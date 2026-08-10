@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 import features
-from features.live_gates import b0_pass
+from cf_platform.live_gates import b0_pass
 
 
 def _many_days(n: int = 30) -> list[str]:
