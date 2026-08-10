@@ -10,7 +10,10 @@ import json
 import pytest
 
 from ingestion.common.http import HttpResponse
+from ingestion.common.rate_limit import RateLimiter
 from ingestion.jquants.client import JQuantsClient, _records
+
+_NO_RL = RateLimiter(0.0)  # keep pagination/retry tests instant
 
 MASTER = "https://api.jquants.com/v2/equities/master"
 BARS = "https://api.jquants.com/v2/equities/bars/daily"
@@ -58,7 +61,7 @@ def test_daily_bars_reads_data_envelope():
     http = _SeqHttp([
         {"data": [{"Code": "8697", "Date": "2025-04-01", "Close": 100}]}
     ])
-    c = JQuantsClient(http, "key", retries=0)
+    c = JQuantsClient(http, "key", retries=0, rate_limiter=_NO_RL)
     bars = c.daily_bars(code="8697")
     assert [b["Code"] for b in bars] == ["8697"]
 
@@ -70,7 +73,7 @@ def test_pagination_uses_pagination_key_request_param():
         {"data": [{"Code": "1"}], "pagination_key": "tok"},
         {"data": [{"Code": "2"}]},
     ])
-    c = JQuantsClient(http, "k", retries=0)
+    c = JQuantsClient(http, "k", retries=0, rate_limiter=_NO_RL)
     rows = c.listed_info()
     assert [r["Code"] for r in rows] == ["1", "2"]
     assert len(http.calls) == 2
@@ -87,7 +90,7 @@ def test_pagination_accepts_legacy_response_token():
         {"data": [{"Code": "1"}], "pagination_token": "tok"},  # legacy resp key
         {"data": [{"Code": "2"}]},
     ])
-    c = JQuantsClient(http, "k", retries=0)
+    c = JQuantsClient(http, "k", retries=0, rate_limiter=_NO_RL)
     rows = c.listed_info()
     assert [r["Code"] for r in rows] == ["1", "2"]
     # still re-sent as pagination_key on the request side
@@ -110,7 +113,7 @@ def test_transport_error_retried_then_succeeds():
             return _resp({"data": [{"Code": "1", "Date": "2025-04-01"}]})
 
     http = _Flaky()
-    c = JQuantsClient(http, "k", retries=2, sleep=lambda d: None)
+    c = JQuantsClient(http, "k", retries=2, sleep=lambda d: None, rate_limiter=_NO_RL)
     bars = c.daily_bars(code="1")
     assert len(bars) == 1 and http.n == 2
 
@@ -130,7 +133,7 @@ def test_transport_error_exhausts_and_raises():
 
     http = _Dead()
     sleeps = []
-    c = JQuantsClient(http, "k", retries=2, sleep=sleeps.append)
+    c = JQuantsClient(http, "k", retries=2, sleep=sleeps.append, rate_limiter=_NO_RL)
     with pytest.raises(_Transient):
         c.listed_info()
     assert http.n == 3  # 1 initial + 2 retries
@@ -151,6 +154,6 @@ def test_5xx_is_retriable():
             return _resp({"data": [{"Code": "1"}]})
 
     http = _Five()
-    c = JQuantsClient(http, "k", retries=2, sleep=lambda d: None)
+    c = JQuantsClient(http, "k", retries=2, sleep=lambda d: None, rate_limiter=_NO_RL)
     rows = c.listed_info()
     assert [r["Code"] for r in rows] == ["1"] and http.n == 2

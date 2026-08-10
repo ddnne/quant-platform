@@ -1,25 +1,26 @@
-"""J-Quants API V2 client.
+"""J-Quants API V2 client — full Premium + add-on catalog.
 
-Base: ``https://api.jquants.com`` — header ``x-api-key``.
+Base: ``https://api.jquants.com`` — header ``x-api-key`` (or, when fetching
+via the Cloudflare secret-proxy, none — the Worker injects the key upstream;
+see :class:`ingestion.common.http.CloudflareJquantsProxyHttpClient`).
 
-Phase 1 endpoints:
-  * ``GET /v2/equities/master``     — listed issues
-  * ``GET /v2/equities/bars/daily`` — daily OHLCV
-  * ``GET /v2/markets/calendar``    — trading calendar / holidays
-  * ``GET /v2/fins/summary``        — OPTIONAL (may 403 on some plans; skip)
+Every dataset in :mod:`ingestion.jquants.catalog` is reachable through the
+generic :meth:`JQuantsClient.fetch_dataset`; the four Phase-1 methods
+(:meth:`listed_info`, :meth:`daily_bars`, :meth:`market_calendar`,
+:meth:`fins_summary`) remain as thin wrappers for back-compat.
 
-V2 places records under a top-level **``data``** envelope. Some shims / tests
-still use the older per-endpoint keys (``info`` / ``daily_bars`` /
-``calendar`` / ``summary``); those are accepted as secondary fallbacks via
-:func:`_records`.
+V2 envelope: records nest under a top-level **``data``** key. Some legacy
+fixtures use per-endpoint keys (``info`` / ``daily_bars`` / ``calendar`` /
+``summary``); those are accepted as secondary fallbacks via :func:`_records`.
 
 V2 pagination: the **request** param is ``pagination_key`` (not
-``pagination_token``). The response key may still appear as
-``pagination_key`` (checked first) or ``pagination_token`` (legacy).
+``pagination_token``). The response key may appear as either
+``pagination_key`` (standard) or ``pagination_token`` (legacy).
 
 Transient HTTP errors (429, 5xx) and transport faults (connection / timeout)
-are retried with exponential backoff. ToS: personal research use only; do not
-redistribute raw data.
+are retried with exponential backoff. Rate limit defaults to a Premium-safe
+~8 rps (480/min, under the 500/min cap). ToS: personal research use only; do
+not redistribute raw data.
 """
 
 from __future__ import annotations
@@ -29,8 +30,13 @@ from typing import Any, Callable, Optional
 from ..common.http import HttpClient, transport_exception_types
 from ..common.rate_limit import RateLimiter
 from ..common.retry import with_retry
+from . import catalog
 
-BASE = "https://api.jquants.com"
+BASE = catalog.BASE
+
+# Request-param aliases -> canonical V2 names. Lets callers pass the readable
+# ``from_date``/``to_date`` while the wire uses ``from``/``to``.
+_PARAM_ALIASES = {"from_date": "from", "to_date": "to"}
 
 
 class _Transient(Exception):
@@ -63,23 +69,30 @@ class JQuantsClient:
     def __init__(
         self,
         http: HttpClient,
-        api_key: str,
+        api_key: str = "",
         *,
         rate_limiter: Optional[RateLimiter] = None,
         retries: int = 3,
         sleep: Callable[[float], None] = None,
     ) -> None:
-        if not api_key:
-            raise ValueError("JQuantsClient requires a non-empty api_key")
+        # ``api_key`` is optional: direct fetch needs it, but the Cloudflare
+        # proxy client injects the key upstream so local proxy callers pass "".
         self._http = http
-        self._api_key = api_key
-        self._rl = rate_limiter or RateLimiter(0.5)
+        self._api_key = api_key or ""
+        self._rl = rate_limiter or RateLimiter(catalog.PREMIUM_MIN_INTERVAL)
         self._retries = retries
         self._sleep = sleep  # None -> with_retry default (time.sleep)
         self._transport_exc = transport_exception_types()
 
+    @property
+    def via_proxy(self) -> bool:
+        """True when the underlying http client is the Cloudflare proxy."""
+        return getattr(self._http, "name", "") == "cf-jquants-proxy"
+
     def _headers(self) -> dict[str, str]:
-        return {"x-api-key": self._api_key}
+        # Never required in proxy mode (the proxy drops caller headers anyway,
+        # so this is defence in depth rather than a correctness path).
+        return {"x-api-key": self._api_key} if self._api_key else {}
 
     def _get(self, path: str, params: Optional[dict[str, Any]] = None) -> Any:
         url = f"{BASE}{path}"
@@ -104,7 +117,55 @@ class JQuantsClient:
             kwargs["sleep"] = self._sleep
         return with_retry(call, **kwargs)
 
-    # --- endpoints --------------------------------------------------------
+    # --- generic catalog access -----------------------------------------
+
+    @staticmethod
+    def _normalize_params(params: Optional[dict[str, Any]]) -> dict[str, Any]:
+        """Drop empties + apply ``from_date``/``to_date`` aliases."""
+        out: dict[str, Any] = {}
+        for k, v in (params or {}).items():
+            if v is None or v == "":
+                continue
+            out[_PARAM_ALIASES.get(k, k)] = v
+        return out
+
+    def fetch_paginated(
+        self, path: str, params: Optional[dict[str, Any]] = None
+    ) -> list[dict]:
+        """Page through ``GET path`` until no ``pagination_key`` is returned.
+
+        ``params`` is the caller's request params (already canonical); the
+        loop adds ``pagination_key`` on follow-up calls without mutating the
+        caller's dict.
+        """
+        base = self._normalize_params(params)
+        rows: list[dict] = []
+        pagination: Optional[str] = None
+        while True:
+            req = dict(base)
+            if pagination:
+                req["pagination_key"] = pagination
+            data = self._get(path, params=req)
+            rows.extend(_records(data))
+            pagination = data.get("pagination_key") if isinstance(data, dict) else None
+            if not pagination:
+                # legacy response key fallback
+                pagination = (
+                    data.get("pagination_token") if isinstance(data, dict) else None
+                )
+            if not pagination:
+                break
+        return rows
+
+    def fetch_dataset(self, dataset_id: str, **params: Any) -> list[dict]:
+        """Fetch any catalog dataset by id, paginating as needed.
+
+        Example: ``client.fetch_dataset("equities_bars_daily", code="8697",
+        from_date="2025-04-01", to_date="2025-04-05")``.
+        """
+        return self.fetch_paginated(catalog.path_of(dataset_id), params=params)
+
+    # --- Phase-1 convenience wrappers (back-compat) ---------------------
 
     def listed_info(
         self, *, date: Optional[str] = None, code: Optional[str] = None
@@ -117,9 +178,10 @@ class JQuantsClient:
         rows: list[dict] = []
         pagination = None
         while True:
+            req = dict(params)
             if pagination:
-                params["pagination_key"] = pagination
-            data = self._get("/v2/equities/master", params=params)
+                req["pagination_key"] = pagination
+            data = self._get("/v2/equities/master", params=req)
             rows.extend(_records(data, "info"))
             pagination = data.get("pagination_key") if isinstance(data, dict) else None
             if not pagination:
@@ -151,9 +213,10 @@ class JQuantsClient:
         rows: list[dict] = []
         pagination = None
         while True:
+            req = dict(params)
             if pagination:
-                params["pagination_key"] = pagination
-            data = self._get("/v2/equities/bars/daily", params=params)
+                req["pagination_key"] = pagination
+            data = self._get("/v2/equities/bars/daily", params=req)
             rows.extend(_records(data, "daily_bars"))
             pagination = data.get("pagination_key") if isinstance(data, dict) else None
             if not pagination:

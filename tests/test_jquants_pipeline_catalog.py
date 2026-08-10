@@ -1,0 +1,126 @@
+"""Pipeline: catalog-driven J-Quants run + proxy-aware key skip.
+
+Offline — a recording HTTP double stands in for the client transport, and an
+in-memory store (``:memory:`` SQLite) proves rows land in ``jquants_records``.
+"""
+
+from __future__ import annotations
+
+import json
+from datetime import datetime
+
+from ingestion.common.http import HttpResponse
+from ingestion.pipeline import run_jquants
+from storage.sqlite_store import SqliteStore
+
+
+class _CatalogHttp:
+    """Returns canned ``data`` for any path; records calls."""
+
+    name = "local"
+
+    def __init__(self, rows):
+        self._rows = rows
+        self.calls: list[str] = []
+
+    def get(self, url, *, headers=None, params=None, timeout=30.0):
+        self.calls.append(url)
+        return HttpResponse(
+            200,
+            {"content-type": "application/json"},
+            json.dumps({"data": self._rows}).encode("utf-8"),
+            url,
+        )
+
+
+def _proxy_http():
+    """An http double whose ``name`` marks it as the CF proxy client."""
+    h = _CatalogHttp([{"Code": "8697", "Date": "2025-04-01", "Close": 100}])
+    h.name = "cf-jquants-proxy"
+    return h
+
+
+def _store(tmp_path):
+    return SqliteStore(tmp_path / "t.sqlite")
+
+
+def test_run_jquants_catalog_writes_to_generic_table(tmp_path):
+    http = _CatalogHttp([{"Code": "8697", "Date": "2025-04-01", "Close": 100}])
+    store = _store(tmp_path)
+    today = datetime(2025, 4, 2, 9, 0, 0)
+    reports = run_jquants(
+        http=http, store=store, api_key="k", data_base=tmp_path, today=today,
+        datasets=["equities_bars_daily"], mode="incremental",
+    )
+    assert len(reports) == 1
+    r = reports[0]
+    assert r.kind == "equities_bars_daily"
+    assert r.fetched == 1 and r.registered == 1 and r.ok
+    # row landed in the generic table with a dataset column
+    rows = store.fetch_all("jquants_records")
+    assert len(rows) == 1
+    assert rows[0]["dataset"] == "equities_bars_daily"
+    assert rows[0]["available_at"]  # PIT column populated
+    store.close()
+
+
+def test_run_jquants_catalog_skips_unknown_dataset(tmp_path):
+    http = _CatalogHttp([])
+    store = _store(tmp_path)
+    today = datetime(2025, 4, 2, 9, 0, 0)
+    reports = run_jquants(
+        http=http, store=store, api_key="k", data_base=tmp_path, today=today,
+        datasets=["not_a_real_dataset"], mode="incremental",
+    )
+    assert reports[0].skipped  # clean skip, not an error
+    store.close()
+
+
+def test_run_jquants_proxy_client_runs_without_api_key(tmp_path):
+    # cf-jquants-proxy http + empty api_key must NOT be skipped.
+    http = _proxy_http()
+    store = _store(tmp_path)
+    today = datetime(2025, 4, 2, 9, 0, 0)
+    reports = run_jquants(
+        http=http, store=store, api_key="", data_base=tmp_path, today=today,
+        datasets=["markets_calendar"], mode="incremental",
+    )
+    assert len(reports) == 1 and reports[0].registered == 1
+    store.close()
+
+
+def test_run_jquants_direct_without_key_is_skipped(tmp_path):
+    http = _CatalogHttp([{"Code": "1"}])
+    store = _store(tmp_path)
+    today = datetime(2025, 4, 2, 9, 0, 0)
+    reports = run_jquants(
+        http=http, store=store, api_key="", data_base=tmp_path, today=today,
+        datasets=["markets_calendar"], mode="incremental",
+    )
+    assert len(reports) == 1
+    assert reports[0].skipped and "JQUANTS_API_KEY" in reports[0].skipped
+    store.close()
+
+
+def test_run_jquants_catalog_incremental_default_window(tmp_path):
+    # incremental + no explicit dates -> a recent from window is applied.
+    seen_params: list[dict] = []
+
+    class _P:
+        name = "local"
+
+        def get(self, url, *, headers=None, params=None, timeout=30.0):
+            seen_params.append(dict(params or {}))
+            return HttpResponse(
+                200, {"content-type": "application/json"},
+                json.dumps({"data": []}).encode("utf-8"), url,
+            )
+
+    store = _store(tmp_path)
+    today = datetime(2025, 4, 10, 9, 0, 0)
+    run_jquants(
+        http=_P(), store=store, api_key="k", data_base=tmp_path, today=today,
+        datasets=["equities_bars_daily"], mode="incremental",
+    )
+    assert seen_params[0].get("from") == "2025-04-05"  # today - 5 days
+    store.close()

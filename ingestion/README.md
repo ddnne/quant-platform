@@ -5,7 +5,7 @@
 
 Phase 1 で実装済み:
 
-- `common/` — HttpClient 抽象（`LocalHttpClient`=httpx 必須 / `CloudflareHttpClient`=stub / `ProxyHttpClient`=J-Quants CF proxy）、retry、rate limit、JST 時刻、`available_at` 検証、raw path、secrets（J-Quants 認証解決）
+- `common/` — HttpClient 抽象（`LocalHttpClient`=httpx 必須 / `CloudflareHttpClient`=stub / `CloudflareJquantsProxyHttpClient`=J-Quants CF 秘匿プロキシ）、retry、rate limit、JST 時刻、`available_at` 検証、raw path、secrets（プロキシ設定解決）
 - `jquants/` — API V2 クライアント・正規化（銘柄/日足/カレンダー/財務サマリ任意）
 - `jsda/` — 公社債取引統計（URL 解決・パース・正規化・取得）。既定 local
 - `pipeline.py` — **Fetcher vs Registrar**（Pattern B）。`run_jquants/run_jsda`

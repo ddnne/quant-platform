@@ -3,9 +3,8 @@
 
 Examples
 --------
-  # Everything, local. J-Quants needs a key (CF proxy by default if a proxy
-  # config exists at ~/.config/quant-platform/, else JQUANTS_API_KEY in env);
-  # JSDA needs no key:
+  # Everything, local (J-Quants needs a key — CF proxy by default if a proxy
+  # config exists, else JQUANTS_API_KEY in env; JSDA needs no key):
   python3 scripts/run_ingestion_once.py --source all --runtime local
 
   # Just JSDA (no key required):
@@ -14,18 +13,6 @@ Examples
   # J-Quants daily bars for one code, a small date window:
   python3 scripts/run_ingestion_once.py --source jquants --code 8697 \\
       --from-date 2025-04-01 --to-date 2025-04-05
-
-  # J-Quants backfill of specific datasets (forwarded to the J-Quants catalog;
-  # unrecognized datasets are ignored gracefully in Phase 1):
-  python3 scripts/run_ingestion_once.py --source jquants --mode backfill \\
-      --dataset listed_info --dataset daily_bars
-
-Secrets
--------
-J-Quants auth is resolved via :mod:`ingestion.common.secrets`: the Cloudflare
-proxy wins when ``~/.config/quant-platform/ingestion-proxy.json`` exists (the
-key then lives only on Cloudflare); otherwise the ``JQUANTS_API_KEY`` env var
-is used for a direct call. Secret values are never echoed.
 
 Runtime
 -------
@@ -38,7 +25,11 @@ Exit codes
   0  run completed (at least one source fetched/registered)
   1  at least one source errored (fetch/parse/register failure)
   2  nothing executed (cloudflare runtime, or every source cleanly skipped,
-     e.g. no J-Quants key/proxy configured)
+     e.g. all API keys absent)
+
+Secrets are resolved via :mod:`ingestion.common.secrets` (the Cloudflare
+proxy when configured — key held on the Worker — or the ``JQUANTS_API_KEY``
+env var for a direct call) and never echoed.
 """
 
 from __future__ import annotations
@@ -53,8 +44,7 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
-from ingestion.common.http import ProxyHttpClient, make_http_client  # noqa: E402
-from ingestion.common.secrets import resolve_jquants  # noqa: E402
+from ingestion.common.http import make_http_client, make_jquants_http  # noqa: E402
 from ingestion.common.timeutil import now_jst  # noqa: E402
 from ingestion.pipeline import (  # noqa: E402
     decide_exit,
@@ -83,18 +73,49 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--to-date", dest="to_date", default=None)
     p.add_argument(
         "--dataset", dest="dataset", action="append", default=None,
-        help="J-Quants dataset name (pass-through to the catalog). Repeatable. "
-             "Default: the core Phase 1 endpoints.",
+        help="J-Quants catalog dataset id (e.g. fins_dividend). Repeatable and/or "
+             "comma-separated. Selects catalog-driven fetch into jquants_records.",
     )
     p.add_argument(
-        "--mode", choices=["backfill", "incremental"], default="incremental",
-        help="J-Quants fetch mode (pass-through; default incremental).",
+        "--mode", choices=["incremental", "backfill"], default="incremental",
+        help="J-Quants catalog fetch mode (default incremental)",
+    )
+    p.add_argument(
+        "--no-jquants-proxy", dest="no_jquants_proxy", action="store_true",
+        help="force direct J-Quants fetch even when a CF proxy is configured",
     )
     p.add_argument(
         "--jsda-url", dest="jsda_url", default=None,
         help="explicit JSDA file URL (skip index scrape)",
     )
+    p.add_argument(
+        "--workers",
+        type=int,
+        default=int(os.environ.get("INGESTION_WORKERS", "8")),
+        help="parallel workers for J-Quants jobs (datasets × date windows). "
+             "Rate limit is shared (Premium ~500/min). Default 8.",
+    )
+    p.add_argument(
+        "--chunk-days",
+        type=int,
+        default=int(os.environ.get("INGESTION_CHUNK_DAYS", "30")),
+        help="split long from/to ranges into N-day grids for parallel backfill "
+             "(J-Quants). Default 30.",
+    )
     return p
+
+
+def _parse_datasets(raw) -> list[str]:
+    """Flatten repeated and comma-separated ``--dataset`` tokens."""
+    if not raw:
+        return []
+    out: list[str] = []
+    for tok in raw:
+        for part in str(tok).split(","):
+            s = part.strip()
+            if s:
+                out.append(s)
+    return out
 
 
 def main(argv=None) -> int:
@@ -112,34 +133,38 @@ def main(argv=None) -> int:
         )
         return 2
 
+    http = make_http_client(runtime, user_agent=_UA)
+    # J-Quants may route through the Cloudflare secret-proxy Worker (key held
+    # on the Worker, not local). Auto: use the proxy when configured + local,
+    # unless --no-jquants-proxy. Other sources keep using the plain `http`.
+    jq_via_proxy = not args.no_jquants_proxy
+    jq_http = make_jquants_http(
+        runtime, via_cf_proxy=None if jq_via_proxy else False, user_agent=_UA
+    )
     store = SqliteStore(db_path)
+    jquants_key = os.environ.get("JQUANTS_API_KEY", "")
 
-    # J-Quants auth: CF proxy (key held on Cloudflare) > env JQUANTS_API_KEY > none.
-    auth = resolve_jquants()
-    if auth.via == "proxy":
-        print(
-            "[env] J-Quants via Cloudflare proxy "
-            "(JQUANTS_API_KEY held on Cloudflare; local key not required)."
-        )
-        http_jquants = ProxyHttpClient(auth.proxy, user_agent=_UA)
+    using_jq_proxy = getattr(jq_http, "name", "") == "cf-jquants-proxy"
+    if using_jq_proxy:
+        print("[env] J-Quants via Cloudflare proxy (API key held on Worker).")
+    elif jquants_key:
+        print("[env] JQUANTS_API_KEY present (value hidden).")
     else:
-        http_jquants = make_http_client(runtime, user_agent=_UA)
-        if auth.via == "env":
-            print("[env] JQUANTS_API_KEY present (value hidden).")
-        else:
-            print("[env] no J-Quants key or proxy configured — J-Quants will be skipped.")
+        print("[env] JQUANTS_API_KEY absent — J-Quants will be skipped.")
 
-    # JSDA is always a direct local fetch (public statistics, no key).
-    http_jsda = make_http_client(runtime, user_agent=_UA)
+    datasets = _parse_datasets(args.dataset)
+    if datasets:
+        print(f"[jquants] catalog mode={args.mode} datasets={','.join(datasets)}")
 
     all_reports = []
     try:
         if args.source in ("jquants", "all"):
             reps = run_jquants(
-                http=http_jquants, store=store, api_key=auth.effective_api_key,
+                http=jq_http, store=store, api_key=jquants_key,
                 data_base=data_base, today=today, runtime=runtime,
                 code=args.code, date_from=args.from_date, date_to=args.to_date,
-                datasets=args.dataset, mode=args.mode,
+                datasets=datasets or None, mode=args.mode,
+                max_workers=args.workers, chunk_days=args.chunk_days,
             )
             all_reports.extend(reps)
             for r in reps:
@@ -147,7 +172,7 @@ def main(argv=None) -> int:
 
         if args.source in ("jsda", "all"):
             reps = run_jsda(
-                http=http_jsda, store=store, data_base=data_base, today=today,
+                http=http, store=store, data_base=data_base, today=today,
                 runtime=runtime, target_url=args.jsda_url,
             )
             all_reports.extend(reps)
@@ -155,7 +180,7 @@ def main(argv=None) -> int:
                 print(r.summary())
     finally:
         store.close()
-        for client in (http_jquants, http_jsda):
+        for client in (http, jq_http):
             if hasattr(client, "close"):
                 try:
                     client.close()

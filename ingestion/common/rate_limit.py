@@ -1,12 +1,18 @@
-"""Simple minimum-interval rate limiter.
+"""Minimum-interval rate limiter (thread-safe).
 
 The first call never waits. Subsequent calls wait just enough to keep calls
-at least ``min_interval_seconds`` apart. ``clock`` / ``sleep`` are injectable
-for fast, deterministic tests.
+at least ``min_interval_seconds`` apart **globally** (shared across threads).
+
+Sleep happens **outside** the lock so other threads can reserve subsequent
+slots while one is sleeping — critical for overlapping I/O RTT under a shared
+Premium budget (500 req/min).
+
+``clock`` / ``sleep`` are injectable for fast, deterministic tests.
 """
 
 from __future__ import annotations
 
+import threading
 import time
 from typing import Callable, Optional
 
@@ -22,24 +28,31 @@ class RateLimiter:
         self._min = max(0.0, float(min_interval_seconds))
         self._clock = clock
         self._sleep = sleep
-        self._last: Optional[float] = None
+        self._next_allowed: Optional[float] = None
+        self._lock = threading.Lock()
 
     @property
     def min_interval(self) -> float:
         return self._min
 
     def acquire(self) -> float:
-        """Block (via injected sleep) until enough time elapsed. Returns wait."""
+        """Reserve the next slot; sleep if needed. Returns seconds waited."""
         if self._min <= 0:
-            self._last = self._clock()
+            with self._lock:
+                self._next_allowed = self._clock()
             return 0.0
-        now = self._clock()
-        waited = 0.0
-        if self._last is not None:
-            elapsed = now - self._last
-            if elapsed < self._min:
-                wait = self._min - elapsed
-                self._sleep(wait)
-                waited = wait
-        self._last = self._clock()
-        return waited
+
+        with self._lock:
+            now = self._clock()
+            if self._next_allowed is None or now >= self._next_allowed:
+                # Slot is free now.
+                self._next_allowed = now + self._min
+                wait = 0.0
+            else:
+                # Reserve a future slot and sleep until then.
+                wait = self._next_allowed - now
+                self._next_allowed = self._next_allowed + self._min
+
+        if wait > 0:
+            self._sleep(wait)
+        return wait

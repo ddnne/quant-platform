@@ -4,24 +4,21 @@
 * ``CloudflareHttpClient`` is an intentional **stub**. Under Pattern B the
   Cloudflare side only *reads* storage; fetching happens on local. Phase 1
   does not require Cloudflare fetch to work.
+* ``CloudflareJquantsProxyHttpClient`` routes J-Quants requests through the
+  Cloudflare secret-proxy Worker so local runners never hold the J-Quants key
+  (see :mod:`ingestion.common.secrets`).
 
 Switching is via ``make_http_client(runtime)`` / env ``INGESTION_RUNTIME`` /
-CLI ``--runtime``.
+CLI ``--runtime``. Pass ``jquants_via_cf_proxy=`` to opt into (or out of) the
+J-Quants proxy for the returned client.
 """
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from typing import Any, Mapping, Optional, Protocol, Union, runtime_checkable
-from urllib.parse import parse_qsl, urlsplit
-
-from .secrets import ProxyConfig, proxy_endpoint
 
 _DEFAULT_UA = "quant-platform-ingest/0.1 (+personal-research; JST)"
-
-#: Host that may be routed through the Cloudflare J-Quants proxy.
-_JQ_HOST = "api.jquants.com"
 
 
 def transport_exception_types() -> tuple:
@@ -161,43 +158,40 @@ class CloudflareHttpClient:
         )
 
 
-class ProxyHttpClient:
-    """Routes J-Quants calls through the Cloudflare ``ingestion-secrets`` proxy.
+class CloudflareJquantsProxyHttpClient:
+    """Route J-Quants requests through the Cloudflare secret-proxy Worker.
 
-    The Worker (``platform/workers/ingestion-secrets``) holds
-    ``JQUANTS_API_KEY`` and injects the upstream ``x-api-key`` itself, so the
-    local runner never sees the key. This client translates a direct call —
+    The J-Quants API key lives only on the Worker; the local runner holds just
+    a shared ``X-Ingestion-Token``. This client satisfies the ``HttpClient``
+    protocol via :meth:`get` — callers (e.g. ``JQuantsClient``) build the same
+    ``https://api.jquants.com/v2/...`` URL they would for a direct call; here
+    we translate that into a ``POST {proxy}/v1/proxy/jquants`` with body
+    ``{"path", "query"}``. The Worker injects ``x-api-key`` upstream, so this
+    client **never** sends the J-Quants key (or any caller-supplied
+    ``x-api-key`` header) from local — defence in depth against leaking it.
 
-        GET https://api.jquants.com/v2/<path>?<params>
-
-    — into a proxy call::
-
-        POST <proxy_endpoint>
-        X-Ingestion-Token: <proxy_token>
-        {"path": "/v2/<path>", "method": "GET", "query": {...}}
-
-    and wraps the Worker's passthrough response (upstream status + body) in an
-    :class:`HttpResponse`. Any client-supplied ``x-api-key`` header is dropped
-    here — the Worker ignores it anyway and uses its own secret.
-
-    Only ``api.jquants.com`` URLs are proxied; anything else raises so a
-    misconfigured JSDA/other fetch cannot accidentally leak through the proxy.
+    Underlying POSTs use ``httpx`` (lazy import); a ``transport`` kwarg lets
+    tests inject ``httpx.MockTransport`` for fully offline requests, matching
+    :class:`LocalHttpClient`.
     """
 
-    name = "local-proxy"
+    name = "cf-jquants-proxy"
 
     def __init__(
         self,
-        proxy: ProxyConfig,
         *,
+        proxy_url: str,
+        proxy_token: str,
         user_agent: str = _DEFAULT_UA,
         timeout: float = 30.0,
         transport: Any = None,
     ) -> None:
-        import httpx  # lazy: local runtime dependency
+        import httpx  # lazy: only proxy fetch needs it
 
-        self._endpoint = proxy_endpoint(proxy)
-        self._token = proxy.proxy_token
+        if not proxy_url or not proxy_token:
+            raise ValueError("CloudflareJquantsProxyHttpClient needs proxy_url + token")
+        self._proxy_url = proxy_url.rstrip("/")
+        self._token = proxy_token
         self._timeout = float(timeout)
         kwargs: dict[str, Any] = dict(
             timeout=self._timeout,
@@ -208,6 +202,20 @@ class ProxyHttpClient:
             kwargs["transport"] = transport
         self._client = httpx.Client(**kwargs)
 
+    @staticmethod
+    def _path_of(url: str) -> str:
+        """Extract the ``/v2/...`` path from a J-Quants URL.
+
+        The Worker rejects anything not under ``/v2/``; we surface that as a
+        clear local error rather than a 400 round-trip.
+        """
+        idx = url.find("/v2/")
+        if idx < 0:
+            raise ValueError(
+                f"jquants proxy: target URL has no /v2/ path to forward: {url!r}"
+            )
+        return url[idx:]
+
     def get(
         self,
         url: str,
@@ -216,30 +224,23 @@ class ProxyHttpClient:
         params: Optional[Mapping[str, Any]] = None,
         timeout: Optional[float] = None,
     ) -> HttpResponse:
-        u = urlsplit(url)
-        if u.netloc != _JQ_HOST:
-            raise RuntimeError(
-                f"ProxyHttpClient only proxies {_JQ_HOST}; refusing to route {url}"
-            )
+        path = self._path_of(url)
+        # query: stringified, None/empty dropped — the Worker forwards as-is.
         query: dict[str, str] = {}
-        for k, v in parse_qsl(u.query, keep_blank_values=True):
-            query[k] = v
-        if params:
-            for k, v in params.items():
-                if v is None:
-                    continue
-                query[k] = str(v)
-        body = json.dumps(
-            {"path": u.path or "/", "method": "GET", "query": query}
-        ).encode("utf-8")
-        # Drop any caller-supplied x-api-key: the Worker injects its own.
-        out_headers: dict[str, str] = {"content-type": "application/json"}
-        if self._token:
-            out_headers["X-Ingestion-Token"] = self._token
+        for k, v in (params or {}).items():
+            if v is None or v == "":
+                continue
+            query[str(k)] = str(v)
+        # NOTE: caller-supplied `headers` are intentionally NOT forwarded —
+        # only X-Ingestion-Token leaves local. The J-Quants key is never sent.
         resp = self._client.post(
-            self._endpoint,
-            content=body,
-            headers=out_headers,
+            f"{self._proxy_url}/v1/proxy/jquants",
+            headers={
+                "X-Ingestion-Token": self._token,
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
+            json={"path": path, "method": "GET", "query": query},
             timeout=timeout if timeout is not None else self._timeout,
         )
         return HttpResponse(
@@ -255,18 +256,81 @@ class ProxyHttpClient:
         except Exception:  # pragma: no cover - best effort
             pass
 
-    def __enter__(self) -> "ProxyHttpClient":
+    def __enter__(self) -> "CloudflareJquantsProxyHttpClient":
         return self
 
     def __exit__(self, *exc) -> None:
         self.close()
 
 
-def make_http_client(runtime: Union[str, None] = "local", **kwargs: Any) -> HttpClient:
-    """Factory keyed by runtime name."""
+def make_http_client(
+    runtime: Union[str, None] = "local",
+    *,
+    jquants_via_cf_proxy: bool = False,
+    **kwargs: Any,
+) -> HttpClient:
+    """Factory keyed by runtime name.
+
+    ``jquants_via_cf_proxy`` is a plain opt-in flag (default ``False``):
+
+    * ``False`` (default) -> direct fetch via :class:`LocalHttpClient` /
+      :class:`CloudflareHttpClient`. The factory stays source-agnostic, so the
+      same client can serve JSDA too. Bare ``make_http_client("local")``
+      therefore always returns a :class:`LocalHttpClient`.
+    * ``True`` -> build a :class:`CloudflareJquantsProxyHttpClient` from the
+      resolved proxy config (raises if none configured). The returned client
+      only forwards ``/v2/`` J-Quants URLs — use it **for J-Quants only**.
+
+    The "use the proxy when configured, for local J-Quants" convenience lives
+    in :func:`make_jquants_http` (auto) rather than here, so this general
+    factory never silently reroutes non-J-Quants sources.
+    """
+    if jquants_via_cf_proxy:
+        from .secrets import resolve_proxy_config  # local import avoids cycle
+
+        cfg = resolve_proxy_config()
+        if cfg is None:
+            raise ValueError(
+                "jquants_via_cf_proxy requested but no proxy config "
+                "(INGESTION_PROXY_URL/INGESTION_PROXY_TOKEN or "
+                "~/.config/quant-platform/ingestion_proxy_{url,token}) found"
+            )
+        # Only forward proxy-relevant kwargs (transport/timeout/ua) to the
+        # proxy client; drop any Local-only options the caller mixed in.
+        proxy_kwargs: dict[str, Any] = {}
+        for k in ("transport", "timeout", "user_agent", "verify"):
+            if k in kwargs:
+                proxy_kwargs[k] = kwargs[k]
+        return CloudflareJquantsProxyHttpClient(
+            proxy_url=cfg.url, proxy_token=cfg.token, **proxy_kwargs
+        )
+
     rt = (runtime or "local").strip().lower()
     if rt == "local":
         return LocalHttpClient(**kwargs)
     if rt == "cloudflare":
         return CloudflareHttpClient(**kwargs)
     raise ValueError(f"unknown runtime: {runtime!r}")
+
+
+def make_jquants_http(
+    runtime: Union[str, None] = "local",
+    *,
+    via_cf_proxy: Optional[bool] = None,
+    **kwargs: Any,
+) -> HttpClient:
+    """Build the J-Quants-specific HTTP client with proxy auto-detection.
+
+    * ``via_cf_proxy=True``  -> force the Cloudflare proxy (raise if no config).
+    * ``via_cf_proxy=False`` -> force direct (key-required) fetch.
+    * ``via_cf_proxy=None`` (default) -> on the **local** runtime, use the
+      proxy when proxy config is available; otherwise direct. This is the
+      "local runner with the Worker configured needs no local key" default.
+    """
+    rt = (runtime or "local").strip().lower()
+    use_proxy = via_cf_proxy
+    if use_proxy is None:
+        from .secrets import resolve_proxy_config
+
+        use_proxy = rt == "local" and resolve_proxy_config() is not None
+    return make_http_client(runtime, jquants_via_cf_proxy=use_proxy, **kwargs)

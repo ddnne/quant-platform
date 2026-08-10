@@ -198,7 +198,7 @@ def run_jquants(
     *,
     http,
     store,
-    api_key: str,
+    api_key: str = "",
     data_base: Path,
     today,
     runtime: str = "local",
@@ -207,20 +207,36 @@ def run_jquants(
     date_to: Optional[str] = None,
     datasets: Optional[List[str]] = None,
     mode: str = "incremental",
+    max_workers: int = 8,
+    chunk_days: int = 30,
 ) -> List[RunReport]:
-    """Fetch + normalize + register J-Quants endpoints for one pass.
+    """Run a J-Quants pass.
 
-    ``datasets`` / ``mode`` are **pass-through knobs** for the J-Quants
-    dataset catalog (Phase 1 expansion). They are accepted here so the CLI
-    can forward ``--dataset`` / ``--mode`` without changing the call signature
-    again; the per-dataset dispatch is wired incrementally and the default
-    (``datasets is None``) runs the core endpoints below regardless of mode.
-    ``api_key`` is the J-Quants key for a direct call, or the sentinel
-    ``"via-proxy"`` when the caller routes J-Quants through the Cloudflare
-    secrets proxy (the proxy holds the real key; this client never sees it).
+    Two modes of operation:
+
+    * **catalog-driven** (``datasets`` is a non-empty list): for each dataset
+      id fetch via :meth:`JQuantsClient.fetch_dataset`, save raw, normalize
+      with :func:`normalize_generic`, and upsert into the generic
+      ``jquants_records`` table. This is the full Premium + add-on coverage
+      path. ``mode`` (``incremental``/``backfill``) controls the default date
+      window when ``date_from``/``date_to`` are not supplied.
+      Long ranges are split into ``chunk_days`` grids and run with up to
+      ``max_workers`` threads under a shared Premium rate limit.
+    * **legacy default** (``datasets`` is ``None``): the Phase-1 curated path
+      (listed_info / daily_bars / market_calendar / fins_summary raw-only)
+      into the specialized tables — unchanged behaviour.
+
+    The API key is required for direct fetch, but **not** when ``http`` is the
+    Cloudflare proxy client (the Worker injects the key upstream).
     """
-    if not api_key:
-        return [RunReport("jquants", "*", skipped="JQUANTS_API_KEY not set")]
+    via_proxy = getattr(http, "name", "") == "cf-jquants-proxy"
+    if not api_key and not via_proxy:
+        return [
+            RunReport(
+                "jquants", "*",
+                skipped="JQUANTS_API_KEY not set (and no CF proxy configured)",
+            )
+        ]
     if runtime != "local":
         return _cannot_fetch("jquants", runtime)
 
@@ -231,6 +247,24 @@ def run_jquants(
     reg = Registrar(store)
     ingested = now_iso()
     reports: List[RunReport] = []
+
+    if datasets:
+        return _run_jquants_catalog(
+            client=client,
+            reg=reg,
+            store=store,
+            datasets=datasets,
+            mode=mode,
+            code=code,
+            date_from=date_from,
+            date_to=date_to,
+            data_base=data_base,
+            today=today,
+            ingested=ingested,
+            runtime=runtime,
+            max_workers=max_workers,
+            chunk_days=chunk_days,
+        )
 
     # 1) listed info
     try:
@@ -289,6 +323,145 @@ def run_jquants(
         reports.append(
             RunReport("jquants", "fins_summary", skipped=f"optional endpoint skipped: {exc}")
         )
+
+    _log(store, "jquants", runtime, reports)
+    return reports
+
+
+def _jquants_default_window(today, mode: str) -> tuple[Optional[str], Optional[str]]:
+    """Default date window when the caller passes none.
+
+    ``incremental`` -> the last ~5 calendar days (catch the latest bars /
+    filings without a heavy backfill). ``backfill`` -> no window (let the
+    server return its full default range, or rely on explicit CLI dates).
+    """
+    if mode == "incremental":
+        try:
+            start = today - _days(5)
+            end = today.strftime("%Y-%m-%d") if hasattr(today, "strftime") else str(today)[:10]
+            return start.strftime("%Y-%m-%d"), end
+        except Exception:  # pragma: no cover - today isn't date-ish
+            return None, None
+    return None, None
+
+
+def _days(n: int):
+    from datetime import timedelta
+
+    return timedelta(days=n)
+
+
+def _dataset_params(accept: list[str], code, date_from, date_to) -> dict:
+    """Build request params for a dataset, limited to what it accepts.
+
+    ``accept`` is the catalog entry's ``params`` list. Avoids sending
+    ``code``/``from``/``to`` to endpoints that don't take them (e.g. a
+    market-wide calendar or index series).
+    """
+    ok = set(accept or [])
+    p: dict = {}
+    if code and "code" in ok:
+        p["code"] = code
+    if date_from and "from" in ok:
+        p["from_date"] = date_from
+    if date_to and "to" in ok:
+        p["to_date"] = date_to
+    return p
+
+
+def _run_jquants_catalog(
+    *,
+    client,
+    reg,
+    store,
+    datasets: List[str],
+    mode: str,
+    code,
+    date_from,
+    date_to,
+    data_base,
+    today,
+    ingested: str,
+    runtime: str,
+    max_workers: int = 8,
+    chunk_days: int = 30,
+) -> List[RunReport]:
+    """Catalog-driven parallel fetch -> raw -> normalize_generic -> jquants_records.
+
+    Jobs = datasets × optional codes × date windows (``chunk_days``). Execution
+    uses a thread pool with a **shared** rate limiter on the client (Premium
+    500/min budget). Pagination within each job stays sequential.
+    """
+    from .jquants import normalize as JN
+    from .jquants.catalog import DATASETS
+    from .jquants.parallel import expand_jobs, run_parallel, summarize_results
+
+    if mode not in ("incremental", "backfill"):
+        mode = "incremental"
+    if not date_from and not date_to:
+        date_from, date_to = _jquants_default_window(today, mode)
+
+    known = [d for d in datasets if d in DATASETS]
+    unknown = [d for d in datasets if d not in DATASETS]
+    reports: List[RunReport] = []
+    for did in unknown:
+        reports.append(RunReport("jquants", did, skipped=f"unknown dataset id: {did}"))
+
+    codes = [code] if code else None
+    jobs = expand_jobs(
+        known,
+        from_date=date_from,
+        to_date=date_to,
+        chunk_days=max(1, int(chunk_days)),
+        codes=codes,
+    )
+    workers = max(1, int(max_workers))
+    print(
+        f"[jquants] parallel jobs={len(jobs)} workers={workers} "
+        f"chunk_days={chunk_days} window={date_from}..{date_to}"
+    )
+
+    # Serialize register/save_raw: SQLite and path writes are not all thread-safe.
+    write_lock = __import__("threading").Lock()
+
+    def _persist(job, rows: list) -> RunReport:
+        # kind stays the dataset id (tests / aggregators key on it). Window
+        # detail is only in the raw filename so multi-window jobs don't clobber.
+        kind = job.dataset_id
+        stamp_name = job.label.replace(" ", "_")[:120]
+        try:
+            with write_lock:
+                save_raw(
+                    data_base,
+                    "jquants",
+                    _stamped(f"{stamp_name}.json", ingested),
+                    json.dumps(rows, ensure_ascii=False).encode("utf-8"),
+                    today,
+                )
+                norm = JN.normalize_generic(
+                    rows, dataset=job.dataset_id, ingested_at=ingested
+                )
+                n = reg.register("jquants_records", norm)
+            return RunReport(
+                "jquants", kind, fetched=len(rows), registered=n
+            )
+        except Exception as exc:  # noqa: BLE001
+            return RunReport("jquants", kind, error=f"{exc}")
+
+    results = run_parallel(client, jobs, max_workers=workers)
+    for res in results:
+        if not res.ok:
+            reports.append(
+                RunReport("jquants", res.job.dataset_id, error=res.error)
+            )
+            continue
+        reports.append(_persist(res.job, res.rows))
+
+    summary = summarize_results(results)
+    print(
+        f"[jquants] parallel done ok={summary['ok']}/{summary['jobs']} "
+        f"rows={summary['rows']} errors={summary['errors']}"
+    )
 
     _log(store, "jquants", runtime, reports)
     return reports
