@@ -20,6 +20,10 @@
 - **Secrets** は Cloudflare Secrets／環境変数。コード・リポジトリに埋め込まない。
 - データは **`event_time`**（事象の時刻）と **`available_at`**（利用可能になった時刻）を持つ（**PIT** 前提）。
 - 構造化保存では `available_at` は必須（空は拒否）。
+- **構造化データの読み出しは PIT Data API（`pit/`）のみ。** 研究・特徴量・戦略コードは
+  直接 SQLite を開かず、必ず `as_of` を取る `pit.get_*` 経由で読む。これが **fact の
+  唯一の読み出し経路（sole read path for facts）** であり、look-ahead を構造で防ぐ。
+  詳細は [pit_api.md](pit_api.md) を参照。
 
 ## 必須データ源（Phase 1 実装）
 

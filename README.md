@@ -3,18 +3,28 @@
 日本株・開示・債券データを用いた量化研究／Paper／FoF 基盤。  
 正本は GitHub リポジトリ 1 本（公開・非公開は運用で変更可）。
 
-## 現状（Phase 1）
+## 現状（Phase 2）
 
-**Phase 1（Ingestion）が完了した状態です。** 2 データソースの取得・正規化・格納が動きます:
+**Phase 1（Ingestion）＋ Phase 2（PIT Data API）が完了した状態です。**
 
-- **J-Quants** API V2（銘柄一覧 / 日足 / カレンダー / 財務サマリ任意）
+Phase 1 — 2 データソースの取得・正規化・格納が動きます:
+
+- **J-Quants** API V2 — カタログ全量（`ingestion/jquants/catalog.py` の `DATASETS`）:
+  銘柄マスター・日足（含む AM）・財務（summary / details / dividend / earnings-date）・
+  決算カレンダー・市場カレンダー・投資部門・指数（TOPIX / 一般）・デリバティブ
+  （日経225オプション / 先物 / オプション）・市場系（信用・空売り・ブレイクダウン）・
+  **EDINET 系**（大株主・持ち合い・大量保有）・分足・Tick（trades）・TDnet 系（list / files / bulk）。
 - **JSDA** 公社債取引統計（CSV/XLSX）
+
+Phase 2 — 構造化データの **読み出し経路として PIT Data API（`pit/`）** を実装。
+全読み出しは `as_of` 必須・`available_at <= as_of` で look-ahead を防止・読み取り専用
+（`mode=ro`）。**直接 SQLite での研究読み出しは禁止**（[docs/pit_api.md](docs/pit_api.md)）。
 
 > 開示系（EDINET 由来の書面・財務詳細）は独立した EDINET DB ではなく、**J-Quants の EDINET 系 API**（`/v2/documents`、`/v2/fins/...`）で後続 Phase に統合する方針。Phase 1 では J-Quants 上記エンドポイント + JSDA が対象。
 
 ランタイムは **local 主系**（`LocalHttpClient` / httpx）。Cloudflare は Pattern B でストレージ読取のみ（Phase 1 では取得しない）。詳細は [docs/data_sources.md](docs/data_sources.md)。
 
-**次は Phase 2（PIT Data API）** です。
+**次は Phase 3（コアエンジン最小）** です。Phase 2（PIT Data API）は完了しました。
 
 詳細は [docs/architecture.md](docs/architecture.md) と [docs/roadmap.md](docs/roadmap.md) を参照してください。
 
@@ -24,6 +34,7 @@
 |------|------|
 | `docs/` | アーキテクチャ・ロードマップ等の文書 |
 | `ingestion/` | 外部データ取得（**Phase 1 実装**: J-Quants / JSDA） |
+| `pit/` | **PIT Data API**（**Phase 2 実装**: `as_of` 必須の読み出し専用 API） |
 | `core/` | コアエンジン（後続 Phase） |
 | `features/` | 特徴量 Registry（後続） |
 | `risk/` | リスク管理（後続） |
