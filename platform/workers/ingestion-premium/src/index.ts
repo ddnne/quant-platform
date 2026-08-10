@@ -88,15 +88,20 @@ function requestQueries(
 ): Record<string, string>[] {
   if (spec.dateMode === "none") return [{}];
 
+  // Single-day key: most series use `date=`; short-sale uses `disc_date=`.
+  const dayKey = spec.dayParam || "date";
+
   if (spec.dateMode === "today") {
     if (opts.from || opts.to) {
       const from = opts.from || opts.to!;
       const to = opts.to || opts.from!;
-      return inclusiveDates(from, to).map((date) => ({ date }));
+      return inclusiveDates(from, to).map((d) => ({ [dayKey]: d }));
     }
-    return [{ date: opts.today || todayJst() }];
+    return [{ [dayKey]: opts.today || todayJst() }];
   }
 
+  // range: only for endpoints that accept bare from/to without code
+  // (calendar, earnings-calendar, topix, investor-types).
   const from = opts.from || (opts.to ? opts.to : daysAgoJst(5));
   const to = opts.to || todayJst();
   if (from > to) throw new Error("from must be on or before to");
