@@ -28,8 +28,12 @@ fact は `pit.get_*` 経由のみ（`core/` は SQLite/HTTP を直接開かな�
 
 Phase 3.5 — **Cloudflare 上の J-Quants Premium core 閉路の実装**。Worker
 `quant-platform-ingestion-premium` は、デプロイ後に cron で 23 データセットを取得し、R2 raw + D1
-structured に保存・per-dataset の pass/fail 検証を行う。addon（分足・Tick・TDnet）は
-スコープ外。ローカルはページネーション付き `/v1/export/d1` から同期して `pit.get_*` で読む。
+structured に保存・per-dataset の pass/fail 検証を行う。**閉路の対象は Premium core 23 だけ**:
+addon（分足・Tick・TDnet）は Phase 1 でカタログされているが Phase 3.5 のスケジュール対象外。
+ローカルはページネーション付き `/v1/export/d1` から同期して `pit.get_*` で読む。
+検証は per-job の pass/fail に加えて、
+[docs/phase35_validation_matrix.md](docs/phase35_validation_matrix.md) のカタログ
+（C1–C12, M*, B*, A*, K*, E*, F*, I*, D*, S*, N*, X*）を daily / weekly の 2 階層で実行する。
 Cloudflare リソース作成・migration・同一 secret 値の binding・deploy が完了して初めて本番閉路が有効になる。
 2026-08-11 JST 時点で `quant-ingest`、`quant-raw`、`quant-structured` を作成し、migration、
 既存の 2 secret binding、Worker + Cron deploy、`/health` とページ export を確認済み。

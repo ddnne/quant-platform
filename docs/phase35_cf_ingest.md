@@ -127,6 +127,33 @@ print(r.metadata, len(r))
 | ``tests/test_phase35_validate.py`` | Pass/fail classification (Python source of truth) |
 | ``tests/test_phase35_natural_key.py`` | Cross-language natural-key consistency |
 | ``tests/test_phase35_sync_script.py`` | Sync script offline-safety + live smoke (QP_LIVE=1) |
+| ``tests/test_phase35_coverage_matrix.py`` | Validation matrix catalog + daily-tier coverage runner |
+
+## Validation matrix
+
+Beyond the per-job pass/fail rule in ``cf_platform.ingest_premium.validate``,
+Phase 3.5 requires a wider catalog of data-quality checks: history span,
+universe coverage, calendar gaps, cross-dataset consistency, addon-leak guard,
+etc. The canonical catalog of check IDs (C1–C12, M*, B*, A*, K*, E*, F*, I*,
+D*, S*, N*, X1–X5) and their **daily / weekly** execution tiers lives in
+``docs/phase35_validation_matrix.md``. The Python mirror — pure data, no I/O —
+is ``cf_platform/ingest_premium/matrix.py``; the runnable checks against a
+local PIT SQLite DB are in ``cf_platform/ingest_premium/coverage.py``.
+
+Run the matrix against a synced DB:
+
+```bash
+# Daily tier (every nightly run): C1–C5, C8, C12, B2, B4, K3, X4
+python3 scripts/run_phase35_validation.py \
+    --db data/structured/ingestion.sqlite --tier daily
+
+# Weekly tier (full catalog); machine-readable JSON
+python3 scripts/run_phase35_validation.py \
+    --db data/structured/ingestion.sqlite --tier weekly --json
+```
+
+Exit code is ``0`` when no check reports ``status="fail"`` (``skip`` and
+``warn`` are tolerated). The runner opens the DB read-only; it never writes.
 
 ## Phase 3.5 → Phase 4 bridge
 
