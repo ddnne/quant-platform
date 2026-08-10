@@ -1,8 +1,13 @@
 # ingestion-premium (Phase 3.5)
 
-Cloudflare Worker that closes the **J-Quants Premium core** ingestion loop on
-CF. It owns the schedule, secrets, R2 raw persistence, D1 structured rows, and
-the validation log — so a single deploy makes the closed loop live.
+Cloudflare Worker that implements the **J-Quants Premium core** ingestion loop
+on CF. It owns the schedule, secrets, R2 raw persistence, D1 structured rows, and
+the validation log. The loop is live only after the resources, migration,
+existing secret values, Worker, and Cron Trigger are deployed successfully.
+
+Deployment status (2026-08-11 JST): resources, migration, both existing secret
+bindings, Worker, and hourly Cron Trigger are deployed; readiness and a
+paginated export request have been verified.
 
 ## Resources
 
@@ -11,12 +16,12 @@ the validation log — so a single deploy makes the closed loop live.
 | R2 | `quant-raw` | Verbatim source JSON per fetch, partitioned by dataset/date |
 | R2 | `quant-structured` | Reserved (future parquet/partition dumps) |
 | D1 | `quant-ingest` | PIT-shaped structured rows (mirror of `storage/schema.py`) |
-| Secret | `JQUANTS_API_KEY` | Required for upstream fetch (already bound) |
+| Secret | `JQUANTS_API_KEY` | Required for upstream fetch; bind the existing value |
 | Secret | `INGESTION_PROXY_TOKEN` | Optional; gates the manual `/v1/run` endpoint |
 
 ## Schedule
 
-Cron = `"15 * * * *"` (hourly at :15 UTC == 10:15 JST). Premium publishes
+Cron = `"15 * * * *"` (hourly at :15; for example 00:15 UTC == 09:15 JST). Premium publishes
 through the JST trading day; hourly cadence keeps the loop closed without
 stressing the 500 req/min cap. Override in `wrangler.toml`.
 
@@ -26,7 +31,7 @@ stressing the 500 req/min cap. Override in `wrangler.toml`.
 |--------|------|------|-------------|
 | GET | `/health` | none | Readiness + last-run summary |
 | POST | `/v1/run?dataset=&from=&to=&today=` | `X-Ingestion-Token` | Manual trigger (one or all datasets) |
-| GET | `/v1/export/d1?table=` | `X-Ingestion-Token` | Stream one D1 table as JSON for local sync |
+| GET | `/v1/export/d1?table=&cursor=&limit=` | `X-Ingestion-Token` | Read one cursor-paginated D1 JSON page |
 
 ## Closed-loop guarantees
 
@@ -34,13 +39,14 @@ stressing the 500 req/min cap. Override in `wrangler.toml`.
 2. **Secrets only on CF** — same names (`JQUANTS_API_KEY`,
    `INGESTION_PROXY_TOKEN`). Never logged.
 3. **Persist R2 raw + D1 structured** — every fetch lands both.
-4. **Incremental primary**; backfill separable via `/v1/run?from=&to=`.
+4. **Incremental primary**; backfill separable via `/v1/run?from=&to=`. Date-only
+   endpoints fan out one request per day, and daily bars use the confirmed bulk path.
 5. **Auto validation** — every dataset result is written to
    `ingestion_validation` with explicit `status ∈ {pass, fail}`.
 6. **Failures ≠ success** — a fetch error sets `status='fail'`; the run
    summary status is `pass` / `partial` / `fail` (never silent).
-7. **Local-readable path** — `scripts/sync_d1_to_sqlite.py` consumes
-   `/v1/export/d1` to build a local PIT DB readable by `pit.get_*`.
+7. **Local-readable path** — `scripts/sync_d1_to_sqlite.py` follows export
+   cursors to build a local PIT DB readable by `pit.get_*`.
 
 ## Premium core dataset set
 

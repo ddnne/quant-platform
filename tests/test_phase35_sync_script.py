@@ -11,23 +11,15 @@ We test the offline paths only — live network smokes are marked with
 
 from __future__ import annotations
 
-import importlib.util
 import os
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 import pytest
+import pit
 
 _REPO = Path(__file__).resolve().parents[1]
 _SYNC = _REPO / "scripts" / "sync_d1_to_sqlite.py"
-
-
-@pytest.fixture(scope="module")
-def sync_module():
-    spec = importlib.util.spec_from_file_location("sync_d1_to_sqlite", _SYNC)
-    mod = importlib.util.module_from_spec(spec)
-    assert spec and spec.loader
-    spec.loader.exec_module(mod)
-    return mod
 
 
 def test_sync_script_exists():
@@ -60,6 +52,23 @@ def test_sync_default_tables_include_pit_tables(sync_module):
         assert t in sync_module.DEFAULT_TABLES
 
 
+def test_cf_export_sync_reaches_nonempty_pit_path(synced_cf_d1_db):
+    """CF-shaped export → paginated sync → generic-record PIT bars."""
+    assert synced_cf_d1_db.rc == 0
+    assert len(synced_cf_d1_db.calls) > 1
+    queries = [parse_qs(urlparse(url).query) for url in synced_cf_d1_db.calls]
+    assert all(query["limit"] == ["2"] for query in queries)
+    assert any("cursor" in query for query in queries[1:])
+
+    bars = pit.get_equity_bars_daily(
+        as_of="2025-04-04T15:30:00+09:00",
+        code="8697",
+        db_path=synced_cf_d1_db.db,
+    )
+    assert len(bars.rows) == 4
+    assert [row["close"] for row in bars.rows] == [100.0, 102.0, 101.0, 104.0]
+
+
 @pytest.mark.live
 def test_sync_live_requires_worker_url(tmp_path, sync_module):
     """Live smoke. Skipped unless ``QP_LIVE=1`` and a worker URL is set.
@@ -78,5 +87,4 @@ def test_sync_live_requires_worker_url(tmp_path, sync_module):
         "--url", url,
         "--table", "jquants_market_calendar",
     ])
-    # Live run: only assert it terminates with one of the known exit codes.
-    assert rc in (0, 1, 2)
+    assert rc == 0

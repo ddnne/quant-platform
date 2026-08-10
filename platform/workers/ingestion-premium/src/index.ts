@@ -11,8 +11,8 @@
  *   5. Auto validation with explicit pass/fail per dataset.
  *   6. Failures not treated as success — a dataset that errors is recorded
  *      with `status='fail'` and surfaces in `/health` + the run summary.
- *   7. Local-readable path — the `/v1/export/d1` endpoint streams the D1
- *      structured tables so `scripts/sync_d1_to_sqlite.py` can build a
+ *   7. Local-readable path — the paginated `/v1/export/d1` endpoint exposes
+ *      D1 structured tables so `scripts/sync_d1_to_sqlite.py` can build a
  *      local PIT DB.
  *   8. Required datasets: see `catalog.ts` (mirrors Python
  *      `PREMIUM_CORE_DATASETS`).
@@ -20,8 +20,8 @@
  * Endpoints:
  *   GET  /health                        — readiness + last-run summary
  *   POST /v1/run[?dataset=..&from=..&to=..]  — manual trigger (auth gated)
- *   GET  /v1/export/d1?table=..         — CSV stream of a D1 table
- *                                         (auth gated)
+ *   GET  /v1/export/d1?table=..&cursor=..&limit=.. — JSON page of a D1 table
+ *                                                    (auth gated)
  */
 
 import { PREMIUM_CORE_DATASETS, isPremiumCore, datasetById, type DatasetSpec } from "./catalog";
@@ -57,6 +57,50 @@ function todayJst(): string {
 function daysAgoJst(n: number): string {
   const t = new Date(Date.now() - n * 24 * 60 * 60 * 1000);
   return toJstIso(t).slice(0, 10);
+}
+
+function inclusiveDates(from: string, to: string): string[] {
+  const datePattern = /^\d{4}-\d{2}-\d{2}$/;
+  if (!datePattern.test(from) || !datePattern.test(to)) {
+    throw new Error("from/to must be YYYY-MM-DD");
+  }
+  const start = new Date(`${from}T00:00:00Z`);
+  const end = new Date(`${to}T00:00:00Z`);
+  if (
+    Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) ||
+    start.toISOString().slice(0, 10) !== from ||
+    end.toISOString().slice(0, 10) !== to
+  ) {
+    throw new Error("from/to must be valid calendar dates");
+  }
+  if (start > end) throw new Error("from must be on or before to");
+
+  const dates: string[] = [];
+  for (let cursor = start; cursor <= end; cursor = new Date(cursor.getTime() + 86_400_000)) {
+    dates.push(cursor.toISOString().slice(0, 10));
+  }
+  return dates;
+}
+
+function requestQueries(
+  spec: DatasetSpec,
+  opts: { from?: string; to?: string; today?: string },
+): Record<string, string>[] {
+  if (spec.dateMode === "none") return [{}];
+
+  if (spec.dateMode === "today") {
+    if (opts.from || opts.to) {
+      const from = opts.from || opts.to!;
+      const to = opts.to || opts.from!;
+      return inclusiveDates(from, to).map((date) => ({ date }));
+    }
+    return [{ date: opts.today || todayJst() }];
+  }
+
+  const from = opts.from || (opts.to ? opts.to : daysAgoJst(5));
+  const to = opts.to || todayJst();
+  if (from > to) throw new Error("from must be on or before to");
+  return [{ from, to }];
 }
 
 // ---------------------------------------------------------------------------
@@ -102,59 +146,62 @@ async function fetchDataset(
     return out;
   }
 
-  // Build base query per spec.dateMode + overrides.
-  const baseQuery: Record<string, string> = {};
-  if (spec.dateMode === "range" || opts.from || opts.to) {
-    if (opts.from) baseQuery["from"] = opts.from;
-    else if (spec.dateMode === "range") baseQuery["from"] = daysAgoJst(5);
-    if (opts.to) baseQuery["to"] = opts.to;
-    else if (spec.dateMode === "range") baseQuery["to"] = todayJst();
-  } else if (spec.dateMode === "today") {
-    baseQuery["date"] = opts.today || todayJst();
+  let queries: Record<string, string>[];
+  try {
+    queries = requestQueries(spec, opts);
+  } catch (e) {
+    out.error = `invalid date range: ${(e as Error).message}`;
+    return out;
   }
 
-  const seenPaginationErrors: number[] = [];
-
-  let pagination: string | null = null;
-  for (let page = 0; page < 200; page++) {
-    const params = new URLSearchParams(baseQuery);
-    if (pagination) params.set("pagination_key", pagination);
-    const url = JQ_BASE + spec.path + "?" + params.toString();
-    let resp: Response;
-    try {
-      resp = await fetchImpl(url, {
-        method: "GET",
-        headers: { "x-api-key": env.JQUANTS_API_KEY },
-      });
-    } catch (e) {
-      out.error = `transport: ${(e as Error).message}`;
-      return out;
+  const path = spec.bulk === "bulk" && spec.bulkPath ? spec.bulkPath : spec.path;
+  for (const baseQuery of queries) {
+    let pagination: string | null = null;
+    for (let page = 0; page < 200; page++) {
+      const params = new URLSearchParams(baseQuery);
+      if (pagination) params.set("pagination_key", pagination);
+      const suffix = params.size > 0 ? `?${params.toString()}` : "";
+      const url = JQ_BASE + path + suffix;
+      let resp: Response;
+      try {
+        resp = await fetchImpl(url, {
+          method: "GET",
+          headers: { "x-api-key": env.JQUANTS_API_KEY },
+        });
+      } catch (e) {
+        out.error = `transport: ${(e as Error).message}`;
+        return out;
+      }
+      out.httpStatus = resp.status;
+      if (resp.status === 429 || resp.status >= 500) {
+        out.error = `transient HTTP ${resp.status}`;
+        return out;
+      }
+      if (!resp.ok) {
+        out.error = `HTTP ${resp.status}: ${(await resp.text()).slice(0, 200)}`;
+        return out;
+      }
+      const text = await resp.text();
+      out.rawBytes += text.length;
+      let parsed: any;
+      try {
+        parsed = JSON.parse(text);
+      } catch (e) {
+        out.error = `invalid json: ${(e as Error).message}`;
+        return out;
+      }
+      const rows = Array.isArray(parsed?.data) ? parsed.data : [];
+      out.rows.push(...rows);
+      const next = parsed?.pagination_key || parsed?.pagination_token;
+      if (!next) break;
+      if (page === 199) {
+        out.paginationErrors++;
+        out.error = "pagination exceeded 200 pages";
+        return out;
+      }
+      pagination = String(next);
     }
-    out.httpStatus = resp.status;
-    if (resp.status === 429 || resp.status >= 500) {
-      out.error = `transient HTTP ${resp.status}`;
-      return out;
-    }
-    if (!resp.ok) {
-      out.error = `HTTP ${resp.status}: ${(await resp.text()).slice(0, 200)}`;
-      return out;
-    }
-    const text = await resp.text();
-    out.rawBytes += text.length;
-    let parsed: any;
-    try {
-      parsed = JSON.parse(text);
-    } catch (e) {
-      out.error = `invalid json: ${(e as Error).message}`;
-      return out;
-    }
-    const rows = Array.isArray(parsed?.data) ? parsed.data : [];
-    out.rows.push(...rows);
-    const next = parsed?.pagination_key || parsed?.pagination_token;
-    if (!next) break;
-    pagination = next;
   }
-  out.paginationErrors = seenPaginationErrors.length;
   return out;
 }
 
@@ -176,10 +223,19 @@ function naturalKey(row: Record<string, unknown>, spec: DatasetSpec): string {
   }
   if (Object.keys(picked).length === 0) {
     // Fallback: stable JSON hash of the whole row.
-    const stable = JSON.stringify(row, Object.keys(row).sort());
+    const stable = stableJson(row);
     return `hash:${stable.slice(0, 60)}`;
   }
   return JSON.stringify(picked);
+}
+
+function stableJson(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  const object = value as Record<string, unknown>;
+  return `{${Object.keys(object).sort().map(
+    (key) => `${JSON.stringify(key)}:${stableJson(object[key])}`,
+  ).join(",")}}`;
 }
 
 function pickEventTime(row: Record<string, unknown>, spec: DatasetSpec): string | null {
@@ -214,6 +270,7 @@ interface DatasetResult {
   availableAtMax: string | null;
   detail: string;
   rawKey: string | null;
+  rawBytes: number;
 }
 
 async function ingestOne(
@@ -233,7 +290,7 @@ async function ingestOne(
       startedAt, finishedAt,
       rowsSeen: outcome.rows.length, rowsInserted: 0, rowsRevisions: 0,
       availableAtMin: null, availableAtMax: null,
-      detail: outcome.error, rawKey: null,
+      detail: outcome.error, rawKey: null, rawBytes: outcome.rawBytes,
     };
     if (runId !== null) {
       await writeValidation(env, runId, res);
@@ -248,7 +305,7 @@ async function ingestOne(
   const rawBody = JSON.stringify({
     fetched_at: toJstIso(when),
     dataset: spec.id,
-    path: spec.path,
+    path: spec.bulk === "bulk" && spec.bulkPath ? spec.bulkPath : spec.path,
     params: opts,
     http_status: outcome.httpStatus,
     rows: outcome.rows.length,
@@ -273,6 +330,7 @@ async function ingestOne(
     availableAtMax: availableBounds.max,
     detail: `raw=${rawKey}`,
     rawKey,
+    rawBytes: outcome.rawBytes,
   };
   if (runId !== null) {
     await writeValidation(env, runId, res);
@@ -282,6 +340,30 @@ async function ingestOne(
 
 interface UpsertSummary { inserted: number; revisions: number; }
 
+interface StructuredRecord {
+  source: string;
+  dataset: string;
+  naturalKey: string;
+  eventTime: string;
+  availableAt: string;
+  ingestedAt: string;
+  payload: string;
+  rawPayload: string;
+}
+
+function recordBinds(records: StructuredRecord[]): unknown[] {
+  return records.flatMap((record) => [
+    record.source,
+    record.dataset,
+    record.naturalKey,
+    record.eventTime,
+    record.availableAt,
+    record.ingestedAt,
+    record.payload,
+    record.rawPayload,
+  ]);
+}
+
 async function upsertRecords(
   env: Env,
   spec: DatasetSpec,
@@ -290,10 +372,10 @@ async function upsertRecords(
 ): Promise<UpsertSummary> {
   if (rows.length === 0) return { inserted: 0, revisions: 0 };
   const ingestedAt = toJstIso(when);
-  // available_at: row-level if present, else the fetch time (PIT-safe:
-  // the row was unknowable before it arrived).
-  const placeholders: string[] = [];
-  const binds: unknown[] = [];
+  // De-duplicate a response by business key, retaining its last occurrence.
+  // available_at is row-level if present, else fetch time (PIT-safe: the row
+  // was unknowable before it arrived).
+  const byKey = new Map<string, StructuredRecord>();
   for (const row of rows) {
     const nk = naturalKey(row, spec);
     const ev = pickEventTime(row, spec);
@@ -301,63 +383,81 @@ async function upsertRecords(
       typeof row["available_at"] === "string"
         ? (row["available_at"] as string)
         : ingestedAt;
-    const payload = JSON.stringify(row);
-    placeholders.push("(?, ?, ?, ?, ?, ?, ?, ?)");
-    binds.push(
-      "jquants", spec.id, nk,
-      ev || availableAt,
-      availableAt, ingestedAt,
-      payload, payload,
-    );
+    // Stable key ordering makes payload comparison semantic rather than
+    // dependent on JSON object property order. The generated PIT timestamps
+    // are separate columns, so an hourly re-fetch does not look amended.
+    const payload = stableJson(row);
+    byKey.set(nk, {
+      source: "jquants",
+      dataset: spec.id,
+      naturalKey: nk,
+      eventTime: ev || availableAt,
+      availableAt,
+      ingestedAt,
+      payload,
+      rawPayload: JSON.stringify(row),
+    });
   }
+  const records = [...byKey.values()];
 
-  // Idempotent insert with amendment-tracking. SQLite/D1 `INSERT OR IGNORE`
-  // leaves a conflicting row untouched; we then upsert revisions on conflict
-  // so multiple published revisions of one observation coexist. We do this
-  // one chunk at a time to stay under D1's per-statement bind cap.
-  const CHUNK = 100;
+  // D1 permits at most 100 bound parameters per statement. Each record has
+  // eight fields, so a VALUES statement can contain at most floor(100/8)=12.
+  const CHUNK = Math.floor(100 / 8);
   let inserted = 0;
-  for (let i = 0; i < rows.length; i += CHUNK) {
-    const end = Math.min(i + CHUNK, rows.length);
-    const pp = placeholders.slice(i, end);
-    const bb = binds.slice(i * 8, end * 8);
-    const sql =
-      `INSERT OR IGNORE INTO jquants_records
-       (source, dataset, natural_key, event_time, available_at, ingested_at, payload, raw_payload)
-       VALUES ${pp.join(", ")}`;
-    const stmt = env.DB.prepare(sql);
-    const r = await stmt.bind(...bb).run();
-    inserted += (r.meta?.changes ?? 0) as number;
-  }
-
-  // Amendments: for each row whose key already existed with a different
-  // available_at, persist a revisions row. (D1 SQLite supports
-  // `INSERT INTO revisions SELECT ... WHERE NOT EXISTS`.) For brevity here
-  // we insert one revisions row per input row whose payload differs from
-  // the current primary row — a deliberate full-fidelity strategy.
   let revisions = 0;
-  for (const row of rows) {
-    const nk = naturalKey(row, spec);
-    const ingestedAt2 = toJstIso(when);
-    const availableAt2 =
-      typeof row["available_at"] === "string"
-        ? (row["available_at"] as string)
-        : ingestedAt2;
-    const payload2 = JSON.stringify(row);
-    const ev2 = pickEventTime(row, spec) || availableAt2;
-    const revSql =
-      `INSERT OR IGNORE INTO jquants_records_revisions
-       (source, dataset, natural_key, available_at, event_time, ingested_at, payload, raw_payload)
-       SELECT source, dataset, natural_key, available_at, event_time, ingested_at, payload, raw_payload
-       FROM jquants_records
-       WHERE source='jquants' AND dataset=? AND natural_key=?
-       UNION
-       SELECT ?, ?, ?, ?, ?, ?, ?, ?`;
-    const r2 = await env.DB.prepare(revSql).bind(
-      spec.id, nk,
-      "jquants", spec.id, nk, availableAt2, ev2, ingestedAt2, payload2, payload2,
-    ).run();
-    revisions += (r2.meta?.changes ?? 0) as number;
+  for (let i = 0; i < records.length; i += CHUNK) {
+    const chunk = records.slice(i, i + CHUNK);
+    const placeholders = chunk.map(() => "(?, ?, ?, ?, ?, ?, ?, ?)").join(", ");
+    const binds = recordBinds(chunk);
+
+    const existing = await env.DB.prepare(
+      `SELECT natural_key FROM jquants_records
+       WHERE source = ? AND dataset = ?
+         AND natural_key IN (${chunk.map(() => "?").join(", ")})`,
+    ).bind("jquants", spec.id, ...chunk.map((record) => record.naturalKey)).all();
+    inserted += chunk.length - (existing.results?.length ?? 0);
+
+    // Archive only a displaced primary whose stable source payload changed.
+    // The archive + primary upsert run atomically as one D1 batch.
+    const archiveSql =
+      `WITH incoming
+       (source, dataset, natural_key, event_time, available_at, ingested_at, payload, raw_payload)
+       AS (VALUES ${placeholders})
+       INSERT OR IGNORE INTO jquants_records_revisions
+       (source, dataset, natural_key, event_time, available_at, ingested_at, payload, raw_payload)
+       SELECT current.source, current.dataset, current.natural_key,
+              current.event_time, current.available_at, current.ingested_at,
+              current.payload, current.raw_payload
+       FROM jquants_records AS current
+       JOIN incoming
+         ON current.source = incoming.source
+        AND current.dataset = incoming.dataset
+        AND current.natural_key = incoming.natural_key
+       WHERE current.payload IS NOT incoming.payload`;
+    const upsertSql =
+      `INSERT INTO jquants_records
+       (source, dataset, natural_key, event_time, available_at, ingested_at, payload, raw_payload)
+       VALUES ${placeholders}
+       ON CONFLICT(source, dataset, natural_key) DO UPDATE SET
+         event_time = CASE
+           WHEN jquants_records.payload IS excluded.payload THEN jquants_records.event_time
+           ELSE excluded.event_time END,
+         available_at = CASE
+           WHEN jquants_records.payload IS excluded.payload
+             THEN MIN(jquants_records.available_at, excluded.available_at)
+           ELSE excluded.available_at END,
+         ingested_at = excluded.ingested_at,
+         payload = CASE
+           WHEN jquants_records.payload IS excluded.payload THEN jquants_records.payload
+           ELSE excluded.payload END,
+         raw_payload = CASE
+           WHEN jquants_records.payload IS excluded.payload THEN jquants_records.raw_payload
+           ELSE excluded.raw_payload END`;
+    const batch = await env.DB.batch([
+      env.DB.prepare(archiveSql).bind(...binds),
+      env.DB.prepare(upsertSql).bind(...binds),
+    ]);
+    revisions += (batch[0]?.meta?.changes ?? 0) as number;
   }
 
   return { inserted, revisions };
@@ -458,8 +558,60 @@ async function runIngestion(
   let rowsInserted = 0;
   let rawBytes = 0;
 
+  if (specs.length === 0) {
+    const finishedAt = toJstIso(new Date());
+    const dataset = opts.dataset || "<none>";
+    const detail = opts.dataset
+      ? `unknown or out-of-scope dataset: ${opts.dataset}`
+      : "no datasets selected";
+    const result: DatasetResult = {
+      dataset,
+      status: "fail",
+      startedAt,
+      finishedAt,
+      rowsSeen: 0,
+      rowsInserted: 0,
+      rowsRevisions: 0,
+      availableAtMin: null,
+      availableAtMax: null,
+      detail,
+      rawKey: null,
+      rawBytes: 0,
+    };
+    failed = 1;
+    failures.push({ dataset, detail });
+    if (runId !== null) await writeValidation(env, runId, result);
+  }
+
   for (const spec of specs) {
-    const res = await ingestOne(env, spec, opts, fetchImpl, runId);
+    const datasetStartedAt = toJstIso(new Date());
+    let res: DatasetResult;
+    try {
+      res = await ingestOne(env, spec, opts, fetchImpl, runId);
+    } catch (e) {
+      const detail = `ingest exception: ${(e as Error).message || String(e)}`;
+      res = {
+        dataset: spec.id,
+        status: "fail",
+        startedAt: datasetStartedAt,
+        finishedAt: toJstIso(new Date()),
+        rowsSeen: 0,
+        rowsInserted: 0,
+        rowsRevisions: 0,
+        availableAtMin: null,
+        availableAtMax: null,
+        detail,
+        rawKey: null,
+        rawBytes: 0,
+      };
+      if (runId !== null) {
+        try {
+          await writeValidation(env, runId, res);
+        } catch (validationError) {
+          res.detail += `; validation write failed: ${(validationError as Error).message}`;
+        }
+      }
+    }
     if (res.status === "pass") {
       passed++;
     } else {
@@ -467,11 +619,12 @@ async function runIngestion(
       failures.push({ dataset: res.dataset, detail: res.detail });
     }
     rowsInserted += res.rowsInserted;
+    rawBytes += res.rawBytes;
   }
 
   const finishedAt = toJstIso(new Date());
   const status: RunSummary["status"] =
-    failed === 0 ? "pass" : passed === 0 ? "fail" : "partial";
+    specs.length === 0 || passed === 0 ? "fail" : failed === 0 ? "pass" : "partial";
   const summary: RunSummary = {
     startedAt, finishedAt, status,
     datasetCount: specs.length,
@@ -507,9 +660,10 @@ function json(body: unknown, status = 200): Response {
 
 async function handleHealth(env: Env): Promise<Response> {
   const last = await lastRunSummary(env);
+  const hasKey = Boolean(env.JQUANTS_API_KEY);
   return json({
-    ok: true,
-    has_jquants_key: Boolean(env.JQUANTS_API_KEY),
+    ok: hasKey,
+    has_jquants_key: hasKey,
     datasets: PREMIUM_CORE_DATASETS.length,
     last_run: last,
   });
@@ -551,8 +705,40 @@ async function handleExportD1(
   if (!allowed.has(table)) {
     return json({ error: "table not exportable" }, 400);
   }
-  const r = await env.DB.prepare(`SELECT * FROM ${table}`).all();
-  return Response.json({ table, rows: r.results ?? [] });
+  const limitRaw = Number(url.searchParams.get("limit") || "500");
+  const cursorRaw = Number(url.searchParams.get("cursor") || "0");
+  if (!Number.isInteger(limitRaw) || limitRaw < 1 || limitRaw > 1000) {
+    return json({ error: "limit must be an integer between 1 and 1000" }, 400);
+  }
+  if (!Number.isInteger(cursorRaw) || cursorRaw < 0) {
+    return json({ error: "cursor must be a non-negative integer" }, 400);
+  }
+
+  // rowid is a stable, indexed cursor for every exportable D1 table. Fetch
+  // one extra row so has_more is exact without an unbounded COUNT(*).
+  const r = await env.DB.prepare(
+    `SELECT rowid AS __export_cursor, * FROM ${table}
+     WHERE rowid > ? ORDER BY rowid LIMIT ?`,
+  ).bind(cursorRaw, limitRaw + 1).all();
+  const fetched = (r.results ?? []) as Record<string, unknown>[];
+  const hasMore = fetched.length > limitRaw;
+  const page = fetched.slice(0, limitRaw);
+  const nextCursor = page.length > 0
+    ? Number(page[page.length - 1].__export_cursor)
+    : null;
+  const rows = page.map((row) => {
+    const clean = { ...row };
+    delete clean.__export_cursor;
+    return clean;
+  });
+  return Response.json({
+    table,
+    rows,
+    cursor: cursorRaw,
+    next_cursor: hasMore ? nextCursor : null,
+    has_more: hasMore,
+    limit: limitRaw,
+  });
 }
 
 export default {

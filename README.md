@@ -6,7 +6,7 @@
 ## 現状（Phase 4）
 
 **Phase 1（Ingestion）＋ Phase 2（PIT Data API）＋ Phase 3（コアエンジン最小）＋
-Phase 3.5（CF J-Quants Premium 閉路）＋ Phase 4（特徴量 Registry）が完了した状態です。**
+Phase 3.5（CF J-Quants Premium 閉路の実装）＋ Phase 4（特徴量 Registry）が完了した状態です。**
 
 Phase 1 — 2 データソースの取得・正規化・格納が動きます:
 
@@ -26,10 +26,13 @@ fact は `pit.get_*` 経由のみ（`core/` は SQLite/HTTP を直接開かな�
 時点の狭い `BarContext` のみを渡す。`next_close`/`same_day_close` 執行・標準/ストレス費用・
 再現性メタデータ付き。詳細は [docs/core_engine.md](docs/core_engine.md)。
 
-Phase 3.5 — **Cloudflare 上の J-Quants Premium core 閉路**。Worker
-`quant-platform-ingestion-premium` が cron で 23 データセットを取得し、R2 raw + D1
+Phase 3.5 — **Cloudflare 上の J-Quants Premium core 閉路の実装**。Worker
+`quant-platform-ingestion-premium` は、デプロイ後に cron で 23 データセットを取得し、R2 raw + D1
 structured に保存・per-dataset の pass/fail 検証を行う。addon（分足・Tick・TDnet）は
-スコープ外。ローカルは `/v1/export/d1` から同期して `pit.get_*` で読む。
+スコープ外。ローカルはページネーション付き `/v1/export/d1` から同期して `pit.get_*` で読む。
+Cloudflare リソース作成・migration・同一 secret 値の binding・deploy が完了して初めて本番閉路が有効になる。
+2026-08-11 JST 時点で `quant-ingest`、`quant-raw`、`quant-structured` を作成し、migration、
+既存の 2 secret binding、Worker + Cron deploy、`/health` とページ export を確認済み。
 詳細は [docs/phase35_cf_ingest.md](docs/phase35_cf_ingest.md)。
 
 Phase 4 — **特徴量 Registry（`features/`）**。PIT 経由のみの versioned 特徴量セット。

@@ -1,8 +1,14 @@
 # Phase 3.5 — CF J-Quants Premium Ingestion Closed Loop
 
-The Cloudflare Worker `quant-platform-ingestion-premium` closes the
-J-Quants **Premium core** ingestion loop end-to-end on CF. It owns the
-schedule, secrets, raw + structured persistence, and validation log.
+The Cloudflare Worker `quant-platform-ingestion-premium` implements the
+J-Quants **Premium core** ingestion loop end-to-end on CF. Once its resources,
+migration, existing secret values, Worker, and Cron Trigger are deployed, it
+owns the schedule, secrets, raw + structured persistence, and validation log.
+
+Deployment status (2026-08-11 JST): `quant-ingest`, `quant-raw`, and
+`quant-structured` exist; the migration, both existing secret bindings, Worker,
+and hourly Cron Trigger are deployed. `/health` reports the key binding ready,
+and an authenticated paginated export smoke succeeds.
 
 ## What's in scope (Premium core, 23 datasets)
 
@@ -29,15 +35,17 @@ guard.
    `raw/{dataset}/{yyyy}/{mm}/{dd}/{stamp}.json`; D1 rows go in
    `jquants_records` (and the revisions mirror) with full PIT columns.
 4. **Incremental primary; backfill separable** — cron uses recent from/to
-   windows; `/v1/run?from=&to=` backfills a span.
+   windows; `/v1/run?from=&to=` backfills a span. Endpoints that accept only
+   `date` fan out once per day, while `equities_bars_daily` prefers its
+   confirmed `/v2/bulk/equities/bars/daily` transport.
 5. **Auto validation** — per-dataset result written to `ingestion_validation`
    with explicit `status ∈ {pass, fail}`.
 6. **Failures ≠ success** — a fetch error sets `status='fail'`; the run
    summary status is `pass` / `partial` / `fail` (never silent). See
    ``cf_platform.ingest_premium.validate.classify_dataset`` for the rule.
-7. **Local-readable path** — ``scripts/sync_d1_to_sqlite.py`` consumes
-   `/v1/export/d1` and builds a local PIT DB so ``pit.get_*`` reads work
-   offline.
+7. **Local-readable path** — ``scripts/sync_d1_to_sqlite.py`` follows the
+   cursor-paginated `/v1/export/d1` response and builds a local PIT DB so
+   ``pit.get_*`` reads work offline.
 
 ## Resources
 
@@ -56,7 +64,7 @@ Schema migration: ``platform/workers/ingestion-premium/migrations/0001_init.sql`
 |--------|------|------|-------------|
 | GET    | `/health` | none | Readiness + last-run summary |
 | POST   | `/v1/run?dataset=&from=&to=&today=` | `X-Ingestion-Token` | Manual trigger (one or all datasets) |
-| GET    | `/v1/export/d1?table=` | `X-Ingestion-Token` | Stream one D1 table as JSON |
+| GET    | `/v1/export/d1?table=&cursor=&limit=` | `X-Ingestion-Token` | Read one cursor-paginated D1 JSON page (`limit` 1–1000) |
 
 ## Secrets policy
 

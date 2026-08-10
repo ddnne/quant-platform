@@ -32,6 +32,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from urllib.parse import urlencode
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _REPO_ROOT not in sys.path:
@@ -53,6 +54,7 @@ DEFAULT_TABLES: tuple[str, ...] = (
     "jquants_daily_bars_revisions",
     "jquants_records_revisions",
 )
+DEFAULT_PAGE_LIMIT = 500
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -77,6 +79,12 @@ def _build_parser() -> argparse.ArgumentParser:
         "--db",
         required=True,
         help="Local SQLite path (will be created if missing).",
+    )
+    p.add_argument(
+        "--page-limit",
+        type=int,
+        default=DEFAULT_PAGE_LIMIT,
+        help="Rows requested per D1 export page (1-1000, default: 500).",
     )
     p.add_argument(
         "--no-proxy-config",
@@ -136,6 +144,9 @@ def _sync_one(
 
 def main(argv=None) -> int:
     args = _build_parser().parse_args(argv)
+    if not 1 <= args.page_limit <= 1000:
+        print("[sync] --page-limit must be between 1 and 1000", file=sys.stderr)
+        return 2
     url, token = _resolve_endpoint(args)
     if not url:
         print(
@@ -153,18 +164,46 @@ def main(argv=None) -> int:
 
     try:
         for t in tables:
-            endpoint = f"{base}/v1/export/d1?table={t}"
-            try:
-                payload = _http_get_json(endpoint, token or "")
-            except Exception as exc:  # noqa: BLE001
-                failures.append(f"{t}: {exc}")
-                print(f"[sync] {t} FAILED: {exc}", file=sys.stderr)
-                continue
-            rows = payload.get("rows") or []
-            seen, registered = _sync_one(store, t, rows)
-            total_seen += seen
-            total_registered += registered
-            print(f"[sync] {t}: seen={seen} registered={registered}")
+            cursor: str | int | None = None
+            table_seen = table_registered = pages = 0
+            while True:
+                query: dict[str, str | int] = {
+                    "table": t,
+                    "limit": args.page_limit,
+                }
+                if cursor is not None:
+                    query["cursor"] = cursor
+                endpoint = f"{base}/v1/export/d1?{urlencode(query)}"
+                try:
+                    payload = _http_get_json(endpoint, token or "")
+                    if payload.get("table", t) != t:
+                        raise ValueError(
+                            f"export returned table={payload.get('table')!r}, expected {t!r}"
+                        )
+                    rows = payload.get("rows") or []
+                    if not isinstance(rows, list):
+                        raise ValueError("export rows must be a list")
+                    seen, registered = _sync_one(store, t, rows)
+                    table_seen += seen
+                    table_registered += registered
+                    pages += 1
+
+                    if not payload.get("has_more", False):
+                        break
+                    next_cursor = payload.get("next_cursor")
+                    if next_cursor is None or next_cursor == cursor:
+                        raise ValueError("export pagination did not advance cursor")
+                    cursor = next_cursor
+                except Exception as exc:  # noqa: BLE001
+                    failures.append(f"{t}: {exc}")
+                    print(f"[sync] {t} FAILED: {exc}", file=sys.stderr)
+                    break
+            total_seen += table_seen
+            total_registered += table_registered
+            print(
+                f"[sync] {t}: pages={pages} seen={table_seen} "
+                f"registered={table_registered}"
+            )
     finally:
         store.close()
 

@@ -41,16 +41,15 @@ bucket_name = "quant-structured"
 [[d1_databases]]
 binding = "DB"
 database_name = "quant-ingest"
-# database_id is printed by `wrangler d1 create` — paste it here.
-# database_id = "PASTE-FROM-wrangler-d1-create"
+database_id = "be6fdcf8-40be-41fc-9535-7facd1fc2ffc"
 
 # Secrets bound via `wrangler secret put` (never in this file):
 # - JQUANTS_API_KEY            (required for fetch)
 # - INGESTION_PROXY_TOKEN      (optional; gates /v1/run manual trigger)
 
 [triggers]
-# Hourly at 15 minutes past. Workers Cron is UTC; 00:15 UTC == 09:15 JST.
-cron = ["15 * * * *"]
+# Hourly at :15. Workers Cron is UTC; for example 00:15 UTC == 09:15 JST.
+crons = ["15 * * * *"]
 
 [observability]
 enabled = true

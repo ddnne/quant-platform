@@ -15,6 +15,7 @@ export interface DatasetSpec {
   id: string;
   path: string;            // /v2/... REST path
   bulk: "api" | "bulk";
+  bulkPath?: string;       // confirmed /v2/bulk/... path when bulk-preferred
   // Default date param strategy for the scheduled run. "range" -> fetch a
   // recent from/to window (incremental); "today" -> fetch the single date
   // "today" (UTC days); "none" -> no date param (full snapshot).
@@ -25,7 +26,7 @@ export interface DatasetSpec {
 
 export const PREMIUM_CORE_DATASETS: DatasetSpec[] = [
   { id: "equities_master",                  path: "/v2/equities/master",                  bulk: "api",  dateMode: "today", codeParam: true  },
-  { id: "equities_bars_daily",              path: "/v2/equities/bars/daily",              bulk: "bulk", dateMode: "range", codeParam: true  },
+  { id: "equities_bars_daily",              path: "/v2/equities/bars/daily", bulkPath: "/v2/bulk/equities/bars/daily", bulk: "bulk", dateMode: "range", codeParam: true  },
   { id: "equities_bars_daily_am",           path: "/v2/equities/bars/daily/am",           bulk: "api",  dateMode: "today", codeParam: true  },
   { id: "fins_summary",                     path: "/v2/fins/summary",                     bulk: "api",  dateMode: "today", codeParam: true  },
   { id: "fins_details",                     path: "/v2/fins/details",                     bulk: "api",  dateMode: "today", codeParam: true  },
