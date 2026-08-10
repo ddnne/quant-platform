@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "quant-platform"
+version = "0.1.0"
+description = "Japanese equities / disclosure / bond data research, paper, FoF platform"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Proprietary" }
+authors = [{ name = "quant-platform" }]
+dependencies = [
+    "httpx>=0.27",
+]
+
+[project.optional-dependencies]
+# JSDA publishes some files as .xlsx; parsing is optional and CSV is the default path.
+xlsx = ["openpyxl>=3.1"]
+dev = [
+    "pytest>=8",
+    "openpyxl>=3.1",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["ingestion*", "storage*"]
+exclude = ["tests*", "scripts*", "data*", "docs*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

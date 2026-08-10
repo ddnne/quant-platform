@@ -36,9 +36,15 @@ credentials.json
 
 # Data dumps (local only)
 data/raw/
+data/structured/
 data/tmp/
 *.parquet
 *.duckdb
+*.sqlite
+*.sqlite3
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
 
 # Local agent logs
 .glm-logs/
