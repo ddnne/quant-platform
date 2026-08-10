@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
+import json
+
+import pytest
+
 from ingestion.jquants.normalize import (
     normalize_daily_bars,
+    normalize_generic,
     normalize_listed_info,
     normalize_market_calendar,
 )
@@ -78,3 +83,53 @@ def test_close_time_15_30_on_and_after_2024_11_05():
     )[0]
     assert on["event_time"] == "2024-11-05T15:30:00+09:00"
     assert after["event_time"] == "2025-04-01T15:30:00+09:00"
+
+
+# --------------------------------------------------------------------------- generic
+
+def test_generic_natural_key_from_catalog_identity_fields():
+    rows = [{"Code": "8697", "Date": "2025-04-01", "Close": 100}]
+    out = normalize_generic(rows, dataset="equities_bars_daily", ingested_at=ING)
+    assert len(out) == 1
+    r = out[0]
+    assert r["dataset"] == "equities_bars_daily"
+    assert r["source"] == "jquants"
+    # identity fields land in the natural key
+    nk = json.loads(r["natural_key"])
+    assert nk == {"Code": "8697", "Date": "2025-04-01"}
+    # daily bars reuse the close-time rule
+    assert r["event_time"] == "2025-04-01T15:30:00+09:00"
+    # payload (sorted) + raw_payload (verbatim) both present
+    assert json.loads(r["raw_payload"])["Close"] == 100
+    assert json.loads(r["payload"]) == rows[0]
+    assert r["available_at"] == ING
+
+
+def test_generic_event_time_from_disclosed_date():
+    rows = [{"Code": "8697", "DisclosedDate": "2025-05-01", "Foo": 1}]
+    out = normalize_generic(rows, dataset="fins_details", ingested_at=ING)
+    assert out[0]["event_time"] == "2025-05-01T09:00:00+09:00"
+    assert json.loads(out[0]["natural_key"])["Code"] == "8697"
+
+
+def test_generic_key_falls_back_to_row_hash_when_no_identity_fields():
+    rows = [{"SomethingUnrelated": "x"}]
+    out = normalize_generic(rows, dataset="markets_breakdown", ingested_at=ING)
+    nk = json.loads(out[0]["natural_key"])
+    assert "_hash" in nk and len(nk["_hash"]) == 40  # sha1 hex
+    # event_time falls back to available_at (ingested) when no date present
+    assert out[0]["event_time"] == ING
+
+
+def test_generic_unknown_dataset_raises():
+    with pytest.raises(KeyError):
+        normalize_generic([{"a": 1}], dataset="nope", ingested_at=ING)
+
+
+def test_generic_skips_non_dict_rows():
+    out = normalize_generic(
+        [{"Code": "1", "Date": "2025-04-01"}, "junk", None],
+        dataset="equities_bars_daily",
+        ingested_at=ING,
+    )
+    assert len(out) == 1

@@ -10,14 +10,26 @@ Field-name tolerance: V2 publishes long names (``Open`` / ``High`` / …) for
 some payloads and abbreviated short names (``O`` / ``H`` / ``CoName`` / …)
 for others. :func:`_pick` returns the first present, non-empty value among
 the candidate keys, so both shapes normalize correctly.
+
+Two storage targets:
+
+* the Phase-1 **specialized** tables (:func:`normalize_daily_bars` /
+  :func:`normalize_listed_info` / :func:`normalize_market_calendar`) for the
+  three curated series, and
+* the **generic** :func:`normalize_generic` -> ``jquants_records`` table that
+  absorbs every other catalog dataset (fins, indices, derivatives, markets,
+  EDINET, minute/tick/TDnet add-ons). Phase 1 prefers the generic table for
+  speed; specialized tables stay for the curated, query-heavy series.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 from typing import Any, Iterable, List, Optional
 
 from ..common.timeutil import parse_dt, to_iso
+from . import catalog
 
 # TSE moved the cash-session close from 15:00 to 15:30 JST starting this date.
 CLOSE_CHANGE_DATE = "2024-11-05"
@@ -182,6 +194,104 @@ def normalize_market_calendar(
                 "available_at": av,
                 "ingested_at": ingested_at,
                 "holiday_division": _pick_str(r, "HolidayDivision", "HolDiv"),
+                "raw_payload": json.dumps(r, ensure_ascii=False),
+            }
+        )
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Generic normalizer -> jquants_records (every other catalog dataset)
+# ---------------------------------------------------------------------------
+
+# Fields inspected (in order) to derive an ``event_time`` when the dataset has
+# no specialized rule. Disclosed/announcement dates win over a plain Date.
+_DATE_FIELDS = ("DisclosedDate", "AnnouncementDate", "DisclosureDate", "Date")
+
+
+def _natural_key(row: dict, key_fields: Iterable[str]) -> dict:
+    """Build a JSON-serializable natural key from the catalog's identity fields.
+
+    Uses whichever of the catalog ``key`` fields are actually present and
+    non-empty. If none match (an unusual payload shape), falls back to a
+    stable SHA-1 of the canonical row so idempotency still holds and we never
+    collapse two distinct rows onto the same key.
+    """
+    nk: dict[str, Any] = {}
+    for f in key_fields:
+        if f in row and row[f] not in (None, ""):
+            nk[f] = row[f]
+    if nk:
+        return nk
+    canon = json.dumps(row, sort_keys=True, ensure_ascii=False)
+    return {"_hash": hashlib.sha1(canon.encode("utf-8")).hexdigest()}
+
+
+def _event_time_for(row: dict, dataset: str) -> Optional[str]:
+    """Best-effort ``event_time`` for a generic row.
+
+    Daily equity bars use the session-close time (honoring the 2024-11-05
+    15:00 -> 15:30 move); minute bars expose ``DateTime``; everything else
+    falls back to the first disclosed/announcement/date field at 09:00 JST.
+    Returns ``None`` when no date-ish field is present (caller uses
+    ``available_at``/``ingested_at``).
+    """
+    if dataset in ("equities_bars_daily", "equities_bars_daily_am"):
+        d = _pick_str(row, "Date")
+        if d:
+            try:
+                return _close_event_time(d[:10])
+            except ValueError:
+                pass
+    dt = _pick(row, "DateTime", "datetime")
+    if dt:
+        try:
+            return to_iso(parse_dt(str(dt)))
+        except ValueError:
+            pass
+    for f in _DATE_FIELDS:
+        v = _pick_str(row, f)
+        if v:
+            try:
+                return to_iso(parse_dt(f"{v[:10]}T09:00:00"))
+            except ValueError:
+                continue
+    return None
+
+
+def normalize_generic(
+    rows: Iterable[dict],
+    *,
+    dataset: str,
+    ingested_at: str,
+    available_at: Optional[str] = None,
+) -> List[dict]:
+    """Normalize any catalog dataset into ``jquants_records`` rows.
+
+    The natural key comes from :func:`_natural_key` (catalog identity fields,
+    row-hash fallback). ``payload`` is a stable (key-sorted) serialization of
+    the row for easy diffing; ``raw_payload`` keeps the verbatim source order
+    for traceability and amendment detection in the store.
+    """
+    av = _avail(available_at, ingested_at)
+    entry = catalog.get(dataset)
+    key_fields = entry.get("key", [])
+    out: List[dict] = []
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        et = _event_time_for(r, dataset) or av
+        out.append(
+            {
+                "source": "jquants",
+                "dataset": dataset,
+                "natural_key": json.dumps(
+                    _natural_key(r, key_fields), sort_keys=True, ensure_ascii=False
+                ),
+                "event_time": et,
+                "available_at": av,
+                "ingested_at": ingested_at,
+                "payload": json.dumps(r, sort_keys=True, ensure_ascii=False),
                 "raw_payload": json.dumps(r, ensure_ascii=False),
             }
         )

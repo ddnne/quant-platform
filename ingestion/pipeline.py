@@ -198,16 +198,41 @@ def run_jquants(
     *,
     http,
     store,
-    api_key: str,
+    api_key: str = "",
     data_base: Path,
     today,
     runtime: str = "local",
     code: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
+    datasets: Optional[List[str]] = None,
+    mode: str = "incremental",
 ) -> List[RunReport]:
-    if not api_key:
-        return [RunReport("jquants", "*", skipped="JQUANTS_API_KEY not set")]
+    """Run a J-Quants pass.
+
+    Two modes of operation:
+
+    * **catalog-driven** (``datasets`` is a non-empty list): for each dataset
+      id fetch via :meth:`JQuantsClient.fetch_dataset`, save raw, normalize
+      with :func:`normalize_generic`, and upsert into the generic
+      ``jquants_records`` table. This is the full Premium + add-on coverage
+      path. ``mode`` (``incremental``/``backfill``) controls the default date
+      window when ``date_from``/``date_to`` are not supplied.
+    * **legacy default** (``datasets`` is ``None``): the Phase-1 curated path
+      (listed_info / daily_bars / market_calendar / fins_summary raw-only)
+      into the specialized tables — unchanged behaviour.
+
+    The API key is required for direct fetch, but **not** when ``http`` is the
+    Cloudflare proxy client (the Worker injects the key upstream).
+    """
+    via_proxy = getattr(http, "name", "") == "cf-jquants-proxy"
+    if not api_key and not via_proxy:
+        return [
+            RunReport(
+                "jquants", "*",
+                skipped="JQUANTS_API_KEY not set (and no CF proxy configured)",
+            )
+        ]
     if runtime != "local":
         return _cannot_fetch("jquants", runtime)
 
@@ -218,6 +243,22 @@ def run_jquants(
     reg = Registrar(store)
     ingested = now_iso()
     reports: List[RunReport] = []
+
+    if datasets:
+        return _run_jquants_catalog(
+            client=client,
+            reg=reg,
+            store=store,
+            datasets=datasets,
+            mode=mode,
+            code=code,
+            date_from=date_from,
+            date_to=date_to,
+            data_base=data_base,
+            today=today,
+            ingested=ingested,
+            runtime=runtime,
+        )
 
     # 1) listed info
     try:
@@ -276,6 +317,97 @@ def run_jquants(
         reports.append(
             RunReport("jquants", "fins_summary", skipped=f"optional endpoint skipped: {exc}")
         )
+
+    _log(store, "jquants", runtime, reports)
+    return reports
+
+
+def _jquants_default_window(today, mode: str) -> tuple[Optional[str], Optional[str]]:
+    """Default date window when the caller passes none.
+
+    ``incremental`` -> the last ~5 calendar days (catch the latest bars /
+    filings without a heavy backfill). ``backfill`` -> no window (let the
+    server return its full default range, or rely on explicit CLI dates).
+    """
+    if mode == "incremental":
+        try:
+            start = today - _days(5)
+            return start.strftime("%Y-%m-%d"), None
+        except Exception:  # pragma: no cover - today isn't date-ish
+            return None, None
+    return None, None
+
+
+def _days(n: int):
+    from datetime import timedelta
+
+    return timedelta(days=n)
+
+
+def _dataset_params(accept: list[str], code, date_from, date_to) -> dict:
+    """Build request params for a dataset, limited to what it accepts.
+
+    ``accept`` is the catalog entry's ``params`` list. Avoids sending
+    ``code``/``from``/``to`` to endpoints that don't take them (e.g. a
+    market-wide calendar or index series).
+    """
+    ok = set(accept or [])
+    p: dict = {}
+    if code and "code" in ok:
+        p["code"] = code
+    if date_from and "from" in ok:
+        p["from_date"] = date_from
+    if date_to and "to" in ok:
+        p["to_date"] = date_to
+    return p
+
+
+def _run_jquants_catalog(
+    *,
+    client,
+    reg,
+    store,
+    datasets: List[str],
+    mode: str,
+    code,
+    date_from,
+    date_to,
+    data_base,
+    today,
+    ingested: str,
+    runtime: str,
+) -> List[RunReport]:
+    """Catalog-driven fetch -> raw -> normalize_generic -> jquants_records."""
+    from .jquants import normalize as JN
+    from .jquants.catalog import DATASETS
+
+    if mode not in ("incremental", "backfill"):
+        mode = "incremental"
+    if not date_from and not date_to:
+        date_from, date_to = _jquants_default_window(today, mode)
+
+    reports: List[RunReport] = []
+    for did in datasets:
+        entry = DATASETS.get(did)
+        if entry is None:
+            reports.append(
+                RunReport("jquants", did, skipped=f"unknown dataset id: {did}")
+            )
+            continue
+        params = _dataset_params(entry.get("params", []), code, date_from, date_to)
+        try:
+            rows = client.fetch_dataset(did, **params)
+            save_raw(
+                data_base, "jquants", _stamped(f"{did}.json", ingested),
+                json.dumps(rows, ensure_ascii=False).encode("utf-8"), today,
+            )
+            norm = JN.normalize_generic(rows, dataset=did, ingested_at=ingested)
+            n = reg.register("jquants_records", norm)
+            reports.append(
+                RunReport("jquants", did, fetched=len(rows), registered=n)
+            )
+        except Exception as exc:  # noqa: BLE001
+            reports.append(RunReport("jquants", did, error=f"{exc}"))
 
     _log(store, "jquants", runtime, reports)
     return reports

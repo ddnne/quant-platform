@@ -67,6 +67,24 @@ CREATE TABLE IF NOT EXISTS jquants_market_calendar (
     PRIMARY KEY (source, date)
 );
 
+-- Generic catch-all for every other J-Quants catalog dataset (fins, indices,
+-- derivatives, markets analytics, EDINET series, minute/tick/TDnet add-ons).
+-- Phase 1 prefers one generic table + ``dataset`` column for ingest speed;
+-- the three curated series above keep their specialized tables. The natural
+-- key is a JSON object of identity fields (e.g. {"Code":..,"Date":..}) or a
+-- row-hash fallback — see ingestion.jquants.normalize._natural_key.
+CREATE TABLE IF NOT EXISTS jquants_records (
+    source       TEXT NOT NULL,
+    dataset      TEXT NOT NULL,
+    natural_key  TEXT NOT NULL,
+    event_time   TEXT NOT NULL,
+    available_at TEXT NOT NULL,
+    ingested_at  TEXT NOT NULL,
+    payload      TEXT,
+    raw_payload  TEXT,
+    PRIMARY KEY (source, dataset, natural_key)
+);
+
 CREATE TABLE IF NOT EXISTS edinetdb_companies (
     source        TEXT NOT NULL,
     code          TEXT NOT NULL,
@@ -127,6 +145,8 @@ CREATE TABLE IF NOT EXISTS ingestion_run_log (
 
 CREATE INDEX IF NOT EXISTS ix_bars_available_at
     ON jquants_daily_bars (code, available_at);
+CREATE INDEX IF NOT EXISTS ix_records_dataset_avail
+    ON jquants_records (dataset, available_at);
 CREATE INDEX IF NOT EXISTS ix_jsda_available_at
     ON jsda_bond_trades (trade_date, available_at);
 """
@@ -136,6 +156,7 @@ NATURAL_KEYS: dict[str, list[str]] = {
     "jquants_listed_info": ["source", "code", "snapshot_date"],
     "jquants_daily_bars": ["source", "code", "date"],
     "jquants_market_calendar": ["source", "date"],
+    "jquants_records": ["source", "dataset", "natural_key"],
     "edinetdb_companies": ["source", "code"],
     "edinetdb_financials": ["source", "code", "period", "statement_type"],
     "jsda_bond_trades": ["source", "trade_date", "isin", "issuer_name"],

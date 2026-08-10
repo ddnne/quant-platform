@@ -42,7 +42,7 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
-from ingestion.common.http import make_http_client  # noqa: E402
+from ingestion.common.http import make_http_client, make_jquants_http  # noqa: E402
 from ingestion.common.timeutil import now_jst  # noqa: E402
 from ingestion.pipeline import (  # noqa: E402
     decide_exit,
@@ -71,10 +71,36 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--from-date", dest="from_date", default=None)
     p.add_argument("--to-date", dest="to_date", default=None)
     p.add_argument(
+        "--dataset", dest="dataset", action="append", default=None,
+        help="J-Quants catalog dataset id (e.g. fins_dividend). Repeatable and/or "
+             "comma-separated. Selects catalog-driven fetch into jquants_records.",
+    )
+    p.add_argument(
+        "--mode", choices=["incremental", "backfill"], default="incremental",
+        help="J-Quants catalog fetch mode (default incremental)",
+    )
+    p.add_argument(
+        "--no-jquants-proxy", dest="no_jquants_proxy", action="store_true",
+        help="force direct J-Quants fetch even when a CF proxy is configured",
+    )
+    p.add_argument(
         "--jsda-url", dest="jsda_url", default=None,
         help="explicit JSDA file URL (skip index scrape)",
     )
     return p
+
+
+def _parse_datasets(raw) -> list[str]:
+    """Flatten repeated and comma-separated ``--dataset`` tokens."""
+    if not raw:
+        return []
+    out: list[str] = []
+    for tok in raw:
+        for part in str(tok).split(","):
+            s = part.strip()
+            if s:
+                out.append(s)
+    return out
 
 
 def main(argv=None) -> int:
@@ -93,11 +119,21 @@ def main(argv=None) -> int:
         return 2
 
     http = make_http_client(runtime, user_agent=_UA)
+    # J-Quants may route through the Cloudflare secret-proxy Worker (key held
+    # on the Worker, not local). Auto: use the proxy when configured + local,
+    # unless --no-jquants-proxy. Other sources keep using the plain `http`.
+    jq_via_proxy = not args.no_jquants_proxy
+    jq_http = make_jquants_http(
+        runtime, via_cf_proxy=None if jq_via_proxy else False, user_agent=_UA
+    )
     store = SqliteStore(db_path)
     jquants_key = os.environ.get("JQUANTS_API_KEY", "")
     edinetdb_key = os.environ.get("EDINETDB_API_KEY", "")
 
-    if jquants_key:
+    using_jq_proxy = getattr(jq_http, "name", "") == "cf-jquants-proxy"
+    if using_jq_proxy:
+        print("[env] J-Quants via Cloudflare proxy (API key held on Worker).")
+    elif jquants_key:
         print("[env] JQUANTS_API_KEY present (value hidden).")
     else:
         print("[env] JQUANTS_API_KEY absent — J-Quants will be skipped.")
@@ -106,13 +142,18 @@ def main(argv=None) -> int:
     else:
         print("[env] EDINETDB_API_KEY absent — EDINET DB will be skipped.")
 
+    datasets = _parse_datasets(args.dataset)
+    if datasets:
+        print(f"[jquants] catalog mode={args.mode} datasets={','.join(datasets)}")
+
     all_reports = []
     try:
         if args.source in ("jquants", "all"):
             reps = run_jquants(
-                http=http, store=store, api_key=jquants_key,
+                http=jq_http, store=store, api_key=jquants_key,
                 data_base=data_base, today=today, runtime=runtime,
                 code=args.code, date_from=args.from_date, date_to=args.to_date,
+                datasets=datasets or None, mode=args.mode,
             )
             all_reports.extend(reps)
             for r in reps:
@@ -138,11 +179,12 @@ def main(argv=None) -> int:
                 print(r.summary())
     finally:
         store.close()
-        if hasattr(http, "close"):
-            try:
-                http.close()
-            except Exception:  # noqa: BLE001
-                pass
+        for client in (http, jq_http):
+            if hasattr(client, "close"):
+                try:
+                    client.close()
+                except Exception:  # noqa: BLE001
+                    pass
 
     print(f"[done] db={db_path}")
     return decide_exit(all_reports)
