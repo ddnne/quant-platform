@@ -1,0 +1,13 @@
+{
+  "name": "quant-platform-ingestion-secrets",
+  "version": "0.1.0",
+  "private": true,
+  "description": "J-Quants API key holder + authenticated proxy for local ingestion runners",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250101.0",
+    "typescript": "^5.5.0"
+  }
+}

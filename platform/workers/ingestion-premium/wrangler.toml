@@ -1,0 +1,56 @@
+# Phase 3.5 — J-Quants Premium **core** ingestion closed loop.
+#
+# Resources (Cloudflare, billed):
+#   * R2 bucket ``quant-raw``        — verbatim source JSON per fetch
+#   * R2 bucket ``quant-structured`` — (reserved; structured rows live in D1)
+#   * D1 database ``quant-ingest``   — PIT-shaped structured rows
+#
+# Bindings (set up once via `wrangler`):
+#   npx wrangler r2 bucket create quant-raw
+#   npx wrangler r2 bucket create quant-structured
+#   npx wrangler d1 create quant-ingest
+#   # apply migrations:
+#   npx wrangler d1 execute quant-ingest --file=migrations/0001_init.sql
+#
+# Secrets (set on this worker, values NOT in this file):
+#   npx wrangler secret put JQUANTS_API_KEY -c platform/workers/ingestion-premium/wrangler.toml
+#   # INGESTION_PROXY_TOKEN is optional — only needed to gate the manual /v1/run endpoint.
+#   npx wrangler secret put INGESTION_PROXY_TOKEN -c platform/workers/ingestion-premium/wrangler.toml
+#
+# Cron: hourly at :15 (Premium endpoints publish continuously through the JST
+# trading day; hourly cadence keeps the loop closed without stressing the
+# 500 req/min Premium cap). Override via the [triggers] block.
+
+name = "quant-platform-ingestion-premium"
+main = "src/index.ts"
+compatibility_date = "2026-08-01"
+workers_dev = true
+
+# R2 — verbatim source JSON, partitioned by dataset/date.
+[[r2_buckets]]
+binding = "RAW_BUCKET"
+bucket_name = "quant-raw"
+
+# R2 — reserved for future parquet/partition dumps (D1 is the structured
+# source of truth for now). Kept so the binding exists when we enable it.
+[[r2_buckets]]
+binding = "STRUCTURED_BUCKET"
+bucket_name = "quant-structured"
+
+# D1 — PIT-shaped structured rows, mirroring storage/schema.py columns.
+[[d1_databases]]
+binding = "DB"
+database_name = "quant-ingest"
+# database_id is printed by `wrangler d1 create` — paste it here.
+# database_id = "PASTE-FROM-wrangler-d1-create"
+
+# Secrets bound via `wrangler secret put` (never in this file):
+# - JQUANTS_API_KEY            (required for fetch)
+# - INGESTION_PROXY_TOKEN      (optional; gates /v1/run manual trigger)
+
+[triggers]
+# Hourly at 15 minutes past. Workers Cron is UTC; 00:15 UTC == 09:15 JST.
+cron = ["15 * * * *"]
+
+[observability]
+enabled = true
