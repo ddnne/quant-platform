@@ -12,7 +12,7 @@ from typing import Any, Iterable, Mapping, Optional
 
 from ingestion.common.timeutil import now_iso
 
-from .schema import SCHEMA_SQL
+from .schema import NATURAL_KEYS, SCHEMA_SQL
 
 
 class MissingAvailableAt(ValueError):
@@ -36,11 +36,21 @@ class SqliteStore:
     # --- core write -------------------------------------------------------
 
     def upsert(self, table: str, rows: Iterable[Mapping[str, Any]]) -> int:
-        """Idempotent upsert.
+        """Idempotent upsert that preserves the earliest ``available_at``.
 
-        Validates ``available_at`` on every row, then ``INSERT OR REPLACE``
-        keyed on the table's natural-key PRIMARY KEY. Re-running the same
-        day produces no duplicate rows.
+        Validates ``available_at`` on every row, then upserts keyed on the
+        table's natural-key PRIMARY KEY. On conflict:
+
+        * ``available_at`` is kept as the **earliest** of (existing, incoming)
+          so a re-upsert never overwrites the original point-in-time stamp.
+        * every other column takes the incoming value (e.g. an amended
+          ``close``), and ``ingested_at`` is refreshed to the latest fetch.
+
+        All incoming available_at values are canonical +09:00 ISO strings, so
+        ``MIN(...)`` (lexicographic on TEXT) is also chronologically correct.
+
+        The whole batch runs in one transaction; any failure rolls back so a
+        partial batch is never committed.
         """
         rows = list(rows)
         if not rows:
@@ -64,13 +74,42 @@ class SqliteStore:
 
         placeholders = ",".join("?" for _ in cols)
         collist = ",".join(cols)
-        sql = (
-            f"INSERT OR REPLACE INTO {table} ({collist}) "
-            f"VALUES ({placeholders})"
-        )
         payload = [[r.get(c) for c in cols] for r in rows]
-        cur = self._conn.executemany(sql, payload)
-        self._conn.commit()
+
+        key_cols = NATURAL_KEYS.get(table, [])
+        if key_cols and all(k in seen for k in key_cols):
+            # ON CONFLICT<natural key> DO UPDATE: keep earliest available_at,
+            # refresh everything else from the incoming row.
+            target = ",".join(key_cols)
+            key_set = set(key_cols)
+            assigns = []
+            for c in cols:
+                if c in key_set:
+                    continue
+                if c == "available_at":
+                    assigns.append(
+                        "available_at = MIN(available_at, excluded.available_at)"
+                    )
+                else:
+                    assigns.append(f"{c} = excluded.{c}")
+            sql = (
+                f"INSERT INTO {table} ({collist}) VALUES ({placeholders}) "
+                f"ON CONFLICT({target}) DO UPDATE SET {','.join(assigns)}"
+            )
+        else:
+            # Defensive fallback (should not happen for known tables).
+            sql = (
+                f"INSERT OR REPLACE INTO {table} ({collist}) "
+                f"VALUES ({placeholders})"
+            )
+
+        try:
+            cur = self._conn.executemany(sql, payload)
+            self._conn.commit()
+        except Exception:
+            # Never leave a partial batch committed then marked skipped.
+            self._conn.rollback()
+            raise
         # executemany.rowcount is -1 on some drivers; fall back to len.
         return cur.rowcount if cur.rowcount and cur.rowcount > 0 else len(payload)
 

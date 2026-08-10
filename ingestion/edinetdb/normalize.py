@@ -36,6 +36,22 @@ def _pick(d: dict, *keys: str) -> Optional[str]:
     return None
 
 
+def _pick_num(d: dict, *keys: str) -> Optional[float]:
+    """First present, non-empty numeric value among ``keys``.
+
+    Unlike ``a or b``, this keeps ``0`` (a valid revenue / income figure)
+    instead of skipping past it to the next candidate.
+    """
+    for k in keys:
+        if k in d:
+            v = d[k]
+            if v is not None and v != "":
+                n = _num(v)
+                if n is not None:
+                    return n
+    return None
+
+
 def normalize_companies(
     rows: Iterable[dict], *, ingested_at: str, available_at: Optional[str] = None
 ) -> List[dict]:
@@ -91,15 +107,11 @@ def normalize_financials(
                 "event_time": et,
                 "available_at": av,
                 "ingested_at": ingested_at,
-                "revenue": _num(r.get("revenue") or r.get("net_sales") or r.get("NetSales")),
-                "operating_income": _num(
-                    r.get("operating_income") or r.get("operating_profit")
-                ),
-                "net_income": _num(
-                    r.get("net_income") or r.get("profit") or r.get("net_profit")
-                ),
-                "total_assets": _num(r.get("total_assets") or r.get("TotalAssets")),
-                "equity": _num(r.get("equity") or r.get("net_assets")),
+                "revenue": _pick_num(r, "revenue", "net_sales", "NetSales"),
+                "operating_income": _pick_num(r, "operating_income", "operating_profit"),
+                "net_income": _pick_num(r, "net_income", "profit", "net_profit"),
+                "total_assets": _pick_num(r, "total_assets", "TotalAssets"),
+                "equity": _pick_num(r, "equity", "net_assets"),
                 "raw_payload": json.dumps(r, ensure_ascii=False),
             }
         )

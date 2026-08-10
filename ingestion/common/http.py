@@ -17,6 +17,20 @@ from typing import Any, Mapping, Optional, Protocol, Union, runtime_checkable
 _DEFAULT_UA = "quant-platform-ingest/0.1 (+personal-research; JST)"
 
 
+def transport_exception_types() -> tuple:
+    """Exception types the HTTP client raises on connection / timeout faults.
+
+    Used by clients to wrap transport errors as retriable. ``httpx`` is
+    imported lazily (it is a local-runtime dependency only); when absent the
+    tuple falls back to ``OSError`` so the module still loads.
+    """
+    try:  # pragma: no cover - depends on optional dep presence
+        import httpx
+    except ImportError:  # pragma: no cover
+        return (OSError,)
+    return (httpx.TransportError, httpx.TimeoutException, OSError)
+
+
 @dataclass(frozen=True)
 class HttpResponse:
     """Runtime-agnostic HTTP response."""

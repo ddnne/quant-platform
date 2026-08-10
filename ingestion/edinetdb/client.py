@@ -11,9 +11,9 @@ Header: ``X-API-Key``. Response shapes are normalized defensively; see
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
-from ..common.http import HttpClient
+from ..common.http import HttpClient, transport_exception_types
 from ..common.rate_limit import RateLimiter
 from ..common.retry import with_retry
 
@@ -34,6 +34,7 @@ class EdinetDbClient:
         *,
         rate_limiter: Optional[RateLimiter] = None,
         retries: int = 3,
+        sleep: Callable[[float], None] = None,
     ) -> None:
         if not api_key:
             raise ValueError("EdinetDbClient requires a non-empty api_key")
@@ -41,6 +42,8 @@ class EdinetDbClient:
         self._api_key = api_key
         self._rl = rate_limiter or RateLimiter(0.5)
         self._retries = retries
+        self._sleep = sleep  # None -> with_retry default (time.sleep)
+        self._transport_exc = transport_exception_types()
 
     def _headers(self) -> dict[str, str]:
         return {"X-API-Key": self._api_key}
@@ -50,7 +53,10 @@ class EdinetDbClient:
 
         def call() -> Any:
             self._rl.acquire()
-            resp = self._http.get(url, headers=self._headers(), params=params)
+            try:
+                resp = self._http.get(url, headers=self._headers(), params=params)
+            except self._transport_exc as exc:
+                raise _Transient(f"{path} -> transport error: {exc}") from exc
             if resp.status == 429 or 500 <= resp.status < 600:
                 raise _Transient(f"{path} -> HTTP {resp.status}")
             if not resp.ok:
@@ -59,7 +65,10 @@ class EdinetDbClient:
                 )
             return resp.json()
 
-        return with_retry(call, retries=self._retries, exceptions=(_Transient,))
+        kwargs: dict[str, Any] = {"retries": self._retries, "exceptions": (_Transient,)}
+        if self._sleep is not None:
+            kwargs["sleep"] = self._sleep
+        return with_retry(call, **kwargs)
 
     def list_companies(
         self, *, q: Optional[str] = None, limit: Optional[int] = None

@@ -135,9 +135,11 @@ def test_run_jsda_end_to_end_idempotent(tmp_path: Path, jsda_sample_text: str):
     assert reps[0].registered == 3
     assert store.count("jsda_bond_trades") == 3
 
-    # Raw saved under partitioned path.
-    raw_file = tmp_path / "raw" / "jsda" / "2025" / "04" / "02" / "saiken.csv"
-    assert raw_file.exists()
+    # Raw saved under partitioned path (filename is timestamp-stamped so
+    # same-day re-fetches do not clobber each other).
+    raw_dir = tmp_path / "raw" / "jsda" / "2025" / "04" / "02"
+    matches = list(raw_dir.glob("saiken_*.csv"))
+    assert len(matches) == 1 and matches[0].exists()
 
     # Re-running the same day is idempotent: no duplicate rows.
     http2 = _Client()

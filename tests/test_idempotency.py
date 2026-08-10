@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -77,4 +78,65 @@ def test_run_log_recorded(tmp_path):
     assert len(rows) == 1
     assert rows[0]["source"] == "jsda"
     assert rows[0]["runtime"] == "local"
+    store.close()
+
+
+# --------------------------------------------------------------------------- earliest available_at
+
+def test_upsert_preserves_earliest_available_at(tmp_path):
+    store = SqliteStore(tmp_path / "ing.sqlite")
+    base = normalize_daily_bars(_bars(), ingested_at=INGESTED)  # available_at == INGESTED
+    store.upsert("jquants_daily_bars", base)
+
+    # re-upsert the SAME natural key with a LATER available_at -> earliest kept
+    later = [dict(base[0])]
+    later[0]["available_at"] = "2025-04-10T09:00:00+09:00"
+    store.upsert("jquants_daily_bars", later)
+
+    row = store.fetch_where(
+        "jquants_daily_bars", "code=? AND date=?", ("8697", "2025-04-01")
+    )[0]
+    assert row["available_at"] == INGESTED  # earliest preserved
+    store.close()
+
+
+def test_upsert_keeps_earlier_available_at_against_earlier_payload(tmp_path):
+    store = SqliteStore(tmp_path / "ing.sqlite")
+    # first write a LATE available_at, then re-upsert an EARLIER one -> earliest wins
+    late = normalize_daily_bars(_bars(), ingested_at="2025-04-10T09:00:00+09:00")
+    store.upsert("jquants_daily_bars", late)
+    early = normalize_daily_bars(_bars(), ingested_at=INGESTED)  # earlier
+    store.upsert("jquants_daily_bars", early)
+    row = store.fetch_where(
+        "jquants_daily_bars", "code=? AND date=?", ("8697", "2025-04-01")
+    )[0]
+    assert row["available_at"] == INGESTED
+    store.close()
+
+
+# --------------------------------------------------------------------------- rollback
+
+def _bar(code, event_time="2025-04-01T15:00:00+09:00"):
+    return {
+        "source": "jquants",
+        "code": code,
+        "date": "2025-04-01",
+        "event_time": event_time,
+        "available_at": "2025-04-02T09:00:00+09:00",
+        "ingested_at": "2025-04-02T09:00:00+09:00",
+    }
+
+
+def test_upsert_rolls_back_on_midbatch_failure(tmp_path):
+    store = SqliteStore(tmp_path / "ing.sqlite")
+    good = _bar("8697")
+    bad = _bar("8698", event_time=None)  # NOT NULL violation mid-batch
+    rows = [good, bad, _bar("8699")]
+    with pytest.raises(sqlite3.IntegrityError):
+        store.upsert("jquants_daily_bars", rows)
+    # nothing partial persisted
+    assert store.count("jquants_daily_bars") == 0
+    # connection is still usable after rollback
+    store.upsert("jquants_daily_bars", [good])
+    assert store.count("jquants_daily_bars") == 1
     store.close()

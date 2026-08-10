@@ -7,13 +7,24 @@
   Cloudflare reading from storage (Phase 2+).
 
 Each ``run_*`` function returns a list of :class:`RunReport` so the CLI can
-print a per-source, per-kind summary and choose an exit code. Missing API
-keys and unsupported runtimes produce *clean skips*, not exceptions.
+print a per-source, per-kind summary and choose an exit code via
+:func:`decide_exit`.
+
+Report semantics (Phase 1 fix):
+
+* ``skipped`` — *clean* skip (missing API key, unsupported runtime, optional
+  endpoint absent). Not a failure.
+* ``error`` — a fetch/parse/register step raised. A failure.
+* ``ok`` — registered at least one row, OR an explicitly expected-empty case
+  (e.g. the raw-only ``fins/summary`` endpoint). A zero-row result without a
+  skip reason is **not** ``ok`` (guards against a silent schema miss looking
+  like success).
 """
 
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
@@ -29,14 +40,21 @@ class RunReport:
     kind: str
     fetched: int = 0
     registered: int = 0
-    skipped: str = ""
+    skipped: str = ""        # clean skip reason (missing key / unsupported runtime)
+    error: str = ""          # failure reason (an exception was raised)
+    expected_empty: bool = False  # registered==0 is intentional (e.g. raw-only)
     raw_path: str = ""
 
     @property
     def ok(self) -> bool:
-        return not self.skipped
+        if self.skipped or self.error:
+            return False
+        return self.registered > 0 or self.expected_empty
 
     def summary(self) -> str:
+        if self.error:
+            tag = "ERROR"
+            return f"[{self.source}/{self.kind}] {tag} ({self.error})"
         if self.skipped:
             tag = "SKIPPED"
             return f"[{self.source}/{self.kind}] {tag} ({self.skipped})"
@@ -46,6 +64,19 @@ class RunReport:
             f"[{self.source}/{self.kind}] {tag} "
             f"fetched={self.fetched} registered={self.registered}{rp}"
         )
+
+
+def decide_exit(reports: List[RunReport]) -> int:
+    """CLI exit code from a flat list of reports.
+
+    ``1`` if any report errored; else ``0`` if any succeeded; else ``2``
+    (every source cleanly skipped, e.g. all API keys absent / cloudflare).
+    """
+    if any(r.error for r in reports):
+        return 1
+    if any(r.ok for r in reports):
+        return 0
+    return 2
 
 
 class Registrar:
@@ -60,6 +91,23 @@ class Registrar:
             # Double-check PIT gate before the store rejects the whole batch.
             validate_available_at(r.get("available_at"))
         return self._store.upsert(table, rows)
+
+
+def _compact_stamp(iso_ts: str) -> str:
+    """``2025-04-02T09:00:00+09:00`` -> ``20250402T090000`` (filename-safe)."""
+    s = (iso_ts or "").replace(":", "").replace("-", "")
+    # e.g. "20250402T090000+0900"
+    return s[:15] if len(s) >= 15 else s
+
+
+def _stamped(name: str, stamp: str) -> str:
+    """Append a compact timestamp before the extension so same-day re-fetches
+    of the same source do not clobber each other under the day partition."""
+    stamp = _compact_stamp(stamp)
+    if not stamp:
+        return name
+    stem, ext = os.path.splitext(name)
+    return f"{stem}_{stamp}{ext}"
 
 
 def save_raw(
@@ -83,6 +131,27 @@ def _cannot_fetch(source: str, runtime: str) -> List[RunReport]:
             ),
         )
     ]
+
+
+def _choose_jsda_parser(filename: str, data: bytes):
+    """Pick the JSDA parser for a downloaded file.
+
+    Returns ``(parser_callable, kind)``. Raises ``ValueError`` for legacy
+    ``.xls`` (unsupported) instead of silently parsing zero rows.
+    """
+    from .jsda.parse import parse_csv, parse_xlsx
+
+    low = (filename or "").lower()
+    is_xlsx_blob = bool(data) and bytes(data[:2]) == b"PK"  # ZIP / XLSX magic
+
+    if low.endswith(".xls") and not is_xlsx_blob:
+        raise ValueError(
+            "legacy .xls is not supported; provide .xlsx or .csv "
+            "(convert the source file)"
+        )
+    if low.endswith(".xlsx") or is_xlsx_blob:
+        return parse_xlsx, "xlsx"
+    return parse_csv, "csv"
 
 
 # ---------------------------------------------------------------------------
@@ -118,49 +187,55 @@ def run_jquants(
     try:
         info = client.listed_info()
         save_raw(
-            data_base, "jquants", "listed_info.json",
+            data_base, "jquants", _stamped("listed_info.json", ingested),
             json.dumps(info, ensure_ascii=False).encode("utf-8"), today,
         )
         rows = JN.normalize_listed_info(info, ingested_at=ingested, snapshot_date=str(today)[:10])
         n = reg.register("jquants_listed_info", rows)
         reports.append(RunReport("jquants", "listed_info", fetched=len(info), registered=n))
     except Exception as exc:  # noqa: BLE001
-        reports.append(RunReport("jquants", "listed_info", skipped=f"error: {exc}"))
+        reports.append(RunReport("jquants", "listed_info", error=f"{exc}"))
 
     # 2) daily bars
     try:
         bars = client.daily_bars(code=code, from_date=date_from, to_date=date_to)
         save_raw(
-            data_base, "jquants", "daily_bars.json",
+            data_base, "jquants", _stamped("daily_bars.json", ingested),
             json.dumps(bars, ensure_ascii=False).encode("utf-8"), today,
         )
         rows = JN.normalize_daily_bars(bars, ingested_at=ingested)
         n = reg.register("jquants_daily_bars", rows)
         reports.append(RunReport("jquants", "daily_bars", fetched=len(bars), registered=n))
     except Exception as exc:  # noqa: BLE001
-        reports.append(RunReport("jquants", "daily_bars", skipped=f"error: {exc}"))
+        reports.append(RunReport("jquants", "daily_bars", error=f"{exc}"))
 
     # 3) market calendar
     try:
         cal = client.market_calendar(from_date=date_from, to_date=date_to)
         save_raw(
-            data_base, "jquants", "calendar.json",
+            data_base, "jquants", _stamped("calendar.json", ingested),
             json.dumps(cal, ensure_ascii=False).encode("utf-8"), today,
         )
         rows = JN.normalize_market_calendar(cal, ingested_at=ingested)
         n = reg.register("jquants_market_calendar", rows)
         reports.append(RunReport("jquants", "calendar", fetched=len(cal), registered=n))
     except Exception as exc:  # noqa: BLE001
-        reports.append(RunReport("jquants", "calendar", skipped=f"error: {exc}"))
+        reports.append(RunReport("jquants", "calendar", error=f"{exc}"))
 
-    # 4) OPTIONAL fins/summary — save raw only; skip cleanly on failure
+    # 4) OPTIONAL fins/summary — save raw only; skip cleanly on failure.
+    #    registered==0 is intentional here (raw-only endpoint).
     try:
         summ = client.fins_summary(code=code)
         save_raw(
-            data_base, "jquants", "fins_summary.json",
+            data_base, "jquants", _stamped("fins_summary.json", ingested),
             json.dumps(summ, ensure_ascii=False).encode("utf-8"), today,
         )
-        reports.append(RunReport("jquants", "fins_summary", fetched=len(summ), registered=0))
+        reports.append(
+            RunReport(
+                "jquants", "fins_summary",
+                fetched=len(summ), registered=0, expected_empty=True,
+            )
+        )
     except Exception as exc:  # noqa: BLE001
         reports.append(
             RunReport("jquants", "fins_summary", skipped=f"optional endpoint skipped: {exc}")
@@ -201,14 +276,14 @@ def run_edinetdb(
     try:
         companies = client.list_companies()
         save_raw(
-            data_base, "edinetdb", "companies.json",
+            data_base, "edinetdb", _stamped("companies.json", ingested),
             json.dumps(companies, ensure_ascii=False).encode("utf-8"), today,
         )
         rows = EN.normalize_companies(companies, ingested_at=ingested)
         n = reg.register("edinetdb_companies", rows)
         reports.append(RunReport("edinetdb", "companies", fetched=len(companies), registered=n))
     except Exception as exc:  # noqa: BLE001
-        reports.append(RunReport("edinetdb", "companies", skipped=f"error: {exc}"))
+        reports.append(RunReport("edinetdb", "companies", error=f"{exc}"))
 
     # Financials for an explicit sample of codes (best-effort, optional).
     sample = list(financial_codes or [])
@@ -219,7 +294,7 @@ def run_edinetdb(
         try:
             fins = client.financials(code)
             save_raw(
-                data_base, "edinetdb", f"financials_{code}.json",
+                data_base, "edinetdb", _stamped(f"financials_{code}.json", ingested),
                 json.dumps(fins, ensure_ascii=False).encode("utf-8"), today,
             )
             rows = EN.normalize_financials(fins, code=code, ingested_at=ingested)
@@ -229,7 +304,7 @@ def run_edinetdb(
             )
         except Exception as exc:  # noqa: BLE001
             reports.append(
-                RunReport("edinetdb", f"financials/{code}", skipped=f"error: {exc}")
+                RunReport("edinetdb", f"financials/{code}", error=f"{exc}")
             )
 
     _log(store, "edinetdb", runtime, reports)
@@ -259,7 +334,6 @@ def run_jsda(
 
     from .jsda import normalize as SN
     from .jsda.fetch import JsdaFetcher
-    from .jsda.parse import parse_csv
 
     fetcher = JsdaFetcher(http)
     reg = Registrar(store)
@@ -269,12 +343,15 @@ def run_jsda(
     try:
         url = target_url or fetcher.pick()
         if not url:
-            reports.append(RunReport("jsda", "bond_trades", skipped="no download links found on index"))
+            reports.append(
+                RunReport("jsda", "bond_trades", skipped="no download links found on index")
+            )
         else:
             data = fetcher.fetch_file(url)
             fname = url.rsplit("/", 1)[-1] or "jsda.csv"
-            rp = save_raw(data_base, "jsda", fname, data, today)
-            records = parse_csv(data)
+            rp = save_raw(data_base, "jsda", _stamped(fname, ingested), data, today)
+            parser, _kind = _choose_jsda_parser(fname, data)  # raises ValueError on .xls
+            records = parser(data)
             rows = SN.normalize_bond_trades(records, ingested_at=ingested)
             n = reg.register("jsda_bond_trades", rows)
             reports.append(
@@ -284,7 +361,7 @@ def run_jsda(
                 )
             )
     except Exception as exc:  # noqa: BLE001
-        reports.append(RunReport("jsda", "bond_trades", skipped=f"error: {exc}"))
+        reports.append(RunReport("jsda", "bond_trades", error=f"{exc}"))
 
     _log(store, "jsda", runtime, reports)
     return reports
@@ -294,7 +371,12 @@ def run_jsda(
 
 def _log(store, source: str, runtime: str, reports: List[RunReport]) -> None:
     try:
-        status = "ok" if any(r.ok for r in reports) else "skipped"
+        if any(r.error for r in reports):
+            status = "error"
+        elif any(r.ok for r in reports):
+            status = "ok"
+        else:
+            status = "skipped"
         store.log_run(
             source=source,
             runtime=runtime,

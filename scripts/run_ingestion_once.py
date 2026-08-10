@@ -23,7 +23,7 @@ local and Cloudflare reads storage only. Passing it exits cleanly (code 2).
 Exit codes
 ----------
   0  run completed (at least one source fetched/registered)
-  1  unexpected error
+  1  at least one source errored (fetch/parse/register failure)
   2  nothing executed (cloudflare runtime, or every source cleanly skipped,
      e.g. all API keys absent)
 
@@ -44,7 +44,12 @@ if _REPO_ROOT not in sys.path:
 
 from ingestion.common.http import make_http_client  # noqa: E402
 from ingestion.common.timeutil import now_jst  # noqa: E402
-from ingestion.pipeline import run_edinetdb, run_jsda, run_jquants  # noqa: E402
+from ingestion.pipeline import (  # noqa: E402
+    decide_exit,
+    run_edinetdb,
+    run_jsda,
+    run_jquants,
+)
 from storage.sqlite_store import SqliteStore  # noqa: E402
 
 _UA = "quant-platform-ingest/0.1 (+personal-research; JST)"
@@ -101,7 +106,7 @@ def main(argv=None) -> int:
     else:
         print("[env] EDINETDB_API_KEY absent — EDINET DB will be skipped.")
 
-    ran_any = False
+    all_reports = []
     try:
         if args.source in ("jquants", "all"):
             reps = run_jquants(
@@ -109,27 +114,28 @@ def main(argv=None) -> int:
                 data_base=data_base, today=today, runtime=runtime,
                 code=args.code, date_from=args.from_date, date_to=args.to_date,
             )
+            all_reports.extend(reps)
             for r in reps:
                 print(r.summary())
-            ran_any = ran_any or any(r.ok for r in reps)
 
         if args.source in ("edinetdb", "all"):
             reps = run_edinetdb(
                 http=http, store=store, api_key=edinetdb_key,
                 data_base=data_base, today=today, runtime=runtime,
+                financial_codes=[args.code] if args.code else None,
             )
+            all_reports.extend(reps)
             for r in reps:
                 print(r.summary())
-            ran_any = ran_any or any(r.ok for r in reps)
 
         if args.source in ("jsda", "all"):
             reps = run_jsda(
                 http=http, store=store, data_base=data_base, today=today,
                 runtime=runtime, target_url=args.jsda_url,
             )
+            all_reports.extend(reps)
             for r in reps:
                 print(r.summary())
-            ran_any = ran_any or any(r.ok for r in reps)
     finally:
         store.close()
         if hasattr(http, "close"):
@@ -139,7 +145,7 @@ def main(argv=None) -> int:
                 pass
 
     print(f"[done] db={db_path}")
-    return 0 if ran_any else 2
+    return decide_exit(all_reports)
 
 
 if __name__ == "__main__":
