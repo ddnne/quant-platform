@@ -89,10 +89,25 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Parallel check-family workers (default: QP_VAL_WORKERS or 4).",
     )
-    p.add_argument(
+    # ``--strict-live-gates`` defaults to True when QP_LIVE=1 (production
+    # runs must enforce LIVE_GATES). The explicit ``--no-strict-live-gates``
+    # flag overrides that for one-shot diagnostic runs.
+    strict_group = p.add_mutually_exclusive_group()
+    strict_group.add_argument(
         "--strict-live-gates",
-        action="store_true",
+        action="store_const",
+        const=True,
+        default=None,
+        dest="strict_live_gates",
         help="Fail if master/bars issuer counts below live order-of-magnitude gates.",
+    )
+    strict_group.add_argument(
+        "--no-strict-live-gates",
+        action="store_const",
+        const=False,
+        default=None,
+        dest="strict_live_gates",
+        help="Disable strict live gates (overrides the QP_LIVE=1 default).",
     )
     return p
 
@@ -129,6 +144,10 @@ def _print_text(results) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
+    # Resolve the tri-state --strict-live-gates. Explicit flag wins; else
+    # default to True when QP_LIVE=1 so live runs enforce LIVE_GATES.
+    if args.strict_live_gates is None:
+        args.strict_live_gates = os.environ.get("QP_LIVE", "") == "1"
     sidecar = _load_validation_sidecar(args.validation_json)
     datasets = (
         [s.strip() for s in args.datasets.split(",") if s.strip()]

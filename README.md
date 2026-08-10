@@ -111,3 +111,18 @@ python scripts/run_ingestion_once.py --source all --runtime cloudflare
 
 API キー等はコードに埋め込まない。名前の一覧のみ [platform/secrets.example.md](platform/secrets.example.md) を参照。  
 `JQUANTS_API_KEY` の **正本は Cloudflare Secret**（Worker が保持）。ローカルは **CF proxy を既定で利用**（環境変数 `INGESTION_PROXY_URL`/`INGESTION_PROXY_TOKEN` または `~/.config/quant-platform/ingestion_proxy_{url,token}` を設定すると有効。proxy 未設定時のみ環境変数 `JQUANTS_API_KEY` の直接利用にフォールバック）。
+
+## 運用完了の定義 (Ops completion)
+
+Phase 3.5 の **運用完了** には以下の両方が必要:
+
+- **Cron `failed=0`** — `quant-platform-ingestion-premium` の `/health` が
+  `last_run.status ∈ {pass, partial-pass}` を報告し、`failed` 件数が 0 であること。
+- **Live B0 strict pass** — 同じ DB で `QP_LIVE=1 python3 scripts/run_phase35_validation.py
+  --db data/structured/ingestion.sqlite --tier daily` が exit 0 となること
+  （LIVE_GATES: master ≳ 3,000 / bars issuers ≳ 3,000 / latest-day rows ≳ 3,000）。
+
+**フレームワーク完了 ≠ データ品質完了**。検証マトリクスのコード・カタログ・docs が揃っていても、
+本番 cron が `failed=0` で回り、かつ live B0 strict が通って初めて運用完了と呼べる。
+詳しくは [docs/phase35_validation_matrix.md](docs/phase35_validation_matrix.md) の
+"Live strict gates" 節を参照。

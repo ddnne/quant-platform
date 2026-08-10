@@ -41,6 +41,46 @@ LIVE_GATES: dict[str, float] = {
     "trading_days_per_year_hi": 255,
 }
 
+# Conservative assumed Premium-start dates per dataset, used by C6/C7.
+# Source: J-Quants data-spec (https://jpx-jquants.com/en/spec/data-spec).
+# Values are rounded toward the *nearest recent* month — i.e. deliberately
+# conservative (a later start ⇒ a shorter expected window ⇒ a more forgiving
+# fill-rate). Where the official start is disputed or plan-dependent, we
+# pick the latest plausible public start. **These are assumptions, not
+# contractual truths** — update as the spec evolves.
+EXPECTED_START: dict[str, str] = {
+    "equities_master": "2000-07-13",
+    "equities_bars_daily": "2004-01-05",
+    "equities_bars_daily_am": "2024-01-04",   # AM is recent-only by spec
+    "fins_summary": "2008-01-08",
+    "fins_details": "2008-01-08",
+    "fins_dividend": "2008-01-08",
+    "fins_earnings_date": "2010-01-04",
+    "equities_earnings_calendar": "2010-01-04",
+    "markets_calendar": "2008-01-01",
+    "equities_investor_types": "2013-01-04",
+    "indices_bars_daily_topix": "2008-01-01",
+    "indices_bars_daily": "2008-01-01",
+    "derivatives_bars_daily_options_225": "2013-01-04",
+    "derivatives_bars_daily_futures": "2013-01-04",
+    "derivatives_bars_daily_options": "2013-01-04",
+    "markets_margin_interest": "2013-01-04",
+    "markets_margin_alert": "2013-01-04",
+    "markets_short_ratio": "2013-01-04",
+    "markets_short_sale_report": "2013-01-04",
+    "markets_breakdown": "2013-01-04",
+    "edinet_major_shareholders": "2018-01-04",
+    "edinet_cross_shareholdings": "2018-01-04",
+    "edinet_large_volume_shareholders": "2018-01-04",
+}
+
+# Fill-rate thresholds for C6/C7. Below ``WARN_RATE`` the row is at least a
+# warning; below ``FAIL_RATE`` it is a failure in strict mode (warns softly
+# offline). ``PASS_RATE`` is the floor for an unqualified pass.
+_C6_C7_PASS_RATE = 0.90
+_C6_C7_WARN_RATE = 0.50
+_C6_C7_FAIL_RATE = 0.20
+
 # Datasets with dedicated fact tables in addition to (or instead of) the
 # generic ``jquants_records`` table. The runner unions both so it works
 # against DBs produced by either the Phase-1 local ingestion or the
@@ -628,16 +668,25 @@ def _check_x4(
 # Weekly-tier checks (stubs unless we can do them from a local DB)
 # ---------------------------------------------------------------------------
 def _check_c6_c7_year_span(
-    conn: sqlite3.Connection, datasets: Iterable[str]
+    conn: sqlite3.Connection,
+    datasets: Iterable[str],
+    *,
+    strict: bool = False,
+    today: str | None = None,
 ) -> list[CheckResult]:
     """C6/C7 — Year span vs Premium expectation.
 
-    Locally, we cannot know the contracted Premium start per dataset, so we
-    emit a ``warn`` with the observed span and the row meta. The actual
-    pass/fail is decided by Ops against the data-spec; this just surfaces
-    the number. C6 and C7 share a computation; both rows emitted.
+    C6 lags: years between EXPECTED_START[ds] and the earliest observed
+    ``event_time`` (positive lag ⇒ observed starts AFTER expected ⇒ bad).
+    C7 fill rate: observed_years ÷ expected_years where
+    ``expected_years = (today − EXPECTED_START[ds])``.
+
+    Offline (``strict=False``) we never hard-fail — small fixtures have
+    only days of data, not years. We do emit ``fail`` when ``strict=True``
+    (QP_LIVE=1) and the fill rate is below ``_C6_C7_FAIL_RATE``.
     """
     out: list[CheckResult] = []
+    ref = (today or _latest_ingested_at(conn) or "")[:10]
     for ds in datasets:
         lo, hi = _dataset_event_window(conn, ds)
         if not lo or not hi:
@@ -650,20 +699,62 @@ def _check_c6_c7_year_span(
                                    {"event_time_min": lo,
                                     "event_time_max": hi}))
             continue
-        years = _calendar_years_between(lo[:10], hi[:10])
+        observed_years = _calendar_years_between(lo[:10], hi[:10])
+        expected_start = EXPECTED_START.get(ds)
+        if not expected_start:
+            out.append(CheckResult(
+                "C6", ds, "warn",
+                f"observed span {lo} → {hi} ({observed_years:.2f} yrs); "
+                "no EXPECTED_START recorded — verify vs data-spec",
+                {"event_time_min": lo, "event_time_max": hi,
+                 "observed_years": observed_years,
+                 "expected_start": None},
+            ))
+            out.append(CheckResult(
+                "C7", ds, "warn",
+                f"observed {observed_years:.2f} yrs; "
+                "fill rate vs Premium expectation needs EXPECTED_START",
+                {"event_time_min": lo, "event_time_max": hi,
+                 "observed_years": observed_years,
+                 "expected_start": None},
+            ))
+            continue
+        expected_years = _calendar_years_between(expected_start, ref or hi[:10])
+        lag_years = _calendar_years_between(expected_start, lo[:10])
+        fill_rate = (
+            observed_years / expected_years if expected_years > 0 else 0.0
+        )
+        # Status decision shared by C6 and C7 (C6 looks at lag, C7 at fill).
+        if fill_rate >= _C6_C7_PASS_RATE:
+            base = "pass"
+        elif fill_rate >= _C6_C7_WARN_RATE:
+            base = "warn"
+        elif fill_rate < _C6_C7_FAIL_RATE and strict:
+            base = "fail"
+        else:
+            base = "warn"
+        c6_detail = (
+            f"observed lo={lo[:10]} vs expected_start={expected_start} "
+            f"(lag {lag_years:.2f} yrs); span={observed_years:.2f} yrs"
+        )
+        c7_detail = (
+            f"fill_rate={fill_rate:.3f} (observed {observed_years:.2f} / "
+            f"expected {expected_years:.2f} yrs since {expected_start})"
+        )
         out.append(CheckResult(
-            "C6", ds, "warn",
-            f"observed span {lo} → {hi} ({years:.2f} yrs); "
-            "verify against data-spec start",
+            "C6", ds, base, c6_detail,
             {"event_time_min": lo, "event_time_max": hi,
-             "observed_years": years},
+             "observed_years": observed_years,
+             "expected_start": expected_start,
+             "lag_years": lag_years},
         ))
         out.append(CheckResult(
-            "C7", ds, "warn",
-            f"observed {years:.2f} yrs; fill rate vs Premium expectation "
-            "requires data-spec",
+            "C7", ds, base, c7_detail,
             {"event_time_min": lo, "event_time_max": hi,
-             "observed_years": years},
+             "observed_years": observed_years,
+             "expected_start": expected_start,
+             "expected_years": expected_years,
+             "fill_rate": fill_rate},
         ))
     return out
 
@@ -681,18 +772,58 @@ def _check_c9_c10_c11(_conn: sqlite3.Connection) -> list[CheckResult]:
     return skipped
 
 
+def _check_b1(
+    conn: sqlite3.Connection,
+    *,
+    strict: bool = False,
+) -> list[CheckResult]:
+    """B1 — bars daily min/max date year span.
+
+    Surfaces the observed year span of ``equities_bars_daily``. A fixture
+    DB with only days of data is a ``warn`` offline; under strict (live)
+    mode, anything under one year is a hard failure (live Premium must
+    have multi-year history).
+    """
+    lo, hi = _dataset_event_window(conn, "equities_bars_daily")
+    if not lo or not hi:
+        return [CheckResult(
+            "B1", "equities_bars_daily", "skip",
+            "no bars event_time observed",
+            {"event_time_min": lo, "event_time_max": hi,
+             "observed_years": 0.0},
+        )]
+    years = _calendar_years_between(lo[:10], hi[:10])
+    if years >= 1.0:
+        status: Status = "pass"
+    elif strict:
+        status = "fail"
+    else:
+        status = "warn"
+    return [CheckResult(
+        "B1", "equities_bars_daily", status,
+        f"bars span {lo[:10]} → {hi[:10]} ({years:.2f} yrs)",
+        {"event_time_min": lo, "event_time_max": hi,
+         "observed_years": years},
+    )]
+
+
 def _stub_weekly_series(_conn: sqlite3.Connection) -> list[CheckResult]:
     """Series-specific weekly checks we cannot decide from a local DB.
 
     Catalog entries exist for completeness (so the doc ↔ code test passes);
     the runner marks them ``skip`` rather than guessing.
+
+    Excludes ids with real implementations elsewhere — B1, C6/C7, X1/X2/X3,
+    C9-C11 — so we don't emit duplicate rows for them here.
     """
     skipped: list[CheckResult] = []
+    # Implemented weekly ids (emit their own rows in the runner):
+    implemented = {"B1", "C6", "C7", "C9", "C10", "C11",
+                   "X1", "X2", "X3", "X5"}
     series_ids = (
         c.id for c in matrix.list_checks("weekly")
         if c.id.startswith(("M", "B", "A", "K", "E", "F", "I", "D", "S", "N"))
-        # C* and X* handled elsewhere
-        and not c.id.startswith("C")
+        and c.id not in implemented
     )
     for cid in series_ids:
         skipped.append(CheckResult(
@@ -703,19 +834,47 @@ def _stub_weekly_series(_conn: sqlite3.Connection) -> list[CheckResult]:
     return skipped
 
 
-def _check_x1(conn: sqlite3.Connection) -> list[CheckResult]:
-    """X1 — master issuer count vs issuers with ≥1 daily bar."""
+def _check_x1(
+    conn: sqlite3.Connection,
+    *,
+    strict: bool = False,
+) -> list[CheckResult]:
+    """X1 — master issuer count vs issuers with ≥1 daily bar.
+
+    Coverage = |master ∩ bars| / |master|: how many of the master issuers
+    have at least one daily bar. Offline we warn when coverage < 0.5; in
+    strict mode (live) we fail when coverage < 0.8 AND the master is at
+    least 1,000 issuers (the strict bar is meaningless on fixture-scale
+    data — we only enforce it when the universe is real-sized).
+    """
     master = _codes_for_master(conn)
     bars = _codes_with_bars(conn)
     if not master:
         return [CheckResult("X1", None, "skip",
                             "no master issuers",
-                            {"master_count": 0, "bar_issuer_count": len(bars)})]
-    return [CheckResult(
-        "X1", None, "warn",
-        f"master={len(master)}, bar issuers={len(bars)}",
-        {"master_count": len(master), "bar_issuer_count": len(bars)},
-    )]
+                            {"master_count": 0, "bar_issuer_count": len(bars),
+                             "coverage": 0.0})]
+    common = master & bars
+    coverage = len(common) / len(master)
+    metrics = {
+        "master_count": len(master),
+        "bar_issuer_count": len(bars),
+        "common_count": len(common),
+        "coverage": coverage,
+    }
+    if coverage >= 0.8:
+        status: Status = "pass"
+    elif coverage >= 0.5:
+        status = "warn"
+    else:
+        status = "warn"
+    if strict and coverage < 0.8 and len(master) > 1000:
+        status = "fail"
+    detail = (
+        f"master={len(master)}, bar issuers={len(bars)}, "
+        f"common={len(common)}, coverage={coverage:.3f}"
+    )
+    return [CheckResult("X1", None, status, detail, metrics)]
 
 
 def _check_x2(conn: sqlite3.Connection) -> list[CheckResult]:
@@ -799,6 +958,37 @@ def _latest_ingested_at(conn: sqlite3.Connection) -> str | None:
         if row and row[0]:
             candidates.append(str(row[0]))
     return max(candidates) if candidates else None
+
+
+# ---------------------------------------------------------------------------
+# Live (strict) gates — surfaced as B0 rows on the daily tier
+# ---------------------------------------------------------------------------
+def _apply_strict_live_gates(db_path: str | Path) -> list[CheckResult]:
+    """Re-measure B0 gates and emit one fail/pass row per gate.
+
+    Surfaces the Phase-4 order-of-magnitude gates (≥3k master, ≥3k bar
+    issuers, ≥3k rows on the latest trading day) as validation rows.
+    Used only when ``strict_live_gates=True`` (e.g. QP_LIVE=1). ``B0`` is
+    not part of the formal matrix catalog (which starts at B1); it is the
+    shared Phase-4 LIVE_GATES hook promoted into the runner so live
+    validation rows fail loudly when the universe is fixture-sized.
+
+    Delegates the measurement to :func:`cf_platform.live_gates.measure_b0`
+    so the gate values and tables are defined in exactly one place.
+    """
+    # Local import keeps the cf_platform package lazy when coverage is
+    # imported by tests that don't need live_gates.
+    from cf_platform.live_gates import measure_b0
+
+    out: list[CheckResult] = []
+    for g in measure_b0(db_path):
+        out.append(CheckResult(
+            "B0", g.name,
+            "pass" if g.ok else "fail",
+            g.detail,
+            {"gate_name": g.name, "value": g.value, "gate": g.gate},
+        ))
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -907,15 +1097,20 @@ def run_coverage(
                     for fut in as_completed(futs):
                         results += fut.result()
             if strict_live_gates:
-                results += _apply_strict_live_gates(conn)
+                results += _apply_strict_live_gates(db_path)
         else:  # weekly
-            results += _check_c6_c7_year_span(conn, iter_datasets)
+            results += _check_c6_c7_year_span(
+                conn, iter_datasets, strict=strict_live_gates, today=today,
+            )
             results += _check_c9_c10_c11(conn)
+            results += _check_b1(conn, strict=strict_live_gates)
             results += _stub_weekly_series(conn)
-            results += _check_x1(conn)
+            results += _check_x1(conn, strict=strict_live_gates)
             results += _check_x2(conn)
             results += _check_x3(conn)
             results += _check_x5(conn)
+            if strict_live_gates:
+                results += _apply_strict_live_gates(db_path)
     finally:
         conn.close()
 

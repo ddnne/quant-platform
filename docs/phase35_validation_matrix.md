@@ -217,3 +217,35 @@ least the daily tier auto-runnable.**
 | Bars / year (full market) | ~0.9M–1.0M |
 
 Offline fixtures use scaled-down counts but the **same check IDs** and report `metrics` so live runs can enforce full gates.
+
+---
+
+## Live strict gates
+
+When run in a live context (env `QP_LIVE=1`), the runner defaults to
+`--strict-live-gates`. Live runs **must** enforce LIVE_GATES — there is no
+soft path in production. The `--no-strict-live-gates` flag exists for
+one-shot diagnostic runs only.
+
+Strict mode promotes the following checks from informational metrics to
+hard failures:
+
+| ID(s) | Soft (offline) | Strict (live) |
+|-------|----------------|----------------|
+| **B0** (daily) | not emitted | one row per gate (`B0_master`, `B0_bars_issuers`, `B0_bars_latest_day`); fail if any gate missed (≥3k master, ≥3k bar issuers, ≥3k latest-day rows) |
+| **C6 / C7** (weekly) | `warn` even on tiny spans | `fail` when fill-rate < 0.20 vs `EXPECTED_START` |
+| **B1** (weekly) | `warn` when bars span < 1 year | `fail` when bars span < 1 year |
+| **X1** (weekly) | `warn` when coverage < 0.5 | `fail` when coverage < 0.8 **and** master > 1,000 (real-sized universe) |
+
+`b0_pass(db, strict=None)` (used by Phase 4 live smoke) treats
+`QP_LIVE=1` as strict — pass `strict=False` explicitly for the soft
+offline path.
+
+### `EXPECTED_START` assumptions
+
+The C6/C7 fill-rate baseline uses a per-dataset start date from the
+J-Quants data-spec (https://jpx-jquants.com/en/spec/data-spec). Values
+in `cf_platform/ingest_premium/coverage.EXPECTED_START` are
+**conservative** (rounded toward the nearest recent month so live
+expectations are forgiving) and are **assumptions, not contractual
+truths** — update as the spec evolves.

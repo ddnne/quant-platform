@@ -155,6 +155,17 @@ python3 scripts/run_phase35_validation.py \
 Exit code is ``0`` when no check reports ``status="fail"`` (``skip`` and
 ``warn`` are tolerated). The runner opens the DB read-only; it never writes.
 
+### Live strict gates
+
+**Live runs must enforce LIVE_GATES** — there is no soft path in
+production. The CLI defaults to ``--strict-live-gates`` when
+``QP_LIVE=1`` is set; pass ``--no-strict-live-gates`` for one-shot
+diagnostic runs only. Strict mode promotes B0 (Phase-4 order-of-magnitude
+gates) and the weekly C6/C7/B1/X1 checks from informational metrics to
+hard failures. See
+[docs/phase35_validation_matrix.md](phase35_validation_matrix.md#live-strict-gates)
+for the full strict-vs-soft table.
+
 ## Phase 3.5 → Phase 4 bridge
 
 The features package reads facts through ``pit.get_*`` from a SQLite DB.
