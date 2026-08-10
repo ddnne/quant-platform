@@ -3,7 +3,7 @@
 外部データ取得は `ingestion/` のみが行う。Phase 1 は **ローカルランタイム** を主系とする。
 PIT のため、構造化行は必ず `event_time` / `available_at` / `source` / `ingested_at` を持つ。
 
-> **利用規約（ToS）**: 各ソースは個人研究目的。生データの再配布は行わない。J-Quants / EDINET DB は各サービスの利用規約・ライセンスを遵守すること。JSDA は出典を明記すること。
+> **利用規約（ToS）**: 各ソースは個人研究目的。生データの再配布は行わない。J-Quants はサービスの利用規約・ライセンスを遵守すること。JSDA は出典を明記すること。
 
 ## ランタイム設計（local vs Cloudflare）
 
@@ -20,8 +20,7 @@ PIT のため、構造化行は必ず `event_time` / `available_at` / `source` /
 
 | Source | Phase 1 推奨 | 計測結果（Cloudflare 直接 fetch） | 備考 |
 |--------|--------------|----------------------------------|------|
-| J-Quants | local 必須 / CF 任意 | **未実施** | 公式 REST API。Plan の範囲で取得。 |
-| EDINET DB | local 必須 / CF 任意 | **未実施** | 公式 API（仕様の一部が不確かなため正規化は防御的）。 |
+| J-Quants | local 必須 / CF 任意 | **未実施** | 公式 REST API。Plan の範囲で取得。EDINET 系（`/v2/documents`, `/v2/fins/...`）は後続 Phase で追加。 |
 | JSDA | **local 推奨** | **未実施（非推奨）** | HTML/CSV/XLSX。ボット/DC リスクがあるためエッジからの取得は避ける。 |
 
 > Cloudflare 直接 fetch は Phase 1 では **未実施**（`CloudflareHttpClient` は fetch を意図的に実装しない）。将来 Phase で Workers の `fetch()` を経由する取得が必要になった場合のみ実装する。
@@ -34,7 +33,7 @@ PIT のため、構造化行は必ず `event_time` / `available_at` / `source` /
 - **冪等性**: 各テーブルの自然キーを `PRIMARY KEY` とし `ON CONFLICT DO UPDATE` で upsert。同一日の再実行で重複行はできない。衝突時は **`available_at` を既存・新規の早い方（`MIN`）で保持**（元の PIT タイムスタンプを上書きしない）、それ以外の列は新規値で更新し `ingested_at` を最新にする。バッチは単一トランザクションで実行し、失敗時はロールバックする（部分コミットなし）。
 - **Raw 保存**: `data/raw/{source}/{yyyy}/{mm}/{dd}/<file>`（gitignore）。
 - **構造化保存**: `data/structured/ingestion.sqlite`（gitignore）。将来 R2/D1 へのレイアウトは `storage/schema.py` のコメント参照。
-- **秘匿**: API 鍵は環境変数のみ（`JQUANTS_API_KEY`, `EDINETDB_API_KEY`）。コード・ログに出力しない。
+- **秘匿**: API 鍵はコード・ログに出力しない。`JQUANTS_API_KEY` の正本は **Cloudflare Secret**（Worker 保持）。ローカルは **CF proxy を既定**（`~/.config/quant-platform/ingestion-proxy.json` で有効化、詳細は `ingestion/common/secrets.py` と [platform/secrets.example.md](../platform/secrets.example.md)）。proxy 未設定時のみ環境変数 `JQUANTS_API_KEY` の直接利用にフォールバック。
 
 ## 1. J-Quants（API V2）
 
@@ -58,23 +57,7 @@ PIT のため、構造化行は必ず `event_time` / `available_at` / `source` /
 
 > **V2 項目名の略称**: 日足・マスターは長名（`Open`/`High`/…, `CompanyName`/…）または短縮名（`O`/`H`/`L`/`C`/`Vo`/`Va`, `CoName`/`HolDiv`/…）で届く場合があるため、正規化は候補キーを順に解決する（`_pick`）。
 
-## 2. EDINET DB
-
-- Base: `https://edinetdb.jp/v1`、ヘッダ `X-API-Key`。
-- Phase 1 エンドポイント:
-  - `GET /v1/companies`（検索/一覧）
-  - `GET /v1/companies/{code}`（詳細）
-  - `GET /v1/companies/{code}/financials`（財務）
-- **注**: 応答 JSON の項目名が公式に完全には確定していないため、正規化は複数候補キーで防御的に解決する。項目対応は **仮**。
-
-| テーブル | 自然キー | 備考 |
-|----------|----------|------|
-| `edinetdb_companies` | (source, code) | code は `code`/`edinet_code`/`stock_code` のいずれか |
-| `edinetdb_financials` | (source, code, period, statement_type) | `statement_type` は空文字可（DEFAULT ''） |
-
-財務の金額項目: `revenue`, `operating_income`, `net_income`, `total_assets`, `equity`（候補キー多数、`edinetdb/normalize.py` 参照）。
-
-## 3. JSDA（公社債取引統計）
+## 2. JSDA（公社債取引統計）
 
 - 参照ページ: `https://www.jsda.or.jp/shiryoshitsu/toukei/saiken_torihiki/`
 - 形式: HTML ページ上の CSV / XLSX。URL は期ごとに変わるため `ingestion/jsda/urls.py` で一元管理（インデックスをスクレイプしてデータ拡張子のリンクを抽出）。
@@ -112,8 +95,13 @@ python3 scripts/run_ingestion_once.py --source all --runtime local
 python3 scripts/run_ingestion_once.py --source jsda
 
 # J-Quants を 1 銘柄・小ウィンドウで
-JQUANTS_API_KEY=*** python3 scripts/run_ingestion_once.py --source jquants \
+# (J-Quants の鍵は CF proxy 既定。proxy 未設定時は JQUANTS_API_KEY 環境変数)
+python3 scripts/run_ingestion_once.py --source jquants \
     --code 8697 --from-date 2025-04-01 --to-date 2025-04-05
+
+# J-Quants をバックフィル + データセット指定（カタログへ pass-through）
+python3 scripts/run_ingestion_once.py --source jquants --mode backfill \
+    --dataset listed_info --dataset daily_bars
 ```
 
 終了コード: `0`=取得/登録あり, `1`=**少なくとも1ソースがエラー**（取得/正規化/登録の失敗）, `2`=何も実行せず（CF ランタイム または全ソース clean skip）。
@@ -122,6 +110,7 @@ JQUANTS_API_KEY=*** python3 scripts/run_ingestion_once.py --source jquants \
 
 ## 次フェーズでの改善点
 
-- `available_at` のソース別実測（J-Quants 翌営業日朝、EDINET 提出日 等）。
+- `available_at` のソース別実測（J-Quants 翌営業日朝、開示（EDINET 系 API）の提出タイミング 等）。
+- J-Quants EDINET 系 API（`/v2/documents`, `/v2/fins/...`）の追加と dataset カタログの拡充。
 - Cloudflare 側 Registrar（R2/D1 読取）と Workers `fetch()` 経由取得の要否判断。
 - 履歴バックフィル（直近N日＋サンプルは Phase 1 対応済）。

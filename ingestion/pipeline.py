@@ -205,7 +205,20 @@ def run_jquants(
     code: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
+    datasets: Optional[List[str]] = None,
+    mode: str = "incremental",
 ) -> List[RunReport]:
+    """Fetch + normalize + register J-Quants endpoints for one pass.
+
+    ``datasets`` / ``mode`` are **pass-through knobs** for the J-Quants
+    dataset catalog (Phase 1 expansion). They are accepted here so the CLI
+    can forward ``--dataset`` / ``--mode`` without changing the call signature
+    again; the per-dataset dispatch is wired incrementally and the default
+    (``datasets is None``) runs the core endpoints below regardless of mode.
+    ``api_key`` is the J-Quants key for a direct call, or the sentinel
+    ``"via-proxy"`` when the caller routes J-Quants through the Cloudflare
+    secrets proxy (the proxy holds the real key; this client never sees it).
+    """
     if not api_key:
         return [RunReport("jquants", "*", skipped="JQUANTS_API_KEY not set")]
     if runtime != "local":
@@ -278,85 +291,6 @@ def run_jquants(
         )
 
     _log(store, "jquants", runtime, reports)
-    return reports
-
-
-# ---------------------------------------------------------------------------
-# EDINET DB
-# ---------------------------------------------------------------------------
-
-def run_edinetdb(
-    *,
-    http,
-    store,
-    api_key: str,
-    data_base: Path,
-    today,
-    runtime: str = "local",
-    financial_codes: Optional[List[str]] = None,
-) -> List[RunReport]:
-    if not api_key:
-        return [RunReport("edinetdb", "*", skipped="EDINETDB_API_KEY not set")]
-    if runtime != "local":
-        return _cannot_fetch("edinetdb", runtime)
-
-    from .edinetdb import normalize as EN
-    from .edinetdb.client import EdinetDbClient
-
-    client = EdinetDbClient(http, api_key)
-    reg = Registrar(store)
-    ingested = now_iso()
-    reports: List[RunReport] = []
-    companies: list[dict] = []
-
-    try:
-        companies = client.list_companies()
-        save_raw(
-            data_base, "edinetdb", _stamped("companies.json", ingested),
-            json.dumps(companies, ensure_ascii=False).encode("utf-8"), today,
-        )
-        rows = EN.normalize_companies(companies, ingested_at=ingested)
-        n = reg.register("edinetdb_companies", rows)
-        reports.append(RunReport("edinetdb", "companies", fetched=len(companies), registered=n))
-    except Exception as exc:  # noqa: BLE001
-        reports.append(RunReport("edinetdb", "companies", error=f"{exc}"))
-
-    # Financials for an explicit sample of codes (best-effort, optional).
-    # Codes the caller passed explicitly (e.g. via the CLI --code) are
-    # *expected* — a failure there is an error. Codes we auto-picked from the
-    # company list are a best-effort sample, so a per-code failure is a clean
-    # skip rather than a failing run.
-    sample = list(financial_codes or [])
-    codes_explicit = bool(sample)
-    if not sample and companies:
-        sample = [c.get("code") or c.get("edinet_code") for c in companies[:3]]
-        sample = [c for c in sample if c]
-    for code in sample:
-        try:
-            fins = client.financials(code)
-            save_raw(
-                data_base, "edinetdb", _stamped(f"financials_{code}.json", ingested),
-                json.dumps(fins, ensure_ascii=False).encode("utf-8"), today,
-            )
-            rows = EN.normalize_financials(fins, code=code, ingested_at=ingested)
-            n = reg.register("edinetdb_financials", rows)
-            reports.append(
-                RunReport("edinetdb", f"financials/{code}", fetched=len(fins), registered=n)
-            )
-        except Exception as exc:  # noqa: BLE001
-            if codes_explicit:
-                reports.append(
-                    RunReport("edinetdb", f"financials/{code}", error=f"{exc}")
-                )
-            else:
-                reports.append(
-                    RunReport(
-                        "edinetdb", f"financials/{code}",
-                        skipped=f"auto-sampled financials failed: {exc}",
-                    )
-                )
-
-    _log(store, "edinetdb", runtime, reports)
     return reports
 
 

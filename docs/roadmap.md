@@ -3,7 +3,7 @@
 | Phase | 内容 |
 |-------|------|
 | 0 | リポジトリと土台（本依頼） |
-| 1 | Ingestion（J-Quants / EDINET DB / JSDA） |
+| 1 | Ingestion（J-Quants / JSDA） |
 | 2 | PIT Data API |
 | 3 | コアエンジン最小 |
 | 4 | 特徴量 Registry |

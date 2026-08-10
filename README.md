@@ -5,11 +5,12 @@
 
 ## 現状（Phase 1）
 
-**Phase 1（Ingestion）が完了した状態です。** 3 データソースの取得・正規化・格納が動きます:
+**Phase 1（Ingestion）が完了した状態です。** 2 データソースの取得・正規化・格納が動きます:
 
 - **J-Quants** API V2（銘柄一覧 / 日足 / カレンダー / 財務サマリ任意）
-- **EDINET DB**（会社一覧・詳細・財務）
 - **JSDA** 公社債取引統計（CSV/XLSX）
+
+> 開示系（EDINET 由来の書面・財務詳細）は独立した EDINET DB ではなく、**J-Quants の EDINET 系 API**（`/v2/documents`、`/v2/fins/...`）で後続 Phase に統合する方針。Phase 1 では J-Quants 上記エンドポイント + JSDA が対象。
 
 ランタイムは **local 主系**（`LocalHttpClient` / httpx）。Cloudflare は Pattern B でストレージ読取のみ（Phase 1 では取得しない）。詳細は [docs/data_sources.md](docs/data_sources.md)。
 
@@ -22,7 +23,7 @@
 | パス | 役割 |
 |------|------|
 | `docs/` | アーキテクチャ・ロードマップ等の文書 |
-| `ingestion/` | 外部データ取得（**Phase 1 実装**: J-Quants / EDINET DB / JSDA） |
+| `ingestion/` | 外部データ取得（**Phase 1 実装**: J-Quants / JSDA） |
 | `core/` | コアエンジン（後続 Phase） |
 | `features/` | 特徴量 Registry（後続） |
 | `risk/` | リスク管理（後続） |
@@ -62,8 +63,8 @@ python -m unittest tests.test_smoke -v
 # JSDA のみ（鍵不要）
 python scripts/run_ingestion_once.py --source jsda --runtime local
 
-# 3 ソースすべて（各 API 鍵は環境変数で）
-JQUANTS_API_KEY=*** EDINETDB_API_KEY=*** python scripts/run_ingestion_once.py --source all
+# 2 ソースすべて（J-Quants の鍵は CF proxy 既定、未設定時は環境変数）
+python scripts/run_ingestion_once.py --source all
 
 # Cloudflare ランタイムは Phase 1 では取得しない（exit 2）
 python scripts/run_ingestion_once.py --source all --runtime cloudflare
@@ -74,4 +75,4 @@ python scripts/run_ingestion_once.py --source all --runtime cloudflare
 ## Secrets
 
 API キー等はコードに埋め込まない。名前の一覧のみ [platform/secrets.example.md](platform/secrets.example.md) を参照。  
-値は Cloudflare Secrets / 環境変数で管理する。
+`JQUANTS_API_KEY` の **正本は Cloudflare Secret**（Worker が保持）。ローカルは **CF proxy を既定で利用**（`~/.config/quant-platform/ingestion-proxy.json` を置くと有効。proxy 未設定時のみ環境変数 `JQUANTS_API_KEY` の直接利用にフォールバック）。
