@@ -207,6 +207,8 @@ def run_jquants(
     date_to: Optional[str] = None,
     datasets: Optional[List[str]] = None,
     mode: str = "incremental",
+    max_workers: int = 8,
+    chunk_days: int = 30,
 ) -> List[RunReport]:
     """Run a J-Quants pass.
 
@@ -218,6 +220,8 @@ def run_jquants(
       ``jquants_records`` table. This is the full Premium + add-on coverage
       path. ``mode`` (``incremental``/``backfill``) controls the default date
       window when ``date_from``/``date_to`` are not supplied.
+      Long ranges are split into ``chunk_days`` grids and run with up to
+      ``max_workers`` threads under a shared Premium rate limit.
     * **legacy default** (``datasets`` is ``None``): the Phase-1 curated path
       (listed_info / daily_bars / market_calendar / fins_summary raw-only)
       into the specialized tables — unchanged behaviour.
@@ -258,6 +262,8 @@ def run_jquants(
             today=today,
             ingested=ingested,
             runtime=runtime,
+            max_workers=max_workers,
+            chunk_days=chunk_days,
         )
 
     # 1) listed info
@@ -332,7 +338,8 @@ def _jquants_default_window(today, mode: str) -> tuple[Optional[str], Optional[s
     if mode == "incremental":
         try:
             start = today - _days(5)
-            return start.strftime("%Y-%m-%d"), None
+            end = today.strftime("%Y-%m-%d") if hasattr(today, "strftime") else str(today)[:10]
+            return start.strftime("%Y-%m-%d"), end
         except Exception:  # pragma: no cover - today isn't date-ish
             return None, None
     return None, None
@@ -376,38 +383,85 @@ def _run_jquants_catalog(
     today,
     ingested: str,
     runtime: str,
+    max_workers: int = 8,
+    chunk_days: int = 30,
 ) -> List[RunReport]:
-    """Catalog-driven fetch -> raw -> normalize_generic -> jquants_records."""
+    """Catalog-driven parallel fetch -> raw -> normalize_generic -> jquants_records.
+
+    Jobs = datasets × optional codes × date windows (``chunk_days``). Execution
+    uses a thread pool with a **shared** rate limiter on the client (Premium
+    500/min budget). Pagination within each job stays sequential.
+    """
     from .jquants import normalize as JN
     from .jquants.catalog import DATASETS
+    from .jquants.parallel import expand_jobs, run_parallel, summarize_results
 
     if mode not in ("incremental", "backfill"):
         mode = "incremental"
     if not date_from and not date_to:
         date_from, date_to = _jquants_default_window(today, mode)
 
+    known = [d for d in datasets if d in DATASETS]
+    unknown = [d for d in datasets if d not in DATASETS]
     reports: List[RunReport] = []
-    for did in datasets:
-        entry = DATASETS.get(did)
-        if entry is None:
-            reports.append(
-                RunReport("jquants", did, skipped=f"unknown dataset id: {did}")
-            )
-            continue
-        params = _dataset_params(entry.get("params", []), code, date_from, date_to)
+    for did in unknown:
+        reports.append(RunReport("jquants", did, skipped=f"unknown dataset id: {did}"))
+
+    codes = [code] if code else None
+    jobs = expand_jobs(
+        known,
+        from_date=date_from,
+        to_date=date_to,
+        chunk_days=max(1, int(chunk_days)),
+        codes=codes,
+    )
+    workers = max(1, int(max_workers))
+    print(
+        f"[jquants] parallel jobs={len(jobs)} workers={workers} "
+        f"chunk_days={chunk_days} window={date_from}..{date_to}"
+    )
+
+    # Serialize register/save_raw: SQLite and path writes are not all thread-safe.
+    write_lock = __import__("threading").Lock()
+
+    def _persist(job, rows: list) -> RunReport:
+        # kind stays the dataset id (tests / aggregators key on it). Window
+        # detail is only in the raw filename so multi-window jobs don't clobber.
+        kind = job.dataset_id
+        stamp_name = job.label.replace(" ", "_")[:120]
         try:
-            rows = client.fetch_dataset(did, **params)
-            save_raw(
-                data_base, "jquants", _stamped(f"{did}.json", ingested),
-                json.dumps(rows, ensure_ascii=False).encode("utf-8"), today,
-            )
-            norm = JN.normalize_generic(rows, dataset=did, ingested_at=ingested)
-            n = reg.register("jquants_records", norm)
-            reports.append(
-                RunReport("jquants", did, fetched=len(rows), registered=n)
+            with write_lock:
+                save_raw(
+                    data_base,
+                    "jquants",
+                    _stamped(f"{stamp_name}.json", ingested),
+                    json.dumps(rows, ensure_ascii=False).encode("utf-8"),
+                    today,
+                )
+                norm = JN.normalize_generic(
+                    rows, dataset=job.dataset_id, ingested_at=ingested
+                )
+                n = reg.register("jquants_records", norm)
+            return RunReport(
+                "jquants", kind, fetched=len(rows), registered=n
             )
         except Exception as exc:  # noqa: BLE001
-            reports.append(RunReport("jquants", did, error=f"{exc}"))
+            return RunReport("jquants", kind, error=f"{exc}")
+
+    results = run_parallel(client, jobs, max_workers=workers)
+    for res in results:
+        if not res.ok:
+            reports.append(
+                RunReport("jquants", res.job.dataset_id, error=res.error)
+            )
+            continue
+        reports.append(_persist(res.job, res.rows))
+
+    summary = summarize_results(results)
+    print(
+        f"[jquants] parallel done ok={summary['ok']}/{summary['jobs']} "
+        f"rows={summary['rows']} errors={summary['errors']}"
+    )
 
     _log(store, "jquants", runtime, reports)
     return reports

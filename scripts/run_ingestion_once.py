@@ -87,6 +87,20 @@ def _build_parser() -> argparse.ArgumentParser:
         "--jsda-url", dest="jsda_url", default=None,
         help="explicit JSDA file URL (skip index scrape)",
     )
+    p.add_argument(
+        "--workers",
+        type=int,
+        default=int(os.environ.get("INGESTION_WORKERS", "8")),
+        help="parallel workers for J-Quants jobs (datasets × date windows). "
+             "Rate limit is shared (Premium ~500/min). Default 8.",
+    )
+    p.add_argument(
+        "--chunk-days",
+        type=int,
+        default=int(os.environ.get("INGESTION_CHUNK_DAYS", "30")),
+        help="split long from/to ranges into N-day grids for parallel backfill "
+             "(J-Quants). Default 30.",
+    )
     return p
 
 
@@ -154,6 +168,7 @@ def main(argv=None) -> int:
                 data_base=data_base, today=today, runtime=runtime,
                 code=args.code, date_from=args.from_date, date_to=args.to_date,
                 datasets=datasets or None, mode=args.mode,
+                max_workers=args.workers, chunk_days=args.chunk_days,
             )
             all_reports.extend(reps)
             for r in reps:
