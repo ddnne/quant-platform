@@ -30,3 +30,6 @@ exclude = ["tests*", "scripts*", "data*", "docs*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+markers = [
+    "live: tests that touch a real network endpoint (skipped by default; set QP_LIVE=1)",
+]
