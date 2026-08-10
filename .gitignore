@@ -39,3 +39,6 @@ data/raw/
 data/tmp/
 *.parquet
 *.duckdb
+
+# Local agent logs
+.glm-logs/
