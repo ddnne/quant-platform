@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+.env
+.env.*
+!.env.example
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+
+# Secrets / local credentials (never commit)
+*.pem
+*.key
+.secrets/
+secrets.json
+credentials.json
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+*.swp
+*~
+
+# Cloudflare / wrangler local
+.wrangler/
+.dev.vars
+
+# Data dumps (local only)
+data/raw/
+data/tmp/
+*.parquet
+*.duckdb
