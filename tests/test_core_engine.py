@@ -25,6 +25,7 @@ from core import (
 from core.execution import close_as_of, open_as_of
 from core.strategies.buy_hold import BuyHold
 from core.strategy_protocol import BarContext, OrderIntent
+from storage.sqlite_store import SqliteStore
 
 from _coreseed import CODES, TRADING_DAYS, close_iso, seed_db
 
@@ -169,13 +170,16 @@ def test_engine_never_uses_future_as_of_for_bars(tmp_path, monkeypatch):
     """Every bars read uses an as_of <= the day being decided (no future)."""
     db = seed_db(tmp_path)
     real_bars = pit.get_equity_bars_daily
-    seen: list[tuple[str, str, str]] = []  # (as_of, from_event, to_event)
+    seen: list[tuple[str, str, str, tuple[str, ...]]] = []
 
-    def wrapped(as_of=None, code=None, from_event=None, to_event=None, *, db_path=None):
-        seen.append((as_of, from_event, to_event))
+    def wrapped(
+        as_of=None, code=None, from_event=None, to_event=None, *, codes=None,
+        db_path=None,
+    ):
+        seen.append((as_of, from_event, to_event, tuple(codes or ())))
         return real_bars(
             as_of=as_of, code=code, from_event=from_event,
-            to_event=to_event, db_path=db_path,
+            to_event=to_event, codes=codes, db_path=db_path,
         )
 
     monkeypatch.setattr(pit, "get_equity_bars_daily", wrapped)
@@ -183,12 +187,15 @@ def test_engine_never_uses_future_as_of_for_bars(tmp_path, monkeypatch):
     run_backtest(BuyHold(), START, END, db_path=db, universe=tuple(CODES))
     assert seen, "engine should read bars through pit"
     end_close = close_as_of(END)
-    for as_of, _from, to_event in seen:
+    for as_of, _from, to_event, codes in seen:
         # as_of never beyond the period's last close ...
         assert as_of <= end_close, (as_of, end_close)
         # ... and for a bars read with to_event=D the as_of is D's close (<= D).
         if to_event is not None:
             assert as_of <= close_as_of(to_event), (as_of, to_event)
+        # The engine pushes its requested universe into the PIT query instead
+        # of scanning every market bar and filtering only in Python.
+        assert set(codes) == set(CODES)
 
 
 def test_no_future_bar_visible_at_decision(tmp_path):
@@ -239,6 +246,103 @@ def test_same_day_close_fills_same_session_and_excludes_same_day_close(tmp_path)
     assert {t["decision_date"] for t in res.trades} == {TRADING_DAYS[1]}
 
 
+def test_same_day_close_debits_cash_and_marks_after_fill(tmp_path):
+    """A same-day buy updates cash and that session's close equity point."""
+    db = seed_db(tmp_path, codes=["1332"])
+    res = run_backtest(
+        BuyHold(), START, END, db_path=db, universe=("1332",),
+        execution_mode="same_day_close",
+    )
+    assert len(res.trades) == 1
+    trade = res.trades[0]
+    fill_row = next(
+        row for row in res.equity_curve if row["date"] == trade["fill_date"]
+    )
+    expected_cash = 1_000_000.0 - trade["notional"] - trade["cost"]
+    assert fill_row["cash"] == pytest.approx(expected_cash)
+    assert fill_row["cash"] < 1_000_000.0
+    assert fill_row["positions_value"] == pytest.approx(
+        trade["shares"] * trade["price"]
+    )
+
+
+def test_same_day_decision_equity_uses_prior_close(tmp_path):
+    """A held position's current-day close cannot leak through ctx.equity."""
+    prices = {
+        "1332": {
+            TRADING_DAYS[0]: 100.0,
+            TRADING_DAYS[1]: 100.0,
+            TRADING_DAYS[2]: 1_000.0,
+            TRADING_DAYS[3]: 1_000.0,
+        }
+    }
+    db = seed_db(tmp_path, codes=["1332"], prices=prices)
+
+    class EnterThenRecord(Recorder):
+        def on_bar(self, ctx: BarContext) -> list[OrderIntent]:
+            self.ctxs.append(ctx)
+            if ctx.date == TRADING_DAYS[1]:
+                return [OrderIntent(code="1332", target_weight=0.5)]
+            return []
+
+    strategy = EnterThenRecord()
+    res = run_backtest(
+        strategy, START, END, db_path=db, universe=("1332",),
+        execution_mode="same_day_close", cost_model=standard_cost(bps=0.0),
+    )
+    day3_ctx = next(ctx for ctx in strategy.ctxs if ctx.date == TRADING_DAYS[2])
+    assert day3_ctx.prices["1332"] == 100.0
+    assert day3_ctx.equity == pytest.approx(1_000_000.0)
+    # Close-time reporting still includes day 3's price move.
+    day3_curve = next(row for row in res.equity_curve if row["date"] == TRADING_DAYS[2])
+    assert day3_curve["equity"] == pytest.approx(5_500_000.0)
+
+
+def test_next_close_missing_fill_bar_carries_order(tmp_path):
+    """A stale prior close must not be relabeled as a missing session's fill."""
+    prices = {
+        "1332": {
+            TRADING_DAYS[0]: 100.0,
+            # No bar on the first intended fill session.
+            TRADING_DAYS[2]: 103.0,
+            TRADING_DAYS[3]: 104.0,
+        }
+    }
+    db = seed_db(tmp_path, codes=["1332"], prices=prices)
+    res = run_backtest(
+        BuyHold(), START, END, db_path=db, universe=("1332",),
+        cost_model=standard_cost(bps=0.0),
+    )
+    assert len(res.trades) == 1
+    assert res.trades[0]["decision_date"] == TRADING_DAYS[0]
+    assert res.trades[0]["fill_date"] == TRADING_DAYS[2]
+    assert res.trades[0]["price"] == 103.0
+
+
+def test_adjusted_prices_prevent_split_pnl(tmp_path):
+    """The adjusted share ledger remains continuous across a 2-for-1 split."""
+    raw = {
+        "1332": {
+            TRADING_DAYS[0]: 100.0,
+            TRADING_DAYS[1]: 100.0,
+            TRADING_DAYS[2]: 50.0,
+            TRADING_DAYS[3]: 50.0,
+        }
+    }
+    adjusted = {"1332": {d: 50.0 for d in TRADING_DAYS}}
+    db = seed_db(
+        tmp_path, codes=["1332"], prices=raw, adjustment_prices=adjusted
+    )
+    res = run_backtest(
+        BuyHold(), START, END, db_path=db, universe=("1332",),
+        cost_model=standard_cost(bps=0.0),
+    )
+    assert res.trades[0]["price"] == 50.0
+    assert [row["equity"] for row in res.equity_curve] == pytest.approx(
+        [1_000_000.0] * len(TRADING_DAYS)
+    )
+
+
 # ---------------------------------------------------------------------------
 # universe from PIT master (anti-survivorship first step)
 # ---------------------------------------------------------------------------
@@ -252,6 +356,30 @@ def test_universe_built_from_pit_master_when_not_fixed(tmp_path):
     assert first.universe == ("1332", "7203", "8697")
     assert set(first.master.keys()) == {"1332", "7203", "8697"}
     assert first.master["7203"].company_name == "Co-7203"
+
+
+def test_universe_uses_latest_complete_master_snapshot(tmp_path):
+    """A code omitted from the latest visible snapshot leaves the universe."""
+    db = seed_db(tmp_path, codes=["1332", "8697"])
+    with SqliteStore(db) as store:
+        store.upsert(
+            "jquants_listed_info",
+            [
+                {
+                    "source": "jquants",
+                    "code": "1332",
+                    "snapshot_date": "2025-04-02",
+                    "event_time": "2025-04-02T09:00:00+09:00",
+                    "available_at": "2025-04-02T09:00:00+09:00",
+                    "ingested_at": "2025-04-02T09:00:00+09:00",
+                    "company_name": "Co-1332",
+                }
+            ],
+        )
+    rec = Recorder()
+    run_backtest(rec, START, END, db_path=db)
+    assert rec.ctxs[0].universe == ("1332", "8697")
+    assert rec.ctxs[1].universe == ("1332",)
 
 
 def test_open_and_close_as_of_helpers():

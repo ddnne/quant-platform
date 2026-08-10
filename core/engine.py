@@ -81,6 +81,20 @@ def _bar_from_row(row: dict[str, Any]) -> Bar:
     )
 
 
+def _bar_price(bar: Bar) -> float | None:
+    """Return the split-adjusted price used by the portfolio share ledger.
+
+    J-Quants supplies adjusted OHLC values when a corporate action changes the
+    number of shares.  Using ``adjustment_close`` for sizing, fills, and marks
+    keeps the engine's stored share quantities in the same adjusted units and
+    prevents a split from appearing as investment P&L.  Older/minimal rows may
+    omit adjusted values, in which case the raw close remains the fallback.
+    """
+    if bar.adjustment_close is not None and bar.adjustment_close > 0:
+        return bar.adjustment_close
+    return bar.close
+
+
 def _shift_date(date_str: str, days: int) -> str:
     """``YYYY-MM-DD`` +/- ``days`` (JST calendar arithmetic)."""
     d = datetime.strptime(date_str, "%Y-%m-%d")
@@ -98,9 +112,9 @@ def _load_snapshot(
     """PIT-visible recent bars per code at ``as_of``, via ``get_equity_bars_daily``.
 
     Returns ``{code: {"close": float|None, "bars": [Bar, ...]}}``. PIT returns
-    rows ordered by ``(code, date)``; ``close`` is the most recent visible bar's
-    close (``None`` if the code has no visible bar in the window). Codes not in
-    ``codes`` are dropped — only the requested (universe + held) set is exposed.
+    rows ordered by ``(code, date)``; ``close`` is the most recent visible
+    split-adjusted close (or raw fallback, ``None`` if no bar is visible in the
+    window). Only the requested universe + held codes are read and exposed.
     """
     snapshot: dict[str, dict[str, Any]] = {
         c: {"close": None, "bars": []} for c in codes
@@ -109,7 +123,11 @@ def _load_snapshot(
         return snapshot
     from_date = _shift_date(to_date, -lookback_days)
     result = pit.get_equity_bars_daily(
-        as_of=as_of, from_event=from_date, to_event=to_date, db_path=db_path
+        as_of=as_of,
+        from_event=from_date,
+        to_event=to_date,
+        codes=tuple(sorted(codes)),
+        db_path=db_path,
     )
     for row in result.rows:
         code = row.get("code")
@@ -118,12 +136,34 @@ def _load_snapshot(
         snapshot[code]["bars"].append(_bar_from_row(row))
     for entry in snapshot.values():
         bars = entry["bars"]
-        entry["close"] = bars[-1].close if bars else None
+        entry["close"] = _bar_price(bars[-1]) if bars else None
     return snapshot
 
 
+def _session_prices(
+    snapshot: dict[str, dict[str, Any]], session_date: str
+) -> dict[str, float]:
+    """Adjusted closes backed by a bar from exactly ``session_date``.
+
+    A snapshot's general ``close`` is intentionally the latest visible mark,
+    which can be older than the requested session during a suspension or data
+    delay.  Execution must be stricter: an order can fill only when the actual
+    fill session has a visible, positive price.
+    """
+    prices: dict[str, float] = {}
+    for code, entry in snapshot.items():
+        for bar in reversed(entry["bars"]):
+            if bar.date != session_date:
+                continue
+            price = _bar_price(bar)
+            if price is not None and price > 0:
+                prices[code] = price
+            break
+    return prices
+
+
 def _mark_equity(
-    shares: dict[str, float], closes: dict[str, float], cash: float
+    shares: dict[str, float], closes: dict[str, float | None], cash: float
 ) -> float:
     """Total equity = cash + positions marked at last visible close.
 
@@ -302,8 +342,7 @@ def run_backtest(
         )
         held = set(shares) | set(universe_d)
 
-        # --- close snapshot at close(d): used for marking (+ next_close fills
-        #     and decision info; + same_day fills) ----------------------------
+        # --- close snapshot at close(d): used for marking and fills ----------
         snap_close = _load_snapshot(
             close_as_of(d), held, d, lookback_days, db_path=db_path
         )
@@ -312,6 +351,7 @@ def run_backtest(
             for c in held
             if snap_close[c]["close"] is not None
         }
+        fill_closes = _session_prices(snap_close, d)
 
         # --- apply pending next_close orders at d's close --------------------
         if mode.fill_offset == 1 and pending is not None:
@@ -319,7 +359,7 @@ def run_backtest(
                 pending["targets"],
                 decision_date=pending["decision_date"],
                 fill_date=d,
-                closes=closes,
+                closes=fill_closes,
                 cost_model=cost_model,
                 shares=shares,
                 cash=cash,
@@ -331,25 +371,30 @@ def run_backtest(
                 else None
             )
 
-        # --- mark portfolio at d's close -------------------------------------
-        equity = _mark_equity(shares, closes, cash)
-        equity_curve.append(
-            {
-                "date": d,
-                "cash": cash,
-                "positions_value": equity - cash,
-                "equity": equity,
-            }
-        )
-
         # --- decision information set at decision_as_of ----------------------
         if mode.fill_offset == 1:
             snap_dec = snap_close  # next_close decides at close(d)
+            decision_equity = _mark_equity(shares, closes, cash)
+            # The next-close decision occurs after this close's fills and mark.
+            equity_curve.append(
+                {
+                    "date": d,
+                    "cash": cash,
+                    "positions_value": decision_equity - cash,
+                    "equity": decision_equity,
+                }
+            )
         else:
             # same_day_close decides at open(d): d's close is NOT yet visible.
             snap_dec = _load_snapshot(
-                mode.decision_as_of(d), set(universe_d), d, lookback_days, db_path=db_path
+                mode.decision_as_of(d), held, d, lookback_days, db_path=db_path
             )
+            decision_closes = {
+                c: snap_dec[c]["close"]
+                for c in held
+                if snap_dec[c]["close"] is not None
+            }
+            decision_equity = _mark_equity(shares, decision_closes, cash)
         prices_d = {c: snap_dec[c]["close"] for c in universe_d}
         bars_d = {c: tuple(snap_dec[c]["bars"]) for c in universe_d}
         positions = {
@@ -361,7 +406,7 @@ def run_backtest(
             universe=universe_d,
             positions=positions,
             cash=cash,
-            equity=equity,
+            equity=decision_equity,
             prices=prices_d,
             bars=bars_d,
             master=master_d,
@@ -369,24 +414,35 @@ def run_backtest(
 
         # --- ask the strategy -----------------------------------------------
         intents = strategy.on_bar(ctx)
-        targets = _resolve_targets(intents, equity, prices_d)
+        targets = _resolve_targets(intents, decision_equity, prices_d)
 
         # --- fill -----------------------------------------------------------
         if mode.fill_offset == 1:
-            pending = (
-                {"targets": targets, "decision_date": d} if targets else None
-            )
+            # A non-empty target set replaces any carried order.  With no new
+            # replacement, preserve targets that could not fill this session.
+            if targets:
+                pending = {"targets": targets, "decision_date": d}
         else:
             # same_day_close fills immediately at d's close.
-            _apply_fills(
+            shares, cash, _ = _apply_fills(
                 targets,
                 decision_date=d,
                 fill_date=d,
-                closes=closes,
+                closes=fill_closes,
                 cost_model=cost_model,
                 shares=shares,
                 cash=cash,
                 trades=trades,
+            )
+            # The published curve is a post-fill, post-cost close-time mark.
+            close_equity = _mark_equity(shares, closes, cash)
+            equity_curve.append(
+                {
+                    "date": d,
+                    "cash": cash,
+                    "positions_value": close_equity - cash,
+                    "equity": close_equity,
+                }
             )
 
     metrics = compute_metrics(equity_curve=equity_curve, trades=trades)

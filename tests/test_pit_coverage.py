@@ -14,6 +14,7 @@ from pit import (
     get_equity_bars_daily,
     get_equity_master,
     get_jsda_bond_trades,
+    get_jsda_repo_rates,
     get_jquants_records,
     get_market_calendar,
 )
@@ -103,6 +104,24 @@ def test_bars_daily_happy_path_with_date_range(tmp_path):
     )
     assert [r["date"] for r in res] == ["2025-03-31"]  # range excludes 03-28 and 04-01
     assert res.rows[0]["raw_payload"]["Close"] == 110.0
+
+
+def test_bars_daily_multiple_codes_filter(tmp_path):
+    rows = [
+        {
+            "source": "jquants", "code": code, "date": "2025-03-31",
+            "event_time": "2025-03-31T15:00:00+09:00",
+            "available_at": "2025-04-01T17:00:00+09:00",
+            "ingested_at": "2025-04-01T17:00:00+09:00", "close": 100.0,
+        }
+        for code in ("1332", "7203", "8697")
+    ]
+    with _store(tmp_path) as s:
+        s.upsert("jquants_daily_bars", rows)
+    res = get_equity_bars_daily(
+        as_of=AS_OF, codes=("1332", "8697"), db_path=tmp_path / "ing.sqlite"
+    )
+    assert [row["code"] for row in res] == ["1332", "8697"]
 
 
 # --- jquants_market_calendar -----------------------------------------------
@@ -203,6 +222,50 @@ def test_jsda_bond_trades_happy_path(tmp_path):
     assert res.rows[0]["close_yield"] == 0.512
     assert res.rows[0]["raw_payload"]["ISIN"] == "JP123456789"
     assert res.metadata["source"] == "jsda"
+
+
+# --- jsda_repo_rates ------------------------------------------------------
+
+
+def test_jsda_repo_rates_happy_path_and_as_of_gate(tmp_path):
+    rows = [
+        {
+            "source": "jsda", "as_of_date": "2025-03-31", "tenor": "1ヶ月物",
+            "rate_type": "東京レポ・レート",
+            "event_time": "2025-03-31T15:00:00+09:00",
+            "available_at": "2025-04-01T09:00:00+09:00",
+            "ingested_at": "2025-04-01T09:00:00+09:00", "rate": 0.012,
+            "raw_payload": '{"tenor": "1ヶ月物", "rate": 0.012}',
+        },
+        {
+            "source": "jsda", "as_of_date": "2025-04-01", "tenor": "1ヶ月物",
+            "rate_type": "東京レポ・レート",
+            "event_time": "2025-04-01T15:00:00+09:00",
+            "available_at": "2025-04-03T09:00:00+09:00",
+            "ingested_at": "2025-04-03T09:00:00+09:00", "rate": 0.013,
+        },
+    ]
+    with _store(tmp_path) as s:
+        s.upsert("jsda_repo_rates", rows)
+    path = tmp_path / "ing.sqlite"
+
+    before_second_publication = get_jsda_repo_rates(
+        as_of=AS_OF,
+        tenor="1ヶ月物",
+        rate_type="東京レポ・レート",
+        from_event="2025-03-01",
+        to_event="2025-04-30",
+        db_path=path,
+    )
+    assert before_second_publication.count == 1
+    assert before_second_publication.rows[0]["rate"] == 0.012
+    assert before_second_publication.rows[0]["raw_payload"]["tenor"] == "1ヶ月物"
+    assert before_second_publication.metadata["table"] == "jsda_repo_rates"
+
+    after_second_publication = get_jsda_repo_rates(
+        as_of="2025-04-03T09:00:00+09:00", tenor="1ヶ月物", db_path=path
+    )
+    assert [row["rate"] for row in after_second_publication] == [0.012, 0.013]
 
 
 # --- read-only enforcement -------------------------------------------------

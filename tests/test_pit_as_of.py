@@ -21,6 +21,7 @@ from pit import (
     get_equity_bars_daily,
     get_equity_master,
     get_jsda_bond_trades,
+    get_jsda_repo_rates,
     get_jquants_records,
     get_market_calendar,
 )
@@ -54,6 +55,7 @@ _ALL_GETTERS = [
     # dataset required too, but as_of is validated FIRST -> AsOfRequired anyway
     ("jquants_records", lambda **k: get_jquants_records(dataset="fins_dividend", **k)),
     ("jsda_bond_trades", lambda **k: get_jsda_bond_trades(**k)),
+    ("jsda_repo_rates", lambda **k: get_jsda_repo_rates(**k)),
 ]
 
 

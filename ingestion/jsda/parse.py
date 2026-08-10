@@ -284,11 +284,14 @@ def parse_repo_csv(data, *, encoding: Optional[str] = None) -> List[dict]:
 
         if tenor_col is not None:
             # Long layout: one record per row (tenor in a cell).
-            tenor = _cell(row, tenor_col)
+            tenor = _cell(row, tenor_col).strip()
             rc = rate_col
             if rc is None:
                 rc = _first_numeric_col(row, raw_headers, {date_col, tenor_col})
-            out.append({"as_of_date": d, "tenor": tenor, "rate": _num(_cell(row, rc))})
+            rate = _num(_cell(row, rc))
+            if not tenor or rate is None:
+                continue
+            out.append({"as_of_date": d, "tenor": tenor, "rate": rate})
         else:
             # Wide layout: one record per numeric column (header = tenor).
             # Only the date column is excluded — ``rate_col`` is a long-layout

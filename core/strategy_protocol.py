@@ -102,8 +102,8 @@ class BarContext:
         positions: Currently held positions, by code.
         cash: Cash balance before this decision's fills.
         equity: Total equity (cash + positions marked at last visible close).
-        prices: Last PIT-visible close per universe code (``None`` if a code
-            has no visible bar yet).
+        prices: Last PIT-visible close per universe code, split-adjusted when
+            supplied (``None`` if a code has no visible bar yet).
         bars: Recent PIT-visible daily bars per universe code, oldest first.
         master: Latest-known-as-of master snapshot per universe code.
     """

@@ -64,6 +64,7 @@ def _bar_rows(
     prices: dict[str, dict[str, float]],
     *,
     available_at_for: dict[str, str] | None = None,
+    adjustment_prices: dict[str, dict[str, float]] | None = None,
 ) -> list[dict]:
     """``prices[code][date] = close``. ``available_at_for[date]`` overrides pub time."""
     rows: list[dict] = []
@@ -86,6 +87,11 @@ def _bar_rows(
                     "high": close,
                     "low": close,
                     "close": close,
+                    "adjustment_close": (
+                        adjustment_prices.get(code, {}).get(d)
+                        if adjustment_prices is not None
+                        else None
+                    ),
                     "volume": 1000.0,
                 }
             )
@@ -107,6 +113,7 @@ def seed_db(
     days: list[str] | None = None,
     prices: dict | None = None,
     bar_available_at_for: dict[str, str] | None = None,
+    adjustment_prices: dict | None = None,
     master_available_at: str | None = None,
 ) -> Path:
     """Create a structured DB with calendar + master + bars; return its path."""
@@ -119,7 +126,11 @@ def seed_db(
     store.upsert("jquants_listed_info", _master_rows(codes, available_at=master_available_at))
     store.upsert(
         "jquants_daily_bars",
-        _bar_rows(prices, available_at_for=bar_available_at_for),
+        _bar_rows(
+            prices,
+            available_at_for=bar_available_at_for,
+            adjustment_prices=adjustment_prices,
+        ),
     )
     store.close()
     return path

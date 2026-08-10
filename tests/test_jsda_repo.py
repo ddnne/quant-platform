@@ -72,6 +72,19 @@ def test_parse_long_layout_with_tenor_column():
     assert records[2]["tenor"] == "1ヶ月物" and records[2]["rate"] == 0.002
 
 
+def test_parse_long_layout_skips_empty_observations():
+    text = (
+        "年月日,期間,レート(%)\n"
+        "2025-04-01,隔日物,-\n"
+        "2025-04-01,,0.010\n"
+        "2025-04-01,1ヶ月物,\n"
+        "2025-04-01,3ヶ月物,0.020\n"
+    )
+    assert parse_repo_csv(text) == [
+        {"as_of_date": "2025-04-01", "tenor": "3ヶ月物", "rate": 0.02}
+    ]
+
+
 def test_parse_handles_bytes_and_cp932():
     cp932_bytes = (
         "年月日,隔日物,1ヶ月物\n"

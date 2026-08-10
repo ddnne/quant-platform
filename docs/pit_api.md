@@ -44,10 +44,11 @@ Ingestion（Phase 1）が `data/structured/ingestion.sqlite` に構造化行を�
 | 関数 | テーブル | 主なフィルタ |
 |------|----------|--------------|
 | `get_equity_master(as_of, code=None, *, db_path=None)` | `jquants_listed_info` + `jquants_records(equities_master)` | `code` |
-| `get_equity_bars_daily(as_of, code=None, from_event=None, to_event=None, *, db_path=None)` | `jquants_daily_bars` + `jquants_records(equities_bars_daily)` | `code`, `from_event`/`to_event`（**date**） |
+| `get_equity_bars_daily(as_of, code=None, from_event=None, to_event=None, *, codes=None, db_path=None)` | `jquants_daily_bars` + `jquants_records(equities_bars_daily)` | `code` または複数の `codes`、`from_event`/`to_event`（**date**） |
 | `get_market_calendar(as_of, from_date=None, to_date=None, *, db_path=None)` | `jquants_market_calendar` + `jquants_records(markets_calendar)` | `from_date`/`to_date`（**date**） |
 | `get_jquants_records(as_of, dataset, code=None, from_event=None, to_event=None, *, db_path=None)` | `jquants_records` | `dataset`（必須）, `code`, `from_event`/`to_event`（**event_time**） |
 | `get_jsda_bond_trades(as_of, isin=None, from_event=None, to_event=None, *, db_path=None)` | `jsda_bond_trades` | `isin`, `from_event`/`to_event`（**trade_date**） |
+| `get_jsda_repo_rates(as_of, tenor=None, rate_type=None, from_event=None, to_event=None, *, db_path=None)` | `jsda_repo_rates` | `tenor`, `rate_type`, `from_event`/`to_event`（**as_of_date**） |
 
 > `jquants_records` は `dataset` でパーティションされる汎用テーブル（カタログ実行では
 > 3 つのキュレーション済系列を含む全カタログデータセット）。公開キュレーション getter

@@ -20,6 +20,7 @@ Tables (see :mod:`storage.schema`):
   ``markets_calendar`` partition of ``jquants_records``
 * :func:`get_jquants_records`    -> ``jquants_records`` (generic, by ``dataset``)
 * :func:`get_jsda_bond_trades`   -> ``jsda_bond_trades``
+* :func:`get_jsda_repo_rates`    -> ``jsda_repo_rates``
 """
 
 from __future__ import annotations
@@ -43,6 +44,7 @@ __all__ = [
     "get_market_calendar",
     "get_jquants_records",
     "get_jsda_bond_trades",
+    "get_jsda_repo_rates",
     "PitResult",
     "PIT_API_VERSION",
 ]
@@ -236,6 +238,7 @@ def get_equity_bars_daily(
     from_event: Any = None,
     to_event: Any = None,
     *,
+    codes: tuple[str, ...] | list[str] | set[str] | None = None,
     db_path: Any = None,
 ) -> PitResult:
     """Point-in-time daily OHLCV bars (``jquants_daily_bars``).
@@ -244,14 +247,28 @@ def get_equity_bars_daily(
     ``to_event`` are additive bounds on the trading **date**
     (``YYYY-MM-DD``; flexible inputs like ``"2025/04/01"`` or a full datetime
     are accepted and reduced to the date). ``code`` optionally restricts to a
-    single issue. Ordered by ``code, date``.
+    single issue; ``codes`` accepts multiple issues for efficient batched
+    reads. They are mutually exclusive. Ordered by ``code, date``.
     """
     as_of_iso = normalize_as_of(as_of)
+    if code is not None and codes is not None:
+        raise ValueError("code and codes are mutually exclusive")
+    requested_codes: list[str] | None
+    if code is not None:
+        requested_codes = [code]
+    elif codes is not None:
+        requested_codes = sorted({str(value) for value in codes})
+    else:
+        requested_codes = None
     clauses: list[str] = []
     params: list[Any] = []
-    if code is not None:
-        clauses.append("code = ?")
-        params.append(code)
+    if requested_codes is not None:
+        if requested_codes:
+            placeholders = ",".join("?" for _ in requested_codes)
+            clauses.append(f"code IN ({placeholders})")
+            params.extend(requested_codes)
+        else:
+            clauses.append("0")
     if from_event is not None:
         clauses.append("date >= ?")
         params.append(_date_bound(from_event))
@@ -268,9 +285,16 @@ def get_equity_bars_daily(
     )
     catalog_clauses: list[str] = []
     catalog_params: list[Any] = []
-    if code is not None:
-        catalog_clauses.append("natural_key LIKE ?")
-        catalog_params.append(f'%"Code": "{code}"%')
+    if requested_codes is not None:
+        if requested_codes:
+            placeholders = ",".join("?" for _ in requested_codes)
+            catalog_clauses.append(
+                "CAST(json_extract(natural_key, '$.Code') AS TEXT) "
+                f"IN ({placeholders})"
+            )
+            catalog_params.extend(requested_codes)
+        else:
+            catalog_clauses.append("0")
     if from_event is not None:
         catalog_clauses.append("substr(event_time, 1, 10) >= ?")
         catalog_params.append(_date_bound(from_event))
@@ -442,3 +466,45 @@ def get_jsda_bond_trades(
         order_by="trade_date, isin",
     )
     return _result(rows, as_of=as_of_iso, table="jsda_bond_trades", source="jsda")
+
+
+def get_jsda_repo_rates(
+    as_of: Any = _NOT_GIVEN,
+    tenor: str | None = None,
+    rate_type: str | None = None,
+    from_event: Any = None,
+    to_event: Any = None,
+    *,
+    db_path: Any = None,
+) -> PitResult:
+    """Point-in-time JSDA repo rates (``jsda_repo_rates``).
+
+    Returns every observation whose ``available_at <= as_of``. ``tenor`` and
+    ``rate_type`` optionally select a series; ``from_event`` / ``to_event``
+    are additive bounds on ``as_of_date`` (``YYYY-MM-DD``; flexible inputs
+    accepted). Ordered by ``as_of_date, tenor, rate_type``.
+    """
+    as_of_iso = normalize_as_of(as_of)
+    clauses: list[str] = []
+    params: list[Any] = []
+    if tenor is not None:
+        clauses.append("tenor = ?")
+        params.append(tenor)
+    if rate_type is not None:
+        clauses.append("rate_type = ?")
+        params.append(rate_type)
+    if from_event is not None:
+        clauses.append("as_of_date >= ?")
+        params.append(_date_bound(from_event))
+    if to_event is not None:
+        clauses.append("as_of_date <= ?")
+        params.append(_date_bound(to_event))
+    rows = run_query(
+        db_path,
+        as_of=as_of_iso,
+        table="jsda_repo_rates",
+        extra_where=" AND ".join(clauses) if clauses else None,
+        params=params,
+        order_by="as_of_date, tenor, rate_type",
+    )
+    return _result(rows, as_of=as_of_iso, table="jsda_repo_rates", source="jsda")

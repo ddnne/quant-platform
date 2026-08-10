@@ -27,6 +27,7 @@ from .api import (
     get_equity_bars_daily,
     get_equity_master,
     get_jsda_bond_trades,
+    get_jsda_repo_rates,
     get_jquants_records,
     get_market_calendar,
 )
@@ -46,6 +47,7 @@ __all__ = [
     "get_market_calendar",
     "get_jquants_records",
     "get_jsda_bond_trades",
+    "get_jsda_repo_rates",
     # result / version
     "PitResult",
     "PIT_API_VERSION",
