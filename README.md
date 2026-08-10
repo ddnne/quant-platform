@@ -3,9 +3,9 @@
 日本株・開示・債券データを用いた量化研究／Paper／FoF 基盤。  
 正本は GitHub リポジトリ 1 本（公開・非公開は運用で変更可）。
 
-## 現状（Phase 2）
+## 現状（Phase 3）
 
-**Phase 1（Ingestion）＋ Phase 2（PIT Data API）が完了した状態です。**
+**Phase 1（Ingestion）＋ Phase 2（PIT Data API）＋ Phase 3（コアエンジン最小）が完了した状態です。**
 
 Phase 1 — 2 データソースの取得・正規化・格納が動きます:
 
@@ -20,11 +20,16 @@ Phase 2 — 構造化データの **読み出し経路として PIT Data API（`
 全読み出しは `as_of` 必須・`available_at <= as_of` で look-ahead を防止・読み取り専用
 （`mode=ro`）。**直接 SQLite での研究読み出しは禁止**（[docs/pit_api.md](docs/pit_api.md)）。
 
-> 開示系（EDINET 由来の書面・財務詳細）は独立した EDINET DB ではなく、**J-Quants の EDINET 系 API**（`/v2/documents`、`/v2/fins/...`）で後続 Phase に統合する方針。Phase 1 では J-Quants 上記エンドポイント + JSDA が対象。
+Phase 3 — **コアエンジン最小（`core/`）**。ブラックボックスのバックテストエンジン。
+fact は `pit.get_*` 経由のみ（`core/` は SQLite/HTTP を直接開かない）、戦略には意思決定 `as_of`
+時点の狭い `BarContext` のみを渡す。`next_close`/`same_day_close` 執行・標準/ストレス費用・
+再現性メタデータ付き。詳細は [docs/core_engine.md](docs/core_engine.md)。
+
+> 開示系（EDINET 由来の大株主・持ち合い・大量保有）は独立した EDINET DB ではなく、**J-Quants の EDINET 系 API**（`/v2/edinet/major-shareholders`、`/v2/edinet/cross-shareholdings`、`/v2/edinet/large-volume-shareholders`、および `/v2/fins/...`）で統合する方針。Phase 1 では J-Quants 上記エンドポイント + JSDA が対象。
 
 ランタイムは **local 主系**（`LocalHttpClient` / httpx）。Cloudflare は Pattern B でストレージ読取のみ（Phase 1 では取得しない）。詳細は [docs/data_sources.md](docs/data_sources.md)。
 
-**次は Phase 3（コアエンジン最小）** です。Phase 2（PIT Data API）は完了しました。
+**次は Phase 4（特徴量 Registry）** です。Phase 3（コアエンジン最小）は完了しました。
 
 詳細は [docs/architecture.md](docs/architecture.md) と [docs/roadmap.md](docs/roadmap.md) を参照してください。
 
@@ -35,7 +40,7 @@ Phase 2 — 構造化データの **読み出し経路として PIT Data API（`
 | `docs/` | アーキテクチャ・ロードマップ等の文書 |
 | `ingestion/` | 外部データ取得（**Phase 1 実装**: J-Quants / JSDA） |
 | `pit/` | **PIT Data API**（**Phase 2 実装**: `as_of` 必須の読み出し専用 API） |
-| `core/` | コアエンジン（後続 Phase） |
+| `core/` | **コアエンジン**（**Phase 3 実装**: PIT 経由のみのブラックボックスバックテスト） |
 | `features/` | 特徴量 Registry（後続） |
 | `risk/` | リスク管理（後続） |
 | `strategies/` | 戦略定義・Paper 関連（後続） |
