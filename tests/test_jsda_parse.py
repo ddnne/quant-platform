@@ -130,7 +130,11 @@ def test_run_jsda_end_to_end_idempotent(tmp_path: Path, jsda_sample_text: str):
     store = SqliteStore(tmp_path / "ing.sqlite")
     http = _Client()
 
-    reps = run_jsda(http=http, store=store, data_base=tmp_path, today="2025-04-02")
+    # repo=False keeps this a focused bond-trade test (its _Client only mocks
+    # the bond index). Repo rates have their own offline tests.
+    reps = run_jsda(
+        http=http, store=store, data_base=tmp_path, today="2025-04-02", repo=False,
+    )
     assert len(reps) == 1 and reps[0].ok
     assert reps[0].registered == 3
     assert store.count("jsda_bond_trades") == 3
@@ -143,7 +147,9 @@ def test_run_jsda_end_to_end_idempotent(tmp_path: Path, jsda_sample_text: str):
 
     # Re-running the same day is idempotent: no duplicate rows.
     http2 = _Client()
-    reps2 = run_jsda(http=http2, store=store, data_base=tmp_path, today="2025-04-02")
+    reps2 = run_jsda(
+        http=http2, store=store, data_base=tmp_path, today="2025-04-02", repo=False,
+    )
     assert reps2[0].ok
     assert store.count("jsda_bond_trades") == 3
 
