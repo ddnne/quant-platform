@@ -213,8 +213,10 @@ DATASETS: dict[str, dict[str, Any]] = {
         # Multi-observation: many minute bars share a (Code, Date). The bulk
         # CSV carries a per-minute ``DateTime``; the REST surface splits it
         # into ``Date`` + ``Time``. List both discriminators so the normalizer
-        # can keep every bar regardless of transport (only whichever exists
-        # lands in the key — see normalize._natural_key).
+        # can keep every bar regardless of transport — and the two are
+        # canonicalized onto a single ``Time`` = HH:MM so the SAME bar fetched
+        # via either transport upserts to one row, not two (see
+        # normalize._natural_key / _canonical_minute_time).
         "key": ["Code", "Date", "DateTime", "Time"],
     },
     "equities_trades": {

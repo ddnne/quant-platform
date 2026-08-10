@@ -12,6 +12,12 @@ These tests pin the behavior at two levels:
   strings; and
 * the store — every bar survives an ``upsert`` into ``jquants_records``.
 
+Minute bars add a canonicalization guard: the bulk CSV carries ``DateTime``
+while the REST surface splits it into ``Date`` + ``Time``, yet both describe
+the *same* observation. The discriminator is canonicalized to a single
+``Time`` = ``HH:MM`` so re-ingesting a bar via the other transport upserts
+rather than inserting a duplicate (the inverse-collapse bug).
+
 A regression guard confirms daily bars (one observation per ``(Code, Date)``)
 still collapse to a single key, so the fix did not over-broaden.
 """
@@ -35,7 +41,8 @@ def _keys(rows, dataset):
 
 def test_minute_bars_distinguish_per_minute_via_datetime():
     """Bulk-CSV minute bars carry ``DateTime``: same Code/Date, different minute
-    -> distinct natural keys (no collapse)."""
+    -> distinct natural keys (no collapse). The discriminator lands in the key
+    as the canonical ``Time`` = HH:MM."""
     rows = [
         {"Code": "8697", "Date": "2025-04-01",
          "DateTime": "2025-04-01T09:00:00+09:00", "C": 100},
@@ -46,7 +53,8 @@ def test_minute_bars_distinguish_per_minute_via_datetime():
     assert len(set(keys)) == 2
     nk = json.loads(keys[0])
     assert nk["Code"] == "8697" and nk["Date"] == "2025-04-01"
-    assert "DateTime" in nk  # discriminator landed in the key
+    assert nk["Time"] == "09:00"  # DateTime canonicalized to HH:MM
+    assert "DateTime" not in nk  # folded away, not doubled up
 
 
 def test_minute_bars_rest_variant_uses_date_plus_time():
@@ -58,15 +66,35 @@ def test_minute_bars_rest_variant_uses_date_plus_time():
     ]
     keys = _keys(rows, "equities_bars_minute")
     assert len(set(keys)) == 2
-    assert "Time" in json.loads(keys[0])
+    assert json.loads(keys[0])["Time"] == "09:00"
 
 
 def test_minute_key_tolerates_lowercase_datetime_alias():
-    """V2 mixes casing (``datetime``); the key records the canonical name."""
+    """V2 mixes casing (``datetime``); the canonicalized key records ``Time``."""
     rows = [{"Code": "8697", "Date": "2025-04-01",
              "datetime": "2025-04-01T09:05:00+09:00", "C": 1}]
     nk = json.loads(_keys(rows, "equities_bars_minute")[0])
-    assert nk["DateTime"] == "2025-04-01T09:05:00+09:00"
+    assert nk["Time"] == "09:05"  # lowercase datetime -> canonical HH:MM
+
+
+def test_minute_bar_same_observation_same_key_across_transports():
+    """The same bar fetched via bulk (``DateTime``) and REST (``Date``+``Time``)
+    MUST produce the identical natural key. Without canonicalization the second
+    ingest inserts a duplicate instead of upserting — the inverse-collapse bug.
+    """
+    bulk = [{"Code": "8697", "Date": "2025-04-01",
+             "DateTime": "2025-04-01T09:00:00+09:00", "C": 100}]
+    rest = [{"Code": "8697", "Date": "2025-04-01", "Time": "09:00", "C": 100}]
+    assert _keys(bulk, "equities_bars_minute") == _keys(rest, "equities_bars_minute")
+    nk = json.loads(_keys(bulk, "equities_bars_minute")[0])
+    assert nk == {"Code": "8697", "Date": "2025-04-01", "Time": "09:00"}
+
+
+def test_minute_bar_rest_time_with_seconds_canonicalizes_to_hhmm():
+    """A REST ``Time`` carrying seconds still reduces to HH:MM so it matches the
+    bulk ``DateTime`` form of the same minute."""
+    rows = [{"Code": "8697", "Date": "2025-04-01", "Time": "09:00:00", "C": 1}]
+    assert json.loads(_keys(rows, "equities_bars_minute")[0])["Time"] == "09:00"
 
 
 # --------------------------------------------------------------------------- tick trades
@@ -157,6 +185,22 @@ def test_upsert_keeps_all_minute_bars(tmp_path):
     # re-upsert of the same data is idempotent — still 2, not 4
     store.upsert("jquants_records", norm)
     assert store.count("jquants_records") == 2
+    store.close()
+
+
+def test_upsert_collapses_cross_transport_duplicate(tmp_path):
+    """The same minute bar ingested via bulk (``DateTime``) then REST (``Time``)
+    upserts to ONE row, not two — the canonicalized key makes the second ingest
+    an update rather than an insert (the inverse-collapse regression)."""
+    store = SqliteStore(tmp_path / "ing.sqlite")
+    bulk = [{"Code": "8697", "Date": "2025-04-01",
+             "DateTime": "2025-04-01T09:00:00+09:00", "C": 100}]
+    rest = [{"Code": "8697", "Date": "2025-04-01", "Time": "09:00", "C": 100}]
+    store.upsert("jquants_records",
+                 normalize_generic(bulk, dataset="equities_bars_minute", ingested_at=ING))
+    store.upsert("jquants_records",
+                 normalize_generic(rest, dataset="equities_bars_minute", ingested_at=ING))
+    assert store.count("jquants_records") == 1
     store.close()
 
 

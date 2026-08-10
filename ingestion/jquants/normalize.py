@@ -209,7 +209,31 @@ def normalize_market_calendar(
 _DATE_FIELDS = ("DisclosedDate", "AnnouncementDate", "DisclosureDate", "Date")
 
 
-def _natural_key(row: dict, key_fields: Iterable[str]) -> dict:
+def _canonical_minute_time(row: dict) -> Optional[str]:
+    """Canonical ``HH:MM`` minute discriminator for a minute-bar row.
+
+    The bulk-CSV surface carries a per-minute ``DateTime`` (full JST timestamp);
+    the REST surface splits the same instant into ``Date`` + ``Time``. Either
+    way it is the *same observation*, so the natural key must not depend on
+    which transport produced the row. Reduce both forms to the JST wall-clock
+    minute ``HH:MM`` — ``parse_dt`` normalizes any offset to JST first, so a
+    UTC-anchored ``DateTime`` still matches the JST ``Time`` value.
+
+    Returns ``None`` only when neither field is present (a malformed row).
+    """
+    dt = _pick(row, "DateTime", "datetime")
+    if dt:
+        try:
+            return parse_dt(str(dt)).strftime("%H:%M")
+        except ValueError:
+            pass
+    t = _pick_str(row, "Time", "time")
+    if t:
+        return t[:5]  # HH:MM (drop any trailing :SS)
+    return None
+
+
+def _natural_key(row: dict, key_fields: Iterable[str], dataset: str = "") -> dict:
     """Build a JSON-serializable natural key from the catalog's identity fields.
 
     For each catalog ``key`` field, take the first present, non-empty value
@@ -222,6 +246,12 @@ def _natural_key(row: dict, key_fields: Iterable[str]) -> dict:
     upsert collapses every observation sharing a ``(Code, Date)`` — or just a
     ``Date`` — onto the last row written (the P1 natural-key bug).
 
+    Minute bars additionally canonicalize their timestamp: bulk ``DateTime`` and
+    REST ``Time`` are two transports for one observation, so both are collapsed
+    onto a single ``Time`` = ``HH:MM`` (see :func:`_canonical_minute_time`).
+    Without this, re-ingesting the same bar via the other transport would
+    insert a duplicate row instead of upserting (the inverse-collapse bug).
+
     If none of the identity fields are present (an unusual payload shape), fall
     back to a stable SHA-1 of the canonical row so idempotency still holds and
     we never collapse two distinct rows onto the same key.
@@ -231,6 +261,11 @@ def _natural_key(row: dict, key_fields: Iterable[str]) -> dict:
         v = _pick(row, f, f.lower())
         if v is not None and v != "":
             nk[f] = v
+    if dataset == "equities_bars_minute":
+        t = _canonical_minute_time(row)
+        if t is not None:
+            nk["Time"] = t
+            nk.pop("DateTime", None)  # folded into the canonical ``Time``
     if nk:
         return nk
     canon = json.dumps(row, sort_keys=True, ensure_ascii=False)
@@ -296,7 +331,9 @@ def normalize_generic(
                 "source": "jquants",
                 "dataset": dataset,
                 "natural_key": json.dumps(
-                    _natural_key(r, key_fields), sort_keys=True, ensure_ascii=False
+                    _natural_key(r, key_fields, dataset),
+                    sort_keys=True,
+                    ensure_ascii=False,
                 ),
                 "event_time": et,
                 "available_at": av,
