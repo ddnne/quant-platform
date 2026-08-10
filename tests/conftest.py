@@ -16,6 +16,10 @@ _REPO = Path(__file__).resolve().parents[1]
 _SYNC = _REPO / "scripts" / "sync_d1_to_sqlite.py"
 CF_TRADING_DAYS = ("2025-04-01", "2025-04-02", "2025-04-03", "2025-04-04")
 CF_CODE = "8697"
+# Secondary code so multi-code features (and the F6 smoke) exercise more than
+# one issuer. Kept in lockstep with ``CF_CODE`` for symmetry.
+CF_CODE_2 = "7203"
+CF_CODES = (CF_CODE, CF_CODE_2)
 
 
 def _json(value: dict) -> str:
@@ -51,19 +55,27 @@ def sync_module():
 
 @pytest.fixture
 def cf_d1_export_rows() -> dict[str, list[dict]]:
-    """D1-shaped generic rows emitted by the premium Worker's export API."""
-    rows = [
-        _generic_row(
+    """D1-shaped generic rows emitted by the premium Worker's export API.
+
+    Multi-code (8697 + 7203) so feature smoke tests can exercise more than
+    one issuer. 8697's price series matches the legacy single-code shape
+    (100 → 102 → 101 → 104) so the assertions in
+    ``test_phase35_sync_script.py`` and the existing F6 expected-value check
+    stay valid; 7203 has its own ladder (8000 → 8050 → 7990 → 8120).
+    """
+    rows: list[dict] = []
+    # Master: one snapshot per code on the same date.
+    for code, name in ((CF_CODE, "Fixture Co"), (CF_CODE_2, "Fixture Motors")):
+        rows.append(_generic_row(
             "equities_master",
             {
-                "Code": CF_CODE,
+                "Code": code,
                 "Date": "2025-03-31",
-                "CompanyName": "Fixture Co",
+                "CompanyName": name,
                 "MarketCode": "0111",
             },
             "2025-03-31T09:00:00+09:00",
-        )
-    ]
+        ))
     for day in CF_TRADING_DAYS:
         rows.append(
             _generic_row(
@@ -72,6 +84,7 @@ def cf_d1_export_rows() -> dict[str, list[dict]]:
                 "2025-01-01T00:00:00+09:00",
             )
         )
+    # 8697 ladder (kept identical to the original single-code fixture).
     for day, close in zip(CF_TRADING_DAYS, (100.0, 102.0, 101.0, 104.0)):
         rows.append(
             _generic_row(
@@ -84,6 +97,23 @@ def cf_d1_export_rows() -> dict[str, list[dict]]:
                     "Low": close,
                     "Close": close,
                     "Volume": 1000.0,
+                },
+                f"{day}T15:30:00+09:00",
+            )
+        )
+    # 7203 ladder.
+    for day, close in zip(CF_TRADING_DAYS, (8000.0, 8050.0, 7990.0, 8120.0)):
+        rows.append(
+            _generic_row(
+                "equities_bars_daily",
+                {
+                    "Code": CF_CODE_2,
+                    "Date": day,
+                    "Open": close,
+                    "High": close,
+                    "Low": close,
+                    "Close": close,
+                    "Volume": 2000.0,
                 },
                 f"{day}T15:30:00+09:00",
             )
