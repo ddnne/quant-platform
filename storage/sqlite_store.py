@@ -18,6 +18,7 @@ from ingestion.common.available_at import (
 )
 from ingestion.common.timeutil import now_iso, parse_dt, to_iso
 
+from .migrate_jquants_keys import ensure_migration_table, migrate_before_write
 from .schema import NATURAL_KEYS, SCHEMA_SQL
 
 
@@ -77,6 +78,9 @@ class SqliteStore:
             pass
         self._conn.executescript(SCHEMA_SQL)
         self._conn.commit()
+        # Marker table for the one-shot legacy natural-key migration on
+        # jquants_records (see storage.migrate_jquants_keys). Idempotent DDL.
+        ensure_migration_table(self._conn)
 
     # --- core write -------------------------------------------------------
 
@@ -121,6 +125,18 @@ class SqliteStore:
                 if k not in seen:
                     seen.add(k)
                     cols.append(k)
+
+        # One-shot legacy natural-key migration: drop stale rows written with
+        # the old collapsed key schema so the new-key write below does not
+        # leave duplicates. No-op for tables/datasets that are unaffected or
+        # already migrated. Runs in this transaction; a later failure rolls it
+        # back. See storage.migrate_jquants_keys for the dataset list + why.
+        if table == "jquants_records":
+            migrate_before_write(
+                self._conn,
+                (r.get("dataset") for r in rows if r.get("dataset")),
+                now_iso=now_iso(),
+            )
 
         placeholders = ",".join("?" for _ in cols)
         collist = ",".join(cols)
