@@ -1,3 +1,4 @@
+/// <reference types="@cloudflare/workers-types" />
 /**
  * Phase 3.5 — J-Quants Premium **core** ingestion closed loop on Cloudflare.
  *
