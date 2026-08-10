@@ -74,7 +74,9 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--dataset", dest="dataset", action="append", default=None,
         help="J-Quants catalog dataset id (e.g. fins_dividend). Repeatable and/or "
-             "comma-separated. Selects catalog-driven fetch into jquants_records.",
+             "comma-separated. Phase 3.5 also accepts the alias 'premiums' "
+             "(the 23 Premium core closed-loop ids), 'addons' (minute/trades/"
+             "TDnet), or 'all'. Selects catalog-driven fetch into jquants_records.",
     )
     p.add_argument(
         "--mode", choices=["incremental", "backfill"], default="incremental",
@@ -116,14 +118,35 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _parse_datasets(raw) -> list[str]:
-    """Flatten repeated and comma-separated ``--dataset`` tokens."""
+    """Flatten repeated and comma-separated ``--dataset`` tokens.
+
+    Recognizes two special tokens (Phase 3.5):
+      * ``premiums`` -> expands to ``PREMIUM_CORE_DATASETS`` (23 ids)
+      * ``addons``   -> expands to the catalog's addon group (5 ids)
+
+    Any other token is treated as a literal catalog dataset id.
+    """
     if not raw:
         return []
+    # Imported lazily to keep --help cheap.
+    from ingestion.jquants.catalog import (
+        DATASETS,
+        PREMIUM_CORE_DATASETS,
+        list_datasets,
+    )
     out: list[str] = []
     for tok in raw:
         for part in str(tok).split(","):
             s = part.strip()
-            if s:
+            if not s:
+                continue
+            if s == "premiums":
+                out.extend(PREMIUM_CORE_DATASETS)
+            elif s == "addons":
+                out.extend(list_datasets("addon"))
+            elif s == "all":
+                out.extend(list(DATASETS.keys()))
+            else:
                 out.append(s)
     return out
 
