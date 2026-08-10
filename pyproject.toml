@@ -24,7 +24,7 @@ dev = [
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["ingestion*", "storage*", "pit*", "core*"]
+include = ["ingestion*", "storage*", "pit*", "core*", "features*", "cf_platform*"]
 exclude = ["tests*", "scripts*", "data*", "docs*"]
 
 [tool.pytest.ini_options]

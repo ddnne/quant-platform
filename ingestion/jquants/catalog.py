@@ -279,6 +279,27 @@ def path_of(dataset_id: str) -> str:
     return get(dataset_id)["path"]
 
 
+# Phase 3.5 — Premium **core** closed loop. All J-Quants Premium datasets that
+# are NOT minute/tick/TDnet add-ons. ``edinet`` is included (Premium surface).
+# This is the canonical list for the CF ingestion schedule: every id below
+# MUST have a fetch job and a validation result. The closure test
+# (tests/test_phase35_premium_set.py) asserts this list is exhaustive over the
+# required handoff datasets and that no addon id appears here.
+PREMIUM_CORE_DATASETS: tuple[str, ...] = tuple(
+    list_datasets("core") + list_datasets("edinet")
+)
+
+
+def is_premium_core(dataset_id: str) -> bool:
+    """True if ``dataset_id`` is in the Phase 3.5 Premium core closed loop.
+
+    Add-ons (minute, trades/tick, TDnet: ``equities_bars_minute``,
+    ``equities_trades``, ``td_*``) are deliberately excluded — they are out
+    of scope for the required CF schedule.
+    """
+    return dataset_id in PREMIUM_CORE_DATASETS
+
+
 def assert_catalog_coverage() -> None:
     """Fail fast (raise) if any catalog entry is missing a usable ``/v2/`` path.
 
