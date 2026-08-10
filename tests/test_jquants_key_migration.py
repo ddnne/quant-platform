@@ -209,8 +209,11 @@ def test_mixed_batch_migrates_only_legacy_datasets(tmp_path):
     for r in s.fetch_all("jquants_records"):
         by_ds.setdefault(r["dataset"], []).append(r)
     assert len(by_ds["equities_bars_minute"]) == 1
-    # the surviving minute row is the new-key one (carries the DateTime discriminator)
-    assert "DateTime" in by_ds["equities_bars_minute"][0]["natural_key"]
+    # the surviving minute row is the new-key one — it carries the canonical
+    # ``Time`` = HH:MM discriminator that makes minute bars unique (the legacy
+    # row collapsed every minute of (Code, Date) onto a Date-only key).
+    nk = by_ds["equities_bars_minute"][0]["natural_key"]
+    assert '"Time": "09:00"' in nk  # canonicalized from the input ``DateTime``
     assert len(by_ds["equities_bars_daily"]) == 1
     # only the key-changed dataset was marked for migration
     marks = {m["dataset"] for m in s.fetch_all("jquants_key_migrations")}
