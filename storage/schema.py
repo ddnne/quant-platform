@@ -67,37 +67,6 @@ CREATE TABLE IF NOT EXISTS jquants_market_calendar (
     PRIMARY KEY (source, date)
 );
 
-CREATE TABLE IF NOT EXISTS edinetdb_companies (
-    source        TEXT NOT NULL,
-    code          TEXT NOT NULL,
-    event_time    TEXT NOT NULL,
-    available_at  TEXT NOT NULL,
-    ingested_at   TEXT NOT NULL,
-    company_name  TEXT,
-    edinet_code   TEXT,
-    sector        TEXT,
-    english_name  TEXT,
-    raw_payload   TEXT,
-    PRIMARY KEY (source, code)
-);
-
-CREATE TABLE IF NOT EXISTS edinetdb_financials (
-    source          TEXT NOT NULL,
-    code            TEXT NOT NULL,
-    period          TEXT NOT NULL,
-    statement_type  TEXT NOT NULL DEFAULT '',
-    event_time      TEXT NOT NULL,
-    available_at    TEXT NOT NULL,
-    ingested_at     TEXT NOT NULL,
-    revenue         REAL,
-    operating_income REAL,
-    net_income      REAL,
-    total_assets    REAL,
-    equity          REAL,
-    raw_payload     TEXT,
-    PRIMARY KEY (source, code, period, statement_type)
-);
-
 CREATE TABLE IF NOT EXISTS jsda_bond_trades (
     source              TEXT NOT NULL,
     trade_date          TEXT NOT NULL,
@@ -136,7 +105,5 @@ NATURAL_KEYS: dict[str, list[str]] = {
     "jquants_listed_info": ["source", "code", "snapshot_date"],
     "jquants_daily_bars": ["source", "code", "date"],
     "jquants_market_calendar": ["source", "date"],
-    "edinetdb_companies": ["source", "code"],
-    "edinetdb_financials": ["source", "code", "period", "statement_type"],
     "jsda_bond_trades": ["source", "trade_date", "isin", "issuer_name"],
 }
