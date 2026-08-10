@@ -245,7 +245,6 @@ def run_jquants(
 
     client = JQuantsClient(http, api_key)
     reg = Registrar(store)
-    ingested = now_iso()
     reports: List[RunReport] = []
 
     if datasets:
@@ -265,14 +264,21 @@ def run_jquants(
             chunk_days=chunk_days,
         )
 
+    # Each sub-fetch stamps its own ``when`` right after the HTTP call returns —
+    # the per-job fetch-completion time. The raw partition (yyyy/mm/dd) follows
+    # ``when`` (not the process-start ``today``) so a sub-fetch that finishes
+    # after midnight lands in the correct day; the same ``when`` drives the
+    # filename stamp and the rows' ``ingested_at`` for consistency.
+
     # 1) listed info
     try:
         info = client.listed_info()
+        when = now_iso()
         save_raw(
-            data_base, "jquants", _stamped("listed_info.json", ingested),
-            json.dumps(info, ensure_ascii=False).encode("utf-8"), today,
+            data_base, "jquants", _stamped("listed_info.json", when),
+            json.dumps(info, ensure_ascii=False).encode("utf-8"), when,
         )
-        rows = JN.normalize_listed_info(info, ingested_at=ingested, snapshot_date=str(today)[:10])
+        rows = JN.normalize_listed_info(info, ingested_at=when, snapshot_date=str(today)[:10])
         n = reg.register("jquants_listed_info", rows)
         reports.append(RunReport("jquants", "listed_info", fetched=len(info), registered=n))
     except Exception as exc:  # noqa: BLE001
@@ -281,11 +287,12 @@ def run_jquants(
     # 2) daily bars
     try:
         bars = client.daily_bars(code=code, from_date=date_from, to_date=date_to)
+        when = now_iso()
         save_raw(
-            data_base, "jquants", _stamped("daily_bars.json", ingested),
-            json.dumps(bars, ensure_ascii=False).encode("utf-8"), today,
+            data_base, "jquants", _stamped("daily_bars.json", when),
+            json.dumps(bars, ensure_ascii=False).encode("utf-8"), when,
         )
-        rows = JN.normalize_daily_bars(bars, ingested_at=ingested)
+        rows = JN.normalize_daily_bars(bars, ingested_at=when)
         n = reg.register("jquants_daily_bars", rows)
         reports.append(RunReport("jquants", "daily_bars", fetched=len(bars), registered=n))
     except Exception as exc:  # noqa: BLE001
@@ -294,11 +301,12 @@ def run_jquants(
     # 3) market calendar
     try:
         cal = client.market_calendar(from_date=date_from, to_date=date_to)
+        when = now_iso()
         save_raw(
-            data_base, "jquants", _stamped("calendar.json", ingested),
-            json.dumps(cal, ensure_ascii=False).encode("utf-8"), today,
+            data_base, "jquants", _stamped("calendar.json", when),
+            json.dumps(cal, ensure_ascii=False).encode("utf-8"), when,
         )
-        rows = JN.normalize_market_calendar(cal, ingested_at=ingested)
+        rows = JN.normalize_market_calendar(cal, ingested_at=when)
         n = reg.register("jquants_market_calendar", rows)
         reports.append(RunReport("jquants", "calendar", fetched=len(cal), registered=n))
     except Exception as exc:  # noqa: BLE001
@@ -308,9 +316,10 @@ def run_jquants(
     #    registered==0 is intentional here (raw-only endpoint).
     try:
         summ = client.fins_summary(code=code)
+        when = now_iso()
         save_raw(
-            data_base, "jquants", _stamped("fins_summary.json", ingested),
-            json.dumps(summ, ensure_ascii=False).encode("utf-8"), today,
+            data_base, "jquants", _stamped("fins_summary.json", when),
+            json.dumps(summ, ensure_ascii=False).encode("utf-8"), when,
         )
         reports.append(
             RunReport(
@@ -439,6 +448,9 @@ def _run_jquants_catalog(
     def _persist(job, rows: list, when: str) -> RunReport:
         # kind stays the dataset id (tests / aggregators key on it). Window
         # detail is only in the raw filename so multi-window jobs don't clobber.
+        # The raw partition (yyyy/mm/dd) follows ``when`` — this job's own
+        # fetch-completion time — not the process-start ``today``, so a job that
+        # finishes after midnight lands in the correct day.
         kind = job.dataset_id
         stamp_name = job.label.replace(" ", "_")[:120]
         try:
@@ -448,7 +460,7 @@ def _run_jquants_catalog(
                     "jquants",
                     _stamped(f"{stamp_name}.json", when),
                     json.dumps(rows, ensure_ascii=False).encode("utf-8"),
-                    today,
+                    when,
                 )
                 norm = JN.normalize_generic(
                     rows, dataset=job.dataset_id, ingested_at=when

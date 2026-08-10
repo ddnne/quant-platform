@@ -147,5 +147,41 @@ def test_single_catalog_job_still_carries_completion_stamp(tmp_path, monkeypatch
     store.close()
 
 
+def test_catalog_raw_partitions_by_completion_day_not_process_start(
+    tmp_path, monkeypatch
+):
+    """Raw bytes land in the yyyy/mm/dd of the job's fetch-completion time.
+
+    A run that starts just before midnight (``today`` = 2025-04-02 23:58) but
+    whose job completes after midnight (completion stamp on 2025-04-03) must file
+    its raw under ``2025/04/03`` — the per-job completion day — not the
+    process-start day ``2025/04/02``. Regression for the save_raw partition
+    using ``today`` instead of the per-job completion timestamp.
+    """
+    # Patched clock: every now_iso() call lands on the calendar day AFTER the
+    # process-start ``today`` the CLI passed in (a midnight-spanning completion).
+    _monotonic_now(
+        monkeypatch,
+        datetime(2025, 4, 3, 0, 5, 0, tzinfo=JST),
+        timedelta(minutes=1),
+    )
+
+    store = _store(tmp_path)
+    http = _CatalogHttp([{"Code": "8697", "Date": "2025-04-01", "Close": 100}])
+    today = datetime(2025, 4, 2, 23, 58, 0)  # process start: just before midnight
+    run_jquants(
+        http=http, store=store, api_key="k", data_base=tmp_path, today=today,
+        datasets=["equities_bars_daily"], mode="backfill",  # exactly one job
+    )
+
+    # Raw must sit under the COMPLETION day, not the process-start day.
+    assert not list((tmp_path / "raw" / "jquants" / "2025" / "04" / "02").glob("*.json"))
+    matches = list((tmp_path / "raw" / "jquants" / "2025" / "04" / "03").glob("*.json"))
+    assert matches and matches[0].exists(), (
+        "raw must partition by the per-job completion date, not process-start today"
+    )
+    store.close()
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-q"])
