@@ -43,7 +43,7 @@
 python -m pytest tests/ -q
 ```
 
-（`pytest` が無い場合は `pip install pytest` のうえ実行。スモークは `python -m unittest tests/test_smoke.py` でも可。）
+（`pytest` が無い場合は `pip install pytest` のうえ実行。スモークは `python -m unittest tests.test_smoke -v` でも可。）
 
 ## Secrets
 
