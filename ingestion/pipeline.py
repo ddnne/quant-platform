@@ -260,7 +260,6 @@ def run_jquants(
             date_to=date_to,
             data_base=data_base,
             today=today,
-            ingested=ingested,
             runtime=runtime,
             max_workers=max_workers,
             chunk_days=chunk_days,
@@ -381,7 +380,6 @@ def _run_jquants_catalog(
     date_to,
     data_base,
     today,
-    ingested: str,
     runtime: str,
     max_workers: int = 8,
     chunk_days: int = 30,
@@ -391,6 +389,12 @@ def _run_jquants_catalog(
     Jobs = datasets × optional codes × date windows (``chunk_days``). Execution
     uses a thread pool with a **shared** rate limiter on the client (Premium
     500/min budget). Pagination within each job stays sequential.
+
+    PIT: each job's ``available_at``/``ingested_at`` default to **that job's
+    own fetch-completion time** (stamped in the worker right after the fetch
+    returns), not a single pre-pool timestamp shared across every job. Parallel
+    jobs finish at different wall-clock instants, so they must carry different
+    PIT stamps.
     """
     from .jquants import normalize as JN
     from .jquants.catalog import DATASETS
@@ -424,7 +428,15 @@ def _run_jquants_catalog(
     # Serialize register/save_raw: SQLite and path writes are not all thread-safe.
     write_lock = __import__("threading").Lock()
 
-    def _persist(job, rows: list) -> RunReport:
+    def _stamp_completion(res) -> None:
+        # Capture this job's fetch-completion time inside the worker, the
+        # instant its data landed. Used as the per-job available_at/ingested_at
+        # default so parallel jobs that finish at different times do not share
+        # one stale pre-pool timestamp. ``now_iso`` is resolved from the module
+        # namespace at call time (thread-safe; reads the system clock).
+        res.completed_at = now_iso()
+
+    def _persist(job, rows: list, when: str) -> RunReport:
         # kind stays the dataset id (tests / aggregators key on it). Window
         # detail is only in the raw filename so multi-window jobs don't clobber.
         kind = job.dataset_id
@@ -434,12 +446,12 @@ def _run_jquants_catalog(
                 save_raw(
                     data_base,
                     "jquants",
-                    _stamped(f"{stamp_name}.json", ingested),
+                    _stamped(f"{stamp_name}.json", when),
                     json.dumps(rows, ensure_ascii=False).encode("utf-8"),
                     today,
                 )
                 norm = JN.normalize_generic(
-                    rows, dataset=job.dataset_id, ingested_at=ingested
+                    rows, dataset=job.dataset_id, ingested_at=when
                 )
                 n = reg.register("jquants_records", norm)
             return RunReport(
@@ -448,14 +460,17 @@ def _run_jquants_catalog(
         except Exception as exc:  # noqa: BLE001
             return RunReport("jquants", kind, error=f"{exc}")
 
-    results = run_parallel(client, jobs, max_workers=workers)
+    results = run_parallel(
+        client, jobs, max_workers=workers, on_job_done=_stamp_completion
+    )
     for res in results:
         if not res.ok:
             reports.append(
                 RunReport("jquants", res.job.dataset_id, error=res.error)
             )
             continue
-        reports.append(_persist(res.job, res.rows))
+        when = getattr(res, "completed_at", "") or now_iso()
+        reports.append(_persist(res.job, res.rows, when))
 
     summary = summarize_results(results)
     print(
