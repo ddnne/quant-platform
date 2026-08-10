@@ -13,8 +13,12 @@ print a per-source, per-kind summary and choose an exit code via
 Report semantics (Phase 1 fix):
 
 * ``skipped`` — *clean* skip (missing API key, unsupported runtime, optional
-  endpoint absent). Not a failure.
-* ``error`` — a fetch/parse/register step raised. A failure.
+  endpoint absent, or an auto-sampled optional sub-fetch that failed). Not a
+  failure.
+* ``error`` — a fetch/parse/register step raised, **or** a silent schema miss:
+  ``fetched > 0`` but ``registered == 0`` with no skip reason and not
+  ``expected_empty`` (normalize produced nothing — schema drift / empty parse).
+  Both are failures.
 * ``ok`` — registered at least one row, OR an explicitly expected-empty case
   (e.g. the raw-only ``fins/summary`` endpoint). A zero-row result without a
   skip reason is **not** ``ok`` (guards against a silent schema miss looking
@@ -46,18 +50,43 @@ class RunReport:
     raw_path: str = ""
 
     @property
+    def schema_miss(self) -> bool:
+        """``fetched > 0`` but ``registered == 0`` with no skip/error and not
+        ``expected_empty``: normalize produced nothing (schema drift or empty
+        parse). Treated as an error so a silent miss can never read as success.
+        """
+        return (
+            not self.skipped
+            and not self.error
+            and not self.expected_empty
+            and self.fetched > 0
+            and self.registered == 0
+        )
+
+    @property
+    def effective_error(self) -> str:
+        """Error text for display/exit: an explicit error, or a schema miss."""
+        if self.error:
+            return self.error
+        if self.schema_miss:
+            return (
+                f"fetched={self.fetched} but registered=0 "
+                "(schema miss / empty normalize)"
+            )
+        return ""
+
+    @property
     def ok(self) -> bool:
-        if self.skipped or self.error:
+        if self.skipped or self.error or self.schema_miss:
             return False
         return self.registered > 0 or self.expected_empty
 
     def summary(self) -> str:
-        if self.error:
-            tag = "ERROR"
-            return f"[{self.source}/{self.kind}] {tag} ({self.error})"
+        err = self.effective_error
+        if err:
+            return f"[{self.source}/{self.kind}] ERROR ({err})"
         if self.skipped:
-            tag = "SKIPPED"
-            return f"[{self.source}/{self.kind}] {tag} ({self.skipped})"
+            return f"[{self.source}/{self.kind}] SKIPPED ({self.skipped})"
         tag = "OK"
         rp = f" raw={self.raw_path}" if self.raw_path else ""
         return (
@@ -69,10 +98,11 @@ class RunReport:
 def decide_exit(reports: List[RunReport]) -> int:
     """CLI exit code from a flat list of reports.
 
-    ``1`` if any report errored; else ``0`` if any succeeded; else ``2``
-    (every source cleanly skipped, e.g. all API keys absent / cloudflare).
+    ``1`` if any report errored (explicit error or schema miss); else ``0`` if
+    any succeeded; else ``2`` (every source cleanly skipped, e.g. all API keys
+    absent / cloudflare).
     """
-    if any(r.error for r in reports):
+    if any(r.effective_error for r in reports):
         return 1
     if any(r.ok for r in reports):
         return 0
@@ -86,11 +116,17 @@ class Registrar:
         self._store = store
 
     def register(self, table: str, rows) -> int:
-        rows = list(rows)
+        # Canonicalize available_at on every row before it reaches the store.
+        # validate_available_at is the PIT hard gate (raises on missing/empty)
+        # AND returns the canonical +09:00 ISO form; persisting that form is
+        # what makes the store's lexicographic MIN(available_at) chronologically
+        # correct across rows that may have arrived in different offsets.
+        canonical = []
         for r in rows:
-            # Double-check PIT gate before the store rejects the whole batch.
-            validate_available_at(r.get("available_at"))
-        return self._store.upsert(table, rows)
+            r = dict(r)
+            r["available_at"] = validate_available_at(r.get("available_at"))
+            canonical.append(r)
+        return self._store.upsert(table, canonical)
 
 
 def _compact_stamp(iso_ts: str) -> str:
@@ -286,7 +322,12 @@ def run_edinetdb(
         reports.append(RunReport("edinetdb", "companies", error=f"{exc}"))
 
     # Financials for an explicit sample of codes (best-effort, optional).
+    # Codes the caller passed explicitly (e.g. via the CLI --code) are
+    # *expected* — a failure there is an error. Codes we auto-picked from the
+    # company list are a best-effort sample, so a per-code failure is a clean
+    # skip rather than a failing run.
     sample = list(financial_codes or [])
+    codes_explicit = bool(sample)
     if not sample and companies:
         sample = [c.get("code") or c.get("edinet_code") for c in companies[:3]]
         sample = [c for c in sample if c]
@@ -303,9 +344,17 @@ def run_edinetdb(
                 RunReport("edinetdb", f"financials/{code}", fetched=len(fins), registered=n)
             )
         except Exception as exc:  # noqa: BLE001
-            reports.append(
-                RunReport("edinetdb", f"financials/{code}", error=f"{exc}")
-            )
+            if codes_explicit:
+                reports.append(
+                    RunReport("edinetdb", f"financials/{code}", error=f"{exc}")
+                )
+            else:
+                reports.append(
+                    RunReport(
+                        "edinetdb", f"financials/{code}",
+                        skipped=f"auto-sampled financials failed: {exc}",
+                    )
+                )
 
     _log(store, "edinetdb", runtime, reports)
     return reports
@@ -371,7 +420,7 @@ def run_jsda(
 
 def _log(store, source: str, runtime: str, reports: List[RunReport]) -> None:
     try:
-        if any(r.error for r in reports):
+        if any(r.effective_error for r in reports):
             status = "error"
         elif any(r.ok for r in reports):
             status = "ok"
