@@ -39,9 +39,11 @@ def test_upsert_replaces_changed_values_on_same_natural_key(tmp_path):
     store = SqliteStore(tmp_path / "ing.sqlite")
     base = normalize_daily_bars(_bars(), ingested_at=INGESTED)
     store.upsert("jquants_daily_bars", base)
-    # amend one bar's close and re-upsert same natural key
-    amended = [dict(base[0])]
-    amended[0]["close"] = 987.0
+    # amend one bar's close via the source record and re-normalize, so the
+    # amendment is visible in raw_payload (how real amendments arrive)
+    amended_src = [dict(_bars()[0])]
+    amended_src[0]["Close"] = 987
+    amended = normalize_daily_bars(amended_src, ingested_at=INGESTED)
     store.upsert("jquants_daily_bars", amended)
     assert store.count("jquants_daily_bars") == 2  # still 2, not 3
     row = store.fetch_where(
@@ -111,6 +113,65 @@ def test_upsert_keeps_earlier_available_at_against_earlier_payload(tmp_path):
         "jquants_daily_bars", "code=? AND date=?", ("8697", "2025-04-01")
     )[0]
     assert row["available_at"] == INGESTED
+    store.close()
+
+
+def test_unchanged_reupsert_keeps_earliest_available_and_refreshes_ingested(tmp_path):
+    store = SqliteStore(tmp_path / "ing.sqlite")
+    first = normalize_daily_bars(_bars(), ingested_at="2025-04-02T09:00:00+09:00")
+    store.upsert("jquants_daily_bars", first)
+
+    # re-upsert the SAME source later in time -> available_at preserved,
+    # ingested_at refreshed to the latest fetch.
+    second = normalize_daily_bars(_bars(), ingested_at="2025-04-20T09:00:00+09:00")
+    store.upsert("jquants_daily_bars", second)
+
+    row = store.fetch_where(
+        "jquants_daily_bars", "code=? AND date=?", ("8697", "2025-04-01")
+    )[0]
+    assert row["available_at"] == "2025-04-02T09:00:00+09:00"  # earliest kept
+    assert row["ingested_at"] == "2025-04-20T09:00:00+09:00"  # refreshed
+    store.close()
+
+
+def test_amended_close_with_later_available_at_is_not_backdated(tmp_path):
+    """P1: an amended close published LATER must take the later available_at,
+    not be backdated to the original publication time."""
+    store = SqliteStore(tmp_path / "ing.sqlite")
+    base = normalize_daily_bars(_bars(), ingested_at="2025-04-02T09:00:00+09:00")
+    store.upsert("jquants_daily_bars", base)
+
+    # amend the 04-01 close via the source record, published LATER.
+    amended_src = [dict(_bars()[0])]
+    amended_src[0]["Close"] = 987
+    amended = normalize_daily_bars(amended_src, ingested_at="2025-04-20T09:00:00+09:00")
+    store.upsert("jquants_daily_bars", amended)
+
+    row = store.fetch_where(
+        "jquants_daily_bars", "code=? AND date=?", ("8697", "2025-04-01")
+    )[0]
+    assert row["close"] == 987.0                              # amended value stored
+    assert row["available_at"] == "2025-04-20T09:00:00+09:00"  # NOT backdated
+    store.close()
+
+
+def test_offset_equivalent_available_at_does_not_backdate(tmp_path):
+    """Canonicalization: 17:00+09:00 and 08:00+00:00 are the same instant and
+    must compare equal, so a re-fetch in a different offset is treated as an
+    unchanged re-fetch (earliest kept), not an amendment."""
+    store = SqliteStore(tmp_path / "ing.sqlite")
+    base = normalize_daily_bars(_bars(), ingested_at="2025-04-01T17:00:00+09:00")
+    store.upsert("jquants_daily_bars", base)
+
+    later = [dict(base[0])]
+    # same instant, expressed in UTC -> canonicalizes to the same +09:00 string
+    later[0]["available_at"] = "2025-04-01T08:00:00+00:00"
+    store.upsert("jquants_daily_bars", later)
+
+    row = store.fetch_where(
+        "jquants_daily_bars", "code=? AND date=?", ("8697", "2025-04-01")
+    )[0]
+    assert row["available_at"] == "2025-04-01T17:00:00+09:00"
     store.close()
 
 
