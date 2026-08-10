@@ -17,6 +17,7 @@ from typing import Any, Optional
 from urllib.parse import quote
 
 from ingestion.common.timeutil import ensure_jst, parse_dt, to_iso
+from storage.schema import NATURAL_KEYS, REVISION_TABLES
 
 from .errors import AsOfRequired, DatabaseNotFound, InvalidAsOf
 
@@ -112,6 +113,10 @@ def _decode_row(row: sqlite3.Row) -> dict[str, Any]:
     (or is empty), the original string is preserved untouched.
     """
     d = dict(row)
+    # Window-ranking helpers used by revision-aware reads are implementation
+    # details, not part of the public row schema.
+    d.pop("_pit_current", None)
+    d.pop("_pit_rank", None)
     for k in _JSON_PAYLOAD_COLS:
         v = d.get(k)
         if isinstance(v, str) and v:
@@ -151,11 +156,39 @@ def run_query(
         where.append(f"({extra_where})")
     if params:
         bound.extend(params)
-    sql = f"SELECT * FROM {table} WHERE " + " AND ".join(where)
-    if order_by:
-        sql += f" ORDER BY {order_by}"
     conn = connect_readonly(db_path)
     try:
+        revision_table = REVISION_TABLES.get(table)
+        has_revision_table = False
+        if revision_table is not None:
+            has_revision_table = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+                (revision_table,),
+            ).fetchone() is not None
+
+        if has_revision_table:
+            key_cols = NATURAL_KEYS[table]
+            partition_by = ",".join(key_cols)
+            sql = (
+                "WITH pit_versions AS ("
+                f"SELECT *, 1 AS _pit_current FROM {table} UNION ALL "
+                f"SELECT *, 0 AS _pit_current FROM {revision_table}"
+                "), pit_visible AS ("
+                "SELECT * FROM pit_versions WHERE " + " AND ".join(where)
+                + "), pit_ranked AS ("
+                "SELECT *, ROW_NUMBER() OVER ("
+                f"PARTITION BY {partition_by} "
+                "ORDER BY available_at DESC, ingested_at DESC, _pit_current DESC"
+                ") AS _pit_rank FROM pit_visible) "
+                "SELECT * FROM pit_ranked WHERE _pit_rank = 1"
+            )
+        else:
+            # Compatibility with databases created before revision tables were
+            # introduced. Opening them once through SqliteStore installs the
+            # history schema for all subsequent reads.
+            sql = f"SELECT * FROM {table} WHERE " + " AND ".join(where)
+        if order_by:
+            sql += f" ORDER BY {order_by}"
         cur = conn.execute(sql, bound)
         return [_decode_row(r) for r in cur.fetchall()]
     finally:

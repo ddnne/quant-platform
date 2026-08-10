@@ -27,6 +27,8 @@ Ingestion（Phase 1）が `data/structured/ingestion.sqlite` に構造化行を�
    ISO 文字列の辞書式比較が正しく働く。`available_at == as_of` の行は **含まれる**
    （その瞬間に公表された情報は使える）。`available_at > as_of`（未来）の行は **絶対に
    返らない**。
+   同じ自然キーに訂正履歴がある場合は、条件を満たす版のうち `available_at` が最大の
+   1 行を返す。したがって訂正前と訂正後の間を `as_of` に指定すると訂正前の値が見える。
 4. **範囲フィルタは加算的**: `from_*` / `to_*` / `code` 等は `available_at` ゲートの
    **上** に重ねるだけで、ゲートを **置き換えない**。
 5. **読み取り専用**: SQLite を `mode=ro`（read-only URI）で開く。書込みは構造的に
@@ -41,15 +43,16 @@ Ingestion（Phase 1）が `data/structured/ingestion.sqlite` に構造化行を�
 
 | 関数 | テーブル | 主なフィルタ |
 |------|----------|--------------|
-| `get_equity_master(as_of, code=None, *, db_path=None)` | `jquants_listed_info` | `code` |
-| `get_equity_bars_daily(as_of, code=None, from_event=None, to_event=None, *, db_path=None)` | `jquants_daily_bars` | `code`, `from_event`/`to_event`（**date**） |
-| `get_market_calendar(as_of, from_date=None, to_date=None, *, db_path=None)` | `jquants_market_calendar` | `from_date`/`to_date`（**date**） |
+| `get_equity_master(as_of, code=None, *, db_path=None)` | `jquants_listed_info` + `jquants_records(equities_master)` | `code` |
+| `get_equity_bars_daily(as_of, code=None, from_event=None, to_event=None, *, db_path=None)` | `jquants_daily_bars` + `jquants_records(equities_bars_daily)` | `code`, `from_event`/`to_event`（**date**） |
+| `get_market_calendar(as_of, from_date=None, to_date=None, *, db_path=None)` | `jquants_market_calendar` + `jquants_records(markets_calendar)` | `from_date`/`to_date`（**date**） |
 | `get_jquants_records(as_of, dataset, code=None, from_event=None, to_event=None, *, db_path=None)` | `jquants_records` | `dataset`（必須）, `code`, `from_event`/`to_event`（**event_time**） |
 | `get_jsda_bond_trades(as_of, isin=None, from_event=None, to_event=None, *, db_path=None)` | `jsda_bond_trades` | `isin`, `from_event`/`to_event`（**trade_date**） |
 
-> `jquants_records` は `dataset` でパーティションされる汎用テーブル（fins / indices /
-> derivatives / markets analytics / EDINET / minute・tick・TDnet 系など、3 つの厳選系列
-> 以外の全カタログデータセット）。`dataset` は必須。有効な id は
+> `jquants_records` は `dataset` でパーティションされる汎用テーブル（カタログ実行では
+> 3 つのキュレーション済系列を含む全カタログデータセット）。公開キュレーション getter
+> は専用テーブルと対応パーティションを二重読みし、同じ自然キーは最新既知版にまとめる。
+> `get_jquants_records` では `dataset` は必須。有効な id は
 > `ingestion.jquants.catalog.DATASETS` を参照。未知の `dataset` は空結果になる（エラー
 > ではない）。
 
@@ -131,3 +134,4 @@ div = res.rows[0]["payload"]["Dividend"] if res else None
 - `tests/test_pit_as_of.py` — `as_of` 必須・パース・空結果
 - `tests/test_pit_lookahead.py` — `available_at > as_of` は不可視、`==` は可視、オフセットの一貫性
 - `tests/test_pit_coverage.py` — 各テーブルのハッピーパス読み出し・読み取り専用強制
+- `tests/test_pit_revisions_catalog.py` — 訂正履歴の as-of 再現・カタログ/専用テーブル二重読み

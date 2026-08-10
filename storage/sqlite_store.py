@@ -19,7 +19,7 @@ from ingestion.common.available_at import (
 from ingestion.common.timeutil import now_iso, parse_dt, to_iso
 
 from .migrate_jquants_keys import ensure_migration_table, migrate_before_write
-from .schema import NATURAL_KEYS, SCHEMA_SQL
+from .schema import NATURAL_KEYS, REVISION_TABLES, SCHEMA_SQL
 
 
 class MissingAvailableAt(ValueError):
@@ -94,10 +94,12 @@ class SqliteStore:
           *earliest* ``available_at`` (compared as aware datetimes) and refresh
           ``ingested_at``. A later re-fetch must never move the point-in-time
           stamp backward.
-        * **amended payload** (the non-PIT data changed): take the *incoming*
-          ``available_at`` and field values. An amended close was **not**
-          available at the original publication time, so MIN-ing it with the
-          old stamp would backdate the amendment — that is the P1 bug.
+        * **amended payload** (the non-PIT data changed): first copy the
+          displaced row to the table's revision history, then take
+          the *incoming* ``available_at`` and field values in the primary
+          table. An amended close was **not** available at the original
+          publication time, and the original value remains queryable for PIT
+          instants before the amendment.
 
         Payload identity prefers ``raw_payload`` (the verbatim source record)
         when present. The whole batch runs in one transaction; any failure
@@ -140,12 +142,14 @@ class SqliteStore:
 
         placeholders = ",".join("?" for _ in cols)
         collist = ",".join(cols)
+        revisions_to_archive: tuple[list[str], list[dict[str, Any]]] | None = None
 
         key_cols = NATURAL_KEYS.get(table, [])
         if key_cols and all(k in seen for k in key_cols):
             key_set = set(key_cols)
             skip = key_set | {"available_at", "ingested_at"}
             existing = self._existing_by_key(table, key_cols, rows)
+            revisions: list[dict[str, Any]] = []
 
             for r in rows:
                 key = tuple(r[k] for k in key_cols)
@@ -153,11 +157,20 @@ class SqliteStore:
                 if ex is not None and _payload_signature(
                     r, cols, skip
                 ) == _payload_signature(ex, cols, skip):
-                    # Unchanged re-fetch: never backdate the PIT stamp.
+                    # Unchanged re-fetch: retain its earliest PIT stamp.
                     r["available_at"] = _earlier_available(
                         ex["available_at"], r["available_at"]
                     )
-                # else: new row OR amendment -> incoming available_at stays.
+                elif ex is not None:
+                    # Amendment: retain the value that this write displaces.
+                    # ``existing`` is updated below so multiple revisions of
+                    # the same key within one batch are preserved in order.
+                    revisions.append(dict(ex))
+                # else: new row -> incoming available_at stays.
+                existing[key] = dict(r)
+
+            if revisions:
+                revisions_to_archive = (key_cols, revisions)
 
             assigns = [f"{c} = excluded.{c}" for c in cols if c not in key_set]
             sql = (
@@ -173,6 +186,8 @@ class SqliteStore:
 
         payload = [[r.get(c) for c in cols] for r in rows]
         try:
+            if revisions_to_archive is not None:
+                self._archive_revisions(table, *revisions_to_archive)
             cur = self._conn.executemany(sql, payload)
             self._conn.commit()
         except Exception:
@@ -181,6 +196,35 @@ class SqliteStore:
             raise
         # executemany.rowcount is -1 on some drivers; fall back to len.
         return cur.rowcount if cur.rowcount and cur.rowcount > 0 else len(payload)
+
+    def _archive_revisions(
+        self, table: str, key_cols: list[str], rows: list[Mapping[str, Any]]
+    ) -> None:
+        """Persist displaced fact rows in the table's revision history.
+
+        The caller owns the surrounding transaction.  A retry of the same
+        amendment updates the identical business-key/``available_at`` version
+        instead of creating a duplicate history row.
+        """
+        revision_table = REVISION_TABLES.get(table)
+        if revision_table is None or not rows:
+            return
+        cols = list(rows[0].keys())
+        placeholders = ",".join("?" for _ in cols)
+        version_key = [*key_cols, "available_at"]
+        version_key_set = set(version_key)
+        assigns = [f"{c} = excluded.{c}" for c in cols if c not in version_key_set]
+        conflict = f"ON CONFLICT({','.join(version_key)}) DO NOTHING"
+        if assigns:
+            conflict = (
+                f"ON CONFLICT({','.join(version_key)}) DO UPDATE SET "
+                + ",".join(assigns)
+            )
+        sql = (
+            f"INSERT INTO {revision_table} ({','.join(cols)}) "
+            f"VALUES ({placeholders}) {conflict}"
+        )
+        self._conn.executemany(sql, [[row.get(c) for c in cols] for row in rows])
 
     def _existing_by_key(
         self, table: str, key_cols: list[str], rows: list[Mapping[str, Any]]

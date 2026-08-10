@@ -83,8 +83,9 @@ PIT のため、構造化行は必ず `event_time` / `available_at` / `source` /
 
 ### 保管
 
-- **キュレーション済 3 系列**（`equities_master`/`equities_bars_daily`/`markets_calendar`）は専用テーブル（下記）に正規化。
-- **それ以外の全データセット**は汎用テーブル `jquants_records(dataset, natural_key, event_time, available_at, ingested_at, payload, raw_payload)` へ。`natural_key` はカタログの識別フィールド（`Code`/`Date` 等）の JSON、該当が無ければ行ハッシュ。PIT 列を全行に付与。
+- 従来のキュレーション実行では 3 系列（`equities_master`/`equities_bars_daily`/`markets_calendar`）を専用テーブル（下記）に正規化。
+- `--dataset` を使うカタログ実行では、3 系列を含む全データセットを汎用テーブル `jquants_records(dataset, natural_key, event_time, available_at, ingested_at, payload, raw_payload)` へ格納。`natural_key` はカタログの識別フィールド（`Code`/`Date` 等）の JSON、該当が無ければ行ハッシュ。PIT 列を全行に付与。PIT のキュレーション getter は専用テーブルと対応する汎用パーティションを二重読みする。
+- 各 fact テーブルの訂正前の値は対応する `*_revisions` テーブルに保持し、PIT 読み出しは `available_at <= as_of` の最新版を自然キーごとに選ぶ。
 
 | テーブル | 自然キー | `event_time` | `available_at` 既定 |
 |----------|----------|--------------|---------------------|

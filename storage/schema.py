@@ -1,9 +1,11 @@
 """SQLite schema for structured ingestion rows.
 
-Every table carries the PIT columns ``event_time`` / ``available_at`` /
+Every fact table carries the PIT columns ``event_time`` / ``available_at`` /
 ``source`` / ``ingested_at`` and a ``raw_payload`` JSON blob for traceability.
-Idempotency is structural: the ``PRIMARY KEY`` is the source's natural key,
-so ``INSERT OR REPLACE`` makes a same-day re-run non-duplicating.
+The primary table keeps one current row per source natural key, while a
+matching ``*_revisions`` table retains values displaced by amendments.  PIT
+reads union both tables and select the newest revision that was available at
+the requested instant.
 
 Future R2/D1 layout (documented, not implemented):
   raw/        -> quant-raw/{source}/{yyyy}/{mm}/{dd}/{file}
@@ -67,11 +69,9 @@ CREATE TABLE IF NOT EXISTS jquants_market_calendar (
     PRIMARY KEY (source, date)
 );
 
--- Generic catch-all for every other J-Quants catalog dataset (fins, indices,
--- derivatives, markets analytics, EDINET series, minute/tick/TDnet add-ons).
--- Phase 1 prefers one generic table + ``dataset`` column for ingest speed;
--- the three curated series above keep their specialized tables. The natural
--- key is a JSON object of identity fields (e.g. {"Code":..,"Date":..}) or a
+-- Generic catch-all for catalog-mode J-Quants ingestion, including the three
+-- datasets that also have legacy specialized tables above.  The natural key
+-- is a JSON object of identity fields (e.g. {"Code":..,"Date":..}) or a
 -- row-hash fallback — see ingestion.jquants.normalize._natural_key.
 CREATE TABLE IF NOT EXISTS jquants_records (
     source       TEXT NOT NULL,
@@ -103,6 +103,39 @@ CREATE TABLE IF NOT EXISTS jsda_bond_trades (
     PRIMARY KEY (source, trade_date, isin, issuer_name)
 );
 
+-- Amendment history.  These tables deliberately mirror their
+-- primary fact table.  A unique business-key + available_at index makes
+-- retries idempotent while allowing multiple published revisions of one
+-- observation to coexist.  ``CREATE ... AS SELECT ... WHERE 0`` also upgrades
+-- existing databases without rebuilding or rewriting their primary tables.
+CREATE TABLE IF NOT EXISTS jquants_listed_info_revisions AS
+    SELECT * FROM jquants_listed_info WHERE 0;
+CREATE UNIQUE INDEX IF NOT EXISTS ux_listed_info_revisions_version
+    ON jquants_listed_info_revisions
+       (source, code, snapshot_date, available_at);
+
+CREATE TABLE IF NOT EXISTS jquants_daily_bars_revisions AS
+    SELECT * FROM jquants_daily_bars WHERE 0;
+CREATE UNIQUE INDEX IF NOT EXISTS ux_daily_bars_revisions_version
+    ON jquants_daily_bars_revisions (source, code, date, available_at);
+
+CREATE TABLE IF NOT EXISTS jquants_market_calendar_revisions AS
+    SELECT * FROM jquants_market_calendar WHERE 0;
+CREATE UNIQUE INDEX IF NOT EXISTS ux_market_calendar_revisions_version
+    ON jquants_market_calendar_revisions (source, date, available_at);
+
+CREATE TABLE IF NOT EXISTS jquants_records_revisions AS
+    SELECT * FROM jquants_records WHERE 0;
+CREATE UNIQUE INDEX IF NOT EXISTS ux_records_revisions_version
+    ON jquants_records_revisions
+       (source, dataset, natural_key, available_at);
+
+CREATE TABLE IF NOT EXISTS jsda_bond_trades_revisions AS
+    SELECT * FROM jsda_bond_trades WHERE 0;
+CREATE UNIQUE INDEX IF NOT EXISTS ux_bond_trades_revisions_version
+    ON jsda_bond_trades_revisions
+       (source, trade_date, isin, issuer_name, available_at);
+
 CREATE TABLE IF NOT EXISTS ingestion_run_log (
     id      INTEGER PRIMARY KEY AUTOINCREMENT,
     ran_at  TEXT    NOT NULL,
@@ -127,4 +160,11 @@ NATURAL_KEYS: dict[str, list[str]] = {
     "jquants_market_calendar": ["source", "date"],
     "jquants_records": ["source", "dataset", "natural_key"],
     "jsda_bond_trades": ["source", "trade_date", "isin", "issuer_name"],
+}
+
+# Fact table -> amendment history table.  Kept separate from
+# ``NATURAL_KEYS`` because primary-table idempotency is still defined solely by
+# the business key; ``available_at`` identifies a version only in history.
+REVISION_TABLES: dict[str, str] = {
+    table: f"{table}_revisions" for table in NATURAL_KEYS
 }
