@@ -1,0 +1,9 @@
+# Secrets for quant-platform ingestion. Values live only on Cloudflare.
+# Put secrets: printf '%s' "$JQUANTS_API_KEY" | npx wrangler secret put JQUANTS_API_KEY -c platform/workers/ingestion-secrets/wrangler.toml
+name = "quant-platform-ingestion-secrets"
+main = "src/index.ts"
+compatibility_date = "2026-08-01"
+workers_dev = true
+
+# Secret bindings (values set via `wrangler secret put`, never in this file):
+# - JQUANTS_API_KEY
