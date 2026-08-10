@@ -212,15 +212,25 @@ _DATE_FIELDS = ("DisclosedDate", "AnnouncementDate", "DisclosureDate", "Date")
 def _natural_key(row: dict, key_fields: Iterable[str]) -> dict:
     """Build a JSON-serializable natural key from the catalog's identity fields.
 
-    Uses whichever of the catalog ``key`` fields are actually present and
-    non-empty. If none match (an unusual payload shape), falls back to a
-    stable SHA-1 of the canonical row so idempotency still holds and we never
-    collapse two distinct rows onto the same key.
+    For each catalog ``key`` field, take the first present, non-empty value
+    among that field and its lowercase alias — V2 publishes mixed casing across
+    payloads (``DateTime`` vs ``datetime``, ``Time`` vs ``time``), so the key
+    is stable either way and always recorded under the canonical name.
+
+    Multi-observation series (minute bars, ticks, option contracts, TDnet
+    disclosures) MUST list their per-observation discriminator here. Without it
+    upsert collapses every observation sharing a ``(Code, Date)`` — or just a
+    ``Date`` — onto the last row written (the P1 natural-key bug).
+
+    If none of the identity fields are present (an unusual payload shape), fall
+    back to a stable SHA-1 of the canonical row so idempotency still holds and
+    we never collapse two distinct rows onto the same key.
     """
     nk: dict[str, Any] = {}
     for f in key_fields:
-        if f in row and row[f] not in (None, ""):
-            nk[f] = row[f]
+        v = _pick(row, f, f.lower())
+        if v is not None and v != "":
+            nk[f] = v
     if nk:
         return nk
     canon = json.dumps(row, sort_keys=True, ensure_ascii=False)

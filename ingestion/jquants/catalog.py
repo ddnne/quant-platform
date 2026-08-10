@@ -127,7 +127,11 @@ DATASETS: dict[str, dict[str, Any]] = {
         "group": "core",
         "bulk": "api",
         "params": ["from", "to"],
-        "key": ["Date"],
+        # Multi-observation: one date returns a row *per* Nikkei-225 option
+        # contract (many strikes / calls / puts / months); ``Code`` identifies
+        # the contract. ``Date`` alone collapses the whole chain onto one row,
+        # so ``Code`` must be in the key.
+        "key": ["Date", "Code"],
     },
     "derivatives_bars_daily_futures": {
         "path": "/v2/derivatives/bars/daily/futures",
@@ -206,14 +210,22 @@ DATASETS: dict[str, dict[str, Any]] = {
         "group": "addon",
         "bulk": "bulk",
         "params": ["code", "from", "to"],
-        "key": ["Code", "Date"],
+        # Multi-observation: many minute bars share a (Code, Date). The bulk
+        # CSV carries a per-minute ``DateTime``; the REST surface splits it
+        # into ``Date`` + ``Time``. List both discriminators so the normalizer
+        # can keep every bar regardless of transport (only whichever exists
+        # lands in the key — see normalize._natural_key).
+        "key": ["Code", "Date", "DateTime", "Time"],
     },
     "equities_trades": {
         "path": "/v2/equities/trades",
         "group": "addon",
         "bulk": "bulk",
         "params": ["code", "date", "from", "to"],
-        "key": ["Code", "Date"],
+        # Multi-observation: many ticks share a (Code, Date). The per-trade
+        # ``DateTime`` must be in the key or upsert collapses a day's ticks
+        # onto the last one written.
+        "key": ["Code", "Date", "DateTime"],
         "_note": "Tick (trades) add-on; official path/CSV surface to confirm. "
                  "Callable via the generic client regardless.",
     },
@@ -222,21 +234,25 @@ DATASETS: dict[str, dict[str, Any]] = {
         "group": "addon",
         "bulk": "api",
         "params": ["date"],
-        "key": ["Date"],
+        # Multi-observation: many disclosures per date. The payload exposes
+        # ``DiscDate`` (not ``Date``) plus a unique ``DiscNo`` per disclosure;
+        # both must be in the key, else a day's disclosures collapse onto one
+        # (and the old ``["Date"]`` matched nothing, silently using a row hash).
+        "key": ["DiscDate", "DiscNo"],
     },
     "td_files": {
         "path": "/v2/td/files",
         "group": "addon",
         "bulk": "api",
         "params": ["date"],
-        "key": ["Date"],
+        "key": ["DiscDate", "DiscNo"],
     },
     "td_bulk": {
         "path": "/v2/td/bulk",
         "group": "addon",
         "bulk": "bulk",
         "params": ["date"],
-        "key": ["Date"],
+        "key": ["DiscDate", "DiscNo"],
         "_note": "TDnet bulk add-on; official path to confirm.",
     },
 }
