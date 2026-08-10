@@ -184,6 +184,7 @@ class CloudflareJquantsProxyHttpClient:
         proxy_token: str,
         user_agent: str = _DEFAULT_UA,
         timeout: float = 30.0,
+        verify: bool = True,
         transport: Any = None,
     ) -> None:
         import httpx  # lazy: only proxy fetch needs it
@@ -193,8 +194,13 @@ class CloudflareJquantsProxyHttpClient:
         self._proxy_url = proxy_url.rstrip("/")
         self._token = proxy_token
         self._timeout = float(timeout)
+        # ``verify`` is forwarded to httpx — matches :class:`LocalHttpClient`, so
+        # ``make_jquants_http(..., verify=...)`` (routed through this client) does
+        # not raise ``TypeError``. The factory in :func:`make_http_client` already
+        # collects ``verify`` into the proxy kwargs; we must accept and pass it on.
         kwargs: dict[str, Any] = dict(
             timeout=self._timeout,
+            verify=verify,
             follow_redirects=True,
             headers={"User-Agent": user_agent},
         )
