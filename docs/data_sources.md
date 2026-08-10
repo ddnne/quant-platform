@@ -146,6 +146,31 @@ python3 scripts/run_ingestion_once.py --source jquants
 
 > 「引値相当」= 社債の高値/安値/終値利回りおよび取引金額。JSDA は利回りベースの公表が主。
 
+### JSDA レポレート（東京レポ・レート / TRR）
+
+- 参照ページ: `https://www.jsda.or.jp/shiryoshitsu/toukei/trr/`（`repo_index_url()`）。2012-10-29 に日本銀行から日本証券業協会へ公表主体が移管された「東京レポ・レート」シリーズ。
+- 形式: HTML ページ上のデータファイル。公表実体は **レガシー `.xls`**（`trr.xls` = 当日分、`trrts.xls` = 時系列一覧）および年度別のレファレンス先（参考施設）PDF/XLSX。URL 解決は `ingestion/jsda/urls.py` に隔離（`resolve_repo_links` / `pick_repo_file`）。`pick_repo_file` は時系列一覧（`trr*ts`）を優先し、レファレンス先一覧（`bessi*` / `reference`）を除外する。
+- 既定ランタイム: **local**（ボンド統計と同じ理由でエッジからのスクレイピングは非推奨）。
+- パース: `ingestion/jsda/parse.py`（`parse_repo_csv` / `parse_repo_xlsx`）。エンコーディング自動検出・タイトル行スキップ・数値の `%`/`,` 削除はボンドと共通ヘルパを再利用。**wide**（日付列＋テナーごとの数値列）と **long**（日付列＋期間列＋レート列）の両レイアウトを `(as_of_date, tenor, rate)` に正規化する。テナー名はソースのヘッダ/セル文字列をそのまま保持（語彙を捏造しない）。
+- ディスパッチ: `pipeline._choose_jsda_repo_parser`（`.xlsx`/ZIP→`parse_repo_xlsx`、`.csv`→`parse_repo_csv`、**レガシー `.xls` は非対応**）。ボンドとは異なり、実ソースが `.xls` であることが既知のため、`run_jsda` は `.xls` を **clean skip**（error ではなく）とし、ボンド取引の成功を阻害しない。実運用で取り込むには `trr.xls`/`trrts.xls` を `.xlsx`/`.csv` に変換のうえ `--jsda-repo-url` で指定（ボンドの `.xls` 方針と同一）。
+- リトライ: ボンド経路と同じ 429/5xx・トランスポートエラーの指数バックオフ。
+- `run_jsda` は既定で **ボンド取引とレポレートの両方** を 1 パスで実行（各々独立の `RunReport`）。`bond=False` / `repo=False`、または CLI `--jsda-only bond|repo` で制限可能。
+
+#### `jsda_repo_rates` カラム対応
+
+自然キー: **(source, as_of_date, tenor, rate_type)**。
+
+| スキーマ列 | ソース（例・別名） | 内容 |
+|------------|---------------------|------|
+| `as_of_date` | 年月日 / 取引日 / 営業日 / 日付 | レート基準日（`event_time` は当日 15:00 JST・引け） |
+| `tenor` | 期間（long）/ ヘッダー（wide: 隔日物・1週間物・1ヶ月物・…・12ヶ月物） | テナー（ソース文字列をそのまま保持） |
+| `rate_type` | （固定既定） | シリーズ名。既定 `東京レポ・レート`（`normalize_repo_rates(rate_type=)` で上書き、例: GCレポレート） |
+| `rate` | レート(%) / 金利 / rate | 公表レート（%、`%`/`,` 除去） |
+
+> **`available_at` は仮**: TRR の真の公開タイミング（概ね翌営業日朝）は未計測のため、既定で取得時刻 `ingested_at` を使う。実測でき次第、より正確な値に差し替える（`conservative_available_at` 参照）。
+>
+> **実ソース形式について（仮）**: 公表ファイルはレガシー `.xls`。本経路は `.csv`/`.xlsx` を対象とするため、`.xls` は clean skip となる。直接取り込みが必要な場合は xlrd 等による `.xls` 読取サポートの追加が別途課題（ボンド経路と同様の方針）。
+
 ## 取得スクリプト
 
 ```bash

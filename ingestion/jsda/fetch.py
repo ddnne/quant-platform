@@ -15,7 +15,14 @@ from typing import Any, Callable, List, Optional
 from ..common.http import HttpClient, transport_exception_types
 from ..common.rate_limit import RateLimiter
 from ..common.retry import with_retry
-from .urls import index_url, pick_latest, resolve_download_links
+from .urls import (
+    index_url,
+    pick_latest,
+    pick_repo_file,
+    repo_index_url,
+    resolve_download_links,
+    resolve_repo_links,
+)
 
 JSDA_USER_AGENT = "quant-platform-ingest/0.1 (+personal-research; JSDA bond stats)"
 
@@ -74,3 +81,12 @@ class JsdaFetcher:
 
     def fetch_file(self, url: str) -> bytes:
         return self._get(url).body
+
+    # --- repo rate (東京レポ・レート) ----------------------------------------
+
+    def list_repo_files(self) -> List[str]:
+        """GET the TRR index page and return resolved data-file URLs."""
+        return resolve_repo_links(self._get(repo_index_url()).text())
+
+    def pick_repo(self, links: Optional[List[str]] = None) -> Optional[str]:
+        return pick_repo_file(links if links is not None else self.list_repo_files())

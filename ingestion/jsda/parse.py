@@ -192,3 +192,133 @@ def parse_xlsx(data: bytes) -> List[dict]:  # pragma: no cover - optional dep
     for r in rows:
         writer.writerow([("" if v is None else str(v)) for v in r])
     return parse_csv(buf.getvalue())
+
+
+# ---------------------------------------------------------------------------
+# Repo rate (東京レポ・レート / TRR)
+# ---------------------------------------------------------------------------
+#
+# The JSDA publishes the Tokyo Repo Rate per business day across tenors. The
+# file is either:
+#   * **wide** — one date column and one numeric column per tenor
+#     (隔日物 / 1週間物 / 1ヶ月物 / … / 12ヶ月物); or
+#   * **long** — a date column, a tenor (期間) column and a rate column.
+#
+# Both shapes normalize to the same record: ``{as_of_date, tenor, rate}``. The
+# tenor is captured verbatim from the source (header text in wide form, cell in
+# long form) so no tenor vocabulary is invented here. Rate values are coerced
+# via the shared ``_num`` (strips ``%``/``,``, treats ``-`` as missing).
+
+_REPO_DATE_ALIASES: list[str] = ["年月日", "取引日", "営業日", "日付", "date"]
+_REPO_TENOR_ALIASES: list[str] = ["期間", "満期", "テナー", "term", "tenor", "期限"]
+_REPO_RATE_ALIASES: list[str] = ["レート", "金利", "rate", "レポレート", "%", "東京レポ"]
+_REPO_DATE_MARKERS = ("年月日", "取引日", "営業日", "日付")
+
+
+def _find_repo_header(rows: List[List[str]]) -> tuple[int, List[str]]:
+    """Locate the repo-rate header row and return its original (un-normalized)
+    cells, so wide-format tenor headers keep their source text."""
+    for i, row in enumerate(rows):
+        normed = [_norm_header(c) for c in row]
+        if any(any(mk in cell for mk in _REPO_DATE_MARKERS) for cell in normed):
+            return i, list(row)
+    for i, row in enumerate(rows):
+        if any((c or "").strip() for c in row):
+            return i, list(row)
+    return -1, []
+
+
+def _col_first(headers: List[str], aliases: list[str]) -> Optional[int]:
+    """First column index whose normalized header contains any alias."""
+    for idx, h in enumerate(headers):
+        if any(a.lower() in h for a in aliases):
+            return idx
+    return None
+
+
+def _first_numeric_col(
+    row: List[str], headers: List[str], skip: set[int]
+) -> Optional[int]:
+    """First column with a parseable number, excluding ``skip`` indices."""
+    for idx in range(min(len(row), len(headers))):
+        if idx in skip:
+            continue
+        if _num(_cell(row, idx)) is not None:
+            return idx
+    return None
+
+
+def parse_repo_csv(data, *, encoding: Optional[str] = None) -> List[dict]:
+    """Parse JSDA repo-rate (TRR) CSV bytes/text into clean records.
+
+    Each record is ``{"as_of_date", "tenor", "rate"}``. Handles wide (one
+    column per tenor) and long (a 期間 column + a rate column) layouts.
+    ``encoding`` overrides auto-detection when known.
+    """
+    text = data.decode(encoding, errors="replace") if (
+        encoding and isinstance(data, (bytes, bytearray))
+    ) else _decode(data)
+    text = text.lstrip("﻿")
+
+    reader = csv.reader(io.StringIO(text))
+    rows = [r for r in reader if any((c or "").strip() for c in r)]
+    if not rows:
+        return []
+
+    header_idx, raw_headers = _find_repo_header(rows)
+    if header_idx < 0:
+        return []
+    norm_headers = [_norm_header(c) for c in raw_headers]
+
+    date_col = _col_first(norm_headers, _REPO_DATE_ALIASES)
+    tenor_col = _col_first(norm_headers, _REPO_TENOR_ALIASES)
+    rate_col = _col_first(norm_headers, _REPO_RATE_ALIASES)
+
+    out: List[dict] = []
+    for row in rows[header_idx + 1:]:
+        if not any((c or "").strip() for c in row):
+            continue
+        d = _date(_cell(row, date_col))
+        if not d:
+            continue  # skip title/total spillover rows
+
+        if tenor_col is not None:
+            # Long layout: one record per row (tenor in a cell).
+            tenor = _cell(row, tenor_col)
+            rc = rate_col
+            if rc is None:
+                rc = _first_numeric_col(row, raw_headers, {date_col, tenor_col})
+            out.append({"as_of_date": d, "tenor": tenor, "rate": _num(_cell(row, rc))})
+        else:
+            # Wide layout: one record per numeric column (header = tenor).
+            # Only the date column is excluded — ``rate_col`` is a long-layout
+            # concept and a tenor header that happens to contain "レート"/"%"
+            # must not be dropped here.
+            for idx in range(min(len(row), len(raw_headers))):
+                if idx == date_col:
+                    continue
+                val = _num(_cell(row, idx))
+                if val is None:
+                    continue  # blank tenor for this day -> not published
+                tenor = (raw_headers[idx] or "").strip()
+                out.append({"as_of_date": d, "tenor": tenor, "rate": val})
+    return out
+
+
+def parse_repo_xlsx(data: bytes) -> List[dict]:  # pragma: no cover - optional dep
+    """Parse JSDA repo-rate XLSX. Requires ``openpyxl`` (extras: ``[xlsx]``)."""
+    try:
+        from openpyxl import load_workbook
+    except ImportError as exc:  # pragma: no cover
+        raise ImportError(
+            "openpyxl is required for JSDA repo-rate .xlsx parsing; "
+            "install with `pip install -e .[xlsx]`"
+        ) from exc
+    wb = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
+    ws = wb.active
+    rows = [[(c.value if c.value is not None else "") for c in row] for row in ws.iter_rows()]
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    for r in rows:
+        writer.writerow([("" if v is None else str(v)) for v in r])
+    return parse_repo_csv(buf.getvalue())

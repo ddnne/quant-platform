@@ -86,7 +86,17 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--jsda-url", dest="jsda_url", default=None,
-        help="explicit JSDA file URL (skip index scrape)",
+        help="explicit JSDA bond-trade file URL (skip index scrape)",
+    )
+    p.add_argument(
+        "--jsda-repo-url", dest="jsda_repo_url", default=None,
+        help="explicit JSDA repo-rate (TRR) file URL (skip TRR index scrape)",
+    )
+    p.add_argument(
+        "--jsda-only", dest="jsda_only", default=None,
+        choices=["bond", "repo"],
+        help="run only one JSDA sub-source (bond trades or repo rates); "
+             "default runs both in one pass",
     )
     p.add_argument(
         "--workers",
@@ -171,9 +181,13 @@ def main(argv=None) -> int:
                 print(r.summary())
 
         if args.source in ("jsda", "all"):
+            jsda_bond = args.jsda_only != "repo"
+            jsda_repo = args.jsda_only != "bond"
             reps = run_jsda(
                 http=http, store=store, data_base=data_base, today=today,
                 runtime=runtime, target_url=args.jsda_url,
+                repo_target_url=args.jsda_repo_url,
+                bond=jsda_bond, repo=jsda_repo,
             )
             all_reports.extend(reps)
             for r in reps:

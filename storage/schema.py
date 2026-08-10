@@ -103,6 +103,22 @@ CREATE TABLE IF NOT EXISTS jsda_bond_trades (
     PRIMARY KEY (source, trade_date, isin, issuer_name)
 );
 
+-- 東京レポ・レート (Tokyo Repo Rate, "TRR"). One row per (as-of day, tenor,
+-- rate_type). ``rate`` is the published rate (%). The full source record is
+-- kept in ``raw_payload``. See ``docs/data_sources.md`` (JSDA repo section).
+CREATE TABLE IF NOT EXISTS jsda_repo_rates (
+    source       TEXT NOT NULL,
+    as_of_date   TEXT NOT NULL,
+    tenor        TEXT NOT NULL DEFAULT '',
+    rate_type    TEXT NOT NULL DEFAULT '',
+    event_time   TEXT NOT NULL,
+    available_at TEXT NOT NULL,
+    ingested_at  TEXT NOT NULL,
+    rate         REAL,
+    raw_payload  TEXT,
+    PRIMARY KEY (source, as_of_date, tenor, rate_type)
+);
+
 -- Amendment history.  These tables deliberately mirror their
 -- primary fact table.  A unique business-key + available_at index makes
 -- retries idempotent while allowing multiple published revisions of one
@@ -136,6 +152,12 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_bond_trades_revisions_version
     ON jsda_bond_trades_revisions
        (source, trade_date, isin, issuer_name, available_at);
 
+CREATE TABLE IF NOT EXISTS jsda_repo_rates_revisions AS
+    SELECT * FROM jsda_repo_rates WHERE 0;
+CREATE UNIQUE INDEX IF NOT EXISTS ux_repo_rates_revisions_version
+    ON jsda_repo_rates_revisions
+       (source, as_of_date, tenor, rate_type, available_at);
+
 CREATE TABLE IF NOT EXISTS ingestion_run_log (
     id      INTEGER PRIMARY KEY AUTOINCREMENT,
     ran_at  TEXT    NOT NULL,
@@ -151,6 +173,8 @@ CREATE INDEX IF NOT EXISTS ix_records_dataset_avail
     ON jquants_records (dataset, available_at);
 CREATE INDEX IF NOT EXISTS ix_jsda_available_at
     ON jsda_bond_trades (trade_date, available_at);
+CREATE INDEX IF NOT EXISTS ix_jsda_repo_available_at
+    ON jsda_repo_rates (as_of_date, available_at);
 """
 
 # Natural keys for documentation / future dedup tooling.
@@ -160,6 +184,7 @@ NATURAL_KEYS: dict[str, list[str]] = {
     "jquants_market_calendar": ["source", "date"],
     "jquants_records": ["source", "dataset", "natural_key"],
     "jsda_bond_trades": ["source", "trade_date", "isin", "issuer_name"],
+    "jsda_repo_rates": ["source", "as_of_date", "tenor", "rate_type"],
 }
 
 # Fact table -> amendment history table.  Kept separate from
