@@ -107,9 +107,33 @@ def iter_date_windows(
     return windows
 
 
+def iter_dates(from_date: str, to_date: str) -> List[str]:
+    """Inclusive list of per-day ``YYYY-MM-DD`` strings over ``[from_date, to_date]``.
+
+    Used for datasets that accept a single ``date`` param (not ``from``/``to``):
+    a date range is expanded into one job per day so the requested span is
+    actually fetched rather than silently dropped.
+    """
+    start = _parse_ymd(from_date)
+    end = _parse_ymd(to_date)
+    if end < start:
+        raise ValueError(f"to_date {to_date!r} is before from_date {from_date!r}")
+    days: list[str] = []
+    cur = start
+    while cur <= end:
+        days.append(_fmt(cur))
+        cur += timedelta(days=1)
+    return days
+
+
 def _supports_range(dataset_id: str) -> bool:
     params = catalog.get(dataset_id).get("params") or []
     return "from" in params and "to" in params
+
+
+def _supports_date(dataset_id: str) -> bool:
+    params = catalog.get(dataset_id).get("params") or []
+    return "date" in params
 
 
 def _supports_code(dataset_id: str) -> bool:
@@ -130,6 +154,9 @@ def expand_jobs(
 
     * If both ``from_date`` and ``to_date`` are set **and** the dataset
       supports ``from``/``to``, the range is gridded into ``chunk_days`` windows.
+    * If both ``from_date`` and ``to_date`` are set **and** the dataset accepts
+      ``date`` (but not ``from``/``to``), the range is expanded into one job per
+      day so the requested span is fetched rather than dropped.
     * If ``codes`` is set and the dataset supports ``code``, jobs fan out per code.
     * Otherwise a single job per dataset (plus any ``extra_params``).
     """
@@ -138,22 +165,35 @@ def expand_jobs(
 
     for did in datasets:
         catalog.get(did)  # raise KeyError early
+        supports_range = _supports_range(did)
+        supports_date = _supports_date(did)
         code_list: Sequence[Optional[str]]
         if codes and _supports_code(did):
             code_list = list(codes)
         else:
             code_list = [None]
 
-        if from_date and to_date and _supports_range(did):
-            windows = iter_date_windows(from_date, to_date, chunk_days)
-        elif (from_date or to_date) and _supports_range(did):
+        # Date fan-out shape for this dataset:
+        #   * range datasets (from/to) → chunk_days windows of (from, to).
+        #   * date-only datasets (date, no from/to) → one job per day.
+        #   * single-sided date param → one job (no filter dropped).
+        #   * no applicable date param → one job with no date filter.
+        date_windows: list[tuple[Optional[str], Optional[str]]] = []
+        date_days: list[str] = []
+        if from_date and to_date and supports_range:
+            date_windows = iter_date_windows(from_date, to_date, chunk_days)
+        elif from_date and to_date and supports_date:
+            date_days = iter_dates(from_date, to_date)
+        elif (from_date or to_date) and supports_range:
             # Open-ended / single-sided range: one job, no grid.
-            windows = [(from_date, to_date)]
+            date_windows = [(from_date, to_date)]
+        elif (from_date or to_date) and supports_date:
+            date_days = [from_date or to_date]
         else:
-            windows = [(None, None)]
+            date_windows = [(None, None)]
 
         for code in code_list:
-            for w_from, w_to in windows:
+            for w_from, w_to in date_windows:
                 params = dict(base_extra)
                 if code is not None:
                     params["code"] = code
@@ -161,6 +201,12 @@ def expand_jobs(
                     params["from"] = w_from
                 if w_to is not None:
                     params["to"] = w_to
+                jobs.append(FetchJob(dataset_id=did, params=params))
+            for d in date_days:
+                params = dict(base_extra)
+                if code is not None:
+                    params["code"] = code
+                params["date"] = d
                 jobs.append(FetchJob(dataset_id=did, params=params))
 
     return jobs
