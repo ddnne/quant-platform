@@ -9,22 +9,22 @@
     },
     {
       "key_id": "phase61-test",
-      "public_key_b64": "AYXDWhVStGtbFcf4IDzES1yVIpQ1Lv7liISV3E7+SlA=",
+      "public_key_b64": "4sQriRWsaz6YQUa+IHwtGVUeQ5RQJe/b4nWOcn4sIRQ=",
       "algorithm": "Ed25519"
     },
     {
       "key_id": "t1",
-      "public_key_b64": "AYpcJXBhBAkKB58vU3epSp4w/8dAH9uf/tHvbrtAgpI=",
+      "public_key_b64": "5PS+yJmEscCYHx6Y7xJpe8Suf+iKNMPl38I9/xvM1rI=",
       "algorithm": "Ed25519"
     },
     {
       "key_id": "k1",
-      "public_key_b64": "gQajBII9JTn7kdlY2pJprkmnzpQ4l4SGNLFajaXgVL8=",
+      "public_key_b64": "IKRDieroyrvYX1uGpQ3U1O1RDMoaFcyc8wfB2qYhaBI=",
       "algorithm": "Ed25519"
     },
     {
       "key_id": "test-key",
-      "public_key_b64": "AfxM8196hhBv7zpXQ3pzPv5B7Ikp3c6+sQrx6eYa6ys=",
+      "public_key_b64": "PZ9W3MW2ZRKmmgqYhtdlc8xSn0GtG2Odj6ujWJV9Mwk=",
       "algorithm": "Ed25519"
     }
   ]

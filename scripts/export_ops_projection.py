@@ -194,9 +194,32 @@ def render_projection_sql(
     snapshot_dir: str | Path | None = None,
     max_age_seconds: int = DEFAULT_MAX_AGE_SECONDS,
     use_sql_transaction: bool = True,
+    generation_id: str | None = None,
+    producer_commit_sha: str | None = None,
 ) -> str:
-    """Return a complete replaceable projection transaction."""
+    """Return a complete replaceable projection transaction.
+
+    Phase 6.2.3: one generation_id tags every projected row; active pointer
+    flips only after the full insert set is present (atomic generation).
+    """
+    from uuid import uuid4
+    import hashlib
+    import subprocess
+
     path = Path(db_path).resolve()
+    gen_id = generation_id or ("projgen-" + uuid4().hex)
+    commit_sha = producer_commit_sha
+    if not commit_sha:
+        try:
+            commit_sha = subprocess.check_output(
+                ["git", "rev-parse", "HEAD"],
+                cwd=str(ROOT),
+                text=True,
+                stderr=subprocess.DEVNULL,
+            ).strip()
+        except Exception:  # noqa: BLE001
+            commit_sha = None
+
     conn = sqlite3.connect("file:" + quote(str(path)) + "?mode=ro", uri=True)
     try:
         coverage = _read_rows(conn, "dataset_coverage", DATASET_COVERAGE_COLUMNS)
@@ -207,6 +230,41 @@ def render_projection_sql(
     finally:
         conn.close()
 
+    # Tag every row with the generation id for mixed-generation detection.
+    for row in coverage:
+        row["projection_generation_id"] = gen_id
+    for row in segments:
+        row["projection_generation_id"] = gen_id
+    if b0_status is not None:
+        b0_status = dict(b0_status)
+        b0_status["projection_generation_id"] = gen_id
+
+    metadata = dict(metadata)
+    metadata["projection_generation_id"] = gen_id
+    metadata["active_generation"] = gen_id
+    metadata["producer_commit_sha"] = commit_sha
+    # Digest over row counts for integrity of this generation.
+    source_digest = "sha256:" + hashlib.sha256(
+        json.dumps(
+            {
+                "coverage": len(coverage),
+                "segments": len(segments),
+                "inventory": len(inventory),
+                "gen": gen_id,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+    metadata.setdefault("detail_json", "{}")
+    try:
+        detail = json.loads(metadata["detail_json"]) if metadata.get("detail_json") else {}
+    except json.JSONDecodeError:
+        detail = {}
+    detail["active_generation"] = gen_id
+    detail["source_db_digest"] = source_digest
+    metadata["detail_json"] = json.dumps(detail, sort_keys=True, separators=(",", ":"))
+
     ENDPOINT_INVENTORY_COLUMNS = (
         "dataset_id", "display_name", "source", "governance_tier",
         "inventory_status", "collection_window", "expected_frequency",
@@ -215,10 +273,52 @@ def render_projection_sql(
     )
     PROJECTION_METADATA_COLUMNS = (
         "generated_at", "source_generation", "age_seconds", "status",
-        "projection_version", "detail_json",
+        "projection_version", "detail_json", "projection_generation_id",
     )
+    COVERAGE_COLS = DATASET_COVERAGE_COLUMNS + ("projection_generation_id",)
+    SEGMENT_COLS = COVERAGE_SEGMENT_COLUMNS + ("projection_generation_id",)
 
-    statements = (["BEGIN TRANSACTION;"] if use_sql_transaction else []) + [
+    generated_at = metadata.get("generated_at") or _now()
+    # Ensure generation tables exist (local test DBs / pre-migration remotes).
+    ddl = [
+        """CREATE TABLE IF NOT EXISTS ops_projection_generation (
+            generation_id TEXT PRIMARY KEY,
+            status TEXT NOT NULL,
+            source_db_digest TEXT,
+            generated_at TEXT NOT NULL,
+            producer_commit_sha TEXT,
+            contract_digest TEXT,
+            registry_digest TEXT,
+            coverage_policy_version TEXT,
+            activated_at TEXT,
+            detail_json TEXT NOT NULL DEFAULT '{}'
+        );""",
+        """CREATE TABLE IF NOT EXISTS ops_projection_active (
+            singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+            generation_id TEXT NOT NULL,
+            activated_at TEXT NOT NULL
+        );""",
+    ]
+    # Best-effort column ensure (no-op if already present; ignore errors at apply time).
+    alter_cols = [
+        "ALTER TABLE dataset_coverage ADD COLUMN projection_generation_id TEXT;",
+        "ALTER TABLE coverage_segments ADD COLUMN projection_generation_id TEXT;",
+        "ALTER TABLE ops_ready_snapshots ADD COLUMN projection_generation_id TEXT;",
+        "ALTER TABLE ops_snapshot_quality ADD COLUMN projection_generation_id TEXT;",
+        "ALTER TABLE ops_b0_status ADD COLUMN projection_generation_id TEXT;",
+        "ALTER TABLE ops_projection_metadata ADD COLUMN projection_generation_id TEXT;",
+    ]
+    statements = (["BEGIN TRANSACTION;"] if use_sql_transaction else []) + ddl + [
+        # Stage generation record before bulk replace.
+        (
+            "INSERT OR REPLACE INTO ops_projection_generation "
+            "(generation_id, status, source_db_digest, generated_at, "
+            "producer_commit_sha, contract_digest, registry_digest, "
+            "coverage_policy_version, activated_at, detail_json) VALUES ("
+            f"{_sql_literal(gen_id)}, 'STAGING', {_sql_literal(source_digest)}, "
+            f"{_sql_literal(generated_at)}, {_sql_literal(commit_sha)}, NULL, NULL, NULL, "
+            "NULL, '{}');"
+        ),
         "DELETE FROM dataset_coverage;",
         "DELETE FROM coverage_segments;",
         "DELETE FROM ops_snapshot_quality;",
@@ -227,6 +327,10 @@ def render_projection_sql(
         "DELETE FROM ops_projection_metadata;",
         "DELETE FROM endpoint_inventory;",
     ]
+    # Note: ALTER cannot run mid-transaction reliably on all SQLite builds after DELETE
+    # of unrelated tables; apply alters before BEGIN when possible. For bundled SQL
+    # consumers, prepend alters outside the transaction.
+    statements = alter_cols + statements
 
     # Insert projection metadata first
     statements.extend(_insert_sql(
@@ -239,14 +343,15 @@ def render_projection_sql(
     ))
 
     statements.extend(_insert_sql(
-        "dataset_coverage", DATASET_COVERAGE_COLUMNS, coverage
+        "dataset_coverage", COVERAGE_COLS, coverage
     ))
     statements.extend(_insert_sql(
-        "coverage_segments", COVERAGE_SEGMENT_COLUMNS, segments
+        "coverage_segments", SEGMENT_COLS, segments
     ))
     if b0_status is not None:
+        b0_cols = tuple(b0_status.keys())
         statements.extend(_insert_sql(
-            "ops_b0_status", tuple(b0_status), (b0_status,)
+            "ops_b0_status", b0_cols, (b0_status,)
         ))
 
     if snapshot_dir is not None:
@@ -277,7 +382,9 @@ def render_projection_sql(
                 "summary_json": json.dumps(
                     quality.get("summary", {}), sort_keys=True, separators=(",", ":")
                 ),
+                "projection_generation_id": gen_id,
             }
+            ready_row["projection_generation_id"] = gen_id
             statements.extend(_insert_sql(
                 "ops_ready_snapshots",
                 tuple(ready_row),
@@ -288,6 +395,17 @@ def render_projection_sql(
                 tuple(quality_row),
                 (quality_row,),
             ))
+    # Atomic activation: only after full bulk insert.
+    statements.append(
+        "UPDATE ops_projection_generation SET status='ACTIVE', "
+        f"activated_at={_sql_literal(generated_at)} "
+        f"WHERE generation_id={_sql_literal(gen_id)};"
+    )
+    statements.append(
+        "INSERT OR REPLACE INTO ops_projection_active "
+        f"(singleton, generation_id, activated_at) VALUES (1, {_sql_literal(gen_id)}, "
+        f"{_sql_literal(generated_at)});"
+    )
     if use_sql_transaction:
         statements.append("COMMIT;")
     return "\n".join(statements) + "\n"

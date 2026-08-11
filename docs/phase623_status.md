@@ -62,3 +62,20 @@ python -c "from ops.backfill_planner import backfill_status_rows; print(len(back
 - JSDA worker: timing-safe token compare, 32MiB artifact cap, bounded body read
 
 Still NO-GO for mass research; GLM independent review still required.
+
+## Code-complete inventory (implementable scope)
+
+Closed in code:
+- Signed Ed25519 receipts + pipeline fail-closed
+- JSDA staging-only + adapters + durable job queue (bounded cron drain)
+- Projection generation pointer + active generation filter in MCP
+- ProcessIsolatedRunner foundation (not CF container sandbox)
+- Paper snapshot/period binding, gateway nested ban + reserve
+- sync_status lag/cursors
+
+Explicitly NOT closed (not forgeable / not claimed):
+- Live 26/26 COMPLETE + READY mint + AM SLA evidence
+- Full Cloudflare Queues/Workflow productization
+- OS/container non-circumventable agent sandbox
+- Independent GLM review → never claim P0 unresolved=0 without it
+- Mass research GO

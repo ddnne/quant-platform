@@ -126,6 +126,59 @@ async function first(db, sql, binds = []) {
   }
 }
 
+/** @param {D1Database} db */
+async function activeProjectionGeneration(db) {
+  const row = await first(db,
+    "SELECT generation_id, activated_at FROM ops_projection_active WHERE singleton = 1");
+  return row;
+}
+
+/**
+ * Prefer active generation rows; if generation column missing or null-only legacy,
+ * fall back to unfiltered (caller must still surface DEGRADED_MIXED when mixed).
+ * @param {D1Database} db
+ * @param {string} table
+ * @param {string} selectSql without WHERE
+ * @param {unknown[]} binds
+ */
+async function allForActiveGeneration(db, table, selectSql, binds = []) {
+  const active = await activeProjectionGeneration(db);
+  if (!active?.generation_id) {
+    return { rows: await all(db, selectSql, binds), active: null, mixed: false };
+  }
+  const gen = String(active.generation_id);
+  // Inject generation filter before ORDER BY / LIMIT if present.
+  let sql = selectSql;
+  if (/\bWHERE\b/i.test(sql)) {
+    sql = sql.replace(/\bWHERE\b/i, `WHERE projection_generation_id = ? AND `);
+    binds = [gen, ...binds];
+  } else if (/\bORDER BY\b/i.test(sql)) {
+    sql = sql.replace(/\bORDER BY\b/i, `WHERE projection_generation_id = ? ORDER BY `);
+    binds = [gen, ...binds];
+  } else if (/\bLIMIT\b/i.test(sql)) {
+    sql = sql.replace(/\bLIMIT\b/i, `WHERE projection_generation_id = ? LIMIT `);
+    binds = [gen, ...binds];
+  } else {
+    sql = `${sql} WHERE projection_generation_id = ?`;
+    binds = [...binds, gen];
+  }
+  try {
+    const rows = await all(db, sql, binds);
+    // Detect mixed gens if unfiltered has other gens
+    const other = await first(db,
+      `SELECT COUNT(*) AS n FROM ${table} WHERE projection_generation_id IS NOT NULL AND projection_generation_id != ?`,
+      [gen]);
+    const mixed = Number(other?.n || 0) > 0;
+    return { rows, active, mixed };
+  } catch (error) {
+    // Column may not exist yet pre-migration — fall back.
+    if (/no such column|projection_generation_id/i.test(String(error))) {
+      return { rows: await all(db, selectSql, binds.slice(active ? 1 : 0)), active, mixed: false };
+    }
+    throw error;
+  }
+}
+
 /**
  * The result always identifies its plane. `ops_current` may change between
  * calls; `research_ready` identifies immutable publication metadata only.
@@ -146,17 +199,34 @@ export async function callOpsTool(db, name, rawArguments) {
 
   if (name === "dataset_coverage") {
     const dataset = datasetArg(args.dataset);
-    const coverage = await first(db,
-      `SELECT dataset, status, policy_version, collection_scope,
-              history_target_start, history_target_end_rule, coverage_mode,
-              expected_frequency, universe_rule, raw_retention_required,
-              structured_reconciliation_required, governance_tier,
-              observed_start, observed_end, row_count, source_run_id,
-              evaluated_at, detail_json
-         FROM dataset_coverage WHERE dataset = ? LIMIT 1`, [dataset]);
+    const active = await activeProjectionGeneration(db);
+    let coverage = null;
+    if (active?.generation_id) {
+      coverage = await first(db,
+        `SELECT dataset, status, policy_version, collection_scope,
+                history_target_start, history_target_end_rule, coverage_mode,
+                expected_frequency, universe_rule, raw_retention_required,
+                structured_reconciliation_required, governance_tier,
+                observed_start, observed_end, row_count, source_run_id,
+                evaluated_at, detail_json, projection_generation_id
+           FROM dataset_coverage
+          WHERE dataset = ? AND projection_generation_id = ? LIMIT 1`,
+        [dataset, active.generation_id]);
+    }
+    if (!coverage) {
+      coverage = await first(db,
+        `SELECT dataset, status, policy_version, collection_scope,
+                history_target_start, history_target_end_rule, coverage_mode,
+                expected_frequency, universe_rule, raw_retention_required,
+                structured_reconciliation_required, governance_tier,
+                observed_start, observed_end, row_count, source_run_id,
+                evaluated_at, detail_json
+           FROM dataset_coverage WHERE dataset = ? LIMIT 1`, [dataset]);
+    }
     return {
       plane: "ops_current", mutable: true, dataset,
       status: coverage ? coverage.status : "UNKNOWN",
+      active_generation: active?.generation_id ?? null,
       coverage,
       ...(coverage ? {} : { reason: "Coverage V2 projection has not been populated for this governed dataset" }),
     };
@@ -341,8 +411,10 @@ export async function callOpsTool(db, name, rawArguments) {
   }
 
   if (name === "projection_status") {
+    const active = await activeProjectionGeneration(db);
     const metadata = await first(db,
-      `SELECT generated_at, source_generation, age_seconds, status, projection_version, detail_json
+      `SELECT generated_at, source_generation, age_seconds, status, projection_version, detail_json,
+              projection_generation_id
          FROM ops_projection_metadata ORDER BY generated_at DESC LIMIT 1`);
     if (!metadata) {
       return {
@@ -351,14 +423,31 @@ export async function callOpsTool(db, name, rawArguments) {
         reason: "projection metadata missing; run scripts/publish_ops_projection.py",
       };
     }
-    const age = Number(metadata.age_seconds ?? 0);
-    const stale = metadata.status === "STALE" || age > 86400;
+    // Recompute age from request time (never trust stored age=0 forever).
+    let age = null;
+    try {
+      const genAt = Date.parse(String(metadata.generated_at));
+      if (!Number.isNaN(genAt)) age = Math.max(0, Math.floor((Date.now() - genAt) / 1000));
+    } catch {
+      age = Number(metadata.age_seconds ?? 0);
+    }
+    let status = metadata.status || "UNKNOWN";
+    if (status === "FRESH" && age != null && age > 86400) status = "STALE";
+    // Mixed generation detection across coverage table
+    const gens = await all(db,
+      `SELECT DISTINCT projection_generation_id AS g FROM dataset_coverage
+        WHERE projection_generation_id IS NOT NULL LIMIT 20`);
+    if (gens.length > 1) status = "DEGRADED_MIXED_GENERATION";
+    const stale = status === "STALE" || status === "DEGRADED_MIXED_GENERATION";
     return {
       plane: "ops_current", mutable: true,
-      projection_status: stale && metadata.status === "FRESH" ? "STALE" : metadata.status,
+      projection_status: status,
       projection_generated_at: metadata.generated_at,
       projection_source_generation: metadata.source_generation,
       projection_age_seconds: age,
+      active_generation: active?.generation_id ?? metadata.projection_generation_id ?? null,
+      activated_at: active?.activated_at ?? null,
+      distinct_projection_generations: gens.map((r) => r.g),
       stale,
       projection_version: metadata.projection_version,
     };

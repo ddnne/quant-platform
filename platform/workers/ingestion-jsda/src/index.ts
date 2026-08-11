@@ -387,12 +387,132 @@ async function collectWithDiscovery(
   }
 }
 
+async function enqueueRootDiscovery(env: Env): Promise<number> {
+  const now = new Date().toISOString();
+  const plans: { dataset: DatasetId; url: string }[] = [
+    { dataset: "jsda_otc_bond_reference_prices", url: OTC_INDEX },
+    { dataset: "jsda_tokyo_repo_rates", url: REPO_INDEX },
+    { dataset: "jsda_corporate_bond_transactions", url: CORP_INDEX },
+  ];
+  let n = 0;
+  for (const plan of plans) {
+    const jobId = `discover:${plan.dataset}:${now.slice(0, 10)}`;
+    try {
+      await env.DB.prepare(
+        `INSERT OR IGNORE INTO jsda_acquisition_jobs
+         (job_id, dataset, job_type, target_url, segment_id, state, attempt, priority, created_at, updated_at)
+         VALUES (?, ?, 'discover_root', ?, NULL, 'pending', 0, 10, ?, ?)`,
+      )
+        .bind(jobId, plan.dataset, plan.url, now, now)
+        .run();
+      n++;
+    } catch {
+      // Table may not be migrated yet — ignore.
+    }
+  }
+  return n;
+}
+
+const CRON_JOB_BATCH = 3;
+
+async function drainJobBatch(
+  env: Env,
+  ua: string,
+): Promise<Record<string, unknown>> {
+  const now = new Date().toISOString();
+  let jobs: { job_id: string; dataset: string; job_type: string; target_url: string }[] = [];
+  try {
+    const res = await env.DB.prepare(
+      `SELECT job_id, dataset, job_type, target_url FROM jsda_acquisition_jobs
+       WHERE state IN ('pending','retry')
+       ORDER BY priority ASC, created_at ASC LIMIT ?`,
+    )
+      .bind(CRON_JOB_BATCH)
+      .all();
+    jobs = (res.results || []) as typeof jobs;
+  } catch (e) {
+    return {
+      mode: "job_queue",
+      error: (e as Error).message,
+      note: "jsda_acquisition_jobs missing — apply migration 0008",
+    };
+  }
+  const results = [];
+  for (const job of jobs) {
+    await env.DB.prepare(
+      `UPDATE jsda_acquisition_jobs SET state='running', attempt=attempt+1, updated_at=? WHERE job_id=?`,
+    )
+      .bind(now, job.job_id)
+      .run();
+    try {
+      if (job.job_type === "discover_root") {
+        const r = await collectWithDiscovery(
+          env,
+          job.dataset as DatasetId,
+          job.target_url,
+          ua,
+        );
+        const state = r.status === "pass" ? "pass" : r.status === "fail" ? "fail" : "partial";
+        await env.DB.prepare(
+          `UPDATE jsda_acquisition_jobs SET state=?, detail=?, updated_at=? WHERE job_id=?`,
+        )
+          .bind(state, r.detail.slice(0, 500), new Date().toISOString(), job.job_id)
+          .run();
+        results.push({ job_id: job.job_id, ...r });
+      } else {
+        await env.DB.prepare(
+          `UPDATE jsda_acquisition_jobs SET state='fail', reason_code='unsupported_job_type', updated_at=? WHERE job_id=?`,
+        )
+          .bind(new Date().toISOString(), job.job_id)
+          .run();
+        results.push({ job_id: job.job_id, status: "fail", detail: "unsupported" });
+      }
+    } catch (e) {
+      await env.DB.prepare(
+        `UPDATE jsda_acquisition_jobs SET state='retry', detail=?, updated_at=? WHERE job_id=?`,
+      )
+        .bind((e as Error).message.slice(0, 500), new Date().toISOString(), job.job_id)
+        .run();
+      results.push({ job_id: job.job_id, status: "retry", detail: (e as Error).message });
+    }
+  }
+  return { mode: "job_queue", drained: results.length, results };
+}
+
 async function runAll(
   env: Env,
   triggeredBy: "cron" | "manual",
 ): Promise<Record<string, unknown>> {
   const ua = env.USER_AGENT || UA;
   const startedAt = new Date().toISOString();
+
+  // Cron: durable bounded path — enqueue roots + drain a small batch.
+  if (triggeredBy === "cron") {
+    const enqueued = await enqueueRootDiscovery(env);
+    const drain = await drainJobBatch(env, ua);
+    const summary = {
+      startedAt,
+      finishedAt: new Date().toISOString(),
+      status: "partial",
+      triggeredBy,
+      mode: "durable_job_queue",
+      enqueued,
+      ...drain,
+    };
+    try {
+      await env.DB.prepare(
+        `INSERT INTO ingestion_run_log (ran_at, source, runtime, status, detail)
+         VALUES (?, 'jsda', 'cloudflare', ?, ?)`,
+      )
+        .bind(startedAt, "partial", JSON.stringify(summary))
+        .run();
+    } catch {
+      /* ignore */
+    }
+    return summary;
+  }
+
+  // Manual: full discovery still available for ops backfill.
   const plans: { dataset: DatasetId; url: string }[] = [
     { dataset: "jsda_otc_bond_reference_prices", url: OTC_INDEX },
     { dataset: "jsda_tokyo_repo_rates", url: REPO_INDEX },
@@ -413,6 +533,7 @@ async function runAll(
     finishedAt,
     status,
     triggeredBy,
+    mode: "manual_full_discovery",
     datasetCount: results.length,
     passed,
     failed,
