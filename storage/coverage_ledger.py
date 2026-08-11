@@ -466,8 +466,22 @@ def _latest_receipt_for(
         return None
 
     def _rank(item: CollectionReceipt) -> tuple:
+        # Prefer cryptographically COMPLETE-eligible receipts first.
         trusted = 1 if is_complete_eligible_receipt(item) else 0
-        return (trusted, item.checked_at, item.run_id)
+        # Never let RECOVERED_RAW_ONLY / parse-staging clobber better evidence.
+        origin = str(item.digests.get("origin") or "")
+        recovered = 1 if (
+            item.digests.get("eligibility") == "RECOVERED_RAW_ONLY"
+            or origin in {
+                "recovered-raw-only",
+                "parsed-staging-only",
+                "offline-test-fixture",
+            }
+            or bool(item.digests.get("synthetic"))
+        ) else 0
+        structured = int(item.structured_row_count or 0)
+        # trusted desc, recovered asc (0 better), structured desc, time desc
+        return (trusted, -recovered, structured, item.checked_at, item.run_id)
 
     return max(exact, key=_rank)
 
