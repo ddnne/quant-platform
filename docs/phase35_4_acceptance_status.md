@@ -1,29 +1,34 @@
 # Phase 3.5 / 4 acceptance status (honest)
 
-**Code P0s landed on `main` this session.** Phase 5 still blocked until ops evidence below is green.
+**Code P0s landed on `main` @ `da60d8b`.** Phase 5 still blocked until ops evidence is green.
 
 ## P0 merge status
 | P0 | Status | Notes |
 |----|--------|-------|
-| P0-1 available_at policy | **merged** | `availability.ts` + Python mirror + unit tests |
-| P0-2 validation honesty | **merged** | C1/C2 run-log honesty; weekly `--require-implemented` |
-| P0-3 watermarks + incremental sync | **merged** | `0002_watermarks.sql` + sync `--incremental` + scale doc |
-| P0-4 CF parallel + retry | **merged** | concurrency 4 / 125ms floor / 429-5xx retry |
-| P0-5 intended_role + accept report | **merged** | FeatureDefinition roles + `scripts/run_phase4_accept.py` |
+| P0-1 available_at policy | **merged + deployed** | `availability.ts` + Python mirror; live bars use session_close |
+| P0-2 validation honesty | **merged** | C1/C2 honesty; weekly `--require-implemented` exits 1 on stubs |
+| P0-3 watermarks + incremental sync | **merged + D1 applied** | `0001`+`0002` applied remote `quant-ingest` |
+| P0-4 CF parallel + retry | **merged + deployed** | concurrency=4, rateLimitMs=125 in `/health` |
+| P0-5 intended_role + accept report | **merged** | offline accept report `ok=true` |
 
-Offline `pytest` after all three merges: green. Worker `tsc --noEmit`: green.
+Offline `pytest`: green. Worker `tsc --noEmit`: green. Pushed to `origin/main`.
 
-## Ops still required (not “complete” yet)
-1. Apply D1 migration `0002_watermarks.sql` on production (if not auto-applied by deploy)
-2. Confirm live `/health` + full `/v1/run` **failed=0** after final main deploy (worker branch already deployed mid-P0)
-3. Produce live artifacts: `data/reports/phase4_accept_*.json`, weekly validation report
-4. Multi-year history / R2 partition migration remains a scale path (scaffolded, not full rewrite)
+## Ops snapshot (2026-08-11 JST)
+| Check | Result |
+|-------|--------|
+| `/health` | `ok=true`, datasets=23, last_run shows `concurrency=4 rateLimitMs=125` |
+| D1 migrations remote | `0001_init` + `0002_watermarks` ✅ |
+| Offline phase4 accept | `ok=true` (fixture; hit_rate=1.0; BT 30 days) |
+| Daily validation on local sync DB | exit 1 — many C8/K3 fails (sparse local data / missing event_time) |
+| Weekly validation | exit 1 — **correct**: 39 `not_implemented` treated as fail |
+| Live phase4 accept / multi-year history | **not yet** |
 
-## What is solid
-- Phase 0–3 design (PIT sole path, core black-box, as_of gate)
-- Phase 3.5 Worker/R2/D1/Cron/Secrets/Export + Premium 23
-- Feature Registry pit-only offline + live B0 path
-- available_at session_close for bars (historical PIT usable at close, not only at ingest)
+## Remaining before Phase 5 (honest)
+1. Live full `/v1/run` after main tip (worker deployed mid-P0; confirm post-merge tip)
+2. Sync D1→local with watermarks; re-run daily matrix with fuller data
+3. Live `scripts/run_phase4_accept.py` with `QP_LIVE=1` + report artifact
+4. Weekly matrix: implement or explicitly defer remaining not_implemented IDs (currently correctly fail completion)
+5. Multi-year / R2 partition migration remains scale path (scaffolded)
 
 ## Phase 5
-Do **not** start until ops checklist above is honestly green.
+Do **not** start until the remaining ops list is honestly green or explicitly waived.
