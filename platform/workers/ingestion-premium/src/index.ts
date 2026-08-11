@@ -37,6 +37,10 @@ import {
   requireNaturalKeysV2Ready,
 } from "./natural_key_migration";
 import { RateLimiter } from "./rate_limit";
+import { isR2Only, wantsSummaryChangeLog } from "./write_path_config";
+import { writeJsonlToR2 } from "./r2_structured_writer";
+import { handleArchiveCold } from "./ops_cold_archive";
+import { handlePruneChangelog } from "./ops_prune_changelog";
 
 export interface Env {
   JQUANTS_API_KEY: string;
@@ -44,6 +48,8 @@ export interface Env {
   DATA_EXPORT_TOKEN?: string;
   /** Optional concurrency cap (1–8). Default 4. */
   INGEST_CONCURRENCY?: string;
+  /** When "1", equities_master structured skips full-history D1 (R2 only). */
+  MASTER_SCD2_ONLY?: string;
   RAW_BUCKET: R2Bucket;
   STRUCTURED_BUCKET: R2Bucket;
   DB: D1Database;
@@ -847,6 +853,58 @@ async function upsertRecords(
   }
   const records = [...byKey.values()];
 
+  // P0: high-volume structured → R2 only (do not grow D1 full-history).
+  if (isR2Only(spec.id, env)) {
+    const runId =
+      `r2-${spec.id}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const r2Result = await writeJsonlToR2(
+      env.STRUCTURED_BUCKET,
+      spec.id,
+      runId,
+      records.map((record) => ({
+        source: record.source,
+        dataset: record.dataset,
+        naturalKey: record.naturalKey,
+        eventTime: record.eventTime,
+        availableAt: record.availableAt,
+        ingestedAt: record.ingestedAt,
+        payload: record.payload,
+        rawPayload: record.rawPayload,
+      })),
+      { runDate: toJstIso(when).slice(0, 10) },
+    );
+    if (wantsSummaryChangeLog(spec.id)) {
+      const summaryPayload = JSON.stringify({
+        kind: "r2_structured_summary",
+        key: r2Result.key,
+        sha256: r2Result.sha256,
+        count: r2Result.count,
+        bytes: r2Result.bytes,
+      });
+      try {
+        await d1WithRetry(() =>
+          env.DB.prepare(
+            `INSERT OR IGNORE INTO ingestion_change_log
+             (table_name, source, dataset, natural_key, event_time, available_at,
+              ingested_at, payload, raw_payload, changed_at)
+             VALUES ('jquants_records_r2', 'jquants', ?, ?, ?, ?, ?, ?, NULL, ?)`,
+          ).bind(
+            spec.id,
+            `r2-summary:${runId}`,
+            toJstIso(when),
+            toJstIso(when),
+            toJstIso(when),
+            summaryPayload,
+            toJstIso(when),
+          ).run(),
+        );
+      } catch {
+        // Summary change_log is observability-only; never fail the ingest.
+      }
+    }
+    return { inserted: records.length, revisions: 0 };
+  }
+
   // D1 permits at most 100 bound parameters per statement. Each record has
   // eight fields → floor(100/8)=12 rows per VALUES statement.
   //
@@ -1410,6 +1468,12 @@ export default {
     if (url.pathname === "/v1/export/d1") return handleExportD1(env, request);
     if (url.pathname === "/v1/export/changes") {
       return handleExportChanges(env, request);
+    }
+    if (url.pathname === "/v1/ops/archive-cold") {
+      return handleArchiveCold(request, env);
+    }
+    if (url.pathname === "/v1/ops/prune-changelog") {
+      return handlePruneChangelog(request, env);
     }
     return json({ error: "not found" }, 404);
   },

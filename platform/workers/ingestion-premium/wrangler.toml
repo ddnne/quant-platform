@@ -31,13 +31,13 @@ workers_dev = true
 binding = "RAW_BUCKET"
 bucket_name = "quant-raw"
 
-# R2 — reserved for future parquet/partition dumps (D1 is the structured
-# source of truth for now). Kept so the binding exists when we enable it.
+# R2 — high-volume structured JSONL/Parquet partitions (historical SoT).
+# D1 holds control-plane + hot-window only; see write_path_config.ts.
 [[r2_buckets]]
 binding = "STRUCTURED_BUCKET"
 bucket_name = "quant-structured"
 
-# D1 — PIT-shaped structured rows, mirroring storage/schema.py columns.
+# D1 — control plane + low-volume / hot-window structured (not full history).
 [[d1_databases]]
 binding = "DB"
 database_name = "quant-ingest"
@@ -50,6 +50,7 @@ database_id = "be6fdcf8-40be-41fc-9535-7facd1fc2ffc"
 
 [vars]
 INGEST_CONCURRENCY = "2"
+# MASTER_SCD2_ONLY = "1"  # optional: route equities_master structured to R2 only
 
 [triggers]
 # Hourly at :15. Workers Cron is UTC; for example 00:15 UTC == 09:15 JST.
