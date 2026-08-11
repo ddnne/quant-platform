@@ -6,17 +6,35 @@ Every structured row carries the PIT columns:
 """
 
 from .coverage_ledger import (
+    CollectionReceipt,
+    RequiredCoverageSegment,
     coverage_gaps,
     coverage_summary,
+    evaluate_required_segments,
+    evaluate_segment,
+    plan_required_segments,
+    read_collection_receipts,
+    read_coverage_segments,
     read_dataset_coverage,
+    record_collection_receipt,
+    record_required_segments,
     refresh_coverage_ledger,
 )
 
 __all__ = [
     "__version__",
+    "CollectionReceipt",
+    "RequiredCoverageSegment",
     "coverage_gaps",
     "coverage_summary",
+    "evaluate_required_segments",
+    "evaluate_segment",
+    "plan_required_segments",
+    "read_collection_receipts",
+    "read_coverage_segments",
     "read_dataset_coverage",
+    "record_collection_receipt",
+    "record_required_segments",
     "refresh_coverage_ledger",
 ]
 __version__ = "0.1.0"

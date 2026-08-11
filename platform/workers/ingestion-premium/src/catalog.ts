@@ -5,6 +5,7 @@
  */
 
 import contractDocument from "../../../../data_contracts/jquants_premium_core.json";
+import coverageDocument from "../../../../data_contracts/collection_coverage.json";
 
 export type DateMode = "range" | "today" | "none";
 export type AvailabilityPolicy =
@@ -47,6 +48,20 @@ export interface DatasetSpec extends ContractJson {
   dayParam?: string;
   codeParam: boolean;
   bulkPath?: string;
+  coverage: CollectionCoveragePolicy;
+}
+
+export interface CollectionCoveragePolicy {
+  collection_scope: string;
+  history_target_start: string;
+  history_target_end_rule: string;
+  coverage_mode: string;
+  expected_frequency: string;
+  universe_rule: string;
+  raw_retention_required: boolean;
+  structured_reconciliation_required: boolean;
+  segment_granularity: "calendar_month";
+  governance_tier: "governed" | "experimental";
 }
 
 const rawContracts = contractDocument.datasets as ContractJson[];
@@ -55,12 +70,25 @@ if (contractDocument.schema_version !== 2 || rawContracts.length !== 23) {
   throw new Error("invalid J-Quants Premium-core contract document");
 }
 
+const coverageDefaults = coverageDocument.defaults as CollectionCoveragePolicy;
+const coverageRows = coverageDocument.datasets as Record<
+  string, Partial<CollectionCoveragePolicy>
+>;
+if (
+  coverageDocument.schema_version !== 2 ||
+  coverageDocument.policy_version !== "collection-coverage/v2" ||
+  Object.keys(coverageRows).length !== rawContracts.length
+) {
+  throw new Error("invalid collection Coverage V2 contract document");
+}
+
 export const PREMIUM_CORE_DATASETS: DatasetSpec[] = rawContracts.map((contract) => ({
   ...contract,
   id: contract.dataset_id,
   dateMode: contract.date_mode,
   dayParam: contract.day_param,
   codeParam: contract.code_param,
+  coverage: { ...coverageDefaults, ...coverageRows[contract.dataset_id] },
 }));
 
 const BY_ID: ReadonlyMap<string, DatasetSpec> = new Map(

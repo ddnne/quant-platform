@@ -14,12 +14,16 @@ from types import MappingProxyType
 from typing import Any, Mapping
 
 from .loader import all_contracts
+from .jsda import jsda_contract_for
 
 COVERAGE_CONTRACT_PATH = Path(__file__).with_name("collection_coverage.json")
 COVERAGE_STATUSES = frozenset(
     {"COMPLETE", "PARTIAL", "STALE", "UNKNOWN", "FAILED"}
 )
 GOVERNANCE_TIERS = frozenset({"governed", "experimental"})
+SEGMENT_GRANULARITIES = frozenset({
+    "calendar_month", "official_archive_day", "source_time_series_file"
+})
 _REQUIRED = frozenset(
     {
         "collection_scope",
@@ -30,6 +34,7 @@ _REQUIRED = frozenset(
         "universe_rule",
         "raw_retention_required",
         "structured_reconciliation_required",
+        "segment_granularity",
         "governance_tier",
     }
 )
@@ -46,6 +51,7 @@ class CollectionCoverageContract:
     universe_rule: str
     raw_retention_required: bool
     structured_reconciliation_required: bool
+    segment_granularity: str
     governance_tier: str
 
     @classmethod
@@ -72,6 +78,11 @@ class CollectionCoverageContract:
             raise ValueError(
                 f"{dataset_id}.governance_tier must be governed or experimental"
             )
+        granularity = str(raw["segment_granularity"])
+        if granularity not in SEGMENT_GRANULARITIES:
+            raise ValueError(
+                f"{dataset_id}.segment_granularity is not supported"
+            )
         for name in ("raw_retention_required", "structured_reconciliation_required"):
             if not isinstance(raw[name], bool):
                 raise ValueError(f"{dataset_id}.{name} must be boolean")
@@ -80,8 +91,8 @@ class CollectionCoverageContract:
 
 def _load() -> tuple[str, Mapping[str, CollectionCoverageContract]]:
     document = json.loads(COVERAGE_CONTRACT_PATH.read_text(encoding="utf-8"))
-    if document.get("schema_version") != 1:
-        raise ValueError("collection coverage schema_version must be 1")
+    if document.get("schema_version") != 2:
+        raise ValueError("collection coverage schema_version must be 2")
     policy_version = document.get("policy_version")
     if not isinstance(policy_version, str) or not policy_version:
         raise ValueError("collection coverage policy_version must be non-empty")
@@ -89,7 +100,17 @@ def _load() -> tuple[str, Mapping[str, CollectionCoverageContract]]:
     rows = document.get("datasets")
     if not isinstance(defaults, dict) or not isinstance(rows, dict):
         raise ValueError("coverage defaults and datasets must be objects")
-    expected = {contract.dataset_id for contract in all_contracts()}
+    # JSDA datasets enter the exact READY coverage catalog only after their
+    # governed ingestion lane exists. Corporate transactions remain separate
+    # until their later change-set.
+    governed_jsda = (
+        jsda_contract_for("jsda_otc_bond_reference_prices"),
+        jsda_contract_for("jsda_tokyo_repo_rates"),
+    )
+    expected = {
+        *(contract.dataset_id for contract in all_contracts()),
+        *(contract.dataset_id for contract in governed_jsda),
+    }
     actual = set(rows)
     if actual != expected:
         raise ValueError(
@@ -123,6 +144,7 @@ __all__ = [
     "COVERAGE_CONTRACT_PATH",
     "COVERAGE_STATUSES",
     "GOVERNANCE_TIERS",
+    "SEGMENT_GRANULARITIES",
     "POLICY_VERSION",
     "CollectionCoverageContract",
     "all_coverage_contracts",

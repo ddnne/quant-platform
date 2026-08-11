@@ -17,6 +17,7 @@ from urllib.parse import parse_qs, urlparse
 
 import pytest
 import pit
+from storage.sqlite_store import SqliteStore
 
 _REPO = Path(__file__).resolve().parents[1]
 _SYNC = _REPO / "scripts" / "sync_d1_to_sqlite.py"
@@ -50,6 +51,63 @@ def test_sync_default_tables_include_pit_tables(sync_module):
         "jquants_market_calendar",
     ):
         assert t in sync_module.DEFAULT_TABLES
+    assert "coverage_segments" in sync_module.DEFAULT_TABLES
+    assert "collection_receipts" in sync_module.DEFAULT_TABLES
+
+
+def test_sync_preserves_nullable_collection_receipt_evidence(tmp_path, sync_module):
+    path = tmp_path / "receipt-sync.sqlite"
+    store = SqliteStore(path)
+    receipt = {
+        "source": "jquants",
+        "dataset": "fins_summary",
+        "segment_id": "2025-01",
+        "segment_start": "2025-01-01",
+        "segment_end": "2025-01-31",
+        "expected_scope": '{"expected_frequency":"event_driven"}',
+        "expected_items": None,
+        "observed_items": 0,
+        "raw_page_count": 1,
+        "raw_row_count": 0,
+        "structured_row_count": 0,
+        "pagination_exhausted": 1,
+        "digests_json": '{"raw":"sha256:test"}',
+        "run_id": 7,
+        "status": "SUCCESS",
+        "error": None,
+        "checked_at": "2025-02-01T00:00:00Z",
+    }
+
+    assert sync_module._sync_one(store, "collection_receipts", [receipt]) == (1, 1)
+    saved = store.fetch_all("collection_receipts")
+    assert saved[0]["expected_items"] is None
+    assert saved[0]["error"] is None
+    assert saved[0]["pagination_exhausted"] == 1
+    store.close()
+
+
+def test_sync_preserves_request_planned_coverage_inventory(tmp_path, sync_module):
+    store = SqliteStore(tmp_path / "segment-sync.sqlite")
+    segment = {
+        "source": "jquants",
+        "dataset": "equities_bars_daily",
+        "segment_id": "2025-01",
+        "policy_version": "collection-coverage/v2",
+        "segment_start": "2025-01-01",
+        "segment_end": "2025-01-31",
+        "expected_scope": '{"expected_frequency":"trading_day"}',
+        "expected_items": 31,
+        "status": "UNKNOWN",
+        "receipt_run_id": None,
+        "evaluated_at": "2025-01-01T00:00:00Z",
+        "detail_json": '{"expected_item_unit":"source_query"}',
+    }
+
+    assert sync_module._sync_one(store, "coverage_segments", [segment]) == (1, 1)
+    saved = store.fetch_all("coverage_segments")
+    assert saved[0]["expected_items"] == 31
+    assert saved[0]["receipt_run_id"] is None
+    store.close()
 
 
 def test_cf_export_sync_reaches_nonempty_pit_path(synced_cf_d1_db):

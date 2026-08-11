@@ -64,6 +64,7 @@ const RETRY_MAX_DELAY_MS = 8_000;
 
 // Persistent run-state keys (KV would be cleaner, but D1 is already here).
 const STATE_LAST_RUN = "last_run_summary";
+const COVERAGE_POLICY_VERSION = "collection-coverage/v2";
 
 // ---------------------------------------------------------------------------
 // time helpers (JST = UTC+9)
@@ -165,6 +166,7 @@ async function sha256(value: string): Promise<string> {
 
 interface FetchOutcome {
   rows: Record<string, unknown>[];
+  queries: Record<string, string>[];
   rawBytes: number;
   paginationErrors: number;
   httpStatus: number;
@@ -276,9 +278,11 @@ async function fetchDataset(
     page: { number: number; raw: string; httpStatus: number },
   ) => Promise<void>,
   retainRows = true,
+  onPlan?: (queries: Record<string, string>[]) => Promise<void>,
 ): Promise<FetchOutcome & { rowsSeen: number }> {
   const out: FetchOutcome & { rowsSeen: number } = {
     rows: [],
+    queries: [],
     rowsSeen: 0,
     rawBytes: 0,
     paginationErrors: 0,
@@ -286,16 +290,17 @@ async function fetchDataset(
     error: "",
     retriesUsed: 0,
   };
-  if (!env.JQUANTS_API_KEY) {
-    out.error = "JQUANTS_API_KEY not bound on worker";
-    return out;
-  }
-
   let queries: Record<string, string>[];
   try {
     queries = requestQueries(spec, opts);
   } catch (e) {
     out.error = `invalid date range: ${(e as Error).message}`;
+    return out;
+  }
+  out.queries = queries;
+  if (onPlan) await onPlan(queries);
+  if (!env.JQUANTS_API_KEY) {
+    out.error = "JQUANTS_API_KEY not bound on worker";
     return out;
   }
 
@@ -418,6 +423,156 @@ interface DatasetResult {
   rawBytes: number;
 }
 
+interface CollectionSegment {
+  id: string;
+  start: string;
+  end: string;
+  expectedScope: Record<string, string>;
+  expectedItems: number | null;
+  canonicalMonth: boolean;
+}
+
+function monthEnd(day: string): string {
+  const [year, month] = day.slice(0, 7).split("-").map(Number);
+  return new Date(Date.UTC(year, month, 0)).toISOString().slice(0, 10);
+}
+
+function collectionSegment(
+  spec: DatasetSpec,
+  queries: Record<string, string>[],
+): CollectionSegment {
+  const dates: string[] = [];
+  for (const query of queries) {
+    if (query.from) dates.push(query.from);
+    if (query.to) dates.push(query.to);
+    const dayKey = spec.dayParam || "date";
+    if (query[dayKey]) dates.push(query[dayKey]);
+  }
+  if (dates.length === 0) {
+    throw new Error(`collection window unavailable for ${spec.id}`);
+  }
+  const start = [...dates].sort()[0];
+  const end = [...dates].sort().at(-1)!;
+  const id = start.slice(0, 7) === end.slice(0, 7)
+    ? start.slice(0, 7)
+    : `${start}_${end}`;
+  const month = start.slice(0, 7);
+  const historyStart = spec.coverage.history_target_start;
+  const requiredStart = historyStart.slice(0, 7) === month
+    ? historyStart
+    : `${month}-01`;
+  const currentDay = todayJst();
+  const requiredEnd = currentDay.slice(0, 7) === month
+    ? currentDay
+    : monthEnd(start);
+  const canonicalMonth = id === month
+    && month <= currentDay.slice(0, 7)
+    && start === requiredStart
+    && end === requiredEnd;
+  return {
+    id,
+    start,
+    end,
+    expectedScope: {
+      coverage_mode: spec.coverage.coverage_mode,
+      expected_frequency: spec.coverage.expected_frequency,
+      expected_item_unit: spec.coverage.expected_frequency === "event_driven"
+        ? "source_event"
+        : "source_query",
+      segment_end: end,
+      segment_start: start,
+      universe_rule: spec.coverage.universe_rule,
+    },
+    expectedItems: spec.coverage.expected_frequency === "event_driven"
+      ? null
+      : queries.length,
+    canonicalMonth,
+  };
+}
+
+async function writeRequiredCoverageSegment(
+  env: Env,
+  spec: DatasetSpec,
+  segment: CollectionSegment,
+): Promise<void> {
+  await env.DB.prepare(
+    `INSERT INTO coverage_segments
+       (source, dataset, segment_id, policy_version, segment_start,
+        segment_end, expected_scope, expected_items, status, receipt_run_id,
+        evaluated_at, detail_json)
+     VALUES ('jquants', ?, ?, ?, ?, ?, ?, ?, 'UNKNOWN', NULL, ?, ?)
+     ON CONFLICT(source, dataset, segment_id, policy_version) DO UPDATE SET
+       segment_start=excluded.segment_start,
+       segment_end=excluded.segment_end,
+       expected_scope=excluded.expected_scope,
+       expected_items=excluded.expected_items,
+       status='UNKNOWN',
+       receipt_run_id=NULL,
+       evaluated_at=excluded.evaluated_at,
+       detail_json=excluded.detail_json`,
+  ).bind(
+    spec.id, segment.id, COVERAGE_POLICY_VERSION,
+    segment.start, segment.end, JSON.stringify(segment.expectedScope),
+    segment.expectedItems, toJstIso(new Date()),
+    JSON.stringify({
+      reason: "request queries planned",
+      expected_item_unit: spec.coverage.expected_frequency === "event_driven"
+        ? "source_event"
+        : "source_query",
+      query_units: segment.expectedItems,
+    }),
+  ).run();
+}
+
+async function writeCollectionReceipt(
+  env: Env,
+  spec: DatasetSpec,
+  runId: number,
+  segment: CollectionSegment,
+  evidence: {
+    observedItems: number;
+    rawPageCount: number;
+    rawRowCount: number;
+    structuredRowCount: number;
+    paginationExhausted: boolean;
+    rawDigest: string;
+    manifestKey: string;
+    status: "SUCCESS" | "FAILED";
+    error: string | null;
+  },
+): Promise<void> {
+  await env.DB.prepare(
+    `INSERT INTO collection_receipts
+       (source, dataset, segment_id, segment_start, segment_end,
+        expected_scope, expected_items, observed_items, raw_page_count,
+        raw_row_count, structured_row_count, pagination_exhausted,
+        digests_json, run_id, status, error, checked_at)
+     VALUES ('jquants', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(source, dataset, segment_id, run_id) DO UPDATE SET
+       segment_start=excluded.segment_start,
+       segment_end=excluded.segment_end,
+       expected_scope=excluded.expected_scope,
+       expected_items=excluded.expected_items,
+       observed_items=excluded.observed_items,
+       raw_page_count=excluded.raw_page_count,
+       raw_row_count=excluded.raw_row_count,
+       structured_row_count=excluded.structured_row_count,
+       pagination_exhausted=excluded.pagination_exhausted,
+       digests_json=excluded.digests_json,
+       status=excluded.status,
+       error=excluded.error,
+       checked_at=excluded.checked_at`,
+  ).bind(
+    spec.id, segment.id, segment.start, segment.end,
+    JSON.stringify(segment.expectedScope), segment.expectedItems,
+    evidence.observedItems,
+    evidence.rawPageCount, evidence.rawRowCount, evidence.structuredRowCount,
+    evidence.paginationExhausted ? 1 : 0,
+    JSON.stringify({ raw: evidence.rawDigest, manifest: evidence.manifestKey }),
+    runId, evidence.status, evidence.error, toJstIso(new Date()),
+  ).run();
+}
+
 async function ingestOne(
   env: Env,
   spec: DatasetSpec,
@@ -434,6 +589,7 @@ async function ingestOne(
   const streamD1 = /options/i.test(spec.id);
   let insertedTotal = 0;
   let revisionsTotal = 0;
+  let structuredRowCount = 0;
   let lastEvent: string | null = null;
   const rawPrefix = rawRunPrefix(spec.id, runId, when);
   const rawPages: {
@@ -466,13 +622,22 @@ async function ingestOne(
         const r = await upsertRecords(env, spec, pageRows, when);
         insertedTotal += r.inserted;
         revisionsTotal += r.revisions;
+        structuredRowCount += pageRows.length;
         const ev = latestEventDate(pageRows);
         if (ev && (lastEvent === null || ev > lastEvent)) lastEvent = ev;
       }
     };
 
+  let segment: CollectionSegment | null = null;
+  const onPlan = async (queries: Record<string, string>[]) => {
+    segment = collectionSegment(spec, queries);
+    if (segment.canonicalMonth) {
+      await writeRequiredCoverageSegment(env, spec, segment);
+    }
+  };
+
   const outcome = await fetchDataset(
-    env, spec, opts, fetchImpl, limiter, onPage, !streamD1,
+    env, spec, opts, fetchImpl, limiter, onPage, !streamD1, onPlan,
   );
 
   const rawKey = `${rawPrefix}/manifest.json`;
@@ -520,6 +685,21 @@ async function ingestOne(
   ).run();
 
   if (outcome.error) {
+    if (segment !== null) {
+      await writeCollectionReceipt(env, spec, runId, segment, {
+        observedItems: spec.coverage.expected_frequency === "event_driven"
+          ? outcome.rowsSeen
+          : outcome.queries.length,
+        rawPageCount: rawPages.length,
+        rawRowCount: outcome.rowsSeen,
+        structuredRowCount,
+        paginationExhausted: false,
+        rawDigest: dataDigest,
+        manifestKey: rawKey,
+        status: "FAILED",
+        error: outcome.error,
+      });
+    }
     const finishedAt = toJstIso(new Date());
     const res: DatasetResult = {
       dataset: spec.id, status: "fail",
@@ -538,8 +718,29 @@ async function ingestOne(
     const inserted = await upsertRecords(env, spec, outcome.rows, when);
     insertedTotal = inserted.inserted;
     revisionsTotal = inserted.revisions;
+    structuredRowCount = outcome.rows.length;
     lastEvent = latestEventDate(outcome.rows);
   }
+
+  if (segment === null) {
+    throw new Error(`successful collection has no segment for ${spec.id}`);
+  }
+  await writeCollectionReceipt(env, spec, runId, segment, {
+    // Events are counted as source items so a reconciled zero-event window is
+    // meaningful. Scheduled/calendar collections count successful source
+    // queries; raw/structured rows are reconciled independently below.
+    observedItems: spec.coverage.expected_frequency === "event_driven"
+      ? outcome.rowsSeen
+      : outcome.queries.length,
+    rawPageCount: rawPages.length,
+    rawRowCount: outcome.rowsSeen,
+    structuredRowCount,
+    paginationExhausted: outcome.paginationErrors === 0,
+    rawDigest: dataDigest,
+    manifestKey: rawKey,
+    status: "SUCCESS",
+    error: null,
+  });
 
   const availableBounds = await selectAvailableBounds(env, spec.id);
 
@@ -1104,7 +1305,7 @@ async function handleExportD1(
     "jquants_records_revisions", "jquants_listed_info_revisions",
     "jquants_daily_bars_revisions", "jquants_market_calendar_revisions",
     "ingestion_validation", "ingestion_run_log", "ingestion_watermarks",
-    "raw_retention_manifests",
+    "raw_retention_manifests", "coverage_segments", "collection_receipts",
   ]);
   if (!allowed.has(table)) {
     return json({ error: "table not exportable" }, 400);

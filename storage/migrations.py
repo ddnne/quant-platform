@@ -436,6 +436,174 @@ MIGRATIONS: tuple[Migration, ...] = (
             ON raw_retention_manifests (run_id, completeness, dataset);
         """,
     ),
+    Migration(
+        5,
+        "phase61_collection_coverage_v2",
+        """
+        CREATE TABLE IF NOT EXISTS coverage_segments (
+            source          TEXT NOT NULL,
+            dataset         TEXT NOT NULL,
+            segment_id      TEXT NOT NULL,
+            policy_version  TEXT NOT NULL,
+            segment_start   TEXT NOT NULL,
+            segment_end     TEXT NOT NULL,
+            expected_scope  TEXT NOT NULL,
+            expected_items  INTEGER CHECK
+                (expected_items IS NULL OR expected_items >= 0),
+            status          TEXT NOT NULL CHECK
+                (status IN ('COMPLETE', 'PARTIAL', 'STALE', 'UNKNOWN', 'FAILED')),
+            receipt_run_id  INTEGER,
+            evaluated_at    TEXT NOT NULL,
+            detail_json     TEXT NOT NULL,
+            PRIMARY KEY (source, dataset, segment_id, policy_version),
+            CHECK (segment_start <= segment_end)
+        );
+        CREATE INDEX IF NOT EXISTS ix_coverage_segments_dataset_status
+            ON coverage_segments
+               (dataset, policy_version, status, segment_start, segment_id);
+
+        CREATE TABLE IF NOT EXISTS collection_receipts (
+            source               TEXT NOT NULL,
+            dataset              TEXT NOT NULL,
+            segment_id           TEXT NOT NULL,
+            segment_start        TEXT NOT NULL,
+            segment_end          TEXT NOT NULL,
+            expected_scope       TEXT NOT NULL,
+            expected_items       INTEGER CHECK
+                (expected_items IS NULL OR expected_items >= 0),
+            observed_items       INTEGER NOT NULL CHECK (observed_items >= 0),
+            raw_page_count       INTEGER NOT NULL CHECK (raw_page_count >= 0),
+            raw_row_count        INTEGER NOT NULL CHECK (raw_row_count >= 0),
+            structured_row_count INTEGER NOT NULL CHECK
+                (structured_row_count >= 0),
+            pagination_exhausted INTEGER NOT NULL CHECK
+                (pagination_exhausted IN (0, 1)),
+            digests_json          TEXT NOT NULL,
+            run_id                INTEGER NOT NULL,
+            status                TEXT NOT NULL CHECK
+                (status IN ('SUCCESS', 'FAILED')),
+            error                 TEXT,
+            checked_at            TEXT NOT NULL,
+            PRIMARY KEY (source, dataset, segment_id, run_id),
+            CHECK (segment_start <= segment_end)
+        );
+        CREATE INDEX IF NOT EXISTS ix_collection_receipts_segment_latest
+            ON collection_receipts
+               (source, dataset, segment_id, segment_start, segment_end,
+                checked_at DESC, run_id DESC);
+        """,
+    ),
+    Migration(
+        6,
+        "phase61_jsda_otc_bond_reference_archive",
+        """
+        CREATE TABLE IF NOT EXISTS jsda_otc_bond_reference_prices (
+            source                   TEXT NOT NULL,
+            publication_label_date   TEXT NOT NULL,
+            quote_effective_date     TEXT NOT NULL,
+            security_code            TEXT NOT NULL DEFAULT '',
+            bond_name                TEXT NOT NULL DEFAULT '',
+            quote_effective_time     TEXT NOT NULL,
+            event_time               TEXT NOT NULL,
+            available_at             TEXT NOT NULL,
+            ingested_at              TEXT NOT NULL,
+            coupon_rate              REAL,
+            maturity_date            TEXT,
+            average_price            REAL,
+            average_yield            REAL,
+            median_price             REAL,
+            median_yield             REAL,
+            high_price               REAL,
+            high_yield               REAL,
+            low_price                REAL,
+            low_yield                REAL,
+            individual_investor_flag TEXT,
+            source_row_number        INTEGER,
+            source_url               TEXT NOT NULL,
+            raw_digest               TEXT NOT NULL,
+            segment_id               TEXT NOT NULL,
+            source_format            TEXT NOT NULL,
+            correction_published_at  TEXT,
+            raw_payload              TEXT,
+            PRIMARY KEY
+                (source, publication_label_date, security_code, bond_name)
+        );
+        CREATE TABLE IF NOT EXISTS jsda_otc_bond_reference_prices_revisions AS
+            SELECT * FROM jsda_otc_bond_reference_prices WHERE 0;
+        CREATE UNIQUE INDEX IF NOT EXISTS
+            ux_otc_bond_reference_revisions_version
+            ON jsda_otc_bond_reference_prices_revisions
+               (source, publication_label_date, security_code, bond_name,
+                available_at, ingested_at);
+        CREATE INDEX IF NOT EXISTS ix_jsda_otc_reference_available_at
+            ON jsda_otc_bond_reference_prices
+               (quote_effective_date, available_at, security_code);
+
+        CREATE TRIGGER IF NOT EXISTS invalidate_snapshot_jsda_otc_reference_i
+        AFTER INSERT ON jsda_otc_bond_reference_prices BEGIN
+            UPDATE local_snapshot_policy SET snapshot_ready=0,
+                active_snapshot_id=NULL,
+                last_error='fact mutation invalidated research snapshot'
+            WHERE singleton=1;
+        END;
+        CREATE TRIGGER IF NOT EXISTS invalidate_snapshot_jsda_otc_reference_u
+        AFTER UPDATE ON jsda_otc_bond_reference_prices BEGIN
+            UPDATE local_snapshot_policy SET snapshot_ready=0,
+                active_snapshot_id=NULL,
+                last_error='fact mutation invalidated research snapshot'
+            WHERE singleton=1;
+        END;
+        CREATE TRIGGER IF NOT EXISTS invalidate_snapshot_jsda_otc_reference_d
+        AFTER DELETE ON jsda_otc_bond_reference_prices BEGIN
+            UPDATE local_snapshot_policy SET snapshot_ready=0,
+                active_snapshot_id=NULL,
+                last_error='fact mutation invalidated research snapshot'
+            WHERE singleton=1;
+        END;
+        CREATE TRIGGER IF NOT EXISTS
+            invalidate_snapshot_jsda_otc_reference_revisions_i
+        AFTER INSERT ON jsda_otc_bond_reference_prices_revisions BEGIN
+            UPDATE local_snapshot_policy SET snapshot_ready=0,
+                active_snapshot_id=NULL,
+                last_error='fact mutation invalidated research snapshot'
+            WHERE singleton=1;
+        END;
+        CREATE TRIGGER IF NOT EXISTS
+            invalidate_snapshot_jsda_otc_reference_revisions_u
+        AFTER UPDATE ON jsda_otc_bond_reference_prices_revisions BEGIN
+            UPDATE local_snapshot_policy SET snapshot_ready=0,
+                active_snapshot_id=NULL,
+                last_error='fact mutation invalidated research snapshot'
+            WHERE singleton=1;
+        END;
+        CREATE TRIGGER IF NOT EXISTS
+            invalidate_snapshot_jsda_otc_reference_revisions_d
+        AFTER DELETE ON jsda_otc_bond_reference_prices_revisions BEGIN
+            UPDATE local_snapshot_policy SET snapshot_ready=0,
+                active_snapshot_id=NULL,
+                last_error='fact mutation invalidated research snapshot'
+            WHERE singleton=1;
+        END;
+        """,
+    ),
+    Migration(
+        7,
+        "phase61_jsda_correction_provenance",
+        """
+        ALTER TABLE jsda_otc_bond_reference_prices
+            ADD COLUMN correction_publication_label TEXT;
+        ALTER TABLE jsda_otc_bond_reference_prices
+            ADD COLUMN correction_source_url TEXT;
+        ALTER TABLE jsda_otc_bond_reference_prices
+            ADD COLUMN correction_raw_digest TEXT;
+        ALTER TABLE jsda_otc_bond_reference_prices_revisions
+            ADD COLUMN correction_publication_label TEXT;
+        ALTER TABLE jsda_otc_bond_reference_prices_revisions
+            ADD COLUMN correction_source_url TEXT;
+        ALTER TABLE jsda_otc_bond_reference_prices_revisions
+            ADD COLUMN correction_raw_digest TEXT;
+        """,
+    ),
 )
 
 

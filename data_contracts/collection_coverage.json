@@ -1,11 +1,12 @@
 {
-  "schema_version": 1,
-  "policy_version": "collection-coverage/v1",
+  "schema_version": 2,
+  "policy_version": "collection-coverage/v2",
   "defaults": {
     "collection_scope": "jquants_premium_core",
     "history_target_end_rule": "latest_published_before_collection_cutoff",
     "raw_retention_required": true,
     "structured_reconciliation_required": true,
+    "segment_granularity": "calendar_month",
     "governance_tier": "governed"
   },
   "datasets": {
@@ -146,6 +147,24 @@
       "coverage_mode": "event_reconciled",
       "expected_frequency": "event_driven",
       "universe_rule": "all_filings_in_collection_window"
+    },
+    "jsda_otc_bond_reference_prices": {
+      "collection_scope": "jsda_governed_otc_reference_archive",
+      "history_target_start": "2002-08-02",
+      "history_target_end_rule": "latest_official_archive_index_day",
+      "coverage_mode": "official_archive_index_reconciled",
+      "expected_frequency": "trading_day",
+      "universe_rule": "all_bonds_in_official_publication_file",
+      "segment_granularity": "official_archive_day"
+    },
+    "jsda_tokyo_repo_rates": {
+      "collection_scope": "jsda_authoritative_tokyo_repo_timeseries",
+      "history_target_start": "2012-10-29",
+      "history_target_end_rule": "latest_jsda_publication",
+      "coverage_mode": "authoritative_time_series_reconciled",
+      "expected_frequency": "trading_day",
+      "universe_rule": "all_tenors_and_publication_days_in_official_timeseries_file",
+      "segment_granularity": "source_time_series_file"
     }
   }
 }

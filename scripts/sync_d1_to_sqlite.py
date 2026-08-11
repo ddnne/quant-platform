@@ -52,7 +52,7 @@ if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
 from ingestion.common.secrets import resolve_proxy_config  # noqa: E402
-from ingestion.jquants.catalog import PREMIUM_CORE_DATASETS  # noqa: E402
+from data_contracts import all_coverage_contracts  # noqa: E402
 from paper_runtime import (  # noqa: E402
     begin_snapshot_sync,
     fail_snapshot_sync,
@@ -76,6 +76,8 @@ DEFAULT_TABLES: tuple[str, ...] = (
     "ingestion_validation",
     "ingestion_watermarks",
     "raw_retention_manifests",
+    "coverage_segments",
+    "collection_receipts",
 )
 DEFAULT_PAGE_LIMIT = 500
 DEFAULT_MAX_PAGES = 10_000
@@ -83,6 +85,11 @@ _CHANGE_FEED_TABLES = frozenset({
     "jquants_records",
     "jquants_records_revisions",
 })
+GOVERNED_READY_DATASETS = tuple(
+    contract.dataset_id
+    for contract in all_coverage_contracts()
+    if contract.governance_tier == "governed"
+)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -190,6 +197,8 @@ _NO_AVAILABLE_AT_TABLES = frozenset({
     "ingestion_run_log",
     "ingestion_watermarks",
     "raw_retention_manifests",
+    "coverage_segments",
+    "collection_receipts",
 })
 
 
@@ -245,6 +254,41 @@ def _ensure_control_tables(conn: sqlite3.Connection) -> None:
             created_at TEXT NOT NULL,
             PRIMARY KEY (dataset, run_id)
         );
+        CREATE TABLE IF NOT EXISTS collection_receipts (
+            source TEXT NOT NULL,
+            dataset TEXT NOT NULL,
+            segment_id TEXT NOT NULL,
+            segment_start TEXT NOT NULL,
+            segment_end TEXT NOT NULL,
+            expected_scope TEXT NOT NULL,
+            expected_items INTEGER,
+            observed_items INTEGER NOT NULL,
+            raw_page_count INTEGER NOT NULL,
+            raw_row_count INTEGER NOT NULL,
+            structured_row_count INTEGER NOT NULL,
+            pagination_exhausted INTEGER NOT NULL,
+            digests_json TEXT NOT NULL,
+            run_id INTEGER NOT NULL,
+            status TEXT NOT NULL,
+            error TEXT,
+            checked_at TEXT NOT NULL,
+            PRIMARY KEY (source, dataset, segment_id, run_id)
+        );
+        CREATE TABLE IF NOT EXISTS coverage_segments (
+            source TEXT NOT NULL,
+            dataset TEXT NOT NULL,
+            segment_id TEXT NOT NULL,
+            policy_version TEXT NOT NULL,
+            segment_start TEXT NOT NULL,
+            segment_end TEXT NOT NULL,
+            expected_scope TEXT NOT NULL,
+            expected_items INTEGER,
+            status TEXT NOT NULL,
+            receipt_run_id INTEGER,
+            evaluated_at TEXT NOT NULL,
+            detail_json TEXT NOT NULL,
+            PRIMARY KEY (source, dataset, segment_id, policy_version)
+        );
         """
     )
 
@@ -260,7 +304,9 @@ def _sync_control_plane(
     # Drop export cursor column if present.
     cleaned = []
     for r in rows:
-        row = {k: v for k, v in r.items() if k != "__export_cursor" and v is not None}
+        # Preserve nullable evidence fields such as receipt error/expected_items;
+        # dropping them could make later rows inherit the first row's shape.
+        row = {k: v for k, v in r.items() if k != "__export_cursor"}
         cleaned.append(row)
     if not cleaned:
         return len(rows), 0
@@ -280,6 +326,33 @@ def _sync_control_plane(
             "ON CONFLICT(dataset, run_id) DO UPDATE SET "
             + ", ".join(
                 f"{c}=excluded.{c}" for c in cols if c not in {"dataset", "run_id"}
+            )
+        )
+    elif table == "collection_receipts" and {
+        "source", "dataset", "segment_id", "run_id"
+    } <= set(cols):
+        sql = (
+            f"INSERT INTO {table} ({col_list}) VALUES ({placeholders}) "
+            "ON CONFLICT(source, dataset, segment_id, run_id) DO UPDATE SET "
+            + ", ".join(
+                f"{c}=excluded.{c}"
+                for c in cols
+                if c not in {"source", "dataset", "segment_id", "run_id"}
+            )
+        )
+    elif table == "coverage_segments" and {
+        "source", "dataset", "segment_id", "policy_version"
+    } <= set(cols):
+        sql = (
+            f"INSERT INTO {table} ({col_list}) VALUES ({placeholders}) "
+            "ON CONFLICT(source, dataset, segment_id, policy_version) "
+            "DO UPDATE SET "
+            + ", ".join(
+                f"{c}=excluded.{c}"
+                for c in cols
+                if c not in {
+                    "source", "dataset", "segment_id", "policy_version"
+                }
             )
         )
     elif "id" in cols:
@@ -648,7 +721,7 @@ def main(argv=None) -> int:
                     Path(args.snapshot_dir)
                     if args.snapshot_dir
                     else Path(args.db).resolve().parent / "snapshots",
-                    required_datasets=PREMIUM_CORE_DATASETS,
+                    required_datasets=GOVERNED_READY_DATASETS,
                 )
                 print(
                     f"[sync] committed snapshot={ready.snapshot_id} "
