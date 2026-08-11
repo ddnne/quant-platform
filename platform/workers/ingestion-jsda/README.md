@@ -1,0 +1,33 @@
+# quant-platform-ingestion-jsda
+
+Cloudflare Worker for **JSDA raw acquisition** (3 governed series).
+
+## Why this exists
+
+JSDA sources are **public HTTP** (no API key). They are not blocked from Cloudflare
+egress. What was missing was a Worker — Python `ingestion/jsda/` historically ran
+local-only (XLS/XLSX via xlrd/openpyxl; polite scraping).
+
+## v0 scope
+
+- Daily cron + manual `POST /v1/run` (auth: `INGESTION_RUN_TOKEN`)
+- Store index HTML + discovered data files to R2 `raw/jsda/{dataset}/...`
+- Log runs to D1 `ingestion_run_log` (`source=jsda`, `runtime=cloudflare`)
+
+## Not yet
+
+- Structured parse of `.xls`/`.xlsx` into D1 fact tables
+- Coverage V2 COMPLETE / READY proof for JSDA series
+
+Until structured parse lands on CF (or a sync path from R2 raw → local/CF structured),
+governed JSDA completeness still depends on the Python pipeline reading raw (local or
+exported from R2).
+
+## Deploy
+
+```bash
+cd platform/workers/ingestion-jsda
+npm install
+printf '%s' "$INGESTION_RUN_TOKEN" | npx wrangler secret put INGESTION_RUN_TOKEN
+npx wrangler deploy
+```

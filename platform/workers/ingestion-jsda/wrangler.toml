@@ -1,0 +1,29 @@
+# JSDA governed sources — public HTTP, no API key.
+# Raw artifacts land in R2; structured parse remains Python (xlrd/openpyxl)
+# until a Workers-native structured path is added.
+name = "quant-platform-ingestion-jsda"
+main = "src/index.ts"
+compatibility_date = "2026-08-01"
+workers_dev = true
+
+[[r2_buckets]]
+binding = "RAW_BUCKET"
+bucket_name = "quant-raw"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "quant-ingest"
+database_id = "be6fdcf8-40be-41fc-9535-7facd1fc2ffc"
+
+# Secrets (optional):
+#   INGESTION_RUN_TOKEN — gates /v1/run (reuse premium run token recommended)
+
+[vars]
+USER_AGENT = "quant-platform-ingest/0.1 (+personal-research; JSDA bond stats)"
+
+[triggers]
+# Daily 01:30 UTC == 10:30 JST — after typical JSDA morning publication window.
+crons = ["30 1 * * *"]
+
+[observability]
+enabled = true
