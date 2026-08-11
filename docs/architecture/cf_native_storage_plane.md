@@ -53,9 +53,12 @@ See also:
 - `docs/operations/d1_prune_runbook.md`
 - `docs/operations/surplus_d1_audit.md`
 
-## Implementation status (2026-08-11)
+## Implementation status (2026-08-12)
 
 - Deployed: `ingestion-premium` P0 write-path guard (`write_path_config.ts`, R2 JSONL).
 - Ops: `POST /v1/ops/archive-cold`, `POST /v1/ops/prune-changelog`.
+- Ops: `POST /v1/ops/jsonl-to-parquet-meta` (parquet-manifest/v1 bridge).
+- Ops: `POST /v1/ops/artifacts-join-plan` (read-only Artifacts plan; Mass NO-GO).
+- `equities_master` live path: SCD2 event log + CURRENT.json on R2 (not full daily dump).
 - High-volume structured no longer inserts full history into D1.
-- Cold archive + change_log prune in progress against live D1.
+- Live: D1 ~651MB, cold `<2026-07-01` = 0, COMPLETE preserved.

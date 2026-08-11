@@ -41,6 +41,9 @@ import { isR2Only, wantsSummaryChangeLog } from "./write_path_config";
 import { writeJsonlToR2 } from "./r2_structured_writer";
 import { handleArchiveCold } from "./ops_cold_archive";
 import { handlePruneChangelog } from "./ops_prune_changelog";
+import { writeMasterScd2 } from "./master_scd2/write";
+import { handleParquetManifest } from "./ops_parquet_manifest";
+import { handleArtifactsJoinPlan } from "./ops_artifacts_plan";
 
 export interface Env {
   JQUANTS_API_KEY: string;
@@ -855,6 +858,46 @@ async function upsertRecords(
 
   // P0: high-volume structured → R2 only (do not grow D1 full-history).
   if (isR2Only(spec.id, env)) {
+    // equities_master: SCD2 event log (not full-universe daily dump).
+    if (spec.id === "equities_master") {
+      const scd2 = await writeMasterScd2(
+        env,
+        records.map((record) => ({
+          naturalKey: record.naturalKey,
+          payload: record.payload,
+        })),
+        when,
+      );
+      if (wantsSummaryChangeLog(spec.id)) {
+        const summaryPayload = JSON.stringify({
+          kind: "scd2_master_summary",
+          events_key: scd2.events_key,
+          events: scd2.inserted,
+        });
+        try {
+          await d1WithRetry(() =>
+            env.DB.prepare(
+              `INSERT OR IGNORE INTO ingestion_change_log
+               (table_name, source, dataset, natural_key, event_time, available_at,
+                ingested_at, payload, raw_payload, changed_at)
+               VALUES ('equities_master_scd2', 'jquants', ?, ?, ?, ?, ?, ?, NULL, ?)`,
+            ).bind(
+              spec.id,
+              `scd2-summary:${Date.now()}`,
+              toJstIso(when),
+              toJstIso(when),
+              toJstIso(when),
+              summaryPayload,
+              toJstIso(when),
+            ).run(),
+          );
+        } catch {
+          /* observability only */
+        }
+      }
+      return { inserted: scd2.inserted, revisions: scd2.revisions };
+    }
+
     const runId =
       `r2-${spec.id}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const r2Result = await writeJsonlToR2(
@@ -1474,6 +1517,12 @@ export default {
     }
     if (url.pathname === "/v1/ops/prune-changelog") {
       return handlePruneChangelog(request, env);
+    }
+    if (url.pathname === "/v1/ops/jsonl-to-parquet-meta") {
+      return handleParquetManifest(request, env);
+    }
+    if (url.pathname === "/v1/ops/artifacts-join-plan") {
+      return handleArtifactsJoinPlan(request, env);
     }
     return json({ error: "not found" }, 404);
   },
