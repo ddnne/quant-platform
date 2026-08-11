@@ -47,25 +47,46 @@ def _run_job(
     req = urllib.request.Request(
         url,
         method="POST",
-        headers={"X-Ingestion-Token": token},
+        headers={
+            "X-Ingestion-Token": token.strip(),
+            "User-Agent": "quant-platform-cf-backfill/1.0 (+ops planner)",
+            "Accept": "application/json",
+        },
+        data=b"",  # explicit empty body for POST
     )
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             body = resp.read().decode("utf-8")
-            code = resp.status
+            code = int(resp.status)
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")
-        code = exc.code
+        code = int(exc.code)
     except Exception as exc:  # noqa: BLE001
         return 0, {"status": "fail", "error": str(exc)}
     try:
         payload = json.loads(body) if body else {}
     except json.JSONDecodeError:
         payload = {"status": "fail", "raw": body[:500]}
-    summary = payload.get("summary") if isinstance(payload, dict) else None
-    if not isinstance(summary, dict):
-        summary = {"status": "fail", "detail": payload}
-    return code, summary
+    # Prefer worker JSON summary; CF edge 403 HTML is not entitlement.
+    if isinstance(payload, dict) and "summary" in payload:
+        summary = payload["summary"]
+        if not isinstance(summary, dict):
+            summary = {"status": "fail", "detail": summary}
+        return code, summary
+    if code == 403 and ("<!DOCTYPE" in body or "<html" in body.lower()):
+        return code, {
+            "status": "fail",
+            "error": "edge_forbidden",
+            "detail": body[:200],
+        }
+    if code == 401 or (
+        isinstance(payload, dict) and payload.get("error") == "unauthorized"
+    ):
+        return 401, {"status": "fail", "error": "unauthorized"}
+    return code, {
+        "status": "fail" if code != 200 else "pass",
+        "detail": payload if payload else body[:300],
+    }
 
 
 def main() -> int:

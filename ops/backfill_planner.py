@@ -164,10 +164,22 @@ class BackfillJob:
             self.reason_code = "http_429"
             self.detail = "rate limited"
             return
-        if http_status in {401, 403}:
+        if http_status == 401:
             self.state = "fail"
-            self.reason_code = "auth" if http_status == 401 else "entitlement"
+            self.reason_code = "auth"
             self.detail = f"HTTP {http_status}"
+            return
+        if http_status == 403:
+            # Worker JSON 403 may be entitlement; edge HTML 403 is retryable.
+            detail = str(summary.get("error") or summary.get("detail") or "")
+            if "edge_forbidden" in detail or "html" in detail.lower():
+                self.state = "retry"
+                self.reason_code = "http_429"  # treat as transient edge/rate
+                self.detail = detail[:300]
+            else:
+                self.state = "fail"
+                self.reason_code = "entitlement"
+                self.detail = f"HTTP 403 {detail[:200]}"
             return
         if http_status != 200:
             self.state = "fail"

@@ -42,10 +42,12 @@
 | 9 | Canonical meta-index (no rewrite) | ✅ retained |
 | 10 | Ops MCP evidence chain | ⏳ live ops (backfill) |
 | 11 | Backfill priority via planner | ✅ code; live running |
-| 12 | Phase 7 foundation artifacts/scheduler/eval | ✅ |
+| 12 | Phase 7 foundation artifacts/scheduler/eval | ✅ (+ FailureMode/Regime/StrategyEvidence) |
+| 9 | generated membership digest + drift fail | ✅ `scripts/verify_governed_js_drift.py` |
+| 11 | BackfillPlanner as SoT driver | ✅ planner running (shell companion may coexist) |
 | 13 | Mass GO conditions | **NO-GO** (correct) |
 | 14 | Core tests | ✅ |
-| 15 | Independent review | Grok interim; GLM deferred |
+| 15 | Independent review | Grok interim; GLM OAuth expired |
 | 16 | Final report format | this doc + review |
 
 ## Live Ops

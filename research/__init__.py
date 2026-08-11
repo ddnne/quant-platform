@@ -11,9 +11,12 @@ from research.readiness import (
 from research.artifacts import (
     ExperimentInsight,
     ExperimentPlan,
+    FailureMode,
     FeatureEvidence,
+    RegimeObservation,
     ResearchIdea,
     RejectionReason,
+    StrategyEvidence,
 )
 from research.scheduler import ExperimentScheduler, ScheduledExperiment
 from research.evaluation import EvaluationHarness, EvaluationProtocol, EvaluationReport
@@ -25,14 +28,17 @@ __all__ = [
     "ExperimentInsight",
     "ExperimentPlan",
     "ExperimentScheduler",
+    "FailureMode",
     "FeatureEvidence",
     "MassResearchDisabledError",
     "OperatorOverrideCapability",
     "OperatorOverrideService",
+    "RegimeObservation",
     "RejectionReason",
     "ResearchIdea",
     "ResearchReadinessService",
     "ScheduledExperiment",
+    "StrategyEvidence",
     "VerifiedResearchReadiness",
     "require_mass_research_start",
 ]

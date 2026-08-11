@@ -227,10 +227,79 @@ class RejectionReason:
         }
 
 
+@dataclass(frozen=True)
+class FailureMode:
+    """First-class failure knowledge (not only successes)."""
+
+    failure_id: str
+    subject_id: str
+    mode: str
+    symptoms: tuple[str, ...]
+    root_cause_hypothesis: str
+    mitigation: str = ""
+    version: str = "failure-mode/v1"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "failure_id": self.failure_id,
+            "subject_id": self.subject_id,
+            "mode": self.mode,
+            "symptoms": list(self.symptoms),
+            "root_cause_hypothesis": self.root_cause_hypothesis,
+            "mitigation": self.mitigation,
+            "version": self.version,
+        }
+
+
+@dataclass(frozen=True)
+class RegimeObservation:
+    regime_id: str
+    label: str
+    period_start: str
+    period_end: str
+    characteristics: tuple[str, ...]
+    evidence: Mapping[str, Any] = field(default_factory=dict)
+    version: str = "regime-observation/v1"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "regime_id": self.regime_id,
+            "label": self.label,
+            "period_start": self.period_start,
+            "period_end": self.period_end,
+            "characteristics": list(self.characteristics),
+            "evidence": dict(self.evidence),
+            "version": self.version,
+        }
+
+
+@dataclass(frozen=True)
+class StrategyEvidence:
+    strategy_id: str
+    strategy_spec_version: str
+    ready_snapshot_id: str
+    findings: tuple[str, ...]
+    metrics: Mapping[str, Any] = field(default_factory=dict)
+    version: str = "strategy-evidence/v1"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "strategy_id": self.strategy_id,
+            "strategy_spec_version": self.strategy_spec_version,
+            "ready_snapshot_id": self.ready_snapshot_id,
+            "findings": list(self.findings),
+            "metrics": dict(self.metrics),
+            "version": self.version,
+        }
+
+
 __all__ = [
     "ExperimentInsight",
     "ExperimentPlan",
+    "FailureMode",
     "FeatureEvidence",
+    "RegimeObservation",
     "RejectionReason",
     "ResearchIdea",
+    "StrategyEvidence",
 ]
