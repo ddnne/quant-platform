@@ -299,15 +299,9 @@ def render_projection_sql(
             activated_at TEXT NOT NULL
         );""",
     ]
-    # Best-effort column ensure (no-op if already present; ignore errors at apply time).
-    alter_cols = [
-        "ALTER TABLE dataset_coverage ADD COLUMN projection_generation_id TEXT;",
-        "ALTER TABLE coverage_segments ADD COLUMN projection_generation_id TEXT;",
-        "ALTER TABLE ops_ready_snapshots ADD COLUMN projection_generation_id TEXT;",
-        "ALTER TABLE ops_snapshot_quality ADD COLUMN projection_generation_id TEXT;",
-        "ALTER TABLE ops_b0_status ADD COLUMN projection_generation_id TEXT;",
-        "ALTER TABLE ops_projection_metadata ADD COLUMN projection_generation_id TEXT;",
-    ]
+    # Schema patches live in migrations (0004_projection_generation.sql).
+    # Do NOT emit ALTER TABLE ADD COLUMN here: wrangler d1 execute fails the
+    # entire import on "duplicate column name" when re-applying a projection.
     statements = (["BEGIN TRANSACTION;"] if use_sql_transaction else []) + ddl + [
         # Stage generation record before bulk replace.
         (
@@ -327,11 +321,6 @@ def render_projection_sql(
         "DELETE FROM ops_projection_metadata;",
         "DELETE FROM endpoint_inventory;",
     ]
-    # Note: ALTER cannot run mid-transaction reliably on all SQLite builds after DELETE
-    # of unrelated tables; apply alters before BEGIN when possible. For bundled SQL
-    # consumers, prepend alters outside the transaction.
-    statements = alter_cols + statements
-
     # Insert projection metadata first
     statements.extend(_insert_sql(
         "ops_projection_metadata", PROJECTION_METADATA_COLUMNS, [metadata]

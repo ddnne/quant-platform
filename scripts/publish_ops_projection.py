@@ -127,12 +127,18 @@ def main(argv: list[str] | None = None) -> int:
     print(f"wrote {args.meta_output}")
 
     if args.apply_remote:
-        # D1 remote execute rejects explicit SQL BEGIN/COMMIT.
+        # D1 remote execute rejects explicit SQL BEGIN/COMMIT and fails the
+        # whole import on duplicate-column ALTER (schema is migration-owned).
+        def _keep_remote_line(line: str) -> bool:
+            stripped = line.strip().upper()
+            if stripped in {"BEGIN TRANSACTION;", "BEGIN;", "COMMIT;", "COMMIT"}:
+                return False
+            if stripped.startswith("ALTER TABLE ") and " ADD COLUMN " in stripped:
+                return False
+            return True
+
         remote_sql = "\n".join(
-            line
-            for line in sql.splitlines()
-            if line.strip().upper()
-            not in {"BEGIN TRANSACTION;", "BEGIN;", "COMMIT;", "COMMIT"}
+            line for line in sql.splitlines() if _keep_remote_line(line)
         ) + "\n"
         remote_path = args.output.with_suffix(".d1.sql")
         remote_path.write_text(remote_sql, encoding="utf-8")
