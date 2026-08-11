@@ -3,6 +3,9 @@
 
 The output is applied out-of-band with ``wrangler d1 execute``. The remote MCP
 never receives a projection-write capability.
+
+Phase 6.2 Residual: Added projection metadata with generated_at, source_generation,
+age, and status fields to prevent stale data from appearing fresh.
 """
 
 from __future__ import annotations
@@ -12,6 +15,7 @@ import json
 from pathlib import Path
 import sqlite3
 import sys
+from datetime import datetime, timezone
 from typing import Any, Iterable, Mapping, Sequence
 from urllib.parse import quote
 
@@ -20,6 +24,126 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from paper_runtime import latest_ready_snapshot  # noqa: E402
+
+
+PROJECTION_VERSION = "ops_projection/v1"
+DEFAULT_MAX_AGE_SECONDS = 86400  # 24 hours
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _projection_metadata(
+    db_path: str | Path,
+    *,
+    max_age_seconds: int = DEFAULT_MAX_AGE_SECONDS,
+) -> dict[str, Any]:
+    """Generate projection metadata with generated_at, source_generation, age, status."""
+    path = Path(db_path).resolve()
+    conn = sqlite3.connect("file:" + quote(str(path)) + "?mode=ro", uri=True)
+    try:
+        # Get latest source generation from change log or coverage evaluation
+        try:
+            row = conn.execute(
+                "SELECT MAX(evaluated_at) AS latest_evaluated FROM dataset_coverage"
+            ).fetchone()
+            source_generation = row[0] if row and row[0] else None
+        except sqlite3.OperationalError:
+            source_generation = None
+
+        # Calculate age
+        generated_at = _now()
+        age_seconds = None
+        status = "UNKNOWN"
+
+        if source_generation:
+            try:
+                source_dt = datetime.fromisoformat(source_generation)
+                generated_dt = datetime.fromisoformat(generated_at)
+                age_seconds = int((generated_dt - source_dt).total_seconds())
+
+                if age_seconds <= max_age_seconds:
+                    status = "FRESH"
+                else:
+                    status = "STALE"
+            except (ValueError, TypeError):
+                status = "FAILED"
+        else:
+            status = "FAILED"
+
+        return {
+            "generated_at": generated_at,
+            "source_generation": source_generation,
+            "age_seconds": age_seconds,
+            "status": status,
+            "projection_version": PROJECTION_VERSION,
+            "detail_json": json.dumps({
+                "max_age_seconds": max_age_seconds,
+                "calculation": "age = generated_at - MAX(dataset_coverage.evaluated_at)",
+            }, sort_keys=True, separators=(",", ":")),
+        }
+    finally:
+        conn.close()
+
+
+def _source_inventory(
+    db_path: str | Path,
+) -> list[dict[str, Any]]:
+    """Read canonical endpoint inventory from local DB."""
+    from data_contracts.canonical import all_canonical_datasets  # noqa: E402
+    from data_contracts.loader import all_contracts  # noqa: E402
+
+    # Map canonical contracts to inventory format
+    inventory = []
+    for contract in all_canonical_datasets():
+        # Get inventory status from canonical_datasets.json if available
+        try:
+            import json
+            from data_contracts.canonical import CANONICAL_REGISTRY_PATH
+            canonical_json = json.loads(CANONICAL_REGISTRY_PATH.read_text(encoding="utf-8"))
+            datasets = canonical_json.get("datasets", [])
+            dataset_entry = next(
+                (d for d in datasets if d["dataset_id"] == contract.dataset_id),
+                None
+            )
+            if dataset_entry:
+                sla = dataset_entry.get("sla", {})
+                inventory_entry = {
+                    "dataset_id": contract.dataset_id,
+                    "display_name": contract.display_name,
+                    "source": contract.source,
+                    "governance_tier": contract.governance_tier,
+                    "inventory_status": dataset_entry.get("inventory_status", (
+                        "GOVERNED" if contract.governance_tier == "governed" else "EXPERIMENTAL"
+                    )),
+                    "collection_window": dataset_entry.get("collection_window", "full_day"),
+                    "expected_frequency": contract.expected_frequency,
+                    "coverage_segment_granularity": contract.coverage_segment_granularity,
+                    "research_eligible": dataset_entry.get("research_eligible", True),
+                    "enabled": dataset_entry.get("enabled", True),
+                    "sla": json.dumps(sla, sort_keys=True, separators=(",", ":")),
+                    "historical_start": contract.historical_start,
+                }
+                inventory.append(inventory_entry)
+        except Exception:
+            # Fallback to basic contract info
+            inventory.append({
+                "dataset_id": contract.dataset_id,
+                "display_name": contract.display_name,
+                "source": contract.source,
+                "governance_tier": contract.governance_tier,
+                "inventory_status": "GOVERNED" if contract.governance_tier == "governed" else "EXPERIMENTAL",
+                "collection_window": "full_day",
+                "expected_frequency": contract.expected_frequency,
+                "coverage_segment_granularity": contract.coverage_segment_granularity,
+                "research_eligible": True,
+                "enabled": True,
+                "sla": "{}",
+                "historical_start": contract.historical_start,
+            })
+
+    return inventory
 
 
 DATASET_COVERAGE_COLUMNS = (
@@ -97,6 +221,7 @@ def render_projection_sql(
     db_path: str | Path,
     *,
     snapshot_dir: str | Path | None = None,
+    max_age_seconds: int = DEFAULT_MAX_AGE_SECONDS,
 ) -> str:
     """Return a complete replaceable projection transaction."""
     path = Path(db_path).resolve()
@@ -105,8 +230,21 @@ def render_projection_sql(
         coverage = _read_rows(conn, "dataset_coverage", DATASET_COVERAGE_COLUMNS)
         segments = _read_rows(conn, "coverage_segments", COVERAGE_SEGMENT_COLUMNS)
         b0_status = _read_latest_b0(conn)
+        metadata = _projection_metadata(db_path, max_age_seconds=max_age_seconds)
+        inventory = _source_inventory(db_path)
     finally:
         conn.close()
+
+    ENDPOINT_INVENTORY_COLUMNS = (
+        "dataset_id", "display_name", "source", "governance_tier",
+        "inventory_status", "collection_window", "expected_frequency",
+        "coverage_segment_granularity", "research_eligible", "enabled",
+        "sla", "historical_start",
+    )
+    PROJECTION_METADATA_COLUMNS = (
+        "generated_at", "source_generation", "age_seconds", "status",
+        "projection_version", "detail_json",
+    )
 
     statements = [
         "BEGIN TRANSACTION;",
@@ -115,7 +253,20 @@ def render_projection_sql(
         "DELETE FROM ops_snapshot_quality;",
         "DELETE FROM ops_ready_snapshots;",
         "DELETE FROM ops_b0_status;",
+        "DELETE FROM ops_projection_metadata;",
+        "DELETE FROM endpoint_inventory;",
     ]
+
+    # Insert projection metadata first
+    statements.extend(_insert_sql(
+        "ops_projection_metadata", PROJECTION_METADATA_COLUMNS, [metadata]
+    ))
+
+    # Insert endpoint inventory
+    statements.extend(_insert_sql(
+        "endpoint_inventory", ENDPOINT_INVENTORY_COLUMNS, inventory
+    ))
+
     statements.extend(_insert_sql(
         "dataset_coverage", DATASET_COVERAGE_COLUMNS, coverage
     ))
