@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sqlite3
 import sys
 from pathlib import Path
@@ -30,6 +31,11 @@ from storage.coverage_ledger import (  # noqa: E402
     record_required_segments,
 )
 from storage.trusted_receipt import open_signed_receipt_authority  # noqa: E402
+
+_FROM_TO_RE = re.compile(
+    r"from=(?P<fr>\d{4}-\d{2}-\d{2}).*?to=(?P<to>\d{4}-\d{2}-\d{2})",
+    re.IGNORECASE,
+)
 
 
 def _count_structured(
@@ -48,6 +54,10 @@ def _count_structured(
     return int(row[0]) if row else 0
 
 
+def _windows_overlap(a0: str, a1: str, b0: str, b1: str) -> bool:
+    return a0[:10] <= b1[:10] and b0[:10] <= a1[:10]
+
+
 def _find_raw_bytes(
     data_dir: Path,
     dataset: str,
@@ -56,27 +66,52 @@ def _find_raw_bytes(
     segment_start: str,
     segment_end: str,
 ) -> bytes | None:
-    """Locate raw JSON whose filename/path is consistent with the segment window."""
+    """Locate raw JSON whose filename/path is consistent with the segment window.
+
+    Prefer files that:
+      1. Contain the exact dataset id in the filename (not a sibling *calendar*)
+      2. Declare from=/to= windows that overlap the segment
+    """
     base = data_dir / "raw" / "jquants"
     if not base.is_dir():
         return None
-    candidates = list(base.rglob("*.json"))
+    # Exact dataset prefix preferred (markets_calendar_from=... not equities_earnings_calendar)
+    prefix = f"{dataset}_"
+    candidates = [
+        p
+        for p in base.rglob("*.json")
+        if p.name.startswith(prefix) or f"/{dataset}_" in str(p).replace("\\", "/")
+    ]
+    if not candidates:
+        # Fallback: filename contains dataset token as a whole path segment-ish
+        candidates = [p for p in base.rglob("*.json") if dataset in p.name]
+
     month = segment_id if len(segment_id) == 7 else segment_id[:7]
-    # Prefer dataset-named files overlapping the segment dates.
     ranked: list[tuple[int, Path]] = []
     for path in candidates:
         name = path.name
         score = 0
-        if dataset.replace("_", "") in name.replace("_", "") or dataset in name:
+        if name.startswith(prefix):
+            score += 20
+        elif dataset in name:
             score += 10
-        if month in name or month in str(path):
-            score += 5
-        if segment_start[:7] in name or segment_end[:7] in name:
-            score += 3
+        m = _FROM_TO_RE.search(name)
+        if m:
+            fr, to = m.group("fr"), m.group("to")
+            if _windows_overlap(segment_start, segment_end, fr, to):
+                score += 30
+            else:
+                # Named for this dataset but wrong window — do not use.
+                continue
+        else:
+            if month in name or month in str(path):
+                score += 5
+            if segment_start[:7] in name or segment_end[:7] in name:
+                score += 3
         if score > 0:
             ranked.append((score, path))
     ranked.sort(key=lambda item: (item[0], item[1].stat().st_mtime), reverse=True)
-    for _score, path in ranked[:80]:
+    for _score, path in ranked[:120]:
         try:
             raw = path.read_bytes()
         except OSError:
@@ -94,6 +129,17 @@ def main() -> int:
     ap.add_argument("--segment-id", default="", help="optional single segment e.g. 2024-01")
     ap.add_argument("--limit", type=int, default=12)
     ap.add_argument("--min-structured", type=int, default=1)
+    ap.add_argument(
+        "--include-complete",
+        action="store_true",
+        help="Also re-issue for segments already COMPLETE (default: skip COMPLETE).",
+    )
+    ap.add_argument(
+        "--order",
+        choices=("asc", "desc"),
+        default="desc",
+        help="Segment scan order by segment_start (default: desc = recent first).",
+    )
     args = ap.parse_args()
 
     db = Path(args.db)
@@ -110,21 +156,30 @@ def main() -> int:
     conn.row_factory = sqlite3.Row
     q = (
         "SELECT source, dataset, segment_id, segment_start, segment_end, "
-        "expected_scope, expected_items FROM coverage_segments "
+        "expected_scope, expected_items, status FROM coverage_segments "
         "WHERE dataset=? AND policy_version='collection-coverage/v2'"
     )
     params: list[object] = [args.dataset]
     if args.segment_id:
         q += " AND segment_id=?"
         params.append(args.segment_id)
-    q += " ORDER BY segment_start DESC LIMIT ?"
+    if not args.include_complete:
+        q += " AND status <> 'COMPLETE'"
+    order = "ASC" if args.order == "asc" else "DESC"
+    q += f" ORDER BY segment_start {order} LIMIT ?"
     params.append(args.limit)
     segments = conn.execute(q, params).fetchall()
     if not segments:
         print("no segments found", file=sys.stderr)
         return 1
 
+    max_run = conn.execute(
+        "SELECT COALESCE(MAX(run_id), 900000) FROM collection_receipts"
+    ).fetchone()[0]
+    next_run = int(max_run) + 1
+
     issued = 0
+    skipped = {"no_struct": 0, "no_raw": 0}
     for row in segments:
         scope = row["expected_scope"]
         if isinstance(scope, str):
@@ -132,19 +187,27 @@ def main() -> int:
                 scope = json.loads(scope)
             except json.JSONDecodeError:
                 scope = {}
+        scope_dict = dict(scope or {})
+        unit = scope_dict.get("expected_item_unit")
+        # Non-event segments need explicit expected_items for COMPLETE
+        # (coverage_ledger.evaluate_segment). source_query unit → 1 plan.
+        expected_items = row["expected_items"]
+        if expected_items is None and unit == "source_query":
+            expected_items = 1
         required = RequiredCoverageSegment(
             source=str(row["source"]),
             dataset=str(row["dataset"]),
             segment_id=str(row["segment_id"]),
             segment_start=str(row["segment_start"]),
             segment_end=str(row["segment_end"]),
-            expected_scope=dict(scope or {}),
-            expected_items=row["expected_items"],
+            expected_scope=scope_dict,
+            expected_items=expected_items,
         )
         structured = _count_structured(
             conn, required.dataset, required.segment_start, required.segment_end
         )
         if structured < args.min_structured:
+            skipped["no_struct"] += 1
             print(
                 f"skip {required.segment_id}: structured={structured} < {args.min_structured}"
             )
@@ -157,10 +220,10 @@ def main() -> int:
             segment_end=required.segment_end,
         )
         if raw is None:
+            skipped["no_raw"] += 1
             print(f"skip {required.segment_id}: no raw bytes for window")
             continue
         # Independent observed: source_query unit expects 1 exhausted query plan.
-        unit = (required.expected_scope or {}).get("expected_item_unit")
         observed = 1 if unit == "source_query" else structured
         if required.expected_items is not None and unit == "source_query":
             observed = int(required.expected_items)
@@ -168,7 +231,7 @@ def main() -> int:
         raw_rows = structured
         receipt = authority.issue(
             required=required,
-            run_id=900_000 + issued,
+            run_id=next_run,
             raw=raw,
             observed_items=observed,
             structured_row_count=structured,
@@ -178,6 +241,7 @@ def main() -> int:
             raw_manifest_digest=None,
             source_request_digest=None,
         )
+        next_run += 1
         record_required_segments(conn, [required])
         record_collection_receipt(conn, receipt)
         issued += 1
@@ -186,9 +250,19 @@ def main() -> int:
             f"structured={structured} run_id={receipt.run_id}"
         )
     conn.commit()
+    print(f"summary issued={issued} skipped={skipped}")
     if issued:
         rows = refresh_coverage_ledger(conn, db, datasets=[args.dataset])
         conn.commit()
+        complete = conn.execute(
+            "SELECT COUNT(*) FROM coverage_segments WHERE dataset=? AND status='COMPLETE'",
+            (args.dataset,),
+        ).fetchone()[0]
+        total = conn.execute(
+            "SELECT COUNT(*) FROM coverage_segments WHERE dataset=?",
+            (args.dataset,),
+        ).fetchone()[0]
+        print(f"local coverage {args.dataset}: COMPLETE={complete}/{total}")
         for r in rows:
             print(
                 f"coverage {r.get('dataset')} status={r.get('status')} "
