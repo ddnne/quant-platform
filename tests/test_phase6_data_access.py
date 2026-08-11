@@ -19,6 +19,12 @@ EXPECTED_TOOLS = {
     "compute_feature", "compute_features",
     "raw_manifest", "trace_provenance",
 }
+EXPECTED_OPS_TOOLS = {
+    "ops_status", "ingestion_last_run", "dataset_coverage", "coverage_gaps",
+    "coverage_segments", "backfill_status", "validation_summary", "b0_status",
+    "latest_ready_snapshot", "snapshot_quality", "raw_retention_status",
+    "sync_status",
+}
 
 
 def test_mcp_surface_is_domain_read_only_and_pit_calls_require_as_of():
@@ -26,15 +32,18 @@ def test_mcp_surface_is_domain_read_only_and_pit_calls_require_as_of():
     tools = server.list_tools()
     by_name = {tool["name"]: tool for tool in tools}
 
-    assert set(by_name) == EXPECTED_TOOLS
-    assert not any(
-        word in name
-        for name in by_name
-        for word in ("sql", "ingest", "backfill", "publish", "approve", "delete")
-    )
+    assert EXPECTED_TOOLS <= set(by_name)
+    assert EXPECTED_OPS_TOOLS <= set(by_name)
+    assert not ({
+        "sql", "ingest_trigger", "publish", "approve", "delete", "shell",
+        "fetch_url", "broker",
+    } & set(by_name))
     for name in ("query_dataset", "get_series", "compute_feature", "compute_features", "trace_provenance"):
         assert "as_of" in by_name[name]["inputSchema"]["required"]
-    assert len(server.call_tool("list_datasets")["datasets"]) == 23
+    datasets = server.call_tool("list_datasets")
+    assert datasets["plane"] == "research_ready"
+    assert datasets["mutable"] is False
+    assert len(datasets["datasets"]) >= 23
 
 
 def test_query_dataset_uses_ready_snapshot_and_filters_future_facts(

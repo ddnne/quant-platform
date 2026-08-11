@@ -12,9 +12,9 @@ import json
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any, Mapping
 
-from data_access import QuantDataAccess, QuantDataConfig
+from data_access import QuantDataAccess, QuantDataConfig, QuantReadDomainService
 
 
 @dataclass(frozen=True)
@@ -52,7 +52,7 @@ _PAGING = {
     "page_token": _STRING,
 }
 
-TOOLS: tuple[Tool, ...] = (
+RESEARCH_TOOLS: tuple[Tool, ...] = (
     Tool("list_datasets", "List allowlisted canonical datasets.", _object()),
     Tool("describe_dataset", "Describe one canonical dataset and collection policy.", _object({"dataset": _STRING}, ("dataset",))),
     Tool("coverage_summary", "Summarize the persistent coverage ledger for a READY snapshot.", _object(_SNAPSHOT)),
@@ -123,10 +123,73 @@ TOOLS: tuple[Tool, ...] = (
     ),
 )
 
+OPS_TOOLS: tuple[Tool, ...] = (
+    Tool("ops_status", "Read mutable current ingestion control-plane status.", _object()),
+    Tool("ingestion_last_run", "Read the latest current ingestion run.", _object()),
+    Tool(
+        "dataset_coverage",
+        "Read one dataset's current Coverage V2 aggregate.",
+        _object({"dataset": _STRING}, ("dataset",)),
+    ),
+    Tool("coverage_gaps", "List current governed Coverage V2 gaps.", _object()),
+    Tool(
+        "coverage_segments",
+        "Read bounded current Coverage V2 segment evidence.",
+        _object({
+            "dataset": _STRING,
+            "status": {
+                "type": "string",
+                "enum": ["COMPLETE", "PARTIAL", "FAILED", "UNKNOWN", "STALE"],
+            },
+            "limit": {"type": "integer", "minimum": 1, "maximum": 500},
+        }),
+    ),
+    Tool(
+        "backfill_status",
+        "Count current required, complete, and remaining segments.",
+        _object({"dataset": _STRING}),
+    ),
+    Tool("validation_summary", "Read the latest current validation verdicts.", _object()),
+    Tool("b0_status", "Read the current recorded B0 gate verdict.", _object()),
+    Tool(
+        "latest_ready_snapshot",
+        "Describe the latest immutable published READY generation.",
+        _object(),
+    ),
+    Tool(
+        "snapshot_quality",
+        "Read quality evidence attached to an immutable READY generation.",
+        _object(_SNAPSHOT),
+    ),
+    Tool(
+        "raw_retention_status",
+        "Read current raw-retention attestations linked to ingestion runs.",
+        _object({"dataset": _STRING}),
+    ),
+    Tool("sync_status", "Read current sync watermarks and change sequence.", _object()),
+)
+
+_OPS_BY_NAME = {tool.name: tool for tool in OPS_TOOLS}
+TOOLS: tuple[Tool, ...] = tuple(
+    _OPS_BY_NAME.get(tool.name, tool) for tool in RESEARCH_TOOLS
+) + tuple(tool for tool in OPS_TOOLS if tool.name not in {
+    candidate.name for candidate in RESEARCH_TOOLS
+})
+
 
 class QuantDataMCPServer:
-    def __init__(self, access: QuantDataAccess | None = None) -> None:
-        self.access = access or QuantDataAccess()
+    def __init__(
+        self,
+        access: QuantDataAccess | None = None,
+        *,
+        service: QuantReadDomainService | None = None,
+        ops_db_path: str | Path = "data/structured/ingestion.sqlite",
+    ) -> None:
+        if access is not None and service is not None:
+            raise ValueError("pass access or service, not both")
+        self.service = service or QuantReadDomainService(
+            access, ops_db_path=ops_db_path
+        )
         self._tools = {tool.name: tool for tool in TOOLS}
 
     def list_tools(self) -> list[dict[str, Any]]:
@@ -135,13 +198,17 @@ class QuantDataMCPServer:
     def call_tool(self, name: str, arguments: Mapping[str, Any] | None = None) -> Any:
         if name not in self._tools:
             raise KeyError(f"unknown Quant Data Access tool: {name!r}")
-        method = getattr(self.access, name)
-        return method(**dict(arguments or {}))
+        return self.service.call_tool(name, arguments)
 
 
-def create_server(*, snapshot_dir: str | Path = "data/research_snapshots") -> QuantDataMCPServer:
+def create_server(
+    *,
+    snapshot_dir: str | Path = "data/research_snapshots",
+    ops_db_path: str | Path = "data/structured/ingestion.sqlite",
+) -> QuantDataMCPServer:
     return QuantDataMCPServer(
-        QuantDataAccess(QuantDataConfig(snapshot_dir=Path(snapshot_dir)))
+        QuantDataAccess(QuantDataConfig(snapshot_dir=Path(snapshot_dir))),
+        ops_db_path=ops_db_path,
     )
 
 
@@ -191,9 +258,10 @@ def _serve_stdio(server: QuantDataMCPServer) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Read-only Quant Data Access MCP")
     parser.add_argument("--snapshot-dir", default="data/research_snapshots")
+    parser.add_argument("--ops-db", default="data/structured/ingestion.sqlite")
     parser.add_argument("--list-tools", action="store_true")
     args = parser.parse_args(argv)
-    server = create_server(snapshot_dir=args.snapshot_dir)
+    server = create_server(snapshot_dir=args.snapshot_dir, ops_db_path=args.ops_db)
     if args.list_tools:
         print(json.dumps({"tools": server.list_tools()}, sort_keys=True))
         return 0
@@ -204,4 +272,11 @@ if __name__ == "__main__":
     raise SystemExit(main())
 
 
-__all__ = ["TOOLS", "QuantDataMCPServer", "create_server", "main"]
+__all__ = [
+    "OPS_TOOLS",
+    "RESEARCH_TOOLS",
+    "TOOLS",
+    "QuantDataMCPServer",
+    "create_server",
+    "main",
+]
