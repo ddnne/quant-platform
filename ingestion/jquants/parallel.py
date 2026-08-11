@@ -180,7 +180,12 @@ def expand_jobs(
         #   * no applicable date param → one job with no date filter.
         date_windows: list[tuple[Optional[str], Optional[str]]] = []
         date_days: list[str] = []
-        if from_date and to_date and supports_range:
+        if from_date and to_date and supports_date and supports_range:
+            # J-Quants equities bars/daily rejects bare from/to without code
+            # ("requires date or code"). Prefer per-day ``date=`` when both
+            # styles are declared so backfill works without a code filter.
+            date_days = iter_dates(from_date, to_date)
+        elif from_date and to_date and supports_range:
             date_windows = iter_date_windows(from_date, to_date, chunk_days)
         elif from_date and to_date and supports_date:
             date_days = iter_dates(from_date, to_date)

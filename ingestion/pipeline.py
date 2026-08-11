@@ -504,34 +504,63 @@ def _run_jquants_catalog(
                         or str(when)[:10]
                     )
                     target_end = str(target_end)[:10]
+                    job_start = str(
+                        params.get("from") or params.get("date") or target_end
+                    )[:10]
+                    job_end = target_end
+                    # First plan without expected counts to discover segment ids.
                     segs = list(
                         plan_required_segments(
                             policy, target_end, source="jquants"
                         )
                     )
-                    req = None
-                    job_start = str(
-                        params.get("from") or params.get("date") or target_end
-                    )[:10]
-                    job_end = target_end
+                    req0 = None
                     for s in segs:
                         if s.segment_start <= job_end and s.segment_end >= job_start:
-                            req = s
+                            req0 = s
                             break
-                    if req is None and segs:
-                        req = segs[-1]
-                    if req is not None:
+                    if req0 is None and segs:
+                        req0 = segs[-1]
+                    if req0 is not None:
+                        unit = (req0.expected_scope or {}).get(
+                            "expected_item_unit", "source_query"
+                        )
+                        # Non-event source_query: one exhausted fetch for the
+                        # segment window is the explicit expected plan (1).
+                        exp_map = None
+                        if (
+                            policy.expected_frequency != "event_driven"
+                            and unit == "source_query"
+                        ):
+                            exp_map = {req0.segment_id: 1}
+                            segs = list(
+                                plan_required_segments(
+                                    policy,
+                                    target_end,
+                                    source="jquants",
+                                    expected_items_by_segment=exp_map,
+                                )
+                            )
+                            req = next(
+                                s for s in segs if s.segment_id == req0.segment_id
+                            )
+                        else:
+                            req = req0
                         record_required_segments(store._conn, [req])
                         run_id_row = store._conn.execute(
                             "SELECT COALESCE(MAX(id), 0) FROM ingestion_run_log"
                         ).fetchone()
                         run_id = int(run_id_row[0]) if run_id_row else 0
+                        if unit == "source_query":
+                            obs = 1 if len(rows) > 0 else 0
+                        else:
+                            obs = len(rows)
                         emit_segment_receipt(
                             store._conn,
                             required=req,
                             run_id=run_id,
                             raw=raw_bytes,
-                            observed_items=len(rows),
+                            observed_items=obs,
                             structured_row_count=n,
                             raw_row_count=len(rows),
                             pagination_exhausted=True,
