@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any, Mapping
 
 from risk import JsonRiskStore
 from strategies.paper import JsonPaperStore, PaperRunConfig, PaperRunResult, run_paper
@@ -28,6 +29,11 @@ from .types import (
     AuthorizedPaperExecutionRequest,
 )
 
+try:
+    from selection.screen import ExperimentBudget
+except ImportError:
+    ExperimentBudget = None  # type: ignore[misc,assignment]
+
 
 @dataclass(frozen=True)
 class AgentPipelineResult:
@@ -41,6 +47,7 @@ class AgentPipelineResult:
     risk_audit: RiskAudit
     risk_audit_path: Path
     artifacts: tuple[ArtifactEnvelope, ...] = ()
+    budget_used: tuple[tuple[str, Any], ...] = ()
 
 
 def _is_within(path: Path, parent: Path) -> bool:
@@ -61,6 +68,7 @@ class AgentPaperPipeline:
         risk_store: JsonRiskStore | None = None,
         strategist: StrategistAgent | None = None,
         risk_agent: RiskAgent | None = None,
+        experiment_budget: ExperimentBudget | None = None,
     ) -> None:
         self.paper_store = paper_store or JsonPaperStore()
         self.risk_store = risk_store or JsonRiskStore()
@@ -74,12 +82,29 @@ class AgentPaperPipeline:
         self.pm = PortfolioManagerAgent()
         self.trader = TraderAgent()
         self.risk_agent = risk_agent or RiskAgent()
+        self.experiment_budget = experiment_budget
+        self._paper_runs_count = 0
 
     def run(self, config: PaperRunConfig) -> AgentPipelineResult:
         universe = tuple(config.universe or ())
         if not universe:
             raise ValueError("agent pipeline requires an explicit non-empty universe")
         request = ResearchRequest(as_of=config.end, universe=universe)
+
+        # Check budget if enabled
+        if self.experiment_budget is not None:
+            try:
+                from selection.screen import early_stop
+                if early_stop(
+                    generation=0,
+                    paper_runs=self._paper_runs_count,
+                    model_calls=0,
+                    budget=self.experiment_budget,
+                ):
+                    raise RuntimeError("Experiment budget exhausted before pipeline run")
+            except ImportError:
+                pass
+
         # These roles consume the same immutable request and have no shared
         # state. Sort after collection so scheduling never affects results.
         with ThreadPoolExecutor(max_workers=len(self.researchers)) as executor:
@@ -100,6 +125,10 @@ class AgentPaperPipeline:
         paper_result = self.paper_store.load(paper_path)
         audit = self.risk_agent.audit(paper_result)
         audit_path = self.risk_store.save(audit)
+
+        # Track paper runs for budget enforcement
+        self._paper_runs_count += 1
+
         snapshot_id = str(paper_result.reproducibility["data_snapshot_id"])
         spec_artifact = ArtifactEnvelope.create(
             type="strategy_spec",
@@ -150,6 +179,18 @@ class AgentPaperPipeline:
             parent_ids=(paper_artifact.artifact_id,),
             payload=audit.to_dict(),
         )
+
+        # Build budget usage tracking
+        budget_used_items: tuple[tuple[str, Any], ...] = ()
+        if self.experiment_budget is not None:
+            budget_used_items = (
+                ("paper_runs", self._paper_runs_count),
+                ("max_paper_runs", self.experiment_budget.max_paper_runs),
+                ("max_generations", self.experiment_budget.max_generations),
+                ("max_model_calls", self.experiment_budget.max_model_calls),
+                ("budget_enabled", True),
+            )
+
         return AgentPipelineResult(
             memos=memos,
             composed_memo=composed,
@@ -167,6 +208,7 @@ class AgentPaperPipeline:
                 paper_artifact,
                 risk_artifact,
             ),
+            budget_used=budget_used_items,
         )
 
 
