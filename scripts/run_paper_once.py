@@ -99,13 +99,12 @@ def main(argv: list[str] | None = None) -> int:
     db_path = Path(args.db)
     if args.strategy == "momentum":
         strategy = MomentumFeatureStrategy(
-            db_path,
             n=args.momentum_n,
             top_k=args.top_k,
             min_momentum=args.min_momentum,
         )
     else:
-        strategy = Return1dFeatureStrategy(db_path, threshold=args.threshold)
+        strategy = Return1dFeatureStrategy(threshold=args.threshold)
 
     config = PaperRunConfig(
         start=args.start,
@@ -125,6 +124,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.json:
         summary = {
+            "experiment_id": result.experiment_id,
             "run_id": result.run_id,
             "lifecycle": result.lifecycle.value,
             "strategy_id": result.metadata["strategy_id"],

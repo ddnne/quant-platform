@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date, timedelta
 
 import features
@@ -58,12 +59,14 @@ def test_paper_run_completes_with_metrics_trades_and_reproducibility(
     paper_fixture,
 ):
     db, days = paper_fixture
-    strategy = Return1dFeatureStrategy(db, threshold=0.0)
+    strategy = Return1dFeatureStrategy(threshold=0.0)
 
     result = run_paper(strategy, _config(db, days))
 
     assert isinstance(result, PaperRunResult)
+    assert result.experiment_id
     assert result.run_id
+    assert result.run_id == result.experiment_id
     assert result.lifecycle is Lifecycle.PAPER
     assert result.equity_curve
     assert result.trades
@@ -81,7 +84,10 @@ def test_paper_run_completes_with_metrics_trades_and_reproducibility(
         "cost_model",
         "strategy_id",
         "strategy_params",
-        "db_fingerprint",
+        "data_snapshot_id",
+        "git_commit",
+        "strategy_definition_hash",
+        "feature_definition_hashes",
     }
     assert required <= metadata.keys()
     assert metadata["core_engine_version"] == CORE_ENGINE_VERSION
@@ -92,17 +98,23 @@ def test_paper_run_completes_with_metrics_trades_and_reproducibility(
     assert metadata["cost_model"]["bps_one_way"] == 5.0
     assert metadata["strategy_id"] == "return_1d_feature"
     assert metadata["strategy_params"] == {"threshold": 0.0}
-    assert metadata["db_fingerprint"]
+    assert metadata["data_snapshot_id"].startswith("sha256:")
+    assert metadata["strategy_definition_hash"].startswith("sha256:")
+    assert metadata["feature_definition_hashes"]["return_1d"].startswith(
+        "sha256:"
+    )
+    assert "db_fingerprint" not in metadata
 
 
 def test_identical_inputs_have_a_deterministic_run_id(paper_fixture):
     db, days = paper_fixture
     config = _config(db, days)
 
-    first = run_paper(Return1dFeatureStrategy(db), config)
-    second = run_paper(Return1dFeatureStrategy(db), config)
+    first = run_paper(Return1dFeatureStrategy(), config)
+    second = run_paper(Return1dFeatureStrategy(), config)
 
     assert first.run_id == second.run_id
+    assert first.experiment_id == second.experiment_id
     assert first.metadata == second.metadata
     assert first.metrics == second.metrics
     assert first.trades == second.trades
@@ -111,7 +123,7 @@ def test_identical_inputs_have_a_deterministic_run_id(paper_fixture):
 
 def test_momentum_example_runs_and_pins_its_feature_version(paper_fixture):
     db, days = paper_fixture
-    strategy = MomentumFeatureStrategy(db, n=5, top_k=1, min_momentum=0.0)
+    strategy = MomentumFeatureStrategy(n=5, top_k=1, min_momentum=0.0)
 
     result = run_paper(strategy, _config(db, days, lifecycle=Lifecycle.DRAFT))
 
@@ -124,6 +136,45 @@ def test_momentum_example_runs_and_pins_its_feature_version(paper_fixture):
         "min_momentum": 0.0,
     }
     assert result.metadata["feature_versions"]["momentum_n"]
+
+
+def test_lifecycle_does_not_change_experiment_or_run_identity(paper_fixture):
+    db, days = paper_fixture
+    paper = _config(db, days, lifecycle=Lifecycle.PAPER)
+    draft = replace(paper, lifecycle=Lifecycle.DRAFT)
+
+    paper_result = run_paper(Return1dFeatureStrategy(), paper)
+    draft_result = run_paper(Return1dFeatureStrategy(), draft)
+
+    assert paper_result.experiment_id == draft_result.experiment_id
+    assert paper_result.run_id == draft_result.run_id
+    assert paper_result.lifecycle is Lifecycle.PAPER
+    assert draft_result.lifecycle is Lifecycle.DRAFT
+
+
+def test_engine_config_change_creates_a_distinct_experiment(paper_fixture):
+    db, days = paper_fixture
+    baseline = _config(db, days)
+
+    first = run_paper(Return1dFeatureStrategy(), baseline)
+    second = run_paper(
+        Return1dFeatureStrategy(), replace(baseline, cost_bps=25.0)
+    )
+
+    assert first.experiment_id != second.experiment_id
+
+
+def test_paper_run_fails_closed_when_snapshot_changes(
+    paper_fixture, monkeypatch
+):
+    from strategies.paper import runner
+
+    db, days = paper_fixture
+    snapshots = iter(("sha256:before", "sha256:after"))
+    monkeypatch.setattr(runner, "data_snapshot_id", lambda _path: next(snapshots))
+
+    with pytest.raises(RuntimeError, match="database changed during the run"):
+        run_paper(Return1dFeatureStrategy(), _config(db, days))
 
 
 def test_feature_strategy_passes_every_decision_as_of_explicitly(
@@ -140,7 +191,7 @@ def test_feature_strategy_passes_every_decision_as_of_explicitly(
 
     monkeypatch.setattr(features, "compute", spy_compute)
 
-    run_paper(Return1dFeatureStrategy(db), _config(db, days))
+    run_paper(Return1dFeatureStrategy(), _config(db, days))
 
     assert calls
     assert {feature_id for feature_id, _ in calls} == {"return_1d"}
@@ -152,4 +203,3 @@ def test_feature_strategy_passes_every_decision_as_of_explicitly(
 def test_lifecycle_labels_are_stable_public_values():
     assert Lifecycle.DRAFT.value == "Draft"
     assert Lifecycle.PAPER.value == "Paper"
-

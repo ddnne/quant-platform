@@ -9,12 +9,19 @@ from typing import Any
 
 import features
 from core import BacktestResult, run_backtest, standard_cost
+from paper_runtime import (
+    DATA_SNAPSHOT_FORMAT,
+    data_snapshot_id,
+    feature_definition_hashes,
+    git_commit,
+    strategy_definition_hash,
+)
 
 from .store import JsonPaperStore
-from .types import Lifecycle, PaperRunConfig, PaperRunResult
+from .types import PaperRunConfig, PaperRunResult
 
 
-PAPER_RUNNER_VERSION = "0.5.0"
+PAPER_RUNNER_VERSION = "0.5.5"
 
 
 def fingerprint_db(db_path: str | Path) -> str:
@@ -56,8 +63,11 @@ def _reproducibility(
     result: BacktestResult,
     *,
     config: PaperRunConfig,
-    db_fingerprint: str,
+    snapshot_id: str,
     feature_versions: dict[str, str],
+    feature_hashes: dict[str, str],
+    strategy_hash: str,
+    commit: str,
 ) -> dict[str, Any]:
     core_md = result.metadata
     return {
@@ -66,6 +76,7 @@ def _reproducibility(
         "pit_api_version": core_md["pit_api_version"],
         "features_runtime_version": features.__version__,
         "feature_versions": feature_versions,
+        "feature_definition_hashes": feature_hashes,
         "period": {"start": config.start, "end": config.end},
         "execution_mode": core_md["execution_mode"],
         "as_of_rule": core_md["as_of_rule"],
@@ -78,29 +89,47 @@ def _reproducibility(
         "params": dict(core_md["strategy_params"]),
         "strategy_params": dict(core_md["strategy_params"]),
         "strategy_params_hash": core_md["strategy_params_hash"],
+        "strategy_definition_hash": strategy_hash,
+        "git_commit": commit,
         "db_path": core_md["db_path"],
-        "db_fingerprint": db_fingerprint,
+        "data_snapshot_format": DATA_SNAPSHOT_FORMAT,
+        "data_snapshot_id": snapshot_id,
+        "calendar_as_of": config.calendar_as_of,
         "trading_days": core_md["trading_days"],
     }
 
 
-def _run_id(
-    *,
-    lifecycle: Lifecycle,
-    reproduction: dict[str, Any],
-    backtest: BacktestResult,
-) -> str:
+def _experiment_id(reproduction: dict[str, Any]) -> str:
+    """Lifecycle-neutral deterministic identity of one experiment design."""
     payload = {
-        "lifecycle": lifecycle.value,
-        "reproducibility": reproduction,
-        "metrics": backtest.metrics,
-        "trades": backtest.trades,
-        "equity_curve": backtest.equity_curve,
+        "strategy_id": reproduction["strategy_id"],
+        "strategy_params": reproduction["strategy_params"],
+        "strategy_definition_hash": reproduction["strategy_definition_hash"],
+        "feature_versions": reproduction["feature_versions"],
+        "feature_definition_hashes": reproduction["feature_definition_hashes"],
+        "data_snapshot_id": reproduction["data_snapshot_id"],
+        "runtime_versions": {
+            "paper_runner": reproduction["paper_runner_version"],
+            "core_engine": reproduction["core_engine_version"],
+            "pit_api": reproduction["pit_api_version"],
+            "features_runtime": reproduction["features_runtime_version"],
+        },
+        "engine_config": {
+            "period": reproduction["period"],
+            "execution_mode": reproduction["execution_mode"],
+            "as_of_rule": reproduction["as_of_rule"],
+            "cost_model": reproduction["cost_model"],
+            "universe": reproduction["universe"],
+            "universe_rule": reproduction["universe_rule"],
+            "lookback_days": reproduction["lookback_days"],
+            "starting_capital": reproduction["starting_capital"],
+            "calendar_as_of": reproduction["calendar_as_of"],
+        },
     }
     blob = json.dumps(
         payload, sort_keys=True, separators=(",", ":"), default=str, allow_nan=False
     )
-    return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:24]
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
 def run_paper(
@@ -111,12 +140,17 @@ def run_paper(
 ) -> PaperRunResult:
     """Run ``strategy`` through ``core.run_backtest`` and optionally persist it.
 
-    The database is fingerprinted before and after the run.  A concurrent
-    mutation fails closed rather than emitting misleading reproduction
-    metadata for a mixed snapshot.
+    A cheap control-plane snapshot id is computed before and after the run. A
+    concurrent mutation fails closed rather than emitting reproduction
+    metadata for a mixed snapshot.  For this deterministic pure-backtest
+    runner, ``run_id == experiment_id`` by policy.
     """
     configured_path = Path(config.db_path or "data/structured/ingestion.sqlite")
-    before = fingerprint_db(configured_path)
+    before = data_snapshot_id(configured_path)
+    feature_versions = _feature_versions(strategy)
+    feature_hashes = feature_definition_hashes(feature_versions)
+    strategy_hash = strategy_definition_hash(strategy)
+    commit = git_commit()
     backtest = run_backtest(
         strategy,
         config.start,
@@ -129,7 +163,7 @@ def run_paper(
         lookback_days=config.lookback_days,
         calendar_as_of=config.calendar_as_of,
     )
-    after = fingerprint_db(configured_path)
+    after = data_snapshot_id(configured_path)
     if before != after:
         raise RuntimeError(
             "paper database changed during the run; retry against a stable "
@@ -139,15 +173,16 @@ def run_paper(
     reproduction = _reproducibility(
         backtest,
         config=config,
-        db_fingerprint=after,
-        feature_versions=_feature_versions(strategy),
+        snapshot_id=before,
+        feature_versions=feature_versions,
+        feature_hashes=feature_hashes,
+        strategy_hash=strategy_hash,
+        commit=commit,
     )
+    experiment_id = _experiment_id(reproduction)
     result = PaperRunResult(
-        run_id=_run_id(
-            lifecycle=config.lifecycle,
-            reproduction=reproduction,
-            backtest=backtest,
-        ),
+        experiment_id=experiment_id,
+        run_id=experiment_id,
         lifecycle=config.lifecycle,
         backtest=backtest,
         reproducibility=reproduction,
@@ -164,11 +199,12 @@ def format_paper_report(result: PaperRunResult) -> str:
     return "\n".join(
         [
             f"Paper run {result.run_id} [{result.lifecycle.value}]",
+            f"Experiment: {result.experiment_id}",
             f"Strategy: {md['strategy_id']}",
             f"Period: {md['period']['start']} .. {md['period']['end']}",
             f"Return (post-cost): {float(metrics.get('total_return_post_cost', 0.0)):.6%}",
             f"Max drawdown: {float(metrics.get('max_drawdown', 0.0)):.6%}",
             f"Trades: {int(metrics.get('num_trades', len(result.trades)))}",
-            f"DB: {md['db_fingerprint']}",
+            f"Data snapshot: {md['data_snapshot_id']}",
         ]
     )

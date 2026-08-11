@@ -29,6 +29,7 @@ import json
 from datetime import datetime, timedelta
 from typing import Any
 
+import features
 import pit
 from pit.query import resolve_db_path
 
@@ -41,7 +42,7 @@ from .universe import load_master
 
 # Bumped per Phase 3 handoff. Surfaced in every result's metadata so a consumer
 # can tell which engine contract a given backtest obeys.
-CORE_ENGINE_VERSION = "0.3.0"
+CORE_ENGINE_VERSION = "0.3.1"
 
 # J-Quants HolidayDivision: "1" == trading day (exchange open).
 _TRADING_HOLIDAY_DIVISION = "1"
@@ -65,6 +66,19 @@ def _params_hash(params: dict[str, Any]) -> str:
     """Short stable hash of a strategy params dict (JSON, sorted keys)."""
     blob = json.dumps(params, sort_keys=True, default=str)
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
+
+
+def _make_feature_accessor(as_of: str, db_path: Any):
+    """Bind the trusted PIT scope used by one decision context."""
+    def compute_feature(feature_id: str, **inputs: Any) -> Any:
+        return features.compute(
+            feature_id,
+            as_of=as_of,
+            db_path=db_path,
+            **inputs,
+        )
+
+    return compute_feature
 
 
 def _bar_from_row(row: dict[str, Any]) -> Bar:
@@ -313,12 +327,18 @@ def run_backtest(
         reproducibility metadata.
     """
     mode = get_mode(execution_mode)
+    resolved_db_path = resolve_db_path(db_path)
     cost_model = cost_model or standard_cost()
     fixed_universe = (
         tuple(sorted(universe)) if universe is not None else None
     )
 
-    days = _trading_days(start, end, db_path=db_path, calendar_as_of=calendar_as_of)
+    days = _trading_days(
+        start,
+        end,
+        db_path=resolved_db_path,
+        calendar_as_of=calendar_as_of,
+    )
     if not days:
         raise ValueError(
             f"no trading days in [{start}, {end}] from the PIT market calendar "
@@ -336,7 +356,7 @@ def run_backtest(
     for d in days:
         # --- universe + held set for this day --------------------------------
         decision_as_of = mode.decision_as_of(d)
-        master_d = load_master(decision_as_of, db_path=db_path)
+        master_d = load_master(decision_as_of, db_path=resolved_db_path)
         universe_d = fixed_universe if fixed_universe is not None else tuple(
             sorted(master_d.keys())
         )
@@ -344,7 +364,7 @@ def run_backtest(
 
         # --- close snapshot at close(d): used for marking and fills ----------
         snap_close = _load_snapshot(
-            close_as_of(d), held, d, lookback_days, db_path=db_path
+            close_as_of(d), held, d, lookback_days, db_path=resolved_db_path
         )
         closes = {
             c: snap_close[c]["close"]
@@ -387,7 +407,11 @@ def run_backtest(
         else:
             # same_day_close decides at open(d): d's close is NOT yet visible.
             snap_dec = _load_snapshot(
-                mode.decision_as_of(d), held, d, lookback_days, db_path=db_path
+                mode.decision_as_of(d),
+                held,
+                d,
+                lookback_days,
+                db_path=resolved_db_path,
             )
             decision_closes = {
                 c: snap_dec[c]["close"]
@@ -410,6 +434,14 @@ def run_backtest(
             prices=prices_d,
             bars=bars_d,
             master=master_d,
+        )
+        # Bind a private callable rather than exposing a database field.  The
+        # public BarContext shape remains facts + ctx.feature(...), while this
+        # trusted closure owns both PIT scope inputs.
+        object.__setattr__(
+            ctx,
+            "_feature_accessor",
+            _make_feature_accessor(decision_as_of, resolved_db_path),
         )
 
         # --- ask the strategy -----------------------------------------------
@@ -466,7 +498,7 @@ def run_backtest(
         "strategy_id": strategy_id,
         "strategy_params": strategy_params,
         "strategy_params_hash": _params_hash(strategy_params),
-        "db_path": str(resolve_db_path(db_path)),
+        "db_path": str(resolved_db_path),
         "trading_days": len(days),
     }
 

@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import Any
 
 import core
-import features
 
 from .return_1d import _complete_equal_weight_targets
 
@@ -22,12 +21,10 @@ class MomentumFeatureStrategy:
 
     def __init__(
         self,
-        db_path: Any,
         n: int = 20,
         top_k: int = 5,
         min_momentum: float = 0.0,
     ) -> None:
-        self._db_path = db_path
         self.n = int(n)
         self.top_k = int(top_k)
         self.min_momentum = float(min_momentum)
@@ -44,13 +41,7 @@ class MomentumFeatureStrategy:
     def on_bar(self, ctx: core.BarContext) -> list[core.OrderIntent]:
         candidates: list[tuple[str, float]] = []
         for code in sorted(ctx.universe):
-            output = features.compute(
-                "momentum_n",
-                as_of=ctx.as_of,
-                code=code,
-                n=self.n,
-                db_path=self._db_path,
-            )
+            output = ctx.feature("momentum_n", code=code, n=self.n)
             if output.value is None:
                 continue
             value = float(output.value)

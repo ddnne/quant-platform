@@ -10,7 +10,8 @@ from typing import Any
 from core import BacktestResult
 
 
-PAPER_RESULT_SCHEMA_VERSION = "paper-result/v1"
+PAPER_RESULT_SCHEMA_VERSION = "paper-result/v2"
+_PAPER_RESULT_V1_SCHEMA_VERSION = "paper-result/v1"
 
 
 class Lifecycle(str, Enum):
@@ -38,8 +39,9 @@ class PaperRunConfig:
     """Inputs to one backtest-backed paper run.
 
     ``db_path`` identifies an already-ingested structured database.  It is
-    passed only to the trusted ``core`` engine and to versioned feature
-    computes; strategies never receive a SQL connection or PIT handle.
+    passed only to the trusted runtime, which binds it into the engine and the
+    context feature accessor; strategies never receive a path, SQL connection,
+    or PIT handle.
     """
 
     start: str
@@ -81,6 +83,7 @@ class PaperRunConfig:
 class PaperRunResult:
     """One completed paper result plus its reproduction manifest."""
 
+    experiment_id: str
     run_id: str
     lifecycle: Lifecycle
     backtest: BacktestResult
@@ -110,6 +113,7 @@ class PaperRunResult:
     def to_dict(self) -> dict[str, Any]:
         return {
             "schema_version": PAPER_RESULT_SCHEMA_VERSION,
+            "experiment_id": self.experiment_id,
             "run_id": self.run_id,
             "lifecycle": self.lifecycle.value,
             "reproducibility": dict(self.reproducibility),
@@ -124,10 +128,14 @@ class PaperRunResult:
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "PaperRunResult":
         schema = payload.get("schema_version")
-        if schema != PAPER_RESULT_SCHEMA_VERSION:
+        if schema not in {
+            PAPER_RESULT_SCHEMA_VERSION,
+            _PAPER_RESULT_V1_SCHEMA_VERSION,
+        }:
             raise ValueError(
                 f"unsupported paper result schema {schema!r}; "
-                f"expected {PAPER_RESULT_SCHEMA_VERSION!r}"
+                f"expected {PAPER_RESULT_SCHEMA_VERSION!r} or "
+                f"{_PAPER_RESULT_V1_SCHEMA_VERSION!r}"
             )
         bt = payload.get("backtest")
         if not isinstance(bt, dict):
@@ -135,8 +143,23 @@ class PaperRunResult:
         reproduction = payload.get("reproducibility")
         if not isinstance(reproduction, dict):
             raise ValueError("paper result is missing its reproducibility block")
+        run_id = str(payload["run_id"])
+        if schema == PAPER_RESULT_SCHEMA_VERSION:
+            experiment_id = str(payload.get("experiment_id", "")).strip()
+            if not experiment_id:
+                raise ValueError("paper-result/v2 is missing experiment_id")
+        else:
+            # V1 used its lifecycle-sensitive run id as the only identity.  It
+            # cannot be losslessly upgraded to a lifecycle-neutral experiment
+            # id, so preserve that stable legacy identity when loading it.
+            experiment_id = str(
+                payload.get("experiment_id")
+                or reproduction.get("experiment_id")
+                or run_id
+            )
         return cls(
-            run_id=str(payload["run_id"]),
+            experiment_id=experiment_id,
+            run_id=run_id,
             lifecycle=Lifecycle.parse(payload["lifecycle"]),
             backtest=BacktestResult(
                 equity_curve=list(bt.get("equity_curve", [])),

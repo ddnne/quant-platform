@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import Any
 
 import core
-import features
 
 
 class Return1dFeatureStrategy:
@@ -19,20 +18,14 @@ class Return1dFeatureStrategy:
     strategy_id = "return_1d_feature"
     feature_ids = ("return_1d",)
 
-    def __init__(self, db_path: Any, threshold: float = 0.0) -> None:
-        self._db_path = db_path
+    def __init__(self, threshold: float = 0.0) -> None:
         self.threshold = float(threshold)
         self.params: dict[str, Any] = {"threshold": self.threshold}
 
     def on_bar(self, ctx: core.BarContext) -> list[core.OrderIntent]:
         selected: set[str] = set()
         for code in sorted(ctx.universe):
-            output = features.compute(
-                "return_1d",
-                as_of=ctx.as_of,
-                code=code,
-                db_path=self._db_path,
-            )
+            output = ctx.feature("return_1d", code=code)
             if output.value is not None and float(output.value) > self.threshold:
                 selected.add(code)
 

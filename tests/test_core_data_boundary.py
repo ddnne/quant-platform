@@ -136,3 +136,36 @@ def test_strategy_context_carries_no_db_handle(tmp_path):
     }
     assert "db_path" not in seen["attrs"]
     assert "conn" not in seen["attrs"]
+
+
+def test_context_feature_accessor_injects_as_of_and_runtime_db(tmp_path):
+    """Strategies name feature inputs, while core owns PIT scope parameters."""
+    db = seed_db(tmp_path)
+    seen: list[tuple[str, str]] = []
+
+    class FeatureUser:
+        strategy_id = "feature_user"
+        params = {}
+
+        def on_bar(self, ctx):
+            output = ctx.feature("return_1d", code=CODES[0])
+            seen.append((output.metadata["as_of"], output.metadata["db_path"]))
+            with pytest.raises(TypeError, match="runtime-scoped"):
+                ctx.feature("return_1d", code=CODES[0], db_path="other.sqlite")
+            with pytest.raises(TypeError, match="runtime-scoped"):
+                ctx.compute_feature("return_1d", code=CODES[0], as_of="future")
+            return []
+
+    run_backtest(
+        FeatureUser(),
+        TRADING_DAYS[0],
+        TRADING_DAYS[-1],
+        db_path=db,
+        universe=tuple(CODES),
+    )
+
+    assert len(seen) == len(TRADING_DAYS)
+    assert [as_of for as_of, _ in seen] == [
+        f"{day}T15:30:00+09:00" for day in TRADING_DAYS
+    ]
+    assert {path for _, path in seen} == {str(db.resolve())}

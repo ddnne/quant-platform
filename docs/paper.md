@@ -1,4 +1,4 @@
-# Paper pipeline（Phase 5）
+# Paper pipeline（Phase 5 / 5.5）
 
 Phase 5 は、アイデア／戦略パラメータを **仮想執行（Paper）** の結果として保存するまでを
 縦に接続する。入口は `PaperRunConfig` と `run_paper`、計算本体は `features` と
@@ -9,17 +9,20 @@ idea / strategy params
   -> features (PIT + required as_of)
   -> core.run_backtest (next_close by default)
   -> PaperRunResult + reproducibility metadata
-  -> data/paper/<strategy_id>/<run_id>.json
+  -> data/paper/<strategy_id>/<experiment_id>/<run_id>.json
+  -> data/paper/index.jsonl
   -> optional simple report
 ```
 
 ## 境界と look-ahead 防止
 
 - fact の読み出しは必ず `pit` を通り、すべての読み出しに明示的な `as_of` が必要。
-- 戦略が利用する派生値は `features` で計算し、シミュレーションは `core` をブラックボックス
-  として利用する。
+- 戦略が利用する派生値は `BarContext.feature(...)`（`ctx.feature(...)`）で要求する。
+  trusted runtime が `ctx.as_of` と DB path を自動的に束縛して `features` を呼び出すため、
+  戦略は `as_of` や DB path を差し替えられない。
 - 戦略モジュールは `pit`、`storage`、`sqlite3`、HTTP クライアント、J-Quants、secrets を
-  import／利用しない。DB の raw handle や SQL を戦略に渡さない。
+  import／利用しない。戦略の data interface は狭い `BarContext` だけとし、DB path、
+  raw handle、SQL、PIT handle を戦略の constructor や `on_bar` に渡さない。
 - 既定の `next_close` は D 日の引け時点で意思決定し、翌営業日の引けで約定する。
   PIT の `available_at <= as_of` と執行時点の分離で look-ahead を防ぐ。
 - J-Quants を含む外部 API は ingestion-only。Paper 実行中にネットワーク取得しない。
@@ -38,7 +41,6 @@ config = PaperRunConfig(
     universe=("8697",),
 )
 strategy = MomentumFeatureStrategy(
-    db_path=config.db_path,
     n=20,
     top_k=1,
     min_momentum=0.0,
@@ -52,34 +54,59 @@ print(result.run_id, result.metrics["total_return_post_cost"])
 ```
 
 `PaperRunConfig` が期間、費用、執行、資本、ユニバース、特徴量／PIT の DB path を固定し、
-戦略インスタンスが `strategy_id` と戦略パラメータを公開する。`run_paper` は設定を
-`core.run_backtest` に渡し、その結果を Paper 固有の識別子・lifecycle・再現性情報とともに
-`PaperRunResult` にまとめる。
+戦略インスタンスが `strategy_id` と戦略パラメータを公開する。DB path は
+trusted runtime configuration に限定され、戦略には公開されない。`run_paper` は設定を
+`core.run_backtest` に渡し、各 bar で PIT-scoped feature accessor を含む `BarContext` を構築する。
+その結果を Paper 固有の識別子・lifecycle・再現性情報とともに `PaperRunResult` にまとめる。
 
 ## Result と保存
 
 `PaperRunResult` は少なくとも次を保持する。
 
-- `run_id`, `strategy_id`, lifecycle（`Draft` または `Paper`）
+- `experiment_id`, `run_id`, `strategy_id`, lifecycle（`Draft` または `Paper`）
 - `metrics`（pre/post-cost return、drawdown、cost drag、trade count など）
 - `trades` と `equity_curve`
 - 実行条件を再現する `reproducibility`
 
 `reproducibility` には `core_engine_version`、`pit_api_version`、feature id/version と
-features runtime version、期間、execution mode、`as_of` rule、cost model、strategy id、
-strategy params と hash、universe、starting capital、lookback、DB path を含める。実 DB を使う
-live smoke では DB fingerprint も記録し、同じコードだけでなく同じ入力 snapshot を識別できる
-ようにする。API key、proxy token などの secret は結果に保存しない。
+feature definition hash、features runtime version、期間、execution mode、`as_of` rule、cost model、
+strategy id/params/hash、strategy definition hash、universe、starting capital、lookback、
+`data_snapshot_id`、取得できる場合は `git_commit` を含める。API key、proxy token などの
+secret は結果に保存しない。
+
+### Data snapshot ID
+
+`data_snapshot_id` は SQLite 全体の payload hash ではなく、軽量な control-plane state の
+決定論的 hash である。schema version/marker、ソート済み ingestion watermark
+（dataset、last event date、last ingested time）、利用できる validation state や key table の
+count / `MAX(ingested_at)` などから生成する。watermark が無い DB のみ、main DB の file
+size / mtime を weak fallback として使う。これは完全な payload 同一性の証明ではなく、
+Phase 6 の multi-experiment で安価に入力状態を区別するための ID である。
+
+runtime は run 前に一度 snapshot ID を決定して result に保存し、run 後に再計算する。
+両者が異なる場合は実行中に入力状態が変更されたとみなし、fail closed とする。
+
+### Experiment, run, lifecycle
+
+- `experiment_id` は strategy id/params、feature version／定義 hash、`data_snapshot_id`、期間、
+  execution/cost/universe などの engine configuration の決定論的 hash である。
+  lifecycle、promotion state、wall-clock 時刻は含めない。
+- `run_id` は 1 回の実行結果の識別子である。Phase 5.5 の pure backtest では
+  `run_id = experiment_id` とする決定論的 policy を採用し、同じ入力とコードの再実行は
+  同じ ID になる。wall-clock 時刻や lifecycle は混ぜない。
+- lifecycle は `Draft` / `Paper` の可変 label であり、experiment の同一性とは分離する。
 
 `JsonPaperStore` の既定保存先は次のとおり。
 
 ```text
-data/paper/<strategy_id>/<run_id>.json
+data/paper/<strategy_id>/<experiment_id>/<run_id>.json
 ```
 
-JSON は結果全体を自己完結に保持する。`run_id` は再現性情報とバックテスト結果から決定論的に
-生成するため、内容が異なる run は別の保存先になる。wall-clock 生成時刻は決定論的な結果／
-再現性 hash に混ぜない。simple report は保存済み result の要約であり、計算の正本は JSON とする。
+JSON は result schema v2 として結果全体を自己完結に保持する。既存の v1 result は
+互換 load の対象とする。軽量な `data/paper/index.jsonl` に experiment/run、lifecycle、
+snapshot、期間、主要 metrics、feature IDs、result path を索引し、`experiment_id` から
+run を検索できる。simple report は保存済み result の要約であり、計算の正本は
+JSON とする。
 
 ## Lifecycle
 
@@ -99,9 +126,18 @@ label は研究結果の分類であり、broker 接続や注文権限を付与�
 - `MomentumFeatureStrategy`: `momentum_n` が閾値以上の上位 `top_k` 銘柄を等ウェイトで
   保有する rule。
 
-両者は `features` の公開 API だけを利用する。注入された `db_path` は `features.compute` に
-渡すためだけの値であり、戦略自身が開いたり SQL を実行したりしない。サンプルは予測力の
+両者は `BarContext` の `ctx.feature(...)` だけを介して feature を利用する。戦略は
+`db_path` を constructor で受け取らず、`features.compute` や SQL を直接呼び出さない。サンプルは予測力の
 主張ではなく、Paper pipeline の境界と再現性を示す用途である。
+
+## Phase 6 への境界
+
+Phase 6 では versioned `StrategySpec` / 宣言的 DSL を、生成側と trusted interpreter の間の
+契約として導入する予定である。LLM の出力は schema validation、許可済み feature / operator、
+制約検査を通し、ここで定めた `BarContext` 境界の上で実行する。LLM が生成した
+任意の Python、`eval` / `exec`、shell command を実行してはならない。Phase 5.5 はその
+ための境界・再現性・識別子・索引の foundation hardening であり、LLM agent の
+実装自体は対象外である。
 
 ## CLI
 
@@ -144,6 +180,7 @@ Paper smoke の opt-in である。
 
 ## Scope
 
-Phase 5 の対象外は、実注文／broker API、FoF と Risk agent の本実装、戦略の大量生成、addon
-dataset、指値・VWAP・分足／Tick 執行である。次の Phase 6 では、ここで固定した Paper 境界と
-保存結果を利用する役割エージェントへ進む。
+Phase 5 / 5.5 の対象外は、実注文／broker API、FoF と Risk agent の本実装、
+LLM による戦略生成、StrategySpec interpreter の本実装、addon dataset、指値・VWAP・
+分足／Tick 執行である。次の Phase 6 では、ここで固定した Paper 境界と保存結果を
+利用する役割エージェントへ進む。

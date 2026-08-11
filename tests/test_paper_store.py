@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
+from dataclasses import replace
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -32,7 +34,7 @@ def _fixture_run(tmp_path):
         universe=tuple(CODES),
         lifecycle=Lifecycle.PAPER,
     )
-    return run_paper(Return1dFeatureStrategy(db), config), db, config
+    return run_paper(Return1dFeatureStrategy(), config), db, config
 
 
 def test_json_store_round_trip_by_path_and_run_id(tmp_path):
@@ -44,15 +46,66 @@ def test_json_store_round_trip_by_path_and_run_id(tmp_path):
     assert path.is_file()
     assert path.suffix == ".json"
     assert path.is_relative_to(tmp_path / "paper")
+    assert path.parent.name == result.experiment_id
     assert store.load(path).to_dict() == result.to_dict()
     assert store.load(result.run_id).to_dict() == result.to_dict()
+    assert (
+        store.load_by_experiment_id(result.experiment_id).to_dict()
+        == result.to_dict()
+    )
+
+
+def test_save_upserts_thin_experiment_index(tmp_path):
+    result, _, config = _fixture_run(tmp_path)
+    store = JsonPaperStore(root=tmp_path / "paper")
+
+    path = store.save(result)
+    store.save(replace(result, lifecycle=Lifecycle.DRAFT))
+
+    rows = [
+        json.loads(line)
+        for line in store.index_path.read_text(encoding="utf-8").splitlines()
+        if line
+    ]
+    assert len(rows) == 1
+    assert rows[0] == {
+        "experiment_id": result.experiment_id,
+        "run_id": result.run_id,
+        "strategy_id": result.strategy_id,
+        "lifecycle": Lifecycle.DRAFT.value,
+        "data_snapshot_id": result.metadata["data_snapshot_id"],
+        "start": config.start,
+        "end": config.end,
+        "total_return": result.metrics["total_return_post_cost"],
+        "max_dd": result.metrics["max_drawdown"],
+        "sharpe": None,
+        "feature_ids": sorted(result.metadata["feature_versions"]),
+        "created_at": rows[0]["created_at"],
+        "result_path": path.relative_to(store.root).as_posix(),
+    }
+    assert store.load_by_experiment_id(result.experiment_id).lifecycle is Lifecycle.DRAFT
+
+
+def test_loads_v1_result_with_legacy_run_identity(tmp_path):
+    result, _, _ = _fixture_run(tmp_path)
+    payload = result.to_dict()
+    payload["schema_version"] = "paper-result/v1"
+    payload.pop("experiment_id")
+    path = tmp_path / "legacy.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    loaded = JsonPaperStore(root=tmp_path / "paper").load(path)
+
+    assert loaded.experiment_id == result.run_id
+    assert loaded.run_id == result.run_id
+    assert loaded.lifecycle is result.lifecycle
 
 
 def test_run_paper_persists_when_store_is_supplied(tmp_path):
     _, db, config = _fixture_run(tmp_path)
     store = JsonPaperStore(root=tmp_path / "paper")
 
-    result = run_paper(Return1dFeatureStrategy(db), config, store=store)
+    result = run_paper(Return1dFeatureStrategy(), config, store=store)
 
     assert store.load(result.run_id).to_dict() == result.to_dict()
 

@@ -9,14 +9,19 @@
 | 3.5 | CF J-Quants Premium 閉路（`platform/workers/ingestion-premium/`） ✅ 完了 |
 | 4 | 特徴量 Registry（`features/`・PIT 経由のみ・versioned・`as_of` 必須） ✅ 完了 |
 | 5 | Paper 縦通し（`strategies/paper/`・result 永続化・sample strategies・CLI） ✅ 完了 |
+| 5.5 | Phase 6 foundation（`ctx.feature` 境界・snapshot ID・experiment identity・index） ✅ 完了 |
 | 6 | 役割エージェント |
 | 7 | 選抜・Knowledge・AI Gateway |
 | 8 | FoF・Risk |
 | 9 | 執行の厚み・追加データ |
 
-> **次は Phase 6（役割エージェント）。** Phase 5 では Paper 縦通しを実装した
+> **次は Phase 6（役割エージェント）。** その前提として Phase 5.5 では、戦略が
+> `BarContext` / `ctx.feature` だけを通じて特徴量を取得する境界、軽量な control-plane
+> `data_snapshot_id`、lifecycle と分離した決定論的 `experiment_id`、run 索引を固定した。
+> Phase 6 では宣言的 StrategySpec / DSL と trusted interpreter を使い、LLM が生成した
+> 任意の Python を実行しない。Phase 5 では Paper 縦通しを実装した
 > （`PaperRunConfig` → feature-driven strategy → `core.run_backtest` →
-> `PaperRunResult` → `data/paper/<strategy_id>/<run_id>.json`）。戦略から DB／PIT／HTTP／
+> `PaperRunResult` → `data/paper/<strategy_id>/<experiment_id>/<run_id>.json`）。戦略から DB／PIT／HTTP／
 > secrets への直接アクセスは禁止し、再現性 metadata を result に固定する。詳細は
 > [paper.md](paper.md)。Phase 4 では特徴量 Registry を実装した
 > （`features/`・`compute` は PIT 経由のみ・`return_1d`/`momentum_n`/`volatility_n` 同梱・

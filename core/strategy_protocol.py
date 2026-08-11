@@ -4,9 +4,10 @@ A :class:`Strategy` is a black-box callback the engine invokes once per
 trading day. It receives a :class:`BarContext` — a **deliberately small** view
 of the world — and returns a list of :class:`OrderIntent` (desired target
 weights). The strategy never touches the database, never imports :mod:`pit`
-or :mod:`storage`, and never sees a handle it could read facts through. Every
-fact it can base a decision on has already been loaded by the engine via the
-PIT Data API at that decision instant's ``as_of`` and exposed on the context.
+or :mod:`storage`, and never sees a data handle. Direct facts are loaded by
+the engine via the PIT Data API; derived values are requested through
+``ctx.feature(...)``, whose trusted runtime accessor binds the decision
+instant's ``as_of`` and database location.
 
 This is the structural enforcement of the data boundary: facts enter the
 engine only through ``pit.get_*`` (see :mod:`core.engine`), and reach the
@@ -18,7 +19,7 @@ cannot fill on day *D* under ``next_close``).
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Mapping, Protocol
+from typing import Any, Mapping, Protocol
 
 
 @dataclass(frozen=True)
@@ -88,10 +89,11 @@ class EquityMaster:
 class BarContext:
     """Everything a strategy may consult at one decision point.
 
-    Intentionally carries **no** database handle and **no** ``pit`` reference.
-    Every value was loaded by the engine through the PIT Data API at
-    :attr:`as_of` (the decision instant). Strategies that need more must have
-    the engine expose it here — they must not read facts themselves.
+    Intentionally carries **no** database path/handle and **no** ``pit``
+    reference. Values were loaded by the engine through PIT at :attr:`as_of`
+    (the decision instant); versioned derived values are available only via
+    :meth:`feature`, which has the same scope injected by the runtime.
+    Strategies must not read facts themselves.
 
     Attributes:
         as_of: The PIT decision instant (canonical JST ISO). Every fact on the
@@ -106,6 +108,8 @@ class BarContext:
             supplied (``None`` if a code has no visible bar yet).
         bars: Recent PIT-visible daily bars per universe code, oldest first.
         master: Latest-known-as-of master snapshot per universe code.
+        feature: PIT-scoped versioned feature computation. Strategies supply
+            only a feature id and declared feature inputs.
     """
 
     as_of: str
@@ -117,6 +121,30 @@ class BarContext:
     prices: Mapping[str, float | None]
     bars: Mapping[str, tuple[Bar, ...]]
     master: Mapping[str, EquityMaster]
+
+    def feature(self, feature_id: str, /, **inputs: Any) -> Any:
+        """Compute a feature through the engine's PIT-scoped runtime accessor.
+
+        The engine binds this accessor for each decision bar.  It injects this
+        context's :attr:`as_of` and the runtime-owned database location, so a
+        strategy supplies only the feature id and its declared inputs.  The
+        database location is deliberately not a context field.
+        """
+        reserved = {"as_of", "db_path"}.intersection(inputs)
+        if reserved:
+            names = ", ".join(sorted(reserved))
+            raise TypeError(f"ctx.feature owns runtime-scoped argument(s): {names}")
+        accessor = getattr(self, "_feature_accessor", None)
+        if accessor is None:
+            raise RuntimeError(
+                "BarContext feature accessor is not bound; contexts must be "
+                "created by the trusted core runtime"
+            )
+        return accessor(feature_id, **inputs)
+
+    def compute_feature(self, feature_id: str, /, **inputs: Any) -> Any:
+        """Explicit alias for :meth:`feature`."""
+        return self.feature(feature_id, **inputs)
 
 
 class Strategy(Protocol):

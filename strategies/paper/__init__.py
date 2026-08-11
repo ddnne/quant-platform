@@ -1,5 +1,7 @@
 """Public Phase 5 paper pipeline."""
 
+from paper_runtime import data_snapshot_id
+
 from .runner import PAPER_RUNNER_VERSION, fingerprint_db, format_paper_report, run_paper
 from .store import DEFAULT_PAPER_ROOT, JsonPaperStore
 from .types import (
@@ -18,7 +20,7 @@ __all__ = [
     "PaperRunResult",
     "JsonPaperStore",
     "fingerprint_db",
+    "data_snapshot_id",
     "run_paper",
     "format_paper_report",
 ]
-
