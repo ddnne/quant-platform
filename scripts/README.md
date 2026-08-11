@@ -5,6 +5,8 @@ Phase 6 hardening utilities:
 - `ops_status.py --json` — offline READY snapshot, coverage, B0 and validation status.
 - `rebuild_paper_index.py --root data/paper --json` — rebuild the disposable index from immutable Paper JSON.
 - `python -m mcp_servers.quant_data --list-tools` — Quant Data Access MCP smoke.
+- `export_ops_projection.py` — verified local Coverage/READY/B0 metadataを bounded
+  D1 projection SQL に変換。MCP 自体には write capability を与えない。
 
 開発・運用用の補助スクリプト。
 
@@ -26,11 +28,19 @@ python scripts/run_ingestion_once.py --source {jquants|jsda|all} --runtime local
 - `--chunk-days N` — `from/to` 長期間を N 日グリッドに分割して並列バックフィル（J-Quants、既定30）。
 - `--no-jquants-proxy` — CF プロキシ設定があっても直接取得に強制。
 - `--jsda-url URL` — JSDA の取得ファイル URL 直指定（インデックス略過）。
+- `--jsda-dataset otc-reference --jsda-from-year 2002` — JSDA 公社債店頭売買
+  参考統計値を公式 archive segment 単位で resumable backfill。
+- `--jsda-dataset tokyo-repo` — authoritative `trrts.xls` を含む東京レポ・レート
+  JSDA-era 全履歴。`.xls` は `xlrd` で parse し、silent skip しない。
+- `--jsda-force` — exact COMPLETE receipt があっても再取得し、訂正/revision を検出。
 
 J-Quants の鍵は **CF proxy が既定**（環境変数 `JQUANTS_PROXY_URL`/`JQUANTS_PROXY_TOKEN` または `~/.config/quant-platform/jquants_proxy_{url,token}`）。local `JQUANTS_API_KEY` は `UNSAFE_DEV_DIRECT_JQUANTS=1` を明示した開発時だけ利用する。JSDA は鍵不要。
 
 終了コード: `0`=取得/登録あり, `1`=予期せぬエラー, `2`=何も実行せず（CF ランタイム or 全ソース skip）。
 詳細は [docs/data_sources.md](../docs/data_sources.md)。
+
+Full governed READY、D1 migration、Ops MCP projection/deploy の順序は
+[docs/phase61_production_runbook.md](../docs/phase61_production_runbook.md) を参照。
 
 ## run_phase35_validation.py（Phase 3.5 検証マトリクス）
 

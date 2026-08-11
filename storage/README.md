@@ -12,7 +12,18 @@ Phase 1 実装:
 PIT のため `available_at` は構造化保存で必須（空は拒否）。
 
 Phase 6 hardening adds formal migrations for `dataset_coverage`, publication
-lifecycle/quality rows, and fact/revision mutation triggers. Coverage status
-is persisted as `COMPLETE | PARTIAL | STALE | UNKNOWN | FAILED`; helpers in
-`coverage_ledger.py` classify the existing C1-C5/C8 results instead of
-duplicating validation rules.
+lifecycle/quality rows, and fact/revision mutation triggers.
+
+Phase 6.1 adds Coverage V2:
+
+- `coverage_segments` is the independent required inventory.
+- `collection_receipts` stores expected/observed counts, raw pages/rows,
+  structured rows, pagination exhaustion, digests, run/status/error/time.
+- `dataset_coverage` is COMPLETE only when every governed required segment is
+  COMPLETE; observed min/max alone cannot prove it.
+- Event windows may reconcile 0 raw rows to 0 structured rows as COMPLETE when
+  the successful receipt and retained raw query evidence prove the window.
+
+JSDA governed tables retain separate PIT timestamps and revision tables.
+`SqliteStore` applies ordered idempotent migrations on open; operators should
+back up the staging database before first open after an upgrade.

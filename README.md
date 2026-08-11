@@ -3,11 +3,12 @@
 日本株・開示・債券データを用いた量化研究／Paper／FoF 基盤。  
 正本は GitHub リポジトリ 1 本（公開・非公開は運用で変更可）。
 
-## 現状（Phase 6）
+## 現状（Phase 6.1 / Pre-Phase 7）
 
 **Phase 1（Ingestion）＋ Phase 2（PIT Data API）＋ Phase 3（コアエンジン最小）＋
 Phase 3.5（CF J-Quants Premium 閉路の実装）＋ Phase 4（特徴量 Registry）＋
-Phase 5（Paper 縦通し）＋ Phase 6（F0 hardening・役割 agent・StrategySpec）が完了した状態です。**
+Phase 5（Paper 縦通し）＋ Phase 6（F0 hardening・役割 agent・StrategySpec）＋
+Phase 6.1（Coverage V2・remote Ops Read MCP・governed JSDA）が実装済みの状態です。**
 
 Phase 1 — 2 データソースの取得・正規化・格納が動きます:
 
@@ -16,7 +17,8 @@ Phase 1 — 2 データソースの取得・正規化・格納が動きます:
   決算カレンダー・市場カレンダー・投資部門・指数（TOPIX / 一般）・デリバティブ
   （日経225オプション / 先物 / オプション）・市場系（信用・空売り・ブレイクダウン）・
   **EDINET 系**（大株主・持ち合い・大量保有）・分足・Tick（trades）・TDnet 系（list / files / bulk）。
-- **JSDA** 公社債取引統計（CSV/XLSX）
+- **JSDA** 公社債店頭売買参考統計値（2002-08-02 以降の公式 archive）、東京レポ・レート、
+  社債の取引情報。3 系列は別 dataset id、raw、receipt、revision history を持つ。
 
 Phase 2 — 構造化データの **読み出し経路として PIT Data API（`pit/`）** を実装。
 全読み出しは `as_of` 必須・`available_at <= as_of` で look-ahead を防止・読み取り専用
@@ -59,11 +61,22 @@ StrategySpec は whitelist interpreter により approved feature の `ctx.featu
 変換される。Paper 後に独立 risk audit を保存する。詳細は
 [docs/agents.md](docs/agents.md)。
 
+Phase 6.1 — **Coverage V2 + remote Ops Read MCP + governed JSDA**。min/max 行境界を完全性の
+根拠にせず、required segment と collection receipt（raw/structured reconcile、pagination 完走、
+digest）で dataset COMPLETE を判定する。READY は governed JQ/JSDA 全件の Coverage V2 proof を
+必須とする。PIT paging は SQL keyset + `LIMIT page_size+1` であり、adapter は全件 load 後に
+slice しない。ブラウザ ChatGPT / mobile は Cloudflare Access/OAuth の Streamable HTTP
+**Ops Read MCP** を使い、local stdio MCP は offline/dev adapter に限定する。Remote Research は
+Cloudflare 上で immutable READY generation を pin できるまで公開しない。運用手順は
+[docs/phase61_production_runbook.md](docs/phase61_production_runbook.md)、接続境界は
+[docs/quant_data_access.md](docs/quant_data_access.md)。
+
 > 開示系（EDINET 由来の大株主・持ち合い・大量保有）は独立した EDINET DB ではなく、**J-Quants の EDINET 系 API**（`/v2/edinet/major-shareholders`、`/v2/edinet/cross-shareholdings`、`/v2/edinet/large-volume-shareholders`、および `/v2/fins/...`）で統合する方針。Phase 1 では J-Quants 上記エンドポイント + JSDA が対象。
 
 ランタイムは **local 主系**（`LocalHttpClient` / httpx）。Cloudflare は Phase 3.5 から取得閉路も担う（Premium core）。詳細は [docs/data_sources.md](docs/data_sources.md)。
 
-**次は Phase 7（選抜・Knowledge・AI Gateway）** です。
+**次は Phase 7（選抜・Knowledge・AI Gateway）** です。Phase 6.1 の framework 完了と、
+credential を使う production backfill / READY / deploy の運用完了は区別する。
 
 詳細は [docs/architecture.md](docs/architecture.md) と [docs/roadmap.md](docs/roadmap.md) を参照してください。
 
@@ -80,7 +93,7 @@ StrategySpec は whitelist interpreter により approved feature の `ctx.featu
 | `strategies/` | **Phase 5–6 実装**: Paper runner／store、sample 戦略、declarative StrategySpec interpreter |
 | `fof/` | Fund of Funds 層（後続） |
 | `agents/` | **Phase 6 実装**: 8 役割の structured I/O と offline orchestrator |
-| `platform/` | Cloudflare 等プラットフォーム設定・Secrets の置き場所（**Phase 3.5**: ingestion-premium Worker） |
+| `platform/` | Cloudflare 設定（ingestion-premium Worker、Access/OAuth protected remote Ops Read MCP） |
 | `cf_platform/` | Python 側の CF 連携ヘルパ（**Phase 3.5**: 検証ロジック・natural_key の真相） |
 | `storage/` | SQLite スキーマ・ライタ（**Phase 1 実装**） |
 | `scripts/` | 運用・開発用スクリプト（ingestion／sync／validation／Paper／agent CLI） |

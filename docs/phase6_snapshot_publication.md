@@ -28,16 +28,17 @@ different generation.
 ## Publication gate
 
 Publication reuses the existing strict B0 scale gates, the Phase 3.5 daily
-validation matrix, and the persistent Coverage Ledger. Any hard validation
-failure or governed dataset whose ledger state is not `COMPLETE` rejects the
-build. The manifest records the snapshot id, canonical contract version,
+validation matrix, and Coverage V2. Any hard validation failure or governed
+dataset whose required segment set is not completely backed by successful
+receipts rejects the build. The manifest records the snapshot id, canonical contract version,
 source run, D1 change sequence, coverage and quality policy versions, dataset
-watermarks, validation/coverage summaries, and commit time.
+watermarks, validation/coverage summaries, a bounded Coverage V2 proof digest,
+and commit time. Opening a READY artifact re-verifies that proof.
 
 ## Collection coverage policy
 
-`data_contracts/collection_coverage.json` is paired one-for-one with the 23
-canonical Premium-core dataset contracts. Its effective fields are:
+`data_contracts/collection_coverage.json` is paired one-for-one with the
+governed J-Quants and JSDA dataset contracts. Its effective fields are:
 
 - `collection_scope`
 - `history_target_start`
@@ -47,14 +48,24 @@ canonical Premium-core dataset contracts. Its effective fields are:
 - `universe_rule`
 - `raw_retention_required`
 - `structured_reconciliation_required`
+- `segment_granularity`
 - `governance_tier` (`governed` or `experimental`)
 
-`dataset_coverage` persists `COMPLETE`, `PARTIAL`, `STALE`, `UNKNOWN`, or
-`FAILED` plus observed bounds and the C1-C5/C8 evidence. Irregular disclosures
-use `event_reconciled` mode. A successful empty endpoint response is not
-treated as a missing daily row, but it also cannot prove historical
-reconciliation, so it remains `PARTIAL` until reconciled evidence exists.
+`coverage_segments` is the independent inventory of required collection units;
+`collection_receipts` records expected scope/items, observed items, raw page/row
+counts, structured row count, pagination exhaustion, digests, run, status,
+error, and checked time. `dataset_coverage` persists the resulting `COMPLETE`,
+`PARTIAL`, `STALE`, `UNKNOWN`, or `FAILED` state. Observed min/max bounds remain
+diagnostics only.
 
-The current policy deliberately makes all Premium-core datasets `governed`.
-Phase 7 may add experimental datasets, but an explicit tier is required and no
-experimental series is silently promoted into governed research.
+Calendar/trading/periodic datasets need every required segment. A missing
+middle segment is therefore `PARTIAL` even if early and late rows exist.
+Irregular disclosures use `event_reconciled` mode: a successful bounded window
+query with exhausted pagination, retained raw evidence, and a 0-to-0 structured
+reconciliation is COMPLETE; an unrelated old row is not. Non-event segments
+need an explicit expected item count.
+
+The current policy deliberately makes Premium-core plus the governed JSDA
+bond-reference, Tokyo Repo Rate, and corporate-bond transaction datasets
+`governed`. Phase 7 may add experimental datasets, but an explicit tier is
+required and no experimental series is silently promoted into governed research.
