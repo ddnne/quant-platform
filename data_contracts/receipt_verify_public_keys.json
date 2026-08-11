@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "keys": [
+    {
+      "key_id": "dev-receipt-v1",
+      "public_key_b64": "DCVwl1tFSnA7QoHV5QxppUsU9uqNo2Fasc8kakH3UBY=",
+      "algorithm": "Ed25519",
+      "note": "dev/bootstrap; rotate for production"
+    }
+  ]
+}

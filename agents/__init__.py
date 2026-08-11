@@ -5,6 +5,7 @@ from .artifacts import ARTIFACT_SCHEMA_VERSION, ArtifactEnvelope
 from .roles import AgentRole, Capability, ROLE_MATRIX, RoleContract
 from .runtime import (
     NEGATIVE_BOUNDARIES,
+    AgentCapabilityRouter,
     AgentRuntimePolicy,
     DomainTool,
     SandboxedAgentRunner,
@@ -28,6 +29,7 @@ __all__ = [
     "AgentPaperPipeline",
     "AgentPipelineResult",
     "AgentRole",
+    "AgentCapabilityRouter",
     "AgentRuntimePolicy",
     "ARTIFACT_SCHEMA_VERSION",
     "ArtifactEnvelope",

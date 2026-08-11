@@ -12,7 +12,9 @@ license = { text = "Proprietary" }
 authors = [{ name = "quant-platform" }]
 dependencies = [
     "httpx>=0.27",
+    "cryptography>=42",
 ]
+
 
 [project.optional-dependencies]
 # JSDA OTC files may be .xlsx; the authoritative Tokyo Repo Rate history is .xls.

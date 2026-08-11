@@ -1,4 +1,4 @@
-"""Mass research gate — attestation required; scalar spoof rejected."""
+"""Mass research gate — signed READY attestation only; no override bypass."""
 
 from __future__ import annotations
 
@@ -7,10 +7,7 @@ from pathlib import Path
 import pytest
 
 from agents.mass_research import assert_mass_research_allowed, start_mass_research
-from research.readiness import (
-    OperatorOverrideService,
-    VerifiedResearchReadiness,
-)
+from research.readiness import OperatorOverrideService
 from selection.budget_ledger import MassResearchDisabledError, ResearchBudgetCapability
 from selection.screen import ExperimentBudget
 
@@ -43,44 +40,22 @@ def test_legacy_scalar_kwargs_rejected(tmp_path: Path):
         )
 
 
-def test_go_override_bool_rejected(tmp_path: Path):
-    cap = _cap(tmp_path)
-    with pytest.raises(MassResearchDisabledError, match="caller-supplied"):
-        assert_mass_research_allowed(budget=cap, go_override=True)
-
-
-def test_start_with_verified_readiness(tmp_path: Path):
-    cap = _cap(tmp_path)
-    readiness = VerifiedResearchReadiness(
-        attestation_id="a1",
-        snapshot_id="snap-1",
-        ready_state="READY",
-        ready_manifest_digest="sha256:" + "a" * 64,
-        coverage_policy_version="collection-coverage/v2",
-        coverage_proof_digest="sha256:" + "b" * 64,
-        governed_membership_digest="sha256:" + "c" * 64,
-        governed_complete=26,
-        governed_total=26,
-        b0_status="PASS",
-        quality_status="PASS",
-        source_generation=1,
-        sync_generation=1,
-        raw_proof_status="COMPLETE",
-        verified_at="2026-01-01T00:00:00+00:00",
-        evidence_digest="sha256:" + "d" * 64,
-    )
-    got_cap, got_att = start_mass_research(budget=cap, readiness=readiness)
-    assert got_cap is cap
-    assert got_att is readiness
-
-
-def test_operator_override_live(tmp_path: Path):
+def test_operator_override_cannot_substitute(tmp_path: Path):
     cap = _cap(tmp_path)
     ov = OperatorOverrideService(audit_dir=tmp_path / "audit").mint(
-        reason="emergency test",
-        operator_identity="operator:test",
+        reason="test",
+        operator_identity="op",
+        scope="hold_period",
         ttl_seconds=600,
     )
-    got_cap, got = start_mass_research(budget=cap, operator_override=ov)
-    assert got_cap is cap
-    assert got.override_id == ov.override_id
+    with pytest.raises(MassResearchDisabledError, match="operator_override"):
+        start_mass_research(budget=cap, operator_override=ov)  # type: ignore[arg-type]
+
+
+def test_safety_scope_override_rejected():
+    with pytest.raises(ValueError):
+        OperatorOverrideService().mint(
+            reason="x",
+            operator_identity="op",
+            scope="mass_research",  # type: ignore[arg-type]
+        )

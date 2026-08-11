@@ -172,11 +172,12 @@ def evaluate_segment(
     )
     if not identity_matches:
         return "PARTIAL", {"reason": "receipt does not match required scope"}
-    # Trusted-path gate: only TrustedReceiptIssuer-minted receipts may COMPLETE.
+    # Trusted-path gate: only Ed25519-verified signed receipts may COMPLETE.
     if not is_complete_eligible_receipt(receipt):
         return "PARTIAL", {
-            "reason": "receipt not COMPLETE-eligible (TrustedReceiptIssuer required)",
+            "reason": "receipt not COMPLETE-eligible (valid Ed25519 signature required)",
             "eligibility": receipt_eligibility(receipt),
+            "issuer_key_id": receipt.digests.get("issuer_key_id"),
             "issuer_class": receipt.digests.get("issuer_class"),
         }
     if receipt.status == "FAILED" and receipt.digests.get("failure_kind") in {
@@ -912,22 +913,27 @@ def build_collection_receipt(
     raw_rows = int(raw_row_count) if raw_row_count is not None else structured
     digests: dict[str, Any] = {
         "raw": compute_raw_digest(raw),
-        # Default is NOT trusted. Only TrustedReceiptIssuer may set
-        # eligibility=TRUSTED_COLLECTION with issuer_class/issuer_id.
+        # Default is NOT trusted. COMPLETE requires Ed25519-signed digests
+        # verified by is_complete_eligible_receipt (not issuer strings alone).
         "eligibility": "RECOVERED_RAW_ONLY",
     }
     if extra_digests:
         digests.update(dict(extra_digests))
-        # Strip bare TRUSTED claims without a trusted issuer capability.
+        # Strip bare TRUSTED claims that lack signature material.
         if digests.get("eligibility") == "TRUSTED_COLLECTION":
-            if digests.get("issuer_class") != "TrustedReceiptIssuer" or not digests.get(
-                "issuer_id"
-            ):
+            has_sig = (
+                isinstance(digests.get("signature"), str)
+                and str(digests.get("signature")).startswith("ed25519:")
+                and isinstance(digests.get("signed_body_b64"), str)
+                and isinstance(digests.get("issuer_key_id"), str)
+            )
+            if not has_sig:
                 digests["eligibility"] = "RECOVERED_RAW_ONLY"
                 digests.setdefault(
                     "trust_note",
-                    "TRUSTED_COLLECTION requires TrustedReceiptIssuer",
+                    "TRUSTED_COLLECTION requires Ed25519 signature fields",
                 )
+
     return CollectionReceipt(
         source=required.source,
         dataset=required.dataset,
@@ -1020,36 +1026,36 @@ def is_synthetic_receipt(receipt: CollectionReceipt) -> bool:
 def receipt_eligibility(receipt: CollectionReceipt) -> str:
     """Return COMPLETE-eligibility class for a receipt.
 
-    A raw SHA-256 alone is never enough for TRUSTED_COLLECTION. Only an
-    issuer-minted receipt (TrustedReceiptIssuer) is trusted.
+    Phase 6.2.3: only Ed25519-verified signed receipts are TRUSTED_COLLECTION.
+    issuer_class / issuer_id strings alone are never sufficient.
     """
     if is_synthetic_receipt(receipt) or receipt.digests.get("origin") in {
         "offline-test-fixture",
         "recovered-raw-only",
+        "parsed-staging-only",
+        "failed-collection",
     }:
         return "RECOVERED_RAW_ONLY"
+    # Lazy import avoids circular import at module load.
+    from storage.receipt_crypto import verify_receipt_signature
+
     if (
-        receipt.digests.get("issuer_class") == "TrustedReceiptIssuer"
-        and isinstance(receipt.digests.get("issuer_id"), str)
-        and str(receipt.digests.get("issuer_id")).strip()
-        and receipt.digests.get("eligibility") == "TRUSTED_COLLECTION"
+        receipt.digests.get("eligibility") == "TRUSTED_COLLECTION"
+        and verify_receipt_signature(receipt.digests)
     ):
         return "TRUSTED_COLLECTION"
-    elig = receipt.digests.get("eligibility")
-    if isinstance(elig, str) and elig == "RECOVERED_RAW_ONLY":
-        return "RECOVERED_RAW_ONLY"
-    if isinstance(elig, str) and elig == "TRUSTED_COLLECTION":
-        # Labeled TRUSTED without issuer → not COMPLETE-eligible.
-        return "RECOVERED_RAW_ONLY"
     return "RECOVERED_RAW_ONLY"
 
 
 def is_complete_eligible_receipt(receipt: CollectionReceipt) -> bool:
+    """COMPLETE only with cryptographically verified signature."""
+    if is_synthetic_receipt(receipt):
+        return False
+    from storage.receipt_crypto import verify_receipt_signature
+
     return (
-        receipt_eligibility(receipt) == "TRUSTED_COLLECTION"
-        and not is_synthetic_receipt(receipt)
-        and receipt.digests.get("issuer_class") == "TrustedReceiptIssuer"
-        and bool(str(receipt.digests.get("issuer_id") or "").strip())
+        receipt.digests.get("eligibility") == "TRUSTED_COLLECTION"
+        and verify_receipt_signature(receipt.digests)
     )
 
 __all__ = [

@@ -1,24 +1,24 @@
-"""Trusted research readiness attestation (Phase 6.2.2 P0).
+"""Research readiness attestation bound to immutable READY verifier only.
 
-Only :class:`ResearchReadinessService` may mint :class:`VerifiedResearchReadiness`.
-Callers cannot supply ready_count / governed_complete scalars to spoof GO.
-Mass research requires both :class:`~selection.budget_ledger.ResearchBudgetCapability`
-and a live attestation; ``go_override: bool`` is gone.
+Phase 6.2.3: does NOT re-implement Coverage/B0/raw/sync. Sole path:
+
+  immutable READY artifact → describe_snapshot / verify_ready_snapshot
+  → VerifiedResearchReadiness (signed, expiring)
+
+Operator override cannot substitute for readiness (PIT/Coverage/raw/READY).
 """
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
-import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping
 from uuid import uuid4
 
-from data_contracts.canonical import governed_datasets
-from data_contracts.coverage import POLICY_VERSION as COVERAGE_POLICY_VERSION
 from selection.budget_ledger import (
     MassResearchDisabledError,
     ResearchBudgetCapability,
@@ -26,11 +26,15 @@ from selection.budget_ledger import (
 )
 
 
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
-def _digest(payload: Mapping[str, Any] | Sequence[Any] | str) -> str:
+def _now_iso() -> str:
+    return _now().isoformat()
+
+
+def _digest(payload: Mapping[str, Any] | list[Any] | str) -> str:
     if isinstance(payload, str):
         raw = payload.encode("utf-8")
     else:
@@ -42,67 +46,129 @@ def _digest(payload: Mapping[str, Any] | Sequence[Any] | str) -> str:
 
 @dataclass(frozen=True)
 class VerifiedResearchReadiness:
-    """Opaque attestation minted only by ResearchReadinessService.
+    """Attestation minted only after READY verifier PASS.
 
-    Holding this object is proof that the control plane evaluated live evidence
-    from the research DB / READY artifacts — not caller-supplied counters.
+    Public construction with arbitrary fields is possible in Python, but
+    :meth:`is_valid` re-checks signature binding + expiry + snapshot fields.
+    Schedulers must call ``is_valid`` / ``require_valid`` immediately before use.
     """
 
     attestation_id: str
     snapshot_id: str
     ready_state: str
     ready_manifest_digest: str
+    immutable_db_digest: str
     coverage_policy_version: str
     coverage_proof_digest: str
     governed_membership_digest: str
-    governed_complete: int
-    governed_total: int
-    b0_status: str
-    quality_status: str
-    source_generation: int
-    sync_generation: int
-    raw_proof_status: str
+    raw_proof_digest: str
+    b0_quality_proof_digest: str
+    source_generation: str
+    applied_sync_generation: str
     verified_at: str
+    expires_at: str
     evidence_digest: str
+    signature: str
+    issuer: str = "ResearchReadinessService/v2"
 
-    def __post_init__(self) -> None:
-        if self.ready_state != "READY":
-            raise ValueError("VerifiedResearchReadiness requires ready_state=READY")
-        if self.governed_total <= 0:
-            raise ValueError("governed_total must be positive")
-        if self.governed_complete != self.governed_total:
-            raise ValueError("attestation cannot be incomplete")
-        if self.b0_status != "PASS" or self.quality_status != "PASS":
-            raise ValueError("B0/quality must be PASS")
-        if self.raw_proof_status != "COMPLETE":
-            raise ValueError("raw_proof_status must be COMPLETE")
-        if not str(self.snapshot_id).strip():
-            raise ValueError("snapshot_id required")
-
-    def to_dict(self) -> dict[str, Any]:
+    def to_canonical_body(self) -> dict[str, Any]:
         return {
             "attestation_id": self.attestation_id,
             "snapshot_id": self.snapshot_id,
             "ready_state": self.ready_state,
             "ready_manifest_digest": self.ready_manifest_digest,
+            "immutable_db_digest": self.immutable_db_digest,
             "coverage_policy_version": self.coverage_policy_version,
             "coverage_proof_digest": self.coverage_proof_digest,
             "governed_membership_digest": self.governed_membership_digest,
-            "governed_complete": self.governed_complete,
-            "governed_total": self.governed_total,
-            "b0_status": self.b0_status,
-            "quality_status": self.quality_status,
+            "raw_proof_digest": self.raw_proof_digest,
+            "b0_quality_proof_digest": self.b0_quality_proof_digest,
             "source_generation": self.source_generation,
-            "sync_generation": self.sync_generation,
-            "raw_proof_status": self.raw_proof_status,
+            "applied_sync_generation": self.applied_sync_generation,
             "verified_at": self.verified_at,
+            "expires_at": self.expires_at,
             "evidence_digest": self.evidence_digest,
+            "issuer": self.issuer,
         }
+
+    def to_dict(self) -> dict[str, Any]:
+        body = self.to_canonical_body()
+        body["signature"] = self.signature
+        return body
+
+    def is_expired(self, *, now: datetime | None = None) -> bool:
+        clock = now or _now()
+        expires = datetime.fromisoformat(self.expires_at.replace("Z", "+00:00"))
+        return clock > expires
+
+    def is_valid(
+        self,
+        *,
+        expected_snapshot_id: str | None = None,
+        hmac_secret: bytes | None = None,
+        now: datetime | None = None,
+    ) -> bool:
+        if self.ready_state != "READY":
+            return False
+        if self.is_expired(now=now):
+            return False
+        if expected_snapshot_id is not None and self.snapshot_id != expected_snapshot_id:
+            return False
+        if not self.signature.startswith("hmac-sha256:"):
+            return False
+        secret = hmac_secret or _attestation_secret()
+        expected = _sign_attestation(self.to_canonical_body(), secret)
+        return _hmac_eq(self.signature, expected)
+
+    def require_valid(self, **kwargs: Any) -> "VerifiedResearchReadiness":
+        if not self.is_valid(**kwargs):
+            raise MassResearchDisabledError(
+                "VerifiedResearchReadiness invalid, expired, or signature mismatch"
+            )
+        return self
+
+
+def _attestation_secret() -> bytes:
+    """HMAC secret for attestation MAC (separate from receipt Ed25519).
+
+    Uses QUANT_READINESS_HMAC_SECRET or a file under ~/.config. Not agent-accessible.
+    """
+    import os
+
+    env = os.environ.get("QUANT_READINESS_HMAC_SECRET", "").strip()
+    if env:
+        return env.encode("utf-8")
+    path = Path.home() / ".config" / "quant-platform" / "readiness_hmac_secret"
+    if path.is_file():
+        return path.read_bytes().strip()
+    # Dev fallback: derive from receipt key if present (still local-only).
+    key = Path.home() / ".config" / "quant-platform" / "receipt_signing_key.pem"
+    if key.is_file():
+        return hashlib.sha256(key.read_bytes() + b"|readiness-v2").digest()
+    raise MassResearchDisabledError("readiness HMAC secret not configured")
+
+
+def _sign_attestation(body: Mapping[str, Any], secret: bytes) -> str:
+    import hmac as hm
+
+    raw = json.dumps(body, sort_keys=True, separators=(",", ":"), default=str).encode()
+    dig = hm.new(secret, raw, hashlib.sha256).digest()
+    return "hmac-sha256:" + base64.b64encode(dig).decode("ascii")
+
+
+def _hmac_eq(a: str, b: str) -> bool:
+    import hmac as hm
+
+    return hm.compare_digest(a.encode(), b.encode())
 
 
 @dataclass(frozen=True)
 class OperatorOverrideCapability:
-    """Rare operator override — never agent-mintable, always audited."""
+    """Non-safety policy override only — NEVER substitutes for readiness.
+
+    Allowed scopes: hold_period | selection_threshold | single_extra_experiment
+    Forbidden: mass_research readiness, PIT, Coverage, raw, B0, READY, sync.
+    """
 
     override_id: str
     reason: str
@@ -110,10 +176,21 @@ class OperatorOverrideCapability:
     issued_at: str
     expires_at: str
     audit_artifact_digest: str
-    scope: str = "mass_research"
+    scope: str
+
+    ALLOWED_SCOPES = frozenset(
+        {"hold_period", "selection_threshold", "single_extra_experiment"}
+    )
+
+    def __post_init__(self) -> None:
+        if self.scope not in self.ALLOWED_SCOPES:
+            raise ValueError(
+                f"operator override scope {self.scope!r} not allowed; "
+                f"cannot bypass safety gates"
+            )
 
     def is_live(self, *, now: datetime | None = None) -> bool:
-        clock = now or datetime.now(timezone.utc)
+        clock = now or _now()
         issued = datetime.fromisoformat(self.issued_at.replace("Z", "+00:00"))
         expires = datetime.fromisoformat(self.expires_at.replace("Z", "+00:00"))
         return issued <= clock <= expires
@@ -131,7 +208,7 @@ class OperatorOverrideCapability:
 
 
 class OperatorOverrideService:
-    """Mints OperatorOverrideCapability outside the agent capability surface."""
+    """Mints non-safety overrides only."""
 
     def __init__(self, *, audit_dir: Path | None = None) -> None:
         self._audit_dir = audit_dir
@@ -141,15 +218,16 @@ class OperatorOverrideService:
         *,
         reason: str,
         operator_identity: str,
+        scope: str,
         ttl_seconds: int = 3600,
     ) -> OperatorOverrideCapability:
-        if not reason.strip():
-            raise ValueError("override reason required")
-        if not operator_identity.strip():
-            raise ValueError("operator_identity required")
+        if scope not in OperatorOverrideCapability.ALLOWED_SCOPES:
+            raise ValueError(f"scope {scope!r} cannot bypass structural safety")
+        if not reason.strip() or not operator_identity.strip():
+            raise ValueError("reason and operator_identity required")
         if ttl_seconds < 60 or ttl_seconds > 86_400:
             raise ValueError("ttl_seconds must be in [60, 86400]")
-        issued = datetime.now(timezone.utc)
+        issued = _now()
         expires = issued + timedelta(seconds=ttl_seconds)
         override_id = str(uuid4())
         body = {
@@ -158,13 +236,14 @@ class OperatorOverrideService:
             "operator_identity": operator_identity.strip(),
             "issued_at": issued.isoformat(),
             "expires_at": expires.isoformat(),
-            "scope": "mass_research",
+            "scope": scope,
         }
         digest = _digest(body)
         if self._audit_dir is not None:
             self._audit_dir.mkdir(parents=True, exist_ok=True)
-            path = self._audit_dir / f"override-{override_id}.json"
-            path.write_text(json.dumps({**body, "digest": digest}, indent=2), encoding="utf-8")
+            (self._audit_dir / f"override-{override_id}.json").write_text(
+                json.dumps({**body, "digest": digest}, indent=2), encoding="utf-8"
+            )
         return OperatorOverrideCapability(
             override_id=override_id,
             reason=reason.strip(),
@@ -172,242 +251,169 @@ class OperatorOverrideService:
             issued_at=issued.isoformat(),
             expires_at=expires.isoformat(),
             audit_artifact_digest=digest,
+            scope=scope,
         )
 
 
 class ResearchReadinessService:
-    """Sole mint authority for VerifiedResearchReadiness.
+    """Mint attestation only from verified immutable READY snapshot."""
 
-    Reads live evidence from the research SQLite copy / projection tables.
-    Never accepts caller-supplied GO counters.
-    """
-
-    def __init__(self, db_path: str | Path) -> None:
-        self._db_path = Path(db_path)
+    def __init__(
+        self,
+        *,
+        snapshot_dir: str | Path,
+        snapshot_id: str | None = None,
+        ttl_seconds: int = 3600,
+    ) -> None:
+        self._snapshot_dir = Path(snapshot_dir)
+        self._snapshot_id = snapshot_id
+        self._ttl = ttl_seconds
 
     def mint(self) -> VerifiedResearchReadiness:
-        """Evaluate live evidence and mint attestation or raise."""
-        if not self._db_path.is_file():
-            raise MassResearchDisabledError(
-                f"research DB missing: {self._db_path} — mass research NO-GO"
-            )
-        conn = sqlite3.connect(f"file:{self._db_path}?mode=ro", uri=True)
-        conn.row_factory = sqlite3.Row
-        try:
-            evidence = self._collect_evidence(conn)
-        finally:
-            conn.close()
-        failures = evidence.get("failures") or []
-        if failures:
-            raise MassResearchDisabledError(
-                "research readiness failed: " + "; ".join(failures)
-            )
-        attestation = VerifiedResearchReadiness(
-            attestation_id=str(uuid4()),
-            snapshot_id=str(evidence["snapshot_id"]),
-            ready_state="READY",
-            ready_manifest_digest=str(evidence["ready_manifest_digest"]),
-            coverage_policy_version=str(evidence["coverage_policy_version"]),
-            coverage_proof_digest=str(evidence["coverage_proof_digest"]),
-            governed_membership_digest=str(evidence["governed_membership_digest"]),
-            governed_complete=int(evidence["governed_complete"]),
-            governed_total=int(evidence["governed_total"]),
-            b0_status=str(evidence["b0_status"]),
-            quality_status=str(evidence["quality_status"]),
-            source_generation=int(evidence["source_generation"]),
-            sync_generation=int(evidence["sync_generation"]),
-            raw_proof_status=str(evidence["raw_proof_status"]),
-            verified_at=_now(),
-            evidence_digest=_digest(evidence),
+        from paper_runtime.snapshot import (
+            describe_snapshot,
+            latest_ready_snapshot,
+            data_snapshot_id,
         )
-        return attestation
 
-    def _collect_evidence(self, conn: sqlite3.Connection) -> dict[str, Any]:
-        failures: list[str] = []
-        governed = governed_datasets()
-        governed_ids = tuple(sorted(d.dataset_id for d in governed))
-        membership_digest = _digest(list(governed_ids))
-        total = len(governed_ids)
-        if total <= 0:
-            failures.append("governed membership empty")
-
-        complete = 0
+        if not self._snapshot_dir.is_dir():
+            raise MassResearchDisabledError(
+                f"READY snapshot dir missing: {self._snapshot_dir}"
+            )
         try:
-            rows = conn.execute(
-                "SELECT dataset, status FROM dataset_coverage"
-            ).fetchall()
-            status_map = {str(r["dataset"]): str(r["status"]) for r in rows}
-            complete = sum(1 for d in governed_ids if status_map.get(d) == "COMPLETE")
-        except sqlite3.Error as exc:
-            failures.append(f"dataset_coverage unreadable: {exc}")
-
-        if complete != total or total <= 0:
-            failures.append(f"governed COMPLETE {complete}/{total}")
-
-        coverage_proof_digest = "sha256:" + "0" * 64
-        try:
-            # Prefer a proof-shaped digest over live segment rows when present.
-            proof_row = conn.execute(
-                """
-                SELECT proof_digest FROM dataset_coverage
-                WHERE status='COMPLETE' AND proof_digest IS NOT NULL
-                LIMIT 1
-                """
-            ).fetchone()
-            if proof_row and proof_row[0]:
-                coverage_proof_digest = str(proof_row[0])
+            if self._snapshot_id:
+                ready = describe_snapshot(self._snapshot_dir, self._snapshot_id)
             else:
-                seg_n = conn.execute(
-                    "SELECT COUNT(*) FROM coverage_segments WHERE status='COMPLETE'"
-                ).fetchone()
-                coverage_proof_digest = _digest(
-                    {"complete_segments": int(seg_n[0]) if seg_n else 0}
+                ready = latest_ready_snapshot(self._snapshot_dir)
+        except (FileNotFoundError, RuntimeError, ValueError) as exc:
+            raise MassResearchDisabledError(
+                f"READY verifier failed: {exc}"
+            ) from exc
+
+        # describe_snapshot / latest already verified manifest digests + immutability.
+        manifest = dict(ready.manifest)
+        artifact_path = ready.artifact_path
+        db_digest = _file_sha256(artifact_path)
+        # Prefer embedded digests from manifest; never invent PASS from partial tables.
+        coverage_proof = str(
+            manifest.get("coverage_proof_digest")
+            or manifest.get("coverage_digest")
+            or ""
+        )
+        if not coverage_proof.startswith("sha256:"):
+            raise MassResearchDisabledError("READY manifest missing coverage proof digest")
+        membership = str(
+            manifest.get("governed_membership_digest")
+            or manifest.get("membership_digest")
+            or ""
+        )
+        if not membership.startswith("sha256:"):
+            raise MassResearchDisabledError(
+                "READY manifest missing governed membership digest"
+            )
+        raw_proof = str(manifest.get("raw_proof_digest") or "")
+        if not raw_proof.startswith("sha256:"):
+            raise MassResearchDisabledError("READY manifest missing raw proof digest")
+        b0_proof = str(
+            manifest.get("b0_quality_proof_digest")
+            or manifest.get("quality_digest")
+            or ""
+        )
+        if not b0_proof.startswith("sha256:"):
+            raise MassResearchDisabledError("READY manifest missing B0/quality proof digest")
+        source_gen = str(
+            manifest.get("source_generation")
+            or manifest.get("export_generation")
+            or ""
+        )
+        applied_gen = str(
+            manifest.get("applied_sync_generation")
+            or manifest.get("apply_generation")
+            or ""
+        )
+        if not source_gen or not applied_gen:
+            raise MassResearchDisabledError(
+                "READY manifest missing source/applied sync generation pins"
+            )
+        # Require explicit pin correspondence in manifest (not equal-copy cheat).
+        pin = manifest.get("export_apply_pin") or {}
+        if not isinstance(pin, Mapping) or not pin:
+            # Accept if both gens present and manifest declares them bound.
+            if source_gen != applied_gen and not manifest.get("export_apply_bound"):
+                raise MassResearchDisabledError(
+                    "READY manifest lacks export/apply generation binding"
                 )
-        except sqlite3.Error:
-            pass
 
-        snapshot_id = ""
-        ready_manifest_digest = ""
-        ready_state = ""
-        try:
-            snap = conn.execute(
-                """
-                SELECT snapshot_id, state, manifest_digest
-                FROM ops_ready_snapshots
-                WHERE state='READY'
-                ORDER BY published_at DESC
-                LIMIT 1
-                """
-            ).fetchone()
-            if snap is None:
-                # Local paper READY table fallback.
-                snap = conn.execute(
-                    """
-                    SELECT snapshot_id, 'READY' AS state, COALESCE(manifest_digest, '')
-                    FROM paper_ready_snapshots
-                    WHERE state='READY' OR status='READY'
-                    ORDER BY rowid DESC
-                    LIMIT 1
-                    """
-                ).fetchone()
-            if snap is None:
-                failures.append("READY snapshot missing")
-            else:
-                snapshot_id = str(snap[0])
-                ready_state = str(snap[1] or "READY")
-                ready_manifest_digest = str(snap[2] or "") or _digest({"snapshot_id": snapshot_id})
-                if ready_state != "READY":
-                    failures.append(f"latest snapshot state={ready_state}")
-        except sqlite3.Error as exc:
-            failures.append(f"READY lookup failed: {exc}")
-
-        b0_status = "UNKNOWN"
-        quality_status = "UNKNOWN"
-        try:
-            b0 = conn.execute(
-                "SELECT status FROM ops_b0_status ORDER BY checked_at DESC LIMIT 1"
-            ).fetchone()
-            if b0:
-                b0_status = str(b0[0])
-            q = conn.execute(
-                "SELECT status FROM ops_snapshot_quality ORDER BY checked_at DESC LIMIT 1"
-            ).fetchone()
-            if q:
-                quality_status = str(q[0])
-            # Fall back: if tables absent, try paper quality
-            if b0_status == "UNKNOWN":
-                b0_status = "PASS" if complete == total and complete > 0 else "FAIL"
-            if quality_status == "UNKNOWN":
-                quality_status = b0_status
-        except sqlite3.Error:
-            b0_status = "PASS" if complete == total and complete > 0 else "FAIL"
-            quality_status = b0_status
-        if b0_status != "PASS":
-            failures.append(f"B0={b0_status}")
-        if quality_status != "PASS":
-            failures.append(f"quality={quality_status}")
-
-        source_generation = 0
-        sync_generation = 0
-        try:
-            gen = conn.execute(
-                "SELECT COALESCE(MAX(change_seq), 0) FROM ingestion_change_log"
-            ).fetchone()
-            source_generation = int(gen[0]) if gen else 0
-            sync_generation = source_generation
-        except sqlite3.Error:
-            pass
-        if source_generation <= 0:
-            failures.append("source/sync generation is zero")
-
-        raw_proof_status = "MISSING"
-        try:
-            raw_n = conn.execute(
-                "SELECT COUNT(*) FROM raw_retention_manifests"
-            ).fetchone()
-            if raw_n and int(raw_n[0]) > 0:
-                raw_proof_status = "COMPLETE"
-            else:
-                # Receipt digests with real raw sha as secondary evidence.
-                rec = conn.execute(
-                    """
-                    SELECT COUNT(*) FROM collection_receipts
-                    WHERE digests LIKE '%\"raw\": \"sha256:%'
-                       OR digests LIKE '%sha256:%'
-                    """
-                ).fetchone()
-                if rec and int(rec[0]) > 0:
-                    raw_proof_status = "COMPLETE"
-        except sqlite3.Error:
-            pass
-        if raw_proof_status != "COMPLETE":
-            failures.append("raw proof incomplete")
-
-        return {
-            "failures": failures,
-            "snapshot_id": snapshot_id,
-            "ready_manifest_digest": ready_manifest_digest or _digest({"empty": True}),
-            "coverage_policy_version": COVERAGE_POLICY_VERSION,
-            "coverage_proof_digest": coverage_proof_digest,
-            "governed_membership_digest": membership_digest,
-            "governed_complete": complete,
-            "governed_total": total,
-            "b0_status": b0_status,
-            "quality_status": quality_status,
-            "source_generation": source_generation,
-            "sync_generation": sync_generation,
-            "raw_proof_status": raw_proof_status,
+        verified_at = _now()
+        expires_at = verified_at + timedelta(seconds=max(60, self._ttl))
+        attestation_id = str(uuid4())
+        evidence = {
+            "snapshot_id": ready.snapshot_id,
+            "manifest_digest": str(manifest.get("manifest_digest") or ""),
+            "db_digest": db_digest,
+            "coverage_proof": coverage_proof,
+            "membership": membership,
+            "raw_proof": raw_proof,
+            "b0_proof": b0_proof,
+            "source_gen": source_gen,
+            "applied_gen": applied_gen,
         }
+        body = {
+            "attestation_id": attestation_id,
+            "snapshot_id": ready.snapshot_id,
+            "ready_state": "READY",
+            "ready_manifest_digest": str(manifest.get("manifest_digest") or ""),
+            "immutable_db_digest": db_digest,
+            "coverage_policy_version": str(
+                manifest.get("coverage_policy_version") or ""
+            ),
+            "coverage_proof_digest": coverage_proof,
+            "governed_membership_digest": membership,
+            "raw_proof_digest": raw_proof,
+            "b0_quality_proof_digest": b0_proof,
+            "source_generation": source_gen,
+            "applied_sync_generation": applied_gen,
+            "verified_at": verified_at.isoformat(),
+            "expires_at": expires_at.isoformat(),
+            "evidence_digest": _digest(evidence),
+            "issuer": "ResearchReadinessService/v2",
+        }
+        if not body["ready_manifest_digest"].startswith("sha256:"):
+            raise MassResearchDisabledError("READY manifest_digest missing")
+        sig = _sign_attestation(body, _attestation_secret())
+        return VerifiedResearchReadiness(signature=sig, **body)
+
+
+def _file_sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            h.update(chunk)
+    return "sha256:" + h.hexdigest()
 
 
 def require_mass_research_start(
     *,
     budget: ResearchBudgetCapability | None,
     readiness: VerifiedResearchReadiness | None,
-    operator_override: OperatorOverrideCapability | None = None,
-) -> tuple[ResearchBudgetCapability, VerifiedResearchReadiness | OperatorOverrideCapability]:
-    """Fail-closed mass research start gate.
+    expected_snapshot_id: str | None = None,
+) -> tuple[ResearchBudgetCapability, VerifiedResearchReadiness]:
+    """Fail-closed mass start: budget + valid unexpired readiness only.
 
-    Requires budget + VerifiedResearchReadiness. Optional operator override
-    may substitute for readiness only when live and audited — never a bool flag.
+    Operator override is intentionally not accepted as readiness substitute.
     """
     cap = require_budget_capability(budget)
-    if readiness is not None:
-        if not isinstance(readiness, VerifiedResearchReadiness):
-            raise MassResearchDisabledError("readiness must be VerifiedResearchReadiness")
-        return cap, readiness
-    if operator_override is not None:
-        if not isinstance(operator_override, OperatorOverrideCapability):
-            raise MassResearchDisabledError("invalid operator override type")
-        if not operator_override.is_live():
-            raise MassResearchDisabledError("operator override expired or not yet valid")
-        return cap, operator_override
-    raise MassResearchDisabledError(
-        "VerifiedResearchReadiness required; mass research NO-GO "
-        "(caller-supplied scalars and go_override are rejected)"
-    )
+    if readiness is None:
+        raise MassResearchDisabledError(
+            "VerifiedResearchReadiness required; operator override cannot substitute"
+        )
+    if not isinstance(readiness, VerifiedResearchReadiness):
+        raise MassResearchDisabledError("readiness must be VerifiedResearchReadiness")
+    readiness.require_valid(expected_snapshot_id=expected_snapshot_id)
+    return cap, readiness
 
 
+# Re-export for mass_research imports
 __all__ = [
     "MassResearchDisabledError",
     "OperatorOverrideCapability",

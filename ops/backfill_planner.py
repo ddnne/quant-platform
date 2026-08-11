@@ -368,12 +368,19 @@ class BackfillPlanner:
                     else:
                         chunks = _week_chunks(start, end, self.chunk_days)
                 for a, b in chunks:
-                    segment_id = f"{a.isoformat()}_{b.isoformat()}"
+                    # Canonical segment ID must match Coverage Contract identity
+                    # (calendar_month → YYYY-MM; never date_date form).
+                    if cov.segment_granularity == "calendar_month":
+                        segment_id = a.strftime("%Y-%m")
+                    elif cov.segment_granularity in {
+                        "official_archive_day",
+                        "source_time_series_file",
+                        "official_archive_year",
+                    }:
+                        segment_id = a.strftime("%Y-%m")
+                    else:
+                        segment_id = a.strftime("%Y-%m")
                     if segment_id in complete:
-                        continue
-                    # Also skip if monthly segment id form already complete
-                    month_id = a.strftime("%Y-%m")
-                    if month_id in complete:
                         continue
                     jobs.append(
                         BackfillJob(
@@ -385,8 +392,12 @@ class BackfillPlanner:
                             endpoint_query_mode=mode,
                             priority=_PRIORITY.get(cov.dataset_id, 200),
                             contract_digest=contract_digest,
+                            expected_evidence="COVERAGE_COMPLETE",
+                            state="pending",
                         )
                     )
+            # Ensure every governed JQ dataset appears at least once in inventory
+            # even when all segments are complete (empty job list still inventories).
             jobs.sort(key=lambda j: (j.priority, j.dataset, j.requested_from))
             return BackfillPlan(
                 plan_version=PLAN_VERSION,
@@ -410,12 +421,86 @@ def inventory_governed_jq_datasets() -> list[str]:
     )
 
 
+def inventory_all_governed_datasets() -> list[str]:
+    """All 26 governed dataset ids (JQ + JSDA) — always for status APIs."""
+    return sorted(
+        c.dataset_id
+        for c in all_coverage_contracts()
+        if c.governance_tier == "governed"
+    )
+
+
+def backfill_status_rows(
+    *,
+    db_path: Path | str | None = None,
+) -> list[dict[str, Any]]:
+    """One row per governed dataset (26). Missing plans are explicit states."""
+    conn: sqlite3.Connection | None = None
+    if db_path and Path(db_path).is_file():
+        conn = sqlite3.connect(f"file:{Path(db_path)}?mode=ro", uri=True)
+    rows: list[dict[str, Any]] = []
+    try:
+        for cov in all_coverage_contracts():
+            if cov.governance_tier != "governed":
+                continue
+            ds = cov.dataset_id
+            required = 0
+            complete = 0
+            state = "PLANNING_MISSING"
+            if conn is not None:
+                try:
+                    r = conn.execute(
+                        """
+                        SELECT
+                          SUM(CASE WHEN status='COMPLETE' THEN 1 ELSE 0 END),
+                          COUNT(*)
+                        FROM coverage_segments WHERE dataset=?
+                        """,
+                        (ds,),
+                    ).fetchone()
+                    if r and r[1]:
+                        complete = int(r[0] or 0)
+                        required = int(r[1] or 0)
+                        if required > 0 and complete == required:
+                            state = "COVERAGE_COMPLETE"
+                        elif complete > 0:
+                            state = "PARTIAL"
+                        else:
+                            state = "DISCOVERY_INCOMPLETE"
+                    else:
+                        if ds.startswith("jsda_"):
+                            state = "CONTRACT_ADAPTER_OR_DISCOVERY_PENDING"
+                        else:
+                            state = "PLANNING_MISSING"
+                except sqlite3.Error:
+                    state = "PLANNING_MISSING"
+            else:
+                if ds.startswith("jsda_"):
+                    state = "CONTRACT_ADAPTER_OR_DISCOVERY_PENDING"
+            rows.append(
+                {
+                    "dataset": ds,
+                    "source": "jsda" if ds.startswith("jsda_") else "jquants",
+                    "history_target_start": cov.history_target_start,
+                    "required_segments": required,
+                    "complete_segments": complete,
+                    "state": state,
+                }
+            )
+    finally:
+        if conn is not None:
+            conn.close()
+    return rows
+
+
 __all__ = [
     "BackfillJob",
     "BackfillPlan",
     "BackfillPlanner",
     "EndpointCapability",
     "PLAN_VERSION",
+    "backfill_status_rows",
+    "inventory_all_governed_datasets",
     "inventory_governed_jq_datasets",
     "load_premium_endpoint_capabilities",
 ]

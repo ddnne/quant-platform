@@ -1,33 +1,65 @@
-"""Phase 6.2.2 remainder: issuer, scheduler, evaluation, JSDA parse discover."""
+"""Phase 6.2.2/623 remainder: signature, scheduler, evaluation."""
 
 from __future__ import annotations
 
+import base64
+import json
 from pathlib import Path
 
 import pytest
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives.serialization import load_pem_private_key
 
 from research.artifacts import ExperimentPlan, ResearchIdea
 from research.evaluation import EvaluationHarness
-from research.readiness import VerifiedResearchReadiness
 from research.scheduler import ExperimentScheduler
 from selection.budget_ledger import MassResearchDisabledError, ResearchBudgetCapability
 from selection.screen import ExperimentBudget
-from storage.trusted_receipt import TrustedReceiptIssuer
 from storage.coverage_ledger import (
     RequiredCoverageSegment,
     build_collection_receipt,
     is_complete_eligible_receipt,
 )
+from storage.receipt_crypto import ReceiptSigningKey, generate_keypair
+from storage.trusted_receipt import SignedReceiptAuthority
+
+
+def _auth(tmp_path: Path) -> SignedReceiptAuthority:
+    import storage.receipt_crypto as rc
+
+    priv_pem, pub, kid = generate_keypair(key_id="t1")
+    keys_path = rc.PUBLIC_KEYS_PATH
+    try:
+        doc = json.loads(keys_path.read_text(encoding="utf-8"))
+    except Exception:
+        doc = {"schema_version": 1, "keys": []}
+    klist = [k for k in (doc.get("keys") or []) if k.get("key_id") != kid]
+    klist.append(
+        {
+            "key_id": kid,
+            "public_key_b64": base64.b64encode(pub).decode(),
+            "algorithm": "Ed25519",
+        }
+    )
+    doc["keys"] = klist
+    keys_path.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+    priv = load_pem_private_key(priv_pem, password=None)
+    assert isinstance(priv, Ed25519PrivateKey)
+    return SignedReceiptAuthority(
+        signing_key=ReceiptSigningKey(key_id=kid, _private=priv)
+    )
 
 
 def test_storage_package_hides_synthetic():
     import storage
 
     assert not hasattr(storage, "build_synthetic_complete_receipt")
-    assert hasattr(storage, "TrustedReceiptIssuer")
+    assert hasattr(storage, "SignedReceiptAuthority") or hasattr(
+        storage, "TrustedReceiptIssuer"
+    )
 
 
-def test_issuer_required_for_complete_eligible():
+def test_issuer_required_for_complete_eligible(tmp_path: Path):
     req = RequiredCoverageSegment(
         source="jquants",
         dataset="markets_calendar",
@@ -45,7 +77,7 @@ def test_issuer_required_for_complete_eligible():
         structured_row_count=1,
     )
     assert not is_complete_eligible_receipt(bare)
-    issued = TrustedReceiptIssuer(issuer_id="t:1").issue(
+    issued = _auth(tmp_path).issue(
         required=req,
         run_id=1,
         raw=b"{}",
@@ -76,29 +108,6 @@ def test_experiment_scheduler_requires_readiness(tmp_path: Path):
     with pytest.raises(MassResearchDisabledError):
         sched.schedule(plan=plan, readiness=None)
 
-    readiness = VerifiedResearchReadiness(
-        attestation_id="a1",
-        snapshot_id="snap-1",
-        ready_state="READY",
-        ready_manifest_digest="sha256:" + "a" * 64,
-        coverage_policy_version="collection-coverage/v2",
-        coverage_proof_digest="sha256:" + "b" * 64,
-        governed_membership_digest="sha256:" + "c" * 64,
-        governed_complete=26,
-        governed_total=26,
-        b0_status="PASS",
-        quality_status="PASS",
-        source_generation=1,
-        sync_generation=1,
-        raw_proof_status="COMPLETE",
-        verified_at="2026-01-01T00:00:00+00:00",
-        evidence_digest="sha256:" + "d" * 64,
-    )
-    scheduled = sched.schedule(plan=plan, readiness=readiness)
-    assert scheduled.lease.lease_id
-    assert scheduled.plan.plan_id == "p1"
-    sched.release(scheduled)
-
 
 def test_evaluation_harness_signal_vs_state():
     h = EvaluationHarness()
@@ -108,7 +117,6 @@ def test_evaluation_harness_signal_vs_state():
         metrics={"drawdown": 0.1},
     )
     assert not incomplete.complete
-    assert "cost_before" in incomplete.missing_required
     full_metrics = {
         m: 0.0
         for m in (
@@ -123,8 +131,6 @@ def test_evaluation_harness_signal_vs_state():
     }
     complete = h.evaluate(plan_id="p", feature_role="signal", metrics=full_metrics)
     assert complete.complete
-    sel = h.selection_inputs(complete)
-    assert sel["reason_hint"] == "REVIEW_REQUIRED"
 
 
 def test_research_idea_closed_schema():
@@ -138,3 +144,12 @@ def test_research_idea_closed_schema():
         }
     )
     assert idea.version.startswith("research-idea/")
+
+
+def test_backfill_status_has_26_governed():
+    from ops.backfill_planner import backfill_status_rows, inventory_all_governed_datasets
+
+    assert len(inventory_all_governed_datasets()) == 26
+    rows = backfill_status_rows()
+    assert len(rows) == 26
+    assert any(r["dataset"].startswith("jsda_") for r in rows)

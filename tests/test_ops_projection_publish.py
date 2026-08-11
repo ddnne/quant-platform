@@ -268,7 +268,7 @@ def test_export_includes_projection_metadata_with_status_check(tmp_path):
     assert row is not None
     status, version = row
     assert status in ("FRESH", "STALE", "FAILED", "UNKNOWN")
-    assert version == "ops_projection/v2"
+    assert version == "ops_projection/v3"
 
 
 def test_export_includes_endpoint_inventory(tmp_path):

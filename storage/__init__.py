@@ -25,17 +25,17 @@ from .coverage_ledger import (
     record_required_segments,
     refresh_coverage_ledger,
 )
-from .trusted_receipt import TrustedReceiptIssuer, mint_ingestion_issuer
+from .trusted_receipt import SignedReceiptAuthority, TrustedReceiptIssuer
 
 # build_synthetic_complete_receipt is intentionally NOT re-exported from the
-# production storage package. Tests import it from storage.coverage_ledger
-# or tests._fixtures.synthetic_receipts.
+# production storage package. mint_ingestion_issuer is removed (Phase 6.2.3).
 
 __all__ = [
     "__version__",
     "CollectionReceipt",
     "RequiredCoverageSegment",
     "SYNTHETIC_RECEIPT_MARKER",
+    "SignedReceiptAuthority",
     "TrustedReceiptIssuer",
     "build_collection_receipt",
     "compute_raw_digest",
@@ -45,7 +45,6 @@ __all__ = [
     "evaluate_segment",
     "is_complete_eligible_receipt",
     "is_synthetic_receipt",
-    "mint_ingestion_issuer",
     "plan_required_segments",
     "read_collection_receipts",
     "read_coverage_segments",

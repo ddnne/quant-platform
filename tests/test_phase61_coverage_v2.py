@@ -44,18 +44,78 @@ def _receipt(
         raw_row_count=raw_count,
         structured_row_count=structured_count,
         pagination_exhausted=pagination_exhausted,
-        digests={
-            "raw": "sha256:" + "a" * 64,
-            "eligibility": "TRUSTED_COLLECTION",
-            "issuer_class": "TrustedReceiptIssuer",
-            "issuer_id": f"jquants:run:{run_id}",
-            "parser_normalizer_version": "coverage-receipt/v2",
-        },
+        digests=_signed_digests(
+            dataset=segment.dataset,
+            segment_id=segment.segment_id,
+            source=segment.source,
+            run_id=run_id,
+            raw_digest="sha256:" + "a" * 64,
+        ),
         run_id=run_id,
         status="SUCCESS",
         error=None,
         checked_at=f"2025-04-01T00:00:0{run_id}+00:00",
     )
+
+
+_SIGNED_KEY = None
+
+
+def _signed_digests(*, dataset, segment_id, source, run_id, raw_digest):
+    """Module-level test signing authority (Ed25519)."""
+    global _SIGNED_KEY
+    import base64
+    import json
+    from pathlib import Path
+    import storage.receipt_crypto as rc
+    from storage.receipt_crypto import (
+        ReceiptSigningKey,
+        build_signed_digest_fields,
+        generate_keypair,
+    )
+    from cryptography.hazmat.primitives.serialization import load_pem_private_key
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    if _SIGNED_KEY is None:
+        priv_pem, pub, kid = generate_keypair(key_id="phase61-test")
+        # Append to repo public-key registry so other tests keep verifying.
+        keys_path = rc.PUBLIC_KEYS_PATH
+        try:
+            doc = json.loads(keys_path.read_text(encoding="utf-8"))
+        except Exception:
+            doc = {"schema_version": 1, "keys": []}
+        keys = list(doc.get("keys") or [])
+        keys = [k for k in keys if k.get("key_id") != kid]
+        keys.append(
+            {
+                "key_id": kid,
+                "public_key_b64": base64.b64encode(pub).decode(),
+                "algorithm": "Ed25519",
+            }
+        )
+        doc["keys"] = keys
+        keys_path.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+        priv = load_pem_private_key(priv_pem, password=None)
+        assert isinstance(priv, Ed25519PrivateKey)
+        _SIGNED_KEY = ReceiptSigningKey(key_id=kid, _private=priv)
+    signed = build_signed_digest_fields(
+        signing_key=_SIGNED_KEY,
+        dataset=dataset,
+        segment_id=segment_id,
+        source=source,
+        run_id=run_id,
+        raw_digest=raw_digest,
+        raw_count=1,
+        structured_count=1,
+        structured_digest=None,
+        pagination_exhausted=True,
+        source_request_digest=None,
+        raw_manifest_digest=raw_digest,
+        structured_generation=run_id,
+    )
+    signed["raw"] = raw_digest
+    return signed
+
 
 
 def _short_event_policy():

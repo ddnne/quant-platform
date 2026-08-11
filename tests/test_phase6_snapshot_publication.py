@@ -28,6 +28,7 @@ from storage.coverage_ledger import (
     refresh_coverage_ledger,
 )
 from storage.sqlite_store import SqliteStore
+from tests.test_phase61_coverage_v2 import _signed_digests
 
 
 def _jquants_coverage_contracts():
@@ -151,32 +152,54 @@ def _seed_publishable_db(path) -> tuple[str, ...]:
             for segment in plan_required_segments(policy, today)
         )
         record_required_segments(conn, planned)
+        from storage.trusted_receipt import open_signed_receipt_authority
+
+        try:
+            authority = open_signed_receipt_authority()
+        except RuntimeError:
+            # Fall back to test keypair registered into public key registry.
+            authority = None
+            from tests.test_phase61_coverage_v2 import _signed_digests as _sd
         for segment in planned:
-            record_collection_receipt(conn, CollectionReceipt(
-                source=segment.source,
-                dataset=segment.dataset,
-                segment_id=segment.segment_id,
-                segment_start=segment.segment_start,
-                segment_end=segment.segment_end,
-                expected_scope=segment.expected_scope,
-                expected_items=segment.expected_items,
-                observed_items=observed,
-                raw_page_count=1,
-                raw_row_count=observed,
-                structured_row_count=observed,
-                pagination_exhausted=True,
-                digests={
-                    "raw": "sha256:" + "1" * 64,
-                    "eligibility": "TRUSTED_COLLECTION",
-                    "issuer_class": "TrustedReceiptIssuer",
-                    "issuer_id": f"jquants:run:{run_id}",
-                    "parser_normalizer_version": "coverage-receipt/v2",
-                },
-                run_id=run_id,
-                status="SUCCESS",
-                error=None,
-                checked_at=today + "T16:00:00Z",
-            ))
+            raw = b'{"data":[{"ok":true}]}'
+            if authority is not None:
+                receipt = authority.issue(
+                    required=segment,
+                    run_id=run_id,
+                    raw=raw,
+                    observed_items=observed,
+                    structured_row_count=observed,
+                    raw_row_count=observed,
+                    pagination_exhausted=True,
+                    checked_at=today + "T16:00:00Z",
+                )
+            else:
+                receipt = CollectionReceipt(
+                    source=segment.source,
+                    dataset=segment.dataset,
+                    segment_id=segment.segment_id,
+                    segment_start=segment.segment_start,
+                    segment_end=segment.segment_end,
+                    expected_scope=segment.expected_scope,
+                    expected_items=segment.expected_items,
+                    observed_items=observed,
+                    raw_page_count=1,
+                    raw_row_count=observed,
+                    structured_row_count=observed,
+                    pagination_exhausted=True,
+                    digests=_sd(
+                        dataset=segment.dataset,
+                        segment_id=segment.segment_id,
+                        source=segment.source,
+                        run_id=run_id,
+                        raw_digest="sha256:" + "1" * 64,
+                    ),
+                    run_id=run_id,
+                    status="SUCCESS",
+                    error=None,
+                    checked_at=today + "T16:00:00Z",
+                )
+            record_collection_receipt(conn, receipt)
     # Generation pin for READY coherence (must be > 0, not mere table presence).
     try:
         conn.execute(

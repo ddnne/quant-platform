@@ -1,10 +1,7 @@
 """Test READY publication coherence gates with and without receipts.
 
 This test proves that coherence fails without receipts but passes with
-synthetic COMPLETE receipts in a fixture database.
-
-Lane C Requirement: Unit test proves coherence fails without receipts;
-passes with synthetic COMPLETE receipts only in fixture DB.
+signed COMPLETE receipts in a fixture database.
 """
 
 from __future__ import annotations
@@ -26,6 +23,7 @@ from storage import (
 )
 from storage.coverage_ledger import plan_required_segments
 from storage.sqlite_store import SqliteStore
+from tests.test_phase61_coverage_v2 import _signed_digests
 
 
 @pytest.fixture
@@ -142,13 +140,13 @@ def fixture_db_with_complete_coverage_and_receipts(fixture_db_with_schema):
             raw_row_count=1 if segment.expected_items != 0 else 0,
             structured_row_count=1 if segment.expected_items != 0 else 0,
             pagination_exhausted=True,  # Pagination exhausted
-            digests={
-                "raw": "sha256:" + "a" * 64,
-                "eligibility": "TRUSTED_COLLECTION",
-                "issuer_class": "TrustedReceiptIssuer",
-                "issuer_id": "jquants:run:1",
-                "parser_normalizer_version": "coverage-receipt/v2",
-            },
+            digests=_signed_digests(
+                dataset=segment.dataset,
+                segment_id=segment.segment_id,
+                source=segment.source,
+                run_id=1,
+                raw_digest="sha256:" + "a" * 64,
+            ),
             run_id=1,
             status="SUCCESS",
             error=None,

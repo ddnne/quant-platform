@@ -203,11 +203,45 @@ def _record(
     digests: Mapping[str, Any],
 ) -> None:
     stamped = dict(digests)
-    if status == "SUCCESS" and error is None:
-        stamped["eligibility"] = "TRUSTED_COLLECTION"
-        stamped["issuer_class"] = "TrustedReceiptIssuer"
-        stamped["issuer_id"] = f"jsda:run:{int(run_id)}"
-        stamped["parser_normalizer_version"] = "coverage-receipt/v2"
+    if (
+        status == "SUCCESS"
+        and error is None
+        and not (
+            isinstance(stamped.get("signature"), str)
+            and str(stamped.get("signature")).startswith("ed25519:")
+        )
+    ):
+        try:
+            from storage.receipt_crypto import build_signed_digest_fields, load_signing_key
+
+            sk = load_signing_key()
+            if sk is not None:
+                raw_d = str(stamped.get("raw") or "")
+                signed = build_signed_digest_fields(
+                    signing_key=sk,
+                    dataset=required.dataset,
+                    segment_id=required.segment_id,
+                    source=required.source,
+                    run_id=run_id,
+                    raw_digest=raw_d,
+                    raw_count=int(raw_row_count),
+                    structured_count=int(structured_row_count),
+                    structured_digest=None,
+                    pagination_exhausted=bool(pagination_exhausted),
+                    source_request_digest=stamped.get("source_request_digest"),
+                    raw_manifest_digest=raw_d or None,
+                    structured_generation=run_id,
+                )
+                stamped.update(signed)
+                stamped["raw"] = raw_d
+            else:
+                stamped["eligibility"] = "RECOVERED_RAW_ONLY"
+                stamped.setdefault(
+                    "trust_note", "unsigned JSDA receipt — signing key missing"
+                )
+        except Exception as exc:  # noqa: BLE001
+            stamped["eligibility"] = "RECOVERED_RAW_ONLY"
+            stamped["trust_note"] = f"sign failed: {exc}"
     record_collection_receipt(store._conn, CollectionReceipt(  # noqa: SLF001
         source=required.source,
         dataset=required.dataset,
