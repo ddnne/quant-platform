@@ -408,12 +408,44 @@ _REPO_DATE_MARKERS = ("年月日", "取引日", "営業日", "公表日", "基�
 
 def _find_repo_header(rows: List[List[str]]) -> tuple[int, List[str]]:
     """Locate the repo-rate header row and return its original (un-normalized)
-    cells, so wide-format tenor headers keep their source text."""
+    cells, so wide-format tenor headers keep their source text.
+
+    Official ``trrts.xls`` uses a matrix header like
+    ``term/ターム | overnight/翌日物 | 1W | ...`` (no explicit date column
+    name). Prefer that over the workbook title / footnote rows.
+    """
+    # 1) Official TRR matrix header (must beat footnotes that mention ターム物/1W).
     for i, row in enumerate(rows):
+        first = (row[0] if row else "") or ""
+        if first.strip().startswith("※"):
+            continue
+        normed = [_norm_header(c) for c in row]
+        has_overnight = any(
+            ("overnight" in c) or ("翌日" in c) for c in normed
+        )
+        has_term_hdr = any(
+            c.startswith("term")
+            or c.startswith("tenor")
+            or c.startswith("ターム")
+            or "term/" in c
+            or "tenor/" in c
+            for c in normed
+        )
+        if has_term_hdr and has_overnight:
+            return i, list(row)
+    # 2) Explicit date-column headers (long/CSV layouts).
+    for i, row in enumerate(rows):
+        first = (row[0] if row else "") or ""
+        if first.strip().startswith("※"):
+            continue
         normed = [_norm_header(c) for c in row]
         if any(any(mk in cell for mk in _REPO_DATE_MARKERS) for cell in normed):
             return i, list(row)
+    # 3) Fallback: first non-empty non-footnote row.
     for i, row in enumerate(rows):
+        first = (row[0] if row else "") or ""
+        if first.strip().startswith("※"):
+            continue
         if any((c or "").strip() for c in row):
             return i, list(row)
     return -1, []
@@ -465,8 +497,73 @@ def parse_repo_csv(data, *, encoding: Optional[str] = None) -> List[dict]:
     tenor_col = _col_first(norm_headers, _REPO_TENOR_ALIASES)
     rate_col = _col_first(norm_headers, _REPO_RATE_ALIASES)
 
+    # Official wide TRR matrix: col0 header is "term/ターム" but cells are dates;
+    # other columns are tenors (overnight, 1W, …). Force wide layout.
+    wide_matrix = False
+    if tenor_col == 0:
+        other = [
+            (raw_headers[i] or "").strip()
+            for i in range(1, len(raw_headers))
+            if (raw_headers[i] or "").strip()
+        ]
+        if other and any(
+            re.search(r"(overnight|翌日|1\s*w|1\s*m|2\s*w|3\s*m|/)", h, re.I)
+            for h in other
+        ):
+            tenor_col = None
+            date_col = 0
+            wide_matrix = True
+    if date_col is None:
+        for probe in rows[header_idx + 1 : header_idx + 12]:
+            if _date(_cell(probe, 0)):
+                date_col = 0
+                wide_matrix = True
+                break
+
+    # Dual header row (official trrts.xls): parent tenors + settlement (T+0/T+1).
+    tenor_labels = list(raw_headers)
+    data_start = header_idx + 1
+    if wide_matrix and header_idx + 1 < len(rows):
+        sub = rows[header_idx + 1]
+        # If next row looks like settlement labels (T+0/T+1) not data dates.
+        sub_joined = " ".join((c or "") for c in sub).upper()
+        if "T+0" in sub_joined or "T+1" in sub_joined:
+            parent = ""
+            labels: list[str] = []
+            width = max(len(raw_headers), len(sub))
+            for i in range(width):
+                top = (raw_headers[i] if i < len(raw_headers) else "") or ""
+                bot = (sub[i] if i < len(sub) else "") or ""
+                top_s, bot_s = top.strip(), bot.strip()
+                if top_s:
+                    parent = top_s
+                if i == (date_col or 0):
+                    labels.append(top_s or "date")
+                    continue
+                if top_s and bot_s and re.match(r"T\+\d+", bot_s, re.I):
+                    labels.append(f"{top_s}/{bot_s}")
+                elif bot_s and re.match(r"T\+\d+", bot_s, re.I) and parent:
+                    labels.append(f"{parent}/{bot_s}")
+                elif top_s:
+                    labels.append(top_s)
+                elif bot_s:
+                    labels.append(bot_s)
+                else:
+                    labels.append("")
+            tenor_labels = labels
+            data_start = header_idx + 2
+
+    def _clean_tenor(label: str) -> str:
+        t = (label or "").strip()
+        if not t or t in {"(%)", "%", "-", "—", "－"}:
+            return ""
+        # Drop pure rate/unit junk headers.
+        if re.fullmatch(r"[\(%）%\s]+", t):
+            return ""
+        return t
+
     out: List[dict] = []
-    for row in rows[header_idx + 1:]:
+    for row in rows[data_start:]:
         if not any((c or "").strip() for c in row):
             continue
         d = _date(_cell(row, date_col))
@@ -485,16 +582,18 @@ def parse_repo_csv(data, *, encoding: Optional[str] = None) -> List[dict]:
             out.append({"as_of_date": d, "tenor": tenor, "rate": rate})
         else:
             # Wide layout: one record per numeric column (header = tenor).
-            # Only the date column is excluded — ``rate_col`` is a long-layout
-            # concept and a tenor header that happens to contain "レート"/"%"
-            # must not be dropped here.
-            for idx in range(min(len(row), len(raw_headers))):
-                if idx == date_col:
+            width = max(len(row), len(tenor_labels))
+            for idx in range(width):
+                if date_col is not None and idx == date_col:
                     continue
                 val = _num(_cell(row, idx))
                 if val is None:
                     continue  # blank tenor for this day -> not published
-                tenor = (raw_headers[idx] or "").strip()
+                tenor = _clean_tenor(
+                    tenor_labels[idx] if idx < len(tenor_labels) else ""
+                )
+                if not tenor:
+                    continue  # never emit empty tenor (causes duplicate keys)
                 out.append({"as_of_date": d, "tenor": tenor, "rate": val})
     return out
 
@@ -551,8 +650,22 @@ def parse_repo_xls(data: bytes) -> List[dict]:
                         value = xlrd.xldate_as_datetime(
                             value, workbook.datemode
                         ).strftime("%Y-%m-%d")
-                    elif isinstance(value, float) and value.is_integer():
-                        value = int(value)
+                    elif cell.ctype == xlrd.XL_CELL_NUMBER and isinstance(
+                        value, (int, float)
+                    ):
+                        # Official trrts.xls stores as_of dates as unformatted
+                        # Excel serial numbers (e.g. 41211) while rates stay in
+                        # [0, 10]. Convert serial-range numbers to YYYY-MM-DD.
+                        num = float(value)
+                        if 20000.0 <= num <= 60000.0:
+                            try:
+                                value = xlrd.xldate_as_datetime(
+                                    num, workbook.datemode
+                                ).strftime("%Y-%m-%d")
+                            except (ValueError, OverflowError):
+                                value = int(num) if num.is_integer() else num
+                        elif num.is_integer():
+                            value = int(num)
                     rendered.append("" if value is None else str(value))
                 writer.writerow(rendered)
             records = parse_repo_csv(buffer.getvalue())

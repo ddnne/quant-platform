@@ -101,14 +101,19 @@ def plan_required_segments(
             expected_items = expected_items_by_segment.get(segment_id)
             if expected_items is not None and expected_items < 0:
                 raise ValueError("expected segment items must be non-negative")
+        unit = (
+            "source_event"
+            if policy.expected_frequency == "event_driven"
+            else "source_query"
+        )
+        # Non-event source_query segments need an explicit expected_items for
+        # COMPLETE (evaluate_segment). Default one exhausted query plan.
+        if expected_items is None and unit == "source_query":
+            expected_items = 1
         scope = {
             "coverage_mode": policy.coverage_mode,
             "expected_frequency": policy.expected_frequency,
-            "expected_item_unit": (
-                "source_event"
-                if policy.expected_frequency == "event_driven"
-                else "source_query"
-            ),
+            "expected_item_unit": unit,
             "segment_end": segment_end.isoformat(),
             "segment_start": segment_start.isoformat(),
             "universe_rule": policy.universe_rule,
