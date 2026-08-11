@@ -394,14 +394,26 @@ async function upsertWatermark(
   lastEventDate: string | null,
   lastIngestedAt: string,
 ): Promise<void> {
+  // last_export_cursor tracks the highest change_seq for this dataset so
+  // Ops MCP sync_status can compute lag vs MAX(ingestion_change_log.change_seq).
+  // NULL would leave every dataset stuck at EXPORT_CURSOR_NULL forever.
   await env.DB.prepare(
     `INSERT INTO ingestion_watermarks
        (dataset, last_event_date, last_ingested_at, last_export_cursor)
-     VALUES (?, ?, ?, NULL)
+     VALUES (
+       ?,
+       ?,
+       ?,
+       (SELECT MAX(change_seq) FROM ingestion_change_log WHERE dataset = ?)
+     )
      ON CONFLICT(dataset) DO UPDATE SET
        last_event_date  = COALESCE(excluded.last_event_date, ingestion_watermarks.last_event_date),
-       last_ingested_at = excluded.last_ingested_at`,
-  ).bind(dataset, lastEventDate, lastIngestedAt).run();
+       last_ingested_at = excluded.last_ingested_at,
+       last_export_cursor = COALESCE(
+         (SELECT MAX(change_seq) FROM ingestion_change_log WHERE dataset = excluded.dataset),
+         ingestion_watermarks.last_export_cursor
+       )`,
+  ).bind(dataset, lastEventDate, lastIngestedAt, dataset).run();
 }
 
 // ---------------------------------------------------------------------------
