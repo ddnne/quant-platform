@@ -1027,6 +1027,20 @@ def publish_ready_snapshot(
                 conn, staging_path, build_id=build_id, required=required
             )
             watermarks = _watermarks_for(conn, required, coverage_rows)
+            # Phase 6.2 coherence gate: READY cannot publish without all gates.
+            from paper_runtime.coherence import check_ready_coherence
+
+            coherence = check_ready_coherence(
+                conn, staging_path, required, run_id=run_id
+            )
+            failed = [g for g in coherence if not g.passed]
+            if failed:
+                detail = "; ".join(
+                    f"{g.gate_name}: {g.reason}" for g in failed
+                )
+                raise SnapshotRejected(
+                    f"READY coherence gates failed: {detail}"
+                )
         except Exception as exc:
             reason = str(exc)[:4000]
             conn.execute(

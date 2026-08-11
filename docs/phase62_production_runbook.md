@@ -157,3 +157,17 @@ The unauthenticated response must be `401`. Authenticated calls should succeed a
 - A missing projection returns UNKNOWN and every governed gap.
 - If AM `observed_end` is null but `row_count > 0`, check data quality — AM data may be sparse.
 - AM null dates before 2024-01-04 are expected — not an error.
+
+## Ops projection cron (local / host)
+
+```bash
+# every hour (example)
+0 * * * * cd /path/to/quant-platform && APPLY_REMOTE_OPS=1 ./scripts/cron_publish_ops.sh
+```
+
+- Default does **not** apply remote unless `APPLY_REMOTE_OPS=1`.
+- Requires working local DB; remote apply needs `wrangler` CF auth.
+- Does **not** auto-declare Coverage COMPLETE — only republishes ledger truth.
+- CF Worker cron for ingestion is separate (`ingestion-premium` hourly); projection
+  publish is intentionally host-side so D1 projection SQL can be generated from
+  the research SQLite snapshot after sync.
