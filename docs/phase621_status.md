@@ -1,37 +1,32 @@
 # Phase 6.2.1 status (honest)
 
-**HEAD**: see `git log -1`  
-**Developer**: GLM (+ orchestrated land)  
-**Backfill**: left running (do not stop)
+**HEAD**: `282b68a`  
+**Primary**: GLM-5.2 when available  
+**Grok**: only while GLM 5h rate-limit (reset ~2026-08-11 19:52:30); not for "stalling"
 
-## Landed on main
+## Landed
 
-| Item | Status |
+| Item | Notes |
 |------|--------|
-| P0 receipt eligibility TRUSTED vs RECOVERED_RAW_ONLY | ✅ `d0d2bcd` |
-| rebuild_from_raw non-COMPLETE-eligible | ✅ |
-| JSDA corporate → jsda_bond_trades mapping | ✅ |
-| Coherence latest receipt + change_seq>0 | ✅ |
-| MCP governed.js generated from coverage SoT | ✅ `36c7398` |
-| ResearchBudgetCapability SQLite ledger | ✅ |
-| PaperExecutionService foundation | ✅ |
+| Receipt eligibility TRUSTED vs RECOVERED_RAW_ONLY | digests; rebuild non-COMPLETE-eligible |
+| Coherence latest receipt + change_seq>0 | |
+| MCP governed.js generated from coverage SoT | |
+| ResearchBudgetCapability SQLite ledger | |
+| Ops projection FRESH/DEGRADED_REFRESH_FAILED/STALE/MISSING | `ops/projection_meta.py` |
+| JSDA corporate dedicated table + mapping | not legacy bond_trades |
+| Strict ResearchMemo/FeatureProposal from_dict | Lane F |
+| PaperExecutionService + agent runtime | Lane G |
+| pytest green | |
 
-## In flight (GLM lanes A–G)
+## Still open
 
-Canonical endpoints metadata, READY policy unify, ops projection states, AM SLA,
-ImmutableArtifactStore, AI gateway typed, agent capability — worktrees `/tmp/qp-621-*`
-
-## Still open / long
-
-- Full READY PublicationPolicy consolidation
-- Live 26/26 COMPLETE + READY≥1 (backfill)
-- JSDA live + publication lag semantics polish
+- collection_trust DDL (Lane A WIP) — digests.eligibility already gates COMPLETE
+- READY PublicationPolicy full consolidate
+- ImmutableArtifactStore full
+- AI Gateway charge tokens end-to-end
 - quant-mcp redeploy tools/list==16
-- Phase 7 mass research: **NO-GO**
+- Live 26 COMPLETE + READY (backfill continues)
 
-## Priority remaining
+## Mass research
 
-1. Land/merge GLM lanes when green  
-2. Typed AI gateway + ImmutableArtifactStore  
-3. Orchestrator run_paper → PaperExecutionService  
-4. MCP redeploy + inventory path metadata  
+**NO-GO** until instruction §20 conditions.
