@@ -513,8 +513,12 @@ export async function callOpsTool(db, name, rawArguments) {
     const marks = await all(db,
       "SELECT dataset, last_event_date, last_ingested_at, last_export_cursor FROM ingestion_watermarks ORDER BY dataset LIMIT 500");
     const change = await first(db, "SELECT MAX(change_seq) AS latest_change_seq FROM ingestion_change_log");
+    const changeCount = await first(db, "SELECT COUNT(*) AS n FROM ingestion_change_log");
     const latest = change?.latest_change_seq == null ? null : Number(change.latest_change_seq);
+    const changeLogRows = changeCount?.n == null ? 0 : Number(changeCount.n);
     // Per-dataset export cursor + lag vs latest change_seq (null cursor = not synced).
+    // applied_cursor stays null until local apply pin is projected — do not
+    // pretend D1 watermark equals local research apply.
     const datasets = (marks || []).map((row) => {
       const cursorRaw = row.last_export_cursor;
       const exported = cursorRaw == null || cursorRaw === "" ? null : Number(cursorRaw);
@@ -522,21 +526,19 @@ export async function callOpsTool(db, name, rawArguments) {
         latest == null || exported == null || Number.isNaN(exported)
           ? null
           : Math.max(0, latest - exported);
+      let state = "UNKNOWN";
+      if (exported == null) {
+        state = changeLogRows === 0 ? "CHANGE_LOG_EMPTY" : "EXPORT_CURSOR_NULL";
+      } else if (lag === 0) state = "CURRENT";
+      else if (lag != null && lag > 0) state = "LAGGING";
       return {
         dataset: row.dataset,
         last_event_date: row.last_event_date ?? null,
         last_ingested_at: row.last_ingested_at ?? null,
         exported_cursor: Number.isNaN(exported) ? null : exported,
-        applied_cursor: Number.isNaN(exported) ? null : exported, // D1-side watermark stands in until local apply pin is projected
+        applied_cursor: null,
         lag,
-        state:
-          exported == null
-            ? "EXPORT_CURSOR_NULL"
-            : lag === 0
-              ? "CURRENT"
-              : lag != null && lag > 0
-                ? "LAGGING"
-                : "UNKNOWN",
+        state,
       };
     });
     const null_cursors = datasets.filter((d) => d.exported_cursor == null).length;
@@ -546,11 +548,15 @@ export async function callOpsTool(db, name, rawArguments) {
       // latest_change_seq kept as stable alias; latest_source_change_seq is the explicit name.
       latest_change_seq: latest,
       latest_source_change_seq: latest,
+      change_log_row_count: changeLogRows,
+      bootstrapped: changeLogRows > 0 && null_cursors === 0,
       watermarks: marks,
       datasets,
       null_export_cursor_count: null_cursors,
       research_note:
-        "Cloudflare ingestion progress ≠ local research apply. Null export cursors mean D1→local sync is not closed.",
+        "Cloudflare ingestion progress ≠ local research apply. " +
+        "Null export cursors are honest when change_log is empty or watermark not advanced; " +
+        "applied_cursor is null until local sync pin is projected. Do not treat null as COMPLETE.",
     };
   }
 
