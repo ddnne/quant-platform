@@ -1,5 +1,17 @@
 # strategies
 
-投資戦略の定義・Paper 実験用の戦略コードの置き場所。
+feature-driven 戦略と Paper（仮想執行）実験の入口。Phase 5 では次を提供する。
 
-実装は **後続 Phase**（Paper 縦通し以降）。現時点では空。
+- `paper/`: `PaperRunConfig`、`run_paper`、`PaperRunResult`、`JsonPaperStore`
+- `examples/`: `Return1dFeatureStrategy`、`MomentumFeatureStrategy`
+
+```text
+strategy params -> features -> core.run_backtest -> PaperRunResult -> JsonPaperStore
+```
+
+戦略モジュールは `pit`、`storage`、`sqlite3`、HTTP、J-Quants、secrets を直接利用しない。
+fact は必須 `as_of` 付きの PIT、派生値は `features`、執行は `core` にそれぞれ閉じ込める。
+Paper は live broker／real order を含まない。
+
+使い方、保存規約、reproducibility metadata、offline／optional live smoke は
+[Paper pipeline](../docs/paper.md) を参照。

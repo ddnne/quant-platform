@@ -42,6 +42,8 @@ data/structured/
 data/tmp/
 data/reports/*
 !data/reports/.gitkeep
+data/paper/*
+!data/paper/.gitkeep
 *.parquet
 *.duckdb
 *.sqlite

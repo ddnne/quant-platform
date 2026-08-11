@@ -8,13 +8,17 @@
 | 3 | コアエンジン最小（`core/`・PIT 経由のみ・ブラックボックス） ✅ 完了 |
 | 3.5 | CF J-Quants Premium 閉路（`platform/workers/ingestion-premium/`） ✅ 完了 |
 | 4 | 特徴量 Registry（`features/`・PIT 経由のみ・versioned・`as_of` 必須） ✅ 完了 |
-| 5 | Paper 縦通し |
+| 5 | Paper 縦通し（`strategies/paper/`・result 永続化・sample strategies・CLI） ✅ 完了 |
 | 6 | 役割エージェント |
 | 7 | 選抜・Knowledge・AI Gateway |
 | 8 | FoF・Risk |
 | 9 | 執行の厚み・追加データ |
 
-> **次は Phase 5（Paper 縦通し）。** Phase 4 では特徴量 Registry を実装した
+> **次は Phase 6（役割エージェント）。** Phase 5 では Paper 縦通しを実装した
+> （`PaperRunConfig` → feature-driven strategy → `core.run_backtest` →
+> `PaperRunResult` → `data/paper/<strategy_id>/<run_id>.json`）。戦略から DB／PIT／HTTP／
+> secrets への直接アクセスは禁止し、再現性 metadata を result に固定する。詳細は
+> [paper.md](paper.md)。Phase 4 では特徴量 Registry を実装した
 > （`features/`・`compute` は PIT 経由のみ・`return_1d`/`momentum_n`/`volatility_n` 同梱・
 > 再現性メタデータ付き）。詳細は [features.md](features.md)。
 > Phase 3.5 では Cloudflare 上の Premium core 取得閉路（`platform/workers/ingestion-premium/`・
