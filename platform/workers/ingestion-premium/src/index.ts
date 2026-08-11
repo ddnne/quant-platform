@@ -54,6 +54,15 @@ function todayJst(): string {
   return toJstIso(new Date()).slice(0, 10);
 }
 
+/** Prefer last completed JST calendar day for market-wide OHLC pulls.
+ *  Using "today" before the session is finished often yields empty `data` which
+ *  the validator treats as pass — hiding missing bars. Cron runs hourly; day-1
+ *  is safer for equities/derivatives market-wide snapshots.
+ */
+function defaultMarketDayJst(): string {
+  return daysAgoJst(1);
+}
+
 function daysAgoJst(n: number): string {
   const t = new Date(Date.now() - n * 24 * 60 * 60 * 1000);
   return toJstIso(t).slice(0, 10);
@@ -97,7 +106,7 @@ function requestQueries(
       const to = opts.to || opts.from!;
       return inclusiveDates(from, to).map((d) => ({ [dayKey]: d }));
     }
-    return [{ [dayKey]: opts.today || todayJst() }];
+    return [{ [dayKey]: opts.today || defaultMarketDayJst() }];
   }
 
   // range: only for endpoints that accept bare from/to without code

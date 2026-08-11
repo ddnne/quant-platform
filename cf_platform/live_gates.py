@@ -44,31 +44,106 @@ def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
     return row is not None
 
 
+def _count_distinct_codes_from_records(
+    conn: sqlite3.Connection, dataset: str
+) -> int:
+    """Count distinct equity codes from generic jquants_records for a dataset."""
+    if not _table_exists(conn, "jquants_records"):
+        return 0
+    # natural_key is JSON like {"Code":"13010","Date":"..."}; prefer payload.
+    for sql in (
+        """
+        SELECT COUNT(DISTINCT json_extract(payload, '$.Code'))
+        FROM jquants_records WHERE dataset = ?
+        """,
+        """
+        SELECT COUNT(DISTINCT json_extract(raw_payload, '$.Code'))
+        FROM jquants_records WHERE dataset = ?
+        """,
+        """
+        SELECT COUNT(DISTINCT json_extract(natural_key, '$.Code'))
+        FROM jquants_records WHERE dataset = ?
+        """,
+    ):
+        try:
+            n = conn.execute(sql, (dataset,)).fetchone()[0]
+            if n:
+                return int(n)
+        except sqlite3.Error:
+            continue
+    return 0
+
+
+def _latest_day_row_count_records(
+    conn: sqlite3.Connection, dataset: str
+) -> int:
+    if not _table_exists(conn, "jquants_records"):
+        return 0
+    try:
+        row = conn.execute(
+            """
+            SELECT json_extract(payload, '$.Date') AS d, COUNT(*)
+            FROM jquants_records
+            WHERE dataset = ? AND json_extract(payload, '$.Date') IS NOT NULL
+            GROUP BY d ORDER BY d DESC LIMIT 1
+            """,
+            (dataset,),
+        ).fetchone()
+        if row:
+            return int(row[1])
+    except sqlite3.Error:
+        pass
+    return 0
+
+
 def measure_b0(db_path: str | Path) -> list[GateResult]:
-    uri = f"file:{Path(db_path).resolve()}?mode=ro"
+    path = Path(db_path).resolve()
+    uri = f"file:{path}?mode=ro"
     conn = sqlite3.connect(uri, uri=True)
     out: list[GateResult] = []
     try:
         master_n = 0
         if _table_exists(conn, "jquants_listed_info"):
-            master_n = int(conn.execute(
-                "SELECT COUNT(DISTINCT code) FROM jquants_listed_info"
-            ).fetchone()[0] or 0)
+            try:
+                master_n = int(conn.execute(
+                    "SELECT COUNT(DISTINCT code) FROM jquants_listed_info"
+                ).fetchone()[0] or 0)
+            except sqlite3.Error:
+                master_n = 0
+        if master_n == 0:
+            master_n = _count_distinct_codes_from_records(conn, "equities_master")
         g = LIVE_GATES["master_min_issuers"]
         out.append(GateResult("B0_master", master_n >= g, float(master_n), g,
                               f"master issuers={master_n} gate>={g}"))
+
         bars_n = 0
         latest_day_n = 0
         if _table_exists(conn, "jquants_daily_bars"):
-            bars_n = int(conn.execute(
-                "SELECT COUNT(DISTINCT code) FROM jquants_daily_bars"
-            ).fetchone()[0] or 0)
-            row = conn.execute(
-                "SELECT date, COUNT(*) FROM jquants_daily_bars "
-                "GROUP BY date ORDER BY date DESC LIMIT 1"
-            ).fetchone()
-            if row:
-                latest_day_n = int(row[1])
+            try:
+                bars_n = int(conn.execute(
+                    "SELECT COUNT(DISTINCT code) FROM jquants_daily_bars"
+                ).fetchone()[0] or 0)
+                row = conn.execute(
+                    "SELECT date, COUNT(*) FROM jquants_daily_bars "
+                    "GROUP BY date ORDER BY date DESC LIMIT 1"
+                ).fetchone()
+                if row:
+                    latest_day_n = int(row[1])
+            except sqlite3.Error:
+                pass
+        # Phase 3.5 worker writes generic jquants_records; fall back there.
+        # Prefer full daily bars; if only AM exists, still report AM metrics
+        # under the bars gate so ops see non-zero coverage.
+        if bars_n == 0:
+            bars_n = _count_distinct_codes_from_records(conn, "equities_bars_daily")
+            latest_day_n = _latest_day_row_count_records(conn, "equities_bars_daily")
+        if bars_n == 0:
+            bars_n = _count_distinct_codes_from_records(
+                conn, "equities_bars_daily_am"
+            )
+            latest_day_n = _latest_day_row_count_records(
+                conn, "equities_bars_daily_am"
+            )
         g2 = LIVE_GATES["bars_min_issuers"]
         out.append(GateResult("B0_bars_issuers", bars_n >= g2, float(bars_n), g2,
                               f"bar issuers={bars_n} gate>={g2}"))
