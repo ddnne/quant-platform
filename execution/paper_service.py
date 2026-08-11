@@ -173,6 +173,12 @@ class PaperExecutionService:
             raise PaperExecutionRejected(str(exc)) from exc
 
         auth_snap = getattr(plan, "ready_snapshot_id", "") or ""
+        require_ready = bool(getattr(config, "require_ready_snapshot", False))
+        if require_ready and not str(auth_snap).strip():
+            raise PaperExecutionRejected(
+                "require_ready_snapshot=True but authorization has empty "
+                "ready_snapshot_id; refusing paper execution without READY pin"
+            )
         if auth_snap and auth_snap != pinned_snapshot:
             raise PaperExecutionRejected(
                 "authorized ready_snapshot_id does not match config db snapshot; "

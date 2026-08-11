@@ -114,7 +114,24 @@ class AgentPaperPipeline:
         composed = self.composer.compose(memos)
         spec = self.strategist.propose(composed)
         decision = self.pm.review(spec)
-        plan = self.trader.prepare(decision)
+        # Propagate READY snapshot pins into the authorization so
+        # PaperExecutionService can bind exact snapshot identity (fail-closed
+        # when config.require_ready_snapshot and pin is empty).
+        ready_id = str(getattr(config, "ready_snapshot_id", "") or "")
+        ready_digest = str(getattr(config, "ready_manifest_digest", "") or "")
+        if getattr(config, "require_ready_snapshot", False) and not ready_id.strip():
+            raise ValueError(
+                "paper pipeline requires ready_snapshot_id when "
+                "require_ready_snapshot=True (no READY pin → refuse execution)"
+            )
+        plan = self.trader.prepare(
+            decision,
+            ready_snapshot_id=ready_id,
+            ready_manifest_digest=ready_digest,
+            universe=universe,
+            period_start=str(config.start),
+            period_end=str(config.end),
+        )
 
         # The orchestrator never touches the trusted paper runtime directly.
         # It hands the capability-free authorization (plan) and the immutable

@@ -56,6 +56,11 @@ class PaperRunConfig:
     price_basis: str = RAW
     lifecycle: Lifecycle | str = Lifecycle.PAPER
     calendar_as_of: str | None = None
+    # Phase 7: pin paper to an immutable READY snapshot when non-empty.
+    ready_snapshot_id: str = ""
+    ready_manifest_digest: str = ""
+    # When True, empty ready_snapshot_id is refused (default False keeps unit tests).
+    require_ready_snapshot: bool = False
 
     def __post_init__(self) -> None:
         if not self.start or not self.end or self.start > self.end:
