@@ -1,13 +1,6 @@
 #!/usr/bin/env bash
 # Production-ready local cron entry for Ops projection refresh.
-# Intended for launchd/cron on the research host (or a runner with CF auth).
-#
-# Steps:
-#   1) refresh_coverage_ledger (honest PARTIAL/COMPLETE from receipts)
-#   2) publish_ops_projection (local SQL + meta)
-#   3) optional --apply-remote when APPLY_REMOTE_OPS=1 and wrangler auth present
-#
-# Never claims coverage COMPLETE; only publishes whatever the ledger reports.
+# Never presents a failed refresh as FRESH (handled in publish_ops_projection).
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
@@ -23,10 +16,14 @@ if [[ ! -f "$DB" ]]; then
   echo "[cron_publish_ops] missing db: $DB" >&2
   exit 2
 fi
-"$PY" scripts/refresh_coverage_ledger.py --db "$DB" || true
-ARGS=(scripts/publish_ops_projection.py --db "$DB")
+# Always pass --refresh-coverage so failures are recorded as DEGRADED_REFRESH_FAILED
+ARGS=(scripts/publish_ops_projection.py --db "$DB" --refresh-coverage)
 if [[ "${APPLY_REMOTE_OPS:-0}" == "1" ]]; then
   ARGS+=(--apply-remote)
 fi
+set +e
 "$PY" "${ARGS[@]}"
-echo "[cron_publish_ops] done $(date -Iseconds)"
+rc=$?
+set -e
+echo "[cron_publish_ops] done rc=$rc $(date -Iseconds)"
+exit "$rc"

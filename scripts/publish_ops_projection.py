@@ -73,29 +73,47 @@ def main(argv: list[str] | None = None) -> int:
         print(f"ERROR: local DB not found: {args.db}", file=sys.stderr)
         return 2
 
+    refresh_status = "skipped"
+    refresh_error = None
+    last_refresh_attempt_at = _now()
+    last_success_at = None
     if args.refresh_coverage:
         from storage.sqlite_store import SqliteStore
         from storage.coverage_ledger import refresh_coverage_ledger
 
+        last_refresh_attempt_at = _now()
         store = SqliteStore(args.db)
         try:
             refresh_coverage_ledger(store._conn, args.db)  # noqa: SLF001
             store._conn.commit()  # noqa: SLF001
-            print("coverage ledger refresh attempted")
+            refresh_status = "success"
+            last_success_at = _now()
+            print("coverage ledger refresh ok")
+        except Exception as exc:  # noqa: BLE001
+            refresh_status = "failed"
+            refresh_error = str(exc)[:2000]
+            print(f"coverage ledger refresh FAILED: {exc}", file=sys.stderr)
         finally:
             store.close()
 
     sql = render_projection_sql(args.db, snapshot_dir=args.snapshot_dir)
-    # Append projection metadata table upsert if present in schema; always write meta JSON.
-    meta = {
-        "projection_status": "AVAILABLE",
-        "projection_generated_at": _now(),
-        "projection_source_generation": str(args.db.resolve()),
-        "local_db": str(args.db),
-        "snapshot_dir": str(args.snapshot_dir),
-        "sql_bytes": len(sql.encode("utf-8")),
-        "publisher": "scripts/publish_ops_projection.py",
-    }
+    from ops.projection_meta import build_projection_metadata
+
+    meta = build_projection_metadata(
+        args.db,
+        refresh_status=refresh_status,
+        refresh_error=refresh_error,
+        last_refresh_attempt_at=last_refresh_attempt_at,
+        last_success_at=last_success_at,
+        publisher="scripts/publish_ops_projection.py",
+    )
+    meta["local_db"] = str(args.db)
+    meta["snapshot_dir"] = str(args.snapshot_dir)
+    meta["sql_bytes"] = len(sql.encode("utf-8"))
+    # Back-compat aliases for older readers
+    meta["projection_status"] = meta["status"]
+    meta["projection_generated_at"] = meta["generated_at"]
+    meta["projection_source_generation"] = meta.get("source_generation")
 
     if args.dry_run:
         print(sql[:2000])
@@ -132,8 +150,9 @@ def main(argv: list[str] | None = None) -> int:
         if proc.returncode != 0:
             print("ERROR: remote apply failed", file=sys.stderr)
             return proc.returncode
-        meta["projection_status"] = "APPLIED_REMOTE"
         meta["applied_at"] = _now()
+        meta["status"] = meta.get("status", "FRESH")
+        meta["projection_status"] = meta["status"]
         args.meta_output.write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
         print("remote projection applied")
 

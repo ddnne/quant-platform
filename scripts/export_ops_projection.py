@@ -38,53 +38,26 @@ def _projection_metadata(
     db_path: str | Path,
     *,
     max_age_seconds: int = DEFAULT_MAX_AGE_SECONDS,
+    refresh_status: str | None = None,
+    refresh_error: str | None = None,
+    last_refresh_attempt_at: str | None = None,
+    last_success_at: str | None = None,
+    applied_at: str | None = None,
 ) -> dict[str, Any]:
-    """Generate projection metadata with generated_at, source_generation, age, status."""
-    path = Path(db_path).resolve()
-    conn = sqlite3.connect("file:" + quote(str(path)) + "?mode=ro", uri=True)
-    try:
-        # Get latest source generation from change log or coverage evaluation
-        try:
-            row = conn.execute(
-                "SELECT MAX(evaluated_at) AS latest_evaluated FROM dataset_coverage"
-            ).fetchone()
-            source_generation = row[0] if row and row[0] else None
-        except sqlite3.OperationalError:
-            source_generation = None
+    """Delegate to shared ops.projection_meta (single status logic)."""
+    from ops.projection_meta import build_projection_metadata
 
-        # Calculate age
-        generated_at = _now()
-        age_seconds = None
-        status = "UNKNOWN"
+    return build_projection_metadata(
+        db_path,
+        max_age_seconds=max_age_seconds,
+        refresh_status=refresh_status,
+        refresh_error=refresh_error,
+        last_refresh_attempt_at=last_refresh_attempt_at,
+        last_success_at=last_success_at,
+        applied_at=applied_at,
+        publisher="scripts/export_ops_projection.py",
+    )
 
-        if source_generation:
-            try:
-                source_dt = datetime.fromisoformat(source_generation)
-                generated_dt = datetime.fromisoformat(generated_at)
-                age_seconds = int((generated_dt - source_dt).total_seconds())
-
-                if age_seconds <= max_age_seconds:
-                    status = "FRESH"
-                else:
-                    status = "STALE"
-            except (ValueError, TypeError):
-                status = "FAILED"
-        else:
-            status = "FAILED"
-
-        return {
-            "generated_at": generated_at,
-            "source_generation": source_generation,
-            "age_seconds": age_seconds,
-            "status": status,
-            "projection_version": PROJECTION_VERSION,
-            "detail_json": json.dumps({
-                "max_age_seconds": max_age_seconds,
-                "calculation": "age = generated_at - MAX(dataset_coverage.evaluated_at)",
-            }, sort_keys=True, separators=(",", ":")),
-        }
-    finally:
-        conn.close()
 
 
 def _source_inventory(

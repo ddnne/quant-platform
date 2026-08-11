@@ -147,7 +147,7 @@ def test_publish_dry_run_prints_sql_preview_and_metadata(tmp_path, capsys):
 
     # Should contain metadata JSON
     assert "projection_status" in output
-    assert "AVAILABLE" in output
+    assert "FRESH" in output
     assert "publisher" in output
     assert "scripts/publish_ops_projection.py" in output
 
@@ -187,7 +187,7 @@ def test_publish_writes_sql_and_metadata_files(tmp_path):
 
     # Check metadata file content
     meta_content = json.loads(meta_file.read_text(encoding="utf-8"))
-    assert meta_content["projection_status"] == "AVAILABLE"
+    assert meta_content["projection_status"] == "FRESH"
     assert "projection_generated_at" in meta_content
     assert meta_content["publisher"] == "scripts/publish_ops_projection.py"
     assert meta_content["local_db"] == str(db_path)
@@ -228,7 +228,7 @@ def test_publish_metadata_includes_expected_fields(tmp_path):
         "sql_bytes",
         "publisher",
     }
-    assert set(meta_content.keys()) == expected_fields
+    assert expected_fields <= set(meta_content.keys())
 
 
 def test_export_includes_projection_metadata_with_status_check(tmp_path):
@@ -268,7 +268,7 @@ def test_export_includes_projection_metadata_with_status_check(tmp_path):
     assert row is not None
     status, version = row
     assert status in ("FRESH", "STALE", "FAILED", "UNKNOWN")
-    assert version == "ops_projection/v1"
+    assert version == "ops_projection/v2"
 
 
 def test_export_includes_endpoint_inventory(tmp_path):
