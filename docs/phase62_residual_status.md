@@ -1,63 +1,52 @@
 # Phase 6.2 residual status (honest)
 
-**HEAD**: `af9f021` (`git log -1`)
-**Date**: 2026-08-11
-**Track**: GLM parallel + orchestrated land
-**Source of truth**: this file. Cross-referenced by
-[phase62_status.md](phase62_status.md),
-[phase62_completion_checklist.md](phase62_completion_checklist.md),
-[phase62_final_report.md](phase62_final_report.md), and
-[pre_phase7_full_code_review.md](pre_phase7_full_code_review.md).
+**HEAD**: `git log -1` (expect `5fd76a2` or later)  
+**Date**: 2026-08-11  
+**Track**: GLM parallel + orchestrated land (`glm-5.2`)
 
 > **Phase 6.2 is code-complete but live NO-GO.** Do **not** assert
-> `PHASE62_FULL_DONE`, live `COMPLETE`, or production `READY` from this state —
-> the live-operational items below remain **OPEN** with no receipts. Phase 7
-> mass research is **NO-GO** until production READY ≥1 **and** real Coverage V2
-> COMPLETE evidence exist.
+> `PHASE62_FULL_DONE`, live `COMPLETE`, or production `READY` without evidence.
+> Phase 7 mass research is **NO-GO** until production READY ≥1 **and** real
+> Coverage V2 COMPLETE evidence exist.
 
-## Code-complete ✅ (logic landed; offline green on land)
+## Code-complete ✅
 
 | Item | Evidence |
 |------|----------|
-| 31-endpoint inventory (26 governed + 5 experimental) | `data_contracts/canonical_datasets.json`, `data_contracts/inventory.py` |
-| Ops projection publisher + D1 apply (no SQL BEGIN) | `scripts/publish_ops_projection.py` applied remote successfully |
-| Coverage V2 plan granularities (month/year/day/file) | `storage/coverage_ledger.py` |
-| Local ledger refresh | `scripts/refresh_coverage_ledger.py` → 26 PARTIAL (honest, no receipts) |
-| Remote Ops 16 tools + migration 0003 + redeploy | Worker live (`platform/workers/quant-ops-mcp/`) |
-| Sync → optional `--publish-ops` / `--apply-remote-ops` | `scripts/sync_d1_to_sqlite.py`; `--publish-ops` defaults OFF for safety |
-| Phase 7 stubs | `knowledge/`, `selection/`, `gateway/` — scaffolding only, not mass research |
-| Offline pytest | keep green on land |
+| 31-endpoint inventory | `data_contracts/canonical_datasets.json` |
+| Ops projection publisher + D1 apply | `scripts/publish_ops_projection.py` |
+| Host cron projection path | `scripts/cron_publish_ops.sh` (+ runbook) |
+| Coverage V2 granularities | `storage/coverage_ledger.py` |
+| JQ collection receipt emit path | `ingestion/jquants/receipts.py` wired in `ingestion/pipeline.py` |
+| Operational receipt CLI | `scripts/write_collection_receipts.py` |
+| Historical backfill driver | `scripts/run_historical_backfill.py` |
+| READY coherence integrated into publish | `paper_runtime/snapshot.py` + schema-aligned `coherence.py` |
+| Remote Ops MCP tools | 16 tools / migration 0003 |
+| Phase 7 stubs | `knowledge/`, `selection/`, `gateway/` |
+| Offline pytest | green on land |
 
 ## Live operational — still OPEN 🚫
 
 | Item | Status |
 |------|--------|
-| Coverage COMPLETE (needs real collection receipts + full backfill) | **Open** — all governed PARTIAL/UNKNOWN with 0 receipts |
-| Production READY ≥1 | **Open** — coherence correctly blocks (no complete coverage to publish) |
-| Full multi-year JQ/JSDA backfill finished | **Open** — requires long live runs (credentials present; not fully executed here) |
-| Cron auto-projection without any human flag | **Partial** — `--publish-ops` flag exists; CF cron wiring not claimed complete |
+| Coverage COMPLETE (receipts + full history) | **Open** — ledger honest PARTIAL; calendar history expanded; JQ receipts emit on **new** ingest |
+| Production READY ≥1 | **Open** — gates correctly block |
+| Full multi-year JQ/JSDA backfill finished | **Open** — long live runs partial (proxy fixed to secrets worker) |
+| CF Worker cron auto-projection (edge) | **Partial** — host cron path complete; edge not claimed |
+
+## Human-only / external gates
+
+- JSDA HTML archive timeouts / site availability
+- Full multi-year premium history wall-clock
+- CF `INGESTION_RUN_TOKEN` for Worker `/v1/run` (local path uses secrets proxy)
+- Live capital / broker (out of scope)
 
 ## Phase 7 mass research
 
-**NO-GO** until READY ≥1 **and** real Coverage V2 COMPLETE evidence exist.
-The Phase 7 stubs (`knowledge/`, `selection/`, `gateway/`) are scaffolding only;
-they do **not** authorize mass autonomous research.
+**NO-GO** until READY + real COMPLETE evidence.
 
-## Parallel GLM lanes (current)
+## Recent live notes
 
-This is **Lane L** (reusing the G worktree on branch `p62/lane-G`) — residual
-docs + honesty pass at `af9f021`. Parallel sibling lanes in flight:
-
-| Lane | Status | Note |
-|------|--------|------|
-| H / I / J / K | **In progress** on parallel worktrees | Merge when offline tests are green |
-
-> No lane may assert `PHASE62_FULL_DONE`, live `COMPLETE`, or production
-> `READY` without the receipts enumerated under "Live operational" above. Lane
-> outputs are reconciled into this file at orchestrated land. (Earlier
-> Phase 6.1 lanes A–F landed; C/D/E/F polish is superseded by the H–L wave.)
-
----
-
-**Last updated**: 2026-08-11 (HEAD `af9f021`)
-**Code-complete**: 8/8 ✅ | **Live operational**: 0/4 OPEN 🚫 | **Phase 7 mass research**: NO-GO
+- `ingestion_proxy_url` must point at **ingestion-secrets** (`/v1/proxy/jquants`), not premium.
+- `markets_calendar` backfill 2017→2026 succeeded (~3510 rows).
+- New catalog ingests write `collection_receipts`; historical rows need re-fetch or raw-file receipt rebuild.
