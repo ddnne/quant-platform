@@ -249,3 +249,45 @@ in `cf_platform/ingest_premium/coverage.EXPECTED_START` are
 **conservative** (rounded toward the nearest recent month so live
 expectations are forgiving) and are **assumptions, not contractual
 truths** — update as the spec evolves.
+
+---
+
+## Validation honesty (P0-2)
+
+The runner refuses to report a "soft pass" that hides a missing
+implementation. Three behavior changes:
+
+### C1 / C2 use real run logs when present
+
+When the CF/D1 ``ingestion_validation`` table is mirrored to the local
+SQLite DB, C1 and C2 mirror its per-dataset ``status`` exactly. When only
+fact rows are available (no run log), C2 degrades to ``warn`` (not pass)
+with ``reason_code="no_run_log"`` so a green offline report can never be
+confused with a real per-job pass verdict.
+
+### Weekly completion mode (`--require-implemented`)
+
+The weekly tier defaults to completion mode: any ``skip`` with
+``reason_code == "not_implemented"`` is treated as a failure. The daily
+tier defaults to the soft path (tolerate stubs). Override with
+``--require-implemented`` / ``--allow-not-implemented``. The
+``reason_code == "needs_r2"`` skip (C11) is exempt — it represents an
+intentional offline deferral, not a missing implementation.
+
+### C9 / C10 approximated when validation history is present
+
+When ``ingestion_validation`` has multiple per-dataset rows, C9 evaluates
+incremental progress (latest run inserted > 0 or accumulated revisions)
+and C10 evaluates idempotency (insert-only runs with zero revisions, or
+revisions alongside inserts). Without that table both checks skip with
+``reason_code="not_implemented"``. **C11** always skips offline with
+``reason_code="needs_r2"`` — R2 raw partitions are simply not visible
+from a SQLite mirror.
+
+### Persisted report JSON
+
+Every CLI run persists the full result set under
+``data/reports/validation_YYYYMMDD_HHMMSS.json`` so an operator can
+audit what the runner saw even after the DB is re-synced. The directory
+is gitignored (``data/reports/*`` but keep ``.gitkeep``); use
+``--no-persist-report`` to skip.

@@ -9,6 +9,17 @@ Offline by design — never touches the network or Cloudflare. Pair with
 ``scripts/sync_d1_to_sqlite.py`` to first build a local mirror of the CF D1
 DB, then run this against it.
 
+P0-2 honesty add-ons:
+
+* The CLI always persists the full result set under
+  ``data/reports/validation_YYYYMMDD_HHMMSS.json`` so an operator can audit
+  what the runner saw even after the DB is re-synced.
+* ``--require-implemented`` (default **True** for ``--tier weekly``,
+  default **False** for ``--tier daily``) treats a ``skip`` with
+  ``reason_code == "not_implemented"`` as a failure. The weekly tier
+  therefore fails until every weekly check has a real implementation; the
+  daily tier tolerates stubs. ``reason_code == "needs_r2"`` is exempt.
+
 Examples
 --------
   # Daily tier, default:
@@ -37,6 +48,8 @@ if _REPO_ROOT not in sys.path:
 
 from cf_platform.ingest_premium.coverage import (  # noqa: E402
     has_failures,
+    not_implemented_skips,
+    persist_report,
     run_coverage,
     summarize,
 )
@@ -89,6 +102,36 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Parallel check-family workers (default: QP_VAL_WORKERS or 4).",
     )
+    p.add_argument(
+        "--reports-dir",
+        default=str(Path(_REPO_ROOT) / "data" / "reports"),
+        help="Directory for persisted JSON reports (default: data/reports).",
+    )
+    p.add_argument(
+        "--no-persist-report",
+        action="store_true",
+        help="Skip writing the JSON report under data/reports/.",
+    )
+    # ``--require-implemented`` defaults to True for the weekly tier and
+    # False for the daily tier; the tri-state below captures "user did not
+    # pass either flag" (None) so main() can apply the per-tier default.
+    req_group = p.add_mutually_exclusive_group()
+    req_group.add_argument(
+        "--require-implemented",
+        action="store_const",
+        const=True,
+        default=None,
+        dest="require_implemented",
+        help="Treat skip+not_implemented as failure (weekly default).",
+    )
+    req_group.add_argument(
+        "--allow-not-implemented",
+        action="store_const",
+        const=False,
+        default=None,
+        dest="require_implemented",
+        help="Tolerate skip+not_implemented (daily default).",
+    )
     # ``--strict-live-gates`` defaults to True when QP_LIVE=1 (production
     # runs must enforce LIVE_GATES). The explicit ``--no-strict-live-gates``
     # flag overrides that for one-shot diagnostic runs.
@@ -125,7 +168,7 @@ def _load_validation_sidecar(path: str | None) -> dict[str, int] | None:
     return {str(k): int(v) for k, v in obj.items()}
 
 
-def _print_text(results) -> None:
+def _print_text(results, *, require_implemented: bool) -> None:
     # Group by check_id then dataset for stable, readable output.
     width_id = max((len(r.check_id) for r in results), default=4)
     width_ds = max((len(r.dataset or "-") for r in results), default=7)
@@ -140,6 +183,15 @@ def _print_text(results) -> None:
           f"fail={counts.get('fail', 0)} "
           f"skip={counts.get('skip', 0)} "
           f"warn={counts.get('warn', 0)}")
+    ni = not_implemented_skips(results)
+    if ni:
+        note = (
+            "FAIL (require-implemented)" if require_implemented else "tolerated"
+        )
+        print(
+            f"not_implemented skips: {len(ni)} "
+            f"({'; '.join(sorted({r.check_id for r in ni}))}) — {note}"
+        )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -148,6 +200,12 @@ def main(argv: list[str] | None = None) -> int:
     # default to True when QP_LIVE=1 so live runs enforce LIVE_GATES.
     if args.strict_live_gates is None:
         args.strict_live_gates = os.environ.get("QP_LIVE", "") == "1"
+    # Resolve the tri-state --require-implemented. Explicit flag wins; else
+    # default to True for the weekly tier (completion mode) and False for
+    # the daily tier (nightly soft path).
+    if args.require_implemented is None:
+        args.require_implemented = args.tier == "weekly"
+
     sidecar = _load_validation_sidecar(args.validation_json)
     datasets = (
         [s.strip() for s in args.datasets.split(",") if s.strip()]
@@ -164,6 +222,7 @@ def main(argv: list[str] | None = None) -> int:
         workers=args.workers,
         strict_live_gates=args.strict_live_gates,
     )
+
     if args.as_json:
         # `default=str` keeps any stray non-JSON values from crashing output.
         print(json.dumps(
@@ -171,8 +230,28 @@ def main(argv: list[str] | None = None) -> int:
             indent=2, sort_keys=True, default=str,
         ))
     else:
-        _print_text(results)
-    return 1 if has_failures(results) else 0
+        _print_text(results, require_implemented=args.require_implemented)
+
+    # Persist the JSON report unless explicitly disabled. The reports dir
+    # is gitignored (data/reports/* but keep .gitkeep).
+    report_path: Path | None = None
+    if not args.no_persist_report:
+        try:
+            report_path = persist_report(
+                results,
+                tier=args.tier,
+                db_path=args.db,
+                reports_dir=args.reports_dir,
+            )
+        except OSError as exc:
+            # Don't let a non-writable reports dir mask the actual result.
+            print(f"[warn] could not persist validation report: {exc}",
+                  file=sys.stderr)
+    if report_path is not None:
+        print(f"[ok] validation report: {report_path}")
+
+    return 1 if has_failures(results,
+                             require_implemented=args.require_implemented) else 0
 
 
 if __name__ == "__main__":

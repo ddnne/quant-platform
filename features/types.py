@@ -10,7 +10,12 @@ reproducible (``as_of``, ``feature_id``, ``feature_version``,
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Literal, Mapping
+
+# Lifecycle / role vocabularies. ``Literal`` keeps the values statically
+# checkable and lets the registry refuse unknown roles at construction time.
+IntendedRole = Literal["signal", "state", "structural", "utility"]
+FeatureStatus = Literal["candidate", "shadow", "approved", "retired"]
 
 
 @dataclass(frozen=True)
@@ -71,6 +76,18 @@ class FeatureDefinition:
     getters scoped to ``as_of``. The compute function must be a pure function
     of ``(ctx, as_of, inputs)``; it must NOT touch wall-clock time, randomness,
     or any global state.
+
+    Lifecycle / role metadata (P0-5):
+
+    * ``intended_role`` (required) declares *how the feature is meant to be
+      consumed* — ``"signal"`` (model input), ``"state"`` (regime / context),
+      ``"structural"`` (universe / master-derived), or ``"utility"`` (debug /
+      diagnostic only). A model registry can refuse to ingest features whose
+      role it does not support.
+    * ``status`` (optional, default ``"approved"`` for built-ins) is the
+      promotion tier: ``"candidate"`` (unvetted), ``"shadow"`` (logged but
+      not used), ``"approved"`` (default for shipped features), ``"retired"``
+      (kept for audit; do not consume in new code).
     """
 
     id: str
@@ -79,3 +96,5 @@ class FeatureDefinition:
     description: str
     compute: Callable[[Any], FeatureOutput]
     tags: tuple[str, ...] = ()
+    intended_role: IntendedRole = "signal"
+    status: FeatureStatus = "approved"
