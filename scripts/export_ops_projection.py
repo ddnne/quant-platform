@@ -63,59 +63,57 @@ def _projection_metadata(
 def _source_inventory(
     db_path: str | Path,
 ) -> list[dict[str, Any]]:
-    """Read canonical endpoint inventory from local DB."""
-    from data_contracts.canonical import all_canonical_datasets  # noqa: E402
-    from data_contracts.loader import all_contracts  # noqa: E402
+    """Canonical endpoint inventory for Ops projection (all known endpoints)."""
+    import json
+    from data_contracts.canonical import CANONICAL_REGISTRY_PATH, all_canonical_datasets
+    from data_contracts.loader import all_contracts
 
-    # Map canonical contracts to inventory format
+    path_by_id: dict[str, str] = {}
+    for c in all_contracts():
+        path = getattr(c, "path", None)
+        if path:
+            path_by_id[c.dataset_id] = str(path)
+
+    try:
+        canonical_json = json.loads(CANONICAL_REGISTRY_PATH.read_text(encoding="utf-8"))
+        datasets = {d["dataset_id"]: d for d in canonical_json.get("datasets", [])}
+    except Exception:
+        datasets = {}
+
     inventory = []
     for contract in all_canonical_datasets():
-        # Get inventory status from canonical_datasets.json if available
-        try:
-            import json
-            from data_contracts.canonical import CANONICAL_REGISTRY_PATH
-            canonical_json = json.loads(CANONICAL_REGISTRY_PATH.read_text(encoding="utf-8"))
-            datasets = canonical_json.get("datasets", [])
-            dataset_entry = next(
-                (d for d in datasets if d["dataset_id"] == contract.dataset_id),
-                None
+        entry = datasets.get(contract.dataset_id, {})
+        sla = dict(entry.get("sla") or {})
+        # Surface actual upstream locator in sla JSON (no D1 schema change).
+        upstream = (
+            entry.get("path")
+            or entry.get("index_url")
+            or entry.get("source_product")
+            or path_by_id.get(contract.dataset_id)
+        )
+        if upstream:
+            sla["upstream_locator"] = upstream
+        if path_by_id.get(contract.dataset_id):
+            sla["jq_path"] = path_by_id[contract.dataset_id]
+        inv_status = entry.get("inventory_status")
+        if not inv_status:
+            inv_status = (
+                "GOVERNED" if contract.governance_tier == "governed" else "EXPERIMENTAL"
             )
-            if dataset_entry:
-                sla = dataset_entry.get("sla", {})
-                inventory_entry = {
-                    "dataset_id": contract.dataset_id,
-                    "display_name": contract.display_name,
-                    "source": contract.source,
-                    "governance_tier": contract.governance_tier,
-                    "inventory_status": dataset_entry.get("inventory_status", (
-                        "GOVERNED" if contract.governance_tier == "governed" else "EXPERIMENTAL"
-                    )),
-                    "collection_window": dataset_entry.get("collection_window", "full_day"),
-                    "expected_frequency": contract.expected_frequency,
-                    "coverage_segment_granularity": contract.coverage_segment_granularity,
-                    "research_eligible": dataset_entry.get("research_eligible", True),
-                    "enabled": dataset_entry.get("enabled", True),
-                    "sla": json.dumps(sla, sort_keys=True, separators=(",", ":")),
-                    "historical_start": contract.historical_start,
-                }
-                inventory.append(inventory_entry)
-        except Exception:
-            # Fallback to basic contract info
-            inventory.append({
-                "dataset_id": contract.dataset_id,
-                "display_name": contract.display_name,
-                "source": contract.source,
-                "governance_tier": contract.governance_tier,
-                "inventory_status": "GOVERNED" if contract.governance_tier == "governed" else "EXPERIMENTAL",
-                "collection_window": "full_day",
-                "expected_frequency": contract.expected_frequency,
-                "coverage_segment_granularity": contract.coverage_segment_granularity,
-                "research_eligible": True,
-                "enabled": True,
-                "sla": "{}",
-                "historical_start": contract.historical_start,
-            })
-
+        inventory.append({
+            "dataset_id": contract.dataset_id,
+            "display_name": contract.display_name,
+            "source": contract.source,
+            "governance_tier": contract.governance_tier,
+            "inventory_status": inv_status,
+            "collection_window": entry.get("collection_window", "full_day"),
+            "expected_frequency": contract.expected_frequency,
+            "coverage_segment_granularity": contract.coverage_segment_granularity,
+            "research_eligible": bool(entry.get("research_eligible", True)),
+            "enabled": bool(entry.get("enabled", True)),
+            "sla": json.dumps(sla, sort_keys=True, separators=(",", ":")),
+            "historical_start": contract.historical_start,
+        })
     return inventory
 
 

@@ -467,6 +467,11 @@ def _latest_receipt_for(
     receipts: Sequence[CollectionReceipt],
     required: RequiredCoverageSegment,
 ) -> CollectionReceipt | None:
+    """Pick best receipt for a segment.
+
+    Prefer COMPLETE-eligible TRUSTED_COLLECTION over RECOVERED_RAW_ONLY even if
+    a recovery rebuild is newer (recovery must not clobber live trust).
+    """
     exact = [
         receipt for receipt in receipts
         if receipt.source == required.source
@@ -475,7 +480,14 @@ def _latest_receipt_for(
         and receipt.segment_start == required.segment_start
         and receipt.segment_end == required.segment_end
     ]
-    return max(exact, key=lambda item: (item.checked_at, item.run_id), default=None)
+    if not exact:
+        return None
+
+    def _rank(item: CollectionReceipt) -> tuple:
+        trusted = 1 if is_complete_eligible_receipt(item) else 0
+        return (trusted, item.checked_at, item.run_id)
+
+    return max(exact, key=_rank)
 
 
 def evaluate_required_segments(

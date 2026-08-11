@@ -1,38 +1,34 @@
 # Phase 6.2.1 status (honest)
 
-**HEAD**: see `git log -1`  
-**Implementer during GLM 429**: Grok (reset was ~19:52; probe confirmed 429)  
-**Backfill**: leave running (not stopped)
+**HEAD**: `git log -1`  
+**GLM**: 429 until ~19:52 (Grok filled structural gaps during limit)  
+**Backfill**: leave running
 
-## Code-complete for 6.2.1 structure (this land)
+## Structure — DONE (code)
 
-| Item | Status |
-|------|--------|
-| P0 receipt trust TRUSTED vs RECOVERED_RAW_ONLY | ✅ |
-| rebuild_from_raw non-COMPLETE-eligible | ✅ |
-| JSDA corporate dedicated table + coverage map | ✅ |
-| Canonical → MCP governed.js generator | ✅ |
-| Ops projection FRESH/DEGRADED/STALE/MISSING | ✅ |
-| ReadyPublicationPolicy evidence bundle | ✅ |
-| ImmutableArtifactStore + KnowledgeStore | ✅ |
-| ResearchBudgetCapability ledger | ✅ |
-| PaperExecutionService path | ✅ |
-| Agent runtime scaffolding | ✅ |
-| SelectionDecision typed | ✅ |
-| AI gateway closed-schema + typed decode | ✅ |
-| AM morning_session + SLA 11:30/12:30 JST | ✅ |
-| offline pytest | ✅ green |
+| # | Item | Status |
+|---|------|--------|
+| 1 | Receipt trust TRUSTED vs RECOVERED; rebuild non-COMPLETE | ✅ |
+| 1b | Prefer TRUSTED over newer RECOVERED when evaluating | ✅ |
+| 2 | JSDA corporate table + coverage map | ✅ |
+| 3 | governed.js generated from SoT | ✅ |
+| 5 | Inventory upstream locator in sla JSON | ✅ |
+| 6 | AM morning_session + SLA 11:30/12:30 | ✅ |
+| 7 | ReadyPublicationPolicy | ✅ |
+| 8 | Coherence latest + change_seq>0 | ✅ |
+| 9 | Ops projection FRESH/DEGRADED/STALE/MISSING | ✅ |
+| 13–17 | Budget, gateway, immutable store, paper exec, runtime | ✅ |
+| 18 | Test audit doc | ✅ |
+| | offline pytest | ✅ green |
 
-## Still human/ops / long-running (not code-done claims)
+## Live / human — NOT claimed done
 
 | Item | Status |
 |------|--------|
-| Live 26/26 COMPLETE + READY≥1 | OPEN (backfill) |
-| quant-mcp redeploy tools/list==16 | needs CF deploy + connector refresh |
-| JSDA live history full | OPEN / site timeout risk |
-| Full canonical PIT/coverage ref split | partial (membership SoT done) |
-| Mass research GO | **NO-GO** (§20) |
+| 26/26 COMPLETE + READY≥1 | OPEN (backfill; calendar COMPLETE 224/224 again) |
+| quant-mcp redeploy tools/list==16 | human/CF |
+| Full multi-year all datasets | wall-clock |
+| Phase 7 mass research GO | **NO-GO** |
 
-## Phase 7 mass research
-
-**NO-GO** until GO conditions. Foundation code present; scheduler fail-closed via budget requirement patterns.
+## Mass research
+**NO-GO**. `agents/mass_research.assert_mass_research_allowed` fail-closed.
