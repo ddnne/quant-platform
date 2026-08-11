@@ -74,11 +74,14 @@ def test_expand_jobs_grids_range_datasets():
         to_date="2020-03-01",
         chunk_days=30,
     )
-    # two windows for each of two range-capable datasets
-    assert len(jobs) >= 4
     datasets = {j.dataset_id for j in jobs}
     assert datasets == {"equities_bars_daily", "markets_calendar"}
-    assert all("from" in j.params and "to" in j.params for j in jobs)
+    # bars: date-or-code API → per-day date=
+    bars = [j for j in jobs if j.dataset_id == "equities_bars_daily"]
+    assert bars and all("date" in j.params for j in bars)
+    # calendar: pure range → from/to windows
+    cal = [j for j in jobs if j.dataset_id == "markets_calendar"]
+    assert cal and all("from" in j.params and "to" in j.params for j in cal)
 
 
 def test_expand_jobs_codes_fanout():

@@ -102,9 +102,9 @@ def test_mixed_range_and_date_only_datasets():
 
 
 def test_range_dataset_unaffected_by_date_expansion():
-    """Datasets with both date and from/to still use from/to windows."""
+    """Pure range datasets (no date param) still use from/to windows."""
     jobs = expand_jobs(
-        ["equities_bars_daily"],
+        ["markets_calendar"],
         from_date="2020-01-01",
         to_date="2020-03-01",
         chunk_days=30,
@@ -112,3 +112,15 @@ def test_range_dataset_unaffected_by_date_expansion():
     assert len(jobs) >= 2
     assert all("from" in j.params and "to" in j.params for j in jobs)
     assert all("date" not in j.params for j in jobs)
+
+
+def test_dual_date_and_range_prefers_date_for_bars():
+    """Bars accept date|from/to but API needs date or code — use date=."""
+    jobs = expand_jobs(
+        ["equities_bars_daily"],
+        from_date="2020-01-01",
+        to_date="2020-01-03",
+        chunk_days=30,
+    )
+    assert len(jobs) == 3
+    assert all("date" in j.params for j in jobs)

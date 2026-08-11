@@ -52,13 +52,14 @@ def test_run_jquants_catalog_writes_to_generic_table(tmp_path):
         http=http, store=store, api_key="k", data_base=tmp_path, today=today,
         datasets=["equities_bars_daily"], mode="incremental",
     )
-    assert len(reports) == 1
-    r = reports[0]
-    assert r.kind == "equities_bars_daily"
-    assert r.fetched == 1 and r.registered == 1 and r.ok
+    # bars expand to one job per day over the default incremental window
+    assert len(reports) >= 1
+    assert all(r.kind == "equities_bars_daily" for r in reports)
+    assert all(r.ok for r in reports)
+    assert sum(r.registered for r in reports) >= 1
     # row landed in the generic table with a dataset column
     rows = store.fetch_all("jquants_records")
-    assert len(rows) == 1
+    assert len(rows) >= 1
     assert rows[0]["dataset"] == "equities_bars_daily"
     assert rows[0]["available_at"]  # PIT column populated
     store.close()
@@ -122,5 +123,8 @@ def test_run_jquants_catalog_incremental_default_window(tmp_path):
         http=_P(), store=store, api_key="k", data_base=tmp_path, today=today,
         datasets=["equities_bars_daily"], mode="incremental",
     )
-    assert seen_params[0].get("from") == "2025-04-05"  # today - 5 days
+    # bars prefer date= (API needs date or code); window still starts today-5d
+    dates = sorted({p.get("date") for p in seen_params if p.get("date")})
+    assert "2025-04-05" in dates
+    assert "2025-04-10" in dates
     store.close()
