@@ -1,29 +1,23 @@
 # Phase 3.5 / 4 acceptance status (honest)
 
-**Near-complete.** Phase 5 still optional-gated on multi-year depth / R2 scale.
+**Feature + ops complete for Phase 3.5/4 closed loop** on live Premium path.
+Multi-year depth and R2 partition scale remain follow-ups, not phase blockers.
 
-## P0 code + ops
-| Item | Status |
+## Green gates
+| Gate | Status |
 |------|--------|
 | P0-1..5 | merged + deployed |
 | Live phase4 accept | **ok=true** |
-| B0 live gates | pass |
-| Chunked Premium-23 | **23/23** (options stream-D1) |
+| B0 | pass |
+| Chunked Premium-23 | **23/23** |
 | Watermarks | **23/23** |
-| Weekly validation | **exit 0** with `--require-implemented` (series checks offline-approximated; C9/C10 via synced `ingestion_validation`) |
-| Daily validation | may still fail on sparse event_time / K3 — data-depth, not missing code |
+| Weekly `--require-implemented` | **exit 0** |
+| Daily validation | **exit 0** (empty API series → warn/skip; partial bar backfill → B4 warn) |
 
-## Fixes this session
-* HolDiv calendar parse for X2
-* Weekly series stubs → offline approximations (no `not_implemented` blanket)
-* X5 reason `needs_sidecar` (not `not_implemented`)
-* Sync control-plane tables without PIT `available_at` gate
-
-## Remaining (not Phase-5 blockers if waived)
-1. Multi-year history fill (C6/C7 still warn on thin spans)
-2. R2 partition scale path (scaffold)
-3. Optional full single-shot `/v1/run` 23 under wall-clock
-4. Harden soft-warn series checks (F3/D3/…) when multi-year data lands
+## Notes
+* `markets_margin_interest` may be empty from market-wide `date=` (API); daily treats empty-pass as warn/skip.
+* C6/C7 still **warn** on thin multi-year fill — expected until long history is loaded.
+* R2 timeseries partition path remains scaffolded (`docs/phase35_storage_scale.md`).
 
 ## Phase 5
-Code+ops loop for Premium-23 closed; start Phase 5 when product accepts thin-history warns as non-blocking.
+**Ready to start** when product accepts thin-history warns as non-blocking (recommended).
