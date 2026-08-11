@@ -26,6 +26,55 @@ and an authenticated paginated export smoke succeeds.
 required schedule. See ``tests/test_phase35_premium_set.py`` for the static
 guard.
 
+## Available_at policy (P0-1)
+
+Each structured row carries an `available_at` timestamp — the instant the
+fact became knowable on the publish-side, NOT the fetch instant. Historically
+the Worker set `available_at = ingestedAt`, which made backfilled bars
+invisible to PIT reads until they were re-ingested. The Worker now derives
+`available_at` from a per-dataset policy implemented in
+`platform/workers/ingestion-premium/src/availability.ts` (Python mirror:
+`cf_platform/ingest_premium/availability.py`).
+
+| Policy         | Rule |
+|----------------|------|
+| `session_close` | `equities_bars_daily`, `equities_bars_daily_am`, `indices_bars_daily`, `indices_bars_daily_topix`, `derivatives_bars_daily_options_225`, `derivatives_bars_daily_futures`, `derivatives_bars_daily_options`: `available_at` = row `Date` at the JST session close (15:30 from 2024-11-05 onward, 15:00 before). If the row lacks `Date`, fall through to `event_field` then `ingest_time`. |
+| `event_field` (default) | Pick the first present event-field candidate in the order `DateTime`, `DisclosedDate`, `AnnouncementDate`, `DiscDate`, `Date`. Bare dates (`YYYY-MM-DD`) advance to **next business open at 09:00 JST** (Saturday/Sunday → Monday). Full timestamps pass through verbatim. |
+| `ingest_time` | Fallback only — the fetch instant. Used when no better signal exists. |
+
+Resolution order in `pickAvailableAt(row, datasetId, ingestedAt)`:
+
+1. Explicit row-level `available_at` (if the upstream payload provides one).
+2. Dataset-policy rule (`session_close` or `event_field`).
+3. Cross-policy fallback: `session_close` rows without `Date` still try
+   `event_field`; `event_field` rows without any candidate fall through.
+4. `ingestedAt` — never null, PIT-safe.
+
+Unit tests: `tests/test_phase35_availability.py` (pure-Python, no network).
+The cross-language constants `SESSION_CLOSE_DATASETS` and
+`EVENT_FIELD_CANDIDATES` are pinned to match the TS source byte-for-byte.
+
+## Parallel ingestion + retry (P0-4)
+
+The Worker runs datasets concurrently with a shared global rate limiter and
+per-HTTP-request retries:
+
+| Knob | Value | Source |
+|------|-------|--------|
+| Concurrency cap | default 4, max 8 | `INGEST_CONCURRENCY` env var on the Worker |
+| Global rate floor | 125 ms between upstream requests | Premium ~500 req/min headroom |
+| Retry policy | 3 retries per HTTP request on 429/5xx | exponential backoff (500 ms base, 8 s cap) + full jitter |
+| Failure isolation | One dataset's retry/failure never aborts others | `runWithConcurrency` per-item try/catch |
+
+The shared `RateLimiter` (in `src/rate_limit.ts`) chains `acquire()` calls
+through a single Promise so the global minimum interval is enforced across
+all concurrent fetches. Each dataset's `fetchDataset` invocation gets its own
+retry budget (3 retries per page request); exhausting the budget for one
+dataset does not consume another's.
+
+The run summary (`/health` → `last_run`) now includes `concurrency` and
+`rateLimitMs` so observability can confirm the effective settings.
+
 ## Closed-loop guarantees
 
 1. **Scheduled** via Workers Cron (`scheduled` handler, hourly at :15 UTC).
@@ -126,6 +175,7 @@ print(r.metadata, len(r))
 | ``tests/test_phase35_premium_set.py`` | Premium set = required set, no addons, TS mirror agrees |
 | ``tests/test_phase35_validate.py`` | Pass/fail classification (Python source of truth) |
 | ``tests/test_phase35_natural_key.py`` | Cross-language natural-key consistency |
+| ``tests/test_phase35_availability.py`` | Available_at policy rules + cross-language constant agreement |
 | ``tests/test_phase35_sync_script.py`` | Sync script offline-safety + live smoke (QP_LIVE=1) |
 | ``tests/test_phase35_coverage_matrix.py`` | Validation matrix catalog + daily-tier coverage runner |
 

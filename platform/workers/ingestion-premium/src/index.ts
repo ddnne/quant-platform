@@ -25,10 +25,14 @@
  */
 
 import { PREMIUM_CORE_DATASETS, isPremiumCore, datasetById, type DatasetSpec } from "./catalog";
+import { pickAvailableAt } from "./availability";
+import { RateLimiter } from "./rate_limit";
 
 export interface Env {
   JQUANTS_API_KEY: string;
   INGESTION_PROXY_TOKEN?: string;
+  /** Optional concurrency cap (1–8). Default 4. */
+  INGEST_CONCURRENCY?: string;
   RAW_BUCKET: R2Bucket;
   STRUCTURED_BUCKET: R2Bucket;
   DB: D1Database;
@@ -36,6 +40,16 @@ export interface Env {
 
 const JQ_BASE = "https://api.jquants.com";
 const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
+
+// P0-4 parallel ingest knobs.
+const DEFAULT_CONCURRENCY = 4;
+const MAX_CONCURRENCY = 8;
+// Premium budget ~500 req/min → 125 ms floor leaves headroom under the cap.
+const RATE_LIMIT_INTERVAL_MS = 125;
+// Per-HTTP-request retries on 429/5xx (matches Python ingestion/common/retry).
+const RETRY_COUNT = 3;
+const RETRY_BASE_DELAY_MS = 500;
+const RETRY_MAX_DELAY_MS = 8_000;
 
 // Persistent run-state keys (KV would be cleaner, but D1 is already here).
 const STATE_LAST_RUN = "last_run_summary";
@@ -140,13 +154,78 @@ interface FetchOutcome {
   paginationErrors: number;
   httpStatus: number;
   error: string;
+  retriesUsed: number;
+}
+
+/** Exponential backoff + full jitter for retry-after-transient. */
+function backoffDelayMs(attempt: number): number {
+  const base = Math.min(
+    RETRY_MAX_DELAY_MS,
+    RETRY_BASE_DELAY_MS * 2 ** (attempt - 1),
+  );
+  return Math.floor(Math.random() * base);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
+async function fetchOnePage(
+  env: Env,
+  url: string,
+  fetchImpl: typeof fetch,
+  limiter: RateLimiter,
+): Promise<{ resp: Response | null; error: string; status: number; retriesUsed: number }> {
+  // 3 retries per HTTP request, scoped to this single page fetch (matches
+  // the Python `with_retry(retries=3)` budget per call). Per-dataset
+  // isolation: a sibling dataset's failure never consumes this budget.
+  let attempt = 0;
+  while (true) {
+    await limiter.acquire();
+    let resp: Response;
+    try {
+      resp = await fetchImpl(url, {
+        method: "GET",
+        headers: { "x-api-key": env.JQUANTS_API_KEY },
+      });
+    } catch (e) {
+      attempt++;
+      if (attempt > RETRY_COUNT) {
+        return {
+          resp: null,
+          error: `transport: ${(e as Error).message}`,
+          status: 0,
+          retriesUsed: attempt,
+        };
+      }
+      await sleep(backoffDelayMs(attempt));
+      continue;
+    }
+    if (resp.status === 429 || (resp.status >= 500 && resp.status < 600)) {
+      attempt++;
+      if (attempt > RETRY_COUNT) {
+        return {
+          resp,
+          error: `transient HTTP ${resp.status} (retries exhausted)`,
+          status: resp.status,
+          retriesUsed: attempt,
+        };
+      }
+      // Drain so the connection can be reused before sleeping.
+      try { await resp.text(); } catch { /* ignore */ }
+      await sleep(backoffDelayMs(attempt));
+      continue;
+    }
+    return { resp, error: "", status: resp.status, retriesUsed: attempt };
+  }
 }
 
 async function fetchDataset(
   env: Env,
   spec: DatasetSpec,
   opts: { from?: string; to?: string; today?: string },
-  fetchImpl: typeof fetch
+  fetchImpl: typeof fetch,
+  limiter: RateLimiter,
 ): Promise<FetchOutcome> {
   const out: FetchOutcome = {
     rows: [],
@@ -154,6 +233,7 @@ async function fetchDataset(
     paginationErrors: 0,
     httpStatus: 0,
     error: "",
+    retriesUsed: 0,
   };
   if (!env.JQUANTS_API_KEY) {
     out.error = "JQUANTS_API_KEY not bound on worker";
@@ -176,19 +256,17 @@ async function fetchDataset(
       if (pagination) params.set("pagination_key", pagination);
       const suffix = params.size > 0 ? `?${params.toString()}` : "";
       const url = JQ_BASE + path + suffix;
-      let resp: Response;
-      try {
-        resp = await fetchImpl(url, {
-          method: "GET",
-          headers: { "x-api-key": env.JQUANTS_API_KEY },
-        });
-      } catch (e) {
-        out.error = `transport: ${(e as Error).message}`;
+
+      const page0 = await fetchOnePage(env, url, fetchImpl, limiter);
+      out.retriesUsed += page0.retriesUsed;
+      out.httpStatus = page0.status;
+      if (page0.error) {
+        out.error = page0.error;
         return out;
       }
-      out.httpStatus = resp.status;
-      if (resp.status === 429 || resp.status >= 500) {
-        out.error = `transient HTTP ${resp.status}`;
+      const resp = page0.resp;
+      if (!resp) {
+        out.error = "transport: no response";
         return out;
       }
       if (!resp.ok) {
@@ -293,9 +371,10 @@ async function ingestOne(
   opts: { from?: string; to?: string; today?: string },
   fetchImpl: typeof fetch,
   runId: number | null,
+  limiter: RateLimiter,
 ): Promise<DatasetResult> {
   const startedAt = toJstIso(new Date());
-  const outcome = await fetchDataset(env, spec, opts, fetchImpl);
+  const outcome = await fetchDataset(env, spec, opts, fetchImpl, limiter);
 
   if (outcome.error) {
     const finishedAt = toJstIso(new Date());
@@ -387,8 +466,10 @@ async function upsertRecords(
   if (rows.length === 0) return { inserted: 0, revisions: 0 };
   const ingestedAt = toJstIso(when);
   // De-duplicate a response by business key, retaining its last occurrence.
-  // available_at is row-level if present, else fetch time (PIT-safe: the row
-  // was unknowable before it arrived).
+  // available_at resolution (P0-1):
+  //   1. Explicit row-level `available_at` (legacy / explicit override)
+  //   2. Dataset-level policy via pickAvailableAt (session_close / event_field)
+  //   3. Falls through to ingestedAt inside pickAvailableAt (PIT-safe fallback).
   const byKey = new Map<string, StructuredRecord>();
   for (const row of rows) {
     const nk = naturalKey(row, spec);
@@ -396,7 +477,7 @@ async function upsertRecords(
     const availableAt =
       typeof row["available_at"] === "string"
         ? (row["available_at"] as string)
-        : ingestedAt;
+        : pickAvailableAt(row, spec.id, ingestedAt);
     // Stable key ordering makes payload comparison semantic rather than
     // dependent on JSON object property order. The generated PIT timestamps
     // are separate columns, so an hourly re-fetch does not look amended.
@@ -514,6 +595,10 @@ export interface RunSummary {
   rowsInserted: number;
   rawBytes: number;
   triggeredBy: "cron" | "manual";
+  /** Effective concurrency cap actually used for this run (P0-4). */
+  concurrency: number;
+  /** Shared limiter minimum interval in ms (P0-4). */
+  rateLimitMs: number;
   failures: { dataset: string; detail: string }[];
 }
 
@@ -597,11 +682,18 @@ async function runIngestion(
     if (runId !== null) await writeValidation(env, runId, result);
   }
 
-  for (const spec of specs) {
+  // P0-4: shared rate limiter (125 ms floor keeps us under Premium 500/min)
+  // and bounded concurrency for parallel dataset ingestion.
+  const limiter = new RateLimiter(RATE_LIMIT_INTERVAL_MS);
+  const concurrency = clampConcurrency(env.INGEST_CONCURRENCY);
+
+  // Preserve input order in the results array for deterministic summaries.
+  const orderedResults: DatasetResult[] = new Array(specs.length);
+  await runWithConcurrency(specs, concurrency, async (spec, index) => {
     const datasetStartedAt = toJstIso(new Date());
     let res: DatasetResult;
     try {
-      res = await ingestOne(env, spec, opts, fetchImpl, runId);
+      res = await ingestOne(env, spec, opts, fetchImpl, runId, limiter);
     } catch (e) {
       const detail = `ingest exception: ${(e as Error).message || String(e)}`;
       res = {
@@ -626,6 +718,11 @@ async function runIngestion(
         }
       }
     }
+    orderedResults[index] = res;
+  });
+
+  for (const res of orderedResults) {
+    if (!res) continue;
     if (res.status === "pass") {
       passed++;
     } else {
@@ -644,6 +741,8 @@ async function runIngestion(
     datasetCount: specs.length,
     passed, failed, rowsInserted, rawBytes,
     triggeredBy,
+    concurrency,
+    rateLimitMs: RATE_LIMIT_INTERVAL_MS,
     failures,
   };
 
@@ -655,6 +754,44 @@ async function runIngestion(
   }
 
   return summary;
+}
+
+/** Read INGEST_CONCURRENCY from env, clamp to [1, MAX_CONCURRENCY]. */
+function clampConcurrency(raw: string | undefined): number {
+  const parsed = Number.parseInt(raw ?? "", 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_CONCURRENCY;
+  return Math.min(MAX_CONCURRENCY, parsed);
+}
+
+/**
+ * Run ``worker`` over ``items`` with at most ``concurrency`` parallel
+ * invocations. Each ``worker`` call is fully isolated — a rejection from one
+ * does not abort the others. Order is preserved by index even though
+ * execution is concurrent.
+ */
+async function runWithConcurrency<T>(
+  items: readonly T[],
+  concurrency: number,
+  worker: (item: T, index: number) => Promise<void>,
+): Promise<void> {
+  if (items.length === 0) return;
+  const effective = Math.max(1, Math.min(concurrency, items.length));
+  let cursor = 0;
+  async function runner(): Promise<void> {
+    while (cursor < items.length) {
+      const myIndex = cursor++;
+      // Per-item try/catch keeps one failure from aborting siblings.
+      try {
+        await worker(items[myIndex], myIndex);
+      } catch {
+        // The worker is responsible for surfacing its own error in the
+        // result object; swallow here so siblings continue.
+      }
+    }
+  }
+  const runners: Promise<void>[] = [];
+  for (let i = 0; i < effective; i++) runners.push(runner());
+  await Promise.all(runners);
 }
 
 // ---------------------------------------------------------------------------
