@@ -1,8 +1,16 @@
 # Phase 6.2 Status and Completion Criteria
 
 **Date**: 2026-08-11  
-**Current HEAD**: `1463e15` (feat(contracts): add canonical dataset registry)  
+**Current HEAD**: `e47da0f`  
 **Developer**: GLM
+
+> **Honest status (supersedes the per-item narrative below):** Phase 6.2 is
+> **code-complete but live NO-GO**. The P0 code fixes described below landed,
+> but **live-operational closure is still OPEN** — Coverage V2 COMPLETE (0
+> receipts), production READY ≥1 (coherence correctly blocks), full multi-year
+> backfill, and CF cron auto-projection are not done. **Phase 7 mass research
+> is NO-GO** until READY ≥1 and real Coverage V2 COMPLETE exist. Source of
+> truth: [docs/phase62_residual_status.md](phase62_residual_status.md).
 
 ## Phase 6.2 Purpose
 
@@ -22,7 +30,12 @@ Phase 6.2 completes the full hardening and data operational closure before Phase
 | P0-8 | Documentation drift | ⚠️ IN PROGRESS | Phase 6.1/6.2 boundaries need clarification |
 | P0-9 | Test audit and consolidation | ⚠️ PENDING | Test suite needs audit for redundant negatives |
 
-## P0 Completion: 9/9 COMPLETE (100%) ✅
+## P0 code fixes: landed (code-complete, not live-complete)
+
+> The P0 items below are **code-complete**. They are **not** live operational
+> closure: Coverage V2 COMPLETE (0 receipts), production READY ≥1, full backfill,
+> and CF cron auto-projection remain **OPEN**. See
+> [docs/phase62_residual_status.md](phase62_residual_status.md).
 
 ### Completed P0 Items ✅
 
@@ -124,13 +137,16 @@ d75cffe fix(coverage): add official_archive_year granularity and JSDA corporate 
 
 ## Estimated Completion
 
-- **P0**: ✅ COMPLETE (9/9) - ALL CRITICAL BLOCKERS RESOLVED
-- **P1 tasks**: 1-2 weeks including backfill execution
-- **Phase 6.2 P0**: ✅ COMPLETE - Ready for P1 execution
-- **Phase 7 start**: After P1 complete and first production READY achieved
+- **P0 code fixes**: ✅ landed (code-complete)
+- **Live operational (READY / COMPLETE / backfill / cron)**: 🚫 OPEN
+- **Phase 7 mass research**: 🚫 NO-GO until READY ≥1 + real Coverage V2 COMPLETE
 
-**P0=0 achieved!** Phase 7 unblocked and ready to begin after P1 tasks complete.
+**Phase 6.2 is code-complete but live NO-GO.** Phase 7 mass research is **not**
+unblocked: it stays NO-GO until production READY ≥1 and real Coverage V2 COMPLETE
+evidence exist. `PHASE62_DONE` is **not** asserted in this state.
 
 ---
 
-**This document will be updated as Phase 6.2 progresses. When all P0 items are complete and Phase 7 prerequisites are met, the final report will be issued with `PHASE62_DONE`.**
+**This document tracks Phase 6.2 progress. The per-item narrative below records
+the P0 code fixes; it does not imply live operational closure. Live status is
+governed by [docs/phase62_residual_status.md](phase62_residual_status.md).**

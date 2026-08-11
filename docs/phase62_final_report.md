@@ -1,15 +1,27 @@
-# Phase 6.2 Final Report: P0=0 COMPLETE ✅
+# Phase 6.2 Final Report: code-complete, live NO-GO
 
 **Date**: 2026-08-11  
-**Final HEAD**: `3cef114` (docs(phase62): mark P0=0 COMPLETE)  
+**Final HEAD**: `e47da0f`  
 **Developer**: GLM  
-**Status**: P0 COMPLETE (9/9) | P1 PENDING (0/3) | Phase 7 UNBLOCKED
+**Status**: P0 code fixes LANDED (9/9) | Live operational OPEN (READY/COMPLETE/backfill/cron) | Phase 7 mass research NO-GO
+
+> **Read this first.** This report records the P0 **code** fixes that landed in
+> Phase 6.2. It is **not** a live-completion sign-off. Live-operational closure
+> — Coverage V2 COMPLETE (0 receipts today), production READY ≥1 (coherence
+> correctly blocks), full multi-year backfill, and CF cron auto-projection — is
+> still **OPEN**. **Phase 7 mass research is NO-GO** until READY ≥1 and real
+> Coverage V2 COMPLETE exist. Source of truth:
+> [docs/phase62_residual_status.md](phase62_residual_status.md).
 
 ## Executive Summary
 
-Phase 6.2 P0 (Critical Blockers) is now **100% COMPLETE**. All 9 critical issues that blocked Phase 7 (mass autonomous research) have been resolved. The codebase is now ready for Phase 7 initiation, pending completion of P1 tasks (endpoint inventory, data backfill, production READY).
+Phase 6.2 P0 (Critical Blockers) **code work is complete**: all 9 critical code
+issues are resolved and offline tests stay green. This is **code-complete, not
+live-complete**. Live-operational closure (real Coverage V2 COMPLETE receipts,
+production READY ≥1, full multi-year backfill, CF cron auto-projection) remains
+**OPEN**, so **Phase 7 mass autonomous research stays NO-GO**.
 
-### P0 Completion: 9/9 COMPLETE (100%) ✅
+### P0 code fixes: 9/9 landed (code-complete; live operational OPEN)
 
 | Priority | Task | Status | Commit |
 |----------|------|--------|--------|
@@ -168,24 +180,32 @@ d75cffe fix(coverage): add official_archive_year granularity and JSDA corporate 
 
 ## Phase 7 Readiness
 
-### ✅ Prerequisites Met (P0=0)
+### Code prerequisites landed (necessary, not sufficient for Phase 7)
 - [x] Dataset membership unified
 - [x] Canonical registry operational
-- [x] Coverage V2 complete and correct
-- [x] Raw retention operational
+- [x] Coverage V2 implementation correct (logic; live COMPLETE not yet evidenced)
+- [x] Raw retention wired (logic; live raw-for-COMPLETE not yet evidenced)
 - [x] Remote Ops tools available
-- [x] READY publish coherence gate enforced
-- [x] Documentation consistent and complete
-- [x] Test suite consolidated and passing
+- [x] READY publish coherence gate enforced (correctly blocks today)
+- [x] Documentation consistent
+- [x] Test suite passing offline
 
-### ⏳ P1 Tasks Remaining (Not Blocking Phase 7 Start)
-- [ ] P1-1: Complete endpoint inventory (~31 endpoints)
-- [ ] P1-2: Real data backfill executed
-- [ ] P1-3: Production READY ≥1 achieved
+> These are **code** prerequisites. They are necessary but **not sufficient**
+> for Phase 7 mass research.
 
-**Note**: P1 tasks are important for production completeness but do not block Phase 7 initiation. Phase 7 can begin in parallel with P1 execution.
+### Live-operational items still OPEN (these DO gate Phase 7 mass research)
+- [x] P1-1: Endpoint inventory — **code-complete** (31 endpoints: 26 governed + 5 experimental)
+- [ ] P1-2: Real data backfill executed — **OPEN** (full multi-year JQ/JSDA backfill not run)
+- [ ] P1-3: Production READY ≥1 achieved — **OPEN** (coherence correctly blocks)
+- [ ] Coverage V2 COMPLETE with real receipts — **OPEN** (all governed PARTIAL/UNKNOWN, 0 receipts)
+- [ ] CF cron auto-projection (no human flag) — **PARTIAL** (flag exists; cron wiring not complete)
 
-### Phase 7 Scope (After P0=0)
+**Note**: Unlike an earlier draft of this report, P1-2/P1-3 and live Coverage V2
+COMPLETE **do** gate Phase 7 mass research. **Phase 7 mass autonomous research
+is NO-GO** until production READY ≥1 and real Coverage V2 COMPLETE exist. Phase
+7 *stubs* (`knowledge/`, `selection/`, `gateway/`) are scaffolding only.
+
+### Phase 7 Scope (only after READY ≥1 + real COMPLETE)
 - **Knowledge Store**: Minimal, feature quality metadata, no unrestricted Python
 - **Selection Gateway**: Closed-schema only, no live broker, no FoF initially
 - **AI Gateway**: Closed-schema LLM calls, experiment budget, early stopping
@@ -207,13 +227,13 @@ d75cffe fix(coverage): add official_archive_year granularity and JSDA corporate 
 ### Medium-term (2-3 weeks)
 - Complete data backfill for all governed datasets
 - Publish first production READY snapshot
-- Begin Phase 7 mass autonomous research (with safeguards)
+- Only **then** revisit Phase 7 mass autonomous research (currently NO-GO)
 
 ## Verification Checklist
 
 Before Phase 7 mass autonomous research:
 
-- [x] P0=0 (all critical blockers resolved)
+- [x] P0 code fixes landed (code-complete; live closure still OPEN)
 - [x] All tests pass (288/288)
 - [x] Git history shows small reviewable commits
 - [x] Dataset membership unified (26 datasets)
@@ -229,22 +249,24 @@ Before Phase 7 mass autonomous research:
 
 ## Conclusion
 
-**Phase 6.2 P0 is COMPLETE** ✅
+**Phase 6.2 is code-complete; live operational closure is OPEN.**
 
-All critical blockers for Phase 7 have been resolved. The codebase now has:
+The P0 **code** fixes landed. The codebase now has:
 - Unified dataset inventory (26 datasets)
 - Single source of truth for dataset metadata
-- Comprehensive coverage V2 implementation
-- Operational raw retention and change sequences
-- Enforced READY publication gates
-- Complete Remote Ops visibility
+- Coverage V2 implementation (logic correct; live COMPLETE not yet evidenced)
+- Raw retention and change sequences wired (logic; live evidence OPEN)
+- READY publication coherence gate enforced (correctly blocks today)
+- Remote Ops visibility (16 tools, migration 0003)
 - Consistent documentation
-- Verified test suite
+- Verified offline test suite
 
-**Phase 7 is UNBLOCKED** and can proceed in parallel with P1 tasks.
+**Phase 7 mass research is NO-GO**, not unblocked. It stays NO-GO until
+production READY ≥1 and real Coverage V2 COMPLETE (with receipts) exist.
+Live-operational work — backfill, READY, CF cron auto-projection — remains open.
 
 ---
 
 **Report Generated**: 2026-08-11  
 **Developer**: GLM  
-**Status**: P0=0 COMPLETE | Phase 7 READY TO BEGIN
+**Status**: P0 code LANDED (9/9) | Live operational OPEN | Phase 7 mass research NO-GO
