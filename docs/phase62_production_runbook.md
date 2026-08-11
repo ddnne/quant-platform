@@ -160,6 +160,11 @@ The unauthenticated response must be `401`. Authenticated calls should succeed a
 
 ## Ops projection cron (local / host)
 
+> Decision record and full launchd/cron wiring:
+> [docs/phase62_cf_edge_cron.md](phase62_cf_edge_cron.md). CF edge cron is
+> intentionally **not** used for projection — it is generated from the host SQLite
+> snapshot. The CF ingestion cron (`ingestion-premium`) is a separate concern.
+
 ```bash
 # every hour (example)
 0 * * * * cd /path/to/quant-platform && APPLY_REMOTE_OPS=1 ./scripts/cron_publish_ops.sh
