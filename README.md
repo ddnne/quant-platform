@@ -16,6 +16,9 @@ production READY≥1、CF cron-wired auto projection が未完了です。Phase 
 READY + 実 Coverage V2 COMPLETE まで GO できません。詳細は
 [docs/phase62_residual_status.md](docs/phase62_residual_status.md) を参照。
 
+並行 lane（H/I/J/K + 本 L）は offline green を merge 条件とします。いかなる lane も
+receipts なしに `PHASE62_FULL_DONE` / live `COMPLETE` / production `READY` を名乗らないこと。
+
 Phase 1 — 2 データソースの取得・正規化・格納が動きます:
 
 - **J-Quants** API V2 — カタログ全量（`ingestion/jquants/catalog.py` の `DATASETS`）:
