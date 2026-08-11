@@ -164,26 +164,169 @@ def test_backtest_with_features_on_real_db_path(synced_cf_d1_db):
     assert Path(res.metadata["db_path"]) == db
 
 
-@pytest.mark.live
-def test_backtest_on_phase35_synced_db(tmp_path):
-    """Live smoke: run a backtest against a DB populated by Phase 3.5 sync.
+def _live_bar_date_bounds(db: Path) -> tuple[str | None, str | None]:
+    """Min/max equities_bars_daily dates from specialized or generic tables."""
+    import sqlite3
 
-    Skipped unless QP_LIVE=1 and QP_SYNCED_DB is set. Run with:
+    conn = sqlite3.connect(f"file:{db.resolve().as_posix()}?mode=ro", uri=True)
+    try:
+        dates: list[str] = []
+        try:
+            row = conn.execute(
+                "SELECT MIN(date), MAX(date) FROM jquants_daily_bars"
+            ).fetchone()
+            dates.extend(str(d)[:10] for d in (row or ()) if d)
+        except sqlite3.Error:
+            pass
+        try:
+            row = conn.execute(
+                "SELECT MIN(substr(event_time, 1, 10)), "
+                "MAX(substr(event_time, 1, 10)) FROM jquants_records "
+                "WHERE dataset='equities_bars_daily'"
+            ).fetchone()
+            dates.extend(str(d)[:10] for d in (row or ()) if d)
+        except sqlite3.Error:
+            pass
+        if not dates:
+            return None, None
+        return min(dates), max(dates)
+    finally:
+        conn.close()
+
+
+def _sample_live_codes(db: Path, n: int = 50) -> list[str]:
+    """Sample up to ``n`` issuer codes that have equities_bars_daily rows."""
+    import sqlite3
+
+    if n < 1:
+        return []
+
+    conn = sqlite3.connect(f"file:{db.resolve().as_posix()}?mode=ro", uri=True)
+    codes: list[str] = []
+    try:
+        try:
+            codes.extend(
+                str(r[0])
+                for r in conn.execute(
+                    "SELECT DISTINCT code FROM jquants_daily_bars "
+                    "WHERE code IS NOT NULL ORDER BY code LIMIT ?",
+                    (n,),
+                )
+            )
+        except sqlite3.Error:
+            pass
+        try:
+            codes.extend(
+                str(r[0])
+                for r in conn.execute(
+                    "SELECT DISTINCT CAST(json_extract(payload, '$.Code') AS TEXT) "
+                    "FROM jquants_records "
+                    "WHERE dataset='equities_bars_daily' "
+                    "AND json_valid(payload) "
+                    "AND json_extract(payload, '$.Code') IS NOT NULL "
+                    "ORDER BY 1 LIMIT ?",
+                    (n,),
+                )
+            )
+        except sqlite3.Error:
+            pass
+    finally:
+        conn.close()
+    return sorted(set(codes))[:n]
+
+
+@pytest.mark.live
+def test_backtest_on_phase35_synced_db():
+    """Live smoke: B0 + feature hit-rate + backtest floor on Phase 3.5 DB.
+
+    Skipped unless QP_LIVE=1. DB path: ``QP_SYNCED_DB`` or ``QP_DB`` or
+    ``data/structured/ingestion.sqlite``.
 
       QP_LIVE=1 QP_SYNCED_DB=data/structured/ingestion.sqlite \\
-        .venv/bin/python -m pytest tests/test_phase4_real_db_smoke.py::test_backtest_on_phase35_synced_db
+        .venv/bin/python -m pytest -m live \\
+        tests/test_phase4_real_db_smoke.py::test_backtest_on_phase35_synced_db -q
     """
-    if not os.environ.get("QP_LIVE"):
-        pytest.skip("set QP_LIVE=1 to run real-DB backtest smoke")
-    db = os.environ.get("QP_SYNCED_DB")
-    if not db or not Path(db).exists():
-        pytest.skip("QP_SYNCED_DB not set or missing")
-    strat = FixedDbReturnFeatureStrategy(Path(db))
+    from cf_platform.live_gates import b0_pass
+
+    if os.environ.get("QP_LIVE") != "1":
+        pytest.skip("QP_LIVE!=1")
+    db_raw = (
+        os.environ.get("QP_SYNCED_DB")
+        or os.environ.get("QP_DB")
+        or "data/structured/ingestion.sqlite"
+    )
+    db = Path(db_raw)
+    if not db.exists():
+        pytest.skip(f"QP_SYNCED_DB/QP_DB not set or missing: {db}")
+
+    # --- B0 strict (docs: Phase 4 live smoke uses b0_pass) -----------------
+    ok, gates = b0_pass(db, strict=True)
+    assert ok, [g.as_dict() for g in gates]
+    print("[live] B0 ok:", [g.detail for g in gates])
+
+    # --- Feature hit rate on a sample of issuers -------------------------
+    sample_n = int(os.environ.get("QP_FEATURE_SAMPLE", "50"))
+    min_hit = float(os.environ.get("QP_FEATURE_MIN_HIT", "0.5"))
+    assert sample_n >= 1, f"QP_FEATURE_SAMPLE must be >= 1, got {sample_n}"
+    assert 0.0 <= min_hit <= 1.0, (
+        f"QP_FEATURE_MIN_HIT must be in [0, 1], got {min_hit}"
+    )
+    codes = _sample_live_codes(db, n=sample_n)
+    assert len(codes) == sample_n, (
+        f"expected {sample_n} distinct bar codes, got {len(codes)}"
+    )
+    lo, hi = _live_bar_date_bounds(db)
+    assert lo and hi, "no equities_bars_daily dates in DB"
+    as_of = f"{hi}T15:30:00+09:00"
+    feature_ids = ("return_1d", "momentum_n", "volatility_n")
+    hits = {fid: 0 for fid in feature_ids}
+    for code in codes:
+        for fid in feature_ids:
+            try:
+                out = features.compute(
+                    fid, as_of=as_of, code=code, db_path=db,
+                )
+            except Exception:  # noqa: BLE001
+                continue
+            if out.value is not None:
+                hits[fid] += 1
+    hit_rates = {fid: hits[fid] / len(codes) for fid in feature_ids}
+    print(f"[live] feature hit_rates n={len(codes)} as_of={as_of}: {hit_rates}")
+    # At least one price feature should fire on a majority of the sample
+    # when history is deep enough; return_1d only needs 2 closes.
+    assert hit_rates["return_1d"] >= min_hit, (
+        f"return_1d hit_rate={hit_rates['return_1d']:.3f} < {min_hit} "
+        f"(n={len(codes)}, as_of={as_of})"
+    )
+
+    # --- Backtest trading_days floor ------------------------------------
+    # Prefer env window; else use observed bar date span (dense recent window).
+    start = os.environ.get("QP_BT_START", lo)
+    end = os.environ.get("QP_BT_END", hi)
+    floor = int(os.environ.get("QP_BT_MIN_DAYS", "50"))
+    assert floor >= 1, f"QP_BT_MIN_DAYS must be >= 1, got {floor}"
+    assert start <= end, f"backtest start {start} is after end {end}"
+    strat = FixedDbReturnFeatureStrategy(db)
     res = run_backtest(
         strat,
-        "2025-04-01", "2025-06-30",  # 3-month window for the smoke
-        db_path=Path(db),
+        start,
+        end,
+        db_path=db,
         cost_model=standard_cost(),
+        universe=tuple(codes[:20]) if codes else None,
     )
-    assert res.metadata["trading_days"] >= 1
-    print(f"[live] trading_days={res.metadata['trading_days']}")
+    trading_days = int(
+        res.metrics.get("num_trading_days")
+        or res.metadata.get("trading_days")
+        or 0
+    )
+    print(
+        f"[live] backtest window={start}..{end} "
+        f"trading_days={trading_days} floor={floor}"
+    )
+    assert trading_days >= floor, (
+        f"trading_days={trading_days} < floor={floor} "
+        f"(window {start}..{end}; set QP_BT_START/END if needed)"
+    )
+    assert res.metadata.get("core_engine_version")
+    assert res.metadata.get("strategy_id") == "return_feature_v0"
