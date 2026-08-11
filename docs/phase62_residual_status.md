@@ -1,29 +1,33 @@
 # Phase 6.2 residual status (honest)
 
-**HEAD**: `9df84a6`  
+**HEAD**: `9c9c58d`  
 **Date**: 2026-08-11  
 **Track**: GLM-5.2 + orchestrated land
 
-> **Code-complete; live still OPEN.** No `PHASE62_FULL_DONE`. Phase 7 mass research **NO-GO**.
+> **Not fully done.** Code-complete; live partial. No `PHASE62_FULL_DONE`.  
+> Phase 7 mass research **NO-GO** until all governed COMPLETE + READY ≥1.
+
+## Live milestone ✅
+
+| Dataset | Status | Evidence |
+|---------|--------|----------|
+| **markets_calendar** | **COMPLETE** | 224/224 segments COMPLETE with real receipts |
 
 ## Code-complete ✅
-Inventory 31, ops projection, host cron, receipt emit, rebuild_from_raw, bars date fix,
-READY coherence in publish, Phase 7 stubs, offline pytest green.
+Inventory, projection, host cron, JQ receipt emit, rebuild_from_raw, bars `date=` fix,
+READY coherence wire, Phase 7 stubs, pytest green.
 
-## Live operational progress
+## Still OPEN 🚫
 
 | Item | Status |
 |------|--------|
-| Coverage COMPLETE (all governed) | **Open** — `markets_calendar` has **11 COMPLETE** months; 213 still PARTIAL (history gap 2008–2016 + remaining months) |
-| Production READY ≥1 | **Open** — coherence blocks until all governed COMPLETE |
-| Full multi-year JQ/JSDA backfill | **In progress** — calendar 2008–2016 + 2017–2026 jobs running; master/premiums long jobs |
-| Cron auto-projection | **Host path ready** (`scripts/cron_publish_ops.sh`); edge not claimed |
+| All 26 governed Coverage COMPLETE | **Open** — only markets_calendar COMPLETE so far |
+| Production READY ≥1 | **Open** — needs full governed COMPLETE |
+| Full multi-year JQ/JSDA backfill | **In progress** (background jobs) |
+| JSDA COMPLETE | **Open** (site/timeout risk) |
+| CF edge auto-projection | Host path only |
 
 ## Human-only
-- Wall-clock for full premium history
-- JSDA site availability
-- Live capital / broker
-
-## Notes
-- Proxy: `ingestion-secrets` (not premium).
-- Non-event COMPLETE needs explicit `expected_items` on receipts (emit sets 1 for source_query).
+- Wall-clock for remaining 25 governed datasets history
+- JSDA availability
+- Live capital/broker (OOS)
