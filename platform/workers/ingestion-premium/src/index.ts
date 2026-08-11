@@ -268,6 +268,47 @@ function pickEventTime(row: Record<string, unknown>, spec: DatasetSpec): string 
   return null;
 }
 
+// Latest source-side event_date observed in a batch, as a YYYY-MM-DD string.
+// Used by the watermark upsert so consumers can ask "how stale is dataset X?"
+// without scanning jquants_records. Returns null only when every row lacks a
+// recognisable Date-like field — we then leave the watermark's event_date
+// untouched rather than overwriting a known-good value with emptiness.
+function latestEventDate(rows: Record<string, unknown>[]): string | null {
+  let best: string | null = null;
+  const candidates = ["DateTime", "Date", "DisclosedDate", "AnnouncementDate", "DiscDate"];
+  for (const row of rows) {
+    for (const k of candidates) {
+      const v = row[k];
+      if (typeof v === "string" && /^\d{4}-\d{2}-\d{2}/.test(v)) {
+        const day = v.slice(0, 10);
+        if (best === null || day > best) best = day;
+        break;
+      }
+    }
+  }
+  return best;
+}
+
+// Watermark upsert — one row per dataset, refreshed after every successful
+// ingest so `scripts/sync_d1_to_sqlite.py --incremental` can short-circuit
+// clean datasets. Failure to advance the watermark must never block the run,
+// so callers swallow D1 errors here and only log them in the dataset detail.
+async function upsertWatermark(
+  env: Env,
+  dataset: string,
+  lastEventDate: string | null,
+  lastIngestedAt: string,
+): Promise<void> {
+  await env.DB.prepare(
+    `INSERT INTO ingestion_watermarks
+       (dataset, last_event_date, last_ingested_at, last_export_cursor)
+     VALUES (?, ?, ?, NULL)
+     ON CONFLICT(dataset) DO UPDATE SET
+       last_event_date  = COALESCE(excluded.last_event_date, ingestion_watermarks.last_event_date),
+       last_ingested_at = excluded.last_ingested_at`,
+  ).bind(dataset, lastEventDate, lastIngestedAt).run();
+}
+
 // ---------------------------------------------------------------------------
 // persistence: R2 raw + D1 structured
 // ---------------------------------------------------------------------------
@@ -332,6 +373,22 @@ async function ingestOne(
   const inserted = await upsertRecords(env, spec, outcome.rows, when);
   const availableBounds = await selectAvailableBounds(env, spec.id);
 
+  // Advance the per-dataset watermark. A failure here is non-fatal — the
+  // structured rows are already durable in jquants_records — but we surface
+  // it in the run detail so ops can spot a degrading D1 binding.
+  const ingestedAt = toJstIso(when);
+  let watermarkDetail = "";
+  try {
+    await upsertWatermark(
+      env,
+      spec.id,
+      latestEventDate(outcome.rows),
+      ingestedAt,
+    );
+  } catch (watermarkError) {
+    watermarkDetail = `; watermark upsert failed: ${(watermarkError as Error).message}`;
+  }
+
   const finishedAt = toJstIso(new Date());
   const res: DatasetResult = {
     dataset: spec.id,
@@ -342,7 +399,7 @@ async function ingestOne(
     rowsRevisions: inserted.revisions,
     availableAtMin: availableBounds.min,
     availableAtMax: availableBounds.max,
-    detail: `raw=${rawKey}`,
+    detail: `raw=${rawKey}${watermarkDetail}`,
     rawKey,
     rawBytes: outcome.rawBytes,
   };
@@ -714,7 +771,7 @@ async function handleExportD1(
     "jquants_market_calendar",
     "jquants_records_revisions", "jquants_listed_info_revisions",
     "jquants_daily_bars_revisions", "jquants_market_calendar_revisions",
-    "ingestion_validation", "ingestion_run_log",
+    "ingestion_validation", "ingestion_run_log", "ingestion_watermarks",
   ]);
   if (!allowed.has(table)) {
     return json({ error: "table not exportable" }, 400);

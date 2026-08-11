@@ -128,7 +128,7 @@ def synced_cf_d1_db(
     """Run the real sync CLI against cursor-paginated in-memory D1 pages."""
     calls: list[str] = []
 
-    def fake_export(url: str, token: str) -> dict:
+    def fake_export(client, url: str, token: str) -> dict:
         assert token == "fixture-token"
         calls.append(url)
         query = parse_qs(urlparse(url).query)
@@ -148,6 +148,10 @@ def synced_cf_d1_db(
             "limit": limit,
         }
 
+    # ``_new_http_client`` returns the real httpx.Client in production. Stub
+    # it with a sentinel so any accidental transport use inside a test fails
+    # fast rather than touching the network.
+    monkeypatch.setattr(sync_module, "_new_http_client", lambda: object())
     monkeypatch.setattr(sync_module, "_http_get_json", fake_export)
     db = tmp_path / "cf-export.sqlite"
     rc = sync_module.main(

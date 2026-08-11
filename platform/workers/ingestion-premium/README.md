@@ -15,9 +15,14 @@ paginated export request have been verified.
 |------|------|---------|
 | R2 | `quant-raw` | Verbatim source JSON per fetch, partitioned by dataset/date |
 | R2 | `quant-structured` | Reserved (future parquet/partition dumps) |
-| D1 | `quant-ingest` | PIT-shaped structured rows (mirror of `storage/schema.py`) |
+| D1 | `quant-ingest` | PIT-shaped structured rows (mirror of `storage/schema.py`) + watermarks |
 | Secret | `JQUANTS_API_KEY` | Required for upstream fetch; bind the existing value |
 | Secret | `INGESTION_PROXY_TOKEN` | Optional; gates the manual `/v1/run` endpoint |
+
+After 0002, D1 also holds `ingestion_watermarks` (one row per dataset,
+advanced after every successful ingest). The local sync script reads it
+through `/v1/export/d1?table=ingestion_watermarks`; see
+`docs/phase35_storage_scale.md` for the full scale-path plan.
 
 ## Schedule
 
@@ -85,7 +90,15 @@ python3 scripts/sync_d1_to_sqlite.py \
   --url "$INGESTION_PREMIUM_URL" \
   --token "$INGESTION_PROXY_TOKEN" \
   --db data/structured/ingestion.sqlite
+
+# Incremental: skip rows already mirrored locally by ingested_at watermark.
+python3 scripts/sync_d1_to_sqlite.py --incremental \
+  --url "$INGESTION_PREMIUM_URL" \
+  --token "$INGESTION_PROXY_TOKEN" \
+  --db data/structured/ingestion.sqlite
 ```
 
 See [docs/phase35_cf_ingest.md](../../../docs/phase35_cf_ingest.md) for the
-full closed-loop spec and ops runbook.
+full closed-loop spec and ops runbook, and
+[docs/phase35_storage_scale.md](../../../docs/phase35_storage_scale.md) for
+the storage scale path (R2 parquet + watermarks + incremental sync).

@@ -166,6 +166,17 @@ hard failures. See
 [docs/phase35_validation_matrix.md](phase35_validation_matrix.md#live-strict-gates)
 for the full strict-vs-soft table.
 
+## Storage scale path (P0-3)
+
+The closed loop today writes every Premium core row to D1
+(`jquants_records` + `*_revisions`). For the **scale runway** — R2 bulk
+timeseries partitions vs D1 control plane, watermarks, and incremental
+local sync — see [docs/phase35_storage_scale.md](phase35_storage_scale.md).
+The current migration adds the `ingestion_watermarks` D1 table
+(`migrations/0002_watermarks.sql`) and the `--incremental` /
+`--since` flags on `scripts/sync_d1_to_sqlite.py`; the parquet dump itself
+is documented but **not** yet implemented.
+
 ## Phase 3.5 → Phase 4 bridge
 
 The features package reads facts through ``pit.get_*`` from a SQLite DB.
