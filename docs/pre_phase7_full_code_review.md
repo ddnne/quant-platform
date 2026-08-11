@@ -1,27 +1,40 @@
 # Phase 6.2 Wave 0 — Full Code Review (Pre-Phase 7)
 
 **Date**: 2026-08-11  
-**HEAD**: `7a0ff21` (feat(mcp): GitHub OAuth remote Ops MCP)  
+**HEAD reviewed**: `7a0ff21` (feat(mcp): GitHub OAuth remote Ops MCP)  
+**Current HEAD**: `e47da0f`  
 **Developer**: GLM  
 **Scope**: Canonical dataset registry, Coverage V2, READY gate, Remote Ops, test audit, Phase 7 preparation
 
+> **Resolution status (post-fix).** This review was written at `7a0ff21`. Since
+> then, **all P0 code findings below are RESOLVED in code** (see per-finding
+> Status). The code work is done and offline tests are green. However, the
+> **live-operational** items — Coverage V2 COMPLETE with real receipts,
+> production READY ≥1, full multi-year backfill, and CF cron auto-projection —
+> remain **OPEN**. **Phase 7 mass research is NO-GO** until READY ≥1 and real
+> Coverage V2 COMPLETE exist. Source of truth:
+> [docs/phase62_residual_status.md](phase62_residual_status.md).
+
 ## Executive Summary
 
-This review identifies all P0 blockers that must reach zero before Phase 7 mass autonomous research can begin. The codebase shows strong architectural foundation with Coverage V2, schema migrations, and MCP patterns implemented. Critical issues center on dataset membership consistency, ops automation, and READY publication gates.
+This review identified all P0 blockers that must reach zero before Phase 7 mass autonomous research can begin. The codebase shows strong architectural foundation with Coverage V2, schema migrations, and MCP patterns implemented. Critical issues centered on dataset membership consistency, ops automation, and READY publication gates. **As of `e47da0f`, all P0 code findings are resolved in code; live operational closure remains open.**
 
-### Overall Health
+### Overall Health (current)
 
 | Category | Status | Notes |
 |----------|--------|-------|
 | Coverage V2 | ✅ Strong | Receipt/segment model well-implemented |
 | Schema migrations | ✅ Strong | Idempotent D1 + SQLite migrations |
 | MCP architecture | ✅ Strong | Clean separation of research/ops domains |
-| Dataset membership | ❌ P0 | 25/26 split - JSDA corporate bonds inconsistent |
-| Ops automation | ❌ P0 | Manual export pipeline, no auto-projection |
-| READY gate | ⚠️ P0 | Missing coherence checks in publish flow |
-| Remote Ops tools | ⚠️ P0 | Read-only but missing ops-specific tools |
-| Documentation | ⚠️ P0 | Phase 6.1/6.2 drift, roadmap inconsistency |
-| Test suite | ⚠️ P0 | Redundant negatives, needs consolidation |
+| Dataset membership | ✅ RESOLVED (code) | 26 datasets consistent across Python/TS/JSON |
+| Ops automation | ✅ RESOLVED (code) / ⚠️ PARTIAL (live) | Publisher + D1 apply + `--publish-ops`; CF cron auto-projection OPEN |
+| READY gate | ✅ RESOLVED (code) / 🚫 OPEN (live) | Coherence gate implemented and correctly blocks; production READY ≥1 not yet achieved |
+| Remote Ops tools | ✅ RESOLVED (code) | 16 tools + migration 0003, Worker live |
+| Documentation | ✅ RESOLVED (docs) | Phase 6.1/6.2 boundary clarified; roadmap consistent |
+| Test suite | ✅ RESOLVED (code) | Consolidated; offline green on land |
+| Coverage V2 COMPLETE (live) | 🚫 OPEN | All governed PARTIAL/UNKNOWN, 0 receipts |
+| Production READY ≥1 (live) | 🚫 OPEN | Coherence correctly blocks |
+| Full backfill (live) | 🚫 OPEN | Multi-year JQ/JSDA backfill not executed |
 
 ---
 
@@ -31,7 +44,7 @@ This review identifies all P0 blockers that must reach zero before Phase 7 mass 
 
 **ID**: `P0-1`  
 **Severity**: `P0 - CRITICAL`  
-**Status**: `UNRESOLVED`  
+**Status**: `RESOLVED (code)` — 26 datasets consistent across Python/TS/JSON  
 **Structural Fix**: Unify `jsda_corporate_bond_transactions` across all registries
 
 #### Issue Details
@@ -86,7 +99,7 @@ The dataset was added to `jsda_governed.json` (change-set 12 per runbook) but wa
 
 **ID**: `P0-2`  
 **Severity**: `P0 - CRITICAL`  
-**Status**: `UNRESOLVED`  
+**Status**: `RESOLVED (code)` — `canonical_datasets.json` + `canonical.py` operational  
 **Structural Fix**: Create single source-of-truth registry
 
 #### Issue Details
@@ -151,7 +164,7 @@ Dataset contracts evolved incrementally without a canonical unified registry. Ea
 
 **ID**: `P0-3`  
 **Severity**: `P0 - CRITICAL`  
-**Status**: `UNRESOLVED`  
+**Status**: `RESOLVED (code) / PARTIAL (live)` — publisher + D1 apply + `--publish-ops`; CF cron auto-projection still OPEN  
 **Structural Fix**: Automate ops projection after each successful run
 
 #### Issue Details
@@ -203,7 +216,7 @@ Projection was designed as out-of-band manual operation to keep MCP read-only. N
 
 **ID**: `P0-4`  
 **Severity**: `P0 - HIGH`  
-**Status**: `PARTIALLY RESOLVED`  
+**Status**: `RESOLVED (code)` — ledger uses segment receipts; min/max are diagnostics only  
 **Structural Fix**: Ensure segment receipts drive COMPLETE, not row count bounds
 
 #### Issue Details
@@ -246,7 +259,7 @@ Historical coverage V1 used min/max row counts as proof. V2 correctly uses recei
 
 **ID**: `P0-5`  
 **Severity**: `P0 - HIGH`  
-**Status**: `PARTIALLY RESOLVED`  
+**Status**: `RESOLVED (code) / OPEN (live)` — raw retention wired; live raw-for-COMPLETE not yet evidenced (0 receipts)  
 **Structural Fix**: Verify raw retention and change sequences in production path
 
 #### Issue Details
@@ -290,7 +303,7 @@ Raw retention policy exists but operational pipeline may not enforce R2 persiste
 
 **ID**: `P0-6`  
 **Severity**: `P0 - CRITICAL`  
-**Status**: `UNRESOLVED`  
+**Status**: `RESOLVED (code) / OPEN (live)` — coherence gate implemented and correctly blocks; production READY ≥1 not yet achieved  
 **Structural Fix**: Add full coherence check before READY publication
 
 #### Issue Details
@@ -344,7 +357,7 @@ READY publication was added but full coherence gate was not implemented or enfor
 
 **ID**: `P0-7`  
 **Severity**: `P0 - MEDIUM`  
-**Status**: `PARTIALLY RESOLVED`  
+**Status**: `RESOLVED (code)` — 16 tools + migration 0003, Worker live  
 **Structural Fix**: Add ops-specific tools to Remote Ops MCP
 
 #### Issue Details
@@ -397,7 +410,7 @@ Remote Ops MCP was implemented with GitHub OAuth but ops-specific tools were not
 
 **ID**: `P0-8`  
 **Severity**: `P0 - MEDIUM`  
-**Status**: `UNRESOLVED`  
+**Status**: `RESOLVED (docs)` — Phase 6.1/6.2 boundary clarified; roadmap consistent  
 **Structural Fix**: Fix Phase 6.1/6.2 roadmap inconsistencies
 
 #### Issue Details
@@ -438,7 +451,7 @@ Documentation updated incrementally without consolidating Phase 6.1/6.2 boundari
 
 **ID**: `P0-9`  
 **Severity**: `P0 - LOW`  
-**Status**: `UNRESOLVED`  
+**Status**: `RESOLVED (code)` — tests consolidated; offline green on land  
 **Structural Fix**: Consolidate redundant negative tests
 
 #### Issue Details
@@ -481,7 +494,7 @@ Tests added incrementally without audit and consolidation.
 
 **ID**: `P1-1`  
 **Severity**: `P1 - HIGH`  
-**Status**: `PENDING`  
+**Status**: `RESOLVED (code)` — 31 endpoints documented (26 governed + 5 experimental) in `data_contracts/inventory.py`  
 **Structural Fix**: Complete endpoint inventory and add to ops tools
 
 #### Details
@@ -504,7 +517,7 @@ Current endpoint inventory incomplete. Need ~31 endpoints fully documented and m
 
 **ID**: `P1-2`  
 **Severity**: `P1 - HIGH`  
-**Status**: `PENDING`  
+**Status**: `OPEN (live)` — full multi-year JQ/JSDA backfill not executed (credentials present)  
 **Structural Fix**: Execute full historical backfill for governed datasets
 
 #### Details
@@ -526,7 +539,7 @@ Production backfill per Phase 6.1 runbook sections 3-4 needs execution.
 
 **ID**: `P1-3`  
 **Severity**: `P1 - HIGH`  
-**Status**: `PENDING`  
+**Status**: `OPEN (live)` — coherence gate correctly blocks; no production READY yet  
 **Structural Fix**: Achieve first complete READY snapshot
 
 #### Details
@@ -568,23 +581,30 @@ All P0s resolved + backfill complete should yield first production READY.
 
 ---
 
-## Verification Checklist
+## Verification Checklist (current state)
 
-Before printing `PHASE62_DONE`, verify:
+Code-complete items (checked) vs live-operational items (still OPEN).
+`PHASE62_DONE` is **not** printed while any live item is open.
 
-- [ ] P0-1: Dataset membership unified (26 datasets)
-- [ ] P0-2: Canonical registry created and used
-- [ ] P0-3: Ops projection automated
-- [ ] P0-4: Coverage V2 receipts drive COMPLETE
-- [ ] P0-5: Raw retention operational
-- [ ] P0-6: READY coherence gate enforced
-- [ ] P0-7: Remote Ops tools complete
-- [ ] P0-8: Documentation consistent
-- [ ] P0-9: Tests consolidated
-- [ ] All tests pass: `pytest -q`
-- [ ] Git log shows small reviewable commits
-- [ ] READY snapshot achievable
-- [ ] Phase 7 prerequisites documented
+### Code-complete ✅
+- [x] P0-1: Dataset membership unified (26 datasets)
+- [x] P0-2: Canonical registry created and used
+- [x] P0-3: Ops projection publisher + D1 apply (`--publish-ops`, default OFF)
+- [x] P0-4: Coverage V2 receipts drive COMPLETE (logic correct)
+- [x] P0-5: Raw retention wired (logic)
+- [x] P0-6: READY coherence gate enforced (correctly blocks)
+- [x] P0-7: Remote Ops tools complete (16 tools + migration 0003)
+- [x] P0-8: Documentation consistent
+- [x] P0-9: Tests consolidated
+- [x] All tests pass offline: `pytest -q`
+- [x] Git log shows small reviewable commits
+
+### Live-operational — OPEN 🚫 (these gate Phase 7 mass research)
+- [ ] Coverage V2 COMPLETE with real receipts (today: 0 receipts, all PARTIAL/UNKNOWN)
+- [ ] Full multi-year JQ/JSDA backfill executed
+- [ ] Production READY ≥1 achieved
+- [ ] CF cron auto-projection (no human flag)
+- [ ] Phase 7 prerequisites implemented (not just stubs)
 
 ---
 
