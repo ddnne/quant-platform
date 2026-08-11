@@ -170,6 +170,10 @@ class AuthorizedPaperExecutionRequest:
 
     This is data, not an executable order: it contains no broker, callable,
     credential, database path, or transport handle.
+
+    Phase 6.2.3: binds exact READY snapshot (id + manifest digest), universe,
+    period, cost scenario, and expiry so PaperExecutionService cannot silently
+    select a mutable current DB.
     """
 
     mode: str
@@ -178,6 +182,13 @@ class AuthorizedPaperExecutionRequest:
     strategy_spec_hash: str
     max_gross_weight: float
     instructions: tuple[str, ...]
+    ready_snapshot_id: str = ""
+    ready_manifest_digest: str = ""
+    universe: tuple[str, ...] = ()
+    period_start: str = ""
+    period_end: str = ""
+    cost_scenario: str = "default"
+    expires_at: str = ""
 
     def __post_init__(self) -> None:
         if self.mode != "paper":

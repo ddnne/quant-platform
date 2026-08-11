@@ -52,14 +52,39 @@ class GatewayBudget:
     max_tokens: int = 100_000
     calls_used: int = 0
     tokens_used: int = 0
+    reserved_tokens: int = 0
+    reserved_calls: int = 0
 
-    def charge(self, tokens: int = 0) -> None:
-        if self.calls_used >= self.max_calls:
+    def reserve(self, *, calls: int = 1, tokens: int = 0) -> None:
+        """Reserve capacity before provider call (fail closed pre-call)."""
+        calls = max(0, int(calls))
+        tokens = max(0, int(tokens))
+        if self.calls_used + self.reserved_calls + calls > self.max_calls:
+            raise RuntimeError("AI gateway model call budget exhausted (reserve)")
+        if self.tokens_used + self.reserved_tokens + tokens > self.max_tokens:
+            raise RuntimeError("AI gateway token budget exhausted (reserve)")
+        self.reserved_calls += calls
+        self.reserved_tokens += tokens
+
+    def reconcile(self, *, calls: int = 1, tokens: int = 0) -> None:
+        """Convert reservation into actual usage after provider returns."""
+        calls = max(0, int(calls))
+        tokens = max(0, int(tokens))
+        self.reserved_calls = max(0, self.reserved_calls - 1)
+        self.reserved_tokens = max(0, self.reserved_tokens - tokens)
+        # charge actual
+        if self.calls_used + calls > self.max_calls:
             raise RuntimeError("AI gateway model call budget exhausted")
         if self.tokens_used + tokens > self.max_tokens:
             raise RuntimeError("AI gateway token budget exhausted")
-        self.calls_used += 1
-        self.tokens_used += max(0, tokens)
+        self.calls_used += calls
+        self.tokens_used += tokens
+
+    def charge(self, tokens: int = 0) -> None:
+        """Legacy single-step charge (reserve+reconcile of 1 call)."""
+        estimate = max(0, int(tokens))
+        self.reserve(calls=1, tokens=estimate)
+        self.reconcile(calls=1, tokens=estimate)
 
 
 class LLMProvider(Protocol):
@@ -190,9 +215,25 @@ class GatewayResult(Generic[T]):
         return self.to_public_dict().get(key, default)
 
 
+def _find_banned_keys(obj: Any, *, path: str = "") -> list[str]:
+    """Reject banned executable keys at any nesting depth."""
+    found: list[str] = []
+    if isinstance(obj, Mapping):
+        for k, v in obj.items():
+            key = str(k)
+            here = f"{path}.{key}" if path else key
+            if key in _BANNED_KEYS:
+                found.append(here)
+            found.extend(_find_banned_keys(v, path=here))
+    elif isinstance(obj, (list, tuple)):
+        for i, v in enumerate(obj):
+            found.extend(_find_banned_keys(v, path=f"{path}[{i}]"))
+    return found
+
+
 def _decode_typed(schema: str, payload: Mapping[str, Any]) -> Any:
     body = {k: v for k, v in payload.items() if k not in {"schema", "gateway"}}
-    banned = sorted(set(body) & _BANNED_KEYS)
+    banned = _find_banned_keys(body)
     if banned:
         raise GatewaySchemaRejected(f"banned executable field(s): {banned}")
     try:
@@ -250,6 +291,9 @@ class AIGateway:
                 f"unsupported output schema {expected_schema!r}; "
                 f"allowed={sorted(ALLOWED_OUTPUT_SCHEMAS)}"
             )
+        # Pre-call reserve using prompt estimate; reconcile with provider usage.
+        estimate = max(1, len(prompt) // 4)
+        self.budget.reserve(calls=1, tokens=estimate)
         raw = dict(
             self.provider.complete(
                 role=role,
@@ -258,9 +302,26 @@ class AIGateway:
                 expected_schema=expected_schema,
             )
         )
+        # Separate usage envelope from content when provider supplies it.
+        usage_block = raw.pop("usage", None)
         usage_tokens = int(raw.pop("usage_tokens", 0) or 0)
-        charge = usage_tokens if usage_tokens > 0 else max(1, len(prompt) // 4)
-        self.budget.charge(tokens=charge)
+        if isinstance(usage_block, Mapping):
+            usage_tokens = int(
+                usage_block.get("total_tokens")
+                or (
+                    int(usage_block.get("input_tokens") or 0)
+                    + int(usage_block.get("output_tokens") or 0)
+                )
+                or usage_tokens
+            )
+        charge = usage_tokens if usage_tokens > 0 else estimate
+        try:
+            self.budget.reconcile(calls=1, tokens=charge)
+        except RuntimeError:
+            # Release reservation on over-budget actuals.
+            self.budget.reserved_calls = max(0, self.budget.reserved_calls - 1)
+            self.budget.reserved_tokens = max(0, self.budget.reserved_tokens - estimate)
+            raise
 
         if "schema" in raw:
             schema = str(raw.get("schema"))

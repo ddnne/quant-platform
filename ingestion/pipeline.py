@@ -555,6 +555,13 @@ def _run_jquants_catalog(
                             obs = 1 if len(rows) > 0 else 0
                         else:
                             obs = len(rows)
+                        # Phase 6.2.3: signed receipt is part of governed success.
+                        # Same connection as structured register; commit together.
+                        from ingestion.runtime_authority import (
+                            open_ingestion_signing_authority,
+                        )
+
+                        authority = open_ingestion_signing_authority()
                         emit_segment_receipt(
                             store._conn,
                             required=req,
@@ -565,11 +572,25 @@ def _run_jquants_catalog(
                             raw_row_count=len(rows),
                             pagination_exhausted=True,
                             status="SUCCESS",
-                            commit=True,
+                            authority=authority,
+                            commit=False,
                         )
+                        store._conn.commit()
                 except Exception as rec_exc:  # noqa: BLE001
-                    # Receipt emit must not fail the ingestion row path.
-                    print(f"[jquants/{kind}] receipt emit skipped: {rec_exc}")
+                    # Governed datasets: receipt failure fails the run.
+                    # Do not leave structured rows looking like full PASS.
+                    try:
+                        store._conn.rollback()
+                    except Exception:  # noqa: BLE001
+                        pass
+                    return RunReport(
+                        "jquants",
+                        kind,
+                        fetched=len(rows),
+                        registered=0,
+                        error=f"receipt emit failed (governed): {rec_exc}",
+                        raw_path=str(rp),
+                    )
             return RunReport(
                 "jquants", kind, fetched=len(rows), registered=n, raw_path=str(rp)
             )

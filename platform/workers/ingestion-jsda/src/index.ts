@@ -40,10 +40,22 @@ type DatasetId =
   | "jsda_tokyo_repo_rates"
   | "jsda_corporate_bond_transactions";
 
-function authorized(request: Request, expected?: string): boolean {
-  if (!expected) return false;
-  return (request.headers.get("X-Ingestion-Token") || "") === expected;
+async function tokenMatches(provided: string, expected: string): Promise<boolean> {
+  const enc = new TextEncoder();
+  const [a, b] = await Promise.all([
+    crypto.subtle.digest("SHA-256", enc.encode(provided)),
+    crypto.subtle.digest("SHA-256", enc.encode(expected)),
+  ]);
+  return crypto.subtle.timingSafeEqual(a, b);
 }
+
+async function authorized(request: Request, expected?: string): Promise<boolean> {
+  if (!expected) return false;
+  const got = request.headers.get("X-Ingestion-Token") || "";
+  return tokenMatches(got, expected);
+}
+
+const MAX_ARTIFACT_BYTES = 32 * 1024 * 1024; // 32 MiB hard cap per artifact
 
 function hostAllowed(url: string): boolean {
   try {
@@ -120,10 +132,51 @@ async function fetchAllowed(
     if (!next) throw new Error(`redirect host not allowlisted from ${url}`);
     return fetchAllowed(next, ua);
   }
-  const bytes = await resp.arrayBuffer();
+  const cl = resp.headers.get("content-length");
+  if (cl && Number(cl) > MAX_ARTIFACT_BYTES) {
+    throw new Error(`artifact too large content-length=${cl} url=${url}`);
+  }
+  // Bounded read: reject if body exceeds max even without Content-Length.
+  const reader = resp.body?.getReader();
+  if (!reader) {
+    const bytes = await resp.arrayBuffer();
+    if (bytes.byteLength > MAX_ARTIFACT_BYTES) {
+      throw new Error(`artifact too large bytes=${bytes.byteLength}`);
+    }
+    return {
+      status: resp.status,
+      bytes,
+      contentType: resp.headers.get("content-type") || "application/octet-stream",
+      finalUrl: url,
+    };
+  }
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (value) {
+      total += value.byteLength;
+      if (total > MAX_ARTIFACT_BYTES) {
+        try {
+          await reader.cancel();
+        } catch {
+          /* ignore */
+        }
+        throw new Error(`artifact too large bytes>${MAX_ARTIFACT_BYTES}`);
+      }
+      chunks.push(value);
+    }
+  }
+  const merged = new Uint8Array(total);
+  let offset = 0;
+  for (const c of chunks) {
+    merged.set(c, offset);
+    offset += c.byteLength;
+  }
   return {
     status: resp.status,
-    bytes,
+    bytes: merged.buffer,
     contentType: resp.headers.get("content-type") || "application/octet-stream",
     finalUrl: url,
   };
@@ -393,7 +446,7 @@ export default {
       });
     }
     if (url.pathname === "/v1/run") {
-      if (!authorized(request, env.INGESTION_RUN_TOKEN)) {
+      if (!(await authorized(request, env.INGESTION_RUN_TOKEN))) {
         return Response.json({ error: "unauthorized" }, { status: 401 });
       }
       const summary = await runAll(env, "manual");

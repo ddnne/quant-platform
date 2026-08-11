@@ -392,7 +392,43 @@ export async function callOpsTool(db, name, rawArguments) {
     const marks = await all(db,
       "SELECT dataset, last_event_date, last_ingested_at, last_export_cursor FROM ingestion_watermarks ORDER BY dataset LIMIT 500");
     const change = await first(db, "SELECT MAX(change_seq) AS latest_change_seq FROM ingestion_change_log");
-    return { plane: "ops_current", mutable: true, watermarks: marks, latest_change_seq: change?.latest_change_seq ?? null };
+    const latest = change?.latest_change_seq == null ? null : Number(change.latest_change_seq);
+    // Per-dataset export cursor + lag vs latest change_seq (null cursor = not synced).
+    const datasets = (marks || []).map((row) => {
+      const cursorRaw = row.last_export_cursor;
+      const exported = cursorRaw == null || cursorRaw === "" ? null : Number(cursorRaw);
+      const lag =
+        latest == null || exported == null || Number.isNaN(exported)
+          ? null
+          : Math.max(0, latest - exported);
+      return {
+        dataset: row.dataset,
+        last_event_date: row.last_event_date ?? null,
+        last_ingested_at: row.last_ingested_at ?? null,
+        exported_cursor: Number.isNaN(exported) ? null : exported,
+        applied_cursor: Number.isNaN(exported) ? null : exported, // D1-side watermark stands in until local apply pin is projected
+        lag,
+        state:
+          exported == null
+            ? "EXPORT_CURSOR_NULL"
+            : lag === 0
+              ? "CURRENT"
+              : lag != null && lag > 0
+                ? "LAGGING"
+                : "UNKNOWN",
+      };
+    });
+    const null_cursors = datasets.filter((d) => d.exported_cursor == null).length;
+    return {
+      plane: "ops_current",
+      mutable: true,
+      latest_source_change_seq: latest,
+      watermarks: marks,
+      datasets,
+      null_export_cursor_count: null_cursors,
+      research_note:
+        "Cloudflare ingestion progress ≠ local research apply. Null export cursors mean D1→local sync is not closed.",
+    };
   }
 
   const [lastRun, coverage, raw] = await Promise.all([

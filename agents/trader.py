@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import datetime, timedelta, timezone
+from typing import Sequence
 
 from .types import AuthorizedPaperExecutionRequest, PortfolioDecision
 from .roles import AgentRole, ROLE_MATRIX
@@ -13,7 +15,18 @@ class TraderAgent:
     role = "trader"
     capabilities = ROLE_MATRIX[AgentRole.TRADER].capabilities
 
-    def prepare(self, decision: PortfolioDecision) -> AuthorizedPaperExecutionRequest:
+    def prepare(
+        self,
+        decision: PortfolioDecision,
+        *,
+        ready_snapshot_id: str = "",
+        ready_manifest_digest: str = "",
+        universe: Sequence[str] = (),
+        period_start: str = "",
+        period_end: str = "",
+        cost_scenario: str = "default",
+        ttl_seconds: int = 3600,
+    ) -> AuthorizedPaperExecutionRequest:
         if not decision.approved:
             raise ValueError("trader refuses an unapproved portfolio decision")
         spec_json = json.dumps(
@@ -23,16 +36,26 @@ class TraderAgent:
             allow_nan=False,
         )
         spec_hash = "sha256:" + hashlib.sha256(spec_json.encode("utf-8")).hexdigest()
+        # Authorization covers mode, spec hash, gross, and exact READY pin.
         authorization = {
             "mode": "paper",
             "strategy_spec_hash": spec_hash,
             "max_gross_weight": decision.max_gross_weight,
+            "ready_snapshot_id": ready_snapshot_id or "",
+            "ready_manifest_digest": ready_manifest_digest or "",
+            "universe": list(universe),
+            "period_start": period_start or "",
+            "period_end": period_end or "",
+            "cost_scenario": cost_scenario,
         }
         authorization_id = "sha256:" + hashlib.sha256(
             json.dumps(authorization, sort_keys=True, separators=(",", ":")).encode(
                 "utf-8"
             )
         ).hexdigest()
+        expires = (
+            datetime.now(timezone.utc) + timedelta(seconds=max(60, ttl_seconds))
+        ).isoformat()
         return AuthorizedPaperExecutionRequest(
             mode="paper",
             authorization_id=authorization_id,
@@ -43,7 +66,15 @@ class TraderAgent:
                 "interpret the reviewed StrategySpec",
                 "run through strategies.paper.run_paper",
                 "do not contact a broker",
+                "consume exact READY snapshot only",
             ),
+            ready_snapshot_id=str(ready_snapshot_id or ""),
+            ready_manifest_digest=str(ready_manifest_digest or ""),
+            universe=tuple(str(u) for u in universe),
+            period_start=str(period_start or ""),
+            period_end=str(period_end or ""),
+            cost_scenario=str(cost_scenario or "default"),
+            expires_at=expires,
         )
 
 

@@ -42,16 +42,29 @@ def _strategy_spec_hash(spec: StrategySpec) -> str:
     return "sha256:" + hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
-def _authorization_id(mode: str, spec_hash: str, max_gross_weight: float) -> str:
-    """Re-derive the immutable authorization id from its three covered fields.
-
-    Mirrors :meth:`agents.trader.TraderAgent.prepare` byte-for-byte so a request
-    minted by the trader is accepted and a tampered one is refused.
-    """
+def _authorization_id(
+    mode: str,
+    spec_hash: str,
+    max_gross_weight: float,
+    *,
+    ready_snapshot_id: str = "",
+    ready_manifest_digest: str = "",
+    universe: tuple[str, ...] | list[str] = (),
+    period_start: str = "",
+    period_end: str = "",
+    cost_scenario: str = "default",
+) -> str:
+    """Re-derive the immutable authorization id (mirrors TraderAgent.prepare)."""
     payload = {
         "mode": mode,
         "strategy_spec_hash": spec_hash,
         "max_gross_weight": max_gross_weight,
+        "ready_snapshot_id": ready_snapshot_id or "",
+        "ready_manifest_digest": ready_manifest_digest or "",
+        "universe": list(universe),
+        "period_start": period_start or "",
+        "period_end": period_end or "",
+        "cost_scenario": cost_scenario or "default",
     }
     blob = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return "sha256:" + hashlib.sha256(blob.encode("utf-8")).hexdigest()
@@ -111,11 +124,17 @@ class PaperExecutionService:
                 "strategy_id does not match the StrategySpec"
             )
 
-        # 3. authorization id: re-derive the immutable id from (mode, hash,
-        #    constraint) and require an exact match. A replayed or tampered id
-        #    is refused even if the individual fields happen to look valid.
+        # 3. authorization id: re-derive covering READY pin + period + universe.
         expected_auth = _authorization_id(
-            plan.mode, expected_hash, plan.max_gross_weight
+            plan.mode,
+            expected_hash,
+            plan.max_gross_weight,
+            ready_snapshot_id=getattr(plan, "ready_snapshot_id", "") or "",
+            ready_manifest_digest=getattr(plan, "ready_manifest_digest", "") or "",
+            universe=getattr(plan, "universe", ()) or (),
+            period_start=getattr(plan, "period_start", "") or "",
+            period_end=getattr(plan, "period_end", "") or "",
+            cost_scenario=getattr(plan, "cost_scenario", "default") or "default",
         )
         if plan.authorization_id != expected_auth:
             raise PaperExecutionRejected(
@@ -128,13 +147,46 @@ class PaperExecutionService:
                 "max_gross_weight constraint must be in (0, 1]"
             )
 
-        # 5. exact READY snapshot: pin the data snapshot before any trusted
-        #    work runs, then (in execute) prove the run consumed this exact one.
+        # 4b. expiry
+        expires_at = getattr(plan, "expires_at", "") or ""
+        if expires_at:
+            from datetime import datetime, timezone
+
+            try:
+                exp = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+                now = datetime.now(timezone.utc)
+                if exp.tzinfo is None:
+                    exp = exp.replace(tzinfo=timezone.utc)
+                if now > exp:
+                    raise PaperExecutionRejected("paper authorization expired")
+            except ValueError as exc:
+                raise PaperExecutionRejected(
+                    f"invalid authorization expires_at: {expires_at}"
+                ) from exc
+
+        # 5. exact READY snapshot: prefer authorization pin; never silently
+        #    invent a different mutable current DB when pin is present.
         db_path = Path(config.db_path or "data/structured/ingestion.sqlite")
         try:
             pinned_snapshot = data_snapshot_id(db_path)
         except FileNotFoundError as exc:
             raise PaperExecutionRejected(str(exc)) from exc
+
+        auth_snap = getattr(plan, "ready_snapshot_id", "") or ""
+        if auth_snap and auth_snap != pinned_snapshot:
+            raise PaperExecutionRejected(
+                "authorized ready_snapshot_id does not match config db snapshot; "
+                "refusing mutable/current DB substitution"
+            )
+        if plan.universe and config.universe:
+            if tuple(str(u) for u in config.universe) != tuple(plan.universe):
+                raise PaperExecutionRejected(
+                    "config universe does not match authorized universe"
+                )
+        if plan.period_start and str(config.start) != plan.period_start:
+            raise PaperExecutionRejected("config start does not match authorized period")
+        if plan.period_end and str(config.end) != plan.period_end:
+            raise PaperExecutionRejected("config end does not match authorized period")
 
         # 6. FeatureRef versions: every referenced feature must resolve to an
         #    approved signal definition at the exact pinned version.

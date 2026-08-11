@@ -51,3 +51,14 @@ python -c "from storage.receipt_crypto import load_signing_key, load_verify_keys
 # Backfill status 26 rows
 python -c "from ops.backfill_planner import backfill_status_rows; print(len(backfill_status_rows()), backfill_status_rows()[:3])"
 ```
+
+## Remainder land (same phase, follow-up)
+
+- JQ pipeline: signed receipt required for governed success; receipt fail fails run
+- JSDA source-specific adapters module (`ingestion/jsda/adapters.py`)
+- Paper authorization binds ready_snapshot_id / period / universe / expiry
+- Gateway nested banned-key scan + pre-call budget reserve/reconcile
+- MCP `sync_status` exposes per-dataset export cursor, lag, null counts
+- JSDA worker: timing-safe token compare, 32MiB artifact cap, bounded body read
+
+Still NO-GO for mass research; GLM independent review still required.
