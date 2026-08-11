@@ -5,6 +5,7 @@ from __future__ import annotations
 import calendar
 from dataclasses import asdict, dataclass
 from datetime import date, datetime, timezone
+import hashlib
 import json
 from pathlib import Path
 import sqlite3
@@ -817,13 +818,177 @@ def coverage_gaps(db_path: str | Path) -> list[dict[str, Any]]:
     ]
 
 
+# ---------------------------------------------------------------------------
+# Receipt construction helpers (Lane H)
+# ---------------------------------------------------------------------------
+#
+# The JSDA governed archive runners (ingestion/jsda/archive.py,
+# repo_archive.py, corrections.py) already write real collection receipts
+# inline as each archive segment is fetched. The J-Quants catalog path
+# (ingestion.pipeline.run_jquants) historically persisted raw bytes and
+# structured rows but emitted **no** receipts — leaving every J-Quants
+# governed dataset at PARTIAL/UNKNOWN with zero receipts.
+#
+# The helpers below give the J-Quants emit path (ingestion/jquants/receipts.py)
+# and the operational CLI (scripts/write_collection_receipts.py) a single,
+# honest way to build a receipt whose ``raw`` digest is computed over the
+# *actual* persisted source bytes — never a placeholder — so any COMPLETE
+# verdict is always backed by verifiable raw retention.
+#
+# ``build_synthetic_complete_receipt`` exists ONLY for offline fixture
+# databases (tests). It carries an explicit ``synthetic`` sentinel in its
+# digests so it can never be mistaken for a live collection receipt and must
+# never be written to a production database.
+
+
+def compute_raw_digest(raw: bytes) -> str:
+    """SHA-256 over the verbatim source bytes, in the ledger's digest form.
+
+    Returns ``"sha256:" + hex``. ``raw`` must be the exact bytes persisted
+    under ``data/raw/...`` for the segment — the digest is what makes raw
+    retention auditable, so it must be computed over real bytes, not a
+    placeholder string.
+    """
+    if not isinstance(raw, (bytes, bytearray)):
+        raise TypeError(
+            "raw must be bytes (the verbatim persisted source bytes), "
+            f"got {type(raw).__name__}"
+        )
+    return "sha256:" + hashlib.sha256(raw).hexdigest()
+
+
+def build_collection_receipt(
+    *,
+    required: RequiredCoverageSegment,
+    run_id: int,
+    raw: bytes,
+    observed_items: int,
+    structured_row_count: int,
+    raw_row_count: int | None = None,
+    pagination_exhausted: bool = True,
+    status: str = "SUCCESS",
+    error: str | None = None,
+    checked_at: str | None = None,
+    extra_digests: Mapping[str, Any] | None = None,
+) -> CollectionReceipt:
+    """Build a REAL receipt whose raw digest is computed over ``raw`` bytes.
+
+    The receipt inherits ``expected_scope``/``expected_items`` from the planned
+    ``required`` segment, so it is identity-compatible with
+    :func:`evaluate_segment` (which demands an exact scope match). The ``raw``
+    digest is always a real SHA-256 over the supplied source bytes; callers
+    MUST pass the bytes actually persisted for the segment.
+
+    This helper records the truth. Whether the segment later evaluates to
+    COMPLETE is decided by :func:`evaluate_segment` against the policy — it
+    never fakes a verdict (a non-event segment without explicit expected items
+    stays PARTIAL, correctly).
+    """
+    if status not in {"SUCCESS", "FAILED"}:
+        raise ValueError("receipt status must be SUCCESS or FAILED")
+    structured = int(structured_row_count)
+    raw_rows = int(raw_row_count) if raw_row_count is not None else structured
+    digests: dict[str, Any] = {"raw": compute_raw_digest(raw)}
+    if extra_digests:
+        digests.update(dict(extra_digests))
+    return CollectionReceipt(
+        source=required.source,
+        dataset=required.dataset,
+        segment_id=required.segment_id,
+        segment_start=required.segment_start,
+        segment_end=required.segment_end,
+        expected_scope=required.expected_scope,
+        expected_items=required.expected_items,
+        observed_items=int(observed_items),
+        raw_page_count=1 if raw else 0,
+        raw_row_count=raw_rows,
+        structured_row_count=structured,
+        pagination_exhausted=bool(pagination_exhausted),
+        digests=digests,
+        run_id=int(run_id),
+        status=status,
+        error=error,
+        checked_at=checked_at or _now(),
+    )
+
+
+# Sentinel embedded in every offline-fixture (synthetic) receipt's digests so
+# it is distinguishable from any live collection receipt and auditable.
+SYNTHETIC_RECEIPT_MARKER = {
+    "synthetic": True,
+    "origin": "offline-test-fixture",
+}
+
+
+def build_synthetic_complete_receipt(
+    *,
+    required: RequiredCoverageSegment,
+    run_id: int,
+    observed_items: int | None = None,
+    checked_at: str | None = None,
+) -> CollectionReceipt:
+    """Build a COMPLETE-shaped receipt for an OFFLINE FIXTURE DATABASE ONLY.
+
+    This is the documented offline synthetic receipt writer used by tests and
+    by the CLI's hard-gated ``--synthetic`` fixture mode. It embeds the
+    :data:`SYNTHETIC_RECEIPT_MARKER` (``synthetic: True`` /
+    ``origin: offline-test-fixture``) in its digests so it can be distinguished
+    from any live collection receipt and **must never be written to a
+    production database**.
+
+    ``observed_items`` defaults to a non-zero count (or ``0`` for event-driven
+    segments whose ``expected_items`` is ``0``) so the receipt can satisfy
+    :func:`evaluate_segment` in a fixture. It records no real raw bytes — the
+    digest is a deterministic placeholder, intentionally marked synthetic.
+    """
+    expected = required.expected_items
+    if observed_items is None:
+        observed_items = 0 if expected == 0 else 1
+    digests: dict[str, Any] = {
+        # Deterministic placeholder digest; the synthetic sentinel is what
+        # matters, not the hex value.
+        "raw": "sha256:" + "0" * 64,
+        **SYNTHETIC_RECEIPT_MARKER,
+    }
+    items = int(observed_items)
+    return CollectionReceipt(
+        source=required.source,
+        dataset=required.dataset,
+        segment_id=required.segment_id,
+        segment_start=required.segment_start,
+        segment_end=required.segment_end,
+        expected_scope=required.expected_scope,
+        expected_items=expected,
+        observed_items=items,
+        raw_page_count=1,
+        raw_row_count=items,
+        structured_row_count=items,
+        pagination_exhausted=True,
+        digests=digests,
+        run_id=int(run_id),
+        status="SUCCESS",
+        error=None,
+        checked_at=checked_at or _now(),
+    )
+
+
+def is_synthetic_receipt(receipt: CollectionReceipt) -> bool:
+    """True if a receipt carries the offline-fixture synthetic sentinel."""
+    return bool(receipt.digests.get("synthetic"))
+
+
 __all__ = [
     "CollectionReceipt",
     "RequiredCoverageSegment",
+    "SYNTHETIC_RECEIPT_MARKER",
+    "build_collection_receipt",
+    "build_synthetic_complete_receipt",
+    "compute_raw_digest",
     "coverage_gaps",
     "coverage_summary",
     "evaluate_segment",
     "evaluate_required_segments",
+    "is_synthetic_receipt",
     "plan_required_segments",
     "read_collection_receipts",
     "read_coverage_segments",
