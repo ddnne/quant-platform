@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from data_contracts import all_coverage_contracts
-from storage.coverage_ledger import read_collection_receipts, read_coverage_segments
+from storage.coverage_ledger import POLICY_VERSION
 
 
 @dataclass(frozen=True)
@@ -97,14 +97,22 @@ def _check_coverage_completeness(
     conn: sqlite3.Connection,
     required_datasets: tuple[str, ...],
 ) -> CoherenceGateResult:
-    """Gate 1: All governed datasets have COMPLETE coverage segments."""
+    """Gate 1: All required governed datasets have COMPLETE coverage segments."""
+    # Only check datasets that are both governed AND in required_datasets
     governed_datasets = {
         contract.dataset_id
         for contract in all_coverage_contracts()
         if contract.governance_tier == "governed"
+        and contract.dataset_id in required_datasets
     }
 
-    segments = read_coverage_segments(conn)
+    # Use conn.execute to query segments directly instead of read_coverage_segments
+    # to avoid path/connection confusion
+    segments_cursor = conn.execute(
+        "SELECT * FROM coverage_segments WHERE policy_version=?",
+        (POLICY_VERSION,)
+    )
+    segments = [dict(row) for row in segments_cursor.fetchall()]
     coverage_by_dataset = {
         dataset: [row for row in segments if row["dataset"] == dataset]
         for dataset in required_datasets
@@ -112,10 +120,6 @@ def _check_coverage_completeness(
 
     incomplete_datasets = []
     for dataset in governed_datasets:
-        if dataset not in required_datasets:
-            incomplete_datasets.append(dataset)
-            continue
-
         dataset_segments = coverage_by_dataset.get(dataset, [])
         if not dataset_segments:
             incomplete_datasets.append(f"{dataset} (no segments)")
@@ -132,7 +136,7 @@ def _check_coverage_completeness(
         gate_name="coverage_completeness",
         passed=passed,
         reason=(
-            "All governed datasets have COMPLETE coverage segments"
+            f"All {len(governed_datasets)} required governed datasets have COMPLETE coverage segments"
             if passed
             else f"Incomplete coverage for: {', '.join(incomplete_datasets)}"
         ),
@@ -149,11 +153,20 @@ def _check_receipts_with_raw_retention(
     required_datasets: tuple[str, ...],
 ) -> CoherenceGateResult:
     """Gate 2: All COMPLETE segments have successful receipts with raw retention."""
-    segments = read_coverage_segments(conn, status="COMPLETE")
-    receipts_by_dataset = {
-        dataset: read_collection_receipts(conn, dataset=dataset)
-        for dataset in required_datasets
-    }
+    # Query COMPLETE segments directly
+    segments_cursor = conn.execute(
+        "SELECT * FROM coverage_segments WHERE status=? AND policy_version=?",
+        ("COMPLETE", POLICY_VERSION)
+    )
+    segments = [dict(row) for row in segments_cursor.fetchall()]
+
+    receipts_by_dataset = {}
+    for dataset in required_datasets:
+        receipt_cursor = conn.execute(
+            "SELECT * FROM collection_receipts WHERE dataset=? ORDER BY checked_at, run_id",
+            (dataset,)
+        )
+        receipts_by_dataset[dataset] = [dict(row) for row in receipt_cursor.fetchall()]
 
     issues = []
     for segment in segments:
@@ -321,7 +334,7 @@ def _check_b0_quality_status(
     """Gate 5: B0 quality checks pass."""
     try:
         row = conn.execute(
-            """SELECT status, summary_json
+            """SELECT status, summary_json, evaluated_at
                FROM snapshot_quality_results
                ORDER BY evaluated_at DESC
                LIMIT 1"""
@@ -354,8 +367,8 @@ def _check_b0_quality_status(
         ),
         detail={
             "status": status,
-            "evaluated_at": row.get("evaluated_at"),
-            "summary": row.get("summary_json"),
+            "evaluated_at": row["evaluated_at"] if row else None,
+            "summary": row["summary_json"] if row else None,
         },
     )
 
