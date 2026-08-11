@@ -146,11 +146,16 @@ def plan_required_segments(
             _append(cursor.isoformat(), cursor, cursor)
             cursor = date.fromordinal(cursor.toordinal() + 1)
     elif granularity == "source_time_series_file":
-        _append(
-            f"{start.isoformat()}_{end.isoformat()}",
-            start,
-            end,
+        # Stable single-file identity must match discovery/ingest (e.g.
+        # jsda-era-timeseries). Date-range ids like 2012-10-29_2026-08-11
+        # create phantom PARTIAL inventory with no receipt.
+        stable_ids = {
+            "jsda_tokyo_repo_rates": "jsda-era-timeseries",
+        }
+        segment_id = stable_ids.get(
+            policy.dataset_id, f"{policy.dataset_id}_timeseries"
         )
+        _append(segment_id, start, end)
     else:  # pragma: no cover
         raise ValueError(
             f"unsupported segment granularity: {policy.segment_granularity!r}"
