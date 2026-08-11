@@ -72,4 +72,10 @@ def test_live_backtest_3m():
         universe=uni,
         cost_model=standard_cost(),
     )
-    assert res.metrics["num_trading_days"] >= 40
+    # ~3m calendar window should contain at least 50 trading days for live
+    # (configurable for unusual windows). Soft offline fixtures use a much
+    # smaller floor — see test_backtest_short_window_offline.
+    floor = int(os.environ.get("QP_BT_MIN_DAYS", "50"))
+    assert res.metrics["num_trading_days"] >= floor, (
+        f"num_trading_days={res.metrics['num_trading_days']} < floor={floor}"
+    )

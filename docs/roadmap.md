@@ -20,3 +20,7 @@
 > Phase 3.5 では Cloudflare 上の Premium core 取得閉路（`platform/workers/ingestion-premium/`・
 > R2 raw + D1 structured・per-dataset 検証・hourly cron・local sync）を構築した。
 > 詳細は [phase35_cf_ingest.md](phase35_cf_ingest.md)。
+>
+> **運用完了の定義**: Phase 3.5 の運用完了には (1) cron `failed=0` と (2) live B0 strict
+> pass の両方が必要。フレームワーク完了 ≠ データ品質完了。詳細は
+> [phase35_validation_matrix.md](phase35_validation_matrix.md) の "Live strict gates" 節を参照。

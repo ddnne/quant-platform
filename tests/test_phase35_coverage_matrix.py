@@ -597,3 +597,308 @@ def test_weekly_X5_skipped_without_sidecar(specialized_db):
     out = run_coverage(specialized_db, tier="weekly")
     x5 = _results_by_id(out, "X5")
     assert x5[0].status == "skip"
+
+
+# ---------------------------------------------------------------------------
+# Weekly tier — C6/C7/B1/X1 real logic (Phase 3.5-4 follow-up)
+# ---------------------------------------------------------------------------
+def _build_year_span_db(tmp_path, *, days=("2024-01-01", "2025-06-30")):
+    """Two-code fixture with an explicit event_time window for C6/C7/B1."""
+    p = tmp_path / "span.sqlite"
+    store = SqliteStore(p)
+    rows = []
+    for code, base in (("8697", 100.0), ("7203", 8000.0)):
+        for i, d in enumerate(days):
+            close = base + i
+            rows.append({
+                "Code": code, "Date": d,
+                "Open": close, "High": close, "Low": close,
+                "Close": close, "Volume": 1000.0, "TurnoverValue": close * 1000,
+            })
+    store.upsert(
+        "jquants_daily_bars",
+        normalize_daily_bars(rows, ingested_at=INGESTED),
+    )
+    store.upsert(
+        "jquants_listed_info",
+        normalize_listed_info(
+            [{"Code": "8697", "Date": "2024-01-01",
+              "CompanyName": "JACR", "MarketCode": "0111"},
+             {"Code": "7203", "Date": "2024-01-01",
+              "CompanyName": "Toyota", "MarketCode": "0111"}],
+            ingested_at=INGESTED, snapshot_date="2024-01-01",
+        ),
+    )
+    store.close()
+    return p
+
+
+def test_C6_C7_warn_on_short_span_offline(tmp_path):
+    """Days-of-data fixture: offline soft mode warns (does not fail)."""
+    p = _build_year_span_db(tmp_path, days=("2025-04-01", "2025-04-04"))
+    out = run_coverage(p, tier="weekly", datasets=["equities_bars_daily"])
+    c6 = _results_by_id(out, "C6")
+    c7 = _results_by_id(out, "C7")
+    assert c6 and c7
+    # Offline (strict=False) we must not hard-fail even on tiny spans.
+    assert all(r.status != "fail" for r in c6), [r.detail for r in c6]
+    assert all(r.status != "fail" for r in c7), [r.detail for r in c7]
+    # Metrics present so consumers can judge for themselves.
+    assert "fill_rate" in c7[0].metrics
+    assert "expected_start" in c7[0].metrics
+
+
+def test_C6_C7_fail_on_short_span_when_strict(tmp_path):
+    """Strict mode (live): a days-of-data span is a hard failure."""
+    p = _build_year_span_db(tmp_path, days=("2025-04-01", "2025-04-04"))
+    out = run_coverage(
+        p, tier="weekly", datasets=["equities_bars_daily"],
+        strict_live_gates=True,
+    )
+    c7 = _results_by_id(out, "C7")
+    assert c7
+    assert c7[0].status == "fail", c7[0].detail
+    assert c7[0].metrics["fill_rate"] < 0.2
+
+
+def test_C6_C7_pass_on_multi_year_span(tmp_path):
+    """A near-complete span vs the expected window should pass even offline.
+
+    Trick the fill-rate by pinning ``today`` close to ``expected_start``
+    so a modest observed span covers the full expected window.
+    """
+    # expected_start for equities_bars_daily is 2004-01-05; a two-year
+    # observed window with today=2006-01-01 gives fill_rate ≈ 1.0.
+    p = _build_year_span_db(
+        tmp_path, days=("2004-01-05", "2005-12-31"),
+    )
+    out = run_coverage(p, tier="weekly", datasets=["equities_bars_daily"],
+                       today="2005-12-31T15:30:00+09:00")
+    c6 = _results_by_id(out, "C6")
+    c7 = _results_by_id(out, "C7")
+    assert c6[0].status == "pass", (c6[0].detail, c6[0].metrics)
+    assert c7[0].status == "pass", (c7[0].detail, c7[0].metrics)
+    assert c7[0].metrics["fill_rate"] >= 0.9
+
+
+def test_B1_warns_on_short_span_offline(tmp_path):
+    p = _build_year_span_db(tmp_path, days=("2025-04-01", "2025-04-04"))
+    out = run_coverage(p, tier="weekly")
+    b1 = _results_by_id(out, "B1")
+    assert len(b1) == 1
+    assert b1[0].status == "warn"  # < 1 year span, offline soft
+    assert b1[0].dataset == "equities_bars_daily"
+    assert b1[0].metrics["observed_years"] < 1.0
+
+
+def test_B1_fails_on_short_span_when_strict(tmp_path):
+    p = _build_year_span_db(tmp_path, days=("2025-04-01", "2025-04-04"))
+    out = run_coverage(p, tier="weekly", strict_live_gates=True)
+    b1 = _results_by_id(out, "B1")
+    assert b1[0].status == "fail"
+
+
+def test_B1_passes_on_multi_year_span(tmp_path):
+    p = _build_year_span_db(
+        tmp_path, days=("2024-01-01", "2025-12-31"),
+    )
+    out = run_coverage(p, tier="weekly")
+    b1 = _results_by_id(out, "B1")
+    assert b1[0].status == "pass"
+    assert b1[0].metrics["observed_years"] >= 1.0
+
+
+def test_X1_passes_when_bars_match_master(matrix_db):
+    """The default fixture has master={8697,7203} and bars cover both."""
+    out = run_coverage(matrix_db, tier="weekly")
+    x1 = _results_by_id(out, "X1")
+    assert len(x1) == 1
+    assert x1[0].status == "pass", x1[0].detail
+    assert x1[0].metrics["master_count"] == 2
+    assert x1[0].metrics["bar_issuer_count"] == 2
+    assert x1[0].metrics["common_count"] == 2
+    assert x1[0].metrics["coverage"] == 1.0
+
+
+def test_X1_warns_when_bar_coverage_low(tmp_path):
+    """master has 3 codes, only 1 has bars → coverage 0.33 → warn offline."""
+    p = tmp_path / "skew.sqlite"
+    store = SqliteStore(p)
+    store.upsert(
+        "jquants_listed_info",
+        normalize_listed_info(
+            [
+                {"Code": "8697", "Date": "2025-03-31",
+                 "CompanyName": "A", "MarketCode": "0111"},
+                {"Code": "7203", "Date": "2025-03-31",
+                 "CompanyName": "B", "MarketCode": "0111"},
+                {"Code": "9984", "Date": "2025-03-31",
+                 "CompanyName": "C", "MarketCode": "0111"},
+            ],
+            ingested_at=INGESTED, snapshot_date="2025-03-31",
+        ),
+    )
+    store.upsert(
+        "jquants_daily_bars",
+        normalize_daily_bars(
+            [{"Code": "8697", "Date": "2025-04-01",
+              "Open": 100.0, "High": 100.0, "Low": 100.0,
+              "Close": 100.0, "Volume": 1.0, "TurnoverValue": 100.0}],
+            ingested_at=INGESTED,
+        ),
+    )
+    store.close()
+    out = run_coverage(p, tier="weekly")
+    x1 = _results_by_id(out, "X1")
+    assert x1[0].status == "warn", x1[0].detail
+    assert x1[0].metrics["coverage"] < 0.5
+
+
+def test_X1_does_not_fail_strict_on_tiny_master(tmp_path):
+    """Strict bar is meaningless on a 3-code fixture: stays warn."""
+    p = tmp_path / "skew.sqlite"
+    store = SqliteStore(p)
+    store.upsert(
+        "jquants_listed_info",
+        normalize_listed_info(
+            [{"Code": c, "Date": "2025-03-31",
+              "CompanyName": c, "MarketCode": "0111"}
+             for c in ("8697", "7203", "9984")],
+            ingested_at=INGESTED, snapshot_date="2025-03-31",
+        ),
+    )
+    store.upsert(
+        "jquants_daily_bars",
+        normalize_daily_bars(
+            [{"Code": "8697", "Date": "2025-04-01",
+              "Open": 100.0, "High": 100.0, "Low": 100.0,
+              "Close": 100.0, "Volume": 1.0, "TurnoverValue": 100.0}],
+            ingested_at=INGESTED,
+        ),
+    )
+    store.close()
+    out = run_coverage(p, tier="weekly", strict_live_gates=True)
+    x1 = _results_by_id(out, "X1")
+    # master has 3 codes (< 1000), so even strict must NOT hard-fail.
+    assert x1[0].status == "warn", x1[0].detail
+
+
+# ---------------------------------------------------------------------------
+# Daily tier — strict-live-gates emits B0 rows on real-data scale
+# ---------------------------------------------------------------------------
+def test_strict_live_gates_emits_B0_rows_on_daily(specialized_db):
+    """When strict_live_gates=True the daily tier surfaces B0 gate rows.
+
+    These rows use ``check_id="B0"`` (Phase-4 shared gate; not part of the
+    formal catalog which starts at B1). Each gate emits one row whose
+    status mirrors ``cf_platform.live_gates.measure_b0``.
+    """
+    out = run_coverage(specialized_db, tier="daily", strict_live_gates=True)
+    b0 = _results_by_id(out, "B0")
+    # Three gates: master, bars issuers, latest-day rows.
+    assert len(b0) == 3
+    names = {r.dataset for r in b0}
+    assert names == {"B0_master", "B0_bars_issuers", "B0_bars_latest_day"}
+    # The tiny fixture (2 codes, 4 days) misses every gate → fail.
+    assert all(r.status == "fail" for r in b0)
+
+
+def test_strict_live_gates_off_by_default_daily(specialized_db):
+    """Without strict_live_gates, no B0 rows are emitted on the daily tier."""
+    out = run_coverage(specialized_db, tier="daily")
+    b0 = _results_by_id(out, "B0")
+    assert b0 == []
+
+
+# ---------------------------------------------------------------------------
+# b0_pass strict resolution — QP_LIVE=1 implies strict
+# ---------------------------------------------------------------------------
+def test_b0_pass_treats_qp_live_as_strict(monkeypatch, tmp_path):
+    """``b0_pass(db, strict=None)`` reads QP_LIVE=1 as strict=True."""
+    from cf_platform.live_gates import b0_pass
+    p = _build_year_span_db(tmp_path, days=("2025-04-01", "2025-04-04"))
+    monkeypatch.setenv("QP_LIVE", "1")
+    ok, results = b0_pass(p)  # strict defaults to None → env lookup
+    # Fixture-scale DB misses gates, so under strict it must fail.
+    assert ok is False
+    assert all(r.name.startswith("B0_") for r in results)
+
+
+def test_b0_pass_no_qp_live_is_soft(monkeypatch, tmp_path):
+    """Without QP_LIVE=1 the same call returns ok=True (soft path)."""
+    from cf_platform.live_gates import b0_pass
+    p = _build_year_span_db(tmp_path, days=("2025-04-01", "2025-04-04"))
+    monkeypatch.delenv("QP_LIVE", raising=False)
+    ok, _ = b0_pass(p)
+    assert ok is True
+
+
+# ---------------------------------------------------------------------------
+# CLI parser — QP_LIVE=1 default for --strict-live-gates
+# ---------------------------------------------------------------------------
+def test_cli_strict_live_gates_defaults_off_without_qp_live(monkeypatch):
+    """Without QP_LIVE the flag defaults to False (offline green path)."""
+    import importlib.util
+    monkeypatch.delenv("QP_LIVE", raising=False)
+    cli_path = _REPO / "scripts" / "run_phase35_validation.py"
+    spec = importlib.util.spec_from_file_location("run_phase35_validation", cli_path)
+    mod = importlib.util.module_from_spec(spec)
+    assert spec and spec.loader
+    spec.loader.exec_module(mod)
+    args = mod._build_parser().parse_args(["--db", "x.sqlite"])
+    # main() resolves None → False when QP_LIVE unset; the parser itself
+    # surfaces None so the env check happens at call time.
+    assert args.strict_live_gates is None
+
+
+def test_cli_strict_live_gates_defaults_on_with_qp_live(monkeypatch, tmp_path):
+    """When QP_LIVE=1, main() resolves strict=True even without the flag."""
+    import importlib.util
+    cli_path = _REPO / "scripts" / "run_phase35_validation.py"
+    spec = importlib.util.spec_from_file_location("run_phase35_validation", cli_path)
+    mod = importlib.util.module_from_spec(spec)
+    assert spec and spec.loader
+    spec.loader.exec_module(mod)
+
+    # Build an empty DB so run_coverage emits failures (not a crash).
+    p = tmp_path / "empty.sqlite"
+    SqliteStore(p).close()
+    monkeypatch.setenv("QP_LIVE", "1")
+
+    # Spy on the resolved flag by patching run_coverage.
+    captured: dict = {}
+
+    def fake_run(db_path, **kw):
+        captured["strict_live_gates"] = kw.get("strict_live_gates")
+        return []
+
+    monkeypatch.setattr(mod, "run_coverage", fake_run)
+    rc = mod.main(["--db", str(p), "--tier", "daily"])
+    assert rc == 0
+    assert captured["strict_live_gates"] is True
+
+
+def test_cli_no_strict_flag_overrides_qp_live(monkeypatch, tmp_path):
+    """``--no-strict-live-gates`` overrides QP_LIVE=1."""
+    import importlib.util
+    cli_path = _REPO / "scripts" / "run_phase35_validation.py"
+    spec = importlib.util.spec_from_file_location("run_phase35_validation", cli_path)
+    mod = importlib.util.module_from_spec(spec)
+    assert spec and spec.loader
+    spec.loader.exec_module(mod)
+
+    p = tmp_path / "empty.sqlite"
+    SqliteStore(p).close()
+    monkeypatch.setenv("QP_LIVE", "1")
+
+    captured: dict = {}
+
+    def fake_run(db_path, **kw):
+        captured["strict_live_gates"] = kw.get("strict_live_gates")
+        return []
+
+    monkeypatch.setattr(mod, "run_coverage", fake_run)
+    rc = mod.main(["--db", str(p), "--tier", "daily",
+                   "--no-strict-live-gates"])
+    assert rc == 0
+    assert captured["strict_live_gates"] is False

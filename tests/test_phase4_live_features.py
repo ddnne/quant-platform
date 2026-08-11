@@ -43,8 +43,10 @@ def test_b0_metrics_report_offline(multi_db):
     ok, results = b0_pass(db, strict=False)
     assert ok is True
     assert any(r.name == "B0_master" for r in results)
-    ok_strict, _ = b0_pass(db, strict=True)
-    assert ok_strict is False
+    # Offline path is soft — even a 10-code fixture passes.
+    ok_strict, results_strict = b0_pass(db, strict=True)
+    assert ok_strict is False  # strict fails hard on fixture-scale data
+    assert any(not r.ok for r in results_strict)
 
 
 def test_features_majority_non_null(multi_db):
@@ -77,5 +79,11 @@ def test_live_b0_and_features_sample():
     db = Path(os.environ.get("QP_DB", "data/structured/ingestion.sqlite"))
     if not db.exists():
         pytest.skip(f"no DB at {db}")
+    # Live runs enforce LIVE_GATES hard: there is no soft path. The explicit
+    # ``strict=True`` is redundant with QP_LIVE=1 (b0_pass resolves strict=None
+    # from the env) but kept here to make the intent unambiguous.
     ok, results = b0_pass(db, strict=True)
     assert ok, [r.as_dict() for r in results]
+    # Sanity: same call with strict=None also resolves to strict under QP_LIVE=1.
+    ok_default, _ = b0_pass(db)
+    assert ok_default == ok
