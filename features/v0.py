@@ -90,6 +90,8 @@ Return1d: FeatureDefinition = register(
         ),
         compute=_return_1d,
         tags=("price", "daily", "return"),
+        intended_role="signal",
+        status="approved",
     )
 )
 
@@ -153,6 +155,8 @@ MomentumN: FeatureDefinition = register(
         ),
         compute=_momentum_n,
         tags=("price", "daily", "momentum"),
+        intended_role="signal",
+        status="approved",
     )
 )
 
@@ -221,6 +225,8 @@ VolatilityN: FeatureDefinition = register(
         ),
         compute=_volatility_n,
         tags=("price", "daily", "volatility"),
+        intended_role="signal",
+        status="approved",
     )
 )
 

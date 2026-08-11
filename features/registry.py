@@ -14,7 +14,14 @@ from __future__ import annotations
 
 from typing import Iterable
 
-from .types import FeatureDefinition, FeatureInput, FeatureOutput, FeatureVersion
+from .types import (
+    FeatureDefinition,
+    FeatureInput,
+    FeatureOutput,
+    FeatureVersion,
+    IntendedRole,
+    FeatureStatus,
+)
 
 # Internal module-level registry. Built-in features register here at import.
 _FEATURES: dict[tuple[str, str], FeatureDefinition] = {}
@@ -88,6 +95,8 @@ __all__ = [
     "FeatureInput",
     "FeatureOutput",
     "FeatureVersion",
+    "IntendedRole",
+    "FeatureStatus",
     "register",
     "get",
     "list_features",

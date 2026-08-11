@@ -36,15 +36,33 @@ These mirror the **core** engine boundary. They are statically enforced by
 
 ## Built-in features (v1.0.0)
 
-| id             | inputs                 | description                                                  |
-|----------------|------------------------|--------------------------------------------------------------|
-| ``return_1d``  | ``code``               | One-session simple return (close-to-close) at ``as_of``.     |
-| ``momentum_n`` | ``code``, ``n?``       | N-session cumulative return (default N=20).                  |
-| ``volatility_n`` | ``code``, ``n?``     | N-session realized vol (sample stdev, √252 annualized, default N=20). |
+| id             | inputs                 | intended_role | status    | description                                                  |
+|----------------|------------------------|---------------|-----------|--------------------------------------------------------------|
+| ``return_1d``  | ``code``               | ``signal``    | ``approved`` | One-session simple return (close-to-close) at ``as_of``.     |
+| ``momentum_n`` | ``code``, ``n?``       | ``signal``    | ``approved`` | N-session cumulative return (default N=20).                  |
+| ``volatility_n`` | ``code``, ``n?``     | ``signal``    | ``approved`` | N-session realized vol (sample stdev, √252 annualized, default N=20). |
 
 Each returns ``FeatureOutput(value=None, metadata={...reason...})`` when
 insufficient history is visible at ``as_of`` — that's a normal signal, not an
 exception.
+
+### Lifecycle metadata (P0-5)
+
+Every :class:`FeatureDefinition` carries two required vocabulary fields so a
+downstream model registry can decide what to ingest without reading the
+compute function:
+
+* **``intended_role``** — one of ``"signal"`` (model input), ``"state"``
+  (regime / context), ``"structural"`` (universe / master-derived),
+  ``"utility"`` (debug / diagnostic only). A model registry can refuse to
+  ingest features whose role it does not support.
+* **``status``** — promotion tier: ``"candidate"`` (unvetted),
+  ``"shadow"`` (logged but not used), ``"approved"`` (default for
+  shipped features), ``"retired"`` (kept for audit; do not consume in
+  new code).
+
+Built-in features default to ``intended_role="signal"`` and
+``status="approved"``. Third-party features may override either field.
 
 ## Usage
 
@@ -94,6 +112,8 @@ register(FeatureDefinition(
     description="Last PIT-visible close at as_of.",
     compute=_my_feature,
     tags=("price",),
+    intended_role="signal",   # or "state" / "structural" / "utility"
+    status="candidate",       # or "shadow" / "approved" / "retired"
 ))
 ```
 

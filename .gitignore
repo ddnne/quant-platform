@@ -40,6 +40,8 @@ credentials.json
 data/raw/
 data/structured/
 data/tmp/
+data/reports/*
+!data/reports/.gitkeep
 *.parquet
 *.duckdb
 *.sqlite

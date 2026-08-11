@@ -328,3 +328,59 @@ def test_compute_metadata_carries_reproducibility_fields(seeded_db):
         "rows_seen", "n",
     ):
         assert k in md, f"missing repro field {k!r}"
+
+
+# ---------------------------------------------------------------------------
+# P0-5 — FeatureDefinition intended_role + status metadata
+# ---------------------------------------------------------------------------
+def test_builtin_features_have_intended_role_signal():
+    """Every v0 builtin must declare intended_role='signal' explicitly."""
+    by_id = {f.id: f for f in list_features()}
+    for fid in ("return_1d", "momentum_n", "volatility_n"):
+        assert fid in by_id, fid
+        f = by_id[fid]
+        assert f.intended_role == "signal", (fid, f.intended_role)
+
+
+def test_builtin_features_default_to_approved_status():
+    """Built-ins ship as 'approved' so model registries can ingest them."""
+    by_id = {f.id: f for f in list_features()}
+    for fid in ("return_1d", "momentum_n", "volatility_n"):
+        assert by_id[fid].status == "approved", (fid, by_id[fid].status)
+
+
+def test_intended_role_vocabulary_is_enforced_at_construction():
+    """The Literal type prevents arbitrary role strings."""
+    # Valid role passes.
+    f = FeatureDefinition(
+        id="dbg_close",
+        version=FeatureVersion(0, 1, 0),
+        inputs=features.FeatureInput(),
+        description="debug",
+        compute=lambda ctx: FeatureOutput(value=None),
+        intended_role="utility",
+        status="candidate",
+    )
+    assert f.intended_role == "utility"
+    assert f.status == "candidate"
+
+
+def test_registry_get_returns_feature_with_role_metadata():
+    """``registry.get`` still works (migration-friendly) and exposes the role."""
+    feat = get("return_1d")
+    assert hasattr(feat, "intended_role")
+    assert hasattr(feat, "status")
+    assert feat.intended_role == "signal"
+
+
+def test_intended_role_field_defaults_to_signal():
+    """A FeatureDefinition without explicit role defaults to 'signal'."""
+    f = FeatureDefinition(
+        id="dbg_default_role",
+        version=FeatureVersion(0, 1, 0),
+        inputs=features.FeatureInput(),
+        description="default role test",
+        compute=lambda ctx: FeatureOutput(value=None),
+    )
+    assert f.intended_role == "signal"
+    assert f.status == "approved"  # built-in default

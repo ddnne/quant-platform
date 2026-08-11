@@ -26,6 +26,7 @@ from cf_platform.ingest_premium import matrix
 from cf_platform.ingest_premium.coverage import (
     CheckResult,
     has_failures,
+    not_implemented_skips,
     run_coverage,
     summarize,
 )
@@ -902,3 +903,339 @@ def test_cli_no_strict_flag_overrides_qp_live(monkeypatch, tmp_path):
                    "--no-strict-live-gates"])
     assert rc == 0
     assert captured["strict_live_gates"] is False
+
+
+# ---------------------------------------------------------------------------
+# P0-2 — Validation honesty: C1/C2 prefer real run logs when available
+# ---------------------------------------------------------------------------
+def _ingestion_validation_rows():
+    """Synthetic per-dataset validation rows simulating a CF D1 sync."""
+    return [
+        {
+            "source": "jquants", "dataset": "equities_bars_daily",
+            "natural_key": '{"Date":"2025-04-01"}',
+            "event_time": "2025-04-01T09:00:00+09:00",
+            "available_at": "2025-04-01T15:30:00+09:00",
+            "ingested_at": "2025-04-01T15:30:00+09:00",
+            "payload": '{"Code":"8697","Date":"2025-04-01","Close":100.0}',
+            "raw_payload": "{}",
+        },
+    ]
+
+
+def _seed_validation_table(store, rows):
+    """Insert synthetic rows into ``ingestion_validation`` for tests."""
+    store._conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS ingestion_validation (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id          INTEGER,
+            dataset         TEXT NOT NULL,
+            started_at      TEXT NOT NULL,
+            finished_at     TEXT NOT NULL,
+            status          TEXT NOT NULL,
+            rows_seen       INTEGER NOT NULL DEFAULT 0,
+            rows_inserted   INTEGER NOT NULL DEFAULT 0,
+            rows_revisions  INTEGER NOT NULL DEFAULT 0,
+            available_at_min TEXT,
+            available_at_max TEXT,
+            detail          TEXT
+        );
+        """
+    )
+    for r in rows:
+        store._conn.execute(
+            "INSERT INTO ingestion_validation "
+            "(run_id, dataset, started_at, finished_at, status, "
+            " rows_seen, rows_inserted, rows_revisions, "
+            " available_at_min, available_at_max, detail) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (r.get("run_id"), r["dataset"], r["started_at"], r["finished_at"],
+             r["status"], r.get("rows_seen", 0), r.get("rows_inserted", 0),
+             r.get("rows_revisions", 0), r.get("available_at_min"),
+             r.get("available_at_max"), r.get("detail", "")),
+        )
+    store._conn.commit()
+
+
+def test_C1_C2_prefer_ingestion_validation_when_present(tmp_path):
+    """When ``ingestion_validation`` exists, C1/C2 mirror its status."""
+    p = tmp_path / "valid.sqlite"
+    store = SqliteStore(p)
+    # Seed some data so the "facts-only" fallback would also pass.
+    store.upsert(
+        "jquants_records",
+        normalize_generic(
+            [{"Code": "8697", "Date": "2025-04-01", "Close": 100.0}],
+            dataset="equities_bars_daily", ingested_at=INGESTED,
+        ),
+    )
+    _seed_validation_table(store, [
+        {"dataset": "equities_bars_daily",
+         "started_at": "2025-04-01T15:00:00+09:00",
+         "finished_at": "2025-04-01T15:30:00+09:00",
+         "status": "pass",
+         "rows_seen": 10, "rows_inserted": 10,
+         "available_at_min": "2025-04-01T15:30:00+09:00",
+         "available_at_max": "2025-04-01T15:30:00+09:00",
+         "detail": "ok"},
+    ])
+    store.close()
+
+    out = run_coverage(p, tier="daily", datasets=["equities_bars_daily"])
+    c1 = _results_by_id(out, "C1")
+    c2 = _results_by_id(out, "C2")
+    assert c1[0].status == "pass"
+    assert c1[0].metrics["source"] == "ingestion_validation"
+    assert c1[0].metrics["validation_status"] == "pass"
+    assert c2[0].status == "pass"
+    assert c2[0].metrics["source"] == "ingestion_validation"
+
+
+def test_C1_C2_mirror_failure_from_ingestion_validation(tmp_path):
+    """A failed validation row surfaces as a hard fail (not silently passing)."""
+    p = tmp_path / "failed.sqlite"
+    store = SqliteStore(p)
+    store.upsert(
+        "jquants_records",
+        normalize_generic(
+            [{"Code": "8697", "Date": "2025-04-01", "Close": 100.0}],
+            dataset="equities_bars_daily", ingested_at=INGESTED,
+        ),
+    )
+    _seed_validation_table(store, [
+        {"dataset": "equities_bars_daily",
+         "started_at": "2025-04-01T15:00:00+09:00",
+         "finished_at": "2025-04-01T15:30:00+09:00",
+         "status": "fail",
+         "rows_seen": 10, "rows_inserted": 0,
+         "available_at_min": None,
+         "detail": "HTTP 503"},
+    ])
+    store.close()
+
+    out = run_coverage(p, tier="daily", datasets=["equities_bars_daily"])
+    c1 = _results_by_id(out, "C1")
+    c2 = _results_by_id(out, "C2")
+    assert c1[0].status == "fail"
+    assert c2[0].status == "fail"
+    assert "HTTP 503" in c2[0].detail or "status=fail" in c2[0].detail
+
+
+def test_C2_warns_with_data_only_when_no_validation_table(matrix_db):
+    """P0-2 contract: without ``ingestion_validation``, C2 is ``warn`` not pass."""
+    out = run_coverage(
+        matrix_db, tier="daily",
+        datasets=["equities_bars_daily", "equities_master", "markets_calendar"],
+    )
+    c2 = _results_by_id(out, "C2")
+    assert c2  # at least one row
+    # The default fixture has no ``ingestion_validation`` table → every C2 row
+    # is "warn" (data present only).
+    for r in c2:
+        assert r.status == "warn", (r.dataset, r.detail)
+        assert r.metrics["source"] == "facts_only"
+        assert r.metrics["reason_code"] == "no_run_log"
+
+
+# ---------------------------------------------------------------------------
+# P0-2 — Weekly completion mode: skip + not_implemented is a failure
+# ---------------------------------------------------------------------------
+def test_has_failures_weekly_completion_mode_treats_not_implemented_as_fail():
+    """``has_failures(..., require_implemented=True)`` fails on skip+not_implemented."""
+    rs = [
+        CheckResult("C9", None, "skip", "needs history",
+                    {"reason_code": "not_implemented"}),
+        CheckResult("C10", None, "skip", "needs history",
+                    {"reason_code": "not_implemented"}),
+        CheckResult("C11", None, "skip", "needs R2",
+                    {"reason_code": "needs_r2"}),
+        CheckResult("B1", "x", "pass", "ok"),
+    ]
+    # Soft mode (default): skip is not a failure.
+    assert not has_failures(rs)
+    # Completion mode: not_implemented is a failure (needs_r2 is exempt).
+    assert has_failures(rs, require_implemented=True)
+
+
+def test_not_implemented_skips_helper():
+    rs = [
+        CheckResult("C9", None, "skip", "needs history",
+                    {"reason_code": "not_implemented"}),
+        CheckResult("C11", None, "skip", "needs R2",
+                    {"reason_code": "needs_r2"}),
+    ]
+    ni = not_implemented_skips(rs)
+    assert len(ni) == 1
+    assert ni[0].check_id == "C9"
+
+
+# ---------------------------------------------------------------------------
+# P0-2 — C9/C10 offline approximations when ingestion_validation is present
+# ---------------------------------------------------------------------------
+def test_C9_C10_implemented_when_validation_history_present(tmp_path):
+    """Multiple runs in ``ingestion_validation`` enable real C9/C10 logic."""
+    p = tmp_path / "valid.sqlite"
+    store = SqliteStore(p)
+    store.upsert(
+        "jquants_records",
+        normalize_generic(
+            [{"Code": "8697", "Date": "2025-04-01", "Close": 100.0}],
+            dataset="equities_bars_daily", ingested_at=INGESTED,
+        ),
+    )
+    _seed_validation_table(store, [
+        {"dataset": "equities_bars_daily",
+         "started_at": "2025-04-01T15:00:00+09:00",
+         "finished_at": "2025-04-01T15:30:00+09:00",
+         "status": "pass",
+         "rows_seen": 10, "rows_inserted": 10,
+         "available_at_min": "2025-04-01T15:30:00+09:00",
+         "available_at_max": "2025-04-01T15:30:00+09:00"},
+        {"dataset": "equities_bars_daily",
+         "started_at": "2025-04-02T15:00:00+09:00",
+         "finished_at": "2025-04-02T15:30:00+09:00",
+         "status": "pass",
+         "rows_seen": 12, "rows_inserted": 2,
+         "available_at_min": "2025-04-02T15:30:00+09:00",
+         "available_at_max": "2025-04-02T15:30:00+09:00"},
+    ])
+    store.close()
+    out = run_coverage(p, tier="weekly", datasets=["equities_bars_daily"])
+    c9 = _results_by_id(out, "C9")
+    c10 = _results_by_id(out, "C10")
+    c11 = _results_by_id(out, "C11")
+    assert c9 and c9[0].status == "pass"
+    assert c9[0].metrics["source"] == "ingestion_validation"
+    assert c9[0].metrics["datasets_progressed"] >= 1
+    assert c10 and c10[0].status == "pass"
+    assert c10[0].metrics["source"] == "ingestion_validation"
+    # C11 must skip with the explicit needs_r2 reason (not generic not_implemented).
+    assert c11 and c11[0].status == "skip"
+    assert c11[0].metrics["reason_code"] == "needs_r2"
+
+
+def test_C9_C10_skip_without_validation_table(specialized_db):
+    """Without ``ingestion_validation`` the new C9/C10 logic degrades to skip."""
+    out = run_coverage(specialized_db, tier="weekly")
+    c9 = _results_by_id(out, "C9")
+    c10 = _results_by_id(out, "C10")
+    c11 = _results_by_id(out, "C11")
+    assert c9[0].status == "skip"
+    assert c9[0].metrics["reason_code"] == "not_implemented"
+    assert c10[0].status == "skip"
+    assert c10[0].metrics["reason_code"] == "not_implemented"
+    assert c11[0].status == "skip"
+    assert c11[0].metrics["reason_code"] == "needs_r2"
+
+
+# ---------------------------------------------------------------------------
+# P0-2 — Persist validation report JSON
+# ---------------------------------------------------------------------------
+def test_persist_report_writes_json_under_data_reports(tmp_path):
+    """``persist_report`` writes a timestamped JSON file under data/reports/."""
+    from cf_platform.ingest_premium.coverage import persist_report
+    rs = [
+        CheckResult("C1", "x", "pass", "ok"),
+        CheckResult("C2", "x", "skip", "needs history",
+                    {"reason_code": "not_implemented"}),
+    ]
+    out_dir = tmp_path / "reports"
+    p = persist_report(rs, tier="weekly", db_path="/tmp/x.sqlite",
+                       reports_dir=out_dir, when="20250101_000000")
+    assert p.exists()
+    assert p.name == "validation_20250101_000000.json"
+    payload = json.loads(p.read_text(encoding="utf-8"))
+    assert payload["tier"] == "weekly"
+    assert payload["summary"] == {"pass": 1, "fail": 0, "skip": 1, "warn": 0}
+    assert payload["not_implemented"]
+    assert payload["not_implemented"][0]["check_id"] == "C2"
+    assert len(payload["results"]) == 2
+
+
+def test_cli_persists_report_and_exits_nonzero_when_weekly_not_implemented(
+    monkeypatch, tmp_path
+):
+    """Weekly tier with stubbed checks must fail under --require-implemented,
+    and the JSON report must be persisted so the operator can audit it."""
+    import importlib.util
+    cli_path = _REPO / "scripts" / "run_phase35_validation.py"
+    spec = importlib.util.spec_from_file_location("run_phase35_validation", cli_path)
+    mod = importlib.util.module_from_spec(spec)
+    assert spec and spec.loader
+    spec.loader.exec_module(mod)
+
+    # Build a tiny fixture DB so the runner has something to read.
+    p = tmp_path / "fixture.sqlite"
+    _build_specialized_db(p)
+
+    reports_dir = tmp_path / "reports"
+    rc = mod.main([
+        "--db", str(p),
+        "--tier", "weekly",
+        "--reports-dir", str(reports_dir),
+        "--no-strict-live-gates",
+    ])
+    # Weekly default is --require-implemented, and the catalog has many
+    # not_implemented weekly stubs → must exit 1.
+    assert rc == 1
+    # A report file should exist under reports_dir.
+    files = list(reports_dir.glob("validation_*.json"))
+    assert files, f"no validation_*.json under {reports_dir}"
+    payload = json.loads(files[0].read_text(encoding="utf-8"))
+    assert payload["tier"] == "weekly"
+    assert payload["summary"]["skip"] > 0
+    assert payload["not_implemented"]
+
+
+def test_cli_allow_not_implemented_for_daily(tmp_path):
+    """Daily tier with --allow-not-implemented tolerates stubs.
+
+    Scoped to the three datasets the fixture populates so C8 doesn't fail
+    on the empty 20 datasets the way the full daily run does.
+    """
+    import importlib.util
+    cli_path = _REPO / "scripts" / "run_phase35_validation.py"
+    spec = importlib.util.spec_from_file_location("run_phase35_validation", cli_path)
+    mod = importlib.util.module_from_spec(spec)
+    assert spec and spec.loader
+    spec.loader.exec_module(mod)
+
+    p = tmp_path / "fixture.sqlite"
+    _build_specialized_db(p)
+    reports_dir = tmp_path / "daily_reports"
+    # Daily default is allow-not-implemented; pass it explicitly to be safe.
+    rc = mod.main([
+        "--db", str(p),
+        "--tier", "daily",
+        "--datasets", "equities_bars_daily,equities_master,markets_calendar",
+        "--allow-not-implemented",
+        "--reports-dir", str(reports_dir),
+        "--no-strict-live-gates",
+    ])
+    assert rc == 0
+
+
+def test_cli_no_persist_report_skips_writing(monkeypatch, tmp_path):
+    """``--no-persist-report`` skips the JSON file entirely."""
+    import importlib.util
+    cli_path = _REPO / "scripts" / "run_phase35_validation.py"
+    spec = importlib.util.spec_from_file_location("run_phase35_validation", cli_path)
+    mod = importlib.util.module_from_spec(spec)
+    assert spec and spec.loader
+    spec.loader.exec_module(mod)
+
+    p = tmp_path / "fixture.sqlite"
+    _build_specialized_db(p)
+    reports_dir = tmp_path / "no_persist_reports"
+    rc = mod.main([
+        "--db", str(p),
+        "--tier", "daily",
+        "--datasets", "equities_bars_daily,equities_master,markets_calendar",
+        "--allow-not-implemented",
+        "--no-persist-report",
+        "--reports-dir", str(reports_dir),
+        "--no-strict-live-gates",
+    ])
+    assert rc == 0
+    assert not reports_dir.exists() or not list(reports_dir.glob("validation_*.json"))
