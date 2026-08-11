@@ -160,19 +160,112 @@ def _http_get_json(client, url: str, token: str) -> dict:
     return resp.json()
 
 
+# Control-plane / non-PIT tables: no available_at column; must not be filtered.
+_NO_AVAILABLE_AT_TABLES = frozenset({
+    "ingestion_validation",
+    "ingestion_run_log",
+    "ingestion_watermarks",
+})
+
+
+def _ensure_control_tables(conn: sqlite3.Connection) -> None:
+    """Create control-plane tables if the local DB was opened before migrations."""
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS ingestion_validation (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id INTEGER,
+            dataset TEXT,
+            started_at TEXT,
+            finished_at TEXT,
+            status TEXT,
+            rows_seen INTEGER,
+            rows_inserted INTEGER,
+            rows_revisions INTEGER,
+            available_at_min TEXT,
+            available_at_max TEXT,
+            detail TEXT
+        );
+        CREATE TABLE IF NOT EXISTS ingestion_run_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ran_at TEXT,
+            source TEXT,
+            runtime TEXT,
+            status TEXT,
+            detail TEXT,
+            started_at TEXT,
+            finished_at TEXT,
+            dataset_count INTEGER,
+            passed INTEGER,
+            failed INTEGER,
+            rows_inserted INTEGER,
+            raw_bytes INTEGER,
+            triggered_by TEXT
+        );
+        CREATE TABLE IF NOT EXISTS ingestion_watermarks (
+            dataset TEXT PRIMARY KEY,
+            last_event_date TEXT,
+            last_ingested_at TEXT NOT NULL,
+            last_export_cursor INTEGER
+        );
+        """
+    )
+
+
+def _sync_control_plane(
+    store: SqliteStore, table: str, rows: list[dict]
+) -> tuple[int, int]:
+    """Insert/replace control-plane rows without PIT available_at gate."""
+    if not rows:
+        return 0, 0
+    conn = store._conn  # noqa: SLF001
+    _ensure_control_tables(conn)
+    # Drop export cursor column if present.
+    cleaned = []
+    for r in rows:
+        row = {k: v for k, v in r.items() if k != "__export_cursor" and v is not None}
+        cleaned.append(row)
+    if not cleaned:
+        return len(rows), 0
+    cols = list(cleaned[0].keys())
+    placeholders = ", ".join("?" for _ in cols)
+    col_list = ", ".join(cols)
+    # Prefer INSERT OR REPLACE on natural identity when possible.
+    if table == "ingestion_watermarks" and "dataset" in cols:
+        sql = (
+            f"INSERT INTO {table} ({col_list}) VALUES ({placeholders}) "
+            f"ON CONFLICT(dataset) DO UPDATE SET "
+            + ", ".join(f"{c}=excluded.{c}" for c in cols if c != "dataset")
+        )
+    elif "id" in cols:
+        sql = (
+            f"INSERT OR REPLACE INTO {table} ({col_list}) VALUES ({placeholders})"
+        )
+    else:
+        sql = f"INSERT INTO {table} ({col_list}) VALUES ({placeholders})"
+    n = 0
+    for row in cleaned:
+        conn.execute(sql, [row.get(c) for c in cols])
+        n += 1
+    conn.commit()
+    return len(rows), n
+
+
 def _sync_one(
     store: SqliteStore, table: str, rows: list[dict]
 ) -> tuple[int, int]:
     """Upsert rows into local table. Returns (seen, registered)."""
     if not rows:
         return 0, 0
+    if table in _NO_AVAILABLE_AT_TABLES:
+        return _sync_control_plane(store, table, rows)
     # Re-key JSON-stringified payload columns if present (the D1 export
     # round-trips them as strings; the writer expects strings too).
     cleaned = []
     for r in rows:
         row = {k: v for k, v in r.items() if v is not None}
         if not row.get("available_at"):
-            # PIT hard gate — skip rows that would be rejected anyway.
+            # PIT hard gate — skip fact rows that would be rejected anyway.
             continue
         cleaned.append(row)
     if not cleaned:
