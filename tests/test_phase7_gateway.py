@@ -42,11 +42,12 @@ def test_ai_gateway_offline_stub_run():
         prompt="test prompt",
         expected_schema="Insight",
     )
-    assert result["schema"] == "Insight"
-    assert result["role"] == "quant"
-    assert result["task"] == "research"
-    assert result["summary"] == "offline_stub"
-    assert result["prompt_chars"] == len("test prompt")
+    public = result.to_public_dict()
+    assert public["schema"] == "Insight"
+    assert public["role"] == "quant"
+    assert public["task"] == "research"
+    assert public["summary"] == "offline_stub"
+    assert public["prompt_chars"] == len("test prompt")
 
 
 def test_ai_gateway_budget_charges():
@@ -110,15 +111,17 @@ def test_ai_gateway_allowed_schemas_constant():
 
 def test_ai_gateway_rejects_non_closed_schema():
     """Should reject provider returning non-closed schema."""
+    from gateway.ai import GatewaySchemaRejected
+
     class BadProvider:
-        def complete(self, *, role: str, task: str, prompt: str):
+        def complete(self, *, role: str, task: str, prompt: str, expected_schema: str):
             return {"schema": "MaliciousCode", "payload": "rm -rf /"}
 
     gateway = AIGateway(provider=BadProvider())
     try:
         gateway.run(role="quant", task="research", prompt="x", expected_schema="Insight")
-        assert False, "Should raise RuntimeError"
-    except RuntimeError as e:
+        assert False, "Should raise GatewaySchemaRejected"
+    except GatewaySchemaRejected as e:
         assert "non-closed schema" in str(e)
 
 
@@ -184,22 +187,24 @@ def test_ai_gateway_includes_usage_metadata():
         prompt="test prompt",
         expected_schema="Insight",
     )
-    assert "gateway" in result
-    assert "calls_used" in result["gateway"]
-    assert "tokens_used" in result["gateway"]
-    assert result["gateway"]["calls_used"] == 1
-    assert result["gateway"]["tokens_used"] > 0
+    public = result.to_public_dict()
+    assert "gateway" in public
+    assert "calls_used" in public["gateway"]
+    assert "tokens_used" in public["gateway"]
+    assert public["gateway"]["calls_used"] == 1
+    assert public["gateway"]["tokens_used"] > 0
 
 
 def test_ai_gateway_custom_provider():
     """Gateway should accept custom provider."""
     class CustomProvider:
-        def complete(self, *, role: str, task: str, prompt: str):
+        def complete(self, *, role: str, task: str, prompt: str, expected_schema: str):
             return {
                 "schema": "Insight",
                 "role": role,
                 "task": task,
                 "custom": True,
+                "schema_version": "insight/v1",
             }
 
     gateway = AIGateway(provider=CustomProvider())
@@ -209,23 +214,19 @@ def test_ai_gateway_custom_provider():
         prompt="x",
         expected_schema="Insight",
     )
-    assert result["custom"] is True
-    assert result["schema"] == "Insight"
+    public = result.to_public_dict()
+    assert public["custom"] is True
+    assert public["schema"] == "Insight"
 
 
 def test_ai_gateway_validates_all_expected_schemas():
-    """All schemas in ALLOWED_OUTPUT_SCHEMAS should be accepted as input validation."""
+    """All schemas in ALLOWED_OUTPUT_SCHEMAS should strict-decode via offline stub."""
     gateway = AIGateway()
-    # The offline stub returns "Insight" regardless of expected_schema,
-    # but the gateway should accept any schema from ALLOWED_OUTPUT_SCHEMAS as valid input
     for schema in ALLOWED_OUTPUT_SCHEMAS:
-        # Should not raise ValueError for any allowed schema
         result = gateway.run(
             role="quant",
             task="research",
             prompt="x",
             expected_schema=schema,
         )
-        # The result will always be "Insight" from the offline stub,
-        # but the call should succeed without raising ValueError for unsupported schema
-        assert result["schema"] in ALLOWED_OUTPUT_SCHEMAS
+        assert result.schema_name == schema

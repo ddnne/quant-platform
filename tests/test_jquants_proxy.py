@@ -127,12 +127,15 @@ def test_make_http_client_explicit_proxy_requires_config(monkeypatch):
 
 # --------------------------------------------------------------------------- secrets
 
-def test_resolve_proxy_config_from_env(monkeypatch):
+def test_resolve_proxy_config_from_env(monkeypatch, tmp_path):
+    # Isolate from host ~/.config jquants_proxy_* files (canonical pair wins).
     monkeypatch.delenv("INGESTION_PROXY_URL", raising=False)
     monkeypatch.delenv("INGESTION_PROXY_TOKEN", raising=False)
+    monkeypatch.delenv("JQUANTS_PROXY_URL", raising=False)
+    monkeypatch.delenv("JQUANTS_PROXY_TOKEN", raising=False)
     monkeypatch.setenv("INGESTION_PROXY_URL", "https://env.proxy/")
     monkeypatch.setenv("INGESTION_PROXY_TOKEN", "envtok")
-    cfg = resolve_proxy_config()
+    cfg = resolve_proxy_config(config_dir=tmp_path)
     assert cfg is not None
     assert cfg.url == "https://env.proxy"  # trailing slash stripped
     assert cfg.token == "envtok"

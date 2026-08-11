@@ -12,12 +12,20 @@ class ExperimentBudget:
     max_generations: int = 3
     max_model_calls: int = 50
     max_paper_runs: int = 20
+    # Hard token/cost caps (required for mass research; never leave None).
+    max_input_tokens: int = 2_000_000
+    max_output_tokens: int = 500_000
+    max_cached_tokens: int = 2_000_000
+    max_compute_time_ms: int = 3_600_000
+    max_estimated_cost_micros: int = 50_000_000  # $50 in micros
 
     def __post_init__(self) -> None:
         if self.max_parallel_experiments < 1:
             raise ValueError("max_parallel_experiments must be >= 1")
         if self.max_generations < 1:
             raise ValueError("max_generations must be >= 1")
+        if self.max_input_tokens < 1 or self.max_output_tokens < 1:
+            raise ValueError("token budgets must be >= 1")
 
 
 def screen_candidates(

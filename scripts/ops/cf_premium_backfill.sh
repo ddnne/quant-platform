@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# DEPRECATED operational path — prefer contract-driven:
+#   python scripts/ops/cf_premium_backfill.py
+# This shell driver keeps hand-written recent windows only as a temporary
+# companion while the planner-based driver is the long-history SoT.
 # Drive historical backfill via Cloudflare ingestion-premium /v1/run.
 # Does NOT call J-Quants from this host; CF holds the API key.
 set -euo pipefail

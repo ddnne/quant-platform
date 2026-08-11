@@ -67,4 +67,4 @@ def test_selection_budget_and_gateway_closed_schema():
     out = AIGateway().run(
         role="strategist", task="memo", prompt="x", expected_schema="Insight"
     )
-    assert out["schema"] in ALLOWED_OUTPUT_SCHEMAS
+    assert out.schema_name in ALLOWED_OUTPUT_SCHEMAS

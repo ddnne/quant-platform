@@ -20,7 +20,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Mapping
 
-from .roles import AgentRole, Capability, ROLE_MATRIX
+from .roles import AgentRole, ROLE_MATRIX
 
 
 #: Non-circumventable denied baseline. Every role starts here; no positive
@@ -89,11 +89,83 @@ def assert_no_capability_leak(role: AgentRole) -> None:
         )
 
 
+@dataclass(frozen=True)
+class DomainTool:
+    """Positive domain tool handle (READY/PIT/Feature only — never raw DB)."""
+
+    name: str
+    invoke: object  # callable[[...], object]
+
+
+class SandboxedAgentRunner:
+    """Real runtime isolation for agent roles (not just a policy object).
+
+    Defaults: no network, secrets, raw DB, arbitrary FS, shell, subprocess,
+    or dynamic code execution. Only explicitly injected domain tools run.
+    """
+
+    def __init__(
+        self,
+        policy: AgentRuntimePolicy,
+        *,
+        domain_tools: Mapping[str, DomainTool] | None = None,
+    ) -> None:
+        if not policy.is_sandboxed:
+            raise RuntimeError("SandboxedAgentRunner requires sandboxed policy")
+        try:
+            assert_no_capability_leak(AgentRole(policy.role))
+        except ValueError as exc:
+            raise RuntimeError(f"unknown role in policy: {policy.role}") from exc
+        self.policy = policy
+        allowed_domain = {
+            "ready_snapshot",
+            "pit_read",
+            "feature_compute",
+        }
+        tools = dict(domain_tools or {})
+        for name in tools:
+            if name not in allowed_domain and not name.startswith("domain:"):
+                raise RuntimeError(f"tool {name!r} not allowed by sandbox")
+        self._tools = tools
+
+    def call_tool(self, name: str, **kwargs: object) -> object:
+        if name not in self._tools:
+            raise RuntimeError(f"tool {name!r} not injected")
+        tool = self._tools[name]
+        fn = tool.invoke
+        if not callable(fn):
+            raise RuntimeError(f"tool {name!r} is not callable")
+        return fn(**kwargs)
+
+    def deny_network(self) -> None:
+        if self.policy.boundaries.get("network"):
+            raise RuntimeError("network boundary relaxed")
+
+    def deny_secrets(self) -> None:
+        if self.policy.boundaries.get("secrets"):
+            raise RuntimeError("secrets boundary relaxed")
+
+    def deny_shell(self) -> None:
+        if self.policy.boundaries.get("shell"):
+            raise RuntimeError("shell boundary relaxed")
+        # Structural refusal surface for accidental shell use.
+        raise RuntimeError("shell/subprocess execution is forbidden in SandboxedAgentRunner")
+
+    def deny_dynamic_code(self, source: str) -> None:
+        raise RuntimeError(
+            "dynamic code execution (eval/exec/compile) is forbidden; "
+            f"refused payload_chars={len(source)}"
+        )
+
+
 __all__ = [
     "NEGATIVE_BOUNDARIES",
     "AgentRuntimePolicy",
+    "DomainTool",
+    "SandboxedAgentRunner",
     "positive_tools_for_role",
     "runtime_policy_for_role",
     "all_runtime_policies",
     "assert_no_capability_leak",
 ]
+
