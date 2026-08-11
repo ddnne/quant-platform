@@ -162,7 +162,8 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help=(
             "After a successful sync (exit 0 path), run "
-            "scripts/publish_ops_projection.py for the local DB."
+            "scripts/publish_ops_projection.py for the local DB. "
+            "Default OFF for safety."
         ),
     )
     p.add_argument(
