@@ -30,6 +30,10 @@ from .code_fingerprints import (
     strategy_definition_hash,
 )
 from .experiment_index import ExperimentIndex
+from .coherence import (
+    CoherenceGateResult,
+    check_ready_coherence,
+)
 
 __all__ = [
     "DATA_SNAPSHOT_FORMAT",
@@ -54,4 +58,6 @@ __all__ = [
     "feature_definition_hashes",
     "git_commit",
     "strategy_definition_hash",
+    "CoherenceGateResult",
+    "check_ready_coherence",
 ]
