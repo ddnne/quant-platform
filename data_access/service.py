@@ -53,6 +53,7 @@ OPS_CURRENT_METHODS = frozenset({
     "b0_status",
     "raw_retention_status",
     "sync_status",
+    "storage_plane_status",
 })
 
 
@@ -338,6 +339,97 @@ class OpsCurrentReadService:
         return self._result(
             watermarks=watermarks,
             latest_change_seq=(change or {}).get("latest_change_seq"),
+        )
+
+    def storage_plane_status(self) -> dict[str, Any]:
+        """CF-native P0 counts-only proof (hot window / cold residual / JSDA)."""
+        hot_cutoff = "2026-07-01"
+
+        def count(sql: str, params: tuple[Any, ...] = ()) -> int:
+            try:
+                row = self._one(sql, params)
+            except Exception:
+                return 0
+            if not row:
+                return 0
+            for key in ("n", "c", "count"):
+                if key in row and row[key] is not None:
+                    return int(row[key])
+            return 0
+
+        jquants_total = count("SELECT COUNT(*) AS n FROM jquants_records")
+        bars_hot = count(
+            "SELECT COUNT(*) AS n FROM jquants_records "
+            "WHERE dataset='equities_bars_daily' AND substr(event_time,1,10) >= ?",
+            (hot_cutoff,),
+        )
+        bars_cold = count(
+            "SELECT COUNT(*) AS n FROM jquants_records "
+            "WHERE dataset='equities_bars_daily' AND substr(event_time,1,10) < ?",
+            (hot_cutoff,),
+        )
+        master_hot = count(
+            "SELECT COUNT(*) AS n FROM jquants_records "
+            "WHERE dataset='equities_master' AND substr(event_time,1,10) >= ?",
+            (hot_cutoff,),
+        )
+        change_log = count("SELECT COUNT(*) AS n FROM ingestion_change_log")
+        complete = count(
+            "SELECT COUNT(*) AS n FROM coverage_segments WHERE status='COMPLETE'"
+        )
+        otc = count("SELECT COUNT(*) AS n FROM jsda_otc_bond_reference_prices")
+        corp = count("SELECT COUNT(*) AS n FROM jsda_corporate_bond_transactions")
+        repo = count("SELECT COUNT(*) AS n FROM jsda_repo_rates")
+        legacy_bars = count("SELECT COUNT(*) AS n FROM jquants_daily_bars")
+        legacy_listed = count("SELECT COUNT(*) AS n FROM jquants_listed_info")
+        legacy_cal = count("SELECT COUNT(*) AS n FROM jquants_market_calendar")
+        stage_primary = count(
+            "SELECT COUNT(*) AS n FROM jquants_records_nk_v2_primary_stage"
+        )
+        stage_chg = count(
+            "SELECT COUNT(*) AS n FROM ingestion_change_log_nk_v2_stage"
+        )
+        empty_legacy = (
+            legacy_bars == 0 and legacy_listed == 0 and legacy_cal == 0
+        )
+        return self._result(
+            hot_cutoff=hot_cutoff,
+            d1_approx_via_counts={
+                "jquants_records_total": jquants_total,
+                "bars_hot": bars_hot,
+                "bars_cold_before_hot_cutoff": bars_cold,
+                "master_hot": master_hot,
+                "change_log_rows": change_log,
+            },
+            complete_segments=complete,
+            jsda={
+                "otc_rows": otc,
+                "corporate_rows": corp,
+                "tokyo_repo_rows": repo,
+            },
+            empty_legacy_tables={
+                "jquants_daily_bars": legacy_bars == 0,
+                "jquants_listed_info": legacy_listed == 0,
+                "jquants_market_calendar": legacy_cal == 0,
+                "all_empty": empty_legacy,
+            },
+            stage_table_counts={
+                "jquants_records_nk_v2_primary_stage": stage_primary,
+                "ingestion_change_log_nk_v2_stage": stage_chg,
+            },
+            p0_claims={
+                "bars_cold_cleared": (
+                    "CONFIRMED" if bars_cold == 0 else "RESIDUAL_COLD"
+                ),
+                "legacy_empty": (
+                    "CONFIRMED_EMPTY" if empty_legacy else "NOT_EMPTY"
+                ),
+                "mass_research": "NO-GO",
+                "ready": None,
+                "honesty_note": (
+                    "Counts-only ops proof. Not READY. Not full history COMPLETE."
+                ),
+            },
         )
 
     def ops_status(self) -> dict[str, Any]:

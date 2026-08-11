@@ -23,7 +23,7 @@ EXPECTED_OPS_TOOLS = {
     "ops_status", "ingestion_last_run", "dataset_coverage", "coverage_gaps",
     "coverage_segments", "backfill_status", "validation_summary", "b0_status",
     "latest_ready_snapshot", "snapshot_quality", "raw_retention_status",
-    "sync_status",
+    "sync_status", "storage_plane_status",
 }
 
 

@@ -31,8 +31,11 @@ export const OPS_TOOLS = Object.freeze([
   }),
   tool("raw_retention_status", "Raw page retention attestations linked to collection runs.", OPTIONAL_DATASET),
   tool("sync_status", "Current D1 change-feed and local-sync watermark status."),
+  tool(
+    "storage_plane_status",
+    "D1 light-path / hot-window / surplus-stage proof for CF-native P0. Counts only; no research rows.",
+  ),
 ]);
-
 /**
  * @param {string} name
  * @param {string} description
@@ -557,6 +560,109 @@ export async function callOpsTool(db, name, rawArguments) {
         "Cloudflare ingestion progress ≠ local research apply. " +
         "Null export cursors are honest when change_log is empty or watermark not advanced; " +
         "applied_cursor is null until local sync pin is projected. Do not treat null as COMPLETE.",
+    };
+  }
+
+  // GLM_PATCH_OK skeleton + schema-corrected live tables (jquants_records SoT).
+  if (name === "storage_plane_status") {
+    const hotCutoff = "2026-07-01";
+    const n = async (sql, binds = []) => {
+      const row = await first(db, sql, binds);
+      const v = row?.n ?? row?.c ?? 0;
+      return Number(v) || 0;
+    };
+    const [
+      jquantsTotal,
+      barsHot,
+      barsCold,
+      masterHot,
+      changeLogRows,
+      completeSegs,
+      otcRows,
+      corpRows,
+      tokyoRepoRows,
+      legacyBars,
+      legacyListed,
+      legacyCal,
+      stagePrimary,
+      stageRev,
+      stageVer,
+      stageChg,
+      ingestionChangeLog,
+    ] = await Promise.all([
+      n("SELECT COUNT(*) AS n FROM jquants_records"),
+      n(
+        "SELECT COUNT(*) AS n FROM jquants_records WHERE dataset = 'equities_bars_daily' AND substr(event_time,1,10) >= ?",
+        [hotCutoff],
+      ),
+      n(
+        "SELECT COUNT(*) AS n FROM jquants_records WHERE dataset = 'equities_bars_daily' AND substr(event_time,1,10) < ?",
+        [hotCutoff],
+      ),
+      n(
+        "SELECT COUNT(*) AS n FROM jquants_records WHERE dataset = 'equities_master' AND substr(event_time,1,10) >= ?",
+        [hotCutoff],
+      ),
+      n("SELECT COUNT(*) AS n FROM ingestion_change_log"),
+      n("SELECT COUNT(*) AS n FROM coverage_segments WHERE status = 'COMPLETE'"),
+      n("SELECT COUNT(*) AS n FROM jsda_otc_bond_reference_prices"),
+      n("SELECT COUNT(*) AS n FROM jsda_corporate_bond_transactions"),
+      n("SELECT COUNT(*) AS n FROM jsda_repo_rates"),
+      n("SELECT COUNT(*) AS n FROM jquants_daily_bars"),
+      n("SELECT COUNT(*) AS n FROM jquants_listed_info"),
+      n("SELECT COUNT(*) AS n FROM jquants_market_calendar"),
+      n("SELECT COUNT(*) AS n FROM jquants_records_nk_v2_primary_stage"),
+      n("SELECT COUNT(*) AS n FROM jquants_records_nk_v2_revisions_stage"),
+      n("SELECT COUNT(*) AS n FROM jquants_records_nk_v2_versions_stage"),
+      n("SELECT COUNT(*) AS n FROM ingestion_change_log_nk_v2_stage"),
+      n("SELECT COUNT(*) AS n FROM ingestion_change_log"),
+    ]);
+    const emptyLegacy =
+      legacyBars === 0 && legacyListed === 0 && legacyCal === 0;
+    const coldCleared = barsCold === 0;
+    return {
+      plane: "ops_current",
+      mutable: true,
+      hot_cutoff: hotCutoff,
+      d1_approx_via_counts: {
+        jquants_records_total: jquantsTotal,
+        bars_hot: barsHot,
+        bars_cold_before_hot_cutoff: barsCold,
+        master_hot: masterHot,
+        change_log_rows: changeLogRows,
+        ingestion_change_log_rows: ingestionChangeLog,
+      },
+      complete_segments: completeSegs,
+      jsda: {
+        otc_rows: otcRows,
+        corporate_rows: corpRows,
+        tokyo_repo_rows: tokyoRepoRows,
+      },
+      empty_legacy_tables: {
+        jquants_daily_bars: legacyBars === 0,
+        jquants_listed_info: legacyListed === 0,
+        jquants_market_calendar: legacyCal === 0,
+        all_empty: emptyLegacy,
+      },
+      stage_table_counts: {
+        jquants_records_nk_v2_primary_stage: stagePrimary,
+        jquants_records_nk_v2_revisions_stage: stageRev,
+        jquants_records_nk_v2_versions_stage: stageVer,
+        ingestion_change_log_nk_v2_stage: stageChg,
+      },
+      p0_claims: {
+        bars_cold_cleared: coldCleared ? "CONFIRMED" : "RESIDUAL_COLD",
+        legacy_empty: emptyLegacy ? "CONFIRMED_EMPTY" : "NOT_EMPTY",
+        high_volume_write_path_code: "R2_ONLY_DEFAULT_IN_write_path_config",
+        master_new_writes: "SCD2_R2_PATH_IN_master_scd2",
+        mass_research: "NO-GO",
+        ready: null,
+        honesty_note:
+          "Counts-only ops proof. Not READY. Not full Parquet materialization. " +
+          "Does not claim all historical COMPLETE.",
+      },
+      research_note:
+        "storage_plane_status is control-plane proof only; never treat as Mass or READY.",
     };
   }
 

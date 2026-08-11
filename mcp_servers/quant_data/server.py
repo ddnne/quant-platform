@@ -167,6 +167,11 @@ OPS_TOOLS: tuple[Tool, ...] = (
         _object({"dataset": _STRING}),
     ),
     Tool("sync_status", "Read current sync watermarks and change sequence.", _object()),
+    Tool(
+        "storage_plane_status",
+        "D1 light-path / hot-window / surplus-stage proof for CF-native P0. Counts only.",
+        _object(),
+    ),
 )
 
 _OPS_BY_NAME = {tool.name: tool for tool in OPS_TOOLS}
