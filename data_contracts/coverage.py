@@ -22,7 +22,7 @@ COVERAGE_STATUSES = frozenset(
 )
 GOVERNANCE_TIERS = frozenset({"governed", "experimental"})
 SEGMENT_GRANULARITIES = frozenset({
-    "calendar_month", "official_archive_day", "source_time_series_file"
+    "calendar_month", "official_archive_day", "official_archive_year", "source_time_series_file"
 })
 _REQUIRED = frozenset(
     {
@@ -101,11 +101,12 @@ def _load() -> tuple[str, Mapping[str, CollectionCoverageContract]]:
     if not isinstance(defaults, dict) or not isinstance(rows, dict):
         raise ValueError("coverage defaults and datasets must be objects")
     # JSDA datasets enter the exact READY coverage catalog only after their
-    # governed ingestion lane exists. Corporate transactions remain separate
-    # until their later change-set.
+    # governed ingestion lane exists. All three governed JSDA datasets are now
+    # included in the unified coverage catalog.
     governed_jsda = (
         jsda_contract_for("jsda_otc_bond_reference_prices"),
         jsda_contract_for("jsda_tokyo_repo_rates"),
+        jsda_contract_for("jsda_corporate_bond_transactions"),
     )
     expected = {
         *(contract.dataset_id for contract in all_contracts()),
