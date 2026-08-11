@@ -1,0 +1,397 @@
+{
+  "schema_version": 1,
+  "registry_version": "v1",
+  "registry_description": "Canonical registry of all governed and experimental datasets in the quant platform. This is the single source of truth for dataset metadata across Python, TypeScript, and documentation.",
+  "datasets": [
+    {
+      "dataset_id": "equities_master",
+      "display_name": "Equities Master",
+      "source": "jquants_premium_core",
+      "governance_tier": "governed",
+      "contracts": {
+        "primary": "jquants_premium_core",
+        "coverage": "collection_coverage/v2",
+        "ingestion": "cf_platform"
+      },
+      "natural_key_fields": ["code"],
+      "historical_start": "2000-07-13",
+      "coverage_segment_granularity": "calendar_month",
+      "expected_frequency": "trading_day"
+    },
+    {
+      "dataset_id": "equities_bars_daily",
+      "display_name": "Equities Daily Bars",
+      "source": "jquants_premium_core",
+      "governance_tier": "governed",
+      "contracts": {
+        "primary": "jquants_premium_core",
+        "coverage": "collection_coverage/v2",
+        "ingestion": "cf_platform"
+      },
+      "natural_key_fields": ["code", "date"],
+      "historical_start": "2004-01-05",
+      "coverage_segment_granularity": "calendar_month",
+      "expected_frequency": "trading_day"
+    },
+    {
+      "dataset_id": "equities_bars_daily_am",
+      "display_name": "Equities Daily Aftermarket Bars",
+      "source": "jquants_premium_core",
+      "governance_tier": "governed",
+      "contracts": {
+        "primary": "jquants_premium_core",
+        "coverage": "collection_coverage/v2",
+        "ingestion": "cf_platform"
+      },
+      "natural_key_fields": ["code", "date"],
+      "historical_start": "2024-01-04",
+      "coverage_segment_granularity": "calendar_month",
+      "expected_frequency": "trading_day"
+    },
+    {
+      "dataset_id": "fins_summary",
+      "display_name": "Financial Summary",
+      "source": "jquants_premium_core",
+      "governance_tier": "governed",
+      "contracts": {
+        "primary": "jquants_premium_core",
+        "coverage": "collection_coverage/v2",
+        "ingestion": "cf_platform"
+      },
+      "natural_key_fields": ["code", "disclosure_date"],
+      "historical_start": "2008-01-08",
+      "coverage_segment_granularity": "calendar_month",
+      "expected_frequency": "event_driven"
+    },
+    {
+      "dataset_id": "fins_details",
+      "display_name": "Financial Details",
+      "source": "jquants_premium_core",
+      "governance_tier": "governed",
+      "contracts": {
+        "primary": "jquants_premium_core",
+        "coverage": "collection_coverage/v2",
+        "ingestion": "cf_platform"
+      },
+      "natural_key_fields": ["code", "disclosure_date", "item_code"],
+      "historical_start": "2008-01-08",
+      "coverage_segment_granularity": "calendar_month",
+      "expected_frequency": "event_driven"
+    },
+    {
+      "dataset_id": "fins_dividend",
+      "display_name": "Financial Dividend",
+      "source": "jquants_premium_core",
+      "governance_tier": "governed",
+      "contracts": {
+        "primary": "jquants_premium_core",
+        "coverage": "collection_coverage/v2",
+        "ingestion": "cf_platform"
+      },
+      "natural_key_fields": ["code", "disclosure_date"],
+      "historical_start": "2008-01-08",
+      "coverage_segment_granularity": "calendar_month",
+      "expected_frequency": "event_driven"
+    },
+    {
+      "dataset_id": "fins_earnings_date",
+      "display_name": "Financial Earnings Date",
+      "source": "jquants_premium_core",
+      "governance_tier": "governed",
+      "contracts": {
+        "primary": "jquants_premium_core",
+        "coverage": "collection_coverage/v2",
+        "ingestion": "cf_platform"
+      },
+      "natural_key_fields": ["code", "disclosure_date"],
+      "historical_start": "2010-01-04",
+      "coverage_segment_granularity": "calendar_month",
+      "expected_frequency": "event_driven"
+    },
+    {
+      "dataset_id": "equities_earnings_calendar",
+      "display_name": "Equities Earnings Calendar",
+      "source": "jquants_premium_core",
+      "governance_tier": "governed",
+      "contracts": {
+        "primary": "jquants_premium_core",
+        "coverage": "collection_coverage/v2",
+        "ingestion": "cf_platform"
+      },
+      "natural_key_fields": ["code", "scheduled_date"],
+      "historical_start": "2010-01-04",
+      "coverage_segment_granularity": "calendar_month",
+      "expected_frequency": "event_driven"
+    },
+    {
+      "dataset_id": "markets_calendar",
+      "display_name": "Markets Calendar",
+      "source": "jquants_premium_core",
+      "governance_tier": "governed",
+      "contracts": {
+        "primary": "jquants_premium_core",
+        "coverage": "collection_coverage/v2",
+        "ingestion": "cf_platform"
+      },
+      "natural_key_fields": ["date"],
+      "historical_start": "2008-01-01",
+      "coverage_segment_granularity": "calendar_month",
+      "expected_frequency": "calendar_day"
+    },
+    {
+      "dataset_id": "equities_investor_types",
+      "display_name": "Equities Investor Types",
+      "source": "jquants_premium_core",
+      "governance_tier": "governed",
+      "contracts": {
+        "primary": "jquants_premium_core",
+        "coverage": "collection_coverage/v2",
+        "ingestion": "cf_platform"
+      },
+      "natural_key_fields": ["date", "section"],
+      "historical_start": "2013-01-04",
+      "coverage_segment_granularity": "calendar_month",
+      "expected_frequency": "weekly"
+    },
+    {
+      "dataset_id": "indices_bars_daily_topix",
+      "display_name": "Indices Daily Bars TOPIX",
+      "source": "jquants_premium_core",
+      "governance_tier": "governed",
+      "contracts": {
+        "primary": "jquants_premium_core",
+        "coverage": "collection_coverage/v2",
+        "ingestion": "cf_platform"
+      },
+      "natural_key_fields": ["date"],
+      "historical_start": "2008-01-01",
+      "coverage_segment_granularity": "calendar_month",
+      "expected_frequency": "trading_day"
+    },
+    {
+      "dataset_id": "indices_bars_daily",
+      "display_name": "Indices Daily Bars",
+      "source": "jquants_premium_core",
+      "governance_tier": "governed",
+      "contracts": {
+        "primary": "jquants_premium_core",
+        "coverage": "collection_coverage/v2",
+        "ingestion": "cf_platform"
+      },
+      "natural_key_fields": ["code", "date"],
+      "historical_start": "2008-01-01",
+      "coverage_segment_granularity": "calendar_month",
+      "expected_frequency": "trading_day"
+    },
+    {
+      "dataset_id": "derivatives_bars_daily_options_225",
+      "display_name": "Derivatives Daily Bars Options Nikkei 225",
+      "source": "jquants_premium_core",
+      "governance_tier": "governed",
+      "contracts": {
+        "primary": "jquants_premium_core",
+        "coverage": "collection_coverage/v2",
+        "ingestion": "cf_platform"
+      },
+      "natural_key_fields": ["code", "date"],
+      "historical_start": "2013-01-04",
+      "coverage_segment_granularity": "calendar_month",
+      "expected_frequency": "trading_day"
+    },
+    {
+      "dataset_id": "derivatives_bars_daily_futures",
+      "display_name": "Derivatives Daily Bars Futures",
+      "source": "jquants_premium_core",
+      "governance_tier": "governed",
+      "contracts": {
+        "primary": "jquants_premium_core",
+        "coverage": "collection_coverage/v2",
+        "ingestion": "cf_platform"
+      },
+      "natural_key_fields": ["code", "date"],
+      "historical_start": "2013-01-04",
+      "coverage_segment_granularity": "calendar_month",
+      "expected_frequency": "trading_day"
+    },
+    {
+      "dataset_id": "derivatives_bars_daily_options",
+      "display_name": "Derivatives Daily Bars Options",
+      "source": "jquants_premium_core",
+      "governance_tier": "governed",
+      "contracts": {
+        "primary": "jquants_premium_core",
+        "coverage": "collection_coverage/v2",
+        "ingestion": "cf_platform"
+      },
+      "natural_key_fields": ["code", "date"],
+      "historical_start": "2013-01-04",
+      "coverage_segment_granularity": "calendar_month",
+      "expected_frequency": "trading_day"
+    },
+    {
+      "dataset_id": "markets_margin_interest",
+      "display_name": "Markets Margin Interest",
+      "source": "jquants_premium_core",
+      "governance_tier": "governed",
+      "contracts": {
+        "primary": "jquants_premium_core",
+        "coverage": "collection_coverage/v2",
+        "ingestion": "cf_platform"
+      },
+      "natural_key_fields": ["code", "date"],
+      "historical_start": "2013-01-04",
+      "coverage_segment_granularity": "calendar_month",
+      "expected_frequency": "weekly"
+    },
+    {
+      "dataset_id": "markets_margin_alert",
+      "display_name": "Markets Margin Alert",
+      "source": "jquants_premium_core",
+      "governance_tier": "governed",
+      "contracts": {
+        "primary": "jquants_premium_core",
+        "coverage": "collection_coverage/v2",
+        "ingestion": "cf_platform"
+      },
+      "natural_key_fields": ["code", "date"],
+      "historical_start": "2013-01-04",
+      "coverage_segment_granularity": "calendar_month",
+      "expected_frequency": "event_driven"
+    },
+    {
+      "dataset_id": "markets_short_ratio",
+      "display_name": "Markets Short Ratio",
+      "source": "jquants_premium_core",
+      "governance_tier": "governed",
+      "contracts": {
+        "primary": "jquants_premium_core",
+        "coverage": "collection_coverage/v2",
+        "ingestion": "cf_platform"
+      },
+      "natural_key_fields": ["date", "section"],
+      "historical_start": "2013-01-04",
+      "coverage_segment_granularity": "calendar_month",
+      "expected_frequency": "weekly"
+    },
+    {
+      "dataset_id": "markets_short_sale_report",
+      "display_name": "Markets Short Sale Report",
+      "source": "jquants_premium_core",
+      "governance_tier": "governed",
+      "contracts": {
+        "primary": "jquants_premium_core",
+        "coverage": "collection_coverage/v2",
+        "ingestion": "cf_platform"
+      },
+      "natural_key_fields": ["code", "date"],
+      "historical_start": "2013-01-04",
+      "coverage_segment_granularity": "calendar_month",
+      "expected_frequency": "event_driven"
+    },
+    {
+      "dataset_id": "markets_breakdown",
+      "display_name": "Markets Breakdown",
+      "source": "jquants_premium_core",
+      "governance_tier": "governed",
+      "contracts": {
+        "primary": "jquants_premium_core",
+        "coverage": "collection_coverage/v2",
+        "ingestion": "cf_platform"
+      },
+      "natural_key_fields": ["code", "date"],
+      "historical_start": "2013-01-04",
+      "coverage_segment_granularity": "calendar_month",
+      "expected_frequency": "trading_day"
+    },
+    {
+      "dataset_id": "edinet_major_shareholders",
+      "display_name": "EDINET Major Shareholders",
+      "source": "jquants_premium_core",
+      "governance_tier": "governed",
+      "contracts": {
+        "primary": "jquants_premium_core",
+        "coverage": "collection_coverage/v2",
+        "ingestion": "cf_platform"
+      },
+      "natural_key_fields": ["code", "filing_date"],
+      "historical_start": "2018-01-04",
+      "coverage_segment_granularity": "calendar_month",
+      "expected_frequency": "event_driven"
+    },
+    {
+      "dataset_id": "edinet_cross_shareholdings",
+      "display_name": "EDINET Cross Shareholdings",
+      "source": "jquants_premium_core",
+      "governance_tier": "governed",
+      "contracts": {
+        "primary": "jquants_premium_core",
+        "coverage": "collection_coverage/v2",
+        "ingestion": "cf_platform"
+      },
+      "natural_key_fields": ["code", "filing_date"],
+      "historical_start": "2018-01-04",
+      "coverage_segment_granularity": "calendar_month",
+      "expected_frequency": "event_driven"
+    },
+    {
+      "dataset_id": "edinet_large_volume_shareholders",
+      "display_name": "EDINET Large Volume Shareholders",
+      "source": "jquants_premium_core",
+      "governance_tier": "governed",
+      "contracts": {
+        "primary": "jquants_premium_core",
+        "coverage": "collection_coverage/v2",
+        "ingestion": "cf_platform"
+      },
+      "natural_key_fields": ["code", "filing_date"],
+      "historical_start": "2018-01-04",
+      "coverage_segment_granularity": "calendar_month",
+      "expected_frequency": "event_driven"
+    },
+    {
+      "dataset_id": "jsda_otc_bond_reference_prices",
+      "display_name": "JSDA OTC Bond Reference Prices",
+      "source": "jsda_governed",
+      "governance_tier": "governed",
+      "contracts": {
+        "primary": "jsda_governed",
+        "coverage": "collection_coverage/v2",
+        "ingestion": "jsda_governed"
+      },
+      "natural_key_fields": ["source", "publication_label_date", "security_code", "bond_name"],
+      "historical_start": "2002-08-02",
+      "coverage_segment_granularity": "official_archive_day",
+      "expected_frequency": "trading_day"
+    },
+    {
+      "dataset_id": "jsda_tokyo_repo_rates",
+      "display_name": "JSDA Tokyo Repo Rates",
+      "source": "jsda_governed",
+      "governance_tier": "governed",
+      "contracts": {
+        "primary": "jsda_governed",
+        "coverage": "collection_coverage/v2",
+        "ingestion": "jsda_governed"
+      },
+      "natural_key_fields": ["source", "as_of_date", "tenor", "rate_type"],
+      "historical_start": "2012-10-29",
+      "coverage_segment_granularity": "source_time_series_file",
+      "expected_frequency": "trading_day"
+    },
+    {
+      "dataset_id": "jsda_corporate_bond_transactions",
+      "display_name": "JSDA Corporate Bond Transactions",
+      "source": "jsda_governed",
+      "governance_tier": "governed",
+      "contracts": {
+        "primary": "jsda_governed",
+        "coverage": "collection_coverage/v2",
+        "ingestion": "jsda_governed"
+      },
+      "natural_key_fields": ["source", "publication_label_date", "trade_date", "security_code", "source_record_id"],
+      "historical_start": "2015-11-04",
+      "coverage_segment_granularity": "official_archive_year",
+      "expected_frequency": "event_driven"
+    }
+  ]
+}

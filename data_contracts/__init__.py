@@ -22,6 +22,16 @@ from .jsda import (
     all_jsda_contracts,
     jsda_contract_for,
 )
+from .canonical import (
+    REGISTRY_VERSION,
+    CanonicalDatasetContract,
+    all_canonical_datasets,
+    canonical_dataset_for,
+    experimental_datasets,
+    governed_datasets,
+    datasets_by_source,
+    validate_downstream_consistency,
+)
 
 __all__ = [
     "AVAILABLE_AT_POLICIES",
@@ -40,4 +50,12 @@ __all__ = [
     "JsdaDatasetContract",
     "all_jsda_contracts",
     "jsda_contract_for",
+    "REGISTRY_VERSION",
+    "CanonicalDatasetContract",
+    "all_canonical_datasets",
+    "canonical_dataset_for",
+    "experimental_datasets",
+    "governed_datasets",
+    "datasets_by_source",
+    "validate_downstream_consistency",
 ]
