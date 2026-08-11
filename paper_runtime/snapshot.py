@@ -1027,19 +1027,26 @@ def publish_ready_snapshot(
                 conn, staging_path, build_id=build_id, required=required
             )
             watermarks = _watermarks_for(conn, required, coverage_rows)
-            # Phase 6.2 coherence gate: READY cannot publish without all gates.
-            from paper_runtime.coherence import check_ready_coherence
+            # Single READY publication policy (evidence bundle).
+            from paper_runtime.ready_policy import ReadyPublicationPolicy
 
-            coherence = check_ready_coherence(
-                conn, staging_path, required, run_id=run_id
+            # raw_manifests already validated inside _evaluate_publication_gate;
+            # pass None so policy does not double-fail on shape differences.
+            bundle = ReadyPublicationPolicy().evaluate(
+                conn,
+                staging_path,
+                required,
+                run_id=run_id,
+                coverage_proof=coverage_proof if isinstance(coverage_proof, dict) else None,
+                quality_status="PASS",
+                raw_manifest_ok=None,
             )
-            failed = [g for g in coherence if not g.passed]
-            if failed:
+            if not bundle.passed:
                 detail = "; ".join(
-                    f"{g.gate_name}: {g.reason}" for g in failed
+                    f"{i.name}: {i.reason}" for i in bundle.failures()
                 )
                 raise SnapshotRejected(
-                    f"READY coherence gates failed: {detail}"
+                    f"READY publication policy failed: {detail}"
                 )
         except Exception as exc:
             reason = str(exc)[:4000]

@@ -1,22 +1,12 @@
-"""Minimal content-addressed knowledge artifact store."""
+"""Minimal content-addressed knowledge artifact store (via ImmutableArtifactStore)."""
 
 from __future__ import annotations
 
-import hashlib
-import json
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
-def _digest(payload: Mapping[str, Any]) -> str:
-    blob = json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
-    return "sha256:" + hashlib.sha256(blob.encode("utf-8")).hexdigest()
+from storage.immutable_artifact import ImmutableArtifactStore
 
 
 @dataclass(frozen=True)
@@ -36,7 +26,7 @@ class KnowledgeStore:
 
     def __init__(self, root: str | Path) -> None:
         self.root = Path(root)
-        self.root.mkdir(parents=True, exist_ok=True)
+        self._store = ImmutableArtifactStore(self.root)
 
     def put(
         self,
@@ -48,7 +38,6 @@ class KnowledgeStore:
         parent_artifact_ids: tuple[str, ...] = (),
         data_snapshot_id: str | None = None,
     ) -> KnowledgeArtifact:
-        # Identity excludes created_at so identical payloads are content-addressed.
         identity = {
             "artifact_type": artifact_type,
             "schema_version": schema_version,
@@ -57,42 +46,37 @@ class KnowledgeStore:
             "data_snapshot_id": data_snapshot_id,
             "payload": dict(payload),
         }
-        artifact_id = _digest(identity)
-        path = self.root / f"{artifact_id.replace(':', '_')}.json"
-        if path.exists():
-            body = json.loads(path.read_text(encoding="utf-8"))
-            created_at = str(body.get("created_at") or _now())
-        else:
-            created_at = _now()
-            body = {
-                **identity,
-                "artifact_id": artifact_id,
-                "created_at": created_at,
-            }
-            path.write_text(json.dumps(body, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
+        ref = self._store.create_if_absent(identity)
+        body = self._store.verify(ref.path, ref.artifact_id)
         return KnowledgeArtifact(
-            artifact_id=artifact_id,
+            artifact_id=ref.artifact_id,
             artifact_type=artifact_type,
             schema_version=schema_version,
             producer_role=producer_role,
             parent_artifact_ids=parent_artifact_ids,
             data_snapshot_id=data_snapshot_id,
-            created_at=created_at,
+            created_at=str(body.get("created_at") or ""),
             payload=dict(payload),
         )
 
     def get(self, artifact_id: str) -> KnowledgeArtifact | None:
-        path = self.root / f"{artifact_id.replace(':', '_')}.json"
+        try:
+            path = self._store.path_for(artifact_id)
+        except ValueError:
+            return None
         if not path.exists():
             return None
-        body = json.loads(path.read_text(encoding="utf-8"))
+        body = self._store.verify(path, artifact_id)
         return KnowledgeArtifact(
-            artifact_id=body["artifact_id"],
-            artifact_type=body["artifact_type"],
-            schema_version=body["schema_version"],
-            producer_role=body["producer_role"],
+            artifact_id=artifact_id,
+            artifact_type=str(body["artifact_type"]),
+            schema_version=str(body["schema_version"]),
+            producer_role=str(body["producer_role"]),
             parent_artifact_ids=tuple(body.get("parent_artifact_ids") or ()),
             data_snapshot_id=body.get("data_snapshot_id"),
-            created_at=body["created_at"],
-            payload=body.get("payload") or {},
+            created_at=str(body.get("created_at") or ""),
+            payload=dict(body.get("payload") or {}),
         )
+
+
+__all__ = ["KnowledgeArtifact", "KnowledgeStore"]

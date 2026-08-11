@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS endpoint_inventory (
         inventory_status IN ('GOVERNED', 'EXPERIMENTAL', 'DISABLED', 'UNAVAILABLE_BY_PLAN', 'UNVERIFIED_ENDPOINT')
     ),
     collection_window            TEXT NOT NULL CHECK (
-        collection_window IN ('intraday', 'full_day', 'weekly', 'calendar', 'event', 'lagged', 'archive', 'disclosure_event', 'archive_backfill')
+        collection_window IN ('intraday', 'full_day', 'weekly', 'calendar', 'event', 'lagged', 'archive', 'disclosure_event', 'archive_backfill', 'morning_session')
     ),
     expected_frequency           TEXT NOT NULL,
     coverage_segment_granularity TEXT NOT NULL,

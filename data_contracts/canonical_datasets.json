@@ -58,7 +58,7 @@
     },
     {
       "dataset_id": "equities_bars_daily_am",
-      "display_name": "Equities Daily Aftermarket Bars",
+      "display_name": "Equities Bars Daily AM (Morning Session)",
       "source": "jquants_premium_core",
       "governance_tier": "governed",
       "contracts": {
@@ -74,15 +74,17 @@
       "coverage_segment_granularity": "calendar_month",
       "expected_frequency": "trading_day",
       "inventory_status": "GOVERNED",
-      "collection_window": "full_day",
+      "collection_window": "morning_session",
       "research_eligible": true,
       "enabled": true,
       "sla": {
         "expected_after": "11:30",
         "usable_by": "12:30",
         "timezone": "Asia/Tokyo",
-        "freshness_policy": "same_trading_day_am"
-      }
+        "freshness_policy": "same_trading_day_am",
+        "session": "morning"
+      },
+      "session": "morning"
     },
     {
       "dataset_id": "fins_summary",
