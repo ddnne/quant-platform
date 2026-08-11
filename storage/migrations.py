@@ -604,6 +604,103 @@ MIGRATIONS: tuple[Migration, ...] = (
             ADD COLUMN correction_raw_digest TEXT;
         """,
     ),
+    Migration(
+        8,
+        "phase62_jsda_corporate_bond_transactions",
+        """
+        CREATE TABLE IF NOT EXISTS jsda_corporate_bond_transactions (
+            source                       TEXT NOT NULL,
+            publication_label_date       TEXT NOT NULL,
+            trade_date                   TEXT NOT NULL,
+            security_code                TEXT NOT NULL DEFAULT '',
+            source_record_id             TEXT NOT NULL DEFAULT '',
+            issuer_name                  TEXT NOT NULL DEFAULT '',
+            isin                         TEXT NOT NULL DEFAULT '',
+            event_time                   TEXT NOT NULL,
+            available_at                 TEXT NOT NULL,
+            ingested_at                  TEXT NOT NULL,
+            coupon_rate                  REAL,
+            maturity_date                TEXT,
+            transaction_type             TEXT,
+            buyer_counterparty_type      TEXT,
+            seller_counterparty_type     TEXT,
+            face_value_mil_jpy           REAL,
+            trade_amount_mil_jpy         REAL,
+            execution_price              REAL,
+            execution_yield              REAL,
+            source_url                   TEXT NOT NULL,
+            raw_digest                   TEXT NOT NULL,
+            segment_id                   TEXT NOT NULL,
+            source_format                TEXT NOT NULL,
+            correction_published_at      TEXT,
+            correction_publication_label TEXT,
+            correction_source_url        TEXT,
+            correction_raw_digest        TEXT,
+            raw_payload                  TEXT,
+            PRIMARY KEY (source, publication_label_date, trade_date,
+                         security_code, source_record_id)
+        );
+        CREATE TABLE IF NOT EXISTS jsda_corporate_bond_transactions_revisions AS
+            SELECT * FROM jsda_corporate_bond_transactions WHERE 0;
+        CREATE UNIQUE INDEX IF NOT EXISTS
+            ux_corporate_bond_transactions_revisions_version
+            ON jsda_corporate_bond_transactions_revisions
+               (source, publication_label_date, trade_date, security_code,
+                source_record_id, available_at, ingested_at);
+        CREATE INDEX IF NOT EXISTS ix_jsda_corporate_transactions_available_at
+            ON jsda_corporate_bond_transactions
+               (trade_date, available_at, security_code);
+
+        CREATE TRIGGER IF NOT EXISTS
+            invalidate_snapshot_jsda_corporate_transactions_i
+        AFTER INSERT ON jsda_corporate_bond_transactions BEGIN
+            UPDATE local_snapshot_policy SET snapshot_ready=0,
+                active_snapshot_id=NULL,
+                last_error='fact mutation invalidated research snapshot'
+            WHERE singleton=1;
+        END;
+        CREATE TRIGGER IF NOT EXISTS
+            invalidate_snapshot_jsda_corporate_transactions_u
+        AFTER UPDATE ON jsda_corporate_bond_transactions BEGIN
+            UPDATE local_snapshot_policy SET snapshot_ready=0,
+                active_snapshot_id=NULL,
+                last_error='fact mutation invalidated research snapshot'
+            WHERE singleton=1;
+        END;
+        CREATE TRIGGER IF NOT EXISTS
+            invalidate_snapshot_jsda_corporate_transactions_d
+        AFTER DELETE ON jsda_corporate_bond_transactions BEGIN
+            UPDATE local_snapshot_policy SET snapshot_ready=0,
+                active_snapshot_id=NULL,
+                last_error='fact mutation invalidated research snapshot'
+            WHERE singleton=1;
+        END;
+        CREATE TRIGGER IF NOT EXISTS
+            invalidate_snapshot_jsda_corporate_transactions_revisions_i
+        AFTER INSERT ON jsda_corporate_bond_transactions_revisions BEGIN
+            UPDATE local_snapshot_policy SET snapshot_ready=0,
+                active_snapshot_id=NULL,
+                last_error='fact mutation invalidated research snapshot'
+            WHERE singleton=1;
+        END;
+        CREATE TRIGGER IF NOT EXISTS
+            invalidate_snapshot_jsda_corporate_transactions_revisions_u
+        AFTER UPDATE ON jsda_corporate_bond_transactions_revisions BEGIN
+            UPDATE local_snapshot_policy SET snapshot_ready=0,
+                active_snapshot_id=NULL,
+                last_error='fact mutation invalidated research snapshot'
+            WHERE singleton=1;
+        END;
+        CREATE TRIGGER IF NOT EXISTS
+            invalidate_snapshot_jsda_corporate_transactions_revisions_d
+        AFTER DELETE ON jsda_corporate_bond_transactions_revisions BEGIN
+            UPDATE local_snapshot_policy SET snapshot_ready=0,
+                active_snapshot_id=NULL,
+                last_error='fact mutation invalidated research snapshot'
+            WHERE singleton=1;
+        END;
+        """,
+    ),
 )
 
 

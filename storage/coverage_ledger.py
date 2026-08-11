@@ -306,15 +306,12 @@ def _jsda_validation_status(
     validation failure when every expected source segment is still missing;
     those independently planned segments correctly aggregate to PARTIAL.
     """
-    # Local fact tables for governed JSDA datasets.
-    # jsda_bond_trades holds 社債の取引情報 rows (see schema comment +
-    # jsda_governed.json dataset_id jsda_corporate_bond_transactions).
-    # OTC reference prices are a separate product (参考統計値) and must not
-    # be confused with corporate transactions.
+    # Every jsda_* governed dataset MUST map here or validation stays UNKNOWN.
+    # Corporate bond transactions is NOT legacy jsda_bond_trades (different NK).
     fact_tables = {
         "jsda_otc_bond_reference_prices": "jsda_otc_bond_reference_prices",
         "jsda_tokyo_repo_rates": "jsda_repo_rates",
-        "jsda_corporate_bond_transactions": "jsda_bond_trades",
+        "jsda_corporate_bond_transactions": "jsda_corporate_bond_transactions",
     }
     table = fact_tables.get(dataset)
     if table is None:

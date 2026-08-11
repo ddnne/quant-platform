@@ -119,6 +119,95 @@ def normalize_otc_reference_prices(
     return out
 
 
+def normalize_corporate_bond_transactions(
+    records: Iterable[dict],
+    *,
+    ingested_at: str,
+    publication_label_date: Optional[str] = None,
+    available_at: Optional[str] = None,
+    source_url: str,
+    raw_digest: str,
+    segment_id: str,
+    source_format: str = "csv",
+    correction_publication_label: Optional[str] = None,
+    correction_published_at: Optional[str] = None,
+    correction_source_url: Optional[str] = None,
+    correction_raw_digest: Optional[str] = None,
+) -> List[dict]:
+    """Normalize governed 社債の取引情報 rows with explicit PIT provenance.
+
+    This is the governed storage adapter for ``jsda_corporate_bond_transactions``.
+    Each input record is one trade observation from an official publication
+    file. The dataset is ``event_driven``: a single bond may trade several
+    times on one trade date, and the same trade may be republished across
+    annual archives. The natural key is therefore
+    ``(source, publication_label_date, trade_date, security_code,
+    source_record_id)`` — publication + per-file record id disambiguate the
+    revisions that the legacy ``jsda_bond_trades`` table (keyed on
+    trade_date/isin/issuer_name) cannot represent.
+
+    ``publication_label_date`` is the date of the publication file, not the
+    trade date, and is not evidence of an exact publication timestamp. When no
+    authoritative publication timestamp is supplied, ``available_at``
+    conservatively remains the actual ``ingested_at``. ``source_record_id``
+    defaults to the row's source line number so the natural key stays unique
+    even when the parser does not assign one explicitly.
+    """
+    availability = available_at or ingested_at
+    out: list[dict] = []
+    for index, record in enumerate(records):
+        label = record.get("publication_label_date") or publication_label_date
+        trade_date = record.get("trade_date")
+        if not label:
+            raise ValueError(
+                "corporate bond row missing publication_label_date"
+            )
+        if not trade_date:
+            raise ValueError("corporate bond row missing trade_date")
+        label = str(label)[:10]
+        trade_date = str(trade_date)[:10]
+        source_record_id = str(
+            record.get("source_record_id")
+            or record.get("source_row_number")
+            or (index + 1)
+        )
+        try:
+            event_time = to_iso(parse_dt(f"{trade_date}T15:00:00"))  # JST close
+        except ValueError:
+            event_time = to_iso(parse_dt(trade_date))
+        out.append({
+            "source": "jsda",
+            "publication_label_date": label,
+            "trade_date": trade_date,
+            "security_code": str(record.get("security_code") or "").strip(),
+            "source_record_id": source_record_id,
+            "issuer_name": str(record.get("issuer_name") or "").strip(),
+            "isin": str(record.get("isin") or "").strip(),
+            "event_time": event_time,
+            "available_at": availability,
+            "ingested_at": ingested_at,
+            "coupon_rate": record.get("coupon_rate"),
+            "maturity_date": record.get("maturity_date"),
+            "transaction_type": record.get("transaction_type"),
+            "buyer_counterparty_type": record.get("buyer_counterparty_type"),
+            "seller_counterparty_type": record.get("seller_counterparty_type"),
+            "face_value_mil_jpy": record.get("face_value_mil_jpy"),
+            "trade_amount_mil_jpy": record.get("trade_amount_mil_jpy"),
+            "execution_price": record.get("execution_price"),
+            "execution_yield": record.get("execution_yield"),
+            "source_url": source_url,
+            "raw_digest": raw_digest,
+            "segment_id": segment_id,
+            "source_format": source_format,
+            "correction_publication_label": correction_publication_label,
+            "correction_published_at": correction_published_at,
+            "correction_source_url": correction_source_url,
+            "correction_raw_digest": correction_raw_digest,
+            "raw_payload": json.dumps(record, ensure_ascii=False, sort_keys=True),
+        })
+    return out
+
+
 def normalize_repo_rates(
     records: Iterable[dict],
     *,

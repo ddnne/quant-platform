@@ -154,6 +154,46 @@ CREATE TABLE IF NOT EXISTS jsda_repo_rates (
     PRIMARY KEY (source, as_of_date, tenor, rate_type)
 );
 
+-- Governed 社債の取引情報 (Corporate Bond Transactions) archive. This is the
+-- event-driven governed storage adapter for ``jsda_corporate_bond_transactions``:
+-- one row per (publication file, trade date, security, source record). It is
+-- intentionally separate from the legacy ``jsda_bond_trades`` table, whose
+-- natural key (trade_date, isin, issuer_name) cannot represent the
+-- publication_label / source_record revisions that the event_driven contract
+-- requires. No legacy row is rewritten.
+CREATE TABLE IF NOT EXISTS jsda_corporate_bond_transactions (
+    source                       TEXT NOT NULL,
+    publication_label_date       TEXT NOT NULL,
+    trade_date                   TEXT NOT NULL,
+    security_code                TEXT NOT NULL DEFAULT '',
+    source_record_id             TEXT NOT NULL DEFAULT '',
+    issuer_name                  TEXT NOT NULL DEFAULT '',
+    isin                         TEXT NOT NULL DEFAULT '',
+    event_time                   TEXT NOT NULL,
+    available_at                 TEXT NOT NULL,
+    ingested_at                  TEXT NOT NULL,
+    coupon_rate                  REAL,
+    maturity_date                TEXT,
+    transaction_type             TEXT,
+    buyer_counterparty_type      TEXT,
+    seller_counterparty_type     TEXT,
+    face_value_mil_jpy           REAL,
+    trade_amount_mil_jpy         REAL,
+    execution_price              REAL,
+    execution_yield              REAL,
+    source_url                   TEXT NOT NULL,
+    raw_digest                   TEXT NOT NULL,
+    segment_id                   TEXT NOT NULL,
+    source_format                TEXT NOT NULL,
+    correction_published_at      TEXT,
+    correction_publication_label TEXT,
+    correction_source_url        TEXT,
+    correction_raw_digest        TEXT,
+    raw_payload                  TEXT,
+    PRIMARY KEY (source, publication_label_date, trade_date,
+                 security_code, source_record_id)
+);
+
 -- Amendment history.  These tables deliberately mirror their
 -- primary fact table.  A unique business-key + available_at index makes
 -- retries idempotent while allowing multiple published revisions of one
@@ -233,6 +273,10 @@ NATURAL_KEYS: dict[str, list[str]] = {
         "source", "publication_label_date", "security_code", "bond_name"
     ],
     "jsda_repo_rates": ["source", "as_of_date", "tenor", "rate_type"],
+    "jsda_corporate_bond_transactions": [
+        "source", "publication_label_date", "trade_date",
+        "security_code", "source_record_id",
+    ],
 }
 
 # Fact table -> amendment history table.  Kept separate from

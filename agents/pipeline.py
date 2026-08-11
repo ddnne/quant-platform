@@ -7,9 +7,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping
 
+from execution.paper_service import PaperExecutionService
 from risk import JsonRiskStore
-from strategies.paper import JsonPaperStore, PaperRunConfig, PaperRunResult, run_paper
-from strategies.spec import StrategySpec, interpret_strategy_spec
+from strategies.paper import JsonPaperStore, PaperRunConfig, PaperRunResult
+from strategies.spec import StrategySpec
 
 from .composer import ComposerAgent
 from .artifacts import ArtifactEnvelope
@@ -114,11 +115,17 @@ class AgentPaperPipeline:
         spec = self.strategist.propose(composed)
         decision = self.pm.review(spec)
         plan = self.trader.prepare(decision)
-        strategy = interpret_strategy_spec(spec)
 
-        # config.db_path is passed only to the trusted paper runtime.  None of
-        # the role-agent method calls above receives it.
-        paper_result = run_paper(strategy, config, store=self.paper_store)
+        # The orchestrator never touches the trusted paper runtime directly.
+        # It hands the capability-free authorization (plan) and the immutable
+        # StrategySpec to the PaperExecutionService, which is the sole authority
+        # that re-derives the authorization, pins the READY snapshot, resolves
+        # FeatureRef versions, and delegates to strategies.paper.run_paper.
+        # config.db_path is passed only to that trusted service; none of the
+        # role-agent method calls above receives it.
+        paper_result = PaperExecutionService(self.paper_store).execute(
+            plan, spec, config
+        )
         paper_path = self.paper_store.result_path(paper_result)
         # Audit the immutable persisted artifact rather than privileged engine
         # state. This keeps the risk role downstream and independently replayable.
