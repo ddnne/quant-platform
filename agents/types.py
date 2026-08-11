@@ -34,6 +34,33 @@ class FeatureProposal:
         if self.status != "candidate":
             raise ValueError("agent feature proposals must begin as candidate")
 
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "FeatureProposal":
+        """Closed-schema decode; rejects unknown fields (no free smuggled keys)."""
+        if not isinstance(payload, Mapping):
+            raise ValueError("FeatureProposal must be an object")
+        allowed = {"feature_id", "intended_role", "rationale", "status"}
+        unknown = sorted(set(payload) - allowed)
+        if unknown:
+            raise ValueError(f"FeatureProposal unknown field(s): {unknown}")
+        missing = {"feature_id", "intended_role", "rationale"} - set(payload)
+        if missing:
+            raise ValueError(f"FeatureProposal missing field(s): {sorted(missing)}")
+        return cls(
+            feature_id=str(payload["feature_id"]),
+            intended_role=str(payload["intended_role"]),
+            rationale=str(payload["rationale"]),
+            status=str(payload.get("status", "candidate")),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "feature_id": self.feature_id,
+            "intended_role": self.intended_role,
+            "rationale": self.rationale,
+            "status": self.status,
+        }
+
 
 @dataclass(frozen=True)
 class ResearchMemo:
@@ -42,6 +69,43 @@ class ResearchMemo:
     thesis: str
     evidence: tuple[str, ...] = ()
     feature_proposals: tuple[FeatureProposal, ...] = ()
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "ResearchMemo":
+        """Closed-schema decode; rejects unknown fields (no free smuggled keys)."""
+        if not isinstance(payload, Mapping):
+            raise ValueError("ResearchMemo must be an object")
+        allowed = {"role", "as_of", "thesis", "evidence", "feature_proposals"}
+        unknown = sorted(set(payload) - allowed)
+        if unknown:
+            raise ValueError(f"ResearchMemo unknown field(s): {unknown}")
+        missing = {"role", "as_of", "thesis"} - set(payload)
+        if missing:
+            raise ValueError(f"ResearchMemo missing field(s): {sorted(missing)}")
+        evidence = payload.get("evidence", ())
+        if not isinstance(evidence, (list, tuple)):
+            raise ValueError("ResearchMemo.evidence must be a list")
+        proposals = payload.get("feature_proposals", ())
+        if not isinstance(proposals, (list, tuple)):
+            raise ValueError("ResearchMemo.feature_proposals must be a list")
+        return cls(
+            role=str(payload["role"]),
+            as_of=str(payload["as_of"]),
+            thesis=str(payload["thesis"]),
+            evidence=tuple(str(item) for item in evidence),
+            feature_proposals=tuple(
+                FeatureProposal.from_dict(item) for item in proposals
+            ),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "role": self.role,
+            "as_of": self.as_of,
+            "thesis": self.thesis,
+            "evidence": list(self.evidence),
+            "feature_proposals": [item.to_dict() for item in self.feature_proposals],
+        }
 
 
 @dataclass(frozen=True)
