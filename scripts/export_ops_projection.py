@@ -222,6 +222,7 @@ def render_projection_sql(
     *,
     snapshot_dir: str | Path | None = None,
     max_age_seconds: int = DEFAULT_MAX_AGE_SECONDS,
+    use_sql_transaction: bool = True,
 ) -> str:
     """Return a complete replaceable projection transaction."""
     path = Path(db_path).resolve()
@@ -246,8 +247,7 @@ def render_projection_sql(
         "projection_version", "detail_json",
     )
 
-    statements = [
-        "BEGIN TRANSACTION;",
+    statements = (["BEGIN TRANSACTION;"] if use_sql_transaction else []) + [
         "DELETE FROM dataset_coverage;",
         "DELETE FROM coverage_segments;",
         "DELETE FROM ops_snapshot_quality;",
@@ -317,7 +317,8 @@ def render_projection_sql(
                 tuple(quality_row),
                 (quality_row,),
             ))
-    statements.append("COMMIT;")
+    if use_sql_transaction:
+        statements.append("COMMIT;")
     return "\n".join(statements) + "\n"
 
 

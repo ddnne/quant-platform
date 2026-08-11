@@ -1,34 +1,34 @@
 # Phase 6.2 residual status (honest)
 
-**Developer track**: GLM (+ Grok orchestrate / land)  
-**Latest HEAD**: `git log -1`
+**HEAD**: `git log -1`  
+**Track**: GLM parallel + orchestrated land
 
 ## Code-complete
 
+| Item | Evidence |
+|------|----------|
+| 31-endpoint inventory (26 governed + 5 experimental) | `data_contracts/canonical_datasets.json`, `inventory.py` |
+| Ops projection publisher + D1 apply (no SQL BEGIN) | `scripts/publish_ops_projection.py` applied remote successfully |
+| Coverage V2 plan granularities (month/year/day/file) | `storage/coverage_ledger.py` |
+| Local ledger refresh | `scripts/refresh_coverage_ledger.py` → 26 PARTIAL (honest, no receipts) |
+| Remote Ops 16 tools + migration 0003 + redeploy | Worker live |
+| Sync → optional `--publish-ops` / `--apply-remote-ops` | `scripts/sync_d1_to_sqlite.py` |
+| Phase 7 stubs | `knowledge/`, `selection/`, `gateway/` |
+| Offline pytest | keep green on land |
+
+## Live operational (still open)
+
 | Item | Status |
 |------|--------|
-| Canonical registry 31 endpoints (26 governed + 5 experimental) | Done |
-| `data_contracts.inventory` | Done |
-| `scripts/publish_ops_projection.py` | Done |
-| `scripts/refresh_coverage_ledger.py` | Done |
-| Remote Ops tools (16) incl. inventory / projection / SLA | Done |
-| D1 migration 0003 + worker redeploy | Done |
-| Phase 7 knowledge / selection / AI gateway stubs | Done |
-| Offline pytest green | Required after each land |
-
-## Not complete (live)
-
-| Item | Status |
-|------|--------|
-| Long-horizon JQ/JSDA backfill → Coverage V2 COMPLETE | Open |
-| Production READY ≥1 | Open |
-| Cron-wired auto projection on CF | Partial (script only) |
-| Add-on promotion to governed | Open (experimental inventory only) |
+| Coverage COMPLETE (needs real collection receipts + full backfill) | **Open** — all governed PARTIAL/UNKNOWN with 0 receipts |
+| Production READY ≥1 | **Open** — coherence correctly blocks |
+| Full multi-year JQ/JSDA backfill finished | **Open** — requires long live runs (credentials present; not fully executed here) |
+| Cron auto-projection without any human flag | **Partial** — flag exists; CF cron wiring not claimed complete |
 
 ## Phase 7 mass research
 
-**NO-GO** until READY + real Coverage V2 COMPLETE.
+**NO-GO** until READY + real COMPLETE evidence.
 
-## Parallel lanes
+## Parallel GLM
 
-GLM worktrees A–D may still land polish commits; merge when green.
+Lanes C/D/E/F continue polish on worktrees; merge when green.

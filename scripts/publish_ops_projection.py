@@ -109,6 +109,15 @@ def main(argv: list[str] | None = None) -> int:
     print(f"wrote {args.meta_output}")
 
     if args.apply_remote:
+        # D1 remote execute rejects explicit SQL BEGIN/COMMIT.
+        remote_sql = "\n".join(
+            line
+            for line in sql.splitlines()
+            if line.strip().upper()
+            not in {"BEGIN TRANSACTION;", "BEGIN;", "COMMIT;", "COMMIT"}
+        ) + "\n"
+        remote_path = args.output.with_suffix(".d1.sql")
+        remote_path.write_text(remote_sql, encoding="utf-8")
         cmd = [
             "npx",
             "wrangler",
@@ -116,7 +125,7 @@ def main(argv: list[str] | None = None) -> int:
             "execute",
             "quant-ingest",
             "--remote",
-            f"--file={args.output}",
+            f"--file={remote_path}",
         ]
         print("running:", " ".join(cmd))
         proc = subprocess.run(cmd, cwd=ROOT / "platform" / "workers" / "quant-ops-mcp")

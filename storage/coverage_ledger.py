@@ -79,20 +79,22 @@ def plan_required_segments(
     source: str = "jquants",
     expected_items_by_segment: Mapping[str, int] | None = None,
 ) -> tuple[RequiredCoverageSegment, ...]:
-    """Create the required inventory independently of observed rows/receipts."""
-    if policy.segment_granularity != "calendar_month":  # pragma: no cover
-        raise ValueError(
-            f"unsupported segment granularity: {policy.segment_granularity!r}"
-        )
+    """Create the required inventory independently of observed rows/receipts.
+
+    Supported granularities:
+    - calendar_month: one segment per calendar month
+    - official_archive_year: one segment per year (JSDA annual archives)
+    - official_archive_day: one segment per day within [start, end]
+    - source_time_series_file: single segment covering full target window
+    """
     start = date.fromisoformat(policy.history_target_start)
     end = date.fromisoformat(target_end)
     if end < start:
         raise ValueError("target_end precedes coverage history target")
+    granularity = policy.segment_granularity
     segments: list[RequiredCoverageSegment] = []
-    cursor = start
-    while cursor <= end:
-        segment_end = min(_month_end(cursor), end)
-        segment_id = cursor.strftime("%Y-%m")
+
+    def _append(segment_id: str, segment_start: date, segment_end: date) -> None:
         expected_items = None
         if expected_items_by_segment is not None:
             expected_items = expected_items_by_segment.get(segment_id)
@@ -107,19 +109,46 @@ def plan_required_segments(
                 else "source_query"
             ),
             "segment_end": segment_end.isoformat(),
-            "segment_start": cursor.isoformat(),
+            "segment_start": segment_start.isoformat(),
             "universe_rule": policy.universe_rule,
+            "segment_granularity": granularity,
         }
         segments.append(RequiredCoverageSegment(
             source=source,
             dataset=policy.dataset_id,
             segment_id=segment_id,
-            segment_start=cursor.isoformat(),
+            segment_start=segment_start.isoformat(),
             segment_end=segment_end.isoformat(),
             expected_scope=scope,
             expected_items=expected_items,
         ))
-        cursor = date.fromordinal(segment_end.toordinal() + 1)
+
+    if granularity == "calendar_month":
+        cursor = start
+        while cursor <= end:
+            segment_end = min(_month_end(cursor), end)
+            _append(cursor.strftime("%Y-%m"), cursor, segment_end)
+            cursor = date.fromordinal(segment_end.toordinal() + 1)
+    elif granularity == "official_archive_year":
+        for year in range(start.year, end.year + 1):
+            segment_start = max(start, date(year, 1, 1))
+            segment_end = min(end, date(year, 12, 31))
+            _append(str(year), segment_start, segment_end)
+    elif granularity == "official_archive_day":
+        cursor = start
+        while cursor <= end:
+            _append(cursor.isoformat(), cursor, cursor)
+            cursor = date.fromordinal(cursor.toordinal() + 1)
+    elif granularity == "source_time_series_file":
+        _append(
+            f"{start.isoformat()}_{end.isoformat()}",
+            start,
+            end,
+        )
+    else:  # pragma: no cover
+        raise ValueError(
+            f"unsupported segment granularity: {policy.segment_granularity!r}"
+        )
     return tuple(segments)
 
 

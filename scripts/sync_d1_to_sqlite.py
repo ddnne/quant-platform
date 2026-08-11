@@ -157,6 +157,22 @@ def _build_parser() -> argparse.ArgumentParser:
             "response. Production incremental sync uses change_seq."
         ),
     )
+    p.add_argument(
+        "--publish-ops",
+        action="store_true",
+        help=(
+            "After a successful sync (exit 0 path), run "
+            "scripts/publish_ops_projection.py for the local DB."
+        ),
+    )
+    p.add_argument(
+        "--apply-remote-ops",
+        action="store_true",
+        help=(
+            "With --publish-ops, also apply the projection SQL to remote D1 "
+            "via wrangler (requires CF auth)."
+        ),
+    )
     return p
 
 
@@ -744,7 +760,29 @@ def main(argv=None) -> int:
         f"registered={total_registered} skipped={total_skipped} "
         f"failures={len(failures)}"
     )
-    return 1 if failures else 0
+    exit_code = 1 if failures else 0
+    if exit_code == 0 and getattr(args, "publish_ops", False):
+        _maybe_publish_ops_projection(
+            args.db,
+            apply_remote=bool(getattr(args, "apply_remote_ops", False)),
+        )
+    return exit_code
+
+
+def _maybe_publish_ops_projection(db_path, *, apply_remote: bool = False) -> None:
+    """Out-of-band ops projection publish after a successful sync."""
+    import subprocess
+
+    cmd = [
+        sys.executable,
+        str(Path(__file__).resolve().parent / "publish_ops_projection.py"),
+        "--db",
+        str(db_path),
+    ]
+    if apply_remote:
+        cmd.append("--apply-remote")
+    print(f"[sync] publishing ops projection: {' '.join(cmd)}")
+    subprocess.run(cmd, check=False)
 
 
 if __name__ == "__main__":

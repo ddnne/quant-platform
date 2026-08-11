@@ -54,3 +54,4 @@ data/paper/*
 
 # Local agent logs
 .glm-logs/
+data/ops/
