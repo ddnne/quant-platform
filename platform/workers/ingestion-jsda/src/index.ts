@@ -13,6 +13,10 @@ export interface Env {
   DB: D1Database;
   INGESTION_RUN_TOKEN?: string;
   USER_AGENT?: string;
+  /** 0 = unlimited data-file fetches; small N for min-segment runs. */
+  MAX_DATA_FILES?: string;
+  /** 0 = all year archive pages; small N for min-segment runs. */
+  MAX_YEAR_PAGES?: string;
 }
 
 const UA =
@@ -273,7 +277,15 @@ async function collectWithDiscovery(
     keys.push(rootPut.key);
 
     const rootLinks = extractLinks(rootHtml, rootIndex);
-    const yearPages = rootLinks.filter(isYearArchive);
+    let yearPages = rootLinks.filter(isYearArchive);
+    const maxYearPages = Math.max(
+      0,
+      Math.min(100, Number(env.MAX_YEAR_PAGES ?? "0") || 0),
+    );
+    // Prefer latest year pages when limiting (often higher years last in list).
+    if (maxYearPages > 0) {
+      yearPages = yearPages.slice().reverse().slice(0, maxYearPages);
+    }
     const dataFromRoot = rootLinks.filter(isDataUrl);
 
     // Crawl year archives when present (OTC style).
@@ -304,11 +316,20 @@ async function collectWithDiscovery(
       await new Promise((r) => setTimeout(r, 300));
     }
 
-    // Fetch every discovered data file (no max=3 PASS heuristic).
+    // Fetch discovered data files. Optional max_files (query/env) for min-segment
+    // evidence closure without multi-hour full-archive crawls.
+    const maxFiles = Math.max(
+      0,
+      Math.min(10_000, Number(env.MAX_DATA_FILES ?? "0") || 0),
+    );
     let stored = 0;
     const errors: string[] = [];
     const artifacts: { url: string; key: string; digest: string }[] = [];
-    for (const dataUrl of [...allData].sort()) {
+    const sortedData = [...allData].sort();
+    // Prefer newest-looking filenames first when limiting (reverse sort).
+    const toFetch =
+      maxFiles > 0 ? sortedData.slice().reverse().slice(0, maxFiles) : sortedData;
+    for (const dataUrl of toFetch) {
       try {
         const file = await fetchAllowed(dataUrl, ua);
         if (file.status >= 400) {
@@ -317,7 +338,7 @@ async function collectWithDiscovery(
         }
         const name = basename(dataUrl);
         // segment by filename identity (publication artifact)
-        const seg = `file_${name.replace(/[^A-Za-z0-9._-]/g, "_")}`;
+        const seg = `file_${name.replace(/[^A-Za-z0-9._-]+/g, "_")}`;
         const put = await putImmutable(
           env,
           dataset,
@@ -482,6 +503,7 @@ async function drainJobBatch(
 async function runAll(
   env: Env,
   triggeredBy: "cron" | "manual",
+  onlyDataset?: DatasetId,
 ): Promise<Record<string, unknown>> {
   const ua = env.USER_AGENT || UA;
   const startedAt = new Date().toISOString();
@@ -513,11 +535,15 @@ async function runAll(
   }
 
   // Manual: full discovery still available for ops backfill.
-  const plans: { dataset: DatasetId; url: string }[] = [
+  // Optional onlyDataset short-circuits to one source for min-segment runs.
+  const allPlans: { dataset: DatasetId; url: string }[] = [
     { dataset: "jsda_otc_bond_reference_prices", url: OTC_INDEX },
     { dataset: "jsda_tokyo_repo_rates", url: REPO_INDEX },
     { dataset: "jsda_corporate_bond_transactions", url: CORP_INDEX },
   ];
+  const plans = onlyDataset
+    ? allPlans.filter((p) => p.dataset === onlyDataset)
+    : allPlans;
   const results: CollectResult[] = [];
   for (const plan of plans) {
     results.push(await collectWithDiscovery(env, plan.dataset, plan.url, ua));
@@ -570,7 +596,15 @@ export default {
       if (!(await authorized(request, env.INGESTION_RUN_TOKEN))) {
         return Response.json({ error: "unauthorized" }, { status: 401 });
       }
-      const summary = await runAll(env, "manual");
+      const ds = url.searchParams.get("dataset") || "";
+      const allowed: DatasetId[] = [
+        "jsda_otc_bond_reference_prices",
+        "jsda_tokyo_repo_rates",
+        "jsda_corporate_bond_transactions",
+      ];
+      const only =
+        ds && (allowed as string[]).includes(ds) ? (ds as DatasetId) : undefined;
+      const summary = await runAll(env, "manual", only);
       return Response.json({ ok: summary.status === "pass", summary });
     }
     return Response.json({ error: "not found" }, { status: 404 });

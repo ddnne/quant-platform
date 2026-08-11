@@ -20,6 +20,9 @@ database_id = "be6fdcf8-40be-41fc-9535-7facd1fc2ffc"
 
 [vars]
 USER_AGENT = "quant-platform-ingest/0.1 (+personal-research; JSDA bond stats)"
+# Cap data-file downloads per discovery run (0 = unlimited). Use 1 for min-segment evidence.
+MAX_DATA_FILES = "3"
+MAX_YEAR_PAGES = "1"
 
 [triggers]
 # Daily 01:30 UTC == 10:30 JST — after typical JSDA morning publication window.
