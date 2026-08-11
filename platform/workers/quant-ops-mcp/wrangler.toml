@@ -1,21 +1,39 @@
+# Quant Ops Read MCP — same remote MCP pattern as news-mcp:
+# GitHub OAuth (@cloudflare/workers-oauth-provider) + Agents McpAgent + /mcp.
 name = "quant-platform-ops-read-mcp"
 main = "src/index.js"
 compatibility_date = "2026-08-01"
+compatibility_flags = ["nodejs_compat"]
 workers_dev = true
+
+# OAuth token storage. Binding name MUST be OAUTH_KV (library requirement).
+[[kv_namespaces]]
+binding = "OAUTH_KV"
+id = "cbbfc9439c3e4a789fa103777d38f39e" # title: quant-ops-mcp-oauth
 
 [[d1_databases]]
 binding = "OPS_DB"
 database_name = "quant-ingest"
 database_id = "be6fdcf8-40be-41fc-9535-7facd1fc2ffc"
 
+[durable_objects]
+bindings = [{ name = "MCP_OBJECT", class_name = "QuantOpsMcpAgent" }]
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["QuantOpsMcpAgent"]
+
 [vars]
-# Public identifiers, not secrets. Replace before deploy. Deliberately-invalid
-# defaults fail closed if the Worker is deployed without Access configuration.
-ACCESS_TEAM_DOMAIN = "replace-with-team.cloudflareaccess.com"
-ACCESS_AUD = "replace-with-access-application-audience"
-OAUTH_AUTHORIZATION_SERVER = "https://replace-with-managed-oauth-issuer.example"
+# D14-style single-user gate (GitHub login).
+ALLOWED_LOGIN = "ddnne"
 DAILY_ROW_QUOTA = "25000"
-ALLOWED_ORIGINS = "https://chatgpt.com,https://chat.openai.com"
+# Authorization server is this Worker itself (same as news-mcp).
+OAUTH_AUTHORIZATION_SERVER = "https://quant-platform-ops-read-mcp.taku-haga.workers.dev"
+
+# secrets (wrangler secret put):
+#   GITHUB_CLIENT_ID
+#   GITHUB_CLIENT_SECRET
+# optional STATE_SECRET (else GITHUB_CLIENT_SECRET is reused for HMAC state)
 
 [observability]
 enabled = true

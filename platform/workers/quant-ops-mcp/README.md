@@ -1,143 +1,115 @@
-# Quant Ops Read MCP (remote)
+# Quant Ops Read MCP (remote, GitHub OAuth)
 
-This Cloudflare Worker is the human-facing MCP endpoint for browser and mobile
-clients. It exposes current operational status over MCP Streamable HTTP at
-`/mcp`. The Python stdio server remains an offline development adapter.
+Human-facing Ops MCP for **browser / mobile ChatGPT & Claude**, using the
+**same mechanism as `news-mcp`**:
 
-The remote server is deliberately Ops-only. It does not return research fact
-rows and has no SQL, D1/R2 handle, secret, shell, arbitrary URL fetch,
-ingestion trigger, deletion, publication, feature approval, or broker tool.
-`latest_ready_snapshot` and `snapshot_quality` return bounded publication
-metadata only; a Research Read MCP must not be enabled until Cloudflare can pin
-and verify a published immutable READY generation.
+```text
+ChatGPT / Claude Connector
+        │ OAuth (GitHub login = ALLOWED_LOGIN)
+        ▼
+workers-oauth-provider  (/authorize /token /register)
+        │
+        ▼
+QuantOpsMcpAgent (/mcp, Durable Object)
+        │
+        ▼
+OPS_DB (quant-ingest D1 projection) — read only
+```
+
+No research fact rows, no SQL, no ingestion/admin tools.
 
 ## Tools
 
-- `ops_status`, `ingestion_last_run`
-- `dataset_coverage`, `coverage_gaps`, `coverage_segments`
-- `backfill_status`, `validation_summary`, `b0_status`
-- `latest_ready_snapshot`, `snapshot_quality`
-- `raw_retention_status`, `sync_status`
+`ops_status`, `ingestion_last_run`, `dataset_coverage`, `coverage_gaps`,
+`coverage_segments`, `backfill_status`, `validation_summary`, `b0_status`,
+`latest_ready_snapshot`, `snapshot_quality`, `raw_retention_status`, `sync_status`
 
-Every result says whether it came from mutable `ops_current` state or immutable
-`research_ready` publication metadata.
+## Auth (news-compatible)
 
-## Authentication and authorization
+- GitHub OAuth via `@cloudflare/workers-oauth-provider`
+- Only `ALLOWED_LOGIN` (default `ddnne`) may complete login
+- KV binding **must** be named `OAUTH_KV`
 
-Put the Worker behind a Cloudflare Access application and configure Cloudflare
-Managed OAuth (or an equivalent OAuth authorization server) for the MCP
-client-facing flow. The Worker publishes OAuth protected-resource metadata at
-`/.well-known/oauth-protected-resource` and still validates the Access JWT
-signature, issuer, audience, and expiry itself.
+### Secrets
 
-Required OAuth resource scope: `quant.read.ops`. Cloudflare Managed OAuth
-forwards a normal Access assertion to the origin; that assertion does not
-contain the OAuth scope or client ID. Therefore the dedicated Access
-application/AUD is itself the server-side `quant.read.ops` authorization
-boundary. Do not share this Access application with research or write APIs.
-Human quota keys use Access `sub` plus the authenticated `identity_nonce`
-(managed-OAuth grant/session); service-token keys use `common_name`, the
-Access service client ID.
+```bash
+npx wrangler secret put GITHUB_CLIENT_ID
+npx wrangler secret put GITHUB_CLIENT_SECRET
+# optional: npx wrangler secret put STATE_SECRET
+```
 
-Reserve `quant.read.research` for a separately deployed Research Read server.
-Write scopes belong to separate services and must never be granted to this
-Worker. Human identity tokens and automation service tokens are kept as
-different principal kinds. Automation should use an Access service token and
-its own OAuth client identity; it must not reuse a person's browser token.
+### GitHub OAuth App
 
-Cloudflare setup references:
+Create (or reuse) a GitHub OAuth App with callback:
 
-- [Remote MCP server and OAuth](https://developers.cloudflare.com/agents/model-context-protocol/guides/remote-mcp-server/)
-- [Validate Access JWTs in a Worker](https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/authorization-cookie/validating-json/)
-- [MCP Streamable HTTP transport](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports)
+```text
+https://quant-platform-ops-read-mcp.taku-haga.workers.dev/callback
+```
 
-Configure these public Wrangler variables before deploy:
+Homepage can be the Worker origin. Scope used: `read:user`.
 
-- `ACCESS_TEAM_DOMAIN`: `<team>.cloudflareaccess.com`
-- `ACCESS_AUD`: Access application audience tag
-- `OAUTH_AUTHORIZATION_SERVER`: Managed OAuth issuer advertised to clients
-- `ALLOWED_ORIGINS`: exact comma-separated browser origins
-- `DAILY_ROW_QUOTA`: positive per-principal/client/UTC-day limit
+If reusing the **news-mcp** OAuth App, add the quant callback URL as an
+additional Authorization callback URL (GitHub allows multiple on some plans /
+settings; otherwise create a dedicated App).
 
-The checked-in placeholders fail closed. Do not store a JWT, service-token
-secret, or OAuth client secret in `wrangler.toml`.
+## Deploy
 
-## D1 and deployment
+```bash
+cd platform/workers/quant-ops-mcp
+npm install
+npm test
+npx wrangler deploy
+```
 
-`OPS_DB` points at the existing `quant-ingest` D1 control database. Apply the
-ingestion Coverage V2 migration first, then this Worker's durable-quota
-migration:
+Apply D1 migrations once (if not already):
 
 ```bash
 npx wrangler d1 execute quant-ingest --remote \
-  --file=../ingestion-premium/migrations/0007_collection_coverage_v2.sql
-
-npx wrangler d1 execute quant-ingest --remote \
   --file=migrations/0001_remote_daily_quota.sql
-
 npx wrangler d1 execute quant-ingest --remote \
   --file=migrations/0002_ops_projection.sql
 ```
 
-After local Coverage V2 evaluation and READY verification, refresh the bounded
-read projection out-of-band (this is not an MCP tool):
+## Endpoints
 
-```bash
-.venv/bin/python scripts/export_ops_projection.py \
-  --db data/structured/ingestion.sqlite \
-  --snapshot-dir data/research_snapshots \
-  --output /tmp/quant-ops-projection.sql
+| Path | Auth | Purpose |
+|------|------|---------|
+| `/mcp` | OAuth Bearer | Streamable HTTP MCP |
+| `/sse` | OAuth Bearer | Legacy SSE transport |
+| `/authorize`, `/token`, `/register`, `/callback` | OAuth | Authorization server |
+| `/healthz` | none | Liveness |
+| `/.well-known/oauth-protected-resource` | none | Resource metadata |
 
-npx wrangler d1 execute quant-ingest --remote \
-  --file=/tmp/quant-ops-projection.sql
-```
-
-If the projection is absent, coverage tools return `UNKNOWN` plus every
-governed JQ/JSDA dataset as a gap; they never turn a missing table into an
-empty-success result.
-
-Install, verify, and deploy from this directory:
-
-```bash
-npm install
-npm test
-npm run typecheck
-npx wrangler deploy
-```
-
-Production endpoint:
+Production URL:
 
 ```text
-https://quant-platform-ops-read-mcp.<account-subdomain>.workers.dev/mcp
+https://quant-platform-ops-read-mcp.taku-haga.workers.dev/mcp
 ```
 
-An unauthenticated MCP request must return `401`:
+## Connect from ChatGPT (phone) / Claude
+
+Same as news-mcp:
+
+1. Open Connectors / remote MCP settings
+2. Add URL: `https://quant-platform-ops-read-mcp.taku-haga.workers.dev/mcp`
+3. Complete **GitHub** login as `ddnne`
+4. Call e.g. `ops_status`, `coverage_gaps`
+
+Unauthenticated:
 
 ```bash
-curl -i https://quant-platform-ops-read-mcp.<account-subdomain>.workers.dev/mcp \
+curl -i https://quant-platform-ops-read-mcp.taku-haga.workers.dev/mcp \
   -H 'content-type: application/json' \
   -H 'accept: application/json, text/event-stream' \
-  --data '{"jsonrpc":"2.0","id":1,"method":"initialize"}'
+  --data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"t","version":"0"}}}'
+# expect 401 + WWW-Authenticate
 ```
 
-For authenticated smoke, obtain a token through the configured OAuth/Access
-flow (MCP Inspector is convenient) and call `initialize`, `tools/list`, then
-`ops_status`. Never paste or commit the token. The repository tests exercise
-the same unauthorized and authenticated paths with ephemeral keys.
-
-## ChatGPT connection
-
-In ChatGPT's remote MCP/connectors settings, add the production `/mcp` URL.
-The client reads protected-resource metadata, opens the configured OAuth flow,
-and requests `quant.read.ops`. Availability of custom remote MCP connections
-depends on the user's ChatGPT workspace/plan; server-side acceptance can still
-be completed with MCP Inspector and the automated tests here.
-
-The local command below is for offline development only and is not the browser
-or mobile connection path:
+## Local stdio (dev only)
 
 ```bash
 .venv/bin/python -m mcp_servers.quant_data \
-  --snapshot-dir data/research_snapshots \
-  --ops-db data/structured/ingestion.sqlite
+  --snapshot-dir data/research_snapshots
 ```
+
+Not for phone/browser.

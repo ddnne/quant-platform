@@ -314,7 +314,8 @@ grok mcp doctor quant_data
 
 | パス | 内容 |
 |------|------|
-| `platform/workers/quant-ops-mcp/` | human-facing remote Ops Read MCP |
+| `platform/workers/quant-ops-mcp/` | human-facing remote Ops Read MCP (**GitHub OAuth**, news-mcp 同型) |
+| Production URL | `https://quant-platform-ops-read-mcp.taku-haga.workers.dev/mcp` |
 | `mcp_servers/quant_data/` | local/dev stdio facade |
 | `data_access/` | shared Ops/Research read-domain + PIT Gatekeeper |
 | `scripts/ops_status.py` | チャット無しの同じ確認口 |
