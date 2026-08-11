@@ -53,6 +53,30 @@ stressing the 500 req/min cap. Override in `wrangler.toml`.
 7. **Local-readable path** — `scripts/sync_d1_to_sqlite.py` follows export
    cursors to build a local PIT DB readable by `pit.get_*`.
 
+## Available_at policy (P0-1)
+
+Each structured row's `available_at` is derived from a dataset-level policy
+in `src/availability.ts` (Python mirror: `cf_platform/ingest_premium/availability.py`):
+
+* **`session_close`** for OHLC bar datasets — JST close instant of the row's
+  `Date` (15:30 from 2024-11-05; 15:00 before).
+* **`event_field`** (default) — first present candidate from
+  `DateTime / DisclosedDate / AnnouncementDate / DiscDate / Date`. Bare
+  dates become next-business-open at 09:00 JST.
+* **`ingest_time`** — fetch-time fallback only.
+
+Unit tests: `tests/test_phase35_availability.py`.
+
+## Parallel ingestion + retry (P0-4)
+
+Datasets run concurrently with a shared 125 ms global rate floor and
+per-HTTP-request 3-retry budget on 429/5xx (exponential backoff + jitter).
+Per-dataset failures are isolated — one fail does not abort siblings.
+
+* Concurrency: `INGEST_CONCURRENCY` env var (default 4, cap 8).
+* Rate limiter: `src/rate_limit.ts` chains `acquire()` calls so all
+  concurrent fetches share the same minimum-interval reservation.
+
 ## Premium core dataset set
 
 Mirrors `PREMIUM_CORE_DATASETS` in `ingestion/jquants/catalog.py` and is
