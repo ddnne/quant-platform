@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timezone
 import json
 import sqlite3
 
 import pytest
 import pit
+import paper_runtime.snapshot as snapshot_module
 
 from data_contracts import all_contracts, all_coverage_contracts
 from paper_runtime import (
@@ -18,8 +20,22 @@ from paper_runtime import (
     open_ready_snapshot,
     publish_ready_snapshot,
 )
-from storage.coverage_ledger import refresh_coverage_ledger
+from storage.coverage_ledger import (
+    CollectionReceipt,
+    plan_required_segments,
+    record_collection_receipt,
+    record_required_segments,
+    refresh_coverage_ledger,
+)
 from storage.sqlite_store import SqliteStore
+
+
+def _jquants_coverage_contracts():
+    canonical = {contract.dataset_id for contract in all_contracts()}
+    return tuple(
+        policy for policy in all_coverage_contracts()
+        if policy.dataset_id in canonical
+    )
 
 
 def _generic_row(dataset: str, key: str, date: str, **payload):
@@ -82,7 +98,7 @@ def _seed_publishable_db(path) -> tuple[str, ...]:
     store = SqliteStore(path)
     conn = store._conn  # noqa: SLF001
     today = datetime.now(timezone.utc).date().isoformat()
-    policies = all_coverage_contracts()
+    policies = _jquants_coverage_contracts()
     required = tuple(policy.dataset_id for policy in policies)
     rows = []
     for policy in policies:
@@ -126,6 +142,35 @@ def _seed_publishable_db(path) -> tuple[str, ...]:
             for dataset in required
         ],
     )
+    for policy in policies:
+        observed = 0 if policy.expected_frequency == "event_driven" else 1
+        planned = tuple(
+            segment
+            if policy.expected_frequency == "event_driven"
+            else replace(segment, expected_items=observed)
+            for segment in plan_required_segments(policy, today)
+        )
+        record_required_segments(conn, planned)
+        for segment in planned:
+            record_collection_receipt(conn, CollectionReceipt(
+                source=segment.source,
+                dataset=segment.dataset,
+                segment_id=segment.segment_id,
+                segment_start=segment.segment_start,
+                segment_end=segment.segment_end,
+                expected_scope=segment.expected_scope,
+                expected_items=segment.expected_items,
+                observed_items=observed,
+                raw_page_count=1,
+                raw_row_count=observed,
+                structured_row_count=observed,
+                pagination_exhausted=True,
+                digests={"raw": "sha256:" + "1" * 64},
+                run_id=run_id,
+                status="SUCCESS",
+                error=None,
+                checked_at=today + "T16:00:00Z",
+            ))
     conn.commit()
     store.close()
     return required
@@ -133,10 +178,46 @@ def _seed_publishable_db(path) -> tuple[str, ...]:
 
 def test_collection_contract_covers_canonical_set_without_event_row_guesses():
     policies = {row.dataset_id: row for row in all_coverage_contracts()}
-    assert set(policies) == {row.dataset_id for row in all_contracts()}
+    assert {row.dataset_id for row in all_contracts()} <= set(policies)
     assert all(row.governance_tier in {"governed", "experimental"} for row in policies.values())
     assert policies["fins_summary"].coverage_mode == "event_reconciled"
     assert policies["fins_summary"].expected_frequency == "event_driven"
+
+
+def test_ready_source_run_stays_jquants_and_jsda_watermark_comes_from_receipts(
+    tmp_path,
+):
+    path = tmp_path / "mixed-sources.sqlite"
+    store = SqliteStore(path)
+    today = datetime.now(timezone.utc).date().isoformat()
+    run_id = _seed_control(store._conn, ("equities_bars_daily",), today)  # noqa: SLF001
+    store._conn.execute(  # noqa: SLF001
+        "INSERT INTO ingestion_run_log (ran_at,source,runtime,status,detail) "
+        "VALUES (?,'jsda','local','pass','{}')",
+        (today,),
+    )
+    selected, _, validations = snapshot_module._latest_complete_run(  # noqa: SLF001
+        store._conn, ("equities_bars_daily",)  # noqa: SLF001
+    )
+    assert selected == run_id and len(validations) == 1
+
+    watermarks = snapshot_module._watermarks_for(  # noqa: SLF001
+        store._conn,  # noqa: SLF001
+        ("equities_bars_daily", "jsda_tokyo_repo_rates"),
+        [{
+            "dataset": "jsda_tokyo_repo_rates",
+            "status": "COMPLETE",
+            "observed_end": "2025-04-02",
+            "evaluated_at": "2026-08-11T00:00:00Z",
+        }],
+    )
+    assert watermarks[-1] == {
+        "dataset": "jsda_tokyo_repo_rates",
+        "last_event_date": "2025-04-02",
+        "last_ingested_at": "2026-08-11T00:00:00Z",
+        "derived_from": "coverage_v2_receipts",
+    }
+    store.close()
 
 
 def test_irregular_empty_pass_is_partial_not_fake_complete_or_failed(tmp_path):
@@ -201,7 +282,53 @@ def test_publish_gate_rejects_partial_coverage_and_exposes_no_ready(tmp_path):
         latest_ready_snapshot(snapshots)
 
 
-def test_ready_publication_is_atomic_content_addressed_and_read_only(tmp_path):
+def test_ready_rejects_missing_middle_segment_and_writes_no_artifact(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(
+        snapshot_module, "all_coverage_contracts", _jquants_coverage_contracts
+    )
+    path = tmp_path / "middle-gap.sqlite"
+    required = _seed_publishable_db(path)
+    conn = sqlite3.connect(path)
+    victim = conn.execute(
+        "SELECT segment_id FROM collection_receipts "
+        "WHERE dataset='fins_summary' ORDER BY segment_start LIMIT 1 OFFSET 1"
+    ).fetchone()
+    assert victim is not None
+    conn.execute(
+        "DELETE FROM collection_receipts "
+        "WHERE source='jquants' AND dataset='fins_summary' AND segment_id=?",
+        (victim[0],),
+    )
+    conn.commit()
+    conn.close()
+
+    snapshot_dir = tmp_path / "snapshots"
+    with pytest.raises(SnapshotRejected, match="coverage not COMPLETE|Coverage V2"):
+        publish_ready_snapshot(
+            path, snapshot_dir, required_datasets=required
+        )
+
+    assert not list(snapshot_dir.glob("sha256_*"))
+    with pytest.raises(FileNotFoundError, match="no READY"):
+        latest_ready_snapshot(snapshot_dir)
+    conn = sqlite3.connect(path)
+    assert conn.execute(
+        "SELECT snapshot_ready FROM local_snapshot_policy WHERE singleton=1"
+    ).fetchone()[0] == 0
+    assert conn.execute(
+        "SELECT state FROM snapshot_publications ORDER BY created_at DESC LIMIT 1"
+    ).fetchone()[0] == "REJECTED"
+    conn.close()
+
+
+def test_ready_publication_is_atomic_content_addressed_and_read_only(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(
+        snapshot_module, "all_coverage_contracts", _jquants_coverage_contracts
+    )
     path = tmp_path / "staging.sqlite"
     required = _seed_publishable_db(path)
     snapshot_dir = tmp_path / "snapshots"
@@ -213,6 +340,15 @@ def test_ready_publication_is_atomic_content_addressed_and_read_only(tmp_path):
     assert ready.manifest["state"] == "READY"
     assert ready.manifest["quality"]["status"] == "PASS"
     assert {row["status"] for row in ready.manifest["coverage"]} == {"COMPLETE"}
+    proof = ready.manifest["coverage_v2_proof"]
+    assert proof["format"] == "coverage-v2-proof/v1"
+    assert proof["status"] == "COMPLETE"
+    assert proof["policy_version"] == "collection-coverage/v2"
+    assert proof["dataset_count"] == len(required)
+    assert proof["segment_count"] == proof["receipt_count"] > len(required)
+    assert proof["proof_digest"].startswith("sha256:")
+    assert len(proof["proof_digest"]) == 71
+    assert len(proof["datasets"]) == len(required)
     assert set(ready.manifest["raw_manifests"]) == set(required)
     assert latest_ready_snapshot(snapshot_dir).snapshot_id == ready.snapshot_id
     assert data_snapshot_id(ready.db_path) == ready.snapshot_id
@@ -236,6 +372,9 @@ def test_ready_publication_is_atomic_content_addressed_and_read_only(tmp_path):
         assert conn.execute(
             "SELECT COUNT(*) FROM dataset_coverage WHERE status='COMPLETE'"
         ).fetchone()[0] == len(required)
+        assert conn.execute(
+            "SELECT COUNT(*) FROM coverage_segments WHERE status='COMPLETE'"
+        ).fetchone()[0] == proof["segment_count"]
         with pytest.raises(sqlite3.OperationalError, match="readonly"):
             conn.execute("DELETE FROM jquants_records")
 

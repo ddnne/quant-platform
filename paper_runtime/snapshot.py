@@ -22,18 +22,23 @@ from data_contracts.coverage import (
     POLICY_VERSION as COVERAGE_POLICY_VERSION,
     all_coverage_contracts,
 )
+from data_contracts.jsda import JSDA_CONTRACT_VERSION
 from data_contracts.loader import SCHEMA_VERSION as DATASET_CONTRACT_VERSION
+from data_contracts.loader import all_contracts
 from storage.coverage_ledger import refresh_coverage_ledger
 
 
 DATA_SNAPSHOT_FORMAT = "paper-data-snapshot/v1"
 LOCAL_SNAPSHOT_MANIFEST_FORMAT = "local-snapshot-manifest/v1"
 RESEARCH_SNAPSHOT_MANIFEST_FORMAT = "research-snapshot-manifest/v2"
-QUALITY_POLICY_VERSION = "b0+phase35-daily+coverage/v1"
+QUALITY_POLICY_VERSION = "b0+phase35-daily+coverage/v2"
 SNAPSHOT_STATES = frozenset(
     {"BUILDING", "SYNCED", "VALIDATING", "READY", "REJECTED"}
 )
 _SNAPSHOT_ID_RE = re.compile(r"sha256:[0-9a-f]{64}\Z")
+_JQUANTS_DATASETS = frozenset(
+    contract.dataset_id for contract in all_contracts()
+)
 
 _WATERMARK_COLUMNS = (
     "dataset",
@@ -336,7 +341,7 @@ def _latest_complete_run(
 ) -> tuple[int, dict[str, Any], list[dict[str, Any]]]:
     run = conn.execute(
         "SELECT id, status, detail FROM ingestion_run_log "
-        "ORDER BY id DESC LIMIT 1"
+        "WHERE source='jquants' ORDER BY id DESC LIMIT 1"
     ).fetchone()
     if run is None:
         raise RuntimeError("no ingestion run is available for snapshot commit")
@@ -522,7 +527,9 @@ def _transition_policy(
 
 
 def _watermarks_for(
-    conn: sqlite3.Connection, required: tuple[str, ...]
+    conn: sqlite3.Connection,
+    required: tuple[str, ...],
+    coverage_rows: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     placeholders = ",".join("?" for _ in required)
     rows = conn.execute(
@@ -532,7 +539,30 @@ def _watermarks_for(
         required,
     ).fetchall()
     watermarks = [dict(row) for row in rows]
-    missing = sorted(set(required) - {str(row["dataset"]) for row in watermarks})
+    present = {str(row["dataset"]) for row in watermarks}
+    coverage = {
+        str(row["dataset"]): row for row in (coverage_rows or [])
+    }
+    # JSDA is locally collected and therefore has no D1 export watermark.
+    # Its independently evaluated Coverage V2 aggregate is derived from the
+    # required-segment/receipt ledger and supplies an honest bounded watermark.
+    for dataset in sorted(set(required) - present):
+        row = coverage.get(dataset)
+        if (
+            row is not None
+            and row.get("status") == "COMPLETE"
+            and row.get("observed_end")
+            and row.get("evaluated_at")
+        ):
+            watermarks.append({
+                "dataset": dataset,
+                "last_event_date": row["observed_end"],
+                "last_ingested_at": row["evaluated_at"],
+                "derived_from": "coverage_v2_receipts",
+            })
+            present.add(dataset)
+    watermarks.sort(key=lambda row: str(row["dataset"]))
+    missing = sorted(set(required) - present)
     if missing:
         raise SnapshotRejected(f"required dataset watermarks missing: {missing}")
     return watermarks
@@ -569,6 +599,204 @@ def _raw_manifests_for(
     return manifests
 
 
+def _coverage_v2_proof(
+    conn: sqlite3.Connection,
+    required: tuple[str, ...],
+    coverage_rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Verify governed segment receipts and return a bounded manifest proof."""
+    if COVERAGE_POLICY_VERSION != "collection-coverage/v2":
+        raise SnapshotRejected(
+            "READY publication requires collection-coverage/v2"
+        )
+    policies = {policy.dataset_id: policy for policy in all_coverage_contracts()}
+    governed = tuple(
+        dataset for dataset in required
+        if policies[dataset].governance_tier == "governed"
+    )
+    by_dataset = {str(row["dataset"]): row for row in coverage_rows}
+    invalid_ledger = sorted(
+        dataset for dataset in governed
+        if dataset not in by_dataset
+        or by_dataset[dataset].get("policy_version") != COVERAGE_POLICY_VERSION
+        or by_dataset[dataset].get("status") != "COMPLETE"
+    )
+    if invalid_ledger:
+        raise SnapshotRejected(
+            f"Coverage V2 aggregate proof incomplete={invalid_ledger}"
+        )
+
+    placeholders = ",".join("?" for _ in governed)
+    rows = conn.execute(
+        """
+        SELECT
+            s.source, s.dataset, s.segment_id, s.policy_version,
+            s.segment_start, s.segment_end, s.expected_scope,
+            s.expected_items, s.status AS segment_status,
+            s.receipt_run_id,
+            r.segment_start AS receipt_start,
+            r.segment_end AS receipt_end,
+            r.expected_scope AS receipt_scope,
+            r.expected_items AS receipt_expected_items,
+            r.observed_items, r.raw_page_count, r.raw_row_count,
+            r.structured_row_count, r.pagination_exhausted,
+            r.digests_json, r.status AS receipt_status, r.error,
+            r.checked_at
+        FROM coverage_segments AS s
+        LEFT JOIN collection_receipts AS r
+          ON r.source = s.source
+         AND r.dataset = s.dataset
+         AND r.segment_id = s.segment_id
+         AND r.run_id = s.receipt_run_id
+        WHERE s.policy_version = ?
+        """
+        + f" AND s.dataset IN ({placeholders})"
+        + " ORDER BY s.dataset, s.segment_start, s.segment_id",
+        (COVERAGE_POLICY_VERSION, *governed),
+    ).fetchall()
+    segments_by_dataset: dict[str, list[sqlite3.Row]] = {
+        dataset: [] for dataset in governed
+    }
+    proof_entries: list[dict[str, Any]] = []
+    invalid_segments: list[tuple[str, str, str]] = []
+    for row in rows:
+        dataset = str(row["dataset"])
+        segments_by_dataset[dataset].append(row)
+        reason: str | None = None
+        try:
+            expected_scope = json.loads(str(row["expected_scope"]))
+            receipt_scope = json.loads(str(row["receipt_scope"]))
+            digests = json.loads(str(row["digests_json"]))
+        except (TypeError, json.JSONDecodeError):
+            expected_scope, receipt_scope, digests = None, None, None
+            reason = "malformed receipt evidence"
+        policy = policies[dataset]
+        if row["segment_status"] != "COMPLETE":
+            reason = "segment not COMPLETE"
+        elif row["receipt_run_id"] is None or row["receipt_status"] != "SUCCESS":
+            reason = "successful receipt missing"
+        elif row["error"] not in (None, ""):
+            reason = "receipt has error"
+        elif (
+            row["receipt_start"] != row["segment_start"]
+            or row["receipt_end"] != row["segment_end"]
+            or receipt_scope != expected_scope
+            or row["receipt_expected_items"] != row["expected_items"]
+        ):
+            reason = "receipt scope mismatch"
+        elif int(row["pagination_exhausted"] or 0) != 1:
+            reason = "pagination not exhausted"
+        elif (
+            policy.expected_frequency != "event_driven"
+            and row["expected_items"] is None
+        ):
+            reason = "non-event expected items missing"
+        elif (
+            row["expected_items"] is not None
+            and int(row["observed_items"] or 0) != int(row["expected_items"])
+        ):
+            reason = "expected scope incomplete"
+        elif int(row["raw_page_count"] or 0) < 1 or not isinstance(
+            digests, dict
+        ) or not isinstance(digests.get("raw"), str) or not digests.get("raw"):
+            reason = "raw retention proof missing"
+        elif (
+            policy.structured_reconciliation_required
+            and int(row["raw_row_count"] or 0)
+            != int(row["structured_row_count"] or 0)
+        ):
+            reason = "raw/structured mismatch"
+        elif (
+            policy.expected_frequency != "event_driven"
+            and int(row["observed_items"] or 0) == 0
+        ):
+            reason = "non-event receipt is empty"
+        if reason is not None:
+            invalid_segments.append((dataset, str(row["segment_id"]), reason))
+            continue
+        proof_entries.append({
+            "source": row["source"],
+            "dataset": dataset,
+            "segment_id": row["segment_id"],
+            "segment_start": row["segment_start"],
+            "segment_end": row["segment_end"],
+            "expected_scope": expected_scope,
+            "expected_items": row["expected_items"],
+            "receipt_run_id": row["receipt_run_id"],
+            "observed_items": row["observed_items"],
+            "raw_page_count": row["raw_page_count"],
+            "raw_row_count": row["raw_row_count"],
+            "structured_row_count": row["structured_row_count"],
+            "pagination_exhausted": row["pagination_exhausted"],
+            "digests": digests,
+            "checked_at": row["checked_at"],
+        })
+
+    missing_inventory = sorted(
+        dataset for dataset, segments in segments_by_dataset.items()
+        if not segments
+    )
+    if missing_inventory or invalid_segments:
+        raise SnapshotRejected(
+            "Coverage V2 segment proof rejected: "
+            f"missing_inventory={missing_inventory}, "
+            f"invalid={invalid_segments[:20]}"
+        )
+    dataset_summary = [
+        {
+            "dataset": dataset,
+            "required_segments": len(segments),
+            "complete_segments": len(segments),
+            "first_segment": str(segments[0]["segment_id"]),
+            "last_segment": str(segments[-1]["segment_id"]),
+        }
+        for dataset, segments in segments_by_dataset.items()
+    ]
+    return {
+        "format": "coverage-v2-proof/v1",
+        "status": "COMPLETE",
+        "policy_version": COVERAGE_POLICY_VERSION,
+        "dataset_count": len(governed),
+        "segment_count": len(proof_entries),
+        "receipt_count": len(proof_entries),
+        "proof_digest": _canonical_digest(proof_entries),
+        "datasets": dataset_summary,
+    }
+
+
+def _verify_coverage_v2_manifest(
+    conn: sqlite3.Connection, manifest: dict[str, Any]
+) -> None:
+    """Recompute the embedded proof before accepting a research READY DB."""
+    if manifest.get("coverage_policy_version") != COVERAGE_POLICY_VERSION:
+        raise RuntimeError("READY snapshot does not use Coverage V2")
+    required_raw = manifest.get("required_datasets")
+    if not isinstance(required_raw, list) or not all(
+        isinstance(item, str) for item in required_raw
+    ):
+        raise RuntimeError("READY snapshot required datasets are malformed")
+    required = tuple(sorted(set(required_raw)))
+    policies = {policy.dataset_id: policy for policy in all_coverage_contracts()}
+    governed = {
+        dataset for dataset, policy in policies.items()
+        if policy.governance_tier == "governed"
+    }
+    if not governed <= set(required) or not set(required) <= set(policies):
+        raise RuntimeError("READY snapshot omits governed Coverage V2 datasets")
+    rows = [
+        dict(row) for row in conn.execute(
+            "SELECT * FROM dataset_coverage ORDER BY dataset"
+        )
+        if str(row["dataset"]) in required
+    ]
+    try:
+        computed = _coverage_v2_proof(conn, required, rows)
+    except (SnapshotRejected, sqlite3.Error) as exc:
+        raise RuntimeError(f"READY Coverage V2 proof is invalid: {exc}") from exc
+    if manifest.get("coverage_v2_proof") != computed:
+        raise RuntimeError("READY Coverage V2 manifest proof mismatch")
+
+
 def _evaluate_publication_gate(
     conn: sqlite3.Connection,
     staging_path: Path,
@@ -578,10 +806,23 @@ def _evaluate_publication_gate(
 ) -> tuple[
     int, dict[str, Any], list[dict[str, Any]], list[dict[str, Any]],
     dict[str, int], list[dict[str, Any]], dict[str, dict[str, Any]],
+    dict[str, Any],
 ]:
     """Reuse strict B0, Phase 3.5 daily checks, and the coverage ledger."""
-    run_id, run_detail, validations = _latest_complete_run(conn, required)
-    raw_manifests = _raw_manifests_for(conn, run_id, required)
+    jquants_required = tuple(
+        dataset for dataset in required if dataset in _JQUANTS_DATASETS
+    )
+    if not jquants_required:
+        raise SnapshotRejected(
+            "READY publication requires the governed J-Quants foundation"
+        )
+    # Phase 6 run validation and R2 raw manifests belong to the Cloudflare
+    # J-Quants batch. Governed JSDA raw/structured completeness is proven by
+    # Coverage V2 receipts below, including its source URL and raw digest.
+    run_id, run_detail, validations = _latest_complete_run(
+        conn, jquants_required
+    )
+    raw_manifests = _raw_manifests_for(conn, run_id, jquants_required)
     today = datetime.now(timezone.utc).date().isoformat()
     coverage_rows = refresh_coverage_ledger(
         conn, staging_path, datasets=required, today=today
@@ -589,7 +830,7 @@ def _evaluate_publication_gate(
     quality_results = run_coverage(
         staging_path,
         tier="daily",
-        datasets=required,
+        datasets=jquants_required,
         today=today,
         workers=1,
         strict_live_gates=True,
@@ -610,8 +851,14 @@ def _evaluate_publication_gate(
         if row["governance_tier"] == "governed"
         and row["status"] != "COMPLETE"
     ]
+    coverage_proof: dict[str, Any] | None = None
+    proof_failure: str | None = None
+    try:
+        coverage_proof = _coverage_v2_proof(conn, required, coverage_rows)
+    except SnapshotRejected as exc:
+        proof_failure = str(exc)
     evaluated_at = datetime.now(timezone.utc).isoformat()
-    passed = not failures and not incomplete
+    passed = not failures and not incomplete and proof_failure is None
     conn.execute(
         """
         INSERT INTO snapshot_quality_results
@@ -648,11 +895,16 @@ def _evaluate_publication_gate(
                 "coverage not COMPLETE="
                 + repr([(item["dataset"], item["status"]) for item in incomplete])
             )
+        if proof_failure is not None:
+            parts.append(proof_failure)
         raise SnapshotRejected("; ".join(parts))
+    if coverage_proof is None:  # pragma: no cover - guarded by passed
+        raise SnapshotRejected("Coverage V2 proof was not produced")
     return (
         run_id, run_detail, validations, coverage_rows, quality_summary,
         failures,
         raw_manifests,
+        coverage_proof,
     )
 
 
@@ -770,10 +1022,11 @@ def publish_ready_snapshot(
             (
                 run_id, run_detail, validations, coverage_rows,
                 quality_summary, quality_failures, raw_manifests,
+                coverage_proof,
             ) = _evaluate_publication_gate(
                 conn, staging_path, build_id=build_id, required=required
             )
-            watermarks = _watermarks_for(conn, required)
+            watermarks = _watermarks_for(conn, required, coverage_rows)
         except Exception as exc:
             reason = str(exc)[:4000]
             conn.execute(
@@ -797,6 +1050,10 @@ def publish_ready_snapshot(
             "format": RESEARCH_SNAPSHOT_MANIFEST_FORMAT,
             "state": "READY",
             "contract_version": contract,
+            "source_contract_versions": {
+                "jquants": contract,
+                "jsda": JSDA_CONTRACT_VERSION,
+            },
             "source_run": {
                 "id": run_id,
                 "started_at": run_detail.get("startedAt"),
@@ -820,6 +1077,7 @@ def publish_ready_snapshot(
                 }
                 for row in coverage_rows
             ],
+            "coverage_v2_proof": coverage_proof,
             "quality": {
                 "status": "PASS",
                 "summary": quality_summary,
@@ -1105,6 +1363,7 @@ def _manifest_snapshot_state(
         expected_id = _research_manifest_id(manifest)
         if manifest.get("manifest_digest") != _research_manifest_digest(manifest):
             raise RuntimeError("latest local snapshot full-manifest checksum mismatch")
+        _verify_coverage_v2_manifest(conn, manifest)
     else:
         expected_id = _canonical_digest(manifest)
     if expected_id != row["snapshot_id"]:
