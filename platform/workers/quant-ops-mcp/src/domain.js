@@ -543,6 +543,8 @@ export async function callOpsTool(db, name, rawArguments) {
     return {
       plane: "ops_current",
       mutable: true,
+      // latest_change_seq kept as stable alias; latest_source_change_seq is the explicit name.
+      latest_change_seq: latest,
       latest_source_change_seq: latest,
       watermarks: marks,
       datasets,
