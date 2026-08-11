@@ -15,6 +15,13 @@ from .coverage import (
     all_coverage_contracts,
     coverage_contract_for,
 )
+from .jsda import (
+    JSDA_CONTRACT_PATH,
+    JSDA_CONTRACT_VERSION,
+    JsdaDatasetContract,
+    all_jsda_contracts,
+    jsda_contract_for,
+)
 
 __all__ = [
     "AVAILABLE_AT_POLICIES",
@@ -28,4 +35,9 @@ __all__ = [
     "CollectionCoverageContract",
     "all_coverage_contracts",
     "coverage_contract_for",
+    "JSDA_CONTRACT_PATH",
+    "JSDA_CONTRACT_VERSION",
+    "JsdaDatasetContract",
+    "all_jsda_contracts",
+    "jsda_contract_for",
 ]

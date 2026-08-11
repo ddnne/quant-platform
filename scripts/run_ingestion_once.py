@@ -96,9 +96,32 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--jsda-only", dest="jsda_only", default=None,
-        choices=["bond", "repo"],
+        choices=["bond", "repo", "otc-reference"],
         help="run only one JSDA sub-source (bond trades or repo rates); "
-             "default runs both in one pass",
+             "otc-reference selects the governed 2002+ archive; default keeps "
+             "the legacy bond + repo pass for compatibility",
+    )
+    p.add_argument(
+        "--jsda-dataset", dest="jsda_dataset", default=None,
+        choices=["otc-reference", "otc-corrections", "tokyo-repo"],
+        help="explicit governed JSDA dataset selection",
+    )
+    p.add_argument(
+        "--jsda-correction-id", dest="jsda_correction_ids",
+        action="append", default=None,
+        help="apply only this discovered OTC correction id (repeatable)",
+    )
+    p.add_argument(
+        "--jsda-from-year", dest="jsda_from_year", type=int, default=2002,
+        help="first governed OTC-reference archive year (default 2002)",
+    )
+    p.add_argument(
+        "--jsda-to-year", dest="jsda_to_year", type=int, default=None,
+        help="last governed OTC-reference archive year (default current year)",
+    )
+    p.add_argument(
+        "--jsda-force", dest="jsda_force", action="store_true",
+        help="re-fetch OTC segments even when an exact COMPLETE receipt exists",
     )
     p.add_argument(
         "--workers",
@@ -211,17 +234,69 @@ def main(argv=None) -> int:
                 print(r.summary())
 
         if args.source in ("jsda", "all"):
-            jsda_bond = args.jsda_only != "repo"
-            jsda_repo = args.jsda_only != "bond"
-            reps = run_jsda(
-                http=http, store=store, data_base=data_base, today=today,
-                runtime=runtime, target_url=args.jsda_url,
-                repo_target_url=args.jsda_repo_url,
-                bond=jsda_bond, repo=jsda_repo,
+            otc_selected = (
+                args.jsda_dataset == "otc-reference"
+                or args.jsda_only == "otc-reference"
             )
-            all_reports.extend(reps)
-            for r in reps:
-                print(r.summary())
+            tokyo_repo_selected = args.jsda_dataset == "tokyo-repo"
+            corrections_selected = args.jsda_dataset == "otc-corrections"
+            legacy_selected = (
+                args.jsda_dataset is None
+                and not otc_selected
+                and not tokyo_repo_selected
+                and not corrections_selected
+            )
+            if legacy_selected:
+                jsda_bond = args.jsda_only != "repo"
+                jsda_repo = args.jsda_only != "bond"
+                reps = run_jsda(
+                    http=http, store=store, data_base=data_base, today=today,
+                    runtime=runtime, target_url=args.jsda_url,
+                    repo_target_url=args.jsda_repo_url,
+                    bond=jsda_bond, repo=jsda_repo,
+                )
+                all_reports.extend(reps)
+                for r in reps:
+                    print(r.summary())
+            if otc_selected:
+                from ingestion.jsda.archive import run_otc_reference_backfill
+
+                archive_report = run_otc_reference_backfill(
+                    http=http,
+                    store=store,
+                    data_base=data_base,
+                    from_year=args.jsda_from_year,
+                    to_year=args.jsda_to_year,
+                    force=args.jsda_force,
+                )
+                archive_run_report = archive_report.as_run_report()
+                all_reports.append(archive_run_report)
+                print(archive_run_report.summary())
+            if tokyo_repo_selected:
+                from ingestion.jsda.repo_archive import run_tokyo_repo_backfill
+
+                repo_report = run_tokyo_repo_backfill(
+                    http=http,
+                    store=store,
+                    data_base=data_base,
+                    force=args.jsda_force,
+                )
+                repo_run_report = repo_report.as_run_report()
+                all_reports.append(repo_run_report)
+                print(repo_run_report.summary())
+            if corrections_selected:
+                from ingestion.jsda.corrections import run_otc_reference_corrections
+
+                correction_report = run_otc_reference_corrections(
+                    http=http,
+                    store=store,
+                    data_base=data_base,
+                    correction_ids=args.jsda_correction_ids,
+                    force=args.jsda_force,
+                )
+                correction_run_report = correction_report.as_run_report()
+                all_reports.append(correction_run_report)
+                print(correction_run_report.summary())
     finally:
         store.close()
         for client in (http, jq_http):

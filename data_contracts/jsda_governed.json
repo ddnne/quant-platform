@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "contract_version": "jsda-governed/v1",
+  "source": "jsda",
+  "datasets": [
+    {
+      "dataset_id": "jsda_otc_bond_reference_prices",
+      "source_product": "公社債店頭売買参考統計値",
+      "index_url": "https://market.jsda.or.jp/shijyo/saiken/baibai/baisanchi/index.html",
+      "history_target_start": "2002-08-02",
+      "history_target_end_rule": "latest_official_archive_index_day",
+      "coverage_mode": "official_archive_index_reconciled",
+      "expected_frequency": "trading_day",
+      "segment_grain": "publication_day",
+      "natural_key_fields": [
+        "source",
+        "publication_label_date",
+        "security_code",
+        "bond_name"
+      ],
+      "effective_time_policy": "source_quote_session_close_1500_jst",
+      "publication_label_policy": "official_archive_row_date",
+      "available_at_policy": "ingest_time_conservative_when_publication_timestamp_unknown",
+      "correction_policy": "new_revision_available_no_earlier_than_correction_publication_or_ingestion",
+      "canonical_formats": ["csv", "xlsx"],
+      "governance_tier": "governed"
+    },
+    {
+      "dataset_id": "jsda_tokyo_repo_rates",
+      "source_product": "東京レポ・レート",
+      "index_url": "https://www.jsda.or.jp/shiryoshitsu/toukei/trr/index.html",
+      "history_target_start": "2012-10-29",
+      "history_target_end_rule": "latest_jsda_publication",
+      "coverage_mode": "authoritative_time_series_reconciled",
+      "expected_frequency": "trading_day",
+      "segment_grain": "source_time_series_file",
+      "natural_key_fields": ["source", "as_of_date", "tenor", "rate_type"],
+      "effective_time_policy": "source_observation_date",
+      "publication_label_policy": "source_publication_label",
+      "available_at_policy": "ingest_time_conservative_when_publication_timestamp_unknown",
+      "correction_policy": "new_revision_available_no_earlier_than_correction_publication_or_ingestion",
+      "canonical_formats": ["xls", "xlsx", "csv"],
+      "governance_tier": "governed"
+    },
+    {
+      "dataset_id": "jsda_corporate_bond_transactions",
+      "source_product": "社債の取引情報",
+      "index_url": "https://www.jsda.or.jp/shiryoshitsu/toukei/saiken_torihiki/",
+      "history_target_start": "2015-11-04",
+      "history_target_end_rule": "latest_official_annual_archive",
+      "coverage_mode": "event_window_reconciled",
+      "expected_frequency": "event_driven",
+      "segment_grain": "publication_year",
+      "natural_key_fields": [
+        "source",
+        "publication_label_date",
+        "trade_date",
+        "security_code",
+        "source_record_id"
+      ],
+      "effective_time_policy": "source_trade_date",
+      "publication_label_policy": "source_publication_date",
+      "available_at_policy": "ingest_time_conservative_when_publication_timestamp_unknown",
+      "correction_policy": "new_revision_available_no_earlier_than_correction_publication_or_ingestion",
+      "canonical_formats": ["csv", "xlsx"],
+      "governance_tier": "governed"
+    }
+  ]
+}

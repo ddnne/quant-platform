@@ -103,6 +103,41 @@ CREATE TABLE IF NOT EXISTS jsda_bond_trades (
     PRIMARY KEY (source, trade_date, isin, issuer_name)
 );
 
+-- Governed 公社債店頭売買参考統計値 archive (2002 -> current). This is
+-- intentionally separate from the legacy ``jsda_bond_trades`` table, whose
+-- historical implementation used the corporate-transaction index while
+-- normalizing reference-price-like columns. No legacy row is rewritten.
+CREATE TABLE IF NOT EXISTS jsda_otc_bond_reference_prices (
+    source                   TEXT NOT NULL,
+    publication_label_date   TEXT NOT NULL,
+    quote_effective_date     TEXT NOT NULL,
+    security_code            TEXT NOT NULL DEFAULT '',
+    bond_name                TEXT NOT NULL DEFAULT '',
+    quote_effective_time     TEXT NOT NULL,
+    event_time               TEXT NOT NULL,
+    available_at             TEXT NOT NULL,
+    ingested_at              TEXT NOT NULL,
+    coupon_rate              REAL,
+    maturity_date            TEXT,
+    average_price            REAL,
+    average_yield            REAL,
+    median_price             REAL,
+    median_yield             REAL,
+    high_price               REAL,
+    high_yield               REAL,
+    low_price                REAL,
+    low_yield                REAL,
+    individual_investor_flag TEXT,
+    source_row_number        INTEGER,
+    source_url               TEXT NOT NULL,
+    raw_digest               TEXT NOT NULL,
+    segment_id               TEXT NOT NULL,
+    source_format            TEXT NOT NULL,
+    correction_published_at  TEXT,
+    raw_payload              TEXT,
+    PRIMARY KEY (source, publication_label_date, security_code, bond_name)
+);
+
 -- 東京レポ・レート (Tokyo Repo Rate, "TRR"). One row per (as-of day, tenor,
 -- rate_type). ``rate`` is the published rate (%). The full source record is
 -- kept in ``raw_payload``. See ``docs/data_sources.md`` (JSDA repo section).
@@ -152,6 +187,13 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_bond_trades_revisions_version
     ON jsda_bond_trades_revisions
        (source, trade_date, isin, issuer_name, available_at);
 
+CREATE TABLE IF NOT EXISTS jsda_otc_bond_reference_prices_revisions AS
+    SELECT * FROM jsda_otc_bond_reference_prices WHERE 0;
+CREATE UNIQUE INDEX IF NOT EXISTS ux_otc_bond_reference_revisions_version
+    ON jsda_otc_bond_reference_prices_revisions
+       (source, publication_label_date, security_code, bond_name,
+        available_at, ingested_at);
+
 CREATE TABLE IF NOT EXISTS jsda_repo_rates_revisions AS
     SELECT * FROM jsda_repo_rates WHERE 0;
 CREATE UNIQUE INDEX IF NOT EXISTS ux_repo_rates_revisions_version
@@ -173,6 +215,9 @@ CREATE INDEX IF NOT EXISTS ix_records_dataset_avail
     ON jquants_records (dataset, available_at);
 CREATE INDEX IF NOT EXISTS ix_jsda_available_at
     ON jsda_bond_trades (trade_date, available_at);
+CREATE INDEX IF NOT EXISTS ix_jsda_otc_reference_available_at
+    ON jsda_otc_bond_reference_prices
+       (quote_effective_date, available_at, security_code);
 CREATE INDEX IF NOT EXISTS ix_jsda_repo_available_at
     ON jsda_repo_rates (as_of_date, available_at);
 """
@@ -184,6 +229,9 @@ NATURAL_KEYS: dict[str, list[str]] = {
     "jquants_market_calendar": ["source", "date"],
     "jquants_records": ["source", "dataset", "natural_key"],
     "jsda_bond_trades": ["source", "trade_date", "isin", "issuer_name"],
+    "jsda_otc_bond_reference_prices": [
+        "source", "publication_label_date", "security_code", "bond_name"
+    ],
     "jsda_repo_rates": ["source", "as_of_date", "tenor", "rate_type"],
 }
 

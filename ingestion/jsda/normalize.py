@@ -47,6 +47,78 @@ def normalize_bond_trades(
     return out
 
 
+def normalize_otc_reference_prices(
+    records: Iterable[dict],
+    *,
+    ingested_at: str,
+    publication_label_date: Optional[str] = None,
+    quote_effective_date: Optional[str] = None,
+    available_at: Optional[str] = None,
+    source_url: str,
+    raw_digest: str,
+    segment_id: str,
+    source_format: str = "csv",
+    correction_publication_label: Optional[str] = None,
+    correction_published_at: Optional[str] = None,
+    correction_source_url: Optional[str] = None,
+    correction_raw_digest: Optional[str] = None,
+) -> List[dict]:
+    """Normalize governed OTC-reference rows with explicit PIT provenance.
+
+    The publication label is not the quote date and neither is evidence of an
+    exact publication timestamp. Callers must calendar-resolve the quote date;
+    when no authoritative publication timestamp is supplied, ``available_at``
+    conservatively remains the actual ``ingested_at``.
+    """
+    availability = available_at or ingested_at
+    out: list[dict] = []
+    for record in records:
+        label = record.get("publication_label_date") or publication_label_date
+        effective = record.get("quote_effective_date") or quote_effective_date
+        if not label:
+            raise ValueError("OTC reference row missing publication_label_date")
+        if not effective:
+            raise ValueError(
+                "OTC reference row missing calendar-resolved quote_effective_date"
+            )
+        label = str(label)[:10]
+        effective = str(effective)[:10]
+        event_time = to_iso(parse_dt(f"{effective}T15:00:00"))
+        out.append({
+            "source": "jsda",
+            "publication_label_date": label,
+            "quote_effective_date": effective,
+            "security_code": str(record.get("security_code") or "").strip(),
+            "bond_name": str(record.get("bond_name") or "").strip(),
+            "quote_effective_time": event_time,
+            "event_time": event_time,
+            "available_at": availability,
+            "ingested_at": ingested_at,
+            "coupon_rate": record.get("coupon_rate"),
+            "maturity_date": record.get("maturity_date"),
+            "average_price": record.get("average_price"),
+            "average_yield": record.get("average_yield"),
+            "median_price": record.get("median_price"),
+            "median_yield": record.get("median_yield"),
+            "high_price": record.get("high_price"),
+            "high_yield": record.get("high_yield"),
+            "low_price": record.get("low_price"),
+            "low_yield": record.get("low_yield"),
+            "individual_investor_flag": record.get("individual_investor_flag"),
+            "source_row_number": record.get("source_row_number"),
+            "source_url": source_url,
+            "raw_digest": raw_digest,
+            "segment_id": segment_id,
+            "source_format": source_format,
+            "correction_publication_label": correction_publication_label,
+            "correction_published_at": correction_published_at,
+            "correction_source_url": correction_source_url,
+            "correction_raw_digest": correction_raw_digest,
+            "raw_payload": json.dumps(record, ensure_ascii=False, sort_keys=True),
+        })
+    return out
+
+
 def normalize_repo_rates(
     records: Iterable[dict],
     *,
