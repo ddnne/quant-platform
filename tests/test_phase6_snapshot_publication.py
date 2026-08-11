@@ -165,12 +165,30 @@ def _seed_publishable_db(path) -> tuple[str, ...]:
                 raw_row_count=observed,
                 structured_row_count=observed,
                 pagination_exhausted=True,
-                digests={"raw": "sha256:" + "1" * 64},
+                digests={"raw": "sha256:" + "1" * 64, "eligibility": "TRUSTED_COLLECTION"},
                 run_id=run_id,
                 status="SUCCESS",
                 error=None,
                 checked_at=today + "T16:00:00Z",
             ))
+    # Generation pin for READY coherence (must be > 0, not mere table presence).
+    try:
+        conn.execute(
+            "INSERT INTO sync_change_state (feed, last_applied_change_seq, updated_at) "
+            "VALUES ('jquants_records', 1, ?) "
+            "ON CONFLICT(feed) DO UPDATE SET last_applied_change_seq=1",
+            (today + "T16:00:00Z",),
+        )
+    except Exception:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS sync_change_state ("
+            "feed TEXT PRIMARY KEY, last_applied_change_seq INTEGER, updated_at TEXT)"
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO sync_change_state "
+            "(feed, last_applied_change_seq, updated_at) VALUES (?, ?, ?)",
+            ("jquants_records", 1, today + "T16:00:00Z"),
+        )
     conn.commit()
     store.close()
     return required

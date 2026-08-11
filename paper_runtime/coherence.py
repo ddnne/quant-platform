@@ -163,7 +163,7 @@ def _check_receipts_with_raw_retention(
     receipts_by_dataset = {}
     for dataset in required_datasets:
         receipt_cursor = conn.execute(
-            "SELECT * FROM collection_receipts WHERE dataset=? ORDER BY checked_at, run_id",
+            "SELECT * FROM collection_receipts WHERE dataset=? ORDER BY checked_at DESC, run_id DESC",
             (dataset,)
         )
         receipts_by_dataset[dataset] = [dict(row) for row in receipt_cursor.fetchall()]
@@ -185,7 +185,7 @@ def _check_receipts_with_raw_retention(
             )
             continue
 
-        receipt = segment_receipts[0]  # Take the latest
+        receipt = segment_receipts[0]  # ORDER BY checked_at DESC → latest first
 
         # Check receipt status
         if receipt["status"] != "SUCCESS":
@@ -400,15 +400,17 @@ def _check_change_sequence_advancing(
     conn: sqlite3.Connection,
 ) -> CoherenceGateResult:
     """Gate 6: Change sequence is advancing (schema-aligned)."""
-    # Prefer local sync_change_state (research copy); then change log variants.
+    # Probe known generation tables; only PASS when some generation > 0.
+    # A present table with max_seq=0 is not advancing — try other sources.
     candidates = [
         (
-            "SELECT COALESCE(MAX(last_applied_change_seq), 0) AS max_seq "
+            "SELECT MAX(last_applied_change_seq) AS max_seq "
             "FROM sync_change_state"
         ),
         "SELECT MAX(change_seq) AS max_seq FROM ingestion_change_log",
         "SELECT MAX(change_seq) AS max_seq FROM change_log",
     ]
+    best: int | None = None
     for sql in candidates:
         try:
             row = conn.execute(sql).fetchone()
@@ -420,19 +422,25 @@ def _check_change_sequence_advancing(
         if max_seq is None:
             continue
         max_seq = int(max_seq)
-        passed = max_seq >= 0  # 0 is valid initial watermark
-        return CoherenceGateResult(
-            gate_name="change_sequence_advancing",
-            passed=passed,
-            reason=f"Change sequence present (max_seq={max_seq})",
-            detail={"max_change_seq": max_seq},
-        )
+        if best is None or max_seq > best:
+            best = max_seq
+        if max_seq > 0:
+            return CoherenceGateResult(
+                gate_name="change_sequence_advancing",
+                passed=True,
+                reason=f"Change sequence advancing (max_seq={max_seq})",
+                detail={"max_change_seq": max_seq},
+            )
 
     return CoherenceGateResult(
         gate_name="change_sequence_advancing",
         passed=False,
-        reason="No change sequence table/evidence found",
-        detail={"max_change_seq": None},
+        reason=(
+            f"Change sequence not advancing (max_seq={best})"
+            if best is not None
+            else "No change sequence table/evidence found"
+        ),
+        detail={"max_change_seq": best},
     )
 
 

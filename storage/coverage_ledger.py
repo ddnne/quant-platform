@@ -172,6 +172,32 @@ def evaluate_segment(
     )
     if not identity_matches:
         return "PARTIAL", {"reason": "receipt does not match required scope"}
+    # Trusted-path gate: only TRUSTED_COLLECTION receipts may drive COMPLETE.
+    # RECOVERED_RAW_ONLY / synthetic / missing eligibility with recovery sentinel
+    # are evidence-only and cannot complete Coverage V2.
+    eligibility = receipt.digests.get("eligibility")
+    if eligibility is None:
+        if receipt.digests.get("synthetic") or receipt.digests.get(
+            "origin"
+        ) in {"offline-test-fixture", "recovered-raw-only"}:
+            eligibility = "RECOVERED_RAW_ONLY"
+        else:
+            # Legacy live receipts without the field remain trusted if they
+            # carried a real raw digest (sha256:...) and are not synthetic.
+            raw_d = receipt.digests.get("raw")
+            if (
+                isinstance(raw_d, str)
+                and raw_d.startswith("sha256:")
+                and not receipt.digests.get("synthetic")
+            ):
+                eligibility = "TRUSTED_COLLECTION"
+            else:
+                eligibility = "RECOVERED_RAW_ONLY"
+    if eligibility != "TRUSTED_COLLECTION":
+        return "PARTIAL", {
+            "reason": "receipt not COMPLETE-eligible (trusted path required)",
+            "eligibility": eligibility,
+        }
     if receipt.status == "FAILED" and receipt.digests.get("failure_kind") in {
         "MISSING_EXPECTED_SEGMENT", "DEFERRED_SOURCE_GAP"
     }:
@@ -280,9 +306,15 @@ def _jsda_validation_status(
     validation failure when every expected source segment is still missing;
     those independently planned segments correctly aggregate to PARTIAL.
     """
+    # Local fact tables for governed JSDA datasets.
+    # jsda_bond_trades holds 社債の取引情報 rows (see schema comment +
+    # jsda_governed.json dataset_id jsda_corporate_bond_transactions).
+    # OTC reference prices are a separate product (参考統計値) and must not
+    # be confused with corporate transactions.
     fact_tables = {
         "jsda_otc_bond_reference_prices": "jsda_otc_bond_reference_prices",
         "jsda_tokyo_repo_rates": "jsda_repo_rates",
+        "jsda_corporate_bond_transactions": "jsda_bond_trades",
     }
     table = fact_tables.get(dataset)
     if table is None:
@@ -888,7 +920,12 @@ def build_collection_receipt(
         raise ValueError("receipt status must be SUCCESS or FAILED")
     structured = int(structured_row_count)
     raw_rows = int(raw_row_count) if raw_row_count is not None else structured
-    digests: dict[str, Any] = {"raw": compute_raw_digest(raw)}
+    digests: dict[str, Any] = {
+        "raw": compute_raw_digest(raw),
+        # Callers that rebuild from raw without independent structured
+        # reconciliation MUST override eligibility to RECOVERED_RAW_ONLY.
+        "eligibility": "TRUSTED_COLLECTION",
+    }
     if extra_digests:
         digests.update(dict(extra_digests))
     return CollectionReceipt(
@@ -946,8 +983,11 @@ def build_synthetic_complete_receipt(
         observed_items = 0 if expected == 0 else 1
     digests: dict[str, Any] = {
         # Deterministic placeholder digest; the synthetic sentinel is what
-        # matters, not the hex value.
+        # matters, not the hex value. eligibility is explicitly TRUSTED so
+        # offline fixtures can exercise COMPLETE; production rebuild path
+        # must never set this combination.
         "raw": "sha256:" + "0" * 64,
+        "eligibility": "TRUSTED_COLLECTION",
         **SYNTHETIC_RECEIPT_MARKER,
     }
     items = int(observed_items)
@@ -975,6 +1015,30 @@ def build_synthetic_complete_receipt(
 def is_synthetic_receipt(receipt: CollectionReceipt) -> bool:
     """True if a receipt carries the offline-fixture synthetic sentinel."""
     return bool(receipt.digests.get("synthetic"))
+
+
+def receipt_eligibility(receipt: CollectionReceipt) -> str:
+    """Return COMPLETE-eligibility class for a receipt."""
+    elig = receipt.digests.get("eligibility")
+    if isinstance(elig, str) and elig:
+        return elig
+    if is_synthetic_receipt(receipt) or receipt.digests.get("origin") in {
+        "offline-test-fixture",
+        "recovered-raw-only",
+    }:
+        return "RECOVERED_RAW_ONLY"
+    raw_d = receipt.digests.get("raw")
+    if (
+        isinstance(raw_d, str)
+        and raw_d.startswith("sha256:")
+        and not is_synthetic_receipt(receipt)
+    ):
+        return "TRUSTED_COLLECTION"
+    return "RECOVERED_RAW_ONLY"
+
+
+def is_complete_eligible_receipt(receipt: CollectionReceipt) -> bool:
+    return receipt_eligibility(receipt) == "TRUSTED_COLLECTION"
 
 
 __all__ = [

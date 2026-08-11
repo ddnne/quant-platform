@@ -142,7 +142,7 @@ def fixture_db_with_complete_coverage_and_receipts(fixture_db_with_schema):
             raw_row_count=1 if segment.expected_items != 0 else 0,
             structured_row_count=1 if segment.expected_items != 0 else 0,
             pagination_exhausted=True,  # Pagination exhausted
-            digests={"raw": "sha256:" + "a" * 64},  # Has raw digest
+            digests={"raw": "sha256:" + "a" * 64, "eligibility": "TRUSTED_COLLECTION"},
             run_id=1,
             status="SUCCESS",
             error=None,

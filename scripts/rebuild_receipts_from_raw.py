@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Rebuild real collection_receipts from data/raw/** (honest digests).
 
-Does NOT claim COMPLETE — run refresh_coverage_ledger afterwards.
-For non-event source_query segments, expected_items=1 (one exhausted query).
+Issues RECOVERED_RAW_ONLY evidence only — NEVER COMPLETE-eligible.
+Self-assigned raw_row_count == structured_row_count is forbidden for
+COMPLETE; trusted issuance requires independent structured measurement
+via the live collection path (or a future --verify-structured mode).
 """
 from __future__ import annotations
 
@@ -99,6 +101,9 @@ def main() -> int:
             continue
         obs = 1 if unit == "source_query" else max(1, len(raw))
         record_required_segments(conn, [req])
+        # Explicit non-trusted eligibility: raw-only recovery evidence.
+        # structured_row_count is NOT independently measured here — set 0 so
+        # we never self-assign equality that could look like reconciliation.
         record_collection_receipt(
             conn,
             build_collection_receipt(
@@ -106,10 +111,15 @@ def main() -> int:
                 run_id=0,
                 raw=raw,
                 observed_items=obs,
-                structured_row_count=obs,
-                raw_row_count=obs,
+                structured_row_count=0,
+                raw_row_count=0,  # not independently counted from parser
                 pagination_exhausted=True,
                 status="SUCCESS",
+                extra_digests={
+                    "eligibility": "RECOVERED_RAW_ONLY",
+                    "origin": "recovered-raw-only",
+                    "recovery_note": "raw file present; structured not re-reconciled",
+                },
             ),
         )
         written += 1
