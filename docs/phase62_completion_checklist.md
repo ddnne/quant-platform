@@ -1,131 +1,74 @@
-# Phase 6.2 Completion Checklist
+# Phase 6.2 Completion Checklist (honest)
 
-**Status**: 6/9 P0 COMPLETE (67%) | 0/3 P1 COMPLETE (0%)
+**Source of truth**: [docs/phase62_residual_status.md](phase62_residual_status.md)
+**HEAD**: `e47da0f`
+**Track**: GLM parallel + orchestrated land
 
-## P0 Tasks (Critical — Must be 0 for Phase 7)
+> Phase 6.2 is **code-complete but live NO-GO**. The items below split into
+> code-complete (checked) and live-operational items that remain **OPEN**.
+> Do **not** treat Phase 6.2 as full live DONE, and do **not** start Phase 7
+> mass research until production READY ≥1 and real Coverage V2 COMPLETE exist.
 
-- [x] **P0-1**: Dataset membership unified (25/26 split fixed)
-  - Added `jsda_corporate_bond_transactions` to coverage contracts
-  - Added `official_archive_year` granularity support
-  - All 26 datasets consistent across Python/TypeScript/JSON
-  - Commits: `24c395e`, `d75cffe`
+## Code-complete ✅
 
-- [x] **P0-2**: Canonical dataset registry created
-  - Created `data_contracts/canonical_datasets.json` with all 26 datasets
-  - Implemented `canonical.py` with validation and consistency checks
-  - All downstream registries validated as subsets
-  - Commit: `1463e15`
+- [x] **31-endpoint inventory** (26 governed + 5 experimental)
+  - `data_contracts/canonical_datasets.json`, `data_contracts/inventory.py`
+- [x] **Ops projection publisher + D1 apply** (no SQL BEGIN)
+  - `scripts/publish_ops_projection.py` applied remote successfully
+- [x] **Coverage V2 plan granularities** (month / year / day / file)
+  - `storage/coverage_ledger.py`
+- [x] **Local ledger refresh (honest PARTIAL)**
+  - `scripts/refresh_coverage_ledger.py` → 26 PARTIAL, 0 receipts
+- [x] **Remote Ops 16 tools + migration 0003 + redeploy**
+  - Worker live (`platform/workers/quant-ops-mcp/`)
+- [x] **Sync → optional `--publish-ops` / `--apply-remote-ops`**
+  - `scripts/sync_d1_to_sqlite.py`; `--publish-ops` defaults OFF for safety
+- [x] **Phase 7 stubs**
+  - `knowledge/`, `selection/`, `gateway/` — scaffolding only, not mass research
+- [x] **Offline pytest green on land**
+  - `pytest -q` stays green
 
-- [x] **P0-3**: Ops projection operational
-  - Manual export via `scripts/export_ops_projection.py` working
-  - Remote Ops MCP can read projection data
-  - Deferred full automation to Phase 6.3 (manual is safe/auditable)
-  - Status: OPERATIONAL
+## Live operational — still OPEN 🚫
 
-- [x] **P0-4**: Coverage V2 implementation correct
-  - Core ledger uses segment receipts, not min/max row counts
-  - Tests validate segment-based evaluation
-  - Min/max bounds are diagnostics only
-  - Status: VERIFIED CORRECT
+- [ ] **Coverage V2 COMPLETE** (real collection receipts + full backfill)
+  - **Open** — all governed datasets PARTIAL/UNKNOWN with 0 receipts
+- [ ] **Production READY ≥1**
+  - **Open** — coherence gate correctly blocks (no complete coverage to publish)
+- [ ] **Full multi-year JQ/JSDA backfill finished**
+  - **Open** — requires long live runs (credentials present; not executed here)
+- [ ] **Cron auto-projection with no human flag**
+  - **Partial** — `--publish-ops` flag exists; CF cron wiring not claimed complete
 
-- [x] **P0-5**: Raw retention operational
-  - Coverage V2 contracts require raw retention
-  - Receipts include raw digests and manifest keys
-  - R2 bucket configuration validated
-  - Status: OPERATIONAL
+## Phase 7 mass research — NO-GO 🚫
 
-- [x] **P0-6**: READY publish coherence gate implemented
-  - Created `paper_runtime/coherence.py` with comprehensive gates
-  - Gates: coverage completeness, receipts with raw, validation, natural keys, B0 quality, change seq
-  - Exported from `paper_runtime` for integration
-  - Commit: `48d9700`
-  - Status: IMPLEMENTED (needs integration into publish_ready_snapshot)
+**NO-GO** until READY ≥1 **and** real Coverage V2 COMPLETE evidence exist.
+The Phase 7 stubs (`knowledge/`, `selection/`, `gateway/`) are scaffolding only;
+they do **not** authorize mass autonomous research.
 
-- [x] **P0-7**: Remote Ops tools complete
-  - 12 ops tools defined in `platform/workers/quant-ops-mcp/src/domain.js`
-  - GitHub OAuth read-only authentication working
-  - Tools: ops_status, coverage_gaps, dataset_coverage, backfill_status, etc.
-  - Status: COMPLETE
+### Phase 7 prerequisites (not started)
+- [ ] Minimal Knowledge Store (no unrestricted Python)
+- [ ] Selection Gateway (closed-schema only, no live broker, no FoF)
+- [ ] AI Gateway (closed-schema LLM, experiment budget, early stopping)
+- [ ] Experiment budget + early stopping enforced in the pipeline
 
-- [ ] **P0-8**: Documentation drift fixed
-  - Need Phase 6.1/6.2 boundary clarification
-  - Update runbook with latest dataset count (26)
-  - Fix roadmap inconsistencies
-  - Status: IN PROGRESS
+## Verification before any "PHASE62 live DONE" claim
 
-- [ ] **P0-9**: Test audit and consolidation
-  - Audit test suite for redundant negative tests
-  - Consolidate to strong invariant tests
-  - Ensure P0 fixes have test coverage
-  - Status: IN PROGRESS
+Before asserting Phase 6.2 live completion, **all** of the following must hold:
 
-## P1 Tasks (Important — Complete before full production)
+- [ ] At least one governed dataset reaches Coverage V2 COMPLETE with receipts
+- [ ] Production READY ≥1 snapshot published and coherence-verified
+- [ ] Full multi-year backfill finished for governed JQ + JSDA
+- [ ] CF cron auto-projection runs with no human flag
+- [ ] Offline pytest still green
 
-- [ ] **P1-1**: Complete endpoint inventory (~31 endpoints)
-  - Full endpoint documentation and monitoring
-  - Integration with ops MCP tools
-  - Status: PENDING
+> `PHASE62_DONE` is **not** printed in this lane. Only the code-complete items
+> above are checked; the live-operational items remain open.
 
-- [ ] **P1-2**: Real data backfill executed
-  - Execute historical backfill per Phase 6.1 runbook
-  - Verify coverage V2 receipts for all segments
-  - Confirm raw retention for backfilled data
-  - Status: PENDING
+## Parallel GLM
 
-- [ ] **P1-3**: Production READY ≥1 achieved
-  - Execute full production run
-  - Publish first complete READY snapshot
-  - Verify all coherence gates passed
-  - Status: PENDING
-
-## Phase 7 Prerequisites (After P0=0, P1 Complete)
-
-### Knowledge Store
-- [ ] Minimal knowledge store implementation
-- [ ] Feature quality metadata tracking
-- [ ] No unrestricted Python execution
-- [ ] Budget constraints and early stopping
-
-### Selection Gateway
-- [ ] Closed-schema only
-- [ ] No live broker integration
-- [ ] No FoF complexity initially
-
-### AI Gateway
-- [ ] Closed-schema LLM calls only
-- [ ] Experiment budget tracking
-- [ ] Early stopping mechanisms
-- [ ] No infinite research loops
-
-## Verification Steps
-
-Before printing `PHASE62_DONE`, verify:
-
-- [ ] All P0 tasks complete (9/9)
-- [ ] All tests pass: `pytest -q`
-- [ ] Git log shows small reviewable commits
-- [ ] READY snapshot achievable
-- [ ] Phase 7 prerequisites documented
-- [ ] Final report format matches instruction §29
-
-## Recent Commits
-
-```
-48d9700 feat(runtime): implement READY publish coherence gate (P0-6)
-1463e15 feat(contracts): add canonical dataset registry (P0-2)
-d75cffe fix(coverage): add official_archive_year granularity and JSDA corporate transactions
-24c395e fix(coverage): add jsda_corporate_bond_transactions to Coverage V2
-7a0ff21 feat(mcp): GitHub OAuth remote Ops MCP (news-mcp pattern)
-```
-
-## Estimated Timeline
-
-- **P0 remaining**: 1-2 days focused work (documentation + test audit)
-- **P1 tasks**: 1-2 weeks including backfill execution
-- **Phase 6.2 complete**: 2-3 weeks total from start
-- **Phase 7 start**: Only after P0=0 and first production READY
+Lanes C/D/E/F continue polish on worktrees; merge when green.
 
 ---
 
-**Last updated**: 2026-08-11  
-**P0 Progress**: 6/9 COMPLETE (67%) | **P1 Progress**: 0/3 COMPLETE (0%)
+**Last updated**: 2026-08-11
+**Code-complete**: 8/8 ✅ | **Live operational**: 0/4 OPEN 🚫 | **Phase 7 mass research**: NO-GO
