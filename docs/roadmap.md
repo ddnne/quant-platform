@@ -11,7 +11,9 @@
 | 5 | Paper 縦通し（`strategies/paper/`・result 永続化・sample strategies・CLI） ✅ 完了 |
 | 5.5 | Phase 6 foundation（`ctx.feature` 境界・snapshot ID・experiment identity・index） ✅ 完了 |
 | 6 | F0 full-code hardening・役割エージェント・StrategySpec ✅ 完了 |
-| 7 | 選抜・Knowledge・AI Gateway |
+| 6.1 | Coverage V2 + remote Ops Read MCP + governed JSDA ✅ 完了 |
+| 6.2 | Inventory tools・projection publish・minimal Phase7 stubs ✅ code-complete / 🚫 live NO-GO |
+| 7 | 選抜・Knowledge・AI Gateway 🚫 NO-GO until READY + Coverage V2 COMPLETE |
 | 8 | FoF・Risk |
 | 9 | 執行の厚み・追加データ |
 

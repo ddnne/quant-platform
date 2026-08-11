@@ -3,12 +3,18 @@
 日本株・開示・債券データを用いた量化研究／Paper／FoF 基盤。  
 正本は GitHub リポジトリ 1 本（公開・非公開は運用で変更可）。
 
-## 現状（Phase 6.1 / Pre-Phase 7）
+## 現状（Phase 6.2 code-complete / Phase 7 NO-GO until live ready）
 
 **Phase 1（Ingestion）＋ Phase 2（PIT Data API）＋ Phase 3（コアエンジン最小）＋
 Phase 3.5（CF J-Quants Premium 閉路の実装）＋ Phase 4（特徴量 Registry）＋
 Phase 5（Paper 縦通し）＋ Phase 6（F0 hardening・役割 agent・StrategySpec）＋
-Phase 6.1（Coverage V2・remote Ops Read MCP・governed JSDA）が実装済みの状態です。**
+Phase 6.1（Coverage V2・remote Ops Read MCP・governed JSDA）＋
+Phase 6.2（inventory tools・projection publish・minimal Phase7 stubs）が実装済みの状態です。**
+
+**Phase 6.2 は code-complete ですが live NO-GO**: 長期 JQ/JSDA backfill → Coverage V2 COMPLETE、
+production READY≥1、CF cron-wired auto projection が未完了です。Phase 7 mass research は
+READY + 実 Coverage V2 COMPLETE まで GO できません。詳細は
+[docs/phase62_residual_status.md](docs/phase62_residual_status.md) を参照。
 
 Phase 1 — 2 データソースの取得・正規化・格納が動きます:
 
