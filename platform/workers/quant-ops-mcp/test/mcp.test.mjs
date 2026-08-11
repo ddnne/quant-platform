@@ -28,7 +28,7 @@ function mockDb() {
 
 test("remote surface is Ops read-only", () => {
   const names = OPS_TOOLS.map((t) => t.name);
-  assert.equal(names.length, 12);
+  assert.equal(names.length, 16);
   for (const banned of [
     "query_dataset",
     "run_ingestion",
@@ -62,7 +62,7 @@ test("initialize and tools/list implement MCP 2025-06-18", async () => {
     { jsonrpc: "2.0", id: 2, method: "tools/list" },
     db,
   );
-  assert.equal(listed.result.tools.length, 12);
+  assert.equal(listed.result.tools.length, 16);
 });
 
 test("ops_status returns structured current-plane output without projection", async () => {

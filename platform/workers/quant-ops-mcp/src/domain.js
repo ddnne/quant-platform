@@ -11,7 +11,7 @@ const OPTIONAL_DATASET = {
 export const OPS_TOOLS = Object.freeze([
   tool("ops_status", "Current ingestion control-plane status; never a research-data query."),
   tool("source_inventory", "Canonical endpoint inventory with all ~31 datasets and tier classification."),
-  tool("endpoint_status", "Per-endpoint status summary including governance tier, inventory status, and coverage state.", OPTIONAL_DATASET),
+  tool("endpoint_status", "Per-endpoint status summary including governance tier, inventory status, and coverage state.", OPTIONAL_DATASET, ["dataset"]),
   tool("projection_status", "Ops projection metadata including generated_at, source_generation, age, and status."),
   tool("collection_sla_status", "Dataset SLA/freshness status with expected_after, usable_by, freshness_policy, and states.", OPTIONAL_DATASET),
   tool("ingestion_last_run", "Latest current ingestion run and bounded summary."),
@@ -31,10 +31,6 @@ export const OPS_TOOLS = Object.freeze([
   }),
   tool("raw_retention_status", "Raw page retention attestations linked to collection runs.", OPTIONAL_DATASET),
   tool("sync_status", "Current D1 change-feed and local-sync watermark status."),
-  tool("source_inventory", "All known endpoints (governed + experimental) from the canonical inventory projection."),
-  tool("endpoint_status", "One endpoint inventory row by dataset_id.", OPTIONAL_DATASET, ["dataset"]),
-  tool("projection_status", "Ops projection freshness metadata (stale/missing must not look current)."),
-  tool("collection_sla_status", "Dataset collection SLA / freshness policy metadata.", OPTIONAL_DATASET),
 ]);
 
 /**
@@ -63,13 +59,15 @@ function objectArgs(value) {
   return /** @type {Record<string, unknown>} */ (value);
 }
 
-/** @param {unknown} value */
-function datasetArg(value) {
+/** @param {unknown} value @param {{governedOnly?: boolean}} options */
+function datasetArg(value, options = {}) {
   if (typeof value !== "string" || !value.trim() || value.length > 160) {
     throw new TypeError("dataset must be a non-empty string of at most 160 characters");
   }
   const dataset = value.trim();
-  if (!GOVERNED_DATASET_SET.has(dataset)) {
+  const governedOnly = options.governedOnly !== false;
+  // Inventory/SLA tools may address experimental endpoints; coverage tools stay governed-only.
+  if (governedOnly && !GOVERNED_DATASET_SET.has(dataset)) {
     throw new RangeError("dataset is not in the governed Ops catalog");
   }
   return dataset;
@@ -325,7 +323,7 @@ export async function callOpsTool(db, name, rawArguments) {
   }
 
   if (name === "endpoint_status") {
-    const dataset = datasetArg(args.dataset);
+    const dataset = datasetArg(args.dataset, { governedOnly: false });
     const endpoint = await first(db,
       `SELECT dataset_id, display_name, source, governance_tier, inventory_status,
               collection_window, expected_frequency, coverage_segment_granularity,
@@ -344,32 +342,49 @@ export async function callOpsTool(db, name, rawArguments) {
 
   if (name === "projection_status") {
     const metadata = await first(db,
-      `SELECT generated_at, source_generation, age, status, projection_version
+      `SELECT generated_at, source_generation, age_seconds, status, projection_version, detail_json
          FROM ops_projection_metadata ORDER BY generated_at DESC LIMIT 1`);
+    if (!metadata) {
+      return {
+        plane: "ops_current", mutable: true,
+        projection_status: "MISSING", stale: true,
+        reason: "projection metadata missing; run scripts/publish_ops_projection.py",
+      };
+    }
+    const age = Number(metadata.age_seconds ?? 0);
+    const stale = metadata.status === "STALE" || age > 86400;
     return {
       plane: "ops_current", mutable: true,
-      status: metadata ? metadata.status : "UNAVAILABLE",
-      ...(metadata || { reason: "Projection metadata not available" }),
+      projection_status: stale && metadata.status === "FRESH" ? "STALE" : metadata.status,
+      projection_generated_at: metadata.generated_at,
+      projection_source_generation: metadata.source_generation,
+      projection_age_seconds: age,
+      stale,
+      projection_version: metadata.projection_version,
     };
   }
 
   if (name === "collection_sla_status") {
-    const dataset = datasetArg(args.dataset);
-    const sla = await first(db,
+    if (args.dataset !== undefined) {
+      const dataset = datasetArg(args.dataset, { governedOnly: false });
+      const sla = await first(db,
+        `SELECT dataset_id, expected_after, usable_by, freshness_policy, timezone,
+                current_state, state_reason, state_since, last_event_date, last_checked_at
+           FROM collection_sla_status WHERE dataset_id = ? LIMIT 1`, [dataset]);
+      return {
+        plane: "ops_current", mutable: true, dataset,
+        sla: sla || { dataset, current_state: "UNKNOWN", reason: "SLA status not projected" },
+      };
+    }
+    const rows = await all(db,
       `SELECT dataset_id, expected_after, usable_by, freshness_policy, timezone,
               current_state, state_reason, state_since, last_event_date, last_checked_at
-         FROM collection_sla_status WHERE dataset_id = ? LIMIT 1`, [dataset]);
-    const coverage = await first(db,
-      `SELECT status, observed_end, evaluated_at FROM dataset_coverage WHERE dataset = ? LIMIT 1`, [dataset]);
+         FROM collection_sla_status ORDER BY dataset_id LIMIT 500`);
     return {
-      plane: "ops_current", mutable: true, dataset,
-      sla: sla || { dataset, status: "UNKNOWN", reason: "SLA status not configured" },
-      coverage_status: coverage?.status || "UNKNOWN",
-      fresh: coverage && sla && sla.freshness_policy
-        ? coverage.observed_end && sla.last_checked_at
-          ? new Date(coverage.observed_end) >= new Date(Date.now() - _parseFreshnessWindow(sla.freshness_policy))
-          : false
-        : null,
+      plane: "ops_current", mutable: true,
+      status: rows.length ? "AVAILABLE" : "UNKNOWN",
+      datasets: rows,
+      ...(rows.length ? {} : { reason: "collection_sla_status projection empty" }),
     };
   }
 
@@ -378,80 +393,6 @@ export async function callOpsTool(db, name, rawArguments) {
       "SELECT dataset, last_event_date, last_ingested_at, last_export_cursor FROM ingestion_watermarks ORDER BY dataset LIMIT 500");
     const change = await first(db, "SELECT MAX(change_seq) AS latest_change_seq FROM ingestion_change_log");
     return { plane: "ops_current", mutable: true, watermarks: marks, latest_change_seq: change?.latest_change_seq ?? null };
-  }
-
-  if (name === "source_inventory") {
-    const rows = await all(db,
-      `SELECT dataset, source, endpoint, tier, inventory_status, enabled, entitlement,
-              collection_window, history_target, research_eligible, sla_json, reason
-         FROM source_inventory ORDER BY tier, dataset LIMIT 500`);
-    if (!rows.length) {
-      return {
-        plane: "ops_current", mutable: true, status: "UNKNOWN",
-        reason: "source_inventory projection missing; run publish_ops_projection",
-        total_known_endpoints: GOVERNED_DATASETS.length,
-        datasets: GOVERNED_DATASETS.map((dataset) => ({
-          dataset, inventory_status: "UNKNOWN", tier: "governed",
-        })),
-      };
-    }
-    const status_counts = {};
-    for (const row of rows) {
-      const key = String(row.inventory_status || "UNKNOWN");
-      status_counts[key] = (status_counts[key] || 0) + 1;
-    }
-    return {
-      plane: "ops_current", mutable: true, status: "AVAILABLE",
-      total_known_endpoints: rows.length, status_counts, datasets: rows,
-    };
-  }
-
-  if (name === "endpoint_status") {
-    const dataset = datasetArg(args.dataset);
-    const row = await first(db,
-      `SELECT dataset, source, endpoint, tier, inventory_status, enabled, entitlement,
-              collection_window, history_target, research_eligible, sla_json, reason
-         FROM source_inventory WHERE dataset = ? LIMIT 1`, [dataset]);
-    return row
-      ? { plane: "ops_current", mutable: true, endpoint: row }
-      : {
-        plane: "ops_current", mutable: true, endpoint: null,
-        reason: "endpoint not present in source_inventory projection",
-        dataset,
-      };
-  }
-
-  if (name === "projection_status") {
-    const row = await first(db,
-      `SELECT projection_status, projection_generated_at, projection_source_generation,
-              projection_age_seconds, stale, reason
-         FROM ops_projection_meta WHERE singleton = 1 LIMIT 1`);
-    if (!row) {
-      return {
-        plane: "ops_current", mutable: true,
-        projection_status: "MISSING", stale: true,
-        reason: "projection metadata missing; publisher has not applied a generation",
-      };
-    }
-    return { plane: "ops_current", mutable: true, ...row };
-  }
-
-  if (name === "collection_sla_status") {
-    const binds = [];
-    let where = "";
-    if (args.dataset !== undefined) {
-      where = " WHERE dataset = ?";
-      binds.push(datasetArg(args.dataset));
-    }
-    const rows = await all(db,
-      `SELECT dataset, inventory_status, collection_window, sla_json
-         FROM source_inventory${where} ORDER BY dataset LIMIT 500`, binds);
-    return {
-      plane: "ops_current", mutable: true,
-      status: rows.length ? "AVAILABLE" : "UNKNOWN",
-      datasets: rows,
-      ...(rows.length ? {} : { reason: "source_inventory/SLA projection empty" }),
-    };
   }
 
   const [lastRun, coverage, raw] = await Promise.all([

@@ -48,20 +48,27 @@ class KnowledgeStore:
         parent_artifact_ids: tuple[str, ...] = (),
         data_snapshot_id: str | None = None,
     ) -> KnowledgeArtifact:
-        created_at = _now()
-        body = {
+        # Identity excludes created_at so identical payloads are content-addressed.
+        identity = {
             "artifact_type": artifact_type,
             "schema_version": schema_version,
             "producer_role": producer_role,
             "parent_artifact_ids": list(parent_artifact_ids),
             "data_snapshot_id": data_snapshot_id,
-            "created_at": created_at,
             "payload": dict(payload),
         }
-        artifact_id = _digest(body)
-        body["artifact_id"] = artifact_id
+        artifact_id = _digest(identity)
         path = self.root / f"{artifact_id.replace(':', '_')}.json"
-        if not path.exists():
+        if path.exists():
+            body = json.loads(path.read_text(encoding="utf-8"))
+            created_at = str(body.get("created_at") or _now())
+        else:
+            created_at = _now()
+            body = {
+                **identity,
+                "artifact_id": artifact_id,
+                "created_at": created_at,
+            }
             path.write_text(json.dumps(body, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
         return KnowledgeArtifact(
             artifact_id=artifact_id,

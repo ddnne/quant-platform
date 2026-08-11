@@ -66,6 +66,10 @@ def test_projection_sql_populates_remote_jsda_coverage_without_paths(tmp_path):
         (_ROOT / "platform/workers/quant-ops-mcp/migrations/0002_ops_projection.sql")
         .read_text(encoding="utf-8")
     )
+    remote.executescript(
+        (_ROOT / "platform/workers/quant-ops-mcp/migrations/0003_endpoint_inventory_sla.sql")
+        .read_text(encoding="utf-8")
+    )
     remote.executescript(sql)
     row = remote.execute(
         "SELECT dataset,status FROM dataset_coverage"
@@ -75,4 +79,6 @@ def test_projection_sql_populates_remote_jsda_coverage_without_paths(tmp_path):
     assert remote.execute(
         "SELECT status,source_build_id FROM ops_b0_status"
     ).fetchone() == ("PASS", "build-jsda")
+    inv_count = remote.execute("SELECT COUNT(*) FROM endpoint_inventory").fetchone()[0]
+    assert inv_count >= 26
     remote.close()

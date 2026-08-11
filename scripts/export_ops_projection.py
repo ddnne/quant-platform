@@ -322,16 +322,56 @@ def render_projection_sql(
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        epilog="Phase 6.2 Residual: Automated projection with metadata freshness tracking."
+    )
     parser.add_argument("--db", required=True, help="validated local control SQLite")
-    parser.add_argument("--snapshot-dir", default=None)
+    parser.add_argument("--snapshot-dir", default=None, help="READY snapshot directory")
     parser.add_argument("--output", default=None, help="output SQL path (default stdout)")
+    parser.add_argument(
+        "--max-age-seconds", type=int, default=DEFAULT_MAX_AGE_SECONDS,
+        help=f"maximum age for fresh projection (default {DEFAULT_MAX_AGE_SECONDS})"
+    )
+    parser.add_argument(
+        "--auto-deploy", action="store_true",
+        help="if wrangler credentials are available, automatically deploy to D1"
+    )
     args = parser.parse_args(argv)
-    rendered = render_projection_sql(args.db, snapshot_dir=args.snapshot_dir)
+
+    rendered = render_projection_sql(
+        args.db,
+        snapshot_dir=args.snapshot_dir,
+        max_age_seconds=args.max_age_seconds,
+    )
+
     if args.output:
         Path(args.output).write_text(rendered, encoding="utf-8")
+        print(f"Projection SQL written to {args.output}", file=sys.stderr)
+
+        # Auto-deploy if requested and wrangler is available
+        if args.auto_deploy:
+            try:
+                import subprocess
+                result = subprocess.run(
+                    ["wrangler", "d1", "execute", "quant-ops", "--local", "--command", rendered],
+                    capture_output=True, text=True, timeout=300,
+                )
+                if result.returncode == 0:
+                    print("Auto-deployed to local D1", file=sys.stderr)
+                    return 0
+                else:
+                    print(f"Auto-deploy failed: {result.stderr}", file=sys.stderr)
+                    return 1
+            except FileNotFoundError:
+                print("wrangler CLI not found, skipping auto-deploy", file=sys.stderr)
+                return 0
+            except Exception as e:
+                print(f"Auto-deploy error: {e}", file=sys.stderr)
+                return 1
     else:
         sys.stdout.write(rendered)
+
     return 0
 
 
