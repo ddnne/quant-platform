@@ -16,6 +16,68 @@ from paper_runtime import latest_ready_snapshot  # noqa: E402
 from storage import coverage_gaps, coverage_summary  # noqa: E402
 
 
+def _am_diagnostic(db_path: str | Path) -> dict:
+    """Add diagnostic for equities_bars_daily_am null last_event_date.
+
+    This detects when AM dataset has null observed_end but may have data,
+    which indicates a data quality issue. Null dates before 2024-01-04 are
+    expected — not an error. Null dates after that with row_count > 0 are
+    suspicious and should be flagged.
+
+    Returns a diagnostic dict that is honest about the AM state without
+    claiming PASS when there's a potential problem.
+    """
+    from storage import read_dataset_coverage
+
+    try:
+        coverage = read_dataset_coverage(db_path, dataset="equities_bars_daily_am")
+    except Exception:
+        return {"error": "Cannot read AM dataset coverage"}
+
+    if not coverage:
+        return {"note": "AM dataset not found in coverage ledger"}
+
+    am_row = coverage[0]
+    observed_start = am_row.get("observed_start")
+    observed_end = am_row.get("observed_end")
+    row_count = am_row.get("row_count", 0)
+    status = am_row.get("status", "UNKNOWN")
+
+    diagnostic = {
+        "dataset": "equities_bars_daily_am",
+        "status": status,
+        "row_count": row_count,
+        "observed_start": observed_start,
+        "observed_end": observed_end,
+    }
+
+    # AM dataset historical start per canonical contract
+    am_expected_start = "2024-01-04"
+
+    # Case 1: No data at all - expected before AM era
+    if row_count == 0 and observed_end is None:
+        diagnostic["diagnostic"] = "NO_DATA"
+        diagnostic["note"] = f"AM data not yet ingested; expected from {am_expected_start}"
+        return diagnostic
+
+    # Case 2: Data exists but null observed_end - suspicious!
+    if row_count > 0 and observed_end is None:
+        diagnostic["diagnostic"] = "SUSPICIOUS"
+        diagnostic["warning"] = f"AM has {row_count} rows but null observed_end"
+        diagnostic["recommendation"] = "Check data quality and event_time values"
+        return diagnostic
+
+    # Case 3: Normal state - data with proper dates
+    if row_count > 0 and observed_end is not None:
+        diagnostic["diagnostic"] = "HEALTHY"
+        return diagnostic
+
+    # Case 4: Edge case - null dates but somehow no rows
+    diagnostic["diagnostic"] = "UNKNOWN"
+    diagnostic["note"] = "AM dataset in unexpected state"
+    return diagnostic
+
+
 def status(snapshot_dir: str | Path) -> dict:
     try:
         snapshot = latest_ready_snapshot(snapshot_dir)
@@ -26,11 +88,13 @@ def status(snapshot_dir: str | Path) -> dict:
             "b0": {"status": "UNKNOWN", "reason": "no READY snapshot"},
             "validation": {"status": "UNKNOWN", "reason": "no READY snapshot"},
             "coverage_gaps": [],
+            "am_diagnostic": {"error": "no READY snapshot"},
         }
     manifest = snapshot.manifest
     quality = manifest.get("quality", {})
     validations = list(manifest.get("validations", []))
     validation_failed = [row for row in validations if row.get("status") != "pass"]
+
     return {
         "snapshot": {
             "state": manifest.get("state"),
@@ -51,6 +115,7 @@ def status(snapshot_dir: str | Path) -> dict:
             "failures": validation_failed,
         },
         "coverage_gaps": coverage_gaps(snapshot.db_path),
+        "am_diagnostic": _am_diagnostic(snapshot.db_path),
     }
 
 
