@@ -1,34 +1,37 @@
 # Phase 3.5 / 4 acceptance status (honest)
 
-**Code P0s landed on `main` @ `da60d8b`.** Phase 5 still blocked until ops evidence is green.
+**Code P0s on `main`.** Ops advanced 2026-08-11; Phase 5 still gated on weekly matrix honesty + multi-year scale.
 
-## P0 merge status
-| P0 | Status | Notes |
-|----|--------|-------|
-| P0-1 available_at policy | **merged + deployed** | `availability.ts` + Python mirror; live bars use session_close |
-| P0-2 validation honesty | **merged** | C1/C2 honesty; weekly `--require-implemented` exits 1 on stubs |
-| P0-3 watermarks + incremental sync | **merged + D1 applied** | `0001`+`0002` applied remote `quant-ingest` |
-| P0-4 CF parallel + retry | **merged + deployed** | concurrency=4, rateLimitMs=125 in `/health` |
-| P0-5 intended_role + accept report | **merged** | offline accept report `ok=true` |
+## P0 code (merged)
+| P0 | Status |
+|----|--------|
+| P0-1 available_at policy | merged + deployed |
+| P0-2 validation honesty | merged (weekly `not_implemented` → exit 1) |
+| P0-3 watermarks + incremental sync | merged; D1 `0001`+`0002` applied remote |
+| P0-4 parallel + retry | merged + deployed (`concurrency=4`, `rateLimitMs=125`) |
+| P0-5 intended_role + accept report | merged; live helpers fall back to `jquants_records` |
 
-Offline `pytest`: green. Worker `tsc --noEmit`: green. Pushed to `origin/main`.
-
-## Ops snapshot (2026-08-11 JST)
+## Ops snapshot (2026-08-11 JST, this session)
 | Check | Result |
 |-------|--------|
-| `/health` | `ok=true`, datasets=23, last_run shows `concurrency=4 rateLimitMs=125` |
-| D1 migrations remote | `0001_init` + `0002_watermarks` ✅ |
-| Offline phase4 accept | `ok=true` (fixture; hit_rate=1.0; BT 30 days) |
-| Daily validation on local sync DB | exit 1 — many C8/K3 fails (sparse local data / missing event_time) |
-| Weekly validation | exit 1 — **correct**: 39 `not_implemented` treated as fail |
-| Live phase4 accept / multi-year history | **not yet** |
+| Worker deploy from main tip | Version after redeploy; watermarks export allowed |
+| D1 migrations | `0001_init` + `0002_watermarks` ✅ |
+| Sync (premium URL) | `jquants_records` incremental OK; default proxy URL pointed at *secrets* worker (404) — use `--url` premium |
+| Bars backfill (partial) | weeks pass (e.g. +39k rows); some ranges D1 network fail / curl timeout |
+| Calendar range ingest | `markets_calendar` 2026-01..08 pass (+217 rows) |
+| Full `/v1/run` 23 datasets | client timeout 600s (incomplete single-shot); health still ok; use per-dataset / cron |
+| B0 live gates | **pass** master/bars ≥3000 |
+| Offline phase4 accept | `ok=true` |
+| **Live** phase4 accept (`QP_LIVE=1`) | **`ok=true`** all sections (registry, hit rates ~0.9, BT 147 days ≥50, B0) |
+| Daily validation local | exit 1 (data/event_time gaps) — not waived |
+| Weekly validation | exit 1 — correct fail on 39 `not_implemented` |
 
-## Remaining before Phase 5 (honest)
-1. Live full `/v1/run` after main tip (worker deployed mid-P0; confirm post-merge tip)
-2. Sync D1→local with watermarks; re-run daily matrix with fuller data
-3. Live `scripts/run_phase4_accept.py` with `QP_LIVE=1` + report artifact
-4. Weekly matrix: implement or explicitly defer remaining not_implemented IDs (currently correctly fail completion)
-5. Multi-year / R2 partition migration remains scale path (scaffolded)
+## Remaining before Phase 5
+1. Reliable full Premium-23 run (worker wall-clock / chunked run) with failed=0
+2. Deeper multi-month bars without D1 connection drops; watermarks populated for all 23
+3. Weekly matrix: implement or explicitly waive remaining `not_implemented` IDs
+4. Fix default `ingestion_proxy_url` to premium worker (ops config; not in git)
+5. Multi-year R2 partition path still scaffold-only
 
 ## Phase 5
-Do **not** start until the remaining ops list is honestly green or explicitly waived.
+Do **not** start until remaining list is green or explicitly waived in writing.

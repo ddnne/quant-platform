@@ -306,16 +306,72 @@ def _b0_section(db_path: Path) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Live helpers
 # ---------------------------------------------------------------------------
+def _table_exists(conn: "sqlite3.Connection", name: str) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)
+    ).fetchone()
+    return row is not None
+
+
+def _bar_dates_from_records(conn: "sqlite3.Connection", *, limit: int = 100) -> list[str]:
+    """Distinct equities_bars_daily dates from generic ``jquants_records``."""
+    try:
+        cur = conn.execute(
+            """
+            SELECT DISTINCT json_extract(payload, '$.Date') AS d
+            FROM jquants_records
+            WHERE dataset = 'equities_bars_daily'
+              AND json_extract(payload, '$.Date') IS NOT NULL
+            ORDER BY d DESC
+            LIMIT ?
+            """,
+            (limit,),
+        )
+        return [str(r[0])[:10] for r in cur.fetchall() if r[0]]
+    except sqlite3.Error:
+        return []
+
+
+def _bar_codes_from_records(conn: "sqlite3.Connection", *, target: int = 50) -> list[str]:
+    """Sample codes from equities_bars_daily in ``jquants_records``."""
+    try:
+        cur = conn.execute(
+            """
+            SELECT DISTINCT json_extract(payload, '$.Code') AS c
+            FROM jquants_records
+            WHERE dataset = 'equities_bars_daily'
+              AND json_extract(payload, '$.Code') IS NOT NULL
+            ORDER BY c
+            LIMIT ?
+            """,
+            (target,),
+        )
+        return [str(r[0]) for r in cur.fetchall() if r[0]]
+    except sqlite3.Error:
+        return []
+
+
 def _sample_live_codes(db_path: Path, *, target: int = 50) -> list[str]:
-    """Sample up to ``target`` codes that have a daily bar in the DB."""
+    """Sample up to ``target`` codes that have a daily bar in the DB.
+
+    Prefer specialized ``jquants_daily_bars``; fall back to ``jquants_records``
+    (Premium closed-loop stores structured rows generically).
+    """
     import sqlite3
     try:
         conn = sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True)
-        cur = conn.execute(
-            "SELECT DISTINCT code FROM jquants_daily_bars "
-            "ORDER BY code LIMIT ?", (target,)
-        )
-        codes = [str(r[0]) for r in cur.fetchall() if r[0]]
+        codes: list[str] = []
+        if _table_exists(conn, "jquants_daily_bars"):
+            try:
+                cur = conn.execute(
+                    "SELECT DISTINCT code FROM jquants_daily_bars "
+                    "ORDER BY code LIMIT ?", (target,),
+                )
+                codes = [str(r[0]) for r in cur.fetchall() if r[0]]
+            except sqlite3.Error:
+                codes = []
+        if not codes and _table_exists(conn, "jquants_records"):
+            codes = _bar_codes_from_records(conn, target=target)
         conn.close()
     except sqlite3.Error:
         codes = []
@@ -327,16 +383,22 @@ def _live_recent_as_ofs(db_path: Path, *, count: int = 5) -> list[str]:
     import sqlite3
     try:
         conn = sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True)
-        cur = conn.execute(
-            "SELECT MAX(date) FROM jquants_daily_bars"
-        )
-        last = cur.fetchone()[0]
-        cur = conn.execute(
-            "SELECT DISTINCT date FROM jquants_daily_bars "
-            "WHERE date <= ? ORDER BY date DESC LIMIT ?",
-            (last, count),
-        )
-        dates = [str(r[0]) for r in cur.fetchall() if r[0]]
+        dates: list[str] = []
+        if _table_exists(conn, "jquants_daily_bars"):
+            try:
+                cur = conn.execute("SELECT MAX(date) FROM jquants_daily_bars")
+                last = cur.fetchone()[0]
+                if last:
+                    cur = conn.execute(
+                        "SELECT DISTINCT date FROM jquants_daily_bars "
+                        "WHERE date <= ? ORDER BY date DESC LIMIT ?",
+                        (last, count),
+                    )
+                    dates = [str(r[0])[:10] for r in cur.fetchall() if r[0]]
+            except sqlite3.Error:
+                dates = []
+        if len(dates) < 2 and _table_exists(conn, "jquants_records"):
+            dates = _bar_dates_from_records(conn, limit=count)
         conn.close()
     except sqlite3.Error:
         dates = []
@@ -348,11 +410,19 @@ def _live_trading_days(db_path: Path) -> list[str]:
     import sqlite3
     try:
         conn = sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True)
-        cur = conn.execute(
-            "SELECT DISTINCT date FROM jquants_daily_bars "
-            "ORDER BY date DESC LIMIT 100"
-        )
-        dates = sorted(str(r[0]) for r in cur.fetchall() if r[0])
+        dates: list[str] = []
+        if _table_exists(conn, "jquants_daily_bars"):
+            try:
+                cur = conn.execute(
+                    "SELECT DISTINCT date FROM jquants_daily_bars "
+                    "ORDER BY date DESC LIMIT 100"
+                )
+                dates = sorted(str(r[0])[:10] for r in cur.fetchall() if r[0])
+            except sqlite3.Error:
+                dates = []
+        if len(dates) < 2 and _table_exists(conn, "jquants_records"):
+            # DESC list → sort ascending for the backtest window
+            dates = sorted(_bar_dates_from_records(conn, limit=100))
         conn.close()
     except sqlite3.Error:
         dates = []
