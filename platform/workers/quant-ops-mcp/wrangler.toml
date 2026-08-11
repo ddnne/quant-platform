@@ -1,0 +1,21 @@
+name = "quant-platform-ops-read-mcp"
+main = "src/index.js"
+compatibility_date = "2026-08-01"
+workers_dev = true
+
+[[d1_databases]]
+binding = "OPS_DB"
+database_name = "quant-ingest"
+database_id = "be6fdcf8-40be-41fc-9535-7facd1fc2ffc"
+
+[vars]
+# Public identifiers, not secrets. Replace before deploy. Deliberately-invalid
+# defaults fail closed if the Worker is deployed without Access configuration.
+ACCESS_TEAM_DOMAIN = "replace-with-team.cloudflareaccess.com"
+ACCESS_AUD = "replace-with-access-application-audience"
+OAUTH_AUTHORIZATION_SERVER = "https://replace-with-managed-oauth-issuer.example"
+DAILY_ROW_QUOTA = "25000"
+ALLOWED_ORIGINS = "https://chatgpt.com,https://chat.openai.com"
+
+[observability]
+enabled = true

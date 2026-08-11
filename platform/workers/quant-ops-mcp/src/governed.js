@@ -1,0 +1,31 @@
+/** Governed Ops catalog. Tests/docs must change when source contracts change. */
+export const GOVERNED_DATASETS = Object.freeze([
+  "equities_master",
+  "equities_bars_daily",
+  "equities_bars_daily_am",
+  "fins_summary",
+  "fins_details",
+  "fins_dividend",
+  "fins_earnings_date",
+  "equities_earnings_calendar",
+  "markets_calendar",
+  "equities_investor_types",
+  "indices_bars_daily_topix",
+  "indices_bars_daily",
+  "derivatives_bars_daily_options_225",
+  "derivatives_bars_daily_futures",
+  "derivatives_bars_daily_options",
+  "markets_margin_interest",
+  "markets_margin_alert",
+  "markets_short_ratio",
+  "markets_short_sale_report",
+  "markets_breakdown",
+  "edinet_major_shareholders",
+  "edinet_cross_shareholdings",
+  "edinet_large_volume_shareholders",
+  "jsda_otc_bond_reference_prices",
+  "jsda_tokyo_repo_rates",
+  "jsda_corporate_bond_transactions",
+]);
+
+export const GOVERNED_DATASET_SET = new Set(GOVERNED_DATASETS);
