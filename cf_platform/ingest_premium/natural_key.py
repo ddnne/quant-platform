@@ -1,64 +1,37 @@
-"""Natural-key + event_time extraction shared between Worker and Python.
+"""Python compatibility surface for Worker identity normalization.
 
-The Worker (TypeScript) upserts rows into D1's `jquants_records` table.
-The Python local sync pulls them back and writes them into SQLite. For the
-two layouts to agree, both sides must derive the SAME `natural_key` and
-`event_time` from the same upstream row.
-
-This module is the Python half. The TypeScript mirror lives in
-`platform/workers/ingestion-premium/src/index.ts` (functions `naturalKey`
-and `pickEventTime`). The cross-language test
-`tests/test_phase35_natural_key.py` asserts agreement on a canonical set of
-fixture rows.
+Dataset-specific key and event policies are selected from ``data_contracts``;
+there is intentionally no global ``KEY_FIELDS`` authority.
 """
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
-# Identity fields in priority order. Must match KEY_FIELDS in catalog.ts.
-KEY_FIELDS: tuple[str, ...] = (
-    "Code", "Date", "DateTime", "Time", "DisclosedDate",
-    "AnnouncementDate", "DiscDate", "DiscNo",
-)
-
-# Event-time candidate fields in priority order. Must match the TypeScript
-# `pickEventTime` candidate list.
-EVENT_TIME_FIELDS: tuple[str, ...] = (
-    "DateTime", "Date", "DisclosedDate", "AnnouncementDate", "DiscDate",
-)
+from data_contracts.identity import event_time_for, natural_key as _natural_key
+from data_contracts.loader import all_contracts
 
 
-def natural_key(row: dict[str, Any]) -> str:
-    """Canonical identity of a J-Quants row.
-
-    Picks the known identity fields present in the row and serializes them
-    to a stable JSON string. If none are present, falls back to a hash of
-    the row's sorted-key serialization (so the same row always maps to the
-    same key, but two distinct no-key rows don't collide on a single sentinel).
-    """
-    picked: dict[str, Any] = {}
-    for k in KEY_FIELDS:
-        v = row.get(k)
-        if v is not None and v != "":
-            picked[k] = v
-    if picked:
-        return json.dumps(picked, sort_keys=True, ensure_ascii=False)
-    stable = json.dumps(row, sort_keys=True, ensure_ascii=False)
-    return f"hash:{stable[:60]}"
+def _field_union(attribute: str) -> tuple[str, ...]:
+    seen: dict[str, None] = {}
+    for contract in all_contracts():
+        for field in getattr(contract, attribute):
+            seen.setdefault(field, None)
+    return tuple(seen)
 
 
-def pick_event_time(row: dict[str, Any]) -> str | None:
-    """Pick the event_time for a row, or None if no candidate is present.
+# Backward-compatible introspection unions. They are not consulted by either
+# normalizer; dataset contracts remain the sole key/event authority.
+KEY_FIELDS = _field_union("natural_key_fields")
+EVENT_TIME_FIELDS = _field_union("event_time_fields")
 
-    Bare dates (``YYYY-MM-DD``) are normalized to ``YYYY-MM-DDT09:00:00+09:00``
-    so they sort against full ISO timestamps and remain PIT-correct.
-    """
-    for k in EVENT_TIME_FIELDS:
-        v = row.get(k)
-        if isinstance(v, str) and v:
-            if len(v) == 10 and v[4] == "-" and v[7] == "-":
-                return f"{v}T09:00:00+09:00"
-            return v
-    return None
+
+def natural_key(row: dict[str, Any], dataset_id: str) -> str:
+    return _natural_key(row, dataset_id)
+
+
+def pick_event_time(row: dict[str, Any], dataset_id: str) -> str | None:
+    return event_time_for(row, dataset_id)
+
+
+__all__ = ["EVENT_TIME_FIELDS", "KEY_FIELDS", "natural_key", "pick_event_time"]

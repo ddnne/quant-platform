@@ -32,6 +32,7 @@ from typing import Any
 import features
 import pit
 from pit.query import resolve_db_path
+from price_basis import RAW, PriceBasis, require_supported_price_basis
 
 from .costs import CostModel, standard_cost
 from .execution import close_as_of, get_mode
@@ -42,7 +43,7 @@ from .universe import load_master
 
 # Bumped per Phase 3 handoff. Surfaced in every result's metadata so a consumer
 # can tell which engine contract a given backtest obeys.
-CORE_ENGINE_VERSION = "0.3.1"
+CORE_ENGINE_VERSION = "0.6.0"
 
 # J-Quants HolidayDivision: "1" == trading day (exchange open).
 _TRADING_HOLIDAY_DIVISION = "1"
@@ -95,17 +96,16 @@ def _bar_from_row(row: dict[str, Any]) -> Bar:
     )
 
 
-def _bar_price(bar: Bar) -> float | None:
-    """Return the split-adjusted price used by the portfolio share ledger.
+def _bar_price(bar: Bar, *, price_basis: PriceBasis) -> float | None:
+    """Return a bar price under the runtime's explicit price-basis contract.
 
-    J-Quants supplies adjusted OHLC values when a corporate action changes the
-    number of shares.  Using ``adjustment_close`` for sizing, fills, and marks
-    keeps the engine's stored share quantities in the same adjusted units and
-    prevents a split from appearing as investment P&L.  Older/minimal rows may
-    omit adjusted values, in which case the raw close remains the fallback.
+    Phase 6 enables ``RAW`` only.  The vendor ``adjustment_close`` column is
+    retained on :class:`Bar` for inspection, but is never selected implicitly:
+    an adjusted historical series can be retrospectively restated and is not
+    PIT-safe until its adjustment factors are versioned as-of.
     """
-    if bar.adjustment_close is not None and bar.adjustment_close > 0:
-        return bar.adjustment_close
+    if price_basis != RAW:  # validated at entry; defensive against misuse
+        raise ValueError(f"unsupported runtime price basis: {price_basis!r}")
     return bar.close
 
 
@@ -122,13 +122,15 @@ def _load_snapshot(
     lookback_days: int,
     *,
     db_path: Any,
+    price_basis: PriceBasis,
 ) -> dict[str, dict[str, Any]]:
     """PIT-visible recent bars per code at ``as_of``, via ``get_equity_bars_daily``.
 
     Returns ``{code: {"close": float|None, "bars": [Bar, ...]}}``. PIT returns
     rows ordered by ``(code, date)``; ``close`` is the most recent visible
-    split-adjusted close (or raw fallback, ``None`` if no bar is visible in the
-    window). Only the requested universe + held codes are read and exposed.
+    raw close (``None`` if no bar is visible in the signal window). Only the
+    requested universe + held codes are read and exposed. Portfolio valuation
+    does not depend on this window; it uses the independent mark ledger.
     """
     snapshot: dict[str, dict[str, Any]] = {
         c: {"close": None, "bars": []} for c in codes
@@ -150,14 +152,16 @@ def _load_snapshot(
         snapshot[code]["bars"].append(_bar_from_row(row))
     for entry in snapshot.values():
         bars = entry["bars"]
-        entry["close"] = _bar_price(bars[-1]) if bars else None
+        entry["close"] = (
+            _bar_price(bars[-1], price_basis=price_basis) if bars else None
+        )
     return snapshot
 
 
 def _session_prices(
-    snapshot: dict[str, dict[str, Any]], session_date: str
+    snapshot: dict[str, dict[str, Any]], session_date: str, *, price_basis: PriceBasis
 ) -> dict[str, float]:
-    """Adjusted closes backed by a bar from exactly ``session_date``.
+    """Prices backed by a PIT-visible bar from exactly ``session_date``.
 
     A snapshot's general ``close`` is intentionally the latest visible mark,
     which can be older than the requested session during a suspension or data
@@ -169,7 +173,7 @@ def _session_prices(
         for bar in reversed(entry["bars"]):
             if bar.date != session_date:
                 continue
-            price = _bar_price(bar)
+            price = _bar_price(bar, price_basis=price_basis)
             if price is not None and price > 0:
                 prices[code] = price
             break
@@ -177,20 +181,56 @@ def _session_prices(
 
 
 def _mark_equity(
-    shares: dict[str, float], closes: dict[str, float | None], cash: float
+    shares: dict[str, float], marks: dict[str, tuple[float, str]], cash: float
 ) -> float:
-    """Total equity = cash + positions marked at last visible close.
+    """Total equity using the last PIT-safe valuation mark for each holding.
 
-    A held code with no visible close in the window is marked at 0 (the engine
-    cannot invent a price); for continuous data this never triggers.
+    The mark ledger is independent of the signal lookback window. A session
+    without a bar carries the last mark; the engine never fabricates a price.
+    A position normally cannot exist without a prior exact-session fill price,
+    so the zero fallback is only a fail-closed defensive case.
     """
     positions_value = 0.0
     for code, qty in shares.items():
         if not qty:
             continue
-        px = closes.get(code)
-        positions_value += qty * (px if px is not None else 0.0)
+        mark = marks.get(code)
+        positions_value += qty * (mark[0] if mark is not None else 0.0)
     return cash + positions_value
+
+
+def _update_marks(
+    marks: dict[str, tuple[float, str]],
+    session_prices: dict[str, float],
+    session_date: str,
+) -> None:
+    """Advance valuation marks only from actual bars in ``session_date``."""
+    for code, price in session_prices.items():
+        marks[code] = (price, session_date)
+
+
+def _equity_point(
+    *,
+    date: str,
+    shares: dict[str, float],
+    marks: dict[str, tuple[float, str]],
+    cash: float,
+) -> dict[str, Any]:
+    """Build an auditable close-time equity row, including stale mark state."""
+    equity = _mark_equity(shares, marks, cash)
+    held = sorted(code for code, qty in shares.items() if qty)
+    mark_dates = {code: marks[code][1] for code in held if code in marks}
+    return {
+        "date": date,
+        "cash": cash,
+        "positions_value": equity - cash,
+        "equity": equity,
+        "mark_dates": mark_dates,
+        "stale_mark_codes": [
+            code for code in held if code in marks and marks[code][1] != date
+        ],
+        "unpriced_codes": [code for code in held if code not in marks],
+    }
 
 
 def _resolve_targets(
@@ -301,6 +341,7 @@ def run_backtest(
     starting_capital: float = 1_000_000.0,
     lookback_days: int = 30,
     calendar_as_of: str | None = None,
+    price_basis: str = RAW,
 ) -> BacktestResult:
     """Run a minimal PIT-only backtest of ``strategy`` over ``[start, end]``.
 
@@ -319,14 +360,20 @@ def run_backtest(
         universe: Optional fixed code list; otherwise built per decision day
             from the PIT equity master as-of (anti-survivorship).
         starting_capital: Initial cash (defaults to 1,000,000 JPY).
-        lookback_days: Bar-history window handed to the strategy each day.
+        lookback_days: Signal bar-history window handed to the strategy each
+            day. Portfolio valuation is independent and carries its last
+            PIT-safe mark across sessions without a bar.
         calendar_as_of: Override the PIT ``as_of`` used to read the calendar.
+        price_basis: Explicit price convention. Phase 6 enables ``"RAW"``.
+            ``"PIT_ADJUSTED"`` fails closed until adjustment provenance is
+            versioned and demonstrably PIT-safe.
 
     Returns:
         A :class:`BacktestResult` with equity curve, trade log, metrics, and
         reproducibility metadata.
     """
     mode = get_mode(execution_mode)
+    resolved_price_basis = require_supported_price_basis(price_basis)
     resolved_db_path = resolve_db_path(db_path)
     cost_model = cost_model or standard_cost()
     fixed_universe = (
@@ -350,6 +397,9 @@ def run_backtest(
     cash = float(starting_capital)
     equity_curve: list[dict[str, Any]] = []
     trades: list[dict[str, Any]] = []
+    # Portfolio valuation is independent of the rolling signal window. Each
+    # entry is (last PIT-visible exact-session price, that session's date).
+    marks: dict[str, tuple[float, str]] = {}
     # next_close only: orders decided on day D fill on day D+1.
     pending: dict[str, Any] | None = None
 
@@ -364,14 +414,23 @@ def run_backtest(
 
         # --- close snapshot at close(d): used for marking and fills ----------
         snap_close = _load_snapshot(
-            close_as_of(d), held, d, lookback_days, db_path=resolved_db_path
+            close_as_of(d),
+            held,
+            d,
+            lookback_days,
+            db_path=resolved_db_path,
+            price_basis=resolved_price_basis,
         )
-        closes = {
-            c: snap_close[c]["close"]
-            for c in held
-            if snap_close[c]["close"] is not None
-        }
-        fill_closes = _session_prices(snap_close, d)
+        fill_closes = _session_prices(
+            snap_close, d, price_basis=resolved_price_basis
+        )
+
+        # Under next_close the session close is inside the decision information
+        # set, so exact-bar marks may advance before fills and valuation. Under
+        # same_day_close the decision occurs at the open; marks advance only
+        # after that decision and its close-time fills below.
+        if mode.fill_offset == 1:
+            _update_marks(marks, fill_closes, d)
 
         # --- apply pending next_close orders at d's close --------------------
         if mode.fill_offset == 1 and pending is not None:
@@ -394,15 +453,12 @@ def run_backtest(
         # --- decision information set at decision_as_of ----------------------
         if mode.fill_offset == 1:
             snap_dec = snap_close  # next_close decides at close(d)
-            decision_equity = _mark_equity(shares, closes, cash)
+            decision_equity = _mark_equity(shares, marks, cash)
             # The next-close decision occurs after this close's fills and mark.
             equity_curve.append(
-                {
-                    "date": d,
-                    "cash": cash,
-                    "positions_value": decision_equity - cash,
-                    "equity": decision_equity,
-                }
+                _equity_point(
+                    date=d, shares=shares, marks=marks, cash=cash
+                )
             )
         else:
             # same_day_close decides at open(d): d's close is NOT yet visible.
@@ -412,13 +468,9 @@ def run_backtest(
                 d,
                 lookback_days,
                 db_path=resolved_db_path,
+                price_basis=resolved_price_basis,
             )
-            decision_closes = {
-                c: snap_dec[c]["close"]
-                for c in held
-                if snap_dec[c]["close"] is not None
-            }
-            decision_equity = _mark_equity(shares, decision_closes, cash)
+            decision_equity = _mark_equity(shares, marks, cash)
         prices_d = {c: snap_dec[c]["close"] for c in universe_d}
         bars_d = {c: tuple(snap_dec[c]["bars"]) for c in universe_d}
         positions = {
@@ -466,15 +518,12 @@ def run_backtest(
                 cash=cash,
                 trades=trades,
             )
+            _update_marks(marks, fill_closes, d)
             # The published curve is a post-fill, post-cost close-time mark.
-            close_equity = _mark_equity(shares, closes, cash)
             equity_curve.append(
-                {
-                    "date": d,
-                    "cash": cash,
-                    "positions_value": close_equity - cash,
-                    "equity": close_equity,
-                }
+                _equity_point(
+                    date=d, shares=shares, marks=marks, cash=cash
+                )
             )
 
     metrics = compute_metrics(equity_curve=equity_curve, trades=trades)
@@ -494,6 +543,9 @@ def run_backtest(
             else "pit_equity_master_latest_as_of_per_decision_day"
         ),
         "lookback_days": lookback_days,
+        "signal_lookback_days": lookback_days,
+        "valuation_mark_policy": "last_pit_safe_exact_session_bar",
+        "price_basis": resolved_price_basis,
         "starting_capital": starting_capital,
         "strategy_id": strategy_id,
         "strategy_params": strategy_params,

@@ -31,9 +31,9 @@ class Strategy(Protocol):
 | `date` | 意思決定の営業日 `YYYY-MM-DD` |
 | `universe` | `as_of` 時点の取引可能銘柄（PIT マスター由来・生き残りバイアス排除の第一歩）|
 | `positions` | 現ポジション（code -> `Position`）|
-| `cash` / `equity` | 現金 / 含み益評価額 |
-| `prices` | universe 各銘柄の最終可視終値（`None` 値あり）|
-| `bars` | universe 各銘柄の直近 PIT 可視日足（古い順）|
+| `cash` / `equity` | 現金 / 最後の PIT-safe mark による評価額 |
+| `prices` | signal lookback 内の各銘柄の最終可視 **RAW** 終値（`None` 値あり）|
+| `bars` | signal lookback 内の PIT 可視日足（古い順）。valuation mark とは独立 |
 | `master` | 各銘柄の `as_of` 時点の最新マスター |
 
 `OrderIntent(code, target_weight)` はポートフォリオ評価額に対する **目標ウェイト**。
@@ -61,8 +61,27 @@ class Strategy(Protocol):
   `next_close` では翌営業日に持ち越す（`same_day_close` ではスキップ）。
 - 最終営業日に決定した注文は約定機会が無い（文書化された挙動）。
 
-株式分割・併合で保有評価に架空損益を入れないため、`adjustment_close` がある日足は
-目標株数・約定・評価のすべてに調整後価格を一貫して用いる。
+## Signal lookback と valuation mark（F0-L）
+
+- `lookback_days` は **シグナル用の日足窓だけ**を制限する。ポートフォリオ評価をこの窓で
+  切り落とさない。
+- 保有銘柄に当日の日足が無い（売買停止・データ遅延など）場合、最後に PIT で可視だった
+  exact-session mark を繰り越す。0 円や当日価格を発明しない。
+- 約定は別ルールでさらに厳格にし、対象セッション当日の日足と正の価格がなければ
+  **約定しない**。古い valuation mark を fill price に流用しない。
+- `equity_curve` は監査用に `mark_dates` / `stale_mark_codes` / `unpriced_codes` も持つ。
+
+## Price basis（F0-M）
+
+Feature と Core は共通 vocabulary `RAW` / `PIT_ADJUSTED` を使う。Phase 6 で実行可能なのは
+**`RAW` のみ**で、目標株数・約定・評価・price feature は未調整終値に統一する。
+J-Quants の `adjustment_close` は保持するが、過去値が後から再計算され得る vendor adjusted
+列を、それだけで point-in-time safe とはみなさない。
+
+`PIT_ADJUSTED` は、各 decision `as_of` で既知だった corporate-action factor と revision を
+再構築・検証できる契約が入るまで fail-closed（`UnsupportedPriceBasis`）とする。したがって
+現状の RAW backtest は分割時の株数調整を自動補正しない。この制限を隠さず metadata の
+`price_basis` に記録する。
 
 ## 費用
 
@@ -106,6 +125,7 @@ result = run_backtest(
     starting_capital=1_000_000.0,
     lookback_days=30,
     calendar_as_of=None,
+    price_basis="RAW",                 # PIT_ADJUSTED is reserved/fail-closed
 )
 ```
 
@@ -116,11 +136,13 @@ result = run_backtest(
 
 `BacktestResult`:
 
-- `equity_curve`: 各営業日の `{date, cash, positions_value, equity}`（post-cost、引け評価）。
+- `equity_curve`: 各営業日の `{date, cash, positions_value, equity, mark_dates,
+  stale_mark_codes, unpriced_codes}`（post-cost、引け評価）。
 - `trades`: `{decision_date, fill_date, code, side, shares, price, notional, cost}`。
 - `metrics`: 上記指標 subset。
 - `metadata`: **再現性ブロック**。`core_engine_version` / `pit_api_version` / `start` / `end` /
   `execution_mode` / `as_of_rule` / `cost_model` / `universe_rule` / `lookback_days` /
+  `signal_lookback_days` / `valuation_mark_policy` / `price_basis` /
   `starting_capital` / `strategy_id` / `strategy_params` / `strategy_params_hash` / `db_path` /
   `trading_days`。ウォールクロック時刻・乱数に依存しないため、同一入力 → 同一メタデータ
   （`tests/test_core_engine.py::test_reproducibility_same_config_same_result`）。

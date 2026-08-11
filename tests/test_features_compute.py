@@ -26,9 +26,11 @@ from features import (
     FeatureDefinition,
     FeatureOutput,
     FeatureVersion,
+    FeatureGovernanceError,
     compute,
     compute_many,
     get,
+    get_for_strategy,
     list_features,
     register,
 )
@@ -92,6 +94,7 @@ def test_registry_rejects_duplicate_id_version():
         inputs=features.FeatureInput(),
         description="dup",
         compute=lambda ctx: FeatureOutput(value=None),
+        intended_role="signal",
     )
     with pytest.raises(ValueError, match="already registered"):
         register(feat)
@@ -104,6 +107,7 @@ def test_registry_accepts_new_version_of_same_id():
         inputs=features.FeatureInput(),
         description="v2 test only",
         compute=lambda ctx: FeatureOutput(value=None),
+        intended_role="signal",
     )
     try:
         register(feat)
@@ -153,6 +157,7 @@ def test_return_1d_matches_manual(seeded_db):
     assert out.metadata["feature_version"] == "1.0.0"
     assert out.metadata["pit_api_version"] == pit.PIT_API_VERSION
     assert out.metadata["features_runtime_version"] == FEATURES_RUNTIME_VERSION
+    assert out.metadata["price_basis"] == "RAW"
 
 
 def test_return_1d_none_with_insufficient_history(tmp_path):
@@ -373,14 +378,65 @@ def test_registry_get_returns_feature_with_role_metadata():
     assert feat.intended_role == "signal"
 
 
-def test_intended_role_field_defaults_to_signal():
-    """A FeatureDefinition without explicit role defaults to 'signal'."""
+def test_intended_role_is_required_and_new_status_defaults_candidate():
+    """External definitions must state a role and cannot inherit approval."""
+    with pytest.raises(TypeError, match="intended_role"):
+        FeatureDefinition(
+            id="dbg_missing_role",
+            version=FeatureVersion(0, 1, 0),
+            inputs=features.FeatureInput(),
+            description="missing role",
+            compute=lambda ctx: FeatureOutput(value=None),
+        )
     f = FeatureDefinition(
-        id="dbg_default_role",
+        id="dbg_candidate",
         version=FeatureVersion(0, 1, 0),
         inputs=features.FeatureInput(),
-        description="default role test",
+        description="candidate by default",
         compute=lambda ctx: FeatureOutput(value=None),
+        intended_role="signal",
     )
-    assert f.intended_role == "signal"
-    assert f.status == "approved"  # built-in default
+    assert f.status == "candidate"
+
+
+def test_feature_governance_rejects_candidate_for_strategy_by_default():
+    candidate = FeatureDefinition(
+        id="candidate_for_spec",
+        version=FeatureVersion(0, 1, 0),
+        inputs=features.FeatureInput(),
+        description="unreviewed",
+        compute=lambda ctx: FeatureOutput(value=None),
+        intended_role="signal",
+    )
+    try:
+        register(candidate)
+        with pytest.raises(FeatureGovernanceError, match="candidate"):
+            get_for_strategy("candidate_for_spec")
+        assert get_for_strategy(
+            "candidate_for_spec", allowed_statuses=("candidate",)
+        ) is candidate
+    finally:
+        from features.registry import _FEATURES
+        _FEATURES.pop(("candidate_for_spec", "0.1.0"), None)
+
+
+def test_feature_governance_accepts_explicitly_approved_builtin():
+    assert get_for_strategy("return_1d").status == "approved"
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("intended_role", "secret"), ("status", "auto-approved")],
+)
+def test_feature_governance_vocabulary_is_runtime_enforced(field, value):
+    kwargs = {"intended_role": "signal", "status": "candidate"}
+    kwargs[field] = value
+    with pytest.raises(ValueError, match=field):
+        FeatureDefinition(
+            id="invalid_governance",
+            version=FeatureVersion(0, 1, 0),
+            inputs=features.FeatureInput(),
+            description="invalid",
+            compute=lambda ctx: FeatureOutput(value=None),
+            **kwargs,
+        )

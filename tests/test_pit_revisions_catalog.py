@@ -9,6 +9,7 @@ from storage.sqlite_store import SqliteStore
 
 ORIGINAL_AT = "2025-04-02T09:00:00+09:00"
 AMENDED_AT = "2025-04-20T09:00:00+09:00"
+SESSION_CLOSE_AT = "2025-04-01T15:30:00+09:00"
 
 
 def test_original_revision_is_visible_before_later_amendment(tmp_path):
@@ -47,7 +48,7 @@ def test_original_revision_is_visible_before_later_amendment(tmp_path):
 
     assert len(between.rows) == 1
     assert between.rows[0]["close"] == 985.0
-    assert between.rows[0]["available_at"] == ORIGINAL_AT
+    assert between.rows[0]["available_at"] == SESSION_CLOSE_AT
     assert len(after.rows) == 1
     assert after.rows[0]["close"] == 987.0
     assert after.rows[0]["available_at"] == AMENDED_AT
@@ -149,6 +150,9 @@ def test_dual_read_deduplicates_shared_business_key_by_latest_availability(tmp_p
             [{**original, "Close": 987}],
             dataset="equities_bars_daily",
             ingested_at=AMENDED_AT,
+            # The true amendment publication time overrides the ordinary
+            # daily-bar session-close policy during legacy/catalog overlap.
+            available_at=AMENDED_AT,
         ),
     )
     store.close()

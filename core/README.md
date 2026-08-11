@@ -14,6 +14,10 @@ look-ahead は PIT の `available_at <= as_of` と執行定義の 2 重構造で
 - `core.NEXT_CLOSE` / `core.SAME_DAY_CLOSE` — 執行モード。
 - `core.standard_cost` / `core.stress_cost` — 費用モデル。
 - `core.BacktestResult` — equity_curve / trades / metrics / 再現性 metadata。
+- price basis は `RAW` のみ有効。`PIT_ADJUSTED` は adjustment provenance が
+  PIT-safe と証明されるまで fail-closed。
+- signal の `lookback_days` と valuation mark は独立。当日 bar が無い保有銘柄は
+  最後の PIT-safe mark を繰り越すが、当日 bar 無しでは約定しない。
 
 詳細は [../docs/core_engine.md](../docs/core_engine.md)。
 

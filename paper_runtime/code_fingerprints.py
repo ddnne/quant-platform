@@ -121,6 +121,7 @@ def feature_definition_hashes(
             },
             "intended_role": definition.intended_role,
             "status": definition.status,
+            "price_basis": definition.price_basis,
         }
         parts: list[tuple[str, bytes]] = [
             (

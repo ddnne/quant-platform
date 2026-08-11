@@ -1,222 +1,33 @@
-"""J-Quants API V2 dataset catalog — Premium core + add-ons.
+"""J-Quants API V2 catalog.
 
-Single source of truth for every dataset we can fetch. Each entry carries:
-
-* ``path``     — the ``/v2/...`` REST path (must start with ``/v2/``);
-* ``group``    — ``core`` (Premium), ``addon`` (minute/tick/TDnet), or ``edinet``;
-* ``bulk``     — preferred fetch mode: ``"api"`` (paginated REST) or ``"bulk"``
-  (official bulk/CSV endpoint, when one exists);
-* ``params``   — a hint of the common request params for documentation /
-  normalization (not enforced);
-* ``key``      — the identity field(s) used to build a natural key for the
-  generic ``jquants_records`` table (best-effort; the normalizer falls back to
-  a row hash when none match).
-
-No endpoint is left as a stub: every id here is fetchable through
-:meth:`ingestion.jquants.client.JQuantsClient.fetch_dataset`. The coverage
-test in ``tests/test_jquants_catalog.py`` fails if any entry lacks a usable
-``/v2/`` path.
-
-Paths reflect the J-Quants API V2 spec (Premium + minute/TDnet add-ons); see
-``docs/data_sources.md`` for the verified date and
-https://jpx-jquants.com/en/spec/data-spec for the canonical reference. A few
-add-on paths are marked ``_note`` where the official bulk/tick surface is
-still being confirmed — they remain callable through the same client; only
-their *preferred* transport is provisional.
+Premium-core metadata is loaded from ``data_contracts/``.  The Worker imports
+that same JSON document, so paths, date modes, natural keys, and PIT policies
+have one authority.  Add-on datasets remain catalogued here because the F0
+contract covers the Premium 23 only.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-BASE = "https://api.jquants.com"
+from data_contracts.loader import all_contracts
 
-# Premium-safe request spacing. Premium allows 500 req/min (8.33 rps); we cap
-# at ~8 rps (0.125 s, 480/min) for headroom. Overridable per-client.
+BASE = "https://api.jquants.com"
 PREMIUM_MIN_INTERVAL = 0.125
 
-DATASETS: dict[str, dict[str, Any]] = {
-    # ------------------------------------------------------------------ core
-    "equities_master": {
-        "path": "/v2/equities/master",
-        "group": "core",
-        "bulk": "api",
-        "params": ["code", "date"],
-        "key": ["Code", "Date"],
-    },
-    "equities_bars_daily": {
-        "path": "/v2/equities/bars/daily",
-        "group": "core",
-        "bulk": "bulk",
-        "params": ["code", "date", "from", "to"],
-        "key": ["Code", "Date"],
-    },
-    "equities_bars_daily_am": {
-        "path": "/v2/equities/bars/daily/am",
-        "group": "core",
-        "bulk": "api",
-        "params": ["code", "date"],
-        "key": ["Code", "Date"],
-    },
-    "fins_summary": {
-        "path": "/v2/fins/summary",
-        "group": "core",
-        "bulk": "api",
-        "params": ["code", "date"],
-        "key": ["Code", "DisclosedDate"],
-        "_note": "OPTIONAL on some plans; raw-only when not normalizable.",
-    },
-    "fins_details": {
-        "path": "/v2/fins/details",
-        "group": "core",
-        "bulk": "api",
-        "params": ["code", "date"],
-        "key": ["Code", "DisclosedDate"],
-    },
-    "fins_dividend": {
-        "path": "/v2/fins/dividend",
-        "group": "core",
-        "bulk": "api",
-        "params": ["code", "from", "to"],
-        "key": ["Code", "AnnouncementDate"],
-    },
-    "fins_earnings_date": {
-        "path": "/v2/fins/earnings-date",
-        "group": "core",
-        "bulk": "api",
-        "params": ["code"],
-        "key": ["Code", "Date"],
-    },
-    "equities_earnings_calendar": {
-        "path": "/v2/equities/earnings-calendar",
-        "group": "core",
-        "bulk": "api",
-        "params": ["from", "to", "date"],
-        "key": ["Date", "Code"],
-    },
-    "markets_calendar": {
-        "path": "/v2/markets/calendar",
-        "group": "core",
-        "bulk": "api",
-        "params": ["from", "to", "holidaydivision"],
-        "key": ["Date"],
-    },
-    "equities_investor_types": {
-        "path": "/v2/equities/investor-types",
-        "group": "core",
-        "bulk": "api",
-        "params": ["code", "from", "to"],
-        "key": ["Date", "Code"],
-    },
-    "indices_bars_daily_topix": {
-        "path": "/v2/indices/bars/daily/topix",
-        "group": "core",
-        "bulk": "api",
-        "params": ["from", "to"],
-        "key": ["Date"],
-    },
-    "indices_bars_daily": {
-        "path": "/v2/indices/bars/daily",
-        "group": "core",
-        "bulk": "api",
-        "params": ["code", "from", "to"],
-        "key": ["Date", "Code"],
-    },
-    "derivatives_bars_daily_options_225": {
-        "path": "/v2/derivatives/bars/daily/options/225",
-        "group": "core",
-        "bulk": "api",
-        "params": ["from", "to"],
-        # Multi-observation: one date returns a row *per* Nikkei-225 option
-        # contract (many strikes / calls / puts / months); ``Code`` identifies
-        # the contract. ``Date`` alone collapses the whole chain onto one row,
-        # so ``Code`` must be in the key.
-        "key": ["Date", "Code"],
-    },
-    "derivatives_bars_daily_futures": {
-        "path": "/v2/derivatives/bars/daily/futures",
-        "group": "core",
-        "bulk": "api",
-        "params": ["code", "from", "to"],
-        "key": ["Date", "Code"],
-    },
-    "derivatives_bars_daily_options": {
-        "path": "/v2/derivatives/bars/daily/options",
-        "group": "core",
-        "bulk": "api",
-        "params": ["code", "from", "to"],
-        "key": ["Date", "Code"],
-    },
-    "markets_margin_interest": {
-        "path": "/v2/markets/margin-interest",
-        "group": "core",
-        "bulk": "api",
-        "params": ["code", "date", "from", "to"],
-        "key": ["Date", "Code"],
-    },
-    "markets_margin_alert": {
-        "path": "/v2/markets/margin-alert",
-        "group": "core",
-        "bulk": "api",
-        "params": ["code", "date", "from", "to"],
-        "key": ["Date", "Code"],
-    },
-    "markets_short_ratio": {
-        "path": "/v2/markets/short-ratio",
-        "group": "core",
-        "bulk": "api",
-        "params": ["code", "date", "from", "to", "section"],
-        "key": ["Date", "Code"],
-    },
-    "markets_short_sale_report": {
-        "path": "/v2/markets/short-sale-report",
-        "group": "core",
-        "bulk": "api",
-        "params": ["code", "date", "from", "to"],
-        "key": ["Date", "Code"],
-    },
-    "markets_breakdown": {
-        "path": "/v2/markets/breakdown",
-        "group": "core",
-        "bulk": "api",
-        "params": ["code", "date", "from", "to"],
-        "key": ["Date", "Code"],
-    },
-    # ----------------------------------------------------- EDINET (no bulk)
-    "edinet_major_shareholders": {
-        "path": "/v2/edinet/major-shareholders",
-        "group": "edinet",
-        "bulk": "api",
-        "params": ["code", "date"],
-        "key": ["Code", "DisclosedDate"],
-    },
-    "edinet_cross_shareholdings": {
-        "path": "/v2/edinet/cross-shareholdings",
-        "group": "edinet",
-        "bulk": "api",
-        "params": ["code", "date"],
-        "key": ["Code", "DisclosedDate"],
-    },
-    "edinet_large_volume_shareholders": {
-        "path": "/v2/edinet/large-volume-shareholders",
-        "group": "edinet",
-        "bulk": "api",
-        "params": ["code", "date"],
-        "key": ["Code", "DisclosedDate"],
-    },
-    # --------------------------------------------------------------- add-ons
+
+def _premium_entries() -> dict[str, dict[str, Any]]:
+    return {c.dataset_id: c.as_catalog_entry() for c in all_contracts()}
+
+
+_ADDON_DATASETS: dict[str, dict[str, Any]] = {
     "equities_bars_minute": {
         "path": "/v2/equities/bars/minute",
         "group": "addon",
         "bulk": "bulk",
         "params": ["code", "from", "to"],
-        # Multi-observation: many minute bars share a (Code, Date). The bulk
-        # CSV carries a per-minute ``DateTime``; the REST surface splits it
-        # into ``Date`` + ``Time``. List both discriminators so the normalizer
-        # can keep every bar regardless of transport — and the two are
-        # canonicalized onto a single ``Time`` = HH:MM so the SAME bar fetched
-        # via either transport upserts to one row, not two (see
-        # normalize._natural_key / _canonical_minute_time).
+        # DateTime (bulk) and Date+Time (REST) are folded to one minute key by
+        # normalize._natural_key so switching transports remains idempotent.
         "key": ["Code", "Date", "DateTime", "Time"],
     },
     "equities_trades": {
@@ -224,22 +35,14 @@ DATASETS: dict[str, dict[str, Any]] = {
         "group": "addon",
         "bulk": "bulk",
         "params": ["code", "date", "from", "to"],
-        # Multi-observation: many ticks share a (Code, Date). The per-trade
-        # ``DateTime`` must be in the key or upsert collapses a day's ticks
-        # onto the last one written.
         "key": ["Code", "Date", "DateTime"],
-        "_note": "Tick (trades) add-on; official path/CSV surface to confirm. "
-                 "Callable via the generic client regardless.",
+        "_note": "Tick add-on; official path/CSV surface remains provisional.",
     },
     "td_list": {
         "path": "/v2/td/list",
         "group": "addon",
         "bulk": "api",
         "params": ["date"],
-        # Multi-observation: many disclosures per date. The payload exposes
-        # ``DiscDate`` (not ``Date``) plus a unique ``DiscNo`` per disclosure;
-        # both must be in the key, else a day's disclosures collapse onto one
-        # (and the old ``["Date"]`` matched nothing, silently using a row hash).
         "key": ["DiscDate", "DiscNo"],
     },
     "td_files": {
@@ -255,60 +58,55 @@ DATASETS: dict[str, dict[str, Any]] = {
         "bulk": "bulk",
         "params": ["date"],
         "key": ["DiscDate", "DiscNo"],
-        "_note": "TDnet bulk add-on; official path to confirm.",
+        "_note": "TDnet bulk add-on; official path remains provisional.",
     },
 }
 
+DATASETS: dict[str, dict[str, Any]] = {**_premium_entries(), **_ADDON_DATASETS}
+
 
 def list_datasets(group: str | None = None) -> list[str]:
-    """All dataset ids, optionally filtered by ``group`` (core/addon/edinet)."""
+    """All dataset ids, optionally filtered by ``group``."""
     if group is None:
-        return list(DATASETS.keys())
-    return [k for k, v in DATASETS.items() if v.get("group") == group]
+        return list(DATASETS)
+    return [dataset_id for dataset_id, entry in DATASETS.items() if entry["group"] == group]
 
 
 def get(dataset_id: str) -> dict[str, Any]:
-    """Catalog entry for ``dataset_id`` — raises ``KeyError`` if unknown."""
-    if dataset_id not in DATASETS:
-        raise KeyError(f"unknown jquants dataset: {dataset_id!r}")
-    return DATASETS[dataset_id]
+    try:
+        return DATASETS[dataset_id]
+    except KeyError as exc:
+        raise KeyError(f"unknown jquants dataset: {dataset_id!r}") from exc
 
 
 def path_of(dataset_id: str) -> str:
-    """The ``/v2/...`` REST path for ``dataset_id``."""
     return get(dataset_id)["path"]
 
 
-# Phase 3.5 — Premium **core** closed loop. All J-Quants Premium datasets that
-# are NOT minute/tick/TDnet add-ons. ``edinet`` is included (Premium surface).
-# This is the canonical list for the CF ingestion schedule: every id below
-# MUST have a fetch job and a validation result. The closure test
-# (tests/test_phase35_premium_set.py) asserts this list is exhaustive over the
-# required handoff datasets and that no addon id appears here.
-PREMIUM_CORE_DATASETS: tuple[str, ...] = tuple(
-    list_datasets("core") + list_datasets("edinet")
-)
+PREMIUM_CORE_DATASETS: tuple[str, ...] = tuple(c.dataset_id for c in all_contracts())
 
 
 def is_premium_core(dataset_id: str) -> bool:
-    """True if ``dataset_id`` is in the Phase 3.5 Premium core closed loop.
-
-    Add-ons (minute, trades/tick, TDnet: ``equities_bars_minute``,
-    ``equities_trades``, ``td_*``) are deliberately excluded — they are out
-    of scope for the required CF schedule.
-    """
     return dataset_id in PREMIUM_CORE_DATASETS
 
 
 def assert_catalog_coverage() -> None:
-    """Fail fast (raise) if any catalog entry is missing a usable ``/v2/`` path.
-
-    Called from the coverage test and importable so downstream tooling can
-    assert completeness without re-implementing the check.
-    """
-    for did, entry in DATASETS.items():
-        p = entry.get("path", "")
-        if not isinstance(p, str) or not p.startswith("/v2/") or len(p) <= len("/v2/"):
+    for dataset_id, entry in DATASETS.items():
+        path = entry.get("path", "")
+        if not isinstance(path, str) or not path.startswith("/v2/") or len(path) <= 4:
             raise ValueError(
-                f"catalog entry {did!r} has no usable /v2/ path: {p!r}"
+                f"catalog entry {dataset_id!r} has no usable /v2/ path: {path!r}"
             )
+
+
+__all__ = [
+    "BASE",
+    "DATASETS",
+    "PREMIUM_CORE_DATASETS",
+    "PREMIUM_MIN_INTERVAL",
+    "assert_catalog_coverage",
+    "get",
+    "is_premium_core",
+    "list_datasets",
+    "path_of",
+]

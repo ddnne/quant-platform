@@ -7,3 +7,4 @@ workers_dev = true
 
 # Secret bindings (values set via `wrangler secret put`, never in this file):
 # - JQUANTS_API_KEY
+# - INGESTION_PROXY_TOKEN

@@ -24,8 +24,14 @@ dev = [
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["ingestion*", "storage*", "pit*", "core*", "features*", "strategies*", "paper_runtime*", "cf_platform*"]
+include = ["ingestion*", "storage*", "pit*", "core*", "features*", "strategies*", "paper_runtime*", "cf_platform*", "data_contracts*", "agents*", "risk*"]
 exclude = ["tests*", "scripts*", "data*", "docs*"]
+
+[tool.setuptools]
+py-modules = ["price_basis"]
+
+[tool.setuptools.package-data]
+data_contracts = ["*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

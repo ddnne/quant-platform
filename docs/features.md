@@ -61,8 +61,22 @@ compute function:
   shipped features), ``"retired"`` (kept for audit; do not consume in
   new code).
 
-Built-in features default to ``intended_role="signal"`` and
-``status="approved"``. Third-party features may override either field.
+`intended_role` has no default and is required for every definition.
+`status` defaults to ``"candidate"`` so a new or external feature is never
+silently promoted. Shipped built-ins declare ``intended_role="signal"`` and
+``status="approved"`` explicitly. Declarative strategies resolve features
+through `features.get_for_strategy(...)`, which admits only approved,
+strategy-facing roles by default; any override must be explicit.
+
+### Price basis (F0-M)
+
+Price-based definitions declare `price_basis="RAW"` and every output repeats
+that value in provenance metadata. `RAW` means the PIT-visible, unadjusted
+session close. `PIT_ADJUSTED` is reserved for a future series whose adjustment
+factors and revisions can be reconstructed at each `as_of`; the existence of a
+vendor `adjustment_close` field alone is not treated as PIT-safety evidence.
+Core sizing, fills, marks, and the built-in price features therefore use the
+same `RAW` convention.
 
 ## Usage
 
@@ -114,6 +128,7 @@ register(FeatureDefinition(
     tags=("price",),
     intended_role="signal",   # or "state" / "structural" / "utility"
     status="candidate",       # or "shadow" / "approved" / "retired"
+    price_basis="RAW",        # for price-derived definitions
 ))
 ```
 

@@ -1,172 +1,84 @@
-"""Phase 3.5 (P0-1) — Dataset-level ``available_at`` policy (Python mirror).
+"""Python compatibility surface for Worker availability normalization.
 
-The Cloudflare Worker picks ``available_at`` per row using a dataset-level
-policy:
-
-    policy         | rule
-    ---------------+---------------------------------------------------------
-    session_close  | equities_bars_daily / am / indices / derivatives bars:
-                   | available_at = event-date session close JST
-                   | (15:30 from 2024-11-05; 15:00 before that).
-    event_field    | If the row has DisclosedDate / AnnouncementDate /
-                   | DateTime use that as the event; available_at = that
-                   | instant (or next business open at 09:00 JST when only
-                   | a date is present).
-    ingest_time    | Fallback only when no better signal exists.
-
-This module is the Python half. The TypeScript mirror lives in
-``platform/workers/ingestion-premium/src/availability.ts``. Cross-language
-consistency is asserted in ``tests/test_phase35_availability.py``.
-
-Nothing here performs I/O — it is pure transformation so unit tests stay
-fast and deterministic.
+Rules come from the shared Premium-core JSON contract; this module deliberately
+contains no dataset list or field-priority table of its own.
 """
 
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from typing import Any, Iterable, Mapping, Optional
+from typing import Any, Mapping
 
-JST = timezone(timedelta(hours=9))
+from data_contracts.identity import available_at_for, session_close_jst
+from data_contracts.loader import AVAILABLE_AT_POLICIES, all_contracts, contract_for
 
-# Datasets whose row Date IS the session — session-close JST is the correct
-# PIT-available time for these. MUST match the TS SESSION_CLOSE_DATASETS.
-SESSION_CLOSE_DATASETS: tuple[str, ...] = (
-    "derivatives_bars_daily_futures",
-    "derivatives_bars_daily_options",
-    "derivatives_bars_daily_options_225",
-    "equities_bars_daily",
-    "equities_bars_daily_am",
-    "indices_bars_daily",
-    "indices_bars_daily_topix",
-)
-
-# 2024-11-05: TSE afternoon close moved from 15:00 to 15:30 JST.
-SESSION_CLOSE_CUTOFF_DATE = "2024-11-05"
-SESSION_CLOSE_TIME_NEW = "15:30"
-SESSION_CLOSE_TIME_OLD = "15:00"
-
-# Event-time candidate fields in priority order. Bare dates are normalized
-# to next-business-open 09:00 JST. MUST match the TS EVENT_FIELD_CANDIDATES.
-EVENT_FIELD_CANDIDATES: tuple[str, ...] = (
-    "DateTime",
-    "DisclosedDate",
-    "AnnouncementDate",
-    "DiscDate",
-    "Date",
-)
-
-POLICIES = ("session_close", "event_field", "ingest_time")
-AvailabilityPolicy = str  # literal type would require Python 3.8+ in cf_platform
-
-DATASET_POLICY: dict[str, str] = {ds: "session_close" for ds in SESSION_CLOSE_DATASETS}
-DEFAULT_POLICY = "event_field"
+POLICIES = tuple(sorted(AVAILABLE_AT_POLICIES))
+DATASET_POLICY = {c.dataset_id: c.available_at_policy for c in all_contracts()}
+SESSION_CLOSE_DATASETS = tuple(sorted(
+    c.dataset_id for c in all_contracts() if c.available_at_policy == "session_close"
+))
+DEFAULT_POLICY = "ingest_time_conservative"
+AvailabilityPolicy = str
 
 
-def policy_for_dataset(dataset_id: str) -> str:
-    """Return the policy name for ``dataset_id`` (falls back to default)."""
-    return DATASET_POLICY.get(dataset_id, DEFAULT_POLICY)
+def _ordered_contract_fields() -> tuple[str, ...]:
+    seen: dict[str, None] = {}
+    for contract in all_contracts():
+        for field in contract.event_time_fields:
+            seen.setdefault(field, None)
+        if contract.availability_field:
+            for field in contract.availability_field.split("+"):
+                seen.setdefault(field, None)
+    return tuple(seen)
 
 
-def session_close_jst(date_yyyy_mm_dd: str) -> str:
-    """JST session-close instant for a session date.
-
-    15:30 JST from 2024-11-05 onward, 15:00 JST before. Raises ``ValueError``
-    on malformed input.
-    """
-    _check_date(date_yyyy_mm_dd)
-    time = (
-        SESSION_CLOSE_TIME_OLD
-        if date_yyyy_mm_dd < SESSION_CLOSE_CUTOFF_DATE
-        else SESSION_CLOSE_TIME_NEW
-    )
-    return f"{date_yyyy_mm_dd}T{time}:00+09:00"
+# Import compatibility only. Runtime selection is always per contract; this
+# union is not a priority list and must not be used as normalization authority.
+EVENT_FIELD_CANDIDATES = _ordered_contract_fields()
 
 
 def next_business_open_jst(date_yyyy_mm_dd: str) -> str:
-    """Advance ``date_yyyy_mm_dd`` past weekends; return 09:00 JST that day."""
-    _check_date(date_yyyy_mm_dd)
-    # Use UTC constructors so the day-walk does not drift across TZs.
-    y, m, d = (int(x) for x in date_yyyy_mm_dd.split("-"))
-    dt = datetime(y, m, d, tzinfo=timezone.utc)
-    while dt.weekday() >= 5:  # Sat=5, Sun=6
-        dt += timedelta(days=1)
-    return f"{dt.strftime('%Y-%m-%d')}T09:00:00+09:00"
+    """Deprecated compatibility helper; runtime policies never call this."""
+    day = datetime.strptime(date_yyyy_mm_dd, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    while day.weekday() >= 5:
+        day += timedelta(days=1)
+    return day.strftime("%Y-%m-%dT09:00:00+09:00")
 
 
-def pick_event_field_instant(row: Mapping[str, Any]) -> Optional[str]:
-    """Pick the event-field instant from ``row``, or ``None`` if no candidate.
+def pick_event_field_instant(row: Mapping[str, Any]) -> str | None:
+    """Deprecated field-inspection helper retained for Phase-3.5 callers.
 
-    Bare dates (``YYYY-MM-DD``) advance to next business open at 09:00 JST.
-    Full timestamps are returned verbatim (caller is expected to have
-    offset-aware formatting).
+    It is not used to choose dataset availability. Contract-driven callers use
+    :func:`pick_available_at`, which never treats an observation Date as 09:00.
     """
-    for key in EVENT_FIELD_CANDIDATES:
-        v = row.get(key)
-        if not isinstance(v, str) or not v:
+    for field in EVENT_FIELD_CANDIDATES:
+        value = row.get(field)
+        if not isinstance(value, str) or not value:
             continue
-        if _is_bare_date(v):
-            return next_business_open_jst(v)
-        if _has_time_component(v):
-            return v
-        # Unexpected shape — keep scanning candidates rather than guessing.
+        if len(value) == 10 and value[4] == "-" and value[7] == "-":
+            return next_business_open_jst(value)
+        if "T" in value or " " in value:
+            return value
     return None
 
 
-def pick_available_at(
-    row: Mapping[str, Any],
-    dataset_id: str,
-    ingested_at: str,
-) -> str:
-    """Compute ``available_at`` per dataset policy.
-
-    Resolution order:
-      1. Policy rule for the dataset (session_close → session close JST;
-         event_field → event-field instant).
-      2. Cross-policy fallback: if a session_close row lacks ``Date``, try
-         event_field; if event_field finds nothing, fall through to ingest.
-      3. ``ingested_at`` — the fetch instant. Last resort, PIT-safe.
-    """
-    policy = policy_for_dataset(dataset_id)
-    if policy == "session_close":
-        d = row.get("Date")
-        if isinstance(d, str) and _is_bare_date(d):
-            return session_close_jst(d)
-        ev = pick_event_field_instant(row)
-        if ev is not None:
-            return ev
-        return ingested_at
-    if policy == "event_field":
-        ev = pick_event_field_instant(row)
-        if ev is not None:
-            return ev
-        return ingested_at
-    # ingest_time
-    return ingested_at
-
-
-def _check_date(value: str) -> None:
-    if len(value) != 10 or value[4] != "-" or value[7] != "-":
-        raise ValueError(f"expected YYYY-MM-DD, got {value!r}")
+def policy_for_dataset(dataset_id: str) -> str:
     try:
-        datetime.strptime(value, "%Y-%m-%d")
-    except ValueError as exc:
-        raise ValueError(f"expected YYYY-MM-DD, got {value!r}") from exc
+        return contract_for(dataset_id).available_at_policy
+    except KeyError:
+        return DEFAULT_POLICY
 
 
-def _is_bare_date(value: str) -> bool:
-    return (
-        len(value) == 10
-        and value[4] == "-"
-        and value[7] == "-"
-        and value[:4].isdigit()
-        and value[5:7].isdigit()
-        and value[8:10].isdigit()
-    )
-
-
-def _has_time_component(value: str) -> bool:
-    return "T" in value or " " in value
+def pick_available_at(
+    row: Mapping[str, Any], dataset_id: str, ingested_at: str
+) -> str:
+    try:
+        return available_at_for(row, dataset_id, ingested_at)
+    except KeyError:
+        # Match the Worker compatibility wrapper: an uncontracted dataset has
+        # no evidenced publication rule, so ingestion time is the only safe
+        # availability instant.
+        return ingested_at
 
 
 __all__ = [
@@ -174,7 +86,6 @@ __all__ = [
     "DATASET_POLICY",
     "DEFAULT_POLICY",
     "EVENT_FIELD_CANDIDATES",
-    "JST",
     "POLICIES",
     "SESSION_CLOSE_DATASETS",
     "next_business_open_jst",

@@ -1,4 +1,4 @@
-"""Local JSON persistence and a thin JSONL index for paper results.
+"""Immutable paper-result JSON with a parallel-safe SQLite experiment index.
 
 This module persists research outputs only.  It does not read market facts;
 all facts in a :class:`PaperRunResult` have already passed through PIT,
@@ -8,11 +8,14 @@ features, and the core engine.
 from __future__ import annotations
 
 import json
+import os
 import re
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+from paper_runtime import ExperimentIndex
 
 from .types import PaperRunResult
 
@@ -29,12 +32,13 @@ def _safe_component(value: str) -> str:
 
 
 class JsonPaperStore:
-    """Atomic result store with a small control-plane experiment index.
+    """Immutable result store with a SQLite WAL control-plane index.
 
     V2 results live below
-    ``<root>/<strategy_id>/<experiment_id>/<run_id>.json``.  ``index.jsonl``
-    is rewritten atomically on each save, making repeated saves an idempotent
-    upsert instead of accumulating duplicate index records.
+    ``<root>/<strategy_id>/<experiment_id>/<run_id>.json``.  The JSON is the
+    immutable source of truth; ``index.sqlite3`` is only a query accelerator.
+    Independent processes may add experiments concurrently without rewriting
+    a shared text file.
     """
 
     def __init__(self, root: str | Path = DEFAULT_PAPER_ROOT) -> None:
@@ -42,7 +46,7 @@ class JsonPaperStore:
 
     @property
     def index_path(self) -> Path:
-        return self.root / "index.jsonl"
+        return self.root / "index.sqlite3"
 
     def result_path(self, result: PaperRunResult) -> Path:
         strategy_id = str(result.reproducibility["strategy_id"])
@@ -54,7 +58,12 @@ class JsonPaperStore:
         )
 
     def save(self, result: PaperRunResult) -> Path:
-        """Persist ``result`` atomically and return its path."""
+        """Persist ``result`` once and index it transactionally.
+
+        An identical retry is idempotent. Reusing a run path for different
+        JSON is rejected: experiment metadata must never silently rewrite its
+        immutable evidence record.
+        """
         path = self.result_path(result)
         path.parent.mkdir(parents=True, exist_ok=True)
         serialized = json.dumps(
@@ -74,32 +83,23 @@ class JsonPaperStore:
         ) as handle:
             handle.write(serialized)
             temporary = Path(handle.name)
-        temporary.replace(path)
+        try:
+            # Hard-link publication is atomic and refuses to replace an
+            # existing result, including a result written by another process.
+            os.link(temporary, path)
+        except FileExistsError:
+            if path.read_text(encoding="utf-8") != serialized:
+                raise FileExistsError(
+                    f"immutable paper result already exists with different "
+                    f"content: {path}"
+                )
+        finally:
+            temporary.unlink(missing_ok=True)
         self._upsert_index(result, path)
         return path
 
     def _read_index(self) -> list[dict[str, Any]]:
-        if not self.index_path.is_file():
-            return []
-        entries: list[dict[str, Any]] = []
-        for line_number, line in enumerate(
-            self.index_path.read_text(encoding="utf-8").splitlines(), start=1
-        ):
-            if not line.strip():
-                continue
-            try:
-                entry = json.loads(line)
-            except json.JSONDecodeError as exc:
-                raise ValueError(
-                    f"invalid paper index JSON at {self.index_path}:{line_number}"
-                ) from exc
-            if not isinstance(entry, dict):
-                raise ValueError(
-                    f"paper index entry at {self.index_path}:{line_number} "
-                    "is not a JSON object"
-                )
-            entries.append(entry)
-        return entries
+        return ExperimentIndex(self.index_path).entries()
 
     @staticmethod
     def _metric(metrics: dict[str, Any], *keys: str) -> Any:
@@ -142,53 +142,12 @@ class JsonPaperStore:
 
     def _upsert_index(self, result: PaperRunResult, path: Path) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
-        entries = self._read_index()
-        key = (result.experiment_id, result.run_id)
-        existing = next(
-            (
-                entry
-                for entry in entries
-                if (entry.get("experiment_id"), entry.get("run_id")) == key
-            ),
-            None,
+        entry = self._index_entry(
+            result,
+            path,
+            created_at=datetime.now(timezone.utc).isoformat(),
         )
-        created_at = (
-            str(existing["created_at"])
-            if existing is not None and existing.get("created_at")
-            else datetime.now(timezone.utc).isoformat()
-        )
-        replacement = self._index_entry(result, path, created_at=created_at)
-        entries_by_key = {
-            (str(entry.get("experiment_id", "")), str(entry.get("run_id", ""))): entry
-            for entry in entries
-        }
-        entries_by_key[key] = replacement
-        ordered = sorted(entries_by_key.values(), key=lambda row: (
-            str(row.get("experiment_id", "")),
-            str(row.get("run_id", "")),
-        ))
-        serialized = "".join(
-            json.dumps(
-                entry,
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-                allow_nan=False,
-            )
-            + "\n"
-            for entry in ordered
-        )
-        with tempfile.NamedTemporaryFile(
-            "w",
-            encoding="utf-8",
-            dir=self.root,
-            prefix=f".{self.index_path.name}.",
-            suffix=".tmp",
-            delete=False,
-        ) as handle:
-            handle.write(serialized)
-            temporary = Path(handle.name)
-        temporary.replace(self.index_path)
+        ExperimentIndex(self.index_path).upsert(entry)
 
     def load(
         self,

@@ -3,11 +3,11 @@
 日本株・開示・債券データを用いた量化研究／Paper／FoF 基盤。  
 正本は GitHub リポジトリ 1 本（公開・非公開は運用で変更可）。
 
-## 現状（Phase 5）
+## 現状（Phase 6）
 
 **Phase 1（Ingestion）＋ Phase 2（PIT Data API）＋ Phase 3（コアエンジン最小）＋
 Phase 3.5（CF J-Quants Premium 閉路の実装）＋ Phase 4（特徴量 Registry）＋
-Phase 5（Paper 縦通し）が完了した状態です。**
+Phase 5（Paper 縦通し）＋ Phase 6（F0 hardening・役割 agent・StrategySpec）が完了した状態です。**
 
 Phase 1 — 2 データソースの取得・正規化・格納が動きます:
 
@@ -50,11 +50,20 @@ trades を含み、既定で `data/paper/<strategy_id>/<run_id>.json` に保存�
 ingestion-only で、戦略は DB／PIT／HTTP／secrets に直接触れない。詳細は
 [docs/paper.md](docs/paper.md)。
 
+Phase 6 — **full-code hardening + 役割 agent（`agents/`）+ StrategySpec
+（`strategies/spec/`）**。Premium core 23 の canonical data contract、contract-driven
+`event_time` / `available_at` / natural key、revision change feed、validated local snapshot
+manifest、parallel-safe SQLite WAL paper index、stale valuation mark と explicit RAW price
+basis、feature approval governance を固定した。8 役割は structured message のみを交換し、
+StrategySpec は whitelist interpreter により approved feature の `ctx.feature` 呼び出しだけへ
+変換される。Paper 後に独立 risk audit を保存する。詳細は
+[docs/agents.md](docs/agents.md)。
+
 > 開示系（EDINET 由来の大株主・持ち合い・大量保有）は独立した EDINET DB ではなく、**J-Quants の EDINET 系 API**（`/v2/edinet/major-shareholders`、`/v2/edinet/cross-shareholdings`、`/v2/edinet/large-volume-shareholders`、および `/v2/fins/...`）で統合する方針。Phase 1 では J-Quants 上記エンドポイント + JSDA が対象。
 
 ランタイムは **local 主系**（`LocalHttpClient` / httpx）。Cloudflare は Phase 3.5 から取得閉路も担う（Premium core）。詳細は [docs/data_sources.md](docs/data_sources.md)。
 
-**次は Phase 6（役割エージェント）** です。
+**次は Phase 7（選抜・Knowledge・AI Gateway）** です。
 
 詳細は [docs/architecture.md](docs/architecture.md) と [docs/roadmap.md](docs/roadmap.md) を参照してください。
 
@@ -67,14 +76,14 @@ ingestion-only で、戦略は DB／PIT／HTTP／secrets に直接触れない�
 | `pit/` | **PIT Data API**（**Phase 2 実装**: `as_of` 必須の読み出し専用 API） |
 | `core/` | **コアエンジン**（**Phase 3 実装**: PIT 経由のみのブラックボックスバックテスト） |
 | `features/` | **特徴量 Registry**（**Phase 4 実装**: PIT 経由のみ・versioned・`as_of` 必須） |
-| `risk/` | リスク管理（後続） |
-| `strategies/` | **Phase 5 実装**: feature-driven サンプル戦略と Paper runner／result／store |
+| `risk/` | **Phase 6 実装**: Paper result と分離した immutable risk audit store |
+| `strategies/` | **Phase 5–6 実装**: Paper runner／store、sample 戦略、declarative StrategySpec interpreter |
 | `fof/` | Fund of Funds 層（後続） |
-| `agents/` | 役割エージェント（後続） |
+| `agents/` | **Phase 6 実装**: 8 役割の structured I/O と offline orchestrator |
 | `platform/` | Cloudflare 等プラットフォーム設定・Secrets の置き場所（**Phase 3.5**: ingestion-premium Worker） |
 | `cf_platform/` | Python 側の CF 連携ヘルパ（**Phase 3.5**: 検証ロジック・natural_key の真相） |
 | `storage/` | SQLite スキーマ・ライタ（**Phase 1 実装**） |
-| `scripts/` | 運用・開発用スクリプト（ingestion／sync／validation／`run_paper_once.py`） |
+| `scripts/` | 運用・開発用スクリプト（ingestion／sync／validation／Paper／agent CLI） |
 | `tests/` | テスト（オフライン・鍵不要で green） |
 
 ## 開発言語・ツール

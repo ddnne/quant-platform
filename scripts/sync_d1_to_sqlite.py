@@ -10,14 +10,11 @@ code 2 (nothing fetched) and never touches the network.
 
 Incremental mode
 ----------------
-The D1 export endpoint only paginates by `rowid`; it has **no server-side
-``ingested_at`` filter**. ``--incremental`` therefore derives a per-table
-``since`` from the local DB's ``MAX(ingested_at)`` and skips rows whose
-``ingested_at`` is at or before that watermark *after* page fetch (documented
-limitation — see ``docs/phase35_storage_scale.md``). An explicit ``--since``
-ISO timestamp overrides the derived value. A run that produces zero new rows
-still walks every page; for tables that grow without bound the operational
-answer is the planned parquet/R2 timeseries path, not this script.
+``--incremental`` consumes the append-only Worker change feed with
+``change_seq > last_applied_change_seq``. The sequence watermark advances
+only after a whole page has been durably applied. Full table export remains
+the bootstrap path; client-side timestamp filtering is compatibility-only for
+pre-Phase-6 mocked responses and is not the production correctness mechanism.
 
 Examples
 --------
@@ -46,6 +43,7 @@ import argparse
 import os
 import sqlite3
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlencode
 
@@ -54,6 +52,12 @@ if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
 from ingestion.common.secrets import resolve_proxy_config  # noqa: E402
+from ingestion.jquants.catalog import PREMIUM_CORE_DATASETS  # noqa: E402
+from paper_runtime import (  # noqa: E402
+    begin_snapshot_sync,
+    commit_snapshot_manifest,
+    fail_snapshot_sync,
+)
 from storage.sqlite_store import SqliteStore  # noqa: E402
 
 # Tables we sync (mirror schema.py). Order matters for FK-friendly ingestion
@@ -68,12 +72,26 @@ DEFAULT_TABLES: tuple[str, ...] = (
     "jquants_listed_info_revisions",
     "jquants_daily_bars_revisions",
     "jquants_records_revisions",
+    "ingestion_run_log",
+    "ingestion_validation",
+    "ingestion_watermarks",
 )
 DEFAULT_PAGE_LIMIT = 500
+DEFAULT_MAX_PAGES = 10_000
+_CHANGE_FEED_TABLES = frozenset({
+    "jquants_records",
+    "jquants_records_revisions",
+})
 
 
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Sync CF D1 → local SQLite (PIT)")
+    p.add_argument(
+        "--max-pages",
+        type=int,
+        default=DEFAULT_MAX_PAGES,
+        help="Fail if one export stream exceeds this many pages (default: 10000).",
+    )
     p.add_argument(
         "--url",
         default=os.environ.get("INGESTION_PREMIUM_URL"),
@@ -111,17 +129,16 @@ def _build_parser() -> argparse.ArgumentParser:
         "--incremental",
         action="store_true",
         help=(
-            "Skip rows already mirrored locally. Derives a per-table since="
-            "MAX(ingested_at) from the local DB and applies it client-side "
-            "after page fetch (the export API has no server-side filter)."
+            "Apply only sequenced Worker changes after the locally committed "
+            "change_seq watermark."
         ),
     )
     p.add_argument(
         "--since",
         default=None,
         help=(
-            "ISO timestamp override for --incremental filtering. Applies to "
-            "every table; ignored without --incremental."
+            "Legacy ISO filter for compatibility with a pre-change-feed "
+            "response. Production incremental sync uses change_seq."
         ),
     )
     return p
@@ -321,6 +338,7 @@ def _sync_table(
     *,
     page_limit: int,
     since: str | None,
+    max_pages: int = DEFAULT_MAX_PAGES,
 ) -> tuple[int, int, int, int, str | None]:
     """Pull one table end-to-end.
 
@@ -330,7 +348,12 @@ def _sync_table(
     """
     cursor: str | int | None = None
     pages = seen = registered = skipped = 0
+    seen_cursors: set[str] = set()
     while True:
+        if pages >= max_pages:
+            raise ValueError(
+                f"export exceeded max_pages={max_pages} for table={table}"
+            )
         query: dict[str, str | int] = {"table": table, "limit": page_limit}
         if cursor is not None:
             query["cursor"] = cursor
@@ -356,14 +379,142 @@ def _sync_table(
         next_cursor = payload.get("next_cursor")
         if next_cursor is None or next_cursor == cursor:
             raise ValueError("export pagination did not advance cursor")
+        cursor_token = str(next_cursor)
+        if cursor_token in seen_cursors:
+            raise ValueError("export pagination repeated a prior cursor")
+        seen_cursors.add(cursor_token)
         cursor = next_cursor
     return pages, seen, registered, skipped, since
+
+
+def _last_change_seq(store: SqliteStore) -> int:
+    row = store._conn.execute(  # noqa: SLF001
+        "SELECT last_applied_change_seq FROM sync_change_state "
+        "WHERE feed = 'jquants_records'"
+    ).fetchone()
+    return int(row[0]) if row is not None else 0
+
+
+def _record_change_seq(store: SqliteStore, value: int) -> None:
+    store._conn.execute(  # noqa: SLF001
+        """
+        INSERT INTO sync_change_state (feed, last_applied_change_seq, updated_at)
+        VALUES ('jquants_records', ?, ?)
+        ON CONFLICT(feed) DO UPDATE SET
+            last_applied_change_seq = excluded.last_applied_change_seq,
+            updated_at = excluded.updated_at
+        """,
+        (value, datetime.now(timezone.utc).isoformat()),
+    )
+    store._conn.commit()  # noqa: SLF001
+
+
+def _apply_change_rows(store: SqliteStore, rows: list[dict]) -> int:
+    """Apply one sequenced page while preserving target-table order."""
+    registered = 0
+    current_table: str | None = None
+    current_rows: list[dict] = []
+
+    def flush() -> None:
+        nonlocal registered, current_rows
+        if current_table is not None and current_rows:
+            registered += _sync_one(store, current_table, current_rows)[1]
+        current_rows = []
+
+    for source in rows:
+        table = str(source.get("table_name", ""))
+        if table not in _CHANGE_FEED_TABLES:
+            raise ValueError(f"change feed target is not allowed: {table!r}")
+        if current_table != table:
+            flush()
+            current_table = table
+        current_rows.append({
+            key: value
+            for key, value in source.items()
+            if key not in {"change_seq", "table_name"}
+        })
+    flush()
+    return registered
+
+
+def _sync_changes(
+    store: SqliteStore,
+    client,
+    base: str,
+    token: str,
+    *,
+    page_limit: int,
+    max_pages: int = DEFAULT_MAX_PAGES,
+    legacy_since: str | None = None,
+) -> tuple[int, int, int, int]:
+    """Consume the server-side monotonic change feed.
+
+    Returns ``(pages, seen, registered, last_applied_change_seq)``.
+    ``change_seq`` is checked for strict monotonicity on every page and is
+    persisted only after all rows in that page are durable.
+    """
+    after_seq = _last_change_seq(store)
+    pages = seen = registered = 0
+    visited = {after_seq}
+    while True:
+        if pages >= max_pages:
+            raise ValueError(f"change feed exceeded max_pages={max_pages}")
+        query = {
+            "after_seq": after_seq,
+            "limit": page_limit,
+            # Harmless on the real endpoint; keeps old offline fixtures able
+            # to return a compatibility page while they migrate.
+            "table": "jquants_records",
+        }
+        endpoint = f"{base}/v1/export/changes?{urlencode(query)}"
+        payload = _http_get_json(client, endpoint, token)
+        rows = payload.get("rows") or []
+        if not isinstance(rows, list):
+            raise ValueError("change feed rows must be a list")
+        pages += 1
+
+        if payload.get("format") != "jquants-change-feed/v1":
+            # Unit-fixture/backward compatibility only. A deployed old Worker
+            # returns 404 before reaching this branch, so production never
+            # silently falls back from sequence correctness to a full scan.
+            filtered, _ = _filter_since(rows, legacy_since or "")
+            seen += len(filtered)
+            registered += _sync_one(store, "jquants_records", filtered)[1]
+            if payload.get("has_more", False):
+                raise ValueError(
+                    "legacy incremental response cannot safely paginate; "
+                    "deploy the Phase 6 change-feed Worker"
+                )
+            break
+
+        previous = after_seq
+        for row in rows:
+            seq = row.get("change_seq")
+            if not isinstance(seq, int) or seq <= previous:
+                raise ValueError("change feed sequence is not strictly increasing")
+            previous = seq
+        next_seq = payload.get("next_seq", previous)
+        if not isinstance(next_seq, int) or next_seq != previous:
+            raise ValueError("change feed next_seq does not match its final row")
+        seen += len(rows)
+        registered += _apply_change_rows(store, rows)
+        _record_change_seq(store, next_seq)
+        after_seq = next_seq
+        if not payload.get("has_more", False):
+            break
+        if not rows or after_seq in visited:
+            raise ValueError("change feed pagination did not advance")
+        visited.add(after_seq)
+    return pages, seen, registered, after_seq
 
 
 def main(argv=None) -> int:
     args = _build_parser().parse_args(argv)
     if not 1 <= args.page_limit <= 1000:
         print("[sync] --page-limit must be between 1 and 1000", file=sys.stderr)
+        return 2
+    if args.max_pages < 1:
+        print("[sync] --max-pages must be at least 1", file=sys.stderr)
         return 2
     if args.since and not args.incremental:
         print("[sync] --since requires --incremental", file=sys.stderr)
@@ -379,15 +530,49 @@ def main(argv=None) -> int:
 
     tables = args.table or list(DEFAULT_TABLES)
     store = SqliteStore(Path(args.db))
+    begin_snapshot_sync(
+        store._conn,  # noqa: SLF001
+        started_at=datetime.now(timezone.utc).isoformat(),
+    )
     base = url.rstrip("/")
     total_seen = total_registered = total_skipped = 0
     failures: list[str] = []
 
     client = _new_http_client()
     try:
+        change_feed_done = False
         for t in tables:
+            if args.incremental and t in _CHANGE_FEED_TABLES:
+                if change_feed_done:
+                    continue
+                try:
+                    pages, seen, registered, change_seq = _sync_changes(
+                        store,
+                        client,
+                        base,
+                        token or "",
+                        page_limit=args.page_limit,
+                        max_pages=args.max_pages,
+                        legacy_since=args.since or _derive_since(store, t),
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    failures.append(f"change_feed: {exc}")
+                    print(f"[sync] change_feed FAILED: {exc}", file=sys.stderr)
+                else:
+                    total_seen += seen
+                    total_registered += registered
+                    print(
+                        f"[sync] change_feed: pages={pages} seen={seen} "
+                        f"registered={registered} change_seq={change_seq}"
+                    )
+                change_feed_done = True
+                continue
             if args.incremental:
-                since = args.since or _derive_since(store, t)
+                # Control/specialized tables are bounded bootstrap exports;
+                # mutable generic facts above use the sequenced feed.
+                since = None if t in _NO_AVAILABLE_AT_TABLES else (
+                    args.since or _derive_since(store, t)
+                )
                 if since:
                     print(f"[sync] {t}: incremental since={since}", file=sys.stderr)
                 else:
@@ -406,6 +591,7 @@ def main(argv=None) -> int:
                     t,
                     page_limit=args.page_limit,
                     since=since,
+                    max_pages=args.max_pages,
                 )
             except Exception as exc:  # noqa: BLE001
                 failures.append(f"{t}: {exc}")
@@ -419,6 +605,26 @@ def main(argv=None) -> int:
                 f"registered={registered} skipped={skipped}"
                 + (f" since={eff_since}" if eff_since else "")
             )
+        if failures:
+            fail_snapshot_sync(store._conn, "; ".join(failures))  # noqa: SLF001
+        elif args.table:
+            fail_snapshot_sync(
+                store._conn,  # noqa: SLF001
+                "targeted sync completed, but a full required-dataset sync "
+                "is required before paper research",
+            )
+        else:
+            try:
+                snapshot_id = commit_snapshot_manifest(
+                    store._conn,  # noqa: SLF001
+                    required_datasets=PREMIUM_CORE_DATASETS,
+                )
+                print(f"[sync] committed snapshot={snapshot_id}")
+            except Exception as exc:  # noqa: BLE001
+                message = f"snapshot: {exc}"
+                failures.append(message)
+                fail_snapshot_sync(store._conn, message)  # noqa: SLF001
+                print(f"[sync] snapshot FAILED: {exc}", file=sys.stderr)
     finally:
         try:
             client.close()

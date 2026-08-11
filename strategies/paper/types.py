@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from core import BacktestResult
+from price_basis import RAW, require_supported_price_basis
 
 
 PAPER_RESULT_SCHEMA_VERSION = "paper-result/v2"
@@ -52,6 +53,7 @@ class PaperRunConfig:
     cost_bps: float = 5.0
     starting_capital: float = 1_000_000.0
     lookback_days: int = 30
+    price_basis: str = RAW
     lifecycle: Lifecycle | str = Lifecycle.PAPER
     calendar_as_of: str | None = None
 
@@ -70,6 +72,9 @@ class PaperRunConfig:
             raise ValueError("lookback_days must be >= 1")
 
         object.__setattr__(self, "lifecycle", Lifecycle.parse(self.lifecycle))
+        object.__setattr__(
+            self, "price_basis", require_supported_price_basis(self.price_basis)
+        )
         if self.universe is not None:
             normalized = tuple(
                 sorted({str(code).strip() for code in self.universe if str(code).strip()})

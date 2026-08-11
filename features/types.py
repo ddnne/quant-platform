@@ -12,6 +12,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable, Literal, Mapping
 
+from price_basis import PriceBasis
+
 # Lifecycle / role vocabularies. ``Literal`` keeps the values statically
 # checkable and lets the registry refuse unknown roles at construction time.
 IntendedRole = Literal["signal", "state", "structural", "utility"]
@@ -84,7 +86,9 @@ class FeatureDefinition:
       ``"structural"`` (universe / master-derived), or ``"utility"`` (debug /
       diagnostic only). A model registry can refuse to ingest features whose
       role it does not support.
-    * ``status`` (optional, default ``"approved"`` for built-ins) is the
+    * ``status`` defaults to ``"candidate"`` so new/external definitions are
+      never silently approved. Shipped built-ins opt into ``"approved"``
+      explicitly after review. It is the
       promotion tier: ``"candidate"`` (unvetted), ``"shadow"`` (logged but
       not used), ``"approved"`` (default for shipped features), ``"retired"``
       (kept for audit; do not consume in new code).
@@ -95,6 +99,27 @@ class FeatureDefinition:
     inputs: FeatureInput
     description: str
     compute: Callable[[Any], FeatureOutput]
+    intended_role: IntendedRole
     tags: tuple[str, ...] = ()
-    intended_role: IntendedRole = "signal"
-    status: FeatureStatus = "approved"
+    status: FeatureStatus = "candidate"
+    price_basis: PriceBasis | None = None
+
+    def __post_init__(self) -> None:
+        """Enforce governance vocabularies at runtime, not only in typing."""
+        roles = {"signal", "state", "structural", "utility"}
+        statuses = {"candidate", "shadow", "approved", "retired"}
+        if self.intended_role not in roles:
+            raise ValueError(
+                f"invalid intended_role {self.intended_role!r}; "
+                f"choose one of {sorted(roles)}"
+            )
+        if self.status not in statuses:
+            raise ValueError(
+                f"invalid feature status {self.status!r}; "
+                f"choose one of {sorted(statuses)}"
+            )
+        if self.price_basis not in {None, "RAW", "PIT_ADJUSTED"}:
+            raise ValueError(
+                f"invalid price_basis {self.price_basis!r}; choose RAW, "
+                "PIT_ADJUSTED, or None"
+            )

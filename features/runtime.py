@@ -24,7 +24,7 @@ from pit.query import resolve_db_path
 from . import registry as _registry
 from .types import FeatureDefinition, FeatureOutput
 
-FEATURES_RUNTIME_VERSION = "0.4.0"
+FEATURES_RUNTIME_VERSION = "0.6.0"
 
 
 class AsOfRequired(ValueError):
@@ -141,6 +141,8 @@ def compute(
         "features_runtime_version": FEATURES_RUNTIME_VERSION,
         "db_path": str(resolved_db),
     })
+    if feature.price_basis is not None:
+        md["price_basis"] = feature.price_basis
     return FeatureOutput(value=out.value, metadata=md)
 
 

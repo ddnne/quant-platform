@@ -27,6 +27,10 @@ from .types import (
 _FEATURES: dict[tuple[str, str], FeatureDefinition] = {}
 
 
+class FeatureGovernanceError(PermissionError):
+    """A registered feature is not eligible for declarative strategy use."""
+
+
 def register(feature: FeatureDefinition) -> FeatureDefinition:
     """Add ``feature`` to the registry.
 
@@ -70,6 +74,39 @@ def get(feature_id: str, version: str | None = None) -> FeatureDefinition:
     )
 
 
+def get_for_strategy(
+    feature_id: str,
+    version: str | None = None,
+    *,
+    allowed_statuses: tuple[FeatureStatus, ...] = ("approved",),
+    allowed_roles: tuple[IntendedRole, ...] = (
+        "signal",
+        "state",
+        "structural",
+    ),
+) -> FeatureDefinition:
+    """Resolve a feature through the fail-closed StrategySpec policy.
+
+    By default only explicitly ``approved`` features intended for strategy
+    consumption are returned. A caller must make a visible policy override to
+    admit candidate/shadow/retired or utility definitions.
+    """
+    feature = get(feature_id, version=version)
+    if feature.status not in allowed_statuses:
+        raise FeatureGovernanceError(
+            f"feature {feature.id!r} version {feature.version} has status "
+            f"{feature.status!r}; allowed strategy statuses are "
+            f"{list(allowed_statuses)!r}"
+        )
+    if feature.intended_role not in allowed_roles:
+        raise FeatureGovernanceError(
+            f"feature {feature.id!r} version {feature.version} has intended_role "
+            f"{feature.intended_role!r}; allowed strategy roles are "
+            f"{list(allowed_roles)!r}"
+        )
+    return feature
+
+
 def list_features() -> list[FeatureDefinition]:
     """All registered features, sorted by (id, version)."""
     return sorted(
@@ -97,8 +134,10 @@ __all__ = [
     "FeatureVersion",
     "IntendedRole",
     "FeatureStatus",
+    "FeatureGovernanceError",
     "register",
     "get",
+    "get_for_strategy",
     "list_features",
     "ids",
     "clear",

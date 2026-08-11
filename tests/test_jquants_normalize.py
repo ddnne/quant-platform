@@ -102,21 +102,33 @@ def test_generic_natural_key_from_catalog_identity_fields():
     # payload (sorted) + raw_payload (verbatim) both present
     assert json.loads(r["raw_payload"])["Close"] == 100
     assert json.loads(r["payload"]) == rows[0]
-    assert r["available_at"] == ING
+    assert r["available_at"] == "2025-04-01T15:30:00+09:00"
 
 
 def test_generic_event_time_from_disclosed_date():
-    rows = [{"Code": "8697", "DisclosedDate": "2025-05-01", "Foo": 1}]
+    rows = [{
+        "Code": "8697",
+        "DisclosedDate": "2025-05-01",
+        "DisclosedTime": "09:00",
+        "DiscNo": "1",
+        "Foo": 1,
+    }]
     out = normalize_generic(rows, dataset="fins_details", ingested_at=ING)
     assert out[0]["event_time"] == "2025-05-01T09:00:00+09:00"
-    assert json.loads(out[0]["natural_key"])["Code"] == "8697"
+    assert json.loads(out[0]["natural_key"]) == {
+        "Code": "8697",
+        "DiscDate": "2025-05-01",
+        "DiscNo": "1",
+    }
+    assert out[0]["available_at"] == "2025-05-01T09:00:00+09:00"
 
 
 def test_generic_key_falls_back_to_row_hash_when_no_identity_fields():
     rows = [{"SomethingUnrelated": "x"}]
     out = normalize_generic(rows, dataset="markets_breakdown", ingested_at=ING)
-    nk = json.loads(out[0]["natural_key"])
-    assert "_hash" in nk and len(nk["_hash"]) == 40  # sha1 hex
+    nk = out[0]["natural_key"]
+    assert nk.startswith("hash:sha256:")
+    assert len(nk.removeprefix("hash:sha256:")) == 64
     # event_time falls back to available_at (ingested) when no date present
     assert out[0]["event_time"] == ING
 

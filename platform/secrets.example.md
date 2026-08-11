@@ -16,10 +16,14 @@ J-Quants 鍵は Cloudflare Worker `quant-platform-ingestion-secrets` のみが�
 
 両方設定時のみ有効。片方のみなら `None`（未認証プロキシは不使用）。`--no-jquants-proxy` で直接取得に強制。トークンは鍵扱い（ログ/コミット禁止）。
 
+プロキシ権限は `data_contracts/jquants_premium_core.json` に列挙された path の upstream
+`GET` と `data_contracts/jquants_proxy_addons.json` に固定した既存 addon 5 path のみに
+限定する。任意の `/v2/*` や書き込み method は許可せず、新 endpoint は共有 contract に
+明示追加されるまで fail-closed とする。
+
 > JSDA は鍵不要（公開統計ページ）。`--source jsda` は環境変数なしで実行可能。
 
 ## その他
 
 必要に応じて後続 Phase で名前を追加する（例: AI Gateway、執行系）。  
 **値や本番キーをこのリポジトリにコミットしないこと。**
-

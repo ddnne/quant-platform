@@ -1,14 +1,12 @@
 """Phase 3.5 — Premium core closed-loop dataset set.
 
-Asserts:
-* `PREMIUM_CORE_DATASETS` is the canonical required set from the handoff.
-* No addon id is in the required set.
-* The TypeScript mirror (catalog.ts) agrees with the Python list.
+Asserts that Premium core remains closed and both runtimes consume the same
+checked-in contract document instead of maintaining duplicate catalogs.
 """
 
 from __future__ import annotations
 
-import re
+import json
 from pathlib import Path
 
 import pytest
@@ -39,6 +37,14 @@ ADDON_IDS = {"equities_bars_minute", "equities_trades", "td_list", "td_files", "
 CATALOG_TS = Path(__file__).resolve().parents[1] / (
     "platform/workers/ingestion-premium/src/catalog.ts"
 )
+CONTRACT_JSON = Path(__file__).resolve().parents[1] / (
+    "data_contracts/jquants_premium_core.json"
+)
+
+
+def _contract_entries() -> dict[str, dict]:
+    document = json.loads(CONTRACT_JSON.read_text(encoding="utf-8"))
+    return {entry["dataset_id"]: entry for entry in document["datasets"]}
 
 
 def test_premium_core_is_exactly_the_required_set():
@@ -73,31 +79,21 @@ def test_required_datasets_all_have_v2_paths():
 
 
 def test_typescript_catalog_matches_python():
-    """catalog.ts must mirror the Python list exactly."""
+    """The Worker derives its dataset list from the shared JSON document."""
     assert CATALOG_TS.exists(), f"missing {CATALOG_TS}"
     text = CATALOG_TS.read_text(encoding="utf-8")
-    # Pull out the id: "..." tokens that appear in PREMIUM_CORE_DATASETS.
-    # The TS file lists each entry as `{ id: "X", path: "/v2/...", ... }`.
-    ts_ids = set(re.findall(r'id:\s*"([^"]+)"', text))
-    # The interface field also matches "id"; the actual dataset ids are the
-    # 23 known names. Sanity-check we found at least all of them.
-    missing = set(PREMIUM_CORE_DATASETS) - ts_ids
-    extra = ts_ids - set(PREMIUM_CORE_DATASETS)
-    assert not missing, f"TS catalog.ts missing ids: {missing}"
-    assert not extra, f"TS catalog.ts has extra ids: {extra}"
+    assert set(_contract_entries()) == set(PREMIUM_CORE_DATASETS)
+    assert 'from "../../../../data_contracts/jquants_premium_core.json"' in text
+    assert "contractDocument.datasets" in text
+    assert "rawContracts.map" in text
+    assert 'id: "equities_master"' not in text
 
 
 def test_typescript_paths_match_python():
-    """Each TS entry's path agrees with the Python catalog."""
-    text = CATALOG_TS.read_text(encoding="utf-8")
-    # Parse `{ id: "X", path: "/v2/Y", ... }` pairs line-by-line.
-    pairs = re.findall(r'id:\s*"([^"]+)"[^{\n]*?path:\s*"([^"]+)"', text)
-    parsed = {pid: path for pid, path in pairs}
+    """The shared document feeding TypeScript agrees with Python catalog views."""
+    entries = _contract_entries()
     for did in PREMIUM_CORE_DATASETS:
-        assert parsed.get(did) == DATASETS[did]["path"], (
-            f"path mismatch for {did}: ts={parsed.get(did)!r} "
-            f"py={DATASETS[did]['path']!r}"
-        )
+        assert entries[did]["path"] == DATASETS[did]["path"]
 
 
 # ---------------------------------------------------------------------------
@@ -147,53 +143,31 @@ DAYPARAM_EXPECTED = {
 }
 
 
-def _parse_ts_entries(text: str) -> dict[str, dict[str, str]]:
-    """Parse each `{ id: "..", ... }` line into {id: {field: value, ...}}.
-
-    Only single-line entries are supported — the catalog deliberately keeps
-    one dataset per line for grep-ability and to make this regex robust.
-    """
-    entries: dict[str, dict[str, str]] = {}
-    for line in text.splitlines():
-        m_id = re.search(r'id:\s*"([^"]+)"', line)
-        if not m_id or line.strip().startswith("//"):
-            continue
-        fields: dict[str, str] = {}
-        for field in ("path", "bulk", "dateMode", "dayParam"):
-            m = re.search(rf'{field}:\s*"([^"]+)"', line)
-            if m:
-                fields[field] = m.group(1)
-        entries[m_id.group(1)] = fields
-    return entries
-
-
 def test_typescript_datemode_contract():
     """Every TS entry has the dateMode that matches the J-Quants V2 API shape.
 
     See DATEMODE_EXPECTED docstring for the failure-mode each entry guards.
     """
-    text = CATALOG_TS.read_text(encoding="utf-8")
-    entries = _parse_ts_entries(text)
+    entries = _contract_entries()
     for did, expected_mode in DATEMODE_EXPECTED.items():
-        assert did in entries, f"{did} missing from catalog.ts"
-        actual_mode = entries[did].get("dateMode")
+        assert did in entries, f"{did} missing from shared contract"
+        actual_mode = entries[did].get("date_mode")
         assert actual_mode == expected_mode, (
             f"{did}: expected dateMode={expected_mode!r} "
-            f"but catalog.ts has {actual_mode!r} — bare from/to is rejected "
+            f"but the shared contract has {actual_mode!r} — bare from/to is rejected "
             f"by this endpoint without a code filter"
         )
 
 
 def test_typescript_dayparam_contract():
     """Endpoints whose single-day key is not ``date`` must declare dayParam."""
-    text = CATALOG_TS.read_text(encoding="utf-8")
-    entries = _parse_ts_entries(text)
+    entries = _contract_entries()
     for did, expected_key in DAYPARAM_EXPECTED.items():
-        assert did in entries, f"{did} missing from catalog.ts"
-        actual = entries[did].get("dayParam")
+        assert did in entries, f"{did} missing from shared contract"
+        actual = entries[did].get("day_param")
         assert actual == expected_key, (
             f"{did}: expected dayParam={expected_key!r} "
-            f"but catalog.ts has {actual!r}"
+            f"but the shared contract has {actual!r}"
         )
 
 

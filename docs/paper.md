@@ -39,6 +39,7 @@ config = PaperRunConfig(
     db_path="data/structured/ingestion.sqlite",
     execution_mode="next_close",
     universe=("8697",),
+    price_basis="RAW",
 )
 strategy = MomentumFeatureStrategy(
     n=20,
@@ -58,6 +59,8 @@ print(result.run_id, result.metrics["total_return_post_cost"])
 trusted runtime configuration に限定され、戦略には公開されない。`run_paper` は設定を
 `core.run_backtest` に渡し、各 bar で PIT-scoped feature accessor を含む `BarContext` を構築する。
 その結果を Paper 固有の識別子・lifecycle・再現性情報とともに `PaperRunResult` にまとめる。
+`price_basis` は Core/Features と同じ `RAW` を既定かつ唯一の有効値とし、provenance が未証明の
+vendor adjusted history を要求する `PIT_ADJUSTED` は fail-closed とする。
 
 ## Result と保存
 
@@ -71,7 +74,7 @@ trusted runtime configuration に限定され、戦略には公開されない�
 `reproducibility` には `core_engine_version`、`pit_api_version`、feature id/version と
 feature definition hash、features runtime version、期間、execution mode、`as_of` rule、cost model、
 strategy id/params/hash、strategy definition hash、universe、starting capital、lookback、
-`data_snapshot_id`、取得できる場合は `git_commit` を含める。API key、proxy token などの
+`price_basis`、`data_snapshot_id`、取得できる場合は `git_commit` を含める。API key、proxy token などの
 secret は結果に保存しない。
 
 ### Data snapshot ID

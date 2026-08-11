@@ -17,7 +17,10 @@ import pytest
 import pit
 from core import (
     NEXT_CLOSE,
+    PIT_ADJUSTED,
+    RAW,
     BacktestResult,
+    UnsupportedPriceBasis,
     run_backtest,
     standard_cost,
     stress_cost,
@@ -81,6 +84,9 @@ def test_buy_hold_completes_backtest_next_close(tmp_path):
     assert md["execution_mode"] == "next_close"
     assert md["strategy_id"] == "buy_hold"
     assert md["universe_rule"].startswith("fixed:")
+    assert md["price_basis"] == RAW
+    assert md["signal_lookback_days"] == md["lookback_days"]
+    assert md["valuation_mark_policy"] == "last_pit_safe_exact_session_bar"
 
 
 def test_next_close_fills_strictly_next_session(tmp_path):
@@ -319,8 +325,32 @@ def test_next_close_missing_fill_bar_carries_order(tmp_path):
     assert res.trades[0]["price"] == 103.0
 
 
-def test_adjusted_prices_prevent_split_pnl(tmp_path):
-    """The adjusted share ledger remains continuous across a 2-for-1 split."""
+def test_stale_mark_survives_beyond_signal_lookback(tmp_path):
+    """A suspension carries valuation without inventing a fill or a zero mark."""
+    prices = {
+        "1332": {
+            TRADING_DAYS[0]: 100.0,
+            TRADING_DAYS[1]: 100.0,
+            # Position is held but no bars exist on day 2 or day 3.
+        }
+    }
+    db = seed_db(tmp_path, codes=["1332"], prices=prices)
+    res = run_backtest(
+        BuyHold(), START, END, db_path=db, universe=("1332",),
+        lookback_days=1, cost_model=standard_cost(bps=0.0),
+    )
+    assert len(res.trades) == 1
+    assert [row["equity"] for row in res.equity_curve] == pytest.approx(
+        [1_000_000.0] * len(TRADING_DAYS)
+    )
+    for row in res.equity_curve[2:]:
+        assert row["mark_dates"] == {"1332": TRADING_DAYS[1]}
+        assert row["stale_mark_codes"] == ["1332"]
+        assert row["unpriced_codes"] == []
+
+
+def test_raw_basis_ignores_unproven_vendor_adjusted_history(tmp_path):
+    """Adjusted vendor columns are not silently treated as PIT-safe."""
     raw = {
         "1332": {
             TRADING_DAYS[0]: 100.0,
@@ -337,10 +367,20 @@ def test_adjusted_prices_prevent_split_pnl(tmp_path):
         BuyHold(), START, END, db_path=db, universe=("1332",),
         cost_model=standard_cost(bps=0.0),
     )
-    assert res.trades[0]["price"] == 50.0
+    assert res.metadata["price_basis"] == RAW
+    assert res.trades[0]["price"] == 100.0
     assert [row["equity"] for row in res.equity_curve] == pytest.approx(
-        [1_000_000.0] * len(TRADING_DAYS)
+        [1_000_000.0, 1_000_000.0, 500_000.0, 500_000.0]
     )
+
+
+def test_pit_adjusted_basis_fails_closed_without_evidence(tmp_path):
+    db = seed_db(tmp_path, codes=["1332"])
+    with pytest.raises(UnsupportedPriceBasis, match="not enabled"):
+        run_backtest(
+            BuyHold(), START, END, db_path=db, universe=("1332",),
+            price_basis=PIT_ADJUSTED,
+        )
 
 
 # ---------------------------------------------------------------------------

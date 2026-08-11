@@ -49,6 +49,18 @@ __all__ = [
     "PIT_API_VERSION",
 ]
 
+# Contract keys are compact canonical JSON when complete and a non-JSON
+# ``hash:sha256:...`` token when any discriminator is absent.  Code filtering
+# therefore reads the key when possible and falls back to retained payloads.
+_CATALOG_CODE_SQL = """COALESCE(
+    CASE WHEN json_valid(natural_key)
+         THEN CAST(json_extract(natural_key, '$.Code') AS TEXT) END,
+    CASE WHEN json_valid(payload)
+         THEN CAST(json_extract(payload, '$.Code') AS TEXT) END,
+    CASE WHEN json_valid(raw_payload)
+         THEN CAST(json_extract(raw_payload, '$.Code') AS TEXT) END
+)"""
+
 
 def _result(
     rows: list[dict[str, Any]],
@@ -213,8 +225,8 @@ def get_equity_master(
     catalog_clauses: list[str] = []
     catalog_params: list[Any] = []
     if code is not None:
-        catalog_clauses.append("natural_key LIKE ?")
-        catalog_params.append(f'%"Code": "{code}"%')
+        catalog_clauses.append(f"{_CATALOG_CODE_SQL} = ?")
+        catalog_params.append(code)
     catalog = _catalog_partition_rows(
         db_path,
         as_of=as_of_iso,
@@ -288,10 +300,7 @@ def get_equity_bars_daily(
     if requested_codes is not None:
         if requested_codes:
             placeholders = ",".join("?" for _ in requested_codes)
-            catalog_clauses.append(
-                "CAST(json_extract(natural_key, '$.Code') AS TEXT) "
-                f"IN ({placeholders})"
-            )
+            catalog_clauses.append(f"{_CATALOG_CODE_SQL} IN ({placeholders})")
             catalog_params.extend(requested_codes)
         else:
             catalog_clauses.append("0")
@@ -387,9 +396,8 @@ def get_jquants_records(
     which is therefore **required** here.
 
     * ``dataset`` (required): the catalog dataset id (e.g. ``"fins_dividend"``).
-    * ``code``: best-effort filter on the natural key's canonical ``"Code"``
-      field via ``LIKE``. Datasets without a ``Code`` key simply yield nothing
-      for a given ``code`` — filter on the decoded payload in that case.
+    * ``code``: filter on canonical ``natural_key.Code`` with payload fallback
+      for SHA-256 fallback keys or datasets whose identity has no Code field.
     * ``from_event`` / ``to_event``: additive bounds on ``event_time``
       (canonical JST ISO; flexible inputs accepted and normalized).
 
@@ -407,10 +415,8 @@ def get_jquants_records(
     clauses: list[str] = ["dataset = ?"]
     params: list[Any] = [dataset]
     if code is not None:
-        # natural_key is json.dumps(..., sort_keys=True) so the canonical
-        # "Code" field serializes as `"Code": "<code>"` — match it with LIKE.
-        clauses.append("natural_key LIKE ?")
-        params.append(f'%"Code": "{code}"%')
+        clauses.append(f"{_CATALOG_CODE_SQL} = ?")
+        params.append(code)
     if from_event is not None:
         clauses.append("event_time >= ?")
         params.append(_event_time_bound(from_event))

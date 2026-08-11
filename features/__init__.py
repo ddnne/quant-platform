@@ -33,8 +33,10 @@ from .registry import (
     FeatureVersion,
     IntendedRole,
     FeatureStatus,
+    FeatureGovernanceError,
     list_features,
     get,
+    get_for_strategy,
     register,
 )
 from .runtime import compute, compute_many
@@ -53,8 +55,10 @@ __all__ = [
     "FeatureVersion",
     "IntendedRole",
     "FeatureStatus",
+    "FeatureGovernanceError",
     "list_features",
     "get",
+    "get_for_strategy",
     "register",
     # runtime
     "compute",
@@ -67,4 +71,4 @@ __all__ = [
     "__version__",
 ]
 
-__version__ = "0.4.0"
+__version__ = "0.6.0"

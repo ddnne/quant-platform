@@ -12,6 +12,7 @@ from ingestion.jquants.normalize import normalize_daily_bars
 from storage.sqlite_store import MissingAvailableAt, SqliteStore
 
 INGESTED = "2025-04-02T09:00:00+09:00"
+FIRST_BAR_CLOSE = "2025-04-01T15:30:00+09:00"
 
 
 def _bars():
@@ -87,7 +88,8 @@ def test_run_log_recorded(tmp_path):
 
 def test_upsert_preserves_earliest_available_at(tmp_path):
     store = SqliteStore(tmp_path / "ing.sqlite")
-    base = normalize_daily_bars(_bars(), ingested_at=INGESTED)  # available_at == INGESTED
+    # Daily bars use their contract-defined session close, not fetch time.
+    base = normalize_daily_bars(_bars(), ingested_at=INGESTED)
     store.upsert("jquants_daily_bars", base)
 
     # re-upsert the SAME natural key with a LATER available_at -> earliest kept
@@ -98,7 +100,7 @@ def test_upsert_preserves_earliest_available_at(tmp_path):
     row = store.fetch_where(
         "jquants_daily_bars", "code=? AND date=?", ("8697", "2025-04-01")
     )[0]
-    assert row["available_at"] == INGESTED  # earliest preserved
+    assert row["available_at"] == FIRST_BAR_CLOSE  # earliest preserved
     store.close()
 
 
@@ -112,7 +114,7 @@ def test_upsert_keeps_earlier_available_at_against_earlier_payload(tmp_path):
     row = store.fetch_where(
         "jquants_daily_bars", "code=? AND date=?", ("8697", "2025-04-01")
     )[0]
-    assert row["available_at"] == INGESTED
+    assert row["available_at"] == FIRST_BAR_CLOSE
     store.close()
 
 
@@ -129,7 +131,7 @@ def test_unchanged_reupsert_keeps_earliest_available_and_refreshes_ingested(tmp_
     row = store.fetch_where(
         "jquants_daily_bars", "code=? AND date=?", ("8697", "2025-04-01")
     )[0]
-    assert row["available_at"] == "2025-04-02T09:00:00+09:00"  # earliest kept
+    assert row["available_at"] == FIRST_BAR_CLOSE  # contract instant kept
     assert row["ingested_at"] == "2025-04-20T09:00:00+09:00"  # refreshed
     store.close()
 
@@ -160,7 +162,11 @@ def test_offset_equivalent_available_at_does_not_backdate(tmp_path):
     must compare equal, so a re-fetch in a different offset is treated as an
     unchanged re-fetch (earliest kept), not an amendment."""
     store = SqliteStore(tmp_path / "ing.sqlite")
-    base = normalize_daily_bars(_bars(), ingested_at="2025-04-01T17:00:00+09:00")
+    base = normalize_daily_bars(
+        _bars(),
+        ingested_at="2025-04-01T17:00:00+09:00",
+        available_at="2025-04-01T17:00:00+09:00",
+    )
     store.upsert("jquants_daily_bars", base)
 
     later = [dict(base[0])]

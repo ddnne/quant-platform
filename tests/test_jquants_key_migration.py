@@ -39,6 +39,11 @@ ET = "2025-04-01T15:00:00+09:00"
 LEGACY_MINUTE_KEY = json.dumps({"Code": "8697", "Date": "2025-04-01"}, sort_keys=True)
 LEGACY_TD_HASH = json.dumps({"_hash": "deadbeefcafebabe"}, sort_keys=True)
 LEGACY_OPTIONS_KEY = json.dumps({"Date": "2025-04-01"}, sort_keys=True)
+CANONICAL_DAILY_KEY = json.dumps(
+    {"Code": "8697", "Date": "2025-04-01"},
+    sort_keys=True,
+    separators=(",", ":"),
+)
 
 
 def _seed_legacy(path, rows) -> None:
@@ -187,8 +192,9 @@ def test_mixed_batch_migrates_only_legacy_datasets(tmp_path):
         [
             # minute: legacy collapsed key -> will be deleted (key changed).
             ("jquants", "equities_bars_minute", LEGACY_MINUTE_KEY, ET, ING, ING, "{}", "{}"),
-            # daily: same Code+Date key pre- and post-fix -> overwritten in place.
-            ("jquants", "equities_bars_daily", LEGACY_MINUTE_KEY, ET, ING, ING, "{}", "{}"),
+            # Daily is outside the P1 delete set and already carries the F0
+            # canonical serialization, so ordinary conflict handling applies.
+            ("jquants", "equities_bars_daily", CANONICAL_DAILY_KEY, ET, ING, ING, "{}", "{}"),
         ],
     )
 
@@ -213,7 +219,7 @@ def test_mixed_batch_migrates_only_legacy_datasets(tmp_path):
     # ``Time`` = HH:MM discriminator that makes minute bars unique (the legacy
     # row collapsed every minute of (Code, Date) onto a Date-only key).
     nk = by_ds["equities_bars_minute"][0]["natural_key"]
-    assert '"Time": "09:00"' in nk  # canonicalized from the input ``DateTime``
+    assert json.loads(nk)["Time"] == "09:00"  # canonicalized from ``DateTime``
     assert len(by_ds["equities_bars_daily"]) == 1
     # only the key-changed dataset was marked for migration
     marks = {m["dataset"] for m in s.fetch_all("jquants_key_migrations")}

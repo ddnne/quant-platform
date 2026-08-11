@@ -40,6 +40,12 @@ from .execution import (
 )
 from .metrics import compute_metrics, max_drawdown
 from .result import BacktestResult
+from price_basis import (
+    PIT_ADJUSTED,
+    RAW,
+    PriceBasis,
+    UnsupportedPriceBasis,
+)
 from .strategy_protocol import (
     Bar,
     BarContext,
@@ -66,6 +72,11 @@ __all__ = [
     "Bar",
     "Position",
     "EquityMaster",
+    # price basis
+    "PriceBasis",
+    "RAW",
+    "PIT_ADJUSTED",
+    "UnsupportedPriceBasis",
     # execution
     "ExecutionMode",
     "NEXT_CLOSE",

@@ -18,7 +18,12 @@ from ingestion.common.available_at import (
 )
 from ingestion.common.timeutil import now_iso, parse_dt, to_iso
 
-from .migrate_jquants_keys import ensure_migration_table, migrate_before_write
+from .migrate_jquants_keys import (
+    ensure_migration_table,
+    migrate_before_write,
+    migrate_contract_keys_v2,
+)
+from .migrations import apply_schema_migrations
 from .schema import NATURAL_KEYS, REVISION_TABLES, SCHEMA_SQL
 
 
@@ -65,6 +70,12 @@ def _earlier_available(a: str, b: str) -> str:
     return to_iso(da if da <= db else db)
 
 
+def _later_available(a: str, b: str) -> str:
+    """Return the later aware instant in canonical storage form."""
+    da, db = parse_dt(a), parse_dt(b)
+    return to_iso(da if da >= db else db)
+
+
 class SqliteStore:
     def __init__(self, db_path) -> None:
         self.path = Path(db_path)
@@ -78,9 +89,12 @@ class SqliteStore:
             pass
         self._conn.executescript(SCHEMA_SQL)
         self._conn.commit()
+        apply_schema_migrations(self._conn)
         # Marker table for the one-shot legacy natural-key migration on
         # jquants_records (see storage.migrate_jquants_keys). Idempotent DDL.
         ensure_migration_table(self._conn)
+        with self._conn:
+            migrate_contract_keys_v2(self._conn, now_iso=now_iso())
 
     # --- core write -------------------------------------------------------
 
@@ -163,6 +177,14 @@ class SqliteStore:
                     )
                 elif ex is not None:
                     # Amendment: retain the value that this write displaces.
+                    # A policy-derived observation timestamp is not evidence
+                    # that the amendment was public then. In the absence of a
+                    # later explicit stamp, the revision becomes available no
+                    # earlier than this ingestion.
+                    if r.get("ingested_at"):
+                        r["available_at"] = _later_available(
+                            r["available_at"], str(r["ingested_at"])
+                        )
                     # ``existing`` is updated below so multiple revisions of
                     # the same key within one batch are preserved in order.
                     revisions.append(dict(ex))
@@ -202,16 +224,17 @@ class SqliteStore:
     ) -> None:
         """Persist displaced fact rows in the table's revision history.
 
-        The caller owns the surrounding transaction.  A retry of the same
-        amendment updates the identical business-key/``available_at`` version
-        instead of creating a duplicate history row.
+        The caller owns the surrounding transaction. A retry of the same
+        amendment updates the identical business-key / ``available_at`` /
+        ``ingested_at`` version. Multiple amendments with an unchanged
+        publication stamp remain distinct because their ingestion times differ.
         """
         revision_table = REVISION_TABLES.get(table)
         if revision_table is None or not rows:
             return
         cols = list(rows[0].keys())
         placeholders = ",".join("?" for _ in cols)
-        version_key = [*key_cols, "available_at"]
+        version_key = [*key_cols, "available_at", "ingested_at"]
         version_key_set = set(version_key)
         assigns = [f"{c} = excluded.{c}" for c in cols if c not in version_key_set]
         conflict = f"ON CONFLICT({','.join(version_key)}) DO NOTHING"

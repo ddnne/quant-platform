@@ -3,6 +3,8 @@
     "target": "es2022",
     "module": "es2022",
     "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "allowSyntheticDefaultImports": true,
     "strict": true,
     "noEmit": true,
     "lib": ["es2022"],

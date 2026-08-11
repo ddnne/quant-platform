@@ -103,10 +103,12 @@ class BarContext:
             names whose master was visible by the decision instant).
         positions: Currently held positions, by code.
         cash: Cash balance before this decision's fills.
-        equity: Total equity (cash + positions marked at last visible close).
-        prices: Last PIT-visible close per universe code, split-adjusted when
-            supplied (``None`` if a code has no visible bar yet).
-        bars: Recent PIT-visible daily bars per universe code, oldest first.
+        equity: Total equity (cash + positions carried at the last PIT-safe
+            exact-session mark when the current session has no bar).
+        prices: Last PIT-visible RAW close inside the signal lookback window
+            (``None`` if a code has no visible bar in that window).
+        bars: Signal-lookback PIT-visible daily bars per universe code, oldest
+            first. Valuation marks are maintained independently.
         master: Latest-known-as-of master snapshot per universe code.
         feature: PIT-scoped versioned feature computation. Strategies supply
             only a feature id and declared feature inputs.

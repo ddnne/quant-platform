@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "purpose": "Exact add-on path allowlist for the authenticated GET-only J-Quants proxy",
+  "datasets": [
+    {
+      "dataset_id": "equities_bars_minute",
+      "path": "/v2/equities/bars/minute"
+    },
+    {
+      "dataset_id": "equities_trades",
+      "path": "/v2/equities/trades"
+    },
+    {
+      "dataset_id": "td_list",
+      "path": "/v2/td/list"
+    },
+    {
+      "dataset_id": "td_files",
+      "path": "/v2/td/files"
+    },
+    {
+      "dataset_id": "td_bulk",
+      "path": "/v2/td/bulk"
+    }
+  ]
+}

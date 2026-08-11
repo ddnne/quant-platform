@@ -6,12 +6,14 @@ import hashlib
 import json
 import math
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 from urllib.parse import quote
 
 
 DATA_SNAPSHOT_FORMAT = "paper-data-snapshot/v1"
+LOCAL_SNAPSHOT_MANIFEST_FORMAT = "local-snapshot-manifest/v1"
 
 _WATERMARK_COLUMNS = (
     "dataset",
@@ -235,6 +237,226 @@ def _main_file_state(path: Path) -> dict[str, int]:
     return {"size": int(stat.st_size), "mtime_ns": int(stat.st_mtime_ns)}
 
 
+def _canonical_digest(value: Any) -> str:
+    encoded = json.dumps(
+        value,
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    return "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+
+def begin_snapshot_sync(conn: sqlite3.Connection, *, started_at: str) -> None:
+    """Invalidate the research snapshot before applying any sync page."""
+    conn.execute(
+        """
+        INSERT INTO local_snapshot_policy
+            (singleton, require_manifest, snapshot_ready, sync_started_at,
+             last_error)
+        VALUES (1, 1, 0, ?, NULL)
+        ON CONFLICT(singleton) DO UPDATE SET
+            require_manifest = 1,
+            snapshot_ready = 0,
+            sync_started_at = excluded.sync_started_at,
+            last_error = NULL
+        """,
+        (started_at,),
+    )
+    conn.commit()
+
+
+def fail_snapshot_sync(conn: sqlite3.Connection, error: str) -> None:
+    """Keep a partially updated local DB unavailable to paper research."""
+    conn.execute(
+        """
+        INSERT INTO local_snapshot_policy
+            (singleton, require_manifest, snapshot_ready, last_error)
+        VALUES (1, 1, 0, ?)
+        ON CONFLICT(singleton) DO UPDATE SET
+            require_manifest = 1,
+            snapshot_ready = 0,
+            last_error = excluded.last_error
+        """,
+        (error[:2000],),
+    )
+    conn.commit()
+
+
+def _latest_complete_run(
+    conn: sqlite3.Connection, required: tuple[str, ...]
+) -> tuple[int, dict[str, Any], list[dict[str, Any]]]:
+    run = conn.execute(
+        "SELECT id, status, detail FROM ingestion_run_log "
+        "ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    if run is None:
+        raise RuntimeError("no ingestion run is available for snapshot commit")
+    status = str(run["status"] if isinstance(run, sqlite3.Row) else run[1])
+    run_id = int(run["id"] if isinstance(run, sqlite3.Row) else run[0])
+    detail_raw = run["detail"] if isinstance(run, sqlite3.Row) else run[2]
+    try:
+        detail = json.loads(detail_raw or "{}")
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"ingestion run {run_id} has invalid detail JSON") from exc
+    if not isinstance(detail, dict):
+        raise RuntimeError(f"ingestion run {run_id} detail is not an object")
+    if status != "pass":
+        raise RuntimeError(
+            f"latest ingestion run {run_id} is {status!r}, not a complete pass"
+        )
+    expected = len(required)
+    if (
+        int(detail.get("datasetCount", -1)) != expected
+        or int(detail.get("passed", -1)) != expected
+        or int(detail.get("failed", -1)) != 0
+    ):
+        raise RuntimeError(
+            f"ingestion run {run_id} is not the complete {expected}-dataset run"
+        )
+
+    rows = conn.execute(
+        "SELECT dataset, status, finished_at, rows_seen, rows_inserted, "
+        "rows_revisions FROM ingestion_validation WHERE run_id = ? "
+        "ORDER BY dataset, id",
+        (run_id,),
+    ).fetchall()
+    latest: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        item = dict(row) if isinstance(row, sqlite3.Row) else {
+            "dataset": row[0], "status": row[1], "finished_at": row[2],
+            "rows_seen": row[3], "rows_inserted": row[4],
+            "rows_revisions": row[5],
+        }
+        latest[str(item["dataset"])] = item
+    missing = sorted(set(required) - set(latest))
+    failed = sorted(
+        dataset for dataset in required
+        if dataset in latest and latest[dataset].get("status") != "pass"
+    )
+    if missing or failed:
+        raise RuntimeError(
+            f"ingestion run {run_id} validation incomplete: "
+            f"missing={missing}, failed={failed}"
+        )
+    return run_id, detail, [latest[dataset] for dataset in required]
+
+
+def commit_snapshot_manifest(
+    conn: sqlite3.Connection,
+    *,
+    required_datasets: Iterable[str],
+) -> str:
+    """Validate and commit an immutable local research-snapshot manifest."""
+    required = tuple(sorted(set(str(item) for item in required_datasets)))
+    if not required:
+        raise ValueError("required_datasets must not be empty")
+    run_id, detail, validations = _latest_complete_run(conn, required)
+
+    placeholders = ",".join("?" for _ in required)
+    rows = conn.execute(
+        "SELECT dataset, last_event_date, last_ingested_at "
+        "FROM ingestion_watermarks "
+        f"WHERE dataset IN ({placeholders}) ORDER BY dataset",
+        required,
+    ).fetchall()
+    watermarks = [dict(row) for row in rows]
+    present = {str(row["dataset"]) for row in watermarks}
+    missing = sorted(set(required) - present)
+    if missing:
+        raise RuntimeError(f"required dataset watermarks missing: {missing}")
+    change = conn.execute(
+        "SELECT last_applied_change_seq FROM sync_change_state "
+        "WHERE feed = 'jquants_records'"
+    ).fetchone()
+    change_seq = int(change[0]) if change is not None else 0
+    committed_at = datetime.now(timezone.utc).isoformat()
+    manifest = {
+        "format": LOCAL_SNAPSHOT_MANIFEST_FORMAT,
+        "committed_at": committed_at,
+        "source_run": {
+            "id": run_id,
+            "started_at": detail.get("startedAt"),
+            "finished_at": detail.get("finishedAt"),
+        },
+        "required_datasets": list(required),
+        "change_seq": change_seq,
+        "dataset_watermarks": watermarks,
+        "validations": validations,
+    }
+    snapshot_id = _canonical_digest(manifest)
+    manifest_json = json.dumps(
+        manifest, ensure_ascii=True, sort_keys=True, separators=(",", ":"),
+        allow_nan=False,
+    )
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO local_snapshot_manifests
+                (snapshot_id, format, committed_at, source_run_id, change_seq,
+                 manifest_json)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                snapshot_id, LOCAL_SNAPSHOT_MANIFEST_FORMAT, committed_at,
+                run_id, change_seq, manifest_json,
+            ),
+        )
+        conn.execute(
+            "UPDATE local_snapshot_policy SET snapshot_ready = 1, "
+            "last_error = NULL WHERE singleton = 1"
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    return snapshot_id
+
+
+def _manifest_snapshot_state(
+    conn: sqlite3.Connection, tables: set[str]
+) -> dict[str, Any] | None:
+    if not {"local_snapshot_policy", "local_snapshot_manifests"} <= tables:
+        return None
+    policy = conn.execute(
+        "SELECT require_manifest, snapshot_ready, last_error "
+        "FROM local_snapshot_policy WHERE singleton = 1"
+    ).fetchone()
+    if policy is None or not bool(policy["require_manifest"]):
+        return None
+    if not bool(policy["snapshot_ready"]):
+        detail = str(policy["last_error"] or "sync is incomplete")
+        raise RuntimeError(
+            "local paper snapshot is not committed and validated: " + detail
+        )
+    row = conn.execute(
+        "SELECT snapshot_id, manifest_json FROM local_snapshot_manifests "
+        "ORDER BY committed_at DESC, rowid DESC LIMIT 1"
+    ).fetchone()
+    if row is None:
+        raise RuntimeError("local paper snapshot policy requires a manifest")
+    try:
+        manifest = json.loads(row["manifest_json"])
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("latest local snapshot manifest is invalid JSON") from exc
+    if _canonical_digest(manifest) != row["snapshot_id"]:
+        raise RuntimeError("latest local snapshot manifest checksum mismatch")
+    current_watermarks = _watermark_state(conn, tables)
+    expected = manifest.get("dataset_watermarks")
+    if current_watermarks != expected:
+        raise RuntimeError(
+            "local ingestion watermarks no longer match the committed snapshot"
+        )
+    return {
+        "format": DATA_SNAPSHOT_FORMAT,
+        "manifest_id": row["snapshot_id"],
+        "manifest": manifest,
+        "watermarks": current_watermarks,
+    }
+
+
 def data_snapshot_id(db_path: str | Path) -> str:
     """Return a lightweight logical identifier for a local data snapshot.
 
@@ -256,29 +478,33 @@ def data_snapshot_id(db_path: str | Path) -> str:
                 "SELECT name FROM sqlite_schema WHERE type = 'table'"
             )
         }
-        watermarks = _watermark_state(conn, tables)
-        state: dict[str, Any] = {
-            "format": DATA_SNAPSHOT_FORMAT,
-            "schema": _schema_state(conn),
-            "watermarks": watermarks,
-            "validation": _validation_state(conn, tables),
-        }
-        if not watermarks:
-            state["fallback"] = {
-                "fact_tables": _fact_table_state(conn, tables),
-                "main_file": _main_file_state(path),
+        manifest_state = _manifest_snapshot_state(conn, tables)
+        if manifest_state is not None:
+            state = manifest_state
+        else:
+            watermarks = _watermark_state(conn, tables)
+            state = {
+                "format": DATA_SNAPSHOT_FORMAT,
+                "schema": _schema_state(conn),
+                "watermarks": watermarks,
+                "validation": _validation_state(conn, tables),
             }
+            if not watermarks:
+                state["fallback"] = {
+                    "fact_tables": _fact_table_state(conn, tables),
+                    "main_file": _main_file_state(path),
+                }
     finally:
         conn.close()
 
-    canonical = json.dumps(
-        state,
-        ensure_ascii=True,
-        sort_keys=True,
-        separators=(",", ":"),
-        allow_nan=False,
-    ).encode("utf-8")
-    return "sha256:" + hashlib.sha256(canonical).hexdigest()
+    return _canonical_digest(state)
 
 
-__all__ = ["DATA_SNAPSHOT_FORMAT", "data_snapshot_id"]
+__all__ = [
+    "DATA_SNAPSHOT_FORMAT",
+    "LOCAL_SNAPSHOT_MANIFEST_FORMAT",
+    "begin_snapshot_sync",
+    "commit_snapshot_manifest",
+    "data_snapshot_id",
+    "fail_snapshot_sync",
+]

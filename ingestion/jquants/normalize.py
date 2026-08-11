@@ -1,10 +1,9 @@
 """Normalize J-Quants V2 payloads into PIT-annotated structured rows.
 
-Every row gets ``source='jquants'`` and the four PIT columns. ``available_at``
-defaults to the fetch time (``ingested_at``), which is always a safe,
-non-look-ahead value; pass an explicit ``available_at`` when the true
-publication time is known. Exact per-source publication timing is **仮**
-pending confirmation — see ``docs/data_sources.md``.
+Every row gets ``source='jquants'`` and the four PIT columns. Premium-core
+``available_at`` values follow the canonical dataset contract; any policy
+without enough evidence falls back conservatively to ``ingested_at``. Pass an
+explicit ``available_at`` when a more precise publication time is known.
 
 Field-name tolerance: V2 publishes long names (``Open`` / ``High`` / …) for
 some payloads and abbreviated short names (``O`` / ``H`` / ``CoName`` / …)
@@ -24,9 +23,16 @@ Two storage targets:
 
 from __future__ import annotations
 
-import hashlib
 import json
 from typing import Any, Iterable, List, Optional
+
+from data_contracts.identity import (
+    available_at_for as contract_available_at,
+    canonical_json,
+    event_time_for as contract_event_time,
+    natural_key as contract_natural_key,
+    sha256_fallback,
+)
 
 from ..common.timeutil import parse_dt, to_iso
 from . import catalog
@@ -89,7 +95,6 @@ def _close_event_time(date_str: str) -> str:
 def normalize_daily_bars(
     rows: Iterable[dict], *, ingested_at: str, available_at: Optional[str] = None
 ) -> List[dict]:
-    av = _avail(available_at, ingested_at)
     out: List[dict] = []
     for r in rows:
         d = _pick_str(r, "Date")
@@ -99,6 +104,9 @@ def normalize_daily_bars(
             et = _close_event_time(d[:10])  # trade close, JST
         except ValueError:
             et = to_iso(parse_dt(d[:10]))
+        av = available_at or contract_available_at(
+            r, "equities_bars_daily", ingested_at
+        )
         out.append(
             {
                 "source": "jquants",
@@ -141,11 +149,14 @@ def normalize_listed_info(
     snapshot_date: str,
     available_at: Optional[str] = None,
 ) -> List[dict]:
-    av = _avail(available_at, ingested_at)
     sd = str(snapshot_date)[:10]
-    et = to_iso(parse_dt(f"{sd}T09:00:00"))
     out: List[dict] = []
     for r in rows:
+        identity_row = r if _pick(r, "Date") else {**r, "Date": sd}
+        et = contract_event_time(identity_row, "equities_master") or ingested_at
+        av = available_at or contract_available_at(
+            identity_row, "equities_master", ingested_at
+        )
         out.append(
             {
                 "source": "jquants",
@@ -179,13 +190,15 @@ def normalize_listed_info(
 def normalize_market_calendar(
     rows: Iterable[dict], *, ingested_at: str, available_at: Optional[str] = None
 ) -> List[dict]:
-    av = _avail(available_at, ingested_at)
     out: List[dict] = []
     for r in rows:
         d = _pick_str(r, "Date")
         if not d:
             continue
-        et = to_iso(parse_dt(f"{d[:10]}T09:00:00"))
+        et = contract_event_time(r, "markets_calendar") or ingested_at
+        av = available_at or contract_available_at(
+            r, "markets_calendar", ingested_at
+        )
         out.append(
             {
                 "source": "jquants",
@@ -233,7 +246,7 @@ def _canonical_minute_time(row: dict) -> Optional[str]:
     return None
 
 
-def _natural_key(row: dict, key_fields: Iterable[str], dataset: str = "") -> dict:
+def _natural_key(row: dict, key_fields: Iterable[str], dataset: str = "") -> str:
     """Build a JSON-serializable natural key from the catalog's identity fields.
 
     For each catalog ``key`` field, take the first present, non-empty value
@@ -252,10 +265,12 @@ def _natural_key(row: dict, key_fields: Iterable[str], dataset: str = "") -> dic
     Without this, re-ingesting the same bar via the other transport would
     insert a duplicate row instead of upserting (the inverse-collapse bug).
 
-    If none of the identity fields are present (an unusual payload shape), fall
-    back to a stable SHA-1 of the canonical row so idempotency still holds and
-    we never collapse two distinct rows onto the same key.
+    Premium-core keys are selected solely by the canonical dataset contract.
+    Add-ons retain their catalog-specific fields until they receive contracts.
+    Missing identity discriminators fall back to ``hash:sha256:<digest>``.
     """
+    if catalog.is_premium_core(dataset):
+        return contract_natural_key(row, dataset)
     nk: dict[str, Any] = {}
     for f in key_fields:
         v = _pick(row, f, f.lower())
@@ -267,9 +282,8 @@ def _natural_key(row: dict, key_fields: Iterable[str], dataset: str = "") -> dic
             nk["Time"] = t
             nk.pop("DateTime", None)  # folded into the canonical ``Time``
     if nk:
-        return nk
-    canon = json.dumps(row, sort_keys=True, ensure_ascii=False)
-    return {"_hash": hashlib.sha1(canon.encode("utf-8")).hexdigest()}
+        return canonical_json(nk)
+    return sha256_fallback(row)
 
 
 def _event_time_for(row: dict, dataset: str) -> Optional[str]:
@@ -281,13 +295,8 @@ def _event_time_for(row: dict, dataset: str) -> Optional[str]:
     Returns ``None`` when no date-ish field is present (caller uses
     ``available_at``/``ingested_at``).
     """
-    if dataset in ("equities_bars_daily", "equities_bars_daily_am"):
-        d = _pick_str(row, "Date")
-        if d:
-            try:
-                return _close_event_time(d[:10])
-            except ValueError:
-                pass
+    if catalog.is_premium_core(dataset):
+        return contract_event_time(row, dataset)
     dt = _pick(row, "DateTime", "datetime")
     if dt:
         try:
@@ -318,27 +327,28 @@ def normalize_generic(
     the row for easy diffing; ``raw_payload`` keeps the verbatim source order
     for traceability and amendment detection in the store.
     """
-    av = _avail(available_at, ingested_at)
     entry = catalog.get(dataset)
     key_fields = entry.get("key", [])
     out: List[dict] = []
     for r in rows:
         if not isinstance(r, dict):
             continue
+        if available_at is not None:
+            av = available_at
+        elif catalog.is_premium_core(dataset):
+            av = contract_available_at(r, dataset, ingested_at)
+        else:
+            av = ingested_at
         et = _event_time_for(r, dataset) or av
         out.append(
             {
                 "source": "jquants",
                 "dataset": dataset,
-                "natural_key": json.dumps(
-                    _natural_key(r, key_fields, dataset),
-                    sort_keys=True,
-                    ensure_ascii=False,
-                ),
+                "natural_key": _natural_key(r, key_fields, dataset),
                 "event_time": et,
                 "available_at": av,
                 "ingested_at": ingested_at,
-                "payload": json.dumps(r, sort_keys=True, ensure_ascii=False),
+                "payload": canonical_json(r),
                 "raw_payload": json.dumps(r, ensure_ascii=False),
             }
         )

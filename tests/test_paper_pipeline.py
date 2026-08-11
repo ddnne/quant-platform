@@ -8,7 +8,7 @@ from datetime import date, timedelta
 import features
 import pit
 import pytest
-from core import CORE_ENGINE_VERSION
+from core import CORE_ENGINE_VERSION, PIT_ADJUSTED, UnsupportedPriceBasis
 from features.runtime import FEATURES_RUNTIME_VERSION
 from strategies.examples import MomentumFeatureStrategy, Return1dFeatureStrategy
 from strategies.paper import Lifecycle, PaperRunConfig, PaperRunResult, run_paper
@@ -88,6 +88,7 @@ def test_paper_run_completes_with_metrics_trades_and_reproducibility(
         "git_commit",
         "strategy_definition_hash",
         "feature_definition_hashes",
+        "price_basis",
     }
     assert required <= metadata.keys()
     assert metadata["core_engine_version"] == CORE_ENGINE_VERSION
@@ -96,6 +97,7 @@ def test_paper_run_completes_with_metrics_trades_and_reproducibility(
     assert metadata["feature_versions"]["return_1d"]
     assert metadata["period"] == {"start": days[0], "end": days[-1]}
     assert metadata["cost_model"]["bps_one_way"] == 5.0
+    assert metadata["price_basis"] == "RAW"
     assert metadata["strategy_id"] == "return_1d_feature"
     assert metadata["strategy_params"] == {"threshold": 0.0}
     assert metadata["data_snapshot_id"].startswith("sha256:")
@@ -162,6 +164,12 @@ def test_engine_config_change_creates_a_distinct_experiment(paper_fixture):
     )
 
     assert first.experiment_id != second.experiment_id
+
+
+def test_paper_config_rejects_unproven_adjusted_basis(paper_fixture):
+    db, days = paper_fixture
+    with pytest.raises(UnsupportedPriceBasis, match="not enabled"):
+        replace(_config(db, days), price_basis=PIT_ADJUSTED)
 
 
 def test_paper_run_fails_closed_when_snapshot_changes(

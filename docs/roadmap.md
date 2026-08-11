@@ -10,12 +10,19 @@
 | 4 | 特徴量 Registry（`features/`・PIT 経由のみ・versioned・`as_of` 必須） ✅ 完了 |
 | 5 | Paper 縦通し（`strategies/paper/`・result 永続化・sample strategies・CLI） ✅ 完了 |
 | 5.5 | Phase 6 foundation（`ctx.feature` 境界・snapshot ID・experiment identity・index） ✅ 完了 |
-| 6 | 役割エージェント |
+| 6 | F0 full-code hardening・役割エージェント・StrategySpec ✅ 完了 |
 | 7 | 選抜・Knowledge・AI Gateway |
 | 8 | FoF・Risk |
 | 9 | 執行の厚み・追加データ |
 
-> **次は Phase 6（役割エージェント）。** その前提として Phase 5.5 では、戦略が
+> **次は Phase 7（選抜・Knowledge・AI Gateway）。** Phase 6 では Premium core 23 の
+> canonical data contract、revision/change-feed、validated snapshot manifest、SQLite WAL paper
+> index、stale valuation marks、RAW price basis、feature governance を hardening した。
+> さらに 8 役割の structured interface、declarative StrategySpec whitelist interpreter、
+> offline Paper orchestrator、独立 risk audit を実装した。任意 Python、agent への secrets/raw
+> data/SQLite/HTTP の引き渡しは禁止。詳細は [agents.md](agents.md)。
+>
+> その前提として Phase 5.5 では、戦略が
 > `BarContext` / `ctx.feature` だけを通じて特徴量を取得する境界、軽量な control-plane
 > `data_snapshot_id`、lifecycle と分離した決定論的 `experiment_id`、run 索引を固定した。
 > Phase 6 では宣言的 StrategySpec / DSL と trusted interpreter を使い、LLM が生成した

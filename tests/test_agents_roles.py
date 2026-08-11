@@ -1,0 +1,76 @@
+"""Role matrix, structured I/O, and capability-boundary tests."""
+
+from __future__ import annotations
+
+import ast
+from pathlib import Path
+
+from agents.composer import ComposerAgent
+from agents.fundamental import FundamentalAgent
+from agents.macro import MacroAgent
+from agents.pm import PortfolioManagerAgent
+from agents.quant import QuantAgent
+from agents.roles import AgentRole, ROLE_MATRIX
+from agents.strategist import StrategistAgent
+from agents.trader import TraderAgent
+from agents.types import ResearchMemo, ResearchRequest
+
+
+def test_eight_roles_have_explicit_input_output_contracts():
+    assert len(AgentRole) == 8
+    assert set(ROLE_MATRIX) == set(AgentRole)
+    assert all(contract.input_type and contract.output_type for contract in ROLE_MATRIX.values())
+    assert all(not contract.may_execute for contract in ROLE_MATRIX.values())
+
+
+def test_roles_exchange_structured_messages_and_a_declarative_spec():
+    request = ResearchRequest(as_of="2025-04-10", universe=("1332", "8697"))
+    memos = tuple(
+        agent.research(request)
+        for agent in (MacroAgent(), FundamentalAgent(), QuantAgent())
+    )
+    assert all(isinstance(memo, ResearchMemo) for memo in memos)
+    composed = ComposerAgent().compose(memos)
+    spec = StrategistAgent(momentum_n=3, top_k=1).propose(composed)
+    decision = PortfolioManagerAgent().review(spec)
+    plan = TraderAgent().prepare(decision)
+
+    assert decision.approved is True
+    assert plan.mode == "paper"
+    assert spec.to_dict()["rule"]["type"] == "top_k"
+    proposals = [proposal for memo in memos for proposal in memo.feature_proposals]
+    assert proposals and all(proposal.status == "candidate" for proposal in proposals)
+
+
+def test_role_implementations_cannot_import_data_or_secret_capabilities():
+    root = Path(__file__).parents[1] / "agents"
+    role_files = [
+        "macro.py",
+        "fundamental.py",
+        "quant.py",
+        "composer.py",
+        "strategist.py",
+        "pm.py",
+        "trader.py",
+        "risk_agent.py",
+    ]
+    banned_roots = {
+        "ingestion",
+        "storage",
+        "pit",
+        "sqlite3",
+        "requests",
+        "httpx",
+        "urllib",
+        "secrets",
+    }
+    for name in role_files:
+        path = root / name
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        imports: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                imports.update(alias.name.split(".")[0] for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                imports.add(node.module.split(".")[0])
+        assert not imports.intersection(banned_roots), (path, imports)

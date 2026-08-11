@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import date, timedelta
 from pathlib import Path
+
+import pytest
 
 from strategies.examples import Return1dFeatureStrategy
 from strategies.paper import JsonPaperStore, Lifecycle, PaperRunConfig, run_paper
@@ -55,35 +59,58 @@ def test_json_store_round_trip_by_path_and_run_id(tmp_path):
     )
 
 
-def test_save_upserts_thin_experiment_index(tmp_path):
+def test_save_idempotently_indexes_immutable_result_in_sqlite_wal(tmp_path):
     result, _, config = _fixture_run(tmp_path)
     store = JsonPaperStore(root=tmp_path / "paper")
 
     path = store.save(result)
-    store.save(replace(result, lifecycle=Lifecycle.DRAFT))
+    store.save(result)
 
-    rows = [
-        json.loads(line)
-        for line in store.index_path.read_text(encoding="utf-8").splitlines()
-        if line
-    ]
+    with sqlite3.connect(store.index_path) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = [
+            dict(row)
+            for row in conn.execute("SELECT * FROM paper_experiments").fetchall()
+        ]
+        assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
     assert len(rows) == 1
-    assert rows[0] == {
-        "experiment_id": result.experiment_id,
-        "run_id": result.run_id,
-        "strategy_id": result.strategy_id,
-        "lifecycle": Lifecycle.DRAFT.value,
-        "data_snapshot_id": result.metadata["data_snapshot_id"],
-        "start": config.start,
-        "end": config.end,
-        "total_return": result.metrics["total_return_post_cost"],
-        "max_dd": result.metrics["max_drawdown"],
-        "sharpe": None,
-        "feature_ids": sorted(result.metadata["feature_versions"]),
-        "created_at": rows[0]["created_at"],
-        "result_path": path.relative_to(store.root).as_posix(),
-    }
-    assert store.load_by_experiment_id(result.experiment_id).lifecycle is Lifecycle.DRAFT
+    assert rows[0]["experiment_id"] == result.experiment_id
+    assert rows[0]["run_id"] == result.run_id
+    assert rows[0]["lifecycle"] == Lifecycle.PAPER.value
+    assert rows[0]["start_date"] == config.start
+    assert rows[0]["end_date"] == config.end
+    assert json.loads(rows[0]["feature_ids_json"]) == sorted(
+        result.metadata["feature_versions"]
+    )
+    assert rows[0]["result_path"] == path.relative_to(store.root).as_posix()
+    assert store.load_by_experiment_id(result.experiment_id).lifecycle is Lifecycle.PAPER
+
+
+def test_save_rejects_different_json_at_existing_run_path(tmp_path):
+    result, _, _ = _fixture_run(tmp_path)
+    store = JsonPaperStore(root=tmp_path / "paper")
+    path = store.save(result)
+    original = path.read_bytes()
+
+    with pytest.raises(FileExistsError, match="immutable paper result"):
+        store.save(replace(result, lifecycle=Lifecycle.DRAFT))
+
+    assert path.read_bytes() == original
+    assert store.load_by_experiment_id(result.experiment_id).lifecycle is Lifecycle.PAPER
+
+
+def test_parallel_identical_saves_share_one_index_record(tmp_path):
+    result, _, _ = _fixture_run(tmp_path)
+    root = tmp_path / "paper"
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        paths = list(pool.map(lambda _: JsonPaperStore(root).save(result), range(16)))
+
+    assert len(set(paths)) == 1
+    with sqlite3.connect(root / "index.sqlite3") as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM paper_experiments"
+        ).fetchone()[0] == 1
 
 
 def test_loads_v1_result_with_legacy_run_identity(tmp_path):

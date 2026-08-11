@@ -2,9 +2,10 @@
 
 Regression guard for the Phase-1 fix. The catalog path runs many jobs under a
 thread pool; each job finishes at its own wall-clock instant. Every job's
-``available_at`` / ``ingested_at`` default must therefore be **that job's own
-fetch-completion time** — never a single pre-pool ``ingested`` value stamped
-onto all jobs alike.
+``ingested_at`` must therefore be **that job's own fetch-completion time** —
+never a single pre-pool value. ``available_at`` is then selected by the
+canonical dataset contract, falling back to that per-job timestamp when the
+publication instant is not evidenced.
 
 Offline: a canned HTTP double stands in for the transport, and an in-memory
 SQLite store proves the timestamps that land in ``jquants_records``.
@@ -93,9 +94,15 @@ def test_catalog_jobs_get_distinct_per_job_timestamps(tmp_path, monkeypatch):
     )
     # Every stamp actually came from the patched clock (no stale pre-pool value).
     assert stamps.issubset(set(produced))
-    # available_at defaults to each job's own ingested_at (no explicit override).
+    # Availability is dataset-specific: daily bars are public at session close,
+    # while a prepublished calendar with no historical timestamp fails safe to
+    # that job's own ingestion time.
     for row in rows:
-        assert row["available_at"] == row["ingested_at"]
+        if row["dataset"] == "equities_bars_daily":
+            assert row["available_at"] == "2025-04-01T15:30:00+09:00"
+        else:
+            assert row["dataset"] == "markets_calendar"
+            assert row["available_at"] == row["ingested_at"]
     store.close()
 
 
@@ -143,7 +150,7 @@ def test_single_catalog_job_still_carries_completion_stamp(tmp_path, monkeypatch
     # The persisted stamp is one produced by the per-job completion capture,
     # not the pre-pool call that happened before the fetch pool started.
     assert rows[0]["ingested_at"] in produced
-    assert rows[0]["available_at"] == rows[0]["ingested_at"]
+    assert rows[0]["available_at"] == "2025-04-01T15:30:00+09:00"
     store.close()
 
 

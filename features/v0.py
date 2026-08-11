@@ -17,6 +17,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from price_basis import RAW
+
 from .registry import register
 from .types import FeatureDefinition, FeatureInput, FeatureOutput, FeatureVersion
 
@@ -92,6 +94,7 @@ Return1d: FeatureDefinition = register(
         tags=("price", "daily", "return"),
         intended_role="signal",
         status="approved",
+        price_basis=RAW,
     )
 )
 
@@ -157,6 +160,7 @@ MomentumN: FeatureDefinition = register(
         tags=("price", "daily", "momentum"),
         intended_role="signal",
         status="approved",
+        price_basis=RAW,
     )
 )
 
@@ -227,6 +231,7 @@ VolatilityN: FeatureDefinition = register(
         tags=("price", "daily", "volatility"),
         intended_role="signal",
         status="approved",
+        price_basis=RAW,
     )
 )
 

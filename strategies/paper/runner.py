@@ -21,7 +21,7 @@ from .store import JsonPaperStore
 from .types import PaperRunConfig, PaperRunResult
 
 
-PAPER_RUNNER_VERSION = "0.5.5"
+PAPER_RUNNER_VERSION = "0.6.0"
 
 
 def fingerprint_db(db_path: str | Path) -> str:
@@ -84,6 +84,7 @@ def _reproducibility(
         "universe": list(config.universe) if config.universe is not None else None,
         "universe_rule": core_md["universe_rule"],
         "lookback_days": core_md["lookback_days"],
+        "price_basis": core_md["price_basis"],
         "starting_capital": core_md["starting_capital"],
         "strategy_id": core_md["strategy_id"],
         "params": dict(core_md["strategy_params"]),
@@ -122,6 +123,7 @@ def _experiment_id(reproduction: dict[str, Any]) -> str:
             "universe": reproduction["universe"],
             "universe_rule": reproduction["universe_rule"],
             "lookback_days": reproduction["lookback_days"],
+            "price_basis": reproduction["price_basis"],
             "starting_capital": reproduction["starting_capital"],
             "calendar_as_of": reproduction["calendar_as_of"],
         },
@@ -161,6 +163,7 @@ def run_paper(
         universe=config.universe,
         starting_capital=config.starting_capital,
         lookback_days=config.lookback_days,
+        price_basis=config.price_basis,
         calendar_as_of=config.calendar_as_of,
     )
     after = data_snapshot_id(configured_path)

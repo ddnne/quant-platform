@@ -14,7 +14,9 @@
  *   7. Local-readable path — the paginated `/v1/export/d1` endpoint exposes
  *      D1 structured tables so `scripts/sync_d1_to_sqlite.py` can build a
  *      local PIT DB.
- *   8. Required datasets: see `catalog.ts` (mirrors Python
+ *   8. Incremental local sync consumes `/v1/export/changes` by monotonic
+ *      `change_seq`; it never rescans mutable fact tables for correctness.
+ *   9. Required datasets: see `catalog.ts` (mirrors Python
  *      `PREMIUM_CORE_DATASETS`).
  *
  * Endpoints:
@@ -22,10 +24,13 @@
  *   POST /v1/run[?dataset=..&from=..&to=..]  — manual trigger (auth gated)
  *   GET  /v1/export/d1?table=..&cursor=..&limit=.. — JSON page of a D1 table
  *                                                    (auth gated)
+ *   GET  /v1/export/changes?after_seq=..&limit=.. — append-only row versions
+ *                                                   (auth gated)
  */
 
 import { PREMIUM_CORE_DATASETS, isPremiumCore, datasetById, type DatasetSpec } from "./catalog";
 import { pickAvailableAt } from "./availability";
+import { naturalKey, pickEventTime, stableJson } from "./identity";
 import { RateLimiter } from "./rate_limit";
 
 export interface Env {
@@ -334,55 +339,6 @@ async function fetchDataset(
   return out;
 }
 
-// ---------------------------------------------------------------------------
-// natural key + structured insert (mirrors ingestion/jquants/normalize.py)
-// ---------------------------------------------------------------------------
-
-const KEY_FIELDS = [
-  "Code", "Date", "DateTime", "Time", "DisclosedDate", "AnnouncementDate",
-  "DiscDate", "DiscNo",
-];
-
-function naturalKey(row: Record<string, unknown>, spec: DatasetSpec): string {
-  const picked: Record<string, unknown> = {};
-  for (const k of KEY_FIELDS) {
-    if (row[k] !== undefined && row[k] !== null && row[k] !== "") {
-      picked[k] = row[k];
-    }
-  }
-  if (Object.keys(picked).length === 0) {
-    // Fallback: stable JSON hash of the whole row.
-    const stable = stableJson(row);
-    return `hash:${stable.slice(0, 60)}`;
-  }
-  return JSON.stringify(picked);
-}
-
-function stableJson(value: unknown): string {
-  if (value === null || typeof value !== "object") return JSON.stringify(value);
-  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
-  const object = value as Record<string, unknown>;
-  return `{${Object.keys(object).sort().map(
-    (key) => `${JSON.stringify(key)}:${stableJson(object[key])}`,
-  ).join(",")}}`;
-}
-
-function pickEventTime(row: Record<string, unknown>, spec: DatasetSpec): string | null {
-  // Event time candidate fields in priority order.
-  const candidates = [
-    "DateTime", "Date", "DisclosedDate", "AnnouncementDate", "DiscDate",
-  ];
-  for (const k of candidates) {
-    const v = row[k];
-    if (typeof v === "string" && v.length > 0) {
-      // Treat bare dates as 09:00 JST event_time.
-      if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return `${v}T09:00:00+09:00`;
-      return v;
-    }
-  }
-  return null;
-}
-
 // Latest source-side event_date observed in a batch, as a YYYY-MM-DD string.
 // Used by the watermark upsert so consumers can ask "how stale is dataset X?"
 // without scanning jquants_records. Returns null only when every row lacks a
@@ -590,7 +546,7 @@ async function upsertRecords(
   //   3. Falls through to ingestedAt inside pickAvailableAt (PIT-safe fallback).
   const byKey = new Map<string, StructuredRecord>();
   for (const row of rows) {
-    const nk = naturalKey(row, spec);
+    const nk = await naturalKey(row, spec);
     const ev = pickEventTime(row, spec);
     const availableAt =
       typeof row["available_at"] === "string"
@@ -617,25 +573,31 @@ async function upsertRecords(
   // eight fields → floor(100/8)=12 rows per VALUES statement.
   //
   // Per-chunk round-trips die on large option chains (~40k rows): thousands of
-  // sequential D1 calls blow Worker CPU/time (error 1101). Instead:
-  //   * pack up to D1_BATCH_STMTS prepared upserts into one `DB.batch()` call
-  //   * skip per-chunk existence SELECT + revision archive when the batch is
-  //     large (rowsInserted becomes an upper bound = records.length).
+  // sequential D1 calls blow Worker CPU/time (error 1101). Archive, change-log,
+  // and upsert statements are therefore packed into D1 transactional batches.
+  // Revision semantics are identical at every batch size (F0-F).
   const CHUNK = Math.floor(100 / 8);
   // Prefer multi-statement batches whenever the page/batch is non-trivial —
   // sequential 12-row round-trips thrash Worker time on options pagination.
   const large = records.length > 200;
-  const D1_BATCH_STMTS = large ? 50 : 1;
+  const D1_BATCH_STMTS = large ? 48 : 3;
   let inserted = 0;
   let revisions = 0;
   type Stmt = ReturnType<D1Database["prepare"]>;
-  let pending: Stmt[] = [];
+  let pending: { stmt: Stmt; archive: boolean }[] = [];
 
   const flush = async (): Promise<void> => {
     if (pending.length === 0) return;
     const batch = pending;
     pending = [];
-    await d1WithRetry(() => env.DB.batch(batch));
+    const results = await d1WithRetry(() =>
+      env.DB.batch(batch.map((entry) => entry.stmt)),
+    );
+    batch.forEach((entry, index) => {
+      if (entry.archive) {
+        revisions += (results[index]?.meta?.changes ?? 0) as number;
+      }
+    });
   };
 
   for (let i = 0; i < records.length; i += CHUNK) {
@@ -653,8 +615,16 @@ async function upsertRecords(
            ELSE excluded.event_time END,
          available_at = CASE
            WHEN jquants_records.payload IS excluded.payload
-             THEN MIN(jquants_records.available_at, excluded.available_at)
-           ELSE excluded.available_at END,
+             THEN CASE
+               WHEN julianday(jquants_records.available_at)
+                    <= julianday(excluded.available_at)
+                 THEN jquants_records.available_at
+               ELSE excluded.available_at END
+           ELSE CASE
+             WHEN julianday(excluded.available_at)
+                  >= julianday(excluded.ingested_at)
+               THEN excluded.available_at
+             ELSE excluded.ingested_at END END,
          ingested_at = excluded.ingested_at,
          payload = CASE
            WHEN jquants_records.payload IS excluded.payload THEN jquants_records.payload
@@ -662,22 +632,6 @@ async function upsertRecords(
          raw_payload = CASE
            WHEN jquants_records.payload IS excluded.payload THEN jquants_records.raw_payload
            ELSE excluded.raw_payload END`;
-
-    if (large) {
-      pending.push(env.DB.prepare(upsertSql).bind(...binds));
-      if (pending.length >= D1_BATCH_STMTS) await flush();
-      continue;
-    }
-
-    // Small-batch path: count inserts, archive revisions, dual-statement batch.
-    const existing = await d1WithRetry(() =>
-      env.DB.prepare(
-        `SELECT natural_key FROM jquants_records
-         WHERE source = ? AND dataset = ?
-           AND natural_key IN (${chunk.map(() => "?").join(", ")})`,
-      ).bind("jquants", spec.id, ...chunk.map((record) => record.naturalKey)).all(),
-    );
-    inserted += chunk.length - (existing.results?.length ?? 0);
 
     const archiveSql =
       `WITH incoming
@@ -694,9 +648,61 @@ async function upsertRecords(
         AND current.dataset = incoming.dataset
         AND current.natural_key = incoming.natural_key
        WHERE current.payload IS NOT incoming.payload`;
+
+    // Append only genuinely new/amended row versions. This statement must run
+    // before the primary upsert in the same D1 batch so it compares against
+    // the displaced current value.
+    const changeSql =
+      `WITH incoming
+       (source, dataset, natural_key, event_time, available_at, ingested_at, payload, raw_payload)
+       AS (VALUES ${placeholders})
+       INSERT OR IGNORE INTO ingestion_change_log
+       (table_name, source, dataset, natural_key, event_time, available_at,
+        ingested_at, payload, raw_payload, changed_at)
+       SELECT 'jquants_records', incoming.source, incoming.dataset,
+              incoming.natural_key, incoming.event_time,
+              CASE WHEN current.natural_key IS NOT NULL
+                         AND current.payload IS NOT incoming.payload
+                   THEN CASE
+                     WHEN julianday(incoming.available_at)
+                          >= julianday(incoming.ingested_at)
+                       THEN incoming.available_at
+                     ELSE incoming.ingested_at END
+                   ELSE incoming.available_at END,
+              incoming.ingested_at, incoming.payload, incoming.raw_payload,
+              incoming.ingested_at
+       FROM incoming
+       LEFT JOIN jquants_records AS current
+         ON current.source = incoming.source
+        AND current.dataset = incoming.dataset
+        AND current.natural_key = incoming.natural_key
+       WHERE current.natural_key IS NULL
+          OR current.payload IS NOT incoming.payload`;
+
+    if (large) {
+      pending.push(
+        { stmt: env.DB.prepare(archiveSql).bind(...binds), archive: true },
+        { stmt: env.DB.prepare(changeSql).bind(...binds), archive: false },
+        { stmt: env.DB.prepare(upsertSql).bind(...binds), archive: false },
+      );
+      if (pending.length >= D1_BATCH_STMTS) await flush();
+      continue;
+    }
+
+    // Small-batch path keeps an exact insert count; persistence semantics are
+    // the same archive → change feed → primary upsert sequence as large pages.
+    const existing = await d1WithRetry(() =>
+      env.DB.prepare(
+        `SELECT natural_key FROM jquants_records
+         WHERE source = ? AND dataset = ?
+           AND natural_key IN (${chunk.map(() => "?").join(", ")})`,
+      ).bind("jquants", spec.id, ...chunk.map((record) => record.naturalKey)).all(),
+    );
+    inserted += chunk.length - (existing.results?.length ?? 0);
     const batch = await d1WithRetry(() =>
       env.DB.batch([
         env.DB.prepare(archiveSql).bind(...binds),
+        env.DB.prepare(changeSql).bind(...binds),
         env.DB.prepare(upsertSql).bind(...binds),
       ]),
     );
@@ -1046,12 +1052,55 @@ async function handleExportD1(
   });
 }
 
+async function handleExportChanges(
+  env: Env, request: Request,
+): Promise<Response> {
+  if (!authorized(request, env, true)) {
+    return json({ error: "unauthorized" }, 401);
+  }
+  const url = new URL(request.url);
+  const afterSeq = Number(url.searchParams.get("after_seq") || "0");
+  const limit = Number(url.searchParams.get("limit") || "500");
+  if (!Number.isSafeInteger(afterSeq) || afterSeq < 0) {
+    return json({ error: "after_seq must be a non-negative safe integer" }, 400);
+  }
+  if (!Number.isInteger(limit) || limit < 1 || limit > 1000) {
+    return json({ error: "limit must be an integer between 1 and 1000" }, 400);
+  }
+
+  const result = await env.DB.prepare(
+    `SELECT change_seq, table_name, source, dataset, natural_key, event_time,
+            available_at, ingested_at, payload, raw_payload
+     FROM ingestion_change_log
+     WHERE change_seq > ?
+     ORDER BY change_seq
+     LIMIT ?`,
+  ).bind(afterSeq, limit + 1).all();
+  const fetched = (result.results ?? []) as Record<string, unknown>[];
+  const hasMore = fetched.length > limit;
+  const rows = fetched.slice(0, limit);
+  const nextSeq = rows.length > 0
+    ? Number(rows[rows.length - 1].change_seq)
+    : afterSeq;
+  return json({
+    format: "jquants-change-feed/v1",
+    after_seq: afterSeq,
+    rows,
+    next_seq: nextSeq,
+    has_more: hasMore,
+    limit,
+  });
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     if (url.pathname === "/health") return handleHealth(env);
     if (url.pathname === "/v1/run") return handleRun(env, request, fetch);
     if (url.pathname === "/v1/export/d1") return handleExportD1(env, request);
+    if (url.pathname === "/v1/export/changes") {
+      return handleExportChanges(env, request);
+    }
     return json({ error: "not found" }, 404);
   },
 

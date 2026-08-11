@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
+import features
+
 from paper_runtime import (
     feature_definition_hashes,
     git_commit,
@@ -30,6 +34,20 @@ def test_feature_definition_hashes_are_version_pinned_and_deterministic():
     assert set(first) == set(versions)
     assert all(value.startswith("sha256:") for value in first.values())
     assert first["momentum_n"] != first["return_1d"]
+
+
+def test_feature_definition_hash_includes_price_basis(monkeypatch):
+    raw = features.get("return_1d")
+    monkeypatch.setattr(features, "get", lambda *_args, **_kwargs: raw)
+    raw_hash = feature_definition_hashes({raw.id: str(raw.version)})[raw.id]
+
+    adjusted = replace(raw, price_basis="PIT_ADJUSTED")
+    monkeypatch.setattr(features, "get", lambda *_args, **_kwargs: adjusted)
+    adjusted_hash = feature_definition_hashes(
+        {adjusted.id: str(adjusted.version)}
+    )[adjusted.id]
+
+    assert raw_hash != adjusted_hash
 
 
 def test_git_commit_prefers_deployment_environment(monkeypatch):

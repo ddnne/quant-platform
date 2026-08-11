@@ -1,9 +1,10 @@
 # strategies
 
-feature-driven 戦略と Paper（仮想執行）実験の入口。Phase 5 では次を提供する。
+feature-driven 戦略と Paper（仮想執行）実験の入口。Phase 5–6 では次を提供する。
 
 - `paper/`: `PaperRunConfig`、`run_paper`、`PaperRunResult`、`JsonPaperStore`
 - `examples/`: `Return1dFeatureStrategy`、`MomentumFeatureStrategy`
+- `spec/`: closed `StrategySpec` schema と approved-feature whitelist interpreter
 
 ```text
 strategy params -> features -> core.run_backtest -> PaperRunResult -> JsonPaperStore
