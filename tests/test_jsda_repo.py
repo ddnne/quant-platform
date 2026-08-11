@@ -274,9 +274,9 @@ def test_run_jsda_repo_available_at_required(tmp_path: Path):
     store.close()
 
 
-def test_run_jsda_repo_legacy_xls_clean_skip(tmp_path: Path):
-    # The real TRR source publishes .xls. Ingestion must SKIP cleanly (not
-    # error), so a --source jsda run stays green when bond trades succeed.
+def test_run_jsda_repo_invalid_legacy_xls_is_error_not_clean_skip(tmp_path: Path):
+    # The real TRR source publishes .xls. Invalid OLE2 input is a hard error;
+    # the authoritative format must never be silently skipped.
     xls_url = "https://www.jsda.or.jp/shiryoshitsu/toukei/trr/files/trrts.xls"
 
     class _XlsClient:
@@ -299,11 +299,10 @@ def test_run_jsda_repo_legacy_xls_clean_skip(tmp_path: Path):
         bond=False, repo=True,
     )
     assert len(reps) == 1
-    assert reps[0].skipped and "unsupported" in reps[0].skipped
-    assert not reps[0].error
+    assert reps[0].error
+    assert not reps[0].skipped
     assert store.count("jsda_repo_rates") == 0
-    # a clean skip does not fail the run on its own
-    assert decide_exit(reps) == 2
+    assert decide_exit(reps) == 1
     store.close()
 
 

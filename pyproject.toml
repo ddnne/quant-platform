@@ -15,11 +15,14 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# JSDA publishes some files as .xlsx; parsing is optional and CSV is the default path.
+# JSDA OTC files may be .xlsx; the authoritative Tokyo Repo Rate history is .xls.
 xlsx = ["openpyxl>=3.1"]
+xls = ["xlrd>=2.0.2"]
+jsda = ["openpyxl>=3.1", "xlrd>=2.0.2"]
 dev = [
     "pytest>=8",
     "openpyxl>=3.1",
+    "xlrd>=2.0.2",
 ]
 
 [tool.setuptools.packages.find]

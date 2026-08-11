@@ -193,21 +193,16 @@ def _choose_jsda_parser(filename: str, data: bytes):
 def _choose_jsda_repo_parser(filename: str, data: bytes):
     """Pick the JSDA repo-rate parser for a downloaded file.
 
-    Mirrors :func:`_choose_jsda_parser` but selects the repo-rate CSV/XLSX
-    parsers. Raises ``ValueError`` for legacy ``.xls`` (the TRR index ships
-    ``.xls``; ``run_jsda`` maps this to a clean *skip* with a convert-the-file
-    note, so the bond-trade path is unaffected).
+    The official full time-series file is legacy ``.xls`` and is parsed with
+    xlrd. It must never be treated as an optional/cleanly-skipped format.
     """
-    from .jsda.parse import parse_repo_csv, parse_repo_xlsx
+    from .jsda.parse import parse_repo_csv, parse_repo_xls, parse_repo_xlsx
 
     low = (filename or "").lower()
     is_xlsx_blob = bool(data) and bytes(data[:2]) == b"PK"
 
     if low.endswith(".xls") and not is_xlsx_blob:
-        raise ValueError(
-            "legacy .xls is not supported; provide .xlsx or .csv "
-            "(convert the TRR source file)"
-        )
+        return parse_repo_xls, "xls"
     if low.endswith(".xlsx") or is_xlsx_blob:
         return parse_repo_xlsx, "xlsx"
     return parse_repo_csv, "csv"
@@ -543,9 +538,8 @@ def run_jsda(
     * ``repo_target_url`` — explicit repo-rate file URL (skips TRR index scrape).
 
     Both are local-only in Phase 1 (bot/DC risk on the edge). The repo path
-    treats a legacy ``.xls`` source (the real TRR format) as a clean **skip**
-    with a convert-the-file note, matching the bond-trade ``.xls`` policy but
-    not failing the run when the known source format is unsupported.
+    parses the official legacy ``.xls`` workbook with xlrd; corrupt or
+    unparseable input is an error, never a clean format skip.
     """
     if runtime != "local":
         return [
@@ -603,9 +597,9 @@ def _run_jsda_bond(fetcher, reg, data_base, today, ingested, target_url) -> RunR
 def _run_jsda_repo(fetcher, reg, data_base, today, ingested, target_url) -> RunReport:
     """Fetch + store JSDA repo rates (東京レポ・レート).
 
-    A legacy ``.xls`` source (the real TRR publication format) is a clean
-    **skip** — not an error — so a ``--source jsda`` run stays green when bond
-    trades succeed and only the repo source needs format conversion.
+    The legacy adapter now parses the official ``.xls`` source. Governed
+    collection receipts and full-history bounds are owned by the explicit
+    Phase 6.1 archive runner.
     """
     from .jsda import normalize as SN
 
@@ -618,19 +612,13 @@ def _run_jsda_repo(fetcher, reg, data_base, today, ingested, target_url) -> RunR
         data = fetcher.fetch_file(url)
         fname = url.rsplit("/", 1)[-1] or "jsda_repo.csv"
         rp = save_raw(data_base, "jsda", _stamped(fname, ingested), data, today)
-        parser, _kind = _choose_jsda_repo_parser(fname, data)  # raises ValueError on .xls
+        parser, _kind = _choose_jsda_repo_parser(fname, data)
         records = parser(data)
         rows = SN.normalize_repo_rates(records, ingested_at=ingested)
         n = reg.register("jsda_repo_rates", rows)
         return RunReport(
             "jsda", "repo_rates",
             fetched=len(records), registered=n, raw_path=str(rp),
-        )
-    except ValueError as exc:
-        # Known: TRR publishes legacy .xls (unsupported). Clean skip so the
-        # bond-trade path is unaffected; user must convert to .xlsx/.csv.
-        return RunReport(
-            "jsda", "repo_rates", skipped=f"repo file unsupported: {exc}"
         )
     except Exception as exc:  # noqa: BLE001
         return RunReport("jsda", "repo_rates", error=f"{exc}")
