@@ -285,27 +285,59 @@ export async function callOpsTool(db, name, rawArguments) {
   }
 
   if (name === "backfill_status") {
+    // Always return one row per governed dataset (26). Never drop JSDA rows.
     const binds = [];
     let where = "";
     if (args.dataset !== undefined) {
       where = " WHERE dataset = ?";
       binds.push(datasetArg(args.dataset));
     }
-    const datasets = await all(db,
+    const grouped = await all(db,
       `SELECT dataset, COUNT(*) AS required_segments,
               SUM(CASE WHEN status = 'COMPLETE' THEN 1 ELSE 0 END) AS complete_segments,
               SUM(CASE WHEN status <> 'COMPLETE' THEN 1 ELSE 0 END) AS remaining_segments
          FROM coverage_segments${where} GROUP BY dataset ORDER BY dataset`, binds);
-    if (datasets.length) {
-      return { plane: "ops_current", mutable: true, status: "AVAILABLE", datasets };
-    }
-    const requested = args.dataset === undefined ? GOVERNED_DATASETS : [datasetArg(args.dataset)];
+    const byDataset = new Map(grouped.map((row) => [String(row.dataset), row]));
+    const requested = args.dataset === undefined
+      ? GOVERNED_DATASETS
+      : [datasetArg(args.dataset)];
+    const datasets = requested.map((dataset) => {
+      const row = byDataset.get(dataset);
+      if (!row) {
+        const state = String(dataset).startsWith("jsda_")
+          ? "DISCOVERY_INCOMPLETE"
+          : "PLANNING_MISSING";
+        return {
+          dataset,
+          required_segments: 0,
+          complete_segments: 0,
+          remaining_segments: 0,
+          state,
+        };
+      }
+      const required = Number(row.required_segments || 0);
+      const complete = Number(row.complete_segments || 0);
+      let state = "PARTIAL";
+      if (required > 0 && complete === required) state = "COVERAGE_COMPLETE";
+      else if (required === 0) {
+        state = String(dataset).startsWith("jsda_")
+          ? "DISCOVERY_INCOMPLETE"
+          : "PLANNING_MISSING";
+      } else if (complete === 0) state = "DISCOVERY_INCOMPLETE";
+      return {
+        dataset,
+        required_segments: required,
+        complete_segments: complete,
+        remaining_segments: Number(row.remaining_segments || 0),
+        state,
+      };
+    });
     return {
-      plane: "ops_current", mutable: true, status: "UNKNOWN",
-      reason: "Coverage V2 segment projection is empty or unavailable",
-      datasets: requested.map((dataset) => ({
-        dataset, required_segments: null, complete_segments: null, remaining_segments: null,
-      })),
+      plane: "ops_current",
+      mutable: true,
+      status: datasets.some((d) => d.required_segments > 0) ? "AVAILABLE" : "UNKNOWN",
+      governed_dataset_count: GOVERNED_DATASETS.length,
+      datasets,
     };
   }
 
