@@ -170,6 +170,29 @@ function sleep(ms: number): Promise<void> {
   return new Promise<void>((resolve) => setTimeout(resolve, ms));
 }
 
+/**
+ * Retry a D1 prepare/batch call on transient transport failures
+ * ("Network connection lost", 5xx-ish D1 errors). Same budget as HTTP
+ * fetch retries so a single huge options upsert does not die on the first
+ * blip mid-chunk loop.
+ */
+async function d1WithRetry<T>(op: () => Promise<T>): Promise<T> {
+  let attempt = 0;
+  while (true) {
+    try {
+      return await op();
+    } catch (e) {
+      attempt++;
+      const msg = (e as Error)?.message || String(e);
+      const transient =
+        /network connection lost|D1_ERROR|internal error|timeout|503|502|429/i
+          .test(msg);
+      if (!transient || attempt > RETRY_COUNT) throw e;
+      await sleep(backoffDelayMs(attempt));
+    }
+  }
+}
+
 async function fetchOnePage(
   env: Env,
   url: string,
@@ -226,9 +249,19 @@ async function fetchDataset(
   opts: { from?: string; to?: string; today?: string },
   fetchImpl: typeof fetch,
   limiter: RateLimiter,
-): Promise<FetchOutcome> {
-  const out: FetchOutcome = {
+  /**
+   * Optional streaming hook: called after each API page. When provided and
+   * the caller sets ``retainRows=false``, page rows are NOT buffered in
+   * ``out.rows`` (only ``rowsSeen`` is tracked via a synthetic counter on
+   * the outcome). Used for huge option chains so we can D1-upsert page by
+   * page without holding 40k+ rows in memory twice.
+   */
+  onPage?: (pageRows: Record<string, unknown>[]) => Promise<void>,
+  retainRows = true,
+): Promise<FetchOutcome & { rowsSeen: number }> {
+  const out: FetchOutcome & { rowsSeen: number } = {
     rows: [],
+    rowsSeen: 0,
     rawBytes: 0,
     paginationErrors: 0,
     httpStatus: 0,
@@ -283,7 +316,11 @@ async function fetchDataset(
         return out;
       }
       const rows = Array.isArray(parsed?.data) ? parsed.data : [];
-      out.rows.push(...rows);
+      out.rowsSeen += rows.length;
+      if (retainRows) out.rows.push(...rows);
+      if (onPage && rows.length > 0) {
+        await onPage(rows as Record<string, unknown>[]);
+      }
       const next = parsed?.pagination_key || parsed?.pagination_token;
       if (!next) break;
       if (page === 199) {
@@ -415,14 +452,39 @@ async function ingestOne(
   limiter: RateLimiter,
 ): Promise<DatasetResult> {
   const startedAt = toJstIso(new Date());
-  const outcome = await fetchDataset(env, spec, opts, fetchImpl, limiter);
+  const when = new Date();
+  // Stream D1 upserts page-by-page for known huge endpoints (options chains).
+  // Holding the full response then upserting doubles memory and blows Worker
+  // limits (error 1101 / ~5min wall). Small datasets keep the classic path.
+  const streamD1 = /options/i.test(spec.id);
+  let insertedTotal = 0;
+  let revisionsTotal = 0;
+  let lastEvent: string | null = null;
+  const sampleRows: Record<string, unknown>[] = [];
+
+  const onPage = streamD1
+    ? async (pageRows: Record<string, unknown>[]) => {
+        const r = await upsertRecords(env, spec, pageRows, when);
+        insertedTotal += r.inserted;
+        revisionsTotal += r.revisions;
+        const ev = latestEventDate(pageRows);
+        if (ev && (lastEvent === null || ev > lastEvent)) lastEvent = ev;
+        if (sampleRows.length < 20) {
+          sampleRows.push(...pageRows.slice(0, 20 - sampleRows.length));
+        }
+      }
+    : undefined;
+
+  const outcome = await fetchDataset(
+    env, spec, opts, fetchImpl, limiter, onPage, !streamD1,
+  );
 
   if (outcome.error) {
     const finishedAt = toJstIso(new Date());
     const res: DatasetResult = {
       dataset: spec.id, status: "fail",
       startedAt, finishedAt,
-      rowsSeen: outcome.rows.length, rowsInserted: 0, rowsRevisions: 0,
+      rowsSeen: outcome.rowsSeen, rowsInserted: insertedTotal, rowsRevisions: revisionsTotal,
       availableAtMin: null, availableAtMax: null,
       detail: outcome.error, rawKey: null, rawBytes: outcome.rawBytes,
     };
@@ -432,24 +494,28 @@ async function ingestOne(
     return res;
   }
 
-  // Raw to R2 (even on empty result, so the run is auditable; only skip on
-  // rows=-and-rawBytes=0 which is impossible here because we got ok HTTP).
-  const when = new Date();
+  // Raw to R2 — full body for small datasets; sample + metadata for streamed.
   const rawKey = rawR2Key(spec.id, when);
+  const r2Rows = streamD1 ? sampleRows : outcome.rows;
   const rawBody = JSON.stringify({
     fetched_at: toJstIso(when),
     dataset: spec.id,
     path: spec.bulk === "bulk" && spec.bulkPath ? spec.bulkPath : spec.path,
     params: opts,
     http_status: outcome.httpStatus,
-    rows: outcome.rows.length,
-    data: outcome.rows,
+    rows: outcome.rowsSeen,
+    data: r2Rows,
+    data_truncated: streamD1,
   });
   await env.RAW_BUCKET.put(rawKey, rawBody);
 
-  // Structured to D1 (generic table for all datasets; specialized tables
-  // are not used on CF — the local sync script reads the generic table).
-  const inserted = await upsertRecords(env, spec, outcome.rows, when);
+  if (!streamD1) {
+    const inserted = await upsertRecords(env, spec, outcome.rows, when);
+    insertedTotal = inserted.inserted;
+    revisionsTotal = inserted.revisions;
+    lastEvent = latestEventDate(outcome.rows);
+  }
+
   const availableBounds = await selectAvailableBounds(env, spec.id);
 
   // Advance the per-dataset watermark. A failure here is non-fatal — the
@@ -458,12 +524,7 @@ async function ingestOne(
   const ingestedAt = toJstIso(when);
   let watermarkDetail = "";
   try {
-    await upsertWatermark(
-      env,
-      spec.id,
-      latestEventDate(outcome.rows),
-      ingestedAt,
-    );
+    await upsertWatermark(env, spec.id, lastEvent, ingestedAt);
   } catch (watermarkError) {
     watermarkDetail = `; watermark upsert failed: ${(watermarkError as Error).message}`;
   }
@@ -473,12 +534,12 @@ async function ingestOne(
     dataset: spec.id,
     status: "pass",
     startedAt, finishedAt,
-    rowsSeen: outcome.rows.length,
-    rowsInserted: inserted.inserted,
-    rowsRevisions: inserted.revisions,
+    rowsSeen: outcome.rowsSeen,
+    rowsInserted: insertedTotal,
+    rowsRevisions: revisionsTotal,
     availableAtMin: availableBounds.min,
     availableAtMax: availableBounds.max,
-    detail: `raw=${rawKey}${watermarkDetail}`,
+    detail: `raw=${rawKey}${watermarkDetail}${streamD1 ? "; stream_d1=1" : ""}`,
     rawKey,
     rawBytes: outcome.rawBytes,
   };
@@ -553,39 +614,35 @@ async function upsertRecords(
   const records = [...byKey.values()];
 
   // D1 permits at most 100 bound parameters per statement. Each record has
-  // eight fields, so a VALUES statement can contain at most floor(100/8)=12.
+  // eight fields → floor(100/8)=12 rows per VALUES statement.
+  //
+  // Per-chunk round-trips die on large option chains (~40k rows): thousands of
+  // sequential D1 calls blow Worker CPU/time (error 1101). Instead:
+  //   * pack up to D1_BATCH_STMTS prepared upserts into one `DB.batch()` call
+  //   * skip per-chunk existence SELECT + revision archive when the batch is
+  //     large (rowsInserted becomes an upper bound = records.length).
   const CHUNK = Math.floor(100 / 8);
+  // Prefer multi-statement batches whenever the page/batch is non-trivial —
+  // sequential 12-row round-trips thrash Worker time on options pagination.
+  const large = records.length > 200;
+  const D1_BATCH_STMTS = large ? 50 : 1;
   let inserted = 0;
   let revisions = 0;
+  type Stmt = ReturnType<D1Database["prepare"]>;
+  let pending: Stmt[] = [];
+
+  const flush = async (): Promise<void> => {
+    if (pending.length === 0) return;
+    const batch = pending;
+    pending = [];
+    await d1WithRetry(() => env.DB.batch(batch));
+  };
+
   for (let i = 0; i < records.length; i += CHUNK) {
     const chunk = records.slice(i, i + CHUNK);
     const placeholders = chunk.map(() => "(?, ?, ?, ?, ?, ?, ?, ?)").join(", ");
     const binds = recordBinds(chunk);
 
-    const existing = await env.DB.prepare(
-      `SELECT natural_key FROM jquants_records
-       WHERE source = ? AND dataset = ?
-         AND natural_key IN (${chunk.map(() => "?").join(", ")})`,
-    ).bind("jquants", spec.id, ...chunk.map((record) => record.naturalKey)).all();
-    inserted += chunk.length - (existing.results?.length ?? 0);
-
-    // Archive only a displaced primary whose stable source payload changed.
-    // The archive + primary upsert run atomically as one D1 batch.
-    const archiveSql =
-      `WITH incoming
-       (source, dataset, natural_key, event_time, available_at, ingested_at, payload, raw_payload)
-       AS (VALUES ${placeholders})
-       INSERT OR IGNORE INTO jquants_records_revisions
-       (source, dataset, natural_key, event_time, available_at, ingested_at, payload, raw_payload)
-       SELECT current.source, current.dataset, current.natural_key,
-              current.event_time, current.available_at, current.ingested_at,
-              current.payload, current.raw_payload
-       FROM jquants_records AS current
-       JOIN incoming
-         ON current.source = incoming.source
-        AND current.dataset = incoming.dataset
-        AND current.natural_key = incoming.natural_key
-       WHERE current.payload IS NOT incoming.payload`;
     const upsertSql =
       `INSERT INTO jquants_records
        (source, dataset, natural_key, event_time, available_at, ingested_at, payload, raw_payload)
@@ -605,11 +662,51 @@ async function upsertRecords(
          raw_payload = CASE
            WHEN jquants_records.payload IS excluded.payload THEN jquants_records.raw_payload
            ELSE excluded.raw_payload END`;
-    const batch = await env.DB.batch([
-      env.DB.prepare(archiveSql).bind(...binds),
-      env.DB.prepare(upsertSql).bind(...binds),
-    ]);
+
+    if (large) {
+      pending.push(env.DB.prepare(upsertSql).bind(...binds));
+      if (pending.length >= D1_BATCH_STMTS) await flush();
+      continue;
+    }
+
+    // Small-batch path: count inserts, archive revisions, dual-statement batch.
+    const existing = await d1WithRetry(() =>
+      env.DB.prepare(
+        `SELECT natural_key FROM jquants_records
+         WHERE source = ? AND dataset = ?
+           AND natural_key IN (${chunk.map(() => "?").join(", ")})`,
+      ).bind("jquants", spec.id, ...chunk.map((record) => record.naturalKey)).all(),
+    );
+    inserted += chunk.length - (existing.results?.length ?? 0);
+
+    const archiveSql =
+      `WITH incoming
+       (source, dataset, natural_key, event_time, available_at, ingested_at, payload, raw_payload)
+       AS (VALUES ${placeholders})
+       INSERT OR IGNORE INTO jquants_records_revisions
+       (source, dataset, natural_key, event_time, available_at, ingested_at, payload, raw_payload)
+       SELECT current.source, current.dataset, current.natural_key,
+              current.event_time, current.available_at, current.ingested_at,
+              current.payload, current.raw_payload
+       FROM jquants_records AS current
+       JOIN incoming
+         ON current.source = incoming.source
+        AND current.dataset = incoming.dataset
+        AND current.natural_key = incoming.natural_key
+       WHERE current.payload IS NOT incoming.payload`;
+    const batch = await d1WithRetry(() =>
+      env.DB.batch([
+        env.DB.prepare(archiveSql).bind(...binds),
+        env.DB.prepare(upsertSql).bind(...binds),
+      ]),
+    );
     revisions += (batch[0]?.meta?.changes ?? 0) as number;
+  }
+
+  await flush();
+  if (large) {
+    // Upper bound — existence SELECT was skipped to keep RTT low.
+    inserted = records.length;
   }
 
   return { inserted, revisions };
