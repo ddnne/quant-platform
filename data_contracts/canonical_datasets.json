@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "registry_version": "v1",
-  "registry_description": "Canonical registry of all governed and experimental datasets in the quant platform. This is the single source of truth for dataset metadata across Python, TypeScript, and documentation.",
+  "registry_description": "Canonical registry of all known endpoints (governed + experimental). SoT for inventory/MCP/docs.",
   "datasets": [
     {
       "dataset_id": "equities_master",
@@ -13,10 +13,21 @@
         "coverage": "collection_coverage/v2",
         "ingestion": "cf_platform"
       },
-      "natural_key_fields": ["code"],
+      "natural_key_fields": [
+        "code"
+      ],
       "historical_start": "2000-07-13",
       "coverage_segment_granularity": "calendar_month",
-      "expected_frequency": "trading_day"
+      "expected_frequency": "trading_day",
+      "inventory_status": "GOVERNED",
+      "collection_window": "full_day",
+      "research_eligible": true,
+      "enabled": true,
+      "sla": {
+        "expected_after": null,
+        "usable_by": null,
+        "freshness_policy": "trading_day"
+      }
     },
     {
       "dataset_id": "equities_bars_daily",
@@ -28,10 +39,22 @@
         "coverage": "collection_coverage/v2",
         "ingestion": "cf_platform"
       },
-      "natural_key_fields": ["code", "date"],
+      "natural_key_fields": [
+        "code",
+        "date"
+      ],
       "historical_start": "2004-01-05",
       "coverage_segment_granularity": "calendar_month",
-      "expected_frequency": "trading_day"
+      "expected_frequency": "trading_day",
+      "inventory_status": "GOVERNED",
+      "collection_window": "full_day",
+      "research_eligible": true,
+      "enabled": true,
+      "sla": {
+        "expected_after": null,
+        "usable_by": null,
+        "freshness_policy": "trading_day"
+      }
     },
     {
       "dataset_id": "equities_bars_daily_am",
@@ -43,10 +66,23 @@
         "coverage": "collection_coverage/v2",
         "ingestion": "cf_platform"
       },
-      "natural_key_fields": ["code", "date"],
+      "natural_key_fields": [
+        "code",
+        "date"
+      ],
       "historical_start": "2024-01-04",
       "coverage_segment_granularity": "calendar_month",
-      "expected_frequency": "trading_day"
+      "expected_frequency": "trading_day",
+      "inventory_status": "GOVERNED",
+      "collection_window": "full_day",
+      "research_eligible": true,
+      "enabled": true,
+      "sla": {
+        "expected_after": "11:30",
+        "usable_by": "12:30",
+        "timezone": "Asia/Tokyo",
+        "freshness_policy": "same_trading_day_am"
+      }
     },
     {
       "dataset_id": "fins_summary",
@@ -58,10 +94,22 @@
         "coverage": "collection_coverage/v2",
         "ingestion": "cf_platform"
       },
-      "natural_key_fields": ["code", "disclosure_date"],
+      "natural_key_fields": [
+        "code",
+        "disclosure_date"
+      ],
       "historical_start": "2008-01-08",
       "coverage_segment_granularity": "calendar_month",
-      "expected_frequency": "event_driven"
+      "expected_frequency": "event_driven",
+      "inventory_status": "GOVERNED",
+      "collection_window": "disclosure_event",
+      "research_eligible": true,
+      "enabled": true,
+      "sla": {
+        "expected_after": null,
+        "usable_by": null,
+        "freshness_policy": "event_driven"
+      }
     },
     {
       "dataset_id": "fins_details",
@@ -73,10 +121,23 @@
         "coverage": "collection_coverage/v2",
         "ingestion": "cf_platform"
       },
-      "natural_key_fields": ["code", "disclosure_date", "item_code"],
+      "natural_key_fields": [
+        "code",
+        "disclosure_date",
+        "item_code"
+      ],
       "historical_start": "2008-01-08",
       "coverage_segment_granularity": "calendar_month",
-      "expected_frequency": "event_driven"
+      "expected_frequency": "event_driven",
+      "inventory_status": "GOVERNED",
+      "collection_window": "disclosure_event",
+      "research_eligible": true,
+      "enabled": true,
+      "sla": {
+        "expected_after": null,
+        "usable_by": null,
+        "freshness_policy": "event_driven"
+      }
     },
     {
       "dataset_id": "fins_dividend",
@@ -88,10 +149,22 @@
         "coverage": "collection_coverage/v2",
         "ingestion": "cf_platform"
       },
-      "natural_key_fields": ["code", "disclosure_date"],
+      "natural_key_fields": [
+        "code",
+        "disclosure_date"
+      ],
       "historical_start": "2008-01-08",
       "coverage_segment_granularity": "calendar_month",
-      "expected_frequency": "event_driven"
+      "expected_frequency": "event_driven",
+      "inventory_status": "GOVERNED",
+      "collection_window": "disclosure_event",
+      "research_eligible": true,
+      "enabled": true,
+      "sla": {
+        "expected_after": null,
+        "usable_by": null,
+        "freshness_policy": "event_driven"
+      }
     },
     {
       "dataset_id": "fins_earnings_date",
@@ -103,10 +176,22 @@
         "coverage": "collection_coverage/v2",
         "ingestion": "cf_platform"
       },
-      "natural_key_fields": ["code", "disclosure_date"],
+      "natural_key_fields": [
+        "code",
+        "disclosure_date"
+      ],
       "historical_start": "2010-01-04",
       "coverage_segment_granularity": "calendar_month",
-      "expected_frequency": "event_driven"
+      "expected_frequency": "event_driven",
+      "inventory_status": "GOVERNED",
+      "collection_window": "disclosure_event",
+      "research_eligible": true,
+      "enabled": true,
+      "sla": {
+        "expected_after": null,
+        "usable_by": null,
+        "freshness_policy": "event_driven"
+      }
     },
     {
       "dataset_id": "equities_earnings_calendar",
@@ -118,10 +203,22 @@
         "coverage": "collection_coverage/v2",
         "ingestion": "cf_platform"
       },
-      "natural_key_fields": ["code", "scheduled_date"],
+      "natural_key_fields": [
+        "code",
+        "scheduled_date"
+      ],
       "historical_start": "2010-01-04",
       "coverage_segment_granularity": "calendar_month",
-      "expected_frequency": "event_driven"
+      "expected_frequency": "event_driven",
+      "inventory_status": "GOVERNED",
+      "collection_window": "disclosure_event",
+      "research_eligible": true,
+      "enabled": true,
+      "sla": {
+        "expected_after": null,
+        "usable_by": null,
+        "freshness_policy": "event_driven"
+      }
     },
     {
       "dataset_id": "markets_calendar",
@@ -133,10 +230,21 @@
         "coverage": "collection_coverage/v2",
         "ingestion": "cf_platform"
       },
-      "natural_key_fields": ["date"],
+      "natural_key_fields": [
+        "date"
+      ],
       "historical_start": "2008-01-01",
       "coverage_segment_granularity": "calendar_month",
-      "expected_frequency": "calendar_day"
+      "expected_frequency": "calendar_day",
+      "inventory_status": "GOVERNED",
+      "collection_window": "full_day",
+      "research_eligible": true,
+      "enabled": true,
+      "sla": {
+        "expected_after": null,
+        "usable_by": null,
+        "freshness_policy": "calendar_day"
+      }
     },
     {
       "dataset_id": "equities_investor_types",
@@ -148,10 +256,22 @@
         "coverage": "collection_coverage/v2",
         "ingestion": "cf_platform"
       },
-      "natural_key_fields": ["date", "section"],
+      "natural_key_fields": [
+        "date",
+        "section"
+      ],
       "historical_start": "2013-01-04",
       "coverage_segment_granularity": "calendar_month",
-      "expected_frequency": "weekly"
+      "expected_frequency": "weekly",
+      "inventory_status": "GOVERNED",
+      "collection_window": "full_day",
+      "research_eligible": true,
+      "enabled": true,
+      "sla": {
+        "expected_after": null,
+        "usable_by": null,
+        "freshness_policy": "weekly"
+      }
     },
     {
       "dataset_id": "indices_bars_daily_topix",
@@ -163,10 +283,21 @@
         "coverage": "collection_coverage/v2",
         "ingestion": "cf_platform"
       },
-      "natural_key_fields": ["date"],
+      "natural_key_fields": [
+        "date"
+      ],
       "historical_start": "2008-01-01",
       "coverage_segment_granularity": "calendar_month",
-      "expected_frequency": "trading_day"
+      "expected_frequency": "trading_day",
+      "inventory_status": "GOVERNED",
+      "collection_window": "full_day",
+      "research_eligible": true,
+      "enabled": true,
+      "sla": {
+        "expected_after": null,
+        "usable_by": null,
+        "freshness_policy": "trading_day"
+      }
     },
     {
       "dataset_id": "indices_bars_daily",
@@ -178,10 +309,22 @@
         "coverage": "collection_coverage/v2",
         "ingestion": "cf_platform"
       },
-      "natural_key_fields": ["code", "date"],
+      "natural_key_fields": [
+        "code",
+        "date"
+      ],
       "historical_start": "2008-01-01",
       "coverage_segment_granularity": "calendar_month",
-      "expected_frequency": "trading_day"
+      "expected_frequency": "trading_day",
+      "inventory_status": "GOVERNED",
+      "collection_window": "full_day",
+      "research_eligible": true,
+      "enabled": true,
+      "sla": {
+        "expected_after": null,
+        "usable_by": null,
+        "freshness_policy": "trading_day"
+      }
     },
     {
       "dataset_id": "derivatives_bars_daily_options_225",
@@ -193,10 +336,22 @@
         "coverage": "collection_coverage/v2",
         "ingestion": "cf_platform"
       },
-      "natural_key_fields": ["code", "date"],
+      "natural_key_fields": [
+        "code",
+        "date"
+      ],
       "historical_start": "2013-01-04",
       "coverage_segment_granularity": "calendar_month",
-      "expected_frequency": "trading_day"
+      "expected_frequency": "trading_day",
+      "inventory_status": "GOVERNED",
+      "collection_window": "full_day",
+      "research_eligible": true,
+      "enabled": true,
+      "sla": {
+        "expected_after": null,
+        "usable_by": null,
+        "freshness_policy": "trading_day"
+      }
     },
     {
       "dataset_id": "derivatives_bars_daily_futures",
@@ -208,10 +363,22 @@
         "coverage": "collection_coverage/v2",
         "ingestion": "cf_platform"
       },
-      "natural_key_fields": ["code", "date"],
+      "natural_key_fields": [
+        "code",
+        "date"
+      ],
       "historical_start": "2013-01-04",
       "coverage_segment_granularity": "calendar_month",
-      "expected_frequency": "trading_day"
+      "expected_frequency": "trading_day",
+      "inventory_status": "GOVERNED",
+      "collection_window": "full_day",
+      "research_eligible": true,
+      "enabled": true,
+      "sla": {
+        "expected_after": null,
+        "usable_by": null,
+        "freshness_policy": "trading_day"
+      }
     },
     {
       "dataset_id": "derivatives_bars_daily_options",
@@ -223,10 +390,22 @@
         "coverage": "collection_coverage/v2",
         "ingestion": "cf_platform"
       },
-      "natural_key_fields": ["code", "date"],
+      "natural_key_fields": [
+        "code",
+        "date"
+      ],
       "historical_start": "2013-01-04",
       "coverage_segment_granularity": "calendar_month",
-      "expected_frequency": "trading_day"
+      "expected_frequency": "trading_day",
+      "inventory_status": "GOVERNED",
+      "collection_window": "full_day",
+      "research_eligible": true,
+      "enabled": true,
+      "sla": {
+        "expected_after": null,
+        "usable_by": null,
+        "freshness_policy": "trading_day"
+      }
     },
     {
       "dataset_id": "markets_margin_interest",
@@ -238,10 +417,22 @@
         "coverage": "collection_coverage/v2",
         "ingestion": "cf_platform"
       },
-      "natural_key_fields": ["code", "date"],
+      "natural_key_fields": [
+        "code",
+        "date"
+      ],
       "historical_start": "2013-01-04",
       "coverage_segment_granularity": "calendar_month",
-      "expected_frequency": "weekly"
+      "expected_frequency": "weekly",
+      "inventory_status": "GOVERNED",
+      "collection_window": "full_day",
+      "research_eligible": true,
+      "enabled": true,
+      "sla": {
+        "expected_after": null,
+        "usable_by": null,
+        "freshness_policy": "weekly"
+      }
     },
     {
       "dataset_id": "markets_margin_alert",
@@ -253,10 +444,22 @@
         "coverage": "collection_coverage/v2",
         "ingestion": "cf_platform"
       },
-      "natural_key_fields": ["code", "date"],
+      "natural_key_fields": [
+        "code",
+        "date"
+      ],
       "historical_start": "2013-01-04",
       "coverage_segment_granularity": "calendar_month",
-      "expected_frequency": "event_driven"
+      "expected_frequency": "event_driven",
+      "inventory_status": "GOVERNED",
+      "collection_window": "disclosure_event",
+      "research_eligible": true,
+      "enabled": true,
+      "sla": {
+        "expected_after": null,
+        "usable_by": null,
+        "freshness_policy": "event_driven"
+      }
     },
     {
       "dataset_id": "markets_short_ratio",
@@ -268,10 +471,22 @@
         "coverage": "collection_coverage/v2",
         "ingestion": "cf_platform"
       },
-      "natural_key_fields": ["date", "section"],
+      "natural_key_fields": [
+        "date",
+        "section"
+      ],
       "historical_start": "2013-01-04",
       "coverage_segment_granularity": "calendar_month",
-      "expected_frequency": "weekly"
+      "expected_frequency": "weekly",
+      "inventory_status": "GOVERNED",
+      "collection_window": "full_day",
+      "research_eligible": true,
+      "enabled": true,
+      "sla": {
+        "expected_after": null,
+        "usable_by": null,
+        "freshness_policy": "weekly"
+      }
     },
     {
       "dataset_id": "markets_short_sale_report",
@@ -283,10 +498,22 @@
         "coverage": "collection_coverage/v2",
         "ingestion": "cf_platform"
       },
-      "natural_key_fields": ["code", "date"],
+      "natural_key_fields": [
+        "code",
+        "date"
+      ],
       "historical_start": "2013-01-04",
       "coverage_segment_granularity": "calendar_month",
-      "expected_frequency": "event_driven"
+      "expected_frequency": "event_driven",
+      "inventory_status": "GOVERNED",
+      "collection_window": "disclosure_event",
+      "research_eligible": true,
+      "enabled": true,
+      "sla": {
+        "expected_after": null,
+        "usable_by": null,
+        "freshness_policy": "event_driven"
+      }
     },
     {
       "dataset_id": "markets_breakdown",
@@ -298,10 +525,22 @@
         "coverage": "collection_coverage/v2",
         "ingestion": "cf_platform"
       },
-      "natural_key_fields": ["code", "date"],
+      "natural_key_fields": [
+        "code",
+        "date"
+      ],
       "historical_start": "2013-01-04",
       "coverage_segment_granularity": "calendar_month",
-      "expected_frequency": "trading_day"
+      "expected_frequency": "trading_day",
+      "inventory_status": "GOVERNED",
+      "collection_window": "full_day",
+      "research_eligible": true,
+      "enabled": true,
+      "sla": {
+        "expected_after": null,
+        "usable_by": null,
+        "freshness_policy": "trading_day"
+      }
     },
     {
       "dataset_id": "edinet_major_shareholders",
@@ -313,10 +552,22 @@
         "coverage": "collection_coverage/v2",
         "ingestion": "cf_platform"
       },
-      "natural_key_fields": ["code", "filing_date"],
+      "natural_key_fields": [
+        "code",
+        "filing_date"
+      ],
       "historical_start": "2018-01-04",
       "coverage_segment_granularity": "calendar_month",
-      "expected_frequency": "event_driven"
+      "expected_frequency": "event_driven",
+      "inventory_status": "GOVERNED",
+      "collection_window": "disclosure_event",
+      "research_eligible": true,
+      "enabled": true,
+      "sla": {
+        "expected_after": null,
+        "usable_by": null,
+        "freshness_policy": "event_driven"
+      }
     },
     {
       "dataset_id": "edinet_cross_shareholdings",
@@ -328,10 +579,22 @@
         "coverage": "collection_coverage/v2",
         "ingestion": "cf_platform"
       },
-      "natural_key_fields": ["code", "filing_date"],
+      "natural_key_fields": [
+        "code",
+        "filing_date"
+      ],
       "historical_start": "2018-01-04",
       "coverage_segment_granularity": "calendar_month",
-      "expected_frequency": "event_driven"
+      "expected_frequency": "event_driven",
+      "inventory_status": "GOVERNED",
+      "collection_window": "disclosure_event",
+      "research_eligible": true,
+      "enabled": true,
+      "sla": {
+        "expected_after": null,
+        "usable_by": null,
+        "freshness_policy": "event_driven"
+      }
     },
     {
       "dataset_id": "edinet_large_volume_shareholders",
@@ -343,10 +606,22 @@
         "coverage": "collection_coverage/v2",
         "ingestion": "cf_platform"
       },
-      "natural_key_fields": ["code", "filing_date"],
+      "natural_key_fields": [
+        "code",
+        "filing_date"
+      ],
       "historical_start": "2018-01-04",
       "coverage_segment_granularity": "calendar_month",
-      "expected_frequency": "event_driven"
+      "expected_frequency": "event_driven",
+      "inventory_status": "GOVERNED",
+      "collection_window": "disclosure_event",
+      "research_eligible": true,
+      "enabled": true,
+      "sla": {
+        "expected_after": null,
+        "usable_by": null,
+        "freshness_policy": "event_driven"
+      }
     },
     {
       "dataset_id": "jsda_otc_bond_reference_prices",
@@ -358,10 +633,24 @@
         "coverage": "collection_coverage/v2",
         "ingestion": "jsda_governed"
       },
-      "natural_key_fields": ["source", "publication_label_date", "security_code", "bond_name"],
+      "natural_key_fields": [
+        "source",
+        "publication_label_date",
+        "security_code",
+        "bond_name"
+      ],
       "historical_start": "2002-08-02",
       "coverage_segment_granularity": "official_archive_day",
-      "expected_frequency": "trading_day"
+      "expected_frequency": "trading_day",
+      "inventory_status": "GOVERNED",
+      "collection_window": "full_day",
+      "research_eligible": true,
+      "enabled": true,
+      "sla": {
+        "expected_after": null,
+        "usable_by": null,
+        "freshness_policy": "trading_day"
+      }
     },
     {
       "dataset_id": "jsda_tokyo_repo_rates",
@@ -373,10 +662,24 @@
         "coverage": "collection_coverage/v2",
         "ingestion": "jsda_governed"
       },
-      "natural_key_fields": ["source", "as_of_date", "tenor", "rate_type"],
+      "natural_key_fields": [
+        "source",
+        "as_of_date",
+        "tenor",
+        "rate_type"
+      ],
       "historical_start": "2012-10-29",
       "coverage_segment_granularity": "source_time_series_file",
-      "expected_frequency": "trading_day"
+      "expected_frequency": "trading_day",
+      "inventory_status": "GOVERNED",
+      "collection_window": "full_day",
+      "research_eligible": true,
+      "enabled": true,
+      "sla": {
+        "expected_after": null,
+        "usable_by": null,
+        "freshness_policy": "trading_day"
+      }
     },
     {
       "dataset_id": "jsda_corporate_bond_transactions",
@@ -388,10 +691,165 @@
         "coverage": "collection_coverage/v2",
         "ingestion": "jsda_governed"
       },
-      "natural_key_fields": ["source", "publication_label_date", "trade_date", "security_code", "source_record_id"],
+      "natural_key_fields": [
+        "source",
+        "publication_label_date",
+        "trade_date",
+        "security_code",
+        "source_record_id"
+      ],
       "historical_start": "2015-11-04",
       "coverage_segment_granularity": "official_archive_year",
-      "expected_frequency": "event_driven"
+      "expected_frequency": "event_driven",
+      "inventory_status": "GOVERNED",
+      "collection_window": "disclosure_event",
+      "research_eligible": true,
+      "enabled": true,
+      "sla": {
+        "expected_after": null,
+        "usable_by": null,
+        "freshness_policy": "event_driven"
+      }
+    },
+    {
+      "dataset_id": "equities_bars_minute",
+      "display_name": "Equities Minute Bars",
+      "source": "jquants_addon",
+      "governance_tier": "experimental",
+      "inventory_status": "EXPERIMENTAL",
+      "collection_window": "intraday",
+      "path": "/v2/equities/bars/minute",
+      "contracts": {
+        "primary": "jquants_proxy_addons",
+        "coverage": "none"
+      },
+      "natural_key_fields": [
+        "code",
+        "datetime"
+      ],
+      "historical_start": "2015-01-01",
+      "coverage_segment_granularity": "calendar_month",
+      "expected_frequency": "intraday",
+      "sla": {
+        "expected_after": null,
+        "usable_by": null,
+        "freshness_policy": "intraday_best_effort"
+      },
+      "research_eligible": false,
+      "enabled": true,
+      "entitlement": "jquants_addon_plan"
+    },
+    {
+      "dataset_id": "equities_trades",
+      "display_name": "Equities Trades (tick)",
+      "source": "jquants_addon",
+      "governance_tier": "experimental",
+      "inventory_status": "UNVERIFIED_ENDPOINT",
+      "collection_window": "intraday",
+      "path": "/v2/equities/trades",
+      "contracts": {
+        "primary": "jquants_proxy_addons",
+        "coverage": "none"
+      },
+      "natural_key_fields": [
+        "code",
+        "datetime",
+        "sequence"
+      ],
+      "historical_start": "2015-01-01",
+      "coverage_segment_granularity": "calendar_month",
+      "expected_frequency": "event_driven",
+      "sla": {
+        "expected_after": null,
+        "usable_by": null,
+        "freshness_policy": "intraday_best_effort"
+      },
+      "research_eligible": false,
+      "enabled": true,
+      "entitlement": "jquants_addon_plan"
+    },
+    {
+      "dataset_id": "td_list",
+      "display_name": "TDnet List",
+      "source": "jquants_addon",
+      "governance_tier": "experimental",
+      "inventory_status": "EXPERIMENTAL",
+      "collection_window": "disclosure_event",
+      "path": "/v2/td/list",
+      "contracts": {
+        "primary": "jquants_proxy_addons",
+        "coverage": "none"
+      },
+      "natural_key_fields": [
+        "code",
+        "disclosure_date",
+        "title"
+      ],
+      "historical_start": "2008-01-01",
+      "coverage_segment_granularity": "calendar_month",
+      "expected_frequency": "event_driven",
+      "sla": {
+        "expected_after": null,
+        "usable_by": null,
+        "freshness_policy": "event_publication"
+      },
+      "research_eligible": false,
+      "enabled": true,
+      "entitlement": "jquants_addon_plan"
+    },
+    {
+      "dataset_id": "td_files",
+      "display_name": "TDnet Files",
+      "source": "jquants_addon",
+      "governance_tier": "experimental",
+      "inventory_status": "EXPERIMENTAL",
+      "collection_window": "disclosure_event",
+      "path": "/v2/td/files",
+      "contracts": {
+        "primary": "jquants_proxy_addons",
+        "coverage": "none"
+      },
+      "natural_key_fields": [
+        "file_id"
+      ],
+      "historical_start": "2008-01-01",
+      "coverage_segment_granularity": "calendar_month",
+      "expected_frequency": "event_driven",
+      "sla": {
+        "expected_after": null,
+        "usable_by": null,
+        "freshness_policy": "event_publication"
+      },
+      "research_eligible": false,
+      "enabled": true,
+      "entitlement": "jquants_addon_plan"
+    },
+    {
+      "dataset_id": "td_bulk",
+      "display_name": "TDnet Bulk",
+      "source": "jquants_addon",
+      "governance_tier": "experimental",
+      "inventory_status": "UNVERIFIED_ENDPOINT",
+      "collection_window": "archive_backfill",
+      "path": "/v2/td/bulk",
+      "contracts": {
+        "primary": "jquants_proxy_addons",
+        "coverage": "none"
+      },
+      "natural_key_fields": [
+        "bulk_id"
+      ],
+      "historical_start": "2008-01-01",
+      "coverage_segment_granularity": "calendar_month",
+      "expected_frequency": "irregular",
+      "sla": {
+        "expected_after": null,
+        "usable_by": null,
+        "freshness_policy": "archive"
+      },
+      "research_eligible": false,
+      "enabled": true,
+      "entitlement": "jquants_addon_plan"
     }
   ]
 }
