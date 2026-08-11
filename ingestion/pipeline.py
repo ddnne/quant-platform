@@ -471,21 +471,78 @@ def _run_jquants_catalog(
         # finishes after midnight lands in the correct day.
         kind = job.dataset_id
         stamp_name = job.label.replace(" ", "_")[:120]
+        raw_bytes = json.dumps(rows, ensure_ascii=False).encode("utf-8")
         try:
             with write_lock:
-                save_raw(
+                rp = save_raw(
                     data_base,
                     "jquants",
                     _stamped(f"{stamp_name}.json", when),
-                    json.dumps(rows, ensure_ascii=False).encode("utf-8"),
+                    raw_bytes,
                     when,
                 )
                 norm = JN.normalize_generic(
                     rows, dataset=job.dataset_id, ingested_at=when
                 )
                 n = reg.register("jquants_records", norm)
+                # Coverage V2: emit a real collection receipt for this job's
+                # window when we can map it to a planned segment. Never fakes
+                # COMPLETE — evaluate_segment decides after ledger refresh.
+                try:
+                    from data_contracts import coverage_contract_for
+                    from storage.coverage_ledger import (
+                        plan_required_segments,
+                        record_required_segments,
+                    )
+                    from .jquants.receipts import emit_segment_receipt
+
+                    params = dict(getattr(job, "params", None) or {})
+                    policy = coverage_contract_for(job.dataset_id)
+                    target_end = (
+                        params.get("to")
+                        or params.get("date")
+                        or str(when)[:10]
+                    )
+                    target_end = str(target_end)[:10]
+                    segs = list(
+                        plan_required_segments(
+                            policy, target_end, source="jquants"
+                        )
+                    )
+                    req = None
+                    job_start = str(
+                        params.get("from") or params.get("date") or target_end
+                    )[:10]
+                    job_end = target_end
+                    for s in segs:
+                        if s.segment_start <= job_end and s.segment_end >= job_start:
+                            req = s
+                            break
+                    if req is None and segs:
+                        req = segs[-1]
+                    if req is not None:
+                        record_required_segments(store._conn, [req])
+                        run_id_row = store._conn.execute(
+                            "SELECT COALESCE(MAX(id), 0) FROM ingestion_run_log"
+                        ).fetchone()
+                        run_id = int(run_id_row[0]) if run_id_row else 0
+                        emit_segment_receipt(
+                            store._conn,
+                            required=req,
+                            run_id=run_id,
+                            raw=raw_bytes,
+                            observed_items=len(rows),
+                            structured_row_count=n,
+                            raw_row_count=len(rows),
+                            pagination_exhausted=True,
+                            status="SUCCESS",
+                            commit=True,
+                        )
+                except Exception as rec_exc:  # noqa: BLE001
+                    # Receipt emit must not fail the ingestion row path.
+                    print(f"[jquants/{kind}] receipt emit skipped: {rec_exc}")
             return RunReport(
-                "jquants", kind, fetched=len(rows), registered=n
+                "jquants", kind, fetched=len(rows), registered=n, raw_path=str(rp)
             )
         except Exception as exc:  # noqa: BLE001
             return RunReport("jquants", kind, error=f"{exc}")
