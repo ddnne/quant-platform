@@ -15,10 +15,16 @@ from research.artifacts import (
     ResearchIdea,
     RejectionReason,
 )
+from research.scheduler import ExperimentScheduler, ScheduledExperiment
+from research.evaluation import EvaluationHarness, EvaluationProtocol, EvaluationReport
 
 __all__ = [
+    "EvaluationHarness",
+    "EvaluationProtocol",
+    "EvaluationReport",
     "ExperimentInsight",
     "ExperimentPlan",
+    "ExperimentScheduler",
     "FeatureEvidence",
     "MassResearchDisabledError",
     "OperatorOverrideCapability",
@@ -26,6 +32,7 @@ __all__ = [
     "RejectionReason",
     "ResearchIdea",
     "ResearchReadinessService",
+    "ScheduledExperiment",
     "VerifiedResearchReadiness",
     "require_mass_research_start",
 ]

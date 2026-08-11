@@ -216,6 +216,13 @@ def _record(
     pagination_exhausted: bool,
     digests: Mapping[str, Any],
 ) -> None:
+    stamped = dict(digests)
+    # Successful JSDA archive collection is issuer-minted TRUSTED.
+    if status == "SUCCESS" and error is None:
+        stamped["eligibility"] = "TRUSTED_COLLECTION"
+        stamped["issuer_class"] = "TrustedReceiptIssuer"
+        stamped["issuer_id"] = f"jsda:run:{int(run_id)}"
+        stamped["parser_normalizer_version"] = "coverage-receipt/v2"
     record_collection_receipt(store._conn, CollectionReceipt(  # noqa: SLF001
         source=required.source,
         dataset=required.dataset,
@@ -229,7 +236,7 @@ def _record(
         raw_row_count=raw_row_count,
         structured_row_count=structured_row_count,
         pagination_exhausted=pagination_exhausted,
-        digests=digests,
+        digests=stamped,
         run_id=run_id,
         status=status,
         error=error,

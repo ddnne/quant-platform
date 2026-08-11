@@ -172,31 +172,12 @@ def evaluate_segment(
     )
     if not identity_matches:
         return "PARTIAL", {"reason": "receipt does not match required scope"}
-    # Trusted-path gate: only TRUSTED_COLLECTION receipts may drive COMPLETE.
-    # RECOVERED_RAW_ONLY / synthetic / missing eligibility with recovery sentinel
-    # are evidence-only and cannot complete Coverage V2.
-    eligibility = receipt.digests.get("eligibility")
-    if eligibility is None:
-        if receipt.digests.get("synthetic") or receipt.digests.get(
-            "origin"
-        ) in {"offline-test-fixture", "recovered-raw-only"}:
-            eligibility = "RECOVERED_RAW_ONLY"
-        else:
-            # Legacy live receipts without the field remain trusted if they
-            # carried a real raw digest (sha256:...) and are not synthetic.
-            raw_d = receipt.digests.get("raw")
-            if (
-                isinstance(raw_d, str)
-                and raw_d.startswith("sha256:")
-                and not receipt.digests.get("synthetic")
-            ):
-                eligibility = "TRUSTED_COLLECTION"
-            else:
-                eligibility = "RECOVERED_RAW_ONLY"
-    if eligibility != "TRUSTED_COLLECTION":
+    # Trusted-path gate: only TrustedReceiptIssuer-minted receipts may COMPLETE.
+    if not is_complete_eligible_receipt(receipt):
         return "PARTIAL", {
-            "reason": "receipt not COMPLETE-eligible (trusted path required)",
-            "eligibility": eligibility,
+            "reason": "receipt not COMPLETE-eligible (TrustedReceiptIssuer required)",
+            "eligibility": receipt_eligibility(receipt),
+            "issuer_class": receipt.digests.get("issuer_class"),
         }
     if receipt.status == "FAILED" and receipt.digests.get("failure_kind") in {
         "MISSING_EXPECTED_SEGMENT", "DEFERRED_SOURCE_GAP"
@@ -931,12 +912,22 @@ def build_collection_receipt(
     raw_rows = int(raw_row_count) if raw_row_count is not None else structured
     digests: dict[str, Any] = {
         "raw": compute_raw_digest(raw),
-        # Callers that rebuild from raw without independent structured
-        # reconciliation MUST override eligibility to RECOVERED_RAW_ONLY.
-        "eligibility": "TRUSTED_COLLECTION",
+        # Default is NOT trusted. Only TrustedReceiptIssuer may set
+        # eligibility=TRUSTED_COLLECTION with issuer_class/issuer_id.
+        "eligibility": "RECOVERED_RAW_ONLY",
     }
     if extra_digests:
         digests.update(dict(extra_digests))
+        # Strip bare TRUSTED claims without a trusted issuer capability.
+        if digests.get("eligibility") == "TRUSTED_COLLECTION":
+            if digests.get("issuer_class") != "TrustedReceiptIssuer" or not digests.get(
+                "issuer_id"
+            ):
+                digests["eligibility"] = "RECOVERED_RAW_ONLY"
+                digests.setdefault(
+                    "trust_note",
+                    "TRUSTED_COLLECTION requires TrustedReceiptIssuer",
+                )
     return CollectionReceipt(
         source=required.source,
         dataset=required.dataset,
@@ -1027,28 +1018,39 @@ def is_synthetic_receipt(receipt: CollectionReceipt) -> bool:
 
 
 def receipt_eligibility(receipt: CollectionReceipt) -> str:
-    """Return COMPLETE-eligibility class for a receipt."""
-    elig = receipt.digests.get("eligibility")
-    if isinstance(elig, str) and elig:
-        return elig
+    """Return COMPLETE-eligibility class for a receipt.
+
+    A raw SHA-256 alone is never enough for TRUSTED_COLLECTION. Only an
+    issuer-minted receipt (TrustedReceiptIssuer) is trusted.
+    """
     if is_synthetic_receipt(receipt) or receipt.digests.get("origin") in {
         "offline-test-fixture",
         "recovered-raw-only",
     }:
         return "RECOVERED_RAW_ONLY"
-    raw_d = receipt.digests.get("raw")
     if (
-        isinstance(raw_d, str)
-        and raw_d.startswith("sha256:")
-        and not is_synthetic_receipt(receipt)
+        receipt.digests.get("issuer_class") == "TrustedReceiptIssuer"
+        and isinstance(receipt.digests.get("issuer_id"), str)
+        and str(receipt.digests.get("issuer_id")).strip()
+        and receipt.digests.get("eligibility") == "TRUSTED_COLLECTION"
     ):
         return "TRUSTED_COLLECTION"
+    elig = receipt.digests.get("eligibility")
+    if isinstance(elig, str) and elig == "RECOVERED_RAW_ONLY":
+        return "RECOVERED_RAW_ONLY"
+    if isinstance(elig, str) and elig == "TRUSTED_COLLECTION":
+        # Labeled TRUSTED without issuer → not COMPLETE-eligible.
+        return "RECOVERED_RAW_ONLY"
     return "RECOVERED_RAW_ONLY"
 
 
 def is_complete_eligible_receipt(receipt: CollectionReceipt) -> bool:
-    return receipt_eligibility(receipt) == "TRUSTED_COLLECTION"
-
+    return (
+        receipt_eligibility(receipt) == "TRUSTED_COLLECTION"
+        and not is_synthetic_receipt(receipt)
+        and receipt.digests.get("issuer_class") == "TrustedReceiptIssuer"
+        and bool(str(receipt.digests.get("issuer_id") or "").strip())
+    )
 
 __all__ = [
     "CollectionReceipt",

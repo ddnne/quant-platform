@@ -1,4 +1,4 @@
-"""Trusted receipt boundary: RECOVERED_RAW_ONLY cannot COMPLETE."""
+"""Trusted receipt boundary: only TrustedReceiptIssuer can COMPLETE."""
 from __future__ import annotations
 
 from dataclasses import replace
@@ -9,6 +9,7 @@ from storage.coverage_ledger import (
     evaluate_segment,
     plan_required_segments,
 )
+from storage.trusted_receipt import TrustedReceiptIssuer
 
 
 def _month_required():
@@ -43,7 +44,8 @@ def test_recovered_raw_only_cannot_complete():
     assert "trusted" in detail["reason"].lower() or "eligible" in detail["reason"].lower()
 
 
-def test_trusted_collection_can_complete():
+def test_bare_builder_cannot_complete():
+    """Default builder is non-trusted — no issuer means no COMPLETE."""
     policy, req = _month_required()
     raw = b'{"data":[{"Date":"2025-01-01"}]}'
     receipt = build_collection_receipt(
@@ -53,7 +55,24 @@ def test_trusted_collection_can_complete():
         observed_items=1,
         structured_row_count=1,
         raw_row_count=1,
-        # default eligibility TRUSTED_COLLECTION
+    )
+    status, detail = evaluate_segment(policy, req, receipt)
+    assert status == "PARTIAL"
+    assert receipt.digests.get("eligibility") == "RECOVERED_RAW_ONLY"
+
+
+def test_trusted_issuer_can_complete():
+    policy, req = _month_required()
+    raw = b'{"data":[{"Date":"2025-01-01"}]}'
+    issuer = TrustedReceiptIssuer(issuer_id="jquants:run:1")
+    receipt = issuer.issue(
+        required=req,
+        run_id=1,
+        raw=raw,
+        observed_items=1,
+        structured_row_count=1,
+        raw_row_count=1,
     )
     status, detail = evaluate_segment(policy, req, receipt)
     assert status == "COMPLETE", detail
+    assert receipt.digests["issuer_class"] == "TrustedReceiptIssuer"

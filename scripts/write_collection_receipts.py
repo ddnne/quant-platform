@@ -301,7 +301,10 @@ def main(argv: list[str] | None = None) -> int:
     structured_rows = args.structured_rows if args.structured_rows is not None else observed
     raw_rows = args.raw_rows if args.raw_rows is not None else structured_rows
 
-    receipt = build_collection_receipt(
+    from storage.trusted_receipt import mint_ingestion_issuer
+
+    issuer = mint_ingestion_issuer(run_id=args.run_id, source=required.source)
+    receipt = issuer.issue(
         required=required,
         run_id=args.run_id,
         raw=raw,

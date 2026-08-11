@@ -1027,12 +1027,13 @@ def publish_ready_snapshot(
                 conn, staging_path, build_id=build_id, required=required
             )
             watermarks = _watermarks_for(conn, required, coverage_rows)
-            # Single READY publication policy (evidence bundle).
+            # Single READY publication policy (typed evidence → sole PASS/FAIL).
             from paper_runtime.ready_policy import ReadyPublicationPolicy
 
             # raw_manifests already validated inside _evaluate_publication_gate;
             # pass None so policy does not double-fail on shape differences.
-            bundle = ReadyPublicationPolicy().evaluate(
+            policy = ReadyPublicationPolicy()
+            bundle = policy.evaluate(
                 conn,
                 staging_path,
                 required,

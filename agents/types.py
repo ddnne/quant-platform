@@ -21,12 +21,22 @@ class ResearchRequest:
 
 @dataclass(frozen=True)
 class FeatureProposal:
-    """Governance proposal only; it does not register or approve a feature."""
+    """Governance proposal only; it does not register or approve a feature.
+
+    Agents never connect Feature implementation to raw DB — only this closed
+    declaration is accepted through the gateway / agent surface.
+    """
 
     feature_id: str
     intended_role: str
     rationale: str
     status: str = "candidate"
+    inputs: tuple[str, ...] = ()
+    transform_declaration: str = ""
+    expected_rationale: str = ""
+    horizon: str = ""
+    cost_estimate: str = ""
+    provenance: str = ""
 
     def __post_init__(self) -> None:
         if self.intended_role not in {"signal", "state", "structural", "utility"}:
@@ -39,18 +49,38 @@ class FeatureProposal:
         """Closed-schema decode; rejects unknown fields (no free smuggled keys)."""
         if not isinstance(payload, Mapping):
             raise ValueError("FeatureProposal must be an object")
-        allowed = {"feature_id", "intended_role", "rationale", "status"}
+        allowed = {
+            "feature_id",
+            "intended_role",
+            "rationale",
+            "status",
+            "inputs",
+            "transform_declaration",
+            "expected_rationale",
+            "horizon",
+            "cost_estimate",
+            "provenance",
+        }
         unknown = sorted(set(payload) - allowed)
         if unknown:
             raise ValueError(f"FeatureProposal unknown field(s): {unknown}")
         missing = {"feature_id", "intended_role", "rationale"} - set(payload)
         if missing:
             raise ValueError(f"FeatureProposal missing field(s): {sorted(missing)}")
+        inputs = payload.get("inputs", ())
+        if not isinstance(inputs, (list, tuple)):
+            raise ValueError("FeatureProposal.inputs must be a list")
         return cls(
             feature_id=str(payload["feature_id"]),
             intended_role=str(payload["intended_role"]),
             rationale=str(payload["rationale"]),
             status=str(payload.get("status", "candidate")),
+            inputs=tuple(str(x) for x in inputs),
+            transform_declaration=str(payload.get("transform_declaration", "")),
+            expected_rationale=str(payload.get("expected_rationale", "")),
+            horizon=str(payload.get("horizon", "")),
+            cost_estimate=str(payload.get("cost_estimate", "")),
+            provenance=str(payload.get("provenance", "")),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -59,6 +89,12 @@ class FeatureProposal:
             "intended_role": self.intended_role,
             "rationale": self.rationale,
             "status": self.status,
+            "inputs": list(self.inputs),
+            "transform_declaration": self.transform_declaration,
+            "expected_rationale": self.expected_rationale,
+            "horizon": self.horizon,
+            "cost_estimate": self.cost_estimate,
+            "provenance": self.provenance,
         }
 
 

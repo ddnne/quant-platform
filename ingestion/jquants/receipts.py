@@ -31,9 +31,9 @@ from typing import Any, Mapping
 from storage.coverage_ledger import (
     CollectionReceipt,
     RequiredCoverageSegment,
-    build_collection_receipt,
     record_collection_receipt,
 )
+from storage.trusted_receipt import TrustedReceiptIssuer, mint_ingestion_issuer
 
 
 def emit_segment_receipt(
@@ -51,21 +51,18 @@ def emit_segment_receipt(
     checked_at: str | None = None,
     extra_digests: Mapping[str, Any] | None = None,
     commit: bool = True,
+    issuer: TrustedReceiptIssuer | None = None,
 ) -> CollectionReceipt:
     """Record a real collection receipt for one planned J-Quants segment.
 
-    Parameters mirror :func:`~storage.coverage_ledger.build_collection_receipt`.
-    ``raw`` must be the verbatim bytes persisted for the segment (the digest is
-    computed over it). The caller owns segment identity: pass the exact
-    :class:`~storage.coverage_ledger.RequiredCoverageSegment` produced by
-    :func:`~storage.coverage_ledger.plan_required_segments` so the receipt's
-    expected scope matches and the segment can evaluate to COMPLETE once the
-    policy gates (pagination, expected items, raw retention) are satisfied.
+    Requires a :class:`TrustedReceiptIssuer` (minted by the ingestion
+    transaction). Bare ``build_collection_receipt`` cannot mint TRUSTED.
 
     Set ``commit=False`` to batch several receipts inside one caller-owned
     transaction.
     """
-    receipt = build_collection_receipt(
+    trusted = issuer or mint_ingestion_issuer(run_id=run_id, source=required.source)
+    receipt = trusted.issue(
         required=required,
         run_id=run_id,
         raw=raw,
