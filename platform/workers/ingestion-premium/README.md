@@ -13,11 +13,12 @@ paginated export request have been verified.
 
 | Kind | Name | Purpose |
 |------|------|---------|
-| R2 | `quant-raw` | Verbatim source JSON per fetch, partitioned by dataset/date |
+| R2 | `quant-raw` | Full response pages + digest manifest per dataset/run |
 | R2 | `quant-structured` | Reserved (future parquet/partition dumps) |
 | D1 | `quant-ingest` | PIT-shaped structured rows (mirror of `storage/schema.py`) + watermarks |
 | Secret | `JQUANTS_API_KEY` | Required for upstream fetch; bind the existing value |
-| Secret | `INGESTION_PROXY_TOKEN` | Optional; gates the manual `/v1/run` endpoint |
+| Secret | `INGESTION_RUN_TOKEN` | Manual run and migration rebuild only |
+| Secret | `DATA_EXPORT_TOKEN` | Structured export endpoints only |
 
 After 0002, D1 also holds `ingestion_watermarks` (one row per dataset,
 advanced after every successful ingest). The local sync script reads it
@@ -41,9 +42,10 @@ stressing the 500 req/min cap. Override in `wrangler.toml`.
 ## Closed-loop guarantees
 
 1. **Scheduled** via Workers Cron (`scheduled` handler).
-2. **Secrets only on CF** — same names (`JQUANTS_API_KEY`,
-   `INGESTION_PROXY_TOKEN`). Never logged.
-3. **Persist R2 raw + D1 structured** — every fetch lands both.
+2. **Secrets only on CF** — upstream, run, and export capabilities are separate and never logged.
+3. **Persist R2 raw + D1 structured** — every response page is retained under
+   `raw/<dataset>/<run_id>/page-NNNNNN.json`; `manifest.json` records page/row
+   counts, SHA-256 digests, and completeness. Production never stores a sample-only body.
 4. **Incremental primary**; backfill separable via `/v1/run?from=&to=`. Date-only
    endpoints fan out one request per day, and daily bars use the confirmed bulk path.
 5. **Auto validation** — every dataset result is written to
@@ -58,6 +60,11 @@ stressing the 500 req/min cap. Override in `wrangler.toml`.
 Each structured row's `available_at` is derived from a dataset-level policy
 in `src/availability.ts` (Python mirror: `cf_platform/ingest_premium/availability.py`):
 
+An upstream payload property named `available_at` is retained in `payload` and
+`raw_payload` for provenance, but is never copied into the trusted metadata
+column. Only the canonical contract (or the Python normalizer's explicit
+trusted-caller keyword used by controlled backfills/tests) can select it.
+
 * **`session_close`** for OHLC bar datasets — JST close instant of the row's
   `Date` (15:30 from 2024-11-05; 15:00 before).
 * **`event_field`** (default) — first present candidate from
@@ -66,6 +73,28 @@ in `src/availability.ts` (Python mirror: `cf_platform/ingest_premium/availabilit
 * **`ingest_time`** — fetch-time fallback only.
 
 Unit tests: `tests/test_phase35_availability.py`.
+
+## Contract-v2 natural-key rebuild
+
+Migration `0005_natural_keys_v2.sql` creates only control/staging tables and
+sets the rebuild state to `PENDING`; it intentionally does not synthesize keys
+with SQLite `json_object()`. D1 has no portable SHA-256 function, so missing
+required identity fields must be handled by the Worker's canonical function.
+
+After applying `0005` and deploying the Worker, run the authenticated rebuild:
+
+```bash
+curl -fsS -X POST \
+  -H "X-Ingestion-Token: $INGESTION_RUN_TOKEN" \
+  "$INGESTION_PREMIUM_URL/v1/admin/rebuild-natural-keys-v2"
+curl -fsS "$INGESTION_PREMIUM_URL/health"
+```
+
+The rebuild stages rows page by page, groups collisions into one primary plus
+revision history, atomically replaces the affected live rows, then audits all
+Premium-core primary/revision/change-feed rows against
+`canonical_natural_key(payload)`. Ingestion and structured exports are blocked
+until `/health` reports `natural_key_migration.state == "READY"`.
 
 ## Parallel ingestion + retry (P0-4)
 
@@ -97,7 +126,8 @@ npx wrangler d1 execute quant-ingest --remote --file=migrations/0001_init.sql
 # ingestion-premium needs its own binding. Re-put the SAME value, do NOT
 # reissue the key.)
 printf '%s' "$JQUANTS_API_KEY" | npx wrangler secret put JQUANTS_API_KEY -c platform/workers/ingestion-premium/wrangler.toml
-printf '%s' "$INGESTION_PROXY_TOKEN" | npx wrangler secret put INGESTION_PROXY_TOKEN -c platform/workers/ingestion-premium/wrangler.toml
+printf '%s' "$INGESTION_RUN_TOKEN" | npx wrangler secret put INGESTION_RUN_TOKEN -c platform/workers/ingestion-premium/wrangler.toml
+printf '%s' "$DATA_EXPORT_TOKEN" | npx wrangler secret put DATA_EXPORT_TOKEN -c platform/workers/ingestion-premium/wrangler.toml
 
 # Deploy
 npx wrangler deploy -c platform/workers/ingestion-premium/wrangler.toml
@@ -112,13 +142,13 @@ npx wrangler deploy -c platform/workers/ingestion-premium/wrangler.toml
 # Pull each D1 table to local SQLite so pit.get_* can read it.
 python3 scripts/sync_d1_to_sqlite.py \
   --url "$INGESTION_PREMIUM_URL" \
-  --token "$INGESTION_PROXY_TOKEN" \
+  --token "$DATA_EXPORT_TOKEN" \
   --db data/structured/ingestion.sqlite
 
 # Incremental: skip rows already mirrored locally by ingested_at watermark.
 python3 scripts/sync_d1_to_sqlite.py --incremental \
   --url "$INGESTION_PREMIUM_URL" \
-  --token "$INGESTION_PROXY_TOKEN" \
+  --token "$DATA_EXPORT_TOKEN" \
   --db data/structured/ingestion.sqlite
 ```
 

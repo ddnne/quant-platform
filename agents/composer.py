@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from .types import ComposedMemo, ResearchMemo
+from .roles import AgentRole, ROLE_MATRIX
 
 
 class ComposerAgent:
     role = "composer"
+    capabilities = ROLE_MATRIX[AgentRole.COMPOSER].capabilities
 
     def compose(self, memos: tuple[ResearchMemo, ...]) -> ComposedMemo:
         if not memos:

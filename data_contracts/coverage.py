@@ -1,0 +1,130 @@
+"""Collection coverage policy paired with the canonical dataset contract.
+
+The policy deliberately distinguishes calendar/periodic series from irregular
+event feeds.  Event feeds are reconciled against the source collection window;
+they never acquire invented daily row-count expectations.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+import json
+from pathlib import Path
+from types import MappingProxyType
+from typing import Any, Mapping
+
+from .loader import all_contracts
+
+COVERAGE_CONTRACT_PATH = Path(__file__).with_name("collection_coverage.json")
+COVERAGE_STATUSES = frozenset(
+    {"COMPLETE", "PARTIAL", "STALE", "UNKNOWN", "FAILED"}
+)
+GOVERNANCE_TIERS = frozenset({"governed", "experimental"})
+_REQUIRED = frozenset(
+    {
+        "collection_scope",
+        "history_target_start",
+        "history_target_end_rule",
+        "coverage_mode",
+        "expected_frequency",
+        "universe_rule",
+        "raw_retention_required",
+        "structured_reconciliation_required",
+        "governance_tier",
+    }
+)
+
+
+@dataclass(frozen=True)
+class CollectionCoverageContract:
+    dataset_id: str
+    collection_scope: str
+    history_target_start: str
+    history_target_end_rule: str
+    coverage_mode: str
+    expected_frequency: str
+    universe_rule: str
+    raw_retention_required: bool
+    structured_reconciliation_required: bool
+    governance_tier: str
+
+    @classmethod
+    def from_dict(
+        cls, dataset_id: str, raw: Mapping[str, Any]
+    ) -> "CollectionCoverageContract":
+        missing = _REQUIRED - raw.keys()
+        if missing:
+            raise ValueError(
+                f"coverage contract {dataset_id!r} missing {sorted(missing)}"
+            )
+        strings = {
+            name: raw[name]
+            for name in _REQUIRED
+            if name not in {
+                "raw_retention_required", "structured_reconciliation_required"
+            }
+        }
+        for name, value in strings.items():
+            if not isinstance(value, str) or not value:
+                raise ValueError(f"{dataset_id}.{name} must be non-empty string")
+        tier = str(raw["governance_tier"])
+        if tier not in GOVERNANCE_TIERS:
+            raise ValueError(
+                f"{dataset_id}.governance_tier must be governed or experimental"
+            )
+        for name in ("raw_retention_required", "structured_reconciliation_required"):
+            if not isinstance(raw[name], bool):
+                raise ValueError(f"{dataset_id}.{name} must be boolean")
+        return cls(dataset_id=dataset_id, **{name: raw[name] for name in _REQUIRED})
+
+
+def _load() -> tuple[str, Mapping[str, CollectionCoverageContract]]:
+    document = json.loads(COVERAGE_CONTRACT_PATH.read_text(encoding="utf-8"))
+    if document.get("schema_version") != 1:
+        raise ValueError("collection coverage schema_version must be 1")
+    policy_version = document.get("policy_version")
+    if not isinstance(policy_version, str) or not policy_version:
+        raise ValueError("collection coverage policy_version must be non-empty")
+    defaults = document.get("defaults")
+    rows = document.get("datasets")
+    if not isinstance(defaults, dict) or not isinstance(rows, dict):
+        raise ValueError("coverage defaults and datasets must be objects")
+    expected = {contract.dataset_id for contract in all_contracts()}
+    actual = set(rows)
+    if actual != expected:
+        raise ValueError(
+            "coverage datasets must exactly match canonical contract: "
+            f"missing={sorted(expected - actual)}, extra={sorted(actual - expected)}"
+        )
+    contracts = {
+        dataset_id: CollectionCoverageContract.from_dict(
+            dataset_id, {**defaults, **overrides}
+        )
+        for dataset_id, overrides in rows.items()
+    }
+    return policy_version, MappingProxyType(contracts)
+
+
+POLICY_VERSION, _CONTRACTS = _load()
+
+
+def all_coverage_contracts() -> tuple[CollectionCoverageContract, ...]:
+    return tuple(_CONTRACTS.values())
+
+
+def coverage_contract_for(dataset_id: str) -> CollectionCoverageContract:
+    try:
+        return _CONTRACTS[dataset_id]
+    except KeyError as exc:
+        raise KeyError(f"unknown coverage contract: {dataset_id!r}") from exc
+
+
+__all__ = [
+    "COVERAGE_CONTRACT_PATH",
+    "COVERAGE_STATUSES",
+    "GOVERNANCE_TIERS",
+    "POLICY_VERSION",
+    "CollectionCoverageContract",
+    "all_coverage_contracts",
+    "coverage_contract_for",
+]

@@ -105,6 +105,41 @@ def test_generic_natural_key_from_catalog_identity_fields():
     assert r["available_at"] == "2025-04-01T15:30:00+09:00"
 
 
+def test_source_available_at_is_raw_only_and_cannot_override_contract_metadata():
+    forged = "1999-01-01T00:00:00+09:00"
+    source = {
+        "Code": "8697",
+        "Date": "2025-04-01",
+        "Close": 100,
+        "available_at": forged,
+    }
+    daily = normalize_daily_bars([source], ingested_at=ING)[0]
+    generic = normalize_generic(
+        [source], dataset="equities_bars_daily", ingested_at=ING
+    )[0]
+
+    assert daily["available_at"] == "2025-04-01T15:30:00+09:00"
+    assert generic["available_at"] == "2025-04-01T15:30:00+09:00"
+    assert json.loads(daily["raw_payload"])["available_at"] == forged
+    assert json.loads(generic["raw_payload"])["available_at"] == forged
+
+
+def test_available_at_keyword_remains_an_explicit_trusted_caller_path():
+    trusted = "2025-04-20T09:00:00+09:00"
+    row = {
+        "Code": "8697",
+        "Date": "2025-04-01",
+        "available_at": "1999-01-01T00:00:00+09:00",
+    }
+    normalized = normalize_generic(
+        [row],
+        dataset="equities_bars_daily",
+        ingested_at=ING,
+        available_at=trusted,
+    )[0]
+    assert normalized["available_at"] == trusted
+
+
 def test_generic_event_time_from_disclosed_date():
     rows = [{
         "Code": "8697",

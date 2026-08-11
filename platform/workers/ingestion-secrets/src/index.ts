@@ -2,7 +2,7 @@
  * Holds JQUANTS_API_KEY on Cloudflare and optionally proxies J-Quants HTTP
  * so local runners never need a local copy of the key.
  *
- * Auth: request header X-Ingestion-Token must match INGESTION_PROXY_TOKEN secret
+ * Auth: request header X-Ingestion-Token must match JQUANTS_PROXY_TOKEN secret
  * when proxying. Health checks need no auth. The upstream capability is
  * intentionally narrow: GET requests to exact shared-contract paths.
  */
@@ -11,7 +11,7 @@ import addonProxyContract from "../../../../data_contracts/jquants_proxy_addons.
 
 export interface Env {
   JQUANTS_API_KEY: string;
-  INGESTION_PROXY_TOKEN?: string;
+  JQUANTS_PROXY_TOKEN?: string;
 }
 
 const JQ_BASE = "https://api.jquants.com";
@@ -70,8 +70,8 @@ export default {
     if (url.pathname === "/v1/proxy/jquants") {
       const token = request.headers.get("X-Ingestion-Token") || "";
       if (
-        !env.INGESTION_PROXY_TOKEN ||
-        !(await tokenMatches(token, env.INGESTION_PROXY_TOKEN))
+        !env.JQUANTS_PROXY_TOKEN ||
+        !(await tokenMatches(token, env.JQUANTS_PROXY_TOKEN))
       ) {
         return Response.json({ error: "unauthorized" }, { status: 401 });
       }

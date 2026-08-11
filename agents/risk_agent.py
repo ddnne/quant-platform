@@ -2,17 +2,15 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
-from typing import Any
-
 from strategies.paper import PaperRunResult
 
 from .types import RiskAudit
+from .roles import AgentRole, ROLE_MATRIX
 
 
 class RiskAgent:
     role = "risk"
+    capabilities = ROLE_MATRIX[AgentRole.RISK].capabilities
 
     def __init__(self, *, max_drawdown_limit: float = 0.35) -> None:
         limit = float(max_drawdown_limit)
@@ -32,22 +30,8 @@ class RiskAgent:
             "max_drawdown_within_limit": max_drawdown <= self.max_drawdown_limit,
         }
         findings = tuple(name for name, passed in checks.items() if not passed)
-        audit_payload: dict[str, Any] = {
-            "experiment_id": result.experiment_id,
-            "run_id": result.run_id,
-            "checks": checks,
-            "max_drawdown": max_drawdown,
-            "max_drawdown_limit": self.max_drawdown_limit,
-        }
-        canonical = json.dumps(
-            audit_payload,
-            sort_keys=True,
-            separators=(",", ":"),
-            allow_nan=False,
-        )
-        audit_id = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-        return RiskAudit(
-            audit_id=audit_id,
+        provisional = RiskAudit(
+            audit_id="pending",
             experiment_id=result.experiment_id,
             run_id=result.run_id,
             status="pass" if not findings else "review",
@@ -58,6 +42,15 @@ class RiskAgent:
                 "max_drawdown_limit": self.max_drawdown_limit,
                 "num_trades": int(metrics.get("num_trades", len(result.trades))),
             },
+        )
+        return RiskAudit(
+            audit_id=provisional.expected_audit_id(),
+            experiment_id=provisional.experiment_id,
+            run_id=provisional.run_id,
+            status=provisional.status,
+            checks=provisional.checks,
+            findings=provisional.findings,
+            metrics=provisional.metrics,
         )
 
 

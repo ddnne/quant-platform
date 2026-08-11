@@ -1,74 +1,100 @@
--- Phase 6 F0-E — contract-v2 natural keys for primary, revisions, and the
--- already-seeded change feed.  Each new key adds source discriminators that
--- the former global KEY_FIELDS sweep omitted; malformed rows retain their
--- legacy key and will use SHA-256 fallback when next ingested by the Worker.
+-- Phase 6 hardening -- contract-v2 natural-key rebuild control plane.
+--
+-- IMPORTANT: natural keys are deliberately *not* rebuilt in SQL.  SQLite's
+-- json_object() retains missing fields as JSON null and D1 has no portable
+-- SHA-256 SQL function.  An UPDATE based on json_object() therefore disagrees
+-- with the canonical Python/Worker rule, which hashes the complete payload
+-- whenever any required discriminator is absent.
+--
+-- The Worker migration in src/natural_key_migration.ts performs the rebuild:
+--   legacy rows -> canonical identity function -> staging -> group versions
+--   -> atomic live-table replacement -> full post-publish identity audit.
+-- Normal ingestion and exports require this row to be READY, so applying this
+-- schema migration cannot leave a partially rebuilt dataset in service.
 
-UPDATE jquants_records
-SET natural_key = CASE dataset
-    WHEN 'equities_investor_types' THEN json_object(
-        'PubDate', json_extract(payload, '$.PubDate'),
-        'Section', json_extract(payload, '$.Section'))
-    WHEN 'fins_dividend' THEN json_object(
-        'Code', json_extract(payload, '$.Code'),
-        'RefNo', COALESCE(json_extract(payload, '$.RefNo'), json_extract(payload, '$.CARefNo')))
-    WHEN 'fins_earnings_date' THEN json_object(
-        'Code', json_extract(payload, '$.Code'),
-        'PubDate', json_extract(payload, '$.PubDate'),
-        'SchDate', json_extract(payload, '$.SchDate'))
-    WHEN 'markets_margin_alert' THEN json_object(
-        'AppDate', json_extract(payload, '$.AppDate'),
-        'Code', json_extract(payload, '$.Code'),
-        'PubDate', json_extract(payload, '$.PubDate'))
-    WHEN 'markets_short_ratio' THEN json_object(
-        'Date', json_extract(payload, '$.Date'),
-        'S33', json_extract(payload, '$.S33'))
-    WHEN 'markets_short_sale_report' THEN json_object(
-        'CalcDate', json_extract(payload, '$.CalcDate'),
-        'Code', json_extract(payload, '$.Code'),
-        'DICName', json_extract(payload, '$.DICName'),
-        'DiscDate', json_extract(payload, '$.DiscDate'),
-        'FundName', json_extract(payload, '$.FundName'))
-    WHEN 'edinet_major_shareholders' THEN json_object(
-        'Code', json_extract(payload, '$.Code'), 'DocId', json_extract(payload, '$.DocId'))
-    WHEN 'edinet_cross_shareholdings' THEN json_object(
-        'Code', json_extract(payload, '$.Code'), 'DocId', json_extract(payload, '$.DocId'))
-    WHEN 'edinet_large_volume_shareholders' THEN json_object(
-        'Code', json_extract(payload, '$.Code'), 'DocId', json_extract(payload, '$.DocId'))
-    ELSE natural_key
-END
-WHERE dataset IN (
-    'equities_investor_types', 'fins_dividend', 'fins_earnings_date',
-    'markets_margin_alert', 'markets_short_ratio', 'markets_short_sale_report',
-    'edinet_major_shareholders', 'edinet_cross_shareholdings',
-    'edinet_large_volume_shareholders'
+CREATE TABLE IF NOT EXISTS natural_key_migrations (
+    migration_id            TEXT PRIMARY KEY,
+    state                   TEXT NOT NULL
+        CHECK (state IN ('PENDING','BUILDING','VALIDATING','READY','REJECTED')),
+    contract_schema_version INTEGER NOT NULL,
+    lock_token              TEXT,
+    started_at              TEXT,
+    completed_at            TEXT,
+    rows_primary            INTEGER NOT NULL DEFAULT 0,
+    rows_revisions          INTEGER NOT NULL DEFAULT 0,
+    rows_changes            INTEGER NOT NULL DEFAULT 0,
+    audit_mismatches        INTEGER,
+    detail                  TEXT
 );
 
-UPDATE jquants_records_revisions
-SET natural_key = CASE dataset
-    WHEN 'equities_investor_types' THEN json_object('PubDate', json_extract(payload, '$.PubDate'), 'Section', json_extract(payload, '$.Section'))
-    WHEN 'fins_dividend' THEN json_object('Code', json_extract(payload, '$.Code'), 'RefNo', COALESCE(json_extract(payload, '$.RefNo'), json_extract(payload, '$.CARefNo')))
-    WHEN 'fins_earnings_date' THEN json_object('Code', json_extract(payload, '$.Code'), 'PubDate', json_extract(payload, '$.PubDate'), 'SchDate', json_extract(payload, '$.SchDate'))
-    WHEN 'markets_margin_alert' THEN json_object('AppDate', json_extract(payload, '$.AppDate'), 'Code', json_extract(payload, '$.Code'), 'PubDate', json_extract(payload, '$.PubDate'))
-    WHEN 'markets_short_ratio' THEN json_object('Date', json_extract(payload, '$.Date'), 'S33', json_extract(payload, '$.S33'))
-    WHEN 'markets_short_sale_report' THEN json_object('CalcDate', json_extract(payload, '$.CalcDate'), 'Code', json_extract(payload, '$.Code'), 'DICName', json_extract(payload, '$.DICName'), 'DiscDate', json_extract(payload, '$.DiscDate'), 'FundName', json_extract(payload, '$.FundName'))
-    WHEN 'edinet_major_shareholders' THEN json_object('Code', json_extract(payload, '$.Code'), 'DocId', json_extract(payload, '$.DocId'))
-    WHEN 'edinet_cross_shareholdings' THEN json_object('Code', json_extract(payload, '$.Code'), 'DocId', json_extract(payload, '$.DocId'))
-    WHEN 'edinet_large_volume_shareholders' THEN json_object('Code', json_extract(payload, '$.Code'), 'DocId', json_extract(payload, '$.DocId'))
-    ELSE natural_key
-END
-WHERE dataset IN ('equities_investor_types','fins_dividend','fins_earnings_date','markets_margin_alert','markets_short_ratio','markets_short_sale_report','edinet_major_shareholders','edinet_cross_shareholdings','edinet_large_volume_shareholders');
+INSERT OR IGNORE INTO natural_key_migrations
+    (migration_id, state, contract_schema_version, detail)
+VALUES
+    ('jquants-premium-natural-keys-v2', 'PENDING', 2,
+     'Run the authenticated Worker natural-key rebuild endpoint');
 
-UPDATE ingestion_change_log
-SET natural_key = CASE dataset
-    WHEN 'equities_investor_types' THEN json_object('PubDate', json_extract(payload, '$.PubDate'), 'Section', json_extract(payload, '$.Section'))
-    WHEN 'fins_dividend' THEN json_object('Code', json_extract(payload, '$.Code'), 'RefNo', COALESCE(json_extract(payload, '$.RefNo'), json_extract(payload, '$.CARefNo')))
-    WHEN 'fins_earnings_date' THEN json_object('Code', json_extract(payload, '$.Code'), 'PubDate', json_extract(payload, '$.PubDate'), 'SchDate', json_extract(payload, '$.SchDate'))
-    WHEN 'markets_margin_alert' THEN json_object('AppDate', json_extract(payload, '$.AppDate'), 'Code', json_extract(payload, '$.Code'), 'PubDate', json_extract(payload, '$.PubDate'))
-    WHEN 'markets_short_ratio' THEN json_object('Date', json_extract(payload, '$.Date'), 'S33', json_extract(payload, '$.S33'))
-    WHEN 'markets_short_sale_report' THEN json_object('CalcDate', json_extract(payload, '$.CalcDate'), 'Code', json_extract(payload, '$.Code'), 'DICName', json_extract(payload, '$.DICName'), 'DiscDate', json_extract(payload, '$.DiscDate'), 'FundName', json_extract(payload, '$.FundName'))
-    WHEN 'edinet_major_shareholders' THEN json_object('Code', json_extract(payload, '$.Code'), 'DocId', json_extract(payload, '$.DocId'))
-    WHEN 'edinet_cross_shareholdings' THEN json_object('Code', json_extract(payload, '$.Code'), 'DocId', json_extract(payload, '$.DocId'))
-    WHEN 'edinet_large_volume_shareholders' THEN json_object('Code', json_extract(payload, '$.Code'), 'DocId', json_extract(payload, '$.DocId'))
-    ELSE natural_key
-END
-WHERE dataset IN ('equities_investor_types','fins_dividend','fins_earnings_date','markets_margin_alert','markets_short_ratio','markets_short_sale_report','edinet_major_shareholders','edinet_cross_shareholdings','edinet_large_volume_shareholders');
+-- Source versions from both the former primary and revision tables.  Staging
+-- is outside the read path and can be filled page by page without exposing a
+-- half-migrated live table.
+CREATE TABLE IF NOT EXISTS jquants_records_nk_v2_versions_stage (
+    source               TEXT NOT NULL,
+    dataset              TEXT NOT NULL,
+    original_natural_key TEXT NOT NULL,
+    natural_key          TEXT NOT NULL,
+    event_time           TEXT NOT NULL,
+    available_at         TEXT NOT NULL,
+    ingested_at          TEXT NOT NULL,
+    payload              TEXT NOT NULL,
+    raw_payload          TEXT,
+    origin               TEXT NOT NULL CHECK (origin IN ('primary','revision')),
+    origin_rowid         INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS ix_nk_v2_versions_stage_identity
+    ON jquants_records_nk_v2_versions_stage
+       (source, dataset, natural_key, ingested_at, available_at);
+
+CREATE TABLE IF NOT EXISTS jquants_records_nk_v2_primary_stage (
+    source       TEXT NOT NULL,
+    dataset      TEXT NOT NULL,
+    natural_key  TEXT NOT NULL,
+    event_time   TEXT NOT NULL,
+    available_at TEXT NOT NULL,
+    ingested_at  TEXT NOT NULL,
+    payload      TEXT NOT NULL,
+    raw_payload  TEXT,
+    PRIMARY KEY (source, dataset, natural_key)
+);
+
+CREATE TABLE IF NOT EXISTS jquants_records_nk_v2_revisions_stage (
+    source       TEXT NOT NULL,
+    dataset      TEXT NOT NULL,
+    natural_key  TEXT NOT NULL,
+    event_time   TEXT NOT NULL,
+    available_at TEXT NOT NULL,
+    ingested_at  TEXT NOT NULL,
+    payload      TEXT NOT NULL,
+    raw_payload  TEXT
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_nk_v2_revisions_stage_version
+    ON jquants_records_nk_v2_revisions_stage
+       (source, dataset, natural_key, available_at, ingested_at, payload);
+
+CREATE TABLE IF NOT EXISTS ingestion_change_log_nk_v2_stage (
+    change_seq   INTEGER PRIMARY KEY,
+    table_name   TEXT NOT NULL,
+    source       TEXT NOT NULL,
+    dataset      TEXT NOT NULL,
+    natural_key  TEXT NOT NULL,
+    event_time   TEXT NOT NULL,
+    available_at TEXT NOT NULL,
+    ingested_at  TEXT NOT NULL,
+    payload      TEXT NOT NULL,
+    raw_payload  TEXT,
+    changed_at   TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS ix_nk_v2_changes_stage_identity
+    ON ingestion_change_log_nk_v2_stage
+       (source, dataset, natural_key, change_seq);

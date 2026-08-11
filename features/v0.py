@@ -43,7 +43,7 @@ def _parse_close_rows(rows: list[dict[str, Any]]) -> list[tuple[str, float]]:
 # --- return_1d --------------------------------------------------------------
 
 def _return_1d(ctx) -> FeatureOutput:
-    code = ctx.inputs["code"]
+    code = ctx.get_input("code")
     res = ctx.get_equity_bars_daily(code=code)
     rows = _parse_close_rows(res.rows)
     if len(rows) < 2:
@@ -102,8 +102,8 @@ Return1d: FeatureDefinition = register(
 # --- momentum_n -------------------------------------------------------------
 
 def _momentum_n(ctx) -> FeatureOutput:
-    code = ctx.inputs["code"]
-    n = int(ctx.inputs.get("n", 20))
+    code = ctx.get_input("code")
+    n = int(ctx.get_input("n", 20))
     if n < 1:
         return FeatureOutput(
             value=None, metadata={"code": code, "reason": "n must be >= 1"},
@@ -169,8 +169,8 @@ MomentumN: FeatureDefinition = register(
 
 def _volatility_n(ctx) -> FeatureOutput:
     import math
-    code = ctx.inputs["code"]
-    n = int(ctx.inputs.get("n", 20))
+    code = ctx.get_input("code")
+    n = int(ctx.get_input("n", 20))
     if n < 2:
         return FeatureOutput(
             value=None,

@@ -24,7 +24,7 @@ dev = [
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["ingestion*", "storage*", "pit*", "core*", "features*", "strategies*", "paper_runtime*", "cf_platform*", "data_contracts*", "agents*", "risk*"]
+include = ["ingestion*", "storage*", "pit*", "core*", "features*", "strategies*", "paper_runtime*", "cf_platform*", "data_contracts*", "agents*", "risk*", "data_access*", "mcp_servers*"]
 exclude = ["tests*", "scripts*", "data*", "docs*"]
 
 [tool.setuptools]

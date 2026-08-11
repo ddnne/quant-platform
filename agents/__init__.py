@@ -1,8 +1,10 @@
 """Deterministic Phase 6 research-role agents and paper orchestrator."""
 
 from .pipeline import AgentPaperPipeline, AgentPipelineResult
-from .roles import AgentRole, ROLE_MATRIX, RoleContract
+from .artifacts import ARTIFACT_SCHEMA_VERSION, ArtifactEnvelope
+from .roles import AgentRole, Capability, ROLE_MATRIX, RoleContract
 from .types import (
+    AuthorizedPaperExecutionRequest,
     ComposedMemo,
     FeatureProposal,
     PortfolioDecision,
@@ -16,6 +18,10 @@ __all__ = [
     "AgentPaperPipeline",
     "AgentPipelineResult",
     "AgentRole",
+    "ARTIFACT_SCHEMA_VERSION",
+    "ArtifactEnvelope",
+    "AuthorizedPaperExecutionRequest",
+    "Capability",
     "ComposedMemo",
     "FeatureProposal",
     "PortfolioDecision",

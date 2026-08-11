@@ -10,11 +10,13 @@ import features
 from .schema import StrategySpec, StrategySpecError, ThresholdRule, TopKRule
 
 
-def _validate_feature(spec: StrategySpec) -> None:
+def _resolve_feature(spec: StrategySpec) -> features.FeatureDefinition:
     """Resolve and authorize the feature, including every declared parameter."""
+    ref = spec.rule.feature
     try:
         definition = features.get_for_strategy(
-            spec.rule.feature_id,
+            ref.id,
+            version=ref.version,
             allowed_statuses=("approved",),
             allowed_roles=("signal",),
         )
@@ -22,7 +24,7 @@ def _validate_feature(spec: StrategySpec) -> None:
         raise StrategySpecError(str(exc)) from exc
     required = set(definition.inputs.required_kwargs) - {"code"}
     optional = set(definition.inputs.optional_kwargs)
-    supplied = set(spec.rule.feature_params)
+    supplied = set(ref.params)
     missing = sorted(required - supplied)
     unknown = sorted(supplied - required - optional)
     if missing:
@@ -35,7 +37,7 @@ def _validate_feature(spec: StrategySpec) -> None:
         )
     for name in sorted(supplied & optional):
         default = definition.inputs.optional_kwargs[name]
-        value = spec.rule.feature_params[name]
+        value = ref.params[name]
         if default is None or value is None:
             continue
         expected = type(default)
@@ -49,6 +51,7 @@ def _validate_feature(spec: StrategySpec) -> None:
                 f"feature {definition.id!r} parameter {name!r} must have type "
                 f"{expected.__name__}"
             )
+    return definition
 
 
 def _equal_weight_intents(
@@ -71,24 +74,32 @@ class StrategySpecStrategy:
     """Core Strategy implementation produced from a validated declaration."""
 
     def __init__(self, spec: StrategySpec) -> None:
-        _validate_feature(spec)
+        definition = _resolve_feature(spec)
         self.spec = spec
         self.strategy_id = spec.strategy_id
-        self.feature_ids = (spec.rule.feature_id,)
+        self.feature_ids = (definition.id,)
+        self.feature_versions = {definition.id: str(definition.version)}
         self.params: dict[str, Any] = {"strategy_spec": spec.to_dict()}
 
     def _scores(self, ctx: core.BarContext) -> list[tuple[str, float]]:
         scores: list[tuple[str, float]] = []
-        params: Mapping[str, Any] = self.spec.rule.feature_params
+        ref = self.spec.rule.feature
+        params: Mapping[str, Any] = ref.params
         for code in sorted(ctx.universe):
-            output = ctx.feature(self.spec.rule.feature_id, code=code, **dict(params))
+            output = ctx.feature(
+                ref.id,
+                version=ref.version,
+                code=code,
+                **dict(params),
+            )
             if output.value is None:
                 continue
             try:
                 scores.append((code, float(output.value)))
             except (TypeError, ValueError) as exc:
                 raise StrategySpecError(
-                    f"feature {self.spec.rule.feature_id!r} returned a non-numeric score"
+                    f"feature {ref.id!r} version {ref.version!r} returned a "
+                    "non-numeric score"
                 ) from exc
         return scores
 

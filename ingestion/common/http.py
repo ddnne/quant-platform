@@ -298,8 +298,8 @@ def make_http_client(
         if cfg is None:
             raise ValueError(
                 "jquants_via_cf_proxy requested but no proxy config "
-                "(INGESTION_PROXY_URL/INGESTION_PROXY_TOKEN or "
-                "~/.config/quant-platform/ingestion_proxy_{url,token}) found"
+                "(JQUANTS_PROXY_URL/JQUANTS_PROXY_TOKEN or "
+                "~/.config/quant-platform/jquants_proxy_{url,token}) found"
             )
         # Only forward proxy-relevant kwargs (transport/timeout/ua) to the
         # proxy client; drop any Local-only options the caller mixed in.

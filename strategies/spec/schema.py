@@ -14,8 +14,8 @@ from types import MappingProxyType
 from typing import Any, Mapping
 
 
-STRATEGY_SPEC_VERSION = "strategy-spec/v1"
-_RESERVED_FEATURE_PARAMS = frozenset({"code", "as_of", "db_path"})
+STRATEGY_SPEC_VERSION = "strategy-spec/v2"
+_RESERVED_FEATURE_PARAMS = frozenset({"code", "as_of", "db_path", "version"})
 
 
 class StrategySpecError(ValueError):
@@ -41,12 +41,12 @@ def _feature_params(value: Any) -> Mapping[str, Any]:
     if value is None:
         return MappingProxyType({})
     if not isinstance(value, Mapping):
-        raise StrategySpecError("rule.feature_params must be an object")
+        raise StrategySpecError("FeatureRef.params must be an object")
     params = dict(value)
     reserved = sorted(_RESERVED_FEATURE_PARAMS.intersection(params))
     if reserved:
         raise StrategySpecError(
-            f"rule.feature_params may not set runtime-owned field(s): {reserved}"
+            f"FeatureRef.params may not set runtime-owned field(s): {reserved}"
         )
     for key, item in params.items():
         if not isinstance(key, str) or not key:
@@ -63,16 +63,53 @@ def _feature_params(value: Any) -> Mapping[str, Any]:
 
 
 @dataclass(frozen=True)
+class FeatureRef:
+    """An immutable, exact reference to one governed feature definition."""
+
+    id: str
+    version: str
+    params: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "id", _identifier(self.id, "FeatureRef.id"))
+        object.__setattr__(
+            self, "version", _identifier(self.version, "FeatureRef.version")
+        )
+        object.__setattr__(self, "params", _feature_params(self.params))
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "FeatureRef":
+        if not isinstance(payload, Mapping):
+            raise StrategySpecError("rule.feature must be a FeatureRef object")
+        _strict_keys(payload, {"id", "version", "params"}, "FeatureRef")
+        missing = {"id", "version"} - set(payload)
+        if missing:
+            raise StrategySpecError(f"FeatureRef missing field(s): {sorted(missing)}")
+        return cls(
+            id=payload["id"],
+            version=payload["version"],
+            params=payload.get("params", {}),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "version": self.version,
+            "params": dict(self.params),
+        }
+
+
+@dataclass(frozen=True)
 class ThresholdRule:
     """Equal-weight every code whose approved feature is at least ``threshold``."""
 
-    feature_id: str
+    feature: FeatureRef
     threshold: float
-    feature_params: Mapping[str, Any] = field(default_factory=dict)
     type: str = field(default="threshold", init=False)
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "feature_id", _identifier(self.feature_id, "feature_id"))
+        if not isinstance(self.feature, FeatureRef):
+            raise StrategySpecError("threshold.feature must be a FeatureRef")
         try:
             threshold = float(self.threshold)
         except (TypeError, ValueError) as exc:
@@ -80,14 +117,25 @@ class ThresholdRule:
         if not math.isfinite(threshold):
             raise StrategySpecError("threshold must be finite")
         object.__setattr__(self, "threshold", threshold)
-        object.__setattr__(self, "feature_params", _feature_params(self.feature_params))
+
+    @property
+    def feature_id(self) -> str:
+        """Compatibility read for metadata consumers; never loses the pin."""
+        return self.feature.id
+
+    @property
+    def feature_version(self) -> str:
+        return self.feature.version
+
+    @property
+    def feature_params(self) -> Mapping[str, Any]:
+        return self.feature.params
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "type": self.type,
-            "feature_id": self.feature_id,
+            "feature": self.feature.to_dict(),
             "threshold": self.threshold,
-            "feature_params": dict(self.feature_params),
         }
 
 
@@ -95,14 +143,14 @@ class ThresholdRule:
 class TopKRule:
     """Equal-weight the highest-scoring ``k`` codes from an approved feature."""
 
-    feature_id: str
+    feature: FeatureRef
     k: int
     min_score: float | None = None
-    feature_params: Mapping[str, Any] = field(default_factory=dict)
     type: str = field(default="top_k", init=False)
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "feature_id", _identifier(self.feature_id, "feature_id"))
+        if not isinstance(self.feature, FeatureRef):
+            raise StrategySpecError("top_k.feature must be a FeatureRef")
         if isinstance(self.k, bool) or not isinstance(self.k, int):
             raise StrategySpecError("top_k.k must be an integer")
         if self.k < 1:
@@ -115,15 +163,26 @@ class TopKRule:
             if not math.isfinite(min_score):
                 raise StrategySpecError("top_k.min_score must be finite")
             object.__setattr__(self, "min_score", min_score)
-        object.__setattr__(self, "feature_params", _feature_params(self.feature_params))
+
+    @property
+    def feature_id(self) -> str:
+        """Compatibility read for metadata consumers; never loses the pin."""
+        return self.feature.id
+
+    @property
+    def feature_version(self) -> str:
+        return self.feature.version
+
+    @property
+    def feature_params(self) -> Mapping[str, Any]:
+        return self.feature.params
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "type": self.type,
-            "feature_id": self.feature_id,
+            "feature": self.feature.to_dict(),
             "k": self.k,
             "min_score": self.min_score,
-            "feature_params": dict(self.feature_params),
         }
 
 
@@ -137,31 +196,29 @@ def _parse_rule(payload: Any) -> Rule:
     if rule_type == "threshold":
         _strict_keys(
             payload,
-            {"type", "feature_id", "threshold", "feature_params"},
+            {"type", "feature", "threshold"},
             "threshold rule",
         )
-        required = {"feature_id", "threshold"} - set(payload)
+        required = {"feature", "threshold"} - set(payload)
         if required:
             raise StrategySpecError(f"threshold rule missing field(s): {sorted(required)}")
         return ThresholdRule(
-            feature_id=payload["feature_id"],
+            feature=FeatureRef.from_dict(payload["feature"]),
             threshold=payload["threshold"],
-            feature_params=payload.get("feature_params", {}),
         )
     if rule_type == "top_k":
         _strict_keys(
             payload,
-            {"type", "feature_id", "k", "min_score", "feature_params"},
+            {"type", "feature", "k", "min_score"},
             "top_k rule",
         )
-        required = {"feature_id", "k"} - set(payload)
+        required = {"feature", "k"} - set(payload)
         if required:
             raise StrategySpecError(f"top_k rule missing field(s): {sorted(required)}")
         return TopKRule(
-            feature_id=payload["feature_id"],
+            feature=FeatureRef.from_dict(payload["feature"]),
             k=payload["k"],
             min_score=payload.get("min_score"),
-            feature_params=payload.get("feature_params", {}),
         )
     raise StrategySpecError(
         f"unknown rule type {rule_type!r}; allowed: ['threshold', 'top_k']"
@@ -204,8 +261,14 @@ class StrategySpec:
         missing = {"strategy_id", "rule"} - set(payload)
         if missing:
             raise StrategySpecError(f"StrategySpec missing field(s): {sorted(missing)}")
+        version = payload.get("version", STRATEGY_SPEC_VERSION)
+        if version != STRATEGY_SPEC_VERSION:
+            raise StrategySpecError(
+                f"unsupported StrategySpec version {version!r}; "
+                f"expected {STRATEGY_SPEC_VERSION!r}"
+            )
         return cls(
-            version=payload.get("version", STRATEGY_SPEC_VERSION),
+            version=version,
             strategy_id=payload["strategy_id"],
             rule=_parse_rule(payload["rule"]),
             rationale=payload.get("rationale", ""),

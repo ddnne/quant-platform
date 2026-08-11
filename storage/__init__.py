@@ -5,5 +5,18 @@ Every structured row carries the PIT columns:
 ``available_at`` is mandatory (enforced in :mod:`storage.sqlite_store`).
 """
 
-__all__ = ["__version__"]
+from .coverage_ledger import (
+    coverage_gaps,
+    coverage_summary,
+    read_dataset_coverage,
+    refresh_coverage_ledger,
+)
+
+__all__ = [
+    "__version__",
+    "coverage_gaps",
+    "coverage_summary",
+    "read_dataset_coverage",
+    "refresh_coverage_ledger",
+]
 __version__ = "0.1.0"

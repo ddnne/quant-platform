@@ -74,8 +74,9 @@ class FeatureDefinition:
     """Static definition of one feature: identity, contract, compute fn.
 
     ``compute(ctx)`` is called by :func:`features.runtime.compute` with a
-    read-only :class:`features.runtime.FeatureContext` carrying the PIT
-    getters scoped to ``as_of``. The compute function must be a pure function
+    read-only :class:`features.runtime.FeatureContext` carrying scoped input
+    and PIT getters plus ``as_of`` (but no database-path attribute). The
+    compute function must be a pure function
     of ``(ctx, as_of, inputs)``; it must NOT touch wall-clock time, randomness,
     or any global state.
 

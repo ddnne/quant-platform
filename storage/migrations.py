@@ -82,6 +82,360 @@ MIGRATIONS: tuple[Migration, ...] = (
                 ingested_at);
         """,
     ),
+    Migration(
+        3,
+        "phase6_ready_snapshot_and_coverage_ledger",
+        """
+        ALTER TABLE local_snapshot_policy
+            ADD COLUMN publication_state TEXT NOT NULL DEFAULT 'REJECTED'
+            CHECK (publication_state IN
+                   ('BUILDING', 'SYNCED', 'VALIDATING', 'READY', 'REJECTED'));
+        ALTER TABLE local_snapshot_policy ADD COLUMN active_build_id TEXT;
+        ALTER TABLE local_snapshot_policy ADD COLUMN active_snapshot_id TEXT;
+
+        CREATE TABLE IF NOT EXISTS dataset_coverage (
+            dataset                         TEXT PRIMARY KEY,
+            status                          TEXT NOT NULL CHECK
+                (status IN ('COMPLETE', 'PARTIAL', 'STALE', 'UNKNOWN', 'FAILED')),
+            policy_version                  TEXT NOT NULL,
+            collection_scope                TEXT NOT NULL,
+            history_target_start            TEXT NOT NULL,
+            history_target_end_rule         TEXT NOT NULL,
+            coverage_mode                   TEXT NOT NULL,
+            expected_frequency              TEXT NOT NULL,
+            universe_rule                   TEXT NOT NULL,
+            raw_retention_required          INTEGER NOT NULL CHECK
+                (raw_retention_required IN (0, 1)),
+            structured_reconciliation_required INTEGER NOT NULL CHECK
+                (structured_reconciliation_required IN (0, 1)),
+            governance_tier                 TEXT NOT NULL CHECK
+                (governance_tier IN ('governed', 'experimental')),
+            observed_start                  TEXT,
+            observed_end                    TEXT,
+            row_count                       INTEGER NOT NULL DEFAULT 0,
+            source_run_id                   INTEGER,
+            evaluated_at                    TEXT NOT NULL,
+            detail_json                     TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS ix_dataset_coverage_status
+            ON dataset_coverage (status, governance_tier, dataset);
+
+        CREATE TABLE IF NOT EXISTS snapshot_publications (
+            build_id                TEXT PRIMARY KEY,
+            snapshot_id             TEXT,
+            state                   TEXT NOT NULL CHECK
+                (state IN ('BUILDING', 'SYNCED', 'VALIDATING', 'READY', 'REJECTED')),
+            staging_path            TEXT NOT NULL,
+            artifact_path           TEXT,
+            manifest_path           TEXT,
+            contract_version        TEXT NOT NULL,
+            source_run_id           INTEGER,
+            change_seq              INTEGER NOT NULL DEFAULT 0,
+            coverage_policy_version TEXT NOT NULL,
+            quality_policy_version  TEXT NOT NULL,
+            created_at              TEXT NOT NULL,
+            committed_at            TEXT,
+            rejection_reason        TEXT,
+            manifest_json           TEXT
+        );
+        CREATE INDEX IF NOT EXISTS ix_snapshot_publications_ready
+            ON snapshot_publications (state, committed_at DESC, snapshot_id);
+
+        CREATE TABLE IF NOT EXISTS snapshot_quality_results (
+            build_id       TEXT PRIMARY KEY,
+            status         TEXT NOT NULL CHECK (status IN ('PASS', 'FAIL')),
+            policy_version TEXT NOT NULL,
+            evaluated_at   TEXT NOT NULL,
+            summary_json   TEXT NOT NULL,
+            results_json   TEXT NOT NULL
+        );
+
+        CREATE TRIGGER IF NOT EXISTS invalidate_snapshot_jquants_listed_info_i
+        AFTER INSERT ON jquants_listed_info BEGIN
+            UPDATE local_snapshot_policy SET snapshot_ready=0,
+                active_snapshot_id=NULL,
+                last_error='fact mutation invalidated research snapshot'
+            WHERE singleton=1;
+        END;
+        CREATE TRIGGER IF NOT EXISTS invalidate_snapshot_jquants_listed_info_u
+        AFTER UPDATE ON jquants_listed_info BEGIN
+            UPDATE local_snapshot_policy SET snapshot_ready=0,
+                active_snapshot_id=NULL,
+                last_error='fact mutation invalidated research snapshot'
+            WHERE singleton=1;
+        END;
+        CREATE TRIGGER IF NOT EXISTS invalidate_snapshot_jquants_listed_info_d
+        AFTER DELETE ON jquants_listed_info BEGIN
+            UPDATE local_snapshot_policy SET snapshot_ready=0,
+                active_snapshot_id=NULL,
+                last_error='fact mutation invalidated research snapshot'
+            WHERE singleton=1;
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS invalidate_snapshot_jquants_daily_bars_i
+        AFTER INSERT ON jquants_daily_bars BEGIN
+            UPDATE local_snapshot_policy SET snapshot_ready=0,
+                active_snapshot_id=NULL,
+                last_error='fact mutation invalidated research snapshot'
+            WHERE singleton=1;
+        END;
+        CREATE TRIGGER IF NOT EXISTS invalidate_snapshot_jquants_daily_bars_u
+        AFTER UPDATE ON jquants_daily_bars BEGIN
+            UPDATE local_snapshot_policy SET snapshot_ready=0,
+                active_snapshot_id=NULL,
+                last_error='fact mutation invalidated research snapshot'
+            WHERE singleton=1;
+        END;
+        CREATE TRIGGER IF NOT EXISTS invalidate_snapshot_jquants_daily_bars_d
+        AFTER DELETE ON jquants_daily_bars BEGIN
+            UPDATE local_snapshot_policy SET snapshot_ready=0,
+                active_snapshot_id=NULL,
+                last_error='fact mutation invalidated research snapshot'
+            WHERE singleton=1;
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS invalidate_snapshot_jquants_market_calendar_i
+        AFTER INSERT ON jquants_market_calendar BEGIN
+            UPDATE local_snapshot_policy SET snapshot_ready=0,
+                active_snapshot_id=NULL,
+                last_error='fact mutation invalidated research snapshot'
+            WHERE singleton=1;
+        END;
+        CREATE TRIGGER IF NOT EXISTS invalidate_snapshot_jquants_market_calendar_u
+        AFTER UPDATE ON jquants_market_calendar BEGIN
+            UPDATE local_snapshot_policy SET snapshot_ready=0,
+                active_snapshot_id=NULL,
+                last_error='fact mutation invalidated research snapshot'
+            WHERE singleton=1;
+        END;
+        CREATE TRIGGER IF NOT EXISTS invalidate_snapshot_jquants_market_calendar_d
+        AFTER DELETE ON jquants_market_calendar BEGIN
+            UPDATE local_snapshot_policy SET snapshot_ready=0,
+                active_snapshot_id=NULL,
+                last_error='fact mutation invalidated research snapshot'
+            WHERE singleton=1;
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS invalidate_snapshot_jquants_records_i
+        AFTER INSERT ON jquants_records BEGIN
+            UPDATE local_snapshot_policy SET snapshot_ready=0,
+                active_snapshot_id=NULL,
+                last_error='fact mutation invalidated research snapshot'
+            WHERE singleton=1;
+        END;
+        CREATE TRIGGER IF NOT EXISTS invalidate_snapshot_jquants_records_u
+        AFTER UPDATE ON jquants_records BEGIN
+            UPDATE local_snapshot_policy SET snapshot_ready=0,
+                active_snapshot_id=NULL,
+                last_error='fact mutation invalidated research snapshot'
+            WHERE singleton=1;
+        END;
+        CREATE TRIGGER IF NOT EXISTS invalidate_snapshot_jquants_records_d
+        AFTER DELETE ON jquants_records BEGIN
+            UPDATE local_snapshot_policy SET snapshot_ready=0,
+                active_snapshot_id=NULL,
+                last_error='fact mutation invalidated research snapshot'
+            WHERE singleton=1;
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS invalidate_snapshot_jsda_bond_trades_i
+        AFTER INSERT ON jsda_bond_trades BEGIN
+            UPDATE local_snapshot_policy SET snapshot_ready=0,
+                active_snapshot_id=NULL,
+                last_error='fact mutation invalidated research snapshot'
+            WHERE singleton=1;
+        END;
+        CREATE TRIGGER IF NOT EXISTS invalidate_snapshot_jsda_bond_trades_u
+        AFTER UPDATE ON jsda_bond_trades BEGIN
+            UPDATE local_snapshot_policy SET snapshot_ready=0,
+                active_snapshot_id=NULL,
+                last_error='fact mutation invalidated research snapshot'
+            WHERE singleton=1;
+        END;
+        CREATE TRIGGER IF NOT EXISTS invalidate_snapshot_jsda_bond_trades_d
+        AFTER DELETE ON jsda_bond_trades BEGIN
+            UPDATE local_snapshot_policy SET snapshot_ready=0,
+                active_snapshot_id=NULL,
+                last_error='fact mutation invalidated research snapshot'
+            WHERE singleton=1;
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS invalidate_snapshot_jsda_repo_rates_i
+        AFTER INSERT ON jsda_repo_rates BEGIN
+            UPDATE local_snapshot_policy SET snapshot_ready=0,
+                active_snapshot_id=NULL,
+                last_error='fact mutation invalidated research snapshot'
+            WHERE singleton=1;
+        END;
+        CREATE TRIGGER IF NOT EXISTS invalidate_snapshot_jsda_repo_rates_u
+        AFTER UPDATE ON jsda_repo_rates BEGIN
+            UPDATE local_snapshot_policy SET snapshot_ready=0,
+                active_snapshot_id=NULL,
+                last_error='fact mutation invalidated research snapshot'
+            WHERE singleton=1;
+        END;
+        CREATE TRIGGER IF NOT EXISTS invalidate_snapshot_jsda_repo_rates_d
+        AFTER DELETE ON jsda_repo_rates BEGIN
+            UPDATE local_snapshot_policy SET snapshot_ready=0,
+                active_snapshot_id=NULL,
+                last_error='fact mutation invalidated research snapshot'
+            WHERE singleton=1;
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS invalidate_snapshot_jquants_listed_info_revisions_i
+        AFTER INSERT ON jquants_listed_info_revisions BEGIN
+            UPDATE local_snapshot_policy SET snapshot_ready=0,
+                active_snapshot_id=NULL,
+                last_error='fact mutation invalidated research snapshot'
+            WHERE singleton=1;
+        END;
+        CREATE TRIGGER IF NOT EXISTS invalidate_snapshot_jquants_listed_info_revisions_u
+        AFTER UPDATE ON jquants_listed_info_revisions BEGIN
+            UPDATE local_snapshot_policy SET snapshot_ready=0,
+                active_snapshot_id=NULL,
+                last_error='fact mutation invalidated research snapshot'
+            WHERE singleton=1;
+        END;
+        CREATE TRIGGER IF NOT EXISTS invalidate_snapshot_jquants_listed_info_revisions_d
+        AFTER DELETE ON jquants_listed_info_revisions BEGIN
+            UPDATE local_snapshot_policy SET snapshot_ready=0,
+                active_snapshot_id=NULL,
+                last_error='fact mutation invalidated research snapshot'
+            WHERE singleton=1;
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS invalidate_snapshot_jquants_daily_bars_revisions_i
+        AFTER INSERT ON jquants_daily_bars_revisions BEGIN
+            UPDATE local_snapshot_policy SET snapshot_ready=0,
+                active_snapshot_id=NULL,
+                last_error='fact mutation invalidated research snapshot'
+            WHERE singleton=1;
+        END;
+        CREATE TRIGGER IF NOT EXISTS invalidate_snapshot_jquants_daily_bars_revisions_u
+        AFTER UPDATE ON jquants_daily_bars_revisions BEGIN
+            UPDATE local_snapshot_policy SET snapshot_ready=0,
+                active_snapshot_id=NULL,
+                last_error='fact mutation invalidated research snapshot'
+            WHERE singleton=1;
+        END;
+        CREATE TRIGGER IF NOT EXISTS invalidate_snapshot_jquants_daily_bars_revisions_d
+        AFTER DELETE ON jquants_daily_bars_revisions BEGIN
+            UPDATE local_snapshot_policy SET snapshot_ready=0,
+                active_snapshot_id=NULL,
+                last_error='fact mutation invalidated research snapshot'
+            WHERE singleton=1;
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS invalidate_snapshot_jquants_market_calendar_revisions_i
+        AFTER INSERT ON jquants_market_calendar_revisions BEGIN
+            UPDATE local_snapshot_policy SET snapshot_ready=0,
+                active_snapshot_id=NULL,
+                last_error='fact mutation invalidated research snapshot'
+            WHERE singleton=1;
+        END;
+        CREATE TRIGGER IF NOT EXISTS invalidate_snapshot_jquants_market_calendar_revisions_u
+        AFTER UPDATE ON jquants_market_calendar_revisions BEGIN
+            UPDATE local_snapshot_policy SET snapshot_ready=0,
+                active_snapshot_id=NULL,
+                last_error='fact mutation invalidated research snapshot'
+            WHERE singleton=1;
+        END;
+        CREATE TRIGGER IF NOT EXISTS invalidate_snapshot_jquants_market_calendar_revisions_d
+        AFTER DELETE ON jquants_market_calendar_revisions BEGIN
+            UPDATE local_snapshot_policy SET snapshot_ready=0,
+                active_snapshot_id=NULL,
+                last_error='fact mutation invalidated research snapshot'
+            WHERE singleton=1;
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS invalidate_snapshot_jquants_records_revisions_i
+        AFTER INSERT ON jquants_records_revisions BEGIN
+            UPDATE local_snapshot_policy SET snapshot_ready=0,
+                active_snapshot_id=NULL,
+                last_error='fact mutation invalidated research snapshot'
+            WHERE singleton=1;
+        END;
+        CREATE TRIGGER IF NOT EXISTS invalidate_snapshot_jquants_records_revisions_u
+        AFTER UPDATE ON jquants_records_revisions BEGIN
+            UPDATE local_snapshot_policy SET snapshot_ready=0,
+                active_snapshot_id=NULL,
+                last_error='fact mutation invalidated research snapshot'
+            WHERE singleton=1;
+        END;
+        CREATE TRIGGER IF NOT EXISTS invalidate_snapshot_jquants_records_revisions_d
+        AFTER DELETE ON jquants_records_revisions BEGIN
+            UPDATE local_snapshot_policy SET snapshot_ready=0,
+                active_snapshot_id=NULL,
+                last_error='fact mutation invalidated research snapshot'
+            WHERE singleton=1;
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS invalidate_snapshot_jsda_bond_trades_revisions_i
+        AFTER INSERT ON jsda_bond_trades_revisions BEGIN
+            UPDATE local_snapshot_policy SET snapshot_ready=0,
+                active_snapshot_id=NULL,
+                last_error='fact mutation invalidated research snapshot'
+            WHERE singleton=1;
+        END;
+        CREATE TRIGGER IF NOT EXISTS invalidate_snapshot_jsda_bond_trades_revisions_u
+        AFTER UPDATE ON jsda_bond_trades_revisions BEGIN
+            UPDATE local_snapshot_policy SET snapshot_ready=0,
+                active_snapshot_id=NULL,
+                last_error='fact mutation invalidated research snapshot'
+            WHERE singleton=1;
+        END;
+        CREATE TRIGGER IF NOT EXISTS invalidate_snapshot_jsda_bond_trades_revisions_d
+        AFTER DELETE ON jsda_bond_trades_revisions BEGIN
+            UPDATE local_snapshot_policy SET snapshot_ready=0,
+                active_snapshot_id=NULL,
+                last_error='fact mutation invalidated research snapshot'
+            WHERE singleton=1;
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS invalidate_snapshot_jsda_repo_rates_revisions_i
+        AFTER INSERT ON jsda_repo_rates_revisions BEGIN
+            UPDATE local_snapshot_policy SET snapshot_ready=0,
+                active_snapshot_id=NULL,
+                last_error='fact mutation invalidated research snapshot'
+            WHERE singleton=1;
+        END;
+        CREATE TRIGGER IF NOT EXISTS invalidate_snapshot_jsda_repo_rates_revisions_u
+        AFTER UPDATE ON jsda_repo_rates_revisions BEGIN
+            UPDATE local_snapshot_policy SET snapshot_ready=0,
+                active_snapshot_id=NULL,
+                last_error='fact mutation invalidated research snapshot'
+            WHERE singleton=1;
+        END;
+        CREATE TRIGGER IF NOT EXISTS invalidate_snapshot_jsda_repo_rates_revisions_d
+        AFTER DELETE ON jsda_repo_rates_revisions BEGIN
+            UPDATE local_snapshot_policy SET snapshot_ready=0,
+                active_snapshot_id=NULL,
+                last_error='fact mutation invalidated research snapshot'
+            WHERE singleton=1;
+        END;
+        """,
+    ),
+    Migration(
+        4,
+        "phase6_raw_retention_attestations",
+        """
+        CREATE TABLE IF NOT EXISTS raw_retention_manifests (
+            dataset      TEXT NOT NULL,
+            run_id       INTEGER NOT NULL,
+            manifest_key TEXT NOT NULL,
+            page_count   INTEGER NOT NULL CHECK (page_count >= 0),
+            row_count    INTEGER NOT NULL CHECK (row_count >= 0),
+            raw_bytes    INTEGER NOT NULL CHECK (raw_bytes >= 0),
+            data_digest  TEXT NOT NULL,
+            completeness TEXT NOT NULL CHECK
+                (completeness IN ('COMPLETE', 'FAILED')),
+            created_at   TEXT NOT NULL,
+            PRIMARY KEY (dataset, run_id)
+        );
+        CREATE INDEX IF NOT EXISTS ix_raw_retention_run_complete
+            ON raw_retention_manifests (run_id, completeness, dataset);
+        """,
+    ),
 )
 
 

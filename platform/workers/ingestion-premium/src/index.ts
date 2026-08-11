@@ -4,8 +4,8 @@
  *
  * Closed-loop contract (Phase 3.5 handoff):
  *   1. Scheduled run on CF (Workers Cron → `scheduled`).
- *   2. Secrets only on CF (same names: `JQUANTS_API_KEY`, optional
- *      `INGESTION_PROXY_TOKEN` to gate `/v1/run`). Key is never logged.
+ *   2. Secrets only on CF. Independent `INGESTION_RUN_TOKEN` and
+ *      `DATA_EXPORT_TOKEN` capabilities gate write and export paths.
  *   3. Persist R2 raw + D1 structured (R2 + D1 bindings).
  *   4. Incremental primary; backfill separable (date params on `/v1/run`).
  *   5. Auto validation with explicit pass/fail per dataset.
@@ -31,11 +31,17 @@
 import { PREMIUM_CORE_DATASETS, isPremiumCore, datasetById, type DatasetSpec } from "./catalog";
 import { pickAvailableAt } from "./availability";
 import { naturalKey, pickEventTime, stableJson } from "./identity";
+import {
+  naturalKeyMigrationStatus,
+  rebuildNaturalKeysV2,
+  requireNaturalKeysV2Ready,
+} from "./natural_key_migration";
 import { RateLimiter } from "./rate_limit";
 
 export interface Env {
   JQUANTS_API_KEY: string;
-  INGESTION_PROXY_TOKEN?: string;
+  INGESTION_RUN_TOKEN?: string;
+  DATA_EXPORT_TOKEN?: string;
   /** Optional concurrency cap (1–8). Default 4. */
   INGEST_CONCURRENCY?: string;
   RAW_BUCKET: R2Bucket;
@@ -137,16 +143,20 @@ function requestQueries(
 }
 
 // ---------------------------------------------------------------------------
-// R2 raw path layout: raw/{dataset}/{yyyy}/{mm}/{dd}/{stamp}.json
+// R2 raw path layout: raw/{dataset}/{run_id}/page-NNNNNN.json + manifest.json
 // ---------------------------------------------------------------------------
 
-function rawR2Key(dataset: string, when: Date): string {
-  const jst = new Date(when.getTime() + JST_OFFSET_MS);
-  const yyyy = jst.toISOString().slice(0, 4);
-  const mm = jst.toISOString().slice(5, 7);
-  const dd = jst.toISOString().slice(8, 10);
-  const stamp = jst.toISOString().replace(/[-:]/g, "").slice(0, 15);
-  return `raw/${dataset}/${yyyy}/${mm}/${dd}/${stamp}.json`;
+function rawRunPrefix(dataset: string, runId: number | null, when: Date): string {
+  const fallback = `uncommitted-${when.toISOString().replace(/[-:.TZ]/g, "")}`;
+  return `raw/${dataset}/${runId === null ? fallback : String(runId)}`;
+}
+
+async function sha256(value: string): Promise<string> {
+  const bytes = new TextEncoder().encode(value);
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return "sha256:" + [...new Uint8Array(digest)]
+    .map((item) => item.toString(16).padStart(2, "0"))
+    .join("");
 }
 
 // ---------------------------------------------------------------------------
@@ -261,7 +271,10 @@ async function fetchDataset(
    * the outcome). Used for huge option chains so we can D1-upsert page by
    * page without holding 40k+ rows in memory twice.
    */
-  onPage?: (pageRows: Record<string, unknown>[]) => Promise<void>,
+  onPage?: (
+    pageRows: Record<string, unknown>[],
+    page: { number: number; raw: string; httpStatus: number },
+  ) => Promise<void>,
   retainRows = true,
 ): Promise<FetchOutcome & { rowsSeen: number }> {
   const out: FetchOutcome & { rowsSeen: number } = {
@@ -287,6 +300,7 @@ async function fetchDataset(
   }
 
   const path = spec.bulk === "bulk" && spec.bulkPath ? spec.bulkPath : spec.path;
+  let pageNumber = 0;
   for (const baseQuery of queries) {
     let pagination: string | null = null;
     for (let page = 0; page < 200; page++) {
@@ -321,10 +335,15 @@ async function fetchDataset(
         return out;
       }
       const rows = Array.isArray(parsed?.data) ? parsed.data : [];
+      pageNumber++;
       out.rowsSeen += rows.length;
       if (retainRows) out.rows.push(...rows);
-      if (onPage && rows.length > 0) {
-        await onPage(rows as Record<string, unknown>[]);
+      if (onPage) {
+        await onPage(rows as Record<string, unknown>[], {
+          number: pageNumber,
+          raw: text,
+          httpStatus: resp.status,
+        });
       }
       const next = parsed?.pagination_key || parsed?.pagination_token;
       if (!next) break;
@@ -416,24 +435,89 @@ async function ingestOne(
   let insertedTotal = 0;
   let revisionsTotal = 0;
   let lastEvent: string | null = null;
-  const sampleRows: Record<string, unknown>[] = [];
+  const rawPrefix = rawRunPrefix(spec.id, runId, when);
+  const rawPages: {
+    key: string;
+    page: number;
+    rows: number;
+    bytes: number;
+    digest: string;
+    http_status: number;
+  }[] = [];
 
-  const onPage = streamD1
-    ? async (pageRows: Record<string, unknown>[]) => {
+  const onPage = async (
+    pageRows: Record<string, unknown>[],
+    page: { number: number; raw: string; httpStatus: number },
+  ) => {
+      const key = `${rawPrefix}/page-${String(page.number).padStart(6, "0")}.json`;
+      const digest = await sha256(page.raw);
+      await env.RAW_BUCKET.put(key, page.raw, {
+        customMetadata: { digest, dataset: spec.id, run_id: String(runId ?? "") },
+      });
+      rawPages.push({
+        key,
+        page: page.number,
+        rows: pageRows.length,
+        bytes: new TextEncoder().encode(page.raw).byteLength,
+        digest,
+        http_status: page.httpStatus,
+      });
+      if (streamD1 && pageRows.length > 0) {
         const r = await upsertRecords(env, spec, pageRows, when);
         insertedTotal += r.inserted;
         revisionsTotal += r.revisions;
         const ev = latestEventDate(pageRows);
         if (ev && (lastEvent === null || ev > lastEvent)) lastEvent = ev;
-        if (sampleRows.length < 20) {
-          sampleRows.push(...pageRows.slice(0, 20 - sampleRows.length));
-        }
       }
-    : undefined;
+    };
 
   const outcome = await fetchDataset(
     env, spec, opts, fetchImpl, limiter, onPage, !streamD1,
   );
+
+  const rawKey = `${rawPrefix}/manifest.json`;
+  const complete = !outcome.error && outcome.paginationErrors === 0;
+  const dataDigest = await sha256(rawPages.map((page) => page.digest).join("\n"));
+  const rawManifest = {
+    format: "jquants-raw-manifest/v1",
+    dataset: spec.id,
+    run_id: runId,
+    fetched_at: toJstIso(when),
+    path: spec.bulk === "bulk" && spec.bulkPath ? spec.bulkPath : spec.path,
+    params: opts,
+    page_count: rawPages.length,
+    row_count: outcome.rowsSeen,
+    raw_bytes: rawPages.reduce((total, page) => total + page.bytes, 0),
+    data_digest: dataDigest,
+    completeness: complete ? "COMPLETE" : "FAILED",
+    complete,
+    error: outcome.error || null,
+    pages: rawPages,
+  };
+  await env.RAW_BUCKET.put(rawKey, JSON.stringify(rawManifest), {
+    customMetadata: { dataset: spec.id, run_id: String(runId ?? ""), completeness: String(complete) },
+  });
+  if (runId === null) {
+    throw new Error("raw retention manifest requires a durable ingestion run id");
+  }
+  await env.DB.prepare(
+    `INSERT INTO raw_retention_manifests
+       (dataset, run_id, manifest_key, page_count, row_count, raw_bytes,
+        data_digest, completeness, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(dataset, run_id) DO UPDATE SET
+       manifest_key=excluded.manifest_key,
+       page_count=excluded.page_count,
+       row_count=excluded.row_count,
+       raw_bytes=excluded.raw_bytes,
+       data_digest=excluded.data_digest,
+       completeness=excluded.completeness,
+       created_at=excluded.created_at`,
+  ).bind(
+    spec.id, runId, rawKey, rawManifest.page_count, rawManifest.row_count,
+    rawManifest.raw_bytes, rawManifest.data_digest, rawManifest.completeness,
+    rawManifest.fetched_at,
+  ).run();
 
   if (outcome.error) {
     const finishedAt = toJstIso(new Date());
@@ -442,28 +526,13 @@ async function ingestOne(
       startedAt, finishedAt,
       rowsSeen: outcome.rowsSeen, rowsInserted: insertedTotal, rowsRevisions: revisionsTotal,
       availableAtMin: null, availableAtMax: null,
-      detail: outcome.error, rawKey: null, rawBytes: outcome.rawBytes,
+      detail: outcome.error, rawKey, rawBytes: outcome.rawBytes,
     };
     if (runId !== null) {
       await writeValidation(env, runId, res);
     }
     return res;
   }
-
-  // Raw to R2 — full body for small datasets; sample + metadata for streamed.
-  const rawKey = rawR2Key(spec.id, when);
-  const r2Rows = streamD1 ? sampleRows : outcome.rows;
-  const rawBody = JSON.stringify({
-    fetched_at: toJstIso(when),
-    dataset: spec.id,
-    path: spec.bulk === "bulk" && spec.bulkPath ? spec.bulkPath : spec.path,
-    params: opts,
-    http_status: outcome.httpStatus,
-    rows: outcome.rowsSeen,
-    data: r2Rows,
-    data_truncated: streamD1,
-  });
-  await env.RAW_BUCKET.put(rawKey, rawBody);
 
   if (!streamD1) {
     const inserted = await upsertRecords(env, spec, outcome.rows, when);
@@ -540,18 +609,14 @@ async function upsertRecords(
   if (rows.length === 0) return { inserted: 0, revisions: 0 };
   const ingestedAt = toJstIso(when);
   // De-duplicate a response by business key, retaining its last occurrence.
-  // available_at resolution (P0-1):
-  //   1. Explicit row-level `available_at` (legacy / explicit override)
-  //   2. Dataset-level policy via pickAvailableAt (session_close / event_field)
-  //   3. Falls through to ingestedAt inside pickAvailableAt (PIT-safe fallback).
+  // `available_at` is trusted metadata selected only by the canonical dataset
+  // contract. A same-named upstream payload field remains in raw/payload for
+  // provenance, but it is never allowed to override the PIT policy.
   const byKey = new Map<string, StructuredRecord>();
   for (const row of rows) {
     const nk = await naturalKey(row, spec);
     const ev = pickEventTime(row, spec);
-    const availableAt =
-      typeof row["available_at"] === "string"
-        ? (row["available_at"] as string)
-        : pickAvailableAt(row, spec.id, ingestedAt);
+    const availableAt = pickAvailableAt(row, spec.id, ingestedAt);
     // Stable key ordering makes payload comparison semantic rather than
     // dependent on JSON object property order. The generated PIT timestamps
     // are separate columns, so an hourly re-fetch does not look amended.
@@ -800,6 +865,10 @@ async function runIngestion(
 ): Promise<RunSummary> {
   const startedAt = toJstIso(new Date());
 
+  // Applying migration 0005 deliberately disables writers until the
+  // application-level canonical rebuild and audit reaches READY.
+  await requireNaturalKeysV2Ready(env.DB);
+
   // Start a run row so validation rows can FK to it.
   const ins = await env.DB.prepare(
     `INSERT INTO ingestion_run_log (ran_at, source, runtime, status, detail)
@@ -958,11 +1027,10 @@ async function runWithConcurrency<T>(
 // HTTP entrypoints
 // ---------------------------------------------------------------------------
 
-function authorized(request: Request, env: Env, requireToken: boolean): boolean {
-  if (!requireToken) return true;
-  if (!env.INGESTION_PROXY_TOKEN) return false;
+function authorized(request: Request, expected: string | undefined): boolean {
+  if (!expected) return false;
   const got = request.headers.get("X-Ingestion-Token") || "";
-  return got === env.INGESTION_PROXY_TOKEN;
+  return got === expected;
 }
 
 function json(body: unknown, status = 200): Response {
@@ -972,18 +1040,41 @@ function json(body: unknown, status = 200): Response {
 async function handleHealth(env: Env): Promise<Response> {
   const last = await lastRunSummary(env);
   const hasKey = Boolean(env.JQUANTS_API_KEY);
+  let naturalKeyMigration: unknown;
+  let naturalKeyReady = false;
+  try {
+    const status = await naturalKeyMigrationStatus(env.DB);
+    naturalKeyMigration = status;
+    naturalKeyReady = status.state === "READY";
+  } catch (error) {
+    naturalKeyMigration = { state: "NOT_INSTALLED", detail: (error as Error).message };
+  }
   return json({
-    ok: hasKey,
+    ok: hasKey && naturalKeyReady,
     has_jquants_key: hasKey,
     datasets: PREMIUM_CORE_DATASETS.length,
+    natural_key_migration: naturalKeyMigration,
     last_run: last,
   });
+}
+
+async function handleNaturalKeyRebuild(env: Env, request: Request): Promise<Response> {
+  if (!authorized(request, env.INGESTION_RUN_TOKEN)) {
+    return json({ error: "unauthorized" }, 401);
+  }
+  try {
+    const status = await rebuildNaturalKeysV2(env.DB);
+    return json({ ok: status.state === "READY", status });
+  } catch (error) {
+    const status = await naturalKeyMigrationStatus(env.DB).catch(() => null);
+    return json({ error: (error as Error).message, status }, 409);
+  }
 }
 
 async function handleRun(
   env: Env, request: Request, fetchImpl: typeof fetch,
 ): Promise<Response> {
-  if (!authorized(request, env, true)) {
+  if (!authorized(request, env.INGESTION_RUN_TOKEN)) {
     return json({ error: "unauthorized" }, 401);
   }
   const url = new URL(request.url);
@@ -1000,9 +1091,10 @@ async function handleRun(
 async function handleExportD1(
   env: Env, request: Request,
 ): Promise<Response> {
-  if (!authorized(request, env, true)) {
+  if (!authorized(request, env.DATA_EXPORT_TOKEN)) {
     return json({ error: "unauthorized" }, 401);
   }
+  await requireNaturalKeysV2Ready(env.DB);
   const url = new URL(request.url);
   const table = url.searchParams.get("table") || "jquants_records";
   // Allow only our known tables (defence in depth against SQL injection).
@@ -1012,6 +1104,7 @@ async function handleExportD1(
     "jquants_records_revisions", "jquants_listed_info_revisions",
     "jquants_daily_bars_revisions", "jquants_market_calendar_revisions",
     "ingestion_validation", "ingestion_run_log", "ingestion_watermarks",
+    "raw_retention_manifests",
   ]);
   if (!allowed.has(table)) {
     return json({ error: "table not exportable" }, 400);
@@ -1055,9 +1148,10 @@ async function handleExportD1(
 async function handleExportChanges(
   env: Env, request: Request,
 ): Promise<Response> {
-  if (!authorized(request, env, true)) {
+  if (!authorized(request, env.DATA_EXPORT_TOKEN)) {
     return json({ error: "unauthorized" }, 401);
   }
+  await requireNaturalKeysV2Ready(env.DB);
   const url = new URL(request.url);
   const afterSeq = Number(url.searchParams.get("after_seq") || "0");
   const limit = Number(url.searchParams.get("limit") || "500");
@@ -1096,6 +1190,9 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     if (url.pathname === "/health") return handleHealth(env);
+    if (url.pathname === "/v1/admin/rebuild-natural-keys-v2") {
+      return handleNaturalKeyRebuild(env, request);
+    }
     if (url.pathname === "/v1/run") return handleRun(env, request, fetch);
     if (url.pathname === "/v1/export/d1") return handleExportD1(env, request);
     if (url.pathname === "/v1/export/changes") {

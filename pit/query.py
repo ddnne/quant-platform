@@ -19,7 +19,7 @@ from urllib.parse import quote
 from ingestion.common.timeutil import ensure_jst, parse_dt, to_iso
 from storage.schema import NATURAL_KEYS, REVISION_TABLES
 
-from .errors import AsOfRequired, DatabaseNotFound, InvalidAsOf
+from .errors import AsOfRequired, DatabaseNotFound, InvalidAsOf, SnapshotNotReady
 
 # Sentinel default for ``as_of`` on the public API. A bare ``None`` default
 # would collide with an explicit ``None`` argument; this object is distinct,
@@ -103,6 +103,34 @@ def connect_readonly(db_path: Any = None) -> sqlite3.Connection:
     uri = "file:" + quote(str(path.resolve())) + "?mode=ro"
     conn = sqlite3.connect(uri, uri=True)
     conn.row_factory = sqlite3.Row
+    # Managed production databases fail closed unless their generation is a
+    # committed READY snapshot. Legacy/test fixtures explicitly retain
+    # require_manifest=0 and remain readable for offline unit construction.
+    policy_table = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' "
+        "AND name='local_snapshot_policy'"
+    ).fetchone()
+    if policy_table is not None:
+        columns = {
+            str(row[1])
+            for row in conn.execute("PRAGMA table_info(local_snapshot_policy)")
+        }
+        projection = "require_manifest, snapshot_ready"
+        if "publication_state" in columns:
+            projection += ", publication_state"
+        policy = conn.execute(
+            f"SELECT {projection} FROM local_snapshot_policy WHERE singleton=1"
+        ).fetchone()
+        if policy is not None and bool(policy["require_manifest"]):
+            state = (
+                str(policy["publication_state"])
+                if "publication_state" in policy.keys() else "READY"
+            )
+            if not bool(policy["snapshot_ready"]) or state != "READY":
+                conn.close()
+                raise SnapshotNotReady(
+                    "managed research snapshot is not READY; PIT access is denied"
+                )
     return conn
 
 

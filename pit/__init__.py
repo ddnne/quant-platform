@@ -37,6 +37,7 @@ from .errors import (
     InvalidAsOf,
     InvalidDataset,
     PitError,
+    SnapshotNotReady,
 )
 from .models import PIT_API_VERSION, PitResult
 
@@ -57,6 +58,7 @@ __all__ = [
     "InvalidAsOf",
     "InvalidDataset",
     "DatabaseNotFound",
+    "SnapshotNotReady",
 ]
 
 __version__ = PIT_API_VERSION

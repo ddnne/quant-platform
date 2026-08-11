@@ -5,10 +5,12 @@ from __future__ import annotations
 from strategies.spec import StrategySpec, TopKRule
 
 from .types import PortfolioDecision
+from .roles import AgentRole, ROLE_MATRIX
 
 
 class PortfolioManagerAgent:
     role = "portfolio_manager"
+    capabilities = ROLE_MATRIX[AgentRole.PORTFOLIO_MANAGER].capabilities
 
     def review(self, spec: StrategySpec) -> PortfolioDecision:
         max_positions = spec.rule.k if isinstance(spec.rule, TopKRule) else None

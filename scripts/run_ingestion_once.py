@@ -175,13 +175,20 @@ def main(argv=None) -> int:
         runtime, via_cf_proxy=None if jq_via_proxy else False, user_agent=_UA
     )
     store = SqliteStore(db_path)
-    jquants_key = os.environ.get("JQUANTS_API_KEY", "")
+    unsafe_direct = os.environ.get("UNSAFE_DEV_DIRECT_JQUANTS", "").strip().lower()
+    unsafe_direct = unsafe_direct in {"1", "true", "yes"}
+    jquants_key = os.environ.get("JQUANTS_API_KEY", "") if unsafe_direct else ""
 
     using_jq_proxy = getattr(jq_http, "name", "") == "cf-jquants-proxy"
     if using_jq_proxy:
         print("[env] J-Quants via Cloudflare proxy (API key held on Worker).")
     elif jquants_key:
-        print("[env] JQUANTS_API_KEY present (value hidden).")
+        print("[env] UNSAFE_DEV_DIRECT_JQUANTS enabled; local key value hidden.")
+    elif os.environ.get("JQUANTS_API_KEY"):
+        print(
+            "[env] local JQUANTS_API_KEY ignored; set "
+            "UNSAFE_DEV_DIRECT_JQUANTS=1 only for explicit unsafe dev use."
+        )
     else:
         print("[env] JQUANTS_API_KEY absent — J-Quants will be skipped.")
 

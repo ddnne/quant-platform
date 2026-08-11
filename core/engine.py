@@ -71,9 +71,20 @@ def _params_hash(params: dict[str, Any]) -> str:
 
 def _make_feature_accessor(as_of: str, db_path: Any):
     """Bind the trusted PIT scope used by one decision context."""
-    def compute_feature(feature_id: str, **inputs: Any) -> Any:
+    def compute_feature(
+        feature_id: str, *, version: str | None = None, **inputs: Any
+    ) -> Any:
+        # Declarative strategies always supply ``version``. Resolve that exact
+        # definition before entering compute so a later registry addition can
+        # never change a persisted StrategySpec's meaning. Hand-written local
+        # strategies may continue to omit it and intentionally follow latest.
+        definition = (
+            features.get(feature_id, version=version)
+            if version is not None
+            else feature_id
+        )
         return features.compute(
-            feature_id,
+            definition,
             as_of=as_of,
             db_path=db_path,
             **inputs,

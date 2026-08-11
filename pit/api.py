@@ -385,6 +385,7 @@ def get_jquants_records(
     from_event: Any = None,
     to_event: Any = None,
     *,
+    natural_key: str | None = None,
     db_path: Any = None,
 ) -> PitResult:
     """Point-in-time generic J-Quants records (``jquants_records``).
@@ -414,6 +415,9 @@ def get_jquants_records(
         )
     clauses: list[str] = ["dataset = ?"]
     params: list[Any] = [dataset]
+    if natural_key is not None:
+        clauses.append("natural_key = ?")
+        params.append(natural_key)
     if code is not None:
         clauses.append(f"{_CATALOG_CODE_SQL} = ?")
         params.append(code)

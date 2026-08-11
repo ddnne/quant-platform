@@ -110,8 +110,9 @@ class BarContext:
         bars: Signal-lookback PIT-visible daily bars per universe code, oldest
             first. Valuation marks are maintained independently.
         master: Latest-known-as-of master snapshot per universe code.
-        feature: PIT-scoped versioned feature computation. Strategies supply
-            only a feature id and declared feature inputs.
+        feature: PIT-scoped versioned feature computation. Persisted
+            declarative strategies supply an exact feature version plus its
+            declared inputs; hand-written local strategies may follow latest.
     """
 
     as_of: str
@@ -124,13 +125,23 @@ class BarContext:
     bars: Mapping[str, tuple[Bar, ...]]
     master: Mapping[str, EquityMaster]
 
-    def feature(self, feature_id: str, /, **inputs: Any) -> Any:
+    def feature(
+        self,
+        feature_id: str,
+        /,
+        *,
+        version: str | None = None,
+        **inputs: Any,
+    ) -> Any:
         """Compute a feature through the engine's PIT-scoped runtime accessor.
 
         The engine binds this accessor for each decision bar.  It injects this
         context's :attr:`as_of` and the runtime-owned database location, so a
-        strategy supplies only the feature id and its declared inputs.  The
-        database location is deliberately not a context field.
+        strategy supplies only the feature identity and its declared inputs.
+        ``StrategySpec`` calls must pass an exact ``version``; omitting it is
+        retained only for hand-written local strategies that deliberately
+        track the registry's latest version. The database location is
+        deliberately not a context field.
         """
         reserved = {"as_of", "db_path"}.intersection(inputs)
         if reserved:
@@ -142,11 +153,18 @@ class BarContext:
                 "BarContext feature accessor is not bound; contexts must be "
                 "created by the trusted core runtime"
             )
-        return accessor(feature_id, **inputs)
+        return accessor(feature_id, version=version, **inputs)
 
-    def compute_feature(self, feature_id: str, /, **inputs: Any) -> Any:
+    def compute_feature(
+        self,
+        feature_id: str,
+        /,
+        *,
+        version: str | None = None,
+        **inputs: Any,
+    ) -> Any:
         """Explicit alias for :meth:`feature`."""
-        return self.feature(feature_id, **inputs)
+        return self.feature(feature_id, version=version, **inputs)
 
 
 class Strategy(Protocol):

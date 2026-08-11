@@ -1,5 +1,11 @@
 # scripts
 
+Phase 6 hardening utilities:
+
+- `ops_status.py --json` — offline READY snapshot, coverage, B0 and validation status.
+- `rebuild_paper_index.py --root data/paper --json` — rebuild the disposable index from immutable Paper JSON.
+- `python -m mcp_servers.quant_data --list-tools` — Quant Data Access MCP smoke.
+
 開発・運用用の補助スクリプト。
 
 ## run_ingestion_once.py（Phase 1）
@@ -21,7 +27,7 @@ python scripts/run_ingestion_once.py --source {jquants|jsda|all} --runtime local
 - `--no-jquants-proxy` — CF プロキシ設定があっても直接取得に強制。
 - `--jsda-url URL` — JSDA の取得ファイル URL 直指定（インデックス略過）。
 
-J-Quants の鍵は **CF proxy が既定**（環境変数 `INGESTION_PROXY_URL`/`INGESTION_PROXY_TOKEN` または `~/.config/quant-platform/ingestion_proxy_{url,token}` で有効化）。proxy 未設定時のみ環境変数 `JQUANTS_API_KEY` で直接取得。JSDA は鍵不要。
+J-Quants の鍵は **CF proxy が既定**（環境変数 `JQUANTS_PROXY_URL`/`JQUANTS_PROXY_TOKEN` または `~/.config/quant-platform/jquants_proxy_{url,token}`）。local `JQUANTS_API_KEY` は `UNSAFE_DEV_DIRECT_JQUANTS=1` を明示した開発時だけ利用する。JSDA は鍵不要。
 
 終了コード: `0`=取得/登録あり, `1`=予期せぬエラー, `2`=何も実行せず（CF ランタイム or 全ソース skip）。
 詳細は [docs/data_sources.md](../docs/data_sources.md)。

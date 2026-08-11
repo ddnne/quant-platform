@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import sqlite3
 from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
@@ -168,4 +169,12 @@ def synced_cf_d1_db(
             "2",
         ]
     )
+    # This fixture intentionally mirrors only one fact table and cannot pass
+    # the governed READY publication gate. Mark it as an unmanaged unit-test
+    # DB so PIT-shape tests can exercise rows; production sync never does this.
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "UPDATE local_snapshot_policy SET require_manifest=0 "
+            "WHERE singleton=1"
+        )
     return SimpleNamespace(db=db, rc=rc, calls=calls, rows=cf_d1_export_rows)

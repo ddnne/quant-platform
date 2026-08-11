@@ -37,37 +37,45 @@ credential. Optional future LLM adapters must preserve these same interfaces.
 
 ## StrategySpec safety contract
 
-`strategies/spec/schema.py` accepts only `strategy-spec/v1`, daily rebalance,
+`strategies/spec/schema.py` accepts only `strategy-spec/v2`, daily rebalance,
 and two numeric rule types:
 
 - `threshold`: select scores at or above a threshold, equal-weight them.
 - `top_k`: select the highest `k` scores (optionally above `min_score`),
   equal-weight them.
 
-Rules name a registered feature and JSON-scalar feature parameters. Unknown
-types, fields, parameters, versions, rebalance modes, and runtime-owned
-parameters (`code`, `as_of`, `db_path`) are rejected before a run. The
-interpreter admits only explicitly `approved`, `signal` features. New feature
-definitions default to `candidate`; an agent's `FeatureProposal` cannot
-register or approve one.
+Every executable rule contains a nested `FeatureRef {id, version, params}`.
+The exact version is mandatory in persisted JSON and is included in the
+canonical spec payload, strategy hash, paper feature-version metadata, and
+experiment identity. Legacy v1 / flat `feature_id` payloads fail closed; they
+must be deliberately migrated rather than silently resolving “latest”.
+Unknown types, fields, parameters, versions, rebalance modes, and
+runtime-owned parameters (`code`, `as_of`, `db_path`, `version`) are rejected
+before a run. The interpreter resolves the exact version and admits only
+explicitly `approved`, `signal` features. New feature definitions default to
+`candidate`; an agent's `FeatureProposal` cannot register or approve one.
 
 The interpreter creates a normal core `Strategy`. Its only data operation is
-`ctx.feature(feature_id, code=..., **validated_params)`. There is no `eval`,
+`ctx.feature(feature_id, version=exact_version, code=..., **validated_params)`.
+There is no `eval`,
 `exec`, dynamic import, generated module, SQL, PIT handle, or HTTP path.
 
 Example:
 
 ```json
 {
-  "version": "strategy-spec/v1",
+  "version": "strategy-spec/v2",
   "strategy_id": "agent_momentum_top_k",
   "rebalance": "daily",
   "rule": {
     "type": "top_k",
-    "feature_id": "momentum_n",
+    "feature": {
+      "id": "momentum_n",
+      "version": "1.0.0",
+      "params": {"n": 5}
+    },
     "k": 1,
-    "min_score": 0.0,
-    "feature_params": {"n": 5}
+    "min_score": 0.0
   },
   "rationale": "approved momentum fixture"
 }

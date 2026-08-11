@@ -7,7 +7,7 @@ local ingestion runner a deliberately narrow proxy capability.
 
 - Public `GET /health` reports only whether the key binding exists.
 - `POST /v1/proxy/jquants` requires `X-Ingestion-Token` matching the
-  `INGESTION_PROXY_TOKEN` secret.
+  `JQUANTS_PROXY_TOKEN` secret.
 - The envelope may request only upstream `GET`.
 - The target must exactly match a Premium-core path in
   [`data_contracts/jquants_premium_core.json`](../../../data_contracts/jquants_premium_core.json)
@@ -35,5 +35,5 @@ Set secrets with Wrangler; never put their values in source or `wrangler.toml`:
 
 ```bash
 npx wrangler secret put JQUANTS_API_KEY
-npx wrangler secret put INGESTION_PROXY_TOKEN
+npx wrangler secret put JQUANTS_PROXY_TOKEN
 ```

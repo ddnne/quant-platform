@@ -2,8 +2,10 @@
 
 Every row gets ``source='jquants'`` and the four PIT columns. Premium-core
 ``available_at`` values follow the canonical dataset contract; any policy
-without enough evidence falls back conservatively to ``ingested_at``. Pass an
-explicit ``available_at`` when a more precise publication time is known.
+without enough evidence falls back conservatively to ``ingested_at``. The
+keyword-only ``available_at`` argument is a trusted-caller/testing capability;
+a same-named field in an upstream source row is retained in raw payload only
+and can never override trusted PIT metadata.
 
 Field-name tolerance: V2 publishes long names (``Open`` / ``High`` / …) for
 some payloads and abbreviated short names (``O`` / ``H`` / ``CoName`` / …)
@@ -77,10 +79,6 @@ def _pick_str(r: dict, *keys: str) -> Optional[str]:
     return _s(_pick(r, *keys))
 
 
-def _avail(available_at: Optional[str], ingested_at: str) -> str:
-    return available_at or ingested_at
-
-
 def _close_event_time(date_str: str) -> str:
     """Session-close ``event_time`` for a date, honoring the 15:30 move.
 
@@ -95,6 +93,7 @@ def _close_event_time(date_str: str) -> str:
 def normalize_daily_bars(
     rows: Iterable[dict], *, ingested_at: str, available_at: Optional[str] = None
 ) -> List[dict]:
+    """Normalize bars; ``available_at`` is trusted caller metadata, not payload."""
     out: List[dict] = []
     for r in rows:
         d = _pick_str(r, "Date")
@@ -149,6 +148,7 @@ def normalize_listed_info(
     snapshot_date: str,
     available_at: Optional[str] = None,
 ) -> List[dict]:
+    """Normalize master rows with an optional trusted availability override."""
     sd = str(snapshot_date)[:10]
     out: List[dict] = []
     for r in rows:
@@ -190,6 +190,7 @@ def normalize_listed_info(
 def normalize_market_calendar(
     rows: Iterable[dict], *, ingested_at: str, available_at: Optional[str] = None
 ) -> List[dict]:
+    """Normalize calendar rows with an optional trusted availability override."""
     out: List[dict] = []
     for r in rows:
         d = _pick_str(r, "Date")
@@ -325,7 +326,8 @@ def normalize_generic(
     The natural key comes from :func:`_natural_key` (catalog identity fields,
     row-hash fallback). ``payload`` is a stable (key-sorted) serialization of
     the row for easy diffing; ``raw_payload`` keeps the verbatim source order
-    for traceability and amendment detection in the store.
+    for traceability and amendment detection in the store. ``available_at`` is
+    an explicit trusted-caller capability and is never read from ``rows``.
     """
     entry = catalog.get(dataset)
     key_fields = entry.get("key", [])

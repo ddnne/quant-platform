@@ -14,8 +14,8 @@
 #
 # Secrets (set on this worker, values NOT in this file):
 #   npx wrangler secret put JQUANTS_API_KEY -c platform/workers/ingestion-premium/wrangler.toml
-#   # INGESTION_PROXY_TOKEN is optional — only needed to gate the manual /v1/run endpoint.
-#   npx wrangler secret put INGESTION_PROXY_TOKEN -c platform/workers/ingestion-premium/wrangler.toml
+#   npx wrangler secret put INGESTION_RUN_TOKEN -c platform/workers/ingestion-premium/wrangler.toml
+#   npx wrangler secret put DATA_EXPORT_TOKEN -c platform/workers/ingestion-premium/wrangler.toml
 #
 # Cron: hourly at :15 (Premium endpoints publish continuously through the JST
 # trading day; hourly cadence keeps the loop closed without stressing the
@@ -26,7 +26,7 @@ main = "src/index.ts"
 compatibility_date = "2026-08-01"
 workers_dev = true
 
-# R2 — verbatim source JSON, partitioned by dataset/date.
+# R2 — full response pages + manifest under raw/{dataset}/{run_id}/.
 [[r2_buckets]]
 binding = "RAW_BUCKET"
 bucket_name = "quant-raw"
@@ -45,7 +45,8 @@ database_id = "be6fdcf8-40be-41fc-9535-7facd1fc2ffc"
 
 # Secrets bound via `wrangler secret put` (never in this file):
 # - JQUANTS_API_KEY            (required for fetch)
-# - INGESTION_PROXY_TOKEN      (optional; gates /v1/run manual trigger)
+# - INGESTION_RUN_TOKEN        (manual run and migration rebuild only)
+# - DATA_EXPORT_TOKEN          (structured export endpoints only)
 
 [triggers]
 # Hourly at :15. Workers Cron is UTC; for example 00:15 UTC == 09:15 JST.

@@ -2,6 +2,7 @@
 
 from .interpreter import StrategySpecStrategy, interpret_strategy_spec
 from .schema import (
+    FeatureRef,
     STRATEGY_SPEC_VERSION,
     StrategySpec,
     StrategySpecError,
@@ -11,6 +12,7 @@ from .schema import (
 
 __all__ = [
     "STRATEGY_SPEC_VERSION",
+    "FeatureRef",
     "StrategySpec",
     "StrategySpecError",
     "StrategySpecStrategy",

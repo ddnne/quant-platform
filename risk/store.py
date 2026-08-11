@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import tempfile
 from pathlib import Path
@@ -27,6 +28,7 @@ class JsonRiskStore:
 
     def save(self, audit: RiskAudit) -> Path:
         """Create an immutable audit, or idempotently accept identical bytes."""
+        audit.verify_content_hash()
         path = self.audit_path(audit)
         serialized = json.dumps(
             audit.to_dict(),
@@ -35,10 +37,6 @@ class JsonRiskStore:
             sort_keys=True,
             allow_nan=False,
         ) + "\n"
-        if path.is_file():
-            if path.read_text(encoding="utf-8") != serialized:
-                raise FileExistsError(f"risk audit is immutable: {path}")
-            return path
         path.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.NamedTemporaryFile(
             "w",
@@ -50,10 +48,15 @@ class JsonRiskStore:
         ) as handle:
             handle.write(serialized)
             temporary = Path(handle.name)
-        # There is a small concurrent first-writer race with replace().  The
-        # audit id is content-derived, so identical writers produce identical
-        # bytes; a later writer cannot mutate the in-memory audit object.
-        temporary.replace(path)
+        try:
+            # Atomic create-if-absent. A concurrent writer cannot replace an
+            # audit after the existence check.
+            os.link(temporary, path)
+        except FileExistsError:
+            if path.read_text(encoding="utf-8") != serialized:
+                raise FileExistsError(f"risk audit is immutable: {path}")
+        finally:
+            temporary.unlink(missing_ok=True)
         return path
 
     def load(self, audit_id: str) -> dict:

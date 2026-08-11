@@ -89,6 +89,12 @@ Phase 6 の multi-experiment で安価に入力状態を区別するための ID
 runtime は run 前に一度 snapshot ID を決定して result に保存し、run 後に再計算する。
 両者が異なる場合は実行中に入力状態が変更されたとみなし、fail closed とする。
 
+Production research は mutable な sync/staging DB を直接使わず、content-addressed な
+READY artifact を `paper_runtime.latest_ready_snapshot` /
+`open_ready_snapshot` で解決する。READY manifest の `snapshot_id` がそのまま
+`data_snapshot_id` になる。publication lifecycle、coverage ledger、strict quality gate は
+[`phase6_snapshot_publication.md`](phase6_snapshot_publication.md) を参照。
+
 ### Experiment, run, lifecycle
 
 - `experiment_id` は strategy id/params、feature version／定義 hash、`data_snapshot_id`、期間、

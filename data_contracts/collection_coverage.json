@@ -1,0 +1,151 @@
+{
+  "schema_version": 1,
+  "policy_version": "collection-coverage/v1",
+  "defaults": {
+    "collection_scope": "jquants_premium_core",
+    "history_target_end_rule": "latest_published_before_collection_cutoff",
+    "raw_retention_required": true,
+    "structured_reconciliation_required": true,
+    "governance_tier": "governed"
+  },
+  "datasets": {
+    "equities_master": {
+      "history_target_start": "2000-07-13",
+      "coverage_mode": "snapshot_history",
+      "expected_frequency": "trading_day",
+      "universe_rule": "all_listed_equities_at_event_date"
+    },
+    "equities_bars_daily": {
+      "history_target_start": "2004-01-05",
+      "coverage_mode": "trading_calendar",
+      "expected_frequency": "trading_day",
+      "universe_rule": "all_listed_equities_at_event_date"
+    },
+    "equities_bars_daily_am": {
+      "history_target_start": "2024-01-04",
+      "coverage_mode": "trading_calendar",
+      "expected_frequency": "trading_day",
+      "universe_rule": "all_listed_equities_at_event_date"
+    },
+    "fins_summary": {
+      "history_target_start": "2008-01-08",
+      "coverage_mode": "event_reconciled",
+      "expected_frequency": "event_driven",
+      "universe_rule": "all_disclosures_in_collection_window"
+    },
+    "fins_details": {
+      "history_target_start": "2008-01-08",
+      "coverage_mode": "event_reconciled",
+      "expected_frequency": "event_driven",
+      "universe_rule": "all_disclosures_in_collection_window"
+    },
+    "fins_dividend": {
+      "history_target_start": "2008-01-08",
+      "coverage_mode": "event_reconciled",
+      "expected_frequency": "event_driven",
+      "universe_rule": "all_announcements_in_collection_window"
+    },
+    "fins_earnings_date": {
+      "history_target_start": "2010-01-04",
+      "coverage_mode": "event_reconciled",
+      "expected_frequency": "event_driven",
+      "universe_rule": "all_published_schedules_in_collection_window"
+    },
+    "equities_earnings_calendar": {
+      "history_target_start": "2010-01-04",
+      "coverage_mode": "event_reconciled",
+      "expected_frequency": "event_driven",
+      "universe_rule": "all_calendar_entries_in_collection_window"
+    },
+    "markets_calendar": {
+      "history_target_start": "2008-01-01",
+      "coverage_mode": "calendar",
+      "expected_frequency": "calendar_day",
+      "universe_rule": "jpx_calendar_days"
+    },
+    "equities_investor_types": {
+      "history_target_start": "2013-01-04",
+      "coverage_mode": "periodic_reconciled",
+      "expected_frequency": "weekly",
+      "universe_rule": "all_market_sections"
+    },
+    "indices_bars_daily_topix": {
+      "history_target_start": "2008-01-01",
+      "coverage_mode": "trading_calendar",
+      "expected_frequency": "trading_day",
+      "universe_rule": "topix"
+    },
+    "indices_bars_daily": {
+      "history_target_start": "2008-01-01",
+      "coverage_mode": "trading_calendar",
+      "expected_frequency": "trading_day",
+      "universe_rule": "all_available_indices"
+    },
+    "derivatives_bars_daily_options_225": {
+      "history_target_start": "2013-01-04",
+      "coverage_mode": "trading_calendar",
+      "expected_frequency": "trading_day",
+      "universe_rule": "all_nikkei_225_option_contracts"
+    },
+    "derivatives_bars_daily_futures": {
+      "history_target_start": "2013-01-04",
+      "coverage_mode": "trading_calendar",
+      "expected_frequency": "trading_day",
+      "universe_rule": "all_available_futures_contracts"
+    },
+    "derivatives_bars_daily_options": {
+      "history_target_start": "2013-01-04",
+      "coverage_mode": "trading_calendar",
+      "expected_frequency": "trading_day",
+      "universe_rule": "all_available_option_contracts"
+    },
+    "markets_margin_interest": {
+      "history_target_start": "2013-01-04",
+      "coverage_mode": "periodic_reconciled",
+      "expected_frequency": "weekly",
+      "universe_rule": "all_reported_issues"
+    },
+    "markets_margin_alert": {
+      "history_target_start": "2013-01-04",
+      "coverage_mode": "event_reconciled",
+      "expected_frequency": "event_driven",
+      "universe_rule": "all_alerts_in_collection_window"
+    },
+    "markets_short_ratio": {
+      "history_target_start": "2013-01-04",
+      "coverage_mode": "periodic_reconciled",
+      "expected_frequency": "weekly",
+      "universe_rule": "all_market_sections"
+    },
+    "markets_short_sale_report": {
+      "history_target_start": "2013-01-04",
+      "coverage_mode": "event_reconciled",
+      "expected_frequency": "event_driven",
+      "universe_rule": "all_reported_issues_in_collection_window"
+    },
+    "markets_breakdown": {
+      "history_target_start": "2013-01-04",
+      "coverage_mode": "trading_calendar",
+      "expected_frequency": "trading_day",
+      "universe_rule": "all_reported_issues"
+    },
+    "edinet_major_shareholders": {
+      "history_target_start": "2018-01-04",
+      "coverage_mode": "event_reconciled",
+      "expected_frequency": "event_driven",
+      "universe_rule": "all_filings_in_collection_window"
+    },
+    "edinet_cross_shareholdings": {
+      "history_target_start": "2018-01-04",
+      "coverage_mode": "event_reconciled",
+      "expected_frequency": "event_driven",
+      "universe_rule": "all_filings_in_collection_window"
+    },
+    "edinet_large_volume_shareholders": {
+      "history_target_start": "2018-01-04",
+      "coverage_mode": "event_reconciled",
+      "expected_frequency": "event_driven",
+      "universe_rule": "all_filings_in_collection_window"
+    }
+  }
+}

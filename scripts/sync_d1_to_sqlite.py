@@ -33,7 +33,7 @@ Examples
   # Explicit URL+token (do not commit these):
   python3 scripts/sync_d1_to_sqlite.py \\
       --url https://quant-platform-ingestion-premium.<acct>.workers.dev \\
-      --token "$INGESTION_PROXY_TOKEN" \\
+      --token "$DATA_EXPORT_TOKEN" \\
       --db data/structured/ingestion.sqlite
 """
 
@@ -55,8 +55,8 @@ from ingestion.common.secrets import resolve_proxy_config  # noqa: E402
 from ingestion.jquants.catalog import PREMIUM_CORE_DATASETS  # noqa: E402
 from paper_runtime import (  # noqa: E402
     begin_snapshot_sync,
-    commit_snapshot_manifest,
     fail_snapshot_sync,
+    publish_ready_snapshot,
 )
 from storage.sqlite_store import SqliteStore  # noqa: E402
 
@@ -75,6 +75,7 @@ DEFAULT_TABLES: tuple[str, ...] = (
     "ingestion_run_log",
     "ingestion_validation",
     "ingestion_watermarks",
+    "raw_retention_manifests",
 )
 DEFAULT_PAGE_LIMIT = 500
 DEFAULT_MAX_PAGES = 10_000
@@ -99,7 +100,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--token",
-        default=os.environ.get("INGESTION_PROXY_TOKEN"),
+        default=os.environ.get("DATA_EXPORT_TOKEN"),
         help="X-Ingestion-Token for /v1/export/d1",
     )
     p.add_argument(
@@ -112,6 +113,14 @@ def _build_parser() -> argparse.ArgumentParser:
         "--db",
         required=True,
         help="Local SQLite path (will be created if missing).",
+    )
+    p.add_argument(
+        "--snapshot-dir",
+        default=None,
+        help=(
+            "READY artifact directory (default: <db-parent>/snapshots). "
+            "Staging DB is never research-readable."
+        ),
     )
     p.add_argument(
         "--page-limit",
@@ -145,15 +154,13 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _resolve_endpoint(args: argparse.Namespace) -> tuple[str | None, str | None]:
-    """Pick (url, token) from args first, else proxy config files."""
+    """Pick the data-export URL and its independently scoped token.
+
+    J-Quants proxy credentials are intentionally never reused here.
+    """
     if args.url:
         return args.url, args.token
-    if args.no_proxy_config:
-        return None, None
-    cfg = resolve_proxy_config()
-    if cfg is None:
-        return None, None
-    return cfg.url, cfg.token
+    return None, None
 
 
 def _new_http_client():
@@ -182,6 +189,7 @@ _NO_AVAILABLE_AT_TABLES = frozenset({
     "ingestion_validation",
     "ingestion_run_log",
     "ingestion_watermarks",
+    "raw_retention_manifests",
 })
 
 
@@ -225,6 +233,18 @@ def _ensure_control_tables(conn: sqlite3.Connection) -> None:
             last_ingested_at TEXT NOT NULL,
             last_export_cursor INTEGER
         );
+        CREATE TABLE IF NOT EXISTS raw_retention_manifests (
+            dataset TEXT NOT NULL,
+            run_id INTEGER NOT NULL,
+            manifest_key TEXT NOT NULL,
+            page_count INTEGER NOT NULL,
+            row_count INTEGER NOT NULL,
+            raw_bytes INTEGER NOT NULL,
+            data_digest TEXT NOT NULL,
+            completeness TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (dataset, run_id)
+        );
         """
     )
 
@@ -253,6 +273,14 @@ def _sync_control_plane(
             f"INSERT INTO {table} ({col_list}) VALUES ({placeholders}) "
             f"ON CONFLICT(dataset) DO UPDATE SET "
             + ", ".join(f"{c}=excluded.{c}" for c in cols if c != "dataset")
+        )
+    elif table == "raw_retention_manifests" and {"dataset", "run_id"} <= set(cols):
+        sql = (
+            f"INSERT INTO {table} ({col_list}) VALUES ({placeholders}) "
+            "ON CONFLICT(dataset, run_id) DO UPDATE SET "
+            + ", ".join(
+                f"{c}=excluded.{c}" for c in cols if c not in {"dataset", "run_id"}
+            )
         )
     elif "id" in cols:
         sql = (
@@ -615,11 +643,17 @@ def main(argv=None) -> int:
             )
         else:
             try:
-                snapshot_id = commit_snapshot_manifest(
-                    store._conn,  # noqa: SLF001
+                ready = publish_ready_snapshot(
+                    Path(args.db),
+                    Path(args.snapshot_dir)
+                    if args.snapshot_dir
+                    else Path(args.db).resolve().parent / "snapshots",
                     required_datasets=PREMIUM_CORE_DATASETS,
                 )
-                print(f"[sync] committed snapshot={snapshot_id}")
+                print(
+                    f"[sync] committed snapshot={ready.snapshot_id} "
+                    f"artifact={ready.db_path}"
+                )
             except Exception as exc:  # noqa: BLE001
                 message = f"snapshot: {exc}"
                 failures.append(message)

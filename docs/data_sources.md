@@ -33,7 +33,7 @@ PIT のため、構造化行は必ず `event_time` / `available_at` / `source` /
 - **冪等性**: 各テーブルの自然キーを `PRIMARY KEY` とし `ON CONFLICT DO UPDATE` で upsert。同一日の再実行で重複行はできない。衝突時は **`available_at` を既存・新規の早い方（`MIN`）で保持**（元の PIT タイムスタンプを上書きしない）、それ以外の列は新規値で更新し `ingested_at` を最新にする。バッチは単一トランザクションで実行し、失敗時はロールバックする（部分コミットなし）。
 - **Raw 保存**: `data/raw/{source}/{yyyy}/{mm}/{dd}/<file>`（gitignore）。
 - **構造化保存**: `data/structured/ingestion.sqlite`（gitignore）。将来 R2/D1 へのレイアウトは `storage/schema.py` のコメント参照。
-- **秘匿**: API 鍵はコード・ログに出力しない。J-Quants の正本は **Cloudflare Secret**（Worker 保持）。ローカルは **CF 秘匿プロキシを既定**（`INGESTION_PROXY_URL`/`INGESTION_PROXY_TOKEN` または `~/.config/quant-platform/ingestion_proxy_{url,token}` で有効化; 詳細は §1 と `ingestion/common/secrets.py`）。プロキシ未設定時のみ環境変数 `JQUANTS_API_KEY` の直接利用にフォールバック。
+- **秘匿**: API 鍵はコード・ログに出力しない。J-Quants の正本は **Cloudflare Secret**（Worker 保持）。ローカルは **CF 秘匿プロキシを既定**（`JQUANTS_PROXY_URL`/`JQUANTS_PROXY_TOKEN` または `~/.config/quant-platform/jquants_proxy_{url,token}`）。local `JQUANTS_API_KEY` は無視し、直接取得は `UNSAFE_DEV_DIRECT_JQUANTS=1` を明示した開発時だけ。
 
 ## 1. J-Quants（API V2）
 
@@ -102,10 +102,10 @@ PIT のため、構造化行は必ず `event_time` / `available_at` / `source` /
 
 J-Quants API 鍵は Cloudflare Worker `quant-platform-ingestion-secrets` のみが保持し、**ローカルには置かない**。ローカルランナは Worker のプロキシエンドポイント `POST {proxy}/v1/proxy/jquants`（ボディ `{path, query}`、ヘッダ `X-Ingestion-Token`）を呼び出し、Worker が上流へ `x-api-key` を注入する。
 
-- プロキシ設定の解決（`ingestion/common/secrets.py`）: 環境変数 `INGESTION_PROXY_URL`/`INGESTION_PROXY_TOKEN`、なければ `~/.config/quant-platform/ingestion_proxy_{url,token}`。片方しか無ければ `None`（未認証プロキシは使わない）。
+- プロキシ設定の解決（`ingestion/common/secrets.py`）: 環境変数 `JQUANTS_PROXY_URL`/`JQUANTS_PROXY_TOKEN`、なければ `~/.config/quant-platform/jquants_proxy_{url,token}`。片方しか無ければ `None`（未認証プロキシは使わない）。旧 `INGESTION_PROXY_*` は J-Quants proxy 入力としてのみ互換読込し、run/export 権限には再利用しない。
 - HTTP クライアント: `CloudflareJquantsProxyHttpClient`（`ingestion/common/http.py`）が J-Quants の `GET https://api.jquants.com/v2/...` をプロキシ `POST` に変換。呼び出し元が渡した `x-api-key` ヘッダは**転送しない**（鍵漏洩の二重防御）。
 - ファクトリ: `make_jquants_http(runtime, via_cf_proxy=None)` が local + プロキシ設定ありなら自動でプロキリクライアントを選択（`--no-jquants-proxy` で強制直接）。汎用 `make_http_client(runtime)` は常に直接（JSDA と共有のため鍵代理は J-Quants のみ）。
-- `JQUANTS_API_KEY` 環境変数は、Cloudflare Worker ランタイムが注入した場合のみ直接モードで使用。プロキシ設定があればローカルで鍵は不要。
+- `JQUANTS_API_KEY` は Cloudflare Worker ランタイムが注入する。local 直接モードは `UNSAFE_DEV_DIRECT_JQUANTS=1` が無い限り fail closed。
 
 実行例:
 

@@ -10,3 +10,9 @@ Phase 1 実装:
 既定パス: `data/structured/ingestion.sqlite`（gitignore）。Raw は `data/raw/`（`ingestion/common/paths.py`）。将来の R2/D1 レイアウトは `schema.py` コメント参照。
 
 PIT のため `available_at` は構造化保存で必須（空は拒否）。
+
+Phase 6 hardening adds formal migrations for `dataset_coverage`, publication
+lifecycle/quality rows, and fact/revision mutation triggers. Coverage status
+is persisted as `COMPLETE | PARTIAL | STALE | UNKNOWN | FAILED`; helpers in
+`coverage_ledger.py` classify the existing C1-C5/C8 results instead of
+duplicating validation rules.

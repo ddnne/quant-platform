@@ -5,15 +5,35 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
+import re
 import sqlite3
+import stat
+import tempfile
 from datetime import datetime, timezone
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 from urllib.parse import quote
+from uuid import uuid4
+
+from cf_platform.ingest_premium.coverage import run_coverage, summarize
+from data_contracts.coverage import (
+    POLICY_VERSION as COVERAGE_POLICY_VERSION,
+    all_coverage_contracts,
+)
+from data_contracts.loader import SCHEMA_VERSION as DATASET_CONTRACT_VERSION
+from storage.coverage_ledger import refresh_coverage_ledger
 
 
 DATA_SNAPSHOT_FORMAT = "paper-data-snapshot/v1"
 LOCAL_SNAPSHOT_MANIFEST_FORMAT = "local-snapshot-manifest/v1"
+RESEARCH_SNAPSHOT_MANIFEST_FORMAT = "research-snapshot-manifest/v2"
+QUALITY_POLICY_VERSION = "b0+phase35-daily+coverage/v1"
+SNAPSHOT_STATES = frozenset(
+    {"BUILDING", "SYNCED", "VALIDATING", "READY", "REJECTED"}
+)
+_SNAPSHOT_ID_RE = re.compile(r"sha256:[0-9a-f]{64}\Z")
 
 _WATERMARK_COLUMNS = (
     "dataset",
@@ -38,6 +58,24 @@ _VALIDATION_SUM_COLUMNS = (
     "rows_inserted",
     "rows_revisions",
 )
+
+
+class SnapshotRejected(RuntimeError):
+    """Raised when a staging DB cannot pass the publication gate."""
+
+
+@dataclass(frozen=True)
+class ReadySnapshot:
+    """A verified, content-addressed READY snapshot artifact."""
+
+    snapshot_id: str
+    db_path: Path
+    manifest_path: Path
+    manifest: dict[str, Any]
+
+    @property
+    def committed_at(self) -> str:
+        return str(self.manifest["committed_at"])
 
 
 def _connect_readonly(path: Path) -> sqlite3.Connection:
@@ -248,23 +286,29 @@ def _canonical_digest(value: Any) -> str:
     return "sha256:" + hashlib.sha256(encoded).hexdigest()
 
 
-def begin_snapshot_sync(conn: sqlite3.Connection, *, started_at: str) -> None:
-    """Invalidate the research snapshot before applying any sync page."""
+def begin_snapshot_sync(conn: sqlite3.Connection, *, started_at: str) -> str:
+    """Invalidate research access and enter ``BUILDING`` before any write."""
+    build_id = "build-" + uuid4().hex
     conn.execute(
         """
         INSERT INTO local_snapshot_policy
             (singleton, require_manifest, snapshot_ready, sync_started_at,
-             last_error)
-        VALUES (1, 1, 0, ?, NULL)
+             last_error, publication_state, active_build_id,
+             active_snapshot_id)
+        VALUES (1, 1, 0, ?, NULL, 'BUILDING', ?, NULL)
         ON CONFLICT(singleton) DO UPDATE SET
             require_manifest = 1,
             snapshot_ready = 0,
             sync_started_at = excluded.sync_started_at,
-            last_error = NULL
+            last_error = NULL,
+            publication_state = 'BUILDING',
+            active_build_id = excluded.active_build_id,
+            active_snapshot_id = NULL
         """,
-        (started_at,),
+        (started_at, build_id),
     )
     conn.commit()
+    return build_id
 
 
 def fail_snapshot_sync(conn: sqlite3.Connection, error: str) -> None:
@@ -272,12 +316,15 @@ def fail_snapshot_sync(conn: sqlite3.Connection, error: str) -> None:
     conn.execute(
         """
         INSERT INTO local_snapshot_policy
-            (singleton, require_manifest, snapshot_ready, last_error)
-        VALUES (1, 1, 0, ?)
+            (singleton, require_manifest, snapshot_ready, last_error,
+             publication_state, active_snapshot_id)
+        VALUES (1, 1, 0, ?, 'REJECTED', NULL)
         ON CONFLICT(singleton) DO UPDATE SET
             require_manifest = 1,
             snapshot_ready = 0,
-            last_error = excluded.last_error
+            last_error = excluded.last_error,
+            publication_state = 'REJECTED',
+            active_snapshot_id = NULL
         """,
         (error[:2000],),
     )
@@ -348,10 +395,24 @@ def commit_snapshot_manifest(
     *,
     required_datasets: Iterable[str],
 ) -> str:
-    """Validate and commit an immutable local research-snapshot manifest."""
+    """Commit the legacy in-place manifest used by compatibility fixtures.
+
+    Production sync uses :func:`publish_ready_snapshot`, which copies into a
+    content-addressed, read-only artifact.  This helper remains for older
+    local callers while retaining the same fail-closed lifecycle states.
+    """
     required = tuple(sorted(set(str(item) for item in required_datasets)))
     if not required:
         raise ValueError("required_datasets must not be empty")
+    conn.execute(
+        "UPDATE local_snapshot_policy SET publication_state='SYNCED' "
+        "WHERE singleton=1"
+    )
+    conn.execute(
+        "UPDATE local_snapshot_policy SET publication_state='VALIDATING' "
+        "WHERE singleton=1"
+    )
+    conn.commit()
     run_id, detail, validations = _latest_complete_run(conn, required)
 
     placeholders = ",".join("?" for _ in required)
@@ -406,13 +467,612 @@ def commit_snapshot_manifest(
         )
         conn.execute(
             "UPDATE local_snapshot_policy SET snapshot_ready = 1, "
-            "last_error = NULL WHERE singleton = 1"
+            "last_error = NULL, publication_state='READY', "
+            "active_snapshot_id=? WHERE singleton = 1",
+            (snapshot_id,),
         )
         conn.commit()
     except Exception:
         conn.rollback()
         raise
     return snapshot_id
+
+
+def _research_manifest_id(manifest: dict[str, Any]) -> str:
+    identity = dict(manifest)
+    identity.pop("snapshot_id", None)
+    # The artifact filename is deterministically derived from snapshot_id and
+    # therefore excluded to avoid a circular hash/name dependency.
+    identity.pop("artifact", None)
+    # Publication bookkeeping does not change the logical data generation.
+    identity.pop("committed_at", None)
+    identity.pop("manifest_digest", None)
+    return _canonical_digest(identity)
+
+
+def _research_manifest_digest(manifest: dict[str, Any]) -> str:
+    document = dict(manifest)
+    document.pop("manifest_digest", None)
+    return _canonical_digest(document)
+
+
+def _artifact_stem(snapshot_id: str) -> str:
+    if not _SNAPSHOT_ID_RE.fullmatch(snapshot_id):
+        raise ValueError(f"invalid snapshot_id: {snapshot_id!r}")
+    return snapshot_id.replace(":", "_", 1)
+
+
+def _transition_policy(
+    conn: sqlite3.Connection,
+    state: str,
+    *,
+    error: str | None = None,
+    snapshot_id: str | None = None,
+    readable: bool = False,
+) -> None:
+    if state not in SNAPSHOT_STATES:
+        raise ValueError(f"invalid snapshot state: {state}")
+    conn.execute(
+        "UPDATE local_snapshot_policy SET publication_state=?, "
+        "snapshot_ready=?, last_error=?, active_snapshot_id=? "
+        "WHERE singleton=1",
+        (state, int(readable), error, snapshot_id),
+    )
+    conn.commit()
+
+
+def _watermarks_for(
+    conn: sqlite3.Connection, required: tuple[str, ...]
+) -> list[dict[str, Any]]:
+    placeholders = ",".join("?" for _ in required)
+    rows = conn.execute(
+        "SELECT dataset, last_event_date, last_ingested_at "
+        "FROM ingestion_watermarks "
+        f"WHERE dataset IN ({placeholders}) ORDER BY dataset",
+        required,
+    ).fetchall()
+    watermarks = [dict(row) for row in rows]
+    missing = sorted(set(required) - {str(row["dataset"]) for row in watermarks})
+    if missing:
+        raise SnapshotRejected(f"required dataset watermarks missing: {missing}")
+    return watermarks
+
+
+def _raw_manifests_for(
+    conn: sqlite3.Connection, run_id: int, required: tuple[str, ...]
+) -> dict[str, dict[str, Any]]:
+    """Require one COMPLETE full-page R2 manifest attestation per dataset."""
+    table = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' "
+        "AND name='raw_retention_manifests'"
+    ).fetchone()
+    if table is None:
+        raise SnapshotRejected("raw retention manifest ledger is missing")
+    placeholders = ",".join("?" for _ in required)
+    rows = conn.execute(
+        "SELECT dataset, run_id, manifest_key, page_count, row_count, "
+        "raw_bytes, data_digest, completeness, created_at "
+        "FROM raw_retention_manifests WHERE run_id=? "
+        f"AND dataset IN ({placeholders}) ORDER BY dataset",
+        (run_id, *required),
+    ).fetchall()
+    manifests = {str(row["dataset"]): dict(row) for row in rows}
+    missing = sorted(set(required) - set(manifests))
+    failed = sorted(
+        dataset for dataset, row in manifests.items()
+        if row["completeness"] != "COMPLETE"
+    )
+    if missing or failed:
+        raise SnapshotRejected(
+            f"raw retention incomplete: missing={missing}, failed={failed}"
+        )
+    return manifests
+
+
+def _evaluate_publication_gate(
+    conn: sqlite3.Connection,
+    staging_path: Path,
+    *,
+    build_id: str,
+    required: tuple[str, ...],
+) -> tuple[
+    int, dict[str, Any], list[dict[str, Any]], list[dict[str, Any]],
+    dict[str, int], list[dict[str, Any]], dict[str, dict[str, Any]],
+]:
+    """Reuse strict B0, Phase 3.5 daily checks, and the coverage ledger."""
+    run_id, run_detail, validations = _latest_complete_run(conn, required)
+    raw_manifests = _raw_manifests_for(conn, run_id, required)
+    today = datetime.now(timezone.utc).date().isoformat()
+    coverage_rows = refresh_coverage_ledger(
+        conn, staging_path, datasets=required, today=today
+    )
+    quality_results = run_coverage(
+        staging_path,
+        tier="daily",
+        datasets=required,
+        today=today,
+        workers=1,
+        strict_live_gates=True,
+    )
+    quality_summary = summarize(quality_results)
+    failures = [
+        result.as_log_dict() for result in quality_results
+        if result.status == "fail"
+    ]
+    incomplete = [
+        {
+            "dataset": row["dataset"],
+            "status": row["status"],
+            "observed_start": row["observed_start"],
+            "history_target_start": row["history_target_start"],
+        }
+        for row in coverage_rows
+        if row["governance_tier"] == "governed"
+        and row["status"] != "COMPLETE"
+    ]
+    evaluated_at = datetime.now(timezone.utc).isoformat()
+    passed = not failures and not incomplete
+    conn.execute(
+        """
+        INSERT INTO snapshot_quality_results
+            (build_id, status, policy_version, evaluated_at, summary_json,
+             results_json)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(build_id) DO UPDATE SET
+            status=excluded.status,
+            policy_version=excluded.policy_version,
+            evaluated_at=excluded.evaluated_at,
+            summary_json=excluded.summary_json,
+            results_json=excluded.results_json
+        """,
+        (
+            build_id, "PASS" if passed else "FAIL", QUALITY_POLICY_VERSION,
+            evaluated_at,
+            json.dumps(quality_summary, sort_keys=True, separators=(",", ":")),
+            json.dumps(
+                [result.as_log_dict() for result in quality_results],
+                sort_keys=True, separators=(",", ":"),
+            ),
+        ),
+    )
+    conn.commit()
+    if not passed:
+        parts = []
+        if failures:
+            parts.append(
+                "quality failures="
+                + repr([(item["check_id"], item["dataset"]) for item in failures])
+            )
+        if incomplete:
+            parts.append(
+                "coverage not COMPLETE="
+                + repr([(item["dataset"], item["status"]) for item in incomplete])
+            )
+        raise SnapshotRejected("; ".join(parts))
+    return (
+        run_id, run_detail, validations, coverage_rows, quality_summary,
+        failures,
+        raw_manifests,
+    )
+
+
+def _atomic_json(path: Path, payload: dict[str, Any], *, mode: int) -> None:
+    fd, raw_path = tempfile.mkstemp(prefix="." + path.name + ".", dir=path.parent)
+    temp_path = Path(raw_path)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(
+                payload, handle, ensure_ascii=True, sort_keys=True,
+                separators=(",", ":"), allow_nan=False,
+            )
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(temp_path, mode)
+        os.replace(temp_path, path)
+    except Exception:
+        temp_path.unlink(missing_ok=True)
+        raise
+
+
+def _copy_sqlite(source: sqlite3.Connection, target_path: Path) -> None:
+    target = sqlite3.connect(str(target_path))
+    try:
+        source.backup(target)
+    finally:
+        target.close()
+
+
+def publish_ready_snapshot(
+    staging_db: str | Path,
+    snapshot_dir: str | Path,
+    *,
+    required_datasets: Iterable[str],
+) -> ReadySnapshot:
+    """Gate a staging DB and atomically publish a read-only READY copy.
+
+    The staging database remains write-capable but never becomes research
+    readable.  Only the content-addressed copy embeds ``snapshot_ready=1``;
+    it is chmod 0444 before the atomic rename into the READY directory.
+    """
+    staging_path = Path(staging_db).resolve()
+    if not staging_path.is_file():
+        raise FileNotFoundError(f"staging database does not exist: {staging_path}")
+    required = tuple(sorted(set(str(item) for item in required_datasets)))
+    if not required:
+        raise ValueError("required_datasets must not be empty")
+    policies = {policy.dataset_id: policy for policy in all_coverage_contracts()}
+    governed = {
+        dataset_id for dataset_id, policy in policies.items()
+        if policy.governance_tier == "governed"
+    }
+    required_set = set(required)
+    if not governed <= required_set or not required_set <= set(policies):
+        raise SnapshotRejected(
+            "READY publication must cover every governed dataset and only "
+            "contracted datasets: "
+            f"missing={sorted(governed - required_set)}, "
+            f"unknown={sorted(required_set - set(policies))}"
+        )
+    destination = Path(snapshot_dir).resolve()
+    destination.mkdir(parents=True, exist_ok=True)
+
+    conn = sqlite3.connect(str(staging_path))
+    conn.row_factory = sqlite3.Row
+    build_id = "build-" + uuid4().hex
+    created_at = datetime.now(timezone.utc).isoformat()
+    contract = f"jquants-premium-core/v{DATASET_CONTRACT_VERSION}"
+    coverage_policy_version = COVERAGE_POLICY_VERSION
+    quality_policy_version = QUALITY_POLICY_VERSION
+    published_ready: ReadySnapshot | None = None
+    try:
+        # Publication always starts from a non-readable staging generation.
+        conn.execute(
+            """
+            INSERT INTO local_snapshot_policy
+                (singleton, require_manifest, snapshot_ready, sync_started_at,
+                 last_error, publication_state, active_build_id,
+                 active_snapshot_id)
+            VALUES (1, 1, 0, ?, NULL, 'BUILDING', ?, NULL)
+            ON CONFLICT(singleton) DO UPDATE SET
+                require_manifest=1, snapshot_ready=0, last_error=NULL,
+                publication_state='BUILDING', active_build_id=excluded.active_build_id,
+                active_snapshot_id=NULL
+            """,
+            (created_at, build_id),
+        )
+        conn.execute(
+            """
+            INSERT INTO snapshot_publications
+                (build_id, state, staging_path, contract_version,
+                 coverage_policy_version, quality_policy_version, created_at)
+            VALUES (?, 'BUILDING', ?, ?, ?, ?, ?)
+            """,
+            (
+                build_id, str(staging_path), contract,
+                coverage_policy_version, quality_policy_version, created_at,
+            ),
+        )
+        conn.commit()
+        _transition_policy(conn, "SYNCED")
+        conn.execute(
+            "UPDATE snapshot_publications SET state='SYNCED' WHERE build_id=?",
+            (build_id,),
+        )
+        conn.commit()
+        _transition_policy(conn, "VALIDATING")
+        conn.execute(
+            "UPDATE snapshot_publications SET state='VALIDATING' WHERE build_id=?",
+            (build_id,),
+        )
+        conn.commit()
+
+        try:
+            (
+                run_id, run_detail, validations, coverage_rows,
+                quality_summary, quality_failures, raw_manifests,
+            ) = _evaluate_publication_gate(
+                conn, staging_path, build_id=build_id, required=required
+            )
+            watermarks = _watermarks_for(conn, required)
+        except Exception as exc:
+            reason = str(exc)[:4000]
+            conn.execute(
+                "UPDATE snapshot_publications SET state='REJECTED', "
+                "rejection_reason=? WHERE build_id=?",
+                (reason, build_id),
+            )
+            conn.commit()
+            _transition_policy(conn, "REJECTED", error=reason)
+            if isinstance(exc, SnapshotRejected):
+                raise
+            raise SnapshotRejected(reason) from exc
+
+        change = conn.execute(
+            "SELECT last_applied_change_seq FROM sync_change_state "
+            "WHERE feed='jquants_records'"
+        ).fetchone()
+        change_seq = int(change[0]) if change is not None else 0
+        committed_at = datetime.now(timezone.utc).isoformat()
+        manifest: dict[str, Any] = {
+            "format": RESEARCH_SNAPSHOT_MANIFEST_FORMAT,
+            "state": "READY",
+            "contract_version": contract,
+            "source_run": {
+                "id": run_id,
+                "started_at": run_detail.get("startedAt"),
+                "finished_at": run_detail.get("finishedAt"),
+            },
+            "change_seq": change_seq,
+            "coverage_policy_version": coverage_policy_version,
+            "quality_policy_version": quality_policy_version,
+            "required_datasets": list(required),
+            "dataset_watermarks": watermarks,
+            "coverage": [
+                {
+                    key: row[key]
+                    for key in (
+                        "dataset", "status", "history_target_start",
+                        "history_target_end_rule", "coverage_mode",
+                        "expected_frequency", "universe_rule",
+                        "governance_tier", "observed_start", "observed_end",
+                        "row_count",
+                    )
+                }
+                for row in coverage_rows
+            ],
+            "quality": {
+                "status": "PASS",
+                "summary": quality_summary,
+                "failures": quality_failures,
+            },
+            "raw_manifests": raw_manifests,
+            "validations": validations,
+            "committed_at": committed_at,
+        }
+        snapshot_id = _research_manifest_id(manifest)
+        manifest["snapshot_id"] = snapshot_id
+        stem = _artifact_stem(snapshot_id)
+        artifact_path = destination / f"{stem}.sqlite"
+        manifest_path = destination / f"{stem}.manifest.json"
+        manifest["artifact"] = artifact_path.name
+        manifest["manifest_digest"] = _research_manifest_digest(manifest)
+
+        fd, raw_temp = tempfile.mkstemp(
+            prefix=f".{stem}.", suffix=".sqlite.tmp", dir=destination
+        )
+        os.close(fd)
+        temp_db = Path(raw_temp)
+        try:
+            _copy_sqlite(conn, temp_db)
+            embedded = sqlite3.connect(str(temp_db))
+            embedded.row_factory = sqlite3.Row
+            try:
+                manifest_json = json.dumps(
+                    manifest, ensure_ascii=True, sort_keys=True,
+                    separators=(",", ":"), allow_nan=False,
+                )
+                embedded.execute(
+                    """
+                    INSERT OR REPLACE INTO local_snapshot_manifests
+                        (snapshot_id, format, committed_at, source_run_id,
+                         change_seq, manifest_json)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        snapshot_id, RESEARCH_SNAPSHOT_MANIFEST_FORMAT,
+                        committed_at, run_id, change_seq, manifest_json,
+                    ),
+                )
+                embedded.execute(
+                    "UPDATE local_snapshot_policy SET snapshot_ready=1, "
+                    "publication_state='READY', active_snapshot_id=?, "
+                    "last_error=NULL WHERE singleton=1",
+                    (snapshot_id,),
+                )
+                embedded.execute(
+                    "UPDATE snapshot_publications SET snapshot_id=?, state='READY', "
+                    "artifact_path=?, manifest_path=?, source_run_id=?, change_seq=?, "
+                    "committed_at=?, rejection_reason=NULL, manifest_json=? "
+                    "WHERE build_id=?",
+                    (
+                        snapshot_id, str(artifact_path), str(manifest_path),
+                        run_id, change_seq, committed_at, manifest_json, build_id,
+                    ),
+                )
+                embedded.commit()
+                integrity = embedded.execute("PRAGMA integrity_check").fetchone()[0]
+                if integrity != "ok":
+                    raise RuntimeError(f"snapshot integrity check failed: {integrity}")
+                embedded.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            finally:
+                embedded.close()
+            os.chmod(temp_db, 0o444)
+            if artifact_path.exists():
+                existing = describe_snapshot(destination, snapshot_id)
+                temp_db.unlink(missing_ok=True)
+                ready = existing
+                manifest = existing.manifest
+                manifest_path = existing.manifest_path
+                artifact_path = existing.db_path
+                committed_at = existing.committed_at
+            else:
+                os.replace(temp_db, artifact_path)
+                _atomic_json(manifest_path, manifest, mode=0o444)
+                ready = ReadySnapshot(
+                    snapshot_id, artifact_path, manifest_path, manifest
+                )
+            published_ready = ready
+            try:
+                _atomic_json(
+                    destination / "latest-ready.json",
+                    {
+                        "format": "research-snapshot-pointer/v1",
+                        "snapshot_id": snapshot_id,
+                        "manifest": manifest_path.name,
+                        "committed_at": committed_at,
+                    },
+                    mode=0o644,
+                )
+            except OSError:
+                # The mutable pointer is an optimization only. Discovery
+                # scans and verifies immutable manifests if pointer refresh
+                # fails after the artifact is already READY.
+                pass
+        except Exception:
+            temp_db.unlink(missing_ok=True)
+            raise
+
+        conn.execute(
+            "UPDATE snapshot_publications SET snapshot_id=?, state='READY', "
+            "artifact_path=?, manifest_path=?, source_run_id=?, change_seq=?, "
+            "committed_at=?, rejection_reason=NULL, manifest_json=? "
+            "WHERE build_id=?",
+            (
+                snapshot_id, str(artifact_path), str(manifest_path), run_id,
+                change_seq, committed_at,
+                json.dumps(manifest, sort_keys=True, separators=(",", ":")),
+                build_id,
+            ),
+        )
+        # Staging is intentionally not research-readable after publication.
+        conn.execute(
+            "UPDATE local_snapshot_policy SET snapshot_ready=0, "
+            "publication_state='READY', active_snapshot_id=?, last_error=NULL "
+            "WHERE singleton=1",
+            (snapshot_id,),
+        )
+        conn.commit()
+        return ready
+    except Exception as exc:
+        if published_ready is not None:
+            # The immutable artifact + sidecar are the publication authority.
+            # A later staging-ledger failure must not make a successfully
+            # published snapshot disappear or be reported as half-published.
+            return published_ready
+        try:
+            conn.rollback()
+            conn.execute(
+                "UPDATE snapshot_publications SET state='REJECTED', "
+                "rejection_reason=? WHERE build_id=? AND state!='READY'",
+                (str(exc)[:4000], build_id),
+            )
+            conn.execute(
+                "UPDATE local_snapshot_policy SET snapshot_ready=0, "
+                "publication_state='REJECTED', active_snapshot_id=NULL, "
+                "last_error=? WHERE singleton=1",
+                (str(exc)[:4000],),
+            )
+            conn.commit()
+        except sqlite3.Error:
+            conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def describe_snapshot(
+    snapshot_dir: str | Path, snapshot_id: str
+) -> ReadySnapshot:
+    """Verify a READY sidecar, immutable artifact, and embedded manifest."""
+    directory = Path(snapshot_dir).resolve()
+    stem = _artifact_stem(snapshot_id)
+    manifest_path = directory / f"{stem}.manifest.json"
+    if not manifest_path.is_file():
+        raise FileNotFoundError(f"snapshot manifest does not exist: {manifest_path}")
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"invalid snapshot manifest: {manifest_path}") from exc
+    if manifest.get("format") != RESEARCH_SNAPSHOT_MANIFEST_FORMAT:
+        raise RuntimeError("unsupported research snapshot manifest format")
+    if manifest.get("state") != "READY" or manifest.get("snapshot_id") != snapshot_id:
+        raise RuntimeError("snapshot manifest is not the requested READY snapshot")
+    if _research_manifest_id(manifest) != snapshot_id:
+        raise RuntimeError("research snapshot manifest checksum mismatch")
+    if manifest.get("manifest_digest") != _research_manifest_digest(manifest):
+        raise RuntimeError("research snapshot full-manifest checksum mismatch")
+    artifact_name = manifest.get("artifact")
+    if artifact_name != f"{stem}.sqlite":
+        raise RuntimeError("research snapshot artifact name mismatch")
+    artifact_path = directory / artifact_name
+    if not artifact_path.is_file():
+        raise FileNotFoundError(f"snapshot artifact does not exist: {artifact_path}")
+    mode = artifact_path.stat().st_mode
+    if mode & (stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH):
+        raise RuntimeError("READY snapshot artifact is writable")
+    if manifest_path.stat().st_mode & (stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH):
+        raise RuntimeError("READY snapshot manifest is writable")
+    if data_snapshot_id(artifact_path) != snapshot_id:
+        raise RuntimeError("embedded snapshot manifest does not match sidecar")
+    return ReadySnapshot(snapshot_id, artifact_path, manifest_path, manifest)
+
+
+def list_ready_snapshots(snapshot_dir: str | Path) -> list[ReadySnapshot]:
+    directory = Path(snapshot_dir).resolve()
+    if not directory.is_dir():
+        return []
+    snapshots: list[ReadySnapshot] = []
+    for path in directory.glob("sha256_*.manifest.json"):
+        token = path.name.removesuffix(".manifest.json").replace("_", ":", 1)
+        try:
+            snapshots.append(describe_snapshot(directory, token))
+        except (FileNotFoundError, RuntimeError, ValueError):
+            continue
+    return sorted(
+        snapshots, key=lambda item: (item.committed_at, item.snapshot_id),
+        reverse=True,
+    )
+
+
+def latest_ready_snapshot(snapshot_dir: str | Path) -> ReadySnapshot:
+    """Resolve the latest verified READY snapshot; never return a build."""
+    directory = Path(snapshot_dir).resolve()
+    # `latest-ready.json` is operationally convenient but not authoritative:
+    # scanning immutable verified manifests prevents a stale/tampered pointer
+    # from making an older artifact appear latest.
+    ready = list_ready_snapshots(directory)
+    if not ready:
+        raise FileNotFoundError(f"no READY research snapshot under {directory}")
+    return ready[0]
+
+
+def open_ready_snapshot(
+    snapshot_dir: str | Path, snapshot_id: str | None = None
+) -> sqlite3.Connection:
+    """Open only a verified READY artifact via immutable SQLite URI flags."""
+    ready = (
+        latest_ready_snapshot(snapshot_dir)
+        if snapshot_id is None
+        else describe_snapshot(snapshot_dir, snapshot_id)
+    )
+    uri = "file:" + quote(str(ready.db_path)) + "?mode=ro&immutable=1"
+    conn = sqlite3.connect(uri, uri=True)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def snapshot_quality_summary(
+    snapshot_dir: str | Path, snapshot_id: str | None = None
+) -> dict[str, Any]:
+    ready = (
+        latest_ready_snapshot(snapshot_dir)
+        if snapshot_id is None
+        else describe_snapshot(snapshot_dir, snapshot_id)
+    )
+    quality = ready.manifest.get("quality")
+    if not isinstance(quality, dict):
+        raise RuntimeError("READY snapshot has no quality summary")
+    return dict(quality)
+
+
+def snapshot_quality_failures(
+    snapshot_dir: str | Path, snapshot_id: str | None = None
+) -> list[dict[str, Any]]:
+    quality = snapshot_quality_summary(snapshot_dir, snapshot_id)
+    failures = quality.get("failures", [])
+    if not isinstance(failures, list):
+        raise RuntimeError("READY snapshot quality failures are malformed")
+    return [dict(item) for item in failures if isinstance(item, dict)]
 
 
 def _manifest_snapshot_state(
@@ -432,7 +1092,7 @@ def _manifest_snapshot_state(
             "local paper snapshot is not committed and validated: " + detail
         )
     row = conn.execute(
-        "SELECT snapshot_id, manifest_json FROM local_snapshot_manifests "
+        "SELECT snapshot_id, format, manifest_json FROM local_snapshot_manifests "
         "ORDER BY committed_at DESC, rowid DESC LIMIT 1"
     ).fetchone()
     if row is None:
@@ -441,8 +1101,16 @@ def _manifest_snapshot_state(
         manifest = json.loads(row["manifest_json"])
     except json.JSONDecodeError as exc:
         raise RuntimeError("latest local snapshot manifest is invalid JSON") from exc
-    if _canonical_digest(manifest) != row["snapshot_id"]:
+    if row["format"] == RESEARCH_SNAPSHOT_MANIFEST_FORMAT:
+        expected_id = _research_manifest_id(manifest)
+        if manifest.get("manifest_digest") != _research_manifest_digest(manifest):
+            raise RuntimeError("latest local snapshot full-manifest checksum mismatch")
+    else:
+        expected_id = _canonical_digest(manifest)
+    if expected_id != row["snapshot_id"]:
         raise RuntimeError("latest local snapshot manifest checksum mismatch")
+    if manifest.get("state", "READY") != "READY":
+        raise RuntimeError("latest local snapshot manifest is not READY")
     current_watermarks = _watermark_state(conn, tables)
     expected = manifest.get("dataset_watermarks")
     if current_watermarks != expected:
@@ -480,7 +1148,10 @@ def data_snapshot_id(db_path: str | Path) -> str:
         }
         manifest_state = _manifest_snapshot_state(conn, tables)
         if manifest_state is not None:
-            state = manifest_state
+            # A READY publication already has a content address. Returning it
+            # directly keeps paper/feature provenance identical to the
+            # artifact name and manifest snapshot_id.
+            return str(manifest_state["manifest_id"])
         else:
             watermarks = _watermark_state(conn, tables)
             state = {
@@ -503,8 +1174,20 @@ def data_snapshot_id(db_path: str | Path) -> str:
 __all__ = [
     "DATA_SNAPSHOT_FORMAT",
     "LOCAL_SNAPSHOT_MANIFEST_FORMAT",
+    "QUALITY_POLICY_VERSION",
+    "RESEARCH_SNAPSHOT_MANIFEST_FORMAT",
+    "SNAPSHOT_STATES",
+    "ReadySnapshot",
+    "SnapshotRejected",
     "begin_snapshot_sync",
     "commit_snapshot_manifest",
     "data_snapshot_id",
+    "describe_snapshot",
     "fail_snapshot_sync",
+    "latest_ready_snapshot",
+    "list_ready_snapshots",
+    "open_ready_snapshot",
+    "publish_ready_snapshot",
+    "snapshot_quality_failures",
+    "snapshot_quality_summary",
 ]

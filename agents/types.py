@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass, field
 from typing import Any, Mapping
 
@@ -63,14 +65,31 @@ class PortfolioDecision:
 
 
 @dataclass(frozen=True)
-class TradePlan:
+class AuthorizedPaperExecutionRequest:
+    """Capability-free authorization for the trusted Paper runtime.
+
+    This is data, not an executable order: it contains no broker, callable,
+    credential, database path, or transport handle.
+    """
+
     mode: str
+    authorization_id: str
     strategy_id: str
+    strategy_spec_hash: str
+    max_gross_weight: float
     instructions: tuple[str, ...]
 
     def __post_init__(self) -> None:
         if self.mode != "paper":
             raise ValueError("Phase 6 trader supports paper mode only")
+        if not self.authorization_id or not self.strategy_spec_hash:
+            raise ValueError("paper execution authorization requires immutable ids")
+        if not 0.0 < float(self.max_gross_weight) <= 1.0:
+            raise ValueError("max_gross_weight must be in (0, 1]")
+
+
+# Compatibility name for callers that only inspect the structured paper plan.
+TradePlan = AuthorizedPaperExecutionRequest
 
 
 @dataclass(frozen=True)
@@ -83,9 +102,9 @@ class RiskAudit:
     findings: tuple[str, ...] = ()
     metrics: Mapping[str, Any] = field(default_factory=dict)
 
-    def to_dict(self) -> dict[str, Any]:
+    def content_payload(self) -> dict[str, Any]:
+        """Return the immutable content covered by ``audit_id``."""
         return {
-            "audit_id": self.audit_id,
             "experiment_id": self.experiment_id,
             "run_id": self.run_id,
             "status": self.status,
@@ -93,3 +112,22 @@ class RiskAudit:
             "findings": list(self.findings),
             "metrics": dict(self.metrics),
         }
+
+    def expected_audit_id(self) -> str:
+        canonical = json.dumps(
+            self.content_payload(),
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+    def verify_content_hash(self) -> None:
+        expected = self.expected_audit_id()
+        if self.audit_id != expected:
+            raise ValueError(
+                "risk audit_id does not match the canonical audit content"
+            )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"audit_id": self.audit_id, **self.content_payload()}

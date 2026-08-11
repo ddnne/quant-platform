@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date, timedelta
 
 import pytest
@@ -63,6 +64,21 @@ def test_agents_spec_paper_risk_pipeline_runs_offline(tmp_path):
     assert JsonRiskStore(risk_root).load(output.risk_audit.audit_id)["run_id"] == (
         output.paper_result.run_id
     )
+    assert [artifact.type for artifact in output.artifacts] == [
+        "strategy_spec",
+        "portfolio_decision",
+        "authorized_paper_execution_request",
+        "paper_result",
+        "risk_audit",
+    ]
+    assert all(
+        artifact.data_snapshot_id
+        == output.paper_result.reproducibility["data_snapshot_id"]
+        for artifact in output.artifacts
+    )
+    assert output.artifacts[-1].parent_ids == (output.artifacts[-2].artifact_id,)
+    with pytest.raises(ValueError, match="canonical audit content"):
+        pipeline.risk_store.save(replace(output.risk_audit, status="tampered"))
 
 
 def test_pipeline_refuses_overlapping_paper_and_risk_write_targets(tmp_path):

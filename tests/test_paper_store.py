@@ -113,6 +113,16 @@ def test_parallel_identical_saves_share_one_index_record(tmp_path):
         ).fetchone()[0] == 1
 
 
+def test_rebuild_index_uses_immutable_json_as_source_of_truth(tmp_path):
+    result, _, _ = _fixture_run(tmp_path)
+    store = JsonPaperStore(root=tmp_path / "paper")
+    store.save(result)
+    store.index_path.unlink()
+
+    assert store.rebuild_index() == 1
+    assert store.load_by_experiment_id(result.experiment_id).to_dict() == result.to_dict()
+
+
 def test_loads_v1_result_with_legacy_run_identity(tmp_path):
     result, _, _ = _fixture_run(tmp_path)
     payload = result.to_dict()

@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from .types import ResearchMemo, ResearchRequest
+from .roles import AgentRole, ROLE_MATRIX
 
 
 class QuantAgent:
     role = "quant"
+    capabilities = ROLE_MATRIX[AgentRole.QUANT].capabilities
 
     def research(self, request: ResearchRequest) -> ResearchMemo:
         return ResearchMemo(

@@ -10,7 +10,8 @@ from agents.fundamental import FundamentalAgent
 from agents.macro import MacroAgent
 from agents.pm import PortfolioManagerAgent
 from agents.quant import QuantAgent
-from agents.roles import AgentRole, ROLE_MATRIX
+from agents.risk_agent import RiskAgent
+from agents.roles import AgentRole, Capability, ROLE_MATRIX
 from agents.strategist import StrategistAgent
 from agents.trader import TraderAgent
 from agents.types import ResearchMemo, ResearchRequest
@@ -21,6 +22,16 @@ def test_eight_roles_have_explicit_input_output_contracts():
     assert set(ROLE_MATRIX) == set(AgentRole)
     assert all(contract.input_type and contract.output_type for contract in ROLE_MATRIX.values())
     assert all(not contract.may_execute for contract in ROLE_MATRIX.values())
+    assert all(contract.capabilities for contract in ROLE_MATRIX.values())
+    assert {
+        capability for contract in ROLE_MATRIX.values()
+        for capability in contract.capabilities
+    } == set(Capability)
+    instances = (
+        MacroAgent(), FundamentalAgent(), QuantAgent(), ComposerAgent(),
+        StrategistAgent(), PortfolioManagerAgent(), TraderAgent(), RiskAgent(),
+    )
+    assert all(agent.capabilities for agent in instances)
 
 
 def test_roles_exchange_structured_messages_and_a_declarative_spec():
@@ -37,6 +48,8 @@ def test_roles_exchange_structured_messages_and_a_declarative_spec():
 
     assert decision.approved is True
     assert plan.mode == "paper"
+    assert plan.authorization_id.startswith("sha256:")
+    assert plan.strategy_spec_hash.startswith("sha256:")
     assert spec.to_dict()["rule"]["type"] == "top_k"
     proposals = [proposal for memo in memos for proposal in memo.feature_proposals]
     assert proposals and all(proposal.status == "candidate" for proposal in proposals)

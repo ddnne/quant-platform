@@ -79,6 +79,11 @@ class ExperimentIndex:
             for row in rows
         ]
 
+    def initialize(self) -> None:
+        """Create an empty index schema when there are no result records."""
+        with self._connection():
+            pass
+
     def upsert(self, entry: dict[str, Any]) -> None:
         """Index one immutable result under a writer-serializing transaction."""
         with self._connection() as conn:
@@ -134,6 +139,13 @@ class ExperimentIndex:
             except Exception:
                 conn.rollback()
                 raise
+
+    def checkpoint(self) -> None:
+        """Materialize WAL contents before atomic index publication."""
+        if not self.path.is_file():
+            return
+        with self._connection() as conn:
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
 
 
 __all__ = ["ExperimentIndex"]

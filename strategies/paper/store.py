@@ -149,6 +149,52 @@ class JsonPaperStore:
         )
         ExperimentIndex(self.index_path).upsert(entry)
 
+    def rebuild_index(self) -> int:
+        """Atomically rebuild the disposable index from immutable JSON.
+
+        All result files are parsed and validated before the current index is
+        replaced. A corrupt artifact therefore cannot destroy a usable index.
+        """
+        paths = sorted(self.root.glob("*/*/*.json"))
+        paths.extend(sorted(self.root.glob("*/*.json")))
+        records: list[tuple[PaperRunResult, Path, str]] = []
+        for path in paths:
+            result = self.load(path)
+            created_at = datetime.fromtimestamp(
+                path.stat().st_mtime, tz=timezone.utc
+            ).isoformat()
+            records.append((result, path, created_at))
+
+        self.root.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            dir=self.root,
+            prefix=".index-rebuild.",
+            suffix=".sqlite3",
+            delete=False,
+        ) as handle:
+            temporary = Path(handle.name)
+        temporary.unlink()
+        try:
+            rebuilt = ExperimentIndex(temporary)
+            rebuilt.initialize()
+            for result, path, created_at in records:
+                rebuilt.upsert(
+                    self._index_entry(result, path, created_at=created_at)
+                )
+            rebuilt.checkpoint()
+            os.replace(temporary, self.index_path)
+            # A replaced SQLite main file must not inherit sidecars belonging
+            # to the previous index generation.
+            for suffix in ("-wal", "-shm"):
+                self.index_path.with_name(self.index_path.name + suffix).unlink(
+                    missing_ok=True
+                )
+        finally:
+            temporary.unlink(missing_ok=True)
+            for suffix in ("-wal", "-shm"):
+                temporary.with_name(temporary.name + suffix).unlink(missing_ok=True)
+        return len(records)
+
     def load(
         self,
         path_or_run_id: str | Path,

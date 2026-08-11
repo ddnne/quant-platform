@@ -8,15 +8,17 @@
 4. Builds a :class:`FeatureContext` whose PIT getters are scoped to ``as_of``.
 5. Calls ``feature.compute(ctx)`` and augments the returned metadata.
 
-The compute function sees only the context; it has no access to ``db_path``,
-no connection, no wall-clock time. Facts enter only via the context's
-``pit.get_*`` shortcuts, which add ``as_of`` and ``db_path`` automatically.
+The compute function sees only the context; it has no ``db_path`` or input
+mapping attribute, no connection, and no wall-clock time. Facts and declared
+inputs enter only via scoped getters. The runtime keeps its database location
+inside a private reader closure.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Mapping
+from types import MappingProxyType
+from typing import Any, Callable, Mapping
 
 import pit
 from pit.query import resolve_db_path
@@ -35,37 +37,56 @@ class MissingInput(KeyError):
     """Raised when a required input is missing on a compute call."""
 
 
-@dataclass(frozen=True)
+_NO_DEFAULT = object()
+_RUNTIME_SCOPE_FIELDS = frozenset({"as_of", "db_path"})
+
+
+@dataclass(frozen=True, slots=True)
 class FeatureContext:
     """Read-only PIT-scoped context handed to a feature's ``compute``.
 
     The ``get_equity_bars_daily`` / ``get_equity_master`` /
-    ``get_market_calendar`` shortcuts already inject ``as_of`` and
-    ``db_path`` — the feature code simply reads. There is no handle to the
-    underlying SQLite DB, no HTTP client, and no wall-clock time.
+    ``get_market_calendar`` shortcuts already inject ``as_of`` and the
+    runtime-owned database scope. Feature inputs are available only through
+    :meth:`get_input`. There is no database-path attribute, connection
+    handle, HTTP client, or wall clock.
     """
 
     as_of: str
-    db_path: Any
-    inputs: Mapping[str, Any]
+    _input_values: Mapping[str, Any]
+    _pit_reader: Callable[[str, Mapping[str, Any]], Any]
+
+    def get_input(self, name: str, default: Any = _NO_DEFAULT) -> Any:
+        """Return one declared input without exposing the complete mapping."""
+        if name in self._input_values:
+            return self._input_values[name]
+        if default is not _NO_DEFAULT:
+            return default
+        raise KeyError(f"feature input not supplied: {name!r}")
+
+    def _read(self, resource: str, kwargs: Mapping[str, Any]):
+        reserved = sorted(_RUNTIME_SCOPE_FIELDS.intersection(kwargs))
+        if reserved:
+            raise TypeError(
+                f"FeatureContext owns runtime-scoped argument(s): {reserved}"
+            )
+        return self._pit_reader(resource, kwargs)
 
     def get_equity_bars_daily(self, **kwargs: Any):
-        """PIT daily bars — ``as_of`` and ``db_path`` injected."""
-        return pit.get_equity_bars_daily(as_of=self.as_of, db_path=self.db_path, **kwargs)
+        """PIT daily bars with the context's trusted scope injected."""
+        return self._read("equity_bars_daily", kwargs)
 
     def get_equity_master(self, **kwargs: Any):
-        """PIT equity master — ``as_of`` and ``db_path`` injected."""
-        return pit.get_equity_master(as_of=self.as_of, db_path=self.db_path, **kwargs)
+        """PIT equity master with the context's trusted scope injected."""
+        return self._read("equity_master", kwargs)
 
     def get_market_calendar(self, **kwargs: Any):
-        """PIT market calendar — ``as_of`` and ``db_path`` injected."""
-        return pit.get_market_calendar(as_of=self.as_of, db_path=self.db_path, **kwargs)
+        """PIT market calendar with the context's trusted scope injected."""
+        return self._read("market_calendar", kwargs)
 
     def get_jquants_records(self, dataset: str, **kwargs: Any):
-        """PIT generic catalog records — ``as_of`` and ``db_path`` injected."""
-        return pit.get_jquants_records(
-            dataset=dataset, as_of=self.as_of, db_path=self.db_path, **kwargs
-        )
+        """PIT generic catalog records with trusted scope injected."""
+        return self._read("jquants_records", {"dataset": dataset, **kwargs})
 
 
 def _require_as_of(as_of: Any) -> str:
@@ -126,7 +147,25 @@ def compute(
     _validate_inputs(feature, inputs)
 
     resolved_db = resolve_db_path(db_path)
-    ctx = FeatureContext(as_of=as_of_iso, db_path=resolved_db, inputs=inputs)
+
+    def _read_pit(resource: str, kwargs: Mapping[str, Any]):
+        readers = {
+            "equity_bars_daily": pit.get_equity_bars_daily,
+            "equity_master": pit.get_equity_master,
+            "market_calendar": pit.get_market_calendar,
+            "jquants_records": pit.get_jquants_records,
+        }
+        try:
+            reader = readers[resource]
+        except KeyError as exc:  # pragma: no cover - context methods are closed
+            raise RuntimeError(f"unknown FeatureContext resource: {resource!r}") from exc
+        return reader(as_of=as_of_iso, db_path=resolved_db, **dict(kwargs))
+
+    ctx = FeatureContext(
+        as_of=as_of_iso,
+        _input_values=MappingProxyType(dict(inputs)),
+        _pit_reader=_read_pit,
+    )
     out = feature.compute(ctx)
     if not isinstance(out, FeatureOutput):
         raise TypeError(

@@ -2,18 +2,43 @@
 
 from __future__ import annotations
 
-from .types import PortfolioDecision, TradePlan
+import hashlib
+import json
+
+from .types import AuthorizedPaperExecutionRequest, PortfolioDecision
+from .roles import AgentRole, ROLE_MATRIX
 
 
 class TraderAgent:
     role = "trader"
+    capabilities = ROLE_MATRIX[AgentRole.TRADER].capabilities
 
-    def prepare(self, decision: PortfolioDecision) -> TradePlan:
+    def prepare(self, decision: PortfolioDecision) -> AuthorizedPaperExecutionRequest:
         if not decision.approved:
             raise ValueError("trader refuses an unapproved portfolio decision")
-        return TradePlan(
+        spec_json = json.dumps(
+            decision.strategy_spec.to_dict(),
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        spec_hash = "sha256:" + hashlib.sha256(spec_json.encode("utf-8")).hexdigest()
+        authorization = {
+            "mode": "paper",
+            "strategy_spec_hash": spec_hash,
+            "max_gross_weight": decision.max_gross_weight,
+        }
+        authorization_id = "sha256:" + hashlib.sha256(
+            json.dumps(authorization, sort_keys=True, separators=(",", ":")).encode(
+                "utf-8"
+            )
+        ).hexdigest()
+        return AuthorizedPaperExecutionRequest(
             mode="paper",
+            authorization_id=authorization_id,
             strategy_id=decision.strategy_spec.strategy_id,
+            strategy_spec_hash=spec_hash,
+            max_gross_weight=decision.max_gross_weight,
             instructions=(
                 "interpret the reviewed StrategySpec",
                 "run through strategies.paper.run_paper",

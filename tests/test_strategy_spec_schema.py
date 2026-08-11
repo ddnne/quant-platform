@@ -6,6 +6,7 @@ import features
 import pytest
 
 from strategies.spec import (
+    FeatureRef,
     StrategySpec,
     StrategySpecError,
     ThresholdRule,
@@ -16,15 +17,18 @@ from strategies.spec import (
 
 def test_strategy_spec_round_trip_supports_only_whitelisted_rules():
     payload = {
-        "version": "strategy-spec/v1",
+        "version": "strategy-spec/v2",
         "strategy_id": "approved_momentum",
         "rebalance": "daily",
         "rule": {
             "type": "top_k",
-            "feature_id": "momentum_n",
+            "feature": {
+                "id": "momentum_n",
+                "version": "1.0.0",
+                "params": {"n": 5},
+            },
             "k": 3,
             "min_score": 0.0,
-            "feature_params": {"n": 5},
         },
         "rationale": "fixture",
     }
@@ -35,6 +39,7 @@ def test_strategy_spec_round_trip_supports_only_whitelisted_rules():
     assert spec.to_dict() == payload
     strategy = interpret_strategy_spec(spec)
     assert strategy.feature_ids == ("momentum_n",)
+    assert strategy.feature_versions == {"momentum_n": "1.0.0"}
     assert strategy.params == {"strategy_spec": payload}
 
 
@@ -53,7 +58,11 @@ def test_strategy_spec_round_trip_supports_only_whitelisted_rules():
                 "strategy_id": "bad",
                 "rule": {
                     "type": "threshold",
-                    "feature_id": "return_1d",
+                    "feature": {
+                        "id": "return_1d",
+                        "version": "1.0.0",
+                        "params": {},
+                    },
                     "threshold": 0,
                     "source": "pass",
                 },
@@ -65,9 +74,12 @@ def test_strategy_spec_round_trip_supports_only_whitelisted_rules():
                 "strategy_id": "bad",
                 "rule": {
                     "type": "threshold",
-                    "feature_id": "return_1d",
+                    "feature": {
+                        "id": "return_1d",
+                        "version": "1.0.0",
+                        "params": {"db_path": "facts.sqlite"},
+                    },
                     "threshold": 0,
-                    "feature_params": {"db_path": "facts.sqlite"},
                 },
             },
             "runtime-owned",
@@ -77,9 +89,12 @@ def test_strategy_spec_round_trip_supports_only_whitelisted_rules():
                 "strategy_id": "bad",
                 "rule": {
                     "type": "top_k",
-                    "feature_id": "momentum_n",
+                    "feature": {
+                        "id": "momentum_n",
+                        "version": "1.0.0",
+                        "params": {"unknown": 1},
+                    },
                     "k": 1,
-                    "feature_params": {"unknown": 1},
                 },
             },
             "unknown parameter",
@@ -89,9 +104,12 @@ def test_strategy_spec_round_trip_supports_only_whitelisted_rules():
                 "strategy_id": "bad",
                 "rule": {
                     "type": "top_k",
-                    "feature_id": "momentum_n",
+                    "feature": {
+                        "id": "momentum_n",
+                        "version": "1.0.0",
+                        "params": {"n": "five"},
+                    },
                     "k": 1,
-                    "feature_params": {"n": "five"},
                 },
             },
             "must have type int",
@@ -116,12 +134,91 @@ def test_strategy_spec_rejects_unapproved_feature_by_default():
     try:
         spec = StrategySpec(
             strategy_id="candidate_rejected",
-            rule=ThresholdRule(feature.id, 0.0),
+            rule=ThresholdRule(
+                FeatureRef(feature.id, str(feature.version)),
+                0.0,
+            ),
         )
         with pytest.raises(StrategySpecError, match="candidate"):
             interpret_strategy_spec(spec)
     finally:
         features.FEATURES_REGISTRY.pop((feature.id, str(feature.version)))
+
+
+def test_persisted_spec_requires_nested_exact_feature_ref():
+    with pytest.raises(StrategySpecError, match="unsupported StrategySpec version"):
+        StrategySpec.from_dict(
+            {
+                "version": "strategy-spec/v1",
+                "strategy_id": "legacy_unpinned",
+                "rule": {
+                    "type": "threshold",
+                    "feature_id": "return_1d",
+                    "threshold": 0,
+                },
+            }
+        )
+
+    with pytest.raises(StrategySpecError, match="missing field.*version"):
+        StrategySpec.from_dict(
+            {
+                "version": "strategy-spec/v2",
+                "strategy_id": "missing_pin",
+                "rule": {
+                    "type": "threshold",
+                    "feature": {"id": "return_1d", "params": {}},
+                    "threshold": 0,
+                },
+            }
+        )
+
+
+def test_interpreter_uses_pinned_version_even_when_newer_exists():
+    feature_id = "phase6_exact_pin_fixture"
+    v1 = features.FeatureDefinition(
+        id=feature_id,
+        version=features.FeatureVersion(1),
+        inputs=features.FeatureInput(required_kwargs=("code",)),
+        description="pinned",
+        compute=lambda _ctx: features.FeatureOutput(value=1.0),
+        intended_role="signal",
+        status="approved",
+    )
+    v2 = features.FeatureDefinition(
+        id=feature_id,
+        version=features.FeatureVersion(2),
+        inputs=features.FeatureInput(required_kwargs=("code",)),
+        description="newer",
+        compute=lambda _ctx: features.FeatureOutput(value=2.0),
+        intended_role="signal",
+        status="approved",
+    )
+    features.register(v1)
+    features.register(v2)
+    calls: list[tuple[str, str | None]] = []
+
+    class Context:
+        universe = ("1332",)
+        positions = {}
+
+        def feature(self, feature_id, *, version=None, **_inputs):
+            calls.append((feature_id, version))
+            return features.FeatureOutput(value=1.0)
+
+    try:
+        strategy = interpret_strategy_spec(
+            StrategySpec(
+                strategy_id="pinned",
+                rule=ThresholdRule(FeatureRef(feature_id, "1.0.0"), 0.0),
+            )
+        )
+        strategy.on_bar(Context())
+        assert calls == [(feature_id, "1.0.0")]
+        assert strategy.feature_versions == {feature_id: "1.0.0"}
+        assert features.get(feature_id).version == features.FeatureVersion(2)
+    finally:
+        features.FEATURES_REGISTRY.pop((feature_id, "1.0.0"), None)
+        features.FEATURES_REGISTRY.pop((feature_id, "2.0.0"), None)
 
 
 def test_strategy_spec_source_contains_no_dynamic_code_execution():

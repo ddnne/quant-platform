@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from .types import FeatureProposal, ResearchMemo, ResearchRequest
+from .roles import AgentRole, ROLE_MATRIX
 
 
 class FundamentalAgent:
     role = "fundamental"
+    capabilities = ROLE_MATRIX[AgentRole.FUNDAMENTAL].capabilities
 
     def research(self, request: ResearchRequest) -> ResearchMemo:
         return ResearchMemo(

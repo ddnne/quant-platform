@@ -23,7 +23,10 @@ These mirror the **core** engine boundary. They are statically enforced by
 
 * **Facts enter only via PIT.** Feature modules import :mod:`pit` and read
   through the ``FeatureContext`` PIT-scoped shortcuts. No ``sqlite3``,
-  no :mod:`storage`, no HTTP client. The context exposes no DB handle.
+  no :mod:`storage`, no HTTP client. The context publicly exposes only
+  ``as_of`` and scoped getters: it has neither a ``db_path`` attribute nor a
+  raw input mapping. Definitions retrieve one declared input at a time with
+  ``ctx.get_input(...)``; the database scope remains in a runtime closure.
 * **``as_of`` is required.** Every compute call passes an explicit
   ``as_of``; the runtime normalizes it via PIT's canonicalizer. There is no
   default — omitting it raises :class:`~features.runtime.AsOfRequired`.

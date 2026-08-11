@@ -4,15 +4,18 @@
 
 ## Phase 1 で使用
 
-- `JQUANTS_API_KEY` — J-Quants API V2（ヘッダ `x-api-key`）。**直接取得時のみ必須**。Cloudflare 秘匿プロキシ経由（推奨）なら local には不要。未設定かつプロキシ未設定時は skip。
+- `JQUANTS_API_KEY` — Cloudflare Worker のみ。local 直接利用は `UNSAFE_DEV_DIRECT_JQUANTS=1` を明示した開発時だけ。
+- `JQUANTS_PROXY_TOKEN` — allowlist 済み upstream GET 専用。
+- `INGESTION_RUN_TOKEN` — manual ingest / migration rebuild 専用。
+- `DATA_EXPORT_TOKEN` — structured export 専用。
 - `INGESTION_RUNTIME` — `local`（既定）/ `cloudflare`。CLI `--runtime` で上書き。
 
 ### J-Quants 秘匿プロキシ（推奨）
 
 J-Quants 鍵は Cloudflare Worker `quant-platform-ingestion-secrets` のみが保持。local はプロキシ経由で取得するため、以下のいずれかでプロキシ座標（URL + 共有トークン）を設定（`ingestion/common/secrets.py` が解決）:
 
-1. 環境変数 `INGESTION_PROXY_URL` / `INGESTION_PROXY_TOKEN`
-2. ファイル `~/.config/quant-platform/ingestion_proxy_url` / `ingestion_proxy_token`（1 行目）
+1. 環境変数 `JQUANTS_PROXY_URL` / `JQUANTS_PROXY_TOKEN`
+2. ファイル `~/.config/quant-platform/jquants_proxy_url` / `jquants_proxy_token`（1 行目）
 
 両方設定時のみ有効。片方のみなら `None`（未認証プロキシは不使用）。`--no-jquants-proxy` で直接取得に強制。トークンは鍵扱い（ログ/コミット禁止）。
 

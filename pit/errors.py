@@ -43,3 +43,7 @@ class DatabaseNotFound(PitError):
     A missing DB is a setup error (run ingestion first), not an empty result —
     returning ``[]`` here would silently masquerade as "no data as of then".
     """
+
+
+class SnapshotNotReady(PitError):
+    """Raised when a managed database is not a committed READY generation."""
