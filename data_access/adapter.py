@@ -6,9 +6,6 @@ paths, R2 listing, ingestion, approval, publication, or deletion.
 
 from __future__ import annotations
 
-import base64
-import hashlib
-import json
 from dataclasses import asdict, dataclass, fields
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -137,50 +134,6 @@ class QuantDataAccess:
             )
         return lower.isoformat(), upper.isoformat()
 
-    @staticmethod
-    def _request_hash(payload: Mapping[str, Any]) -> str:
-        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
-        return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
-
-    def _page(
-        self,
-        rows: list[dict[str, Any]],
-        *,
-        request: Mapping[str, Any],
-        page_size: int | None,
-        page_token: str | None,
-    ) -> dict[str, Any]:
-        size = self.config.default_page_size if page_size is None else int(page_size)
-        if not 1 <= size <= self.config.max_rows:
-            raise ValueError(f"page_size must be between 1 and {self.config.max_rows}")
-        request_hash = self._request_hash({**request, "page_size": size})
-        offset = 0
-        if page_token:
-            try:
-                decoded = json.loads(
-                    base64.urlsafe_b64decode(page_token.encode("ascii")).decode("utf-8")
-                )
-                offset = int(decoded["offset"])
-                if decoded["request_hash"] != request_hash or offset < 0:
-                    raise ValueError
-            except Exception as exc:
-                raise ValueError("invalid or mismatched page_token") from exc
-        page = rows[offset : offset + size]
-        next_offset = offset + len(page)
-        next_token = None
-        if next_offset < len(rows):
-            token = {"offset": next_offset, "request_hash": request_hash}
-            next_token = base64.urlsafe_b64encode(
-                json.dumps(token, separators=(",", ":")).encode("utf-8")
-            ).decode("ascii")
-        quota = self._quota.charge(len(page))
-        return {
-            "rows": page,
-            "returned": len(page),
-            "next_page_token": next_token,
-            "quota": quota,
-        }
-
     def list_datasets(self) -> dict[str, Any]:
         return {
             "datasets": [self.describe_dataset(item) for item in sorted(self._datasets)]
@@ -294,6 +247,9 @@ class QuantDataAccess:
         as_of_iso = self._require_as_of(as_of)
         start_day, end_day = self._date_window(as_of_iso, start, end)
         snapshot = self._snapshot(snapshot_id)
+        size = self.config.default_page_size if page_size is None else int(page_size)
+        if not 1 <= size <= self.config.max_rows:
+            raise ValueError(f"page_size must be between 1 and {self.config.max_rows}")
         result = pit.get_jquants_records(
             as_of=as_of_iso,
             dataset=dataset,
@@ -301,6 +257,9 @@ class QuantDataAccess:
             from_event=start_day,
             to_event=end_day + "T23:59:59+09:00",
             db_path=snapshot.db_path,
+            page_size=size,
+            page_token=page_token,
+            snapshot_id=snapshot.snapshot_id,
         )
         request = {
             "snapshot_id": snapshot.snapshot_id,
@@ -310,13 +269,14 @@ class QuantDataAccess:
             "start": start_day,
             "end": end_day,
         }
-        page = self._page(
-            result.rows,
-            request=request,
-            page_size=page_size,
-            page_token=page_token,
-        )
-        return {**request, **page}
+        quota = self._quota.charge(len(result.rows))
+        return {
+            **request,
+            "rows": result.rows,
+            "returned": len(result.rows),
+            "next_page_token": result.metadata.get("next_page_token"),
+            "quota": quota,
+        }
 
     def get_series(
         self,

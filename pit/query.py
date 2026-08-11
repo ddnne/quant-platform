@@ -163,6 +163,8 @@ def run_query(
     extra_where: Optional[str] = None,
     params: Optional[list[Any]] = None,
     order_by: Optional[str] = None,
+    keyset_after: Optional[tuple[tuple[str, ...], tuple[Any, ...]]] = None,
+    limit: Optional[int] = None,
 ) -> list[dict[str, Any]]:
     """Run a PIT-gated ``SELECT *`` and return decoded rows.
 
@@ -170,10 +172,13 @@ def run_query(
     applied with ``as_of`` as the first bound parameter; ``extra_where`` /
     ``params`` (optional, additive) extend it — they can never replace it.
 
-    ``table`` and ``order_by`` are internal trusted identifiers (hard-coded in
-    :mod:`pit.api`), never user input, so they are interpolated directly. All
-    user-controlled values (``as_of``, codes, dates, dataset) are bound as
-    parameters.
+    ``table``, ``order_by``, and the optional keyset column names are internal
+    trusted identifiers (hard-coded in :mod:`pit.api`), never user input, so
+    they are interpolated directly. All user-controlled values (``as_of``,
+    codes, dates, dataset, and cursor keys) are bound as parameters. When
+    supplied, ``limit`` is applied in SQL; callers can request one extra row
+    to determine whether another keyset page exists without materializing the
+    complete result set.
 
     The connection is opened read-only and closed in a ``finally`` so a query
     error never leaks a writer-capable handle.
@@ -184,6 +189,21 @@ def run_query(
         where.append(f"({extra_where})")
     if params:
         bound.extend(params)
+    keyset_sql: str | None = None
+    keyset_bound: list[Any] = []
+    if keyset_after is not None:
+        columns, values = keyset_after
+        if not columns or len(columns) != len(values):
+            raise ValueError("keyset columns and values must have equal length")
+        branches: list[str] = []
+        for index, column in enumerate(columns):
+            comparisons = [f"{prior} = ?" for prior in columns[:index]]
+            comparisons.append(f"{column} > ?")
+            branches.append("(" + " AND ".join(comparisons) + ")")
+            keyset_bound.extend(values[: index + 1])
+        keyset_sql = "(" + " OR ".join(branches) + ")"
+    if limit is not None and (not isinstance(limit, int) or limit < 1):
+        raise ValueError("limit must be a positive integer")
     conn = connect_readonly(db_path)
     try:
         revision_table = REVISION_TABLES.get(table)
@@ -215,8 +235,14 @@ def run_query(
             # introduced. Opening them once through SqliteStore installs the
             # history schema for all subsequent reads.
             sql = f"SELECT * FROM {table} WHERE " + " AND ".join(where)
+        if keyset_sql:
+            sql += f" AND {keyset_sql}"
+            bound.extend(keyset_bound)
         if order_by:
             sql += f" ORDER BY {order_by}"
+        if limit is not None:
+            sql += " LIMIT ?"
+            bound.append(limit)
         cur = conn.execute(sql, bound)
         return [_decode_row(r) for r in cur.fetchall()]
     finally:

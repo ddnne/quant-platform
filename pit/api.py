@@ -25,7 +25,10 @@ Tables (see :mod:`storage.schema`):
 
 from __future__ import annotations
 
-from typing import Any
+import base64
+import hashlib
+import json
+from typing import Any, Mapping
 
 from ingestion.common.timeutil import parse_date_str, parse_dt, to_iso
 from ingestion.jquants.normalize import (
@@ -61,6 +64,10 @@ _CATALOG_CODE_SQL = """COALESCE(
          THEN CAST(json_extract(raw_payload, '$.Code') AS TEXT) END
 )"""
 
+_PAGE_CURSOR_VERSION = 1
+_MAX_PAGE_SIZE = 1_000
+_JQUANTS_PAGE_ORDER = ("event_time", "natural_key", "source")
+
 
 def _result(
     rows: list[dict[str, Any]],
@@ -69,6 +76,7 @@ def _result(
     table: str,
     source: str | None = None,
     dataset: str | None = None,
+    extra_metadata: Mapping[str, Any] | None = None,
 ) -> PitResult:
     """Build a :class:`PitResult` with standard provenance metadata."""
     md: dict[str, Any] = {
@@ -81,7 +89,63 @@ def _result(
         md["source"] = source
     if dataset is not None:
         md["dataset"] = dataset
+    if extra_metadata:
+        md.update(extra_metadata)
     return PitResult(rows=rows, metadata=md)
+
+
+def _page_query_hash(payload: Mapping[str, Any]) -> str:
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _encode_page_token(
+    *,
+    snapshot_id: str | None,
+    query_hash: str,
+    last_row: Mapping[str, Any],
+) -> str:
+    payload = {
+        "version": _PAGE_CURSOR_VERSION,
+        "snapshot_id": snapshot_id,
+        "query_hash": query_hash,
+        "last_event_time": last_row["event_time"],
+        "last_natural_key": last_row["natural_key"],
+        "last_source": last_row["source"],
+    }
+    return base64.urlsafe_b64encode(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).decode("ascii")
+
+
+def _decode_page_token(
+    token: str,
+    *,
+    snapshot_id: str | None,
+    query_hash: str,
+) -> tuple[str, str, str]:
+    try:
+        payload = json.loads(
+            base64.urlsafe_b64decode(token.encode("ascii")).decode("utf-8")
+        )
+        if not isinstance(payload, dict):
+            raise ValueError
+        if payload.get("version") != _PAGE_CURSOR_VERSION:
+            raise ValueError
+        if payload.get("snapshot_id") != snapshot_id:
+            raise ValueError
+        if payload.get("query_hash") != query_hash:
+            raise ValueError
+        values = (
+            payload["last_event_time"],
+            payload["last_natural_key"],
+            payload["last_source"],
+        )
+        if not all(isinstance(value, str) for value in values):
+            raise ValueError
+        return values
+    except Exception as exc:
+        raise ValueError("invalid or mismatched page_token") from exc
 
 
 def _date_bound(value: Any) -> str:
@@ -387,6 +451,9 @@ def get_jquants_records(
     *,
     natural_key: str | None = None,
     db_path: Any = None,
+    page_size: int | None = None,
+    page_token: str | None = None,
+    snapshot_id: str | None = None,
 ) -> PitResult:
     """Point-in-time generic J-Quants records (``jquants_records``).
 
@@ -402,7 +469,12 @@ def get_jquants_records(
     * ``from_event`` / ``to_event``: additive bounds on ``event_time``
       (canonical JST ISO; flexible inputs accepted and normalized).
 
-    Ordered by ``event_time, natural_key``.
+    Ordered by the stable keyset ``event_time, natural_key, source``. Passing
+    ``page_size`` makes pagination execute in SQL with ``LIMIT page_size+1``;
+    the returned ``metadata.next_page_token`` is bound to the complete query
+    and, when supplied, the immutable ``snapshot_id``. Omitting pagination
+    preserves the original unbounded PIT API behavior for local research
+    callers.
     """
     as_of_iso = normalize_as_of(as_of)
     if dataset is None or dataset is _NOT_GIVEN or (
@@ -413,30 +485,94 @@ def get_jquants_records(
             "jquants_records table is partitioned by dataset). See "
             "ingestion.jquants.catalog.DATASETS for valid ids."
         )
+    dataset_value = str(dataset)
     clauses: list[str] = ["dataset = ?"]
-    params: list[Any] = [dataset]
+    params: list[Any] = [dataset_value]
     if natural_key is not None:
         clauses.append("natural_key = ?")
         params.append(natural_key)
     if code is not None:
         clauses.append(f"{_CATALOG_CODE_SQL} = ?")
         params.append(code)
+    from_event_iso: str | None = None
+    to_event_iso: str | None = None
     if from_event is not None:
+        from_event_iso = _event_time_bound(from_event)
         clauses.append("event_time >= ?")
-        params.append(_event_time_bound(from_event))
+        params.append(from_event_iso)
     if to_event is not None:
+        to_event_iso = _event_time_bound(to_event)
         clauses.append("event_time <= ?")
-        params.append(_event_time_bound(to_event))
+        params.append(to_event_iso)
+
+    size: int | None = None
+    query_hash: str | None = None
+    keyset_after: tuple[tuple[str, ...], tuple[Any, ...]] | None = None
+    sql_limit: int | None = None
+    if page_size is None:
+        if page_token is not None:
+            raise ValueError("page_size is required when page_token is supplied")
+    else:
+        try:
+            size = int(page_size)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"page_size must be between 1 and {_MAX_PAGE_SIZE}"
+            ) from exc
+        if not 1 <= size <= _MAX_PAGE_SIZE:
+            raise ValueError(f"page_size must be between 1 and {_MAX_PAGE_SIZE}")
+        query_hash = _page_query_hash({
+            "cursor_version": _PAGE_CURSOR_VERSION,
+            "snapshot_id": snapshot_id,
+            "as_of": as_of_iso,
+            "dataset": dataset_value,
+            "code": code,
+            "natural_key": natural_key,
+            "from_event": from_event_iso,
+            "to_event": to_event_iso,
+            "page_size": size,
+        })
+        if page_token is not None:
+            last_keys = _decode_page_token(
+                page_token,
+                snapshot_id=snapshot_id,
+                query_hash=query_hash,
+            )
+            keyset_after = (_JQUANTS_PAGE_ORDER, last_keys)
+        sql_limit = size + 1
     rows = run_query(
         db_path,
         as_of=as_of_iso,
         table="jquants_records",
         extra_where=" AND ".join(clauses),
         params=params,
-        order_by="event_time, natural_key",
+        order_by=", ".join(_JQUANTS_PAGE_ORDER),
+        keyset_after=keyset_after,
+        limit=sql_limit,
     )
+    page_metadata: dict[str, Any] | None = None
+    if size is not None:
+        has_more = len(rows) > size
+        rows = rows[:size]
+        next_page_token = None
+        if has_more and rows:
+            assert query_hash is not None
+            next_page_token = _encode_page_token(
+                snapshot_id=snapshot_id,
+                query_hash=query_hash,
+                last_row=rows[-1],
+            )
+        page_metadata = {
+            "page_size": size,
+            "next_page_token": next_page_token,
+        }
     return _result(
-        rows, as_of=as_of_iso, table="jquants_records", source="jquants", dataset=dataset
+        rows,
+        as_of=as_of_iso,
+        table="jquants_records",
+        source="jquants",
+        dataset=dataset_value,
+        extra_metadata=page_metadata,
     )
 
 
