@@ -76,10 +76,18 @@ const coverageRows = coverageDocument.datasets as Record<
 >;
 if (
   coverageDocument.schema_version !== 2 ||
-  coverageDocument.policy_version !== "collection-coverage/v2" ||
-  Object.keys(coverageRows).length !== rawContracts.length
+  coverageDocument.policy_version !== "collection-coverage/v2"
 ) {
   throw new Error("invalid collection Coverage V2 contract document");
+}
+// Coverage catalog may include JSDA + all governed sets (26); Premium core is 23.
+// Require every Premium dataset has a coverage row rather than equal counts.
+for (const contract of rawContracts) {
+  if (!coverageRows[contract.dataset_id]) {
+    throw new Error(
+      `missing Coverage V2 row for Premium dataset ${contract.dataset_id}`,
+    );
+  }
 }
 
 export const PREMIUM_CORE_DATASETS: DatasetSpec[] = rawContracts.map((contract) => ({
