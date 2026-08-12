@@ -150,6 +150,30 @@ packages/
 
 歴史的ドキュメントにトップレベル `ingestion/` 等の記述が残っていても、実装の正本は上記 `packages/*` です。
 
+## LLM 向けナビゲーション地図
+
+エージェント／LLM がリポジトリを編集するときの **入口** です（Mass / READY / Phase7 は **NO-GO / OFF**）。
+
+| 順番 | 読むもの | 理由 |
+|------|----------|------|
+| 1 | この README | 製品オリエンテーション + `packages/*` 地図 |
+| 2 | [docs/architecture/llm_nav_map.md](docs/architecture/llm_nav_map.md) | タスク別ルーティング・禁止事項・import 方針 |
+| 3 | [docs/phase62_residual_status.md](docs/phase62_residual_status.md) | **live residual 唯一の SoT**（COMPLETE / Mass NO-GO） |
+| 4 | [docs/architecture.md](docs/architecture.md) | PIT sole read / Coverage V2 / MCP 境界 |
+| 5 | タスク 1 本の domain doc | `pit_api` / `core_engine` / `agents` 等（nav map 参照） |
+
+**Hard rules（要約）:**
+
+- residual 以外の `phase62*_status` / `final_report` は **historical**（バナー付き）。GO 判定に使わない。
+- import 名は **leaf のまま**（`import pit`）。`quant_platform.*`（Batch Z）は **DEFER**。
+- `platform/workers/**` と `data/**` は **移動禁止**。
+- fact は `pit.get_*` のみ。市場 HTTP は `ingestion` のみ。
+- 詳細な plane 依存 allow-list と例外（`data_access` / `paper_runtime` 等）は ADR:
+  [docs/architecture/adr_llm_friendly_refactor.md](docs/architecture/adr_llm_friendly_refactor.md)
+  （**Accepted (Grok 2026-08-12)**）。
+
+静的ガード: `tests/test_plane_import_boundaries.py`（＋既存 `test_*_boundary*.py`）。
+
 ## 開発言語・ツール
 
 - **Python 3.11+**（`pyproject.toml` で `requires-python = ">=3.11"`）

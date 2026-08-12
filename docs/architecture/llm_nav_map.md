@@ -1,9 +1,9 @@
 # LLM / agent navigation map
 
-**Status:** Draft (Track B0) — skeleton for README entry after Grok review of the ADR.  
-**Paired ADR:** [`adr_llm_friendly_refactor.md`](./adr_llm_friendly_refactor.md) (**Proposed**).  
+**Status:** **Live** (Track B1 — productionized in README).  
+**Paired ADR:** [`adr_llm_friendly_refactor.md`](./adr_llm_friendly_refactor.md) (**Accepted (Grok 2026-08-12)**).  
 **Live residual SoT:** [`../phase62_residual_status.md`](../phase62_residual_status.md)  
-**Layout SoT:** [`repo_layout_migration.md`](./repo_layout_migration.md) (implemented)
+**Layout SoT:** [`repo_layout_migration.md`](./repo_layout_migration.md) (**DONE** Batches 0–E; Batch Z DEFER)
 
 > **Mass Autonomous Research / production READY / Phase 7 switch: NO-GO · OFF.**  
 > Do not upgrade those statuses from this map. Only residual + dated `docs/proof/*` may record live evidence.
@@ -163,7 +163,7 @@ Full policy: ADR §5.2.
 | `docs/architecture.md` | **current architecture hub** |
 | `docs/architecture/repo_layout_migration.md` | **current layout SoT** |
 | `docs/architecture/phase7_fail_closed.md` | **current** (Phase 7 OFF) |
-| `docs/architecture/adr_llm_friendly_refactor.md` | **proposed ADR** |
+| `docs/architecture/adr_llm_friendly_refactor.md` | **Accepted ADR (Grok 2026-08-12)** |
 | `docs/phase61_production_runbook.md` | runbook |
 | `docs/phase62_production_runbook.md` | runbook |
 | `docs/phase62_cf_edge_cron.md` | runbook / design note |
@@ -179,7 +179,7 @@ Full policy: ADR §5.2.
 | `docs/proof/*` | dated evidence |
 | `docs/operations/*` | ops runbooks |
 
-B1-a will stamp historical files with an explicit banner pointing here + residual.
+Historical phase status / final_report / checklist files carry a **Historical snapshot** banner → residual SoT.
 
 ---
 
@@ -195,6 +195,7 @@ python -m pytest \
   tests/test_core_data_boundary.py \
   tests/test_features_data_boundary.py \
   tests/test_strategies_static_boundaries.py \
+  tests/test_plane_import_boundaries.py \
   tests/test_phase7_gateway.py \
   tests/test_ops_projection_publish_guard.py \
   -q
@@ -241,20 +242,20 @@ Shared ROOT bootstrap unification is **B1-e** (ADR); until then scripts use loca
 
 ---
 
-## 11. B1 batch pointer (implementation later)
+## 11. B1 batch pointer
 
-| Batch | Theme | Code? |
-|-------|-------|-------|
-| **B0** | This map + ADR | docs only (**now**) |
-| B1-a | Docs hub, historical stamps, README link | docs |
-| B1-b | Plane READMEs, public API, boundary tests | packages + tests |
-| B1-c | Dead code / empty dirs | minimal |
-| B1-d | Test tiers / matrix navigation | tests |
-| B1-e | Script bootstrap, `qp_paths` stragglers | scripts + packages |
-| B1-f | Optional archive move / script regroup | optional |
-| Z | `quant_platform.*` namespace | **out of B1** |
+| Batch | Theme | Status |
+|-------|-------|--------|
+| **B0** | This map + ADR design | **DONE** |
+| **B1-a** | Docs hub, historical stamps, README link | **DONE** (this productionization) |
+| **B1-b** | Plane READMEs, public API notes, boundary tests | **DONE** (with B1-a land) |
+| B1-c | Dead code / empty dirs | pending |
+| B1-d | Test tiers / matrix navigation | pending |
+| B1-e | Script bootstrap, `qp_paths` stragglers | pending |
+| B1-f | Optional archive move / script regroup | optional / last |
+| Z | `quant_platform.*` namespace | **DEFER** (out of B1) |
 
-Do **not** start B1 until ADR status is **Accepted** by Grok review.
+ADR is **Accepted (Grok 2026-08-12)**. Mass / READY / Phase7 remain **NO-GO / OFF**.
 
 ---
 

@@ -2,6 +2,44 @@
 
 Contracts → ingest → store → PIT read → ops meta.
 
-- `data_contracts`, `ingestion`, `storage`, `pit`, `data_access`, `ops`
+## Leaf packages (import names = leaf; **not** `data_plane.*`)
 
-Import names stay top-level (`import ingestion`, not `data_plane.ingestion`).
+| Import | Role |
+|--------|------|
+| `data_contracts` | JSON contracts, coverage identity, governed sets (CF-adjacent SoT) |
+| `ingestion` | **Only** external market network plane (J-Quants / JSDA) |
+| `storage` | Structured write, receipts, coverage ledger |
+| `pit` | **Sole** structured fact read path (`as_of` required) |
+| `data_access` | Ops/research read façade (shared adapter; may bridge to features/paper_runtime) |
+| `ops` | Backfill planner, projection meta helpers |
+
+## Allowed deps (plane)
+
+- Within `data_plane` leaves as documented in ADR §5.1
+- `storage` / `cf_platform` helpers (edge) for coverage measurement reuse
+- **Exception:** `data_access` → `features`, `paper_runtime` (intentional read-domain bridge)
+
+## Forbidden
+
+- Import `product.*` (`agents`, `gateway`, `selection`, …)
+- `pit` / `ingestion` must not import `core` / `features` / `strategies`
+- Market HTTP outside `ingestion`
+- Fabricating COMPLETE or arming Mass/READY
+
+## Public entrypoints (prefer)
+
+| Package | Prefer |
+|---------|--------|
+| `pit` | `get_equity_bars_daily`, `get_equity_master`, `get_jquants_records`, `get_*` |
+| `storage` | coverage ledger, receipt authority, schema/store writers |
+| `ingestion` | `pipeline`, `jquants.catalog`, clients (root is namespace-light) |
+| `data_contracts` | `loader` / `coverage` / `identity` + JSON package data |
+| `data_access` | `QuantDataAccess`, ops/research read services |
+| `ops` | `backfill_planner`, `projection_meta` |
+
+## Policy
+
+- **Import stability (B1):** leaf top-level names; Batch Z (`quant_platform.*`) **DEFER**
+- Static guard: `tests/test_plane_import_boundaries.py`
+- Live residual: `docs/phase62_residual_status.md` (Mass/READY/Phase7 **NO-GO**)
+- Details: `docs/architecture/adr_llm_friendly_refactor.md`, `docs/architecture/llm_nav_map.md`

@@ -1,3 +1,7 @@
+> **Historical snapshot** — not current residual SoT.
+> Current residual: [phase62_residual_status.md](phase62_residual_status.md).
+> Mass / READY / Phase7: **NO-GO / OFF** unless residual says otherwise.
+
 # Phase 6.2.2 Operational Closure + Phase 7 Foundation — Status
 
 **Developer:** Grok (GLM OAuth expired — not usable)  

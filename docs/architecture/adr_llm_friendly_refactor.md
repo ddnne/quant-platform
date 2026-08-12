@@ -2,10 +2,11 @@
 
 | Field | Value |
 |-------|--------|
-| **Status** | **Proposed** (awaiting Grok review) |
-| **Track** | **B0** (design only — **no** B1 implementation in this commit) |
+| **Status** | **Accepted (Grok 2026-08-12)** |
+| **Track** | **B1** (docs hub + plane import guards; Batch Z still **DEFER**) |
 | **Date** | 2026-08-12 |
 | **Tip at authoring** | `666510d` (layout migration Batches 0–E landed; import names unchanged) |
+| **Accepted after** | `8638936` (Track A dry-run landed; residual SoT live-synced in B1) |
 | **Supersedes** | Nothing (extends `repo_layout_migration.md` success criteria) |
 | **Related** | [`repo_layout_migration.md`](./repo_layout_migration.md), [`repo_layout_inventory.md`](./repo_layout_inventory.md), [`phase7_fail_closed.md`](./phase7_fail_closed.md), [`../phase62_residual_status.md`](../phase62_residual_status.md), [`llm_nav_map.md`](./llm_nav_map.md) |
 
@@ -123,7 +124,7 @@ After layout migration, onboarding and multi-file agent edits still require trib
 
 ---
 
-## 4. Decision summary (Proposed)
+## 4. Decision summary (Accepted)
 
 | ID | Decision | B1 batch |
 |----|----------|----------|
@@ -378,7 +379,8 @@ Layer 4 — HISTORICAL / ARCHIVE (do not treat as current GO)
 | **OFF** | Switch closed (Phase 7 foundation) | phase7_fail_closed + code |
 | **code-complete** | Implementation present; not live GO | README / residual |
 | **live verified** | Remote/live check with dated proof | residual + `docs/proof/*` |
-| **Proposed** | ADR awaiting review | this document |
+| **Proposed** | ADR awaiting review | (historical) |
+| **Accepted** | ADR reviewed; B1 may land | this document |
 
 **Forbidden in B1 commits without residual+proof update:**  
 `PHASE62_FULL_DONE`, “Mass ON”, “READY≥1 production”, “Phase 7 GO”, inventing COMPLETE counts.
@@ -606,52 +608,51 @@ B1-e may document grouping without forcing directory moves (layout Batch F optio
 
 ## 12. Implementation batches (B1-*) — after Grok approval only
 
-> **B0 (this change):** ADR + nav map draft only. No package behavior change.
+> **B0:** ADR + nav map draft (landed). **Accepted (Grok 2026-08-12)** unlocks B1.
 
-### B1-a — Documentation hub & honesty stamps
+### B1-a — Documentation hub & honesty stamps — **DONE (2026-08-12)**
 
 **Intent:** Make agents land on current truth without reading 30 phase files.
 
 **Actions:**
 
 1. Finalize `docs/architecture/llm_nav_map.md` (from B0 draft).
-2. Link it from `README.md` (“Agent / LLM entry”).
+2. Link it from `README.md` (“LLM 向けナビゲーション地図”).
 3. Stamp historical `docs/phase62*_status.md`, `phase621_*`, `phase622_*`, `phase623_*`, and completion/final reports with historical banner → residual SoT.
-4. Add residual pointer callout if any architecture doc still implies live Mass/READY.
-5. Optionally add `docs/architecture/DOC_TRUTH_MAP` section inside nav map (table of all phase docs).
+4. Sync `docs/phase62_residual_status.md` live numbers (COMPLETE 404, OTC 5, Track A dry-run).
+5. Doc truth table remains inside nav map §7 (no extra hub file).
 
-**Touches:** `docs/**`, `README.md` only.
+**Touches:** `docs/**`, `README.md` (B1-a); plane READMEs + guards with B1-b.
 
 **Exit criteria:**
 
-- [ ] Nav map lists read order + task cheat sheet + do-not list
-- [ ] Historical banners on phase status shards
-- [ ] README links nav map
-- [ ] Residual still says Mass/READY/Phase7 NO-GO/OFF
-- [ ] No Python/runtime changes
+- [x] Nav map lists read order + task cheat sheet + do-not list
+- [x] Historical banners on phase status shards
+- [x] README links nav map
+- [x] Residual still says Mass/READY/Phase7 NO-GO/OFF
 
 **Rollback:** revert docs commit.
 
 ---
 
-### B1-b — Plane boundaries & public API documentation
+### B1-b — Plane boundaries & public API documentation — **DONE (2026-08-12)**
 
 **Intent:** Encode allow-list imports; clarify `__all__` / entrypoints without mass renames.
 
 **Actions:**
 
-1. Expand each `packages/*/README.md` with: purpose, allowed deps, public entrypoints, forbidden deps.
-2. Align leaf package `__init__.py` exports with §5.2 table where cheap (no behavior change).
-3. Add `tests/test_plane_import_boundaries.py` (static) for the highest-value illegal edges.
-4. Fix any accidental illegal imports discovered (minimal).
+1. Add thin leaf `packages/**/README.md` where missing (public entry + forbidden imports).
+2. Keep leaf package `__init__.py` exports as-is (no mass rewrite).
+3. Add `tests/test_plane_import_boundaries.py` (static allow-list + plane hard bans).
+4. Document ADR exceptions: `data_access` → features/paper_runtime; `paper_runtime`/`storage` → cf_platform.
 
 **Exit criteria:**
 
-- [ ] G0 guard pack green
-- [ ] New plane boundary test green
-- [ ] Plane READMEs exist and mention import policy D1 (leaf names)
-- [ ] Mass gate still fail-closed
-- [ ] Full offline pytest green
+- [x] G0 guard pack green
+- [x] New plane boundary test green
+- [x] Plane READMEs exist for previously missing leaves
+- [x] Mass gate still fail-closed
+- [x] Full offline pytest green
 
 **Rollback:** revert commit(s); tests prove restore.
 
@@ -774,18 +775,18 @@ B1-e may document grouping without forcing directory moves (layout Batch F optio
 
 ---
 
-## 14. Grok review focus (open questions)
+## 14. Grok review decisions (2026-08-12)
 
-These are intentionally unresolved at B0; Grok should decide or defer:
-
-1. **Batch Z timeline** — keep deferred indefinitely, or schedule after B1-f?
-2. **Physical `docs/archive/` move** in B1-a vs banners-only?
-3. **Script directory regroup (Batch F)** in B1-e/f or never?
-4. **How strict** should `test_plane_import_boundaries` be on `paper_runtime → storage` (already allowed) vs product→ingestion (forbidden)?
-5. **Rename collisions** (`research/artifacts` etc.) worth shim churn or docs-only?
-6. **`data_access` plane label** — keep under `data_plane/` (current) vs document as “shared” without moving?
-7. **Acceptable G0 runtime budget** (e.g. &lt; 30s) for agent loops?
-8. Any additional frozen paths beyond Workers + `data/` (e.g. specific scripts called by external cron)?
+| # | Question | Decision |
+|---|----------|----------|
+| 1 | Batch Z timeline | **DEFER** indefinitely relative to B1; separate ADR amendment if ever scheduled |
+| 2 | Physical `docs/archive/` move | **Banners-only** in B1-a; physical archive optional later |
+| 3 | Script directory regroup (Batch F) | **Optional / last** — not required for B1 exit |
+| 4 | `test_plane_import_boundaries` strictness | Allow `paper_runtime → storage` / `data_access → features|paper_runtime`; forbid product→ingestion market clients |
+| 5 | Rename collisions | **Docs-only** in B1 (glossary); no shim churn |
+| 6 | `data_access` plane label | **Keep** under `data_plane/`; document as shared read adapter |
+| 7 | G0 runtime budget | Prefer guard pack fast; no hard SLA enforced in ADR |
+| 8 | Extra frozen paths | Workers + `data/` remain the hard freeze |
 
 ---
 
@@ -800,7 +801,7 @@ These are intentionally unresolved at B0; Grok should decide or defer:
 | [`../phase62_residual_status.md`](../phase62_residual_status.md) | **Live residual SoT** |
 | [`./phase7_fail_closed.md`](./phase7_fail_closed.md) | Phase 7 OFF |
 | [`../quant_data_access.md`](../quant_data_access.md) | Ops vs research read domains |
-| [`./llm_nav_map.md`](./llm_nav_map.md) | Agent entry map (B0 draft) |
+| [`./llm_nav_map.md`](./llm_nav_map.md) | Agent entry map (B1 live) |
 | `pyproject.toml` | multi-root setuptools discovery |
 | `qp_paths.py` | `repo_root()` / `package_dir()` |
 
@@ -811,3 +812,4 @@ These are intentionally unresolved at B0; Grok should decide or defer:
 | Date | Change |
 |------|--------|
 | 2026-08-12 | B0 Proposed: initial full ADR for LLM-friendly refactor; no implementation |
+| 2026-08-12 | **Accepted** (Grok review): Batch Z DEFER; leaf imports; residual single SoT; scripts optional; Mass/READY/Phase7 NO-GO. B1 may implement. |
