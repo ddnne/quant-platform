@@ -3,7 +3,7 @@
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
 **Live verified:** 2026-08-12 (A3 +71/+3/+1 → segment COMPLETE **482**; bars `observed_start` **2008-05-01**; Track B residual live-sync)  
 **Proof:** `docs/proof/complete_plus23_parallel_receipts_20260812.md`, `docs/proof/complete_plus3_struct_hint_20260812.md`, `docs/proof/complete_plus1_bars_202608_20260812.md`, `docs/proof/bars_observed_start_move_20260812.md`, `docs/proof/complete_plus3_otc_20260812.md`, `docs/proof/raw_throughput_POST_AEXEC_20260812T141214Z.md`, `docs/proof/track_a_dryrun_20260812.md`, `docs/proof/data_quality_scan_20260812.md`  
-**Repo tip:** `67da011` — COMPLETE **482** / raw **1839** / bars observed **2008-05-01** / Phase7 **OFF**
+**Repo tip:** *(filled at push — short SHA of this residual land)* — COMPLETE **482** / raw **1889** / bars observed **2008-05-01** / Phase7 **OFF**
 
 ## Live snapshot
 
@@ -15,7 +15,7 @@
 | JSDA OTC COMPLETE segs | **5** — `2026-08-06`, `2026-08-07`, `2026-08-10`, `2026-08-12`, `2026-08-13` (dataset still PARTIAL) |
 | JSDA corporate COMPLETE segs | **1** — year `2026` (dataset still PARTIAL) |
 | A3 sealed (partial datasets) | `markets_short_ratio` 32, `markets_breakdown` 32, `markets_margin_alert` 18, `equities_investor_types` 7, `equities_earnings_calendar` 1, `fins_details` 2, `equities_bars_daily` 12 (all still dataset PARTIAL except calendar/tokyo) |
-| Remote `raw_retention_manifests` | **1839** (D1 `quant-ingest` RO count 2026-08-12 live; earlier residual 1696 / POST_AEXEC 1593; local research mirror still **0**) |
+| Remote `raw_retention_manifests` | **1889** (D1 `quant-ingest` RO count 2026-08-12 live; earlier residual 1696 / POST_AEXEC 1593; local research mirror still **0**) |
 | `equities_bars_daily` | dataset **PARTIAL**; COMPLETE segs **12**; `observed_start` **`2008-05-01`** → `observed_end` `2026-08-12`; row_count **803862** (receipt-plane union; see bars_observed_start proof) |
 | `markets_margin_interest` | **STALE** (C8); sticky COMPLETE segs **14**; observed `2024-01-12`→`2025-02-28` — DEFER (see p1 margin proof) |
 | master | `scd2_event_sourcing` / D1 hot |
