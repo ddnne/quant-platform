@@ -15,7 +15,10 @@ Row counts, raw retention alone, or Cloudflare fetch success are **not** enough.
 6. **Non-event segments**: `expected_items` must be explicit (for `source_query` unit → typically `1`)
 7. **Pagination exhausted** and raw_row_count == structured_row_count when reconciliation required
 8. **Ledger refresh** promotes segment to COMPLETE via `evaluate_segment`
-9. **Ops projection** published (`publish_ops_projection.py --apply-remote`) so MCP shows COMPLETE
+9. **Ops projection** published so MCP shows COMPLETE:
+   - Prefer `scripts/ops_reeval_freshness.py` (targeted; never rewrites segments)
+   - Full `publish_ops_projection.py --apply-remote` only if local COMPLETE ≥ remote
+     (fail-closed guard refuses otherwise; see `docs/operations/projection_publish_guard.md`)
 
 ## Explicitly NOT COMPLETE
 

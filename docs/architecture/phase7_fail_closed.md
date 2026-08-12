@@ -1,5 +1,10 @@
 # Phase 7 Foundation — fail-closed only
 
+**Switch status: OFF.** Mass Autonomous Research, production LLM loops, and
+READY/B0 production gates must remain disabled. This document is foundation
+only (schema / isolation / budget lease concepts). Enabling switches is a
+separate, explicit human decision — never implied by merge of this file.
+
 **Mass Autonomous Research: NO-GO (switch remains closed)**
 
 Foundation scope only (no production LLM autonomy, no live broker):

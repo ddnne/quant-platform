@@ -16,7 +16,9 @@ if [[ ! -f "$DB" ]]; then
   echo "[cron_publish_ops] missing db: $DB" >&2
   exit 2
 fi
-# Always pass --refresh-coverage so failures are recorded as DEGRADED_REFRESH_FAILED
+# Local refresh may lag remote COMPLETE. Full --apply-remote is fail-closed
+# (see publish_ops_projection enforce_complete_count_guard). Prefer targeted
+# remote freshness when APPLY_REMOTE_OPS=1 but full publish would be refused.
 ARGS=(scripts/publish_ops_projection.py --db "$DB" --refresh-coverage)
 if [[ "${APPLY_REMOTE_OPS:-0}" == "1" ]]; then
   ARGS+=(--apply-remote)
@@ -25,5 +27,12 @@ set +e
 "$PY" "${ARGS[@]}"
 rc=$?
 set -e
+if [[ "$rc" -eq 3 && "${APPLY_REMOTE_OPS:-0}" == "1" ]]; then
+  echo "[cron_publish_ops] full apply refused by COMPLETE guard (rc=3); running targeted ops_reeval_freshness"
+  set +e
+  "$PY" scripts/ops_reeval_freshness.py
+  rc=$?
+  set -e
+fi
 echo "[cron_publish_ops] done rc=$rc $(date -Iseconds)"
 exit "$rc"
