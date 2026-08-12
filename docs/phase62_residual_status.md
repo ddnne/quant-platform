@@ -2,8 +2,8 @@
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
 **Live verified:** 2026-08-12 (A3 COMPLETE **482**; Track A execute raw **1488→1889** Δ+401; bars `observed_start` **2008-05-01**; Phase7 OFF)  
-**Proof:** `docs/proof/raw_throughput_POST_AEXEC_20260812.md`, `docs/proof/raw_throughput_POST_AEXEC_20260812T143225Z.md`, `docs/proof/complete_plus23_parallel_receipts_20260812.md`, `docs/proof/complete_plus1_bars_202608_20260812.md`, `docs/proof/bars_observed_start_move_20260812.md`, `docs/proof/track_a_dryrun_20260812.md`  
-**Repo tip:** *(filled at push)* — COMPLETE **482** / raw **1889** / bars observed **2008-05-01** / Phase7 **OFF**
+**Proof:** `docs/proof/raw_throughput_POST_AEXEC_20260812.md`, `docs/proof/raw_throughput_POST_AEXEC_20260812T143446Z.md`, `docs/proof/bars_history_observed_start_20260812.md`, `docs/proof/complete_plus23_parallel_receipts_20260812.md`, `docs/proof/complete_plus1_bars_202608_20260812.md`, `docs/proof/track_a_dryrun_20260812.md`  
+**Repo tip:** `e9b6288` — COMPLETE **482** / raw **1889** / bars observed **2008-05-01** / Phase7 **OFF**
 
 ## Live snapshot
 
