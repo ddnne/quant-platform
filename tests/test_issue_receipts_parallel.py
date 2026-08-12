@@ -210,4 +210,36 @@ def test_cli_dry_run_exits_ready(tmp_path: Path, capsys: pytest.CaptureFixture[s
 def test_empty_array_raw_rejected(tmp_path: Path):
     mod = _load_mod()
     assert mod._is_usable_raw(b"[]") is False
+    assert mod._is_usable_raw(b"[\n]") is False
     assert mod._is_usable_raw(b'{"rows":[1]}') is True
+
+
+def test_struct_hint_skips_empty_months(tmp_path: Path):
+    """--struct-hint must not spend --limit on months with zero structured rows."""
+    mod = _load_mod()
+    db = tmp_path / "t.sqlite"
+    _seed_db(db)
+    conn = sqlite3.connect(db)
+    conn.row_factory = sqlite3.Row
+    all_jobs = mod.load_candidate_segments(
+        conn,
+        datasets=["markets_short_ratio"],
+        segment_id="",
+        limit_per_dataset=10,
+        include_complete=False,
+        order="asc",
+        struct_hint=False,
+    )
+    hinted = mod.load_candidate_segments(
+        conn,
+        datasets=["markets_short_ratio"],
+        segment_id="",
+        limit_per_dataset=10,
+        include_complete=False,
+        order="asc",
+        struct_hint=True,
+    )
+    conn.close()
+    assert {j.segment_id for j in all_jobs} == {"2025-01", "2025-02", "2025-03"}
+    # 2025-02 has no structured rows in seed
+    assert {j.segment_id for j in hinted} == {"2025-01", "2025-03"}

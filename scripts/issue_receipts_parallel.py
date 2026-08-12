@@ -20,6 +20,10 @@ Usage examples
   # Issue + refresh ledger
   .venv/bin/python scripts/issue_receipts_parallel.py \\
     --datasets markets_short_ratio,markets_breakdown --limit 8 --workers 4
+
+  # Sparse history: only months that already have structured rows
+  .venv/bin/python scripts/issue_receipts_parallel.py \\
+    --datasets fins_details --struct-hint --limit 20 --workers 4
 """
 
 from __future__ import annotations
@@ -134,13 +138,20 @@ def build_raw_index(data_dir: Path, datasets: Sequence[str]) -> dict[str, list[R
 
 
 def _is_usable_raw(raw: bytes) -> bool:
-    """Reject empty/stub payloads (e.g. ``[]`` / ``{}``) — not honest evidence."""
+    """Reject empty/stub payloads (e.g. ``[]`` / ``{}``) — not honest evidence.
+
+    Empty-raw ban is fail-closed: short bodies, JSON null/empty containers, and
+    whitespace-only payloads never qualify as collection evidence.
+    """
     if not raw or len(raw) >= 5_000_000:
         return False
     stripped = raw.strip()
     if len(stripped) < 8:
         return False
-    if stripped in {b"[]", b"{}", b"null", b'""'}:
+    if stripped in {b"[]", b"{}", b"null", b'""', b"''"}:
+        return False
+    # Pretty-printed empty containers (still no rows).
+    if stripped in {b"[\n]", b"[\r\n]", b"{\n}", b"{\r\n}"}:
         return False
     return True
 
@@ -249,7 +260,16 @@ def load_candidate_segments(
     limit_per_dataset: int,
     include_complete: bool,
     order: str,
+    struct_hint: bool = False,
 ) -> list[SegmentJob]:
+    """Load coverage segments to scan.
+
+    When ``struct_hint`` is True, only segments that already have at least one
+    ``jquants_records`` row in their window are returned. This keeps ``--limit``
+    from being consumed by empty recent months (common for sparse backfills
+    such as ``fins_details`` 2024-01/02 sitting behind many empty 2025–2026
+    months).
+    """
     jobs: list[SegmentJob] = []
     order_sql = "ASC" if order == "asc" else "DESC"
     for dataset in datasets:
@@ -264,6 +284,20 @@ def load_candidate_segments(
             params.append(segment_id)
         if not include_complete:
             q += " AND status <> 'COMPLETE'"
+        if struct_hint:
+            # Prefer segments that already hold structured rows so --limit is
+            # spent on sealable candidates, not empty calendar months.
+            q += (
+                " AND EXISTS ("
+                "  SELECT 1 FROM jquants_records j"
+                "  WHERE j.dataset = coverage_segments.dataset"
+                "    AND substr(j.event_time, 1, 10)"
+                "        >= substr(coverage_segments.segment_start, 1, 10)"
+                "    AND substr(j.event_time, 1, 10)"
+                "        <= substr(coverage_segments.segment_end, 1, 10)"
+                "  LIMIT 1"
+                ")"
+            )
         q += f" ORDER BY segment_start {order_sql} LIMIT ?"
         params.append(limit_per_dataset)
         for row in conn.execute(q, params).fetchall():
@@ -471,6 +505,15 @@ def main(argv: list[str] | None = None) -> int:
         help="Segment scan order by segment_start (default: desc).",
     )
     ap.add_argument(
+        "--struct-hint",
+        action="store_true",
+        help=(
+            "Only scan non-COMPLETE segments that already have structured rows "
+            "in-window (EXISTS jquants_records). Prevents --limit from being "
+            "consumed by empty recent months."
+        ),
+    )
+    ap.add_argument(
         "--dry-run",
         action="store_true",
         help="Prepare only; do not sign/write receipts or refresh ledger.",
@@ -515,6 +558,7 @@ def main(argv: list[str] | None = None) -> int:
         limit_per_dataset=args.limit,
         include_complete=args.include_complete,
         order=args.order,
+        struct_hint=bool(args.struct_hint),
     )
     if not jobs:
         print("no segments found", file=sys.stderr)
