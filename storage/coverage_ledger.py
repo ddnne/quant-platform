@@ -558,9 +558,11 @@ def refresh_coverage_ledger(
             by_dataset[str(result.dataset)].append(result)
 
     placeholders = ",".join("?" for _ in selected)
+    # Include status (+ receipt_run_id) so sticky COMPLETE can see prior COMPLETE
+    # inventory. Omitting status made demotion guards no-ops (prior_status always None).
     inventory_cursor = conn.execute(
         "SELECT source,dataset,segment_id,segment_start,segment_end,"
-        "expected_scope,expected_items FROM coverage_segments "
+        "expected_scope,expected_items,status,receipt_run_id FROM coverage_segments "
         f"WHERE policy_version=? AND dataset IN ({placeholders})",
         (POLICY_VERSION, *selected),
     )
@@ -572,6 +574,7 @@ def refresh_coverage_ledger(
             "source": raw[0], "dataset": raw[1], "segment_id": raw[2],
             "segment_start": raw[3], "segment_end": raw[4],
             "expected_scope": raw[5], "expected_items": raw[6],
+            "status": raw[7], "receipt_run_id": raw[8],
         }
         inventory_by_dataset[str(row["dataset"])][str(row["segment_id"])] = row
     receipt_cursor = conn.execute(
