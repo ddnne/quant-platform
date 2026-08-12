@@ -646,6 +646,29 @@ def refresh_coverage_ledger(
         for (
             required_segment, receipt, segment_status, segment_detail
         ) in segment_evaluations:
+            # Fail-closed sticky COMPLETE: never demote a previously COMPLETE
+            # segment while its SUCCESS receipt remains COMPLETE-eligible.
+            # Prevents calendar day-roll / scope replan from wiping honest evidence.
+            prior_inv = inventory_by_dataset[dataset].get(
+                required_segment.segment_id
+            )
+            prior_status = (
+                None if prior_inv is None else str(prior_inv.get("status") or "")
+            )
+            if (
+                segment_status != "COMPLETE"
+                and prior_status == "COMPLETE"
+                and receipt is not None
+                and receipt.status == "SUCCESS"
+                and is_complete_eligible_receipt(receipt)
+            ):
+                segment_detail = {
+                    **dict(segment_detail),
+                    "sticky_complete": True,
+                    "demotion_blocked": segment_detail.get("reason"),
+                    "reason": "sticky COMPLETE: eligible SUCCESS receipt retained",
+                }
+                segment_status = "COMPLETE"
             segment_statuses.append(segment_status)
             segment_rows.append({
                 "source": required_segment.source,
