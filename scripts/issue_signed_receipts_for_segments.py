@@ -47,6 +47,10 @@ _FROM_TO_RE = re.compile(
     r"from=(?P<fr>\d{4}-\d{2}-\d{2}).*?to=(?P<to>\d{4}-\d{2}-\d{2})",
     re.IGNORECASE,
 )
+_DATE_ONLY_RE = re.compile(
+    r"^(?P<dataset>[a-z0-9_]+)_date=(?P<date>\d{4}-\d{2}-\d{2})",
+    re.IGNORECASE,
+)
 
 def _count_structured(
     conn: sqlite3.Connection, dataset: str, start: str, end: str
@@ -112,10 +116,18 @@ def _find_raw_bytes(
                 # Named for this dataset but wrong window — do not use.
                 continue
         else:
-            if month in name or month in str(path):
-                score += 5
-            if segment_start[:7] in name or segment_end[:7] in name:
-                score += 3
+            md = _DATE_ONLY_RE.match(name)
+            if md and md.group("dataset") == dataset:
+                d = md.group("date")
+                if segment_start[:10] <= d <= segment_end[:10]:
+                    score += 25
+                else:
+                    continue
+            else:
+                if month in name or month in str(path):
+                    score += 5
+                if segment_start[:7] in name or segment_end[:7] in name:
+                    score += 3
         if score > 0:
             ranked.append((score, path))
     ranked.sort(key=lambda item: (item[0], item[1].stat().st_mtime), reverse=True)
@@ -132,7 +144,16 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--db", default=str(ROOT / "data/structured/ingestion.sqlite"))
     ap.add_argument("--data-dir", default=str(ROOT / "data"))
-    ap.add_argument("--dataset", default="markets_calendar")
+    ap.add_argument(
+        "--dataset",
+        default="markets_calendar",
+        help="Single dataset id (or use --datasets for multi).",
+    )
+    ap.add_argument(
+        "--datasets",
+        default="",
+        help="Comma-separated datasets. When set, overrides --dataset.",
+    )
     ap.add_argument("--segment-id", default="", help="optional single segment e.g. 2024-01")
     ap.add_argument("--limit", type=int, default=12)
     ap.add_argument("--min-structured", type=int, default=1)
@@ -147,7 +168,19 @@ def main() -> int:
         default="desc",
         help="Segment scan order by segment_start (default: desc = recent first).",
     )
+    ap.add_argument(
+        "--parallel-hint",
+        action="store_true",
+        help="Print pointer to scripts/issue_receipts_parallel.py and exit 0.",
+    )
     args = ap.parse_args()
+
+    if args.parallel_hint:
+        print(
+            "For multi-dataset worker-pool issuance use: "
+            "scripts/issue_receipts_parallel.py --datasets … --workers N"
+        )
+        return 0
 
     db = Path(args.db)
     if not db.is_file():
@@ -161,21 +194,27 @@ def main() -> int:
 
     conn = sqlite3.connect(db)
     conn.row_factory = sqlite3.Row
-    q = (
-        "SELECT source, dataset, segment_id, segment_start, segment_end, "
-        "expected_scope, expected_items, status FROM coverage_segments "
-        "WHERE dataset=? AND policy_version='collection-coverage/v2'"
-    )
-    params: list[object] = [args.dataset]
-    if args.segment_id:
-        q += " AND segment_id=?"
-        params.append(args.segment_id)
-    if not args.include_complete:
-        q += " AND status <> 'COMPLETE'"
+    dataset_list = [d.strip() for d in args.datasets.split(",") if d.strip()]
+    if not dataset_list:
+        dataset_list = [args.dataset]
     order = "ASC" if args.order == "asc" else "DESC"
-    q += f" ORDER BY segment_start {order} LIMIT ?"
-    params.append(args.limit)
-    segments = conn.execute(q, params).fetchall()
+    segments: list[sqlite3.Row] = []
+    per_ds_limit = max(1, args.limit // max(1, len(dataset_list)))
+    for ds in dataset_list:
+        q = (
+            "SELECT source, dataset, segment_id, segment_start, segment_end, "
+            "expected_scope, expected_items, status FROM coverage_segments "
+            "WHERE dataset=? AND policy_version='collection-coverage/v2'"
+        )
+        params: list[object] = [ds]
+        if args.segment_id:
+            q += " AND segment_id=?"
+            params.append(args.segment_id)
+        if not args.include_complete:
+            q += " AND status <> 'COMPLETE'"
+        q += f" ORDER BY segment_start {order} LIMIT ?"
+        params.append(per_ds_limit if len(dataset_list) > 1 else args.limit)
+        segments.extend(conn.execute(q, params).fetchall())
     if not segments:
         print("no segments found", file=sys.stderr)
         return 1
@@ -186,6 +225,7 @@ def main() -> int:
     next_run = int(max_run) + 1
 
     issued = 0
+    issued_datasets: set[str] = set()
     skipped = {"no_struct": 0, "no_raw": 0}
     for row in segments:
         scope = row["expected_scope"]
@@ -252,6 +292,7 @@ def main() -> int:
         record_required_segments(conn, [required])
         record_collection_receipt(conn, receipt)
         issued += 1
+        issued_datasets.add(required.dataset)
         print(
             f"issued signed receipt {required.dataset}/{required.segment_id} "
             f"structured={structured} run_id={receipt.run_id}"
@@ -259,17 +300,19 @@ def main() -> int:
     conn.commit()
     print(f"summary issued={issued} skipped={skipped}")
     if issued:
-        rows = refresh_coverage_ledger(conn, db, datasets=[args.dataset])
+        ds_list = sorted(issued_datasets)
+        rows = refresh_coverage_ledger(conn, db, datasets=ds_list)
         conn.commit()
-        complete = conn.execute(
-            "SELECT COUNT(*) FROM coverage_segments WHERE dataset=? AND status='COMPLETE'",
-            (args.dataset,),
-        ).fetchone()[0]
-        total = conn.execute(
-            "SELECT COUNT(*) FROM coverage_segments WHERE dataset=?",
-            (args.dataset,),
-        ).fetchone()[0]
-        print(f"local coverage {args.dataset}: COMPLETE={complete}/{total}")
+        for ds in ds_list:
+            complete = conn.execute(
+                "SELECT COUNT(*) FROM coverage_segments WHERE dataset=? AND status='COMPLETE'",
+                (ds,),
+            ).fetchone()[0]
+            total = conn.execute(
+                "SELECT COUNT(*) FROM coverage_segments WHERE dataset=?",
+                (ds,),
+            ).fetchone()[0]
+            print(f"local coverage {ds}: COMPLETE={complete}/{total}")
         for r in rows:
             print(
                 f"coverage {r.get('dataset')} status={r.get('status')} "
