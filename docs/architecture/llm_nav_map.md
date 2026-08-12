@@ -231,9 +231,9 @@ More detail after B1-d: planned `tests/README.md` (ADR §12).
 | Script cluster | Examples | Plane |
 |----------------|----------|-------|
 | Ingest | `run_ingestion_once.py`, `run_historical_backfill.py`, `parse_jsda_from_r2_mirror.py` | data_plane |
-| Coverage / receipts | `write_collection_receipts.py`, `refresh_coverage_ledger.py`, `issue_signed_receipts_for_segments.py`, `evaluate_collection_sla.py` | data_plane / edge |
+| Coverage / receipts | `write_collection_receipts.py`, `refresh_coverage_ledger.py`, `issue_receipts_parallel.py`, `issue_signed_receipts_for_segments.py`, `evaluate_collection_sla.py` | data_plane / edge (**empty-raw ban**; no COMPLETE without raw) |
 | Sync / D1 | `sync_d1_to_sqlite.py`, `report_d1_local_sync_lag.py`, `restore_local_complete_from_receipt.py` | ops |
-| Projection | `export_ops_projection.py`, `publish_ops_projection.py`, `ops_reeval_freshness.py`, `ops_status.py` | ops (**publish fail-closed**) |
+| Projection | `export_ops_projection.py`, `publish_ops_projection.py`, `ops_reeval_freshness.py`, `ops_reeval_observed_window.py`, `ops_status.py` | ops (**publish fail-closed**; observed_* re-eval does not rewrite segments) |
 | Paper / agents | `run_paper_once.py`, `run_agents_paper_once.py`, `rebuild_paper_index.py` | research / product |
 | Validation | `run_phase35_validation.py`, `run_phase4_accept.py` | edge / features |
 | Codegen | `generate_governed_js.py`, `verify_governed_js_drift.py` | contracts → Workers |
