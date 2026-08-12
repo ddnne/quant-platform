@@ -8,12 +8,19 @@ Pipeline:
 
 Removes the "human must remember export commands" sole path. Remote MCP still
 never gains write tools; this script is an out-of-band publisher.
+
+Fail-closed guard (GLM design):
+  - Before full --apply-remote (non dry-run), probe local + remote COMPLETE counts.
+  - If remote probe fails OR local < remote, refuse exit 3 unless --force-apply-remote.
+  - Targeted reevaluation path is unaffected (not a full publish).
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import re
+import sqlite3
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -28,6 +35,126 @@ from scripts.export_ops_projection import render_projection_sql  # noqa: E402
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def count_local_complete(db_path: Path) -> int:
+    """Count COMPLETE coverage_segments in a local SQLite ops/research DB.
+
+    Raises sqlite3.Error if the table is missing — callers must surface that
+    rather than silently treating an unprobed DB as zero (fail-closed).
+    """
+    conn = sqlite3.connect(str(db_path))
+    try:
+        row = conn.execute(
+            "SELECT COUNT(*) FROM coverage_segments WHERE status = 'COMPLETE'"
+        ).fetchone()
+        return int(row[0]) if row else 0
+    finally:
+        conn.close()
+
+
+def count_remote_complete(
+    *,
+    database: str = "quant-ingest",
+    wrangler_cwd: Path | None = None,
+    timeout_sec: int = 120,
+) -> int | None:
+    """Query remote D1 COMPLETE count via wrangler. None if unreachable.
+
+    Returns None for any transport / parse / non-zero exit failure so that
+    enforce_complete_count_guard can apply fail-closed semantics.
+    """
+    cwd = wrangler_cwd or (ROOT / "platform" / "workers" / "quant-ops-mcp")
+    wrangler_bin = (
+        ROOT
+        / "platform"
+        / "workers"
+        / "ingestion-premium"
+        / "node_modules"
+        / ".bin"
+        / "wrangler"
+    )
+    config = ROOT / "platform" / "workers" / "ingestion-premium" / "wrangler.toml"
+    use_local_bin = wrangler_bin.is_file()
+    cmd: list[str] = []
+    if use_local_bin:
+        cmd.append(str(wrangler_bin))
+    else:
+        cmd.extend(["npx", "wrangler"])
+    cmd.extend(
+        [
+            "d1",
+            "execute",
+            database,
+            "--remote",
+            f"--config={config}",
+            "--json",
+            "--command",
+            "SELECT COUNT(*) AS c FROM coverage_segments WHERE status='COMPLETE'",
+        ]
+    )
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=str(cwd if use_local_bin else ROOT),
+            capture_output=True,
+            text=True,
+            timeout=timeout_sec,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        print(f"WARN: remote COMPLETE probe failed: {exc}", file=sys.stderr)
+        return None
+    if proc.returncode != 0:
+        print(
+            f"WARN: remote COMPLETE probe exit={proc.returncode}: "
+            f"{(proc.stderr or proc.stdout)[:500]}",
+            file=sys.stderr,
+        )
+        return None
+    text = proc.stdout or ""
+    idx = text.find("[")
+    if idx < 0:
+        return None
+    try:
+        payload = json.loads(text[idx:])
+        if not isinstance(payload, list) or not payload:
+            return None
+        results = payload[0].get("results") or []
+        if not results:
+            return None
+        return int(results[0].get("c", results[0].get("COUNT(*)", 0)))
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError, IndexError):
+        m = re.search(r'"c"\s*:\s*(\d+)', text)
+        return int(m.group(1)) if m else None
+
+
+def enforce_complete_count_guard(
+    *,
+    local_complete: int,
+    remote_complete: int | None,
+    force: bool,
+) -> str | None:
+    """Return error message if full apply must be refused; else None.
+
+    Fail-closed: unknown remote (None) is treated as refuse. ``force`` is the
+    only override path and must be supplied explicitly by the operator.
+    """
+    if force:
+        return None
+    if remote_complete is None:
+        return (
+            "Refusing --apply-remote: could not read remote COMPLETE count "
+            "(fail-closed). Use --force-apply-remote to override after manual check."
+        )
+    if local_complete < remote_complete:
+        return (
+            f"Refusing --apply-remote: local COMPLETE segments ({local_complete}) "
+            f"fewer than remote ({remote_complete}). "
+            "Full projection publish would risk destroying remote COMPLETE evidence. "
+            "Use targeted reevaluation, or --force-apply-remote only after explicit review."
+        )
+    return None
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -63,6 +190,14 @@ def main(argv: list[str] | None = None) -> int:
         help="Apply exported SQL to remote D1 via wrangler (requires CF auth).",
     )
     parser.add_argument(
+        "--force-apply-remote",
+        action="store_true",
+        help=(
+            "Override COMPLETE-count fail-closed guard for --apply-remote. "
+            "Use only after confirming local evidence supersedes remote."
+        ),
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Render SQL only; do not write meta apply.",
@@ -95,6 +230,34 @@ def main(argv: list[str] | None = None) -> int:
             print(f"coverage ledger refresh FAILED: {exc}", file=sys.stderr)
         finally:
             store.close()
+
+    # Fail-closed guard before spending time on full SQL export when apply is requested.
+    # 対象: 完全 publish のみ (dry-run / targeted reeval は対象外)
+    if args.apply_remote and not args.dry_run:
+        local_n = count_local_complete(args.db)
+        remote_n = count_remote_complete()
+        guard_err = enforce_complete_count_guard(
+            local_complete=local_n,
+            remote_complete=remote_n,
+            force=bool(args.force_apply_remote),
+        )
+        if guard_err:
+            print(f"ERROR: {guard_err}", file=sys.stderr)
+            print(
+                f"guard_detail local_complete={local_n} remote_complete={remote_n} "
+                f"force={bool(args.force_apply_remote)}",
+                file=sys.stderr,
+            )
+            return 3
+        if args.force_apply_remote and remote_n is not None and local_n < remote_n:
+            print(
+                f"WARN: --force-apply-remote with local COMPLETE {local_n} < remote {remote_n}",
+                file=sys.stderr,
+            )
+        print(
+            f"complete_count_guard ok local={local_n} remote={remote_n} "
+            f"force={bool(args.force_apply_remote)}"
+        )
 
     sql = render_projection_sql(args.db, snapshot_dir=args.snapshot_dir)
     from ops.projection_meta import build_projection_metadata
@@ -137,9 +300,10 @@ def main(argv: list[str] | None = None) -> int:
                 return False
             return True
 
-        remote_sql = "\n".join(
-            line for line in sql.splitlines() if _keep_remote_line(line)
-        ) + "\n"
+        remote_sql = (
+            "\n".join(line for line in sql.splitlines() if _keep_remote_line(line))
+            + "\n"
+        )
         remote_path = args.output.with_suffix(".d1.sql")
         remote_path.write_text(remote_sql, encoding="utf-8")
         cmd = [
@@ -152,14 +316,18 @@ def main(argv: list[str] | None = None) -> int:
             f"--file={remote_path}",
         ]
         print("running:", " ".join(cmd))
-        proc = subprocess.run(cmd, cwd=ROOT / "platform" / "workers" / "quant-ops-mcp")
+        proc = subprocess.run(
+            cmd, cwd=ROOT / "platform" / "workers" / "quant-ops-mcp"
+        )
         if proc.returncode != 0:
             print("ERROR: remote apply failed", file=sys.stderr)
             return proc.returncode
         meta["applied_at"] = _now()
         meta["status"] = meta.get("status", "FRESH")
         meta["projection_status"] = meta["status"]
-        args.meta_output.write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
+        args.meta_output.write_text(
+            json.dumps(meta, indent=2) + "\n", encoding="utf-8"
+        )
         print("remote projection applied")
 
     return 0
