@@ -47,9 +47,18 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlencode
 
+# Resolve repo root; support packages/* layout without editable install.
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if _REPO_ROOT not in sys.path:
-    sys.path.insert(0, _REPO_ROOT)
+_PATH_CANDIDATES = (
+    _REPO_ROOT,
+    os.path.join(_REPO_ROOT, "packages", "data_plane"),
+    os.path.join(_REPO_ROOT, "packages", "research_runtime"),
+    os.path.join(_REPO_ROOT, "packages", "edge"),
+    os.path.join(_REPO_ROOT, "packages", "product"),
+)
+for _p in reversed(_PATH_CANDIDATES):
+    if os.path.isdir(_p) and _p not in sys.path:
+        sys.path.insert(0, _p)
 
 from ingestion.common.secrets import resolve_proxy_config  # noqa: E402
 from data_contracts import all_coverage_contracts  # noqa: E402
@@ -317,21 +326,56 @@ def _ensure_control_tables(conn: sqlite3.Connection) -> None:
     )
 
 
+def _local_table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
+    """Return physical column names for ``table`` (empty if missing)."""
+    try:
+        rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    except sqlite3.Error:
+        return set()
+    names: set[str] = set()
+    for row in rows:
+        # PRAGMA table_info: (cid, name, type, notnull, dflt_value, pk)
+        name = row[1] if not isinstance(row, sqlite3.Row) else row["name"]
+        names.add(str(name))
+    return names
+
+
 def _sync_control_plane(
     store: SqliteStore, table: str, rows: list[dict]
 ) -> tuple[int, int]:
-    """Insert/replace control-plane rows without PIT available_at gate."""
+    """Insert/replace control-plane rows without PIT available_at gate.
+
+    Remote-only columns (e.g. ops projection metadata not yet in local
+    research SQLite schema) are dropped so thin control exports can close
+    D1→local lag without a packages schema rewrite.
+    """
     if not rows:
         return 0, 0
     conn = store._conn  # noqa: SLF001
     _ensure_control_tables(conn)
-    # Drop export cursor column if present.
+    local_cols = _local_table_columns(conn, table)
     cleaned = []
+    dropped_cols: set[str] = set()
     for r in rows:
         # Preserve nullable evidence fields such as receipt error/expected_items;
         # dropping them could make later rows inherit the first row's shape.
-        row = {k: v for k, v in r.items() if k != "__export_cursor"}
+        row = {}
+        for k, v in r.items():
+            if k == "__export_cursor":
+                continue
+            if local_cols and k not in local_cols:
+                dropped_cols.add(k)
+                continue
+            row[k] = v
         cleaned.append(row)
+    warned_attr = f"_qp_dropped_cols_warned_{table}"
+    if dropped_cols and not getattr(_sync_control_plane, warned_attr, False):
+        print(
+            f"[sync] {table}: dropped remote-only columns "
+            f"{sorted(dropped_cols)} (absent from local schema)",
+            file=sys.stderr,
+        )
+        setattr(_sync_control_plane, warned_attr, True)
     if not cleaned:
         return len(rows), 0
     cols = list(cleaned[0].keys())

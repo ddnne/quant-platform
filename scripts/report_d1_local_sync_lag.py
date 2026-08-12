@@ -94,6 +94,32 @@ def collect(
                 applied = int(row["last_applied_change_seq"])
                 break
 
+        # Thin control-plane counts (visibility only; not READY claims).
+        control: dict = {}
+        for table, sql in (
+            (
+                "coverage_segments",
+                "SELECT COUNT(*) AS n, "
+                "SUM(CASE WHEN status='COMPLETE' THEN 1 ELSE 0 END) AS complete "
+                "FROM coverage_segments",
+            ),
+            (
+                "collection_receipts",
+                "SELECT COUNT(*) AS n FROM collection_receipts",
+            ),
+        ):
+            try:
+                row = con.execute(sql).fetchone()
+                if table == "coverage_segments":
+                    control[table] = {
+                        "n": int(row["n"] or 0),
+                        "complete": int(row["complete"] or 0),
+                    }
+                else:
+                    control[table] = {"n": int(row["n"] or 0)}
+            except sqlite3.Error:
+                control[table] = None
+
         focus_out = []
         for ds in focus:
             wm = next((w for w in watermarks if w["dataset"] == ds), None)
@@ -139,6 +165,7 @@ def collect(
                 "null_export": null_export,
                 "sync_change_state": applied_rows,
                 "last_applied_change_seq": applied,
+                "control": control,
             },
             "remote_inputs": {
                 "max_seq": remote_max_seq,
@@ -151,6 +178,8 @@ def collect(
                 "applied_lag = remote_max_seq - local last_applied_change_seq "
                 "(0 means local applied watermark caught the remote tip of the "
                 "retained change_log window; not a READY claim).",
+                "control counts are local-only visibility for thin tables "
+                "(coverage_segments / collection_receipts); not READY.",
                 "Does not assert COMPLETE/materialization of fact tables.",
                 "Legacy table jquants_market_calendar may be empty when remote "
                 "stores calendar rows in jquants_records / R2 only.",
@@ -178,6 +207,20 @@ def _print_text(report: dict) -> None:
         f"{local['last_applied_change_seq']} "
         f"applied_lag={local.get('applied_lag')}"
     )
+    ctrl = local.get("control") or {}
+    cs = ctrl.get("coverage_segments")
+    cr = ctrl.get("collection_receipts")
+    if cs is not None or cr is not None:
+        cs_s = (
+            f"n={cs['n']} complete={cs['complete']}"
+            if isinstance(cs, dict)
+            else "missing"
+        )
+        cr_s = f"n={cr['n']}" if isinstance(cr, dict) else "missing"
+        print(
+            f"local control: coverage_segments {cs_s}; "
+            f"collection_receipts {cr_s}"
+        )
     print(
         f"remote inputs: max_seq={remote['max_seq']} "
         f"change_log_n={remote['change_log_n']}"

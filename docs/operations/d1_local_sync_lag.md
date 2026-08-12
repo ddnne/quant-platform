@@ -3,46 +3,81 @@
 **Scope:** export cursor + applied change_seq lag only.
 Does **not** claim READY, paper-research readiness, or full fact materialization.
 
-## Live measurement (2026-08-12, post-close)
+## Live measurement (2026-08-12, P1-2 close #2)
 
 | Metric | PRE | POST |
 |--------|-----|------|
-| origin/main tip (at PRE) | `bafc5f6` | *(see commit of this doc)* |
+| origin/main tip (at PRE) | `5c40da5` | *(this commit)* |
+| Remote `ingestion_watermarks` n | 23 | 23 |
+| Remote null `last_export_cursor` | **0** | **0** |
+| Remote `ingestion_change_log` n | 367 | 367 |
+| Remote `MAX(change_seq)` | **2859284** | **2859284** |
+| Remote `markets_calendar.last_export_cursor` | 2859283 (lag≈1) | 2859283 (lag≈1) |
+| Remote `equities_bars_daily.last_export_cursor` | 2859180 (lag≈104) | 2859180 (lag≈104) |
+| Remote `indices_bars_daily_topix.last_export_cursor` | 2859284 (lag≈0) | 2859284 (lag≈0) |
+| Remote `coverage_segments` n / COMPLETE | 12940 / 401 | 12940 / 401 |
+| Remote `collection_receipts` n | 1416 | 1416 |
+| Local watermarks null export | **0** | **0** |
+| Local `markets_calendar.last_export_cursor` | 2859278 (export_lag=6) | **2859283** (export_lag=**1**) |
+| Local `equities_bars_daily.last_export_cursor` | 2859180 (export_lag=104) | 2859180 (export_lag=104; remote tip lag) |
+| Local `indices_bars_daily_topix.last_export_cursor` | 2859279 (export_lag=5) | **2859284** (export_lag=**0**) |
+| Local `sync_change_state.last_applied_change_seq` | 2859279 | **2859284** |
+| Local applied lag (`max_seq - applied`) | **5** | **0** |
+| Local `coverage_segments` n / COMPLETE | 12940 / 401 | **12940 / 401** (re-exported) |
+| Local `collection_receipts` n | 1630 | **3040** (remote 1416 upserted; local-only rows retained) |
+
+### What was closed (paths)
+
+1. **`ingestion_watermarks` re-export** — D1 → local
+   (`markets_calendar` 2859278→2859283, `indices_bars_daily_topix`→2859284).
+2. **Incremental change_feed** — applied 2859279→**2859284** (5 non-local
+   R2/SCD2 markers skipped; seq advanced; applied_lag **5→0**).
+3. **Thin control: `coverage_segments`** — full export 12940 rows registered
+   (remote-only column `projection_generation_id` dropped client-side).
+4. **Thin control: `collection_receipts`** — full export 1416 rows registered
+   into local (local retains extra historical keys → n=3040).
+
+### Script improvements (this close)
+
+- `scripts/sync_d1_to_sqlite.py`: drop remote-only control columns unknown to
+  local schema (fixes coverage_segments export after projection metadata
+  landed on D1); packages/* path candidates for mid-reorg imports.
+- `scripts/report_d1_local_sync_lag.py`: report local control counts
+  (`coverage_segments` n/complete, `collection_receipts` n).
+
+### What is *not* claimed
+
+- equities_bars_daily export_lag≈104 is **remote watermark lag** vs tip, not
+  a D1→local applied gap (local cursor matches remote cursor).
+- `collection_receipts` local n > remote n: no local prune of extra keys.
+- No READY / COMPLETE promotion / Mass / sqlite commit snapshot claim.
+- applied_lag=0 = tip of **retained** remote change_log window only.
+
+---
+
+## Prior measurement (2026-08-12, first close)
+
+| Metric | PRE | POST |
+|--------|-----|------|
+| origin/main tip (at PRE) | `bafc5f6` | *(see prior commit)* |
 | Remote `ingestion_watermarks` n | 23 | 23 |
 | Remote null `last_export_cursor` | **0** | **0** |
 | Remote `ingestion_change_log` n | 362 | 362 |
 | Remote `MAX(change_seq)` | 2859279 | 2859279 |
 | Remote `markets_calendar.last_export_cursor` | 2859278 (lag≈1) | 2859278 (lag≈1) |
 | Remote `equities_bars_daily.last_export_cursor` | 2859180 (lag≈99) | 2859180 (lag≈99) |
-| Local `jquants_market_calendar` rows | 0 | 0 (legacy table unused; remote has no such table) |
-| Local `jquants_records` `markets_calendar` rows | 6798 | 6798 |
-| Local `markets_calendar` max event_time | 2026-08-11 | 2026-08-11 |
 | Local watermarks null export | **23** | **0** |
 | Local `markets_calendar.last_export_cursor` | NULL | **2859278** |
 | Local `sync_change_state.last_applied_change_seq` | *(empty)* | **2859279** |
 | Local applied lag (`max_seq - applied`) | n/a | **0** |
-| Local `coverage_segments` COMPLETE | 400 | 400 *(unchanged; not re-evaluated)* |
-| Local `dataset_coverage.markets_calendar` | PARTIAL | PARTIAL *(not promoted)* |
 
-### What was closed (one path)
+### What was closed (first path)
 
 1. **Export watermarks D1 → local** via
-   `scripts/sync_d1_to_sqlite.py --table ingestion_watermarks`
-   (`markets_calendar` cursor NULL → 2859278).
+   `scripts/sync_d1_to_sqlite.py --table ingestion_watermarks`.
 2. **Applied change_seq** via
    `scripts/sync_d1_to_sqlite.py --incremental --table jquants_records`
    after skipping non-local markers (`jquants_records_r2`, `equities_master_scd2`).
-   Applied watermark: 0 → 2859279 (retained change_log window only).
-
-### What is *not* claimed
-
-- `dataset_coverage` / segment COMPLETE was **not** rewritten by this path.
-- Full history for `markets_calendar` on remote D1 is thin (n≈42 recent rows);
-  bulk structured history may live on R2 (`jquants_records_r2` summary markers).
-- Legacy local table `jquants_market_calendar` remains empty; calendar facts live
-  in local `jquants_records` (dataset=`markets_calendar`).
-- applied_lag=0 means local applied the tip of the **retained** remote change_log,
-  not that every historical D1/R2 row is present locally.
 
 ## How to re-measure
 
@@ -59,38 +94,54 @@ npx wrangler d1 execute quant-ingest --remote --command \
 
 npx wrangler d1 execute quant-ingest --remote --command \
   "SELECT dataset, last_export_cursor FROM ingestion_watermarks
-   WHERE dataset IN ('markets_calendar','equities_bars_daily')
+   WHERE dataset IN ('markets_calendar','equities_bars_daily','indices_bars_daily_topix')
    ORDER BY dataset;"
 ```
 
 Local + lag report (read-only):
 
 ```bash
-python3 scripts/report_d1_local_sync_lag.py \
+# use repo .venv (cryptography / package imports)
+source .venv/bin/activate
+python scripts/report_d1_local_sync_lag.py \
   --db data/structured/ingestion.sqlite \
-  --remote-max-seq 2859279 \
-  --remote-change-log-n 362 \
-  --focus markets_calendar,equities_bars_daily
+  --remote-max-seq 2859284 \
+  --remote-change-log-n 367 \
+  --focus markets_calendar,equities_bars_daily,indices_bars_daily_topix
 ```
 
-## Sync command used for the closed path
+## Sync commands used for closed paths
 
 ```bash
 export INGESTION_PREMIUM_URL="https://quant-platform-ingestion-premium.<acct>.workers.dev"
 export DATA_EXPORT_TOKEN  # from ~/.config/quant-platform/data_export_token — do not commit
+source .venv/bin/activate
 
-# Control-plane watermarks
-python3 scripts/sync_d1_to_sqlite.py \
+# 1) Control-plane watermarks
+python scripts/sync_d1_to_sqlite.py \
   --db data/structured/ingestion.sqlite \
   --table ingestion_watermarks \
   --url "$INGESTION_PREMIUM_URL" \
   --token "$DATA_EXPORT_TOKEN"
 
-# Applied change_seq (skips R2/SCD2 markers; advances seq)
-python3 scripts/sync_d1_to_sqlite.py \
+# 2) Applied change_seq (skips R2/SCD2 markers; advances seq)
+python scripts/sync_d1_to_sqlite.py \
   --db data/structured/ingestion.sqlite \
   --table jquants_records \
   --incremental \
+  --url "$INGESTION_PREMIUM_URL" \
+  --token "$DATA_EXPORT_TOKEN"
+
+# 3) Thin control tables
+python scripts/sync_d1_to_sqlite.py \
+  --db data/structured/ingestion.sqlite \
+  --table coverage_segments \
+  --url "$INGESTION_PREMIUM_URL" \
+  --token "$DATA_EXPORT_TOKEN"
+
+python scripts/sync_d1_to_sqlite.py \
+  --db data/structured/ingestion.sqlite \
+  --table collection_receipts \
   --url "$INGESTION_PREMIUM_URL" \
   --token "$DATA_EXPORT_TOKEN"
 ```
