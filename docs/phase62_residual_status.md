@@ -2,8 +2,7 @@
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
 **Live verified:** 2026-08-12 (remote D1 RO after P0 margin+TOPIX execute; COMPLETE segs **482**; raw_n **1934**; bars/topix/breakdown/margin `observed_*` below; Phase7 **OFF**)  
-**Repo tip:** `38600d9` — COMPLETE **482** / raw **1934** / bars **2008-05-01** / topix **2008-01-01** / margin **PARTIAL** / Phase7 **OFF**  
-*(tip line re-stamped to this push SHA in follow-up residual commit)*
+**Repo tip:** `f42326d` — COMPLETE **482** / raw **1934** / bars **2008-05-01** / topix **2008-01-01** / margin **PARTIAL** / Phase7 **OFF**
 
 ## Live snapshot (remote D1 `quant-ingest`)
 
