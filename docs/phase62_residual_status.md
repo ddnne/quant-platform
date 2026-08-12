@@ -3,7 +3,7 @@
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
 **Live verified:** 2026-08-12 (OTC COMPLETE +3 → segment COMPLETE **404**; B1 residual sync)  
 **Proof:** `docs/proof/complete_plus3_otc_20260812.md`, `docs/proof/track_a_dryrun_20260812.md`, `docs/proof/data_quality_scan_20260812.md`  
-**Repo tip:** `5d4a78e` — Track B1 LLM nav + plane import guards (this residual live-sync is docs-only on main; Track A infra `8638936`)
+**Repo tip:** `086f6a7` — residual live-sync + B1 body `7b09e1b` (Track A infra `8638936`)
 
 ## Live snapshot
 
