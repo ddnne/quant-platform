@@ -1,0 +1,38 @@
+# Remote raw_retention_manifests POST_AEXEC (D1 quant-ingest)
+
+Source: wrangler d1 execute --remote (2026-08-12 ~14:12Z)
+Column: completeness (not status)
+
+## totals
+- total: 1593
+- complete_m: 1492
+- failed_m: 101
+- sum_rows: 9648200
+- sum_bytes: 6050507303
+
+## PRE (Track A baseline snippet)
+- total: 1488
+- complete_m: 1449
+- failed_m: 39
+
+## delta PRE→POST
+- total: +105
+- complete_m: +43
+- failed_m: +62
+
+## equities_bars_daily
+- n: 309 manifests
+- complete_n: 215
+- rows (sum): 8101966
+
+## AEXEC window (created_at >= 2026-08-12T22:55+09:00, equities_bars_daily)
+- COMPLETE: 45 manifests, sum row_count=1046715
+- FAILED: 62 manifests, sum row_count=0
+
+## coverage_segments (remote, not claimed as A-driven seal)
+- COMPLETE: 431
+- PARTIAL: 12505
+- UNKNOWN: 5
+- equities_bars_daily COMPLETE segments: **12** (unchanged vs prior Track A focus)
+
+No tokens/secrets in this file.
