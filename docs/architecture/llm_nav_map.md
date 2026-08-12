@@ -1,0 +1,271 @@
+# LLM / agent navigation map
+
+**Status:** Draft (Track B0) — skeleton for README entry after Grok review of the ADR.  
+**Paired ADR:** [`adr_llm_friendly_refactor.md`](./adr_llm_friendly_refactor.md) (**Proposed**).  
+**Live residual SoT:** [`../phase62_residual_status.md`](../phase62_residual_status.md)  
+**Layout SoT:** [`repo_layout_migration.md`](./repo_layout_migration.md) (implemented)
+
+> **Mass Autonomous Research / production READY / Phase 7 switch: NO-GO · OFF.**  
+> Do not upgrade those statuses from this map. Only residual + dated `docs/proof/*` may record live evidence.
+
+---
+
+## 0. Read this first (≤5 files)
+
+| # | File | Why |
+|---|------|-----|
+| 1 | [`../../README.md`](../../README.md) | Product orientation + `packages/*` tree |
+| 2 | **This file** | Task routing + do-not list |
+| 3 | [`../phase62_residual_status.md`](../phase62_residual_status.md) | Live residual; COMPLETE counts; Mass NO-GO |
+| 4 | [`../architecture.md`](../architecture.md) | PIT sole read path, Coverage V2, MCP planes |
+| 5 | *One* domain doc for your task (table below) | Contract detail |
+
+**Refactor / layout / import policy work:** also read the [ADR](./adr_llm_friendly_refactor.md).
+
+---
+
+## 1. Do not (agent safety)
+
+```text
+✗ Claim or enable Mass ON, production READY, Phase 7 GO
+✗ Invent COMPLETE segments or live B0 pass without residual+proof
+✗ Move platform/workers/** or data/**
+✗ Introduce quant_platform.* imports (Batch Z not approved for B1)
+✗ Read facts via raw SQLite from core / features / strategies (use pit.get_*)
+✗ Call market HTTP outside packages/data_plane/ingestion
+✗ Commit secrets, data/*.sqlite, .venv, egg-info, node_modules
+✗ Treat docs/phase62*_status.md / final_report as current residual SoT
+✗ Weaken publish fail-closed guards or mass_research operator_override rejection
+✗ Delete Python↔TS parity mirrors or governed.js codegen without replacement
+```
+
+---
+
+## 2. Repository planes (disk vs import)
+
+```text
+packages/
+  edge/                 import: cf_platform, mcp_servers
+  data_plane/           import: data_contracts, ingestion, storage, pit, data_access, ops
+  research_runtime/     import: core, features, strategies, paper_runtime, risk, price_basis
+  product/              import: agents, research, selection, execution, knowledge, gateway
+platform/workers/**     NOT a Python package — path FROZEN (wrangler)
+scripts/                CLI drivers (not installed packages)
+tests/                  offline pytest (testpaths)
+docs/                   architecture / domain / operations / proof / phase history
+data/                   local gitignored domain — do not move
+qp_paths.py             repo_root() — use instead of parents[N] in packages
+```
+
+**Import rule (B1 default):** leaf top-level names stay (`import pit`, not `data_plane.pit`).  
+Physical path is for humans/agents browsing disk; Python path is setuptools multi-root.
+
+---
+
+## 3. Dependency direction (short)
+
+```text
+data_contracts ← ingestion ← storage ← pit
+                      ↑           ↑
+                 cf_platform  (coverage helpers)
+
+pit ← features ← core ← strategies ← agents / execution
+         ↑                 ↑
+    price_basis      paper_runtime → storage, data_contracts, cf_platform
+
+data_access → pit, features, paper_runtime, storage, data_contracts
+mcp_servers → data_access
+
+product (agents, gateway, …) must not fetch market data via ingestion HTTP
+```
+
+Details + exceptions: ADR §5.
+
+---
+
+## 4. Task → code + docs
+
+| Task | Start here (code) | Domain doc |
+|------|-------------------|------------|
+| J-Quants / JSDA fetch | `packages/data_plane/ingestion/` | [`../data_sources.md`](../data_sources.md) |
+| Dataset contracts / governed JSON | `packages/data_plane/data_contracts/` | package README + JSON files |
+| Receipts / coverage ledger | `packages/data_plane/storage/` | residual + [`../phase61_production_runbook.md`](../phase61_production_runbook.md) |
+| PIT fact read | `packages/data_plane/pit/` | [`../pit_api.md`](../pit_api.md) |
+| Ops / research read adapter | `packages/data_plane/data_access/` | [`../quant_data_access.md`](../quant_data_access.md) |
+| Backfill planning | `packages/data_plane/ops/` | residual / ops scripts |
+| CF Premium algorithms (Python) | `packages/edge/cf_platform/` | [`../phase35_cf_ingest.md`](../phase35_cf_ingest.md) |
+| Local stdio MCP | `packages/edge/mcp_servers/quant_data/` | [`../quant_data_access.md`](../quant_data_access.md) |
+| Features | `packages/research_runtime/features/` | [`../features.md`](../features.md) |
+| Backtest engine | `packages/research_runtime/core/` | [`../core_engine.md`](../core_engine.md) |
+| StrategySpec / paper runner | `packages/research_runtime/strategies/` | [`../paper.md`](../paper.md), [`../agents.md`](../agents.md) |
+| READY policy / snapshots | `packages/research_runtime/paper_runtime/` | residual (**READY NO-GO** for production) |
+| Role agents / Mass gate | `packages/product/agents/` | [`../agents.md`](../agents.md), [`./phase7_fail_closed.md`](./phase7_fail_closed.md) |
+| Selection / budget | `packages/product/selection/` | phase7 foundation OFF docs |
+| AI gateway stubs | `packages/product/gateway/` | fail-closed tests |
+| CF Workers (TS) | `platform/workers/<name>/` | worker README + phase runbooks |
+| Publish ops projection | `scripts/publish_ops_projection.py` | [`../operations/projection_publish_guard.md`](../operations/projection_publish_guard.md) |
+| Packaging / paths | `pyproject.toml`, `qp_paths.py` | this map + layout migration |
+| LLM-friendly refactor | *no code until B1 approved* | [ADR](./adr_llm_friendly_refactor.md) |
+
+---
+
+## 5. Public entrypoints (cheat)
+
+Prefer these over random deep imports for **new** code:
+
+| Package | Prefer |
+|---------|--------|
+| `pit` | `get_equity_bars_daily`, `get_equity_master`, `get_jquants_records`, `get_*`, errors |
+| `core` | `run_backtest`, `standard_cost` / `stress_cost`, strategy protocol |
+| `storage` | coverage ledger API, `TrustedReceiptIssuer`, schema/store for writers |
+| `agents` | `AgentPaperPipeline`, role types, `mass_research.start_mass_research` (fail-closed) |
+| `data_contracts` | `loader` / `coverage` / `identity` / inventory helpers + JSON package data |
+| `cf_platform` | `ingest_premium.*`, `live_gates.measure_b0` |
+| `strategies` | `spec.schema`, `spec.interpreter`, `paper.runner` / store types |
+| `ingestion` | `pipeline`, `jquants.catalog`, clients — root is namespace-light |
+
+Full policy: ADR §5.2.
+
+---
+
+## 6. Name collision glossary
+
+| Name you see | Means | Not to confuse with |
+|--------------|-------|---------------------|
+| **Track B0** | This design track (ADR only) | — |
+| **B0 gates** (`cf_platform.live_gates`) | Order-of-magnitude volume checks | Track B0; Mass GO |
+| **READY** | Research snapshot policy / publication | “repo ready to merge” |
+| **COMPLETE** | Coverage V2 segment/dataset state | “phase complete” prose |
+| **code-complete** | Implementation present | live GO |
+| **NO-GO / OFF** | Must not enable | DEFER (postponed work) |
+| `platform/` (disk) | Workers tree | stdlib `platform`; use `cf_platform` for Python |
+| `execution` (three places) | core fill timing · paper_runtime helper · product paper service | See ADR §8.2 |
+| `artifacts` (agents vs research) | Different artifact types | Do not merge casually |
+| `data_access` | Read domain façade | Not a second PIT |
+
+---
+
+## 7. Docs truth layers
+
+| Layer | Paths | Agent rule |
+|-------|-------|------------|
+| **0 Current** | README, this map, `phase62_residual_status.md`, `architecture.md`, ADR (if refactoring) | Always prefer |
+| **1 Domain** | `pit_api`, `core_engine`, `features`, `paper`, `agents`, `quant_data_access`, `data_sources` | By task |
+| **2 Ops** | `docs/operations/*`, phase runbooks, worker READMEs | When operating live systems |
+| **3 Proof** | `docs/proof/*` | Cite evidence; do not invent status |
+| **4 Historical** | `phase62_status`, `phase621_*`, `phase622_*`, `phase623_*`, many `phase62_*checklist/final*` | Banner / archive; not residual SoT |
+
+### 7.1 Phase / residual file index (maintenance)
+
+| File | Tag (B0 draft) |
+|------|----------------|
+| `docs/phase62_residual_status.md` | **current residual** |
+| `docs/architecture.md` | **current architecture hub** |
+| `docs/architecture/repo_layout_migration.md` | **current layout SoT** |
+| `docs/architecture/phase7_fail_closed.md` | **current** (Phase 7 OFF) |
+| `docs/architecture/adr_llm_friendly_refactor.md` | **proposed ADR** |
+| `docs/phase61_production_runbook.md` | runbook |
+| `docs/phase62_production_runbook.md` | runbook |
+| `docs/phase62_cf_edge_cron.md` | runbook / design note |
+| `docs/phase35_*.md` | domain + runbook (Phase 3.5) |
+| `docs/phase62_status.md` | historical snapshot |
+| `docs/phase621_status.md` | historical snapshot |
+| `docs/phase622_status.md` | historical snapshot |
+| `docs/phase623_status.md` | historical snapshot |
+| `docs/phase621_test_audit.md` | historical / audit |
+| `docs/phase622_independent_review.md` | historical review |
+| `docs/phase62_completion_checklist.md` | historical / checklist |
+| `docs/phase62_final_report.md` | historical report — **not** FULL DONE alone |
+| `docs/proof/*` | dated evidence |
+| `docs/operations/*` | ops runbooks |
+
+B1-a will stamp historical files with an explicit banner pointing here + residual.
+
+---
+
+## 8. Tests — what to run
+
+### Guard pack (every structural change)
+
+```bash
+python -m pytest \
+  tests/test_smoke.py \
+  tests/test_mass_research_gate.py \
+  tests/test_gateway_fail_closed.py \
+  tests/test_core_data_boundary.py \
+  tests/test_features_data_boundary.py \
+  tests/test_strategies_static_boundaries.py \
+  tests/test_phase7_gateway.py \
+  tests/test_ops_projection_publish_guard.py \
+  -q
+```
+
+### Full offline
+
+```bash
+pip install -e ".[dev]"   # after packaging/layout changes
+python -m pytest tests/ -q
+python -m unittest tests.test_smoke -v
+```
+
+Live (`QP_LIVE=1`) is **operator-only**, never a B1 merge gate.
+
+More detail after B1-d: planned `tests/README.md` (ADR §12).
+
+---
+
+## 9. Scripts map (flat list → purpose)
+
+| Script cluster | Examples | Plane |
+|----------------|----------|-------|
+| Ingest | `run_ingestion_once.py`, `run_historical_backfill.py`, `parse_jsda_from_r2_mirror.py` | data_plane |
+| Coverage / receipts | `write_collection_receipts.py`, `refresh_coverage_ledger.py`, `issue_signed_receipts_for_segments.py`, `evaluate_collection_sla.py` | data_plane / edge |
+| Sync / D1 | `sync_d1_to_sqlite.py`, `report_d1_local_sync_lag.py`, `restore_local_complete_from_receipt.py` | ops |
+| Projection | `export_ops_projection.py`, `publish_ops_projection.py`, `ops_reeval_freshness.py`, `ops_status.py` | ops (**publish fail-closed**) |
+| Paper / agents | `run_paper_once.py`, `run_agents_paper_once.py`, `rebuild_paper_index.py` | research / product |
+| Validation | `run_phase35_validation.py`, `run_phase4_accept.py` | edge / features |
+| Codegen | `generate_governed_js.py`, `verify_governed_js_drift.py` | contracts → Workers |
+
+Shared ROOT bootstrap unification is **B1-e** (ADR); until then scripts use local `sys.path` inserts — keep `parents[N]` consistent with file depth.
+
+---
+
+## 10. Frozen paths
+
+| Path | Rule |
+|------|------|
+| `platform/workers/**` | No moves; wrangler + runbooks + tests hardcode |
+| `data/**` | Local domain; gitignore; never commit sqlite dumps/secrets |
+| Import leaf names | Stable through B1 (`ingestion`, `pit`, …) |
+| Mass / READY / Phase7 switches | Remain closed |
+
+---
+
+## 11. B1 batch pointer (implementation later)
+
+| Batch | Theme | Code? |
+|-------|-------|-------|
+| **B0** | This map + ADR | docs only (**now**) |
+| B1-a | Docs hub, historical stamps, README link | docs |
+| B1-b | Plane READMEs, public API, boundary tests | packages + tests |
+| B1-c | Dead code / empty dirs | minimal |
+| B1-d | Test tiers / matrix navigation | tests |
+| B1-e | Script bootstrap, `qp_paths` stragglers | scripts + packages |
+| B1-f | Optional archive move / script regroup | optional |
+| Z | `quant_platform.*` namespace | **out of B1** |
+
+Do **not** start B1 until ADR status is **Accepted** by Grok review.
+
+---
+
+## 12. Quick spirit checklist
+
+```text
+[ ] Ingestion-only network for market data
+[ ] pit.get_* sole structured fact read (as_of, available_at)
+[ ] core/features/strategies: no direct SQLite facts
+[ ] CF contracts + Worker parity respected
+[ ] Mass fail-closed; no operator_override
+[ ] Publish fail-closed; no synthetic COMPLETE in prod export
+[ ] Honest residual; proof dated; no GO fiction
+```
