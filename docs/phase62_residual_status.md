@@ -3,7 +3,7 @@
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
 **Live verified:** 2026-08-12 (A3 COMPLETE +71 → segment COMPLETE **479**; Track B residual live-sync)  
 **Proof:** `docs/proof/complete_plus23_parallel_receipts_20260812.md`, `docs/proof/complete_plus3_otc_20260812.md`, `docs/proof/raw_throughput_POST_AEXEC_20260812T141214Z.md`, `docs/proof/track_a_dryrun_20260812.md`, `docs/proof/data_quality_scan_20260812.md`  
-**Repo tip:** `7a5a74b` — Track B residual live-sync + docs SoT (COMPLETE 479 / raw 1696 / Phase7 OFF)
+**Repo tip:** `b579080` — Track B residual live-sync + docs SoT (COMPLETE 479 / raw 1696 / Phase7 OFF)
 
 ## Live snapshot
 
