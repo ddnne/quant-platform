@@ -37,9 +37,19 @@ Contracts → ingest → store → PIT read → ops meta.
 | `data_access` | `QuantDataAccess`, ops/research read services |
 | `ops` | `backfill_planner`, `projection_meta` |
 
+## Operator CLIs (data_plane-facing)
+
+| Script | Role |
+|--------|------|
+| `scripts/issue_receipts_parallel.py` | A3: seal months with **usable raw + structured** (empty-raw ban; no backfill) |
+| `scripts/publish_ops_projection.py` | Export + fail-closed remote apply (`local COMPLETE ≥ remote`) |
+| `scripts/ops_reeval_observed_window.py` | Receipt-plane `observed_*` reeval (no segment rewrite) |
+| `scripts/ops_reeval_freshness.py` | Projection FRESH clock (no COMPLETE claim) |
+
 ## Policy
 
 - **Import stability (B1):** leaf top-level names; Batch Z (`quant_platform.*`) **DEFER**
 - Static guard: `tests/test_plane_import_boundaries.py`
-- Live residual: `docs/phase62_residual_status.md` (Mass/READY/Phase7 **NO-GO**)
+- Live residual: `docs/phase62_residual_status.md` (Mass/READY/Phase7 **NO-GO / OFF**)
+- Sticky COMPLETE: day-roll must not demote eligible SUCCESS (`storage/coverage_ledger.py`)
 - Details: `docs/architecture/adr_llm_friendly_refactor.md`, `docs/architecture/llm_nav_map.md`

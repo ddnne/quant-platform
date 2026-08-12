@@ -39,4 +39,6 @@ Compute stack (no external market network): backtest, features, strategies, pape
 
 - Leaf imports only (Batch Z **DEFER**)
 - Guards: `tests/test_core_data_boundary.py`, `test_features_data_boundary.py`, `test_strategies_static_boundaries.py`, `test_plane_import_boundaries.py`
-- Residual: Mass / READY / Phase7 **NO-GO** — `docs/phase62_residual_status.md`
+- Residual: Mass / READY / Phase7 **NO-GO / OFF** — `docs/phase62_residual_status.md`
+- READY / B0 production GO is **not** declared from this plane; paper_runtime READY is research machinery only
+- Test navigation: `tests/README.md` (G0/G1/G2)

@@ -43,3 +43,5 @@ Orchestration and product surfaces (agents, selection, gateway stubs).
 - Leaf imports only; Batch Z **DEFER**
 - Guards: `tests/test_mass_research_gate.py`, `test_gateway_fail_closed.py`, `test_plane_import_boundaries.py`
 - Residual SoT: `docs/phase62_residual_status.md` (Mass/READY/Phase7 **NO-GO / OFF**)
+- Phase 7 docs: `docs/architecture/phase7_fail_closed.md`, `docs/operations/phase7_foundation_off.md`
+- Product plane **never** issues Coverage COMPLETE (receipts live in data_plane/storage)

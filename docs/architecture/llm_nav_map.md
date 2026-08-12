@@ -104,8 +104,10 @@ Details + exceptions: ADR §5.
 | AI gateway stubs | `packages/product/gateway/` | fail-closed tests |
 | CF Workers (TS) | `platform/workers/<name>/` | worker README + phase runbooks |
 | Publish ops projection | `scripts/publish_ops_projection.py` | [`../operations/projection_publish_guard.md`](../operations/projection_publish_guard.md) |
+| A3 seal raw+struct months | `scripts/issue_receipts_parallel.py` | residual + [`../proof/complete_plus8_r2_raw_seal_20260813.md`](../proof/complete_plus8_r2_raw_seal_20260813.md); **never** invent COMPLETE; R2 mirror OK if usable raw |
 | Packaging / paths | `pyproject.toml`, `qp_paths.py` | this map + layout migration |
 | LLM-friendly refactor | plane READMEs + `tests/test_plane_import_boundaries.py` | [ADR](./adr_llm_friendly_refactor.md) (**Accepted**); residual for live status |
+| Test tiers (G0/G1/G2) | `tests/README.md` | this map §11 B1-d |
 
 ---
 
@@ -231,7 +233,7 @@ More detail after B1-d: planned `tests/README.md` (ADR §12).
 | Script cluster | Examples | Plane |
 |----------------|----------|-------|
 | Ingest | `run_ingestion_once.py`, `run_historical_backfill.py`, `parse_jsda_from_r2_mirror.py` | data_plane |
-| Coverage / receipts | `write_collection_receipts.py`, `refresh_coverage_ledger.py`, `issue_receipts_parallel.py`, `issue_signed_receipts_for_segments.py`, `evaluate_collection_sla.py` | data_plane / edge (**empty-raw ban**; no COMPLETE without raw) |
+| Coverage / receipts | `write_collection_receipts.py`, `refresh_coverage_ledger.py`, `issue_receipts_parallel.py`, `issue_signed_receipts_for_segments.py`, `evaluate_collection_sla.py` | data_plane / edge (**empty-raw ban** incl. `{"data":[]}`; no COMPLETE without raw; sticky COMPLETE survives day-roll) |
 | Sync / D1 | `sync_d1_to_sqlite.py`, `report_d1_local_sync_lag.py`, `restore_local_complete_from_receipt.py` | ops |
 | Projection | `export_ops_projection.py`, `publish_ops_projection.py`, `ops_reeval_freshness.py`, `ops_reeval_observed_window.py`, `ops_status.py` | ops (**publish fail-closed**; observed_* re-eval does not rewrite segments) |
 | Paper / agents | `run_paper_once.py`, `run_agents_paper_once.py`, `rebuild_paper_index.py` | research / product |
@@ -260,8 +262,8 @@ Shared ROOT bootstrap unification is **B1-e** (ADR); until then scripts use loca
 | **B0** | This map + ADR design | **DONE** |
 | **B1-a** | Docs hub, historical stamps, README link | **DONE** |
 | **B1-b** | Plane READMEs, public API notes, boundary tests | **DONE** |
-| **B1-c** | Dead code / empty dirs / collision docs | **partial** — inventory 2026-08-12: root `raw/` already absent; `ingestion.jsda.adapters` unreferenced but **kept** as formal surface; name-collision glossary extended; no parity-mirror or fail-closed deletions |
-| B1-d | Test tiers / matrix navigation | pending |
+| **B1-c** | Dead code / empty dirs / collision docs | **partial** — inventory 2026-08-13: root `raw/` absent; `ingestion.jsda.adapters` unreferenced but **kept** as formal surface; no parity-mirror or fail-closed deletions; heuristic “zero-ref” scans **false-positive** on leaf imports (`from core import engine`) — do not mass-delete |
+| **B1-d** | Test tiers / matrix navigation | **partial** — `tests/README.md` G0/G1/G2 + named guard table (2026-08-13); heavy matrix split still open |
 | B1-e | Script bootstrap, `qp_paths` stragglers | pending |
 | B1-f | Optional archive move / script regroup | optional / last |
 | Z | `quant_platform.*` namespace | **DEFER** (out of B1) |

@@ -113,8 +113,9 @@
 | Mass / READY / Phase7 switch ON | **NO-GO** (Phase7 **OFF** maintained) |
 | applied_cursor materialization | **DEFER** |
 | Batch Z (`quant_platform.*` imports) | **DEFER** (ADR Accepted; out of B1) |
-| B1-c full dead-code purge | **partial** — inventory only; no unsafe deletes |
-| B1-d / B1-e | **pending** / partial |
+| B1-c full dead-code purge | **partial** — inventory only; no unsafe deletes (false-positive import scans) |
+| B1-d test tier nav | **partial** — `tests/README.md` G0/G1/G2 landed; matrix split open |
+| B1-e script bootstrap | **pending** |
 
 ## Note on COMPLETE counts
 - **Dataset-level COMPLETE = 2** means only two datasets have *all* required segments COMPLETE.
