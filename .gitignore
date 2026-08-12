@@ -55,3 +55,11 @@ data/paper/*
 # Local agent logs
 .glm-logs/
 data/ops/
+
+# Accidental root package shadows after packages/* reorg (never recreate)
+/data_contracts/
+/ingestion/
+/storage/
+/agents/
+/core/
+/cf_platform/
