@@ -1,9 +1,10 @@
 # Repo layout migration plan
 
-**Status:** plan-only (P0). No package moves in this commit.  
+**Status:** **fully implemented** (Batches 0–E). Physical layout under `packages/*`; import names unchanged via setuptools multi-root.  
 **Tip at plan authoring:** `b76996d`  
-**Mass research / READY publication / Phase 7 GO:** **OFF** (this plan does not enable them).  
-**Data / secrets:** `data/` stays gitignored local domain; **do not move** raw secrets or local SQLite dumps.
+**Mass research / READY publication / Phase 7 GO:** **OFF** (this migration does not enable them).  
+**Data / secrets:** `data/` stays gitignored local domain; **do not move** raw secrets or local SQLite dumps.  
+**Workers:** `platform/workers/**` path frozen; only relative imports of `data_contracts` JSON were retargeted to `packages/data_plane/data_contracts/`.
 
 ---
 

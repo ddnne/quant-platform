@@ -10,9 +10,9 @@ local ingestion runner a deliberately narrow proxy capability.
   `JQUANTS_PROXY_TOKEN` secret.
 - The envelope may request only upstream `GET`.
 - The target must exactly match a Premium-core path in
-  [`data_contracts/jquants_premium_core.json`](../../../data_contracts/jquants_premium_core.json)
+  [`packages/data_plane/data_contracts/jquants_premium_core.json`](../../../packages/data_plane/data_contracts/jquants_premium_core.json)
   or one of the five existing add-on paths in
-  [`data_contracts/jquants_proxy_addons.json`](../../../data_contracts/jquants_proxy_addons.json).
+  [`packages/data_plane/data_contracts/jquants_proxy_addons.json`](../../../packages/data_plane/data_contracts/jquants_proxy_addons.json).
   The Worker imports both JSON sources directly; there is no path list in its
   source. Tests pin the add-on contract to the Python ingestion catalog.
 - A generic `/v2/*` prefix is not an authorization policy. New endpoints stay

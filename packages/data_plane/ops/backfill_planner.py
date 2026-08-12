@@ -104,12 +104,30 @@ class EndpointCapability:
     source: str = "jquants"
 
 
+def _contracts_dir() -> Path:
+    """Locate data_contracts on disk (import-stable; layout may be packages/*)."""
+    import importlib.util
+
+    spec = importlib.util.find_spec("data_contracts")
+    if spec is not None:
+        if spec.submodule_search_locations:
+            return Path(next(iter(spec.submodule_search_locations)))
+        if spec.origin:
+            return Path(spec.origin).resolve().parent
+    from qp_paths import repo_root
+
+    root = repo_root()
+    for candidate in (
+        root / "packages" / "data_plane" / "data_contracts",
+        root / "data_contracts",
+    ):
+        if candidate.is_dir():
+            return candidate
+    return root / "packages" / "data_plane" / "data_contracts"
+
+
 def load_premium_endpoint_capabilities() -> dict[str, EndpointCapability]:
-    path = (
-        Path(__file__).resolve().parents[1]
-        / "data_contracts"
-        / "jquants_premium_core.json"
-    )
+    path = _contracts_dir() / "jquants_premium_core.json"
     doc = json.loads(path.read_text(encoding="utf-8"))
     out: dict[str, EndpointCapability] = {}
     for row in doc.get("datasets") or []:

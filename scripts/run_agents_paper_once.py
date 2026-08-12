@@ -3,13 +3,24 @@
 
 from __future__ import annotations
 
-import argparse
-import json
-import os
 import sys
 from pathlib import Path
 
-_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Bootstrap repo root onto sys.path before importing qp_paths (plain script runs).
+for _parent in Path(__file__).resolve().parents:
+    if (_parent / "qp_paths.py").is_file() and (_parent / "pyproject.toml").is_file():
+        if str(_parent) not in sys.path:
+            sys.path.insert(0, str(_parent))
+        break
+else:
+    raise RuntimeError("quant-platform repo root not found from script")
+
+from qp_paths import repo_root
+import argparse
+import json
+import os
+
+_REPO_ROOT = str(repo_root())
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
@@ -17,7 +28,6 @@ from agents import AgentPaperPipeline  # noqa: E402
 from agents.strategist import StrategistAgent  # noqa: E402
 from risk import JsonRiskStore  # noqa: E402
 from strategies.paper import JsonPaperStore, PaperRunConfig  # noqa: E402
-
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -40,13 +50,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--risk-output", default="data/risk/audits")
     return parser
 
-
 def _codes(value: str) -> tuple[str, ...]:
     codes = tuple(code.strip() for code in value.split(",") if code.strip())
     if not codes:
         raise ValueError("--universe must contain at least one code")
     return codes
-
 
 def main(argv: list[str] | None = None) -> int:
     parser = _parser()
@@ -85,7 +93,6 @@ def main(argv: list[str] | None = None) -> int:
         )
     )
     return 0
-
 
 if __name__ == "__main__":
     raise SystemExit(main())

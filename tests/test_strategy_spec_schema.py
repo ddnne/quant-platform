@@ -225,7 +225,9 @@ def test_strategy_spec_source_contains_no_dynamic_code_execution():
     import ast
     from pathlib import Path
 
-    root = Path(__file__).parents[1] / "strategies" / "spec"
+    import strategies as _strategies_pkg
+
+    root = Path(_strategies_pkg.__file__).resolve().parent / "spec"
     for path in root.glob("*.py"):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         called = {

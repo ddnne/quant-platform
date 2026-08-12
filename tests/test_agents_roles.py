@@ -56,7 +56,9 @@ def test_roles_exchange_structured_messages_and_a_declarative_spec():
 
 
 def test_role_implementations_cannot_import_data_or_secret_capabilities():
-    root = Path(__file__).parents[1] / "agents"
+    import agents as _agents_pkg
+
+    root = Path(_agents_pkg.__file__).resolve().parent
     role_files = [
         "macro.py",
         "fundamental.py",

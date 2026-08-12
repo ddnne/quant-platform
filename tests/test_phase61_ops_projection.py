@@ -15,6 +15,46 @@ _MODULE = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(_MODULE)
 
 
+
+def _ensure_projection_generation_columns(conn):
+    """Align test remote DB with migration 0004_projection_generation.sql."""
+    cols = (
+        ("dataset_coverage", "projection_generation_id TEXT"),
+        ("coverage_segments", "projection_generation_id TEXT"),
+        ("ops_ready_snapshots", "projection_generation_id TEXT"),
+        ("ops_snapshot_quality", "projection_generation_id TEXT"),
+        ("ops_b0_status", "projection_generation_id TEXT"),
+        ("ops_projection_metadata", "projection_generation_id TEXT"),
+    )
+    for table, coldef in cols:
+        try:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {coldef}")
+        except Exception:
+            pass  # table may not exist yet or column already present
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS ops_projection_generation (
+            generation_id TEXT PRIMARY KEY,
+            status TEXT NOT NULL,
+            source_db_digest TEXT,
+            generated_at TEXT NOT NULL,
+            producer_commit_sha TEXT,
+            contract_digest TEXT,
+            registry_digest TEXT,
+            coverage_policy_version TEXT,
+            activated_at TEXT,
+            detail_json TEXT NOT NULL DEFAULT '{}'
+        )"""
+    )
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS ops_projection_active (
+            singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+            generation_id TEXT NOT NULL,
+            activated_at TEXT NOT NULL
+        )"""
+    )
+    conn.commit()
+
+
 def test_projection_sql_populates_remote_jsda_coverage_without_paths(tmp_path):
     local_path = tmp_path / "local.sqlite"
     store = SqliteStore(local_path)
@@ -62,14 +102,15 @@ def test_projection_sql_populates_remote_jsda_coverage_without_paths(tmp_path):
     assert str(tmp_path) not in sql
 
     remote = sqlite3.connect(":memory:")
-    remote.executescript(
-        (_ROOT / "platform/workers/quant-ops-mcp/migrations/0002_ops_projection.sql")
-        .read_text(encoding="utf-8")
-    )
-    remote.executescript(
-        (_ROOT / "platform/workers/quant-ops-mcp/migrations/0003_endpoint_inventory_sla.sql")
-        .read_text(encoding="utf-8")
-    )
+    _mig = _ROOT / "platform/workers/quant-ops-mcp/migrations"
+    for _name in (
+        "0002_ops_projection.sql",
+        "0003_endpoint_inventory_sla.sql",
+        "0004_projection_generation.sql",
+        "0005_endpoint_inventory_morning_session.sql",
+    ):
+        remote.executescript((_mig / _name).read_text(encoding="utf-8"))
+    _ensure_projection_generation_columns(remote)
     remote.executescript(sql)
     row = remote.execute(
         "SELECT dataset,status FROM dataset_coverage"

@@ -13,15 +13,27 @@ AM SLA States:
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+# Bootstrap repo root onto sys.path before importing qp_paths (plain script runs).
+for _parent in Path(__file__).resolve().parents:
+    if (_parent / "qp_paths.py").is_file() and (_parent / "pyproject.toml").is_file():
+        if str(_parent) not in sys.path:
+            sys.path.insert(0, str(_parent))
+        break
+else:
+    raise RuntimeError("quant-platform repo root not found from script")
+
+from qp_paths import repo_root
 import argparse
 import json
-from pathlib import Path
+
 import sqlite3
-import sys
 from typing import Any
 from urllib.parse import quote
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = repo_root()
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
@@ -37,9 +49,7 @@ from data_contracts.coverage import (
     COVERAGE_STATUSES,
 )
 
-
 SLA_STATES = frozenset({"AVAILABLE", "DEGRADED", "UNAVAILABLE", "UNKNOWN"})
-
 
 def evaluate_collection_sla(
     db_path: str | Path,
@@ -140,7 +150,6 @@ def evaluate_collection_sla(
         ],
     }
 
-
 def evaluate_receipt_sla(
     db_path: str | Path,
     *,
@@ -219,7 +228,6 @@ def evaluate_receipt_sla(
         "non_compliant_segments": len(issues),
         "issues": issues,
     }
-
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
@@ -316,7 +324,6 @@ def main(argv: list[str] | None = None) -> int:
         import traceback
         traceback.print_exc()
         return 1
-
 
 if __name__ == "__main__":
     raise SystemExit(main())

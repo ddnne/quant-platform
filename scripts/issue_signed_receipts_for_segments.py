@@ -13,14 +13,25 @@ RECOVERED rebuilds are never upgraded to signed COMPLETE without raw + structure
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+# Bootstrap repo root onto sys.path before importing qp_paths (plain script runs).
+for _parent in Path(__file__).resolve().parents:
+    if (_parent / "qp_paths.py").is_file() and (_parent / "pyproject.toml").is_file():
+        if str(_parent) not in sys.path:
+            sys.path.insert(0, str(_parent))
+        break
+else:
+    raise RuntimeError("quant-platform repo root not found from script")
+
+from qp_paths import repo_root
 import argparse
 import json
 import re
 import sqlite3
-import sys
-from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = repo_root()
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
@@ -37,7 +48,6 @@ _FROM_TO_RE = re.compile(
     re.IGNORECASE,
 )
 
-
 def _count_structured(
     conn: sqlite3.Connection, dataset: str, start: str, end: str
 ) -> int:
@@ -53,10 +63,8 @@ def _count_structured(
     ).fetchone()
     return int(row[0]) if row else 0
 
-
 def _windows_overlap(a0: str, a1: str, b0: str, b1: str) -> bool:
     return a0[:10] <= b1[:10] and b0[:10] <= a1[:10]
-
 
 def _find_raw_bytes(
     data_dir: Path,
@@ -119,7 +127,6 @@ def _find_raw_bytes(
         if raw.strip() and len(raw) < 5_000_000:
             return raw
     return None
-
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
@@ -272,7 +279,6 @@ def main() -> int:
         print("no receipts issued")
     conn.close()
     return 0 if issued else 1
-
 
 if __name__ == "__main__":
     raise SystemExit(main())

@@ -8,16 +8,26 @@ Fixes common footguns:
 """
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+# Bootstrap repo root onto sys.path before importing qp_paths (plain script runs).
+for _parent in Path(__file__).resolve().parents:
+    if (_parent / "qp_paths.py").is_file() and (_parent / "pyproject.toml").is_file():
+        if str(_parent) not in sys.path:
+            sys.path.insert(0, str(_parent))
+        break
+else:
+    raise RuntimeError("quant-platform repo root not found from script")
+
+from qp_paths import repo_root
 import argparse
 import json
 import subprocess
-import sys
 from datetime import date, datetime
-from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = repo_root()
 LOG_ROOT = ROOT / ".glm-logs" / "backfill"
-
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
@@ -75,7 +85,6 @@ def main() -> int:
     print(f"log={log} exit={proc.returncode}")
     print("Next: python scripts/refresh_coverage_ledger.py && python scripts/backfill_status_report.py")
     return int(proc.returncode)
-
 
 if __name__ == "__main__":
     raise SystemExit(main())

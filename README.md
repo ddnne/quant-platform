@@ -89,24 +89,66 @@ credential を使う production backfill / READY / deploy の運用完了は区�
 
 詳細は [docs/architecture.md](docs/architecture.md) と [docs/roadmap.md](docs/roadmap.md) を参照してください。
 
-## ディレクトリの見方
+## ディレクトリの見方（layout migration 後）
+
+ライブラリコードは **plane 別** に `packages/*` へ物理配置しています。  
+**Python の import 名は従来どおり**（`import ingestion` / `import pit` 等）。setuptools multi-root
+（`where = packages/{edge,data_plane,research_runtime,product}`）で解決します。  
+詳細・履歴: [docs/architecture/repo_layout_migration.md](docs/architecture/repo_layout_migration.md)。
+
+### トップレベル
 
 | パス | 役割 |
 |------|------|
-| `docs/` | アーキテクチャ・ロードマップ等の文書 |
-| `ingestion/` | 外部データ取得（**Phase 1 実装**: J-Quants / JSDA） |
-| `pit/` | **PIT Data API**（**Phase 2 実装**: `as_of` 必須の読み出し専用 API） |
-| `core/` | **コアエンジン**（**Phase 3 実装**: PIT 経由のみのブラックボックスバックテスト） |
-| `features/` | **特徴量 Registry**（**Phase 4 実装**: PIT 経由のみ・versioned・`as_of` 必須） |
-| `risk/` | **Phase 6 実装**: Paper result と分離した immutable risk audit store |
-| `strategies/` | **Phase 5–6 実装**: Paper runner／store、sample 戦略、declarative StrategySpec interpreter |
-| `fof/` | Fund of Funds 層（後続） |
-| `agents/` | **Phase 6 実装**: 8 役割の structured I/O と offline orchestrator |
-| `platform/` | Cloudflare 設定（ingestion-premium Worker、Access/OAuth protected remote Ops Read MCP） |
-| `cf_platform/` | Python 側の CF 連携ヘルパ（**Phase 3.5**: 検証ロジック・natural_key の真相） |
-| `storage/` | SQLite スキーマ・ライタ（**Phase 1 実装**） |
-| `scripts/` | 運用・開発用スクリプト（ingestion／sync／validation／Paper／agent CLI） |
-| `tests/` | テスト（オフライン・鍵不要で green） |
+| `packages/` | ライブラリ本体（下表の 4 plane） |
+| `platform/` | Cloudflare Workers（**path 固定** — wrangler / deploy / 多数の runbook が依存） |
+| `scripts/` | 運用・開発 CLI（ingestion / sync / validation / Paper / ops） |
+| `tests/` | オフライン pytest（`testpaths = ["tests"]`） |
+| `docs/` | アーキテクチャ・phase runbook |
+| `data/` | ローカル raw/structured/paper/reports（**gitignore**・移動しない） |
+| `qp_paths.py` | `repo_root()` — パッケージ深さに依存しないリポジトリ根解決 |
+| `conftest.py` | pytest: root + `packages/*` を path に載せ、FakeHttpClient を提供 |
+| `pyproject.toml` | packaging / editable install |
+
+### `packages/` 地図（import 名は括弧内 = ディスク上の leaf 名）
+
+```
+packages/
+├── edge/                    # CF 隣接 Python + local MCP
+│   ├── cf_platform/         # (import cf_platform) Premium 検証・natural_key SoT mirror
+│   └── mcp_servers/         # (import mcp_servers) local stdio quant_data MCP
+├── data_plane/              # contracts → ingest → store → PIT read → ops meta
+│   ├── data_contracts/      # JSON 契約・coverage・identity
+│   ├── ingestion/           # J-Quants / JSDA fetch + normalize
+│   ├── storage/             # SQLite schema / receipts / coverage ledger
+│   ├── pit/                 # PIT Data API（fact の sole read path）
+│   ├── data_access/         # Ops + research read adapter
+│   └── ops/                 # Backfill planner, projection meta
+├── research_runtime/        # 計算スタック（外部ネットワークなし）
+│   ├── core/                # ブラックボックス backtest engine
+│   ├── features/            # versioned feature registry (PIT-only)
+│   ├── strategies/          # Paper runner / StrategySpec
+│   ├── paper_runtime/       # READY policy, snapshots, fingerprints
+│   ├── risk/                # immutable risk audit store
+│   └── price_basis/         # (import price_basis) 共有 price-basis helper
+└── product/                 # オーケストレーション / プロダクト面
+    ├── agents/              # 8 役割 agent + paper pipeline
+    ├── research/            # ideas / evaluation / readiness
+    ├── selection/           # budget ledger / screen / decision
+    ├── execution/           # authorized paper execution
+    ├── knowledge/           # immutable knowledge artifacts
+    ├── gateway/             # AI gateway stubs (fail-closed)
+    └── fof/                 # FoF 層プレースホルダ
+```
+
+### 凍結・非移動
+
+| パス | 理由 |
+|------|------|
+| `platform/workers/**` | wrangler.toml / migrations / `npx wrangler -c` と runbook の path 契約 |
+| `data/**` | ローカル secrets 隣接・SQLite・receipts（gitignore domain） |
+
+歴史的ドキュメントにトップレベル `ingestion/` 等の記述が残っていても、実装の正本は上記 `packages/*` です。
 
 ## 開発言語・ツール
 

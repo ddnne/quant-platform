@@ -6,8 +6,8 @@
  * when proxying. Health checks need no auth. The upstream capability is
  * intentionally narrow: GET requests to exact shared-contract paths.
  */
-import premiumContract from "../../../../data_contracts/jquants_premium_core.json";
-import addonProxyContract from "../../../../data_contracts/jquants_proxy_addons.json";
+import premiumContract from "../../../../packages/data_plane/data_contracts/jquants_premium_core.json";
+import addonProxyContract from "../../../../packages/data_plane/data_contracts/jquants_proxy_addons.json";
 
 export interface Env {
   JQUANTS_API_KEY: string;

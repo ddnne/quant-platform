@@ -4,8 +4,8 @@
  * path, natural key, or PIT timestamp policy is duplicated in Worker source.
  */
 
-import contractDocument from "../../../../data_contracts/jquants_premium_core.json";
-import coverageDocument from "../../../../data_contracts/collection_coverage.json";
+import contractDocument from "../../../../packages/data_plane/data_contracts/jquants_premium_core.json";
+import coverageDocument from "../../../../packages/data_plane/data_contracts/collection_coverage.json";
 
 export type DateMode = "range" | "today" | "none";
 export type AvailabilityPolicy =

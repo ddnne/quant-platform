@@ -19,8 +19,8 @@ J-Quants 鍵は Cloudflare Worker `quant-platform-ingestion-secrets` のみが�
 
 両方設定時のみ有効。片方のみなら `None`（未認証プロキシは不使用）。`--no-jquants-proxy` で直接取得に強制。トークンは鍵扱い（ログ/コミット禁止）。
 
-プロキシ権限は `data_contracts/jquants_premium_core.json` に列挙された path の upstream
-`GET` と `data_contracts/jquants_proxy_addons.json` に固定した既存 addon 5 path のみに
+プロキシ権限は `packages/data_plane/data_contracts/jquants_premium_core.json` に列挙された path の upstream
+`GET` と `packages/data_plane/data_contracts/jquants_proxy_addons.json` に固定した既存 addon 5 path のみに
 限定する。任意の `/v2/*` や書き込み method は許可せず、新 endpoint は共有 contract に
 明示追加されるまで fail-closed とする。
 

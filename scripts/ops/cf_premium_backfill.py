@@ -7,22 +7,33 @@ Existing shell driver is superseded for long-history closure.
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+# Bootstrap repo root onto sys.path before importing qp_paths (plain script runs).
+for _parent in Path(__file__).resolve().parents:
+    if (_parent / "qp_paths.py").is_file() and (_parent / "pyproject.toml").is_file():
+        if str(_parent) not in sys.path:
+            sys.path.insert(0, str(_parent))
+        break
+else:
+    raise RuntimeError("quant-platform repo root not found from script")
+
+from qp_paths import repo_root
 import argparse
 import json
 import os
-import sys
 import time
 import urllib.error
 import urllib.request
 from pathlib import Path
 
 # Repo root on path
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = repo_root()
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from ops.backfill_planner import BackfillPlanner  # noqa: E402
-
 
 def _token() -> str:
     path = Path(
@@ -32,7 +43,6 @@ def _token() -> str:
         )
     )
     return path.read_text(encoding="utf-8").strip()
-
 
 def _run_job(
     *,
@@ -87,7 +97,6 @@ def _run_job(
         "status": "fail" if code != 200 else "pass",
         "detail": payload if payload else body[:300],
     }
-
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
@@ -172,7 +181,6 @@ def main() -> int:
 
     print(f"finished executed={done}", flush=True)
     return 0
-
 
 if __name__ == "__main__":
     raise SystemExit(main())

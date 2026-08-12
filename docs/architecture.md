@@ -2,6 +2,14 @@
 
 Phase 6.1 時点のデータ完全性、PIT、公開 snapshot、外部 read surface の境界を固定する。
 
+## Repository layout
+
+Library code is grouped under `packages/{edge,data_plane,research_runtime,product}` by plane.
+**Import names stay top-level** (`import ingestion`, `import pit`, …). Cloudflare Workers remain
+at `platform/workers/**` (path frozen). See
+[architecture/repo_layout_migration.md](architecture/repo_layout_migration.md) for the mapping
+and packaging policy.
+
 ## 目的
 
 日本株・開示・債券データを用いた **研究／Paper／FoF** 基盤を構築する。

@@ -12,7 +12,7 @@ from data_contracts.identity import available_at_for, natural_key
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKER = ROOT / "platform/workers/ingestion-premium"
-CONTRACT = ROOT / "data_contracts/jquants_premium_core.json"
+CONTRACT = ROOT / "packages/data_plane/data_contracts/jquants_premium_core.json"
 
 
 def test_python_and_worker_share_canonical_identity_and_availability_semantics():

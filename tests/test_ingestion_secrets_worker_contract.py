@@ -14,8 +14,12 @@ from ingestion.jquants.catalog import DATASETS, PREMIUM_CORE_DATASETS
 
 
 ROOT = Path(__file__).parents[1]
-CONTRACT_PATH = ROOT / "data_contracts" / "jquants_premium_core.json"
-ADDON_CONTRACT_PATH = ROOT / "data_contracts" / "jquants_proxy_addons.json"
+CONTRACT_PATH = (
+    ROOT / "packages" / "data_plane" / "data_contracts" / "jquants_premium_core.json"
+)
+ADDON_CONTRACT_PATH = (
+    ROOT / "packages" / "data_plane" / "data_contracts" / "jquants_proxy_addons.json"
+)
 WORKER_PATH = (
     ROOT / "platform" / "workers" / "ingestion-secrets" / "src" / "index.ts"
 )
@@ -42,7 +46,7 @@ def test_secret_proxy_whitelist_source_is_exact_premium_contract():
     assert len(expected) == 23
     assert (
         'import premiumContract from '
-        '"../../../../data_contracts/jquants_premium_core.json"'
+        '"../../../../packages/data_plane/data_contracts/jquants_premium_core.json"'
     ) in source
     assert "...premiumContract.datasets, ...addonProxyContract.datasets" in source
     assert "JQUANTS_PROXY_PATHS.has(body.path)" in source
@@ -61,7 +65,7 @@ def test_secret_proxy_preserves_exact_catalogued_addons_via_shared_contract():
     assert _contract_paths().isdisjoint(addon_paths)
     assert (
         'import addonProxyContract from '
-        '"../../../../data_contracts/jquants_proxy_addons.json"'
+        '"../../../../packages/data_plane/data_contracts/jquants_proxy_addons.json"'
     ) in source
 
 

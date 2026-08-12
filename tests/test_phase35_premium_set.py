@@ -38,7 +38,7 @@ CATALOG_TS = Path(__file__).resolve().parents[1] / (
     "platform/workers/ingestion-premium/src/catalog.ts"
 )
 CONTRACT_JSON = Path(__file__).resolve().parents[1] / (
-    "data_contracts/jquants_premium_core.json"
+    "packages/data_plane/data_contracts/jquants_premium_core.json"
 )
 
 
@@ -83,7 +83,10 @@ def test_typescript_catalog_matches_python():
     assert CATALOG_TS.exists(), f"missing {CATALOG_TS}"
     text = CATALOG_TS.read_text(encoding="utf-8")
     assert set(_contract_entries()) == set(PREMIUM_CORE_DATASETS)
-    assert 'from "../../../../data_contracts/jquants_premium_core.json"' in text
+    assert (
+        'from "../../../../packages/data_plane/data_contracts/jquants_premium_core.json"'
+        in text
+    )
     assert "contractDocument.datasets" in text
     assert "rawContracts.map" in text
     assert 'id: "equities_master"' not in text

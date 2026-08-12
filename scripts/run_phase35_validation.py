@@ -36,13 +36,24 @@ Examples
 
 from __future__ import annotations
 
-import argparse
-import json
-import os
 import sys
 from pathlib import Path
 
-_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Bootstrap repo root onto sys.path before importing qp_paths (plain script runs).
+for _parent in Path(__file__).resolve().parents:
+    if (_parent / "qp_paths.py").is_file() and (_parent / "pyproject.toml").is_file():
+        if str(_parent) not in sys.path:
+            sys.path.insert(0, str(_parent))
+        break
+else:
+    raise RuntimeError("quant-platform repo root not found from script")
+
+from qp_paths import repo_root
+import argparse
+import json
+import os
+
+_REPO_ROOT = str(repo_root())
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
@@ -53,7 +64,6 @@ from cf_platform.ingest_premium.coverage import (  # noqa: E402
     run_coverage,
     summarize,
 )
-
 
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Phase 3.5 validation matrix runner")
@@ -154,7 +164,6 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     return p
 
-
 def _load_validation_sidecar(path: str | None) -> dict[str, int] | None:
     if not path:
         return None
@@ -166,7 +175,6 @@ def _load_validation_sidecar(path: str | None) -> dict[str, int] | None:
     if not isinstance(obj, dict):
         raise ValueError("validation sidecar must be a JSON object {dataset: int}")
     return {str(k): int(v) for k, v in obj.items()}
-
 
 def _print_text(results, *, require_implemented: bool) -> None:
     # Group by check_id then dataset for stable, readable output.
@@ -192,7 +200,6 @@ def _print_text(results, *, require_implemented: bool) -> None:
             f"not_implemented skips: {len(ni)} "
             f"({'; '.join(sorted({r.check_id for r in ni}))}) — {note}"
         )
-
 
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
@@ -252,7 +259,6 @@ def main(argv: list[str] | None = None) -> int:
 
     return 1 if has_failures(results,
                              require_implemented=args.require_implemented) else 0
-
 
 if __name__ == "__main__":
     sys.exit(main())

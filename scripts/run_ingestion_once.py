@@ -34,13 +34,24 @@ env var for a direct call) and never echoed.
 
 from __future__ import annotations
 
-import argparse
-import os
 import sys
 from pathlib import Path
 
+# Bootstrap repo root onto sys.path before importing qp_paths (plain script runs).
+for _parent in Path(__file__).resolve().parents:
+    if (_parent / "qp_paths.py").is_file() and (_parent / "pyproject.toml").is_file():
+        if str(_parent) not in sys.path:
+            sys.path.insert(0, str(_parent))
+        break
+else:
+    raise RuntimeError("quant-platform repo root not found from script")
+
+from qp_paths import repo_root
+import argparse
+import os
+
 # Make ``ingestion`` / ``storage`` importable when run as a plain script.
-_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_REPO_ROOT = str(repo_root())
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
@@ -54,7 +65,6 @@ from ingestion.pipeline import (  # noqa: E402
 from storage.sqlite_store import SqliteStore  # noqa: E402
 
 _UA = "quant-platform-ingest/0.1 (+personal-research; JST)"
-
 
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Phase 1 ingestion (one shot)")
@@ -139,7 +149,6 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     return p
 
-
 def _parse_datasets(raw) -> list[str]:
     """Flatten repeated and comma-separated ``--dataset`` tokens.
 
@@ -172,7 +181,6 @@ def _parse_datasets(raw) -> list[str]:
             else:
                 out.append(s)
     return out
-
 
 def main(argv=None) -> int:
     args = _build_parser().parse_args(argv)
@@ -308,7 +316,6 @@ def main(argv=None) -> int:
 
     print(f"[done] db={db_path}")
     return decide_exit(all_reports)
-
 
 if __name__ == "__main__":
     sys.exit(main())

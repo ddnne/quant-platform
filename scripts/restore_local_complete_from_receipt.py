@@ -9,14 +9,25 @@ Mass / READY: NO-GO. Never invents segments. Never writes remote D1.
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+# Bootstrap repo root onto sys.path before importing qp_paths (plain script runs).
+for _parent in Path(__file__).resolve().parents:
+    if (_parent / "qp_paths.py").is_file() and (_parent / "pyproject.toml").is_file():
+        if str(_parent) not in sys.path:
+            sys.path.insert(0, str(_parent))
+        break
+else:
+    raise RuntimeError("quant-platform repo root not found from script")
+
+from qp_paths import repo_root
 import argparse
 import json
 import sqlite3
-import sys
 from datetime import datetime, timezone
-from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = repo_root()
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
@@ -29,10 +40,8 @@ from storage.coverage_ledger import (  # noqa: E402
     record_required_segments,
 )
 
-
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
-
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
@@ -145,7 +154,6 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     finally:
         conn.close()
-
 
 if __name__ == "__main__":
     raise SystemExit(main())

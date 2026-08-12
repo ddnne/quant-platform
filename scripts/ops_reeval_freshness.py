@@ -12,15 +12,26 @@ Mass / READY / B0: NO-GO.
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+# Bootstrap repo root onto sys.path before importing qp_paths (plain script runs).
+for _parent in Path(__file__).resolve().parents:
+    if (_parent / "qp_paths.py").is_file() and (_parent / "pyproject.toml").is_file():
+        if str(_parent) not in sys.path:
+            sys.path.insert(0, str(_parent))
+        break
+else:
+    raise RuntimeError("quant-platform repo root not found from script")
+
+from qp_paths import repo_root
 import argparse
 import json
 import subprocess
-import sys
 import uuid
 from datetime import datetime, timezone
-from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = repo_root()
 WRANGLER = (
     ROOT
     / "platform"
@@ -42,14 +53,11 @@ DATASETS = (
     "jsda_tokyo_repo_rates",
 )
 
-
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
-
 def _sql_escape(value: str) -> str:
     return value.replace("'", "''")
-
 
 def build_sql(now: str, gen: str, commit: str) -> str:
     lines: list[str] = []
@@ -102,7 +110,6 @@ def build_sql(now: str, gen: str, commit: str) -> str:
         "WHERE id=(SELECT id FROM ops_projection_metadata ORDER BY id DESC LIMIT 1);"
     )
     return "\n".join(lines) + "\n"
-
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
@@ -168,7 +175,6 @@ def main(argv: list[str] | None = None) -> int:
     print(f"wrote {meta_path}")
     print("OK coverage_segments_untouched=1 mass=NO-GO")
     return 0
-
 
 if __name__ == "__main__":
     raise SystemExit(main())

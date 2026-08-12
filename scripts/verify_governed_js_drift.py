@@ -7,19 +7,29 @@ build/deploy must fail on drift.
 
 from __future__ import annotations
 
-import hashlib
-import json
-import re
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+# Bootstrap repo root onto sys.path before importing qp_paths (plain script runs).
+for _parent in Path(__file__).resolve().parents:
+    if (_parent / "qp_paths.py").is_file() and (_parent / "pyproject.toml").is_file():
+        if str(_parent) not in sys.path:
+            sys.path.insert(0, str(_parent))
+        break
+else:
+    raise RuntimeError("quant-platform repo root not found from script")
+
+from qp_paths import repo_root
+import hashlib
+import json
+import re
+
+ROOT = repo_root()
 sys.path.insert(0, str(ROOT))
 
 from data_contracts.coverage import all_coverage_contracts  # noqa: E402
 
 GOVERNED_JS = ROOT / "platform/workers/quant-ops-mcp/src/governed.js"
-
 
 def expected_membership() -> tuple[list[str], str]:
     ids = sorted(
@@ -31,7 +41,6 @@ def expected_membership() -> tuple[list[str], str]:
         json.dumps(ids, separators=(",", ":"), ensure_ascii=True).encode()
     ).hexdigest()
     return ids, digest
-
 
 def parse_generated(path: Path) -> tuple[list[str], str]:
     text = path.read_text(encoding="utf-8")
@@ -51,7 +60,6 @@ def parse_generated(path: Path) -> tuple[list[str], str]:
     if not isinstance(ids, list):
         raise SystemExit("GOVERNED_DATASETS is not a list")
     return [str(x) for x in ids], dig_m.group(1)
-
 
 def main() -> int:
     if not GOVERNED_JS.is_file():
@@ -78,7 +86,6 @@ def main() -> int:
         return 1
     print(f"OK governed.js matches coverage n={len(exp_ids)} {exp_digest}")
     return 0
-
 
 if __name__ == "__main__":
     raise SystemExit(main())

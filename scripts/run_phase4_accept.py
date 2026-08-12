@@ -33,15 +33,27 @@ Examples
 """
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+# Bootstrap repo root onto sys.path before importing qp_paths (plain script runs).
+for _parent in Path(__file__).resolve().parents:
+    if (_parent / "qp_paths.py").is_file() and (_parent / "pyproject.toml").is_file():
+        if str(_parent) not in sys.path:
+            sys.path.insert(0, str(_parent))
+        break
+else:
+    raise RuntimeError("quant-platform repo root not found from script")
+
+from qp_paths import repo_root
 import argparse
 import json
 import os
-import sys
 from datetime import date, timedelta
-from pathlib import Path
+
 from typing import Any
 
-_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_REPO_ROOT = str(repo_root())
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
@@ -51,7 +63,6 @@ from core import run_backtest, standard_cost  # noqa: E402
 from core.strategy_protocol import BarContext, OrderIntent  # noqa: E402
 
 FEATURE_IDS = ("return_1d", "momentum_n", "volatility_n")
-
 
 # ---------------------------------------------------------------------------
 # Offline fixture builder — mirrors tests/_coreseed.py but is self-contained
@@ -66,7 +77,6 @@ def _weekdays(start: date, n: int) -> list[str]:
             out.append(cur.isoformat())
         cur += timedelta(days=1)
     return out
-
 
 def _build_offline_db(path: Path) -> tuple[Path, list[str], list[str]]:
     """Seed a fixture DB with multi-code multi-day bars; return (db, days, codes)."""
@@ -125,7 +135,6 @@ def _build_offline_db(path: Path) -> tuple[Path, list[str], list[str]]:
     store.close()
     return path, days, codes
 
-
 # ---------------------------------------------------------------------------
 # Feature-driven strategy for the accept backtest
 # ---------------------------------------------------------------------------
@@ -168,7 +177,6 @@ class MomentumTopPickStrategy:
             return []
         return [OrderIntent(code=best_code, target_weight=1.0)]
 
-
 # ---------------------------------------------------------------------------
 # Accept checks
 # ---------------------------------------------------------------------------
@@ -210,7 +218,6 @@ def _registry_integrity_section() -> dict[str, Any]:
         "status_violations": status_violations,
     }
 
-
 def _feature_hit_rates_section(
     db_path: Path, codes: list[str], as_ofs: list[str]
 ) -> dict[str, Any]:
@@ -249,7 +256,6 @@ def _feature_hit_rates_section(
             "avg_rows_seen": (rows_seen_total / total) if total else 0.0,
         }
     return out
-
 
 def _backtest_section(
     db_path: Path,
@@ -291,7 +297,6 @@ def _backtest_section(
         "max_drawdown": metrics.get("max_drawdown"),
     }
 
-
 def _b0_section(db_path: Path) -> dict[str, Any]:
     """F4 — B0 strict gates. Only emitted when QP_LIVE=1."""
     from cf_platform.live_gates import b0_pass
@@ -302,7 +307,6 @@ def _b0_section(db_path: Path) -> dict[str, Any]:
         "gates": [r.as_dict() for r in results],
     }
 
-
 # ---------------------------------------------------------------------------
 # Live helpers
 # ---------------------------------------------------------------------------
@@ -311,7 +315,6 @@ def _table_exists(conn: "sqlite3.Connection", name: str) -> bool:
         "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)
     ).fetchone()
     return row is not None
-
 
 def _bar_dates_from_records(conn: "sqlite3.Connection", *, limit: int = 100) -> list[str]:
     """Distinct equities_bars_daily dates from generic ``jquants_records``."""
@@ -331,7 +334,6 @@ def _bar_dates_from_records(conn: "sqlite3.Connection", *, limit: int = 100) -> 
     except sqlite3.Error:
         return []
 
-
 def _bar_codes_from_records(conn: "sqlite3.Connection", *, target: int = 50) -> list[str]:
     """Sample codes from equities_bars_daily in ``jquants_records``."""
     try:
@@ -349,7 +351,6 @@ def _bar_codes_from_records(conn: "sqlite3.Connection", *, target: int = 50) -> 
         return [str(r[0]) for r in cur.fetchall() if r[0]]
     except sqlite3.Error:
         return []
-
 
 def _sample_live_codes(db_path: Path, *, target: int = 50) -> list[str]:
     """Sample up to ``target`` codes that have a daily bar in the DB.
@@ -377,7 +378,6 @@ def _sample_live_codes(db_path: Path, *, target: int = 50) -> list[str]:
         codes = []
     return codes
 
-
 def _live_recent_as_ofs(db_path: Path, *, count: int = 5) -> list[str]:
     """Up to ``count`` recent session closes as ``as_of`` strings."""
     import sqlite3
@@ -404,7 +404,6 @@ def _live_recent_as_ofs(db_path: Path, *, count: int = 5) -> list[str]:
         dates = []
     return [f"{d}T15:30:00+09:00" for d in dates]
 
-
 def _live_trading_days(db_path: Path) -> list[str]:
     """Recent trading days spanning the live backtest window."""
     import sqlite3
@@ -427,7 +426,6 @@ def _live_trading_days(db_path: Path) -> list[str]:
     except sqlite3.Error:
         dates = []
     return dates
-
 
 # ---------------------------------------------------------------------------
 # Main
@@ -469,7 +467,6 @@ def _build_parser() -> argparse.ArgumentParser:
              "Offline default 20; live default 50.",
     )
     return p
-
 
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
@@ -560,7 +557,6 @@ def main(argv: list[str] | None = None) -> int:
     print(f"[phase4-accept] live={live} ok={report['ok']} -> {out_path}")
     return 0 if report["ok"] else 1
 
-
 def _write_report(
     report: dict[str, Any],
     out_arg: str | None,
@@ -579,7 +575,6 @@ def _write_report(
         encoding="utf-8",
     )
     return out_path
-
 
 if __name__ == "__main__":
     sys.exit(main())

@@ -14,14 +14,25 @@ Usage:
 
 from __future__ import annotations
 
-import argparse
-import json
 import sys
-from dataclasses import asdict
-from datetime import date
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+# Bootstrap repo root onto sys.path before importing qp_paths (plain script runs).
+for _parent in Path(__file__).resolve().parents:
+    if (_parent / "qp_paths.py").is_file() and (_parent / "pyproject.toml").is_file():
+        if str(_parent) not in sys.path:
+            sys.path.insert(0, str(_parent))
+        break
+else:
+    raise RuntimeError("quant-platform repo root not found from script")
+
+from qp_paths import repo_root
+import argparse
+import json
+from dataclasses import asdict
+from datetime import date
+
+ROOT = repo_root()
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
@@ -31,7 +42,6 @@ from data_contracts import (
     governed_datasets,
 )
 from storage import coverage_gaps, coverage_summary, read_dataset_coverage
-
 
 def backfill_status(db_path: str | Path) -> dict:
     """Generate comprehensive backfill status vs contracts."""
@@ -133,7 +143,6 @@ def backfill_status(db_path: str | Path) -> dict:
         "am_diagnostic": am_status if am_status else None,
     }
 
-
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--db", default="data/structured/ingestion.sqlite",
@@ -155,7 +164,6 @@ def main(argv: list[str] | None = None) -> int:
     if result.get("gaps", {}).get("failed", 0) > 0:
         return 1
     return 0
-
 
 if __name__ == "__main__":
     raise SystemExit(main())

@@ -3,18 +3,28 @@
 
 from __future__ import annotations
 
-import argparse
-import json
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+# Bootstrap repo root onto sys.path before importing qp_paths (plain script runs).
+for _parent in Path(__file__).resolve().parents:
+    if (_parent / "qp_paths.py").is_file() and (_parent / "pyproject.toml").is_file():
+        if str(_parent) not in sys.path:
+            sys.path.insert(0, str(_parent))
+        break
+else:
+    raise RuntimeError("quant-platform repo root not found from script")
+
+from qp_paths import repo_root
+import argparse
+import json
+
+ROOT = repo_root()
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from paper_runtime import latest_ready_snapshot  # noqa: E402
 from storage import coverage_gaps, coverage_summary  # noqa: E402
-
 
 def _am_diagnostic(db_path: str | Path) -> dict:
     """Add diagnostic for equities_bars_daily_am null last_event_date.
@@ -77,7 +87,6 @@ def _am_diagnostic(db_path: str | Path) -> dict:
     diagnostic["note"] = "AM dataset in unexpected state"
     return diagnostic
 
-
 def status(snapshot_dir: str | Path) -> dict:
     try:
         snapshot = latest_ready_snapshot(snapshot_dir)
@@ -118,7 +127,6 @@ def status(snapshot_dir: str | Path) -> dict:
         "am_diagnostic": _am_diagnostic(snapshot.db_path),
     }
 
-
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--snapshot-dir", default="data/research_snapshots")
@@ -130,7 +138,6 @@ def main(argv: list[str] | None = None) -> int:
     else:
         print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
     return 0
-
 
 if __name__ == "__main__":
     raise SystemExit(main())

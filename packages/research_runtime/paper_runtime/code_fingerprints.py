@@ -36,7 +36,15 @@ def git_commit(repo_root: str | Path | None = None) -> str:
         if value:
             return value
 
-    root = Path(repo_root) if repo_root is not None else Path(__file__).parents[1]
+    if repo_root is not None:
+        root = Path(repo_root)
+    else:
+        try:
+            from qp_paths import repo_root as _qp_repo_root
+
+            root = _qp_repo_root()
+        except Exception:
+            root = Path(__file__).resolve().parents[1]
     try:
         completed = subprocess.run(
             ["git", "rev-parse", "HEAD"],

@@ -161,7 +161,10 @@ def test_compatibility_field_union_is_derived_not_a_priority_policy():
 def test_worker_catalog_imports_the_same_contract_document():
     text = CATALOG_TS.read_text(encoding="utf-8")
     assert CONTRACT_PATH.name == "jquants_premium_core.json"
-    assert 'from "../../../../data_contracts/jquants_premium_core.json"' in text
+    assert (
+        'from "../../../../packages/data_plane/data_contracts/jquants_premium_core.json"'
+        in text
+    )
     assert "contractDocument.datasets" in text
     assert "PREMIUM_CORE_DATASETS: DatasetSpec[] = rawContracts.map" in text
     # Dataset ids live in JSON, not in a second TypeScript literal catalog.

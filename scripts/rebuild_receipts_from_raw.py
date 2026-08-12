@@ -8,12 +8,23 @@ via the live collection path (or a future --verify-structured mode).
 """
 from __future__ import annotations
 
-import argparse
-import re
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+# Bootstrap repo root onto sys.path before importing qp_paths (plain script runs).
+for _parent in Path(__file__).resolve().parents:
+    if (_parent / "qp_paths.py").is_file() and (_parent / "pyproject.toml").is_file():
+        if str(_parent) not in sys.path:
+            sys.path.insert(0, str(_parent))
+        break
+else:
+    raise RuntimeError("quant-platform repo root not found from script")
+
+from qp_paths import repo_root
+import argparse
+import re
+
+ROOT = repo_root()
 sys.path.insert(0, str(ROOT))
 
 from data_contracts import coverage_contract_for
@@ -32,7 +43,6 @@ DATE_ONLY = re.compile(
     r"^(?P<dataset>[a-z0-9_]+)_date=(?P<date>\d{4}-\d{2}-\d{2})"
 )
 
-
 def _parse(name: str):
     stem = Path(name).name
     m = FROM_TO.match(stem)
@@ -43,7 +53,6 @@ def _parse(name: str):
         d = m.group("date")
         return m.group("dataset"), d, d
     return None
-
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
@@ -129,7 +138,6 @@ def main() -> int:
     store.close()
     print(f"written={written} skipped={skipped}")
     return 0
-
 
 if __name__ == "__main__":
     raise SystemExit(main())

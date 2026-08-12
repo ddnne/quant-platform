@@ -11,7 +11,9 @@ import ast
 from pathlib import Path
 
 
-STRATEGIES_DIR = Path(__file__).resolve().parents[1] / "strategies"
+import strategies as _strategies_pkg
+
+STRATEGIES_DIR = Path(_strategies_pkg.__file__).resolve().parent
 
 FORBIDDEN_IMPORT_ROOTS = frozenset(
     {

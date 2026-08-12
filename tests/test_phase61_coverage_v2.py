@@ -177,19 +177,25 @@ def test_raw_structured_mismatch_is_not_complete():
     assert detail["reason"] == "raw/structured row mismatch"
 
 
-def test_non_event_month_needs_explicit_expected_items():
+def test_non_event_month_defaults_expected_items_to_one_source_query():
+    """plan_required_segments defaults source_query expected_items=1 when unset.
+
+    Explicit expected_items_by_segment still overrides (see next test). A
+    reconciled receipt with observed==expected may COMPLETE.
+    """
     policy = replace(
         coverage_contract_for("equities_bars_daily"),
         history_target_start="2025-01-01",
     )
     required = plan_required_segments(policy, "2025-01-31")[0]
+    assert required.expected_items == 1
 
     status, detail = evaluate_segment(
         policy, required, _receipt(required, observed=1)
     )
 
-    assert status == "PARTIAL"
-    assert detail["reason"] == "non-event segment lacks explicit expected items"
+    assert status == "COMPLETE"
+    assert detail["reason"] == "receipt reconciled"
 
 
 def test_non_event_month_completes_with_independent_matching_query_plan():

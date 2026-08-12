@@ -44,14 +44,26 @@ Examples
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+# Bootstrap repo root onto sys.path before importing qp_paths (plain script runs).
+for _parent in Path(__file__).resolve().parents:
+    if (_parent / "qp_paths.py").is_file() and (_parent / "pyproject.toml").is_file():
+        if str(_parent) not in sys.path:
+            sys.path.insert(0, str(_parent))
+        break
+else:
+    raise RuntimeError("quant-platform repo root not found from script")
+
+from qp_paths import repo_root
 import argparse
 import json
 import sqlite3
-import sys
-from pathlib import Path
+
 from urllib.parse import quote
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = repo_root()
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
@@ -65,17 +77,14 @@ from storage.coverage_ledger import (  # noqa: E402
     record_collection_receipt,
 )
 
-
 def _coverage_source(dataset: str) -> str:
     return "jsda" if dataset.startswith("jsda_") else "jquants"
-
 
 def _connect(db_path: Path) -> sqlite3.Connection:
     uri = "file:" + quote(str(db_path)) + "?mode=rw"
     conn = sqlite3.connect(uri, uri=True)
     conn.row_factory = sqlite3.Row
     return conn
-
 
 def _ensure_receipts_table(conn: sqlite3.Connection) -> None:
     row = conn.execute(
@@ -89,11 +98,9 @@ def _ensure_receipts_table(conn: sqlite3.Connection) -> None:
             "0007_collection_coverage_v2.sql)."
         )
 
-
 def _plan_segments(dataset: str, target_end: str, source: str) -> list[RequiredCoverageSegment]:
     policy = coverage_contract_for(dataset)
     return list(plan_required_segments(policy, target_end, source=source))
-
 
 def _pick_segment(
     segments: list[RequiredCoverageSegment], segment_id: str | None
@@ -114,7 +121,6 @@ def _pick_segment(
         f"{len(segments)} planned segments match — pass --segment-id "
         f"(or --list-segments). Available: {available}"
     )
-
 
 def _count_observed(raw: bytes) -> int:
     """Best-effort observed-item count from the persisted raw bytes.
@@ -144,7 +150,6 @@ def _count_observed(raw: bytes) -> int:
                 return len(value)
     # A non-empty object we can't structurally count: treat as one event.
     return 1 if parsed else 0
-
 
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
@@ -203,12 +208,10 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     return p
 
-
 def _today_utc() -> str:
     from datetime import datetime, timezone
 
     return datetime.now(timezone.utc).date().isoformat()
-
 
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
@@ -331,7 +334,6 @@ def main(argv: list[str] | None = None) -> int:
         "coverage_segments / dataset_coverage.",
     )
     return 0
-
 
 if __name__ == "__main__":
     raise SystemExit(main())

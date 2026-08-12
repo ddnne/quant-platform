@@ -1,9 +1,23 @@
 #!/usr/bin/env python3
 """Report governed COMPLETE progress (honest, no faking)."""
 from __future__ import annotations
-import json, sqlite3, sys
+
+import sys
 from pathlib import Path
-ROOT = Path(__file__).resolve().parents[1]
+
+# Bootstrap repo root onto sys.path before importing qp_paths (plain script runs).
+for _parent in Path(__file__).resolve().parents:
+    if (_parent / "qp_paths.py").is_file() and (_parent / "pyproject.toml").is_file():
+        if str(_parent) not in sys.path:
+            sys.path.insert(0, str(_parent))
+        break
+else:
+    raise RuntimeError("quant-platform repo root not found from script")
+
+from qp_paths import repo_root
+import json, sqlite3, sys
+
+ROOT = repo_root()
 sys.path.insert(0, str(ROOT))
 from data_contracts import all_coverage_contracts
 

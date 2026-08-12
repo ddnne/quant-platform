@@ -28,12 +28,40 @@ dev = [
 ]
 
 [tool.setuptools.packages.find]
-where = ["."]
-include = ["ingestion*", "storage*", "pit*", "core*", "features*", "strategies*", "paper_runtime*", "cf_platform*", "data_contracts*", "agents*", "risk*", "data_access*", "mcp_servers*"]
-exclude = ["tests*", "scripts*", "data*", "docs*"]
+where = [
+    "packages/edge",
+    "packages/data_plane",
+    "packages/research_runtime",
+    "packages/product",
+]
+include = [
+    "cf_platform*",
+    "mcp_servers*",
+    "data_contracts*",
+    "ingestion*",
+    "storage*",
+    "pit*",
+    "data_access*",
+    "ops*",
+    "core*",
+    "features*",
+    "strategies*",
+    "paper_runtime*",
+    "risk*",
+    "price_basis*",
+    "agents*",
+    "research*",
+    "selection*",
+    "execution*",
+    "knowledge*",
+    "gateway*",
+]
+# Note: do NOT use "data*" — it would exclude data_contracts / data_access.
+# Local data plane lives at repo-root data/ and is outside packages.find where=.
+exclude = ["tests*", "scripts*", "docs*", "platform*"]
 
 [tool.setuptools]
-py-modules = ["price_basis"]
+py-modules = ["qp_paths"]
 
 [tool.setuptools.package-data]
 data_contracts = ["*.json"]
