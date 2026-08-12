@@ -85,6 +85,13 @@ _CHANGE_FEED_TABLES = frozenset({
     "jquants_records",
     "jquants_records_revisions",
 })
+# Observability / non-local materialization markers that appear in
+# ingestion_change_log. Sequence must still advance past them; local SQLite
+# has no target table for these rows.
+_CHANGE_FEED_SKIP_TABLES = frozenset({
+    "jquants_records_r2",
+    "equities_master_scd2",
+})
 GOVERNED_READY_DATASETS = tuple(
     contract.dataset_id
     for contract in all_coverage_contracts()
@@ -527,9 +534,16 @@ def _record_change_seq(store: SqliteStore, value: int) -> None:
     store._conn.commit()  # noqa: SLF001
 
 
-def _apply_change_rows(store: SqliteStore, rows: list[dict]) -> int:
-    """Apply one sequenced page while preserving target-table order."""
+def _apply_change_rows(store: SqliteStore, rows: list[dict]) -> tuple[int, int]:
+    """Apply one sequenced page while preserving target-table order.
+
+    Returns ``(registered, skipped)``. Rows whose ``table_name`` is in
+    ``_CHANGE_FEED_SKIP_TABLES`` (R2/SCD2 markers) are counted as skipped so
+    the monotonic ``change_seq`` watermark can still advance. Unknown tables
+    still raise — silent drops of new local targets would hide bugs.
+    """
     registered = 0
+    skipped = 0
     current_table: str | None = None
     current_rows: list[dict] = []
 
@@ -541,6 +555,9 @@ def _apply_change_rows(store: SqliteStore, rows: list[dict]) -> int:
 
     for source in rows:
         table = str(source.get("table_name", ""))
+        if table in _CHANGE_FEED_SKIP_TABLES:
+            skipped += 1
+            continue
         if table not in _CHANGE_FEED_TABLES:
             raise ValueError(f"change feed target is not allowed: {table!r}")
         if current_table != table:
@@ -552,7 +569,7 @@ def _apply_change_rows(store: SqliteStore, rows: list[dict]) -> int:
             if key not in {"change_seq", "table_name"}
         })
     flush()
-    return registered
+    return registered, skipped
 
 
 def _sync_changes(
@@ -572,7 +589,7 @@ def _sync_changes(
     persisted only after all rows in that page are durable.
     """
     after_seq = _last_change_seq(store)
-    pages = seen = registered = 0
+    pages = seen = registered = skipped = 0
     visited = {after_seq}
     while True:
         if pages >= max_pages:
@@ -615,7 +632,9 @@ def _sync_changes(
         if not isinstance(next_seq, int) or next_seq != previous:
             raise ValueError("change feed next_seq does not match its final row")
         seen += len(rows)
-        registered += _apply_change_rows(store, rows)
+        page_registered, page_skipped = _apply_change_rows(store, rows)
+        registered += page_registered
+        skipped += page_skipped
         _record_change_seq(store, next_seq)
         after_seq = next_seq
         if not payload.get("has_more", False):
@@ -623,6 +642,12 @@ def _sync_changes(
         if not rows or after_seq in visited:
             raise ValueError("change feed pagination did not advance")
         visited.add(after_seq)
+    if skipped:
+        print(
+            f"[sync] change_feed: skipped_non_local={skipped} "
+            f"(R2/SCD2 markers; seq advanced)",
+            file=sys.stderr,
+        )
     return pages, seen, registered, after_seq
 
 
