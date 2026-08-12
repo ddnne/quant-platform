@@ -1,9 +1,9 @@
 # Phase 6.2 / 6.3 residual status
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
-**Live verified:** 2026-08-12 (OTC COMPLETE +3 publish → segment COMPLETE **404**)  
-**Proof:** `docs/proof/complete_plus3_otc_20260812.md`, `docs/proof/track_a_dryrun_20260812.md`  
-**Repo tip (Track A infra):** `8638936` — historical raw acceleration planner + throughput report
+**Live verified:** 2026-08-12 (OTC COMPLETE +3 → segment COMPLETE **404**; B1 residual sync)  
+**Proof:** `docs/proof/complete_plus3_otc_20260812.md`, `docs/proof/track_a_dryrun_20260812.md`, `docs/proof/data_quality_scan_20260812.md`  
+**Repo tip:** `5d4a78e` — Track B1 LLM nav + plane import guards (this residual live-sync is docs-only on main; Track A infra `8638936`)
 
 ## Live snapshot
 
@@ -14,13 +14,15 @@
 | calendar segments | **224 COMPLETE / 0 PARTIAL** |
 | JSDA OTC COMPLETE segs | **5** — `2026-08-06`, `2026-08-07`, `2026-08-10`, `2026-08-12`, `2026-08-13` (dataset still PARTIAL) |
 | JSDA corporate COMPLETE segs | **1** — year `2026` (dataset still PARTIAL) |
+| Remote `raw_retention_manifests` | **~1554** (approx live order-of-magnitude; earlier remote scan ~1488; local research mirror may be 0) |
 | master | `scd2_event_sourcing` / D1 hot |
 | projection | FRESH (fail-closed full publish after +3) |
 | sticky COMPLETE | **fixed inventory status load** + demotion guard in `storage/coverage_ledger.py` |
 | Full publish guard | `scripts/publish_ops_projection.py` fail-closed |
 | Targeted freshness | `scripts/ops_reeval_freshness.py` (no segment rewrite) |
 | Layout migration | **DONE** — libraries under `packages/{edge,data_plane,research_runtime,product}`; import leaf names unchanged |
-| Track A (historical raw accel) | **infra landed** on tip `8638936` (dry-run proof only; no COMPLETE claim from Track A) |
+| Track A (historical raw accel) | **infra landed** (`8638936` dry-run proof only); **subscription floor `2006-08-12`**; no COMPLETE claim from Track A |
+| Track B1 (LLM-friendly) | **landed** `7b09e1b` — README nav + ADR Accepted + plane import guards |
 | Mass / READY / B0 | **NO-GO** |
 | Phase 7 | **OFF / foundation only** |
 
@@ -34,6 +36,7 @@
 | JSDA min COMPLETE (otc/corp/tokyo) | **DONE** (otc 5; corp/tokyo ≥1 each) |
 | Physical layout → `packages/*` planes | **DONE** (Batches 0–E; import names leaf top-level) |
 | Track A planner / throughput report | **DONE** (infra + dry-run proof; execute/COMPLETE separate) |
+| Track B1 docs hub + plane import guards | **DONE** (`7b09e1b`; Batch Z still DEFER) |
 | Extra COMPLETE without raw | **DEFER** |
 | OTC full archive COMPLETE | **DEFER** (thousands of trading days remain) |
 | Mass / READY / Phase7 switch ON | **NO-GO** |
