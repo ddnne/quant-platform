@@ -1,5 +1,8 @@
 # Segment COMPLETE checklist (Phase 6.2.3)
 
+Live COMPLETE **counts** live only in [phase62_residual_status.md](phase62_residual_status.md).  
+Mass / READY / Phase7 remain **NO-GO / OFF** unless residual says otherwise.
+
 A coverage segment is **COMPLETE** only when **all** of the following hold.
 Row counts, raw retention alone, or Cloudflare fetch success are **not** enough.
 

@@ -1,3 +1,7 @@
+> **Historical snapshot** — not current residual SoT.
+> Current residual: [phase62_residual_status.md](phase62_residual_status.md).
+> Mass / READY / Phase7: **NO-GO / OFF** unless residual says otherwise.
+
 # Phase 6.1 / Pre-Phase 7 hardening plan
 
 Recorded start HEAD: `ac0c676 feat(phase6): hardening acceptance + data access foundation`

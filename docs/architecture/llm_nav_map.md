@@ -105,7 +105,7 @@ Details + exceptions: ADR §5.
 | CF Workers (TS) | `platform/workers/<name>/` | worker README + phase runbooks |
 | Publish ops projection | `scripts/publish_ops_projection.py` | [`../operations/projection_publish_guard.md`](../operations/projection_publish_guard.md) |
 | Packaging / paths | `pyproject.toml`, `qp_paths.py` | this map + layout migration |
-| LLM-friendly refactor | *no code until B1 approved* | [ADR](./adr_llm_friendly_refactor.md) |
+| LLM-friendly refactor | plane READMEs + `tests/test_plane_import_boundaries.py` | [ADR](./adr_llm_friendly_refactor.md) (**Accepted**); residual for live status |
 
 ---
 
@@ -132,16 +132,18 @@ Full policy: ADR §5.2.
 
 | Name you see | Means | Not to confuse with |
 |--------------|-------|---------------------|
-| **Track B0** | This design track (ADR only) | — |
-| **B0 gates** (`cf_platform.live_gates`) | Order-of-magnitude volume checks | Track B0; Mass GO |
+| **Track B0** | LLM-refactor design ADR (now Accepted) | Track B1 implementation batches |
+| **Track B1** | Docs hub + plane guards (+ later B1-c…e) | B0 gates / Mass GO |
+| **B0 gates** (`cf_platform.live_gates`) | Order-of-magnitude volume checks | Track B0/B1; Mass GO |
 | **READY** | Research snapshot policy / publication | “repo ready to merge” |
 | **COMPLETE** | Coverage V2 segment/dataset state | “phase complete” prose |
 | **code-complete** | Implementation present | live GO |
 | **NO-GO / OFF** | Must not enable | DEFER (postponed work) |
 | `platform/` (disk) | Workers tree | stdlib `platform`; use `cf_platform` for Python |
-| `execution` (three places) | core fill timing · paper_runtime helper · product paper service | See ADR §8.2 |
-| `artifacts` (agents vs research) | Different artifact types | Do not merge casually |
+| `execution` (three places) | core fill timing · paper_runtime helper · product paper service | Keep all three; see ADR §8.2 |
+| `artifacts` (agents vs research) | Agent envelopes vs research idea artifacts | Do not merge casually |
 | `data_access` | Read domain façade | Not a second PIT |
+| `ingestion.jsda.adapters` | Formal JSDA adapter surface (Phase 6.2.3 design) | Not yet wired into fetch/parse paths — **keep** (not D-dead) |
 
 ---
 
@@ -153,21 +155,30 @@ Full policy: ADR §5.2.
 | **1 Domain** | `pit_api`, `core_engine`, `features`, `paper`, `agents`, `quant_data_access`, `data_sources` | By task |
 | **2 Ops** | `docs/operations/*`, phase runbooks, worker READMEs | When operating live systems |
 | **3 Proof** | `docs/proof/*` | Cite evidence; do not invent status |
-| **4 Historical** | `phase62_status`, `phase621_*`, `phase622_*`, `phase623_*`, many `phase62_*checklist/final*` | Banner / archive; not residual SoT |
+| **4 Historical** | `phase62_status`, `phase621_*`, `phase622_*`, `phase623_*`, `phase62_*checklist/final*`, `pre_phase7_*`, `phase6_hardening_*`, `phase61_plan`, dated `phase35_4_*` acceptance/ops verify | Banner / archive; not residual SoT |
 
 ### 7.1 Phase / residual file index (maintenance)
 
-| File | Tag (B0 draft) |
-|------|----------------|
-| `docs/phase62_residual_status.md` | **current residual** |
+| File | Tag |
+|------|-----|
+| `docs/phase62_residual_status.md` | **current residual** (sole live COMPLETE / Mass SoT) |
 | `docs/architecture.md` | **current architecture hub** |
+| `docs/architecture/llm_nav_map.md` | **current** agent entry map (this file) |
 | `docs/architecture/repo_layout_migration.md` | **current layout SoT** |
-| `docs/architecture/phase7_fail_closed.md` | **current** (Phase 7 OFF) |
+| `docs/architecture/phase7_fail_closed.md` | **current** (Phase 7 **OFF**) |
+| `docs/operations/phase7_foundation_off.md` | **current** ops note (Phase 7 **OFF**) |
 | `docs/architecture/adr_llm_friendly_refactor.md` | **Accepted ADR (Grok 2026-08-12)** |
+| `docs/architecture/adr_historical_raw_acceleration.md` | Track A ADR (infra/execute evidence in proof/) |
+| `docs/complete_segment_checklist.md` | **current** COMPLETE evidence contract (not residual counts) |
+| `docs/phase6_snapshot_publication.md` | domain (READY publication machine; production READY still **NO-GO**) |
 | `docs/phase61_production_runbook.md` | runbook |
 | `docs/phase62_production_runbook.md` | runbook |
 | `docs/phase62_cf_edge_cron.md` | runbook / design note |
-| `docs/phase35_*.md` | domain + runbook (Phase 3.5) |
+| `docs/phase35_cf_ingest.md`, `phase35_s0_secrets.md`, `phase35_storage_scale.md`, `phase35_validation_matrix.md` | domain + runbook (Phase 3.5) |
+| `docs/phase35_4_acceptance_status.md` | historical acceptance snapshot |
+| `docs/phase35_4_ops_verify_20260811.md` | historical ops verify snapshot |
+| `docs/phase6_hardening_acceptance.md` | historical acceptance snapshot |
+| `docs/phase61_plan.md` | historical plan |
 | `docs/phase62_status.md` | historical snapshot |
 | `docs/phase621_status.md` | historical snapshot |
 | `docs/phase622_status.md` | historical snapshot |
@@ -176,11 +187,11 @@ Full policy: ADR §5.2.
 | `docs/phase622_independent_review.md` | historical review |
 | `docs/phase62_completion_checklist.md` | historical / checklist |
 | `docs/phase62_final_report.md` | historical report — **not** FULL DONE alone |
+| `docs/pre_phase7_full_code_review.md` | historical Wave-0 review |
 | `docs/proof/*` | dated evidence |
 | `docs/operations/*` | ops runbooks |
 
-Historical phase status / final_report / checklist files carry a **Historical snapshot** banner → residual SoT.
-
+Historical phase status / final_report / checklist / acceptance-plan files carry a **Historical snapshot** banner → residual SoT.
 ---
 
 ## 8. Tests — what to run
@@ -247,16 +258,15 @@ Shared ROOT bootstrap unification is **B1-e** (ADR); until then scripts use loca
 | Batch | Theme | Status |
 |-------|-------|--------|
 | **B0** | This map + ADR design | **DONE** |
-| **B1-a** | Docs hub, historical stamps, README link | **DONE** (this productionization) |
-| **B1-b** | Plane READMEs, public API notes, boundary tests | **DONE** (with B1-a land) |
-| B1-c | Dead code / empty dirs | pending |
+| **B1-a** | Docs hub, historical stamps, README link | **DONE** |
+| **B1-b** | Plane READMEs, public API notes, boundary tests | **DONE** |
+| **B1-c** | Dead code / empty dirs / collision docs | **partial** — inventory 2026-08-12: root `raw/` already absent; `ingestion.jsda.adapters` unreferenced but **kept** as formal surface; name-collision glossary extended; no parity-mirror or fail-closed deletions |
 | B1-d | Test tiers / matrix navigation | pending |
 | B1-e | Script bootstrap, `qp_paths` stragglers | pending |
 | B1-f | Optional archive move / script regroup | optional / last |
 | Z | `quant_platform.*` namespace | **DEFER** (out of B1) |
 
 ADR is **Accepted (Grok 2026-08-12)**. Mass / READY / Phase7 remain **NO-GO / OFF**.
-
 ---
 
 ## 12. Quick spirit checklist
