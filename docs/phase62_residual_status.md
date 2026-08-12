@@ -1,7 +1,7 @@
 # Phase 6.2 / 6.3 residual status
 
-**Live verified:** 2026-08-12 (quant-mcp / wrangler remote)  
-**origin/main:** `6e6c9d9` (docs sync; sticky in `4aaf424`) (sticky COMPLETE + dataset_coverage resync)
+**Live verified:** 2026-08-12T13:01Z (wrangler remote D1)  
+**origin/main tip (pre-docs):** `346c47c` · sticky COMPLETE impl: `4aaf424`
 
 ## Live snapshot
 
@@ -11,11 +11,18 @@
 | Segment COMPLETE total | **400** |
 | calendar segments | **224 COMPLETE / 0 PARTIAL** |
 | master | `scd2_event_sourcing` / **128811** (D1 hot) |
-| projection | FRESH |
+| projection | **FRESH** (gen `projgen-304ec56e3d9b4d6da4c15334ae5f6757` after ops_reeval) |
 | sticky COMPLETE | **in code** (`storage/coverage_ledger.py`: demotion blocked while SUCCESS receipt eligible) |
 | Full publish guard | `scripts/publish_ops_projection.py` fail-closed |
 | Targeted freshness | `scripts/ops_reeval_freshness.py` (no segment rewrite) |
 | Mass / READY / B0 | **NO-GO** |
+
+## Sticky observe note (2026-08-12 re-run)
+
+- PRE→POST via `ops_reeval_freshness.py` only (no segment rewrite).
+- **markets_calendar 224/224 held**; segment COMPLETE **400** unchanged; no demotion.
+- Proof: `docs/proof/sticky_complete_verify_20260812.md`.
+- Continue observing on day-roll; do not treat as READY.
 
 ## DONE vs DEFER
 
@@ -26,6 +33,7 @@
 | Local COMPLETE heal 400=remote | **DONE** |
 | D1 cold prune | **DONE** (cold=0) |
 | JSDA min COMPLETE (otc/corp/tokyo) | **DONE** (1 each) |
+| Sticky day-progress observe (reeval path) | **OBSERVED** (2026-08-12T13:01Z; no demote) |
 | Extra COMPLETE without raw | **DEFER** |
 | Mass / READY / Phase7 switch ON | **NO-GO** |
 | applied_cursor materialization | **DEFER** |
