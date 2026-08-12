@@ -70,6 +70,19 @@ def _count_structured(
 def _windows_overlap(a0: str, a1: str, b0: str, b1: str) -> bool:
     return a0[:10] <= b1[:10] and b0[:10] <= a1[:10]
 
+
+def _is_usable_raw(raw: bytes) -> bool:
+    """Reject empty/stub payloads (e.g. ``[]`` / ``{}``) — not honest evidence."""
+    if not raw or len(raw) >= 5_000_000:
+        return False
+    stripped = raw.strip()
+    if len(stripped) < 8:
+        return False
+    if stripped in {b"[]", b"{}", b"null", b'""'}:
+        return False
+    return True
+
+
 def _find_raw_bytes(
     data_dir: Path,
     dataset: str,
@@ -83,6 +96,7 @@ def _find_raw_bytes(
     Prefer files that:
       1. Contain the exact dataset id in the filename (not a sibling *calendar*)
       2. Declare from=/to= windows that overlap the segment
+      3. Carry non-stub payload (prefer larger over empty ``[]``)
     """
     base = data_dir / "raw" / "jquants"
     if not base.is_dir():
@@ -99,7 +113,7 @@ def _find_raw_bytes(
         candidates = [p for p in base.rglob("*.json") if dataset in p.name]
 
     month = segment_id if len(segment_id) == 7 else segment_id[:7]
-    ranked: list[tuple[int, Path]] = []
+    ranked: list[tuple[int, int, Path]] = []
     for path in candidates:
         name = path.name
         score = 0
@@ -128,15 +142,24 @@ def _find_raw_bytes(
                     score += 5
                 if segment_start[:7] in name or segment_end[:7] in name:
                     score += 3
-        if score > 0:
-            ranked.append((score, path))
-    ranked.sort(key=lambda item: (item[0], item[1].stat().st_mtime), reverse=True)
-    for _score, path in ranked[:120]:
+        if score <= 0:
+            continue
+        try:
+            size = path.stat().st_size
+        except OSError:
+            continue
+        # Empty [] stubs are 2 bytes — never prefer them.
+        if size < 8:
+            continue
+        ranked.append((score, size, path))
+    # Prefer window match score, then larger payload (real rows over stubs).
+    ranked.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    for _score, _size, path in ranked[:120]:
         try:
             raw = path.read_bytes()
         except OSError:
             continue
-        if raw.strip() and len(raw) < 5_000_000:
+        if _is_usable_raw(raw):
             return raw
     return None
 
