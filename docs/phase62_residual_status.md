@@ -1,7 +1,7 @@
 # Phase 6.2 / 6.3 residual status
 
 **Live verified:** 2026-08-12 (quant-mcp / wrangler remote)  
-**origin/main:** `4aaf424` (sticky COMPLETE + dataset_coverage resync)
+**origin/main:** `6e6c9d9` (docs sync; sticky in `4aaf424`) (sticky COMPLETE + dataset_coverage resync)
 
 ## Live snapshot
 
