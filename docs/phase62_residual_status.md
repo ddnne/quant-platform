@@ -2,7 +2,7 @@
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
 **Live verified:** 2026-08-13 (remote D1 RO after A3 +8 R2-raw seal; COMPLETE segs **490**; raw_n **2465**; Phase7 **OFF**)  
-**Repo tip:** `76fb849` — COMPLETE **490** / raw **2465** / A3 +8 / sticky fix / Phase7 **OFF**
+**Repo tip:** `a5eaa7a` — COMPLETE **490** / raw **2465** / A3 +8 / Track B docs / Phase7 **OFF**
 
 ## Live snapshot (remote D1 `quant-ingest`)
 
