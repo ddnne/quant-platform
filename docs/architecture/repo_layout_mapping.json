@@ -1,0 +1,654 @@
+{
+  "$schema_note": "Machine-readable twin of docs/architecture/repo_layout_migration.md",
+  "version": 1,
+  "tip_at_plan": "b76996ddf0bc24107b5d9fce65ddf05dd86ae6fb",
+  "status": "plan_only",
+  "constraints": {
+    "mass_research": "OFF",
+    "ready_publication": "OFF",
+    "phase7_go": "OFF",
+    "do_not_move": [
+      "data/",
+      "platform/workers/",
+      "docs/",
+      "tests/"
+    ],
+    "import_policy": "stabilize",
+    "import_policy_rationale": "Multi-root setuptools where= under packages/* keeps import names (ingestion, pit, ...) stable while disk groups by plane. Full quant_platform.* rewrite deferred to batch Z."
+  },
+  "target_planes": {
+    "edge_cf": {
+      "disk_root": "platform/",
+      "moves": false,
+      "description": "Cloudflare Workers + secrets name list; wrangler paths frozen"
+    },
+    "edge_python": {
+      "disk_root": "packages/edge/",
+      "description": "CF-adjacent Python helpers + local stdio MCP"
+    },
+    "data_plane": {
+      "disk_root": "packages/data_plane/",
+      "description": "contracts, ingestion, storage, PIT, data_access, ops meta"
+    },
+    "research_runtime": {
+      "disk_root": "packages/research_runtime/",
+      "description": "core engine, features, strategies, paper_runtime, risk, price_basis"
+    },
+    "product": {
+      "disk_root": "packages/product/",
+      "description": "agents, research orchestration, selection, execution, knowledge, gateway, fof"
+    },
+    "tooling": {
+      "disk_root": "scripts/",
+      "description": "operator CLIs; optional internal regroup in batch F"
+    },
+    "local_data": {
+      "disk_root": "data/",
+      "moves": false,
+      "description": "gitignored raw/structured/paper/reports/ops"
+    }
+  },
+  "setuptools_target": {
+    "packages_find_where": [
+      "packages/edge",
+      "packages/data_plane",
+      "packages/research_runtime",
+      "packages/product"
+    ],
+    "packages_find_include": [
+      "cf_platform*",
+      "mcp_servers*",
+      "data_contracts*",
+      "ingestion*",
+      "storage*",
+      "pit*",
+      "data_access*",
+      "ops*",
+      "core*",
+      "features*",
+      "strategies*",
+      "paper_runtime*",
+      "risk*",
+      "agents*",
+      "research*",
+      "selection*",
+      "execution*",
+      "knowledge*",
+      "gateway*"
+    ],
+    "packages_find_exclude": [
+      "tests*",
+      "scripts*",
+      "data*",
+      "docs*",
+      "platform*"
+    ],
+    "py_modules": ["price_basis"],
+    "package_dir": {
+      "price_basis": "packages/research_runtime"
+    },
+    "package_data": {
+      "data_contracts": ["*.json"]
+    },
+    "batch0_add_includes_now_missing": [
+      "research*",
+      "selection*",
+      "ops*",
+      "execution*",
+      "gateway*",
+      "knowledge*"
+    ]
+  },
+  "mappings": [
+    {
+      "id": "M01",
+      "from": "data_contracts/",
+      "to": "packages/data_plane/data_contracts/",
+      "plane": "data_plane",
+      "batch": "A",
+      "import_name": "data_contracts",
+      "import_changes": false,
+      "setuptools_include_today": true,
+      "notes": "package-data *.json must keep shipping"
+    },
+    {
+      "id": "M02",
+      "from": "ingestion/",
+      "to": "packages/data_plane/ingestion/",
+      "plane": "data_plane",
+      "batch": "A",
+      "import_name": "ingestion",
+      "import_changes": false,
+      "setuptools_include_today": true,
+      "notes": "largest Python package tree"
+    },
+    {
+      "id": "M03",
+      "from": "storage/",
+      "to": "packages/data_plane/storage/",
+      "plane": "data_plane",
+      "batch": "A",
+      "import_name": "storage",
+      "import_changes": false,
+      "setuptools_include_today": true,
+      "path_hotspots": [
+        "storage/receipt_crypto.py -> data_contracts/receipt_verify_public_keys.json"
+      ]
+    },
+    {
+      "id": "M04",
+      "from": "pit/",
+      "to": "packages/data_plane/pit/",
+      "plane": "data_plane",
+      "batch": "A",
+      "import_name": "pit",
+      "import_changes": false,
+      "setuptools_include_today": true
+    },
+    {
+      "id": "M05",
+      "from": "data_access/",
+      "to": "packages/data_plane/data_access/",
+      "plane": "data_plane",
+      "batch": "A",
+      "import_name": "data_access",
+      "import_changes": false,
+      "setuptools_include_today": true
+    },
+    {
+      "id": "M06",
+      "from": "ops/",
+      "to": "packages/data_plane/ops/",
+      "plane": "data_plane",
+      "batch": "A",
+      "import_name": "ops",
+      "import_changes": false,
+      "setuptools_include_today": false,
+      "path_hotspots": [
+        "ops/backfill_planner.py -> data_contracts/jquants_premium_core.json"
+      ]
+    },
+    {
+      "id": "M07",
+      "from": "core/",
+      "to": "packages/research_runtime/core/",
+      "plane": "research_runtime",
+      "batch": "B",
+      "import_name": "core",
+      "import_changes": false,
+      "setuptools_include_today": true
+    },
+    {
+      "id": "M08",
+      "from": "features/",
+      "to": "packages/research_runtime/features/",
+      "plane": "research_runtime",
+      "batch": "B",
+      "import_name": "features",
+      "import_changes": false,
+      "setuptools_include_today": true
+    },
+    {
+      "id": "M09",
+      "from": "strategies/",
+      "to": "packages/research_runtime/strategies/",
+      "plane": "research_runtime",
+      "batch": "B",
+      "import_name": "strategies",
+      "import_changes": false,
+      "setuptools_include_today": true,
+      "path_hotspots": [
+        "tests/test_strategies_static_boundaries.py",
+        "tests/test_strategy_spec_schema.py"
+      ]
+    },
+    {
+      "id": "M10",
+      "from": "paper_runtime/",
+      "to": "packages/research_runtime/paper_runtime/",
+      "plane": "research_runtime",
+      "batch": "B",
+      "import_name": "paper_runtime",
+      "import_changes": false,
+      "setuptools_include_today": true,
+      "path_hotspots": [
+        "paper_runtime/code_fingerprints.py git_commit parents[1]"
+      ]
+    },
+    {
+      "id": "M11",
+      "from": "risk/",
+      "to": "packages/research_runtime/risk/",
+      "plane": "research_runtime",
+      "batch": "B",
+      "import_name": "risk",
+      "import_changes": false,
+      "setuptools_include_today": true
+    },
+    {
+      "id": "M12",
+      "from": "price_basis.py",
+      "to": "packages/research_runtime/price_basis.py",
+      "plane": "research_runtime",
+      "batch": "B",
+      "import_name": "price_basis",
+      "import_changes": false,
+      "setuptools_include_today": true,
+      "kind": "py_module",
+      "notes": "requires package-dir price_basis = packages/research_runtime"
+    },
+    {
+      "id": "M13",
+      "from": "agents/",
+      "to": "packages/product/agents/",
+      "plane": "product",
+      "batch": "C",
+      "import_name": "agents",
+      "import_changes": false,
+      "setuptools_include_today": true,
+      "path_hotspots": [
+        "tests/test_agents_roles.py"
+      ]
+    },
+    {
+      "id": "M14",
+      "from": "research/",
+      "to": "packages/product/research/",
+      "plane": "product",
+      "batch": "C",
+      "import_name": "research",
+      "import_changes": false,
+      "setuptools_include_today": false
+    },
+    {
+      "id": "M15",
+      "from": "selection/",
+      "to": "packages/product/selection/",
+      "plane": "product",
+      "batch": "C",
+      "import_name": "selection",
+      "import_changes": false,
+      "setuptools_include_today": false
+    },
+    {
+      "id": "M16",
+      "from": "execution/",
+      "to": "packages/product/execution/",
+      "plane": "product",
+      "batch": "C",
+      "import_name": "execution",
+      "import_changes": false,
+      "setuptools_include_today": false
+    },
+    {
+      "id": "M17",
+      "from": "knowledge/",
+      "to": "packages/product/knowledge/",
+      "plane": "product",
+      "batch": "C",
+      "import_name": "knowledge",
+      "import_changes": false,
+      "setuptools_include_today": false
+    },
+    {
+      "id": "M18",
+      "from": "gateway/",
+      "to": "packages/product/gateway/",
+      "plane": "product",
+      "batch": "C",
+      "import_name": "gateway",
+      "import_changes": false,
+      "setuptools_include_today": false
+    },
+    {
+      "id": "M19",
+      "from": "fof/",
+      "to": "packages/product/fof/",
+      "plane": "product",
+      "batch": "C",
+      "import_name": null,
+      "import_changes": false,
+      "setuptools_include_today": false,
+      "kind": "placeholder_readme"
+    },
+    {
+      "id": "M20",
+      "from": "cf_platform/",
+      "to": "packages/edge/cf_platform/",
+      "plane": "edge_python",
+      "batch": "D",
+      "import_name": "cf_platform",
+      "import_changes": false,
+      "setuptools_include_today": true,
+      "notes": "Python SoT mirror; not Workers"
+    },
+    {
+      "id": "M21",
+      "from": "mcp_servers/",
+      "to": "packages/edge/mcp_servers/",
+      "plane": "edge_python",
+      "batch": "D",
+      "import_name": "mcp_servers",
+      "import_changes": false,
+      "setuptools_include_today": true,
+      "notes": "local stdio MCP only; remote is platform/workers/quant-ops-mcp"
+    }
+  ],
+  "frozen_paths": [
+    {
+      "path": "platform/",
+      "reason": "wrangler.toml relative deploy roots; scripts hardcode platform/workers"
+    },
+    {
+      "path": "platform/workers/ingestion-premium/",
+      "reason": "migrations + cron worker; publish_ops_projection / ops_reeval_freshness wrangler.toml path"
+    },
+    {
+      "path": "platform/workers/ingestion-secrets/",
+      "reason": "secret proxy worker path in docs and secrets.example"
+    },
+    {
+      "path": "platform/workers/ingestion-jsda/",
+      "reason": "JSDA worker"
+    },
+    {
+      "path": "platform/workers/quant-ops-mcp/",
+      "reason": "remote Ops MCP; generate_governed_js output path"
+    },
+    {
+      "path": "data/",
+      "reason": "gitignored local domain; raw secrets / sqlite / paper artifacts"
+    },
+    {
+      "path": "tests/",
+      "reason": "pytest testpaths; stay at repo root"
+    },
+    {
+      "path": "docs/",
+      "reason": "documentation root; layout SoT added under docs/architecture/"
+    }
+  ],
+  "delete_candidates": [
+    {
+      "path": "raw/",
+      "batch": "F",
+      "reason": "empty leftover; real raw lives under data/raw (gitignored)"
+    }
+  ],
+  "batches": [
+    {
+      "id": "0",
+      "name": "packaging_hygiene_and_repo_root_helper",
+      "moves": [],
+      "actions": [
+        "Add missing setuptools includes: research*, selection*, ops*, execution*, gateway*, knowledge*",
+        "Introduce repo_root() helper; fix parents[1] in storage/receipt_crypto.py, ops/backfill_planner.py, paper_runtime/code_fingerprints.py",
+        "Create packages/{edge,data_plane,research_runtime,product}/ placeholders",
+        "pip install -e '.[dev]'"
+      ],
+      "exit_criteria": [
+        "Editable import of previously missing packages works",
+        "Batch 0 pytest set green",
+        "No data/ or platform/workers changes"
+      ],
+      "pytest_min": [
+        "tests/test_smoke.py",
+        "tests/test_mass_research_gate.py",
+        "tests/test_phase623_receipt_signature.py",
+        "tests/test_backfill_planner.py",
+        "tests/test_paper_code_fingerprints.py"
+      ]
+    },
+    {
+      "id": "A",
+      "name": "move_data_plane",
+      "moves": ["M01", "M02", "M03", "M04", "M05", "M06"],
+      "exit_criteria": [
+        "No top-level data plane packages",
+        "Imports stable",
+        "Batch A pytest set green",
+        "platform/workers and data/ untouched"
+      ],
+      "pytest_min": [
+        "tests/test_smoke.py",
+        "tests/test_http_client.py",
+        "tests/test_jquants_client.py",
+        "tests/test_jquants_catalog.py",
+        "tests/test_jquants_normalize.py",
+        "tests/test_jsda_parse.py",
+        "tests/test_jsda_governed.py",
+        "tests/test_pipeline_reports.py",
+        "tests/test_pit_as_of.py",
+        "tests/test_pit_lookahead.py",
+        "tests/test_pit_coverage.py",
+        "tests/test_natural_keys.py",
+        "tests/test_immutable_artifact.py",
+        "tests/test_phase623_receipt_signature.py",
+        "tests/test_phase61_coverage_v2.py",
+        "tests/test_phase6_data_access.py",
+        "tests/test_backfill_planner.py",
+        "tests/test_identity_runtime_parity.py"
+      ]
+    },
+    {
+      "id": "B",
+      "name": "move_research_runtime",
+      "moves": ["M07", "M08", "M09", "M10", "M11", "M12"],
+      "exit_criteria": [
+        "core/features/strategies/paper_runtime/risk/price_basis import",
+        "Strategy path-based tests updated",
+        "Batch B pytest set green"
+      ],
+      "pytest_min": [
+        "tests/test_core_engine.py",
+        "tests/test_core_data_boundary.py",
+        "tests/test_features_compute.py",
+        "tests/test_features_data_boundary.py",
+        "tests/test_strategy_spec_schema.py",
+        "tests/test_strategies_static_boundaries.py",
+        "tests/test_paper_pipeline.py",
+        "tests/test_paper_snapshot.py",
+        "tests/test_paper_store.py",
+        "tests/test_ready_policy.py",
+        "tests/test_paper_code_fingerprints.py",
+        "tests/test_phase4_accept_script.py"
+      ]
+    },
+    {
+      "id": "C",
+      "name": "move_product",
+      "moves": ["M13", "M14", "M15", "M16", "M17", "M18", "M19"],
+      "exit_criteria": [
+        "Product imports work",
+        "Mass gate still fail-closed",
+        "Batch C pytest set green"
+      ],
+      "pytest_min": [
+        "tests/test_agents_roles.py",
+        "tests/test_agents_pipeline.py",
+        "tests/test_paper_execution_service.py",
+        "tests/test_selection_decision.py",
+        "tests/test_research_budget_ledger.py",
+        "tests/test_mass_research_gate.py",
+        "tests/test_phase7_gateway.py",
+        "tests/test_phase7_knowledge.py",
+        "tests/test_phase7_selection.py",
+        "tests/test_phase7_pipeline_budget.py",
+        "tests/test_phase622_remainder.py"
+      ]
+    },
+    {
+      "id": "D",
+      "name": "move_edge_python",
+      "moves": ["M20", "M21"],
+      "exit_criteria": [
+        "cf_platform and mcp_servers under packages/edge",
+        "pyproject where only packages/*",
+        "Full offline pytest green",
+        "platform/workers path-stable"
+      ],
+      "pytest_min": [
+        "tests/"
+      ]
+    },
+    {
+      "id": "E",
+      "name": "docs_and_path_consumer_sweep",
+      "moves": [],
+      "exit_criteria": [
+        "README directory table matches disk",
+        "Full offline pytest green"
+      ],
+      "pytest_min": [
+        "tests/"
+      ]
+    },
+    {
+      "id": "F",
+      "name": "scripts_hygiene_optional",
+      "moves": [],
+      "optional": true,
+      "actions": [
+        "Optional scripts/ subfolder regroup with shared ROOT helper",
+        "Delete empty raw/"
+      ],
+      "exit_criteria": [
+        "CLI docs updated if scripts moved",
+        "Full offline pytest green"
+      ],
+      "pytest_min": [
+        "tests/"
+      ]
+    },
+    {
+      "id": "Z",
+      "name": "optional_import_namespace_rewrite",
+      "moves": [],
+      "optional": true,
+      "out_of_scope_p0": true,
+      "actions": [
+        "Introduce quant_platform.* with temporary re-export shims at old names",
+        "Delete shims after consumers migrate"
+      ]
+    }
+  ],
+  "path_hotspots": [
+    {
+      "file": "conftest.py",
+      "issue": "sys.path insert of repo root; after moves editable install required for packages/*",
+      "batch_fix": "0+"
+    },
+    {
+      "file": "storage/receipt_crypto.py",
+      "issue": "parents[1] / data_contracts/receipt_verify_public_keys.json",
+      "batch_fix": "0"
+    },
+    {
+      "file": "ops/backfill_planner.py",
+      "issue": "parents[1] / data_contracts/jquants_premium_core.json",
+      "batch_fix": "0"
+    },
+    {
+      "file": "paper_runtime/code_fingerprints.py",
+      "issue": "parents[1] as git root",
+      "batch_fix": "0"
+    },
+    {
+      "file": "scripts/generate_governed_js.py",
+      "issue": "writes platform/workers/quant-ops-mcp/src/governed.js",
+      "batch_fix": "frozen_platform"
+    },
+    {
+      "file": "scripts/publish_ops_projection.py",
+      "issue": "ROOT / platform/workers/ingestion-premium/wrangler.toml",
+      "batch_fix": "frozen_platform"
+    },
+    {
+      "file": "scripts/ops_reeval_freshness.py",
+      "issue": "wrangler.toml under platform/workers/ingestion-premium",
+      "batch_fix": "frozen_platform"
+    },
+    {
+      "file": "scripts/*.py",
+      "issue": "ROOT = parents[1]; breaks if scripts nested deeper without helper",
+      "batch_fix": "F"
+    },
+    {
+      "file": "tests/conftest.py",
+      "issue": "loads scripts/sync_d1_to_sqlite.py by path",
+      "batch_fix": "F"
+    },
+    {
+      "file": "tests/test_strategies_static_boundaries.py",
+      "issue": "repo / strategies path join",
+      "batch_fix": "B"
+    },
+    {
+      "file": "tests/test_agents_roles.py",
+      "issue": "repo / agents path join",
+      "batch_fix": "C"
+    },
+    {
+      "file": "quant_platform.egg-info/",
+      "issue": "stale top_level (ingestion/pit/storage only); regenerate after packaging batches",
+      "batch_fix": "0+"
+    },
+    {
+      "file": ".venv/",
+      "issue": "editable install cache; reinstall if imports resolve to missing paths",
+      "batch_fix": "0+"
+    }
+  ],
+  "dependency_graph_source_only": {
+    "ingestion": ["data_contracts", "storage"],
+    "storage": ["cf_platform", "data_contracts", "ingestion"],
+    "pit": ["ingestion", "storage"],
+    "cf_platform": ["data_contracts", "ingestion"],
+    "data_access": ["data_contracts", "features", "paper_runtime", "pit", "storage"],
+    "ops": ["data_contracts"],
+    "core": ["features", "pit", "price_basis"],
+    "features": ["pit", "price_basis"],
+    "strategies": ["core", "features", "paper_runtime", "price_basis"],
+    "paper_runtime": ["cf_platform", "data_contracts", "storage", "strategies"],
+    "agents": ["execution", "research", "risk", "selection", "strategies"],
+    "execution": ["agents", "features", "paper_runtime", "strategies"],
+    "research": ["selection"],
+    "knowledge": ["storage"],
+    "mcp_servers": ["data_access"],
+    "gateway": [],
+    "selection": [],
+    "risk": []
+  },
+  "current_top_level": [
+    "agents",
+    "cf_platform",
+    "conftest.py",
+    "core",
+    "data",
+    "data_access",
+    "data_contracts",
+    "docs",
+    "execution",
+    "features",
+    "fof",
+    "gateway",
+    "ingestion",
+    "knowledge",
+    "mcp_servers",
+    "ops",
+    "paper_runtime",
+    "pit",
+    "platform",
+    "price_basis.py",
+    "pyproject.toml",
+    "raw",
+    "README.md",
+    "research",
+    "risk",
+    "scripts",
+    "selection",
+    "storage",
+    "strategies",
+    "tests"
+  ]
+}
