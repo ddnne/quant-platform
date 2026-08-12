@@ -16,6 +16,7 @@
 | Full publish guard | `scripts/publish_ops_projection.py` fail-closed |
 | Targeted freshness | `scripts/ops_reeval_freshness.py` (no segment rewrite) |
 | Mass / READY / B0 | **NO-GO** |
+| Phase 7 | **OFF / foundation only** (schema + fail-closed; mass research not ON) |
 
 ## Sticky observe note (2026-08-12 re-run)
 
@@ -34,8 +35,9 @@
 | D1 cold prune | **DONE** (cold=0) |
 | JSDA min COMPLETE (otc/corp/tokyo) | **DONE** (1 each) |
 | Sticky day-progress observe (reeval path) | **OBSERVED** (2026-08-12T13:01Z; no demote) |
+| Phase 7 foundation (fail-closed + schema stubs) | **DONE (OFF)** — [operations/phase7_foundation_off.md](operations/phase7_foundation_off.md) |
 | Extra COMPLETE without raw | **DEFER** |
-| Mass / READY / Phase7 switch ON | **NO-GO** |
+| Mass / READY / Phase7 switch ON | **NO-GO** (switch remains OFF; no enable env/flag) |
 | applied_cursor materialization | **DEFER** |
 
 ## Note on COMPLETE counts
