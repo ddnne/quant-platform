@@ -1,0 +1,15 @@
+# Publish entrypoints audit (fail-closed guard)
+
+**Live verified 2026-08-12.** Full apply uses `scripts/publish_ops_projection.py` which enforces
+`enforce_complete_count_guard` (refuse if local COMPLETE < remote COMPLETE).
+
+| Entry | Path | apply-remote? | Guard applies? |
+|-------|------|---------------|----------------|
+| Manual / ops | `scripts/publish_ops_projection.py --apply-remote` | yes | **yes** (built-in) |
+| Cron | `scripts/cron_publish_ops.sh` with `APPLY_REMOTE_OPS=1` | yes | **yes** (calls publish_ops_projection); on rc=3 falls back to `ops_reeval_freshness.py` |
+| Sync | `scripts/sync_d1_to_sqlite.py --publish-ops --apply-remote-ops` | optional | **yes** (subprocess to publish_ops_projection) |
+| Targeted freshness | `scripts/ops_reeval_freshness.py` | n/a (not full publish) | does not rewrite COMPLETE segments |
+
+**Mass / READY:** NO-GO.
+
+**No additional entry points found that write projection without the guard.**

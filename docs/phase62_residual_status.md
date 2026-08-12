@@ -1,33 +1,23 @@
-# Phase 6.2 residual status (honest)
+# Phase 6.2 / 6.3 residual status (2026-08-12)
 
-**HEAD**: `4b5e9a4`  
-**Date**: 2026-08-11  
-**Track**: GLM-5.2 + orchestrated land
+| Area | Status | Notes |
+|------|--------|-------|
+| D1 cold prune | **DONE** | cold rows before hot cutoff = 0 |
+| R2-first write path | **DONE** | write_path_config / r2_structured_writer |
+| master SCD2 | **DONE** | scd2_event_sourcing / D1 hot 128811 |
+| Full publish guard | **DONE** | fe6aafc |
+| Local COMPLETE heal | **DONE** | local 400 = remote 400 |
+| Target freshness | **DONE** | ops_reeval_freshness |
+| JSDA min COMPLETE | **DONE** | OTC / corporate / tokyo 1 each |
+| Segment COMPLETE total | **400** | not invent more without raw |
+| Dataset-level COMPLETE | ~2 full-dataset | calendar + tokyo aggregate COMPLETE; others PARTIAL |
+| Mass / READY / B0 | **NO-GO** | |
+| applied_cursor materialization | **DEFER** | READY path |
+| Extra COMPLETE without raw | **DEFER** | correct |
 
-> **Not fully done.** Code-complete; live partial. No `PHASE62_FULL_DONE`.  
-> Phase 7 mass research **NO-GO** until all governed COMPLETE + READY ≥1.
-
-## Live milestone ✅
-
-| Dataset | Status | Evidence |
-|---------|--------|----------|
-| **markets_calendar** | **COMPLETE** | 224/224 segments COMPLETE with real receipts (1/26 governed) |
-
-## Code-complete ✅
-Inventory, projection, host cron, JQ receipt emit, rebuild_from_raw, bars `date=` fix,
-READY coherence wire, Phase 7 stubs (knowledge / selection+budget / gateway), pytest green.
-
-## Still OPEN 🚫
-
-| Item | Status |
-|------|--------|
-| All 26 governed Coverage COMPLETE | **Open** — markets_calendar COMPLETE (1/26); 25 to go |
-| Production READY ≥1 | **Open** — coherence Gate 1 needs all 26 COMPLETE |
-| Full multi-year JQ/JSDA backfill | **In progress** (background jobs) |
-| JSDA COMPLETE | **Open** (site/timeout risk) |
-| CF edge auto-projection | Host path only — CF edge cron intentionally not used for projection ([docs/phase62_cf_edge_cron.md](phase62_cf_edge_cron.md)) |
-
-## Human-only
-- Wall-clock for remaining 25 governed datasets history
-- JSDA availability
-- Live capital/broker (OOS)
+## Unpushed commits (ahead of origin/main)
+- 1f66821 storage_plane_status
+- 1f175a3 master scd2 contract + reeval evidence
+- fe6aafc publish guard
+- b86b93b reeval + restore tooling
+- c4505b1 heal evidence
