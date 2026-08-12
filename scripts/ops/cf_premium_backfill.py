@@ -210,6 +210,21 @@ def main(argv: list[str] | None = None) -> int:
         default="",
         help="Plan cutoff YYYY-MM-DD (default: yesterday UTC)",
     )
+    ap.add_argument(
+        "--chunk-days",
+        type=int,
+        default=7,
+        help="When using --week-chunks, subdivide today-mode into N-day ranges (default 7)",
+    )
+    ap.add_argument(
+        "--week-chunks",
+        action="store_true",
+        help=(
+            "Force week/N-day chunks for today-mode datasets (equities_bars_daily). "
+            "Avoids CF Worker resource limit 1102 on full calendar months. "
+            "segment_id remains YYYY-MM for coverage identity."
+        ),
+    )
     args = ap.parse_args(argv)
 
     execute = bool(args.execute) and not bool(args.dry_run)
@@ -220,6 +235,8 @@ def main(argv: list[str] | None = None) -> int:
     planner = BackfillPlanner(
         cutoff=cutoff,
         db_path=db_path if db_path and db_path.is_file() else None,
+        chunk_days_for_today_mode=int(args.chunk_days) if int(args.chunk_days) > 0 else 7,
+        prefer_month_chunks_for_today=not bool(args.week_chunks),
     )
     plan = planner.plan(
         datasets=ds_filter,

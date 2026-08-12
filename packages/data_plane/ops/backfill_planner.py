@@ -427,12 +427,12 @@ class BackfillPlanner:
                 elif mode == "none":
                     chunks = [(start, end)]
                 else:
-                    # today-mode: date-range batch is still standard when the
-                    # coverage segment is calendar_month (Track A default).
-                    if (
-                        cov.segment_granularity == "calendar_month"
-                        or self.prefer_month_chunks_for_today
-                    ):
+                    # today-mode: default is calendar_month-aligned ranges (Track A).
+                    # Full-month dispatch for high-volume series (equities_bars_daily)
+                    # can exceed CF Worker resource limits (error 1102). Set
+                    # prefer_month_chunks_for_today=False to subdivide into week/
+                    # N-day ranges; segment_id stays YYYY-MM for coverage identity.
+                    if self.prefer_month_chunks_for_today:
                         chunks = _month_chunks(start, end)
                     else:
                         chunks = _week_chunks(start, end, self.chunk_days)
