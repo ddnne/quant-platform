@@ -538,6 +538,23 @@ def record_required_segments(
     conn.executemany(sql, rows)
 
 
+def _rank_receipt_for_match(item: CollectionReceipt) -> tuple:
+    """Rank receipts: trusted first, recovered last, then structured/time."""
+    trusted = 1 if is_complete_eligible_receipt(item) else 0
+    origin = str(item.digests.get("origin") or "")
+    recovered = 1 if (
+        item.digests.get("eligibility") == "RECOVERED_RAW_ONLY"
+        or origin in {
+            "recovered-raw-only",
+            "parsed-staging-only",
+            "offline-test-fixture",
+        }
+        or bool(item.digests.get("synthetic"))
+    ) else 0
+    structured = int(item.structured_row_count or 0)
+    return (trusted, -recovered, structured, item.checked_at, item.run_id)
+
+
 def _latest_receipt_for(
     receipts: Sequence[CollectionReceipt],
     required: RequiredCoverageSegment,
@@ -557,26 +574,34 @@ def _latest_receipt_for(
     ]
     if not exact:
         return None
+    return max(exact, key=_rank_receipt_for_match)
 
-    def _rank(item: CollectionReceipt) -> tuple:
-        # Prefer cryptographically COMPLETE-eligible receipts first.
-        trusted = 1 if is_complete_eligible_receipt(item) else 0
-        # Never let RECOVERED_RAW_ONLY / parse-staging clobber better evidence.
-        origin = str(item.digests.get("origin") or "")
-        recovered = 1 if (
-            item.digests.get("eligibility") == "RECOVERED_RAW_ONLY"
-            or origin in {
-                "recovered-raw-only",
-                "parsed-staging-only",
-                "offline-test-fixture",
-            }
-            or bool(item.digests.get("synthetic"))
-        ) else 0
-        structured = int(item.structured_row_count or 0)
-        # trusted desc, recovered asc (0 better), structured desc, time desc
-        return (trusted, -recovered, structured, item.checked_at, item.run_id)
 
-    return max(exact, key=_rank)
+def _latest_eligible_success_for_segment_id(
+    receipts: Sequence[CollectionReceipt],
+    *,
+    source: str,
+    dataset: str,
+    segment_id: str,
+) -> CollectionReceipt | None:
+    """Best COMPLETE-eligible SUCCESS receipt for a segment_id.
+
+    Used by sticky COMPLETE when exact window match fails after a day-roll
+    replan (segment_end advanced) but an honest signed SUCCESS still exists
+    for the same segment_id.
+    """
+    candidates = [
+        receipt
+        for receipt in receipts
+        if receipt.source == source
+        and receipt.dataset == dataset
+        and receipt.segment_id == segment_id
+        and receipt.status == "SUCCESS"
+        and is_complete_eligible_receipt(receipt)
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=_rank_receipt_for_match)
 
 
 def evaluate_required_segments(
@@ -703,12 +728,18 @@ def refresh_coverage_ledger(
         if policy.segment_granularity in {
             "official_archive_day", "source_time_series_file"
         }:
+            # Keep inventory through target_end. Also retain already-COMPLETE
+            # days that sit past UTC target_end (JST archive day can lead UTC
+            # calendar) so refresh does not wipe honest seals.
             required_segments = tuple(sorted(
                 (
                     _required_from_inventory(row)
                     for row in inventory_by_dataset[dataset].values()
                     if str(row["source"]) == source
-                    and str(row["segment_start"]) <= target_end
+                    and (
+                        str(row["segment_start"]) <= target_end
+                        or str(row.get("status") or "") == "COMPLETE"
+                    )
                 ),
                 key=lambda item: (item.segment_start, item.segment_id),
             ))
@@ -743,28 +774,47 @@ def refresh_coverage_ledger(
             required_segment, receipt, segment_status, segment_detail
         ) in segment_evaluations:
             # Fail-closed sticky COMPLETE: never demote a previously COMPLETE
-            # segment while its SUCCESS receipt remains COMPLETE-eligible.
-            # Prevents calendar day-roll / scope replan from wiping honest evidence.
+            # segment while a COMPLETE-eligible SUCCESS receipt remains for the
+            # same segment_id. Exact window match may fail after day-roll replan
+            # (segment_end advanced); fall back to segment_id-level lookup.
             prior_inv = inventory_by_dataset[dataset].get(
                 required_segment.segment_id
             )
             prior_status = (
                 None if prior_inv is None else str(prior_inv.get("status") or "")
             )
+            sticky_receipt = receipt
             if (
                 segment_status != "COMPLETE"
                 and prior_status == "COMPLETE"
-                and receipt is not None
-                and receipt.status == "SUCCESS"
-                and is_complete_eligible_receipt(receipt)
+                and (
+                    sticky_receipt is None
+                    or sticky_receipt.status != "SUCCESS"
+                    or not is_complete_eligible_receipt(sticky_receipt)
+                )
+            ):
+                sticky_receipt = _latest_eligible_success_for_segment_id(
+                    receipts_by_dataset[dataset],
+                    source=required_segment.source,
+                    dataset=required_segment.dataset,
+                    segment_id=required_segment.segment_id,
+                )
+            if (
+                segment_status != "COMPLETE"
+                and prior_status == "COMPLETE"
+                and sticky_receipt is not None
+                and sticky_receipt.status == "SUCCESS"
+                and is_complete_eligible_receipt(sticky_receipt)
             ):
                 segment_detail = {
                     **dict(segment_detail),
                     "sticky_complete": True,
                     "demotion_blocked": segment_detail.get("reason"),
                     "reason": "sticky COMPLETE: eligible SUCCESS receipt retained",
+                    "sticky_receipt_run_id": sticky_receipt.run_id,
                 }
                 segment_status = "COMPLETE"
+                receipt = sticky_receipt
             segment_statuses.append(segment_status)
             segment_rows.append({
                 "source": required_segment.source,
@@ -782,6 +832,17 @@ def refresh_coverage_ledger(
                 "evaluated_at": evaluated_at,
                 "detail_json": _canonical_json(segment_detail),
             })
+        # Recompute aggregate after sticky COMPLETE upgrades so a day-roll
+        # that only fails exact window match does not pin dataset PARTIAL
+        # while every segment row is COMPLETE.
+        if any(status == "FAILED" for status in segment_statuses):
+            segment_aggregate = "FAILED"
+        elif segment_statuses and all(
+            status == "COMPLETE" for status in segment_statuses
+        ):
+            segment_aggregate = "COMPLETE"
+        else:
+            segment_aggregate = "PARTIAL"
         if validation_status != "COMPLETE":
             status = validation_status
         else:

@@ -212,6 +212,11 @@ def test_empty_array_raw_rejected(tmp_path: Path):
     assert mod._is_usable_raw(b"[]") is False
     assert mod._is_usable_raw(b"[\n]") is False
     assert mod._is_usable_raw(b'{"rows":[1]}') is True
+    # J-Quants envelope with zero rows must not pass empty-raw ban.
+    assert mod._is_usable_raw(b'{"data":[]}') is False
+    assert mod._is_usable_raw(b'{"data": []}') is False
+    assert mod._is_usable_raw(b'{"data":[1]}') is True
+    assert mod._is_usable_raw(b'{"rows":[]}') is False
 
 
 def test_struct_hint_skips_empty_months(tmp_path: Path):
@@ -243,3 +248,11 @@ def test_struct_hint_skips_empty_months(tmp_path: Path):
     assert {j.segment_id for j in all_jobs} == {"2025-01", "2025-02", "2025-03"}
     # 2025-02 has no structured rows in seed
     assert {j.segment_id for j in hinted} == {"2025-01", "2025-03"}
+
+
+def test_empty_data_envelope_and_size_gate():
+    mod = _load_mod()
+    assert mod._is_usable_raw(b'{"data": []}') is False
+    # large non-empty still ok
+    body = b'{"data":[' + b'1,' * 100 + b'2]}'
+    assert mod._is_usable_raw(body) is True

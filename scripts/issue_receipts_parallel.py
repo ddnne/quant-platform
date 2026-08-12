@@ -140,10 +140,11 @@ def build_raw_index(data_dir: Path, datasets: Sequence[str]) -> dict[str, list[R
 def _is_usable_raw(raw: bytes) -> bool:
     """Reject empty/stub payloads (e.g. ``[]`` / ``{}``) — not honest evidence.
 
-    Empty-raw ban is fail-closed: short bodies, JSON null/empty containers, and
-    whitespace-only payloads never qualify as collection evidence.
+    Empty-raw ban is fail-closed: short bodies, JSON null/empty containers,
+    whitespace-only payloads, and J-Quants-shaped ``{"data": []}`` never qualify
+    as collection evidence.
     """
-    if not raw or len(raw) >= 5_000_000:
+    if not raw or len(raw) >= 25_000_000:
         return False
     stripped = raw.strip()
     if len(stripped) < 8:
@@ -153,6 +154,32 @@ def _is_usable_raw(raw: bytes) -> bool:
     # Pretty-printed empty containers (still no rows).
     if stripped in {b"[\n]", b"[\r\n]", b"{\n}", b"{\r\n}"}:
         return False
+    # J-Quants page envelope with zero rows (common cron empty window).
+    if stripped in {
+        b'{"data":[]}',
+        b'{"data": []}',
+        b'{"data": [\n]}',
+        b'{"data":[]}\n',
+        b'{"data": []}\n',
+    }:
+        return False
+    try:
+        payload = json.loads(stripped)
+    except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
+        # Non-JSON raw is still admissible if large enough (already size-gated).
+        return True
+    if isinstance(payload, list) and len(payload) == 0:
+        return False
+    if isinstance(payload, dict):
+        if not payload:
+            return False
+        data = payload.get("data")
+        if isinstance(data, list) and len(data) == 0:
+            return False
+        # Some envelopes use "rows" instead of "data".
+        rows = payload.get("rows")
+        if isinstance(rows, list) and len(rows) == 0 and "data" not in payload:
+            return False
     return True
 
 
