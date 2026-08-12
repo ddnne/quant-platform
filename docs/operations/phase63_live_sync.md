@@ -1,33 +1,16 @@
-# Phase 6.3 Live vs Code Sync
+# Phase 6.3 live vs code (2026-08-12)
 
-## Environment Context
-- **Platform Path:** `/Users/taku/GitHub/quant-platform`
-- **Projection Status:** FRESH
-- **Deployment Guard:** `fe6aafc`
+| Commit | Role |
+|--------|------|
+| `4aaf424` | sticky COMPLETE; dataset_coverage resynced from segments |
+| `fe6aafc` | full projection publish fail-closed guard |
+| `b86b93b` | ops_reeval_freshness + restore_local_complete_from_receipt |
+| `1f175a3` | master coverage_mode scd2_event_sourcing |
+| `1f66821` | storage_plane_status MCP tool |
 
-## Code Commits Sync
-The live environment is currently aligned with the following Git history endpoints:
-- `fe6aafc` (Active Guard)
-- `b86b93b`
-- `c4505b1`
-- `1f175a3`
-- `1f66821`
-
-## Live System Metrics
-- **Master SCD2 Event Sourcing:** `128,811` records
-- **Segment Status (COMPLETE):** `400` 
-  - Calendar: `224`
-  - Master: `94`
-  - Tokyo: `1`
-  - OTC: `1`
-  - Corp: `1`
-- **Dataset-Level Status (COMPLETE):** `≈ 2` (Full-dataset completion is severely bottlenecked)
-
-## Critical Discrepancies & Operations Status
-### Segment vs. Dataset Completion
-There is a massive discrepancy between segment completion (`400`) and full-dataset completion (`≈ 2`). Operations that aggregate or rely on complete datasets will fail if treated as ready based on segment counts alone. 
-
-### Mass Operation Status
-**MASS: NO-GO**
-
-Due to the severe deficit in full-dataset completion (`≈ 2`), mass execution against the live environment is strictly prohibited until the dataset-level COMPLETE metrics are resolved.
+## Live checks
+- markets_calendar: 224/224 COMPLETE (dataset COMPLETE)
+- jsda_tokyo_repo_rates: COMPLETE
+- segment COMPLETE: 400
+- sticky: prevents demotion of COMPLETE when SUCCESS receipt still eligible
+- Mass / READY: NO-GO
