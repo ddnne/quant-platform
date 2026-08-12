@@ -280,3 +280,92 @@ def test_worker_plans_non_event_query_units_before_collection():
     assert ": queries.length" in source
     assert "if (segment.canonicalMonth)" in source
     assert "await writeRequiredCoverageSegment" in source
+
+
+def test_receipt_observed_window_ignores_empty_success_shells():
+    """R2-only history: empty SUCCESS shells must not move observed_start."""
+    from storage.coverage_ledger import (
+        _merge_observed_window,
+        _receipt_observed_window,
+    )
+
+    early = _receipt(
+        type("S", (), {
+            "source": "jquants",
+            "dataset": "equities_bars_daily",
+            "segment_id": "2008-05",
+            "segment_start": "2008-05-01",
+            "segment_end": "2008-05-31",
+            "expected_scope": {"unit": "calendar_month"},
+            "expected_items": None,
+        })(),
+        raw_rows=100,
+        structured_rows=100,
+    )
+    empty_shell = _receipt(
+        type("S", (), {
+            "source": "jquants",
+            "dataset": "equities_bars_daily",
+            "segment_id": "2006-09",
+            "segment_start": "2006-09-01",
+            "segment_end": "2006-09-30",
+            "expected_scope": {"unit": "calendar_month"},
+            "expected_items": None,
+        })(),
+        observed=0,
+        raw_rows=0,
+        structured_rows=0,
+    )
+    failed = _receipt(
+        type("S", (), {
+            "source": "jquants",
+            "dataset": "equities_bars_daily",
+            "segment_id": "2007-01",
+            "segment_start": "2007-01-01",
+            "segment_end": "2007-01-31",
+            "expected_scope": {"unit": "calendar_month"},
+            "expected_items": None,
+        })(),
+        raw_rows=50,
+        structured_rows=50,
+    )
+    failed = replace(failed, status="FAILED")
+
+    start, end, raw_total = _receipt_observed_window([empty_shell, failed, early])
+    assert start == "2008-05-01"
+    assert end == "2008-05-31"
+    assert raw_total == 100
+
+    # Receipt evidence before hot floor advances observed_start.
+    merged_s, merged_e = _merge_observed_window(
+        "2024-01-04T15:00:00+09:00",
+        "2026-08-10T15:30:00+09:00",
+        start,
+        end,
+    )
+    assert merged_s == "2008-05-01"
+    assert str(merged_e).startswith("2026-08-10")
+
+
+def test_merge_observed_window_preserves_hot_timestamp_when_same_day():
+    from storage.coverage_ledger import _merge_observed_window
+
+    # Hot window already at extreme day — keep full ISO timestamp.
+    s, e = _merge_observed_window(
+        "2008-05-01T15:00:00+09:00",
+        "2026-08-10T15:30:00+09:00",
+        "2008-05-01",
+        "2026-08-10",
+    )
+    assert s == "2008-05-01T15:00:00+09:00"
+    assert e == "2026-08-10T15:30:00+09:00"
+
+    # Receipt-only when hot is absent.
+    s2, e2 = _merge_observed_window(None, None, "2010-01-01", "2010-12-31")
+    assert s2 == "2010-01-01"
+    assert e2 == "2010-12-31"
+
+    # Empty union returns hot unchanged.
+    s3, e3 = _merge_observed_window("2024-01-04", "2024-02-01", None, None)
+    assert s3 == "2024-01-04"
+    assert e3 == "2024-02-01"

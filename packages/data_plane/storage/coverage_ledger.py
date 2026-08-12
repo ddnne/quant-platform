@@ -251,6 +251,89 @@ def _latest_run_id(conn: sqlite3.Connection, dataset: str) -> int | None:
     return int(row[0]) if row is not None and row[0] is not None else None
 
 
+def _date_prefix(value: str | None) -> str | None:
+    """Normalize ISO timestamps / calendar dates to YYYY-MM-DD for ordering."""
+    if value is None:
+        return None
+    text = str(value).strip()
+    if len(text) < 10:
+        return None
+    return text[:10]
+
+
+def _receipt_observed_window(
+    receipts: Sequence[CollectionReceipt],
+) -> tuple[str | None, str | None, int]:
+    """Observed calendar span from SUCCESS receipts with real raw rows.
+
+    R2-only structured paths leave D1 ``jquants_records`` as a hot window only
+    (often starting 2024+). Historical evidence still lands in
+    ``collection_receipts`` with ``raw_row_count > 0`` (and matching structured
+    count when the worker wrote R2 JSONL). Empty SUCCESS shells
+    (``raw_row_count=0``) must not extend ``observed_start``.
+    """
+    starts: list[str] = []
+    ends: list[str] = []
+    raw_total = 0
+    for receipt in receipts:
+        if receipt.status != "SUCCESS":
+            continue
+        raw_n = int(receipt.raw_row_count or 0)
+        if raw_n <= 0:
+            continue
+        start = _date_prefix(receipt.segment_start)
+        end = _date_prefix(receipt.segment_end)
+        if start is None or end is None:
+            continue
+        starts.append(start)
+        ends.append(end)
+        raw_total += raw_n
+    if not starts:
+        return None, None, 0
+    return min(starts), max(ends), raw_total
+
+
+def _merge_observed_window(
+    hot_start: str | None,
+    hot_end: str | None,
+    receipt_start: str | None,
+    receipt_end: str | None,
+) -> tuple[str | None, str | None]:
+    """Union D1-hot C4 window with receipt-plane evidence (calendar dates).
+
+    Prefer keeping a richer hot-window timestamp when it is the extreme, but
+    never hide earlier receipt evidence behind a hot-only min.
+    """
+    candidates_start = [
+        v for v in (_date_prefix(hot_start), _date_prefix(receipt_start)) if v
+    ]
+    candidates_end = [
+        v for v in (_date_prefix(hot_end), _date_prefix(receipt_end)) if v
+    ]
+    if not candidates_start and not candidates_end:
+        return hot_start, hot_end
+    merged_start = min(candidates_start) if candidates_start else None
+    merged_end = max(candidates_end) if candidates_end else None
+    # Preserve original hot timestamp when it still wins on the same day prefix.
+    if (
+        merged_start is not None
+        and hot_start is not None
+        and _date_prefix(hot_start) == merged_start
+    ):
+        out_start: str | None = str(hot_start)
+    else:
+        out_start = merged_start
+    if (
+        merged_end is not None
+        and hot_end is not None
+        and _date_prefix(hot_end) == merged_end
+    ):
+        out_end: str | None = str(hot_end)
+    else:
+        out_end = merged_end
+    return out_start, out_end
+
+
 def _dataset_status(
     results: list[CheckResult],
 ) -> tuple[str, int, str | None, str | None]:
@@ -607,6 +690,16 @@ def refresh_coverage_ledger(
             validation_status, count, observed_start, observed_end = _dataset_status(
                 dataset_evidence
             )
+        # CF-native R2 structured path: D1 jquants_records is hot-window only.
+        # Expand observed_* from SUCCESS receipts that actually retained raw
+        # rows so history backfill moves observed_start before the hot floor.
+        receipt_start, receipt_end, receipt_raw_rows = _receipt_observed_window(
+            receipts_by_dataset[dataset]
+        )
+        if receipt_start is not None or receipt_end is not None:
+            observed_start, observed_end = _merge_observed_window(
+                observed_start, observed_end, receipt_start, receipt_end,
+            )
         if policy.segment_granularity in {
             "official_archive_day", "source_time_series_file"
         }:
@@ -708,6 +801,16 @@ def refresh_coverage_ledger(
                     if segment_statuses.count(value)
                 },
                 "target_end": target_end,
+            },
+            "observed_window": {
+                "receipt_start": receipt_start,
+                "receipt_end": receipt_end,
+                "receipt_raw_rows": receipt_raw_rows,
+                "source": (
+                    "receipt_union_hot"
+                    if receipt_start is not None or receipt_end is not None
+                    else "hot_c4_only"
+                ),
             },
         }
         rows.append({
