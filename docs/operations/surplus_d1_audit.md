@@ -25,3 +25,9 @@
 | cold bars on remote | 0 |
 
 No additional quant D1 databases to delete. news-db remains isolated.
+
+## 2026-08-12 P0 reeval note
+
+- coverage reevaluation advanced `dataset_coverage.evaluated_at` without rewriting COMPLETE segments.
+- equities_master ops row_count set to **128811** (D1 hot window) with `coverage_mode=scd2_event_sourcing`.
+- Local research SQLite still holds ~7.55M cold master rows; not CF SoT. Do not re-publish full local coverage_segments without reconciling receipts.

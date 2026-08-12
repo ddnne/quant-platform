@@ -12,7 +12,7 @@
   "datasets": {
     "equities_master": {
       "history_target_start": "2000-07-13",
-      "coverage_mode": "snapshot_history",
+      "coverage_mode": "scd2_event_sourcing",
       "expected_frequency": "trading_day",
       "universe_rule": "all_listed_equities_at_event_date"
     },
