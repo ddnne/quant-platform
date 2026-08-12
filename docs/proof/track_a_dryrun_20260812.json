@@ -1,0 +1,237 @@
+{
+  "title": "Track A historical raw acceleration dry-run",
+  "generated_at": "2026-08-12T13:55:11.573042+00:00",
+  "mode": "dry-run",
+  "plan_cutoff": "2026-08-11",
+  "plan_contract_digest": "sha256:abbe50216f1d5a6c24100606e52920c0f3aed650029d2183906f9b5a204cbc0c",
+  "queued_count": 1066,
+  "executed_count": 0,
+  "counts_by_pool": {
+    "general": 874,
+    "fins": 192
+  },
+  "counts_by_dataset": {
+    "indices_bars_daily_topix": 192,
+    "equities_bars_daily": 240,
+    "equities_master": 178,
+    "fins_summary": 192,
+    "markets_margin_interest": 132,
+    "markets_breakdown": 132
+  },
+  "dispatch_envelope": {
+    "queued_general": 874,
+    "queued_fins": 192,
+    "general_rpm": 480.0,
+    "fins_rpm": 480.0,
+    "host_dispatch_floor_minutes_if_parallel_pools": 1.821,
+    "host_dispatch_floor_minutes_if_serial_all": 2.221,
+    "note": "Host dispatch only. Worker pagination dominates wall-clock; this is not a COMPLETE/SLA estimate."
+  },
+  "scheduler_config_static": {
+    "version": "range-batch-scheduler/v1",
+    "rate_pools": {
+      "general": {
+        "rpm": 480.0,
+        "workers": 4,
+        "note": "J-Quants Premium general ~500/min; driver uses 480 headroom"
+      },
+      "fins": {
+        "rpm": 480.0,
+        "workers": 2,
+        "note": "fins_* endpoints: separate rate budget; isolated token bucket"
+      }
+    },
+    "track_a_datasets": [
+      "equities_bars_daily",
+      "indices_bars_daily_topix",
+      "markets_breakdown",
+      "fins_summary",
+      "equities_master",
+      "markets_margin_interest"
+    ],
+    "date_range_batch_standard": true,
+    "default_mode": "dry-run"
+  },
+  "config": {
+    "general_rpm": 480.0,
+    "fins_rpm": 480.0,
+    "general_workers": 4,
+    "fins_workers": 2,
+    "max_jobs": 0,
+    "execute": false,
+    "sleep_on_retry_s": 30.0,
+    "request_timeout_s": 600,
+    "mode": "dry-run"
+  },
+  "notes": [
+    "Worker pass != Coverage COMPLETE; seal only with raw+structured.",
+    "Token is never written into this result.",
+    "scheduler_config=range-batch-scheduler/v1",
+    "track_a_datasets=['equities_bars_daily', 'indices_bars_daily_topix', 'markets_breakdown', 'fins_summary', 'equities_master', 'markets_margin_interest']",
+    "dry-run: no HTTP calls issued"
+  ],
+  "sample_jobs": [
+    {
+      "dataset": "equities_bars_daily",
+      "source": "jquants",
+      "segment_id": "2004-01",
+      "requested_from": "2004-01-05",
+      "requested_to": "2004-01-31",
+      "endpoint_query_mode": "today",
+      "priority": 30,
+      "attempt": 0,
+      "state": "pending",
+      "expected_evidence": "raw_plus_structured_then_receipt",
+      "contract_digest": "sha256:abbe50216f1d5a6c24100606e52920c0f3aed650029d2183906f9b5a204cbc0c",
+      "reason_code": "ok",
+      "detail": "",
+      "rate_pool": "general",
+      "queue_index": 192
+    },
+    {
+      "dataset": "equities_master",
+      "source": "jquants",
+      "segment_id": "2004-01",
+      "requested_from": "2004-01-01",
+      "requested_to": "2004-01-31",
+      "endpoint_query_mode": "today",
+      "priority": 40,
+      "attempt": 0,
+      "state": "pending",
+      "expected_evidence": "raw_plus_structured_then_receipt",
+      "contract_digest": "sha256:abbe50216f1d5a6c24100606e52920c0f3aed650029d2183906f9b5a204cbc0c",
+      "reason_code": "ok",
+      "detail": "",
+      "rate_pool": "general",
+      "queue_index": 432
+    },
+    {
+      "dataset": "fins_summary",
+      "source": "jquants",
+      "segment_id": "2008-01",
+      "requested_from": "2008-01-08",
+      "requested_to": "2008-01-31",
+      "endpoint_query_mode": "today",
+      "priority": 70,
+      "attempt": 0,
+      "state": "pending",
+      "expected_evidence": "raw_plus_structured_then_receipt",
+      "contract_digest": "sha256:abbe50216f1d5a6c24100606e52920c0f3aed650029d2183906f9b5a204cbc0c",
+      "reason_code": "ok",
+      "detail": "",
+      "rate_pool": "fins",
+      "queue_index": 610
+    },
+    {
+      "dataset": "indices_bars_daily_topix",
+      "source": "jquants",
+      "segment_id": "2008-01",
+      "requested_from": "2008-01-01",
+      "requested_to": "2008-01-31",
+      "endpoint_query_mode": "range",
+      "priority": 20,
+      "attempt": 0,
+      "state": "pending",
+      "expected_evidence": "raw_plus_structured_then_receipt",
+      "contract_digest": "sha256:abbe50216f1d5a6c24100606e52920c0f3aed650029d2183906f9b5a204cbc0c",
+      "reason_code": "ok",
+      "detail": "",
+      "rate_pool": "general",
+      "queue_index": 0
+    },
+    {
+      "dataset": "markets_breakdown",
+      "source": "jquants",
+      "segment_id": "2013-01",
+      "requested_from": "2013-01-04",
+      "requested_to": "2013-01-31",
+      "endpoint_query_mode": "today",
+      "priority": 84,
+      "attempt": 0,
+      "state": "pending",
+      "expected_evidence": "raw_plus_structured_then_receipt",
+      "contract_digest": "sha256:abbe50216f1d5a6c24100606e52920c0f3aed650029d2183906f9b5a204cbc0c",
+      "reason_code": "ok",
+      "detail": "",
+      "rate_pool": "general",
+      "queue_index": 934
+    },
+    {
+      "dataset": "markets_margin_interest",
+      "source": "jquants",
+      "segment_id": "2013-01",
+      "requested_from": "2013-01-04",
+      "requested_to": "2013-01-31",
+      "endpoint_query_mode": "today",
+      "priority": 80,
+      "attempt": 0,
+      "state": "pending",
+      "expected_evidence": "raw_plus_structured_then_receipt",
+      "contract_digest": "sha256:abbe50216f1d5a6c24100606e52920c0f3aed650029d2183906f9b5a204cbc0c",
+      "reason_code": "ok",
+      "detail": "",
+      "rate_pool": "general",
+      "queue_index": 802
+    }
+  ],
+  "pre_metrics_summary": {
+    "raw_manifests": 0,
+    "complete_segs": 404,
+    "complete_ds": 2,
+    "stale_datasets": [
+      "markets_margin_interest"
+    ],
+    "projection": "FRESH",
+    "track_a": {
+      "equities_bars_daily": {
+        "status": "PARTIAL",
+        "complete_segments": 12,
+        "total_segments": 272,
+        "records": 803862,
+        "event_time_max": "2026-08-10T15:30:00+09:00"
+      },
+      "indices_bars_daily_topix": {
+        "status": "PARTIAL",
+        "complete_segments": 32,
+        "total_segments": 224,
+        "records": 635,
+        "event_time_max": "2026-08-10T15:30:00+09:00"
+      },
+      "markets_breakdown": {
+        "status": "PARTIAL",
+        "complete_segments": 8,
+        "total_segments": 164,
+        "records": 2669153,
+        "event_time_max": "2026-08-10T00:00:00+09:00"
+      },
+      "fins_summary": {
+        "status": "PARTIAL",
+        "complete_segments": 5,
+        "total_segments": 224,
+        "records": 6121,
+        "event_time_max": "2026-08-10T09:00:00+09:00"
+      },
+      "equities_master": {
+        "status": "PARTIAL",
+        "complete_segments": 94,
+        "total_segments": 314,
+        "records": 7679458,
+        "event_time_max": "2026-08-12T00:00:00+09:00"
+      },
+      "markets_margin_interest": {
+        "status": "STALE",
+        "complete_segments": 14,
+        "total_segments": 164,
+        "records": 251470,
+        "event_time_max": "2025-02-28T00:00:00+09:00"
+      }
+    }
+  },
+  "bans_respected": [
+    "dry-run only (no /v1/run execute)",
+    "no COMPLETE forgery",
+    "no Mass/READY",
+    "no secrets in artifact",
+    "local DB noted as research mirror not CF SoT"
+  ]
+}

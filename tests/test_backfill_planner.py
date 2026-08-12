@@ -56,3 +56,32 @@ def test_worker_summary_partial_not_pass():
     job2.apply_worker_summary({"status": "pass"}, http_status=429)
     assert job2.state == "retry"
     assert job2.reason_code == "http_429"
+
+
+def test_planner_dataset_and_range_filter():
+    plan = BackfillPlanner(cutoff=__import__("datetime").date(2008, 6, 30)).plan(
+        datasets=["indices_bars_daily_topix"],
+        from_date="2008-03-01",
+        to_date="2008-04-30",
+    )
+    assert plan.jobs
+    assert all(j.dataset == "indices_bars_daily_topix" for j in plan.jobs)
+    assert all(j.segment_id in {"2008-03", "2008-04"} for j in plan.jobs)
+    # Honest evidence expectation: not auto COMPLETE
+    assert all("raw" in j.expected_evidence for j in plan.jobs)
+
+
+def test_premium_rate_constants_documented():
+    from ops.backfill_planner import (
+        DATE_RANGE_BATCH_STANDARD,
+        PREMIUM_DRIVER_FINS_RPM,
+        PREMIUM_DRIVER_GENERAL_RPM,
+        PREMIUM_FINS_RPM_CAP,
+        PREMIUM_GENERAL_RPM_CAP,
+    )
+
+    assert DATE_RANGE_BATCH_STANDARD is True
+    assert PREMIUM_DRIVER_GENERAL_RPM <= PREMIUM_GENERAL_RPM_CAP
+    assert PREMIUM_DRIVER_FINS_RPM <= PREMIUM_FINS_RPM_CAP
+    assert PREMIUM_GENERAL_RPM_CAP == 500
+    assert PREMIUM_FINS_RPM_CAP == 500

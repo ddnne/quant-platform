@@ -21,6 +21,21 @@ from data_contracts.coverage import (
     coverage_contract_for,
 )
 PLAN_VERSION = "backfill-plan/v1"
+
+# ---------------------------------------------------------------------------
+# J-Quants Premium rate budgets (Track A acceleration; see ADR + range_batch_scheduler)
+# General Premium ~500 req/min. fins_* endpoints use a **separate** budget.
+# Drivers should leave headroom (e.g. 480 RPM) and never share fins vs general
+# token buckets. Worker-side floor ~125 ms remains authoritative upstream.
+# ---------------------------------------------------------------------------
+PREMIUM_GENERAL_RPM_CAP = 500
+PREMIUM_FINS_RPM_CAP = 500  # separate pool — do not merge with general
+PREMIUM_DRIVER_GENERAL_RPM = 480
+PREMIUM_DRIVER_FINS_RPM = 480
+
+# Date-range batch is the standard planning unit (calendar_month segments).
+DATE_RANGE_BATCH_STANDARD = True
+
 JobState = Literal[
     "pending",
     "running",
@@ -318,7 +333,13 @@ def _read_complete_segments(
 
 
 class BackfillPlanner:
-    """Plan backfill jobs from Coverage Contract + endpoint capabilities."""
+    """Plan backfill jobs from Coverage Contract + endpoint capabilities.
+
+    Date-range batch is standard: each job is dataset × inclusive
+    ``requested_from``/``requested_to`` (typically one calendar month).
+    Rate pools (general vs fins) are assigned at schedule time — see
+    :mod:`ops.range_batch_scheduler`.
+    """
 
     def __init__(
         self,
@@ -327,20 +348,38 @@ class BackfillPlanner:
         db_path: Path | str | None = None,
         sources: Sequence[str] = ("jquants",),
         chunk_days_for_today_mode: int = 7,
+        prefer_month_chunks_for_today: bool = True,
     ) -> None:
         self.cutoff = cutoff or (_today_utc() - timedelta(days=1))
         self.db_path = Path(db_path) if db_path else None
         self.sources = frozenset(sources)
         self.chunk_days = chunk_days_for_today_mode
+        # Track A: calendar_month alignment is standard even for today-mode
+        # endpoints when the coverage segment is calendar_month.
+        self.prefer_month_chunks_for_today = prefer_month_chunks_for_today
         self.endpoints = load_premium_endpoint_capabilities()
 
-    def plan(self) -> BackfillPlan:
+    def plan(
+        self,
+        *,
+        datasets: Sequence[str] | None = None,
+        from_date: str | None = None,
+        to_date: str | None = None,
+    ) -> BackfillPlan:
+        """Build the full contract plan, optionally filtered to a range window.
+
+        Filtering never invents segments outside the contract inventory; it
+        only drops jobs outside ``datasets`` / ``[from_date, to_date]``.
+        """
         conn: sqlite3.Connection | None = None
         if self.db_path and self.db_path.is_file():
             conn = sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True)
         try:
             jobs: list[BackfillJob] = []
             contract_digest = _contract_bundle_digest()
+            allow = {d.strip() for d in (datasets or []) if d and str(d).strip()} or None
+            filter_from = _parse_date(from_date) if from_date else None
+            filter_to = _parse_date(to_date) if to_date else None
             # Inventory ALL governed datasets from coverage (includes fins_details).
             for cov in all_coverage_contracts():
                 if cov.governance_tier != "governed":
@@ -349,6 +388,8 @@ class BackfillPlanner:
                 if cov.dataset_id.startswith("jsda_"):
                     continue
                 if "jquants" not in self.sources:
+                    continue
+                if allow is not None and cov.dataset_id not in allow:
                     continue
                 ep = self.endpoints.get(cov.dataset_id)
                 if ep is None:
@@ -372,6 +413,12 @@ class BackfillPlanner:
                     continue
                 start = _parse_date(cov.history_target_start)
                 end = self.cutoff
+                if filter_from is not None and filter_from > start:
+                    start = filter_from
+                if filter_to is not None and filter_to < end:
+                    end = filter_to
+                if start > end:
+                    continue
                 complete = _read_complete_segments(conn, cov.dataset_id)
                 mode = ep.date_mode
                 if mode == "range":
@@ -380,8 +427,12 @@ class BackfillPlanner:
                 elif mode == "none":
                     chunks = [(start, end)]
                 else:
-                    # today-mode: week chunks by default
-                    if cov.segment_granularity == "calendar_month":
+                    # today-mode: date-range batch is still standard when the
+                    # coverage segment is calendar_month (Track A default).
+                    if (
+                        cov.segment_granularity == "calendar_month"
+                        or self.prefer_month_chunks_for_today
+                    ):
                         chunks = _month_chunks(start, end)
                     else:
                         chunks = _week_chunks(start, end, self.chunk_days)
@@ -400,6 +451,11 @@ class BackfillPlanner:
                         segment_id = a.strftime("%Y-%m")
                     if segment_id in complete:
                         continue
+                    # Optional job-level range filter (partial month overlap keep).
+                    if filter_from is not None and b < filter_from:
+                        continue
+                    if filter_to is not None and a > filter_to:
+                        continue
                     jobs.append(
                         BackfillJob(
                             dataset=cov.dataset_id,
@@ -410,7 +466,8 @@ class BackfillPlanner:
                             endpoint_query_mode=mode,
                             priority=_PRIORITY.get(cov.dataset_id, 200),
                             contract_digest=contract_digest,
-                            expected_evidence="COVERAGE_COMPLETE",
+                            # Honest: worker pass is not Coverage COMPLETE.
+                            expected_evidence="raw_plus_structured_then_receipt",
                             state="pending",
                         )
                     )
@@ -515,8 +572,13 @@ __all__ = [
     "BackfillJob",
     "BackfillPlan",
     "BackfillPlanner",
+    "DATE_RANGE_BATCH_STANDARD",
     "EndpointCapability",
     "PLAN_VERSION",
+    "PREMIUM_DRIVER_FINS_RPM",
+    "PREMIUM_DRIVER_GENERAL_RPM",
+    "PREMIUM_FINS_RPM_CAP",
+    "PREMIUM_GENERAL_RPM_CAP",
     "backfill_status_rows",
     "inventory_all_governed_datasets",
     "inventory_governed_jq_datasets",
