@@ -1,8 +1,8 @@
 # Phase 6.2 / 6.3 residual status
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
-**Live verified:** 2026-08-13 (remote D1; COMPLETE segs **510**; breakdown `observed_start=2015-03-26`; margin **detail_json C8 pass**; Phase7 **OFF**)  
-**Repo tip:** `e82672e` — COMPLETE **510** / bars `2008-05-01` / breakdown `2015-03-26` / Phase7 **OFF** / EDINET **+4** / OTC **+0**
+**Live verified:** 2026-08-13 (remote D1; COMPLETE segs **510**; raw_n **6118**; multi-track bars/fins/topix **done**; fins `observed_start=2014-01-01`; margin **C8 pass**; Phase7 **OFF**)  
+**Repo tip:** *(set to push SHA after this pass)* — COMPLETE **510** / raw_n **6118** / bars `2008-05-01` / fins `2014-01-01` / breakdown `2015-03-26` / topix end `2026-08-13` / Phase7 **OFF**
 
 ## Live snapshot (remote D1 `quant-ingest`)
 
@@ -10,34 +10,44 @@
 |------|--------|
 | Dataset COMPLETE | **2** — `markets_calendar` (224/224 segs), `jsda_tokyo_repo_rates` (1/1) |
 | Dataset STALE | **0** (margin PARTIAL via receipt reeval; not STALE) |
-| Segment COMPLETE total | **510** (local == remote; A3 506→**510** EDINET +4) |
+| Segment COMPLETE total | **510** (remote; EDINET +4 concurrent; multi-track pass did **not** invent COMPLETE) |
 | Segment other | PARTIAL majority / UNKNOWN (topix inventory shape) |
 | calendar segments | **224 COMPLETE / 0 PARTIAL** |
 | JSDA OTC COMPLETE segs | **5** — `2026-08-06`, `2026-08-07`, `2026-08-10`, `2026-08-12`, `2026-08-13` (dataset still PARTIAL; **+0** this pass — JSDA fetch timeout) |
 | JSDA corporate COMPLETE segs | **1** — year `2026` (dataset still PARTIAL) |
-| A3 sealed (partial datasets) | prior + **+4 this pass** (edinet_major/2026-01 + edinet_cross/2026-02/03/04); also +3 margin/ssr; +2 margin/ssr 2026-07; +7/`*/2026-07`; +4 investor/edinet; … |
-| Remote `raw_retention_manifests` | growing under acquisition (bars solo + EDINET H1 raw landed; local research mirror raw still partial) |
-| Track A + P0 execute | bars solo week-chunks may still be live; MB solo **done** 409/409; MB 2015-dir partial (26 pass / 5 fail, RPM share). **Worker pass ≠ COMPLETE** |
+| A3 sealed (partial datasets) | prior + **+4** edinet (major/2026-01 + cross/2026-02/03/04); also +3 margin/ssr; +2 margin/ssr 2026-07; +7/`*/2026-07`; +4 investor/edinet; … |
+| Remote `raw_retention_manifests` | **6118** total (session PRE **5279** → POST **6118**, **+839** under multi-track; local research mirror still partial) |
+| Track A + P0 execute | **multi-track chain DONE** — MB solo 409/409; bars solo **280** (264 pass/16 fail); fins paced i=96; topix3 192/192. **Worker pass ≠ COMPLETE** |
 | master | `scd2_event_sourcing` / D1 hot |
-| projection | **FRESH** — `projgen-e730b97119c6407aac3f17e2f8d50982` (`generated_at=2026-08-13T13:42:23.699691+00:00`, age_seconds=0; full publish fail-closed + post reeval freshness) |
+| projection | **FRESH** — `projgen-d511c8243a1944d1a538eed274a25a75` (`generated_at=2026-08-13T13:43:57.356726+00:00`, age_seconds=0; post multi-track `ops_reeval_freshness`) |
 | sticky COMPLETE | **fixed** segment_id fallback + post-sticky dataset aggregate + COMPLETE inventory retain past UTC target_end (`coverage_ledger.py`) |
 | Full publish guard | `scripts/publish_ops_projection.py` fail-closed |
 | Targeted freshness | `scripts/ops_reeval_freshness.py` (no segment rewrite) |
 | Observed window re-eval | `scripts/ops_reeval_observed_window.py` (SUCCESS receipts `raw_row_count>0`; no segment rewrite / no COMPLETE claim) |
 | Layout migration | **DONE** — libraries under `packages/{edge,data_plane,research_runtime,product}`; import leaf names unchanged |
-| Track A (historical raw accel) | **EXECUTE DONE** — PRE raw **1488** → AEXEC **1889** → live **5519** (still rising under mid-hole) |
+| Track A (historical raw accel) | **EXECUTE DONE** — PRE raw **1488** → AEXEC **1889** → live **6118** |
 | Track B1 (LLM-friendly) | **landed** + residual/docs SoT live-sync; B1-e partial (ops/coverage/receipt CLIs); Batch Z still **DEFER** |
 | Mass / READY / B0 | **NO-GO** |
 | Phase 7 | **OFF / foundation only** — **must remain OFF**; no mass arming, no production READY, no Phase7 switch ON |
+
+### Host POST/min (multi-track session, state jsonl)
+
+| Track | host POST/min | n | note |
+|-------|--------------:|--:|------|
+| MB solo | **10.97** | 409 | general pool |
+| bars solo | **6.22** | 280 | general; 0×429 |
+| fins paced | **1.15** | 102 | fins pool |
+| topix3 | **93.48** | 192 | residual months (fast) |
 
 ### observed_* (remote D1, key datasets)
 
 | dataset | status | COMPLETE segs | observed_start | observed_end | raw manifests (COMPLETE) | notes |
 |---------|--------|--------------:|----------------|--------------|--------------------------:|-------|
-| `equities_bars_daily` | **PARTIAL** | **12** | **`2008-05-01`** | **`2026-08-12`** | growing under mid-hole backfill | receipt-plane union; worker pass ≠ COMPLETE |
-| `indices_bars_daily_topix` | **PARTIAL** | **32** | **`2008-01-01`** | **`2026-08-12`** | — | sticky COMPLETE months |
-| `markets_breakdown` | **PARTIAL** | **32** | **`2015-03-26`** | **`2026-08-12`** | — | reeval after MB solo+2015-dir receipts; full publish resets to 2024-01-01 → re-run reeval |
-| `markets_margin_interest` | **PARTIAL** | **17** | **`2024-01-01`** | **`2026-08-13`** | — | **detail_json C8 pass** (lag **≤7**, receipt SoT); COMPLETE months include **2026-06/07/08**; dataset **not** COMPLETE |
+| `equities_bars_daily` | **PARTIAL** | **12** | **`2008-05-01`** | **`2026-08-12`** | growing (n≈2000) | multi-track 280 week jobs done; worker pass ≠ COMPLETE |
+| `indices_bars_daily_topix` | **PARTIAL** | **32** | **`2008-01-01`** | **`2026-08-13`** | n≈998 | residual topix3 192 pass; C8 lag 0 |
+| `markets_breakdown` | **PARTIAL** | **32** | **`2015-03-26`** | **`2026-08-12`** | n≈1056 | reeval after MB solo+2015-dir; full publish resets → re-run reeval |
+| `fins_summary` | **PARTIAL** | **5** | **`2014-01-01`** | **`2026-08-12`** | n≈304 | paced 2016–2023 done; reeval moved start from 2024-01-01 |
+| `markets_margin_interest` | **PARTIAL** | **17** | **`2024-01-01`** | **`2026-08-13`** | — | **detail_json C8 pass** (lag **1**≤7, receipt SoT); COMPLETE months include **2026-06/07/08**; dataset **not** COMPLETE |
 | `markets_short_ratio` | PARTIAL | 32 | 2024-01-04 | 2026-08-10 | — | A3 sealed months |
 | `markets_margin_alert` | PARTIAL | 18 | 2025-03-03 | 2026-08-07 | — | A3 sealed months |
 | `markets_calendar` | **COMPLETE** | 224 | 2008-01-01 | 2026-08-12 | — | sticky full + aggregate fix |
@@ -73,6 +83,7 @@
 ### Track A / raw throughput / bars history
 | Proof | What it closes |
 |-------|----------------|
+| [`docs/proof/p0_multi_track_throughput_20260813.md`](proof/p0_multi_track_throughput_20260813.md) | **Multi-track** MB/bars/fins/topix host POST/min + raw Δ **+839** (5279→6118) + reeval (fins start **2014-01-01**, breakdown **2015-03-26**, C8 pass, projection FRESH) |
 | [`docs/proof/track_a_dryrun_20260812.md`](proof/track_a_dryrun_20260812.md) | Track A planner dry-run |
 | [`docs/proof/raw_throughput_PRE_20260812.md`](proof/raw_throughput_PRE_20260812.md) / [`.json`](proof/raw_throughput_PRE_20260812.json) | PRE baseline |
 | [`docs/proof/raw_throughput_PRE_AEXEC_20260812.md`](proof/raw_throughput_PRE_AEXEC_20260812.md) | PRE_AEXEC |
@@ -121,9 +132,11 @@
 | Track B1 docs hub + plane import guards | **DONE** |
 | Track B residual live-sync + docs SoT banners | **DONE** (COMPLETE **510** / breakdown `2015-03-26` / C8 pass / Phase7 OFF) |
 | bars `observed_start` receipt-plane union | **DONE** (remote **`2008-05-01`**) |
+| multi-track bars/fins/topix paced execute + host rpm proof | **DONE** (bars 280; fins i=96; topix3 192; see multi-track proof) |
+| fins_summary `observed_start` history deepen | **DONE** (remote **`2014-01-01`** via paced raw + reeval; further pre-2014 open) |
 | bars gap **2004-01 → 2008-04** deepen / pre-May-2008 `observed_start` | **DEFER** (catalog wants 2004; subscription floor **2006-08-13**; empty `data[]` through 2008-04; raw_n=0 on gap receipts — see reverify proof) |
-| topix `observed_start` receipt-plane | **DONE** (remote **`2008-01-01`**) |
-| margin STALE → PARTIAL (freshness) | **DONE** (remote PARTIAL; `observed_end=2026-08-12`; **detail_json C8 pass** lag 1d≤7 via `receipt_observed_end`; not dataset COMPLETE) |
+| topix `observed_start` receipt-plane | **DONE** (remote **`2008-01-01`**; `observed_end` **`2026-08-13`**) |
+| margin STALE → PARTIAL (freshness) | **DONE** (remote PARTIAL; `observed_end=2026-08-13`; **detail_json C8 pass** lag 1d≤7 via `receipt_observed_end`; not dataset COMPLETE) |
 | planner OOS before subscription floor | **DONE** (`JQUANTS_SUBSCRIPTION_FLOOR=2006-08-13`; fail id 2522 class blocked) |
 | Extra COMPLETE without raw | **DEFER** / **Forbidden** |
 | OTC full archive COMPLETE | **DEFER** (thousands of trading days remain) |
