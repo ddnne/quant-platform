@@ -1,8 +1,8 @@
 # Phase 6.2 / 6.3 residual status
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
-**Live verified:** 2026-08-13T13:49Z (remote D1; COMPLETE segs **510**; raw_n **6378** / COMPLETE completeness **5490**; multi-track bars/fins/topix **done**; fins `observed_start=2014-01-01`; margin **detail_json C8 pass** lag 1d≤7; projection **FRESH** age=0; Phase7 **OFF**)  
-**Repo tip:** `dbb3590` — COMPLETE **510** / raw_n **6378** / bars `2008-05-01` / fins `2014-01-01` / breakdown `2015-03-26` / topix end `2026-08-13` / margin C8 **pass** / Phase7 **OFF**
+**Live verified:** 2026-08-13T14:01Z (remote D1; COMPLETE segs **510**; raw_n **6477** / COMPLETE completeness **5589**; G8 reeval×5 + freshness FRESH age=0; fins `observed_start=2014-01-01`; margin **detail_json C8 pass** lag 1d≤7; Phase7 **OFF**)  
+**Repo tip:** `(see post-push SHA)` — COMPLETE **510** / raw_n **6477** / bars `2008-05-01` / fins `2014-01-01` / breakdown `2015-03-26` / topix end `2026-08-13` / margin C8 **pass** / Phase7 **OFF**
 
 ## Live snapshot (remote D1 `quant-ingest`)
 
@@ -10,22 +10,22 @@
 |------|--------|
 | Dataset COMPLETE | **2** — `markets_calendar` (224/224 segs), `jsda_tokyo_repo_rates` (1/1) |
 | Dataset STALE | **0** (margin PARTIAL via receipt reeval; not STALE) |
-| Segment COMPLETE total | **510** (remote; EDINET +4 concurrent; multi-track pass did **not** invent COMPLETE) |
+| Segment COMPLETE total | **510** (remote; G8 circuit **Δ0** — measurement only, no empty COMPLETE) |
 | Segment other | PARTIAL majority / UNKNOWN (topix inventory shape) |
 | calendar segments | **224 COMPLETE / 0 PARTIAL** |
 | JSDA OTC COMPLETE segs | **5** — `2026-08-06`, `2026-08-07`, `2026-08-10`, `2026-08-12`, `2026-08-13` (dataset still PARTIAL; **+0** this pass — JSDA fetch timeout) |
 | JSDA corporate COMPLETE segs | **1** — year `2026` (dataset still PARTIAL) |
 | A3 sealed (partial datasets) | prior + **+4** edinet (major/2026-01 + cross/2026-02/03/04); also +3 margin/ssr; +2 margin/ssr 2026-07; +7/`*/2026-07`; +4 investor/edinet; … |
-| Remote `raw_retention_manifests` | **6378** total / **5490** COMPLETE completeness (high-rate wave PRE **3535** → re-verify **6378**, **+2843**; peer traffic continues; local research mirror still partial) |
-| Track A + P0 execute | **multi-track chain DONE** — MB solo 409/409; bars solo **280** (264 pass/16 fail); fins paced **96/96**; topix3 **2×192** (w1 93.48 / w2 62.79 rpm). **Worker pass ≠ COMPLETE** |
+| Remote `raw_retention_manifests` | **6477** total / **5589** COMPLETE completeness (session PRE **6447**/**5559** → POST **6477**/**5589**, **+30**/+30; peers t7/t8/t5 still live; local research mirror still partial) |
+| Track A + P0 execute | **multi-track chain DONE** — MB solo 409/409; bars solo **280** (264 pass/16 fail); fins paced **96/96**; topix3 **2×192** (w1 93.48 / w2 62.79 rpm). Peers t7_master / t8_misc / t5_margin_earn still running. **Worker pass ≠ COMPLETE** |
 | master | `scd2_event_sourcing` / D1 hot |
-| projection | **FRESH** — `projgen-ef9627ddbb4a4330803bcd2662019d0f` (`generated_at=2026-08-13T13:49:05.920521+00:00`, age_seconds=0; `ops_reeval_freshness` re-verify) |
+| projection | **FRESH** — `projgen-8927d3b38aae41c18dc740df9a7ed6ad` (`generated_at=2026-08-13T14:01:21.532627+00:00`, age_seconds=0; `ops_reeval_freshness` G8) |
 | sticky COMPLETE | **fixed** segment_id fallback + post-sticky dataset aggregate + COMPLETE inventory retain past UTC target_end (`coverage_ledger.py`) |
 | Full publish guard | `scripts/publish_ops_projection.py` fail-closed |
 | Targeted freshness | `scripts/ops_reeval_freshness.py` (no segment rewrite) |
 | Observed window re-eval | `scripts/ops_reeval_observed_window.py` (SUCCESS receipts `raw_row_count>0`; no segment rewrite / no COMPLETE claim) |
 | Layout migration | **DONE** — libraries under `packages/{edge,data_plane,research_runtime,product}`; import leaf names unchanged |
-| Track A (historical raw accel) | **EXECUTE DONE** — PRE raw **1488** → AEXEC **1889** → high-rate PRE **3535** → live **6378** |
+| Track A (historical raw accel) | **EXECUTE DONE** — PRE raw **1488** → AEXEC **1889** → high-rate PRE **3535** → live **6477** |
 | Track B1 (LLM-friendly) | **landed** + residual/docs SoT live-sync; B1-e partial (ops/coverage/receipt CLIs); Batch Z still **DEFER** |
 | Mass / READY / B0 | **NO-GO** |
 | Phase 7 | **OFF / foundation only** — **must remain OFF**; no mass arming, no production READY, no Phase7 switch ON |
@@ -38,8 +38,11 @@
 | bars solo | **6.22** | 280 | general; 0×429; pass 264 / fail 16 |
 | fins paced | **1.09–1.16** | 102 | fins pool; runner `host_jobs_per_min=1.09` |
 | topix3 w1 / w2 | **93.48** / **62.79** | 192 / 192 | residual months (fast burst); orch re-dispatch after bars |
-| merged wave (re-verify) | **12.31** | 1073 host events | `report_raw_throughput --state-jsonl` merged mb+bars+topix3+fins |
-| proof | — | — | [`docs/proof/p0_high_rate_parallel_acq_20260813.md`](proof/p0_high_rate_parallel_acq_20260813.md) |
+| t7 master (live peer) | **3.65** | ~136 | equities_master; not killed |
+| t8 misc (live peer) | **10.50** | ~393 | short_ratio / margin_alert / investor; not killed |
+| merged mb+bars+topix3+fins | **12.56** | 1175 | G8 wave2 re-measure |
+| merged + peers t4/t7/t8 | **17.63** | 1896 | concurrent acq included |
+| proof | — | — | [`docs/proof/p0_multi_track_wave2_20260813.md`](proof/p0_multi_track_wave2_20260813.md) |
 
 ### observed_* (remote D1, key datasets)
 
@@ -85,6 +88,7 @@
 ### Track A / raw throughput / bars history
 | Proof | What it closes |
 |-------|----------------|
+| [`docs/proof/p0_multi_track_wave2_20260813.md`](proof/p0_multi_track_wave2_20260813.md) | **G8 closed circuit** T13+T14+T15: reeval×5 + FRESH age=0 (`projgen-8927…`); raw PRE **6447**→POST **6477** (+30); COMPLETE segs **510** Δ0; host rpm bars **6.22** / topix w1 **93.48** / merged **12.56** / +peers **17.63**; no kill acq |
 | [`docs/proof/p0_high_rate_parallel_acq_20260813.md`](proof/p0_high_rate_parallel_acq_20260813.md) | **High-rate parallel** PRE raw **3535**→re-verify **6378** (+2843); host rpm mb 10.97 / bars 6.22 / topix3 **93.48→62.79** / merged **12.31**; bars/fins/topix drivers done; observed_* + margin C8 **pass**; projection FRESH age=0 |
 | [`docs/proof/p0_multi_track_throughput_20260813.md`](proof/p0_multi_track_throughput_20260813.md) | **Multi-track** MB/bars/fins/topix host POST/min + raw Δ **+839** (5279→6118) + reeval (fins start **2014-01-01**, breakdown **2015-03-26**, C8 pass, projection FRESH) |
 | [`docs/proof/track_a_dryrun_20260812.md`](proof/track_a_dryrun_20260812.md) | Track A planner dry-run |
@@ -133,7 +137,8 @@
 | Physical layout → `packages/*` planes | **DONE** (Batches 0–E; import names leaf top-level) |
 | Track A planner / throughput / execute | **DONE** (infra + live execute; raw continuing under mid-hole) |
 | Track B1 docs hub + plane import guards | **DONE** |
-| Track B residual live-sync + docs SoT banners | **DONE** (COMPLETE **510** / breakdown `2015-03-26` / C8 pass / Phase7 OFF) |
+| Track B residual live-sync + docs SoT banners | **DONE** (COMPLETE **510** / raw **6477** / breakdown `2015-03-26` / C8 pass / Phase7 OFF; G8 wave2) |
+| G8 closed circuit (reeval + freshness + throughput proof) | **DONE** (FRESH age=0; COMPLETE Δ0; peers not killed) |
 | bars `observed_start` receipt-plane union | **DONE** (remote **`2008-05-01`**) |
 | multi-track bars/fins/topix paced execute + host rpm proof | **DONE** (bars 280; fins i=96; topix3 192; see multi-track proof) |
 | fins_summary `observed_start` history deepen | **DONE** (remote **`2014-01-01`** via paced raw + reeval; further pre-2014 open) |
