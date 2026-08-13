@@ -2,7 +2,7 @@
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
 **Live verified:** 2026-08-13 (remote D1 after P0 finish: breakdown `observed_start` restore + projection freshness; COMPLETE segs **490**; raw_n **live ~3158+** growing mid-hole; Phase7 **OFF**)  
-**Repo tip:** *(set to push SHA after commit)* — COMPLETE **490** / raw live / bars `2008-05-01` / breakdown `2015-04-01` / Phase7 **OFF**
+**Repo tip:** `ddcadad` — COMPLETE **490** / raw live / bars `2008-05-01` / breakdown `2015-04-01` / Phase7 **OFF**
 
 ## Live snapshot (remote D1 `quant-ingest`)
 
