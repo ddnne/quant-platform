@@ -2,7 +2,7 @@
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
 **Live verified:** 2026-08-13T15:03Z (remote D1; COMPLETE segs **538**; raw_n **7385**; G8-final reeval×5 + FRESH; margin `observed_start=2013-01-04` + **C8 pass** lag 1; projection **FRESH** age=0; Phase7 **OFF**)  
-**Repo tip:** `e00b05f` — COMPLETE **538** / raw_n **7385** / margin start **`2013-01-04`** / margin C8 **pass** / Phase7 **OFF** (tip → push SHA after commit)
+**Repo tip:** `7c5a7c0` — COMPLETE **538** / raw_n **7385** / margin start **`2013-01-04`** / margin C8 **pass** / Phase7 **OFF**
 
 ## Live snapshot (remote D1 `quant-ingest`)
 
