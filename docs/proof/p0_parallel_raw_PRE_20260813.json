@@ -1,0 +1,99 @@
+{
+  "label": "PRE",
+  "generated_at": "2026-08-13T12:07:36.155667+00:00",
+  "raw_manifests_total": 3535,
+  "dataset_coverage": [
+    {
+      "dataset": "equities_bars_daily",
+      "status": "PARTIAL",
+      "observed_start": "2008-05-01",
+      "observed_end": "2026-08-12",
+      "row_count": 803862
+    },
+    {
+      "dataset": "fins_summary",
+      "status": "PARTIAL",
+      "observed_start": "2024-01-01",
+      "observed_end": "2026-08-11",
+      "row_count": 6121
+    },
+    {
+      "dataset": "indices_bars_daily_topix",
+      "status": "PARTIAL",
+      "observed_start": "2008-01-01",
+      "observed_end": "2026-08-12",
+      "row_count": 635
+    },
+    {
+      "dataset": "markets_breakdown",
+      "status": "PARTIAL",
+      "observed_start": "2024-01-01",
+      "observed_end": "2026-08-12",
+      "row_count": 2669153
+    }
+  ],
+  "raw_by_dataset": [
+    {
+      "dataset": "equities_bars_daily",
+      "n": 1404,
+      "n_complete": 1300,
+      "sum_rows": 23380917,
+      "sum_bytes": 15638205746
+    },
+    {
+      "dataset": "fins_summary",
+      "n": 197,
+      "n_complete": 96,
+      "sum_rows": 68288,
+      "sum_bytes": 133358001
+    },
+    {
+      "dataset": "indices_bars_daily_topix",
+      "n": 420,
+      "n_complete": 420,
+      "sum_rows": 11662,
+      "sum_bytes": 916648
+    },
+    {
+      "dataset": "markets_breakdown",
+      "n": 148,
+      "n_complete": 148,
+      "sum_rows": 2009038,
+      "sum_bytes": 793620659
+    }
+  ],
+  "receipts_by_dataset": [
+    {
+      "dataset": "equities_bars_daily",
+      "n_success": 1202,
+      "n_nz": 966,
+      "min_nz": "2008-05-01",
+      "max_nz": "2026-08-12",
+      "sum_raw": 17158110
+    },
+    {
+      "dataset": "fins_summary",
+      "n_success": 96,
+      "n_nz": 68,
+      "min_nz": "2014-01-01",
+      "max_nz": "2026-08-12",
+      "sum_raw": 53502
+    },
+    {
+      "dataset": "indices_bars_daily_topix",
+      "n_success": 420,
+      "n_nz": 399,
+      "min_nz": "2008-01-01",
+      "max_nz": "2026-08-13",
+      "sum_raw": 11662
+    },
+    {
+      "dataset": "markets_breakdown",
+      "n_success": 137,
+      "n_nz": 88,
+      "min_nz": "2015-04-01",
+      "max_nz": "2026-08-12",
+      "sum_raw": 1195763
+    }
+  ]
+}
