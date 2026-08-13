@@ -1,3 +1,8 @@
+> **Historical snapshot** — not current residual SoT.
+> Current residual: [phase62_residual_status.md](../phase62_residual_status.md).
+> Mass / READY / Phase7: **NO-GO / OFF** unless residual says otherwise.
+> Counts below are dated (2026-08-12) and may be stale.
+
 # Phase 6.3 live vs code (2026-08-12)
 
 | Commit | Role |

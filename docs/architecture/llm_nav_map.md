@@ -2,7 +2,9 @@
 
 **Status:** **Live** (Track B1 — productionized in README).  
 **Paired ADR:** [`adr_llm_friendly_refactor.md`](./adr_llm_friendly_refactor.md) (**Accepted (Grok 2026-08-12)**).  
-**Live residual SoT:** [`../phase62_residual_status.md`](../phase62_residual_status.md) — sole place for COMPLETE segs / raw_n / C8 / tip / Phase7  
+**Live residual SoT (sole):** [`../phase62_residual_status.md`](../phase62_residual_status.md)  
+— **only** file that may hold live COMPLETE segs / raw_n / C8 / tip / Phase7 / Mass·READY.  
+**This map never embeds live counts** (acq / residual agents own those numbers).  
 **Layout SoT:** [`repo_layout_migration.md`](./repo_layout_migration.md) (**DONE** Batches 0–E; Batch Z DEFER)  
 **Architecture hub:** [`../architecture.md`](../architecture.md) (PIT / Coverage V2 / MCP; not residual counts)
 
@@ -18,7 +20,7 @@
 |---|------|-----|
 | 1 | [`../../README.md`](../../README.md) | Product orientation + `packages/*` tree |
 | 2 | **This file** | Task routing + do-not list |
-| 3 | [`../phase62_residual_status.md`](../phase62_residual_status.md) | Live residual SoT: COMPLETE segs, raw_n, C8, tip, Phase7 OFF, Mass NO-GO |
+| 3 | [`../phase62_residual_status.md`](../phase62_residual_status.md) | **Live residual SoT (sole)** — COMPLETE segs, raw_n, C8, tip, Phase7 OFF, Mass NO-GO |
 | 4 | [`../architecture.md`](../architecture.md) | PIT sole read path, Coverage V2, MCP planes (not residual counts) |
 | 5 | *One* domain doc for your task (table below) | Contract detail |
 
@@ -155,19 +157,19 @@ Full policy: ADR §5.2.
 
 | Layer | Paths | Agent rule |
 |-------|-------|------------|
-| **0 Current** | README, this map, `phase62_residual_status.md` (**only** live COMPLETE/raw_n/C8/tip), `architecture.md`, ADR (if refactoring) | Always prefer |
+| **0 Current** | README, this map, **`phase62_residual_status.md` (sole live residual SoT)**, `architecture.md`, ADR (if refactoring) | Always prefer; **counts only in residual** |
 | **1 Domain** | `pit_api`, `core_engine`, `features`, `paper`, `agents`, `quant_data_access`, `data_sources` | By task |
-| **2 Ops** | `docs/operations/*`, phase runbooks, worker READMEs | When operating live systems |
+| **2 Ops** | `docs/operations/*`, phase runbooks, worker READMEs | When operating live systems; not residual counts |
 | **3 Proof** | `docs/proof/*` | Cite evidence; do not invent status |
-| **4 Historical** | `phase62_status`, `phase621_*`, `phase622_*`, `phase623_*`, `phase62_*checklist/final*`, `pre_phase7_*`, `phase6_hardening_*`, `phase61_plan`, dated `phase35_4_*` acceptance/ops verify | Banner / archive; not residual SoT |
+| **4 Historical** | `phase62_status`, `phase621_*`, `phase622_*`, `phase623_*`, `phase62_*checklist/final*`, `pre_phase7_*`, `phase6_hardening_*`, `phase61_plan`, dated `phase35_4_*` acceptance/ops verify, dated ops live-sync notes | Banner / archive; **not** residual SoT |
 
 ### 7.1 Phase / residual file index (maintenance)
 
 | File | Tag |
 |------|-----|
-| `docs/phase62_residual_status.md` | **current residual** (sole live COMPLETE / Mass SoT) |
-| `docs/architecture.md` | **current architecture hub** |
-| `docs/architecture/llm_nav_map.md` | **current** agent entry map (this file) |
+| `docs/phase62_residual_status.md` | **live residual SoT (sole)** — COMPLETE / raw_n / C8 / tip / Mass·READY / Phase7 |
+| `docs/architecture.md` | **current architecture hub** (banner → residual; no live counts) |
+| `docs/architecture/llm_nav_map.md` | **current** agent entry map (this file; no live counts) |
 | `docs/architecture/repo_layout_migration.md` | **current layout SoT** |
 | `docs/architecture/phase7_fail_closed.md` | **current** (Phase 7 **OFF**) |
 | `docs/operations/phase7_foundation_off.md` | **current** ops note (Phase 7 **OFF**) |
@@ -175,8 +177,8 @@ Full policy: ADR §5.2.
 | `docs/architecture/adr_historical_raw_acceleration.md` | Track A ADR (infra/execute evidence in proof/) |
 | `docs/complete_segment_checklist.md` | **current** COMPLETE evidence contract (not residual counts) |
 | `docs/phase6_snapshot_publication.md` | domain (READY publication machine; production READY still **NO-GO**) |
-| `docs/phase61_production_runbook.md` | runbook |
-| `docs/phase62_production_runbook.md` | runbook |
+| `docs/phase61_production_runbook.md` | runbook (not residual counts) |
+| `docs/phase62_production_runbook.md` | runbook (not residual counts) |
 | `docs/phase62_cf_edge_cron.md` | runbook / design note |
 | `docs/phase35_cf_ingest.md`, `phase35_s0_secrets.md`, `phase35_storage_scale.md`, `phase35_validation_matrix.md` | domain + runbook (Phase 3.5) |
 | `docs/phase35_4_acceptance_status.md` | historical acceptance snapshot |
@@ -192,10 +194,12 @@ Full policy: ADR §5.2.
 | `docs/phase62_completion_checklist.md` | historical / checklist |
 | `docs/phase62_final_report.md` | historical report — **not** FULL DONE alone |
 | `docs/pre_phase7_full_code_review.md` | historical Wave-0 review |
+| `docs/operations/phase63_live_sync.md` | historical live-vs-code note (counts may be stale) |
 | `docs/proof/*` | dated evidence |
 | `docs/operations/*` | ops runbooks |
 
-Historical phase status / final_report / checklist / acceptance-plan files carry a **Historical snapshot** banner → residual SoT.
+Historical phase status / final_report / checklist / acceptance-plan / dated live-sync files carry a **Historical snapshot** banner pointing at [`phase62_residual_status.md`](../phase62_residual_status.md). **Never** treat them as live residual SoT.
+
 ---
 
 ## 8. Tests — what to run
@@ -242,7 +246,8 @@ Test tiers: `tests/README.md` (G0/G1/G2; ADR §12 / B1-d).
 | Validation | `run_phase35_validation.py`, `run_phase4_accept.py` | edge / features |
 | Codegen | `generate_governed_js.py`, `verify_governed_js_drift.py` | contracts → Workers |
 
-Shared ROOT bootstrap: `scripts/_bootstrap.py` (`ensure_repo_root`) — **B1-e partial** (ops/coverage CLIs migrated 2026-08-13; remaining scripts still local inserts).
+Shared ROOT bootstrap: `scripts/_bootstrap.py` (`ensure_repo_root`) — **B1-e partial**  
+(ops/coverage/receipt CLIs migrated; `ensure_repo_root` inserts root + `packages/*` plane paths; remaining scripts still local inserts; **do not** regroup dirs).
 
 ---
 
@@ -266,12 +271,13 @@ Shared ROOT bootstrap: `scripts/_bootstrap.py` (`ensure_repo_root`) — **B1-e p
 | **B1-b** | Plane READMEs, public API notes, boundary tests | **DONE** |
 | **B1-c** | Dead code / empty dirs / collision docs | **partial** — inventory 2026-08-13: root `raw/` absent; `ingestion.jsda.adapters` unreferenced but **kept** as formal surface; no parity-mirror or fail-closed deletions; heuristic “zero-ref” scans **false-positive** on leaf imports (`from core import engine`) — do not mass-delete |
 | **B1-d** | Test tiers / matrix navigation | **partial** — `tests/README.md` G0/G1/G2 + named guard table (2026-08-13); heavy matrix split still open |
-| **B1-e** | Script bootstrap, `qp_paths` stragglers | **partial** — `_bootstrap` on ops/coverage + receipt CLIs; fingerprints no longer `parents[N]`; remaining scripts incremental |
+| **B1-e** | Script bootstrap, `qp_paths` stragglers | **partial** — `_bootstrap` on ops/coverage + receipt CLIs; plane paths on `ensure_repo_root`; fingerprints no longer `parents[N]`; remaining scripts incremental (no dir moves) |
 | B1-f | Optional archive move / script regroup | optional / last |
 | Z | `quant_platform.*` namespace | **DEFER** (out of B1) |
-| Docs SoT | residual live-sync + historical banners + this map | **DONE** (counts only in residual; architecture hub bannered) |
+| Docs SoT | residual live-sync + historical banners + this map | **DONE** (counts **only** in residual; this map / architecture hub / ADR = nav + pointers) |
 
 ADR is **Accepted (Grok 2026-08-12)**. Mass / READY / Phase7 remain **NO-GO / OFF**.
+
 ---
 
 ## 12. Quick spirit checklist

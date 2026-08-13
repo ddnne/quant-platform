@@ -1,5 +1,10 @@
 # Phase 6.2 production runbook — ops projection, backfill status, AM diagnostics
 
+> **Live residual SoT:** [phase62_residual_status.md](phase62_residual_status.md)  
+> (COMPLETE / raw_n / Mass·READY / Phase7 — not this runbook.)  
+> **Agent nav:** [architecture/llm_nav_map.md](architecture/llm_nav_map.md)  
+> **Do not** launch `cf_premium_backfill` / Mass / READY from runbook prose alone.
+
 This runbook extends Phase 6.1 with Phase 6.2 ops tooling, backfill gap reporting, and aftermarket (AM) dataset diagnostics. It assumes a working Phase 6.1 installation with D1 migrations applied and production credentials configured.
 
 ## Preconditions

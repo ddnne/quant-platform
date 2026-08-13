@@ -1,5 +1,9 @@
 # Phase 6.1 production backfill, READY, and remote MCP runbook
 
+> **Live residual SoT:** [phase62_residual_status.md](phase62_residual_status.md)  
+> (COMPLETE / raw_n / Mass·READY / Phase7 — not this runbook.)  
+> **Agent nav:** [architecture/llm_nav_map.md](architecture/llm_nav_map.md)
+
 This runbook turns the Phase 6.1 code path into a production generation. A
 green offline suite proves the implementation; it does not prove that live
 J-Quants/JSDA history, Cloudflare bindings, Access policy, or a READY artifact

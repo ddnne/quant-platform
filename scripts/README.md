@@ -1,12 +1,13 @@
 # scripts
 
-**Bootstrap (B1-e):** `scripts/_bootstrap.py` → `ensure_repo_root()`. Ops/coverage/receipt
+**Bootstrap (B1-e):** `scripts/_bootstrap.py` → `ensure_repo_root()` (repo root +
+`packages/{edge,data_plane,research_runtime,product}` plane paths). Ops/coverage/receipt
 CLIs (`issue_receipts_parallel`, `publish_ops_projection`, `export_ops_projection`,
 `refresh_coverage_ledger`, `ops_status`, `ops_reeval_*`, `write_collection_receipts`,
 `issue_signed_receipts_for_segments`, `restore_local_complete_from_receipt`,
 `evaluate_collection_sla`) use it. Other scripts may still use local `sys.path`
-inserts until migrated. Do not launch Mass / READY / Phase7 / `cf_premium_backfill`
-from residual prose alone.
+inserts until migrated. Live counts / GO gates: [docs/phase62_residual_status.md](../docs/phase62_residual_status.md)
+only. Do not launch Mass / READY / Phase7 / `cf_premium_backfill` from residual prose alone.
 
 Phase 6 hardening utilities:
 

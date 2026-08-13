@@ -1,7 +1,8 @@
 """Shared bootstrap for scripts/ CLIs (Track B1-e).
 
 Finds the quant-platform repo root (``qp_paths.py`` + ``pyproject.toml``) and
-inserts it on ``sys.path`` so leaf packages work without an editable install.
+inserts root + ``packages/*`` plane roots on ``sys.path`` so leaf packages
+(``import storage``, ``import pit``, …) resolve without an editable install.
 
 Usage from any script under ``scripts/`` or ``scripts/ops/``::
 
@@ -28,9 +29,11 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+_PLANE_NAMES = ("edge", "data_plane", "research_runtime", "product")
+
 
 def ensure_repo_root() -> Path:
-    """Return repo root and ensure it is first on ``sys.path``."""
+    """Return repo root; put root + plane package roots on ``sys.path``."""
     # Prefer qp_paths once root is importable; otherwise walk from CWD/script tree.
     for start in (Path.cwd().resolve(), Path(__file__).resolve().parent):
         for parent in [start, *start.parents]:
@@ -40,6 +43,13 @@ def ensure_repo_root() -> Path:
                 root_s = str(parent)
                 if root_s not in sys.path:
                     sys.path.insert(0, root_s)
+                packages = parent / "packages"
+                for plane in _PLANE_NAMES:
+                    plane_path = packages / plane
+                    if plane_path.is_dir():
+                        plane_s = str(plane_path)
+                        if plane_s not in sys.path:
+                            sys.path.insert(0, plane_s)
                 return parent
     raise RuntimeError(
         "quant-platform repo root not found (need qp_paths.py + pyproject.toml)"
