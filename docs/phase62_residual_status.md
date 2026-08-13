@@ -2,7 +2,7 @@
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
 **Live verified:** 2026-08-13 (remote D1 after P0 margin C8 receipt-plane lag + projection freshness reclock; COMPLETE segs **490**; raw_n **~3535**; Phase7 **OFF**)  
-**Repo tip:** `a2ff24f` — COMPLETE **490** / raw ~3535 / bars `2008-05-01` / breakdown `2015-04-01` / margin PARTIAL `observed_end=2026-08-12` / Phase7 **OFF**
+**Repo tip:** `a97b26f` — COMPLETE **490** / raw ~3535 / bars `2008-05-01` / breakdown `2015-04-01` / margin PARTIAL `observed_end=2026-08-12` / Phase7 **OFF**
 
 ## Live snapshot (remote D1 `quant-ingest`)
 
