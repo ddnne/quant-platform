@@ -1,8 +1,8 @@
 # Phase 6.2 / 6.3 residual status
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
-**Live verified:** 2026-08-13 (remote D1 after A3 +4 investor/edinet seal + fail-closed publish; COMPLETE segs **494**; raw_n **3535** / COMPLETE completeness **3330**; Phase7 **OFF**)  
-**Repo tip:** `da3f076` — COMPLETE **494** / raw 3535 / bars `2008-05-01` / breakdown `2015-04-01` / Phase7 **OFF** / B1-e partial / `cf_premium_backfill` **not** launched
+**Live verified:** 2026-08-13 (remote D1; margin `observed_end` re-restored **2026-08-12** after regression to 2026-08-04; COMPLETE segs **494**; raw_n **3535** / COMPLETE completeness **3330**; Phase7 **OFF**)  
+**Repo tip:** *(set to push SHA after this residual commit)* — COMPLETE **494** / raw 3535 / bars `2008-05-01` / breakdown `2015-04-01` / Phase7 **OFF** / margin C8 receipt lag **1d≤7** / `cf_premium_backfill` **not** launched
 
 ## Live snapshot (remote D1 `quant-ingest`)
 
@@ -37,7 +37,7 @@
 | `equities_bars_daily` | **PARTIAL** | **12** | **`2008-05-01`** | **`2026-08-12`** | growing under mid-hole backfill | receipt-plane union; worker pass ≠ COMPLETE |
 | `indices_bars_daily_topix` | **PARTIAL** | **32** | **`2008-01-01`** | **`2026-08-12`** | — | sticky COMPLETE months |
 | `markets_breakdown` | **PARTIAL** | **32** | **`2015-04-01`** | **`2026-08-12`** | — | reeval restored from SUCCESS raw>0 (PRE was 2024-01-01 after full publish) |
-| `markets_margin_interest` | **PARTIAL** | **14** | **`2024-01-01`** | **`2026-08-12`** | — | receipt-plane C8 lag **1d≤7** PASS; cold detail C8 530d remnant not SoT; **not** COMPLETE |
+| `markets_margin_interest` | **PARTIAL** | **14** | **`2024-01-01`** | **`2026-08-12`** | — | **restored** from PRE regression `2026-08-04` (lag 9d FAIL) via receipt reeval; C8 lag **1d≤7** PASS; no re-execute; **not** COMPLETE |
 | `markets_short_ratio` | PARTIAL | 32 | 2024-01-04 | 2026-08-10 | — | A3 sealed months |
 | `markets_margin_alert` | PARTIAL | 18 | 2025-03-03 | 2026-08-07 | — | A3 sealed months |
 | `markets_calendar` | **COMPLETE** | 224 | 2008-01-01 | 2026-08-12 | — | sticky full + aggregate fix |
@@ -88,6 +88,7 @@
 | [`docs/proof/p0_finish_projection_breakdown_20260813.md`](proof/p0_finish_projection_breakdown_20260813.md) | P0 finish: projection FRESH + breakdown `observed_start` **2015-04-01** restore |
 | [`docs/proof/p0_margin_projection_20260813.md`](proof/p0_margin_projection_20260813.md) | margin observed_end + earlier projection freshness |
 | [`docs/proof/p0_margin_c8_projection_20260813.md`](proof/p0_margin_c8_projection_20260813.md) | margin C8 receipt-plane lag (1d≤7) + projection reclock FRESH age=0 |
+| [`docs/proof/p0_margin_observed_end_restore_20260813.md`](proof/p0_margin_observed_end_restore_20260813.md) | **P0** observed_end **2026-08-04→2026-08-12** restore (no execute; lag 9d FAIL→1d PASS) |
 | [`docs/proof/p0_storage_plane_evidence.md`](proof/p0_storage_plane_evidence.md) | storage plane evidence |
 | [`docs/proof/data_quality_scan_20260812.md`](proof/data_quality_scan_20260812.md) | quality scan |
 | [`docs/proof/phase63_completion_20260812.md`](proof/phase63_completion_20260812.md) | Phase 6.3 guard/freshness tooling land |
@@ -113,7 +114,7 @@
 | bars `observed_start` receipt-plane union | **DONE** (remote **`2008-05-01`**) |
 | bars gap **2004-01 → 2008-04** deepen / pre-May-2008 `observed_start` | **DEFER** (catalog wants 2004; subscription floor **2006-08-13**; empty `data[]` through 2008-04; raw_n=0 on gap receipts — see reverify proof) |
 | topix `observed_start` receipt-plane | **DONE** (remote **`2008-01-01`**) |
-| margin STALE → PARTIAL (freshness) | **DONE** (remote PARTIAL; `observed_end=2026-08-12`; receipt C8 lag 1d≤7; cold 530d detail remnant; not dataset COMPLETE) |
+| margin STALE → PARTIAL (freshness) | **DONE** (remote PARTIAL; `observed_end=2026-08-12` re-restored 2026-08-13 after 2026-08-04 regression; receipt C8 lag 1d≤7; not dataset COMPLETE) |
 | Extra COMPLETE without raw | **DEFER** / **Forbidden** |
 | OTC full archive COMPLETE | **DEFER** (thousands of trading days remain) |
 | `markets_margin_interest` full history / monthly TRUSTED seal | **DEFER** |
