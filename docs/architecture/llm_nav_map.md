@@ -2,11 +2,13 @@
 
 **Status:** **Live** (Track B1 — productionized in README).  
 **Paired ADR:** [`adr_llm_friendly_refactor.md`](./adr_llm_friendly_refactor.md) (**Accepted (Grok 2026-08-12)**).  
-**Live residual SoT:** [`../phase62_residual_status.md`](../phase62_residual_status.md)  
-**Layout SoT:** [`repo_layout_migration.md`](./repo_layout_migration.md) (**DONE** Batches 0–E; Batch Z DEFER)
+**Live residual SoT:** [`../phase62_residual_status.md`](../phase62_residual_status.md) — sole place for COMPLETE segs / raw_n / C8 / tip / Phase7  
+**Layout SoT:** [`repo_layout_migration.md`](./repo_layout_migration.md) (**DONE** Batches 0–E; Batch Z DEFER)  
+**Architecture hub:** [`../architecture.md`](../architecture.md) (PIT / Coverage V2 / MCP; not residual counts)
 
 > **Mass Autonomous Research / production READY / Phase 7 switch: NO-GO · OFF.**  
-> Do not upgrade those statuses from this map. Only residual + dated `docs/proof/*` may record live evidence.
+> Do not upgrade those statuses from this map. Only residual + dated `docs/proof/*` may record live evidence.  
+> **Do not** launch `cf_premium_backfill` / Mass / READY from this map or residual prose alone.
 
 ---
 
@@ -16,8 +18,8 @@
 |---|------|-----|
 | 1 | [`../../README.md`](../../README.md) | Product orientation + `packages/*` tree |
 | 2 | **This file** | Task routing + do-not list |
-| 3 | [`../phase62_residual_status.md`](../phase62_residual_status.md) | Live residual; COMPLETE counts; Mass NO-GO |
-| 4 | [`../architecture.md`](../architecture.md) | PIT sole read path, Coverage V2, MCP planes |
+| 3 | [`../phase62_residual_status.md`](../phase62_residual_status.md) | Live residual SoT: COMPLETE segs, raw_n, C8, tip, Phase7 OFF, Mass NO-GO |
+| 4 | [`../architecture.md`](../architecture.md) | PIT sole read path, Coverage V2, MCP planes (not residual counts) |
 | 5 | *One* domain doc for your task (table below) | Contract detail |
 
 **Refactor / layout / import policy work:** also read the [ADR](./adr_llm_friendly_refactor.md).
@@ -153,7 +155,7 @@ Full policy: ADR §5.2.
 
 | Layer | Paths | Agent rule |
 |-------|-------|------------|
-| **0 Current** | README, this map, `phase62_residual_status.md`, `architecture.md`, ADR (if refactoring) | Always prefer |
+| **0 Current** | README, this map, `phase62_residual_status.md` (**only** live COMPLETE/raw_n/C8/tip), `architecture.md`, ADR (if refactoring) | Always prefer |
 | **1 Domain** | `pit_api`, `core_engine`, `features`, `paper`, `agents`, `quant_data_access`, `data_sources` | By task |
 | **2 Ops** | `docs/operations/*`, phase runbooks, worker READMEs | When operating live systems |
 | **3 Proof** | `docs/proof/*` | Cite evidence; do not invent status |
@@ -267,6 +269,7 @@ Shared ROOT bootstrap: `scripts/_bootstrap.py` (`ensure_repo_root`) — **B1-e p
 | **B1-e** | Script bootstrap, `qp_paths` stragglers | **partial** — `_bootstrap` on ops/coverage + receipt CLIs; fingerprints no longer `parents[N]`; remaining scripts incremental |
 | B1-f | Optional archive move / script regroup | optional / last |
 | Z | `quant_platform.*` namespace | **DEFER** (out of B1) |
+| Docs SoT | residual live-sync + historical banners + this map | **DONE** (counts only in residual; architecture hub bannered) |
 
 ADR is **Accepted (Grok 2026-08-12)**. Mass / READY / Phase7 remain **NO-GO / OFF**.
 ---

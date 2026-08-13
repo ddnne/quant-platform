@@ -1,5 +1,9 @@
 # Architecture（概要）
 
+> **Live residual SoT:** [phase62_residual_status.md](phase62_residual_status.md)  
+> (COMPLETE counts / raw_n / Mass·READY **NO-GO** / Phase 7 **OFF** — do not invent live status here.)  
+> **Agent nav:** [architecture/llm_nav_map.md](architecture/llm_nav_map.md) · **Layout SoT:** [architecture/repo_layout_migration.md](architecture/repo_layout_migration.md)
+
 Phase 6.1 時点のデータ完全性、PIT、公開 snapshot、外部 read surface の境界を固定する。
 
 ## Repository layout

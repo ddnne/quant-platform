@@ -1,8 +1,8 @@
 # Phase 6.2 / 6.3 residual status
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
-**Live verified:** 2026-08-13 (remote D1; margin **detail_json C8 pass** lag 1d≤7 via receipt SoT; COMPLETE segs **503**; Phase7 **OFF**)  
-**Repo tip:** `7eac49a` — COMPLETE **503** / bars `2008-05-01` / breakdown `2015-04-01` / Phase7 **OFF** / margin detail C8 **pass** / `cf_premium_backfill` **not** launched this pass
+**Live verified:** 2026-08-13 (remote D1; COMPLETE segs **503**; raw_n **5519** / completeness COMPLETE **4698**; margin **detail_json C8 pass** lag 1d≤7 via receipt SoT; Phase7 **OFF**)  
+**Repo tip:** `1471944` — COMPLETE **503** / raw **5519** / bars `2008-05-01` / breakdown `2015-04-01` / Phase7 **OFF** / margin detail C8 **pass** / `cf_premium_backfill` **not** launched this pass
 
 ## Live snapshot (remote D1 `quant-ingest`)
 
@@ -10,13 +10,13 @@
 |------|--------|
 | Dataset COMPLETE | **2** — `markets_calendar` (224/224 segs), `jsda_tokyo_repo_rates` (1/1) |
 | Dataset STALE | **0** (margin PARTIAL via receipt reeval; not STALE) |
-| Segment COMPLETE total | **503** (local == remote; A3 501→**503** +2) |
-| Segment other | PARTIAL majority / UNKNOWN (topix inventory shape) |
+| Segment COMPLETE total | **503** (local == remote; A3 501→**503** +2 sealed; no further seal this pass) |
+| Segment other | PARTIAL **12167** / UNKNOWN **271** (remote snapshot; inventory shape moves under acquisition) |
 | calendar segments | **224 COMPLETE / 0 PARTIAL** |
 | JSDA OTC COMPLETE segs | **5** — `2026-08-06`, `2026-08-07`, `2026-08-10`, `2026-08-12`, `2026-08-13` (dataset still PARTIAL) |
 | JSDA corporate COMPLETE segs | **1** — year `2026` (dataset still PARTIAL) |
-| A3 sealed (partial datasets) | prior + **+2 this pass** (`markets_margin_interest/2026-07`, `markets_short_sale_report/2026-07`); also +7/`*/2026-07` edinet×3/investor/fins/indices; +4 investor/edinet; fins/deriv/short_sale 2026-08; short_ratio 32; breakdown 32; margin_alert 18; bars 12; topix 32; master 94; fins_summary 5; … |
-| Remote `raw_retention_manifests` | growing under acquisition (D1 RO; local research mirror raw still partial) |
+| A3 sealed (partial datasets) | prior + **+2 sealed** (`markets_margin_interest/2026-07`, `markets_short_sale_report/2026-07`); also +7/`*/2026-07` edinet×3/investor/fins/indices; +4 investor/edinet; fins/deriv/short_sale 2026-08; short_ratio 32; breakdown 32; margin_alert 18; bars 12; topix 32; master 94; fins_summary 5; … |
+| Remote `raw_retention_manifests` | **5519** total / **4698** COMPLETE completeness / **830** FAILED (D1 RO snapshot; bars mid-hole continues → raw_n rising; local research mirror raw still partial) |
 | Track A + P0 execute | equities bars mid-hole still live elsewhere; **this pass did not** start `cf_premium`. **Worker pass ≠ COMPLETE** |
 | master | `scd2_event_sourcing` / D1 hot |
 | projection | **FRESH** — `projgen-d754e700cb7748b986c256ff4ce7c19f` (`generated_at=2026-08-13T13:19:26.473192+00:00`, age_seconds=0; full publish fail-closed; local `data/ops/projection_meta.json`) |
@@ -25,8 +25,8 @@
 | Targeted freshness | `scripts/ops_reeval_freshness.py` (no segment rewrite) |
 | Observed window re-eval | `scripts/ops_reeval_observed_window.py` (SUCCESS receipts `raw_row_count>0`; no segment rewrite / no COMPLETE claim) |
 | Layout migration | **DONE** — libraries under `packages/{edge,data_plane,research_runtime,product}`; import leaf names unchanged |
-| Track A (historical raw accel) | **EXECUTE DONE** — PRE raw **1488** → AEXEC **1889** → live **4099** |
-| Track B1 (LLM-friendly) | **landed** + residual/docs SoT; B1-e +receipt CLIs; Batch Z still **DEFER** |
+| Track A (historical raw accel) | **EXECUTE DONE** — PRE raw **1488** → AEXEC **1889** → live **5519** (still rising under mid-hole) |
+| Track B1 (LLM-friendly) | **landed** + residual/docs SoT live-sync; B1-e partial (ops/coverage/receipt CLIs); Batch Z still **DEFER** |
 | Mass / READY / B0 | **NO-GO** |
 | Phase 7 | **OFF / foundation only** — **must remain OFF**; no mass arming, no production READY, no Phase7 switch ON |
 
@@ -115,7 +115,7 @@
 | Physical layout → `packages/*` planes | **DONE** (Batches 0–E; import names leaf top-level) |
 | Track A planner / throughput / execute | **DONE** (infra + live execute; raw continuing under mid-hole) |
 | Track B1 docs hub + plane import guards | **DONE** |
-| Track B residual live-sync + docs SoT banners | **DONE** (this pass) |
+| Track B residual live-sync + docs SoT banners | **DONE** (COMPLETE **503** / raw **5519** / C8 pass / Phase7 OFF; llm_nav + architecture hub SoT) |
 | bars `observed_start` receipt-plane union | **DONE** (remote **`2008-05-01`**) |
 | bars gap **2004-01 → 2008-04** deepen / pre-May-2008 `observed_start` | **DEFER** (catalog wants 2004; subscription floor **2006-08-13**; empty `data[]` through 2008-04; raw_n=0 on gap receipts — see reverify proof) |
 | topix `observed_start` receipt-plane | **DONE** (remote **`2008-01-01`**) |
@@ -135,9 +135,10 @@
 
 ## Note on COMPLETE counts
 - **Dataset-level COMPLETE = 2** means only two datasets have *all* required segments COMPLETE.
-- **Segment COMPLETE = 501** counts every COMPLETE segment across datasets (calendar 224 + master/topix/markets/JSDA/A3 seals, etc.).
+- **Segment COMPLETE = 503** counts every COMPLETE segment across datasets (calendar 224 + master/topix/markets/JSDA/A3 seals, etc.).
 - Next honest +N requires additional **real raw** (R2 or official fetch) + structured + signed SUCCESS; do not invent.
 - Post-+2: short_sale/margin **2026-07** sealed; further +N needs more remote/local raw+struct months (margin 2025-03…2026-06 etc. still open).
+- **raw_n** is remote `raw_retention_manifests` count (live snapshot **5519**; rising under bars mid-hole); not a COMPLETE claim. Worker pass ≠ segment COMPLETE.
 - **Do not** start `cf_premium_backfill` / Mass / READY from residual prose alone (**launch ban** this session; coordinate if another agent owns bars mid-hole).
 
 ## Phase 7 OFF (explicit)
