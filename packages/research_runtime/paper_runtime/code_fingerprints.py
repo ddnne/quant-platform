@@ -44,7 +44,15 @@ def git_commit(repo_root: str | Path | None = None) -> str:
 
             root = _qp_repo_root()
         except Exception:
-            root = Path(__file__).resolve().parents[1]
+            # Never use parents[N] from packages/* (depth varies by plane).
+            # Walk from CWD for pyproject+tests; else keep CWD for git -C.
+            root = Path.cwd().resolve()
+            for parent in [root, *root.parents]:
+                if (parent / "pyproject.toml").is_file() and (
+                    parent / "tests"
+                ).is_dir():
+                    root = parent
+                    break
     try:
         completed = subprocess.run(
             ["git", "rev-parse", "HEAD"],

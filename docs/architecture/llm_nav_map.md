@@ -224,7 +224,7 @@ python -m unittest tests.test_smoke -v
 
 Live (`QP_LIVE=1`) is **operator-only**, never a B1 merge gate.
 
-More detail after B1-d: planned `tests/README.md` (ADR §12).
+Test tiers: `tests/README.md` (G0/G1/G2; ADR §12 / B1-d).
 
 ---
 
@@ -240,7 +240,7 @@ More detail after B1-d: planned `tests/README.md` (ADR §12).
 | Validation | `run_phase35_validation.py`, `run_phase4_accept.py` | edge / features |
 | Codegen | `generate_governed_js.py`, `verify_governed_js_drift.py` | contracts → Workers |
 
-Shared ROOT bootstrap unification is **B1-e** (ADR); until then scripts use local `sys.path` inserts — keep `parents[N]` consistent with file depth.
+Shared ROOT bootstrap: `scripts/_bootstrap.py` (`ensure_repo_root`) — **B1-e partial** (ops/coverage CLIs migrated 2026-08-13; remaining scripts still local inserts).
 
 ---
 
@@ -264,7 +264,7 @@ Shared ROOT bootstrap unification is **B1-e** (ADR); until then scripts use loca
 | **B1-b** | Plane READMEs, public API notes, boundary tests | **DONE** |
 | **B1-c** | Dead code / empty dirs / collision docs | **partial** — inventory 2026-08-13: root `raw/` absent; `ingestion.jsda.adapters` unreferenced but **kept** as formal surface; no parity-mirror or fail-closed deletions; heuristic “zero-ref” scans **false-positive** on leaf imports (`from core import engine`) — do not mass-delete |
 | **B1-d** | Test tiers / matrix navigation | **partial** — `tests/README.md` G0/G1/G2 + named guard table (2026-08-13); heavy matrix split still open |
-| B1-e | Script bootstrap, `qp_paths` stragglers | pending |
+| **B1-e** | Script bootstrap, `qp_paths` stragglers | **partial** — `scripts/_bootstrap.py` + ops/coverage CLI migration; `paper_runtime.code_fingerprints` no longer uses `parents[N]`; remaining scripts incremental |
 | B1-f | Optional archive move / script regroup | optional / last |
 | Z | `quant_platform.*` namespace | **DEFER** (out of B1) |
 

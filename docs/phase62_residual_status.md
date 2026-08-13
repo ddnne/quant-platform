@@ -124,7 +124,7 @@
 | Batch Z (`quant_platform.*` imports) | **DEFER** (ADR Accepted; out of B1) |
 | B1-c full dead-code purge | **partial** — inventory only; no unsafe deletes (false-positive import scans) |
 | B1-d test tier nav | **partial** — `tests/README.md` G0/G1/G2 landed; matrix split open |
-| B1-e script bootstrap | **pending** |
+| B1-e script bootstrap | **partial** — `scripts/_bootstrap.py` + ops/coverage CLIs; fingerprints `parents[N]` fixed; remaining scripts incremental |
 
 ## Note on COMPLETE counts
 - **Dataset-level COMPLETE = 2** means only two datasets have *all* required segments COMPLETE.

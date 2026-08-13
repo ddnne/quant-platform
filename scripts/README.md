@@ -1,5 +1,11 @@
 # scripts
 
+**Bootstrap (B1-e):** `scripts/_bootstrap.py` → `ensure_repo_root()`. Ops/coverage CLIs
+(`issue_receipts_parallel`, `publish_ops_projection`, `export_ops_projection`,
+`refresh_coverage_ledger`, `ops_status`, `ops_reeval_*`) use it. Other scripts may
+still use local `sys.path` inserts until migrated. Do not launch Mass / READY /
+Phase7 / `cf_premium_backfill` from residual prose alone.
+
 Phase 6 hardening utilities:
 
 - `ops_status.py --json` — offline READY snapshot, coverage, B0 and validation status.
