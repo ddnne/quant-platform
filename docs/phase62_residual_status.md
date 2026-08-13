@@ -73,6 +73,9 @@
 | [`docs/proof/remote_raw_POST_AEXEC_snippet.txt`](proof/remote_raw_POST_AEXEC_snippet.txt) | remote raw snippet |
 | [`docs/proof/bars_observed_start_move_20260812.md`](proof/bars_observed_start_move_20260812.md) | code path: receipt ∪ hot → `observed_*` |
 | [`docs/proof/bars_history_observed_start_20260812.md`](proof/bars_history_observed_start_20260812.md) | bars PRE/POST **`observed_start=2008-05-01`**; raw →1889 |
+| [`docs/proof/bars_gap_20060812_20080430_20260812.md`](proof/bars_gap_20060812_20080430_20260812.md) | full week-chunk gap dispatch 2006-08→2008-04 (empty shells) |
+| [`docs/proof/bars_p0_gap_midhole_20260813.md`](proof/bars_p0_gap_midhole_20260813.md) | gap DEFER + mid-hole fill 2011–2025 |
+| [`docs/proof/bars_p0_gap_2004_2008_reverify_20260813.md`](proof/bars_p0_gap_2004_2008_reverify_20260813.md) | **reverify** 2004–2008-04: API floor 2006-08-13 + empty `data[]`; `observed_start` stays **2008-05-01** |
 
 ### P0 / P1 other datasets (margin, topix, quality)
 | Proof | What it closes |
@@ -105,6 +108,7 @@
 | Track B1 docs hub + plane import guards | **DONE** |
 | Track B residual live-sync + docs SoT banners | **DONE** (this pass) |
 | bars `observed_start` receipt-plane union | **DONE** (remote **`2008-05-01`**) |
+| bars gap **2004-01 → 2008-04** deepen / pre-May-2008 `observed_start` | **DEFER** (catalog wants 2004; subscription floor **2006-08-13**; empty `data[]` through 2008-04; raw_n=0 on gap receipts — see reverify proof) |
 | topix `observed_start` receipt-plane | **DONE** (remote **`2008-01-01`**) |
 | margin STALE → PARTIAL (freshness) | **DONE** (remote PARTIAL; `observed_end=2026-08-12`; not dataset COMPLETE) |
 | Extra COMPLETE without raw | **DEFER** / **Forbidden** |
