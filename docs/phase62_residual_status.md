@@ -1,8 +1,8 @@
 # Phase 6.2 / 6.3 residual status
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
-**Live verified:** 2026-08-14 (JST) / ~2026-08-13T17:17Z UTC (remote D1; COMPLETE segs **585**; raw_n **7762**; T5 fins family **DONE** 287/1+recover→288; T12 fins seals **+45**; T9 options **+2**; empty COMPLETE **0**; Phase7 **OFF**)  
-**Repo tip:** `ec90b47` — COMPLETE **585** / raw_n **7762** / T5 fins **DONE** / Phase7 **OFF**
+**Live verified:** 2026-08-14 (JST) / ~2026-08-13T17:33Z UTC (remote D1; COMPLETE segs **585**; raw_n **7825**; receipts +N **0**; div_pre 120/120 worker pass≠COMPLETE; FRESH; empty COMPLETE **0**; Phase7 **OFF**)  
+**Repo tip:** `c328e02` — COMPLETE **585** / raw_n **7825** / +N **0** / FRESH / Phase7 **OFF**
 
 ## Live snapshot (remote D1 `quant-ingest`)
 
@@ -16,10 +16,10 @@
 | JSDA OTC COMPLETE segs | **5** — `2026-08-06`, `2026-08-07`, `2026-08-10`, `2026-08-12`, `2026-08-13` (dataset still PARTIAL; **+0** G7 — site timeout + R2 MISS) |
 | JSDA corporate COMPLETE segs | **1** — year `2026` only (prior years **DEFER** — no raw) |
 | A3 sealed (partial datasets) | prior + G7 **+10** + G6 **+18** + T9 **+2** + **T12 +45** (fins_details **+20** 2018-01…2019-08; fins_summary **+25** 2008-07…2010-07) → COMPLETE **585** |
-| Remote `raw_retention_manifests` | **7762** total (T5 fins wave + T9 options + peers) |
+| Remote `raw_retention_manifests` | **7825** total (prior **7762** + div_pre/peers Δ; worker pass ≠ COMPLETE) |
 | Track A + P0 execute | **T4/T7/T8 + G5 + T5 fins DONE** — topix **192/192**; master **147**+retry; misc **432**+retry; **t5_margin_earn 346** (344p/2f)+retry **2/2**; **t5_fins_paced 287/1** + 2022-05 split/daily recover → **288 unique**. **Worker pass ≠ COMPLETE** |
 | master | `scd2_event_sourcing` / D1 hot |
-| projection | **FRESH** — T12 `projgen-134169e74fda4429bb2ea8b2e69ab36a` age=0 (post T12 publish); reeval does not rewrite segs |
+| projection | **FRESH** — `projgen-fe1eae005c73494ba543dd0d95a915f0` age=0 (ops_reeval_freshness; segs untouched) |
 | sticky COMPLETE | **fixed** segment_id fallback + post-sticky dataset aggregate + COMPLETE inventory retain past UTC target_end (`coverage_ledger.py`) |
 | Full publish guard | `scripts/publish_ops_projection.py` fail-closed |
 | Targeted freshness | `scripts/ops_reeval_freshness.py` (no segment rewrite) |
