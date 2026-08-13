@@ -2,7 +2,7 @@
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
 **Live verified:** 2026-08-14 (JST) / ~2026-08-13T17:17Z UTC (remote D1; COMPLETE segs **585**; raw_n **7762**; T5 fins family **DONE** 287/1+recover→288; T12 fins seals **+45**; T9 options **+2**; empty COMPLETE **0**; Phase7 **OFF**)  
-**Repo tip:** `(pending push)` — COMPLETE **585** / raw_n **7762** / T5 fins **DONE** / Phase7 **OFF**
+**Repo tip:** `ec90b47` — COMPLETE **585** / raw_n **7762** / T5 fins **DONE** / Phase7 **OFF**
 
 ## Live snapshot (remote D1 `quant-ingest`)
 
