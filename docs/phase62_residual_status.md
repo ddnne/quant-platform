@@ -19,7 +19,7 @@
 | Remote `raw_retention_manifests` | **9324** total (prior **7825** / residual **9200** → live **9324**; worker pass ≠ COMPLETE) |
 | Track A + P0 execute | **T4/T7/T8 + G5 + T5 fins DONE + t5_div_pre DONE + G8 indices + G9 T13/T14 ops** — topix **192/192**; peer R2 seal prep for fins residual; **Worker pass ≠ COMPLETE** |
 | master | `scd2_event_sourcing` / D1 hot |
-| projection | **FRESH** — `projgen-9b9eca10e640421e815c81970ec7bbd1` age≈0 (G9 T14 `ops_reeval_freshness`; segs untouched; session PRE age ~**16983s** @ `fe1eae00`) |
+| projection | **FRESH** — `projgen-d4677ef69f7d49f88145b31ad04c170a` age≈0 (G9 T14 `ops_reeval_freshness`; segs untouched; session PRE age ~**16983s** @ `fe1eae00`) |
 | sticky COMPLETE | **fixed** segment_id fallback + post-sticky dataset aggregate + COMPLETE inventory retain past UTC target_end (`coverage_ledger.py`) |
 | Full publish guard | `scripts/publish_ops_projection.py` fail-closed |
 | Targeted freshness | `scripts/ops_reeval_freshness.py` (no segment rewrite) |
@@ -82,7 +82,7 @@
 ### COMPLETE seals
 | Proof | What it closes |
 |-------|----------------|
-| [`docs/proof/w0713_t13_t14_ops_20260814.md`](proof/w0713_t13_t14_ops_20260814.md) | **G9 T13+T14**: projection PRE age ~**16983s** → POST age≈0 (`projgen-9b9eca10…`); receipts **+27** (details **+11** / div **+11** / earn_date **+5** issued); remote COMPLETE **677**; raw_n **9324**; empty COMPLETE **0**; no cf_premium |
+| [`docs/proof/w0713_t13_t14_ops_20260814.md`](proof/w0713_t13_t14_ops_20260814.md) | **G9 T13+T14**: projection PRE age ~**16983s** → POST age≈0 (`projgen-d4677ef…`); receipts **+27** (details **+11** / div **+11** / earn_date **+5** issued); remote COMPLETE **677**; raw_n **9324**; empty COMPLETE **0**; no cf_premium |
 | [`docs/proof/g8_t11_otc_t12_indices_20260814.md`](proof/g8_t11_otc_t12_indices_20260814.md) | **G8 T11+T12**: OTC **+1** (`2026-08-14` run **900661**); `indices_bars_daily` **+5** (2024-01/08/09/10/12); remote COMPLETE **677**; raw_n **9200**; FRESH `projgen-c1aacf…`; further OTC/history **DEFER** |
 | [`docs/proof/t5_dividend_pre2018_20260814.md`](proof/t5_dividend_pre2018_20260814.md) | **t5_div_pre**: `fins_dividend` **2008-01…2017-12** plan **120** → **120 pass / 0 fail**; host jobs/min **4.69**; reeval `observed_start` **`2013-02-01`** (was 2018-01-01); COMPLETE segs **585** Δ0; raw_n **7825**; empty COMPLETE **0** |
 | [`docs/proof/t5_fins_family_20260813.md`](proof/t5_fins_family_20260813.md) | **T5 fins family FINAL**: runner **287/1** (fail=`fins_details` 2022-05 CF1102) + split/daily recover → unique **288**; host jobs/min **1.68**; observed summary **2008-07-01** / details·div·earn **2018-01-01** → end **2026-08-13** C8 pass; receipts this close **+0** (T12 peer **+45** already); **superseded on div start** by t5_div_pre → **2013-02-01** |
