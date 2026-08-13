@@ -2,7 +2,7 @@
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
 **Live verified:** 2026-08-13 (remote D1; COMPLETE segs **510**; raw_n **6118**; multi-track bars/fins/topix **done**; fins `observed_start=2014-01-01`; margin **C8 pass**; Phase7 **OFF**)  
-**Repo tip:**  — COMPLETE **510** / raw_n **6118** / bars `2008-05-01` / fins `2014-01-01` / breakdown `2015-03-26` / topix end `2026-08-13` / Phase7 **OFF**
+**Repo tip:** `9b2b7dd` — COMPLETE **510** / raw_n **6118** / bars `2008-05-01` / fins `2014-01-01` / breakdown `2015-03-26` / topix end `2026-08-13` / Phase7 **OFF**
 
 ## Live snapshot (remote D1 `quant-ingest`)
 
