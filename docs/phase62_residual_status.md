@@ -2,7 +2,7 @@
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
 **Live verified:** 2026-08-13T14:40Z (remote D1; COMPLETE segs **531**; raw_n **7289** / COMPLETE completeness **6400**; T4/T7/T8 wave + **54/54** fail-retry + observed reeval; projection **FRESH** age=0; Phase7 **OFF**)
-**Repo tip:**  — COMPLETE **531** / raw_n **7289** / T4 topix 192p / T7 master 147 + retry / T8 misc 432 + retry / Phase7 **OFF**
+**Repo tip:** `5c48d1d` — COMPLETE **531** / raw_n **7289** / T4 topix 192p / T7 master 147 + retry / T8 misc 432 + retry / Phase7 **OFF**
 
 ## Live snapshot (remote D1 `quant-ingest`)
 
