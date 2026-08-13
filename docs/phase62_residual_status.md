@@ -19,7 +19,7 @@
 | Remote `raw_retention_manifests` | **5519** total / **4698** COMPLETE completeness / **830** FAILED (D1 RO snapshot; bars mid-hole continues → raw_n rising; local research mirror raw still partial) |
 | Track A + P0 execute | equities bars mid-hole still live elsewhere; **this pass did not** start `cf_premium`. **Worker pass ≠ COMPLETE** |
 | master | `scd2_event_sourcing` / D1 hot |
-| projection | **FRESH** — `projgen-a2391c9fb2334eb6b4573c4f3598dc82` (`generated_at=2026-08-13T13:35:37.726377+00:00`, age_seconds=0; full publish fail-closed; local `data/ops/projection_meta.json`) |
+| projection | **FRESH** — `projgen-2bb40f808a8a4b278d7bc571114ddd89` (`generated_at=2026-08-13T13:36:35.511110+00:00`, age_seconds=0; full publish fail-closed; local `data/ops/projection_meta.json`) |
 | sticky COMPLETE | **fixed** segment_id fallback + post-sticky dataset aggregate + COMPLETE inventory retain past UTC target_end (`coverage_ledger.py`) |
 | Full publish guard | `scripts/publish_ops_projection.py` fail-closed |
 | Targeted freshness | `scripts/ops_reeval_freshness.py` (no segment rewrite) |
@@ -37,7 +37,7 @@
 | `equities_bars_daily` | **PARTIAL** | **12** | **`2008-05-01`** | **`2026-08-12`** | growing under mid-hole backfill | receipt-plane union; worker pass ≠ COMPLETE |
 | `indices_bars_daily_topix` | **PARTIAL** | **32** | **`2008-01-01`** | **`2026-08-12`** | — | sticky COMPLETE months |
 | `markets_breakdown` | **PARTIAL** | **32** | **`2015-04-01`** | **`2026-08-12`** | — | reeval restored from SUCCESS raw>0 (PRE was 2024-01-01 after full publish) |
-| `markets_margin_interest` | **PARTIAL** | **17** | **`2024-01-01`** | **`2026-08-12`** | — | **detail_json C8 pass** (lag **1d≤7**, `source=receipt_observed_end`); COMPLETE months include **2026-06/07/08**; dataset **not** COMPLETE |
+| `markets_margin_interest` | **PARTIAL** | **17** | **`2024-01-01`** | **`2026-08-13`** | — | **detail_json C8 pass** (lag **≤7**, receipt SoT); COMPLETE months include **2026-06/07/08**; dataset **not** COMPLETE |
 | `markets_short_ratio` | PARTIAL | 32 | 2024-01-04 | 2026-08-10 | — | A3 sealed months |
 | `markets_margin_alert` | PARTIAL | 18 | 2025-03-03 | 2026-08-07 | — | A3 sealed months |
 | `markets_calendar` | **COMPLETE** | 224 | 2008-01-01 | 2026-08-12 | — | sticky full + aggregate fix |
@@ -111,7 +111,7 @@
 |------|--------|
 | Sticky COMPLETE + inventory status fix | **DONE** (+ segment_id fallback + aggregate recompute 2026-08-13) |
 | Publish fail-closed guard | **DONE** |
-| Honest segment COMPLETE path (raw + signed SUCCESS) | **DONE** (OTC 5; A3 +71/+3/+1/+8/+4/+7/+2/+3; total COMPLETE **506**)
+| Honest segment COMPLETE path (raw + signed SUCCESS) | **DONE** (OTC 5; A3 +71/+3/+1/+8/+4/+7/+2/+3; total COMPLETE **506**) |
 | JSDA min COMPLETE (otc/corp/tokyo) | **DONE** (otc 5; corp/tokyo ≥1 each) |
 | Physical layout → `packages/*` planes | **DONE** (Batches 0–E; import names leaf top-level) |
 | Track A planner / throughput / execute | **DONE** (infra + live execute; raw continuing under mid-hole) |
