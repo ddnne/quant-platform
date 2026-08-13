@@ -13,7 +13,8 @@ from typing import Any
 from data_contracts.loader import all_contracts
 
 BASE = "https://api.jquants.com"
-PREMIUM_MIN_INTERVAL = 0.125
+# Premium ~500 req/min → 0.12 s floor (500/min). Near-ceiling; 429 recovers via short backoff.
+PREMIUM_MIN_INTERVAL = 0.12
 
 
 def _premium_entries() -> dict[str, dict[str, Any]]:

@@ -19,7 +19,7 @@ V2 pagination: the **request** param is ``pagination_key`` (not
 
 Transient HTTP errors (429, 5xx) and transport faults (connection / timeout)
 are retried with exponential backoff. Rate limit defaults to a Premium-safe
-~8 rps (480/min, under the 500/min cap). ToS: personal research use only; do
+~8.3 rps (500/min ceiling via PREMIUM_MIN_INTERVAL=0.12s). ToS: personal research use only; do
 not redistribute raw data.
 """
 

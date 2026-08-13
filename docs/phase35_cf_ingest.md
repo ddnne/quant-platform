@@ -61,9 +61,9 @@ per-HTTP-request retries:
 
 | Knob | Value | Source |
 |------|-------|--------|
-| Concurrency cap | default 4, max 8 | `INGEST_CONCURRENCY` env var on the Worker |
-| Global rate floor | 125 ms between upstream requests | Premium ~500 req/min headroom |
-| Retry policy | 3 retries per HTTP request on 429/5xx | exponential backoff (500 ms base, 8 s cap) + full jitter |
+| Concurrency cap | default 6, max 8 | `INGEST_CONCURRENCY` env var on the Worker |
+| Global rate floor | 120 ms between upstream requests | Premium ~500 req/min ceiling |
+| Retry policy | 3 retries per HTTP request on 429/5xx | 429: short backoff (1–3 s) + adaptive 2× interval then recover; 5xx: exp backoff (500 ms base, 8 s cap) + jitter |
 | Failure isolation | One dataset's retry/failure never aborts others | `runWithConcurrency` per-item try/catch |
 
 The shared `RateLimiter` (in `src/rate_limit.ts`) chains `acquire()` calls

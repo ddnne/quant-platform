@@ -38,10 +38,10 @@ Coverage Contract (`collection_coverage.json`) remains SoT for `history_target_s
 
 | Pool | Budget | Notes |
 |------|--------|-------|
-| **general** | ~**500 req/min** (driver default **480 RPM** headroom) | Bars, master, markets_*, indices_*, derivatives, edinet, calendar |
-| **fins** | **Separate budget** (~500/min class; default **480 RPM**) | `fins_*` endpoints only — do **not** share the general token bucket |
+| **general** | ~**500 req/min** (driver default **495 RPM** near ceiling) | Bars, master, markets_*, indices_*, derivatives, edinet, calendar |
+| **fins** | **Separate budget** (~500/min class; default **495 RPM**) | `fins_*` endpoints only — do **not** share the general token bucket |
 
-Worker-side floor remains ~125 ms between upstream calls (`platform/workers/ingestion-premium` `RATE_LIMIT_INTERVAL_MS`). Client-side dual pools prevent fins backfill from starving general (and vice versa) when CF `/v1/run` is fan-out from this host.
+Worker-side floor is **120 ms** between upstream calls (`platform/workers/ingestion-premium` `RATE_LIMIT_INTERVAL_MS` → theoretical **500/min**). On 429: short backoff then recover near ceiling. Client-side dual pools prevent fins backfill from starving general (and vice versa) when CF `/v1/run` is fan-out from this host.
 
 **Do not log tokens.** Token path: `~/.config/quant-platform/ingestion_run_token` or `INGESTION_RUN_TOKEN_FILE`.
 
@@ -70,7 +70,7 @@ Worker-side floor remains ~125 ms between upstream calls (`platform/workers/inge
 
 - Parallelism **overlaps RTT**; it does not exceed RPM.
 - Default: dry-run plan only; `--execute` required for live POST.
-- Max parallel workers are capped per pool (defaults: general 4, fins 2).
+- Max parallel workers are capped per pool (defaults: general **12**, fins **6**; CLI-overridable).
 
 ### 5. Storage plane (unchanged)
 
@@ -117,10 +117,12 @@ Assumptions (conservative, not a SLA):
 
 | Parameter | Value |
 |-----------|--------|
-| General RPM cap | 480 |
-| Fins RPM cap | 480 (isolated) |
-| Parallel general workers | 4 |
-| Parallel fins workers | 2 |
+| General RPM cap | 495 (near 500) |
+| Fins RPM cap | 495 (isolated) |
+| Parallel general workers | 12 |
+| Parallel fins workers | 6 |
+| Worker RATE_LIMIT_INTERVAL_MS | 120 (≈500 upstream/min) |
+| Worker INGEST_CONCURRENCY | 6 (max 8) |
 | Month segment / job | 1 CF `/v1/run` (range) |
 | Upstream pages / month (bars, all codes) | highly variable (10²–10⁴); wall-clock dominated by pagination inside Worker |
 | Planner jobs Track A @ full history (empty COMPLETE) | O(10²–10³) month segments |

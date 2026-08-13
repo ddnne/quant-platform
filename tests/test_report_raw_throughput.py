@@ -77,11 +77,18 @@ def test_collect_metrics_on_temp_db(tmp_path: Path):
     assert ta["complete_segments"] == 1
     assert ta["total_segments"] == 2
     assert ta["records"]["rows"] == 2
+    # Request-rate block (theoretical upstream from Worker floor).
+    rr = report["request_rate"]
+    assert rr["worker_rate_limit_ms"] == 120
+    assert rr["theoretical_upstream_rpm"] == 500.0
+    assert rr["client_defaults"]["general_rpm"] >= 495
+    assert rr["client_defaults"]["general_workers"] >= 8
 
     md = mod.to_markdown(report)
     assert "raw_retention_manifests" in md
     assert "markets_margin_interest" in md
     assert "never forges COMPLETE" in md
+    assert "request rate" in md.lower() or "theoretical_upstream_rpm" in md
 
     post = dict(report)
     post["raw_retention_manifests"] = dict(report["raw_retention_manifests"])
@@ -91,6 +98,63 @@ def test_collect_metrics_on_temp_db(tmp_path: Path):
     d = mod.delta_metrics(report, post)
     assert d["raw_manifests_total"] == 3
     assert d["complete_segments"] == 2
+
+
+def test_attach_request_rate_from_state_jsonl(tmp_path: Path):
+    mod = _load_report_mod()
+    state = tmp_path / "state.jsonl"
+    lines = [
+        json.dumps(
+            {
+                "finished_at": "2026-08-12T12:00:00+00:00",
+                "rate_pool": "general",
+                "state": "pass",
+                "http_status": 200,
+            }
+        ),
+        json.dumps(
+            {
+                "finished_at": "2026-08-12T12:00:12+00:00",
+                "rate_pool": "general",
+                "state": "pass",
+                "http_status": 200,
+            }
+        ),
+        json.dumps(
+            {
+                "finished_at": "2026-08-12T12:00:24+00:00",
+                "rate_pool": "fins",
+                "state": "retry",
+                "http_status": 429,
+                "reason_code": "http_429",
+            }
+        ),
+    ]
+    state.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    report: dict = {"request_rate": {}}
+    mod.attach_request_rate(report, state_jsonl=state, worker_rate_limit_ms=120)
+    host = report["request_rate"]["host_dispatch"]
+    assert host["n_events"] == 3
+    # 2 intervals over 24s → 5 req/min
+    assert host["requests_per_min"] == 5.0
+    assert host["http_429_count"] == 1
+    assert report["request_rate"]["theoretical_upstream_rpm"] == 500.0
+
+    md = mod.to_markdown(
+        {
+            "label": "rpm",
+            "generated_at": "t",
+            "db_path": "x",
+            "db_note": "n",
+            "request_rate": report["request_rate"],
+            "raw_retention_manifests": {},
+            "coverage_segments": {},
+            "dataset_coverage": {},
+            "track_a": {},
+        }
+    )
+    assert "host_dispatch_requests_per_min" in md
+    assert "5.0" in md
 
 
 def test_cli_smoke_missing_db(tmp_path: Path):
@@ -112,3 +176,4 @@ def test_cli_smoke_missing_db(tmp_path: Path):
     data = json.loads((tmp_path / "out.json").read_text(encoding="utf-8"))
     assert data["errors"]
     assert "missing" in data["errors"][0]
+    assert data["request_rate"]["theoretical_upstream_rpm"] == 500.0

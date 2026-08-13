@@ -8,8 +8,8 @@ Default mode is **dry-run** (plan + queue only). Pass ``--execute`` to POST
 ``/v1/run``. Tokens are read from ``~/.config`` (or env path) and **never logged**.
 
 Rate pools (explicit):
-  * general — J-Quants Premium ~500/min (driver default 480 RPM)
-  * fins    — fins_* separate budget (driver default 480 RPM, isolated bucket)
+  * general — J-Quants Premium ~500/min (driver default 495 RPM, near ceiling)
+  * fins    — fins_* separate budget (driver default 495 RPM, isolated bucket)
 
 See ``docs/architecture/adr_historical_raw_acceleration.md``.
 """
@@ -48,11 +48,15 @@ from ops.backfill_planner import (  # noqa: E402
     PREMIUM_DRIVER_GENERAL_RPM,
 )
 from ops.range_batch_scheduler import (  # noqa: E402
+    DEFAULT_FINS_WORKERS,
+    DEFAULT_GENERAL_WORKERS,
+    DEFAULT_SLEEP_ON_RETRY_S,
     SCHEDULER_CONFIG,
     TRACK_A_DATASETS,
     RangeBatchScheduler,
     SchedulerConfig,
     estimate_dispatch_envelope,
+    measure_dispatch_rpm,
 )
 
 
@@ -155,25 +159,34 @@ def main(argv: list[str] | None = None) -> int:
         "--workers",
         type=int,
         default=0,
-        help="General pool workers (0 = config default)",
+        help=f"General pool workers (0 = default {DEFAULT_GENERAL_WORKERS})",
     )
     ap.add_argument(
         "--fins-workers",
         type=int,
         default=0,
-        help="Fins pool workers (0 = config default)",
+        help=f"Fins pool workers (0 = default {DEFAULT_FINS_WORKERS})",
     )
     ap.add_argument(
         "--general-rpm",
         type=float,
         default=PREMIUM_DRIVER_GENERAL_RPM,
-        help=f"General pool RPM cap (default {PREMIUM_DRIVER_GENERAL_RPM}, under ~500/min)",
+        help=f"General pool RPM cap (default {PREMIUM_DRIVER_GENERAL_RPM}, near ~500/min)",
     )
     ap.add_argument(
         "--fins-rpm",
         type=float,
         default=PREMIUM_DRIVER_FINS_RPM,
         help=f"Fins pool RPM cap (default {PREMIUM_DRIVER_FINS_RPM}; separate budget)",
+    )
+    ap.add_argument(
+        "--sleep-on-retry",
+        type=float,
+        default=DEFAULT_SLEEP_ON_RETRY_S,
+        help=(
+            f"Seconds to pause after HTTP 429/retryable fail before next job "
+            f"(default {DEFAULT_SLEEP_ON_RETRY_S}; short recovery, not a deep park)"
+        ),
     )
     ap.add_argument("--max-jobs", type=int, default=0, help="0 = no limit")
     ap.add_argument(
@@ -250,10 +263,15 @@ def main(argv: list[str] | None = None) -> int:
     cfg = SchedulerConfig(
         general_rpm=float(args.general_rpm),
         fins_rpm=float(args.fins_rpm),
-        general_workers=int(args.workers) if args.workers > 0 else 4,
-        fins_workers=int(args.fins_workers) if args.fins_workers > 0 else 2,
+        general_workers=(
+            int(args.workers) if args.workers > 0 else DEFAULT_GENERAL_WORKERS
+        ),
+        fins_workers=(
+            int(args.fins_workers) if args.fins_workers > 0 else DEFAULT_FINS_WORKERS
+        ),
         max_jobs=int(args.max_jobs),
         execute=execute,
+        sleep_on_retry_s=max(0.0, float(args.sleep_on_retry)),
     )
 
     token = ""
@@ -294,11 +312,15 @@ def main(argv: list[str] | None = None) -> int:
     )
     out = result.to_dict()
     out["dispatch_envelope"] = envelope
+    host_rpm = measure_dispatch_rpm(result.executed) if result.executed else None
+    if host_rpm is not None:
+        out["host_dispatch_rpm"] = host_rpm
     out["scheduler_config_static"] = {
         k: SCHEDULER_CONFIG[k]
         for k in (
             "version",
             "rate_pools",
+            "sleep_on_retry_s",
             "track_a_datasets",
             "date_range_batch_standard",
             "default_mode",
@@ -328,6 +350,11 @@ def main(argv: list[str] | None = None) -> int:
         f"dispatch_envelope={json.dumps(envelope, sort_keys=True)}",
         flush=True,
     )
+    if host_rpm is not None:
+        print(
+            f"host_dispatch_rpm={json.dumps(host_rpm, sort_keys=True)}",
+            flush=True,
+        )
     print(f"plan_out={plan_path}", flush=True)
     print(f"queue_out={queue_path}", flush=True)
     if not execute:

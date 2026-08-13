@@ -19,7 +19,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
@@ -34,19 +34,23 @@ from ops.backfill_planner import (
 # ---------------------------------------------------------------------------
 # Rate / pool config (explicit; also documented in ADR)
 # J-Quants Premium general ~500/min; fins endpoints are a separate budget.
-# Defaults leave headroom under the ~500/min class caps.
+# P0: drive near the Premium ceiling (495–500 RPM). Low-rate parking is banned.
 # ---------------------------------------------------------------------------
 
 RATE_POOL_GENERAL = "general"
 RATE_POOL_FINS = "fins"
 
-# Under ~500/min general Premium cap.
-DEFAULT_GENERAL_RPM: float = 480.0
+# Near ~500/min general Premium cap (client host dispatch; upstream paced by Worker).
+DEFAULT_GENERAL_RPM: float = 495.0
 # Separate fins budget — do not share the general token bucket.
-DEFAULT_FINS_RPM: float = 480.0
+DEFAULT_FINS_RPM: float = 495.0
 
-DEFAULT_GENERAL_WORKERS: int = 4
-DEFAULT_FINS_WORKERS: int = 2
+# Parallel host POSTs overlap Worker RTT; RPM still bounds token acquisition.
+DEFAULT_GENERAL_WORKERS: int = 12
+DEFAULT_FINS_WORKERS: int = 6
+
+# After HTTP 429 / retryable failure: short pause then resume near-limit RPM.
+DEFAULT_SLEEP_ON_RETRY_S: float = 2.0
 
 # Track A acceleration focus (priority order). History starts come from
 # Coverage Contract via BackfillPlanner — not from this tuple.
@@ -80,7 +84,7 @@ SCHEDULER_CONFIG: dict[str, Any] = {
         RATE_POOL_GENERAL: {
             "rpm": DEFAULT_GENERAL_RPM,
             "workers": DEFAULT_GENERAL_WORKERS,
-            "note": "J-Quants Premium general ~500/min; driver uses 480 headroom",
+            "note": "J-Quants Premium general ~500/min; driver default 495 near ceiling",
         },
         RATE_POOL_FINS: {
             "rpm": DEFAULT_FINS_RPM,
@@ -88,6 +92,7 @@ SCHEDULER_CONFIG: dict[str, Any] = {
             "note": "fins_* endpoints: separate rate budget; isolated token bucket",
         },
     },
+    "sleep_on_retry_s": DEFAULT_SLEEP_ON_RETRY_S,
     "track_a_datasets": list(TRACK_A_DATASETS),
     "date_range_batch_standard": True,
     "evidence_closure": "raw_plus_structured_only",
@@ -119,7 +124,8 @@ class SchedulerConfig:
     fins_workers: int = DEFAULT_FINS_WORKERS
     max_jobs: int = 0  # 0 = no limit
     execute: bool = False  # dry-run unless True
-    sleep_on_retry_s: float = 30.0
+    # Short 429 cooldown; do not park far below the Premium ceiling.
+    sleep_on_retry_s: float = DEFAULT_SLEEP_ON_RETRY_S
     request_timeout_s: int = 600
 
     def to_dict(self) -> dict[str, Any]:
@@ -372,6 +378,7 @@ class RangeBatchScheduler:
             job = sq.job
             job.attempt += 1
             job.state = "running"
+            started_at = datetime.now(timezone.utc).isoformat()
             limiters[sq.pool].acquire()
             # Never pass token into log lines; callback owns the header.
             code, summary = self._run_job(
@@ -384,8 +391,13 @@ class RangeBatchScheduler:
             )
             job.apply_worker_summary(summary, http_status=code)
             if job.state == "retry":
+                # Short cooldown only; rate limiters stay at configured near-ceiling RPM.
                 time.sleep(self.config.sleep_on_retry_s)
+            finished_at = datetime.now(timezone.utc).isoformat()
             row = sq.to_dict()
+            row["started_at"] = started_at
+            row["finished_at"] = finished_at
+            row["http_status"] = code
             # Safety: strip any accidental token-like keys
             for k in list(row.keys()):
                 if "token" in k.lower() or "secret" in k.lower() or "authorization" in k.lower():
@@ -488,11 +500,75 @@ def estimate_dispatch_envelope(
     }
 
 
+def measure_dispatch_rpm(
+    executed: Sequence[Mapping[str, Any]],
+    *,
+    timestamp_key: str = "finished_at",
+) -> dict[str, Any]:
+    """Measure host POST throughput from executed job rows (or state jsonl).
+
+    Returns observed requests/min over the wall window spanned by timestamps.
+    Does **not** equal JQ upstream page rate (Worker pagination is separate).
+    """
+    times: list[float] = []
+    for row in executed:
+        raw = row.get(timestamp_key) or row.get("started_at")
+        if not raw:
+            continue
+        try:
+            ts = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        times.append(ts.timestamp())
+    if len(times) < 2:
+        return {
+            "n_events": len(times),
+            "requests_per_min": None,
+            "window_seconds": None,
+            "note": "need >=2 timestamped events to measure host RPM",
+        }
+    times.sort()
+    window_s = max(times[-1] - times[0], 1e-9)
+    rpm = (len(times) - 1) * 60.0 / window_s
+    by_pool: dict[str, int] = {}
+    by_state: dict[str, int] = {}
+    n_429 = 0
+    for row in executed:
+        pool = str(row.get("rate_pool") or "unknown")
+        by_pool[pool] = by_pool.get(pool, 0) + 1
+        st = str(row.get("state") or "unknown")
+        by_state[st] = by_state.get(st, 0) + 1
+        if int(row.get("http_status") or 0) == 429 or row.get("reason_code") == "http_429":
+            n_429 += 1
+    return {
+        "n_events": len(times),
+        "requests_per_min": round(rpm, 2),
+        "window_seconds": round(window_s, 3),
+        "first_at": datetime.fromtimestamp(times[0], tz=timezone.utc).isoformat(),
+        "last_at": datetime.fromtimestamp(times[-1], tz=timezone.utc).isoformat(),
+        "by_pool": by_pool,
+        "by_state": by_state,
+        "http_429_count": n_429,
+        "note": (
+            "Host POST /v1/run rate only. Upstream JQ pages are paced by Worker "
+            "RATE_LIMIT_INTERVAL_MS (~120 ms → 500/min)."
+        ),
+    }
+
+
+def theoretical_upstream_rpm(rate_limit_interval_ms: float) -> float | None:
+    """Convert Worker min-interval (ms) to theoretical max upstream requests/min."""
+    if rate_limit_interval_ms is None or rate_limit_interval_ms <= 0:
+        return None
+    return round(60_000.0 / float(rate_limit_interval_ms), 2)
+
+
 __all__ = [
     "DEFAULT_FINS_RPM",
     "DEFAULT_FINS_WORKERS",
     "DEFAULT_GENERAL_RPM",
     "DEFAULT_GENERAL_WORKERS",
+    "DEFAULT_SLEEP_ON_RETRY_S",
     "RATE_POOL_FINS",
     "RATE_POOL_GENERAL",
     "SCHEDULER_CONFIG",
@@ -505,7 +581,9 @@ __all__ = [
     "build_queue",
     "estimate_dispatch_envelope",
     "filter_plan_jobs",
+    "measure_dispatch_rpm",
     "plan_and_queue",
     "rate_pool_for_dataset",
     "rpm_to_min_interval",
+    "theoretical_upstream_rpm",
 ]

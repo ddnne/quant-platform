@@ -25,13 +25,12 @@ PLAN_VERSION = "backfill-plan/v1"
 # ---------------------------------------------------------------------------
 # J-Quants Premium rate budgets (Track A acceleration; see ADR + range_batch_scheduler)
 # General Premium ~500 req/min. fins_* endpoints use a **separate** budget.
-# Drivers should leave headroom (e.g. 480 RPM) and never share fins vs general
-# token buckets. Worker-side floor ~125 ms remains authoritative upstream.
+# P0: drive near the ceiling (495 RPM). Worker-side floor ~120 ms → 500/min upstream.
 # ---------------------------------------------------------------------------
 PREMIUM_GENERAL_RPM_CAP = 500
 PREMIUM_FINS_RPM_CAP = 500  # separate pool — do not merge with general
-PREMIUM_DRIVER_GENERAL_RPM = 480
-PREMIUM_DRIVER_FINS_RPM = 480
+PREMIUM_DRIVER_GENERAL_RPM = 495
+PREMIUM_DRIVER_FINS_RPM = 495
 
 # Date-range batch is the standard planning unit (calendar_month segments).
 DATE_RANGE_BATCH_STANDARD = True

@@ -9,6 +9,8 @@ Aggregates (from a research-mirror DB — **not** CF SoT unless synced):
   * Track A focus metrics
   * optional projection_meta status
   * optional --baseline JSON for PRE→POST delta
+  * optional --state-jsonl host POST requests/min (proof of dispatch rate)
+  * theoretical upstream RPM from Worker RATE_LIMIT_INTERVAL_MS
 
 Outputs JSON and/or Markdown. Never fabricates COMPLETE.
 
@@ -16,6 +18,7 @@ Usage:
   python scripts/report_raw_throughput.py
   python scripts/report_raw_throughput.py --format both --out-dir docs/proof
   python scripts/report_raw_throughput.py --baseline data/reports/throughput_pre.json
+  python scripts/report_raw_throughput.py --state-jsonl .glm-logs/cf-backfill/state.jsonl
 """
 
 from __future__ import annotations
@@ -43,9 +46,19 @@ ROOT = repo_root()
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from ops.range_batch_scheduler import TRACK_A_DATASETS  # noqa: E402
+from ops.range_batch_scheduler import (  # noqa: E402
+    DEFAULT_FINS_RPM,
+    DEFAULT_GENERAL_RPM,
+    DEFAULT_GENERAL_WORKERS,
+    DEFAULT_FINS_WORKERS,
+    TRACK_A_DATASETS,
+    measure_dispatch_rpm,
+    theoretical_upstream_rpm,
+)
 
-REPORT_VERSION = "raw-throughput/v1"
+REPORT_VERSION = "raw-throughput/v2"
+# Mirror Worker const RATE_LIMIT_INTERVAL_MS (platform/workers/ingestion-premium).
+DEFAULT_WORKER_RATE_LIMIT_MS = 120
 
 
 def _connect_ro(db_path: Path) -> sqlite3.Connection:
@@ -107,6 +120,23 @@ def collect_metrics(db_path: Path, *, label: str = "snapshot") -> dict[str, Any]
         },
         "track_a": {},
         "projection": None,
+        "request_rate": {
+            "worker_rate_limit_ms": DEFAULT_WORKER_RATE_LIMIT_MS,
+            "theoretical_upstream_rpm": theoretical_upstream_rpm(
+                DEFAULT_WORKER_RATE_LIMIT_MS
+            ),
+            "client_defaults": {
+                "general_rpm": DEFAULT_GENERAL_RPM,
+                "fins_rpm": DEFAULT_FINS_RPM,
+                "general_workers": DEFAULT_GENERAL_WORKERS,
+                "fins_workers": DEFAULT_FINS_WORKERS,
+            },
+            "host_dispatch": None,
+            "note": (
+                "theoretical_upstream_rpm = 60000/rate_limit_ms (JQ pages). "
+                "host_dispatch is POST /v1/run/min from state jsonl when provided."
+            ),
+        },
         "errors": [],
     }
 
@@ -326,6 +356,52 @@ def delta_metrics(pre: MappingLike, post: MappingLike) -> dict[str, Any]:
 MappingLike = dict[str, Any]
 
 
+def load_state_jsonl(path: Path) -> list[dict[str, Any]]:
+    """Load scheduler state jsonl rows (skips blank / corrupt lines)."""
+    rows: list[dict[str, Any]] = []
+    if not path.is_file():
+        return rows
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict):
+            rows.append(obj)
+    return rows
+
+
+def attach_request_rate(
+    report: dict[str, Any],
+    *,
+    state_jsonl: Path | None = None,
+    worker_rate_limit_ms: float = DEFAULT_WORKER_RATE_LIMIT_MS,
+) -> dict[str, Any]:
+    """Populate report['request_rate'] with theoretical + optional host RPM."""
+    rr = report.setdefault("request_rate", {})
+    rr["worker_rate_limit_ms"] = worker_rate_limit_ms
+    rr["theoretical_upstream_rpm"] = theoretical_upstream_rpm(worker_rate_limit_ms)
+    rr.setdefault(
+        "client_defaults",
+        {
+            "general_rpm": DEFAULT_GENERAL_RPM,
+            "fins_rpm": DEFAULT_FINS_RPM,
+            "general_workers": DEFAULT_GENERAL_WORKERS,
+            "fins_workers": DEFAULT_FINS_WORKERS,
+        },
+    )
+    if state_jsonl is not None:
+        rows = load_state_jsonl(state_jsonl)
+        host = measure_dispatch_rpm(rows)
+        host["state_jsonl"] = str(state_jsonl)
+        host["rows_loaded"] = len(rows)
+        rr["host_dispatch"] = host
+    return report
+
+
 def to_markdown(report: dict[str, Any]) -> str:
     """Human-readable Markdown summary."""
     lines: list[str] = []
@@ -334,6 +410,35 @@ def to_markdown(report: dict[str, Any]) -> str:
     lines.append(f"- generated_at: `{report.get('generated_at')}`")
     lines.append(f"- db: `{report.get('db_path')}`")
     lines.append(f"- note: {report.get('db_note')}")
+    lines.append("")
+    rr = report.get("request_rate") or {}
+    lines.append("## request rate (RPM)")
+    lines.append("")
+    lines.append(f"| metric | value |")
+    lines.append(f"|--------|------:|")
+    lines.append(f"| worker_rate_limit_ms | {rr.get('worker_rate_limit_ms')} |")
+    lines.append(
+        f"| theoretical_upstream_rpm | {rr.get('theoretical_upstream_rpm')} |"
+    )
+    cd = rr.get("client_defaults") or {}
+    lines.append(
+        f"| client_general_rpm / workers | {cd.get('general_rpm')} / {cd.get('general_workers')} |"
+    )
+    lines.append(
+        f"| client_fins_rpm / workers | {cd.get('fins_rpm')} / {cd.get('fins_workers')} |"
+    )
+    host = rr.get("host_dispatch")
+    if isinstance(host, dict):
+        lines.append(
+            f"| host_dispatch_requests_per_min | {host.get('requests_per_min')} |"
+        )
+        lines.append(f"| host_dispatch_n_events | {host.get('n_events')} |")
+        lines.append(f"| host_dispatch_window_s | {host.get('window_seconds')} |")
+        lines.append(f"| host_http_429_count | {host.get('http_429_count')} |")
+    else:
+        lines.append("| host_dispatch_requests_per_min | — (pass --state-jsonl) |")
+    lines.append("")
+    lines.append(f"- rate note: {rr.get('note', '')}")
     lines.append("")
     raw = report.get("raw_retention_manifests") or {}
     lines.append("## raw_retention_manifests")
@@ -449,9 +554,26 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Explicit Markdown output path",
     )
+    ap.add_argument(
+        "--state-jsonl",
+        type=Path,
+        default=None,
+        help="Scheduler state jsonl (executed jobs) for host POST requests/min",
+    )
+    ap.add_argument(
+        "--worker-rate-limit-ms",
+        type=float,
+        default=DEFAULT_WORKER_RATE_LIMIT_MS,
+        help=f"Worker RATE_LIMIT_INTERVAL_MS for theoretical upstream RPM (default {DEFAULT_WORKER_RATE_LIMIT_MS})",
+    )
     args = ap.parse_args(argv)
 
     report = collect_metrics(args.db, label=args.label)
+    attach_request_rate(
+        report,
+        state_jsonl=args.state_jsonl,
+        worker_rate_limit_ms=float(args.worker_rate_limit_ms),
+    )
     if args.baseline and args.baseline.is_file():
         try:
             pre = json.loads(args.baseline.read_text(encoding="utf-8"))
@@ -492,12 +614,17 @@ def main(argv: list[str] | None = None) -> int:
     segs = report.get("coverage_segments") or {}
     ds = report.get("dataset_coverage") or {}
     raw = report.get("raw_retention_manifests") or {}
+    rr = report.get("request_rate") or {}
+    host = rr.get("host_dispatch") or {}
+    host_rpm = host.get("requests_per_min") if isinstance(host, dict) else None
     print(
         f"SUMMARY label={report.get('label')} raw_manifests={raw.get('total', 0)} "
         f"complete_segs={segs.get('complete', 0)} complete_ds={ds.get('complete', 0)} "
         f"stale_ds={ds.get('stale', 0)} "
         f"stale={','.join(ds.get('stale_datasets') or []) or '—'} "
-        f"proj={(report.get('projection') or {}).get('status')}",
+        f"proj={(report.get('projection') or {}).get('status')} "
+        f"upstream_rpm_theory={rr.get('theoretical_upstream_rpm')} "
+        f"host_rpm={host_rpm if host_rpm is not None else '—'}",
         flush=True,
     )
     return 0

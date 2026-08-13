@@ -85,3 +85,6 @@ def test_premium_rate_constants_documented():
     assert PREMIUM_DRIVER_FINS_RPM <= PREMIUM_FINS_RPM_CAP
     assert PREMIUM_GENERAL_RPM_CAP == 500
     assert PREMIUM_FINS_RPM_CAP == 500
+    # Near-ceiling defaults (P0 rate accel); not a deep safety park under 450.
+    assert PREMIUM_DRIVER_GENERAL_RPM >= 495
+    assert PREMIUM_DRIVER_FINS_RPM >= 495

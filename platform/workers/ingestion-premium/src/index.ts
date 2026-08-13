@@ -49,7 +49,7 @@ export interface Env {
   JQUANTS_API_KEY: string;
   INGESTION_RUN_TOKEN?: string;
   DATA_EXPORT_TOKEN?: string;
-  /** Optional concurrency cap (1–8). Default 4. */
+  /** Optional concurrency cap (1–8). Default 6 (near Premium ceiling). */
   INGEST_CONCURRENCY?: string;
   /** When "1", equities_master structured skips full-history D1 (R2 only). */
   MASTER_SCD2_ONLY?: string;
@@ -61,15 +61,18 @@ export interface Env {
 const JQ_BASE = "https://api.jquants.com";
 const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
 
-// P0-4 parallel ingest knobs.
-const DEFAULT_CONCURRENCY = 4;
+// P0-4 parallel ingest knobs — drive near Premium ~500/min ceiling.
+const DEFAULT_CONCURRENCY = 6;
 const MAX_CONCURRENCY = 8;
-// Premium budget ~500 req/min → 125 ms floor leaves headroom under the cap.
-const RATE_LIMIT_INTERVAL_MS = 125;
+// Premium budget ~500 req/min → 120 ms floor = exactly 500/min theoretical max.
+const RATE_LIMIT_INTERVAL_MS = 120;
 // Per-HTTP-request retries on 429/5xx (matches Python ingestion/common/retry).
 const RETRY_COUNT = 3;
 const RETRY_BASE_DELAY_MS = 500;
 const RETRY_MAX_DELAY_MS = 8_000;
+// 429: short backoff only, then resume near-ceiling via RateLimiter.notifyOk.
+const RETRY_429_BASE_DELAY_MS = 1_000;
+const RETRY_429_MAX_DELAY_MS = 3_000;
 
 // Persistent run-state keys (KV would be cleaner, but D1 is already here).
 const STATE_LAST_RUN = "last_run_summary";
@@ -183,13 +186,23 @@ interface FetchOutcome {
   retriesUsed: number;
 }
 
-/** Exponential backoff + full jitter for retry-after-transient. */
+/** Exponential backoff + full jitter for retry-after-transient (5xx / transport). */
 function backoffDelayMs(attempt: number): number {
   const base = Math.min(
     RETRY_MAX_DELAY_MS,
     RETRY_BASE_DELAY_MS * 2 ** (attempt - 1),
   );
   return Math.floor(Math.random() * base);
+}
+
+/** Short 429-only backoff — recover to near-ceiling quickly (P0 rate accel). */
+function backoff429DelayMs(attempt: number): number {
+  const base = Math.min(
+    RETRY_429_MAX_DELAY_MS,
+    RETRY_429_BASE_DELAY_MS * 2 ** (attempt - 1),
+  );
+  // Half-to-full jitter so concurrent workers do not re-stampede together.
+  return Math.floor(base / 2 + Math.random() * (base / 2));
 }
 
 function sleep(ms: number): Promise<void> {
@@ -250,7 +263,23 @@ async function fetchOnePage(
       await sleep(backoffDelayMs(attempt));
       continue;
     }
-    if (resp.status === 429 || (resp.status >= 500 && resp.status < 600)) {
+    if (resp.status === 429) {
+      attempt++;
+      // Adaptive limiter: short cooldown + temporary 2× interval, then recover.
+      limiter.notify429(1_200);
+      if (attempt > RETRY_COUNT) {
+        return {
+          resp,
+          error: `transient HTTP 429 (retries exhausted)`,
+          status: 429,
+          retriesUsed: attempt,
+        };
+      }
+      try { await resp.text(); } catch { /* ignore */ }
+      await sleep(backoff429DelayMs(attempt));
+      continue;
+    }
+    if (resp.status >= 500 && resp.status < 600) {
       attempt++;
       if (attempt > RETRY_COUNT) {
         return {
@@ -264,6 +293,10 @@ async function fetchOnePage(
       try { await resp.text(); } catch { /* ignore */ }
       await sleep(backoffDelayMs(attempt));
       continue;
+    }
+    // Success path: decay any 429 penalty back toward the 120 ms floor.
+    if (resp.status >= 200 && resp.status < 300) {
+      limiter.notifyOk();
     }
     return { resp, error: "", status: resp.status, retriesUsed: attempt };
   }
@@ -1225,8 +1258,8 @@ async function runIngestion(
     if (runId !== null) await writeValidation(env, runId, result);
   }
 
-  // P0-4: shared rate limiter (125 ms floor keeps us under Premium 500/min)
-  // and bounded concurrency for parallel dataset ingestion.
+  // P0-4: shared rate limiter (120 ms floor → 500/min theoretical) and
+  // bounded concurrency for parallel dataset ingestion.
   const limiter = new RateLimiter(RATE_LIMIT_INTERVAL_MS);
   const concurrency = clampConcurrency(env.INGEST_CONCURRENCY);
 

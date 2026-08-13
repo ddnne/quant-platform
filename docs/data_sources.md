@@ -42,7 +42,7 @@ PIT のため、構造化行は必ず `event_time` / `available_at` / `source` /
 - カバレッジ保証: `catalog.assert_catalog_coverage()` と `tests/test_jquants_catalog.py` が、カタログ内の全データセットに `/v2/` パスと `JQuantsClient.fetch_dataset` 経由のルートを要求する（stub-only は不可）。
 - ページネーション: **要求パラメータは `pagination_key`**（V2）。応答キーは `pagination_key`（標準）または `pagination_token`（レガシー）のいずれかのため両方を見る。レコード一覧は V2 エンベロープのトップレベル **`data`** から読む（レガシー `info`/`daily_bars`/`calendar`/`summary` はフォールバック）。
 - リトライ: 429/5xx および接続・タイムアウト系のトランスポートエラーを指数バックオフで再試行（`ingestion/common/retry.py`）。
-- レート制限: Premium は 500 req/min。安全側として **約 8 rps（0.125s 間隔 ≒ 480/min）** を既定（`catalog.PREMIUM_MIN_INTERVAL`）。`ingestion/common/rate_limit.py`。
+- レート制限: Premium は 500 req/min。上限近傍として **約 8.3 rps（0.12s 間隔 ≒ 500/min）** を既定（`catalog.PREMIUM_MIN_INTERVAL`）。`ingestion/common/rate_limit.py`。429 は短バックオフ後に上限近くへ復帰。
 
 ### エンドポイントカタログ（Premium + アドオン）
 

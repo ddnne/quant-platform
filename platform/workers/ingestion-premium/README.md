@@ -98,11 +98,13 @@ until `/health` reports `natural_key_migration.state == "READY"`.
 
 ## Parallel ingestion + retry (P0-4)
 
-Datasets run concurrently with a shared 125 ms global rate floor and
-per-HTTP-request 3-retry budget on 429/5xx (exponential backoff + jitter).
-Per-dataset failures are isolated — one fail does not abort siblings.
+Datasets run concurrently with a shared **120 ms** global rate floor
+(theoretical **500 req/min** upstream) and a per-HTTP-request 3-retry budget.
+On **429**: short backoff (1–3 s) + temporary 2× interval, then
+`notifyOk()` restores the base floor. 5xx uses longer exponential backoff +
+jitter. Per-dataset failures are isolated — one fail does not abort siblings.
 
-* Concurrency: `INGEST_CONCURRENCY` env var (default 4, cap 8).
+* Concurrency: `INGEST_CONCURRENCY` env var (default **6**, cap 8).
 * Rate limiter: `src/rate_limit.ts` chains `acquire()` calls so all
   concurrent fetches share the same minimum-interval reservation.
 

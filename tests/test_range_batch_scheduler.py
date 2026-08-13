@@ -8,7 +8,10 @@ from pathlib import Path
 from ops.backfill_planner import BackfillJob, BackfillPlan, BackfillPlanner
 from ops.range_batch_scheduler import (
     DEFAULT_FINS_RPM,
+    DEFAULT_FINS_WORKERS,
     DEFAULT_GENERAL_RPM,
+    DEFAULT_GENERAL_WORKERS,
+    DEFAULT_SLEEP_ON_RETRY_S,
     RATE_POOL_FINS,
     RATE_POOL_GENERAL,
     SCHEDULER_CONFIG,
@@ -18,9 +21,11 @@ from ops.range_batch_scheduler import (
     build_queue,
     estimate_dispatch_envelope,
     filter_plan_jobs,
+    measure_dispatch_rpm,
     plan_and_queue,
     rate_pool_for_dataset,
     rpm_to_min_interval,
+    theoretical_upstream_rpm,
 )
 
 
@@ -32,14 +37,22 @@ def test_rate_pool_fins_isolated():
     assert rate_pool_for_dataset("edinet_major_shareholders") == RATE_POOL_GENERAL
 
 
-def test_rpm_and_config_headroom():
-    assert DEFAULT_GENERAL_RPM < 500
-    assert DEFAULT_FINS_RPM < 500
-    assert rpm_to_min_interval(480) == 60.0 / 480.0
+def test_rpm_and_config_near_ceiling():
+    # P0: near Premium ~500/min ceiling (495–500), not a deep safety park.
+    assert 495 <= DEFAULT_GENERAL_RPM <= 500
+    assert 495 <= DEFAULT_FINS_RPM <= 500
+    assert 8 <= DEFAULT_GENERAL_WORKERS <= 16
+    assert 4 <= DEFAULT_FINS_WORKERS <= 8
+    assert DEFAULT_SLEEP_ON_RETRY_S <= 5.0  # short 429 recovery
+    assert rpm_to_min_interval(495) == 60.0 / 495.0
     assert rpm_to_min_interval(0) == 0.0
+    assert theoretical_upstream_rpm(120) == 500.0
+    assert theoretical_upstream_rpm(125) == 480.0
     assert SCHEDULER_CONFIG["date_range_batch_standard"] is True
     assert SCHEDULER_CONFIG["default_mode"] == "dry-run"
     assert "fins_summary" in TRACK_A_DATASETS
+    assert SCHEDULER_CONFIG["rate_pools"]["general"]["rpm"] == DEFAULT_GENERAL_RPM
+    assert SCHEDULER_CONFIG["rate_pools"]["general"]["workers"] == DEFAULT_GENERAL_WORKERS
 
 
 def test_filter_track_a_and_focus_range():
@@ -184,6 +197,7 @@ def test_execute_uses_run_job_and_never_logs_token():
     assert result.mode == "execute"
     assert len(result.executed) == 2
     assert all(r["state"] == "pass" for r in result.executed)
+    assert all("finished_at" in r and "started_at" in r for r in result.executed)
     assert seen_tokens and all(t == "SUPERSECRET" for t in seen_tokens)
     # Result serialization must not include the secret
     assert "SUPERSECRET" not in str(result.to_dict())
@@ -234,9 +248,40 @@ def test_plan_and_queue_and_envelope():
     )
     assert plan.jobs
     assert len(queued) <= 3
-    env = estimate_dispatch_envelope(queued, general_rpm=480, fins_rpm=480)
+    env = estimate_dispatch_envelope(queued, general_rpm=495, fins_rpm=495)
     assert "host_dispatch_floor_minutes_if_parallel_pools" in env
     assert env["queued_general"] + env["queued_fins"] == len(queued)
+
+
+def test_measure_dispatch_rpm_from_timestamps():
+    rows = [
+        {
+            "finished_at": "2026-08-12T12:00:00+00:00",
+            "rate_pool": "general",
+            "state": "pass",
+            "http_status": 200,
+        },
+        {
+            "finished_at": "2026-08-12T12:00:30+00:00",
+            "rate_pool": "general",
+            "state": "pass",
+            "http_status": 200,
+        },
+        {
+            "finished_at": "2026-08-12T12:01:00+00:00",
+            "rate_pool": "fins",
+            "state": "retry",
+            "http_status": 429,
+            "reason_code": "http_429",
+        },
+    ]
+    m = measure_dispatch_rpm(rows)
+    assert m["n_events"] == 3
+    # 2 intervals over 60s → 2 req/min
+    assert m["requests_per_min"] == 2.0
+    assert m["http_429_count"] == 1
+    assert m["by_pool"]["general"] == 2
+    assert measure_dispatch_rpm([])["requests_per_min"] is None
 
 
 def test_planner_range_filter_and_month_standard():

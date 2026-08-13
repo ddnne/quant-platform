@@ -147,7 +147,12 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--dataset", action="append", default=[], help="dataset id (repeatable)")
     ap.add_argument("--from-date", required=True)
     ap.add_argument("--to-date", required=True)
-    ap.add_argument("--workers", type=int, default=4)
+    ap.add_argument(
+        "--workers",
+        type=int,
+        default=12,
+        help="General pool workers for CF runtime (default 12)",
+    )
     ap.add_argument("--chunk-days", type=int, default=30)
     ap.add_argument("--source", choices=["jquants", "jsda", "all"], default="jquants")
     ap.add_argument(
@@ -173,12 +178,17 @@ def main(argv: list[str] | None = None) -> int:
         help="CF: one latest segment per dataset (e.g. margin interest refresh)",
     )
     ap.add_argument("--max-jobs", type=int, default=0, help="CF: cap queued jobs")
-    ap.add_argument("--general-rpm", type=float, default=480.0)
+    ap.add_argument(
+        "--general-rpm",
+        type=float,
+        default=495.0,
+        help="General pool RPM near Premium ~500/min (default 495)",
+    )
     ap.add_argument(
         "--fins-rpm",
         type=float,
-        default=480.0,
-        help="Fins separate rate pool (do not share with general)",
+        default=495.0,
+        help="Fins separate rate pool (do not share with general; default 495)",
     )
     args = ap.parse_args(argv)
 

@@ -18,8 +18,8 @@
 #   npx wrangler secret put DATA_EXPORT_TOKEN -c platform/workers/ingestion-premium/wrangler.toml
 #
 # Cron: hourly at :15 (Premium endpoints publish continuously through the JST
-# trading day; hourly cadence keeps the loop closed without stressing the
-# 500 req/min Premium cap). Override concurrency via [vars].INGEST_CONCURRENCY.
+# trading day). Worker paces upstream at ~120 ms (500/min). Override concurrency
+# via [vars].INGEST_CONCURRENCY (default 6, max 8).
 
 name = "quant-platform-ingestion-premium"
 main = "src/index.ts"
@@ -49,7 +49,8 @@ database_id = "be6fdcf8-40be-41fc-9535-7facd1fc2ffc"
 # - DATA_EXPORT_TOKEN          (structured export endpoints only)
 
 [vars]
-INGEST_CONCURRENCY = "2"
+# Parallel dataset ingest; shared RateLimiter still enforces ~500/min upstream.
+INGEST_CONCURRENCY = "6"
 # MASTER_SCD2_ONLY = "1"  # optional: route equities_master structured to R2 only
 
 [triggers]
