@@ -14,7 +14,7 @@ Parallel Premium backfill wave (host POST `/v1/run`), general + fins pools, **wi
 | `markets_breakdown` solo | `p0_mb_solo_*` | week-chunks → **409/409 pass** | **DONE** before bars |
 | `equities_bars_daily` solo | `p0_bars_solo_*` | 2008-05-01…2023-12-31, week-7d, max-jobs **280**, workers 2, general-rpm 495 | **DONE** executed=280 (pass 264 / fail 16) |
 | `fins_summary` paced | `p0_fins_paced_*` | monthly 2016–2023 residual, paced runner | **DONE** 96/96 pass (`"done": true`) |
-| `indices_bars_daily_topix` | `p0_topix3_*` (+ peer `t4_topix_exec_*`) | residual history | **DONE** topix3 executed=192 pass; peer t4 also 192 pass |
+| `indices_bars_daily_topix` | `p0_topix3_*` (+ peer `t4_topix_exec_*`) | residual history | **DONE** topix3 wave1 **192** pass @ **93.48** rpm; orch residual wave2 **192** pass @ **62.79** rpm (state jsonl n=**384**); peer t4 also 192 pass |
 
 **Bans held:** no Mass; no empty COMPLETE seal; no intentional rate demotion; original bars/fins/chain wait shells not killed.
 
@@ -38,29 +38,31 @@ Source: `.glm-logs/cf-backfill/p0_parallel_PRE_20260813T120732Z.json` (`generate
 |-------------|---------:|---------:|-------------:|-------|
 | `p0_mb_solo_state.jsonl` | 409 | 2230.9 | **10.97** | all pass |
 | `p0_bars_solo_state.jsonl` | 280 | 2692.2 | **6.22** | pass 264 / fail 16; http_429=0 |
-| `p0_topix3_state.jsonl` | 192→204 | 122.6 (run log) / 683 (later append) | **93.48** (run log) / 17.83 (report window incl. tail) | peak burst high-rate |
+| `p0_topix3_state.jsonl` | **384** (2×192) | w1 122.6 / w2 182.5 | **93.48** (w1) / **62.79** (w2) | orch residual re-dispatch after bars; no kill |
 | `t4_topix_exec_state.jsonl` (peer) | 192 | 80.5 | **142.41** | concurrent peer agent |
 | `p0_fins_paced_state.jsonl` | 102 | 5256 | **1.09–1.16** | runner `host_jobs_per_min=1.09`; report_raw needs `finished_at` (fins uses `ts`) |
-| **merged** mb+bars+topix3+fins | 983 rows / host n=881 | 4943 | **10.68** | `p0_parallel_wave_merged_state.jsonl` |
+| **merged** mb+bars+topix3+fins (early) | 983 / host n=881 | 4943 | **10.68** | first seal snapshot |
+| **merged** incl. topix w2 (re-verify) | **1073** | 5224 | **12.31** | `report_raw_throughput --state-jsonl` post orch topix residual |
 
 Run-log `host_dispatch_rpm` (authoritative per driver finish line):
 
 ```text
-mb:    requests_per_min=10.97  executed=409 pass
-bars:  requests_per_min=6.22   executed=280 pass=264 fail=16  http_429=0
-topix3:requests_per_min=93.48  executed=192 pass
-fins:  host_jobs_per_min=1.09  pass=96 fail=0 done=true
+mb:     requests_per_min=10.97  executed=409 pass
+bars:   requests_per_min=6.22   executed=280 pass=264 fail=16  http_429=0
+topix3: requests_per_min=93.48  executed=192 pass   (wave1)
+topix3: requests_per_min=62.79  executed=192 pass   (wave2 / orch residual)
+fins:   host_jobs_per_min=1.09  pass=96 fail=0 done=true
 ```
 
-**Peak host rpm observed this wave:** topix bursts **~93–143** POST/min; sustained multi-driver merge **~11**/min; bars solo sustained **~6.2**/min at workers=2 under shared general pool (peer master/misc/mb residual also live).
+**Peak host rpm observed this wave:** topix bursts **~63–143** POST/min; sustained multi-driver merge **~11–12**/min; bars solo sustained **~6.2**/min at workers=2 under shared general pool (peer master/misc/mb residual also live).
 
 ## POST remote raw_n (D1 `quant-ingest`)
 
-| metric | PRE | POST (wrangler `--remote`) | Δ |
-|--------|----:|---------------------------:|--:|
-| `raw_retention_manifests` total | **3535** | **6213** | **+2678** |
-| completeness=COMPLETE | — | **5325** | — |
-| coverage_segments COMPLETE | 501 (prior residual) | **510** | +9 (peer seals / concurrent A3) |
+| metric | PRE | POST first seal | POST re-verify (13:49Z) | Δ vs PRE |
+|--------|----:|----------------:|------------------------:|---------:|
+| `raw_retention_manifests` total | **3535** | **6213** | **6378** | **+2843** |
+| completeness=COMPLETE | — | **5325** | **5490** | — |
+| coverage_segments COMPLETE | 501 (prior residual) | **510** | **510** | +9 (peer seals / concurrent A3; **not** invented by this wave) |
 
 > Remote is SoT. Local research-mirror `report_raw_throughput` shows raw_manifests=0 (mirror not raw-synced); do not treat local raw as SoT.
 
@@ -84,13 +86,13 @@ fins:  host_jobs_per_min=1.09  pass=96 fail=0 done=true
 .venv/bin/python scripts/ops_reeval_freshness.py
 ```
 
-| field | value |
-|-------|-------|
-| status | **FRESH** |
-| `generated_at` | **`2026-08-13T13:45:30.731474+00:00`** |
-| `age_seconds` | **0** |
-| `projection_generation_id` | **`projgen-66763022d5ea4a56b51498874fbd3850`** |
-| segments rewritten | **none** |
+| field | first seal | re-verify (this pass) |
+|-------|------------|------------------------|
+| status | **FRESH** | **FRESH** |
+| `generated_at` | `2026-08-13T13:45:30.731474+00:00` | **`2026-08-13T13:49:05.920521+00:00`** |
+| `age_seconds` | 0 | **0** |
+| `projection_generation_id` | `projgen-66763022d5ea4a56b51498874fbd3850` | **`projgen-ef9627ddbb4a4330803bcd2662019d0f`** |
+| segments rewritten | none | **none** |
 
 ## Margin detail_json C8 (wrangler confirm)
 
@@ -107,8 +109,9 @@ status=pass; detail="1 day(s) since latest event_time"; days_lag=1; source=recei
 |--------|-----------------|
 | bars | `p0_bars_solo_run.log`: `finished executed=280 states={'pass': 264, 'fail': 16}` |
 | fins | `p0_fins_paced_run.log`: `{"done": true, "pass": 96, "fail": 0, ...}` |
-| topix3 | `p0_topix3_run.log`: `finished executed=192 states={'pass': 192}` |
+| topix3 | `p0_topix3_run.log`: wave1 `finished executed=192` @ 93.48 rpm; wave2 `finished executed=192` @ 62.79 rpm; state n=384 |
 | mb | `p0_mb_solo_run.log` / orch: `finished executed=409 states={'pass': 409}` |
+| chain | `p0_chain_orchestrator.log`: `ALL_GENERAL_AND_FINS_CHAIN_COMPLETE` |
 
 ## Artifacts
 
