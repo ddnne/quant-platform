@@ -117,4 +117,4 @@ No segment rewrite. No COMPLETE / Mass / READY claim from reeval. Dataset remain
 
 ## Report line
 
-`SHA=<push> COMPLETE=560 options_near pass=9/9 (retry 2/2) fail_primary=2×503 sealed=+2 (2026-06/07 run_ids 900587/900586) remote+22 incl peer-ready`
+`SHA=513e264 COMPLETE=560 options_near pass=9/9 (retry 2/2) fail_primary=2×503 sealed=+2 (2026-06/07 run_ids 900587/900586) remote+22 incl peer-ready`
