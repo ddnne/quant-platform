@@ -1,8 +1,8 @@
 # Phase 6.2 / 6.3 residual status
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
-**Live verified:** 2026-08-13T14:01Z (remote D1; COMPLETE segs **510**; raw_n **6477** / COMPLETE completeness **5589**; G8 reeval×5 + freshness FRESH age=0; fins `observed_start=2014-01-01`; margin **detail_json C8 pass** lag 1d≤7; Phase7 **OFF**)  
-**Repo tip:** `b0bd7af` — COMPLETE **510** / raw_n **6477** / bars `2008-05-01` / fins `2014-01-01` / breakdown `2015-03-26` / topix end `2026-08-13` / margin C8 **pass** / Phase7 **OFF**
+**Live verified:** 2026-08-13T14:20Z (remote D1; COMPLETE segs **520**; raw_n **7130** / COMPLETE completeness **6241**; G7 T11 OTC **+0 DEFER** timeout + T12 receipts **+10** → 520; projection **FRESH** age=0; Phase7 **OFF**)
+**Repo tip:** `(pending push)` — COMPLETE **520** / raw_n **7130** / OTC **5** (+0) / receipt **+10** / bars `2008-05-01` / fins `2014-01-01` / breakdown `2015-03-26` / Phase7 **OFF**
 
 ## Live snapshot (remote D1 `quant-ingest`)
 
@@ -10,22 +10,22 @@
 |------|--------|
 | Dataset COMPLETE | **2** — `markets_calendar` (224/224 segs), `jsda_tokyo_repo_rates` (1/1) |
 | Dataset STALE | **0** (margin PARTIAL via receipt reeval; not STALE) |
-| Segment COMPLETE total | **510** (remote; G8 circuit **Δ0** — measurement only, no empty COMPLETE) |
+| Segment COMPLETE total | **520** (remote; G7 T12 **+10** signed receipts; OTC **+0**) |
 | Segment other | PARTIAL majority / UNKNOWN (topix inventory shape) |
 | calendar segments | **224 COMPLETE / 0 PARTIAL** |
-| JSDA OTC COMPLETE segs | **5** — `2026-08-06`, `2026-08-07`, `2026-08-10`, `2026-08-12`, `2026-08-13` (dataset still PARTIAL; **+0** this pass — JSDA fetch timeout) |
-| JSDA corporate COMPLETE segs | **1** — year `2026` (dataset still PARTIAL) |
-| A3 sealed (partial datasets) | prior + **+4** edinet (major/2026-01 + cross/2026-02/03/04); also +3 margin/ssr; +2 margin/ssr 2026-07; +7/`*/2026-07`; +4 investor/edinet; … |
-| Remote `raw_retention_manifests` | **6477** total / **5589** COMPLETE completeness (session PRE **6447**/**5559** → POST **6477**/**5589**, **+30**/+30; peers t7/t8/t5 still live; local research mirror still partial) |
+| JSDA OTC COMPLETE segs | **5** — `2026-08-06`, `2026-08-07`, `2026-08-10`, `2026-08-12`, `2026-08-13` (dataset still PARTIAL; **+0** G7 — site timeout + R2 MISS) |
+| JSDA corporate COMPLETE segs | **1** — year `2026` only (prior years **DEFER** — no raw) |
+| A3 sealed (partial datasets) | prior + G7 **+10** (major/2026-02; cross/2026-06; large_volume/2026-01…06; futures/2026-01/02); also +4 edinet earlier; +3 margin/ssr; … |
+| Remote `raw_retention_manifests` | **7130** total / **6241** COMPLETE completeness (peer acq continues; local research mirror still partial) |
 | Track A + P0 execute | **multi-track chain DONE** — MB solo 409/409; bars solo **280** (264 pass/16 fail); fins paced **96/96**; topix3 **2×192** (w1 93.48 / w2 62.79 rpm). Peers t7_master / t8_misc / t5_margin_earn still running. **Worker pass ≠ COMPLETE** |
 | master | `scd2_event_sourcing` / D1 hot |
-| projection | **FRESH** — `projgen-8927d3b38aae41c18dc740df9a7ed6ad` (`generated_at=2026-08-13T14:01:21.532627+00:00`, age_seconds=0; `ops_reeval_freshness` G8) |
+| projection | **FRESH** — `projgen-3ac496d26f2d45c78ae849e06b988974` (`generated_at=2026-08-13T14:19:37.321591+00:00`, age_seconds=0; G7 post-publish reeval) |
 | sticky COMPLETE | **fixed** segment_id fallback + post-sticky dataset aggregate + COMPLETE inventory retain past UTC target_end (`coverage_ledger.py`) |
 | Full publish guard | `scripts/publish_ops_projection.py` fail-closed |
 | Targeted freshness | `scripts/ops_reeval_freshness.py` (no segment rewrite) |
 | Observed window re-eval | `scripts/ops_reeval_observed_window.py` (SUCCESS receipts `raw_row_count>0`; no segment rewrite / no COMPLETE claim) |
 | Layout migration | **DONE** — libraries under `packages/{edge,data_plane,research_runtime,product}`; import leaf names unchanged |
-| Track A (historical raw accel) | **EXECUTE DONE** — PRE raw **1488** → AEXEC **1889** → high-rate PRE **3535** → live **6477** |
+| Track A (historical raw accel) | **EXECUTE DONE** — PRE raw **1488** → AEXEC **1889** → high-rate PRE **3535** → live **7130** |
 | Track B1 (LLM-friendly) | **landed** + residual/docs SoT live-sync; B1-e partial (ops/coverage/receipt CLIs); Batch Z still **DEFER** |
 | Mass / READY / B0 | **NO-GO** |
 | Phase 7 | **OFF / foundation only** — **must remain OFF**; no mass arming, no production READY, no Phase7 switch ON |
@@ -59,19 +59,20 @@
 | `jsda_tokyo_repo_rates` | **COMPLETE** | 1 | 2012-10-29 | 2026-08-10 | — | dataset COMPLETE |
 | `fins_details` | PARTIAL | **3** | — | — | — | +2026-08 seal |
 | `equities_investor_types` | PARTIAL | **10** | — | — | — | +2019-12 + 2026-07 + 2026-08 seals |
-| `edinet_cross_shareholdings` | PARTIAL | **5** | 2026-02-01 | 2026-08-13 | — | COMPLETE **2026-02/03/04/07/08** |
-| `edinet_major_shareholders` | PARTIAL | **3** | 2026-01-01 | 2026-08-13 | — | COMPLETE **2026-01/07/08** |
-| `edinet_large_volume_shareholders` | PARTIAL | **2** | 2026-05-13 | 2026-08-13 | — | COMPLETE 2026-07 + 2026-08 only |
+| `edinet_cross_shareholdings` | PARTIAL | **6** | 2026-02-01 | 2026-08-13 | — | COMPLETE **2026-02/03/04/06/07/08** |
+| `edinet_major_shareholders` | PARTIAL | **4** | 2026-01-01 | 2026-08-13 | — | COMPLETE **2026-01/02/07/08** |
+| `edinet_large_volume_shareholders` | PARTIAL | **8** | 2026-01-01 | 2026-08-13 | — | COMPLETE **2026-01…08** |
 | `fins_dividend` / `fins_earnings_date` | PARTIAL | **2** each | — | — | — | COMPLETE 2026-07 + 2026-08 |
 | `markets_short_sale_report` | PARTIAL | **3** | — | — | — | COMPLETE **2026-06/07/08** |
 | `indices_bars_daily` | PARTIAL | **2** | — | — | — | COMPLETE 2026-07 + 2026-08 |
-| `derivatives_bars_daily_{futures,options,options_225}` | PARTIAL | **1** each | — | — | — | first COMPLETE month |
+| `derivatives_bars_daily_{futures,options,options_225}` | PARTIAL | futures **3** / options **1** each | — | — | — | futures COMPLETE **2026-01/02/08**; options still 2026-08 only |
 
 ## Proof index (aggregate — do not orphan)
 
 ### COMPLETE seals
 | Proof | What it closes |
 |-------|----------------|
+| [`docs/proof/g7_t11_otc_t12_receipts_20260813.md`](proof/g7_t11_otc_t12_receipts_20260813.md) | G7 T11 OTC **+0 DEFER** (timeout); T12 receipts **+10** → COMPLETE **520** |
 | [`docs/proof/mb_2015dir_reeval_edinet_plus4_20260813.md`](proof/mb_2015dir_reeval_edinet_plus4_20260813.md) | T5/T9/T10: breakdown `observed_start=2015-03-26`; OTC **+0**; EDINET **+4** → COMPLETE **510** |
 | [`docs/proof/t4_breakdown_wave_20260813.md`](proof/t4_breakdown_wave_20260813.md) | T4/G3 MB week-chunk midhole (GW2019 empty expected); reeval `observed_start=2015-03-26` |
 | [`docs/proof/complete_plus3_margin_ssr_jun2026_20260813.md`](proof/complete_plus3_margin_ssr_jun2026_20260813.md) | A3 **+3** margin 2026-06/08 + short_sale 2026-06 → COMPLETE **506** |
@@ -133,8 +134,8 @@
 |------|--------|
 | Sticky COMPLETE + inventory status fix | **DONE** (+ segment_id fallback + aggregate recompute 2026-08-13) |
 | Publish fail-closed guard | **DONE** |
-| Honest segment COMPLETE path (raw + signed SUCCESS) | **DONE** (OTC 5; A3 +71/+3/+1/+8/+4/+7/+2/+3/+4; total COMPLETE **510**) |
-| JSDA min COMPLETE (otc/corp/tokyo) | **DONE** (otc 5; corp/tokyo ≥1 each; further OTC **DEFER** site timeout) |
+| Honest segment COMPLETE path (raw + signed SUCCESS) | **DONE** (OTC 5; A3 … + G7 **+10**; total COMPLETE **520**) |
+| JSDA min COMPLETE (otc/corp/tokyo) | **DONE** (otc 5; corp/tokyo ≥1 each; further OTC **DEFER** site timeout + R2 MISS) |
 | Physical layout → `packages/*` planes | **DONE** (Batches 0–E; import names leaf top-level) |
 | Track A planner / throughput / execute | **DONE** (infra + live execute; raw continuing under mid-hole) |
 | Track B1 docs hub + plane import guards | **DONE** |
@@ -161,9 +162,9 @@
 
 ## Note on COMPLETE counts
 - **Dataset-level COMPLETE = 2** means only two datasets have *all* required segments COMPLETE.
-- **Segment COMPLETE = 510** counts every COMPLETE segment across datasets (calendar 224 + master/topix/markets/JSDA/A3 seals, etc.).
+- **Segment COMPLETE = 520** counts every COMPLETE segment across datasets (calendar 224 + master/topix/markets/JSDA/A3 seals, etc.).
 - Next honest +N requires additional **real raw** (R2 or official fetch) + structured + signed SUCCESS; do not invent.
-- Post-+4 EDINET: major **2026-01** + cross **2026-02/03/04**; large_volume H1 and further months still open.
+- Post-G7: major **2026-01/02/07/08**; cross **2026-02/03/04/06/07/08**; large_volume **2026-01…08**; futures **2026-01/02/08**.
 - OTC archive +N blocked when `market.jsda.or.jp` times out and no R2 raw for candidate days.
 - Full publish resets breakdown `observed_*` toward hot facts — always re-run `ops_reeval_observed_window.py --dataset markets_breakdown` after apply.
 - Coordinate `cf_premium_backfill` on **general** with live bars solo (near-ceiling RPM); prefer ≤40 RPM single worker or wait for bars idle. Mass / READY **NO-GO**.
