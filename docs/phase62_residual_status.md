@@ -1,8 +1,8 @@
 # Phase 6.2 / 6.3 residual status
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
-**Live verified:** 2026-08-13T15:03Z (remote D1; COMPLETE segs **538**; raw_n **7385**; G8-final reeval×5 + FRESH; margin `observed_start=2013-01-04` + **C8 pass** lag 1; projection **FRESH** age=0; Phase7 **OFF**)  
-**Repo tip:** `7c5a7c0` — COMPLETE **538** / raw_n **7385** / margin start **`2013-01-04`** / margin C8 **pass** / Phase7 **OFF**
+**Live verified:** 2026-08-13T15:03Z (remote D1; COMPLETE segs **538**; raw_n **7385**; G8-final FRESH; **G4 T5 fins wave1 partial** — `fins_summary` **`2008-07-01`**, `fins_details` **`2018-01-01`**, C8 pass lag 1; **t5_fins_paced still_running=yes** PID 8449 ~**76/288**; dividend/earnings **DEFER**; Phase7 **OFF**)  
+**Repo tip:** _(set after push)_ — COMPLETE **538** / raw_n **7385** / fins_summary start **`2008-07-01`** / details **`2018-01-01`** / T5 still_running **yes** / Phase7 **OFF**
 
 ## Live snapshot (remote D1 `quant-ingest`)
 
@@ -55,7 +55,7 @@
 | `indices_bars_daily_topix` | **PARTIAL** | **32** | **`2008-01-01`** | **`2026-08-13`** | n=1383 / c=1382 | T4 192/192 + prior; C8 lag **0** |
 | `equities_master` | **PARTIAL** | **94** | **`2006-08-13`** | **`2026-08-12`** | n≈238 | T7 147 + 29 retry; C8 lag **1**; scd2 hot |
 | `markets_breakdown` | **PARTIAL** | **32** | **`2015-03-26`** | **`2026-08-12`** | n=1066 / c=706 | G8-final reeval restored start after full-publish reset; C8 **pass** lag **1** |
-| `fins_summary` | **PARTIAL** | **5** | **`2008-07-01`** | **`2026-08-12`** | n=379 / c=272 | G8-final receipt reeval deepened start (was 2014-01-01); C8 **pass** lag **1**; paced runner still live |
+| `fins_summary` | **PARTIAL** | **5** | **`2008-07-01`** | **`2026-08-12`** | n=379 / c=272 | **G4 T5** pre-2014 wave **72/72** + reeval n_receipts=238 (job PRE was **2014-01-01**); empty shells 2008-01…06 → start **Jul** not Jan; C8 **pass** lag **1**; **not COMPLETE**; runner still live |
 | `markets_margin_interest` | **PARTIAL** | **17** | **`2013-01-04`** | **`2026-08-13`** | n=224 / c=223 | **G5** history 147/147; G8-final reeval restored start; **C8 pass** lag **1**≤7; COMPLETE still 17; dataset **not** COMPLETE |
 | `equities_earnings_calendar` | **PARTIAL** | **1** | **`2010-01-04`** | **`2026-08-13`** | — | **G5** 199/199 worker pass (2010-01…2026-07); C8 pass lag **0**; COMPLETE only **2026-08** |
 | `markets_short_ratio` | **PARTIAL** | 32 | **`2013-01-04`** | **`2026-08-12`** | n≈199 | T8 + retry; observed_start moved from 2024; C8 lag **1** |
@@ -97,6 +97,7 @@
 ### Track A / raw throughput / bars history
 | Proof | What it closes |
 |-------|----------------|
+| [`docs/proof/t5_fins_family_20260813.md`](proof/t5_fins_family_20260813.md) | **G4 T5 fins family** wave1 **partial** (no wait 288): i≈**76/288** pass=76; host jobs/min **1.34–1.37**; `fins_summary` **2014-01-01→2008-07-01**; `fins_details` **2024-01-01→2018-01-01**; C8 pass; dividend/earnings **DEFER**; **still_running=yes** (not killed) |
 | [`docs/proof/wave2256_final_close_20260813.md`](proof/wave2256_final_close_20260813.md) | **G8-final** closed circuit: reeval×5 + FRESH age=0 (`projgen-a059…`); session PRE raw **6447**→POST **7385**; COMPLETE segs **510→538**; empty COMPLETE **0**; Mass NO-GO; Phase7 OFF; acq not killed |
 | [`docs/proof/p0_multi_track_wave2_20260813.md`](proof/p0_multi_track_wave2_20260813.md) | **G8 closed circuit** T13+T14+T15: reeval×5 + FRESH age=0 (`projgen-8927…`); raw PRE **6447**→POST **6477** (+30); COMPLETE segs **510** Δ0; host rpm bars **6.22** / topix w1 **93.48** / merged **12.56** / +peers **17.63**; no kill acq |
 | [`docs/proof/p0_high_rate_parallel_acq_20260813.md`](proof/p0_high_rate_parallel_acq_20260813.md) | **High-rate parallel** PRE raw **3535**→re-verify **6378** (+2843); host rpm mb 10.97 / bars 6.22 / topix3 **93.48→62.79** / merged **12.31**; bars/fins/topix drivers done; observed_* + margin C8 **pass**; projection FRESH age=0 |
@@ -152,7 +153,8 @@
 | G8 closed circuit (reeval + freshness + throughput proof) | **DONE** (wave2 + **G8-final** reeval×5 + FRESH age=0; peers not killed) |
 | bars `observed_start` receipt-plane union | **DONE** (remote **`2008-05-01`**) |
 | multi-track bars/fins/topix paced execute + host rpm proof | **DONE** (bars 280; fins i=96; topix3 192; see multi-track proof) |
-| fins_summary `observed_start` history deepen | **DONE** (remote **`2008-07-01`** via receipt reeval G8-final; was 2014-01-01) |
+| fins_summary `observed_start` history deepen | **DONE** (remote **`2008-07-01`** via T5 pre-2014 paced 72/72 + G4 reeval; empty 2008-01…06 shells; COMPLETE seal still open) |
+| T5 fins family wave1 (summary+details+div+earn 288) | **partial + still_running** — G4 snap **76/288** (summary **72/72**, details **4+/72**); dividend/earnings_date **DEFER** until runner reaches them; **do not kill** PID 8449; proof [`t5_fins_family_20260813.md`](proof/t5_fins_family_20260813.md) |
 | bars gap **2004-01 → 2008-04** deepen / pre-May-2008 `observed_start` | **DEFER** (catalog wants 2004; subscription floor **2006-08-13**; empty `data[]` through 2008-04; raw_n=0 on gap receipts — see reverify proof) |
 | topix `observed_start` receipt-plane | **DONE** (remote **`2008-01-01`**; `observed_end` **`2026-08-13`**) |
 | margin STALE → PARTIAL (freshness) | **DONE** (remote PARTIAL; `observed_end=2026-08-13`; **detail_json C8 pass** lag 1d≤7 via `receipt_observed_end`; not dataset COMPLETE) |
