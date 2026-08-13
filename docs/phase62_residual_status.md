@@ -2,7 +2,7 @@
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
 **Live verified:** 2026-08-14 (JST) / ~2026-08-13T23:20Z UTC (remote D1; COMPLETE segs **729**; raw_n **9387**; G10 stagnant-4 seals + peers; FRESH age=0; empty COMPLETE **0**; Phase7 **OFF**)  
-**Repo tip:** `100be1c` (pre-push; set to push SHA after G10 land) — COMPLETE **729** / raw_n **9387** / stagnant-4 Δ / Phase7 **OFF**
+**Repo tip:** `dc89f2f` — COMPLETE **729** / raw_n **9387** / stagnant-4 Δ / Phase7 **OFF**
 
 ## Live snapshot (remote D1 `quant-ingest`)
 
@@ -199,7 +199,7 @@
 
 ## Note on COMPLETE counts
 - **Dataset-level COMPLETE = 2** means only two datasets have *all* required segments COMPLETE.
-- **Segment COMPLETE = 677** counts every COMPLETE segment across datasets (calendar 224 + master/topix/markets/JSDA/A3/T9/T12/G8/w0713 peers, etc.).
+- **Segment COMPLETE = 729** counts every COMPLETE segment across datasets (calendar 224 + master/topix/markets/JSDA/A3/T9/T12/G8/G9/G10 seals, etc.).
 - Next honest +N requires additional **real raw** (R2 or official fetch) + structured + signed SUCCESS; do not invent.
 - Post-G6: major/cross/large_volume/futures/options_225 all **2026-01…08** COMPLETE; options **2026-06/07/08** (T9).
 - T12 fins: fins_summary COMPLETE segs **30**; fins_details **23**; remaining history months **DEFER** without local usable raw+struct.
