@@ -2,7 +2,7 @@
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
 **Live verified:** 2026-08-13T15:03Z (remote D1; COMPLETE segs **538**; raw_n **7385**; G8-final FRESH; **G4 T5 fins wave1 partial** — `fins_summary` **`2008-07-01`**, `fins_details` **`2018-01-01`**, C8 pass lag 1; **t5_fins_paced still_running=yes** PID 8449 ~**76/288**; dividend/earnings **DEFER**; Phase7 **OFF**)  
-**Repo tip:** _(set after push)_ — COMPLETE **538** / raw_n **7385** / fins_summary start **`2008-07-01`** / details **`2018-01-01`** / T5 still_running **yes** / Phase7 **OFF**
+**Repo tip:** `7f42c4a` — COMPLETE **538** / raw_n **7385** / fins_summary start **`2008-07-01`** / details **`2018-01-01`** / T5 still_running **yes** / Phase7 **OFF**
 
 ## Live snapshot (remote D1 `quant-ingest`)
 
