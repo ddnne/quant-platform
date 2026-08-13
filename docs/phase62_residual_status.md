@@ -2,7 +2,7 @@
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
 **Live verified:** 2026-08-13 (remote D1 after A3 +4 investor/edinet seal + fail-closed publish; COMPLETE segs **494**; raw_n **3535** / COMPLETE completeness **3330**; Phase7 **OFF**)  
-**Repo tip:** `3a5c075` — COMPLETE **494** / raw 3535 / bars `2008-05-01` / breakdown `2015-04-01` / Phase7 **OFF** / `cf_premium_backfill` **not** launched
+**Repo tip:** `da3f076` — COMPLETE **494** / raw 3535 / bars `2008-05-01` / breakdown `2015-04-01` / Phase7 **OFF** / B1-e partial / `cf_premium_backfill` **not** launched
 
 ## Live snapshot (remote D1 `quant-ingest`)
 
