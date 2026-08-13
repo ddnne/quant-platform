@@ -1,8 +1,8 @@
 # Phase 6.2 / 6.3 residual status
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
-**Live verified:** 2026-08-13T15:06Z (remote D1; COMPLETE segs **538**; raw_n **7389**; **G6 t6_deriv_edinet closed** — futures/options_225/edinet H1 **+18** vs G7 / tip **+7** options_225; options `observed_start=2026-06-01`; G4 T5 fins still live; Phase7 **OFF**)  
-**Repo tip:** `a47541a` — COMPLETE **538** / raw_n **7389** / G6 **done** / options_near **still_running** / Phase7 **OFF**
+**Live verified:** 2026-08-14 (JST) / ~2026-08-13T15:16Z UTC (remote D1; COMPLETE segs **538**; raw_n **7430** / raw_c **6535**; T13–T15 reeval×5 + FRESH; empty COMPLETE **0**; G6 closed; fins/options_near **still_running** not killed; Phase7 **OFF**)  
+**Repo tip:** `PENDING_TIPSET` — COMPLETE **538** / raw_n **7430** / T1–T16 instruction close / Phase7 **OFF**
 
 ## Live snapshot (remote D1 `quant-ingest`)
 
@@ -11,21 +11,21 @@
 | Dataset COMPLETE | **2** — `markets_calendar` (224/224 segs), `jsda_tokyo_repo_rates` (1/1) |
 | Dataset STALE | **0** (margin PARTIAL via receipt reeval; not STALE) |
 | Segment COMPLETE total | **538** (remote; sticky + peer seals; **no** empty COMPLETE — null `receipt_run_id`=0 / empty `detail_json`=0) |
-| Segment other | PARTIAL **12386** / UNKNOWN **17** |
+| Segment other | PARTIAL **12371** / UNKNOWN **32** |
 | calendar segments | **224 COMPLETE / 0 PARTIAL** |
 | JSDA OTC COMPLETE segs | **5** — `2026-08-06`, `2026-08-07`, `2026-08-10`, `2026-08-12`, `2026-08-13` (dataset still PARTIAL; **+0** G7 — site timeout + R2 MISS) |
 | JSDA corporate COMPLETE segs | **1** — year `2026` only (prior years **DEFER** — no raw) |
-| A3 sealed (partial datasets) | prior + G7 **+10** + **G6 +18** (futures **03–07**; major **03–06**; cross **01/05**; options_225 **01–07**) → COMPLETE **538** |
-| Remote `raw_retention_manifests` | **7389** total (G8-final **7385** → G6 reeval/peer acq; options_near + fins still writing) |
+| A3 sealed (partial datasets) | prior + G7 **+10** + **G6 +18** (futures **03–07**; major **03–06**; cross **01/05**; options_225 **01–07**) → COMPLETE **538** (Δ0 this sync; reeval only) |
+| Remote `raw_retention_manifests` | **7430** total / COMPLETE completeness **6535** (G6 **7389** → T13–T15 sync peer acq; options_near + fins still writing) |
 | Track A + P0 execute | **T4/T7/T8 + G5 DONE** — topix **192/192**; master **147**+retry; misc **432**+retry; **t5_margin_earn 346** (344p/2f)+retry **2/2**. **Worker pass ≠ COMPLETE** |
 | master | `scd2_event_sourcing` / D1 hot |
-| projection | **FRESH** — `projgen-b758a387a7a440639ea4619eb7bad6ad` (`generated_at=2026-08-13T15:05:26.805105+00:00`, age_seconds=0; G6 post-reeval freshness) |
+| projection | **FRESH** — `projgen-daa4d8277cbf47989175b4f1dc8f0cac` (`generated_at=2026-08-13T15:15:52.545268+00:00`, age_seconds=0; T13–T15 post-reeval freshness) |
 | sticky COMPLETE | **fixed** segment_id fallback + post-sticky dataset aggregate + COMPLETE inventory retain past UTC target_end (`coverage_ledger.py`) |
 | Full publish guard | `scripts/publish_ops_projection.py` fail-closed |
 | Targeted freshness | `scripts/ops_reeval_freshness.py` (no segment rewrite) |
 | Observed window re-eval | `scripts/ops_reeval_observed_window.py` (SUCCESS receipts `raw_row_count>0`; no segment rewrite / no COMPLETE claim) |
 | Layout migration | **DONE** — libraries under `packages/{edge,data_plane,research_runtime,product}`; import leaf names unchanged |
-| Track A (historical raw accel) | **EXECUTE DONE** — PRE raw **1488** → AEXEC **1889** → high-rate PRE **3535** → T478 PRE **5265** → T478 **7289** → G5 **7362** → G8-final **7385** → G6 **7389** |
+| Track A (historical raw accel) | **EXECUTE DONE** — PRE raw **1488** → AEXEC **1889** → high-rate PRE **3535** → T478 PRE **5265** → T478 **7289** → G5 **7362** → G8-final **7385** → G6 **7389** → T13–T15 **7430** |
 | Track B1 (LLM-friendly) | **landed** + residual/docs SoT live-sync; B1-e partial (ops/coverage/receipt CLIs); Batch Z still **DEFER** |
 | Mass / READY / B0 | **NO-GO** |
 | Phase 7 | **OFF / foundation only** — **must remain OFF**; no mass arming, no production READY, no Phase7 switch ON |
@@ -45,18 +45,18 @@
 | t5 margin+earn | **7.51** | 346 | 344p/2f → retry 2/2 (2017-01/02); w=2 rpm=495 |
 | merged mb+bars+topix3+fins | **12.56** | 1175 | G8 wave2 re-measure |
 | merged + peers t4/t7/t8 | **17.63** | 1896 | concurrent acq included |
-| proof | — | — | [`docs/proof/t6_deriv_edinet_20260813.md`](proof/t6_deriv_edinet_20260813.md) (G6) + [`g5_margin_earn_history_20260813.md`](proof/g5_margin_earn_history_20260813.md) + T478 |
+| proof | — | — | [`docs/proof/instruction_t1t16_close_20260814.md`](proof/instruction_t1t16_close_20260814.md) (T13–T15 final sync) + G6/G5/T478 |
 
 ### observed_* (remote D1, key datasets)
 
 | dataset | status | COMPLETE segs | observed_start | observed_end | raw manifests (COMPLETE) | notes |
 |---------|--------|--------------:|----------------|--------------|--------------------------:|-------|
-| `equities_bars_daily` | **PARTIAL** | **12** | **`2008-05-01`** | **`2026-08-12`** | n=2120 / c=1758 | G8-final reeval C8 **pass** lag **1**; worker pass ≠ COMPLETE |
-| `indices_bars_daily_topix` | **PARTIAL** | **32** | **`2008-01-01`** | **`2026-08-13`** | n=1383 / c=1382 | T4 192/192 + prior; C8 lag **0** |
+| `equities_bars_daily` | **PARTIAL** | **12** | **`2008-05-01`** | **`2026-08-13`** | n=2121 / c=1759 | T13–T15 reeval C8 **pass** lag **1**; worker pass ≠ COMPLETE |
+| `indices_bars_daily_topix` | **PARTIAL** | **32** | **`2008-01-01`** | **`2026-08-14`** | n=1384 / c=1383 | T4 192/192 + prior; C8 lag **0** |
 | `equities_master` | **PARTIAL** | **94** | **`2006-08-13`** | **`2026-08-12`** | n≈238 | T7 147 + 29 retry; C8 lag **1**; scd2 hot |
-| `markets_breakdown` | **PARTIAL** | **32** | **`2015-03-26`** | **`2026-08-12`** | n=1066 / c=706 | G8-final reeval restored start after full-publish reset; C8 **pass** lag **1** |
-| `fins_summary` | **PARTIAL** | **5** | **`2008-07-01`** | **`2026-08-12`** | n=379 / c=272 | **G4 T5** pre-2014 wave **72/72** + reeval n_receipts=238 (job PRE was **2014-01-01**); empty shells 2008-01…06 → start **Jul** not Jan; C8 **pass** lag **1**; **not COMPLETE**; runner still live |
-| `markets_margin_interest` | **PARTIAL** | **17** | **`2013-01-04`** | **`2026-08-13`** | n=224 / c=223 | **G5** history 147/147; G8-final reeval restored start; **C8 pass** lag **1**≤7; COMPLETE still 17; dataset **not** COMPLETE |
+| `markets_breakdown` | **PARTIAL** | **32** | **`2015-03-26`** | **`2026-08-13`** | n=1067 / c=707 | T13–T15 reeval; C8 **pass** lag **1** |
+| `fins_summary` | **PARTIAL** | **5** | **`2008-07-01`** | **`2026-08-13`** | n=380 / c=273 | **G4 T5** pre-2014 wave **72/72** + reeval; empty shells 2008-01…06 → start **Jul**; C8 **pass** lag **1**; **not COMPLETE**; runner still live |
+| `markets_margin_interest` | **PARTIAL** | **17** | **`2013-01-04`** | **`2026-08-13`** | n=225 / c=224 | **G5** history 147/147; T13–T15 reeval; **C8 pass** lag **2**≤7; COMPLETE still 17; dataset **not** COMPLETE |
 | `equities_earnings_calendar` | **PARTIAL** | **1** | **`2010-01-04`** | **`2026-08-13`** | — | **G5** 199/199 worker pass (2010-01…2026-07); C8 pass lag **0**; COMPLETE only **2026-08** |
 | `markets_short_ratio` | **PARTIAL** | 32 | **`2013-01-04`** | **`2026-08-12`** | n≈199 | T8 + retry; observed_start moved from 2024; C8 lag **1** |
 | `markets_margin_alert` | **PARTIAL** | 18 | **`2013-01-04`** | **`2026-08-12`** | n≈237 | T8 + retry; observed_start moved from 2025-03; C8 lag **1** |
@@ -79,6 +79,7 @@
 ### COMPLETE seals
 | Proof | What it closes |
 |-------|----------------|
+| [`docs/proof/instruction_t1t16_close_20260814.md`](proof/instruction_t1t16_close_20260814.md) | **T13–T15 final sync + T1–T16 instruction close** (2026-08-14 JST): reeval×5 + FRESH age=0; raw **7430**/6535; COMPLETE segs **538** Δ0; empty COMPLETE **0**; Mass NO-GO; acq not killed |
 | [`docs/proof/t6_deriv_edinet_20260813.md`](proof/t6_deriv_edinet_20260813.md) | **G6 T9+T10** t6_deriv_edinet: worker 22p/1f; seals **+18** vs G7 (futures+5 major+4 cross+2 options_225+7) → COMPLETE **538**; reeval C8 pass; options_near not killed |
 | [`docs/proof/t4_t7_t8_parallel_acq_reeval_20260813.md`](proof/t4_t7_t8_parallel_acq_reeval_20260813.md) | T4/T7/T8 parallel acq + **54/54** fail-retry + observed reeval; raw **5265→7289** (target Δ n **+1398**); **no** empty COMPLETE |
 | [`docs/proof/t1_master_misc_close_20260813.md`](proof/t1_master_misc_close_20260813.md) | T1/G1 monitor queue-close master/misc (fail residual → closed by T478 retry) |
@@ -152,8 +153,9 @@
 | Physical layout → `packages/*` planes | **DONE** (Batches 0–E; import names leaf top-level) |
 | Track A planner / throughput / execute | **DONE** (infra + live execute; raw continuing under mid-hole) |
 | Track B1 docs hub + plane import guards | **DONE** |
-| Track B residual live-sync + docs SoT banners | **DONE** (COMPLETE **538** / raw **7389** / G6 closed; Phase7 OFF) |
+| Track B residual live-sync + docs SoT banners | **DONE** (COMPLETE **538** / raw **7430** / G6 closed; Phase7 OFF) |
 | G8 closed circuit (reeval + freshness + throughput proof) | **DONE** (wave2 + **G8-final** reeval×5 + FRESH age=0; peers not killed) |
+| T13–T15 final sync + T1–T16 instruction close | **DONE** (2026-08-14: reeval×5 C8 pass; FRESH `projgen-daa4…`; raw **7430**; COMPLETE **538** Δ0; proof `instruction_t1t16_close_20260814.md`) |
 | G6 t6_deriv_edinet (T9+T10) seal + reeval | **DONE** (worker 22p/1f; +18 seals vs G7 → **538**; options_near still_running wave partial; no kill) |
 | bars `observed_start` receipt-plane union | **DONE** (remote **`2008-05-01`**) |
 | multi-track bars/fins/topix paced execute + host rpm proof | **DONE** (bars 280; fins i=96; topix3 192; see multi-track proof) |
