@@ -2,7 +2,7 @@
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
 **Live verified:** 2026-08-13T14:49Z (remote D1; COMPLETE segs **531**; raw_n **7362**; G5 `t5_margin_earn` history done; margin `observed_start=2013-01-04` + **C8 pass** lag 1; earn C8 pass lag 0; projection **FRESH** age=0; Phase7 **OFF**)  
-**Repo tip:** *(set after push)* — COMPLETE **531** / raw_n **7362** / margin start **`2013-01-04`** / margin C8 **pass** / earn C8 **pass** / Phase7 **OFF**
+**Repo tip:** `99db2cf` — COMPLETE **531** / raw_n **7362** / margin start **`2013-01-04`** / margin C8 **pass** / earn C8 **pass** / Phase7 **OFF**
 
 ## Live snapshot (remote D1 `quant-ingest`)
 
