@@ -2,7 +2,7 @@
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
 **Live verified:** 2026-08-13 (remote D1; margin **detail_json C8 pass** lag 1d≤7 via receipt SoT; COMPLETE segs **503**; Phase7 **OFF**)  
-**Repo tip:** *(set on push)* — COMPLETE **503** / bars `2008-05-01` / breakdown `2015-04-01` / Phase7 **OFF** / margin detail C8 **pass** / `cf_premium_backfill` **not** launched this pass
+**Repo tip:**  — COMPLETE **503** / bars  / breakdown  / Phase7 **OFF** / margin detail C8 **pass** /  **not** launched this pass
 
 ## Live snapshot (remote D1 `quant-ingest`)
 
