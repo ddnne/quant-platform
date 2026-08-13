@@ -1,8 +1,8 @@
 # Phase 6.2 / 6.3 residual status
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
-**Live verified:** 2026-08-13 (remote D1; margin **detail_json C8 pass** lag 1d≤7 via receipt SoT; COMPLETE segs **494**; Phase7 **OFF**)  
-**Repo tip:** `f34a517` — COMPLETE **494** / bars `2008-05-01` / breakdown `2015-04-01` / Phase7 **OFF** / margin detail C8 **pass** / projection FRESH age=0
+**Live verified:** 2026-08-13 (remote D1; margin **detail_json C8 pass** lag 1d≤7 via receipt SoT; COMPLETE segs **501**; raw_n **4099** / COMPLETE completeness **3712**; Phase7 **OFF**)  
+**Repo tip:** *(set after push)* — COMPLETE **501** / bars `2008-05-01` / breakdown `2015-04-01` / Phase7 **OFF** / margin detail C8 **pass** / `cf_premium_backfill` **not** launched
 
 ## Live snapshot (remote D1 `quant-ingest`)
 
@@ -10,23 +10,23 @@
 |------|--------|
 | Dataset COMPLETE | **2** — `markets_calendar` (224/224 segs), `jsda_tokyo_repo_rates` (1/1) |
 | Dataset STALE | **0** (margin PARTIAL via receipt reeval; not STALE) |
-| Segment COMPLETE total | **494** (local == remote; A3 490→**494** +4) |
+| Segment COMPLETE total | **501** (local == remote; A3 494→**501** +7) |
 | Segment other | PARTIAL majority / UNKNOWN (topix inventory shape) |
 | calendar segments | **224 COMPLETE / 0 PARTIAL** |
 | JSDA OTC COMPLETE segs | **5** — `2026-08-06`, `2026-08-07`, `2026-08-10`, `2026-08-12`, `2026-08-13` (dataset still PARTIAL) |
 | JSDA corporate COMPLETE segs | **1** — year `2026` (dataset still PARTIAL) |
-| A3 sealed (partial datasets) | prior + **+4 this pass**: `equities_investor_types` **9** (incl. 2019-12), `edinet_*` 2026-08 first seals (3 datasets); also fins/deriv/short_sale 2026-08, short_ratio 32, breakdown 32, margin_alert 18, bars 12, topix 32, master 94, fins_summary 5, … |
-| Remote `raw_retention_manifests` | **3535** total / **3330** COMPLETE completeness (D1 RO; local research mirror raw still partial) |
+| A3 sealed (partial datasets) | prior + **+7 this pass** (`*/2026-07`): edinet×3, investor_types, fins_dividend, fins_earnings_date, indices_bars_daily; also prior +4 investor/edinet, fins/deriv/short_sale 2026-08, short_ratio 32, breakdown 32, margin_alert 18, bars 12, topix 32, master 94, fins_summary 5, … |
+| Remote `raw_retention_manifests` | **4099** total / **3712** COMPLETE completeness (D1 RO; acquisition continuing; local research mirror raw still partial) |
 | Track A + P0 execute | equities bars week/month/5d waves; topix history; margin latest. **Worker pass ≠ COMPLETE** |
 | master | `scd2_event_sourcing` / D1 hot |
-| projection | **FRESH** — `projgen-a34f7703ba9b4c7694654fb1df7aa773` (`generated_at=2026-08-13T12:14:17.185113+00:00`, age_seconds=0; targeted `ops_reeval_freshness`; local `data/ops/projection_meta.json`) |
+| projection | **FRESH** — `projgen-63c1a8f5df4a4b34844e4e15cedcf575` (`generated_at=2026-08-13T12:15:46.731549+00:00`, age_seconds=0; full publish fail-closed; local `data/ops/projection_meta.json`) |
 | sticky COMPLETE | **fixed** segment_id fallback + post-sticky dataset aggregate + COMPLETE inventory retain past UTC target_end (`coverage_ledger.py`) |
 | Full publish guard | `scripts/publish_ops_projection.py` fail-closed |
 | Targeted freshness | `scripts/ops_reeval_freshness.py` (no segment rewrite) |
 | Observed window re-eval | `scripts/ops_reeval_observed_window.py` (SUCCESS receipts `raw_row_count>0`; no segment rewrite / no COMPLETE claim) |
 | Layout migration | **DONE** — libraries under `packages/{edge,data_plane,research_runtime,product}`; import leaf names unchanged |
-| Track A (historical raw accel) | **EXECUTE DONE** — PRE raw **1488** → AEXEC **1889** → live **3535** |
-| Track B1 (LLM-friendly) | **landed** + residual/docs SoT; Batch Z still **DEFER** |
+| Track A (historical raw accel) | **EXECUTE DONE** — PRE raw **1488** → AEXEC **1889** → live **4099** |
+| Track B1 (LLM-friendly) | **landed** + residual/docs SoT; B1-e +receipt CLIs; Batch Z still **DEFER** |
 | Mass / READY / B0 | **NO-GO** |
 | Phase 7 | **OFF / foundation only** — **must remain OFF**; no mass arming, no production READY, no Phase7 switch ON |
 
@@ -43,9 +43,11 @@
 | `markets_calendar` | **COMPLETE** | 224 | 2008-01-01 | 2026-08-12 | — | sticky full + aggregate fix |
 | `jsda_tokyo_repo_rates` | **COMPLETE** | 1 | 2012-10-29 | 2026-08-10 | — | dataset COMPLETE |
 | `fins_details` | PARTIAL | **3** | — | — | — | +2026-08 seal |
-| `equities_investor_types` | PARTIAL | **9** | — | — | — | +2019-12 + 2026-08 seals |
-| `edinet_cross_shareholdings` / `edinet_large_volume_shareholders` / `edinet_major_shareholders` | PARTIAL | **1** each | — | — | — | first COMPLETE month 2026-08 |
-| `fins_dividend` / `fins_earnings_date` / `markets_short_sale_report` | PARTIAL | **1** each | — | — | — | first COMPLETE month |
+| `equities_investor_types` | PARTIAL | **10** | — | — | — | +2019-12 + 2026-07 + 2026-08 seals |
+| `edinet_cross_shareholdings` / `edinet_large_volume_shareholders` / `edinet_major_shareholders` | PARTIAL | **2** each | — | — | — | COMPLETE months 2026-07 + 2026-08 |
+| `fins_dividend` / `fins_earnings_date` | PARTIAL | **2** each | — | — | — | COMPLETE 2026-07 + 2026-08 |
+| `markets_short_sale_report` | PARTIAL | **1** | — | — | — | 2026-08 only; 2026-07 DEFER |
+| `indices_bars_daily` | PARTIAL | **2** | — | — | — | COMPLETE 2026-07 + 2026-08 |
 | `derivatives_bars_daily_{futures,options,options_225}` | PARTIAL | **1** each | — | — | — | first COMPLETE month |
 
 ## Proof index (aggregate — do not orphan)
@@ -53,6 +55,7 @@
 ### COMPLETE seals
 | Proof | What it closes |
 |-------|----------------|
+| [`docs/proof/complete_plus7_jul2026_remote_struct_20260813.md`](proof/complete_plus7_jul2026_remote_struct_20260813.md) | A3 **+7** remote 2026-07 struct + R2 raw → COMPLETE **501** |
 | [`docs/proof/complete_plus4_investor_edinet_20260813.md`](proof/complete_plus4_investor_edinet_20260813.md) | A3 **+4** investor 2019-12 + edinet×3 2026-08 → COMPLETE **494** |
 | [`docs/proof/complete_plus8_r2_raw_seal_20260813.md`](proof/complete_plus8_r2_raw_seal_20260813.md) | A3 **+8** via R2 raw mirror + parallel receipts → COMPLETE **490** |
 | [`docs/proof/complete_plus23_parallel_receipts_20260812.md`](proof/complete_plus23_parallel_receipts_20260812.md) | A3 parallel receipts **+71** → COMPLETE **479** |
@@ -106,7 +109,7 @@
 |------|--------|
 | Sticky COMPLETE + inventory status fix | **DONE** (+ segment_id fallback + aggregate recompute 2026-08-13) |
 | Publish fail-closed guard | **DONE** |
-| Honest segment COMPLETE path (raw + signed SUCCESS) | **DONE** (OTC 5; A3 +71/+3/+1/+8/+4; total COMPLETE **494**) |
+| Honest segment COMPLETE path (raw + signed SUCCESS) | **DONE** (OTC 5; A3 +71/+3/+1/+8/+4/+7; total COMPLETE **501**) |
 | JSDA min COMPLETE (otc/corp/tokyo) | **DONE** (otc 5; corp/tokyo ≥1 each) |
 | Physical layout → `packages/*` planes | **DONE** (Batches 0–E; import names leaf top-level) |
 | Track A planner / throughput / execute | **DONE** (infra + live execute; raw continuing under mid-hole) |
@@ -127,13 +130,13 @@
 | Batch Z (`quant_platform.*` imports) | **DEFER** (ADR Accepted; out of B1) |
 | B1-c full dead-code purge | **partial** — inventory only; no unsafe deletes (false-positive import scans) |
 | B1-d test tier nav | **partial** — `tests/README.md` G0/G1/G2 landed; matrix split open |
-| B1-e script bootstrap | **partial** — `scripts/_bootstrap.py` + ops/coverage CLIs; fingerprints `parents[N]` fixed; remaining scripts incremental |
+| B1-e script bootstrap | **partial** — ops/coverage + receipt CLIs on `_bootstrap`; fingerprints `parents[N]` fixed; remaining scripts incremental |
 
 ## Note on COMPLETE counts
 - **Dataset-level COMPLETE = 2** means only two datasets have *all* required segments COMPLETE.
-- **Segment COMPLETE = 494** counts every COMPLETE segment across datasets (calendar 224 + master/topix/markets/JSDA/A3 seals, etc.).
+- **Segment COMPLETE = 501** counts every COMPLETE segment across datasets (calendar 224 + master/topix/markets/JSDA/A3 seals, etc.).
 - Next honest +N requires additional **real raw** (R2 or official fetch) + structured + signed SUCCESS; do not invent.
-- Local structured months with usable raw are currently **exhausted** at 494 (post +4). Further seals need new raw and/or structured ingest first.
+- Post-+7: local sealables for mirrored 2026-07 months closed; further +N needs more remote struct months and/or raw (e.g. short_sale/margin 2026-07 DEFER).
 - **Do not** start `cf_premium_backfill` / Mass / READY from residual prose alone (**launch ban** this session; coordinate if another agent owns bars mid-hole).
 
 ## Phase 7 OFF (explicit)
