@@ -2,7 +2,7 @@
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
 **Live verified:** 2026-08-14 (JST) / ~2026-08-13T23:15Z UTC (remote D1; COMPLETE segs **677**; raw_n **9324**; G9 T13 receipts **+27** + G8 peers; FRESH age≈0; empty COMPLETE **0**; Phase7 **OFF**)  
-**Repo tip:** `1c613d2` — COMPLETE **677** / raw_n **9324** / G9 receipts **+27** / Phase7 **OFF**
+**Repo tip:** `202368b029f5507db34c92094fcbcb75b2e955bd` — COMPLETE **677** / raw_n **9324** / G9 receipts **+27** / Phase7 **OFF**
 
 ## Live snapshot (remote D1 `quant-ingest`)
 
