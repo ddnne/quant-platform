@@ -152,4 +152,4 @@ Options full-month COMPLETE still **DEFER** until week-chunks finish + R2 seal p
 
 ## Report line
 
-`SHA=<post-push> COMPLETE=538 (+7 tip / +18 vs G7) pass=22 fail=1 still_running=t6_options_near,t5_fins_paced`
+`SHA=a47541a COMPLETE=538 (+7 tip / +18 vs G7) pass=22 fail=1 still_running=t6_options_near,t5_fins_paced`

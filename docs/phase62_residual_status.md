@@ -2,7 +2,7 @@
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
 **Live verified:** 2026-08-13T15:06Z (remote D1; COMPLETE segs **538**; raw_n **7389**; **G6 t6_deriv_edinet closed** — futures/options_225/edinet H1 **+18** vs G7 / tip **+7** options_225; options `observed_start=2026-06-01`; G4 T5 fins still live; Phase7 **OFF**)  
-**Repo tip:** _(set after push)_ — COMPLETE **538** / raw_n **7389** / G6 **done** / options_near **still_running** / Phase7 **OFF**
+**Repo tip:** `a47541a` — COMPLETE **538** / raw_n **7389** / G6 **done** / options_near **still_running** / Phase7 **OFF**
 
 ## Live snapshot (remote D1 `quant-ingest`)
 
