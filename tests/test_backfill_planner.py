@@ -71,6 +71,37 @@ def test_planner_dataset_and_range_filter():
     assert all("raw" in j.expected_evidence for j in plan.jobs)
 
 
+def test_planner_clamps_subscription_floor_no_oos_before_2006_08_13():
+    """Fail id 2522: requested_from=2006-08-12 → HTTP 400 subscription.
+
+    Planner must never emit jobs starting before JQUANTS_SUBSCRIPTION_FLOOR.
+    """
+    from datetime import date
+
+    from ops.backfill_planner import (
+        JQUANTS_SUBSCRIPTION_FLOOR,
+        BackfillPlanner,
+    )
+
+    assert JQUANTS_SUBSCRIPTION_FLOOR == date(2006, 8, 13)
+    plan = BackfillPlanner(
+        cutoff=date(2006, 8, 31),
+        prefer_month_chunks_for_today=False,
+        chunk_days_for_today_mode=1,
+    ).plan(
+        datasets=["equities_bars_daily"],
+        from_date="2004-01-05",
+        to_date="2006-08-31",
+    )
+    assert plan.jobs, "expected jobs on/after subscription floor"
+    assert all(
+        j.requested_from >= "2006-08-13" for j in plan.jobs
+    ), min(j.requested_from for j in plan.jobs)
+    assert all(j.requested_to >= j.requested_from for j in plan.jobs)
+    # Explicit OOS day must not appear as a job window start.
+    assert not any(j.requested_from == "2006-08-12" for j in plan.jobs)
+
+
 def test_premium_rate_constants_documented():
     from ops.backfill_planner import (
         DATE_RANGE_BATCH_STANDARD,

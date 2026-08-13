@@ -334,6 +334,102 @@ def _merge_observed_window(
     return out_start, out_end
 
 
+def _calendar_days_between(start: str, end: str) -> int | None:
+    """Inclusive-of-order calendar-day delta (end - start) on YYYY-MM-DD prefixes."""
+    try:
+        a = date.fromisoformat(str(start)[:10])
+        b = date.fromisoformat(str(end)[:10])
+    except ValueError:
+        return None
+    return (b - a).days
+
+
+def _apply_receipt_freshness_c8(
+    evidence: list[CheckResult],
+    *,
+    dataset: str,
+    receipt_end: str | None,
+    reference: str,
+    freshness_days: int,
+) -> list[CheckResult]:
+    """Re-score C8 from SUCCESS receipt plane when it is newer than D1-hot.
+
+    CF-native R2 structured paths leave ``jquants_records`` as a residual hot
+    window (or empty). Freshness SoT for those datasets is SUCCESS receipts
+    with ``raw_row_count > 0`` (segment_end). Never invents dates — only uses
+    the provided ``receipt_end`` evidence.
+    """
+    if not receipt_end:
+        return evidence
+    receipt_hi = _date_prefix(receipt_end)
+    ref = _date_prefix(reference) or str(reference)[:10]
+    if receipt_hi is None or ref is None:
+        return evidence
+    days = _calendar_days_between(receipt_hi, ref)
+    if days is None:
+        return evidence
+    out: list[CheckResult] = []
+    replaced = False
+    for result in evidence:
+        if result.check_id != "C8" or str(result.dataset or "") != dataset:
+            out.append(result)
+            continue
+        hot_hi = result.metrics.get("latest_event_time")
+        hot_prefix = _date_prefix(str(hot_hi)) if hot_hi is not None else None
+        # Keep hot C8 when it is at least as fresh as the receipt plane.
+        if hot_prefix is not None and hot_prefix >= receipt_hi:
+            out.append(result)
+            continue
+        if days <= freshness_days:
+            status = "pass"
+            detail = f"{days} day(s) since latest event_time"
+        else:
+            status = "fail"
+            detail = f"stale: {days} day(s) > {freshness_days}"
+        out.append(
+            CheckResult(
+                "C8",
+                dataset,
+                status,
+                detail,
+                {
+                    "latest_event_time": receipt_hi,
+                    "reference": ref,
+                    "max_days": freshness_days,
+                    "days_lag": days,
+                    "source": "receipt_observed_end",
+                    "hot_latest_event_time": hot_hi,
+                },
+            )
+        )
+        replaced = True
+    if not replaced:
+        # No C8 row from hot plane (empty dataset) — still emit receipt C8.
+        if days <= freshness_days:
+            status = "pass"
+            detail = f"{days} day(s) since latest event_time"
+        else:
+            status = "fail"
+            detail = f"stale: {days} day(s) > {freshness_days}"
+        out.append(
+            CheckResult(
+                "C8",
+                dataset,
+                status,
+                detail,
+                {
+                    "latest_event_time": receipt_hi,
+                    "reference": ref,
+                    "max_days": freshness_days,
+                    "days_lag": days,
+                    "source": "receipt_observed_end",
+                    "hot_latest_event_time": None,
+                },
+            )
+        )
+    return out
+
+
 def _dataset_status(
     results: list[CheckResult],
 ) -> tuple[str, int, str | None, str | None]:
@@ -706,7 +802,22 @@ def refresh_coverage_ledger(
     for dataset in selected:
         policy = policies[dataset]
         source = _coverage_source(dataset)
+        # CF-native R2 structured path: D1 jquants_records is hot-window only.
+        # Expand observed_* / C8 from SUCCESS receipts that actually retained
+        # raw rows so history backfill and freshness use receipt SoT.
+        receipt_start, receipt_end, receipt_raw_rows = _receipt_observed_window(
+            receipts_by_dataset[dataset]
+        )
         dataset_evidence = by_dataset[dataset]
+        if source == "jquants":
+            dataset_evidence = _apply_receipt_freshness_c8(
+                dataset_evidence,
+                dataset=dataset,
+                receipt_end=receipt_end,
+                reference=target_end,
+                freshness_days=freshness_days,
+            )
+            by_dataset[dataset] = dataset_evidence
         if source == "jsda":
             validation_status, count, observed_start, observed_end = (
                 _jsda_validation_status(conn, dataset)
@@ -715,12 +826,6 @@ def refresh_coverage_ledger(
             validation_status, count, observed_start, observed_end = _dataset_status(
                 dataset_evidence
             )
-        # CF-native R2 structured path: D1 jquants_records is hot-window only.
-        # Expand observed_* from SUCCESS receipts that actually retained raw
-        # rows so history backfill moves observed_start before the hot floor.
-        receipt_start, receipt_end, receipt_raw_rows = _receipt_observed_window(
-            receipts_by_dataset[dataset]
-        )
         if receipt_start is not None or receipt_end is not None:
             observed_start, observed_end = _merge_observed_window(
                 observed_start, observed_end, receipt_start, receipt_end,

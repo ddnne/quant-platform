@@ -1,18 +1,19 @@
 #!/usr/bin/env python3
-"""Re-eval dataset_coverage.observed_start/end from SUCCESS receipts (remote D1).
+"""Re-eval dataset_coverage.observed_* + C8 from SUCCESS receipts (remote D1).
 
 Why
 ---
 High-volume Premium datasets use R2-only structured writes. D1
-``jquants_records`` is hot-window only, so C4-driven ``observed_start`` can
-stick at the hot floor (e.g. 2024-01-04) even after historical backfill
-landed raw + receipts.
+``jquants_records`` is hot-window only, so C4/C8 from cold/hot facts can
+stick on a residual max event_time (e.g. 2025-02-28) even after recent
+raw + receipts landed on R2.
 
 This script unions the receipt plane (SUCCESS + raw_row_count > 0) into
-``dataset_coverage.observed_*`` without:
+``dataset_coverage.observed_*`` and re-scores ``detail_json.checks`` C8
+from that real ``receipt_end`` without:
   * rewriting coverage_segments
   * claiming COMPLETE / Mass / READY
-  * touching raw retention rows
+  * inventing event times (only receipt segment_end + calendar lag)
 
 Default dataset: equities_bars_daily.
 """
@@ -36,7 +37,7 @@ import argparse
 import json
 import subprocess
 import tempfile
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 ROOT = ensure_repo_root()
 WRANGLER = (
@@ -52,6 +53,7 @@ WRANGLER_CONFIG = (
     ROOT / "platform" / "workers" / "ingestion-premium" / "wrangler.toml"
 )
 DB_NAME = "quant-ingest"
+DEFAULT_FRESHNESS_DAYS = 7
 
 
 def _now() -> str:
@@ -91,12 +93,127 @@ def _first_row(payload: list[dict]) -> dict | None:
     return results[0] if results else None
 
 
+def _calendar_days_between(start: str, end: str) -> int | None:
+    try:
+        a = date.fromisoformat(str(start)[:10])
+        b = date.fromisoformat(str(end)[:10])
+    except ValueError:
+        return None
+    return (b - a).days
+
+
+def _patch_detail_c8(
+    detail: dict,
+    *,
+    dataset: str,
+    receipt_start: str,
+    receipt_end: str,
+    receipt_n: object,
+    receipt_sum_raw: object,
+    reference: str,
+    freshness_days: int,
+) -> dict:
+    """Rewrite C8 check + observed_window from real receipt evidence."""
+    days = _calendar_days_between(receipt_end, reference)
+    if days is None:
+        raise ValueError(f"cannot lag-compare receipt_end={receipt_end!r} ref={reference!r}")
+    if days <= freshness_days:
+        c8_status = "pass"
+        c8_detail = f"{days} day(s) since latest event_time"
+    else:
+        c8_status = "fail"
+        c8_detail = f"stale: {days} day(s) > {freshness_days}"
+    checks = list(detail.get("checks") or [])
+    hot_latest = None
+    new_checks: list[dict] = []
+    found_c8 = False
+    for row in checks:
+        if not isinstance(row, dict):
+            new_checks.append(row)
+            continue
+        if str(row.get("check_id") or "") != "C8":
+            new_checks.append(row)
+            continue
+        metrics = row.get("metrics") if isinstance(row.get("metrics"), dict) else {}
+        hot_latest = metrics.get("latest_event_time")
+        found_c8 = True
+        new_checks.append(
+            {
+                "check_id": "C8",
+                "dataset": dataset,
+                "detail": c8_detail,
+                "metrics": {
+                    "latest_event_time": receipt_end,
+                    "reference": reference,
+                    "max_days": freshness_days,
+                    "days_lag": days,
+                    "source": "receipt_observed_end",
+                    "hot_latest_event_time": hot_latest,
+                },
+                "status": c8_status,
+            }
+        )
+    if not found_c8:
+        new_checks.append(
+            {
+                "check_id": "C8",
+                "dataset": dataset,
+                "detail": c8_detail,
+                "metrics": {
+                    "latest_event_time": receipt_end,
+                    "reference": reference,
+                    "max_days": freshness_days,
+                    "days_lag": days,
+                    "source": "receipt_observed_end",
+                    "hot_latest_event_time": None,
+                },
+                "status": c8_status,
+            }
+        )
+    detail = dict(detail)
+    detail["checks"] = new_checks
+    detail["observed_window"] = {
+        "receipt_start": receipt_start,
+        "receipt_end": receipt_end,
+        "receipt_raw_rows": receipt_sum_raw,
+        "receipt_n": receipt_n,
+        "source": "receipt_union_hot",
+    }
+    detail["status_note"] = (
+        f"PARTIAL: segment plane + receipt observed; C8 from receipt_end "
+        f"{receipt_end} lag={days}d (source=receipt_observed_end); "
+        f"hot_latest={hot_latest!s}; no COMPLETE claim"
+    )
+    detail["ops_reeval_observed_window"] = {
+        "receipt_start": receipt_start,
+        "receipt_end": receipt_end,
+        "receipt_n": receipt_n,
+        "receipt_sum_raw": receipt_sum_raw,
+        "c8_status": c8_status,
+        "c8_days_lag": days,
+        "c8_reference": reference,
+        "c8_max_days": freshness_days,
+    }
+    return detail
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument(
         "--dataset",
         default="equities_bars_daily",
         help="Dataset id to re-eval (default equities_bars_daily)",
+    )
+    ap.add_argument(
+        "--freshness-days",
+        type=int,
+        default=DEFAULT_FRESHNESS_DAYS,
+        help=f"C8 max lag days (default {DEFAULT_FRESHNESS_DAYS})",
+    )
+    ap.add_argument(
+        "--today",
+        default=None,
+        help="C8 reference date YYYY-MM-DD (default: today UTC)",
     )
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args(argv)
@@ -113,7 +230,8 @@ def main(argv: list[str] | None = None) -> int:
     pre = _first_row(
         _wrangler_json(
             "SELECT dataset, status, observed_start, observed_end, row_count, "
-            f"evaluated_at FROM dataset_coverage WHERE dataset='{_sql_escape(ds)}'"
+            f"evaluated_at, detail_json FROM dataset_coverage "
+            f"WHERE dataset='{_sql_escape(ds)}'"
         )
     )
     if pre is None:
@@ -144,27 +262,6 @@ def main(argv: list[str] | None = None) -> int:
     pre_start_d = str(pre_start)[:10] if pre_start else None
     pre_end_d = str(pre_end)[:10] if pre_end else None
 
-    new_start = receipt_start
-    if pre_start_d and pre_start_d < new_start:
-        # Keep even earlier hot-window evidence if present (unlikely).
-        new_start = pre_start if pre_start_d == str(pre_start)[:10] else pre_start_d
-        if pre_start_d < receipt_start:
-            new_start = (
-                str(pre_start)
-                if pre_start and str(pre_start)[:10] == pre_start_d
-                else pre_start_d
-            )
-    else:
-        new_start = receipt_start
-
-    new_end = receipt_end
-    if pre_end_d and pre_end_d > receipt_end:
-        new_end = (
-            str(pre_end)
-            if pre_end and str(pre_end)[:10] == pre_end_d
-            else pre_end_d
-        )
-
     # Recompute with pure date merge for clarity.
     starts = [x for x in (pre_start_d, receipt_start) if x]
     ends = [x for x in (pre_end_d, receipt_end) if x]
@@ -176,6 +273,43 @@ def main(argv: list[str] | None = None) -> int:
     if pre_end and str(pre_end)[:10] == new_end:
         new_end = str(pre_end)
 
+    reference = (args.today or datetime.now(timezone.utc).date().isoformat())[:10]
+    raw_detail = pre.get("detail_json") or "{}"
+    try:
+        detail_obj = json.loads(raw_detail) if isinstance(raw_detail, str) else dict(raw_detail)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        detail_obj = {}
+    if not isinstance(detail_obj, dict):
+        detail_obj = {}
+    pre_c8 = None
+    for row in detail_obj.get("checks") or []:
+        if isinstance(row, dict) and row.get("check_id") == "C8":
+            pre_c8 = {
+                "status": row.get("status"),
+                "detail": row.get("detail"),
+                "metrics": row.get("metrics"),
+            }
+            break
+    new_detail = _patch_detail_c8(
+        detail_obj,
+        dataset=ds,
+        receipt_start=receipt_start,
+        receipt_end=receipt_end,
+        receipt_n=receipt.get("n_receipts"),
+        receipt_sum_raw=receipt.get("sum_raw"),
+        reference=reference,
+        freshness_days=int(args.freshness_days),
+    )
+    post_c8 = None
+    for row in new_detail.get("checks") or []:
+        if isinstance(row, dict) and row.get("check_id") == "C8":
+            post_c8 = {
+                "status": row.get("status"),
+                "detail": row.get("detail"),
+                "metrics": row.get("metrics"),
+            }
+            break
+
     now = _now()
     report = {
         "dataset": ds,
@@ -185,6 +319,7 @@ def main(argv: list[str] | None = None) -> int:
             "status": pre.get("status"),
             "row_count": pre.get("row_count"),
             "evaluated_at": pre.get("evaluated_at"),
+            "c8": pre_c8,
         },
         "receipt_window": {
             "start": receipt_start,
@@ -196,10 +331,12 @@ def main(argv: list[str] | None = None) -> int:
             "observed_start": new_start,
             "observed_end": new_end,
             "evaluated_at": now,
+            "c8": post_c8,
+            "c8_reference": reference,
         },
         "note": (
-            "observed_* from SUCCESS receipts raw_row_count>0 union hot window; "
-            "coverage_segments untouched; no COMPLETE claim"
+            "observed_* + detail_json C8 from SUCCESS receipts raw_row_count>0; "
+            "coverage_segments untouched; status not forced to COMPLETE"
         ),
     }
     print(json.dumps(report, indent=2, ensure_ascii=False))
@@ -207,7 +344,6 @@ def main(argv: list[str] | None = None) -> int:
     if new_start >= "2024-01-01" and (
         pre_start_d is None or new_start[:10] >= str(pre_start_d)
     ):
-        # Not a hard fail — still apply if receipt evidence exists, but warn.
         print(
             "WARN: planned observed_start still >= 2024-01-01; "
             "need more historical raw+receipt evidence",
@@ -218,34 +354,15 @@ def main(argv: list[str] | None = None) -> int:
         print("dry-run: no remote UPDATE")
         return 0
 
-    detail_note = _sql_escape(
-        json.dumps(
-            {
-                "ops_reeval_observed_window": True,
-                "receipt_start": receipt_start,
-                "receipt_end": receipt_end,
-                "receipt_n": receipt.get("n_receipts"),
-                "receipt_sum_raw": receipt.get("sum_raw"),
-                "pre_observed_start": pre_start,
-                "pre_observed_end": pre_end,
-            },
-            ensure_ascii=False,
-            sort_keys=True,
-        )
+    detail_sql = _sql_escape(
+        json.dumps(new_detail, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     )
     sql = (
         f"UPDATE dataset_coverage SET "
         f"observed_start='{_sql_escape(new_start)}', "
         f"observed_end='{_sql_escape(new_end)}', "
-        f"evaluated_at='{_sql_escape(now)}' "
-        f"WHERE dataset='{_sql_escape(ds)}';\n"
-    )
-    # Append a small note into detail_json without wiping existing keys when
-    # SQLite json1 is available; fall back to leave detail_json alone on error.
-    sql += (
-        f"UPDATE dataset_coverage SET detail_json = "
-        f"CASE WHEN detail_json IS NULL OR detail_json = '' THEN '{detail_note}' "
-        f"ELSE detail_json END "
+        f"evaluated_at='{_sql_escape(now)}', "
+        f"detail_json='{detail_sql}' "
         f"WHERE dataset='{_sql_escape(ds)}';\n"
     )
 
@@ -273,11 +390,33 @@ def main(argv: list[str] | None = None) -> int:
     post = _first_row(
         _wrangler_json(
             "SELECT dataset, status, observed_start, observed_end, row_count, "
-            f"evaluated_at FROM dataset_coverage WHERE dataset='{_sql_escape(ds)}'"
+            f"evaluated_at, detail_json FROM dataset_coverage "
+            f"WHERE dataset='{_sql_escape(ds)}'"
         )
     )
-    print("POST", json.dumps(post, ensure_ascii=False))
+    post_out = dict(post or {})
+    raw_post_detail = post_out.pop("detail_json", None)
+    post_c8_live = None
+    if raw_post_detail:
+        try:
+            d = json.loads(raw_post_detail)
+            for row in d.get("checks") or []:
+                if isinstance(row, dict) and row.get("check_id") == "C8":
+                    post_c8_live = {
+                        "status": row.get("status"),
+                        "detail": row.get("detail"),
+                        "metrics": row.get("metrics"),
+                    }
+                    break
+        except (TypeError, ValueError, json.JSONDecodeError):
+            post_c8_live = {"error": "detail_json parse failed"}
+    post_out["c8"] = post_c8_live
+    print("POST", json.dumps(post_out, ensure_ascii=False))
     post_start = str((post or {}).get("observed_start") or "")[:10]
+    if post_c8_live and post_c8_live.get("status") == "pass":
+        print(f"OK detail_json C8 pass lag={post_c8_live.get('metrics', {}).get('days_lag')}")
+    else:
+        print(f"WARN detail_json C8 not pass: {post_c8_live!r}", flush=True)
     if post_start and post_start < "2024-01-01":
         print(f"OK observed_start moved to {post_start} (< 2024-01-01)")
         return 0

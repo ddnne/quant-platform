@@ -35,6 +35,12 @@ PREMIUM_DRIVER_FINS_RPM = 495
 # Date-range batch is the standard planning unit (calendar_month segments).
 DATE_RANGE_BATCH_STANDARD = True
 
+# J-Quants Premium subscription floor (API HTTP 400 for earlier dates).
+# Evidence: collection_receipts run_id=2522, segment 2006-08-12 FAILED with
+# "Your subscription covers the following dates: 2006-08-13 ~ ."
+# Planner must never emit OOS jobs before this calendar day.
+JQUANTS_SUBSCRIPTION_FLOOR = date(2006, 8, 13)
+
 JobState = Literal[
     "pending",
     "running",
@@ -416,6 +422,9 @@ class BackfillPlanner:
                     start = filter_from
                 if filter_to is not None and filter_to < end:
                     end = filter_to
+                # Clamp to subscription floor so OOS dates never reach /v1/run.
+                if start < JQUANTS_SUBSCRIPTION_FLOOR:
+                    start = JQUANTS_SUBSCRIPTION_FLOOR
                 if start > end:
                     continue
                 complete = _read_complete_segments(conn, cov.dataset_id)
@@ -436,6 +445,13 @@ class BackfillPlanner:
                     else:
                         chunks = _week_chunks(start, end, self.chunk_days)
                 for a, b in chunks:
+                    # Per-chunk floor clamp (week/N-day paths that start mid-month).
+                    if b < JQUANTS_SUBSCRIPTION_FLOOR:
+                        continue
+                    if a < JQUANTS_SUBSCRIPTION_FLOOR:
+                        a = JQUANTS_SUBSCRIPTION_FLOOR
+                    if a > b:
+                        continue
                     # Canonical segment ID must match Coverage Contract identity
                     # (calendar_month → YYYY-MM; never date_date form).
                     if cov.segment_granularity == "calendar_month":
