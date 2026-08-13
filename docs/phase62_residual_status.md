@@ -1,8 +1,8 @@
 # Phase 6.2 / 6.3 residual status
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
-**Live verified:** 2026-08-13 (remote D1 RO after A3 +8 R2-raw seal; COMPLETE segs **490**; raw_n **2465**; Phase7 **OFF**)  
-**Repo tip:** `a5eaa7a` — COMPLETE **490** / raw **2465** / A3 +8 / Track B docs / Phase7 **OFF**
+**Live verified:** 2026-08-13 (remote D1 after P0 finish: breakdown `observed_start` restore + projection freshness; COMPLETE segs **490**; raw_n **live ~3158+** growing mid-hole; Phase7 **OFF**)  
+**Repo tip:** *(set to push SHA after commit)* — COMPLETE **490** / raw live / bars `2008-05-01` / breakdown `2015-04-01` / Phase7 **OFF**
 
 ## Live snapshot (remote D1 `quant-ingest`)
 
@@ -16,16 +16,16 @@
 | JSDA OTC COMPLETE segs | **5** — `2026-08-06`, `2026-08-07`, `2026-08-10`, `2026-08-12`, `2026-08-13` (dataset still PARTIAL) |
 | JSDA corporate COMPLETE segs | **1** — year `2026` (dataset still PARTIAL) |
 | A3 sealed (partial datasets) | prior + **new 2026-08**: `fins_details` 3, `fins_dividend` 1, `fins_earnings_date` 1, `markets_short_sale_report` 1, `equities_investor_types` 8, `derivatives_bars_daily_*` 1 each; also short_ratio 32, breakdown 32, margin_alert 18, bars 12, topix 32, master 94, fins_summary 5, … |
-| Remote `raw_retention_manifests` | **2465** total / **2359** COMPLETE (D1 RO; bars mid-hole backfill by other agent grows raw; local research mirror raw still partial) |
+| Remote `raw_retention_manifests` | **live ~3158+** total / **~3038** COMPLETE completeness (D1 RO; bars mid-hole backfill grows raw continuously; local research mirror raw still partial) |
 | Track A + P0 execute | equities bars week/month/5d waves; topix history; margin latest. **Worker pass ≠ COMPLETE** |
 | master | `scd2_event_sourcing` / D1 hot |
-| projection | **FRESH** — `projgen-b19da58cd0974e4fb84802ba69ad7a0d` (fail-closed full publish after A3 +8; local `data/ops/projection_meta.json`) |
+| projection | **FRESH** — `projgen-17ba75ec08a640339a7f057b7e36919d` (`generated_at=2026-08-13T01:01:07.627426+00:00`, age_seconds=0; targeted `ops_reeval_freshness`; local `data/ops/projection_meta.json`) |
 | sticky COMPLETE | **fixed** segment_id fallback + post-sticky dataset aggregate + COMPLETE inventory retain past UTC target_end (`coverage_ledger.py`) |
 | Full publish guard | `scripts/publish_ops_projection.py` fail-closed |
 | Targeted freshness | `scripts/ops_reeval_freshness.py` (no segment rewrite) |
 | Observed window re-eval | `scripts/ops_reeval_observed_window.py` (SUCCESS receipts `raw_row_count>0`; no segment rewrite / no COMPLETE claim) |
 | Layout migration | **DONE** — libraries under `packages/{edge,data_plane,research_runtime,product}`; import leaf names unchanged |
-| Track A (historical raw accel) | **EXECUTE DONE** — PRE raw **1488** → AEXEC **1889** → live **2465** (bars mid-hole + margin/topix waves continue under other agent) |
+| Track A (historical raw accel) | **EXECUTE DONE** — PRE raw **1488** → AEXEC **1889** → live **~3158+** (bars mid-hole continues under other agent) |
 | Track B1 (LLM-friendly) | **landed** + residual/docs SoT; Batch Z still **DEFER** |
 | Mass / READY / B0 | **NO-GO** |
 | Phase 7 | **OFF / foundation only** — **must remain OFF**; no mass arming, no production READY, no Phase7 switch ON |
@@ -36,7 +36,7 @@
 |---------|--------|--------------:|----------------|--------------|--------------------------:|-------|
 | `equities_bars_daily` | **PARTIAL** | **12** | **`2008-05-01`** | **`2026-08-12`** | growing under mid-hole backfill | receipt-plane union; worker pass ≠ COMPLETE |
 | `indices_bars_daily_topix` | **PARTIAL** | **32** | **`2008-01-01`** | **`2026-08-12`** | — | sticky COMPLETE months |
-| `markets_breakdown` | **PARTIAL** | **32** | **`2024-01-01`** | **`2026-08-12`** | — | A3 sticky COMPLETE months |
+| `markets_breakdown` | **PARTIAL** | **32** | **`2015-04-01`** | **`2026-08-12`** | — | reeval restored from SUCCESS raw>0 (PRE was 2024-01-01 after full publish) |
 | `markets_margin_interest` | **PARTIAL** | **14** | **`2024-01-01`** | **`2026-08-12`** | — | reeval observed_end; **not** COMPLETE |
 | `markets_short_ratio` | PARTIAL | 32 | 2024-01-04 | 2026-08-10 | — | A3 sealed months |
 | `markets_margin_alert` | PARTIAL | 18 | 2025-03-03 | 2026-08-07 | — | A3 sealed months |
@@ -80,6 +80,8 @@
 | [`docs/proof/p0_other_datasets_margin_topix_20260812.md`](proof/p0_other_datasets_margin_topix_20260812.md) | margin latest+Jul → **PARTIAL**; topix hist → **`observed_start=2008-01-01`** |
 | [`docs/proof/p1_markets_margin_interest_stale_defer_20260812.md`](proof/p1_markets_margin_interest_stale_defer_20260812.md) | prior STALE root-cause / history DEFER (superseded on status only by P0) |
 | [`docs/proof/p0_reeval_20260812.md`](proof/p0_reeval_20260812.md) | earlier reeval / projection freshness (historical COMPLETE 400) |
+| [`docs/proof/p0_finish_projection_breakdown_20260813.md`](proof/p0_finish_projection_breakdown_20260813.md) | P0 finish: projection FRESH + breakdown `observed_start` **2015-04-01** restore |
+| [`docs/proof/p0_margin_projection_20260813.md`](proof/p0_margin_projection_20260813.md) | margin observed_end + earlier projection freshness |
 | [`docs/proof/p0_storage_plane_evidence.md`](proof/p0_storage_plane_evidence.md) | storage plane evidence |
 | [`docs/proof/data_quality_scan_20260812.md`](proof/data_quality_scan_20260812.md) | quality scan |
 | [`docs/proof/phase63_completion_20260812.md`](proof/phase63_completion_20260812.md) | Phase 6.3 guard/freshness tooling land |
@@ -109,7 +111,7 @@
 | OTC full archive COMPLETE | **DEFER** (thousands of trading days remain) |
 | `markets_margin_interest` full history / monthly TRUSTED seal | **DEFER** |
 | JSDA corporate years 2015–2025 | **DEFER** |
-| breakdown `observed_start` pre-2024 depth | **DEFER** / watch (live shows 2024-01-01) |
+| breakdown `observed_start` pre-2024 depth | **DONE** (remote **`2015-04-01`** via receipt reeval; further 2016–2023 week residual still open) |
 | Mass / READY / Phase7 switch ON | **NO-GO** (Phase7 **OFF** maintained) |
 | applied_cursor materialization | **DEFER** |
 | Batch Z (`quant_platform.*` imports) | **DEFER** (ADR Accepted; out of B1) |
