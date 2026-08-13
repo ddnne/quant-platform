@@ -17,7 +17,7 @@
 | JSDA corporate COMPLETE segs | **1** — year `2026` only (prior years **DEFER** — no raw) |
 | A3 sealed (partial datasets) | prior + G7 **+10** + G6 **+18** + T9 **+2** + **T12 +45** (fins_details **+20** 2018-01…2019-08; fins_summary **+25** 2008-07…2010-07) → COMPLETE **585** |
 | Remote `raw_retention_manifests` | **7825** total (prior **7762** + div_pre/peers Δ; worker pass ≠ COMPLETE) |
-| Track A + P0 execute | **T4/T7/T8 + G5 + T5 fins DONE** — topix **192/192**; master **147**+retry; misc **432**+retry; **t5_margin_earn 346** (344p/2f)+retry **2/2**; **t5_fins_paced 287/1** + 2022-05 split/daily recover → **288 unique**. **Worker pass ≠ COMPLETE** |
+| Track A + P0 execute | **T4/T7/T8 + G5 + T5 fins DONE + t5_div_pre DONE** — topix **192/192**; master **147**+retry; misc **432**+retry; **t5_margin_earn 346** (344p/2f)+retry **2/2**; **t5_fins_paced 287/1** + 2022-05 recover → **288 unique**; **t5_div_earn_div_pre 120/120** (`fins_dividend` 2008-01…2017-12; observed_start **2013-02-01**). **Worker pass ≠ COMPLETE** |
 | master | `scd2_event_sourcing` / D1 hot |
 | projection | **FRESH** — `projgen-fe1eae005c73494ba543dd0d95a915f0` age=0 (ops_reeval_freshness; segs untouched) |
 | sticky COMPLETE | **fixed** segment_id fallback + post-sticky dataset aggregate + COMPLETE inventory retain past UTC target_end (`coverage_ledger.py`) |
@@ -25,7 +25,7 @@
 | Targeted freshness | `scripts/ops_reeval_freshness.py` (no segment rewrite) |
 | Observed window re-eval | `scripts/ops_reeval_observed_window.py` (SUCCESS receipts `raw_row_count>0`; no segment rewrite / no COMPLETE claim) |
 | Layout migration | **DONE** — libraries under `packages/{edge,data_plane,research_runtime,product}`; import leaf names unchanged |
-| Track A (historical raw accel) | **EXECUTE DONE** — PRE raw **1488** → … → T13–T15 **7430** → T9/G5 peers → T5 fins → live raw **7762** |
+| Track A (historical raw accel) | **EXECUTE DONE** — PRE raw **1488** → … → T13–T15 **7430** → T9/G5 peers → T5 fins → t5_div_pre → live raw **7825** |
 | Track B1 (LLM-friendly) | **landed** + residual/docs SoT live-sync; B1-e partial (ops/coverage/receipt CLIs); Batch Z still **DEFER** |
 | Mass / READY / B0 | **NO-GO** |
 | Phase 7 | **OFF / foundation only** — **must remain OFF**; no mass arming, no production READY, no Phase7 switch ON |
@@ -39,6 +39,7 @@
 | fins paced | **1.09–1.16** | 102 | fins pool; runner `host_jobs_per_min=1.09` |
 | t5 fins family (G4 snap) | **1.34–1.37** | **76/288** | historical partial snap (superseded by FINAL) |
 | t5 fins family (**FINAL**) | **1.68** | **288** | serial paced **DONE**; runner **287/1** + 2022-05 recover → unique **288**; PID dead; flag DONE |
+| t5_div_pre (`fins_dividend` 2008–2017) | **4.69** | **120** | **120 pass / 0 fail**; PID **43684** natural exit; empty shells 2008-01…2013-01; nz **59** months |
 | topix3 w1 / w2 | **93.48** / **62.79** | 192 / 192 | residual months (fast burst); orch re-dispatch after bars |
 | t4 topix | **142.41** | 192 | all pass; burst |
 | t7 master | **3.58** | 147 | 118p/29f → retry 29/29 |
@@ -68,7 +69,7 @@
 | `edinet_cross_shareholdings` | PARTIAL | **8** | **`2026-01-01`** | 2026-08-13 | — | **G6** COMPLETE **2026-01…08** (+01/+05); C8 pass lag 3 |
 | `edinet_major_shareholders` | PARTIAL | **8** | **`2026-01-01`** | 2026-08-13 | — | **G6** COMPLETE **2026-01…08** (+03…06); C8 pass lag 3 |
 | `edinet_large_volume_shareholders` | PARTIAL | **8** | **`2026-01-01`** | 2026-08-13 | — | COMPLETE **2026-01…08** (G7); C8 pass lag 1 |
-| `fins_dividend` | **PARTIAL** | **2** | **`2018-01-01`** | **`2026-08-13`** | — | **T5 FINAL** 72/72 worker; reeval start **2018-01-01**; C8 **pass** lag **1**; COMPLETE still 2026-07/08 only |
+| `fins_dividend` | **PARTIAL** | **2** | **`2013-02-01`** | **`2026-08-13`** | — | **t5_div_pre** 120/120 (2008–2017) + T5 FINAL 72/72 (2018–2023); reeval POST start **2013-02-01** (empty shells ≤2013-01); C8 **pass** lag **1**; COMPLETE still 2026-07/08 only; dataset **not** COMPLETE |
 | `fins_earnings_date` | **PARTIAL** | **2** | **`2018-01-01`** | **`2026-08-13`** | — | **T5 FINAL** 72/72 worker; reeval start **2018-01-01**; C8 **pass** lag **1**; COMPLETE still 2026-07/08 only |
 | `markets_short_sale_report` | PARTIAL | **3** | — | — | — | COMPLETE **2026-06/07/08** |
 | `indices_bars_daily` | PARTIAL | **2** | — | — | — | COMPLETE 2026-07 + 2026-08 |
@@ -81,7 +82,8 @@
 ### COMPLETE seals
 | Proof | What it closes |
 |-------|----------------|
-| [`docs/proof/t5_fins_family_20260813.md`](proof/t5_fins_family_20260813.md) | **T5 fins family FINAL**: runner **287/1** (fail=`fins_details` 2022-05 CF1102) + split/daily recover → unique **288**; host jobs/min **1.68**; observed summary **2008-07-01** / details·div·earn **2018-01-01** → end **2026-08-13** C8 pass; receipts this close **+0** (T12 peer **+45** already) |
+| [`docs/proof/t5_dividend_pre2018_20260814.md`](proof/t5_dividend_pre2018_20260814.md) | **t5_div_pre**: `fins_dividend` **2008-01…2017-12** plan **120** → **120 pass / 0 fail**; host jobs/min **4.69**; reeval `observed_start` **`2013-02-01`** (was 2018-01-01); COMPLETE segs **585** Δ0; raw_n **7825**; empty COMPLETE **0** |
+| [`docs/proof/t5_fins_family_20260813.md`](proof/t5_fins_family_20260813.md) | **T5 fins family FINAL**: runner **287/1** (fail=`fins_details` 2022-05 CF1102) + split/daily recover → unique **288**; host jobs/min **1.68**; observed summary **2008-07-01** / details·div·earn **2018-01-01** → end **2026-08-13** C8 pass; receipts this close **+0** (T12 peer **+45** already); **superseded on div start** by t5_div_pre → **2013-02-01** |
 | [`docs/proof/t12_receipts_wave_20260814.md`](proof/t12_receipts_wave_20260814.md) | **T12 fins receipts**: fins_details **+20** + fins_summary **+25** → remote COMPLETE **585**; empty-raw ban held; no acq launch |
 | [`docs/proof/t9_options_near_close_20260814.md`](proof/t9_options_near_close_20260814.md) | **T9 options_near close**: week-chunk 9/9 pass (retry 2/2); seals **+2** (2026-06/07 run_ids **900587/900586**) → then T12 → **585**; reeval C8 pass |
 | [`docs/proof/instruction_t1t16_close_20260814.md`](proof/instruction_t1t16_close_20260814.md) | **T13–T15 final sync + T1–T16 instruction close** (2026-08-14 JST): reeval×5 + FRESH age=0; raw **7430**/6535; COMPLETE segs **538** Δ0; empty COMPLETE **0**; Mass NO-GO; acq not killed |
@@ -158,7 +160,7 @@
 | Physical layout → `packages/*` planes | **DONE** (Batches 0–E; import names leaf top-level) |
 | Track A planner / throughput / execute | **DONE** (infra + live execute; raw continuing under mid-hole) |
 | Track B1 docs hub + plane import guards | **DONE** |
-| Track B residual live-sync + docs SoT banners | **DONE** (COMPLETE **585** / raw **7762** / T5+T12 closed; Phase7 OFF) |
+| Track B residual live-sync + docs SoT banners | **DONE** (COMPLETE **585** / raw **7825** / T5+T12+t5_div_pre closed; Phase7 OFF) |
 | G8 closed circuit (reeval + freshness + throughput proof) | **DONE** (wave2 + **G8-final** reeval×5 + FRESH age=0; peers not killed) |
 | T13–T15 final sync + T1–T16 instruction close | **DONE** (2026-08-14: reeval×5 C8 pass; FRESH `projgen-daa4…`; raw **7430**; COMPLETE **538** Δ0; proof `instruction_t1t16_close_20260814.md`) |
 | G6 t6_deriv_edinet (T9+T10) seal + reeval | **DONE** (worker 22p/1f; +18 seals vs G7 → **538**; options_near closed by T9 2026-08-14) |
@@ -167,7 +169,8 @@
 | bars `observed_start` receipt-plane union | **DONE** (remote **`2008-05-01`**) |
 | multi-track bars/fins/topix paced execute + host rpm proof | **DONE** (bars 280; fins FINAL 288; topix3 192; see multi-track + T5 proof) |
 | fins_summary `observed_start` history deepen | **DONE** (remote **`2008-07-01`** via T5 pre-2014 paced 72/72 + FINAL reeval; empty 2008-01…06 shells; COMPLETE segs **30** via T12 not dataset COMPLETE) |
-| T5 fins family (summary+details+div+earn 288) | **DONE** — runner **287/1** (`fins_details` 2022-05 CF1102) + split/daily recover → unique **288**; host jobs/min **1.68**; reeval ×4 C8 pass; observed div/earn start **2018-01-01**; PID dead / flag DONE; proof [`t5_fins_family_20260813.md`](proof/t5_fins_family_20260813.md) |
+| T5 fins family (summary+details+div+earn 288) | **DONE** — runner **287/1** (`fins_details` 2022-05 CF1102) + split/daily recover → unique **288**; host jobs/min **1.68**; reeval ×4 C8 pass; observed div/earn start **2018-01-01** at close; PID dead / flag DONE; proof [`t5_fins_family_20260813.md`](proof/t5_fins_family_20260813.md) |
+| t5_div_pre `fins_dividend` 2008-01…2017-12 | **DONE** — plan **120** / **120 pass / 0 fail**; host jobs/min **4.69**; PID **43684** natural exit; reeval `observed_start` **`2013-02-01`**; empty shells 2008-01…2013-01; COMPLETE **585** Δ0; raw_n **7825**; proof [`t5_dividend_pre2018_20260814.md`](proof/t5_dividend_pre2018_20260814.md) |
 | bars gap **2004-01 → 2008-04** deepen / pre-May-2008 `observed_start` | **DEFER** (catalog wants 2004; subscription floor **2006-08-13**; empty `data[]` through 2008-04; raw_n=0 on gap receipts — see reverify proof) |
 | topix `observed_start` receipt-plane | **DONE** (remote **`2008-01-01`**; `observed_end` **`2026-08-13`**) |
 | margin STALE → PARTIAL (freshness) | **DONE** (remote PARTIAL; `observed_end=2026-08-13`; **detail_json C8 pass** lag 1d≤7 via `receipt_observed_end`; not dataset COMPLETE) |
@@ -191,10 +194,12 @@
 - Next honest +N requires additional **real raw** (R2 or official fetch) + structured + signed SUCCESS; do not invent.
 - Post-G6: major/cross/large_volume/futures/options_225 all **2026-01…08** COMPLETE; options **2026-06/07/08** (T9).
 - T12: fins_summary COMPLETE segs **30**; fins_details **23**; remaining history months **DEFER** without local usable raw+struct.
+- t5_div_pre: `fins_dividend` worker **120/120** pre-2018; `observed_start` **2013-02-01**; COMPLETE segs still **2** (no seal this wave).
 - OTC archive +N blocked when `market.jsda.or.jp` times out and no R2 raw for candidate days.
 - Full publish resets breakdown/margin `observed_*` toward hot facts — always re-run `ops_reeval_observed_window.py` for focus datasets after apply.
 - Coordinate `cf_premium_backfill` on **general** with live peers; prefer ≤40 RPM single worker. Mass / READY **NO-GO**.
 - T5 close: runner natural exit (PID dead); **no** empty COMPLETE; issue_receipts this close **+0** (T12 already sealed ready months).
+- t5_div_pre: PID **43684** natural exit; **no** kill / **no** double-run; empty COMPLETE **0**.
 
 ## Phase 7 OFF (explicit)
 Phase 7 remains **foundation-only / OFF**. Stubs under `knowledge/`, `selection/`, `gateway/`, `research/` are scaffolding.  
