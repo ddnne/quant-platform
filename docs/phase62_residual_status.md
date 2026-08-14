@@ -1,8 +1,8 @@
 # Phase 6.2 / 6.3 residual status
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
-**Live verified:** 2026-08-14 (JST) / ~2026-08-14T00:30Z UTC (remote D1; COMPLETE segs **942**; raw_n **9687**; G7 T9+T10 `w0713_t7_margin_inv` **970/970** worker pass + reeval; C8 margin **pass** lag2; COMPLETE +N **0**; FRESH age=0; empty COMPLETE **0**; Phase7 **OFF**)  
-**Repo tip:** `694e15d8240aad08f87dcdac33016ac3bc7478ba` — COMPLETE **942** / raw_n **9687** / G7 margin_inv **970/970** / C8 margin **pass** / empty COMPLETE **0** / Phase7 **OFF**
+**Live verified:** 2026-08-14 (JST) / ~2026-08-14T00:49Z UTC (remote D1; COMPLETE segs **942**; raw_n **9687**/c **8567**; 停滞4 bars/master/topix/breakdown **42/220/82/69**; C8 bars/mb/topix/master/margin all **pass**; FRESH age=0 `projgen-98b032…`; empty COMPLETE **0**; Phase7 **OFF**; w0713 T1–T17 instruction final **DONE/DEFER**)  
+**Repo tip:** `77356fd4cb8b9f7211064e20bbd01cd6d3a0193d` — COMPLETE **942** / raw_n **9687** / FRESH `projgen-98b032…` / empty COMPLETE **0** / Phase7 **OFF** (tip-set after push)
 
 ## Live snapshot (remote D1 `quant-ingest`)
 
@@ -10,16 +10,16 @@
 |------|--------|
 | Dataset COMPLETE | **2** — `markets_calendar` (224/224 segs), `jsda_tokyo_repo_rates` (1/1) |
 | Dataset STALE | **0** (margin PARTIAL via receipt reeval; not STALE) |
-| Segment COMPLETE total | **942** (remote; G6 + peers; **G7 T9+T10 no A3 seal** → +N **0**; **no** empty COMPLETE) |
+| Segment COMPLETE total | **942** (remote; G1–G10 + G5–G8 peers; instruction final reeval **+N 0**; **no** empty COMPLETE) |
 | Segment other | PARTIAL / UNKNOWN (remainder; not mass-READY) |
 | calendar segments | **224 COMPLETE / 0 PARTIAL** |
 | JSDA OTC COMPLETE segs | **6** — `2026-08-06`…`13` + **`2026-08-14`** (dataset still PARTIAL; G8 T11 **+1** via CF R2 XLS; further days **DEFER** site timeout / R2 MISS) |
 | JSDA corporate COMPLETE segs | **1** — year `2026` only (prior years **DEFER** — no raw) |
 | A3 sealed (partial datasets) | prior + G1/G2/G4 + **G6 t6_deriv_edinet +60** → COMPLETE **942**; **G7 margin_inv seals +0** (acq only) |
-| Remote `raw_retention_manifests` | **9687** total (G7 target Δ n **+1030** + peers; worker pass ≠ COMPLETE) |
-| Track A + P0 execute | **w0713 multi-track** + G1/G2/G4/G6 DONE + **G7 T9+T10 `w0713_t7_margin_inv` 970/970** (918p/52f + retry 52/52); **Worker pass ≠ COMPLETE** |
+| Remote `raw_retention_manifests` | **9687** total / **8567** COMPLETE (instruction PRE raw **7917** → POST **9687** Δ **+1770**; worker pass ≠ COMPLETE) |
+| Track A + P0 execute | **w0713 multi-track T1–T17 instruction final DONE/DEFER** + G1/G2/G4/G5/G6/G7/G8/G10 closed; **Worker pass ≠ COMPLETE** |
 | master | `scd2_event_sourcing` / D1 hot |
-| projection | **FRESH** — `projgen-f15c9ceef3b84ab68113d419a1707666` age=0 (G7 reeval freshness; segs untouched by reclock) |
+| projection | **FRESH** — `projgen-98b0328173f94bf099bc8b6960e54c34` age=0 (w0713 instruction final reeval freshness; segs untouched by reclock) |
 | sticky COMPLETE | **fixed** segment_id fallback + post-sticky dataset aggregate + COMPLETE inventory retain past UTC target_end (`coverage_ledger.py`) |
 | Full publish guard | `scripts/publish_ops_projection.py` fail-closed |
 | Targeted freshness | `scripts/ops_reeval_freshness.py` (no segment rewrite) |
@@ -89,6 +89,7 @@
 ### COMPLETE seals
 | Proof | What it closes |
 |-------|----------------|
+| [`docs/proof/w0713_instruction_final_20260814.md`](proof/w0713_instruction_final_20260814.md) | **W0713 instruction final T1–T17**: PRE tip `83fe7c0` raw **7917** COMPLETE **585** 停滞4 **12/94/32/32** → POST raw **9687**/c **8567** COMPLETE **942** 停滞4 **42/220/82/69**; reeval×5 C8 pass; FRESH `projgen-98b032…` age=0; empty **0**; Mass NO-GO; Phase7 OFF |
 | [`docs/proof/g7_t9_t10_margin_inv_20260814.md`](proof/g7_t9_t10_margin_inv_20260814.md) | **G7 T9+T10 `w0713_t7_margin_inv`**: plan **970** → wave1 **918p/52f** + retry **52/52** = **970/970**; host POST/min **9.61**; raw **8008→9687**; short_sale start **2013-11-01**; **C8 margin pass lag2 held**; COMPLETE +N **0**; empty **0**; FRESH `projgen-f15c9…` |
 | [`docs/proof/w0713_t6_deriv_edinet_20260814.md`](proof/w0713_t6_deriv_edinet_20260814.md) | **G6 T7+T8 w0713_t6_deriv_edinet**: acq 2025 (main 41p/19f + retry 48/48); seals **+60** (futures/opt225/edinet×3 **2025-01…12**); COMPLETE **882→942**; observed_start **`2025-01-01`**; options full 2025 **DEFER**; empty **0**; FRESH `projgen-08c14…` |
 | [`docs/proof/w0713_t4_breakdown_close_20260814.md`](proof/w0713_t4_breakdown_close_20260814.md) | **G4 T4 markets_breakdown close**: residual week-jobs **40p/4f**; R2 seal map **36/36** ready; issue **+36** (`2015-04…2018-03` **900927–900962**); COMPLETE **32→69 (+37)**; platform COMPLETE **882**; empty **0**; FRESH `projgen-b8c5…` |
@@ -180,6 +181,7 @@
 | Track B residual live-sync + docs SoT banners | **DONE** (COMPLETE **677** / raw **9200** / G8 closed; Phase7 OFF) |
 | G8 closed circuit (reeval + freshness + throughput proof) | **DONE** (wave2 + **G8-final** reeval×5 + FRESH age=0; peers not killed) |
 | T13–T15 final sync + T1–T16 instruction close | **DONE** (2026-08-14: reeval×5 C8 pass; FRESH `projgen-daa4…`; raw **7430**; COMPLETE **538** Δ0; proof `instruction_t1t16_close_20260814.md`) |
+| W0713 T1–T17 instruction final close | **DONE** (2026-08-14 ~00:49Z: remote D1 measure; reeval×5 C8 pass; FRESH `projgen-98b032…` age=0; raw **9687**/c **8567**; COMPLETE **942**; 停滞4 **42/220/82/69**; empty **0**; proof `w0713_instruction_final_20260814.md`) |
 | G6 t6_deriv_edinet (T9+T10) seal + reeval | **DONE** (worker 22p/1f; +18 seals vs G7 → **538**; options_near closed by T9 2026-08-14) |
 | T9 options_near week-chunk + seal | **DONE** (9/9 pass; COMPLETE **+2** Jun/Jul; later T12 → **585**) |
 | T12 fins raw seals (details+summary) | **DONE** (**+45** → COMPLETE **585**; empty-raw ban; proof `t12_receipts_wave_20260814.md`) |
