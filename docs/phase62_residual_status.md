@@ -2,7 +2,7 @@
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
 **Live verified:** 2026-08-14 (JST) / ~2026-08-14T05:34Z UTC (remote D1; COMPLETE segs **1956**; raw_n **11701**; margin family+investor wave **+80**; FRESH `projgen-c0739f41…`; empty COMPLETE **0**; Phase7 **OFF**; **W3-G4 w0814c_g4_misc +80**)  
-**Repo tip:** `PLACEHOLDER_PUSH_SHA` — COMPLETE **1956** / margin **65**/alert **66**/short_ratio **80**/short_sale **51**/investor **58** / FRESH `projgen-c0739f41…` / empty COMPLETE **0** / Phase7 **OFF** / w0814c G4 misc
+**Repo tip:** `a47f75b6d5df140ef9ac53e2836c3520f6726eb0` — COMPLETE **1956** / margin **65**/alert **66**/short_ratio **80**/short_sale **51**/investor **58** / FRESH `projgen-c0739f41…` / empty COMPLETE **0** / Phase7 **OFF** / w0814c G4 misc
 
 ## Live snapshot (remote D1 `quant-ingest`)
 
