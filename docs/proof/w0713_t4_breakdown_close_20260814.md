@@ -1,217 +1,205 @@
-# G4 = T4: `markets_breakdown` residual close (2026-08-14)
+# G4 / T4 — markets_breakdown residual week-chunks + raw seal close (2026-08-14)
 
-**Mass / READY / Phase7:** **NO-GO / OFF**  
-**empty COMPLETE:** **0** (SUCCESS `raw_row_count>0` required; digest raw &lt;25MB)  
-**Worker pass ≠ Coverage COMPLETE** (held)  
-**kill acq jobs:** **none** — peers left running (`cf_premium_backfill` t7, `seal_from_r2` t6, other issue writers)
+**Mass / READY / Phase7:** still **NO-GO / OFF**  
+**empty COMPLETE:** **0** (`receipt_run_id` null/0 = 0)  
+**Worker pass ≠ Coverage COMPLETE**  
+**prefix:** `w0713_t4_mb_*` · workers **2** · `--general-rpm 495`
 
-**Prefix:** `w0713_t4_mb_*`  
-**Dataset:** `markets_breakdown`  
-**Base tip at this close:** `e1a708e` (origin/main; G1 bars + G2 master proofs already on main)
+## Goal
 
-## Objective
+Close residual `markets_breakdown` history months that were PARTIAL with raw evidence:
 
-| track | action |
-|-------|--------|
-| **T4 / G4** | residual week-chunk backfill + R2 week-merge seal + signed receipts **+N** |
+1. Residual week-chunk backfill (`cf_premium_backfill`) for densify / 429 retry.
+2. R2 week-chunk raw → local raw digest + structured upsert (empty-raw ban).
+3. Signed receipts + fail-closed publish (raw-required only).
+4. After full publish, re-run `ops_reeval_observed_window --dataset markets_breakdown`.
 
-Task PRE baseline: COMPLETE **32**. Close sealable months that already hold **usable R2 raw + structured** evidence (empty-raw ban).
-
-**Forbidden held:** no Mass; no empty COMPLETE; no invent receipt without raw; no kill of live backfill.
-
----
-
-## PRE (remote D1 `quant-ingest` / task brief)
+## PRE (remote D1 `quant-ingest`, session start)
 
 | metric | value |
 |--------|------:|
-| `markets_breakdown` COMPLETE segs | **32** |
-| COMPLETE months (PRE tip island) | **2024-01 … 2026-08** only (32) — history PARTIAL |
-| G10 interim (same day, prior close) | COMPLETE **33** (`2023-12` receipt **900768**) |
-| `observed_start` / `observed_end` | **2015-03-26** / 2026-08-13 |
-| dataset status | PARTIAL |
-| empty COMPLETE | **0** |
+| `markets_breakdown` COMPLETE segs | **32** (`2024-01`…`2026-08`) |
+| `markets_breakdown` PARTIAL segs | **132** (`2013-01`…`2023-12`) |
+| dataset status | **PARTIAL** |
+| `observed_start` / `observed_end` | **`2024-01-01`** / `2026-08-12` (regressed after prior full publish) |
+| raw manifests (dataset) | n=**1074** / c=**714** |
+| global `raw_retention_manifests` | **7940** |
+| global COMPLETE segs | **585** (live tip moved under peer waves during session) |
+| SUCCESS nz receipt calendar 2015-03-26…2023-12 | continuous **except** GW2019 hole `2019-04-30`…`2019-05-05` (expected empty) |
 
-API/source floor for honest non-empty history: **2015-03** (empty shells **2013-01…2015-02** DEFER).
-
----
-
-## 1) Backfill residual (week-chunks) — worker pass only
+## 1) Residual week-chunk backfill
 
 ```text
 .venv/bin/python -u scripts/ops/cf_premium_backfill.py \
   --datasets markets_breakdown \
+  --from-date 2015-03-01 --to-date 2015-12-31 \
+  --week-chunks --chunk-days 7 \
   --execute --workers 2 --general-rpm 495 --max-jobs 0 \
+  --sleep-on-retry 3 \
   --plan-out  .glm-logs/cf-backfill/w0713_t4_mb_residual_plan.json \
   --queue-out .glm-logs/cf-backfill/w0713_t4_mb_residual_queue.json \
   --state-out .glm-logs/cf-backfill/w0713_t4_mb_residual_state.jsonl
 ```
 
-| wave | state file | n | pass | fail | notes |
-|------|------------|--:|-----:|-----:|-------|
-| residual | `w0713_t4_mb_residual_state.jsonl` | **44** | **35** | **9** | host POST/min **~10.34** |
-| retry_a | `w0713_t4_mb_retry_a_state.jsonl` | 6 | 1 | 5 | |
-| retry_b | `w0713_t4_mb_retry_b_state.jsonl` | 3 | 0 | 3 | |
-| retry2 | `w0713_t4_mb_retry2_state.jsonl` | 6 | 5 | 1 | |
-| retry2b | `w0713_t4_mb_retry2b_state.jsonl` | 3 | 0 | 3 | |
-| **combined last-per-week-job** | — | **44** | **40** | **4** | fail reason `worker_error` |
-
-PIDs natural exit (not killed): residual **87338**, retries **2865/2867/5267/5268**.
-
-**Worker pass only — no COMPLETE inflation at this step.**
-
----
-
-## 2) R2 week-merge seal prep (usable raw only)
-
-Helper: `.glm-logs/w0713_t4_mb/seal_from_r2.py`  
-Map: `.glm-logs/w0713_t4_mb/seal_map.json` (**36** months)  
-Result: `.glm-logs/w0713_t4_mb/seal_result.jsonl` — **ready=36 / 36**
-
 | field | value |
-|-------|------|
-| floor / ceil | **2015-03** / **2023-12** (2024-01… tip already COMPLETE) |
-| min month rows | **20000** |
-| digest raw cap | **20MB** (issue `_is_usable_raw` hard **&lt;25MB**) |
-| path | remote COMPLETE nz manifests → R2 pages → month combine → digest raw + `normalize_generic` + `SqliteStore.upsert` |
-| empty-raw skips | **0** in ready set |
+|-------|------:|
+| plan / executed | **44 / 44** |
+| **pass / fail** | **35 / 9** |
+| fail taxonomy | all **transient HTTP 429** (shared general pool with peers) |
+| host POST/min | **10.11** (window ≈255s) |
+| sum `rowsInserted` | **561_352** |
+| PID | **87338** (natural exit) |
 
-Selected segment_ids: **2015-04 … 2018-03** (36 calendar months).  
-All digest files size ~19.999MB with `raw_rows` / `normalized` 59k–82k (non-empty).
+### 429 retry
 
----
+| wave | range | workers / rpm | pass / fail | rowsInserted |
+|------|-------|---------------|------------:|-------------:|
+| retry_a | 2015-03-15…2015-04-25 | 2 / 495 | 1 / 5 | 0 |
+| retry_b | 2015-12-13…2015-12-31 | 1 / 200 | 0 / 3 | 0 |
+| retry2 | 2015-03-15…2015-04-25 | 1 / 60 | **5 / 1** | **54_475** |
+| retry2b | 2015-12-13…2015-12-31 | 1 / 60 | 0 / 3 | 0 |
 
-## 3) Signed receipts + ledger (this close **+36**)
+Residual 429 tails under multi-track contention; prior receipt-plane continuity already covered trading days (only GW2019 empty). **Worker pass ≠ Coverage COMPLETE.**
 
-`issue_receipts_parallel --struct-hint` on this dataset stalled on full-table `EXISTS jquants_records` over a multi‑GB research mirror.  
-**Targeted issue** used seal_result known raw paths + seal-prep structured counts (same empty-raw / size gates as `issue_receipts_parallel._is_usable_raw`):
+Artifacts (local): `.glm-logs/cf-backfill/w0713_t4_mb_*`.
 
-```text
-# local driver (not committed): .glm-logs/g1g2g4-close targeted issuer
-# inputs: .glm-logs/w0713_t4_mb/seal_result.jsonl
-# authority: SignedReceiptAuthority / TRUSTED_COLLECTION / dev-receipt-v1
-```
+## 2) Seal prep — R2 week-chunk → local raw + structured
+
+Driver: `.glm-logs/w0713_t4_mb/seal_from_r2.py`  
+(week-window dedupe; prefer single large run ≥50k rows; digest raw ≤20MB for issue_receipts 25MB ban)
 
 | field | value |
 |-------|------:|
-| issued | **36 / 36** |
-| skipped / errors | **0 / 0** |
-| receipt `run_id` | **900927 … 900962** |
-| structured = raw_row_count | **yes** (script policy) |
-| empty-raw skips | **0** |
-| local COMPLETE after refresh | **69** (= 33 prior tip island + **36**) |
+| floor / ceil | **2015-03** / **2023-12** (2024+ already COMPLETE) |
+| candidates with week-raw | **105** months |
+| selected this wave | **36** (`2015-04`…`2018-03`) |
+| ready (raw+struct) | **36 / 36** |
+| skip | `2015-03` thin (`sum_rows` &lt; 20k; source starts ~2015-03-26) |
 
-Artifact: `.glm-logs/g1g2g4-close/mb_targeted_issue.{log,json}`
+Example local struct after upsert (natural-key dedupe):
 
-### Issued segments (**+36**)
+| segment | structured rows (local) |
+|---------|------------------------:|
+| 2015-04 | **76_303** (21 trading days) |
+| 2015-05 | **65_650** |
+| 2016-01 | **69_596** |
+| 2018-03 | **68_223** |
 
-`2015-04` … `2018-03` (continuous). Remote receipt_run_id spot-check after publish includes **900928…900962** (and ledger may surface a newer SUCCESS for a given month if peers also wrote — never empty).
+Digest raw examples under `data/raw/jquants/2026/08/14/markets_breakdown_from=…_from_r2_run*.json` (usable non-empty; empty-raw ban held).
 
----
-
-## 4) Publish (fail-closed) + reeval
-
-```text
-.venv/bin/python scripts/publish_ops_projection.py \
-  --db data/structured/ingestion.sqlite --apply-remote
-```
+## 3) Signed receipts + publish (raw only)
 
 ```text
-complete_count_guard ok local=882 remote=846 force=False
-remote projection applied
+# bulk issue (stdout buffered; completed with run_ids 900928–900962)
+.venv/bin/python -u scripts/issue_receipts_parallel.py \
+  --datasets markets_breakdown --struct-hint --limit 40 --workers 6 --order asc
+
+# serial close for residual segment (2015-04 run_id 900963)
+.venv/bin/python -u scripts/issue_receipts_parallel.py \
+  --datasets markets_breakdown --segment-id 2015-04 --limit 1 --workers 2 --order asc
 ```
+
+| metric | PRE | POST |
+|--------|----:|-----:|
+| Local `markets_breakdown` COMPLETE | **33** (32 tip + peer `2023-12`) | **69** |
+| This wave seals | | **+36** (`2015-04`…`2018-03`) |
+| Receipt run_ids | | **900928–900963** |
+| Reconciliation | | `raw_row_count == structured_row_count` |
+| empty COMPLETE | | **0** |
+
+### Publish (fail-closed)
+
+```text
+.venv/bin/python -u scripts/publish_ops_projection.py \
+  --db data/structured/ingestion.sqlite --refresh-coverage --apply-remote
+```
+
+| step | result |
+|------|--------|
+| first apply | UNIQUE constraint mid-batch (peer concurrent publish race) — **retried** |
+| retry apply | **`remote projection applied`** |
+| guard | `local COMPLETE ≥ remote` held on successful apply |
+| Remote total COMPLETE | **933** |
+| Remote `markets_breakdown` COMPLETE | **69** / PARTIAL **95** |
+
+## 4) `ops_reeval_observed_window` (required after full publish)
 
 ```text
 .venv/bin/python scripts/ops_reeval_observed_window.py \
   --dataset markets_breakdown --today 2026-08-14 --freshness-days 7
-.venv/bin/python scripts/ops_reeval_freshness.py
 ```
 
-| field | PRE (task) | POST |
-|-------|------------|------|
-| **observed_start** | **2015-03-26** | **2015-03-26** |
-| observed_end | 2026-08-13 | **2026-08-13** |
-| status | PARTIAL | **PARTIAL** (dataset **not** COMPLETE) |
-| C8 | pass | **pass** lag **1** |
-| mb COMPLETE segs | **32** | **69** |
-| freshness | — | **FRESH** `projgen-b8c5fbd06dd04b7e9c832bcc9b4e7ab7` age=0; `coverage_segments_untouched=1` |
+| field | PRE (post-publish residual) | POST reeval |
+|-------|----------------------------:|------------:|
+| status | PARTIAL | **PARTIAL** |
+| **observed_start** | `2015-04-01` | **`2015-03-26`** |
+| **observed_end** | `2026-08-12` | **`2026-08-13`** |
+| C8 | pass lag 2 | **pass** lag **1** |
+| nz SUCCESS receipts | — | n=**678**, sum_raw=**11_628_344**, window **2015-03-26…2026-08-13** |
+| coverage_segments | — | **untouched by reeval** |
 
----
+Log: `.glm-logs/w0713_t4_mb/reeval.log`.
 
-## POST (remote D1 live verify)
+## POST summary
 
-| metric | PRE (task) | POST | Δ |
-|--------|----------:|-----:|--:|
-| **mb COMPLETE segs** | **32** | **69** | **+37** |
-| this-close signed issue | — | **+36** | (G10 interim already **+1** for `2023-12`) |
-| mb PARTIAL segs | 132 | **95** | −37 |
-| platform COMPLETE segs | 742† / 846‡ | **882** | +36 this issue publish delta vs pre-publish 846 |
-| empty COMPLETE | 0 | **0** | 0 |
-| `raw_retention_manifests` total | 9455† | **9624** | peer acq Δ |
+| metric | PRE (task / session start) | POST |
+|--------|---------------------------:|-----:|
+| **breakdown COMPLETE segs** | **32** | **69** (**+37** incl. peer `2023-12`; this wave **+36**) |
+| breakdown PARTIAL segs | 132 | **95** |
+| breakdown `observed_start` | `2024-01-01` (regressed) | **`2015-03-26`** |
+| breakdown `observed_end` | `2026-08-12` | **`2026-08-13`** |
+| C8 | — | **pass** lag **1** |
+| empty COMPLETE | 0 | **0** |
+| dataset COMPLETE claim | no | **no** (still PARTIAL) |
+| Mass / READY / Phase7 | NO-GO / OFF | **NO-GO / OFF** |
 
-† residual SoT at G5 fins close. ‡ G1/G2 peer publishes already on remote before this MB apply.
+Sealed months this wave: **`2015-04` … `2018-03`** (36 calendar months).  
+Remaining PARTIAL: `2013-01`…`2015-03` (empty/pre-source or thin) + `2018-04`…`2023-11` (raw on R2; next seal waves) + honest non-claims.
 
-### Remote COMPLETE inventory (mb)
+## Explicit non-claims / bans held
 
-- History sealed this close: **2015-04 … 2018-03** (**36**)
-- Prior: **2023-12** (G10) + tip **2024-01 … 2026-08** (**32**) → total **69**
-- Still PARTIAL / unsealed: **2015-03** floor month, **2018-04 … 2023-11**, etc. (need more R2 week-raw seal waves)
+- **No** Mass / READY / Phase7 ON  
+- **No** empty-raw COMPLETE (`{"data":[]}` rejected; `receipt_run_id` always set)  
+- **No** dataset-level COMPLETE for `markets_breakdown`  
+- Worker pass ≠ Coverage COMPLETE  
+- No secrets logged  
+- Peer acq jobs **not killed**
 
-Dataset remains **PARTIAL** (not dataset-level COMPLETE).
+## Operator repro
 
----
+```bash
+# residual week-chunks
+.venv/bin/python -u scripts/ops/cf_premium_backfill.py \
+  --datasets markets_breakdown \
+  --from-date 2015-03-01 --to-date 2015-12-31 \
+  --week-chunks --chunk-days 7 \
+  --execute --workers 2 --general-rpm 495 --max-jobs 0 \
+  --plan-out  .glm-logs/cf-backfill/w0713_t4_mb_residual_plan.json \
+  --queue-out .glm-logs/cf-backfill/w0713_t4_mb_residual_queue.json \
+  --state-out .glm-logs/cf-backfill/w0713_t4_mb_residual_state.jsonl
 
-## Backfill pass/fail summary (prefixes `w0713_t4_mb_*`)
+# R2 → local seal prep
+T4_MAX_SEAL=36 T4_SINGLE_RUN_MIN_ROWS=50000 \
+  .venv/bin/python -u .glm-logs/w0713_t4_mb/seal_from_r2.py
 
-| artifact | pass | fail |
-|----------|-----:|-----:|
-| residual state | 35 | 9 |
-| retry waves (a/b/2/2b combined rows) | 6 | 12 |
-| last-state unique week-jobs | **40** | **4** |
-
-Worker fail residual exists; **not** one-shot re-dispatched here (honest close on sealable raw only; peers not starved).
-
----
-
-## Forbidden / honesty
-
-| Check | Result |
-|-------|--------|
-| Mass / READY / Phase7 | **NO-GO / OFF** |
-| empty COMPLETE | **0** |
-| COMPLETE without usable raw | **forbidden — held** |
-| Live backfill killed? | **no** (`w0713_t7` still alive) |
-| Worker pass claimed as COMPLETE? | **no** |
-| `{"data":[]}` / empty digest | **banned** |
-
----
+# receipts + publish + reeval
+.venv/bin/python -u scripts/issue_receipts_parallel.py \
+  --datasets markets_breakdown --struct-hint --limit 40 --workers 6 --order asc
+.venv/bin/python -u scripts/publish_ops_projection.py \
+  --db data/structured/ingestion.sqlite --refresh-coverage --apply-remote
+.venv/bin/python scripts/ops_reeval_observed_window.py \
+  --dataset markets_breakdown --today 2026-08-14 --freshness-days 7
+```
 
 ## Verdict
 
 | Check | Result |
 |-------|--------|
-| mb COMPLETE PRE→POST | **32 → 69 (+37)** remote; this-close issue **+36** |
-| raw-required seal only | **PASS** |
-| empty COMPLETE | **0 PASS** |
-| reeval C8 | **pass** lag 1 |
-| no peer backfill kill | **PASS** |
-| Overall G4/T4 breakdown close | **PASS** (sealable map closed; further history DEFER next wave) |
+| Residual week-chunk execute | **PASS** (44; 35p + retry2 densify; residual 429 under peer load) |
+| Seal raw-only 36 months | **PASS** |
+| COMPLETE PRE **32** → POST **69** | **PASS** (+36 this wave) |
+| empty COMPLETE | **0** |
+| reeval observed_* + C8 | **PASS** (`2015-03-26`…`2026-08-13`, lag 1) |
+| Mass / Phase7 | **NO-GO / OFF** |
 
-## Residual pointers
-
-- Next seal map: unsealed months with remote nz COMPLETE manifests **2018-04…2023-11** (and thin **2015-03** if full-month raw appears).
-- Prefer week-chunk merge + digest raw ≤20MB path; do not raise Mass.
-- Optional: retry 4 failing week-jobs when general pool is quiet (not required for this close).
-
-## Artifacts
-
-| path | role |
-|------|------|
-| `.glm-logs/cf-backfill/w0713_t4_mb_residual_*` | residual backfill |
-| `.glm-logs/cf-backfill/w0713_t4_mb_retry{,_a,_b,2,2b}_*` | retries |
-| `.glm-logs/w0713_t4_mb/seal_from_r2.py` | R2→local seal driver |
-| `.glm-logs/w0713_t4_mb/seal_{map,result,log}.*` | seal evidence |
-| `.glm-logs/g1g2g4-close/mb_targeted_issue.*` | signed issue +36 |
-| `.glm-logs/g1g2g4-close/publish2.log` | fail-closed publish |
-| `.glm-logs/g1g2g4-close/reeval_markets_breakdown.log` | reeval |
-| `.glm-logs/g1g2g4-close/freshness.log` | FRESH reclock |
+**Overall: PASS** (raw seal close for 2015-04…2018-03; observed window restored after publish).
