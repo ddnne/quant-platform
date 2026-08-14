@@ -2,7 +2,7 @@
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
 **Live verified:** 2026-08-15 (JST) / ~2026-08-14T16:13Z UTC (remote D1; COMPLETE segs **3023**; Dataset COMPLETE **7**; bars COMPLETE **220**/post-floor residual **0**; FRESH `projgen-a47f87a2…`; empty COMPLETE **0**; Phase7 **OFF**; **W11-G3 w0815c_g3_bars** residual verify)
-**Repo tip:** *(see latest commit SHA after W11-G3 push)* — COMPLETE **3023** / bars **220** / Dataset COMPLETE **7** / FRESH `projgen-a47f87a2…` / empty COMPLETE **0** / Phase7 **OFF** / w0815c G3 bars residual
+**Repo tip:** `28abeebdce6fd66c3f2a83a6d9bec56a466bd58c` — COMPLETE **3023** / bars **220** / Dataset COMPLETE **7** / FRESH `projgen-a47f87a2…` / empty COMPLETE **0** / Phase7 **OFF** / w0815c G3 bars residual
 
 ## Live snapshot (remote D1 `quant-ingest`)
 
