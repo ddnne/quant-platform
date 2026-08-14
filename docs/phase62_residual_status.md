@@ -2,7 +2,7 @@
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
 **Live verified:** 2026-08-15 (JST) / ~2026-08-14T15:45Z UTC (remote D1; COMPLETE segs **2922**; Dataset COMPLETE **5**; topix/idx **220+4 empty DEFER**; FRESH `projgen-6ffab6ba…`; empty COMPLETE **0**; Phase7 **OFF**; **W10-G8 topix/idx** + G12 surface)
-**Repo tip:** *(post-push)* — COMPLETE **2922** / topix+idx residual empty DEFER / FRESH `projgen-6ffab6ba…` / empty COMPLETE **0** / Phase7 **OFF** / W10-G8
+**Repo tip:** `66fab4d158227d19bd6880424cd90710e8393fe7` — COMPLETE **2922** / topix+idx residual empty DEFER / FRESH `projgen-6ffab6ba…` / empty COMPLETE **0** / Phase7 **OFF** / W10-G8
 
 ## Live snapshot (remote D1 `quant-ingest`)
 
