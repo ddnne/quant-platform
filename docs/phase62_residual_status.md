@@ -1,8 +1,8 @@
 # Phase 6.2 / 6.3 residual status
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
-**Live verified:** 2026-08-14 (JST) / ~2026-08-14T05:34Z UTC (remote D1; COMPLETE segs **1956**; raw_n **11701**; margin family+investor wave **+80**; FRESH `projgen-c0739f41…`; empty COMPLETE **0**; Phase7 **OFF**; **W3-G4 w0814c_g4_misc +80**)  
-**Repo tip:** `837a696fa01fa4165e43fbe6102bef001bd816db` — COMPLETE **1956** / margin **65**/alert **66**/short_ratio **80**/short_sale **51**/investor **58** / FRESH `projgen-c0739f41…` / empty COMPLETE **0** / Phase7 **OFF** / w0814c G4 misc
+**Live verified:** 2026-08-14 (JST) / ~2026-08-14T05:52Z UTC (remote D1; COMPLETE segs **1986**; futures/options/o225 **56/14/56**; FRESH `projgen-df80f965…`; empty COMPLETE **0**; Phase7 **OFF**; **W3-G3 w0814c_g3_deriv +30**)  
+**Repo tip:** (set on push) — COMPLETE **1986** / futures/options/o225 **56/14/56** / FRESH `projgen-df80f965…` / empty COMPLETE **0** / Phase7 **OFF** / w0814c G3 deriv  
 
 ## Live snapshot (remote D1 `quant-ingest`)
 
@@ -67,6 +67,7 @@
 | w0814b g6 edinet | **2.13** | **36** | **36p/0f**; seal+issue **+36** → COMPLETE **32→44** each; observed_start **`2023-01-01`** |
 | w0814b g7 misc seal | — | **80** | **W2-G7** R2 seal **80/80** + issue/restore; wave months **+80** (unique restore **+34** after peer race); C8 margin **pass lag2 held**; acq execute DEFER (dry-run **660**) |
 | w0814b g5 deriv residual | **~1.3** | **34+** | **W2-G5** paced rpm45; futures/o225 **2023 12/12**; options 2025 weeks cont.; seals **+27** → futures/opt/o225 **44/8/44** |
+| w0814c g3 deriv residual | **~1.3** | **24+** | **W3-G3** paced rpm45; futures/o225 **2022 12/12**; options seal **2025-07…12**; seals **+30** → futures/opt/o225 **56/14/56** |
 | w0814b g4 fins residual | **1.85** | **48** | **W2-G4** serial paced **48/48** pass (0×429); seal+issue **+48**; COMPLETE fins **54/47/26/26→66/59/38/38** |
 | w0814b all-sources **G9 close** | — | — | proof [`w0814b_all_sources_wave_20260814.md`](proof/w0814b_all_sources_wave_20260814.md) PRE **10702/1376** → POST **11242/1478** |
 | w0814c g7 earn+am residual | — | **230** | **W3-G7** dry-run **230** (earn 199 + am 31); acq+seal **DEFER** tip-Date / today-mode; COMPLETE **1/1** held |
@@ -104,9 +105,9 @@
 | `fins_earnings_date` | **PARTIAL** | **38** | **`2018-01-01`** | **`2026-08-13`** | — | prior **26** + **W2-G4 w0814b_g4_fins +12** (`2020-01…12`) → COMPLETE segs **38** (`2018-01…12` + `2019-01…12` + `2020-01…12` + tips); C8 **pass** lag **1**; dataset **not** COMPLETE |
 | `markets_short_sale_report` | PARTIAL | **51** | **`2012-01-10`** | **`2026-08-13`** | — | prior **35** + **W3-G4 misc +16** `2016-07…2017-10`; C8 **pass** lag **1**; observed_start reeval **2012-01-10** |
 | `indices_bars_daily` | PARTIAL | **220** | **`2008-05-01`** | **`2026-08-13`** | — | prior **129** + **W3-G5 w0814c_g5 +91** seal (`2017-03…2023-12` + tip holes); residual PARTIAL **4** (`2008-01…04` empty DEFER); C8 **pass** lag **1**; dataset **not** COMPLETE |
-| `derivatives_bars_daily_futures` | PARTIAL | **44** | **`2023-01-01`** | **`2026-08-13`** | — | **W2-G5** +12 **2023** (prior 32) → **44**; G3 2022 acq cont.; C8 **pass** lag 1; pre-2023 DEFER seal |
-| `derivatives_bars_daily_options` | PARTIAL | **11** | **`2025-07-01`** | **`2026-08-13`** | — | prior **8** + **W3-G9 +3** (`2025-07…09`); continuous **2025-07…2026-08**; further 2025 weeks acq cont.; C8 **pass** lag 1 |
-| `derivatives_bars_daily_options_225` | PARTIAL | **44** | **`2023-01-01`** | **`2026-08-13`** | — | **W2-G5** +12 **2023** → **44**; G3 2022 acq cont.; C8 **pass** lag 1; pre-2023 DEFER seal |
+| `derivatives_bars_daily_futures` | PARTIAL | **56** | **`2022-01-01`** | **`2026-08-13`** | — | **W3-G3 w0814c_g3_deriv +12** `2022-01…12` (prior 44 from W2-G5) → **56**; C8 **pass** lag 1; pre-2022 DEFER |
+| `derivatives_bars_daily_options` | PARTIAL | **14** | **`2025-07-01`** | **`2026-08-13`** | — | **W3-G3 +6** (`2025-07…12`) continuous into **2026-01…08**; gap ~150; H1 acq cont.; C8 **pass** lag 1 |
+| `derivatives_bars_daily_options_225` | PARTIAL | **56** | **`2022-01-01`** | **`2026-08-13`** | — | **W3-G3 w0814c_g3_deriv +12** `2022-01…12` (prior 44 from W2-G5) → **56**; C8 **pass** lag 1; pre-2022 DEFER |
 
 ## Proof index (aggregate — do not orphan)
 
@@ -114,6 +115,7 @@
 | Proof | What it closes |
 |-------|----------------|
 | [`docs/proof/w0814c_g4_misc_20260814.md`](proof/w0814c_g4_misc_20260814.md) | **W3-G4 w0814c_g4_misc** next seal wave: dry-run **580** (execute DEFER); R2 seal **80/80** (`2015-09…2016-12` ×4 + short_sale `2016-07…2017-10`); issue/restore; COMPLETE margin **49→65** / alert **50→66** / short_ratio **64→80** / short_sale **35→51** / investor **42→58** (**+80** wave); unique restore **+53** after peer race; **C8 margin pass lag2 held**; platform **1956**; empty **0**; FRESH `projgen-c0739f41…` |
+| [`docs/proof/w0814c_g3_deriv_20260814.md`](proof/w0814c_g3_deriv_20260814.md) | **W3-G3 w0814c_g3_deriv residual**: acq futures/o225 **2022 24/24** host ~rpm45; options seal **2025-07…12** + H1 acq cont.; R2 seal+issue **+30**; COMPLETE futures/opt/o225 **44/8/44→56/14/56**; platform **1986**; C8 pass×3; empty **0**; FRESH `projgen-df80f965…` |
 | [`docs/proof/w0814c_g6_edinet_20260814.md`](proof/w0814c_g6_edinet_20260814.md) | **W3-G6 w0814c_g6_edinet**: acq 2022 **36/36** (main 34p/2f + retry 3/3) host **2.51**/min (0×429); R2 seal **36/36** (pass1 33 + lock-retry 3); issue **+24** (runs **902249–902272**) + peer race **+12** → COMPLETE **44→56** each (+12×3); platform POST **1891**; observed_start **`2022-01-01`**; C8 pass lag 4/4/1; empty **0**; FRESH `projgen-b85f736b…` |
 | [`docs/proof/w0814c_g5_idx_mb_20260814.md`](proof/w0814c_g5_idx_mb_20260814.md) | **W3-G5 w0814c_g5**: idx residual acq **95** (67p/28f + retry **28/28**, rpm **7.62/4.02**, 0×429); R2 seal+issue **+91** → idx COMPLETE **129→220**; mb residual seal probe sealable **0** pre-2015 **DEFER** (COMPLETE **137→137**); platform **1867**; C8 pass lag1×2; empty **0**; FRESH `projgen-463803f9…` |
 | [`docs/proof/w0814c_all_sources_wave_20260814.md`](proof/w0814c_all_sources_wave_20260814.md) | **W3-G9 w0814c all-sources close**: PRE tip `4164545` raw **11281** COMPLETE **1727** → POST raw **11656** COMPLETE **1789** (+62); margin **64**/alert **62**/idx **143**/options **11**/cross **55**/OTC **17**; reeval×5 C8 pass; FRESH `projgen-00c6312e…`; empty **0**; peers not killed |
