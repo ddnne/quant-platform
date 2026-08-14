@@ -1,8 +1,8 @@
 # Phase 6.2 / 6.3 residual status
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
-**Live verified:** 2026-08-14 (JST) / ~2026-08-14T04:00Z UTC (remote D1; COMPLETE segs **1585**; FRESH `projgen-653a369e…`; empty COMPLETE **0**; Phase7 **OFF**; **W2-G5 w0814b_g5_deriv +27** + prior W2-G6/G7 peers)  
-**Repo tip:** `da8f425f81ba6603cff991081121df4776f768be` — COMPLETE **1585** / futures **44** / options **8** / o225 **44** / FRESH `projgen-653a369e…` / empty COMPLETE **0** / Phase7 **OFF** / w0814b G5 deriv
+**Live verified:** 2026-08-14 (JST) / ~2026-08-14T04:12Z UTC (remote D1; COMPLETE segs **1654**; FRESH `projgen-881ff280…`; empty COMPLETE **0**; Phase7 **OFF**; **W2-G2 w0814b_g2_mb +32** mb **137** + prior peers)  
+**Repo tip:** `04e3b7ae84283aac33c6e668d8b03b99ca2515c0` — COMPLETE **1654** / mb **137** / FRESH `projgen-881ff280…` / empty COMPLETE **0** / Phase7 **OFF** / w0814b G2 mb
 
 ## Live snapshot (remote D1 `quant-ingest`)
 
@@ -10,16 +10,16 @@
 |------|--------|
 | Dataset COMPLETE | **3** — `markets_calendar` (224/224), `jsda_tokyo_repo_rates` (1/1), **`jsda_corporate_bond_transactions` (12/12)** |
 | Dataset STALE | **0** (margin PARTIAL via receipt reeval; not STALE) |
-| Segment COMPLETE total | **1585** (remote; prior **1566** + **W2-G5 deriv +27** unique + concurrent peers; **no** empty COMPLETE) |
+| Segment COMPLETE total | **1654** (remote; prior **1585** + **W2-G2 mb +21** unique issue + concurrent peers; **no** empty COMPLETE) |
 | Segment other | PARTIAL / UNKNOWN (remainder; not mass-READY) |
 | calendar segments | **224 COMPLETE / 0 PARTIAL** |
 | JSDA OTC COMPLETE segs | **11** — `2026-07-30/31` + `2026-08-03`…`07` + `10` + `12`…`14` (**W2-G8 +2** tip/recent raw; further history **DEFER** site timeout) |
 | JSDA corporate COMPLETE segs | **12** — years **`2015`…`2026`** (**G9 +11**; full annual TORIHIKI; dataset **COMPLETE**) |
-| A3 sealed (partial datasets) | prior + w0814 FINAL **1376** + w0814b G9 **1478** + W2-G6/G7 + **W2-G5 deriv +27** → COMPLETE **1585** |
+| A3 sealed (partial datasets) | prior + w0814 FINAL **1376** + w0814b G9 **1478** + W2-G6/G7 + W2-G5 deriv + **W2-G2 mb +32** → COMPLETE **1654** |
 | Remote `raw_retention_manifests` | multi-track acq (w0814b G5 deriv paced cont.; worker pass ≠ COMPLETE) |
 | Track A + P0 execute | **w0713 T1–T17 DONE/DEFER** + **w0814 peers** + **w0814b G1–G9** + **W2-G5 deriv** + **W2-G6 edinet** + **W2-G7 misc seal**; **Worker pass ≠ COMPLETE** |
 | master | `scd2_event_sourcing` / D1 hot |
-| projection | **FRESH** — `projgen-653a369ea4fc43acb3968050ad85ef82` (W2-G5 reeval freshness; segs untouched by reclock) |
+| projection | **FRESH** — `projgen-881ff280eb8c4d98af4b4e6bf136c0a6` (W2-G2 reeval freshness; segs untouched by reclock) |
 | sticky COMPLETE | **fixed** segment_id fallback + post-sticky dataset aggregate + COMPLETE inventory retain past UTC target_end (`coverage_ledger.py`) |
 | Full publish guard | `scripts/publish_ops_projection.py` fail-closed |
 | Targeted freshness | `scripts/ops_reeval_freshness.py` (no segment rewrite) |
