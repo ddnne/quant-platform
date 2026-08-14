@@ -278,13 +278,18 @@ async function collectWithDiscovery(
 
     const rootLinks = extractLinks(rootHtml, rootIndex);
     let yearPages = rootLinks.filter(isYearArchive);
+    // Prefer highest archive year first (list order on index is not reliable).
+    yearPages = yearPages.slice().sort((a, b) => {
+      const ya = Number(YEAR_ARCHIVE_RE.exec(new URL(a).pathname)?.[1] || 0);
+      const yb = Number(YEAR_ARCHIVE_RE.exec(new URL(b).pathname)?.[1] || 0);
+      return yb - ya;
+    });
     const maxYearPages = Math.max(
       0,
       Math.min(100, Number(env.MAX_YEAR_PAGES ?? "0") || 0),
     );
-    // Prefer latest year pages when limiting (often higher years last in list).
     if (maxYearPages > 0) {
-      yearPages = yearPages.slice().reverse().slice(0, maxYearPages);
+      yearPages = yearPages.slice(0, maxYearPages);
     }
     const dataFromRoot = rootLinks.filter(isDataUrl);
 
