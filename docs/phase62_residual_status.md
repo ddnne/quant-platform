@@ -92,6 +92,7 @@
 ### COMPLETE seals
 | Proof | What it closes |
 |-------|----------------|
+| [`docs/proof/w0814_g9_jsda_20260814.md`](proof/w0814_g9_jsda_20260814.md) | **G9 JSDA**: OTC **+3** (`2026-08-03/04/05` runs **901241–901243**) → COMPLETE **9**; corporate **+11** annual 2015–2025 + full 2026 re-seal → **12/12 dataset COMPLETE** (runs **901244–901255**); repo verify COMPLETE; remote COMPLETE **1056**; empty **0**; FRESH `projgen-e1b67b…`; history DEFER |
 | [`docs/proof/w0814_g4_master_residual_20260814.md`](proof/w0814_g4_master_residual_20260814.md) | **G4 `w0814_g4_master` residual**: plan **21** (`2006-08…2008-04`); acq wave1 **0p/21f** + retry **0p/21f** (400 sub + 429×20); seal window_ok **0** / window_bad **21** DEFER; COMPLETE **220→220 (+0)**; C8 pass lag1; FRESH `projgen-14c0bb…`; empty **0** |
 | [`docs/proof/w0713_instruction_final_20260814.md`](proof/w0713_instruction_final_20260814.md) | **W0713 instruction final T1–T17**: PRE tip `83fe7c0` raw **7917** COMPLETE **585** 停滞4 **12/94/32/32** → POST raw **9687**/c **8567** COMPLETE **942** 停滞4 **42/220/82/69**; reeval×5 C8 pass; FRESH `projgen-98b032…` age=0; empty **0**; Mass NO-GO; Phase7 OFF |
 | [`docs/proof/g7_t9_t10_margin_inv_20260814.md`](proof/g7_t9_t10_margin_inv_20260814.md) | **G7 T9+T10 `w0713_t7_margin_inv`**: plan **970** → wave1 **918p/52f** + retry **52/52** = **970/970**; host POST/min **9.61**; raw **8008→9687**; short_sale start **2013-11-01**; **C8 margin pass lag2 held**; COMPLETE +N **0**; empty **0**; FRESH `projgen-f15c9…` |
