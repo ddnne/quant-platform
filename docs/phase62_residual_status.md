@@ -2,7 +2,7 @@
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
 **Live verified:** 2026-08-15 (JST) / ~2026-08-14T16:30Z UTC (remote D1; COMPLETE segs **3111**; raw_n **14131**; Dataset COMPLETE **7**; FRESH `projgen-7662cb5d…`; empty COMPLETE **0**; Phase7 **OFF**; **W9-G1 w0815_g1_general** deriv+edinet densify/seal + peers)
-**Repo tip:** `(pending commit)` — COMPLETE **3111** / raw **14131** / Dataset COMPLETE **7** / FRESH `projgen-7662cb5d…` / empty COMPLETE **0** / Phase7 **OFF** / w0815_g1_general
+**Repo tip:** `33440c378e8ebf3616f4a28e8dea068df553b89f` — COMPLETE **3111** / raw **14131** / Dataset COMPLETE **7** / FRESH `projgen-7662cb5d…` / empty COMPLETE **0** / Phase7 **OFF** / w0815_g1_general
 
 ## Live snapshot (remote D1 `quant-ingest`)
 
