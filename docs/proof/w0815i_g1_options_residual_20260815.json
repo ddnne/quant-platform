@@ -1,0 +1,113 @@
+{
+  "wave": "w0815i_g1_options / W17-G1",
+  "ts": "2026-08-14T23:51:16.884773+00:00",
+  "dataset": "derivatives_bars_daily_options",
+  "PRE": {
+    "remote_complete": 157,
+    "remote_partial": [
+      "2022-12",
+      "2023-01",
+      "2023-02",
+      "2023-03",
+      "2023-04",
+      "2023-05",
+      "2023-06"
+    ],
+    "local_complete": 160,
+    "local_partial": [
+      "2023-03",
+      "2023-04",
+      "2023-05",
+      "2023-06"
+    ]
+  },
+  "POST": {
+    "remote_complete_by_ds": [
+      {
+        "dataset": "derivatives_bars_daily_futures",
+        "status": "COMPLETE",
+        "n": 164
+      },
+      {
+        "dataset": "derivatives_bars_daily_options",
+        "status": "COMPLETE",
+        "n": 164
+      },
+      {
+        "dataset": "derivatives_bars_daily_options_225",
+        "status": "COMPLETE",
+        "n": 164
+      }
+    ],
+    "remote_partial": [],
+    "remote_dataset_coverage": [
+      {
+        "dataset": "derivatives_bars_daily_futures",
+        "status": "COMPLETE",
+        "observed_start": "2013-01-04",
+        "observed_end": "2026-08-14"
+      },
+      {
+        "dataset": "derivatives_bars_daily_options",
+        "status": "COMPLETE",
+        "observed_start": "2013-01-04",
+        "observed_end": "2026-08-14"
+      },
+      {
+        "dataset": "derivatives_bars_daily_options_225",
+        "status": "COMPLETE",
+        "observed_start": "2013-01-04",
+        "observed_end": "2026-08-14"
+      }
+    ],
+    "remote_total": [
+      {
+        "status": "COMPLETE",
+        "n": 3417
+      },
+      {
+        "status": "PARTIAL",
+        "n": 9526
+      },
+      {
+        "status": "UNKNOWN",
+        "n": 1
+      }
+    ],
+    "local_complete": 164,
+    "local_partial": [],
+    "local_dataset_coverage": [
+      {
+        "dataset": "derivatives_bars_daily_futures",
+        "status": "COMPLETE",
+        "observed_start": "2013-01-04",
+        "observed_end": "2026-08-14"
+      },
+      {
+        "dataset": "derivatives_bars_daily_options",
+        "status": "COMPLETE",
+        "observed_start": "2013-01-04",
+        "observed_end": "2026-08-14"
+      },
+      {
+        "dataset": "derivatives_bars_daily_options_225",
+        "status": "COMPLETE",
+        "observed_start": "2013-01-04",
+        "observed_end": "2026-08-14"
+      }
+    ]
+  },
+  "closed_segs": [
+    "2022-12",
+    "2023-01",
+    "2023-02",
+    "2023-03",
+    "2023-04",
+    "2023-05",
+    "2023-06"
+  ],
+  "densify": "skipped_raw_ready",
+  "dataset_complete": true,
+  "empty_raw_ban": "held",
+  "mass": "NO-GO"
+}
