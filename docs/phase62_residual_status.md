@@ -1,31 +1,32 @@
 # Phase 6.2 / 6.3 residual status
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
-**Live verified:** 2026-08-15 (JST) / ~2026-08-14T23:22Z UTC (remote D1; COMPLETE segs **3409**; raw_n **14953**; Dataset COMPLETE **10**; FRESH `projgen-6899460e…`; empty COMPLETE **0**; Phase7 **OFF**; **W16-G6 w0815h_g6_ops** continuous publish+reeval + dual-issue gate + peers)
-**Repo tip:** `a8b4645152a39140c74938004bd47ea9afe43480` — COMPLETE **3409** / raw **14953** / Dataset COMPLETE **10** / FRESH `projgen-6899460e…` / empty COMPLETE **0** / Phase7 **OFF** / w0815h_g6_ops
+**Live verified:** 2026-08-15 (JST) / ~2026-08-14T23:55Z UTC (remote D1; COMPLETE segs **3421**; Dataset COMPLETE **11**; FRESH `projgen-a1b1ff51…`; empty COMPLETE **0**; Phase7 **OFF**; **W15-G1 w0815g_g1_options** surgical reagg → options **164/164** + dataset COMPLETE)
+**Repo tip:** `c394e500a7143feada3345b8798685d77872c13b` — COMPLETE **3421** / Dataset COMPLETE **11** / FRESH `projgen-a1b1ff51…` / empty COMPLETE **0** / Phase7 **OFF** / w0815g_g1_options
 
 ## Live snapshot (remote D1 `quant-ingest`)
 
 | Item | Value |
 |------|--------|
-| Dataset COMPLETE | **10** — `markets_calendar` (224/224), `jsda_tokyo_repo_rates` (1/1), `jsda_corporate_bond_transactions` (12/12), `equities_investor_types` (164/164), `edinet_major_shareholders` (104/104), `markets_margin_alert` (164/164), `markets_margin_interest` (164/164), `markets_short_ratio` (164/164), **`derivatives_bars_daily_futures` (164/164)**, **`derivatives_bars_daily_options_225` (164/164)** |
-| Dataset COMPLETE surfaces | **aligned** — `dataset_coverage.status` **10** (W10-G12 investor/edinet_major + W11-G1 margin + W12-G3 short_ratio + **W13-G3 futures/o225**; held through **W16-G6** ops; proof [`w0815e_g3_dataset_complete_20260815.md`](proof/w0815e_g3_dataset_complete_20260815.md), [`w0815h_g6_ops_20260815.md`](proof/w0815h_g6_ops_20260815.md)) |
+| Dataset COMPLETE | **11** — `markets_calendar` (224/224), `jsda_tokyo_repo_rates` (1/1), `jsda_corporate_bond_transactions` (12/12), `equities_investor_types` (164/164), `edinet_major_shareholders` (104/104), `markets_margin_alert` (164/164), `markets_margin_interest` (164/164), `markets_short_ratio` (164/164), **`derivatives_bars_daily_futures` (164/164)**, **`derivatives_bars_daily_options_225` (164/164)**, **`derivatives_bars_daily_options` (164/164)** |
+| Dataset COMPLETE surfaces | **aligned** — `dataset_coverage.status` **11** (prior **10** + **W15-G1 options** 164/164 surgical reagg+verify; proof [`w0815g_g1_options_20260815.md`](proof/w0815g_g1_options_20260815.md), [`w0815e_g3_dataset_complete_20260815.md`](proof/w0815e_g3_dataset_complete_20260815.md)) |
 | Dataset STALE | **0** |
-| Segment COMPLETE total | **3409** (remote; W16-G6 PRE **3391** → POST **3409** **+18** peers+G6 publish; G6 owned issue **+0** dual-gate; peer options **+15** fins **+2** OTC **+1**; **no** empty COMPLETE) |
+| Segment COMPLETE total | **3421** (remote; W15-G1 PRE **3380** → POST **3421** **+41**; options **+29** residual reagg seal; concurrent peers; **no** empty COMPLETE) |
 | Segment other | PARTIAL / UNKNOWN (remainder; not mass-READY) |
 | calendar segments | **224 COMPLETE / 0 PARTIAL** |
 | JSDA OTC COMPLETE segs | **49** — tip/recent sealed (**W16 peer +1**; prior W15 **48**); further tip/archive **DEFER** site timeout (D5) |
 | JSDA corporate COMPLETE segs | **12** — years **`2015`…`2026`** (**G9 +11**; full annual TORIHIKI; dataset **COMPLETE**) |
 | **markets_short_ratio** | segs **164/164 COMPLETE** + `dataset_coverage` **COMPLETE** (W12-G3 surgical re-agg; **W13/W14 verify held**) |
 | **derivatives_bars_daily_futures** | segs **164/164 COMPLETE** + `dataset_coverage` **COMPLETE** (**W13-G3** surgical re-agg; segs closed W12-G4; **W16-G6 held**) |
-| **derivatives_bars_daily_options_225** | segs **164/164 COMPLETE** + `dataset_coverage` **COMPLETE** (**W13-G3** surgical re-agg; segs closed W12-G4; **W16-G6 held**) |
+| **derivatives_bars_daily_options_225** | segs **164/164 COMPLETE** + `dataset_coverage` **COMPLETE** (**W13-G3** surgical re-agg; segs closed W12-G4; **W15-G1 held**) |
+| **derivatives_bars_daily_options** | segs **164/164 COMPLETE** + `dataset_coverage` **COMPLETE** (**W15-G1** surgical full-month reagg from week R2 + issue; residual **0**) |
 | **markets_short_sale_report** | COMPLETE **154** / PARTIAL **10** (`2013-01…10` pre-history; **no nz raw** → densify **DEFER**) |
 | **markets_breakdown** | COMPLETE **137** / PARTIAL **27** (`2013-01…2015-03`) — **W10-G9 DEFER_pre2015_empty**; source floor **2015-03-26**; island **`2015-04…2026-08`**; observed_start **`2015-03-26`**; history_target **`2013-01-04`** (contract held) |
-| A3 sealed (partial datasets) | prior + **W6–W16 peers** + **W16-G6 ops publish** → COMPLETE **3409** |
-| Remote `raw_retention_manifests` | **14953** total (W16-G6 PRE **14910** → POST **14953** **+43**; worker pass ≠ COMPLETE) |
-| Track A + P0 execute | **w0713…w0815h** + **W16-G6 ops** + peers; **Worker pass ≠ COMPLETE** |
+| A3 sealed (partial datasets) | prior + **W6–W16 peers** + **W15-G1 options reagg** → COMPLETE **3421** |
+| Remote `raw_retention_manifests` | options nz COMPLETE **754** (emptyish **25** held; worker pass ≠ COMPLETE) |
+| Track A + P0 execute | **w0713…w0815h** + **W15-G1 options** + peers; **Worker pass ≠ COMPLETE** |
 | master | `scd2_event_sourcing` / D1 hot |
-| projection | **FRESH** — `projgen-6899460e4e994e1d8662f02cc342f4e9` (W16-G6 reeval freshness; segs untouched by reclock; prior W15-G4 `projgen-462e902c…` / loop `projgen-b63aadf8…`) |
+| projection | **FRESH** — `projgen-a1b1ff51d9b841f6a8141b8d60a6952c` (W15-G1 reeval freshness; segs untouched by reclock; prior W16-G6 `projgen-6899460e…`) |
 | sticky COMPLETE | **fixed** segment_id fallback + post-sticky dataset aggregate + COMPLETE inventory retain past UTC target_end (`coverage_ledger.py`) |
 | Full publish guard | `scripts/publish_ops_projection.py` fail-closed |
 | Targeted freshness | `scripts/ops_reeval_freshness.py` (no segment rewrite) |
@@ -58,6 +59,7 @@ Canonical blocked residuals. **Do not re-run densify** unless the re-try conditi
 
 | Track | host POST/min | n | note |
 |-------|--------------:|--:|------|
+| w0815g g1 options (W15-G1) | — | **+29** segs / **+1** dataset COMPLETE | **W15-G1** residual options: peer densify ALIVE→DEAD 126/126; surgical full-month reagg **29/29** ready from week R2; issue **22/22** ok (+7 already COMPLETE mid-session); options segs **135→164**; `dataset_coverage` **COMPLETE** verify; fail-closed publish; FRESH `projgen-a1b1ff51…`; remote COMPLETE **3380→3421**; Dataset COMPLETE **10→11**; empty **0**; peers not killed; proof [`w0815g_g1_options_20260815.md`](proof/w0815g_g1_options_20260815.md) |
 | w0815h g6 ops (W16-G6) | — | **+0** issue / session **+18** segs | **W16-G6** continuous ops: dual-issue gate (G1 `issue_restore_fast` + `issue_receipts` alive entire window → G6 owned issue **0**); fail-closed publish ×N (no force); FRESH `projgen-6899460e…`; remote COMPLETE **3391→3409** raw **14910→14953** (+43); Dataset COMPLETE **10** held; options segs **142→157** peer; OTC **48→49** peer; fins_summary **198→200** peer; empty **0**; DEFER densify **not** re-run; peers not killed; general ~495 note / fins separate; proof [`w0815h_g6_ops_20260815.md`](proof/w0815h_g6_ops_20260815.md) |
 | w0815g g4 ops (W15-G4) | — | **+7** issue / session **+11** segs | **W15-G4** continuous ops: full-month ready-seal issue options **+7** (`2018-09`, `2021-03/04/05/06/07/08`); dual-issue gate (skip while G1 issue_as_ready alive); fail-closed publish (no force); FRESH `projgen-462e902c…`; remote COMPLETE **3380→3391** raw **14856→14910** (+54); Dataset COMPLETE **10** held; options segs **135→142**; OTC **45→48** peer; fins **197→198** peer; empty **0**; DEFER densify **not** re-run; peers not killed; general ~495 note / fins separate; proof [`w0815g_g4_ops_20260815.md`](proof/w0815g_g4_ops_20260815.md) |
 | w0815f g4 ops (W14-G4) | — | **+8** issue / session **+13** segs | **W14-G4** continuous ops: ready-seal issue options **+8** (`2018-08/10/11/12`, `2020-03/04/06/09`); dual-issue gate (skip cycles 2–4 while G1 issue_restore_fast alive); fail-closed publish (no force); FRESH `projgen-767b7073…`; remote COMPLETE **3347→3360** raw **14657→14717** (+60); Dataset COMPLETE **10** held; options segs **105→115**; OTC **43→45** peer; fins **196→197** peer; empty **0**; DEFER densify **not** re-run; peers not killed; general ~495 note / fins separate; proof [`w0815f_g4_ops_20260815.md`](proof/w0815f_g4_ops_20260815.md) |
@@ -167,7 +169,7 @@ Canonical blocked residuals. **Do not re-run densify** unless the re-try conditi
 | `markets_short_sale_report` | PARTIAL | **115** | **`2012-01-10`** | **`2026-08-13`** | — | prior **99** + **W7-G4 misc +16** `2021-11…2023-02` (runs **903162–903177**); C8 **pass** lag **1**; observed_start reeval **2012-01-10** |
 | `indices_bars_daily` | PARTIAL | **220** | **`2008-05-01`** | **`2026-08-14`** | — | COMPLETE segs **220**; residual PARTIAL **4** (`2008-01…04` empty DEFER re-verified **W10-G8 w0815b_g8** acq **4/4** `row_count=0` runs **12360/12364/12369/12381**); observed_start **2008-05-01** held; C8 **pass** lag **1**; dataset **not** COMPLETE (proof [`w0815b_g8_topix_indices_20260815.md`](proof/w0815b_g8_topix_indices_20260815.md)) |
 | `derivatives_bars_daily_futures` | **COMPLETE** | **164** | **`2013-01-04`** | **`2026-08-14`** | — | segs **164/164** since **W12-G4** residual seal; **W13-G3** surgical re-aggregate promoted `dataset_coverage` PARTIAL→**COMPLETE** (stale status_counts 80/84 fixed); C8 **pass** lag **1**; proof [`w0815e_g3_dataset_complete_20260815.md`](proof/w0815e_g3_dataset_complete_20260815.md) |
-| `derivatives_bars_daily_options` | PARTIAL | **142** | **`2013-01-04`** | **`2026-08-14`** | — | prior **135** (W15-G4 PRE) + **W15-G4 full-month issue +7** (`2018-09`, `2021-03…08`) → **142**; residual densify W14 DONE; G1 surgical reagg continuing; observed_start **`2013-01-04`**; C8 **pass**; dataset **not** COMPLETE; proof [`w0815g_g4_ops_20260815.md`](proof/w0815g_g4_ops_20260815.md) |
+| `derivatives_bars_daily_options` | **COMPLETE** | **164** | **`2013-01-04`** | **`2026-08-14`** | — | segs **164/164** via **W15-G1** surgical full-month reagg of week densify R2 (**29** residual months `2018-09`+`2021-03…2023-06`) + issue; `dataset_coverage` **COMPLETE** (C1–C5+C8 pass); residual PARTIAL **0**; proof [`w0815g_g1_options_20260815.md`](proof/w0815g_g1_options_20260815.md) |
 | `derivatives_bars_daily_options_225` | **COMPLETE** | **164** | **`2013-01-04`** | **`2026-08-14`** | — | segs **164/164** since **W12-G4** residual seal; **W13-G3** surgical re-aggregate promoted `dataset_coverage` PARTIAL→**COMPLETE** (stale status_counts 80/84 fixed); C8 **pass** lag **1**; proof [`w0815e_g3_dataset_complete_20260815.md`](proof/w0815e_g3_dataset_complete_20260815.md) |
 
 ## Proof index (aggregate — do not orphan)
@@ -175,6 +177,7 @@ Canonical blocked residuals. **Do not re-run densify** unless the re-try conditi
 ### COMPLETE seals
 | Proof | What it closes |
 |-------|----------------|
+| [`docs/proof/w0815g_g1_options_20260815.md`](proof/w0815g_g1_options_20260815.md) | **W15-G1 w0815g_g1_options**: residual options surgical full-month reagg **29/29** from week R2 (peer densify 126/126 not killed); issue **22/22**; options segs **135→164** + `dataset_coverage` **COMPLETE**; Dataset COMPLETE **10→11**; FRESH `projgen-a1b1ff51…`; remote COMPLETE **3380→3421**; empty **0**; peers not killed |
 | [`docs/proof/w0815g_g4_ops_20260815.md`](proof/w0815g_g4_ops_20260815.md) | **W15-G4 w0815g_g4_ops**: continuous ops full-month ready-seal issue options **+7**; dual-issue gate (skip while G1 issue_as_ready alive); fail-closed publish; FRESH `projgen-462e902c…`; remote COMPLETE **3380→3391** raw **14856→14910** (+54); Dataset COMPLETE **10** held; options **135→142**; OTC **45→48** peer; fins **197→198** peer; empty **0**; DEFER densify **not** re-run; peers not killed |
 | [`docs/proof/w0815f_g4_ops_20260815.md`](proof/w0815f_g4_ops_20260815.md) | **W14-G4 w0815f_g4_ops**: continuous ops ready-seal issue options **+8**; dual-issue gate (skip while G1 issue_restore_fast alive); fail-closed publish; FRESH `projgen-767b7073…`; remote COMPLETE **3347→3360** raw **14657→14717** (+60); Dataset COMPLETE **10** held; options **105→115**; OTC **43→45** peer; fins **196→197** peer; empty **0**; DEFER densify **not** re-run; peers not killed |
 | [`docs/proof/w0815e_g5_ops_20260815.md`](proof/w0815e_g5_ops_20260815.md) | **W13-G5 w0815e_g5_ops**: continuous ops ready-seal issue options **+6**; dual-issue gate; fail-closed publish; FRESH `projgen-70a08329…`; remote COMPLETE **3308→3325** raw **14408→14499** (+91); Dataset COMPLETE **10** held (futures+o225 via W13-G3); options **76→83**; OTC **34→43** peer; empty **0**; DEFER densify **not** re-run; peers not killed |
