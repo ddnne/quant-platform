@@ -10,7 +10,7 @@
 
 **Live verified:** 2026-08-15 (JST) / ~2026-08-14T23:42Z UTC  
 **Base HEAD (pre-proof):** `df061f8` (wave start PRE also recorded `307065e`; peers landed G3 fins_rest mid-window)  
-**Proof HEAD (post-push):** _fill after push_  
+**Proof HEAD (post-push):** `4630043`  
 **Projection freshness reclock:** `projgen-186fbdd1e8fd4f948142ad4beb913ba9` · `coverage_segments_untouched=1` · Mass **NO-GO**
 
 ## Summary
@@ -290,4 +290,4 @@ curl -o /tmp/S2606XX.csv \
 
 ## Report line
 
-`SHA=<post-push> COMPLETE PRE bars/major/cross/large/otc=220/104/76/62/49 POST=220/104/76/62/49 (+0/+0/+0/+0/+0); bars post-floor residual=[]; EDINET sealable nz=0 DEFER_EMPTY_API; OTC HTTP200 full CSV=0 tip-extend 404 mid-June timeout; platform remote PRE=3409 POST=3414 (peers); empty COMPLETE=0; Mass=NO-GO; FRESH projgen-186fbdd1…`
+`SHA=4630043a690c761c504b5145b874f5ae472f7619 COMPLETE PRE bars/major/cross/large/otc=220/104/76/62/49 POST=220/104/76/62/49 (+0/+0/+0/+0/+0); bars post-floor residual=[]; EDINET sealable nz=0 DEFER_EMPTY_API; OTC HTTP200 full CSV=0 tip-extend 404 mid-June timeout; platform remote PRE=3409 POST=3414 (peers); empty COMPLETE=0; Mass=NO-GO; FRESH projgen-186fbdd1…`
