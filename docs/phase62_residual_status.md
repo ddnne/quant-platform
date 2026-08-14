@@ -2,7 +2,7 @@
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
 **Live verified:** 2026-08-14 (JST) / ~2026-08-14T06:14Z UTC (remote D1; COMPLETE segs **2034**; raw_n **11731**; mb COMPLETE **137**; FRESH `projgen-075b61ae…`; empty COMPLETE **0**; Phase7 **OFF**; **W4-G5 w0814d_g5_mb DEFER +0**)
-**Repo tip:** `PLACEHOLDER_SHA` — COMPLETE **2034** / mb **137** / FRESH `projgen-075b61ae…` / empty COMPLETE **0** / Phase7 **OFF** / w0814d G5 mb DEFER
+**Repo tip:** `a4e1102314101c0f553063b3240d9690150022be` — COMPLETE **2034** / mb **137** / FRESH `projgen-075b61ae…` / empty COMPLETE **0** / Phase7 **OFF** / w0814d G5 mb DEFER
 
 ## Live snapshot (remote D1 `quant-ingest`)
 
