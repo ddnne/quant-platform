@@ -2,7 +2,7 @@
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
 **Live verified:** 2026-08-14 (JST) / ~2026-08-14T02:38Z UTC (remote D1; COMPLETE segs **1376**; raw_n **10701**/c **9129**; mb COMPLETE **105**; FRESH `projgen-f1d9b952…`; empty COMPLETE **0**; Phase7 **OFF**; **G2 w0814_g2_mb +36** + FINAL wave sync)  
-**Repo tip:** *(set to push SHA after commit)* — COMPLETE **1376** / raw_n **10701** / mb **105** / FRESH `projgen-f1d9b952…` / empty COMPLETE **0** / Phase7 **OFF** / w0814 G2 + FINAL  
+**Repo tip:**  — COMPLETE **1376** / raw_n **10701** / mb **105** / FRESH  / empty COMPLETE **0** / Phase7 **OFF** / w0814 G2 + FINAL  
 
 ## Live snapshot (remote D1 `quant-ingest`)
 
