@@ -2,7 +2,7 @@
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
 **Live verified:** 2026-08-14 (JST) / ~2026-08-14T05:22Z UTC (remote D1; COMPLETE segs **1891**; raw_n **11698**; edinet each **56**; FRESH `projgen-b85f736b…`; empty COMPLETE **0**; Phase7 **OFF**; **W3-G6 w0814c_g6_edinet +36**)  
-**Repo tip:** `(pending push SHA)` — COMPLETE **1891** / edinet **56/56/56** / FRESH `projgen-b85f736b…` / empty COMPLETE **0** / Phase7 **OFF** / w0814c G6 edinet 2022
+**Repo tip:** `cc22b2fc5bb7ea5b39ef8684478fbe4fdebcfafb` — COMPLETE **1891** / edinet **56/56/56** / FRESH `projgen-b85f736b…` / empty COMPLETE **0** / Phase7 **OFF** / w0814c G6 edinet 2022
 
 ## Live snapshot (remote D1 `quant-ingest`)
 
