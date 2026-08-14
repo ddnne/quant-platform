@@ -1,8 +1,8 @@
 # Phase 6.2 / 6.3 residual status
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
-**Live verified:** 2026-08-14 (JST) / ~2026-08-14T04:25Z UTC (remote D1; COMPLETE segs **1727**; raw_n **11280**; fins COMPLETE **66/59/38/38**; FRESH `projgen-5fe71c60…`; empty COMPLETE **0**; Phase7 **OFF**; **W2-G4 w0814b_g4_fins +48**)  
-**Repo tip:** `be579767d8eb0abb0eb8e1ebe345b9c66cca460e` — COMPLETE **1727** / fins **66/59/38/38** / FRESH `projgen-5fe71c60…` / empty COMPLETE **0** / Phase7 **OFF** / w0814b G4 fins  
+**Live verified:** 2026-08-14 (JST) / ~2026-08-14T04:37Z UTC (remote D1; COMPLETE segs **1733**; fins COMPLETE **66/59/38/38**; FRESH `projgen-efc306a7…`; empty COMPLETE **0**; Phase7 **OFF**; **W3-G8 w0814c_g8_jsda OTC +6**)  
+**Repo tip:** `PENDING_PUSH` — COMPLETE **1733** / OTC **17** / FRESH `projgen-efc306a7…` / empty COMPLETE **0** / Phase7 **OFF** / w0814c G8 JSDA
 
 ## Live snapshot (remote D1 `quant-ingest`)
 
@@ -10,16 +10,16 @@
 |------|--------|
 | Dataset COMPLETE | **3** — `markets_calendar` (224/224), `jsda_tokyo_repo_rates` (1/1), **`jsda_corporate_bond_transactions` (12/12)** |
 | Dataset STALE | **0** (margin PARTIAL via receipt reeval; not STALE) |
-| Segment COMPLETE total | **1727** (remote; prior peer **1727** includes **W2-G4 fins +48** + **W2-G3 idx +96** + peers; **no** empty COMPLETE) |
+| Segment COMPLETE total | **1733** (remote; prior **1727** + **W3-G8 OTC +6**; **no** empty COMPLETE) |
 | Segment other | PARTIAL / UNKNOWN (remainder; not mass-READY) |
 | calendar segments | **224 COMPLETE / 0 PARTIAL** |
-| JSDA OTC COMPLETE segs | **11** — `2026-07-30/31` + `2026-08-03`…`07` + `10` + `12`…`14` (**W2-G8 +2** tip/recent raw; further history **DEFER** site timeout) |
+| JSDA OTC COMPLETE segs | **17** — `2026-07-22`…`24` + `27`…`31` + `2026-08-03`…`07` + `10` + `12`…`14` (**W3-G8 +6** tip/recent raw; further history **DEFER** site timeout) |
 | JSDA corporate COMPLETE segs | **12** — years **`2015`…`2026`** (**G9 +11**; full annual TORIHIKI; dataset **COMPLETE**) |
 | A3 sealed (partial datasets) | prior + w0814 FINAL + w0814b peers + **W2-G4 fins +48** → COMPLETE **1727** |
 | Remote `raw_retention_manifests` | **11280** total (W2-G4 fins residual acq + peers; worker pass ≠ COMPLETE) |
 | Track A + P0 execute | **w0713 T1–T17 DONE/DEFER** + **w0814 peers** + **w0814b G1–G9** + **W2-G4 fins +48** + **W2-G5 deriv** + **W2-G6 edinet** + **W2-G7 misc seal**; **Worker pass ≠ COMPLETE** |
 | master | `scd2_event_sourcing` / D1 hot |
-| projection | **FRESH** — `projgen-5fe71c606e82456896a57c258fa52d3b` (W2-G4 fins reeval freshness; segs untouched by reclock) |
+| projection | **FRESH** — `projgen-efc306a7cd82452480b59d6f9f110c8d` (W3-G8 JSDA reeval freshness; segs untouched by reclock) |
 | sticky COMPLETE | **fixed** segment_id fallback + post-sticky dataset aggregate + COMPLETE inventory retain past UTC target_end (`coverage_ledger.py`) |
 | Full publish guard | `scripts/publish_ops_projection.py` fail-closed |
 | Targeted freshness | `scripts/ops_reeval_freshness.py` (no segment rewrite) |
@@ -87,7 +87,7 @@
 | `markets_margin_alert` | **PARTIAL** | **50** | **`2012-12-28`** | **`2026-08-13`** | — | prior **34** + **W2-G7 misc +16** `2014-05…2015-08`; C8 **pass** lag **1**; observed_start reeval **2012-12-28** |
 | `markets_calendar` | **COMPLETE** | 224 | 2008-01-01 | 2026-08-12 | — | sticky full + aggregate fix |
 | `jsda_tokyo_repo_rates` | **COMPLETE** | 1 | 2012-10-29 | 2026-08-10 | — | dataset COMPLETE (G9 verify only) |
-| `jsda_otc_bond_reference_prices` | **PARTIAL** | **11** | **`2026-07-30`** | **`2026-08-14`** | — | **W2-G8 +2** (`2026-07-30/31` runs **901821/901820**); prior tip **9**; history **DEFER** site timeout; dataset **not** COMPLETE |
+| `jsda_otc_bond_reference_prices` | **PARTIAL** | **17** | **`2026-07-22`** | **`2026-08-14`** | — | **W3-G8 +6** (`2026-07-22`…`24`/`27`…`29` runs **902114–902119**); prior **11**; history **DEFER** site timeout; dataset **not** COMPLETE |
 | `jsda_corporate_bond_transactions` | **COMPLETE** | **12** | **`2015-11-02`** | **`2026-08-14`** | — | **G9 +11** full annual TORIHIKI2015–2026 (runs **901244–901255**); dataset **COMPLETE** |
 | `fins_details` | **PARTIAL** | **59** | **`2018-01-01`** | **`2026-08-13`** | — | prior **47** + **W2-G4 w0814b_g4_fins +12** (`2021-09…2022-08`) → COMPLETE segs **59** (`2018-01…2022-08` + tips); C8 **pass** lag **1**; dataset **not** COMPLETE |
 | `equities_investor_types` | **PARTIAL** | **42** | **`2012-12-28`** | **`2026-08-12`** | — | prior **26** + **W2-G7 misc +16** `2014-05…2015-08` (runs **901905–901920**); C8 **pass** lag **3** |
@@ -120,6 +120,7 @@
 | [`docs/proof/w0814_g7_edinet_20260814.md`](proof/w0814_g7_edinet_20260814.md) | **G7 w0814_g7_edinet**: acq 2024 (main 3p/33f + retry **36/36**); seals **+36** (major/cross/large **+12** each); COMPLETE **20→32** each; platform **1260**; observed_start **`2024-01-01`**; empty **0**; FRESH `projgen-ce19380…` |
 | [`docs/proof/w0814_g8_misc_20260814.md`](proof/w0814_g8_misc_20260814.md) | **G8 misc w0814_g8_misc**: R2 seal+issue **+80** (margin/alert/short_ratio/short_sale/investor ×16); COMPLETE **1212**; C8 margin **pass lag2 held**; earn history DEFER tip-Date; acq execute DEFER (G7 970/970); empty **0**; FRESH `projgen-5be221…` |
 | [`docs/proof/w0814_all_sources_wave_20260814.md`](proof/w0814_all_sources_wave_20260814.md) | **G10 w0814 all-sources wave close**: PRE tip `cac338b` raw **9687** COMPLETE **942** → POST raw **10662**/c **9090** COMPLETE **1106** (+164); topix **82→220**; futures **20→32**; host rpm g1 **13.74** / g3 topix **34.74** / g2 mb **14.38**; reeval×5 C8 pass; FRESH `projgen-d28bfce…` age=0; empty **0**; peers not killed |
+| [`docs/proof/w0814c_g8_jsda_20260814.md`](proof/w0814c_g8_jsda_20260814.md) | **W3-G8 JSDA**: OTC tip/recent **+6** (`2026-07-22`…`24`/`27`…`29` runs **902114–902119**) → COMPLETE **17**; corporate+repo COMPLETE skip; remote COMPLETE **1733**; empty **0**; FRESH `projgen-efc306a7…`; further tip/history **DEFER** site timeout |
 | [`docs/proof/w0814b_g8_jsda_20260814.md`](proof/w0814b_g8_jsda_20260814.md) | **W2-G8 JSDA**: OTC tip/recent **+2** (`2026-07-30/31` runs **901821/901820**) → COMPLETE **11**; corporate **12/12** + repo COMPLETE verify; remote COMPLETE **1442**; empty **0**; FRESH `projgen-1e79a513…`; further tip/history **DEFER** site timeout; year-archive sort fix |
 | [`docs/proof/w0814_g9_jsda_20260814.md`](proof/w0814_g9_jsda_20260814.md) | **G9 JSDA**: OTC **+3** (`2026-08-03/04/05` runs **901241–901243**) → COMPLETE **9**; corporate **+11** annual 2015–2025 + full 2026 re-seal → **12/12 dataset COMPLETE** (runs **901244–901255**); repo verify COMPLETE; remote COMPLETE **1056**; empty **0**; FRESH `projgen-e1b67b…`; history DEFER |
 | [`docs/proof/w0814_g4_master_residual_20260814.md`](proof/w0814_g4_master_residual_20260814.md) | **G4 `w0814_g4_master` residual**: plan **21** (`2006-08…2008-04`); acq wave1 **0p/21f** + retry **0p/21f** (400 sub + 429×20); seal window_ok **0** / window_bad **21** DEFER; COMPLETE **220→220 (+0)**; C8 pass lag1; FRESH `projgen-14c0bb…`; empty **0** |
