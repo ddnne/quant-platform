@@ -9,6 +9,7 @@
 
 **Live verified:** 2026-08-15 (JST) / ~2026-08-14T23:09Z UTC  
 **Base HEAD (pre-proof):** `d674f3b`  
+**Proof HEAD (post-push):** `7daadf7`  
 **Projection freshness reclock:** `projgen-7176afff0c274129a670d3015db92597` · `coverage_segments_untouched=1` · Mass **NO-GO**
 
 ## Summary
@@ -287,4 +288,4 @@ curl -o data/raw/jsda/jsda_otc_bond_reference_prices/2026-06-10/S260610.csv \
 
 ## Report line
 
-`SHA=<post-push> COMPLETE PRE bars/major/cross/large/otc=220/104/76/62/48 POST=220/104/76/62/49 (+0/+0/+0/+0/+1); bars post-floor residual=[]; EDINET sealable nz=0 DEFER_EMPTY_API; OTC sealed 2026-06-10 run=903805; platform remote PRE=3391 POST=3403; empty COMPLETE=0; Mass=NO-GO; FRESH projgen-7176afff…`
+`SHA=7daadf7911091690a8341bc1a61a53052da835aa COMPLETE PRE bars/major/cross/large/otc=220/104/76/62/48 POST=220/104/76/62/49 (+0/+0/+0/+0/+1); bars post-floor residual=[]; EDINET sealable nz=0 DEFER_EMPTY_API; OTC sealed 2026-06-10 run=903805; platform remote PRE=3391 POST=3403; empty COMPLETE=0; Mass=NO-GO; FRESH projgen-7176afff…`
