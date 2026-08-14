@@ -290,4 +290,4 @@ curl -o /tmp/S2606XX.csv \
 
 ## Report line
 
-`SHA=4630043a690c761c504b5145b874f5ae472f7619 COMPLETE PRE bars/major/cross/large/otc=220/104/76/62/49 POST=220/104/76/62/49 (+0/+0/+0/+0/+0); bars post-floor residual=[]; EDINET sealable nz=0 DEFER_EMPTY_API; OTC HTTP200 full CSV=0 tip-extend 404 mid-June timeout; platform remote PRE=3409 POST=3414 (peers); empty COMPLETE=0; Mass=NO-GO; FRESH projgen-186fbdd1…`
+`SHA=e81d72afa31ceead36ca090df5242cbc71fca657 COMPLETE PRE bars/major/cross/large/otc=220/104/76/62/49 POST=220/104/76/62/49 (+0/+0/+0/+0/+0); bars post-floor residual=[]; EDINET sealable nz=0 DEFER_EMPTY_API; OTC HTTP200 full CSV=0 tip-extend 404 mid-June timeout; platform remote PRE=3409 POST=3414 (peers); empty COMPLETE=0; Mass=NO-GO; FRESH projgen-186fbdd1…`
