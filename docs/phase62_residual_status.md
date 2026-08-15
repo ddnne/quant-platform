@@ -1,9 +1,9 @@
 # Phase 6.2 / 6.3 residual status
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
-**Live verified:** 2026-08-15 (JST) / **W55** 評価深化・翌日リターン突合（READY 未宣言） FINAL · COMPLETE segs **3478** · Dataset COMPLETE **21 / 26** · PARTIAL = **5** permanent DEFER only · **actionable_gap = 0** · empty COMPLETE **0** · **OTC 93** tip island held · permanent DEFER **5** / NO_DENSIFY **6** · densify coverage loops **ENDED** · Mass/READY/Phase7 **NO-GO/OFF** · raw **15915** (remote verify; W46 tip secondary baseline **15869** held) · FRESH `projgen-b7c349edd3fb454a806ede864cf80bcf` · **CF-SoT** held — D1 = hot tip · R2 = history · COMPLETE = receipt-owned · floors W38 + W42 mb **2015-04-01** **not lowered** · coverage baseline **W47 FINAL held** · READY **not declared** · tip densify **SKIP** · densify **none** · promotion **7 approved** (W52–W54 **6** + W55 O2 **+1** `short_ratio_level` · v1.0.0) · nextday return eval Mass **OFF** · status=`candidate` · **candidate_only=False** (legs approved) · label **研究用・未宣言** · PRE_sha `205392f54ca832d67867fe96c149867f52586def` · **POST_PUSH_SHA** *(pending G5 fill)*
+**Live verified:** 2026-08-15 (JST) / **W55** 評価深化・翌日リターン突合（READY 未宣言） FINAL · COMPLETE segs **3478** · Dataset COMPLETE **21 / 26** · PARTIAL = **5** permanent DEFER only · **actionable_gap = 0** · empty COMPLETE **0** · **OTC 93** tip island held · permanent DEFER **5** / NO_DENSIFY **6** · densify coverage loops **ENDED** · Mass/READY/Phase7 **NO-GO/OFF** · raw **15915** (remote verify; W46 tip secondary baseline **15869** held) · FRESH `projgen-b7c349edd3fb454a806ede864cf80bcf` · **CF-SoT** held — D1 = hot tip · R2 = history · COMPLETE = receipt-owned · floors W38 + W42 mb **2015-04-01** **not lowered** · coverage baseline **W47 FINAL held** · READY **not declared** · tip densify **SKIP** · densify **none** · promotion **7 approved** (W52–W54 **6** + W55 O2 **+1** `short_ratio_level` · v1.0.0) · nextday return eval Mass **OFF** · status=`candidate` · **candidate_only=False** (legs approved) · label **研究用・未宣言** · PRE_sha `205392f54ca832d67867fe96c149867f52586def` · **POST_PUSH_SHA** `4d727623ead2f30ce37b8e7850b1c278cc94a943`
 
-**Repo tip:** *(pending G5 push)* — W55 評価深化・翌日リターン突合 FINAL · COMPLETE **3478** / Dataset COMPLETE **21** / OTC **93** / empty COMPLETE **0** / **actionable_gap = 0** / Phase7 **OFF** / READY **未宣言** · FRESH `projgen-b7c349edd3fb454a806ede864cf80bcf` · promotion **7 approved** / **3 candidate** · nextday **e2e_pass** · tip densify **SKIP** · **POST_PUSH_SHA** *(pending)*
+**Repo tip:** `4d727623ead2f30ce37b8e7850b1c278cc94a943` — W55 評価深化・翌日リターン突合 FINAL · COMPLETE **3478** / Dataset COMPLETE **21** / OTC **93** / empty COMPLETE **0** / **actionable_gap = 0** / Phase7 **OFF** / READY **未宣言** · FRESH `projgen-b7c349edd3fb454a806ede864cf80bcf` · promotion **7 approved** / **3 candidate** · nextday **e2e_pass** · tip densify **SKIP** · **POST_PUSH_SHA** `4d727623ead2f30ce37b8e7850b1c278cc94a943`
 
 ## 評価深化・翌日リターン突合（READY 未宣言）
 
@@ -33,7 +33,7 @@
 | permanent DEFER | **5** held |
 | tip densify | **SKIP** (not primary this phase) |
 | densify | **none** |
-| push | **POST_PUSH_SHA** *(pending G5 fill)* · PRE_sha `205392f54ca832d67867fe96c149867f52586def` |
+| push | **POST_PUSH_SHA** `4d727623ead2f30ce37b8e7850b1c278cc94a943` (G5 FINAL merge) · PRE_sha `205392f54ca832d67867fe96c149867f52586def` |
 | Projection | **FRESH** `projgen-b7c349edd3fb454a806ede864cf80bcf` (G3 T9 ops_reeval_freshness; residual FRESH sync; publish apply **SKIP** no segment drift; fail-closed no force) |
 | Nextday return eval | G1 **PASS** — multiday signal + R_{T→T+1} attach · mean-by-sign · Mass **not** connected · no orders · **研究用・未宣言** |
 | Selective O2 | G2 **PASS** — `short_ratio_level` tip E2E non-null · **+1 approved** |
