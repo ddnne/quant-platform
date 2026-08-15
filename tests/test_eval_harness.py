@@ -430,3 +430,223 @@ def test_eval_harness_source_freeze_literals():
     assert "os.environ" not in src
     assert "MASS_RESEARCH_ENABLE" not in src
     assert "PHASE7_ENABLE" not in src
+
+
+# ---------------------------------------------------------------------------
+# W61 research walk-forward + multi-period (fixed defs · no READY)
+# ---------------------------------------------------------------------------
+
+
+def test_split_asof_days_walk_forward_chronological():
+    from research.eval_harness import (
+        RESEARCH_WALK_FORWARD_LABEL,
+        WALK_FORWARD_VERSION,
+        split_asof_days_walk_forward,
+        EvalHarnessError,
+    )
+
+    days = [f"2024-10-{i:02d}" for i in range(1, 31)]
+    split = split_asof_days_walk_forward(
+        days, train_fraction=0.5, min_train_days=5, min_test_days=5
+    )
+    assert split["version"] == WALK_FORWARD_VERSION
+    assert split["threshold_tuning"] is False
+    assert split["signal_definitions_fixed"] is True
+    assert split["ready_declared"] is False
+    assert split["mass_research"] == "NO-GO"
+    assert split["operational_go"] is False
+    assert "研究用" in RESEARCH_WALK_FORWARD_LABEL
+    assert split["train_as_of_days"][-1] < split["test_as_of_days"][0]
+    assert len(split["train_as_of_days"]) + len(split["test_as_of_days"]) == 30
+
+    with pytest.raises(EvalHarnessError):
+        split_asof_days_walk_forward(["2024-01-02"], min_train_days=5, min_test_days=5)
+
+
+def test_multi_period_and_walk_forward_multisignal_r2_fixtures(tmp_path: Path):
+    """Fixed S1/S2/S3 on two synthetic periods + WF split; Mass/READY closed."""
+    from datetime import date, timedelta
+
+    from research.eval_harness import (
+        run_multi_period_multisignal_compare,
+        run_research_walk_forward_multisignal,
+    )
+    from research.r2_feature_context import HISTORY_SOURCE_R2
+
+    def _bar(code: str, day: str, close: float, vol: float = 1000.0) -> str:
+        payload = {
+            "Code": code,
+            "Date": day,
+            "O": close,
+            "H": close,
+            "L": close,
+            "C": close,
+            "Vo": vol,
+        }
+        aa = f"{day}T15:30:00+09:00"
+        return json.dumps(
+            {
+                "source": "jquants",
+                "dataset": "equities_bars_daily",
+                "natural_key": json.dumps({"Code": code, "Date": day}, sort_keys=True),
+                "event_time": aa,
+                "available_at": aa,
+                "payload": payload,
+                "raw_payload": payload,
+            },
+            ensure_ascii=True,
+        )
+
+    def _topix(day: str, close: float) -> str:
+        payload = {"Date": day, "C": close}
+        aa = f"{day}T15:30:00+09:00"
+        return json.dumps(
+            {
+                "source": "jquants",
+                "dataset": "indices_bars_daily_topix",
+                "natural_key": json.dumps({"Date": day}, sort_keys=True),
+                "event_time": aa,
+                "available_at": aa,
+                "payload": payload,
+                "raw_payload": payload,
+            },
+            ensure_ascii=True,
+        )
+
+    def _cal(day: str) -> str:
+        payload = {"Date": day, "HolDiv": "1"}
+        return json.dumps(
+            {
+                "source": "jquants",
+                "dataset": "markets_calendar",
+                "natural_key": json.dumps({"Date": day}, sort_keys=True),
+                "event_time": f"{day}T00:00:00+09:00",
+                "available_at": f"{day}T00:00:00+09:00",
+                "payload": payload,
+                "raw_payload": payload,
+            },
+            ensure_ascii=True,
+        )
+
+    def _fins(code: str, day: str) -> str:
+        payload = {"Code": code, "DiscDate": day}
+        aa = f"{day}T15:30:00+09:00"
+        return json.dumps(
+            {
+                "source": "jquants",
+                "dataset": "fins_summary",
+                "natural_key": json.dumps({"Code": code, "Date": day}, sort_keys=True),
+                "event_time": aa,
+                "available_at": aa,
+                "payload": payload,
+                "raw_payload": payload,
+            },
+            ensure_ascii=True,
+        )
+
+    def build_window(start: date, n_weekdays: int):
+        days = []
+        d = start
+        while len(days) < n_weekdays:
+            if d.weekday() < 5:
+                days.append(d.isoformat())
+            d += timedelta(days=1)
+        bars, topix, cal, fins = [], [], [], []
+        for i, day in enumerate(days):
+            for code in ("13010", "72030", "67580"):
+                bars.append(
+                    _bar(code, day, close=100.0 + i + (0.5 if code == "13010" else 0), vol=1000 + i * 20)
+                )
+            topix.append(_topix(day, 3000.0 + i * 0.1))
+            cal.append(_cal(day))
+            if i % 4 == 0:
+                fins.append(_fins("13010", day))
+        return days, {
+            "equities_bars_daily": bars,
+            "indices_bars_daily_topix": topix,
+            "markets_calendar": cal,
+            "fins_summary": fins,
+        }
+
+    days_a, lines_a = build_window(date(2022, 9, 1), 24)
+    days_b, lines_b = build_window(date(2023, 9, 1), 24)
+
+    puts: list[tuple[str, str]] = []
+
+    def fake_put(bucket: str, key: str, body: bytes, **kwargs):
+        puts.append((bucket, key))
+        return {"bucket": bucket, "key": key, "status": "dry_run", "bytes": len(body)}
+
+    mp = run_multi_period_multisignal_compare(
+        [
+            {
+                "period_id": "synth_2022q4",
+                "period_start": days_a[0],
+                "period_end": days_a[-1],
+                "max_days": 20,
+                "min_days": 10,
+                "r2_raw_lines_by_dataset": lines_a,
+                "r2_allow_empty_datasets": ("markets_margin_interest",),
+            },
+            {
+                "period_id": "synth_2023q4",
+                "period_start": days_b[0],
+                "period_end": days_b[-1],
+                "max_days": 20,
+                "min_days": 10,
+                "r2_raw_lines_by_dataset": lines_b,
+                "r2_allow_empty_datasets": ("markets_margin_interest",),
+            },
+            {
+                "period_id": "no_data_gap",
+                "period_start": "2010-01-01",
+                "period_end": "2010-03-31",
+                "skip_reason": "documented inventory gap (fixture)",
+            },
+        ],
+        job_id_prefix="w0815bb-test-mp",
+        codes=["13010", "72030", "67580"],
+        write_per_day_artifacts=False,
+        dry_run=True,
+        r2_put=fake_put,
+        staging_dir=tmp_path,
+        history_source="r2",
+    )
+    assert mp["n_periods_ok"] == 2
+    assert mp["n_periods_skipped"] == 1
+    assert mp["ready_declared"] is False
+    assert mp["mass_research"] == "NO-GO"
+    assert mp["operational_go"] is False
+    assert mp["significance_claimed"] is False
+    assert len(mp["cross_period_compare_table"]) >= 2
+    for row in mp["cross_period_compare_table"]:
+        assert "period_id" in row and "signal_id" in row
+
+    wf = run_research_walk_forward_multisignal(
+        period_start=days_a[0],
+        period_end=days_a[-1],
+        job_id="w0815bb-test-wf",
+        codes=["13010", "72030", "67580"],
+        max_days=20,
+        min_days=10,
+        train_fraction=0.5,
+        min_train_days=5,
+        min_test_days=5,
+        write_per_day_artifacts=False,
+        dry_run=True,
+        r2_put=fake_put,
+        staging_dir=tmp_path,
+        history_source="r2",
+        r2_raw_lines_by_dataset=lines_a,
+        r2_allow_empty_datasets=("markets_margin_interest",),
+    )
+    assert wf["threshold_tuning"] is False
+    assert wf["ready_declared"] is False
+    assert wf["mass_research"] == "NO-GO"
+    assert wf["split"]["train_as_of_days"][-1] < wf["split"]["test_as_of_days"][0]
+    assert wf["train"]["n_days"] >= 5
+    assert wf["test"]["n_days"] >= 5
+    assert len(wf["train"]["compare_table"]) == 3
+    assert len(wf["test"]["compare_table"]) == 3
+    # history_source should be r2 when bridge used
+    assert HISTORY_SOURCE_R2 == "r2"

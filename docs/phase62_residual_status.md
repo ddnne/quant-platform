@@ -1,8 +1,48 @@
 # Phase 6.2 / 6.3 residual status
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
-**Live verified:** 2026-08-15 (JST) / **W60** 長期窓マルチシグナル比較 + 橋拡張（READY 未宣言） · COMPLETE segs **3478** · Dataset COMPLETE **21 / 26** · PARTIAL = **5** permanent DEFER only · **actionable_gap = 0** · empty COMPLETE **0** · **OTC 93** tip island held · permanent DEFER **5** / NO_DENSIFY **6** · densify coverage loops **ENDED** · Mass/READY/Phase7 **NO-GO/OFF** · FRESH `projgen-acdc868d174e4304ae93da453c01f057` · **CF-SoT** held — D1 = hot tip · R2 = history · COMPLETE = receipt-owned · floors W38 + W42 mb **2015-04-01** **not lowered** · coverage baseline **W47 FINAL held** · READY **not declared** · tip densify **SKIP** · densify **none** · promotion **9 approved** held · remain **1 candidate** (`return_1d_c21` policy no-promote) · R2 bridge **expanded** (margin/short/fins/alert) · multi-signal long **50d×30** job `w0815ba-g1-long-multisignal` · S1 mean R +1 **−0.000182** / −1 **−0.000245** · S2 non_null **0.047** · S3 non_null **0.636** · tip-20d separation **not** reproduced on long window · label **小サンプル / 研究用・未宣言** · **no significance / no edge / no operational GO**
-**Repo tip:** `8361a0f1efeac194c2caf5621e1cc1715d8a5600` — W60 long multi-signal + bridge expand · COMPLETE **3478** / Dataset COMPLETE **21** / OTC **93** / empty COMPLETE **0** / **actionable_gap = 0** / Phase7 **OFF** / READY **未宣言** · FRESH `projgen-acdc868d174e4304ae93da453c01f057` · tip densify **SKIP**
+**Live verified:** 2026-08-15 (JST) / **W61** 複数期間 S1/S2/S3 + 研究用 WF（READY 未宣言） · COMPLETE segs **3478** · Dataset COMPLETE **21 / 26** · PARTIAL = **5** DEFER only · **actionable_gap = 0** · empty COMPLETE **0** · **OTC 93** · Mass/READY/Phase7 **NO-GO/OFF** · FRESH `projgen-1f5c90edc7b0436f9edd9401cd91adb0` · **CF-SoT** held · promotion **9 approved** / **1 candidate** no-promote · multi-period **4 windows** (2022q4/2023q4/2024q4/2025q1) · S1 tip separation **not stable** across periods · research WF train/test on w2024q4 · coverage gaps documented · **no significance / no edge / no operational GO**
+**Repo tip:** (set on push) — W61 multi-period + research walk-forward · COMPLETE **21** / segs **3478** / OTC **93** / READY **未宣言** · FRESH `projgen-1f5c90edc7b0436f9edd9401cd91adb0`
+
+## 複数期間シグナル再評価 + 研究用ウォークフォワード（READY 未宣言）
+
+**Phase name:** COMPLETE 21 複数期間 S1/S2/S3 再評価 + 研究用 WF（宣言なし）  
+**Wave:** W61 / w0815bb  
+**Close:** [`docs/proof/w0815bb_w61_multi_period_close_20260815.md`](proof/w0815bb_w61_multi_period_close_20260815.md)  
+**Multi-period:** [`.glm-logs/w0815bb_w61_multiperiod/`](../.glm-logs/w0815bb_w61_multiperiod/) · report [`docs/proof/w0815bb_w61_multi_period_multisignal_20260815.md`](proof/w0815bb_w61_multi_period_multisignal_20260815.md) · `history_source=r2` · codes **30** · windows **w2022q4 (40d)** · **w2023q4 (40d)** · **w2024q4 (50d)** · **w2025q1 (25d)**  
+
+| period | S1 meanR +1 / −1 | S1 gross | S2 nn | S3 nn | S3 gross |
+|--------|------------------:|---------:|------:|------:|---------:|
+| w2022q4 | −0.00010 / −0.00105 | +0.00043 | **0** | 0.95 | +0.00021 |
+| w2023q4 | **+0.00243 / −0.00141** | **+0.00188** | **0** | 0.96 | +0.00209 |
+| w2024q4 | −0.00018 / −0.00024 | ~0 | 0.047 | 0.64 | +0.00069 |
+| w2025q1 | −0.0203 / −0.0189 | −0.00032 | 0.64 | 1.00 | −0.00032 |
+
+· tip-20d S1 separation **not** stable across long R2 periods · only mild same-direction print on **w2023q4** · **小サンプル / 研究用・未宣言**  
+**Walk-forward (research):** API `split_asof_days_walk_forward` + `run_research_walk_forward_multisignal` · w2024q4 train 25d / test 25d · **threshold_tuning=false** · train S1 gross **−** / test S1 gross **+** (unstable within-window) · proof [`docs/proof/w0815bb_w61_walk_forward_research_20260815.md`](proof/w0815bb_w61_walk_forward_research_20260815.md)  
+**Coverage inventory:** [`docs/proof/w0815bb_w61_coverage_inventory_20260815.md`](proof/w0815bb_w61_coverage_inventory_20260815.md) · topix JSONL gap 2024–2025 (archive used) · margin/short JSONL year gaps (empty_allowed, not invented)  
+**Harness:** `run_multi_period_multisignal_compare` · `run_research_walk_forward_multisignal` · freezes Mass **NO-GO** / Phase7 **OFF**  
+**Prior W60 long multi-signal + bridge expand:** held underneath
+
+| gate | status |
+|------|--------|
+| READY | **未宣言** |
+| Mass / Phase7 | **NO-GO / OFF** |
+| Dataset COMPLETE | **21** |
+| COMPLETE segs | **3478** |
+| empty COMPLETE | **0** |
+| OTC | **93** |
+| permanent DEFER | **5** |
+| densify | **none** |
+| Multi-period | **4/4 ok** · no invent fills |
+| Research WF | **landed** · fixed defs · not GO |
+| tip densify | **SKIP** |
+
+### Explicit non-declarations (held)
+
+- **READY** — not declared  
+- **Mass** — **NO-GO / OFF**  
+- **Phase7** — **OFF**
 
 ## 長期窓マルチシグナル比較 + 橋拡張（READY 未宣言）
 
