@@ -212,5 +212,6 @@ Until then: honest **DEFER** residual empty shells; dataset stays **PARTIAL**.
 | ref | SHA |
 |-----|-----|
 | PRE (wave start) | `306bebb2febf835032abf3bc210f755338b8caac` |
-| proof commit | `1f05c6bc3d5ed3b44d6796e0f6bfb79561da53f2` |
-| proof content | `1f05c6bc3d5ed3b44d6796e0f6bfb79561da53f2` |
+| proof commit | `5f6cd9ce8b744770295db94afeb68e0b95ac76d4` |
+| proof content | `5f6cd9ce8b744770295db94afeb68e0b95ac76d4` |
+| POST push | `5f6cd9ce8b744770295db94afeb68e0b95ac76d4` |

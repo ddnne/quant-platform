@@ -27,5 +27,7 @@
   "defer_reason": "pre-2013-02 empty island: all 61 PARTIAL have SUCCESS receipt raw_row_count=0 + R2 manifest row_count=0 completeness=COMPLETE window_ok",
   "retry_when": "nz raw appears for any residual month (manifest row_count>0 or SUCCESS raw_row_count>0 with Date in segment window) \u2192 seal \u2192 issue \u2192 COMPLETE",
   "mass": "NO-GO",
-  "empty_complete": 0
+  "empty_complete": 0,
+  "PROOF_SHA": "5f6cd9ce8b744770295db94afeb68e0b95ac76d4",
+  "POST_PUSH_SHA": "5f6cd9ce8b744770295db94afeb68e0b95ac76d4"
 }
