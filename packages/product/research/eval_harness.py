@@ -1730,10 +1730,512 @@ def multi_year_availability_table(
     return rows
 
 
+# ---------------------------------------------------------------------------
+# Standard research eval checklist entry (W66 / w0815bg)
+# ---------------------------------------------------------------------------
+
+CHECKLIST_VERSION: str = "standard-research-eval-checklist/v1"
+CHECKLIST_WAVE: str = "W66 / w0815bg"
+CHECKLIST_LABEL: str = (
+    "標準研究評価チェックリスト・未宣言 "
+    "(合格≠research_candidate / READY未接続 / Mass NO-GO / 運用GOではない)"
+)
+STANDARD_EVAL_PROOF: str = (
+    "docs/proof/w0815bg_w66_standard_research_eval_checklist_20260815.md"
+)
+# Modes that only re-run existing rejected baselines — never mint new signals.
+STANDARD_EVAL_MODES: tuple[str, ...] = (
+    "wiring_only",
+    "s1_rejected_baseline",
+    "s4_rejected_baseline",
+)
+
+
+def standard_research_eval_checklist_document() -> dict[str, Any]:
+    """Public document for the standard research evaluation checklist."""
+    from research.baseline_catalog import (
+        RESEARCH_STATUS_REJECTED,
+        rejected_baseline_catalog,
+    )
+    from research.holding_metrics import holding_metrics_document
+    from research.robustness_gate import research_robustness_gate_document
+
+    cat = rejected_baseline_catalog()
+    return {
+        "version": CHECKLIST_VERSION,
+        "wave": CHECKLIST_WAVE,
+        "label": CHECKLIST_LABEL,
+        "proof": STANDARD_EVAL_PROOF,
+        "required": [
+            "multi_year_or_non_overlapping_long_periods",
+            "cost_assumption_default_10bp_one_way",
+            "robustness_gate_v2_with_cost",
+            "explicit_data_gap_disclosure",
+            "pass_does_not_connect_ready_mass_go",
+        ],
+        "recommended": [
+            "holding_turnover_metrics",
+        ],
+        "insufficient": [
+            "short_window_only",
+            "gross_only_without_cost_gate",
+            "skipped_checklist",
+        ],
+        "gate": research_robustness_gate_document(),
+        "holding_surface": holding_metrics_document(),
+        "rejected_baseline_examples": {
+            "research_status": RESEARCH_STATUS_REJECTED,
+            "signal_ids": list(cat.get("signal_ids") or []),
+            "hyp_ids": list(cat.get("hyp_ids") or []),
+            "note": (
+                "S1–S5 failed this bar (or never completed multi-year cost-aware "
+                "eval) and remain research_baseline_rejected — not un-rejected."
+            ),
+        },
+        "default_entry": "run_standard_research_eval",
+        "modes": list(STANDARD_EVAL_MODES),
+        "mass_research": MASS_RESEARCH,
+        "phase7": PHASE7,
+        "ready_declared": False,
+        "operational_go": False,
+        "connected_to_ready": False,
+        "connected_to_mass": False,
+        "research_candidate": False,
+        "edge_claimed": False,
+        "significance_claimed": False,
+        "densify": DENSIFY,
+        "note": (
+            "Any new hypothesis must pass this checklist before research_candidate. "
+            "Results that skip the checklist are NOT research_candidate. "
+            "Gate pass still does not mint READY, arm Mass, or claim edge. "
+            "Short-window-only is insufficient. "
+            "This entry does not invent new signals."
+        ),
+    }
+
+
+def run_standard_research_eval(
+    periods: Sequence[Mapping[str, Any]] | None = None,
+    *,
+    years: Sequence[int] | None = None,
+    mode: str = "wiring_only",
+    job_id_prefix: str = "eval-harness-std",
+    codes: Sequence[str] | None = None,
+    max_days: int = 80,
+    min_days: int = 40,
+    feature_row_limit: int = DEFAULT_FEATURE_ROW_LIMIT,
+    volume_change_abs_min: float | None = DEFAULT_VOLUME_CHANGE_ABS_MIN,
+    one_way_cost: float = DEFAULT_ONE_WAY_COST,
+    cost_change_reason: str | None = None,
+    require_net_sign_majority: bool = True,
+    apply_robustness_gate: bool = True,
+    min_periods_gate: int = 2,
+    min_active_per_period: int = 20,
+    write_per_day_artifacts: bool = False,
+    dry_run: bool = True,
+    data_gap_notes: Any = None,
+    include_holding: bool = True,
+    holding_records: Sequence[Mapping[str, Any]] | None = None,
+    period_rows_for_gate: Sequence[Mapping[str, Any]] | None = None,
+    signal_ids: Sequence[str] | None = None,
+    d1_execute: D1ExecuteFn | None = None,
+    r2_put: R2PutFn | None = None,
+    staging_dir: str | Path | None = None,
+    wrangler: str | Path | None = None,
+    wrangler_config: str | Path | None = None,
+    history_source: str = "r2",
+    r2_get: Callable[[str, str], bytes] | None = None,
+    r2_bucket: str = "quant-structured",
+) -> dict[str, Any]:
+    """Standard research evaluation checklist entry (W66).
+
+    Bundles multi-year window design, cost-aware robustness gate v2, optional
+    holding annotation, and mandatory freeze / data-gap disclosure.
+
+    This is the **default entry for future hypotheses**. Short-window-only is
+    insufficient for ``research_candidate``.
+
+    Hard constraints
+    ----------------
+    * Does **not** invent or register new signals
+    * May re-run S1 / S4 paths only as **rejected baseline** dry demos
+    * ``research_candidate`` is always **False** here (no auto-promotion)
+    * Gate pass still leaves READY/Mass/Phase7 closed
+    * ``dry_run=True`` (default) validates wiring without heavy R2 when
+      ``mode="wiring_only"`` or when no executable periods are supplied
+
+    Modes
+    -----
+    * ``wiring_only`` — design windows + cost + gate surface + freezes (no R2)
+    * ``s1_rejected_baseline`` — call :func:`run_multi_year_s1_eval` (S1 catalog rejected)
+    * ``s4_rejected_baseline`` — call :func:`run_multi_year_extra_hyp_eval` (S4 rejected)
+
+    Returns a dict with ``checklist_version``, ``steps_completed``,
+    ``robustness_gate``, ``cost_assumption``, ``data_gap_notes``, optional
+    ``holding``, and freeze flags always closed.
+    """
+    from research.baseline_catalog import (
+        RESEARCH_STATUS_REJECTED,
+        is_research_baseline_rejected,
+        rejected_baseline_catalog,
+    )
+    from research.holding_metrics import (
+        cost_amortization_report,
+        holding_metrics_document,
+        holding_metrics_report,
+    )
+
+    assert_harness_closed()
+    mode_s = str(mode or "wiring_only").strip().lower()
+    if mode_s not in STANDARD_EVAL_MODES:
+        raise EvalHarnessError(
+            f"run_standard_research_eval mode must be one of "
+            f"{list(STANDARD_EVAL_MODES)}, got {mode!r}"
+        )
+
+    steps: list[str] = ["assert_harness_closed"]
+
+    # Cost assumption (default 10bp one-way; change needs reason).
+    default_cost = float(DEFAULT_ONE_WAY_COST)
+    cost = float(one_way_cost)
+    cost_bp = cost * 10_000.0
+    if abs(cost - default_cost) > 1e-15 and not (
+        cost_change_reason and str(cost_change_reason).strip()
+    ):
+        raise EvalHarnessError(
+            "changing one_way_cost from default 10bp requires cost_change_reason"
+        )
+    cost_assumption: dict[str, Any] = {
+        "one_way_cost": cost,
+        "one_way_cost_bp": cost_bp,
+        "round_trip_cost": cost * 2.0,
+        "round_trip_cost_bp": cost_bp * 2.0,
+        "require_net_sign_majority": bool(require_net_sign_majority),
+        "default_one_way_cost": default_cost,
+        "default_one_way_cost_bp": default_cost * 10_000.0,
+        "changed_from_default": abs(cost - default_cost) > 1e-15,
+        "change_reason": (
+            str(cost_change_reason).strip() if cost_change_reason else None
+        ),
+        "label": "仮定に依存・研究用・運用GOではない",
+        "formula": "net_one_way = gross_signed_mean_active - one_way_cost",
+    }
+    steps.append("cost_assumption")
+
+    # Multi-year / non-overlapping long window design.
+    if periods is None:
+        designed = design_yearly_eval_windows(
+            years, max_days=max_days, min_days=min_days, codes=codes
+        )
+    else:
+        designed = [dict(p) for p in periods]
+    steps.append("multi_year_or_long_period_design")
+    availability = multi_year_availability_table(designed)
+
+    # Data-gap disclosure (required).
+    gap_notes: Any
+    if data_gap_notes is not None:
+        gap_notes = data_gap_notes
+    else:
+        gap_notes = {
+            "source": "design_yearly_eval_windows.coverage_notes + inventory",
+            "inventory": dict(DATASET_YEAR_INVENTORY_NOTES),
+            "per_period": [
+                {
+                    "period_id": p.get("period_id"),
+                    "year": p.get("year"),
+                    "skip_reason": p.get("skip_reason"),
+                    "s4_eligible": p.get("s4_eligible"),
+                    "coverage_notes": p.get("coverage_notes"),
+                }
+                for p in designed
+            ],
+            "note": (
+                "Gaps skipped / empty_allowed — never densify invent. "
+                "Caller may override data_gap_notes."
+            ),
+        }
+    steps.append("data_gap_disclosure")
+
+    # Baseline catalog awareness (rejected demos only).
+    catalog = rejected_baseline_catalog()
+    baseline_demo: dict[str, Any] = {
+        "mode": mode_s,
+        "catalog_version": catalog.get("version"),
+        "rejected_signal_ids": list(catalog.get("signal_ids") or []),
+        "research_status_value": RESEARCH_STATUS_REJECTED,
+        "new_signals_registered": False,
+        "note": (
+            "Does not invent signals. S1/S4 modes re-run rejected baselines only."
+        ),
+    }
+    steps.append("baseline_catalog_check")
+
+    multi_year_result: dict[str, Any] | None = None
+    gate: dict[str, Any] | None = None
+    executable = any(
+        not p.get("skip_reason")
+        and str(p.get("period_start") or "").strip()
+        and str(p.get("period_end") or "").strip()
+        and (
+            p.get("r2_raw_lines_by_dataset")
+            or p.get("r2_object_keys_by_dataset")
+            or p.get("r2_local_paths_by_dataset")
+            or d1_execute is not None
+            or history_source == "d1_tip"
+        )
+        for p in designed
+    )
+
+    if mode_s == "wiring_only" or (dry_run and not executable and period_rows_for_gate is None):
+        # Validate wiring without heavy R2.
+        steps.append("wiring_only_no_heavy_r2")
+        gate_signal_id = DEFAULT_SIGNAL_ID
+        if mode_s == "s1_rejected_baseline":
+            gate_signal_id = DEFAULT_SIGNAL_ID
+            baseline_demo["signal_id"] = DEFAULT_SIGNAL_ID
+            baseline_demo["hyp_id"] = "S1"
+            baseline_demo["still_rejected"] = is_research_baseline_rejected(
+                DEFAULT_SIGNAL_ID
+            )
+        elif mode_s == "s4_rejected_baseline":
+            gate_signal_id = "c21_margin_change_sign"
+            baseline_demo["signal_id"] = gate_signal_id
+            baseline_demo["hyp_id"] = "S4"
+            baseline_demo["still_rejected"] = is_research_baseline_rejected(
+                gate_signal_id
+            )
+        if period_rows_for_gate is not None and apply_robustness_gate:
+            gate = evaluate_research_robustness_gate(
+                period_rows_for_gate,
+                signal_id=gate_signal_id,
+                min_periods=min_periods_gate,
+                min_active_per_period=min_active_per_period,
+                one_way_cost=cost,
+                require_net_sign_majority=require_net_sign_majority,
+            )
+            steps.append("robustness_gate_v2")
+        elif apply_robustness_gate:
+            # Document-level gate surface (no period metrics → not passed).
+            gate = {
+                **research_robustness_gate_document(),
+                "passed": False,
+                "reasons": ["wiring_only_no_period_metrics"],
+                "signal_id": gate_signal_id,
+                "ready_declared": False,
+                "operational_go": False,
+                "connected_to_ready": False,
+                "connected_to_mass": False,
+                "mass_research": MASS_RESEARCH,
+                "phase7": PHASE7,
+            }
+            steps.append("robustness_gate_v2_surface")
+        multi_year_result = {
+            "status": "wiring_only",
+            "n_years_designed": len(designed),
+            "periods_designed": [
+                {
+                    "period_id": p.get("period_id"),
+                    "year": p.get("year"),
+                    "period_start": p.get("period_start"),
+                    "period_end": p.get("period_end"),
+                    "skip_reason": p.get("skip_reason"),
+                    "s4_eligible": p.get("s4_eligible"),
+                }
+                for p in designed
+            ],
+            "availability": availability,
+            "note": (
+                "No multi-year job executed (wiring_only or dry_run without "
+                "executable period fixtures). Short-window-only remains insufficient."
+            ),
+        }
+    elif mode_s == "s1_rejected_baseline":
+        if not is_research_baseline_rejected(DEFAULT_SIGNAL_ID):
+            raise EvalHarnessError(
+                "s1_rejected_baseline requires catalog rejection of "
+                f"{DEFAULT_SIGNAL_ID}"
+            )
+        multi_year_result = run_multi_year_s1_eval(
+            designed,
+            years=None,
+            job_id_prefix=job_id_prefix,
+            codes=codes,
+            max_days=max_days,
+            min_days=min_days,
+            feature_row_limit=feature_row_limit,
+            volume_change_abs_min=volume_change_abs_min,
+            write_per_day_artifacts=write_per_day_artifacts,
+            dry_run=dry_run,
+            d1_execute=d1_execute,
+            r2_put=r2_put,
+            staging_dir=staging_dir,
+            wrangler=wrangler,
+            wrangler_config=wrangler_config,
+            history_source=history_source,
+            r2_get=r2_get,
+            r2_bucket=r2_bucket,
+            apply_robustness_gate=apply_robustness_gate,
+            min_periods_gate=min_periods_gate,
+            min_active_per_period=min_active_per_period,
+            one_way_cost=cost,
+            require_net_sign_majority=require_net_sign_majority,
+        )
+        gate = multi_year_result.get("robustness_gate")
+        steps.append("multi_year_s1_rejected_baseline")
+        steps.append("robustness_gate_v2")
+        baseline_demo["signal_id"] = DEFAULT_SIGNAL_ID
+        baseline_demo["hyp_id"] = "S1"
+        baseline_demo["still_rejected"] = is_research_baseline_rejected(DEFAULT_SIGNAL_ID)
+    elif mode_s == "s4_rejected_baseline":
+        s4_id = "c21_margin_change_sign"
+        if not is_research_baseline_rejected(s4_id):
+            raise EvalHarnessError(
+                f"s4_rejected_baseline requires catalog rejection of {s4_id}"
+            )
+        want = list(signal_ids) if signal_ids is not None else [s4_id]
+        multi_year_result = run_multi_year_extra_hyp_eval(
+            designed,
+            years=None,
+            job_id_prefix=job_id_prefix,
+            codes=codes,
+            max_days=max_days,
+            min_days=min_days,
+            feature_row_limit=feature_row_limit,
+            one_way_cost=cost,
+            write_per_day_artifacts=write_per_day_artifacts,
+            dry_run=dry_run,
+            d1_execute=d1_execute,
+            r2_put=r2_put,
+            staging_dir=staging_dir,
+            wrangler=wrangler,
+            wrangler_config=wrangler_config,
+            history_source=history_source,
+            r2_get=r2_get,
+            r2_bucket=r2_bucket,
+            apply_robustness_gate=apply_robustness_gate,
+            min_periods_gate=min_periods_gate,
+            min_active_per_period=min_active_per_period,
+            signal_ids=want,
+            require_net_sign_majority=require_net_sign_majority,
+        )
+        gates = multi_year_result.get("robustness_gates") or {}
+        # Prefer primary S4 gate when present.
+        if s4_id in gates:
+            gate = gates[s4_id]
+        elif gates:
+            gate = next(iter(gates.values()))
+        else:
+            gate = None
+        steps.append("multi_year_s4_rejected_baseline")
+        steps.append("robustness_gate_v2")
+        baseline_demo["signal_id"] = s4_id
+        baseline_demo["hyp_id"] = "S4"
+        baseline_demo["still_rejected"] = is_research_baseline_rejected(s4_id)
+        baseline_demo["signal_ids"] = want
+
+    # Optional period_rows_for_gate override after multi-year (or alone).
+    if period_rows_for_gate is not None and mode_s != "wiring_only":
+        if apply_robustness_gate:
+            sid = (
+                (baseline_demo.get("signal_id") or DEFAULT_SIGNAL_ID)
+                if baseline_demo.get("signal_id")
+                else DEFAULT_SIGNAL_ID
+            )
+            gate = evaluate_research_robustness_gate(
+                period_rows_for_gate,
+                signal_id=str(sid),
+                min_periods=min_periods_gate,
+                min_active_per_period=min_active_per_period,
+                one_way_cost=cost,
+                require_net_sign_majority=require_net_sign_majority,
+            )
+            if "robustness_gate_v2" not in steps:
+                steps.append("robustness_gate_v2")
+
+    # Holding / turnover (recommended).
+    holding: dict[str, Any] | None = None
+    if include_holding:
+        if holding_records is not None:
+            holding = holding_metrics_report(
+                holding_records,
+                one_way_cost=cost,
+            )
+            steps.append("holding_turnover_metrics")
+        else:
+            holding = {
+                "status": "annotation_only",
+                "document": holding_metrics_document(),
+                "cost_amortization": cost_amortization_report(one_way_cost=cost),
+                "note": (
+                    "Recommended holding metrics surface only — no sign panel "
+                    "supplied. Pass holding_records for full run-length report."
+                ),
+            }
+            steps.append("holding_turnover_annotation")
+
+    # Pass does NOT connect READY / Mass / GO (always restate).
+    steps.append("freeze_ready_mass_phase7_closed")
+
+    gate_passed = bool(gate.get("passed")) if isinstance(gate, Mapping) else False
+
+    return {
+        "checklist_version": CHECKLIST_VERSION,
+        "version": CHECKLIST_VERSION,
+        "wave": CHECKLIST_WAVE,
+        "label": CHECKLIST_LABEL,
+        "proof": STANDARD_EVAL_PROOF,
+        "mode": mode_s,
+        "dry_run": bool(dry_run),
+        "job_id_prefix": job_id_prefix,
+        "steps_completed": list(steps),
+        "designed_periods": designed,
+        "availability": availability,
+        "multi_year": multi_year_result,
+        "robustness_gate": gate,
+        "cost_assumption": cost_assumption,
+        "data_gap_notes": gap_notes,
+        "holding": holding,
+        "baseline_demo": baseline_demo,
+        "new_signals_registered": False,
+        "research_candidate": False,
+        "checklist_skipped": False,
+        "gate_passed": gate_passed,
+        "gate_pass_implies_ready": False,
+        "gate_pass_implies_mass": False,
+        "gate_pass_implies_research_candidate": False,
+        "short_window_only_sufficient": False,
+        "mass_research": MASS_RESEARCH,
+        "phase7": PHASE7,
+        "ready_declared": False,
+        "operational_go": False,
+        "connected_to_ready": False,
+        "connected_to_mass": False,
+        "significance_claimed": False,
+        "edge_claimed": False,
+        "densify": DENSIFY,
+        "local_sot": LOCAL_SOT,
+        "order_execution": ORDER_EXECUTION,
+        "note": (
+            "Standard research eval checklist (W66). Default entry for future hyps. "
+            "Short-window-only is insufficient. Does not invent signals. "
+            "Gate pass ≠ research_candidate ≠ READY/Mass/GO. "
+            "S1–S5 remain research_baseline_rejected when used as demos."
+        ),
+    }
+
+
+# Alias for discoverability.
+standard_research_eval_checklist_run = run_standard_research_eval
+
+
 __all__ = [
     "APPROVED_SIGNAL_LEGS",
     "COMPLETE_21_DATASETS",
     "COMPLETE_21_DATASET_SET",
+    "CHECKLIST_LABEL",
+    "CHECKLIST_VERSION",
+    "CHECKLIST_WAVE",
     "CONNECTED_TO_MASS_RESEARCH_LOOP",
     "DATASET_YEAR_INVENTORY_NOTES",
     "DEFAULT_EVAL_CODES",
@@ -1771,6 +2273,8 @@ __all__ = [
     "RESEARCH_ARTIFACT_PREFIX",
     "RESEARCH_WALK_FORWARD_LABEL",
     "SIGNAL_CANDIDATE_ONLY",
+    "STANDARD_EVAL_MODES",
+    "STANDARD_EVAL_PROOF",
     "WALK_FORWARD_VERSION",
     "EvalHarnessError",
     "SingleShotJobError",
@@ -1798,9 +2302,12 @@ __all__ = [
     "run_multisignal_compare",
     "run_nextday_return_eval",
     "run_research_walk_forward_multisignal",
+    "run_standard_research_eval",
     "session_close_as_of",
     "signal_definition",
     "split_asof_days_walk_forward",
+    "standard_research_eval_checklist_document",
+    "standard_research_eval_checklist_run",
     "summarize_nextday_by_sign",
     "summarize_signal_day",
     "evaluate_research_robustness_gate",

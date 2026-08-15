@@ -109,6 +109,36 @@ Module: [`r2_feature_context.py`](r2_feature_context.py). Proof:
 Module: [`eval_harness.py`](eval_harness.py) (re-exports multiday/nextday helpers from [`single_shot_job.py`](single_shot_job.py)).  
 Tests: `tests/test_eval_harness.py`, `tests/test_single_shot_research_job.py`, `tests/test_mass_research_gate.py`, `tests/test_r2_feature_context.py`.
 
+## Standard research eval checklist (W66 · default for future hyps)
+
+Before any hypothesis is labeled **`research_candidate`**, it must pass the
+standard checklist (multi-year or non-overlapping long periods · cost 10bp
+default · robustness_gate v2 with `net_sign_majority` · data-gap disclosure ·
+pass ≠ READY/Mass). Short-window-only is **insufficient**.
+
+```python
+from research.eval_harness import run_standard_research_eval
+
+# Wiring-only (no heavy R2): freezes + cost + window design + gap notes
+out = run_standard_research_eval(dry_run=True)
+assert out["ready_declared"] is False
+assert out["mass_research"] == "NO-GO"
+assert out["phase7"] == "OFF"
+assert out["research_candidate"] is False  # never auto-promotes
+```
+
+| rule | held |
+|------|------|
+| Default entry | `run_standard_research_eval` |
+| Gate | cost-aware v2 (`net_sign_majority`, 10bp one-way) |
+| S1–S5 | remain `research_baseline_rejected` (catalog); demo re-run only |
+| READY / Mass / Phase7 | **not** connected on pass |
+| New signals | **not** invented by this entry |
+
+Checklist proof: `docs/proof/w0815bg_w66_standard_research_eval_checklist_20260815.md`.  
+Harness proof: `docs/proof/w0815bg_w66_standard_eval_harness_entry_20260815.md`.  
+Tests: `tests/test_standard_research_eval.py`.
+
 ## Single-shot job (W49 skeleton · W50 CF execute · W51 tip features · W52 signal)
 
 Lower-level CF tip execute / feature / single-day signal path. Prefer

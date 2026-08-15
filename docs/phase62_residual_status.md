@@ -1,10 +1,47 @@
 # Phase 6.2 / 6.3 residual status
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
-**Live verified:** 2026-08-15 (JST) / **W65** 不合格ベースライン固定（READY 未宣言） · COMPLETE segs **3478** · Dataset COMPLETE **21** · PARTIAL **5** DEFER · **actionable_gap = 0** · **P0 gaps = 0** · empty COMPLETE **0** · **OTC 93** · Mass/READY/Phase7 **NO-GO/OFF** · FRESH `projgen-3ec43f655e4f4ef08a636d33bc88f43e` · **CF-SoT** held · promotion **9 approved** / **1 candidate** no-promote · S1–S5 **research_baseline_rejected** · holding metrics **research-only** · cost **10bp one-way** held · S1 Q4 cost **FAIL** · S4 cost PASS weak · **gate pass ≠ READY/Mass** · **no significance / no edge / no operational GO**
-**Repo tip:** `22d2544b866e112515ffeb23b74d86f2101137c8` — W65 不合格ベースライン固定 · COMPLETE **21** / DEFER **5** / segs **3478** / OTC **93** / READY **未宣言** · FRESH `projgen-3ec43f655e4f4ef08a636d33bc88f43e`
+**Live verified:** 2026-08-15 (JST) / **W66** 標準評価チェックリスト固定 · simple daily sign track closed（READY 未宣言） · COMPLETE segs **3478** · Dataset COMPLETE **21** · PARTIAL **5** DEFER · **actionable_gap = 0** · **P0 gaps = 0** · empty COMPLETE **0** · **OTC 93** · Mass/READY/Phase7 **NO-GO/OFF** · FRESH `projgen-03cc13b6603b4bad84d051420f25e417` · **CF-SoT** held · promotion **9 approved** / **1 candidate** no-promote · S1–S5 **research_baseline_rejected** · checklist **v1** · `run_standard_research_eval` · holding metrics **research-only** · cost **10bp one-way** held · S1 Q4 cost **FAIL** · S4 cost PASS weak · **gate/checklist pass ≠ READY/Mass** · **no significance / no edge / no operational GO**
+**Repo tip:** `TIP_PENDING_W66_FEAT` — W66 標準評価チェックリスト固定 · COMPLETE **21** / DEFER **5** / segs **3478** / OTC **93** / READY **未宣言** · FRESH `projgen-03cc13b6603b4bad84d051420f25e417`
 
-## 不合格ベースライン固定 S1–S5 + 保有メトリクス + データ穴整理（READY 未宣言）
+## 標準研究評価チェックリスト固定（READY 未宣言）
+
+**Phase name:** 標準研究評価手順固定 + harness 標準エントリ（宣言なし）  
+**Wave:** W66 / w0815bg  
+**Close:** [`docs/proof/w0815bg_w66_standard_eval_close_20260815.md`](proof/w0815bg_w66_standard_eval_close_20260815.md)  
+**Checklist:** [`docs/proof/w0815bg_w66_standard_research_eval_checklist_20260815.md`](proof/w0815bg_w66_standard_research_eval_checklist_20260815.md) · **v1** `standard-research-eval-checklist/v1`  
+**Harness entry:** `packages/product/research/eval_harness.py` · `run_standard_research_eval` · alias `standard_research_eval_checklist_run` · proof [`docs/proof/w0815bg_w66_standard_eval_harness_entry_20260815.md`](proof/w0815bg_w66_standard_eval_harness_entry_20260815.md)  
+**Tests:** `tests/test_standard_research_eval.py`  
+**Ops health:** [`docs/proof/w0815bg_w66_ops_health_20260815.md`](proof/w0815bg_w66_ops_health_20260815.md) · log [`.glm-logs/w0815bg_w66_standard_eval/`](../.glm-logs/w0815bg_w66_standard_eval/)  
+**S1–S5:** stay **research_baseline_rejected** (no un-reject · simple daily sign track **closed**)  
+**Checklist pass ≠** `research_candidate` / READY / Mass / Phase7 / edge  
+**FRESH:** `projgen-03cc13b6603b4bad84d051420f25e417` · coverage_segments untouched · mass=NO-GO · densify **none**  
+**Prior W65 不合格ベースライン固定:** held underneath
+
+| gate | status |
+|------|--------|
+| READY | **未宣言** (checklist/harness does not connect) |
+| Mass / Phase7 | **NO-GO / OFF** |
+| Dataset COMPLETE | **21** |
+| DEFER | **5** |
+| COMPLETE segs | **3478** |
+| empty COMPLETE | **0** |
+| OTC | **93** |
+| densify | **none** |
+| P0 data gaps | **0** |
+| S1–S5 catalog | **research_baseline_rejected** |
+| checklist | **v1 locked** · research-only |
+| `run_standard_research_eval` | **landed** · wiring_only default |
+| Holding metrics | held research-only (W65) |
+| Cost gate v2 | held · research-only |
+
+### Explicit non-declarations (held)
+
+- **READY** — not declared  
+- **Mass** — **NO-GO / OFF**  
+- **Phase7** — **OFF**
+
+## 不合格ベースライン固定 S1–S5 + 保有メトリクス + データ穴整理（READY 未宣言）· W65 held
 
 **Phase name:** 不合格ベースライン固定（単純日次 sign · 宣言なし）  
 **Wave:** W65 / w0815bf  
