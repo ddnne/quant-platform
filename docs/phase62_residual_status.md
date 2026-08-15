@@ -1,8 +1,24 @@
 # Phase 6.2 / 6.3 residual status
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
-**Live verified:** 2026-08-15 (JST) / ~2026-08-15T04:51–04:59Z UTC (remote D1; COMPLETE segs **3457** **+0**; raw **15506** tip POST; Dataset COMPLETE **11**; empty COMPLETE **0**; Phase7 **OFF**; **W34** tip collect + JSDA + gap; floors **locked** + **NO_DENSIFY_FIXED** held; tip raw **+30** secondary; FRESH `projgen-f0ee1d48d335445eb7f42c75c872e7da`; **HAS_RAW_SEALABLE=0** held; post_floor_sealable **0** densify **none**; OTC **72** held; **DEFER densify not** re-run; **CF-SoT** language held — D1 = hot tip · R2 = history · COMPLETE = receipt-owned; **POST_PUSH_SHA** `730d333cc3d3caab39238d52d1e7be3fe9af3904`)
-**Repo tip:** `730d333cc3d3caab39238d52d1e7be3fe9af3904` — COMPLETE **3457** / Dataset COMPLETE **11** / empty COMPLETE **0** / Phase7 **OFF** / w0815aa W34 collect ops close
+**Live verified:** 2026-08-15 (JST) / ~2026-08-15T05:02–05:15Z UTC (remote D1; COMPLETE segs **3457** **+0**; raw **15536** tip POST; Dataset COMPLETE **11**; empty COMPLETE **0**; Phase7 **OFF**; **W35** tip collect + JSDA + gap; floors **locked** + **NO_DENSIFY_FIXED** held; tip raw **+30** secondary; FRESH `projgen-340eac0c5eda4e8b8ffdadb0b37cafa4`; **HAS_RAW_SEALABLE=0** held; post_floor_sealable **0** densify **none**; OTC **72** held; **DEFER densify not** re-run; **CF-SoT** language held — D1 = hot tip · R2 = history · COMPLETE = receipt-owned; **POST_PUSH_SHA** `POST_PUSH_SHA_PENDING`)
+**Repo tip:** `POST_PUSH_SHA_PENDING` — COMPLETE **3457** / Dataset COMPLETE **11** / empty COMPLETE **0** / Phase7 **OFF** / w0815ab W35 collect ops close
+
+## W35 / w0815ab — continuous collect ops (JQ tip + JSDA + gap) (FINAL)
+
+**Ops close proof:** [`docs/proof/w0815ab_w35_collect_ops_20260815.md`](proof/w0815ab_w35_collect_ops_20260815.md)  
+**Machine:** tip [`.glm-logs/w0815ab_g1_tip/FINAL_metrics.json`](../.glm-logs/w0815ab_g1_tip/FINAL_metrics.json) · JSDA [`.glm-logs/w0815ab_g2_jsda/jsda_summary.json`](../.glm-logs/w0815ab_g2_jsda/jsda_summary.json) · gap [`.glm-logs/w0815ab_g3_gap/GAP_REPORT.json`](../.glm-logs/w0815ab_g3_gap/GAP_REPORT.json)
+
+| gate | status |
+|------|--------|
+| Tip densify | **secondary** — COMPLETE **Δ0** · raw **+30** (general 27p + fins 3p); logs `w0815ab_g1_tip` |
+| JSDA OTC | **72→72** · FULL_OK_NEW **0** · S260817 refetch only · corp/repo COMPLETE skip · hot D1 **SKIP** 252 (D1 7403 intermittent retried OK) |
+| Gap | post_floor_sealable **0** · densify **none** · HAS_RAW_SEALABLE **0** · verdict GAP_HELD_NO_SEALABLE |
+| Floors / NO_DENSIFY | **held** (W29 lock; 18 classes; catalog unchanged) |
+| empty-raw COMPLETE / Mass / READY / Phase7 | **ban / NO-GO / OFF** |
+| Projection | **FRESH** `projgen-340eac0c5eda4e8b8ffdadb0b37cafa4` |
+| CF-SoT | D1 **hot tip** · R2 **history** · COMPLETE **receipt-owned** |
+| Push | **POST_PUSH_SHA** `POST_PUSH_SHA_PENDING` |
 
 ## W34 / w0815aa — continuous collect ops (JQ tip + JSDA + gap) (FINAL)
 
@@ -183,7 +199,7 @@ Coverage DEFERs **D1–D10** (D10 fins_summary residual 6 formalized **W19-G6 T1
 | Dataset COMPLETE | **11** — `markets_calendar` (224/224), `jsda_tokyo_repo_rates` (1/1), `jsda_corporate_bond_transactions` (12/12), `equities_investor_types` (164/164), `edinet_major_shareholders` (104/104), `markets_margin_alert` (164/164), `markets_margin_interest` (164/164), `markets_short_ratio` (164/164), **`derivatives_bars_daily_futures` (164/164)**, **`derivatives_bars_daily_options_225` (164/164)**, **`derivatives_bars_daily_options` (164/164)** |
 | Dataset COMPLETE surfaces | **aligned** — `dataset_coverage.status` **11** (prior **10** + **W15-G1 options** 164/164 surgical reagg+verify; held through **W18–W27** ops; proof [`w0815g_g1_options_20260815.md`](proof/w0815g_g1_options_20260815.md), [`w0815s_g4_ops_20260815.md`](proof/w0815s_g4_ops_20260815.md), [`w0815t_g6_matrix_close_ops_20260815.md`](proof/w0815t_g6_matrix_close_ops_20260815.md)) |
 | Dataset STALE | **0** |
-| Segment COMPLETE total | **3457** (remote; **W34** PRE/POST **3457** **+0** primary; tip raw-only secondary; prior **W33** **3457** **+0**; prior **W32** **3457** **+0**; prior **W31** **3457** **+0**; prior **W30** **3457** **+0**; prior **W29** **3457** **+0**; prior **W28-G1** **3457** **+0**; prior **W27-G6** matrix HAS_RAW_SEALABLE **0** / closed **0**; prior W22 peer OTC **+15**; **no** empty COMPLETE) |
+| Segment COMPLETE total | **3457** (remote; **W35** PRE/POST **3457** **+0** primary; tip raw-only secondary; prior **W34** **3457** **+0**; prior **W33** **3457** **+0**; prior **W32** **3457** **+0**; prior **W31** **3457** **+0**; prior **W30** **3457** **+0**; prior **W29** **3457** **+0**; prior **W28-G1** **3457** **+0**; prior **W27-G6** matrix HAS_RAW_SEALABLE **0** / closed **0**; prior W22 peer OTC **+15**; **no** empty COMPLETE) |
 | Segment other | PARTIAL / UNKNOWN (remainder; not mass-READY) |
 | calendar segments | **224 COMPLETE / 0 PARTIAL** |
 | JSDA OTC COMPLETE segs | **72** — tip/recent sealed (**W22 peer +15** vs prior **57**; W18 **49→57**; **W27-G6 / W25 held**); further tip/archive **DEFER** site timeout/404/403 (D5) |
@@ -196,8 +212,8 @@ Coverage DEFERs **D1–D10** (D10 fins_summary residual 6 formalized **W19-G6 T1
 | **fins_summary** | COMPLETE **218** / PARTIAL **6** (`2008-01…06` empty pre-history shells; **no nz raw** → densify **DEFER** — **W19-G6 T13 formal** / **W25-G5 re-verify held**) |
 | **markets_breakdown** | COMPLETE **137** / PARTIAL **27** (`2013-01…2015-03`) — **W10-G9 DEFER_pre2015_empty**; source floor **2015-03-26**; island **`2015-04…2026-08`**; observed_start **`2015-03-26`**; history_target **`2013-01-04`** (contract held) |
 | A3 sealed (partial datasets) | prior + **W6–W25 peers** + **W25-G5 ops publish** → COMPLETE **3457** |
-| Remote `raw_retention_manifests` | **15506** total (**W34** tip PRE **15476** → POST **15506** **+30** general 27 + fins 3; prior **W33** **15420→15476**; prior **W32** **15390→15420**; prior **W31** **15311→15367**; prior **W30** **15255→15311**; prior **W29** **15225→15255**; prior **W28-G1** **15145→15175**; prior **W27-G6** **15145**; worker pass ≠ COMPLETE) |
-| Track A + P0 execute | **w0713…w0815aa** + **W34** tip collect + JSDA/gap + **W33** collect ops + **W32** collect ops + **W31** collect ops + **W30** collect ops + **W29** floor catalog + **W27-G6 matrix close** + peers; **Worker pass ≠ COMPLETE** |
+| Remote `raw_retention_manifests` | **15536** total (**W35** tip PRE **15506** → POST **15536** **+30** general 27 + fins 3; prior **W34** **15476→15506**; prior **W33** **15420→15476**; prior **W32** **15390→15420**; prior **W31** **15311→15367**; prior **W30** **15255→15311**; prior **W29** **15225→15255**; prior **W28-G1** **15145→15175**; prior **W27-G6** **15145**; worker pass ≠ COMPLETE) |
+| Track A + P0 execute | **w0713…w0815ab** + **W35** tip collect + JSDA/gap + **W34** collect ops + **W33** collect ops + **W32** collect ops + **W31** collect ops + **W30** collect ops + **W29** floor catalog + **W27-G6 matrix close** + peers; **Worker pass ≠ COMPLETE** |
 | master | `scd2_event_sourcing` / D1 hot |
 | projection | **FRESH** — `projgen-f0ee1d48d335445eb7f42c75c872e7da` (**W34** tip reeval; segs untouched; prior **W33** `projgen-061b5d38…` / **W32** `projgen-b5f2325c…` / **W31** `projgen-20ecd21e…` / **W30** `projgen-c4240127…` / **W29** `projgen-76084a30…` / **W28-G1** `projgen-57a33eaa…` / **W27-G6** `projgen-2ef0e4ae…`) |
 | sticky COMPLETE | **fixed** segment_id fallback + post-sticky dataset aggregate + COMPLETE inventory retain past UTC target_end (`coverage_ledger.py`) |
