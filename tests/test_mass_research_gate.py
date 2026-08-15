@@ -1,4 +1,7 @@
-"""Mass research gate — signed READY attestation only; no override bypass."""
+"""Mass research gate — signed READY attestation only; no override bypass.
+
+Also freezes Phase7 / Mass OFF constants (W49 / w0815ap_g3 T9).
+"""
 
 from __future__ import annotations
 
@@ -8,6 +11,13 @@ import pytest
 
 from agents.mass_research import assert_mass_research_allowed, start_mass_research
 from research.readiness import OperatorOverrideService
+from research.single_shot_job import (
+    MASS_RESEARCH_STATUS,
+    PHASE7_STATUS,
+    READY_DECLARED,
+    READY_PUBLICATION_STATUS,
+    assert_mass_and_phase7_off,
+)
 from selection.budget_ledger import MassResearchDisabledError, ResearchBudgetCapability
 from selection.screen import ExperimentBudget
 
@@ -59,3 +69,14 @@ def test_safety_scope_override_rejected():
             operator_identity="op",
             scope="mass_research",  # type: ignore[arg-type]
         )
+
+
+def test_phase7_mass_off_constants_frozen():
+    """T9: Phase7 OFF / Mass NO-GO / READY not declared — do not enable switches."""
+    assert MASS_RESEARCH_STATUS == "NO-GO"
+    assert PHASE7_STATUS == "OFF"
+    assert READY_PUBLICATION_STATUS == "OFF"
+    assert READY_DECLARED is False
+    status = assert_mass_and_phase7_off()
+    assert status["mass_research"] == "NO-GO"
+    assert status["phase7"] == "OFF"

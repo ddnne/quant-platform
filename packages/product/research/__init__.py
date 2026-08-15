@@ -20,8 +20,18 @@ from research.artifacts import (
 )
 from research.scheduler import ExperimentScheduler, ScheduledExperiment
 from research.evaluation import EvaluationHarness, EvaluationProtocol, EvaluationReport
+from research.single_shot_job import (
+    COMPLETE_21_DATASETS,
+    MASS_RESEARCH_STATUS,
+    PHASE7_STATUS,
+    READY_DECLARED,
+    SingleShotJobSpec,
+    assert_mass_and_phase7_off,
+    build_single_shot_job_spec,
+)
 
 __all__ = [
+    "COMPLETE_21_DATASETS",
     "EvaluationHarness",
     "EvaluationProtocol",
     "EvaluationReport",
@@ -30,15 +40,21 @@ __all__ = [
     "ExperimentScheduler",
     "FailureMode",
     "FeatureEvidence",
+    "MASS_RESEARCH_STATUS",
     "MassResearchDisabledError",
     "OperatorOverrideCapability",
     "OperatorOverrideService",
+    "PHASE7_STATUS",
+    "READY_DECLARED",
     "RegimeObservation",
     "RejectionReason",
     "ResearchIdea",
     "ResearchReadinessService",
     "ScheduledExperiment",
+    "SingleShotJobSpec",
     "StrategyEvidence",
     "VerifiedResearchReadiness",
+    "assert_mass_and_phase7_off",
+    "build_single_shot_job_spec",
     "require_mass_research_start",
 ]
