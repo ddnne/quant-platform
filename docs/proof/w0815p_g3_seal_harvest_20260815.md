@@ -11,7 +11,7 @@
 **Live verified:** 2026-08-15 (JST) / ~2026-08-15T01:19Z UTC  
 **Wave start HEAD:** `541a33f8f4c9082c633e7d301ccd76394838a2c2`  
 **Base HEAD (pre-proof):** `541a33f8f4c9082c633e7d301ccd76394838a2c2`  
-**Proof HEAD (post-push):** `PLACEHOLDER`  
+**Proof HEAD (post-push):** `479a4fed918d0046fc24fa6645a3c95321eb8376`  
 **Projection:** **FRESH** `projgen-bafc1270a7b448c798245014f61749cf`  
 **Artifacts:** `.glm-logs/w0815p_g3_seal/` (`scan_window_ok_fast.py`, `data_date_gate.py`, `inventory_window_ok.json`, `harvest_verdict.json`, `PRE_remote.json`, `POST_remote.json`, `FINAL_metrics.json`, `publish.log`, `reeval_freshness.log`, `pages/`)
 
