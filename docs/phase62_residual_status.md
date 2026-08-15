@@ -1,9 +1,9 @@
 # Phase 6.2 / 6.3 residual status
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
-**Live verified:** 2026-08-15 (JST) / **W50** 利用準備 E2E（READY 未宣言） FINAL · COMPLETE segs **3478** · Dataset COMPLETE **21 / 26** · PARTIAL = **5** permanent DEFER only · **actionable_gap = 0** · empty COMPLETE **0** · **OTC 93** tip island held · permanent DEFER **5** / NO_DENSIFY **6** · densify coverage loops **ENDED** · Mass/READY/Phase7 **NO-GO/OFF** · raw **15892** (remote verify; W46 tip secondary baseline **15869** held) · FRESH `projgen-0fb233bde5df4a8ca66b73bbbf78905d` · **CF-SoT** held — D1 = hot tip · R2 = history · COMPLETE = receipt-owned · floors W38 + W42 mb **2015-04-01** **not lowered** · coverage baseline **W47 FINAL held** · READY **not declared** · **POST_PUSH_SHA** _filled after push_ · PRE_sha `dc2a70539665fa16306ea742c021f010b21ee223`
+**Live verified:** 2026-08-15 (JST) / **W50** 利用準備 E2E（READY 未宣言） FINAL · COMPLETE segs **3478** · Dataset COMPLETE **21 / 26** · PARTIAL = **5** permanent DEFER only · **actionable_gap = 0** · empty COMPLETE **0** · **OTC 93** tip island held · permanent DEFER **5** / NO_DENSIFY **6** · densify coverage loops **ENDED** · Mass/READY/Phase7 **NO-GO/OFF** · raw **15892** (remote verify; W46 tip secondary baseline **15869** held) · FRESH `projgen-0fb233bde5df4a8ca66b73bbbf78905d` · **CF-SoT** held — D1 = hot tip · R2 = history · COMPLETE = receipt-owned · floors W38 + W42 mb **2015-04-01** **not lowered** · coverage baseline **W47 FINAL held** · READY **not declared** · **POST_PUSH_SHA** `d0dad82592145f80da22c700c6336ffd0fcfa2fe` · PRE_sha `dc2a70539665fa16306ea742c021f010b21ee223`
 
-**Repo tip:** _filled after push_ — W50 利用準備 E2E FINAL · COMPLETE **3478** / Dataset COMPLETE **21** / OTC **93** / empty COMPLETE **0** / **actionable_gap = 0** / Phase7 **OFF** / READY **未宣言** · FRESH `projgen-0fb233bde5df4a8ca66b73bbbf78905d` · **POST_PUSH_SHA** _filled after push_
+**Repo tip:** `d0dad82592145f80da22c700c6336ffd0fcfa2fe` — W50 利用準備 E2E FINAL · COMPLETE **3478** / Dataset COMPLETE **21** / OTC **93** / empty COMPLETE **0** / **actionable_gap = 0** / Phase7 **OFF** / READY **未宣言** · FRESH `projgen-0fb233bde5df4a8ca66b73bbbf78905d` · **POST_PUSH_SHA** `d0dad82592145f80da22c700c6336ffd0fcfa2fe`
 
 ## 利用準備 E2E（READY 未宣言）
 
@@ -31,7 +31,7 @@
 | OTC tip island | **93** held |
 | tip densify | **SKIP** (T12 · not primary this phase) |
 | densify | **none** |
-| push | **POST_PUSH_SHA** _filled after push_ (G5 FINAL merge) · PRE_sha `dc2a70539665fa16306ea742c021f010b21ee223` |
+| push | **POST_PUSH_SHA** `d0dad82592145f80da22c700c6336ffd0fcfa2fe` (G5 FINAL merge) · PRE_sha `dc2a70539665fa16306ea742c021f010b21ee223` |
 | Projection | **FRESH** `projgen-0fb233bde5df4a8ca66b73bbbf78905d` (peer G3 T9 ops_reeval_freshness; G4 residual-only; publish apply **SKIP** no segment drift; fail-closed no force) |
 | Single-shot CF E2E | G1 **PASS** — D1 tip extract + R2 put (input_plan/result/manifest) · Mass **not** connected |
 | Features expand | **7** candidates · COMPLETE 21 only · status=`candidate` · no READY claim |
