@@ -1,9 +1,9 @@
 # Phase 6.2 / 6.3 residual status
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
-**Live verified:** 2026-08-15 (JST) / **W57** ユニバース拡大・研究レポート（READY 未宣言） FINAL · COMPLETE segs **3478** · Dataset COMPLETE **21 / 26** · PARTIAL = **5** permanent DEFER only · **actionable_gap = 0** · empty COMPLETE **0** · **OTC 93** tip island held · permanent DEFER **5** / NO_DENSIFY **6** · densify coverage loops **ENDED** · Mass/READY/Phase7 **NO-GO/OFF** · raw **15915** held · FRESH `projgen-30219278e4064f258021f02eb00bbbc9` · **CF-SoT** held — D1 = hot tip · R2 = history · COMPLETE = receipt-owned · floors W38 + W42 mb **2015-04-01** **not lowered** · coverage baseline **W47 FINAL held** · READY **not declared** · tip densify **SKIP** · densify **none** · promotion **9 approved** (W52–W56 **8** + W57 O2 **+1** `margin_alert_flag` · v1.0.0) · remain **1 candidate** (`return_1d_c21` policy no-promote) · universe expand n_codes=**30** · n_days=**20** · mean R +1 **+0.00823** / −1 **−0.00202** · median +1 **+0.00900** / −1 **−0.00098** · label **小サンプル / 研究用・未宣言** · pytest **114** · PRE_sha `8381d9106167d65118f57509d67ed488419ceddf` · **POST_PUSH_SHA** `POST_PUSH_SHA_PENDING`
+**Live verified:** 2026-08-15 (JST) / **W57** ユニバース拡大・研究レポート（READY 未宣言） FINAL · COMPLETE segs **3478** · Dataset COMPLETE **21 / 26** · PARTIAL = **5** permanent DEFER only · **actionable_gap = 0** · empty COMPLETE **0** · **OTC 93** tip island held · permanent DEFER **5** / NO_DENSIFY **6** · densify coverage loops **ENDED** · Mass/READY/Phase7 **NO-GO/OFF** · raw **15915** held · FRESH `projgen-30219278e4064f258021f02eb00bbbc9` · **CF-SoT** held — D1 = hot tip · R2 = history · COMPLETE = receipt-owned · floors W38 + W42 mb **2015-04-01** **not lowered** · coverage baseline **W47 FINAL held** · READY **not declared** · tip densify **SKIP** · densify **none** · promotion **9 approved** (W52–W56 **8** + W57 O2 **+1** `margin_alert_flag` · v1.0.0) · remain **1 candidate** (`return_1d_c21` policy no-promote) · universe expand n_codes=**30** · n_days=**20** · mean R +1 **+0.00823** / −1 **−0.00202** · median +1 **+0.00900** / −1 **−0.00098** · label **小サンプル / 研究用・未宣言** · pytest **114** · PRE_sha `8381d9106167d65118f57509d67ed488419ceddf` · **POST_PUSH_SHA** `8357a0dfa543ef97a953d5583f4ac48ba1257618`
 
-**Repo tip:** `REPO_TIP_PENDING` — W57 ユニバース拡大・研究レポート FINAL · COMPLETE **3478** / Dataset COMPLETE **21** / OTC **93** / empty COMPLETE **0** / **actionable_gap = 0** / Phase7 **OFF** / READY **未宣言** · FRESH `projgen-30219278e4064f258021f02eb00bbbc9` · promotion **9 approved** / **1 candidate** · universe **e2e_pass** · tip densify **SKIP** · **POST_PUSH_SHA** `POST_PUSH_SHA_PENDING`
+**Repo tip:** `8357a0dfa543ef97a953d5583f4ac48ba1257618` — W57 ユニバース拡大・研究レポート FINAL · COMPLETE **3478** / Dataset COMPLETE **21** / OTC **93** / empty COMPLETE **0** / **actionable_gap = 0** / Phase7 **OFF** / READY **未宣言** · FRESH `projgen-30219278e4064f258021f02eb00bbbc9` · promotion **9 approved** / **1 candidate** · universe **e2e_pass** · tip densify **SKIP** · **POST_PUSH_SHA** `8357a0dfa543ef97a953d5583f4ac48ba1257618`
 
 ## ユニバース拡大・研究レポート（READY 未宣言）
 
@@ -34,7 +34,7 @@
 | permanent DEFER | **5** held |
 | tip densify | **SKIP** (T12; not primary this phase) |
 | densify | **none** |
-| push | **POST_PUSH_SHA** `POST_PUSH_SHA_PENDING` (G4 FINAL merge) · PRE_sha `8381d9106167d65118f57509d67ed488419ceddf` |
+| push | **POST_PUSH_SHA** `8357a0dfa543ef97a953d5583f4ac48ba1257618` (G4 FINAL merge) · PRE_sha `8381d9106167d65118f57509d67ed488419ceddf` |
 | Projection | **FRESH** `projgen-30219278e4064f258021f02eb00bbbc9` (G3 T11 ops_reeval_freshness; residual FRESH sync; publish apply **SKIP** no segment drift; fail-closed no force) |
 | Universe expand eval | G1 **PASS** — n_codes=**30** · n_days=**20** · mean+median by sign · Mass **not** connected · no orders · **小サンプル / 研究用・未宣言** · no significance / no edge |
 | Research report | G2 **written** — template + filled · 小サンプル · no READY claim |
