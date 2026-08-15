@@ -1,8 +1,8 @@
 # Phase 6.2 / 6.3 residual status
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
-**Live verified:** 2026-08-15 (JST) / tip PRE `2026-08-15T06:59:37Z` → ops POST `2026-08-15T07:21:10Z` UTC · **W41** continuous collect · W38 contract floors **still SoT** (`ba3c811`) · COMPLETE segs **3461→3478 (Δ+17 PRIMARY)** · Dataset COMPLETE **20 held** · empty COMPLETE **0** · **OTC 76→93 (+17 PRIMARY)** FULL_OK_NEW S260401…S260423 (17 Apr weekdays) · tip raw **15703→15750 (+47 secondary)** · tip densify **not primary** · actionable_n **0** · mb **2015-03** DEFER_thin_partial_month held (no densify) · Permanent DEFER **5** held · Phase7 **OFF** · FRESH `projgen-56113e9f4ca54796b9fc547a3f2ac8c6` · **CF-SoT** held — D1 = hot tip · R2 = history · COMPLETE = receipt-owned · **POST_PUSH_SHA** `PENDING_PUSH`
-**Repo tip:** `PENDING_PUSH` — W41 ops · COMPLETE **3478** / OTC **93** / Dataset COMPLETE **20** / empty COMPLETE **0** / raw **15756** (tip mid **15750**) / Phase7 **OFF**
+**Live verified:** 2026-08-15 (JST) / tip PRE `2026-08-15T06:59:37Z` → ops POST `2026-08-15T07:21:10Z` UTC · **W41** continuous collect · W38 contract floors **still SoT** (`ba3c811`) · COMPLETE segs **3461→3478 (Δ+17 PRIMARY)** · Dataset COMPLETE **20 held** · empty COMPLETE **0** · **OTC 76→93 (+17 PRIMARY)** FULL_OK_NEW S260401…S260423 (17 Apr weekdays) · tip raw **15703→15750 (+47 secondary)** · tip densify **not primary** · actionable_n **0** · mb **2015-03** DEFER_thin_partial_month held (no densify) · Permanent DEFER **5** held · Phase7 **OFF** · FRESH `projgen-56113e9f4ca54796b9fc547a3f2ac8c6` · **CF-SoT** held — D1 = hot tip · R2 = history · COMPLETE = receipt-owned · **POST_PUSH_SHA** `7960e193c929c9df2bfa63b5adcb6dcff32dd90d`
+**Repo tip:** `7960e193c929c9df2bfa63b5adcb6dcff32dd90d` — W41 ops · COMPLETE **3478** / OTC **93** / Dataset COMPLETE **20** / empty COMPLETE **0** / raw **15756** (tip mid **15750**) / Phase7 **OFF**
 
 ## W41 / w0815ah — continuous collect ops (JSDA OTC PRIMARY + JQ tip secondary + gap) (FINAL)
 
@@ -22,7 +22,7 @@
 | empty-raw COMPLETE / Mass / READY / Phase7 | **ban / NO-GO / OFF** |
 | Projection | **FRESH** `projgen-56113e9f4ca54796b9fc547a3f2ac8c6` |
 | CF-SoT | D1 **hot tip** · R2 **history** · COMPLETE **receipt-owned** |
-| Push | **POST_PUSH_SHA** `PENDING_PUSH` |
+| Push | **POST_PUSH_SHA** `7960e193c929c9df2bfa63b5adcb6dcff32dd90d` |
 
 **Primary success:** COMPLETE segs **+17** (OTC FULL_OK_NEW residual Apr weekdays) + Dataset COMPLETE held 20.  
 **Highlight:** OTC **76→93**. **Secondary only:** tip raw +47. **Not** tip-as-primary. **Not** densify-as-success.
