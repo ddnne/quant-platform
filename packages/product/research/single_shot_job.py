@@ -1076,14 +1076,26 @@ def build_tip_feature_context(
     *,
     as_of: str,
     inputs: Mapping[str, Any] | None = None,
+    plane: str = "D1_hot_tip",
+    source: str = "cloudflare_d1_tip",
+    table_prefix: str = "tip",
 ) -> FeatureContext:
-    """Build a FeatureContext whose PIT reads come from in-memory tip rows.
+    """Build a FeatureContext whose PIT reads come from in-memory rows.
 
-    Local SQLite is **not** used. Rows are gated by ``available_at <= as_of``.
+    Local SQLite is **not** used as SoT. Rows are gated by
+    ``available_at <= as_of`` (NULL/empty ``available_at`` excluded).
+
+    ``plane`` / ``source`` / ``table_prefix`` default to the D1 hot-tip
+    path. The R2 history bridge reuses this builder with
+    ``plane="R2_history"`` / ``source="cloudflare_r2_structured"`` /
+    ``table_prefix="r2"`` (see :mod:`research.r2_feature_context`).
     """
     as_of_s = str(as_of).strip()
     if not as_of_s:
         raise SingleShotJobError("as_of is required for tip FeatureContext")
+    plane_s = str(plane).strip() or "D1_hot_tip"
+    source_s = str(source).strip() or "cloudflare_d1_tip"
+    prefix = str(table_prefix).strip() or "tip"
 
     # Materialize plain dicts once.
     store: dict[str, list[dict[str, Any]]] = {
@@ -1120,10 +1132,10 @@ def build_tip_feature_context(
                 rows=out,
                 metadata={
                     "as_of": as_of_s,
-                    "table": "tip_equities_bars_daily",
+                    "table": f"{prefix}_equities_bars_daily",
                     "count": len(out),
-                    "source": "cloudflare_d1_tip",
-                    "plane": "D1_hot_tip",
+                    "source": source_s,
+                    "plane": plane_s,
                 },
             )
 
@@ -1146,10 +1158,10 @@ def build_tip_feature_context(
                 rows=out,
                 metadata={
                     "as_of": as_of_s,
-                    "table": "tip_markets_calendar",
+                    "table": f"{prefix}_markets_calendar",
                     "count": len(out),
-                    "source": "cloudflare_d1_tip",
-                    "plane": "D1_hot_tip",
+                    "source": source_s,
+                    "plane": plane_s,
                 },
             )
 
@@ -1182,11 +1194,11 @@ def build_tip_feature_context(
                 rows=out,
                 metadata={
                     "as_of": as_of_s,
-                    "table": "tip_jquants_records",
+                    "table": f"{prefix}_jquants_records",
                     "dataset": dataset,
                     "count": len(out),
-                    "source": "cloudflare_d1_tip",
-                    "plane": "D1_hot_tip",
+                    "source": source_s,
+                    "plane": plane_s,
                 },
             )
 
@@ -1201,10 +1213,10 @@ def build_tip_feature_context(
                 rows=out,
                 metadata={
                     "as_of": as_of_s,
-                    "table": "tip_jsda_tokyo_repo_rates",
+                    "table": f"{prefix}_jsda_tokyo_repo_rates",
                     "count": len(out),
-                    "source": "cloudflare_d1_tip",
-                    "plane": "D1_hot_tip",
+                    "source": source_s,
+                    "plane": plane_s,
                 },
             )
 
@@ -2540,14 +2552,23 @@ def execute_multiday_signal_eval(
     staging_dir: str | Path | None = None,
     wrangler: str | Path | None = None,
     wrangler_config: str | Path | None = None,
+    history_source: str = "d1_tip",
+    r2_object_keys_by_dataset: Mapping[str, Sequence[str]] | None = None,
+    r2_local_paths_by_dataset: Mapping[str, Sequence[str | Path]] | None = None,
+    r2_raw_lines_by_dataset: Mapping[str, Sequence[Any]] | None = None,
+    r2_get: Callable[[str, str], bytes] | None = None,
+    r2_bucket: str = "quant-structured",
 ) -> MultidaySignalEval:
-    """Run single_shot-equivalent tip signal compute across multiple as_of days.
+    """Run single_shot-equivalent signal compute across multiple as_of days.
 
-    Flow (Mass OFF · no READY · no orders · CF D1 tip only):
+    Flow (Mass OFF · no READY · no orders):
 
-    1. One tip payload extract for the window (not local SQLite SoT).
+    1. One history/tip payload extract for the window (not local SQLite SoT).
+       Default ``history_source="d1_tip"`` (CF D1 hot tip). Optional
+       ``history_source="r2"`` loads R2 structured JSONL/archive via
+       :mod:`research.r2_feature_context` (keys/fixtures required).
     2. Discover trading days (or use caller ``as_of_days``).
-    3. For each day: tip FeatureContext → approved-leg features → signal.
+    3. For each day: FeatureContext → approved-leg features → signal.
        Feature ``as_of`` is always T session close (no T+1 feature leak).
     4. Aggregate per-day counts / non-null rate / sign distribution.
     5. Optional (W55): attach next-day return per code/day when T+1 bar is
@@ -2577,15 +2598,43 @@ def execute_multiday_signal_eval(
         else ["13010", "72030", "67580"]
     )
 
-    tip_feature_extract = extract_d1_tip_feature_rows(
-        dataset_ids,
-        period_start=start,
-        period_end=end,
-        codes=selected_codes,
-        row_limit_per_dataset=feature_row_limit,
-        d1_execute=d1_execute,
-        context="multiday signal tip feature extract",
+    # Lazy import avoids circular import at module load
+    # (r2_feature_context imports helpers from this module).
+    from research.r2_feature_context import (
+        HISTORY_SOURCE_D1_TIP,
+        HISTORY_SOURCE_R2,
+        extract_r2_history_feature_rows,
+        resolve_history_source,
     )
+
+    hist_src = resolve_history_source(history_source)
+    if hist_src == HISTORY_SOURCE_R2:
+        tip_feature_extract = extract_r2_history_feature_rows(
+            dataset_ids,
+            period_start=start,
+            period_end=end,
+            codes=selected_codes,
+            object_keys_by_dataset=r2_object_keys_by_dataset,
+            local_paths_by_dataset=r2_local_paths_by_dataset,
+            raw_lines_by_dataset=r2_raw_lines_by_dataset,
+            r2_get=r2_get,
+            bucket=r2_bucket,
+            row_limit_per_dataset=max(int(feature_row_limit), 5000),
+            context="multiday signal r2 history feature extract",
+        )
+    else:
+        # Default: D1 hot tip (unchanged path).
+        if hist_src != HISTORY_SOURCE_D1_TIP:
+            raise SingleShotJobError(f"unsupported history_source={hist_src!r}")
+        tip_feature_extract = extract_d1_tip_feature_rows(
+            dataset_ids,
+            period_start=start,
+            period_end=end,
+            codes=selected_codes,
+            row_limit_per_dataset=feature_row_limit,
+            d1_execute=d1_execute,
+            context="multiday signal tip feature extract",
+        )
     rows_by_ds = tip_feature_extract.get("rows_by_dataset") or {}
     if codes is None and tip_feature_extract.get("selected_codes"):
         selected_codes = list(tip_feature_extract["selected_codes"])
@@ -2762,10 +2811,20 @@ def execute_multiday_signal_eval(
         "codes": list(selected_codes),
         "n_days": len(day_results),
         "as_of_days": [d.get("date") for d in day_results],
-        "tip_plane": "D1_hot_tip",
-        "d1_database": D1_DATABASE_NAME,
+        "history_source": hist_src,
+        "tip_plane": tip_feature_extract.get("plane")
+        or ("R2_history" if hist_src == HISTORY_SOURCE_R2 else "D1_hot_tip"),
+        "d1_database": (
+            None if hist_src == HISTORY_SOURCE_R2 else D1_DATABASE_NAME
+        ),
+        "r2_bucket": (
+            tip_feature_extract.get("bucket")
+            if hist_src == HISTORY_SOURCE_R2
+            else None
+        ),
         "tip_extracted_row_counts": tip_feature_extract.get("extracted_row_counts"),
-        "tip_raw_tip_counts": tip_feature_extract.get("raw_tip_counts"),
+        "tip_raw_tip_counts": tip_feature_extract.get("raw_tip_counts")
+        or tip_feature_extract.get("raw_envelope_counts"),
         "per_day": per_day_compact,
         "aggregate": {
             "signal_count": total_computed,
@@ -2966,6 +3025,12 @@ def execute_multiday_nextday_return_eval(
     staging_dir: str | Path | None = None,
     wrangler: str | Path | None = None,
     wrangler_config: str | Path | None = None,
+    history_source: str = "d1_tip",
+    r2_object_keys_by_dataset: Mapping[str, Sequence[str]] | None = None,
+    r2_local_paths_by_dataset: Mapping[str, Sequence[str | Path]] | None = None,
+    r2_raw_lines_by_dataset: Mapping[str, Sequence[Any]] | None = None,
+    r2_get: Callable[[str, str], bytes] | None = None,
+    r2_bucket: str = "quant-structured",
 ) -> MultidaySignalEval:
     """W55/W56 entry: multiday signal eval with next-day return alignment.
 
@@ -2975,6 +3040,9 @@ def execute_multiday_nextday_return_eval(
     (**小サンプル / 研究用・未宣言**) — Mass OFF, READY not declared, no orders,
     no densify, no significance / edge claim. If tip yields fewer than 20
     trading days, returns max available (honest n_days).
+
+    Optional ``history_source="r2"`` (W59) loads R2 structured history instead
+    of D1 tip — see :mod:`research.r2_feature_context`.
     """
     return execute_multiday_signal_eval(
         period_start=period_start,
@@ -2987,6 +3055,12 @@ def execute_multiday_nextday_return_eval(
         feature_row_limit=feature_row_limit,
         volume_change_abs_min=volume_change_abs_min,
         attach_nextday_returns=True,
+        history_source=history_source,
+        r2_object_keys_by_dataset=r2_object_keys_by_dataset,
+        r2_local_paths_by_dataset=r2_local_paths_by_dataset,
+        r2_raw_lines_by_dataset=r2_raw_lines_by_dataset,
+        r2_get=r2_get,
+        r2_bucket=r2_bucket,
         write_per_day_artifacts=write_per_day_artifacts,
         dry_run=dry_run,
         d1_execute=d1_execute,

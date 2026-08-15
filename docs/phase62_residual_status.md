@@ -1,9 +1,57 @@
 # Phase 6.2 / 6.3 residual status
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
-**Live verified:** 2026-08-15 (JST) / **W58** 履歴拡大・複数シグナル比較（READY 未宣言） FINAL · COMPLETE segs **3478** · Dataset COMPLETE **21 / 26** · PARTIAL = **5** permanent DEFER only · **actionable_gap = 0** · empty COMPLETE **0** · **OTC 93** tip island held · permanent DEFER **5** / NO_DENSIFY **6** · densify coverage loops **ENDED** · Mass/READY/Phase7 **NO-GO/OFF** · raw **15915** held · FRESH `projgen-20e613d7a30943378004831cdc26c9b2` · **CF-SoT** held — D1 = hot tip · R2 = history · COMPLETE = receipt-owned · floors W38 + W42 mb **2015-04-01** **not lowered** · coverage baseline **W47 FINAL held** · READY **not declared** · tip densify **SKIP** · densify **none** · promotion **9 approved** held · remain **1 candidate** (`return_1d_c21` policy no-promote) · history_expand_possible **NO** · tip max n_days=**28** · mean R +1 **+0.00643** / −1 **−0.00148** · multi-signal n_codes=**30** · n_days=**20** · S1/S2/S3 compare **e2e_pass** · cost **10bp one-way / 仮定に依存** · label **小サンプル / 研究用・未宣言** · pytest **114** · PRE_sha `e86a4cc584891ad15b346294053c1e5705c9f286` · **POST_PUSH_SHA** `35f3425ec60a648b74b484a009f0007201af5dcd`
+**Live verified:** 2026-08-15 (JST) / **W59** R2→FeatureContext 研究用橋（READY 未宣言） **FINAL** · COMPLETE segs **3478** · Dataset COMPLETE **21 / 26** · PARTIAL = **5** permanent DEFER only · **actionable_gap = 0** · empty COMPLETE **0** · **OTC 93** tip island held · permanent DEFER **5** / NO_DENSIFY **6** · densify coverage loops **ENDED** · Mass/READY/Phase7 **NO-GO/OFF** · raw **15915** held · FRESH `projgen-38b19559dba646dcb463409c78f3bc9e` · **CF-SoT** held — D1 = hot tip · R2 = history · COMPLETE = receipt-owned · floors W38 + W42 mb **2015-04-01** **not lowered** · coverage baseline **W47 FINAL held** · READY **not declared** · tip densify **SKIP** · densify **none** · promotion **9 approved** held · remain **1 candidate** (`return_1d_c21` policy no-promote) · R2→FeatureContext bridge **landed** (research-only · `history_source="r2"|"d1_tip"`) · can_build_40d_asof **yes** · long-window S1 **long_eval_ran=yes** · **n_days=50** · **n_codes=30** · `history_source=r2` · mean R +1 **−0.000182** / −1 **−0.000245** · overall **−0.000213** · job `w0815az-g3-long` · label **小サンプル / 研究用・未宣言** · pytest **137** · PRE_sha `b079899a119576e5dc0e815390263e74bbdcb89b` · **POST_PUSH_SHA** *filled after push*
 
-**Repo tip:** `bf9b11414c5850ede5695cd07fd1e3b120521838` — W58 履歴拡大・複数シグナル比較 FINAL · COMPLETE **3478** / Dataset COMPLETE **21** / OTC **93** / empty COMPLETE **0** / **actionable_gap = 0** / Phase7 **OFF** / READY **未宣言** · FRESH `projgen-20e613d7a30943378004831cdc26c9b2` · promotion **9 approved** / **1 candidate** · history expand **NO** · multi-signal **e2e_pass** · tip densify **SKIP** · **POST_PUSH_SHA** `35f3425ec60a648b74b484a009f0007201af5dcd`
+**Repo tip:** *filled after push* — W59 R2→FeatureContext 研究用橋 FINAL · COMPLETE **3478** / Dataset COMPLETE **21** / OTC **93** / empty COMPLETE **0** / **actionable_gap = 0** / Phase7 **OFF** / READY **未宣言** · FRESH `projgen-38b19559dba646dcb463409c78f3bc9e` · bridge **landed research-only** · long eval **50d×30** · tip densify **SKIP** · **POST_PUSH_SHA** *filled after push*
+
+## R2→FeatureContext 研究用橋（READY 未宣言）
+
+**Phase name:** COMPLETE 21 R2→FeatureContext 研究用橋（宣言なし）  
+**Wave:** W59 / w0815az (T1–T14 · G5 FINAL merge + push)  
+**Close proof:** [`docs/proof/w0815az_w59_bridge_close_20260815.md`](proof/w0815az_w59_bridge_close_20260815.md)  
+**Bridge (G1 · research-only):** [`.glm-logs/w0815az_g1_bridge/`](../.glm-logs/w0815az_g1_bridge/) · module [`packages/product/research/r2_feature_context.py`](../packages/product/research/r2_feature_context.py) · tests [`tests/test_r2_feature_context.py`](../tests/test_r2_feature_context.py) (**23 passed**) · proof [`docs/proof/w0815az_w59_r2_feature_context_bridge_20260815.md`](proof/w0815az_w59_r2_feature_context_bridge_20260815.md) · inventory [`t1_r2_inventory.json`](../.glm-logs/w0815az_g1_bridge/t1_r2_inventory.json) · schema map [`t2_schema_mapping.json`](../.glm-logs/w0815az_g1_bridge/t2_schema_mapping.json) · **T1–T5 DONE** — R2 JSONL+archive inventory · FeatureContext schema map · research loader · PIT (`available_at` required / `<= as_of`) · DEFER 5 hard reject · wired `history_source="r2"|"d1_tip"` into `execute_multiday_signal_eval` / nextday / eval_harness · default remains **`d1_tip`** (backward compatible) · S1 MVP datasets `equities_bars_daily` · `indices_bars_daily_topix` · `markets_calendar` · COMPLETE 21 inventory-mapped · local SQLite mirror **disposable only / not SoT** · **can_build_40d_asof=yes** · label **研究用・未宣言**  
+**Verify (G2):** [`.glm-logs/w0815az_g2_verify/`](../.glm-logs/w0815az_g2_verify/) · [`RETURN_CARD.json`](../.glm-logs/w0815az_g2_verify/RETURN_CARD.json) · **40d_ok=yes** · pytest **131** · **tip_path_ok=true**  
+**Long-window S1 (G3 pre-bridge DEFER → G3b live success):** G3 [`.glm-logs/w0815az_g3_long/`](../.glm-logs/w0815az_g3_long/) · **PASS_DEFER** pre-bridge (superseded) · G3b [`.glm-logs/w0815az_g3b_long/`](../.glm-logs/w0815az_g3b_long/) · [`RETURN_CARD.json`](../.glm-logs/w0815az_g3b_long/RETURN_CARD.json) · proof [`docs/proof/w0815az_w59_long_window_signal_eval_20260815.md`](proof/w0815az_w59_long_window_signal_eval_20260815.md) · job `w0815az-g3-long` · **long_eval_ran=yes** · **n_days=50** · **n_codes=30** · `history_source=r2` · period `2024-09-02…2024-12-18` · mean R +1 **−0.000182** / −1 **−0.000245** · overall **−0.000213** · non_null_rate **1.0** · return_null_rate **0.02** · R2 `research/single_shot/job=w0815az-g3-long/batch_summary.json` · **PASS_LONG_R2** · **小サンプル / 研究用・未宣言** · **no significance / no edge**  
+**Ops / quality / residual (G4 T12–T14):** [`.glm-logs/w0815az_g4_ops/`](../.glm-logs/w0815az_g4_ops/) · [`FINAL_metrics.json`](../.glm-logs/w0815az_g4_ops/FINAL_metrics.json) · [`switch_check.json`](../.glm-logs/w0815az_g4_ops/switch_check.json) · [`SUMMARY.txt`](../.glm-logs/w0815az_g4_ops/SUMMARY.txt)  
+**G5 final merge:** [`.glm-logs/w0815az_g5_final/`](../.glm-logs/w0815az_g5_final/) · empty **0** · dc **21** · segs **3478** · OTC **93** · pytest **137** · push **yes**  
+**Promotion:** held **9 approved** / **1 candidate** (`return_1d_c21`) · **no promote this wave** · policy no-promote: `return_1d_c21`  
+**FRESH (G4 T13):** reclock `projgen-38b19559dba646dcb463409c78f3bc9e` (pre age wall **~1503s** >300; coverage_segments untouched; publish apply **SKIP**)  
+**Unit tests (G5 merge):** complete21 min (approved **9**) + permanent_defer + single_shot + mass gate + eval_harness + r2_feature_context · **137 passed**  
+**Mass / Phase7 (G4/G5):** **NO-GO / OFF** reconfirmed · READY **not declared** · no arming switches  
+**Catalog:** [`docs/proof/complete21_min_feature_catalog_20260815.md`](proof/complete21_min_feature_catalog_20260815.md) (code SoT = `complete21_min.py` **9 approved / 1 candidate**) · bridge module `research/r2_feature_context.py`  
+**Prior W58 履歴拡大・複数シグナル比較:** § 履歴拡大・複数シグナル比較 held underneath · W57 ユニバース · coverage baseline **W47 FINAL** held
+
+| gate | status |
+|------|--------|
+| Phase name | **COMPLETE 21 R2→FeatureContext 研究用橋（宣言なし）** |
+| Coverage baseline FINAL | **held** (W47 FINAL · Dataset COMPLETE **21/26** · segs **3478** · **actionable_gap=0**) |
+| READY | **未宣言 / not declared** (research bridge only) |
+| Mass | **NO-GO / OFF** — **reconfirmed** this wave (G4 T12 freezes + G5 merge) |
+| Phase7 | **OFF** (foundation / fail-closed only) — **reconfirmed** this wave |
+| empty COMPLETE | **0** (remote verify G4 + G5) |
+| Dataset COMPLETE | **21** (remote verify held; not invent 22) |
+| COMPLETE segs | **3478** (remote verify held · Δ0) |
+| OTC tip island | **93** held |
+| permanent DEFER | **5** held (hard reject on R2 history load) |
+| tip densify | **SKIP** (T14; not primary this phase) |
+| densify | **none** |
+| push | **POST_PUSH_SHA** *filled after push* (G5 FINAL merge) · PRE_sha `b079899a119576e5dc0e815390263e74bbdcb89b` |
+| Projection | **FRESH** `projgen-38b19559dba646dcb463409c78f3bc9e` (G4 T13 ops_reeval_freshness; residual FRESH sync; publish apply **SKIP** no segment drift; fail-closed no force) |
+| R2→FeatureContext bridge | G1 **landed** — research-only loader · `history_source=r2` optional · PIT + DEFER 5 · **can_build_40d_asof=yes** · Mass **not** connected · READY **not** declared |
+| Long-window S1 live eval | G3b **PASS_LONG_R2** · **long_eval_ran=yes** · **n_days=50** · **n_codes=30** · mean R near **0** · research-only · **no** edge claim |
+| Promotion | **held 9 approved** · remain **1 candidate** · **no** `return_1d_c21` promote |
+| Unit tests | **137 passed** (complete21 min · permanent_defer · single_shot · mass gate · eval_harness · r2_feature_context) |
+| raw_retention | **15915** held (not coverage primary) |
+
+**Primary this phase:** land research-only R2 structured history → FeatureContext bridge (COMPLETE 21 inventory · S1 MVP · PIT · DEFER fail-closed) · live 40–60 day S1 long eval via R2 · residual R2→FeatureContext 研究用橋 on held COMPLETE **21** / DEFER **5** — **without** READY / Mass / Phase7 declaration.  
+**Not:** densify · tip primary · invent COMPLETE 22 · Phase7 ON · READY GO · mass ON · treat bridge as READY · force remaining candidate · promote `return_1d_c21` · significance / edge / operational GO claim.
+
+### Explicit non-declarations (held)
+
+- **READY** — not declared (R2→FeatureContext 研究用橋 only; research path; no production READY GO)
+- **Mass Autonomous Research** — **NO-GO / OFF**
+- **Phase7** — **OFF** (no `PHASE7_*` / `MASS_RESEARCH_ENABLE` arming switch)
 
 ## 履歴拡大・複数シグナル比較（READY 未宣言）
 

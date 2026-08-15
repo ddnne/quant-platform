@@ -61,7 +61,7 @@ assert ex.ready_declared is False
 | Inputs | residual **COMPLETE 21** only (`permanent_defer` hard-reject) |
 | Signal legs | registry-**approved** only (`topix_relative_1d` · `is_trading_day` · `volume_change_1d`) |
 | Pipeline | approved-leg signal → multiday as_of → next-day return → R2 `batch_summary` |
-| Read | CF D1 `quant-ingest` **hot tip** (bounded; history SoT remains R2) |
+| Read | CF D1 `quant-ingest` **hot tip** (default) or R2 structured history (`history_source="r2"`) |
 | Output path | R2 `quant-structured` · `research/single_shot/job={id}/…` (local **not** SoT) |
 | Mass loop | **not** connected |
 | READY | **not** set |
@@ -70,8 +70,44 @@ assert ex.ready_declared is False
 | Densify | **none** |
 | Label | 小サンプル / 研究用・未宣言 (when nextday returns attached; no edge claim) |
 
+### R2 history bridge (W59)
+
+Optional research path to build FeatureContext from R2 structured JSONL/archive
+(not local SQLite SoT). Default eval path remains D1 tip.
+
+```python
+from research.r2_feature_context import (
+    extract_r2_history_feature_rows,
+    build_r2_feature_context,
+    S1_SIGNAL_HISTORY_DATASETS,
+)
+from research.eval_harness import run_nextday_return_eval
+
+# Direct bridge (fixtures / keys)
+extract = extract_r2_history_feature_rows(
+    list(S1_SIGNAL_HISTORY_DATASETS),
+    period_start="2026-04-01",
+    period_end="2026-06-30",
+    codes=["13010"],
+    raw_lines_by_dataset={...},  # or object_keys_by_dataset + r2_get
+)
+ctx = build_r2_feature_context(extract["rows_by_dataset"], as_of="2026-06-03T15:30:00+09:00")
+
+# Harness wiring (default history_source remains "d1_tip")
+ex = run_nextday_return_eval(
+    period_start="2026-04-01",
+    period_end="2026-06-30",
+    history_source="r2",
+    r2_raw_lines_by_dataset={...},
+    dry_run=True,
+)
+```
+
+Module: [`r2_feature_context.py`](r2_feature_context.py). Proof:
+`docs/proof/w0815az_w59_r2_feature_context_bridge_20260815.md`.
+
 Module: [`eval_harness.py`](eval_harness.py) (re-exports multiday/nextday helpers from [`single_shot_job.py`](single_shot_job.py)).  
-Tests: `tests/test_eval_harness.py`, `tests/test_single_shot_research_job.py`, `tests/test_mass_research_gate.py`.
+Tests: `tests/test_eval_harness.py`, `tests/test_single_shot_research_job.py`, `tests/test_mass_research_gate.py`, `tests/test_r2_feature_context.py`.
 
 ## Single-shot job (W49 skeleton · W50 CF execute · W51 tip features · W52 signal)
 

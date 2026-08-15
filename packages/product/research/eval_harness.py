@@ -253,11 +253,21 @@ def run_multiday_signal_eval(
     staging_dir: str | Path | None = None,
     wrangler: str | Path | None = None,
     wrangler_config: str | Path | None = None,
+    history_source: str = "d1_tip",
+    r2_object_keys_by_dataset: Mapping[str, Sequence[str]] | None = None,
+    r2_local_paths_by_dataset: Mapping[str, Sequence[str | Path]] | None = None,
+    r2_raw_lines_by_dataset: Mapping[str, Sequence[Any]] | None = None,
+    r2_get: Any | None = None,
+    r2_bucket: str = "quant-structured",
 ) -> MultidaySignalEval:
     """Multiday approved-leg signal batch → R2 ``batch_summary.json``.
 
     Guards COMPLETE-21 datasets + approved signal legs before any tip extract.
     Does **not** mint READY, open mass research, execute orders, or densify.
+
+    ``history_source``:
+        * ``"d1_tip"`` (default) — CF D1 hot tip extract
+        * ``"r2"`` — R2 structured history bridge (keys/fixtures required)
     """
     assert_harness_closed()
     require_approved_signal_legs(context="multiday signal eval legs")
@@ -285,6 +295,12 @@ def run_multiday_signal_eval(
         staging_dir=staging_dir,
         wrangler=wrangler,
         wrangler_config=wrangler_config,
+        history_source=history_source,
+        r2_object_keys_by_dataset=r2_object_keys_by_dataset,
+        r2_local_paths_by_dataset=r2_local_paths_by_dataset,
+        r2_raw_lines_by_dataset=r2_raw_lines_by_dataset,
+        r2_get=r2_get,
+        r2_bucket=r2_bucket,
     )
 
 
@@ -306,12 +322,21 @@ def run_nextday_return_eval(
     staging_dir: str | Path | None = None,
     wrangler: str | Path | None = None,
     wrangler_config: str | Path | None = None,
+    history_source: str = "d1_tip",
+    r2_object_keys_by_dataset: Mapping[str, Sequence[str]] | None = None,
+    r2_local_paths_by_dataset: Mapping[str, Sequence[str | Path]] | None = None,
+    r2_raw_lines_by_dataset: Mapping[str, Sequence[Any]] | None = None,
+    r2_get: Any | None = None,
+    r2_bucket: str = "quant-structured",
 ) -> MultidaySignalEval:
     """Full pipeline: approved-leg signal → multiday → next-day return → R2.
 
     Research only (小サンプル / 研究用・未宣言). Feature as_of = T session
     close; return evaluation_as_of = T+1 session close (see
     :data:`NEXTDAY_LOOKAHEAD_POLICY`). No significance / no edge claim.
+
+    Optional ``history_source="r2"`` uses the R2 FeatureContext bridge
+    (see :mod:`research.r2_feature_context`). Default remains D1 tip.
     """
     assert_harness_closed()
     require_approved_signal_legs(context="nextday return eval legs")
@@ -338,6 +363,12 @@ def run_nextday_return_eval(
         staging_dir=staging_dir,
         wrangler=wrangler,
         wrangler_config=wrangler_config,
+        history_source=history_source,
+        r2_object_keys_by_dataset=r2_object_keys_by_dataset,
+        r2_local_paths_by_dataset=r2_local_paths_by_dataset,
+        r2_raw_lines_by_dataset=r2_raw_lines_by_dataset,
+        r2_get=r2_get,
+        r2_bucket=r2_bucket,
     )
 
 
