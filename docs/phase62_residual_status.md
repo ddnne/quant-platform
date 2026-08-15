@@ -1,8 +1,8 @@
 # Phase 6.2 / 6.3 residual status
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
-**Live verified:** 2026-08-15 (JST) / W44 permanent DEFER lock ~`2026-08-15T07:48–07:52Z` UTC · **W44** earn tip4 **FINAL** permanent DEFER + DEFER/NO_DENSIFY reaffirm · COMPLETE segs **3478** · Dataset COMPLETE **21** (held; **not** invent 22) · empty COMPLETE **0** · **OTC 93** · fins_earnings_date PARTIAL **4** (**FINAL** PD-MX-EARN-TIP; **not** re-open densify; **not** Dataset COMPLETE) · Permanent DEFER **5** locked (master · earn_cal · bars_am · otc long-tail · earn tip4) · NO_DENSIFY **6** classes aligned · densify / tip densify **not primary** · Phase7 **OFF** · FRESH `projgen-7c2404dd29644aa4bc4e00675fc1f288` · **CF-SoT** held — D1 = hot tip · R2 = history · COMPLETE = receipt-owned · **POST_PUSH_SHA** _(filled after push)_
-**Repo tip:** _(filled after push)_ — W44 residual DEFER lock · COMPLETE **3478** / OTC **93** / Dataset COMPLETE **21** / empty COMPLETE **0** / Phase7 **OFF**
+**Live verified:** 2026-08-15 (JST) / W44 permanent DEFER lock ~`2026-08-15T07:48–07:52Z` UTC · **W44** earn tip4 **FINAL** permanent DEFER + DEFER/NO_DENSIFY reaffirm · COMPLETE segs **3478** · Dataset COMPLETE **21** (held; **not** invent 22) · empty COMPLETE **0** · **OTC 93** · fins_earnings_date PARTIAL **4** (**FINAL** PD-MX-EARN-TIP; **not** re-open densify; **not** Dataset COMPLETE) · Permanent DEFER **5** locked (master · earn_cal · bars_am · otc long-tail · earn tip4) · NO_DENSIFY **6** classes aligned · densify / tip densify **not primary** · Phase7 **OFF** · FRESH `projgen-7c2404dd29644aa4bc4e00675fc1f288` · **CF-SoT** held — D1 = hot tip · R2 = history · COMPLETE = receipt-owned · **POST_PUSH_SHA** `19ee21f892542500de9bf8fcef0887c3716489dd`
+**Repo tip:** `19ee21f892542500de9bf8fcef0887c3716489dd` — W44 residual DEFER lock · COMPLETE **3478** / OTC **93** / Dataset COMPLETE **21** / empty COMPLETE **0** / Phase7 **OFF**
 
 ## W44 / w0815ak — permanent DEFER lock + earn tip4 FINAL (FINAL)
 
@@ -22,7 +22,7 @@
 | empty-raw COMPLETE / Mass / READY / Phase7 | **ban / NO-GO / OFF** |
 | Projection | **FRESH** `projgen-7c2404dd29644aa4bc4e00675fc1f288` |
 | CF-SoT | D1 **hot tip** · R2 **history** · COMPLETE **receipt-owned** |
-| Push | **POST_PUSH_SHA** _(filled after push)_ |
+| Push | **POST_PUSH_SHA** `19ee21f892542500de9bf8fcef0887c3716489dd` |
 
 **Primary success:** residual **FINAL permanent DEFER lock** (earn tip4 + master / bars_am / earn_cal / otc long-tail). Metrics **held**. **Not** densify-as-success. **Not** tip-as-primary. **Not** invent COMPLETE 22.
 
