@@ -2,7 +2,7 @@
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
 **Live verified:** 2026-08-15 (JST) / **W61** 複数期間 S1/S2/S3 + 研究用 WF（READY 未宣言） · COMPLETE segs **3478** · Dataset COMPLETE **21 / 26** · PARTIAL = **5** DEFER only · **actionable_gap = 0** · empty COMPLETE **0** · **OTC 93** · Mass/READY/Phase7 **NO-GO/OFF** · FRESH `projgen-1f5c90edc7b0436f9edd9401cd91adb0` · **CF-SoT** held · promotion **9 approved** / **1 candidate** no-promote · multi-period **4 windows** (2022q4/2023q4/2024q4/2025q1) · S1 tip separation **not stable** across periods · research WF train/test on w2024q4 · coverage gaps documented · **no significance / no edge / no operational GO**
-**Repo tip:** (set on push) — W61 multi-period + research walk-forward · COMPLETE **21** / segs **3478** / OTC **93** / READY **未宣言** · FRESH `projgen-1f5c90edc7b0436f9edd9401cd91adb0`
+**Repo tip:**  — W61 multi-period + research walk-forward · COMPLETE **21** / segs **3478** / OTC **93** / READY **未宣言** · FRESH `projgen-1f5c90edc7b0436f9edd9401cd91adb0`
 
 ## 複数期間シグナル再評価 + 研究用ウォークフォワード（READY 未宣言）
 
