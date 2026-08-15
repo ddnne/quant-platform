@@ -1,8 +1,8 @@
 # Phase 6.2 / 6.3 residual status
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
-**Live verified:** 2026-08-15 (JST) / W42 residual close ~`2026-08-15T07:21–07:30Z` UTC · **W42** mb floor + permanent DEFER lock + OTC absorb · contract floor mb **2015-04-01** (`089144c`) · COMPLETE segs **3478** · Dataset COMPLETE **21** (includes **markets_breakdown**) · empty COMPLETE **0** · **OTC 93** (W41 FULL_OK_NEW +17 absorbed remote **76→93**) · fins_earnings_date still PARTIAL **4** (tip DEFER; **not** Dataset COMPLETE) · Permanent DEFER **5** (master · earn_cal · bars_am · otc long-tail · earn tip4) · densify / tip densify **not primary** · Phase7 **OFF** · FRESH `projgen-9c224abe0e164223b39395020d7e5116` · **CF-SoT** held — D1 = hot tip · R2 = history · COMPLETE = receipt-owned · **POST_PUSH_SHA** `PENDING_PUSH`
-**Repo tip:** `PENDING_PUSH` — W42 residual · COMPLETE **3478** / OTC **93** / Dataset COMPLETE **21** / empty COMPLETE **0** / Phase7 **OFF**
+**Live verified:** 2026-08-15 (JST) / W42 residual close ~`2026-08-15T07:21–07:30Z` UTC · **W42** mb floor + permanent DEFER lock + OTC absorb · contract floor mb **2015-04-01** (`089144c`) · COMPLETE segs **3478** · Dataset COMPLETE **21** (includes **markets_breakdown**) · empty COMPLETE **0** · **OTC 93** (W41 FULL_OK_NEW +17 absorbed remote **76→93**) · fins_earnings_date still PARTIAL **4** (tip DEFER; **not** Dataset COMPLETE) · Permanent DEFER **5** (master · earn_cal · bars_am · otc long-tail · earn tip4) · densify / tip densify **not primary** · Phase7 **OFF** · FRESH `projgen-9c224abe0e164223b39395020d7e5116` · **CF-SoT** held — D1 = hot tip · R2 = history · COMPLETE = receipt-owned · **POST_PUSH_SHA** `7d97b67bc9b74aa241df63c8d0ad9a1bf51f5384`
+**Repo tip:** `7d97b67bc9b74aa241df63c8d0ad9a1bf51f5384` — W42 residual · COMPLETE **3478** / OTC **93** / Dataset COMPLETE **21** / empty COMPLETE **0** / Phase7 **OFF**
 
 ## W42 / w0815ai — residual close (mb floor + tip4 DEFER + OTC absorb) (FINAL)
 
@@ -21,7 +21,7 @@
 | empty-raw COMPLETE / Mass / READY / Phase7 | **ban / NO-GO / OFF** |
 | Projection | **FRESH** `projgen-9c224abe0e164223b39395020d7e5116` |
 | CF-SoT | D1 **hot tip** · R2 **history** · COMPLETE **receipt-owned** |
-| Push | **POST_PUSH_SHA** `PENDING_PUSH` |
+| Push | **POST_PUSH_SHA** `7d97b67bc9b74aa241df63c8d0ad9a1bf51f5384` |
 
 **Primary success:** Dataset COMPLETE **+1** (`markets_breakdown`). **Absorb:** OTC **+17** / COMPLETE segs **+17** (W41). **Not** densify-as-success. **Not** tip-as-primary.
 
