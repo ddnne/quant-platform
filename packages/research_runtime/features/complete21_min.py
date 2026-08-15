@@ -1,4 +1,4 @@
-"""Minimal COMPLETE-21-only features (W49–W56 / w0815aw_g3).
+"""Minimal COMPLETE-21-only features (W49–W57 / w0815ax_g3).
 
 All features:
 
@@ -19,9 +19,11 @@ Promotion:
   ``1.0.0``) after CF tip E2E non-null with valid S33 ``section`` path.
 * W56 / w0815aw_g3 optional O2: ``futures_activity_proxy`` → approved (version
   pin ``1.0.0``) after CF tip E2E non-null on D1
-  ``derivatives_bars_daily_futures``. ``return_1d_c21`` remains candidate
-  (policy twin of v0 ``return_1d``). Remaining 2 stay candidate
-  (``return_1d_c21`` · ``margin_alert_flag``).
+  ``derivatives_bars_daily_futures``.
+* W57 / w0815ax_g3 optional O2: ``margin_alert_flag`` → approved (version pin
+  ``1.0.0``) after CF tip E2E non-null on D1 ``markets_margin_alert``.
+  ``return_1d_c21`` remains candidate (policy twin of v0 ``return_1d``).
+  Remaining 1 stays candidate (``return_1d_c21``).
 * No READY / Mass / Phase7 claim. ``get_for_strategy`` still admits only
   approved + strategy-facing roles (utility requires explicit role override).
 
@@ -870,7 +872,7 @@ MarginAlertFlag: FeatureDefinition = register(
         compute=_margin_alert_flag,
         tags=("margin", "alert", "flag", "complete21"),
         intended_role="signal",
-        status="candidate",
+        status="approved",  # W57 O2 promotion; version pin 1.0.0
         price_basis=None,
     )
 )

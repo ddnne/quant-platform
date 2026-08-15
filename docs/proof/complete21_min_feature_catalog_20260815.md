@@ -1,10 +1,10 @@
 # COMPLETE 21 — minimal feature catalog (2026-08-15)
 
-**Wave:** W56 / w0815aw_g3 optional O2 (extends W55 / w0815av_g2 · W54 / w0815au_g2 · W53 / w0815at_g1 · W52 / w0815as_g1 · W51 / w0815ar_g2 · W50 / w0815aq_g2 · W49 / w0815ap_g2)  
+**Wave:** W57 / w0815ax_g3 optional O2 (extends W56 / w0815aw_g3 · W55 / w0815av_g2 · W54 / w0815au_g2 · W53 / w0815at_g1 · W52 / w0815as_g1 · W51 / w0815ar_g2 · W50 / w0815aq_g2 · W49 / w0815ap_g2)  
 **Phase:** COMPLETE 21 **usage readiness** (利用準備) — feature catalog + min implementations + quality gates  
 **Mass / READY / Phase7:** **not** declared · **not** enabled · densify **not** run · push **not** this task  
-**Promotion (W52+W53+W54+W55+W56):** **8** approved — `is_trading_day` · `volume_change_1d` · `topix_relative_1d` · `disclosure_flag_fins` · `margin_interest_change_1d` · `repo_rate_level` · `short_ratio_level` · `futures_activity_proxy` (version pin **1.0.0**); remaining **2** stay `candidate`  
-**Promotion eval proofs:** [`w0815as_w52_feature_promotion_eval_20260815.md`](w0815as_w52_feature_promotion_eval_20260815.md) · [`w0815at_w53_o2_promotion_20260815.md`](w0815at_w53_o2_promotion_20260815.md) · [`w0815au_w54_o2_promotion_20260815.md`](w0815au_w54_o2_promotion_20260815.md) · [`w0815av_w55_o2_short_ratio_20260815.md`](w0815av_w55_o2_short_ratio_20260815.md) · [`w0815aw_w56_o2_futures_20260815.md`](w0815aw_w56_o2_futures_20260815.md)  
+**Promotion (W52+W53+W54+W55+W56+W57):** **9** approved — `is_trading_day` · `volume_change_1d` · `topix_relative_1d` · `disclosure_flag_fins` · `margin_interest_change_1d` · `repo_rate_level` · `short_ratio_level` · `futures_activity_proxy` · `margin_alert_flag` (version pin **1.0.0**); remaining **1** stays `candidate` (`return_1d_c21`)  
+**Promotion eval proofs:** [`w0815as_w52_feature_promotion_eval_20260815.md`](w0815as_w52_feature_promotion_eval_20260815.md) · [`w0815at_w53_o2_promotion_20260815.md`](w0815at_w53_o2_promotion_20260815.md) · [`w0815au_w54_o2_promotion_20260815.md`](w0815au_w54_o2_promotion_20260815.md) · [`w0815av_w55_o2_short_ratio_20260815.md`](w0815av_w55_o2_short_ratio_20260815.md) · [`w0815aw_w56_o2_futures_20260815.md`](w0815aw_w56_o2_futures_20260815.md) · [`w0815ax_w57_o2_margin_alert_20260815.md`](w0815ax_w57_o2_margin_alert_20260815.md)  
 **Candidate → approved criteria:** [`complete21_feature_candidate_to_approved_criteria_20260815.md`](complete21_feature_candidate_to_approved_criteria_20260815.md)
 
 **Sources:**
@@ -102,7 +102,7 @@ None of these declare READY.
 |------------|------------------------|------------------|--------|
 | `margin_interest_change_1d` | `markets_margin_interest` | \((M_t - M_{t-1}) / M_{t-1}\) with \(M =\) LongVol + ShrtVol | **implemented** (complete21 min, **approved** · v1.0.0 · W53 O2) |
 | `short_ratio_level` | `markets_short_ratio` | \((\)ShrtWithResVa + ShrtNoResVa\() / \)SellExShortVa for S33 section | **implemented** (complete21 min, **approved** · v1.0.0 · W55 O2) |
-| `margin_alert_flag` | `markets_margin_alert` | 1.0 if any PIT-visible alert row for `code` at `as_of`, else 0.0 | **implemented** (complete21 min, candidate) · W51 |
+| `margin_alert_flag` | `markets_margin_alert` | 1.0 if any PIT-visible alert row for `code` at `as_of`, else 0.0 | **implemented** (complete21 min, **approved** · v1.0.0 · W57 O2) |
 
 ### 2.4 Disclosure / filings flags
 
@@ -146,30 +146,31 @@ Registered under `packages/research_runtime/features/complete21_min.py` (importe
 | `is_trading_day` | **1.0.0** (pin) | utility | **approved** | `markets_calendar` | W50 → **W52 promote** |
 | `repo_rate_level` | **1.0.0** (pin) | state | **approved** | `jsda_tokyo_repo_rates` | W50 → **W54 O2 promote** |
 | `return_1d_c21` | 1.0.0 | signal | candidate | `equities_bars_daily` | **W51** (no promote · twin of v0) |
-| `margin_alert_flag` | 1.0.0 | signal | candidate | `markets_margin_alert` | **W51** |
+| `margin_alert_flag` | **1.0.0** (pin) | signal | **approved** | `markets_margin_alert` | W51 → **W57 O2 promote** |
 | `futures_activity_proxy` | **1.0.0** (pin) | state | **approved** | `derivatives_bars_daily_futures` | W51 → **W56 O2 promote** |
 
-**Count:** **10** complete21 min features (**8** approved · **2** candidate) (+ 3 approved v0 bars features outside this module).
+**Count:** **10** complete21 min features (**9** approved · **1** candidate) (+ 3 approved v0 bars features outside this module).
 
 Each compute path calls `require_feature_datasets(...)` → permanent DEFER reject **before** PIT reads.
 
 Pipeline guard: `FeatureContext.get_jquants_records`, `get_equity_master`, `get_market_calendar`, `get_equity_bars_daily`, and `get_jsda_repo_rates` refuse permanent DEFER ids via `require_history_eligible` / fixed reject for master.
 
-**W52 + W53 + W54 + W55 + W56 promotion notes:**
+**W52 + W53 + W54 + W55 + W56 + W57 promotion notes:**
 
 * W52: `is_trading_day` · `volume_change_1d` — version pin **1.0.0**; proof [`w0815as_w52_feature_promotion_eval_20260815.md`](w0815as_w52_feature_promotion_eval_20260815.md).
 * W53 O2: `topix_relative_1d` · `disclosure_flag_fins` · `margin_interest_change_1d` — version pin **1.0.0**; feature-level CF tip E2E + proof [`w0815at_w53_o2_promotion_20260815.md`](w0815at_w53_o2_promotion_20260815.md).
 * W54 selective O2: `repo_rate_level` — version pin **1.0.0**; CF tip E2E on D1 `jsda_repo_rates` hot tip + proof [`w0815au_w54_o2_promotion_20260815.md`](w0815au_w54_o2_promotion_20260815.md).
 * W55 selective O2: `short_ratio_level` — version pin **1.0.0**; CF tip E2E with valid S33 `section` path on D1 `markets_short_ratio` + proof [`w0815av_w55_o2_short_ratio_20260815.md`](w0815av_w55_o2_short_ratio_20260815.md).
 * W56 optional O2: `futures_activity_proxy` — version pin **1.0.0**; CF tip E2E on D1 `derivatives_bars_daily_futures` + proof [`w0815aw_w56_o2_futures_20260815.md`](w0815aw_w56_o2_futures_20260815.md).
+* W57 optional O2: `margin_alert_flag` — version pin **1.0.0**; CF tip E2E on D1 `markets_margin_alert` + proof [`w0815ax_w57_o2_margin_alert_20260815.md`](w0815ax_w57_o2_margin_alert_20260815.md).
 * `is_trading_day` remains `intended_role=utility` — `get_for_strategy` requires explicit `allowed_roles` override (not a default strategy signal).
-* Signal-role approvals (`volume_change_1d` · `topix_relative_1d` · `disclosure_flag_fins` · `margin_interest_change_1d` · `short_ratio_level`) and state-role approvals (`repo_rate_level` · `futures_activity_proxy`) are admitted by default `get_for_strategy` (`state` is a default strategy role). `short_ratio_level` still requires runtime `section` (S33).
+* Signal-role approvals (`volume_change_1d` · `topix_relative_1d` · `disclosure_flag_fins` · `margin_interest_change_1d` · `short_ratio_level` · `margin_alert_flag`) and state-role approvals (`repo_rate_level` · `futures_activity_proxy`) are admitted by default `get_for_strategy` (`state` is a default strategy role). `short_ratio_level` still requires runtime `section` (S33); `margin_alert_flag` requires runtime `code`.
 * Consumers must pin `(id, version="1.0.0")`; major bump if meaning changes.
 * Minimal tip signal `c21_topix_relative_sign`: `candidate_only=False` after primary promote; signal **status** remains **candidate** (not READY).
 
 **W51 notes (held):**
 
-* `return_1d_c21` is a **candidate export** of the 1d simple-return formula on the complete21 path (`require_feature_datasets` + tags). It does **not** replace approved v0 `return_1d` and was **not** promoted (W52–W56 policy).
+* `return_1d_c21` is a **candidate export** of the 1d simple-return formula on the complete21 path (`require_feature_datasets` + tags). It does **not** replace approved v0 `return_1d` and was **not** promoted (W52–W57 policy).
 * Test strengthen (T5): missing required inputs, `as_of` required, PIT `available_at` gates, DEFER poison on all declared dataset groups.
 
 ---
@@ -183,8 +184,8 @@ This document does **not**:
 * enable **Phase7**
 * invent Dataset COMPLETE **22**
 * re-open densify / tip densify as primary
-* promote remaining **2** candidate features without feature-level CF O2 + Q\* clarity
-* merge `return_1d_c21` into approved v0 `return_1d` (W54–W56: explicit no-promote)
+* promote remaining **1** candidate feature without feature-level CF O2 + Q\* clarity (and `return_1d_c21` is policy no-promote)
+* merge `return_1d_c21` into approved v0 `return_1d` (W54–W57: explicit no-promote)
 * treat local SQLite as CF SoT
 * declare Mass / READY / Phase7 from feature promotion alone
 

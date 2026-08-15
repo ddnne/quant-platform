@@ -1,4 +1,4 @@
-"""COMPLETE 21 min features + feature-pipeline permanent DEFER guard (W49–W56).
+"""COMPLETE 21 min features + feature-pipeline permanent DEFER guard (W49–W57).
 
 W51 / w0815ar_g2:
 
@@ -33,8 +33,14 @@ W56 / w0815aw_g3 optional O2:
 * Promote after feature-level CF tip E2E: ``futures_activity_proxy`` → approved
   (v1.0.0).
 * Do **not** promote ``return_1d_c21`` (policy twin of v0 ``return_1d``).
-* ``margin_alert_flag`` remains candidate (not chosen this wave).
-* Remaining 2 stay candidate. No READY / Mass / Phase7.
+* ``margin_alert_flag`` remains candidate (not chosen that wave).
+
+W57 / w0815ax_g3 optional O2:
+
+* Promote after feature-level CF tip E2E: ``margin_alert_flag`` → approved
+  (v1.0.0).
+* Do **not** promote ``return_1d_c21`` (policy twin of v0 ``return_1d``).
+* Remaining 1 stays candidate. No READY / Mass / Phase7.
 """
 
 from __future__ import annotations
@@ -95,7 +101,7 @@ COMPLETE21_MIN_IDS = (
     "futures_activity_proxy",
 )
 
-# W52 + W53 + W54 + W55 + W56 O2 promotions; version pin remains 1.0.0.
+# W52 + W53 + W54 + W55 + W56 + W57 O2 promotions; version pin remains 1.0.0.
 COMPLETE21_MIN_APPROVED_IDS = (
     "is_trading_day",
     "volume_change_1d",
@@ -105,6 +111,7 @@ COMPLETE21_MIN_APPROVED_IDS = (
     "repo_rate_level",
     "short_ratio_level",
     "futures_activity_proxy",
+    "margin_alert_flag",
 )
 COMPLETE21_MIN_CANDIDATE_IDS = tuple(
     fid for fid in COMPLETE21_MIN_IDS if fid not in COMPLETE21_MIN_APPROVED_IDS
@@ -437,7 +444,7 @@ def test_complete21_min_requires_as_of(tmp_path):
 
 
 def test_complete21_min_w56_promotion_status_and_version_pin():
-    """W52–W56: 8 approved (pinned 1.0.0); remaining 2 stay candidate."""
+    """W52–W57: 9 approved (pinned 1.0.0); remaining 1 stays candidate."""
     for fid in COMPLETE21_MIN_APPROVED_IDS:
         feat = get(fid)
         assert feat.status == "approved", fid
@@ -446,8 +453,8 @@ def test_complete21_min_w56_promotion_status_and_version_pin():
         feat = get(fid)
         assert feat.status == "candidate", fid
         assert feat.status != "approved", fid
-    assert len(COMPLETE21_MIN_APPROVED_IDS) == 8
-    assert len(COMPLETE21_MIN_CANDIDATE_IDS) == 2
+    assert len(COMPLETE21_MIN_APPROVED_IDS) == 9
+    assert len(COMPLETE21_MIN_CANDIDATE_IDS) == 1
     # Policy: return_1d_c21 must remain candidate (twin of v0 return_1d)
     assert get("return_1d_c21").status == "candidate"
     assert "return_1d_c21" not in COMPLETE21_MIN_APPROVED_IDS
@@ -461,8 +468,10 @@ def test_complete21_min_w56_promotion_status_and_version_pin():
     # W56 optional O2 promote
     assert get("futures_activity_proxy").status == "approved"
     assert get("futures_activity_proxy").intended_role == "state"
-    # margin_alert_flag remains candidate this wave
-    assert get("margin_alert_flag").status == "candidate"
+    # W57 optional O2 promote
+    assert get("margin_alert_flag").status == "approved"
+    assert get("margin_alert_flag").intended_role == "signal"
+    assert "code" in get("margin_alert_flag").inputs.required_kwargs
 
 
 def test_get_for_strategy_admits_approved_signal_not_utility_or_candidate():
@@ -501,6 +510,13 @@ def test_get_for_strategy_admits_approved_signal_not_utility_or_candidate():
     assert fut.intended_role == "state"
     assert str(fut.version) == "1.0.0"
 
+    # W57 optional O2 promote: margin_alert_flag approved + signal → admitted
+    mflag = get_for_strategy("margin_alert_flag", version="1.0.0")
+    assert mflag.status == "approved"
+    assert mflag.intended_role == "signal"
+    assert str(mflag.version) == "1.0.0"
+    assert "code" in mflag.inputs.required_kwargs
+
     # is_trading_day: approved but utility → role gate rejects by default
     with pytest.raises(FeatureGovernanceError, match="utility"):
         get_for_strategy("is_trading_day", version="1.0.0")
@@ -515,8 +531,6 @@ def test_get_for_strategy_admits_approved_signal_not_utility_or_candidate():
     # remaining complete21 min stay candidate → status gate rejects
     with pytest.raises(FeatureGovernanceError, match="candidate"):
         get_for_strategy("return_1d_c21")
-    with pytest.raises(FeatureGovernanceError, match="candidate"):
-        get_for_strategy("margin_alert_flag")
 
 
 def test_complete21_min_declared_datasets_reject_each_permanent_defer():
