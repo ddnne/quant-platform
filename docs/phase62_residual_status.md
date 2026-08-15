@@ -1,8 +1,37 @@
 # Phase 6.2 / 6.3 residual status
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
-**Live verified:** 2026-08-15 (JST) / **W61** 複数期間 S1/S2/S3 + 研究用 WF（READY 未宣言） · COMPLETE segs **3478** · Dataset COMPLETE **21 / 26** · PARTIAL = **5** DEFER only · **actionable_gap = 0** · empty COMPLETE **0** · **OTC 93** · Mass/READY/Phase7 **NO-GO/OFF** · FRESH `projgen-1f5c90edc7b0436f9edd9401cd91adb0` · **CF-SoT** held · promotion **9 approved** / **1 candidate** no-promote · multi-period **4 windows** (2022q4/2023q4/2024q4/2025q1) · S1 tip separation **not stable** across periods · research WF train/test on w2024q4 · coverage gaps documented · **no significance / no edge / no operational GO**
-**Repo tip:**  — W61 multi-period + research walk-forward · COMPLETE **21** / segs **3478** / OTC **93** / READY **未宣言** · FRESH `projgen-1f5c90edc7b0436f9edd9401cd91adb0`
+**Live verified:** 2026-08-15 (JST) / **W62** 研究用頑健性ゲート + S4/S5（READY 未宣言） · COMPLETE segs **3478** · Dataset COMPLETE **21** · PARTIAL **5** DEFER · **actionable_gap = 0** · empty COMPLETE **0** · **OTC 93** · Mass/READY/Phase7 **NO-GO/OFF** · FRESH `projgen-e20f400348eb4b839b36848b15a90047` · **CF-SoT** held · promotion **9 approved** / **1 candidate** no-promote · research robustness gate **landed** (pass≠GO) · S1 hard-WF **FAIL** · S4 margin soft **PASS** (weak) · S5 short_ratio_delta **FAIL** · 2024 margin/short **empty by inventory** · **no significance / no edge / no operational GO**
+**Repo tip:** (set on push) — W62 gate + S4/S5 · COMPLETE **21** / segs **3478** / OTC **93** / READY **未宣言** · FRESH `projgen-e20f400348eb4b839b36848b15a90047`
+
+## 研究用頑健性ゲート + 別仮説 S4/S5（READY 未宣言）
+
+**Phase name:** 研究用頑健性ゲート固定 + 別仮説最大2本（宣言なし）  
+**Wave:** W62 / w0815bc  
+**Close:** [`docs/proof/w0815bc_w62_gate_hyp_close_20260815.md`](proof/w0815bc_w62_gate_hyp_close_20260815.md)  
+**Gate:** `packages/product/research/robustness_gate.py` · [`docs/proof/w0815bc_w62_research_robustness_gate_20260815.md`](proof/w0815bc_w62_research_robustness_gate_20260815.md) · multi_period≥2 · sign majority · not catastrophic · optional WF no full flip · **pass ≠ READY/Mass/GO**  
+**S1–S3 examples (W61 metrics):** S1 soft **PASS** / hard-WF **FAIL** · S2/S3 soft **PASS** — still **未宣言**  
+**S4/S5:** [`docs/proof/w0815bc_w62_extra_hyp_s4_s5_20260815.md`](proof/w0815bc_w62_extra_hyp_s4_s5_20260815.md) · margin_change_sign / short_ratio_delta_sign · S4 soft **PASS** (weak) · S5 **FAIL** · w2024 empty · aa `archive_ingest_pollution`  
+**Logs:** [`.glm-logs/w0815bc_w62_gate_hyp/`](../.glm-logs/w0815bc_w62_gate_hyp/)  
+**Prior W61 multi-period + WF:** held underneath
+
+| gate | status |
+|------|--------|
+| READY | **未宣言** (gate pass does not connect) |
+| Mass / Phase7 | **NO-GO / OFF** |
+| Dataset COMPLETE | **21** |
+| COMPLETE segs | **3478** |
+| empty COMPLETE | **0** |
+| OTC | **93** |
+| densify | **none** |
+| Robustness gate | **landed research-only** |
+| S4/S5 | evaluated · **not GO** |
+
+### Explicit non-declarations (held)
+
+- **READY** — not declared  
+- **Mass** — **NO-GO / OFF**  
+- **Phase7** — **OFF**
 
 ## 複数期間シグナル再評価 + 研究用ウォークフォワード（READY 未宣言）
 

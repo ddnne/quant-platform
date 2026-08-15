@@ -56,19 +56,27 @@ from data_contracts.permanent_defer import (
 from features.minimal_signal import (
     CANDIDATE_ONLY as SIGNAL_CANDIDATE_ONLY,
     DEFAULT_FEATURE_IDS as DEFAULT_SIGNAL_FEATURE_IDS,
+    DEFAULT_SHORT_RATIO_SECTION,
     DEFAULT_SIGNAL_DATASETS,
     DEFAULT_VOLUME_CHANGE_ABS_MIN,
     DEFAULT_VOLUME_SIGN_ABS_MIN,
+    EXTRA_HYP_DATASETS,
+    EXTRA_HYP_FEATURE_IDS,
     MULTI_SIGNAL_DATASETS,
     MULTI_SIGNAL_FEATURE_IDS,
     SIGNAL_ID as DEFAULT_SIGNAL_ID,
+    SIGNAL_ID_MARGIN_CHANGE,
+    SIGNAL_ID_SHORT_RATIO_DELTA,
     SIGNAL_ID_TOPIX_DISC,
     SIGNAL_ID_TOPIX_REL,
     SIGNAL_ID_VOLUME_SIGN,
     SIGNAL_VERSION as DEFAULT_SIGNAL_VERSION,
+    compute_margin_sign_from_feature_observations,
+    compute_short_delta_from_feature_observations,
     compute_signal_from_feature_observations,
     compute_topix_disc_from_feature_observations,
     compute_volume_sign_from_feature_observations,
+    extra_hyp_definitions,
     multi_signal_definitions,
     signal_definition,
 )
@@ -3274,6 +3282,364 @@ def _summarize_one_signal_batch(
     }
 
 
+def execute_extra_hyp_signals_compare(
+    *,
+    period_start: str,
+    period_end: str,
+    job_id: str = "w0815bc-g1-extra-hyp",
+    codes: Sequence[str] | None = None,
+    as_of_days: Sequence[str] | None = None,
+    max_days: int = 40,
+    min_days: int = 10,
+    feature_row_limit: int = DEFAULT_FEATURE_ROW_LIMIT,
+    one_way_cost: float = RESEARCH_ONE_WAY_COST,
+    short_ratio_section: str = DEFAULT_SHORT_RATIO_SECTION,
+    write_per_day_artifacts: bool = False,
+    dry_run: bool = False,
+    d1_execute: D1ExecuteFn | None = None,
+    r2_put: R2PutFn | None = None,
+    staging_dir: str | Path | None = None,
+    wrangler: str | Path | None = None,
+    wrangler_config: str | Path | None = None,
+    history_source: str = "r2",
+    r2_object_keys_by_dataset: Mapping[str, Sequence[str]] | None = None,
+    r2_local_paths_by_dataset: Mapping[str, Sequence[str | Path]] | None = None,
+    r2_raw_lines_by_dataset: Mapping[str, Sequence[Any]] | None = None,
+    r2_get: Callable[[str, str], bytes] | None = None,
+    r2_bucket: str = "quant-structured",
+    r2_allow_empty_datasets: Sequence[str] | None = None,
+) -> MultidaySignalEval:
+    """W62 S4/S5 research hypotheses (not S1 rehash) multi-day compare.
+
+    S4: sign(margin_interest_change_1d)
+    S5: sign(Δ short_ratio_level) for ``short_ratio_section``, broadcast.
+
+    Empty datasets → honest null signals. Not READY / Mass OFF.
+    """
+    assert_mass_and_phase7_off()
+    start = str(period_start).strip()[:10]
+    end = str(period_end).strip()[:10]
+    if not start or not end:
+        raise SingleShotJobError("period_start and period_end are required")
+    jid = str(job_id).strip()
+    if not jid or "/" in jid or "\\" in jid or ".." in jid:
+        raise SingleShotJobError("job_id must be a non-empty path-safe token")
+
+    dataset_ids = require_complete_21_only(
+        EXTRA_HYP_DATASETS, context="extra hyp datasets"
+    )
+    selected_codes = (
+        [str(c).strip() for c in codes if str(c).strip()]
+        if codes
+        else ["13010", "72030", "67580"]
+    )
+    section = str(short_ratio_section).strip() or DEFAULT_SHORT_RATIO_SECTION
+    _fids: list[str] = []
+    for x in list(EXTRA_HYP_FEATURE_IDS) + ["is_trading_day"]:
+        if x not in _fids:
+            _fids.append(x)
+    feature_ids = tuple(_fids)
+    definitions = {
+        d["signal_id"]: d for d in extra_hyp_definitions(section=section)
+    }
+
+    from research.r2_feature_context import (
+        HISTORY_SOURCE_D1_TIP,
+        HISTORY_SOURCE_R2,
+        extract_r2_history_feature_rows,
+        resolve_history_source,
+    )
+
+    hist_src = resolve_history_source(history_source)
+    if hist_src == HISTORY_SOURCE_R2:
+        tip_feature_extract = extract_r2_history_feature_rows(
+            dataset_ids,
+            period_start=start,
+            period_end=end,
+            codes=selected_codes,
+            object_keys_by_dataset=r2_object_keys_by_dataset,
+            local_paths_by_dataset=r2_local_paths_by_dataset,
+            raw_lines_by_dataset=r2_raw_lines_by_dataset,
+            r2_get=r2_get,
+            bucket=r2_bucket,
+            row_limit_per_dataset=max(int(feature_row_limit), 5000),
+            allow_empty_datasets=r2_allow_empty_datasets
+            or (
+                "markets_margin_interest",
+                "markets_short_ratio",
+            ),
+            context="extra hyp r2 history feature extract",
+        )
+    else:
+        if hist_src != HISTORY_SOURCE_D1_TIP:
+            raise SingleShotJobError(f"unsupported history_source={hist_src!r}")
+        tip_feature_extract = extract_d1_tip_feature_rows(
+            dataset_ids,
+            period_start=start,
+            period_end=end,
+            codes=selected_codes,
+            row_limit_per_dataset=feature_row_limit,
+            d1_execute=d1_execute,
+            context="extra hyp tip feature extract",
+        )
+    rows_by_ds = tip_feature_extract.get("rows_by_dataset") or {}
+
+    full_trading_days = discover_tip_trading_days(
+        rows_by_ds, period_start=start, period_end=end
+    )
+    bar_days = sorted(
+        {
+            str(r.get("date") or "")[:10]
+            for r in (rows_by_ds.get("equities_bars_daily") or [])
+            if r.get("date")
+        }
+    )
+    next_day_source = sorted(set(full_trading_days or []) | set(bar_days))
+    next_map = next_trading_day_map(next_day_source)
+    close_index = build_equity_close_index(rows_by_ds)
+
+    if as_of_days:
+        day_list = sorted({str(d).strip()[:10] for d in as_of_days if str(d).strip()})
+    else:
+        day_list = list(full_trading_days)
+    if len(day_list) > max_days:
+        day_list = day_list[-int(max_days) :]
+    if not day_list:
+        raise SingleShotJobError(
+            f"extra hyp compare: no trading days in {start}..{end}"
+        )
+
+    paths = design_artifact_paths(jid)
+    prefix = str(paths["prefix"])
+    batch_key = f"{prefix}/batch_summary.json"
+    executed_at = _now_utc()
+
+    signal_day_rows: dict[str, list[list[dict[str, Any]]]] = {
+        SIGNAL_ID_MARGIN_CHANGE: [],
+        SIGNAL_ID_SHORT_RATIO_DELTA: [],
+    }
+    day_results: list[dict[str, Any]] = []
+    prev_short: float | None = None
+
+    for d in day_list:
+        as_of = session_close_as_of(d)
+        feature_payload = compute_tip_candidate_features(
+            rows_by_ds,
+            as_of=as_of,
+            feature_ids=feature_ids,
+            codes=selected_codes,
+            dates=[d],
+            sections=[section],
+        )
+        obs = feature_payload.get("observations") or []
+        s4 = compute_margin_sign_from_feature_observations(
+            obs, as_of=as_of, codes=selected_codes
+        )
+        s5 = compute_short_delta_from_feature_observations(
+            obs,
+            as_of=as_of,
+            prev_short_ratio_level=prev_short,
+            codes=selected_codes,
+            section=section,
+        )
+        # update prev short from observations
+        for o in obs:
+            if str(o.get("feature_id") or "") == "short_ratio_level" and o.get(
+                "value"
+            ) is not None:
+                try:
+                    prev_short = float(o["value"])
+                except (TypeError, ValueError):
+                    pass
+                break
+
+        nxt = next_map.get(d)
+        eval_as_of = session_close_as_of(nxt) if nxt else None
+        per_signal_day: dict[str, Any] = {}
+        for sid, core in (
+            (SIGNAL_ID_MARGIN_CHANGE, s4),
+            (SIGNAL_ID_SHORT_RATIO_DELTA, s5),
+        ):
+            aligned = attach_next_day_returns(
+                list(core.get("observations") or []),
+                signal_date=d,
+                next_date=nxt,
+                close_index=close_index,
+                evaluation_as_of=eval_as_of,
+                feature_as_of=as_of,
+            )
+            costed = attach_research_cost_fields(aligned, one_way_cost=one_way_cost)
+            signal_day_rows[sid].append(costed)
+            day_summary = summarize_signal_day(
+                {**core, "observations": costed}, as_of=as_of
+            )
+            day_summary["nextday_day_summary"] = summarize_nextday_by_sign(costed)
+            day_summary["research_cost_day"] = summarize_research_cost(
+                costed, one_way_cost=one_way_cost
+            )
+            day_summary["observations"] = costed
+            day_summary["next_day_date"] = nxt
+            day_summary["evaluation_as_of"] = eval_as_of
+            day_summary["feature_as_of"] = as_of
+            day_summary["definition"] = definitions.get(sid)
+            per_signal_day[sid] = day_summary
+
+        day_results.append(
+            {
+                "date": d,
+                "as_of": as_of,
+                "signals": per_signal_day,
+                "codes": list(selected_codes),
+                "label": NEXTDAY_RESEARCH_LABEL,
+                "mass_research": MASS_RESEARCH_STATUS,
+                "phase7": PHASE7_STATUS,
+                "ready_declared": READY_DECLARED,
+            }
+        )
+
+    by_signal: dict[str, Any] = {}
+    for sid in (SIGNAL_ID_MARGIN_CHANGE, SIGNAL_ID_SHORT_RATIO_DELTA):
+        by_signal[sid] = _summarize_one_signal_batch(
+            signal_day_rows[sid],
+            signal_id=sid,
+            definition=definitions.get(sid) or {},
+            one_way_cost=one_way_cost,
+        )
+
+    compare_rows: list[dict[str, Any]] = []
+    for sid in (SIGNAL_ID_MARGIN_CHANGE, SIGNAL_ID_SHORT_RATIO_DELTA):
+        body = by_signal[sid]
+        nd = body.get("nextday_return") or {}
+        by_sign = nd.get("by_sign") or {}
+        cost = body.get("research_cost") or {}
+        agg = body.get("aggregate") or {}
+        compare_rows.append(
+            {
+                "signal_id": sid,
+                "signal_count": agg.get("signal_count"),
+                "non_null": agg.get("non_null"),
+                "non_null_rate": agg.get("non_null_rate"),
+                "sign_plus": (agg.get("sign_distribution") or {}).get("+1"),
+                "sign_zero": (agg.get("sign_distribution") or {}).get("0"),
+                "sign_minus": (agg.get("sign_distribution") or {}).get("-1"),
+                "mean_R_plus": (by_sign.get("+1") or {}).get("mean_next_day_return"),
+                "median_R_plus": (by_sign.get("+1") or {}).get(
+                    "median_next_day_return"
+                ),
+                "mean_R_minus": (by_sign.get("-1") or {}).get("mean_next_day_return"),
+                "median_R_minus": (by_sign.get("-1") or {}).get(
+                    "median_next_day_return"
+                ),
+                "overall_mean_R": (nd.get("overall") or {}).get(
+                    "mean_next_day_return"
+                ),
+                "null_return_rate": (nd.get("overall") or {}).get("null_return_rate"),
+                "gross_signed_mean_active": (
+                    (cost.get("gross_signed_return") or {}).get("mean_active")
+                ),
+                "net_one_way_mean_active": (
+                    (cost.get("net_signed_return_one_way") or {}).get("mean_active")
+                ),
+                "n_active_positions": (
+                    (cost.get("gross_signed_return") or {}).get("n_active_positions")
+                ),
+            }
+        )
+
+    batch_summary: dict[str, Any] = {
+        "version": "extra-hyp-multisignal-nextday-batch/v1",
+        "job_id": jid,
+        "pipeline": "extra_hyp_signals_compare",
+        "signal_ids": [SIGNAL_ID_MARGIN_CHANGE, SIGNAL_ID_SHORT_RATIO_DELTA],
+        "definitions": extra_hyp_definitions(section=section),
+        "feature_ids": list(feature_ids),
+        "short_ratio_section": section,
+        "dataset_ids": list(dataset_ids),
+        "period_start": start,
+        "period_end": end,
+        "codes": list(selected_codes),
+        "n_codes": len(selected_codes),
+        "n_days": len(day_results),
+        "as_of_days": [d.get("date") for d in day_results],
+        "history_source": hist_src,
+        "tip_plane": (
+            tip_feature_extract.get("plane")
+            if hist_src == HISTORY_SOURCE_R2
+            else "D1_hot_tip"
+        ),
+        "tip_extracted_row_counts": tip_feature_extract.get("extracted_row_counts"),
+        "by_signal": by_signal,
+        "compare_table": compare_rows,
+        "look_ahead_policy": dict(NEXTDAY_LOOKAHEAD_POLICY),
+        "executed_at_utc": executed_at,
+        "artifact": {
+            "bucket": RESEARCH_ARTIFACT_BUCKET,
+            "prefix": prefix,
+            "batch_summary_r2_key": batch_key,
+        },
+        "mass_research": MASS_RESEARCH_STATUS,
+        "phase7": PHASE7_STATUS,
+        "ready_declared": READY_DECLARED,
+        "order_execution": False,
+        "local_sot": False,
+        "densify": False,
+        "label": NEXTDAY_RESEARCH_LABEL,
+        "cost_label": RESEARCH_COST_LABEL,
+        "significance_claimed": False,
+        "edge_claimed": False,
+        "operational_go": False,
+        "not_s1_rehash": True,
+        "note": (
+            "W62 S4/S5 research hypotheses (margin change / short ratio Δ). "
+            "小サンプル / 研究用・未宣言. Not READY. No Mass. No densify invent."
+        ),
+    }
+
+    puts: list[dict[str, Any]] = []
+
+    def _put(key: str, payload: Mapping[str, Any]) -> dict[str, Any]:
+        body = _json_bytes(payload)
+        if r2_put is not None:
+            meta = r2_put(RESEARCH_ARTIFACT_BUCKET, key, body)
+            if "status" not in meta:
+                meta = {**meta, "status": "injected"}
+            return meta
+        return default_r2_put(
+            RESEARCH_ARTIFACT_BUCKET,
+            key,
+            body,
+            wrangler=wrangler,
+            config=wrangler_config,
+            dry_run=dry_run,
+            staging_dir=staging_dir,
+        )
+
+    puts.append(_put(batch_key, batch_summary))
+    if write_per_day_artifacts:
+        for d in day_results:
+            date_s = str(d.get("date") or "")[:10]
+            day_key = f"{prefix}/days/date={date_s}/signals.json"
+            puts.append(_put(day_key, d))
+
+    return MultidaySignalEval(
+        job_id=jid,
+        n_days=len(day_results),
+        as_of_days=tuple(str(d.get("date")) for d in day_results),
+        codes=tuple(selected_codes),
+        batch_summary_r2_key=batch_key,
+        batch_summary=batch_summary,
+        day_results=tuple(day_results),
+        r2_puts=tuple(puts),
+        dry_run=bool(dry_run),
+        mass_research=MASS_RESEARCH_STATUS,
+        phase7=PHASE7_STATUS,
+        ready_declared=READY_DECLARED,
+        local_sot=False,
+        attach_nextday_returns=True,
+        version="extra-hyp-multisignal-nextday-eval/v1",
+    )
+
+
 def execute_multiday_multisignal_compare(
     *,
     period_start: str,
@@ -3838,6 +4204,7 @@ __all__ = [
     "default_r2_put",
     "design_artifact_paths",
     "discover_tip_trading_days",
+    "execute_extra_hyp_signals_compare",
     "execute_multiday_multisignal_compare",
     "execute_multiday_nextday_return_eval",
     "execute_multiday_signal_eval",

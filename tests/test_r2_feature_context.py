@@ -712,6 +712,7 @@ def test_available_at_repair_calendar_only_no_lookahead():
     assert pol["version"] == AVAILABLE_AT_REPAIR_POLICY["version"]
     assert pol["r2_sot_rewrite"] is False
     assert "calendar_ingest_pollution" in pol["repairs"]
+    assert "archive_ingest_pollution" in pol["repairs"]
 
     cal_rows = [
         {
@@ -734,7 +735,7 @@ def test_available_at_repair_calendar_only_no_lookahead():
     assert repaired["rows"][0]["available_at"] == "2024-10-01T00:00:00+09:00"
     assert repaired["look_ahead"] is False
 
-    # fins: post-date preserved (not rewritten to event_time)
+    # fins: short real lag preserved (not archive 2026 pattern)
     fins = [
         {
             "date": "2024-10-01",
@@ -746,6 +747,23 @@ def test_available_at_repair_calendar_only_no_lookahead():
     fr = repair_available_at_research(fins, dataset="fins_summary", policy="auto")
     assert fr["n_fixed"] == 0
     assert fr["rows"][0]["available_at"] == "2024-10-05T15:00:00+09:00"
+
+    # margin: 2026 ingest stamp on 2022 event → research repair
+    margin = [
+        {
+            "date": "2022-10-07",
+            "event_time": "2022-10-07T15:00:00+09:00",
+            "available_at": "2026-08-13T23:41:27+09:00",
+            "Code": "13010",
+        }
+    ]
+    mr = repair_available_at_research(
+        margin, dataset="markets_margin_interest", policy="auto"
+    )
+    assert mr["n_fixed"] == 1
+    assert mr["repair_applied"] == "archive_ingest_pollution"
+    assert mr["rows"][0]["available_at"] == "2022-10-07T15:00:00+09:00"
+    assert mr["look_ahead"] is False
 
 
 def test_multisignal_history_source_r2(tmp_path: Path):

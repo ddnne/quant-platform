@@ -798,6 +798,296 @@ def compute_topix_disc_from_feature_observations(
     )
 
 
+# ---------------------------------------------------------------------------
+# W62 extra research hypotheses (not S1 rehash)
+# S4: sign(margin_interest_change_1d)
+# S5: sign(Δ short_ratio_level) for a fixed section (broadcast to codes)
+# ---------------------------------------------------------------------------
+
+SHORT_RATIO_FEATURE_ID: str = "short_ratio_level"
+SIGNAL_ID_MARGIN_CHANGE: str = "c21_margin_change_sign"
+SIGNAL_ID_SHORT_RATIO_DELTA: str = "c21_short_ratio_delta_sign"
+DEFAULT_SHORT_RATIO_SECTION: str = "0050"  # research pin (TSE 33 sector code)
+
+EXTRA_HYP_FEATURE_IDS: tuple[str, ...] = (
+    "is_trading_day",
+    MARGIN_CHANGE_FEATURE_ID,
+    SHORT_RATIO_FEATURE_ID,
+)
+
+EXTRA_HYP_DATASETS: tuple[str, ...] = (
+    "equities_bars_daily",
+    "markets_calendar",
+    "indices_bars_daily_topix",
+    "markets_margin_interest",
+    "markets_short_ratio",
+)
+
+
+def compute_margin_change_sign_signal(
+    *,
+    margin_change: float | None,
+    is_trading_day: float | None = 1.0,
+    code: str | None = None,
+    date: str | None = None,
+    as_of: str | None = None,
+) -> dict[str, Any]:
+    """S4 research: sign(margin_interest_change_1d) on trading days.
+
+    Approved legs only. Candidate status — not READY.
+    """
+    raw_sign = sign_from_numeric(margin_change)
+    filtered, filter_meta = apply_trading_day_filter(raw_sign, is_trading_day)
+    meta: dict[str, Any] = {
+        "signal_id": SIGNAL_ID_MARGIN_CHANGE,
+        "signal_version": SIGNAL_VERSION,
+        "status": SIGNAL_STATUS,
+        "candidate_only": False,
+        "primary_feature_id": MARGIN_CHANGE_FEATURE_ID,
+        "filter_feature_id": FILTER_FEATURE_ID,
+        "margin_interest_change_1d": margin_change,
+        "raw_sign": raw_sign,
+        "filter": filter_meta,
+        "mass_research": MASS_RESEARCH,
+        "phase7": PHASE7,
+        "ready_declared": READY_DECLARED,
+        "order_execution": ORDER_EXECUTION,
+        "note": (
+            "Research signal: sign(margin_interest_change_1d). "
+            "Not READY. Not mass research. No order execution."
+        ),
+    }
+    if code is not None:
+        meta["code"] = str(code)
+    if date is not None:
+        meta["date"] = str(date)[:10]
+    if as_of is not None:
+        meta["as_of"] = str(as_of)
+    return _signal_row_envelope(
+        signal_id=SIGNAL_ID_MARGIN_CHANGE,
+        value=filtered,
+        code=str(code) if code is not None else "",
+        date=str(date)[:10] if date is not None else "",
+        as_of=str(as_of) if as_of is not None else "",
+        candidate_only=False,
+        metadata=meta,
+    )
+
+
+def compute_short_ratio_delta_sign_signal(
+    *,
+    short_ratio_level: float | None,
+    prev_short_ratio_level: float | None,
+    is_trading_day: float | None = 1.0,
+    section: str | None = None,
+    code: str | None = None,
+    date: str | None = None,
+    as_of: str | None = None,
+) -> dict[str, Any]:
+    """S5 research: sign(short_ratio_level − prev) on trading days.
+
+    Sector-level Δ broadcast to each code (research convenience). Not READY.
+    Missing prev or level → None (honest empty).
+    """
+    delta: float | None
+    if short_ratio_level is None or prev_short_ratio_level is None:
+        delta = None
+    else:
+        try:
+            delta = float(short_ratio_level) - float(prev_short_ratio_level)
+        except (TypeError, ValueError):
+            delta = None
+    raw_sign = sign_from_numeric(delta)
+    filtered, filter_meta = apply_trading_day_filter(raw_sign, is_trading_day)
+    meta: dict[str, Any] = {
+        "signal_id": SIGNAL_ID_SHORT_RATIO_DELTA,
+        "signal_version": SIGNAL_VERSION,
+        "status": SIGNAL_STATUS,
+        "candidate_only": False,
+        "primary_feature_id": SHORT_RATIO_FEATURE_ID,
+        "filter_feature_id": FILTER_FEATURE_ID,
+        "section": section,
+        "short_ratio_level": short_ratio_level,
+        "prev_short_ratio_level": prev_short_ratio_level,
+        "delta": delta,
+        "raw_sign": raw_sign,
+        "filter": filter_meta,
+        "mass_research": MASS_RESEARCH,
+        "phase7": PHASE7,
+        "ready_declared": READY_DECLARED,
+        "order_execution": ORDER_EXECUTION,
+        "note": (
+            "Research signal: sign(Δ short_ratio_level) for fixed section, "
+            "broadcast per code. Not READY. Not mass. No orders."
+        ),
+    }
+    if code is not None:
+        meta["code"] = str(code)
+    if date is not None:
+        meta["date"] = str(date)[:10]
+    if as_of is not None:
+        meta["as_of"] = str(as_of)
+    return _signal_row_envelope(
+        signal_id=SIGNAL_ID_SHORT_RATIO_DELTA,
+        value=filtered,
+        code=str(code) if code is not None else "",
+        date=str(date)[:10] if date is not None else "",
+        as_of=str(as_of) if as_of is not None else "",
+        candidate_only=False,
+        metadata=meta,
+    )
+
+
+def compute_margin_sign_from_feature_observations(
+    observations: Sequence[Mapping[str, Any]],
+    *,
+    as_of: str,
+    codes: Sequence[str] | None = None,
+) -> dict[str, Any]:
+    """Batch S4 from tip/R2 feature observations."""
+    as_of_s = str(as_of).strip()
+    by_code, default_td = _index_feature_observations(
+        observations, as_of=as_of_s, codes=codes
+    )
+    code_list = (
+        [str(c).strip() for c in codes if str(c).strip()]
+        if codes
+        else sorted(by_code.keys())
+    )
+    signal_obs: list[dict[str, Any]] = []
+    for code in code_list:
+        feats = by_code.get(code) or {}
+        td = feats.get(FILTER_FEATURE_ID, default_td)
+        rec = compute_margin_change_sign_signal(
+            margin_change=feats.get(MARGIN_CHANGE_FEATURE_ID),
+            is_trading_day=td,
+            code=code,
+            date=str(as_of_s)[:10],
+            as_of=as_of_s,
+        )
+        signal_obs.append(rec)
+    return _aggregate_signal_obs(
+        signal_obs,
+        signal_id=SIGNAL_ID_MARGIN_CHANGE,
+        as_of=as_of_s,
+        feature_ids=(MARGIN_CHANGE_FEATURE_ID, FILTER_FEATURE_ID),
+        extra={
+            "formula": (
+                "value = sign(margin_interest_change_1d) if is_trading_day==1; "
+                "else None"
+            ),
+        },
+    )
+
+
+def compute_short_delta_from_feature_observations(
+    observations: Sequence[Mapping[str, Any]],
+    *,
+    as_of: str,
+    prev_short_ratio_level: float | None,
+    codes: Sequence[str] | None = None,
+    section: str = DEFAULT_SHORT_RATIO_SECTION,
+) -> dict[str, Any]:
+    """Batch S5: broadcast sector Δ short_ratio to each code."""
+    as_of_s = str(as_of).strip()
+    by_code, default_td = _index_feature_observations(
+        observations, as_of=as_of_s, codes=codes
+    )
+    # short_ratio_level is section-keyed (metadata may omit code)
+    level: float | None = None
+    for obs in observations:
+        if str(obs.get("feature_id") or "") != SHORT_RATIO_FEATURE_ID:
+            continue
+        v = obs.get("value")
+        if v is not None:
+            try:
+                level = float(v)
+            except (TypeError, ValueError):
+                level = None
+            break
+    code_list = (
+        [str(c).strip() for c in codes if str(c).strip()]
+        if codes
+        else sorted(by_code.keys()) or [""]
+    )
+    signal_obs: list[dict[str, Any]] = []
+    for code in code_list:
+        feats = by_code.get(code) or {}
+        td = feats.get(FILTER_FEATURE_ID, default_td)
+        rec = compute_short_ratio_delta_sign_signal(
+            short_ratio_level=level,
+            prev_short_ratio_level=prev_short_ratio_level,
+            is_trading_day=td,
+            section=section,
+            code=code,
+            date=str(as_of_s)[:10],
+            as_of=as_of_s,
+        )
+        signal_obs.append(rec)
+    return _aggregate_signal_obs(
+        signal_obs,
+        signal_id=SIGNAL_ID_SHORT_RATIO_DELTA,
+        as_of=as_of_s,
+        feature_ids=(SHORT_RATIO_FEATURE_ID, FILTER_FEATURE_ID),
+        extra={
+            "formula": (
+                "value = sign(short_ratio_level - prev) if is_trading_day==1 "
+                f"and section={section!r}; else None (broadcast to codes)"
+            ),
+            "section": section,
+            "short_ratio_level": level,
+            "prev_short_ratio_level": prev_short_ratio_level,
+        },
+    )
+
+
+def extra_hyp_definitions(
+    *,
+    section: str = DEFAULT_SHORT_RATIO_SECTION,
+) -> list[dict[str, Any]]:
+    """Declarative catalog for W62 S4/S5 research hypotheses."""
+    return [
+        {
+            "signal_id": SIGNAL_ID_MARGIN_CHANGE,
+            "version": SIGNAL_VERSION,
+            "status": SIGNAL_STATUS,
+            "candidate_only": False,
+            "approved_legs_only": True,
+            "primary_feature_id": MARGIN_CHANGE_FEATURE_ID,
+            "filter_feature_id": FILTER_FEATURE_ID,
+            "feature_status_pins": {
+                MARGIN_CHANGE_FEATURE_ID: "approved",
+                FILTER_FEATURE_ID: "approved",
+            },
+            "formula": (
+                "value = sign(margin_interest_change_1d) if is_trading_day==1"
+            ),
+            "role": "margin_change_sign",
+            "not_s1_rehash": True,
+        },
+        {
+            "signal_id": SIGNAL_ID_SHORT_RATIO_DELTA,
+            "version": SIGNAL_VERSION,
+            "status": SIGNAL_STATUS,
+            "candidate_only": False,
+            "approved_legs_only": True,
+            "primary_feature_id": SHORT_RATIO_FEATURE_ID,
+            "filter_feature_id": FILTER_FEATURE_ID,
+            "section": section,
+            "feature_status_pins": {
+                SHORT_RATIO_FEATURE_ID: "approved",
+                FILTER_FEATURE_ID: "approved",
+            },
+            "formula": (
+                f"value = sign(Δ short_ratio_level[{section}]) "
+                "if is_trading_day==1; broadcast to codes"
+            ),
+            "role": "short_ratio_delta_sign",
+            "not_s1_rehash": True,
+        },
+    ]
+
+
 def multi_signal_definitions(
     *,
     volume_sign_abs_min: float = DEFAULT_VOLUME_SIGN_ABS_MIN,
@@ -881,10 +1171,13 @@ def multi_signal_definitions(
 __all__ = [
     "CANDIDATE_ONLY",
     "DEFAULT_FEATURE_IDS",
+    "DEFAULT_SHORT_RATIO_SECTION",
     "DEFAULT_SIGNAL_DATASETS",
     "DEFAULT_VOLUME_CHANGE_ABS_MIN",
     "DEFAULT_VOLUME_SIGN_ABS_MIN",
     "DISCLOSURE_FEATURE_ID",
+    "EXTRA_HYP_DATASETS",
+    "EXTRA_HYP_FEATURE_IDS",
     "FEATURE_STATUS_PINS",
     "FILTER_FEATURE_ID",
     "GATE_FEATURE_ID",
@@ -896,7 +1189,10 @@ __all__ = [
     "PHASE7",
     "PRIMARY_FEATURE_ID",
     "READY_DECLARED",
+    "SHORT_RATIO_FEATURE_ID",
     "SIGNAL_ID",
+    "SIGNAL_ID_MARGIN_CHANGE",
+    "SIGNAL_ID_SHORT_RATIO_DELTA",
     "SIGNAL_ID_TOPIX_DISC",
     "SIGNAL_ID_TOPIX_REL",
     "SIGNAL_ID_VOLUME_SIGN",
@@ -906,12 +1202,17 @@ __all__ = [
     "apply_margin_change_filter",
     "apply_trading_day_filter",
     "apply_volume_change_gate",
+    "compute_margin_change_sign_signal",
+    "compute_margin_sign_from_feature_observations",
+    "compute_short_delta_from_feature_observations",
+    "compute_short_ratio_delta_sign_signal",
     "compute_signal_from_feature_observations",
     "compute_topix_disc_from_feature_observations",
     "compute_topix_rel_disclosure_signal",
     "compute_topix_relative_sign_signal",
     "compute_volume_change_sign_signal",
     "compute_volume_sign_from_feature_observations",
+    "extra_hyp_definitions",
     "multi_signal_definitions",
     "sign_from_numeric",
     "sign_from_topix_relative",

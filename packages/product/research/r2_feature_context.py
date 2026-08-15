@@ -141,6 +141,26 @@ AVAILABLE_AT_REPAIR_POLICY: dict[str, Any] = {
             ),
             "look_ahead": False,
         },
+        "archive_ingest_pollution": {
+            "datasets": [
+                "markets_margin_interest",
+                "markets_short_ratio",
+                "markets_margin_alert",
+            ],
+            "condition": (
+                "envelope.available_at day > event day AND "
+                "year(available_at) >= 2026 AND year(event) < 2026"
+            ),
+            "action": "available_at = event_time",
+            "rationale": (
+                "Some R2 JSONL/archive reseals stamp available_at with 2026 "
+                "ingest wall-clock while event_time is historical (2022–2025). "
+                "That is not real post-event lag; research repair sets "
+                "available_at=event_time so PIT historical as_of works. "
+                "Does not rewrite R2 SoT. Not a densify."
+            ),
+            "look_ahead": False,
+        },
         "missing_available_at_drop": {
             "datasets": ["*"],
             "condition": "available_at is null or empty",
@@ -149,15 +169,19 @@ AVAILABLE_AT_REPAIR_POLICY: dict[str, Any] = {
             "look_ahead": False,
         },
         "post_date_preserve": {
-            "datasets": list(BRIDGE_EXPAND_DATASETS) + [
+            "datasets": [
                 "equities_bars_daily",
                 "indices_bars_daily_topix",
+                "fins_summary",
             ],
-            "condition": "available_at is real post-event publish/disclosure time",
+            "condition": (
+                "available_at is real post-event publish/disclosure time "
+                "(not archive_ingest_pollution pattern)"
+            ),
             "action": "keep envelope available_at unchanged",
             "rationale": (
-                "Fins/margin/short/alert may publish after event day; using "
-                "event_time as available_at would look ahead. Preserve envelope."
+                "Bars/topix/fins envelopes with honest lag stay as-is. "
+                "Do not pull future visibility earlier than envelope evidence."
             ),
             "look_ahead": False,
         },
@@ -596,6 +620,16 @@ def filter_history_rows(
     return out
 
 
+# Datasets that may carry 2026 ingest wall-clock as available_at on historical events.
+_ARCHIVE_INGEST_POLLUTION_DATASETS: frozenset[str] = frozenset(
+    {
+        "markets_margin_interest",
+        "markets_short_ratio",
+        "markets_margin_alert",
+    }
+)
+
+
 def repair_available_at_research(
     rows: Sequence[Mapping[str, Any]],
     *,
@@ -607,17 +641,22 @@ def repair_available_at_research(
     Returns ``{"rows": [...], "n_in", "n_out", "n_fixed", "n_dropped_null_aa",
     "policy", "repair_applied"}``.
 
-    * ``policy="auto"`` — calendar gets ingest-pollution repair; others preserve.
+    * ``policy="auto"`` — calendar + margin/short/alert ingest-pollution repairs.
     * ``policy="none"`` — no mutation (still drops null available_at later).
-    * ``policy="calendar_ingest_pollution"`` — force calendar repair even if
-      dataset is not markets_calendar (tests).
+    * ``policy="calendar_ingest_pollution"`` / ``archive_ingest_pollution`` —
+      force that repair path (tests).
     """
     ds = str(dataset).strip()
     apply_cal = policy in ("auto", "calendar_ingest_pollution") and (
         ds == "markets_calendar" or policy == "calendar_ingest_pollution"
     )
+    apply_archive = policy in ("auto", "archive_ingest_pollution") and (
+        ds in _ARCHIVE_INGEST_POLLUTION_DATASETS
+        or policy == "archive_ingest_pollution"
+    )
     n_fixed = 0
     n_dropped = 0
+    repair_tags: list[str] = []
     out: list[dict[str, Any]] = []
     for raw in rows:
         row = dict(raw)
@@ -628,15 +667,38 @@ def repair_available_at_research(
             # when require_available_at=False; we count and exclude here.
             n_dropped += 1
             continue
-        if apply_cal and et is not None and str(et).strip():
+        if et is not None and str(et).strip():
             aa_day = str(aa).strip()[:10]
             et_day = str(et).strip()[:10]
-            if aa_day and et_day and aa_day > et_day:
+            aa_year = aa_day[:4] if len(aa_day) >= 4 else ""
+            et_year = et_day[:4] if len(et_day) >= 4 else ""
+            if apply_cal and aa_day and et_day and aa_day > et_day:
                 row["available_at"] = et
                 row["_aa_repair"] = "calendar_ingest_pollution"
                 n_fixed += 1
-        # post_date_preserve: leave non-calendar rows as-is (including lag).
+                repair_tags.append("calendar_ingest_pollution")
+            elif (
+                apply_archive
+                and aa_day
+                and et_day
+                and aa_day > et_day
+                and aa_year >= "2026"
+                and et_year
+                and et_year < "2026"
+            ):
+                row["available_at"] = et
+                row["_aa_repair"] = "archive_ingest_pollution"
+                n_fixed += 1
+                repair_tags.append("archive_ingest_pollution")
+        # post_date_preserve: leave other rows as-is (including real lag).
         out.append(row)
+    applied = "none"
+    if n_fixed:
+        # Prefer the specific tag used.
+        if "archive_ingest_pollution" in repair_tags:
+            applied = "archive_ingest_pollution"
+        elif "calendar_ingest_pollution" in repair_tags:
+            applied = "calendar_ingest_pollution"
     return {
         "rows": out,
         "n_in": len(list(rows)),
@@ -645,9 +707,7 @@ def repair_available_at_research(
         "n_dropped_null_aa": n_dropped,
         "dataset": ds,
         "policy": policy,
-        "repair_applied": (
-            "calendar_ingest_pollution" if apply_cal and n_fixed else "none"
-        ),
+        "repair_applied": applied,
         "research_only": True,
         "look_ahead": False,
         "document": AVAILABLE_AT_REPAIR_POLICY["version"],

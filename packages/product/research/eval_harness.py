@@ -55,6 +55,12 @@ from features.minimal_signal import (
     signal_definition,
 )
 from features.registry import get as get_feature
+from research.robustness_gate import (
+    evaluate_research_robustness_gate,
+    period_rows_from_cross_table,
+    research_robustness_gate_document,
+    walk_forward_gross_from_compare,
+)
 from research.single_shot_job import (
     COMPLETE_21_DATASETS,
     COMPLETE_21_DATASET_SET,
@@ -79,6 +85,7 @@ from research.single_shot_job import (
     build_equity_close_index,
     design_artifact_paths,
     discover_tip_trading_days,
+    execute_extra_hyp_signals_compare,
     execute_multiday_multisignal_compare,
     execute_multiday_nextday_return_eval,
     execute_multiday_signal_eval,
@@ -927,4 +934,9 @@ __all__ = [
     "split_asof_days_walk_forward",
     "summarize_nextday_by_sign",
     "summarize_signal_day",
+    "evaluate_research_robustness_gate",
+    "period_rows_from_cross_table",
+    "research_robustness_gate_document",
+    "walk_forward_gross_from_compare",
+    "execute_extra_hyp_signals_compare",
 ]
