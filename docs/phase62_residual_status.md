@@ -2,7 +2,7 @@
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
 **Live verified:** 2026-08-15 (JST) / **W64** コスト込み複数年（READY 未宣言） · COMPLETE segs **3478** · Dataset COMPLETE **21** · PARTIAL **5** DEFER · **actionable_gap = 0** · empty COMPLETE **0** · **OTC 93** · Mass/READY/Phase7 **NO-GO/OFF** · FRESH `projgen-31ae63a75b9a477a8b7e6f9d34f6f630` · **CF-SoT** held · promotion **9 approved** / **1 candidate** no-promote · cost **10bp one-way** · S1 Q4 cost **FAIL** (+3/−3 net) · S4 Q4 cost PASS weak all − · S1 full~100d **FAIL** · topix JSONL gap 2024–25 archive · margin 2024 empty held · **gate pass ≠ READY/Mass** · **no significance / no edge / no operational GO**
-**Repo tip:** `daabc53658459437ea2908acd891737d5058610a` — W64 cost multi-year · COMPLETE **21** / segs **3478** / OTC **93** / READY **未宣言** · FRESH `projgen-31ae63a75b9a477a8b7e6f9d34f6f630`
+**Repo tip:** `afceb91ea689c4703b29c6332bf35346675cb8c8` — W64 cost multi-year · COMPLETE **21** / segs **3478** / OTC **93** / READY **未宣言** · FRESH `projgen-31ae63a75b9a477a8b7e6f9d34f6f630`
 
 ## コスト込み複数年研究評価 S1 + S4（READY 未宣言）
 
