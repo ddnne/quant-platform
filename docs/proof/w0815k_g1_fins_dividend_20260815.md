@@ -182,3 +182,12 @@ Dataset remains **PARTIAL** (not dataset-level COMPLETE). Residual is honestly e
 ## Report line
 
 `COMPLETE div=163(+0) | platform ~3440 | seals +0 (window_ok 0) | densify skip tip=0 residual=61 pre-history shells forever | host429=0 rpm_budget=100 workers=1 unused | FRESH projgen-b6b0eb69… | empty 0 | seal-first 0 | fins_summary residual 6 DEFER untouched | Mass NO-GO`
+
+## Git
+
+| ref | SHA |
+|-----|-----|
+| PRE (wave start) | `1da0bfea93b9535e2a344d4119d512972c5d515e` |
+| proof commit / POST push | `02726b4c09014d5ab6dba99a1ddad3a01f5f4adf` |
+
+Push: `origin/main` (`3925df0..02726b4`).
