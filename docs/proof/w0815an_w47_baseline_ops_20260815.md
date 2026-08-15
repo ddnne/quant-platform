@@ -10,7 +10,7 @@
 **Live verified:** 2026-08-15 (JST) / G1 ops ~`2026-08-15T09:01–09:04Z` UTC  
 **Wave start HEAD:** `2bfd3ee7fbfe645f00a6bcec04f0bcf771804fc8` (W46 post-fill)  
 **Residual baseline commits:** `dc974df` · `7a45313`  
-**Proof HEAD (post-push):** (fill after push)  
+**Proof HEAD (post-push):** `2da6085f9c34804578b7438baf144ce23d99462b`
 **Projection (G1 ops reeval):** **FRESH** `projgen-1a965a00414c4810b25ee77943d1a0f8` (age ~89s at capture; pre-gen `projgen-f74d5496490141c8940d81317b8aaf7f`)
 
 **Artifacts:**
@@ -107,9 +107,9 @@ Source: [`.glm-logs/w0815an_g1_ops/FINAL_metrics.json`](../../.glm-logs/w0815an_
 | step | result |
 |------|--------|
 | Docs committed | residual SoT (FRESH sync) · usage notes · this proof · residual baseline commits |
-| `git push origin main` | (fill after push) |
-| `origin/main` SHA | (fill after push) |
-| HEAD == origin/main | (fill after push) |
+| `git push origin main` | **done** (after commit) |
+| `origin/main` SHA | `2da6085f9c34804578b7438baf144ce23d99462b` |
+| HEAD == origin/main | **yes** (after push) |
 
 ---
 
