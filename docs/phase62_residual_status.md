@@ -1,7 +1,7 @@
 # Phase 6.2 / 6.3 residual status
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
-**Live verified:** 2026-08-15 (JST) / tip PRE `2026-08-15T06:19:54Z` → POST `2026-08-15T06:28:19Z` UTC · **W39** continuous collect · W38 contract floors **still SoT** (`ba3c811`) · COMPLETE segs **3457→3457 (Δ0)** · Dataset COMPLETE **20 held** · empty COMPLETE **0** · tip raw **15642→15673 (+31 secondary)** · tip densify **not primary** · actionable_n **0** · mb **2015-03** DEFER_thin_partial_month (densify once rows=0 · seal 0) · Permanent DEFER **5** held · Phase7 **OFF** · FRESH `projgen-870c78f492424ab6a93267adf5d37375` · **CF-SoT** held — D1 = hot tip · R2 = history · COMPLETE = receipt-owned · **2e436bfcb2ec1759b6bfb32727a98ea3d5fbf3cd** `2e436bfcb2ec1759b6bfb32727a98ea3d5fbf3cd`
+**Live verified:** 2026-08-15 (JST) / tip PRE `2026-08-15T06:19:54Z` → POST `2026-08-15T06:28:19Z` UTC · **W39** continuous collect · W38 contract floors **still SoT** (`ba3c811`) · COMPLETE segs **3457→3457 (Δ0)** · Dataset COMPLETE **20 held** · empty COMPLETE **0** · tip raw **15642→15673 (+31 secondary)** · tip densify **not primary** · actionable_n **0** · mb **2015-03** DEFER_thin_partial_month (densify once rows=0 · seal 0) · Permanent DEFER **5** held · Phase7 **OFF** · FRESH `projgen-870c78f492424ab6a93267adf5d37375` · **CF-SoT** held — D1 = hot tip · R2 = history · COMPLETE = receipt-owned · **POST_PUSH_SHA** `2e436bfcb2ec1759b6bfb32727a98ea3d5fbf3cd`
 **Repo tip:** `2e436bfcb2ec1759b6bfb32727a98ea3d5fbf3cd` — W39 ops · COMPLETE **3457** / Dataset COMPLETE **20** / empty COMPLETE **0** / raw **15673** / Phase7 **OFF**
 
 ## W39 / w0815af — continuous collect ops (JQ tip + JSDA/MB + gap) (FINAL)
@@ -22,7 +22,7 @@
 | empty-raw COMPLETE / Mass / READY / Phase7 | **ban / NO-GO / OFF** |
 | Projection | **FRESH** `projgen-870c78f492424ab6a93267adf5d37375` |
 | CF-SoT | D1 **hot tip** · R2 **history** · COMPLETE **receipt-owned** |
-| Push | **2e436bfcb2ec1759b6bfb32727a98ea3d5fbf3cd** `2e436bfcb2ec1759b6bfb32727a98ea3d5fbf3cd` |
+| Push | **POST_PUSH_SHA** `2e436bfcb2ec1759b6bfb32727a98ea3d5fbf3cd` |
 
 **Primary success:** COMPLETE segs Δ0 + Dataset COMPLETE held 20.  
 **Secondary only:** tip raw +31. **Not** tip-as-primary. **Not** densify-as-success.
@@ -61,7 +61,7 @@
 | empty COMPLETE | **0 → 0** (ban held) |
 | raw_retention_manifests | **not remeasured** (no tip collect; held W36 **15589**) |
 | Projection | **FRESH** `projgen-c54a409aaeef424e9c13394b82bd720b` |
-| Push | **2e436bfcb2ec1759b6bfb32727a98ea3d5fbf3cd** `afd7189647331de2d977f3ce2018ca34135bb5c1` |
+| Push | **POST_PUSH_SHA** `afd7189647331de2d977f3ce2018ca34135bb5c1` |
 
 ### history_target_start raises (old → new)
 
@@ -186,7 +186,7 @@ Source: [`.glm-logs/w0815ae_reeval/REEVAL_DELTA.json`](../.glm-logs/w0815ae_reev
 | empty-raw COMPLETE / Mass / READY / Phase7 | **ban / NO-GO / OFF** |
 | Projection | **FRESH** `projgen-cbb5d486b6e942769ad8fcd08b1dbc7b` |
 | CF-SoT | D1 **hot tip** · R2 **history** · COMPLETE **receipt-owned** |
-| Push | **2e436bfcb2ec1759b6bfb32727a98ea3d5fbf3cd** `596e721a4e38759c5f8c7120eec904c9e6cf7437` |
+| Push | **POST_PUSH_SHA** `596e721a4e38759c5f8c7120eec904c9e6cf7437` |
 
 ## W35 / w0815ab — continuous collect ops (JQ tip + JSDA + gap) (FINAL)
 
@@ -202,7 +202,7 @@ Source: [`.glm-logs/w0815ae_reeval/REEVAL_DELTA.json`](../.glm-logs/w0815ae_reev
 | empty-raw COMPLETE / Mass / READY / Phase7 | **ban / NO-GO / OFF** |
 | Projection | **FRESH** `projgen-340eac0c5eda4e8b8ffdadb0b37cafa4` |
 | CF-SoT | D1 **hot tip** · R2 **history** · COMPLETE **receipt-owned** |
-| Push | **2e436bfcb2ec1759b6bfb32727a98ea3d5fbf3cd** `fb626604fe46c3d17a609981b62208cb02ca9d10` |
+| Push | **POST_PUSH_SHA** `fb626604fe46c3d17a609981b62208cb02ca9d10` |
 
 ## W34 / w0815aa — continuous collect ops (JQ tip + JSDA + gap) (FINAL)
 
@@ -218,7 +218,7 @@ Source: [`.glm-logs/w0815ae_reeval/REEVAL_DELTA.json`](../.glm-logs/w0815ae_reev
 | empty-raw COMPLETE / Mass / READY / Phase7 | **ban / NO-GO / OFF** |
 | Projection | **FRESH** `projgen-f0ee1d48d335445eb7f42c75c872e7da` |
 | CF-SoT | D1 **hot tip** · R2 **history** · COMPLETE **receipt-owned** |
-| Push | **2e436bfcb2ec1759b6bfb32727a98ea3d5fbf3cd** `730d333cc3d3caab39238d52d1e7be3fe9af3904` |
+| Push | **POST_PUSH_SHA** `730d333cc3d3caab39238d52d1e7be3fe9af3904` |
 
 ## W33 / w0815z — continuous collect ops (JQ tip + JSDA + gap) (FINAL)
 
@@ -234,7 +234,7 @@ Source: [`.glm-logs/w0815ae_reeval/REEVAL_DELTA.json`](../.glm-logs/w0815ae_reev
 | empty-raw COMPLETE / Mass / READY / Phase7 | **ban / NO-GO / OFF** |
 | Projection | **FRESH** `projgen-061b5d38668a4e6d8537757c28350d78` |
 | CF-SoT | D1 **hot tip** · R2 **history** · COMPLETE **receipt-owned** |
-| Push | **2e436bfcb2ec1759b6bfb32727a98ea3d5fbf3cd** `3927ca4d81950828dfe292364b976ca461d31d2a` |
+| Push | **POST_PUSH_SHA** `3927ca4d81950828dfe292364b976ca461d31d2a` |
 
 ## W32 / w0815y — continuous collect ops (JQ tip + JSDA + gap) (FINAL)
 
@@ -250,7 +250,7 @@ Source: [`.glm-logs/w0815ae_reeval/REEVAL_DELTA.json`](../.glm-logs/w0815ae_reev
 | empty-raw COMPLETE / Mass / READY / Phase7 | **ban / NO-GO / OFF** |
 | Projection | **FRESH** `projgen-b5f2325ca773478cb3c9e2eb1839e4d9` |
 | CF-SoT | D1 **hot tip** · R2 **history** · COMPLETE **receipt-owned** |
-| Push | **2e436bfcb2ec1759b6bfb32727a98ea3d5fbf3cd** `b44c23c7f3af6e36ef7bafe37195cc3b12c369e8` |
+| Push | **POST_PUSH_SHA** `b44c23c7f3af6e36ef7bafe37195cc3b12c369e8` |
 
 ## W31 / w0815x — continuous collect ops (JQ tip + JSDA + gap) (FINAL)
 
@@ -266,7 +266,7 @@ Source: [`.glm-logs/w0815ae_reeval/REEVAL_DELTA.json`](../.glm-logs/w0815ae_reev
 | empty-raw COMPLETE / Mass / READY / Phase7 | **ban / NO-GO / OFF** |
 | Projection | **FRESH** `projgen-20ecd21e86c34b45bf21d82c39d5f84d` |
 | CF-SoT | D1 **hot tip** · R2 **history** · COMPLETE **receipt-owned** |
-| Push | **2e436bfcb2ec1759b6bfb32727a98ea3d5fbf3cd** `74894912ac4851bbd5a837183e000a160a11e5e3` |
+| Push | **POST_PUSH_SHA** `74894912ac4851bbd5a837183e000a160a11e5e3` |
 
 ## W30 / w0815w — continuous collect ops (JQ tip + JSDA + gap) (FINAL)
 
@@ -282,7 +282,7 @@ Source: [`.glm-logs/w0815ae_reeval/REEVAL_DELTA.json`](../.glm-logs/w0815ae_reev
 | empty-raw COMPLETE / Mass / READY / Phase7 | **ban / NO-GO / OFF** |
 | Projection | **FRESH** `projgen-c4240127142b4d9b83e53f02866018a7` |
 | CF-SoT | D1 **hot tip** · R2 **history** · COMPLETE **receipt-owned** |
-| Push | **2e436bfcb2ec1759b6bfb32727a98ea3d5fbf3cd** `b18a06175a3bb4ed3f3c84c6f1dd573a309e1e10` |
+| Push | **POST_PUSH_SHA** `b18a06175a3bb4ed3f3c84c6f1dd573a309e1e10` |
 
 ## W29 / w0815v — floor catalog + NO_DENSIFY + tip ops close (FINAL)
 
@@ -300,7 +300,7 @@ Source: [`.glm-logs/w0815ae_reeval/REEVAL_DELTA.json`](../.glm-logs/w0815ae_reev
 | empty-raw COMPLETE / Mass / READY / Phase7 | **ban / NO-GO / OFF** |
 | Projection | **FRESH** `projgen-76084a30143043febab9babe9327aa2f` |
 | CF-SoT | D1 **hot tip** · R2 **history** · COMPLETE **receipt-owned** |
-| Push | **2e436bfcb2ec1759b6bfb32727a98ea3d5fbf3cd** `d3c9f54b5237c7f18f692483601a706b5ee620b0` |
+| Push | **POST_PUSH_SHA** `d3c9f54b5237c7f18f692483601a706b5ee620b0` |
 
 ### NO_DENSIFY_FIXED (never re-densify residual class)
 
