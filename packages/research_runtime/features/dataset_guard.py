@@ -1,9 +1,10 @@
 """Feature-pipeline guards: permanent DEFER datasets cannot feed history loads.
 
-COMPLETE 21 usage readiness (W49): research features must not treat the five
-permanent DEFER residuals as full-history inputs. This module re-exports the
-data-contracts helpers and adds a small COMPLETE-21 allowlist for catalog /
-feature declarations.
+COMPLETE 21 usage readiness (W49): research features must not treat permanent
+DEFER residuals as full-history inputs. W68: permanent DEFER n=4
+(PD-MX-EARN-TIP / fins_earnings_date tip4 superseded by live seal). This module
+re-exports the data-contracts helpers and adds a small COMPLETE-21 allowlist
+for catalog / feature declarations.
 
 Ops / tip / SCD2 CURRENT paths are out of scope — only feature history loads.
 """

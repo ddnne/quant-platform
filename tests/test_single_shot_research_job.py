@@ -89,12 +89,16 @@ def test_require_complete_21_only_rejects_permanent_defer():
         require_complete_21_only(["equities_bars_daily", "equities_master"])
 
 
-def test_require_complete_21_only_rejects_all_five_permanent_defer():
-    """T3: every permanent DEFER id fails closed with PermanentDeferHistoryError."""
+def test_require_complete_21_only_rejects_all_permanent_defer():
+    """T3: every permanent DEFER id fails closed with PermanentDeferHistoryError.
+
+    W68: permanent DEFER n=4 (PD-MX-EARN-TIP / fins_earnings_date superseded).
+    """
+    assert len(PERMANENT_DEFER_DATASETS) == 4
     for defer_id in sorted(PERMANENT_DEFER_DATASETS):
         with pytest.raises(PermanentDeferHistoryError, match="permanent DEFER"):
             require_complete_21_only([defer_id])
-    # Bundle of all 5 still fail-closed (never silently filtered).
+    # Bundle of all remaining DEFER still fail-closed (never silently filtered).
     with pytest.raises(PermanentDeferHistoryError):
         require_complete_21_only(sorted(PERMANENT_DEFER_DATASETS))
 
@@ -251,9 +255,10 @@ def test_execute_dry_run_with_injected_d1(tmp_path: Path):
 
 
 def test_extract_d1_tip_summaries_rejects_defer():
+    # W68: fins_earnings_date no longer permanent DEFER; use remaining PD id.
     with pytest.raises(PermanentDeferHistoryError):
         extract_d1_tip_summaries(
-            ["fins_earnings_date"],
+            ["equities_earnings_calendar"],
             period_start="2026-08-01",
             period_end="2026-08-15",
             d1_execute=lambda sql: (_ for _ in ()).throw(AssertionError("no d1")),
@@ -792,7 +797,7 @@ def test_phase7_mass_ready_freeze_constants():
 def test_freeze_status_matches_constants():
     status = freeze_status()
     assert status["complete_21_count"] == 21
-    assert status["permanent_defer_count"] == 5
+    assert status["permanent_defer_count"] == 4  # W68: PD-MX-EARN-TIP superseded
     assert status["artifact_bucket"] == "quant-structured"
     assert status["local_sot"] is False
 

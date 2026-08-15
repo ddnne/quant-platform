@@ -135,7 +135,7 @@ def test_t1_inventory_covers_complete_21_and_excludes_defer():
     doc = r2_inventory_document()
     assert doc["complete_21_count"] == 21
     assert len(doc["complete_21"]) == 21
-    assert doc["permanent_defer_count"] == 5
+    assert doc["permanent_defer_count"] == 4  # W68: PD-MX-EARN-TIP superseded
     assert set(doc["permanent_defer_excluded"]) == PERMANENT_DEFER_DATASETS
     for ds in S1_SIGNAL_HISTORY_DATASETS:
         inv = COMPLETE_21_R2_INVENTORY[ds]
@@ -234,9 +234,10 @@ def test_t5_defer_hard_reject_on_build_context():
 
 
 def test_t5_defer_hard_reject_on_sqlite_mirror(tmp_path: Path):
+    # W68: fins_earnings_date no longer permanent DEFER; use remaining PD id.
     with pytest.raises(PermanentDeferHistoryError):
         materialize_disposable_sqlite_mirror(
-            {"fins_earnings_date": [{"available_at": "x"}]},
+            {"equities_bars_daily_am": [{"available_at": "x"}]},
             db_path=tmp_path / "x.sqlite",
         )
 

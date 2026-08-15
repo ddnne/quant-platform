@@ -197,9 +197,14 @@ def test_require_feature_dataset_rejects_all_permanent_defer():
 
 def test_require_feature_datasets_and_filter():
     require_feature_datasets(["equities_bars_daily", "fins_summary"])
-    with pytest.raises(PermanentDeferHistoryError, match="PD-MX-EARN-TIP"):
+    # W68: fins_earnings_date tip4 COMPLETE — history-eligible (not PD-MX-EARN-TIP).
+    require_feature_datasets(
+        ["equities_bars_daily", "fins_earnings_date"],
+        context="feature test",
+    )
+    with pytest.raises(PermanentDeferHistoryError, match="PD-D4-EARN-CAL"):
         require_feature_datasets(
-            ["equities_bars_daily", "fins_earnings_date"],
+            ["equities_bars_daily", "equities_earnings_calendar"],
             context="feature test",
         )
     assert filter_feature_datasets(
@@ -1290,7 +1295,7 @@ def test_margin_short_calendar_repo_reject_defer_poison(monkeypatch):
     """Each new feature's declared datasets stay DEFER-free; poison fails closed."""
     for poisoned in (
         ["markets_margin_interest", "equities_master"],
-        ["markets_short_ratio", "fins_earnings_date"],
+        ["markets_short_ratio", "equities_earnings_calendar"],  # W68: fins not DEFER
         ["markets_calendar", "equities_bars_daily_am"],
         ["jsda_tokyo_repo_rates", "jsda_otc_bond_reference_prices"],
         ["equities_bars_daily", "equities_bars_daily_am"],  # return_1d_c21 path

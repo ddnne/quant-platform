@@ -1,46 +1,87 @@
 # Phase 6.2 / 6.3 residual status
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
-**Live verified:** 2026-08-15/16 · **W67** coverage expand attempt **INCOMPLETE** for Dataset COMPLETE increase（honest） · fins **100/104 held** · COMPLETE **21 held** · COMPLETE segs **3478** · DEFER **5** · **actionable_gap = 0** · densify **none** · empty COMPLETE **0** · **OTC 93** · bars_am tip COMPLETE **1** / PARTIAL **31** · Mass/READY/Phase7 **NO-GO/OFF** · FRESH `projgen-7375ba081dbd484eac1f360910e3e9fa` · S1–S5 **research_baseline_rejected** untouched · **ユーザー希望の 21→22 は raw 無しのため未達** · block **PD-MX-EARN-TIP / NO_RAW / HAS_RAW_SEALABLE=0** · **no invent COMPLETE** · **no densify success** · **no significance / no edge / no operational GO**
-**Repo tip:** `b1fcc71adb228b9f49f3ad8854c5aada843572e0` — W67 honest fins tip4 COMPLETE expand attempt blocked NO_RAW · COMPLETE **21** / DEFER **5** / segs **3478** / OTC **93** / READY **未宣言** · FRESH `projgen-7375ba081dbd484eac1f360910e3e9fa`
+**Live verified:** 2026-08-15/16 · **W68** COMPLETE delta **COMPLETE** · fins tip4 live seal **100→104/104** · Dataset COMPLETE **21→22** · COMPLETE segs **3478→3482** · DEFER **4** remaining (bars_am · earn_cal · master · OTC) · PD-MX-EARN-TIP **superseded** (tip4 only) · empty COMPLETE **0** · **OTC 93** (+0) · bars_am COMPLETE tip **1** (+0) · Mass/READY/Phase7 **NO-GO/OFF** · FRESH `projgen-76991c143558463ab981b6da0899459c` · S1–S5 **research_baseline_rejected** untouched · densify **none** · **no invent** · **no Mass/READY ON** · **no S1–S5 un-reject** · **no OTC bulk densify**
+**Repo tip:** (post-push this wave) — W68 fins tip4 COMPLETE seal · COMPLETE **22** / DEFER **4** / segs **3482** / OTC **93** / READY **未宣言** · FRESH `projgen-76991c143558463ab981b6da0899459c`
 
-## Coverage expand attempt（Dataset COMPLETE 増加は INCOMPLETE）· W67
+## COMPLETE delta close（Dataset COMPLETE 21→22）· W68
 
-**Phase name:** fins tip4 COMPLETE expand live reverify + bars_am progress + PARTIAL next plan（宣言なし · invent なし）  
-**Wave:** W67 / w0816a  
-**Close:** [`docs/proof/w0816a_w67_coverage_expand_close_20260816.md`](proof/w0816a_w67_coverage_expand_close_20260816.md)  
-**Task A fins:** [`docs/proof/w0816a_w67_fins_earnings_date_complete_attempt_20260816.md`](proof/w0816a_w67_fins_earnings_date_complete_attempt_20260816.md) · **100/104 held (Δ0)** · tip `2026-01…04` **PERMANENT_DEFER / NO_RAW** · `HAS_RAW_SEALABLE=0`  
-**Task B bars_am:** [`docs/proof/w0816a_w67_bars_am_progress_20260816.md`](proof/w0816a_w67_bars_am_progress_20260816.md) · COMPLETE tip **1** / PARTIAL **31** · history **+0** · PD-D4-BARS-AM densify history FORBIDDEN  
-**Task C PARTIAL plan:** [`docs/proof/w0816a_w67_partial_next_plan_20260816.md`](proof/w0816a_w67_partial_next_plan_20260816.md) · earn_cal / master / OTC plan only · no bulk  
-**Logs:** [`.glm-logs/w0816a_w67_coverage/`](../.glm-logs/w0816a_w67_coverage/) · FRESH log `reeval_freshness.log`  
-**FRESH:** `projgen-7375ba081dbd484eac1f360910e3e9fa` · coverage_segments untouched · mass=NO-GO · densify **none**  
+**Phase name:** fins tip4 live API seal + OTC/bars_am honest +0 + permanent_defer hygiene + residual close（宣言なし）  
+**Wave:** W68 / w0816b  
+**Close:** [`docs/proof/w0816b_w68_complete_delta_close_20260816.md`](proof/w0816b_w68_complete_delta_close_20260816.md)  
+**Task A fins:** [`docs/proof/w0816b_w68_fins_live_api_probe_20260816.md`](proof/w0816b_w68_fins_live_api_probe_20260816.md) · **104/104** · tip `2026-01…04` **COMPLETE** · receipts **903892/903890/903889/903888** · real nz raw  
+**Task B OTC:** [`docs/proof/w0816b_w68_otc_tip_complete_delta_20260816.md`](proof/w0816b_w68_otc_tip_complete_delta_20260816.md) · COMPLETE **93** Δ**0** (no FULL_OK pending)  
+**Task C bars_am:** [`docs/proof/w0816b_w68_bars_am_tip_20260816.md`](proof/w0816b_w68_bars_am_tip_20260816.md) · COMPLETE tip **1** / PARTIAL **31** · history **+0** · PD-D4-BARS-AM densify history FORBIDDEN  
+**permanent_defer:** `packages/data_plane/data_contracts/permanent_defer.py` · **n=4** · W44 `PD-MX-EARN-TIP` tip4 **superseded by W68 live seal** (SUPERSEDED_PERMANENT_DEFER_IDS)  
+**Logs:** [`.glm-logs/w0816b_w68_complete_delta/`](../.glm-logs/w0816b_w68_complete_delta/) · FRESH log `reeval_freshness.log`  
+**FRESH:** `projgen-76991c143558463ab981b6da0899459c` · coverage_segments untouched (reeval) · mass=NO-GO · densify **none**  
 **S1–S5:** stay **research_baseline_rejected** (no un-reject)  
-**Explicit:** ユーザー希望の **21→22 は raw 無しのため未達** · COMPLETE expand **INCOMPLETE** · honest evidence + push **COMPLETE**  
-**Prior W66 標準評価チェックリスト固定:** held underneath
+**Note:** `dataset_coverage.status` for fins may still read PARTIAL (stale aggregate); **coverage_segments SoT = 104/104 COMPLETE**  
+**Prior W67 honest INCOMPLETE for fins expand:** held underneath · **superseded for fins tip4 only** by this wave  
 
 | gate | status |
 |------|--------|
 | READY | **未宣言** |
 | Mass / Phase7 | **NO-GO / OFF** |
-| Dataset COMPLETE | **21** held (21→22 **未達**) |
-| DEFER | **5** |
-| COMPLETE segs | **3478** |
+| Dataset COMPLETE | **22** (21→22 landed) |
+| DEFER | **4** (bars_am · earn_cal · master · OTC) |
+| COMPLETE segs | **3482** |
 | empty COMPLETE | **0** |
-| OTC | **93** |
-| fins_earnings_date | **100/104** held · tip4 NO_RAW |
+| OTC | **93** (+0) |
+| fins_earnings_date | **104/104** COMPLETE · tip4 sealed |
 | bars_am | COMPLETE **1** tip / PARTIAL **31** · history **0** |
 | densify | **none** |
 | actionable_gap | **0** |
 | S1–S5 catalog | **research_baseline_rejected** untouched |
-| FRESH | `projgen-7375ba081dbd484eac1f360910e3e9fa` |
-| COMPLETE expand | **INCOMPLETE** (block PD-MX-EARN-TIP / NO_RAW) |
+| FRESH | `projgen-76991c143558463ab981b6da0899459c` |
+| COMPLETE expand | **COMPLETE** (fins tip4 live seal) |
+| PD-MX-EARN-TIP | **superseded** (tip4 only; W68) |
 
 ### Explicit non-declarations (held)
 
 - **READY** — not declared  
 - **Mass** — **NO-GO / OFF**  
 - **Phase7** — **OFF**  
-- **Dataset COMPLETE 22** — not invented  
+- **OTC / bars_am COMPLETE invent** — not claimed (+0 honest)  
+- **densify success** — not claimed (densify_executed=0)  
+
+## Coverage expand attempt（Dataset COMPLETE 増加は INCOMPLETE）· W67 held · fins tip4 superseded by W68
+
+**Phase name:** fins tip4 COMPLETE expand live reverify + bars_am progress + PARTIAL next plan（宣言なし · invent なし）  
+**Wave:** W67 / w0816a  
+**Close:** [`docs/proof/w0816a_w67_coverage_expand_close_20260816.md`](proof/w0816a_w67_coverage_expand_close_20260816.md)  
+**Task A fins:** [`docs/proof/w0816a_w67_fins_earnings_date_complete_attempt_20260816.md`](proof/w0816a_w67_fins_earnings_date_complete_attempt_20260816.md) · was **100/104 held (Δ0)** · tip `2026-01…04` then **PERMANENT_DEFER / NO_RAW** · `HAS_RAW_SEALABLE=0` · **superseded for fins tip4 by W68 live seal**  
+**Task B bars_am:** [`docs/proof/w0816a_w67_bars_am_progress_20260816.md`](proof/w0816a_w67_bars_am_progress_20260816.md) · COMPLETE tip **1** / PARTIAL **31** · history **+0** · PD-D4-BARS-AM densify history FORBIDDEN  
+**Task C PARTIAL plan:** [`docs/proof/w0816a_w67_partial_next_plan_20260816.md`](proof/w0816a_w67_partial_next_plan_20260816.md) · earn_cal / master / OTC plan only · no bulk  
+**Logs:** [`.glm-logs/w0816a_w67_coverage/`](../.glm-logs/w0816a_w67_coverage/) · FRESH log `reeval_freshness.log`  
+**FRESH (at W67):** `projgen-7375ba081dbd484eac1f360910e3e9fa` · coverage_segments untouched · mass=NO-GO · densify **none**  
+**S1–S5:** stay **research_baseline_rejected** (no un-reject)  
+**Explicit (historical):** ユーザー希望の **21→22 は raw 無しのため未達** at W67 · COMPLETE expand then **INCOMPLETE** · honest evidence + push **COMPLETE** · **fins tip4 only superseded by W68**  
+**Prior W66 標準評価チェックリスト固定:** held underneath
+
+| gate | status (W67 held snapshot) |
+|------|--------|
+| READY | **未宣言** |
+| Mass / Phase7 | **NO-GO / OFF** |
+| Dataset COMPLETE | **21** held at W67 (21→22 then **未達**; **W68 landed 22**) |
+| DEFER | **5** at W67 (**W68 → 4**) |
+| COMPLETE segs | **3478** at W67 (**W68 → 3482**) |
+| empty COMPLETE | **0** |
+| OTC | **93** |
+| fins_earnings_date | **100/104** at W67 · tip4 NO_RAW then (**W68 → 104/104**) |
+| bars_am | COMPLETE **1** tip / PARTIAL **31** · history **0** |
+| densify | **none** |
+| actionable_gap | **0** |
+| S1–S5 catalog | **research_baseline_rejected** untouched |
+| FRESH | `projgen-7375ba081dbd484eac1f360910e3e9fa` (W67) |
+| COMPLETE expand | **INCOMPLETE** at W67 (block PD-MX-EARN-TIP / NO_RAW) · **superseded for fins by W68** |
+
+### Explicit non-declarations (held at W67; fins expand later by W68)
+
+- **READY** — not declared  
+- **Mass** — **NO-GO / OFF**  
+- **Phase7** — **OFF**  
+- **Dataset COMPLETE 22** — not invented at W67 (landed later W68 with real raw+receipt)  
 - **densify success** — not claimed  
 
 ## 標準研究評価チェックリスト固定（READY 未宣言）· W66 held

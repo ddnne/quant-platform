@@ -16,6 +16,9 @@ through the authenticated GET-only secret proxy. It is **not** a PIT dataset
 contract and does not define event-time, availability, or natural-key rules.
 
 `permanent_defer.py` is the fail-closed list of residual PARTIAL datasets
-(W44/W47 lock, n=5) that must not be treated as full-history COMPLETE in
-research history loaders. See
-`docs/proof/complete21_cf_read_paths_20260815.md` §T2.
+(W44/W47 lock; **n=4** after W68) that must not be treated as full-history
+COMPLETE in research history loaders. W44 `PD-MX-EARN-TIP` / `fins_earnings_date`
+tip4 is **superseded by W68 live seal** (tip months COMPLETE; no longer fail-closed).
+Remaining: master, earn_cal, bars_am, OTC. See
+`docs/proof/complete21_cf_read_paths_20260815.md` §T2 and
+`docs/proof/w0816b_w68_complete_delta_close_20260816.md`.

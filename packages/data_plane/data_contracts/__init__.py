@@ -35,6 +35,7 @@ from .canonical import (
 from .permanent_defer import (
     PERMANENT_DEFER_DATASETS,
     PERMANENT_DEFER_IDS,
+    SUPERSEDED_PERMANENT_DEFER_IDS,
     PermanentDeferHistoryError,
     filter_permanent_defer,
     is_permanent_defer,
@@ -69,6 +70,7 @@ __all__ = [
     "validate_downstream_consistency",
     "PERMANENT_DEFER_DATASETS",
     "PERMANENT_DEFER_IDS",
+    "SUPERSEDED_PERMANENT_DEFER_IDS",
     "PermanentDeferHistoryError",
     "filter_permanent_defer",
     "is_permanent_defer",

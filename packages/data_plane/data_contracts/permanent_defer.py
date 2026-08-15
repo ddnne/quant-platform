@@ -3,9 +3,17 @@
 W44/W47 residual lock (see ``docs/phase62_residual_status.md`` and
 ``docs/proof/w0815ak_w44_defer_lock_20260815.md``):
 
-* Dataset COMPLETE = **21** (held). These 5 remain residual PARTIAL.
-* Densify on these classes is **FORBIDDEN** unless residual SoT re-opens.
-* Research **history** loads must not treat them as full-history COMPLETE.
+* Dataset COMPLETE was **21** at W44; residual PARTIAL set was n=5.
+* Densify on remaining classes is **FORBIDDEN** unless residual SoT re-opens.
+* Research **history** loads must not treat remaining DEFER as full-history COMPLETE.
+
+**W68 supersession (tip4 only):** ``PD-MX-EARN-TIP`` / ``fins_earnings_date`` tip
+months ``2026-01…04`` were FINAL permanent DEFER at W44 because vendor tip had
+``NO_RAW`` / ``HAS_RAW_SEALABLE=0``. W68 live API probe returned nz window_ok
+raw for all four months, sealed with signed SUCCESS receipts
+(903892 / 903890 / 903889 / 903888) and remote D1 COMPLETE **104/104** →
+Dataset COMPLETE **22**. Those four months only are **no longer** fail-closed
+via this module. Other PD ids (bars_am, OTC, master, earn_cal) remain.
 
 Ops / tip / SCD2 CURRENT reads are out of scope for this module — only
 history-grade research loaders should call the guards below.
@@ -15,24 +23,28 @@ from __future__ import annotations
 
 from typing import Iterable, Sequence
 
-# Canonical permanent DEFER dataset ids (n=5). Names match residual SoT.
+# Canonical permanent DEFER dataset ids (n=4 after W68). Names match residual SoT.
 PERMANENT_DEFER_DATASETS: frozenset[str] = frozenset(
     {
         "equities_master",  # PD-D2-MASTER (MISDATE + PRE_PLAN)
         "equities_earnings_calendar",  # PD-D4-EARN-CAL (vendor tip-only history)
         "equities_bars_daily_am",  # PD-D4-BARS-AM (tip-only AM)
-        "fins_earnings_date",  # PD-MX-EARN-TIP (tip holes 2026-01…04)
         "jsda_otc_bond_reference_prices",  # PD-D5-JSDA-OTC (tip island only)
     }
 )
 
-# Stable short ids used in residual / densify ban tables.
+# Stable short ids used in residual / densify ban tables (active fail-closed).
 PERMANENT_DEFER_IDS: dict[str, str] = {
     "equities_master": "PD-D2-MASTER",
     "equities_earnings_calendar": "PD-D4-EARN-CAL",
     "equities_bars_daily_am": "PD-D4-BARS-AM",
-    "fins_earnings_date": "PD-MX-EARN-TIP",
     "jsda_otc_bond_reference_prices": "PD-D5-JSDA-OTC",
+}
+
+# Historical / superseded PD ids — kept for docs and residual narrative only.
+# NOT fail-closed: W68 live seal closed fins tip4 (see module docstring).
+SUPERSEDED_PERMANENT_DEFER_IDS: dict[str, str] = {
+    "fins_earnings_date": "PD-MX-EARN-TIP",  # W44 FINAL NO_RAW → W68 LIVE SEAL tip4 COMPLETE
 }
 
 
@@ -94,7 +106,7 @@ def reject_permanent_defer_for_history(
     )
     raise PermanentDeferHistoryError(
         f"{context}: permanent DEFER dataset(s) excluded from research "
-        f"history loads: {detail}. Prefer the 21 COMPLETE datasets; see "
+        f"history loads: {detail}. Prefer the 22 COMPLETE datasets; see "
         "docs/proof/complete21_cf_read_paths_20260815.md"
     )
 
@@ -109,6 +121,7 @@ def require_history_eligible(dataset: str, *, context: str = "research history l
 __all__ = [
     "PERMANENT_DEFER_DATASETS",
     "PERMANENT_DEFER_IDS",
+    "SUPERSEDED_PERMANENT_DEFER_IDS",
     "PermanentDeferHistoryError",
     "filter_permanent_defer",
     "is_permanent_defer",

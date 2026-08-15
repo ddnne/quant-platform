@@ -554,7 +554,7 @@ DisclosureFlagFins: FeatureDefinition = register(
         description=(
             "Binary disclosure flag: 1.0 if any PIT-visible fins_summary row "
             "exists for code at as_of, else 0.0. COMPLETE 21 only "
-            "(fins_summary). Permanent DEFER (e.g. fins_earnings_date) excluded."
+            "(fins_summary). Permanent DEFER residuals excluded from this feature."
         ),
         compute=_disclosure_flag_fins,
         tags=("disclosure", "fins", "flag", "complete21"),
