@@ -1,8 +1,8 @@
 # Phase 6.2 / 6.3 residual status
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
-**Live verified:** 2026-08-15 (JST) / W45 collect ops ~`2026-08-15T07:57–08:07Z` UTC · **W45** continuous collect · COMPLETE segs **3478** (Δ**0** primary) · Dataset COMPLETE **21** held (not invent 22) · raw **15816** (tip secondary **+30** from 15786) · empty COMPLETE **0** · **OTC 93** held (FULL_OK_NEW **0**; tip still S260817; holes 404) · permanent DEFER **5** / NO_DENSIFY **6** held (W44 FINAL; densify ban) · gap actionable_n **0** / actionable_jq_n **0** · densify **not** executed · tip densify **not primary** · Phase7 **OFF** · FRESH `projgen-df5c8d692bec4b8194719ceb4733e084` · **CF-SoT** held — D1 = hot tip · R2 = history · COMPLETE = receipt-owned · **POST_PUSH_SHA** `PENDING_PUSH`
-**Repo tip:** `PENDING_PUSH` — W45 collect ops · COMPLETE **3478** / OTC **93** / Dataset COMPLETE **21** / raw **15816** / empty COMPLETE **0** / Phase7 **OFF**
+**Live verified:** 2026-08-15 (JST) / W45 collect ops ~`2026-08-15T07:57–08:07Z` UTC · **W45** continuous collect · COMPLETE segs **3478** (Δ**0** primary) · Dataset COMPLETE **21** held (not invent 22) · raw **15816** (tip secondary **+30** from 15786) · empty COMPLETE **0** · **OTC 93** held (FULL_OK_NEW **0**; tip still S260817; holes 404) · permanent DEFER **5** / NO_DENSIFY **6** held (W44 FINAL; densify ban) · gap actionable_n **0** / actionable_jq_n **0** · densify **not** executed · tip densify **not primary** · Phase7 **OFF** · FRESH `projgen-df5c8d692bec4b8194719ceb4733e084` · **CF-SoT** held — D1 = hot tip · R2 = history · COMPLETE = receipt-owned · **POST_PUSH_SHA** `6989770038bd5badb93c92f8f2793dbc611f462c`
+**Repo tip:** `6989770038bd5badb93c92f8f2793dbc611f462c` — W45 collect ops · COMPLETE **3478** / OTC **93** / Dataset COMPLETE **21** / raw **15816** / empty COMPLETE **0** / Phase7 **OFF**
 
 ## W45 / w0815al — continuous collect ops (JQ tip secondary + JSDA OTC probe + gap) (FINAL)
 
@@ -23,7 +23,7 @@
 | empty-raw COMPLETE / Mass / READY / Phase7 | **ban / NO-GO / OFF** |
 | Projection | **FRESH** `projgen-df5c8d692bec4b8194719ceb4733e084` |
 | CF-SoT | D1 **hot tip** · R2 **history** · COMPLETE **receipt-owned** |
-| Push | **POST_PUSH_SHA** `PENDING_PUSH` |
+| Push | **POST_PUSH_SHA** `6989770038bd5badb93c92f8f2793dbc611f462c` |
 
 **Primary success:** COMPLETE segs **Δ0** + Dataset COMPLETE **21** held.  
 **Secondary only:** tip raw **+30** (→ **15816**). **OTC:** no new FULL_OK. **Not** tip-as-primary. **Not** densify-as-success. DEFER densify ban held.
