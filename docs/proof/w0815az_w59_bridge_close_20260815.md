@@ -15,7 +15,7 @@
 
 **Live verified:** 2026-08-15 (JST) / G1 bridge · G2 verify · G3b long ~`12:48Z` · G4 quality · G5 merge+push this close  
 **Wave start HEAD (PRE_sha):** `b079899a119576e5dc0e815390263e74bbdcb89b` (W58 post-lock)  
-**Proof HEAD (post-push):** `f98f0f9a72a3c70beb30648aa5f6fb428e7bc4ae`
+**Proof HEAD (post-push):** `6ce7e2b0d9b57a2e3555f6d9d014243b5b7ef3f3`
 **Projection (G4 T13 reclock; residual sync):** **FRESH** `projgen-38b19559dba646dcb463409c78f3bc9e`
 
 **Artifacts:**
@@ -208,8 +208,8 @@ uv run pytest \
 |-------|-------|
 | PRE_sha | `b079899a119576e5dc0e815390263e74bbdcb89b` |
 | POST_PUSH_SHA (feat commit) | `a220af1d63a1ee0a24e5d212ebdfd9e8c3cfa9b2` |
-| fill_sha | `f98f0f9a72a3c70beb30648aa5f6fb428e7bc4ae` |
-| origin/main tip (post-lock) | `f98f0f9a72a3c70beb30648aa5f6fb428e7bc4ae` |
+| fill_sha | `6ce7e2b0d9b57a2e3555f6d9d014243b5b7ef3f3` |
+| origin/main tip (post-lock) | `6ce7e2b0d9b57a2e3555f6d9d014243b5b7ef3f3` |
 | HEAD == origin/main | **true** |
 
 ---
