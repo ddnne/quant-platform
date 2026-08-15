@@ -12,7 +12,7 @@
 
 **Live verified:** 2026-08-15 (JST) / G1 multiday ~`11:03Z` · G2 selective O2 ~`11:02Z` · G3 quality+residual ~`11:04–11:08Z` · G5 merge+push this close  
 **Wave start HEAD (PRE_sha):** `918c5b23eea60e19f1512cd094399ddfbb86cbb7` (W53 post-lock)  
-**Proof HEAD (post-push):** *(filled after G5 push)*  
+**Proof HEAD (post-push):** `93c45d92d1c6de1abf0d7e0856c1894b56aecd2a`  
 **Projection (G3 T10 reclock; residual sync):** **FRESH** `projgen-3d29a3d673cc4214bd0913639fb52ad5` (pre-gen `projgen-d2cc11b67ad84724afaffbe4c000b59c`)
 
 **Artifacts:**
@@ -212,8 +212,8 @@ Machine matrix: [`.glm-logs/w0815au_g2_o2/O2_RESULTS_MATRIX.json`](../../.glm-lo
 | field | value |
 |-------|-------|
 | PRE_sha | `918c5b23eea60e19f1512cd094399ddfbb86cbb7` |
-| POST_PUSH_SHA (feat commit) | *(filled after G5 push)* |
-| origin/main (tip after fill) | *(filled after lock)* |
+| POST_PUSH_SHA (feat commit) | `93c45d92d1c6de1abf0d7e0856c1894b56aecd2a` |
+| origin/main (tip after fill) | *(filled after lock commit)* |
 | HEAD == origin/main | *(filled after lock)* |
 
 ---
