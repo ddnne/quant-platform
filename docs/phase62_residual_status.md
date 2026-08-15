@@ -2,7 +2,7 @@
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
 **Live verified:** 2026-08-15/16 · **W69** ops aggregate sync **COMPLETE** · live verified ops COMPLETE **22** (aggregate synced) · coverage_gaps **fins removed** · DEFER **4** remaining (bars_am · earn_cal · master · OTC) · segs **3482** · empty **0** · **OTC 93** (+0) · bars_am COMPLETE tip **1** (+0) · Mass/READY/Phase7 **NO-GO/OFF** · FRESH `projgen-7423932e07c84157ae8b712c2d4eb017` · S1–S5 **research_baseline_rejected** untouched · densify **none** · **no invent** · **no Mass/READY ON** · **no S1–S5 un-reject** · **no OTC bulk densify** · **no fins roll-back**
-**Repo tip:**  — W69 ops aggregate sync residual close · COMPLETE **22** / DEFER **4** / segs **3482** / OTC **93** / READY **未宣言** · FRESH `projgen-7423932e07c84157ae8b712c2d4eb017`
+**Repo tip:** `39dbd43180849f935876503f2e76aa3eb40126b6` — W69 ops aggregate sync residual close · COMPLETE **22** / DEFER **4** / segs **3482** / OTC **93** / READY **未宣言** · FRESH `projgen-7423932e07c84157ae8b712c2d4eb017`
 
 ## ops aggregate sync residual close（Dataset COMPLETE show 22）· W69
 
