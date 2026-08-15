@@ -2,7 +2,7 @@
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
 **Live verified:** 2026-08-15 (JST) / **W66** 標準評価チェックリスト固定 · simple daily sign track closed（READY 未宣言） · COMPLETE segs **3478** · Dataset COMPLETE **21** · PARTIAL **5** DEFER · **actionable_gap = 0** · **P0 gaps = 0** · empty COMPLETE **0** · **OTC 93** · Mass/READY/Phase7 **NO-GO/OFF** · FRESH `projgen-03cc13b6603b4bad84d051420f25e417` · **CF-SoT** held · promotion **9 approved** / **1 candidate** no-promote · S1–S5 **research_baseline_rejected** · checklist **v1** · `run_standard_research_eval` · holding metrics **research-only** · cost **10bp one-way** held · S1 Q4 cost **FAIL** · S4 cost PASS weak · **gate/checklist pass ≠ READY/Mass** · **no significance / no edge / no operational GO**
-**Repo tip:** `TIP_PENDING_W66_FEAT` — W66 標準評価チェックリスト固定 · COMPLETE **21** / DEFER **5** / segs **3478** / OTC **93** / READY **未宣言** · FRESH `projgen-03cc13b6603b4bad84d051420f25e417`
+**Repo tip:** `fb20fadc41da61210a5caaa9dd3f6a63073fa40b` — W66 標準評価チェックリスト固定 · COMPLETE **21** / DEFER **5** / segs **3478** / OTC **93** / READY **未宣言** · FRESH `projgen-03cc13b6603b4bad84d051420f25e417`
 
 ## 標準研究評価チェックリスト固定（READY 未宣言）
 
