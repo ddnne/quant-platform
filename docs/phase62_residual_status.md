@@ -14,7 +14,7 @@ Proof: [`docs/proof/column_null_audit_20260815.md`](proof/column_null_audit_2026
 | Typed master V2 short keys (`S17`/`Mkt*`) | **FIXED** `df6271d` (was 100% null typed) |
 | Bars `AAdj*` false all-day Adj alias | **FIXED** `df6271d` |
 | Always-null source fields | fins forecast/unit, options EC/EH/EL/EO/SQD, ExRT, listing_date, JSDA corp schema-superset → **DEFER** (do not invent) |
-| **`tokyo_repo_rows=0` vs COMPLETE** | **plane split** (D1 fact empty by design; local facts **30303** match TRUSTED receipt) — **not data loss**; honesty UI **FIXED** `4fcef08` |
+| **`tokyo_repo_rows` vs COMPLETE** | **plane split** explained (not data loss); honesty UI **FIXED** `4fcef08`; **D1 hot tip publish** **DONE** 2026-08-15: D1 `jsda_repo_rates` **0→252** (`as_of_date>=2026-07-01`); full history stays local **30303** / R2 — **no full D1 backfill** ([`jsda_hot_d1_publish_20260815.md`](proof/jsda_hot_d1_publish_20260815.md)) |
 | Mass / READY / Phase7 / empty-raw COMPLETE | **NO-GO / OFF / ban held** |
 
 Coverage DEFERs **D1–D10** (D10 fins_summary residual 6 formalized **W19-G6 T13**). Column-audit **does not** promote dataset COMPLETE.
@@ -177,7 +177,7 @@ Canonical blocked residuals. **Do not re-run densify** unless the re-try conditi
 | `equities_earnings_calendar` | **PARTIAL** | **1** | **`2010-01-04`** | **`2026-08-14`** | — | **W3-G7** residual dry-run **199**; R2 scan window_ok **0/180** tip-dated `Date`; acq+seal **DEFER**; C8 **pass** lag **0**; COMPLETE only **2026-08** |
 | `markets_short_ratio` | **PARTIAL** | **150** | **`2013-01-04`** | **`2026-08-13`** | — | prior **128** + **W7-G4 misc +16** `2021-01…2022-04` (runs **903179–903194**); C8 **pass** lag **1** |
 | `markets_calendar` | **COMPLETE** | 224 | 2008-01-01 | 2026-08-12 | — | sticky full + aggregate fix |
-| `jsda_tokyo_repo_rates` | **COMPLETE** | 1 | 2012-10-29 | 2026-08-10 | — | dataset COMPLETE (G9); **W20-G4**: local facts **30303** = receipt; D1 `tokyo_repo_rows=0` = plane-split not loss ([`column_null_audit_20260815.md`](proof/column_null_audit_20260815.md)) |
+| `jsda_tokyo_repo_rates` | **COMPLETE** | 1 | 2012-10-29 | 2026-08-10 | — | dataset COMPLETE (G9); local facts **30303** = receipt; D1 hot tip **252** rows (`>=2026-07-01`) via `publish_jsda_hot_to_d1.py` ([`jsda_hot_d1_publish_20260815.md`](proof/jsda_hot_d1_publish_20260815.md); plane-split honesty [`column_null_audit_20260815.md`](proof/column_null_audit_20260815.md)) |
 | `jsda_otc_bond_reference_prices` | **PARTIAL** | **57** | **`2026-07-02`** | **`2026-08-17`** | — | prior **49** + **W18-G4 peer tip +8** → **57** (G5 ops publish absorb); history **DEFER** site timeout (D5); dataset **not** COMPLETE; proof [`w0815j_g5_ops_20260815.md`](proof/w0815j_g5_ops_20260815.md) |
 | `jsda_corporate_bond_transactions` | **COMPLETE** | **12** | **`2015-11-02`** | **`2026-08-14`** | — | **G9 +11** full annual TORIHIKI2015–2026 (runs **901244–901255**); dataset **COMPLETE** |
 | `fins_details` | **PARTIAL** | **104** | **`2018-01-01`** | **`2026-08-14`** | — | continuous **2018-01…2026-08**; **W9-G2** unsealed-with-raw **0** (no seal this wave); C8 **pass** lag **1**; dataset **not** COMPLETE |

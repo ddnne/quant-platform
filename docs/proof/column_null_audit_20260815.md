@@ -155,7 +155,7 @@ Local `data/structured/ingestion.sqlite`:
 | `fins_dividend` | DeemCapGains, DeemDiv, DistAmt, NetAssetDecRatio, RetEarn | payload | **SOURCE_ALWAYS_NULL** | DEFER |
 | `derivatives_bars_daily_options` | EC, EH, EL, EO, SQD | payload | **SOURCE_ALWAYS_NULL** (evening/SQ empty on sample) | DEFER |
 | `jsda_corporate_bond_transactions` | isin, buyer/seller_counterparty_type, face_value_mil_jpy, trade_amount_mil_jpy | typed | **SCHEMA_SUPERSET / SOURCE_EMPTY** | DEFER — do not invent |
-| `jsda_tokyo_repo_rates` on D1 | whole fact table | D1 fact | **PLANE_SPLIT** (coverage projected, fact not backfilled) | honesty FIXED G4; not local loss |
+| `jsda_tokyo_repo_rates` on D1 | whole fact table | D1 fact | **PLANE_SPLIT** (coverage projected; full history not on D1) | honesty FIXED G4; **hot tip** D1 **252** rows published 2026-08-15 (`publish_jsda_hot_to_d1.py`); not local loss |
 | `equities_bars_daily_am` / `equities_earnings_calendar` | history | product | **TIP_ONLY / NO_HISTORICAL_RANGE** | DEFER D4 |
 
 ---
