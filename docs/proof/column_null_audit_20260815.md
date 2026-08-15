@@ -1,10 +1,10 @@
 # Column / typed NULL audit — 2026-08-15
 
-**Wave:** w0815m / W20-G2 (Track B typed NULL)  
+**Waves:** w0815m / **W20-G1 Track A** (contract vs API keys) + **W20-G2 Track B** (typed NULL mapping)  
 **Operator:** GLM 5.3 implementer  
-**Authority:** CF SoT only — R2 `quant-raw` + remote D1 `quant-ingest` (`jquants_records.payload`). Local raw is corroborative, not authority.  
+**Authority:** CF SoT — R2 `quant-raw` + remote D1 `quant-ingest` (`jquants_records.payload`); live CF-proxy for G1 key samples. Local raw/sqlite tip is corroborative when live tip window is closed.  
 **Mass / READY / Phase7:** **NO-GO**  
-**Logs:** `.glm-logs/w0815m_g2_typed_null/`
+**Logs:** `.glm-logs/w0815m_g1_contract_api/` (G1) · `.glm-logs/w0815m_g2_typed_null/` (G2)
 
 ---
 
@@ -191,3 +191,106 @@ Cross-check live key inventory: `.glm-logs/w0815m_g1_contract_api/{equities_bars
 | markets_calendar | no | n/a | **PASS** |
 
 **Track B GO for mapping correctness after fix.** Storage plane remains generic-payload SoT; specialized tables only used on local Python paths / SCD2 attrs.
+
+---
+
+## Track A — contract vs live API key inventory (W20-G1)
+
+**Wave:** w0815m / W20-G1  
+**Scope:** all 23 datasets in `packages/data_plane/data_contracts/jquants_premium_core.json`  
+**Transport:** CF secret-proxy (`cf-jquants-proxy`), ~1–few day windows; fins after general; rate ~≤500/min  
+**Artifacts (key lists only, no secrets / no full payloads):** `.glm-logs/w0815m_g1_contract_api/`  
+**Mass / READY / Phase7:** **NO-GO**
+
+### Method
+
+1. Live `JQuantsClient.fetch_dataset` via CF proxy for each Premium path (params corrected per vendor 400 messages: derivatives need `date`; indices need `date|code`; short-ratio needs `date|s33`; dividend needs `date|code` not bare from/to).
+2. When live empty (AM tip expired after ~06:00 next day on weekend; sparse EDINET days), corroborate keys from non-empty tip `jquants_records.payload` / retained raw (same key surface).
+3. Diff contract `natural_key_fields` + `field_aliases` + path against sampled keys; smoke `identity.natural_key` on live rows.
+4. Classify storage: specialized typed normalize vs catalog `normalize_generic` → `jquants_records` payload/raw_payload.
+
+### Storage classification (production)
+
+| class | datasets | notes |
+|-------|----------|-------|
+| **typed_capable__generic_production** | `equities_bars_daily`, `equities_master`, `markets_calendar` | `normalize_daily_bars` / `normalize_listed_info` / `normalize_market_calendar` exist; catalog ingest always uses `normalize_generic`. Local specialized tables currently **0** rows; CF hot is **generic payload**. |
+| **generic_payload** | remaining **20** Premium datasets | `normalize_generic` → `jquants_records.payload` + `raw_payload` (full row retained; no key drop). |
+
+### Contract vs API — summary table
+
+| dataset | endpoint | API keys sample (n) | contract NK / aliases | storage | dropped keys? | gaps |
+|---------|----------|---------------------|----------------------|---------|---------------|------|
+| `equities_master` | `/v2/equities/master` | 14: `Code,Date,CoName,CoNameEn,S17,S17Nm,S33,S33Nm,ScaleCat,Mkt,MktNm,Mrgn,MrgnNm,ProdCat` | NK=`Code,Date` | typed_capable / generic prod | specialized: `Mrgn*`/`ProdCat` payload-only (intentional); long names absent on V2 | — (short aliases **FIXED** W20-G2) |
+| `equities_bars_daily` | `/v2/equities/bars/daily` | 44 short OHLCV + Adj/M/A splits + `MktCap,ExRT,AdjFactor` | NK=`Code,Date` | typed_capable / generic prod | specialized maps all-day O/H/L/C/Vo/Va/Adj*; session splits / AdjFactor / limits payload-only | — |
+| `equities_bars_daily_am` | `/v2/equities/bars/daily/am` | 8: `Code,Date,MO,MH,ML,MC,MVo,MVa` | NK=`Code,Date` | generic | none | **TIP_ONLY** (no historical `date`; empty after tip window) |
+| `fins_summary` | `/v2/fins/summary` | 111 incl. `Code,DiscDate,DiscNo,DiscTime` | NK=`Code,DiscDate,DiscNo` aliases Disc*↔Disclosed* | generic | none | — (live uses short `Disc*`) |
+| `fins_details` | `/v2/fins/details` | 6: `Code,DiscDate,DiscNo,DiscTime,DocType,FS` | same Disc aliases | generic | none | — |
+| `fins_dividend` | `/v2/fins/dividend` | 23 incl. `CARefNo` (not `RefNo`) | NK=`Code,RefNo` aliases `CARefNo` | generic | none | — NK resolves via alias |
+| `fins_earnings_date` | `/v2/fins/earnings-date` | 7: `Code,PubDate,SchDate,CoName,CoNameEn,FQName,FYE` | NK=`Code,PubDate,SchDate` | generic | none | — |
+| `equities_earnings_calendar` | `/v2/equities/earnings-calendar` | 7: `Date,Code,CoName,FQ,FY,Section,SectorNm` | NK=`Date,Code` | generic | none | **TIP_CALENDAR** (not historical range) |
+| `markets_calendar` | `/v2/markets/calendar` | 2: `Date,HolDiv` | NK=`Date` | typed_capable / generic prod | HolDiv mapped | — |
+| `equities_investor_types` | `/v2/equities/investor-types` | 56 incl. `PubDate,Section,EnDate` | NK=`PubDate,Section` | generic | none | — |
+| `indices_bars_daily_topix` | `/v2/indices/bars/daily/topix` | 5: `Date,O,H,L,C` | NK=`Date` | generic | none | — |
+| `indices_bars_daily` | `/v2/indices/bars/daily` | 6: `Date,Code,O,H,L,C` | NK=`Date,Code` | generic | none | — (API requires `date` or `code`) |
+| `derivatives_bars_daily_options_225` | `/v2/derivatives/bars/daily/options/225` | 30 | NK=`Date,Code` | generic | none | — (API requires `date`) |
+| `derivatives_bars_daily_futures` | `/v2/derivatives/bars/daily/futures` | 29 | NK=`Date,Code` | generic | none | — (API requires `date`) |
+| `derivatives_bars_daily_options` | `/v2/derivatives/bars/daily/options` | 37 | NK=`Date,Code` | generic | none | — (API requires `date`) |
+| `markets_margin_interest` | `/v2/markets/margin-interest` | 9 | NK=`Date,Code` | generic | none | — |
+| `markets_margin_alert` | `/v2/markets/margin-alert` | 20 incl. `Code,PubDate,AppDate` | NK=`Code,PubDate,AppDate` | generic | none | — |
+| `markets_short_ratio` | `/v2/markets/short-ratio` | 5: `Date,S33,SellExShortVa,ShrtNoResVa,ShrtWithResVa` | NK=`Date,S33` | generic | none | — (API requires `date` or `s33`) |
+| `markets_short_sale_report` | `/v2/markets/short-sale-report` | 14 incl. `DiscDate,CalcDate,Code,DICName,FundName` | NK=5-field composite | generic | none | — |
+| `markets_breakdown` | `/v2/markets/breakdown` | 16 | NK=`Date,Code` | generic | none | — |
+| `edinet_major_shareholders` | `/v2/edinet/major-shareholders` | 11 incl. `Code,DocId,SubDate,SubTime` | NK=`Code,DocId` | generic | none | sparse days (sampled historical date) |
+| `edinet_cross_shareholdings` | `/v2/edinet/cross-shareholdings` | 13 | NK=`Code,DocId` | generic | none | sparse days |
+| `edinet_large_volume_shareholders` | `/v2/edinet/large-volume-shareholders` | 15 | NK=`Code,DocId` | generic | none | — |
+
+Per-dataset key JSON: `.glm-logs/w0815m_g1_contract_api/{dataset_id}_keys.json` + `audit_full.json` + `table.md`.
+
+### Natural-key smoke (live rows → `identity.natural_key`)
+
+| dataset | result |
+|---------|--------|
+| `fins_summary` | `{"Code",DiscDate,DiscNo}` — no hash fallback |
+| `fins_dividend` | `RefNo` filled from live `CARefNo` via contract alias |
+| `equities_master` | `{"Code","Date"}` |
+| `markets_calendar` | `{"Date"}` |
+| `markets_short_ratio` | `{"Date","S33"}` |
+| `markets_short_sale_report` | 5-field composite OK |
+
+**No NK_MISSING across Premium 23.** Contract paths all match live `/v2/...` surfaces.
+
+### Residual non-mapping gaps (product / vendor — not normalize bugs)
+
+| flag | datasets | disposition |
+|------|----------|-------------|
+| `TIP_ONLY_ENDPOINT` | `equities_bars_daily_am` | Vendor same-day AM only until ~06:00 next day; contract lists `params:["code","date"]` but historical date is not supported. History DEFER (see `w0815b_g11_earn_am`). Keys from tip structured store when live window closed. |
+| `TIP_CALENDAR_NOT_HISTORICAL_RANGE` | `equities_earnings_calendar` | Next-business-day tip calendar; range params ignored by vendor. History DEFER. |
+
+No empty-raw accept. No invented fields. No Mass ON.
+
+### Track A code changes
+
+None required beyond W20-G2 (`df6271d`) master short-key + bars `AAdj*` fix already on `main`. Catalog path remains generic for all Premium datasets; empty-raw ban held.
+
+### JSDA governed (brief, out of JQ Premium sample)
+
+From `packages/data_plane/data_contracts/jsda_governed.json` (schema v1):
+
+| dataset_id | product | natural_key_fields | history_target_start |
+|------------|---------|--------------------|----------------------|
+| `jsda_otc_bond_reference_prices` | 公社債店頭売買参考統計値 | source, publication_label_date, security_code, bond_name | 2002-08-02 |
+| `jsda_tokyo_repo_rates` | 東京レポ・レート | source, as_of_date, tenor, rate_type | 2012-10-29 |
+| `jsda_corporate_bond_transactions` | 社債の取引情報 | source, publication_label_date, trade_date, security_code, source_record_id | 2015-11-04 |
+
+JSDA is archive/file ingest (CSV/XLS), not J-Quants REST; storage via JSDA-specific tables / normalize — not `jquants_records`.
+
+### Verdict (Track A)
+
+| check | status |
+|-------|--------|
+| All 23 Premium paths sampled (live and/or non-empty SoT payload) | **PASS** |
+| Contract NK present (direct or alias) on live shape | **PASS** |
+| Generic path retains full keys | **PASS** |
+| Typed path mapping bugs for master/bars | **FIXED** (W20-G2) |
+| AM / earnings calendar historical capability | **DEFER** (vendor tip-only — documented) |
+| Mass / READY | **NO-GO** |
