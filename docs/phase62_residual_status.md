@@ -1,9 +1,64 @@
 # Phase 6.2 / 6.3 residual status
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
-**Live verified:** 2026-08-15 (JST) / **W57** ユニバース拡大・研究レポート（READY 未宣言） FINAL · COMPLETE segs **3478** · Dataset COMPLETE **21 / 26** · PARTIAL = **5** permanent DEFER only · **actionable_gap = 0** · empty COMPLETE **0** · **OTC 93** tip island held · permanent DEFER **5** / NO_DENSIFY **6** · densify coverage loops **ENDED** · Mass/READY/Phase7 **NO-GO/OFF** · raw **15915** held · FRESH `projgen-30219278e4064f258021f02eb00bbbc9` · **CF-SoT** held — D1 = hot tip · R2 = history · COMPLETE = receipt-owned · floors W38 + W42 mb **2015-04-01** **not lowered** · coverage baseline **W47 FINAL held** · READY **not declared** · tip densify **SKIP** · densify **none** · promotion **9 approved** (W52–W56 **8** + W57 O2 **+1** `margin_alert_flag` · v1.0.0) · remain **1 candidate** (`return_1d_c21` policy no-promote) · universe expand n_codes=**30** · n_days=**20** · mean R +1 **+0.00823** / −1 **−0.00202** · median +1 **+0.00900** / −1 **−0.00098** · label **小サンプル / 研究用・未宣言** · pytest **114** · PRE_sha `8381d9106167d65118f57509d67ed488419ceddf` · **POST_PUSH_SHA** `8357a0dfa543ef97a953d5583f4ac48ba1257618`
+**Live verified:** 2026-08-15 (JST) / **W58** 履歴拡大・複数シグナル比較（READY 未宣言） FINAL · COMPLETE segs **3478** · Dataset COMPLETE **21 / 26** · PARTIAL = **5** permanent DEFER only · **actionable_gap = 0** · empty COMPLETE **0** · **OTC 93** tip island held · permanent DEFER **5** / NO_DENSIFY **6** · densify coverage loops **ENDED** · Mass/READY/Phase7 **NO-GO/OFF** · raw **15915** held · FRESH `projgen-20e613d7a30943378004831cdc26c9b2` · **CF-SoT** held — D1 = hot tip · R2 = history · COMPLETE = receipt-owned · floors W38 + W42 mb **2015-04-01** **not lowered** · coverage baseline **W47 FINAL held** · READY **not declared** · tip densify **SKIP** · densify **none** · promotion **9 approved** held · remain **1 candidate** (`return_1d_c21` policy no-promote) · history_expand_possible **NO** · tip max n_days=**28** · mean R +1 **+0.00643** / −1 **−0.00148** · multi-signal n_codes=**30** · n_days=**20** · S1/S2/S3 compare **e2e_pass** · cost **10bp one-way / 仮定に依存** · label **小サンプル / 研究用・未宣言** · pytest **114** · PRE_sha `e86a4cc584891ad15b346294053c1e5705c9f286` · **POST_PUSH_SHA** *(filled after push)*
 
-**Repo tip:** `c9e93b9b2ea7ee859a6a93e76594dfc4e17aeca9` — W57 ユニバース拡大・研究レポート FINAL · COMPLETE **3478** / Dataset COMPLETE **21** / OTC **93** / empty COMPLETE **0** / **actionable_gap = 0** / Phase7 **OFF** / READY **未宣言** · FRESH `projgen-30219278e4064f258021f02eb00bbbc9` · promotion **9 approved** / **1 candidate** · universe **e2e_pass** · tip densify **SKIP** · **POST_PUSH_SHA** `8357a0dfa543ef97a953d5583f4ac48ba1257618`
+**Repo tip:** *(filled after push)* — W58 履歴拡大・複数シグナル比較 FINAL · COMPLETE **3478** / Dataset COMPLETE **21** / OTC **93** / empty COMPLETE **0** / **actionable_gap = 0** / Phase7 **OFF** / READY **未宣言** · FRESH `projgen-20e613d7a30943378004831cdc26c9b2` · promotion **9 approved** / **1 candidate** · history expand **NO** · multi-signal **e2e_pass** · tip densify **SKIP** · **POST_PUSH_SHA** *(filled after push)*
+
+## 履歴拡大・複数シグナル比較（READY 未宣言）
+
+**Phase name:** COMPLETE 21 履歴拡大・複数シグナル比較（宣言なし）  
+**Wave:** W58 / w0815ay (T1–T12 · G4 FINAL merge + push)  
+**Close proof:** [`docs/proof/w0815ay_w58_history_multisignal_close_20260815.md`](proof/w0815ay_w58_history_multisignal_close_20260815.md)  
+**History expand (G1 · tip max only · 小サンプル):** [`.glm-logs/w0815ay_g1_history/`](../.glm-logs/w0815ay_g1_history/) · [`RETURN_CARD.json`](../.glm-logs/w0815ay_g1_history/RETURN_CARD.json) · job `w0815ay-g1-history60` · **history_expand_possible=NO** (R2 JSONL+archive **exists**; multiday eval is **D1 tip-only** · no R2→FeatureContext bridge) · D1 tip `equities_bars_daily` **2026-07-01…2026-08-10** (n rows **124367** · trading days **28**) · TOPIX tip days **28** · cold join plan window **2026-04-01…2026-08-14** · **n_days=28** tip max · **n_codes=30** · mean R +1 **+0.00643** / −1 **−0.00148** · median +1 **+0.00648** / −1 **−0.00093** · proof [`docs/proof/w0815ay_w58_history_window_eval_20260815.md`](proof/w0815ay_w58_history_window_eval_20260815.md) · R2 `research/single_shot/job=w0815ay-g1-history60/batch_summary.json` · **40–60 day eval NOT possible** without invent  
+**Multi-signal compare (G2 · research metrics · 小サンプル):** [`.glm-logs/w0815ay_g2_multisignal/`](../.glm-logs/w0815ay_g2_multisignal/) · [`summary.json`](../.glm-logs/w0815ay_g2_multisignal/summary.json) · [`RETURN_CARD.json`](../.glm-logs/w0815ay_g2_multisignal/RETURN_CARD.json) · [`batch_summary.json`](../.glm-logs/w0815ay_g2_multisignal/batch_summary.json) · job `w0815ay-g2-multisignal` · **n_codes=30** · **n_days=20** · as_of `2026-07-13…2026-08-10` · period `2026-07-01…2026-08-14` · signals **S1** `c21_topix_relative_sign@1.0.0` · **S2** `c21_volume_change_sign@1.0.0` (|Δvol|≥0.10) · **S3** `c21_topix_rel_disclosure_filter@1.0.0` · all legs **approved** · status **candidate** · **candidate_only=False** · Mass **OFF** · no orders · no READY · label **小サンプル / 研究用・未宣言** · cost label **仮定に依存・研究用・運用GOではない** (one-way **10bp** / RT **20bp**) · report [`docs/proof/w0815ay_w58_multi_signal_compare_report_20260815.md`](proof/w0815ay_w58_multi_signal_compare_report_20260815.md) · compare (gross signed mean active / mean R +1 / −1):
+
+| signal | non_null | +1 n | −1 n | mean R +1 | mean R −1 | median R +1 | median R −1 | gross signed mean | net one-way mean |
+|--------|----------|------|------|-----------|-----------|-------------|-------------|-------------------|------------------|
+| S1 topix_rel | **600/600** (1.0) | 312 | 288 | **+0.00823** | **−0.00202** | **+0.00900** | **−0.00098** | **+0.00528** | **+0.00428** |
+| S2 volume_sign | **451/600** (0.752) | 206 | 245 | +0.00165 | +0.00298 | +0.00193 | +0.00278 | **−0.00078** | **−0.00178** |
+| S3 topix+disc | **177/600** (0.295) | 89 | 88 | +0.00718 | +0.00055 | +0.00805 | +0.00034 | **+0.00345** | **+0.00245** |
+
+· overall mean/median R (shared market) **+0.00336** / **+0.00305** · null_return_rate overall **0.05** · look-ahead policy held · R2 `research/single_shot/job=w0815ay-g2-multisignal/batch_summary.json` · **e2e_pass=true** · **no significance / no edge / no operational GO**  
+**Ops / quality / residual (G3):** [`.glm-logs/w0815ay_g3_ops/`](../.glm-logs/w0815ay_g3_ops/) · [`FINAL_metrics.json`](../.glm-logs/w0815ay_g3_ops/FINAL_metrics.json) · [`switch_check.json`](../.glm-logs/w0815ay_g3_ops/switch_check.json) · [`SUMMARY.txt`](../.glm-logs/w0815ay_g3_ops/SUMMARY.txt)  
+**G4 final merge:** [`.glm-logs/w0815ay_g4_final/`](../.glm-logs/w0815ay_g4_final/) · empty **0** · dc **21** · segs **3478** · OTC **93** · pytest **114** · push **yes**  
+**Promotion (G3):** held **9 approved** / **1 candidate** (`return_1d_c21`) · **no promote this wave** · policy no-promote: `return_1d_c21`  
+**FRESH (G3 T11):** reclock `projgen-20e613d7a30943378004831cdc26c9b2` (pre age wall **~805s** >300; coverage_segments untouched; publish apply **SKIP**)  
+**Unit tests (G4 merge):** complete21 min (approved **9**) + permanent_defer + single_shot + mass gate + eval_harness · **114 passed**  
+**Mass / Phase7 (G3 T10):** **NO-GO / OFF** reconfirmed · READY **not declared** · no arming switches  
+**Catalog:** [`docs/proof/complete21_min_feature_catalog_20260815.md`](proof/complete21_min_feature_catalog_20260815.md) (code SoT = `complete21_min.py` **9 approved / 1 candidate**) · multi-signal defs in `features/minimal_signal.py` + `research/single_shot_job.py`  
+**Prior W57 ユニバース拡大・研究レポート:** § ユニバース拡大・研究レポート held underneath · W56 研究ハーネス · coverage baseline **W47 FINAL** held
+
+| gate | status |
+|------|--------|
+| Phase name | **COMPLETE 21 履歴拡大・複数シグナル比較（宣言なし）** |
+| Coverage baseline FINAL | **held** (W47 FINAL · Dataset COMPLETE **21/26** · segs **3478** · **actionable_gap=0**) |
+| READY | **未宣言 / not declared** (research metrics only) |
+| Mass | **NO-GO / OFF** — **reconfirmed** this wave (G3 T10) |
+| Phase7 | **OFF** (foundation / fail-closed only) — **reconfirmed** this wave (G3 T10) |
+| empty COMPLETE | **0** (remote verify G3 + G4) |
+| Dataset COMPLETE | **21** (remote verify held; not invent 22) |
+| COMPLETE segs | **3478** (remote verify held · Δ0) |
+| OTC tip island | **93** held |
+| permanent DEFER | **5** held |
+| tip densify | **SKIP** (T12; not primary this phase) |
+| densify | **none** |
+| push | **POST_PUSH_SHA** *(filled after push)* (G4 FINAL merge) · PRE_sha `e86a4cc584891ad15b346294053c1e5705c9f286` |
+| Projection | **FRESH** `projgen-20e613d7a30943378004831cdc26c9b2` (G3 T11 ops_reeval_freshness; residual FRESH sync; publish apply **SKIP** no segment drift; fail-closed no force) |
+| History expand | G1 **NO** — tip max **28** · target 40–60 **blocked** (R2 history exists; tip-only eval path; no invent) · mean R +1 **+0.00643** / −1 **−0.00148** · Mass **not** connected |
+| Multi-signal compare | G2 **PASS** — 3 signals · n_codes=**30** · n_days=**20** · cost 10bp research-only · Mass **not** connected · no orders · **小サンプル / 研究用・未宣言** · no significance / no edge |
+| Promotion | **held 9 approved** · remain **1 candidate** · **no** `return_1d_c21` promote |
+| Unit tests | **114 passed** (complete21 min · permanent_defer · single_shot · mass gate · eval_harness) |
+| raw_retention | **15915** held (not coverage primary) |
+
+**Primary this phase:** history expand investigation (honest tip-max when 40–60 blocked) · multi-signal compare (S1 topix_rel / S2 volume_sign / S3 topix+disclosure) with research-only cost · residual 履歴拡大・複数シグナル比較 on held COMPLETE **21** / DEFER **5** — **without** READY / Mass / Phase7 declaration.  
+**Not:** densify · tip primary · invent COMPLETE 22 · Phase7 ON · READY GO · mass ON · treat multi-signal as READY · force remaining candidate · promote `return_1d_c21` · significance / edge / operational GO claim · claim 40–60 day history eval.
+
+### Explicit non-declarations (held)
+
+- **READY** — not declared (履歴拡大・複数シグナル比較 only; research metrics; no production READY GO)
+- **Mass Autonomous Research** — **NO-GO / OFF**
+- **Phase7** — **OFF** (no `PHASE7_*` / `MASS_RESEARCH_ENABLE` arming switch)
 
 ## ユニバース拡大・研究レポート（READY 未宣言）
 
