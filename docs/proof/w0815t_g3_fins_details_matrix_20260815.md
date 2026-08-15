@@ -11,7 +11,7 @@
 
 **Live verified:** 2026-08-15 (JST) / ~2026-08-15T02:41Z UTC  
 **Wave start HEAD:** `306bebb2febf835032abf3bc210f755338b8caac`  
-**Proof HEAD (post-push):** _(filled after push)_  
+**Proof HEAD (post-push):** `766c32e312c49615969ec8347241497699a84629`  
 **Projection:** **FRESH** `projgen-e16f2fda784f4e91a1ce5b6740c2e61b`  
 **Artifacts:** `.glm-logs/w0815t_g3_fins_details/` (`matrix_partial_cf_raw.py`, `matrix/partial_cf_raw_matrix.json`, `matrix_summary.json`, `DEFER_pre2018_shells.json`, `FINAL_metrics.json`, publish + reeval)
 
