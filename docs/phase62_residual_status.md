@@ -2,7 +2,7 @@
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
 **Live verified:** 2026-08-15 (JST) / **W65** 不合格ベースライン固定（READY 未宣言） · COMPLETE segs **3478** · Dataset COMPLETE **21** · PARTIAL **5** DEFER · **actionable_gap = 0** · **P0 gaps = 0** · empty COMPLETE **0** · **OTC 93** · Mass/READY/Phase7 **NO-GO/OFF** · FRESH `projgen-3ec43f655e4f4ef08a636d33bc88f43e` · **CF-SoT** held · promotion **9 approved** / **1 candidate** no-promote · S1–S5 **research_baseline_rejected** · holding metrics **research-only** · cost **10bp one-way** held · S1 Q4 cost **FAIL** · S4 cost PASS weak · **gate pass ≠ READY/Mass** · **no significance / no edge / no operational GO**
-**Repo tip:** `6b2e05c4ee99639fd27502894ae6f9f2615d7102` — W65 不合格ベースライン固定 · COMPLETE **21** / DEFER **5** / segs **3478** / OTC **93** / READY **未宣言** · FRESH `projgen-3ec43f655e4f4ef08a636d33bc88f43e`
+**Repo tip:** `4a05b263f6e563cc5ba4727b7b95d66dcc5c22bb` — W65 不合格ベースライン固定 · COMPLETE **21** / DEFER **5** / segs **3478** / OTC **93** / READY **未宣言** · FRESH `projgen-3ec43f655e4f4ef08a636d33bc88f43e`
 
 ## 不合格ベースライン固定 S1–S5 + 保有メトリクス + データ穴整理（READY 未宣言）
 
