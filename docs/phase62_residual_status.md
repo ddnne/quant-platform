@@ -54,9 +54,9 @@ Coverage DEFERs **D1–D10** (D10 fins_summary residual 6 formalized **W19-G6 T1
 | Item | Value |
 |------|--------|
 | Dataset COMPLETE | **11** — `markets_calendar` (224/224), `jsda_tokyo_repo_rates` (1/1), `jsda_corporate_bond_transactions` (12/12), `equities_investor_types` (164/164), `edinet_major_shareholders` (104/104), `markets_margin_alert` (164/164), `markets_margin_interest` (164/164), `markets_short_ratio` (164/164), **`derivatives_bars_daily_futures` (164/164)**, **`derivatives_bars_daily_options_225` (164/164)**, **`derivatives_bars_daily_options` (164/164)** |
-| Dataset COMPLETE surfaces | **aligned** — `dataset_coverage.status` **11** (prior **10** + **W15-G1 options** 164/164 surgical reagg+verify; held through **W18–W25** ops; proof [`w0815g_g1_options_20260815.md`](proof/w0815g_g1_options_20260815.md), [`w0815r_g5_ops_20260815.md`](proof/w0815r_g5_ops_20260815.md)) |
+| Dataset COMPLETE surfaces | **aligned** — `dataset_coverage.status` **11** (prior **10** + **W15-G1 options** 164/164 surgical reagg+verify; held through **W18–W27** ops; proof [`w0815g_g1_options_20260815.md`](proof/w0815g_g1_options_20260815.md), [`w0815s_g4_ops_20260815.md`](proof/w0815s_g4_ops_20260815.md), [`w0815t_g6_matrix_close_ops_20260815.md`](proof/w0815t_g6_matrix_close_ops_20260815.md)) |
 | Dataset STALE | **0** |
-| Segment COMPLETE total | **3457** (remote; **W27-G6** PRE **3457** → POST **3457** **+0**; matrix HAS_RAW_SEALABLE **0** / closed **0**; prior W25-G5 held; prior W22 peer OTC **+15**; **no** empty COMPLETE) |
+| Segment COMPLETE total | **3457** (remote; **W27-G6** PRE **3457** → POST **3457** **+0**; matrix HAS_RAW_SEALABLE **0** / closed **0**; prior **W26-G4** ops PRE/POST **3457** issue **+0** ready-gap empty; prior W25-G5 held; prior W22 peer OTC **+15**; **no** empty COMPLETE) |
 | Segment other | PARTIAL / UNKNOWN (remainder; not mass-READY) |
 | calendar segments | **224 COMPLETE / 0 PARTIAL** |
 | JSDA OTC COMPLETE segs | **72** — tip/recent sealed (**W22 peer +15** vs prior **57**; W18 **49→57**; **W27-G6 / W25 held**); further tip/archive **DEFER** site timeout/404/403 (D5) |
@@ -69,10 +69,10 @@ Coverage DEFERs **D1–D10** (D10 fins_summary residual 6 formalized **W19-G6 T1
 | **fins_summary** | COMPLETE **218** / PARTIAL **6** (`2008-01…06` empty pre-history shells; **no nz raw** → densify **DEFER** — **W19-G6 T13 formal** / **W25-G5 re-verify held**) |
 | **markets_breakdown** | COMPLETE **137** / PARTIAL **27** (`2013-01…2015-03`) — **W10-G9 DEFER_pre2015_empty**; source floor **2015-03-26**; island **`2015-04…2026-08`**; observed_start **`2015-03-26`**; history_target **`2013-01-04`** (contract held) |
 | A3 sealed (partial datasets) | prior + **W6–W25 peers** + **W25-G5 ops publish** → COMPLETE **3457** |
-| Remote `raw_retention_manifests` | **15145** total (**W27-G6** ops window PRE **15145** → POST **15145** **+0**; prior W25-G5 **15125**; worker pass ≠ COMPLETE) |
-| Track A + P0 execute | **w0713…w0815t** + **W27-G6 matrix close ops** + G1–G5 residual matrices + peers; **Worker pass ≠ COMPLETE** |
+| Remote `raw_retention_manifests` | **15145** total (**W27-G6** PRE/POST **15145** **+0**; prior **W26-G4** ops PRE **15125** → POST **15145** **+20** peer tip densify; prior W25-G5 **15125**; worker pass ≠ COMPLETE) |
+| Track A + P0 execute | **w0713…w0815t** + **W27-G6 matrix close** + **W26-G4 ops** + G1–G5 residual matrices + peers; **Worker pass ≠ COMPLETE** |
 | master | `scd2_event_sourcing` / D1 hot |
-| projection | **FRESH** — `projgen-2ef0e4ae259f4f61b30856fe2ceff350` (W27-G6 ops final reeval freshness; segs untouched by reclock; prior W25-G5 `projgen-9ee87879…`) |
+| projection | **FRESH** — `projgen-2ef0e4ae259f4f61b30856fe2ceff350` (W27-G6 final reeval; segs untouched; prior **W26-G4** `projgen-2d336b6e…` / W25-G5 `projgen-9ee87879…`) |
 | sticky COMPLETE | **fixed** segment_id fallback + post-sticky dataset aggregate + COMPLETE inventory retain past UTC target_end (`coverage_ledger.py`) |
 | Full publish guard | `scripts/publish_ops_projection.py` fail-closed |
 | Targeted freshness | `scripts/ops_reeval_freshness.py` (no segment rewrite) |
@@ -83,7 +83,7 @@ Coverage DEFERs **D1–D10** (D10 fins_summary residual 6 formalized **W19-G6 T1
 | Mass / READY / B0 | **NO-GO** |
 | Phase 7 | **OFF / foundation only** — **must remain OFF**; no mass arming, no production READY, no Phase7 switch ON |
 
-## DEFER inventory (retry conditions) — W11-G7 T20 + **W17-G5 T15** + **W19-G6 T13 formal** + **W25-G5 / W26-G4 maintain**
+## DEFER inventory (retry conditions) — W11-G7 T20 + **W17-G5 T15** + **W19-G6 T13 formal** + **W25-G5 / W26-G4 / W27-G6 maintain**
 
 Canonical blocked residuals. **Do not re-run densify** unless the re-try condition is met. Empty-raw COMPLETE remains **forbidden**.
 
@@ -109,6 +109,7 @@ Canonical blocked residuals. **Do not re-run densify** unless the re-try conditi
 | Track | host POST/min | n | note |
 |-------|--------------:|--:|------|
 | w0815t g6 matrix close ops (W27-G6) | — | **+0** seal / session **+0** segs | **W27-G6** T6–T15: peer matrices G1–G5 **HAS_RAW_SEALABLE=0** → closed **0** by dataset; tip densify **SKIP** (G2 tip NO_RAW is DEFER); CF-SoT language **CONFIRMED** (no local SoT); unified **残 seg × raw 有無** table; dual-coord peer `w0815s_g4_ops` then fail-closed publish local=remote **3457** no force; FRESH `projgen-2ef0e4ae…`; remote COMPLETE **3457→3457** raw **15145→15145** (+0); Dataset COMPLETE **11** held; OTC **72** held; fins_summary **218**/PARTIAL **6** held; empty **0**; DEFER D1–D10 densify **not** re-run; peers not killed; tokyo_repo local **30303** / D1 hot **252**; general ~495 note / fins separate; proof [`w0815t_g6_matrix_close_ops_20260815.md`](proof/w0815t_g6_matrix_close_ops_20260815.md) |
+| w0815s g4 ops (W26-G4) | — | **+0** issue / session **+0** segs | **W26-G4** continuous ops (~02:24–02:47Z): ready-seal gap **0** all 14 cycles; no peer ops_loop dual; fail-closed publish ×N (c1 + c13/c14 + final; no force); FRESH `projgen-2d336b6e…` (later reclocked by W27); remote COMPLETE **3457→3457** raw **15125→15145** (+20 peer tip densify); Dataset COMPLETE **11** held; OTC **72** held; fins_summary **218**/PARTIAL **6** held; empty **0**; DEFER D1–D10 densify **not** re-run; last_run monitor no peer kill (`w0815s_g2_tip` / `g3_seal` / `g1_jsda` left alone); **CF-SoT** language **CONFIRMED**; tokyo_repo local **30303** / D1 hot **252**; general ~495 note / fins separate; proof [`w0815s_g4_ops_20260815.md`](proof/w0815s_g4_ops_20260815.md) |
 | w0815r g5 ops (W25-G5) | — | **+0** issue / session **+0** segs | **W25-G5** continuous ops T11–T16: dual-coord peer `w0815q_g6_ops` (publish defer cycles 1–3; peer dead cycle 4+ → fail-closed publish ×N no force); ready-seal gap **0** all 14 cycles; FRESH `projgen-9ee87879…`; remote COMPLETE **3457→3457** raw **15102→15125** (+23 peer densify); Dataset COMPLETE **11** held; OTC **72** held; fins_summary **218**/PARTIAL **6** held; empty **0**; DEFER D1–D10 densify **not** re-run; last_run monitor no peer kill; **CF-SoT** language **CONFIRMED** (W24-G1 §9 + W25-G1 lock); tokyo_repo local **30303** / D1 hot **252**; general ~495 note / fins separate; proof [`w0815r_g5_ops_20260815.md`](proof/w0815r_g5_ops_20260815.md) |
 | w0815r g4 edinet/otc (W25-G4) | — | **+0** seal | **W25-G4** T8–T10: EDINET residual nz scan sealable **0** (cross 28 + large 42 DEFER_EMPTY_API; no forever densify); OTC tip/recent FULL_OK **0** (tip **404** + site timeout/403; held **72**); corp/repo COMPLETE skip; hot D1 **SKIP** (local=D1 tip `2026-08-10` n=252); ops publish **SKIP** (no seal delta); FRESH reclock; COMPLETE **3457** held; Dataset COMPLETE **11**; empty **0**; proof [`w0815r_g4_edinet_otc_20260815.md`](proof/w0815r_g4_edinet_otc_20260815.md) |
 | w0815q g6 ops (W24-G6) | — | **+0** issue / session **+0** segs | **W24-G6** continuous ops T13–T17: jsda last_run PARTIAL **diag NO_RECOVER** (D5 DEFER; seal_delta 0); dual-coord peer `w0815p_g4_ops` (c1) + `w0815r_g5_ops` (c12–14; no kill); ready-seal gap **0** all 14 cycles; fail-closed publish ×N (no force); FRESH `projgen-eafc6c4a…`; remote COMPLETE **3457→3457** raw **15100→15104** (+4 peer); Dataset COMPLETE **11** held; OTC **72** held; fins_summary **218**/PARTIAL **6** held; empty **0**; DEFER D1–D10 densify **not** re-run; **column_null_audit** origin **CONFIRMED**; tokyo_repo local **30303** / D1 hot **252**; general ~495 note / fins separate; proof [`w0815q_g6_ops_20260815.md`](proof/w0815q_g6_ops_20260815.md) |
