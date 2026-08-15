@@ -148,6 +148,29 @@ def main(argv: list[str] | None = None) -> int:
             "SELECT COUNT(*) FROM coverage_segments WHERE status='COMPLETE'"
         ).fetchone()[0]
         print(f"local COMPLETE total: {total}")
+
+        # Post-seal aggregate follow-up (W70): if this was the last PARTIAL
+        # segment, promote dataset_coverage without a full ledger refresh.
+        # Never invents segs; leaves coverage_segments untouched beyond seal.
+        from storage.coverage_ledger import sync_dataset_coverage_from_segments
+
+        reagg = sync_dataset_coverage_from_segments(
+            conn,
+            datasets=[args.dataset],
+            policy_version=args.policy_version,
+            wave="restore_local_complete_from_receipt",
+        )
+        for row in reagg:
+            print(
+                "dataset_coverage_sync:",
+                {
+                    "dataset": row.get("dataset"),
+                    "action": row.get("action"),
+                    "from": row.get("old_status") or row.get("from"),
+                    "to": row.get("to") or row.get("status") or row.get("derived_status"),
+                    "status_counts": row.get("status_counts"),
+                },
+            )
         print("OK remote_untouched=1")
         return 0
     finally:

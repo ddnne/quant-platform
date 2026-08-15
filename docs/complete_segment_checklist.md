@@ -18,7 +18,19 @@ Row counts, raw retention alone, or Cloudflare fetch success are **not** enough.
 6. **Non-event segments**: `expected_items` must be explicit (for `source_query` unit → typically `1`)
 7. **Pagination exhausted** and raw_row_count == structured_row_count when reconciliation required
 8. **Ledger refresh** promotes segment to COMPLETE via `evaluate_segment`
-9. **Ops projection** published so MCP shows COMPLETE:
+9. **Dataset aggregate follow-up (mandatory after last PARTIAL seal):**
+   - Prefer surgical re-agg (does **not** rewrite `coverage_segments`):
+     ```bash
+     .venv/bin/python scripts/sync_dataset_coverage_from_segments.py \
+       --db data/structured/ingestion.sqlite --datasets <DATASET>
+     ```
+   - Promotes `dataset_coverage.status=COMPLETE` only when **all** required
+     segs are COMPLETE with honest `status_counts` (never invents segments;
+     refuses empty-raw COMPLETE). Avoid full `refresh_coverage_ledger` unless
+     segment plane itself is wrong.
+   - `scripts/restore_local_complete_from_receipt.py` runs this sync for the
+     sealed dataset automatically after a successful segment COMPLETE.
+10. **Ops projection** published so MCP shows COMPLETE:
    - Prefer `scripts/ops_reeval_freshness.py` (targeted; never rewrites segments)
    - Full `publish_ops_projection.py --apply-remote` only if local COMPLETE ≥ remote
      (fail-closed guard refuses otherwise; see `docs/operations/projection_publish_guard.md`)

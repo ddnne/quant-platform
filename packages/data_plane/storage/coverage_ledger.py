@@ -1161,6 +1161,328 @@ def coverage_gaps(db_path: str | Path) -> list[dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------
+# Surgical dataset_coverage re-aggregate from coverage_segments (SoT)
+# ---------------------------------------------------------------------------
+#
+# Segment seals (restore/issue) can leave ``dataset_coverage.status`` stale
+# (e.g. segs 104/104 COMPLETE while aggregate stays PARTIAL). Full
+# ``refresh_coverage_ledger`` re-evaluates every segment from receipts and is
+# riskier than necessary when the segment plane is already correct.
+#
+# These helpers re-aggregate **only** ``dataset_coverage`` from existing
+# ``coverage_segments`` rows. They never invent segments and never rewrite
+# the segment plane. Prefer this path after a seal when all required segs
+# are already COMPLETE (W10-G12 / W13-G3 / W69 class).
+
+
+def aggregate_status_from_segment_counts(
+    status_counts: Mapping[str, int],
+) -> str:
+    """Pure: derive dataset aggregate status from a segment status histogram.
+
+    Rules (fail-closed, never invent COMPLETE from empty inventory):
+    - total == 0 → ``UNKNOWN`` (caller must not promote)
+    - any ``FAILED`` → ``FAILED``
+    - every segment ``COMPLETE`` (total > 0) → ``COMPLETE``
+    - otherwise → ``PARTIAL``
+    """
+    counts = {
+        str(status): int(n)
+        for status, n in dict(status_counts or {}).items()
+        if int(n) > 0
+    }
+    total = sum(counts.values())
+    if total <= 0:
+        return "UNKNOWN"
+    if int(counts.get("FAILED", 0)) > 0:
+        return "FAILED"
+    if int(counts.get("COMPLETE", 0)) == total:
+        return "COMPLETE"
+    return "PARTIAL"
+
+
+def honest_status_counts(
+    status_counts: Mapping[str, int],
+) -> dict[str, int]:
+    """Normalize a segment status histogram (drop zeros; int values)."""
+    return {
+        str(status): int(n)
+        for status, n in sorted(dict(status_counts or {}).items())
+        if int(n) > 0
+    }
+
+
+def _failing_checks_from_detail(detail: Mapping[str, Any] | None) -> list[dict[str, Any]]:
+    checks = [] if detail is None else list(detail.get("checks") or [])
+    failing: list[dict[str, Any]] = []
+    for check in checks:
+        if not isinstance(check, Mapping):
+            continue
+        status = str(check.get("status", "")).lower()
+        if status in {"fail", "failed", "error"}:
+            failing.append(dict(check))
+    return failing
+
+
+def build_surgical_reagg_detail(
+    existing_detail: Mapping[str, Any] | None,
+    *,
+    status_counts: Mapping[str, int],
+    required_segments: int,
+    audit: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Merge honest coverage_v2 status_counts into dataset detail_json."""
+    detail = dict(existing_detail or {})
+    cov = dict(detail.get("coverage_v2") or {})
+    prev_counts = cov.get("status_counts")
+    new_counts = honest_status_counts(status_counts)
+    cov["status_counts"] = new_counts
+    cov["required_segments"] = int(required_segments)
+    if audit is not None:
+        cov["surgical_reagg"] = dict(audit)
+        if prev_counts is not None and "prev_status_counts" not in cov["surgical_reagg"]:
+            cov["surgical_reagg"]["prev_status_counts"] = prev_counts
+    detail["coverage_v2"] = cov
+    detail["aggregate_source"] = "surgical_reagg_from_coverage_segments"
+    return detail
+
+
+def sync_dataset_coverage_from_segments(
+    conn: sqlite3.Connection,
+    *,
+    datasets: Iterable[str] | None = None,
+    policy_version: str = POLICY_VERSION,
+    dry_run: bool = False,
+    require_no_failing_checks: bool = True,
+    refuse_empty_complete: bool = True,
+    wave: str | None = None,
+) -> list[dict[str, Any]]:
+    """Re-aggregate ``dataset_coverage`` from live ``coverage_segments`` rows.
+
+    For each dataset:
+    1. Read segment status histogram (policy_version scoped).
+    2. Compute honest ``status_counts`` and aggregate status.
+    3. Promote to COMPLETE only when all segs COMPLETE, no FAILED, inventory
+       non-empty, optional C* checks pass, and no empty COMPLETE segs
+       (null/0 ``receipt_run_id``).
+    4. Update **only** ``dataset_coverage.status`` + ``detail_json`` /
+       ``evaluated_at``. Never invent or rewrite ``coverage_segments``.
+
+    Returns a list of per-dataset action dicts (promoted / counts_refreshed /
+    verify_only / skip_* / demoted).
+    """
+    if datasets is None:
+        selected = [
+            str(row[0])
+            for row in conn.execute(
+                "SELECT dataset FROM dataset_coverage ORDER BY dataset"
+            ).fetchall()
+        ]
+    else:
+        selected = list(datasets)
+    if not selected:
+        return []
+
+    evaluated_at = _now()
+    results: list[dict[str, Any]] = []
+    pre_platform = conn.execute(
+        "SELECT COUNT(*) FROM coverage_segments WHERE status='COMPLETE'"
+    ).fetchone()[0]
+
+    for dataset in selected:
+        seg_rows = conn.execute(
+            """
+            SELECT status, COUNT(*) AS n
+            FROM coverage_segments
+            WHERE dataset=? AND policy_version=?
+            GROUP BY status
+            """,
+            (dataset, policy_version),
+        ).fetchall()
+        raw_counts = {
+            str(row[0]): int(row[1]) for row in seg_rows if int(row[1]) > 0
+        }
+        status_counts = honest_status_counts(raw_counts)
+        total = sum(status_counts.values())
+        complete = int(status_counts.get("COMPLETE", 0))
+        derived = aggregate_status_from_segment_counts(status_counts)
+
+        dc = conn.execute(
+            "SELECT status, detail_json, observed_start, observed_end, row_count "
+            "FROM dataset_coverage WHERE dataset=?",
+            (dataset,),
+        ).fetchone()
+        if dc is None:
+            results.append(
+                {
+                    "dataset": dataset,
+                    "action": "skip_missing_dataset_coverage",
+                    "status_counts": status_counts,
+                    "derived_status": derived,
+                    "total": total,
+                    "complete": complete,
+                }
+            )
+            continue
+
+        old_status = str(dc[0] if not isinstance(dc, sqlite3.Row) else dc["status"])
+        detail_raw = dc[1] if not isinstance(dc, sqlite3.Row) else dc["detail_json"]
+        try:
+            detail = json.loads(detail_raw or "{}")
+            if not isinstance(detail, dict):
+                detail = {}
+        except (TypeError, ValueError, json.JSONDecodeError):
+            detail = {}
+        prev_counts = (detail.get("coverage_v2") or {}).get("status_counts")
+        failing = _failing_checks_from_detail(detail)
+
+        empty_complete = 0
+        if refuse_empty_complete and complete > 0:
+            empty_complete = int(
+                conn.execute(
+                    """
+                    SELECT COUNT(*) FROM coverage_segments
+                    WHERE dataset=? AND policy_version=? AND status='COMPLETE'
+                      AND (receipt_run_id IS NULL OR receipt_run_id=0)
+                    """,
+                    (dataset, policy_version),
+                ).fetchone()[0]
+            )
+
+        base = {
+            "dataset": dataset,
+            "old_status": old_status,
+            "status_counts": status_counts,
+            "prev_status_counts": prev_counts,
+            "derived_status": derived,
+            "total": total,
+            "complete": complete,
+            "failing_checks": len(failing),
+            "empty_complete": empty_complete,
+            "dry_run": dry_run,
+        }
+
+        if total <= 0:
+            results.append({**base, "action": "skip_empty_inventory"})
+            continue
+
+        # COMPLETE promotion gates (empty-raw COMPLETE forbidden).
+        # Already-COMPLETE datasets are never demoted solely for historical C*
+        # fail noise or empty-receipt audit; only PARTIAL→COMPLETE is gated.
+        if derived == "COMPLETE":
+            promoting = old_status != "COMPLETE"
+            if promoting and require_no_failing_checks and failing:
+                results.append(
+                    {
+                        **base,
+                        "action": "skip_failing_checks",
+                        "failing_check_ids": [
+                            c.get("id") or c.get("check_id") or c.get("name")
+                            for c in failing
+                        ],
+                    }
+                )
+                continue
+            if promoting and refuse_empty_complete and empty_complete > 0:
+                results.append(
+                    {
+                        **base,
+                        "action": "skip_empty_complete_segments",
+                        "reason": "COMPLETE segs with null/0 receipt_run_id",
+                    }
+                )
+                continue
+            new_status = "COMPLETE"
+        elif derived == "FAILED":
+            new_status = "FAILED"
+        else:
+            new_status = "PARTIAL"
+
+        new_counts = honest_status_counts(status_counts)
+        prev_norm = honest_status_counts(prev_counts or {})
+        status_same = old_status == new_status
+        counts_same = prev_norm == new_counts
+
+        if status_same and counts_same:
+            results.append(
+                {
+                    **base,
+                    "action": "verify_only",
+                    "status": new_status,
+                    "eligible": new_status == "COMPLETE",
+                }
+            )
+            continue
+
+        if old_status == "COMPLETE" and new_status != "COMPLETE":
+            action = "demoted"
+        elif old_status != new_status and new_status == "COMPLETE":
+            action = "promoted"
+        else:
+            action = "counts_refreshed"
+
+        audit = {
+            "at": evaluated_at,
+            "reason": (
+                "all required segments COMPLETE; stale aggregate re-synced"
+                if new_status == "COMPLETE"
+                else "honest re-aggregate from coverage_segments SoT"
+            ),
+            "prev_status": old_status,
+            "new_status": new_status,
+            "prev_status_counts": prev_counts,
+            "wave": wave,
+        }
+        new_detail = build_surgical_reagg_detail(
+            detail,
+            status_counts=new_counts,
+            required_segments=total,
+            audit=audit,
+        )
+        detail_json = _canonical_json(new_detail)
+
+        if not dry_run:
+            conn.execute(
+                """
+                UPDATE dataset_coverage
+                SET status=?, detail_json=?, evaluated_at=?
+                WHERE dataset=?
+                """,
+                (new_status, detail_json, evaluated_at, dataset),
+            )
+
+        results.append(
+            {
+                **base,
+                "action": action,
+                "from": old_status,
+                "to": new_status,
+                "status": new_status,
+                "new_status_counts": new_counts,
+            }
+        )
+
+    if not dry_run and any(
+        r.get("action") in {"promoted", "demoted", "counts_refreshed"}
+        for r in results
+    ):
+        conn.commit()
+
+    post_platform = conn.execute(
+        "SELECT COUNT(*) FROM coverage_segments WHERE status='COMPLETE'"
+    ).fetchone()[0]
+    if post_platform != pre_platform:
+        raise RuntimeError(
+            "coverage_segments mutated during surgical re-aggregate: "
+            f"COMPLETE {pre_platform} -> {post_platform}"
+        )
+
+    for row in results:
+        row["platform_complete_segs"] = post_platform
+    return results
+
+
+# ---------------------------------------------------------------------------
 # Receipt construction helpers (Lane H)
 # ---------------------------------------------------------------------------
 #

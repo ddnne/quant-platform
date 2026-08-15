@@ -90,12 +90,49 @@ SQL
 
 The `COMPLETE` bucket must increase by **exactly 1** versus the prior state.
 
-## 6. Publish the ops projection (separate, controlled step)
+## 5b. Dataset aggregate follow-up (mandatory; W70)
 
-Only after Step 5 confirms a single +1 delta:
+If this seal was the **last** PARTIAL segment for `${DATASET}`, segment SoT is
+now all-COMPLETE but `dataset_coverage` may still show PARTIAL (W68/W69 class).
+
+`restore_local_complete_from_receipt.py` already calls
+`sync_dataset_coverage_from_segments` for the sealed dataset. For tip seals /
+issue paths that do **not** go through restore, run explicitly:
 
 ```bash
-python scripts/publish_ops_projection.py --allow-remote
+.venv/bin/python scripts/sync_dataset_coverage_from_segments.py \
+  --db "${LOCAL_DB}" --datasets "${DATASET}"
+# dry-run first if unsure:
+# .venv/bin/python scripts/sync_dataset_coverage_from_segments.py \
+#   --db "${LOCAL_DB}" --datasets "${DATASET}" --dry-run
+```
+
+Rules (fail-closed):
+
+- Promotes `dataset_coverage` → COMPLETE **only** when all segs COMPLETE
+- Writes honest `coverage_v2.status_counts` from segment histogram
+- **Never** invents segments; **never** rewrites `coverage_segments`
+- Refuses empty COMPLETE (null/0 `receipt_run_id`)
+- Prefer this surgical path over full `refresh_coverage_ledger`
+
+Verify:
+
+```bash
+sqlite3 "${LOCAL_DB}" <<SQL
+SELECT status FROM dataset_coverage WHERE dataset='${DATASET}';
+SELECT status, COUNT(*) FROM coverage_segments
+WHERE dataset='${DATASET}' GROUP BY status;
+SQL
+```
+
+Dataset COMPLETE count must match segment SoT (all COMPLETE → dataset COMPLETE).
+
+## 6. Publish the ops projection (separate, controlled step)
+
+Only after Step 5 confirms a single +1 delta **and** Step 5b aggregate is honest:
+
+```bash
+python scripts/publish_ops_projection.py --db "${LOCAL_DB}" --apply-remote
 ```
 
 Notes:
