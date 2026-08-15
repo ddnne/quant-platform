@@ -2,7 +2,7 @@
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
 **Live verified:** 2026-08-15/16 · **W68** COMPLETE delta **COMPLETE** · fins tip4 live seal **100→104/104** · Dataset COMPLETE **21→22** · COMPLETE segs **3478→3482** · DEFER **4** remaining (bars_am · earn_cal · master · OTC) · PD-MX-EARN-TIP **superseded** (tip4 only) · empty COMPLETE **0** · **OTC 93** (+0) · bars_am COMPLETE tip **1** (+0) · Mass/READY/Phase7 **NO-GO/OFF** · FRESH `projgen-76991c143558463ab981b6da0899459c` · S1–S5 **research_baseline_rejected** untouched · densify **none** · **no invent** · **no Mass/READY ON** · **no S1–S5 un-reject** · **no OTC bulk densify**
-**Repo tip:** (post-push this wave) — W68 fins tip4 COMPLETE seal · COMPLETE **22** / DEFER **4** / segs **3482** / OTC **93** / READY **未宣言** · FRESH `projgen-76991c143558463ab981b6da0899459c`
+**Repo tip:** `fb707298d47b2588d5b4b15e2298aa388c58f36f` — W68 fins tip4 COMPLETE seal · COMPLETE **22** / DEFER **4** / segs **3482** / OTC **93** / READY **未宣言** · FRESH `projgen-76991c143558463ab981b6da0899459c`
 
 ## COMPLETE delta close（Dataset COMPLETE 21→22）· W68
 
