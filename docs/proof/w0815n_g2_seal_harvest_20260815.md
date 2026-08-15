@@ -11,7 +11,7 @@
 **Live verified:** 2026-08-15 (JST) / ~2026-08-15T00:44Z UTC  
 **Wave start HEAD:** `12d7592e096dcf510fa3b9dcdb3553528d6a4aa6`  
 **Base HEAD (pre-proof):** `5f11b97128aa39a530ff5e54510ecb573dfc0c18`  
-**Proof HEAD (post-push):** _(filled after push)_  
+**Proof HEAD (post-push):** `d9c9f7dd4d884d9aeaf39da1a430553523ab3eca`  
 **Projection:** **FRESH** `projgen-94809de8939844c69b07f1093557f8c3`  
 **Artifacts:** `.glm-logs/w0815n_g2_seal_harvest/` (`scan_window_ok_fast.py`, `inventory_window_ok.json`, `harvest_verdict.json`, `PRE_remote.json`, `POST_remote.json`, `FINAL_metrics.json`, `publish.log`, `reeval_freshness.log`, `pages/`)
 

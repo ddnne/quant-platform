@@ -2,7 +2,7 @@
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
 **Live verified:** 2026-08-15 (JST) / ~2026-08-15T00:44Z UTC (remote D1; COMPLETE segs **3442**; raw_n **15037**; Dataset COMPLETE **11**; FRESH `projgen-94809de8…`; empty COMPLETE **0**; Phase7 **OFF**; **W21-G2 seal harvest** true window_ok **0** + prior **W19-G6** ops / **T13 DEFER** fins_summary residual 6 formal)
-**Repo tip:** _(post-push)_ — COMPLETE **3442** / raw **15037** / Dataset COMPLETE **11** / FRESH `projgen-94809de8…` / empty COMPLETE **0** / Phase7 **OFF** / w0815n_g2_seal_harvest
+**Repo tip:** `d9c9f7dd4d884d9aeaf39da1a430553523ab3eca` — COMPLETE **3442** / raw **15037** / Dataset COMPLETE **11** / FRESH `projgen-94809de8…` / empty COMPLETE **0** / Phase7 **OFF** / w0815n_g2_seal_harvest
 
 ## W20 column / NULL audit (short)
 
