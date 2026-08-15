@@ -43,7 +43,7 @@
         "code",
         "date"
       ],
-      "historical_start": "2004-01-05",
+      "historical_start": "2008-05-01",
       "coverage_segment_granularity": "calendar_month",
       "expected_frequency": "trading_day",
       "inventory_status": "GOVERNED",
@@ -100,7 +100,7 @@
         "code",
         "disclosure_date"
       ],
-      "historical_start": "2008-01-08",
+      "historical_start": "2008-07-01",
       "coverage_segment_granularity": "calendar_month",
       "expected_frequency": "event_driven",
       "inventory_status": "GOVERNED",
@@ -128,7 +128,7 @@
         "disclosure_date",
         "item_code"
       ],
-      "historical_start": "2008-01-08",
+      "historical_start": "2018-01-01",
       "coverage_segment_granularity": "calendar_month",
       "expected_frequency": "event_driven",
       "inventory_status": "GOVERNED",
@@ -155,7 +155,7 @@
         "code",
         "disclosure_date"
       ],
-      "historical_start": "2008-01-08",
+      "historical_start": "2013-02-01",
       "coverage_segment_granularity": "calendar_month",
       "expected_frequency": "event_driven",
       "inventory_status": "GOVERNED",
@@ -182,7 +182,7 @@
         "code",
         "disclosure_date"
       ],
-      "historical_start": "2010-01-04",
+      "historical_start": "2018-01-01",
       "coverage_segment_granularity": "calendar_month",
       "expected_frequency": "event_driven",
       "inventory_status": "GOVERNED",
@@ -288,7 +288,7 @@
       "natural_key_fields": [
         "date"
       ],
-      "historical_start": "2008-01-01",
+      "historical_start": "2008-05-01",
       "coverage_segment_granularity": "calendar_month",
       "expected_frequency": "trading_day",
       "inventory_status": "GOVERNED",
@@ -315,7 +315,7 @@
         "code",
         "date"
       ],
-      "historical_start": "2008-01-01",
+      "historical_start": "2008-05-01",
       "coverage_segment_granularity": "calendar_month",
       "expected_frequency": "trading_day",
       "inventory_status": "GOVERNED",
@@ -504,7 +504,7 @@
         "code",
         "date"
       ],
-      "historical_start": "2013-01-04",
+      "historical_start": "2013-11-01",
       "coverage_segment_granularity": "calendar_month",
       "expected_frequency": "event_driven",
       "inventory_status": "GOVERNED",
@@ -531,7 +531,7 @@
         "code",
         "date"
       ],
-      "historical_start": "2013-01-04",
+      "historical_start": "2015-03-26",
       "coverage_segment_granularity": "calendar_month",
       "expected_frequency": "trading_day",
       "inventory_status": "GOVERNED",
@@ -585,7 +585,7 @@
         "code",
         "filing_date"
       ],
-      "historical_start": "2018-01-04",
+      "historical_start": "2020-05-01",
       "coverage_segment_granularity": "calendar_month",
       "expected_frequency": "event_driven",
       "inventory_status": "GOVERNED",
@@ -612,7 +612,7 @@
         "code",
         "filing_date"
       ],
-      "historical_start": "2018-01-04",
+      "historical_start": "2021-07-01",
       "coverage_segment_granularity": "calendar_month",
       "expected_frequency": "event_driven",
       "inventory_status": "GOVERNED",

@@ -59,14 +59,15 @@ def test_worker_summary_partial_not_pass():
 
 
 def test_planner_dataset_and_range_filter():
-    plan = BackfillPlanner(cutoff=__import__("datetime").date(2008, 6, 30)).plan(
+    # Post observed floor 2008-05-01 (pre-floor Jan–Apr no longer planned).
+    plan = BackfillPlanner(cutoff=__import__("datetime").date(2008, 7, 31)).plan(
         datasets=["indices_bars_daily_topix"],
-        from_date="2008-03-01",
-        to_date="2008-04-30",
+        from_date="2008-05-01",
+        to_date="2008-06-30",
     )
     assert plan.jobs
     assert all(j.dataset == "indices_bars_daily_topix" for j in plan.jobs)
-    assert all(j.segment_id in {"2008-03", "2008-04"} for j in plan.jobs)
+    assert all(j.segment_id in {"2008-05", "2008-06"} for j in plan.jobs)
     # Honest evidence expectation: not auto COMPLETE
     assert all("raw" in j.expected_evidence for j in plan.jobs)
 
@@ -75,6 +76,8 @@ def test_planner_clamps_subscription_floor_no_oos_before_2006_08_13():
     """Fail id 2522: requested_from=2006-08-12 → HTTP 400 subscription.
 
     Planner must never emit jobs starting before JQUANTS_SUBSCRIPTION_FLOOR.
+    Uses equities_master (history still pre-floor) — equities_bars_daily floor
+    was raised to 2008-05-01 (w0815ae) so it no longer exercises the clamp.
     """
     from datetime import date
 
@@ -89,8 +92,8 @@ def test_planner_clamps_subscription_floor_no_oos_before_2006_08_13():
         prefer_month_chunks_for_today=False,
         chunk_days_for_today_mode=1,
     ).plan(
-        datasets=["equities_bars_daily"],
-        from_date="2004-01-05",
+        datasets=["equities_master"],
+        from_date="2000-07-13",
         to_date="2006-08-31",
     )
     assert plan.jobs, "expected jobs on/after subscription floor"

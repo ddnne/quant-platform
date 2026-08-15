@@ -66,13 +66,13 @@ TRACK_A_DATASETS: tuple[str, ...] = (
 # Preferred deep-history windows for Track A (inclusive). Planner still owns
 # segment inventory; these only filter the queue for acceleration runs.
 TRACK_A_FOCUS_RANGES: dict[str, tuple[str, str]] = {
-    # 2004–2023 equities bars (before typical recent FRESH window).
-    "equities_bars_daily": ("2004-01-05", "2023-12-31"),
+    # Proven observed floors (w0815ae/W38) through pre-FRESH history.
+    "equities_bars_daily": ("2008-05-01", "2023-12-31"),
     # Full TOPIX history is contract-driven; focus filter is wide open.
-    "indices_bars_daily_topix": ("2008-01-01", "2099-12-31"),
-    "markets_breakdown": ("2013-01-04", "2099-12-31"),
-    "fins_summary": ("2008-01-08", "2099-12-31"),
-    "equities_master": ("2000-07-13", "2099-12-31"),
+    "indices_bars_daily_topix": ("2008-05-01", "2099-12-31"),
+    "markets_breakdown": ("2015-03-26", "2099-12-31"),
+    "fins_summary": ("2008-07-01", "2099-12-31"),
+    "equities_master": ("2000-07-13", "2099-12-31"),  # not raised (misdate band)
     # Latest-only preference is applied via max_jobs / latest_only, not range.
     "markets_margin_interest": ("2013-01-04", "2099-12-31"),
 }

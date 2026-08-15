@@ -57,7 +57,7 @@ def test_rpm_and_config_near_ceiling():
 
 def test_filter_track_a_and_focus_range():
     plan = BackfillPlanner(cutoff=date(2024, 1, 31)).plan()
-    # Track A bars focus 2004–2023 — January 2024 is outside focus upper bound
+    # Track A bars focus 2008-05–2023 — January 2024 is outside focus upper bound
     # for equities_bars_daily (to 2023-12-31), so 2024-01 jobs drop.
     track = filter_plan_jobs(plan, track_a=True)
     datasets = {j.dataset for j in track}
@@ -65,16 +65,16 @@ def test_filter_track_a_and_focus_range():
     assert "equities_bars_daily" in datasets or "indices_bars_daily_topix" in datasets
     # No JSDA
     assert not any(d.startswith("jsda_") for d in datasets)
-    # Date filter
+    # Date filter — post observed floor 2008-05-01 (pre-floor Jan–Apr pruned)
     narrow = filter_plan_jobs(
         plan,
         datasets=["indices_bars_daily_topix"],
-        from_date="2008-01-01",
-        to_date="2008-03-31",
+        from_date="2008-05-01",
+        to_date="2008-07-31",
     )
     assert narrow
     assert all(j.dataset == "indices_bars_daily_topix" for j in narrow)
-    assert all(j.requested_from <= "2008-03-31" for j in narrow)
+    assert all(j.requested_from <= "2008-07-31" for j in narrow)
 
 
 def test_latest_only_one_per_dataset():
@@ -118,7 +118,8 @@ def test_build_queue_assigns_pools_and_cap():
 
 
 def test_dry_run_scheduler_no_network():
-    plan = BackfillPlanner(cutoff=date(2008, 3, 31)).plan(
+    # Cutoff must be on/after observed floor 2008-05-01 or the plan is empty.
+    plan = BackfillPlanner(cutoff=date(2008, 6, 30)).plan(
         datasets=["indices_bars_daily_topix"]
     )
     calls: list[tuple] = []
@@ -285,15 +286,16 @@ def test_measure_dispatch_rpm_from_timestamps():
 
 
 def test_planner_range_filter_and_month_standard():
-    plan = BackfillPlanner(cutoff=date(2008, 6, 30)).plan(
+    # Post observed floor 2008-05-01; filter mid-window should exclude earlier months.
+    plan = BackfillPlanner(cutoff=date(2008, 8, 31)).plan(
         datasets=["indices_bars_daily_topix"],
-        from_date="2008-02-01",
-        to_date="2008-04-30",
+        from_date="2008-06-01",
+        to_date="2008-07-31",
     )
     assert plan.jobs
     months = {j.segment_id for j in plan.jobs}
-    assert "2008-02" in months
-    assert "2008-01" not in months
+    assert "2008-06" in months
+    assert "2008-05" not in months
     # Date-range batch: each job is a range, not a single day
     for j in plan.jobs:
         assert j.requested_from <= j.requested_to

@@ -50,28 +50,29 @@ LIVE_GATES: dict[str, float] = {
 # contractual truths** — update as the spec evolves.
 EXPECTED_START: dict[str, str] = {
     "equities_master": "2000-07-13",
-    "equities_bars_daily": "2004-01-05",
+    # Raised to proven observed floors (w0815ae/W38; docs/proof/observed_floor_catalog_20260815.md)
+    "equities_bars_daily": "2008-05-01",
     "equities_bars_daily_am": "2024-01-04",   # AM is recent-only by spec
-    "fins_summary": "2008-01-08",
-    "fins_details": "2008-01-08",
-    "fins_dividend": "2008-01-08",
-    "fins_earnings_date": "2010-01-04",
-    "equities_earnings_calendar": "2010-01-04",
+    "fins_summary": "2008-07-01",
+    "fins_details": "2018-01-01",
+    "fins_dividend": "2013-02-01",
+    "fins_earnings_date": "2018-01-01",
+    "equities_earnings_calendar": "2010-01-04",  # tip-only vendor; not raised
     "markets_calendar": "2008-01-01",
     "equities_investor_types": "2013-01-04",
-    "indices_bars_daily_topix": "2008-01-01",
-    "indices_bars_daily": "2008-01-01",
+    "indices_bars_daily_topix": "2008-05-01",
+    "indices_bars_daily": "2008-05-01",
     "derivatives_bars_daily_options_225": "2013-01-04",
     "derivatives_bars_daily_futures": "2013-01-04",
     "derivatives_bars_daily_options": "2013-01-04",
     "markets_margin_interest": "2013-01-04",
     "markets_margin_alert": "2013-01-04",
     "markets_short_ratio": "2013-01-04",
-    "markets_short_sale_report": "2013-01-04",
-    "markets_breakdown": "2013-01-04",
+    "markets_short_sale_report": "2013-11-01",
+    "markets_breakdown": "2015-03-26",
     "edinet_major_shareholders": "2018-01-04",
-    "edinet_cross_shareholdings": "2018-01-04",
-    "edinet_large_volume_shareholders": "2018-01-04",
+    "edinet_cross_shareholdings": "2020-05-01",
+    "edinet_large_volume_shareholders": "2021-07-01",
 }
 
 # Fill-rate thresholds for C6/C7. Below ``WARN_RATE`` the row is at least a

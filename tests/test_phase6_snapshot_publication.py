@@ -110,11 +110,12 @@ def _seed_publishable_db(path) -> tuple[str, ...]:
         ))
         rows.append(_generic_row(policy.dataset_id, "latest", today, **extra))
     # The bar and calendar checks share exactly the same observed trading days.
+    # Bars floor is 2008-05-01 (w0815ae); calendar remains 2008-01-01.
     rows.append(_generic_row(
-        "equities_bars_daily", "calendar-policy-start", "2008-01-01"
+        "equities_bars_daily", "calendar-policy-start", "2008-05-01"
     ))
     rows.append(_generic_row(
-        "markets_calendar", "bars-policy-start", "2004-01-05",
+        "markets_calendar", "bars-policy-start", "2008-05-01",
         HolidayDivision="1",
     ))
     for dataset in ("equities_master", "equities_bars_daily"):

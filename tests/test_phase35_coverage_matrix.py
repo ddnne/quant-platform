@@ -668,13 +668,13 @@ def test_C6_C7_pass_on_multi_year_span(tmp_path):
     Trick the fill-rate by pinning ``today`` close to ``expected_start``
     so a modest observed span covers the full expected window.
     """
-    # expected_start for equities_bars_daily is 2004-01-05; a two-year
-    # observed window with today=2006-01-01 gives fill_rate ≈ 1.0.
+    # expected_start for equities_bars_daily is 2008-05-01 (observed floor);
+    # a ~2y observed window pinned near start gives fill_rate ≈ 1.0.
     p = _build_year_span_db(
-        tmp_path, days=("2004-01-05", "2005-12-31"),
+        tmp_path, days=("2008-05-01", "2010-04-30"),
     )
     out = run_coverage(p, tier="weekly", datasets=["equities_bars_daily"],
-                       today="2005-12-31T15:30:00+09:00")
+                       today="2010-04-30T15:30:00+09:00")
     c6 = _results_by_id(out, "C6")
     c7 = _results_by_id(out, "C7")
     assert c6[0].status == "pass", (c6[0].detail, c6[0].metrics)
