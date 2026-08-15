@@ -9,7 +9,7 @@
 
 **Live verified:** 2026-08-15 (JST) / G3 ops ~`2026-08-15T09:11–09:14Z` UTC · G2 smokes ~`09:21Z`  
 **Wave start HEAD:** `1fd017da9605ad557c34175ec54f910df097e617` (W47 post-fill)  
-**Proof HEAD (post-push):** _fill after push_  
+**Proof HEAD (post-push):** `7e504c63e4e70cb21c7315c8bcc1d59fb4e9a77a`  
 **Projection (G3 ops reeval):** **FRESH** `projgen-17345de1e40b4aabb5496c18b22d3182` (age ~107s at capture; pre-gen `projgen-1a965a00414c4810b25ee77943d1a0f8`)
 
 **Artifacts:**
@@ -150,9 +150,9 @@ Source: [`.glm-logs/w0815ao_g3_ops/FINAL_metrics.json`](../../.glm-logs/w0815ao_
 |------|--------|
 | Code committed | `permanent_defer.py` · adapter history guard · unit tests · contract exports |
 | Docs committed | residual SoT (利用準備 + FRESH) · complete21 CF paths · this proof |
-| `git push origin main` | **done** (after commit) |
-| `origin/main` SHA | _fill after push_ |
-| HEAD == origin/main | _fill after push_ |
+| `git push origin main` | **done** |
+| `origin/main` SHA (content) | `7e504c63e4e70cb21c7315c8bcc1d59fb4e9a77a` |
+| HEAD == origin/main | **yes** (after content + SHA-fill pushes) |
 
 ---
 

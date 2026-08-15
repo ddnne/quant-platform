@@ -1,9 +1,9 @@
 # Phase 6.2 / 6.3 residual status
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
-**Live verified:** 2026-08-15 (JST) / **W48** 利用準備フェーズ開始（READY 未宣言） · COMPLETE segs **3478** · Dataset COMPLETE **21 / 26** · PARTIAL = **5** permanent DEFER only · **actionable_gap = 0** · empty COMPLETE **0** · **OTC 93** tip island held · permanent DEFER **5** / NO_DENSIFY **6** · densify coverage loops **ENDED** · Mass/READY/Phase7 **NO-GO/OFF** · raw **15869** held (W46 tip secondary) · FRESH `projgen-17345de1e40b4aabb5496c18b22d3182` · **CF-SoT** held — D1 = hot tip · R2 = history · COMPLETE = receipt-owned · floors W38 + W42 mb **2015-04-01** **not lowered** · coverage baseline **W47 FINAL held** · READY **not declared**
+**Live verified:** 2026-08-15 (JST) / **W48** 利用準備フェーズ（READY 未宣言） FINAL · COMPLETE segs **3478** · Dataset COMPLETE **21 / 26** · PARTIAL = **5** permanent DEFER only · **actionable_gap = 0** · empty COMPLETE **0** · **OTC 93** tip island held · permanent DEFER **5** / NO_DENSIFY **6** · densify coverage loops **ENDED** · Mass/READY/Phase7 **NO-GO/OFF** · raw **15869** held (W46 tip secondary) · FRESH `projgen-17345de1e40b4aabb5496c18b22d3182` · **CF-SoT** held — D1 = hot tip · R2 = history · COMPLETE = receipt-owned · floors W38 + W42 mb **2015-04-01** **not lowered** · coverage baseline **W47 FINAL held** · READY **not declared** · **POST_PUSH_SHA** `7e504c63e4e70cb21c7315c8bcc1d59fb4e9a77a`
 
-**Repo tip:** `1fd017da9605ad557c34175ec54f910df097e617` — W48 利用準備開始 · COMPLETE **3478** / Dataset COMPLETE **21** / OTC **93** / **actionable_gap = 0** / Phase7 **OFF** / READY **未宣言**
+**Repo tip:** `7e504c63e4e70cb21c7315c8bcc1d59fb4e9a77a` — W48 利用準備 FINAL · COMPLETE **3478** / Dataset COMPLETE **21** / OTC **93** / **actionable_gap = 0** / Phase7 **OFF** / READY **未宣言** · **POST_PUSH_SHA** `7e504c63e4e70cb21c7315c8bcc1d59fb4e9a77a`
 
 ## 利用準備フェーズ開始（READY 未宣言）
 
@@ -23,7 +23,7 @@
 | empty COMPLETE | **0** (remote verify held) |
 | tip densify | **SKIP** (not primary this phase) |
 | densify | **none** |
-| push | **POST_PUSH_SHA** _fill after push_ |
+| push | **POST_PUSH_SHA** `7e504c63e4e70cb21c7315c8bcc1d59fb4e9a77a` |
 | Projection | **FRESH** `projgen-17345de1e40b4aabb5496c18b22d3182` (ops_reeval_freshness; publish apply **SKIP** local==remote 3478) |
 | G1 DEFER guard | `permanent_defer.py` + `QuantDataAccess` history fail-closed · tests **6 passed** |
 | G2 smokes T4–T6 | **all pass** (tip PIT joins; READY **not** declared) |
