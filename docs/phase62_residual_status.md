@@ -2,7 +2,7 @@
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
 **Live verified:** 2026-08-15/16 · **W67** coverage expand attempt **INCOMPLETE** for Dataset COMPLETE increase（honest） · fins **100/104 held** · COMPLETE **21 held** · COMPLETE segs **3478** · DEFER **5** · **actionable_gap = 0** · densify **none** · empty COMPLETE **0** · **OTC 93** · bars_am tip COMPLETE **1** / PARTIAL **31** · Mass/READY/Phase7 **NO-GO/OFF** · FRESH `projgen-7375ba081dbd484eac1f360910e3e9fa` · S1–S5 **research_baseline_rejected** untouched · **ユーザー希望の 21→22 は raw 無しのため未達** · block **PD-MX-EARN-TIP / NO_RAW / HAS_RAW_SEALABLE=0** · **no invent COMPLETE** · **no densify success** · **no significance / no edge / no operational GO**
-**Repo tip:** (pin after W67 land) — W67 honest fins tip4 COMPLETE expand attempt blocked NO_RAW · COMPLETE **21** / DEFER **5** / segs **3478** / OTC **93** / READY **未宣言** · FRESH `projgen-7375ba081dbd484eac1f360910e3e9fa`
+**Repo tip:** `b1fcc71adb228b9f49f3ad8854c5aada843572e0` — W67 honest fins tip4 COMPLETE expand attempt blocked NO_RAW · COMPLETE **21** / DEFER **5** / segs **3478** / OTC **93** / READY **未宣言** · FRESH `projgen-7375ba081dbd484eac1f360910e3e9fa`
 
 ## Coverage expand attempt（Dataset COMPLETE 増加は INCOMPLETE）· W67
 
