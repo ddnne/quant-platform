@@ -1,10 +1,49 @@
 # Phase 6.2 / 6.3 residual status
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
-**Live verified:** 2026-08-15 (JST) / **W66** 標準評価チェックリスト固定 · simple daily sign track closed（READY 未宣言） · COMPLETE segs **3478** · Dataset COMPLETE **21** · PARTIAL **5** DEFER · **actionable_gap = 0** · **P0 gaps = 0** · empty COMPLETE **0** · **OTC 93** · Mass/READY/Phase7 **NO-GO/OFF** · FRESH `projgen-03cc13b6603b4bad84d051420f25e417` · **CF-SoT** held · promotion **9 approved** / **1 candidate** no-promote · S1–S5 **research_baseline_rejected** · checklist **v1** · `run_standard_research_eval` · holding metrics **research-only** · cost **10bp one-way** held · S1 Q4 cost **FAIL** · S4 cost PASS weak · **gate/checklist pass ≠ READY/Mass** · **no significance / no edge / no operational GO**
-**Repo tip:** `fb20fadc41da61210a5caaa9dd3f6a63073fa40b` — W66 標準評価チェックリスト固定 · COMPLETE **21** / DEFER **5** / segs **3478** / OTC **93** / READY **未宣言** · FRESH `projgen-03cc13b6603b4bad84d051420f25e417`
+**Live verified:** 2026-08-15/16 · **W67** coverage expand attempt **INCOMPLETE** for Dataset COMPLETE increase（honest） · fins **100/104 held** · COMPLETE **21 held** · COMPLETE segs **3478** · DEFER **5** · **actionable_gap = 0** · densify **none** · empty COMPLETE **0** · **OTC 93** · bars_am tip COMPLETE **1** / PARTIAL **31** · Mass/READY/Phase7 **NO-GO/OFF** · FRESH `projgen-7375ba081dbd484eac1f360910e3e9fa` · S1–S5 **research_baseline_rejected** untouched · **ユーザー希望の 21→22 は raw 無しのため未達** · block **PD-MX-EARN-TIP / NO_RAW / HAS_RAW_SEALABLE=0** · **no invent COMPLETE** · **no densify success** · **no significance / no edge / no operational GO**
+**Repo tip:** (pin after W67 land) — W67 honest fins tip4 COMPLETE expand attempt blocked NO_RAW · COMPLETE **21** / DEFER **5** / segs **3478** / OTC **93** / READY **未宣言** · FRESH `projgen-7375ba081dbd484eac1f360910e3e9fa`
 
-## 標準研究評価チェックリスト固定（READY 未宣言）
+## Coverage expand attempt（Dataset COMPLETE 増加は INCOMPLETE）· W67
+
+**Phase name:** fins tip4 COMPLETE expand live reverify + bars_am progress + PARTIAL next plan（宣言なし · invent なし）  
+**Wave:** W67 / w0816a  
+**Close:** [`docs/proof/w0816a_w67_coverage_expand_close_20260816.md`](proof/w0816a_w67_coverage_expand_close_20260816.md)  
+**Task A fins:** [`docs/proof/w0816a_w67_fins_earnings_date_complete_attempt_20260816.md`](proof/w0816a_w67_fins_earnings_date_complete_attempt_20260816.md) · **100/104 held (Δ0)** · tip `2026-01…04` **PERMANENT_DEFER / NO_RAW** · `HAS_RAW_SEALABLE=0`  
+**Task B bars_am:** [`docs/proof/w0816a_w67_bars_am_progress_20260816.md`](proof/w0816a_w67_bars_am_progress_20260816.md) · COMPLETE tip **1** / PARTIAL **31** · history **+0** · PD-D4-BARS-AM densify history FORBIDDEN  
+**Task C PARTIAL plan:** [`docs/proof/w0816a_w67_partial_next_plan_20260816.md`](proof/w0816a_w67_partial_next_plan_20260816.md) · earn_cal / master / OTC plan only · no bulk  
+**Logs:** [`.glm-logs/w0816a_w67_coverage/`](../.glm-logs/w0816a_w67_coverage/) · FRESH log `reeval_freshness.log`  
+**FRESH:** `projgen-7375ba081dbd484eac1f360910e3e9fa` · coverage_segments untouched · mass=NO-GO · densify **none**  
+**S1–S5:** stay **research_baseline_rejected** (no un-reject)  
+**Explicit:** ユーザー希望の **21→22 は raw 無しのため未達** · COMPLETE expand **INCOMPLETE** · honest evidence + push **COMPLETE**  
+**Prior W66 標準評価チェックリスト固定:** held underneath
+
+| gate | status |
+|------|--------|
+| READY | **未宣言** |
+| Mass / Phase7 | **NO-GO / OFF** |
+| Dataset COMPLETE | **21** held (21→22 **未達**) |
+| DEFER | **5** |
+| COMPLETE segs | **3478** |
+| empty COMPLETE | **0** |
+| OTC | **93** |
+| fins_earnings_date | **100/104** held · tip4 NO_RAW |
+| bars_am | COMPLETE **1** tip / PARTIAL **31** · history **0** |
+| densify | **none** |
+| actionable_gap | **0** |
+| S1–S5 catalog | **research_baseline_rejected** untouched |
+| FRESH | `projgen-7375ba081dbd484eac1f360910e3e9fa` |
+| COMPLETE expand | **INCOMPLETE** (block PD-MX-EARN-TIP / NO_RAW) |
+
+### Explicit non-declarations (held)
+
+- **READY** — not declared  
+- **Mass** — **NO-GO / OFF**  
+- **Phase7** — **OFF**  
+- **Dataset COMPLETE 22** — not invented  
+- **densify success** — not claimed  
+
+## 標準研究評価チェックリスト固定（READY 未宣言）· W66 held
 
 **Phase name:** 標準研究評価手順固定 + harness 標準エントリ（宣言なし）  
 **Wave:** W66 / w0815bg  
