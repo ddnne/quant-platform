@@ -17,6 +17,7 @@ from research.single_shot_job import (
     COMPLETE_21_DATASETS,
     COMPLETE_21_DATASET_SET,
     DEFAULT_CANDIDATE_FEATURES,
+    DEFAULT_SIGNAL_ID,
     MASS_RESEARCH_ENV_ARMING_SWITCHES,
     MASS_RESEARCH_STATUS,
     PHASE7_ENV_ARMING_SWITCHES,
@@ -25,6 +26,7 @@ from research.single_shot_job import (
     READY_PUBLICATION_STATUS,
     RESEARCH_ARTIFACT_BUCKET,
     RESEARCH_ARTIFACT_PREFIX,
+    SIGNAL_CANDIDATE_ONLY,
     SingleShotJobError,
     assert_mass_and_phase7_off,
     build_single_shot_job_spec,
@@ -43,6 +45,9 @@ from selection.screen import ExperimentBudget
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SINGLE_SHOT_PATH = (
     REPO_ROOT / "packages" / "product" / "research" / "single_shot_job.py"
+)
+MINIMAL_SIGNAL_PATH = (
+    REPO_ROOT / "packages" / "research_runtime" / "features" / "minimal_signal.py"
 )
 
 
@@ -96,6 +101,11 @@ def test_design_artifact_paths_are_r2_not_local_sot():
     assert paths["prefix"].startswith("research/single_shot/job=")
     assert paths["manifest_r2_key"].endswith("/manifest.json")
     assert "{content_hash}" in paths["result_r2_key_template"]
+    assert "{content_hash}" in paths["features_r2_key_template"]
+    assert "{content_hash}" in paths["signals_r2_key_template"]
+    assert paths["signals_r2_key_template"].startswith(
+        "research/single_shot/job=job-demo-1/signals/"
+    )
     # No local filesystem SoT fields (authority keys are R2 only).
     assert "local_path" not in paths
     assert not any(str(k).startswith("/") for k in paths if isinstance(k, str) is False)
@@ -489,8 +499,14 @@ def test_execute_with_features_writes_manifest_feature_stats(tmp_path: Path):
         assert "row_counts" in block
         assert "null_counts" in block
     feat_body = json.loads(puts[ex.features_r2_key].decode("utf-8"))
-    assert feat_body["status"] == "candidate"
+    # W52: default set mixes approved (volume/calendar) + candidate (topix)
+    assert feat_body["status"] in ("mixed", "approved", "candidate")
+    assert feat_body["ready_declared"] is False
     assert feat_body["local_sot"] is False
+    by_fid = {b["feature_id"]: b for b in feat_body["features"]}
+    assert by_fid["volume_change_1d"]["status"] == "approved"
+    assert by_fid["is_trading_day"]["status"] == "approved"
+    assert by_fid["topix_relative_1d"]["status"] == "candidate"
 
 
 def test_execute_features_rejects_defer_before_d1():
@@ -511,6 +527,174 @@ def test_execute_features_rejects_defer_before_d1():
             d1_execute=boom_d1,
         )
     assert calls == []
+
+
+# ---------------------------------------------------------------------------
+# W52 / T5–T7 — minimal signal (candidate_only) + R2 signals path
+# ---------------------------------------------------------------------------
+
+
+def test_minimal_signal_pure_helpers():
+    from features.minimal_signal import (
+        compute_topix_relative_sign_signal,
+        sign_from_topix_relative,
+    )
+
+    assert sign_from_topix_relative(0.01) == 1.0
+    assert sign_from_topix_relative(-0.02) == -1.0
+    assert sign_from_topix_relative(0.0) == 0.0
+    assert sign_from_topix_relative(None) is None
+
+    long = compute_topix_relative_sign_signal(
+        topix_relative=0.005, is_trading_day=1.0, code="13010"
+    )
+    assert long["value"] == 1.0
+    assert long["signal_id"] == DEFAULT_SIGNAL_ID
+    assert long["candidate_only"] is True
+    assert long["metadata"]["order_execution"] is False
+    assert long["metadata"]["ready_declared"] is False
+
+    non_td = compute_topix_relative_sign_signal(
+        topix_relative=0.005, is_trading_day=0.0, code="13010"
+    )
+    assert non_td["value"] is None
+
+    gated = compute_topix_relative_sign_signal(
+        topix_relative=0.005,
+        is_trading_day=1.0,
+        volume_change=0.01,
+        volume_change_abs_min=0.05,
+        code="13010",
+    )
+    assert gated["value"] is None  # |0.01| < 0.05
+
+
+def test_execute_compute_signals_writes_signals_artifact(tmp_path: Path):
+    """W52 T6 unit: compute_signals → R2 signals key + candidate_only metadata."""
+
+    def fake_d1(sql: str):
+        s = sql.lower()
+        if "count(*)" in s:
+            return [
+                {
+                    "n": 4,
+                    "min_event_time": "2026-08-01",
+                    "max_event_time": "2026-08-04",
+                }
+            ]
+        if "payload" in s and "equities_bars_daily" in s:
+            return [
+                {
+                    "natural_key": json.dumps({"Code": "13010", "Date": "2026-08-01"}),
+                    "event_time": "2026-08-01T09:00:00+09:00",
+                    "available_at": "2026-08-01T15:30:00+09:00",
+                    "payload": json.dumps(
+                        {"Code": "13010", "Date": "2026-08-01", "C": 1000.0, "Vo": 100.0}
+                    ),
+                },
+                {
+                    "natural_key": json.dumps({"Code": "13010", "Date": "2026-08-04"}),
+                    "event_time": "2026-08-04T09:00:00+09:00",
+                    "available_at": "2026-08-04T15:30:00+09:00",
+                    "payload": json.dumps(
+                        {"Code": "13010", "Date": "2026-08-04", "C": 1020.0, "Vo": 150.0}
+                    ),
+                },
+            ]
+        if "payload" in s and "indices_bars_daily_topix" in s:
+            return [
+                {
+                    "natural_key": json.dumps({"Date": "2026-08-01"}),
+                    "event_time": "2026-08-01T09:00:00+09:00",
+                    "available_at": "2026-08-01T15:30:00+09:00",
+                    "payload": json.dumps({"Date": "2026-08-01", "C": 3000.0}),
+                },
+                {
+                    "natural_key": json.dumps({"Date": "2026-08-04"}),
+                    "event_time": "2026-08-04T09:00:00+09:00",
+                    "available_at": "2026-08-04T15:30:00+09:00",
+                    "payload": json.dumps({"Date": "2026-08-04", "C": 3010.0}),
+                },
+            ]
+        if "payload" in s and "markets_calendar" in s:
+            return [
+                {
+                    "natural_key": json.dumps({"Date": "2026-08-04"}),
+                    "event_time": "2026-08-04",
+                    "available_at": "2026-08-04T00:00:00+09:00",
+                    "payload": json.dumps(
+                        {"Date": "2026-08-04", "HolidayDivision": "1"}
+                    ),
+                }
+            ]
+        if "equities_bars_daily" in s:
+            return [
+                {
+                    "natural_key": json.dumps({"Code": "13010", "Date": "2026-08-04"}),
+                    "event_time": "2026-08-04T09:00:00+09:00",
+                    "available_at": "2026-08-04T15:30:00+09:00",
+                }
+            ]
+        return [
+            {
+                "natural_key": json.dumps({"Date": "2026-08-04"}),
+                "event_time": "2026-08-04",
+                "available_at": "2026-08-04",
+            }
+        ]
+
+    puts: dict[str, bytes] = {}
+
+    def fake_put(bucket: str, key: str, body: bytes):
+        puts[key] = body
+        return {"bucket": bucket, "key": key, "bytes": len(body), "status": "injected"}
+
+    ex = execute_single_shot_job(
+        dataset_ids=[
+            "equities_bars_daily",
+            "markets_calendar",
+            "indices_bars_daily_topix",
+        ],
+        period_start="2026-08-01",
+        period_end="2026-08-15",
+        job_id="w0815as-unit-signal",
+        dry_run=True,
+        compute_signals=True,
+        feature_codes=["13010"],
+        d1_execute=fake_d1,
+        r2_put=fake_put,
+        staging_dir=tmp_path,
+    )
+    assert ex.ready_declared is False
+    assert ex.mass_research == "NO-GO"
+    assert ex.phase7 == "OFF"
+    assert ex.signals_r2_key is not None
+    assert ex.signals_r2_key.startswith(
+        "research/single_shot/job=w0815as-unit-signal/signals/"
+    )
+    assert ex.features_r2_key is not None
+    assert ex.signal_result is not None
+    assert ex.signal_result["signal_id"] == DEFAULT_SIGNAL_ID
+    assert ex.signal_result["candidate_only"] is True
+    assert SIGNAL_CANDIDATE_ONLY is True
+    assert ex.signal_result["order_execution"] is False
+    assert ex.signal_result["ready_declared"] is False
+    # 5 puts: input_plan, result, features, signals, manifest
+    assert len(puts) == 5
+    assert ex.signals_r2_key in puts
+    manifest = json.loads(puts[ex.manifest_r2_key].decode("utf-8"))
+    assert manifest["compute_signals"] is True
+    assert manifest["order_execution"] is False
+    assert manifest["signal"]["signal_id"] == DEFAULT_SIGNAL_ID
+    assert manifest["signal"]["candidate_only"] is True
+    assert "signals" in manifest["keys"]
+    sig_body = json.loads(puts[ex.signals_r2_key].decode("utf-8"))
+    assert sig_body["signal_id"] == DEFAULT_SIGNAL_ID
+    assert sig_body["candidate_only"] is True
+    assert sig_body["order_execution"] is False
+    assert sig_body["local_sot"] is False
+    # equity +2% vs topix +0.33% → positive relative → long
+    assert any(o.get("value") == 1.0 for o in sig_body.get("observations") or [])
 
 
 # ---------------------------------------------------------------------------
@@ -554,9 +738,8 @@ def test_mass_research_still_hard_reject_without_readiness(tmp_path: Path):
         start_mass_research(budget=cap, readiness=None)
 
 
-def test_single_shot_module_does_not_import_mass_research_loop():
-    """AST guard: skeleton must not call into agents.mass_research."""
-    tree = ast.parse(SINGLE_SHOT_PATH.read_text(encoding="utf-8"))
+def _ast_imports_and_calls(path: Path) -> tuple[set[str], set[str]]:
+    tree = ast.parse(path.read_text(encoding="utf-8"))
     imported: set[str] = set()
     called: set[str] = set()
     for node in ast.walk(tree):
@@ -574,6 +757,12 @@ def test_single_shot_module_does_not_import_mass_research_loop():
                 called.add(func.id)
             elif isinstance(func, ast.Attribute):
                 called.add(func.attr)
+    return imported, called
+
+
+def test_single_shot_module_does_not_import_mass_research_loop():
+    """AST guard: skeleton must not call into agents.mass_research."""
+    imported, called = _ast_imports_and_calls(SINGLE_SHOT_PATH)
     assert "agents" not in imported
     assert "mass_research" not in imported
     assert "start_mass_research" not in imported
@@ -581,6 +770,33 @@ def test_single_shot_module_does_not_import_mass_research_loop():
     assert "VerifiedResearchReadiness" not in imported
     assert "start_mass_research" not in called
     assert "require_mass_research_start" not in called
+
+
+def test_t7_signal_and_single_shot_no_mass_ready_or_orders():
+    """W52 T7: hard AST/comment — no mass import, no READY mint, no order exec."""
+    for path in (SINGLE_SHOT_PATH, MINIMAL_SIGNAL_PATH):
+        imported, called = _ast_imports_and_calls(path)
+        src = path.read_text(encoding="utf-8")
+        assert "agents" not in imported, path.name
+        assert "mass_research" not in imported, path.name
+        assert "start_mass_research" not in imported, path.name
+        assert "require_mass_research_start" not in imported, path.name
+        assert "VerifiedResearchReadiness" not in imported, path.name
+        assert "ResearchReadinessService" not in imported, path.name
+        # No order / paper execution surface.
+        assert "OrderIntent" not in imported, path.name
+        assert "paper_service" not in imported, path.name
+        assert "execution" not in imported, path.name
+        assert "start_mass_research" not in called, path.name
+        assert "place_order" not in called, path.name
+        assert "submit_order" not in called, path.name
+        assert "mint_ready" not in called, path.name
+        assert "MASS_RESEARCH_ENABLE" not in src
+        assert "PHASE7_ENABLE" not in src
+        assert 'MASS_RESEARCH_STATUS: str = "GO"' not in src
+        assert 'PHASE7_STATUS: str = "ON"' not in src
+        assert "READY_DECLARED: bool = True" not in src
+        assert "ORDER_EXECUTION: bool = True" not in src
 
 
 def test_no_phase7_or_mass_env_arming_switches_in_skeleton_source():
@@ -591,3 +807,5 @@ def test_no_phase7_or_mass_env_arming_switches_in_skeleton_source():
     assert "PHASE7_ENABLE" not in src
     assert 'PHASE7_STATUS: str = "ON"' not in src
     assert 'MASS_RESEARCH_STATUS: str = "GO"' not in src
+    assert "order_execution" in src  # freeze field must remain False
+    assert "ORDER_EXECUTION" not in src or "ORDER_EXECUTION: bool = True" not in src

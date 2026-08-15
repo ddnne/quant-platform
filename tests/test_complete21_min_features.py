@@ -1,11 +1,16 @@
-"""COMPLETE 21 min features + feature-pipeline permanent DEFER guard (W49–W51 T5–T7).
+"""COMPLETE 21 min features + feature-pipeline permanent DEFER guard (W49–W52).
 
 W51 / w0815ar_g2:
 
 * T5 — strengthen tests for existing 7 candidates (missing inputs, PIT gates,
   DEFER rejection).
 * T6 — +3 candidates: return_1d_c21, margin_alert_flag, futures_activity_proxy.
-* T7 criteria doc is separate; no candidate → approved promotion this wave.
+* T7 criteria doc is separate; no candidate → approved promotion that wave.
+
+W52 / w0815as_g1:
+
+* Promote at most 2: ``is_trading_day`` + ``volume_change_1d`` → approved
+  (version pin 1.0.0). Remaining 8 stay candidate.
 """
 
 from __future__ import annotations
@@ -24,10 +29,12 @@ from features import (
     compute,
     filter_feature_datasets,
     get,
+    get_for_strategy,
     list_features,
     require_feature_dataset,
     require_feature_datasets,
 )
+from features.registry import FeatureGovernanceError
 from features.complete21_min import (
     disclosure_flag_from_count,
     futures_activity_from_volume_pairs,
@@ -50,7 +57,7 @@ if str(TESTS_DIR) not in sys.path:
 from _coreseed import CODES, close_iso, seed_db
 
 
-# W49–W50 held (7) + W51 expand (+3) = 10 candidates.
+# W49–W50 held (7) + W51 expand (+3) = 10 complete21 min features.
 COMPLETE21_MIN_IDS = (
     "volume_change_1d",
     "topix_relative_1d",
@@ -62,6 +69,15 @@ COMPLETE21_MIN_IDS = (
     "return_1d_c21",
     "margin_alert_flag",
     "futures_activity_proxy",
+)
+
+# W52 promotion set (max 2); version pin remains 1.0.0.
+COMPLETE21_MIN_APPROVED_IDS = (
+    "is_trading_day",
+    "volume_change_1d",
+)
+COMPLETE21_MIN_CANDIDATE_IDS = tuple(
+    fid for fid in COMPLETE21_MIN_IDS if fid not in COMPLETE21_MIN_APPROVED_IDS
 )
 
 # Features that require a specific kwargs at the runtime gate.
@@ -390,12 +406,44 @@ def test_complete21_min_requires_as_of(tmp_path):
         compute("margin_alert_flag", as_of=None, code=CODES[0], db_path=db)
 
 
-def test_complete21_min_all_candidates_stay_candidate_not_approved():
-    """W51 hard rule: do not promote any complete21_min feature to approved."""
-    for fid in COMPLETE21_MIN_IDS:
+def test_complete21_min_w52_promotion_status_and_version_pin():
+    """W52: exactly 2 approved (pinned 1.0.0); remaining 8 stay candidate."""
+    for fid in COMPLETE21_MIN_APPROVED_IDS:
+        feat = get(fid)
+        assert feat.status == "approved", fid
+        assert str(feat.version) == "1.0.0", fid
+    for fid in COMPLETE21_MIN_CANDIDATE_IDS:
         feat = get(fid)
         assert feat.status == "candidate", fid
         assert feat.status != "approved", fid
+    assert len(COMPLETE21_MIN_APPROVED_IDS) == 2
+    assert len(COMPLETE21_MIN_CANDIDATE_IDS) == 8
+
+
+def test_get_for_strategy_admits_approved_signal_not_utility_or_candidate():
+    """Contract: get_for_strategy admits approved strategy-facing roles only."""
+    # volume_change_1d: approved + signal → admitted
+    vol = get_for_strategy("volume_change_1d", version="1.0.0")
+    assert vol.status == "approved"
+    assert vol.intended_role == "signal"
+    assert str(vol.version) == "1.0.0"
+
+    # is_trading_day: approved but utility → role gate rejects by default
+    with pytest.raises(FeatureGovernanceError, match="utility"):
+        get_for_strategy("is_trading_day", version="1.0.0")
+    util = get_for_strategy(
+        "is_trading_day",
+        version="1.0.0",
+        allowed_roles=("utility", "signal", "state", "structural"),
+    )
+    assert util.status == "approved"
+    assert util.intended_role == "utility"
+
+    # remaining complete21 min stay candidate → status gate rejects
+    with pytest.raises(FeatureGovernanceError, match="candidate"):
+        get_for_strategy("topix_relative_1d")
+    with pytest.raises(FeatureGovernanceError, match="candidate"):
+        get_for_strategy("return_1d_c21")
 
 
 def test_complete21_min_declared_datasets_reject_each_permanent_defer():
@@ -737,8 +785,11 @@ def test_complete21_min_features_registered():
     assert set(COMPLETE21_MIN_IDS).issubset(ids)
     for fid in COMPLETE21_MIN_IDS:
         feat = get(fid)
-        assert feat.status == "candidate"
         assert "complete21" in feat.tags
+        if fid in COMPLETE21_MIN_APPROVED_IDS:
+            assert feat.status == "approved", fid
+        else:
+            assert feat.status == "candidate", fid
 
 
 def test_volume_change_1d_on_seeded_bars(tmp_path):

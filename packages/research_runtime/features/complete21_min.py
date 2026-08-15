@@ -1,11 +1,18 @@
-"""Minimal COMPLETE-21-only features (W49–W51 / w0815ar_g2).
+"""Minimal COMPLETE-21-only features (W49–W52 / w0815as_g1).
 
 All features:
 
 * declare required datasets from COMPLETE 21 only;
 * call :func:`require_feature_datasets` (permanent DEFER fail-closed) before
-  any PIT read;
-* stay ``status="candidate"`` — no READY / strategy default claim.
+  any PIT read.
+
+Promotion (W52 / w0815as_g1 · T1–T4):
+
+* ``status="approved"`` (version pin ``1.0.0``): ``is_trading_day``,
+  ``volume_change_1d`` — only after I*/Q*/O2 gates in the W52 proof.
+* Remaining 8 stay ``status="candidate"``.
+* No READY / Mass / Phase7 claim. ``get_for_strategy`` still admits only
+  approved + strategy-facing roles (utility requires explicit role override).
 
 Implemented (W49–W50, 7):
 
@@ -28,7 +35,7 @@ Implemented (W51 expand, +3):
   ``derivatives_bars_daily_futures`` (optional contract ``code`` filter).
 
 Approved v0 ``return_1d`` remains in ``features.v0`` (DEFER-guarded via
-``get_equity_bars_daily``). This wave does **not** promote any candidate.
+``get_equity_bars_daily``).
 """
 
 from __future__ import annotations
@@ -445,7 +452,7 @@ VolumeChange1d: FeatureDefinition = register(
         compute=_volume_change_1d,
         tags=("volume", "daily", "complete21"),
         intended_role="signal",
-        status="candidate",
+        status="approved",  # W52 promotion; version pin 1.0.0
         price_basis=None,
     )
 )
@@ -708,7 +715,9 @@ IsTradingDay: FeatureDefinition = register(
         compute=_is_trading_day,
         tags=("calendar", "trading_day", "complete21"),
         intended_role="utility",
-        status="candidate",
+        status="approved",  # W52 promotion; version pin 1.0.0
+        # Note: intended_role=utility → get_for_strategy requires allowed_roles
+        # override; not a default strategy signal.
         price_basis=None,
     )
 )

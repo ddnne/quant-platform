@@ -1,10 +1,53 @@
 # Phase 6.2 / 6.3 residual status
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
-**Live verified:** 2026-08-15 (JST) / **W51** 特徴量込み E2E（READY 未宣言） FINAL · COMPLETE segs **3478** · Dataset COMPLETE **21 / 26** · PARTIAL = **5** permanent DEFER only · **actionable_gap = 0** · empty COMPLETE **0** · **OTC 93** tip island held · permanent DEFER **5** / NO_DENSIFY **6** · densify coverage loops **ENDED** · Mass/READY/Phase7 **NO-GO/OFF** · raw **15892** (remote verify; W46 tip secondary baseline **15869** held) · FRESH `projgen-48993e3f05814d759576c01f65196041` · **CF-SoT** held — D1 = hot tip · R2 = history · COMPLETE = receipt-owned · floors W38 + W42 mb **2015-04-01** **not lowered** · coverage baseline **W47 FINAL held** · READY **not declared** · tip densify **SKIP** · densify **none** · **POST_PUSH_SHA** `8e64328f8f0513c2d9f1514256fec44be35ae020` · PRE_sha `ea4a151fd3f2a9d4d40c3a967ea2e04ad89a3938`
+**Live verified:** 2026-08-15 (JST) / **W52** approved/シグナル下地（READY 未宣言） FINAL · COMPLETE segs **3478** · Dataset COMPLETE **21 / 26** · PARTIAL = **5** permanent DEFER only · **actionable_gap = 0** · empty COMPLETE **0** · **OTC 93** tip island held · permanent DEFER **5** / NO_DENSIFY **6** · densify coverage loops **ENDED** · Mass/READY/Phase7 **NO-GO/OFF** · raw **15915** (remote verify; W46 tip secondary baseline **15869** held) · FRESH `projgen-97e38cc4670f4003901a2ca3b1b0ba37` · **CF-SoT** held — D1 = hot tip · R2 = history · COMPLETE = receipt-owned · floors W38 + W42 mb **2015-04-01** **not lowered** · coverage baseline **W47 FINAL held** · READY **not declared** · tip densify **SKIP** · densify **none** · promotion **2 approved** (cap max 2 · `volume_change_1d` · `is_trading_day` · v1.0.0) · signal E2E Mass **OFF** · **POST_PUSH_SHA** `POST_PUSH_SHA_PENDING` · PRE_sha `816fed4d98e8ad6dbec26f0152a36e013f574167`
 
-**Repo tip:** `8e64328f8f0513c2d9f1514256fec44be35ae020` — W51 特徴量込み E2E FINAL · COMPLETE **3478** / Dataset COMPLETE **21** / OTC **93** / empty COMPLETE **0** / **actionable_gap = 0** / Phase7 **OFF** / READY **未宣言** · FRESH `projgen-48993e3f05814d759576c01f65196041` · single_shot candidate features → R2 · **POST_PUSH_SHA** `8e64328f8f0513c2d9f1514256fec44be35ae020`
+**Repo tip:** `POST_PUSH_SHA_PENDING` — W52 approved/シグナル下地 FINAL · COMPLETE **3478** / Dataset COMPLETE **21** / OTC **93** / empty COMPLETE **0** / **actionable_gap = 0** / Phase7 **OFF** / READY **未宣言** · FRESH `projgen-97e38cc4670f4003901a2ca3b1b0ba37` · promotion **2/2 max** · signal **candidate_only** · **POST_PUSH_SHA** `POST_PUSH_SHA_PENDING`
 
+
+## approved/シグナル下地（READY 未宣言）
+
+**Phase name:** COMPLETE 21 approved/シグナル下地（宣言なし）  
+**Wave:** W52 / w0815as (T1–T12 · G5 FINAL merge + push)  
+**Promotion/signal close proof:** [`docs/proof/w0815as_w52_promotion_signal_close_20260815.md`](proof/w0815as_w52_promotion_signal_close_20260815.md)  
+**Ops / residual (G4):** [`.glm-logs/w0815as_g4_ops/`](../.glm-logs/w0815as_g4_ops/) · [`ops_snapshot.json`](../.glm-logs/w0815as_g4_ops/ops_snapshot.json) · [`switch_check.json`](../.glm-logs/w0815as_g4_ops/switch_check.json) · [`FINAL_metrics.json`](../.glm-logs/w0815as_g4_ops/FINAL_metrics.json)  
+**Promotion (G1):** `packages/research_runtime/features/complete21_min.py` · **2 approved** (cap max **2** · version pin **1.0.0**): `volume_change_1d` (`intended_role=signal`) · `is_trading_day` (`intended_role=utility`) · remain **8 candidate** · criteria [`docs/proof/complete21_feature_candidate_to_approved_criteria_20260815.md`](proof/complete21_feature_candidate_to_approved_criteria_20260815.md) · eval [`docs/proof/w0815as_w52_feature_promotion_eval_20260815.md`](proof/w0815as_w52_feature_promotion_eval_20260815.md)  
+**Signal E2E (G2):** `packages/research_runtime/features/minimal_signal.py` · signal `c21_topix_relative_sign@1.0.0` · `status=candidate` · **candidate_only=True** · Mass **OFF** · no orders · no READY · single_shot path writes under `…/signals/` · job `w0815as-g2-signal-e2e` · proof [`docs/proof/w0815as_w52_signal_e2e_20260815.md`](proof/w0815as_w52_signal_e2e_20260815.md)  
+**Smokes / FRESH (G3):** [`.glm-logs/w0815as_g3_ops/`](../.glm-logs/w0815as_g3_ops/) · T8 bars×short_ratio **pass** · T9 FRESH reclock `projgen-97e38cc4670f4003901a2ca3b1b0ba37` · T10 pytest **32**  
+**Catalog:** [`docs/proof/complete21_min_feature_catalog_20260815.md`](proof/complete21_min_feature_catalog_20260815.md)  
+**Unit tests (merge):** features + permanent_defer + single_shot + mass gate · **84 passed**  
+**Prior W51 feature E2E:** § 特徴量込み E2E held underneath · W50 usage E2E · W49 deepen · W48 groundwork · coverage baseline **W47 FINAL** held
+
+| gate | status |
+|------|--------|
+| Phase name | **COMPLETE 21 approved/シグナル下地（宣言なし）** |
+| Coverage baseline FINAL | **held** (W47 FINAL · Dataset COMPLETE **21/26** · segs **3478** · **actionable_gap=0**) |
+| READY | **未宣言 / not declared** |
+| Mass | **NO-GO / OFF** (signal E2E Mass **OFF**) |
+| Phase7 | **OFF** (foundation / fail-closed only) — **reconfirmed** this wave |
+| empty COMPLETE | **0** (remote verify G4 + G5 re-verify) |
+| Dataset COMPLETE | **21** (remote verify held; not invent 22) |
+| COMPLETE segs | **3478** (remote verify held · Δ0) |
+| OTC tip island | **93** held |
+| permanent DEFER | **5** held |
+| tip densify | **SKIP** (T12 · not primary this phase) |
+| densify | **none** |
+| push | **POST_PUSH_SHA** `POST_PUSH_SHA_PENDING` (G5 FINAL merge) · PRE_sha `816fed4d98e8ad6dbec26f0152a36e013f574167` |
+| Projection | **FRESH** `projgen-97e38cc4670f4003901a2ca3b1b0ba37` (peer G3 T9 ops_reeval_freshness; residual FRESH sync; publish apply **SKIP** no segment drift; fail-closed no force) |
+| Promotion | **2 approved** (cap max **2**) · `volume_change_1d` · `is_trading_day` · v**1.0.0** · remain **8 candidate** · no READY claim |
+| Signal E2E | Mass **OFF** · `c21_topix_relative_sign@1.0.0` · **candidate_only** · no order execution · R2 `…/signals/` |
+| Unit tests | **84 passed** (complete21 min · permanent_defer · single_shot · mass gate) |
+| raw_retention | **15915** (remote count at G4; not coverage primary; W46 tip secondary **15869** held) |
+
+**Primary this phase:** candidate→**approved** promotion wave (max **2**) + minimal tip **signal** groundwork on held COMPLETE **21** / DEFER **5** — **without** READY / Mass / Phase7 declaration.  
+**Not:** densify · tip primary · invent COMPLETE 22 · Phase7 ON · READY GO · mass ON · promote >2 · treat signal as READY.
+
+### Explicit non-declarations (held)
+
+- **READY** — not declared (approved/シグナル下地 only; no production READY GO)
+- **Mass Autonomous Research** — **NO-GO / OFF** (signal E2E Mass OFF)
+- **Phase7** — **OFF** (no `PHASE7_*` / `MASS_RESEARCH_ENABLE` arming switch)
 
 ## 特徴量込み E2E（READY 未宣言）
 

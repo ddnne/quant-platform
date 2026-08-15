@@ -1,10 +1,11 @@
 # COMPLETE 21 — minimal feature catalog (2026-08-15)
 
-**Wave:** W51 / w0815ar_g2 · T5–T7 (extends W50 / w0815aq_g2 · W49 / w0815ap_g2)  
+**Wave:** W52 / w0815as_g1 · T1–T4 (extends W51 / w0815ar_g2 · W50 / w0815aq_g2 · W49 / w0815ap_g2)  
 **Phase:** COMPLETE 21 **usage readiness** (利用準備) — feature catalog + min implementations + quality gates  
 **Mass / READY / Phase7:** **not** declared · **not** enabled · densify **not** run · push **not** this task  
-**Promotion:** **none** this wave — all complete21 min features remain `candidate`  
-**Candidate → approved criteria (draft):** [`complete21_feature_candidate_to_approved_criteria_20260815.md`](complete21_feature_candidate_to_approved_criteria_20260815.md)
+**Promotion (W52):** **2** approved — `is_trading_day` · `volume_change_1d` (version pin **1.0.0**); remaining **8** stay `candidate`  
+**Promotion eval proof:** [`w0815as_w52_feature_promotion_eval_20260815.md`](w0815as_w52_feature_promotion_eval_20260815.md)  
+**Candidate → approved criteria:** [`complete21_feature_candidate_to_approved_criteria_20260815.md`](complete21_feature_candidate_to_approved_criteria_20260815.md)
 
 **Sources:**
 
@@ -85,7 +86,7 @@ None of these declare READY.
 | `return_1d_c21` | `equities_bars_daily` | same formula; complete21 path + `require_feature_datasets` | **implemented** (complete21 min, **candidate**) · W51 export · does **not** replace v0 |
 | `momentum_n` | `equities_bars_daily` | N-session cumulative return | implemented (v0, approved) |
 | `volatility_n` | `equities_bars_daily` | sample stdev of 1d returns · √252 | implemented (v0, approved) |
-| `volume_change_1d` | `equities_bars_daily` | \((V_t - V_{t-1}) / V_{t-1}\) | **implemented** (complete21 min, candidate) |
+| `volume_change_1d` | `equities_bars_daily` | \((V_t - V_{t-1}) / V_{t-1}\) | **implemented** (complete21 min, **approved** · v1.0.0 · W52) |
 
 **Not used:** `equities_bars_daily_am` (DEFER).
 
@@ -118,7 +119,7 @@ None of these declare READY.
 | feature_id | inputs | formula (sketch) | status |
 |------------|--------|------------------|--------|
 | (future) investor_flow_change | `equities_investor_types` | section × pubdate flows | catalog only |
-| `is_trading_day` | `markets_calendar` | 1.0 if `holiday_division=="1"` for date (default = as_of day) | **implemented** (complete21 min, candidate) |
+| `is_trading_day` | `markets_calendar` | 1.0 if `holiday_division=="1"` for date (default = as_of day) | **implemented** (complete21 min, **approved** · v1.0.0 · W52 · utility) |
 | `repo_rate_level` | `jsda_tokyo_repo_rates` | latest PIT-visible `rate` (optional tenor / rate_type) | **implemented** (complete21 min, candidate) |
 | (future) corp_bond_print_flag | `jsda_corporate_bond_transactions` | activity flag | catalog only |
 
@@ -137,28 +138,34 @@ Registered under `packages/research_runtime/features/complete21_min.py` (importe
 
 | id | version | intended_role | status | required datasets | wave |
 |----|---------|---------------|--------|-------------------|------|
-| `volume_change_1d` | 1.0.0 | signal | candidate | `equities_bars_daily` | W49 |
+| `volume_change_1d` | **1.0.0** (pin) | signal | **approved** | `equities_bars_daily` | W49 → **W52 promote** |
 | `topix_relative_1d` | 1.0.0 | signal | candidate | `equities_bars_daily`, `indices_bars_daily_topix` | W49 |
 | `disclosure_flag_fins` | 1.0.0 | signal | candidate | `fins_summary` | W49 |
 | `margin_interest_change_1d` | 1.0.0 | signal | candidate | `markets_margin_interest` | W50 |
 | `short_ratio_level` | 1.0.0 | signal | candidate | `markets_short_ratio` | W50 |
-| `is_trading_day` | 1.0.0 | utility | candidate | `markets_calendar` | W50 |
+| `is_trading_day` | **1.0.0** (pin) | utility | **approved** | `markets_calendar` | W50 → **W52 promote** |
 | `repo_rate_level` | 1.0.0 | state | candidate | `jsda_tokyo_repo_rates` | W50 |
 | `return_1d_c21` | 1.0.0 | signal | candidate | `equities_bars_daily` | **W51** |
 | `margin_alert_flag` | 1.0.0 | signal | candidate | `markets_margin_alert` | **W51** |
 | `futures_activity_proxy` | 1.0.0 | state | candidate | `derivatives_bars_daily_futures` | **W51** |
 
-**Count:** **10** complete21 min candidates (+ 3 approved v0 bars features outside this module).
+**Count:** **10** complete21 min features (**2** approved · **8** candidate) (+ 3 approved v0 bars features outside this module).
 
 Each compute path calls `require_feature_datasets(...)` → permanent DEFER reject **before** PIT reads.
 
 Pipeline guard: `FeatureContext.get_jquants_records`, `get_equity_master`, `get_market_calendar`, `get_equity_bars_daily`, and `get_jsda_repo_rates` refuse permanent DEFER ids via `require_history_eligible` / fixed reject for master.
 
-**W51 notes:**
+**W52 promotion notes:**
 
-* `return_1d_c21` is a **candidate export** of the 1d simple-return formula on the complete21 path (`require_feature_datasets` + tags). It does **not** replace approved v0 `return_1d` and is **not** promoted this wave.
+* Promoted (max 2): `is_trading_day` · `volume_change_1d` — version pin **1.0.0**; proof [`w0815as_w52_feature_promotion_eval_20260815.md`](w0815as_w52_feature_promotion_eval_20260815.md).
+* `is_trading_day` remains `intended_role=utility` — `get_for_strategy` requires explicit `allowed_roles` override (not a default strategy signal).
+* `volume_change_1d` is `intended_role=signal` + `approved` → admitted by default `get_for_strategy`.
+* Consumers must pin `(id, version="1.0.0")`; major bump if meaning changes.
+
+**W51 notes (held):**
+
+* `return_1d_c21` is a **candidate export** of the 1d simple-return formula on the complete21 path (`require_feature_datasets` + tags). It does **not** replace approved v0 `return_1d` and was **not** promoted (W52).
 * Test strengthen (T5): missing required inputs, `as_of` required, PIT `available_at` gates, DEFER poison on all declared dataset groups.
-* Promotion criteria draft: [`complete21_feature_candidate_to_approved_criteria_20260815.md`](complete21_feature_candidate_to_approved_criteria_20260815.md) — **no** status flip this wave.
 
 ---
 
@@ -171,9 +178,10 @@ This document does **not**:
 * enable **Phase7**
 * invent Dataset COMPLETE **22**
 * re-open densify / tip densify as primary
-* promote `candidate` features to strategy-default `approved` consumption
+* promote more than the W52 set of **2** features (remaining 8 stay candidate)
 * merge `return_1d_c21` into approved v0 `return_1d`
 * treat local SQLite as CF SoT
+* declare Mass / READY / Phase7 from feature promotion alone
 
 Live residual remains: Mass **NO-GO** · READY **not** declared · Phase7 **OFF**.
 

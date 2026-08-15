@@ -57,6 +57,14 @@ from .complete21_min import (
     MarginAlertFlag,
     FuturesActivityProxy,
 )
+from .minimal_signal import (
+    SIGNAL_ID as MINIMAL_SIGNAL_ID,
+    SIGNAL_VERSION as MINIMAL_SIGNAL_VERSION,
+    CANDIDATE_ONLY as MINIMAL_SIGNAL_CANDIDATE_ONLY,
+    compute_signal_from_feature_observations,
+    compute_topix_relative_sign_signal,
+    signal_definition as minimal_signal_definition,
+)
 from .dataset_guard import (
     COMPLETE_21_DATASETS,
     PermanentDeferHistoryError,
@@ -97,6 +105,13 @@ __all__ = [
     "Return1dC21",
     "MarginAlertFlag",
     "FuturesActivityProxy",
+    # minimal signal (W52 candidate-only; no mass / READY / orders)
+    "MINIMAL_SIGNAL_ID",
+    "MINIMAL_SIGNAL_VERSION",
+    "MINIMAL_SIGNAL_CANDIDATE_ONLY",
+    "compute_signal_from_feature_observations",
+    "compute_topix_relative_sign_signal",
+    "minimal_signal_definition",
     # dataset guards
     "COMPLETE_21_DATASETS",
     "PermanentDeferHistoryError",

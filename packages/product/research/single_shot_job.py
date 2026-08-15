@@ -1,17 +1,22 @@
 """Single-shot research job (Mass OFF / Phase7 OFF / READY not declared).
 
 W49 skeleton (declare + path design) + W50 minimal CF-backed execute +
-W51 COMPLETE-21 **candidate** feature compute on tip FeatureContext:
+W51 COMPLETE-21 **candidate** feature compute on tip FeatureContext +
+W52 minimal **candidate-only** signal write (T5–T7):
 
 * **Inputs:** COMPLETE 21 dataset ids only (permanent DEFER excluded via
   ``data_contracts.permanent_defer``).
 * **Read:** CF D1 ``quant-ingest`` hot tip extract (bounded; not full-history SoT).
 * **Features:** tip-backed :class:`features.runtime.FeatureContext` (not local
   SQLite SoT) computing COMPLETE-21 min **candidate** features.
+* **Signal (W52):** one minimal tip signal from strongest candidate features
+  (``sign(topix_relative_1d)`` + ``is_trading_day`` filter + optional volume
+  gate). Written under ``…/signals/``. ``candidate_only=True`` until promote.
 * **Write:** R2 ``quant-structured`` under ``research/single_shot/job={id}/…``.
   Local FS is **not** Source of Truth (optional dry-run stages payloads only).
 * **Not** connected to ``agents.mass_research`` / mass research loop.
 * Does **not** set READY / mint readiness / arm Phase7.
+* Does **not** emit orders or call paper execution.
 
 This module does not open market HTTP, densify, or publish READY snapshots.
 """
@@ -34,6 +39,16 @@ from data_contracts.permanent_defer import (
     PERMANENT_DEFER_DATASETS,
     PermanentDeferHistoryError,
     reject_permanent_defer_for_history,
+)
+from features.minimal_signal import (
+    CANDIDATE_ONLY as SIGNAL_CANDIDATE_ONLY,
+    DEFAULT_FEATURE_IDS as DEFAULT_SIGNAL_FEATURE_IDS,
+    DEFAULT_SIGNAL_DATASETS,
+    DEFAULT_VOLUME_CHANGE_ABS_MIN,
+    SIGNAL_ID as DEFAULT_SIGNAL_ID,
+    SIGNAL_VERSION as DEFAULT_SIGNAL_VERSION,
+    compute_signal_from_feature_observations,
+    signal_definition,
 )
 from features.registry import get as get_feature
 from features.runtime import FEATURES_RUNTIME_VERSION, FeatureContext
@@ -58,8 +73,9 @@ DEFAULT_TIP_SAMPLE_LIMIT: int = 20
 DEFAULT_FEATURE_ROW_LIMIT: int = 400
 DEFAULT_FEATURE_CODE_LIMIT: int = 5
 
-# COMPLETE-21 min candidate features used by the tip feature path (W51).
-# Status remains ``candidate`` — no READY / strategy-default claim.
+# COMPLETE-21 min features used by the tip feature path (W51 default set).
+# W52: volume_change_1d + is_trading_day are registry-approved (v1.0.0 pin);
+# topix_relative_1d remains candidate. No READY / Mass / Phase7 claim.
 DEFAULT_CANDIDATE_FEATURES: tuple[str, ...] = (
     "volume_change_1d",
     "is_trading_day",
@@ -72,6 +88,10 @@ DEFAULT_FEATURE_DATASETS: tuple[str, ...] = (
     "markets_calendar",
     "indices_bars_daily_topix",
 )
+
+# W52 minimal signal: candidate_only while primary topix_relative_1d is candidate.
+# Filter/gate prefer G1-approved is_trading_day + volume_change_1d.
+# Signal id is fixed in features.minimal_signal; no order execution path.
 
 # ---------------------------------------------------------------------------
 # Freeze constants (T9: tests assert these remain closed — do not arm)
@@ -159,6 +179,7 @@ class SingleShotJobSpec:
     input_plan_r2_key: str
     result_r2_key_template: str
     features_r2_key_template: str = ""
+    signals_r2_key_template: str = ""
     mass_research: str = MASS_RESEARCH_STATUS
     phase7: str = PHASE7_STATUS
     ready_declared: bool = READY_DECLARED
@@ -179,12 +200,14 @@ class SingleShotJobSpec:
                 "input_plan_r2_key": self.input_plan_r2_key,
                 "result_r2_key_template": self.result_r2_key_template,
                 "features_r2_key_template": self.features_r2_key_template,
+                "signals_r2_key_template": self.signals_r2_key_template,
                 "local_sot": self.local_sot,
             },
             "mass_research": self.mass_research,
             "phase7": self.phase7,
             "ready_declared": self.ready_declared,
             "ready_publication": READY_PUBLICATION_STATUS,
+            "order_execution": False,
         }
 
 
@@ -207,6 +230,7 @@ def design_artifact_paths(job_id: str) -> dict[str, Any]:
         "input_plan_r2_key": f"{prefix}/input_plan.json",
         "result_r2_key_template": f"{prefix}/result/{{content_hash}}.json",
         "features_r2_key_template": f"{prefix}/features/{{content_hash}}.json",
+        "signals_r2_key_template": f"{prefix}/signals/{{content_hash}}.json",
         "local_sot": False,
         "history_input_patterns": {
             "structured_jsonl": "structured/jsonl/{dataset}/dt=YYYY-MM-DD/{run_id}.jsonl",
@@ -299,6 +323,7 @@ def build_single_shot_job_spec(
         input_plan_r2_key=str(paths["input_plan_r2_key"]),
         result_r2_key_template=str(paths["result_r2_key_template"]),
         features_r2_key_template=str(paths["features_r2_key_template"]),
+        signals_r2_key_template=str(paths["signals_r2_key_template"]),
         mass_research=MASS_RESEARCH_STATUS,
         phase7=PHASE7_STATUS,
         ready_declared=READY_DECLARED,
@@ -319,9 +344,12 @@ def freeze_status() -> dict[str, Any]:
         "permanent_defer_count": len(PERMANENT_DEFER_DATASETS),
         "connected_to_mass_research_loop": False,
         "sets_ready": False,
+        "order_execution": False,
         "local_sot": False,
         "artifact_bucket": RESEARCH_ARTIFACT_BUCKET,
         "artifact_prefix": RESEARCH_ARTIFACT_PREFIX,
+        "default_signal_id": DEFAULT_SIGNAL_ID,
+        "signal_candidate_only": SIGNAL_CANDIDATE_ONLY,
     }
 
 
@@ -349,6 +377,8 @@ def assert_mass_and_phase7_off() -> Mapping[str, Any]:
         raise RuntimeError("single-shot skeleton must not connect to mass loop")
     if status["sets_ready"] is not False:
         raise RuntimeError("single-shot skeleton must not set READY")
+    if status.get("order_execution") is not False:
+        raise RuntimeError("single-shot skeleton must not execute orders")
     return status
 
 
@@ -375,6 +405,8 @@ class SingleShotExecution:
     r2_puts: tuple[dict[str, Any], ...]
     features_r2_key: str | None = None
     feature_result: Mapping[str, Any] | None = None
+    signals_r2_key: str | None = None
+    signal_result: Mapping[str, Any] | None = None
     mass_research: str = MASS_RESEARCH_STATUS
     phase7: str = PHASE7_STATUS
     ready_declared: bool = READY_DECLARED
@@ -394,6 +426,10 @@ class SingleShotExecution:
             "feature_result": (
                 dict(self.feature_result) if self.feature_result is not None else None
             ),
+            "signals_r2_key": self.signals_r2_key,
+            "signal_result": (
+                dict(self.signal_result) if self.signal_result is not None else None
+            ),
             "tip_extracts": dict(self.tip_extracts),
             "r2_puts": list(self.r2_puts),
             "spec": self.spec.to_dict(),
@@ -401,6 +437,7 @@ class SingleShotExecution:
             "phase7": self.phase7,
             "ready_declared": self.ready_declared,
             "ready_publication": READY_PUBLICATION_STATUS,
+            "order_execution": False,
             "local_sot": self.local_sot,
         }
 
@@ -1025,6 +1062,7 @@ def _augment_feature_output(
     as_of: str,
     out: FeatureOutput,
     *,
+    status: str | None = None,
     extra_meta: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     md = dict(out.metadata)
@@ -1035,7 +1073,7 @@ def _augment_feature_output(
             "version": version,
             "as_of": as_of,
             "features_runtime_version": FEATURES_RUNTIME_VERSION,
-            "status": "candidate",
+            "status": status if status is not None else get_feature(feature_id).status,
             "plane": "D1_hot_tip",
             "local_sot": False,
             "ready_declared": READY_DECLARED,
@@ -1059,10 +1097,11 @@ def compute_tip_candidate_features(
     codes: Sequence[str] | None = None,
     dates: Sequence[str] | None = None,
 ) -> dict[str, Any]:
-    """Compute COMPLETE-21 **candidate** features on a tip FeatureContext.
+    """Compute COMPLETE-21 min features on a tip FeatureContext.
 
     Does not use local SQLite. Returns per-feature values + row/null counts
-    for the research artifact / manifest.
+    for the research artifact / manifest. Per-feature ``status`` mirrors the
+    registry (approved or candidate); overall path is still not READY.
     """
     fids = tuple(feature_ids) if feature_ids else DEFAULT_CANDIDATE_FEATURES
     as_of_s = str(as_of).strip()
@@ -1103,6 +1142,7 @@ def compute_tip_candidate_features(
     for fid in fids:
         feat = get_feature(fid)
         version = str(feat.version)
+        reg_status = feat.status
         values: list[Any] = []
         feature_obs: list[dict[str, Any]] = []
 
@@ -1114,7 +1154,7 @@ def compute_tip_candidate_features(
                     {
                         "feature_id": fid,
                         "version": version,
-                        "status": "candidate",
+                        "status": reg_status,
                         "row_counts": {
                             "computed": 0,
                             "non_null": 0,
@@ -1138,7 +1178,12 @@ def compute_tip_candidate_features(
                         "expected FeatureOutput"
                     )
                 rec = _augment_feature_output(
-                    fid, version, as_of_s, out, extra_meta={"code": code}
+                    fid,
+                    version,
+                    as_of_s,
+                    out,
+                    status=reg_status,
+                    extra_meta={"code": code},
                 )
                 values.append(rec["value"])
                 feature_obs.append(rec)
@@ -1157,7 +1202,12 @@ def compute_tip_candidate_features(
                         "expected FeatureOutput"
                     )
                 rec = _augment_feature_output(
-                    fid, version, as_of_s, out, extra_meta={"date": d}
+                    fid,
+                    version,
+                    as_of_s,
+                    out,
+                    status=reg_status,
+                    extra_meta={"date": d},
                 )
                 values.append(rec["value"])
                 feature_obs.append(rec)
@@ -1168,7 +1218,7 @@ def compute_tip_candidate_features(
                 {
                     "feature_id": fid,
                     "version": version,
-                    "status": "candidate",
+                    "status": reg_status,
                     "row_counts": {"computed": 0, "non_null": 0, "null": 0},
                     "null_counts": 0,
                     "reason": "short_ratio_level requires section; not in default tip path",
@@ -1186,7 +1236,9 @@ def compute_tip_candidate_features(
                     f"feature {fid!r} returned {type(out).__name__}; "
                     "expected FeatureOutput"
                 )
-            rec = _augment_feature_output(fid, version, as_of_s, out)
+            rec = _augment_feature_output(
+                fid, version, as_of_s, out, status=reg_status
+            )
             values.append(rec["value"])
             feature_obs.append(rec)
             observations.append(rec)
@@ -1197,7 +1249,7 @@ def compute_tip_candidate_features(
             {
                 "feature_id": fid,
                 "version": version,
-                "status": "candidate",
+                "status": reg_status,
                 "row_counts": {
                     "computed": len(values),
                     "non_null": non_null,
@@ -1218,6 +1270,14 @@ def compute_tip_candidate_features(
             }
         )
 
+    statuses = {b.get("status") for b in feature_blocks}
+    if statuses == {"approved"}:
+        path_status = "approved"
+    elif "approved" in statuses and "candidate" in statuses:
+        path_status = "mixed"
+    else:
+        path_status = "candidate"
+
     return {
         "version": "single-shot-features/v1",
         "as_of": as_of_s,
@@ -1232,10 +1292,10 @@ def compute_tip_candidate_features(
         "ready_declared": READY_DECLARED,
         "ready_publication": READY_PUBLICATION_STATUS,
         "local_sot": False,
-        "status": "candidate",
+        "status": path_status,
         "note": (
-            "COMPLETE-21 candidate features on tip FeatureContext (D1 hot tip). "
-            "Not READY. Not mass research."
+            "COMPLETE-21 min features on tip FeatureContext (D1 hot tip). "
+            "Per-feature status from registry. Not READY. Not mass research."
         ),
     }
 
@@ -1381,10 +1441,12 @@ def execute_single_shot_job(
     dry_run: bool = False,
     sample_limit: int = DEFAULT_TIP_SAMPLE_LIMIT,
     compute_features: bool = False,
+    compute_signals: bool = False,
     feature_ids: Sequence[str] | None = None,
     feature_codes: Sequence[str] | None = None,
     feature_as_of: str | None = None,
     feature_row_limit: int = DEFAULT_FEATURE_ROW_LIMIT,
+    volume_change_abs_min: float | None = DEFAULT_VOLUME_CHANGE_ABS_MIN,
     d1_execute: D1ExecuteFn | None = None,
     r2_put: R2PutFn | None = None,
     staging_dir: str | Path | None = None,
@@ -1403,12 +1465,22 @@ def execute_single_shot_job(
         When True, also extract tip payloads, build a tip FeatureContext
         (not local SQLite), compute COMPLETE-21 **candidate** features, and
         write a features artifact + feature stats on the manifest.
+    compute_signals:
+        When True, also compute the W52 minimal tip signal from candidate
+        feature observations and write a signals artifact under
+        ``research/single_shot/job={id}/signals/``. Implies feature compute
+        for the signal's required feature ids. ``candidate_only=True``.
+        Does **not** mint READY or emit orders.
     d1_execute / r2_put:
         Injectable callables for unit tests. Defaults use wrangler remote.
 
-    Never connects to mass research, never sets READY, never arms Phase7.
+    Never connects to mass research, never sets READY, never arms Phase7,
+    never executes orders.
     """
     assert_mass_and_phase7_off()
+    # Signal path always needs features; never opens order/mass paths.
+    if compute_signals:
+        compute_features = True
     spec = build_single_shot_job_spec(
         dataset_ids=dataset_ids,
         period_start=period_start,
@@ -1427,10 +1499,21 @@ def execute_single_shot_job(
 
     feature_payload: dict[str, Any] | None = None
     tip_feature_extract: dict[str, Any] | None = None
+    signal_payload: dict[str, Any] | None = None
     if compute_features:
         # Ensure feature-required datasets are present when caller only passed
         # a summary subset; still COMPLETE-21 only / DEFER fail-closed.
-        fids = tuple(feature_ids) if feature_ids else DEFAULT_CANDIDATE_FEATURES
+        if feature_ids is not None:
+            fids = tuple(feature_ids)
+        elif compute_signals:
+            fids = DEFAULT_SIGNAL_FEATURE_IDS
+        else:
+            fids = DEFAULT_CANDIDATE_FEATURES
+        # Signal always needs its three feature legs.
+        if compute_signals:
+            for required_fid in DEFAULT_SIGNAL_FEATURE_IDS:
+                if required_fid not in fids:
+                    fids = fids + (required_fid,)
         needed: list[str] = list(spec.dataset_ids)
         # Map feature → required tip datasets (min surface for default 3).
         if "volume_change_1d" in fids or "topix_relative_1d" in fids:
@@ -1442,6 +1525,10 @@ def execute_single_shot_job(
             needed.append("indices_bars_daily_topix")
         if "margin_interest_change_1d" in fids and "markets_margin_interest" not in needed:
             needed.append("markets_margin_interest")
+        if compute_signals:
+            for ds in DEFAULT_SIGNAL_DATASETS:
+                if ds not in needed:
+                    needed.append(ds)
         # Re-validate expanded set (DEFER still fail-closed).
         feature_datasets = require_complete_21_only(
             needed, context="single-shot feature datasets"
@@ -1477,6 +1564,26 @@ def execute_single_shot_job(
                 "selected_codes": tip_feature_extract.get("selected_codes"),
             },
         }
+        if compute_signals:
+            # Pure join over tip feature observations — no mass, no READY, no orders.
+            signal_core = compute_signal_from_feature_observations(
+                feature_payload.get("observations") or [],
+                as_of=as_of,
+                volume_change_abs_min=volume_change_abs_min,
+                codes=feature_codes or tip_feature_extract.get("selected_codes"),
+            )
+            signal_payload = {
+                **signal_core,
+                "job_id": spec.job_id,
+                "definition": signal_definition(),
+                "dataset_ids": list(feature_datasets),
+                "period_start": spec.period_start,
+                "period_end": spec.period_end,
+                "feature_tip_input_row_counts": feature_payload.get(
+                    "tip_input_row_counts"
+                ),
+                "tip_feature_extract": feature_payload.get("tip_feature_extract"),
+            }
 
     executed_at = _now_utc()
     # Hash identity excludes wall-clock so re-runs with same tip facts are stable
@@ -1502,10 +1609,12 @@ def execute_single_shot_job(
             for ds, body in (tip.get("extracts") or {}).items()
         },
         "compute_features": bool(compute_features),
+        "compute_signals": bool(compute_signals),
         "mass_research": MASS_RESEARCH_STATUS,
         "phase7": PHASE7_STATUS,
         "ready_declared": READY_DECLARED,
         "ready_publication": READY_PUBLICATION_STATUS,
+        "order_execution": False,
         "local_sot": False,
     }
     if feature_payload is not None:
@@ -1521,12 +1630,26 @@ def execute_single_shot_job(
         ]
         result_identity["feature_as_of"] = feature_payload.get("as_of")
         result_identity["feature_ids"] = list(feature_payload.get("feature_ids") or [])
+    if signal_payload is not None:
+        result_identity["signal_summary"] = {
+            "signal_id": signal_payload.get("signal_id"),
+            "signal_version": signal_payload.get("signal_version"),
+            "status": signal_payload.get("status"),
+            "candidate_only": signal_payload.get("candidate_only"),
+            "row_counts": signal_payload.get("row_counts"),
+            "null_counts": signal_payload.get("null_counts"),
+        }
 
     ch = content_hash_payload(result_identity)
     result_key = spec.result_r2_key_template.format(content_hash=ch.replace(":", "_"))
     features_key: str | None = None
     if feature_payload is not None and spec.features_r2_key_template:
         features_key = spec.features_r2_key_template.format(
+            content_hash=ch.replace(":", "_")
+        )
+    signals_key: str | None = None
+    if signal_payload is not None and spec.signals_r2_key_template:
+        signals_key = spec.signals_r2_key_template.format(
             content_hash=ch.replace(":", "_")
         )
 
@@ -1540,6 +1663,7 @@ def execute_single_shot_job(
             "manifest_r2_key": spec.manifest_r2_key,
             "input_plan_r2_key": spec.input_plan_r2_key,
             "features_r2_key": features_key,
+            "signals_r2_key": signals_key,
         },
         "sample_rows": {
             ds: body.get("sample_rows") or []
@@ -1552,6 +1676,15 @@ def execute_single_shot_job(
         result_body["feature_tip_input_row_counts"] = feature_payload.get(
             "tip_input_row_counts"
         )
+    if signal_payload is not None:
+        result_body["signal"] = {
+            "signal_id": signal_payload.get("signal_id"),
+            "version": signal_payload.get("signal_version"),
+            "status": signal_payload.get("status"),
+            "candidate_only": signal_payload.get("candidate_only"),
+            "row_counts": signal_payload.get("row_counts"),
+            "sample_values": signal_payload.get("sample_values"),
+        }
 
     input_plan = {
         "version": "single-shot-input-plan/v1",
@@ -1565,9 +1698,11 @@ def execute_single_shot_job(
             "table": "jquants_records",
         },
         "compute_features": bool(compute_features),
+        "compute_signals": bool(compute_signals),
         "feature_ids": list(feature_payload.get("feature_ids") or [])
         if feature_payload
         else [],
+        "signal_id": signal_payload.get("signal_id") if signal_payload else None,
         "history_sot_note": (
             "Full history SoT is R2 quant-structured JSONL/archive; "
             "this job only reads D1 hot tip for a bounded proof pass."
@@ -1575,6 +1710,7 @@ def execute_single_shot_job(
         "mass_research": MASS_RESEARCH_STATUS,
         "phase7": PHASE7_STATUS,
         "ready_declared": READY_DECLARED,
+        "order_execution": False,
     }
 
     manifest: dict[str, Any] = {
@@ -1587,6 +1723,7 @@ def execute_single_shot_job(
             "input_plan": spec.input_plan_r2_key,
             "result": result_key,
             **({"features": features_key} if features_key else {}),
+            **({"signals": signals_key} if signals_key else {}),
         },
         "content_hash": ch,
         "dataset_ids": list(spec.dataset_ids),
@@ -1597,12 +1734,14 @@ def execute_single_shot_job(
             for ds, body in (tip.get("extracts") or {}).items()
         },
         "compute_features": bool(compute_features),
+        "compute_signals": bool(compute_signals),
         "executed_at_utc": executed_at,
         "dry_run": bool(dry_run),
         "mass_research": MASS_RESEARCH_STATUS,
         "phase7": PHASE7_STATUS,
         "ready_declared": READY_DECLARED,
         "ready_publication": READY_PUBLICATION_STATUS,
+        "order_execution": False,
         "local_sot": False,
         "connected_to_mass_research_loop": False,
     }
@@ -1626,6 +1765,18 @@ def execute_single_shot_job(
             manifest["feature_raw_tip_counts"] = tip_feature_extract.get(
                 "raw_tip_counts"
             )
+    if signal_payload is not None:
+        manifest["signal"] = {
+            "signal_id": signal_payload.get("signal_id"),
+            "version": signal_payload.get("signal_version"),
+            "status": signal_payload.get("status"),
+            "candidate_only": signal_payload.get("candidate_only"),
+            "row_counts": signal_payload.get("row_counts"),
+            "null_counts": signal_payload.get("null_counts"),
+            "feature_ids": signal_payload.get("feature_ids"),
+            "as_of": signal_payload.get("as_of"),
+            "order_execution": False,
+        }
 
     features_body: dict[str, Any] | None = None
     if feature_payload is not None and features_key is not None:
@@ -1635,6 +1786,22 @@ def execute_single_shot_job(
             "executed_at_utc": executed_at,
             "artifact": {
                 "bucket": spec.artifact_bucket,
+                "features_r2_key": features_key,
+                "result_r2_key": result_key,
+                "manifest_r2_key": spec.manifest_r2_key,
+                "signals_r2_key": signals_key,
+            },
+        }
+
+    signals_body: dict[str, Any] | None = None
+    if signal_payload is not None and signals_key is not None:
+        signals_body = {
+            **signal_payload,
+            "content_hash": ch,
+            "executed_at_utc": executed_at,
+            "artifact": {
+                "bucket": spec.artifact_bucket,
+                "signals_r2_key": signals_key,
                 "features_r2_key": features_key,
                 "result_r2_key": result_key,
                 "manifest_r2_key": spec.manifest_r2_key,
@@ -1665,6 +1832,8 @@ def execute_single_shot_job(
     puts.append(_put(result_key, result_body))
     if features_body is not None and features_key is not None:
         puts.append(_put(features_key, features_body))
+    if signals_body is not None and signals_key is not None:
+        puts.append(_put(signals_key, signals_body))
     puts.append(_put(spec.manifest_r2_key, manifest))
 
     return SingleShotExecution(
@@ -1679,6 +1848,8 @@ def execute_single_shot_job(
         r2_puts=tuple(puts),
         features_r2_key=features_key,
         feature_result=feature_payload,
+        signals_r2_key=signals_key,
+        signal_result=signal_payload,
         mass_research=MASS_RESEARCH_STATUS,
         phase7=PHASE7_STATUS,
         ready_declared=READY_DECLARED,
@@ -1694,7 +1865,12 @@ __all__ = [
     "DEFAULT_FEATURE_CODE_LIMIT",
     "DEFAULT_FEATURE_DATASETS",
     "DEFAULT_FEATURE_ROW_LIMIT",
+    "DEFAULT_SIGNAL_DATASETS",
+    "DEFAULT_SIGNAL_FEATURE_IDS",
+    "DEFAULT_SIGNAL_ID",
+    "DEFAULT_SIGNAL_VERSION",
     "DEFAULT_TIP_SAMPLE_LIMIT",
+    "DEFAULT_VOLUME_CHANGE_ABS_MIN",
     "MASS_RESEARCH_ENV_ARMING_SWITCHES",
     "MASS_RESEARCH_STATUS",
     "PHASE7_ENV_ARMING_SWITCHES",
@@ -1703,6 +1879,7 @@ __all__ = [
     "READY_PUBLICATION_STATUS",
     "RESEARCH_ARTIFACT_BUCKET",
     "RESEARCH_ARTIFACT_PREFIX",
+    "SIGNAL_CANDIDATE_ONLY",
     "PermanentDeferHistoryError",
     "SingleShotExecution",
     "SingleShotJobError",
@@ -1721,4 +1898,5 @@ __all__ = [
     "freeze_status",
     "head_r2_object",
     "require_complete_21_only",
+    "signal_definition",
 ]
