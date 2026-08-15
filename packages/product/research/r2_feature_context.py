@@ -81,6 +81,95 @@ DEFAULT_R2_ROW_LIMIT_PER_DATASET: int = 50_000
 # S1 minimal set for topix-relative signal long eval.
 S1_SIGNAL_HISTORY_DATASETS: tuple[str, ...] = DEFAULT_FEATURE_DATASETS
 
+# Multi-signal (W58/W60): S1/S2/S3 legs — bars/topix/calendar + fins (+ margin optional).
+MULTI_SIGNAL_HISTORY_DATASETS: tuple[str, ...] = (
+    "equities_bars_daily",
+    "markets_calendar",
+    "indices_bars_daily_topix",
+    "fins_summary",
+    "markets_margin_interest",
+)
+
+# W60 bridge expansion: high-value COMPLETE datasets beyond S1 core
+# (approved features exist for each). DEFER 5 remain hard-rejected.
+BRIDGE_EXPAND_DATASETS: tuple[str, ...] = (
+    "markets_margin_interest",
+    "markets_short_ratio",
+    "fins_summary",
+    "markets_margin_alert",
+)
+
+# ---------------------------------------------------------------------------
+# available_at research repair policy (explicit · no silent look-ahead)
+# ---------------------------------------------------------------------------
+#
+# Rule (held): never invent future visibility. PIT gate is always
+# ``available_at <= as_of``. Null available_at rows are dropped (hard).
+#
+# Research-only repairs (disposable mirror, never rewrite R2 SoT):
+#
+# * calendar_ingest_pollution — archive calendar envelopes sometimes carry
+#   ingest wall-clock as available_at (post-dating event day by years).
+#   Repair: set available_at = event_time when envelope available_at day
+#   > event day. Documented in W59 calendar_pit_repair.
+# * missing_available_at_drop — if available_at is null/empty after parse,
+#   drop the row (do **not** backfill from as_of or "now").
+# * post_date_preserve — when available_at is a real post-event disclosure
+#   (e.g. fins DiscDate/time, margin publish lag), keep as-is so PIT
+#   correctly hides the row until as_of reaches available_at.
+#
+# Forbidden: setting available_at to evaluation time, wall-clock now, or
+# any future-of-event instant that is not evidenced on the envelope.
+
+AVAILABLE_AT_REPAIR_POLICY: dict[str, Any] = {
+    "version": "r2-available-at-repair/v1",
+    "wave": "W60 / w0815ba",
+    "research_only": True,
+    "local_sot": False,
+    "r2_sot_rewrite": False,
+    "pit_gate": "available_at required and available_at <= as_of",
+    "null_available_at": "drop (hard)",
+    "repairs": {
+        "calendar_ingest_pollution": {
+            "datasets": ["markets_calendar"],
+            "condition": "envelope.available_at day > event day",
+            "action": "available_at = event_time",
+            "rationale": (
+                "Archive calendar available_at sometimes equals ingest wall-clock "
+                "(~2026) which fails historical as_of. Calendar is pre-known; "
+                "event_time is the honest research visibility for holiday flags."
+            ),
+            "look_ahead": False,
+        },
+        "missing_available_at_drop": {
+            "datasets": ["*"],
+            "condition": "available_at is null or empty",
+            "action": "exclude row",
+            "rationale": "Never invent visibility from as_of or wall-clock.",
+            "look_ahead": False,
+        },
+        "post_date_preserve": {
+            "datasets": list(BRIDGE_EXPAND_DATASETS) + [
+                "equities_bars_daily",
+                "indices_bars_daily_topix",
+            ],
+            "condition": "available_at is real post-event publish/disclosure time",
+            "action": "keep envelope available_at unchanged",
+            "rationale": (
+                "Fins/margin/short/alert may publish after event day; using "
+                "event_time as available_at would look ahead. Preserve envelope."
+            ),
+            "look_ahead": False,
+        },
+    },
+    "forbidden": [
+        "available_at = as_of",
+        "available_at = now()",
+        "available_at = evaluation_as_of",
+        "silent future fill without documented repair",
+    ],
+}
+
 # ---------------------------------------------------------------------------
 # T1 — R2 key patterns per COMPLETE 21 (+ DEFER 5 documented as excluded)
 # ---------------------------------------------------------------------------
@@ -507,6 +596,69 @@ def filter_history_rows(
     return out
 
 
+def repair_available_at_research(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    dataset: str,
+    policy: str = "auto",
+) -> dict[str, Any]:
+    """Apply documented research-only available_at repairs (never look-ahead).
+
+    Returns ``{"rows": [...], "n_in", "n_out", "n_fixed", "n_dropped_null_aa",
+    "policy", "repair_applied"}``.
+
+    * ``policy="auto"`` — calendar gets ingest-pollution repair; others preserve.
+    * ``policy="none"`` — no mutation (still drops null available_at later).
+    * ``policy="calendar_ingest_pollution"`` — force calendar repair even if
+      dataset is not markets_calendar (tests).
+    """
+    ds = str(dataset).strip()
+    apply_cal = policy in ("auto", "calendar_ingest_pollution") and (
+        ds == "markets_calendar" or policy == "calendar_ingest_pollution"
+    )
+    n_fixed = 0
+    n_dropped = 0
+    out: list[dict[str, Any]] = []
+    for raw in rows:
+        row = dict(raw)
+        aa = row.get("available_at")
+        et = row.get("event_time")
+        if aa is None or aa == "":
+            # Policy: drop null — never invent. Caller may still pass through
+            # when require_available_at=False; we count and exclude here.
+            n_dropped += 1
+            continue
+        if apply_cal and et is not None and str(et).strip():
+            aa_day = str(aa).strip()[:10]
+            et_day = str(et).strip()[:10]
+            if aa_day and et_day and aa_day > et_day:
+                row["available_at"] = et
+                row["_aa_repair"] = "calendar_ingest_pollution"
+                n_fixed += 1
+        # post_date_preserve: leave non-calendar rows as-is (including lag).
+        out.append(row)
+    return {
+        "rows": out,
+        "n_in": len(list(rows)),
+        "n_out": len(out),
+        "n_fixed": n_fixed,
+        "n_dropped_null_aa": n_dropped,
+        "dataset": ds,
+        "policy": policy,
+        "repair_applied": (
+            "calendar_ingest_pollution" if apply_cal and n_fixed else "none"
+        ),
+        "research_only": True,
+        "look_ahead": False,
+        "document": AVAILABLE_AT_REPAIR_POLICY["version"],
+    }
+
+
+def available_at_policy_document() -> dict[str, Any]:
+    """Public document for available_at repair (W60 T7)."""
+    return dict(AVAILABLE_AT_REPAIR_POLICY)
+
+
 # ---------------------------------------------------------------------------
 # R2 object get (wrangler) — injectable for tests
 # ---------------------------------------------------------------------------
@@ -658,19 +810,25 @@ def extract_r2_history_feature_rows(
     r2_get: R2GetFn | None = None,
     bucket: str = R2_HISTORY_BUCKET,
     row_limit_per_dataset: int = DEFAULT_R2_ROW_LIMIT_PER_DATASET,
+    allow_empty_datasets: Sequence[str] | None = None,
+    apply_available_at_repair: bool = True,
     context: str = "r2 history feature extract",
 ) -> dict[str, Any]:
     """Load R2 structured history and normalize to FeatureContext row shapes.
 
     Fail-closed on permanent DEFER / non-COMPLETE-21 before any parse.
 
-    At least one input channel is required per dataset:
+    At least one input channel is required per dataset (unless listed in
+    ``allow_empty_datasets``, which yields an honest empty row set):
 
     * ``object_keys_by_dataset`` + ``r2_get`` (or default wrangler get)
     * ``local_paths_by_dataset`` (local mirror files — **not** SoT)
     * ``raw_lines_by_dataset`` (in-memory / test fixtures)
 
     Local paths / lines are **disposable mirrors**, never Source of Truth.
+
+    When ``apply_available_at_repair`` is True, calendar rows get the documented
+    research-only ingest-pollution repair (see ``AVAILABLE_AT_REPAIR_POLICY``).
     """
     ids = require_complete_21_only(dataset_ids, context=context)
     # Belt-and-suspenders: explicit DEFER reject even if allowlist drifts.
@@ -686,16 +844,28 @@ def extract_r2_history_feature_rows(
     keys_map = {str(k): list(v) for k, v in (object_keys_by_dataset or {}).items()}
     paths_map = {str(k): list(v) for k, v in (local_paths_by_dataset or {}).items()}
     lines_map = {str(k): list(v) for k, v in (raw_lines_by_dataset or {}).items()}
+    empty_ok = {str(x).strip() for x in (allow_empty_datasets or []) if str(x).strip()}
 
     rows_by_dataset: dict[str, list[dict[str, Any]]] = {}
     raw_counts: dict[str, int] = {}
     source_channels: dict[str, list[str]] = {}
+    aa_repairs: dict[str, dict[str, Any]] = {}
 
     for ds in ids:
         has_keys = bool(keys_map.get(ds))
         has_paths = bool(paths_map.get(ds))
         has_lines = bool(lines_map.get(ds))
         if not (has_keys or has_paths or has_lines):
+            if ds in empty_ok:
+                source_channels[ds] = ["empty_allowed"]
+                raw_counts[ds] = 0
+                rows_by_dataset[ds] = []
+                aa_repairs[ds] = {
+                    "repair_applied": "none",
+                    "n_fixed": 0,
+                    "note": "channel missing · empty_allowed",
+                }
+                continue
             raise R2FeatureContextError(
                 f"{context}: dataset {ds!r} has no R2 input channel "
                 "(object_keys / local_paths / raw_lines). "
@@ -728,6 +898,27 @@ def extract_r2_history_feature_rows(
             row = normalize_r2_history_row(env, dataset=ds)
             if row is not None:
                 normalized.append(row)
+
+        if apply_available_at_repair:
+            repaired = repair_available_at_research(
+                normalized, dataset=ds, policy="auto"
+            )
+            normalized = list(repaired["rows"])
+            aa_repairs[ds] = {
+                k: repaired[k]
+                for k in (
+                    "n_in",
+                    "n_out",
+                    "n_fixed",
+                    "n_dropped_null_aa",
+                    "repair_applied",
+                    "policy",
+                    "research_only",
+                    "look_ahead",
+                )
+            }
+        else:
+            aa_repairs[ds] = {"repair_applied": "skipped", "n_fixed": 0}
 
         code_filter = ds in _CODE_KEYED_HISTORY_DATASETS and bool(selected_codes)
         filtered = filter_history_rows(
@@ -766,12 +957,16 @@ def extract_r2_history_feature_rows(
         },
         "source_channels": source_channels,
         "rows_by_dataset": rows_by_dataset,
+        "available_at_repairs": aa_repairs,
+        "available_at_policy_version": AVAILABLE_AT_REPAIR_POLICY["version"],
+        "bridge_expand_datasets": list(BRIDGE_EXPAND_DATASETS),
         "local_sot": False,
         "disposable_mirror": True,
         "note": (
             "R2 structured history extract for research FeatureContext. "
             "Not READY. Not local SQLite SoT. Local paths/lines are disposable "
-            "mirrors only. Permanent DEFER excluded. available_at preserved for PIT."
+            "mirrors only. Permanent DEFER excluded. available_at preserved for PIT "
+            "(calendar research repair only when documented)."
         ),
     }
 
@@ -1017,6 +1212,9 @@ def r2_inventory_document() -> dict[str, Any]:
         "permanent_defer_excluded": PERMANENT_DEFER_R2_NOTE,
         "live_samples": LIVE_R2_SAMPLE_KEYS,
         "s1_minimal_datasets": list(S1_SIGNAL_HISTORY_DATASETS),
+        "multi_signal_datasets": list(MULTI_SIGNAL_HISTORY_DATASETS),
+        "bridge_expand_datasets": list(BRIDGE_EXPAND_DATASETS),
+        "available_at_repair_policy": AVAILABLE_AT_REPAIR_POLICY,
         "sources": [
             "docs/proof/complete21_cf_read_paths_20260815.md",
             "docs/architecture/r2_partition_scheme.md",
@@ -1029,7 +1227,8 @@ def r2_inventory_document() -> dict[str, Any]:
         "ready_declared": False,
         "note": (
             "History SoT is R2 quant-structured. D1 is hot tip only. "
-            "Local SQLite is never SoT. Permanent DEFER 5 hard-rejected on load."
+            "Local SQLite is never SoT. Permanent DEFER 5 hard-rejected on load. "
+            "W60: bridge expand margin/short/fins/alert + multi-signal long window."
         ),
     }
 
@@ -1082,10 +1281,37 @@ def schema_mapping_document() -> dict[str, Any]:
                 "Code": "none",
                 "Date": "payload.Date → row.date",
                 "event_time": "envelope.event_time",
-                "available_at": "envelope.available_at (PIT)",
+                "available_at": "envelope.available_at (PIT); research repair if ingest pollution",
                 "holiday_division": "payload.HolDiv | HolidayDivision",
             },
         },
+        "bridge_expand_column_map": {
+            "fins_summary": {
+                "Code": "payload.Code → row.Code",
+                "Date": "payload.DiscDate | payload.Date | event_time[:10]",
+                "event_time": "envelope.event_time (disclosure clock)",
+                "available_at": "envelope.available_at preserved (post_date_preserve)",
+            },
+            "markets_margin_interest": {
+                "Code": "payload.Code → row.Code",
+                "Date": "payload.Date | event_time[:10]",
+                "event_time": "envelope.event_time",
+                "available_at": "envelope.available_at preserved (post_date_preserve)",
+            },
+            "markets_short_ratio": {
+                "S33": "payload.S33 → row.S33 / section",
+                "Date": "payload.Date | event_time[:10]",
+                "event_time": "envelope.event_time",
+                "available_at": "envelope.available_at preserved (post_date_preserve)",
+            },
+            "markets_margin_alert": {
+                "Code": "payload.Code → row.Code",
+                "Date": "payload.Date | event_time[:10]",
+                "event_time": "envelope.event_time",
+                "available_at": "envelope.available_at preserved (post_date_preserve)",
+            },
+        },
+        "available_at_repair_policy": AVAILABLE_AT_REPAIR_POLICY,
         "local_sot": False,
     }
 
@@ -1179,8 +1405,12 @@ __all__ = [
     "R2_LINE_SCHEMA",
     "R2_TABLE_PREFIX",
     "RESEARCH_ARTIFACT_BUCKET",
+    "AVAILABLE_AT_REPAIR_POLICY",
+    "BRIDGE_EXPAND_DATASETS",
+    "MULTI_SIGNAL_HISTORY_DATASETS",
     "S1_SIGNAL_HISTORY_DATASETS",
     "archive_prefix_for",
+    "available_at_policy_document",
     "build_r2_feature_context",
     "can_build_40d_asof",
     "default_r2_get_object",
@@ -1194,6 +1424,7 @@ __all__ = [
     "parse_r2_structured_bytes",
     "parse_r2_structured_line",
     "r2_inventory_document",
+    "repair_available_at_research",
     "resolve_history_source",
     "schema_mapping_document",
     "write_r2_inventory_json",

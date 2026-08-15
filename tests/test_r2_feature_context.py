@@ -15,11 +15,15 @@ from data_contracts.permanent_defer import (
     PermanentDeferHistoryError,
 )
 from research.r2_feature_context import (
+    AVAILABLE_AT_REPAIR_POLICY,
+    BRIDGE_EXPAND_DATASETS,
     COMPLETE_21_R2_INVENTORY,
     FEATURE_CONTEXT_SCHEMA_MAP,
     HISTORY_SOURCE_R2,
+    MULTI_SIGNAL_HISTORY_DATASETS,
     R2FeatureContextError,
     S1_SIGNAL_HISTORY_DATASETS,
+    available_at_policy_document,
     build_r2_feature_context,
     can_build_40d_asof,
     extract_r2_history_feature_rows,
@@ -28,6 +32,7 @@ from research.r2_feature_context import (
     normalize_r2_history_row,
     parse_r2_structured_line,
     r2_inventory_document,
+    repair_available_at_research,
     resolve_history_source,
     schema_mapping_document,
     write_r2_inventory_json,
@@ -35,6 +40,7 @@ from research.r2_feature_context import (
 from research.single_shot_job import (
     DEFAULT_CANDIDATE_FEATURES,
     compute_tip_candidate_features,
+    execute_multiday_multisignal_compare,
     execute_multiday_signal_eval,
 )
 
@@ -568,3 +574,257 @@ def test_multiday_history_source_r2_does_not_break_default_d1(tmp_path: Path):
     assert ex.mass_research == "NO-GO"
     assert ex.batch_summary["history_source"] == "r2"
     assert ex.batch_summary["tip_plane"] == "R2_history"
+
+
+# ---------------------------------------------------------------------------
+# W60 — bridge expand (margin/short/fins/alert) + multi-signal R2 + aa policy
+# ---------------------------------------------------------------------------
+
+
+def _catalog_line(
+    dataset: str,
+    day: str,
+    *,
+    code: str | None = "13010",
+    available_at: str | None = None,
+    extra_payload: dict | None = None,
+) -> str:
+    aa = available_at if available_at is not None else f"{day}T15:30:00+09:00"
+    payload = {"Date": day, **(extra_payload or {})}
+    if code is not None:
+        payload["Code"] = code
+    nk: dict = {"Date": day}
+    if code is not None:
+        nk["Code"] = code
+    if "S33" in payload:
+        nk = {"Date": day, "S33": payload["S33"]}
+    return json.dumps(
+        {
+            "source": "jquants",
+            "dataset": dataset,
+            "natural_key": json.dumps(nk, sort_keys=True),
+            "event_time": f"{day}T15:30:00+09:00",
+            "available_at": aa,
+            "ingested_at": "2026-08-12T00:00:00+09:00",
+            "payload": payload,
+            "raw_payload": payload,
+        },
+        ensure_ascii=True,
+    )
+
+
+def test_bridge_expand_datasets_listed():
+    assert "markets_margin_interest" in BRIDGE_EXPAND_DATASETS
+    assert "markets_short_ratio" in BRIDGE_EXPAND_DATASETS
+    assert "fins_summary" in BRIDGE_EXPAND_DATASETS
+    assert "markets_margin_alert" in BRIDGE_EXPAND_DATASETS
+    inv = r2_inventory_document()
+    assert set(BRIDGE_EXPAND_DATASETS).issubset(set(COMPLETE_21_R2_INVENTORY))
+    assert inv["bridge_expand_datasets"] == list(BRIDGE_EXPAND_DATASETS)
+    sm = schema_mapping_document()
+    for ds in BRIDGE_EXPAND_DATASETS:
+        assert ds in sm["bridge_expand_column_map"]
+
+
+def test_extract_bridge_expand_datasets_normalize_and_pit():
+    """Load fins/margin/short/alert via R2 bridge; DEFER still hard-reject."""
+    lines = {
+        "fins_summary": [
+            _catalog_line(
+                "fins_summary",
+                "2024-10-15",
+                code="13010",
+                extra_payload={"DiscDate": "2024-10-15", "NetSales": 1},
+            ),
+            # future available_at — kept in extract window filter by event day,
+            # but FeatureContext PIT will hide at earlier as_of
+            _catalog_line(
+                "fins_summary",
+                "2024-10-20",
+                code="13010",
+                available_at="2024-10-25T15:30:00+09:00",
+                extra_payload={"DiscDate": "2024-10-20"},
+            ),
+        ],
+        "markets_margin_interest": [
+            _catalog_line(
+                "markets_margin_interest",
+                "2024-10-15",
+                code="13010",
+                extra_payload={"LongMarginTradeVolume": 100, "ShortMarginTradeVolume": 50},
+            ),
+            _catalog_line(
+                "markets_margin_interest",
+                "2024-10-16",
+                code="13010",
+                extra_payload={"LongMarginTradeVolume": 110, "ShortMarginTradeVolume": 40},
+            ),
+        ],
+        "markets_short_ratio": [
+            _catalog_line(
+                "markets_short_ratio",
+                "2024-10-15",
+                code=None,
+                extra_payload={"S33": "0050", "ShortSaleRatio": 0.12},
+            ),
+        ],
+        "markets_margin_alert": [
+            _catalog_line(
+                "markets_margin_alert",
+                "2024-10-15",
+                code="13010",
+                extra_payload={"PublishDate": "2024-10-15"},
+            ),
+        ],
+    }
+    extract = extract_r2_history_feature_rows(
+        list(BRIDGE_EXPAND_DATASETS),
+        period_start="2024-10-01",
+        period_end="2024-10-31",
+        codes=["13010"],
+        raw_lines_by_dataset=lines,
+    )
+    assert extract["history_source"] == HISTORY_SOURCE_R2
+    assert extract["local_sot"] is False
+    assert extract["extracted_row_counts"]["fins_summary"] == 2
+    assert extract["extracted_row_counts"]["markets_margin_interest"] == 2
+    assert extract["extracted_row_counts"]["markets_short_ratio"] == 1
+    assert extract["extracted_row_counts"]["markets_margin_alert"] == 1
+
+    # PIT: at 2024-10-15 close, post-dated fins row must not be visible
+    ctx = build_r2_feature_context(
+        extract["rows_by_dataset"],
+        as_of="2024-10-15T15:30:00+09:00",
+        inputs={"code": "13010", "section": "0050"},
+    )
+    fins = ctx.get_jquants_records(dataset="fins_summary", code="13010")
+    assert len(fins.rows) == 1  # only available_at <= as_of
+    margin = ctx.get_jquants_records(dataset="markets_margin_interest", code="13010")
+    assert len(margin.rows) >= 1
+    short = ctx.get_jquants_records(dataset="markets_short_ratio")
+    assert len(short.rows) >= 1
+    alert = ctx.get_jquants_records(dataset="markets_margin_alert", code="13010")
+    assert len(alert.rows) >= 1
+
+
+def test_available_at_repair_calendar_only_no_lookahead():
+    pol = available_at_policy_document()
+    assert pol["version"] == AVAILABLE_AT_REPAIR_POLICY["version"]
+    assert pol["r2_sot_rewrite"] is False
+    assert "calendar_ingest_pollution" in pol["repairs"]
+
+    cal_rows = [
+        {
+            "date": "2024-10-01",
+            "event_time": "2024-10-01T00:00:00+09:00",
+            "available_at": "2026-08-11T18:00:00+09:00",  # ingest pollution
+            "holiday_division": "1",
+        },
+        {
+            "date": "2024-10-02",
+            "event_time": "2024-10-02T00:00:00+09:00",
+            "available_at": None,  # drop
+        },
+    ]
+    repaired = repair_available_at_research(
+        cal_rows, dataset="markets_calendar", policy="auto"
+    )
+    assert repaired["n_fixed"] == 1
+    assert repaired["n_dropped_null_aa"] == 1
+    assert repaired["rows"][0]["available_at"] == "2024-10-01T00:00:00+09:00"
+    assert repaired["look_ahead"] is False
+
+    # fins: post-date preserved (not rewritten to event_time)
+    fins = [
+        {
+            "date": "2024-10-01",
+            "event_time": "2024-10-01T15:00:00+09:00",
+            "available_at": "2024-10-05T15:00:00+09:00",
+            "Code": "13010",
+        }
+    ]
+    fr = repair_available_at_research(fins, dataset="fins_summary", policy="auto")
+    assert fr["n_fixed"] == 0
+    assert fr["rows"][0]["available_at"] == "2024-10-05T15:00:00+09:00"
+
+
+def test_multisignal_history_source_r2(tmp_path: Path):
+    """Long-window multi-signal path accepts history_source=r2 fixtures."""
+    from datetime import date, timedelta
+
+    start = date(2024, 10, 1)
+    days: list[str] = []
+    d = start
+    while len(days) < 12:
+        if d.weekday() < 5:
+            days.append(d.isoformat())
+        d += timedelta(days=1)
+
+    bar_lines = []
+    topix_lines = []
+    cal_lines = []
+    fins_lines = []
+    for i, day in enumerate(days):
+        for code in ("13010", "72030", "67580"):
+            bar_lines.append(
+                _bar_line(code, day, close=100.0 + i, volume=1000.0 + i * 50)
+            )
+        topix_lines.append(_topix_line(day, close=3000.0 + i))
+        cal_lines.append(_cal_line(day))
+        # sparse disclosure on day 5 for one code
+        if i == 5:
+            fins_lines.append(
+                _catalog_line(
+                    "fins_summary",
+                    day,
+                    code="13010",
+                    extra_payload={"DiscDate": day},
+                )
+            )
+
+    puts: list[tuple[str, str]] = []
+
+    def fake_put(bucket: str, key: str, body: bytes, **kwargs):
+        puts.append((bucket, key))
+        return {"bucket": bucket, "key": key, "status": "dry_run", "bytes": len(body)}
+
+    ex = execute_multiday_multisignal_compare(
+        period_start=days[0],
+        period_end=days[-1],
+        job_id="w0815ba-g1-multisignal-r2-test",
+        codes=["13010", "72030", "67580"],
+        max_days=10,
+        min_days=5,
+        dry_run=True,
+        write_per_day_artifacts=False,
+        r2_put=fake_put,
+        staging_dir=tmp_path,
+        history_source="r2",
+        r2_raw_lines_by_dataset={
+            "equities_bars_daily": bar_lines,
+            "indices_bars_daily_topix": topix_lines,
+            "markets_calendar": cal_lines,
+            "fins_summary": fins_lines,
+            # margin empty-allowed path: omit channel → allow_empty default
+        },
+    )
+    assert ex.n_days >= 5
+    assert ex.ready_declared is False
+    assert ex.mass_research == "NO-GO"
+    assert ex.phase7 == "OFF"
+    assert ex.batch_summary["history_source"] == "r2"
+    assert ex.batch_summary["tip_plane"] == "R2_history"
+    assert ex.batch_summary["significance_claimed"] is False
+    assert ex.batch_summary["edge_claimed"] is False
+    assert ex.batch_summary["operational_go"] is False
+    table = ex.batch_summary["compare_table"]
+    assert len(table) == 3
+    sids = {r["signal_id"] for r in table}
+    assert "c21_topix_relative_sign" in sids
+    assert "c21_volume_change_sign" in sids
+    assert "c21_topix_rel_disclosure_filter" in sids
+    assert set(MULTI_SIGNAL_HISTORY_DATASETS) >= {
+        "equities_bars_daily",
+        "fins_summary",
+        "markets_margin_interest",
+    }

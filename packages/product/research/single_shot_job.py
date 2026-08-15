@@ -815,12 +815,12 @@ def _normalize_tip_catalog_row(
         "payload": dict(payload),
         "raw_payload": dict(payload),
         # Flatten common fields for pure helpers that inspect row tops.
-        "date": _pick_str(payload, "Date", "date")
+        "date": _pick_str(payload, "Date", "date", "DiscDate", "PublishedDate")
         or (str(event_time)[:10] if event_time else None),
         "close": _pick_num(payload, "Close", "C", "AdjC", "AC"),
         "volume": _pick_num(payload, "Volume", "Vo", "AdjVo", "AVo"),
         "Code": _pick_str(payload, "Code", "code"),
-        "Date": _pick_str(payload, "Date", "date"),
+        "Date": _pick_str(payload, "Date", "date", "DiscDate", "PublishedDate"),
         # S33 sector code for markets_short_ratio (short_ratio_level tip path).
         "S33": _pick_str(payload, "S33", "section"),
         "section": _pick_str(payload, "S33", "section"),
@@ -3293,8 +3293,15 @@ def execute_multiday_multisignal_compare(
     staging_dir: str | Path | None = None,
     wrangler: str | Path | None = None,
     wrangler_config: str | Path | None = None,
+    history_source: str = "d1_tip",
+    r2_object_keys_by_dataset: Mapping[str, Sequence[str]] | None = None,
+    r2_local_paths_by_dataset: Mapping[str, Sequence[str | Path]] | None = None,
+    r2_raw_lines_by_dataset: Mapping[str, Sequence[Any]] | None = None,
+    r2_get: Callable[[str, str], bytes] | None = None,
+    r2_bucket: str = "quant-structured",
+    r2_allow_empty_datasets: Sequence[str] | None = None,
 ) -> MultidaySignalEval:
-    """W58 multi-signal compare on one tip extract (approved legs only).
+    """W58/W60 multi-signal compare (approved legs only).
 
     Signals (all candidate; candidate_only=False; not READY):
 
@@ -3304,6 +3311,10 @@ def execute_multiday_multisignal_compare(
 
     Same codes / as_of days / next-day returns across signals. Optional
     research-only net PnL under one-way 10bp cost (仮定に依存・研究用・運用GOではない).
+
+    ``history_source``:
+        * ``"d1_tip"`` (default) — CF D1 hot tip extract (W58 tip 20d path)
+        * ``"r2"`` — R2 structured history bridge (W59/W60 long window)
 
     Does **not** connect Mass, mint READY, densify, or execute orders.
     """
@@ -3330,15 +3341,46 @@ def execute_multiday_multisignal_compare(
         for d in multi_signal_definitions(volume_sign_abs_min=volume_sign_abs_min)
     }
 
-    tip_feature_extract = extract_d1_tip_feature_rows(
-        dataset_ids,
-        period_start=start,
-        period_end=end,
-        codes=selected_codes,
-        row_limit_per_dataset=feature_row_limit,
-        d1_execute=d1_execute,
-        context="multisignal tip feature extract",
+    # Lazy import avoids circular import at module load.
+    from research.r2_feature_context import (
+        HISTORY_SOURCE_D1_TIP,
+        HISTORY_SOURCE_R2,
+        extract_r2_history_feature_rows,
+        resolve_history_source,
     )
+
+    hist_src = resolve_history_source(history_source)
+    if hist_src == HISTORY_SOURCE_R2:
+        tip_feature_extract = extract_r2_history_feature_rows(
+            dataset_ids,
+            period_start=start,
+            period_end=end,
+            codes=selected_codes,
+            object_keys_by_dataset=r2_object_keys_by_dataset,
+            local_paths_by_dataset=r2_local_paths_by_dataset,
+            raw_lines_by_dataset=r2_raw_lines_by_dataset,
+            r2_get=r2_get,
+            bucket=r2_bucket,
+            row_limit_per_dataset=max(int(feature_row_limit), 5000),
+            allow_empty_datasets=r2_allow_empty_datasets
+            or (
+                "fins_summary",
+                "markets_margin_interest",
+            ),
+            context="multisignal r2 history feature extract",
+        )
+    else:
+        if hist_src != HISTORY_SOURCE_D1_TIP:
+            raise SingleShotJobError(f"unsupported history_source={hist_src!r}")
+        tip_feature_extract = extract_d1_tip_feature_rows(
+            dataset_ids,
+            period_start=start,
+            period_end=end,
+            codes=selected_codes,
+            row_limit_per_dataset=feature_row_limit,
+            d1_execute=d1_execute,
+            context="multisignal tip feature extract",
+        )
     rows_by_ds = tip_feature_extract.get("rows_by_dataset") or {}
     if codes is None and tip_feature_extract.get("selected_codes"):
         selected_codes = list(tip_feature_extract["selected_codes"])
@@ -3556,10 +3598,18 @@ def execute_multiday_multisignal_compare(
         "n_codes": len(selected_codes),
         "n_days": len(day_results),
         "as_of_days": [d.get("date") for d in day_results],
-        "tip_plane": "D1_hot_tip",
-        "d1_database": D1_DATABASE_NAME,
+        "history_source": hist_src,
+        "tip_plane": (
+            tip_feature_extract.get("plane")
+            if hist_src == HISTORY_SOURCE_R2
+            else "D1_hot_tip"
+        ),
+        "d1_database": D1_DATABASE_NAME if hist_src == HISTORY_SOURCE_D1_TIP else None,
         "tip_extracted_row_counts": tip_feature_extract.get("extracted_row_counts"),
-        "tip_raw_tip_counts": tip_feature_extract.get("raw_tip_counts"),
+        "tip_raw_tip_counts": tip_feature_extract.get("raw_tip_counts")
+        or tip_feature_extract.get("raw_envelope_counts"),
+        "history_source_channels": tip_feature_extract.get("source_channels"),
+        "available_at_repairs": tip_feature_extract.get("available_at_repairs"),
         "by_signal": by_signal,
         "compare_table": compare_rows,
         "research_cost_assumption": {
@@ -3622,7 +3672,8 @@ def execute_multiday_multisignal_compare(
         "edge_claimed": False,
         "operational_go": False,
         "note": (
-            "W58 multi-signal tip compare via single_shot only. "
+            "Multi-signal compare via single_shot only "
+            f"(history_source={hist_src}). "
             "Three approved-leg research signals on the same universe/period. "
             "Next-day returns + optional research cost (10bp one-way). "
             "小サンプル / 研究用・未宣言 · 仮定に依存・研究用・運用GOではない. "

@@ -1,8 +1,57 @@
 # Phase 6.2 / 6.3 residual status
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
-**Live verified:** 2026-08-15 (JST) / **W59** R2→FeatureContext 研究用橋（READY 未宣言） **FINAL** · COMPLETE segs **3478** · Dataset COMPLETE **21 / 26** · PARTIAL = **5** permanent DEFER only · **actionable_gap = 0** · empty COMPLETE **0** · **OTC 93** tip island held · permanent DEFER **5** / NO_DENSIFY **6** · densify coverage loops **ENDED** · Mass/READY/Phase7 **NO-GO/OFF** · raw **15915** held · FRESH `projgen-38b19559dba646dcb463409c78f3bc9e` · **CF-SoT** held — D1 = hot tip · R2 = history · COMPLETE = receipt-owned · floors W38 + W42 mb **2015-04-01** **not lowered** · coverage baseline **W47 FINAL held** · READY **not declared** · tip densify **SKIP** · densify **none** · promotion **9 approved** held · remain **1 candidate** (`return_1d_c21` policy no-promote) · R2→FeatureContext bridge **landed** (research-only · `history_source="r2"|"d1_tip"`) · can_build_40d_asof **yes** · long-window S1 **long_eval_ran=yes** · **n_days=50** · **n_codes=30** · `history_source=r2` · mean R +1 **−0.000182** / −1 **−0.000245** · overall **−0.000213** · job `w0815az-g3-long` · label **小サンプル / 研究用・未宣言** · pytest **137** · PRE_sha `b079899a119576e5dc0e815390263e74bbdcb89b` · **POST_PUSH_SHA** `a220af1d63a1ee0a24e5d212ebdfd9e8c3cfa9b2`
-**Repo tip:** `6ce7e2b0d9b57a2e3555f6d9d014243b5b7ef3f3` — W59 R2→FeatureContext 研究用橋 FINAL · COMPLETE **3478** / Dataset COMPLETE **21** / OTC **93** / empty COMPLETE **0** / **actionable_gap = 0** / Phase7 **OFF** / READY **未宣言** · FRESH `projgen-38b19559dba646dcb463409c78f3bc9e` · bridge **landed research-only** · long eval **50d×30** · tip densify **SKIP** · **POST_PUSH_SHA** `a220af1d63a1ee0a24e5d212ebdfd9e8c3cfa9b2`
+**Live verified:** 2026-08-15 (JST) / **W60** 長期窓マルチシグナル比較 + 橋拡張（READY 未宣言） · COMPLETE segs **3478** · Dataset COMPLETE **21 / 26** · PARTIAL = **5** permanent DEFER only · **actionable_gap = 0** · empty COMPLETE **0** · **OTC 93** tip island held · permanent DEFER **5** / NO_DENSIFY **6** · densify coverage loops **ENDED** · Mass/READY/Phase7 **NO-GO/OFF** · FRESH `projgen-acdc868d174e4304ae93da453c01f057` · **CF-SoT** held — D1 = hot tip · R2 = history · COMPLETE = receipt-owned · floors W38 + W42 mb **2015-04-01** **not lowered** · coverage baseline **W47 FINAL held** · READY **not declared** · tip densify **SKIP** · densify **none** · promotion **9 approved** held · remain **1 candidate** (`return_1d_c21` policy no-promote) · R2 bridge **expanded** (margin/short/fins/alert) · multi-signal long **50d×30** job `w0815ba-g1-long-multisignal` · S1 mean R +1 **−0.000182** / −1 **−0.000245** · S2 non_null **0.047** · S3 non_null **0.636** · tip-20d separation **not** reproduced on long window · label **小サンプル / 研究用・未宣言** · **no significance / no edge / no operational GO**
+**Repo tip:** (set on push) — W60 long multi-signal + bridge expand · COMPLETE **3478** / Dataset COMPLETE **21** / OTC **93** / empty COMPLETE **0** / **actionable_gap = 0** / Phase7 **OFF** / READY **未宣言** · FRESH `projgen-acdc868d174e4304ae93da453c01f057` · tip densify **SKIP**
+
+## 長期窓マルチシグナル比較 + 橋拡張（READY 未宣言）
+
+**Phase name:** COMPLETE 21 長期窓マルチシグナル比較 + 橋拡張（宣言なし）  
+**Wave:** W60 / w0815ba  
+**Close proof:** [`docs/proof/w0815ba_w60_long_multisignal_close_20260815.md`](proof/w0815ba_w60_long_multisignal_close_20260815.md)  
+**Long multi-signal (A):** [`.glm-logs/w0815ba_w60_long_multisignal/`](../.glm-logs/w0815ba_w60_long_multisignal/) · [`summary.json`](../.glm-logs/w0815ba_w60_long_multisignal/summary.json) · job `w0815ba-g1-long-multisignal` · `history_source=r2` · **n_days=50** · **n_codes=30** · period `2024-09-02…2024-12-18` · S1/S2/S3 same definitions as W58 · report [`docs/proof/w0815ba_w60_long_multisignal_compare_20260815.md`](proof/w0815ba_w60_long_multisignal_compare_20260815.md) · R2 `research/single_shot/job=w0815ba-g1-long-multisignal/batch_summary.json`  
+
+| signal | non_null rate | mean R +1 | mean R −1 | gross signed mean | net 10bp one-way |
+|--------|--------------:|----------:|----------:|------------------:|-----------------:|
+| S1 topix_rel | **1.000** | **−0.000182** | **−0.000245** | ~0 | **−0.000973** |
+| S2 volume_sign | **0.047** | −0.00381 | −0.00165 | **−0.000275** | **−0.001275** |
+| S3 topix+disc | **0.636** | +0.000369 | −0.000977 | **+0.000688** | **−0.000312** |
+
+· tip-20d (W58) S1 separation **not** held on long window (reconfirm W59) · S2 fire-rate collapses 0.75→0.047 · S3 denser via R2 fins but still **no** edge claim · **小サンプル / 研究用・未宣言**  
+**Bridge expand (B):** [`docs/proof/w0815ba_w60_bridge_expand_20260815.md`](proof/w0815ba_w60_bridge_expand_20260815.md) · datasets **markets_margin_interest** · **markets_short_ratio** · **fins_summary** · **markets_margin_alert** · live extract counts 1200 / 790 / 77 / 500 · `AVAILABLE_AT_REPAIR_POLICY` documented · DEFER 5 hard reject held · multi-signal path accepts `history_source=r2`  
+**Ops / FRESH:** [`.glm-logs/w0815ba_w60_ops/`](../.glm-logs/w0815ba_w60_ops/) · FRESH `projgen-acdc868d174e4304ae93da453c01f057` · segs **3478** · dc **21** · empty **0** · OTC **93** · Mass **NO-GO** · Phase7 **OFF**  
+**Promotion:** held **9 approved** / **1 candidate** (`return_1d_c21`) · **no promote**  
+**Prior W59 R2 bridge + S1 long eval:** held underneath
+
+| gate | status |
+|------|--------|
+| Phase name | **COMPLETE 21 長期窓マルチシグナル比較 + 橋拡張（宣言なし）** |
+| Coverage baseline FINAL | **held** (W47 · Dataset COMPLETE **21/26** · segs **3478** · **actionable_gap=0**) |
+| READY | **未宣言** |
+| Mass | **NO-GO / OFF** |
+| Phase7 | **OFF** |
+| empty COMPLETE | **0** |
+| Dataset COMPLETE | **21** |
+| COMPLETE segs | **3478** |
+| OTC tip island | **93** |
+| permanent DEFER | **5** hard reject |
+| tip densify | **SKIP** |
+| densify | **none** |
+| Projection | **FRESH** `projgen-acdc868d174e4304ae93da453c01f057` |
+| Long multi-signal | **PASS** · 50d×30 · S1/S2/S3 · tip vs long delta documented · no edge |
+| Bridge expand | **margin / short / fins / alert** loadable under PIT · aa policy explicit |
+| Promotion | **9 approved** · **1 candidate** no-promote |
+| Unit tests | r2_feature_context + eval_harness + complete21 min + permanent_defer + mass gate **pass** |
+
+**Primary this phase:** long-window multi-signal fairness (S1/S2/S3) vs tip-20d + expand R2 FeatureContext bridge to high-value COMPLETE datasets — research-only.  
+**Not:** READY / Mass / Phase7 / densify / COMPLETE 22 / promote `return_1d_c21` / look-ahead / significance / orders.
+
+### Explicit non-declarations (held)
+
+- **READY** — not declared  
+- **Mass Autonomous Research** — **NO-GO / OFF**  
+- **Phase7** — **OFF**
+
 ## R2→FeatureContext 研究用橋（READY 未宣言）
 
 **Phase name:** COMPLETE 21 R2→FeatureContext 研究用橋（宣言なし）  
