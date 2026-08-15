@@ -1,10 +1,47 @@
 # Phase 6.2 / 6.3 residual status
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
-**Live verified:** 2026-08-15 (JST) / **W64** コスト込み複数年（READY 未宣言） · COMPLETE segs **3478** · Dataset COMPLETE **21** · PARTIAL **5** DEFER · **actionable_gap = 0** · empty COMPLETE **0** · **OTC 93** · Mass/READY/Phase7 **NO-GO/OFF** · FRESH `projgen-31ae63a75b9a477a8b7e6f9d34f6f630` · **CF-SoT** held · promotion **9 approved** / **1 candidate** no-promote · cost **10bp one-way** · S1 Q4 cost **FAIL** (+3/−3 net) · S4 Q4 cost PASS weak all − · S1 full~100d **FAIL** · topix JSONL gap 2024–25 archive · margin 2024 empty held · **gate pass ≠ READY/Mass** · **no significance / no edge / no operational GO**
-**Repo tip:** `afceb91ea689c4703b29c6332bf35346675cb8c8` — W64 cost multi-year · COMPLETE **21** / segs **3478** / OTC **93** / READY **未宣言** · FRESH `projgen-31ae63a75b9a477a8b7e6f9d34f6f630`
+**Live verified:** 2026-08-15 (JST) / **W65** 不合格ベースライン固定（READY 未宣言） · COMPLETE segs **3478** · Dataset COMPLETE **21** · PARTIAL **5** DEFER · **actionable_gap = 0** · **P0 gaps = 0** · empty COMPLETE **0** · **OTC 93** · Mass/READY/Phase7 **NO-GO/OFF** · FRESH `projgen-3ec43f655e4f4ef08a636d33bc88f43e` · **CF-SoT** held · promotion **9 approved** / **1 candidate** no-promote · S1–S5 **research_baseline_rejected** · holding metrics **research-only** · cost **10bp one-way** held · S1 Q4 cost **FAIL** · S4 cost PASS weak · **gate pass ≠ READY/Mass** · **no significance / no edge / no operational GO**
+**Repo tip:** `PIN_AFTER_COMMIT` — W65 不合格ベースライン固定 · COMPLETE **21** / DEFER **5** / segs **3478** / OTC **93** / READY **未宣言** · FRESH `projgen-3ec43f655e4f4ef08a636d33bc88f43e`
 
-## コスト込み複数年研究評価 S1 + S4（READY 未宣言）
+## 不合格ベースライン固定 S1–S5 + 保有メトリクス + データ穴整理（READY 未宣言）
+
+**Phase name:** 不合格ベースライン固定（単純日次 sign · 宣言なし）  
+**Wave:** W65 / w0815bf  
+**Close:** [`docs/proof/w0815bf_w65_baseline_close_20260815.md`](proof/w0815bf_w65_baseline_close_20260815.md)  
+**Rejected:** [`docs/proof/w0815bf_w65_simple_daily_sign_baselines_rejected_20260815.md`](proof/w0815bf_w65_simple_daily_sign_baselines_rejected_20260815.md)  
+**Holding metrics:** [`docs/proof/w0815bf_w65_holding_turnover_metrics_20260815.md`](proof/w0815bf_w65_holding_turnover_metrics_20260815.md) · `packages/product/research/holding_metrics.py`  
+**Data gap priority:** [`docs/proof/w0815bf_w65_data_gap_priority_20260815.md`](proof/w0815bf_w65_data_gap_priority_20260815.md) · **P0 = 0**  
+**Catalog:** `packages/product/research/baseline_catalog.py` · `research_status=research_baseline_rejected` · **not** connected to READY/Mass  
+**S1–S5:** all **research_baseline_rejected** (S1 cost FAIL · S4 cost weak PASS not candidate · S2/S3/S5 never multi-year cost-robust)  
+**Holding (S1 sample optional):** pooled mean hold ≈ **1.88 d** · p50 **2** · p90 **4** · turnover_proxy ≈ **0.53 / day** · amort ≈ **5.3 bp/day** (10bp/1.88) · 研究用・未宣言  
+**Gaps:** topix JSONL 2024–25 **ARCHIVE_OK** · calendar archive+PIT · margin 2024 empty · short 2024–25 · full-year bar span ~Oct · **no densify / no invent**  
+**Logs:** [`.glm-logs/w0815bf_w65_baselines/`](../.glm-logs/w0815bf_w65_baselines/) · FRESH log `reeval_freshness.log`  
+**FRESH:** `projgen-3ec43f655e4f4ef08a636d33bc88f43e` · coverage_segments untouched · mass=NO-GO  
+**Prior W64 cost multi-year:** held underneath
+
+| gate | status |
+|------|--------|
+| READY | **未宣言** (reject catalog does not connect) |
+| Mass / Phase7 | **NO-GO / OFF** |
+| Dataset COMPLETE | **21** |
+| DEFER | **5** |
+| COMPLETE segs | **3478** |
+| empty COMPLETE | **0** |
+| OTC | **93** |
+| densify | **none** |
+| P0 data gaps | **0** |
+| S1–S5 catalog | **research_baseline_rejected** |
+| Holding metrics | **landed research-only** |
+| Cost gate v2 | held from W64 · research-only |
+
+### Explicit non-declarations (held)
+
+- **READY** — not declared  
+- **Mass** — **NO-GO / OFF**  
+- **Phase7** — **OFF**
+
+## コスト込み複数年研究評価 S1 + S4（READY 未宣言）· W64 held
 
 **Phase name:** コスト込み複数年 + 通年窓拡張（宣言なし）  
 **Wave:** W64 / w0815be  
