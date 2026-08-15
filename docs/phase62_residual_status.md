@@ -1,8 +1,122 @@
 # Phase 6.2 / 6.3 residual status
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
-**Live verified:** 2026-08-15 (JST) / ~2026-08-15T05:19–05:37Z UTC (remote D1; COMPLETE segs **3457** **+0**; raw **15589** tip POST; Dataset COMPLETE **11**; empty COMPLETE **0**; Phase7 **OFF**; **W36** tip collect + JSDA + gap; floors **locked** + **NO_DENSIFY_FIXED** held; tip raw **+30** secondary; FRESH `projgen-cbb5d486b6e942769ad8fcd08b1dbc7b`; **HAS_RAW_SEALABLE=0** held; post_floor_sealable **0** densify **none**; OTC **72** held; **DEFER densify not** re-run; **CF-SoT** language held — D1 = hot tip · R2 = history · COMPLETE = receipt-owned; **POST_PUSH_SHA** `596e721a4e38759c5f8c7120eec904c9e6cf7437`)
-**Repo tip:** `596e721a4e38759c5f8c7120eec904c9e6cf7437` — COMPLETE **3457** / Dataset COMPLETE **11** / empty COMPLETE **0** / Phase7 **OFF** / w0815ac W36 collect ops close
+**Live verified:** 2026-08-15 (JST) / **W38** contract floors **applied** (`history_target_start` **11** raises) · contract commit `ba3c81157c1528784e4909ca7e03e7c8076553c2` · floor catalog [`observed_floor_catalog_20260815.md`](proof/observed_floor_catalog_20260815.md) · residual DEFER re-align (**NO_DENSIFY** **18→6** active; **12** OUT_OF_SCOPE after raise) · Permanent DEFER **5** entries (D2/D4×2/D5/MX-EARN-TIP) · densify **none** · empty COMPLETE **0** ban held · Phase7 **OFF** · **CF-SoT** held — D1 = hot tip · R2 = history · COMPLETE = receipt-owned · COMPLETE / Dataset COMPLETE / raw / FRESH **pending reeval** (peer T2 may still be updating POST numbers; G5 fills final metrics)
+**Repo tip (docs apply):** *local residual+proof commit this wave* — contract floors live since `ba3c811`; prior collect ops close `596e721` (W36 COMPLETE **3457** baseline until reeval)
+
+## W38 / w0815ae — residual DEFER re-align after floor contract raises (APPLY)
+
+**Contract commit:** `ba3c81157c1528784e4909ca7e03e7c8076553c2` — `contract(w0815ae/W38): raise history_target_start to proven observed floors` (**11** raises)  
+**Floor catalog (evidence):** [`docs/proof/observed_floor_catalog_20260815.md`](proof/observed_floor_catalog_20260815.md)  
+**Contract review proof (draft):** [`docs/proof/w0815ae_w38_contract_floor_raise_20260815.md`](proof/w0815ae_w38_contract_floor_raise_20260815.md)  
+**Machine drafts:** [`.glm-logs/w0815ae_defer/PERMANENT_DEFER.json`](../.glm-logs/w0815ae_defer/PERMANENT_DEFER.json) · [`.glm-logs/w0815ae_defer/NO_DENSIFY_AFTER_CONTRACT_DRAFT.json`](../.glm-logs/w0815ae_defer/NO_DENSIFY_AFTER_CONTRACT_DRAFT.json) · [`.glm-logs/w0815ae_contract/contract_diff.json`](../.glm-logs/w0815ae_contract/contract_diff.json)  
+**Metrics:** COMPLETE / Dataset COMPLETE / raw / FRESH = **pending reeval** (peer T2 / G5 fill POST)
+
+| gate | status |
+|------|--------|
+| Contract floors | **applied** — **11** `history_target_start` raises to proven observed floors (`ba3c811`) |
+| Floor catalog | **linked** — [`observed_floor_catalog_20260815.md`](proof/observed_floor_catalog_20260815.md) (W29 evidence; W38 implements catalog §2 candidates minus master) |
+| NO_DENSIFY re-align | **18 → 6** active required-window classes (**12** OUT_OF_SCOPE after raise) |
+| Permanent DEFER | **5** entries (D2 master · D4 earn_cal · D4 bars_am · D5 OTC archive · MX-EARN-TIP) |
+| densify | **none** (no densify this wave; permanent DEFER densify forbidden) |
+| empty-raw COMPLETE / Mass / READY / Phase7 | **ban / NO-GO / OFF** |
+| CF-SoT | D1 **hot tip** · R2 **history** · COMPLETE **receipt-owned** |
+| COMPLETE reeval | **pending reeval** — G5 fills final POST numbers |
+
+### history_target_start raises (old → new)
+
+Proven-floor raises landed in `packages/data_plane/data_contracts/collection_coverage.json` (+ aligned copies). Evidence: catalog §1 + contract_diff.
+
+| dataset | old `history_target_start` | new `history_target_start` | pre-floor residual cured (OOS) | catalog / defer |
+|---------|---------------------------:|---------------------------:|--------------------------------|-----------------|
+| `equities_bars_daily` | 2004-01-05 | **2008-05-01** | 52 segs (31 NO_RAW + 21 EMPTY) `2004-01…2008-04` | D7 · catalog |
+| `indices_bars_daily_topix` | 2008-01-01 | **2008-05-01** | 4 empty shells `2008-01…04` | D1 · catalog |
+| `indices_bars_daily` | 2008-01-01 | **2008-05-01** | 4 empty / missing receipt `2008-01…04` | D1 · catalog |
+| `fins_summary` | 2008-01-08 | **2008-07-01** | 6 empty shells `2008-01…06` | D10 · catalog |
+| `fins_dividend` | 2008-01-08 | **2013-02-01** | 61 EMPTY_SHELL `2008-01…2013-01` | MX-DIV · catalog |
+| `fins_details` | 2008-01-08 | **2018-01-01** | 120 PRE2018 empty `2008-01…2017-12` | MX-DET · catalog |
+| `fins_earnings_date` | 2010-01-04 | **2018-01-01** | 96 NO_RAW pre-floor `2010-01…2017-12` (**tip 2026-01…04 still DEFER**) | MX-EARN-PRE OOS · MX-EARN-TIP survives |
+| `markets_breakdown` | 2013-01-04 | **2015-03-26** | 27 segs pre-source-floor `2013-01…2015-03` | D3 · catalog |
+| `markets_short_sale_report` | 2013-01-04 | **2013-11-01** | 10 empty shells `2013-01…10` | D9 · catalog |
+| `edinet_cross_shareholdings` | 2018-01-04 | **2020-05-01** | 28 empty pre-island `2018-01…2020-04` | D6 · catalog |
+| `edinet_large_volume_shareholders` | 2018-01-04 | **2021-07-01** | 42 empty pre-island `2018-01…2021-06` | D6 · catalog |
+
+**Explicitly not raised (4):**
+
+| dataset | keep `history_target_start` | reason |
+|---------|----------------------------:|--------|
+| `equities_master` | 2000-07-13 | D2 MISDATE not always-empty; permanent DEFER |
+| `equities_earnings_calendar` | 2010-01-04 | D4 tip-only; catalog de-scope ≠ floor raise |
+| `equities_bars_daily_am` | 2024-01-04 | D4 tip-only AM `date_mode=today` |
+| `jsda_otc_bond_reference_prices` | 2002-08-02 | D5 archive site capability; do **not** raise to tip island |
+
+Aligned copies (same raise set): `canonical_datasets.json#historical_start` · `coverage.py#EXPECTED_START` · `range_batch_scheduler.py#TRACK_A_FOCUS_RANGES`.
+
+### NO_DENSIFY re-align (after contract)
+
+W29 lock had **18** never-densify residual classes. After W38 floor raises:
+
+```
+W29 NO_DENSIFY 18 classes
+  ├─ OUT_OF_SCOPE (12)  — pre-floor residual entirely before new history_target_start
+  │    D1×2, D3, D6×2, D7×2, D9, D10, MX-DIV, MX-DET, MX-EARN-PRE
+  └─ STILL_DEFER (6)    — required-window residual remains (active NO_DENSIFY)
+       D2×2 master, D4×2 earn/am, D5 OTC archive, MX-EARN-TIP
+```
+
+**Check:** 12 + 6 = 18.
+
+#### OUT_OF_SCOPE after raise (archive note only — densify never required)
+
+Pre-floor residual falls **strictly before** new `history_target_start`. Not a required-window densify/DEFER gate target. PARTIAL rows may remain in D1 inventory until human-gate prune/reagg — densify still **forbidden**; empty-raw COMPLETE still **forbidden**.
+
+| DEFER id | dataset | residual class / span | n | new floor | disposition |
+|----------|---------|----------------------|--:|----------:|-------------|
+| **D1** | `indices_bars_daily_topix` | EMPTY_SHELL `2008-01…04` | 4 | 2008-05-01 | **OUT_OF_SCOPE** |
+| **D1** | `indices_bars_daily` | EMPTY/missing receipt `2008-01…04` | 4 | 2008-05-01 | **OUT_OF_SCOPE** |
+| **D3** | `markets_breakdown` | EMPTY_PRE_SOURCE_FLOOR `2013-01…2015-03` | 27 | 2015-03-26 | **OUT_OF_SCOPE** |
+| **D6** | `edinet_cross_shareholdings` | EMPTY_PRE_ISLAND `2018-01…2020-04` | 28 | 2020-05-01 | **OUT_OF_SCOPE** |
+| **D6** | `edinet_large_volume_shareholders` | EMPTY_PRE_ISLAND `2018-01…2021-06` | 42 | 2021-07-01 | **OUT_OF_SCOPE** |
+| **D7** | `equities_bars_daily` | NO_RAW_OOS `2004-01…2006-07` | 31 | 2008-05-01 | **OUT_OF_SCOPE** |
+| **D7** | `equities_bars_daily` | EMPTY_UNDER_SUBSCRIPTION `2006-08…2008-04` | 21 | 2008-05-01 | **OUT_OF_SCOPE** |
+| **D9** | `markets_short_sale_report` | EMPTY_PRE_HISTORY `2013-01…10` | 10 | 2013-11-01 | **OUT_OF_SCOPE** |
+| **D10** | `fins_summary` | EMPTY_PRE_HISTORY `2008-01…06` | 6 | 2008-07-01 | **OUT_OF_SCOPE** |
+| **MX-DIV** | `fins_dividend` | EMPTY_SHELL `2008-01…2013-01` | 61 | 2013-02-01 | **OUT_OF_SCOPE** |
+| **MX-DET** | `fins_details` | DEFER_PRE2018_EMPTY `2008-01…2017-12` | 120 | 2018-01-01 | **OUT_OF_SCOPE** |
+| **MX-EARN-PRE** | `fins_earnings_date` | NO_RAW_FOR_MONTH_PRE_FLOOR `2010-01…2017-12` | 96 | 2018-01-01 | **OUT_OF_SCOPE** |
+
+#### STILL_DEFER within required window (active NO_DENSIFY — **6** classes)
+
+| DEFER id | dataset | residual class / span | n | floor after W38 | permanent ref |
+|----------|---------|----------------------|--:|-----------------|---------------|
+| **D2** | `equities_master` | PRE_PLAN `2000-07…2006-07` | 73 | 2000-07-13 (unchanged) | PD-D2-MASTER |
+| **D2** | `equities_master` | MISDATE `2006-08…2008-04` | 21 | 2000-07-13 (unchanged) | PD-D2-MASTER |
+| **D4** | `equities_earnings_calendar` | TIP_ONLY_VENDOR history residual | ~199 | 2010-01-04 (unchanged) | PD-D4-EARN-CAL |
+| **D4** | `equities_bars_daily_am` | TIP_ONLY_VENDOR history residual | ~31 | 2024-01-04 (unchanged) | PD-D4-BARS-AM |
+| **D5** | `jsda_otc_bond_reference_prices` | ARCHIVE_SITE_FAIL beyond tip COMPLETE **72** | archive | 2002-08-02 (unchanged) | PD-D5-JSDA-OTC |
+| **MX-EARN-TIP** | `fins_earnings_date` | NO_RAW_FOR_MONTH_TIP `2026-01…04` | 4 | 2018-01-01 (**raised**; tip holes remain inside window) | PD-MX-EARN-TIP |
+
+**Policy held:** empty-raw COMPLETE **forbidden** · tip densify **secondary** (non-DEFER tip holes only) · Mass/READY/Phase7 **NO-GO/OFF** · CF-SoT D1 hot tip / R2 history / receipt-owned COMPLETE · D8 Batch Z **OFF** (not a densify class).
+
+### Permanent DEFER list (will not be cured by floor raise this wave)
+
+Definition: residual class with **no honest floor-raise cure** this wave (or tip residual that **survives** a raise). Densify remains **forbidden**.
+
+| id | DEFER | dataset(s) | class / span | why permanent | retry condition |
+|----|-------|------------|--------------|---------------|-----------------|
+| **PD-D2-MASTER** | D2 | `equities_master` | MISDATE `2006-08…2008-04` (n=21) + PRE_PLAN `2000-07…2006-07` (n=73) | Tip-misdated Date (`~2008-05-07`); not always-empty product window; raising floor would invent COMPLETE without vendor fix | Fresh R2 with **in-scope Date** + window_ok seal path; no invent COMPLETE |
+| **PD-D4-EARN-CAL** | D4 | `equities_earnings_calendar` | TIP_ONLY history (~199) | Vendor next-bday / tip-dated only; history de-scope is catalog change, not floor bump | Vendor historical range API **or** catalog de-scope; prefer `fins_earnings_date` for event history |
+| **PD-D4-BARS-AM** | D4 | `equities_bars_daily_am` | TIP_ONLY history (~31) | `date_mode=today` AM session — not historical OHLC | Vendor historical AM API **or** use `equities_bars_daily` / catalog de-scope |
+| **PD-D5-JSDA-OTC** | D5 | `jsda_otc_bond_reference_prices` | ARCHIVE beyond tip **72** | Site capability (timeout/404/403); do **not** raise to tip island | JSDA HTTP **200** full CSV **and** R2 raw for target day → seal day-by-day |
+| **PD-MX-EARN-TIP** | MX-EARN-TIP | `fins_earnings_date` | tip holes `2026-01…04` (n=4) | Floor raise → `2018-01-01` clears **pre-floor only**; tip known-empty stays required-window DEFER | Vendor nz for tip residual months; no densify-as-success |
+
+**Evidence:** [`PERMANENT_DEFER.json`](../.glm-logs/w0815ae_defer/PERMANENT_DEFER.json) · catalog §1 / §2 do-not-raise · master/earn/am/otc proofs under `docs/proof/w0815*`.
+
+### Metrics note (G5 / peer T2)
+
+COMPLETE segs / Dataset COMPLETE / raw manifests / FRESH projection may still be updating via peer reeval after contract land. This residual apply records **contract + DEFER SoT only**. Use **pending reeval** until G5 fills POST numbers in residual Live verified + proof.
+
+**Non-actions this apply:** densify · empty-raw COMPLETE · Mass/READY/Phase7 · invent COMPLETE by prune without reagg policy · raise master/D4/D5 floors.
 
 ## W36 / w0815ac — continuous collect ops (JQ tip + JSDA + gap) (FINAL)
 
@@ -136,32 +250,33 @@
 
 ### NO_DENSIFY_FIXED (never re-densify residual class)
 
-Canonical blocked residual **segment classes**. **Do not densify** unless DEFER re-try condition is met. Count **18** classes (formal D1–D7,D9,D10 + matrix MX-\*).
+**W29 baseline:** **18** classes (formal D1–D7,D9,D10 + matrix MX-\*). **Do not densify** unless DEFER re-try condition is met.  
+**W38 supersession:** after contract floor raises (`ba3c811`), **active required-window** NO_DENSIFY = **6** classes; **12** classes are **OUT_OF_SCOPE** archive (see **§W38** above). Historical 18-row table retained for audit:
 
-| DEFER id | dataset(s) | residual class / span | n | never densify reason |
-|----------|------------|----------------------|--:|----------------------|
-| **D1** | `indices_bars_daily_topix` | EMPTY `2008-01…04` | 4 | API empty shells |
-| **D1** | `indices_bars_daily` | EMPTY/missing receipt `2008-01…04` | 4 | same band |
-| **D2** | `equities_master` | PRE_PLAN `2000-07…2006-07` | 73 | no sealable raw |
-| **D2** | `equities_master` | MISDATE `2006-08…2008-04` | 21 | tip-misdated Date |
-| **D3** | `markets_breakdown` | EMPTY pre-source-floor `2013-01…2015-03` | 27 | source floor 2015-03-26 |
-| **D4** | `equities_earnings_calendar` | TIP_ONLY history residual | ~199 | vendor next-bday only |
-| **D4** | `equities_bars_daily_am` | TIP_ONLY history residual | ~31 | today-mode AM only |
-| **D5** | `jsda_otc_bond_reference_prices` | ARCHIVE beyond tip COMPLETE **72** | archive | site timeout/404/403 |
-| **D6** | `edinet_cross_shareholdings` | EMPTY pre-island `2018-01…2020-04` | 28 | empty-raw residual |
-| **D6** | `edinet_large_volume_shareholders` | EMPTY pre-island `2018-01…2021-06` | 42 | empty-raw residual |
-| **D7** | `equities_bars_daily` | NO_RAW `2004-01…2006-07` | 31 | OOS / entitlement |
-| **D7** | `equities_bars_daily` | EMPTY `2006-08…2008-04` | 21 | empty API under sub |
-| **D9** | `markets_short_sale_report` | EMPTY pre-history `2013-01…10` | 10 | first nz 2013-11 |
-| **D10** | `fins_summary` | EMPTY pre-history `2008-01…06` | 6 | first nz 2008-07 |
-| **MX-DIV** | `fins_dividend` | EMPTY_SHELL `2008-01…2013-01` | 61 | W27-G1 matrix forever-skip |
-| **MX-DET** | `fins_details` | DEFER_PRE2018 `2008-01…2017-12` | 120 | W27-G3 matrix forever-skip |
-| **MX-EARN-PRE** | `fins_earnings_date` | NO_RAW pre-floor `2010-01…2017-12` | 96 | W27-G2 matrix |
-| **MX-EARN-TIP** | `fins_earnings_date` | tip known-empty `2026-01…04` | 4 | W27-G2; no densify-as-success |
+| DEFER id | dataset(s) | residual class / span | n | W38 disposition | never densify reason |
+|----------|------------|----------------------|--:|-----------------|----------------------|
+| **D1** | `indices_bars_daily_topix` | EMPTY `2008-01…04` | 4 | **OOS** (floor→2008-05-01) | API empty shells |
+| **D1** | `indices_bars_daily` | EMPTY/missing receipt `2008-01…04` | 4 | **OOS** (floor→2008-05-01) | same band |
+| **D2** | `equities_master` | PRE_PLAN `2000-07…2006-07` | 73 | **STILL_DEFER** | no sealable raw |
+| **D2** | `equities_master` | MISDATE `2006-08…2008-04` | 21 | **STILL_DEFER** | tip-misdated Date |
+| **D3** | `markets_breakdown` | EMPTY pre-source-floor `2013-01…2015-03` | 27 | **OOS** (floor→2015-03-26) | source floor 2015-03-26 |
+| **D4** | `equities_earnings_calendar` | TIP_ONLY history residual | ~199 | **STILL_DEFER** | vendor next-bday only |
+| **D4** | `equities_bars_daily_am` | TIP_ONLY history residual | ~31 | **STILL_DEFER** | today-mode AM only |
+| **D5** | `jsda_otc_bond_reference_prices` | ARCHIVE beyond tip COMPLETE **72** | archive | **STILL_DEFER** | site timeout/404/403 |
+| **D6** | `edinet_cross_shareholdings` | EMPTY pre-island `2018-01…2020-04` | 28 | **OOS** (floor→2020-05-01) | empty-raw residual |
+| **D6** | `edinet_large_volume_shareholders` | EMPTY pre-island `2018-01…2021-06` | 42 | **OOS** (floor→2021-07-01) | empty-raw residual |
+| **D7** | `equities_bars_daily` | NO_RAW `2004-01…2006-07` | 31 | **OOS** (floor→2008-05-01) | OOS / entitlement |
+| **D7** | `equities_bars_daily` | EMPTY `2006-08…2008-04` | 21 | **OOS** (floor→2008-05-01) | empty API under sub |
+| **D9** | `markets_short_sale_report` | EMPTY pre-history `2013-01…10` | 10 | **OOS** (floor→2013-11-01) | first nz 2013-11 |
+| **D10** | `fins_summary` | EMPTY pre-history `2008-01…06` | 6 | **OOS** (floor→2008-07-01) | first nz 2008-07 |
+| **MX-DIV** | `fins_dividend` | EMPTY_SHELL `2008-01…2013-01` | 61 | **OOS** (floor→2013-02-01) | W27-G1 matrix forever-skip |
+| **MX-DET** | `fins_details` | DEFER_PRE2018 `2008-01…2017-12` | 120 | **OOS** (floor→2018-01-01) | W27-G3 matrix forever-skip |
+| **MX-EARN-PRE** | `fins_earnings_date` | NO_RAW pre-floor `2010-01…2017-12` | 96 | **OOS** (floor→2018-01-01) | W27-G2 matrix |
+| **MX-EARN-TIP** | `fins_earnings_date` | tip known-empty `2026-01…04` | 4 | **STILL_DEFER** | W27-G2; no densify-as-success |
 
-**JSDA floors (residual):** OTC archive **D5** · `jsda_tokyo_repo_rates` **COMPLETE** 1/1 · `jsda_corporate_bond_transactions` **COMPLETE** 12/12 · earn_calendar / bars_am **D4** tip-only.
+**JSDA floors (residual):** OTC archive **D5** (still DEFER) · `jsda_tokyo_repo_rates` **COMPLETE** 1/1 · `jsda_corporate_bond_transactions` **COMPLETE** 12/12 · earn_calendar / bars_am **D4** tip-only (still DEFER).
 
-**Contract raise candidates (not applied):** see catalog §2 — indices→`2008-05-01`, bars/master→`2008-05-01`, fins_summary→`2008-07-01`, dividend→`2013-02-01`, details/earn→`2018-01-01`, mb→`2015-03-26`, short_sale→`2013-11-01`, edinet cross/large→island floors.
+**Contract raise candidates:** W29 catalog §2 proposed **12**; W38 **implemented 11** (all proven always-empty floors); **master not raised** (D2 permanent DEFER).
 
 ## W27-G6 unified matrix — 残 seg × raw 有無
 
@@ -242,10 +357,11 @@ Coverage DEFERs **D1–D10** (D10 fins_summary residual 6 formalized **W19-G6 T1
 | Mass / READY / B0 | **NO-GO** |
 | Phase 7 | **OFF / foundation only** — **must remain OFF**; no mass arming, no production READY, no Phase7 switch ON |
 
-## DEFER inventory (retry conditions) — W11-G7 T20 + **W17-G5 T15** + **W19-G6 T13 formal** + **W25–W28 maintain** + **W29-G1 NO_DENSIFY_FIXED lock**
+## DEFER inventory (retry conditions) — W11-G7 T20 + **W17-G5 T15** + **W19-G6 T13 formal** + **W25–W28 maintain** + **W29-G1 NO_DENSIFY_FIXED lock** + **W38 active 6 / OOS 12**
 
 Canonical blocked residuals. **Do not re-run densify** unless the re-try condition is met. Empty-raw COMPLETE remains **forbidden**.  
-**W29-G1:** floors locked + **NO_DENSIFY_FIXED** table above (18 classes) · catalog [`observed_floor_catalog_20260815.md`](proof/observed_floor_catalog_20260815.md).
+**W29-G1:** floors locked + **NO_DENSIFY_FIXED** (was 18 classes) · catalog [`observed_floor_catalog_20260815.md`](proof/observed_floor_catalog_20260815.md).  
+**W38 / w0815ae:** contract floors applied (`ba3c811`, **11** raises) · active required-window NO_DENSIFY **6** classes · **12** pre-floor classes **OUT_OF_SCOPE** after raise (archive only) · Permanent DEFER list in **§W38** above · historical D1–D10 rows below retained as evidence (re-try paths); densify still forbidden for OOS shells until human-gate prune/reagg.
 
 **W19-G6 T13 formalize + W26-G4 re-verify:** `fins_summary` PARTIAL **`2008-01…06`** (**6**) = **empty pre-history shells** before observed floor **`2008-07-01`** (W18-G1 R2 SUCCESS COMPLETE `row_count=0` all 6; densify skipped; surgical dataset COMPLETE **not** rule-legal 218≠224). Keep empty residuals for **short_sale / topix / idx / master / breakdown / earn / am / EDINET** (D1–D4, D6, D9) — **no** densify, **no** invent COMPLETE. Re-verify remote POST **2026-08-15T02:47Z**: fins_summary PARTIAL exactly `2008-01…06`; short_sale PARTIAL `2013-01…10`; topix/idx COMPLETE segs **220/220** with residual PARTIAL **4+4** held (`2008-01…04`); breakdown COMPLETE **137** / PARTIAL **27** (`2013-01…2015-03`); master/earn/am/EDINET empty bands unchanged; D5 OTC tip held **72** (archive still DEFER).
 
