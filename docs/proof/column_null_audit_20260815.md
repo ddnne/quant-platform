@@ -272,8 +272,8 @@ docs/proof/data_quality_scan_20260812.md   # prior D1 jsda_repo_rates=0
 
 ## 8. Orchestrator report (W20-G5)
 
-1. **commits (wave):** `df6271d` (G2 typed), `4fcef08` (+ lock `07e6a67`), this merge commit (G5)
-2. **push SHA:** *(filled post-push)*
+1. **commits (wave):** `df6271d` (G2 typed), `4fcef08` (+ lock `07e6a67`), `5b5c146` (G1 docs), `2210813` (G3 docs), `f818d3f` (G5 unify)
+2. **push SHA:** `f818d3f30b2ee10bf6606e591c3cd05dff6e68fa`
 3. **audit summary table:** §4
 4. **always-null list:** §2
 5. **fixes applied:** master short keys, bars AAdj, tokyo_repo honesty (§5)
