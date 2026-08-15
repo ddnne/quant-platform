@@ -1,0 +1,19 @@
+{
+  "wave": "w0815k_g1",
+  "dataset": "fins_dividend",
+  "ts": "2026-08-15T00:20:14.850916+00:00",
+  "complete": 163,
+  "partial_residual": 61,
+  "residual_span": "2008-01..2013-01",
+  "tip_island": "2013-02..2026-08 continuous",
+  "holes_in_tip_span": 0,
+  "observed_start": "2013-02-01",
+  "observed_end": "2026-08-14",
+  "status": "PARTIAL",
+  "this_wave_delta": 0,
+  "seal_ready": 0,
+  "densify_executed": 0,
+  "forever_densify_skip": true,
+  "fins_summary_residual_6_defer": "untouched",
+  "mass": "NO-GO"
+}
