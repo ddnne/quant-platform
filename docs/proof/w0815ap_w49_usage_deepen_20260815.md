@@ -10,7 +10,7 @@
 
 **Live verified:** 2026-08-15 (JST) / G4 ops ~`2026-08-15T09:35–09:40Z` UTC · G1 smokes ~`09:39Z` · G3 job ~`09:38Z`  
 **Wave start HEAD:** `4ee335f0b1d622ce3a4395b788ab5c063e7c6e86` (W48 post-fill)  
-**Proof HEAD (post-push):** _POST_PUSH_SHA_ (filled after `git push origin main`)  
+**Proof HEAD (post-push):** c916c3271d8a07f988e89aa21b3ebaf46bf3cdae (filled after `git push origin main`)  
 **Projection (G4 ops reeval):** **FRESH** `projgen-b47cea8b663f41c09b62e3324a4603a4` (age ~129s at capture; pre-gen `projgen-17345de1e40b4aabb5496c18b22d3182`)
 
 **Artifacts:**
@@ -218,7 +218,7 @@ Source: [`.glm-logs/w0815ap_g4_ops/FINAL_metrics.json`](../../.glm-logs/w0815ap_
 | Code committed | `complete21_min.py` · `dataset_guard.py` · `runtime.py` guards · `single_shot_job.py` · package exports · unit tests |
 | Docs committed | residual SoT (利用準備深化 + FRESH) · complete21 min feature catalog · this proof |
 | `git push origin main` | **done** (G5) |
-| `origin/main` SHA (content) | _POST_PUSH_SHA_ |
+| `origin/main` SHA (content) | c916c3271d8a07f988e89aa21b3ebaf46bf3cdae |
 | HEAD == origin/main | **yes** (after content + SHA-fill pushes) |
 
 ---

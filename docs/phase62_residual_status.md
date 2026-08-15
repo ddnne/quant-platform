@@ -1,9 +1,9 @@
 # Phase 6.2 / 6.3 residual status
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
-**Live verified:** 2026-08-15 (JST) / **W49** 利用準備深化（READY 未宣言） FINAL · COMPLETE segs **3478** · Dataset COMPLETE **21 / 26** · PARTIAL = **5** permanent DEFER only · **actionable_gap = 0** · empty COMPLETE **0** · **OTC 93** tip island held · permanent DEFER **5** / NO_DENSIFY **6** · densify coverage loops **ENDED** · Mass/READY/Phase7 **NO-GO/OFF** · raw **15869** held (W46 tip secondary) · FRESH `projgen-b47cea8b663f41c09b62e3324a4603a4` · **CF-SoT** held — D1 = hot tip · R2 = history · COMPLETE = receipt-owned · floors W38 + W42 mb **2015-04-01** **not lowered** · coverage baseline **W47 FINAL held** · READY **not declared** · **POST_PUSH_SHA** `_POST_PUSH_SHA_`
+**Live verified:** 2026-08-15 (JST) / **W49** 利用準備深化（READY 未宣言） FINAL · COMPLETE segs **3478** · Dataset COMPLETE **21 / 26** · PARTIAL = **5** permanent DEFER only · **actionable_gap = 0** · empty COMPLETE **0** · **OTC 93** tip island held · permanent DEFER **5** / NO_DENSIFY **6** · densify coverage loops **ENDED** · Mass/READY/Phase7 **NO-GO/OFF** · raw **15869** held (W46 tip secondary) · FRESH `projgen-b47cea8b663f41c09b62e3324a4603a4` · **CF-SoT** held — D1 = hot tip · R2 = history · COMPLETE = receipt-owned · floors W38 + W42 mb **2015-04-01** **not lowered** · coverage baseline **W47 FINAL held** · READY **not declared** · **POST_PUSH_SHA** `c916c3271d8a07f988e89aa21b3ebaf46bf3cdae`
 
-**Repo tip:** `_POST_PUSH_SHA_` — W49 利用準備深化 FINAL · COMPLETE **3478** / Dataset COMPLETE **21** / OTC **93** / **actionable_gap = 0** / Phase7 **OFF** / READY **未宣言** · FRESH `projgen-b47cea8b663f41c09b62e3324a4603a4` · **POST_PUSH_SHA** `_POST_PUSH_SHA_`
+**Repo tip:** `c916c3271d8a07f988e89aa21b3ebaf46bf3cdae` — W49 利用準備深化 FINAL · COMPLETE **3478** / Dataset COMPLETE **21** / OTC **93** / **actionable_gap = 0** / Phase7 **OFF** / READY **未宣言** · FRESH `projgen-b47cea8b663f41c09b62e3324a4603a4` · **POST_PUSH_SHA** `c916c3271d8a07f988e89aa21b3ebaf46bf3cdae`
 
 ## 利用準備深化（READY 未宣言）
 
@@ -28,7 +28,7 @@
 | Dataset COMPLETE | **21** (remote verify held; not invent 22) |
 | tip densify | **SKIP** (T12 · not primary this phase) |
 | densify | **none** |
-| push | **POST_PUSH_SHA** `_POST_PUSH_SHA_` (G5 FINAL merge) |
+| push | **POST_PUSH_SHA** `c916c3271d8a07f988e89aa21b3ebaf46bf3cdae` (G5 FINAL merge) |
 | Projection | **FRESH** `projgen-b47cea8b663f41c09b62e3324a4603a4` (ops_reeval_freshness T10 age large ~1535s; publish apply **SKIP** local==remote 3478; fail-closed no force) |
 | Smokes expanding | G1 T1–T4 **4 pass** (bars×margin · bars×edinet_major · bars×tokyo_repo · fins_summary×dividend; READY **not** declared) |
 | Features skeleton | COMPLETE 21 min catalog + `volume_change_1d` / `topix_relative_1d` / `disclosure_flag_fins` (candidate) + DEFER dataset_guard |
