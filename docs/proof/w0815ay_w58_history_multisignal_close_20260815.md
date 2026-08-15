@@ -13,7 +13,7 @@
 
 **Live verified:** 2026-08-15 (JST) / G1 history ~`12:12Z` · G2 multi-signal ~`12:08Z` · G3 quality ~`12:03–12:09Z` · G4 merge+push this close  
 **Wave start HEAD (PRE_sha):** `e86a4cc584891ad15b346294053c1e5705c9f286` (W57 post-lock)  
-**Proof HEAD (post-push):** *(filled after push)*  
+**Proof HEAD (post-push):** `35f3425ec60a648b74b484a009f0007201af5dcd`  
 **Projection (G3 T11 reclock; residual sync):** **FRESH** `projgen-20e613d7a30943378004831cdc26c9b2` (pre-gen `projgen-30219278e4064f258021f02eb00bbbc9`)
 
 **Artifacts:**
@@ -216,9 +216,9 @@ Research-only net next-day return assumes a fixed **one-way cost of 10bp** per s
 | field | value |
 |-------|-------|
 | PRE_sha | `e86a4cc584891ad15b346294053c1e5705c9f286` |
-| POST_PUSH_SHA (feat commit) | *(filled after push)* |
-| origin/main (tip after lock) | *(filled after push)* |
-| HEAD == origin/main | *(asserted after push)* |
+| POST_PUSH_SHA (feat commit) | `35f3425ec60a648b74b484a009f0007201af5dcd` |
+| origin/main (tip after fill) | *(lock commit after this fill)* |
+| HEAD == origin/main | **true** (post-push feat; lock commits follow) |
 
 ---
 
