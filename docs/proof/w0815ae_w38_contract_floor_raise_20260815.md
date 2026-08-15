@@ -12,7 +12,7 @@
 **Live verified:** 2026-08-15 (JST) / reeval PRE `2026-08-15T06:04:54Z` → POST `2026-08-15T06:11:48Z` UTC  
 **Contract commit:** `ba3c81157c1528784e4909ca7e03e7c8076553c2`  
 **Residual DEFER docs commit:** `ddbd823af28953bea659adfa970dd7301b81e3e3`  
-**Proof HEAD (post-push):** **POST_PUSH_SHA** *(filled after push)*  
+**Proof HEAD (post-push):** `afd7189647331de2d977f3ce2018ca34135bb5c1`  
 **Projection:** **FRESH** `projgen-c54a409aaeef424e9c13394b82bd720b` (fail-closed publish local=remote **3457**; mass=**NO-GO**)
 
 **Floor catalog (evidence):** [`observed_floor_catalog_20260815.md`](observed_floor_catalog_20260815.md)  
@@ -203,9 +203,9 @@ Detail: [`.glm-logs/w0815ae_defer/PERMANENT_DEFER.json`](../../.glm-logs/w0815ae
 |------|------:|
 | Contract | `ba3c81157c1528784e4909ca7e03e7c8076553c2` |
 | Residual DEFER docs | `ddbd823af28953bea659adfa970dd7301b81e3e3` |
-| Proof finalize | *(this commit)* |
-| **POST_PUSH_SHA** | *(filled after `git push origin main`)* |
-| origin/main after push | must equal HEAD |
+| Proof finalize | `afd7189647331de2d977f3ce2018ca34135bb5c1` |
+| **POST_PUSH_SHA** | `afd7189647331de2d977f3ce2018ca34135bb5c1` |
+| origin/main after push | equals HEAD after SHA-fill push |
 
 ---
 

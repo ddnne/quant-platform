@@ -1,8 +1,8 @@
 # Phase 6.2 / 6.3 residual status
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
-**Live verified:** 2026-08-15 (JST) / reeval PRE `2026-08-15T06:04:54Z` → POST `2026-08-15T06:11:48Z` UTC · **W38** contract floors **applied** (`history_target_start` **11** raises) · contract commit `ba3c81157c1528784e4909ca7e03e7c8076553c2` · residual DEFER re-align (`ddbd823`) · COMPLETE segs **3457→3457 (Δ0)** · Dataset COMPLETE **11→20 (+9)** · empty COMPLETE **0** · densify **none** · tip densify **not primary** (T7 held) · NO_DENSIFY **18→6** active · Permanent DEFER **5** · Phase7 **OFF** · FRESH `projgen-c54a409aaeef424e9c13394b82bd720b` · raw **not remeasured** (held W36 **15589**) · **CF-SoT** held — D1 = hot tip · R2 = history · COMPLETE = receipt-owned · **POST_PUSH_SHA** *(filled after push)*
-**Repo tip:** *proof finalize this wave* — contract `ba3c811` · residual DEFER `ddbd823` · COMPLETE **3457** / Dataset COMPLETE **20** / empty COMPLETE **0** / Phase7 **OFF**
+**Live verified:** 2026-08-15 (JST) / reeval PRE `2026-08-15T06:04:54Z` → POST `2026-08-15T06:11:48Z` UTC · **W38** contract floors **applied** (`history_target_start` **11** raises) · contract commit `ba3c81157c1528784e4909ca7e03e7c8076553c2` · residual DEFER re-align (`ddbd823`) · COMPLETE segs **3457→3457 (Δ0)** · Dataset COMPLETE **11→20 (+9)** · empty COMPLETE **0** · densify **none** · tip densify **not primary** (T7 held) · NO_DENSIFY **18→6** active · Permanent DEFER **5** · Phase7 **OFF** · FRESH `projgen-c54a409aaeef424e9c13394b82bd720b` · raw **not remeasured** (held W36 **15589**) · **CF-SoT** held — D1 = hot tip · R2 = history · COMPLETE = receipt-owned · **POST_PUSH_SHA** `afd7189647331de2d977f3ce2018ca34135bb5c1`
+**Repo tip:** `afd7189647331de2d977f3ce2018ca34135bb5c1` — contract `ba3c811` · residual DEFER `ddbd823` · COMPLETE **3457** / Dataset COMPLETE **20** / empty COMPLETE **0** / Phase7 **OFF**
 
 ## W38 / w0815ae — contract floor raise + residual DEFER re-align + reeval (FINAL)
 
@@ -27,7 +27,7 @@
 | empty COMPLETE | **0 → 0** (ban held) |
 | raw_retention_manifests | **not remeasured** (no tip collect; held W36 **15589**) |
 | Projection | **FRESH** `projgen-c54a409aaeef424e9c13394b82bd720b` |
-| Push | **POST_PUSH_SHA** *(filled after push)* |
+| Push | **POST_PUSH_SHA** `afd7189647331de2d977f3ce2018ca34135bb5c1` |
 
 ### history_target_start raises (old → new)
 
