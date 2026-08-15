@@ -1,8 +1,8 @@
 # Phase 6.2 / 6.3 residual status
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
-**Live verified:** 2026-08-15 (JST) / ~2026-08-15T03:50–03:56Z UTC (remote D1; COMPLETE segs **3457** **+0**; raw **15311** tip POST; Dataset COMPLETE **11**; empty COMPLETE **0**; Phase7 **OFF**; **W30** tip collect + JSDA + gap; floors **locked** + **NO_DENSIFY_FIXED** held; tip raw **+56** secondary; FRESH `projgen-c4240127142b4d9b83e53f02866018a7`; **HAS_RAW_SEALABLE=0** held; post_floor_sealable **0** densify **none**; OTC **72** held; **DEFER densify not** re-run; **CF-SoT** language held — D1 = hot tip · R2 = history · COMPLETE = receipt-owned; **POST_PUSH_SHA** `POST_PUSH_SHA_PENDING`)
-**Repo tip:** `POST_PUSH_SHA_PENDING` — COMPLETE **3457** / Dataset COMPLETE **11** / empty COMPLETE **0** / Phase7 **OFF** / w0815w W30 collect ops close
+**Live verified:** 2026-08-15 (JST) / ~2026-08-15T03:50–03:56Z UTC (remote D1; COMPLETE segs **3457** **+0**; raw **15311** tip POST; Dataset COMPLETE **11**; empty COMPLETE **0**; Phase7 **OFF**; **W30** tip collect + JSDA + gap; floors **locked** + **NO_DENSIFY_FIXED** held; tip raw **+56** secondary; FRESH `projgen-c4240127142b4d9b83e53f02866018a7`; **HAS_RAW_SEALABLE=0** held; post_floor_sealable **0** densify **none**; OTC **72** held; **DEFER densify not** re-run; **CF-SoT** language held — D1 = hot tip · R2 = history · COMPLETE = receipt-owned; **POST_PUSH_SHA** `b18a06175a3bb4ed3f3c84c6f1dd573a309e1e10`)
+**Repo tip:** `b18a06175a3bb4ed3f3c84c6f1dd573a309e1e10` — COMPLETE **3457** / Dataset COMPLETE **11** / empty COMPLETE **0** / Phase7 **OFF** / w0815w W30 collect ops close
 
 ## W30 / w0815w — continuous collect ops (JQ tip + JSDA + gap) (FINAL)
 
@@ -18,7 +18,7 @@
 | empty-raw COMPLETE / Mass / READY / Phase7 | **ban / NO-GO / OFF** |
 | Projection | **FRESH** `projgen-c4240127142b4d9b83e53f02866018a7` |
 | CF-SoT | D1 **hot tip** · R2 **history** · COMPLETE **receipt-owned** |
-| Push | **POST_PUSH_SHA** `POST_PUSH_SHA_PENDING` |
+| Push | **POST_PUSH_SHA** `b18a06175a3bb4ed3f3c84c6f1dd573a309e1e10` |
 
 ## W29 / w0815v — floor catalog + NO_DENSIFY + tip ops close (FINAL)
 
