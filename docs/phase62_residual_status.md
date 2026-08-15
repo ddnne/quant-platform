@@ -1,8 +1,8 @@
 # Phase 6.2 / 6.3 residual status
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
-**Live verified:** 2026-08-15 (JST) / ~2026-08-15T01:11Z UTC (remote D1; COMPLETE segs **3457**; raw_n **15057**; Dataset COMPLETE **11**; FRESH `projgen-f0c85058…`; empty COMPLETE **0**; Phase7 **OFF**; **W22-G4** ops dual-coord peer `w0815n_g4` + prior **W21-G2** seal harvest / **T13 DEFER** fins_summary residual 6 formal)
-**Repo tip:** `27065f4e07a1b898253a695040533386e98feccf` — COMPLETE **3457** / raw **15057** / Dataset COMPLETE **11** / FRESH `projgen-f0c85058…` / empty COMPLETE **0** / Phase7 **OFF** / w0815o_g4_ops
+**Live verified:** 2026-08-15 (JST) / ~2026-08-15T01:21Z UTC (remote D1; COMPLETE segs **3457**; raw_n **15100**; Dataset COMPLETE **11**; FRESH `projgen-4f5ea492…`; empty COMPLETE **0**; Phase7 **OFF**; **W23-G2** tip densify + peers G1/G3; **T13 DEFER** fins_summary residual 6 formal)
+**Repo tip:** *(post-push G2)* — COMPLETE **3457** / raw **15100** / Dataset COMPLETE **11** / FRESH `projgen-4f5ea492…` / empty COMPLETE **0** / Phase7 **OFF** / w0815p_g2_tip
 
 ## W20 column / NULL audit (short)
 
@@ -38,10 +38,10 @@ Coverage DEFERs **D1–D10** (D10 fins_summary residual 6 formalized **W19-G6 T1
 | **fins_summary** | COMPLETE **218** / PARTIAL **6** (`2008-01…06` empty pre-history shells; **no nz raw** → densify **DEFER** — **W19-G6 T13 formal** / **W22-G4 re-verify held**) |
 | **markets_breakdown** | COMPLETE **137** / PARTIAL **27** (`2013-01…2015-03`) — **W10-G9 DEFER_pre2015_empty**; source floor **2015-03-26**; island **`2015-04…2026-08`**; observed_start **`2015-03-26`**; history_target **`2013-01-04`** (contract held) |
 | A3 sealed (partial datasets) | prior + **W6–W22 peers** + **W22-G4 ops publish** → COMPLETE **3457** |
-| Remote `raw_retention_manifests` | **15057** total (W22-G4 PRE **15037** → POST **15057** **+20**; prior W21-G4 session **15020→15057**; worker pass ≠ COMPLETE) |
-| Track A + P0 execute | **w0713…w0815o** + **W22-G4 ops** + **W21-G4 ops** + peers; **Worker pass ≠ COMPLETE** |
+| Remote `raw_retention_manifests` | **15100** total (**W23-G2** tip densify PRE **15079** → POST **15100** **+21**; prior W22-G4 **15057**; worker pass ≠ COMPLETE) |
+| Track A + P0 execute | **w0713…w0815p** + **W23-G2 tip densify** + **W22-G4 ops** + peers; **Worker pass ≠ COMPLETE** |
 | master | `scd2_event_sourcing` / D1 hot |
-| projection | **FRESH** — `projgen-f0c85058920c4e84ace2b663dd7d79b2` (W22-G4 final reeval freshness; segs untouched by reclock; prior W21-G4 `projgen-7b3b8bf6…`) |
+| projection | **FRESH** — `projgen-4f5ea4922bf34764bcb1972574332ab7` (W23-G2 tip densify reeval freshness; segs untouched by reclock; prior W22-G4 `projgen-f0c85058…`) |
 | sticky COMPLETE | **fixed** segment_id fallback + post-sticky dataset aggregate + COMPLETE inventory retain past UTC target_end (`coverage_ledger.py`) |
 | Full publish guard | `scripts/publish_ops_projection.py` fail-closed |
 | Targeted freshness | `scripts/ops_reeval_freshness.py` (no segment rewrite) |
@@ -77,6 +77,7 @@ Canonical blocked residuals. **Do not re-run densify** unless the re-try conditi
 
 | Track | host POST/min | n | note |
 |-------|--------------:|--:|------|
+| w0815p g2 tip densify (W23-G2) | general ~37.4 host rpm / fins ~8.1 | **+0** seal / raw **+21** | **W23-G2** JQ tip densify `2026-08-01…` (no DEFER): general week-chunks **17p/0f** (w=8 rpm**495**; 0×429; rowsInserted **93308** incl breakdown tip) + fins tip **3p/0f** (w=2 rpm**100**; rows **7155**); tip months already COMPLETE → seal/issue **0**; receipt-plane reeval C8 pass bars/margin/mb/fins/topix/…; fail-closed publish local=remote **3457**; FRESH `projgen-4f5ea492…`; raw **15079→15100**; Dataset COMPLETE **11**; empty **0**; DEFER densify **SKIP**; proof [`w0815p_g2_tip_densify_20260815.md`](proof/w0815p_g2_tip_densify_20260815.md) |
 | w0815o g4 ops (W22-G4) | — | **+0** issue / session **+15** segs | **W22-G4** continuous ops: dual-issue **coord** with peer `w0815n_g4_ops` (skip issue+publish thrash while peer ops_loop alive cycles 1–10; peer dead cycle 11+ → fail-closed publish ×N no force); ready-seal gap **0** all 14 cycles; FRESH `projgen-f0c85058…`; remote COMPLETE **3442→3457** raw **15037→15057** (+20); Dataset COMPLETE **11** held; OTC **57→72** peer tip; fins_summary **218**/PARTIAL **6** held; empty **0**; DEFER D1–D10 densify **not** re-run; peers not killed; tokyo_repo local **30303** / D1 hot **252**; general ~495 note / fins separate; proof [`w0815o_g4_ops_20260815.md`](proof/w0815o_g4_ops_20260815.md) |
 | w0815n g4 ops (W21-G4) | — | **+0** issue / session **+15** segs | **W21-G4** continuous ops: ready-seal scan **0** gap all 14 cycles; dual-issue + peer-ops gate (defer publish ×10 while `w0815o_g4_ops` alive); fail-closed final publish (no force); FRESH `projgen-7b3b8bf6…`; remote COMPLETE **3442→3457** raw **15020→15057** (+37); Dataset COMPLETE **11** held; OTC **57→72** peer **W21-G1**; empty **0**; DEFER D1–D10 densify **not** re-run; peers not killed; general ~495 note / fins separate; proof [`w0815n_g4_ops_20260815.md`](proof/w0815n_g4_ops_20260815.md) |
 | w0815o g2 tip densify (W22-G2) | general ~36.3 host rpm / fins ~8.1 | **+0** seal / raw **+20** | **W22-G2** JQ tip densify `2026-08-01…14` (no DEFER): general week-chunks **17p/0f** (w=8 rpm**495**; 0×429; rowsInserted **93308** incl breakdown tip) + fins tip **3p/0f** (w=2 rpm**100**; rows **7155**); tip months already COMPLETE → seal/issue **0**; receipt-plane reeval C8 pass bars/margin/mb/fins/topix; fail-closed publish local=remote **3442**; FRESH `projgen-50230079…`; raw **15037→15057**; Dataset COMPLETE **11**; empty **0**; DEFER densify **SKIP**; proof [`w0815o_g2_tip_densify_20260815.md`](proof/w0815o_g2_tip_densify_20260815.md) |
