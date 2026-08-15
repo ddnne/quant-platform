@@ -2,7 +2,7 @@
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
 **Live verified:** 2026-08-15 (JST) / ~2026-08-15T03:05Z UTC (remote D1; COMPLETE segs **3457**; raw_n **15175**; Dataset COMPLETE **11**; FRESH `projgen-57a33eaa…`; empty COMPLETE **0**; Phase7 **OFF**; **W28-G1** tip densify general **27p/0f** @495 + fins **3p/0f** @100 + JSDA FULL_OK new **0**; **HAS_RAW_SEALABLE=0** held; **DEFER D1–D10** densify **not** re-run; **CF-SoT** language held)
-**Repo tip:**  — COMPLETE **3457** / raw **15175** / Dataset COMPLETE **11** / FRESH `projgen-57a33eaa…` / empty COMPLETE **0** / Phase7 **OFF** / w0815u_g1_collect
+**Repo tip:** `19558902df336030dc8a44e8f31b32cb076f2398` — COMPLETE **3457** / raw **15175** / Dataset COMPLETE **11** / FRESH `projgen-57a33eaa…` / empty COMPLETE **0** / Phase7 **OFF** / w0815u_g1_collect
 
 ## W27-G6 unified matrix — 残 seg × raw 有無
 
