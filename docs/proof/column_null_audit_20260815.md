@@ -1,10 +1,10 @@
 # Column / typed NULL audit — 2026-08-15
 
-**Waves:** w0815m / **W20-G1 Track A** (contract vs API keys) + **W20-G2 Track B** (typed NULL mapping)  
+**Waves:** w0815m / **W20-G1 Track A** (contract vs API keys) + **W20-G2 Track B** (typed NULL mapping) + **W20-G3 Track B** (JSON payload NULL)  
 **Operator:** GLM 5.3 implementer  
-**Authority:** CF SoT — R2 `quant-raw` + remote D1 `quant-ingest` (`jquants_records.payload`); live CF-proxy for G1 key samples. Local raw/sqlite tip is corroborative when live tip window is closed.  
+**Authority:** CF SoT — R2 `quant-raw` + R2 `quant-structured` + remote D1 `quant-ingest` (`jquants_records.payload` / residual hot); live CF-proxy for G1 key samples. Local raw/sqlite tip is corroborative when live tip window is closed.  
 **Mass / READY / Phase7:** **NO-GO**  
-**Logs:** `.glm-logs/w0815m_g1_contract_api/` (G1) · `.glm-logs/w0815m_g2_typed_null/` (G2)
+**Logs:** `.glm-logs/w0815m_g1_contract_api/` (G1) · `.glm-logs/w0815m_g2_typed_null/` (G2) · `.glm-logs/w0815m_g3_json_null/` (G3)
 
 ---
 
@@ -294,3 +294,125 @@ JSDA is archive/file ingest (CSV/XLS), not J-Quants REST; storage via JSDA-speci
 | Typed path mapping bugs for master/bars | **FIXED** (W20-G2) |
 | AM / earnings calendar historical capability | **DEFER** (vendor tip-only — documented) |
 | Mass / READY | **NO-GO** |
+
+---
+
+## Track B — JSON payload NULL audit (W20-G3)
+
+**Wave:** w0815m / **W20-G3**  
+**Scope:** generic `jquants_records` **payload / raw_payload** for priority datasets (fins / markets / derivatives / edinet / investor_types)  
+**SoT:** CF R2 raw pages + R2 structured JSONL + D1 residual hot rows  
+**Empty-raw ban:** only COMPLETE manifests with `row_count > 0`  
+**Mass / READY / Phase7:** **NO-GO**  
+**Artifacts:** `.glm-logs/w0815m_g3_json_null/` (`AUDIT_REPORT.json`, `DEEP_SAME_ROW.json`, `R2_STRUCTURED_SAMPLE.json`, `FINAL_VERDICT.json`, raw/structured samples)
+
+### 1. How records land in `jquants_records` (and R2 structured)
+
+Premium-core ingest is CF-native (`platform/workers/ingestion-premium`):
+
+| stage | what is written |
+|-------|-----------------|
+| API page | `parsed.data[]` rows — **no field whitelist / no drop** |
+| R2 raw | full response body → `quant-raw/raw/{dataset}/{run_id}/page-*.json` + manifest |
+| structured record | `payload = stableJson(row)` (sorted keys; **undefined only** stripped); `raw_payload = JSON.stringify(row)` |
+| write path | Premium core → **R2-only** structured JSONL (`structured/jsonl/{dataset}/dt=…/{runId}.jsonl`); D1 `jquants_records` is residual hot / legacy tip, not full history |
+
+```ts
+// platform/workers/ingestion-premium/src/index.ts — upsertRecords
+const payload = stableJson(row);
+// ...
+rawPayload: JSON.stringify(row),
+```
+
+```ts
+// platform/workers/ingestion-premium/src/identity.ts — stableJson
+// undefined keys dropped; null / "" preserved as JSON null / empty string
+```
+
+**Implication:** any always-null value in payload is either (a) present empty from the API, or (b) a same-row drop vs `raw_payload`. There is no intermediate typed flatten for these generic datasets.
+
+### 2. Method
+
+1. For each priority dataset, pick a non-empty COMPLETE `raw_retention_manifests` row; download R2 raw page(s); compute key presence / null-or-empty rates on API `data[]`.
+2. Sample D1 `jquants_records` residual rows (`payload`, `raw_payload`); **same-row** compare keysets + values.
+3. Resolve R2 structured keys via `ingestion_change_log` (`jquants_records_r2` summaries); download JSONL; re-check payload≡raw_payload.
+4. Classify always-null keys: **SOURCE** (empty in raw API) vs **MAPPING** (raw has value, payload lost it).
+
+### 3. Dataset results (same-row integrity)
+
+| dataset | raw sample n | D1 compared | R2 JSONL sample | payload≡raw keyset (D1) | value mismatches | always-null keys (D1 hot) | class |
+|---------|-------------:|------------:|----------------:|------------------------:|-----------------:|---------------------------:|-------|
+| `fins_summary` | 414 | 300 | 200 | **1.0** | 0 | 11 | **SOURCE** |
+| `fins_details` | 402 | 266 | 200 | **1.0** | 0 | 0 top-level | OK (nested `FS`) |
+| `fins_dividend` | 460 | 300 | 200 | **1.0** | 0 | 5 | **SOURCE** |
+| `fins_earnings_date` | 18 | 300 | 5 | **1.0** | 0 | 0 | OK |
+| `markets_margin_interest` | 500 | 300 | 200 | **1.0** | 0 | 0 | OK |
+| `markets_margin_alert` | 219 | 300 | 200 | **1.0** | 0 | 0 | OK |
+| `markets_short_ratio` | 34 | 300 | 34 | **1.0** | 0 | 0 | OK |
+| `markets_short_sale_report` | 500 | 300 | 200 | **1.0** | 0 | 0 | OK |
+| `markets_breakdown` | 500 | 300 | 200 | **1.0** | 0 | 0 | OK |
+| `derivatives_bars_daily_futures` | 126 | 126 | 126 | **1.0** | 0 | 0 | OK |
+| `derivatives_bars_daily_options` | 500 | 300 | 200 | **1.0** | 0 | 5 | **SOURCE** |
+| `derivatives_bars_daily_options_225` | 500 | 300 | 200 | **1.0** | 0 | 0 | OK |
+| `edinet_major_shareholders` | 2 | 57 | 2 | **1.0** | 0 | 0 | OK |
+| `edinet_cross_shareholdings` | 2 | 51 | 2 | **1.0** | 0 | 0 (D1) | OK (R2 tip-day sparse) |
+| `edinet_large_volume_shareholders` | 41 | 300 | 23 | **1.0** | 0 | 0 | OK |
+| `equities_investor_types` | 25 | 20 | 4 | **1.0** | 0 | 0 | OK |
+
+**Fields dropped before payload:** **none** (0 mapping drops across all 16).
+
+Example R2 structured objects:
+
+- `structured/jsonl/fins_summary/dt=2026-08-14/r2-fins_summary-1786752949387-8jal91.jsonl`
+- `structured/jsonl/markets_margin_interest/dt=2026-05-01/r2-markets_margin_interest-1786721754020-7jc1fo.jsonl`
+- `structured/jsonl/derivatives_bars_daily_options/dt=2026-08-14/r2-derivatives_bars_daily_options-1786752970381-kfd8j8.jsonl`
+
+Note: latest hourly raw for `markets_margin_interest` is often `row_count=0` (empty-raw ban → not used); audit used non-empty COMPLETE run with 4253 rows.
+
+### 4. Always-null key catalog (source API empty strings)
+
+Same-row: if payload is always empty for a key, `raw_payload` is always empty for that key too (no mapping nullify).
+
+| dataset | always-null / empty keys (D1 residual sample) | interpretation |
+|---------|-----------------------------------------------|----------------|
+| `fins_summary` | `DivUnit`, `FDiv1Q`, `FDivTotalAnn`, `FDivUnit`, `FPayoutRatioAnn`, `MatChgSub`, `NCROE`, `NxFDiv1Q`, `NxFDiv3Q`, `NxFDivUnit`, `NxFNCOP2Q` | REIT unit fields + rarely-used forecast / non-consolidated series; API returns `""`. `MatChgSub` superseded by `SigChgInC` after 2024-07-22 vendor change (key may still appear empty). Spec: [fins/summary](https://jpx-jquants.com/en/spec/fin-summary). |
+| `fins_dividend` | `DeemCapGains`, `DeemDiv`, `DistAmt`, `NetAssetDecRatio`, `RetEarn` | REIT / deemed-dividend fields empty on common equity cash-dividend rows in sample. |
+| `derivatives_bars_daily_options` | `EO`, `EH`, `EL`, `EC`, `SQD` | Emergency-margin OHLC + special quotation date; empty when emergency margin not triggered (typical `EmMrgnTrgDiv=002`). |
+
+R2 structured tip windows can show a **superset** of empty forecast keys for `fins_summary` (e.g. all `FNC*` / `FNCOP*` empty on a single disclosure day) — still source-empty, not dropped.
+
+### 5. Special cases
+
+#### `fins_details` nested `FS`
+
+Top-level keys are only **6**: `Code`, `DiscDate`, `DiscNo`, `DiscTime`, `DocType`, `FS`.  
+BS/PL/CF line items live **inside** the `FS` object (vendor shape). Payload stores the whole object; nothing is flattened away. This is **not** a field-drop bug.
+
+#### No specialized typed mapping for this set
+
+These datasets are **generic_payload** only (see Track A). W20-G2 typed fixes (bars `AAdj*`, master `S17`/`Mkt`…) do not apply. Nulls here are JSON-value nulls, not typed-column mapping.
+
+### 6. Code fix
+
+**None required.** No pre-payload field drop; no `stableJson` loss of present keys; payload ≡ raw_payload on same rows for D1 residual and R2 structured.
+
+Optional follow-ups (out of scope / non-claims):
+
+- Document expected always-empty REIT/emergency fields in consumer docs.
+- Nested `FS` key cardinality variance (XBRL label surface differs by DocType) — research consumers should treat `FS` as open map.
+- No Mass ON / re-ingest / empty-raw accept.
+
+### 7. Verdict (W20-G3)
+
+| check | status |
+|-------|--------|
+| Landing path traced (raw + structured) | **PASS** |
+| R2 raw + R2 structured + D1 residual sampled for 16 priority datasets | **PASS** |
+| payload keyset ≡ raw_payload same-row | **PASS (100%)** |
+| Always-null keys classified source vs mapping | **PASS — all SOURCE** |
+| Fields dropped before payload | **NONE** |
+| Code fix | **not needed** |
+| Empty-raw ban | **held** |
+| Mass / READY / Phase7 | **NO-GO** |
+
+**Track B JSON payload integrity: GO (no mapping defects).** Residual nulls are vendor empty values retained faithfully.
