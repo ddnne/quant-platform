@@ -11,6 +11,7 @@
 
 **Live verified:** 2026-08-15 (JST) / ~2026-08-15T02:43Z UTC  
 **Wave start HEAD:** `306bebb2febf835032abf3bc210f755338b8caac`  
+**Proof HEAD (post-push):** `dcac84932977231a136c04dbfa2dd66ac5e38971`  
 **Projection:** **FRESH** `projgen-c55114231b2e4f5e9c99fb521545daac`  
 **Artifacts:** `.glm-logs/w0815t_g2_fins_earn/` (`matrix/`, `pre/`, `post/`, dry plans, defer evidence, publish + reeval, `FINAL_metrics.json`)
 
