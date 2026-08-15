@@ -1,9 +1,41 @@
 # Phase 6.2 / 6.3 residual status
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
-**Live verified:** 2026-08-15 (JST) / **W47** residual FINAL + ops close · COMPLETE segs **3478** · Dataset COMPLETE **21 / 26** · PARTIAL = **5** permanent DEFER only · **actionable_gap = 0** · empty COMPLETE **0** · **OTC 93** tip island held · permanent DEFER **5** / NO_DENSIFY **6** · densify coverage loops **ENDED** · Mass/READY/Phase7 **NO-GO/OFF** · raw **15869** held (W46 tip secondary) · FRESH `projgen-1a965a00414c4810b25ee77943d1a0f8` · **CF-SoT** held — D1 = hot tip · R2 = history · COMPLETE = receipt-owned · floors W38 + W42 mb **2015-04-01** **not lowered** · **POST_PUSH_SHA** `2da6085f9c34804578b7438baf144ce23d99462b`
+**Live verified:** 2026-08-15 (JST) / **W48** 利用準備フェーズ開始（READY 未宣言） · COMPLETE segs **3478** · Dataset COMPLETE **21 / 26** · PARTIAL = **5** permanent DEFER only · **actionable_gap = 0** · empty COMPLETE **0** · **OTC 93** tip island held · permanent DEFER **5** / NO_DENSIFY **6** · densify coverage loops **ENDED** · Mass/READY/Phase7 **NO-GO/OFF** · raw **15869** held (W46 tip secondary) · FRESH `projgen-17345de1e40b4aabb5496c18b22d3182` · **CF-SoT** held — D1 = hot tip · R2 = history · COMPLETE = receipt-owned · floors W38 + W42 mb **2015-04-01** **not lowered** · coverage baseline **W47 FINAL held** · READY **not declared**
 
-**Repo tip:** `2da6085f9c34804578b7438baf144ce23d99462b` — W47 residual FINAL · COMPLETE **3478** / Dataset COMPLETE **21** / OTC **93** / **actionable_gap = 0** / Phase7 **OFF**
+**Repo tip:** `1fd017da9605ad557c34175ec54f910df097e617` — W48 利用準備開始 · COMPLETE **3478** / Dataset COMPLETE **21** / OTC **93** / **actionable_gap = 0** / Phase7 **OFF** / READY **未宣言**
+
+## 利用準備フェーズ開始（READY 未宣言）
+
+**Phase name:** COMPLETE 21 利用準備（宣言なし）  
+**Wave:** W48 / w0815ao (T1–T10 FINAL merge)  
+**Usage readiness proof:** [`docs/proof/w0815ao_w48_usage_readiness_20260815.md`](proof/w0815ao_w48_usage_readiness_20260815.md)  
+**CF read paths + DEFER guard:** [`docs/proof/complete21_cf_read_paths_20260815.md`](proof/complete21_cf_read_paths_20260815.md)  
+**Ops logs:** [`.glm-logs/w0815ao_g3_ops/`](../.glm-logs/w0815ao_g3_ops/) · [`ops_snapshot.json`](../.glm-logs/w0815ao_g3_ops/ops_snapshot.json) · [`switch_check.json`](../.glm-logs/w0815ao_g3_ops/switch_check.json) · smokes [`.glm-logs/w0815ao_g2_smoke/`](../.glm-logs/w0815ao_g2_smoke/)
+
+| gate | status |
+|------|--------|
+| Phase name | **COMPLETE 21 利用準備（宣言なし）** |
+| Coverage baseline FINAL | **held** (W47 FINAL · Dataset COMPLETE **21/26** · segs **3478** · **actionable_gap=0**) |
+| READY | **未宣言 / not declared** |
+| Mass | **NO-GO / OFF** |
+| Phase7 | **OFF** (foundation / fail-closed only) |
+| empty COMPLETE | **0** (remote verify held) |
+| tip densify | **SKIP** (not primary this phase) |
+| densify | **none** |
+| push | **POST_PUSH_SHA** _fill after push_ |
+| Projection | **FRESH** `projgen-17345de1e40b4aabb5496c18b22d3182` (ops_reeval_freshness; publish apply **SKIP** local==remote 3478) |
+| G1 DEFER guard | `permanent_defer.py` + `QuantDataAccess` history fail-closed · tests **6 passed** |
+| G2 smokes T4–T6 | **all pass** (tip PIT joins; READY **not** declared) |
+
+**Primary this phase:** enter utilization-prep posture on held coverage baseline — **without** READY / Mass / Phase7 declaration.  
+**Not:** densify · tip primary · invent COMPLETE 22 · Phase7 ON · READY GO · mass ON.
+
+### Explicit non-declarations (held)
+
+- **READY** — not declared (利用準備 only; no production READY GO)
+- **Mass Autonomous Research** — **NO-GO / OFF**
+- **Phase7** — **OFF** (no `PHASE7_*` / `MASS_RESEARCH_ENABLE` arming switch)
 
 ## W47 / w0815an — residual FINAL (coverage dense complete · gap 0 · no densify)
 
