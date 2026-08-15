@@ -12,7 +12,7 @@
 
 **Live verified:** 2026-08-15 (JST) / G1 promotion · G2 signal E2E ~`10:24Z` UTC · G3 smoke+FRESH ~`10:19–10:20Z` · G4 residual ~`10:18–10:20Z` · G5 merge+push this close  
 **Wave start HEAD (PRE_sha):** `816fed4d98e8ad6dbec26f0152a36e013f574167` (W51 post-fill)  
-**Proof HEAD (post-push):** `POST_PUSH_SHA_PENDING`  
+**Proof HEAD (post-push):** `7f5f0051e9e5a114a01a74c73ba29a3fc90a669f`  
 **Projection (G3 T9 reclock; residual sync):** **FRESH** `projgen-97e38cc4670f4003901a2ca3b1b0ba37` (pre-gen `projgen-48993e3f05814d759576c01f65196041`)
 
 **Artifacts:**
@@ -199,9 +199,9 @@ R2 put statuses: `put_ok` × **5** · heads all exist.
 | field | value |
 |-------|-------|
 | PRE_sha | `816fed4d98e8ad6dbec26f0152a36e013f574167` |
-| POST_PUSH_SHA (feat commit) | `POST_PUSH_SHA_PENDING` |
-| origin/main after push | `POST_PUSH_SHA_PENDING` |
-| HEAD == origin/main | **pending push** |
+| POST_PUSH_SHA (feat commit) | `7f5f0051e9e5a114a01a74c73ba29a3fc90a669f` |
+| origin/main after push | `7f5f0051e9e5a114a01a74c73ba29a3fc90a669f` |
+| HEAD == origin/main | **true** (both `7f5f0051e9e5a114a01a74c73ba29a3fc90a669f`) |
 
 ---
 
