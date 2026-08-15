@@ -278,3 +278,80 @@ docs/proof/data_quality_scan_20260812.md   # prior D1 jsda_repo_rates=0
 4. **always-null list:** §2
 5. **fixes applied:** master short keys, bars AAdj, tokyo_repo honesty (§5)
 6. **remaining issues:** source always-null fields; tip-only am/earn calendar; JSDA corp schema-superset empties; D1 fact plane empty by design; coverage DEFERs D1–D9 unchanged
+
+---
+
+## 9. Re-verification 2026-08-15 10:34JST
+
+**Wave:** `w0815q` / **W24-G1** (T1/T5 HIGHEST)  
+**Operator:** GLM 5.3 implementer  
+**Logs:** `.glm-logs/w0815q_g1_audit_reverify/`  
+**Mass / READY / Phase7 / empty-raw COMPLETE:** **NO-GO / OFF / ban held**  
+**New mapping bugs found:** **none** (no T6 code fix required)
+
+### 9.1 Origin presence prove
+
+```
+git fetch origin main
+git cat-file -e origin/main:docs/proof/column_null_audit_20260815.md  → OK
+```
+
+File is on `origin/main` (ancestor of tip; authored W20 `f818d3f`/`12d7592`; hot tip note `c820dec`). Fixes on main: `df6271d` (master short keys), `4fcef08` (tokyo_repo honesty), `c820dec` (D1 hot 252).
+
+### 9.2 Method (CF SoT re-sample)
+
+| Claim | Method | Authority |
+|-------|--------|-----------|
+| Master typed short keys no longer 100% null | Remote D1 `jquants_records` `equities_master` Aug window aggregate on payload short keys; n=200 sample through `normalize_listed_info` (specialized path post-`df6271d`) | CF D1 `quant-ingest` + local normalize |
+| Generic payload no key drop | Same-row `payload` vs `raw_payload` keyset equality on recent D1 rows | CF D1 `quant-ingest` |
+| Samples | **1 fins** (`fins_summary` n=150) + **1 margin** (`markets_margin_interest` n=150) | as above |
+
+Script: `.glm-logs/w0815q_g1_audit_reverify/reverify_cf_sot.py` → `REVERIFY_REPORT.json`.
+
+### 9.3 Results
+
+#### Claim A — master V2 short keys / specialized typed path
+
+| Signal | Result |
+|--------|--------|
+| D1 Aug window `equities_master` n | **31115** (`event_time` 2026-08-03…2026-08-12) |
+| payload null `S17` / `S17Nm` / `S33` / `S33Nm` / `Mkt` / `MktNm` | **0 / 0 / 0 / 0 / 0 / 0** |
+| long-name keys present (`Sector17Code` / `MarketCode`) | **0** (V2 short-only SoT; unchanged) |
+| `ListingDate` non-empty | **0** (source always-missing; DEFER held) |
+| Specialized sample n | **200** |
+| typed null rate POST `df6271d` (`sector_17_*`, `sector_33_*`, `market_*`) | **0.0** each |
+| PRE-fix sim (long-name only aliases) nulls on sample | **200/200** sector_17 + market (would still be 100% null) |
+| `listing_date` typed null rate | **1.0** (source; not a regression) |
+| Example typed | code=`13010` CoName=極洋; S17=`1`/食品; S33=`0050`; Mkt=`0111`/プライム; listing_date=`null` |
+
+**Verdict:** claim **HOLDS** — short keys present on D1 payload; specialized path no longer 100% null. Residual `listing_date` source DEFER unchanged.
+
+#### Claim B — generic payload no key drop (fins + margin)
+
+| dataset | compared | keyset_equal_rate | mapping_drop | n_keys_union | verdict |
+|---------|---------:|------------------:|:------------:|-------------:|---------|
+| `fins_summary` | 150 | **1.0** | **false** | 111 | **問題なし** |
+| `markets_margin_interest` | 150 | **1.0** | **false** | 9 | **問題なし** |
+
+`value_mismatches={}`; `keys_dropped_from_payload={}` both samples.
+
+**Verdict:** claim **HOLDS** — no field drop on generic path (reconfirms G3 deep same-row).
+
+### 9.4 Still-valid findings (no invent / no reopen)
+
+| Prior finding | Re-verify status |
+|---------------|------------------|
+| Generic payload path no field drop | **still valid** |
+| Master short-key typed fix `df6271d` | **still valid** (live re-sample) |
+| Bars AAdj false-alias fix `df6271d` | not re-sampled this ticket (code+tests remain on main) |
+| Source always-null DEFERs (fins forecast/unit, options EC…, ExRT, listing_date, JSDA corp schema-superset) | **still DEFER** |
+| `tokyo_repo` plane-split honesty `4fcef08` + D1 hot tip **252** `c820dec` | **still valid** (not re-broken) |
+| Mass NO-GO / empty-raw ban | **held** |
+
+### 9.5 New issues
+
+**None.** No T6 mapping fix required.
+
+### 9.6 Residual SoT link
+
+Live residual SoT: [`docs/phase62_residual_status.md`](../phase62_residual_status.md) § **W20 column / NULL audit** → this file.

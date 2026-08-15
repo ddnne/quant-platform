@@ -6,14 +6,16 @@
 
 ## W20 column / NULL audit (short)
 
-Proof: [`docs/proof/column_null_audit_20260815.md`](proof/column_null_audit_20260815.md) · G4 [`w0815m_g4_jsda_audit_20260815.md`](proof/w0815m_g4_jsda_audit_20260815.md)
+**Canonical column/NULL audit path:** [`docs/proof/column_null_audit_20260815.md`](proof/column_null_audit_20260815.md)  
+G4 JSDA: [`w0815m_g4_jsda_audit_20260815.md`](proof/w0815m_g4_jsda_audit_20260815.md)  
+**W24-G1 re-verify (2026-08-15 10:34JST):** audit §9 · logs `.glm-logs/w0815q_g1_audit_reverify/` · CF SoT re-sample **HOLDS** (master short typed 0% null n=200; fins+margin payload keyset equal 1.0; **no new mapping bugs**)
 
 | Item | Result |
 |------|--------|
-| Generic payload drop | **none** (G3 deep same-row keyset equal 100%) |
-| Typed master V2 short keys (`S17`/`Mkt*`) | **FIXED** `df6271d` (was 100% null typed) |
+| Generic payload drop | **none** (G3 deep same-row; **W24-G1 re-sample** fins_summary n=150 + margin_interest n=150 keyset_equal_rate=**1.0**) |
+| Typed master V2 short keys (`S17`/`Mkt*`) | **FIXED** `df6271d` (was 100% null typed); **W24-G1 re-sample** D1 Aug n=31115 short keys 0-null + normalize_listed_info n=200 typed 0% null |
 | Bars `AAdj*` false all-day Adj alias | **FIXED** `df6271d` |
-| Always-null source fields | fins forecast/unit, options EC/EH/EL/EO/SQD, ExRT, listing_date, JSDA corp schema-superset → **DEFER** (do not invent) |
+| Always-null source fields | fins forecast/unit, options EC/EH/EL/EO/SQD, ExRT, listing_date, JSDA corp schema-superset → **DEFER** (do not invent); listing_date re-confirmed 100% null source |
 | **`tokyo_repo_rows` vs COMPLETE** | **plane split** explained (not data loss); honesty UI **FIXED** `4fcef08`; **D1 hot tip publish** **DONE** 2026-08-15: D1 `jsda_repo_rates` **0→252** (`as_of_date>=2026-07-01`); full history stays local **30303** / R2 — **no full D1 backfill** ([`jsda_hot_d1_publish_20260815.md`](proof/jsda_hot_d1_publish_20260815.md)) |
 | Mass / READY / Phase7 / empty-raw COMPLETE | **NO-GO / OFF / ban held** |
 
@@ -205,7 +207,7 @@ Canonical blocked residuals. **Do not re-run densify** unless the re-try conditi
 ### Column / NULL audit (W20)
 | Proof | What it closes |
 |-------|----------------|
-| [`docs/proof/column_null_audit_20260815.md`](proof/column_null_audit_20260815.md) | **W20-G5 unified** merge G1–G4: dataset×key tables; always-null list + cause class; **tokyo_repo_rows=0** plane-split; per-dataset 問題なし/要修正/DEFER; Mass NO-GO |
+| [`docs/proof/column_null_audit_20260815.md`](proof/column_null_audit_20260815.md) | **W20-G5 unified** merge G1–G4: dataset×key tables; always-null list + cause class; **tokyo_repo_rows=0** plane-split; per-dataset 問題なし/要修正/DEFER; Mass NO-GO; **W24-G1 §9 re-verify 2026-08-15 10:34JST** CF SoT HOLDS (master short typed + fins/margin no key drop; no new bugs) |
 | [`docs/proof/w0815m_g4_jsda_audit_20260815.md`](proof/w0815m_g4_jsda_audit_20260815.md) | **W20-G4**: JSDA tokyo_repo honesty + OTC/corp/repo field coverage; `storage_plane_status` divergence flags |
 
 ### COMPLETE seals
