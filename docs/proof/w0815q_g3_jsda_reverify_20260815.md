@@ -10,7 +10,7 @@
 **Live verified:** 2026-08-15 (~01:40Z UTC)  
 **Projection (reeval):** **FRESH** `projgen-432e34acc37e49e3be496d5e379ff8a2` (`coverage_segments_untouched=1`, mass=NO-GO)  
 **Base HEAD (pre-proof):** `7fb2fa3`  
-**Proof HEAD (post-push):** _(filled after push)_
+**Proof HEAD (post-push):** `3c5f2c9`
 
 ## Verdict
 
