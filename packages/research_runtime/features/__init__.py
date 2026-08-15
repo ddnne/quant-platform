@@ -49,6 +49,10 @@ from .complete21_min import (
     VolumeChange1d,
     TopixRelative1d,
     DisclosureFlagFins,
+    MarginInterestChange1d,
+    ShortRatioLevel,
+    IsTradingDay,
+    RepoRateLevel,
 )
 from .dataset_guard import (
     COMPLETE_21_DATASETS,
@@ -83,6 +87,10 @@ __all__ = [
     "VolumeChange1d",
     "TopixRelative1d",
     "DisclosureFlagFins",
+    "MarginInterestChange1d",
+    "ShortRatioLevel",
+    "IsTradingDay",
+    "RepoRateLevel",
     # dataset guards
     "COMPLETE_21_DATASETS",
     "PermanentDeferHistoryError",

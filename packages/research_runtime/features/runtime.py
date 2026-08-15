@@ -115,6 +115,18 @@ class FeatureContext:
         )
         return self._read("jquants_records", {"dataset": eligible, **kwargs})
 
+    def get_jsda_repo_rates(self, **kwargs: Any):
+        """PIT JSDA Tokyo repo rates with the context's trusted scope injected.
+
+        Maps to COMPLETE dataset ``jsda_tokyo_repo_rates`` (history-eligible).
+        Permanent DEFER ids are fail-closed before the PIT read.
+        """
+        require_feature_dataset(
+            "jsda_tokyo_repo_rates",
+            context="FeatureContext.get_jsda_repo_rates",
+        )
+        return self._read("jsda_repo_rates", kwargs)
+
 
 def _require_as_of(as_of: Any) -> str:
     if as_of is None:
@@ -181,6 +193,7 @@ def compute(
             "equity_master": pit.get_equity_master,
             "market_calendar": pit.get_market_calendar,
             "jquants_records": pit.get_jquants_records,
+            "jsda_repo_rates": pit.get_jsda_repo_rates,
         }
         try:
             reader = readers[resource]

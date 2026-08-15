@@ -25,9 +25,11 @@ from research.single_shot_job import (
     MASS_RESEARCH_STATUS,
     PHASE7_STATUS,
     READY_DECLARED,
+    SingleShotExecution,
     SingleShotJobSpec,
     assert_mass_and_phase7_off,
     build_single_shot_job_spec,
+    execute_single_shot_job,
 )
 
 __all__ = [
@@ -51,10 +53,12 @@ __all__ = [
     "ResearchIdea",
     "ResearchReadinessService",
     "ScheduledExperiment",
+    "SingleShotExecution",
     "SingleShotJobSpec",
     "StrategyEvidence",
     "VerifiedResearchReadiness",
     "assert_mass_and_phase7_off",
     "build_single_shot_job_spec",
+    "execute_single_shot_job",
     "require_mass_research_start",
 ]

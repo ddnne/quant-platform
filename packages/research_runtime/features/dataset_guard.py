@@ -55,6 +55,7 @@ _SHORTCUT_DATASET: dict[str, str] = {
     "equity_bars_daily": "equities_bars_daily",
     "equity_master": "equities_master",  # permanent DEFER — blocked for history
     "market_calendar": "markets_calendar",
+    "jsda_repo_rates": "jsda_tokyo_repo_rates",
 }
 
 

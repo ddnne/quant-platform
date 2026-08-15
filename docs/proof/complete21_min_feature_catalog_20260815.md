@@ -1,7 +1,7 @@
 # COMPLETE 21 — minimal feature catalog (2026-08-15)
 
-**Wave:** W49 / w0815ap_g2 · T5  
-**Phase:** COMPLETE 21 **usage readiness** (利用準備) — feature catalog only  
+**Wave:** W50 / w0815aq_g2 · T5–T7 (extends W49 / w0815ap_g2)  
+**Phase:** COMPLETE 21 **usage readiness** (利用準備) — feature catalog + min implementations  
 **Mass / READY / Phase7:** **not** declared · **not** enabled · densify **not** run · push **not** this task
 
 **Sources:**
@@ -78,7 +78,7 @@ None of these declare READY.
 
 | feature_id | inputs (COMPLETE only) | formula (sketch) | status |
 |------------|------------------------|------------------|--------|
-| `return_1d` | `equities_bars_daily` | \((C_t - C_{t-1}) / C_{t-1}\) | implemented (v0, approved) |
+| `return_1d` | `equities_bars_daily` | \((C_t - C_{t-1}) / C_{t-1}\) | implemented (v0, approved) · DEFER-guarded via `get_equity_bars_daily` |
 | `momentum_n` | `equities_bars_daily` | N-session cumulative return | implemented (v0, approved) |
 | `volatility_n` | `equities_bars_daily` | sample stdev of 1d returns · √252 | implemented (v0, approved) |
 | `volume_change_1d` | `equities_bars_daily` | \((V_t - V_{t-1}) / V_{t-1}\) | **implemented** (complete21 min, candidate) |
@@ -95,8 +95,8 @@ None of these declare READY.
 
 | feature_id | inputs (COMPLETE only) | formula (sketch) | status |
 |------------|------------------------|------------------|--------|
-| `margin_interest_change_1d` | `markets_margin_interest` | session-over-session change in margin interest fields | catalog + **skeleton** path (guarded load) |
-| (future) short_ratio_level | `markets_short_ratio` | level / change of short ratio | catalog only |
+| `margin_interest_change_1d` | `markets_margin_interest` | \((M_t - M_{t-1}) / M_{t-1}\) with \(M =\) LongVol + ShrtVol | **implemented** (complete21 min, candidate) |
+| `short_ratio_level` | `markets_short_ratio` | \((\)ShrtWithResVa + ShrtNoResVa\() / \)SellExShortVa for S33 section | **implemented** (complete21 min, candidate) |
 | (future) margin_alert_flag | `markets_margin_alert` | 1 if alert row visible at `as_of` | catalog only |
 
 ### 2.4 Disclosure / filings flags
@@ -109,18 +109,18 @@ None of these declare READY.
 
 **Not used:** `fins_earnings_date`, `equities_earnings_calendar` (DEFER).
 
-### 2.5 Investor / calendar / JSDA (catalog only this wave)
+### 2.5 Investor / calendar / JSDA
 
-| feature_id (future) | inputs | note |
-|---------------------|--------|------|
-| investor_flow_change | `equities_investor_types` | section × pubdate flows |
-| is_trading_day | `markets_calendar` | structural / utility |
-| repo_rate_level | `jsda_tokyo_repo_rates` | macro context |
-| corp_bond_print_flag | `jsda_corporate_bond_transactions` | activity flag |
+| feature_id | inputs | formula (sketch) | status |
+|------------|--------|------------------|--------|
+| (future) investor_flow_change | `equities_investor_types` | section × pubdate flows | catalog only |
+| `is_trading_day` | `markets_calendar` | 1.0 if `holiday_division=="1"` for date (default = as_of day) | **implemented** (complete21 min, candidate) |
+| `repo_rate_level` | `jsda_tokyo_repo_rates` | latest PIT-visible `rate` (optional tenor / rate_type) | **implemented** (complete21 min, candidate) |
+| (future) corp_bond_print_flag | `jsda_corporate_bond_transactions` | activity flag | catalog only |
 
 ---
 
-## 3. Implemented in this wave (T6)
+## 3. Implemented (T5–T6)
 
 Registered under `packages/research_runtime/features/complete21_min.py` (imported from `features` package):
 
@@ -129,10 +129,16 @@ Registered under `packages/research_runtime/features/complete21_min.py` (importe
 | `volume_change_1d` | 1.0.0 | signal | candidate | `equities_bars_daily` |
 | `topix_relative_1d` | 1.0.0 | signal | candidate | `equities_bars_daily`, `indices_bars_daily_topix` |
 | `disclosure_flag_fins` | 1.0.0 | signal | candidate | `fins_summary` |
+| `margin_interest_change_1d` | 1.0.0 | signal | candidate | `markets_margin_interest` |
+| `short_ratio_level` | 1.0.0 | signal | candidate | `markets_short_ratio` |
+| `is_trading_day` | 1.0.0 | utility | candidate | `markets_calendar` |
+| `repo_rate_level` | 1.0.0 | state | candidate | `jsda_tokyo_repo_rates` |
 
 Each compute path calls `require_feature_datasets(...)` → permanent DEFER reject **before** PIT reads.
 
-Pipeline guard (T7): `FeatureContext.get_jquants_records` and `get_equity_master` refuse permanent DEFER ids via `require_history_eligible` / fixed reject for master.
+Pipeline guard (T7): `FeatureContext.get_jquants_records`, `get_equity_master`, `get_market_calendar`, and `get_jsda_repo_rates` refuse permanent DEFER ids via `require_history_eligible` / fixed reject for master.
+
+**W50 note:** `return_1d` cleanup deferred — already shipped as approved v0 with bars DEFER guard; not duplicated as complete21 candidate.
 
 ---
 

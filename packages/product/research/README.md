@@ -19,27 +19,39 @@ from research import (
 
 Mass start is **fail-closed** without `VerifiedResearchReadiness`; operator override is rejected.
 
-## Single-shot job skeleton (W49 T8)
+## Single-shot job (W49 skeleton · W50 CF execute)
 
 ```python
 from research.single_shot_job import (
     COMPLETE_21_DATASETS,
     build_single_shot_job_spec,
+    execute_single_shot_job,
     assert_mass_and_phase7_off,
 )
 
 # COMPLETE 21 only (permanent DEFER rejected). Output keys are R2, not local SoT.
 spec = build_single_shot_job_spec(
     dataset_ids=["equities_bars_daily", "markets_calendar"],
-    period_start="2024-01-01",
-    period_end="2024-12-31",
+    period_start="2026-08-01",
+    period_end="2026-08-15",
 )
 assert_mass_and_phase7_off()  # Mass NO-GO · Phase7 OFF · READY not declared
+
+# One CF-backed pass: D1 tip extract → R2 result + manifest (not READY).
+# dry_run=True stages puts without remote write when R2 credentials missing.
+ex = execute_single_shot_job(
+    dataset_ids=["equities_bars_daily", "markets_calendar"],
+    period_start="2026-08-01",
+    period_end="2026-08-15",
+    job_id="demo-job",
+    dry_run=False,
+)
 ```
 
 | rule | held |
 |------|------|
 | Inputs | residual **COMPLETE 21** only (`permanent_defer` excluded) |
+| Read | CF D1 `quant-ingest` **hot tip** (bounded; history SoT remains R2) |
 | Output path | R2 `quant-structured` · `research/single_shot/job={id}/…` (local **not** SoT) |
 | Mass loop | **not** connected (`agents.mass_research` untouched) |
 | READY | **not** set |
