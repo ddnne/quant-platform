@@ -1,4 +1,4 @@
-"""Minimal COMPLETE-21-only features (W49 / w0815ap_g2 · W50 / w0815aq_g2).
+"""Minimal COMPLETE-21-only features (W49–W51 / w0815ar_g2).
 
 All features:
 
@@ -7,7 +7,7 @@ All features:
   any PIT read;
 * stay ``status="candidate"`` — no READY / strategy default claim.
 
-Implemented:
+Implemented (W49–W50, 7):
 
 * ``volume_change_1d`` — one-session volume change from equity daily bars.
 * ``topix_relative_1d`` — equity 1d return minus TOPIX 1d return.
@@ -17,9 +17,18 @@ Implemented:
 * ``is_trading_day`` — calendar utility: 1.0 if ``date`` is a trading day.
 * ``repo_rate_level`` — latest Tokyo repo rate level (JSDA).
 
-``return_1d`` remains the approved v0 feature (already COMPLETE-only bars +
-FeatureContext DEFER guard via ``get_equity_bars_daily``); not re-registered
-here.
+Implemented (W51 expand, +3):
+
+* ``return_1d_c21`` — complete21-path export of the 1d simple-return formula
+  (``require_feature_datasets`` + bars). Does **not** replace approved v0
+  ``return_1d``; stays ``candidate``.
+* ``margin_alert_flag`` — binary flag if any ``markets_margin_alert`` row is
+  PIT-visible for ``code``.
+* ``futures_activity_proxy`` — sum of latest-session futures volumes from
+  ``derivatives_bars_daily_futures`` (optional contract ``code`` filter).
+
+Approved v0 ``return_1d`` remains in ``features.v0`` (DEFER-guarded via
+``get_equity_bars_daily``). This wave does **not** promote any candidate.
 """
 
 from __future__ import annotations
@@ -214,6 +223,40 @@ def repo_rate_level_from_rows(
     }
 
 
+def margin_alert_flag_from_count(n_rows: int) -> tuple[float, dict[str, Any]]:
+    """1.0 if any margin-alert row is visible, else 0.0."""
+    flag = 1.0 if n_rows > 0 else 0.0
+    return flag, {"rows_seen": n_rows, "flag": flag}
+
+
+def futures_activity_from_volume_pairs(
+    pairs: list[tuple[str, float]],
+) -> tuple[float | None, dict[str, Any]]:
+    """Sum volumes on the latest date as a futures activity proxy.
+
+    ``pairs`` are sorted ``(date, volume)`` observations (any contract).
+    Returns None when no volume observations are present.
+    """
+    if not pairs:
+        return None, {
+            "rows_seen": 0,
+            "reason": "no futures volume observations visible",
+        }
+    last_date = pairs[-1][0]
+    total = 0.0
+    n_on_date = 0
+    for d, v in pairs:
+        if d == last_date:
+            total += v
+            n_on_date += 1
+    return total, {
+        "rows_seen": len(pairs),
+        "activity_date": last_date,
+        "contracts_on_date": n_on_date,
+        "volume_sum": total,
+    }
+
+
 def _parse_volume_rows(rows: list[dict[str, Any]]) -> list[tuple[str, float]]:
     out: list[tuple[str, float]] = []
     for r in rows:
@@ -336,6 +379,35 @@ def _latest_short_ratio_row(
         return None
     candidates.sort(key=lambda x: x[0])
     return candidates[-1][1]
+
+
+def _parse_futures_volume_rows(
+    rows: list[dict[str, Any]],
+) -> list[tuple[str, float]]:
+    """Extract ``(date, volume)`` from derivatives futures catalog rows."""
+    out: list[tuple[str, float]] = []
+    for r in rows:
+        payload = _row_payload(r)
+        d = (
+            payload.get("Date")
+            or payload.get("date")
+            or r.get("date")
+            or (str(r.get("event_time"))[:10] if r.get("event_time") else None)
+        )
+        vol = (
+            payload.get("Volume")
+            or payload.get("volume")
+            or r.get("volume")
+            or r.get("Volume")
+        )
+        if d is None or vol is None:
+            continue
+        try:
+            out.append((str(d)[:10], float(vol)))
+        except (TypeError, ValueError):
+            continue
+    out.sort(key=lambda x: x[0])
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -695,6 +767,147 @@ RepoRateLevel: FeatureDefinition = register(
 )
 
 
+# ---------------------------------------------------------------------------
+# return_1d_c21 — complete21-path export of 1d simple return (candidate)
+# ---------------------------------------------------------------------------
+
+_RETURN_C21_DATASETS = ("equities_bars_daily",)
+
+
+def _return_1d_c21(ctx) -> FeatureOutput:
+    require_feature_datasets(
+        _RETURN_C21_DATASETS, context="feature return_1d_c21"
+    )
+    code = ctx.get_input("code")
+    res = ctx.get_equity_bars_daily(code=code)
+    pairs = _parse_close_rows(res.rows)
+    value, meta = simple_return_from_closes(pairs)
+    meta = {
+        **meta,
+        "code": code,
+        "datasets": list(_RETURN_C21_DATASETS),
+        "export_of": "return_1d",
+        "path": "complete21_min",
+    }
+    return FeatureOutput(value=value, metadata=meta)
+
+
+Return1dC21: FeatureDefinition = register(
+    FeatureDefinition(
+        id="return_1d_c21",
+        version=FeatureVersion(1, 0, 0),
+        inputs=FeatureInput(
+            required_kwargs=("code",),
+            as_of_rule="session_close",
+        ),
+        description=(
+            "COMPLETE-21 path export of one-session simple return "
+            "(close-to-close) from equities_bars_daily. Calls "
+            "require_feature_datasets before PIT reads. Candidate twin of "
+            "approved v0 return_1d — does not replace it; no promotion this wave."
+        ),
+        compute=_return_1d_c21,
+        tags=("return", "daily", "complete21", "export"),
+        intended_role="signal",
+        status="candidate",
+        price_basis=RAW,
+    )
+)
+
+
+# ---------------------------------------------------------------------------
+# margin_alert_flag
+# ---------------------------------------------------------------------------
+
+_MARGIN_ALERT_DATASETS = ("markets_margin_alert",)
+
+
+def _margin_alert_flag(ctx) -> FeatureOutput:
+    require_feature_datasets(
+        _MARGIN_ALERT_DATASETS, context="feature margin_alert_flag"
+    )
+    code = ctx.get_input("code")
+    res = ctx.get_jquants_records(dataset="markets_margin_alert", code=code)
+    n = len(res.rows) if res is not None and getattr(res, "rows", None) is not None else 0
+    value, meta = margin_alert_flag_from_count(n)
+    meta = {**meta, "code": code, "datasets": list(_MARGIN_ALERT_DATASETS)}
+    return FeatureOutput(value=value, metadata=meta)
+
+
+MarginAlertFlag: FeatureDefinition = register(
+    FeatureDefinition(
+        id="margin_alert_flag",
+        version=FeatureVersion(1, 0, 0),
+        inputs=FeatureInput(
+            required_kwargs=("code",),
+            as_of_rule="session_close",
+        ),
+        description=(
+            "Binary margin-alert flag: 1.0 if any PIT-visible "
+            "markets_margin_alert row exists for code at as_of, else 0.0. "
+            "COMPLETE 21 only. Permanent DEFER datasets rejected before PIT reads."
+        ),
+        compute=_margin_alert_flag,
+        tags=("margin", "alert", "flag", "complete21"),
+        intended_role="signal",
+        status="candidate",
+        price_basis=None,
+    )
+)
+
+
+# ---------------------------------------------------------------------------
+# futures_activity_proxy
+# ---------------------------------------------------------------------------
+
+_FUTURES_DATASETS = ("derivatives_bars_daily_futures",)
+
+
+def _futures_activity_proxy(ctx) -> FeatureOutput:
+    require_feature_datasets(
+        _FUTURES_DATASETS, context="feature futures_activity_proxy"
+    )
+    code = ctx.get_input("code", None)
+    kwargs: dict[str, Any] = {"dataset": "derivatives_bars_daily_futures"}
+    if code is not None:
+        kwargs["code"] = code
+    res = ctx.get_jquants_records(**kwargs)
+    rows = res.rows if res is not None and getattr(res, "rows", None) else []
+    pairs = _parse_futures_volume_rows(rows)
+    value, meta = futures_activity_from_volume_pairs(pairs)
+    meta = {
+        **meta,
+        "code": code,
+        "datasets": list(_FUTURES_DATASETS),
+        "metric": "volume_sum_latest_date",
+    }
+    return FeatureOutput(value=value, metadata=meta)
+
+
+FuturesActivityProxy: FeatureDefinition = register(
+    FeatureDefinition(
+        id="futures_activity_proxy",
+        version=FeatureVersion(1, 0, 0),
+        inputs=FeatureInput(
+            required_kwargs=(),
+            optional_kwargs={"code": None},
+            as_of_rule="session_close",
+        ),
+        description=(
+            "Futures activity proxy: sum of Volume on the latest PIT-visible "
+            "date from derivatives_bars_daily_futures. Optional contract code "
+            "filter. Returns None when no volumes are visible. COMPLETE 21 only. "
+            "Permanent DEFER datasets rejected before PIT reads."
+        ),
+        compute=_futures_activity_proxy,
+        tags=("futures", "derivatives", "activity", "complete21"),
+        intended_role="state",
+        status="candidate",
+        price_basis=None,
+    )
+)
+
+
 __all__ = [
     "VolumeChange1d",
     "TopixRelative1d",
@@ -703,6 +916,9 @@ __all__ = [
     "ShortRatioLevel",
     "IsTradingDay",
     "RepoRateLevel",
+    "Return1dC21",
+    "MarginAlertFlag",
+    "FuturesActivityProxy",
     "volume_change_from_pairs",
     "simple_return_from_closes",
     "topix_relative_from_returns",
@@ -711,4 +927,6 @@ __all__ = [
     "short_ratio_level_from_components",
     "is_trading_day_from_division",
     "repo_rate_level_from_rows",
+    "margin_alert_flag_from_count",
+    "futures_activity_from_volume_pairs",
 ]

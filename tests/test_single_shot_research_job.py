@@ -1,8 +1,9 @@
-"""T8 single-shot job + T9 Phase7/Mass OFF freeze + W50 execute/DEFER (w0815aq)."""
+"""T8 single-shot job + T9 Phase7/Mass OFF freeze + W50 execute/DEFER + W51 features."""
 
 from __future__ import annotations
 
 import ast
+import json
 from pathlib import Path
 
 import pytest
@@ -15,6 +16,7 @@ from data_contracts.permanent_defer import (
 from research.single_shot_job import (
     COMPLETE_21_DATASETS,
     COMPLETE_21_DATASET_SET,
+    DEFAULT_CANDIDATE_FEATURES,
     MASS_RESEARCH_ENV_ARMING_SWITCHES,
     MASS_RESEARCH_STATUS,
     PHASE7_ENV_ARMING_SWITCHES,
@@ -26,8 +28,11 @@ from research.single_shot_job import (
     SingleShotJobError,
     assert_mass_and_phase7_off,
     build_single_shot_job_spec,
+    build_tip_feature_context,
+    compute_tip_candidate_features,
     design_artifact_paths,
     execute_single_shot_job,
+    extract_d1_tip_feature_rows,
     extract_d1_tip_summaries,
     freeze_status,
     require_complete_21_only,
@@ -233,6 +238,279 @@ def test_extract_d1_tip_summaries_rejects_defer():
             period_end="2026-08-15",
             d1_execute=lambda sql: (_ for _ in ()).throw(AssertionError("no d1")),
         )
+
+
+def test_extract_d1_tip_feature_rows_rejects_defer():
+    with pytest.raises(PermanentDeferHistoryError):
+        extract_d1_tip_feature_rows(
+            ["equities_master"],
+            period_start="2026-08-01",
+            period_end="2026-08-15",
+            d1_execute=lambda sql: (_ for _ in ()).throw(AssertionError("no d1")),
+        )
+
+
+def test_tip_feature_context_and_candidate_compute():
+    """W51: tip FeatureContext (not local SoT) computes candidate features."""
+    tip_rows = {
+        "equities_bars_daily": [
+            {
+                "code": "13010",
+                "date": "2026-08-03",
+                "volume": 100.0,
+                "close": 100.0,
+                "available_at": "2026-08-03T15:30:00+09:00",
+                "event_time": "2026-08-03T09:00:00+09:00",
+            },
+            {
+                "code": "13010",
+                "date": "2026-08-04",
+                "volume": 150.0,
+                "close": 110.0,
+                "available_at": "2026-08-04T15:30:00+09:00",
+                "event_time": "2026-08-04T09:00:00+09:00",
+            },
+        ],
+        "markets_calendar": [
+            {
+                "date": "2026-08-03",
+                "holiday_division": "1",
+                "available_at": "2026-08-03T09:00:00+09:00",
+                "event_time": "2026-08-03T09:00:00+09:00",
+            },
+            {
+                "date": "2026-08-04",
+                "holiday_division": "1",
+                "available_at": "2026-08-04T09:00:00+09:00",
+                "event_time": "2026-08-04T09:00:00+09:00",
+            },
+        ],
+        "indices_bars_daily_topix": [
+            {
+                "date": "2026-08-03",
+                "close": 3000.0,
+                "available_at": "2026-08-03T15:30:00+09:00",
+                "event_time": "2026-08-03T09:00:00+09:00",
+                "payload": {"Date": "2026-08-03", "C": 3000.0},
+            },
+            {
+                "date": "2026-08-04",
+                "close": 3030.0,
+                "available_at": "2026-08-04T15:30:00+09:00",
+                "event_time": "2026-08-04T09:00:00+09:00",
+                "payload": {"Date": "2026-08-04", "C": 3030.0},
+            },
+        ],
+    }
+    as_of = "2026-08-04T15:30:00+09:00"
+    ctx = build_tip_feature_context(
+        tip_rows, as_of=as_of, inputs={"code": "13010"}
+    )
+    assert ctx.as_of == as_of
+    bars = ctx.get_equity_bars_daily(code="13010")
+    assert len(bars.rows) == 2
+    assert bars.metadata["source"] == "cloudflare_d1_tip"
+
+    result = compute_tip_candidate_features(
+        tip_rows,
+        as_of=as_of,
+        feature_ids=DEFAULT_CANDIDATE_FEATURES,
+        codes=["13010"],
+        dates=["2026-08-03", "2026-08-04"],
+    )
+    assert result["ready_declared"] is False
+    assert result["local_sot"] is False
+    by_id = {f["feature_id"]: f for f in result["features"]}
+    assert set(by_id) == set(DEFAULT_CANDIDATE_FEATURES)
+    # volume: (150-100)/100 = 0.5
+    vol = by_id["volume_change_1d"]
+    assert vol["version"] == "1.0.0"
+    assert vol["row_counts"]["computed"] == 1
+    assert vol["null_counts"] == 0
+    assert vol["sample_values"][0]["value"] == pytest.approx(0.5)
+    # calendar trading days
+    cal = by_id["is_trading_day"]
+    assert cal["row_counts"]["computed"] == 2
+    assert cal["null_counts"] == 0
+    assert all(sv["value"] == 1.0 for sv in cal["sample_values"])
+    # topix relative: equity ret 0.10 - topix ret 0.01 = 0.09
+    rel = by_id["topix_relative_1d"]
+    assert rel["row_counts"]["computed"] == 1
+    assert rel["null_counts"] == 0
+    assert rel["sample_values"][0]["value"] == pytest.approx(0.09)
+
+
+def test_execute_with_features_writes_manifest_feature_stats(tmp_path: Path):
+    """W51 T1/T3: execute path computes candidates + manifest feature_id/version/row_counts."""
+
+    def fake_d1(sql: str):
+        s = sql
+        # COUNT queries
+        if "COUNT(*)" in s and "payload" not in s.lower():
+            if "equities_bars_daily" in s and "LIKE" in s:
+                return [{"n": 2}]
+            if "equities_bars_daily" in s:
+                return [
+                    {
+                        "n": 2,
+                        "min_event_time": "2026-08-03T09:00:00+09:00",
+                        "max_event_time": "2026-08-04T09:00:00+09:00",
+                    }
+                ]
+            if "markets_calendar" in s:
+                return [
+                    {
+                        "n": 2,
+                        "min_event_time": "2026-08-03",
+                        "max_event_time": "2026-08-04",
+                    }
+                ]
+            if "indices_bars_daily_topix" in s:
+                return [
+                    {
+                        "n": 2,
+                        "min_event_time": "2026-08-03",
+                        "max_event_time": "2026-08-04",
+                    }
+                ]
+            return [{"n": 0}]
+        # natural_key discovery samples
+        if "SELECT natural_key FROM" in s:
+            return [
+                {"natural_key": json.dumps({"Code": "13010", "Date": "2026-08-03"})},
+                {"natural_key": json.dumps({"Code": "13010", "Date": "2026-08-04"})},
+            ]
+        # payload extracts
+        if "payload" in s and "equities_bars_daily" in s:
+            return [
+                {
+                    "natural_key": json.dumps({"Code": "13010", "Date": "2026-08-03"}),
+                    "event_time": "2026-08-03T09:00:00+09:00",
+                    "available_at": "2026-08-03T15:30:00+09:00",
+                    "payload": json.dumps(
+                        {"Code": "13010", "Date": "2026-08-03", "C": 100, "Vo": 100}
+                    ),
+                },
+                {
+                    "natural_key": json.dumps({"Code": "13010", "Date": "2026-08-04"}),
+                    "event_time": "2026-08-04T09:00:00+09:00",
+                    "available_at": "2026-08-04T15:30:00+09:00",
+                    "payload": json.dumps(
+                        {"Code": "13010", "Date": "2026-08-04", "C": 110, "Vo": 150}
+                    ),
+                },
+            ]
+        if "payload" in s and "markets_calendar" in s:
+            return [
+                {
+                    "natural_key": json.dumps({"Date": "2026-08-03"}),
+                    "event_time": "2026-08-03T09:00:00+09:00",
+                    "available_at": "2026-08-03T09:00:00+09:00",
+                    "payload": json.dumps({"Date": "2026-08-03", "HolDiv": "1"}),
+                },
+                {
+                    "natural_key": json.dumps({"Date": "2026-08-04"}),
+                    "event_time": "2026-08-04T09:00:00+09:00",
+                    "available_at": "2026-08-04T09:00:00+09:00",
+                    "payload": json.dumps({"Date": "2026-08-04", "HolDiv": "1"}),
+                },
+            ]
+        if "payload" in s and "indices_bars_daily_topix" in s:
+            return [
+                {
+                    "natural_key": json.dumps({"Date": "2026-08-03"}),
+                    "event_time": "2026-08-03T09:00:00+09:00",
+                    "available_at": "2026-08-03T15:30:00+09:00",
+                    "payload": json.dumps({"Date": "2026-08-03", "C": 3000.0}),
+                },
+                {
+                    "natural_key": json.dumps({"Date": "2026-08-04"}),
+                    "event_time": "2026-08-04T09:00:00+09:00",
+                    "available_at": "2026-08-04T15:30:00+09:00",
+                    "payload": json.dumps({"Date": "2026-08-04", "C": 3030.0}),
+                },
+            ]
+        # summary sample rows (no payload)
+        if "equities_bars_daily" in s:
+            return [
+                {
+                    "natural_key": json.dumps({"Code": "13010", "Date": "2026-08-03"}),
+                    "event_time": "2026-08-03T09:00:00+09:00",
+                    "available_at": "2026-08-03T15:30:00+09:00",
+                }
+            ]
+        return [
+            {
+                "natural_key": json.dumps({"Date": "2026-08-03"}),
+                "event_time": "2026-08-03",
+                "available_at": "2026-08-03",
+            }
+        ]
+
+    puts: dict[str, bytes] = {}
+
+    def fake_put(bucket: str, key: str, body: bytes):
+        puts[key] = body
+        return {"bucket": bucket, "key": key, "bytes": len(body), "status": "injected"}
+
+    ex = execute_single_shot_job(
+        dataset_ids=[
+            "equities_bars_daily",
+            "markets_calendar",
+            "indices_bars_daily_topix",
+        ],
+        period_start="2026-08-01",
+        period_end="2026-08-15",
+        job_id="w0815ar-unit-feat",
+        dry_run=True,
+        compute_features=True,
+        feature_codes=["13010"],
+        d1_execute=fake_d1,
+        r2_put=fake_put,
+        staging_dir=tmp_path,
+    )
+    assert ex.ready_declared is False
+    assert ex.features_r2_key is not None
+    assert ex.features_r2_key.startswith(
+        "research/single_shot/job=w0815ar-unit-feat/features/"
+    )
+    assert ex.feature_result is not None
+    assert set(ex.feature_result["feature_ids"]) == set(DEFAULT_CANDIDATE_FEATURES)
+    # 4 puts: input_plan, result, features, manifest
+    assert len(puts) == 4
+    assert ex.manifest_r2_key in puts
+    assert ex.features_r2_key in puts
+    manifest = json.loads(puts[ex.manifest_r2_key].decode("utf-8"))
+    assert manifest["compute_features"] is True
+    assert "features" in manifest
+    for block in manifest["features"]:
+        assert "feature_id" in block
+        assert "version" in block
+        assert "row_counts" in block
+        assert "null_counts" in block
+    feat_body = json.loads(puts[ex.features_r2_key].decode("utf-8"))
+    assert feat_body["status"] == "candidate"
+    assert feat_body["local_sot"] is False
+
+
+def test_execute_features_rejects_defer_before_d1():
+    calls: list[str] = []
+
+    def boom_d1(sql: str):
+        calls.append(sql)
+        raise AssertionError("d1 must not be called for permanent DEFER input")
+
+    with pytest.raises(PermanentDeferHistoryError):
+        execute_single_shot_job(
+            dataset_ids=["equities_bars_daily_am"],
+            period_start="2026-08-01",
+            period_end="2026-08-15",
+            job_id="defer-feat",
+            dry_run=True,
+            compute_features=True,
+            d1_execute=boom_d1,
+        )
+    assert calls == []
 
 
 # ---------------------------------------------------------------------------

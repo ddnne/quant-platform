@@ -1,8 +1,10 @@
 # COMPLETE 21 — minimal feature catalog (2026-08-15)
 
-**Wave:** W50 / w0815aq_g2 · T5–T7 (extends W49 / w0815ap_g2)  
-**Phase:** COMPLETE 21 **usage readiness** (利用準備) — feature catalog + min implementations  
-**Mass / READY / Phase7:** **not** declared · **not** enabled · densify **not** run · push **not** this task
+**Wave:** W51 / w0815ar_g2 · T5–T7 (extends W50 / w0815aq_g2 · W49 / w0815ap_g2)  
+**Phase:** COMPLETE 21 **usage readiness** (利用準備) — feature catalog + min implementations + quality gates  
+**Mass / READY / Phase7:** **not** declared · **not** enabled · densify **not** run · push **not** this task  
+**Promotion:** **none** this wave — all complete21 min features remain `candidate`  
+**Candidate → approved criteria (draft):** [`complete21_feature_candidate_to_approved_criteria_20260815.md`](complete21_feature_candidate_to_approved_criteria_20260815.md)
 
 **Sources:**
 
@@ -10,6 +12,7 @@
 |--------|------|
 | COMPLETE 21 list | [`coverage_baseline_21_usage_notes_20260815.md`](coverage_baseline_21_usage_notes_20260815.md) |
 | CF read paths + DEFER guard | [`complete21_cf_read_paths_20260815.md`](complete21_cf_read_paths_20260815.md) |
+| Candidate → approved criteria | [`complete21_feature_candidate_to_approved_criteria_20260815.md`](complete21_feature_candidate_to_approved_criteria_20260815.md) |
 | Residual SoT | [`../phase62_residual_status.md`](../phase62_residual_status.md) |
 | Permanent DEFER lock | [`w0815ak_w44_defer_lock_20260815.md`](w0815ak_w44_defer_lock_20260815.md) |
 | Features contract | [`../features.md`](../features.md) |
@@ -78,7 +81,8 @@ None of these declare READY.
 
 | feature_id | inputs (COMPLETE only) | formula (sketch) | status |
 |------------|------------------------|------------------|--------|
-| `return_1d` | `equities_bars_daily` | \((C_t - C_{t-1}) / C_{t-1}\) | implemented (v0, approved) · DEFER-guarded via `get_equity_bars_daily` |
+| `return_1d` | `equities_bars_daily` | \((C_t - C_{t-1}) / C_{t-1}\) | implemented (v0, **approved**) · DEFER-guarded via `get_equity_bars_daily` |
+| `return_1d_c21` | `equities_bars_daily` | same formula; complete21 path + `require_feature_datasets` | **implemented** (complete21 min, **candidate**) · W51 export · does **not** replace v0 |
 | `momentum_n` | `equities_bars_daily` | N-session cumulative return | implemented (v0, approved) |
 | `volatility_n` | `equities_bars_daily` | sample stdev of 1d returns · √252 | implemented (v0, approved) |
 | `volume_change_1d` | `equities_bars_daily` | \((V_t - V_{t-1}) / V_{t-1}\) | **implemented** (complete21 min, candidate) |
@@ -97,7 +101,7 @@ None of these declare READY.
 |------------|------------------------|------------------|--------|
 | `margin_interest_change_1d` | `markets_margin_interest` | \((M_t - M_{t-1}) / M_{t-1}\) with \(M =\) LongVol + ShrtVol | **implemented** (complete21 min, candidate) |
 | `short_ratio_level` | `markets_short_ratio` | \((\)ShrtWithResVa + ShrtNoResVa\() / \)SellExShortVa for S33 section | **implemented** (complete21 min, candidate) |
-| (future) margin_alert_flag | `markets_margin_alert` | 1 if alert row visible at `as_of` | catalog only |
+| `margin_alert_flag` | `markets_margin_alert` | 1.0 if any PIT-visible alert row for `code` at `as_of`, else 0.0 | **implemented** (complete21 min, candidate) · W51 |
 
 ### 2.4 Disclosure / filings flags
 
@@ -118,27 +122,43 @@ None of these declare READY.
 | `repo_rate_level` | `jsda_tokyo_repo_rates` | latest PIT-visible `rate` (optional tenor / rate_type) | **implemented** (complete21 min, candidate) |
 | (future) corp_bond_print_flag | `jsda_corporate_bond_transactions` | activity flag | catalog only |
 
+### 2.6 Derivatives (futures / options)
+
+| feature_id | inputs (COMPLETE only) | formula (sketch) | status |
+|------------|------------------------|------------------|--------|
+| `futures_activity_proxy` | `derivatives_bars_daily_futures` | sum of `Volume` on latest PIT-visible date (optional contract `code`) | **implemented** (complete21 min, candidate) · W51 |
+| (future) options_activity_proxy | `derivatives_bars_daily_options` / `_options_225` | analogous volume proxy | catalog only |
+
 ---
 
 ## 3. Implemented (T5–T6)
 
 Registered under `packages/research_runtime/features/complete21_min.py` (imported from `features` package):
 
-| id | version | intended_role | status | required datasets |
-|----|---------|---------------|--------|-------------------|
-| `volume_change_1d` | 1.0.0 | signal | candidate | `equities_bars_daily` |
-| `topix_relative_1d` | 1.0.0 | signal | candidate | `equities_bars_daily`, `indices_bars_daily_topix` |
-| `disclosure_flag_fins` | 1.0.0 | signal | candidate | `fins_summary` |
-| `margin_interest_change_1d` | 1.0.0 | signal | candidate | `markets_margin_interest` |
-| `short_ratio_level` | 1.0.0 | signal | candidate | `markets_short_ratio` |
-| `is_trading_day` | 1.0.0 | utility | candidate | `markets_calendar` |
-| `repo_rate_level` | 1.0.0 | state | candidate | `jsda_tokyo_repo_rates` |
+| id | version | intended_role | status | required datasets | wave |
+|----|---------|---------------|--------|-------------------|------|
+| `volume_change_1d` | 1.0.0 | signal | candidate | `equities_bars_daily` | W49 |
+| `topix_relative_1d` | 1.0.0 | signal | candidate | `equities_bars_daily`, `indices_bars_daily_topix` | W49 |
+| `disclosure_flag_fins` | 1.0.0 | signal | candidate | `fins_summary` | W49 |
+| `margin_interest_change_1d` | 1.0.0 | signal | candidate | `markets_margin_interest` | W50 |
+| `short_ratio_level` | 1.0.0 | signal | candidate | `markets_short_ratio` | W50 |
+| `is_trading_day` | 1.0.0 | utility | candidate | `markets_calendar` | W50 |
+| `repo_rate_level` | 1.0.0 | state | candidate | `jsda_tokyo_repo_rates` | W50 |
+| `return_1d_c21` | 1.0.0 | signal | candidate | `equities_bars_daily` | **W51** |
+| `margin_alert_flag` | 1.0.0 | signal | candidate | `markets_margin_alert` | **W51** |
+| `futures_activity_proxy` | 1.0.0 | state | candidate | `derivatives_bars_daily_futures` | **W51** |
+
+**Count:** **10** complete21 min candidates (+ 3 approved v0 bars features outside this module).
 
 Each compute path calls `require_feature_datasets(...)` → permanent DEFER reject **before** PIT reads.
 
-Pipeline guard (T7): `FeatureContext.get_jquants_records`, `get_equity_master`, `get_market_calendar`, and `get_jsda_repo_rates` refuse permanent DEFER ids via `require_history_eligible` / fixed reject for master.
+Pipeline guard: `FeatureContext.get_jquants_records`, `get_equity_master`, `get_market_calendar`, `get_equity_bars_daily`, and `get_jsda_repo_rates` refuse permanent DEFER ids via `require_history_eligible` / fixed reject for master.
 
-**W50 note:** `return_1d` cleanup deferred — already shipped as approved v0 with bars DEFER guard; not duplicated as complete21 candidate.
+**W51 notes:**
+
+* `return_1d_c21` is a **candidate export** of the 1d simple-return formula on the complete21 path (`require_feature_datasets` + tags). It does **not** replace approved v0 `return_1d` and is **not** promoted this wave.
+* Test strengthen (T5): missing required inputs, `as_of` required, PIT `available_at` gates, DEFER poison on all declared dataset groups.
+* Promotion criteria draft: [`complete21_feature_candidate_to_approved_criteria_20260815.md`](complete21_feature_candidate_to_approved_criteria_20260815.md) — **no** status flip this wave.
 
 ---
 
@@ -152,6 +172,7 @@ This document does **not**:
 * invent Dataset COMPLETE **22**
 * re-open densify / tip densify as primary
 * promote `candidate` features to strategy-default `approved` consumption
+* merge `return_1d_c21` into approved v0 `return_1d`
 * treat local SQLite as CF SoT
 
 Live residual remains: Mass **NO-GO** · READY **not** declared · Phase7 **OFF**.
@@ -167,4 +188,5 @@ Live residual remains: Mass **NO-GO** · READY **not** declared · Phase7 **OFF*
 | Feature runtime | `packages/research_runtime/features/runtime.py` |
 | Min features | `packages/research_runtime/features/complete21_min.py` |
 | Guard / feature tests | `tests/test_complete21_min_features.py` |
+| Candidate → approved criteria | [`complete21_feature_candidate_to_approved_criteria_20260815.md`](complete21_feature_candidate_to_approved_criteria_20260815.md) |
 | Prior usage readiness | [`w0815ao_w48_usage_readiness_20260815.md`](w0815ao_w48_usage_readiness_20260815.md) |

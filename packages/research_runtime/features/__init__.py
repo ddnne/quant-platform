@@ -53,6 +53,9 @@ from .complete21_min import (
     ShortRatioLevel,
     IsTradingDay,
     RepoRateLevel,
+    Return1dC21,
+    MarginAlertFlag,
+    FuturesActivityProxy,
 )
 from .dataset_guard import (
     COMPLETE_21_DATASETS,
@@ -91,6 +94,9 @@ __all__ = [
     "ShortRatioLevel",
     "IsTradingDay",
     "RepoRateLevel",
+    "Return1dC21",
+    "MarginAlertFlag",
+    "FuturesActivityProxy",
     # dataset guards
     "COMPLETE_21_DATASETS",
     "PermanentDeferHistoryError",

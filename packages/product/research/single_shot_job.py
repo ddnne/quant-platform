@@ -1,10 +1,13 @@
 """Single-shot research job (Mass OFF / Phase7 OFF / READY not declared).
 
-W49 skeleton (declare + path design) + W50 minimal CF-backed execute:
+W49 skeleton (declare + path design) + W50 minimal CF-backed execute +
+W51 COMPLETE-21 **candidate** feature compute on tip FeatureContext:
 
 * **Inputs:** COMPLETE 21 dataset ids only (permanent DEFER excluded via
   ``data_contracts.permanent_defer``).
 * **Read:** CF D1 ``quant-ingest`` hot tip extract (bounded; not full-history SoT).
+* **Features:** tip-backed :class:`features.runtime.FeatureContext` (not local
+  SQLite SoT) computing COMPLETE-21 min **candidate** features.
 * **Write:** R2 ``quant-structured`` under ``research/single_shot/job={id}/…``.
   Local FS is **not** Source of Truth (optional dry-run stages payloads only).
 * **Not** connected to ``agents.mass_research`` / mass research loop.
@@ -23,6 +26,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from types import MappingProxyType, SimpleNamespace
 from typing import Any, Callable, Mapping, Sequence
 from uuid import uuid4
 
@@ -31,6 +35,9 @@ from data_contracts.permanent_defer import (
     PermanentDeferHistoryError,
     reject_permanent_defer_for_history,
 )
+from features.registry import get as get_feature
+from features.runtime import FEATURES_RUNTIME_VERSION, FeatureContext
+from features.types import FeatureOutput
 
 # Repo root: packages/product/research/this_file.py → parents[3]
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -48,6 +55,23 @@ _DEFAULT_WRANGLER_CONFIG = (
 )
 D1_DATABASE_NAME: str = "quant-ingest"
 DEFAULT_TIP_SAMPLE_LIMIT: int = 20
+DEFAULT_FEATURE_ROW_LIMIT: int = 400
+DEFAULT_FEATURE_CODE_LIMIT: int = 5
+
+# COMPLETE-21 min candidate features used by the tip feature path (W51).
+# Status remains ``candidate`` — no READY / strategy-default claim.
+DEFAULT_CANDIDATE_FEATURES: tuple[str, ...] = (
+    "volume_change_1d",
+    "is_trading_day",
+    "topix_relative_1d",
+)
+
+# Datasets sufficient for the default 2–3 candidate features.
+DEFAULT_FEATURE_DATASETS: tuple[str, ...] = (
+    "equities_bars_daily",
+    "markets_calendar",
+    "indices_bars_daily_topix",
+)
 
 # ---------------------------------------------------------------------------
 # Freeze constants (T9: tests assert these remain closed — do not arm)
@@ -134,6 +158,7 @@ class SingleShotJobSpec:
     manifest_r2_key: str
     input_plan_r2_key: str
     result_r2_key_template: str
+    features_r2_key_template: str = ""
     mass_research: str = MASS_RESEARCH_STATUS
     phase7: str = PHASE7_STATUS
     ready_declared: bool = READY_DECLARED
@@ -153,6 +178,7 @@ class SingleShotJobSpec:
                 "manifest_r2_key": self.manifest_r2_key,
                 "input_plan_r2_key": self.input_plan_r2_key,
                 "result_r2_key_template": self.result_r2_key_template,
+                "features_r2_key_template": self.features_r2_key_template,
                 "local_sot": self.local_sot,
             },
             "mass_research": self.mass_research,
@@ -180,6 +206,7 @@ def design_artifact_paths(job_id: str) -> dict[str, Any]:
         "manifest_r2_key": f"{prefix}/manifest.json",
         "input_plan_r2_key": f"{prefix}/input_plan.json",
         "result_r2_key_template": f"{prefix}/result/{{content_hash}}.json",
+        "features_r2_key_template": f"{prefix}/features/{{content_hash}}.json",
         "local_sot": False,
         "history_input_patterns": {
             "structured_jsonl": "structured/jsonl/{dataset}/dt=YYYY-MM-DD/{run_id}.jsonl",
@@ -271,6 +298,7 @@ def build_single_shot_job_spec(
         manifest_r2_key=str(paths["manifest_r2_key"]),
         input_plan_r2_key=str(paths["input_plan_r2_key"]),
         result_r2_key_template=str(paths["result_r2_key_template"]),
+        features_r2_key_template=str(paths["features_r2_key_template"]),
         mass_research=MASS_RESEARCH_STATUS,
         phase7=PHASE7_STATUS,
         ready_declared=READY_DECLARED,
@@ -345,6 +373,8 @@ class SingleShotExecution:
     input_plan_r2_key: str
     tip_extracts: Mapping[str, Any]
     r2_puts: tuple[dict[str, Any], ...]
+    features_r2_key: str | None = None
+    feature_result: Mapping[str, Any] | None = None
     mass_research: str = MASS_RESEARCH_STATUS
     phase7: str = PHASE7_STATUS
     ready_declared: bool = READY_DECLARED
@@ -360,6 +390,10 @@ class SingleShotExecution:
             "result_r2_key": self.result_r2_key,
             "manifest_r2_key": self.manifest_r2_key,
             "input_plan_r2_key": self.input_plan_r2_key,
+            "features_r2_key": self.features_r2_key,
+            "feature_result": (
+                dict(self.feature_result) if self.feature_result is not None else None
+            ),
             "tip_extracts": dict(self.tip_extracts),
             "r2_puts": list(self.r2_puts),
             "spec": self.spec.to_dict(),
@@ -526,6 +560,686 @@ def extract_d1_tip_summaries(
     }
 
 
+# ---------------------------------------------------------------------------
+# W51 — tip FeatureContext + COMPLETE-21 candidate feature compute
+# ---------------------------------------------------------------------------
+
+
+def _decode_json_obj(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str) and value:
+        try:
+            loaded = json.loads(value)
+            if isinstance(loaded, dict):
+                return loaded
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return {}
+    return {}
+
+
+def _pick_num(payload: Mapping[str, Any], *names: str) -> float | None:
+    for name in names:
+        if name not in payload or payload[name] is None or payload[name] == "":
+            continue
+        try:
+            return float(payload[name])
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _pick_str(payload: Mapping[str, Any], *names: str) -> str | None:
+    for name in names:
+        v = payload.get(name)
+        if v is None or v == "":
+            continue
+        return str(v)
+    return None
+
+
+def _as_of_from_period_end(period_end: str) -> str:
+    """Session-close as_of at period_end (JST) for tip feature compute."""
+    d = str(period_end).strip()[:10]
+    return f"{d}T15:30:00+09:00"
+
+
+def _available_at_ok(row_available_at: Any, as_of: str) -> bool:
+    """PIT gate: available_at must be present and <= as_of (lexicographic ISO)."""
+    if row_available_at is None or row_available_at == "":
+        return False
+    return str(row_available_at) <= str(as_of)
+
+
+def _normalize_tip_bar_row(
+    *,
+    payload: Mapping[str, Any],
+    event_time: Any,
+    available_at: Any,
+    natural_key: Any,
+) -> dict[str, Any] | None:
+    """Map a D1 tip bar payload to curated equity-bar fields (no ingestion import)."""
+    code = _pick_str(payload, "Code", "code")
+    date = _pick_str(payload, "Date", "date")
+    if date is None and event_time is not None:
+        date = str(event_time)[:10]
+    if code is None and natural_key is not None:
+        nk = _decode_json_obj(natural_key)
+        code = _pick_str(nk, "Code", "code")
+        if date is None:
+            date = _pick_str(nk, "Date", "date")
+    if not code or not date:
+        return None
+    return {
+        "source": "jquants",
+        "code": str(code),
+        "date": str(date)[:10],
+        "event_time": event_time,
+        "available_at": available_at,
+        "volume": _pick_num(payload, "Volume", "Vo", "AdjVo", "AVo"),
+        "close": _pick_num(payload, "Close", "C", "AdjC", "AC"),
+        "open": _pick_num(payload, "Open", "O", "AdjO", "AO"),
+        "high": _pick_num(payload, "High", "H", "AdjH", "AH"),
+        "low": _pick_num(payload, "Low", "L", "AdjL", "AL"),
+        "payload": dict(payload),
+        "raw_payload": dict(payload),
+    }
+
+
+def _normalize_tip_calendar_row(
+    *,
+    payload: Mapping[str, Any],
+    event_time: Any,
+    available_at: Any,
+    natural_key: Any,
+) -> dict[str, Any] | None:
+    date = _pick_str(payload, "Date", "date")
+    if date is None and event_time is not None:
+        date = str(event_time)[:10]
+    if date is None and natural_key is not None:
+        nk = _decode_json_obj(natural_key)
+        date = _pick_str(nk, "Date", "date")
+    if not date:
+        return None
+    hol = _pick_str(payload, "HolidayDivision", "HolDiv", "holiday_division")
+    return {
+        "source": "jquants",
+        "date": str(date)[:10],
+        "event_time": event_time,
+        "available_at": available_at,
+        "holiday_division": hol,
+        "payload": dict(payload),
+        "raw_payload": dict(payload),
+    }
+
+
+def _normalize_tip_catalog_row(
+    *,
+    dataset: str,
+    payload: Mapping[str, Any],
+    event_time: Any,
+    available_at: Any,
+    natural_key: Any,
+) -> dict[str, Any]:
+    """Generic catalog row shape for get_jquants_records (topix etc.)."""
+    return {
+        "source": "jquants",
+        "dataset": dataset,
+        "natural_key": natural_key,
+        "event_time": event_time,
+        "available_at": available_at,
+        "payload": dict(payload),
+        "raw_payload": dict(payload),
+        # Flatten common fields for pure helpers that inspect row tops.
+        "date": _pick_str(payload, "Date", "date")
+        or (str(event_time)[:10] if event_time else None),
+        "close": _pick_num(payload, "Close", "C", "AdjC", "AC"),
+        "volume": _pick_num(payload, "Volume", "Vo", "AdjVo", "AVo"),
+        "Code": _pick_str(payload, "Code", "code"),
+        "Date": _pick_str(payload, "Date", "date"),
+    }
+
+
+def _discover_tip_codes(
+    d1_execute: D1ExecuteFn,
+    *,
+    period_start: str,
+    period_end: str,
+    code_limit: int,
+) -> list[str]:
+    """Pick tip codes that have multi-day bar history (for 1d features)."""
+    # Prefer a small fixed probe set that is known liquid on TSE; fall back to
+    # first multi-day codes if those miss in the tip window.
+    preferred = ("13010", "72030", "67580", "99840", "83060")
+    found: list[str] = []
+    for code in preferred:
+        # Precompute LIKE pattern: nested f-string backslashes are illegal in 3.11.
+        nk_pat = '%"Code":"' + code + '"%'
+        sql = (
+            "SELECT COUNT(*) AS n FROM jquants_records WHERE "
+            f"dataset = {_sql_str('equities_bars_daily')} "
+            f"AND substr(event_time, 1, 10) >= {_sql_str(period_start)} "
+            f"AND substr(event_time, 1, 10) <= {_sql_str(period_end)} "
+            f"AND natural_key LIKE {_sql_str(nk_pat)}"
+        )
+        rows = d1_execute(sql)
+        n = int((rows[0] or {}).get("n") or 0) if rows else 0
+        if n >= 2:
+            found.append(code)
+        if len(found) >= code_limit:
+            return found
+    if found:
+        return found[:code_limit]
+
+    # Fallback: sample natural keys and group by Code in Python.
+    sample_sql = (
+        "SELECT natural_key FROM jquants_records WHERE "
+        f"dataset = {_sql_str('equities_bars_daily')} "
+        f"AND substr(event_time, 1, 10) >= {_sql_str(period_start)} "
+        f"AND substr(event_time, 1, 10) <= {_sql_str(period_end)} "
+        "ORDER BY event_time, natural_key LIMIT 400"
+    )
+    samples = d1_execute(sample_sql)
+    by_code: dict[str, set[str]] = {}
+    for row in samples:
+        nk = _decode_json_obj(row.get("natural_key"))
+        code = _pick_str(nk, "Code", "code")
+        date = _pick_str(nk, "Date", "date")
+        if not code or not date:
+            continue
+        by_code.setdefault(str(code), set()).add(str(date)[:10])
+    ranked = sorted(
+        ((c, len(ds)) for c, ds in by_code.items() if len(ds) >= 2),
+        key=lambda x: (-x[1], x[0]),
+    )
+    return [c for c, _ in ranked[:code_limit]]
+
+
+def extract_d1_tip_feature_rows(
+    dataset_ids: Sequence[str],
+    *,
+    period_start: str,
+    period_end: str,
+    codes: Sequence[str] | None = None,
+    row_limit_per_dataset: int = DEFAULT_FEATURE_ROW_LIMIT,
+    code_limit: int = DEFAULT_FEATURE_CODE_LIMIT,
+    d1_execute: D1ExecuteFn | None = None,
+    context: str = "single-shot tip feature extract",
+) -> dict[str, Any]:
+    """Bounded tip **payload** extract for FeatureContext (not full history).
+
+    Fail-closed on permanent DEFER / non-COMPLETE-21 before any query.
+    Returns normalized tip rows suitable for :func:`build_tip_feature_context`.
+    """
+    ids = require_complete_21_only(dataset_ids, context=context)
+    start = str(period_start).strip()
+    end = str(period_end).strip()
+    if not start or not end:
+        raise SingleShotJobError("period_start and period_end are required")
+    limit = max(1, min(int(row_limit_per_dataset), 2000))
+    exec_fn = d1_execute or default_d1_execute
+
+    selected_codes: list[str]
+    if codes:
+        selected_codes = [str(c).strip() for c in codes if str(c).strip()]
+    elif "equities_bars_daily" in ids:
+        selected_codes = _discover_tip_codes(
+            exec_fn, period_start=start, period_end=end, code_limit=code_limit
+        )
+    else:
+        selected_codes = []
+
+    rows_by_dataset: dict[str, list[dict[str, Any]]] = {}
+    raw_counts: dict[str, int] = {}
+
+    for ds in ids:
+        count_sql = (
+            "SELECT COUNT(*) AS n FROM jquants_records WHERE "
+            f"dataset = {_sql_str(ds)} "
+            f"AND substr(event_time, 1, 10) >= {_sql_str(start)} "
+            f"AND substr(event_time, 1, 10) <= {_sql_str(end)}"
+        )
+        count_rows = exec_fn(count_sql)
+        raw_counts[ds] = int((count_rows[0] or {}).get("n") or 0) if count_rows else 0
+
+        where_extra = ""
+        if ds == "equities_bars_daily" and selected_codes:
+            # Precompute LIKE patterns (no backslash inside f-string expr on 3.11).
+            like_parts = []
+            for c in selected_codes:
+                nk_pat = '%"Code":"' + c + '"%'
+                like_parts.append(f"natural_key LIKE {_sql_str(nk_pat)}")
+            likes = " OR ".join(like_parts)
+            where_extra = f" AND ({likes})"
+
+        payload_sql = (
+            "SELECT natural_key, event_time, available_at, payload "
+            "FROM jquants_records WHERE "
+            f"dataset = {_sql_str(ds)} "
+            f"AND substr(event_time, 1, 10) >= {_sql_str(start)} "
+            f"AND substr(event_time, 1, 10) <= {_sql_str(end)}"
+            f"{where_extra} "
+            "ORDER BY event_time, natural_key "
+            f"LIMIT {limit}"
+        )
+        raw_rows = exec_fn(payload_sql)
+        normalized: list[dict[str, Any]] = []
+        for r in raw_rows:
+            payload = _decode_json_obj(r.get("payload"))
+            if ds == "equities_bars_daily":
+                row = _normalize_tip_bar_row(
+                    payload=payload,
+                    event_time=r.get("event_time"),
+                    available_at=r.get("available_at"),
+                    natural_key=r.get("natural_key"),
+                )
+            elif ds == "markets_calendar":
+                row = _normalize_tip_calendar_row(
+                    payload=payload,
+                    event_time=r.get("event_time"),
+                    available_at=r.get("available_at"),
+                    natural_key=r.get("natural_key"),
+                )
+            else:
+                row = _normalize_tip_catalog_row(
+                    dataset=ds,
+                    payload=payload,
+                    event_time=r.get("event_time"),
+                    available_at=r.get("available_at"),
+                    natural_key=r.get("natural_key"),
+                )
+            if row is not None:
+                normalized.append(row)
+        rows_by_dataset[ds] = normalized
+
+    return {
+        "source": "cloudflare_d1_remote",
+        "d1_database": D1_DATABASE_NAME,
+        "plane": "D1_hot_tip",
+        "period_start": start,
+        "period_end": end,
+        "dataset_ids": list(ids),
+        "selected_codes": list(selected_codes),
+        "raw_tip_counts": raw_counts,
+        "extracted_row_counts": {
+            ds: len(rows_by_dataset.get(ds) or []) for ds in ids
+        },
+        "rows_by_dataset": rows_by_dataset,
+        "local_sot": False,
+        "note": (
+            "Bounded tip payload extract for candidate feature compute. "
+            "Not READY. Not local SQLite SoT. History remains on R2."
+        ),
+    }
+
+
+def build_tip_feature_context(
+    tip_rows_by_dataset: Mapping[str, Sequence[Mapping[str, Any]]],
+    *,
+    as_of: str,
+    inputs: Mapping[str, Any] | None = None,
+) -> FeatureContext:
+    """Build a FeatureContext whose PIT reads come from in-memory tip rows.
+
+    Local SQLite is **not** used. Rows are gated by ``available_at <= as_of``.
+    """
+    as_of_s = str(as_of).strip()
+    if not as_of_s:
+        raise SingleShotJobError("as_of is required for tip FeatureContext")
+
+    # Materialize plain dicts once.
+    store: dict[str, list[dict[str, Any]]] = {
+        str(ds): [dict(r) for r in (rows or [])]
+        for ds, rows in tip_rows_by_dataset.items()
+    }
+
+    def _pit_reader(resource: str, kwargs: Mapping[str, Any]) -> SimpleNamespace:
+        kw = dict(kwargs)
+        if resource == "equity_bars_daily":
+            rows = list(store.get("equities_bars_daily") or [])
+            code = kw.get("code")
+            codes = kw.get("codes")
+            from_event = kw.get("from_event")
+            to_event = kw.get("to_event")
+            out: list[dict[str, Any]] = []
+            for row in rows:
+                if not _available_at_ok(row.get("available_at"), as_of_s):
+                    continue
+                if code is not None and str(row.get("code")) != str(code):
+                    continue
+                if codes is not None and str(row.get("code")) not in {
+                    str(c) for c in codes
+                }:
+                    continue
+                d = str(row.get("date") or "")[:10]
+                if from_event is not None and d < str(from_event)[:10]:
+                    continue
+                if to_event is not None and d > str(to_event)[:10]:
+                    continue
+                out.append(row)
+            out.sort(key=lambda r: (str(r.get("code") or ""), str(r.get("date") or "")))
+            return SimpleNamespace(
+                rows=out,
+                metadata={
+                    "as_of": as_of_s,
+                    "table": "tip_equities_bars_daily",
+                    "count": len(out),
+                    "source": "cloudflare_d1_tip",
+                    "plane": "D1_hot_tip",
+                },
+            )
+
+        if resource == "market_calendar":
+            rows = list(store.get("markets_calendar") or [])
+            from_date = kw.get("from_date")
+            to_date = kw.get("to_date")
+            out = []
+            for row in rows:
+                if not _available_at_ok(row.get("available_at"), as_of_s):
+                    continue
+                d = str(row.get("date") or "")[:10]
+                if from_date is not None and d < str(from_date)[:10]:
+                    continue
+                if to_date is not None and d > str(to_date)[:10]:
+                    continue
+                out.append(row)
+            out.sort(key=lambda r: str(r.get("date") or ""))
+            return SimpleNamespace(
+                rows=out,
+                metadata={
+                    "as_of": as_of_s,
+                    "table": "tip_markets_calendar",
+                    "count": len(out),
+                    "source": "cloudflare_d1_tip",
+                    "plane": "D1_hot_tip",
+                },
+            )
+
+        if resource == "jquants_records":
+            dataset = str(kw.get("dataset") or "")
+            rows = list(store.get(dataset) or [])
+            code = kw.get("code")
+            out = []
+            for row in rows:
+                if not _available_at_ok(row.get("available_at"), as_of_s):
+                    continue
+                if code is not None:
+                    payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+                    row_code = (
+                        row.get("Code")
+                        or row.get("code")
+                        or (payload.get("Code") if isinstance(payload, dict) else None)
+                        or (payload.get("code") if isinstance(payload, dict) else None)
+                    )
+                    if row_code is None or str(row_code) != str(code):
+                        continue
+                out.append(row)
+            out.sort(
+                key=lambda r: (
+                    str(r.get("event_time") or ""),
+                    str(r.get("natural_key") or ""),
+                )
+            )
+            return SimpleNamespace(
+                rows=out,
+                metadata={
+                    "as_of": as_of_s,
+                    "table": "tip_jquants_records",
+                    "dataset": dataset,
+                    "count": len(out),
+                    "source": "cloudflare_d1_tip",
+                    "plane": "D1_hot_tip",
+                },
+            )
+
+        if resource == "equity_master":
+            # Permanent DEFER is blocked by FeatureContext before this reader.
+            return SimpleNamespace(rows=[], metadata={"as_of": as_of_s, "count": 0})
+
+        if resource == "jsda_repo_rates":
+            rows = list(store.get("jsda_tokyo_repo_rates") or [])
+            out = [r for r in rows if _available_at_ok(r.get("available_at"), as_of_s)]
+            return SimpleNamespace(
+                rows=out,
+                metadata={
+                    "as_of": as_of_s,
+                    "table": "tip_jsda_tokyo_repo_rates",
+                    "count": len(out),
+                    "source": "cloudflare_d1_tip",
+                    "plane": "D1_hot_tip",
+                },
+            )
+
+        raise RuntimeError(f"unknown tip FeatureContext resource: {resource!r}")
+
+    return FeatureContext(
+        as_of=as_of_s,
+        _input_values=MappingProxyType(dict(inputs or {})),
+        _pit_reader=_pit_reader,
+    )
+
+
+def _augment_feature_output(
+    feature_id: str,
+    version: str,
+    as_of: str,
+    out: FeatureOutput,
+    *,
+    extra_meta: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    md = dict(out.metadata)
+    md.update(
+        {
+            "feature_id": feature_id,
+            "feature_version": version,
+            "version": version,
+            "as_of": as_of,
+            "features_runtime_version": FEATURES_RUNTIME_VERSION,
+            "status": "candidate",
+            "plane": "D1_hot_tip",
+            "local_sot": False,
+            "ready_declared": READY_DECLARED,
+        }
+    )
+    if extra_meta:
+        md.update(dict(extra_meta))
+    return {
+        "feature_id": feature_id,
+        "version": version,
+        "value": out.value,
+        "metadata": md,
+    }
+
+
+def compute_tip_candidate_features(
+    tip_rows_by_dataset: Mapping[str, Sequence[Mapping[str, Any]]],
+    *,
+    as_of: str,
+    feature_ids: Sequence[str] | None = None,
+    codes: Sequence[str] | None = None,
+    dates: Sequence[str] | None = None,
+) -> dict[str, Any]:
+    """Compute COMPLETE-21 **candidate** features on a tip FeatureContext.
+
+    Does not use local SQLite. Returns per-feature values + row/null counts
+    for the research artifact / manifest.
+    """
+    fids = tuple(feature_ids) if feature_ids else DEFAULT_CANDIDATE_FEATURES
+    as_of_s = str(as_of).strip()
+
+    # Discover codes from tip bars when not provided.
+    bar_rows = list(tip_rows_by_dataset.get("equities_bars_daily") or [])
+    if codes:
+        code_list = [str(c).strip() for c in codes if str(c).strip()]
+    else:
+        by_code: dict[str, set[str]] = {}
+        for row in bar_rows:
+            c = row.get("code")
+            d = row.get("date")
+            if c and d:
+                by_code.setdefault(str(c), set()).add(str(d)[:10])
+        ranked = sorted(
+            ((c, len(ds)) for c, ds in by_code.items() if len(ds) >= 2),
+            key=lambda x: (-x[1], x[0]),
+        )
+        code_list = [c for c, _ in ranked[:DEFAULT_FEATURE_CODE_LIMIT]]
+
+    # Dates for is_trading_day: explicit, else calendar tip dates, else as_of day.
+    cal_rows = list(tip_rows_by_dataset.get("markets_calendar") or [])
+    if dates:
+        date_list = [str(d)[:10] for d in dates]
+    elif cal_rows:
+        date_list = sorted({str(r.get("date"))[:10] for r in cal_rows if r.get("date")})
+    else:
+        date_list = [as_of_s[:10]]
+
+    tip_input_counts = {
+        ds: len(list(rows or [])) for ds, rows in tip_rows_by_dataset.items()
+    }
+
+    feature_blocks: list[dict[str, Any]] = []
+    observations: list[dict[str, Any]] = []
+
+    for fid in fids:
+        feat = get_feature(fid)
+        version = str(feat.version)
+        values: list[Any] = []
+        feature_obs: list[dict[str, Any]] = []
+
+        if fid in ("volume_change_1d", "topix_relative_1d", "disclosure_flag_fins",
+                   "margin_interest_change_1d"):
+            targets = code_list
+            if not targets:
+                feature_blocks.append(
+                    {
+                        "feature_id": fid,
+                        "version": version,
+                        "status": "candidate",
+                        "row_counts": {
+                            "computed": 0,
+                            "non_null": 0,
+                            "null": 0,
+                        },
+                        "null_counts": 0,
+                        "reason": "no tip codes with multi-day history",
+                    }
+                )
+                continue
+            for code in targets:
+                ctx = build_tip_feature_context(
+                    tip_rows_by_dataset,
+                    as_of=as_of_s,
+                    inputs={"code": code},
+                )
+                out = feat.compute(ctx)
+                if not isinstance(out, FeatureOutput):
+                    raise TypeError(
+                        f"feature {fid!r} returned {type(out).__name__}; "
+                        "expected FeatureOutput"
+                    )
+                rec = _augment_feature_output(
+                    fid, version, as_of_s, out, extra_meta={"code": code}
+                )
+                values.append(rec["value"])
+                feature_obs.append(rec)
+                observations.append(rec)
+        elif fid == "is_trading_day":
+            for d in date_list:
+                ctx = build_tip_feature_context(
+                    tip_rows_by_dataset,
+                    as_of=as_of_s,
+                    inputs={"date": d},
+                )
+                out = feat.compute(ctx)
+                if not isinstance(out, FeatureOutput):
+                    raise TypeError(
+                        f"feature {fid!r} returned {type(out).__name__}; "
+                        "expected FeatureOutput"
+                    )
+                rec = _augment_feature_output(
+                    fid, version, as_of_s, out, extra_meta={"date": d}
+                )
+                values.append(rec["value"])
+                feature_obs.append(rec)
+                observations.append(rec)
+        elif fid == "short_ratio_level":
+            # section required; skip unless caller put section in codes-like inputs
+            feature_blocks.append(
+                {
+                    "feature_id": fid,
+                    "version": version,
+                    "status": "candidate",
+                    "row_counts": {"computed": 0, "non_null": 0, "null": 0},
+                    "null_counts": 0,
+                    "reason": "short_ratio_level requires section; not in default tip path",
+                }
+            )
+            continue
+        else:
+            # Features with no required kwargs (e.g. repo_rate_level)
+            ctx = build_tip_feature_context(
+                tip_rows_by_dataset, as_of=as_of_s, inputs={}
+            )
+            out = feat.compute(ctx)
+            if not isinstance(out, FeatureOutput):
+                raise TypeError(
+                    f"feature {fid!r} returned {type(out).__name__}; "
+                    "expected FeatureOutput"
+                )
+            rec = _augment_feature_output(fid, version, as_of_s, out)
+            values.append(rec["value"])
+            feature_obs.append(rec)
+            observations.append(rec)
+
+        non_null = sum(1 for v in values if v is not None)
+        null_n = sum(1 for v in values if v is None)
+        feature_blocks.append(
+            {
+                "feature_id": fid,
+                "version": version,
+                "status": "candidate",
+                "row_counts": {
+                    "computed": len(values),
+                    "non_null": non_null,
+                    "null": null_n,
+                },
+                "null_counts": null_n,
+                "sample_values": [
+                    {
+                        "value": o["value"],
+                        **{
+                            k: o["metadata"].get(k)
+                            for k in ("code", "date", "section")
+                            if o["metadata"].get(k) is not None
+                        },
+                    }
+                    for o in feature_obs[:10]
+                ],
+            }
+        )
+
+    return {
+        "version": "single-shot-features/v1",
+        "as_of": as_of_s,
+        "feature_ids": list(fids),
+        "codes": list(code_list),
+        "dates": list(date_list),
+        "tip_input_row_counts": tip_input_counts,
+        "features": feature_blocks,
+        "observations": observations,
+        "mass_research": MASS_RESEARCH_STATUS,
+        "phase7": PHASE7_STATUS,
+        "ready_declared": READY_DECLARED,
+        "ready_publication": READY_PUBLICATION_STATUS,
+        "local_sot": False,
+        "status": "candidate",
+        "note": (
+            "COMPLETE-21 candidate features on tip FeatureContext (D1 hot tip). "
+            "Not READY. Not mass research."
+        ),
+    }
+
+
 def default_r2_put(
     bucket: str,
     key: str,
@@ -666,6 +1380,11 @@ def execute_single_shot_job(
     job_id: str | None = None,
     dry_run: bool = False,
     sample_limit: int = DEFAULT_TIP_SAMPLE_LIMIT,
+    compute_features: bool = False,
+    feature_ids: Sequence[str] | None = None,
+    feature_codes: Sequence[str] | None = None,
+    feature_as_of: str | None = None,
+    feature_row_limit: int = DEFAULT_FEATURE_ROW_LIMIT,
     d1_execute: D1ExecuteFn | None = None,
     r2_put: R2PutFn | None = None,
     staging_dir: str | Path | None = None,
@@ -680,6 +1399,10 @@ def execute_single_shot_job(
         When True, design + D1 read still run; R2 puts are staged locally only
         (or recorded without remote write). Prefer real R2 put when credentials
         work.
+    compute_features:
+        When True, also extract tip payloads, build a tip FeatureContext
+        (not local SQLite), compute COMPLETE-21 **candidate** features, and
+        write a features artifact + feature stats on the manifest.
     d1_execute / r2_put:
         Injectable callables for unit tests. Defaults use wrangler remote.
 
@@ -702,10 +1425,63 @@ def execute_single_shot_job(
         context="single-shot research job tip extract",
     )
 
+    feature_payload: dict[str, Any] | None = None
+    tip_feature_extract: dict[str, Any] | None = None
+    if compute_features:
+        # Ensure feature-required datasets are present when caller only passed
+        # a summary subset; still COMPLETE-21 only / DEFER fail-closed.
+        fids = tuple(feature_ids) if feature_ids else DEFAULT_CANDIDATE_FEATURES
+        needed: list[str] = list(spec.dataset_ids)
+        # Map feature → required tip datasets (min surface for default 3).
+        if "volume_change_1d" in fids or "topix_relative_1d" in fids:
+            if "equities_bars_daily" not in needed:
+                needed.append("equities_bars_daily")
+        if "is_trading_day" in fids and "markets_calendar" not in needed:
+            needed.append("markets_calendar")
+        if "topix_relative_1d" in fids and "indices_bars_daily_topix" not in needed:
+            needed.append("indices_bars_daily_topix")
+        if "margin_interest_change_1d" in fids and "markets_margin_interest" not in needed:
+            needed.append("markets_margin_interest")
+        # Re-validate expanded set (DEFER still fail-closed).
+        feature_datasets = require_complete_21_only(
+            needed, context="single-shot feature datasets"
+        )
+        tip_feature_extract = extract_d1_tip_feature_rows(
+            feature_datasets,
+            period_start=spec.period_start,
+            period_end=spec.period_end,
+            codes=feature_codes,
+            row_limit_per_dataset=feature_row_limit,
+            d1_execute=d1_execute,
+            context="single-shot tip feature extract",
+        )
+        as_of = feature_as_of or _as_of_from_period_end(spec.period_end)
+        feature_payload = compute_tip_candidate_features(
+            tip_feature_extract.get("rows_by_dataset") or {},
+            as_of=as_of,
+            feature_ids=fids,
+            codes=feature_codes or tip_feature_extract.get("selected_codes"),
+        )
+        feature_payload = {
+            **feature_payload,
+            "job_id": spec.job_id,
+            "dataset_ids": list(feature_datasets),
+            "period_start": spec.period_start,
+            "period_end": spec.period_end,
+            "tip_feature_extract": {
+                "plane": tip_feature_extract.get("plane"),
+                "raw_tip_counts": tip_feature_extract.get("raw_tip_counts"),
+                "extracted_row_counts": tip_feature_extract.get(
+                    "extracted_row_counts"
+                ),
+                "selected_codes": tip_feature_extract.get("selected_codes"),
+            },
+        }
+
     executed_at = _now_utc()
     # Hash identity excludes wall-clock so re-runs with same tip facts are stable
     # when counts match; executed_at lives only in outer envelopes.
-    result_identity = {
+    result_identity: dict[str, Any] = {
         "version": "single-shot-result/v1",
         "job_id": spec.job_id,
         "dataset_ids": list(spec.dataset_ids),
@@ -725,16 +1501,36 @@ def execute_single_shot_job(
             }
             for ds, body in (tip.get("extracts") or {}).items()
         },
+        "compute_features": bool(compute_features),
         "mass_research": MASS_RESEARCH_STATUS,
         "phase7": PHASE7_STATUS,
         "ready_declared": READY_DECLARED,
         "ready_publication": READY_PUBLICATION_STATUS,
         "local_sot": False,
     }
+    if feature_payload is not None:
+        # Stable feature identity for content hash (exclude sample dumps of floats only via features summary).
+        result_identity["features_summary"] = [
+            {
+                "feature_id": f.get("feature_id"),
+                "version": f.get("version"),
+                "row_counts": f.get("row_counts"),
+                "null_counts": f.get("null_counts"),
+            }
+            for f in (feature_payload.get("features") or [])
+        ]
+        result_identity["feature_as_of"] = feature_payload.get("as_of")
+        result_identity["feature_ids"] = list(feature_payload.get("feature_ids") or [])
+
     ch = content_hash_payload(result_identity)
     result_key = spec.result_r2_key_template.format(content_hash=ch.replace(":", "_"))
+    features_key: str | None = None
+    if feature_payload is not None and spec.features_r2_key_template:
+        features_key = spec.features_r2_key_template.format(
+            content_hash=ch.replace(":", "_")
+        )
 
-    result_body = {
+    result_body: dict[str, Any] = {
         **result_identity,
         "content_hash": ch,
         "executed_at_utc": executed_at,
@@ -743,12 +1539,19 @@ def execute_single_shot_job(
             "result_r2_key": result_key,
             "manifest_r2_key": spec.manifest_r2_key,
             "input_plan_r2_key": spec.input_plan_r2_key,
+            "features_r2_key": features_key,
         },
         "sample_rows": {
             ds: body.get("sample_rows") or []
             for ds, body in (tip.get("extracts") or {}).items()
         },
     }
+    if feature_payload is not None:
+        result_body["features"] = feature_payload.get("features")
+        result_body["feature_codes"] = feature_payload.get("codes")
+        result_body["feature_tip_input_row_counts"] = feature_payload.get(
+            "tip_input_row_counts"
+        )
 
     input_plan = {
         "version": "single-shot-input-plan/v1",
@@ -761,6 +1564,10 @@ def execute_single_shot_job(
             "d1_database": tip["d1_database"],
             "table": "jquants_records",
         },
+        "compute_features": bool(compute_features),
+        "feature_ids": list(feature_payload.get("feature_ids") or [])
+        if feature_payload
+        else [],
         "history_sot_note": (
             "Full history SoT is R2 quant-structured JSONL/archive; "
             "this job only reads D1 hot tip for a bounded proof pass."
@@ -770,7 +1577,7 @@ def execute_single_shot_job(
         "ready_declared": READY_DECLARED,
     }
 
-    manifest = {
+    manifest: dict[str, Any] = {
         "version": "single-shot-manifest/v1",
         "job_id": spec.job_id,
         "bucket": spec.artifact_bucket,
@@ -779,6 +1586,7 @@ def execute_single_shot_job(
             "manifest": spec.manifest_r2_key,
             "input_plan": spec.input_plan_r2_key,
             "result": result_key,
+            **({"features": features_key} if features_key else {}),
         },
         "content_hash": ch,
         "dataset_ids": list(spec.dataset_ids),
@@ -788,6 +1596,7 @@ def execute_single_shot_job(
             ds: int((body or {}).get("row_count") or 0)
             for ds, body in (tip.get("extracts") or {}).items()
         },
+        "compute_features": bool(compute_features),
         "executed_at_utc": executed_at,
         "dry_run": bool(dry_run),
         "mass_research": MASS_RESEARCH_STATUS,
@@ -797,6 +1606,40 @@ def execute_single_shot_job(
         "local_sot": False,
         "connected_to_mass_research_loop": False,
     }
+    if feature_payload is not None:
+        # T3: manifest carries feature_id, version, row_counts (+ null_counts).
+        manifest["features"] = [
+            {
+                "feature_id": f.get("feature_id"),
+                "version": f.get("version"),
+                "status": f.get("status"),
+                "row_counts": f.get("row_counts"),
+                "null_counts": f.get("null_counts"),
+            }
+            for f in (feature_payload.get("features") or [])
+        ]
+        manifest["feature_as_of"] = feature_payload.get("as_of")
+        manifest["feature_tip_input_row_counts"] = feature_payload.get(
+            "tip_input_row_counts"
+        )
+        if tip_feature_extract is not None:
+            manifest["feature_raw_tip_counts"] = tip_feature_extract.get(
+                "raw_tip_counts"
+            )
+
+    features_body: dict[str, Any] | None = None
+    if feature_payload is not None and features_key is not None:
+        features_body = {
+            **feature_payload,
+            "content_hash": ch,
+            "executed_at_utc": executed_at,
+            "artifact": {
+                "bucket": spec.artifact_bucket,
+                "features_r2_key": features_key,
+                "result_r2_key": result_key,
+                "manifest_r2_key": spec.manifest_r2_key,
+            },
+        }
 
     puts: list[dict[str, Any]] = []
 
@@ -820,6 +1663,8 @@ def execute_single_shot_job(
 
     puts.append(_put(spec.input_plan_r2_key, input_plan))
     puts.append(_put(result_key, result_body))
+    if features_body is not None and features_key is not None:
+        puts.append(_put(features_key, features_body))
     puts.append(_put(spec.manifest_r2_key, manifest))
 
     return SingleShotExecution(
@@ -832,6 +1677,8 @@ def execute_single_shot_job(
         input_plan_r2_key=spec.input_plan_r2_key,
         tip_extracts=tip,
         r2_puts=tuple(puts),
+        features_r2_key=features_key,
+        feature_result=feature_payload,
         mass_research=MASS_RESEARCH_STATUS,
         phase7=PHASE7_STATUS,
         ready_declared=READY_DECLARED,
@@ -843,6 +1690,10 @@ __all__ = [
     "COMPLETE_21_DATASETS",
     "COMPLETE_21_DATASET_SET",
     "D1_DATABASE_NAME",
+    "DEFAULT_CANDIDATE_FEATURES",
+    "DEFAULT_FEATURE_CODE_LIMIT",
+    "DEFAULT_FEATURE_DATASETS",
+    "DEFAULT_FEATURE_ROW_LIMIT",
     "DEFAULT_TIP_SAMPLE_LIMIT",
     "MASS_RESEARCH_ENV_ARMING_SWITCHES",
     "MASS_RESEARCH_STATUS",
@@ -858,11 +1709,14 @@ __all__ = [
     "SingleShotJobSpec",
     "assert_mass_and_phase7_off",
     "build_single_shot_job_spec",
+    "build_tip_feature_context",
+    "compute_tip_candidate_features",
     "content_hash_payload",
     "default_d1_execute",
     "default_r2_put",
     "design_artifact_paths",
     "execute_single_shot_job",
+    "extract_d1_tip_feature_rows",
     "extract_d1_tip_summaries",
     "freeze_status",
     "head_r2_object",

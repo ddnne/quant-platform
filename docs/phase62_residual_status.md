@@ -1,9 +1,55 @@
 # Phase 6.2 / 6.3 residual status
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
-**Live verified:** 2026-08-15 (JST) / **W50** 利用準備 E2E（READY 未宣言） FINAL · COMPLETE segs **3478** · Dataset COMPLETE **21 / 26** · PARTIAL = **5** permanent DEFER only · **actionable_gap = 0** · empty COMPLETE **0** · **OTC 93** tip island held · permanent DEFER **5** / NO_DENSIFY **6** · densify coverage loops **ENDED** · Mass/READY/Phase7 **NO-GO/OFF** · raw **15892** (remote verify; W46 tip secondary baseline **15869** held) · FRESH `projgen-0fb233bde5df4a8ca66b73bbbf78905d` · **CF-SoT** held — D1 = hot tip · R2 = history · COMPLETE = receipt-owned · floors W38 + W42 mb **2015-04-01** **not lowered** · coverage baseline **W47 FINAL held** · READY **not declared** · **POST_PUSH_SHA** `d0dad82592145f80da22c700c6336ffd0fcfa2fe` · PRE_sha `dc2a70539665fa16306ea742c021f010b21ee223`
+**Live verified:** 2026-08-15 (JST) / **W51** 特徴量込み E2E（READY 未宣言） FINAL · COMPLETE segs **3478** · Dataset COMPLETE **21 / 26** · PARTIAL = **5** permanent DEFER only · **actionable_gap = 0** · empty COMPLETE **0** · **OTC 93** tip island held · permanent DEFER **5** / NO_DENSIFY **6** · densify coverage loops **ENDED** · Mass/READY/Phase7 **NO-GO/OFF** · raw **15892** (remote verify; W46 tip secondary baseline **15869** held) · FRESH `projgen-48993e3f05814d759576c01f65196041` · **CF-SoT** held — D1 = hot tip · R2 = history · COMPLETE = receipt-owned · floors W38 + W42 mb **2015-04-01** **not lowered** · coverage baseline **W47 FINAL held** · READY **not declared** · tip densify **SKIP** · densify **none** · **POST_PUSH_SHA** _filled after push_ · PRE_sha `ea4a151fd3f2a9d4d40c3a967ea2e04ad89a3938`
 
-**Repo tip:** `d0dad82592145f80da22c700c6336ffd0fcfa2fe` — W50 利用準備 E2E FINAL · COMPLETE **3478** / Dataset COMPLETE **21** / OTC **93** / empty COMPLETE **0** / **actionable_gap = 0** / Phase7 **OFF** / READY **未宣言** · FRESH `projgen-0fb233bde5df4a8ca66b73bbbf78905d` · **POST_PUSH_SHA** `d0dad82592145f80da22c700c6336ffd0fcfa2fe`
+**Repo tip:** _filled after push_ — W51 特徴量込み E2E FINAL · COMPLETE **3478** / Dataset COMPLETE **21** / OTC **93** / empty COMPLETE **0** / **actionable_gap = 0** / Phase7 **OFF** / READY **未宣言** · FRESH `projgen-48993e3f05814d759576c01f65196041` · single_shot candidate features → R2 · **POST_PUSH_SHA** _filled after push_
+
+
+## 特徴量込み E2E（READY 未宣言）
+
+**Phase name:** COMPLETE 21 特徴量込み E2E（宣言なし）  
+**Wave:** W51 / w0815ar (T1–T12 · G5 FINAL merge + push)  
+**Feature E2E close proof:** [`docs/proof/w0815ar_w51_feature_e2e_close_20260815.md`](proof/w0815ar_w51_feature_e2e_close_20260815.md)  
+**Single-shot feature E2E proof:** [`docs/proof/w0815ar_w51_feature_e2e_20260815.md`](proof/w0815ar_w51_feature_e2e_20260815.md)  
+**Single-shot feature E2E (G1):** [`.glm-logs/w0815ar_g1_e2e/`](../.glm-logs/w0815ar_g1_e2e/) · job `w0815ar-g1-e2e` · tip FeatureContext → candidate features → R2 `quant-structured` · **e2e_pass=true** · DEFER 5 fail-closed · READY **not** declared  
+**Features expand (G2):** `packages/research_runtime/features/complete21_min.py` · **10** candidate features (W50 7 + expand 3: `return_1d_c21` · `margin_alert_flag` · `futures_activity_proxy`) · status=`candidate` · DEFER dataset_guard held · promotion **none**  
+**Catalog:** [`docs/proof/complete21_min_feature_catalog_20260815.md`](proof/complete21_min_feature_catalog_20260815.md) · criteria draft [`docs/proof/complete21_feature_candidate_to_approved_criteria_20260815.md`](proof/complete21_feature_candidate_to_approved_criteria_20260815.md)  
+**Smokes expand (G3):** [`.glm-logs/w0815ar_g3_smoke/`](../.glm-logs/w0815ar_g3_smoke/) · T8a bars×margin_alert · T8b bars×markets_breakdown · **all pass** · FRESH reclock T9  
+**Ops / residual (G4):** [`.glm-logs/w0815ar_g4_ops/`](../.glm-logs/w0815ar_g4_ops/) · [`ops_snapshot.json`](../.glm-logs/w0815ar_g4_ops/ops_snapshot.json) · [`switch_check.json`](../.glm-logs/w0815ar_g4_ops/switch_check.json) · [`FINAL_metrics.json`](../.glm-logs/w0815ar_g4_ops/FINAL_metrics.json)  
+**Unit tests (merge):** features + permanent_defer + single_shot + mass gate · **80 passed**  
+**Prior W50 E2E:** § 利用準備 E2E held underneath · W49 deepen · W48 groundwork · coverage baseline **W47 FINAL** held
+
+| gate | status |
+|------|--------|
+| Phase name | **COMPLETE 21 特徴量込み E2E（宣言なし）** |
+| Coverage baseline FINAL | **held** (W47 FINAL · Dataset COMPLETE **21/26** · segs **3478** · **actionable_gap=0**) |
+| READY | **未宣言 / not declared** |
+| Mass | **NO-GO / OFF** |
+| Phase7 | **OFF** (foundation / fail-closed only) — **reconfirmed** this wave |
+| empty COMPLETE | **0** (remote verify held) |
+| Dataset COMPLETE | **21** (remote verify held; not invent 22) |
+| COMPLETE segs | **3478** (remote verify held · Δ0) |
+| OTC tip island | **93** held |
+| permanent DEFER | **5** held |
+| tip densify | **SKIP** (T12 · not primary this phase) |
+| densify | **none** |
+| push | **POST_PUSH_SHA** _filled after push_ (G5 FINAL merge) · PRE_sha `ea4a151fd3f2a9d4d40c3a967ea2e04ad89a3938` |
+| Projection | **FRESH** `projgen-48993e3f05814d759576c01f65196041` (peer G3 T9 ops_reeval_freshness; G4 residual-only; publish apply **SKIP** no segment drift; fail-closed no force) |
+| Single-shot features → R2 | G1 **PASS** — tip FeatureContext computes **3** default candidates (`volume_change_1d` · `is_trading_day` · `topix_relative_1d`) · R2 put ×4 (input_plan/result/**features**/manifest) · Mass **not** connected |
+| Features catalog | **10** candidates · COMPLETE 21 only · status=`candidate` · no READY claim · no promotion |
+| Smokes expand | G3 T8a/T8b **pass** · READY **not** declared |
+| Unit tests | **80 passed** (complete21 min · permanent_defer · single_shot · mass gate) |
+| raw_retention | **15892** (remote count at G4; not coverage primary) |
+
+**Primary this phase:** single_shot **computes candidate features → R2** on held COMPLETE **21** / DEFER **5** baseline — **without** READY / Mass / Phase7 declaration.  
+**Not:** densify · tip primary · invent COMPLETE 22 · Phase7 ON · READY GO · mass ON · feature promotion to approved.
+
+### Explicit non-declarations (held)
+
+- **READY** — not declared (特徴量込み E2E only; no production READY GO)
+- **Mass Autonomous Research** — **NO-GO / OFF**
+- **Phase7** — **OFF** (no `PHASE7_*` / `MASS_RESEARCH_ENABLE` arming switch)
 
 ## 利用準備 E2E（READY 未宣言）
 

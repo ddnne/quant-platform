@@ -1,4 +1,12 @@
-"""COMPLETE 21 min features + feature-pipeline permanent DEFER guard (W49–W50 T5–T7)."""
+"""COMPLETE 21 min features + feature-pipeline permanent DEFER guard (W49–W51 T5–T7).
+
+W51 / w0815ar_g2:
+
+* T5 — strengthen tests for existing 7 candidates (missing inputs, PIT gates,
+  DEFER rejection).
+* T6 — +3 candidates: return_1d_c21, margin_alert_flag, futures_activity_proxy.
+* T7 criteria doc is separate; no candidate → approved promotion this wave.
+"""
 
 from __future__ import annotations
 
@@ -22,7 +30,9 @@ from features import (
 )
 from features.complete21_min import (
     disclosure_flag_from_count,
+    futures_activity_from_volume_pairs,
     is_trading_day_from_division,
+    margin_alert_flag_from_count,
     margin_interest_change_from_pairs,
     repo_rate_level_from_rows,
     short_ratio_level_from_components,
@@ -30,7 +40,7 @@ from features.complete21_min import (
     topix_relative_from_returns,
     volume_change_from_pairs,
 )
-from features.runtime import FeatureContext
+from features.runtime import AsOfRequired, FeatureContext, MissingInput
 from storage.sqlite_store import SqliteStore
 
 TESTS_DIR = Path(__file__).resolve().parent
@@ -40,6 +50,7 @@ if str(TESTS_DIR) not in sys.path:
 from _coreseed import CODES, close_iso, seed_db
 
 
+# W49–W50 held (7) + W51 expand (+3) = 10 candidates.
 COMPLETE21_MIN_IDS = (
     "volume_change_1d",
     "topix_relative_1d",
@@ -48,6 +59,20 @@ COMPLETE21_MIN_IDS = (
     "short_ratio_level",
     "is_trading_day",
     "repo_rate_level",
+    "return_1d_c21",
+    "margin_alert_flag",
+    "futures_activity_proxy",
+)
+
+# Features that require a specific kwargs at the runtime gate.
+_REQUIRED_INPUT_CASES = (
+    ("volume_change_1d", ("code",)),
+    ("topix_relative_1d", ("code",)),
+    ("disclosure_flag_fins", ("code",)),
+    ("margin_interest_change_1d", ("code",)),
+    ("short_ratio_level", ("section",)),
+    ("return_1d_c21", ("code",)),
+    ("margin_alert_flag", ("code",)),
 )
 
 
@@ -192,6 +217,9 @@ def test_new_feature_dataset_constants_are_complete_only():
         mod._SHORT_RATIO_DATASETS,
         mod._CALENDAR_DATASETS,
         mod._REPO_DATASETS,
+        mod._RETURN_C21_DATASETS,
+        mod._MARGIN_ALERT_DATASETS,
+        mod._FUTURES_DATASETS,
     )
     for group in constants:
         for ds in group:
@@ -302,6 +330,402 @@ def test_repo_rate_level_helper_data_free():
     none_v, none_m = repo_rate_level_from_rows([])
     assert none_v is None
     assert "no repo" in none_m["reason"]
+
+
+def test_margin_alert_and_futures_helpers_data_free():
+    flag, meta = margin_alert_flag_from_count(2)
+    assert flag == 1.0
+    assert meta["rows_seen"] == 2
+    flag0, _ = margin_alert_flag_from_count(0)
+    assert flag0 == 0.0
+
+    activity, ameta = futures_activity_from_volume_pairs(
+        [
+            ("2025-04-01", 100.0),
+            ("2025-04-02", 50.0),
+            ("2025-04-02", 75.0),
+        ]
+    )
+    assert activity == pytest.approx(125.0)
+    assert ameta["activity_date"] == "2025-04-02"
+    assert ameta["contracts_on_date"] == 2
+
+    none_v, none_m = futures_activity_from_volume_pairs([])
+    assert none_v is None
+    assert "no futures" in none_m["reason"]
+
+
+# ---------------------------------------------------------------------------
+# T5 — missing inputs / as_of / DEFER rejection / PIT gates (all candidates)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("fid,required", _REQUIRED_INPUT_CASES)
+def test_complete21_min_missing_required_inputs(tmp_path, fid, required):
+    """Runtime MissingInput before compute when required kwargs are absent."""
+    days = ["2025-04-01", "2025-04-02"]
+    db = seed_db(
+        tmp_path,
+        days=days,
+        prices={CODES[0]: {d: 100.0 for d in days}},
+    )
+    with pytest.raises(MissingInput) as exc:
+        compute(fid, as_of=close_iso(days[-1]), db_path=db)
+    msg = str(exc.value)
+    for key in required:
+        assert key in msg
+
+
+def test_complete21_min_requires_as_of(tmp_path):
+    days = ["2025-04-01", "2025-04-02"]
+    db = seed_db(
+        tmp_path,
+        days=days,
+        prices={CODES[0]: {d: 100.0 for d in days}},
+    )
+    with pytest.raises(AsOfRequired):
+        compute("volume_change_1d", as_of=None, code=CODES[0], db_path=db)
+    with pytest.raises(AsOfRequired):
+        compute("return_1d_c21", as_of=None, code=CODES[0], db_path=db)
+    with pytest.raises(AsOfRequired):
+        compute("margin_alert_flag", as_of=None, code=CODES[0], db_path=db)
+
+
+def test_complete21_min_all_candidates_stay_candidate_not_approved():
+    """W51 hard rule: do not promote any complete21_min feature to approved."""
+    for fid in COMPLETE21_MIN_IDS:
+        feat = get(fid)
+        assert feat.status == "candidate", fid
+        assert feat.status != "approved", fid
+
+
+def test_complete21_min_declared_datasets_reject_each_permanent_defer():
+    """Every declared feature dataset list fails closed when any DEFER is mixed in."""
+    from features import complete21_min as mod
+
+    groups = (
+        mod._VOLUME_DATASETS,
+        mod._TOPIX_REL_DATASETS,
+        mod._DISC_DATASETS,
+        mod._MARGIN_DATASETS,
+        mod._SHORT_RATIO_DATASETS,
+        mod._CALENDAR_DATASETS,
+        mod._REPO_DATASETS,
+        mod._RETURN_C21_DATASETS,
+        mod._MARGIN_ALERT_DATASETS,
+        mod._FUTURES_DATASETS,
+    )
+    for group in groups:
+        for defer_ds in sorted(PERMANENT_DEFER_DATASETS):
+            poisoned = list(group) + [defer_ds]
+            with pytest.raises(PermanentDeferHistoryError):
+                require_feature_datasets(poisoned, context="feature T5 DEFER")
+
+
+def test_pit_gate_hides_future_available_at_margin_and_disclosure(tmp_path):
+    """PIT: rows with available_at > as_of must not affect feature values."""
+    days = ["2025-04-01", "2025-04-02"]
+    db = seed_db(
+        tmp_path,
+        days=days,
+        prices={CODES[0]: {d: 100.0 for d in days}},
+    )
+    store = SqliteStore(db)
+    # D1 margin obs: published at D1 close (visible at as_of=D1).
+    # D2 margin obs: published at D2 close only (hidden at as_of=D1).
+    store.upsert(
+        "jquants_records",
+        [
+            {
+                "source": "jquants",
+                "dataset": "markets_margin_interest",
+                "natural_key": json.dumps(
+                    {"Code": CODES[0], "Date": "2025-04-01"},
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                "event_time": "2025-04-01T00:00:00+09:00",
+                "available_at": close_iso("2025-04-01"),
+                "ingested_at": close_iso("2025-04-01"),
+                "payload": json.dumps(
+                    {
+                        "Date": "2025-04-01",
+                        "Code": CODES[0],
+                        "LongVol": 100.0,
+                        "ShrtVol": 0.0,
+                    },
+                    ensure_ascii=False,
+                ),
+                "raw_payload": json.dumps(
+                    {
+                        "Date": "2025-04-01",
+                        "Code": CODES[0],
+                        "LongVol": 100.0,
+                        "ShrtVol": 0.0,
+                    },
+                    ensure_ascii=False,
+                ),
+            },
+            {
+                "source": "jquants",
+                "dataset": "markets_margin_interest",
+                "natural_key": json.dumps(
+                    {"Code": CODES[0], "Date": "2025-04-02"},
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                "event_time": "2025-04-02T00:00:00+09:00",
+                "available_at": close_iso("2025-04-02"),
+                "ingested_at": close_iso("2025-04-02"),
+                "payload": json.dumps(
+                    {
+                        "Date": "2025-04-02",
+                        "Code": CODES[0],
+                        "LongVol": 200.0,
+                        "ShrtVol": 0.0,
+                    },
+                    ensure_ascii=False,
+                ),
+                "raw_payload": json.dumps(
+                    {
+                        "Date": "2025-04-02",
+                        "Code": CODES[0],
+                        "LongVol": 200.0,
+                        "ShrtVol": 0.0,
+                    },
+                    ensure_ascii=False,
+                ),
+            },
+            {
+                "source": "jquants",
+                "dataset": "fins_summary",
+                "natural_key": json.dumps(
+                    {"Code": CODES[0], "Date": "2025-04-02"},
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                "event_time": "2025-04-02T00:00:00+09:00",
+                "available_at": close_iso("2025-04-02"),
+                "ingested_at": close_iso("2025-04-02"),
+                "payload": json.dumps(
+                    {"Code": CODES[0], "Date": "2025-04-02", "NetSales": 1},
+                    ensure_ascii=False,
+                ),
+                "raw_payload": json.dumps(
+                    {"Code": CODES[0], "Date": "2025-04-02", "NetSales": 1},
+                    ensure_ascii=False,
+                ),
+            },
+        ],
+    )
+    store.close()
+
+    # At D1 close: only one margin obs → insufficient; disclosure flag 0.
+    margin_early = compute(
+        "margin_interest_change_1d",
+        as_of=close_iso("2025-04-01"),
+        code=CODES[0],
+        db_path=db,
+    )
+    assert margin_early.value is None
+    assert "insufficient" in margin_early.metadata["reason"]
+
+    disc_early = compute(
+        "disclosure_flag_fins",
+        as_of=close_iso("2025-04-01"),
+        code=CODES[0],
+        db_path=db,
+    )
+    assert disc_early.value == 0.0
+
+    # At D2 close: both margin obs + disclosure visible.
+    margin_late = compute(
+        "margin_interest_change_1d",
+        as_of=close_iso("2025-04-02"),
+        code=CODES[0],
+        db_path=db,
+    )
+    assert margin_late.value == pytest.approx(1.0)  # 100 → 200
+
+    disc_late = compute(
+        "disclosure_flag_fins",
+        as_of=close_iso("2025-04-02"),
+        code=CODES[0],
+        db_path=db,
+    )
+    assert disc_late.value == 1.0
+
+
+def test_pit_gate_hides_future_short_ratio_and_margin_alert(tmp_path):
+    days = ["2025-04-01", "2025-04-02"]
+    db = seed_db(
+        tmp_path,
+        days=days,
+        prices={CODES[0]: {d: 100.0 for d in days}},
+    )
+    store = SqliteStore(db)
+    # Short ratio published only at D2 close.
+    store.upsert(
+        "jquants_records",
+        [
+            {
+                "source": "jquants",
+                "dataset": "markets_short_ratio",
+                "natural_key": json.dumps(
+                    {"Date": "2025-04-02", "S33": "0050"},
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                "event_time": "2025-04-02T00:00:00+09:00",
+                "available_at": close_iso("2025-04-02"),
+                "ingested_at": close_iso("2025-04-02"),
+                "payload": json.dumps(
+                    {
+                        "Date": "2025-04-02",
+                        "S33": "0050",
+                        "SellExShortVa": 200.0,
+                        "ShrtWithResVa": 40.0,
+                        "ShrtNoResVa": 10.0,
+                    },
+                    ensure_ascii=False,
+                ),
+                "raw_payload": json.dumps(
+                    {
+                        "Date": "2025-04-02",
+                        "S33": "0050",
+                        "SellExShortVa": 200.0,
+                        "ShrtWithResVa": 40.0,
+                        "ShrtNoResVa": 10.0,
+                    },
+                    ensure_ascii=False,
+                ),
+            },
+            {
+                "source": "jquants",
+                "dataset": "markets_margin_alert",
+                "natural_key": json.dumps(
+                    {
+                        "Code": CODES[0],
+                        "PubDate": "2025-04-02",
+                        "AppDate": "2025-04-02",
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                "event_time": "2025-04-02T00:00:00+09:00",
+                "available_at": close_iso("2025-04-02"),
+                "ingested_at": close_iso("2025-04-02"),
+                "payload": json.dumps(
+                    {
+                        "Code": CODES[0],
+                        "PubDate": "2025-04-02",
+                        "AppDate": "2025-04-02",
+                    },
+                    ensure_ascii=False,
+                ),
+                "raw_payload": json.dumps(
+                    {
+                        "Code": CODES[0],
+                        "PubDate": "2025-04-02",
+                        "AppDate": "2025-04-02",
+                    },
+                    ensure_ascii=False,
+                ),
+            },
+        ],
+    )
+    store.close()
+
+    short_early = compute(
+        "short_ratio_level",
+        as_of=close_iso("2025-04-01"),
+        section="0050",
+        db_path=db,
+    )
+    assert short_early.value is None
+
+    alert_early = compute(
+        "margin_alert_flag",
+        as_of=close_iso("2025-04-01"),
+        code=CODES[0],
+        db_path=db,
+    )
+    assert alert_early.value == 0.0
+
+    short_late = compute(
+        "short_ratio_level",
+        as_of=close_iso("2025-04-02"),
+        section="0050",
+        db_path=db,
+    )
+    assert short_late.value == pytest.approx(0.25)
+
+    alert_late = compute(
+        "margin_alert_flag",
+        as_of=close_iso("2025-04-02"),
+        code=CODES[0],
+        db_path=db,
+    )
+    assert alert_late.value == 1.0
+
+
+def test_pit_gate_hides_future_futures_activity(tmp_path):
+    days = ["2025-04-01", "2025-04-02"]
+    db = seed_db(
+        tmp_path,
+        days=days,
+        prices={CODES[0]: {d: 100.0 for d in days}},
+    )
+    store = SqliteStore(db)
+    store.upsert(
+        "jquants_records",
+        [
+            {
+                "source": "jquants",
+                "dataset": "derivatives_bars_daily_futures",
+                "natural_key": json.dumps(
+                    {"Date": "2025-04-02", "Code": "160060019"},
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                "event_time": "2025-04-02T00:00:00+09:00",
+                "available_at": close_iso("2025-04-02"),
+                "ingested_at": close_iso("2025-04-02"),
+                "payload": json.dumps(
+                    {
+                        "Date": "2025-04-02",
+                        "Code": "160060019",
+                        "Volume": 500.0,
+                        "Close": 28000.0,
+                    },
+                    ensure_ascii=False,
+                ),
+                "raw_payload": json.dumps(
+                    {
+                        "Date": "2025-04-02",
+                        "Code": "160060019",
+                        "Volume": 500.0,
+                        "Close": 28000.0,
+                    },
+                    ensure_ascii=False,
+                ),
+            }
+        ],
+    )
+    store.close()
+
+    early = compute(
+        "futures_activity_proxy",
+        as_of=close_iso("2025-04-01"),
+        db_path=db,
+    )
+    assert early.value is None
+
+    late = compute(
+        "futures_activity_proxy",
+        as_of=close_iso("2025-04-02"),
+        db_path=db,
+    )
+    assert late.value == pytest.approx(500.0)
 
 
 # ---------------------------------------------------------------------------
@@ -663,6 +1087,173 @@ def test_margin_short_calendar_repo_reject_defer_poison(monkeypatch):
         ["markets_short_ratio", "fins_earnings_date"],
         ["markets_calendar", "equities_bars_daily_am"],
         ["jsda_tokyo_repo_rates", "jsda_otc_bond_reference_prices"],
+        ["equities_bars_daily", "equities_bars_daily_am"],  # return_1d_c21 path
+        ["markets_margin_alert", "equities_master"],
+        ["derivatives_bars_daily_futures", "equities_earnings_calendar"],
     ):
         with pytest.raises(PermanentDeferHistoryError):
             require_feature_datasets(poisoned, context="feature test")
+
+
+# ---------------------------------------------------------------------------
+# T6 — W51 expand: return_1d_c21, margin_alert_flag, futures_activity_proxy
+# ---------------------------------------------------------------------------
+
+def test_return_1d_c21_matches_simple_return_on_seeded_bars(tmp_path):
+    days = ["2025-04-01", "2025-04-02", "2025-04-03"]
+    prices = {CODES[0]: {d: 100.0 + i for i, d in enumerate(days)}}
+    db = seed_db(tmp_path, days=days, prices=prices)
+    out = compute(
+        "return_1d_c21",
+        as_of=close_iso(days[-1]),
+        code=CODES[0],
+        db_path=db,
+    )
+    assert out.value == pytest.approx((102.0 - 101.0) / 101.0)
+    assert out.metadata["feature_id"] == "return_1d_c21"
+    assert out.metadata["datasets"] == ["equities_bars_daily"]
+    assert out.metadata["export_of"] == "return_1d"
+    assert out.metadata["path"] == "complete21_min"
+    # Parity with approved v0 return_1d (same formula, different id/status).
+    v0 = compute(
+        "return_1d",
+        as_of=close_iso(days[-1]),
+        code=CODES[0],
+        db_path=db,
+    )
+    assert out.value == pytest.approx(v0.value)
+    assert get("return_1d_c21").status == "candidate"
+    assert get("return_1d").status == "approved"
+
+
+def test_return_1d_c21_insufficient_history(tmp_path):
+    day = "2025-04-01"
+    db = seed_db(
+        tmp_path,
+        days=[day],
+        prices={CODES[0]: {day: 100.0}},
+    )
+    out = compute(
+        "return_1d_c21",
+        as_of=close_iso(day),
+        code=CODES[0],
+        db_path=db,
+    )
+    assert out.value is None
+    assert "insufficient" in out.metadata["reason"]
+
+
+def test_margin_alert_flag_on_seeded_records(tmp_path):
+    days = ["2025-04-01", "2025-04-02"]
+    db = seed_db(
+        tmp_path,
+        days=days,
+        prices={CODES[0]: {d: 100.0 for d in days}},
+    )
+    _upsert_jquants_records(
+        db,
+        dataset="markets_margin_alert",
+        payloads=[
+            {
+                "Code": CODES[0],
+                "PubDate": "2025-04-01",
+                "AppDate": "2025-04-01",
+                "Date": "2025-04-01",
+            },
+        ],
+    )
+    out = compute(
+        "margin_alert_flag",
+        as_of=close_iso("2025-04-01"),
+        code=CODES[0],
+        db_path=db,
+    )
+    assert out.value == 1.0
+    assert out.metadata["datasets"] == ["markets_margin_alert"]
+    assert out.metadata["feature_id"] == "margin_alert_flag"
+    assert out.metadata["rows_seen"] >= 1
+
+
+def test_margin_alert_flag_empty_is_zero(tmp_path):
+    days = ["2025-04-01"]
+    db = seed_db(
+        tmp_path,
+        days=days,
+        prices={CODES[0]: {days[0]: 100.0}},
+    )
+    out = compute(
+        "margin_alert_flag",
+        as_of=close_iso(days[0]),
+        code=CODES[0],
+        db_path=db,
+    )
+    assert out.value == 0.0
+    assert out.metadata["rows_seen"] == 0
+
+
+def test_futures_activity_proxy_on_seeded_records(tmp_path):
+    days = ["2025-04-01", "2025-04-02"]
+    db = seed_db(
+        tmp_path,
+        days=days,
+        prices={CODES[0]: {d: 100.0 for d in days}},
+    )
+    _upsert_jquants_records(
+        db,
+        dataset="derivatives_bars_daily_futures",
+        payloads=[
+            {
+                "Date": "2025-04-01",
+                "Code": "160060019",
+                "Volume": 100.0,
+                "Close": 27000.0,
+            },
+            {
+                "Date": "2025-04-02",
+                "Code": "160060019",
+                "Volume": 200.0,
+                "Close": 27100.0,
+            },
+            {
+                "Date": "2025-04-02",
+                "Code": "160060020",
+                "Volume": 50.0,
+                "Close": 100.0,
+            },
+        ],
+    )
+    # All contracts: latest date sum = 200 + 50 = 250
+    out = compute(
+        "futures_activity_proxy",
+        as_of=close_iso("2025-04-02"),
+        db_path=db,
+    )
+    assert out.value == pytest.approx(250.0)
+    assert out.metadata["datasets"] == ["derivatives_bars_daily_futures"]
+    assert out.metadata["activity_date"] == "2025-04-02"
+    assert out.metadata["contracts_on_date"] == 2
+
+    # Optional code filter
+    out_one = compute(
+        "futures_activity_proxy",
+        as_of=close_iso("2025-04-02"),
+        code="160060019",
+        db_path=db,
+    )
+    assert out_one.value == pytest.approx(200.0)
+
+
+def test_futures_activity_proxy_empty_is_none(tmp_path):
+    days = ["2025-04-01"]
+    db = seed_db(
+        tmp_path,
+        days=days,
+        prices={CODES[0]: {days[0]: 100.0}},
+    )
+    out = compute(
+        "futures_activity_proxy",
+        as_of=close_iso(days[0]),
+        db_path=db,
+    )
+    assert out.value is None
+    assert "no futures" in out.metadata["reason"]
