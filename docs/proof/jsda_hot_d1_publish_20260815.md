@@ -1,8 +1,9 @@
 # JSDA hot tip → D1 publish (2026-08-15)
 
 **Mass / READY / Phase7:** **NO-GO / OFF**  
-**empty-raw ban:** held (no invent rows; copy of sealed local facts only)  
-**Policy:** D1 = **hot tip only** · full history = local research DB / R2
+**empty-raw ban:** held (no invent rows; copy of sealed facts only)  
+**CF SoT policy:** D1 = **hot tip** · R2 = **history** · coverage COMPLETE = **receipt-owned**  
+Local research SQLite = **mirror / research convenience** — **not** authority, **not** “local SoT”.
 
 ## Problem
 
@@ -10,18 +11,20 @@ Audit (W20-G4/G5) documented:
 
 | Plane | `jsda_repo_rates` | `jsda_tokyo_repo_rates` COMPLETE |
 |-------|------------------:|----------------------------------|
-| Local research sqlite | **30 303** | **COMPLETE** (receipt = 30 303) |
-| D1 (before this wave) | **0** | **COMPLETE** (coverage projected) |
+| Local research sqlite (**mirror**) | **30 303** | **COMPLETE** (**receipt-owned** = 30 303) |
+| R2 history | sealed full archive | — |
+| D1 (before this wave) | **0** | **COMPLETE** (coverage projected / receipt-owned) |
 
-`tokyo_repo_rows=0` was **not data loss** — receipt-owned COMPLETE vs plane-local fact COUNT.
+`tokyo_repo_rows=0` was **not data loss** — **receipt-owned** COMPLETE vs plane-local fact COUNT.
 
 ## Design decision (implemented)
 
 | Plane | Content |
 |-------|---------|
-| Local + R2 | Full sealed history (SoT for research) |
-| D1 | **Hot tip only** (`as_of_date >= 2026-07-01`, same cutoff as `storage_plane_status`) |
-| COMPLETE | Still **receipt-owned** (not redefined by D1 fact count) |
+| **R2** | Full sealed history (**history SoT**) |
+| **Local research sqlite** | Mirror of sealed history (**research convenience only** — not authority) |
+| **D1** | **Hot tip only** (`as_of_date >= 2026-07-01`, same cutoff as `storage_plane_status`) |
+| **COMPLETE** | Still **receipt-owned** (not redefined by D1 fact count) |
 
 Full D1 backfill of 30k+ repo / 700k+ OTC is **explicitly out of scope** (D1 size / hot-only architecture).
 
@@ -45,8 +48,9 @@ Script path: `scripts/publish_jsda_hot_to_d1.py`
 | D1 `jsda_repo_rates` COUNT | **0** | **252** |
 | Hot cutoff | — | **2026-07-01** |
 | Cold rows on D1 (`as_of_date < cutoff`) | — | **0** |
-| Local full history | 30 303 | 30 303 (unchanged) |
-| Dataset COMPLETE | COMPLETE | COMPLETE (unchanged) |
+| Local mirror full history | 30 303 | 30 303 (unchanged; **not** SoT) |
+| R2 history | sealed | sealed (unchanged) |
+| Dataset COMPLETE | COMPLETE | COMPLETE (**receipt-owned**, unchanged) |
 
 Remote probe:
 
@@ -72,5 +76,7 @@ SQL artifact: `.glm-logs/jsda_hot_d1/jsda_repo_hot_2026-07-01.sql`
 
 ## Honesty
 
-- COMPLETE still means signed receipt + coverage, not “D1 has full history”.
+- COMPLETE still means signed receipt + coverage (**receipt-owned**), not “D1 has full history”.
+- Local research SQLite is a **mirror** only — never claim it as SoT / authority.
+- Do not invent data; Mass / READY remain **NO-GO**.
 - `storage_plane_status` honesty flags (`4fcef08`) remain valid when D1 is empty; after hot publish, divergence of kind `COMPLETE_WITHOUT_LOCAL_FACTS` should clear for tokyo_repo on D1 while `FACT_VS_COVERAGE_COUNT_MISMATCH` may appear (252 tip vs 30303 ledger) — expected and documented.

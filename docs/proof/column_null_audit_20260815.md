@@ -12,7 +12,9 @@
 | **G4** | JSDA critical (`tokyo_repo_rows=0`) + field coverage | `.glm-logs/w0815m_g4_jsda_audit/` · [`w0815m_g4_jsda_audit_20260815.md`](w0815m_g4_jsda_audit_20260815.md) · fix `4fcef08` |
 | **G5** | This merge + residual + push | this file |
 
-**Authority:** CF SoT — live proxy (G1), R2 `quant-raw` + remote D1 `quant-ingest` payload (G2/G3), local research DB for JSDA facts (G4).  
+**Authority (CF SoT):** D1 = **hot tip** · R2 = **history** · coverage COMPLETE = **receipt-owned**.  
+Live proxy (G1); R2 `quant-raw` + remote D1 `quant-ingest` payload (G2/G3); JSDA sealed history on R2 + receipt plane (G4).  
+Local research SQLite = **mirror / research convenience only** — **not** authority, **not** “local SoT”.  
 **Mass / READY / Phase7:** **NO-GO / OFF**  
 **Empty-raw COMPLETE:** **forbidden** (held)  
 **Destructive:** none (mapping honesty only; no re-ingest / no COMPLETE flip)
@@ -27,7 +29,7 @@
 | Typed master (`normalize` / SCD2) | V2 short keys `S17`/`S33`/`Mkt*` were 100% unmapped → always-null typed | **要修正 → FIXED** (`df6271d`) |
 | Typed bars | Core OHLC maps OK; `AAdj*` was false all-day Adj alias | **要修正 → FIXED** (`df6271d`) |
 | Always-null source fields | Fins forecast/unit, options EC/EH/EL/EO/SQD, ExRT, listing_date, JSDA corp schema-superset | **DEFER** (source / schema) — do not invent |
-| `tokyo_repo_rows=0` vs COMPLETE | Plane split: D1 fact empty vs receipt-owned COMPLETE; local **30303** facts match receipt | **問題なし** (not data loss); honesty UI **FIXED** (`4fcef08`) |
+| `tokyo_repo_rows=0` vs COMPLETE | Plane split: D1 fact empty (pre-hot) vs **receipt-owned** COMPLETE; full history = R2 + local **mirror** **30303** (not authority) | **問題なし** (not data loss); honesty UI **FIXED** (`4fcef08`); D1 hot tip **252** |
 | Tip-only endpoints | `equities_bars_daily_am`, `equities_earnings_calendar` | **DEFER** (vendor contract; D4) |
 
 ---
@@ -131,13 +133,13 @@ Note: initial G3 `AUDIT_REPORT` labeled `fins_summary` **MAPPING_BUG** by compar
 
 ### 1.4 Track D — JSDA typed facts (G4)
 
-Local `data/structured/ingestion.sqlite`:
+Local research mirror `data/structured/ingestion.sqlite` (**convenience counts only** — not CF authority; R2 holds history, COMPLETE is receipt-owned):
 
-| fact table | rows | coverage status | key null findings |
+| fact table | rows (mirror) | coverage status | key null findings |
 |------------|-----:|-----------------|-------------------|
 | `jsda_otc_bond_reference_prices` | **702451** | PARTIAL | coupon_rate ~0.5%; avg yield ~0.35%; individual_investor_flag ~3.5%; identity/PIT 0% |
 | `jsda_corporate_bond_transactions` | **156079** | COMPLETE | **always-empty schema-superset:** isin, buyer/seller counterparty, face/trade amount (100%); execution_price ~20% null; identity 0% |
-| `jsda_repo_rates` (dataset `jsda_tokyo_repo_rates`) | **30303** | COMPLETE | rate/tenor/rate_type/raw_payload/available_at **0% null** |
+| `jsda_repo_rates` (dataset `jsda_tokyo_repo_rates`) | **30303** | COMPLETE (receipt-owned) | rate/tenor/rate_type/raw_payload/available_at **0% null** |
 
 ---
 
@@ -155,7 +157,7 @@ Local `data/structured/ingestion.sqlite`:
 | `fins_dividend` | DeemCapGains, DeemDiv, DistAmt, NetAssetDecRatio, RetEarn | payload | **SOURCE_ALWAYS_NULL** | DEFER |
 | `derivatives_bars_daily_options` | EC, EH, EL, EO, SQD | payload | **SOURCE_ALWAYS_NULL** (evening/SQ empty on sample) | DEFER |
 | `jsda_corporate_bond_transactions` | isin, buyer/seller_counterparty_type, face_value_mil_jpy, trade_amount_mil_jpy | typed | **SCHEMA_SUPERSET / SOURCE_EMPTY** | DEFER — do not invent |
-| `jsda_tokyo_repo_rates` on D1 | whole fact table | D1 fact | **PLANE_SPLIT** (coverage projected; full history not on D1) | honesty FIXED G4; **hot tip** D1 **252** rows published 2026-08-15 (`publish_jsda_hot_to_d1.py`); not local loss |
+| `jsda_tokyo_repo_rates` on D1 | whole fact table | D1 fact | **PLANE_SPLIT** (coverage **receipt-owned**; full history = R2, not D1) | honesty FIXED G4; **hot tip** D1 **252** rows published 2026-08-15 (`publish_jsda_hot_to_d1.py`); local mirror **30303** = research convenience, **not loss** |
 | `equities_bars_daily_am` / `equities_earnings_calendar` | history | product | **TIP_ONLY / NO_HISTORICAL_RANGE** | DEFER D4 |
 
 ---
@@ -175,16 +177,19 @@ Two **independent** aggregates:
 | `tokyo_repo_rows` | `COUNT(*)` on fact table **`jsda_repo_rates` on the DB plane queried** | `OpsCurrentReadService.storage_plane_status` / MCP `domain.js` |
 | Dataset **COMPLETE** | Signed receipt + `coverage_segments` → `dataset_coverage.status` | `coverage_ledger` + ops projection |
 
-Ops projection publishes **coverage ledgers**, not full JSDA fact backfill to D1. Architecture: D1 = control/hot tip; full structured history SoT = local research DB / R2 structured. High-volume history **must not** refill D1.
+Ops projection publishes **coverage ledgers**, not full JSDA fact backfill to D1.  
+**CF SoT:** D1 = **hot tip** · R2 = **history** · COMPLETE = **receipt-owned**.  
+Local research SQLite = **mirror / research convenience** — **not** authority / **not** “local SoT”. High-volume history **must not** refill D1.
 
 ### Evidence
 
-| Plane | `jsda_repo_rates` rows | `dataset_coverage` | Receipt |
+| Plane | `jsda_repo_rates` rows | `dataset_coverage` | Receipt / role |
 |-------|----------------------:|--------------------|---------|
-| **Local** research sqlite | **30303** | COMPLETE, row_count **30303** | run **83**, raw=structured=**30303**, TRUSTED, `2012-10-29`→`2026-08-10` |
-| **D1** remote (prior quality scan) | **0** | COMPLETE (projected) | receipt-owned segment `jsda-era-timeseries` |
+| **R2** history | full sealed archive | — | **history SoT** (structured/raw partitions) |
+| **Local** research sqlite (mirror) | **30303** | COMPLETE, row_count **30303** | convenience mirror of sealed facts; run **83** raw=structured=**30303**, TRUSTED, `2012-10-29`→`2026-08-10` |
+| **D1** remote (prior quality scan) | **0** (pre-hot) / **252** hot tip post-publish | COMPLETE (projected) | **receipt-owned** segment `jsda-era-timeseries` |
 
-→ **`tokyo_repo_rows=0` on D1 is expected plane-split, not data loss and not receipt fraud.** Local facts match the sealed receipt.
+→ **`tokyo_repo_rows=0` on D1 (pre-hot) is expected plane-split, not data loss and not receipt fraud.** Mirror facts match the sealed receipt; COMPLETE stays receipt-owned.
 
 Additional: `r2_parse` discover layout looks for `jsda_tokyo_repo_rates/` dataset dirs; production seal used date-stamped `data/raw/jsda/YYYY/MM/DD/` via `repo_archive` — discoverer can show 0 artifacts while governed seal already succeeded.
 
@@ -226,7 +231,7 @@ No re-ingest, no COMPLETE rewrite, no Mass change.
 | `edinet_major_shareholders` | clean | COMPLETE | **問題なし** |
 | `edinet_cross_shareholdings` | clean | PARTIAL empty pre-island D6 | **問題なし** |
 | `edinet_large_volume_shareholders` | clean | PARTIAL empty pre-island D6 | **問題なし** |
-| `jsda_tokyo_repo_rates` | facts full local; D1 count plane-split | COMPLETE | **問題なし** (honesty **FIXED**) |
+| `jsda_tokyo_repo_rates` | R2 history + local mirror full; D1 hot tip / plane-split | COMPLETE (receipt-owned) | **問題なし** (honesty **FIXED**; not loss) |
 | `jsda_corporate_bond_transactions` | schema-superset always-empty cols | COMPLETE | **問題なし** + cols **DEFER** |
 | `jsda_otc_bond_reference_prices` | sparse legitimate nulls | PARTIAL archive D5 | **問題なし** (coverage DEFER) |
 

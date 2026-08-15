@@ -58,16 +58,16 @@ Artifacts: `.glm-logs/w0815q_g3_jsda/d1_repo_*.json`
 
 ---
 
-## 2. Local full **30303** still matches receipt COMPLETE
+## 2. Local mirror full **30303** still matches receipt COMPLETE
 
-Source: `data/structured/ingestion.sqlite`
+Source: local research mirror `data/structured/ingestion.sqlite` (**not** SoT; R2 = history; COMPLETE = receipt-owned)
 
 | Layer | Value |
 |-------|------:|
 | Fact `jsda_repo_rates` COUNT | **30303** |
 | Fact date range | **2012-10-29** → **2026-08-10** (3367 distinct days) |
 | Local hot window (`>=2026-07-01`) | **252** (= D1 tip) |
-| Local cold (`<2026-07-01`) | **30051** (full history SoT; not on D1 by design) |
+| Local cold (`<2026-07-01`) | **30051** (mirror of full history; R2 = history SoT; not on D1 by design) |
 | Core typed nulls (`rate`/`tenor`/`rate_type`/`as_of_date`/`available_at`/`raw_payload`/`source`) | **0** |
 | `dataset_coverage.jsda_tokyo_repo_rates` | **COMPLETE**, row_count **30303** |
 | Segment `jsda-era-timeseries` | **COMPLETE**, `receipt_run_id=**83**` |
@@ -136,7 +136,7 @@ D1 coverage ledger also shows `jsda_tokyo_repo_rates` **COMPLETE** / row_count *
 
 ## 4. last_run partial JSDA — root cause + recovery
 
-### 4.1 Local research plane (observable)
+### 4.1 Local research mirror (observable — **not** SoT)
 
 `ingestion_run_log` for source=`jsda` / dataset `jsda_tokyo_repo_rates`:
 
@@ -178,17 +178,19 @@ Latest CF `ingestion_run_log` source=`jsda` entries are routinely **`status=part
 - Corp job: similar tip-store partial
 - Tokyo repo discover job often **`pass`** (index + trrts + trr stored)
 
-This is **Worker pass ≠ COMPLETE** policy: CF raw discovery stores tip artifacts to R2; COMPLETE is receipt-owned via local governed seal + coverage projection. **Not fact loss; not incomplete tip publish for repo (D1 hot n=252 still present).**
+This is **Worker pass ≠ COMPLETE** policy: CF raw discovery stores tip artifacts to R2; COMPLETE is **receipt-owned** (governed seal + coverage projection). Local sqlite is **mirror only**. **Not fact loss; not incomplete tip publish for repo (D1 hot n=252 still present).**
 
 ---
 
 ## 5. Plane semantics (re-confirmed)
 
-| Plane | `jsda_repo_rates` facts | COMPLETE meaning |
+**CF SoT:** D1 = **hot tip** · R2 = **history** · COMPLETE = **receipt-owned**. Local research SQLite = **mirror / research convenience** — **not** authority.
+
+| Plane | `jsda_repo_rates` facts | COMPLETE / role |
 |-------|------------------------:|------------------|
-| Local research sqlite | **30303** full history | receipt + segment |
-| D1 control / hot tip | **252** (`>=2026-07-01`) | coverage projected; tip facts only |
-| R2 structured / raw | SoT for full history / archives | — |
+| R2 structured / raw | full sealed history / archives | **history SoT** |
+| Local research sqlite | **30303** full history (**mirror**) | convenience mirror; matches receipt — **not** authority |
+| D1 control / hot tip | **252** (`>=2026-07-01`) | tip facts only; coverage **receipt-owned** |
 
 `FACT_VS_COVERAGE_COUNT_MISMATCH` (252 tip vs 30303 ledger) on D1 remains **expected** after hot publish; `COMPLETE_WITHOUT_LOCAL_FACTS` should **not** fire while tip rows exist.
 
