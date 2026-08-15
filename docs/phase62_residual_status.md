@@ -1,7 +1,7 @@
 # Phase 6.2 / 6.3 residual status
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
-**Live verified:** 2026-08-15 (JST) / ~2026-08-15T04:32–04:47Z UTC (remote D1; COMPLETE segs **3457** **+0**; raw **15476** tip POST; Dataset COMPLETE **11**; empty COMPLETE **0**; Phase7 **OFF**; **W33** tip collect + JSDA + gap; floors **locked** + **NO_DENSIFY_FIXED** held; tip raw **+56** secondary; FRESH `projgen-061b5d38668a4e6d8537757c28350d78`; **HAS_RAW_SEALABLE=0** held; post_floor_sealable **0** densify **none**; OTC **72** held; **DEFER densify not** re-run; **CF-SoT** language held — D1 = hot tip · R2 = history · COMPLETE = receipt-owned; **3927ca4d81950828dfe292364b976ca461d31d2a** `3927ca4d81950828dfe292364b976ca461d31d2a`)
+**Live verified:** 2026-08-15 (JST) / ~2026-08-15T04:32–04:47Z UTC (remote D1; COMPLETE segs **3457** **+0**; raw **15476** tip POST; Dataset COMPLETE **11**; empty COMPLETE **0**; Phase7 **OFF**; **W33** tip collect + JSDA + gap; floors **locked** + **NO_DENSIFY_FIXED** held; tip raw **+56** secondary; FRESH `projgen-061b5d38668a4e6d8537757c28350d78`; **HAS_RAW_SEALABLE=0** held; post_floor_sealable **0** densify **none**; OTC **72** held; **DEFER densify not** re-run; **CF-SoT** language held — D1 = hot tip · R2 = history · COMPLETE = receipt-owned; **POST_PUSH_SHA** `3927ca4d81950828dfe292364b976ca461d31d2a`)
 **Repo tip:** `3927ca4d81950828dfe292364b976ca461d31d2a` — COMPLETE **3457** / Dataset COMPLETE **11** / empty COMPLETE **0** / Phase7 **OFF** / w0815z W33 collect ops close
 
 ## W33 / w0815z — continuous collect ops (JQ tip + JSDA + gap) (FINAL)
@@ -18,7 +18,7 @@
 | empty-raw COMPLETE / Mass / READY / Phase7 | **ban / NO-GO / OFF** |
 | Projection | **FRESH** `projgen-061b5d38668a4e6d8537757c28350d78` |
 | CF-SoT | D1 **hot tip** · R2 **history** · COMPLETE **receipt-owned** |
-| Push | **3927ca4d81950828dfe292364b976ca461d31d2a** `3927ca4d81950828dfe292364b976ca461d31d2a` |
+| Push | **POST_PUSH_SHA** `3927ca4d81950828dfe292364b976ca461d31d2a` |
 
 ## W32 / w0815y — continuous collect ops (JQ tip + JSDA + gap) (FINAL)
 
@@ -34,7 +34,7 @@
 | empty-raw COMPLETE / Mass / READY / Phase7 | **ban / NO-GO / OFF** |
 | Projection | **FRESH** `projgen-b5f2325ca773478cb3c9e2eb1839e4d9` |
 | CF-SoT | D1 **hot tip** · R2 **history** · COMPLETE **receipt-owned** |
-| Push | **3927ca4d81950828dfe292364b976ca461d31d2a** `b44c23c7f3af6e36ef7bafe37195cc3b12c369e8` |
+| Push | **POST_PUSH_SHA** `b44c23c7f3af6e36ef7bafe37195cc3b12c369e8` |
 
 ## W31 / w0815x — continuous collect ops (JQ tip + JSDA + gap) (FINAL)
 
@@ -50,7 +50,7 @@
 | empty-raw COMPLETE / Mass / READY / Phase7 | **ban / NO-GO / OFF** |
 | Projection | **FRESH** `projgen-20ecd21e86c34b45bf21d82c39d5f84d` |
 | CF-SoT | D1 **hot tip** · R2 **history** · COMPLETE **receipt-owned** |
-| Push | **3927ca4d81950828dfe292364b976ca461d31d2a** `74894912ac4851bbd5a837183e000a160a11e5e3` |
+| Push | **POST_PUSH_SHA** `74894912ac4851bbd5a837183e000a160a11e5e3` |
 
 ## W30 / w0815w — continuous collect ops (JQ tip + JSDA + gap) (FINAL)
 
@@ -66,7 +66,7 @@
 | empty-raw COMPLETE / Mass / READY / Phase7 | **ban / NO-GO / OFF** |
 | Projection | **FRESH** `projgen-c4240127142b4d9b83e53f02866018a7` |
 | CF-SoT | D1 **hot tip** · R2 **history** · COMPLETE **receipt-owned** |
-| Push | **3927ca4d81950828dfe292364b976ca461d31d2a** `b18a06175a3bb4ed3f3c84c6f1dd573a309e1e10` |
+| Push | **POST_PUSH_SHA** `b18a06175a3bb4ed3f3c84c6f1dd573a309e1e10` |
 
 ## W29 / w0815v — floor catalog + NO_DENSIFY + tip ops close (FINAL)
 
@@ -84,7 +84,7 @@
 | empty-raw COMPLETE / Mass / READY / Phase7 | **ban / NO-GO / OFF** |
 | Projection | **FRESH** `projgen-76084a30143043febab9babe9327aa2f` |
 | CF-SoT | D1 **hot tip** · R2 **history** · COMPLETE **receipt-owned** |
-| Push | **3927ca4d81950828dfe292364b976ca461d31d2a** `d3c9f54b5237c7f18f692483601a706b5ee620b0` |
+| Push | **POST_PUSH_SHA** `d3c9f54b5237c7f18f692483601a706b5ee620b0` |
 
 ### NO_DENSIFY_FIXED (never re-densify residual class)
 
