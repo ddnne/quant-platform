@@ -10,6 +10,7 @@
 
 **Live verified:** 2026-08-15 (JST) / ~2026-08-15T02:47Z UTC  
 **Wave start HEAD:** `306bebb2febf835032abf3bc210f755338b8caac`  
+**Proof HEAD (post-push):** `369e08da37a25c796874cf02d50a06525ac23c0b`  
 **Projection:** **FRESH** `projgen-2ef0e4ae259f4f61b30856fe2ceff350`  
 **Artifacts:** `.glm-logs/w0815t_g6_ops/` (`PRE_remote.json`, `POST_remote.json`, `FINAL_metrics.json`, `matrix/unified_matrix_summary.json`, `publish.log`, `reeval_freshness.log`, `last_run_monitor.json`)
 
