@@ -1,8 +1,51 @@
 # Phase 6.2 / 6.3 residual status
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
-**Live verified:** 2026-08-15 (JST) / ~2026-08-15T03:05Z UTC (remote D1; COMPLETE segs **3457**; raw_n **15175**; Dataset COMPLETE **11**; FRESH `projgen-57a33eaa…`; empty COMPLETE **0**; Phase7 **OFF**; **W28-G1** tip densify general **27p/0f** @495 + fins **3p/0f** @100 + JSDA FULL_OK new **0**; **HAS_RAW_SEALABLE=0** held; **DEFER D1–D10** densify **not** re-run; **CF-SoT** language held)
-**Repo tip:** `19558902df336030dc8a44e8f31b32cb076f2398` — COMPLETE **3457** / raw **15175** / Dataset COMPLETE **11** / FRESH `projgen-57a33eaa…` / empty COMPLETE **0** / Phase7 **OFF** / w0815u_g1_collect
+**Live verified:** 2026-08-15 (JST) / ~2026-08-15T03:19Z UTC (remote D1; COMPLETE segs **3457**; Dataset COMPLETE **11**; empty COMPLETE **0**; Phase7 **OFF**; **W29-G1** floors **locked** + **NO_DENSIFY_FIXED** cataloged; tip densify **secondary**; **HAS_RAW_SEALABLE=0** held; **DEFER densify not** re-run; **CF-SoT** language held — D1 = hot tip · R2 = history · COMPLETE = receipt-owned)
+**Repo tip:** (see git; docs wave may lead tip) — COMPLETE **3457** / Dataset COMPLETE **11** / empty COMPLETE **0** / Phase7 **OFF** / w0815v_floor catalog
+
+## W29-G1 / w0815v — observed floor catalog + NO_DENSIFY lock
+
+**Canonical floor catalog:** [`docs/proof/observed_floor_catalog_20260815.md`](proof/observed_floor_catalog_20260815.md)  
+**Machine:** [`.glm-logs/w0815v_floor/unified_floor_catalog.json`](../.glm-logs/w0815v_floor/unified_floor_catalog.json) · [`.glm-logs/w0815v_floor/NO_DENSIFY_FIXED.json`](../.glm-logs/w0815v_floor/NO_DENSIFY_FIXED.json)  
+**Peer floors:** T1 fins · T2 bars/master · T3 edinet/mb/ssr · T4 indices under `.glm-logs/w0815v_floor/`
+
+| gate | status |
+|------|--------|
+| Floors | **locked** — sealable observed floors recorded for all residual + COMPLETE governed datasets |
+| Tip densify | **secondary** (peer continuous / G7 T10) — not floor-catalog work |
+| Contract `history_target_start` raise | **propose only** (12 candidates; **0** implemented this wave) |
+| empty-raw COMPLETE / Mass / READY / Phase7 | **ban / NO-GO / OFF** |
+| CF-SoT | D1 **hot tip** · R2 **history** · COMPLETE **receipt-owned** |
+
+### NO_DENSIFY_FIXED (never re-densify residual class)
+
+Canonical blocked residual **segment classes**. **Do not densify** unless DEFER re-try condition is met. Count **18** classes (formal D1–D7,D9,D10 + matrix MX-\*).
+
+| DEFER id | dataset(s) | residual class / span | n | never densify reason |
+|----------|------------|----------------------|--:|----------------------|
+| **D1** | `indices_bars_daily_topix` | EMPTY `2008-01…04` | 4 | API empty shells |
+| **D1** | `indices_bars_daily` | EMPTY/missing receipt `2008-01…04` | 4 | same band |
+| **D2** | `equities_master` | PRE_PLAN `2000-07…2006-07` | 73 | no sealable raw |
+| **D2** | `equities_master` | MISDATE `2006-08…2008-04` | 21 | tip-misdated Date |
+| **D3** | `markets_breakdown` | EMPTY pre-source-floor `2013-01…2015-03` | 27 | source floor 2015-03-26 |
+| **D4** | `equities_earnings_calendar` | TIP_ONLY history residual | ~199 | vendor next-bday only |
+| **D4** | `equities_bars_daily_am` | TIP_ONLY history residual | ~31 | today-mode AM only |
+| **D5** | `jsda_otc_bond_reference_prices` | ARCHIVE beyond tip COMPLETE **72** | archive | site timeout/404/403 |
+| **D6** | `edinet_cross_shareholdings` | EMPTY pre-island `2018-01…2020-04` | 28 | empty-raw residual |
+| **D6** | `edinet_large_volume_shareholders` | EMPTY pre-island `2018-01…2021-06` | 42 | empty-raw residual |
+| **D7** | `equities_bars_daily` | NO_RAW `2004-01…2006-07` | 31 | OOS / entitlement |
+| **D7** | `equities_bars_daily` | EMPTY `2006-08…2008-04` | 21 | empty API under sub |
+| **D9** | `markets_short_sale_report` | EMPTY pre-history `2013-01…10` | 10 | first nz 2013-11 |
+| **D10** | `fins_summary` | EMPTY pre-history `2008-01…06` | 6 | first nz 2008-07 |
+| **MX-DIV** | `fins_dividend` | EMPTY_SHELL `2008-01…2013-01` | 61 | W27-G1 matrix forever-skip |
+| **MX-DET** | `fins_details` | DEFER_PRE2018 `2008-01…2017-12` | 120 | W27-G3 matrix forever-skip |
+| **MX-EARN-PRE** | `fins_earnings_date` | NO_RAW pre-floor `2010-01…2017-12` | 96 | W27-G2 matrix |
+| **MX-EARN-TIP** | `fins_earnings_date` | tip known-empty `2026-01…04` | 4 | W27-G2; no densify-as-success |
+
+**JSDA floors (residual):** OTC archive **D5** · `jsda_tokyo_repo_rates` **COMPLETE** 1/1 · `jsda_corporate_bond_transactions` **COMPLETE** 12/12 · earn_calendar / bars_am **D4** tip-only.
+
+**Contract raise candidates (not applied):** see catalog §2 — indices→`2008-05-01`, bars/master→`2008-05-01`, fins_summary→`2008-07-01`, dividend→`2013-02-01`, details/earn→`2018-01-01`, mb→`2015-03-26`, short_sale→`2013-11-01`, edinet cross/large→island floors.
 
 ## W27-G6 unified matrix — 残 seg × raw 有無
 
@@ -83,9 +126,10 @@ Coverage DEFERs **D1–D10** (D10 fins_summary residual 6 formalized **W19-G6 T1
 | Mass / READY / B0 | **NO-GO** |
 | Phase 7 | **OFF / foundation only** — **must remain OFF**; no mass arming, no production READY, no Phase7 switch ON |
 
-## DEFER inventory (retry conditions) — W11-G7 T20 + **W17-G5 T15** + **W19-G6 T13 formal** + **W25-G5 / W26-G4 / W27-G6 maintain**
+## DEFER inventory (retry conditions) — W11-G7 T20 + **W17-G5 T15** + **W19-G6 T13 formal** + **W25–W28 maintain** + **W29-G1 NO_DENSIFY_FIXED lock**
 
-Canonical blocked residuals. **Do not re-run densify** unless the re-try condition is met. Empty-raw COMPLETE remains **forbidden**.
+Canonical blocked residuals. **Do not re-run densify** unless the re-try condition is met. Empty-raw COMPLETE remains **forbidden**.  
+**W29-G1:** floors locked + **NO_DENSIFY_FIXED** table above (18 classes) · catalog [`observed_floor_catalog_20260815.md`](proof/observed_floor_catalog_20260815.md).
 
 **W19-G6 T13 formalize + W26-G4 re-verify:** `fins_summary` PARTIAL **`2008-01…06`** (**6**) = **empty pre-history shells** before observed floor **`2008-07-01`** (W18-G1 R2 SUCCESS COMPLETE `row_count=0` all 6; densify skipped; surgical dataset COMPLETE **not** rule-legal 218≠224). Keep empty residuals for **short_sale / topix / idx / master / breakdown / earn / am / EDINET** (D1–D4, D6, D9) — **no** densify, **no** invent COMPLETE. Re-verify remote POST **2026-08-15T02:47Z**: fins_summary PARTIAL exactly `2008-01…06`; short_sale PARTIAL `2013-01…10`; topix/idx COMPLETE segs **220/220** with residual PARTIAL **4+4** held (`2008-01…04`); breakdown COMPLETE **137** / PARTIAL **27** (`2013-01…2015-03`); master/earn/am/EDINET empty bands unchanged; D5 OTC tip held **72** (archive still DEFER).
 
@@ -240,6 +284,11 @@ Canonical blocked residuals. **Do not re-run densify** unless the re-try conditi
 | `derivatives_bars_daily_options_225` | **COMPLETE** | **164** | **`2013-01-04`** | **`2026-08-14`** | — | segs **164/164** since **W12-G4** residual seal; **W13-G3** surgical re-aggregate promoted `dataset_coverage` PARTIAL→**COMPLETE** (stale status_counts 80/84 fixed); C8 **pass** lag **1**; proof [`w0815e_g3_dataset_complete_20260815.md`](proof/w0815e_g3_dataset_complete_20260815.md) |
 
 ## Proof index (aggregate — do not orphan)
+
+### Floor catalog / NO_DENSIFY (W29)
+| Proof | What it closes |
+|-------|----------------|
+| [`docs/proof/observed_floor_catalog_20260815.md`](proof/observed_floor_catalog_20260815.md) | **W29-G1 / w0815v**: unified observed floors vs `history_target_start` for all residual + COMPLETE governed datasets; **12** contract raise **proposals** (0 implemented); **NO_DENSIFY_FIXED** 18 classes; floors locked; tip densify secondary; CF-SoT held; empty-raw ban held |
 
 ### Column / NULL audit (W20)
 | Proof | What it closes |
