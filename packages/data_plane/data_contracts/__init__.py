@@ -32,6 +32,15 @@ from .canonical import (
     datasets_by_source,
     validate_downstream_consistency,
 )
+from .permanent_defer import (
+    PERMANENT_DEFER_DATASETS,
+    PERMANENT_DEFER_IDS,
+    PermanentDeferHistoryError,
+    filter_permanent_defer,
+    is_permanent_defer,
+    reject_permanent_defer_for_history,
+    require_history_eligible,
+)
 
 __all__ = [
     "AVAILABLE_AT_POLICIES",
@@ -58,4 +67,11 @@ __all__ = [
     "governed_datasets",
     "datasets_by_source",
     "validate_downstream_consistency",
+    "PERMANENT_DEFER_DATASETS",
+    "PERMANENT_DEFER_IDS",
+    "PermanentDeferHistoryError",
+    "filter_permanent_defer",
+    "is_permanent_defer",
+    "reject_permanent_defer_for_history",
+    "require_history_eligible",
 ]

@@ -18,6 +18,7 @@ from data_contracts import (
     all_contracts,
     contract_for,
     coverage_contract_for,
+    require_history_eligible,
 )
 from paper_runtime.snapshot import (
     describe_snapshot as describe_ready_snapshot,
@@ -116,6 +117,13 @@ class QuantDataAccess:
         if value not in self._datasets:
             raise PermissionError(f"dataset is not allowlisted: {value!r}")
         return value
+
+    def _require_history_dataset(self, dataset: str) -> str:
+        """Allowlisted + not permanent DEFER (research history fact loads)."""
+        value = self._require_dataset(dataset)
+        return require_history_eligible(
+            value, context="QuantDataAccess research history"
+        )
 
     @staticmethod
     def _require_as_of(as_of: Any) -> str:
@@ -243,7 +251,7 @@ class QuantDataAccess:
         page_size: int | None = None,
         page_token: str | None = None,
     ) -> dict[str, Any]:
-        dataset = self._require_dataset(dataset)
+        dataset = self._require_history_dataset(dataset)
         as_of_iso = self._require_as_of(as_of)
         start_day, end_day = self._date_window(as_of_iso, start, end)
         snapshot = self._snapshot(snapshot_id)
@@ -393,7 +401,7 @@ class QuantDataAccess:
         as_of: Any,
         snapshot_id: str | None = None,
     ) -> dict[str, Any]:
-        dataset = self._require_dataset(dataset)
+        dataset = self._require_history_dataset(dataset)
         as_of_iso = self._require_as_of(as_of)
         snapshot = self._snapshot(snapshot_id)
         result = pit.get_jquants_records(
