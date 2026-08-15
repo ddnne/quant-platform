@@ -1,8 +1,8 @@
 # Phase 6.2 / 6.3 residual status
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
-**Live verified:** 2026-08-15 (JST) / tip PRE `2026-08-15T06:33:51Z` → ops POST `2026-08-15T06:55:17Z` UTC · **W40** continuous collect · W38 contract floors **still SoT** (`ba3c811`) · COMPLETE segs **3457→3461 (Δ+4 PRIMARY)** · Dataset COMPLETE **20 held** · empty COMPLETE **0** · **OTC 72→76 (+4 HIGHLIGHT)** FULL_OK_NEW S260424/427/428/430 · tip raw **15673→15703 (+30 secondary)** · tip densify **not primary** · actionable_n **0** · mb **2015-03** DEFER_thin_partial_month held (no densify) · Permanent DEFER **5** held · Phase7 **OFF** · FRESH `projgen-c362f07dd19f494ab798c6aca2aa3a93` · **CF-SoT** held — D1 = hot tip · R2 = history · COMPLETE = receipt-owned · **POST_PUSH_SHA** `POST_PUSH_SHA`
-**Repo tip:** `POST_PUSH_SHA` — W40 ops · COMPLETE **3461** / OTC **76** / Dataset COMPLETE **20** / empty COMPLETE **0** / raw **15703** / Phase7 **OFF**
+**Live verified:** 2026-08-15 (JST) / tip PRE `2026-08-15T06:33:51Z` → ops POST `2026-08-15T06:55:17Z` UTC · **W40** continuous collect · W38 contract floors **still SoT** (`ba3c811`) · COMPLETE segs **3457→3461 (Δ+4 PRIMARY)** · Dataset COMPLETE **20 held** · empty COMPLETE **0** · **OTC 72→76 (+4 HIGHLIGHT)** FULL_OK_NEW S260424/427/428/430 · tip raw **15673→15703 (+30 secondary)** · tip densify **not primary** · actionable_n **0** · mb **2015-03** DEFER_thin_partial_month held (no densify) · Permanent DEFER **5** held · Phase7 **OFF** · FRESH `projgen-c362f07dd19f494ab798c6aca2aa3a93` · **CF-SoT** held — D1 = hot tip · R2 = history · COMPLETE = receipt-owned · **POST_PUSH_SHA** `924ca1895b4734e7bd0d828aa634a136fcdf08c2`
+**Repo tip:** `924ca1895b4734e7bd0d828aa634a136fcdf08c2` — W40 ops · COMPLETE **3461** / OTC **76** / Dataset COMPLETE **20** / empty COMPLETE **0** / raw **15703** / Phase7 **OFF**
 
 ## W40 / w0815ag — continuous collect ops (JQ tip + JSDA OTC seal + gap) (FINAL)
 
@@ -22,7 +22,7 @@
 | empty-raw COMPLETE / Mass / READY / Phase7 | **ban / NO-GO / OFF** |
 | Projection | **FRESH** `projgen-c362f07dd19f494ab798c6aca2aa3a93` |
 | CF-SoT | D1 **hot tip** · R2 **history** · COMPLETE **receipt-owned** |
-| Push | **POST_PUSH_SHA** `POST_PUSH_SHA` |
+| Push | **POST_PUSH_SHA** `924ca1895b4734e7bd0d828aa634a136fcdf08c2` |
 
 **Primary success:** COMPLETE segs **+4** (OTC FULL_OK_NEW residual) + Dataset COMPLETE held 20.  
 **Highlight:** OTC **72→76**. **Secondary only:** tip raw +30. **Not** tip-as-primary. **Not** densify-as-success.
