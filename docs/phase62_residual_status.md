@@ -1,9 +1,9 @@
 # Phase 6.2 / 6.3 residual status
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
-**Live verified:** 2026-08-15 (JST) / **W53** O2強化・再評価（READY 未宣言） FINAL · COMPLETE segs **3478** · Dataset COMPLETE **21 / 26** · PARTIAL = **5** permanent DEFER only · **actionable_gap = 0** · empty COMPLETE **0** · **OTC 93** tip island held · permanent DEFER **5** / NO_DENSIFY **6** · densify coverage loops **ENDED** · Mass/READY/Phase7 **NO-GO/OFF** · raw **15915** (remote verify; W46 tip secondary baseline **15869** held) · FRESH `projgen-d2cc11b67ad84724afaffbe4c000b59c` · **CF-SoT** held — D1 = hot tip · R2 = history · COMPLETE = receipt-owned · floors W38 + W42 mb **2015-04-01** **not lowered** · coverage baseline **W47 FINAL held** · READY **not declared** · tip densify **SKIP** · densify **none** · promotion **5 approved** (W52 **2** + W53 O2 **+3** · v1.0.0) · signal 2nd E2E Mass **OFF** · status=`candidate` · **candidate_only=False** (legs approved) · **POST_PUSH_SHA** `POST_PUSH_SHA_PENDING` · PRE_sha `b6dc56a7ec771c1408a5477c7857752da4856dcf`
+**Live verified:** 2026-08-15 (JST) / **W53** O2強化・再評価（READY 未宣言） FINAL · COMPLETE segs **3478** · Dataset COMPLETE **21 / 26** · PARTIAL = **5** permanent DEFER only · **actionable_gap = 0** · empty COMPLETE **0** · **OTC 93** tip island held · permanent DEFER **5** / NO_DENSIFY **6** · densify coverage loops **ENDED** · Mass/READY/Phase7 **NO-GO/OFF** · raw **15915** (remote verify; W46 tip secondary baseline **15869** held) · FRESH `projgen-d2cc11b67ad84724afaffbe4c000b59c` · **CF-SoT** held — D1 = hot tip · R2 = history · COMPLETE = receipt-owned · floors W38 + W42 mb **2015-04-01** **not lowered** · coverage baseline **W47 FINAL held** · READY **not declared** · tip densify **SKIP** · densify **none** · promotion **5 approved** (W52 **2** + W53 O2 **+3** · v1.0.0) · signal 2nd E2E Mass **OFF** · status=`candidate` · **candidate_only=False** (legs approved) · **POST_PUSH_SHA** `664c88e0821c12fc7a85ad04434e8a0b19737873` · PRE_sha `b6dc56a7ec771c1408a5477c7857752da4856dcf`
 
-**Repo tip:** `POST_PUSH_SHA_PENDING` — W53 O2強化・再評価 FINAL · COMPLETE **3478** / Dataset COMPLETE **21** / OTC **93** / empty COMPLETE **0** / **actionable_gap = 0** / Phase7 **OFF** / READY **未宣言** · FRESH `projgen-d2cc11b67ad84724afaffbe4c000b59c` · promotion **5 approved** / **5 candidate** · signal **2nd E2E** · tip densify **SKIP** · **POST_PUSH_SHA** `POST_PUSH_SHA_PENDING`
+**Repo tip:** `664c88e0821c12fc7a85ad04434e8a0b19737873` — W53 O2強化・再評価 FINAL · COMPLETE **3478** / Dataset COMPLETE **21** / OTC **93** / empty COMPLETE **0** / **actionable_gap = 0** / Phase7 **OFF** / READY **未宣言** · FRESH `projgen-d2cc11b67ad84724afaffbe4c000b59c` · promotion **5 approved** / **5 candidate** · signal **2nd E2E** · tip densify **SKIP** · **POST_PUSH_SHA** `664c88e0821c12fc7a85ad04434e8a0b19737873`
 
 
 ## O2強化・再評価（READY 未宣言）
@@ -36,7 +36,7 @@
 | permanent DEFER | **5** held |
 | tip densify | **SKIP** (T12 · not primary this phase) |
 | densify | **none** |
-| push | **POST_PUSH_SHA** `POST_PUSH_SHA_PENDING` (G5 FINAL merge) · PRE_sha `b6dc56a7ec771c1408a5477c7857752da4856dcf` |
+| push | **POST_PUSH_SHA** `664c88e0821c12fc7a85ad04434e8a0b19737873` (G5 FINAL merge) · PRE_sha `b6dc56a7ec771c1408a5477c7857752da4856dcf` |
 | Projection | **FRESH** `projgen-d2cc11b67ad84724afaffbe4c000b59c` (peer G3 T9 ops_reeval_freshness; residual FRESH sync; publish apply **SKIP** no segment drift; fail-closed no force) |
 | O2 feature E2E | G1 **PASS** — tip FeatureContext → R2 for `topix_relative_1d` · `disclosure_flag_fins` · `margin_interest_change_1d` (margin Jul tip + PIT as_of) · Mass **not** connected |
 | Promotion | **+3 this wave** → **5 approved** total · `topix_relative_1d` · `disclosure_flag_fins` · `margin_interest_change_1d` (+ W52 `volume_change_1d` · `is_trading_day`) · v**1.0.0** · remain **5 candidate** · no READY claim |
