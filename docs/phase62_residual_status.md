@@ -1,8 +1,42 @@
 # Phase 6.2 / 6.3 residual status
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
-**Live verified:** 2026-08-15 (JST) / tip PRE `2026-08-15T06:19:54Z` → POST `2026-08-15T06:28:19Z` UTC · **W39** continuous collect · W38 contract floors **still SoT** (`ba3c811`) · COMPLETE segs **3457→3457 (Δ0)** · Dataset COMPLETE **20 held** · empty COMPLETE **0** · tip raw **15642→15673 (+31 secondary)** · tip densify **not primary** · actionable_n **0** · mb **2015-03** DEFER_thin_partial_month (densify once rows=0 · seal 0) · Permanent DEFER **5** held · Phase7 **OFF** · FRESH `projgen-870c78f492424ab6a93267adf5d37375` · **CF-SoT** held — D1 = hot tip · R2 = history · COMPLETE = receipt-owned · **POST_PUSH_SHA** `2e436bfcb2ec1759b6bfb32727a98ea3d5fbf3cd`
-**Repo tip:** `2e436bfcb2ec1759b6bfb32727a98ea3d5fbf3cd` — W39 ops · COMPLETE **3457** / Dataset COMPLETE **20** / empty COMPLETE **0** / raw **15673** / Phase7 **OFF**
+**Live verified:** 2026-08-15 (JST) / tip PRE `2026-08-15T06:33:51Z` → ops POST `2026-08-15T06:55:17Z` UTC · **W40** continuous collect · W38 contract floors **still SoT** (`ba3c811`) · COMPLETE segs **3457→3461 (Δ+4 PRIMARY)** · Dataset COMPLETE **20 held** · empty COMPLETE **0** · **OTC 72→76 (+4 HIGHLIGHT)** FULL_OK_NEW S260424/427/428/430 · tip raw **15673→15703 (+30 secondary)** · tip densify **not primary** · actionable_n **0** · mb **2015-03** DEFER_thin_partial_month held (no densify) · Permanent DEFER **5** held · Phase7 **OFF** · FRESH `projgen-c362f07dd19f494ab798c6aca2aa3a93` · **CF-SoT** held — D1 = hot tip · R2 = history · COMPLETE = receipt-owned · **POST_PUSH_SHA** `POST_PUSH_SHA`
+**Repo tip:** `POST_PUSH_SHA` — W40 ops · COMPLETE **3461** / OTC **76** / Dataset COMPLETE **20** / empty COMPLETE **0** / raw **15703** / Phase7 **OFF**
+
+## W40 / w0815ag — continuous collect ops (JQ tip + JSDA OTC seal + gap) (FINAL)
+
+**Ops close proof:** [`docs/proof/w0815ag_w40_collect_ops_20260815.md`](proof/w0815ag_w40_collect_ops_20260815.md)  
+**Machine:** tip [`.glm-logs/w0815ag_g1_tip/FINAL_metrics.json`](../.glm-logs/w0815ag_g1_tip/FINAL_metrics.json) · JSDA [`.glm-logs/w0815ag_g2_jsda/jsda_summary.json`](../.glm-logs/w0815ag_g2_jsda/jsda_summary.json) · gap [`.glm-logs/w0815ag_g3_gap/SUMMARY.json`](../.glm-logs/w0815ag_g3_gap/SUMMARY.json) · ops [`.glm-logs/w0815ag_ops/POST_remote.json`](../.glm-logs/w0815ag_ops/POST_remote.json)
+
+| gate | status |
+|------|--------|
+| COMPLETE segs | **3457 → 3461 (Δ+4)** — **PRIMARY** (OTC residual seals) |
+| Dataset COMPLETE | **20 held** — **PRIMARY** (W38 contract still SoT; OTC still PARTIAL dataset-level) |
+| JSDA OTC | **72→76 (+4)** — **HIGHLIGHT** · FULL_OK_NEW **4** S260424/427/428/430 · R2 put OK · tip still S260817 · corp/repo COMPLETE skip · hot D1 **SKIP** 252 |
+| Tip densify | **secondary** — raw **15673→15703 (+30)** · general 27p/0f @495 · fins 3p/0f @100 · 0×429 · seal **0** |
+| Gap | actionable_n **0** · densify **none** · empty COMPLETE **0** · verdict GAP_HELD_NO_ACTIONABLE |
+| mb 2015-03 | **held** DEFER_thin_partial_month · densify **not** re-run |
+| Permanent DEFER | **5** held (PD-D2-MASTER · PD-D4-EARN-CAL · PD-D4-BARS-AM · PD-D5-JSDA-OTC · PD-MX-EARN-TIP) |
+| Floors / contract | **unchanged** this wave (W38 `ba3c811` still SoT) |
+| empty-raw COMPLETE / Mass / READY / Phase7 | **ban / NO-GO / OFF** |
+| Projection | **FRESH** `projgen-c362f07dd19f494ab798c6aca2aa3a93` |
+| CF-SoT | D1 **hot tip** · R2 **history** · COMPLETE **receipt-owned** |
+| Push | **POST_PUSH_SHA** `POST_PUSH_SHA` |
+
+**Primary success:** COMPLETE segs **+4** (OTC FULL_OK_NEW residual) + Dataset COMPLETE held 20.  
+**Highlight:** OTC **72→76**. **Secondary only:** tip raw +30. **Not** tip-as-primary. **Not** densify-as-success.
+
+### Residual PARTIAL after W40 (all non-actionable)
+
+| dataset | PARTIAL n | disposition |
+|---------|----------:|-------------|
+| `equities_master` | **94** | permanent DEFER PD-D2-MASTER |
+| `equities_earnings_calendar` | **199** | permanent DEFER PD-D4-EARN-CAL |
+| `equities_bars_daily_am` | **31** | permanent DEFER PD-D4-BARS-AM |
+| `jsda_otc_bond_reference_prices` | **8705** | permanent DEFER PD-D5-JSDA-OTC (tip COMPLETE **76**; was 8709/72) |
+| `fins_earnings_date` | **4** | permanent DEFER PD-MX-EARN-TIP `2026-01…04` |
+| `markets_breakdown` | **1** | **DEFER_thin_partial_month** `2015-03` (W39 densify once rows=0; first full COMPLETE **2015-04**) |
 
 ## W39 / w0815af — continuous collect ops (JQ tip + JSDA/MB + gap) (FINAL)
 
