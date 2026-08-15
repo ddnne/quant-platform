@@ -11,7 +11,7 @@
 
 **Live verified:** 2026-08-15 (JST) / G1 E2E ~`2026-08-15T10:04Z` UTC · G3 smokes ~`10:03Z` · G4 residual ~`10:00–10:06Z` · G5 merge+push this close  
 **Wave start HEAD (PRE_sha):** `ea4a151fd3f2a9d4d40c3a967ea2e04ad89a3938` (W50 post-fill)  
-**Proof HEAD (post-push):** _filled after push_  
+**Proof HEAD (post-push):** `8e64328f8f0513c2d9f1514256fec44be35ae020`  
 **Projection (peer G3 T9 reeval; G4 consume):** **FRESH** `projgen-48993e3f05814d759576c01f65196041` (age ~301s at G4 capture; pre-gen `projgen-0fb233bde5df4a8ca66b73bbbf78905d`)
 
 **Artifacts:**
@@ -185,9 +185,9 @@ All `status=candidate`. Criteria draft only: [`complete21_feature_candidate_to_a
 | field | value |
 |-------|-------|
 | PRE_sha | `ea4a151fd3f2a9d4d40c3a967ea2e04ad89a3938` |
-| POST_PUSH_SHA (feature commit) | _filled after push_ |
-| origin/main after push | _filled after push_ |
-| HEAD == origin/main | _filled after push_ |
+| POST_PUSH_SHA (feature commit) | `8e64328f8f0513c2d9f1514256fec44be35ae020` |
+| origin/main after push | `8e64328f8f0513c2d9f1514256fec44be35ae020` |
+| HEAD == origin/main | **true** (both `8e64328f8f0513c2d9f1514256fec44be35ae020`) |
 
 ---
 

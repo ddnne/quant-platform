@@ -1,9 +1,9 @@
 # Phase 6.2 / 6.3 residual status
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
-**Live verified:** 2026-08-15 (JST) / **W51** 特徴量込み E2E（READY 未宣言） FINAL · COMPLETE segs **3478** · Dataset COMPLETE **21 / 26** · PARTIAL = **5** permanent DEFER only · **actionable_gap = 0** · empty COMPLETE **0** · **OTC 93** tip island held · permanent DEFER **5** / NO_DENSIFY **6** · densify coverage loops **ENDED** · Mass/READY/Phase7 **NO-GO/OFF** · raw **15892** (remote verify; W46 tip secondary baseline **15869** held) · FRESH `projgen-48993e3f05814d759576c01f65196041` · **CF-SoT** held — D1 = hot tip · R2 = history · COMPLETE = receipt-owned · floors W38 + W42 mb **2015-04-01** **not lowered** · coverage baseline **W47 FINAL held** · READY **not declared** · tip densify **SKIP** · densify **none** · **POST_PUSH_SHA** _filled after push_ · PRE_sha `ea4a151fd3f2a9d4d40c3a967ea2e04ad89a3938`
+**Live verified:** 2026-08-15 (JST) / **W51** 特徴量込み E2E（READY 未宣言） FINAL · COMPLETE segs **3478** · Dataset COMPLETE **21 / 26** · PARTIAL = **5** permanent DEFER only · **actionable_gap = 0** · empty COMPLETE **0** · **OTC 93** tip island held · permanent DEFER **5** / NO_DENSIFY **6** · densify coverage loops **ENDED** · Mass/READY/Phase7 **NO-GO/OFF** · raw **15892** (remote verify; W46 tip secondary baseline **15869** held) · FRESH `projgen-48993e3f05814d759576c01f65196041` · **CF-SoT** held — D1 = hot tip · R2 = history · COMPLETE = receipt-owned · floors W38 + W42 mb **2015-04-01** **not lowered** · coverage baseline **W47 FINAL held** · READY **not declared** · tip densify **SKIP** · densify **none** · **POST_PUSH_SHA** `8e64328f8f0513c2d9f1514256fec44be35ae020` · PRE_sha `ea4a151fd3f2a9d4d40c3a967ea2e04ad89a3938`
 
-**Repo tip:** _filled after push_ — W51 特徴量込み E2E FINAL · COMPLETE **3478** / Dataset COMPLETE **21** / OTC **93** / empty COMPLETE **0** / **actionable_gap = 0** / Phase7 **OFF** / READY **未宣言** · FRESH `projgen-48993e3f05814d759576c01f65196041` · single_shot candidate features → R2 · **POST_PUSH_SHA** _filled after push_
+**Repo tip:** `8e64328f8f0513c2d9f1514256fec44be35ae020` — W51 特徴量込み E2E FINAL · COMPLETE **3478** / Dataset COMPLETE **21** / OTC **93** / empty COMPLETE **0** / **actionable_gap = 0** / Phase7 **OFF** / READY **未宣言** · FRESH `projgen-48993e3f05814d759576c01f65196041` · single_shot candidate features → R2 · **POST_PUSH_SHA** `8e64328f8f0513c2d9f1514256fec44be35ae020`
 
 
 ## 特徴量込み E2E（READY 未宣言）
@@ -34,7 +34,7 @@
 | permanent DEFER | **5** held |
 | tip densify | **SKIP** (T12 · not primary this phase) |
 | densify | **none** |
-| push | **POST_PUSH_SHA** _filled after push_ (G5 FINAL merge) · PRE_sha `ea4a151fd3f2a9d4d40c3a967ea2e04ad89a3938` |
+| push | **POST_PUSH_SHA** `8e64328f8f0513c2d9f1514256fec44be35ae020` (G5 FINAL merge) · PRE_sha `ea4a151fd3f2a9d4d40c3a967ea2e04ad89a3938` |
 | Projection | **FRESH** `projgen-48993e3f05814d759576c01f65196041` (peer G3 T9 ops_reeval_freshness; G4 residual-only; publish apply **SKIP** no segment drift; fail-closed no force) |
 | Single-shot features → R2 | G1 **PASS** — tip FeatureContext computes **3** default candidates (`volume_change_1d` · `is_trading_day` · `topix_relative_1d`) · R2 put ×4 (input_plan/result/**features**/manifest) · Mass **not** connected |
 | Features catalog | **10** candidates · COMPLETE 21 only · status=`candidate` · no READY claim · no promotion |
