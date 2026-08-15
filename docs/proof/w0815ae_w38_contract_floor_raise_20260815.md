@@ -1,40 +1,55 @@
-# W38 / w0815ae — contract floor raise + residual DEFER re-align (T11 draft) (2026-08-15)
+# W38 / w0815ae — contract floor raise + residual DEFER re-align + reeval (FINAL) (2026-08-15)
 
 **Mass / READY / Phase7:** still **NO-GO / OFF**  
-**empty COMPLETE:** **0** ban held  
-**densify:** **none** (this wave — residual SoT + contract review only)  
+**empty COMPLETE:** **0** ban held (PRE **0** → POST **0**)  
+**densify:** **none** (this wave — contract floors + inventory replan only; **no tip densify as primary**)  
 **DEFER densify re-run:** **not** done  
 **Contract `history_target_start` raise:** **implemented** — **11** floors raised (`ba3c811`)  
-**Primary metric (COMPLETE segs):** **pending reeval** (peer T2 / G5 fill POST)  
-**Secondary metric (tip raw):** **pending reeval**
+**Primary metric (COMPLETE segs):** **3457 → 3457 (Δ0)**  
+**Dataset COMPLETE:** **11 → 20 (+9)**  
+**Secondary metric (tip raw):** **not remeasured** this wave (no tip collect; held W36 **15589**)
 
-**Live verified (contract):** 2026-08-15 (JST) — floors live in `collection_coverage.json` after `ba3c811`  
+**Live verified:** 2026-08-15 (JST) / reeval PRE `2026-08-15T06:04:54Z` → POST `2026-08-15T06:11:48Z` UTC  
 **Contract commit:** `ba3c81157c1528784e4909ca7e03e7c8076553c2`  
+**Residual DEFER docs commit:** `ddbd823af28953bea659adfa970dd7301b81e3e3`  
+**Proof HEAD (post-push):** **POST_PUSH_SHA** *(filled after push)*  
+**Projection:** **FRESH** `projgen-c54a409aaeef424e9c13394b82bd720b` (fail-closed publish local=remote **3457**; mass=**NO-GO**)
+
 **Floor catalog (evidence):** [`observed_floor_catalog_20260815.md`](observed_floor_catalog_20260815.md)  
 **Residual SoT:** [`docs/phase62_residual_status.md`](../phase62_residual_status.md) §W38  
-**Machine:** [`.glm-logs/w0815ae_contract/contract_diff.json`](../../.glm-logs/w0815ae_contract/contract_diff.json) · [`.glm-logs/w0815ae_defer/PERMANENT_DEFER.json`](../../.glm-logs/w0815ae_defer/PERMANENT_DEFER.json) · [`.glm-logs/w0815ae_defer/NO_DENSIFY_AFTER_CONTRACT_DRAFT.json`](../../.glm-logs/w0815ae_defer/NO_DENSIFY_AFTER_CONTRACT_DRAFT.json)
+**Machine:**
 
-CF-SoT held: **D1 = hot tip · R2 = history · COMPLETE = receipt-owned**.
+| track | path |
+|-------|------|
+| Contract diff (T1) | [`.glm-logs/w0815ae_contract/contract_diff.json`](../../.glm-logs/w0815ae_contract/contract_diff.json) |
+| Permanent DEFER (T4) | [`.glm-logs/w0815ae_defer/PERMANENT_DEFER.json`](../../.glm-logs/w0815ae_defer/PERMANENT_DEFER.json) |
+| NO_DENSIFY re-align (T5) | [`.glm-logs/w0815ae_defer/NO_DENSIFY_AFTER_CONTRACT_DRAFT.json`](../../.glm-logs/w0815ae_defer/NO_DENSIFY_AFTER_CONTRACT_DRAFT.json) |
+| Reeval delta (T2/T3) | [`.glm-logs/w0815ae_reeval/REEVAL_DELTA.json`](../../.glm-logs/w0815ae_reeval/REEVAL_DELTA.json) |
+| PRE / POST snapshots | `.glm-logs/w0815ae_reeval/{PRE,POST}_snapshot.json` |
+| Reeval summary | [`.glm-logs/w0815ae_reeval/SUMMARY.md`](../../.glm-logs/w0815ae_reeval/SUMMARY.md) |
 
----
-
-## 1. Scope
-
-| lane | owner | outcome |
-|------|-------|---------|
-| **T1 contract raises** | G1 | **11** `history_target_start` raises to proven observed floors |
-| **T4 Permanent DEFER** | residual prep | **5** permanent entries (D2 / D4×2 / D5 / MX-EARN-TIP) |
-| **T5 NO_DENSIFY re-align** | residual prep | **18 → 6** active; **12** OUT_OF_SCOPE |
-| **T11 contract review** | this proof (draft) | before→after table + catalog evidence links |
-| **T2 reeval / G5 metrics** | peer | COMPLETE/raw/FRESH **pending reeval** — G5 fills final POST |
-
-**Not done:** densify · empty-raw COMPLETE · Mass/READY/Phase7 · raise master/D4/D5 floors · invent COMPLETE by prune without reagg.
+CF-SoT held entire wave: **D1 = hot tip · R2 = history · COMPLETE = receipt-owned**.
 
 ---
 
-## 2. T11 contract review table (before → after)
+## 1. Parallel agent split (W38 / w0815ae)
 
-Evidence column points at the canonical floor catalog (`observed_floor_catalog_20260815.md` §1) and residual DEFER ids. Machine twin of raises: `.glm-logs/w0815ae_contract/contract_diff.json`.
+| lane | tasks | owner / logs | outcome |
+|------|-------|--------------|---------|
+| **T1 contract raises** | Raise `history_target_start` to proven observed floors (11) + aligned copies + tests | G1 · `.glm-logs/w0815ae_contract/` · commit `ba3c811` | **11** floors live; master/D4/D5 **not** raised |
+| **T4 Permanent DEFER** | Inventory residual classes with no honest floor-raise cure | residual prep · `.glm-logs/w0815ae_defer/PERMANENT_DEFER.json` | **5** permanent entries formalized |
+| **T5 NO_DENSIFY re-align** | Map W29 18 classes → after-raise OOS vs STILL_DEFER | residual prep · `NO_DENSIFY_AFTER_CONTRACT_DRAFT.json` | **18 → 6** active; **12** OUT_OF_SCOPE |
+| **T2/T3 reeval** | PRE snapshot · inventory replan (OOS PARTIAL prune + sticky COMPLETE) · publish fail-closed · observed reeval ×11 · FRESH | `.glm-logs/w0815ae_reeval/` | Dataset COMPLETE **11→20 (+9)** · COMPLETE segs **Δ0** · empty **0** · FRESH `projgen-c54a409aaeef…` |
+| **T11 contract review** | before→after table + catalog evidence | this proof §2 | matches `contract_diff.json` `count_changed=11` |
+| **T10–T12 ops close** | residual POST · proof fill · push | this proof + residual SoT | POST numbers live · **POST_PUSH_SHA** · HEAD==origin |
+
+**Not done:** densify · tip collect loop · empty-raw COMPLETE · Mass/READY/Phase7 · raise master/D4/D5 floors · invent COMPLETE by prune without reagg · force-apply publish.
+
+---
+
+## 2. T11 contract review — history_target_start (old → new + evidence)
+
+Evidence column points at the canonical floor catalog (`observed_floor_catalog_20260815.md` §1) and residual DEFER ids. Machine twin: `.glm-logs/w0815ae_contract/contract_diff.json`.
 
 ### 2.1 Raised (11)
 
@@ -78,7 +93,61 @@ W29 catalog §2 had **12** raise candidates including master → `2008-05-01`. W
 
 ---
 
-## 3. NO_DENSIFY re-align summary
+## 3. PRE / POST metrics (remote D1 `quant-ingest`)
+
+Primary = **COMPLETE segs** (must not invent). Dataset COMPLETE flips via honest floor replan + sticky COMPLETE only.
+
+| Metric | PRE (reeval `06:04:54Z`) | POST (reeval `06:11:48Z`) | Δ | role |
+|--------|-------------------------:|--------------------------:|--:|------|
+| Segment COMPLETE total | **3457** | **3457** | **0** | **PRIMARY** |
+| Dataset COMPLETE | **11** | **20** | **+9** | floor replan promote |
+| empty COMPLETE | **0** | **0** | held | **ban held** |
+| `raw_retention_manifests` | **15589** (W36 tip POST) | **not remeasured** | — | no tip collect this wave |
+| densify executed | none | **false** | — | NO_DENSIFY |
+| tip densify as primary | — | **false** (T7 held) | — | secondary only; not run |
+| Contract floors raised | 0 (W29 propose only) | **11** | +11 | this wave |
+| Active NO_DENSIFY classes | **18** | **6** | −12 | residual re-align |
+| JSDA OTC COMPLETE | **72** | **72** | held | D5 |
+| FRESH generation | prior W36 `projgen-cbb5d486…` | **`projgen-c54a409aaeef424e9c13394b82bd720b`** | reclocked | reeval publish |
+
+### 3.1 Flipped to Dataset COMPLETE (+9)
+
+OOS PARTIAL prune under new floors + sticky in-window COMPLETE → dataset reagg COMPLETE. **No new segment COMPLETE seals** (COMPLETE segs Δ0).
+
+| dataset | old floor → new | OOS pruned (PARTIAL) | post required COMPLETE segs |
+|---------|-----------------|---------------------:|----------------------------:|
+| `equities_bars_daily` | 2004-01-05 → **2008-05-01** | 52 | 220 |
+| `indices_bars_daily_topix` | 2008-01-01 → **2008-05-01** | 4 | 220 |
+| `indices_bars_daily` | 2008-01-01 → **2008-05-01** | 4 | 220 |
+| `fins_summary` | 2008-01-08 → **2008-07-01** | 6 | 218 |
+| `fins_dividend` | 2008-01-08 → **2013-02-01** | 61 | 163 |
+| `fins_details` | 2008-01-08 → **2018-01-01** | 120 | 104 |
+| `markets_short_sale_report` | 2013-01-04 → **2013-11-01** | 10 | 154 |
+| `edinet_cross_shareholdings` | 2018-01-04 → **2020-05-01** | 28 | 76 |
+| `edinet_large_volume_shareholders` | 2018-01-04 → **2021-07-01** | 42 | 62 |
+
+### 3.2 Still PARTIAL after reeval (6 datasets)
+
+| dataset | PARTIAL segs | note |
+|---------|-------------:|------|
+| `equities_master` | **94** | NOT raised (D2 MISDATE / PRE_PLAN) — permanent DEFER |
+| `equities_earnings_calendar` | **199** | tip-only vendor (D4) — permanent DEFER |
+| `equities_bars_daily_am` | **31** | tip-only AM (D4) — permanent DEFER |
+| `jsda_otc_bond_reference_prices` | **8709** | archive site (D5); tip island COMPLETE **72** |
+| `fins_earnings_date` | **4** | tip holes `2026-01…04` (MX-EARN-TIP); pre-floor 96 OOS pruned |
+| `markets_breakdown` | **1** | floor **2015-03-26**; residual **2015-03** thin-floor still DEFER (first full COMPLETE **2015-04**) |
+
+### 3.3 Reeval path (no densify / no tip loop)
+
+1. PRE remote snapshot (COMPLETE **3457** · Dataset COMPLETE **11** · empty **0**)
+2. Local inventory replan from new floors: OOS PARTIAL prune + sticky COMPLETE + dataset_coverage reagg
+3. `publish_ops_projection.py --apply-remote` fail-closed (local=remote **3457**; no force)
+4. `ops_reeval_observed_window.py` ×11 raised datasets
+5. `ops_reeval_freshness.py` → FRESH `projgen-c54a409aaeef424e9c13394b82bd720b`
+
+---
+
+## 4. NO_DENSIFY re-align summary
 
 | metric | W29 (pre) | W38 (post) |
 |--------|----------:|-----------:|
@@ -93,37 +162,23 @@ W29 catalog §2 had **12** raise candidates including master → `2008-05-01`. W
 
 Full mapping: residual SoT §W38 · `.glm-logs/w0815ae_defer/NO_DENSIFY_AFTER_CONTRACT_DRAFT.json`.
 
+**Tip densify:** **not primary** this wave (T7 held). No tip collect loop. Secondary tip densify only applies to non-DEFER tip holes in collect waves — W38 is contract/reeval only.
+
 ---
 
-## 4. Permanent DEFER (reasons)
+## 5. Permanent DEFER list
 
-| id | dataset(s) | why | retry |
-|----|------------|-----|-------|
-| **PD-D2-MASTER** | `equities_master` | tip-misdated Date; not always-empty | in-scope Date + window_ok seal |
-| **PD-D4-EARN-CAL** | `equities_earnings_calendar` | tip-only vendor | historical API or catalog de-scope |
-| **PD-D4-BARS-AM** | `equities_bars_daily_am` | `date_mode=today` AM | historical AM API or use daily OHLC |
-| **PD-D5-JSDA-OTC** | `jsda_otc_bond_reference_prices` | site capability; tip 72 island | HTTP 200 + R2 raw day-by-day |
-| **PD-MX-EARN-TIP** | `fins_earnings_date` `2026-01…04` | tip holes survive floor raise | vendor nz for tip months |
+| id | dataset(s) | class / span | why permanent | retry |
+|----|------------|--------------|---------------|-------|
+| **PD-D2-MASTER** | `equities_master` | MISDATE `2006-08…2008-04` (n=21) + PRE_PLAN `2000-07…2006-07` (n=73) | tip-misdated Date; not always-empty | in-scope Date + window_ok seal |
+| **PD-D4-EARN-CAL** | `equities_earnings_calendar` | TIP_ONLY history (~199) | tip-only vendor | historical API or catalog de-scope |
+| **PD-D4-BARS-AM** | `equities_bars_daily_am` | TIP_ONLY history (~31) | `date_mode=today` AM | historical AM API or use daily OHLC |
+| **PD-D5-JSDA-OTC** | `jsda_otc_bond_reference_prices` | ARCHIVE beyond tip **72** | site capability | HTTP 200 + R2 raw day-by-day |
+| **PD-MX-EARN-TIP** | `fins_earnings_date` | tip holes `2026-01…04` (n=4) | tip holes survive floor raise | vendor nz for tip months |
 
 Detail: [`.glm-logs/w0815ae_defer/PERMANENT_DEFER.json`](../../.glm-logs/w0815ae_defer/PERMANENT_DEFER.json).
 
----
-
-## 5. PRE / POST metrics — **pending reeval**
-
-| Metric | PRE (W36 baseline) | POST (W38) | role |
-|--------|-------------------:|-----------:|------|
-| Segment COMPLETE total | **3457** (`596e721` / W36) | **pending reeval** | PRIMARY — G5 fill |
-| `raw_retention_manifests` | **15589** (W36 tip POST) | **pending reeval** | secondary |
-| Dataset COMPLETE | **11** | **pending reeval** | held unless reeval says otherwise |
-| empty COMPLETE | **0** | **0** expected (ban held) | ban |
-| densify executed | none | **false** | NO_DENSIFY |
-| Contract floors raised | 0 (W29 propose only) | **11** | this wave |
-| Active NO_DENSIFY classes | **18** | **6** | residual re-align |
-| JSDA OTC COMPLETE | **72** | **72** expected (D5 held) | D5 |
-| FRESH generation | `projgen-cbb5d486…` (W36) | **pending reeval** | G5 fill |
-
-**NOTE:** Contract raise alone does not invent COMPLETE segs. OOS pre-floor PARTIALs may remain in inventory until human-gate prune/reagg — densify still forbidden. Peer T2 reeval / G5 ops close owns final POST numbers.
+**Optional residual note:** `markets_breakdown` **2015-03** (1 month) remains PARTIAL under floor `2015-03-26` — thin-floor first partial month; densify **forbidden**; treat as DEFER thin-floor (not a Permanent DEFER id; first full COMPLETE is **2015-04**).
 
 ---
 
@@ -131,24 +186,26 @@ Detail: [`.glm-logs/w0815ae_defer/PERMANENT_DEFER.json`](../../.glm-logs/w0815ae
 
 | gate | status |
 |------|--------|
-| empty-raw COMPLETE | **forbidden** |
-| tip densify | secondary — non-DEFER tip holes only |
+| empty-raw COMPLETE | **forbidden** — PRE/POST **0** |
+| tip densify as primary | **not** (T7 held) |
 | permanent DEFER densify | **forbidden** |
+| densify this wave | **none** |
 | Mass / READY / Phase7 | **NO-GO / OFF** |
 | CF-SoT | D1 hot tip · R2 history · receipt-owned COMPLETE |
-| force-apply publish | fail-closed when local COMPLETE < remote |
+| force-apply publish | fail-closed when local COMPLETE < remote (held; equal **3457**) |
+| invent COMPLETE | **none** — sticky COMPLETE only; OOS PARTIAL prune does not mint segs |
 
 ---
 
-## 7. G5 fill checklist (placeholder)
+## 7. Push / SHA lock
 
-- [ ] Remote D1 COMPLETE segs POST
-- [ ] Dataset COMPLETE count POST
-- [ ] raw_retention_manifests POST
-- [ ] FRESH `projgen-*` after any reeval/publish
-- [ ] Confirm HAS_RAW_SEALABLE still **0** / post_floor sealable **0**
-- [ ] Confirm MX-EARN-TIP still DEFER (4 tip months)
-- [ ] Push SHA (if G5 pushes all)
+| item | value |
+|------|------:|
+| Contract | `ba3c81157c1528784e4909ca7e03e7c8076553c2` |
+| Residual DEFER docs | `ddbd823af28953bea659adfa970dd7301b81e3e3` |
+| Proof finalize | *(this commit)* |
+| **POST_PUSH_SHA** | *(filled after `git push origin main`)* |
+| origin/main after push | must equal HEAD |
 
 ---
 
@@ -158,6 +215,7 @@ Detail: [`.glm-logs/w0815ae_defer/PERMANENT_DEFER.json`](../../.glm-logs/w0815ae
 |-----|------|
 | [`observed_floor_catalog_20260815.md`](observed_floor_catalog_20260815.md) | W29 observed floors + raise candidates |
 | [`w0815v_w29_floor_contract_ops_20260815.md`](w0815v_w29_floor_contract_ops_20260815.md) | W29 floor lock (raises **not** implemented then) |
-| [`docs/phase62_residual_status.md`](../phase62_residual_status.md) §W38 | residual DEFER + NO_DENSIFY SoT after raise |
+| [`docs/phase62_residual_status.md`](../phase62_residual_status.md) §W38 | residual DEFER + NO_DENSIFY SoT + live POST metrics |
 | `.glm-logs/w0815ae_contract/contract_diff.json` | machine before/after |
-| `.glm-logs/w0815ae_defer/*` | Permanent DEFER + NO_DENSIFY mapping drafts |
+| `.glm-logs/w0815ae_defer/*` | Permanent DEFER + NO_DENSIFY mapping |
+| `.glm-logs/w0815ae_reeval/REEVAL_DELTA.json` | PRE/POST machine metrics |

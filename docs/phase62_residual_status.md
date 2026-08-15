@@ -1,16 +1,16 @@
 # Phase 6.2 / 6.3 residual status
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
-**Live verified:** 2026-08-15 (JST) / **W38** contract floors **applied** (`history_target_start` **11** raises) · contract commit `ba3c81157c1528784e4909ca7e03e7c8076553c2` · floor catalog [`observed_floor_catalog_20260815.md`](proof/observed_floor_catalog_20260815.md) · residual DEFER re-align (**NO_DENSIFY** **18→6** active; **12** OUT_OF_SCOPE after raise) · Permanent DEFER **5** entries (D2/D4×2/D5/MX-EARN-TIP) · densify **none** · empty COMPLETE **0** ban held · Phase7 **OFF** · **CF-SoT** held — D1 = hot tip · R2 = history · COMPLETE = receipt-owned · COMPLETE / Dataset COMPLETE / raw / FRESH **pending reeval** (peer T2 may still be updating POST numbers; G5 fills final metrics)
-**Repo tip (docs apply):** *local residual+proof commit this wave* — contract floors live since `ba3c811`; prior collect ops close `596e721` (W36 COMPLETE **3457** baseline until reeval)
+**Live verified:** 2026-08-15 (JST) / reeval PRE `2026-08-15T06:04:54Z` → POST `2026-08-15T06:11:48Z` UTC · **W38** contract floors **applied** (`history_target_start` **11** raises) · contract commit `ba3c81157c1528784e4909ca7e03e7c8076553c2` · residual DEFER re-align (`ddbd823`) · COMPLETE segs **3457→3457 (Δ0)** · Dataset COMPLETE **11→20 (+9)** · empty COMPLETE **0** · densify **none** · tip densify **not primary** (T7 held) · NO_DENSIFY **18→6** active · Permanent DEFER **5** · Phase7 **OFF** · FRESH `projgen-c54a409aaeef424e9c13394b82bd720b` · raw **not remeasured** (held W36 **15589**) · **CF-SoT** held — D1 = hot tip · R2 = history · COMPLETE = receipt-owned · **POST_PUSH_SHA** *(filled after push)*
+**Repo tip:** *proof finalize this wave* — contract `ba3c811` · residual DEFER `ddbd823` · COMPLETE **3457** / Dataset COMPLETE **20** / empty COMPLETE **0** / Phase7 **OFF**
 
-## W38 / w0815ae — residual DEFER re-align after floor contract raises (APPLY)
+## W38 / w0815ae — contract floor raise + residual DEFER re-align + reeval (FINAL)
 
 **Contract commit:** `ba3c81157c1528784e4909ca7e03e7c8076553c2` — `contract(w0815ae/W38): raise history_target_start to proven observed floors` (**11** raises)  
+**Residual DEFER docs:** `ddbd823af28953bea659adfa970dd7301b81e3e3`  
 **Floor catalog (evidence):** [`docs/proof/observed_floor_catalog_20260815.md`](proof/observed_floor_catalog_20260815.md)  
-**Contract review proof (draft):** [`docs/proof/w0815ae_w38_contract_floor_raise_20260815.md`](proof/w0815ae_w38_contract_floor_raise_20260815.md)  
-**Machine drafts:** [`.glm-logs/w0815ae_defer/PERMANENT_DEFER.json`](../.glm-logs/w0815ae_defer/PERMANENT_DEFER.json) · [`.glm-logs/w0815ae_defer/NO_DENSIFY_AFTER_CONTRACT_DRAFT.json`](../.glm-logs/w0815ae_defer/NO_DENSIFY_AFTER_CONTRACT_DRAFT.json) · [`.glm-logs/w0815ae_contract/contract_diff.json`](../.glm-logs/w0815ae_contract/contract_diff.json)  
-**Metrics:** COMPLETE / Dataset COMPLETE / raw / FRESH = **pending reeval** (peer T2 / G5 fill POST)
+**Contract review proof (FINAL):** [`docs/proof/w0815ae_w38_contract_floor_raise_20260815.md`](proof/w0815ae_w38_contract_floor_raise_20260815.md)  
+**Machine:** [`.glm-logs/w0815ae_defer/PERMANENT_DEFER.json`](../.glm-logs/w0815ae_defer/PERMANENT_DEFER.json) · [`.glm-logs/w0815ae_defer/NO_DENSIFY_AFTER_CONTRACT_DRAFT.json`](../.glm-logs/w0815ae_defer/NO_DENSIFY_AFTER_CONTRACT_DRAFT.json) · [`.glm-logs/w0815ae_contract/contract_diff.json`](../.glm-logs/w0815ae_contract/contract_diff.json) · [`.glm-logs/w0815ae_reeval/REEVAL_DELTA.json`](../.glm-logs/w0815ae_reeval/REEVAL_DELTA.json)
 
 | gate | status |
 |------|--------|
@@ -19,9 +19,15 @@
 | NO_DENSIFY re-align | **18 → 6** active required-window classes (**12** OUT_OF_SCOPE after raise) |
 | Permanent DEFER | **5** entries (D2 master · D4 earn_cal · D4 bars_am · D5 OTC archive · MX-EARN-TIP) |
 | densify | **none** (no densify this wave; permanent DEFER densify forbidden) |
+| tip densify | **not primary** (T7 held) — no tip collect loop this wave |
 | empty-raw COMPLETE / Mass / READY / Phase7 | **ban / NO-GO / OFF** |
 | CF-SoT | D1 **hot tip** · R2 **history** · COMPLETE **receipt-owned** |
-| COMPLETE reeval | **pending reeval** — G5 fills final POST numbers |
+| COMPLETE segs | **3457 → 3457 (Δ0)** |
+| Dataset COMPLETE | **11 → 20 (+9)** |
+| empty COMPLETE | **0 → 0** (ban held) |
+| raw_retention_manifests | **not remeasured** (no tip collect; held W36 **15589**) |
+| Projection | **FRESH** `projgen-c54a409aaeef424e9c13394b82bd720b` |
+| Push | **POST_PUSH_SHA** *(filled after push)* |
 
 ### history_target_start raises (old → new)
 
@@ -96,7 +102,7 @@ Pre-floor residual falls **strictly before** new `history_target_start`. Not a r
 | **D5** | `jsda_otc_bond_reference_prices` | ARCHIVE_SITE_FAIL beyond tip COMPLETE **72** | archive | 2002-08-02 (unchanged) | PD-D5-JSDA-OTC |
 | **MX-EARN-TIP** | `fins_earnings_date` | NO_RAW_FOR_MONTH_TIP `2026-01…04` | 4 | 2018-01-01 (**raised**; tip holes remain inside window) | PD-MX-EARN-TIP |
 
-**Policy held:** empty-raw COMPLETE **forbidden** · tip densify **secondary** (non-DEFER tip holes only) · Mass/READY/Phase7 **NO-GO/OFF** · CF-SoT D1 hot tip / R2 history / receipt-owned COMPLETE · D8 Batch Z **OFF** (not a densify class).
+**Policy held:** empty-raw COMPLETE **forbidden** · tip densify **not primary** this wave (T7 held; secondary only on non-DEFER tip holes in collect waves) · Mass/READY/Phase7 **NO-GO/OFF** · CF-SoT D1 hot tip / R2 history / receipt-owned COMPLETE · D8 Batch Z **OFF** (not a densify class).
 
 ### Permanent DEFER list (will not be cured by floor raise this wave)
 
@@ -112,11 +118,25 @@ Definition: residual class with **no honest floor-raise cure** this wave (or tip
 
 **Evidence:** [`PERMANENT_DEFER.json`](../.glm-logs/w0815ae_defer/PERMANENT_DEFER.json) · catalog §1 / §2 do-not-raise · master/earn/am/otc proofs under `docs/proof/w0815*`.
 
-### Metrics note (G5 / peer T2)
+### Reeval POST metrics (live verified)
 
-COMPLETE segs / Dataset COMPLETE / raw manifests / FRESH projection may still be updating via peer reeval after contract land. This residual apply records **contract + DEFER SoT only**. Use **pending reeval** until G5 fills POST numbers in residual Live verified + proof.
+Source: [`.glm-logs/w0815ae_reeval/REEVAL_DELTA.json`](../.glm-logs/w0815ae_reeval/REEVAL_DELTA.json) · PRE `06:04:54Z` · POST `06:11:48Z`.
 
-**Non-actions this apply:** densify · empty-raw COMPLETE · Mass/READY/Phase7 · invent COMPLETE by prune without reagg policy · raise master/D4/D5 floors.
+| Metric | PRE | POST | Δ |
+|--------|----:|-----:|--:|
+| COMPLETE segs | **3457** | **3457** | **0** |
+| Dataset COMPLETE | **11** | **20** | **+9** |
+| empty COMPLETE | **0** | **0** | held |
+| FRESH | (W36 prior) | `projgen-c54a409aaeef424e9c13394b82bd720b` | reclocked |
+| raw_retention_manifests | **15589** (W36) | **not remeasured** | no tip collect |
+
+**Flipped to Dataset COMPLETE (+9):** `equities_bars_daily` · `indices_bars_daily` · `indices_bars_daily_topix` · `fins_summary` · `fins_dividend` · `fins_details` · `markets_short_sale_report` · `edinet_cross_shareholdings` · `edinet_large_volume_shareholders`.
+
+**Still PARTIAL (6):** master **94** · earn_cal **199** · bars_am **31** · otc **8709** · fins_earnings_date tip **4** · markets_breakdown **1** (`2015-03` thin-floor under `history_target_start=2015-03-26` — still DEFER thin-floor; first full COMPLETE **2015-04**).
+
+**Path:** inventory replan (OOS PARTIAL prune + sticky COMPLETE) · fail-closed publish local=remote **3457** · observed reeval ×11 · FRESH. **No densify. No tip collect loop. No invent COMPLETE.**
+
+**Non-actions this wave:** densify · tip collect as primary · empty-raw COMPLETE · Mass/READY/Phase7 · invent COMPLETE by prune without reagg policy · raise master/D4/D5 floors.
 
 ## W36 / w0815ac — continuous collect ops (JQ tip + JSDA + gap) (FINAL)
 
@@ -327,26 +347,27 @@ Coverage DEFERs **D1–D10** (D10 fins_summary residual 6 formalized **W19-G6 T1
 ## Live snapshot (remote D1 `quant-ingest`)
 | Item | Value |
 |------|--------|
-| Dataset COMPLETE | **11** — `markets_calendar` (224/224), `jsda_tokyo_repo_rates` (1/1), `jsda_corporate_bond_transactions` (12/12), `equities_investor_types` (164/164), `edinet_major_shareholders` (104/104), `markets_margin_alert` (164/164), `markets_margin_interest` (164/164), `markets_short_ratio` (164/164), **`derivatives_bars_daily_futures` (164/164)**, **`derivatives_bars_daily_options_225` (164/164)**, **`derivatives_bars_daily_options` (164/164)** |
-| Dataset COMPLETE surfaces | **aligned** — `dataset_coverage.status` **11** (prior **10** + **W15-G1 options** 164/164 surgical reagg+verify; held through **W18–W27** ops; proof [`w0815g_g1_options_20260815.md`](proof/w0815g_g1_options_20260815.md), [`w0815s_g4_ops_20260815.md`](proof/w0815s_g4_ops_20260815.md), [`w0815t_g6_matrix_close_ops_20260815.md`](proof/w0815t_g6_matrix_close_ops_20260815.md)) |
+| Dataset COMPLETE | **20** (**W38** PRE **11** → POST **20** **+9** via floor replan; sticky COMPLETE; no new segs) — prior 11 held + **`equities_bars_daily`** · **`indices_bars_daily`** · **`indices_bars_daily_topix`** · **`fins_summary`** · **`fins_dividend`** · **`fins_details`** · **`markets_short_sale_report`** · **`edinet_cross_shareholdings`** · **`edinet_large_volume_shareholders`** |
+| Dataset COMPLETE surfaces | **aligned** — `dataset_coverage.status` **20** COMPLETE / **6** PARTIAL (W38 reeval; proof [`w0815ae_w38_contract_floor_raise_20260815.md`](proof/w0815ae_w38_contract_floor_raise_20260815.md)) |
 | Dataset STALE | **0** |
-| Segment COMPLETE total | **3457** (remote; **W36** PRE/POST **3457** **+0** primary; tip raw-only secondary; prior **W35** **3457** **+0**; prior **W34** **3457** **+0**; prior **W33** **3457** **+0**; prior **W32** **3457** **+0**; prior **W31** **3457** **+0**; prior **W30** **3457** **+0**; prior **W29** **3457** **+0**; prior **W28-G1** **3457** **+0**; prior **W27-G6** matrix HAS_RAW_SEALABLE **0** / closed **0**; prior W22 peer OTC **+15**; **no** empty COMPLETE) |
-| Segment other | PARTIAL / UNKNOWN (remainder; not mass-READY) |
+| Segment COMPLETE total | **3457** (remote; **W38** PRE/POST **3457** **+0** primary — floor replan OOS prune only, sticky COMPLETE; prior **W36** **3457** **+0**; **no** empty COMPLETE) |
+| empty COMPLETE | **0** (ban held PRE/POST W38) |
+| Segment other | PARTIAL (master **94** · earn_cal **199** · bars_am **31** · otc **8709** · fins_earnings_date tip **4** · markets_breakdown **1** `2015-03` thin-floor) — not mass-READY |
 | calendar segments | **224 COMPLETE / 0 PARTIAL** |
-| JSDA OTC COMPLETE segs | **72** — tip/recent sealed (**W22 peer +15** vs prior **57**; W18 **49→57**; **W27-G6 / W25 held**); further tip/archive **DEFER** site timeout/404/403 (D5) |
-| JSDA corporate COMPLETE segs | **12** — years **`2015`…`2026`** (**G9 +11**; full annual TORIHIKI; dataset **COMPLETE**) |
-| **markets_short_ratio** | segs **164/164 COMPLETE** + `dataset_coverage` **COMPLETE** (W12-G3 surgical re-agg; **W13–W25 verify held**) |
-| **derivatives_bars_daily_futures** | segs **164/164 COMPLETE** + `dataset_coverage` **COMPLETE** (**W13-G3** surgical re-agg; segs closed W12-G4; **W25-G5 held**) |
-| **derivatives_bars_daily_options_225** | segs **164/164 COMPLETE** + `dataset_coverage` **COMPLETE** (**W13-G3** surgical re-agg; segs closed W12-G4; **W25-G5 held**) |
-| **derivatives_bars_daily_options** | segs **164/164 COMPLETE** + `dataset_coverage` **COMPLETE** (**W15-G1** surgical full-month reagg from week R2 + issue; residual **0**; **W25-G5 held**) |
-| **markets_short_sale_report** | COMPLETE **154** / PARTIAL **10** (`2013-01…10` empty pre-history; **no nz raw** → densify **DEFER** — **W17-G5 T15 formal** / **W25-G5 re-verify held**) |
-| **fins_summary** | COMPLETE **218** / PARTIAL **6** (`2008-01…06` empty pre-history shells; **no nz raw** → densify **DEFER** — **W19-G6 T13 formal** / **W25-G5 re-verify held**) |
-| **markets_breakdown** | COMPLETE **137** / PARTIAL **27** (`2013-01…2015-03`) — **W10-G9 DEFER_pre2015_empty**; source floor **2015-03-26**; island **`2015-04…2026-08`**; observed_start **`2015-03-26`**; history_target **`2013-01-04`** (contract held) |
-| A3 sealed (partial datasets) | prior + **W6–W25 peers** + **W25-G5 ops publish** → COMPLETE **3457** |
-| Remote `raw_retention_manifests` | **15589** total (**W36** tip PRE **15559** → POST **15589** **+30** general 27 + fins 3; prior **W35** **15506→15536**; prior **W34** **15476→15506**; prior **W33** **15420→15476**; prior **W32** **15390→15420**; prior **W31** **15311→15367**; prior **W30** **15255→15311**; prior **W29** **15225→15255**; prior **W28-G1** **15145→15175**; prior **W27-G6** **15145**; worker pass ≠ COMPLETE) |
-| Track A + P0 execute | **w0713…w0815ac** + **W36** tip collect + JSDA/gap + **W35** collect ops + **W34** collect ops + **W33** collect ops + **W32** collect ops + **W31** collect ops + **W30** collect ops + **W29** floor catalog + **W27-G6 matrix close** + peers; **Worker pass ≠ COMPLETE** |
-| master | `scd2_event_sourcing` / D1 hot |
-| projection | **FRESH** — `projgen-cbb5d486b6e942769ad8fcd08b1dbc7b` (**W36** tip reeval; segs untouched; prior **W35** `projgen-340eac0c…` / **W34** `projgen-f0ee1d48…` / **W33** `projgen-061b5d38…` / **W32** `projgen-b5f2325c…` / **W31** `projgen-20ecd21e…` / **W30** `projgen-c4240127…` / **W29** `projgen-76084a30…` / **W28-G1** `projgen-57a33eaa…` / **W27-G6** `projgen-2ef0e4ae…`) |
+| JSDA OTC COMPLETE segs | **72** — tip/recent sealed; further tip/archive **DEFER** site timeout/404/403 (D5 permanent) |
+| JSDA corporate COMPLETE segs | **12** — years **`2015`…`2026`** (full annual TORIHIKI; dataset **COMPLETE**) |
+| **markets_short_ratio** | segs **164/164 COMPLETE** + `dataset_coverage` **COMPLETE** |
+| **derivatives_bars_daily_futures** | segs **164/164 COMPLETE** + `dataset_coverage` **COMPLETE** |
+| **derivatives_bars_daily_options_225** | segs **164/164 COMPLETE** + `dataset_coverage` **COMPLETE** |
+| **derivatives_bars_daily_options** | segs **164/164 COMPLETE** + `dataset_coverage` **COMPLETE** |
+| **markets_short_sale_report** | dataset **COMPLETE** (**W38** floor → **2013-11-01**; COMPLETE segs **154**; pre-floor PARTIAL OOS) |
+| **fins_summary** | dataset **COMPLETE** (**W38** floor → **2008-07-01**; COMPLETE segs **218**; pre-floor PARTIAL OOS) |
+| **markets_breakdown** | COMPLETE **137** / PARTIAL **1** (`2015-03` thin under floor **2015-03-26**) — **W38** raised floor from `2013-01-04`; still DEFER thin-floor (first full COMPLETE **2015-04**) |
+| A3 sealed (partial datasets) | sticky COMPLETE retained → COMPLETE **3457** (W38 no new seals) |
+| Remote `raw_retention_manifests` | **15589** total (**W38** not remeasured — no tip collect; held **W36** tip POST **15589**; prior chain W35…W27 unchanged) |
+| Track A + P0 execute | **w0713…w0815ae** + **W38** contract floors + reeval + **W36** tip collect + peers; **Worker pass ≠ COMPLETE** |
+| master | `scd2_event_sourcing` / D1 hot — still PARTIAL **94** (D2 permanent DEFER; floor **not** raised) |
+| projection | **FRESH** — `projgen-c54a409aaeef424e9c13394b82bd720b` (**W38** reeval publish; segs sticky **3457**; prior **W36** `projgen-cbb5d486…` / **W35** `projgen-340eac0c…`) |
 | sticky COMPLETE | **fixed** segment_id fallback + post-sticky dataset aggregate + COMPLETE inventory retain past UTC target_end (`coverage_ledger.py`) |
 | Full publish guard | `scripts/publish_ops_projection.py` fail-closed |
 | Targeted freshness | `scripts/ops_reeval_freshness.py` (no segment rewrite) |
@@ -384,6 +405,7 @@ Canonical blocked residuals. **Do not re-run densify** unless the re-try conditi
 
 | Track | host POST/min | n | note |
 |-------|--------------:|--:|------|
+| w0815ae W38 contract+reeval | **n/a** (no tip densify) | COMPLETE segs **Δ0** · Dataset COMPLETE **+9** · densify **none** | **W38 / w0815ae** parallel: T1 contract **11** `history_target_start` raises (`ba3c811`) · T4 Permanent DEFER **5** · T5 NO_DENSIFY **18→6** · T2/T3 reeval OOS PARTIAL prune + sticky COMPLETE + fail-closed publish local=remote **3457** · FRESH `projgen-c54a409aaeef424e9c13394b82bd720b` · Dataset COMPLETE **11→20** · empty **0** · tip densify **not primary** · markets_breakdown residual **1** (`2015-03` thin) · proof [`w0815ae_w38_contract_floor_raise_20260815.md`](proof/w0815ae_w38_contract_floor_raise_20260815.md) |
 | w0815ac W36 collect ops | general **1.69** (n=27 @495rpm cfg) / fins **4.87** (n=3 @100rpm) | **+0** seal / raw **+30** · post_floor sealable **0** | **W36 / w0815ac** parallel: T1 tip general week-chunks **27p/0f** (w=8 rpm**495**; 0×429; rows **567351**) + fins tip **3p/0f** (w=2 rpm**100**; rows **7155**); T2 JSDA OTC FULL_OK new **0** (S260817 refetch already sealed; tip advance 404/timeout); corp/repo COMPLETE skip; hot D1 **SKIP** (n=252 max=`2026-08-10`); T3 gap post_floor_sealable **0** densify **none** HAS_RAW_SEALABLE **0**; seal/issue **0** (tip already COMPLETE); fail-closed publish local=remote **3457** no force; FRESH `projgen-cbb5d486b6e942769ad8fcd08b1dbc7b`; remote COMPLETE **3457→3457** raw **15559→15589** (+30); Dataset COMPLETE **11**; OTC **72** held; empty **0**; floors/NO_DENSIFY held; DEFER densify **not** executed; peers not killed; proof [`w0815ac_w36_collect_ops_20260815.md`](proof/w0815ac_w36_collect_ops_20260815.md) |
 | w0815z W33 collect ops | general **5.03** (n=27 @495rpm cfg) / fins **7.94** (n=3 @100rpm) | **+0** seal / raw **+56** · post_floor sealable **0** | **W33 / w0815z** parallel: T1 tip general week-chunks **27p/0f** (w=8 rpm**495**; 0×429; rows **567338**) + fins tip **3p/0f** (w=2 rpm**100**; rows **7155**); T2 JSDA OTC FULL_OK new **0** (S260817 refetch already sealed; tip advance 404/timeout); corp/repo COMPLETE skip; hot D1 **SKIP** (n=252 max=`2026-08-10`); T3 gap post_floor_sealable **0** densify **none** HAS_RAW_SEALABLE **0**; seal/issue **0** (tip already COMPLETE); fail-closed publish local=remote **3457** no force; FRESH `projgen-061b5d38668a4e6d8537757c28350d78`; remote COMPLETE **3457→3457** raw **15420→15476** (+56); Dataset COMPLETE **11**; OTC **72** held; empty **0**; floors/NO_DENSIFY held; DEFER densify **not** executed; peers not killed; proof [`w0815z_w33_collect_ops_20260815.md`](proof/w0815z_w33_collect_ops_20260815.md) |
 | w0815y W32 collect ops | general **5.51** (n=27 @495rpm cfg) / fins **7.88** (n=3 @100rpm) | **+0** seal / raw **+30** · post_floor sealable **0** | **W32 / w0815y** parallel: T1 tip general week-chunks **27p/0f** (w=8 rpm**495**; 0×429; rows **567351**) + fins tip **3p/0f** (w=2 rpm**100**; rows **7155**); T2 JSDA OTC FULL_OK new **0** (S260817 refetch already sealed; tip advance 404/timeout); corp/repo COMPLETE skip; hot D1 **SKIP** (n=252 max=`2026-08-10`); T3 gap post_floor_sealable **0** densify **none** HAS_RAW_SEALABLE **0**; seal/issue **0** (tip already COMPLETE); fail-closed publish local=remote **3457** no force; FRESH `projgen-b5f2325ca773478cb3c9e2eb1839e4d9`; remote COMPLETE **3457→3457** raw **15390→15420** (+30); Dataset COMPLETE **11**; OTC **72** held; empty **0**; floors/NO_DENSIFY held; DEFER densify **not** executed; peers not killed; proof [`w0815y_w32_collect_ops_20260815.md`](proof/w0815y_w32_collect_ops_20260815.md) |
