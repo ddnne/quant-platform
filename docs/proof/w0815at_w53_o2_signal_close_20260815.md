@@ -227,8 +227,8 @@ R2 put statuses: `put_ok` × **5** · heads all exist.
 |-------|-------|
 | PRE_sha | `b6dc56a7ec771c1408a5477c7857752da4856dcf` |
 | POST_PUSH_SHA (feat commit) | `664c88e0821c12fc7a85ad04434e8a0b19737873` |
-| origin/main after push | `664c88e0821c12fc7a85ad04434e8a0b19737873` |
-| HEAD == origin/main | **pending push** |
+| origin/main (tip after fill) | `51bec79de7c2bddb94db491d170ef9f699fab1ed` |
+| HEAD == origin/main | **true** (both `51bec79de7c2bddb94db491d170ef9f699fab1ed`) |
 
 ---
 
