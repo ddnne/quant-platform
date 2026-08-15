@@ -1,10 +1,54 @@
 # Phase 6.2 / 6.3 residual status
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
-**Live verified:** 2026-08-15 (JST) / **W54** 複数日シグナル評価（READY 未宣言） FINAL · COMPLETE segs **3478** · Dataset COMPLETE **21 / 26** · PARTIAL = **5** permanent DEFER only · **actionable_gap = 0** · empty COMPLETE **0** · **OTC 93** tip island held · permanent DEFER **5** / NO_DENSIFY **6** · densify coverage loops **ENDED** · Mass/READY/Phase7 **NO-GO/OFF** · raw **15915** (remote verify; W46 tip secondary baseline **15869** held) · FRESH `projgen-3d29a3d673cc4214bd0913639fb52ad5` · **CF-SoT** held — D1 = hot tip · R2 = history · COMPLETE = receipt-owned · floors W38 + W42 mb **2015-04-01** **not lowered** · coverage baseline **W47 FINAL held** · READY **not declared** · tip densify **SKIP** · densify **none** · promotion **6 approved** (W52 **2** + W53 O2 **+3** + W54 selective O2 **+1** `repo_rate_level` · v1.0.0) · multiday signal batch Mass **OFF** · status=`candidate` · **candidate_only=False** (legs approved) · PRE_sha `918c5b23eea60e19f1512cd094399ddfbb86cbb7` · **POST_PUSH_SHA** `93c45d92d1c6de1abf0d7e0856c1894b56aecd2a`
+**Live verified:** 2026-08-15 (JST) / **W55** 評価深化・翌日リターン突合（READY 未宣言） FINAL · COMPLETE segs **3478** · Dataset COMPLETE **21 / 26** · PARTIAL = **5** permanent DEFER only · **actionable_gap = 0** · empty COMPLETE **0** · **OTC 93** tip island held · permanent DEFER **5** / NO_DENSIFY **6** · densify coverage loops **ENDED** · Mass/READY/Phase7 **NO-GO/OFF** · raw **15915** (remote verify; W46 tip secondary baseline **15869** held) · FRESH `projgen-b7c349edd3fb454a806ede864cf80bcf` · **CF-SoT** held — D1 = hot tip · R2 = history · COMPLETE = receipt-owned · floors W38 + W42 mb **2015-04-01** **not lowered** · coverage baseline **W47 FINAL held** · READY **not declared** · tip densify **SKIP** · densify **none** · promotion **7 approved** (W52–W54 **6** + W55 O2 **+1** `short_ratio_level` · v1.0.0) · nextday return eval Mass **OFF** · status=`candidate` · **candidate_only=False** (legs approved) · label **研究用・未宣言** · PRE_sha `205392f54ca832d67867fe96c149867f52586def` · **POST_PUSH_SHA** *(pending G5 fill)*
 
-**Repo tip:** `93c45d92d1c6de1abf0d7e0856c1894b56aecd2a` — W54 複数日シグナル評価 FINAL · COMPLETE **3478** / Dataset COMPLETE **21** / OTC **93** / empty COMPLETE **0** / **actionable_gap = 0** / Phase7 **OFF** / READY **未宣言** · FRESH `projgen-3d29a3d673cc4214bd0913639fb52ad5` · promotion **6 approved** / **4 candidate** · multiday **e2e_pass** · tip densify **SKIP** · **POST_PUSH_SHA** `93c45d92d1c6de1abf0d7e0856c1894b56aecd2a`
+**Repo tip:** *(pending G5 push)* — W55 評価深化・翌日リターン突合 FINAL · COMPLETE **3478** / Dataset COMPLETE **21** / OTC **93** / empty COMPLETE **0** / **actionable_gap = 0** / Phase7 **OFF** / READY **未宣言** · FRESH `projgen-b7c349edd3fb454a806ede864cf80bcf` · promotion **7 approved** / **3 candidate** · nextday **e2e_pass** · tip densify **SKIP** · **POST_PUSH_SHA** *(pending)*
 
+## 評価深化・翌日リターン突合（READY 未宣言）
+
+**Phase name:** COMPLETE 21 評価深化・翌日リターン突合（宣言なし）  
+**Wave:** W55 / w0815av (T1–T12 · G5 FINAL merge + push)  
+**Nextday close proof:** [`docs/proof/w0815av_w55_nextday_close_20260815.md`](proof/w0815av_w55_nextday_close_20260815.md)  
+**Ops / quality / residual (G3):** [`.glm-logs/w0815av_g3_ops/`](../.glm-logs/w0815av_g3_ops/) · [`FINAL_metrics.json`](../.glm-logs/w0815av_g3_ops/FINAL_metrics.json) · [`switch_check.json`](../.glm-logs/w0815av_g3_ops/switch_check.json) · [`SUMMARY.txt`](../.glm-logs/w0815av_g3_ops/SUMMARY.txt)  
+**Nextday return alignment (G1 · research metrics):** [`.glm-logs/w0815av_g1_nextday/`](../.glm-logs/w0815av_g1_nextday/) · [`summary.json`](../.glm-logs/w0815av_g1_nextday/summary.json) · [`batch_summary.json`](../.glm-logs/w0815av_g1_nextday/batch_summary.json) · `execute_multiday_nextday_return_eval` · job `w0815av-g1-nextday` · **n_days=6** as_of days `2026-08-03…2026-08-10` · codes `13010/72030/67580` · signal `c21_topix_relative_sign@1.0.0` · `status=candidate` · **candidate_only=False** · Mass **OFF** · no orders · no READY · label **研究用・未宣言** · signal aggregate non_null **15/18** (rate **0.8333333333333334**) sign `+1:6` / `-1:9` / `null:3` · **nextday mean_R** `+1:0.013616` / `-1:0.005943` / overall `0.004928` · null_return_rate overall **0.16666666666666666** · look-ahead policy: feature as_of=T close; return=`close(T+1)/close(T)-1` with evaluation_as_of=T+1 close; **no feature look-ahead** · R2 `research/single_shot/job=w0815av-g1-nextday/batch_summary.json` · **e2e_pass=true** · proof [`docs/proof/w0815av_w55_nextday_return_eval_20260815.md`](proof/w0815av_w55_nextday_return_eval_20260815.md)  
+**Selective O2 (G2):** [`.glm-logs/w0815av_g2_o2/`](../.glm-logs/w0815av_g2_o2/) · [`t5_short_ratio_level_summary.json`](../.glm-logs/w0815av_g2_o2/t5_short_ratio_level_summary.json) · feature `short_ratio_level` · tip `markets_short_ratio` S33 sections · **o2_pass** (non_null≥1) · **promoted → approved** (version pin **1.0.0**) · policy no-promote: `return_1d_c21` · proof [`docs/proof/w0815av_w55_o2_short_ratio_20260815.md`](proof/w0815av_w55_o2_short_ratio_20260815.md)  
+**Promotion (G2):** `packages/research_runtime/features/complete21_min.py` · this wave **+1 approved**: `short_ratio_level` · **total 7 approved** (W52–W54 **6** + W55 `short_ratio_level`) · remain **3 candidate** (`futures_activity_proxy` · `margin_alert_flag` · `return_1d_c21`)  
+**FRESH (G3 T9):** reclock `projgen-b7c349edd3fb454a806ede864cf80bcf` (pre age wall **~679s** >300; coverage_segments untouched; publish apply **SKIP**)  
+**Unit tests (G5 merge):** complete21 min (approved **7+**) + permanent_defer + single_shot (nextday) + mass gate · **100 passed**  
+**Catalog:** [`docs/proof/complete21_min_feature_catalog_20260815.md`](proof/complete21_min_feature_catalog_20260815.md) (code SoT = `complete21_min.py` **7 approved / 3 candidate**)  
+**Prior W54 複数日シグナル評価:** § 複数日シグナル評価 held underneath · W53 O2強化 · W52 approved/シグナル下地 · coverage baseline **W47 FINAL** held
+
+| gate | status |
+|------|--------|
+| Phase name | **COMPLETE 21 評価深化・翌日リターン突合（宣言なし）** |
+| Coverage baseline FINAL | **held** (W47 FINAL · Dataset COMPLETE **21/26** · segs **3478** · **actionable_gap=0**) |
+| READY | **未宣言 / not declared** (research metrics only) |
+| Mass | **NO-GO / OFF** (nextday single_shot batch Mass **OFF**) |
+| Phase7 | **OFF** (foundation / fail-closed only) — **reconfirmed** this wave (G3 T10) |
+| empty COMPLETE | **0** (remote verify G3 + G5 re-verify) |
+| Dataset COMPLETE | **21** (remote verify held; not invent 22) |
+| COMPLETE segs | **3478** (remote verify held · Δ0) |
+| OTC tip island | **93** held |
+| permanent DEFER | **5** held |
+| tip densify | **SKIP** (not primary this phase) |
+| densify | **none** |
+| push | **POST_PUSH_SHA** *(pending G5 fill)* · PRE_sha `205392f54ca832d67867fe96c149867f52586def` |
+| Projection | **FRESH** `projgen-b7c349edd3fb454a806ede864cf80bcf` (G3 T9 ops_reeval_freshness; residual FRESH sync; publish apply **SKIP** no segment drift; fail-closed no force) |
+| Nextday return eval | G1 **PASS** — multiday signal + R_{T→T+1} attach · mean-by-sign · Mass **not** connected · no orders · **研究用・未宣言** |
+| Selective O2 | G2 **PASS** — `short_ratio_level` tip E2E non-null · **+1 approved** |
+| Promotion | **+1 this wave** → **7 approved** total · remain **3 candidate** · no READY claim |
+| Unit tests | **100 passed** (complete21 min · permanent_defer · single_shot · mass gate) |
+| raw_retention | **15915** held (not coverage primary; W46 tip secondary **15869** held) |
+
+**Primary this phase (research metrics only):** nextday tip **return alignment** (signal sign × R_{T→T+1}) + selective O2 (`short_ratio_level`) on held COMPLETE **21** / DEFER **5** — **without** READY / Mass / Phase7 declaration.  
+**Not:** densify · tip primary · invent COMPLETE 22 · Phase7 ON · READY GO · mass ON · treat nextday eval as READY · force remaining 3 candidates · promote `return_1d_c21`.
+
+### Explicit non-declarations (held)
+
+- **READY** — not declared (評価深化・翌日リターン突合 only; research metrics; no production READY GO)
+- **Mass Autonomous Research** — **NO-GO / OFF** (nextday single_shot Mass OFF)
+- **Phase7** — **OFF** (no `PHASE7_*` / `MASS_RESEARCH_ENABLE` arming switch)
 
 ## 複数日シグナル評価（READY 未宣言）
 

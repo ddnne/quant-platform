@@ -1,4 +1,4 @@
-"""Minimal COMPLETE-21-only features (W49–W54 / w0815au_g2).
+"""Minimal COMPLETE-21-only features (W49–W55 / w0815av_g2).
 
 All features:
 
@@ -15,8 +15,11 @@ Promotion:
   feature-level CF tip E2E non-null proof.
 * W54 / w0815au_g2 selective O2: ``repo_rate_level`` → approved (version pin
   ``1.0.0``) after CF tip E2E non-null on D1 ``jsda_repo_rates`` hot tip.
+* W55 / w0815av_g2 selective O2: ``short_ratio_level`` → approved (version pin
+  ``1.0.0``) after CF tip E2E non-null with valid S33 ``section`` path.
   ``return_1d_c21`` remains candidate (policy twin of v0 ``return_1d``).
-  Remaining 4 stay candidate.
+  Remaining 3 stay candidate (``return_1d_c21`` · ``margin_alert_flag`` ·
+  ``futures_activity_proxy``).
 * No READY / Mass / Phase7 claim. ``get_for_strategy`` still admits only
   approved + strategy-facing roles (utility requires explicit role override).
 
@@ -660,7 +663,7 @@ ShortRatioLevel: FeatureDefinition = register(
         compute=_short_ratio_level,
         tags=("short", "ratio", "sector", "complete21"),
         intended_role="signal",
-        status="candidate",
+        status="approved",  # W55 O2 promotion; version pin 1.0.0
         price_basis=None,
     )
 )

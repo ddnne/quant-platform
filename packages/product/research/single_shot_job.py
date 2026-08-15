@@ -17,6 +17,10 @@ W52–W53 minimal signal write + W54 multi-day as_of batch (Mass OFF):
 * **Multi-day (W54):** :func:`execute_multiday_signal_eval` reuses one tip
   extract across 5–10 trading-day as_of values; aggregates sign stats and
   writes ``batch_summary.json`` (still Mass OFF / no READY / no orders).
+* **Next-day return (W55):** optional attach of ``R_{T→T+1}`` close-to-close
+  returns per code/day + mean-by-sign summary (研究用・未宣言). Feature
+  ``as_of`` remains T session close; evaluation uses T+1 close availability
+  only (no look-ahead into features). See :data:`NEXTDAY_LOOKAHEAD_POLICY`.
 * **Write:** R2 ``quant-structured`` under ``research/single_shot/job={id}/…``.
   Local FS is **not** Source of Truth (optional dry-run stages payloads only).
 * **Not** connected to ``agents.mass_research`` / mass research loop.
@@ -804,6 +808,9 @@ def _normalize_tip_catalog_row(
         "volume": _pick_num(payload, "Volume", "Vo", "AdjVo", "AVo"),
         "Code": _pick_str(payload, "Code", "code"),
         "Date": _pick_str(payload, "Date", "date"),
+        # S33 sector code for markets_short_ratio (short_ratio_level tip path).
+        "S33": _pick_str(payload, "S33", "section"),
+        "section": _pick_str(payload, "S33", "section"),
     }
 
 
@@ -1230,6 +1237,40 @@ def _augment_feature_output(
     }
 
 
+def _discover_tip_sections(
+    tip_rows_by_dataset: Mapping[str, Sequence[Mapping[str, Any]]],
+    *,
+    section_limit: int = DEFAULT_FEATURE_CODE_LIMIT,
+) -> list[str]:
+    """Discover S33 section codes from tip ``markets_short_ratio`` rows.
+
+    Prefers well-known probe sections (``0050`` …) when present, then fills
+    from remaining tip S33 values (stable sort). Empty when tip has no S33.
+    """
+    short_rows = list(tip_rows_by_dataset.get("markets_short_ratio") or [])
+    seen: set[str] = set()
+    for row in short_rows:
+        payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+        s33 = (
+            row.get("S33")
+            or row.get("section")
+            or (payload.get("S33") if isinstance(payload, dict) else None)
+            or (payload.get("section") if isinstance(payload, dict) else None)
+        )
+        if s33 is None or str(s33).strip() == "":
+            continue
+        seen.add(str(s33).strip())
+    if not seen:
+        return []
+    # Prefer catalog/test probe sections when present in tip.
+    preferred = ("0050", "1050", "2050", "3050", "3100", "3150", "3200", "3250", "3300")
+    ordered: list[str] = [s for s in preferred if s in seen]
+    for s in sorted(seen):
+        if s not in ordered:
+            ordered.append(s)
+    return ordered[: max(1, int(section_limit))]
+
+
 def compute_tip_candidate_features(
     tip_rows_by_dataset: Mapping[str, Sequence[Mapping[str, Any]]],
     *,
@@ -1237,12 +1278,16 @@ def compute_tip_candidate_features(
     feature_ids: Sequence[str] | None = None,
     codes: Sequence[str] | None = None,
     dates: Sequence[str] | None = None,
+    sections: Sequence[str] | None = None,
 ) -> dict[str, Any]:
     """Compute COMPLETE-21 min features on a tip FeatureContext.
 
     Does not use local SQLite. Returns per-feature values + row/null counts
     for the research artifact / manifest. Per-feature ``status`` mirrors the
     registry (approved or candidate); overall path is still not READY.
+
+    ``sections`` supplies S33 codes for ``short_ratio_level``; when omitted,
+    sections are discovered from tip ``markets_short_ratio`` rows.
     """
     fids = tuple(feature_ids) if feature_ids else DEFAULT_CANDIDATE_FEATURES
     as_of_s = str(as_of).strip()
@@ -1273,6 +1318,12 @@ def compute_tip_candidate_features(
     else:
         date_list = [as_of_s[:10]]
 
+    # S33 sections for short_ratio_level (explicit or tip-discovered).
+    if sections:
+        section_list = [str(s).strip() for s in sections if str(s).strip()]
+    else:
+        section_list = _discover_tip_sections(tip_rows_by_dataset)
+
     tip_input_counts = {
         ds: len(list(rows or [])) for ds, rows in tip_rows_by_dataset.items()
     }
@@ -1288,7 +1339,7 @@ def compute_tip_candidate_features(
         feature_obs: list[dict[str, Any]] = []
 
         if fid in ("volume_change_1d", "topix_relative_1d", "disclosure_flag_fins",
-                   "margin_interest_change_1d"):
+                   "margin_interest_change_1d", "margin_alert_flag", "return_1d_c21"):
             targets = code_list
             if not targets:
                 feature_blocks.append(
@@ -1354,20 +1405,48 @@ def compute_tip_candidate_features(
                 feature_obs.append(rec)
                 observations.append(rec)
         elif fid == "short_ratio_level":
-            # section required; skip unless caller put section in codes-like inputs
-            feature_blocks.append(
-                {
-                    "feature_id": fid,
-                    "version": version,
-                    "status": reg_status,
-                    "row_counts": {"computed": 0, "non_null": 0, "null": 0},
-                    "null_counts": 0,
-                    "reason": "short_ratio_level requires section; not in default tip path",
-                }
-            )
-            continue
+            targets = section_list
+            if not targets:
+                feature_blocks.append(
+                    {
+                        "feature_id": fid,
+                        "version": version,
+                        "status": reg_status,
+                        "row_counts": {"computed": 0, "non_null": 0, "null": 0},
+                        "null_counts": 0,
+                        "reason": (
+                            "short_ratio_level requires section; no tip S33 "
+                            "sections discovered and none provided"
+                        ),
+                    }
+                )
+                continue
+            for section in targets:
+                ctx = build_tip_feature_context(
+                    tip_rows_by_dataset,
+                    as_of=as_of_s,
+                    inputs={"section": section},
+                )
+                out = feat.compute(ctx)
+                if not isinstance(out, FeatureOutput):
+                    raise TypeError(
+                        f"feature {fid!r} returned {type(out).__name__}; "
+                        "expected FeatureOutput"
+                    )
+                rec = _augment_feature_output(
+                    fid,
+                    version,
+                    as_of_s,
+                    out,
+                    status=reg_status,
+                    extra_meta={"section": section},
+                )
+                values.append(rec["value"])
+                feature_obs.append(rec)
+                observations.append(rec)
         else:
-            # Features with no required kwargs (e.g. repo_rate_level)
+            # Features with no required kwargs (e.g. repo_rate_level,
+            # futures_activity_proxy).
             ctx = build_tip_feature_context(
                 tip_rows_by_dataset, as_of=as_of_s, inputs={}
             )
@@ -1425,6 +1504,7 @@ def compute_tip_candidate_features(
         "feature_ids": list(fids),
         "codes": list(code_list),
         "dates": list(date_list),
+        "sections": list(section_list),
         "tip_input_row_counts": tip_input_counts,
         "features": feature_blocks,
         "observations": observations,
@@ -1585,6 +1665,7 @@ def execute_single_shot_job(
     compute_signals: bool = False,
     feature_ids: Sequence[str] | None = None,
     feature_codes: Sequence[str] | None = None,
+    feature_sections: Sequence[str] | None = None,
     feature_as_of: str | None = None,
     feature_row_limit: int = DEFAULT_FEATURE_ROW_LIMIT,
     volume_change_abs_min: float | None = DEFAULT_VOLUME_CHANGE_ABS_MIN,
@@ -1705,6 +1786,7 @@ def execute_single_shot_job(
             as_of=as_of,
             feature_ids=fids,
             codes=feature_codes or tip_feature_extract.get("selected_codes"),
+            sections=feature_sections,
         )
         feature_payload = {
             **feature_payload,
@@ -2016,7 +2098,39 @@ def execute_single_shot_job(
 
 # ---------------------------------------------------------------------------
 # W54 — multi-day as_of signal eval (single_shot only · Mass OFF)
+# W55 — next-day return alignment (research only · 研究用・未宣言)
 # ---------------------------------------------------------------------------
+
+# Look-ahead policy (documented for tests + proofs; do not weaken).
+# Convention:
+#   * At end of day T, signal S_T uses only data available at T session close
+#     (feature as_of = ``{T}T15:30:00+09:00``; available_at ≤ feature as_of).
+#   * Realized next-day return R_{T→T+1} = close(T+1)/close(T) − 1 uses bars
+#     for trading days T and next trading day T+1.
+#   * evaluation_as_of defaults to T+1 session close so the T+1 bar is
+#     PIT-available (available_at ≤ evaluation_as_of). This is historical
+#     research labeling — not a live trading claim, not READY, not Mass.
+NEXTDAY_LOOKAHEAD_POLICY: Mapping[str, Any] = MappingProxyType(
+    {
+        "version": "nextday-lookahead-policy/v1",
+        "label": "研究用・未宣言",
+        "feature_as_of": "signal_day_T_session_close",
+        "feature_as_of_clock": "T15:30:00+09:00",
+        "feature_pit_gate": "available_at <= feature_as_of",
+        "return_definition": "close(T+1)/close(T) - 1",
+        "evaluation_as_of": "next_trading_day_T1_session_close",
+        "evaluation_as_of_clock": "T+1 15:30:00+09:00",
+        "return_pit_gate": "available_at(T bar) and available_at(T+1 bar) <= evaluation_as_of",
+        "no_feature_lookahead": True,
+        "ready_declared": False,
+        "mass_research": "NO-GO",
+        "note": (
+            "Signal features never see T+1 bars. Returns are attached only "
+            "when both T and T+1 closes pass the evaluation PIT gate. "
+            "Missing T+1 (tip edge) → null return, counted in null rate."
+        ),
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -2036,6 +2150,7 @@ class MultidaySignalEval:
     phase7: str = PHASE7_STATUS
     ready_declared: bool = READY_DECLARED
     local_sot: bool = False
+    attach_nextday_returns: bool = False
     version: str = "multiday-signal-eval/v1"
 
     def to_dict(self) -> dict[str, Any]:
@@ -2057,6 +2172,8 @@ class MultidaySignalEval:
             "order_execution": False,
             "local_sot": self.local_sot,
             "connected_to_mass_research_loop": False,
+            "attach_nextday_returns": self.attach_nextday_returns,
+            "label": "研究用・未宣言",
         }
 
 
@@ -2153,6 +2270,214 @@ def summarize_signal_day(
     }
 
 
+def session_close_as_of(date: str) -> str:
+    """JST equity session-close as_of clock for a calendar date."""
+    d = str(date).strip()[:10]
+    return f"{d}T15:30:00+09:00"
+
+
+def build_equity_close_index(
+    tip_rows_by_dataset: Mapping[str, Sequence[Mapping[str, Any]]],
+) -> dict[tuple[str, str], dict[str, Any]]:
+    """Map ``(code, date)`` → ``{close, available_at, ...}`` from tip equity bars.
+
+    Used only for research next-day return attachment (not feature compute).
+    """
+    out: dict[tuple[str, str], dict[str, Any]] = {}
+    for row in tip_rows_by_dataset.get("equities_bars_daily") or []:
+        code = str(row.get("code") or "").strip()
+        date = str(row.get("date") or "")[:10]
+        close = row.get("close")
+        if not code or not date or close is None:
+            continue
+        try:
+            close_f = float(close)
+        except (TypeError, ValueError):
+            continue
+        out[(code, date)] = {
+            "code": code,
+            "date": date,
+            "close": close_f,
+            "available_at": row.get("available_at"),
+            "event_time": row.get("event_time"),
+        }
+    return out
+
+
+def next_trading_day_map(trading_days: Sequence[str]) -> dict[str, str | None]:
+    """For each trading day, map to the next trading day (or None at tip edge)."""
+    days = sorted({str(d).strip()[:10] for d in trading_days if str(d).strip()})
+    out: dict[str, str | None] = {}
+    for i, d in enumerate(days):
+        out[d] = days[i + 1] if i + 1 < len(days) else None
+    return out
+
+
+def attach_next_day_returns(
+    observations: Sequence[Mapping[str, Any]],
+    *,
+    signal_date: str,
+    next_date: str | None,
+    close_index: Mapping[tuple[str, str], Mapping[str, Any]],
+    evaluation_as_of: str | None = None,
+    feature_as_of: str | None = None,
+) -> list[dict[str, Any]]:
+    """Attach close-to-close next-day return per signal observation.
+
+    Look-ahead policy (研究用・未宣言 — see :data:`NEXTDAY_LOOKAHEAD_POLICY`):
+
+    * ``feature_as_of`` = signal day T session close (features already gated).
+    * ``evaluation_as_of`` = next trading day T+1 session close so the T+1 bar
+      is PIT-available; both T and T+1 closes require
+      ``available_at <= evaluation_as_of``.
+    * Features themselves never use T+1 data (caller must keep feature as_of
+      at T close when computing the signal).
+    """
+    sig_d = str(signal_date).strip()[:10]
+    feat_as_of = feature_as_of or session_close_as_of(sig_d)
+    nxt_d = str(next_date).strip()[:10] if next_date else None
+    eval_as_of = (
+        evaluation_as_of
+        if evaluation_as_of is not None
+        else (session_close_as_of(nxt_d) if nxt_d else None)
+    )
+
+    out: list[dict[str, Any]] = []
+    for obs in observations:
+        rec = dict(obs)
+        code = str(obs.get("code") or "").strip()
+        close_t: float | None = None
+        close_t1: float | None = None
+        next_day_return: float | None = None
+        pit_ok = False
+        reason: str | None
+
+        if not nxt_d:
+            reason = "no_next_trading_day"
+        elif not code:
+            reason = "missing_code"
+        elif eval_as_of is None:
+            reason = "missing_evaluation_as_of"
+        else:
+            t_bar = close_index.get((code, sig_d))
+            t1_bar = close_index.get((code, nxt_d))
+            if t_bar is None:
+                reason = "missing_close_T"
+            elif t1_bar is None:
+                reason = "missing_close_T1"
+            elif not _available_at_ok(t_bar.get("available_at"), eval_as_of):
+                reason = "pit_fail_T"
+            elif not _available_at_ok(t1_bar.get("available_at"), eval_as_of):
+                reason = "pit_fail_T1"
+            else:
+                try:
+                    close_t = float(t_bar["close"])
+                    close_t1 = float(t1_bar["close"])
+                except (TypeError, ValueError, KeyError):
+                    reason = "non_numeric_close"
+                    close_t = None
+                    close_t1 = None
+                else:
+                    if close_t == 0.0:
+                        reason = "zero_close_T"
+                    else:
+                        next_day_return = (close_t1 / close_t) - 1.0
+                        pit_ok = True
+                        reason = None
+
+        rec["signal_date"] = sig_d
+        rec["next_day_date"] = nxt_d
+        rec["close_T"] = close_t
+        rec["close_T1"] = close_t1
+        rec["next_day_return"] = next_day_return
+        rec["feature_as_of"] = feat_as_of
+        rec["evaluation_as_of"] = eval_as_of
+        rec["next_day_return_pit_ok"] = pit_ok
+        rec["next_day_return_null_reason"] = reason
+        rec["label"] = "研究用・未宣言"
+        out.append(rec)
+    return out
+
+
+def summarize_nextday_by_sign(
+    aligned_rows: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """T2: mean next-day return by signal sign (+1 / 0 / −1), counts, null rates.
+
+    Output is research-only (研究用・未宣言). Does not claim READY / Mass / edge.
+    """
+
+    def _sign_key(value: Any) -> str:
+        if value is None:
+            return "null_signal"
+        try:
+            v = float(value)
+        except (TypeError, ValueError):
+            return "null_signal"
+        if v == 1.0:
+            return "+1"
+        if v == -1.0:
+            return "-1"
+        if v == 0.0:
+            return "0"
+        return "null_signal"
+
+    def _bucket_summary(returns: Sequence[Any]) -> dict[str, Any]:
+        n = len(returns)
+        non_null = [float(r) for r in returns if r is not None]
+        null_n = n - len(non_null)
+        mean = (sum(non_null) / len(non_null)) if non_null else None
+        return {
+            "count": n,
+            "non_null_return_count": len(non_null),
+            "null_return_count": null_n,
+            "null_return_rate": (float(null_n) / float(n)) if n else None,
+            "mean_next_day_return": mean,
+        }
+
+    buckets: dict[str, list[Any]] = {
+        "+1": [],
+        "0": [],
+        "-1": [],
+        "null_signal": [],
+    }
+    for row in aligned_rows:
+        key = _sign_key(row.get("value"))
+        buckets[key].append(row.get("next_day_return"))
+
+    by_sign = {k: _bucket_summary(v) for k, v in buckets.items()}
+    overall = _bucket_summary([row.get("next_day_return") for row in aligned_rows])
+
+    # Sign-aligned only (exclude null signal) for a compact research view.
+    signed_rows = [
+        row
+        for row in aligned_rows
+        if row.get("value") is not None
+        and float(row["value"]) in (1.0, 0.0, -1.0)
+    ]
+    signed_overall = _bucket_summary(
+        [row.get("next_day_return") for row in signed_rows]
+    )
+
+    return {
+        "version": "nextday-by-sign/v1",
+        "label": "研究用・未宣言",
+        "by_sign": by_sign,
+        "overall": overall,
+        "signed_overall": signed_overall,
+        "n_rows": len(aligned_rows),
+        "look_ahead_policy": dict(NEXTDAY_LOOKAHEAD_POLICY),
+        "ready_declared": False,
+        "mass_research": MASS_RESEARCH_STATUS,
+        "phase7": PHASE7_STATUS,
+        "order_execution": False,
+        "note": (
+            "Mean next-day close-to-close return by signal sign. "
+            "Research only — not READY, not Mass, no order claim."
+        ),
+    }
+
+
 def execute_multiday_signal_eval(
     *,
     period_start: str,
@@ -2164,6 +2489,7 @@ def execute_multiday_signal_eval(
     min_days: int = 5,
     feature_row_limit: int = DEFAULT_FEATURE_ROW_LIMIT,
     volume_change_abs_min: float | None = DEFAULT_VOLUME_CHANGE_ABS_MIN,
+    attach_nextday_returns: bool = False,
     write_per_day_artifacts: bool = True,
     dry_run: bool = False,
     d1_execute: D1ExecuteFn | None = None,
@@ -2179,11 +2505,16 @@ def execute_multiday_signal_eval(
     1. One tip payload extract for the window (not local SQLite SoT).
     2. Discover trading days (or use caller ``as_of_days``).
     3. For each day: tip FeatureContext → approved-leg features → signal.
+       Feature ``as_of`` is always T session close (no T+1 feature leak).
     4. Aggregate per-day counts / non-null rate / sign distribution.
-    5. Write ``research/single_shot/job={id}/batch_summary.json`` (+ optional
+    5. Optional (W55): attach next-day return per code/day when T+1 bar is
+       PIT-available at evaluation_as_of = T+1 session close; summarize mean
+       return by signal sign.
+    6. Write ``research/single_shot/job={id}/batch_summary.json`` (+ optional
        per-day ``days/date=YYYY-MM-DD/signals.json``).
 
     Does **not** call ``agents.mass_research``, mint READY, or paper execution.
+    Labels remain 研究用・未宣言 when next-day returns are attached.
     """
     assert_mass_and_phase7_off()
     start = str(period_start).strip()[:10]
@@ -2216,12 +2547,31 @@ def execute_multiday_signal_eval(
     if codes is None and tip_feature_extract.get("selected_codes"):
         selected_codes = list(tip_feature_extract["selected_codes"])
 
+    # Full tip trading calendar (used for next-day mapping even when as_of_days
+    # is a caller subset).
+    full_trading_days = discover_tip_trading_days(
+        rows_by_ds, period_start=start, period_end=end
+    )
+    # Bar-date fallback for next-day when calendar is short of tip bars.
+    bar_days = sorted(
+        {
+            str(r.get("date") or "")[:10]
+            for r in (rows_by_ds.get("equities_bars_daily") or [])
+            if r.get("date")
+        }
+    )
+    next_day_source = full_trading_days if full_trading_days else bar_days
+    # Union calendar + bars so T+1 can resolve from either plane.
+    next_day_source = sorted(set(next_day_source) | set(bar_days))
+    next_map = next_trading_day_map(next_day_source)
+    close_index = (
+        build_equity_close_index(rows_by_ds) if attach_nextday_returns else {}
+    )
+
     if as_of_days:
         day_list = sorted({str(d).strip()[:10] for d in as_of_days if str(d).strip()})
     else:
-        day_list = discover_tip_trading_days(
-            rows_by_ds, period_start=start, period_end=end
-        )
+        day_list = list(full_trading_days)
     # Prefer mid/late window days so 1d features have prior bars in the tip.
     if len(day_list) > max_days:
         day_list = day_list[-int(max_days) :]
@@ -2241,7 +2591,8 @@ def execute_multiday_signal_eval(
 
     day_results: list[dict[str, Any]] = []
     for d in day_list:
-        as_of = f"{d}T15:30:00+09:00"
+        # Feature as_of is ALWAYS T session close — never T+1 (no look-ahead).
+        as_of = session_close_as_of(d)
         feature_payload = compute_tip_candidate_features(
             rows_by_ds,
             as_of=as_of,
@@ -2263,9 +2614,47 @@ def execute_multiday_signal_eval(
         day_summary["codes"] = list(selected_codes)
         day_summary["feature_status"] = feature_payload.get("status")
         day_summary["definition"] = signal_definition()
-        day_summary["observations"] = signal_core.get("observations") or []
+        day_summary["observations"] = list(signal_core.get("observations") or [])
         day_summary["local_sot"] = False
         day_summary["phase7"] = PHASE7_STATUS
+        day_summary["feature_as_of"] = as_of
+        day_summary["label"] = "研究用・未宣言"
+
+        if attach_nextday_returns:
+            nxt = next_map.get(d)
+            eval_as_of = session_close_as_of(nxt) if nxt else None
+            aligned = attach_next_day_returns(
+                day_summary["observations"],
+                signal_date=d,
+                next_date=nxt,
+                close_index=close_index,
+                evaluation_as_of=eval_as_of,
+                feature_as_of=as_of,
+            )
+            day_summary["observations"] = aligned
+            day_summary["next_day_date"] = nxt
+            day_summary["evaluation_as_of"] = eval_as_of
+            day_summary["attach_nextday_returns"] = True
+            day_summary["look_ahead_policy"] = dict(NEXTDAY_LOOKAHEAD_POLICY)
+            day_summary["sample_values"] = [
+                {
+                    "code": r.get("code"),
+                    "value": r.get("value"),
+                    "next_day_return": r.get("next_day_return"),
+                    "next_day_date": r.get("next_day_date"),
+                    "close_T": r.get("close_T"),
+                    "close_T1": r.get("close_T1"),
+                    "topix_relative": (r.get("metadata") or {}).get(
+                        "topix_relative"
+                    ),
+                    "next_day_return_null_reason": r.get(
+                        "next_day_return_null_reason"
+                    ),
+                }
+                for r in aligned[:10]
+            ]
+            day_summary["nextday_day_summary"] = summarize_nextday_by_sign(aligned)
+
         day_results.append(day_summary)
 
     # Aggregate across days.
@@ -2283,18 +2672,32 @@ def execute_multiday_signal_eval(
         {
             "date": d.get("date"),
             "as_of": d.get("as_of"),
+            "feature_as_of": d.get("feature_as_of"),
             "signal_count": d.get("signal_count"),
             "non_null": d.get("non_null"),
             "null": d.get("null"),
             "non_null_rate": d.get("non_null_rate"),
             "sign_distribution": d.get("sign_distribution"),
             "sample_values": d.get("sample_values"),
+            **(
+                {
+                    "next_day_date": d.get("next_day_date"),
+                    "evaluation_as_of": d.get("evaluation_as_of"),
+                    "nextday_day_summary": d.get("nextday_day_summary"),
+                }
+                if attach_nextday_returns
+                else {}
+            ),
         }
         for d in day_results
     ]
 
     batch_summary: dict[str, Any] = {
-        "version": "multiday-signal-batch/v1",
+        "version": (
+            "multiday-signal-nextday-batch/v1"
+            if attach_nextday_returns
+            else "multiday-signal-batch/v1"
+        ),
         "job_id": jid,
         "signal_id": DEFAULT_SIGNAL_ID,
         "signal_version": DEFAULT_SIGNAL_VERSION,
@@ -2347,12 +2750,33 @@ def execute_multiday_signal_eval(
         "local_sot": False,
         "connected_to_mass_research_loop": False,
         "densify": False,
+        "attach_nextday_returns": bool(attach_nextday_returns),
+        "label": "研究用・未宣言",
         "note": (
-            "W54 multi-day tip signal eval via single_shot only. "
-            "Approved-leg signal c21_topix_relative_sign (candidate_only=False). "
-            "Not READY. Not mass research. No order execution. CF D1 tip only."
+            (
+                "W55 multi-day tip signal + next-day return alignment via "
+                "single_shot only. Feature as_of = T close; evaluation_as_of = "
+                "T+1 close for return PIT. Approved-leg signal "
+                "c21_topix_relative_sign (candidate_only=False). "
+                "研究用・未宣言. Not READY. Not mass research. No order "
+                "execution. CF D1 tip only. No densify."
+            )
+            if attach_nextday_returns
+            else (
+                "W54 multi-day tip signal eval via single_shot only. "
+                "Approved-leg signal c21_topix_relative_sign (candidate_only=False). "
+                "Not READY. Not mass research. No order execution. CF D1 tip only."
+            )
         ),
     }
+
+    if attach_nextday_returns:
+        all_aligned: list[Mapping[str, Any]] = []
+        for d in day_results:
+            all_aligned.extend(d.get("observations") or [])
+        nextday_summary = summarize_nextday_by_sign(all_aligned)
+        batch_summary["nextday_return"] = nextday_summary
+        batch_summary["look_ahead_policy"] = dict(NEXTDAY_LOOKAHEAD_POLICY)
 
     puts: list[dict[str, Any]] = []
 
@@ -2380,7 +2804,11 @@ def execute_multiday_signal_eval(
             date_s = str(d.get("date") or "")[:10]
             day_key = f"{prefix}/days/date={date_s}/signals.json"
             day_body = {
-                "version": "multiday-signal-day/v1",
+                "version": (
+                    "multiday-signal-nextday-day/v1"
+                    if attach_nextday_returns
+                    else "multiday-signal-day/v1"
+                ),
                 "job_id": jid,
                 **{k: d[k] for k in d if k != "definition"},
                 "definition": d.get("definition") or signal_definition(),
@@ -2389,6 +2817,7 @@ def execute_multiday_signal_eval(
                 "ready_declared": READY_DECLARED,
                 "order_execution": False,
                 "local_sot": False,
+                "label": "研究用・未宣言",
             }
             puts.append(_put(day_key, day_body))
             d["signals_r2_key"] = day_key
@@ -2396,7 +2825,11 @@ def execute_multiday_signal_eval(
     # Parent manifest (freeze surface + keys; no READY claim).
     manifest_key = str(paths["manifest_r2_key"])
     manifest = {
-        "version": "multiday-signal-manifest/v1",
+        "version": (
+            "multiday-signal-nextday-manifest/v1"
+            if attach_nextday_returns
+            else "multiday-signal-manifest/v1"
+        ),
         "job_id": jid,
         "bucket": RESEARCH_ARTIFACT_BUCKET,
         "prefix": prefix,
@@ -2428,6 +2861,16 @@ def execute_multiday_signal_eval(
         "order_execution": False,
         "local_sot": False,
         "connected_to_mass_research_loop": False,
+        "attach_nextday_returns": bool(attach_nextday_returns),
+        "label": "研究用・未宣言",
+        **(
+            {
+                "nextday_return": batch_summary.get("nextday_return"),
+                "look_ahead_policy": dict(NEXTDAY_LOOKAHEAD_POLICY),
+            }
+            if attach_nextday_returns
+            else {}
+        ),
     }
     puts.append(_put(manifest_key, manifest))
     batch_summary["manifest_r2_key"] = manifest_key
@@ -2446,6 +2889,58 @@ def execute_multiday_signal_eval(
         phase7=PHASE7_STATUS,
         ready_declared=READY_DECLARED,
         local_sot=False,
+        attach_nextday_returns=bool(attach_nextday_returns),
+        version=(
+            "multiday-signal-nextday-eval/v1"
+            if attach_nextday_returns
+            else "multiday-signal-eval/v1"
+        ),
+    )
+
+
+def execute_multiday_nextday_return_eval(
+    *,
+    period_start: str,
+    period_end: str,
+    job_id: str = "w0815av-g1-nextday",
+    codes: Sequence[str] | None = None,
+    as_of_days: Sequence[str] | None = None,
+    max_days: int = 10,
+    min_days: int = 5,
+    feature_row_limit: int = DEFAULT_FEATURE_ROW_LIMIT,
+    volume_change_abs_min: float | None = DEFAULT_VOLUME_CHANGE_ABS_MIN,
+    write_per_day_artifacts: bool = True,
+    dry_run: bool = False,
+    d1_execute: D1ExecuteFn | None = None,
+    r2_put: R2PutFn | None = None,
+    staging_dir: str | Path | None = None,
+    wrangler: str | Path | None = None,
+    wrangler_config: str | Path | None = None,
+) -> MultidaySignalEval:
+    """W55 entry: multiday signal eval with next-day return alignment.
+
+    Thin wrapper around :func:`execute_multiday_signal_eval` with
+    ``attach_nextday_returns=True``. Research only (研究用・未宣言) — Mass OFF,
+    READY not declared, no orders, no densify.
+    """
+    return execute_multiday_signal_eval(
+        period_start=period_start,
+        period_end=period_end,
+        job_id=job_id,
+        codes=codes,
+        as_of_days=as_of_days,
+        max_days=max_days,
+        min_days=min_days,
+        feature_row_limit=feature_row_limit,
+        volume_change_abs_min=volume_change_abs_min,
+        attach_nextday_returns=True,
+        write_per_day_artifacts=write_per_day_artifacts,
+        dry_run=dry_run,
+        d1_execute=d1_execute,
+        r2_put=r2_put,
+        staging_dir=staging_dir,
+        wrangler=wrangler,
+        wrangler_config=wrangler_config,
     )
 
 
@@ -2465,6 +2960,7 @@ __all__ = [
     "DEFAULT_VOLUME_CHANGE_ABS_MIN",
     "MASS_RESEARCH_ENV_ARMING_SWITCHES",
     "MASS_RESEARCH_STATUS",
+    "NEXTDAY_LOOKAHEAD_POLICY",
     "PHASE7_ENV_ARMING_SWITCHES",
     "PHASE7_STATUS",
     "READY_DECLARED",
@@ -2478,6 +2974,8 @@ __all__ = [
     "SingleShotJobError",
     "SingleShotJobSpec",
     "assert_mass_and_phase7_off",
+    "attach_next_day_returns",
+    "build_equity_close_index",
     "build_single_shot_job_spec",
     "build_tip_feature_context",
     "compute_tip_candidate_features",
@@ -2486,13 +2984,17 @@ __all__ = [
     "default_r2_put",
     "design_artifact_paths",
     "discover_tip_trading_days",
+    "execute_multiday_nextday_return_eval",
     "execute_multiday_signal_eval",
     "execute_single_shot_job",
     "extract_d1_tip_feature_rows",
     "extract_d1_tip_summaries",
     "freeze_status",
     "head_r2_object",
+    "next_trading_day_map",
     "require_complete_21_only",
+    "session_close_as_of",
     "signal_definition",
+    "summarize_nextday_by_sign",
     "summarize_signal_day",
 ]

@@ -1,4 +1,4 @@
-"""T8 single-shot job + T9 Phase7/Mass OFF freeze + W50–W54 execute/DEFER/features/multiday."""
+"""T8 single-shot job + T9 Phase7/Mass OFF freeze + W50–W55 execute/DEFER/features/multiday/nextday."""
 
 from __future__ import annotations
 
@@ -20,6 +20,7 @@ from research.single_shot_job import (
     DEFAULT_SIGNAL_ID,
     MASS_RESEARCH_ENV_ARMING_SWITCHES,
     MASS_RESEARCH_STATUS,
+    NEXTDAY_LOOKAHEAD_POLICY,
     PHASE7_ENV_ARMING_SWITCHES,
     PHASE7_STATUS,
     READY_DECLARED,
@@ -29,17 +30,23 @@ from research.single_shot_job import (
     SIGNAL_CANDIDATE_ONLY,
     SingleShotJobError,
     assert_mass_and_phase7_off,
+    attach_next_day_returns,
+    build_equity_close_index,
     build_single_shot_job_spec,
     build_tip_feature_context,
     compute_tip_candidate_features,
     design_artifact_paths,
     discover_tip_trading_days,
+    execute_multiday_nextday_return_eval,
     execute_multiday_signal_eval,
     execute_single_shot_job,
     extract_d1_tip_feature_rows,
     extract_d1_tip_summaries,
     freeze_status,
+    next_trading_day_map,
     require_complete_21_only,
+    session_close_as_of,
+    summarize_nextday_by_sign,
     summarize_signal_day,
 )
 from selection.budget_ledger import MassResearchDisabledError, ResearchBudgetCapability
@@ -261,6 +268,68 @@ def test_extract_d1_tip_feature_rows_rejects_defer():
             period_end="2026-08-15",
             d1_execute=lambda sql: (_ for _ in ()).throw(AssertionError("no d1")),
         )
+
+
+def test_tip_short_ratio_level_with_section():
+    """W55: short_ratio_level tip path uses S33 section (discover or explicit)."""
+    tip_rows = {
+        "markets_short_ratio": [
+            {
+                "date": "2026-08-04",
+                "S33": "0050",
+                "section": "0050",
+                "available_at": "2026-08-04T15:30:00+09:00",
+                "event_time": "2026-08-04T09:00:00+09:00",
+                "payload": {
+                    "Date": "2026-08-04",
+                    "S33": "0050",
+                    "SellExShortVa": 200.0,
+                    "ShrtWithResVa": 40.0,
+                    "ShrtNoResVa": 10.0,
+                },
+            },
+            {
+                "date": "2026-08-04",
+                "S33": "1050",
+                "section": "1050",
+                "available_at": "2026-08-04T15:30:00+09:00",
+                "event_time": "2026-08-04T09:00:00+09:00",
+                "payload": {
+                    "Date": "2026-08-04",
+                    "S33": "1050",
+                    "SellExShortVa": 100.0,
+                    "ShrtWithResVa": 10.0,
+                    "ShrtNoResVa": 0.0,
+                },
+            },
+        ],
+    }
+    as_of = "2026-08-04T15:30:00+09:00"
+    # Explicit sections
+    result = compute_tip_candidate_features(
+        tip_rows,
+        as_of=as_of,
+        feature_ids=["short_ratio_level"],
+        sections=["0050", "1050"],
+    )
+    assert result["sections"] == ["0050", "1050"]
+    by_id = {f["feature_id"]: f for f in result["features"]}
+    block = by_id["short_ratio_level"]
+    assert block["row_counts"]["computed"] == 2
+    assert block["row_counts"]["non_null"] == 2
+    assert block["null_counts"] == 0
+    samples = {sv["section"]: sv["value"] for sv in block["sample_values"]}
+    assert samples["0050"] == pytest.approx(0.25)  # (40+10)/200
+    assert samples["1050"] == pytest.approx(0.10)  # (10+0)/100
+
+    # Auto-discover from tip when sections omitted
+    discovered = compute_tip_candidate_features(
+        tip_rows,
+        as_of=as_of,
+        feature_ids=["short_ratio_level"],
+    )
+    assert "0050" in discovered["sections"]
+    assert discovered["features"][0]["row_counts"]["non_null"] >= 1
 
 
 def test_tip_feature_context_and_candidate_compute():
@@ -1060,3 +1129,277 @@ def test_multiday_reject_permanent_defer_before_d1():
         require_complete_21_only(
             ["equities_master"], context="multiday signal eval datasets"
         )
+
+
+# ---------------------------------------------------------------------------
+# W55 / T1–T4 — multi-day signal + next-day return alignment (research only)
+# Look-ahead policy (documented here + NEXTDAY_LOOKAHEAD_POLICY):
+#   * feature as_of = T session close only (features never see T+1 bars)
+#   * evaluation_as_of = T+1 session close for return PIT join
+#   * R_{T→T+1} = close(T+1)/close(T) - 1 when both bars available_at ≤ eval as_of
+#   * 研究用・未宣言 — no mass, no READY, no orders
+# ---------------------------------------------------------------------------
+
+
+def test_nextday_lookahead_policy_documented():
+    """T4: look-ahead policy is frozen and explicit (no feature T+1 leak)."""
+    p = dict(NEXTDAY_LOOKAHEAD_POLICY)
+    assert p["no_feature_lookahead"] is True
+    assert p["feature_as_of"] == "signal_day_T_session_close"
+    assert p["evaluation_as_of"] == "next_trading_day_T1_session_close"
+    assert "close(T+1)/close(T)" in p["return_definition"]
+    assert p["ready_declared"] is False
+    assert p["mass_research"] == "NO-GO"
+    assert p["label"] == "研究用・未宣言"
+    assert session_close_as_of("2026-08-07") == "2026-08-07T15:30:00+09:00"
+
+
+def test_build_equity_close_index_and_next_trading_day_map():
+    tip = {
+        "equities_bars_daily": [
+            {
+                "code": "13010",
+                "date": "2026-08-06",
+                "close": 100.0,
+                "available_at": "2026-08-06T15:30:00+09:00",
+            },
+            {
+                "code": "13010",
+                "date": "2026-08-07",
+                "close": 110.0,
+                "available_at": "2026-08-07T15:30:00+09:00",
+            },
+        ]
+    }
+    idx = build_equity_close_index(tip)
+    assert idx[("13010", "2026-08-06")]["close"] == 100.0
+    assert next_trading_day_map(["2026-08-07", "2026-08-06", "2026-08-10"]) == {
+        "2026-08-06": "2026-08-07",
+        "2026-08-07": "2026-08-10",
+        "2026-08-10": None,
+    }
+
+
+def test_attach_next_day_returns_pit_and_formula():
+    """T1 unit: return uses T/T+1 closes; PIT gate + null at tip edge."""
+    close_index = {
+        ("13010", "2026-08-06"): {
+            "close": 100.0,
+            "available_at": "2026-08-06T15:30:00+09:00",
+        },
+        ("13010", "2026-08-07"): {
+            "close": 105.0,
+            "available_at": "2026-08-07T15:30:00+09:00",
+        },
+        ("72030", "2026-08-06"): {
+            "close": 200.0,
+            "available_at": "2026-08-06T15:30:00+09:00",
+        },
+        # 72030 missing T+1 → null return
+    }
+    obs = [
+        {"code": "13010", "value": 1.0},
+        {"code": "72030", "value": -1.0},
+    ]
+    aligned = attach_next_day_returns(
+        obs,
+        signal_date="2026-08-06",
+        next_date="2026-08-07",
+        close_index=close_index,
+        # evaluation_as_of = T+1 close (research convention)
+        evaluation_as_of="2026-08-07T15:30:00+09:00",
+        feature_as_of="2026-08-06T15:30:00+09:00",
+    )
+    assert aligned[0]["next_day_return"] == pytest.approx(0.05)
+    assert aligned[0]["feature_as_of"] == "2026-08-06T15:30:00+09:00"
+    assert aligned[0]["evaluation_as_of"] == "2026-08-07T15:30:00+09:00"
+    assert aligned[0]["next_day_return_pit_ok"] is True
+    assert aligned[1]["next_day_return"] is None
+    assert aligned[1]["next_day_return_null_reason"] == "missing_close_T1"
+
+    # PIT fail: T+1 bar available_at after evaluation_as_of → null (no look-ahead)
+    late = {
+        ("13010", "2026-08-06"): {
+            "close": 100.0,
+            "available_at": "2026-08-06T15:30:00+09:00",
+        },
+        ("13010", "2026-08-07"): {
+            "close": 105.0,
+            "available_at": "2026-08-08T00:00:00+09:00",  # after eval as_of
+        },
+    }
+    pit_fail = attach_next_day_returns(
+        [{"code": "13010", "value": 1.0}],
+        signal_date="2026-08-06",
+        next_date="2026-08-07",
+        close_index=late,
+        evaluation_as_of="2026-08-07T15:30:00+09:00",
+    )
+    assert pit_fail[0]["next_day_return"] is None
+    assert pit_fail[0]["next_day_return_null_reason"] == "pit_fail_T1"
+
+    # No next trading day → null
+    edge = attach_next_day_returns(
+        [{"code": "13010", "value": 1.0}],
+        signal_date="2026-08-12",
+        next_date=None,
+        close_index=close_index,
+    )
+    assert edge[0]["next_day_return"] is None
+    assert edge[0]["next_day_return_null_reason"] == "no_next_trading_day"
+
+
+def test_summarize_nextday_by_sign_means_and_null_rates():
+    """T2 unit: mean next-day return by +1 / 0 / −1 + null rates."""
+    rows = [
+        {"value": 1.0, "next_day_return": 0.02},
+        {"value": 1.0, "next_day_return": 0.04},
+        {"value": -1.0, "next_day_return": -0.01},
+        {"value": -1.0, "next_day_return": None},
+        {"value": 0.0, "next_day_return": 0.0},
+        {"value": None, "next_day_return": 0.10},
+    ]
+    s = summarize_nextday_by_sign(rows)
+    assert s["label"] == "研究用・未宣言"
+    assert s["ready_declared"] is False
+    assert s["mass_research"] == "NO-GO"
+    assert s["by_sign"]["+1"]["count"] == 2
+    assert s["by_sign"]["+1"]["mean_next_day_return"] == pytest.approx(0.03)
+    assert s["by_sign"]["+1"]["null_return_count"] == 0
+    assert s["by_sign"]["-1"]["count"] == 2
+    assert s["by_sign"]["-1"]["null_return_count"] == 1
+    assert s["by_sign"]["-1"]["null_return_rate"] == pytest.approx(0.5)
+    assert s["by_sign"]["-1"]["mean_next_day_return"] == pytest.approx(-0.01)
+    assert s["by_sign"]["0"]["mean_next_day_return"] == pytest.approx(0.0)
+    assert s["by_sign"]["null_signal"]["count"] == 1
+    assert "look_ahead_policy" in s
+    assert s["look_ahead_policy"]["no_feature_lookahead"] is True
+
+
+def test_execute_multiday_nextday_return_eval_batch(tmp_path: Path):
+    """T1–T3 unit: multiday + next-day attach → batch_summary nextday_return."""
+    puts: dict[str, bytes] = {}
+
+    def fake_put(bucket: str, key: str, body: bytes):
+        puts[key] = body
+        return {"bucket": bucket, "key": key, "bytes": len(body), "status": "injected"}
+
+    # Signal days leave room for T+1 (08-12 still in synthetic tip).
+    eval_result = execute_multiday_nextday_return_eval(
+        period_start="2026-08-01",
+        period_end="2026-08-14",
+        job_id="w0815av-g1-nextday-unit",
+        codes=["13010", "72030"],
+        as_of_days=[
+            "2026-08-04",
+            "2026-08-05",
+            "2026-08-06",
+            "2026-08-07",
+            "2026-08-10",
+            "2026-08-11",
+        ],
+        max_days=10,
+        min_days=5,
+        dry_run=True,
+        d1_execute=_fake_d1_multiday,
+        r2_put=fake_put,
+        staging_dir=tmp_path,
+    )
+
+    assert eval_result.attach_nextday_returns is True
+    assert eval_result.n_days == 6
+    assert eval_result.mass_research == "NO-GO"
+    assert eval_result.phase7 == "OFF"
+    assert eval_result.ready_declared is False
+    assert eval_result.local_sot is False
+    assert eval_result.batch_summary_r2_key == (
+        "research/single_shot/job=w0815av-g1-nextday-unit/batch_summary.json"
+    )
+    assert eval_result.batch_summary_r2_key in puts
+    body = json.loads(puts[eval_result.batch_summary_r2_key].decode("utf-8"))
+    assert body["attach_nextday_returns"] is True
+    assert body["label"] == "研究用・未宣言"
+    assert body["mass_research"] == "NO-GO"
+    assert body["ready_declared"] is False
+    assert body["order_execution"] is False
+    assert body["connected_to_mass_research_loop"] is False
+    assert "nextday_return" in body
+    nr = body["nextday_return"]
+    assert nr["label"] == "研究用・未宣言"
+    assert set(nr["by_sign"].keys()) == {"+1", "0", "-1", "null_signal"}
+    # Synthetic rising bars → non-null next-day returns for days with T+1.
+    assert nr["overall"]["non_null_return_count"] >= 1
+    assert nr["look_ahead_policy"]["no_feature_lookahead"] is True
+    # Per-day: feature_as_of is T close; evaluation_as_of is T+1 close when present.
+    for day in body["per_day"]:
+        d = day["date"]
+        assert day["feature_as_of"] == f"{d}T15:30:00+09:00"
+        if day.get("next_day_date"):
+            assert day["evaluation_as_of"] == (
+                f"{day['next_day_date']}T15:30:00+09:00"
+            )
+        # Sample carries next_day_return field when attached.
+        for sample in day.get("sample_values") or []:
+            assert "next_day_return" in sample
+    # R2 path prefix for this job.
+    assert body["artifact"]["batch_summary_r2_key"].startswith(
+        "research/single_shot/job=w0815av-g1-nextday-unit/"
+    )
+    day_keys = [k for k in puts if "/days/date=" in k and k.endswith("/signals.json")]
+    assert len(day_keys) == 6
+
+
+def test_nextday_eval_no_mass_ready_or_orders_ast():
+    """T4: nextday path stays single_shot; no mass/READY/orders imports."""
+    imported, called = _ast_imports_and_calls(SINGLE_SHOT_PATH)
+    src = SINGLE_SHOT_PATH.read_text(encoding="utf-8")
+    assert "execute_multiday_nextday_return_eval" in src
+    assert "NEXTDAY_LOOKAHEAD_POLICY" in src
+    assert "attach_next_day_returns" in src
+    assert "summarize_nextday_by_sign" in src
+    assert "agents" not in imported
+    assert "mass_research" not in imported
+    assert "start_mass_research" not in imported
+    assert "VerifiedResearchReadiness" not in imported
+    assert "OrderIntent" not in imported
+    assert "paper_service" not in imported
+    assert "place_order" not in called
+    assert "submit_order" not in called
+    assert "mint_ready" not in called
+    assert 'MASS_RESEARCH_STATUS: str = "NO-GO"' in src
+    assert 'PHASE7_STATUS: str = "OFF"' in src
+    assert "READY_DECLARED: bool = False" in src
+    # Look-ahead policy comments / constants present.
+    assert "no_feature_lookahead" in src
+    assert "研究用・未宣言" in src
+    # Feature as_of must remain T close (documented in policy + code).
+    assert "signal_day_T_session_close" in src
+    assert "next_trading_day_T1_session_close" in src
+
+
+def test_nextday_flag_off_preserves_w54_shape(tmp_path: Path):
+    """attach_nextday_returns=False keeps W54 batch shape (no nextday_return)."""
+    puts: dict[str, bytes] = {}
+
+    def fake_put(bucket: str, key: str, body: bytes):
+        puts[key] = body
+        return {"bucket": bucket, "key": key, "bytes": len(body), "status": "injected"}
+
+    eval_result = execute_multiday_signal_eval(
+        period_start="2026-08-01",
+        period_end="2026-08-14",
+        job_id="w0815au-g1-multiday-unit-compat",
+        codes=["13010", "72030"],
+        as_of_days=["2026-08-04", "2026-08-05", "2026-08-06", "2026-08-07", "2026-08-10"],
+        max_days=10,
+        min_days=5,
+        attach_nextday_returns=False,
+        dry_run=True,
+        d1_execute=_fake_d1_multiday,
+        r2_put=fake_put,
+        staging_dir=tmp_path,
+    )
+    assert eval_result.attach_nextday_returns is False
+    body = json.loads(puts[eval_result.batch_summary_r2_key].decode("utf-8"))
+    assert "nextday_return" not in body
+    assert body["version"] == "multiday-signal-batch/v1"
