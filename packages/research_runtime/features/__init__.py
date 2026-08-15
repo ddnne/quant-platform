@@ -45,6 +45,18 @@ from .v0 import (
     MomentumN,
     VolatilityN,
 )
+from .complete21_min import (
+    VolumeChange1d,
+    TopixRelative1d,
+    DisclosureFlagFins,
+)
+from .dataset_guard import (
+    COMPLETE_21_DATASETS,
+    PermanentDeferHistoryError,
+    filter_feature_datasets,
+    require_feature_dataset,
+    require_feature_datasets,
+)
 
 __all__ = [
     # registry
@@ -63,10 +75,20 @@ __all__ = [
     # runtime
     "compute",
     "compute_many",
-    # built-in features
+    # built-in features (v0)
     "Return1d",
     "MomentumN",
     "VolatilityN",
+    # COMPLETE 21 min features (candidate)
+    "VolumeChange1d",
+    "TopixRelative1d",
+    "DisclosureFlagFins",
+    # dataset guards
+    "COMPLETE_21_DATASETS",
+    "PermanentDeferHistoryError",
+    "filter_feature_datasets",
+    "require_feature_dataset",
+    "require_feature_datasets",
     # version
     "__version__",
 ]

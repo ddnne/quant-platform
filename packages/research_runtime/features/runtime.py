@@ -24,6 +24,7 @@ import pit
 from pit.query import resolve_db_path
 
 from . import registry as _registry
+from .dataset_guard import require_feature_dataset
 from .types import FeatureDefinition, FeatureOutput
 
 FEATURES_RUNTIME_VERSION = "0.6.0"
@@ -73,20 +74,46 @@ class FeatureContext:
         return self._pit_reader(resource, kwargs)
 
     def get_equity_bars_daily(self, **kwargs: Any):
-        """PIT daily bars with the context's trusted scope injected."""
+        """PIT daily bars with the context's trusted scope injected.
+
+        Maps to COMPLETE dataset ``equities_bars_daily`` (history-eligible).
+        """
+        require_feature_dataset(
+            "equities_bars_daily", context="FeatureContext.get_equity_bars_daily"
+        )
         return self._read("equity_bars_daily", kwargs)
 
     def get_equity_master(self, **kwargs: Any):
-        """PIT equity master with the context's trusted scope injected."""
+        """PIT equity master — **blocked** for feature history (permanent DEFER).
+
+        ``equities_master`` is PD-D2-MASTER (not Dataset COMPLETE). Features must
+        not use master history loads; raise :class:`PermanentDeferHistoryError`.
+        """
+        require_feature_dataset(
+            "equities_master", context="FeatureContext.get_equity_master"
+        )
         return self._read("equity_master", kwargs)
 
     def get_market_calendar(self, **kwargs: Any):
-        """PIT market calendar with the context's trusted scope injected."""
+        """PIT market calendar with the context's trusted scope injected.
+
+        Maps to COMPLETE dataset ``markets_calendar`` (history-eligible).
+        """
+        require_feature_dataset(
+            "markets_calendar", context="FeatureContext.get_market_calendar"
+        )
         return self._read("market_calendar", kwargs)
 
     def get_jquants_records(self, dataset: str, **kwargs: Any):
-        """PIT generic catalog records with trusted scope injected."""
-        return self._read("jquants_records", {"dataset": dataset, **kwargs})
+        """PIT generic catalog records with trusted scope injected.
+
+        Permanent DEFER dataset ids are fail-closed before the PIT read
+        (COMPLETE 21 usage readiness — features must not pull DEFER 5).
+        """
+        eligible = require_feature_dataset(
+            dataset, context="FeatureContext.get_jquants_records"
+        )
+        return self._read("jquants_records", {"dataset": eligible, **kwargs})
 
 
 def _require_as_of(as_of: Any) -> str:
