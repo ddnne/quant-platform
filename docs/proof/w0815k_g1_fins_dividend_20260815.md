@@ -188,6 +188,7 @@ Dataset remains **PARTIAL** (not dataset-level COMPLETE). Residual is honestly e
 | ref | SHA |
 |-----|-----|
 | PRE (wave start) | `1da0bfea93b9535e2a344d4119d512972c5d515e` |
-| proof commit / POST push | `02726b4c09014d5ab6dba99a1ddad3a01f5f4adf` |
+| proof commit | `02726b4c09014d5ab6dba99a1ddad3a01f5f4adf` |
+| POST push (fill HEAD) | `8ecd9a7c0524c4292e7aabbf07665e2a33ba1528` |
 
-Push: `origin/main` (`3925df0..02726b4`).
+Push: `origin/main` (`02726b4..8ecd9a7` fill; content `3925df0..02726b4`).
