@@ -1,8 +1,42 @@
 # Phase 6.2 / 6.3 residual status
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
-**Live verified:** 2026-08-15 (JST) / reeval PRE `2026-08-15T06:04:54Z` → POST `2026-08-15T06:11:48Z` UTC · **W38** contract floors **applied** (`history_target_start` **11** raises) · contract commit `ba3c81157c1528784e4909ca7e03e7c8076553c2` · residual DEFER re-align (`ddbd823`) · COMPLETE segs **3457→3457 (Δ0)** · Dataset COMPLETE **11→20 (+9)** · empty COMPLETE **0** · densify **none** · tip densify **not primary** (T7 held) · NO_DENSIFY **18→6** active · Permanent DEFER **5** · Phase7 **OFF** · FRESH `projgen-c54a409aaeef424e9c13394b82bd720b` · raw **not remeasured** (held W36 **15589**) · **CF-SoT** held — D1 = hot tip · R2 = history · COMPLETE = receipt-owned · **POST_PUSH_SHA** `afd7189647331de2d977f3ce2018ca34135bb5c1`
-**Repo tip:** `afd7189647331de2d977f3ce2018ca34135bb5c1` — contract `ba3c811` · residual DEFER `ddbd823` · COMPLETE **3457** / Dataset COMPLETE **20** / empty COMPLETE **0** / Phase7 **OFF**
+**Live verified:** 2026-08-15 (JST) / tip PRE `2026-08-15T06:19:54Z` → POST `2026-08-15T06:28:19Z` UTC · **W39** continuous collect · W38 contract floors **still SoT** (`ba3c811`) · COMPLETE segs **3457→3457 (Δ0)** · Dataset COMPLETE **20 held** · empty COMPLETE **0** · tip raw **15642→15673 (+31 secondary)** · tip densify **not primary** · actionable_n **0** · mb **2015-03** DEFER_thin_partial_month (densify once rows=0 · seal 0) · Permanent DEFER **5** held · Phase7 **OFF** · FRESH `projgen-870c78f492424ab6a93267adf5d37375` · **CF-SoT** held — D1 = hot tip · R2 = history · COMPLETE = receipt-owned · **POST_PUSH_SHA** `POST_PUSH_SHA`
+**Repo tip:** `POST_PUSH_SHA` — W39 ops · COMPLETE **3457** / Dataset COMPLETE **20** / empty COMPLETE **0** / raw **15673** / Phase7 **OFF**
+
+## W39 / w0815af — continuous collect ops (JQ tip + JSDA/MB + gap) (FINAL)
+
+**Ops close proof:** [`docs/proof/w0815af_w39_collect_ops_20260815.md`](proof/w0815af_w39_collect_ops_20260815.md)  
+**Machine:** tip [`.glm-logs/w0815af_g1_tip/FINAL_metrics.json`](../.glm-logs/w0815af_g1_tip/FINAL_metrics.json) · JSDA+MB [`.glm-logs/w0815af_g2_jsda_mb/jsda_summary.json`](../.glm-logs/w0815af_g2_jsda_mb/jsda_summary.json) · gap [`.glm-logs/w0815af_g3_gap/SUMMARY.json`](../.glm-logs/w0815af_g3_gap/SUMMARY.json)
+
+| gate | status |
+|------|--------|
+| COMPLETE segs | **3457 → 3457 (Δ0)** — **PRIMARY** |
+| Dataset COMPLETE | **20 held** — **PRIMARY** (W38 contract still SoT) |
+| Tip densify | **secondary** — raw **15642→15673 (+31)** · general 27p/0f @495 · fins 3p/0f @100 · 0×429 · seal **0** |
+| JSDA OTC | **72→72** · FULL_OK_NEW **0** · S260817 refetch only · corp/repo COMPLETE skip · hot D1 **SKIP** 252 |
+| mb 2015-03 | densify once rows=**0** → **DEFER_thin_partial_month** · HAS_RAW_SEALABLE **false** · seal **0** |
+| Gap | actionable_n **0** · densify **none** · empty COMPLETE **0** · verdict GAP_HELD_NO_ACTIONABLE |
+| Permanent DEFER | **5** held (PD-D2-MASTER · PD-D4-EARN-CAL · PD-D4-BARS-AM · PD-D5-JSDA-OTC · PD-MX-EARN-TIP) |
+| Floors / contract | **unchanged** this wave (W38 `ba3c811` still SoT) |
+| empty-raw COMPLETE / Mass / READY / Phase7 | **ban / NO-GO / OFF** |
+| Projection | **FRESH** `projgen-870c78f492424ab6a93267adf5d37375` |
+| CF-SoT | D1 **hot tip** · R2 **history** · COMPLETE **receipt-owned** |
+| Push | **POST_PUSH_SHA** `POST_PUSH_SHA` |
+
+**Primary success:** COMPLETE segs Δ0 + Dataset COMPLETE held 20.  
+**Secondary only:** tip raw +31. **Not** tip-as-primary. **Not** densify-as-success.
+
+### Residual PARTIAL after W39 (unchanged set; all non-actionable)
+
+| dataset | PARTIAL n | disposition |
+|---------|----------:|-------------|
+| `equities_master` | **94** | permanent DEFER PD-D2-MASTER |
+| `equities_earnings_calendar` | **199** | permanent DEFER PD-D4-EARN-CAL |
+| `equities_bars_daily_am` | **31** | permanent DEFER PD-D4-BARS-AM |
+| `jsda_otc_bond_reference_prices` | **8709** | permanent DEFER PD-D5-JSDA-OTC (tip COMPLETE **72**) |
+| `fins_earnings_date` | **4** | permanent DEFER PD-MX-EARN-TIP `2026-01…04` |
+| `markets_breakdown` | **1** | **DEFER_thin_partial_month** `2015-03` (W39 densify once rows=0; first full COMPLETE **2015-04**) |
 
 ## W38 / w0815ae — contract floor raise + residual DEFER re-align + reeval (FINAL)
 
