@@ -12,7 +12,7 @@
 
 **Live verified:** 2026-08-15 (JST) / ~2026-08-15T02:40Z UTC  
 **Base HEAD (pre-proof):** `306bebb`  
-**Proof HEAD (post-push):** _(filled after push)_  
+**Proof HEAD (post-push):** `d1f0a68`  
 **Projection freshness reclock:** `projgen-04a6a3dde3934161afd6fcef31b7dcbd` · `coverage_segments_untouched=1` · Mass **NO-GO**
 
 ## Rule (fixed)
@@ -240,4 +240,4 @@ cat .glm-logs/w0815t_g5_edinet/defer_condition.txt
 
 ## Report line
 
-`SHA=306bebb… COMPLETE PRE major/cross/large=104/76/62 POST=104/76/62 (+0/+0/+0); closed_this_wave=0/0/0; residual DEFER fixed cross=28 large=42; matrix HAS_RAW=0 EMPTY=70; sealable_nz=0; densify ban held; empty COMPLETE=0; platform remote 3457 held; Mass=NO-GO; FRESH projgen-04a6a3dd…`
+`SHA=d1f0a68ca847ee441897f3eddfb542e3954cfcff COMPLETE PRE major/cross/large=104/76/62 POST=104/76/62 (+0/+0/+0); closed_this_wave=0/0/0; residual DEFER fixed cross=28 large=42; matrix HAS_RAW=0 EMPTY=70; sealable_nz=0; densify ban held; empty COMPLETE=0; platform remote 3457 held; Mass=NO-GO; FRESH projgen-04a6a3dd…`
