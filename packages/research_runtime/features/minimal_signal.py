@@ -1,14 +1,14 @@
-"""Minimal COMPLETE-21 tip signal (W52 / w0815as_g2 · T5).
+"""Minimal COMPLETE-21 tip signal (W52 / w0815as_g2 · T5; W53 primary promote).
 
 One research signal built from the strongest tip-ready COMPLETE-21 min
-features. G1 mid-wave promotion (prefer approved when available):
+features. Prefer approved legs when available:
 
-* primary: ``sign(topix_relative_1d)``  →  +1 / 0 / −1  (**candidate**)
+* primary: ``sign(topix_relative_1d)``  →  +1 / 0 / −1  (**approved** · W53)
 * filter:  ``is_trading_day == 1.0`` (non-trading → signal None) (**approved**)
 * optional gate: ``volume_change_1d`` absolute threshold (**approved**)
 
-Overall signal stays ``candidate_only=True`` because the primary leg is still
-``topix_relative_1d`` (not promoted). No READY / strategy-default claim.
+``candidate_only=False`` after W53 primary promotion. Signal status remains
+``candidate`` (not READY / not strategy-default / Mass OFF).
 
 Hard constraints (T7):
 
@@ -31,17 +31,17 @@ from typing import Any, Mapping, Sequence
 SIGNAL_ID: str = "c21_topix_relative_sign"
 SIGNAL_VERSION: str = "1.0.0"
 SIGNAL_STATUS: str = "candidate"  # not READY; not strategy-default
-# Primary leg remains candidate (G1 promoted only is_trading_day + volume_change_1d).
-CANDIDATE_ONLY: bool = True
+# Primary + filter + gate are all registry-approved after W53 (still no READY).
+CANDIDATE_ONLY: bool = False
 
-# Feature ids this signal consumes (prefer approved filter/gate; primary candidate).
-PRIMARY_FEATURE_ID: str = "topix_relative_1d"  # candidate
+# Feature ids this signal consumes (all approved after W53 primary promote).
+PRIMARY_FEATURE_ID: str = "topix_relative_1d"  # approved (W53)
 FILTER_FEATURE_ID: str = "is_trading_day"  # approved (W52 G1)
 GATE_FEATURE_ID: str = "volume_change_1d"  # approved (W52 G1)
 
 # Registry status pins at signal-definition time (documentation; not a gate).
 FEATURE_STATUS_PINS: dict[str, str] = {
-    PRIMARY_FEATURE_ID: "candidate",
+    PRIMARY_FEATURE_ID: "approved",
     FILTER_FEATURE_ID: "approved",
     GATE_FEATURE_ID: "approved",
 }
@@ -331,7 +331,7 @@ def compute_signal_from_feature_observations(
         "order_execution": ORDER_EXECUTION,
         "local_sot": False,
         "note": (
-            "COMPLETE-21 candidate-only minimal signal on tip feature values. "
+            "COMPLETE-21 minimal tip signal (legs approved; signal status candidate). "
             "Not READY. Not mass research. No order execution."
         ),
     }
@@ -361,8 +361,9 @@ def signal_definition() -> dict[str, Any]:
         "ready_declared": READY_DECLARED,
         "order_execution": ORDER_EXECUTION,
         "note": (
-            "candidate_only because primary topix_relative_1d is still candidate; "
-            "filter/gate prefer G1-approved is_trading_day + volume_change_1d."
+            "candidate_only=False after W53 primary topix_relative_1d promote; "
+            "all three legs approved (v1.0.0). Signal status remains candidate "
+            "(not READY / Mass OFF / no orders)."
         ),
     }
 

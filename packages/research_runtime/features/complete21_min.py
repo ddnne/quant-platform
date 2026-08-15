@@ -1,4 +1,4 @@
-"""Minimal COMPLETE-21-only features (W49–W52 / w0815as_g1).
+"""Minimal COMPLETE-21-only features (W49–W53 / w0815at_g1).
 
 All features:
 
@@ -6,11 +6,13 @@ All features:
 * call :func:`require_feature_datasets` (permanent DEFER fail-closed) before
   any PIT read.
 
-Promotion (W52 / w0815as_g1 · T1–T4):
+Promotion:
 
-* ``status="approved"`` (version pin ``1.0.0``): ``is_trading_day``,
-  ``volume_change_1d`` — only after I*/Q*/O2 gates in the W52 proof.
-* Remaining 8 stay ``status="candidate"``.
+* W52 / w0815as_g1: ``is_trading_day``, ``volume_change_1d`` → approved
+  (version pin ``1.0.0``).
+* W53 / w0815at_g1 O2 re-eval: ``topix_relative_1d``, ``disclosure_flag_fins``,
+  ``margin_interest_change_1d`` → approved (version pin ``1.0.0``) after
+  feature-level CF tip E2E non-null proof. Remaining 5 stay candidate.
 * No READY / Mass / Phase7 claim. ``get_for_strategy`` still admits only
   approved + strategy-facing roles (utility requires explicit role override).
 
@@ -505,7 +507,7 @@ TopixRelative1d: FeatureDefinition = register(
         compute=_topix_relative_1d,
         tags=("return", "relative", "topix", "complete21"),
         intended_role="signal",
-        status="candidate",
+        status="approved",  # W53 O2 promotion; version pin 1.0.0
         price_basis=RAW,
     )
 )
@@ -546,7 +548,7 @@ DisclosureFlagFins: FeatureDefinition = register(
         compute=_disclosure_flag_fins,
         tags=("disclosure", "fins", "flag", "complete21"),
         intended_role="signal",
-        status="candidate",
+        status="approved",  # W53 O2 promotion; version pin 1.0.0
         price_basis=None,
     )
 )
@@ -593,7 +595,7 @@ MarginInterestChange1d: FeatureDefinition = register(
         compute=_margin_interest_change_1d,
         tags=("margin", "interest", "complete21"),
         intended_role="signal",
-        status="candidate",
+        status="approved",  # W53 O2 promotion; version pin 1.0.0
         price_basis=None,
     )
 )

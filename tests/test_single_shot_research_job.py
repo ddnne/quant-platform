@@ -499,14 +499,14 @@ def test_execute_with_features_writes_manifest_feature_stats(tmp_path: Path):
         assert "row_counts" in block
         assert "null_counts" in block
     feat_body = json.loads(puts[ex.features_r2_key].decode("utf-8"))
-    # W52: default set mixes approved (volume/calendar) + candidate (topix)
+    # W53: default tip set is all approved (volume/calendar/topix)
     assert feat_body["status"] in ("mixed", "approved", "candidate")
     assert feat_body["ready_declared"] is False
     assert feat_body["local_sot"] is False
     by_fid = {b["feature_id"]: b for b in feat_body["features"]}
     assert by_fid["volume_change_1d"]["status"] == "approved"
     assert by_fid["is_trading_day"]["status"] == "approved"
-    assert by_fid["topix_relative_1d"]["status"] == "candidate"
+    assert by_fid["topix_relative_1d"]["status"] == "approved"
 
 
 def test_execute_features_rejects_defer_before_d1():
@@ -550,7 +550,7 @@ def test_minimal_signal_pure_helpers():
     )
     assert long["value"] == 1.0
     assert long["signal_id"] == DEFAULT_SIGNAL_ID
-    assert long["candidate_only"] is True
+    assert long["candidate_only"] is False
     assert long["metadata"]["order_execution"] is False
     assert long["metadata"]["ready_declared"] is False
 
@@ -675,8 +675,8 @@ def test_execute_compute_signals_writes_signals_artifact(tmp_path: Path):
     assert ex.features_r2_key is not None
     assert ex.signal_result is not None
     assert ex.signal_result["signal_id"] == DEFAULT_SIGNAL_ID
-    assert ex.signal_result["candidate_only"] is True
-    assert SIGNAL_CANDIDATE_ONLY is True
+    assert ex.signal_result["candidate_only"] is False
+    assert SIGNAL_CANDIDATE_ONLY is False
     assert ex.signal_result["order_execution"] is False
     assert ex.signal_result["ready_declared"] is False
     # 5 puts: input_plan, result, features, signals, manifest
@@ -686,11 +686,11 @@ def test_execute_compute_signals_writes_signals_artifact(tmp_path: Path):
     assert manifest["compute_signals"] is True
     assert manifest["order_execution"] is False
     assert manifest["signal"]["signal_id"] == DEFAULT_SIGNAL_ID
-    assert manifest["signal"]["candidate_only"] is True
+    assert manifest["signal"]["candidate_only"] is False
     assert "signals" in manifest["keys"]
     sig_body = json.loads(puts[ex.signals_r2_key].decode("utf-8"))
     assert sig_body["signal_id"] == DEFAULT_SIGNAL_ID
-    assert sig_body["candidate_only"] is True
+    assert sig_body["candidate_only"] is False
     assert sig_body["order_execution"] is False
     assert sig_body["local_sot"] is False
     # equity +2% vs topix +0.33% → positive relative → long

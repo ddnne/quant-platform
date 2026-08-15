@@ -1,10 +1,57 @@
 # Phase 6.2 / 6.3 residual status
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
-**Live verified:** 2026-08-15 (JST) / **W52** approved/シグナル下地（READY 未宣言） FINAL · COMPLETE segs **3478** · Dataset COMPLETE **21 / 26** · PARTIAL = **5** permanent DEFER only · **actionable_gap = 0** · empty COMPLETE **0** · **OTC 93** tip island held · permanent DEFER **5** / NO_DENSIFY **6** · densify coverage loops **ENDED** · Mass/READY/Phase7 **NO-GO/OFF** · raw **15915** (remote verify; W46 tip secondary baseline **15869** held) · FRESH `projgen-97e38cc4670f4003901a2ca3b1b0ba37` · **CF-SoT** held — D1 = hot tip · R2 = history · COMPLETE = receipt-owned · floors W38 + W42 mb **2015-04-01** **not lowered** · coverage baseline **W47 FINAL held** · READY **not declared** · tip densify **SKIP** · densify **none** · promotion **2 approved** (cap max 2 · `volume_change_1d` · `is_trading_day` · v1.0.0) · signal E2E Mass **OFF** · **POST_PUSH_SHA** `7f5f0051e9e5a114a01a74c73ba29a3fc90a669f` · PRE_sha `816fed4d98e8ad6dbec26f0152a36e013f574167`
+**Live verified:** 2026-08-15 (JST) / **W53** O2強化・再評価（READY 未宣言） FINAL · COMPLETE segs **3478** · Dataset COMPLETE **21 / 26** · PARTIAL = **5** permanent DEFER only · **actionable_gap = 0** · empty COMPLETE **0** · **OTC 93** tip island held · permanent DEFER **5** / NO_DENSIFY **6** · densify coverage loops **ENDED** · Mass/READY/Phase7 **NO-GO/OFF** · raw **15915** (remote verify; W46 tip secondary baseline **15869** held) · FRESH `projgen-d2cc11b67ad84724afaffbe4c000b59c` · **CF-SoT** held — D1 = hot tip · R2 = history · COMPLETE = receipt-owned · floors W38 + W42 mb **2015-04-01** **not lowered** · coverage baseline **W47 FINAL held** · READY **not declared** · tip densify **SKIP** · densify **none** · promotion **5 approved** (W52 **2** + W53 O2 **+3** · v1.0.0) · signal 2nd E2E Mass **OFF** · status=`candidate` · **candidate_only=False** (legs approved) · **POST_PUSH_SHA** `POST_PUSH_SHA_PENDING` · PRE_sha `b6dc56a7ec771c1408a5477c7857752da4856dcf`
 
-**Repo tip:** `7f5f0051e9e5a114a01a74c73ba29a3fc90a669f` — W52 approved/シグナル下地 FINAL · COMPLETE **3478** / Dataset COMPLETE **21** / OTC **93** / empty COMPLETE **0** / **actionable_gap = 0** / Phase7 **OFF** / READY **未宣言** · FRESH `projgen-97e38cc4670f4003901a2ca3b1b0ba37` · promotion **2/2 max** · signal **candidate_only** · **POST_PUSH_SHA** `7f5f0051e9e5a114a01a74c73ba29a3fc90a669f`
+**Repo tip:** `POST_PUSH_SHA_PENDING` — W53 O2強化・再評価 FINAL · COMPLETE **3478** / Dataset COMPLETE **21** / OTC **93** / empty COMPLETE **0** / **actionable_gap = 0** / Phase7 **OFF** / READY **未宣言** · FRESH `projgen-d2cc11b67ad84724afaffbe4c000b59c` · promotion **5 approved** / **5 candidate** · signal **2nd E2E** · tip densify **SKIP** · **POST_PUSH_SHA** `POST_PUSH_SHA_PENDING`
 
+
+## O2強化・再評価（READY 未宣言）
+
+**Phase name:** COMPLETE 21 O2強化・再評価（宣言なし）  
+**Wave:** W53 / w0815at (T1–T12 · G5 FINAL merge + push)  
+**O2/signal close proof:** [`docs/proof/w0815at_w53_o2_signal_close_20260815.md`](proof/w0815at_w53_o2_signal_close_20260815.md)  
+**O2 promotion proof:** [`docs/proof/w0815at_w53_o2_promotion_20260815.md`](proof/w0815at_w53_o2_promotion_20260815.md)  
+**Signal 2nd E2E proof:** [`docs/proof/w0815at_w53_signal_e2e_20260815.md`](proof/w0815at_w53_signal_e2e_20260815.md) · spec [`docs/proof/c21_topix_relative_sign_spec_20260815.md`](proof/c21_topix_relative_sign_spec_20260815.md)  
+**Ops / residual (G4):** [`.glm-logs/w0815at_g4_ops/`](../.glm-logs/w0815at_g4_ops/) · [`ops_snapshot.json`](../.glm-logs/w0815at_g4_ops/ops_snapshot.json) · [`switch_check.json`](../.glm-logs/w0815at_g4_ops/switch_check.json) · [`FINAL_metrics.json`](../.glm-logs/w0815at_g4_ops/FINAL_metrics.json)  
+**O2 feature E2E (G1):** [`.glm-logs/w0815at_g1_o2/`](../.glm-logs/w0815at_g1_o2/) · [`O2_RESULTS_MATRIX.json`](../.glm-logs/w0815at_g1_o2/O2_RESULTS_MATRIX.json) · tip single_shot feature jobs · **o2_pass**: `topix_relative_1d` · `disclosure_flag_fins` · `margin_interest_change_1d` (PIT path; Aug tip margin weekly lag held)  
+**Promotion (G1):** `packages/research_runtime/features/complete21_min.py` · this wave **+3 approved** (version pin **1.0.0**): `topix_relative_1d` · `disclosure_flag_fins` · `margin_interest_change_1d` · **total 5 approved** (incl. W52 `volume_change_1d` · `is_trading_day`) · remain **5 candidate** · criteria [`docs/proof/complete21_feature_candidate_to_approved_criteria_20260815.md`](proof/complete21_feature_candidate_to_approved_criteria_20260815.md)  
+**Signal 2nd E2E (G2):** `packages/research_runtime/features/minimal_signal.py` · signal `c21_topix_relative_sign@1.0.0` · `status=candidate` · **candidate_only=False** (primary/filter/gate legs approved) · Mass **OFF** · no orders · no READY · job `w0815at-g2-signal-e2e` · codes `67580`/`83060` · as_of `2026-08-07T15:30:00+09:00` (**≠** W52) · **e2e_pass=true** · R2 `…/signals/` · logs [`.glm-logs/w0815at_g2_signal/`](../.glm-logs/w0815at_g2_signal/)  
+**Smokes / FRESH (G3):** [`.glm-logs/w0815at_g3_ops/`](../.glm-logs/w0815at_g3_ops/) · T8 bars×short_sale_report **pass** · T9 FRESH reclock `projgen-d2cc11b67ad84724afaffbe4c000b59c` · T10 freeze pytest **84** (pre-G1 expand)  
+**Catalog:** [`docs/proof/complete21_min_feature_catalog_20260815.md`](proof/complete21_min_feature_catalog_20260815.md) (code SoT = `complete21_min.py` **5 approved / 5 candidate**)  
+**Unit tests (merge):** features + permanent_defer + single_shot + mass gate · **87 passed**  
+**Prior W52 approved/シグナル下地:** § approved/シグナル下地 held underneath · W51 feature E2E · W50 usage E2E · W49 deepen · W48 groundwork · coverage baseline **W47 FINAL** held
+
+| gate | status |
+|------|--------|
+| Phase name | **COMPLETE 21 O2強化・再評価（宣言なし）** |
+| Coverage baseline FINAL | **held** (W47 FINAL · Dataset COMPLETE **21/26** · segs **3478** · **actionable_gap=0**) |
+| READY | **未宣言 / not declared** |
+| Mass | **NO-GO / OFF** (signal 2nd E2E Mass **OFF**) |
+| Phase7 | **OFF** (foundation / fail-closed only) — **reconfirmed** this wave |
+| empty COMPLETE | **0** (remote verify G4 + G5 re-verify) |
+| Dataset COMPLETE | **21** (remote verify held; not invent 22) |
+| COMPLETE segs | **3478** (remote verify held · Δ0) |
+| OTC tip island | **93** held |
+| permanent DEFER | **5** held |
+| tip densify | **SKIP** (T12 · not primary this phase) |
+| densify | **none** |
+| push | **POST_PUSH_SHA** `POST_PUSH_SHA_PENDING` (G5 FINAL merge) · PRE_sha `b6dc56a7ec771c1408a5477c7857752da4856dcf` |
+| Projection | **FRESH** `projgen-d2cc11b67ad84724afaffbe4c000b59c` (peer G3 T9 ops_reeval_freshness; residual FRESH sync; publish apply **SKIP** no segment drift; fail-closed no force) |
+| O2 feature E2E | G1 **PASS** — tip FeatureContext → R2 for `topix_relative_1d` · `disclosure_flag_fins` · `margin_interest_change_1d` (margin Jul tip + PIT as_of) · Mass **not** connected |
+| Promotion | **+3 this wave** → **5 approved** total · `topix_relative_1d` · `disclosure_flag_fins` · `margin_interest_change_1d` (+ W52 `volume_change_1d` · `is_trading_day`) · v**1.0.0** · remain **5 candidate** · no READY claim |
+| Signal 2nd E2E | Mass **OFF** · `c21_topix_relative_sign@1.0.0` · status **candidate** · **candidate_only=False** · no order execution · R2 `…/signals/` · job `w0815at-g2-signal-e2e` |
+| Unit tests | **87 passed** (complete21 min · permanent_defer · single_shot · mass gate) |
+| raw_retention | **15915** (remote count at G4; not coverage primary; W46 tip secondary **15869** held) |
+
+**Primary this phase:** O2 (CF tip feature-level E2E) 強化 + re-eval promotion (**+3**) + second tip **signal** E2E on held COMPLETE **21** / DEFER **5** — **without** READY / Mass / Phase7 declaration.  
+**Not:** densify · tip primary · invent COMPLETE 22 · Phase7 ON · READY GO · mass ON · treat signal as READY · force remaining 5 candidates.
+
+### Explicit non-declarations (held)
+
+- **READY** — not declared (O2強化・再評価 only; no production READY GO)
+- **Mass Autonomous Research** — **NO-GO / OFF** (signal 2nd E2E Mass OFF)
+- **Phase7** — **OFF** (no `PHASE7_*` / `MASS_RESEARCH_ENABLE` arming switch)
 
 ## approved/シグナル下地（READY 未宣言）
 
@@ -12,8 +59,8 @@
 **Wave:** W52 / w0815as (T1–T12 · G5 FINAL merge + push)  
 **Promotion/signal close proof:** [`docs/proof/w0815as_w52_promotion_signal_close_20260815.md`](proof/w0815as_w52_promotion_signal_close_20260815.md)  
 **Ops / residual (G4):** [`.glm-logs/w0815as_g4_ops/`](../.glm-logs/w0815as_g4_ops/) · [`ops_snapshot.json`](../.glm-logs/w0815as_g4_ops/ops_snapshot.json) · [`switch_check.json`](../.glm-logs/w0815as_g4_ops/switch_check.json) · [`FINAL_metrics.json`](../.glm-logs/w0815as_g4_ops/FINAL_metrics.json)  
-**Promotion (G1):** `packages/research_runtime/features/complete21_min.py` · **2 approved** (cap max **2** · version pin **1.0.0**): `volume_change_1d` (`intended_role=signal`) · `is_trading_day` (`intended_role=utility`) · remain **8 candidate** · criteria [`docs/proof/complete21_feature_candidate_to_approved_criteria_20260815.md`](proof/complete21_feature_candidate_to_approved_criteria_20260815.md) · eval [`docs/proof/w0815as_w52_feature_promotion_eval_20260815.md`](proof/w0815as_w52_feature_promotion_eval_20260815.md)  
-**Signal E2E (G2):** `packages/research_runtime/features/minimal_signal.py` · signal `c21_topix_relative_sign@1.0.0` · `status=candidate` · **candidate_only=True** · Mass **OFF** · no orders · no READY · single_shot path writes under `…/signals/` · job `w0815as-g2-signal-e2e` · proof [`docs/proof/w0815as_w52_signal_e2e_20260815.md`](proof/w0815as_w52_signal_e2e_20260815.md)  
+**Promotion (G1):** `packages/research_runtime/features/complete21_min.py` · **2 approved** at W52 close (cap max **2** · version pin **1.0.0**): `volume_change_1d` (`intended_role=signal`) · `is_trading_day` (`intended_role=utility`) · remain **8 candidate** at close · criteria [`docs/proof/complete21_feature_candidate_to_approved_criteria_20260815.md`](proof/complete21_feature_candidate_to_approved_criteria_20260815.md) · eval [`docs/proof/w0815as_w52_feature_promotion_eval_20260815.md`](proof/w0815as_w52_feature_promotion_eval_20260815.md) · **superseded** by W53 O2 +3 above  
+**Signal E2E (G2):** `packages/research_runtime/features/minimal_signal.py` · signal `c21_topix_relative_sign@1.0.0` · `status=candidate` · **candidate_only=True** at W52 close · Mass **OFF** · no orders · no READY · single_shot path writes under `…/signals/` · job `w0815as-g2-signal-e2e` · proof [`docs/proof/w0815as_w52_signal_e2e_20260815.md`](proof/w0815as_w52_signal_e2e_20260815.md)  
 **Smokes / FRESH (G3):** [`.glm-logs/w0815as_g3_ops/`](../.glm-logs/w0815as_g3_ops/) · T8 bars×short_ratio **pass** · T9 FRESH reclock `projgen-97e38cc4670f4003901a2ca3b1b0ba37` · T10 pytest **32**  
 **Catalog:** [`docs/proof/complete21_min_feature_catalog_20260815.md`](proof/complete21_min_feature_catalog_20260815.md)  
 **Unit tests (merge):** features + permanent_defer + single_shot + mass gate · **84 passed**  
@@ -34,9 +81,9 @@
 | tip densify | **SKIP** (T12 · not primary this phase) |
 | densify | **none** |
 | push | **POST_PUSH_SHA** `7f5f0051e9e5a114a01a74c73ba29a3fc90a669f` (G5 FINAL merge) · PRE_sha `816fed4d98e8ad6dbec26f0152a36e013f574167` |
-| Projection | **FRESH** `projgen-97e38cc4670f4003901a2ca3b1b0ba37` (peer G3 T9 ops_reeval_freshness; residual FRESH sync; publish apply **SKIP** no segment drift; fail-closed no force) |
-| Promotion | **2 approved** (cap max **2**) · `volume_change_1d` · `is_trading_day` · v**1.0.0** · remain **8 candidate** · no READY claim |
-| Signal E2E | Mass **OFF** · `c21_topix_relative_sign@1.0.0` · **candidate_only** · no order execution · R2 `…/signals/` |
+| Projection | **FRESH** `projgen-97e38cc4670f4003901a2ca3b1b0ba37` (peer G3 T9 ops_reeval_freshness; residual FRESH sync; publish apply **SKIP** no segment drift; fail-closed no force) — **superseded** by W53 reclock above |
+| Promotion | **2 approved** at W52 close (cap max **2**) · `volume_change_1d` · `is_trading_day` · v**1.0.0** · remain **8 candidate** at close · no READY claim |
+| Signal E2E | Mass **OFF** · `c21_topix_relative_sign@1.0.0` · **candidate_only** at W52 · no order execution · R2 `…/signals/` |
 | Unit tests | **84 passed** (complete21 min · permanent_defer · single_shot · mass gate) |
 | raw_retention | **15915** (remote count at G4; not coverage primary; W46 tip secondary **15869** held) |
 

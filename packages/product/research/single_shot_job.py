@@ -74,8 +74,9 @@ DEFAULT_FEATURE_ROW_LIMIT: int = 400
 DEFAULT_FEATURE_CODE_LIMIT: int = 5
 
 # COMPLETE-21 min features used by the tip feature path (W51 default set).
-# W52: volume_change_1d + is_trading_day are registry-approved (v1.0.0 pin);
-# topix_relative_1d remains candidate. No READY / Mass / Phase7 claim.
+# W52–W53: volume_change_1d / is_trading_day / topix_relative_1d are
+# registry-approved (v1.0.0 pin). Name kept for path stability; statuses
+# mirror the registry. No READY / Mass / Phase7 claim.
 DEFAULT_CANDIDATE_FEATURES: tuple[str, ...] = (
     "volume_change_1d",
     "is_trading_day",
@@ -87,6 +88,21 @@ DEFAULT_FEATURE_DATASETS: tuple[str, ...] = (
     "equities_bars_daily",
     "markets_calendar",
     "indices_bars_daily_topix",
+)
+
+# Code-keyed tip extracts: apply natural_key Code filter when codes selected.
+# (Index / calendar / section / JSDA macro datasets are intentionally excluded.)
+_CODE_KEYED_TIP_DATASETS: frozenset[str] = frozenset(
+    {
+        "equities_bars_daily",
+        "fins_summary",
+        "fins_details",
+        "fins_dividend",
+        "markets_margin_interest",
+        "markets_margin_alert",
+        "markets_short_sale_report",
+        "equities_investor_types",
+    }
 )
 
 # W52 minimal signal: candidate_only while primary topix_relative_1d is candidate.
@@ -840,8 +856,10 @@ def extract_d1_tip_feature_rows(
         raw_counts[ds] = int((count_rows[0] or {}).get("n") or 0) if count_rows else 0
 
         where_extra = ""
-        if ds == "equities_bars_daily" and selected_codes:
+        if selected_codes and ds in _CODE_KEYED_TIP_DATASETS:
             # Precompute LIKE patterns (no backslash inside f-string expr on 3.11).
+            # Code-filter bars + code-keyed catalog tips (fins / margin / short / …)
+            # so LIMIT does not sample other issuers and miss the probe codes.
             like_parts = []
             for c in selected_codes:
                 nk_pat = '%"Code":"' + c + '"%'
@@ -1525,6 +1543,12 @@ def execute_single_shot_job(
             needed.append("indices_bars_daily_topix")
         if "margin_interest_change_1d" in fids and "markets_margin_interest" not in needed:
             needed.append("markets_margin_interest")
+        if "disclosure_flag_fins" in fids and "fins_summary" not in needed:
+            needed.append("fins_summary")
+        if "margin_alert_flag" in fids and "markets_margin_alert" not in needed:
+            needed.append("markets_margin_alert")
+        if "return_1d_c21" in fids and "equities_bars_daily" not in needed:
+            needed.append("equities_bars_daily")
         if compute_signals:
             for ds in DEFAULT_SIGNAL_DATASETS:
                 if ds not in needed:

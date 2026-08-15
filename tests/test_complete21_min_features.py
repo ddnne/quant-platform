@@ -1,4 +1,4 @@
-"""COMPLETE 21 min features + feature-pipeline permanent DEFER guard (W49–W52).
+"""COMPLETE 21 min features + feature-pipeline permanent DEFER guard (W49–W53).
 
 W51 / w0815ar_g2:
 
@@ -9,8 +9,13 @@ W51 / w0815ar_g2:
 
 W52 / w0815as_g1:
 
-* Promote at most 2: ``is_trading_day`` + ``volume_change_1d`` → approved
-  (version pin 1.0.0). Remaining 8 stay candidate.
+* Promote: ``is_trading_day`` + ``volume_change_1d`` → approved (v1.0.0).
+
+W53 / w0815at_g1 O2:
+
+* Promote after feature-level CF tip E2E: ``topix_relative_1d``,
+  ``disclosure_flag_fins``, ``margin_interest_change_1d`` → approved (v1.0.0).
+* Remaining 5 stay candidate. No READY / Mass / Phase7.
 """
 
 from __future__ import annotations
@@ -71,10 +76,13 @@ COMPLETE21_MIN_IDS = (
     "futures_activity_proxy",
 )
 
-# W52 promotion set (max 2); version pin remains 1.0.0.
+# W52 + W53 O2 promotions; version pin remains 1.0.0.
 COMPLETE21_MIN_APPROVED_IDS = (
     "is_trading_day",
     "volume_change_1d",
+    "topix_relative_1d",
+    "disclosure_flag_fins",
+    "margin_interest_change_1d",
 )
 COMPLETE21_MIN_CANDIDATE_IDS = tuple(
     fid for fid in COMPLETE21_MIN_IDS if fid not in COMPLETE21_MIN_APPROVED_IDS
@@ -406,8 +414,8 @@ def test_complete21_min_requires_as_of(tmp_path):
         compute("margin_alert_flag", as_of=None, code=CODES[0], db_path=db)
 
 
-def test_complete21_min_w52_promotion_status_and_version_pin():
-    """W52: exactly 2 approved (pinned 1.0.0); remaining 8 stay candidate."""
+def test_complete21_min_w53_promotion_status_and_version_pin():
+    """W52+W53: 5 approved (pinned 1.0.0); remaining 5 stay candidate."""
     for fid in COMPLETE21_MIN_APPROVED_IDS:
         feat = get(fid)
         assert feat.status == "approved", fid
@@ -416,8 +424,8 @@ def test_complete21_min_w52_promotion_status_and_version_pin():
         feat = get(fid)
         assert feat.status == "candidate", fid
         assert feat.status != "approved", fid
-    assert len(COMPLETE21_MIN_APPROVED_IDS) == 2
-    assert len(COMPLETE21_MIN_CANDIDATE_IDS) == 8
+    assert len(COMPLETE21_MIN_APPROVED_IDS) == 5
+    assert len(COMPLETE21_MIN_CANDIDATE_IDS) == 5
 
 
 def test_get_for_strategy_admits_approved_signal_not_utility_or_candidate():
@@ -427,6 +435,15 @@ def test_get_for_strategy_admits_approved_signal_not_utility_or_candidate():
     assert vol.status == "approved"
     assert vol.intended_role == "signal"
     assert str(vol.version) == "1.0.0"
+
+    # W53 O2 promotes: topix / disclosure / margin also admitted as signal
+    topix = get_for_strategy("topix_relative_1d", version="1.0.0")
+    assert topix.status == "approved"
+    assert topix.intended_role == "signal"
+    disc = get_for_strategy("disclosure_flag_fins", version="1.0.0")
+    assert disc.status == "approved"
+    margin = get_for_strategy("margin_interest_change_1d", version="1.0.0")
+    assert margin.status == "approved"
 
     # is_trading_day: approved but utility → role gate rejects by default
     with pytest.raises(FeatureGovernanceError, match="utility"):
@@ -441,9 +458,9 @@ def test_get_for_strategy_admits_approved_signal_not_utility_or_candidate():
 
     # remaining complete21 min stay candidate → status gate rejects
     with pytest.raises(FeatureGovernanceError, match="candidate"):
-        get_for_strategy("topix_relative_1d")
-    with pytest.raises(FeatureGovernanceError, match="candidate"):
         get_for_strategy("return_1d_c21")
+    with pytest.raises(FeatureGovernanceError, match="candidate"):
+        get_for_strategy("short_ratio_level")
 
 
 def test_complete21_min_declared_datasets_reject_each_permanent_defer():
@@ -842,6 +859,51 @@ def test_topix_relative_1d_rejects_if_internal_datasets_were_defer(monkeypatch):
         assert ds not in PERMANENT_DEFER_DATASETS
 
 
+def test_topix_relative_1d_seeded_dual_leg(tmp_path):
+    """W53: dual-leg integration — equity return minus TOPIX return on seeded DB."""
+    days = ["2025-04-01", "2025-04-02"]
+    # Equity: 100 → 110 = +10%; TOPIX: 3000 → 3030 = +1% → relative +9%.
+    prices = {CODES[0]: {"2025-04-01": 100.0, "2025-04-02": 110.0}}
+    db = seed_db(tmp_path, days=days, prices=prices)
+    _upsert_jquants_records(
+        db,
+        dataset="indices_bars_daily_topix",
+        payloads=[
+            {"Date": "2025-04-01", "Close": 3000.0},
+            {"Date": "2025-04-02", "Close": 3030.0},
+        ],
+    )
+    out = compute(
+        "topix_relative_1d",
+        as_of=close_iso("2025-04-02"),
+        code=CODES[0],
+        db_path=db,
+    )
+    assert out.value == pytest.approx(0.09)
+    assert out.metadata["feature_id"] == "topix_relative_1d"
+    assert out.metadata["datasets"] == [
+        "equities_bars_daily",
+        "indices_bars_daily_topix",
+    ]
+    assert out.metadata["equity_ret"] == pytest.approx(0.10)
+    assert out.metadata["topix_ret"] == pytest.approx(0.01)
+
+
+def test_topix_relative_1d_insufficient_missing_topix_leg(tmp_path):
+    """Missing TOPIX leg → None (not raise)."""
+    days = ["2025-04-01", "2025-04-02"]
+    prices = {CODES[0]: {d: 100.0 + i for i, d in enumerate(days)}}
+    db = seed_db(tmp_path, days=days, prices=prices)
+    out = compute(
+        "topix_relative_1d",
+        as_of=close_iso(days[-1]),
+        code=CODES[0],
+        db_path=db,
+    )
+    assert out.value is None
+    assert "missing" in out.metadata["reason"]
+
+
 def test_disclosure_flag_fins_empty_db_is_zero(tmp_path):
     days = ["2025-04-01", "2025-04-02"]
     prices = {CODES[0]: {d: 100.0 for d in days}}
@@ -856,6 +918,29 @@ def test_disclosure_flag_fins_empty_db_is_zero(tmp_path):
     assert out.value == 0.0
     assert out.metadata["rows_seen"] == 0
     assert out.metadata["datasets"] == ["fins_summary"]
+
+
+def test_disclosure_flag_fins_seeded_positive(tmp_path):
+    """W53: positive path — any PIT-visible fins_summary row → 1.0."""
+    days = ["2025-04-01", "2025-04-02"]
+    prices = {CODES[0]: {d: 100.0 for d in days}}
+    db = seed_db(tmp_path, days=days, prices=prices)
+    _upsert_jquants_records(
+        db,
+        dataset="fins_summary",
+        payloads=[
+            {"Code": CODES[0], "Date": "2025-04-02", "NetSales": 123},
+        ],
+    )
+    out = compute(
+        "disclosure_flag_fins",
+        as_of=close_iso("2025-04-02"),
+        code=CODES[0],
+        db_path=db,
+    )
+    assert out.value == 1.0
+    assert out.metadata["rows_seen"] >= 1
+    assert out.metadata["feature_id"] == "disclosure_flag_fins"
 
 
 def test_v0_return_1d_still_works_with_guard(tmp_path):

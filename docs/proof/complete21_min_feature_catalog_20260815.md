@@ -1,10 +1,10 @@
 # COMPLETE 21 — minimal feature catalog (2026-08-15)
 
-**Wave:** W52 / w0815as_g1 · T1–T4 (extends W51 / w0815ar_g2 · W50 / w0815aq_g2 · W49 / w0815ap_g2)  
+**Wave:** W53 / w0815at_g1 O2 (extends W52 / w0815as_g1 · W51 / w0815ar_g2 · W50 / w0815aq_g2 · W49 / w0815ap_g2)  
 **Phase:** COMPLETE 21 **usage readiness** (利用準備) — feature catalog + min implementations + quality gates  
 **Mass / READY / Phase7:** **not** declared · **not** enabled · densify **not** run · push **not** this task  
-**Promotion (W52):** **2** approved — `is_trading_day` · `volume_change_1d` (version pin **1.0.0**); remaining **8** stay `candidate`  
-**Promotion eval proof:** [`w0815as_w52_feature_promotion_eval_20260815.md`](w0815as_w52_feature_promotion_eval_20260815.md)  
+**Promotion (W52+W53):** **5** approved — `is_trading_day` · `volume_change_1d` · `topix_relative_1d` · `disclosure_flag_fins` · `margin_interest_change_1d` (version pin **1.0.0**); remaining **5** stay `candidate`  
+**Promotion eval proofs:** [`w0815as_w52_feature_promotion_eval_20260815.md`](w0815as_w52_feature_promotion_eval_20260815.md) · [`w0815at_w53_o2_promotion_20260815.md`](w0815at_w53_o2_promotion_20260815.md)  
 **Candidate → approved criteria:** [`complete21_feature_candidate_to_approved_criteria_20260815.md`](complete21_feature_candidate_to_approved_criteria_20260815.md)
 
 **Sources:**
@@ -94,13 +94,13 @@ None of these declare READY.
 
 | feature_id | inputs (COMPLETE only) | formula (sketch) | status |
 |------------|------------------------|------------------|--------|
-| `topix_relative_1d` | `equities_bars_daily` + `indices_bars_daily_topix` | equity `return_1d` − TOPIX `return_1d` | **implemented** (complete21 min, candidate) |
+| `topix_relative_1d` | `equities_bars_daily` + `indices_bars_daily_topix` | equity `return_1d` − TOPIX `return_1d` | **implemented** (complete21 min, **approved** · v1.0.0 · W53 O2) |
 
 ### 2.3 Margin / short
 
 | feature_id | inputs (COMPLETE only) | formula (sketch) | status |
 |------------|------------------------|------------------|--------|
-| `margin_interest_change_1d` | `markets_margin_interest` | \((M_t - M_{t-1}) / M_{t-1}\) with \(M =\) LongVol + ShrtVol | **implemented** (complete21 min, candidate) |
+| `margin_interest_change_1d` | `markets_margin_interest` | \((M_t - M_{t-1}) / M_{t-1}\) with \(M =\) LongVol + ShrtVol | **implemented** (complete21 min, **approved** · v1.0.0 · W53 O2) |
 | `short_ratio_level` | `markets_short_ratio` | \((\)ShrtWithResVa + ShrtNoResVa\() / \)SellExShortVa for S33 section | **implemented** (complete21 min, candidate) |
 | `margin_alert_flag` | `markets_margin_alert` | 1.0 if any PIT-visible alert row for `code` at `as_of`, else 0.0 | **implemented** (complete21 min, candidate) · W51 |
 
@@ -108,7 +108,7 @@ None of these declare READY.
 
 | feature_id | inputs (COMPLETE only) | formula (sketch) | status |
 |------------|------------------------|------------------|--------|
-| `disclosure_flag_fins` | `fins_summary` | 1.0 if any PIT-visible summary row for `code` at `as_of`, else 0.0 | **implemented** (complete21 min, candidate) |
+| `disclosure_flag_fins` | `fins_summary` | 1.0 if any PIT-visible summary row for `code` at `as_of`, else 0.0 | **implemented** (complete21 min, **approved** · v1.0.0 · W53 O2) |
 | (future) dividend_announce_flag | `fins_dividend` | announcement presence | catalog only |
 | (future) edinet_major_holder_flag | `edinet_major_shareholders` | filing presence | catalog only |
 
@@ -139,9 +139,9 @@ Registered under `packages/research_runtime/features/complete21_min.py` (importe
 | id | version | intended_role | status | required datasets | wave |
 |----|---------|---------------|--------|-------------------|------|
 | `volume_change_1d` | **1.0.0** (pin) | signal | **approved** | `equities_bars_daily` | W49 → **W52 promote** |
-| `topix_relative_1d` | 1.0.0 | signal | candidate | `equities_bars_daily`, `indices_bars_daily_topix` | W49 |
-| `disclosure_flag_fins` | 1.0.0 | signal | candidate | `fins_summary` | W49 |
-| `margin_interest_change_1d` | 1.0.0 | signal | candidate | `markets_margin_interest` | W50 |
+| `topix_relative_1d` | **1.0.0** (pin) | signal | **approved** | `equities_bars_daily`, `indices_bars_daily_topix` | W49 → **W53 O2 promote** |
+| `disclosure_flag_fins` | **1.0.0** (pin) | signal | **approved** | `fins_summary` | W49 → **W53 O2 promote** |
+| `margin_interest_change_1d` | **1.0.0** (pin) | signal | **approved** | `markets_margin_interest` | W50 → **W53 O2 promote** |
 | `short_ratio_level` | 1.0.0 | signal | candidate | `markets_short_ratio` | W50 |
 | `is_trading_day` | **1.0.0** (pin) | utility | **approved** | `markets_calendar` | W50 → **W52 promote** |
 | `repo_rate_level` | 1.0.0 | state | candidate | `jsda_tokyo_repo_rates` | W50 |
@@ -149,22 +149,24 @@ Registered under `packages/research_runtime/features/complete21_min.py` (importe
 | `margin_alert_flag` | 1.0.0 | signal | candidate | `markets_margin_alert` | **W51** |
 | `futures_activity_proxy` | 1.0.0 | state | candidate | `derivatives_bars_daily_futures` | **W51** |
 
-**Count:** **10** complete21 min features (**2** approved · **8** candidate) (+ 3 approved v0 bars features outside this module).
+**Count:** **10** complete21 min features (**5** approved · **5** candidate) (+ 3 approved v0 bars features outside this module).
 
 Each compute path calls `require_feature_datasets(...)` → permanent DEFER reject **before** PIT reads.
 
 Pipeline guard: `FeatureContext.get_jquants_records`, `get_equity_master`, `get_market_calendar`, `get_equity_bars_daily`, and `get_jsda_repo_rates` refuse permanent DEFER ids via `require_history_eligible` / fixed reject for master.
 
-**W52 promotion notes:**
+**W52 + W53 promotion notes:**
 
-* Promoted (max 2): `is_trading_day` · `volume_change_1d` — version pin **1.0.0**; proof [`w0815as_w52_feature_promotion_eval_20260815.md`](w0815as_w52_feature_promotion_eval_20260815.md).
+* W52: `is_trading_day` · `volume_change_1d` — version pin **1.0.0**; proof [`w0815as_w52_feature_promotion_eval_20260815.md`](w0815as_w52_feature_promotion_eval_20260815.md).
+* W53 O2: `topix_relative_1d` · `disclosure_flag_fins` · `margin_interest_change_1d` — version pin **1.0.0**; feature-level CF tip E2E + proof [`w0815at_w53_o2_promotion_20260815.md`](w0815at_w53_o2_promotion_20260815.md).
 * `is_trading_day` remains `intended_role=utility` — `get_for_strategy` requires explicit `allowed_roles` override (not a default strategy signal).
-* `volume_change_1d` is `intended_role=signal` + `approved` → admitted by default `get_for_strategy`.
+* Signal-role approvals (`volume_change_1d` · `topix_relative_1d` · `disclosure_flag_fins` · `margin_interest_change_1d`) are admitted by default `get_for_strategy`.
 * Consumers must pin `(id, version="1.0.0")`; major bump if meaning changes.
+* Minimal tip signal `c21_topix_relative_sign`: `candidate_only=False` after primary promote; signal **status** remains **candidate** (not READY).
 
 **W51 notes (held):**
 
-* `return_1d_c21` is a **candidate export** of the 1d simple-return formula on the complete21 path (`require_feature_datasets` + tags). It does **not** replace approved v0 `return_1d` and was **not** promoted (W52).
+* `return_1d_c21` is a **candidate export** of the 1d simple-return formula on the complete21 path (`require_feature_datasets` + tags). It does **not** replace approved v0 `return_1d` and was **not** promoted (W52/W53).
 * Test strengthen (T5): missing required inputs, `as_of` required, PIT `available_at` gates, DEFER poison on all declared dataset groups.
 
 ---
@@ -178,7 +180,7 @@ This document does **not**:
 * enable **Phase7**
 * invent Dataset COMPLETE **22**
 * re-open densify / tip densify as primary
-* promote more than the W52 set of **2** features (remaining 8 stay candidate)
+* promote remaining **5** candidate features without feature-level CF O2 + Q\* clarity
 * merge `return_1d_c21` into approved v0 `return_1d`
 * treat local SQLite as CF SoT
 * declare Mass / READY / Phase7 from feature promotion alone
