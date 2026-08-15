@@ -57,6 +57,8 @@ from features.minimal_signal import (
 )
 from features.registry import get as get_feature
 from research.robustness_gate import (
+    DEFAULT_ONE_WAY_COST,
+    annotate_period_rows_with_cost,
     evaluate_research_robustness_gate,
     period_rows_from_cross_table,
     research_robustness_gate_document,
@@ -1225,6 +1227,8 @@ def run_multi_year_s1_eval(
     apply_robustness_gate: bool = True,
     min_periods_gate: int = 2,
     min_active_per_period: int = 20,
+    one_way_cost: float = DEFAULT_ONE_WAY_COST,
+    require_net_sign_majority: bool = True,
 ) -> dict[str, Any]:
     """Year-split S1 (topix_relative_sign) research eval; fail-one-year safe.
 
@@ -1368,6 +1372,7 @@ def run_multi_year_s1_eval(
                 "n_codes": r.get("n_codes"),
                 "signal_id": DEFAULT_SIGNAL_ID,
                 "gross_signed_mean_active": s1.get("gross_signed_mean_active"),
+                "net_one_way_mean_active": s1.get("net_one_way_mean_active"),
                 "mean_R_plus": s1.get("mean_R_plus"),
                 "mean_R_minus": s1.get("mean_R_minus"),
                 "n_active_positions": s1.get("n_active_positions"),
@@ -1375,6 +1380,8 @@ def run_multi_year_s1_eval(
                 "non_null_rate": s1.get("non_null_rate"),
             }
         )
+    # Annotate cost (research-only 10bp one-way by default).
+    cross = annotate_period_rows_with_cost(cross, one_way_cost=one_way_cost)
 
     gate: dict[str, Any] | None = None
     if apply_robustness_gate:
@@ -1383,6 +1390,7 @@ def run_multi_year_s1_eval(
                 "period_id": row["period_id"],
                 "status": "ok",
                 "gross_signed_mean_active": row.get("gross_signed_mean_active"),
+                "net_one_way_mean_active": row.get("net_one_way_mean_active"),
                 "n_active_positions": row.get("n_active_positions")
                 or row.get("non_null"),
                 "non_null": row.get("non_null"),
@@ -1398,6 +1406,8 @@ def run_multi_year_s1_eval(
             signal_id=DEFAULT_SIGNAL_ID,
             min_periods=min_periods_gate,
             min_active_per_period=min_active_per_period,
+            one_way_cost=one_way_cost,
+            require_net_sign_majority=require_net_sign_majority,
         )
 
     return {
@@ -1413,6 +1423,12 @@ def run_multi_year_s1_eval(
         "years": results,
         "cross_year_s1_table": cross,
         "robustness_gate": gate,
+        "cost_assumption": {
+            "one_way_cost": float(one_way_cost),
+            "one_way_cost_bp": float(one_way_cost) * 10_000.0,
+            "require_net_sign_majority": bool(require_net_sign_majority),
+            "label": "仮定に依存・研究用・運用GOではない",
+        },
         "mass_research": MASS_RESEARCH,
         "phase7": PHASE7,
         "ready_declared": False,
@@ -1427,7 +1443,8 @@ def run_multi_year_s1_eval(
         "note": (
             "Multi-year S1 research eval with independent per-year jobs. "
             "Error/skip on one year does not kill the batch. "
-            "robustness_gate.pass does NOT mint READY or arm Mass."
+            "Cost-aware robustness_gate (default). "
+            "pass does NOT mint READY or arm Mass."
         ),
     }
 
@@ -1456,6 +1473,7 @@ def run_multi_year_extra_hyp_eval(
     min_periods_gate: int = 2,
     min_active_per_period: int = 20,
     signal_ids: Sequence[str] | None = None,
+    require_net_sign_majority: bool = True,
 ) -> dict[str, Any]:
     """Year-split S4 (margin) / S5 research hyp eval; skip years without data.
 
@@ -1625,6 +1643,7 @@ def run_multi_year_extra_hyp_eval(
                     **dict(row),
                 }
             )
+    cross = annotate_period_rows_with_cost(cross, one_way_cost=one_way_cost)
 
     gates: dict[str, Any] = {}
     if apply_robustness_gate:
@@ -1635,6 +1654,8 @@ def run_multi_year_extra_hyp_eval(
                 signal_id=sid,
                 min_periods=min_periods_gate,
                 min_active_per_period=min_active_per_period,
+                one_way_cost=one_way_cost,
+                require_net_sign_majority=require_net_sign_majority,
             )
 
     return {
@@ -1650,6 +1671,12 @@ def run_multi_year_extra_hyp_eval(
         "years": results,
         "cross_year_compare_table": cross,
         "robustness_gates": gates,
+        "cost_assumption": {
+            "one_way_cost": float(one_way_cost),
+            "one_way_cost_bp": float(one_way_cost) * 10_000.0,
+            "require_net_sign_majority": bool(require_net_sign_majority),
+            "label": "仮定に依存・研究用・運用GOではない",
+        },
         "mass_research": MASS_RESEARCH,
         "phase7": PHASE7,
         "ready_declared": False,
@@ -1663,7 +1690,8 @@ def run_multi_year_extra_hyp_eval(
         "fail_one_year_safe": True,
         "note": (
             "Multi-year S4/S5 research eval. Gap years skipped honestly "
-            "(no densify invent). Gate pass ≠ READY/Mass."
+            "(no densify invent). Cost-aware gate (default). "
+            "Gate pass ≠ READY/Mass."
         ),
     }
 

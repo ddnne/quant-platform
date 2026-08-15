@@ -52,7 +52,11 @@ def test_gate_fails_single_period_tip_like_win():
             "n_active_positions": 600,
         }
     ]
-    out = evaluate_research_robustness_gate(rows, signal_id="c21_topix_relative_sign")
+    out = evaluate_research_robustness_gate(
+        rows,
+        signal_id="c21_topix_relative_sign",
+        require_net_sign_majority=False,
+    )
     assert out["passed"] is False
     assert out["ready_declared"] is False
     assert out["operational_go"] is False
@@ -72,7 +76,9 @@ def test_gate_fails_sign_disagreement():
             "n_active_positions": 100,
         },
     ]
-    out = evaluate_research_robustness_gate(rows, signal_id="s")
+    out = evaluate_research_robustness_gate(
+        rows, signal_id="s", require_net_sign_majority=False
+    )
     assert out["passed"] is False
     assert out["criteria"]["sign_majority"]["passed"] is False
     assert out["ready_declared"] is False
@@ -80,25 +86,27 @@ def test_gate_fails_sign_disagreement():
 
 
 def test_gate_pass_does_not_arm_ready():
+    # Gross well above 10bp so net remains majority +
     rows = [
         {
             "period_id": "p1",
-            "gross_signed_mean_active": 0.001,
+            "gross_signed_mean_active": 0.003,
             "n_active_positions": 50,
         },
         {
             "period_id": "p2",
-            "gross_signed_mean_active": 0.0015,
+            "gross_signed_mean_active": 0.0025,
             "n_active_positions": 50,
         },
         {
             "period_id": "p3",
-            "gross_signed_mean_active": 0.0008,
+            "gross_signed_mean_active": 0.002,
             "n_active_positions": 50,
         },
     ]
     out = evaluate_research_robustness_gate(rows, signal_id="hyp")
     assert out["passed"] is True
+    assert out["cost_aware_passed"] is True
     assert out["ready_declared"] is False
     assert out["operational_go"] is False
     assert out["connected_to_ready"] is False
@@ -108,10 +116,32 @@ def test_gate_pass_does_not_arm_ready():
     assert out["edge_claimed"] is False
 
 
+def test_gate_cost_after_fails_when_net_sign_splits():
+    """W64: gross majority alone is insufficient if net signs split after 10bp."""
+    rows = [
+        # gross all + small (~8–12bp) → after 10bp cost half flip to −
+        {"period_id": "a", "gross_signed_mean_active": 0.0012, "n_active_positions": 100},
+        {"period_id": "b", "gross_signed_mean_active": 0.0011, "n_active_positions": 100},
+        {"period_id": "c", "gross_signed_mean_active": 0.0005, "n_active_positions": 100},
+        {"period_id": "d", "gross_signed_mean_active": 0.0004, "n_active_positions": 100},
+    ]
+    gross_only = evaluate_research_robustness_gate(
+        rows, signal_id="s", require_net_sign_majority=False
+    )
+    cost_on = evaluate_research_robustness_gate(
+        rows, signal_id="s", require_net_sign_majority=True
+    )
+    assert gross_only["gross_only_passed"] is True
+    assert cost_on["passed"] is False
+    assert cost_on["criteria"]["net_sign_majority"]["passed"] is False
+    assert cost_on["ready_declared"] is False
+    assert cost_on["operational_go"] is False
+
+
 def test_gate_wf_full_flip_advisory_or_hard():
     rows = [
-        {"period_id": "p1", "gross_signed_mean_active": 0.001, "n_active_positions": 50},
-        {"period_id": "p2", "gross_signed_mean_active": 0.001, "n_active_positions": 50},
+        {"period_id": "p1", "gross_signed_mean_active": 0.003, "n_active_positions": 50},
+        {"period_id": "p2", "gross_signed_mean_active": 0.003, "n_active_positions": 50},
     ]
     wf = walk_forward_gross_from_compare(
         [{"signal_id": "s", "gross_signed_mean_active": 0.002}],
@@ -119,12 +149,20 @@ def test_gate_wf_full_flip_advisory_or_hard():
         signal_id="s",
     )
     soft = evaluate_research_robustness_gate(
-        rows, signal_id="s", walk_forward=wf, require_wf_check=False
+        rows,
+        signal_id="s",
+        walk_forward=wf,
+        require_wf_check=False,
+        require_net_sign_majority=True,
     )
     assert soft["criteria"]["wf_not_full_flip"]["full_flip"] is True
     # soft: flip is advisory, may still pass multi-period criteria
     hard = evaluate_research_robustness_gate(
-        rows, signal_id="s", walk_forward=wf, require_wf_check=True
+        rows,
+        signal_id="s",
+        walk_forward=wf,
+        require_wf_check=True,
+        require_net_sign_majority=True,
     )
     assert hard["passed"] is False
     assert any("wf_not_full_flip" in r for r in hard["reasons"])

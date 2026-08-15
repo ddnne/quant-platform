@@ -1,10 +1,47 @@
 # Phase 6.2 / 6.3 residual status
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
-**Live verified:** 2026-08-15 (JST) / **W63** 複数年研究評価 S1+S4（READY 未宣言） · COMPLETE segs **3478** · Dataset COMPLETE **21** · PARTIAL **5** DEFER · **actionable_gap = 0** · empty COMPLETE **0** · **OTC 93** · Mass/READY/Phase7 **NO-GO/OFF** · FRESH `projgen-96d5a48f6fe243509562da2694b5f476` · **CF-SoT** held · promotion **9 approved** / **1 candidate** no-promote · multi-year S1 gate soft **PASS** (majority +) · multi-year S4 gate soft **PASS** (majority −) · years 2015/17/19/21/23/25 Q4 · topix JSONL gap 2024–25 archive · margin 2024 empty held · **gate pass ≠ READY/Mass** · **no significance / no edge / no operational GO**
-**Repo tip:** `7254cc85d4598daac5b4948a54dda4b4a57bf73d` — W63 multi-year S1+S4 · COMPLETE **21** / segs **3478** / OTC **93** / READY **未宣言** · FRESH `projgen-96d5a48f6fe243509562da2694b5f476`
+**Live verified:** 2026-08-15 (JST) / **W64** コスト込み複数年（READY 未宣言） · COMPLETE segs **3478** · Dataset COMPLETE **21** · PARTIAL **5** DEFER · **actionable_gap = 0** · empty COMPLETE **0** · **OTC 93** · Mass/READY/Phase7 **NO-GO/OFF** · FRESH `projgen-31ae63a75b9a477a8b7e6f9d34f6f630` · **CF-SoT** held · promotion **9 approved** / **1 candidate** no-promote · cost **10bp one-way** · S1 Q4 cost **FAIL** (+3/−3 net) · S4 Q4 cost PASS weak all − · S1 full~100d **FAIL** · topix JSONL gap 2024–25 archive · margin 2024 empty held · **gate pass ≠ READY/Mass** · **no significance / no edge / no operational GO**
+**Repo tip:** *(pinned after push)* — W64 cost multi-year · COMPLETE **21** / segs **3478** / OTC **93** / READY **未宣言** · FRESH `projgen-31ae63a75b9a477a8b7e6f9d34f6f630`
 
-## 複数年研究評価 S1 + S4（READY 未宣言）
+## コスト込み複数年研究評価 S1 + S4（READY 未宣言）
+
+**Phase name:** コスト込み複数年 + 通年窓拡張（宣言なし）  
+**Wave:** W64 / w0815be  
+**Close:** [`docs/proof/w0815be_w64_cost_multi_year_close_20260815.md`](proof/w0815be_w64_cost_multi_year_close_20260815.md)  
+**Eval:** [`docs/proof/w0815be_w64_cost_multi_year_eval_20260815.md`](proof/w0815be_w64_cost_multi_year_eval_20260815.md)  
+**Gate v2:** `packages/product/research/robustness_gate.py` · `net_sign_majority` default on · `net = gross − 10bp` · pass ≠ READY/Mass/GO  
+**Harness:** `run_multi_year_s1_eval` / `run_multi_year_extra_hyp_eval` cost-aware defaults  
+**Cost:** one_way **10bp (0.001)** · RT **20bp** · label 仮定に依存・研究用・運用GOではない  
+**S1 Q4 cost:** **FAIL** (net +3/−3; W63 gross soft PASS overstated)  
+**S4 Q4 cost:** **PASS** (all net −; weak magnitudes — not candidate)  
+**S1 full bar-span:** 2015/19/21/23 · ~100d · gross **FAIL** · cost **FAIL**  
+**Gaps (honest):** topix JSONL **2024–2025** → archive · calendar archive + PIT · margin **2024** empty · full-year bar sample ends ~Oct (period bound to bar span; no invent Dec)  
+**Logs:** [`.glm-logs/w0815be_w64_cost_full/`](../.glm-logs/w0815be_w64_cost_full/)  
+**FRESH:** `projgen-31ae63a75b9a477a8b7e6f9d34f6f630` · coverage_segments untouched · mass=NO-GO  
+**Prior W63 multi-year Q4 gross soft PASS:** held underneath (now cost-revisited)
+
+| gate | status |
+|------|--------|
+| READY | **未宣言** (cost gate pass/fail does not connect) |
+| Mass / Phase7 | **NO-GO / OFF** |
+| Dataset COMPLETE | **21** |
+| COMPLETE segs | **3478** |
+| empty COMPLETE | **0** |
+| OTC | **93** |
+| densify | **none** |
+| Cost gate v2 | **landed** · default on · research-only |
+| S1 Q4 cost | **FAIL** · not GO |
+| S4 Q4 cost | PASS weak · not GO |
+| S1 full ~100d | **FAIL** · not GO |
+
+### Explicit non-declarations (held)
+
+- **READY** — not declared  
+- **Mass** — **NO-GO / OFF**  
+- **Phase7** — **OFF**
+
+## 複数年研究評価 S1 + S4（READY 未宣言）· W63 held
 
 **Phase name:** equities_bars 複数年窓 S1 再評価 + S4 margin（宣言なし）  
 **Wave:** W63 / w0815bd  
@@ -12,8 +49,8 @@
 **Eval:** [`docs/proof/w0815bd_w63_multi_year_eval_20260815.md`](proof/w0815bd_w63_multi_year_eval_20260815.md) · availability [`docs/proof/w0815bd_w63_year_availability_20260815.md`](proof/w0815bd_w63_year_availability_20260815.md)  
 **APIs:** `design_yearly_eval_windows` · `run_multi_year_s1_eval` · `run_multi_year_extra_hyp_eval` · `multi_year_availability_table` (`eval_harness.py`) · year-split fail-one-year-safe  
 **Windows:** y2015_q4 · y2017_q4 · y2019_q4 · y2021_q4 · y2023_q4 · y2025_q4 · **50d** · **30 codes** · `history_source=r2`  
-**S1 gate:** soft **PASS** (6/6 eligible · majority sign **+** · not catastrophic) — **≠ READY/Mass**  
-**S4 gate:** soft **PASS** (6/6 eligible · majority sign **−**) — years with margin only; 2024 gap not forced  
+**S1 gate (gross-only W63):** soft **PASS** (6/6 · majority **+**) — **superseded for candidacy by W64 cost FAIL**  
+**S4 gate (gross-only W63):** soft **PASS** (6/6 · majority **−**) — cost-aware still majority − but weak (W64)  
 **Gaps (honest):** topix JSONL **2024–2025** → archive · calendar archive + PIT · margin **2024** empty by inventory · no densify invent  
 **Logs:** [`.glm-logs/w0815bd_w63_multiyear/`](../.glm-logs/w0815bd_w63_multiyear/)  
 **Prior W62 gate + S4/S5:** held underneath
@@ -27,8 +64,8 @@
 | empty COMPLETE | **0** |
 | OTC | **93** |
 | densify | **none** |
-| Multi-year S1 | **6/6 ok** · gate soft PASS · not GO |
-| Multi-year S4 | **6/6 ok** · gate soft PASS · not GO |
+| Multi-year S1 | **6/6 ok** · gross soft PASS · **cost FAIL (W64)** · not GO |
+| Multi-year S4 | **6/6 ok** · gross soft PASS · cost weak PASS (W64) · not GO |
 | Year-split | **fail-one-year-safe** |
 
 ### Explicit non-declarations (held)
