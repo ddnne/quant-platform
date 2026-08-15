@@ -1,14 +1,15 @@
 # Phase 6.2 / 6.3 residual status
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
-**Live verified:** 2026-08-15 (JST) / **W47** residual FINAL · COMPLETE segs **3478** · Dataset COMPLETE **21 / 26** · PARTIAL = **5** permanent DEFER only · **actionable_gap = 0** · empty COMPLETE **0** · **OTC 93** tip island held · permanent DEFER **5** / NO_DENSIFY **6** · densify coverage loops **ENDED** · Mass/READY/Phase7 **NO-GO/OFF** · raw **15869** held (W46 tip secondary) · FRESH `projgen-f74d5496490141c8940d81317b8aaf7f` · **CF-SoT** held — D1 = hot tip · R2 = history · COMPLETE = receipt-owned · floors W38 + W42 mb **2015-04-01** **not lowered** · baseline PRE `2bfd3ee7fbfe645f00a6bcec04f0bcf771804fc8`
-**Repo tip:** (residual commit — fill post-push) — W47 residual FINAL · COMPLETE **3478** / Dataset COMPLETE **21** / OTC **93** / **actionable_gap = 0** / Phase7 **OFF**
+**Live verified:** 2026-08-15 (JST) / **W47** residual FINAL · COMPLETE segs **3478** · Dataset COMPLETE **21 / 26** · PARTIAL = **5** permanent DEFER only · **actionable_gap = 0** · empty COMPLETE **0** · **OTC 93** tip island held · permanent DEFER **5** / NO_DENSIFY **6** · densify coverage loops **ENDED** · Mass/READY/Phase7 **NO-GO/OFF** · raw **15869** held (W46 tip secondary) · FRESH `projgen-f74d5496490141c8940d81317b8aaf7f` · **CF-SoT** held — D1 = hot tip · R2 = history · COMPLETE = receipt-owned · floors W38 + W42 mb **2015-04-01** **not lowered** · **POST_PUSH_SHA** `dc974df4c242fd6c69ee8aef506431cd3955d249`
+**Repo tip:** `dc974df4c242fd6c69ee8aef506431cd3955d249` — W47 residual FINAL · COMPLETE **3478** / Dataset COMPLETE **21** / OTC **93** / **actionable_gap = 0** / Phase7 **OFF**
 
 ## W47 / w0815an — residual FINAL (coverage dense complete · gap 0 · no densify)
 
 **Machine twin:** [`.glm-logs/w0815an_g2_residual/BASELINE_W47.json`](../.glm-logs/w0815an_g2_residual/BASELINE_W47.json)  
 **Live D1 pre (g1_ops):** COMPLETE segs **3478** · Dataset COMPLETE **21** · OTC **93** · FRESH `projgen-f74d5496490141c8940d81317b8aaf7f` · PRE_sha `2bfd3ee7fbfe645f00a6bcec04f0bcf771804fc8`  
-**Prior collect:** W46 tip secondary raw **15869** held · no densify this wave · no tip collect this wave
+**Prior collect:** W46 tip secondary raw **15869** held · no densify this wave · no tip collect this wave  
+**Push:** **POST_PUSH_SHA** `dc974df4c242fd6c69ee8aef506431cd3955d249`
 
 ## Coverage baseline (W47 FINAL)
 - Dataset COMPLETE: 21 / 26
