@@ -70,7 +70,7 @@ TRACK_A_FOCUS_RANGES: dict[str, tuple[str, str]] = {
     "equities_bars_daily": ("2008-05-01", "2023-12-31"),
     # Full TOPIX history is contract-driven; focus filter is wide open.
     "indices_bars_daily_topix": ("2008-05-01", "2099-12-31"),
-    "markets_breakdown": ("2015-03-26", "2099-12-31"),
+    "markets_breakdown": ("2015-04-01", "2099-12-31"),
     "fins_summary": ("2008-07-01", "2099-12-31"),
     "equities_master": ("2000-07-13", "2099-12-31"),  # not raised (misdate band)
     # Latest-only preference is applied via max_jobs / latest_only, not range.

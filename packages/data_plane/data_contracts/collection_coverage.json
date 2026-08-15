@@ -125,7 +125,7 @@
       "universe_rule": "all_reported_issues_in_collection_window"
     },
     "markets_breakdown": {
-      "history_target_start": "2015-03-26",
+      "history_target_start": "2015-04-01",
       "coverage_mode": "trading_calendar",
       "expected_frequency": "trading_day",
       "universe_rule": "all_reported_issues"

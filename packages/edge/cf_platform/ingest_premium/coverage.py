@@ -69,7 +69,7 @@ EXPECTED_START: dict[str, str] = {
     "markets_margin_alert": "2013-01-04",
     "markets_short_ratio": "2013-01-04",
     "markets_short_sale_report": "2013-11-01",
-    "markets_breakdown": "2015-03-26",
+    "markets_breakdown": "2015-04-01",
     "edinet_major_shareholders": "2018-01-04",
     "edinet_cross_shareholdings": "2020-05-01",
     "edinet_large_volume_shareholders": "2021-07-01",

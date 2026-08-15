@@ -531,7 +531,7 @@
         "code",
         "date"
       ],
-      "historical_start": "2015-03-26",
+      "historical_start": "2015-04-01",
       "coverage_segment_granularity": "calendar_month",
       "expected_frequency": "trading_day",
       "inventory_status": "GOVERNED",
