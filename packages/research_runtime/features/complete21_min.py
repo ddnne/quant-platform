@@ -1,4 +1,4 @@
-"""Minimal COMPLETE-21-only features (W49–W53 / w0815at_g1).
+"""Minimal COMPLETE-21-only features (W49–W54 / w0815au_g2).
 
 All features:
 
@@ -12,7 +12,11 @@ Promotion:
   (version pin ``1.0.0``).
 * W53 / w0815at_g1 O2 re-eval: ``topix_relative_1d``, ``disclosure_flag_fins``,
   ``margin_interest_change_1d`` → approved (version pin ``1.0.0``) after
-  feature-level CF tip E2E non-null proof. Remaining 5 stay candidate.
+  feature-level CF tip E2E non-null proof.
+* W54 / w0815au_g2 selective O2: ``repo_rate_level`` → approved (version pin
+  ``1.0.0``) after CF tip E2E non-null on D1 ``jsda_repo_rates`` hot tip.
+  ``return_1d_c21`` remains candidate (policy twin of v0 ``return_1d``).
+  Remaining 4 stay candidate.
 * No READY / Mass / Phase7 claim. ``get_for_strategy`` still admits only
   approved + strategy-facing roles (utility requires explicit role override).
 
@@ -30,7 +34,7 @@ Implemented (W51 expand, +3):
 
 * ``return_1d_c21`` — complete21-path export of the 1d simple-return formula
   (``require_feature_datasets`` + bars). Does **not** replace approved v0
-  ``return_1d``; stays ``candidate``.
+  ``return_1d``; stays ``candidate`` (W54 T8 policy: no promote).
 * ``margin_alert_flag`` — binary flag if any ``markets_margin_alert`` row is
   PIT-visible for ``code``.
 * ``futures_activity_proxy`` — sum of latest-session futures volumes from
@@ -772,7 +776,7 @@ RepoRateLevel: FeatureDefinition = register(
         compute=_repo_rate_level,
         tags=("repo", "rate", "jsda", "macro", "complete21"),
         intended_role="state",
-        status="candidate",
+        status="approved",  # W54 O2 promotion; version pin 1.0.0
         price_basis=None,
     )
 )

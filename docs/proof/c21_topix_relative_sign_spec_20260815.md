@@ -22,12 +22,13 @@ This document freezes the **research signal contract** as implemented. It does *
 | **signal_id** | `c21_topix_relative_sign` |
 | **version** | `1.0.0` |
 | **status** | `candidate` |
-| **candidate_only** | **true** |
+| **candidate_only** | **false** (all three legs registry-**approved** after W53 O2) |
 | **artifact surface** | R2 `quant-structured` · `research/single_shot/job={id}/signals/{content_hash}.json` |
+| **multi-day batch (W54)** | `research/single_shot/job={id}/batch_summary.json` (+ optional `days/date=YYYY-MM-DD/signals.json`) |
 
-### Why `candidate_only=True`
+### Why `candidate_only=False` (W53+)
 
-The **primary** leg `topix_relative_1d` remains registry **candidate** (W52 G1 promoted only `is_trading_day` + `volume_change_1d`). The overall signal therefore stays candidate-only even though filter/gate prefer approved features. No strategy-default / READY claim.
+All three feature legs are registry-**approved** after W53 O2 promotion of `topix_relative_1d` (W52 already approved `is_trading_day` + `volume_change_1d`). The **signal status** remains `candidate` — not strategy-default, not READY, Mass OFF. `candidate_only=False` only means the legs are not restricted to candidate features.
 
 ---
 
@@ -37,9 +38,11 @@ The **primary** leg `topix_relative_1d` remains registry **candidate** (W52 G1 p
 
 | role | feature_id | registry status (pin) | version pin | role in signal |
 |------|------------|----------------------|-------------|----------------|
-| **primary** | `topix_relative_1d` | **candidate** | 1.0.0 | `sign(·)` → +1 / 0 / −1 |
+| **primary** | `topix_relative_1d` | **approved** (W53 O2) | 1.0.0 | `sign(·)` → +1 / 0 / −1 |
 | **filter** | `is_trading_day` | **approved** (W52 G1) | 1.0.0 | non-trading or missing → `value=None` |
 | **gate** | `volume_change_1d` | **approved** (W52 G1) | 1.0.0 | optional `\|·\| >= abs_min`; default **disabled** |
+
+**Approved-only purity (W54):** signal uses only these three COMPLETE-21 **approved** features. Optional approved legs (`disclosure_flag_fins`, `margin_interest_change_1d`) are **not** required for this signal.
 
 Feature catalog: [`complete21_min_feature_catalog_20260815.md`](complete21_min_feature_catalog_20260815.md).  
 Promotion eval: [`w0815as_w52_feature_promotion_eval_20260815.md`](w0815as_w52_feature_promotion_eval_20260815.md).
@@ -128,7 +131,7 @@ Code constants:
   "signal_id": "c21_topix_relative_sign",
   "version": "1.0.0",
   "status": "candidate",
-  "candidate_only": true,
+  "candidate_only": false,
   "value": -1.0,
   "code": "13010",
   "date": "2026-08-10",

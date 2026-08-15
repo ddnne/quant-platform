@@ -1,4 +1,4 @@
-"""COMPLETE 21 min features + feature-pipeline permanent DEFER guard (W49–W53).
+"""COMPLETE 21 min features + feature-pipeline permanent DEFER guard (W49–W54).
 
 W51 / w0815ar_g2:
 
@@ -15,7 +15,12 @@ W53 / w0815at_g1 O2:
 
 * Promote after feature-level CF tip E2E: ``topix_relative_1d``,
   ``disclosure_flag_fins``, ``margin_interest_change_1d`` → approved (v1.0.0).
-* Remaining 5 stay candidate. No READY / Mass / Phase7.
+
+W54 / w0815au_g2 selective O2:
+
+* Promote after feature-level CF tip E2E: ``repo_rate_level`` → approved (v1.0.0).
+* Do **not** promote ``return_1d_c21`` (policy twin of v0 ``return_1d``).
+* Remaining 4 stay candidate. No READY / Mass / Phase7.
 """
 
 from __future__ import annotations
@@ -76,13 +81,14 @@ COMPLETE21_MIN_IDS = (
     "futures_activity_proxy",
 )
 
-# W52 + W53 O2 promotions; version pin remains 1.0.0.
+# W52 + W53 + W54 O2 promotions; version pin remains 1.0.0.
 COMPLETE21_MIN_APPROVED_IDS = (
     "is_trading_day",
     "volume_change_1d",
     "topix_relative_1d",
     "disclosure_flag_fins",
     "margin_interest_change_1d",
+    "repo_rate_level",
 )
 COMPLETE21_MIN_CANDIDATE_IDS = tuple(
     fid for fid in COMPLETE21_MIN_IDS if fid not in COMPLETE21_MIN_APPROVED_IDS
@@ -414,8 +420,8 @@ def test_complete21_min_requires_as_of(tmp_path):
         compute("margin_alert_flag", as_of=None, code=CODES[0], db_path=db)
 
 
-def test_complete21_min_w53_promotion_status_and_version_pin():
-    """W52+W53: 5 approved (pinned 1.0.0); remaining 5 stay candidate."""
+def test_complete21_min_w54_promotion_status_and_version_pin():
+    """W52+W53+W54: 6 approved (pinned 1.0.0); remaining 4 stay candidate."""
     for fid in COMPLETE21_MIN_APPROVED_IDS:
         feat = get(fid)
         assert feat.status == "approved", fid
@@ -424,8 +430,14 @@ def test_complete21_min_w53_promotion_status_and_version_pin():
         feat = get(fid)
         assert feat.status == "candidate", fid
         assert feat.status != "approved", fid
-    assert len(COMPLETE21_MIN_APPROVED_IDS) == 5
-    assert len(COMPLETE21_MIN_CANDIDATE_IDS) == 5
+    assert len(COMPLETE21_MIN_APPROVED_IDS) == 6
+    assert len(COMPLETE21_MIN_CANDIDATE_IDS) == 4
+    # W54 T8: return_1d_c21 must remain candidate (policy twin of v0 return_1d)
+    assert get("return_1d_c21").status == "candidate"
+    assert "return_1d_c21" not in COMPLETE21_MIN_APPROVED_IDS
+    # W54 selective O2 promote
+    assert get("repo_rate_level").status == "approved"
+    assert get("repo_rate_level").intended_role == "state"
 
 
 def test_get_for_strategy_admits_approved_signal_not_utility_or_candidate():
@@ -444,6 +456,12 @@ def test_get_for_strategy_admits_approved_signal_not_utility_or_candidate():
     assert disc.status == "approved"
     margin = get_for_strategy("margin_interest_change_1d", version="1.0.0")
     assert margin.status == "approved"
+
+    # W54 O2 promote: repo_rate_level approved + state → admitted (state is default role)
+    repo = get_for_strategy("repo_rate_level", version="1.0.0")
+    assert repo.status == "approved"
+    assert repo.intended_role == "state"
+    assert str(repo.version) == "1.0.0"
 
     # is_trading_day: approved but utility → role gate rejects by default
     with pytest.raises(FeatureGovernanceError, match="utility"):

@@ -1,10 +1,10 @@
 # COMPLETE 21 — minimal feature catalog (2026-08-15)
 
-**Wave:** W53 / w0815at_g1 O2 (extends W52 / w0815as_g1 · W51 / w0815ar_g2 · W50 / w0815aq_g2 · W49 / w0815ap_g2)  
+**Wave:** W54 / w0815au_g2 selective O2 (extends W53 / w0815at_g1 · W52 / w0815as_g1 · W51 / w0815ar_g2 · W50 / w0815aq_g2 · W49 / w0815ap_g2)  
 **Phase:** COMPLETE 21 **usage readiness** (利用準備) — feature catalog + min implementations + quality gates  
 **Mass / READY / Phase7:** **not** declared · **not** enabled · densify **not** run · push **not** this task  
-**Promotion (W52+W53):** **5** approved — `is_trading_day` · `volume_change_1d` · `topix_relative_1d` · `disclosure_flag_fins` · `margin_interest_change_1d` (version pin **1.0.0**); remaining **5** stay `candidate`  
-**Promotion eval proofs:** [`w0815as_w52_feature_promotion_eval_20260815.md`](w0815as_w52_feature_promotion_eval_20260815.md) · [`w0815at_w53_o2_promotion_20260815.md`](w0815at_w53_o2_promotion_20260815.md)  
+**Promotion (W52+W53+W54):** **6** approved — `is_trading_day` · `volume_change_1d` · `topix_relative_1d` · `disclosure_flag_fins` · `margin_interest_change_1d` · `repo_rate_level` (version pin **1.0.0**); remaining **4** stay `candidate`  
+**Promotion eval proofs:** [`w0815as_w52_feature_promotion_eval_20260815.md`](w0815as_w52_feature_promotion_eval_20260815.md) · [`w0815at_w53_o2_promotion_20260815.md`](w0815at_w53_o2_promotion_20260815.md) · [`w0815au_w54_o2_promotion_20260815.md`](w0815au_w54_o2_promotion_20260815.md)  
 **Candidate → approved criteria:** [`complete21_feature_candidate_to_approved_criteria_20260815.md`](complete21_feature_candidate_to_approved_criteria_20260815.md)
 
 **Sources:**
@@ -120,7 +120,7 @@ None of these declare READY.
 |------------|--------|------------------|--------|
 | (future) investor_flow_change | `equities_investor_types` | section × pubdate flows | catalog only |
 | `is_trading_day` | `markets_calendar` | 1.0 if `holiday_division=="1"` for date (default = as_of day) | **implemented** (complete21 min, **approved** · v1.0.0 · W52 · utility) |
-| `repo_rate_level` | `jsda_tokyo_repo_rates` | latest PIT-visible `rate` (optional tenor / rate_type) | **implemented** (complete21 min, candidate) |
+| `repo_rate_level` | `jsda_tokyo_repo_rates` | latest PIT-visible `rate` (optional tenor / rate_type) | **implemented** (complete21 min, **approved** · v1.0.0 · W54 O2) |
 | (future) corp_bond_print_flag | `jsda_corporate_bond_transactions` | activity flag | catalog only |
 
 ### 2.6 Derivatives (futures / options)
@@ -144,29 +144,30 @@ Registered under `packages/research_runtime/features/complete21_min.py` (importe
 | `margin_interest_change_1d` | **1.0.0** (pin) | signal | **approved** | `markets_margin_interest` | W50 → **W53 O2 promote** |
 | `short_ratio_level` | 1.0.0 | signal | candidate | `markets_short_ratio` | W50 |
 | `is_trading_day` | **1.0.0** (pin) | utility | **approved** | `markets_calendar` | W50 → **W52 promote** |
-| `repo_rate_level` | 1.0.0 | state | candidate | `jsda_tokyo_repo_rates` | W50 |
-| `return_1d_c21` | 1.0.0 | signal | candidate | `equities_bars_daily` | **W51** |
+| `repo_rate_level` | **1.0.0** (pin) | state | **approved** | `jsda_tokyo_repo_rates` | W50 → **W54 O2 promote** |
+| `return_1d_c21` | 1.0.0 | signal | candidate | `equities_bars_daily` | **W51** (no promote · twin of v0) |
 | `margin_alert_flag` | 1.0.0 | signal | candidate | `markets_margin_alert` | **W51** |
 | `futures_activity_proxy` | 1.0.0 | state | candidate | `derivatives_bars_daily_futures` | **W51** |
 
-**Count:** **10** complete21 min features (**5** approved · **5** candidate) (+ 3 approved v0 bars features outside this module).
+**Count:** **10** complete21 min features (**6** approved · **4** candidate) (+ 3 approved v0 bars features outside this module).
 
 Each compute path calls `require_feature_datasets(...)` → permanent DEFER reject **before** PIT reads.
 
 Pipeline guard: `FeatureContext.get_jquants_records`, `get_equity_master`, `get_market_calendar`, `get_equity_bars_daily`, and `get_jsda_repo_rates` refuse permanent DEFER ids via `require_history_eligible` / fixed reject for master.
 
-**W52 + W53 promotion notes:**
+**W52 + W53 + W54 promotion notes:**
 
 * W52: `is_trading_day` · `volume_change_1d` — version pin **1.0.0**; proof [`w0815as_w52_feature_promotion_eval_20260815.md`](w0815as_w52_feature_promotion_eval_20260815.md).
 * W53 O2: `topix_relative_1d` · `disclosure_flag_fins` · `margin_interest_change_1d` — version pin **1.0.0**; feature-level CF tip E2E + proof [`w0815at_w53_o2_promotion_20260815.md`](w0815at_w53_o2_promotion_20260815.md).
+* W54 selective O2: `repo_rate_level` — version pin **1.0.0**; CF tip E2E on D1 `jsda_repo_rates` hot tip + proof [`w0815au_w54_o2_promotion_20260815.md`](w0815au_w54_o2_promotion_20260815.md). Chose repo over `short_ratio_level` (clearer tip; no `section` required).
 * `is_trading_day` remains `intended_role=utility` — `get_for_strategy` requires explicit `allowed_roles` override (not a default strategy signal).
-* Signal-role approvals (`volume_change_1d` · `topix_relative_1d` · `disclosure_flag_fins` · `margin_interest_change_1d`) are admitted by default `get_for_strategy`.
+* Signal-role approvals (`volume_change_1d` · `topix_relative_1d` · `disclosure_flag_fins` · `margin_interest_change_1d`) and state-role `repo_rate_level` are admitted by default `get_for_strategy` (`state` is a default strategy role).
 * Consumers must pin `(id, version="1.0.0")`; major bump if meaning changes.
 * Minimal tip signal `c21_topix_relative_sign`: `candidate_only=False` after primary promote; signal **status** remains **candidate** (not READY).
 
 **W51 notes (held):**
 
-* `return_1d_c21` is a **candidate export** of the 1d simple-return formula on the complete21 path (`require_feature_datasets` + tags). It does **not** replace approved v0 `return_1d` and was **not** promoted (W52/W53).
+* `return_1d_c21` is a **candidate export** of the 1d simple-return formula on the complete21 path (`require_feature_datasets` + tags). It does **not** replace approved v0 `return_1d` and was **not** promoted (W52/W53/**W54 T8 policy**).
 * Test strengthen (T5): missing required inputs, `as_of` required, PIT `available_at` gates, DEFER poison on all declared dataset groups.
 
 ---
@@ -180,8 +181,8 @@ This document does **not**:
 * enable **Phase7**
 * invent Dataset COMPLETE **22**
 * re-open densify / tip densify as primary
-* promote remaining **5** candidate features without feature-level CF O2 + Q\* clarity
-* merge `return_1d_c21` into approved v0 `return_1d`
+* promote remaining **4** candidate features without feature-level CF O2 + Q\* clarity
+* merge `return_1d_c21` into approved v0 `return_1d` (W54 T8: explicit no-promote)
 * treat local SQLite as CF SoT
 * declare Mass / READY / Phase7 from feature promotion alone
 

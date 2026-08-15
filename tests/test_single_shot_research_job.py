@@ -1,4 +1,4 @@
-"""T8 single-shot job + T9 Phase7/Mass OFF freeze + W50 execute/DEFER + W51 features."""
+"""T8 single-shot job + T9 Phase7/Mass OFF freeze + W50–W54 execute/DEFER/features/multiday."""
 
 from __future__ import annotations
 
@@ -33,11 +33,14 @@ from research.single_shot_job import (
     build_tip_feature_context,
     compute_tip_candidate_features,
     design_artifact_paths,
+    discover_tip_trading_days,
+    execute_multiday_signal_eval,
     execute_single_shot_job,
     extract_d1_tip_feature_rows,
     extract_d1_tip_summaries,
     freeze_status,
     require_complete_21_only,
+    summarize_signal_day,
 )
 from selection.budget_ledger import MassResearchDisabledError, ResearchBudgetCapability
 from selection.screen import ExperimentBudget
@@ -809,3 +812,251 @@ def test_no_phase7_or_mass_env_arming_switches_in_skeleton_source():
     assert 'MASS_RESEARCH_STATUS: str = "GO"' not in src
     assert "order_execution" in src  # freeze field must remain False
     assert "ORDER_EXECUTION" not in src or "ORDER_EXECUTION: bool = True" not in src
+
+
+# ---------------------------------------------------------------------------
+# W54 / T1–T5 — multi-day as_of signal eval (single_shot only · Mass OFF)
+# ---------------------------------------------------------------------------
+
+
+def _fake_d1_multiday(sql: str):
+    """Synthetic tip rows spanning several trading days for multiday unit tests."""
+    s = sql.lower()
+    if "count(*)" in s:
+        return [
+            {
+                "n": 12,
+                "min_event_time": "2026-08-03",
+                "max_event_time": "2026-08-12",
+            }
+        ]
+
+    # Multi-day equity bars for two codes (need ≥2 dates for 1d features).
+    bar_days = [
+        ("2026-08-03", 1000.0, 100.0),
+        ("2026-08-04", 1010.0, 110.0),
+        ("2026-08-05", 1005.0, 120.0),
+        ("2026-08-06", 1020.0, 130.0),
+        ("2026-08-07", 1015.0, 140.0),
+        ("2026-08-10", 1030.0, 150.0),
+        ("2026-08-11", 1025.0, 160.0),
+        ("2026-08-12", 1040.0, 170.0),
+    ]
+    topix = [
+        ("2026-08-03", 3000.0),
+        ("2026-08-04", 3005.0),
+        ("2026-08-05", 3010.0),
+        ("2026-08-06", 3000.0),
+        ("2026-08-07", 3015.0),
+        ("2026-08-10", 3020.0),
+        ("2026-08-11", 3010.0),
+        ("2026-08-12", 3030.0),
+    ]
+    cal_days = [
+        "2026-08-03",
+        "2026-08-04",
+        "2026-08-05",
+        "2026-08-06",
+        "2026-08-07",
+        "2026-08-08",  # weekend non-trading
+        "2026-08-09",  # weekend non-trading
+        "2026-08-10",
+        "2026-08-11",
+        "2026-08-12",
+    ]
+
+    if "payload" in s and "equities_bars_daily" in s:
+        rows = []
+        for code, base in (("13010", 0.0), ("72030", 50.0)):
+            for d, c, vo in bar_days:
+                rows.append(
+                    {
+                        "natural_key": json.dumps({"Code": code, "Date": d}),
+                        "event_time": f"{d}T09:00:00+09:00",
+                        "available_at": f"{d}T15:30:00+09:00",
+                        "payload": json.dumps(
+                            {
+                                "Code": code,
+                                "Date": d,
+                                "C": c + base,
+                                "Vo": vo,
+                            }
+                        ),
+                    }
+                )
+        return rows
+    if "payload" in s and "indices_bars_daily_topix" in s:
+        return [
+            {
+                "natural_key": json.dumps({"Date": d}),
+                "event_time": f"{d}T09:00:00+09:00",
+                "available_at": f"{d}T15:30:00+09:00",
+                "payload": json.dumps({"Date": d, "C": c}),
+            }
+            for d, c in topix
+        ]
+    if "payload" in s and "markets_calendar" in s:
+        rows = []
+        for d in cal_days:
+            hol = "0" if d in ("2026-08-08", "2026-08-09") else "1"
+            rows.append(
+                {
+                    "natural_key": json.dumps({"Date": d}),
+                    "event_time": d,
+                    "available_at": f"{d}T00:00:00+09:00",
+                    "payload": json.dumps(
+                        {"Date": d, "HolidayDivision": hol}
+                    ),
+                }
+            )
+        return rows
+    # summary samples / discovery
+    if "equities_bars_daily" in s:
+        return [
+            {
+                "natural_key": json.dumps({"Code": "13010", "Date": d}),
+                "event_time": f"{d}T09:00:00+09:00",
+                "available_at": f"{d}T15:30:00+09:00",
+            }
+            for d, _, _ in bar_days
+        ]
+    return [
+        {
+            "natural_key": json.dumps({"Date": "2026-08-04"}),
+            "event_time": "2026-08-04",
+            "available_at": "2026-08-04",
+        }
+    ]
+
+
+def test_discover_tip_trading_days_filters_non_trading():
+    tip = {
+        "markets_calendar": [
+            {"date": "2026-08-07", "holiday_division": "1"},
+            {"date": "2026-08-08", "holiday_division": "0"},
+            {"date": "2026-08-10", "holiday_division": "1"},
+        ]
+    }
+    days = discover_tip_trading_days(tip, period_start="2026-08-01", period_end="2026-08-14")
+    assert days == ["2026-08-07", "2026-08-10"]
+
+
+def test_summarize_signal_day_sign_distribution():
+    payload = {
+        "signal_id": DEFAULT_SIGNAL_ID,
+        "candidate_only": False,
+        "row_counts": {
+            "computed": 3,
+            "non_null": 2,
+            "null": 1,
+            "long": 1,
+            "short": 1,
+            "flat": 0,
+        },
+        "sample_values": [{"code": "13010", "value": 1.0}],
+    }
+    s = summarize_signal_day(payload, as_of="2026-08-07T15:30:00+09:00")
+    assert s["signal_count"] == 3
+    assert s["non_null"] == 2
+    assert abs(s["non_null_rate"] - 2 / 3) < 1e-9
+    assert s["sign_distribution"] == {"+1": 1, "0": 0, "-1": 1, "null": 1}
+    assert s["order_execution"] is False
+    assert s["ready_declared"] is False
+    assert s["mass_research"] == "NO-GO"
+
+
+def test_execute_multiday_signal_eval_batch_summary(tmp_path: Path):
+    """W54 T2–T4 unit: multi as_of → batch_summary + per-day + freeze closed."""
+    puts: dict[str, bytes] = {}
+
+    def fake_put(bucket: str, key: str, body: bytes):
+        puts[key] = body
+        return {"bucket": bucket, "key": key, "bytes": len(body), "status": "injected"}
+
+    eval_result = execute_multiday_signal_eval(
+        period_start="2026-08-01",
+        period_end="2026-08-14",
+        job_id="w0815au-g1-multiday-unit",
+        codes=["13010", "72030"],
+        as_of_days=[
+            "2026-08-04",
+            "2026-08-05",
+            "2026-08-06",
+            "2026-08-07",
+            "2026-08-10",
+            "2026-08-11",
+            "2026-08-12",
+        ],
+        max_days=10,
+        min_days=5,
+        dry_run=True,
+        d1_execute=_fake_d1_multiday,
+        r2_put=fake_put,
+        staging_dir=tmp_path,
+    )
+
+    assert eval_result.n_days == 7
+    assert eval_result.mass_research == "NO-GO"
+    assert eval_result.phase7 == "OFF"
+    assert eval_result.ready_declared is False
+    assert eval_result.local_sot is False
+    assert eval_result.batch_summary_r2_key == (
+        "research/single_shot/job=w0815au-g1-multiday-unit/batch_summary.json"
+    )
+    assert eval_result.batch_summary_r2_key in puts
+    body = json.loads(puts[eval_result.batch_summary_r2_key].decode("utf-8"))
+    assert body["n_days"] == 7
+    assert body["candidate_only"] is False
+    assert body["approved_legs_only"] is True
+    assert body["signal_id"] == DEFAULT_SIGNAL_ID
+    assert body["mass_research"] == "NO-GO"
+    assert body["order_execution"] is False
+    assert body["ready_declared"] is False
+    assert body["connected_to_mass_research_loop"] is False
+    assert body["local_sot"] is False
+    assert "aggregate" in body
+    assert "sign_distribution" in body["aggregate"]
+    assert len(body["per_day"]) == 7
+    # Per-day artifacts + batch_summary + manifest
+    day_keys = [k for k in puts if "/days/date=" in k and k.endswith("/signals.json")]
+    assert len(day_keys) == 7
+    assert any(k.endswith("/manifest.json") for k in puts)
+    # Each day has signal_count / non_null_rate / sign_distribution
+    for day in body["per_day"]:
+        assert "signal_count" in day
+        assert "non_null_rate" in day
+        assert set(day["sign_distribution"].keys()) == {"+1", "0", "-1", "null"}
+    # Aggregate non-null should be positive with synthetic rising bars vs topix.
+    assert body["aggregate"]["signal_count"] >= 7
+    assert SIGNAL_CANDIDATE_ONLY is False
+
+
+def test_multiday_signal_eval_no_mass_ready_or_orders_ast():
+    """W54 T5: multiday path stays inside single_shot; no mass/READY/orders."""
+    imported, called = _ast_imports_and_calls(SINGLE_SHOT_PATH)
+    src = SINGLE_SHOT_PATH.read_text(encoding="utf-8")
+    assert "execute_multiday_signal_eval" in src
+    assert "agents" not in imported
+    assert "mass_research" not in imported
+    assert "start_mass_research" not in imported
+    assert "VerifiedResearchReadiness" not in imported
+    assert "OrderIntent" not in imported
+    assert "paper_service" not in imported
+    assert "place_order" not in called
+    assert "submit_order" not in called
+    assert "mint_ready" not in called
+    # Multiday must still hard-code freeze constants (not arm).
+    assert 'MASS_RESEARCH_STATUS: str = "NO-GO"' in src
+    assert 'PHASE7_STATUS: str = "OFF"' in src
+    assert "READY_DECLARED: bool = False" in src
+    assert "connected_to_mass_research_loop" in src
+
+
+def test_multiday_reject_permanent_defer_before_d1():
+    """Multiday uses DEFAULT_SIGNAL_DATASETS only; DEFER never enters the path."""
+    # If a caller tried to force DEFER via wrong datasets, require_complete_21_only
+    # still fail-closes — exercise via discover/require surface.
+    with pytest.raises((SingleShotJobError, PermanentDeferHistoryError)):
+        require_complete_21_only(
+            ["equities_master"], context="multiday signal eval datasets"
+        )

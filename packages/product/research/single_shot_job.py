@@ -1,17 +1,22 @@
 """Single-shot research job (Mass OFF / Phase7 OFF / READY not declared).
 
 W49 skeleton (declare + path design) + W50 minimal CF-backed execute +
-W51 COMPLETE-21 **candidate** feature compute on tip FeatureContext +
-W52 minimal **candidate-only** signal write (T5–T7):
+W51 COMPLETE-21 feature compute on tip FeatureContext +
+W52–W53 minimal signal write + W54 multi-day as_of batch (Mass OFF):
 
 * **Inputs:** COMPLETE 21 dataset ids only (permanent DEFER excluded via
   ``data_contracts.permanent_defer``).
 * **Read:** CF D1 ``quant-ingest`` hot tip extract (bounded; not full-history SoT).
 * **Features:** tip-backed :class:`features.runtime.FeatureContext` (not local
-  SQLite SoT) computing COMPLETE-21 min **candidate** features.
-* **Signal (W52):** one minimal tip signal from strongest candidate features
-  (``sign(topix_relative_1d)`` + ``is_trading_day`` filter + optional volume
-  gate). Written under ``…/signals/``. ``candidate_only=True`` until promote.
+  SQLite SoT) computing COMPLETE-21 min features (approved preferred).
+* **Signal (W52–W53):** ``c21_topix_relative_sign`` =
+  ``sign(topix_relative_1d)`` + ``is_trading_day`` filter + optional volume
+  gate. All three legs are registry-**approved** after W53; signal status
+  remains ``candidate`` with ``candidate_only=False``. Written under
+  ``…/signals/``.
+* **Multi-day (W54):** :func:`execute_multiday_signal_eval` reuses one tip
+  extract across 5–10 trading-day as_of values; aggregates sign stats and
+  writes ``batch_summary.json`` (still Mass OFF / no READY / no orders).
 * **Write:** R2 ``quant-structured`` under ``research/single_shot/job={id}/…``.
   Local FS is **not** Source of Truth (optional dry-run stages payloads only).
 * **Not** connected to ``agents.mass_research`` / mass research loop.
@@ -105,8 +110,8 @@ _CODE_KEYED_TIP_DATASETS: frozenset[str] = frozenset(
     }
 )
 
-# W52 minimal signal: candidate_only while primary topix_relative_1d is candidate.
-# Filter/gate prefer G1-approved is_trading_day + volume_change_1d.
+# W52–W53 minimal signal: primary topix_relative_1d approved (W53); filter/gate
+# is_trading_day + volume_change_1d approved (W52). candidate_only=False.
 # Signal id is fixed in features.minimal_signal; no order execution path.
 
 # ---------------------------------------------------------------------------
@@ -560,6 +565,55 @@ def extract_d1_tip_summaries(
 
     extracts: dict[str, Any] = {}
     for ds in ids:
+        jsda_table = _JSDA_TIP_TABLE_BY_DATASET.get(ds)
+        if jsda_table is not None:
+            # Dedicated JSDA fact table (e.g. jsda_repo_rates). Date grain is
+            # as_of_date; event_time is present for PIT ordering.
+            count_sql = (
+                "SELECT COUNT(*) AS n, "
+                "MIN(event_time) AS min_event_time, "
+                "MAX(event_time) AS max_event_time "
+                f"FROM {jsda_table} WHERE "
+                f"as_of_date >= {_sql_str(start)} "
+                f"AND as_of_date <= {_sql_str(end)}"
+            )
+            count_rows = exec_fn(count_sql)
+            row0 = count_rows[0] if count_rows else {}
+            n = int(row0.get("n") or 0)
+            sample_sql = (
+                "SELECT source, as_of_date, tenor, rate_type, "
+                "event_time, available_at "
+                f"FROM {jsda_table} WHERE "
+                f"as_of_date >= {_sql_str(start)} "
+                f"AND as_of_date <= {_sql_str(end)} "
+                "ORDER BY as_of_date, tenor, rate_type "
+                f"LIMIT {limit}"
+            )
+            samples = exec_fn(sample_sql)
+            extracts[ds] = {
+                "dataset": ds,
+                "table": jsda_table,
+                "row_count": n,
+                "min_event_time": row0.get("min_event_time"),
+                "max_event_time": row0.get("max_event_time"),
+                "sample_limit": limit,
+                "sample_rows": [
+                    {
+                        "natural_key": (
+                            f"{r.get('as_of_date')}|{r.get('tenor')}|"
+                            f"{r.get('rate_type')}"
+                        ),
+                        "event_time": r.get("event_time"),
+                        "available_at": r.get("available_at"),
+                        "as_of_date": r.get("as_of_date"),
+                        "tenor": r.get("tenor"),
+                        "rate_type": r.get("rate_type"),
+                    }
+                    for r in samples
+                ],
+            }
+            continue
+
         count_sql = (
             "SELECT COUNT(*) AS n, "
             "MIN(event_time) AS min_event_time, "
@@ -753,6 +807,45 @@ def _normalize_tip_catalog_row(
     }
 
 
+# COMPLETE-21 JSDA datasets live on dedicated D1 fact tables (not
+# jquants_records). Tip feature extract / summary must hit these tables.
+_JSDA_TIP_TABLE_BY_DATASET: dict[str, str] = {
+    "jsda_tokyo_repo_rates": "jsda_repo_rates",
+}
+
+
+def _normalize_tip_jsda_repo_row(row: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Map a D1 ``jsda_repo_rates`` tip row for FeatureContext.get_jsda_repo_rates."""
+    as_of_date = row.get("as_of_date") or row.get("date")
+    if as_of_date is None or as_of_date == "":
+        return None
+    rate = row.get("rate")
+    try:
+        rate_f = float(rate) if rate is not None and rate != "" else None
+    except (TypeError, ValueError):
+        rate_f = None
+    raw = row.get("raw_payload")
+    raw_obj = _decode_json_obj(raw) if raw is not None else {}
+    return {
+        "source": str(row.get("source") or "jsda"),
+        "as_of_date": str(as_of_date)[:10],
+        "date": str(as_of_date)[:10],
+        "tenor": str(row.get("tenor") or ""),
+        "rate_type": str(row.get("rate_type") or ""),
+        "rate": rate_f,
+        "event_time": row.get("event_time"),
+        "available_at": row.get("available_at"),
+        "ingested_at": row.get("ingested_at"),
+        "raw_payload": raw_obj if raw_obj else raw,
+        "payload": {
+            "as_of_date": str(as_of_date)[:10],
+            "tenor": row.get("tenor"),
+            "rate_type": row.get("rate_type"),
+            "rate": rate_f,
+        },
+    }
+
+
 def _discover_tip_codes(
     d1_execute: D1ExecuteFn,
     *,
@@ -846,6 +939,36 @@ def extract_d1_tip_feature_rows(
     raw_counts: dict[str, int] = {}
 
     for ds in ids:
+        jsda_table = _JSDA_TIP_TABLE_BY_DATASET.get(ds)
+        if jsda_table is not None:
+            # Dedicated JSDA fact table (hot tip on D1; not jquants_records).
+            count_sql = (
+                f"SELECT COUNT(*) AS n FROM {jsda_table} WHERE "
+                f"as_of_date >= {_sql_str(start)} "
+                f"AND as_of_date <= {_sql_str(end)}"
+            )
+            count_rows = exec_fn(count_sql)
+            raw_counts[ds] = (
+                int((count_rows[0] or {}).get("n") or 0) if count_rows else 0
+            )
+            payload_sql = (
+                "SELECT source, as_of_date, tenor, rate_type, event_time, "
+                "available_at, ingested_at, rate, raw_payload "
+                f"FROM {jsda_table} WHERE "
+                f"as_of_date >= {_sql_str(start)} "
+                f"AND as_of_date <= {_sql_str(end)} "
+                "ORDER BY as_of_date, tenor, rate_type "
+                f"LIMIT {limit}"
+            )
+            raw_rows = exec_fn(payload_sql)
+            normalized: list[dict[str, Any]] = []
+            for r in raw_rows:
+                row = _normalize_tip_jsda_repo_row(r)
+                if row is not None:
+                    normalized.append(row)
+            rows_by_dataset[ds] = normalized
+            continue
+
         count_sql = (
             "SELECT COUNT(*) AS n FROM jquants_records WHERE "
             f"dataset = {_sql_str(ds)} "
@@ -878,7 +1001,7 @@ def extract_d1_tip_feature_rows(
             f"LIMIT {limit}"
         )
         raw_rows = exec_fn(payload_sql)
-        normalized: list[dict[str, Any]] = []
+        normalized = []
         for r in raw_rows:
             payload = _decode_json_obj(r.get("payload"))
             if ds == "equities_bars_daily":
@@ -1484,10 +1607,11 @@ def execute_single_shot_job(
         (not local SQLite), compute COMPLETE-21 **candidate** features, and
         write a features artifact + feature stats on the manifest.
     compute_signals:
-        When True, also compute the W52 minimal tip signal from candidate
+        When True, also compute the W52/W53 minimal tip signal from approved
         feature observations and write a signals artifact under
         ``research/single_shot/job={id}/signals/``. Implies feature compute
-        for the signal's required feature ids. ``candidate_only=True``.
+        for the signal's required feature ids. ``candidate_only=False``
+        (legs approved; signal status remains candidate).
         Does **not** mint READY or emit orders.
     d1_execute / r2_put:
         Injectable callables for unit tests. Defaults use wrangler remote.
@@ -1549,6 +1673,15 @@ def execute_single_shot_job(
             needed.append("markets_margin_alert")
         if "return_1d_c21" in fids and "equities_bars_daily" not in needed:
             needed.append("equities_bars_daily")
+        if "repo_rate_level" in fids and "jsda_tokyo_repo_rates" not in needed:
+            needed.append("jsda_tokyo_repo_rates")
+        if "short_ratio_level" in fids and "markets_short_ratio" not in needed:
+            needed.append("markets_short_ratio")
+        if (
+            "futures_activity_proxy" in fids
+            and "derivatives_bars_daily_futures" not in needed
+        ):
+            needed.append("derivatives_bars_daily_futures")
         if compute_signals:
             for ds in DEFAULT_SIGNAL_DATASETS:
                 if ds not in needed:
@@ -1881,6 +2014,441 @@ def execute_single_shot_job(
     )
 
 
+# ---------------------------------------------------------------------------
+# W54 — multi-day as_of signal eval (single_shot only · Mass OFF)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class MultidaySignalEval:
+    """Outcome of a multi-as_of tip signal batch (not READY, not mass, no orders)."""
+
+    job_id: str
+    n_days: int
+    as_of_days: tuple[str, ...]
+    codes: tuple[str, ...]
+    batch_summary_r2_key: str
+    batch_summary: Mapping[str, Any]
+    day_results: tuple[Mapping[str, Any], ...]
+    r2_puts: tuple[dict[str, Any], ...]
+    dry_run: bool
+    mass_research: str = MASS_RESEARCH_STATUS
+    phase7: str = PHASE7_STATUS
+    ready_declared: bool = READY_DECLARED
+    local_sot: bool = False
+    version: str = "multiday-signal-eval/v1"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "version": self.version,
+            "job_id": self.job_id,
+            "n_days": self.n_days,
+            "as_of_days": list(self.as_of_days),
+            "codes": list(self.codes),
+            "batch_summary_r2_key": self.batch_summary_r2_key,
+            "batch_summary": dict(self.batch_summary),
+            "day_results": [dict(d) for d in self.day_results],
+            "r2_puts": list(self.r2_puts),
+            "dry_run": self.dry_run,
+            "mass_research": self.mass_research,
+            "phase7": self.phase7,
+            "ready_declared": self.ready_declared,
+            "ready_publication": READY_PUBLICATION_STATUS,
+            "order_execution": False,
+            "local_sot": self.local_sot,
+            "connected_to_mass_research_loop": False,
+        }
+
+
+def discover_tip_trading_days(
+    tip_rows_by_dataset: Mapping[str, Sequence[Mapping[str, Any]]],
+    *,
+    period_start: str | None = None,
+    period_end: str | None = None,
+) -> list[str]:
+    """Return sorted trading-day dates from tip calendar rows (HolidayDivision==1).
+
+    Falls back to bar event dates when calendar rows are missing (still not READY).
+    """
+    start = str(period_start).strip()[:10] if period_start else None
+    end = str(period_end).strip()[:10] if period_end else None
+    cal_rows = list(tip_rows_by_dataset.get("markets_calendar") or [])
+    days: list[str] = []
+    for row in cal_rows:
+        d = str(row.get("date") or "")[:10]
+        if not d:
+            continue
+        if start and d < start:
+            continue
+        if end and d > end:
+            continue
+        hol = row.get("holiday_division")
+        if hol is None and isinstance(row.get("payload"), Mapping):
+            hol = row["payload"].get("HolidayDivision") or row["payload"].get(
+                "holiday_division"
+            )
+        if str(hol).strip() == "1":
+            days.append(d)
+    if days:
+        return sorted(set(days))
+
+    # Fallback: unique bar dates in tip (assume listed session days).
+    bar_days: set[str] = set()
+    for row in tip_rows_by_dataset.get("equities_bars_daily") or []:
+        d = str(row.get("date") or "")[:10]
+        if not d:
+            continue
+        if start and d < start:
+            continue
+        if end and d > end:
+            continue
+        bar_days.add(d)
+    return sorted(bar_days)
+
+
+def summarize_signal_day(
+    signal_payload: Mapping[str, Any],
+    *,
+    as_of: str,
+) -> dict[str, Any]:
+    """Per-day aggregate: signal count, non-null rate, sign distribution (+1/0/-1)."""
+    rc = signal_payload.get("row_counts") if isinstance(signal_payload, Mapping) else None
+    if not isinstance(rc, Mapping):
+        rc = {}
+    computed = int(rc.get("computed") or 0)
+    non_null = int(rc.get("non_null") or 0)
+    null_n = int(rc.get("null") or 0)
+    long_n = int(rc.get("long") or 0)
+    short_n = int(rc.get("short") or 0)
+    flat_n = int(rc.get("flat") or 0)
+    rate = (float(non_null) / float(computed)) if computed else None
+    sample = list(signal_payload.get("sample_values") or [])[:10]
+    return {
+        "date": str(as_of)[:10],
+        "as_of": str(as_of),
+        "signal_count": computed,
+        "non_null": non_null,
+        "null": null_n,
+        "non_null_rate": rate,
+        "sign_distribution": {
+            "+1": long_n,
+            "0": flat_n,
+            "-1": short_n,
+            "null": null_n,
+        },
+        "row_counts": {
+            "computed": computed,
+            "non_null": non_null,
+            "null": null_n,
+            "long": long_n,
+            "short": short_n,
+            "flat": flat_n,
+        },
+        "sample_values": sample,
+        "signal_id": signal_payload.get("signal_id"),
+        "candidate_only": signal_payload.get("candidate_only"),
+        "order_execution": False,
+        "ready_declared": False,
+        "mass_research": MASS_RESEARCH_STATUS,
+    }
+
+
+def execute_multiday_signal_eval(
+    *,
+    period_start: str,
+    period_end: str,
+    job_id: str = "w0815au-g1-multiday",
+    codes: Sequence[str] | None = None,
+    as_of_days: Sequence[str] | None = None,
+    max_days: int = 10,
+    min_days: int = 5,
+    feature_row_limit: int = DEFAULT_FEATURE_ROW_LIMIT,
+    volume_change_abs_min: float | None = DEFAULT_VOLUME_CHANGE_ABS_MIN,
+    write_per_day_artifacts: bool = True,
+    dry_run: bool = False,
+    d1_execute: D1ExecuteFn | None = None,
+    r2_put: R2PutFn | None = None,
+    staging_dir: str | Path | None = None,
+    wrangler: str | Path | None = None,
+    wrangler_config: str | Path | None = None,
+) -> MultidaySignalEval:
+    """Run single_shot-equivalent tip signal compute across multiple as_of days.
+
+    Flow (Mass OFF · no READY · no orders · CF D1 tip only):
+
+    1. One tip payload extract for the window (not local SQLite SoT).
+    2. Discover trading days (or use caller ``as_of_days``).
+    3. For each day: tip FeatureContext → approved-leg features → signal.
+    4. Aggregate per-day counts / non-null rate / sign distribution.
+    5. Write ``research/single_shot/job={id}/batch_summary.json`` (+ optional
+       per-day ``days/date=YYYY-MM-DD/signals.json``).
+
+    Does **not** call ``agents.mass_research``, mint READY, or paper execution.
+    """
+    assert_mass_and_phase7_off()
+    start = str(period_start).strip()[:10]
+    end = str(period_end).strip()[:10]
+    if not start or not end:
+        raise SingleShotJobError("period_start and period_end are required")
+    jid = str(job_id).strip()
+    if not jid or "/" in jid or "\\" in jid or ".." in jid:
+        raise SingleShotJobError("job_id must be a non-empty path-safe token")
+
+    dataset_ids = require_complete_21_only(
+        DEFAULT_SIGNAL_DATASETS, context="multiday signal eval datasets"
+    )
+    selected_codes = (
+        [str(c).strip() for c in codes if str(c).strip()]
+        if codes
+        else ["13010", "72030", "67580"]
+    )
+
+    tip_feature_extract = extract_d1_tip_feature_rows(
+        dataset_ids,
+        period_start=start,
+        period_end=end,
+        codes=selected_codes,
+        row_limit_per_dataset=feature_row_limit,
+        d1_execute=d1_execute,
+        context="multiday signal tip feature extract",
+    )
+    rows_by_ds = tip_feature_extract.get("rows_by_dataset") or {}
+    if codes is None and tip_feature_extract.get("selected_codes"):
+        selected_codes = list(tip_feature_extract["selected_codes"])
+
+    if as_of_days:
+        day_list = sorted({str(d).strip()[:10] for d in as_of_days if str(d).strip()})
+    else:
+        day_list = discover_tip_trading_days(
+            rows_by_ds, period_start=start, period_end=end
+        )
+    # Prefer mid/late window days so 1d features have prior bars in the tip.
+    if len(day_list) > max_days:
+        day_list = day_list[-int(max_days) :]
+    if len(day_list) < min_days and as_of_days is None:
+        # Still proceed with whatever trading days exist; caller sees n_days.
+        pass
+    if not day_list:
+        raise SingleShotJobError(
+            "multiday signal eval: no trading days found in tip window "
+            f"{start}..{end}"
+        )
+
+    paths = design_artifact_paths(jid)
+    prefix = str(paths["prefix"])
+    batch_key = f"{prefix}/batch_summary.json"
+    executed_at = _now_utc()
+
+    day_results: list[dict[str, Any]] = []
+    for d in day_list:
+        as_of = f"{d}T15:30:00+09:00"
+        feature_payload = compute_tip_candidate_features(
+            rows_by_ds,
+            as_of=as_of,
+            feature_ids=DEFAULT_SIGNAL_FEATURE_IDS,
+            codes=selected_codes,
+            dates=[d],
+        )
+        signal_core = compute_signal_from_feature_observations(
+            feature_payload.get("observations") or [],
+            as_of=as_of,
+            volume_change_abs_min=volume_change_abs_min,
+            codes=selected_codes,
+        )
+        day_summary = summarize_signal_day(signal_core, as_of=as_of)
+        day_summary["feature_tip_input_row_counts"] = feature_payload.get(
+            "tip_input_row_counts"
+        )
+        day_summary["feature_ids"] = list(DEFAULT_SIGNAL_FEATURE_IDS)
+        day_summary["codes"] = list(selected_codes)
+        day_summary["feature_status"] = feature_payload.get("status")
+        day_summary["definition"] = signal_definition()
+        day_summary["observations"] = signal_core.get("observations") or []
+        day_summary["local_sot"] = False
+        day_summary["phase7"] = PHASE7_STATUS
+        day_results.append(day_summary)
+
+    # Aggregate across days.
+    total_computed = sum(int(d.get("signal_count") or 0) for d in day_results)
+    total_non_null = sum(int(d.get("non_null") or 0) for d in day_results)
+    total_null = sum(int(d.get("null") or 0) for d in day_results)
+    total_long = sum(int((d.get("sign_distribution") or {}).get("+1") or 0) for d in day_results)
+    total_short = sum(int((d.get("sign_distribution") or {}).get("-1") or 0) for d in day_results)
+    total_flat = sum(int((d.get("sign_distribution") or {}).get("0") or 0) for d in day_results)
+    overall_rate = (
+        float(total_non_null) / float(total_computed) if total_computed else None
+    )
+
+    per_day_compact = [
+        {
+            "date": d.get("date"),
+            "as_of": d.get("as_of"),
+            "signal_count": d.get("signal_count"),
+            "non_null": d.get("non_null"),
+            "null": d.get("null"),
+            "non_null_rate": d.get("non_null_rate"),
+            "sign_distribution": d.get("sign_distribution"),
+            "sample_values": d.get("sample_values"),
+        }
+        for d in day_results
+    ]
+
+    batch_summary: dict[str, Any] = {
+        "version": "multiday-signal-batch/v1",
+        "job_id": jid,
+        "signal_id": DEFAULT_SIGNAL_ID,
+        "signal_version": DEFAULT_SIGNAL_VERSION,
+        "signal_status": "candidate",
+        "candidate_only": SIGNAL_CANDIDATE_ONLY,
+        "definition": signal_definition(),
+        "feature_ids": list(DEFAULT_SIGNAL_FEATURE_IDS),
+        "feature_status_pins": {
+            "topix_relative_1d": "approved",
+            "is_trading_day": "approved",
+            "volume_change_1d": "approved",
+        },
+        "approved_legs_only": True,
+        "dataset_ids": list(dataset_ids),
+        "period_start": start,
+        "period_end": end,
+        "codes": list(selected_codes),
+        "n_days": len(day_results),
+        "as_of_days": [d.get("date") for d in day_results],
+        "tip_plane": "D1_hot_tip",
+        "d1_database": D1_DATABASE_NAME,
+        "tip_extracted_row_counts": tip_feature_extract.get("extracted_row_counts"),
+        "tip_raw_tip_counts": tip_feature_extract.get("raw_tip_counts"),
+        "per_day": per_day_compact,
+        "aggregate": {
+            "signal_count": total_computed,
+            "non_null": total_non_null,
+            "null": total_null,
+            "non_null_rate": overall_rate,
+            "sign_distribution": {
+                "+1": total_long,
+                "0": total_flat,
+                "-1": total_short,
+                "null": total_null,
+            },
+        },
+        "volume_change_abs_min": volume_change_abs_min,
+        "executed_at_utc": executed_at,
+        "artifact": {
+            "bucket": RESEARCH_ARTIFACT_BUCKET,
+            "prefix": prefix,
+            "batch_summary_r2_key": batch_key,
+            "per_day_key_template": f"{prefix}/days/date={{date}}/signals.json",
+        },
+        "mass_research": MASS_RESEARCH_STATUS,
+        "phase7": PHASE7_STATUS,
+        "ready_declared": READY_DECLARED,
+        "ready_publication": READY_PUBLICATION_STATUS,
+        "order_execution": False,
+        "local_sot": False,
+        "connected_to_mass_research_loop": False,
+        "densify": False,
+        "note": (
+            "W54 multi-day tip signal eval via single_shot only. "
+            "Approved-leg signal c21_topix_relative_sign (candidate_only=False). "
+            "Not READY. Not mass research. No order execution. CF D1 tip only."
+        ),
+    }
+
+    puts: list[dict[str, Any]] = []
+
+    def _put(key: str, payload: Mapping[str, Any]) -> dict[str, Any]:
+        body = _json_bytes(payload)
+        if r2_put is not None:
+            meta = r2_put(RESEARCH_ARTIFACT_BUCKET, key, body)
+            if "status" not in meta:
+                meta = {**meta, "status": "injected"}
+            return meta
+        return default_r2_put(
+            RESEARCH_ARTIFACT_BUCKET,
+            key,
+            body,
+            wrangler=wrangler,
+            config=wrangler_config,
+            dry_run=dry_run,
+            staging_dir=staging_dir,
+        )
+
+    puts.append(_put(batch_key, batch_summary))
+
+    if write_per_day_artifacts:
+        for d in day_results:
+            date_s = str(d.get("date") or "")[:10]
+            day_key = f"{prefix}/days/date={date_s}/signals.json"
+            day_body = {
+                "version": "multiday-signal-day/v1",
+                "job_id": jid,
+                **{k: d[k] for k in d if k != "definition"},
+                "definition": d.get("definition") or signal_definition(),
+                "mass_research": MASS_RESEARCH_STATUS,
+                "phase7": PHASE7_STATUS,
+                "ready_declared": READY_DECLARED,
+                "order_execution": False,
+                "local_sot": False,
+            }
+            puts.append(_put(day_key, day_body))
+            d["signals_r2_key"] = day_key
+
+    # Parent manifest (freeze surface + keys; no READY claim).
+    manifest_key = str(paths["manifest_r2_key"])
+    manifest = {
+        "version": "multiday-signal-manifest/v1",
+        "job_id": jid,
+        "bucket": RESEARCH_ARTIFACT_BUCKET,
+        "prefix": prefix,
+        "keys": {
+            "manifest": manifest_key,
+            "batch_summary": batch_key,
+            **(
+                {
+                    f"day_{d.get('date')}": d.get("signals_r2_key")
+                    for d in day_results
+                    if d.get("signals_r2_key")
+                }
+                if write_per_day_artifacts
+                else {}
+            ),
+        },
+        "n_days": len(day_results),
+        "as_of_days": [d.get("date") for d in day_results],
+        "codes": list(selected_codes),
+        "signal_id": DEFAULT_SIGNAL_ID,
+        "candidate_only": SIGNAL_CANDIDATE_ONLY,
+        "aggregate": batch_summary["aggregate"],
+        "executed_at_utc": executed_at,
+        "dry_run": bool(dry_run),
+        "mass_research": MASS_RESEARCH_STATUS,
+        "phase7": PHASE7_STATUS,
+        "ready_declared": READY_DECLARED,
+        "ready_publication": READY_PUBLICATION_STATUS,
+        "order_execution": False,
+        "local_sot": False,
+        "connected_to_mass_research_loop": False,
+    }
+    puts.append(_put(manifest_key, manifest))
+    batch_summary["manifest_r2_key"] = manifest_key
+
+    return MultidaySignalEval(
+        job_id=jid,
+        n_days=len(day_results),
+        as_of_days=tuple(str(d.get("date")) for d in day_results),
+        codes=tuple(selected_codes),
+        batch_summary_r2_key=batch_key,
+        batch_summary=batch_summary,
+        day_results=tuple(day_results),
+        r2_puts=tuple(puts),
+        dry_run=bool(dry_run),
+        mass_research=MASS_RESEARCH_STATUS,
+        phase7=PHASE7_STATUS,
+        ready_declared=READY_DECLARED,
+        local_sot=False,
+    )
+
+
 __all__ = [
     "COMPLETE_21_DATASETS",
     "COMPLETE_21_DATASET_SET",
@@ -1904,6 +2472,7 @@ __all__ = [
     "RESEARCH_ARTIFACT_BUCKET",
     "RESEARCH_ARTIFACT_PREFIX",
     "SIGNAL_CANDIDATE_ONLY",
+    "MultidaySignalEval",
     "PermanentDeferHistoryError",
     "SingleShotExecution",
     "SingleShotJobError",
@@ -1916,6 +2485,8 @@ __all__ = [
     "default_d1_execute",
     "default_r2_put",
     "design_artifact_paths",
+    "discover_tip_trading_days",
+    "execute_multiday_signal_eval",
     "execute_single_shot_job",
     "extract_d1_tip_feature_rows",
     "extract_d1_tip_summaries",
@@ -1923,4 +2494,5 @@ __all__ = [
     "head_r2_object",
     "require_complete_21_only",
     "signal_definition",
+    "summarize_signal_day",
 ]
