@@ -213,8 +213,8 @@ Machine matrix: [`.glm-logs/w0815au_g2_o2/O2_RESULTS_MATRIX.json`](../../.glm-lo
 |-------|-------|
 | PRE_sha | `918c5b23eea60e19f1512cd094399ddfbb86cbb7` |
 | POST_PUSH_SHA (feat commit) | `93c45d92d1c6de1abf0d7e0856c1894b56aecd2a` |
-| origin/main (tip after fill) | *(filled after lock commit)* |
-| HEAD == origin/main | *(filled after lock)* |
+| origin/main (tip after fill) | `0c0ed93faf69e81cd72d26d0f9d7b9b09b228457` |
+| HEAD == origin/main | **true** (both `0c0ed93faf69e81cd72d26d0f9d7b9b09b228457`) |
 
 ---
 
