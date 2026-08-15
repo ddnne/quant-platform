@@ -342,7 +342,14 @@ class OpsCurrentReadService:
         )
 
     def storage_plane_status(self) -> dict[str, Any]:
-        """CF-native P0 counts-only proof (hot window / cold residual / JSDA)."""
+        """CF-native P0 counts-only proof (hot window / cold residual / JSDA).
+
+        Fact-table counts are **plane-local** (this DB). Dataset COMPLETE is
+        **receipt-owned** via ``dataset_coverage`` / ``coverage_segments`` and
+        may be projected without a matching full fact backfill on D1. Do not
+        treat ``tokyo_repo_rows == 0`` as contradiction of coverage COMPLETE
+        without checking ``jsda.coverage`` and the plane identity.
+        """
         hot_cutoff = "2026-07-01"
 
         def count(sql: str, params: tuple[Any, ...] = ()) -> int:
@@ -392,6 +399,65 @@ class OpsCurrentReadService:
         empty_legacy = (
             legacy_bars == 0 and legacy_listed == 0 and legacy_cal == 0
         )
+        # Coverage ledger (receipt-owned COMPLETE) vs fact-table counts.
+        jsda_cov_rows = self._all(
+            "SELECT dataset, status, row_count, observed_start, observed_end "
+            "FROM dataset_coverage WHERE dataset LIKE 'jsda_%' "
+            "ORDER BY dataset"
+        ) or []
+        jsda_coverage: dict[str, Any] = {}
+        for row in jsda_cov_rows:
+            ds = str(row.get("dataset") or "")
+            if not ds:
+                continue
+            jsda_coverage[ds] = {
+                "status": row.get("status"),
+                "coverage_row_count": int(row.get("row_count") or 0),
+                "observed_start": row.get("observed_start"),
+                "observed_end": row.get("observed_end"),
+            }
+        fact_by_dataset = {
+            "jsda_otc_bond_reference_prices": otc,
+            "jsda_corporate_bond_transactions": corp,
+            "jsda_tokyo_repo_rates": repo,
+        }
+        fact_table_by_dataset = {
+            "jsda_otc_bond_reference_prices": "jsda_otc_bond_reference_prices",
+            "jsda_corporate_bond_transactions": "jsda_corporate_bond_transactions",
+            "jsda_tokyo_repo_rates": "jsda_repo_rates",
+        }
+        divergence: list[dict[str, Any]] = []
+        for ds, fact_n in fact_by_dataset.items():
+            cov = jsda_coverage.get(ds) or {}
+            status = cov.get("status")
+            cov_n = int(cov.get("coverage_row_count") or 0)
+            if status == "COMPLETE" and fact_n == 0 and cov_n > 0:
+                divergence.append({
+                    "dataset": ds,
+                    "fact_table": fact_table_by_dataset[ds],
+                    "coverage_status": status,
+                    "coverage_row_count": cov_n,
+                    "fact_rows": fact_n,
+                    "kind": "COMPLETE_WITHOUT_LOCAL_FACTS",
+                    "note": (
+                        "Receipt/coverage COMPLETE projected without this "
+                        "plane holding fact rows. Not automatic data loss — "
+                        "check local research DB / R2 structured SoT."
+                    ),
+                })
+            elif status == "COMPLETE" and fact_n > 0 and cov_n > 0 and fact_n != cov_n:
+                divergence.append({
+                    "dataset": ds,
+                    "fact_table": fact_table_by_dataset[ds],
+                    "coverage_status": status,
+                    "coverage_row_count": cov_n,
+                    "fact_rows": fact_n,
+                    "kind": "FACT_VS_COVERAGE_COUNT_MISMATCH",
+                    "note": (
+                        "Plane fact count differs from coverage ledger "
+                        "row_count (often hot-tip D1 vs full local history)."
+                    ),
+                })
         return self._result(
             hot_cutoff=hot_cutoff,
             d1_approx_via_counts={
@@ -403,9 +469,28 @@ class OpsCurrentReadService:
             },
             complete_segments=complete,
             jsda={
+                # Plane-local fact counts (table COUNT(*)).
                 "otc_rows": otc,
                 "corporate_rows": corp,
                 "tokyo_repo_rows": repo,
+                "fact_table_map": {
+                    "jsda_otc_bond_reference_prices": "jsda_otc_bond_reference_prices",
+                    "jsda_corporate_bond_transactions": (
+                        "jsda_corporate_bond_transactions"
+                    ),
+                    "jsda_tokyo_repo_rates": "jsda_repo_rates",
+                },
+                # Receipt-owned coverage (may be COMPLETE with empty fact plane).
+                "coverage": jsda_coverage,
+                "coverage_vs_fact_divergence": divergence,
+                "definition": (
+                    "tokyo_repo_rows = COUNT(jsda_repo_rates) on this plane only. "
+                    "dataset COMPLETE for jsda_tokyo_repo_rates is owned by signed "
+                    "collection_receipts + coverage_segments (segment "
+                    "jsda-era-timeseries), not by D1 fact backfill. "
+                    "ops projection publishes coverage ledgers; full JSDA history "
+                    "lives on local research DB / R2 structured SoT."
+                ),
             },
             empty_legacy_tables={
                 "jquants_daily_bars": legacy_bars == 0,
@@ -427,7 +512,9 @@ class OpsCurrentReadService:
                 "mass_research": "NO-GO",
                 "ready": None,
                 "honesty_note": (
-                    "Counts-only ops proof. Not READY. Not full history COMPLETE."
+                    "Counts-only ops proof. Not READY. Not full history COMPLETE. "
+                    "JSDA COMPLETE is receipt-owned; fact counts are plane-local "
+                    "(D1 may show tokyo_repo_rows=0 while coverage COMPLETE)."
                 ),
             },
         )

@@ -564,6 +564,7 @@ export async function callOpsTool(db, name, rawArguments) {
   }
 
   // GLM_PATCH_OK skeleton + schema-corrected live tables (jquants_records SoT).
+  // Fact counts are plane-local; JSDA COMPLETE is receipt-owned (coverage ledger).
   if (name === "storage_plane_status") {
     const hotCutoff = "2026-07-01";
     const n = async (sql, binds = []) => {
@@ -589,6 +590,7 @@ export async function callOpsTool(db, name, rawArguments) {
       stageVer,
       stageChg,
       ingestionChangeLog,
+      jsdaCovRows,
     ] = await Promise.all([
       n("SELECT COUNT(*) AS n FROM jquants_records"),
       n(
@@ -616,10 +618,70 @@ export async function callOpsTool(db, name, rawArguments) {
       n("SELECT COUNT(*) AS n FROM jquants_records_nk_v2_versions_stage"),
       n("SELECT COUNT(*) AS n FROM ingestion_change_log_nk_v2_stage"),
       n("SELECT COUNT(*) AS n FROM ingestion_change_log"),
+      all(
+        db,
+        "SELECT dataset, status, row_count, observed_start, observed_end FROM dataset_coverage WHERE dataset LIKE 'jsda_%' ORDER BY dataset",
+      ).catch(() => []),
     ]);
     const emptyLegacy =
       legacyBars === 0 && legacyListed === 0 && legacyCal === 0;
     const coldCleared = barsCold === 0;
+    const jsdaCoverage = {};
+    for (const row of jsdaCovRows || []) {
+      if (!row?.dataset) continue;
+      jsdaCoverage[row.dataset] = {
+        status: row.status,
+        coverage_row_count: Number(row.row_count) || 0,
+        observed_start: row.observed_start ?? null,
+        observed_end: row.observed_end ?? null,
+      };
+    }
+    const factByDataset = {
+      jsda_otc_bond_reference_prices: otcRows,
+      jsda_corporate_bond_transactions: corpRows,
+      jsda_tokyo_repo_rates: tokyoRepoRows,
+    };
+    const factTableByDataset = {
+      jsda_otc_bond_reference_prices: "jsda_otc_bond_reference_prices",
+      jsda_corporate_bond_transactions: "jsda_corporate_bond_transactions",
+      jsda_tokyo_repo_rates: "jsda_repo_rates",
+    };
+    const divergence = [];
+    for (const [ds, factN] of Object.entries(factByDataset)) {
+      const cov = jsdaCoverage[ds] || {};
+      const status = cov.status;
+      const covN = Number(cov.coverage_row_count) || 0;
+      if (status === "COMPLETE" && factN === 0 && covN > 0) {
+        divergence.push({
+          dataset: ds,
+          fact_table: factTableByDataset[ds],
+          coverage_status: status,
+          coverage_row_count: covN,
+          fact_rows: factN,
+          kind: "COMPLETE_WITHOUT_LOCAL_FACTS",
+          note:
+            "Receipt/coverage COMPLETE projected without this plane holding fact rows. " +
+            "Not automatic data loss — check local research DB / R2 structured SoT.",
+        });
+      } else if (
+        status === "COMPLETE" &&
+        factN > 0 &&
+        covN > 0 &&
+        factN !== covN
+      ) {
+        divergence.push({
+          dataset: ds,
+          fact_table: factTableByDataset[ds],
+          coverage_status: status,
+          coverage_row_count: covN,
+          fact_rows: factN,
+          kind: "FACT_VS_COVERAGE_COUNT_MISMATCH",
+          note:
+            "Plane fact count differs from coverage ledger row_count " +
+            "(often hot-tip D1 vs full local history).",
+        });
+      }
+    }
     return {
       plane: "ops_current",
       mutable: true,
@@ -637,6 +699,19 @@ export async function callOpsTool(db, name, rawArguments) {
         otc_rows: otcRows,
         corporate_rows: corpRows,
         tokyo_repo_rows: tokyoRepoRows,
+        fact_table_map: {
+          jsda_otc_bond_reference_prices: "jsda_otc_bond_reference_prices",
+          jsda_corporate_bond_transactions: "jsda_corporate_bond_transactions",
+          jsda_tokyo_repo_rates: "jsda_repo_rates",
+        },
+        coverage: jsdaCoverage,
+        coverage_vs_fact_divergence: divergence,
+        definition:
+          "tokyo_repo_rows = COUNT(jsda_repo_rates) on this plane only. " +
+          "dataset COMPLETE for jsda_tokyo_repo_rates is owned by signed " +
+          "collection_receipts + coverage_segments (segment jsda-era-timeseries), " +
+          "not by D1 fact backfill. ops projection publishes coverage ledgers; " +
+          "full JSDA history lives on local research DB / R2 structured SoT.",
       },
       empty_legacy_tables: {
         jquants_daily_bars: legacyBars === 0,
@@ -659,7 +734,8 @@ export async function callOpsTool(db, name, rawArguments) {
         ready: null,
         honesty_note:
           "Counts-only ops proof. Not READY. Not full Parquet materialization. " +
-          "Does not claim all historical COMPLETE.",
+          "Does not claim all historical COMPLETE. JSDA COMPLETE is receipt-owned; " +
+          "fact counts are plane-local (D1 may show tokyo_repo_rows=0 while coverage COMPLETE).",
       },
       research_note:
         "storage_plane_status is control-plane proof only; never treat as Mass or READY.",
