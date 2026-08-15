@@ -1,8 +1,53 @@
 # Phase 6.2 / 6.3 residual status
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
-**Live verified:** 2026-08-15 (JST) / tip PRE `2026-08-15T06:59:37Z` → ops POST `2026-08-15T07:21:10Z` UTC · **W41** continuous collect · W38 contract floors **still SoT** (`ba3c811`) · COMPLETE segs **3461→3478 (Δ+17 PRIMARY)** · Dataset COMPLETE **20 held** · empty COMPLETE **0** · **OTC 76→93 (+17 PRIMARY)** FULL_OK_NEW S260401…S260423 (17 Apr weekdays) · tip raw **15703→15750 (+47 secondary)** · tip densify **not primary** · actionable_n **0** · mb **2015-03** DEFER_thin_partial_month held (no densify) · Permanent DEFER **5** held · Phase7 **OFF** · FRESH `projgen-56113e9f4ca54796b9fc547a3f2ac8c6` · **CF-SoT** held — D1 = hot tip · R2 = history · COMPLETE = receipt-owned · **POST_PUSH_SHA** `7960e193c929c9df2bfa63b5adcb6dcff32dd90d`
-**Repo tip:** `7960e193c929c9df2bfa63b5adcb6dcff32dd90d` — W41 ops · COMPLETE **3478** / OTC **93** / Dataset COMPLETE **20** / empty COMPLETE **0** / raw **15756** (tip mid **15750**) / Phase7 **OFF**
+**Live verified:** 2026-08-15 (JST) / W42 residual close ~`2026-08-15T07:21–07:30Z` UTC · **W42** mb floor + permanent DEFER lock + OTC absorb · contract floor mb **2015-04-01** (`089144c`) · COMPLETE segs **3478** · Dataset COMPLETE **21** (includes **markets_breakdown**) · empty COMPLETE **0** · **OTC 93** (W41 FULL_OK_NEW +17 absorbed remote **76→93**) · fins_earnings_date still PARTIAL **4** (tip DEFER; **not** Dataset COMPLETE) · Permanent DEFER **5** (master · earn_cal · bars_am · otc long-tail · earn tip4) · densify / tip densify **not primary** · Phase7 **OFF** · FRESH `projgen-9c224abe0e164223b39395020d7e5116` · **CF-SoT** held — D1 = hot tip · R2 = history · COMPLETE = receipt-owned · **POST_PUSH_SHA** `PENDING_PUSH`
+**Repo tip:** `PENDING_PUSH` — W42 residual · COMPLETE **3478** / OTC **93** / Dataset COMPLETE **21** / empty COMPLETE **0** / Phase7 **OFF**
+
+## W42 / w0815ai — residual close (mb floor + tip4 DEFER + OTC absorb) (FINAL)
+
+**Ops / residual proof:** [`docs/proof/w0815ai_w42_close_20260815.md`](proof/w0815ai_w42_close_20260815.md)  
+**Machine:** mb [`.glm-logs/w0815ai_g1_mb/`](../.glm-logs/w0815ai_g1_mb/) · earn tip4 [`.glm-logs/w0815ai_g2_earn/`](../.glm-logs/w0815ai_g2_earn/) · DEFER [`.glm-logs/w0815ai_g3_defer/PERMANENT_DEFER_W42.json`](../.glm-logs/w0815ai_g3_defer/PERMANENT_DEFER_W42.json) · OTC absorb [`.glm-logs/w0815ai_g4_ops/`](../.glm-logs/w0815ai_g4_ops/) · T11 [`.glm-logs/w0815ai_g6_close/`](../.glm-logs/w0815ai_g6_close/)
+
+| gate | status |
+|------|--------|
+| COMPLETE segs | **3478 held** (T6 absorb **3461→3478 Δ+17** from W41 OTC seals) |
+| Dataset COMPLETE | **20 → 21 (+1)** — **PRIMARY** (`markets_breakdown` via floor **2015-04-01**) |
+| JSDA OTC | **93 held** (T6 remote **76→93 +17**; tip island; archive still DEFER) |
+| T1 mb `2015-03` | **FLOOR_RAISE_TO_2015_04** · OOS PARTIAL prune · seal **0** · dataset **COMPLETE** |
+| T2 fins_earnings_date tip4 | all **4 PERMANENT DEFER** PD-MX-EARN-TIP · NO_RAW_FOR_MONTH · densify **0** · **not** Dataset COMPLETE |
+| Permanent DEFER | **5** locked (PD-D2-MASTER · PD-D4-EARN-CAL · PD-D4-BARS-AM · PD-D5-JSDA-OTC · PD-MX-EARN-TIP) |
+| Floors / contract | mb floor raise only (`089144c`); W38 other floors still SoT |
+| empty-raw COMPLETE / Mass / READY / Phase7 | **ban / NO-GO / OFF** |
+| Projection | **FRESH** `projgen-9c224abe0e164223b39395020d7e5116` |
+| CF-SoT | D1 **hot tip** · R2 **history** · COMPLETE **receipt-owned** |
+| Push | **POST_PUSH_SHA** `PENDING_PUSH` |
+
+**Primary success:** Dataset COMPLETE **+1** (`markets_breakdown`). **Absorb:** OTC **+17** / COMPLETE segs **+17** (W41). **Not** densify-as-success. **Not** tip-as-primary.
+
+### Dataset COMPLETE list (**21**) — includes `markets_breakdown`
+
+`derivatives_bars_daily_futures` · `derivatives_bars_daily_options` · `derivatives_bars_daily_options_225` · `edinet_cross_shareholdings` · `edinet_large_volume_shareholders` · `edinet_major_shareholders` · `equities_bars_daily` · `equities_investor_types` · `fins_details` · `fins_dividend` · `fins_summary` · `indices_bars_daily` · `indices_bars_daily_topix` · `jsda_corporate_bond_transactions` · `jsda_tokyo_repo_rates` · **`markets_breakdown`** · `markets_calendar` · `markets_margin_alert` · `markets_margin_interest` · `markets_short_ratio` · `markets_short_sale_report`
+
+### Residual PARTIAL after W42 (all non-actionable)
+
+| dataset | PARTIAL n | disposition |
+|---------|----------:|-------------|
+| `equities_master` | **94** | permanent DEFER PD-D2-MASTER |
+| `equities_earnings_calendar` | **199** | permanent DEFER PD-D4-EARN-CAL |
+| `equities_bars_daily_am` | **31** | permanent DEFER PD-D4-BARS-AM |
+| `jsda_otc_bond_reference_prices` | archive beyond tip | permanent DEFER PD-D5-JSDA-OTC (tip COMPLETE **93**) |
+| `fins_earnings_date` | **4** | permanent DEFER PD-MX-EARN-TIP `2026-01…04` (**not** Dataset COMPLETE) |
+
+### Permanent DEFER list (W42 lock)
+
+| id | dataset(s) | class / span | densify |
+|----|------------|--------------|---------|
+| **PD-D2-MASTER** | `equities_master` | MISDATE `2006-08…2008-04` (21) + PRE_PLAN `2000-07…2006-07` (73) | FORBIDDEN unless in-window Date raw |
+| **PD-D4-EARN-CAL** | `equities_earnings_calendar` | vendor tip-only history (~199) | FORBIDDEN |
+| **PD-D4-BARS-AM** | `equities_bars_daily_am` | tip-only AM (~31) | FORBIDDEN |
+| **PD-D5-JSDA-OTC** | `jsda_otc_bond_reference_prices` | archive long-tail beyond tip **93** | no archive densify forever |
+| **PD-MX-EARN-TIP** | `fins_earnings_date` | tip holes `2026-01…04` (4) · NO_RAW_FOR_MONTH | FORBIDDEN (tip densify not success) |
 
 ## W41 / w0815ah — continuous collect ops (JSDA OTC PRIMARY + JQ tip secondary + gap) (FINAL)
 
