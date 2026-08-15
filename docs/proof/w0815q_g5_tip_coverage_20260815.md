@@ -10,7 +10,7 @@
 
 **Live verified:** 2026-08-15 (JST) / ~2026-08-15T01:40Z UTC  
 **Wave start HEAD:** `5966aa08ba09c55a321d686040202831d9ca50e0`  
-**Proof HEAD (post-push):** `PLACEHOLDER`  
+**Proof HEAD (post-push):** `ec59718d7e60285b3403a7778d77b0da998342e9`  
 **Projection:** **FRESH** `projgen-432e34acc37e49e3be496d5e379ff8a2`  
 **Artifacts:** `.glm-logs/w0815q_g5_tip/` (`dry_*`, `exec_bars_tip_*`, `scan_residual_nz*`, `FINAL_metrics.json`, `pre/`, `post/`, publish + reeval logs)
 
