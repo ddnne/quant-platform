@@ -1,8 +1,8 @@
 # Phase 6.2 / 6.3 residual status
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
-**Live verified:** 2026-08-15 (JST) / ~2026-08-15T04:01–04:14Z UTC (remote D1; COMPLETE segs **3457** **+0**; raw **15367** tip POST; Dataset COMPLETE **11**; empty COMPLETE **0**; Phase7 **OFF**; **W31** tip collect + JSDA + gap; floors **locked** + **NO_DENSIFY_FIXED** held; tip raw **+56** secondary; FRESH `projgen-20ecd21e86c34b45bf21d82c39d5f84d`; **HAS_RAW_SEALABLE=0** held; post_floor_sealable **0** densify **none**; OTC **72** held; **DEFER densify not** re-run; **CF-SoT** language held — D1 = hot tip · R2 = history · COMPLETE = receipt-owned; **POST_PUSH_SHA** `PENDING_PUSH`)
-**Repo tip:** `PENDING_PUSH` — COMPLETE **3457** / Dataset COMPLETE **11** / empty COMPLETE **0** / Phase7 **OFF** / w0815x W31 collect ops close
+**Live verified:** 2026-08-15 (JST) / ~2026-08-15T04:01–04:14Z UTC (remote D1; COMPLETE segs **3457** **+0**; raw **15367** tip POST; Dataset COMPLETE **11**; empty COMPLETE **0**; Phase7 **OFF**; **W31** tip collect + JSDA + gap; floors **locked** + **NO_DENSIFY_FIXED** held; tip raw **+56** secondary; FRESH `projgen-20ecd21e86c34b45bf21d82c39d5f84d`; **HAS_RAW_SEALABLE=0** held; post_floor_sealable **0** densify **none**; OTC **72** held; **DEFER densify not** re-run; **CF-SoT** language held — D1 = hot tip · R2 = history · COMPLETE = receipt-owned; **POST_PUSH_SHA** `74894912ac4851bbd5a837183e000a160a11e5e3`)
+**Repo tip:** `74894912ac4851bbd5a837183e000a160a11e5e3` — COMPLETE **3457** / Dataset COMPLETE **11** / empty COMPLETE **0** / Phase7 **OFF** / w0815x W31 collect ops close
 
 ## W31 / w0815x — continuous collect ops (JQ tip + JSDA + gap) (FINAL)
 
@@ -18,7 +18,7 @@
 | empty-raw COMPLETE / Mass / READY / Phase7 | **ban / NO-GO / OFF** |
 | Projection | **FRESH** `projgen-20ecd21e86c34b45bf21d82c39d5f84d` |
 | CF-SoT | D1 **hot tip** · R2 **history** · COMPLETE **receipt-owned** |
-| Push | **POST_PUSH_SHA** `PENDING_PUSH` |
+| Push | **POST_PUSH_SHA** `74894912ac4851bbd5a837183e000a160a11e5e3` |
 
 ## W30 / w0815w — continuous collect ops (JQ tip + JSDA + gap) (FINAL)
 
