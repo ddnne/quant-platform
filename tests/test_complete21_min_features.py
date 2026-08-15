@@ -1,4 +1,4 @@
-"""COMPLETE 21 min features + feature-pipeline permanent DEFER guard (W49–W55).
+"""COMPLETE 21 min features + feature-pipeline permanent DEFER guard (W49–W56).
 
 W51 / w0815ar_g2:
 
@@ -26,8 +26,15 @@ W55 / w0815av_g2 selective O2:
 * Promote after feature-level CF tip E2E with S33 section:
   ``short_ratio_level`` → approved (v1.0.0).
 * Do **not** promote ``return_1d_c21`` (policy twin of v0 ``return_1d``).
-* Skip ``margin_alert_flag`` / ``futures_activity_proxy`` (no free O2 this wave).
-* Remaining 3 stay candidate. No READY / Mass / Phase7.
+* Skip ``margin_alert_flag`` / ``futures_activity_proxy`` (no free O2 that wave).
+
+W56 / w0815aw_g3 optional O2:
+
+* Promote after feature-level CF tip E2E: ``futures_activity_proxy`` → approved
+  (v1.0.0).
+* Do **not** promote ``return_1d_c21`` (policy twin of v0 ``return_1d``).
+* ``margin_alert_flag`` remains candidate (not chosen this wave).
+* Remaining 2 stay candidate. No READY / Mass / Phase7.
 """
 
 from __future__ import annotations
@@ -88,7 +95,7 @@ COMPLETE21_MIN_IDS = (
     "futures_activity_proxy",
 )
 
-# W52 + W53 + W54 + W55 O2 promotions; version pin remains 1.0.0.
+# W52 + W53 + W54 + W55 + W56 O2 promotions; version pin remains 1.0.0.
 COMPLETE21_MIN_APPROVED_IDS = (
     "is_trading_day",
     "volume_change_1d",
@@ -97,6 +104,7 @@ COMPLETE21_MIN_APPROVED_IDS = (
     "margin_interest_change_1d",
     "repo_rate_level",
     "short_ratio_level",
+    "futures_activity_proxy",
 )
 COMPLETE21_MIN_CANDIDATE_IDS = tuple(
     fid for fid in COMPLETE21_MIN_IDS if fid not in COMPLETE21_MIN_APPROVED_IDS
@@ -428,8 +436,8 @@ def test_complete21_min_requires_as_of(tmp_path):
         compute("margin_alert_flag", as_of=None, code=CODES[0], db_path=db)
 
 
-def test_complete21_min_w55_promotion_status_and_version_pin():
-    """W52–W55: 7 approved (pinned 1.0.0); remaining 3 stay candidate."""
+def test_complete21_min_w56_promotion_status_and_version_pin():
+    """W52–W56: 8 approved (pinned 1.0.0); remaining 2 stay candidate."""
     for fid in COMPLETE21_MIN_APPROVED_IDS:
         feat = get(fid)
         assert feat.status == "approved", fid
@@ -438,8 +446,8 @@ def test_complete21_min_w55_promotion_status_and_version_pin():
         feat = get(fid)
         assert feat.status == "candidate", fid
         assert feat.status != "approved", fid
-    assert len(COMPLETE21_MIN_APPROVED_IDS) == 7
-    assert len(COMPLETE21_MIN_CANDIDATE_IDS) == 3
+    assert len(COMPLETE21_MIN_APPROVED_IDS) == 8
+    assert len(COMPLETE21_MIN_CANDIDATE_IDS) == 2
     # Policy: return_1d_c21 must remain candidate (twin of v0 return_1d)
     assert get("return_1d_c21").status == "candidate"
     assert "return_1d_c21" not in COMPLETE21_MIN_APPROVED_IDS
@@ -450,6 +458,11 @@ def test_complete21_min_w55_promotion_status_and_version_pin():
     assert get("short_ratio_level").status == "approved"
     assert get("short_ratio_level").intended_role == "signal"
     assert "section" in get("short_ratio_level").inputs.required_kwargs
+    # W56 optional O2 promote
+    assert get("futures_activity_proxy").status == "approved"
+    assert get("futures_activity_proxy").intended_role == "state"
+    # margin_alert_flag remains candidate this wave
+    assert get("margin_alert_flag").status == "candidate"
 
 
 def test_get_for_strategy_admits_approved_signal_not_utility_or_candidate():
@@ -482,6 +495,12 @@ def test_get_for_strategy_admits_approved_signal_not_utility_or_candidate():
     assert str(short.version) == "1.0.0"
     assert "section" in short.inputs.required_kwargs
 
+    # W56 optional O2 promote: futures_activity_proxy approved + state → admitted
+    fut = get_for_strategy("futures_activity_proxy", version="1.0.0")
+    assert fut.status == "approved"
+    assert fut.intended_role == "state"
+    assert str(fut.version) == "1.0.0"
+
     # is_trading_day: approved but utility → role gate rejects by default
     with pytest.raises(FeatureGovernanceError, match="utility"):
         get_for_strategy("is_trading_day", version="1.0.0")
@@ -498,8 +517,6 @@ def test_get_for_strategy_admits_approved_signal_not_utility_or_candidate():
         get_for_strategy("return_1d_c21")
     with pytest.raises(FeatureGovernanceError, match="candidate"):
         get_for_strategy("margin_alert_flag")
-    with pytest.raises(FeatureGovernanceError, match="candidate"):
-        get_for_strategy("futures_activity_proxy")
 
 
 def test_complete21_min_declared_datasets_reject_each_permanent_defer():

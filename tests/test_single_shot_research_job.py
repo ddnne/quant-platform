@@ -1150,7 +1150,9 @@ def test_nextday_lookahead_policy_documented():
     assert "close(T+1)/close(T)" in p["return_definition"]
     assert p["ready_declared"] is False
     assert p["mass_research"] == "NO-GO"
-    assert p["label"] == "研究用・未宣言"
+    assert p["label"] == "小サンプル / 研究用・未宣言"
+    assert p.get("significance_claimed") is False
+    assert p.get("edge_claimed") is False
     assert session_close_as_of("2026-08-07") == "2026-08-07T15:30:00+09:00"
 
 
@@ -1250,30 +1252,37 @@ def test_attach_next_day_returns_pit_and_formula():
 
 
 def test_summarize_nextday_by_sign_means_and_null_rates():
-    """T2 unit: mean next-day return by +1 / 0 / −1 + null rates."""
+    """T2 unit: mean/median next-day return by +1 / 0 / −1 + null rates."""
     rows = [
         {"value": 1.0, "next_day_return": 0.02},
         {"value": 1.0, "next_day_return": 0.04},
+        {"value": 1.0, "next_day_return": 0.06},
         {"value": -1.0, "next_day_return": -0.01},
         {"value": -1.0, "next_day_return": None},
         {"value": 0.0, "next_day_return": 0.0},
         {"value": None, "next_day_return": 0.10},
     ]
     s = summarize_nextday_by_sign(rows)
-    assert s["label"] == "研究用・未宣言"
+    assert s["label"] == "小サンプル / 研究用・未宣言"
     assert s["ready_declared"] is False
     assert s["mass_research"] == "NO-GO"
-    assert s["by_sign"]["+1"]["count"] == 2
-    assert s["by_sign"]["+1"]["mean_next_day_return"] == pytest.approx(0.03)
+    assert s["significance_claimed"] is False
+    assert s["edge_claimed"] is False
+    assert s["by_sign"]["+1"]["count"] == 3
+    assert s["by_sign"]["+1"]["mean_next_day_return"] == pytest.approx(0.04)
+    assert s["by_sign"]["+1"]["median_next_day_return"] == pytest.approx(0.04)
     assert s["by_sign"]["+1"]["null_return_count"] == 0
     assert s["by_sign"]["-1"]["count"] == 2
     assert s["by_sign"]["-1"]["null_return_count"] == 1
     assert s["by_sign"]["-1"]["null_return_rate"] == pytest.approx(0.5)
     assert s["by_sign"]["-1"]["mean_next_day_return"] == pytest.approx(-0.01)
+    assert s["by_sign"]["-1"]["median_next_day_return"] == pytest.approx(-0.01)
     assert s["by_sign"]["0"]["mean_next_day_return"] == pytest.approx(0.0)
+    assert s["by_sign"]["0"]["median_next_day_return"] == pytest.approx(0.0)
     assert s["by_sign"]["null_signal"]["count"] == 1
     assert "look_ahead_policy" in s
     assert s["look_ahead_policy"]["no_feature_lookahead"] is True
+    assert "median_next_day_return" in s["overall"]
 
 
 def test_execute_multiday_nextday_return_eval_batch(tmp_path: Path):
@@ -1318,17 +1327,20 @@ def test_execute_multiday_nextday_return_eval_batch(tmp_path: Path):
     assert eval_result.batch_summary_r2_key in puts
     body = json.loads(puts[eval_result.batch_summary_r2_key].decode("utf-8"))
     assert body["attach_nextday_returns"] is True
-    assert body["label"] == "研究用・未宣言"
+    assert body["label"] == "小サンプル / 研究用・未宣言"
     assert body["mass_research"] == "NO-GO"
     assert body["ready_declared"] is False
     assert body["order_execution"] is False
     assert body["connected_to_mass_research_loop"] is False
+    assert body["significance_claimed"] is False
+    assert body["edge_claimed"] is False
     assert "nextday_return" in body
     nr = body["nextday_return"]
-    assert nr["label"] == "研究用・未宣言"
+    assert nr["label"] == "小サンプル / 研究用・未宣言"
     assert set(nr["by_sign"].keys()) == {"+1", "0", "-1", "null_signal"}
     # Synthetic rising bars → non-null next-day returns for days with T+1.
     assert nr["overall"]["non_null_return_count"] >= 1
+    assert "median_next_day_return" in nr["overall"]
     assert nr["look_ahead_policy"]["no_feature_lookahead"] is True
     # Per-day: feature_as_of is T close; evaluation_as_of is T+1 close when present.
     for day in body["per_day"]:
@@ -1372,6 +1384,8 @@ def test_nextday_eval_no_mass_ready_or_orders_ast():
     # Look-ahead policy comments / constants present.
     assert "no_feature_lookahead" in src
     assert "研究用・未宣言" in src
+    assert "小サンプル" in src
+    assert "median_next_day_return" in src
     # Feature as_of must remain T close (documented in policy + code).
     assert "signal_day_T_session_close" in src
     assert "next_trading_day_T1_session_close" in src

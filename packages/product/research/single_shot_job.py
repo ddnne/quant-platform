@@ -21,6 +21,10 @@ W52–W53 minimal signal write + W54 multi-day as_of batch (Mass OFF):
   returns per code/day + mean-by-sign summary (研究用・未宣言). Feature
   ``as_of`` remains T session close; evaluation uses T+1 close availability
   only (no look-ahead into features). See :data:`NEXTDAY_LOOKAHEAD_POLICY`.
+* **Expand window (W56):** multiday + nextday eval may use up to ~20 trading
+  days from the available CF D1 tip (or max available; honest if tip is
+  shorter). Sign-wise mean **and median** next-day return; outputs always
+  labeled **小サンプル / 研究用・未宣言** (no significance / no edge claim).
 * **Write:** R2 ``quant-structured`` under ``research/single_shot/job={id}/…``.
   Local FS is **not** Source of Truth (optional dry-run stages payloads only).
 * **Not** connected to ``agents.mass_research`` / mass research loop.
@@ -2110,10 +2114,13 @@ def execute_single_shot_job(
 #   * evaluation_as_of defaults to T+1 session close so the T+1 bar is
 #     PIT-available (available_at ≤ evaluation_as_of). This is historical
 #     research labeling — not a live trading claim, not READY, not Mass.
+# Research-only sample label for nextday metrics (W55/W56). Never an edge claim.
+NEXTDAY_RESEARCH_LABEL: str = "小サンプル / 研究用・未宣言"
+
 NEXTDAY_LOOKAHEAD_POLICY: Mapping[str, Any] = MappingProxyType(
     {
         "version": "nextday-lookahead-policy/v1",
-        "label": "研究用・未宣言",
+        "label": NEXTDAY_RESEARCH_LABEL,
         "feature_as_of": "signal_day_T_session_close",
         "feature_as_of_clock": "T15:30:00+09:00",
         "feature_pit_gate": "available_at <= feature_as_of",
@@ -2124,10 +2131,13 @@ NEXTDAY_LOOKAHEAD_POLICY: Mapping[str, Any] = MappingProxyType(
         "no_feature_lookahead": True,
         "ready_declared": False,
         "mass_research": "NO-GO",
+        "significance_claimed": False,
+        "edge_claimed": False,
         "note": (
             "Signal features never see T+1 bars. Returns are attached only "
             "when both T and T+1 closes pass the evaluation PIT gate. "
-            "Missing T+1 (tip edge) → null return, counted in null rate."
+            "Missing T+1 (tip edge) → null return, counted in null rate. "
+            "小サンプル — no statistical significance / no edge claim."
         ),
     }
 )
@@ -2173,7 +2183,13 @@ class MultidaySignalEval:
             "local_sot": self.local_sot,
             "connected_to_mass_research_loop": False,
             "attach_nextday_returns": self.attach_nextday_returns,
-            "label": "研究用・未宣言",
+            "label": (
+                NEXTDAY_RESEARCH_LABEL
+                if self.attach_nextday_returns
+                else "研究用・未宣言"
+            ),
+            "significance_claimed": False,
+            "edge_claimed": False,
         }
 
 
@@ -2394,17 +2410,30 @@ def attach_next_day_returns(
         rec["evaluation_as_of"] = eval_as_of
         rec["next_day_return_pit_ok"] = pit_ok
         rec["next_day_return_null_reason"] = reason
-        rec["label"] = "研究用・未宣言"
+        rec["label"] = NEXTDAY_RESEARCH_LABEL
         out.append(rec)
     return out
+
+
+def _median_f(values: Sequence[float]) -> float | None:
+    """Simple median of a non-empty numeric sequence (research helper)."""
+    if not values:
+        return None
+    ordered = sorted(float(v) for v in values)
+    n = len(ordered)
+    mid = n // 2
+    if n % 2 == 1:
+        return ordered[mid]
+    return (ordered[mid - 1] + ordered[mid]) / 2.0
 
 
 def summarize_nextday_by_sign(
     aligned_rows: Sequence[Mapping[str, Any]],
 ) -> dict[str, Any]:
-    """T2: mean next-day return by signal sign (+1 / 0 / −1), counts, null rates.
+    """T2: mean/median next-day return by signal sign (+1 / 0 / −1), counts, null rates.
 
-    Output is research-only (研究用・未宣言). Does not claim READY / Mass / edge.
+    Output is research-only (**小サンプル / 研究用・未宣言**). Does not claim
+    READY / Mass / edge / statistical significance.
     """
 
     def _sign_key(value: Any) -> str:
@@ -2427,12 +2456,14 @@ def summarize_nextday_by_sign(
         non_null = [float(r) for r in returns if r is not None]
         null_n = n - len(non_null)
         mean = (sum(non_null) / len(non_null)) if non_null else None
+        median = _median_f(non_null)
         return {
             "count": n,
             "non_null_return_count": len(non_null),
             "null_return_count": null_n,
             "null_return_rate": (float(null_n) / float(n)) if n else None,
             "mean_next_day_return": mean,
+            "median_next_day_return": median,
         }
 
     buckets: dict[str, list[Any]] = {
@@ -2460,8 +2491,8 @@ def summarize_nextday_by_sign(
     )
 
     return {
-        "version": "nextday-by-sign/v1",
-        "label": "研究用・未宣言",
+        "version": "nextday-by-sign/v2",
+        "label": NEXTDAY_RESEARCH_LABEL,
         "by_sign": by_sign,
         "overall": overall,
         "signed_overall": signed_overall,
@@ -2471,9 +2502,12 @@ def summarize_nextday_by_sign(
         "mass_research": MASS_RESEARCH_STATUS,
         "phase7": PHASE7_STATUS,
         "order_execution": False,
+        "significance_claimed": False,
+        "edge_claimed": False,
         "note": (
-            "Mean next-day close-to-close return by signal sign. "
-            "Research only — not READY, not Mass, no order claim."
+            "Mean and median next-day close-to-close return by signal sign. "
+            "小サンプル / 研究用・未宣言 — not READY, not Mass, no order claim, "
+            "no statistical significance, no edge claim."
         ),
     }
 
@@ -2618,7 +2652,9 @@ def execute_multiday_signal_eval(
         day_summary["local_sot"] = False
         day_summary["phase7"] = PHASE7_STATUS
         day_summary["feature_as_of"] = as_of
-        day_summary["label"] = "研究用・未宣言"
+        day_summary["label"] = (
+            NEXTDAY_RESEARCH_LABEL if attach_nextday_returns else "研究用・未宣言"
+        )
 
         if attach_nextday_returns:
             nxt = next_map.get(d)
@@ -2751,15 +2787,20 @@ def execute_multiday_signal_eval(
         "connected_to_mass_research_loop": False,
         "densify": False,
         "attach_nextday_returns": bool(attach_nextday_returns),
-        "label": "研究用・未宣言",
+        "label": (
+            NEXTDAY_RESEARCH_LABEL if attach_nextday_returns else "研究用・未宣言"
+        ),
+        "significance_claimed": False,
+        "edge_claimed": False,
         "note": (
             (
-                "W55 multi-day tip signal + next-day return alignment via "
+                "W55/W56 multi-day tip signal + next-day return alignment via "
                 "single_shot only. Feature as_of = T close; evaluation_as_of = "
                 "T+1 close for return PIT. Approved-leg signal "
                 "c21_topix_relative_sign (candidate_only=False). "
-                "研究用・未宣言. Not READY. Not mass research. No order "
-                "execution. CF D1 tip only. No densify."
+                "小サンプル / 研究用・未宣言 — no significance / no edge claim. "
+                "Not READY. Not mass research. No order execution. "
+                "CF D1 tip only. No densify."
             )
             if attach_nextday_returns
             else (
@@ -2902,10 +2943,10 @@ def execute_multiday_nextday_return_eval(
     *,
     period_start: str,
     period_end: str,
-    job_id: str = "w0815av-g1-nextday",
+    job_id: str = "w0815aw-g1-expand20",
     codes: Sequence[str] | None = None,
     as_of_days: Sequence[str] | None = None,
-    max_days: int = 10,
+    max_days: int = 20,
     min_days: int = 5,
     feature_row_limit: int = DEFAULT_FEATURE_ROW_LIMIT,
     volume_change_abs_min: float | None = DEFAULT_VOLUME_CHANGE_ABS_MIN,
@@ -2917,11 +2958,14 @@ def execute_multiday_nextday_return_eval(
     wrangler: str | Path | None = None,
     wrangler_config: str | Path | None = None,
 ) -> MultidaySignalEval:
-    """W55 entry: multiday signal eval with next-day return alignment.
+    """W55/W56 entry: multiday signal eval with next-day return alignment.
 
     Thin wrapper around :func:`execute_multiday_signal_eval` with
-    ``attach_nextday_returns=True``. Research only (研究用・未宣言) — Mass OFF,
-    READY not declared, no orders, no densify.
+    ``attach_nextday_returns=True``. Default ``max_days=20`` (W56 expand toward
+    ~20 trading days within available CF tip). Research only
+    (**小サンプル / 研究用・未宣言**) — Mass OFF, READY not declared, no orders,
+    no densify, no significance / edge claim. If tip yields fewer than 20
+    trading days, returns max available (honest n_days).
     """
     return execute_multiday_signal_eval(
         period_start=period_start,
@@ -2961,6 +3005,7 @@ __all__ = [
     "MASS_RESEARCH_ENV_ARMING_SWITCHES",
     "MASS_RESEARCH_STATUS",
     "NEXTDAY_LOOKAHEAD_POLICY",
+    "NEXTDAY_RESEARCH_LABEL",
     "PHASE7_ENV_ARMING_SWITCHES",
     "PHASE7_STATUS",
     "READY_DECLARED",

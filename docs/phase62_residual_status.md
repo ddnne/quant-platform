@@ -1,9 +1,56 @@
 # Phase 6.2 / 6.3 residual status
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
-**Live verified:** 2026-08-15 (JST) / **W55** 評価深化・翌日リターン突合（READY 未宣言） FINAL · COMPLETE segs **3478** · Dataset COMPLETE **21 / 26** · PARTIAL = **5** permanent DEFER only · **actionable_gap = 0** · empty COMPLETE **0** · **OTC 93** tip island held · permanent DEFER **5** / NO_DENSIFY **6** · densify coverage loops **ENDED** · Mass/READY/Phase7 **NO-GO/OFF** · raw **15915** (remote verify; W46 tip secondary baseline **15869** held) · FRESH `projgen-b7c349edd3fb454a806ede864cf80bcf` · **CF-SoT** held — D1 = hot tip · R2 = history · COMPLETE = receipt-owned · floors W38 + W42 mb **2015-04-01** **not lowered** · coverage baseline **W47 FINAL held** · READY **not declared** · tip densify **SKIP** · densify **none** · promotion **7 approved** (W52–W54 **6** + W55 O2 **+1** `short_ratio_level` · v1.0.0) · nextday return eval Mass **OFF** · status=`candidate` · **candidate_only=False** (legs approved) · label **研究用・未宣言** · PRE_sha `205392f54ca832d67867fe96c149867f52586def` · **POST_PUSH_SHA** `4d727623ead2f30ce37b8e7850b1c278cc94a943`
+**Live verified:** 2026-08-15 (JST) / **W56** 研究ハーネス・評価窓拡大（READY 未宣言） FINAL · COMPLETE segs **3478** · Dataset COMPLETE **21 / 26** · PARTIAL = **5** permanent DEFER only · **actionable_gap = 0** · empty COMPLETE **0** · **OTC 93** tip island held · permanent DEFER **5** / NO_DENSIFY **6** · densify coverage loops **ENDED** · Mass/READY/Phase7 **NO-GO/OFF** · raw **15915** held · FRESH `projgen-4a73478f55d84323870198094f875450` · **CF-SoT** held — D1 = hot tip · R2 = history · COMPLETE = receipt-owned · floors W38 + W42 mb **2015-04-01** **not lowered** · coverage baseline **W47 FINAL held** · READY **not declared** · tip densify **SKIP** · densify **none** · promotion **8 approved** (W52–W55 **7** + W56 O2 **+1** `futures_activity_proxy` · v1.0.0) · remain **2 candidate** · expand20 nextday eval Mass **OFF** · status=`candidate` · **candidate_only=False** · label **小サンプル / 研究用・未宣言** · n_days=**20** · mean R +1 **+0.01075** / −1 **−0.00459** · median +1 **+0.01114** / −1 **−0.00296** · harness `packages/product/research/eval_harness.py` · PRE_sha `c8423531cfe691eb6001e8f46d488310cc1e029b` · **POST_PUSH_SHA** `69889bbcfa7b250b57ba8cec59c34cdf73b58705`
 
-**Repo tip:** `4d727623ead2f30ce37b8e7850b1c278cc94a943` — W55 評価深化・翌日リターン突合 FINAL · COMPLETE **3478** / Dataset COMPLETE **21** / OTC **93** / empty COMPLETE **0** / **actionable_gap = 0** / Phase7 **OFF** / READY **未宣言** · FRESH `projgen-b7c349edd3fb454a806ede864cf80bcf` · promotion **7 approved** / **3 candidate** · nextday **e2e_pass** · tip densify **SKIP** · **POST_PUSH_SHA** `4d727623ead2f30ce37b8e7850b1c278cc94a943`
+**Repo tip:** `69889bbcfa7b250b57ba8cec59c34cdf73b58705` — W56 研究ハーネス・評価窓拡大 FINAL · COMPLETE **3478** / Dataset COMPLETE **21** / OTC **93** / empty COMPLETE **0** / **actionable_gap = 0** / Phase7 **OFF** / READY **未宣言** · FRESH `projgen-4a73478f55d84323870198094f875450` · promotion **8 approved** / **2 candidate** · expand20 **e2e_pass** · tip densify **SKIP** · **POST_PUSH_SHA** `69889bbcfa7b250b57ba8cec59c34cdf73b58705`
+
+## 研究ハーネス・評価窓拡大（READY 未宣言）
+
+**Phase name:** COMPLETE 21 研究ハーネス・評価窓拡大（宣言なし）  
+**Wave:** W56 / w0815aw (T1–T12 · G4 FINAL merge + push)  
+**Expand20 close proof:** [`docs/proof/w0815aw_w56_expand20_close_20260815.md`](proof/w0815aw_w56_expand20_close_20260815.md)  
+**Ops / quality / residual (G3):** [`.glm-logs/w0815aw_g3_ops/`](../.glm-logs/w0815aw_g3_ops/) · [`FINAL_metrics.json`](../.glm-logs/w0815aw_g3_ops/FINAL_metrics.json) · [`switch_check.json`](../.glm-logs/w0815aw_g3_ops/switch_check.json) · [`SUMMARY.txt`](../.glm-logs/w0815aw_g3_ops/SUMMARY.txt)  
+**Expand20 nextday eval (G1 · research metrics · 小サンプル):** [`.glm-logs/w0815aw_g1_expand20/`](../.glm-logs/w0815aw_g1_expand20/) · [`summary.json`](../.glm-logs/w0815aw_g1_expand20/summary.json) · [`batch_summary.json`](../.glm-logs/w0815aw_g1_expand20/batch_summary.json) · `execute_multiday_nextday_return_eval` · job `w0815aw-g1-expand20` · **n_days=20** (tip available **28**) as_of days `2026-07-13…2026-08-10` · codes `13010/72030/67580` · signal `c21_topix_relative_sign@1.0.0` · `status=candidate` · **candidate_only=False** · Mass **OFF** · no orders · no READY · label **小サンプル / 研究用・未宣言** · signal aggregate non_null **60/60** (rate **1.0**) sign `+1:32` / `-1:28` · **nextday mean_R** `+1:+0.01075` / `-1:-0.00459` · **median_R** `+1:+0.01114` / `-1:-0.00296` · overall mean/median `+0.00375` / `+0.00177` · null_return_rate overall **0.05** · look-ahead policy held · R2 `research/single_shot/job=w0815aw-g1-expand20/batch_summary.json` · **e2e_pass=true** · proof [`docs/proof/w0815aw_w56_expand20_nextday_eval_20260815.md`](proof/w0815aw_w56_expand20_nextday_eval_20260815.md)  
+**Eval harness (G2):** `packages/product/research/eval_harness.py` · tests `tests/test_eval_harness.py` (**14**) · README · pipeline approved-leg signal → multiday → nextday → R2 batch_summary · Mass/READY/Phase7 closed  
+**Optional O2 (G3 T8):** [`.glm-logs/w0815aw_g3_o2/`](../.glm-logs/w0815aw_g3_o2/) · [`t8_futures_activity_proxy_summary.json`](../.glm-logs/w0815aw_g3_o2/t8_futures_activity_proxy_summary.json) · feature `futures_activity_proxy` · tip `derivatives_bars_daily_futures` · **o2_pass** (non_null≥1 · value **1408195.0**) · **promoted → approved** (version pin **1.0.0**) · not chosen: `margin_alert_flag` · policy no-promote: `return_1d_c21` · proof [`docs/proof/w0815aw_w56_o2_futures_20260815.md`](proof/w0815aw_w56_o2_futures_20260815.md)  
+**Promotion (G3):** `packages/research_runtime/features/complete21_min.py` · this wave **+1 approved**: `futures_activity_proxy` · **total 8 approved** (W52–W55 **7** + W56 `futures_activity_proxy`) · remain **2 candidate** (`margin_alert_flag` · `return_1d_c21`)  
+**FRESH (G3 T10):** reclock `projgen-4a73478f55d84323870198094f875450` (pre age wall **~1000s** >300; coverage_segments untouched; publish apply **SKIP**)  
+**Unit tests (G4 merge):** complete21 min (approved **8+**) + permanent_defer + single_shot + eval_harness + mass gate · **114 passed** (G3 core **100** + harness **14**)  
+**Catalog:** [`docs/proof/complete21_min_feature_catalog_20260815.md`](proof/complete21_min_feature_catalog_20260815.md) (code SoT = `complete21_min.py` **8 approved / 2 candidate**)  
+**Prior W55 評価深化・翌日リターン突合:** § 評価深化・翌日リターン突合 held underneath · W54 複数日 · W53 O2強化 · coverage baseline **W47 FINAL** held
+
+| gate | status |
+|------|--------|
+| Phase name | **COMPLETE 21 研究ハーネス・評価窓拡大（宣言なし）** |
+| Coverage baseline FINAL | **held** (W47 FINAL · Dataset COMPLETE **21/26** · segs **3478** · **actionable_gap=0**) |
+| READY | **未宣言 / not declared** (research harness only) |
+| Mass | **NO-GO / OFF** (expand20 / harness single_shot Mass **OFF**) |
+| Phase7 | **OFF** (foundation / fail-closed only) — **reconfirmed** this wave |
+| empty COMPLETE | **0** (remote verify G3 + G4 re-verify) |
+| Dataset COMPLETE | **21** (remote verify held; not invent 22) |
+| COMPLETE segs | **3478** (remote verify held · Δ0) |
+| OTC tip island | **93** held |
+| permanent DEFER | **5** held |
+| tip densify | **SKIP** (T12; not primary this phase) |
+| densify | **none** |
+| push | **POST_PUSH_SHA** `69889bbcfa7b250b57ba8cec59c34cdf73b58705` (G4 FINAL merge) · PRE_sha `c8423531cfe691eb6001e8f46d488310cc1e029b` |
+| Projection | **FRESH** `projgen-4a73478f55d84323870198094f875450` (G3 T10 ops_reeval_freshness; residual FRESH sync; publish apply **SKIP** no segment drift; fail-closed no force) |
+| Expand20 nextday eval | G1 **PASS** — n_days=**20** · mean+median by sign · Mass **not** connected · no orders · **小サンプル / 研究用・未宣言** · no significance / no edge |
+| Eval harness | G2 **landed** — `eval_harness.py` · **14** tests · closed Mass/READY/Phase7 |
+| Optional O2 | G3 T8 **PASS** — `futures_activity_proxy` tip E2E non-null · **+1 approved** |
+| Promotion | **+1 this wave** → **8 approved** total · remain **2 candidate** · no READY claim |
+| Unit tests | **114 passed** (complete21 min · permanent_defer · single_shot · eval_harness · mass gate) |
+| raw_retention | **15915** held (not coverage primary) |
+
+**Primary this phase:** expand tip multiday **nextday** eval (~20 trading days) + stable **eval harness** + optional O2 (`futures_activity_proxy`) on held COMPLETE **21** / DEFER **5** — **without** READY / Mass / Phase7 declaration.  
+**Not:** densify · tip primary · invent COMPLETE 22 · Phase7 ON · READY GO · mass ON · treat expand20 as READY · force remaining 2 candidates · promote `return_1d_c21` · significance / edge claim.
+
+### Explicit non-declarations (held)
+
+- **READY** — not declared (研究ハーネス・評価窓拡大 only; research metrics; no production READY GO)
+- **Mass Autonomous Research** — **NO-GO / OFF** (expand20 / harness single_shot Mass OFF)
+- **Phase7** — **OFF** (no `PHASE7_*` / `MASS_RESEARCH_ENABLE` arming switch)
 
 ## 評価深化・翌日リターン突合（READY 未宣言）
 

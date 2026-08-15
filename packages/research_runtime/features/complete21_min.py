@@ -1,4 +1,4 @@
-"""Minimal COMPLETE-21-only features (W49–W55 / w0815av_g2).
+"""Minimal COMPLETE-21-only features (W49–W56 / w0815aw_g3).
 
 All features:
 
@@ -17,9 +17,11 @@ Promotion:
   ``1.0.0``) after CF tip E2E non-null on D1 ``jsda_repo_rates`` hot tip.
 * W55 / w0815av_g2 selective O2: ``short_ratio_level`` → approved (version pin
   ``1.0.0``) after CF tip E2E non-null with valid S33 ``section`` path.
-  ``return_1d_c21`` remains candidate (policy twin of v0 ``return_1d``).
-  Remaining 3 stay candidate (``return_1d_c21`` · ``margin_alert_flag`` ·
-  ``futures_activity_proxy``).
+* W56 / w0815aw_g3 optional O2: ``futures_activity_proxy`` → approved (version
+  pin ``1.0.0``) after CF tip E2E non-null on D1
+  ``derivatives_bars_daily_futures``. ``return_1d_c21`` remains candidate
+  (policy twin of v0 ``return_1d``). Remaining 2 stay candidate
+  (``return_1d_c21`` · ``margin_alert_flag``).
 * No READY / Mass / Phase7 claim. ``get_for_strategy`` still admits only
   approved + strategy-facing roles (utility requires explicit role override).
 
@@ -920,7 +922,7 @@ FuturesActivityProxy: FeatureDefinition = register(
         compute=_futures_activity_proxy,
         tags=("futures", "derivatives", "activity", "complete21"),
         intended_role="state",
-        status="candidate",
+        status="approved",
         price_basis=None,
     )
 )

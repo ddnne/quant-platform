@@ -31,8 +31,17 @@ from research.single_shot_job import (
     build_single_shot_job_spec,
     execute_single_shot_job,
 )
+from research.eval_harness import (
+    APPROVED_SIGNAL_LEGS,
+    MultidaySignalEval,
+    assert_harness_closed,
+    run_full_pipeline,
+    run_multiday_signal_eval,
+    run_nextday_return_eval,
+)
 
 __all__ = [
+    "APPROVED_SIGNAL_LEGS",
     "COMPLETE_21_DATASETS",
     "EvaluationHarness",
     "EvaluationProtocol",
@@ -44,6 +53,7 @@ __all__ = [
     "FeatureEvidence",
     "MASS_RESEARCH_STATUS",
     "MassResearchDisabledError",
+    "MultidaySignalEval",
     "OperatorOverrideCapability",
     "OperatorOverrideService",
     "PHASE7_STATUS",
@@ -57,8 +67,12 @@ __all__ = [
     "SingleShotJobSpec",
     "StrategyEvidence",
     "VerifiedResearchReadiness",
+    "assert_harness_closed",
     "assert_mass_and_phase7_off",
     "build_single_shot_job_spec",
     "execute_single_shot_job",
     "require_mass_research_start",
+    "run_full_pipeline",
+    "run_multiday_signal_eval",
+    "run_nextday_return_eval",
 ]
