@@ -1,418 +1,280 @@
-# Column / typed NULL audit — 2026-08-15
+# Column / NULL audit — unified (2026-08-15)
 
-**Waves:** w0815m / **W20-G1 Track A** (contract vs API keys) + **W20-G2 Track B** (typed NULL mapping) + **W20-G3 Track B** (JSON payload NULL)  
-**Operator:** GLM 5.3 implementer  
-**Authority:** CF SoT — R2 `quant-raw` + R2 `quant-structured` + remote D1 `quant-ingest` (`jquants_records.payload` / residual hot); live CF-proxy for G1 key samples. Local raw/sqlite tip is corroborative when live tip window is closed.  
-**Mass / READY / Phase7:** **NO-GO**  
-**Logs:** `.glm-logs/w0815m_g1_contract_api/` (G1) · `.glm-logs/w0815m_g2_typed_null/` (G2) · `.glm-logs/w0815m_g3_json_null/` (G3)
+**Wave:** `w0815m` / **W20** (G1–G5 merge)  
+**Operator:** GLM 5.3 implementer (W20-G5 integration)  
+**Peers merged:**
 
----
+| Track | Role | Log / proof |
+|-------|------|-------------|
+| **G1** | Contract × live API key inventory | `.glm-logs/w0815m_g1_contract_api/` |
+| **G2** | Typed specialized columns (bars/master/calendar) | `.glm-logs/w0815m_g2_typed_null/` · fix `df6271d` |
+| **G3** | JSON payload null (generic `jquants_records`) | `.glm-logs/w0815m_g3_json_null/` (`AUDIT_REPORT.json`, `DEEP_SAME_ROW.json`) |
+| **G4** | JSDA critical (`tokyo_repo_rows=0`) + field coverage | `.glm-logs/w0815m_g4_jsda_audit/` · [`w0815m_g4_jsda_audit_20260815.md`](w0815m_g4_jsda_audit_20260815.md) · fix `4fcef08` |
+| **G5** | This merge + residual + push | this file |
 
-## Track B — specialized typed mapping (bars / master / calendar)
-
-Scope datasets:
-
-| dataset | specialized table (local schema) | CF hot fact plane |
-|---------|----------------------------------|-------------------|
-| `equities_bars_daily` | `jquants_daily_bars` (OHLC/V/Turnover/Adjustment*) | `jquants_records` where `dataset='equities_bars_daily'` (full payload JSON) |
-| `equities_master` | `jquants_listed_info` | `jquants_records` / master SCD2 writer |
-| `markets_calendar` | `jquants_market_calendar` | `jquants_records` |
-
-Remote D1 does **not** materialize specialized typed tables (only `jquants_records*`). Typed-column audit is therefore: (1) keys present in CF payload/raw, (2) whether `normalize.py` / SCD2 mapper would produce NULL typed columns from those keys.
-
-### SoT samples (non-empty)
-
-| source | object / window | rows | empty-raw? |
-|--------|-----------------|------|------------|
-| R2 raw | `raw/equities_bars_daily/10718/page-000001.json` (2018-12-06..) | 3954 | no |
-| R2 raw | `raw/equities_master/9962/page-000001.json` (Date=2026-08-13) | 4443 | no |
-| R2 raw | `raw/markets_calendar/13253/page-000001.json` | 6 | no |
-| D1 hot | bars `Date` ∈ 2026-07-01..07-31 | 97696 | n/a |
-| D1 hot | master `Date` ∈ 2026-08-01..08-13 | 31115 | n/a |
-| D1 hot | calendar (full hot) | 42 | n/a |
-| Live proxy (W20-G1) | `/v2/equities/bars/daily`, `/v2/equities/master`, `/v2/markets/calendar` | see `w0815m_g1_contract_api/*_keys.json` | no |
+**Authority:** CF SoT — live proxy (G1), R2 `quant-raw` + remote D1 `quant-ingest` payload (G2/G3), local research DB for JSDA facts (G4).  
+**Mass / READY / Phase7:** **NO-GO / OFF**  
+**Empty-raw COMPLETE:** **forbidden** (held)  
+**Destructive:** none (mapping honesty only; no re-ingest / no COMPLETE flip)
 
 ---
 
-## 1. `equities_bars_daily`
+## Executive summary
 
-### API / payload keys (V2 short — CF SoT)
-
-```
-Code Date O H L C Vo Va UL LL
-AdjFactor AdjO AdjH AdjL AdjC AdjVo
-MO MH ML MC MUL MLL MVo MVa MAdjO MAdjH MAdjL MAdjC MAdjVo
-AO AH AL AC AUL ALL AVo AVa AAdjO AAdjH AAdjL AAdjC AAdjVo
-MktCap ExRT
-```
-
-### Specialized typed columns (`jquants_daily_bars` / `normalize_daily_bars`)
-
-| typed column | source keys (post-fix) | D1 Jul null rate | R2 page null rate | class |
-|--------------|--------------------------|------------------|-------------------|--------|
-| `code` | `Code` | 0 | 0 | required identity |
-| `date` | `Date` | 0 | 0 | required identity |
-| `open` | `Open`/`O` | 5222/97696 (**5.34%**) | 75/2000 sample-window ≈3.8% full page | **legitimate source null** (halted / no trade) |
-| `high`/`low`/`close` | `H`/`L`/`C` | same 5.34% | same | same |
-| `volume`/`turnover_value` | `Vo`/`Va` | same 5.34% | same | same |
-| `adjustment_*` | `AdjO`…`AdjVo` (not `AAdj*`) | same 5.34% | same | co-null with OHLC |
-| (no typed col) | `AdjFactor` | **0% null** | **0%** | **discarded by design** (kept in payload/raw only) |
-| (no typed col) | `UL`/`LL`, morning `M*`, afternoon `A*`, `MktCap` | partial | partial | **discarded by design** (session split / meta) |
-| (no typed col) | `ExRT` | ~99.99% null | **100%** on sample pages | **source always-null-ish** (field present, value null) |
-
-### Mapping findings
-
-1. **Core OHLC/V/Turnover/Adj\* mapping is correct** for V2 short names (`O`/`H`/`L`/`C`/`Vo`/`Va`/`AdjO`…). Null rates on typed metrics track the source, not a dropped-key bug.
-2. **False alias removed:** `AAdjO`/`AAdjH`/`AAdjL`/`AAdjC`/`AAdjVo` were listed as fallbacks for all-day `adjustment_*`. On V2 these are **afternoon-session** adjusted series, not aliases. When all-day `Adj*` is null, afternoon must not silently fill typed all-day columns. Fix in `normalize_daily_bars`.
-3. **Discarded fields (intentional for specialized table):** `AdjFactor`, limit flags, morning/afternoon split OHLCV, `MktCap`, `ExRT`. Full fidelity remains in CF `payload` / R2 raw (empty-raw ban holds). Optional follow-up: promote `adjustment_factor` (`AdjFactor`) into specialized schema if research paths need typed access without JSON extract.
-
-### Bars null classification
-
-| class | columns / fields |
-|-------|------------------|
-| Legitimate source null | OHLC / volume / turnover / Adj* when no session print (~5% Jul hot) |
-| Always present non-null source | `Code`, `Date`, `AdjFactor`, `UL`/`LL` (string flags) |
-| Always-null source value | `ExRT` (key present, value null almost always) |
-| Mapping bug (fixed) | `AAdj*` mis-aliased to all-day adjustment |
-| Discarded (not typed) | session splits, `AdjFactor`, `MktCap`, limits |
+| Area | Finding | Verdict |
+|------|---------|---------|
+| Generic payload path (`jquants_records`) | Same-row payload vs raw_payload keyset **100% equal** across G3 deep sample; **no field drop** | **問題なし** (mapping) |
+| Typed master (`normalize` / SCD2) | V2 short keys `S17`/`S33`/`Mkt*` were 100% unmapped → always-null typed | **要修正 → FIXED** (`df6271d`) |
+| Typed bars | Core OHLC maps OK; `AAdj*` was false all-day Adj alias | **要修正 → FIXED** (`df6271d`) |
+| Always-null source fields | Fins forecast/unit, options EC/EH/EL/EO/SQD, ExRT, listing_date, JSDA corp schema-superset | **DEFER** (source / schema) — do not invent |
+| `tokyo_repo_rows=0` vs COMPLETE | Plane split: D1 fact empty vs receipt-owned COMPLETE; local **30303** facts match receipt | **問題なし** (not data loss); honesty UI **FIXED** (`4fcef08`) |
+| Tip-only endpoints | `equities_bars_daily_am`, `equities_earnings_calendar` | **DEFER** (vendor contract; D4) |
 
 ---
 
-## 2. `equities_master`
+## 1. Dataset × key audit tables
 
-### API / payload keys (V2 short — CF SoT)
+### 1.1 Track A — contract / live API keys (G1)
 
-```
-Date Code CoName CoNameEn S17 S17Nm S33 S33Nm ScaleCat Mkt MktNm Mrgn MrgnNm ProdCat
-```
+Live CF-jquants-proxy probe (`live_all.json`). Storage: production ingest is **generic_payload** (`jquants_records`); bars/master/calendar also have specialized normalize paths (local typed tables may be empty while D1 holds payload).
 
-**Not published** on `/v2/equities/master`: `ListingDate` / `ListDate`, long names (`CompanyName`, `Sector17Code`, `MarketCode`, …).
+| dataset | endpoint | API keys (n) | NK (contract) | storage | dropped keys (generic) | gaps |
+|---------|----------|-------------:|---------------|---------|------------------------|------|
+| `equities_master` | `/v2/equities/master` | 14 | Code,Date | typed_capable + generic | none on generic; typed subset | short-name typed fix G2 |
+| `equities_bars_daily` | `/v2/equities/bars/daily` | 44 | Code,Date | typed_capable + generic | none on generic | AAdj alias fix G2 |
+| `equities_bars_daily_am` | `/v2/equities/bars/daily/am` | 8 | Code,Date | generic | none | **TIP_ONLY_ENDPOINT** |
+| `fins_summary` | `/v2/fins/summary` | 111 | Code,DiscDate,DiscNo (+aliases) | generic | none | source always-null keys |
+| `fins_details` | `/v2/fins/details` | 6 (+ nested FS) | Code,DiscDate,DiscNo | generic | none | — |
+| `fins_dividend` | `/v2/fins/dividend` | 23 | Code,RefNo (+aliases) | generic | none | source always-null keys |
+| `fins_earnings_date` | `/v2/fins/earnings-date` | 7 | Code,PubDate,SchDate | generic | none | — |
+| `equities_earnings_calendar` | `/v2/equities/earnings-calendar` | 7 | Date,Code | generic | none | **TIP_CALENDAR_NOT_HISTORICAL_RANGE** |
+| `markets_calendar` | `/v2/markets/calendar` | 2 | Date | typed_capable + generic | none | — |
+| `equities_investor_types` | `/v2/equities/investor-types` | 56 | PubDate,Section | generic | none | — |
+| `indices_bars_daily_topix` | `/v2/indices/bars/daily/topix` | 5 | Date | generic | none | — |
+| `indices_bars_daily` | `/v2/indices/bars/daily` | 6 | Date,Code | generic | none | — |
+| `derivatives_bars_daily_options_225` | `…/options/225` | 30 | Date,Code | generic | none | — |
+| `derivatives_bars_daily_futures` | `…/futures` | 29 | Date,Code | generic | none | — |
+| `derivatives_bars_daily_options` | `…/options` | 37 | Date,Code | generic | none | EC/EH/EL/EO/SQD always-null |
+| `markets_margin_interest` | `/v2/markets/margin-interest` | 9 | Date,Code | generic | none | — |
+| `markets_margin_alert` | `/v2/markets/margin-alert` | 20 | Code,PubDate,AppDate | generic | none | — |
+| `markets_short_ratio` | `/v2/markets/short-ratio` | 5 | Date,S33 | generic | none | — |
+| `markets_short_sale_report` | `/v2/markets/short-sale-report` | 14 | DiscDate,CalcDate,Code,DICName,FundName | generic | none | — |
+| `markets_breakdown` | `/v2/markets/breakdown` | 16 | Date,Code | generic | none | — |
+| `edinet_major_shareholders` | `/v2/edinet/major-shareholders` | 11 | Code,DocId | generic | none | — |
+| `edinet_cross_shareholdings` | `/v2/edinet/cross-shareholdings` | 13 | Code,DocId | generic | none | — |
+| `edinet_large_volume_shareholders` | `/v2/edinet/large-volume-shareholders` | 15 | Code,DocId | generic | none | — |
+| JSDA OTC / corporate / tokyo_repo | JSDA site (governed) | n/a | per schema | typed fact tables | n/a | G4 plane split |
 
-### Specialized typed columns (`jquants_listed_info` / `normalize_listed_info`)
+Full key lists: `.glm-logs/w0815m_g1_contract_api/*_keys.json`.
 
-| typed column | pre-fix aliases | V2 live key | PRE null (typed mapping) | POST null | class |
-|--------------|------------------|-------------|---------------------------|-----------|--------|
-| `company_name` | `CompanyName`/`CoName` | `CoName` | 0% | 0% | ok |
-| `company_name_en` | …/`CoNameEn` | `CoNameEn` | 0% | 0% | ok |
-| `sector_17_code` | `Sector17Code`/`Sec17Code` only | **`S17`** | **100%** | **0%** | **mapping bug → fixed** |
-| `sector_17_name` | …/`Sec17CodeName` | **`S17Nm`** | **100%** | **0%** | **mapping bug → fixed** |
-| `sector_33_code` | …/`Sec33Code` | **`S33`** | **100%** | **0%** | **mapping bug → fixed** |
-| `sector_33_name` | … | **`S33Nm`** | **100%** | **0%** | **mapping bug → fixed** |
-| `scale_category` | `ScaleCategory`/`ScaleCat` | `ScaleCat` | 0% | 0% | ok |
-| `market_code` | `MarketCode`/`MktCode` only | **`Mkt`** | **100%** | **0%** | **mapping bug → fixed** |
-| `market_name` | …/`MktCodeName` | **`MktNm`** | **100%** | **0%** | **mapping bug → fixed** |
-| `listing_date` | `ListingDate`/`ListDate` | *(absent)* | **100%** | **100%** | **always-missing from source** (not a mapping miss) |
+### 1.2 Track B — typed specialized (G2)
 
-D1 evidence (2026-08-01..08-13, n=31115): every row has `S17`/`S33`/`Mkt` and **zero** long-name keys — pre-fix specialized mapping would have produced **31 115/31 115 null** for sector and market typed columns.
+Remote D1 does **not** materialize specialized tables; typed audit = payload keys + whether `normalize.py` / SCD2 would produce NULL typed columns.
 
-### SCD2 path (same bug class)
+#### `equities_bars_daily`
 
-`platform/workers/ingestion-premium/src/master_scd2/write.ts` `payloadToMasterRecord` only read long names / missed `CoName`, `S17*`, `S33*`, `Mkt*`, `ScaleCat`. Fixed in parallel with Python normalize.
+| typed column | source keys | D1 Jul null (n=97696) | class |
+|--------------|-------------|----------------------:|--------|
+| code / date | Code / Date | 0% | required identity |
+| open/high/low/close/volume/turnover | O H L C Vo Va | **5.34%** | legitimate source null (halt / no print) |
+| adjustment_* | AdjO…AdjVo | **5.34%** | co-null with OHLC |
+| (no typed) AdjFactor | AdjFactor | **0%** | discarded by design (payload only) |
+| (no typed) ExRT | ExRT | **~99.99%** | source always-null-ish |
+| (no typed) M*/A* session splits, MktCap, UL/LL | … | partial | discarded by design |
 
-### Discarded (not in specialized schema)
+**Fix:** stop treating afternoon `AAdj*` as all-day `Adj*` fallbacks (`normalize_daily_bars`).
 
-| field | notes |
-|-------|-------|
-| `Mrgn` / `MrgnNm` | margin eligibility code/name — present 100%, kept in payload only |
-| `ProdCat` | product category — present 100%, kept in payload only |
+#### `equities_master`
 
-### Master null classification
+| typed column | V2 live key | PRE typed null | POST | class |
+|--------------|-------------|----------------|------|--------|
+| company_name / _en | CoName / CoNameEn | 0% | 0% | ok |
+| sector_17/33 code+name | **S17 / S17Nm / S33 / S33Nm** | **100%** | **0%** | **mapping bug → FIXED** |
+| market_code / name | **Mkt / MktNm** | **100%** | **0%** | **mapping bug → FIXED** |
+| scale_category | ScaleCat | 0% | 0% | ok |
+| listing_date | *(absent on V2)* | **100%** | **100%** | always-missing source |
+| Mrgn* / ProdCat | present 100% | n/a | n/a | discarded typed (payload only) |
 
-| class | columns |
-|-------|---------|
-| Mapping bug (fixed) | sector_17/33 code+name, market code+name under V2 short keys |
-| Always-missing source | `listing_date` (ListingDate never on V2 master) |
-| Legitimate non-null source | CoName*, ScaleCat, S*, Mkt*, Mrgn*, ProdCat on live window |
-| Discarded typed | Mrgn*, ProdCat |
+D1 Aug window n=31115: every row has `S17`/`S33`/`Mkt`; zero long-name keys. SCD2 `write.ts` fixed in parallel.
+
+#### `markets_calendar`
+
+| typed | keys | null | class |
+|-------|------|------|--------|
+| date | Date | 0 | ok |
+| holiday_division | HolDiv / HolidayDivision | 0 | ok |
+
+### 1.3 Track C — JSON payload null (G3)
+
+Landing path: R2 full API body; D1 `payload=stableJson(row)` + `raw_payload=JSON.stringify(row)`; **no field whitelist**; stableJson drops `undefined` only.
+
+**Deep same-row (D1):** for all 16 audited datasets, `payload` vs `raw_payload` **keyset_equal_rate=1.0**, `mapping_drop=false`, `value_mismatches={}`.
+
+| dataset | payload keys | always-null/empty (deep) | sparse (&lt;5%) | verdict (mapping) |
+|---------|-------------:|--------------------------|----------------|-------------------|
+| `fins_summary` | 111 | 11 (see list) | many forecast/2Q fields | **問題なし** (source nulls; false MAPPING_BUG on cross-sample) |
+| `fins_details` | 6 + nested FS | 0 top-level | rare FS labels | **問題なし** |
+| `fins_dividend` | 23 | 5 | — | **問題なし** (source) |
+| `fins_earnings_date` | 7 | 0 | — | **問題なし** |
+| `markets_margin_interest` | 9 | 0 | — | **問題なし** |
+| `markets_margin_alert` | 20 | 0 | — | **問題なし** |
+| `markets_short_ratio` | 5 | 0 | — | **問題なし** |
+| `markets_short_sale_report` | 14 | 0 | — | **問題なし** |
+| `markets_breakdown` | 16 | 0 | — | **問題なし** |
+| `derivatives_bars_daily_futures` | 29 | 0 | — | **問題なし** |
+| `derivatives_bars_daily_options` | 37 | 5 (EC/EH/EL/EO/SQD) | — | **問題なし** (source) |
+| `derivatives_bars_daily_options_225` | 30 | 0 | — | **問題なし** |
+| `edinet_*` (3) | 11–15 | 0 | — | **問題なし** |
+| `equities_investor_types` | 56 | 0 | — | **問題なし** |
+
+Note: initial G3 `AUDIT_REPORT` labeled `fins_summary` **MAPPING_BUG** by comparing raw page (n=414) vs D1 sample (n=200) always-null sets. Deep same-row on D1 n=300 shows **no drop** — sparse keys (`Div3Q`, `NxFNCEPS2Q`, …) appear at ~0.3–1% when sampled sufficiently. **Reclassified to SOURCE_NULLS / sparse.**
+
+### 1.4 Track D — JSDA typed facts (G4)
+
+Local `data/structured/ingestion.sqlite`:
+
+| fact table | rows | coverage status | key null findings |
+|------------|-----:|-----------------|-------------------|
+| `jsda_otc_bond_reference_prices` | **702451** | PARTIAL | coupon_rate ~0.5%; avg yield ~0.35%; individual_investor_flag ~3.5%; identity/PIT 0% |
+| `jsda_corporate_bond_transactions` | **156079** | COMPLETE | **always-empty schema-superset:** isin, buyer/seller counterparty, face/trade amount (100%); execution_price ~20% null; identity 0% |
+| `jsda_repo_rates` (dataset `jsda_tokyo_repo_rates`) | **30303** | COMPLETE | rate/tenor/rate_type/raw_payload/available_at **0% null** |
 
 ---
 
-## 3. `markets_calendar`
+## 2. Always-null / always-missing inventory + cause class
 
-### API keys
-
-```
-Date HolDiv
-```
-
-### Typed columns
-
-| typed column | keys | D1 hot null | R2 null | class |
-|--------------|------|-------------|---------|--------|
-| `date` | `Date` | 0/42 | 0/6 | ok |
-| `holiday_division` | `HolidayDivision`/`HolDiv` | 0/42 | 0/6 | ok |
-
-No discarded fields. No mapping bug. No always-null typed column.
+| dataset | field(s) | plane | cause class | action |
+|---------|----------|-------|-------------|--------|
+| `equities_master` | `listing_date` (ListingDate) | typed | **SOURCE_ALWAYS_MISSING** (V2 never sends) | DEFER — no invent |
+| `equities_master` | sector/market typed (pre-fix) | typed | **MAPPING_BUG** (missed S17/Mkt short keys) | **FIXED** G2 |
+| `equities_bars_daily` | `ExRT` | payload | **SOURCE_ALWAYS_NULL** (~100%) | DEFER observe |
+| `equities_bars_daily` | OHLC ~5% | payload/typed | **LEGITIMATE_SOURCE_NULL** | ok |
+| `equities_bars_daily` | `AAdj*` → all-day Adj (pre-fix) | typed | **MAPPING_BUG** (false alias) | **FIXED** G2 |
+| `fins_summary` | DivUnit, FDiv1Q, FDivTotalAnn, FDivUnit, FPayoutRatioAnn, MatChgSub, NCROE, NxFDiv1Q, NxFDiv3Q, NxFDivUnit, NxFNCOP2Q | payload | **SOURCE_ALWAYS_NULL** (vendor leaves empty) | DEFER |
+| `fins_summary` | Div3Q, NxFNCEPS2Q, NxFNCNP2Q, NxFNCOdP2Q, NxFNCSales2Q, … | payload | **SPARSE_SOURCE** (&lt;5% non-empty) | ok — not mapping |
+| `fins_dividend` | DeemCapGains, DeemDiv, DistAmt, NetAssetDecRatio, RetEarn | payload | **SOURCE_ALWAYS_NULL** | DEFER |
+| `derivatives_bars_daily_options` | EC, EH, EL, EO, SQD | payload | **SOURCE_ALWAYS_NULL** (evening/SQ empty on sample) | DEFER |
+| `jsda_corporate_bond_transactions` | isin, buyer/seller_counterparty_type, face_value_mil_jpy, trade_amount_mil_jpy | typed | **SCHEMA_SUPERSET / SOURCE_EMPTY** | DEFER — do not invent |
+| `jsda_tokyo_repo_rates` on D1 | whole fact table | D1 fact | **PLANE_SPLIT** (coverage projected, fact not backfilled) | honesty FIXED G4; not local loss |
+| `equities_bars_daily_am` / `equities_earnings_calendar` | history | product | **TIP_ONLY / NO_HISTORICAL_RANGE** | DEFER D4 |
 
 ---
 
-## Fixes shipped (this ticket)
+## 3. `tokyo_repo_rows=0` explanation (mandatory)
 
-| file | change |
+### Question
+
+Why can `storage_plane_status.jsda.tokyo_repo_rows` be **0** while `jsda_tokyo_repo_rates` is dataset **COMPLETE**?
+
+### Answer (root cause)
+
+Two **independent** aggregates:
+
+| Signal | Meaning | Owner |
+|--------|---------|-------|
+| `tokyo_repo_rows` | `COUNT(*)` on fact table **`jsda_repo_rates` on the DB plane queried** | `OpsCurrentReadService.storage_plane_status` / MCP `domain.js` |
+| Dataset **COMPLETE** | Signed receipt + `coverage_segments` → `dataset_coverage.status` | `coverage_ledger` + ops projection |
+
+Ops projection publishes **coverage ledgers**, not full JSDA fact backfill to D1. Architecture: D1 = control/hot tip; full structured history SoT = local research DB / R2 structured. High-volume history **must not** refill D1.
+
+### Evidence
+
+| Plane | `jsda_repo_rates` rows | `dataset_coverage` | Receipt |
+|-------|----------------------:|--------------------|---------|
+| **Local** research sqlite | **30303** | COMPLETE, row_count **30303** | run **83**, raw=structured=**30303**, TRUSTED, `2012-10-29`→`2026-08-10` |
+| **D1** remote (prior quality scan) | **0** | COMPLETE (projected) | receipt-owned segment `jsda-era-timeseries` |
+
+→ **`tokyo_repo_rows=0` on D1 is expected plane-split, not data loss and not receipt fraud.** Local facts match the sealed receipt.
+
+Additional: `r2_parse` discover layout looks for `jsda_tokyo_repo_rates/` dataset dirs; production seal used date-stamped `data/raw/jsda/YYYY/MM/DD/` via `repo_archive` — discoverer can show 0 artifacts while governed seal already succeeded.
+
+### Fix applied (G4, honesty only)
+
+`storage_plane_status` now exposes:
+
+- `jsda.coverage` (status, coverage_row_count, observed window)
+- `jsda.coverage_vs_fact_divergence` (`COMPLETE_WITHOUT_LOCAL_FACTS` / count mismatch)
+- `jsda.definition` (plane semantics for `tokyo_repo_rows`)
+
+No re-ingest, no COMPLETE rewrite, no Mass change.
+
+---
+
+## 4. Summary per dataset — 問題なし / 要修正 / DEFER
+
+| dataset | mapping / column health | residual coverage (separate) | column-audit verdict |
+|---------|-------------------------|------------------------------|----------------------|
+| `equities_master` | typed short keys **FIXED**; listing_date missing | PARTIAL (misdate DEFER D2) | **要修正→済** + listing **DEFER** |
+| `equities_bars_daily` | OHLC OK; AAdj **FIXED**; ExRT source-null | PARTIAL (pre-2008-05 D7) | **要修正→済** + ExRT **DEFER** |
+| `equities_bars_daily_am` | keys OK | tip-only COMPLETE 1 | **DEFER** tip product |
+| `markets_calendar` | clean | COMPLETE | **問題なし** |
+| `fins_summary` | no payload drop; source always-null keys | PARTIAL residual | **問題なし** (source DEFER fields) |
+| `fins_details` | clean (nested FS sparse OK) | PARTIAL | **問題なし** |
+| `fins_dividend` | source always-null 5 keys | PARTIAL | **問題なし** + fields **DEFER** |
+| `fins_earnings_date` | clean | PARTIAL | **問題なし** |
+| `equities_earnings_calendar` | clean keys | tip-only | **DEFER** tip product |
+| `equities_investor_types` | clean | COMPLETE | **問題なし** |
+| `indices_bars_daily(_topix)` | clean keys | PARTIAL empty pre-2008-05 D1 | **問題なし** (coverage DEFER) |
+| `markets_margin_interest` | clean | COMPLETE | **問題なし** |
+| `markets_margin_alert` | clean | COMPLETE | **問題なし** |
+| `markets_short_ratio` | clean | COMPLETE | **問題なし** |
+| `markets_short_sale_report` | clean | PARTIAL pre-hist D9 | **問題なし** |
+| `markets_breakdown` | clean | PARTIAL pre-2015 D3 | **問題なし** |
+| `derivatives_bars_daily_futures` | clean | COMPLETE | **問題なし** |
+| `derivatives_bars_daily_options` | EC/EH/EL/EO/SQD source-null | COMPLETE | **問題なし** + fields **DEFER** |
+| `derivatives_bars_daily_options_225` | clean | COMPLETE | **問題なし** |
+| `edinet_major_shareholders` | clean | COMPLETE | **問題なし** |
+| `edinet_cross_shareholdings` | clean | PARTIAL empty pre-island D6 | **問題なし** |
+| `edinet_large_volume_shareholders` | clean | PARTIAL empty pre-island D6 | **問題なし** |
+| `jsda_tokyo_repo_rates` | facts full local; D1 count plane-split | COMPLETE | **問題なし** (honesty **FIXED**) |
+| `jsda_corporate_bond_transactions` | schema-superset always-empty cols | COMPLETE | **問題なし** + cols **DEFER** |
+| `jsda_otc_bond_reference_prices` | sparse legitimate nulls | PARTIAL archive D5 | **問題なし** (coverage DEFER) |
+
+---
+
+## 5. Fixes applied this wave (code)
+
+| Commit | Change |
+|--------|--------|
+| `df6271d` | `normalize.py` master V2 short aliases + bars AAdj not all-day; SCD2 `write.ts` same; tests; Track B proof section |
+| `4fcef08` | `storage_plane_status` JSDA coverage + divergence honesty (Python + MCP); G4 proof |
+
+**Tests:** `pytest tests/test_jquants_normalize.py` → **16 passed**.
+
+**Not done:** historical specialized re-materialize; D1 JSDA fact backfill; schema expansion for AdjFactor/Mrgn/session splits; Mass/READY/Phase7.
+
+---
+
+## 6. Leak-check
+
+| Gate | Status |
 |------|--------|
-| `packages/data_plane/ingestion/jquants/normalize.py` | Master: add `S17`/`S17Nm`/`S33`/`S33Nm`/`Mkt`/`MktNm`. Bars: stop treating `AAdj*` as all-day Adj aliases. |
-| `platform/workers/ingestion-premium/src/master_scd2/write.ts` | Same V2 short-key coverage for SCD2 `MasterRecord`. |
-| `tests/test_jquants_normalize.py` | `test_listed_info_v2_live_short_names`, `test_bars_aadj_is_not_all_day_adjustment_alias`. |
-
-**Tests:** `python3 -m pytest tests/test_jquants_normalize.py -q` → **16 passed**.
-
-**Not done (explicit non-claims):**
-
-- No re-ingest / D1 rewrite of historical specialized rows (CF hot is generic payload — already complete).
-- No schema expansion for `AdjFactor` / `Mrgn` / session split columns.
-- No Mass ON / READY / Phase7 / empty-raw accept.
+| Empty-raw COMPLETE ban | **held** |
+| Mass / READY / B0 | **NO-GO** |
+| Phase 7 | **OFF** |
+| Destructive DROP/rewrite | **none** |
+| Dual-issue / peer kill | **n/a** (docs+mapping only) |
 
 ---
 
-## Evidence paths
+## 7. Evidence index
 
 ```
-.glm-logs/w0815m_g2_typed_null/
-  r2_bars_page.json
-  r2_master_page.json
-  r2_calendar_page.json
-  d1_bars_jul2026.json
-  d1_master_aug2026.json
-  audit_summary.json
-  pytest_normalize.log
+.glm-logs/w0815m_g1_contract_api/   live_all.json, *_keys.json, audit_full.json, table.md
+.glm-logs/w0815m_g2_typed_null/     r2_*.json, d1_*.json, audit_summary.json
+.glm-logs/w0815m_g3_json_null/      AUDIT_REPORT.json, DEEP_SAME_ROW.json, samples/, d1/
+.glm-logs/w0815m_g4_jsda_audit/     audit_local.json, residual.md
+docs/proof/w0815m_g4_jsda_audit_20260815.md
+docs/proof/data_quality_scan_20260812.md   # prior D1 jsda_repo_rates=0
 ```
-
-Cross-check live key inventory: `.glm-logs/w0815m_g1_contract_api/{equities_bars_daily,equities_master,markets_calendar}_keys.json`.
 
 ---
 
-## Verdict (Track B)
+## 8. Orchestrator report (W20-G5)
 
-| dataset | always-null typed (pre) | root cause | status |
-|---------|-------------------------|------------|--------|
-| equities_bars_daily OHLC/V/Adj* | no (≈5% source null) | n/a | **PASS** mapping; Adj false-alias hardened |
-| equities_master sector/market | **yes (100%)** | missing V2 short aliases | **FIXED** |
-| equities_master listing_date | yes (100%) | source never sends field | **classified — no code fix** |
-| markets_calendar | no | n/a | **PASS** |
-
-**Track B GO for mapping correctness after fix.** Storage plane remains generic-payload SoT; specialized tables only used on local Python paths / SCD2 attrs.
-
----
-
-## Track A — contract vs live API key inventory (W20-G1)
-
-**Wave:** w0815m / W20-G1  
-**Scope:** all 23 datasets in `packages/data_plane/data_contracts/jquants_premium_core.json`  
-**Transport:** CF secret-proxy (`cf-jquants-proxy`), ~1–few day windows; fins after general; rate ~≤500/min  
-**Artifacts (key lists only, no secrets / no full payloads):** `.glm-logs/w0815m_g1_contract_api/`  
-**Mass / READY / Phase7:** **NO-GO**
-
-### Method
-
-1. Live `JQuantsClient.fetch_dataset` via CF proxy for each Premium path (params corrected per vendor 400 messages: derivatives need `date`; indices need `date|code`; short-ratio needs `date|s33`; dividend needs `date|code` not bare from/to).
-2. When live empty (AM tip expired after ~06:00 next day on weekend; sparse EDINET days), corroborate keys from non-empty tip `jquants_records.payload` / retained raw (same key surface).
-3. Diff contract `natural_key_fields` + `field_aliases` + path against sampled keys; smoke `identity.natural_key` on live rows.
-4. Classify storage: specialized typed normalize vs catalog `normalize_generic` → `jquants_records` payload/raw_payload.
-
-### Storage classification (production)
-
-| class | datasets | notes |
-|-------|----------|-------|
-| **typed_capable__generic_production** | `equities_bars_daily`, `equities_master`, `markets_calendar` | `normalize_daily_bars` / `normalize_listed_info` / `normalize_market_calendar` exist; catalog ingest always uses `normalize_generic`. Local specialized tables currently **0** rows; CF hot is **generic payload**. |
-| **generic_payload** | remaining **20** Premium datasets | `normalize_generic` → `jquants_records.payload` + `raw_payload` (full row retained; no key drop). |
-
-### Contract vs API — summary table
-
-| dataset | endpoint | API keys sample (n) | contract NK / aliases | storage | dropped keys? | gaps |
-|---------|----------|---------------------|----------------------|---------|---------------|------|
-| `equities_master` | `/v2/equities/master` | 14: `Code,Date,CoName,CoNameEn,S17,S17Nm,S33,S33Nm,ScaleCat,Mkt,MktNm,Mrgn,MrgnNm,ProdCat` | NK=`Code,Date` | typed_capable / generic prod | specialized: `Mrgn*`/`ProdCat` payload-only (intentional); long names absent on V2 | — (short aliases **FIXED** W20-G2) |
-| `equities_bars_daily` | `/v2/equities/bars/daily` | 44 short OHLCV + Adj/M/A splits + `MktCap,ExRT,AdjFactor` | NK=`Code,Date` | typed_capable / generic prod | specialized maps all-day O/H/L/C/Vo/Va/Adj*; session splits / AdjFactor / limits payload-only | — |
-| `equities_bars_daily_am` | `/v2/equities/bars/daily/am` | 8: `Code,Date,MO,MH,ML,MC,MVo,MVa` | NK=`Code,Date` | generic | none | **TIP_ONLY** (no historical `date`; empty after tip window) |
-| `fins_summary` | `/v2/fins/summary` | 111 incl. `Code,DiscDate,DiscNo,DiscTime` | NK=`Code,DiscDate,DiscNo` aliases Disc*↔Disclosed* | generic | none | — (live uses short `Disc*`) |
-| `fins_details` | `/v2/fins/details` | 6: `Code,DiscDate,DiscNo,DiscTime,DocType,FS` | same Disc aliases | generic | none | — |
-| `fins_dividend` | `/v2/fins/dividend` | 23 incl. `CARefNo` (not `RefNo`) | NK=`Code,RefNo` aliases `CARefNo` | generic | none | — NK resolves via alias |
-| `fins_earnings_date` | `/v2/fins/earnings-date` | 7: `Code,PubDate,SchDate,CoName,CoNameEn,FQName,FYE` | NK=`Code,PubDate,SchDate` | generic | none | — |
-| `equities_earnings_calendar` | `/v2/equities/earnings-calendar` | 7: `Date,Code,CoName,FQ,FY,Section,SectorNm` | NK=`Date,Code` | generic | none | **TIP_CALENDAR** (not historical range) |
-| `markets_calendar` | `/v2/markets/calendar` | 2: `Date,HolDiv` | NK=`Date` | typed_capable / generic prod | HolDiv mapped | — |
-| `equities_investor_types` | `/v2/equities/investor-types` | 56 incl. `PubDate,Section,EnDate` | NK=`PubDate,Section` | generic | none | — |
-| `indices_bars_daily_topix` | `/v2/indices/bars/daily/topix` | 5: `Date,O,H,L,C` | NK=`Date` | generic | none | — |
-| `indices_bars_daily` | `/v2/indices/bars/daily` | 6: `Date,Code,O,H,L,C` | NK=`Date,Code` | generic | none | — (API requires `date` or `code`) |
-| `derivatives_bars_daily_options_225` | `/v2/derivatives/bars/daily/options/225` | 30 | NK=`Date,Code` | generic | none | — (API requires `date`) |
-| `derivatives_bars_daily_futures` | `/v2/derivatives/bars/daily/futures` | 29 | NK=`Date,Code` | generic | none | — (API requires `date`) |
-| `derivatives_bars_daily_options` | `/v2/derivatives/bars/daily/options` | 37 | NK=`Date,Code` | generic | none | — (API requires `date`) |
-| `markets_margin_interest` | `/v2/markets/margin-interest` | 9 | NK=`Date,Code` | generic | none | — |
-| `markets_margin_alert` | `/v2/markets/margin-alert` | 20 incl. `Code,PubDate,AppDate` | NK=`Code,PubDate,AppDate` | generic | none | — |
-| `markets_short_ratio` | `/v2/markets/short-ratio` | 5: `Date,S33,SellExShortVa,ShrtNoResVa,ShrtWithResVa` | NK=`Date,S33` | generic | none | — (API requires `date` or `s33`) |
-| `markets_short_sale_report` | `/v2/markets/short-sale-report` | 14 incl. `DiscDate,CalcDate,Code,DICName,FundName` | NK=5-field composite | generic | none | — |
-| `markets_breakdown` | `/v2/markets/breakdown` | 16 | NK=`Date,Code` | generic | none | — |
-| `edinet_major_shareholders` | `/v2/edinet/major-shareholders` | 11 incl. `Code,DocId,SubDate,SubTime` | NK=`Code,DocId` | generic | none | sparse days (sampled historical date) |
-| `edinet_cross_shareholdings` | `/v2/edinet/cross-shareholdings` | 13 | NK=`Code,DocId` | generic | none | sparse days |
-| `edinet_large_volume_shareholders` | `/v2/edinet/large-volume-shareholders` | 15 | NK=`Code,DocId` | generic | none | — |
-
-Per-dataset key JSON: `.glm-logs/w0815m_g1_contract_api/{dataset_id}_keys.json` + `audit_full.json` + `table.md`.
-
-### Natural-key smoke (live rows → `identity.natural_key`)
-
-| dataset | result |
-|---------|--------|
-| `fins_summary` | `{"Code",DiscDate,DiscNo}` — no hash fallback |
-| `fins_dividend` | `RefNo` filled from live `CARefNo` via contract alias |
-| `equities_master` | `{"Code","Date"}` |
-| `markets_calendar` | `{"Date"}` |
-| `markets_short_ratio` | `{"Date","S33"}` |
-| `markets_short_sale_report` | 5-field composite OK |
-
-**No NK_MISSING across Premium 23.** Contract paths all match live `/v2/...` surfaces.
-
-### Residual non-mapping gaps (product / vendor — not normalize bugs)
-
-| flag | datasets | disposition |
-|------|----------|-------------|
-| `TIP_ONLY_ENDPOINT` | `equities_bars_daily_am` | Vendor same-day AM only until ~06:00 next day; contract lists `params:["code","date"]` but historical date is not supported. History DEFER (see `w0815b_g11_earn_am`). Keys from tip structured store when live window closed. |
-| `TIP_CALENDAR_NOT_HISTORICAL_RANGE` | `equities_earnings_calendar` | Next-business-day tip calendar; range params ignored by vendor. History DEFER. |
-
-No empty-raw accept. No invented fields. No Mass ON.
-
-### Track A code changes
-
-None required beyond W20-G2 (`df6271d`) master short-key + bars `AAdj*` fix already on `main`. Catalog path remains generic for all Premium datasets; empty-raw ban held.
-
-### JSDA governed (brief, out of JQ Premium sample)
-
-From `packages/data_plane/data_contracts/jsda_governed.json` (schema v1):
-
-| dataset_id | product | natural_key_fields | history_target_start |
-|------------|---------|--------------------|----------------------|
-| `jsda_otc_bond_reference_prices` | 公社債店頭売買参考統計値 | source, publication_label_date, security_code, bond_name | 2002-08-02 |
-| `jsda_tokyo_repo_rates` | 東京レポ・レート | source, as_of_date, tenor, rate_type | 2012-10-29 |
-| `jsda_corporate_bond_transactions` | 社債の取引情報 | source, publication_label_date, trade_date, security_code, source_record_id | 2015-11-04 |
-
-JSDA is archive/file ingest (CSV/XLS), not J-Quants REST; storage via JSDA-specific tables / normalize — not `jquants_records`.
-
-### Verdict (Track A)
-
-| check | status |
-|-------|--------|
-| All 23 Premium paths sampled (live and/or non-empty SoT payload) | **PASS** |
-| Contract NK present (direct or alias) on live shape | **PASS** |
-| Generic path retains full keys | **PASS** |
-| Typed path mapping bugs for master/bars | **FIXED** (W20-G2) |
-| AM / earnings calendar historical capability | **DEFER** (vendor tip-only — documented) |
-| Mass / READY | **NO-GO** |
-
----
-
-## Track B — JSON payload NULL audit (W20-G3)
-
-**Wave:** w0815m / **W20-G3**  
-**Scope:** generic `jquants_records` **payload / raw_payload** for priority datasets (fins / markets / derivatives / edinet / investor_types)  
-**SoT:** CF R2 raw pages + R2 structured JSONL + D1 residual hot rows  
-**Empty-raw ban:** only COMPLETE manifests with `row_count > 0`  
-**Mass / READY / Phase7:** **NO-GO**  
-**Artifacts:** `.glm-logs/w0815m_g3_json_null/` (`AUDIT_REPORT.json`, `DEEP_SAME_ROW.json`, `R2_STRUCTURED_SAMPLE.json`, `FINAL_VERDICT.json`, raw/structured samples)
-
-### 1. How records land in `jquants_records` (and R2 structured)
-
-Premium-core ingest is CF-native (`platform/workers/ingestion-premium`):
-
-| stage | what is written |
-|-------|-----------------|
-| API page | `parsed.data[]` rows — **no field whitelist / no drop** |
-| R2 raw | full response body → `quant-raw/raw/{dataset}/{run_id}/page-*.json` + manifest |
-| structured record | `payload = stableJson(row)` (sorted keys; **undefined only** stripped); `raw_payload = JSON.stringify(row)` |
-| write path | Premium core → **R2-only** structured JSONL (`structured/jsonl/{dataset}/dt=…/{runId}.jsonl`); D1 `jquants_records` is residual hot / legacy tip, not full history |
-
-```ts
-// platform/workers/ingestion-premium/src/index.ts — upsertRecords
-const payload = stableJson(row);
-// ...
-rawPayload: JSON.stringify(row),
-```
-
-```ts
-// platform/workers/ingestion-premium/src/identity.ts — stableJson
-// undefined keys dropped; null / "" preserved as JSON null / empty string
-```
-
-**Implication:** any always-null value in payload is either (a) present empty from the API, or (b) a same-row drop vs `raw_payload`. There is no intermediate typed flatten for these generic datasets.
-
-### 2. Method
-
-1. For each priority dataset, pick a non-empty COMPLETE `raw_retention_manifests` row; download R2 raw page(s); compute key presence / null-or-empty rates on API `data[]`.
-2. Sample D1 `jquants_records` residual rows (`payload`, `raw_payload`); **same-row** compare keysets + values.
-3. Resolve R2 structured keys via `ingestion_change_log` (`jquants_records_r2` summaries); download JSONL; re-check payload≡raw_payload.
-4. Classify always-null keys: **SOURCE** (empty in raw API) vs **MAPPING** (raw has value, payload lost it).
-
-### 3. Dataset results (same-row integrity)
-
-| dataset | raw sample n | D1 compared | R2 JSONL sample | payload≡raw keyset (D1) | value mismatches | always-null keys (D1 hot) | class |
-|---------|-------------:|------------:|----------------:|------------------------:|-----------------:|---------------------------:|-------|
-| `fins_summary` | 414 | 300 | 200 | **1.0** | 0 | 11 | **SOURCE** |
-| `fins_details` | 402 | 266 | 200 | **1.0** | 0 | 0 top-level | OK (nested `FS`) |
-| `fins_dividend` | 460 | 300 | 200 | **1.0** | 0 | 5 | **SOURCE** |
-| `fins_earnings_date` | 18 | 300 | 5 | **1.0** | 0 | 0 | OK |
-| `markets_margin_interest` | 500 | 300 | 200 | **1.0** | 0 | 0 | OK |
-| `markets_margin_alert` | 219 | 300 | 200 | **1.0** | 0 | 0 | OK |
-| `markets_short_ratio` | 34 | 300 | 34 | **1.0** | 0 | 0 | OK |
-| `markets_short_sale_report` | 500 | 300 | 200 | **1.0** | 0 | 0 | OK |
-| `markets_breakdown` | 500 | 300 | 200 | **1.0** | 0 | 0 | OK |
-| `derivatives_bars_daily_futures` | 126 | 126 | 126 | **1.0** | 0 | 0 | OK |
-| `derivatives_bars_daily_options` | 500 | 300 | 200 | **1.0** | 0 | 5 | **SOURCE** |
-| `derivatives_bars_daily_options_225` | 500 | 300 | 200 | **1.0** | 0 | 0 | OK |
-| `edinet_major_shareholders` | 2 | 57 | 2 | **1.0** | 0 | 0 | OK |
-| `edinet_cross_shareholdings` | 2 | 51 | 2 | **1.0** | 0 | 0 (D1) | OK (R2 tip-day sparse) |
-| `edinet_large_volume_shareholders` | 41 | 300 | 23 | **1.0** | 0 | 0 | OK |
-| `equities_investor_types` | 25 | 20 | 4 | **1.0** | 0 | 0 | OK |
-
-**Fields dropped before payload:** **none** (0 mapping drops across all 16).
-
-Example R2 structured objects:
-
-- `structured/jsonl/fins_summary/dt=2026-08-14/r2-fins_summary-1786752949387-8jal91.jsonl`
-- `structured/jsonl/markets_margin_interest/dt=2026-05-01/r2-markets_margin_interest-1786721754020-7jc1fo.jsonl`
-- `structured/jsonl/derivatives_bars_daily_options/dt=2026-08-14/r2-derivatives_bars_daily_options-1786752970381-kfd8j8.jsonl`
-
-Note: latest hourly raw for `markets_margin_interest` is often `row_count=0` (empty-raw ban → not used); audit used non-empty COMPLETE run with 4253 rows.
-
-### 4. Always-null key catalog (source API empty strings)
-
-Same-row: if payload is always empty for a key, `raw_payload` is always empty for that key too (no mapping nullify).
-
-| dataset | always-null / empty keys (D1 residual sample) | interpretation |
-|---------|-----------------------------------------------|----------------|
-| `fins_summary` | `DivUnit`, `FDiv1Q`, `FDivTotalAnn`, `FDivUnit`, `FPayoutRatioAnn`, `MatChgSub`, `NCROE`, `NxFDiv1Q`, `NxFDiv3Q`, `NxFDivUnit`, `NxFNCOP2Q` | REIT unit fields + rarely-used forecast / non-consolidated series; API returns `""`. `MatChgSub` superseded by `SigChgInC` after 2024-07-22 vendor change (key may still appear empty). Spec: [fins/summary](https://jpx-jquants.com/en/spec/fin-summary). |
-| `fins_dividend` | `DeemCapGains`, `DeemDiv`, `DistAmt`, `NetAssetDecRatio`, `RetEarn` | REIT / deemed-dividend fields empty on common equity cash-dividend rows in sample. |
-| `derivatives_bars_daily_options` | `EO`, `EH`, `EL`, `EC`, `SQD` | Emergency-margin OHLC + special quotation date; empty when emergency margin not triggered (typical `EmMrgnTrgDiv=002`). |
-
-R2 structured tip windows can show a **superset** of empty forecast keys for `fins_summary` (e.g. all `FNC*` / `FNCOP*` empty on a single disclosure day) — still source-empty, not dropped.
-
-### 5. Special cases
-
-#### `fins_details` nested `FS`
-
-Top-level keys are only **6**: `Code`, `DiscDate`, `DiscNo`, `DiscTime`, `DocType`, `FS`.  
-BS/PL/CF line items live **inside** the `FS` object (vendor shape). Payload stores the whole object; nothing is flattened away. This is **not** a field-drop bug.
-
-#### No specialized typed mapping for this set
-
-These datasets are **generic_payload** only (see Track A). W20-G2 typed fixes (bars `AAdj*`, master `S17`/`Mkt`…) do not apply. Nulls here are JSON-value nulls, not typed-column mapping.
-
-### 6. Code fix
-
-**None required.** No pre-payload field drop; no `stableJson` loss of present keys; payload ≡ raw_payload on same rows for D1 residual and R2 structured.
-
-Optional follow-ups (out of scope / non-claims):
-
-- Document expected always-empty REIT/emergency fields in consumer docs.
-- Nested `FS` key cardinality variance (XBRL label surface differs by DocType) — research consumers should treat `FS` as open map.
-- No Mass ON / re-ingest / empty-raw accept.
-
-### 7. Verdict (W20-G3)
-
-| check | status |
-|-------|--------|
-| Landing path traced (raw + structured) | **PASS** |
-| R2 raw + R2 structured + D1 residual sampled for 16 priority datasets | **PASS** |
-| payload keyset ≡ raw_payload same-row | **PASS (100%)** |
-| Always-null keys classified source vs mapping | **PASS — all SOURCE** |
-| Fields dropped before payload | **NONE** |
-| Code fix | **not needed** |
-| Empty-raw ban | **held** |
-| Mass / READY / Phase7 | **NO-GO** |
-
-**Track B JSON payload integrity: GO (no mapping defects).** Residual nulls are vendor empty values retained faithfully.
+1. **commits (wave):** `df6271d` (G2 typed), `4fcef08` (+ lock `07e6a67`), this merge commit (G5)
+2. **push SHA:** *(filled post-push)*
+3. **audit summary table:** §4
+4. **always-null list:** §2
+5. **fixes applied:** master short keys, bars AAdj, tokyo_repo honesty (§5)
+6. **remaining issues:** source always-null fields; tip-only am/earn calendar; JSDA corp schema-superset empties; D1 fact plane empty by design; coverage DEFERs D1–D9 unchanged

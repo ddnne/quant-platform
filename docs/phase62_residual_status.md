@@ -1,11 +1,25 @@
 # Phase 6.2 / 6.3 residual status
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
-**Live verified:** 2026-08-15 (JST) / ~2026-08-15T00:31Z UTC (remote D1; COMPLETE segs **3442**; raw_n **15020**; Dataset COMPLETE **11**; FRESH `projgen-3c068e1c…`; empty COMPLETE **0**; Phase7 **OFF**; **W18-G5 w0815j_g5_ops** continuous publish+reeval + dual-issue gate + LIVE+DEFER inventory maintain)
-**Repo tip:** `eb10c6d729a08594b3502d83aab04ade8ee6216d` — COMPLETE **3442** / raw **15020** / Dataset COMPLETE **11** / FRESH `projgen-3c068e1c…` / empty COMPLETE **0** / Phase7 **OFF** / w0815j_g5_ops
+**Live verified:** 2026-08-15 (JST) / ~2026-08-15T00:31Z UTC (remote D1; COMPLETE segs **3442**; raw_n **15020**; Dataset COMPLETE **11**; FRESH `projgen-3c068e1c…`; empty COMPLETE **0**; Phase7 **OFF**; **W18-G5 ops** + **W20 column/NULL audit** merge)
+**Repo tip:** *(W20-G5 post-push)* — COMPLETE **3442** / raw **15020** / Dataset COMPLETE **11** / FRESH `projgen-3c068e1c…` / empty COMPLETE **0** / Phase7 **OFF** / column-null audit
+
+## W20 column / NULL audit (short)
+
+Proof: [`docs/proof/column_null_audit_20260815.md`](proof/column_null_audit_20260815.md) · G4 [`w0815m_g4_jsda_audit_20260815.md`](proof/w0815m_g4_jsda_audit_20260815.md)
+
+| Item | Result |
+|------|--------|
+| Generic payload drop | **none** (G3 deep same-row keyset equal 100%) |
+| Typed master V2 short keys (`S17`/`Mkt*`) | **FIXED** `df6271d` (was 100% null typed) |
+| Bars `AAdj*` false all-day Adj alias | **FIXED** `df6271d` |
+| Always-null source fields | fins forecast/unit, options EC/EH/EL/EO/SQD, ExRT, listing_date, JSDA corp schema-superset → **DEFER** (do not invent) |
+| **`tokyo_repo_rows=0` vs COMPLETE** | **plane split** (D1 fact empty by design; local facts **30303** match TRUSTED receipt) — **not data loss**; honesty UI **FIXED** `4fcef08` |
+| Mass / READY / Phase7 / empty-raw COMPLETE | **NO-GO / OFF / ban held** |
+
+Coverage DEFERs **D1–D9** unchanged. Column-audit **does not** promote dataset COMPLETE.
 
 ## Live snapshot (remote D1 `quant-ingest`)
-
 | Item | Value |
 |------|--------|
 | Dataset COMPLETE | **11** — `markets_calendar` (224/224), `jsda_tokyo_repo_rates` (1/1), `jsda_corporate_bond_transactions` (12/12), `equities_investor_types` (164/164), `edinet_major_shareholders` (104/104), `markets_margin_alert` (164/164), `markets_margin_interest` (164/164), `markets_short_ratio` (164/164), **`derivatives_bars_daily_futures` (164/164)**, **`derivatives_bars_daily_options_225` (164/164)**, **`derivatives_bars_daily_options` (164/164)** |
@@ -160,7 +174,7 @@ Canonical blocked residuals. **Do not re-run densify** unless the re-try conditi
 | `equities_earnings_calendar` | **PARTIAL** | **1** | **`2010-01-04`** | **`2026-08-14`** | — | **W3-G7** residual dry-run **199**; R2 scan window_ok **0/180** tip-dated `Date`; acq+seal **DEFER**; C8 **pass** lag **0**; COMPLETE only **2026-08** |
 | `markets_short_ratio` | **PARTIAL** | **150** | **`2013-01-04`** | **`2026-08-13`** | — | prior **128** + **W7-G4 misc +16** `2021-01…2022-04` (runs **903179–903194**); C8 **pass** lag **1** |
 | `markets_calendar` | **COMPLETE** | 224 | 2008-01-01 | 2026-08-12 | — | sticky full + aggregate fix |
-| `jsda_tokyo_repo_rates` | **COMPLETE** | 1 | 2012-10-29 | 2026-08-10 | — | dataset COMPLETE (G9 verify only) |
+| `jsda_tokyo_repo_rates` | **COMPLETE** | 1 | 2012-10-29 | 2026-08-10 | — | dataset COMPLETE (G9); **W20-G4**: local facts **30303** = receipt; D1 `tokyo_repo_rows=0` = plane-split not loss ([`column_null_audit_20260815.md`](proof/column_null_audit_20260815.md)) |
 | `jsda_otc_bond_reference_prices` | **PARTIAL** | **57** | **`2026-07-02`** | **`2026-08-17`** | — | prior **49** + **W18-G4 peer tip +8** → **57** (G5 ops publish absorb); history **DEFER** site timeout (D5); dataset **not** COMPLETE; proof [`w0815j_g5_ops_20260815.md`](proof/w0815j_g5_ops_20260815.md) |
 | `jsda_corporate_bond_transactions` | **COMPLETE** | **12** | **`2015-11-02`** | **`2026-08-14`** | — | **G9 +11** full annual TORIHIKI2015–2026 (runs **901244–901255**); dataset **COMPLETE** |
 | `fins_details` | **PARTIAL** | **104** | **`2018-01-01`** | **`2026-08-14`** | — | continuous **2018-01…2026-08**; **W9-G2** unsealed-with-raw **0** (no seal this wave); C8 **pass** lag **1**; dataset **not** COMPLETE |
@@ -178,6 +192,12 @@ Canonical blocked residuals. **Do not re-run densify** unless the re-try conditi
 | `derivatives_bars_daily_options_225` | **COMPLETE** | **164** | **`2013-01-04`** | **`2026-08-14`** | — | segs **164/164** since **W12-G4** residual seal; **W13-G3** surgical re-aggregate promoted `dataset_coverage` PARTIAL→**COMPLETE** (stale status_counts 80/84 fixed); C8 **pass** lag **1**; proof [`w0815e_g3_dataset_complete_20260815.md`](proof/w0815e_g3_dataset_complete_20260815.md) |
 
 ## Proof index (aggregate — do not orphan)
+
+### Column / NULL audit (W20)
+| Proof | What it closes |
+|-------|----------------|
+| [`docs/proof/column_null_audit_20260815.md`](proof/column_null_audit_20260815.md) | **W20-G5 unified** merge G1–G4: dataset×key tables; always-null list + cause class; **tokyo_repo_rows=0** plane-split; per-dataset 問題なし/要修正/DEFER; Mass NO-GO |
+| [`docs/proof/w0815m_g4_jsda_audit_20260815.md`](proof/w0815m_g4_jsda_audit_20260815.md) | **W20-G4**: JSDA tokyo_repo honesty + OTC/corp/repo field coverage; `storage_plane_status` divergence flags |
 
 ### COMPLETE seals
 | Proof | What it closes |
