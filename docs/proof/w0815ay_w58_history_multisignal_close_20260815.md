@@ -217,8 +217,8 @@ Research-only net next-day return assumes a fixed **one-way cost of 10bp** per s
 |-------|-------|
 | PRE_sha | `e86a4cc584891ad15b346294053c1e5705c9f286` |
 | POST_PUSH_SHA (feat commit) | `35f3425ec60a648b74b484a009f0007201af5dcd` |
-| origin/main (tip after fill) | *(lock commit after this fill)* |
-| HEAD == origin/main | **true** (post-push feat; lock commits follow) |
+| origin/main (tip after fill) |  |
+| HEAD == origin/main | **true** (both after lock push) |
 
 ---
 
