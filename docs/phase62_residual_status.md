@@ -1,9 +1,48 @@
 # Phase 6.2 / 6.3 residual status
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
-**Live verified:** 2026-08-15 (JST) / **W48** 利用準備フェーズ（READY 未宣言） FINAL · COMPLETE segs **3478** · Dataset COMPLETE **21 / 26** · PARTIAL = **5** permanent DEFER only · **actionable_gap = 0** · empty COMPLETE **0** · **OTC 93** tip island held · permanent DEFER **5** / NO_DENSIFY **6** · densify coverage loops **ENDED** · Mass/READY/Phase7 **NO-GO/OFF** · raw **15869** held (W46 tip secondary) · FRESH `projgen-17345de1e40b4aabb5496c18b22d3182` · **CF-SoT** held — D1 = hot tip · R2 = history · COMPLETE = receipt-owned · floors W38 + W42 mb **2015-04-01** **not lowered** · coverage baseline **W47 FINAL held** · READY **not declared** · **POST_PUSH_SHA** `7e504c63e4e70cb21c7315c8bcc1d59fb4e9a77a`
+**Live verified:** 2026-08-15 (JST) / **W49** 利用準備深化（READY 未宣言） FINAL · COMPLETE segs **3478** · Dataset COMPLETE **21 / 26** · PARTIAL = **5** permanent DEFER only · **actionable_gap = 0** · empty COMPLETE **0** · **OTC 93** tip island held · permanent DEFER **5** / NO_DENSIFY **6** · densify coverage loops **ENDED** · Mass/READY/Phase7 **NO-GO/OFF** · raw **15869** held (W46 tip secondary) · FRESH `projgen-b47cea8b663f41c09b62e3324a4603a4` · **CF-SoT** held — D1 = hot tip · R2 = history · COMPLETE = receipt-owned · floors W38 + W42 mb **2015-04-01** **not lowered** · coverage baseline **W47 FINAL held** · READY **not declared** · **POST_PUSH_SHA** `_POST_PUSH_SHA_`
 
-**Repo tip:** `7e504c63e4e70cb21c7315c8bcc1d59fb4e9a77a` — W48 利用準備 FINAL · COMPLETE **3478** / Dataset COMPLETE **21** / OTC **93** / **actionable_gap = 0** / Phase7 **OFF** / READY **未宣言** · **POST_PUSH_SHA** `7e504c63e4e70cb21c7315c8bcc1d59fb4e9a77a`
+**Repo tip:** `_POST_PUSH_SHA_` — W49 利用準備深化 FINAL · COMPLETE **3478** / Dataset COMPLETE **21** / OTC **93** / **actionable_gap = 0** / Phase7 **OFF** / READY **未宣言** · FRESH `projgen-b47cea8b663f41c09b62e3324a4603a4` · **POST_PUSH_SHA** `_POST_PUSH_SHA_`
+
+## 利用準備深化（READY 未宣言）
+
+**Phase name:** COMPLETE 21 利用準備深化（宣言なし）  
+**Wave:** W49 / w0815ap (T1–T12 deepen · G5 FINAL merge + push)  
+**Usage deepen proof:** [`docs/proof/w0815ap_w49_usage_deepen_20260815.md`](proof/w0815ap_w49_usage_deepen_20260815.md)  
+**Ops logs:** [`.glm-logs/w0815ap_g4_ops/`](../.glm-logs/w0815ap_g4_ops/) · [`ops_snapshot.json`](../.glm-logs/w0815ap_g4_ops/ops_snapshot.json) · [`switch_check.json`](../.glm-logs/w0815ap_g4_ops/switch_check.json) · [`FINAL_metrics.json`](../.glm-logs/w0815ap_g4_ops/FINAL_metrics.json)  
+**Smokes expanding:** [`.glm-logs/w0815ap_g1_smoke/`](../.glm-logs/w0815ap_g1_smoke/) · T1–T4 expanded tip PIT joins **4 pass**  
+**Features skeleton:** [`docs/proof/complete21_min_feature_catalog_20260815.md`](proof/complete21_min_feature_catalog_20260815.md) · `packages/research_runtime/features/complete21_min.py` · `dataset_guard.py`  
+**Single-shot job skeleton:** `packages/product/research/single_shot_job.py` · [`.glm-logs/w0815ap_g3_job/`](../.glm-logs/w0815ap_g3_job/) · Mass loop **not** connected  
+**Unit tests (merge):** features + permanent_defer + single_shot + mass gate · **37 passed**  
+**Prior W48 groundwork:** [`docs/proof/w0815ao_w48_usage_readiness_20260815.md`](proof/w0815ao_w48_usage_readiness_20260815.md) · residual § 利用準備フェーズ開始 held underneath
+
+| gate | status |
+|------|--------|
+| Phase name | **COMPLETE 21 利用準備深化（宣言なし）** |
+| Coverage baseline FINAL | **held** (W47 FINAL · Dataset COMPLETE **21/26** · segs **3478** · **actionable_gap=0**) |
+| READY | **未宣言 / not declared** |
+| Mass | **NO-GO / OFF** |
+| Phase7 | **OFF** (foundation / fail-closed only) — **reconfirmed** this wave |
+| empty COMPLETE | **0** (remote verify held) |
+| Dataset COMPLETE | **21** (remote verify held; not invent 22) |
+| tip densify | **SKIP** (T12 · not primary this phase) |
+| densify | **none** |
+| push | **POST_PUSH_SHA** `_POST_PUSH_SHA_` (G5 FINAL merge) |
+| Projection | **FRESH** `projgen-b47cea8b663f41c09b62e3324a4603a4` (ops_reeval_freshness T10 age large ~1535s; publish apply **SKIP** local==remote 3478; fail-closed no force) |
+| Smokes expanding | G1 T1–T4 **4 pass** (bars×margin · bars×edinet_major · bars×tokyo_repo · fins_summary×dividend; READY **not** declared) |
+| Features skeleton | COMPLETE 21 min catalog + `volume_change_1d` / `topix_relative_1d` / `disclosure_flag_fins` (candidate) + DEFER dataset_guard |
+| Single-shot job | skeleton only · R2 path · Mass **not** connected · `single_shot_job.py` |
+| Unit tests | **37 passed** (complete21 min · permanent_defer · single_shot · mass gate) |
+
+**Primary this phase:** deepen utilization-prep on held coverage baseline — expanded smokes · features skeleton · single-shot job stub — **without** READY / Mass / Phase7 declaration.  
+**Not:** densify · tip primary · invent COMPLETE 22 · Phase7 ON · READY GO · mass ON.
+
+### Explicit non-declarations (held)
+
+- **READY** — not declared (利用準備深化 only; no production READY GO)
+- **Mass Autonomous Research** — **NO-GO / OFF**
+- **Phase7** — **OFF** (no `PHASE7_*` / `MASS_RESEARCH_ENABLE` arming switch)
 
 ## 利用準備フェーズ開始（READY 未宣言）
 
@@ -24,7 +63,7 @@
 | tip densify | **SKIP** (not primary this phase) |
 | densify | **none** |
 | push | **POST_PUSH_SHA** `7e504c63e4e70cb21c7315c8bcc1d59fb4e9a77a` |
-| Projection | **FRESH** `projgen-17345de1e40b4aabb5496c18b22d3182` (ops_reeval_freshness; publish apply **SKIP** local==remote 3478) |
+| Projection | **FRESH** `projgen-17345de1e40b4aabb5496c18b22d3182` (ops_reeval_freshness; publish apply **SKIP** local==remote 3478) — **superseded** by W49 reclock above |
 | G1 DEFER guard | `permanent_defer.py` + `QuantDataAccess` history fail-closed · tests **6 passed** |
 | G2 smokes T4–T6 | **all pass** (tip PIT joins; READY **not** declared) |
 
