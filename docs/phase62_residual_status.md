@@ -2,7 +2,7 @@
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
 **Live verified:** 2026-08-15 (JST) / **W62** 研究用頑健性ゲート + S4/S5（READY 未宣言） · COMPLETE segs **3478** · Dataset COMPLETE **21** · PARTIAL **5** DEFER · **actionable_gap = 0** · empty COMPLETE **0** · **OTC 93** · Mass/READY/Phase7 **NO-GO/OFF** · FRESH `projgen-e20f400348eb4b839b36848b15a90047` · **CF-SoT** held · promotion **9 approved** / **1 candidate** no-promote · research robustness gate **landed** (pass≠GO) · S1 hard-WF **FAIL** · S4 margin soft **PASS** (weak) · S5 short_ratio_delta **FAIL** · 2024 margin/short **empty by inventory** · **no significance / no edge / no operational GO**
-**Repo tip:** (set on push) — W62 gate + S4/S5 · COMPLETE **21** / segs **3478** / OTC **93** / READY **未宣言** · FRESH `projgen-e20f400348eb4b839b36848b15a90047`
+**Repo tip:**  — W62 gate + S4/S5 · COMPLETE **21** / segs **3478** / OTC **93** / READY **未宣言** · FRESH `projgen-e20f400348eb4b839b36848b15a90047`
 
 ## 研究用頑健性ゲート + 別仮説 S4/S5（READY 未宣言）
 
