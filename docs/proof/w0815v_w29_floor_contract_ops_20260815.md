@@ -13,7 +13,7 @@
 **Live verified:** 2026-08-15 (JST) / ~2026-08-15T03:18–03:32Z UTC  
 **Wave start HEAD (tip PRE):** `3213b07f645a5e18dc491029fb5ad5bb00fd21f0`  
 **Floor catalog commit:** `391409dcb94d6931cfa11ed3627f4c3878050467`  
-**Proof HEAD (post-push):** `POST_PUSH_SHA` (filled after T14 push)  
+**Proof HEAD (post-push):** `d3c9f54b5237c7f18f692483601a706b5ee620b0`  
 **Projection:** **FRESH** `projgen-76084a30143043febab9babe9327aa2f` (tip reeval; segs untouched; mass=**NO-GO**)
 
 **Artifacts:**
@@ -180,7 +180,7 @@ Only post-floor PARTIALs: `fins_earnings_date` **2026-01…04** classed **TIP_DE
 |------|--------|
 | Docs committed | `observed_floor_catalog_20260815.md` · this proof · `phase62_residual_status.md` |
 | `git push origin main` | **done** |
-| `origin/main` SHA | `POST_PUSH_SHA` |
+| `origin/main` SHA | `d3c9f54b5237c7f18f692483601a706b5ee620b0` |
 | HEAD == origin/main | **yes** (after push) |
 
 ---
@@ -200,7 +200,7 @@ Only post-floor PARTIALs: `fins_earnings_date` **2026-01…04** classed **TIP_DE
 | 9 | Projection FRESH id recorded | **yes** `projgen-76084a30…` |
 | 10 | last_run / RPM from tip FINAL | **yes** |
 | 11 | residual live verified POST numbers | **yes** |
-| 12 | push SHA locked | **yes** (POST_PUSH_SHA) |
+| 12 | push SHA locked | **yes** (`d3c9f54b5237c7f18f692483601a706b5ee620b0`) |
 | 13 | no junk ?? files in commit | **yes** (docs only) |
 | 14 | Mass/READY/Phase7 | **OFF** |
 | 15 | peers not killed | **yes** |

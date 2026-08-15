@@ -1,8 +1,8 @@
 # Phase 6.2 / 6.3 residual status
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
-**Live verified:** 2026-08-15 (JST) / ~2026-08-15T03:32Z UTC (remote D1; COMPLETE segs **3457** **+0**; raw **15255** tip POST; Dataset COMPLETE **11**; empty COMPLETE **0**; Phase7 **OFF**; **W29** floors **locked** + **NO_DENSIFY_FIXED** + **NO_HOLES** post-floor closed **0**; tip raw **+30** secondary; FRESH `projgen-76084a30143043febab9babe9327aa2f`; **HAS_RAW_SEALABLE=0** held; **DEFER densify not** re-run; **CF-SoT** language held — D1 = hot tip · R2 = history · COMPLETE = receipt-owned; **POST_PUSH_SHA** `POST_PUSH_SHA`)
-**Repo tip:** `POST_PUSH_SHA` — COMPLETE **3457** / Dataset COMPLETE **11** / empty COMPLETE **0** / Phase7 **OFF** / w0815v W29 floor+ops close
+**Live verified:** 2026-08-15 (JST) / ~2026-08-15T03:32Z UTC (remote D1; COMPLETE segs **3457** **+0**; raw **15255** tip POST; Dataset COMPLETE **11**; empty COMPLETE **0**; Phase7 **OFF**; **W29** floors **locked** + **NO_DENSIFY_FIXED** + **NO_HOLES** post-floor closed **0**; tip raw **+30** secondary; FRESH `projgen-76084a30143043febab9babe9327aa2f`; **HAS_RAW_SEALABLE=0** held; **DEFER densify not** re-run; **CF-SoT** language held — D1 = hot tip · R2 = history · COMPLETE = receipt-owned; **POST_PUSH_SHA** `d3c9f54b5237c7f18f692483601a706b5ee620b0`)
+**Repo tip:** `d3c9f54b5237c7f18f692483601a706b5ee620b0` — COMPLETE **3457** / Dataset COMPLETE **11** / empty COMPLETE **0** / Phase7 **OFF** / w0815v W29 floor+ops close
 
 ## W29 / w0815v — floor catalog + NO_DENSIFY + tip ops close (FINAL)
 
@@ -20,7 +20,7 @@
 | empty-raw COMPLETE / Mass / READY / Phase7 | **ban / NO-GO / OFF** |
 | Projection | **FRESH** `projgen-76084a30143043febab9babe9327aa2f` |
 | CF-SoT | D1 **hot tip** · R2 **history** · COMPLETE **receipt-owned** |
-| Push | **POST_PUSH_SHA** `POST_PUSH_SHA` |
+| Push | **POST_PUSH_SHA** `d3c9f54b5237c7f18f692483601a706b5ee620b0` |
 
 ### NO_DENSIFY_FIXED (never re-densify residual class)
 
