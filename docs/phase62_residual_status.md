@@ -2,7 +2,7 @@
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
 **Live verified:** 2026-08-15/16 · **W70** tip + aggregate residual **COMPLETE** · live verified ops COMPLETE **22** held · DEFER **4** remaining (bars_am · earn_cal · master · OTC) · segs **3482** · empty **0** · **OTC 93** (+0) · bars_am COMPLETE tip **1** (+0) · Mass/READY/Phase7 **NO-GO/OFF** · FRESH `projgen-5a13abfcb3774c6cb8276b57089efab1` · S1–S5 **research_baseline_rejected** untouched · densify **none** · **no invent** · **no Mass/READY ON** · **no S1–S5 un-reject** · **no OTC bulk densify** · **no fins roll-back** · aggregate follow-up tooling landed
-**Repo tip:** (pin after push) — W70 tip + aggregate residual close · COMPLETE **22** / DEFER **4** / segs **3482** / OTC **93** / READY **未宣言** · FRESH `projgen-5a13abfcb3774c6cb8276b57089efab1`
+**Repo tip:** `0e0d96e0377a0907465c6fcb50ae53f27e47d87c` — W70 tip + aggregate residual close · COMPLETE **22** / DEFER **4** / segs **3482** / OTC **93** / READY **未宣言** · FRESH `projgen-5a13abfcb3774c6cb8276b57089efab1`
 
 ## tip + aggregate residual close（Dataset COMPLETE 22 held）· W70
 
