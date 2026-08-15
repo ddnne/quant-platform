@@ -120,20 +120,23 @@ def normalize_daily_bars(
                 "close": _pick_num(r, "Close", "C"),
                 "volume": _pick_num(r, "Volume", "Vo"),
                 "turnover_value": _pick_num(r, "TurnoverValue", "Va"),
+                # All-day adjusted series only. V2 also publishes session-split
+                # fields (MAdj* morning / AAdj* afternoon) — those are *not*
+                # aliases of Adj* and must not backfill when Adj* is null.
                 "adjustment_open": _pick_num(
-                    r, "AdjustmentOpen", "AdjOpen", "AdjO", "AAdjO"
+                    r, "AdjustmentOpen", "AdjOpen", "AdjO"
                 ),
                 "adjustment_high": _pick_num(
-                    r, "AdjustmentHigh", "AdjHigh", "AdjH", "AAdjH"
+                    r, "AdjustmentHigh", "AdjHigh", "AdjH"
                 ),
                 "adjustment_low": _pick_num(
-                    r, "AdjustmentLow", "AdjLow", "AdjL", "AAdjL"
+                    r, "AdjustmentLow", "AdjLow", "AdjL"
                 ),
                 "adjustment_close": _pick_num(
-                    r, "AdjustmentClose", "AdjClose", "AdjC", "AAdjC"
+                    r, "AdjustmentClose", "AdjClose", "AdjC"
                 ),
                 "adjustment_volume": _pick_num(
-                    r, "AdjustmentVolume", "AdjVolume", "AdjVo", "AAdjVo"
+                    r, "AdjustmentVolume", "AdjVolume", "AdjVo"
                 ),
                 "raw_payload": json.dumps(r, ensure_ascii=False),
             }
@@ -169,17 +172,29 @@ def normalize_listed_info(
                 "company_name_en": _pick_str(
                     r, "CompanyNameEnglish", "CoNameEnglish", "CoNameEn"
                 ),
-                "sector_17_code": _pick_str(r, "Sector17Code", "Sec17Code"),
-                "sector_17_name": _pick_str(
-                    r, "Sector17CodeName", "Sec17CodeName"
+                # V2 short: S17/S17Nm/S33/S33Nm/Mkt/MktNm (live SoT 2026-08).
+                # Longer Sec*/Market* aliases retained for historical payloads.
+                "sector_17_code": _pick_str(
+                    r, "Sector17Code", "Sec17Code", "S17"
                 ),
-                "sector_33_code": _pick_str(r, "Sector33Code", "Sec33Code"),
+                "sector_17_name": _pick_str(
+                    r, "Sector17CodeName", "Sec17CodeName", "S17Nm"
+                ),
+                "sector_33_code": _pick_str(
+                    r, "Sector33Code", "Sec33Code", "S33"
+                ),
                 "sector_33_name": _pick_str(
-                    r, "Sector33CodeName", "Sec33CodeName"
+                    r, "Sector33CodeName", "Sec33CodeName", "S33Nm"
                 ),
                 "scale_category": _pick_str(r, "ScaleCategory", "ScaleCat"),
-                "market_code": _pick_str(r, "MarketCode", "MktCode"),
-                "market_name": _pick_str(r, "MarketCodeName", "MktCodeName"),
+                "market_code": _pick_str(
+                    r, "MarketCode", "MktCode", "Mkt"
+                ),
+                "market_name": _pick_str(
+                    r, "MarketCodeName", "MktCodeName", "MktNm"
+                ),
+                # ListingDate/ListDate are absent from V2 /v2/equities/master
+                # (always-missing source field; not a mapping miss).
                 "listing_date": _pick_str(r, "ListingDate", "ListDate"),
                 "raw_payload": json.dumps(r, ensure_ascii=False),
             }

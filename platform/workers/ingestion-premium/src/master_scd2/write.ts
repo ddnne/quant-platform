@@ -71,18 +71,49 @@ export function payloadToMasterRecord(
     obj.Code ?? obj.code ?? obj.LocalCode ?? obj.local_code ?? naturalKey ?? "",
   ).trim();
   if (!code) return null;
+  // V2 live payload uses short keys (CoName/S17/S33/Mkt/ScaleCat…). Long
+  // names retained for historical or alternate surfaces.
   return {
     local_code: code,
-    code_name: String(obj.CompanyName ?? obj.company_name ?? obj.Name ?? obj.name ?? ""),
-    sector_33_code: strOrUndef(obj.Sector33Code ?? obj.sector_33_code),
-    sector_33_name: strOrUndef(obj.Sector33CodeName ?? obj.sector_33_name),
-    sector_17_code: strOrUndef(obj.Sector17Code ?? obj.sector_17_code),
-    sector_17_name: strOrUndef(obj.Sector17CodeName ?? obj.sector_17_name),
-    scale_code: strOrUndef(obj.ScaleCategory ?? obj.scale_code),
+    code_name: String(
+      obj.CompanyName ??
+        obj.CoName ??
+        obj.company_name ??
+        obj.Name ??
+        obj.name ??
+        "",
+    ),
+    sector_33_code: strOrUndef(
+      obj.Sector33Code ?? obj.Sec33Code ?? obj.S33 ?? obj.sector_33_code,
+    ),
+    sector_33_name: strOrUndef(
+      obj.Sector33CodeName ??
+        obj.Sec33CodeName ??
+        obj.S33Nm ??
+        obj.sector_33_name,
+    ),
+    sector_17_code: strOrUndef(
+      obj.Sector17Code ?? obj.Sec17Code ?? obj.S17 ?? obj.sector_17_code,
+    ),
+    sector_17_name: strOrUndef(
+      obj.Sector17CodeName ??
+        obj.Sec17CodeName ??
+        obj.S17Nm ??
+        obj.sector_17_name,
+    ),
+    scale_code: strOrUndef(
+      obj.ScaleCategory ?? obj.ScaleCat ?? obj.scale_code,
+    ),
     scale_name: strOrUndef(obj.ScaleCategoryName ?? obj.scale_name),
-    listing_date: strOrUndef(obj.ListingDate ?? obj.listing_date),
-    market_code: strOrUndef(obj.MarketCode ?? obj.market_code),
-    market_name: strOrUndef(obj.MarketCodeName ?? obj.market_name),
+    listing_date: strOrUndef(
+      obj.ListingDate ?? obj.ListDate ?? obj.listing_date,
+    ),
+    market_code: strOrUndef(
+      obj.MarketCode ?? obj.MktCode ?? obj.Mkt ?? obj.market_code,
+    ),
+    market_name: strOrUndef(
+      obj.MarketCodeName ?? obj.MktCodeName ?? obj.MktNm ?? obj.market_name,
+    ),
   };
 }
 

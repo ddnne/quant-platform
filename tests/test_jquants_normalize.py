@@ -59,6 +59,68 @@ def test_listed_info_short_names():
     assert r["sector_17_code"] == "1"
 
 
+def test_listed_info_v2_live_short_names():
+    """V2 /v2/equities/master uses S17/S33/Mkt (not Sec17Code/MktCode)."""
+    rows = [{
+        "Date": "2026-08-13",
+        "Code": "13010",
+        "CoName": "極洋",
+        "CoNameEn": "KYOKUYO CO.,LTD.",
+        "S17": "1",
+        "S17Nm": "食品",
+        "S33": "0050",
+        "S33Nm": "水産・農林業",
+        "ScaleCat": "TOPIX Small 1",
+        "Mkt": "0111",
+        "MktNm": "プライム",
+        "Mrgn": "2",
+        "MrgnNm": "貸借",
+        "ProdCat": "011",
+    }]
+    r = normalize_listed_info(rows, ingested_at=ING, snapshot_date="2026-08-13")[0]
+    assert r["company_name"] == "極洋"
+    assert r["company_name_en"] == "KYOKUYO CO.,LTD."
+    assert r["sector_17_code"] == "1"
+    assert r["sector_17_name"] == "食品"
+    assert r["sector_33_code"] == "0050"
+    assert r["sector_33_name"] == "水産・農林業"
+    assert r["scale_category"] == "TOPIX Small 1"
+    assert r["market_code"] == "0111"
+    assert r["market_name"] == "プライム"
+    # ListingDate not published on V2 master surface
+    assert r["listing_date"] is None
+
+
+def test_bars_aadj_is_not_all_day_adjustment_alias():
+    """AAdj* is afternoon-session adjusted OHLCV, not a fallback for Adj*."""
+    rows = [{
+        "Code": "13010",
+        "Date": "2024-01-04",
+        "O": None,
+        "H": None,
+        "L": None,
+        "C": None,
+        "Vo": None,
+        "Va": None,
+        "AdjO": None,
+        "AdjH": None,
+        "AdjL": None,
+        "AdjC": None,
+        "AdjVo": None,
+        "AAdjO": 3785.0,
+        "AAdjH": 3825.0,
+        "AAdjL": 3785.0,
+        "AAdjC": 3815.0,
+        "AAdjVo": 12000.0,
+    }]
+    r = normalize_daily_bars(rows, ingested_at=ING)[0]
+    assert r["adjustment_open"] is None
+    assert r["adjustment_high"] is None
+    assert r["adjustment_low"] is None
+    assert r["adjustment_close"] is None
+    assert r["adjustment_volume"] is None
+
+
 def test_calendar_short_names():
     rows = [{"Date": "2025-05-03", "HolDiv": "1"}]
     r = normalize_market_calendar(rows, ingested_at=ING)[0]
