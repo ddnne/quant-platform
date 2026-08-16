@@ -2,7 +2,7 @@
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
 **Live verified:** 2026-08-16 · **W74** research entry under COMPLETE 22 residual **COMPLETE** · entry doc + health smoke + standard eval wiring_only · live verified ops COMPLETE **22** held · DEFER **4** remaining (bars_am · earn_cal · master · OTC) · segs **3482** · empty **0** · **OTC 93** · bars_am COMPLETE tip **1** / PARTIAL **31** · Mass/READY/Phase7 **NO-GO/OFF** · FRESH `projgen-9c3fc52394f84e268c1b1c73a9d1bd90` · S1–S5 **research_baseline_rejected** untouched · densify **none** · **no invent** · **no Mass/READY ON** · **no S1–S5 un-reject** · **no OTC bulk densify** · **no fins roll-back** · **no new daily signs** · COMPLETE expand = **tip-wait** · research entry **ready**
-**Repo tip:** *(pin after push)* — W74 research entry residual close · COMPLETE **22** / DEFER **4** / segs **3482** / OTC **93** / READY **未宣言** · FRESH `projgen-9c3fc52394f84e268c1b1c73a9d1bd90`
+**Repo tip:** `d0024624859588caf0d563216b4ad05fa987add3` — W74 research entry residual close · COMPLETE **22** / DEFER **4** / segs **3482** / OTC **93** / READY **未宣言** · FRESH `projgen-9c3fc52394f84e268c1b1c73a9d1bd90`
 
 ## research entry residual close（Dataset COMPLETE 22 held · research entry ready）· W74
 
