@@ -1,16 +1,79 @@
 # Phase 6.2 / 6.3 residual status
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
-**Live verified:** 2026-08-16 · **W75** milestone freeze after W74 research entry residual **COMPLETE** · freeze text · COMPLETE 22 health · FRESH · live verified ops COMPLETE **22** held · DEFER **4** remaining (bars_am · earn_cal · master · OTC) · segs **3482** · empty **0** · **OTC 93** · bars_am COMPLETE tip **1** / PARTIAL **31** · Mass/READY/Phase7 **NO-GO/OFF** · FRESH `projgen-6413b47e0e24467a9535655f976b8452` · S1–S5 **research_baseline_rejected** untouched · densify **none** · **no invent** · **no Mass/READY ON** · **no S1–S5 un-reject** · **no OTC bulk densify** · **no fins roll-back** · **no new daily signs** · COMPLETE expand = **tip-wait** · research entry **ready** · **waiting for human hypothesis class**
-**Repo tip:** `7495140c993e875f9998e44a3dd1314a9e5d3659` — W75 milestone freeze residual close · COMPLETE **22** / DEFER **4** / segs **3482** / OTC **93** / READY **未宣言** · FRESH `projgen-6413b47e0e24467a9535655f976b8452`
+**Live verified:** 2026-08-16 · **W77** hypothesis redesign + eval checklist v2 + JSDA residual **COMPLETE** · hyp classes · checklist v2 · repo tip reseal · OTC +0 · COMPLETE 22 health · FRESH · live verified ops COMPLETE **22** held · DEFER **4** remaining (bars_am · earn_cal · master · OTC) · segs **3482** · empty **0** · **OTC 93** · bars_am COMPLETE tip **1** / PARTIAL **31** · Mass/READY/Phase7 **NO-GO/OFF** · FRESH `projgen-46a6565c145b4dcdb3a0894441a29780` · S1–S5 **research_baseline_rejected** untouched · densify **none** · **no invent** · **no Mass/READY ON** · **no S1–S5 un-reject** · **no OTC bulk densify** · **no fins roll-back** · **no simple_daily_sign mass gen** · COMPLETE expand = **tip-wait** · research entry **linked** · checklist **v2** · `simple_daily_sign` default **OFF**
+**Repo tip:** *(filled at pin commit)* — W77 hyp+eval+JSDA residual close · COMPLETE **22** / DEFER **4** / segs **3482** / OTC **93** / READY **未宣言** · FRESH `projgen-46a6565c145b4dcdb3a0894441a29780`
 
-## Research entry (W74 · ready · freeze layer W75)
+## Research entry (W74 · ready · freeze W75 · redesign layer W77)
 
 **Entry path:** [`docs/proof/w0816h_w74_research_entry_complete22_20260816.md`](proof/w0816h_w74_research_entry_complete22_20260816.md)  
-**Checklist:** `run_standard_research_eval` / `standard-research-eval-checklist/v1`  
-**Status:** research entry **ready** under COMPLETE **22** · Mass/READY/Phase7 **NO-GO/OFF** · next = **human hypothesis class**
+**Checklist:** `run_standard_research_eval` / `standard-research-eval-checklist/v2`  
+**Hypothesis classes:** [`docs/proof/w0816k_w77_hypothesis_space_redesign_20260816.md`](proof/w0816k_w77_hypothesis_space_redesign_20260816.md) · `simple_daily_sign` default **OFF**  
+**Status:** research entry **linked** under COMPLETE **22** · Mass/READY/Phase7 **NO-GO/OFF** · default gen = multi-structure classes (not simple daily sign mass)
 
-## milestone freeze residual close（Dataset COMPLETE 22 held · research entry ready · human hypothesis wait）· W75
+## hypothesis + eval v2 + JSDA residual close（Dataset COMPLETE 22 held · research entry linked）· W77
+
+**Phase name:** Hypothesis space redesign + standard-research-eval checklist v2 + JSDA repo/OTC residual FRESH close（宣言なし · invent なし · NOT Mass · NOT simple_daily_sign mass gen）  
+**Wave:** W77 / w0816k  
+**Close:** [`docs/proof/w0816k_w77_hypothesis_eval_jsda_close_20260816.md`](proof/w0816k_w77_hypothesis_eval_jsda_close_20260816.md)  
+**Task A hyp redesign:** [`docs/proof/w0816k_w77_hypothesis_space_redesign_20260816.md`](proof/w0816k_w77_hypothesis_space_redesign_20260816.md) · `hypothesis_classes.py` · `idea_generator.py` · `scheduler.py` · simple_daily_sign default **OFF**  
+**Task B eval v2:** [`docs/proof/w0816k_w77_eval_checklist_v2_20260816.md`](proof/w0816k_w77_eval_checklist_v2_20260816.md) · `CHECKLIST_VERSION=…/v2` · cost_models + risk_scenarios · incomplete → `research_candidate_allowed=False`  
+**Task C JSDA:** [`docs/proof/w0816k_w77_jsda_repo_depth_20260816.md`](proof/w0816k_w77_jsda_repo_depth_20260816.md) · tip reseal **30303→30330** end **2026-08-14** receipt **903893** · [`docs/proof/w0816k_w77_otc_staged_20260816.md`](proof/w0816k_w77_otc_staged_20260816.md) · OTC **93→93 (+0)** FULL_OK_NEW=0 · corp **12/12**  
+**Health smoke:** `scripts/check_complete22_health.py` local+remote **all_checks_pass**  
+**Final verify:** [`.glm-logs/w0816k_w77_close/`](../.glm-logs/w0816k_w77_close/) · [`.glm-logs/w0816k_w77_jsda/`](../.glm-logs/w0816k_w77_jsda/)  
+**FRESH:** `projgen-46a6565c145b4dcdb3a0894441a29780` · coverage_segments untouched (reeval) · mass=NO-GO · densify **none**  
+**S1–S5:** stay **research_baseline_rejected** (no un-reject)  
+**Prior W75 freeze residual:** held underneath  
+
+| gate | status |
+|------|--------|
+| READY | **未宣言** |
+| Mass / Phase7 | **NO-GO / OFF** |
+| Dataset COMPLETE | **22** held |
+| DEFER | **4** (bars_am · earn_cal · master · OTC) |
+| COMPLETE segs | **3482** |
+| empty COMPLETE | **0** |
+| OTC | **93** (tip island; wait FULL_OK; this-wave +0) |
+| fins_earnings_date | **104/104** COMPLETE · `dataset_coverage` **COMPLETE** |
+| bars_am | COMPLETE **1** tip / PARTIAL **31** · history **DEFER** · tip continuous only |
+| densify | **none** |
+| coverage expand | **tip-wait** |
+| research entry | **linked** ([`w0816h_w74_research_entry_complete22_20260816.md`](proof/w0816h_w74_research_entry_complete22_20260816.md)) |
+| checklist | **v2** (`standard-research-eval-checklist/v2`) |
+| hyp classes | landed · `simple_daily_sign` default **OFF** |
+| JSDA repo | **30330** rows · end **2026-08-14** · receipt **903893** · deep history usable |
+| S1–S5 catalog | **research_baseline_rejected** untouched |
+| FRESH | `projgen-46a6565c145b4dcdb3a0894441a29780` |
+| COMPLETE 22 health check | **held** (`check_complete22_health.py`) |
+| LIVE_API_EMPTY (bars_am history) | **true** · history_reprobe **FORBIDDEN** |
+| TIP_ONLY_POLICY | **locked** |
+
+### Explicit non-declarations (held)
+
+- **READY** — not declared  
+- **Mass** — **NO-GO / OFF**  
+- **Phase7** — **OFF**  
+- **bars_am history COMPLETE invent** — not claimed (re-probe locked)  
+- **OTC COMPLETE invent / bulk densify** — not claimed / not run  
+- **densify success** — not claimed (densify_executed=0)  
+- **fins segment invent / roll-back** — not done (104/104 held)  
+- **Dataset COMPLETE 23** — not invented (COMPLETE expand = tip-wait)  
+- **S1–S5 un-reject** — not done  
+- **simple_daily_sign mass generation** — forbidden (default OFF)  
+- **short-window-only candidate** — not claimed  
+- **earn_cal/master bulk densify** — not done  
+- **edge / significance / operational GO** — none  
+
+### Residual TOP (W77)
+
+1. **Hypothesis space redesign** — `simple_daily_sign` default OFF · 6 multi-structure classes default ON  
+2. **Eval checklist v2** — leverage/short costs + risk scenarios · incomplete blocks candidate  
+3. **JSDA residual** — repo tip reseal / OTC +0 / corp 12/12 held  
+4. **Mass NO-GO / READY 未宣言** — held  
+5. **Research entry still linked** — W74 under COMPLETE 22 · checklist v2  
+6. **W75 freeze context held underneath** — milestone freeze · tip-wait (no W76 wave in-repo)
+
+## milestone freeze residual close（Dataset COMPLETE 22 held · research entry ready · human hypothesis wait）· W75 held · redesign by W77
 
 **Phase name:** Milestone freeze after W74 research entry FRESH residual close（宣言なし · invent なし · NOT redesign · NOT coverage expand · NOT Mass）  
 **Wave:** W75 / w0816i  

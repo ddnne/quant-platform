@@ -18,7 +18,12 @@ from research.artifacts import (
     RejectionReason,
     StrategyEvidence,
 )
-from research.scheduler import ExperimentScheduler, ScheduledExperiment
+from research.scheduler import (
+    ExperimentScheduler,
+    HypothesisClassScheduleSelection,
+    ScheduledExperiment,
+    select_schedule_hypothesis_classes,
+)
 from research.evaluation import EvaluationHarness, EvaluationProtocol, EvaluationReport
 from research.single_shot_job import (
     COMPLETE_21_DATASETS,
@@ -39,10 +44,30 @@ from research.eval_harness import (
     run_multiday_signal_eval,
     run_nextday_return_eval,
 )
+from research.hypothesis_classes import (
+    ALL_CLASS_IDS,
+    CLASS_SIMPLE_DAILY_SIGN,
+    DEFAULT_GENERATION_CLASS_IDS,
+    HYPOTHESIS_CLASS_REGISTRY,
+    HypothesisClassSpec,
+    assert_simple_daily_sign_not_default_enabled,
+    default_generation_class_ids,
+    get_hypothesis_class,
+    hypothesis_class_registry_document,
+    select_generation_classes,
+)
+from research.idea_generator import (
+    GeneratedIdeaBatch,
+    default_generation_policy,
+    generate_idea_payloads,
+)
 
 __all__ = [
+    "ALL_CLASS_IDS",
     "APPROVED_SIGNAL_LEGS",
+    "CLASS_SIMPLE_DAILY_SIGN",
     "COMPLETE_21_DATASETS",
+    "DEFAULT_GENERATION_CLASS_IDS",
     "EvaluationHarness",
     "EvaluationProtocol",
     "EvaluationReport",
@@ -51,6 +76,10 @@ __all__ = [
     "ExperimentScheduler",
     "FailureMode",
     "FeatureEvidence",
+    "GeneratedIdeaBatch",
+    "HYPOTHESIS_CLASS_REGISTRY",
+    "HypothesisClassScheduleSelection",
+    "HypothesisClassSpec",
     "MASS_RESEARCH_STATUS",
     "MassResearchDisabledError",
     "MultidaySignalEval",
@@ -69,10 +98,19 @@ __all__ = [
     "VerifiedResearchReadiness",
     "assert_harness_closed",
     "assert_mass_and_phase7_off",
+    "assert_simple_daily_sign_not_default_enabled",
     "build_single_shot_job_spec",
+    "default_generation_class_ids",
+    "default_generation_policy",
     "execute_single_shot_job",
+    "generate_idea_payloads",
+    "get_hypothesis_class",
+    "hypothesis_class_registry_document",
     "require_mass_research_start",
     "run_full_pipeline",
     "run_multiday_signal_eval",
     "run_nextday_return_eval",
+    "select_generation_classes",
+    "select_schedule_hypothesis_classes",
 ]
+

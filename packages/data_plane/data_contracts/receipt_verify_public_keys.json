@@ -13,11 +13,6 @@
       "algorithm": "Ed25519"
     },
     {
-      "key_id": "t1",
-      "public_key_b64": "5PS+yJmEscCYHx6Y7xJpe8Suf+iKNMPl38I9/xvM1rI=",
-      "algorithm": "Ed25519"
-    },
-    {
       "key_id": "k1",
       "public_key_b64": "IKRDieroyrvYX1uGpQ3U1O1RDMoaFcyc8wfB2qYhaBI=",
       "algorithm": "Ed25519"
@@ -25,6 +20,11 @@
     {
       "key_id": "test-key",
       "public_key_b64": "PZ9W3MW2ZRKmmgqYhtdlc8xSn0GtG2Odj6ujWJV9Mwk=",
+      "algorithm": "Ed25519"
+    },
+    {
+      "key_id": "t1",
+      "public_key_b64": "00vPBvGv26PQRJiOurfDHGGzCURaCkZlAMfojd0yJ48=",
       "algorithm": "Ed25519"
     }
   ]

@@ -109,36 +109,96 @@ Module: [`r2_feature_context.py`](r2_feature_context.py). Proof:
 Module: [`eval_harness.py`](eval_harness.py) (re-exports multiday/nextday helpers from [`single_shot_job.py`](single_shot_job.py)).  
 Tests: `tests/test_eval_harness.py`, `tests/test_single_shot_research_job.py`, `tests/test_mass_research_gate.py`, `tests/test_r2_feature_context.py`.
 
-## Standard research eval checklist (W66 · default for future hyps)
+## Standard research eval checklist (v2 · W77 · default for future hyps)
 
 Before any hypothesis is labeled **`research_candidate`**, it must pass the
-standard checklist (multi-year or non-overlapping long periods · cost 10bp
-default · robustness_gate v2 with `net_sign_majority` · data-gap disclosure ·
-pass ≠ READY/Mass). Short-window-only is **insufficient**.
+standard checklist **v2** (`standard-research-eval-checklist/v2`):
+
+* multi-year or non-overlapping long periods
+* transaction cost 10bp one-way default (extendable with reason)
+* **leverage/short cost assumptions** (borrow + financing; long-only must state N/A)
+* robustness_gate v2 with `net_sign_majority`
+* data-gap disclosure
+* **risk scenario evaluation** (crash · high_vol · rate up/down if usable · liquidity if available)
+* pass ≠ READY/Mass
+* holding/turnover **near-required** for high-frequency hyps
+
+**Incomplete checklist cannot become `research_candidate`.** Short-window-only is **insufficient**.
 
 ```python
 from research.eval_harness import run_standard_research_eval
 
-# Wiring-only (no heavy R2): freezes + cost + window design + gap notes
+# Wiring-only (no heavy R2): freezes + costs + window design + gap notes + scenario surface
 out = run_standard_research_eval(dry_run=True)
+assert out["checklist_version"] == "standard-research-eval-checklist/v2"
 assert out["ready_declared"] is False
 assert out["mass_research"] == "NO-GO"
 assert out["phase7"] == "OFF"
 assert out["research_candidate"] is False  # never auto-promotes
+assert out["research_candidate_allowed"] is False  # wiring leaves scenarios incomplete
 ```
 
 | rule | held |
 |------|------|
 | Default entry | `run_standard_research_eval` |
+| Version | `standard-research-eval-checklist/v2` |
 | Gate | cost-aware v2 (`net_sign_majority`, 10bp one-way) |
+| Cost models | `research.cost_models` (short borrow · leverage financing) |
+| Risk scenarios | `research.risk_scenarios` (min set) |
 | S1–S5 | remain `research_baseline_rejected` (catalog); demo re-run only |
 | READY / Mass / Phase7 | **not** connected on pass |
 | New signals | **not** invented by this entry |
 
-Checklist proof: `docs/proof/w0815bg_w66_standard_research_eval_checklist_20260815.md`.  
+Checklist v2 proof: `docs/proof/w0816k_w77_eval_checklist_v2_20260816.md`.  
+Checklist v1 (prior): `docs/proof/w0815bg_w66_standard_research_eval_checklist_20260815.md`.  
 Harness proof: `docs/proof/w0815bg_w66_standard_eval_harness_entry_20260815.md`.  
 COMPLETE 22 research entry (W74): `docs/proof/w0816h_w74_research_entry_complete22_20260816.md`.  
 Tests: `tests/test_standard_research_eval.py`.
+
+## Hypothesis class registry (W77 · entry space redesign)
+
+Research ideas are typed into **hypothesis classes** so generation is not
+skewed to simple daily sign mass production (S1–S5 stay
+`research_baseline_rejected`).
+
+```python
+from research.hypothesis_classes import (
+    CLASS_SIMPLE_DAILY_SIGN,
+    default_generation_class_ids,
+    select_generation_classes,
+    assert_simple_daily_sign_not_default_enabled,
+)
+from research.idea_generator import generate_idea_payloads
+from research.scheduler import select_schedule_hypothesis_classes
+
+assert_simple_daily_sign_not_default_enabled()
+assert CLASS_SIMPLE_DAILY_SIGN not in default_generation_class_ids()
+
+# Default mix: multi_day_hold · event_post · cross_section_relative ·
+# macro_conditioned · fundamentals_price · flow_demand
+mix = select_generation_classes()
+assert CLASS_SIMPLE_DAILY_SIGN not in mix
+
+# simple_daily_sign only via explicit opt-in (and never alone as mass-default)
+batch = generate_idea_payloads(author="human", batch_id="demo")
+assert batch.simple_daily_sign_included is False
+sched_mix = select_schedule_hypothesis_classes()
+assert sched_mix.simple_daily_sign_default_off is True
+```
+
+| class | default generation | priority |
+|-------|--------------------|----------|
+| `multi_day_hold` | ON | high |
+| `event_post` | ON | … |
+| `cross_section_relative` | ON | … |
+| `macro_conditioned` | ON | … |
+| `fundamentals_price` | ON | … |
+| `flow_demand` | ON | … |
+| `simple_daily_sign` | **OFF** (opt-in) | **lowest** |
+
+Module: [`hypothesis_classes.py`](hypothesis_classes.py) · generator: [`idea_generator.py`](idea_generator.py).  
+Proof: `docs/proof/w0816k_w77_hypothesis_space_redesign_20260816.md`.  
+Tests: `tests/test_hypothesis_classes.py`.
 
 ## Single-shot job (W49 skeleton · W50 CF execute · W51 tip features · W52 signal)
 

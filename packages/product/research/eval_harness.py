@@ -1731,16 +1731,21 @@ def multi_year_availability_table(
 
 
 # ---------------------------------------------------------------------------
-# Standard research eval checklist entry (W66 / w0815bg)
+# Standard research eval checklist entry (W66 v1 · W77 / w0816k v2)
 # ---------------------------------------------------------------------------
 
-CHECKLIST_VERSION: str = "standard-research-eval-checklist/v1"
-CHECKLIST_WAVE: str = "W66 / w0815bg"
+CHECKLIST_VERSION: str = "standard-research-eval-checklist/v2"
+CHECKLIST_VERSION_V1: str = "standard-research-eval-checklist/v1"
+CHECKLIST_WAVE: str = "W77 / w0816k"
 CHECKLIST_LABEL: str = (
-    "標準研究評価チェックリスト・未宣言 "
-    "(合格≠research_candidate / READY未接続 / Mass NO-GO / 運用GOではない)"
+    "標準研究評価チェックリスト v2・未宣言 "
+    "(レバ/空売りコスト + リスクシナリオ / 合格≠research_candidate / "
+    "READY未接続 / Mass NO-GO / 運用GOではない)"
 )
 STANDARD_EVAL_PROOF: str = (
+    "docs/proof/w0816k_w77_eval_checklist_v2_20260816.md"
+)
+STANDARD_EVAL_PROOF_V1: str = (
     "docs/proof/w0815bg_w66_standard_research_eval_checklist_20260815.md"
 )
 # Modes that only re-run existing rejected baselines — never mint new signals.
@@ -1750,38 +1755,61 @@ STANDARD_EVAL_MODES: tuple[str, ...] = (
     "s4_rejected_baseline",
 )
 
+# Checklist v2 required item ids (order is documentation-stable).
+CHECKLIST_V2_REQUIRED: tuple[str, ...] = (
+    "multi_year_or_non_overlapping_long_periods",
+    "cost_assumption_default_10bp_one_way",
+    "leverage_short_cost_assumptions",
+    "robustness_gate_v2_with_cost",
+    "explicit_data_gap_disclosure",
+    "risk_scenario_evaluation",
+    "pass_does_not_connect_ready_mass_go",
+)
+CHECKLIST_V2_NEAR_REQUIRED: tuple[str, ...] = (
+    "holding_turnover_metrics",  # near-required for high-frequency hyps
+)
+CHECKLIST_V2_INSUFFICIENT: tuple[str, ...] = (
+    "short_window_only",
+    "gross_only_without_cost_gate",
+    "skipped_checklist",
+    "incomplete_leverage_short_costs",
+    "incomplete_risk_scenarios",
+    "scenario_sign_break_undisclosed",
+)
+
 
 def standard_research_eval_checklist_document() -> dict[str, Any]:
-    """Public document for the standard research evaluation checklist."""
+    """Public document for the standard research evaluation checklist (v2)."""
     from research.baseline_catalog import (
         RESEARCH_STATUS_REJECTED,
         rejected_baseline_catalog,
     )
+    from research.cost_models import cost_models_document
     from research.holding_metrics import holding_metrics_document
+    from research.risk_scenarios import risk_scenarios_document
     from research.robustness_gate import research_robustness_gate_document
 
     cat = rejected_baseline_catalog()
     return {
         "version": CHECKLIST_VERSION,
+        "prior_version": CHECKLIST_VERSION_V1,
         "wave": CHECKLIST_WAVE,
         "label": CHECKLIST_LABEL,
         "proof": STANDARD_EVAL_PROOF,
-        "required": [
-            "multi_year_or_non_overlapping_long_periods",
-            "cost_assumption_default_10bp_one_way",
-            "robustness_gate_v2_with_cost",
-            "explicit_data_gap_disclosure",
-            "pass_does_not_connect_ready_mass_go",
-        ],
+        "proof_v1": STANDARD_EVAL_PROOF_V1,
+        "required": list(CHECKLIST_V2_REQUIRED),
+        "near_required": list(CHECKLIST_V2_NEAR_REQUIRED),
+        "near_required_note": (
+            "holding/turnover is near-required for high-frequency / daily-sign "
+            "hyps (prefer hard-require when hyp re-trades frequently)"
+        ),
         "recommended": [
-            "holding_turnover_metrics",
+            "holding_turnover_metrics",  # kept for v1 compat wording
         ],
-        "insufficient": [
-            "short_window_only",
-            "gross_only_without_cost_gate",
-            "skipped_checklist",
-        ],
+        "insufficient": list(CHECKLIST_V2_INSUFFICIENT),
         "gate": research_robustness_gate_document(),
+        "cost_models_surface": cost_models_document(),
+        "risk_scenarios_surface": risk_scenarios_document(),
         "holding_surface": holding_metrics_document(),
         "rejected_baseline_examples": {
             "research_status": RESEARCH_STATUS_REJECTED,
@@ -1801,15 +1829,133 @@ def standard_research_eval_checklist_document() -> dict[str, Any]:
         "connected_to_ready": False,
         "connected_to_mass": False,
         "research_candidate": False,
+        "incomplete_checklist_blocks_research_candidate": True,
         "edge_claimed": False,
         "significance_claimed": False,
         "densify": DENSIFY,
         "note": (
-            "Any new hypothesis must pass this checklist before research_candidate. "
-            "Results that skip the checklist are NOT research_candidate. "
-            "Gate pass still does not mint READY, arm Mass, or claim edge. "
-            "Short-window-only is insufficient. "
-            "This entry does not invent new signals."
+            "Any new hypothesis must pass this checklist (v2) before "
+            "research_candidate. Incomplete checklist CANNOT become "
+            "research_candidate. Gate pass still does not mint READY, arm Mass, "
+            "or claim edge. Short-window-only is insufficient. "
+            "This entry does not invent new signals. S1–S5 stay rejected."
+        ),
+    }
+
+
+def evaluate_checklist_v2_completeness(
+    *,
+    multi_year_present: bool,
+    cost_assumption_present: bool,
+    leverage_short_complete: bool,
+    robustness_gate_present: bool,
+    data_gap_disclosed: bool,
+    risk_scenarios_passed: bool,
+    risk_scenarios_candidate_allowed: bool,
+    freeze_closed: bool,
+    holding_present: bool = False,
+    high_frequency_hyp: bool = False,
+    require_holding_for_hf: bool = True,
+    checklist_skipped: bool = False,
+) -> dict[str, Any]:
+    """Evaluate whether checklist v2 items are complete for candidate discussion.
+
+    Incomplete → ``research_candidate_allowed=False`` (hard). Even when complete,
+    this helper never sets READY/Mass and never auto-promotes candidate status;
+    harness callers still keep ``research_candidate=False``.
+    """
+    items: dict[str, Any] = {
+        "multi_year_or_non_overlapping_long_periods": {
+            "required": True,
+            "present": bool(multi_year_present),
+            "passed": bool(multi_year_present),
+        },
+        "cost_assumption_default_10bp_one_way": {
+            "required": True,
+            "present": bool(cost_assumption_present),
+            "passed": bool(cost_assumption_present),
+        },
+        "leverage_short_cost_assumptions": {
+            "required": True,
+            "present": bool(leverage_short_complete),
+            "passed": bool(leverage_short_complete),
+        },
+        "robustness_gate_v2_with_cost": {
+            "required": True,
+            "present": bool(robustness_gate_present),
+            "passed": bool(robustness_gate_present),
+        },
+        "explicit_data_gap_disclosure": {
+            "required": True,
+            "present": bool(data_gap_disclosed),
+            "passed": bool(data_gap_disclosed),
+        },
+        "risk_scenario_evaluation": {
+            "required": True,
+            "present": bool(risk_scenarios_passed),
+            "passed": bool(risk_scenarios_passed)
+            and bool(risk_scenarios_candidate_allowed),
+            "scenario_passed": bool(risk_scenarios_passed),
+            "scenario_candidate_allowed": bool(risk_scenarios_candidate_allowed),
+        },
+        "pass_does_not_connect_ready_mass_go": {
+            "required": True,
+            "present": bool(freeze_closed),
+            "passed": bool(freeze_closed),
+        },
+        "holding_turnover_metrics": {
+            "required": bool(high_frequency_hyp and require_holding_for_hf),
+            "near_required": True,
+            "present": bool(holding_present),
+            "passed": (
+                bool(holding_present)
+                if (high_frequency_hyp and require_holding_for_hf)
+                else True
+            ),
+            "high_frequency_hyp": bool(high_frequency_hyp),
+        },
+    }
+    missing = [
+        k
+        for k, v in items.items()
+        if v.get("required") and not v.get("passed")
+    ]
+    complete = not missing and not checklist_skipped
+    research_candidate_allowed = bool(complete)
+    if checklist_skipped:
+        research_candidate_allowed = False
+        missing = list(dict.fromkeys([*missing, "checklist_skipped"]))
+
+    reasons: list[str] = []
+    if checklist_skipped:
+        reasons.append("checklist_skipped → not research_candidate")
+    if missing:
+        reasons.append(
+            "incomplete_checklist_items: " + ", ".join(missing)
+            + " → not research_candidate"
+        )
+    if complete:
+        reasons.append(
+            "checklist_v2_complete (still not auto research_candidate; "
+            "READY/Mass remain closed)"
+        )
+
+    return {
+        "version": CHECKLIST_VERSION,
+        "complete": bool(complete),
+        "research_candidate_allowed": bool(research_candidate_allowed),
+        "missing_required": missing,
+        "items": items,
+        "reasons": reasons,
+        "ready_declared": False,
+        "operational_go": False,
+        "connected_to_ready": False,
+        "connected_to_mass": False,
+        "mass_research": MASS_RESEARCH,
+        "phase7": PHASE7,
+        "note": (
+            "Incomplete checklist v2 cannot become research_candidate. "
+            "Complete still does not auto-promote or connect READY/Mass."
         ),
     }
 
@@ -1838,6 +1984,29 @@ def run_standard_research_eval(
     holding_records: Sequence[Mapping[str, Any]] | None = None,
     period_rows_for_gate: Sequence[Mapping[str, Any]] | None = None,
     signal_ids: Sequence[str] | None = None,
+    # --- checklist v2: leverage / short costs ---
+    position_style: str = "long_only_unlevered",
+    gross_leverage: float = 1.0,
+    short_fraction: float = 0.0,
+    short_borrow_annual_bp: float | None = None,
+    financing_annual_bp: float | None = None,
+    short_borrow_change_reason: str | None = None,
+    financing_change_reason: str | None = None,
+    uses_short: bool | None = None,
+    uses_leverage: bool | None = None,
+    leverage_short_cost_assumption: Mapping[str, Any] | None = None,
+    # --- checklist v2: risk scenarios ---
+    scenario_rows: Sequence[Mapping[str, Any]] | None = None,
+    rate_data_usable: bool = False,
+    liquidity_data_available: bool = False,
+    prefer_fail_on_sign_break: bool = True,
+    scenario_weakness_disclosed: bool = False,
+    scenario_weakness_notes: str | None = None,
+    baseline_majority_sign: int | None = None,
+    baseline_net_majority_sign: int | None = None,
+    # --- holding near-required for HF ---
+    high_frequency_hyp: bool = False,
+    require_holding_for_hf: bool = True,
     d1_execute: D1ExecuteFn | None = None,
     r2_put: R2PutFn | None = None,
     staging_dir: str | Path | None = None,
@@ -1847,42 +2016,55 @@ def run_standard_research_eval(
     r2_get: Callable[[str, str], bytes] | None = None,
     r2_bucket: str = "quant-structured",
 ) -> dict[str, Any]:
-    """Standard research evaluation checklist entry (W66).
+    """Standard research evaluation checklist entry (v2 · W77 / w0816k).
 
-    Bundles multi-year window design, cost-aware robustness gate v2, optional
-    holding annotation, and mandatory freeze / data-gap disclosure.
+    Bundles multi-year window design, base 10bp transaction cost, **explicit
+    leverage/short cost assumptions**, cost-aware robustness gate v2, **risk
+    scenario evaluation**, optional/near-required holding annotation, and
+    mandatory freeze / data-gap disclosure.
 
     This is the **default entry for future hypotheses**. Short-window-only is
-    insufficient for ``research_candidate``.
+    insufficient for ``research_candidate``. **Incomplete checklist cannot
+    become ``research_candidate``.**
 
     Hard constraints
     ----------------
     * Does **not** invent or register new signals
     * May re-run S1 / S4 paths only as **rejected baseline** dry demos
     * ``research_candidate`` is always **False** here (no auto-promotion)
+    * Incomplete checklist → ``research_candidate_allowed=False``
     * Gate pass still leaves READY/Mass/Phase7 closed
     * ``dry_run=True`` (default) validates wiring without heavy R2 when
       ``mode="wiring_only"`` or when no executable periods are supplied
 
     Modes
     -----
-    * ``wiring_only`` — design windows + cost + gate surface + freezes (no R2)
-    * ``s1_rejected_baseline`` — call :func:`run_multi_year_s1_eval` (S1 catalog rejected)
-    * ``s4_rejected_baseline`` — call :func:`run_multi_year_extra_hyp_eval` (S4 rejected)
+    * ``wiring_only`` — design windows + costs + scenarios surface + freezes
+    * ``s1_rejected_baseline`` — call :func:`run_multi_year_s1_eval` (S1 rejected)
+    * ``s4_rejected_baseline`` — call :func:`run_multi_year_extra_hyp_eval` (S4)
 
     Returns a dict with ``checklist_version``, ``steps_completed``,
-    ``robustness_gate``, ``cost_assumption``, ``data_gap_notes``, optional
-    ``holding``, and freeze flags always closed.
+    ``robustness_gate``, ``cost_assumption``, ``leverage_short_costs``,
+    ``risk_scenarios``, ``checklist_completeness``, ``data_gap_notes``,
+    optional ``holding``, and freeze flags always closed.
     """
     from research.baseline_catalog import (
         RESEARCH_STATUS_REJECTED,
         is_research_baseline_rejected,
         rejected_baseline_catalog,
     )
+    from research.cost_models import (
+        build_leverage_short_cost_assumption,
+        default_long_only_unlevered_cost_assumption,
+    )
     from research.holding_metrics import (
         cost_amortization_report,
         holding_metrics_document,
         holding_metrics_report,
+    )
+    from research.risk_scenarios import (
+        default_na_scenario_bundle,
+        evaluate_risk_scenarios,
     )
 
     assert_harness_closed()
@@ -1921,6 +2103,54 @@ def run_standard_research_eval(
         "formula": "net_one_way = gross_signed_mean_active - one_way_cost",
     }
     steps.append("cost_assumption")
+
+    # Leverage / short related costs (checklist v2 required).
+    if leverage_short_cost_assumption is not None:
+        lev_short = dict(leverage_short_cost_assumption)
+        # Ensure freeze fields closed even if caller omitted them.
+        lev_short.setdefault("ready_declared", False)
+        lev_short.setdefault("operational_go", False)
+        lev_short.setdefault("connected_to_ready", False)
+        lev_short.setdefault("connected_to_mass", False)
+        lev_short.setdefault("mass_research", MASS_RESEARCH)
+        lev_short.setdefault("phase7", PHASE7)
+        if "assumptions_complete" not in lev_short:
+            lev_short["assumptions_complete"] = bool(
+                lev_short.get("assumptions_disclosed", False)
+            )
+    else:
+        style = str(position_style or "long_only_unlevered").strip().lower()
+        if style == "long_only_unlevered" and float(gross_leverage) <= 1.0 + 1e-12:
+            lev_short = default_long_only_unlevered_cost_assumption(
+                one_way_cost=cost,
+                cost_change_reason=cost_change_reason,
+            )
+        else:
+            lev_short = build_leverage_short_cost_assumption(
+                position_style=style,
+                gross_leverage=float(gross_leverage),
+                short_fraction=float(short_fraction),
+                one_way_cost=cost,
+                short_borrow_annual_bp=short_borrow_annual_bp,
+                financing_annual_bp=financing_annual_bp,
+                cost_change_reason=cost_change_reason,
+                short_borrow_change_reason=short_borrow_change_reason,
+                financing_change_reason=financing_change_reason,
+                uses_short=uses_short,
+                uses_leverage=uses_leverage,
+            )
+    steps.append("leverage_short_cost_assumptions")
+    # Mirror base tx fields into cost_assumption for v1-compat readers.
+    cost_assumption["leverage_short"] = {
+        "position_style": lev_short.get("position_style"),
+        "assumptions_complete": lev_short.get("assumptions_complete"),
+        "uses_short": lev_short.get("uses_short"),
+        "uses_leverage": lev_short.get("uses_leverage"),
+        "short_borrow_daily": (lev_short.get("short_borrow") or {}).get("daily_cost"),
+        "financing_daily": (lev_short.get("leverage_financing") or {}).get(
+            "daily_cost"
+        ),
+    }
 
     # Multi-year / non-overlapping long window design.
     if periods is None:
@@ -1987,7 +2217,9 @@ def run_standard_research_eval(
         for p in designed
     )
 
-    if mode_s == "wiring_only" or (dry_run and not executable and period_rows_for_gate is None):
+    if mode_s == "wiring_only" or (
+        dry_run and not executable and period_rows_for_gate is None
+    ):
         # Validate wiring without heavy R2.
         steps.append("wiring_only_no_heavy_r2")
         gate_signal_id = DEFAULT_SIGNAL_ID
@@ -2086,7 +2318,9 @@ def run_standard_research_eval(
         steps.append("robustness_gate_v2")
         baseline_demo["signal_id"] = DEFAULT_SIGNAL_ID
         baseline_demo["hyp_id"] = "S1"
-        baseline_demo["still_rejected"] = is_research_baseline_rejected(DEFAULT_SIGNAL_ID)
+        baseline_demo["still_rejected"] = is_research_baseline_rejected(
+            DEFAULT_SIGNAL_ID
+        )
     elif mode_s == "s4_rejected_baseline":
         s4_id = "c21_margin_change_sign"
         if not is_research_baseline_rejected(s4_id):
@@ -2153,8 +2387,9 @@ def run_standard_research_eval(
             if "robustness_gate_v2" not in steps:
                 steps.append("robustness_gate_v2")
 
-    # Holding / turnover (recommended).
+    # Holding / turnover (near-required for high-frequency hyps in v2).
     holding: dict[str, Any] | None = None
+    holding_metrics_done = False
     if include_holding:
         if holding_records is not None:
             holding = holding_metrics_report(
@@ -2162,26 +2397,107 @@ def run_standard_research_eval(
                 one_way_cost=cost,
             )
             steps.append("holding_turnover_metrics")
+            holding_metrics_done = True
         else:
             holding = {
                 "status": "annotation_only",
                 "document": holding_metrics_document(),
                 "cost_amortization": cost_amortization_report(one_way_cost=cost),
                 "note": (
-                    "Recommended holding metrics surface only — no sign panel "
-                    "supplied. Pass holding_records for full run-length report."
+                    "Near-required holding metrics surface only — no sign panel "
+                    "supplied. Pass holding_records for full run-length report. "
+                    "High-frequency hyps should supply holding_records."
                 ),
             }
             steps.append("holding_turnover_annotation")
+            # Annotation alone does not satisfy HF near-required.
+            holding_metrics_done = False
+
+    # Risk scenario evaluation (checklist v2 required).
+    gate_signal_id_for_scen = str(
+        baseline_demo.get("signal_id") or DEFAULT_SIGNAL_ID
+    )
+    # Pull baseline signs from gate when not supplied.
+    b_maj = baseline_majority_sign
+    b_net = baseline_net_majority_sign
+    if isinstance(gate, Mapping):
+        crit = gate.get("criteria") or {}
+        if b_maj is None:
+            b_maj = (crit.get("sign_majority") or {}).get("majority_sign")
+        if b_net is None:
+            b_net = (crit.get("net_sign_majority") or {}).get("majority_net_sign")
+
+    if scenario_rows is not None:
+        scen_input = list(scenario_rows)
+    else:
+        # Wiring default: core pending + rate/liquidity N/A disclosure.
+        scen_input = default_na_scenario_bundle(
+            rate_data_usable=rate_data_usable,
+            liquidity_data_available=liquidity_data_available,
+        )
+    risk_scen = evaluate_risk_scenarios(
+        scen_input,
+        baseline_majority_sign=b_maj,
+        baseline_net_majority_sign=b_net,
+        rate_data_usable=rate_data_usable,
+        liquidity_data_available=liquidity_data_available,
+        prefer_fail_on_sign_break=prefer_fail_on_sign_break,
+        scenario_weakness_disclosed=scenario_weakness_disclosed,
+        scenario_weakness_notes=scenario_weakness_notes,
+        signal_id=gate_signal_id_for_scen,
+    )
+    steps.append("risk_scenario_evaluation")
 
     # Pass does NOT connect READY / Mass / GO (always restate).
     steps.append("freeze_ready_mass_phase7_closed")
 
     gate_passed = bool(gate.get("passed")) if isinstance(gate, Mapping) else False
 
+    # Completeness: incomplete checklist cannot become research_candidate.
+    multi_year_present = bool(designed) and (
+        multi_year_result is not None
+        or any(
+            str(p.get("period_start") or "").strip()
+            and str(p.get("period_end") or "").strip()
+            for p in designed
+        )
+    )
+    freeze_closed = (
+        MASS_RESEARCH == "NO-GO"
+        and PHASE7 == "OFF"
+        and READY_DECLARED is False
+    )
+    completeness = evaluate_checklist_v2_completeness(
+        multi_year_present=multi_year_present,
+        cost_assumption_present=True,
+        leverage_short_complete=bool(lev_short.get("assumptions_complete")),
+        robustness_gate_present=gate is not None,
+        data_gap_disclosed=gap_notes is not None,
+        risk_scenarios_passed=bool(risk_scen.get("passed")),
+        risk_scenarios_candidate_allowed=bool(
+            risk_scen.get("research_candidate_allowed")
+        ),
+        freeze_closed=freeze_closed,
+        holding_present=holding_metrics_done,
+        high_frequency_hyp=bool(high_frequency_hyp),
+        require_holding_for_hf=bool(require_holding_for_hf),
+        checklist_skipped=False,
+    )
+    steps.append("checklist_v2_completeness")
+
+    # Hard rule: harness never auto-promotes; incomplete forces False.
+    research_candidate = False
+    research_candidate_allowed = bool(
+        completeness.get("research_candidate_allowed")
+    )
+    if not completeness.get("complete"):
+        research_candidate = False
+        research_candidate_allowed = False
+
     return {
         "checklist_version": CHECKLIST_VERSION,
         "version": CHECKLIST_VERSION,
+        "prior_checklist_version": CHECKLIST_VERSION_V1,
         "wave": CHECKLIST_WAVE,
         "label": CHECKLIST_LABEL,
         "proof": STANDARD_EVAL_PROOF,
@@ -2194,17 +2510,23 @@ def run_standard_research_eval(
         "multi_year": multi_year_result,
         "robustness_gate": gate,
         "cost_assumption": cost_assumption,
+        "leverage_short_costs": lev_short,
+        "risk_scenarios": risk_scen,
+        "checklist_completeness": completeness,
         "data_gap_notes": gap_notes,
         "holding": holding,
         "baseline_demo": baseline_demo,
         "new_signals_registered": False,
-        "research_candidate": False,
+        "research_candidate": research_candidate,
+        "research_candidate_allowed": research_candidate_allowed,
+        "checklist_complete": bool(completeness.get("complete")),
         "checklist_skipped": False,
         "gate_passed": gate_passed,
         "gate_pass_implies_ready": False,
         "gate_pass_implies_mass": False,
         "gate_pass_implies_research_candidate": False,
         "short_window_only_sufficient": False,
+        "high_frequency_hyp": bool(high_frequency_hyp),
         "mass_research": MASS_RESEARCH,
         "phase7": PHASE7,
         "ready_declared": False,
@@ -2217,7 +2539,9 @@ def run_standard_research_eval(
         "local_sot": LOCAL_SOT,
         "order_execution": ORDER_EXECUTION,
         "note": (
-            "Standard research eval checklist (W66). Default entry for future hyps. "
+            "Standard research eval checklist v2 (W77). Default entry for future "
+            "hyps. Requires leverage/short cost assumptions + risk scenarios. "
+            "Incomplete checklist cannot become research_candidate. "
             "Short-window-only is insufficient. Does not invent signals. "
             "Gate pass ≠ research_candidate ≠ READY/Mass/GO. "
             "S1–S5 remain research_baseline_rejected when used as demos."
@@ -2234,7 +2558,11 @@ __all__ = [
     "COMPLETE_21_DATASETS",
     "COMPLETE_21_DATASET_SET",
     "CHECKLIST_LABEL",
+    "CHECKLIST_V2_INSUFFICIENT",
+    "CHECKLIST_V2_NEAR_REQUIRED",
+    "CHECKLIST_V2_REQUIRED",
     "CHECKLIST_VERSION",
+    "CHECKLIST_VERSION_V1",
     "CHECKLIST_WAVE",
     "CONNECTED_TO_MASS_RESEARCH_LOOP",
     "DATASET_YEAR_INVENTORY_NOTES",
@@ -2275,6 +2603,7 @@ __all__ = [
     "SIGNAL_CANDIDATE_ONLY",
     "STANDARD_EVAL_MODES",
     "STANDARD_EVAL_PROOF",
+    "STANDARD_EVAL_PROOF_V1",
     "WALK_FORWARD_VERSION",
     "EvalHarnessError",
     "SingleShotJobError",
@@ -2285,6 +2614,7 @@ __all__ = [
     "design_artifact_paths",
     "design_yearly_eval_windows",
     "discover_tip_trading_days",
+    "evaluate_checklist_v2_completeness",
     "execute_multiday_nextday_return_eval",
     "execute_multiday_signal_eval",
     "freeze_status",
@@ -2316,3 +2646,4 @@ __all__ = [
     "walk_forward_gross_from_compare",
     "execute_extra_hyp_signals_compare",
 ]
+
