@@ -2,7 +2,7 @@
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
 **Live verified:** 2026-08-16 · **W71** bars_am history live probe residual **COMPLETE** · LIVE_API_EMPTY all **31** PARTIAL months confirmed · sealed_n **0** · live verified ops COMPLETE **22** held · DEFER **4** remaining (bars_am · earn_cal · master · OTC) · segs **3482** · empty **0** · **OTC 93** (+0) · bars_am COMPLETE tip **1** / PARTIAL **31** (history live empty) · Mass/READY/Phase7 **NO-GO/OFF** · FRESH `projgen-e106119e243949fa92b4f180deed007b` · S1–S5 **research_baseline_rejected** untouched · densify **none** · **no invent** · **no Mass/READY ON** · **no S1–S5 un-reject** · **no OTC bulk densify** · **no fins roll-back** · tip-only vendor reconfirmed
-**Repo tip:** *(pin after push)* — W71 bars_am live probe residual close · COMPLETE **22** / DEFER **4** / segs **3482** / OTC **93** / READY **未宣言** · FRESH `projgen-e106119e243949fa92b4f180deed007b`
+**Repo tip:** `70655a27c1df6e67c902e70caeb76b19d564428c` — W71 bars_am live probe residual close · COMPLETE **22** / DEFER **4** / segs **3482** / OTC **93** / READY **未宣言** · FRESH `projgen-e106119e243949fa92b4f180deed007b`
 
 ## bars_am history live probe residual close（Dataset COMPLETE 22 held · LIVE_API_EMPTY）· W71
 
