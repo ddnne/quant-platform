@@ -1,21 +1,27 @@
 # Phase 6.2 / 6.3 residual status
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
-**Live verified:** 2026-08-16 · **W74** research entry under COMPLETE 22 residual **COMPLETE** · entry doc + health smoke + standard eval wiring_only · live verified ops COMPLETE **22** held · DEFER **4** remaining (bars_am · earn_cal · master · OTC) · segs **3482** · empty **0** · **OTC 93** · bars_am COMPLETE tip **1** / PARTIAL **31** · Mass/READY/Phase7 **NO-GO/OFF** · FRESH `projgen-9c3fc52394f84e268c1b1c73a9d1bd90` · S1–S5 **research_baseline_rejected** untouched · densify **none** · **no invent** · **no Mass/READY ON** · **no S1–S5 un-reject** · **no OTC bulk densify** · **no fins roll-back** · **no new daily signs** · COMPLETE expand = **tip-wait** · research entry **ready**
-**Repo tip:** `d0024624859588caf0d563216b4ad05fa987add3` — W74 research entry residual close · COMPLETE **22** / DEFER **4** / segs **3482** / OTC **93** / READY **未宣言** · FRESH `projgen-9c3fc52394f84e268c1b1c73a9d1bd90`
+**Live verified:** 2026-08-16 · **W75** milestone freeze after W74 research entry residual **COMPLETE** · freeze text · COMPLETE 22 health · FRESH · live verified ops COMPLETE **22** held · DEFER **4** remaining (bars_am · earn_cal · master · OTC) · segs **3482** · empty **0** · **OTC 93** · bars_am COMPLETE tip **1** / PARTIAL **31** · Mass/READY/Phase7 **NO-GO/OFF** · FRESH `projgen-6413b47e0e24467a9535655f976b8452` · S1–S5 **research_baseline_rejected** untouched · densify **none** · **no invent** · **no Mass/READY ON** · **no S1–S5 un-reject** · **no OTC bulk densify** · **no fins roll-back** · **no new daily signs** · COMPLETE expand = **tip-wait** · research entry **ready** · **waiting for human hypothesis class**
+**Repo tip:** `PLACEHOLDER_W75_CLOSE_SHA` — W75 milestone freeze residual close · COMPLETE **22** / DEFER **4** / segs **3482** / OTC **93** / READY **未宣言** · FRESH `projgen-6413b47e0e24467a9535655f976b8452`
 
-## research entry residual close（Dataset COMPLETE 22 held · research entry ready）· W74
+## Research entry (W74 · ready · freeze layer W75)
 
-**Phase name:** Research entry under COMPLETE 22 FRESH residual close（宣言なし · invent なし · NOT coverage expand · NOT Mass）  
-**Wave:** W74 / w0816h  
-**Close:** [`docs/proof/w0816h_w74_research_entry_close_20260816.md`](proof/w0816h_w74_research_entry_close_20260816.md)  
-**Entry doc:** [`docs/proof/w0816h_w74_research_entry_complete22_20260816.md`](proof/w0816h_w74_research_entry_complete22_20260816.md) · prerequisites COMPLETE 22 health OK · tip-wait · Mass OFF · empty COMPLETE 0 · entry `run_standard_research_eval` / `standard-research-eval-checklist/v1`  
+**Entry path:** [`docs/proof/w0816h_w74_research_entry_complete22_20260816.md`](proof/w0816h_w74_research_entry_complete22_20260816.md)  
+**Checklist:** `run_standard_research_eval` / `standard-research-eval-checklist/v1`  
+**Status:** research entry **ready** under COMPLETE **22** · Mass/READY/Phase7 **NO-GO/OFF** · next = **human hypothesis class**
+
+## milestone freeze residual close（Dataset COMPLETE 22 held · research entry ready · human hypothesis wait）· W75
+
+**Phase name:** Milestone freeze after W74 research entry FRESH residual close（宣言なし · invent なし · NOT redesign · NOT coverage expand · NOT Mass）  
+**Wave:** W75 / w0816i  
+**Freeze:** [`docs/proof/w0816i_w75_milestone_freeze_20260816.md`](proof/w0816i_w75_milestone_freeze_20260816.md)  
+**Close:** [`docs/proof/w0816i_w75_milestone_freeze_close_20260816.md`](proof/w0816i_w75_milestone_freeze_close_20260816.md)  
+**Research entry (ready):** [`docs/proof/w0816h_w74_research_entry_complete22_20260816.md`](proof/w0816h_w74_research_entry_complete22_20260816.md) · COMPLETE 22 health OK · tip-wait · Mass OFF · empty COMPLETE 0 · S1–S5 rejected  
 **Health smoke:** `scripts/check_complete22_health.py` local+remote **all_checks_pass**  
-**Eval smoke:** `run_standard_research_eval(dry_run=True, mode="wiring_only")` · ready_declared=False · mass NO-GO · research_candidate=False  
-**Final verify:** [`.glm-logs/w0816h_w74_research_entry/`](../.glm-logs/w0816h_w74_research_entry/) · health_local/remote · standard_eval_wiring · FRESH log  
-**FRESH:** `projgen-9c3fc52394f84e268c1b1c73a9d1bd90` · coverage_segments untouched (reeval) · mass=NO-GO · densify **none**  
+**Final verify:** [`.glm-logs/w0816i_w75_freeze/`](../.glm-logs/w0816i_w75_freeze/) · health_local/remote · FRESH log  
+**FRESH:** `projgen-6413b47e0e24467a9535655f976b8452` · coverage_segments untouched (reeval) · mass=NO-GO · densify **none**  
 **S1–S5:** stay **research_baseline_rejected** (no un-reject)  
-**Prior W73 maintain residual:** held underneath  
+**Prior W74 research entry residual:** held underneath  
 
 | gate | status |
 |------|--------|
@@ -29,9 +35,69 @@
 | fins_earnings_date | **104/104** COMPLETE · `dataset_coverage` **COMPLETE** |
 | bars_am | COMPLETE **1** tip / PARTIAL **31** · history **DEFER** · tip continuous only |
 | densify | **none** |
+| coverage expand | **tip-wait** |
+| research entry | **ready** ([`w0816h_w74_research_entry_complete22_20260816.md`](proof/w0816h_w74_research_entry_complete22_20260816.md)) |
+| human hypothesis class | **waiting** |
+| new simple daily signs | **none** (forbidden) |
+| S1–S5 catalog | **research_baseline_rejected** untouched |
+| FRESH | `projgen-6413b47e0e24467a9535655f976b8452` |
+| COMPLETE 22 health check | **held** (`check_complete22_health.py`) |
+| LIVE_API_EMPTY (bars_am history) | **true** · history_reprobe **FORBIDDEN** |
+| TIP_ONLY_POLICY | **locked** |
+
+### Explicit non-declarations (held)
+
+- **READY** — not declared  
+- **Mass** — **NO-GO / OFF**  
+- **Phase7** — **OFF**  
+- **bars_am history COMPLETE invent** — not claimed (re-probe locked)  
+- **OTC COMPLETE invent / bulk densify** — not claimed / not run  
+- **densify success** — not claimed (densify_executed=0)  
+- **fins segment invent / roll-back** — not done (104/104 held)  
+- **Dataset COMPLETE 23** — not invented (COMPLETE expand = tip-wait)  
+- **S1–S5 un-reject** — not done  
+- **new simple daily signs** — not added  
+- **short-window-only candidate** — not claimed  
+- **earn_cal/master bulk densify** — not done  
+- **feature expand / eval redesign** — not done (freeze only)  
+- **human hypothesis class auto-select** — not done (waiting)
+
+### Residual TOP (W75)
+
+1. **Milestone freeze** — W75 seals W74 research entry under COMPLETE 22  
+2. **Research entry ready** — [`w0816h_w74_research_entry_complete22_20260816.md`](proof/w0816h_w74_research_entry_complete22_20260816.md)  
+3. **Waiting for human hypothesis class** — no auto-promote / no new signs  
+4. **Tip-wait** — COMPLETE expand only via tip continuous / FULL_OK; no invent 23  
+5. **W74 underneath** — entry doc + health + standard eval wiring_only  
+
+## research entry residual close（Dataset COMPLETE 22 held · research entry ready）· W74 held · freeze by W75
+
+**Phase name:** Research entry under COMPLETE 22 FRESH residual close（宣言なし · invent なし · NOT coverage expand · NOT Mass）  
+**Wave:** W74 / w0816h  
+**Close:** [`docs/proof/w0816h_w74_research_entry_close_20260816.md`](proof/w0816h_w74_research_entry_close_20260816.md)  
+**Entry doc:** [`docs/proof/w0816h_w74_research_entry_complete22_20260816.md`](proof/w0816h_w74_research_entry_complete22_20260816.md) · prerequisites COMPLETE 22 health OK · tip-wait · Mass OFF · empty COMPLETE 0 · entry `run_standard_research_eval` / `standard-research-eval-checklist/v1`  
+**Health smoke:** `scripts/check_complete22_health.py` local+remote **all_checks_pass**  
+**Eval smoke:** `run_standard_research_eval(dry_run=True, mode="wiring_only")` · ready_declared=False · mass NO-GO · research_candidate=False  
+**Final verify:** [`.glm-logs/w0816h_w74_research_entry/`](../.glm-logs/w0816h_w74_research_entry/) · health_local/remote · standard_eval_wiring · FRESH log  
+**FRESH (at W74):** `projgen-9c3fc52394f84e268c1b1c73a9d1bd90` · coverage_segments untouched (reeval) · mass=NO-GO · densify **none**  
+**S1–S5:** stay **research_baseline_rejected** (no un-reject)  
+**Prior W73 maintain residual:** held underneath · **W75 adds milestone freeze on top**  
+
+| gate | status (W74 held snapshot) |
+|------|--------|
+| READY | **未宣言** |
+| Mass / Phase7 | **NO-GO / OFF** |
+| Dataset COMPLETE | **22** held |
+| DEFER | **4** (bars_am · earn_cal · master · OTC) |
+| COMPLETE segs | **3482** |
+| empty COMPLETE | **0** |
+| OTC | **93** (tip island; wait FULL_OK) |
+| fins_earnings_date | **104/104** COMPLETE · `dataset_coverage` **COMPLETE** |
+| bars_am | COMPLETE **1** tip / PARTIAL **31** · history **DEFER** · tip continuous only |
+| densify | **none** |
 | research entry | **ready** (`run_standard_research_eval` / checklist v1) |
 | S1–S5 catalog | **research_baseline_rejected** untouched |
-| FRESH | `projgen-9c3fc52394f84e268c1b1c73a9d1bd90` |
+| FRESH | `projgen-9c3fc52394f84e268c1b1c73a9d1bd90` (W74) |
 | COMPLETE 22 health check | **held** (`check_complete22_health.py`) |
 | LIVE_API_EMPTY (bars_am history) | **true** · history_reprobe **FORBIDDEN** |
 | TIP_ONLY_POLICY | **locked** |
@@ -51,7 +117,7 @@
 - **short-window-only candidate** — not claimed  
 - **earn_cal/master bulk densify** — not done  
 
-### Residual TOP (W74)
+### Residual TOP (W74 held under W75)
 
 1. **Maintain COMPLETE 22** — health check floors held  
 2. **Research entry ready** — checklist v1 under COMPLETE 22 · [`w0816h_w74_research_entry_complete22_20260816.md`](proof/w0816h_w74_research_entry_complete22_20260816.md)  
@@ -59,7 +125,7 @@
 4. **FRESH** — ops reclock held  
 5. **W73 underneath** — health check + tip path regression + research guards  
 
-## maintain + regression guards residual close（Dataset COMPLETE 22 held · tip-wait）· W73 held · research entry by W74
+## maintain + regression guards residual close（Dataset COMPLETE 22 held · tip-wait）· W73 held · research entry by W74 · freeze by W75
 
 **Phase name:** COMPLETE 22 health check automation + tip path regression + research guards FRESH residual close（宣言なし · invent なし · NOT expand to 23）  
 **Wave:** W73 / w0816g  
