@@ -2,7 +2,7 @@
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
 **Live verified:** 2026-08-16 · **W73** maintain + regression guards residual **COMPLETE** · COMPLETE 22 health script + pytest · tip path regression (history_reprobe FORBIDDEN · issue→aggregate sync) · research guards S1–S5 rejected · live verified ops COMPLETE **22** held · DEFER **4** remaining (bars_am · earn_cal · master · OTC) · segs **3482** · empty **0** · **OTC 93** · bars_am COMPLETE tip **1** / PARTIAL **31** · Mass/READY/Phase7 **NO-GO/OFF** · FRESH `projgen-531e7c3a06e8464b8e57f2ff40471e0c` · S1–S5 **research_baseline_rejected** untouched · densify **none** · **no invent** · **no Mass/READY ON** · **no S1–S5 un-reject** · **no OTC bulk densify** · **no fins roll-back** · **no new daily signs** · COMPLETE expand = **tip-wait**
-**Repo tip:** `TBD_AFTER_PUSH` — W73 maintain residual close · COMPLETE **22** / DEFER **4** / segs **3482** / OTC **93** / READY **未宣言** · FRESH `projgen-531e7c3a06e8464b8e57f2ff40471e0c`
+**Repo tip:** `b3ea5d1a8aef626b095c3709c6c16c8a01de0f98` — W73 maintain residual close · COMPLETE **22** / DEFER **4** / segs **3482** / OTC **93** / READY **未宣言** · FRESH `projgen-531e7c3a06e8464b8e57f2ff40471e0c`
 
 ## maintain + regression guards residual close（Dataset COMPLETE 22 held · tip-wait）· W73
 
