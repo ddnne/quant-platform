@@ -36,6 +36,8 @@ Implemented (W49–W50, 7):
 * ``short_ratio_level`` — short-sale ratio level for a sector (S33).
 * ``is_trading_day`` — calendar utility: 1.0 if ``date`` is a trading day.
 * ``repo_rate_level`` — latest Tokyo repo rate level (JSDA).
+* ``repo_rate_change`` — lookback change in Tokyo repo rate (JSDA; W78
+  macro_conditioned support; **candidate**).
 
 Implemented (W51 expand, +3):
 
@@ -240,6 +242,58 @@ def repo_rate_level_from_rows(
         "tenor": last.get("tenor"),
         "rate_type": last.get("rate_type"),
         "rate": rate,
+    }
+
+
+def repo_rate_change_from_rows(
+    rows: list[dict[str, Any]],
+    *,
+    lookback: int = 5,
+) -> tuple[float | None, dict[str, Any]]:
+    """Change in Tokyo repo rate over ``lookback`` distinct as_of_date steps.
+
+    Uses the latest visible rate minus the rate ``lookback`` distinct dates
+    earlier (per-date last observation). Returns None when insufficient
+    history is PIT-visible.
+    """
+    lb = int(lookback)
+    if lb < 1:
+        return None, {
+            "rows_seen": len(rows),
+            "lookback": lb,
+            "reason": "lookback must be >= 1",
+        }
+    by_date: dict[str, float] = {}
+    for r in rows:
+        rate = r.get("rate")
+        d = r.get("as_of_date") or r.get("date")
+        if rate is None or d is None:
+            continue
+        try:
+            by_date[str(d)[:10]] = float(rate)
+        except (TypeError, ValueError):
+            continue
+    dates = sorted(by_date.keys())
+    if len(dates) < lb + 1:
+        return None, {
+            "rows_seen": len(rows),
+            "n_dates": len(dates),
+            "lookback": lb,
+            "reason": f"insufficient repo history (need >= {lb + 1} dates)",
+        }
+    d_last = dates[-1]
+    d_base = dates[-1 - lb]
+    cur = by_date[d_last]
+    base = by_date[d_base]
+    return cur - base, {
+        "rows_seen": len(rows),
+        "n_dates": len(dates),
+        "lookback": lb,
+        "as_of_date": d_last,
+        "base_date": d_base,
+        "rate": cur,
+        "base_rate": base,
+        "delta": cur - base,
     }
 
 
@@ -790,6 +844,59 @@ RepoRateLevel: FeatureDefinition = register(
 
 
 # ---------------------------------------------------------------------------
+# repo_rate_change (W78 / w0816m — macro_conditioned support)
+# ---------------------------------------------------------------------------
+
+
+def _repo_rate_change(ctx) -> FeatureOutput:
+    require_feature_datasets(
+        _REPO_DATASETS, context="feature repo_rate_change"
+    )
+    lookback = int(ctx.get_input("lookback", 5) or 5)
+    tenor = ctx.get_input("tenor", None)
+    rate_type = ctx.get_input("rate_type", None)
+    kwargs: dict[str, Any] = {}
+    if tenor is not None:
+        kwargs["tenor"] = tenor
+    if rate_type is not None:
+        kwargs["rate_type"] = rate_type
+    res = ctx.get_jsda_repo_rates(**kwargs)
+    rows = res.rows if res is not None and getattr(res, "rows", None) else []
+    value, meta = repo_rate_change_from_rows(rows, lookback=lookback)
+    meta = {
+        **meta,
+        "datasets": list(_REPO_DATASETS),
+        "tenor_filter": tenor,
+        "rate_type_filter": rate_type,
+    }
+    return FeatureOutput(value=value, metadata=meta)
+
+
+RepoRateChange: FeatureDefinition = register(
+    FeatureDefinition(
+        id="repo_rate_change",
+        version=FeatureVersion(1, 0, 0),
+        inputs=FeatureInput(
+            required_kwargs=(),
+            optional_kwargs={"lookback": 5, "tenor": None, "rate_type": None},
+            as_of_rule="session_close",
+        ),
+        description=(
+            "Change in Tokyo repo rate over lookback distinct as_of_date steps "
+            "(JSDA). COMPLETE dataset jsda_tokyo_repo_rates. Supports "
+            "macro_conditioned hypothesis class (W78). Candidate until feature "
+            "E2E promotion; pure helper unit-tested. Permanent DEFER rejected."
+        ),
+        compute=_repo_rate_change,
+        tags=("repo", "rate", "jsda", "macro", "change", "complete21"),
+        intended_role="state",
+        status="candidate",  # W78 land; promote only after tip/history E2E
+        price_basis=None,
+    )
+)
+
+
+# ---------------------------------------------------------------------------
 # return_1d_c21 — complete21-path export of 1d simple return (candidate)
 # ---------------------------------------------------------------------------
 
@@ -938,6 +1045,7 @@ __all__ = [
     "ShortRatioLevel",
     "IsTradingDay",
     "RepoRateLevel",
+    "RepoRateChange",
     "Return1dC21",
     "MarginAlertFlag",
     "FuturesActivityProxy",
@@ -949,6 +1057,7 @@ __all__ = [
     "short_ratio_level_from_components",
     "is_trading_day_from_division",
     "repo_rate_level_from_rows",
+    "repo_rate_change_from_rows",
     "margin_alert_flag_from_count",
     "futures_activity_from_volume_pairs",
 ]

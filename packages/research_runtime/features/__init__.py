@@ -53,6 +53,7 @@ from .complete21_min import (
     ShortRatioLevel,
     IsTradingDay,
     RepoRateLevel,
+    RepoRateChange,
     Return1dC21,
     MarginAlertFlag,
     FuturesActivityProxy,
@@ -64,6 +65,17 @@ from .minimal_signal import (
     compute_signal_from_feature_observations,
     compute_topix_relative_sign_signal,
     signal_definition as minimal_signal_definition,
+)
+from .class_signals import (
+    SIGNAL_ID_MULTI_DAY_HOLD,
+    SIGNAL_ID_MACRO_CONDITIONED,
+    SIGNAL_ID_CROSS_SECTION,
+    class_signal_definitions,
+    class_signals_document,
+    compute_multi_day_hold_signal,
+    compute_macro_conditioned_signal,
+    compute_cross_section_signal,
+    apply_sticky_hold,
 )
 from .dataset_guard import (
     COMPLETE_21_DATASETS,
@@ -102,6 +114,7 @@ __all__ = [
     "ShortRatioLevel",
     "IsTradingDay",
     "RepoRateLevel",
+    "RepoRateChange",
     "Return1dC21",
     "MarginAlertFlag",
     "FuturesActivityProxy",
@@ -112,6 +125,16 @@ __all__ = [
     "compute_signal_from_feature_observations",
     "compute_topix_relative_sign_signal",
     "minimal_signal_definition",
+    # class signals (W78 multi_day_hold / macro_conditioned; not simple daily sign)
+    "SIGNAL_ID_MULTI_DAY_HOLD",
+    "SIGNAL_ID_MACRO_CONDITIONED",
+    "SIGNAL_ID_CROSS_SECTION",
+    "class_signal_definitions",
+    "class_signals_document",
+    "compute_multi_day_hold_signal",
+    "compute_macro_conditioned_signal",
+    "compute_cross_section_signal",
+    "apply_sticky_hold",
     # dataset guards
     "COMPLETE_21_DATASETS",
     "PermanentDeferHistoryError",

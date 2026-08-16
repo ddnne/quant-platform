@@ -1,17 +1,86 @@
 # Phase 6.2 / 6.3 residual status
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
-**Live verified:** 2026-08-16 · **W77** hypothesis redesign + eval checklist v2 + JSDA residual **COMPLETE** · hyp classes · checklist v2 · repo tip reseal · OTC +0 · COMPLETE 22 health · FRESH · live verified ops COMPLETE **22** held · DEFER **4** remaining (bars_am · earn_cal · master · OTC) · segs **3482** · empty **0** · **OTC 93** · bars_am COMPLETE tip **1** / PARTIAL **31** · Mass/READY/Phase7 **NO-GO/OFF** · FRESH `projgen-46a6565c145b4dcdb3a0894441a29780` · S1–S5 **research_baseline_rejected** untouched · densify **none** · **no invent** · **no Mass/READY ON** · **no S1–S5 un-reject** · **no OTC bulk densify** · **no fins roll-back** · **no simple_daily_sign mass gen** · COMPLETE expand = **tip-wait** · research entry **linked** · checklist **v2** · `simple_daily_sign` default **OFF**
-**Repo tip:** `c482f50dbd82b0727d9e17fd70e41d50233c6427` — W77 hyp+eval+JSDA residual close · COMPLETE **22** / DEFER **4** / segs **3482** / OTC **93** / READY **未宣言** · FRESH `projgen-46a6565c145b4dcdb3a0894441a29780`
+**Live verified:** 2026-08-16 · **W78** GO build residual **COMPLETE** · repo-linked cost_models v2 · OTC **93→163 (+70)** staged FULL_OK · class hyps multi_day_hold+macro_conditioned impl+eval (not auto-candidate) · COMPLETE 22 health · FRESH · live verified ops COMPLETE **22** held · DEFER **4** remaining (bars_am · earn_cal · master · OTC dataset PARTIAL) · segs **3552** · empty **0** · **OTC 163** (dataset still PARTIAL) · bars_am COMPLETE tip **1** / PARTIAL **31** · Mass/READY/Phase7/operational GO **NO-GO/未宣言/OFF/未宣言** · FRESH `projgen-65c5af3769194269a9027ba4d013561e` · S1–S5 **research_baseline_rejected** untouched · densify **none** · **no invent** · **no Mass/READY ON** · **no operational GO** · **no S1–S5 un-reject** · **no OTC bulk densify** · **no fins roll-back** · **no simple_daily_sign mass gen** · COMPLETE expand = **tip-wait** · research entry **linked** · checklist **v2** · `simple_daily_sign` default **OFF** · W77 underneath held
+**Repo tip:** `TIP_PENDING_W78_CLOSE` — W78 GO build residual close · COMPLETE **22** / DEFER **4** / segs **3552** / OTC **163** / READY **未宣言** · operational GO **未宣言** · FRESH `projgen-65c5af3769194269a9027ba4d013561e`
 
-## Research entry (W74 · ready · freeze W75 · redesign layer W77)
+## Research entry (W74 · ready · freeze W75 · redesign W77 · GO-build layer W78)
 
 **Entry path:** [`docs/proof/w0816h_w74_research_entry_complete22_20260816.md`](proof/w0816h_w74_research_entry_complete22_20260816.md)  
 **Checklist:** `run_standard_research_eval` / `standard-research-eval-checklist/v2`  
 **Hypothesis classes:** [`docs/proof/w0816k_w77_hypothesis_space_redesign_20260816.md`](proof/w0816k_w77_hypothesis_space_redesign_20260816.md) · `simple_daily_sign` default **OFF**  
-**Status:** research entry **linked** under COMPLETE **22** · Mass/READY/Phase7 **NO-GO/OFF** · default gen = multi-structure classes (not simple daily sign mass)
+**Cost models:** `research-cost-models/v2` · prefer date-matched `jsda_tokyo_repo_rates` ([`w0816m_w78_repo_linked_cost_model_20260816.md`](proof/w0816m_w78_repo_linked_cost_model_20260816.md))  
+**GO remaining gates:** [`docs/proof/w0816m_w78_go_remaining_gates_20260816.md`](proof/w0816m_w78_go_remaining_gates_20260816.md)  
+**Status:** research entry **linked** under COMPLETE **22** · Mass/READY/Phase7/operational GO **NO-GO/未宣言/OFF/未宣言** · default gen = multi-structure classes (not simple daily sign mass) · class hyps **implemented, not auto-candidate**
 
-## hypothesis + eval v2 + JSDA residual close（Dataset COMPLETE 22 held · research entry linked）· W77
+## GO build residual close（Dataset COMPLETE 22 held · OTC segs 163 · research entry linked · GO 未宣言）· W78
+
+**Phase name:** Repo-linked costs + OTC archive stage + class hyp impl/eval + GO remaining gates residual FRESH close（宣言なし · invent なし · NOT Mass · NOT operational GO · NOT simple_daily_sign mass gen）  
+**Wave:** W78 / w0816m  
+**Close:** [`docs/proof/w0816m_w78_go_build_close_20260816.md`](proof/w0816m_w78_go_build_close_20260816.md)  
+**Task A repo-linked costs:** [`docs/proof/w0816m_w78_repo_linked_cost_model_20260816.md`](proof/w0816m_w78_repo_linked_cost_model_20260816.md) · `cost_models.py` v2 · `prefer_repo_linked` · no ffill invent  
+**Task B OTC archive:** [`docs/proof/w0816m_w78_otc_archive_stage_20260816.md`](proof/w0816m_w78_otc_archive_stage_20260816.md) · COMPLETE segs **93→163 (+70)** FULL_OK staged · dataset **PARTIAL** held  
+**Tasks C/D class hyps:** [`docs/proof/w0816m_w78_hyp_impl_eval_20260816.md`](proof/w0816m_w78_hyp_impl_eval_20260816.md) · multi_day_hold + macro_conditioned (+ optional CS) · eval FAIL/not_candidate honestly · S1–S5 untouched  
+**GO gates:** [`docs/proof/w0816m_w78_go_remaining_gates_20260816.md`](proof/w0816m_w78_go_remaining_gates_20260816.md)  
+**Health smoke:** `scripts/check_complete22_health.py` local+remote **all_checks_pass** (OTC **163** ≥ floor 93)  
+**Final verify:** [`.glm-logs/w0816m_w78_go_build/`](../.glm-logs/w0816m_w78_go_build/)  
+**FRESH:** `projgen-65c5af3769194269a9027ba4d013561e` · coverage_segments untouched (reeval) · mass=NO-GO · densify **none**  
+**S1–S5:** stay **research_baseline_rejected** (no un-reject)  
+**Prior W77 residual:** held underneath  
+
+| gate | status |
+|------|--------|
+| READY | **未宣言** |
+| Mass / Phase7 | **NO-GO / OFF** |
+| operational GO | **未宣言** |
+| Dataset COMPLETE | **22** held |
+| DEFER | **4** (bars_am · earn_cal · master · OTC **dataset** PARTIAL) |
+| COMPLETE segs | **3552** |
+| empty COMPLETE | **0** |
+| OTC segs COMPLETE | **163** (was 93; staged FULL_OK +70; **dataset still PARTIAL**) |
+| fins_earnings_date | **104/104** COMPLETE · `dataset_coverage` **COMPLETE** |
+| bars_am | COMPLETE **1** tip / PARTIAL **31** · history **DEFER** · tip continuous only |
+| densify | **none** (OTC bulk densify forbidden; staged FULL_OK only) |
+| coverage expand | **tip-wait** |
+| research entry | **linked** ([`w0816h_w74_research_entry_complete22_20260816.md`](proof/w0816h_w74_research_entry_complete22_20260816.md)) |
+| checklist | **v2** (`standard-research-eval-checklist/v2`) |
+| cost models | **v2** repo-linked preferred |
+| hyp classes | landed · class signals implemented · **not auto-candidate** · `simple_daily_sign` default **OFF** |
+| JSDA repo | **30330** rows · end **2026-08-14** · receipt **903893** · deep history usable (W77 held) |
+| S1–S5 catalog | **research_baseline_rejected** untouched |
+| FRESH | `projgen-65c5af3769194269a9027ba4d013561e` |
+| COMPLETE 22 health check | **held** (`check_complete22_health.py`) |
+| LIVE_API_EMPTY (bars_am history) | **true** · history_reprobe **FORBIDDEN** |
+| TIP_ONLY_POLICY | **locked** |
+
+### Explicit non-declarations (held)
+
+- **READY** — not declared  
+- **Mass** — **NO-GO / OFF**  
+- **Phase7** — **OFF**  
+- **operational GO** — **未宣言**  
+- **bars_am history COMPLETE invent** — not claimed (re-probe locked)  
+- **OTC dataset COMPLETE invent / bulk densify** — not claimed / not run (segment COMPLETE 163 only)  
+- **densify success** — not claimed as coverage expand  
+- **fins segment invent / roll-back** — not done (104/104 held)  
+- **Dataset COMPLETE 23** — not invented (COMPLETE expand = tip-wait)  
+- **S1–S5 un-reject** — not done  
+- **simple_daily_sign mass generation** — forbidden (default OFF)  
+- **short-window-only candidate** — not claimed  
+- **earn_cal/master bulk densify** — not done  
+- **edge / significance / orders** — none / separate gate  
+- **gate pass → READY/Mass/GO** — never auto-connects  
+
+### Residual TOP (W78)
+
+1. **Repo-linked costs** — cost_models v2 · prefer date-matched `jsda_tokyo_repo_rates` · gaps disclosed  
+2. **OTC 93→163** — staged FULL_OK archive (+70) · dataset still **PARTIAL**  
+3. **Class hyps implemented, not auto-candidate** — multi_day_hold FAIL · macro discussion-only weak − · harness `research_candidate=False`  
+4. **GO remaining gates (short)** — eval v2 candidate exists · repo costs · OTC/repo thickness · orders separate · Mass/READY/operational GO 未宣言 — see [`w0816m_w78_go_remaining_gates_20260816.md`](proof/w0816m_w78_go_remaining_gates_20260816.md)  
+5. **Mass NO-GO / READY 未宣言 / operational GO 未宣言** — held  
+6. **Research entry + W77 underneath** — W74 entry linked · W77 hyp redesign + checklist v2 + JSDA residual held  
+
+## hypothesis + eval v2 + JSDA residual close（Dataset COMPLETE 22 held · research entry linked）· W77 held · GO build by W78
 
 **Phase name:** Hypothesis space redesign + standard-research-eval checklist v2 + JSDA repo/OTC residual FRESH close（宣言なし · invent なし · NOT Mass · NOT simple_daily_sign mass gen）  
 **Wave:** W77 / w0816k  

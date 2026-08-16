@@ -1748,11 +1748,20 @@ STANDARD_EVAL_PROOF: str = (
 STANDARD_EVAL_PROOF_V1: str = (
     "docs/proof/w0815bg_w66_standard_research_eval_checklist_20260815.md"
 )
+# W78 additive: prefer date-matched jsda_tokyo_repo_rates for lev/short costs.
+STANDARD_EVAL_COST_MODEL_PROOF: str = (
+    "docs/proof/w0816m_w78_repo_linked_cost_model_20260816.md"
+)
+# Defaults for cost-model rate path (prefer repo-linked; fixed bp fallback OK).
+COST_MODEL_PREFER_REPO_LINKED: bool = True
+COST_MODEL_REQUIRE_REPO_LINKED: bool = False
 # Modes that only re-run existing rejected baselines — never mint new signals.
+# class_hyp_offline runs W78 multi_day_hold / macro_conditioned (not S1–S5).
 STANDARD_EVAL_MODES: tuple[str, ...] = (
     "wiring_only",
     "s1_rejected_baseline",
     "s4_rejected_baseline",
+    "class_hyp_offline",
 )
 
 # Checklist v2 required item ids (order is documentation-stable).
@@ -1797,6 +1806,7 @@ def standard_research_eval_checklist_document() -> dict[str, Any]:
         "label": CHECKLIST_LABEL,
         "proof": STANDARD_EVAL_PROOF,
         "proof_v1": STANDARD_EVAL_PROOF_V1,
+        "cost_model_proof": STANDARD_EVAL_COST_MODEL_PROOF,
         "required": list(CHECKLIST_V2_REQUIRED),
         "near_required": list(CHECKLIST_V2_NEAR_REQUIRED),
         "near_required_note": (
@@ -1805,10 +1815,24 @@ def standard_research_eval_checklist_document() -> dict[str, Any]:
         ),
         "recommended": [
             "holding_turnover_metrics",  # kept for v1 compat wording
+            "repo_linked_cost_model",  # W78: prefer jsda_tokyo_repo_rates
         ],
         "insufficient": list(CHECKLIST_V2_INSUFFICIENT),
         "gate": research_robustness_gate_document(),
         "cost_models_surface": cost_models_document(),
+        "cost_model_defaults": {
+            "prefer_repo_linked": COST_MODEL_PREFER_REPO_LINKED,
+            "require_repo_linked": COST_MODEL_REQUIRE_REPO_LINKED,
+            "preferred_dataset": "jsda_tokyo_repo_rates",
+            "fixed_bp_fallback_ok": True,
+            "gap_policy": "disclose_only_no_ffill_no_invent",
+            "note": (
+                "W78 / w0816m: leverage financing + short borrow prefer "
+                "date-matched Tokyo repo rates. Fixed bp remains a disclosed "
+                "fallback when no series is supplied. Gaps never invent-filled. "
+                "Not hard-required (require_repo_linked=False)."
+            ),
+        },
         "risk_scenarios_surface": risk_scenarios_document(),
         "holding_surface": holding_metrics_document(),
         "rejected_baseline_examples": {
@@ -1838,6 +1862,8 @@ def standard_research_eval_checklist_document() -> dict[str, Any]:
             "research_candidate. Incomplete checklist CANNOT become "
             "research_candidate. Gate pass still does not mint READY, arm Mass, "
             "or claim edge. Short-window-only is insufficient. "
+            "Leverage/short costs prefer date-matched jsda_tokyo_repo_rates "
+            "(W78); fixed bp is disclosed fallback. "
             "This entry does not invent new signals. S1–S5 stay rejected."
         ),
     }
@@ -1995,6 +2021,14 @@ def run_standard_research_eval(
     uses_short: bool | None = None,
     uses_leverage: bool | None = None,
     leverage_short_cost_assumption: Mapping[str, Any] | None = None,
+    # --- W78 / w0816m: prefer date-matched jsda_tokyo_repo_rates ---
+    repo_rate_series: Mapping[str, Any] | Sequence[Mapping[str, Any]] | None = None,
+    prefer_repo_linked: bool = True,
+    require_repo_linked: bool = False,
+    short_borrow_spread_bp: float | None = None,
+    short_borrow_sensitivity: str | None = None,
+    borrow_proxy_annual_bp: float | None = None,
+    repo_required_dates: Sequence[Any] | None = None,
     # --- checklist v2: risk scenarios ---
     scenario_rows: Sequence[Mapping[str, Any]] | None = None,
     rate_data_usable: bool = False,
@@ -2042,6 +2076,9 @@ def run_standard_research_eval(
     * ``wiring_only`` — design windows + costs + scenarios surface + freezes
     * ``s1_rejected_baseline`` — call :func:`run_multi_year_s1_eval` (S1 rejected)
     * ``s4_rejected_baseline`` — call :func:`run_multi_year_extra_hyp_eval` (S4)
+    * ``class_hyp_offline`` — W78 multi_day_hold + macro_conditioned offline
+      multi-year (local bar mirrors + jsda_repo_rates); not S1–S5; never
+      auto-promotes research_candidate
 
     Returns a dict with ``checklist_version``, ``steps_completed``,
     ``robustness_gate``, ``cost_assumption``, ``leverage_short_costs``,
@@ -2056,6 +2093,7 @@ def run_standard_research_eval(
     from research.cost_models import (
         build_leverage_short_cost_assumption,
         default_long_only_unlevered_cost_assumption,
+        load_repo_rate_series,
     )
     from research.holding_metrics import (
         cost_amortization_report,
@@ -2104,7 +2142,16 @@ def run_standard_research_eval(
     }
     steps.append("cost_assumption")
 
+    # Normalize optional repo series (mapping / rows / prebuilt). Gaps disclosed.
+    repo_series_norm: dict[str, Any] | None = None
+    if repo_rate_series is not None:
+        repo_series_norm = load_repo_rate_series(
+            repo_rate_series,
+            required_dates=repo_required_dates,
+        )
+
     # Leverage / short related costs (checklist v2 required).
+    # W78: prefer date-matched jsda_tokyo_repo_rates when series supplied.
     if leverage_short_cost_assumption is not None:
         lev_short = dict(leverage_short_cost_assumption)
         # Ensure freeze fields closed even if caller omitted them.
@@ -2118,12 +2165,39 @@ def run_standard_research_eval(
             lev_short["assumptions_complete"] = bool(
                 lev_short.get("assumptions_disclosed", False)
             )
+        # Attach normalized series for disclosure when caller omitted it.
+        if repo_series_norm is not None and not lev_short.get("repo_rate"):
+            from research.cost_models import mean_repo_rate_pct
+
+            m = mean_repo_rate_pct(
+                repo_series_norm,
+                dates=repo_required_dates,
+            )
+            lev_short["repo_rate"] = {
+                "preferred": bool(prefer_repo_linked),
+                "series_supplied": True,
+                "series_usable": int(m.get("n_obs") or 0) > 0,
+                "series": repo_series_norm,
+                "mean_rate_pct": m.get("mean_rate_pct"),
+                "mean_annual_bp": m.get("mean_annual_bp"),
+                "n_obs": int(m.get("n_obs") or 0),
+                "gap_dates": list(repo_series_norm.get("gap_dates") or []),
+                "n_gaps": int(repo_series_norm.get("n_gaps") or 0),
+                "ffill_applied": False,
+                "invent_fill": False,
+            }
     else:
         style = str(position_style or "long_only_unlevered").strip().lower()
-        if style == "long_only_unlevered" and float(gross_leverage) <= 1.0 + 1e-12:
+        if (
+            style == "long_only_unlevered"
+            and float(gross_leverage) <= 1.0 + 1e-12
+            and not uses_short
+            and not uses_leverage
+        ):
             lev_short = default_long_only_unlevered_cost_assumption(
                 one_way_cost=cost,
                 cost_change_reason=cost_change_reason,
+                repo_rate_series=repo_series_norm,
             )
         else:
             lev_short = build_leverage_short_cost_assumption(
@@ -2138,8 +2212,30 @@ def run_standard_research_eval(
                 financing_change_reason=financing_change_reason,
                 uses_short=uses_short,
                 uses_leverage=uses_leverage,
+                repo_rate_series=repo_series_norm,
+                prefer_repo_linked=bool(prefer_repo_linked),
+                short_borrow_spread_bp=short_borrow_spread_bp,
+                short_borrow_sensitivity=short_borrow_sensitivity,
+                borrow_proxy_annual_bp=borrow_proxy_annual_bp,
+                required_dates=repo_required_dates,
             )
     steps.append("leverage_short_cost_assumptions")
+
+    # Optional hard prefer: require_repo_linked blocks completeness only when
+    # leverage or short is in use and series is missing/unusable.
+    repo_req = bool(require_repo_linked)
+    uses_ls = bool(lev_short.get("uses_short") or lev_short.get("uses_leverage"))
+    repo_ok = bool(lev_short.get("repo_linked")) or not uses_ls
+    if repo_req and uses_ls and not repo_ok:
+        lev_short = dict(lev_short)
+        lev_short["assumptions_complete"] = False
+        missing = list(lev_short.get("missing_disclosure") or [])
+        if "repo_rate_series" not in missing:
+            missing.append("repo_rate_series")
+        lev_short["missing_disclosure"] = missing
+        lev_short["require_repo_linked"] = True
+        lev_short["repo_linked_requirement_failed"] = True
+
     # Mirror base tx fields into cost_assumption for v1-compat readers.
     cost_assumption["leverage_short"] = {
         "position_style": lev_short.get("position_style"),
@@ -2150,7 +2246,18 @@ def run_standard_research_eval(
         "financing_daily": (lev_short.get("leverage_financing") or {}).get(
             "daily_cost"
         ),
+        "repo_linked": lev_short.get("repo_linked"),
+        "prefer_repo_linked": bool(prefer_repo_linked),
+        "require_repo_linked": repo_req,
+        "short_rate_source": (lev_short.get("short_borrow") or {}).get(
+            "rate_source"
+        ),
+        "financing_rate_source": (lev_short.get("leverage_financing") or {}).get(
+            "rate_source"
+        ),
     }
+    cost_assumption["repo_rate"] = lev_short.get("repo_rate")
+    cost_assumption["cost_model_proof"] = STANDARD_EVAL_COST_MODEL_PROOF
 
     # Multi-year / non-overlapping long window design.
     if periods is None:
@@ -2203,6 +2310,7 @@ def run_standard_research_eval(
 
     multi_year_result: dict[str, Any] | None = None
     gate: dict[str, Any] | None = None
+    class_hyp_bundle: dict[str, Any] | None = None
     executable = any(
         not p.get("skip_reason")
         and str(p.get("period_start") or "").strip()
@@ -2217,7 +2325,72 @@ def run_standard_research_eval(
         for p in designed
     )
 
-    if mode_s == "wiring_only" or (
+    if mode_s == "class_hyp_offline":
+        # W78: multi_day_hold + macro_conditioned offline multi-year.
+        # Does not touch S1–S5 catalog. Never auto-promotes candidate.
+        from research.class_hyp_eval import run_class_hyp_multi_year_eval
+
+        class_hyp_bundle = run_class_hyp_multi_year_eval(
+            designed if periods is not None else None,
+            codes=codes,
+            one_way_cost=cost,
+            max_days=max_days,
+            min_periods_gate=min_periods_gate,
+            min_active_per_period=min_active_per_period,
+            apply_robustness_gate=apply_robustness_gate,
+        )
+        multi_year_result = class_hyp_bundle
+        md_block = class_hyp_bundle.get("multi_day_hold") or {}
+        gate = md_block.get("robustness_gate")
+        baseline_demo["signal_id"] = md_block.get("signal_id")
+        baseline_demo["hypothesis_class"] = "multi_day_hold"
+        baseline_demo["class_signals"] = True
+        baseline_demo["new_signals_registered"] = True  # class signals landed
+        baseline_demo["note"] = (
+            "W78 class_hyp_offline: multi_day_hold + macro_conditioned "
+            "(+ optional cross_section). Not S1–S5. Not simple_daily_sign."
+        )
+        # Prefer class hyp holding panel when present.
+        if include_holding and md_block.get("holding") is not None:
+            holding_records = None  # use precomputed below
+        steps.append("class_hyp_offline_multi_year")
+        if apply_robustness_gate:
+            steps.append("robustness_gate_v2")
+        # Override scenario_rows from class hyp risk blocks when caller did not supply.
+        if scenario_rows is None:
+            risk_from_macro = (class_hyp_bundle.get("macro_conditioned") or {}).get(
+                "risk_scenarios"
+            )
+            risk_from_md = md_block.get("risk_scenarios")
+            # Prefer multi_day_hold risk block for primary checklist surface.
+            if isinstance(risk_from_md, Mapping) and risk_from_md.get(
+                "scenario_rows"
+            ):
+                scenario_rows = list(risk_from_md.get("scenario_rows") or [])
+            elif isinstance(risk_from_macro, Mapping) and risk_from_macro.get(
+                "scenario_rows"
+            ):
+                scenario_rows = list(risk_from_macro.get("scenario_rows") or [])
+        # Rate data is usable for macro_conditioned path (repo series).
+        if not rate_data_usable:
+            rate_data_usable = True
+        # Feed local repo series into cost model when not already supplied.
+        if repo_series_norm is None and class_hyp_bundle.get("repo_load"):
+            # Reload from the same SQLite path class_hyp used (disclosure only
+            # when series already embedded in cost_assumption of class hyp).
+            try:
+                from research.class_hyp_eval import (
+                    DEFAULT_SQLITE,
+                    load_repo_rows_from_sqlite,
+                )
+                from research.cost_models import load_repo_rate_series_from_rows
+
+                _rows = load_repo_rows_from_sqlite(DEFAULT_SQLITE)
+                if _rows:
+                    repo_series_norm = load_repo_rate_series_from_rows(_rows)
+            except Exception:  # noqa: BLE001 — non-fatal disclosure path
+                pass
+    elif mode_s == "wiring_only" or (
         dry_run and not executable and period_rows_for_gate is None
     ):
         # Validate wiring without heavy R2.
@@ -2391,11 +2564,20 @@ def run_standard_research_eval(
     holding: dict[str, Any] | None = None
     holding_metrics_done = False
     if include_holding:
+        precomputed_holding = None
+        if class_hyp_bundle is not None:
+            precomputed_holding = (class_hyp_bundle.get("multi_day_hold") or {}).get(
+                "holding"
+            )
         if holding_records is not None:
             holding = holding_metrics_report(
                 holding_records,
                 one_way_cost=cost,
             )
+            steps.append("holding_turnover_metrics")
+            holding_metrics_done = True
+        elif isinstance(precomputed_holding, Mapping):
+            holding = dict(precomputed_holding)
             steps.append("holding_turnover_metrics")
             holding_metrics_done = True
         else:
@@ -2508,15 +2690,23 @@ def run_standard_research_eval(
         "designed_periods": designed,
         "availability": availability,
         "multi_year": multi_year_result,
+        "class_hyp": class_hyp_bundle,
         "robustness_gate": gate,
         "cost_assumption": cost_assumption,
         "leverage_short_costs": lev_short,
+        "repo_rate_series": repo_series_norm,
+        "prefer_repo_linked": bool(prefer_repo_linked),
+        "require_repo_linked": bool(require_repo_linked),
+        "cost_model_proof": STANDARD_EVAL_COST_MODEL_PROOF,
         "risk_scenarios": risk_scen,
         "checklist_completeness": completeness,
         "data_gap_notes": gap_notes,
         "holding": holding,
         "baseline_demo": baseline_demo,
-        "new_signals_registered": False,
+        "new_signals_registered": bool(
+            class_hyp_bundle is not None
+            or bool(baseline_demo.get("new_signals_registered"))
+        ),
         "research_candidate": research_candidate,
         "research_candidate_allowed": research_candidate_allowed,
         "checklist_complete": bool(completeness.get("complete")),
@@ -2601,6 +2791,9 @@ __all__ = [
     "RESEARCH_ARTIFACT_PREFIX",
     "RESEARCH_WALK_FORWARD_LABEL",
     "SIGNAL_CANDIDATE_ONLY",
+    "COST_MODEL_PREFER_REPO_LINKED",
+    "COST_MODEL_REQUIRE_REPO_LINKED",
+    "STANDARD_EVAL_COST_MODEL_PROOF",
     "STANDARD_EVAL_MODES",
     "STANDARD_EVAL_PROOF",
     "STANDARD_EVAL_PROOF_V1",

@@ -270,6 +270,7 @@ def test_invalid_mode_rejected():
         "wiring_only",
         "s1_rejected_baseline",
         "s4_rejected_baseline",
+        "class_hyp_offline",
     }
 
 
