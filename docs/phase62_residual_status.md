@@ -2,7 +2,7 @@
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
 **Live verified:** 2026-08-16 · **W72** tip-only ops residual **COMPLETE** · bars_am history DEFER (W71 LIVE_API_EMPTY) · tip continuous only · no regular history re-probe · OTC tip island + wait FULL_OK · no bulk densify · tip auto-collect path verified + issue→aggregate wire · live verified ops COMPLETE **22** held · DEFER **4** remaining (bars_am · earn_cal · master · OTC) · segs **3482** · empty **0** · **OTC 93** · bars_am COMPLETE tip **1** / PARTIAL **31** · Mass/READY/Phase7 **NO-GO/OFF** · FRESH `projgen-64a35ac4dd544b67afced062b9b19ea3` · S1–S5 **research_baseline_rejected** untouched · densify **none** · **no invent** · **no Mass/READY ON** · **no S1–S5 un-reject** · **no OTC bulk densify** · **no fins roll-back** · COMPLETE expand = **tip-wait**
-**Repo tip:** `TBD_AFTER_PUSH` — W72 tip-only residual close · COMPLETE **22** / DEFER **4** / segs **3482** / OTC **93** / READY **未宣言** · FRESH `projgen-64a35ac4dd544b67afced062b9b19ea3`
+**Repo tip:** `51f6d028459d6b4960efbd6e84b26150b965d43e` — W72 tip-only residual close · COMPLETE **22** / DEFER **4** / segs **3482** / OTC **93** / READY **未宣言** · FRESH `projgen-64a35ac4dd544b67afced062b9b19ea3`
 
 ## tip-only ops residual close（Dataset COMPLETE 22 held · tip-wait）· W72
 
