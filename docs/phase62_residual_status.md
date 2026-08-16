@@ -1,10 +1,65 @@
 # Phase 6.2 / 6.3 residual status
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
-**Live verified:** 2026-08-16 · **W73** maintain + regression guards residual **COMPLETE** · COMPLETE 22 health script + pytest · tip path regression (history_reprobe FORBIDDEN · issue→aggregate sync) · research guards S1–S5 rejected · live verified ops COMPLETE **22** held · DEFER **4** remaining (bars_am · earn_cal · master · OTC) · segs **3482** · empty **0** · **OTC 93** · bars_am COMPLETE tip **1** / PARTIAL **31** · Mass/READY/Phase7 **NO-GO/OFF** · FRESH `projgen-531e7c3a06e8464b8e57f2ff40471e0c` · S1–S5 **research_baseline_rejected** untouched · densify **none** · **no invent** · **no Mass/READY ON** · **no S1–S5 un-reject** · **no OTC bulk densify** · **no fins roll-back** · **no new daily signs** · COMPLETE expand = **tip-wait**
-**Repo tip:** `b3ea5d1a8aef626b095c3709c6c16c8a01de0f98` — W73 maintain residual close · COMPLETE **22** / DEFER **4** / segs **3482** / OTC **93** / READY **未宣言** · FRESH `projgen-531e7c3a06e8464b8e57f2ff40471e0c`
+**Live verified:** 2026-08-16 · **W74** research entry under COMPLETE 22 residual **COMPLETE** · entry doc + health smoke + standard eval wiring_only · live verified ops COMPLETE **22** held · DEFER **4** remaining (bars_am · earn_cal · master · OTC) · segs **3482** · empty **0** · **OTC 93** · bars_am COMPLETE tip **1** / PARTIAL **31** · Mass/READY/Phase7 **NO-GO/OFF** · FRESH `projgen-9c3fc52394f84e268c1b1c73a9d1bd90` · S1–S5 **research_baseline_rejected** untouched · densify **none** · **no invent** · **no Mass/READY ON** · **no S1–S5 un-reject** · **no OTC bulk densify** · **no fins roll-back** · **no new daily signs** · COMPLETE expand = **tip-wait** · research entry **ready**
+**Repo tip:** *(pin after push)* — W74 research entry residual close · COMPLETE **22** / DEFER **4** / segs **3482** / OTC **93** / READY **未宣言** · FRESH `projgen-9c3fc52394f84e268c1b1c73a9d1bd90`
 
-## maintain + regression guards residual close（Dataset COMPLETE 22 held · tip-wait）· W73
+## research entry residual close（Dataset COMPLETE 22 held · research entry ready）· W74
+
+**Phase name:** Research entry under COMPLETE 22 FRESH residual close（宣言なし · invent なし · NOT coverage expand · NOT Mass）  
+**Wave:** W74 / w0816h  
+**Close:** [`docs/proof/w0816h_w74_research_entry_close_20260816.md`](proof/w0816h_w74_research_entry_close_20260816.md)  
+**Entry doc:** [`docs/proof/w0816h_w74_research_entry_complete22_20260816.md`](proof/w0816h_w74_research_entry_complete22_20260816.md) · prerequisites COMPLETE 22 health OK · tip-wait · Mass OFF · empty COMPLETE 0 · entry `run_standard_research_eval` / `standard-research-eval-checklist/v1`  
+**Health smoke:** `scripts/check_complete22_health.py` local+remote **all_checks_pass**  
+**Eval smoke:** `run_standard_research_eval(dry_run=True, mode="wiring_only")` · ready_declared=False · mass NO-GO · research_candidate=False  
+**Final verify:** [`.glm-logs/w0816h_w74_research_entry/`](../.glm-logs/w0816h_w74_research_entry/) · health_local/remote · standard_eval_wiring · FRESH log  
+**FRESH:** `projgen-9c3fc52394f84e268c1b1c73a9d1bd90` · coverage_segments untouched (reeval) · mass=NO-GO · densify **none**  
+**S1–S5:** stay **research_baseline_rejected** (no un-reject)  
+**Prior W73 maintain residual:** held underneath  
+
+| gate | status |
+|------|--------|
+| READY | **未宣言** |
+| Mass / Phase7 | **NO-GO / OFF** |
+| Dataset COMPLETE | **22** held |
+| DEFER | **4** (bars_am · earn_cal · master · OTC) |
+| COMPLETE segs | **3482** |
+| empty COMPLETE | **0** |
+| OTC | **93** (tip island; wait FULL_OK) |
+| fins_earnings_date | **104/104** COMPLETE · `dataset_coverage` **COMPLETE** |
+| bars_am | COMPLETE **1** tip / PARTIAL **31** · history **DEFER** · tip continuous only |
+| densify | **none** |
+| research entry | **ready** (`run_standard_research_eval` / checklist v1) |
+| S1–S5 catalog | **research_baseline_rejected** untouched |
+| FRESH | `projgen-9c3fc52394f84e268c1b1c73a9d1bd90` |
+| COMPLETE 22 health check | **held** (`check_complete22_health.py`) |
+| LIVE_API_EMPTY (bars_am history) | **true** · history_reprobe **FORBIDDEN** |
+| TIP_ONLY_POLICY | **locked** |
+
+### Explicit non-declarations (held)
+
+- **READY** — not declared  
+- **Mass** — **NO-GO / OFF**  
+- **Phase7** — **OFF**  
+- **bars_am history COMPLETE invent** — not claimed (re-probe locked)  
+- **OTC COMPLETE invent / bulk densify** — not claimed / not run  
+- **densify success** — not claimed (densify_executed=0)  
+- **fins segment invent / roll-back** — not done (104/104 held)  
+- **Dataset COMPLETE 23** — not invented (COMPLETE expand = tip-wait)  
+- **S1–S5 un-reject** — not done  
+- **new simple daily signs** — not added  
+- **short-window-only candidate** — not claimed  
+- **earn_cal/master bulk densify** — not done  
+
+### Residual TOP (W74)
+
+1. **Maintain COMPLETE 22** — health check floors held  
+2. **Research entry ready** — checklist v1 under COMPLETE 22 · [`w0816h_w74_research_entry_complete22_20260816.md`](proof/w0816h_w74_research_entry_complete22_20260816.md)  
+3. **Tip-wait** — COMPLETE expand only via tip continuous / FULL_OK; no invent 23  
+4. **FRESH** — ops reclock held  
+5. **W73 underneath** — health check + tip path regression + research guards  
+
+## maintain + regression guards residual close（Dataset COMPLETE 22 held · tip-wait）· W73 held · research entry by W74
 
 **Phase name:** COMPLETE 22 health check automation + tip path regression + research guards FRESH residual close（宣言なし · invent なし · NOT expand to 23）  
 **Wave:** W73 / w0816g  
@@ -56,7 +111,7 @@
 - **new simple daily signs** — not added  
 - **earn_cal/master bulk densify** — not done  
 
-### Residual TOP (W73)
+### Residual TOP (W73 held under W74)
 
 1. **Maintain COMPLETE 22** — health check floors held  
 2. **Tip-wait** — COMPLETE expand only via tip continuous / FULL_OK; no invent 23  

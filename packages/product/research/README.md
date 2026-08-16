@@ -137,6 +137,7 @@ assert out["research_candidate"] is False  # never auto-promotes
 
 Checklist proof: `docs/proof/w0815bg_w66_standard_research_eval_checklist_20260815.md`.  
 Harness proof: `docs/proof/w0815bg_w66_standard_eval_harness_entry_20260815.md`.  
+COMPLETE 22 research entry (W74): `docs/proof/w0816h_w74_research_entry_complete22_20260816.md`.  
 Tests: `tests/test_standard_research_eval.py`.
 
 ## Single-shot job (W49 skeleton · W50 CF execute · W51 tip features · W52 signal)
