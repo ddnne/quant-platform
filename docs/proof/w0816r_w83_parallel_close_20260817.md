@@ -224,7 +224,7 @@ See also: [`w0816r_w83_go_gates_20260817.md`](w0816r_w83_go_gates_20260817.md)
 |------|-------|
 | W82 tip (start) | `4696f36` — docs pin after event+paper+OTC close |
 | W82 feature tip | `e7d73fb` — event_post PIT demote + paper gap + OTC 4485→4499 |
-| W83 feature tip | *(this commit)* — parallel default candidates + paper negatives + OTC tip-wait + FRESH close |
+| W83 feature tip | `12e3e46` — parallel default candidates + paper negatives + OTC tip-wait + FRESH close |
 | This wave | commit + push on `main` past `4696f36` |
 
 ---
