@@ -61,6 +61,15 @@ from research.idea_generator import (
     default_generation_policy,
     generate_idea_payloads,
 )
+from research.paper_candidate_adapter import (
+    PAPER_CANDIDATE_ADAPTER_VERSION,
+    PAPER_CANDIDATE_SPEC_VERSION,
+    PaperCandidateReceptacle,
+    adapt_class_hyp_candidate,
+    adapt_from_class_hyp_bundle,
+    assert_unarmed,
+    emit_example_paper_specs,
+)
 
 __all__ = [
     "ALL_CLASS_IDS",
@@ -85,7 +94,10 @@ __all__ = [
     "MultidaySignalEval",
     "OperatorOverrideCapability",
     "OperatorOverrideService",
+    "PAPER_CANDIDATE_ADAPTER_VERSION",
+    "PAPER_CANDIDATE_SPEC_VERSION",
     "PHASE7_STATUS",
+    "PaperCandidateReceptacle",
     "READY_DECLARED",
     "RegimeObservation",
     "RejectionReason",
@@ -96,12 +108,16 @@ __all__ = [
     "SingleShotJobSpec",
     "StrategyEvidence",
     "VerifiedResearchReadiness",
+    "adapt_class_hyp_candidate",
+    "adapt_from_class_hyp_bundle",
     "assert_harness_closed",
     "assert_mass_and_phase7_off",
     "assert_simple_daily_sign_not_default_enabled",
+    "assert_unarmed",
     "build_single_shot_job_spec",
     "default_generation_class_ids",
     "default_generation_policy",
+    "emit_example_paper_specs",
     "execute_single_shot_job",
     "generate_idea_payloads",
     "get_hypothesis_class",

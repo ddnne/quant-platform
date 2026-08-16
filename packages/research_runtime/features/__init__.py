@@ -82,6 +82,11 @@ from .class_signals import (
     compute_flow_demand_signal,
     compute_fundamentals_price_signal,
     apply_sticky_hold,
+    economic_net_meaningful,
+    occurrence_rate_multiday,
+    occurrence_rate_event_post,
+    multi_year_skew_check,
+    production_candidate_bar,
 )
 from .dataset_guard import (
     COMPLETE_21_DATASETS,
@@ -131,7 +136,7 @@ __all__ = [
     "compute_signal_from_feature_observations",
     "compute_topix_relative_sign_signal",
     "minimal_signal_definition",
-    # class signals (W78–W79; not simple daily sign)
+    # class signals (W78–W80; not simple daily sign)
     "SIGNAL_ID_MULTI_DAY_HOLD",
     "SIGNAL_ID_MACRO_CONDITIONED",
     "SIGNAL_ID_CROSS_SECTION",
@@ -147,6 +152,11 @@ __all__ = [
     "compute_flow_demand_signal",
     "compute_fundamentals_price_signal",
     "apply_sticky_hold",
+    "economic_net_meaningful",
+    "occurrence_rate_multiday",
+    "occurrence_rate_event_post",
+    "multi_year_skew_check",
+    "production_candidate_bar",
     # dataset guards
     "COMPLETE_21_DATASETS",
     "PermanentDeferHistoryError",

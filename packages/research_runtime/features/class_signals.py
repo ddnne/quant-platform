@@ -1,4 +1,4 @@
-"""Hypothesis-class research signals (W78–W79) — not simple daily sign.
+"""Hypothesis-class research signals (W78–W80) — not simple daily sign.
 
 Implements real signal logic for:
 
@@ -18,8 +18,11 @@ Hard constraints
 * Does **not** emit order intents / call paper execution
 * Does **not** un-reject S1–S5
 * ``simple_daily_sign`` is **not** used
+* Mass / READY / operational GO never auto-connect from pass
 
-Status remains ``candidate`` (research). Pass ≠ READY / Mass / GO.
+Status remains ``candidate`` (research). W80 may set ``research_candidate=True``
+when production criteria (economic net + occurrence rate + multi-year + risk)
+are all met — still not READY / Mass / GO.
 """
 
 from __future__ import annotations
@@ -30,11 +33,11 @@ from typing import Any, Mapping, Sequence
 # Identity / freeze
 # ---------------------------------------------------------------------------
 
-CLASS_SIGNALS_VERSION: str = "class-signals/v2"
-CLASS_SIGNALS_WAVE: str = "W79 / w0816n"
+CLASS_SIGNALS_VERSION: str = "class-signals/v3"
+CLASS_SIGNALS_WAVE: str = "W80 / w0816o"
 
 SIGNAL_STATUS: str = "candidate"
-SIGNAL_VERSION: str = "1.1.0"
+SIGNAL_VERSION: str = "1.2.0"
 CANDIDATE_ONLY: bool = False  # legs may be approved; signal status stays candidate
 
 MASS_RESEARCH: str = "NO-GO"
@@ -82,8 +85,25 @@ DEFAULT_FLOW_HOLD_DAYS: int = 5
 DEFAULT_FUND_HOLD_DAYS: int = 20
 DEFAULT_FUND_MOMENTUM_N: int = 20
 # Candidate bar helper: residual after costs must clear this for "economic"
-# meaningfulness discussion (research only; not auto-promote).
+# meaningfulness discussion (research only).
 DEFAULT_MIN_ECONOMIC_NET: float = 0.002  # 20bp per scored hold
+
+# ---------------------------------------------------------------------------
+# W80 occurrence-rate / production-candidate bar (rate-based, not count alone)
+# ---------------------------------------------------------------------------
+# multi_day_hold: scored rebalances / code-days. fixed_horizon expect ~1/hold.
+# Floor at half expected for hold=10 → 0.05; use 0.04 research buffer.
+DEFAULT_MIN_ACTIVATION_RATE_MULTIDAY: float = 0.04
+# event_post: annualized scored events per code (earnings ~4/yr typical).
+# 0.5 = at least half an event / code / year average across multi-year.
+DEFAULT_MIN_EVENTS_PER_CODE_YEAR: float = 0.5
+# event_post panel intensity: scored events / trading days (not code-days).
+DEFAULT_MIN_EVENTS_PER_TRADING_DAY: float = 0.05
+# multi-year: single-year share of sum(max(net,0)) must stay below this.
+DEFAULT_MAX_YEAR_POS_NET_SHARE: float = 0.75
+# research_candidate requires enough independent years (not count of events).
+DEFAULT_MIN_YEARS_RESEARCH_CANDIDATE: int = 4
+DEFAULT_TRADING_DAYS_PER_YEAR: int = 245
 
 # Macro regime defaults (research placeholders; disclose when overridden)
 # Repo rates in local JSDA are percent-like (e.g. 0.1 = 0.1%).
@@ -109,6 +129,7 @@ CROSS_SECTION_DATASETS: tuple[str, ...] = (
 )
 EVENT_POST_DATASETS: tuple[str, ...] = (
     "fins_summary",
+    "fins_earnings_date",  # W80 thicken event calendar when available
     "equities_bars_daily",
     "markets_calendar",
 )
@@ -873,6 +894,281 @@ def economic_net_meaningful(
     }
 
 
+def occurrence_rate_multiday(
+    *,
+    n_active: int | None,
+    n_code_days: int | None,
+    n_trading_days: int | None = None,
+    n_codes: int | None = None,
+    hold_days: int = DEFAULT_HOLD_DAYS,
+    min_activation_rate: float = DEFAULT_MIN_ACTIVATION_RATE_MULTIDAY,
+) -> dict[str, Any]:
+    """Occurrence / activation rate for multi_day_hold (rate, not count alone).
+
+    ``activation_rate = n_active / n_code_days`` when code-days known.
+    Absolute ``n_active`` alone is **not** used to reject.
+    """
+    n_a = int(n_active or 0)
+    n_cd = int(n_code_days or 0)
+    n_td = int(n_trading_days or 0)
+    n_c = int(n_codes or 0)
+    rate = (float(n_a) / float(n_cd)) if n_cd > 0 else None
+    expected = 1.0 / float(max(int(hold_days), 1))
+    sufficient = bool(rate is not None and rate >= float(min_activation_rate))
+    return {
+        "kind": "occurrence_rate_multiday",
+        "n_active": n_a,
+        "n_code_days": n_cd if n_cd > 0 else None,
+        "n_trading_days": n_td if n_td > 0 else None,
+        "n_codes": n_c if n_c > 0 else None,
+        "activation_rate": rate,
+        "activation_rate_per_code_day": rate,
+        "expected_activation_rate": expected,
+        "min_activation_rate": float(min_activation_rate),
+        "sufficient": sufficient,
+        "reject_on_count_alone": False,
+        "reason": (
+            "activation_rate_ok"
+            if sufficient
+            else (
+                "activation_rate_below_min"
+                if rate is not None
+                else "no_code_days_for_rate"
+            )
+        ),
+        "note": (
+            "Sufficiency uses rate (events or rebalances / code-days), "
+            "not absolute n_active. Short window with OK rate → extend."
+        ),
+    }
+
+
+def occurrence_rate_event_post(
+    *,
+    n_events: int | None,
+    n_scored: int | None = None,
+    n_trading_days: int | None = None,
+    n_codes: int | None = None,
+    n_code_days: int | None = None,
+    trading_days_per_year: int = DEFAULT_TRADING_DAYS_PER_YEAR,
+    min_events_per_code_year: float = DEFAULT_MIN_EVENTS_PER_CODE_YEAR,
+    min_events_per_trading_day: float = DEFAULT_MIN_EVENTS_PER_TRADING_DAY,
+) -> dict[str, Any]:
+    """Occurrence rate for event_post — rate-based, multi-year friendly.
+
+    Primary metrics:
+    * events_per_trading_day = n_scored / n_trading_days
+    * events_per_code_year   = annualized n_scored / n_codes
+    * events_per_code_day    = n_scored / n_code_days
+
+    Absolute event count alone must **not** reject when rates are OK.
+    """
+    n_ev = int(n_events or 0)
+    n_sc = int(n_scored if n_scored is not None else n_ev)
+    n_td = int(n_trading_days or 0)
+    n_c = int(n_codes or 0)
+    n_cd = int(n_code_days or 0)
+    if n_cd <= 0 and n_td > 0 and n_c > 0:
+        n_cd = n_td * n_c
+
+    per_td = (float(n_sc) / float(n_td)) if n_td > 0 else None
+    per_cd = (float(n_sc) / float(n_cd)) if n_cd > 0 else None
+    per_code_year = None
+    if n_c > 0 and n_td > 0:
+        # annualize from window length
+        years_frac = float(n_td) / float(max(int(trading_days_per_year), 1))
+        if years_frac > 0:
+            per_code_year = (float(n_sc) / float(n_c)) / years_frac
+
+    rate_ok_td = bool(
+        per_td is not None and per_td >= float(min_events_per_trading_day)
+    )
+    rate_ok_year = bool(
+        per_code_year is not None
+        and per_code_year >= float(min_events_per_code_year)
+    )
+    # either panel intensity or annualized per-code rate is enough
+    sufficient = bool(rate_ok_td or rate_ok_year)
+    if per_td is None and per_code_year is None:
+        sufficient = False
+        reason = "no_days_or_codes_for_rate"
+    elif sufficient:
+        reason = "occurrence_rate_ok"
+    else:
+        reason = "occurrence_rate_below_min"
+
+    return {
+        "kind": "occurrence_rate_event_post",
+        "n_events": n_ev,
+        "n_scored": n_sc,
+        "n_trading_days": n_td if n_td > 0 else None,
+        "n_codes": n_c if n_c > 0 else None,
+        "n_code_days": n_cd if n_cd > 0 else None,
+        "events_per_trading_day": per_td,
+        "events_per_code_day": per_cd,
+        "events_per_code_year_annualized": per_code_year,
+        "min_events_per_trading_day": float(min_events_per_trading_day),
+        "min_events_per_code_year": float(min_events_per_code_year),
+        "rate_ok_trading_day": rate_ok_td,
+        "rate_ok_code_year": rate_ok_year,
+        "sufficient": sufficient,
+        "reject_on_count_alone": False,
+        "reason": reason,
+        "note": (
+            "Event sufficiency = occurrence rate (events/trading day or "
+            "annualized per code), multi-year coverage. Do not reject on "
+            "absolute n_events alone. Short window with OK rate → extend."
+        ),
+    }
+
+
+def multi_year_skew_check(
+    net_by_period: Mapping[str, float | None] | Sequence[tuple[str, float | None]],
+    *,
+    max_pos_share: float = DEFAULT_MAX_YEAR_POS_NET_SHARE,
+) -> dict[str, Any]:
+    """Detect extreme single-year dominance of positive net mass."""
+    if isinstance(net_by_period, Mapping):
+        items = [(str(k), v) for k, v in net_by_period.items()]
+    else:
+        items = [(str(k), v) for k, v in net_by_period]
+    pos = [(k, float(v)) for k, v in items if v is not None and float(v) > 0]
+    pos_sum = sum(v for _, v in pos)
+    if pos_sum <= 0:
+        return {
+            "ok": False,
+            "reason": "no_positive_net_years",
+            "max_pos_share": float(max_pos_share),
+            "shares": {},
+            "dominant_period": None,
+            "dominant_share": None,
+        }
+    shares = {k: float(v) / pos_sum for k, v in pos}
+    dom_k, dom_s = max(shares.items(), key=lambda kv: kv[1])
+    ok = bool(dom_s <= float(max_pos_share))
+    return {
+        "ok": ok,
+        "reason": "no_extreme_skew" if ok else "extreme_single_year_skew",
+        "max_pos_share": float(max_pos_share),
+        "shares": shares,
+        "dominant_period": dom_k,
+        "dominant_share": dom_s,
+        "n_positive_years": len(pos),
+        "pos_net_sum": pos_sum,
+    }
+
+
+def production_candidate_bar(
+    *,
+    checklist_complete: bool,
+    gate_passed: bool,
+    risk_ok: bool,
+    economic_net_ok: bool,
+    occurrence_ok: bool,
+    multi_year_ok: bool,
+    skew_ok: bool,
+    n_ok_periods: int,
+    min_years: int = DEFAULT_MIN_YEARS_RESEARCH_CANDIDATE,
+    economic_net: Mapping[str, Any] | None = None,
+    occurrence: Mapping[str, Any] | None = None,
+    skew: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """W80 production research_candidate bar (still not READY / Mass / GO).
+
+    All must pass:
+    1. checklist v2 complete (caller-supplied)
+    2. robustness gate pass
+    3. risk scenarios not catastrophic
+    4. economic net meaningful (positive majority + mean ≥ min)
+    5. occurrence / activation rate sufficient (rate, not count alone)
+    6. multi-year coverage (≥ min_years ok periods) without extreme skew
+
+    When all pass → ``research_candidate=True`` (research only).
+    Weak consistent-negative → not_candidate (via economic_net_ok=False).
+    """
+    years_ok = bool(multi_year_ok and int(n_ok_periods) >= int(min_years))
+    all_ok = bool(
+        checklist_complete
+        and gate_passed
+        and risk_ok
+        and economic_net_ok
+        and occurrence_ok
+        and years_ok
+        and skew_ok
+    )
+    fails: list[str] = []
+    if not checklist_complete:
+        fails.append("checklist_incomplete")
+    if not gate_passed:
+        fails.append("gate_failed")
+    if not risk_ok:
+        fails.append("risk_catastrophic_or_blocked")
+    if not economic_net_ok:
+        fails.append("economic_net_not_meaningful")
+    if not occurrence_ok:
+        fails.append("occurrence_rate_insufficient")
+    if not years_ok:
+        fails.append("multi_year_coverage_insufficient")
+    if not skew_ok:
+        fails.append("extreme_multi_year_skew")
+
+    if all_ok:
+        verdict = "research_candidate"
+        yes_no = "yes"
+    elif (
+        gate_passed
+        and risk_ok
+        and economic_net_ok
+        and (not occurrence_ok or not years_ok or not skew_ok or not checklist_complete)
+    ):
+        # gate+econ ok but production rate/year/checklist incomplete
+        verdict = "discussion_only"
+        yes_no = "no_discussion_only"
+    elif gate_passed and risk_ok and not economic_net_ok:
+        verdict = "not_candidate_economic_net_not_meaningful"
+        yes_no = "no"
+    else:
+        verdict = "not_candidate"
+        yes_no = "no"
+
+    return {
+        "research_candidate": bool(all_ok),
+        "research_candidate_allowed": bool(
+            gate_passed and risk_ok and economic_net_ok
+        ),
+        "candidate_yes_no": yes_no,
+        "verdict": verdict,
+        "production_criteria": {
+            "checklist_complete": bool(checklist_complete),
+            "gate_passed": bool(gate_passed),
+            "risk_ok": bool(risk_ok),
+            "economic_net_ok": bool(economic_net_ok),
+            "occurrence_ok": bool(occurrence_ok),
+            "multi_year_ok": bool(years_ok),
+            "skew_ok": bool(skew_ok),
+            "n_ok_periods": int(n_ok_periods),
+            "min_years": int(min_years),
+            "all_ok": all_ok,
+            "fails": fails,
+        },
+        "economic_net": dict(economic_net) if economic_net else None,
+        "occurrence": dict(occurrence) if occurrence else None,
+        "skew": dict(skew) if skew else None,
+        "ready_declared": False,
+        "mass_research": MASS_RESEARCH,
+        "phase7": PHASE7,
+        "operational_go": False,
+        "connected_to_ready": False,
+        "connected_to_mass": False,
+        "note": (
+            "W80 production research_candidate bar. All criteria required. "
+            "research_candidate=True is research-only; never auto-connects "
+            "READY / Mass / operational GO / Phase7 / orders. "
+            "Occurrence uses rates not absolute counts."
+        ),
+    }
+
+
 def compute_event_post_signal(
     *,
     surprise: float | None,
@@ -1320,15 +1616,20 @@ def class_signals_document() -> dict[str, Any]:
         "signals": class_signal_definitions(),
         "supported_hold_days": list(SUPPORTED_HOLD_DAYS),
         "min_economic_net": DEFAULT_MIN_ECONOMIC_NET,
+        "min_activation_rate_multiday": DEFAULT_MIN_ACTIVATION_RATE_MULTIDAY,
+        "min_events_per_code_year": DEFAULT_MIN_EVENTS_PER_CODE_YEAR,
+        "min_years_research_candidate": DEFAULT_MIN_YEARS_RESEARCH_CANDIDATE,
         "not_simple_daily_sign": True,
         "s1_s5_unreject": S1_S5_UNREJECT,
         **_freeze_meta(),
         "note": (
-            "W79 class-based research signals. multi_day_hold + event_post + "
+            "W80 class-based research signals. multi_day_hold + event_post + "
             "macro_conditioned + flow_demand + fundamentals_price "
-            "(+ optional cross_section). Candidate only if economic net "
-            "meaningful; weak consistent-negative is not_candidate. "
-            "Not READY. Not Mass. No S1–S5 un-reject."
+            "(+ optional cross_section). Production research_candidate only "
+            "if economic net meaningful + occurrence rate sufficient + "
+            "multi-year no extreme skew + risk OK. Weak consistent-negative "
+            "is not_candidate. READY/Mass never auto-connect. "
+            "No S1–S5 un-reject."
         ),
     }
 
@@ -1349,11 +1650,17 @@ __all__ = [
     "DEFAULT_FUND_HOLD_DAYS",
     "DEFAULT_FUND_MOMENTUM_N",
     "DEFAULT_HOLD_DAYS",
+    "DEFAULT_MAX_YEAR_POS_NET_SHARE",
+    "DEFAULT_MIN_ACTIVATION_RATE_MULTIDAY",
     "DEFAULT_MIN_ECONOMIC_NET",
+    "DEFAULT_MIN_EVENTS_PER_CODE_YEAR",
+    "DEFAULT_MIN_EVENTS_PER_TRADING_DAY",
+    "DEFAULT_MIN_YEARS_RESEARCH_CANDIDATE",
     "DEFAULT_MOMENTUM_N",
     "DEFAULT_REPO_CHANGE_EPS",
     "DEFAULT_REPO_HIGH_THRESHOLD",
     "DEFAULT_REPO_LOW_THRESHOLD",
+    "DEFAULT_TRADING_DAYS_PER_YEAR",
     "DISCLOSURE_FEATURE_ID",
     "EVENT_POST_DATASETS",
     "FLOW_DEMAND_DATASETS",
@@ -1398,6 +1705,10 @@ __all__ = [
     "economic_net_meaningful",
     "fundamental_value_score",
     "multi_day_forward_return",
+    "multi_year_skew_check",
+    "occurrence_rate_event_post",
+    "occurrence_rate_multiday",
+    "production_candidate_bar",
     "repo_regime_from_change",
     "repo_regime_from_level",
     "sign_from_numeric",

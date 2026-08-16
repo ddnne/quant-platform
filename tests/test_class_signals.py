@@ -1,4 +1,4 @@
-"""W78–W79 class signals: multi_day_hold + event/flow/fund + macro (not daily sign)."""
+"""W78–W80 class signals: multi_day_hold + event/flow/fund + macro (not daily sign)."""
 
 from __future__ import annotations
 
@@ -30,6 +30,10 @@ from features.class_signals import (
     economic_net_meaningful,
     fundamental_value_score,
     multi_day_forward_return,
+    multi_year_skew_check,
+    occurrence_rate_event_post,
+    occurrence_rate_multiday,
+    production_candidate_bar,
     repo_regime_from_change,
     repo_regime_from_level,
     sign_from_numeric,
@@ -238,6 +242,75 @@ def test_economic_net_meaningful_bar():
     assert good["meaningful"] is True
 
 
+def test_occurrence_rate_not_count_alone():
+    """W80: rate OK with small absolute count; rate fail with large count."""
+    # 27 events / 60 days / 30 codes — W79 sparse Q4 — rate still OK
+    sparse = occurrence_rate_event_post(
+        n_events=27, n_scored=27, n_trading_days=60, n_codes=30
+    )
+    assert sparse["sufficient"] is True
+    assert sparse["reject_on_count_alone"] is False
+    assert sparse["events_per_code_year_annualized"] > 0.5
+
+    # zero days → cannot compute rate
+    bad = occurrence_rate_event_post(n_events=1000, n_scored=1000, n_trading_days=0)
+    assert bad["sufficient"] is False
+
+    md = occurrence_rate_multiday(n_active=100, n_code_days=1000, hold_days=10)
+    assert md["activation_rate"] == pytest.approx(0.1)
+    assert md["sufficient"] is True
+
+
+def test_production_candidate_bar_all_criteria():
+    """research_candidate True only when all production criteria pass."""
+    ok = production_candidate_bar(
+        checklist_complete=True,
+        gate_passed=True,
+        risk_ok=True,
+        economic_net_ok=True,
+        occurrence_ok=True,
+        multi_year_ok=True,
+        skew_ok=True,
+        n_ok_periods=6,
+    )
+    assert ok["research_candidate"] is True
+    assert ok["candidate_yes_no"] == "yes"
+    assert ok["ready_declared"] is False
+    assert ok["mass_research"] == "NO-GO"
+    assert ok["connected_to_ready"] is False
+
+    # missing occurrence → discussion_only (not production)
+    disc = production_candidate_bar(
+        checklist_complete=True,
+        gate_passed=True,
+        risk_ok=True,
+        economic_net_ok=True,
+        occurrence_ok=False,
+        multi_year_ok=True,
+        skew_ok=True,
+        n_ok_periods=6,
+    )
+    assert disc["research_candidate"] is False
+    assert disc["candidate_yes_no"] == "no_discussion_only"
+
+    # weak econ → not_candidate
+    weak = production_candidate_bar(
+        checklist_complete=True,
+        gate_passed=True,
+        risk_ok=True,
+        economic_net_ok=False,
+        occurrence_ok=True,
+        multi_year_ok=True,
+        skew_ok=True,
+        n_ok_periods=6,
+    )
+    assert weak["research_candidate"] is False
+    assert weak["verdict"] == "not_candidate_economic_net_not_meaningful"
+
+    skew = multi_year_skew_check({"y1": 0.10, "y2": 0.01, "y3": 0.01})
+    assert skew["ok"] is False  # y1 share 0.10/0.12 > 0.75
+
+
 def test_class_hyp_eval_pure_on_synthetic_bars():
     from research.class_hyp_eval import (
         evaluate_event_post_on_bars,
@@ -245,6 +318,7 @@ def test_class_hyp_eval_pure_on_synthetic_bars():
         evaluate_fundamentals_price_on_bars,
         evaluate_macro_conditioned_on_bars,
         evaluate_multi_day_hold_on_bars,
+        merge_event_calendars,
     )
     from research.cost_models import load_repo_rate_series_from_mapping
 
@@ -258,6 +332,8 @@ def test_class_hyp_eval_pure_on_synthetic_bars():
     assert md["signal_id"] == SIGNAL_ID_MULTI_DAY_HOLD
     assert md["hold_days"] == 5
     assert md["ready_declared"] is False
+    assert md.get("occurrence") is not None
+    assert "activation_rate" in md["occurrence"]
 
     repo = load_repo_rate_series_from_mapping(
         {d: 0.10 + 0.001 * i for i, d in enumerate(dates)}
@@ -288,11 +364,17 @@ def test_class_hyp_eval_pure_on_synthetic_bars():
             }
         ],
     }
+    earn_only = {
+        "13010": [{"disc_date": dates[10], "source": "fins_earnings_date"}],
+    }
+    merged = merge_event_calendars(events, earn_only)
+    assert len(merged["13010"]) == 2  # summary + earnings-date thicken
     ep = evaluate_event_post_on_bars(
         bars, events, post_hold_days=5, one_way_cost=0.001
     )
     assert ep["signal_id"] == SIGNAL_ID_EVENT_POST
     assert ep["n_events"] == 2
+    assert ep.get("occurrence") is not None
 
     margin = {
         "13010": [(dates[i], 1000.0 + 50 * i) for i in range(0, len(dates), 3)],

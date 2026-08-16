@@ -1,21 +1,25 @@
-"""Offline multi-year class-hypothesis eval (W78 / w0816m · W79 / w0816n).
+"""Offline multi-year class-hypothesis eval (W78–W80).
 
 Runs class research signals over local bar mirrors + local SQLite
-(``jsda_repo_rates``, ``fins_summary``, margin/short), then feeds
-cost-aware robustness gate + checklist v2 + economic-net candidate bar.
+(``jsda_repo_rates``, ``fins_summary``, ``fins_earnings_date``, margin/short),
+then feeds cost-aware robustness gate + checklist v2 + economic-net +
+**occurrence-rate** production candidate bar.
 
 Classes covered
 ---------------
-* multi_day_hold · macro_conditioned · cross_section_relative (improve)
-* event_post · flow_demand · fundamentals_price (W79 remaining)
+* multi_day_hold · multi_day_hold_10 · macro_conditioned · cross_section_relative
+* event_post · flow_demand · fundamentals_price
 
 Hard constraints
 ----------------
 * Not simple_daily_sign · no S1–S5 un-reject
 * Not READY / Mass / Phase7 / orders
-* No invent fill on repo / fins / margin gaps
-* research_candidate is never auto-promoted here
+* No invent fill on repo / fins / margin / liquidity gaps
+* W80: ``research_candidate=True`` only when production bar fully met
+  (still never auto-connects Mass / READY / operational GO)
 * weak consistent-negative is **not_candidate** (economic net bar)
+* Event sufficiency = occurrence **rate** (not absolute count alone);
+  short window with OK rate → extend and re-eval
 """
 
 from __future__ import annotations
@@ -39,9 +43,15 @@ from features.class_signals import (
     DEFAULT_FUND_HOLD_DAYS,
     DEFAULT_FUND_MOMENTUM_N,
     DEFAULT_HOLD_DAYS,
+    DEFAULT_MAX_YEAR_POS_NET_SHARE,
+    DEFAULT_MIN_ACTIVATION_RATE_MULTIDAY,
     DEFAULT_MIN_ECONOMIC_NET,
+    DEFAULT_MIN_EVENTS_PER_CODE_YEAR,
+    DEFAULT_MIN_EVENTS_PER_TRADING_DAY,
+    DEFAULT_MIN_YEARS_RESEARCH_CANDIDATE,
     DEFAULT_REPO_HIGH_THRESHOLD,
     DEFAULT_REPO_LOW_THRESHOLD,
+    DEFAULT_TRADING_DAYS_PER_YEAR,
     SIGNAL_ID_CROSS_SECTION,
     SIGNAL_ID_EVENT_POST,
     SIGNAL_ID_FLOW_DEMAND,
@@ -62,14 +72,22 @@ from features.class_signals import (
     economic_net_meaningful,
     fundamental_value_score,
     multi_day_forward_return,
+    multi_year_skew_check,
+    occurrence_rate_event_post,
+    occurrence_rate_multiday,
+    production_candidate_bar,
     sign_from_numeric,
 )
 from research.cost_models import (
     DEFAULT_ONE_WAY_COST,
     REPO_DATASET_ID,
     annotate_period_rows_with_extended_costs,
+    apply_liquidity_to_one_way_cost,
     build_leverage_short_cost_assumption,
+    compute_liquidity_proxy_from_bars,
     default_long_only_unlevered_cost_assumption,
+    liquidity_bucket_from_proxy,
+    liquidity_cost_multipliers,
     load_repo_rate_series_from_rows,
     lookup_repo_rate,
     mean_repo_rate_pct,
@@ -93,13 +111,18 @@ from research.robustness_gate import evaluate_research_robustness_gate
 # Freeze / identity
 # ---------------------------------------------------------------------------
 
-CLASS_HYP_EVAL_VERSION: str = "class-hyp-eval/v2"
+CLASS_HYP_EVAL_VERSION: str = "class-hyp-eval/v3"
 CLASS_HYP_EVAL_WAVE: str = CLASS_SIGNALS_WAVE
 MASS_RESEARCH: str = "NO-GO"
 PHASE7: str = "OFF"
 READY_DECLARED: bool = False
 # Economic net bar (research): weak consistent-negative never candidate.
 MIN_ECONOMIC_NET: float = DEFAULT_MIN_ECONOMIC_NET
+MIN_ACTIVATION_RATE_MULTIDAY: float = DEFAULT_MIN_ACTIVATION_RATE_MULTIDAY
+MIN_EVENTS_PER_CODE_YEAR: float = DEFAULT_MIN_EVENTS_PER_CODE_YEAR
+MIN_EVENTS_PER_TRADING_DAY: float = DEFAULT_MIN_EVENTS_PER_TRADING_DAY
+MIN_YEARS_RESEARCH_CANDIDATE: int = DEFAULT_MIN_YEARS_RESEARCH_CANDIDATE
+MAX_YEAR_POS_NET_SHARE: float = DEFAULT_MAX_YEAR_POS_NET_SHARE
 
 # Default codes matching multi-year harness probes.
 DEFAULT_EVAL_CODES: tuple[str, ...] = (
@@ -135,8 +158,55 @@ DEFAULT_EVAL_CODES: tuple[str, ...] = (
     "65030",
 )
 
-# Q4 windows used by W63/W64 multi-year path.
+# W80: prefer full-year windows when W64 full mirrors exist; else Q4.
+# Full mirrors currently cover 2015/2019/2021/2023 (~Jan–Oct). Q4 kept for
+# 2017/2025 so multi-year span remains ≥6 years with rate-based sufficiency.
 DEFAULT_PERIODS: tuple[dict[str, Any], ...] = (
+    {
+        "period_id": "y2015_full",
+        "year": 2015,
+        "period_start": "2015-01-05",
+        "period_end": "2015-10-21",
+        "window_kind": "full_prefer",
+    },
+    {
+        "period_id": "y2017_q4",
+        "year": 2017,
+        "period_start": "2017-09-01",
+        "period_end": "2017-12-29",
+        "window_kind": "q4",
+    },
+    {
+        "period_id": "y2019_full",
+        "year": 2019,
+        "period_start": "2019-01-04",
+        "period_end": "2019-10-18",
+        "window_kind": "full_prefer",
+    },
+    {
+        "period_id": "y2021_full",
+        "year": 2021,
+        "period_start": "2021-01-04",
+        "period_end": "2021-10-15",
+        "window_kind": "full_prefer",
+    },
+    {
+        "period_id": "y2023_full",
+        "year": 2023,
+        "period_start": "2023-01-04",
+        "period_end": "2023-10-13",
+        "window_kind": "full_prefer",
+    },
+    {
+        "period_id": "y2025_q4",
+        "year": 2025,
+        "period_start": "2025-09-01",
+        "period_end": "2025-12-29",
+        "window_kind": "q4",
+    },
+)
+# Legacy Q4-only periods (W63/W79 baseline) for regression compare.
+DEFAULT_PERIODS_Q4: tuple[dict[str, Any], ...] = (
     {"period_id": "y2015_q4", "year": 2015, "period_start": "2015-09-01", "period_end": "2015-12-29"},
     {"period_id": "y2017_q4", "year": 2017, "period_start": "2017-09-01", "period_end": "2017-12-29"},
     {"period_id": "y2019_q4", "year": 2019, "period_start": "2019-09-01", "period_end": "2019-12-29"},
@@ -148,6 +218,9 @@ DEFAULT_PERIODS: tuple[dict[str, Any], ...] = (
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_BARS_MIRROR_DIR: Path = (
     _REPO_ROOT / ".glm-logs" / "w0815bd_w63_multiyear" / "r2_mirror"
+)
+DEFAULT_BARS_FULL_MIRROR_DIR: Path = (
+    _REPO_ROOT / ".glm-logs" / "w0815be_w64_cost_full" / "r2_mirror"
 )
 DEFAULT_SQLITE: Path = _REPO_ROOT / "data" / "structured" / "ingestion.sqlite"
 
@@ -177,11 +250,37 @@ def load_bars_ndjson(
     *,
     codes: Sequence[str] | None = None,
     max_days: int | None = None,
+    period_start: str | None = None,
+    period_end: str | None = None,
 ) -> dict[str, list[tuple[str, float]]]:
     """Load equities_bars_daily ndjson → ``{code: [(date, close), ...]}`` sorted."""
+    rich = load_bars_ndjson_rich(
+        path,
+        codes=codes,
+        max_days=max_days,
+        period_start=period_start,
+        period_end=period_end,
+    )
+    return {c: [(d, float(r["close"])) for d, r in pairs] for c, pairs in rich.items()}
+
+
+def load_bars_ndjson_rich(
+    path: str | Path,
+    *,
+    codes: Sequence[str] | None = None,
+    max_days: int | None = None,
+    period_start: str | None = None,
+    period_end: str | None = None,
+) -> dict[str, list[tuple[str, dict[str, Any]]]]:
+    """Load bars with close + liquidity fields for W80 cost modulation.
+
+    Each value: ``(date, {close, Va, Vo, AdjC, AdjVo, Code, Date})``.
+    """
     p = Path(path)
     code_filter = {str(c).strip() for c in codes} if codes else None
-    by_code: dict[str, dict[str, float]] = {}
+    p_start = str(period_start)[:10] if period_start else None
+    p_end = str(period_end)[:10] if period_end else None
+    by_code: dict[str, dict[str, dict[str, Any]]] = {}
     with p.open() as fh:
         for line in fh:
             line = line.strip()
@@ -205,6 +304,10 @@ def load_bars_ndjson(
                 continue
             if code_filter is not None and code not in code_filter:
                 continue
+            if p_start and date < p_start:
+                continue
+            if p_end and date > p_end:
+                continue
             close = payload.get("C")
             if close is None:
                 close = payload.get("Close") or payload.get("AdjC")
@@ -212,15 +315,51 @@ def load_bars_ndjson(
                 c = float(close)
             except (TypeError, ValueError):
                 continue
-            by_code.setdefault(code, {})[date] = c
+            rec = {
+                "close": c,
+                "C": c,
+                "Close": c,
+                "Code": code,
+                "Date": date,
+                "date": date,
+                "Va": payload.get("Va") or payload.get("AVa") or payload.get("MVa"),
+                "Vo": payload.get("Vo") or payload.get("AVo") or payload.get("MVo"),
+                "AdjC": payload.get("AdjC") or payload.get("AAdjC"),
+                "AdjVo": payload.get("AdjVo") or payload.get("AAdjVo"),
+            }
+            by_code.setdefault(code, {})[date] = rec
 
-    out: dict[str, list[tuple[str, float]]] = {}
+    out: dict[str, list[tuple[str, dict[str, Any]]]] = {}
     for code, dmap in by_code.items():
         pairs = sorted(dmap.items(), key=lambda x: x[0])
         if max_days is not None and len(pairs) > int(max_days):
             pairs = pairs[-int(max_days) :]
         out[code] = pairs
     return out
+
+
+def bars_rich_to_close_panel(
+    rich: Mapping[str, Sequence[tuple[str, Mapping[str, Any]]]],
+) -> dict[str, list[tuple[str, float]]]:
+    """Strip rich bars to (date, close) panel."""
+    return {
+        str(c): [(d, float(r["close"])) for d, r in pairs]
+        for c, pairs in rich.items()
+    }
+
+
+def collect_liquidity_bar_rows(
+    rich: Mapping[str, Sequence[tuple[str, Mapping[str, Any]]]],
+) -> list[dict[str, Any]]:
+    """Flatten rich bars to rows for ``compute_liquidity_proxy_from_bars``."""
+    rows: list[dict[str, Any]] = []
+    for code, pairs in rich.items():
+        for d, r in pairs:
+            row = dict(r)
+            row.setdefault("Code", code)
+            row.setdefault("Date", d)
+            rows.append(row)
+    return rows
 
 
 def load_repo_rows_from_sqlite(
@@ -282,22 +421,40 @@ def resolve_bars_path(
     period_id: str,
     *,
     mirror_dir: str | Path = DEFAULT_BARS_MIRROR_DIR,
+    prefer_full: bool = True,
 ) -> Path | None:
-    """Map period_id like y2015_q4 → local ndjson mirror path if present."""
+    """Map period_id like y2015_q4 / y2015_full → local ndjson mirror path.
+
+    W80: prefer full-year W64 mirrors when ``prefer_full`` and period is full
+    or period_id contains ``full``.
+    """
     d = Path(mirror_dir)
     year = _period_year(period_id)
     if year is None:
         return None
-    candidates = [
-        d / f"equities_bars_daily_y{year}_q4.ndjson",
-        d / f"equities_bars_daily_y{year}_full.ndjson",
-        # W64 full mirrors live under cost_full
-        _REPO_ROOT
-        / ".glm-logs"
-        / "w0815be_w64_cost_full"
-        / "r2_mirror"
-        / f"equities_bars_daily_y{year}_full.ndjson",
-    ]
+    pid = str(period_id).lower()
+    want_full = prefer_full and ("full" in pid or not pid.endswith("q4"))
+    full_path = (
+        DEFAULT_BARS_FULL_MIRROR_DIR / f"equities_bars_daily_y{year}_full.ndjson"
+    )
+    q4_path = d / f"equities_bars_daily_y{year}_q4.ndjson"
+    candidates: list[Path] = []
+    if want_full:
+        candidates.extend(
+            [
+                full_path,
+                d / f"equities_bars_daily_y{year}_full.ndjson",
+                q4_path,
+            ]
+        )
+    else:
+        candidates.extend(
+            [
+                q4_path,
+                full_path,
+                d / f"equities_bars_daily_y{year}_full.ndjson",
+            ]
+        )
     for c in candidates:
         if c.exists():
             return c
@@ -583,6 +740,124 @@ def load_fins_events_from_sqlite(
         con.close()
 
 
+def load_fins_earnings_date_from_sqlite(
+    db_path: str | Path = DEFAULT_SQLITE,
+    *,
+    codes: Sequence[str] | None = None,
+    start: str | None = None,
+    end: str | None = None,
+) -> dict[str, list[dict[str, Any]]]:
+    """Load fins_earnings_date calendar → ``{code: [event_dict, ...]}``.
+
+    Event keys: disc_date (PubDate prefer, else SchDate), sch_date, pub_date,
+    source=fins_earnings_date. No invent; missing PubDate uses SchDate.
+    """
+    db = Path(db_path)
+    if not db.exists():
+        return {}
+    code_list = [str(c).strip() for c in (codes or []) if str(c).strip()]
+    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    try:
+        sql = (
+            "SELECT natural_key, event_time, payload FROM jquants_records "
+            "WHERE dataset = 'fins_earnings_date'"
+        )
+        params: list[Any] = []
+        if start:
+            sql += " AND event_time >= ?"
+            params.append(str(start)[:10])
+        if end:
+            sql += " AND event_time <= ?"
+            params.append(str(end)[:10] + "T23:59:59")
+        if code_list:
+            clauses = " OR ".join(["natural_key LIKE ?" for _ in code_list])
+            sql += f" AND ({clauses})"
+            params.extend([f'%"{c}"%' for c in code_list])
+        sql += " ORDER BY event_time ASC"
+        code_set = set(code_list) if code_list else None
+        by_code: dict[str, list[dict[str, Any]]] = {}
+        for _nk, event_time, payload in con.execute(sql, params):
+            try:
+                pl = json.loads(payload) if isinstance(payload, str) else payload
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if not isinstance(pl, Mapping):
+                continue
+            code = str(pl.get("Code") or "").strip()
+            if not code:
+                continue
+            if code_set is not None and code not in code_set:
+                continue
+            pub = str(pl.get("PubDate") or "")[:10] or None
+            sch = str(pl.get("SchDate") or "")[:10] or None
+            disc = pub or sch or str(event_time or "")[:10]
+            if not disc:
+                continue
+            by_code.setdefault(code, []).append(
+                {
+                    "disc_date": disc,
+                    "pub_date": pub,
+                    "sch_date": sch,
+                    "eps": None,
+                    "feps": None,
+                    "bps": None,
+                    "prior_eps": None,
+                    "source": "fins_earnings_date",
+                    "event_time": str(event_time) if event_time else None,
+                    "fq_name": pl.get("FQName"),
+                }
+            )
+        for code, events in by_code.items():
+            events.sort(key=lambda e: e["disc_date"])
+        return by_code
+    finally:
+        con.close()
+
+
+def merge_event_calendars(
+    fins_summary: Mapping[str, Sequence[Mapping[str, Any]]],
+    earnings_date: Mapping[str, Sequence[Mapping[str, Any]]] | None = None,
+) -> dict[str, list[dict[str, Any]]]:
+    """Thicken event calendar: fins_summary primary; earnings_date fills gaps.
+
+    Same (code, disc_date) prefers fins_summary (has EPS/FEPS for surprise).
+    Earnings-only dates enter with null surprise (skipped by scoring unless
+    later joined). Disclosed; no invent of surprise.
+    """
+    out: dict[str, list[dict[str, Any]]] = {}
+    codes = set(fins_summary.keys()) | set((earnings_date or {}).keys())
+    for code in codes:
+        by_date: dict[str, dict[str, Any]] = {}
+        for ev in earnings_date.get(code, []) if earnings_date else []:
+            d = str(ev.get("disc_date") or "")[:10]
+            if not d:
+                continue
+            by_date[d] = dict(ev)
+            by_date[d]["source"] = "fins_earnings_date"
+        for ev in fins_summary.get(code, []) or []:
+            d = str(ev.get("disc_date") or "")[:10]
+            if not d:
+                continue
+            base = by_date.get(d, {})
+            merged = dict(base)
+            merged.update(dict(ev))
+            merged["source"] = "fins_summary"
+            if base.get("source") == "fins_earnings_date":
+                merged["thickened_from_earnings_date"] = True
+            by_date[d] = merged
+        events = list(by_date.values())
+        events.sort(key=lambda e: e["disc_date"])
+        # re-attach prior_eps from fins_summary eps chain
+        last_eps = None
+        for ev in events:
+            if ev.get("prior_eps") is None:
+                ev["prior_eps"] = last_eps
+            if ev.get("eps") is not None:
+                last_eps = ev["eps"]
+        out[str(code)] = events
+    return out
+
+
 def load_fins_latest_asof_map(
     events_by_code: Mapping[str, Sequence[Mapping[str, Any]]],
 ) -> dict[str, list[tuple[str, dict[str, Any]]]]:
@@ -711,6 +986,19 @@ def evaluate_multi_day_hold_on_bars(
     # dailyized residual illustration (research only)
     net_daily = (gross - one_way_cost) if gross is not None else None
 
+    n_code_days = len(holding_records)
+    n_codes = len(bars_by_code)
+    all_dates = {r["date"] for r in holding_records}
+    n_trading_days = len(all_dates)
+    occ = occurrence_rate_multiday(
+        n_active=n_active,
+        n_code_days=n_code_days,
+        n_trading_days=n_trading_days,
+        n_codes=n_codes,
+        hold_days=h,
+        min_activation_rate=MIN_ACTIVATION_RATE_MULTIDAY,
+    )
+
     return {
         "signal_id": SIGNAL_ID_MULTI_DAY_HOLD,
         "hypothesis_class": CLASS_MULTI_DAY_HOLD,
@@ -724,19 +1012,21 @@ def evaluate_multi_day_hold_on_bars(
         "n_active_positions": n_active,
         "n_rebalance_events": n_rebalance,
         "n_signed_returns": len(signed_returns),
-        "n_codes": len(bars_by_code),
+        "n_codes": n_codes,
+        "n_code_days": n_code_days,
+        "n_trading_days": n_trading_days,
+        "occurrence": occ,
         "per_code_sample": per_code_stats[:10],
         "holding_records": holding_records,
         "non_null": n_active,
         "non_null_rate": (
-            float(n_active) / float(len(holding_records))
-            if holding_records
-            else None
+            float(n_active) / float(n_code_days) if n_code_days else None
         ),
         **_freeze(),
         "note": (
             f"Multi-day hold n={h}: sticky fixed_horizon; "
             "gross = mean(sign * R_hold); net = gross - one_way/hold_days. "
+            "Occurrence = activation rate (not count alone). "
             "Not READY / not Mass."
         ),
     }
@@ -839,6 +1129,16 @@ def evaluate_macro_conditioned_on_bars(
 
     gross = mean(signed_returns) if signed_returns else None
     net = (gross - float(one_way_cost)) if gross is not None else None
+    n_code_days = len(holding_records)
+    n_trading_days = len({r["date"] for r in holding_records})
+    occ = occurrence_rate_multiday(
+        n_active=n_active,
+        n_code_days=n_code_days,
+        n_trading_days=n_trading_days,
+        n_codes=len(bars_by_code),
+        hold_days=1,  # daily re-check path
+        min_activation_rate=MIN_ACTIVATION_RATE_MULTIDAY,
+    )
 
     return {
         "signal_id": SIGNAL_ID_MACRO_CONDITIONED,
@@ -855,12 +1155,13 @@ def evaluate_macro_conditioned_on_bars(
         "n_conditioned_null": n_conditioned_null,
         "regime_counts": regime_counts,
         "n_codes": len(bars_by_code),
+        "n_code_days": n_code_days,
+        "n_trading_days": n_trading_days,
+        "occurrence": occ,
         "holding_records": holding_records,
         "non_null": n_active,
         "non_null_rate": (
-            float(n_active) / float(len(holding_records))
-            if holding_records
-            else None
+            float(n_active) / float(n_code_days) if n_code_days else None
         ),
         "repo_dataset": REPO_DATASET_ID,
         **_freeze(),
@@ -952,6 +1253,17 @@ def evaluate_cross_section_on_bars(
 
     gross = mean(signed_returns) if signed_returns else None
     net = (gross - float(am_cost)) if gross is not None else None
+    n_codes = len(bars_by_code)
+    n_trading_days = len(dates)
+    n_code_days = n_trading_days * n_codes if n_trading_days and n_codes else 0
+    occ = occurrence_rate_multiday(
+        n_active=n_active,
+        n_code_days=n_code_days,
+        n_trading_days=n_trading_days,
+        n_codes=n_codes,
+        hold_days=h if h > 1 else 1,
+        min_activation_rate=MIN_ACTIVATION_RATE_MULTIDAY,
+    )
     return {
         "signal_id": SIGNAL_ID_CROSS_SECTION,
         "hypothesis_class": "cross_section_relative",
@@ -963,6 +1275,10 @@ def evaluate_cross_section_on_bars(
         "amortized_one_way_cost": float(am_cost),
         "n_active_positions": n_active,
         "n_signed_returns": len(signed_returns),
+        "n_codes": n_codes,
+        "n_trading_days": n_trading_days,
+        "n_code_days": n_code_days,
+        "occurrence": occ,
         **_freeze(),
         "note": (
             f"Cross-section rank L-S hold_days={h}. Not READY / not Mass."
@@ -1055,6 +1371,27 @@ def evaluate_event_post_on_bars(
 
     gross = mean(signed_returns) if signed_returns else None
     net = (gross - am_cost) if gross is not None else None
+    n_codes = len(bars_by_code)
+    all_bar_dates: set[str] = set()
+    for pairs in bars_by_code.values():
+        for d, _ in pairs:
+            all_bar_dates.add(str(d)[:10])
+    if period_start:
+        all_bar_dates = {d for d in all_bar_dates if d >= str(period_start)[:10]}
+    if period_end:
+        all_bar_dates = {d for d in all_bar_dates if d <= str(period_end)[:10]}
+    n_trading_days = len(all_bar_dates)
+    n_code_days = n_trading_days * n_codes if n_trading_days and n_codes else 0
+    occ = occurrence_rate_event_post(
+        n_events=n_events,
+        n_scored=n_scored,
+        n_trading_days=n_trading_days,
+        n_codes=n_codes,
+        n_code_days=n_code_days,
+        trading_days_per_year=DEFAULT_TRADING_DAYS_PER_YEAR,
+        min_events_per_code_year=MIN_EVENTS_PER_CODE_YEAR,
+        min_events_per_trading_day=MIN_EVENTS_PER_TRADING_DAY,
+    )
     return {
         "signal_id": SIGNAL_ID_EVENT_POST,
         "hypothesis_class": CLASS_EVENT_POST,
@@ -1068,7 +1405,10 @@ def evaluate_event_post_on_bars(
         "n_events": n_events,
         "n_no_surprise": n_no_surprise,
         "n_no_bar_match": n_no_bar_match,
-        "n_codes": len(bars_by_code),
+        "n_codes": n_codes,
+        "n_trading_days": n_trading_days,
+        "n_code_days": n_code_days,
+        "occurrence": occ,
         "holding_records": holding_records,
         "non_null": n_scored,
         "non_null_rate": (
@@ -1076,7 +1416,9 @@ def evaluate_event_post_on_bars(
         ),
         **_freeze(),
         "note": (
-            f"Event-post hold={h}d on fins DiscDate surprise proxy. "
+            f"Event-post hold={h}d on fins DiscDate surprise proxy "
+            "(+ fins_earnings_date thicken when merged). "
+            "Occurrence = rate (events/day or per code-year), not count alone. "
             "Gaps → skip (no invent). Not READY / not Mass."
         ),
     }
@@ -1184,6 +1526,17 @@ def evaluate_flow_demand_on_bars(
 
     gross = mean(signed_returns) if signed_returns else None
     net = (gross - am_cost) if gross is not None else None
+    n_code_days = len(holding_records)
+    n_trading_days = len({r["date"] for r in holding_records})
+    n_codes = len(bars_by_code)
+    occ = occurrence_rate_multiday(
+        n_active=n_active,
+        n_code_days=n_code_days,
+        n_trading_days=n_trading_days,
+        n_codes=n_codes,
+        hold_days=h,
+        min_activation_rate=MIN_ACTIVATION_RATE_MULTIDAY,
+    )
     return {
         "signal_id": SIGNAL_ID_FLOW_DEMAND,
         "hypothesis_class": CLASS_FLOW_DEMAND,
@@ -1196,7 +1549,10 @@ def evaluate_flow_demand_on_bars(
         "n_active_positions": n_active,
         "n_signed_returns": len(signed_returns),
         "n_margin_obs": n_margin_obs,
-        "n_codes": len(bars_by_code),
+        "n_codes": n_codes,
+        "n_code_days": n_code_days,
+        "n_trading_days": n_trading_days,
+        "occurrence": occ,
         "n_codes_with_margin": sum(
             1 for c in bars_by_code if len(margin_by_code.get(c) or []) >= 2
         ),
@@ -1298,6 +1654,18 @@ def evaluate_fundamentals_price_on_bars(
 
     gross = mean(signed_returns) if signed_returns else None
     net = (gross - am_cost) if gross is not None else None
+    n_code_days = len(holding_records)
+    n_trading_days = len({r["date"] for r in holding_records})
+    n_codes = len(bars_by_code)
+    occ = occurrence_rate_multiday(
+        n_active=n_active,
+        n_code_days=n_code_days,
+        n_trading_days=n_trading_days,
+        n_codes=n_codes,
+        hold_days=h,
+        # value×momentum agree is sparse by design; floor lower than sticky mom
+        min_activation_rate=min(MIN_ACTIVATION_RATE_MULTIDAY, 0.01),
+    )
     return {
         "signal_id": SIGNAL_ID_FUNDAMENTALS_PRICE,
         "hypothesis_class": CLASS_FUNDAMENTALS_PRICE,
@@ -1312,7 +1680,10 @@ def evaluate_fundamentals_price_on_bars(
         "n_active_positions": n_active,
         "n_signed_returns": len(signed_returns),
         "n_missing_fins_days": n_missing_fins,
-        "n_codes": len(bars_by_code),
+        "n_codes": n_codes,
+        "n_code_days": n_code_days,
+        "n_trading_days": n_trading_days,
+        "occurrence": occ,
         "holding_records": holding_records,
         "non_null": n_active,
         **_freeze(),
@@ -1346,16 +1717,27 @@ def run_class_hyp_multi_year_eval(
     event_hold_days: int = DEFAULT_EVENT_POST_HOLD_DAYS,
     flow_hold_days: int = DEFAULT_FLOW_HOLD_DAYS,
     fund_hold_days: int = DEFAULT_FUND_HOLD_DAYS,
-    max_days: int = 80,
+    max_days: int | None = None,
     min_periods_gate: int = 2,
     min_active_per_period: int = 20,
     min_economic_net: float = MIN_ECONOMIC_NET,
+    min_activation_rate_multiday: float = MIN_ACTIVATION_RATE_MULTIDAY,
+    min_events_per_code_year: float = MIN_EVENTS_PER_CODE_YEAR,
+    min_events_per_trading_day: float = MIN_EVENTS_PER_TRADING_DAY,
+    min_years_research_candidate: int = MIN_YEARS_RESEARCH_CANDIDATE,
+    max_year_pos_net_share: float = MAX_YEAR_POS_NET_SHARE,
     apply_robustness_gate: bool = True,
+    prefer_liquidity_linked: bool = True,
+    thicken_event_with_earnings_date: bool = True,
+    checklist_complete: bool = True,
 ) -> dict[str, Any]:
-    """Multi-year offline eval for all enabled class hyps (W79).
+    """Multi-year offline eval for all enabled class hyps (W80).
 
-    Uses local W63/W64 bar/margin mirrors and local SQLite
-    (jsda_repo_rates, fins_summary, short_ratio).
+    Uses local W63 Q4 + W64 full bar/margin mirrors and local SQLite
+    (jsda_repo_rates, fins_summary, fins_earnings_date, short_ratio).
+
+    Production ``research_candidate=True`` only when gate + economic net +
+    occurrence rate + multi-year skew + risk all pass (still not READY/Mass).
     """
     period_list = [dict(p) for p in (periods or DEFAULT_PERIODS)]
     selected = (
@@ -1393,7 +1775,7 @@ def run_class_hyp_multi_year_eval(
     # Fins lookback buffer for prior EPS / as-of PIT
     fins_global_start = "2014-01-01"
     fins_global_end = "2026-12-31"
-    fins_events = (
+    fins_summary_events = (
         load_fins_events_from_sqlite(
             sqlite_path,
             codes=selected,
@@ -1403,17 +1785,43 @@ def run_class_hyp_multi_year_eval(
         if (include_event_post or include_fundamentals_price)
         else {}
     )
+    earn_date_events: dict[str, list[dict[str, Any]]] = {}
+    if thicken_event_with_earnings_date and (
+        include_event_post or include_fundamentals_price
+    ):
+        earn_date_events = load_fins_earnings_date_from_sqlite(
+            sqlite_path,
+            codes=selected,
+            start=fins_global_start,
+            end=fins_global_end,
+        )
+    if thicken_event_with_earnings_date and earn_date_events:
+        fins_events = merge_event_calendars(fins_summary_events, earn_date_events)
+        event_source = "fins_summary+fins_earnings_date"
+    else:
+        fins_events = fins_summary_events
+        event_source = "fins_summary"
     fins_load_note = {
-        "source": "local_sqlite_jquants_records_fins_summary",
+        "source": "local_sqlite_jquants_records_" + event_source.replace("+", "_"),
         "path": str(sqlite_path),
         "n_codes": len(fins_events),
         "n_events": sum(len(v) for v in fins_events.values()),
+        "n_events_fins_summary": sum(len(v) for v in fins_summary_events.values()),
+        "n_events_fins_earnings_date": sum(
+            len(v) for v in earn_date_events.values()
+        ),
+        "thickened_with_earnings_date": bool(
+            thicken_event_with_earnings_date and earn_date_events
+        ),
+        "event_source": event_source,
         "pit_disclosure": (
             "fins_summary keyed by DiscDate / event_time for offline research. "
-            "available_at may be event-time or bulk; research uses DiscDate as "
-            "visibility key. Disclosed; no invent fill."
+            "fins_earnings_date thickens calendar via PubDate|SchDate when "
+            "available; surprise still requires fins_summary EPS/FEPS "
+            "(no invent). available_at may be event-time or bulk; research "
+            "uses DiscDate/PubDate as visibility key. Disclosed."
         ),
-        "dataset": "fins_summary",
+        "dataset": event_source,
     }
 
     short_series_full = (
@@ -1470,11 +1878,58 @@ def run_class_hyp_multi_year_eval(
             continue
 
         try:
-            bars = load_bars_ndjson(
-                bars_path, codes=selected, max_days=max_days
+            # Full-year windows need more than 80 days; Q4 can stay capped.
+            window_kind = str(p.get("window_kind") or "")
+            if max_days is not None:
+                period_max_days = int(max_days)
+            elif "full" in str(pid).lower() or window_kind.startswith("full"):
+                period_max_days = 260
+            else:
+                period_max_days = 80
+
+            rich = load_bars_ndjson_rich(
+                bars_path,
+                codes=selected,
+                max_days=period_max_days,
+                period_start=p_start,
+                period_end=p_end,
             )
+            bars = bars_rich_to_close_panel(rich)
             if not bars:
                 raise RuntimeError("no bars after code filter")
+
+            # Liquidity-linked one-way cost (prefer when ADV available)
+            liq_rows = collect_liquidity_bar_rows(rich)
+            liq_proxy = compute_liquidity_proxy_from_bars(
+                liq_rows, source_label=f"bars:{pid}"
+            )
+            liq_bucket = liquidity_bucket_from_proxy(liq_proxy)
+            liq_mults = liquidity_cost_multipliers(
+                str(liq_bucket.get("bucket") or "missing")
+            )
+            tx_mult = (
+                float(liq_mults.get("tx_mult") or 1.0)
+                if prefer_liquidity_linked
+                else 1.0
+            )
+            if not prefer_liquidity_linked:
+                tx_mult = 1.0
+            # missing bucket → mult 1.0 unmodulated (no invent)
+            if liq_bucket.get("is_gap") or str(liq_bucket.get("bucket")) == "missing":
+                if prefer_liquidity_linked:
+                    tx_mult = float(liq_mults.get("tx_mult") or 1.0)
+            one_way_eff = apply_liquidity_to_one_way_cost(
+                one_way_cost, tx_mult=tx_mult
+            )
+            liq_extra = {
+                "liquidity_bucket": liq_bucket.get("bucket"),
+                "liquidity_adv_jpy": liq_proxy.get("adv_jpy"),
+                "liquidity_tx_mult": tx_mult,
+                "one_way_cost_base": float(one_way_cost),
+                "one_way_cost_eff": float(one_way_eff),
+                "prefer_liquidity_linked": bool(prefer_liquidity_linked),
+                "liquidity_is_gap": bool(liq_bucket.get("is_gap")),
+            }
 
             def _period_row(
                 eval_out: Mapping[str, Any],
@@ -1489,6 +1944,7 @@ def run_class_hyp_multi_year_eval(
                     "period_start": p_start,
                     "period_end": p_end,
                     "bars_path": str(bars_path),
+                    "window_kind": window_kind or None,
                     "n_codes": eval_out.get("n_codes"),
                     "gross_signed_mean_active": eval_out.get(
                         "gross_signed_mean_active"
@@ -1500,15 +1956,19 @@ def run_class_hyp_multi_year_eval(
                     "non_null": eval_out.get("non_null")
                     or eval_out.get("n_active_positions"),
                     "non_null_rate": eval_out.get("non_null_rate"),
+                    "n_trading_days": eval_out.get("n_trading_days"),
+                    "n_code_days": eval_out.get("n_code_days"),
+                    "occurrence": eval_out.get("occurrence"),
                     "signal_id": signal_id,
                     "holding_records": eval_out.get("holding_records"),
+                    **liq_extra,
                 }
                 if extra:
                     row.update(dict(extra))
                 return row
 
             md = evaluate_multi_day_hold_on_bars(
-                bars, hold_days=h, one_way_cost=one_way_cost
+                bars, hold_days=h, one_way_cost=one_way_eff
             )
             results_md.append(
                 _period_row(
@@ -1525,7 +1985,7 @@ def run_class_hyp_multi_year_eval(
 
             if include_multi_day_hold_10 and h != 10:
                 md10 = evaluate_multi_day_hold_on_bars(
-                    bars, hold_days=10, one_way_cost=one_way_cost
+                    bars, hold_days=10, one_way_cost=one_way_eff
                 )
                 results_md10.append(
                     _period_row(
@@ -1547,7 +2007,7 @@ def run_class_hyp_multi_year_eval(
                 momentum_n=h,
                 hold_days=h,
                 mode=macro_mode,
-                one_way_cost=one_way_cost,
+                one_way_cost=one_way_eff,
             )
             results_macro.append(
                 _period_row(
@@ -1565,7 +2025,7 @@ def run_class_hyp_multi_year_eval(
                 xs = evaluate_cross_section_on_bars(
                     bars,
                     momentum_n=h,
-                    one_way_cost=one_way_cost,
+                    one_way_cost=one_way_eff,
                     hold_days=int(cross_section_hold_days),
                 )
                 results_xs.append(
@@ -1586,7 +2046,7 @@ def run_class_hyp_multi_year_eval(
                     bars,
                     fins_events,
                     post_hold_days=int(event_hold_days),
-                    one_way_cost=one_way_cost,
+                    one_way_cost=one_way_eff,
                     period_start=p_start,
                     period_end=p_end,
                 )
@@ -1630,7 +2090,7 @@ def run_class_hyp_multi_year_eval(
                     margin,
                     short_slice,
                     hold_days=int(flow_hold_days),
-                    one_way_cost=one_way_cost,
+                    one_way_cost=one_way_eff,
                     require_short_confirm=False,
                 )
                 results_flow.append(
@@ -1657,7 +2117,7 @@ def run_class_hyp_multi_year_eval(
                     fins_events,
                     hold_days=int(fund_hold_days),
                     momentum_n=DEFAULT_FUND_MOMENTUM_N,
-                    one_way_cost=one_way_cost,
+                    one_way_cost=one_way_eff,
                     mode="value_momentum_agree",
                 )
                 results_fund.append(
@@ -1766,6 +2226,11 @@ def run_class_hyp_multi_year_eval(
 
     cost_md = default_long_only_unlevered_cost_assumption(
         one_way_cost=one_way_cost
+    )
+    cost_md["prefer_liquidity_linked"] = bool(prefer_liquidity_linked)
+    cost_md["liquidity_note"] = (
+        "Per-period one_way_eff = one_way_base * tx_mult[bucket] from "
+        "equities_bars ADV. Missing ADV → mult=1.0 gap disclosed (no invent)."
     )
     cost_macro = build_leverage_short_cost_assumption(
         position_style="long_short",
@@ -1922,50 +2387,157 @@ def run_class_hyp_multi_year_eval(
             require_positive_majority=True,
         )
 
+    def _aggregate_occurrence_multiday(
+        rows: list[dict[str, Any]], *, hold_days: int
+    ) -> dict[str, Any]:
+        ok = [r for r in rows if r.get("status") == "ok"]
+        n_active = sum(int(r.get("n_active_positions") or 0) for r in ok)
+        n_cd = sum(int(r.get("n_code_days") or 0) for r in ok)
+        n_td = sum(int(r.get("n_trading_days") or 0) for r in ok)
+        n_codes = 0
+        for r in ok:
+            n_codes = max(n_codes, int(r.get("n_codes") or 0))
+        occ = occurrence_rate_multiday(
+            n_active=n_active,
+            n_code_days=n_cd,
+            n_trading_days=n_td,
+            n_codes=n_codes,
+            hold_days=hold_days,
+            min_activation_rate=float(min_activation_rate_multiday),
+        )
+        occ["per_period"] = [
+            {
+                "period_id": r.get("period_id"),
+                "occurrence": r.get("occurrence"),
+                "n_active": r.get("n_active_positions"),
+                "n_code_days": r.get("n_code_days"),
+                "n_trading_days": r.get("n_trading_days"),
+            }
+            for r in ok
+        ]
+        return occ
+
+    def _aggregate_occurrence_event(
+        rows: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        ok = [r for r in rows if r.get("status") == "ok"]
+        n_events = sum(int(r.get("n_events") or 0) for r in ok)
+        n_scored = sum(int(r.get("n_active_positions") or 0) for r in ok)
+        n_td = sum(int(r.get("n_trading_days") or 0) for r in ok)
+        n_cd = sum(int(r.get("n_code_days") or 0) for r in ok)
+        n_codes = 0
+        for r in ok:
+            n_codes = max(n_codes, int(r.get("n_codes") or 0))
+        occ = occurrence_rate_event_post(
+            n_events=n_events,
+            n_scored=n_scored,
+            n_trading_days=n_td,
+            n_codes=n_codes,
+            n_code_days=n_cd,
+            trading_days_per_year=DEFAULT_TRADING_DAYS_PER_YEAR,
+            min_events_per_code_year=float(min_events_per_code_year),
+            min_events_per_trading_day=float(min_events_per_trading_day),
+        )
+        occ["per_period"] = [
+            {
+                "period_id": r.get("period_id"),
+                "occurrence": r.get("occurrence"),
+                "n_events": r.get("n_events"),
+                "n_scored": r.get("n_active_positions"),
+                "n_trading_days": r.get("n_trading_days"),
+            }
+            for r in ok
+        ]
+        return occ
+
+    def _skew_from_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
+        nets: dict[str, float | None] = {}
+        for r in rows:
+            if r.get("status") != "ok":
+                continue
+            pid_r = str(r.get("period_id") or r.get("year") or "p")
+            nets[pid_r] = r.get("net_one_way_mean_active")
+        return multi_year_skew_check(
+            nets, max_pos_share=float(max_year_pos_net_share)
+        )
+
     def _candidate_verdict(
         gate: dict[str, Any] | None,
         risk: dict[str, Any] | None,
         rows: list[dict[str, Any]],
         *,
         n_ok: int,
+        occurrence: Mapping[str, Any] | None = None,
+        hyp_kind: str = "generic",
+        hold_days_for_occ: int = 5,
     ) -> dict[str, Any]:
-        """Candidate bar: gate + risk + **economic net meaningful** (W79).
+        """W80 production bar: gate + risk + econ + occurrence + multi-year skew.
 
         Weak consistent-negative → not_candidate even if gate passes.
-        research_candidate always False (no auto-promote).
+        research_candidate=True only when all production criteria pass
+        (still not READY / Mass / operational GO).
         """
         gate_pass = bool(gate and gate.get("passed"))
         risk_ok = bool(risk and risk.get("research_candidate_allowed"))
         econ = _econ_from_rows(rows)
         econ_ok = bool(econ.get("meaningful"))
-        # discussion_only if gate+risk ok but econ fails (weak negative etc.)
-        structural_ok = bool(gate_pass and risk_ok and n_ok >= min_periods_gate)
-        allowed = bool(structural_ok and econ_ok)
-        if allowed:
-            verdict = "discussion_only_not_auto_promoted"
-        elif structural_ok and not econ_ok:
-            verdict = "not_candidate_economic_net_not_meaningful"
-        else:
-            verdict = "not_candidate"
+        if occurrence is None:
+            if hyp_kind == "event_post":
+                occurrence = _aggregate_occurrence_event(rows)
+            elif hyp_kind in {"multi_day_hold", "multi_day_hold_10"}:
+                occurrence = _aggregate_occurrence_multiday(
+                    rows, hold_days=hold_days_for_occ
+                )
+            else:
+                # generic: treat n_active/code_days if present
+                occurrence = _aggregate_occurrence_multiday(
+                    rows, hold_days=hold_days_for_occ
+                )
+        occ_ok = bool((occurrence or {}).get("sufficient"))
+        skew = _skew_from_rows(rows)
+        skew_ok = bool(skew.get("ok"))
+        multi_year_ok = bool(n_ok >= int(min_years_research_candidate))
+
+        bar = production_candidate_bar(
+            checklist_complete=bool(checklist_complete),
+            gate_passed=gate_pass,
+            risk_ok=risk_ok,
+            economic_net_ok=econ_ok,
+            occurrence_ok=occ_ok,
+            multi_year_ok=multi_year_ok,
+            skew_ok=skew_ok,
+            n_ok_periods=n_ok,
+            min_years=int(min_years_research_candidate),
+            economic_net=econ,
+            occurrence=occurrence,
+            skew=skew,
+        )
         return {
-            "research_candidate": False,
-            "research_candidate_allowed": allowed,
+            "research_candidate": bool(bar.get("research_candidate")),
+            "research_candidate_allowed": bool(
+                bar.get("research_candidate_allowed")
+            ),
+            "candidate_yes_no": bar.get("candidate_yes_no"),
             "gate_passed": gate_pass,
             "risk_scenarios_ok": risk_ok,
             "economic_net": econ,
             "economic_net_ok": econ_ok,
+            "occurrence": dict(occurrence or {}),
+            "occurrence_ok": occ_ok,
+            "skew": skew,
+            "skew_ok": skew_ok,
+            "production_criteria": bar.get("production_criteria"),
             "n_ok_periods": n_ok,
-            "verdict": verdict,
+            "verdict": bar.get("verdict"),
             "ready_declared": False,
             "mass_research": MASS_RESEARCH,
+            "phase7": PHASE7,
+            "operational_go": False,
+            "connected_to_ready": False,
+            "connected_to_mass": False,
             "min_economic_net": float(min_economic_net),
-            "note": (
-                "Candidate bar = checklist/gate + risk not catastrophic + "
-                "economically meaningful positive net majority. "
-                "Weak consistent-negative is not_candidate. "
-                "research_candidate always False (no auto-promote). "
-                "Pass ≠ READY/Mass."
-            ),
+            "min_years_research_candidate": int(min_years_research_candidate),
+            "note": bar.get("note"),
         }
 
     def _n_ok(rows: list[dict[str, Any]]) -> int:
@@ -1996,8 +2568,18 @@ def run_class_hyp_multi_year_eval(
         cost: dict[str, Any] | None = None,
         holding: dict[str, Any] | None = None,
         extra: Mapping[str, Any] | None = None,
+        hyp_kind: str = "generic",
+        hold_days_for_occ: int = 5,
     ) -> dict[str, Any]:
         n_ok = _n_ok(rows)
+        cand = _candidate_verdict(
+            gate,
+            risk,
+            rows,
+            n_ok=n_ok,
+            hyp_kind=hyp_kind,
+            hold_days_for_occ=hold_days_for_occ,
+        )
         block: dict[str, Any] = {
             "signal_id": signal_id,
             "hypothesis_class": hyp_class,
@@ -2008,7 +2590,8 @@ def run_class_hyp_multi_year_eval(
             "robustness_gate": gate,
             "cost_assumption": cost,
             "risk_scenarios": risk,
-            "candidate": _candidate_verdict(gate, risk, rows, n_ok=n_ok),
+            "candidate": cand,
+            "occurrence": cand.get("occurrence"),
         }
         if holding is not None:
             block["holding"] = holding
@@ -2032,7 +2615,13 @@ def run_class_hyp_multi_year_eval(
         "codes": selected,
         "one_way_cost": float(one_way_cost),
         "one_way_cost_bp": float(one_way_cost) * 10_000.0,
+        "prefer_liquidity_linked": bool(prefer_liquidity_linked),
         "min_economic_net": float(min_economic_net),
+        "min_activation_rate_multiday": float(min_activation_rate_multiday),
+        "min_events_per_code_year": float(min_events_per_code_year),
+        "min_events_per_trading_day": float(min_events_per_trading_day),
+        "min_years_research_candidate": int(min_years_research_candidate),
+        "max_year_pos_net_share": float(max_year_pos_net_share),
         "repo_load": repo_load_note,
         "fins_load": fins_load_note,
         "short_load": short_load_note,
@@ -2044,6 +2633,8 @@ def run_class_hyp_multi_year_eval(
             risk=risk_md,
             cost=cost_md,
             holding=holding_md,
+            hyp_kind="multi_day_hold",
+            hold_days_for_occ=h,
             extra={
                 "cost_amortization": cost_amortization_report(
                     one_way_cost=one_way_cost
@@ -2057,23 +2648,27 @@ def run_class_hyp_multi_year_eval(
             gate=gate_macro,
             risk=risk_macro,
             cost=cost_macro,
+            hyp_kind="generic",
+            hold_days_for_occ=h,
         ),
         "n_years_requested": len(period_list),
         "n_years_ok_multi_day_hold": n_ok_md,
         "n_years_ok_macro_conditioned": n_ok_macro,
         "history_source": (
-            "local_r2_mirror_ndjson + local_sqlite "
-            "(jsda_repo_rates · fins_summary · margin · short_ratio)"
+            "local_r2_mirror_ndjson (W63 q4 + W64 full) + local_sqlite "
+            "(jsda_repo_rates · fins_summary · fins_earnings_date · "
+            "margin · short_ratio)"
         ),
-        "label": "研究用・複数年クラス仮説評価・未宣言",
+        "label": "研究用・複数年クラス仮説評価・W80生産候補バー・未宣言",
         **_freeze(),
         "note": (
-            "W79 class hyp multi-year offline eval. multi_day_hold + "
-            "event_post + macro_conditioned + flow_demand + "
-            "fundamentals_price (+ cross_section improve). "
-            "Candidate only if economic net meaningful (positive majority "
-            "and mean net >= min_economic_net). Weak consistent-negative "
-            "→ not_candidate. research_candidate never auto-promoted. "
+            "W80 class hyp multi-year offline eval with occurrence rates + "
+            "liquidity-linked costs + extended full-year windows. "
+            "research_candidate=True only if checklist v2 + gate + risk + "
+            "economic net meaningful + occurrence rate sufficient + "
+            "multi-year (≥min_years) without extreme skew. "
+            "Weak consistent-negative → not_candidate. "
+            "READY/Mass/operational GO never auto-connect. "
             "Not READY / Mass NO-GO / Phase7 OFF."
         ),
     }
@@ -2088,6 +2683,8 @@ def run_class_hyp_multi_year_eval(
             if results_md10
             else None,
             cost=cost_md,
+            hyp_kind="multi_day_hold_10",
+            hold_days_for_occ=10,
             extra={"variant": "hold_10", "n_ok": n_ok_md10},
         )
     if include_cross_section:
@@ -2098,6 +2695,8 @@ def run_class_hyp_multi_year_eval(
             gate=gate_xs,
             risk=risk_xs,
             cost=cost_ls,
+            hyp_kind="generic",
+            hold_days_for_occ=int(cross_section_hold_days),
             extra={"hold_days": int(cross_section_hold_days)},
         )
     if include_event_post:
@@ -2108,6 +2707,8 @@ def run_class_hyp_multi_year_eval(
             gate=gate_event,
             risk=risk_event,
             cost=cost_md,
+            hyp_kind="event_post",
+            hold_days_for_occ=int(event_hold_days),
             extra={"post_hold_days": int(event_hold_days), "n_ok": n_ok_event},
         )
     if include_flow_demand:
@@ -2118,6 +2719,8 @@ def run_class_hyp_multi_year_eval(
             gate=gate_flow,
             risk=risk_flow,
             cost=cost_ls,
+            hyp_kind="generic",
+            hold_days_for_occ=int(flow_hold_days),
             extra={"hold_days": int(flow_hold_days), "n_ok": n_ok_flow},
         )
     if include_fundamentals_price:
@@ -2128,11 +2731,14 @@ def run_class_hyp_multi_year_eval(
             gate=gate_fund,
             risk=risk_fund,
             cost=cost_ls,
+            hyp_kind="generic",
+            hold_days_for_occ=int(fund_hold_days),
             extra={"hold_days": int(fund_hold_days), "n_ok": n_ok_fund},
         )
 
-    # Summary yes/no per class
+    # Summary yes/no per class (honest; may be yes if research_candidate)
     summary: dict[str, Any] = {}
+    any_research_candidate = False
     for key in (
         "multi_day_hold",
         "multi_day_hold_10",
@@ -2146,32 +2752,50 @@ def run_class_hyp_multi_year_eval(
         if not isinstance(block, Mapping):
             continue
         cand = block.get("candidate") or {}
+        rc = bool(cand.get("research_candidate"))
+        if rc:
+            any_research_candidate = True
         summary[key] = {
             "signal_id": block.get("signal_id"),
             "gate_passed": cand.get("gate_passed"),
             "economic_net_ok": cand.get("economic_net_ok"),
+            "occurrence_ok": cand.get("occurrence_ok"),
+            "skew_ok": cand.get("skew_ok"),
             "research_candidate_allowed": cand.get(
                 "research_candidate_allowed"
             ),
-            "research_candidate": False,
+            "research_candidate": rc,
             "verdict": cand.get("verdict"),
-            "candidate_yes_no": "no",  # never yes without economic+gate+risk
+            "candidate_yes_no": cand.get("candidate_yes_no") or "no",
+            "mean_net": (cand.get("economic_net") or {}).get("mean_net"),
+            "n_ok_periods": cand.get("n_ok_periods"),
         }
-        if cand.get("research_candidate_allowed"):
-            # Still not production candidate; discussion only
-            summary[key]["candidate_yes_no"] = "no_discussion_only"
     out["candidate_summary"] = summary
+    out["any_research_candidate"] = any_research_candidate
+    out["ready_declared"] = False
+    out["mass_research"] = MASS_RESEARCH
+    out["phase7"] = PHASE7
+    out["operational_go"] = False
     return out
 
 
 __all__ = [
     "CLASS_HYP_EVAL_VERSION",
     "CLASS_HYP_EVAL_WAVE",
+    "DEFAULT_BARS_FULL_MIRROR_DIR",
     "DEFAULT_BARS_MIRROR_DIR",
     "DEFAULT_EVAL_CODES",
     "DEFAULT_PERIODS",
+    "DEFAULT_PERIODS_Q4",
     "DEFAULT_SQLITE",
+    "MAX_YEAR_POS_NET_SHARE",
+    "MIN_ACTIVATION_RATE_MULTIDAY",
     "MIN_ECONOMIC_NET",
+    "MIN_EVENTS_PER_CODE_YEAR",
+    "MIN_EVENTS_PER_TRADING_DAY",
+    "MIN_YEARS_RESEARCH_CANDIDATE",
+    "bars_rich_to_close_panel",
+    "collect_liquidity_bar_rows",
     "evaluate_cross_section_on_bars",
     "evaluate_event_post_on_bars",
     "evaluate_flow_demand_on_bars",
@@ -2180,11 +2804,14 @@ __all__ = [
     "evaluate_multi_day_hold_on_bars",
     "fins_asof",
     "load_bars_ndjson",
+    "load_bars_ndjson_rich",
+    "load_fins_earnings_date_from_sqlite",
     "load_fins_events_from_sqlite",
     "load_margin_from_sqlite",
     "load_margin_ndjson",
     "load_repo_rows_from_sqlite",
     "load_short_ratio_series_from_sqlite",
+    "merge_event_calendars",
     "momentum_series",
     "resolve_bars_path",
     "resolve_margin_path",
