@@ -2,7 +2,7 @@
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
 **Live verified:** 2026-08-16 · **W75** milestone freeze after W74 research entry residual **COMPLETE** · freeze text · COMPLETE 22 health · FRESH · live verified ops COMPLETE **22** held · DEFER **4** remaining (bars_am · earn_cal · master · OTC) · segs **3482** · empty **0** · **OTC 93** · bars_am COMPLETE tip **1** / PARTIAL **31** · Mass/READY/Phase7 **NO-GO/OFF** · FRESH `projgen-6413b47e0e24467a9535655f976b8452` · S1–S5 **research_baseline_rejected** untouched · densify **none** · **no invent** · **no Mass/READY ON** · **no S1–S5 un-reject** · **no OTC bulk densify** · **no fins roll-back** · **no new daily signs** · COMPLETE expand = **tip-wait** · research entry **ready** · **waiting for human hypothesis class**
-**Repo tip:** `PLACEHOLDER_W75_CLOSE_SHA` — W75 milestone freeze residual close · COMPLETE **22** / DEFER **4** / segs **3482** / OTC **93** / READY **未宣言** · FRESH `projgen-6413b47e0e24467a9535655f976b8452`
+**Repo tip:** `7495140c993e875f9998e44a3dd1314a9e5d3659` — W75 milestone freeze residual close · COMPLETE **22** / DEFER **4** / segs **3482** / OTC **93** / READY **未宣言** · FRESH `projgen-6413b47e0e24467a9535655f976b8452`
 
 ## Research entry (W74 · ready · freeze layer W75)
 
