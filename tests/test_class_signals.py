@@ -174,6 +174,89 @@ def test_class_signal_definitions_not_daily_sign():
     assert doc["s1_s5_unreject"] is False
 
 
+def test_event_post_pit_entry_no_lookahead():
+    """W82: DiscTime after session close / missing → next bar; no invent times."""
+    from features.class_signals import (
+        event_post_available_at_from_fields,
+        event_post_entry_bar_index,
+        parse_disc_time_hhmmss,
+        session_close_hhmmss,
+    )
+
+    assert parse_disc_time_hhmmss("10:05") == "10:05:00"
+    assert parse_disc_time_hhmmss(None) is None
+    assert parse_disc_time_hhmmss("") is None
+    assert session_close_hhmmss("2023-08-31") == "15:00:00"
+    assert session_close_hhmmss("2024-11-05") == "15:30:00"
+
+    aa, meta = event_post_available_at_from_fields(
+        disc_date="2023-08-31", disc_time="10:05"
+    )
+    assert aa == "2023-08-31T10:05:00+09:00"
+    assert meta["time_known"] is True
+    aa_miss, meta_miss = event_post_available_at_from_fields(
+        disc_date="2023-08-31", disc_time=None
+    )
+    assert aa_miss is None
+    assert meta_miss["time_known"] is False
+    assert "no invent" in meta_miss["reason"].lower() or "unknown" in meta_miss["mode"]
+
+    # Weekday sequence with gap-free bars
+    dates = [
+        "2023-08-28",
+        "2023-08-29",
+        "2023-08-30",
+        "2023-08-31",
+        "2023-09-01",
+        "2023-09-04",
+    ]
+    date_to_idx = {d: i for i, d in enumerate(dates)}
+
+    # Pre-close disclosure → same-day entry OK
+    idx, ed, m = event_post_entry_bar_index(
+        date_to_idx, disc_date="2023-08-31", disc_time="10:05"
+    )
+    assert idx == date_to_idx["2023-08-31"]
+    assert ed == "2023-08-31"
+    assert m["look_ahead"] is False
+    assert m["pre_session_close"] is True
+
+    # At session close (15:00 pre-2024-11-05) → next session (no same-day close)
+    idx2, ed2, m2 = event_post_entry_bar_index(
+        date_to_idx, disc_date="2023-08-31", disc_time="15:00"
+    )
+    assert ed2 == "2023-09-01"
+    assert idx2 == date_to_idx["2023-09-01"]
+    assert m2["look_ahead"] is False
+    assert m2["pre_session_close"] is False
+
+    # After close → next session
+    idx3, ed3, m3 = event_post_entry_bar_index(
+        date_to_idx, disc_date="2023-08-31", disc_time="16:30"
+    )
+    assert ed3 == "2023-09-01"
+    assert m3["look_ahead"] is False
+
+    # Missing DiscTime → conservative next session (no invent 00:00/09:00)
+    idx4, ed4, m4 = event_post_entry_bar_index(
+        date_to_idx, disc_date="2023-08-31", disc_time=None
+    )
+    assert ed4 == "2023-09-01"
+    assert m4["time_known"] is False
+    assert m4["look_ahead"] is False
+
+    # Non-trading disc_date → first trading bar after calendar day
+    weekend = {
+        "2023-09-01": 0,
+        "2023-09-04": 1,
+    }
+    idx5, ed5, m5 = event_post_entry_bar_index(
+        weekend, disc_date="2023-09-02", disc_time="10:00"  # Saturday
+    )
+    assert ed5 == "2023-09-04"
+    assert m5["look_ahead"] is False
+
+
 def test_event_post_flow_fund_signals():
     surp, meta = earnings_surprise_proxy(eps=10.0, feps=12.0)
     assert surp == pytest.approx(2.0)

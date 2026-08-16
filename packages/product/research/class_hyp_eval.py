@@ -83,7 +83,9 @@ from features.class_signals import (
     occurrence_rate_event_post,
     occurrence_rate_multiday,
     production_candidate_bar,
+    event_post_entry_bar_index,
     sign_from_numeric,
+    EVENT_POST_ENTRY_MODE,
 )
 from research.stats_metrics import (
     period_stats_report,
@@ -124,7 +126,7 @@ from research.robustness_gate import evaluate_research_robustness_gate
 # Freeze / identity
 # ---------------------------------------------------------------------------
 
-CLASS_HYP_EVAL_VERSION: str = "class-hyp-eval/v4"
+CLASS_HYP_EVAL_VERSION: str = "class-hyp-eval/v5"
 CLASS_HYP_EVAL_WAVE: str = CLASS_SIGNALS_WAVE
 MASS_RESEARCH: str = "NO-GO"
 PHASE7: str = "OFF"
@@ -684,7 +686,8 @@ def load_fins_events_from_sqlite(
 ) -> dict[str, list[dict[str, Any]]]:
     """Load fins_summary disclosure events → ``{code: [event_dict, ...]}``.
 
-    Each event: disc_date, eps, feps, bps, prior_eps (filled after sort).
+    Each event: disc_date, disc_time, eps, feps, bps, prior_eps, event_time,
+    available_at (row envelope when selected). DiscTime never invented.
     """
     db = Path(db_path)
     if not db.exists():
@@ -692,8 +695,16 @@ def load_fins_events_from_sqlite(
     code_list = [str(c).strip() for c in (codes or []) if str(c).strip()]
     con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
     try:
+        # Prefer available_at when column present (PIT envelope).
+        cols = {
+            r[1]
+            for r in con.execute("PRAGMA table_info(jquants_records)").fetchall()
+        }
+        has_aa = "available_at" in cols
+        aa_sel = ", available_at" if has_aa else ""
         sql = (
-            "SELECT natural_key, event_time, payload FROM jquants_records "
+            "SELECT natural_key, event_time, payload"
+            f"{aa_sel} FROM jquants_records "
             "WHERE dataset = 'fins_summary'"
         )
         params: list[Any] = []
@@ -711,7 +722,12 @@ def load_fins_events_from_sqlite(
         sql += " ORDER BY event_time ASC"
         code_set = set(code_list) if code_list else None
         by_code: dict[str, list[dict[str, Any]]] = {}
-        for _nk, event_time, payload in con.execute(sql, params):
+        for row in con.execute(sql, params):
+            if has_aa:
+                _nk, event_time, payload, row_aa = row
+            else:
+                _nk, event_time, payload = row
+                row_aa = None
             try:
                 pl = json.loads(payload) if isinstance(payload, str) else payload
             except (TypeError, json.JSONDecodeError):
@@ -723,9 +739,12 @@ def load_fins_events_from_sqlite(
                 continue
             if code_set is not None and code not in code_set:
                 continue
-            disc = str(pl.get("DiscDate") or str(event_time or "")[:10])[:10]
+            disc = str(pl.get("DiscDate") or pl.get("DisclosedDate") or str(event_time or "")[:10])[:10]
             if not disc:
                 continue
+            disc_time = pl.get("DiscTime") or pl.get("DisclosedTime")
+            if disc_time is not None:
+                disc_time = str(disc_time).strip() or None
 
             def _f(key: str) -> float | None:
                 v = pl.get(key)
@@ -739,10 +758,13 @@ def load_fins_events_from_sqlite(
             by_code.setdefault(code, []).append(
                 {
                     "disc_date": disc,
+                    "disc_time": disc_time,
                     "eps": _f("EPS"),
                     "feps": _f("FEPS"),
                     "bps": _f("BPS"),
                     "event_time": str(event_time) if event_time else None,
+                    "available_at": str(row_aa) if row_aa else None,
+                    "source": "fins_summary",
                 }
             )
         # Attach prior_eps chronologically
@@ -1321,10 +1343,14 @@ def evaluate_event_post_on_bars(
     one_way_cost: float = DEFAULT_ONE_WAY_COST,
     period_start: str | None = None,
     period_end: str | None = None,
+    entry_mode: str = EVENT_POST_ENTRY_MODE,
 ) -> dict[str, Any]:
     """Evaluate event_post: post-disclosure multi-day hold on surprise sign.
 
-    Scores only on disclosure event days within period (event-defined entry).
+    Scores only on disclosure events within period. Entry is **PIT-safe**:
+    DiscDate+DiscTime SoT → first session close that does not look ahead
+    (after-close / missing DiscTime → next trading bar). Hold is close-to-close
+    over ``post_hold_days`` sessions from that entry.
     """
     h = int(post_hold_days)
     am_cost = amortized_one_way_cost(one_way_cost, h)
@@ -1333,13 +1359,15 @@ def evaluate_event_post_on_bars(
     n_scored = 0
     n_no_surprise = 0
     n_no_bar_match = 0
+    n_same_day_entry = 0
+    n_next_session_entry = 0
     holding_records: list[dict[str, Any]] = []
 
     for code, pairs in sorted(bars_by_code.items()):
         pairs_l = list(pairs)
         if len(pairs_l) < h + 1:
             continue
-        date_to_idx = {d: i for i, (d, _) in enumerate(pairs_l)}
+        date_to_idx = {str(d)[:10]: i for i, (d, _) in enumerate(pairs_l)}
         closes = [c for _, c in pairs_l]
         events = list(events_by_code.get(code) or [])
         for ev in events:
@@ -1356,35 +1384,60 @@ def evaluate_event_post_on_bars(
                 feps=ev.get("feps"),
                 prior_eps=ev.get("prior_eps"),
             )
-            # Match disc_date to bar date or next available bar
-            idx = date_to_idx.get(disc)
-            if idx is None:
-                later = [d for d in date_to_idx if d >= disc]
-                if not later:
-                    n_no_bar_match += 1
-                    continue
-                idx = date_to_idx[min(later)]
-                disc_matched = min(later)
+            # Prefer envelope available_at / event_time when present (dataset SoT)
+            disc_time = ev.get("disc_time")
+            event_time = ev.get("event_time") or ev.get("available_at")
+            idx, entry_date, entry_meta = event_post_entry_bar_index(
+                date_to_idx,
+                disc_date=disc,
+                disc_time=disc_time,
+                event_time=str(event_time) if event_time else None,
+                entry_mode=entry_mode,
+            )
+            if idx is None or entry_date is None:
+                n_no_bar_match += 1
+                holding_records.append(
+                    {
+                        "date": None,
+                        "code": code,
+                        "sign": None,
+                        "disc_date": disc,
+                        "disc_time": disc_time,
+                        "surprise": surprise,
+                        "entry_meta": entry_meta,
+                        "skip": "no_eligible_entry_bar",
+                    }
+                )
+                continue
+            if entry_date == disc:
+                n_same_day_entry += 1
             else:
-                disc_matched = disc
+                n_next_session_entry += 1
             rec = compute_event_post_signal(
                 surprise=surprise,
                 is_event_day=True,
                 is_trading_day=1.0,
                 post_hold_days=h,
                 code=code,
-                date=disc_matched,
+                date=entry_date,
                 disc_date=disc,
-                extra_meta={"surprise_meta": s_meta},
+                as_of=entry_meta.get("available_at"),
+                extra_meta={
+                    "surprise_meta": s_meta,
+                    "entry_meta": entry_meta,
+                },
             )
             val = rec.get("value")
             holding_records.append(
                 {
-                    "date": disc_matched,
+                    "date": entry_date,
                     "code": code,
                     "sign": val,
                     "disc_date": disc,
+                    "disc_time": disc_time,
                     "surprise": surprise,
+                    "entry_meta": entry_meta,
+                    "available_at": entry_meta.get("available_at"),
                 }
             )
             if val is None or val == 0.0:
@@ -1430,6 +1483,7 @@ def evaluate_event_post_on_bars(
         "signal_id": SIGNAL_ID_EVENT_POST,
         "hypothesis_class": CLASS_EVENT_POST,
         "post_hold_days": h,
+        "entry_mode": str(entry_mode),
         "gross_signed_mean_active": gross,
         "net_one_way_mean_active": net,
         "amortized_one_way_cost": am_cost,
@@ -1439,6 +1493,8 @@ def evaluate_event_post_on_bars(
         "n_events": n_events,
         "n_no_surprise": n_no_surprise,
         "n_no_bar_match": n_no_bar_match,
+        "n_same_day_entry": n_same_day_entry,
+        "n_next_session_entry": n_next_session_entry,
         "n_codes": n_codes,
         "n_trading_days": n_trading_days,
         "n_code_days": n_code_days,
@@ -1451,11 +1507,12 @@ def evaluate_event_post_on_bars(
         ),
         **_freeze(),
         "note": (
-            f"Event-post hold={h}d on fins DiscDate surprise proxy "
-            "(+ fins_earnings_date thicken when merged). "
-            "Occurrence = rate (events/day or per code-year), not count alone. "
-            "trade_stats = t/Sharpe/winrate on hold nets. "
-            "Gaps → skip (no invent). Not READY / not Mass."
+            f"Event-post hold={h}d PIT entry (mode={entry_mode}) on fins "
+            "DiscDate+DiscTime surprise proxy (+ fins_earnings_date thicken "
+            "when merged; no invent surprise). Entry = first session close "
+            "not looking ahead of availability. Occurrence = rate not count. "
+            "trade_stats = t/Sharpe/winrate on hold nets. Gaps → skip. "
+            "Not READY / not Mass."
         ),
     }
 
@@ -1857,12 +1914,15 @@ def run_class_hyp_multi_year_eval(
         ),
         "event_source": event_source,
         "pit_disclosure": (
-            "fins_summary keyed by DiscDate / event_time for offline research. "
-            "fins_earnings_date thickens calendar via PubDate|SchDate when "
-            "available; surprise still requires fins_summary EPS/FEPS "
-            "(no invent). available_at may be event-time or bulk; research "
-            "uses DiscDate/PubDate as visibility key. Disclosed."
+            "fins_summary SoT: DiscDate + DiscTime (aliases DisclosedDate/"
+            "DisclosedTime); envelope event_time/available_at when present. "
+            "W82 entry = first session close not looking ahead of availability "
+            "(after-close or missing DiscTime → next trading bar; no invent "
+            "timestamps). fins_earnings_date thickens calendar via PubDate|"
+            "SchDate when available; surprise still requires fins_summary "
+            "EPS/FEPS (no invent). Disclosed."
         ),
+        "entry_mode": EVENT_POST_ENTRY_MODE,
         "dataset": event_source,
     }
 
@@ -2101,6 +2161,12 @@ def run_class_hyp_multi_year_eval(
                             "post_hold_days": int(event_hold_days),
                             "n_events": ep.get("n_events"),
                             "n_no_surprise": ep.get("n_no_surprise"),
+                            "n_no_bar_match": ep.get("n_no_bar_match"),
+                            "n_same_day_entry": ep.get("n_same_day_entry"),
+                            "n_next_session_entry": ep.get(
+                                "n_next_session_entry"
+                            ),
+                            "entry_mode": ep.get("entry_mode"),
                             "amortized_one_way_cost": ep.get(
                                 "amortized_one_way_cost"
                             ),
