@@ -125,6 +125,20 @@ def history_reprobe_forbidden(dataset: str) -> bool:
     ).upper() == "FORBIDDEN"
 
 
+def history_densify_forbidden(dataset: str) -> bool:
+    """True when history/bulk densify is locked FORBIDDEN (tip-only residual).
+
+    W73 regression guard: tip-only datasets must never take the densify path.
+    bars_am uses ``history_densify=FORBIDDEN``; OTC uses ``bulk_densify=FORBIDDEN``.
+    """
+    policy = tip_only_policy_for(dataset)
+    if not policy:
+        return False
+    return str(policy.get("history_densify", "")).upper() == "FORBIDDEN" or str(
+        policy.get("bulk_densify", "")
+    ).upper() == "FORBIDDEN"
+
+
 def filter_permanent_defer(
     datasets: Iterable[str],
 ) -> list[str]:
@@ -193,6 +207,7 @@ __all__ = [
     "TIP_ONLY_POLICY",
     "PermanentDeferHistoryError",
     "filter_permanent_defer",
+    "history_densify_forbidden",
     "history_reprobe_forbidden",
     "is_permanent_defer",
     "is_tip_only_policy",

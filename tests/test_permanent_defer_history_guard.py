@@ -10,6 +10,7 @@ from data_contracts import (
     TIP_ONLY_POLICY,
     PermanentDeferHistoryError,
     filter_permanent_defer,
+    history_densify_forbidden,
     history_reprobe_forbidden,
     is_permanent_defer,
     is_tip_only_policy,
@@ -117,6 +118,7 @@ def test_w72_tip_only_policy_bars_am_and_otc():
     assert bars["history_densify"] == "FORBIDDEN"
     assert "LIVE_API_EMPTY" in str(bars["history_reason"])
     assert history_reprobe_forbidden("equities_bars_daily_am") is True
+    assert history_densify_forbidden("equities_bars_daily_am") is True
 
     otc = tip_only_policy_for("jsda_otc_bond_reference_prices")
     assert otc is not None
@@ -125,6 +127,7 @@ def test_w72_tip_only_policy_bars_am_and_otc():
     assert otc["bulk_densify"] == "FORBIDDEN"
     assert otc["seal_gate"] == "FULL_OK"
     assert history_reprobe_forbidden("jsda_otc_bond_reference_prices") is True
+    assert history_densify_forbidden("jsda_otc_bond_reference_prices") is True
 
     # Machine map covers exactly the two tip-only residual classes.
     assert set(TIP_ONLY_POLICY) == {

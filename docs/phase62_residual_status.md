@@ -1,22 +1,22 @@
 # Phase 6.2 / 6.3 residual status
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
-**Live verified:** 2026-08-16 · **W72** tip-only ops residual **COMPLETE** · bars_am history DEFER (W71 LIVE_API_EMPTY) · tip continuous only · no regular history re-probe · OTC tip island + wait FULL_OK · no bulk densify · tip auto-collect path verified + issue→aggregate wire · live verified ops COMPLETE **22** held · DEFER **4** remaining (bars_am · earn_cal · master · OTC) · segs **3482** · empty **0** · **OTC 93** · bars_am COMPLETE tip **1** / PARTIAL **31** · Mass/READY/Phase7 **NO-GO/OFF** · FRESH `projgen-64a35ac4dd544b67afced062b9b19ea3` · S1–S5 **research_baseline_rejected** untouched · densify **none** · **no invent** · **no Mass/READY ON** · **no S1–S5 un-reject** · **no OTC bulk densify** · **no fins roll-back** · COMPLETE expand = **tip-wait**
-**Repo tip:** `51f6d028459d6b4960efbd6e84b26150b965d43e` — W72 tip-only residual close · COMPLETE **22** / DEFER **4** / segs **3482** / OTC **93** / READY **未宣言** · FRESH `projgen-64a35ac4dd544b67afced062b9b19ea3`
+**Live verified:** 2026-08-16 · **W73** maintain + regression guards residual **COMPLETE** · COMPLETE 22 health script + pytest · tip path regression (history_reprobe FORBIDDEN · issue→aggregate sync) · research guards S1–S5 rejected · live verified ops COMPLETE **22** held · DEFER **4** remaining (bars_am · earn_cal · master · OTC) · segs **3482** · empty **0** · **OTC 93** · bars_am COMPLETE tip **1** / PARTIAL **31** · Mass/READY/Phase7 **NO-GO/OFF** · FRESH `projgen-531e7c3a06e8464b8e57f2ff40471e0c` · S1–S5 **research_baseline_rejected** untouched · densify **none** · **no invent** · **no Mass/READY ON** · **no S1–S5 un-reject** · **no OTC bulk densify** · **no fins roll-back** · **no new daily signs** · COMPLETE expand = **tip-wait**
+**Repo tip:** `TBD_AFTER_PUSH` — W73 maintain residual close · COMPLETE **22** / DEFER **4** / segs **3482** / OTC **93** / READY **未宣言** · FRESH `projgen-531e7c3a06e8464b8e57f2ff40471e0c`
 
-## tip-only ops residual close（Dataset COMPLETE 22 held · tip-wait）· W72
+## maintain + regression guards residual close（Dataset COMPLETE 22 held · tip-wait）· W73
 
-**Phase name:** bars_am/OTC tip-only policy lock + tip auto-collect path + COMPLETE 22 health FRESH residual close（宣言なし · invent なし）  
-**Wave:** W72 / w0816f  
-**Close:** [`docs/proof/w0816f_w72_tip_only_close_20260816.md`](proof/w0816f_w72_tip_only_close_20260816.md)  
-**Task A policy lock:** [`docs/proof/w0816f_w72_tip_only_policy_lock_20260816.md`](proof/w0816f_w72_tip_only_policy_lock_20260816.md) · `TIP_ONLY_POLICY` in `permanent_defer.py` · bars_am history DEFER + history_reprobe **FORBIDDEN** · OTC tip island wait FULL_OK + bulk_densify **FORBIDDEN**  
-**Task B tip auto-collect path:** [`docs/proof/w0816f_w72_tip_auto_collect_path_20260816.md`](proof/w0816f_w72_tip_auto_collect_path_20260816.md) · premium cron hourly + JSDA daily · issue→`sync_dataset_coverage_from_segments` wire · existing tip COMPLETE held  
-**Task C COMPLETE 22 health:** [`docs/proof/w0816f_w72_complete22_health_20260816.md`](proof/w0816f_w72_complete22_health_20260816.md) · COMPLETE **22** · PARTIAL **4** · fins **104/104** · segs **3482** · empty **0** · OTC **93** · bars_am **1/31**  
-**Final verify:** [`.glm-logs/w0816f_w72_tip_only/verify_final.json`](../.glm-logs/w0816f_w72_tip_only/verify_final.json) · all_checks_pass  
-**Logs:** [`.glm-logs/w0816f_w72_tip_only/`](../.glm-logs/w0816f_w72_tip_only/) · FRESH log `reeval_freshness.log`  
-**FRESH:** `projgen-64a35ac4dd544b67afced062b9b19ea3` · coverage_segments untouched (reeval) · mass=NO-GO · densify **none**  
+**Phase name:** COMPLETE 22 health check automation + tip path regression + research guards FRESH residual close（宣言なし · invent なし · NOT expand to 23）  
+**Wave:** W73 / w0816g  
+**Close:** [`docs/proof/w0816g_w73_maintain_close_20260816.md`](proof/w0816g_w73_maintain_close_20260816.md)  
+**Task A COMPLETE 22 health:** [`docs/proof/w0816g_w73_complete22_health_20260816.md`](proof/w0816g_w73_complete22_health_20260816.md) · `scripts/check_complete22_health.py` · floors COMPLETE==22 · PARTIAL defer4 · fins 104 · empty 0 · OTC≥93 · bars_am≥1 · residual note tip-wait  
+**Task B tip path regression:** [`docs/proof/w0816g_w73_tip_path_regression_20260816.md`](proof/w0816g_w73_tip_path_regression_20260816.md) · history_reprobe FORBIDDEN · issue→aggregate sync · densify not on seal path · `history_densify_forbidden`  
+**Task C research guards:** `tests/test_w73_research_guards.py` · S1–S5 rejected · standard eval never READY/Mass · no new daily signs  
+**Final verify:** [`.glm-logs/w0816g_w73_maintain/health_remote.json`](../.glm-logs/w0816g_w73_maintain/health_remote.json) · all_checks_pass  
+**Logs:** [`.glm-logs/w0816g_w73_maintain/`](../.glm-logs/w0816g_w73_maintain/) · FRESH log `reeval_freshness.log`  
+**FRESH:** `projgen-531e7c3a06e8464b8e57f2ff40471e0c` · coverage_segments untouched (reeval) · mass=NO-GO · densify **none**  
 **S1–S5:** stay **research_baseline_rejected** (no un-reject)  
-**Prior W71 bars_am LIVE_API_EMPTY residual:** held underneath  
+**Prior W72 tip-only ops residual:** held underneath  
 
 | gate | status |
 |------|--------|
@@ -32,12 +32,13 @@
 | densify | **none** |
 | actionable_gap | **0** (history densify unavailable; COMPLETE expand = tip-wait) |
 | S1–S5 catalog | **research_baseline_rejected** untouched |
-| FRESH | `projgen-64a35ac4dd544b67afced062b9b19ea3` |
-| LIVE_API_EMPTY (bars_am history) | **true** · 31/31 (W71) · history_reprobe **FORBIDDEN** (W72) |
+| FRESH | `projgen-531e7c3a06e8464b8e57f2ff40471e0c` |
+| LIVE_API_EMPTY (bars_am history) | **true** · 31/31 (W71) · history_reprobe **FORBIDDEN** (W72/W73) |
 | PD-D4-BARS-AM | **held** · tip continuous · no regular history re-probe |
 | PD-D5-JSDA-OTC | **held** · tip island + wait FULL_OK · no bulk densify |
-| TIP_ONLY_POLICY | **locked** (`permanent_defer.py`) |
-| tip auto-collect → seal → aggregate | **wired** (restore + issue paths) |
+| TIP_ONLY_POLICY | **locked** (`permanent_defer.py`) · densify helper W73 |
+| tip auto-collect → seal → aggregate | **wired** + **regression-tested** |
+| COMPLETE 22 health check | **landed** (`check_complete22_health.py`) |
 | aggregate follow-up tooling | **COMPLETE** (W70; held) |
 | ops aggregate sync | **COMPLETE** (W69; held) |
 
@@ -52,9 +53,68 @@
 - **fins segment invent / roll-back** — not done (104/104 held)  
 - **Dataset COMPLETE 23** — not invented (bars_am still 1/32; COMPLETE expand = tip-wait)  
 - **S1–S5 un-reject** — not done  
+- **new simple daily signs** — not added  
 - **earn_cal/master bulk densify** — not done  
 
-### Residual TOP (W72)
+### Residual TOP (W73)
+
+1. **Maintain COMPLETE 22** — health check floors held  
+2. **Tip-wait** — COMPLETE expand only via tip continuous / FULL_OK; no invent 23  
+3. **Health check + tip path regression** — landed this wave  
+4. **FRESH** — ops reclock held  
+5. **W72 underneath** — tip-only policy lock + issue→aggregate wire  
+
+## tip-only ops residual close（Dataset COMPLETE 22 held · tip-wait）· W72 held · maintain guards by W73
+
+**Phase name:** bars_am/OTC tip-only policy lock + tip auto-collect path + COMPLETE 22 health FRESH residual close（宣言なし · invent なし）  
+**Wave:** W72 / w0816f  
+**Close:** [`docs/proof/w0816f_w72_tip_only_close_20260816.md`](proof/w0816f_w72_tip_only_close_20260816.md)  
+**Task A policy lock:** [`docs/proof/w0816f_w72_tip_only_policy_lock_20260816.md`](proof/w0816f_w72_tip_only_policy_lock_20260816.md) · `TIP_ONLY_POLICY` in `permanent_defer.py` · bars_am history DEFER + history_reprobe **FORBIDDEN** · OTC tip island wait FULL_OK + bulk_densify **FORBIDDEN**  
+**Task B tip auto-collect path:** [`docs/proof/w0816f_w72_tip_auto_collect_path_20260816.md`](proof/w0816f_w72_tip_auto_collect_path_20260816.md) · premium cron hourly + JSDA daily · issue→`sync_dataset_coverage_from_segments` wire · existing tip COMPLETE held  
+**Task C COMPLETE 22 health:** [`docs/proof/w0816f_w72_complete22_health_20260816.md`](proof/w0816f_w72_complete22_health_20260816.md) · COMPLETE **22** · PARTIAL **4** · fins **104/104** · segs **3482** · empty **0** · OTC **93** · bars_am **1/31**  
+**Final verify:** [`.glm-logs/w0816f_w72_tip_only/verify_final.json`](../.glm-logs/w0816f_w72_tip_only/verify_final.json) · all_checks_pass  
+**Logs:** [`.glm-logs/w0816f_w72_tip_only/`](../.glm-logs/w0816f_w72_tip_only/) · FRESH log `reeval_freshness.log`  
+**FRESH (at W72):** `projgen-64a35ac4dd544b67afced062b9b19ea3` · coverage_segments untouched (reeval) · mass=NO-GO · densify **none**  
+**S1–S5:** stay **research_baseline_rejected** (no un-reject)  
+**Prior W71 bars_am LIVE_API_EMPTY residual:** held underneath · **W73 adds maintain health/regression on top**  
+
+| gate | status (W72 held snapshot) |
+|------|--------|
+| READY | **未宣言** |
+| Mass / Phase7 | **NO-GO / OFF** |
+| Dataset COMPLETE | **22** held |
+| DEFER | **4** (bars_am · earn_cal · master · OTC) |
+| COMPLETE segs | **3482** |
+| empty COMPLETE | **0** |
+| OTC | **93** (tip island; wait FULL_OK) |
+| fins_earnings_date | **104/104** COMPLETE · `dataset_coverage` **COMPLETE** |
+| bars_am | COMPLETE **1** tip / PARTIAL **31** · history **DEFER** (W71 LIVE_API_EMPTY) · tip continuous only |
+| densify | **none** |
+| actionable_gap | **0** (history densify unavailable; COMPLETE expand = tip-wait) |
+| S1–S5 catalog | **research_baseline_rejected** untouched |
+| FRESH | `projgen-64a35ac4dd544b67afced062b9b19ea3` (W72) |
+| LIVE_API_EMPTY (bars_am history) | **true** · 31/31 (W71) · history_reprobe **FORBIDDEN** (W72) |
+| PD-D4-BARS-AM | **held** · tip continuous · no regular history re-probe |
+| PD-D5-JSDA-OTC | **held** · tip island + wait FULL_OK · no bulk densify |
+| TIP_ONLY_POLICY | **locked** (`permanent_defer.py`) |
+| tip auto-collect → seal → aggregate | **wired** (restore + issue paths) |
+| aggregate follow-up tooling | **COMPLETE** (W70; held) |
+| ops aggregate sync | **COMPLETE** (W69; held) |
+
+### Explicit non-declarations (held at W72)
+
+- **READY** — not declared  
+- **Mass** — **NO-GO / OFF**  
+- **Phase7** — **OFF**  
+- **bars_am history COMPLETE invent** — not claimed (LIVE_API_EMPTY · re-probe locked)  
+- **OTC COMPLETE invent / bulk densify** — not claimed / not run  
+- **densify success** — not claimed (densify_executed=0)  
+- **fins segment invent / roll-back** — not done (104/104 held)  
+- **Dataset COMPLETE 23** — not invented (bars_am still 1/32; COMPLETE expand = tip-wait)  
+- **S1–S5 un-reject** — not done  
+- **earn_cal/master bulk densify** — not done  
+
+### Residual TOP (W72 held under W73)
 
 1. **Tip-only ops** — bars_am continuous tip collect; OTC wait FULL_OK  
 2. **COMPLETE expand is tip-wait** — no history densify; no invent 23  
