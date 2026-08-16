@@ -1,4 +1,4 @@
-"""Offline multi-year class-hypothesis eval (W78–W81).
+"""Offline multi-year class-hypothesis eval (W78–W83).
 
 Runs class research signals over local bar mirrors + local SQLite
 (``jsda_repo_rates``, ``fins_summary``, ``fins_earnings_date``, margin/short),
@@ -9,20 +9,24 @@ production candidate bar.
 Classes covered
 ---------------
 * multi_day_hold · multi_day_hold_10 · macro_conditioned · cross_section_relative
-* event_post · flow_demand · fundamentals_price
+* cross_section sticky hold=10 (W83 default path when enabled)
+* event_post (PIT DiscDate+DiscTime only; no look-ahead revival)
+* flow_demand · fundamentals_price
 
 Hard constraints
 ----------------
 * Not simple_daily_sign · no S1–S5 un-reject
 * Not READY / Mass / Phase7 / orders
 * No invent fill on repo / fins / margin / liquidity gaps
-* W81: ``research_candidate=True`` only when production bar fully met
+* W81+: ``research_candidate=True`` only when production bar fully met
   including |t| / Sharpe / period win-rate (still never auto-connects
   Mass / READY / operational GO)
+* No mean-bp-only promotion
 * weak consistent-negative is **not_candidate** (economic net bar)
 * noisy low t/Sharpe / unstable yearly signs → demote to discussion_only
 * Event sufficiency = occurrence **rate** (not absolute count alone);
   short window with OK rate → extend and re-eval
+* event_post entry = W82 PIT first non-look-ahead session close
 """
 
 from __future__ import annotations
@@ -126,7 +130,7 @@ from research.robustness_gate import evaluate_research_robustness_gate
 # Freeze / identity
 # ---------------------------------------------------------------------------
 
-CLASS_HYP_EVAL_VERSION: str = "class-hyp-eval/v5"
+CLASS_HYP_EVAL_VERSION: str = "class-hyp-eval/v6"
 CLASS_HYP_EVAL_WAVE: str = CLASS_SIGNALS_WAVE
 MASS_RESEARCH: str = "NO-GO"
 PHASE7: str = "OFF"
@@ -1802,14 +1806,27 @@ def run_class_hyp_multi_year_eval(
     mirror_dir: str | Path = DEFAULT_BARS_MIRROR_DIR,
     sqlite_path: str | Path = DEFAULT_SQLITE,
     include_cross_section: bool = True,
+    include_cross_section_hold_10: bool = True,
     include_event_post: bool = True,
     include_flow_demand: bool = True,
     include_fundamentals_price: bool = True,
+    include_fundamentals_hold_10: bool = True,
     include_multi_day_hold_10: bool = True,
     cross_section_hold_days: int = 5,
+    cross_section_momentum_n: int | None = None,
+    # Sticky hold=10 uses short mom lookback (W82 pin). Content-matched
+    # mom=10 collapses residual (W83 explore) — do not "align" blindly.
+    cross_section_hold10_momentum_n: int = 5,
+    cross_section_long_frac: float = 0.3,
+    cross_section_short_frac: float = 0.3,
     event_hold_days: int = DEFAULT_EVENT_POST_HOLD_DAYS,
     flow_hold_days: int = DEFAULT_FLOW_HOLD_DAYS,
+    flow_require_short_confirm: bool = False,
     fund_hold_days: int = DEFAULT_FUND_HOLD_DAYS,
+    fund_momentum_n: int = DEFAULT_FUND_MOMENTUM_N,
+    # W83 candidate: hold=10 mom=10 value×momentum agree (separate block).
+    fund_hold10_momentum_n: int = 10,
+    fund_mode: str = "value_momentum_agree",
     max_days: int | None = None,
     min_periods_gate: int = 2,
     min_active_per_period: int = 20,
@@ -1829,7 +1846,7 @@ def run_class_hyp_multi_year_eval(
     thicken_event_with_earnings_date: bool = True,
     checklist_complete: bool = True,
 ) -> dict[str, Any]:
-    """Multi-year offline eval for all enabled class hyps (W81).
+    """Multi-year offline eval for all enabled class hyps (W81–W83).
 
     Uses local W63 Q4 + W64 full bar/margin mirrors and local SQLite
     (jsda_repo_rates, fins_summary, fins_earnings_date, short_ratio).
@@ -1837,6 +1854,11 @@ def run_class_hyp_multi_year_eval(
     Production ``research_candidate=True`` only when gate + economic net +
     occurrence rate + multi-year skew + risk + **statistical bar**
     (|t|, Sharpe, period win-rate) all pass (still not READY/Mass).
+    No mean-bp-only promotion. event_post uses W82 PIT entry only.
+
+    W83: default path always includes sticky cross_section hold=10 as a
+    separate block when ``include_cross_section_hold_10`` (parallel to
+    multi_day_hold_10). Primary ``cross_section_hold_days`` default remains 5.
     """
     period_list = [dict(p) for p in (periods or DEFAULT_PERIODS)]
     selected = (
@@ -1945,9 +1967,23 @@ def run_class_hyp_multi_year_eval(
     results_md10: list[dict[str, Any]] = []
     results_macro: list[dict[str, Any]] = []
     results_xs: list[dict[str, Any]] = []
+    results_xs10: list[dict[str, Any]] = []
     results_event: list[dict[str, Any]] = []
     results_flow: list[dict[str, Any]] = []
     results_fund: list[dict[str, Any]] = []
+    results_fund10: list[dict[str, Any]] = []
+    xs_mom_n = (
+        int(cross_section_momentum_n)
+        if cross_section_momentum_n is not None
+        else int(cross_section_hold_days)
+    )
+    xs10_mom_n = int(cross_section_hold10_momentum_n)
+    xs_long_frac = float(cross_section_long_frac)
+    xs_short_frac = float(cross_section_short_frac)
+    fund_mom_n = int(fund_momentum_n)
+    fund10_mom_n = int(fund_hold10_momentum_n)
+    fund_mode_s = str(fund_mode or "value_momentum_agree")
+    flow_short_confirm = bool(flow_require_short_confirm)
 
     for raw in period_list:
         p = dict(raw)
@@ -1969,12 +2005,16 @@ def run_class_hyp_multi_year_eval(
             results_macro.append(dict(skip))
             if include_cross_section:
                 results_xs.append(dict(skip))
+            if include_cross_section_hold_10:
+                results_xs10.append(dict(skip))
             if include_event_post:
                 results_event.append(dict(skip))
             if include_flow_demand:
                 results_flow.append(dict(skip))
             if include_fundamentals_price:
                 results_fund.append(dict(skip))
+            if include_fundamentals_hold_10:
+                results_fund10.append(dict(skip))
             if include_multi_day_hold_10:
                 results_md10.append(dict(skip))
             continue
@@ -2127,9 +2167,11 @@ def run_class_hyp_multi_year_eval(
             if include_cross_section:
                 xs = evaluate_cross_section_on_bars(
                     bars,
-                    momentum_n=h,
+                    momentum_n=xs_mom_n,
                     one_way_cost=one_way_eff,
                     hold_days=int(cross_section_hold_days),
+                    long_frac=xs_long_frac,
+                    short_frac=xs_short_frac,
                 )
                 results_xs.append(
                     _period_row(
@@ -2137,7 +2179,38 @@ def run_class_hyp_multi_year_eval(
                         signal_id=SIGNAL_ID_CROSS_SECTION,
                         extra={
                             "hold_days": int(cross_section_hold_days),
+                            "momentum_n": xs_mom_n,
+                            "long_frac": xs_long_frac,
+                            "short_frac": xs_short_frac,
                             "amortized_one_way_cost": xs.get(
+                                "amortized_one_way_cost"
+                            ),
+                        },
+                    )
+                )
+
+            if include_cross_section_hold_10 and int(cross_section_hold_days) != 10:
+                # W83 default path: sticky hold=10 with W82-pin mom lookback
+                # (mom=5). Content-matched mom=10 fails multi-year residual.
+                xs10 = evaluate_cross_section_on_bars(
+                    bars,
+                    momentum_n=xs10_mom_n,
+                    one_way_cost=one_way_eff,
+                    hold_days=10,
+                    long_frac=xs_long_frac,
+                    short_frac=xs_short_frac,
+                )
+                results_xs10.append(
+                    _period_row(
+                        xs10,
+                        signal_id=SIGNAL_ID_CROSS_SECTION,
+                        extra={
+                            "hold_days": 10,
+                            "momentum_n": xs10_mom_n,
+                            "variant": "hold_10",
+                            "long_frac": xs_long_frac,
+                            "short_frac": xs_short_frac,
+                            "amortized_one_way_cost": xs10.get(
                                 "amortized_one_way_cost"
                             ),
                         },
@@ -2200,7 +2273,7 @@ def run_class_hyp_multi_year_eval(
                     short_slice,
                     hold_days=int(flow_hold_days),
                     one_way_cost=one_way_eff,
-                    require_short_confirm=False,
+                    require_short_confirm=flow_short_confirm,
                 )
                 results_flow.append(
                     _period_row(
@@ -2208,6 +2281,7 @@ def run_class_hyp_multi_year_eval(
                         signal_id=SIGNAL_ID_FLOW_DEMAND,
                         extra={
                             "hold_days": int(flow_hold_days),
+                            "require_short_confirm": flow_short_confirm,
                             "margin_source": margin_src,
                             "n_margin_obs": flow.get("n_margin_obs"),
                             "n_codes_with_margin": flow.get(
@@ -2225,9 +2299,9 @@ def run_class_hyp_multi_year_eval(
                     bars,
                     fins_events,
                     hold_days=int(fund_hold_days),
-                    momentum_n=DEFAULT_FUND_MOMENTUM_N,
+                    momentum_n=fund_mom_n,
                     one_way_cost=one_way_eff,
-                    mode="value_momentum_agree",
+                    mode=fund_mode_s,
                 )
                 results_fund.append(
                     _period_row(
@@ -2235,6 +2309,8 @@ def run_class_hyp_multi_year_eval(
                         signal_id=SIGNAL_ID_FUNDAMENTALS_PRICE,
                         extra={
                             "hold_days": int(fund_hold_days),
+                            "momentum_n": fund_mom_n,
+                            "mode": fund_mode_s,
                             "n_missing_fins_days": fund.get(
                                 "n_missing_fins_days"
                             ),
@@ -2242,6 +2318,40 @@ def run_class_hyp_multi_year_eval(
                                 "value_benchmark_median"
                             ),
                             "amortized_one_way_cost": fund.get(
+                                "amortized_one_way_cost"
+                            ),
+                        },
+                    )
+                )
+
+            if include_fundamentals_hold_10 and (
+                int(fund_hold_days) != 10 or int(fund_mom_n) != int(fund10_mom_n)
+            ):
+                # W83: fund hold=10 mom=10 on default path (candidate in explore).
+                fund10 = evaluate_fundamentals_price_on_bars(
+                    bars,
+                    fins_events,
+                    hold_days=10,
+                    momentum_n=fund10_mom_n,
+                    one_way_cost=one_way_eff,
+                    mode=fund_mode_s,
+                )
+                results_fund10.append(
+                    _period_row(
+                        fund10,
+                        signal_id=SIGNAL_ID_FUNDAMENTALS_PRICE,
+                        extra={
+                            "hold_days": 10,
+                            "momentum_n": fund10_mom_n,
+                            "mode": fund_mode_s,
+                            "variant": "hold_10_mom_matched",
+                            "n_missing_fins_days": fund10.get(
+                                "n_missing_fins_days"
+                            ),
+                            "value_benchmark_median": fund10.get(
+                                "value_benchmark_median"
+                            ),
+                            "amortized_one_way_cost": fund10.get(
                                 "amortized_one_way_cost"
                             ),
                         },
@@ -2258,12 +2368,16 @@ def run_class_hyp_multi_year_eval(
             results_macro.append(dict(err))
             if include_cross_section:
                 results_xs.append(dict(err))
+            if include_cross_section_hold_10:
+                results_xs10.append(dict(err))
             if include_event_post:
                 results_event.append(dict(err))
             if include_flow_demand:
                 results_flow.append(dict(err))
             if include_fundamentals_price:
                 results_fund.append(dict(err))
+            if include_fundamentals_hold_10:
+                results_fund10.append(dict(err))
             if include_multi_day_hold_10:
                 results_md10.append(dict(err))
 
@@ -2317,6 +2431,11 @@ def run_class_hyp_multi_year_eval(
         if include_cross_section
         else None
     )
+    gate_xs10 = (
+        _gate(results_xs10, SIGNAL_ID_CROSS_SECTION + "_hold10")
+        if include_cross_section_hold_10 and results_xs10
+        else None
+    )
     gate_event = (
         _gate(results_event, SIGNAL_ID_EVENT_POST)
         if include_event_post
@@ -2330,6 +2449,11 @@ def run_class_hyp_multi_year_eval(
     gate_fund = (
         _gate(results_fund, SIGNAL_ID_FUNDAMENTALS_PRICE)
         if include_fundamentals_price
+        else None
+    )
+    gate_fund10 = (
+        _gate(results_fund10, SIGNAL_ID_FUNDAMENTALS_PRICE + "_hold10")
+        if include_fundamentals_hold_10 and results_fund10
         else None
     )
 
@@ -2475,11 +2599,21 @@ def run_class_hyp_multi_year_eval(
     risk_md = _risk(results_md, SIGNAL_ID_MULTI_DAY_HOLD)
     risk_macro = _risk(results_macro, SIGNAL_ID_MACRO_CONDITIONED)
     risk_xs = _risk(results_xs, SIGNAL_ID_CROSS_SECTION) if include_cross_section else None
+    risk_xs10 = (
+        _risk(results_xs10, SIGNAL_ID_CROSS_SECTION)
+        if include_cross_section_hold_10 and results_xs10
+        else None
+    )
     risk_event = _risk(results_event, SIGNAL_ID_EVENT_POST) if include_event_post else None
     risk_flow = _risk(results_flow, SIGNAL_ID_FLOW_DEMAND) if include_flow_demand else None
     risk_fund = (
         _risk(results_fund, SIGNAL_ID_FUNDAMENTALS_PRICE)
         if include_fundamentals_price
+        else None
+    )
+    risk_fund10 = (
+        _risk(results_fund10, SIGNAL_ID_FUNDAMENTALS_PRICE)
+        if include_fundamentals_hold_10 and results_fund10
         else None
     )
 
@@ -2716,9 +2850,11 @@ def run_class_hyp_multi_year_eval(
     n_ok_md = _n_ok(results_md)
     n_ok_macro = _n_ok(results_macro)
     n_ok_xs = _n_ok(results_xs)
+    n_ok_xs10 = _n_ok(results_xs10)
     n_ok_event = _n_ok(results_event)
     n_ok_flow = _n_ok(results_flow)
     n_ok_fund = _n_ok(results_fund)
+    n_ok_fund10 = _n_ok(results_fund10)
     n_ok_md10 = _n_ok(results_md10)
 
     def _compact(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -2838,10 +2974,13 @@ def run_class_hyp_multi_year_eval(
         "label": "研究用・複数年クラス仮説評価・W81統計バー再判定・未宣言",
         **_freeze(),
         "note": (
-            "W81 class hyp multi-year offline eval with occurrence rates + "
+            "W83 class hyp multi-year offline eval with occurrence rates + "
             "liquidity-linked costs + extended full-year windows + "
             "statistical bar (|t|≥1.5, Sharpe≥0.5, period win-rate≥0.6, "
-            "≥4 positive periods). "
+            "≥4 positive periods). No mean-bp-only promotion. "
+            "Default path includes sticky cross_section hold=10 (mom=5 pin) "
+            "and fundamentals hold=10 mom=10. "
+            "event_post uses W82 PIT DiscDate+DiscTime entry only. "
             "research_candidate=True only if checklist v2 + gate + risk + "
             "economic net meaningful + occurrence rate sufficient + "
             "multi-year (≥min_years) without extreme skew + stats bar. "
@@ -2876,7 +3015,36 @@ def run_class_hyp_multi_year_eval(
             cost=cost_ls,
             hyp_kind="generic",
             hold_days_for_occ=int(cross_section_hold_days),
-            extra={"hold_days": int(cross_section_hold_days)},
+            extra={
+                "hold_days": int(cross_section_hold_days),
+                "momentum_n": xs_mom_n,
+                "long_frac": xs_long_frac,
+                "short_frac": xs_short_frac,
+            },
+        )
+    if include_cross_section_hold_10 and results_xs10:
+        out["cross_section_hold_10"] = _class_block(
+            signal_id=SIGNAL_ID_CROSS_SECTION,
+            hyp_class="cross_section_relative",
+            rows=results_xs10,
+            gate=gate_xs10,
+            risk=risk_xs10,
+            cost=cost_ls,
+            hyp_kind="generic",
+            hold_days_for_occ=10,
+            extra={
+                "hold_days": 10,
+                "momentum_n": xs10_mom_n,
+                "variant": "hold_10",
+                "long_frac": xs_long_frac,
+                "short_frac": xs_short_frac,
+                "n_ok": n_ok_xs10,
+                "note": (
+                    f"W83 default-path sticky hold=10 with momentum_n="
+                    f"{xs10_mom_n} (W82 pin; mom=10 collapses). "
+                    "Not Mass/READY."
+                ),
+            },
         )
     if include_event_post:
         out["event_post"] = _class_block(
@@ -2888,7 +3056,12 @@ def run_class_hyp_multi_year_eval(
             cost=cost_md,
             hyp_kind="event_post",
             hold_days_for_occ=int(event_hold_days),
-            extra={"post_hold_days": int(event_hold_days), "n_ok": n_ok_event},
+            extra={
+                "post_hold_days": int(event_hold_days),
+                "n_ok": n_ok_event,
+                "entry_mode": EVENT_POST_ENTRY_MODE,
+                "pit_definition": "W82 DiscDate+DiscTime first non-look-ahead close",
+            },
         )
     if include_flow_demand:
         out["flow_demand"] = _class_block(
@@ -2900,7 +3073,11 @@ def run_class_hyp_multi_year_eval(
             cost=cost_ls,
             hyp_kind="generic",
             hold_days_for_occ=int(flow_hold_days),
-            extra={"hold_days": int(flow_hold_days), "n_ok": n_ok_flow},
+            extra={
+                "hold_days": int(flow_hold_days),
+                "require_short_confirm": flow_short_confirm,
+                "n_ok": n_ok_flow,
+            },
         )
     if include_fundamentals_price:
         out["fundamentals_price"] = _class_block(
@@ -2912,7 +3089,34 @@ def run_class_hyp_multi_year_eval(
             cost=cost_ls,
             hyp_kind="generic",
             hold_days_for_occ=int(fund_hold_days),
-            extra={"hold_days": int(fund_hold_days), "n_ok": n_ok_fund},
+            extra={
+                "hold_days": int(fund_hold_days),
+                "momentum_n": fund_mom_n,
+                "mode": fund_mode_s,
+                "n_ok": n_ok_fund,
+            },
+        )
+    if include_fundamentals_hold_10 and results_fund10:
+        out["fundamentals_hold_10"] = _class_block(
+            signal_id=SIGNAL_ID_FUNDAMENTALS_PRICE,
+            hyp_class=CLASS_FUNDAMENTALS_PRICE,
+            rows=results_fund10,
+            gate=gate_fund10,
+            risk=risk_fund10,
+            cost=cost_ls,
+            hyp_kind="generic",
+            hold_days_for_occ=10,
+            extra={
+                "hold_days": 10,
+                "momentum_n": fund10_mom_n,
+                "mode": fund_mode_s,
+                "variant": "hold_10_mom_matched",
+                "n_ok": n_ok_fund10,
+                "note": (
+                    "W83 default-path fund hold=10 mom-matched. "
+                    "Not Mass/READY."
+                ),
+            },
         )
 
     # Summary yes/no per class (honest; may be yes if research_candidate)
@@ -2924,8 +3128,10 @@ def run_class_hyp_multi_year_eval(
         "event_post",
         "macro_conditioned",
         "cross_section_relative",
+        "cross_section_hold_10",
         "flow_demand",
         "fundamentals_price",
+        "fundamentals_hold_10",
     ):
         block = out.get(key)
         if not isinstance(block, Mapping):

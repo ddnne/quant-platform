@@ -33,8 +33,8 @@ from typing import Any, Mapping, Sequence
 # Identity / freeze
 # ---------------------------------------------------------------------------
 
-CLASS_SIGNALS_VERSION: str = "class-signals/v5"
-CLASS_SIGNALS_WAVE: str = "W82 / w0816q"
+CLASS_SIGNALS_VERSION: str = "class-signals/v6"
+CLASS_SIGNALS_WAVE: str = "W83 / w0816r"
 
 SIGNAL_STATUS: str = "candidate"
 SIGNAL_VERSION: str = "1.4.0"

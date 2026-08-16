@@ -539,3 +539,50 @@ def test_class_hyp_eval_pure_on_synthetic_bars():
     )
     assert fund["signal_id"] == SIGNAL_ID_FUNDAMENTALS_PRICE
     assert fund["hypothesis_class"] == CLASS_FUNDAMENTALS_PRICE
+
+    from research.class_hyp_eval import evaluate_cross_section_on_bars
+
+    xs5 = evaluate_cross_section_on_bars(
+        bars, momentum_n=5, hold_days=5, one_way_cost=0.001
+    )
+    assert xs5["hold_days"] == 5
+    xs10 = evaluate_cross_section_on_bars(
+        bars, momentum_n=5, hold_days=10, one_way_cost=0.001
+    )
+    assert xs10["hold_days"] == 10
+    assert xs10.get("occurrence") is not None
+
+
+def test_w83_wave_tags_and_default_path_params():
+    """W83 / w0816r: wave tags + default path includes xs/fund hold=10 blocks."""
+    import inspect
+
+    from features.class_signals import (
+        CLASS_SIGNALS_VERSION,
+        CLASS_SIGNALS_WAVE,
+        EVENT_POST_ENTRY_MODE,
+    )
+    from research.class_hyp_eval import (
+        CLASS_HYP_EVAL_VERSION,
+        CLASS_HYP_EVAL_WAVE,
+        run_class_hyp_multi_year_eval,
+    )
+
+    assert CLASS_SIGNALS_VERSION == "class-signals/v6"
+    assert "W83" in CLASS_SIGNALS_WAVE
+    assert CLASS_HYP_EVAL_VERSION == "class-hyp-eval/v6"
+    assert "W83" in CLASS_HYP_EVAL_WAVE
+    # PIT event entry held (no look-ahead revival)
+    assert EVENT_POST_ENTRY_MODE == "same_day_close_if_pre_close"
+
+    sig = inspect.signature(run_class_hyp_multi_year_eval)
+    assert sig.parameters["include_cross_section_hold_10"].default is True
+    assert sig.parameters["include_fundamentals_hold_10"].default is True
+    # W82 pin mom lookback for sticky hold=10 (content-matched mom=10 fails)
+    assert sig.parameters["cross_section_hold10_momentum_n"].default == 5
+    assert sig.parameters["fund_hold10_momentum_n"].default == 10
+    # Freezes: no Mass/READY auto
+    doc = class_signals_document()
+    assert doc["mass_research"] == "NO-GO"
+    assert doc["ready_declared"] is False
+    assert doc["phase7"] == "OFF"
