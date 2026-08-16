@@ -213,6 +213,7 @@ See also: [`w0816q_w82_go_gates_20260817.md`](w0816q_w82_go_gates_20260817.md)
 |------|-------|
 | W81 tip (start) | `4143698` — docs pin after stats+paper+OTC close |
 | W81 feature tip | `726d245` — stats bar + event_post only + paper trial + OTC 2595→4485 |
+| W82 feature tip | `e7d73fb` — event_post PIT demote + paper gap + OTC 4485→4499 + FRESH close |
 | This wave | commit + push on `main` past `4143698` |
 
 ---
