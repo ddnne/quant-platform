@@ -191,7 +191,7 @@ See also: [`w0816p_w81_go_gates_20260816.md`](w0816p_w81_go_gates_20260816.md)
 |------|-------|
 | W80 tip (start) | `71b3466` — docs pin after candidate residual close |
 | W80 feature tip | `e7b2cf5` — production candidates + OTC 639→2595 + paper UNARMED |
-| W81 feature tip | *(this commit)* — stats bar + event_post only + paper trial + OTC 2595→4485 + FRESH close |
+| W81 feature tip | `726d245` — stats bar + event_post only + paper trial + OTC 2595→4485 + FRESH close |
 | This wave | commit + push on `main` past `71b3466` |
 
 ---
