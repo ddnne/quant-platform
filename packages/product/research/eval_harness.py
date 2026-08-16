@@ -1749,14 +1749,21 @@ STANDARD_EVAL_PROOF_V1: str = (
     "docs/proof/w0815bg_w66_standard_research_eval_checklist_20260815.md"
 )
 # W78 additive: prefer date-matched jsda_tokyo_repo_rates for lev/short costs.
+# W79 additive: liquidity-linked tx / short-spread modulation (repo-linked kept).
 STANDARD_EVAL_COST_MODEL_PROOF: str = (
+    "docs/proof/w0816n_w79_liquidity_linked_cost_20260816.md"
+)
+STANDARD_EVAL_COST_MODEL_PROOF_REPO_LINKED: str = (
     "docs/proof/w0816m_w78_repo_linked_cost_model_20260816.md"
 )
 # Defaults for cost-model rate path (prefer repo-linked; fixed bp fallback OK).
 COST_MODEL_PREFER_REPO_LINKED: bool = True
 COST_MODEL_REQUIRE_REPO_LINKED: bool = False
+# W79: prefer liquidity modulation when proxy available; never invent.
+COST_MODEL_PREFER_LIQUIDITY_LINKED: bool = True
+COST_MODEL_REQUIRE_LIQUIDITY_LINKED: bool = False
 # Modes that only re-run existing rejected baselines — never mint new signals.
-# class_hyp_offline runs W78 multi_day_hold / macro_conditioned (not S1–S5).
+# class_hyp_offline runs W78–W79 class hyps (not S1–S5 / not simple_daily_sign).
 STANDARD_EVAL_MODES: tuple[str, ...] = (
     "wiring_only",
     "s1_rejected_baseline",
@@ -1816,6 +1823,7 @@ def standard_research_eval_checklist_document() -> dict[str, Any]:
         "recommended": [
             "holding_turnover_metrics",  # kept for v1 compat wording
             "repo_linked_cost_model",  # W78: prefer jsda_tokyo_repo_rates
+            "liquidity_linked_cost_model",  # W79: scale tx/short by ADV bucket
         ],
         "insufficient": list(CHECKLIST_V2_INSUFFICIENT),
         "gate": research_robustness_gate_document(),
@@ -1823,14 +1831,23 @@ def standard_research_eval_checklist_document() -> dict[str, Any]:
         "cost_model_defaults": {
             "prefer_repo_linked": COST_MODEL_PREFER_REPO_LINKED,
             "require_repo_linked": COST_MODEL_REQUIRE_REPO_LINKED,
+            "prefer_liquidity_linked": COST_MODEL_PREFER_LIQUIDITY_LINKED,
+            "require_liquidity_linked": COST_MODEL_REQUIRE_LIQUIDITY_LINKED,
             "preferred_dataset": "jsda_tokyo_repo_rates",
+            "liquidity_dataset": "equities_bars_daily",
             "fixed_bp_fallback_ok": True,
+            "liquidity_unmodulated_when_missing_ok": True,
             "gap_policy": "disclose_only_no_ffill_no_invent",
             "note": (
                 "W78 / w0816m: leverage financing + short borrow prefer "
                 "date-matched Tokyo repo rates. Fixed bp remains a disclosed "
                 "fallback when no series is supplied. Gaps never invent-filled. "
-                "Not hard-required (require_repo_linked=False)."
+                "Not hard-required (require_repo_linked=False). "
+                "W79 / w0816n: liquidity (ADV from equities_bars) modulates "
+                "one-way tx cost and short spread (combined with low/mid/high "
+                "sensitivity). Missing liquidity → mult=1.0 + gap disclose; "
+                "never invent. Not hard-required "
+                "(require_liquidity_linked=False)."
             ),
         },
         "risk_scenarios_surface": risk_scenarios_document(),
@@ -1864,6 +1881,8 @@ def standard_research_eval_checklist_document() -> dict[str, Any]:
             "or claim edge. Short-window-only is insufficient. "
             "Leverage/short costs prefer date-matched jsda_tokyo_repo_rates "
             "(W78); fixed bp is disclosed fallback. "
+            "Liquidity modulates tx + short spread when ADV proxy available "
+            "(W79); missing liquidity disclosed, never invented. "
             "This entry does not invent new signals. S1–S5 stay rejected."
         ),
     }
@@ -2029,6 +2048,16 @@ def run_standard_research_eval(
     short_borrow_sensitivity: str | None = None,
     borrow_proxy_annual_bp: float | None = None,
     repo_required_dates: Sequence[Any] | None = None,
+    # --- W79 / w0816n: liquidity-linked tx / short-spread modulation ---
+    liquidity_proxy: Mapping[str, Any] | float | None = None,
+    liquidity_bars: Sequence[Mapping[str, Any]] | None = None,
+    liquidity_bucket: str | None = None,
+    liquidity_adv_jpy: float | None = None,
+    is_topix: bool | None = None,
+    scale_category: str | None = None,
+    prefer_liquidity_linked: bool = True,
+    require_liquidity_linked: bool = False,
+    liquidity_required_dates: Sequence[Any] | None = None,
     # --- checklist v2: risk scenarios ---
     scenario_rows: Sequence[Mapping[str, Any]] | None = None,
     rate_data_usable: bool = False,
@@ -2198,6 +2227,13 @@ def run_standard_research_eval(
                 one_way_cost=cost,
                 cost_change_reason=cost_change_reason,
                 repo_rate_series=repo_series_norm,
+                liquidity_proxy=liquidity_proxy,
+                liquidity_bars=liquidity_bars,
+                liquidity_bucket=liquidity_bucket,
+                liquidity_adv_jpy=liquidity_adv_jpy,
+                is_topix=is_topix,
+                scale_category=scale_category,
+                prefer_liquidity_linked=bool(prefer_liquidity_linked),
             )
         else:
             lev_short = build_leverage_short_cost_assumption(
@@ -2218,6 +2254,15 @@ def run_standard_research_eval(
                 short_borrow_sensitivity=short_borrow_sensitivity,
                 borrow_proxy_annual_bp=borrow_proxy_annual_bp,
                 required_dates=repo_required_dates,
+                liquidity_proxy=liquidity_proxy,
+                liquidity_bars=liquidity_bars,
+                liquidity_bucket=liquidity_bucket,
+                liquidity_adv_jpy=liquidity_adv_jpy,
+                is_topix=is_topix,
+                scale_category=scale_category,
+                prefer_liquidity_linked=bool(prefer_liquidity_linked),
+                require_liquidity_linked=bool(require_liquidity_linked),
+                liquidity_required_dates=liquidity_required_dates,
             )
     steps.append("leverage_short_cost_assumptions")
 
@@ -2236,6 +2281,21 @@ def run_standard_research_eval(
         lev_short["require_repo_linked"] = True
         lev_short["repo_linked_requirement_failed"] = True
 
+    # Optional hard prefer: require_liquidity_linked blocks when gap.
+    liq_req = bool(require_liquidity_linked)
+    liq_block = lev_short.get("liquidity") or {}
+    # For require we need non-gap liquidity (modulation applied or bucket known).
+    liq_gap = bool(liq_block.get("is_gap", True)) if liq_block else True
+    if liq_req and liq_gap:
+        lev_short = dict(lev_short)
+        lev_short["assumptions_complete"] = False
+        missing = list(lev_short.get("missing_disclosure") or [])
+        if "liquidity_proxy" not in missing:
+            missing.append("liquidity_proxy")
+        lev_short["missing_disclosure"] = missing
+        lev_short["require_liquidity_linked"] = True
+        lev_short["liquidity_linked_requirement_failed"] = True
+
     # Mirror base tx fields into cost_assumption for v1-compat readers.
     cost_assumption["leverage_short"] = {
         "position_style": lev_short.get("position_style"),
@@ -2249,6 +2309,10 @@ def run_standard_research_eval(
         "repo_linked": lev_short.get("repo_linked"),
         "prefer_repo_linked": bool(prefer_repo_linked),
         "require_repo_linked": repo_req,
+        "liquidity_linked": lev_short.get("liquidity_linked"),
+        "prefer_liquidity_linked": bool(prefer_liquidity_linked),
+        "require_liquidity_linked": liq_req,
+        "liquidity_bucket": (lev_short.get("liquidity") or {}).get("bucket"),
         "short_rate_source": (lev_short.get("short_borrow") or {}).get(
             "rate_source"
         ),
@@ -2257,6 +2321,7 @@ def run_standard_research_eval(
         ),
     }
     cost_assumption["repo_rate"] = lev_short.get("repo_rate")
+    cost_assumption["liquidity"] = lev_short.get("liquidity")
     cost_assumption["cost_model_proof"] = STANDARD_EVAL_COST_MODEL_PROOF
 
     # Multi-year / non-overlapping long window design.
@@ -2326,7 +2391,7 @@ def run_standard_research_eval(
     )
 
     if mode_s == "class_hyp_offline":
-        # W78: multi_day_hold + macro_conditioned offline multi-year.
+        # W78–W79: class hyps offline multi-year (event/flow/fund + holds).
         # Does not touch S1–S5 catalog. Never auto-promotes candidate.
         from research.class_hyp_eval import run_class_hyp_multi_year_eval
 
@@ -2346,9 +2411,14 @@ def run_standard_research_eval(
         baseline_demo["hypothesis_class"] = "multi_day_hold"
         baseline_demo["class_signals"] = True
         baseline_demo["new_signals_registered"] = True  # class signals landed
+        baseline_demo["candidate_summary"] = class_hyp_bundle.get(
+            "candidate_summary"
+        )
         baseline_demo["note"] = (
-            "W78 class_hyp_offline: multi_day_hold + macro_conditioned "
-            "(+ optional cross_section). Not S1–S5. Not simple_daily_sign."
+            "W79 class_hyp_offline: multi_day_hold + event_post + "
+            "macro_conditioned + flow_demand + fundamentals_price "
+            "(+ cross_section). Not S1–S5. Not simple_daily_sign. "
+            "Candidate only if economic net meaningful."
         )
         # Prefer class hyp holding panel when present.
         if include_holding and md_block.get("holding") is not None:
@@ -2697,6 +2767,9 @@ def run_standard_research_eval(
         "repo_rate_series": repo_series_norm,
         "prefer_repo_linked": bool(prefer_repo_linked),
         "require_repo_linked": bool(require_repo_linked),
+        "prefer_liquidity_linked": bool(prefer_liquidity_linked),
+        "require_liquidity_linked": bool(require_liquidity_linked),
+        "liquidity": lev_short.get("liquidity"),
         "cost_model_proof": STANDARD_EVAL_COST_MODEL_PROOF,
         "risk_scenarios": risk_scen,
         "checklist_completeness": completeness,
@@ -2791,9 +2864,12 @@ __all__ = [
     "RESEARCH_ARTIFACT_PREFIX",
     "RESEARCH_WALK_FORWARD_LABEL",
     "SIGNAL_CANDIDATE_ONLY",
+    "COST_MODEL_PREFER_LIQUIDITY_LINKED",
     "COST_MODEL_PREFER_REPO_LINKED",
+    "COST_MODEL_REQUIRE_LIQUIDITY_LINKED",
     "COST_MODEL_REQUIRE_REPO_LINKED",
     "STANDARD_EVAL_COST_MODEL_PROOF",
+    "STANDARD_EVAL_COST_MODEL_PROOF_REPO_LINKED",
     "STANDARD_EVAL_MODES",
     "STANDARD_EVAL_PROOF",
     "STANDARD_EVAL_PROOF_V1",

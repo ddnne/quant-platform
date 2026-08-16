@@ -4,6 +4,8 @@ Wave
 ----
 * W77 / w0816k — explicit leverage/short assumptions (checklist v2)
 * W78 / w0816m — **prefer date-matched ``jsda_tokyo_repo_rates``** over fixed bp
+* W79 / w0816n — **liquidity-linked** modulation of tx cost and/or short spread
+  (repo-linked v2 kept; short low/mid/high sensitivity retained)
 
 Purpose
 -------
@@ -18,17 +20,22 @@ Hard constraints
 * Does **not** claim edge / significance
 * Pure helpers preferred (unit-testable without R2 / D1)
 * **No invent fill** on repo gaps — missing dates are gap-flagged, never ffilled
+* **No invent** on missing liquidity — gap disclosed; costs unmodulated
 
 Models
 ------
-1. **Transaction (base)** — one-way default 10bp (matches robustness_gate).
+1. **Transaction (base)** — one-way default 10bp (matches robustness_gate);
+   optionally scaled by liquidity bucket (high/mid/low).
 2. **Short borrow** — preferred: ``f(repo[t] + borrow_spread, short_frac)`` with
    documented low/mid/high spread sensitivity; fallback: fixed annual bp
-   placeholder or pure ``borrow_proxy``.
+   placeholder or pure ``borrow_proxy``. Spread may be further scaled by
+   liquidity bucket (combined with sensitivity).
 3. **Leverage / financing** — preferred: ``f(repo_rate[t], leverage excess)``;
    fallback: fixed annual bp placeholder when no repo series is supplied.
 4. **Long-only unlevered** — tx cost only; leverage/short **N/A** with explicit
    assumptions (required even when unused).
+5. **Liquidity proxy** — from equities_bars dollar/yen volume (and optional
+   TOPIX/scale membership); missing data → gap disclose, never invent.
 
 Rate units
 ----------
@@ -49,12 +56,16 @@ from typing import Any, Mapping, Sequence
 
 COST_MODELS_VERSION: str = "research-cost-models/v2"
 COST_MODELS_VERSION_V1: str = "research-cost-models/v1"
-COST_MODELS_WAVE: str = "W78 / w0816m"
+COST_MODELS_WAVE: str = "W79 / w0816n"
 COST_MODELS_LABEL: str = (
     "研究用コストモデル v2・未宣言 "
-    "(取引 + 空売り借入 + レバ調達・repo連動優先 / READY未接続 / Mass NO-GO)"
+    "(取引 + 空売り借入 + レバ調達・repo連動優先 + 流動性連動 / "
+    "READY未接続 / Mass NO-GO)"
 )
 COST_MODELS_PROOF: str = (
+    "docs/proof/w0816n_w79_liquidity_linked_cost_20260816.md"
+)
+COST_MODELS_PROOF_REPO_LINKED: str = (
     "docs/proof/w0816m_w78_repo_linked_cost_model_20260816.md"
 )
 
@@ -116,6 +127,54 @@ SHORT_BORROW_SPREAD_SENSITIVITY: dict[str, float] = {
     "mid": SHORT_BORROW_SPREAD_MID_BP,
     "high": SHORT_BORROW_SPREAD_HIGH_BP,
 }
+
+# ---------------------------------------------------------------------------
+# Liquidity-linked modulation (W79 / w0816n)
+# ---------------------------------------------------------------------------
+# Proxy from equities_bars_daily: prefer turnover_value (売買代金 / yen volume);
+# fallback close * volume. Optional TOPIX / scale_category membership is a soft
+# bias only when bars-derived proxy is present — never invents a proxy alone.
+#
+# ADV thresholds are research placeholders in JPY/day (仮定に依存):
+#   high: ADV >= 1e9   (≈¥1bn/day large-cap liquid)
+#   mid:  ADV >= 1e8   (≈¥100m/day)
+#   low:  ADV <  1e8
+# Missing liquidity data → gap disclose; multipliers stay 1.0 (unmodulated).
+
+LIQUIDITY_DATASET_ID: str = "equities_bars_daily"
+LIQUIDITY_PROXY_UNIT: str = "jpy_adv"  # average daily yen turnover
+
+LIQUIDITY_BUCKET_HIGH: str = "high"
+LIQUIDITY_BUCKET_MID: str = "mid"
+LIQUIDITY_BUCKET_LOW: str = "low"
+LIQUIDITY_BUCKET_MISSING: str = "missing"
+KNOWN_LIQUIDITY_BUCKETS: tuple[str, ...] = (
+    LIQUIDITY_BUCKET_HIGH,
+    LIQUIDITY_BUCKET_MID,
+    LIQUIDITY_BUCKET_LOW,
+)
+
+# ADV thresholds (JPY / day) — research defaults; override via kwargs.
+LIQUIDITY_ADV_HIGH_JPY: float = 1_000_000_000.0  # 1e9
+LIQUIDITY_ADV_MID_JPY: float = 100_000_000.0  # 1e8
+
+# Multipliers applied to base one-way tx cost and short borrow *spread*.
+# high liquidity → base; low liquidity → higher costs.
+LIQUIDITY_TX_MULT: dict[str, float] = {
+    LIQUIDITY_BUCKET_HIGH: 1.0,
+    LIQUIDITY_BUCKET_MID: 1.5,
+    LIQUIDITY_BUCKET_LOW: 2.5,
+}
+LIQUIDITY_SHORT_SPREAD_MULT: dict[str, float] = {
+    LIQUIDITY_BUCKET_HIGH: 1.0,
+    LIQUIDITY_BUCKET_MID: 1.5,
+    LIQUIDITY_BUCKET_LOW: 2.0,
+}
+
+# Optional soft bias when TOPIX / large-scale membership is known *and* ADV
+# is observed: bump bucket one step toward high (never invents from membership
+# alone when ADV is missing).
+LIQUIDITY_TOPIX_SOFT_UPGRADE: bool = True
 
 # Position style tags accepted by checklist v2.
 POSITION_STYLE_LONG_ONLY_UNLEVERED: str = "long_only_unlevered"
@@ -588,6 +647,642 @@ def mean_repo_rate_pct(
 
 
 # ---------------------------------------------------------------------------
+# Liquidity proxy + cost modulation (W79 / w0816n)
+# ---------------------------------------------------------------------------
+#
+# Formula (documented)
+# --------------------
+# Per-bar yen turnover (prefer turnover_value / 売買代金):
+#
+#   yen_turnover[t] =
+#       turnover_value[t]                         if present
+#       else close[t] * volume[t]                 if both present
+#       else adjustment_close[t] * adjustment_volume[t]
+#       else MISSING (gap; never invent)
+#
+# Liquidity proxy (ADV, JPY/day) over supplied bars:
+#
+#   ADV = mean(yen_turnover[t] for observed t)
+#
+# Bucket (research thresholds; 仮定に依存):
+#
+#   high  if ADV >= LIQUIDITY_ADV_HIGH_JPY  (default 1e9)
+#   mid   if ADV >= LIQUIDITY_ADV_MID_JPY   (default 1e8)
+#   low   if ADV observed and < mid threshold
+#   missing if no observed yen_turnover  → gap disclose; no invent
+#
+# Optional soft upgrade (only when ADV observed):
+#   if is_topix or scale_category indicates large-cap → bucket one step up
+#   (low→mid, mid→high). Never invents ADV from membership alone.
+#
+# Cost modulation (combined with short low/mid/high sensitivity):
+#
+#   one_way_cost_eff = one_way_cost_base * LIQUIDITY_TX_MULT[bucket]
+#   spread_eff_bp    = spread_base_bp    * LIQUIDITY_SHORT_SPREAD_MULT[bucket]
+#
+#   where spread_base_bp ∈ {25, 50, 150} from short_borrow_sensitivity.
+#
+# Missing liquidity → mult = 1.0 (unmodulated), liquidity_gap=True disclosed.
+# ---------------------------------------------------------------------------
+
+
+def _pick_num_field(row: Mapping[str, Any], *keys: str) -> float | None:
+    for k in keys:
+        if k not in row:
+            continue
+        v = row.get(k)
+        if v is None or v == "":
+            continue
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def yen_turnover_from_bar(row: Mapping[str, Any]) -> dict[str, Any]:
+    """Extract one bar's yen turnover. Gap → value None (no invent).
+
+    Priority:
+    1. ``turnover_value`` / TurnoverValue / Va (売買代金)
+    2. ``close * volume``
+    3. ``adjustment_close * adjustment_volume``
+    """
+    d = _date_key(row.get("date") or row.get("Date") or row.get("as_of_date"))
+    code = row.get("code") or row.get("Code")
+    tv = _pick_num_field(
+        row, "turnover_value", "TurnoverValue", "turnoverValue", "Va"
+    )
+    if tv is not None and tv >= 0:
+        return {
+            "date": d,
+            "code": str(code) if code is not None else None,
+            "yen_turnover": float(tv),
+            "source_field": "turnover_value",
+            "is_gap": False,
+        }
+    close = _pick_num_field(row, "close", "Close", "C")
+    vol = _pick_num_field(row, "volume", "Volume", "Vo")
+    if close is not None and vol is not None and close >= 0 and vol >= 0:
+        return {
+            "date": d,
+            "code": str(code) if code is not None else None,
+            "yen_turnover": float(close) * float(vol),
+            "source_field": "close_x_volume",
+            "is_gap": False,
+        }
+    adj_c = _pick_num_field(
+        row, "adjustment_close", "AdjustmentClose", "AdjClose", "AdjC"
+    )
+    adj_v = _pick_num_field(
+        row, "adjustment_volume", "AdjustmentVolume", "AdjVolume", "AdjVo"
+    )
+    if adj_c is not None and adj_v is not None and adj_c >= 0 and adj_v >= 0:
+        return {
+            "date": d,
+            "code": str(code) if code is not None else None,
+            "yen_turnover": float(adj_c) * float(adj_v),
+            "source_field": "adjustment_close_x_adjustment_volume",
+            "is_gap": False,
+        }
+    return {
+        "date": d,
+        "code": str(code) if code is not None else None,
+        "yen_turnover": None,
+        "source_field": None,
+        "is_gap": True,
+        "reason": "missing_turnover_and_price_volume",
+    }
+
+
+def compute_liquidity_proxy_from_bars(
+    bars: Sequence[Mapping[str, Any]] | None,
+    *,
+    required_dates: Sequence[Any] | None = None,
+    is_topix: bool | None = None,
+    scale_category: str | None = None,
+    source_label: str = "equities_bars",
+) -> dict[str, Any]:
+    """Compute ADV (JPY) liquidity proxy from equities bar rows.
+
+    **No invent fill** on missing bars/fields — gaps disclosed.
+    """
+    bars = list(bars or [])
+    by_date: dict[str, float] = {}
+    gap_bar_dates: list[str] = []
+    source_fields: dict[str, int] = {}
+    for raw in bars:
+        hit = yen_turnover_from_bar(raw)
+        d = hit.get("date")
+        if hit.get("is_gap") or hit.get("yen_turnover") is None:
+            if d is not None:
+                gap_bar_dates.append(str(d))
+            continue
+        d_s = str(d) if d is not None else f"_nodate_{len(by_date)}"
+        # If multiple rows share a date (cross-section), accumulate then
+        # we'll mean later; for single-name bars last-write is fine, for
+        # multi-name sum per date then mean over dates of daily totals.
+        by_date[d_s] = by_date.get(d_s, 0.0) + float(hit["yen_turnover"])
+        sf = str(hit.get("source_field") or "unknown")
+        source_fields[sf] = int(source_fields.get(sf, 0)) + 1
+
+    req: list[str] = []
+    if required_dates is not None:
+        seen: set[str] = set()
+        for raw in required_dates:
+            d = _date_key(raw)
+            if d is not None and d not in seen:
+                seen.add(d)
+                req.append(d)
+    req_gaps = [d for d in req if d not in by_date]
+
+    vals = list(by_date.values())
+    n_obs = len(vals)
+    adv: float | None = (sum(vals) / float(n_obs)) if n_obs > 0 else None
+
+    return {
+        "kind": "liquidity_proxy",
+        "version": COST_MODELS_VERSION,
+        "dataset": LIQUIDITY_DATASET_ID,
+        "proxy_unit": LIQUIDITY_PROXY_UNIT,
+        "formula": (
+            "ADV = mean_t(turnover_value[t] "
+            "or close[t]*volume[t] "
+            "or adjustment_close[t]*adjustment_volume[t]); "
+            "missing fields → gap (no invent)"
+        ),
+        "adv_jpy": adv,
+        "n_obs": n_obs,
+        "n_input_bars": len(bars),
+        "by_date_yen_turnover": dict(sorted(by_date.items())),
+        "source_field_counts": source_fields,
+        "required_dates": list(req),
+        "gap_dates": list(req_gaps),
+        "gap_bar_dates": gap_bar_dates,
+        "n_gaps": len(req_gaps),
+        "coverage_complete": (len(req_gaps) == 0 if req else n_obs > 0),
+        "is_gap": adv is None,
+        "ffill_applied": False,
+        "invent_fill": False,
+        "gap_policy": "disclose_only_no_ffill_no_invent",
+        "is_topix": is_topix,
+        "scale_category": scale_category,
+        "source_label": source_label,
+        "note": (
+            "Liquidity proxy from equities_bars yen turnover. "
+            "Missing bars/fields are gap-flagged; never invented."
+        ),
+        **_freeze_fields(),
+    }
+
+
+def compute_liquidity_proxy_from_adv(
+    adv_jpy: float | None,
+    *,
+    n_obs: int | None = None,
+    is_topix: bool | None = None,
+    scale_category: str | None = None,
+    source_label: str = "adv_scalar",
+    gap_dates: Sequence[Any] | None = None,
+) -> dict[str, Any]:
+    """Build a liquidity proxy envelope from a precomputed ADV (JPY/day).
+
+    ``adv_jpy is None`` → gap (no invent).
+    """
+    gaps = []
+    if gap_dates is not None:
+        for raw in gap_dates:
+            d = _date_key(raw)
+            if d is not None:
+                gaps.append(d)
+    is_gap = adv_jpy is None
+    try:
+        adv_f = float(adv_jpy) if adv_jpy is not None else None
+    except (TypeError, ValueError):
+        adv_f = None
+        is_gap = True
+    if adv_f is not None and adv_f < 0:
+        adv_f = None
+        is_gap = True
+    return {
+        "kind": "liquidity_proxy",
+        "version": COST_MODELS_VERSION,
+        "dataset": LIQUIDITY_DATASET_ID,
+        "proxy_unit": LIQUIDITY_PROXY_UNIT,
+        "formula": "ADV supplied as scalar (precomputed); None → gap",
+        "adv_jpy": adv_f,
+        "n_obs": int(n_obs) if n_obs is not None else (0 if is_gap else 1),
+        "n_input_bars": None,
+        "by_date_yen_turnover": {},
+        "source_field_counts": {},
+        "required_dates": [],
+        "gap_dates": list(gaps),
+        "gap_bar_dates": [],
+        "n_gaps": len(gaps),
+        "coverage_complete": not is_gap and len(gaps) == 0,
+        "is_gap": is_gap,
+        "ffill_applied": False,
+        "invent_fill": False,
+        "gap_policy": "disclose_only_no_ffill_no_invent",
+        "is_topix": is_topix,
+        "scale_category": scale_category,
+        "source_label": source_label,
+        "note": (
+            "Precomputed ADV. None/invalid → gap disclose; never invent."
+        ),
+        **_freeze_fields(),
+    }
+
+
+def _scale_category_is_large(scale_category: str | None) -> bool:
+    if scale_category is None:
+        return False
+    s = str(scale_category).strip().lower()
+    if not s:
+        return False
+    # JQuants ScaleCategory examples: TOPIX Large70, TOPIX Mid400, etc.
+    large_tokens = ("large", "core30", "large70", "topix100")
+    return any(t in s for t in large_tokens)
+
+
+def liquidity_bucket_from_proxy(
+    proxy: Mapping[str, Any] | float | None,
+    *,
+    high_jpy: float = LIQUIDITY_ADV_HIGH_JPY,
+    mid_jpy: float = LIQUIDITY_ADV_MID_JPY,
+    apply_topix_soft_upgrade: bool = LIQUIDITY_TOPIX_SOFT_UPGRADE,
+) -> dict[str, Any]:
+    """Map ADV proxy → high/mid/low bucket. Missing → ``missing`` (no invent)."""
+    adv: float | None
+    is_topix: bool | None = None
+    scale_category: str | None = None
+    proxy_doc: dict[str, Any] | None = None
+
+    if proxy is None:
+        adv = None
+    elif isinstance(proxy, (int, float)) and not isinstance(proxy, bool):
+        try:
+            adv = float(proxy)
+        except (TypeError, ValueError):
+            adv = None
+    elif isinstance(proxy, Mapping):
+        proxy_doc = dict(proxy)
+        raw_adv = proxy.get("adv_jpy")
+        if raw_adv is None and proxy.get("is_gap"):
+            adv = None
+        else:
+            try:
+                adv = float(raw_adv) if raw_adv is not None else None
+            except (TypeError, ValueError):
+                adv = None
+        is_topix = proxy.get("is_topix")
+        if is_topix is not None:
+            is_topix = bool(is_topix)
+        scale_category = (
+            str(proxy.get("scale_category"))
+            if proxy.get("scale_category") is not None
+            else None
+        )
+    else:
+        adv = None
+
+    if adv is None:
+        return {
+            "kind": "liquidity_bucket",
+            "version": COST_MODELS_VERSION,
+            "bucket": LIQUIDITY_BUCKET_MISSING,
+            "adv_jpy": None,
+            "is_gap": True,
+            "thresholds_jpy": {
+                "high": float(high_jpy),
+                "mid": float(mid_jpy),
+            },
+            "soft_upgrade_applied": False,
+            "is_topix": is_topix,
+            "scale_category": scale_category,
+            "formula": (
+                f"high if ADV>={high_jpy:g}; mid if ADV>={mid_jpy:g}; "
+                "low if ADV observed else missing"
+            ),
+            "proxy": proxy_doc,
+            "ffill_applied": False,
+            "invent_fill": False,
+            "gap_policy": "disclose_only_no_ffill_no_invent",
+            "note": "No ADV observed — liquidity bucket missing (no invent).",
+            **_freeze_fields(),
+        }
+
+    raw_bucket: str
+    if float(adv) >= float(high_jpy):
+        raw_bucket = LIQUIDITY_BUCKET_HIGH
+    elif float(adv) >= float(mid_jpy):
+        raw_bucket = LIQUIDITY_BUCKET_MID
+    else:
+        raw_bucket = LIQUIDITY_BUCKET_LOW
+
+    soft = False
+    bucket = raw_bucket
+    membership_large = bool(is_topix) or _scale_category_is_large(scale_category)
+    if apply_topix_soft_upgrade and membership_large:
+        if raw_bucket == LIQUIDITY_BUCKET_LOW:
+            bucket = LIQUIDITY_BUCKET_MID
+            soft = True
+        elif raw_bucket == LIQUIDITY_BUCKET_MID:
+            bucket = LIQUIDITY_BUCKET_HIGH
+            soft = True
+
+    return {
+        "kind": "liquidity_bucket",
+        "version": COST_MODELS_VERSION,
+        "bucket": bucket,
+        "raw_bucket": raw_bucket,
+        "adv_jpy": float(adv),
+        "is_gap": False,
+        "thresholds_jpy": {
+            "high": float(high_jpy),
+            "mid": float(mid_jpy),
+        },
+        "soft_upgrade_applied": soft,
+        "is_topix": is_topix,
+        "scale_category": scale_category,
+        "formula": (
+            f"high if ADV>={high_jpy:g}; mid if ADV>={mid_jpy:g}; "
+            "low if ADV observed else missing; "
+            "optional TOPIX/large soft upgrade one step"
+        ),
+        "proxy": proxy_doc,
+        "ffill_applied": False,
+        "invent_fill": False,
+        "gap_policy": "disclose_only_no_ffill_no_invent",
+        "note": (
+            "Research ADV bucket. Soft TOPIX/large upgrade only when ADV "
+            "is observed — membership alone never invents a bucket."
+        ),
+        **_freeze_fields(),
+    }
+
+
+def liquidity_cost_multipliers(
+    bucket: str | Mapping[str, Any] | None,
+    *,
+    tx_mult_map: Mapping[str, float] | None = None,
+    short_spread_mult_map: Mapping[str, float] | None = None,
+) -> dict[str, Any]:
+    """Return tx / short-spread multipliers for a liquidity bucket.
+
+    Missing / unknown bucket → multipliers 1.0 (unmodulated) + gap flag.
+    """
+    tx_map = dict(tx_mult_map or LIQUIDITY_TX_MULT)
+    sp_map = dict(short_spread_mult_map or LIQUIDITY_SHORT_SPREAD_MULT)
+
+    b: str | None
+    is_gap = False
+    if bucket is None:
+        b = LIQUIDITY_BUCKET_MISSING
+        is_gap = True
+    elif isinstance(bucket, Mapping):
+        b = str(bucket.get("bucket") or LIQUIDITY_BUCKET_MISSING)
+        is_gap = bool(bucket.get("is_gap")) or b == LIQUIDITY_BUCKET_MISSING
+    else:
+        b = str(bucket).strip().lower()
+        if b not in KNOWN_LIQUIDITY_BUCKETS:
+            if b in ("missing", "none", "gap", ""):
+                b = LIQUIDITY_BUCKET_MISSING
+                is_gap = True
+            else:
+                raise ValueError(
+                    f"liquidity bucket must be one of "
+                    f"{list(KNOWN_LIQUIDITY_BUCKETS)} or missing; got {bucket!r}"
+                )
+
+    if is_gap or b == LIQUIDITY_BUCKET_MISSING:
+        return {
+            "kind": "liquidity_cost_multipliers",
+            "version": COST_MODELS_VERSION,
+            "bucket": LIQUIDITY_BUCKET_MISSING,
+            "is_gap": True,
+            "tx_mult": 1.0,
+            "short_spread_mult": 1.0,
+            "tx_mult_map": dict(tx_map),
+            "short_spread_mult_map": dict(sp_map),
+            "modulated": False,
+            "formula": (
+                "one_way_eff = one_way_base * tx_mult; "
+                "spread_eff = spread_base * short_spread_mult; "
+                "missing → mult=1.0 unmodulated (no invent)"
+            ),
+            "note": (
+                "Liquidity missing — costs unmodulated (mult=1.0); gap disclosed."
+            ),
+            **_freeze_fields(),
+        }
+
+    return {
+        "kind": "liquidity_cost_multipliers",
+        "version": COST_MODELS_VERSION,
+        "bucket": b,
+        "is_gap": False,
+        "tx_mult": float(tx_map[b]),
+        "short_spread_mult": float(sp_map[b]),
+        "tx_mult_map": dict(tx_map),
+        "short_spread_mult_map": dict(sp_map),
+        "modulated": True,
+        "formula": (
+            "one_way_eff = one_way_base * tx_mult[bucket]; "
+            "spread_eff_bp = spread_base_bp * short_spread_mult[bucket]"
+        ),
+        "note": (
+            "Research liquidity multipliers. high→base; low→higher costs."
+        ),
+        **_freeze_fields(),
+    }
+
+
+def resolve_liquidity_modulation(
+    *,
+    liquidity_proxy: Mapping[str, Any] | float | None = None,
+    liquidity_bars: Sequence[Mapping[str, Any]] | None = None,
+    liquidity_bucket: str | None = None,
+    liquidity_adv_jpy: float | None = None,
+    is_topix: bool | None = None,
+    scale_category: str | None = None,
+    required_dates: Sequence[Any] | None = None,
+    high_jpy: float = LIQUIDITY_ADV_HIGH_JPY,
+    mid_jpy: float = LIQUIDITY_ADV_MID_JPY,
+    prefer_liquidity_linked: bool = True,
+    apply_topix_soft_upgrade: bool = LIQUIDITY_TOPIX_SOFT_UPGRADE,
+) -> dict[str, Any]:
+    """Resolve liquidity proxy → bucket → multipliers (gap-safe).
+
+    Priority for inputs:
+    1. explicit ``liquidity_bucket`` (if known high/mid/low)
+    2. ``liquidity_proxy`` envelope or ADV scalar
+    3. ``liquidity_adv_jpy`` scalar
+    4. ``liquidity_bars`` → compute proxy
+    5. none → missing gap
+
+    When ``prefer_liquidity_linked=False``, still computes disclosure but
+    forces ``modulated=False`` and mult=1.0.
+    """
+    proxy_doc: dict[str, Any] | None = None
+    bucket_doc: dict[str, Any]
+
+    explicit_bucket = None
+    if liquidity_bucket is not None:
+        key = str(liquidity_bucket).strip().lower()
+        if key in KNOWN_LIQUIDITY_BUCKETS:
+            explicit_bucket = key
+        elif key in ("missing", "none", "gap", ""):
+            explicit_bucket = LIQUIDITY_BUCKET_MISSING
+        else:
+            raise ValueError(
+                f"liquidity_bucket must be one of "
+                f"{list(KNOWN_LIQUIDITY_BUCKETS)} or missing; "
+                f"got {liquidity_bucket!r}"
+            )
+
+    if explicit_bucket is not None and explicit_bucket != LIQUIDITY_BUCKET_MISSING:
+        bucket_doc = {
+            "kind": "liquidity_bucket",
+            "version": COST_MODELS_VERSION,
+            "bucket": explicit_bucket,
+            "raw_bucket": explicit_bucket,
+            "adv_jpy": None,
+            "is_gap": False,
+            "thresholds_jpy": {"high": float(high_jpy), "mid": float(mid_jpy)},
+            "soft_upgrade_applied": False,
+            "is_topix": is_topix,
+            "scale_category": scale_category,
+            "formula": "explicit bucket override",
+            "proxy": None,
+            "ffill_applied": False,
+            "invent_fill": False,
+            "gap_policy": "disclose_only_no_ffill_no_invent",
+            "note": "Explicit liquidity_bucket supplied by caller.",
+            **_freeze_fields(),
+        }
+    else:
+        if liquidity_proxy is not None:
+            if isinstance(liquidity_proxy, Mapping):
+                proxy_doc = dict(liquidity_proxy)
+                # Allow injecting membership if not already on proxy.
+                if is_topix is not None and proxy_doc.get("is_topix") is None:
+                    proxy_doc["is_topix"] = is_topix
+                if (
+                    scale_category is not None
+                    and proxy_doc.get("scale_category") is None
+                ):
+                    proxy_doc["scale_category"] = scale_category
+            else:
+                proxy_doc = compute_liquidity_proxy_from_adv(
+                    float(liquidity_proxy)
+                    if liquidity_proxy is not None
+                    else None,
+                    is_topix=is_topix,
+                    scale_category=scale_category,
+                )
+        elif liquidity_adv_jpy is not None:
+            proxy_doc = compute_liquidity_proxy_from_adv(
+                liquidity_adv_jpy,
+                is_topix=is_topix,
+                scale_category=scale_category,
+            )
+        elif liquidity_bars is not None:
+            proxy_doc = compute_liquidity_proxy_from_bars(
+                liquidity_bars,
+                required_dates=required_dates,
+                is_topix=is_topix,
+                scale_category=scale_category,
+            )
+        elif explicit_bucket == LIQUIDITY_BUCKET_MISSING:
+            proxy_doc = compute_liquidity_proxy_from_adv(
+                None,
+                is_topix=is_topix,
+                scale_category=scale_category,
+                source_label="explicit_missing",
+            )
+        else:
+            proxy_doc = compute_liquidity_proxy_from_adv(
+                None,
+                is_topix=is_topix,
+                scale_category=scale_category,
+                source_label="empty",
+            )
+        bucket_doc = liquidity_bucket_from_proxy(
+            proxy_doc,
+            high_jpy=high_jpy,
+            mid_jpy=mid_jpy,
+            apply_topix_soft_upgrade=apply_topix_soft_upgrade,
+        )
+
+    mults = liquidity_cost_multipliers(bucket_doc)
+    prefer = bool(prefer_liquidity_linked)
+    applied = bool(prefer and mults.get("modulated"))
+    if not prefer:
+        # Still disclose bucket, but force unmodulated costs.
+        mults = dict(mults)
+        mults["tx_mult"] = 1.0
+        mults["short_spread_mult"] = 1.0
+        mults["modulated"] = False
+        mults["prefer_liquidity_linked"] = False
+        mults["note"] = (
+            "prefer_liquidity_linked=False; multipliers forced to 1.0 "
+            "(bucket still disclosed)."
+        )
+    else:
+        mults = dict(mults)
+        mults["prefer_liquidity_linked"] = True
+
+    return {
+        "kind": "liquidity_modulation",
+        "version": COST_MODELS_VERSION,
+        "wave": COST_MODELS_WAVE,
+        "prefer_liquidity_linked": prefer,
+        "applied": applied,
+        "is_gap": bool(bucket_doc.get("is_gap") or mults.get("is_gap")),
+        "bucket": bucket_doc.get("bucket"),
+        "adv_jpy": bucket_doc.get("adv_jpy"),
+        "tx_mult": float(mults["tx_mult"]),
+        "short_spread_mult": float(mults["short_spread_mult"]),
+        "proxy": proxy_doc,
+        "bucket_detail": bucket_doc,
+        "multipliers": mults,
+        "dataset": LIQUIDITY_DATASET_ID,
+        "ffill_applied": False,
+        "invent_fill": False,
+        "gap_policy": "disclose_only_no_ffill_no_invent",
+        "formula": (
+            "one_way_eff = one_way_base * tx_mult[bucket]; "
+            "spread_eff = short_sensitivity_spread * short_spread_mult[bucket]; "
+            "missing liquidity → mult=1.0, gap disclosed (no invent)"
+        ),
+        "note": (
+            "Liquidity-linked cost modulation (W79). Combines with short "
+            "low/mid/high sensitivity. Missing liquidity never invented."
+        ),
+        **_freeze_fields(),
+    }
+
+
+def apply_liquidity_to_one_way_cost(
+    one_way_cost: float,
+    *,
+    tx_mult: float = 1.0,
+) -> float:
+    """``one_way_eff = one_way_base * tx_mult``."""
+    return float(one_way_cost) * float(tx_mult)
+
+
+def apply_liquidity_to_short_spread_bp(
+    spread_bp: float,
+    *,
+    short_spread_mult: float = 1.0,
+) -> float:
+    """``spread_eff_bp = spread_base_bp * short_spread_mult``."""
+    return float(spread_bp) * float(short_spread_mult)
+
+
+# ---------------------------------------------------------------------------
 # Daily cost pure helpers
 # ---------------------------------------------------------------------------
 
@@ -915,13 +1610,18 @@ def cost_models_document() -> dict[str, Any]:
         "wave": COST_MODELS_WAVE,
         "label": COST_MODELS_LABEL,
         "proof": COST_MODELS_PROOF,
+        "proof_repo_linked": COST_MODELS_PROOF_REPO_LINKED,
         "preferred_rate_source": RATE_SOURCE_REPO_SERIES,
         "transaction": {
             "one_way_cost_bp": DEFAULT_ONE_WAY_COST_BP,
             "one_way_cost": DEFAULT_ONE_WAY_COST,
             "round_trip_cost_bp": DEFAULT_ONE_WAY_COST_BP * 2.0,
             "round_trip_cost": DEFAULT_ROUND_TRIP_COST,
-            "formula_one_way": "net_one_way = gross_signed_mean_active - one_way_cost",
+            "formula_one_way": (
+                "net_one_way = gross_signed_mean_active - one_way_cost; "
+                "one_way_cost = one_way_base * liquidity_tx_mult[bucket]"
+            ),
+            "liquidity_tx_mult": dict(LIQUIDITY_TX_MULT),
             "change_requires": "cost_change_reason",
             "label": "仮定に依存・研究用・運用GOではない",
         },
@@ -929,10 +1629,16 @@ def cost_models_document() -> dict[str, Any]:
             "preferred_model": RATE_SOURCE_REPO_PLUS_SPREAD,
             "formula_preferred": (
                 "short_borrow_daily[t] ≈ "
-                "(repo_pct[t]/100 + spread) / trading_days * short_fraction"
+                "(repo_pct[t]/100 + spread_base*liq_mult) "
+                "/ trading_days * short_fraction"
             ),
             "spread_sensitivity_bp": dict(SHORT_BORROW_SPREAD_SENSITIVITY),
             "default_spread_bp": DEFAULT_SHORT_BORROW_SPREAD_BP,
+            "liquidity_short_spread_mult": dict(LIQUIDITY_SHORT_SPREAD_MULT),
+            "combined_spread_formula": (
+                "spread_eff_bp = SHORT_BORROW_SPREAD_SENSITIVITY[low|mid|high] "
+                "* LIQUIDITY_SHORT_SPREAD_MULT[high|mid|low]"
+            ),
             "fallback_fixed_annual_bp": DEFAULT_SHORT_BORROW_ANNUAL_BP,
             "fallback_model": RATE_SOURCE_FIXED_BP,
             "alt_model": RATE_SOURCE_BORROW_PROXY,
@@ -945,6 +1651,7 @@ def cost_models_document() -> dict[str, Any]:
             "applies_when": "position_style uses short side (long_short / levered_long_short)",
             "note": (
                 "Prefer repo[t] + explicit borrow spread (low/mid/high). "
+                "Spread further scaled by liquidity bucket (W79). "
                 "Fixed 50bp annual is a fallback placeholder when no repo series. "
                 "Not a broker borrow quote. Hard-to-borrow names need higher spreads."
             ),
@@ -979,6 +1686,32 @@ def cost_models_document() -> dict[str, Any]:
                 "Not operational GO."
             ),
         },
+        "liquidity": {
+            "dataset": LIQUIDITY_DATASET_ID,
+            "proxy_unit": LIQUIDITY_PROXY_UNIT,
+            "formula_proxy": (
+                "ADV = mean_t(turnover_value[t] or close[t]*volume[t] "
+                "or adjustment_close[t]*adjustment_volume[t])"
+            ),
+            "bucket_thresholds_jpy": {
+                "high": LIQUIDITY_ADV_HIGH_JPY,
+                "mid": LIQUIDITY_ADV_MID_JPY,
+            },
+            "bucket_rule": (
+                "high if ADV>=1e9; mid if ADV>=1e8; low if ADV observed else missing"
+            ),
+            "tx_mult": dict(LIQUIDITY_TX_MULT),
+            "short_spread_mult": dict(LIQUIDITY_SHORT_SPREAD_MULT),
+            "topix_soft_upgrade": LIQUIDITY_TOPIX_SOFT_UPGRADE,
+            "gap_policy": "disclose_only_no_ffill_no_invent",
+            "prefer_liquidity_linked_default": True,
+            "require_liquidity_linked_default": False,
+            "note": (
+                "W79: liquidity modulates tx cost and short spread. "
+                "Missing bars/fields → gap disclose; never invent ADV. "
+                "TOPIX/scale membership alone never invents a bucket."
+            ),
+        },
         "repo_series_api": {
             "load_repo_rate_series": "unified loader (mapping / rows / series)",
             "load_repo_rate_series_from_mapping": "date→rate_pct mapping",
@@ -989,23 +1722,39 @@ def cost_models_document() -> dict[str, Any]:
             "date_matched_leverage_financing_costs": "per-date financing",
             "date_matched_short_borrow_costs": "per-date short cost",
         },
+        "liquidity_api": {
+            "yen_turnover_from_bar": "single-bar yen turnover (gap-safe)",
+            "compute_liquidity_proxy_from_bars": "ADV from equities_bars rows",
+            "compute_liquidity_proxy_from_adv": "ADV scalar envelope",
+            "liquidity_bucket_from_proxy": "ADV → high/mid/low/missing",
+            "liquidity_cost_multipliers": "bucket → tx/spread mult",
+            "resolve_liquidity_modulation": "unified proxy→bucket→mult",
+            "apply_liquidity_to_one_way_cost": "tx * tx_mult",
+            "apply_liquidity_to_short_spread_bp": "spread * short_spread_mult",
+        },
         "known_position_styles": list(KNOWN_POSITION_STYLES),
+        "known_liquidity_buckets": list(KNOWN_LIQUIDITY_BUCKETS),
         "defaults_policy": {
             "prefer_repo_linked": True,
             "require_repo_linked": False,
+            "prefer_liquidity_linked": True,
+            "require_liquidity_linked": False,
             "fixed_bp_fallback_when": "no repo_rate_series supplied",
-            "long_only_unlevered": "tx only; short/financing N/A explicit",
+            "liquidity_unmodulated_when": "no liquidity proxy / bars / bucket",
+            "long_only_unlevered": "tx only (optionally liq-scaled); short/financing N/A explicit",
             "note": (
                 "Checklist v2 prefers repo-linked financing/short when series "
                 "is available; fixed bp remains valid disclosed fallback. "
+                "Liquidity mult preferred when proxy available; missing "
+                "liquidity never invent-filled (mult=1.0 + gap). "
                 "Gaps never invent-filled."
             ),
         },
         "note": (
             "Research cost models for checklist v2 (v2 surface). Explicit "
             "short/leverage assumptions required. Prefer date-matched "
-            "jsda_tokyo_repo_rates. Pass does not mint READY, arm Mass, or "
-            "claim edge."
+            "jsda_tokyo_repo_rates. Liquidity modulates tx + short spread "
+            "(W79). Pass does not mint READY, arm Mass, or claim edge."
         ),
     }
     doc.update(_freeze_fields())
@@ -1034,6 +1783,16 @@ def build_leverage_short_cost_assumption(
     short_borrow_sensitivity: str | None = None,
     borrow_proxy_annual_bp: float | None = None,
     required_dates: Sequence[Any] | None = None,
+    # --- W79 liquidity-linked ---
+    liquidity_proxy: Mapping[str, Any] | float | None = None,
+    liquidity_bars: Sequence[Mapping[str, Any]] | None = None,
+    liquidity_bucket: str | None = None,
+    liquidity_adv_jpy: float | None = None,
+    is_topix: bool | None = None,
+    scale_category: str | None = None,
+    prefer_liquidity_linked: bool = True,
+    require_liquidity_linked: bool = False,
+    liquidity_required_dates: Sequence[Any] | None = None,
 ) -> dict[str, Any]:
     """Build explicit leverage/short cost assumption block for checklist v2.
 
@@ -1044,6 +1803,12 @@ def build_leverage_short_cost_assumption(
     (default), financing uses mean observed repo rates and short uses
     repo + spread (low/mid/high). **Gaps are disclosed, never ffilled.**
 
+    When liquidity inputs are supplied and ``prefer_liquidity_linked=True``
+    (default), one-way tx cost and short borrow *spread* are scaled by
+    liquidity bucket (high/mid/low). Short low/mid/high sensitivity is
+    applied **first**, then liquidity mult. **Missing liquidity is never
+    invented** — multipliers stay 1.0 and the gap is disclosed.
+
     Returns a freeze-wrapped dict. Does not mint READY/Mass.
     """
     style = str(position_style or "").strip().lower() or POSITION_STYLE_LONG_ONLY_UNLEVERED
@@ -1053,11 +1818,11 @@ def build_leverage_short_cost_assumption(
         style_known = True
 
     if one_way_cost_bp is not None:
-        tx = float(one_way_cost_bp) / 10_000.0
-        tx_bp = float(one_way_cost_bp)
+        tx_base = float(one_way_cost_bp) / 10_000.0
+        tx_base_bp = float(one_way_cost_bp)
     else:
-        tx = float(one_way_cost)
-        tx_bp = tx * 10_000.0
+        tx_base = float(one_way_cost)
+        tx_base_bp = tx_base * 10_000.0
 
     # Infer uses_short / uses_leverage from style when not provided.
     if uses_short is None:
@@ -1075,8 +1840,8 @@ def build_leverage_short_cost_assumption(
     else:
         uses_leverage = bool(uses_leverage)
 
-    # Resolve short spread sensitivity.
-    spread_bp = (
+    # Resolve short spread sensitivity (base band before liquidity mult).
+    spread_base_bp = (
         float(short_borrow_spread_bp)
         if short_borrow_spread_bp is not None
         else DEFAULT_SHORT_BORROW_SPREAD_BP
@@ -1090,13 +1855,42 @@ def build_leverage_short_cost_assumption(
                 f"{list(SHORT_BORROW_SPREAD_SENSITIVITY)}, got "
                 f"{short_borrow_sensitivity!r}"
             )
-        spread_bp = float(SHORT_BORROW_SPREAD_SENSITIVITY[key])
+        spread_base_bp = float(SHORT_BORROW_SPREAD_SENSITIVITY[key])
         sens_label = key
     else:
         for k, v in SHORT_BORROW_SPREAD_SENSITIVITY.items():
-            if abs(spread_bp - float(v)) < 1e-12:
+            if abs(spread_base_bp - float(v)) < 1e-12:
                 sens_label = k
                 break
+
+    # ---- W79 liquidity modulation (tx + short spread) ----
+    liq_req = (
+        liquidity_required_dates
+        if liquidity_required_dates is not None
+        else required_dates
+    )
+    liq = resolve_liquidity_modulation(
+        liquidity_proxy=liquidity_proxy,
+        liquidity_bars=liquidity_bars,
+        liquidity_bucket=liquidity_bucket,
+        liquidity_adv_jpy=liquidity_adv_jpy,
+        is_topix=is_topix,
+        scale_category=scale_category,
+        required_dates=liq_req,
+        prefer_liquidity_linked=bool(prefer_liquidity_linked),
+    )
+    tx_mult = float(liq["tx_mult"])
+    short_spread_mult = float(liq["short_spread_mult"])
+    liq_applied = bool(liq.get("applied"))
+    liq_gap = bool(liq.get("is_gap"))
+
+    # Effective tx after liquidity mult.
+    tx = apply_liquidity_to_one_way_cost(tx_base, tx_mult=tx_mult)
+    tx_bp = tx * 10_000.0
+    # Effective short spread = sensitivity band * liquidity mult.
+    spread_bp = apply_liquidity_to_short_spread_bp(
+        spread_base_bp, short_spread_mult=short_spread_mult
+    )
 
     # Normalize / re-check series against required_dates if given.
     series_doc: dict[str, Any] | None = None
@@ -1116,19 +1910,32 @@ def build_leverage_short_cost_assumption(
     use_repo = bool(prefer_repo_linked and repo_available)
 
     # ---- Short borrow rate resolution ----
+    # For repo+spread and fixed paths, spread already includes liquidity mult
+    # when modulated. For fixed annual / borrow_proxy overrides, also scale
+    # the annual borrow by short_spread_mult when liquidity is applied and
+    # no explicit short_borrow_annual_bp was forced without mult intent:
+    # policy: scale spread component only for repo+spread; for fixed default
+    # annual, scale the whole annual by short_spread_mult when modulated so
+    # low-liquidity shorts cost more even without repo series.
     short_rate_source = RATE_SOURCE_NOT_APPLICABLE
     if uses_short:
         if borrow_proxy_annual_bp is not None and not use_repo:
-            borrow_bp = float(borrow_proxy_annual_bp)
+            borrow_bp = float(borrow_proxy_annual_bp) * (
+                short_spread_mult if liq_applied else 1.0
+            )
             short_rate_source = RATE_SOURCE_BORROW_PROXY
         elif use_repo and repo_mean is not None and repo_mean.get("mean_annual_bp") is not None:
             borrow_bp = float(repo_mean["mean_annual_bp"]) + float(spread_bp)
             short_rate_source = RATE_SOURCE_REPO_PLUS_SPREAD
         elif short_borrow_annual_bp is not None:
-            borrow_bp = float(short_borrow_annual_bp)
+            borrow_bp = float(short_borrow_annual_bp) * (
+                short_spread_mult if liq_applied else 1.0
+            )
             short_rate_source = RATE_SOURCE_FIXED_BP
         else:
-            borrow_bp = DEFAULT_SHORT_BORROW_ANNUAL_BP
+            borrow_bp = DEFAULT_SHORT_BORROW_ANNUAL_BP * (
+                short_spread_mult if liq_applied else 1.0
+            )
             short_rate_source = RATE_SOURCE_FIXED_BP
     else:
         borrow_bp = (
@@ -1194,11 +2001,22 @@ def build_leverage_short_cost_assumption(
         fin_rate_source = RATE_SOURCE_NOT_APPLICABLE
 
     default_tx = float(DEFAULT_ONE_WAY_COST)
-    tx_changed = abs(tx - default_tx) > 1e-15
+    # Base (pre-liquidity) change detection — liquidity mult alone is not a
+    # "cost_change_reason" requirement (it is an explicit model path).
+    tx_changed = abs(tx_base - default_tx) > 1e-15
     # For disclosure: fixed-bp override detection vs historical defaults
     # (repo-linked rates are not "changed from fixed default" in the same sense)
+    # Compare pre-liquidity fixed/proxy overrides.
     if short_rate_source == RATE_SOURCE_FIXED_BP:
-        borrow_changed = abs(borrow_bp - DEFAULT_SHORT_BORROW_ANNUAL_BP) > 1e-12
+        if short_borrow_annual_bp is not None:
+            borrow_changed = (
+                abs(float(short_borrow_annual_bp) - DEFAULT_SHORT_BORROW_ANNUAL_BP)
+                > 1e-12
+            )
+        elif liq_applied:
+            borrow_changed = False  # default annual * liq mult is model path
+        else:
+            borrow_changed = abs(borrow_bp - DEFAULT_SHORT_BORROW_ANNUAL_BP) > 1e-12
     elif short_rate_source == RATE_SOURCE_BORROW_PROXY:
         borrow_changed = True  # explicit proxy always disclosed as non-default
     else:
@@ -1232,6 +2050,13 @@ def build_leverage_short_cost_assumption(
     ):
         disclosed = False
         missing.append("financing_change_reason")
+
+    # Optional hard prefer: require_liquidity_linked blocks completeness when
+    # liquidity is missing/unusable.
+    if bool(require_liquidity_linked) and liq_gap:
+        disclosed = False
+        if "liquidity_proxy" not in missing:
+            missing.append("liquidity_proxy")
 
     assumptions_complete = disclosed and (
         short_not_applicable or uses_short
@@ -1279,6 +2104,40 @@ def build_leverage_short_cost_assumption(
         ),
     }
 
+    liq_block: dict[str, Any] = {
+        "preferred": bool(prefer_liquidity_linked),
+        "require_liquidity_linked": bool(require_liquidity_linked),
+        "applied": liq_applied,
+        "is_gap": liq_gap,
+        "bucket": liq.get("bucket"),
+        "adv_jpy": liq.get("adv_jpy"),
+        "tx_mult": tx_mult,
+        "short_spread_mult": short_spread_mult,
+        "spread_base_bp": float(spread_base_bp),
+        "spread_effective_bp": float(spread_bp),
+        "tx_base": float(tx_base),
+        "tx_base_bp": float(tx_base_bp),
+        "tx_effective": float(tx),
+        "tx_effective_bp": float(tx_bp),
+        "tx_mult_map": dict(LIQUIDITY_TX_MULT),
+        "short_spread_mult_map": dict(LIQUIDITY_SHORT_SPREAD_MULT),
+        "dataset": LIQUIDITY_DATASET_ID,
+        "proxy_unit": LIQUIDITY_PROXY_UNIT,
+        "proxy": liq.get("proxy"),
+        "bucket_detail": liq.get("bucket_detail"),
+        "multipliers": liq.get("multipliers"),
+        "ffill_applied": False,
+        "invent_fill": False,
+        "gap_policy": "disclose_only_no_ffill_no_invent",
+        "formula": liq.get("formula"),
+        "note": (
+            "Liquidity scales one_way_tx and short spread (after low/mid/high "
+            "sensitivity). Missing liquidity → mult=1.0, gap disclosed, no invent."
+            if prefer_liquidity_linked
+            else "prefer_liquidity_linked=False; mult forced to 1.0."
+        ),
+    }
+
     out: dict[str, Any] = {
         "version": COST_MODELS_VERSION,
         "prior_version": COST_MODELS_VERSION_V1,
@@ -1295,17 +2154,26 @@ def build_leverage_short_cost_assumption(
             fin_rate_source == RATE_SOURCE_REPO_SERIES
             or short_rate_source == RATE_SOURCE_REPO_PLUS_SPREAD
         ),
+        "prefer_liquidity_linked": bool(prefer_liquidity_linked),
+        "require_liquidity_linked": bool(require_liquidity_linked),
+        "liquidity_linked": liq_applied,
         "transaction": {
             "one_way_cost": tx,
             "one_way_cost_bp": tx_bp,
+            "one_way_cost_base": tx_base,
+            "one_way_cost_base_bp": tx_base_bp,
             "round_trip_cost": tx * 2.0,
             "round_trip_cost_bp": tx_bp * 2.0,
             "default_one_way_cost": default_tx,
+            "liquidity_tx_mult": tx_mult,
             "changed_from_default": tx_changed,
             "change_reason": (
                 str(cost_change_reason).strip() if cost_change_reason else None
             ),
-            "formula": "net_one_way = gross_signed_mean_active - one_way_cost",
+            "formula": (
+                "net_one_way = gross_signed_mean_active - one_way_cost; "
+                "one_way_cost = one_way_base * liquidity_tx_mult[bucket]"
+            ),
         },
         "short_borrow": {
             "not_applicable": short_not_applicable,
@@ -1319,11 +2187,27 @@ def build_leverage_short_cost_assumption(
             "spread_bp": (
                 float(spread_bp)
                 if uses_short and short_rate_source == RATE_SOURCE_REPO_PLUS_SPREAD
+                else (float(spread_bp) if uses_short and liq_applied else None)
+            ),
+            "spread_base_bp": (
+                float(spread_base_bp)
+                if uses_short
+                and (
+                    short_rate_source == RATE_SOURCE_REPO_PLUS_SPREAD
+                    or liq_applied
+                )
                 else None
+            ),
+            "liquidity_short_spread_mult": (
+                short_spread_mult if uses_short else None
             ),
             "sensitivity": (
                 sens_label
-                if uses_short and short_rate_source == RATE_SOURCE_REPO_PLUS_SPREAD
+                if uses_short
+                and (
+                    short_rate_source == RATE_SOURCE_REPO_PLUS_SPREAD
+                    or sens_label is not None
+                )
                 else None
             ),
             "sensitivity_bands_bp": dict(SHORT_BORROW_SPREAD_SENSITIVITY),
@@ -1340,16 +2224,22 @@ def build_leverage_short_cost_assumption(
                 else None
             ),
             "formula": (
-                "short_borrow_daily ≈ (repo_annual + spread) / trading_days "
-                "* short_fraction"
+                "short_borrow_daily ≈ (repo_annual + spread_base*liq_mult) "
+                "/ trading_days * short_fraction"
                 if short_rate_source == RATE_SOURCE_REPO_PLUS_SPREAD
                 else (
                     "short_borrow_daily ≈ (annual_bp/10000) / trading_days "
                     "* short_fraction"
+                    + (
+                        " (annual scaled by liq short_spread_mult when applied)"
+                        if liq_applied
+                        else ""
+                    )
                 )
             ),
             "note": (
-                "Research stock-lending fee model (repo + spread preferred). "
+                "Research stock-lending fee model (repo + spread preferred; "
+                "spread = sensitivity_band * liquidity_mult). "
                 if uses_short
                 else "Short side not used; borrow fee N/A (explicit)."
             ),
@@ -1397,6 +2287,7 @@ def build_leverage_short_cost_assumption(
             ),
         },
         "repo_rate": repo_block,
+        "liquidity": liq_block,
         "combined_daily_extra_cost": short_daily + fin_daily,
         "combined_daily_extra_cost_bp": (short_daily + fin_daily) * 10_000.0,
         "net_formula_extended": (
@@ -1409,6 +2300,8 @@ def build_leverage_short_cost_assumption(
         "note": (
             "Explicit leverage/short cost assumptions for checklist v2. "
             "Prefer date-matched jsda_tokyo_repo_rates over fixed bp. "
+            "Liquidity modulates tx cost and short spread (W79); missing "
+            "liquidity disclosed, never invented. "
             "Long-only unlevered must still state N/A. Not READY / not Mass."
         ),
     }
@@ -1421,11 +2314,18 @@ def default_long_only_unlevered_cost_assumption(
     one_way_cost: float = DEFAULT_ONE_WAY_COST,
     cost_change_reason: str | None = None,
     repo_rate_series: Mapping[str, Any] | None = None,
+    liquidity_proxy: Mapping[str, Any] | float | None = None,
+    liquidity_bars: Sequence[Mapping[str, Any]] | None = None,
+    liquidity_bucket: str | None = None,
+    liquidity_adv_jpy: float | None = None,
+    is_topix: bool | None = None,
+    scale_category: str | None = None,
+    prefer_liquidity_linked: bool = True,
 ) -> dict[str, Any]:
     """Convenience: long-only unlevered with base 10bp + explicit N/A shorts/lev.
 
     Repo series may be attached for disclosure/inventory but financing/short
-    remain N/A for this style.
+    remain N/A for this style. Liquidity may still scale one-way tx cost.
     """
     return build_leverage_short_cost_assumption(
         position_style=POSITION_STYLE_LONG_ONLY_UNLEVERED,
@@ -1437,6 +2337,13 @@ def default_long_only_unlevered_cost_assumption(
         uses_leverage=False,
         repo_rate_series=repo_rate_series,
         prefer_repo_linked=True,
+        liquidity_proxy=liquidity_proxy,
+        liquidity_bars=liquidity_bars,
+        liquidity_bucket=liquidity_bucket,
+        liquidity_adv_jpy=liquidity_adv_jpy,
+        is_topix=is_topix,
+        scale_category=scale_category,
+        prefer_liquidity_linked=prefer_liquidity_linked,
     )
 
 
@@ -1562,6 +2469,7 @@ __all__ = [
     "CONNECTED_TO_READY",
     "COST_MODELS_LABEL",
     "COST_MODELS_PROOF",
+    "COST_MODELS_PROOF_REPO_LINKED",
     "COST_MODELS_VERSION",
     "COST_MODELS_VERSION_V1",
     "COST_MODELS_WAVE",
@@ -1577,7 +2485,19 @@ __all__ = [
     "DEFAULT_SHORT_BORROW_SPREAD_BP",
     "DEFAULT_TRADING_DAYS_PER_YEAR",
     "EDGE_CLAIMED",
+    "KNOWN_LIQUIDITY_BUCKETS",
     "KNOWN_POSITION_STYLES",
+    "LIQUIDITY_ADV_HIGH_JPY",
+    "LIQUIDITY_ADV_MID_JPY",
+    "LIQUIDITY_BUCKET_HIGH",
+    "LIQUIDITY_BUCKET_LOW",
+    "LIQUIDITY_BUCKET_MID",
+    "LIQUIDITY_BUCKET_MISSING",
+    "LIQUIDITY_DATASET_ID",
+    "LIQUIDITY_PROXY_UNIT",
+    "LIQUIDITY_SHORT_SPREAD_MULT",
+    "LIQUIDITY_TOPIX_SOFT_UPGRADE",
+    "LIQUIDITY_TX_MULT",
     "MASS_RESEARCH",
     "OPERATIONAL_GO",
     "PHASE7",
@@ -1600,13 +2520,19 @@ __all__ = [
     "SIGNIFICANCE_CLAIMED",
     "annual_bp_to_fraction",
     "annotate_period_rows_with_extended_costs",
+    "apply_liquidity_to_one_way_cost",
+    "apply_liquidity_to_short_spread_bp",
     "build_leverage_short_cost_assumption",
+    "compute_liquidity_proxy_from_adv",
+    "compute_liquidity_proxy_from_bars",
     "cost_models_document",
     "date_matched_leverage_financing_costs",
     "date_matched_short_borrow_costs",
     "default_long_only_unlevered_cost_assumption",
     "leverage_financing_daily_cost",
     "leverage_financing_daily_cost_from_repo",
+    "liquidity_bucket_from_proxy",
+    "liquidity_cost_multipliers",
     "load_repo_rate_series",
     "load_repo_rate_series_from_mapping",
     "load_repo_rate_series_from_pit",
@@ -1617,7 +2543,9 @@ __all__ = [
     "repo_rate_pct_to_annual_bp",
     "repo_rate_pct_to_annual_fraction",
     "research_net_with_extended_costs",
+    "resolve_liquidity_modulation",
     "short_borrow_daily_cost",
     "short_borrow_daily_cost_from_proxy",
     "short_borrow_daily_cost_from_repo",
+    "yen_turnover_from_bar",
 ]

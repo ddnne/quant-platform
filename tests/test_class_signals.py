@@ -1,22 +1,34 @@
-"""W78 / w0816m class signals: multi_day_hold + macro_conditioned (not daily sign)."""
+"""W78–W79 class signals: multi_day_hold + event/flow/fund + macro (not daily sign)."""
 
 from __future__ import annotations
 
 import pytest
 
 from features.class_signals import (
+    CLASS_EVENT_POST,
+    CLASS_FLOW_DEMAND,
+    CLASS_FUNDAMENTALS_PRICE,
     CLASS_MACRO_CONDITIONED,
     CLASS_MULTI_DAY_HOLD,
+    SIGNAL_ID_EVENT_POST,
+    SIGNAL_ID_FLOW_DEMAND,
+    SIGNAL_ID_FUNDAMENTALS_PRICE,
     SIGNAL_ID_MACRO_CONDITIONED,
     SIGNAL_ID_MULTI_DAY_HOLD,
     amortized_one_way_cost,
     apply_sticky_hold,
     class_signal_definitions,
     class_signals_document,
+    compute_event_post_signal,
+    compute_flow_demand_signal,
+    compute_fundamentals_price_signal,
     compute_macro_conditioned_signal,
     compute_multi_day_hold_signal,
     condition_signal_on_regime,
     cross_section_rank_signs,
+    earnings_surprise_proxy,
+    economic_net_meaningful,
+    fundamental_value_score,
     multi_day_forward_return,
     repo_regime_from_change,
     repo_regime_from_level,
@@ -146,6 +158,9 @@ def test_class_signal_definitions_not_daily_sign():
     ids = {d["signal_id"] for d in defs}
     assert SIGNAL_ID_MULTI_DAY_HOLD in ids
     assert SIGNAL_ID_MACRO_CONDITIONED in ids
+    assert SIGNAL_ID_EVENT_POST in ids
+    assert SIGNAL_ID_FLOW_DEMAND in ids
+    assert SIGNAL_ID_FUNDAMENTALS_PRICE in ids
     for d in defs:
         assert d.get("not_simple_daily_sign") is True
         assert d.get("hypothesis_class") != "simple_daily_sign"
@@ -155,8 +170,79 @@ def test_class_signal_definitions_not_daily_sign():
     assert doc["s1_s5_unreject"] is False
 
 
+def test_event_post_flow_fund_signals():
+    surp, meta = earnings_surprise_proxy(eps=10.0, feps=12.0)
+    assert surp == pytest.approx(2.0)
+    assert meta["mode"] == "feps_minus_eps"
+    surp2, meta2 = earnings_surprise_proxy(eps=11.0, prior_eps=10.0)
+    assert surp2 == pytest.approx(1.0)
+    assert meta2["mode"] == "eps_minus_prior"
+    none_s, _ = earnings_surprise_proxy(eps=None, feps=None)
+    assert none_s is None
+
+    ep = compute_event_post_signal(
+        surprise=2.0, is_event_day=True, post_hold_days=5, code="13010"
+    )
+    assert ep["signal_id"] == SIGNAL_ID_EVENT_POST
+    assert ep["hypothesis_class"] == CLASS_EVENT_POST
+    assert ep["value"] == 1.0
+    ep_off = compute_event_post_signal(surprise=2.0, is_event_day=False)
+    assert ep_off["value"] is None
+
+    flow = compute_flow_demand_signal(
+        margin_change=0.05, hold_days=5, code="72030"
+    )
+    assert flow["signal_id"] == SIGNAL_ID_FLOW_DEMAND
+    assert flow["hypothesis_class"] == CLASS_FLOW_DEMAND
+    assert flow["value"] == 1.0
+    assert flow["metadata"]["not_s4_rehash"] is True
+    flow_conf = compute_flow_demand_signal(
+        margin_change=0.05,
+        short_ratio_change=-0.02,
+        require_short_confirm=True,
+    )
+    assert flow_conf["value"] is None  # sign conflict
+
+    vs, vmeta = fundamental_value_score(close=100.0, bps=50.0)
+    assert vs == pytest.approx(0.5)
+    assert vmeta["mode"] == "bps_over_price"
+    fund = compute_fundamentals_price_signal(
+        value_score=0.6,
+        momentum=0.02,
+        value_benchmark=0.4,
+        hold_days=20,
+        mode="value_momentum_agree",
+    )
+    assert fund["signal_id"] == SIGNAL_ID_FUNDAMENTALS_PRICE
+    assert fund["hypothesis_class"] == CLASS_FUNDAMENTALS_PRICE
+    assert fund["value"] == 1.0
+    fund_disagree = compute_fundamentals_price_signal(
+        value_score=0.6,
+        momentum=-0.02,
+        value_benchmark=0.4,
+        mode="value_momentum_agree",
+    )
+    assert fund_disagree["value"] is None
+
+
+def test_economic_net_meaningful_bar():
+    # weak consistent-negative → not meaningful
+    weak = economic_net_meaningful([-0.001, -0.0005, -0.002])
+    assert weak["meaningful"] is False
+    assert weak.get("weak_consistent_negative") is True
+    # positive majority but tiny residual → not meaningful
+    tiny = economic_net_meaningful([0.0001, 0.0002, -0.00005], min_mean_net=0.002)
+    assert tiny["meaningful"] is False
+    # economically meaningful positive
+    good = economic_net_meaningful([0.01, 0.005, 0.003], min_mean_net=0.002)
+    assert good["meaningful"] is True
+
+
 def test_class_hyp_eval_pure_on_synthetic_bars():
     from research.class_hyp_eval import (
+        evaluate_event_post_on_bars,
+        evaluate_flow_demand_on_bars,
+        evaluate_fundamentals_price_on_bars,
         evaluate_macro_conditioned_on_bars,
         evaluate_multi_day_hold_on_bars,
     )
@@ -181,3 +267,45 @@ def test_class_hyp_eval_pure_on_synthetic_bars():
     )
     assert macro["signal_id"] == SIGNAL_ID_MACRO_CONDITIONED
     assert macro["repo_dataset"] == "jsda_tokyo_repo_rates"
+
+    events = {
+        "13010": [
+            {
+                "disc_date": dates[5],
+                "eps": 10.0,
+                "feps": 12.0,
+                "bps": 50.0,
+                "prior_eps": 9.0,
+            }
+        ],
+        "72030": [
+            {
+                "disc_date": dates[8],
+                "eps": 5.0,
+                "feps": 4.0,
+                "bps": 20.0,
+                "prior_eps": 6.0,
+            }
+        ],
+    }
+    ep = evaluate_event_post_on_bars(
+        bars, events, post_hold_days=5, one_way_cost=0.001
+    )
+    assert ep["signal_id"] == SIGNAL_ID_EVENT_POST
+    assert ep["n_events"] == 2
+
+    margin = {
+        "13010": [(dates[i], 1000.0 + 50 * i) for i in range(0, len(dates), 3)],
+        "72030": [(dates[i], 2000.0 - 30 * i) for i in range(0, len(dates), 3)],
+    }
+    flow = evaluate_flow_demand_on_bars(
+        bars, margin, hold_days=5, one_way_cost=0.001
+    )
+    assert flow["signal_id"] == SIGNAL_ID_FLOW_DEMAND
+    assert flow["hypothesis_class"] == CLASS_FLOW_DEMAND
+
+    fund = evaluate_fundamentals_price_on_bars(
+        bars, events, hold_days=5, momentum_n=5, one_way_cost=0.001
+    )
+    assert fund["signal_id"] == SIGNAL_ID_FUNDAMENTALS_PRICE
+    assert fund["hypothesis_class"] == CLASS_FUNDAMENTALS_PRICE
