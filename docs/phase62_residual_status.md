@@ -2,7 +2,7 @@
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
 **Live verified:** 2026-08-16 · **W79** GO final-gate residual **COMPLETE** · **GO = pre-live-order final gate** · liquidity+repo cost_models v2 · OTC **163→639 (+476)** FULL_OK max · hyp candidate search (event_post/flow_demand/fundamentals_price · multi_day 10d discussion_only · **no production candidate**) · COMPLETE 22 health · FRESH · live verified ops COMPLETE **22** held · DEFER **4** remaining (bars_am · earn_cal · master · OTC dataset PARTIAL) · segs **4028** · empty **0** · **OTC 639** (dataset still PARTIAL) · bars_am COMPLETE tip **1** / PARTIAL **31** · Mass/READY/Phase7/operational GO **NO-GO/未宣言/OFF/未宣言** · paper path **separate** · FRESH `projgen-16552e9f51de45a58f9a1c1f97f39a95` · S1–S5 **research_baseline_rejected** untouched · densify **none** · **no invent** · **no Mass/READY ON** · **no operational GO** · **no S1–S5 un-reject** · **no OTC bulk densify** · **no fins roll-back** · **no simple_daily_sign mass gen** · **no live orders** · COMPLETE expand = **tip-wait** · research entry **linked** · checklist **v2** · `simple_daily_sign` default **OFF** · W78 underneath held
-**Repo tip:** `(pending pin after commit)` — W79 GO final-gate residual close · COMPLETE **22** / DEFER **4** / segs **4028** / OTC **639** / READY **未宣言** · operational GO **未宣言** · FRESH `projgen-16552e9f51de45a58f9a1c1f97f39a95`
+**Repo tip:** `903215e39918d9210063421cec14b41223ddb2d5` — W79 GO final-gate residual close · COMPLETE **22** / DEFER **4** / segs **4028** / OTC **639** / READY **未宣言** · operational GO **未宣言** · FRESH `projgen-16552e9f51de45a58f9a1c1f97f39a95`
 
 ## Research entry (W74 · ready · freeze W75 · redesign W77 · GO-build W78 · GO-final W79)
 
