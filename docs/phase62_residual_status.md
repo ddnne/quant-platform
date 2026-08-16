@@ -1,25 +1,69 @@
 # Phase 6.2 / 6.3 residual status
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
-**Live verified:** 2026-08-15/16 · **W70** tip + aggregate residual **COMPLETE** · live verified ops COMPLETE **22** held · DEFER **4** remaining (bars_am · earn_cal · master · OTC) · segs **3482** · empty **0** · **OTC 93** (+0) · bars_am COMPLETE tip **1** (+0) · Mass/READY/Phase7 **NO-GO/OFF** · FRESH `projgen-5a13abfcb3774c6cb8276b57089efab1` · S1–S5 **research_baseline_rejected** untouched · densify **none** · **no invent** · **no Mass/READY ON** · **no S1–S5 un-reject** · **no OTC bulk densify** · **no fins roll-back** · aggregate follow-up tooling landed
-**Repo tip:** `0e0d96e0377a0907465c6fcb50ae53f27e47d87c` — W70 tip + aggregate residual close · COMPLETE **22** / DEFER **4** / segs **3482** / OTC **93** / READY **未宣言** · FRESH `projgen-5a13abfcb3774c6cb8276b57089efab1`
+**Live verified:** 2026-08-16 · **W71** bars_am history live probe residual **COMPLETE** · LIVE_API_EMPTY all **31** PARTIAL months confirmed · sealed_n **0** · live verified ops COMPLETE **22** held · DEFER **4** remaining (bars_am · earn_cal · master · OTC) · segs **3482** · empty **0** · **OTC 93** (+0) · bars_am COMPLETE tip **1** / PARTIAL **31** (history live empty) · Mass/READY/Phase7 **NO-GO/OFF** · FRESH `projgen-e106119e243949fa92b4f180deed007b` · S1–S5 **research_baseline_rejected** untouched · densify **none** · **no invent** · **no Mass/READY ON** · **no S1–S5 un-reject** · **no OTC bulk densify** · **no fins roll-back** · tip-only vendor reconfirmed
+**Repo tip:** *(pin after push)* — W71 bars_am live probe residual close · COMPLETE **22** / DEFER **4** / segs **3482** / OTC **93** / READY **未宣言** · FRESH `projgen-e106119e243949fa92b4f180deed007b`
 
-## tip + aggregate residual close（Dataset COMPLETE 22 held）· W70
+## bars_am history live probe residual close（Dataset COMPLETE 22 held · LIVE_API_EMPTY）· W71
+
+**Phase name:** bars_am history live API re-probe all empty + OTC tip +0 + FRESH residual close（宣言なし · invent なし）  
+**Wave:** W71 / w0816e  
+**Close:** [`docs/proof/w0816e_w71_bars_am_live_probe_close_20260816.md`](proof/w0816e_w71_bars_am_live_probe_close_20260816.md)  
+**Task A bars_am live history probe:** [`docs/proof/w0816e_w71_bars_am_history_live_probe_20260816.md`](proof/w0816e_w71_bars_am_history_live_probe_20260816.md) · **31/31 LIVE_API_EMPTY** · `rowsInserted=0` · sealed_n **0** · R2 run_ids **14098…14129** · PARTIAL restore after plan UNKNOWN rewrite  
+**Task C OTC rescan:** [`docs/proof/w0816e_w71_otc_rescan_20260816.md`](proof/w0816e_w71_otc_rescan_20260816.md) · COMPLETE **93** Δ**0** · FULL_OK_NEW **0**  
+**Final verify:** [`.glm-logs/w0816e_w71_bars_am/verify_final.json`](../.glm-logs/w0816e_w71_bars_am/verify_final.json) · COMPLETE **22** · PARTIAL **4** · bars_am **1/31** · fins **104/104** · segs **3482** · empty **0** · LIVE_API_EMPTY · all_checks_pass  
+**Logs:** [`.glm-logs/w0816e_w71_bars_am/`](../.glm-logs/w0816e_w71_bars_am/) · FRESH log `reeval_freshness.log` · `live_api_results.json` · `LIVE_API_EMPTY.json`  
+**FRESH:** `projgen-e106119e243949fa92b4f180deed007b` · coverage_segments untouched (reeval) · mass=NO-GO · densify **none**  
+**S1–S5:** stay **research_baseline_rejected** (no un-reject)  
+**Prior W70 tip + aggregate residual:** held underneath  
+
+| gate | status |
+|------|--------|
+| READY | **未宣言** |
+| Mass / Phase7 | **NO-GO / OFF** |
+| Dataset COMPLETE | **22** held |
+| DEFER | **4** (bars_am · earn_cal · master · OTC) |
+| COMPLETE segs | **3482** |
+| empty COMPLETE | **0** |
+| OTC | **93** (+0) |
+| fins_earnings_date | **104/104** COMPLETE · `dataset_coverage` **COMPLETE** |
+| bars_am | COMPLETE **1** tip / PARTIAL **31** · history live **EMPTY** reconfirmed (W71) |
+| densify | **none** |
+| actionable_gap | **0** (history densify unavailable on AM path) |
+| S1–S5 catalog | **research_baseline_rejected** untouched |
+| FRESH | `projgen-e106119e243949fa92b4f180deed007b` |
+| LIVE_API_EMPTY (bars_am history) | **true** · 31/31 · sealed_n **0** |
+| PD-D4-BARS-AM | **held** · tip-only vendor · research history loads still deferred |
+| aggregate follow-up tooling | **COMPLETE** (W70; held) |
+| ops aggregate sync | **COMPLETE** (W69; held) |
+
+### Explicit non-declarations (held)
+
+- **READY** — not declared  
+- **Mass** — **NO-GO / OFF**  
+- **Phase7** — **OFF**  
+- **bars_am history COMPLETE invent** — not claimed (live empty ×31; sealed_n=0)  
+- **OTC COMPLETE invent** — not claimed (+0 honest)  
+- **densify success** — not claimed (densify_executed=0)  
+- **fins segment invent / roll-back** — not done (104/104 held)  
+- **Dataset COMPLETE 23** — not invented (bars_am still 1/32)
+
+## tip + aggregate residual close（Dataset COMPLETE 22 held）· W70 held · history live empty reconfirmed W71
 
 **Phase name:** reusable surgical re-agg path + OTC/bars_am honest +0 + earn_cal/master plan + FRESH residual close（宣言なし）  
 **Wave:** W70 / w0816d  
 **Close:** [`docs/proof/w0816d_w70_tip_and_aggregate_close_20260816.md`](proof/w0816d_w70_tip_and_aggregate_close_20260816.md)  
 **Task A aggregate follow-up:** [`docs/proof/w0816d_w70_aggregate_followup_20260816.md`](proof/w0816d_w70_aggregate_followup_20260816.md) · `sync_dataset_coverage_from_segments` + CLI + **15** tests + checklist/restore wire · COMPLETE **22** held dry-run  
 **Task B OTC:** [`docs/proof/w0816d_w70_otc_tip_20260816.md`](proof/w0816d_w70_otc_tip_20260816.md) · COMPLETE **93** Δ**0** · FULL_OK_NEW **0**  
-**Task C bars_am:** [`docs/proof/w0816d_w70_bars_am_tip_20260816.md`](proof/w0816d_w70_bars_am_tip_20260816.md) · COMPLETE tip **1** / PARTIAL **31** · history **+0** · PD-D4-BARS-AM densify history FORBIDDEN  
+**Task C bars_am:** [`docs/proof/w0816d_w70_bars_am_tip_20260816.md`](proof/w0816d_w70_bars_am_tip_20260816.md) · COMPLETE tip **1** / PARTIAL **31** · history **+0** · PD-D4-BARS-AM densify history FORBIDDEN · **W71 re-probed live empty**  
 **Task D earn_cal/master plan:** [`docs/proof/w0816d_w70_earn_cal_master_plan_20260816.md`](proof/w0816d_w70_earn_cal_master_plan_20260816.md) · investigation only · no bulk  
 **Final verify:** [`.glm-logs/w0816d_w70_tip/verify_final.json`](../.glm-logs/w0816d_w70_tip/verify_final.json) · COMPLETE **22** · PARTIAL **4** · fins **104/104** · segs **3482** · empty **0** · all_checks_pass  
 **Logs:** [`.glm-logs/w0816d_w70_tip/`](../.glm-logs/w0816d_w70_tip/) · FRESH log `reeval_freshness.log`  
-**FRESH:** `projgen-5a13abfcb3774c6cb8276b57089efab1` · coverage_segments untouched (reeval) · mass=NO-GO · densify **none**  
+**FRESH (at W70):** `projgen-5a13abfcb3774c6cb8276b57089efab1` · coverage_segments untouched (reeval) · mass=NO-GO · densify **none**  
 **S1–S5:** stay **research_baseline_rejected** (no un-reject)  
 **Prior W69 ops aggregate sync residual:** held underneath  
 
-| gate | status |
+| gate | status (W70 held snapshot) |
 |------|--------|
 | READY | **未宣言** |
 | Mass / Phase7 | **NO-GO / OFF** |
@@ -33,12 +77,12 @@
 | densify | **none** |
 | actionable_gap | **0** |
 | S1–S5 catalog | **research_baseline_rejected** untouched |
-| FRESH | `projgen-5a13abfcb3774c6cb8276b57089efab1` |
+| FRESH | `projgen-5a13abfcb3774c6cb8276b57089efab1` (W70) |
 | aggregate follow-up tooling | **COMPLETE** (W70) |
 | ops aggregate sync | **COMPLETE** (W69; held) |
 | PD-MX-EARN-TIP | **superseded** (tip4 only; W68) · aggregate closed W69 |
 
-### Explicit non-declarations (held)
+### Explicit non-declarations (held at W70)
 
 - **READY** — not declared  
 - **Mass** — **NO-GO / OFF**  
