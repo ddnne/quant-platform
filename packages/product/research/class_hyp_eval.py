@@ -1,9 +1,10 @@
-"""Offline multi-year class-hypothesis eval (W78–W80).
+"""Offline multi-year class-hypothesis eval (W78–W81).
 
 Runs class research signals over local bar mirrors + local SQLite
 (``jsda_repo_rates``, ``fins_summary``, ``fins_earnings_date``, margin/short),
 then feeds cost-aware robustness gate + checklist v2 + economic-net +
-**occurrence-rate** production candidate bar.
+**occurrence-rate** + **W81 statistical bar** (t-stat / Sharpe / win-rate)
+production candidate bar.
 
 Classes covered
 ---------------
@@ -15,9 +16,11 @@ Hard constraints
 * Not simple_daily_sign · no S1–S5 un-reject
 * Not READY / Mass / Phase7 / orders
 * No invent fill on repo / fins / margin / liquidity gaps
-* W80: ``research_candidate=True`` only when production bar fully met
-  (still never auto-connects Mass / READY / operational GO)
+* W81: ``research_candidate=True`` only when production bar fully met
+  including |t| / Sharpe / period win-rate (still never auto-connects
+  Mass / READY / operational GO)
 * weak consistent-negative is **not_candidate** (economic net bar)
+* noisy low t/Sharpe / unstable yearly signs → demote to discussion_only
 * Event sufficiency = occurrence **rate** (not absolute count alone);
   short window with OK rate → extend and re-eval
 """
@@ -44,10 +47,14 @@ from features.class_signals import (
     DEFAULT_FUND_MOMENTUM_N,
     DEFAULT_HOLD_DAYS,
     DEFAULT_MAX_YEAR_POS_NET_SHARE,
+    DEFAULT_MIN_ABS_T_STAT,
     DEFAULT_MIN_ACTIVATION_RATE_MULTIDAY,
     DEFAULT_MIN_ECONOMIC_NET,
     DEFAULT_MIN_EVENTS_PER_CODE_YEAR,
     DEFAULT_MIN_EVENTS_PER_TRADING_DAY,
+    DEFAULT_MIN_PERIOD_WIN_RATE,
+    DEFAULT_MIN_POSITIVE_PERIODS,
+    DEFAULT_MIN_SHARPE_PERIOD,
     DEFAULT_MIN_YEARS_RESEARCH_CANDIDATE,
     DEFAULT_REPO_HIGH_THRESHOLD,
     DEFAULT_REPO_LOW_THRESHOLD,
@@ -77,6 +84,12 @@ from features.class_signals import (
     occurrence_rate_multiday,
     production_candidate_bar,
     sign_from_numeric,
+)
+from research.stats_metrics import (
+    period_stats_report,
+    stats_bar_check,
+    stats_metrics_document,
+    trade_stats_report,
 )
 from research.cost_models import (
     DEFAULT_ONE_WAY_COST,
@@ -111,7 +124,7 @@ from research.robustness_gate import evaluate_research_robustness_gate
 # Freeze / identity
 # ---------------------------------------------------------------------------
 
-CLASS_HYP_EVAL_VERSION: str = "class-hyp-eval/v3"
+CLASS_HYP_EVAL_VERSION: str = "class-hyp-eval/v4"
 CLASS_HYP_EVAL_WAVE: str = CLASS_SIGNALS_WAVE
 MASS_RESEARCH: str = "NO-GO"
 PHASE7: str = "OFF"
@@ -123,6 +136,11 @@ MIN_EVENTS_PER_CODE_YEAR: float = DEFAULT_MIN_EVENTS_PER_CODE_YEAR
 MIN_EVENTS_PER_TRADING_DAY: float = DEFAULT_MIN_EVENTS_PER_TRADING_DAY
 MIN_YEARS_RESEARCH_CANDIDATE: int = DEFAULT_MIN_YEARS_RESEARCH_CANDIDATE
 MAX_YEAR_POS_NET_SHARE: float = DEFAULT_MAX_YEAR_POS_NET_SHARE
+# W81 statistical bar floors (period nets).
+MIN_ABS_T_STAT: float = DEFAULT_MIN_ABS_T_STAT
+MIN_SHARPE_PERIOD: float = DEFAULT_MIN_SHARPE_PERIOD
+MIN_PERIOD_WIN_RATE: float = DEFAULT_MIN_PERIOD_WIN_RATE
+MIN_POSITIVE_PERIODS: int = DEFAULT_MIN_POSITIVE_PERIODS
 
 # Default codes matching multi-year harness probes.
 DEFAULT_EVAL_CODES: tuple[str, ...] = (
@@ -985,6 +1003,13 @@ def evaluate_multi_day_hold_on_bars(
     net = (gross - am_cost) if gross is not None else None
     # dailyized residual illustration (research only)
     net_daily = (gross - one_way_cost) if gross is not None else None
+    trade_stats = trade_stats_report(
+        signed_returns,
+        hold_days=h,
+        one_way_cost=float(one_way_cost),
+        amortize_cost=True,
+        trading_days_per_year=DEFAULT_TRADING_DAYS_PER_YEAR,
+    )
 
     n_code_days = len(holding_records)
     n_codes = len(bars_by_code)
@@ -1016,6 +1041,7 @@ def evaluate_multi_day_hold_on_bars(
         "n_code_days": n_code_days,
         "n_trading_days": n_trading_days,
         "occurrence": occ,
+        "trade_stats": trade_stats,
         "per_code_sample": per_code_stats[:10],
         "holding_records": holding_records,
         "non_null": n_active,
@@ -1027,6 +1053,7 @@ def evaluate_multi_day_hold_on_bars(
             f"Multi-day hold n={h}: sticky fixed_horizon; "
             "gross = mean(sign * R_hold); net = gross - one_way/hold_days. "
             "Occurrence = activation rate (not count alone). "
+            "trade_stats = t/Sharpe/winrate on hold nets. "
             "Not READY / not Mass."
         ),
     }
@@ -1371,6 +1398,13 @@ def evaluate_event_post_on_bars(
 
     gross = mean(signed_returns) if signed_returns else None
     net = (gross - am_cost) if gross is not None else None
+    trade_stats = trade_stats_report(
+        signed_returns,
+        hold_days=h,
+        one_way_cost=float(one_way_cost),
+        amortize_cost=True,
+        trading_days_per_year=DEFAULT_TRADING_DAYS_PER_YEAR,
+    )
     n_codes = len(bars_by_code)
     all_bar_dates: set[str] = set()
     for pairs in bars_by_code.values():
@@ -1409,6 +1443,7 @@ def evaluate_event_post_on_bars(
         "n_trading_days": n_trading_days,
         "n_code_days": n_code_days,
         "occurrence": occ,
+        "trade_stats": trade_stats,
         "holding_records": holding_records,
         "non_null": n_scored,
         "non_null_rate": (
@@ -1419,6 +1454,7 @@ def evaluate_event_post_on_bars(
             f"Event-post hold={h}d on fins DiscDate surprise proxy "
             "(+ fins_earnings_date thicken when merged). "
             "Occurrence = rate (events/day or per code-year), not count alone. "
+            "trade_stats = t/Sharpe/winrate on hold nets. "
             "Gaps → skip (no invent). Not READY / not Mass."
         ),
     }
@@ -1726,18 +1762,24 @@ def run_class_hyp_multi_year_eval(
     min_events_per_trading_day: float = MIN_EVENTS_PER_TRADING_DAY,
     min_years_research_candidate: int = MIN_YEARS_RESEARCH_CANDIDATE,
     max_year_pos_net_share: float = MAX_YEAR_POS_NET_SHARE,
+    min_abs_t_stat: float = MIN_ABS_T_STAT,
+    min_sharpe_period: float = MIN_SHARPE_PERIOD,
+    min_period_win_rate: float = MIN_PERIOD_WIN_RATE,
+    min_positive_periods: int = MIN_POSITIVE_PERIODS,
+    require_stats_bar: bool = True,
     apply_robustness_gate: bool = True,
     prefer_liquidity_linked: bool = True,
     thicken_event_with_earnings_date: bool = True,
     checklist_complete: bool = True,
 ) -> dict[str, Any]:
-    """Multi-year offline eval for all enabled class hyps (W80).
+    """Multi-year offline eval for all enabled class hyps (W81).
 
     Uses local W63 Q4 + W64 full bar/margin mirrors and local SQLite
     (jsda_repo_rates, fins_summary, fins_earnings_date, short_ratio).
 
     Production ``research_candidate=True`` only when gate + economic net +
-    occurrence rate + multi-year skew + risk all pass (still not READY/Mass).
+    occurrence rate + multi-year skew + risk + **statistical bar**
+    (|t|, Sharpe, period win-rate) all pass (still not READY/Mass).
     """
     period_list = [dict(p) for p in (periods or DEFAULT_PERIODS)]
     selected = (
@@ -1959,6 +2001,7 @@ def run_class_hyp_multi_year_eval(
                     "n_trading_days": eval_out.get("n_trading_days"),
                     "n_code_days": eval_out.get("n_code_days"),
                     "occurrence": eval_out.get("occurrence"),
+                    "trade_stats": eval_out.get("trade_stats"),
                     "signal_id": signal_id,
                     "holding_records": eval_out.get("holding_records"),
                     **liq_extra,
@@ -2461,6 +2504,51 @@ def run_class_hyp_multi_year_eval(
             nets, max_pos_share=float(max_year_pos_net_share)
         )
 
+    def _stats_from_rows(
+        rows: list[dict[str, Any]],
+        *,
+        hold_days: int | None = None,
+    ) -> dict[str, Any]:
+        """Period-net statistical pack + W81 stats bar check."""
+        ok_rows = [
+            r
+            for r in rows
+            if r.get("status") == "ok"
+            and r.get("net_one_way_mean_active") is not None
+        ]
+        nets = [float(r["net_one_way_mean_active"]) for r in ok_rows]
+        pids = [str(r.get("period_id") or r.get("year") or "p") for r in ok_rows]
+        stats = period_stats_report(
+            nets, period_ids=pids, hold_days=hold_days
+        )
+        # Attach per-period trade_stats summaries when present (no raw trades).
+        trade_rows = []
+        for r in ok_rows:
+            ts = r.get("trade_stats")
+            if isinstance(ts, Mapping):
+                trade_rows.append(
+                    {
+                        "period_id": r.get("period_id"),
+                        "n_trades": ts.get("n_trades"),
+                        "mean_net": ts.get("mean_net"),
+                        "t_stat": ts.get("t_stat"),
+                        "sharpe_ann": ts.get("sharpe_ann"),
+                        "win_rate": ts.get("win_rate"),
+                        "payoff": ts.get("payoff"),
+                        "max_dd": ts.get("max_dd"),
+                    }
+                )
+        if trade_rows:
+            stats["per_period_trade_stats"] = trade_rows
+        bar = stats_bar_check(
+            stats,
+            min_abs_t=float(min_abs_t_stat),
+            min_sharpe=float(min_sharpe_period),
+            min_win_rate=float(min_period_win_rate),
+            min_positive_periods=int(min_positive_periods),
+        )
+        return {"stats": stats, "stats_bar": bar}
+
     def _candidate_verdict(
         gate: dict[str, Any] | None,
         risk: dict[str, Any] | None,
@@ -2471,9 +2559,10 @@ def run_class_hyp_multi_year_eval(
         hyp_kind: str = "generic",
         hold_days_for_occ: int = 5,
     ) -> dict[str, Any]:
-        """W80 production bar: gate + risk + econ + occurrence + multi-year skew.
+        """W81 production bar: gate + risk + econ + occurrence + skew + stats.
 
         Weak consistent-negative → not_candidate even if gate passes.
+        Noisy low t/Sharpe / unstable yearly signs → demote discussion_only.
         research_candidate=True only when all production criteria pass
         (still not READY / Mass / operational GO).
         """
@@ -2497,6 +2586,10 @@ def run_class_hyp_multi_year_eval(
         skew = _skew_from_rows(rows)
         skew_ok = bool(skew.get("ok"))
         multi_year_ok = bool(n_ok >= int(min_years_research_candidate))
+        stats_pack = _stats_from_rows(rows, hold_days=hold_days_for_occ)
+        stats = stats_pack["stats"]
+        sbar = stats_pack["stats_bar"]
+        stats_ok = bool(sbar.get("stats_ok"))
 
         bar = production_candidate_bar(
             checklist_complete=bool(checklist_complete),
@@ -2511,6 +2604,10 @@ def run_class_hyp_multi_year_eval(
             economic_net=econ,
             occurrence=occurrence,
             skew=skew,
+            stats_ok=stats_ok,
+            stats=stats,
+            stats_bar=sbar,
+            require_stats=bool(require_stats_bar),
         )
         return {
             "research_candidate": bool(bar.get("research_candidate")),
@@ -2526,6 +2623,9 @@ def run_class_hyp_multi_year_eval(
             "occurrence_ok": occ_ok,
             "skew": skew,
             "skew_ok": skew_ok,
+            "stats": stats,
+            "stats_bar": sbar,
+            "stats_ok": stats_ok,
             "production_criteria": bar.get("production_criteria"),
             "n_ok_periods": n_ok,
             "verdict": bar.get("verdict"),
@@ -2537,6 +2637,10 @@ def run_class_hyp_multi_year_eval(
             "connected_to_mass": False,
             "min_economic_net": float(min_economic_net),
             "min_years_research_candidate": int(min_years_research_candidate),
+            "min_abs_t_stat": float(min_abs_t_stat),
+            "min_sharpe_period": float(min_sharpe_period),
+            "min_period_win_rate": float(min_period_win_rate),
+            "min_positive_periods": int(min_positive_periods),
             "note": bar.get("note"),
         }
 
@@ -2622,6 +2726,12 @@ def run_class_hyp_multi_year_eval(
         "min_events_per_trading_day": float(min_events_per_trading_day),
         "min_years_research_candidate": int(min_years_research_candidate),
         "max_year_pos_net_share": float(max_year_pos_net_share),
+        "min_abs_t_stat": float(min_abs_t_stat),
+        "min_sharpe_period": float(min_sharpe_period),
+        "min_period_win_rate": float(min_period_win_rate),
+        "min_positive_periods": int(min_positive_periods),
+        "require_stats_bar": bool(require_stats_bar),
+        "stats_metrics": stats_metrics_document(),
         "repo_load": repo_load_note,
         "fins_load": fins_load_note,
         "short_load": short_load_note,
@@ -2659,15 +2769,18 @@ def run_class_hyp_multi_year_eval(
             "(jsda_repo_rates · fins_summary · fins_earnings_date · "
             "margin · short_ratio)"
         ),
-        "label": "研究用・複数年クラス仮説評価・W80生産候補バー・未宣言",
+        "label": "研究用・複数年クラス仮説評価・W81統計バー再判定・未宣言",
         **_freeze(),
         "note": (
-            "W80 class hyp multi-year offline eval with occurrence rates + "
-            "liquidity-linked costs + extended full-year windows. "
+            "W81 class hyp multi-year offline eval with occurrence rates + "
+            "liquidity-linked costs + extended full-year windows + "
+            "statistical bar (|t|≥1.5, Sharpe≥0.5, period win-rate≥0.6, "
+            "≥4 positive periods). "
             "research_candidate=True only if checklist v2 + gate + risk + "
             "economic net meaningful + occurrence rate sufficient + "
-            "multi-year (≥min_years) without extreme skew. "
+            "multi-year (≥min_years) without extreme skew + stats bar. "
             "Weak consistent-negative → not_candidate. "
+            "Noisy low t/Sharpe / unstable yearly signs → demote. "
             "READY/Mass/operational GO never auto-connect. "
             "Not READY / Mass NO-GO / Phase7 OFF."
         ),
@@ -2755,12 +2868,14 @@ def run_class_hyp_multi_year_eval(
         rc = bool(cand.get("research_candidate"))
         if rc:
             any_research_candidate = True
+        stats = cand.get("stats") or {}
         summary[key] = {
             "signal_id": block.get("signal_id"),
             "gate_passed": cand.get("gate_passed"),
             "economic_net_ok": cand.get("economic_net_ok"),
             "occurrence_ok": cand.get("occurrence_ok"),
             "skew_ok": cand.get("skew_ok"),
+            "stats_ok": cand.get("stats_ok"),
             "research_candidate_allowed": cand.get(
                 "research_candidate_allowed"
             ),
@@ -2768,7 +2883,23 @@ def run_class_hyp_multi_year_eval(
             "verdict": cand.get("verdict"),
             "candidate_yes_no": cand.get("candidate_yes_no") or "no",
             "mean_net": (cand.get("economic_net") or {}).get("mean_net"),
+            "t_stat": stats.get("t_stat"),
+            "sharpe": stats.get("sharpe"),
+            "win_rate": stats.get("win_rate"),
+            "payoff": stats.get("payoff"),
+            "max_dd": stats.get("max_dd"),
+            "calmar": stats.get("calmar"),
             "n_ok_periods": cand.get("n_ok_periods"),
+            "decision": (
+                "keep"
+                if rc
+                else (
+                    "demote"
+                    if (cand.get("production_criteria") or {}).get("w80_core_ok")
+                    and not cand.get("stats_ok")
+                    else "not_candidate"
+                )
+            ),
         }
     out["candidate_summary"] = summary
     out["any_research_candidate"] = any_research_candidate
@@ -2789,10 +2920,14 @@ __all__ = [
     "DEFAULT_PERIODS_Q4",
     "DEFAULT_SQLITE",
     "MAX_YEAR_POS_NET_SHARE",
+    "MIN_ABS_T_STAT",
     "MIN_ACTIVATION_RATE_MULTIDAY",
     "MIN_ECONOMIC_NET",
     "MIN_EVENTS_PER_CODE_YEAR",
     "MIN_EVENTS_PER_TRADING_DAY",
+    "MIN_PERIOD_WIN_RATE",
+    "MIN_POSITIVE_PERIODS",
+    "MIN_SHARPE_PERIOD",
     "MIN_YEARS_RESEARCH_CANDIDATE",
     "bars_rich_to_close_panel",
     "collect_liquidity_bar_rows",

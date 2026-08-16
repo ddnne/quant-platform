@@ -272,6 +272,7 @@ def test_production_candidate_bar_all_criteria():
         multi_year_ok=True,
         skew_ok=True,
         n_ok_periods=6,
+        stats_ok=True,
     )
     assert ok["research_candidate"] is True
     assert ok["candidate_yes_no"] == "yes"
@@ -289,6 +290,7 @@ def test_production_candidate_bar_all_criteria():
         multi_year_ok=True,
         skew_ok=True,
         n_ok_periods=6,
+        stats_ok=True,
     )
     assert disc["research_candidate"] is False
     assert disc["candidate_yes_no"] == "no_discussion_only"
@@ -303,12 +305,75 @@ def test_production_candidate_bar_all_criteria():
         multi_year_ok=True,
         skew_ok=True,
         n_ok_periods=6,
+        stats_ok=True,
     )
     assert weak["research_candidate"] is False
     assert weak["verdict"] == "not_candidate_economic_net_not_meaningful"
 
+    # W81: stats bar fail with W80 core ok → demote discussion_only
+    noisy = production_candidate_bar(
+        checklist_complete=True,
+        gate_passed=True,
+        risk_ok=True,
+        economic_net_ok=True,
+        occurrence_ok=True,
+        multi_year_ok=True,
+        skew_ok=True,
+        n_ok_periods=6,
+        stats_ok=False,
+        stats_bar={"noisy": True, "stats_ok": False},
+        require_stats=True,
+    )
+    assert noisy["research_candidate"] is False
+    assert noisy["candidate_yes_no"] == "no_discussion_only"
+    assert "stats_bar_failed" in noisy["production_criteria"]["fails"]
+    assert noisy["verdict"] in (
+        "discussion_only_noisy_stats",
+        "discussion_only_stats_bar",
+    )
+
     skew = multi_year_skew_check({"y1": 0.10, "y2": 0.01, "y3": 0.01})
     assert skew["ok"] is False  # y1 share 0.10/0.12 > 0.75
+
+
+def test_stats_metrics_period_and_bar():
+    """W81 stats helpers: t-stat / Sharpe / winrate / bar on synthetic nets."""
+    from research.stats_metrics import (
+        period_stats_report,
+        stats_bar_check,
+        t_stat_vs_zero,
+        trade_stats_report,
+    )
+
+    # Stable positive: should pass bar
+    strong = [0.01, 0.012, 0.008, 0.009, 0.011, 0.007]
+    rep = period_stats_report(strong, period_ids=[f"y{i}" for i in range(6)])
+    assert rep["mean_net"] is not None and rep["mean_net"] > 0
+    assert rep["t_stat"] is not None and rep["t_stat"] > 1.5
+    assert rep["sharpe"] is not None and rep["sharpe"] > 0.5
+    assert rep["win_rate"] == 1.0
+    bar_ok = stats_bar_check(rep)
+    assert bar_ok["stats_ok"] is True
+
+    # Noisy mixed signs (W80 multi_day_hold_10-like scale)
+    noisy = [0.0065, 0.0151, 0.0008, -0.0080, -0.0052, 0.0035]
+    nrep = period_stats_report(noisy)
+    nbar = stats_bar_check(nrep)
+    assert nbar["stats_ok"] is False
+    assert nrep["abs_t_stat"] is not None and nrep["abs_t_stat"] < 1.5
+
+    t0 = t_stat_vs_zero([])
+    assert t0["t_stat"] is None
+
+    trades = trade_stats_report(
+        [0.02, -0.01, 0.015, 0.005, -0.008],
+        hold_days=10,
+        one_way_cost=0.001,
+        amortize_cost=True,
+    )
+    assert trades["n_trades"] == 5
+    assert trades["sharpe_ann"] is not None
+    assert trades["win_rate"] is not None
 
 
 def test_class_hyp_eval_pure_on_synthetic_bars():

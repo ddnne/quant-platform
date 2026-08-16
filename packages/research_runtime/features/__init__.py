@@ -136,7 +136,7 @@ __all__ = [
     "compute_signal_from_feature_observations",
     "compute_topix_relative_sign_signal",
     "minimal_signal_definition",
-    # class signals (W78–W80; not simple daily sign)
+    # class signals (W78–W81; not simple daily sign; W81 stats bar)
     "SIGNAL_ID_MULTI_DAY_HOLD",
     "SIGNAL_ID_MACRO_CONDITIONED",
     "SIGNAL_ID_CROSS_SECTION",

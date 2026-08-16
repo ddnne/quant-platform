@@ -1,17 +1,95 @@
 # Phase 6.2 / 6.3 residual status
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
-**Live verified:** 2026-08-16 · **W80** candidate residual **COMPLETE** · **GO = pre-live-order final gate** · **2 research_candidates** (multi_day_hold 10d · event_post; **not Mass**) · OTC **639→2595 (+1956)** official FULL_OK exhaust · paper adapter **UNARMED** · COMPLETE 22 health · FRESH · live verified ops COMPLETE **22** held · DEFER **4** remaining (bars_am · earn_cal · master · OTC dataset PARTIAL) · segs **5984** · empty **0** · **OTC 2595** (dataset still PARTIAL; optional 2008+ seal B in progress) · bars_am COMPLETE tip **1** / PARTIAL **31** · Mass/READY/Phase7/operational GO **NO-GO/未宣言/OFF/未宣言** · paper path **UNARMED separate** · FRESH `projgen-1330aff25b6c4596a44bb5799d70cd1e` · S1–S5 **research_baseline_rejected** untouched · densify **none** · **no invent** · **no Mass/READY ON** · **no operational GO** · **no S1–S5 un-reject** · **no OTC bulk densify** · **no fins roll-back** · **no simple_daily_sign mass gen** · **no live orders** · COMPLETE expand = **tip-wait** · research entry **linked** · checklist **v2** · `simple_daily_sign` default **OFF** · W79 underneath held
-**Repo tip:** `e7b2cf55d10d0dc8a938acc68cba610df02a6d8a` — W80 candidate residual close · COMPLETE **22** / DEFER **4** / segs **5984** / OTC **2595** / READY **未宣言** · operational GO **未宣言** · FRESH `projgen-1330aff25b6c4596a44bb5799d70cd1e`
+**Live verified:** 2026-08-16 · **W81** stats+paper+OTC residual **COMPLETE** · **GO = pre-live-order final gate** · **1 research_candidate** (**event_post** only; multi_day 10d **demoted** noisy stats; **not Mass**) · stats bar raised (t/Sharpe/win-rate) · paper limited trial rehearsal (30d post-cost −4.37% · **not** edge) · OTC **2595→4485 (+1890)** 2008+ FULL_OK · COMPLETE 22 health · FRESH · live verified ops COMPLETE **22** held · DEFER **4** remaining (bars_am · earn_cal · master · OTC dataset PARTIAL) · segs **7874** · empty **0** · **OTC 4485** (dataset still PARTIAL; pre-2008 not main claim) · bars_am COMPLETE tip **1** / PARTIAL **31** · Mass/READY/Phase7/operational GO **NO-GO/未宣言/OFF/未宣言** · continuous paper **UNARMED** · FRESH `projgen-af053445fef84124939b35561ba519c0` · S1–S5 **research_baseline_rejected** untouched · densify **none** · **no invent** · **no Mass/READY ON** · **no operational GO** · **no S1–S5 un-reject** · **no OTC bulk densify** · **no fins roll-back** · **no simple_daily_sign mass gen** · **no live orders** · COMPLETE expand = **tip-wait** · research entry **linked** · checklist **v2** · `simple_daily_sign` default **OFF** · W80 underneath held
+**Repo tip:** *(feature commit SHA after push)* — W81 stats+paper+OTC residual close · COMPLETE **22** / DEFER **4** / segs **7874** / OTC **4485** / READY **未宣言** · operational GO **未宣言** · FRESH `projgen-af053445fef84124939b35561ba519c0`
 
-## Research entry (W74 · ready · freeze W75 · redesign W77 · GO-build W78 · GO-final W79 · candidate W80)
+## Research entry (W74 · ready · freeze W75 · redesign W77 · GO-build W78 · GO-final W79 · candidate W80 · stats W81)
 
 **Entry path:** [`docs/proof/w0816h_w74_research_entry_complete22_20260816.md`](proof/w0816h_w74_research_entry_complete22_20260816.md)  
 **Checklist:** `run_standard_research_eval` / `standard-research-eval-checklist/v2`  
 **Hypothesis classes:** [`docs/proof/w0816k_w77_hypothesis_space_redesign_20260816.md`](proof/w0816k_w77_hypothesis_space_redesign_20260816.md) · `simple_daily_sign` default **OFF**  
 **Cost models:** `research-cost-models/v2` · prefer repo-linked + liquidity-linked ([`w0816n_w79_liquidity_linked_cost_20260816.md`](proof/w0816n_w79_liquidity_linked_cost_20260816.md) · [`w0816m_w78_repo_linked_cost_model_20260816.md`](proof/w0816m_w78_repo_linked_cost_model_20260816.md))  
-**GO final gates:** [`docs/proof/w0816o_w80_go_gates_20260816.md`](proof/w0816o_w80_go_gates_20260816.md) · GO = **pre-live-order final gate** · operational GO **未宣言**  
-**Status:** research entry **linked** under COMPLETE **22** · Mass/READY/Phase7/operational GO **NO-GO/未宣言/OFF/未宣言** · default gen = multi-structure classes (not simple daily sign mass) · class hyps **implemented** · **2 production research_candidates** (class_hyp; **not** Mass/READY) · paper path **UNARMED separate**
+**Stats bar:** `research-stats-metrics/v1` · class-signals **v4** ([`w0816p_w81_stats_bar_rejudge_20260816.md`](proof/w0816p_w81_stats_bar_rejudge_20260816.md))  
+**GO final gates:** [`docs/proof/w0816p_w81_go_gates_20260816.md`](proof/w0816p_w81_go_gates_20260816.md) · GO = **pre-live-order final gate** · operational GO **未宣言**  
+**Status:** research entry **linked** under COMPLETE **22** · Mass/READY/Phase7/operational GO **NO-GO/未宣言/OFF/未宣言** · default gen = multi-structure classes (not simple daily sign mass) · class hyps **implemented** · **1 production research_candidate** (event_post; **not** Mass/READY) · continuous paper **UNARMED** · limited trial rehearsal only
+
+## Stats + paper + OTC residual close（Dataset COMPLETE 22 held · OTC segs 4485 · event_post only · multi_day demoted · paper limited trial · GO 未宣言）· W81
+
+**Phase name:** Statistical bar re-judge + paper limited trial + OTC 2008+ FULL_OK finish + residual FRESH close（宣言なし · invent なし · NOT Mass · NOT operational GO · NOT simple_daily_sign mass gen · NOT live orders · NOT edge claim from limited paper）  
+**Wave:** W81 / w0816p  
+**GO definition:** **GO** = **pre-live-order final gate** (not operational GO declare)  
+**Close:** [`docs/proof/w0816p_w81_stats_paper_otc_close_20260816.md`](proof/w0816p_w81_stats_paper_otc_close_20260816.md)  
+**Task A stats bar:** [`docs/proof/w0816p_w81_stats_bar_rejudge_20260816.md`](proof/w0816p_w81_stats_bar_rejudge_20260816.md) · **event_post KEEP** (t=2.83 · Sharpe=1.15) · multi_day 10d **DEMOTED** `discussion_only_noisy_stats` (t=0.62 · Sharpe=0.25) · class_signals **v4** · stats_metrics **v1**  
+**Task B paper trial:** [`docs/proof/w0816p_w81_paper_limited_trial_20260816.md`](proof/w0816p_w81_paper_limited_trial_20260816.md) · event_post single-shot healthy · limited 30d post-cost **−4.37%** (rehearsal only) · multi_day unarmed · continuous **OFF**  
+**Task C OTC 2008+:** [`docs/proof/w0816p_w81_otc_2008plus_20260816.md`](proof/w0816p_w81_otc_2008plus_20260816.md) · COMPLETE segs **2595→4485 (+1890)** · span **2008-03-25…2026-08-17** · dataset **PARTIAL** held · segs **7874** · pre-2008 not claimed  
+**GO gates:** [`docs/proof/w0816p_w81_go_gates_20260816.md`](proof/w0816p_w81_go_gates_20260816.md)  
+**Health smoke:** `scripts/check_complete22_health.py` local+remote **all_checks_pass** (OTC **4485** ≥ floor 93)  
+**Final verify:** [`.glm-logs/w0816p_w81_stats/`](../.glm-logs/w0816p_w81_stats/)  
+**FRESH:** `projgen-af053445fef84124939b35561ba519c0` · coverage_segments untouched (reeval) · mass=NO-GO · densify **none**  
+**S1–S5:** stay **research_baseline_rejected** (no un-reject)  
+**Prior W80 residual:** held underneath  
+
+| gate | status |
+|------|--------|
+| READY | **未宣言** |
+| Mass / Phase7 | **NO-GO / OFF** |
+| operational GO | **未宣言** |
+| GO (pre-live-order final gate) | residual inventory only · **not declared** |
+| Dataset COMPLETE | **22** held |
+| DEFER | **4** (bars_am · earn_cal · master · OTC **dataset** PARTIAL) |
+| COMPLETE segs | **7874** |
+| empty COMPLETE | **0** |
+| OTC segs COMPLETE | **4485** (was 2595; 2008+ FULL_OK +1890; **dataset still PARTIAL**) |
+| fins_earnings_date | **104/104** COMPLETE · `dataset_coverage` **COMPLETE** |
+| bars_am | COMPLETE **1** tip / PARTIAL **31** · history **DEFER** · tip continuous only |
+| densify | **none** (OTC bulk densify forbidden; FULL_OK official 2008+ only) |
+| coverage expand | **tip-wait** |
+| research entry | **linked** ([`w0816h_w74_research_entry_complete22_20260816.md`](proof/w0816h_w74_research_entry_complete22_20260816.md)) |
+| checklist | **v2** (`standard-research-eval-checklist/v2`) |
+| cost models | **v2** repo-linked + liquidity-linked preferred |
+| stats bar | **v1** · \|t\|≥1.5 · Sharpe≥0.50 · win-rate≥0.60 · ≥4 pos years |
+| hyp classes | landed · **1 research_candidate** (event_post) · multi_day 10d demoted · harness wiring still `research_candidate=False` · `simple_daily_sign` default **OFF** |
+| paper path | limited trial rehearsal for event_post · continuous **UNARMED** · multi_day unarmed · not live |
+| JSDA repo | **30330** rows · end **2026-08-14** · receipt **903893** · deep history usable (W77 held) |
+| S1–S5 catalog | **research_baseline_rejected** untouched |
+| FRESH | `projgen-af053445fef84124939b35561ba519c0` |
+| COMPLETE 22 health check | **held** (`check_complete22_health.py`) |
+| LIVE_API_EMPTY (bars_am history) | **true** · history_reprobe **FORBIDDEN** |
+| TIP_ONLY_POLICY | **locked** |
+
+### Explicit non-declarations (held)
+
+- **READY** — not declared  
+- **Mass** — **NO-GO / OFF**  
+- **Phase7** — **OFF**  
+- **operational GO** — **未宣言**  
+- **GO final gate declare** — residual only (pre-live-order inventory; not ops arm)  
+- **bars_am history COMPLETE invent** — not claimed (re-probe locked)  
+- **OTC dataset COMPLETE invent / bulk densify** — not claimed / not run (segment COMPLETE 4485 only)  
+- **pre-2008 OTC as main claim** — not claimed  
+- **densify success** — not claimed as coverage expand  
+- **fins segment invent / roll-back** — not done (104/104 held)  
+- **Dataset COMPLETE 23** — not invented (COMPLETE expand = tip-wait)  
+- **research_candidate → Mass/READY/ops GO** — never auto-connects (class_hyp True ≠ Mass)  
+- **S1–S5 un-reject** — not done  
+- **simple_daily_sign mass generation** — forbidden (default OFF)  
+- **earn_cal/master bulk densify** — not done  
+- **edge / significance / orders / live** — none / separate gate / **no live orders**  
+- **paper continuous** — UNARMED; limited trial not auto-arm  
+- **limited paper PnL as edge claim** — not claimed  
+- **gate pass → READY/Mass/GO** — never auto-connects  
+
+### Residual TOP (W81)
+
+1. **Stats bar raised** — \|t\|≥1.5 · Sharpe≥0.50 · win-rate≥0.60 · ≥4 pos years · mean bp alone insufficient  
+2. **event_post only research_candidate (not Mass)** — t=**2.83** · Sharpe=**1.15** · +53.0bp  
+3. **multi_day_hold 10d DEMOTED** — t=**0.62** · Sharpe=**0.25** · `discussion_only_noisy_stats`  
+4. **Paper limited trial** — event_post single-shot healthy · 30d post-cost **−4.37%** rehearsal only · multi_day unarmed · continuous **OFF**  
+5. **OTC 2595→4485** — 2008-03-25…2026-08-17 · dataset still **PARTIAL** · segs **7874** · pre-2008 not claimed  
+6. **GO 未宣言** — pre-live-order residual only · Mass **NO-GO** · READY **未宣言** · operational GO **未宣言**  
+7. **COMPLETE 22 held** · empty **0** · no invent 23 · costs v2 held · research entry linked  
+8. **W80 underneath** — prior 2 candidates / OTC 2595 / paper UNARMED adapter  
 
 ## Candidate residual close（Dataset COMPLETE 22 held · OTC segs 2595 · 2 research_candidates · paper UNARMED · GO 未宣言）· W80
 
@@ -20,7 +98,7 @@
 **GO definition:** **GO** = **pre-live-order final gate** (not operational GO declare)  
 **Close:** [`docs/proof/w0816o_w80_candidate_close_20260816.md`](proof/w0816o_w80_candidate_close_20260816.md)  
 **Task A+B production candidates:** [`docs/proof/w0816o_w80_production_candidate_search_20260816.md`](proof/w0816o_w80_production_candidate_search_20260816.md) · multi_day_hold **10d** research_candidate · event_post research_candidate · occurrence-rate bar · **not Mass**  
-**Task C OTC exhaust:** [`docs/proof/w0816o_w80_otc_official_exhaust_20260816.md`](proof/w0816o_w80_otc_official_exhaust_20260816.md) · COMPLETE segs **639→2595 (+1956)** · span **2016-01-04…2026-08-17** · dataset **PARTIAL** held · segs **5984** · optional 2008+ seal B **in progress**  
+**Task C OTC exhaust:** [`docs/proof/w0816o_w80_otc_official_exhaust_20260816.md`](proof/w0816o_w80_otc_official_exhaust_20260816.md) · COMPLETE segs **639→2595 (+1956)** · span **2016-01-04…2026-08-17** · dataset **PARTIAL** held · segs **5984** · optional 2008+ seal B **in progress** (finished in W81)  
 **Task D paper adapter:** [`docs/proof/w0816o_w80_paper_adapter_unarmed_20260816.md`](proof/w0816o_w80_paper_adapter_unarmed_20260816.md) · **UNARMED**  
 **GO gates:** [`docs/proof/w0816o_w80_go_gates_20260816.md`](proof/w0816o_w80_go_gates_20260816.md)  
 **Health smoke:** `scripts/check_complete22_health.py` local+remote **all_checks_pass** (OTC **2595** ≥ floor 93)  
@@ -79,7 +157,7 @@
 ### Residual TOP (W80)
 
 1. **2 research_candidates (not Mass)** — multi_day_hold **10d** (+21.1bp · act 0.090) · event_post (+53.0bp · ~3.61/code-yr)  
-2. **OTC 639→2595** — official FULL_OK exhaust · span **2016-01-04…2026-08-17** · dataset still **PARTIAL** · segs **5984** · optional **2008+ seal B in progress**  
+2. **OTC 639→2595** — official FULL_OK exhaust · span **2016-01-04…2026-08-17** · dataset still **PARTIAL** · segs **5984** · optional **2008+ seal B in progress** (finished W81)  
 3. **Paper UNARMED** — receptacle only · no continuous paper · no live  
 4. **GO 未宣言** — pre-live-order residual only · Mass **NO-GO** · READY **未宣言** · operational GO **未宣言**  
 5. **COMPLETE 22 held** · empty **0** · no invent 23 · costs v2 held · research entry linked  

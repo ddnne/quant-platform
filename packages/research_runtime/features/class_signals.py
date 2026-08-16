@@ -33,11 +33,11 @@ from typing import Any, Mapping, Sequence
 # Identity / freeze
 # ---------------------------------------------------------------------------
 
-CLASS_SIGNALS_VERSION: str = "class-signals/v3"
-CLASS_SIGNALS_WAVE: str = "W80 / w0816o"
+CLASS_SIGNALS_VERSION: str = "class-signals/v4"
+CLASS_SIGNALS_WAVE: str = "W81 / w0816p"
 
 SIGNAL_STATUS: str = "candidate"
-SIGNAL_VERSION: str = "1.2.0"
+SIGNAL_VERSION: str = "1.3.0"
 CANDIDATE_ONLY: bool = False  # legs may be approved; signal status stays candidate
 
 MASS_RESEARCH: str = "NO-GO"
@@ -104,6 +104,18 @@ DEFAULT_MAX_YEAR_POS_NET_SHARE: float = 0.75
 # research_candidate requires enough independent years (not count of events).
 DEFAULT_MIN_YEARS_RESEARCH_CANDIDATE: int = 4
 DEFAULT_TRADING_DAYS_PER_YEAR: int = 245
+
+# ---------------------------------------------------------------------------
+# W81 statistical bar (raise beyond mean bp) — period-net metrics
+# ---------------------------------------------------------------------------
+# |t| of period mean nets vs 0 (sample std). Below ~1.0 is noise with n≈6.
+DEFAULT_MIN_ABS_T_STAT: float = 1.5
+# Period Sharpe = mean/std of period nets (periods_per_year=1).
+DEFAULT_MIN_SHARPE_PERIOD: float = 0.50
+# Share of periods with net > 0 (yearly sign stability).
+DEFAULT_MIN_PERIOD_WIN_RATE: float = 0.60
+# Absolute positive-net year count.
+DEFAULT_MIN_POSITIVE_PERIODS: int = 4
 
 # Macro regime defaults (research placeholders; disclose when overridden)
 # Repo rates in local JSDA are percent-like (e.g. 0.1 = 0.1%).
@@ -1072,8 +1084,12 @@ def production_candidate_bar(
     economic_net: Mapping[str, Any] | None = None,
     occurrence: Mapping[str, Any] | None = None,
     skew: Mapping[str, Any] | None = None,
+    stats_ok: bool = True,
+    stats: Mapping[str, Any] | None = None,
+    stats_bar: Mapping[str, Any] | None = None,
+    require_stats: bool = True,
 ) -> dict[str, Any]:
-    """W80 production research_candidate bar (still not READY / Mass / GO).
+    """W81 production research_candidate bar (still not READY / Mass / GO).
 
     All must pass:
     1. checklist v2 complete (caller-supplied)
@@ -1082,11 +1098,16 @@ def production_candidate_bar(
     4. economic net meaningful (positive majority + mean ≥ min)
     5. occurrence / activation rate sufficient (rate, not count alone)
     6. multi-year coverage (≥ min_years ok periods) without extreme skew
+    7. **W81 statistical bar**: |t|, Sharpe, period win-rate / pos years
+       (when ``require_stats``; default True)
 
     When all pass → ``research_candidate=True`` (research only).
     Weak consistent-negative → not_candidate (via economic_net_ok=False).
+    Low t/Sharpe / unstable yearly signs → demote to discussion_only
+    (gate+econ ok) or not_candidate.
     """
     years_ok = bool(multi_year_ok and int(n_ok_periods) >= int(min_years))
+    stats_required_ok = bool(stats_ok) if require_stats else True
     all_ok = bool(
         checklist_complete
         and gate_passed
@@ -1095,6 +1116,7 @@ def production_candidate_bar(
         and occurrence_ok
         and years_ok
         and skew_ok
+        and stats_required_ok
     )
     fails: list[str] = []
     if not checklist_complete:
@@ -1111,6 +1133,19 @@ def production_candidate_bar(
         fails.append("multi_year_coverage_insufficient")
     if not skew_ok:
         fails.append("extreme_multi_year_skew")
+    if require_stats and not stats_ok:
+        fails.append("stats_bar_failed")
+
+    w80_core_ok = bool(
+        checklist_complete
+        and gate_passed
+        and risk_ok
+        and economic_net_ok
+        and occurrence_ok
+        and years_ok
+        and skew_ok
+    )
+    noisy = bool((stats_bar or {}).get("noisy")) if stats_bar else False
 
     if all_ok:
         verdict = "research_candidate"
@@ -1119,10 +1154,23 @@ def production_candidate_bar(
         gate_passed
         and risk_ok
         and economic_net_ok
-        and (not occurrence_ok or not years_ok or not skew_ok or not checklist_complete)
+        and (
+            not occurrence_ok
+            or not years_ok
+            or not skew_ok
+            or not checklist_complete
+            or (require_stats and not stats_ok)
+        )
     ):
-        # gate+econ ok but production rate/year/checklist incomplete
-        verdict = "discussion_only"
+        # gate+econ ok but production rate/year/checklist/stats incomplete
+        if require_stats and not stats_ok and w80_core_ok:
+            verdict = (
+                "discussion_only_noisy_stats"
+                if noisy
+                else "discussion_only_stats_bar"
+            )
+        else:
+            verdict = "discussion_only"
         yes_no = "no_discussion_only"
     elif gate_passed and risk_ok and not economic_net_ok:
         verdict = "not_candidate_economic_net_not_meaningful"
@@ -1146,14 +1194,19 @@ def production_candidate_bar(
             "occurrence_ok": bool(occurrence_ok),
             "multi_year_ok": bool(years_ok),
             "skew_ok": bool(skew_ok),
+            "stats_ok": bool(stats_required_ok),
+            "stats_required": bool(require_stats),
             "n_ok_periods": int(n_ok_periods),
             "min_years": int(min_years),
             "all_ok": all_ok,
+            "w80_core_ok": w80_core_ok,
             "fails": fails,
         },
         "economic_net": dict(economic_net) if economic_net else None,
         "occurrence": dict(occurrence) if occurrence else None,
         "skew": dict(skew) if skew else None,
+        "stats": dict(stats) if stats else None,
+        "stats_bar": dict(stats_bar) if stats_bar else None,
         "ready_declared": False,
         "mass_research": MASS_RESEARCH,
         "phase7": PHASE7,
@@ -1161,10 +1214,12 @@ def production_candidate_bar(
         "connected_to_ready": False,
         "connected_to_mass": False,
         "note": (
-            "W80 production research_candidate bar. All criteria required. "
+            "W81 production research_candidate bar. All criteria required "
+            "including statistical bar (|t|, Sharpe, period win-rate). "
             "research_candidate=True is research-only; never auto-connects "
             "READY / Mass / operational GO / Phase7 / orders. "
-            "Occurrence uses rates not absolute counts."
+            "Occurrence uses rates not absolute counts. "
+            "Noisy low t/Sharpe / unstable yearly signs → demote."
         ),
     }
 
@@ -1619,17 +1674,22 @@ def class_signals_document() -> dict[str, Any]:
         "min_activation_rate_multiday": DEFAULT_MIN_ACTIVATION_RATE_MULTIDAY,
         "min_events_per_code_year": DEFAULT_MIN_EVENTS_PER_CODE_YEAR,
         "min_years_research_candidate": DEFAULT_MIN_YEARS_RESEARCH_CANDIDATE,
+        "min_abs_t_stat": DEFAULT_MIN_ABS_T_STAT,
+        "min_sharpe_period": DEFAULT_MIN_SHARPE_PERIOD,
+        "min_period_win_rate": DEFAULT_MIN_PERIOD_WIN_RATE,
+        "min_positive_periods": DEFAULT_MIN_POSITIVE_PERIODS,
         "not_simple_daily_sign": True,
         "s1_s5_unreject": S1_S5_UNREJECT,
         **_freeze_meta(),
         "note": (
-            "W80 class-based research signals. multi_day_hold + event_post + "
+            "W81 class-based research signals. multi_day_hold + event_post + "
             "macro_conditioned + flow_demand + fundamentals_price "
             "(+ optional cross_section). Production research_candidate only "
-            "if economic net meaningful + occurrence rate sufficient + "
-            "multi-year no extreme skew + risk OK. Weak consistent-negative "
-            "is not_candidate. READY/Mass never auto-connect. "
-            "No S1–S5 un-reject."
+            "if economic net + occurrence rate + multi-year no extreme skew + "
+            "risk OK + statistical bar (|t|≥1.5, Sharpe≥0.5, win-rate≥0.6, "
+            "≥4 positive periods). Weak consistent-negative is not_candidate. "
+            "Noisy low t/Sharpe → demote to discussion_only. "
+            "READY/Mass never auto-connect. No S1–S5 un-reject."
         ),
     }
 
@@ -1653,8 +1713,12 @@ __all__ = [
     "DEFAULT_MAX_YEAR_POS_NET_SHARE",
     "DEFAULT_MIN_ACTIVATION_RATE_MULTIDAY",
     "DEFAULT_MIN_ECONOMIC_NET",
+    "DEFAULT_MIN_ABS_T_STAT",
     "DEFAULT_MIN_EVENTS_PER_CODE_YEAR",
     "DEFAULT_MIN_EVENTS_PER_TRADING_DAY",
+    "DEFAULT_MIN_PERIOD_WIN_RATE",
+    "DEFAULT_MIN_POSITIVE_PERIODS",
+    "DEFAULT_MIN_SHARPE_PERIOD",
     "DEFAULT_MIN_YEARS_RESEARCH_CANDIDATE",
     "DEFAULT_MOMENTUM_N",
     "DEFAULT_REPO_CHANGE_EPS",
