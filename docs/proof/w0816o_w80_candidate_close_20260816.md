@@ -178,6 +178,7 @@ See also: [`w0816o_w80_go_gates_20260816.md`](w0816o_w80_go_gates_20260816.md)
 |------|-------|
 | W79 tip (start) | `c69f47e` — docs pin after GO final residual close |
 | W79 feature tip | `903215e` — liquidity costs + OTC 163→639 + hyp candidate |
+| W80 feature tip | `e7b2cf5` — production candidates + OTC 639→2595 + paper UNARMED + FRESH close |
 | This wave | commit + push on `main` past `c69f47e` |
 
 ---
