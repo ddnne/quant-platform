@@ -2,7 +2,7 @@
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
 **Live verified:** 2026-08-16 · **W77** hypothesis redesign + eval checklist v2 + JSDA residual **COMPLETE** · hyp classes · checklist v2 · repo tip reseal · OTC +0 · COMPLETE 22 health · FRESH · live verified ops COMPLETE **22** held · DEFER **4** remaining (bars_am · earn_cal · master · OTC) · segs **3482** · empty **0** · **OTC 93** · bars_am COMPLETE tip **1** / PARTIAL **31** · Mass/READY/Phase7 **NO-GO/OFF** · FRESH `projgen-46a6565c145b4dcdb3a0894441a29780` · S1–S5 **research_baseline_rejected** untouched · densify **none** · **no invent** · **no Mass/READY ON** · **no S1–S5 un-reject** · **no OTC bulk densify** · **no fins roll-back** · **no simple_daily_sign mass gen** · COMPLETE expand = **tip-wait** · research entry **linked** · checklist **v2** · `simple_daily_sign` default **OFF**
-**Repo tip:** *(filled at pin commit)* — W77 hyp+eval+JSDA residual close · COMPLETE **22** / DEFER **4** / segs **3482** / OTC **93** / READY **未宣言** · FRESH `projgen-46a6565c145b4dcdb3a0894441a29780`
+**Repo tip:** `c482f50dbd82b0727d9e17fd70e41d50233c6427` — W77 hyp+eval+JSDA residual close · COMPLETE **22** / DEFER **4** / segs **3482** / OTC **93** / READY **未宣言** · FRESH `projgen-46a6565c145b4dcdb3a0894441a29780`
 
 ## Research entry (W74 · ready · freeze W75 · redesign layer W77)
 
