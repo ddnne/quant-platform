@@ -2,7 +2,7 @@
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
 **Live verified:** 2026-08-16 · **W78** GO build residual **COMPLETE** · repo-linked cost_models v2 · OTC **93→163 (+70)** staged FULL_OK · class hyps multi_day_hold+macro_conditioned impl+eval (not auto-candidate) · COMPLETE 22 health · FRESH · live verified ops COMPLETE **22** held · DEFER **4** remaining (bars_am · earn_cal · master · OTC dataset PARTIAL) · segs **3552** · empty **0** · **OTC 163** (dataset still PARTIAL) · bars_am COMPLETE tip **1** / PARTIAL **31** · Mass/READY/Phase7/operational GO **NO-GO/未宣言/OFF/未宣言** · FRESH `projgen-65c5af3769194269a9027ba4d013561e` · S1–S5 **research_baseline_rejected** untouched · densify **none** · **no invent** · **no Mass/READY ON** · **no operational GO** · **no S1–S5 un-reject** · **no OTC bulk densify** · **no fins roll-back** · **no simple_daily_sign mass gen** · COMPLETE expand = **tip-wait** · research entry **linked** · checklist **v2** · `simple_daily_sign` default **OFF** · W77 underneath held
-**Repo tip:** `TIP_PENDING_W78_CLOSE` — W78 GO build residual close · COMPLETE **22** / DEFER **4** / segs **3552** / OTC **163** / READY **未宣言** · operational GO **未宣言** · FRESH `projgen-65c5af3769194269a9027ba4d013561e`
+**Repo tip:** `5ec78fed0609832f59c670e05b3eb0c5fd505684` — W78 GO build residual close · COMPLETE **22** / DEFER **4** / segs **3552** / OTC **163** / READY **未宣言** · operational GO **未宣言** · FRESH `projgen-65c5af3769194269a9027ba4d013561e`
 
 ## Research entry (W74 · ready · freeze W75 · redesign W77 · GO-build layer W78)
 
