@@ -7,11 +7,15 @@ import pytest
 from data_contracts import (
     PERMANENT_DEFER_DATASETS,
     SUPERSEDED_PERMANENT_DEFER_IDS,
+    TIP_ONLY_POLICY,
     PermanentDeferHistoryError,
     filter_permanent_defer,
+    history_reprobe_forbidden,
     is_permanent_defer,
+    is_tip_only_policy,
     reject_permanent_defer_for_history,
     require_history_eligible,
+    tip_only_policy_for,
 )
 from data_access.adapter import QuantDataAccess
 
@@ -95,3 +99,35 @@ def test_quant_data_access_describe_still_allows_defer_metadata():
     # master is a premium-core contract, so describe must succeed.
     desc = access.describe_dataset("equities_master")
     assert desc["dataset"]["dataset_id"] == "equities_master"
+
+
+def test_w72_tip_only_policy_bars_am_and_otc():
+    """W72: bars_am history DEFER + no re-probe; OTC tip island wait FULL_OK."""
+    assert is_tip_only_policy("equities_bars_daily_am")
+    assert is_tip_only_policy("jsda_otc_bond_reference_prices")
+    assert not is_tip_only_policy("equities_master")
+    assert not is_tip_only_policy("fins_earnings_date")
+
+    bars = tip_only_policy_for("equities_bars_daily_am")
+    assert bars is not None
+    assert bars["pd_id"] == "PD-D4-BARS-AM"
+    assert bars["mode"] == "tip_continuous"
+    assert bars["history"] == "DEFER"
+    assert bars["history_reprobe"] == "FORBIDDEN"
+    assert bars["history_densify"] == "FORBIDDEN"
+    assert "LIVE_API_EMPTY" in str(bars["history_reason"])
+    assert history_reprobe_forbidden("equities_bars_daily_am") is True
+
+    otc = tip_only_policy_for("jsda_otc_bond_reference_prices")
+    assert otc is not None
+    assert otc["pd_id"] == "PD-D5-JSDA-OTC"
+    assert otc["mode"] == "tip_island_wait_full_ok"
+    assert otc["bulk_densify"] == "FORBIDDEN"
+    assert otc["seal_gate"] == "FULL_OK"
+    assert history_reprobe_forbidden("jsda_otc_bond_reference_prices") is True
+
+    # Machine map covers exactly the two tip-only residual classes.
+    assert set(TIP_ONLY_POLICY) == {
+        "equities_bars_daily_am",
+        "jsda_otc_bond_reference_prices",
+    }

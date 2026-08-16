@@ -36,11 +36,15 @@ from .permanent_defer import (
     PERMANENT_DEFER_DATASETS,
     PERMANENT_DEFER_IDS,
     SUPERSEDED_PERMANENT_DEFER_IDS,
+    TIP_ONLY_POLICY,
     PermanentDeferHistoryError,
     filter_permanent_defer,
+    history_reprobe_forbidden,
     is_permanent_defer,
+    is_tip_only_policy,
     reject_permanent_defer_for_history,
     require_history_eligible,
+    tip_only_policy_for,
 )
 
 __all__ = [
@@ -71,9 +75,13 @@ __all__ = [
     "PERMANENT_DEFER_DATASETS",
     "PERMANENT_DEFER_IDS",
     "SUPERSEDED_PERMANENT_DEFER_IDS",
+    "TIP_ONLY_POLICY",
     "PermanentDeferHistoryError",
     "filter_permanent_defer",
+    "history_reprobe_forbidden",
     "is_permanent_defer",
+    "is_tip_only_policy",
     "reject_permanent_defer_for_history",
     "require_history_eligible",
+    "tip_only_policy_for",
 ]

@@ -57,6 +57,7 @@ from storage.coverage_ledger import (  # noqa: E402
     refresh_coverage_ledger,
     record_collection_receipt,
     record_required_segments,
+    sync_dataset_coverage_from_segments,
 )
 from storage.trusted_receipt import open_signed_receipt_authority  # noqa: E402
 
@@ -664,6 +665,27 @@ def main(argv: list[str] | None = None) -> int:
                     (ds,),
                 ).fetchone()[0]
                 print(f"local coverage {ds}: COMPLETE={complete}/{total}")
+            # W72 tip auto-collect path: surgical re-agg after issue+refresh
+            # (parity with restore + issue_signed_receipts_for_segments).
+            reagg = sync_dataset_coverage_from_segments(
+                conn,
+                datasets=touched,
+                wave="issue_receipts_parallel",
+            )
+            conn.commit()
+            for row in reagg:
+                print(
+                    "dataset_coverage_sync:",
+                    {
+                        "dataset": row.get("dataset"),
+                        "action": row.get("action"),
+                        "from": row.get("old_status") or row.get("from"),
+                        "to": row.get("to")
+                        or row.get("status")
+                        or row.get("derived_status"),
+                        "status_counts": row.get("status_counts"),
+                    },
+                )
 
     complete_after = conn.execute(
         "SELECT COUNT(*) FROM coverage_segments WHERE status='COMPLETE'"
@@ -687,7 +709,8 @@ def main(argv: list[str] | None = None) -> int:
         "workers": int(args.workers),
         "note": (
             "COMPLETE only after ledger refresh with raw+structured+signed "
-            "SUCCESS; never without raw. No backfill/Mass launched."
+            "SUCCESS; never without raw. No backfill/Mass launched. "
+            "Post-seal surgical sync_dataset_coverage_from_segments (W72)."
         ),
     }
     if args.json_summary:

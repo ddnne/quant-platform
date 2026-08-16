@@ -7,8 +7,13 @@ Does NOT invent COMPLETE. It:
   3. Loads matching raw bytes when available under data/raw
   4. Issues SignedReceiptAuthority receipts with independent counts
   5. Refreshes coverage ledger for the dataset
+  6. Surgical dataset_coverage re-agg (W70/W72 tip auto-collect path)
 
 RECOVERED rebuilds are never upgraded to signed COMPLETE without raw + structure.
+
+Post-seal tip path (bars_am / OTC continuous tip collect → seal):
+after ledger refresh, ``sync_dataset_coverage_from_segments`` keeps
+``dataset_coverage`` honest without a full rewrite of ``coverage_segments``.
 """
 
 from __future__ import annotations
@@ -38,6 +43,7 @@ from storage.coverage_ledger import (  # noqa: E402
     refresh_coverage_ledger,
     record_collection_receipt,
     record_required_segments,
+    sync_dataset_coverage_from_segments,
 )
 from storage.trusted_receipt import open_signed_receipt_authority  # noqa: E402
 
@@ -338,6 +344,26 @@ def main() -> int:
             print(
                 f"coverage {r.get('dataset')} status={r.get('status')} "
                 f"detail_keys={list((r.get('detail') or {}).keys())[:5]}"
+            )
+        # W72 tip auto-collect path: surgical re-agg after issue+refresh so
+        # dataset_coverage tracks segment SoT (same as restore path / W70).
+        # Never invents segs; refuses empty COMPLETE; does not touch segments.
+        reagg = sync_dataset_coverage_from_segments(
+            conn,
+            datasets=ds_list,
+            wave="issue_signed_receipts_for_segments",
+        )
+        conn.commit()
+        for row in reagg:
+            print(
+                "dataset_coverage_sync:",
+                {
+                    "dataset": row.get("dataset"),
+                    "action": row.get("action"),
+                    "from": row.get("old_status") or row.get("from"),
+                    "to": row.get("to") or row.get("status") or row.get("derived_status"),
+                    "status_counts": row.get("status_counts"),
+                },
             )
     else:
         print("no receipts issued")
