@@ -61,6 +61,14 @@ from research.idea_generator import (
     default_generation_policy,
     generate_idea_payloads,
 )
+from research.mass_strategy_factory import (
+    MASS_FACTORY_VERSION,
+    MASS_FACTORY_WAVE,
+    MassFactoryConfig,
+    generate_strategy_batch,
+    mass_factory_document,
+    run_mass_factory,
+)
 from research.paper_candidate_adapter import (
     PAPER_CANDIDATE_ADAPTER_VERSION,
     PAPER_CANDIDATE_SPEC_VERSION,
@@ -87,6 +95,9 @@ __all__ = [
     "FeatureEvidence",
     "GeneratedIdeaBatch",
     "HYPOTHESIS_CLASS_REGISTRY",
+    "MASS_FACTORY_VERSION",
+    "MASS_FACTORY_WAVE",
+    "MassFactoryConfig",
     "HypothesisClassScheduleSelection",
     "HypothesisClassSpec",
     "MASS_RESEARCH_STATUS",
@@ -120,10 +131,13 @@ __all__ = [
     "emit_example_paper_specs",
     "execute_single_shot_job",
     "generate_idea_payloads",
+    "generate_strategy_batch",
     "get_hypothesis_class",
     "hypothesis_class_registry_document",
+    "mass_factory_document",
     "require_mass_research_start",
     "run_full_pipeline",
+    "run_mass_factory",
     "run_multiday_signal_eval",
     "run_nextday_return_eval",
     "select_generation_classes",
