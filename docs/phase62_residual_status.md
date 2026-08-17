@@ -1,37 +1,40 @@
 # Phase 6.2 / 6.3 residual status
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
-**Live verified:** 2026-08-17 · **W88** reforge mass factory → **logic diversity** (not hold/mom/frac grids) · seed **870816** · n_generated **35** · n_unique_logic **18** · n_numeric_variant **17** · n_after_dedup **18** · eval_set **after_dedup** · survivors **13** · fail_rate **0** · wall **~6.5s** · recipe `scripts/run_mass_strategy_batch.py` · **3 defaults frozen** (mom5/mom3/fund · not retuned) · CF minimal **blocked** · LLM entry **unconnected** · human main **NOT selected** · **GO deferred** · Mass/READY/Phase7/ops GO **NO-GO/未宣言/OFF/未宣言** · continuous paper **UNARMED** · COMPLETE **22** held · DEFER **4** · segs **7888** · empty **0** · OTC **4499** tip-wait · W87/W86 underneath held · S1–S5 **research_baseline_rejected** · densify **none** · **no invent** · **no Mass/READY ON** · **no operational GO** · **no live** · **no simple_daily_sign mass** · **no hold/mom/frac grid as 100 strategies** · proofs [`w0816w_w88_logic_diversity_factory_20260817.md`](proof/w0816w_w88_logic_diversity_factory_20260817.md) · [`w0816w_w88_residual_close_20260817.md`](proof/w0816w_w88_residual_close_20260817.md)  
-**Repo tip:** `f5774e4f8ca0b8b7357539aae179492b35472cfd` — W88 logic diversity factory + residual close · feature `44d248e` · COMPLETE **22** / DEFER **4** / segs **7888** / OTC **4499** / Mass/READY/ops GO **NO-GO/未宣言/未宣言** · continuous paper **UNARMED** · 3 defaults **frozen**
+**Live verified:** 2026-08-17 · **W89** interest-rate factors + multi-factor logics + CF eval (promising only) · seed **870816** · n_generated **43** · n_unique_logic **22** · n_numeric_variant **21** · n_after_dedup **22** · eval_set **after_dedup** · survivors **17** · fail_rate **0** · wall **~6.9s** · recipe `scripts/run_mass_strategy_batch.py` · rate_abs_level_xs + rate_curve_shape_xs (3M−ON) + mf_value_mom_rate + mf_flow_price · all 4 new **lite-survived** · most promising **mf_value_mom_rate** (t≈1.48 · Sharpe≈0.60) · near-groups **parallel** (flow hard/soft · fund slow · rate/macro) · **3 defaults frozen** (mom5/mom3/fund · not retuned) · CF **blocked** · LLM entry **connected** (`propose_profit_hypotheses`) · human main **NOT selected** · **GO deferred** · Mass/READY/Phase7/ops GO **NO-GO/未宣言/OFF/未宣言** · continuous paper **UNARMED** · COMPLETE **22** held · DEFER **4** · segs **7888** · empty **0** · OTC **4499** tip-wait · W88/W87/W86 underneath held · S1–S5 **research_baseline_rejected** · densify **none** · **no invent** · **no Mass/READY ON** · **no operational GO** · **no live** · **no simple_daily_sign mass** · **no hold/mom/frac grid** · proofs [`w0816x_w89_rate_multifactor_cf_20260817.md`](proof/w0816x_w89_rate_multifactor_cf_20260817.md) · [`w0816x_w89_residual_close_20260817.md`](proof/w0816x_w89_residual_close_20260817.md)  
+**Repo tip:** *(pin after push)* — W89 rate+multifactor factory · COMPLETE **22** / DEFER **4** / segs **7888** / OTC **4499** / Mass/READY/ops GO **NO-GO/未宣言/未宣言** · continuous paper **UNARMED** · 3 defaults **frozen**
 
-## Research entry (W74 · ready · freeze W75 · redesign W77 · GO-build W78 · GO-final W79 · candidate W80 · stats W81 · PIT W82 · parallel W83 · realign W84 · multi-window W85 · sign+repo+compare W86 · mass factory W87 · logic diversity W88)
+## Research entry (W74 · ready · freeze W75 · redesign W77 · GO-build W78 · GO-final W79 · candidate W80 · stats W81 · PIT W82 · parallel W83 · realign W84 · multi-window W85 · sign+repo+compare W86 · mass factory W87 · logic diversity W88 · rate+multifactor W89)
 
 **Entry path:** [`docs/proof/w0816h_w74_research_entry_complete22_20260816.md`](proof/w0816h_w74_research_entry_complete22_20260816.md)  
 **Checklist:** `run_standard_research_eval` / `standard-research-eval-checklist/v2`  
 **Hypothesis classes:** [`docs/proof/w0816k_w77_hypothesis_space_redesign_20260816.md`](proof/w0816k_w77_hypothesis_space_redesign_20260816.md) · `simple_daily_sign` default **OFF**  
 **Cost models:** `research-cost-models/v2` · prefer repo-linked + liquidity-linked + **short = repo[t]×100+spread** + **paper daily repo financing** (opt-in) ([`w0816u_w86_paper_repo_financing_20260817.md`](proof/w0816u_w86_paper_repo_financing_20260817.md) · [`w0816t_w85_short_cost_repo_spread_20260817.md`](proof/w0816t_w85_short_cost_repo_spread_20260817.md) · [`w0816n_w79_liquidity_linked_cost_20260816.md`](proof/w0816n_w79_liquidity_linked_cost_20260816.md) · [`w0816m_w78_repo_linked_cost_model_20260816.md`](proof/w0816m_w78_repo_linked_cost_model_20260816.md))  
-**Stats bar:** `research-stats-metrics/v1` · class-signals **v6** (W83) · W81 stats floors held · W82 PIT held · W84 paper align · W85 multi-window · W86 sign+repo+compare · W87 mass factory skeleton · **W88 logic-diversity factory** (`mass-strategy-factory/v2`)  
-**Mass factory (logic diversity):** [`docs/proof/w0816w_w88_logic_diversity_factory_20260817.md`](proof/w0816w_w88_logic_diversity_factory_20260817.md) · residual close [`w0816w_w88_residual_close_20260817.md`](proof/w0816w_w88_residual_close_20260817.md) · `mass-strategy-factory/v2` · seed **870816** · metrics **unique_logic / after_dedup** · recipe `scripts/run_mass_strategy_batch.py`  
-**GO final gates:** [`docs/proof/w0816u_w86_go_gates_20260817.md`](proof/w0816u_w86_go_gates_20260817.md) · GO = **pre-live-order final gate** · **repo + compare table required before GO consideration** · operational GO **未宣言** · **W88 GO judgment deferred**  
-**Status:** research entry **linked** under COMPLETE **22** · Mass/READY/Phase7/operational GO **NO-GO/未宣言/OFF/未宣言** · factory = **logic diversification** (not grid mass · not Mass ON) · **3 default production research_candidates frozen** (xs hold=10 mom=5 · xs hold=10 mom=3 · fund hold=10 mom=10; all **chosen_sign=+1**; **not retuned this wave**; **not** Mass/READY) · factory survivors **≠** production research_candidate · StrategySpec **v3** · continuous paper **UNARMED**
+**Stats bar:** `research-stats-metrics/v1` · class-signals **v7** (W89) · W81 stats floors held · W82 PIT held · W84 paper align · W85 multi-window · W86 sign+repo+compare · W87 mass factory skeleton · W88 logic-diversity · **W89 rate+multifactor** (`mass-strategy-factory/v2.1`)  
+**Mass factory (rate + multi-factor):** [`docs/proof/w0816x_w89_rate_multifactor_cf_20260817.md`](proof/w0816x_w89_rate_multifactor_cf_20260817.md) · residual close [`w0816x_w89_residual_close_20260817.md`](proof/w0816x_w89_residual_close_20260817.md) · `mass-strategy-factory/v2.1` · seed **870816** · metrics **unique_logic / after_dedup** · recipe `scripts/run_mass_strategy_batch.py` · logs [`.glm-logs/w0816x_w89_rate_mf/`](../.glm-logs/w0816x_w89_rate_mf/)  
+**GO final gates:** [`docs/proof/w0816u_w86_go_gates_20260817.md`](proof/w0816u_w86_go_gates_20260817.md) · GO = **pre-live-order final gate** · **repo + compare table required before GO consideration** · operational GO **未宣言** · **W89 GO judgment deferred**  
+**Status:** research entry **linked** under COMPLETE **22** · Mass/READY/Phase7/operational GO **NO-GO/未宣言/OFF/未宣言** · factory = **logic diversification** + **rate/multi-factor** (not grid mass · not Mass ON) · **3 default production research_candidates frozen** (xs hold=10 mom=5 · xs hold=10 mom=3 · fund hold=10 mom=10; all **chosen_sign=+1**; **not retuned this wave**; **not** Mass/READY) · factory survivors **≠** production research_candidate · StrategySpec **v3** · continuous paper **UNARMED**
 
-## Logic diversity factory residual close（Dataset COMPLETE 22 held · unique_logic 18 · after_dedup 18 · survivors 13 · fail_rate 0 · 3 defaults frozen · GO deferred · human main NOT selected）· W88
+## Rate + multi-factor residual close（Dataset COMPLETE 22 held · unique_logic 22 · after_dedup 22 · survivors 17 · fail_rate 0 · rate+mf all lite-survived · 3 defaults frozen · near-groups parallel · CF blocked · LLM connected · GO deferred · human main NOT selected）· W89
 
-**Phase name:** reforge mass factory → **logic diversity** + near-dup + unique_logic/after_dedup metrics + residual FRESH close（宣言なし · invent なし · NOT Mass ON · NOT READY · NOT operational GO · NOT human main select · NOT continuous paper arm · NOT simple_daily_sign mass gen · NOT hold/mom/frac grid as 100 · NOT retune 3 defaults · NOT live orders · GO judgment deferred）  
-**Wave:** W88 / w0816w  
+**Phase name:** interest-rate factors + multi-factor logics + CF eval (promising only) + residual FRESH close（宣言なし · invent なし · NOT Mass ON · NOT READY · NOT operational GO · NOT human main select · NOT continuous paper arm · NOT simple_daily_sign mass gen · NOT hold/mom/frac grid · NOT retune 3 defaults · NOT near-group merge · NOT live orders · GO judgment deferred）  
+**Wave:** W89 / w0816x  
 **GO definition:** **GO** = **pre-live-order final gate** (not operational GO declare) · **GO judgment deferred this wave**  
-**Close:** [`docs/proof/w0816w_w88_residual_close_20260817.md`](proof/w0816w_w88_residual_close_20260817.md)  
-**Factory proof:** [`docs/proof/w0816w_w88_logic_diversity_factory_20260817.md`](proof/w0816w_w88_logic_diversity_factory_20260817.md) · module `packages/product/research/mass_strategy_factory.py` · CLI `scripts/run_mass_strategy_batch.py` · version `mass-strategy-factory/v2`  
-**1 run (real mirrors):** seed **870816** · n_generated **35** · n_unique_logic **18** · n_numeric_variant **17** · n_after_dedup **18** · n_dropped_near_dup **17** · logic_diversity_ok **True** · evaluated **18** (after_dedup) · survivors **13** · fail_rate **0.0** · wall **~6.503s** · continuous paper **UNARMED** · frozen_defaults_retuned **False** · human_main_candidates_selected **False**  
-**reject_reason_histogram** (from [`.glm-logs/w0816w_w88_logic/screens.json`](../.glm-logs/w0816w_w88_logic/screens.json)): `both_signs_near_zero_or_nonpositive` **5** · `near_zero_after_cost` **2**  
-**CF minimal:** **blocked** (no mass-logic CF worker; single_shot tip path only; scale deferred)  
-**LLM entry:** **unconnected** (idea_generator declarations only; residual note)  
-**Next residual:** deepen multi-year **class_hyp** on distinct-logic survivors · optional LLM thesis prompts through evaluator · human main **not this wave**  
-**W87 underneath held:** factory pipeline skeleton · batch eval · freezes (grid diversity risk fixed in W88)  
+**Close:** [`docs/proof/w0816x_w89_residual_close_20260817.md`](proof/w0816x_w89_residual_close_20260817.md)  
+**Factory proof:** [`docs/proof/w0816x_w89_rate_multifactor_cf_20260817.md`](proof/w0816x_w89_rate_multifactor_cf_20260817.md) · module `packages/product/research/mass_strategy_factory.py` · CLI `scripts/run_mass_strategy_batch.py` · version `mass-strategy-factory/v2.1` · class-signals **v7**  
+**1 run (real mirrors):** seed **870816** · n_generated **43** · n_unique_logic **22** · n_numeric_variant **21** · n_after_dedup **22** · n_dropped_near_dup **21** · logic_diversity_ok **True** · evaluated **22** (after_dedup) · survivors **17** · fail_rate **0.0** · wall **~6.866s** · continuous paper **UNARMED** · frozen_defaults_retuned **False** · human_main_candidates_selected **False**  
+**New logics (lite survivors):** `rate_abs_level_xs` · `rate_curve_shape_xs` (spread=3M−overnight; JSDA tenors only) · `mf_value_mom_rate` (t≈1.48 · Sharpe≈0.60 · **most promising**) · `mf_flow_price`  
+**reject_reason_histogram** (from [`.glm-logs/w0816x_w89_rate_mf/screens.json`](../.glm-logs/w0816x_w89_rate_mf/screens.json)): `both_signs_near_zero_or_nonpositive` **5** · `near_zero_after_cost` **2**  
+**CF minimal:** **blocked** (no mass-logic CF worker; single_shot tip path only; scale deferred; local mainline)  
+**LLM entry:** **connected** (`propose_profit_hypotheses` · always through evaluator · window tweaks forbidden)  
+**Near-groups:** flow hard/soft/pressure · fund value×mom slow · rate/macro cousins — **keep parallel**  
+**Next residual:** deeper multi-year **class_hyp** on promising only (`mf_value_mom_rate` first) · human main **not this wave**  
+**W88 underneath held:** logic diversity factory · near-dup · unique_logic metrics · 18 base templates  
+**W87 underneath held:** factory pipeline skeleton · batch eval · freezes  
 **W86 underneath held:** sign flip · paper repo · compare table · 3 defaults all **chosen_sign=+1** · GO **未宣言**  
 **OTC tip-wait:** **4499** · dataset **PARTIAL** · no bulk re-scan · segs **7888**  
 **Health smoke:** COMPLETE **22** held · no invent **23** · empty **0**  
-**Final verify:** [`.glm-logs/w0816w_w88_logic/`](../.glm-logs/w0816w_w88_logic/) · SUMMARY / factory_run / strategies_after_dedup / screens / ranking  
+**Final verify:** [`.glm-logs/w0816x_w89_rate_mf/`](../.glm-logs/w0816x_w89_rate_mf/) · SUMMARY / factory_run / strategies_after_dedup / screens / ranking / profit_hypothesis_eval  
 **S1–S5:** stay **research_baseline_rejected** (no un-reject)  
 
 | gate | status |
@@ -42,8 +45,10 @@
 | GO (pre-live-order final gate) | **deferred** this wave |
 | human main candidate | **NOT selected** this wave |
 | continuous paper | **UNARMED** |
-| logic factory run | **1** · seed **870816** · unique_logic **18** · after_dedup **18** · survivors **13** · fail_rate **0** · wall **~6.5s** |
+| logic factory run | **1** · seed **870816** · unique_logic **22** · after_dedup **22** · survivors **17** · fail_rate **0** · wall **~6.9s** |
+| rate+mf new logics | **4** · all lite-survived |
 | 3 defaults retuned | **False** (frozen) |
+| near-groups merged | **False** (parallel) |
 | Dataset COMPLETE | **22** held (no invent **23**) |
 | DEFER | **4** (bars_am · earn_cal · master · OTC **dataset** PARTIAL) |
 | COMPLETE segs | **7888** |
@@ -55,9 +60,9 @@
 | factory survivors → research_candidate | **never auto** |
 | factory survivors → Mass/READY/ops GO | **never auto** |
 | S1–S5 catalog | **research_baseline_rejected** untouched |
-| W86/W87 underneath | **held** |
+| W86/W87/W88 underneath | **held** |
 
-### Explicit non-declarations (held · W88)
+### Explicit non-declarations (held · W89)
 
 - **READY** — not declared  
 - **Mass** operational ON — **NO-GO / OFF**  
@@ -69,15 +74,25 @@
 - **factory survivors as production research_candidates** — not claimed  
 - **3 defaults retune** — forbidden / not done  
 - **hold/mom/frac grid as 100 strategies** — forbidden  
+- **near-group early merge** — forbidden  
 - **Dataset COMPLETE 23** — not invented  
 - **S1–S5 un-reject** — not done  
 - **simple_daily_sign mass generation** — forbidden  
 - **live orders / edge claim from lite factory screen** — none  
 - **CF 200/500 scale** — deferred  
+- **heavy multi-year auto for non-promising** — deferred  
 
-### Residual TOP (W88)
+### Residual TOP (W89)
 
-1. **grid mass production → logic diversification** — residual TOP  
+1. **rate + multi-factor logics** — residual TOP (lite landed; deeper multi-year only for promising)  
+2. **CF status** — **blocked** (local mainline; no mass-logic CF worker)  
+3. **defaults frozen** — mom5 · mom3 · fund; not retuned  
+4. **near-groups parallel** — flow hard/soft · fund slow · rate cousins  
+5. **GO deferred** · Mass/READY/ops GO closed · continuous paper UNARMED  
+
+### Residual TOP (W88 underneath)
+
+1. **grid mass production → logic diversification** — held under W88  
 2. **3 defaults frozen** — mom5 · mom3 · fund · not retuned  
 3. **GO deferred** — Mass/READY/ops GO **未宣言** · continuous paper **UNARMED** · human main **NOT selected**  
 4. **1 run held** — seed **870816** · unique_logic **18** · after_dedup **18** · survivors **13** · fail_rate **0** · wall **~6.5s**  

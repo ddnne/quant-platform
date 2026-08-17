@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""W88 / w0816w — logic-diversity mass strategy factory batch runner.
+"""W89 / w0816x — logic-diversity mass strategy factory batch runner.
 
-Generate strategy individuals from distinct economic logic templates,
-near-dup collapse grid mutations, batch-evaluate distinct logics
-(post-cost, both signs, t/Sharpe/activation). Research factory only.
+Generate strategy individuals from distinct economic logic templates
+(including rate factors + multi-factor), near-dup collapse grid mutations,
+batch-evaluate distinct logics (post-cost, both signs, t/Sharpe/activation).
+Research factory only.
 
 Does **not** arm Mass / READY / operational GO / continuous paper / live.
 Does **not** retune frozen default-path representatives (mom5 / mom3 / fund).
@@ -11,7 +12,7 @@ Does **not** retune frozen default-path representatives (mom5 / mom3 / fund).
 Examples
 --------
     python scripts/run_mass_strategy_batch.py --seed 870816 --n 100 \\
-        --out-dir .glm-logs/w0816w_w88_logic/
+        --out-dir .glm-logs/w0816x_w89_rate_mf/
 
     python scripts/run_mass_strategy_batch.py --synthetic --n 100 \\
         --out-dir /tmp/msf_syn
@@ -54,7 +55,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument(
         "--out-dir",
         type=str,
-        default=str(ROOT / ".glm-logs" / "w0816w_w88_logic"),
+        default=str(ROOT / ".glm-logs" / "w0816x_w89_rate_mf"),
         help="Output directory for machine-readable results",
     )
     p.add_argument(

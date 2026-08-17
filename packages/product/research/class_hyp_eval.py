@@ -46,8 +46,12 @@ from features.class_signals import (
     CLASS_FUNDAMENTALS_PRICE,
     CLASS_MACRO_CONDITIONED,
     CLASS_MULTI_DAY_HOLD,
+    CLASS_MULTI_FACTOR,
+    CLASS_RATE_FACTOR,
     CLASS_SIGNALS_VERSION,
     CLASS_SIGNALS_WAVE,
+    DEFAULT_CURVE_INVERT_THRESHOLD,
+    DEFAULT_CURVE_STEEP_THRESHOLD,
     DEFAULT_EVENT_POST_HOLD_DAYS,
     DEFAULT_FLOW_HOLD_DAYS,
     DEFAULT_FUND_HOLD_DAYS,
@@ -66,12 +70,18 @@ from features.class_signals import (
     DEFAULT_REPO_HIGH_THRESHOLD,
     DEFAULT_REPO_LOW_THRESHOLD,
     DEFAULT_TRADING_DAYS_PER_YEAR,
+    REPO_CURVE_LONG_TENOR,
+    REPO_CURVE_SHORT_TENOR,
     SIGNAL_ID_CROSS_SECTION,
     SIGNAL_ID_EVENT_POST,
     SIGNAL_ID_FLOW_DEMAND,
     SIGNAL_ID_FUNDAMENTALS_PRICE,
     SIGNAL_ID_MACRO_CONDITIONED,
+    SIGNAL_ID_MF_FLOW_PRICE,
+    SIGNAL_ID_MF_VALUE_MOM_RATE,
     SIGNAL_ID_MULTI_DAY_HOLD,
+    SIGNAL_ID_RATE_CURVE_XS,
+    SIGNAL_ID_RATE_LEVEL_XS,
     SUPPORTED_HOLD_DAYS,
     amortized_one_way_cost,
     apply_sticky_hold,
@@ -81,6 +91,10 @@ from features.class_signals import (
     compute_flow_demand_signal,
     compute_fundamentals_price_signal,
     compute_macro_conditioned_signal,
+    compute_mf_flow_price_signal,
+    compute_mf_value_mom_rate_signal,
+    compute_rate_curve_xs_signal,
+    compute_rate_level_xs_signal,
     cross_section_rank_signs,
     earnings_surprise_proxy,
     economic_net_meaningful,
@@ -443,6 +457,90 @@ def load_repo_rows_from_sqlite(
         return rows
     finally:
         con.close()
+
+
+def load_repo_rows_all_tenors_from_sqlite(
+    db_path: str | Path = DEFAULT_SQLITE,
+    *,
+    start: str | None = None,
+    end: str | None = None,
+) -> list[dict[str, Any]]:
+    """Load all JSDA Tokyo repo tenors (for curve-shape proxy; no invent)."""
+    return load_repo_rows_from_sqlite(
+        db_path, start=start, end=end, tenor_contains=None
+    )
+
+
+def build_repo_curve_series(
+    rows: Sequence[Mapping[str, Any]] | None,
+    *,
+    short_tenor: str = REPO_CURVE_SHORT_TENOR,
+    long_tenor: str = REPO_CURVE_LONG_TENOR,
+) -> dict[str, Any]:
+    """Build date-keyed short/long rates + spread from multi-tenor rows.
+
+    Curve definition (documented):
+    ``spread[d] = rate(long_tenor, d) − rate(short_tenor, d)``.
+    Only observed JSDA repo tenors; missing either leg → gap (no invent/ffill).
+    This is a **funding term-structure proxy**, not a sovereign JGB/OIS curve.
+    """
+    by_date_tenor: dict[str, dict[str, float]] = {}
+    for raw in rows or []:
+        d = str(raw.get("as_of_date") or raw.get("date") or "")[:10]
+        if not d or len(d) < 10:
+            continue
+        t = str(raw.get("tenor") or "")
+        rate = raw.get("rate")
+        if rate is None or rate == "":
+            continue
+        try:
+            rate_f = float(rate)
+        except (TypeError, ValueError):
+            continue
+        by_date_tenor.setdefault(d, {})[t] = rate_f
+
+    short_by: dict[str, float] = {}
+    long_by: dict[str, float] = {}
+    spread_by: dict[str, float] = {}
+    gap_dates: list[str] = []
+    for d, tenors in sorted(by_date_tenor.items()):
+        s = tenors.get(short_tenor)
+        lo = tenors.get(long_tenor)
+        if s is not None:
+            short_by[d] = s
+        if lo is not None:
+            long_by[d] = lo
+        if s is not None and lo is not None:
+            spread_by[d] = lo - s
+        else:
+            gap_dates.append(d)
+
+    return {
+        "kind": "repo_curve_series",
+        "dataset": "jsda_tokyo_repo_rates",
+        "short_tenor": short_tenor,
+        "long_tenor": long_tenor,
+        "definition": "spread = long_tenor_rate - short_tenor_rate (same as_of_date)",
+        "note": (
+            "Funding term-structure proxy from JSDA Tokyo repo tenors only. "
+            "Not JGB/OIS. Gaps disclosed; never ffilled or invented."
+        ),
+        "short_rates_by_date": dict(sorted(short_by.items())),
+        "long_rates_by_date": dict(sorted(long_by.items())),
+        "spread_by_date": dict(sorted(spread_by.items())),
+        # Alias used by rate-level path when overnight preferred
+        "rates_by_date": dict(sorted(short_by.items())),
+        "n_obs_short": len(short_by),
+        "n_obs_long": len(long_by),
+        "n_obs_spread": len(spread_by),
+        "n_gap_either_leg": len(gap_dates),
+        "gap_dates_sample": gap_dates[:20],
+        "ffill_applied": False,
+        "invent_fill": False,
+        "tenors_observed": sorted(
+            {t for m in by_date_tenor.values() for t in m.keys()}
+        ),
+    }
 
 
 def _period_year(period_id: str) -> int | None:
@@ -1234,6 +1332,482 @@ def evaluate_macro_conditioned_on_bars(
         "note": (
             f"Macro-conditioned momentum mode={mode} on jsda_tokyo_repo_rates. "
             "Repo gaps → no trade (no invent). Not READY / not Mass."
+        ),
+    }
+
+
+def evaluate_rate_level_xs_on_bars(
+    bars_by_code: Mapping[str, Sequence[tuple[str, float]]],
+    repo_series: Mapping[str, Any] | None,
+    *,
+    momentum_n: int = 5,
+    hold_days: int = 10,
+    long_frac: float = 0.3,
+    short_frac: float = 0.3,
+    one_way_cost: float = DEFAULT_ONE_WAY_COST,
+    high_threshold: float = DEFAULT_REPO_HIGH_THRESHOLD,
+    low_threshold: float = DEFAULT_REPO_LOW_THRESHOLD,
+) -> dict[str, Any]:
+    """Absolute rate-level factor × CS book (risk-on/off), multi-day sticky.
+
+    Distinct from macro_conditioned rate_level (unidirectional mom gate).
+    """
+    from research.cost_models import lookup_repo_rate
+
+    n = int(momentum_n)
+    h = int(hold_days)
+    am_cost = amortized_one_way_cost(one_way_cost, h)
+    by_date: dict[str, dict[str, float | None]] = {}
+    dates_by_code: dict[str, list[str]] = {}
+    closes_list: dict[str, list[float]] = {}
+    for code, pairs in bars_by_code.items():
+        pairs_l = list(pairs)
+        moms = momentum_series(pairs_l, n=n)
+        for d, m in moms:
+            by_date.setdefault(d, {})[code] = m
+        dates_by_code[code] = [d for d, _ in pairs_l]
+        closes_list[code] = [c for _, c in pairs_l]
+
+    dates = sorted(by_date.keys())
+    # Daily CS rank signs, then rate-level risk-adjust
+    daily_adj: dict[str, dict[str, float | None]] = {c: {} for c in bars_by_code}
+    n_regime_gap = 0
+    regime_counts: dict[str, int] = {}
+    for d in dates:
+        ranks = cross_section_rank_signs(
+            by_date[d], long_frac=long_frac, short_frac=short_frac
+        )
+        hit = lookup_repo_rate(repo_series, d) if repo_series else {"is_gap": True}
+        if hit.get("is_gap") or hit.get("rate_pct") is None:
+            n_regime_gap += 1
+            for code in ranks:
+                daily_adj.setdefault(code, {})[d] = None
+            continue
+        rate = hit.get("rate_pct")
+        for code, cs_sign in ranks.items():
+            rec = compute_rate_level_xs_signal(
+                cs_sign=cs_sign,
+                repo_rate=rate,
+                high_threshold=high_threshold,
+                low_threshold=low_threshold,
+                code=code,
+                date=d,
+            )
+            reg = rec.get("regime")
+            if reg is not None:
+                regime_counts[str(reg)] = regime_counts.get(str(reg), 0) + 1
+            daily_adj.setdefault(code, {})[d] = rec.get("value")
+
+    signed_returns: list[float] = []
+    n_active = 0
+    holding_records: list[dict[str, Any]] = []
+    for code, dlist in dates_by_code.items():
+        entries = [daily_adj.get(code, {}).get(d) for d in dlist]
+        held = apply_sticky_hold(entries, hold_days=h, rebalance_mode="fixed_horizon")
+        closes = closes_list[code]
+        for i, pos in enumerate(held):
+            holding_records.append({"date": dlist[i], "code": code, "sign": pos})
+            if pos is None or pos == 0.0:
+                continue
+            if i % h != 0:
+                continue
+            fwd = multi_day_forward_return(closes, hold_days=h, entry_index=i)
+            if fwd is None:
+                continue
+            n_active += 1
+            signed_returns.append(float(pos) * float(fwd))
+
+    gross = mean(signed_returns) if signed_returns else None
+    net = (gross - am_cost) if gross is not None else None
+    n_code_days = len(holding_records)
+    n_trading_days = len({r["date"] for r in holding_records})
+    occ = occurrence_rate_multiday(
+        n_active=n_active,
+        n_code_days=n_code_days,
+        n_trading_days=n_trading_days,
+        n_codes=len(bars_by_code),
+        hold_days=h,
+        min_activation_rate=MIN_ACTIVATION_RATE_MULTIDAY,
+    )
+    return {
+        "signal_id": SIGNAL_ID_RATE_LEVEL_XS,
+        "hypothesis_class": CLASS_RATE_FACTOR,
+        "mode": "rate_level_xs_risk_adj",
+        "momentum_n": n,
+        "hold_days": h,
+        "gross_signed_mean_active": gross,
+        "net_one_way_mean_active": net,
+        "amortized_one_way_cost": am_cost,
+        "one_way_cost": float(one_way_cost),
+        "n_active_positions": n_active,
+        "n_signed_returns": len(signed_returns),
+        "n_regime_gap": n_regime_gap,
+        "regime_counts": regime_counts,
+        "n_codes": len(bars_by_code),
+        "n_code_days": n_code_days,
+        "n_trading_days": n_trading_days,
+        "occurrence": occ,
+        **_freeze(),
+        "note": (
+            "Absolute rate-level factor × CS risk-on/off book on "
+            "jsda_tokyo_repo_rates. Not macro mom-gate. Not READY / not Mass."
+        ),
+    }
+
+
+def evaluate_rate_curve_xs_on_bars(
+    bars_by_code: Mapping[str, Sequence[tuple[str, float]]],
+    curve_series: Mapping[str, Any] | None,
+    *,
+    momentum_n: int = 5,
+    hold_days: int = 10,
+    long_frac: float = 0.3,
+    short_frac: float = 0.3,
+    one_way_cost: float = DEFAULT_ONE_WAY_COST,
+    steep_threshold: float = DEFAULT_CURVE_STEEP_THRESHOLD,
+    invert_threshold: float = DEFAULT_CURVE_INVERT_THRESHOLD,
+) -> dict[str, Any]:
+    """Repo curve-shape factor × CS book (steep keep / inverted reverse)."""
+    n = int(momentum_n)
+    h = int(hold_days)
+    am_cost = amortized_one_way_cost(one_way_cost, h)
+    short_by = dict((curve_series or {}).get("short_rates_by_date") or {})
+    long_by = dict((curve_series or {}).get("long_rates_by_date") or {})
+
+    by_date: dict[str, dict[str, float | None]] = {}
+    dates_by_code: dict[str, list[str]] = {}
+    closes_list: dict[str, list[float]] = {}
+    for code, pairs in bars_by_code.items():
+        pairs_l = list(pairs)
+        moms = momentum_series(pairs_l, n=n)
+        for d, m in moms:
+            by_date.setdefault(d, {})[code] = m
+        dates_by_code[code] = [d for d, _ in pairs_l]
+        closes_list[code] = [c for _, c in pairs_l]
+
+    dates = sorted(by_date.keys())
+    daily_adj: dict[str, dict[str, float | None]] = {c: {} for c in bars_by_code}
+    n_regime_gap = 0
+    regime_counts: dict[str, int] = {}
+    for d in dates:
+        ranks = cross_section_rank_signs(
+            by_date[d], long_frac=long_frac, short_frac=short_frac
+        )
+        # exact date match; no invent/ffill
+        s_rate = short_by.get(str(d)[:10])
+        l_rate = long_by.get(str(d)[:10])
+        if s_rate is None or l_rate is None:
+            n_regime_gap += 1
+            for code in ranks:
+                daily_adj.setdefault(code, {})[d] = None
+            continue
+        for code, cs_sign in ranks.items():
+            rec = compute_rate_curve_xs_signal(
+                cs_sign=cs_sign,
+                short_rate=s_rate,
+                long_rate=l_rate,
+                steep_threshold=steep_threshold,
+                invert_threshold=invert_threshold,
+                code=code,
+                date=d,
+            )
+            reg = rec.get("regime")
+            if reg is not None:
+                regime_counts[str(reg)] = regime_counts.get(str(reg), 0) + 1
+            daily_adj.setdefault(code, {})[d] = rec.get("value")
+
+    signed_returns: list[float] = []
+    n_active = 0
+    holding_records: list[dict[str, Any]] = []
+    for code, dlist in dates_by_code.items():
+        entries = [daily_adj.get(code, {}).get(d) for d in dlist]
+        held = apply_sticky_hold(entries, hold_days=h, rebalance_mode="fixed_horizon")
+        closes = closes_list[code]
+        for i, pos in enumerate(held):
+            holding_records.append({"date": dlist[i], "code": code, "sign": pos})
+            if pos is None or pos == 0.0:
+                continue
+            if i % h != 0:
+                continue
+            fwd = multi_day_forward_return(closes, hold_days=h, entry_index=i)
+            if fwd is None:
+                continue
+            n_active += 1
+            signed_returns.append(float(pos) * float(fwd))
+
+    gross = mean(signed_returns) if signed_returns else None
+    net = (gross - am_cost) if gross is not None else None
+    n_code_days = len(holding_records)
+    n_trading_days = len({r["date"] for r in holding_records})
+    occ = occurrence_rate_multiday(
+        n_active=n_active,
+        n_code_days=n_code_days,
+        n_trading_days=n_trading_days,
+        n_codes=len(bars_by_code),
+        hold_days=h,
+        min_activation_rate=MIN_ACTIVATION_RATE_MULTIDAY,
+    )
+    return {
+        "signal_id": SIGNAL_ID_RATE_CURVE_XS,
+        "hypothesis_class": CLASS_RATE_FACTOR,
+        "mode": "rate_curve_shape_xs",
+        "momentum_n": n,
+        "hold_days": h,
+        "curve_short_tenor": (curve_series or {}).get("short_tenor")
+        or REPO_CURVE_SHORT_TENOR,
+        "curve_long_tenor": (curve_series or {}).get("long_tenor")
+        or REPO_CURVE_LONG_TENOR,
+        "curve_definition": (curve_series or {}).get("definition"),
+        "gross_signed_mean_active": gross,
+        "net_one_way_mean_active": net,
+        "amortized_one_way_cost": am_cost,
+        "one_way_cost": float(one_way_cost),
+        "n_active_positions": n_active,
+        "n_signed_returns": len(signed_returns),
+        "n_regime_gap": n_regime_gap,
+        "regime_counts": regime_counts,
+        "n_codes": len(bars_by_code),
+        "n_code_days": n_code_days,
+        "n_trading_days": n_trading_days,
+        "occurrence": occ,
+        **_freeze(),
+        "note": (
+            "Repo curve-shape factor (3M−overnight) × CS book. "
+            "JSDA tenors only; no invent. Not READY / not Mass."
+        ),
+    }
+
+
+def evaluate_mf_value_mom_rate_on_bars(
+    bars_by_code: Mapping[str, Sequence[tuple[str, float]]],
+    events_by_code: Mapping[str, Sequence[Mapping[str, Any]]],
+    repo_series: Mapping[str, Any] | None,
+    *,
+    hold_days: int = DEFAULT_FUND_HOLD_DAYS,
+    momentum_n: int = DEFAULT_FUND_MOMENTUM_N,
+    one_way_cost: float = DEFAULT_ONE_WAY_COST,
+    high_threshold: float = DEFAULT_REPO_HIGH_THRESHOLD,
+    low_threshold: float = DEFAULT_REPO_LOW_THRESHOLD,
+) -> dict[str, Any]:
+    """Multi-factor value × mom × rate-level (PIT + cost)."""
+    from research.cost_models import lookup_repo_rate
+
+    h = int(hold_days)
+    n = int(momentum_n)
+    am_cost = amortized_one_way_cost(one_way_cost, h)
+    asof_map = load_fins_latest_asof_map(events_by_code)
+
+    value_by_code_date: dict[str, dict[str, float | None]] = {}
+    value_scores_all: list[float] = []
+    for code, pairs in bars_by_code.items():
+        series = asof_map.get(code) or []
+        value_by_code_date[code] = {}
+        for d, close in pairs:
+            fin = fins_asof(series, d)
+            if fin is None:
+                value_by_code_date[code][d] = None
+                continue
+            score, _ = fundamental_value_score(
+                close=close, eps=fin.get("eps"), bps=fin.get("bps")
+            )
+            value_by_code_date[code][d] = score
+            if score is not None:
+                value_scores_all.append(score)
+    global_median = None
+    if value_scores_all:
+        ss = sorted(value_scores_all)
+        global_median = ss[len(ss) // 2]
+
+    signed_returns: list[float] = []
+    n_active = 0
+    n_missing = 0
+    holding_records: list[dict[str, Any]] = []
+    for code, pairs in sorted(bars_by_code.items()):
+        pairs_l = list(pairs)
+        if len(pairs_l) < max(h, n) + 2:
+            continue
+        moms = momentum_series(pairs_l, n=n)
+        mom_by_date = {d: m for d, m in moms}
+        closes = [c for _, c in pairs_l]
+        dates = [d for d, _ in pairs_l]
+        entries: list[float | None] = []
+        for d, _close in pairs_l:
+            vscore = value_by_code_date.get(code, {}).get(d)
+            hit = (
+                lookup_repo_rate(repo_series, d)
+                if repo_series
+                else {"is_gap": True}
+            )
+            rate = None if hit.get("is_gap") else hit.get("rate_pct")
+            if vscore is None:
+                n_missing += 1
+                entries.append(None)
+                continue
+            rec = compute_mf_value_mom_rate_signal(
+                value_score=vscore,
+                momentum=mom_by_date.get(d),
+                repo_rate=rate,
+                value_benchmark=global_median,
+                high_threshold=high_threshold,
+                low_threshold=low_threshold,
+                hold_days=h,
+                code=code,
+                date=d,
+            )
+            entries.append(rec.get("value"))
+        held = apply_sticky_hold(entries, hold_days=h, rebalance_mode="fixed_horizon")
+        for i, pos in enumerate(held):
+            holding_records.append({"date": dates[i], "code": code, "sign": pos})
+            if pos is None or pos == 0.0:
+                continue
+            if i % h != 0:
+                continue
+            fwd = multi_day_forward_return(closes, hold_days=h, entry_index=i)
+            if fwd is None:
+                continue
+            n_active += 1
+            signed_returns.append(float(pos) * float(fwd))
+
+    gross = mean(signed_returns) if signed_returns else None
+    net = (gross - am_cost) if gross is not None else None
+    n_code_days = len(holding_records)
+    n_trading_days = len({r["date"] for r in holding_records})
+    occ = occurrence_rate_multiday(
+        n_active=n_active,
+        n_code_days=n_code_days,
+        n_trading_days=n_trading_days,
+        n_codes=len(bars_by_code),
+        hold_days=h,
+        min_activation_rate=MIN_ACTIVATION_RATE_MULTIDAY,
+    )
+    return {
+        "signal_id": SIGNAL_ID_MF_VALUE_MOM_RATE,
+        "hypothesis_class": CLASS_MULTI_FACTOR,
+        "mode": "value_mom_rate",
+        "hold_days": h,
+        "momentum_n": n,
+        "gross_signed_mean_active": gross,
+        "net_one_way_mean_active": net,
+        "amortized_one_way_cost": am_cost,
+        "one_way_cost": float(one_way_cost),
+        "n_active_positions": n_active,
+        "n_signed_returns": len(signed_returns),
+        "n_missing_fins_or_rate": n_missing,
+        "n_codes": len(bars_by_code),
+        "n_code_days": n_code_days,
+        "n_trading_days": n_trading_days,
+        "occurrence": occ,
+        **_freeze(),
+        "note": (
+            "Multi-factor value×mom×rate. Distinct from fund_value_mom_agree. "
+            "PIT fins + date-matched repo. Not READY / not Mass."
+        ),
+    }
+
+
+def evaluate_mf_flow_price_on_bars(
+    bars_by_code: Mapping[str, Sequence[tuple[str, float]]],
+    margin_by_code: Mapping[str, Sequence[tuple[str, float]]],
+    *,
+    hold_days: int = DEFAULT_FLOW_HOLD_DAYS,
+    momentum_n: int = 10,
+    one_way_cost: float = DEFAULT_ONE_WAY_COST,
+) -> dict[str, Any]:
+    """Multi-factor flow × price-mom confirm (parallel to flow hard/soft)."""
+    h = int(hold_days)
+    n = int(momentum_n)
+    am_cost = amortized_one_way_cost(one_way_cost, h)
+    signed_returns: list[float] = []
+    n_active = 0
+    n_margin_obs = 0
+    holding_records: list[dict[str, Any]] = []
+
+    for code, pairs in sorted(bars_by_code.items()):
+        pairs_l = list(pairs)
+        if len(pairs_l) < max(h, n) + 2:
+            continue
+        margin_pairs = list(margin_by_code.get(code) or [])
+        if len(margin_pairs) < 2:
+            continue
+        margin_chg_by_date: dict[str, float | None] = {}
+        for i, (d, m) in enumerate(margin_pairs):
+            if i == 0:
+                margin_chg_by_date[d] = None
+                continue
+            prev = margin_pairs[i - 1][1]
+            if prev == 0:
+                margin_chg_by_date[d] = None
+            else:
+                margin_chg_by_date[d] = (float(m) - float(prev)) / float(prev)
+            n_margin_obs += 1
+
+        moms = momentum_series(pairs_l, n=n)
+        mom_by_date = {d: m for d, m in moms}
+        dates = [d for d, _ in pairs_l]
+        closes = [c for _, c in pairs_l]
+        entry_signs: list[float | None] = []
+        for d in dates:
+            if d in margin_chg_by_date and margin_chg_by_date[d] is not None:
+                rec = compute_mf_flow_price_signal(
+                    margin_change=margin_chg_by_date[d],
+                    momentum=mom_by_date.get(d),
+                    is_trading_day=1.0,
+                    hold_days=h,
+                    code=code,
+                    date=d,
+                )
+                entry_signs.append(rec.get("value"))
+            else:
+                entry_signs.append(None)
+
+        held = apply_sticky_hold(
+            entry_signs, hold_days=h, rebalance_mode="min_hold"
+        )
+        for i, pos in enumerate(held):
+            holding_records.append({"date": dates[i], "code": code, "sign": pos})
+            if pos is None or pos == 0.0:
+                continue
+            if entry_signs[i] is None or entry_signs[i] == 0.0:
+                continue
+            fwd = multi_day_forward_return(closes, hold_days=h, entry_index=i)
+            if fwd is None:
+                continue
+            n_active += 1
+            signed_returns.append(float(pos) * float(fwd))
+
+    gross = mean(signed_returns) if signed_returns else None
+    net = (gross - am_cost) if gross is not None else None
+    n_code_days = len(holding_records)
+    n_trading_days = len({r["date"] for r in holding_records})
+    occ = occurrence_rate_multiday(
+        n_active=n_active,
+        n_code_days=n_code_days,
+        n_trading_days=n_trading_days,
+        n_codes=len(bars_by_code),
+        hold_days=h,
+        min_activation_rate=MIN_ACTIVATION_RATE_MULTIDAY,
+    )
+    return {
+        "signal_id": SIGNAL_ID_MF_FLOW_PRICE,
+        "hypothesis_class": CLASS_MULTI_FACTOR,
+        "mode": "flow_price",
+        "hold_days": h,
+        "momentum_n": n,
+        "gross_signed_mean_active": gross,
+        "net_one_way_mean_active": net,
+        "amortized_one_way_cost": am_cost,
+        "one_way_cost": float(one_way_cost),
+        "n_active_positions": n_active,
+        "n_signed_returns": len(signed_returns),
+        "n_margin_obs": n_margin_obs,
+        "n_codes": len(bars_by_code),
+        "n_code_days": n_code_days,
+        "n_trading_days": n_trading_days,
+        "occurrence": occ,
+        **_freeze(),
+        "note": (
+            "Multi-factor flow×price confirm. Near-group parallel to "
+            "flow_margin_hard/soft (do not merge). Not READY / not Mass."
         ),
     }
 
@@ -3643,12 +4217,17 @@ __all__ = [
     "MIN_YEARS_RESEARCH_CANDIDATE",
     "bars_rich_to_close_panel",
     "collect_liquidity_bar_rows",
+    "build_repo_curve_series",
     "evaluate_cross_section_on_bars",
     "evaluate_event_post_on_bars",
     "evaluate_flow_demand_on_bars",
     "evaluate_fundamentals_price_on_bars",
     "evaluate_macro_conditioned_on_bars",
+    "evaluate_mf_flow_price_on_bars",
+    "evaluate_mf_value_mom_rate_on_bars",
     "evaluate_multi_day_hold_on_bars",
+    "evaluate_rate_curve_xs_on_bars",
+    "evaluate_rate_level_xs_on_bars",
     "fins_asof",
     "load_bars_ndjson",
     "load_bars_ndjson_rich",
@@ -3656,6 +4235,7 @@ __all__ = [
     "load_fins_events_from_sqlite",
     "load_margin_from_sqlite",
     "load_margin_ndjson",
+    "load_repo_rows_all_tenors_from_sqlite",
     "load_repo_rows_from_sqlite",
     "load_short_ratio_series_from_sqlite",
     "merge_event_calendars",

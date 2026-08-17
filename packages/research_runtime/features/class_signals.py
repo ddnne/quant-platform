@@ -33,11 +33,11 @@ from typing import Any, Mapping, Sequence
 # Identity / freeze
 # ---------------------------------------------------------------------------
 
-CLASS_SIGNALS_VERSION: str = "class-signals/v6"
-CLASS_SIGNALS_WAVE: str = "W83 / w0816r"
+CLASS_SIGNALS_VERSION: str = "class-signals/v7"
+CLASS_SIGNALS_WAVE: str = "W89 / w0816x"
 
 SIGNAL_STATUS: str = "candidate"
-SIGNAL_VERSION: str = "1.4.0"
+SIGNAL_VERSION: str = "1.5.0"
 CANDIDATE_ONLY: bool = False  # legs may be approved; signal status stays candidate
 
 MASS_RESEARCH: str = "NO-GO"
@@ -57,6 +57,9 @@ CLASS_CROSS_SECTION_RELATIVE: str = "cross_section_relative"
 CLASS_EVENT_POST: str = "event_post"
 CLASS_FLOW_DEMAND: str = "flow_demand"
 CLASS_FUNDAMENTALS_PRICE: str = "fundamentals_price"
+# W89 research families (factory/eval dispatch; not necessarily in registry)
+CLASS_RATE_FACTOR: str = "rate_factor"
+CLASS_MULTI_FACTOR: str = "multi_factor"
 
 # Signal ids (stable R2 / catalog keys)
 SIGNAL_ID_MULTI_DAY_HOLD: str = "c21_multi_day_momentum_hold"
@@ -65,6 +68,10 @@ SIGNAL_ID_CROSS_SECTION: str = "c21_cross_section_momentum_rank"
 SIGNAL_ID_EVENT_POST: str = "c21_event_post_disclosure_hold"
 SIGNAL_ID_FLOW_DEMAND: str = "c21_margin_flow_multiday"
 SIGNAL_ID_FUNDAMENTALS_PRICE: str = "c21_fundamentals_price_value"
+SIGNAL_ID_RATE_LEVEL_XS: str = "c21_rate_level_xs_risk_adj"
+SIGNAL_ID_RATE_CURVE_XS: str = "c21_rate_curve_shape_xs"
+SIGNAL_ID_MF_VALUE_MOM_RATE: str = "c21_mf_value_mom_rate"
+SIGNAL_ID_MF_FLOW_PRICE: str = "c21_mf_flow_price_confirm"
 
 # Feature legs (prefer registry-approved)
 MOMENTUM_FEATURE_ID: str = "momentum_n"
@@ -72,10 +79,19 @@ TRADING_DAY_FEATURE_ID: str = "is_trading_day"
 TOPIX_REL_FEATURE_ID: str = "topix_relative_1d"
 REPO_RATE_FEATURE_ID: str = "repo_rate_level"
 REPO_CHANGE_FEATURE_ID: str = "repo_rate_change"
+REPO_CURVE_FEATURE_ID: str = "repo_curve_spread"
 DISCLOSURE_FEATURE_ID: str = "disclosure_flag_fins"
 MARGIN_CHANGE_FEATURE_ID: str = "margin_interest_change_1d"
 SHORT_RATIO_FEATURE_ID: str = "short_ratio_level"
 FUNDAMENTAL_RATIO_FEATURE_ID: str = "fundamental_ratio"
+
+# Tokyo repo tenor pins for curve-shape proxy (no invent; only observed tenors).
+# Definition: spread = rate(long_tenor) − rate(short_tenor) on same as_of_date.
+# Available JSDA tenors include overnight T+0/T+1, 1W–3W, 1M/3M/6M/1Y.
+REPO_CURVE_SHORT_TENOR: str = "overnight/翌日物/T+0"
+REPO_CURVE_LONG_TENOR: str = "3M/T+1"
+DEFAULT_CURVE_STEEP_THRESHOLD: float = 0.0
+DEFAULT_CURVE_INVERT_THRESHOLD: float = 0.0
 
 DEFAULT_HOLD_DAYS: int = 5
 SUPPORTED_HOLD_DAYS: tuple[int, ...] = (5, 10, 20)
@@ -140,6 +156,19 @@ MACRO_CONDITIONED_DATASETS: tuple[str, ...] = (
     "markets_calendar",
     "indices_bars_daily_topix",
     "jsda_tokyo_repo_rates",
+)
+RATE_FACTOR_DATASETS: tuple[str, ...] = (
+    "equities_bars_daily",
+    "markets_calendar",
+    "indices_bars_daily_topix",
+    "jsda_tokyo_repo_rates",
+)
+MULTI_FACTOR_DATASETS: tuple[str, ...] = (
+    "equities_bars_daily",
+    "markets_calendar",
+    "fins_summary",
+    "jsda_tokyo_repo_rates",
+    "markets_margin_interest",
 )
 CROSS_SECTION_DATASETS: tuple[str, ...] = (
     "equities_bars_daily",
@@ -1754,6 +1783,510 @@ def compute_fundamentals_price_signal(
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# W89 rate_factor — absolute level + curve-shape (CS / risk-adj, not mom-only gate)
+# ---------------------------------------------------------------------------
+
+
+def repo_curve_spread(
+    short_rate: float | None,
+    long_rate: float | None,
+) -> tuple[float | None, dict[str, Any]]:
+    """Term-structure proxy from two repo tenors (no invent on missing leg).
+
+    Definition (documented for repo-only tenors):
+    ``spread = long_rate − short_rate`` on the same as_of_date.
+    Positive = upward sloping (steep); negative = inverted.
+    """
+    if short_rate is None or long_rate is None:
+        return None, {
+            "reason": "missing_leg",
+            "short_rate": short_rate,
+            "long_rate": long_rate,
+        }
+    try:
+        s = float(short_rate)
+        lo = float(long_rate)
+    except (TypeError, ValueError):
+        return None, {"reason": "non_numeric_leg"}
+    spread = lo - s
+    return spread, {
+        "short_rate": s,
+        "long_rate": lo,
+        "spread": spread,
+        "definition": "long_tenor_rate - short_tenor_rate",
+    }
+
+
+def repo_regime_from_curve(
+    spread: float | None,
+    *,
+    steep_threshold: float = DEFAULT_CURVE_STEEP_THRESHOLD,
+    invert_threshold: float = DEFAULT_CURVE_INVERT_THRESHOLD,
+) -> tuple[str | None, dict[str, Any]]:
+    """Label curve regime: steep / inverted / flat (or None if missing)."""
+    if spread is None:
+        return None, {"reason": "curve_spread missing"}
+    try:
+        sp = float(spread)
+    except (TypeError, ValueError):
+        return None, {"reason": "curve_spread not numeric", "raw": spread}
+    if sp > float(steep_threshold):
+        label = "steep"
+    elif sp < float(invert_threshold):
+        label = "inverted"
+    else:
+        label = "flat"
+    return label, {
+        "spread": sp,
+        "steep_threshold": float(steep_threshold),
+        "invert_threshold": float(invert_threshold),
+        "regime": label,
+    }
+
+
+def rate_level_risk_adjust_sign(
+    cs_sign: float | None,
+    regime: str | None,
+    *,
+    mode: str = "risk_on_off_book",
+) -> tuple[float | None, dict[str, Any]]:
+    """Transform a cross-section sign by absolute rate-level regime.
+
+    Modes
+    -----
+    risk_on_off_book (default):
+        * low  → keep CS book (risk-on)
+        * high → reverse CS book (risk-off / defensive rotation)
+        * mid  → no trade (neutral funding)
+    This is **not** the same as macro_conditioned rate_level (which gates
+    unidirectional equity mom long_only/short_only).
+    """
+    m = str(mode or "risk_on_off_book").strip().lower()
+    if cs_sign is None or regime is None:
+        return None, {
+            "adjusted": False,
+            "reason": "missing cs_sign or regime",
+            "mode": m,
+            "regime": regime,
+            "cs_sign": cs_sign,
+        }
+    try:
+        e = float(cs_sign)
+    except (TypeError, ValueError):
+        return None, {"adjusted": False, "reason": "cs_sign not numeric", "mode": m}
+    if e == 0.0:
+        return 0.0, {
+            "adjusted": True,
+            "mode": m,
+            "regime": regime,
+            "rule": "cs_flat",
+            "value": 0.0,
+        }
+    if m != "risk_on_off_book":
+        raise ValueError(f"mode must be risk_on_off_book, got {mode!r}")
+    if regime == "low":
+        out, rule = e, "low_rate → risk_on keep CS"
+    elif regime == "high":
+        out, rule = -e, "high_rate → risk_off reverse CS"
+    elif regime == "mid":
+        out, rule = None, "mid_rate → no_trade"
+    else:
+        out, rule = None, f"unknown regime {regime!r}"
+    return out, {
+        "adjusted": True,
+        "mode": m,
+        "regime": regime,
+        "cs_sign": e,
+        "rule": rule,
+        "value": out,
+    }
+
+
+def rate_curve_risk_adjust_sign(
+    cs_sign: float | None,
+    regime: str | None,
+    *,
+    mode: str = "steep_risk_on",
+) -> tuple[float | None, dict[str, Any]]:
+    """Transform CS sign by repo curve-shape regime.
+
+    steep_risk_on (default):
+        * steep    → keep CS book (risk-on term structure)
+        * inverted → reverse CS book (risk-off / inversion stress)
+        * flat     → no trade
+    """
+    m = str(mode or "steep_risk_on").strip().lower()
+    if cs_sign is None or regime is None:
+        return None, {
+            "adjusted": False,
+            "reason": "missing cs_sign or curve regime",
+            "mode": m,
+            "regime": regime,
+            "cs_sign": cs_sign,
+        }
+    try:
+        e = float(cs_sign)
+    except (TypeError, ValueError):
+        return None, {"adjusted": False, "reason": "cs_sign not numeric", "mode": m}
+    if e == 0.0:
+        return 0.0, {
+            "adjusted": True,
+            "mode": m,
+            "regime": regime,
+            "rule": "cs_flat",
+            "value": 0.0,
+        }
+    if m != "steep_risk_on":
+        raise ValueError(f"mode must be steep_risk_on, got {mode!r}")
+    if regime == "steep":
+        out, rule = e, "steep_curve → risk_on keep CS"
+    elif regime == "inverted":
+        out, rule = -e, "inverted_curve → risk_off reverse CS"
+    elif regime == "flat":
+        out, rule = None, "flat_curve → no_trade"
+    else:
+        out, rule = None, f"unknown regime {regime!r}"
+    return out, {
+        "adjusted": True,
+        "mode": m,
+        "regime": regime,
+        "cs_sign": e,
+        "rule": rule,
+        "value": out,
+    }
+
+
+def compute_rate_level_xs_signal(
+    *,
+    cs_sign: float | None,
+    repo_rate: float | None,
+    high_threshold: float = DEFAULT_REPO_HIGH_THRESHOLD,
+    low_threshold: float = DEFAULT_REPO_LOW_THRESHOLD,
+    code: str | None = None,
+    date: str | None = None,
+    as_of: str | None = None,
+    extra_meta: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Absolute rate-level factor × cross-section book (risk-on/off)."""
+    regime, regime_meta = repo_regime_from_level(
+        repo_rate,
+        high_threshold=high_threshold,
+        low_threshold=low_threshold,
+    )
+    adjusted, adj_meta = rate_level_risk_adjust_sign(cs_sign, regime)
+    meta: dict[str, Any] = {
+        "signal_id": SIGNAL_ID_RATE_LEVEL_XS,
+        "signal_version": SIGNAL_VERSION,
+        "status": SIGNAL_STATUS,
+        "hypothesis_class": CLASS_RATE_FACTOR,
+        "primary_feature_id": REPO_RATE_FEATURE_ID,
+        "secondary_feature_id": MOMENTUM_FEATURE_ID,
+        "datasets_required": list(RATE_FACTOR_DATASETS),
+        "cs_sign": cs_sign,
+        "repo_rate": repo_rate,
+        "regime": regime_meta,
+        "adjust": adj_meta,
+        "formula": (
+            "CS rank mom L-S book; absolute repo level risk-adjusts "
+            "(low keep / high reverse / mid flat)"
+        ),
+        "not_simple_daily_sign": True,
+        "not_macro_mom_gate_only": True,
+        "note": (
+            "Absolute rate-level factor with CS risk-adjustment on "
+            "jsda_tokyo_repo_rates. Distinct from macro_conditioned rate_level. "
+            "Not READY. Not mass."
+        ),
+    }
+    meta.update(_freeze_meta())
+    if code is not None:
+        meta["code"] = str(code)
+    if date is not None:
+        meta["date"] = str(date)[:10]
+    if as_of is not None:
+        meta["as_of"] = str(as_of)
+    if extra_meta:
+        meta.update(dict(extra_meta))
+    return {
+        "signal_id": SIGNAL_ID_RATE_LEVEL_XS,
+        "version": SIGNAL_VERSION,
+        "status": SIGNAL_STATUS,
+        "candidate_only": CANDIDATE_ONLY,
+        "hypothesis_class": CLASS_RATE_FACTOR,
+        "value": adjusted,
+        "regime": regime,
+        "code": str(code) if code is not None else None,
+        "date": str(date)[:10] if date is not None else None,
+        "as_of": as_of,
+        "metadata": meta,
+    }
+
+
+def compute_rate_curve_xs_signal(
+    *,
+    cs_sign: float | None,
+    short_rate: float | None,
+    long_rate: float | None,
+    steep_threshold: float = DEFAULT_CURVE_STEEP_THRESHOLD,
+    invert_threshold: float = DEFAULT_CURVE_INVERT_THRESHOLD,
+    code: str | None = None,
+    date: str | None = None,
+    as_of: str | None = None,
+    extra_meta: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Repo curve-shape factor × cross-section book."""
+    spread, spread_meta = repo_curve_spread(short_rate, long_rate)
+    regime, regime_meta = repo_regime_from_curve(
+        spread,
+        steep_threshold=steep_threshold,
+        invert_threshold=invert_threshold,
+    )
+    adjusted, adj_meta = rate_curve_risk_adjust_sign(cs_sign, regime)
+    meta: dict[str, Any] = {
+        "signal_id": SIGNAL_ID_RATE_CURVE_XS,
+        "signal_version": SIGNAL_VERSION,
+        "status": SIGNAL_STATUS,
+        "hypothesis_class": CLASS_RATE_FACTOR,
+        "primary_feature_id": REPO_CURVE_FEATURE_ID,
+        "secondary_feature_id": MOMENTUM_FEATURE_ID,
+        "datasets_required": list(RATE_FACTOR_DATASETS),
+        "curve_definition": {
+            "short_tenor": REPO_CURVE_SHORT_TENOR,
+            "long_tenor": REPO_CURVE_LONG_TENOR,
+            "spread": "long - short",
+            "note": (
+                "Only JSDA Tokyo repo tenors available (no JGB/OIS curve). "
+                "3M vs overnight is a funding term-structure proxy, not a "
+                "sovereign yield curve."
+            ),
+        },
+        "cs_sign": cs_sign,
+        "spread": spread_meta,
+        "regime": regime_meta,
+        "adjust": adj_meta,
+        "formula": (
+            "CS rank mom L-S; repo curve steep keep / inverted reverse / flat no trade"
+        ),
+        "not_simple_daily_sign": True,
+        "note": (
+            "Curve-shape rate factor from multi-tenor jsda_tokyo_repo_rates. "
+            "Not READY. Not mass."
+        ),
+    }
+    meta.update(_freeze_meta())
+    if code is not None:
+        meta["code"] = str(code)
+    if date is not None:
+        meta["date"] = str(date)[:10]
+    if as_of is not None:
+        meta["as_of"] = str(as_of)
+    if extra_meta:
+        meta.update(dict(extra_meta))
+    return {
+        "signal_id": SIGNAL_ID_RATE_CURVE_XS,
+        "version": SIGNAL_VERSION,
+        "status": SIGNAL_STATUS,
+        "candidate_only": CANDIDATE_ONLY,
+        "hypothesis_class": CLASS_RATE_FACTOR,
+        "value": adjusted,
+        "regime": regime,
+        "spread": spread,
+        "code": str(code) if code is not None else None,
+        "date": str(date)[:10] if date is not None else None,
+        "as_of": as_of,
+        "metadata": meta,
+    }
+
+
+# ---------------------------------------------------------------------------
+# W89 multi_factor — value×mom×rate · flow×price (thesis-required combinations)
+# ---------------------------------------------------------------------------
+
+
+def compute_mf_value_mom_rate_signal(
+    *,
+    value_score: float | None,
+    momentum: float | None,
+    repo_rate: float | None,
+    value_benchmark: float | None = None,
+    high_threshold: float = DEFAULT_REPO_HIGH_THRESHOLD,
+    low_threshold: float = DEFAULT_REPO_LOW_THRESHOLD,
+    hold_days: int = DEFAULT_FUND_HOLD_DAYS,
+    code: str | None = None,
+    date: str | None = None,
+    as_of: str | None = None,
+    extra_meta: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Three-factor: value × price-mom agree, then funding-level alignment.
+
+    Thesis: cheap winners earn more under easy funding; expensive losers under
+    tight funding. Distinct from fund_value_mom_agree (no rate leg).
+    """
+    h = int(hold_days)
+    fund = compute_fundamentals_price_signal(
+        value_score=value_score,
+        momentum=momentum,
+        value_benchmark=value_benchmark,
+        hold_days=h,
+        mode="value_momentum_agree",
+        code=code,
+        date=date,
+        as_of=as_of,
+    )
+    base = fund.get("value")
+    regime, regime_meta = repo_regime_from_level(
+        repo_rate,
+        high_threshold=high_threshold,
+        low_threshold=low_threshold,
+    )
+    # Funding alignment: longs only when not high; shorts only when not low
+    value: float | None
+    rule: str
+    if base is None:
+        value, rule = None, "base_value_mom_null"
+    elif base == 0.0:
+        value, rule = 0.0, "base_flat"
+    elif regime is None:
+        value, rule = None, "rate_regime_missing"
+    elif float(base) > 0 and regime in {"low", "mid"}:
+        value, rule = float(base), "long_allowed_easy_or_mid_funding"
+    elif float(base) < 0 and regime in {"high", "mid"}:
+        value, rule = float(base), "short_allowed_tight_or_mid_funding"
+    else:
+        value, rule = None, "funding_misaligned_no_trade"
+
+    meta: dict[str, Any] = {
+        "signal_id": SIGNAL_ID_MF_VALUE_MOM_RATE,
+        "signal_version": SIGNAL_VERSION,
+        "status": SIGNAL_STATUS,
+        "hypothesis_class": CLASS_MULTI_FACTOR,
+        "factors": ["value", "momentum", "rate_level"],
+        "datasets_required": list(MULTI_FACTOR_DATASETS),
+        "base_fund": fund.get("metadata"),
+        "repo_rate": repo_rate,
+        "regime": regime_meta,
+        "rule": rule,
+        "hold_days": h,
+        "formula": (
+            "value_mom_agree AND (long only if rate not high; "
+            "short only if rate not low)"
+        ),
+        "not_simple_daily_sign": True,
+        "not_fund_value_mom_agree_only": True,
+        "note": (
+            "Multi-factor value×mom×rate. Distinct from fund_value_mom_agree. "
+            "Not READY. Not mass."
+        ),
+    }
+    meta.update(_freeze_meta())
+    if code is not None:
+        meta["code"] = str(code)
+    if date is not None:
+        meta["date"] = str(date)[:10]
+    if as_of is not None:
+        meta["as_of"] = str(as_of)
+    if extra_meta:
+        meta.update(dict(extra_meta))
+    return {
+        "signal_id": SIGNAL_ID_MF_VALUE_MOM_RATE,
+        "version": SIGNAL_VERSION,
+        "status": SIGNAL_STATUS,
+        "candidate_only": CANDIDATE_ONLY,
+        "hypothesis_class": CLASS_MULTI_FACTOR,
+        "value": value,
+        "regime": regime,
+        "code": str(code) if code is not None else None,
+        "date": str(date)[:10] if date is not None else None,
+        "as_of": as_of,
+        "metadata": meta,
+    }
+
+
+def compute_mf_flow_price_signal(
+    *,
+    margin_change: float | None,
+    momentum: float | None,
+    is_trading_day: float | None = 1.0,
+    hold_days: int = DEFAULT_FLOW_HOLD_DAYS,
+    code: str | None = None,
+    date: str | None = None,
+    as_of: str | None = None,
+    extra_meta: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Two-factor: margin flow confirmed by price momentum (not short-ratio).
+
+    Thesis: demand pressure earns only when price co-moves (flow×price).
+    Distinct from flow_margin_short_hard/soft (short confirm) and
+    flow_margin_pressure (flow only).
+    """
+    h = int(hold_days)
+    _, filter_meta = apply_trading_day_filter(1.0, is_trading_day)
+    flow_sign = sign_from_numeric(margin_change)
+    mom_sign = sign_from_numeric(momentum)
+    if filter_meta.get("passed") is not True:
+        value, rule = None, "non_trading_day"
+    elif flow_sign is None:
+        value, rule = None, "margin_change_missing"
+    elif mom_sign is None or mom_sign == 0.0:
+        value, rule = None, "momentum_flat_or_missing"
+    elif flow_sign == 0.0:
+        value, rule = 0.0, "flow_flat"
+    elif (flow_sign > 0 and mom_sign > 0) or (flow_sign < 0 and mom_sign < 0):
+        value, rule = float(flow_sign), "flow_and_price_agree"
+    else:
+        value, rule = None, "flow_price_disagree"
+
+    meta: dict[str, Any] = {
+        "signal_id": SIGNAL_ID_MF_FLOW_PRICE,
+        "signal_version": SIGNAL_VERSION,
+        "status": SIGNAL_STATUS,
+        "hypothesis_class": CLASS_MULTI_FACTOR,
+        "factors": ["margin_flow", "price_momentum"],
+        "datasets_required": [
+            "markets_margin_interest",
+            "equities_bars_daily",
+            "markets_calendar",
+        ],
+        "margin_change": margin_change,
+        "momentum": momentum,
+        "hold_days": h,
+        "rule": rule,
+        "filter": filter_meta,
+        "formula": (
+            f"entry only when sign(margin_change)==sign(mom); sticky hold={h}d"
+        ),
+        "not_simple_daily_sign": True,
+        "not_s4_rehash": True,
+        "not_short_confirm_variant": True,
+        "note": (
+            "Multi-factor flow×price confirm. Parallel near-group to "
+            "flow_margin_* (keep; do not merge). Not READY. Not mass."
+        ),
+    }
+    meta.update(_freeze_meta())
+    if code is not None:
+        meta["code"] = str(code)
+    if date is not None:
+        meta["date"] = str(date)[:10]
+    if as_of is not None:
+        meta["as_of"] = str(as_of)
+    if extra_meta:
+        meta.update(dict(extra_meta))
+    return {
+        "signal_id": SIGNAL_ID_MF_FLOW_PRICE,
+        "version": SIGNAL_VERSION,
+        "status": SIGNAL_STATUS,
+        "candidate_only": CANDIDATE_ONLY,
+        "hypothesis_class": CLASS_MULTI_FACTOR,
+        "value": value,
+        "code": str(code) if code is not None else None,
+        "date": str(date)[:10] if date is not None else None,
+        "as_of": as_of,
+        "metadata": meta,
+    }
+
+
 def class_signal_definitions(
     *,
     hold_days: int = DEFAULT_HOLD_DAYS,
@@ -1906,6 +2439,88 @@ def class_signal_definitions(
             "not_simple_daily_sign": True,
             "role": "fundamentals_price",
         },
+        {
+            "signal_id": SIGNAL_ID_RATE_LEVEL_XS,
+            "version": SIGNAL_VERSION,
+            "status": SIGNAL_STATUS,
+            "candidate_only": CANDIDATE_ONLY,
+            "hypothesis_class": CLASS_RATE_FACTOR,
+            "horizon": "multi_day_cs_rate_level",
+            "primary_feature_id": REPO_RATE_FEATURE_ID,
+            "feature_kinds": [
+                "repo_rate_level",
+                "cross_section_rank",
+                "risk_on_off_book",
+            ],
+            "datasets_required": list(RATE_FACTOR_DATASETS),
+            "formula": (
+                "CS mom L-S risk-adjusted by absolute Tokyo repo level "
+                "(low keep / high reverse / mid flat)"
+            ),
+            "not_simple_daily_sign": True,
+            "not_macro_mom_gate_only": True,
+            "role": "rate_factor_abs_level",
+        },
+        {
+            "signal_id": SIGNAL_ID_RATE_CURVE_XS,
+            "version": SIGNAL_VERSION,
+            "status": SIGNAL_STATUS,
+            "candidate_only": CANDIDATE_ONLY,
+            "hypothesis_class": CLASS_RATE_FACTOR,
+            "horizon": "multi_day_cs_rate_curve",
+            "primary_feature_id": REPO_CURVE_FEATURE_ID,
+            "feature_kinds": [
+                "repo_curve_spread",
+                "cross_section_rank",
+                "term_structure_proxy",
+            ],
+            "datasets_required": list(RATE_FACTOR_DATASETS),
+            "formula": (
+                f"spread={REPO_CURVE_LONG_TENOR}-"
+                f"{REPO_CURVE_SHORT_TENOR}; steep keep CS / inverted reverse"
+            ),
+            "not_simple_daily_sign": True,
+            "role": "rate_factor_curve_shape",
+            "curve_definition": {
+                "short_tenor": REPO_CURVE_SHORT_TENOR,
+                "long_tenor": REPO_CURVE_LONG_TENOR,
+                "note": "JSDA repo tenors only (no JGB/OIS invent)",
+            },
+        },
+        {
+            "signal_id": SIGNAL_ID_MF_VALUE_MOM_RATE,
+            "version": SIGNAL_VERSION,
+            "status": SIGNAL_STATUS,
+            "candidate_only": CANDIDATE_ONLY,
+            "hypothesis_class": CLASS_MULTI_FACTOR,
+            "horizon": f"{int(fund_hold_days)}d_multi_factor",
+            "primary_feature_id": FUNDAMENTAL_RATIO_FEATURE_ID,
+            "feature_kinds": ["value", "momentum", "rate_level"],
+            "datasets_required": list(MULTI_FACTOR_DATASETS),
+            "formula": "value×mom agree AND funding-level alignment",
+            "not_simple_daily_sign": True,
+            "not_fund_value_mom_agree_only": True,
+            "role": "multi_factor_value_mom_rate",
+        },
+        {
+            "signal_id": SIGNAL_ID_MF_FLOW_PRICE,
+            "version": SIGNAL_VERSION,
+            "status": SIGNAL_STATUS,
+            "candidate_only": CANDIDATE_ONLY,
+            "hypothesis_class": CLASS_MULTI_FACTOR,
+            "horizon": f"{int(flow_hold_days)}d_multi_factor",
+            "primary_feature_id": MARGIN_CHANGE_FEATURE_ID,
+            "feature_kinds": ["margin_flow", "price_momentum"],
+            "datasets_required": [
+                "markets_margin_interest",
+                "equities_bars_daily",
+                "markets_calendar",
+            ],
+            "formula": "sign(margin_change)==sign(mom); sticky multi-day hold",
+            "not_simple_daily_sign": True,
+            "not_short_confirm_variant": True,
+            "role": "multi_factor_flow_price",
+        },
     ]
 
 
@@ -1928,13 +2543,12 @@ def class_signals_document() -> dict[str, Any]:
         "s1_s5_unreject": S1_S5_UNREJECT,
         **_freeze_meta(),
         "note": (
-            "W82 class-based research signals. multi_day_hold + event_post + "
+            "W89 class-based research signals. multi_day_hold + event_post + "
             "macro_conditioned + flow_demand + fundamentals_price "
-            "(+ optional cross_section). Production research_candidate only "
-            "if economic net + occurrence rate + multi-year no extreme skew + "
-            "risk OK + statistical bar (|t|≥1.5, Sharpe≥0.5, win-rate≥0.6, "
-            "≥4 positive periods). Weak consistent-negative is not_candidate. "
-            "Noisy low t/Sharpe → demote to discussion_only. "
+            "(+ optional cross_section) + rate_factor (abs level / curve) + "
+            "multi_factor (value×mom×rate / flow×price). Production "
+            "research_candidate only if economic net + occurrence rate + "
+            "multi-year no extreme skew + risk OK + statistical bar. "
             "READY/Mass never auto-connect. No S1–S5 un-reject."
         ),
     }
@@ -1948,6 +2562,8 @@ __all__ = [
     "CLASS_FUNDAMENTALS_PRICE",
     "CLASS_MACRO_CONDITIONED",
     "CLASS_MULTI_DAY_HOLD",
+    "CLASS_MULTI_FACTOR",
+    "CLASS_RATE_FACTOR",
     "CLASS_SIGNALS_VERSION",
     "CLASS_SIGNALS_WAVE",
     "CROSS_SECTION_DATASETS",
@@ -1969,6 +2585,8 @@ __all__ = [
     "DEFAULT_MIN_SHARPE_PERIOD",
     "DEFAULT_MIN_YEARS_RESEARCH_CANDIDATE",
     "DEFAULT_MOMENTUM_N",
+    "DEFAULT_CURVE_INVERT_THRESHOLD",
+    "DEFAULT_CURVE_STEEP_THRESHOLD",
     "DEFAULT_REPO_CHANGE_EPS",
     "DEFAULT_REPO_HIGH_THRESHOLD",
     "DEFAULT_REPO_LOW_THRESHOLD",
@@ -1983,10 +2601,15 @@ __all__ = [
     "MASS_RESEARCH",
     "MOMENTUM_FEATURE_ID",
     "MULTI_DAY_HOLD_DATASETS",
+    "MULTI_FACTOR_DATASETS",
     "ORDER_EXECUTION",
     "PHASE7",
+    "RATE_FACTOR_DATASETS",
     "READY_DECLARED",
     "REPO_CHANGE_FEATURE_ID",
+    "REPO_CURVE_FEATURE_ID",
+    "REPO_CURVE_LONG_TENOR",
+    "REPO_CURVE_SHORT_TENOR",
     "REPO_RATE_FEATURE_ID",
     "SHORT_RATIO_FEATURE_ID",
     "SIGNAL_ID_CROSS_SECTION",
@@ -1994,7 +2617,11 @@ __all__ = [
     "SIGNAL_ID_FLOW_DEMAND",
     "SIGNAL_ID_FUNDAMENTALS_PRICE",
     "SIGNAL_ID_MACRO_CONDITIONED",
+    "SIGNAL_ID_MF_FLOW_PRICE",
+    "SIGNAL_ID_MF_VALUE_MOM_RATE",
     "SIGNAL_ID_MULTI_DAY_HOLD",
+    "SIGNAL_ID_RATE_CURVE_XS",
+    "SIGNAL_ID_RATE_LEVEL_XS",
     "SIGNAL_STATUS",
     "SIGNAL_VERSION",
     "SUPPORTED_HOLD_DAYS",
@@ -2010,7 +2637,11 @@ __all__ = [
     "compute_flow_demand_signal",
     "compute_fundamentals_price_signal",
     "compute_macro_conditioned_signal",
+    "compute_mf_flow_price_signal",
+    "compute_mf_value_mom_rate_signal",
     "compute_multi_day_hold_signal",
+    "compute_rate_curve_xs_signal",
+    "compute_rate_level_xs_signal",
     "condition_signal_on_regime",
     "cross_section_rank_signs",
     "earnings_surprise_proxy",
@@ -2024,7 +2655,11 @@ __all__ = [
     "occurrence_rate_multiday",
     "parse_disc_time_hhmmss",
     "production_candidate_bar",
+    "rate_curve_risk_adjust_sign",
+    "rate_level_risk_adjust_sign",
+    "repo_curve_spread",
     "repo_regime_from_change",
+    "repo_regime_from_curve",
     "repo_regime_from_level",
     "session_close_hhmmss",
     "sign_from_numeric",

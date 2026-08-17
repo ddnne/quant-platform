@@ -1,4 +1,4 @@
-"""W88 / w0816w — logic-diversity mass factory: templates, near-dup, freezes."""
+"""W89 / w0816x — logic-diversity mass factory: rate + multi-factor + freezes."""
 
 from __future__ import annotations
 
@@ -17,6 +17,8 @@ from research.mass_strategy_factory import (
     DEFAULT_N,
     DEFAULT_NEAR_DUP_THRESHOLD,
     FAMILY_DEFINITIONS,
+    FAMILY_MULTI_FACTOR,
+    FAMILY_RATE_FACTOR,
     FAMILY_VOL_RISK_ADJUSTED,
     FACTORY_FAMILY_IDS,
     FROZEN_DEFAULT_PATH,
@@ -25,6 +27,7 @@ from research.mass_strategy_factory import (
     MASS_FACTORY_VERSION,
     MASS_FACTORY_WAVE,
     MASS_RESEARCH,
+    NEAR_LOGIC_GROUPS,
     OPERATIONAL_GO,
     PHASE7,
     READY_DECLARED,
@@ -40,6 +43,8 @@ from research.mass_strategy_factory import (
     load_batch_data_context,
     logic_templates_document,
     mass_factory_document,
+    near_logic_groups_document,
+    propose_profit_hypotheses,
     run_batch_eval,
     run_mass_factory,
     screen_strategy_result,
@@ -62,7 +67,7 @@ def test_freezes_closed():
     assert READY_DECLARED is False
     assert OPERATIONAL_GO is False
     assert CONTINUOUS_PAPER == "UNARMED"
-    assert "W88" in MASS_FACTORY_WAVE
+    assert "W89" in MASS_FACTORY_WAVE or "W88" in MASS_FACTORY_WAVE
     assert MASS_FACTORY_VERSION.startswith("mass-strategy-factory/")
     assert doc["frozen_defaults_retuned"] is False
 
@@ -93,7 +98,7 @@ def test_frozen_defaults_not_retuned():
 
 def test_logic_templates_distinct_economic_logic():
     doc = logic_templates_document()
-    assert doc["n_logic_templates"] >= 12
+    assert doc["n_logic_templates"] >= 20  # W89: +rate + multi-factor
     assert len(LOGIC_TEMPLATE_IDS) == len(set(LOGIC_TEMPLATE_IDS))
     # each template has required fields
     fps = set()
@@ -113,12 +118,23 @@ def test_logic_templates_distinct_economic_logic():
         CLASS_SIMPLE_DAILY_SIGN not in (t.family_id, t.logic_id)
         for t in LOGIC_TEMPLATES.values()
     )
+    # W89 rate + multi-factor present
+    assert "rate_abs_level_xs" in LOGIC_TEMPLATES
+    assert "rate_curve_shape_xs" in LOGIC_TEMPLATES
+    assert "mf_value_mom_rate" in LOGIC_TEMPLATES
+    assert "mf_flow_price" in LOGIC_TEMPLATES
+    assert LOGIC_TEMPLATES["rate_abs_level_xs"].family_id == FAMILY_RATE_FACTOR
+    assert LOGIC_TEMPLATES["mf_value_mom_rate"].family_id == FAMILY_MULTI_FACTOR
     # diversity rules documented
     rules = doc["diversity_rules"]
     assert "hold_days only" in str(rules["does_not_count"])
     assert "info source" in str(rules["counts_as_different"]).lower() or any(
         "info" in x.lower() for x in rules["counts_as_different"]
     )
+    # near-groups parallel
+    ng = near_logic_groups_document()
+    assert len(ng["groups"]) >= 2
+    assert len(NEAR_LOGIC_GROUPS) >= 2
 
 
 def test_families_still_documented_for_eval_dispatch():
@@ -134,6 +150,8 @@ def test_families_still_documented_for_eval_dispatch():
     ):
         assert cid in FAMILY_DEFINITIONS or cid in FACTORY_FAMILY_IDS
     assert FAMILY_VOL_RISK_ADJUSTED in FAMILY_DEFINITIONS
+    assert FAMILY_RATE_FACTOR in FAMILY_DEFINITIONS
+    assert FAMILY_MULTI_FACTOR in FAMILY_DEFINITIONS
     assert CLASS_SIMPLE_DAILY_SIGN not in FAMILY_DEFINITIONS
 
 
@@ -393,5 +411,59 @@ def test_default_n_capacity_and_cf_llm_residuals():
     assert "blocker" in cf
     assert cf["scale_deferred"] is True
     llm = llm_logic_entry_status()
-    assert llm["status"] == "unconnected"
-    assert "always_through_evaluator" in llm or llm.get("always_through_evaluator") is True
+    assert llm["status"] == "connected"
+    assert llm.get("always_through_evaluator") is True
+    assert "propose_profit_hypotheses" in str(llm.get("entry_fn") or "")
+
+
+def test_propose_profit_hypotheses_rejects_window_tweaks_and_evals():
+    # window tweak only → reject
+    bad = propose_profit_hypotheses(
+        [
+            {
+                "logic_id": "xs_rank_ls_sticky",
+                "params": {"hold_days": 15, "momentum_n": 3},
+            }
+        ],
+        evaluate=False,
+    )
+    assert bad["n_rejected"] >= 1
+    assert bad["n_accepted"] == 0
+
+    # full thesis rate factor → accept + evaluate synthetic
+    good = propose_profit_hypotheses(
+        [
+            {
+                "logic_id": "rate_abs_level_xs",
+                "thesis": LOGIC_TEMPLATES["rate_abs_level_xs"].thesis,
+                "signal_definition": LOGIC_TEMPLATES[
+                    "rate_abs_level_xs"
+                ].signal_definition,
+                "position_rule": LOGIC_TEMPLATES[
+                    "rate_abs_level_xs"
+                ].position_rule,
+                "datasets_used": list(
+                    LOGIC_TEMPLATES["rate_abs_level_xs"].datasets_used
+                ),
+            },
+            {
+                "logic_id": "mf_flow_price",
+                "thesis": LOGIC_TEMPLATES["mf_flow_price"].thesis,
+                "signal_definition": LOGIC_TEMPLATES[
+                    "mf_flow_price"
+                ].signal_definition,
+                "position_rule": LOGIC_TEMPLATES["mf_flow_price"].position_rule,
+                "datasets_used": list(
+                    LOGIC_TEMPLATES["mf_flow_price"].datasets_used
+                ),
+            },
+        ],
+        evaluate=True,
+        synthetic=True,
+    )
+    assert good["n_accepted"] == 2
+    assert good["n_rejected"] == 0
+    assert good.get("eval") is not None
+    assert good["eval"].get("n_strategies_evaluated") == 2
+    assert good["mass_research"] == "NO-GO"
+    assert good["continuous_paper"] == "UNARMED"

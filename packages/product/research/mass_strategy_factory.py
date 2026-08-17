@@ -1,10 +1,16 @@
-"""Mass strategy logic-diversity factory + batch auto-experiment (W88 / w0816w).
+"""Mass strategy logic-diversity factory + batch auto-experiment (W89 / w0816x).
 
 Purpose
 -------
 Research factory that generates strategy **individuals** around **distinct
 economic logic templates** (thesis + signal structure + position rule +
 datasets), not hold_days / momentum_window / long_frac param grids.
+
+W89 extends W88 with:
+* interest-rate factor logics (absolute level + curve-shape × CS)
+* multi-factor logics (value×mom×rate, flow×price) with required theses
+* near-group labels (flow hard/soft, fund slow kept parallel)
+* programmatic profit-hypothesis entry (always through evaluator)
 
 W87 risk addressed
 ------------------
@@ -33,7 +39,7 @@ Building blocks reused
 * ``class_signals`` / ``class_hyp_eval`` — pure bar evaluators
 * ``cost_models`` · ``sign_selection`` · ``stats_metrics``
 
-See: ``docs/proof/w0816w_w88_logic_diversity_factory_20260817.md``
+See: ``docs/proof/w0816x_w89_rate_multifactor_cf_20260817.md``
 """
 
 from __future__ import annotations
@@ -86,8 +92,8 @@ from features.class_signals import (
 # Identity / freezes (must never arm operational Mass)
 # ---------------------------------------------------------------------------
 
-MASS_FACTORY_VERSION: str = "mass-strategy-factory/v2"
-MASS_FACTORY_WAVE: str = "W88 / w0816w"
+MASS_FACTORY_VERSION: str = "mass-strategy-factory/v2.1"
+MASS_FACTORY_WAVE: str = "W89 / w0816x"
 
 MASS_RESEARCH: str = "NO-GO"  # operational Mass remains NO-GO
 PHASE7: str = "OFF"
@@ -105,8 +111,55 @@ LIVE_ORDERS: bool = False
 # Factory "mass" here means bulk research generation — never operational Mass.
 FACTORY_MASS_LOOP: str = "research_batch_only"
 
-# Optional family not in hypothesis_classes registry (pure price vol filter).
+# Optional families not in hypothesis_classes registry.
 FAMILY_VOL_RISK_ADJUSTED: str = "vol_risk_adjusted"
+FAMILY_RATE_FACTOR: str = "rate_factor"
+FAMILY_MULTI_FACTOR: str = "multi_factor"
+
+# Near-groups kept parallel for comparison (do not merge early).
+NEAR_LOGIC_GROUPS: tuple[dict[str, Any], ...] = (
+    {
+        "group_id": "flow_margin_confirm",
+        "label": "flow hard/soft/pressure (near-group parallel)",
+        "logic_ids": (
+            "flow_margin_pressure",
+            "flow_margin_short_hard",
+            "flow_margin_short_soft",
+            "mf_flow_price",  # multi-factor cousin; price confirm vs short
+        ),
+        "note": (
+            "Keep hard/soft/pressure parallel; mf_flow_price is multi-factor "
+            "price-confirm cousin (not a short-confirm variant merge)."
+        ),
+    },
+    {
+        "group_id": "fund_value_mom",
+        "label": "fund value×mom (slow variant parallel)",
+        "logic_ids": (
+            "fund_value_mom_agree",
+            "fund_value_mom_agree_slow",
+            "mf_value_mom_rate",  # multi-factor cousin; adds rate leg
+        ),
+        "note": (
+            "Keep slow variant parallel; mf_value_mom_rate adds rate factor "
+            "(not a near-dup of fund_value_mom_agree)."
+        ),
+    },
+    {
+        "group_id": "rate_macro_family",
+        "label": "rate / macro family (level vs change vs CS factor)",
+        "logic_ids": (
+            "macro_repo_rate_change",
+            "macro_repo_rate_level",
+            "rate_abs_level_xs",
+            "rate_curve_shape_xs",
+        ),
+        "note": (
+            "macro_* = mom gate; rate_* = CS risk-adj factor logics. "
+            "Keep distinct (not merge)."
+        ),
+    },
+)
 
 # Gen-time reject reason codes
 REJECT_SIMPLE_DAILY_SIGN: str = "simple_daily_sign_forbidden"
@@ -627,6 +680,119 @@ def _build_logic_templates() -> dict[str, LogicTemplate]:
             structural_keys=("mode", "mom_structure"),
             notes="Distinct mom_structure tag; not a free mom grid over fund_value_mom_agree.",
         ),
+        # ----- W89 interest-rate factor logics -----
+        LogicTemplate(
+            logic_id="rate_abs_level_xs",
+            display_name="Absolute rate-level × CS risk-on/off",
+            thesis=(
+                "Absolute Tokyo repo funding level is a risk-appetite factor: "
+                "low rates → risk-on keep CS relative strength book; "
+                "high rates → risk-off reverse CS book; mid → flat"
+            ),
+            signal_definition=(
+                "CS rank(mom) L-S signs risk-adjusted by absolute repo rate_level "
+                "(not unidirectional mom gate)"
+            ),
+            position_rule="sticky fixed_horizon balanced L/S after rate-level book transform",
+            datasets_used=bars_idx + ("jsda_tokyo_repo_rates",),
+            family_id=FAMILY_RATE_FACTOR,
+            base_params={
+                "mode": "rate_level_xs_risk_adj",
+                "momentum_n": 5,
+                "hold_days": 10,
+                "long_frac": 0.3,
+                "short_frac": 0.3,
+                "high_threshold": 0.05,
+                "low_threshold": 0.0,
+            },
+            structural_keys=("mode",),
+            notes=(
+                "Distinct from macro_repo_rate_level (mom gate). Combines rate "
+                "factor with CS position construction."
+            ),
+        ),
+        LogicTemplate(
+            logic_id="rate_curve_shape_xs",
+            display_name="Repo curve-shape × CS risk-on/off",
+            thesis=(
+                "Funding term-structure steepness proxies risk appetite: "
+                "steep (3M−ON > 0) → keep CS book; inverted → reverse; flat → no trade"
+            ),
+            signal_definition=(
+                "curve_spread = rate(3M/T+1) − rate(overnight/T+0) from "
+                "jsda_tokyo_repo_rates; CS rank mom L-S risk-adjusted by curve regime"
+            ),
+            position_rule="sticky fixed_horizon balanced L/S after curve-shape book transform",
+            datasets_used=bars_idx + ("jsda_tokyo_repo_rates",),
+            family_id=FAMILY_RATE_FACTOR,
+            base_params={
+                "mode": "rate_curve_shape_xs",
+                "momentum_n": 5,
+                "hold_days": 10,
+                "long_frac": 0.3,
+                "short_frac": 0.3,
+                "steep_threshold": 0.0,
+                "invert_threshold": 0.0,
+                "curve_short_tenor": "overnight/翌日物/T+0",
+                "curve_long_tenor": "3M/T+1",
+            },
+            structural_keys=("mode", "curve_short_tenor", "curve_long_tenor"),
+            notes=(
+                "Curve definition uses only observed JSDA repo tenors "
+                "(no JGB/OIS invent). Funding term-structure proxy, not sovereign curve."
+            ),
+        ),
+        # ----- W89 multi-factor logics -----
+        LogicTemplate(
+            logic_id="mf_value_mom_rate",
+            display_name="Value × mom × rate multi-factor",
+            thesis=(
+                "Cheap winners under easy/mid funding and expensive losers under "
+                "tight/mid funding earn a multi-day premium (three-factor agreement)"
+            ),
+            signal_definition=(
+                "value_mom_agree AND funding alignment "
+                "(long only if rate not high; short only if rate not low)"
+            ),
+            position_rule="sticky fixed_horizon hold of triple-agree signs",
+            datasets_used=("fins_summary", "jsda_tokyo_repo_rates") + bars,
+            family_id=FAMILY_MULTI_FACTOR,
+            base_params={
+                "mode": "value_mom_rate",
+                "hold_days": 10,
+                "momentum_n": 10,
+                "high_threshold": 0.05,
+                "low_threshold": 0.0,
+            },
+            structural_keys=("mode",),
+            notes=(
+                "Not a near-dup of fund_value_mom_agree: adds rate leg as third factor. "
+                "Near-group cousin under fund_value_mom for comparison only."
+            ),
+        ),
+        LogicTemplate(
+            logic_id="mf_flow_price",
+            display_name="Flow × price multi-factor",
+            thesis=(
+                "Margin demand pressure earns multi-day only when price momentum "
+                "confirms the flow direction (flow×price co-movement)"
+            ),
+            signal_definition="enter only when sign(margin_change)==sign(price_mom)",
+            position_rule="min_hold sticky; price confirm (not short-ratio confirm)",
+            datasets_used=("markets_margin_interest",) + bars,
+            family_id=FAMILY_MULTI_FACTOR,
+            base_params={
+                "mode": "flow_price",
+                "hold_days": 10,
+                "momentum_n": 10,
+                "confirm": "price_mom",
+            },
+            structural_keys=("mode", "confirm"),
+            notes=(
+                "Distinct from flow_margin_short_hard/soft (short confirm). "
+                "Keep parallel in flow near-group; do not merge."
+            ),
+        ),
     ]
     return {t.logic_id: t for t in tpls}
 
@@ -702,8 +868,30 @@ DEFAULT_FAMILY_RATIOS: dict[str, float] = {
 }
 
 
+def near_logic_groups_document() -> dict[str, Any]:
+    """Near-groups kept parallel for comparison (do not merge early)."""
+    return {
+        "version": MASS_FACTORY_VERSION,
+        "wave": MASS_FACTORY_WAVE,
+        "policy": (
+            "Near-similar logics (flow hard/soft, fund slow, rate macro cousins) "
+            "stay parallel for now — label as near-group; do not merge early."
+        ),
+        "groups": [dict(g) for g in NEAR_LOGIC_GROUPS],
+    }
+
+
 def logic_templates_document() -> dict[str, Any]:
     """Document logic templates + diversity rules."""
+    rate_ids = [
+        lid
+        for lid, t in LOGIC_TEMPLATES.items()
+        if t.family_id in {FAMILY_RATE_FACTOR, CLASS_MACRO_CONDITIONED}
+        and ("rate" in lid or "macro_repo" in lid)
+    ]
+    mf_ids = [
+        lid for lid, t in LOGIC_TEMPLATES.items() if t.family_id == FAMILY_MULTI_FACTOR
+    ]
     return {
         "version": MASS_FACTORY_VERSION,
         "wave": MASS_FACTORY_WAVE,
@@ -712,6 +900,9 @@ def logic_templates_document() -> dict[str, Any]:
         "templates": {
             lid: LOGIC_TEMPLATES[lid].to_dict() for lid in LOGIC_TEMPLATE_IDS
         },
+        "w89_rate_factor_logic_ids": rate_ids,
+        "w89_multi_factor_logic_ids": mf_ids,
+        "near_logic_groups": near_logic_groups_document(),
         "diversity_rules": {
             "counts_as_different": [
                 "info source / datasets",
@@ -728,6 +919,7 @@ def logic_templates_document() -> dict[str, Any]:
             "near_dup_threshold": DEFAULT_NEAR_DUP_THRESHOLD,
             "numeric_only_knobs": sorted(NUMERIC_ONLY_KNOBS),
             "prefer": "many distinct templates over many param clones",
+            "near_group_policy": "keep parallel; label; do not merge early",
         },
         "frozen_default_path": list(FROZEN_DEFAULT_PATH),
         "simple_daily_sign": "forbidden as diversity source",
@@ -764,7 +956,11 @@ def family_definitions_document() -> dict[str, Any]:
         },
         "hypothesis_class_alignment": {
             "registry_default_generation": list(DEFAULT_GENERATION_CLASS_IDS),
-            "extra_factory_families": [FAMILY_VOL_RISK_ADJUSTED],
+            "extra_factory_families": [
+                FAMILY_VOL_RISK_ADJUSTED,
+                FAMILY_RATE_FACTOR,
+                FAMILY_MULTI_FACTOR,
+            ],
             "excluded": [CLASS_SIMPLE_DAILY_SIGN],
         },
         **_freeze(),
@@ -1513,9 +1709,11 @@ def load_batch_data_context(
         DEFAULT_BARS_MIRROR_DIR,
         DEFAULT_SQLITE,
         bars_rich_to_close_panel,
+        build_repo_curve_series,
         load_bars_ndjson_rich,
         load_fins_events_from_sqlite,
         load_margin_ndjson,
+        load_repo_rows_all_tenors_from_sqlite,
         load_repo_rows_from_sqlite,
         load_short_ratio_series_from_sqlite,
         resolve_bars_path,
@@ -1549,6 +1747,9 @@ def load_batch_data_context(
     repo_series = (
         load_repo_rate_series_from_rows(repo_rows) if repo_rows else None
     )
+    # Multi-tenor for curve-shape factor (W89); overnight-only rows lack 3M.
+    repo_all = load_repo_rows_all_tenors_from_sqlite(db) if db.exists() else []
+    curve_series = build_repo_curve_series(repo_all) if repo_all else None
     fins_events = (
         load_fins_events_from_sqlite(
             db, codes=selected, start="2014-01-01", end="2026-12-31"
@@ -1582,6 +1783,7 @@ def load_batch_data_context(
                     "bars": {},
                     "margin": {},
                     "repo_series": repo_series,
+                    "curve_series": curve_series,
                     "fins_events": fins_events,
                     "short_series": short_series,
                 }
@@ -1612,6 +1814,7 @@ def load_batch_data_context(
                 "bars": bars,
                 "margin": margin,
                 "repo_series": repo_series,
+                "curve_series": curve_series,
                 "fins_events": fins_events,
                 "short_series": short_series,
                 "bars_path": str(bars_path),
@@ -1630,13 +1833,19 @@ def load_batch_data_context(
             "sqlite": str(db),
             "sqlite_exists": db.exists(),
             "n_repo_rows": len(repo_rows),
+            "n_repo_all_tenor_rows": len(repo_all),
+            "n_curve_spread_obs": (
+                int((curve_series or {}).get("n_obs_spread") or 0)
+            ),
+            "curve_definition": (curve_series or {}).get("definition"),
             "n_fins_codes": len(fins_events),
             "use_q4_periods": bool(config.use_q4_periods),
             "max_days_per_period": int(config.max_days_per_period),
             "tradeoff": (
                 "Lite multi-year: Q4 (or capped full) windows + code subsample "
                 "for wall-time. Not production research_candidate SoT; "
-                "survivors need deeper class_hyp re-eval before any promotion."
+                "survivors need deeper class_hyp re-eval before any promotion. "
+                "Heavy multi-year only for promising survivors."
             ),
         },
     )
@@ -1661,9 +1870,28 @@ def _synthetic_batch_context(config: MassFactoryConfig) -> BatchDataContext:
                 for i in range(0, len(dates), 3)
             ]
         rates = {d: 0.05 + 0.001 * i for i, d in enumerate(dates)}
+        short_r = {d: 0.04 + 0.001 * i for i, d in enumerate(dates)}
+        long_r = {
+            d: (0.06 + 0.001 * i if i % 7 != 0 else 0.02 + 0.0005 * i)
+            for i, d in enumerate(dates)
+        }
+        spread = {d: long_r[d] - short_r[d] for d in dates}
         repo_series = {
             "rates_by_date": rates,
             "dataset": "jsda_tokyo_repo_rates",
+            "source": "synthetic",
+        }
+        curve_series = {
+            "kind": "repo_curve_series",
+            "dataset": "jsda_tokyo_repo_rates",
+            "short_tenor": "overnight/翌日物/T+0",
+            "long_tenor": "3M/T+1",
+            "definition": "spread = long_tenor_rate - short_tenor_rate",
+            "short_rates_by_date": short_r,
+            "long_rates_by_date": long_r,
+            "spread_by_date": spread,
+            "rates_by_date": short_r,
+            "n_obs_spread": len(spread),
             "source": "synthetic",
         }
         fins_events = {
@@ -1698,6 +1926,7 @@ def _synthetic_batch_context(config: MassFactoryConfig) -> BatchDataContext:
                 "bars": bars,
                 "margin": margin,
                 "repo_series": repo_series,
+                "curve_series": curve_series,
                 "fins_events": fins_events,
                 "short_series": [
                     (d, 0.01 + 0.0001 * i) for i, d in enumerate(dates)
@@ -1726,7 +1955,11 @@ def _eval_on_panel(
         evaluate_flow_demand_on_bars,
         evaluate_fundamentals_price_on_bars,
         evaluate_macro_conditioned_on_bars,
+        evaluate_mf_flow_price_on_bars,
+        evaluate_mf_value_mom_rate_on_bars,
         evaluate_multi_day_hold_on_bars,
+        evaluate_rate_curve_xs_on_bars,
+        evaluate_rate_level_xs_on_bars,
         momentum_series,
     )
 
@@ -1780,6 +2013,53 @@ def _eval_on_panel(
             high_threshold=float(p.get("high_threshold") or 0.05),
             low_threshold=float(p.get("low_threshold") or 0.0),
         )
+    elif fid == FAMILY_RATE_FACTOR:
+        mode = str(p.get("mode") or "rate_level_xs_risk_adj")
+        if mode == "rate_curve_shape_xs":
+            out = evaluate_rate_curve_xs_on_bars(
+                bars,
+                panel.get("curve_series"),
+                momentum_n=int(p.get("momentum_n") or 5),
+                hold_days=int(p.get("hold_days") or 10),
+                long_frac=float(p.get("long_frac") or 0.3),
+                short_frac=float(p.get("short_frac") or 0.3),
+                one_way_cost=one_way_cost,
+                steep_threshold=float(p.get("steep_threshold") or 0.0),
+                invert_threshold=float(p.get("invert_threshold") or 0.0),
+            )
+        else:
+            out = evaluate_rate_level_xs_on_bars(
+                bars,
+                panel.get("repo_series"),
+                momentum_n=int(p.get("momentum_n") or 5),
+                hold_days=int(p.get("hold_days") or 10),
+                long_frac=float(p.get("long_frac") or 0.3),
+                short_frac=float(p.get("short_frac") or 0.3),
+                one_way_cost=one_way_cost,
+                high_threshold=float(p.get("high_threshold") or 0.05),
+                low_threshold=float(p.get("low_threshold") or 0.0),
+            )
+    elif fid == FAMILY_MULTI_FACTOR:
+        mode = str(p.get("mode") or "value_mom_rate")
+        if mode == "flow_price":
+            out = evaluate_mf_flow_price_on_bars(
+                bars,
+                panel.get("margin") or {},
+                hold_days=int(p.get("hold_days") or 10),
+                momentum_n=int(p.get("momentum_n") or 10),
+                one_way_cost=one_way_cost,
+            )
+        else:
+            out = evaluate_mf_value_mom_rate_on_bars(
+                bars,
+                panel.get("fins_events") or {},
+                panel.get("repo_series"),
+                hold_days=int(p.get("hold_days") or 10),
+                momentum_n=int(p.get("momentum_n") or 10),
+                one_way_cost=one_way_cost,
+                high_threshold=float(p.get("high_threshold") or 0.05),
+                low_threshold=float(p.get("low_threshold") or 0.0),
+            )
     elif fid == CLASS_EVENT_POST:
         out = evaluate_event_post_on_bars(
             bars,
@@ -2579,7 +2859,7 @@ def write_factory_outputs(
             "",
             "```bash",
             "python scripts/run_mass_strategy_batch.py --seed 870816 --n 100 \\",
-            "  --out-dir .glm-logs/w0816w_w88_logic/",
+            "  --out-dir .glm-logs/w0816x_w89_rate_mf/",
             "```",
             "",
             "Synthetic (tests / no mirrors):",
@@ -2636,20 +2916,266 @@ def try_cf_minimal_mass_batch() -> dict[str, Any]:
     }
 
 
-def llm_logic_entry_status() -> dict[str, Any]:
-    """Optional LLM entry for different profit hypotheses (not window tweaks)."""
-    return {
-        "status": "unconnected",
+def _is_window_tweak_only(proposal: Mapping[str, Any]) -> bool:
+    """True when proposal only mutates hold/mom/frac without new thesis/signal."""
+    thesis = str(proposal.get("thesis") or "").strip()
+    signal = str(
+        proposal.get("signal_definition") or proposal.get("signal") or ""
+    ).strip()
+    position = str(
+        proposal.get("position_rule") or proposal.get("position") or ""
+    ).strip()
+    if not thesis or not signal or not position:
+        return True
+    # Explicit window-tweak: same catalog logic_id + only numeric knobs
+    # (hold/mom/frac) without structural mode / new signal.
+    structural = (
+        proposal.get("structural_keys")
+        or proposal.get("mode")
+        or (proposal.get("params") or {}).get("mode")
+    )
+    params = dict(proposal.get("params") or {})
+    only_numeric = (
+        bool(params)
+        and set(params.keys()) <= NUMERIC_ONLY_KNOBS
+        and not structural
+    )
+    if only_numeric and str(proposal.get("logic_id") or "") in LOGIC_TEMPLATES:
+        # same logic_id + only numeric overrides → window tweak
+        return True
+    tweak_words = ("window", "hold_days only", "mom only", "frac only")
+    blob = f"{thesis} {signal}".lower()
+    if any(w in blob for w in tweak_words) and "factor" not in blob:
+        if not proposal.get("datasets") and not proposal.get("datasets_used"):
+            return True
+    return False
+
+
+def propose_profit_hypotheses(
+    proposals: Sequence[Mapping[str, Any]],
+    *,
+    evaluate: bool = True,
+    synthetic: bool = False,
+    config: MassFactoryConfig | None = None,
+    ctx: BatchDataContext | None = None,
+) -> dict[str, Any]:
+    """Entry for **different profit hypotheses** (not window tweaks).
+
+    Programmatic / LLM-agent hook: each proposal must carry thesis, signal
+    definition, position rule, and datasets. Window-tweak-only proposals are
+    rejected at entry. Accepted proposals map to catalog logic templates when
+    ``logic_id`` matches, else ad-hoc individuals. When ``evaluate=True``,
+    **always** routes through the factory evaluator (PIT + cost).
+
+    Does not arm Mass / READY / GO / continuous paper.
+    """
+    cfg = config or MassFactoryConfig(seed=DEFAULT_SEED, n=max(20, len(proposals) + 5))
+    accepted: list[dict[str, Any]] = []
+    rejected: list[dict[str, Any]] = []
+
+    for i, raw in enumerate(proposals):
+        prop = dict(raw or {})
+        if _is_window_tweak_only(prop):
+            rejected.append(
+                {
+                    "index": i,
+                    "proposal": prop,
+                    "reject_reason": "window_tweak_only_forbidden",
+                    "note": (
+                        "Proposals must change economic thesis / signal / "
+                        "position / datasets — not hold/mom/frac windows only."
+                    ),
+                }
+            )
+            continue
+        logic_id = str(prop.get("logic_id") or "").strip()
+        if logic_id and logic_id in LOGIC_TEMPLATES:
+            tpl = LOGIC_TEMPLATES[logic_id]
+            params = dict(tpl.base_params)
+            params.update(dict(prop.get("params") or {}))
+            ok, reason = validate_strategy_at_gen(
+                tpl.family_id,
+                params,
+                available_datasets=cfg.available_datasets,
+                logic_id=logic_id,
+            )
+            if not ok:
+                rejected.append(
+                    {
+                        "index": i,
+                        "proposal": prop,
+                        "reject_reason": reason,
+                    }
+                )
+                continue
+            ind = {
+                "strategy_id": stable_strategy_id(
+                    seed=cfg.seed,
+                    family_id=tpl.family_id,
+                    params=params,
+                    generation_index=i,
+                    logic_id=logic_id,
+                ),
+                "logic_id": logic_id,
+                "logic_fingerprint": tpl.logic_fingerprint(),
+                "thesis": str(prop.get("thesis") or tpl.thesis),
+                "signal_definition": str(
+                    prop.get("signal_definition") or tpl.signal_definition
+                ),
+                "position_rule": str(
+                    prop.get("position_rule") or tpl.position_rule
+                ),
+                "datasets_used": list(
+                    prop.get("datasets_used")
+                    or prop.get("datasets")
+                    or tpl.datasets_used
+                ),
+                "datasets_required": list(tpl.datasets_used),
+                "family_id": tpl.family_id,
+                "params": params,
+                "status": "accepted",
+                "source": "profit_hypothesis_entry",
+                "generation_index": i,
+                "seed": cfg.seed,
+            }
+            accepted.append(ind)
+        else:
+            # Ad-hoc: require family_id + full thesis fields
+            family = str(
+                prop.get("family_id") or prop.get("family") or ""
+            ).strip()
+            if not family:
+                rejected.append(
+                    {
+                        "index": i,
+                        "proposal": prop,
+                        "reject_reason": "missing_logic_id_or_family",
+                    }
+                )
+                continue
+            params = dict(prop.get("params") or {})
+            ind = {
+                "strategy_id": stable_strategy_id(
+                    seed=cfg.seed,
+                    family_id=family,
+                    params=params,
+                    generation_index=i,
+                    logic_id=logic_id or f"adhoc_{i}",
+                ),
+                "logic_id": logic_id or f"adhoc_{i}",
+                "logic_fingerprint": hashlib.sha256(
+                    json.dumps(
+                        {
+                            "thesis": prop.get("thesis"),
+                            "signal": prop.get("signal_definition"),
+                            "position": prop.get("position_rule"),
+                            "family": family,
+                        },
+                        sort_keys=True,
+                        default=str,
+                    ).encode("utf-8")
+                ).hexdigest()[:16],
+                "thesis": str(prop.get("thesis") or ""),
+                "signal_definition": str(
+                    prop.get("signal_definition") or prop.get("signal") or ""
+                ),
+                "position_rule": str(
+                    prop.get("position_rule") or prop.get("position") or ""
+                ),
+                "datasets_used": list(
+                    prop.get("datasets_used") or prop.get("datasets") or []
+                ),
+                "datasets_required": list(
+                    prop.get("datasets_used") or prop.get("datasets") or []
+                ),
+                "family_id": family,
+                "params": params,
+                "status": "accepted",
+                "source": "profit_hypothesis_entry_adhoc",
+                "generation_index": i,
+                "seed": cfg.seed,
+            }
+            accepted.append(ind)
+
+    out: dict[str, Any] = {
+        "version": MASS_FACTORY_VERSION,
         "wave": MASS_FACTORY_WAVE,
+        "entry": "propose_profit_hypotheses",
+        "n_proposals": len(proposals),
+        "n_accepted": len(accepted),
+        "n_rejected": len(rejected),
+        "accepted": accepted,
+        "rejected": rejected,
+        "always_through_evaluator": bool(evaluate),
+        "window_tweaks_forbidden": True,
+        **_freeze(),
+    }
+    if evaluate and accepted:
+        gen = {
+            "strategies_after_dedup": accepted,
+            "strategies": accepted,
+            "n_generated": len(accepted),
+            "n_unique_logic": len({a["logic_id"] for a in accepted}),
+            "n_after_dedup": len(accepted),
+            "n_numeric_variant": 0,
+            "n_requested": len(accepted),
+            "config": cfg.to_dict(),
+        }
+        batch = run_batch_eval(
+            gen, config=cfg, ctx=ctx, synthetic=synthetic
+        )
+        out["eval"] = {
+            k: batch[k]
+            for k in batch
+            if k not in {"results", "screens"}
+        }
+        out["eval_screens"] = batch.get("screens")
+        out["eval_ranking"] = batch.get("ranking")
+        out["eval_results"] = batch.get("results")
+    elif evaluate and not accepted:
+        out["eval"] = {
+            "n_strategies_evaluated": 0,
+            "note": "no accepted proposals to evaluate",
+        }
+    return out
+
+
+def llm_logic_entry_status() -> dict[str, Any]:
+    """LLM / agent entry for different profit hypotheses (not window tweaks)."""
+    return {
+        "status": "connected",
+        "wave": MASS_FACTORY_WAVE,
+        "version": MASS_FACTORY_VERSION,
+        "entry_fn": "research.mass_strategy_factory.propose_profit_hypotheses",
+        "declaration_helper": "research.idea_generator.generate_idea_payloads",
+        "rules": {
+            "require": [
+                "thesis (what earns)",
+                "signal_definition (entry structure)",
+                "position_rule (book / hold construction)",
+                "datasets (info source)",
+            ],
+            "forbid": [
+                "hold/mom/frac window tweaks only",
+                "sign flip as separate strategy",
+                "simple_daily_sign mass",
+            ],
+            "always_through_evaluator": True,
+            "prompt_guidance": (
+                "Propose different economic profit hypotheses "
+                "(info source / entry / position / thesis). "
+                "Never propose window-only mutations. "
+                "Every proposal is screened by the factory evaluator "
+                "(PIT + cost + both signs)."
+            ),
+        },
+        "catalog_logic_ids": list(LOGIC_TEMPLATE_IDS),
+        "near_logic_groups": near_logic_groups_document(),
         "note": (
-            "research.idea_generator emits ResearchIdea declarations only "
-            "(hypothesis class mix). It is not wired to the logic factory "
-            "evaluator or profit-hypothesis LLM prompts. "
-            "If connected later: prompt for different economic theses "
-            "(info source / entry / position / thesis), never hold/mom/frac "
-            "window tweaks; always through evaluator."
+            "Programmatic entry connected (W89). LLM provider API is optional; "
+            "agents call propose_profit_hypotheses with thesis payloads. "
+            "idea_generator remains a ResearchIdea declaration helper."
         ),
-        "hook": "research.idea_generator.generate_idea_payloads",
         "always_through_evaluator": True,
         **_freeze(),
     }
@@ -2662,7 +3188,8 @@ def mass_factory_document() -> dict[str, Any]:
         "wave": MASS_FACTORY_WAVE,
         "purpose": (
             "Generate distinct economic logic templates and batch-evaluate "
-            "after near-dup (research factory). Not hold/mom/frac grid mass."
+            "after near-dup (research factory). W89 adds rate factors + "
+            "multi-factor logics. Not hold/mom/frac grid mass."
         ),
         "primary_metrics": [
             "n_generated",
@@ -2671,11 +3198,13 @@ def mass_factory_document() -> dict[str, Any]:
             "n_after_dedup",
         ],
         "logic_templates": logic_templates_document(),
+        "near_logic_groups": near_logic_groups_document(),
         "families": family_definitions_document(),
         "default_config": MassFactoryConfig().to_dict(),
         "frozen_default_path": list(FROZEN_DEFAULT_PATH),
         "cf_minimal": try_cf_minimal_mass_batch(),
         "llm_entry": llm_logic_entry_status(),
+        "profit_hypothesis_entry": "propose_profit_hypotheses",
         "not_goals": [
             "hold/mom/frac grid as 100 strategies",
             "retune 3 frozen defaults (mom5/mom3/fund)",
@@ -2684,15 +3213,17 @@ def mass_factory_document() -> dict[str, Any]:
             "S1–S5 un-reject",
             "human main candidate selection this wave",
             "CF 200/500 scale",
+            "merge near-groups early",
         ],
         "eval_tradeoffs": (
             "Lite multi-year (Q4 windows + code subsample). "
-            "Eval after near-dup only. Survivors need deeper class_hyp "
+            "Eval after near-dup only. Heavy multi-year / distributed only "
+            "for promising survivors. Survivors need deeper class_hyp "
             "re-eval before promotion."
         ),
         "continuous_paper": CONTINUOUS_PAPER,
         **_freeze(),
-        "proof": "docs/proof/w0816w_w88_logic_diversity_factory_20260817.md",
+        "proof": "docs/proof/w0816x_w89_rate_multifactor_cf_20260817.md",
     }
 
 
@@ -2705,6 +3236,8 @@ __all__ = [
     "OPERATIONAL_GO",
     "CONTINUOUS_PAPER",
     "FAMILY_VOL_RISK_ADJUSTED",
+    "FAMILY_RATE_FACTOR",
+    "FAMILY_MULTI_FACTOR",
     "FAMILY_DEFINITIONS",
     "FACTORY_FAMILY_IDS",
     "DEFAULT_FAMILY_RATIOS",
@@ -2713,6 +3246,7 @@ __all__ = [
     "DEFAULT_NEAR_DUP_THRESHOLD",
     "DEFAULT_MAX_FAMILY_SHARE",
     "FROZEN_DEFAULT_PATH",
+    "NEAR_LOGIC_GROUPS",
     "LOGIC_TEMPLATES",
     "LOGIC_TEMPLATE_IDS",
     "LogicTemplate",
@@ -2724,6 +3258,7 @@ __all__ = [
     "REJECT_NEAR_DUPLICATE",
     "family_definitions_document",
     "logic_templates_document",
+    "near_logic_groups_document",
     "mass_factory_document",
     "stable_strategy_id",
     "validate_strategy_at_gen",
@@ -2735,6 +3270,7 @@ __all__ = [
     "evaluate_one_strategy",
     "screen_strategy_result",
     "run_batch_eval",
+    "propose_profit_hypotheses",
     "run_mass_factory",
     "write_factory_outputs",
     "try_cf_minimal_mass_batch",
