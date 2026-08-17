@@ -62,6 +62,7 @@ from research.idea_generator import (
     generate_idea_payloads,
 )
 from research.mass_strategy_factory import (
+    FROZEN_DEFAULT_PATH,
     MASS_FACTORY_VERSION,
     MASS_FACTORY_WAVE,
     MassFactoryConfig,
@@ -95,6 +96,7 @@ __all__ = [
     "FeatureEvidence",
     "GeneratedIdeaBatch",
     "HYPOTHESIS_CLASS_REGISTRY",
+    "FROZEN_DEFAULT_PATH",
     "MASS_FACTORY_VERSION",
     "MASS_FACTORY_WAVE",
     "MassFactoryConfig",

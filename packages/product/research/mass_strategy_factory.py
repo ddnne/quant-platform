@@ -1,30 +1,39 @@
-"""Mass strategy generation factory + batch auto-experiment (W87 / w0816v).
+"""Mass strategy logic-diversity factory + batch auto-experiment (W88 / w0816w).
 
 Purpose
 -------
-Stable factory that generates **100+ diverse strategy specs per run** across
-multiple hypothesis **families**, then batch-evaluates them automatically
-(post-cost, both signs when applicable, t/Sharpe/activation).
+Research factory that generates strategy **individuals** around **distinct
+economic logic templates** (thesis + signal structure + position rule +
+datasets), not hold_days / momentum_window / long_frac param grids.
+
+W87 risk addressed
+------------------
+N=100 "diversity" that was mostly family × multi-axis param slots
+(hold / mom / frac) is rejected. Diversity now requires difference in:
+
+* information source
+* entry / signal logic
+* position construction
+* economic thesis
+
+Does **not** count as distinct: hold_days-only, momentum window-only,
+frac 0.3→0.4-only, or sign flip as a separate strategy (sign is eval aspect).
 
 This is a **research factory**, not operational Mass / READY / live:
 
 * Does **not** call ``agents.mass_research`` / arm Mass loop
 * Does **not** mint READY / VerifiedResearchReadiness / operational GO
 * Does **not** un-reject S1–S5 or use ``simple_daily_sign`` as diversity
-* Does **not** flood one family with micro param grids (anti-bias)
-* continuous paper remains **UNARMED** (optional short paper subset only)
+* Does **not** retune the three frozen default-path representatives
+* continuous paper remains **UNARMED**
 
 Building blocks reused
 ----------------------
-* ``hypothesis_classes`` — family ids / datasets / generation policy
+* ``hypothesis_classes`` — family ids / datasets
 * ``class_signals`` / ``class_hyp_eval`` — pure bar evaluators
-* ``cost_models`` — one-way / amortized cost
-* ``sign_selection`` — both sides after cost
-* ``stats_metrics`` — period t / Sharpe / win-rate
-* checklist v2 completeness is **not** auto-promoted to research_candidate
-  for mass survivors (screening only; human main candidates deferred)
+* ``cost_models`` · ``sign_selection`` · ``stats_metrics``
 
-See: ``docs/proof/w0816v_w87_mass_strategy_factory_20260817.md``
+See: ``docs/proof/w0816w_w88_logic_diversity_factory_20260817.md``
 """
 
 from __future__ import annotations
@@ -52,7 +61,6 @@ from research.hypothesis_classes import (
     MASS_RESEARCH as HC_MASS,
     PHASE7 as HC_PHASE7,
     READY_DECLARED as HC_READY,
-    get_hypothesis_class,
 )
 from research.cost_models import DEFAULT_ONE_WAY_COST
 from research.sign_selection import (
@@ -68,7 +76,6 @@ from research.stats_metrics import (
 )
 from features.class_signals import (
     DEFAULT_HOLD_DAYS,
-    SUPPORTED_HOLD_DAYS,
     amortized_one_way_cost,
     apply_sticky_hold,
     multi_day_forward_return,
@@ -79,8 +86,8 @@ from features.class_signals import (
 # Identity / freezes (must never arm operational Mass)
 # ---------------------------------------------------------------------------
 
-MASS_FACTORY_VERSION: str = "mass-strategy-factory/v1"
-MASS_FACTORY_WAVE: str = "W87 / w0816v"
+MASS_FACTORY_VERSION: str = "mass-strategy-factory/v2"
+MASS_FACTORY_WAVE: str = "W88 / w0816w"
 
 MASS_RESEARCH: str = "NO-GO"  # operational Mass remains NO-GO
 PHASE7: str = "OFF"
@@ -108,6 +115,9 @@ REJECT_MISSING_DATASETS: str = "required_datasets_unavailable"
 REJECT_INVALID_PARAMS: str = "invalid_params"
 REJECT_S1_S5: str = "s1_s5_unreject_forbidden"
 REJECT_UNKNOWN_FAMILY: str = "unknown_family"
+REJECT_UNKNOWN_LOGIC: str = "unknown_logic_template"
+REJECT_NEAR_DUPLICATE: str = "near_duplicate_grid_mutation"
+REJECT_FROZEN_DEFAULT_RETUNE: str = "frozen_default_retune_forbidden"
 
 # Eval / screen reason codes
 SCREEN_NEAR_ZERO: str = "near_zero_after_cost"
@@ -120,22 +130,63 @@ SCREEN_LOW_ACTIVATION: str = "low_activation"
 SCREEN_BOTH_SIGNS_FAIL: str = "both_signs_near_zero_or_nonpositive"
 
 DEFAULT_SEED: int = 870816
-DEFAULT_N: int = 100
+DEFAULT_N: int = 100  # capacity; uniqueness measured by unique_logic / after_dedup
 DEFAULT_NEAR_ZERO_ABS: float = 0.0005  # 5bp
 DEFAULT_MIN_ACTIVATION: float = 0.01
-DEFAULT_MAX_FAMILY_SHARE: float = 0.28  # anti-bias: no family > 28% of N
+DEFAULT_MAX_FAMILY_SHARE: float = 0.35  # soft; logic diversity is primary anti-bias
 DEFAULT_ONE_WAY: float = DEFAULT_ONE_WAY_COST
+DEFAULT_NEAR_DUP_THRESHOLD: float = 0.85  # drop when similarity >= this
 
-# Default family ratios (direction diversity; sum ≈ 1.0)
-DEFAULT_FAMILY_RATIOS: dict[str, float] = {
-    CLASS_MULTI_DAY_HOLD: 0.16,
-    CLASS_EVENT_POST: 0.14,
-    CLASS_CROSS_SECTION_RELATIVE: 0.20,
-    CLASS_MACRO_CONDITIONED: 0.14,
-    CLASS_FUNDAMENTALS_PRICE: 0.14,
-    CLASS_FLOW_DEMAND: 0.12,
-    FAMILY_VOL_RISK_ADJUSTED: 0.10,
-}
+# Numeric-only knobs that do **not** create a new logic by themselves.
+NUMERIC_ONLY_KNOBS: frozenset[str] = frozenset(
+    {
+        "hold_days",
+        "post_hold_days",
+        "momentum_n",
+        "long_frac",
+        "short_frac",
+        "vol_n",
+        "vol_threshold",
+        "high_threshold",
+        "low_threshold",
+    }
+)
+
+# ---------------------------------------------------------------------------
+# Frozen default-path representatives (W83–W86) — DO NOT retune here
+# ---------------------------------------------------------------------------
+
+FROZEN_DEFAULT_PATH: tuple[dict[str, Any], ...] = (
+    {
+        "representative_id": "cross_section_hold_10",
+        "family_id": CLASS_CROSS_SECTION_RELATIVE,
+        "hold_days": 10,
+        "momentum_n": 5,
+        "long_frac": 0.3,
+        "short_frac": 0.3,
+        "stance": "KEEP",
+        "note": "W83–W86 default path; factory must not retune",
+    },
+    {
+        "representative_id": "cross_section_hold_10_mom3",
+        "family_id": CLASS_CROSS_SECTION_RELATIVE,
+        "hold_days": 10,
+        "momentum_n": 3,
+        "long_frac": 0.3,
+        "short_frac": 0.3,
+        "stance": "PROMOTE",
+        "note": "W85 promote; factory must not retune",
+    },
+    {
+        "representative_id": "fundamentals_hold_10",
+        "family_id": CLASS_FUNDAMENTALS_PRICE,
+        "hold_days": 10,
+        "momentum_n": 10,
+        "mode": "value_momentum_agree",
+        "stance": "KEEP",
+        "note": "W83–W86 default path; factory must not retune",
+    },
+)
 
 # Datasets the factory can satisfy offline (local mirrors + sqlite).
 FACTORY_AVAILABLE_DATASETS: frozenset[str] = frozenset(
@@ -154,6 +205,17 @@ FACTORY_AVAILABLE_DATASETS: frozenset[str] = frozenset(
         "markets_short_sale_report",
         "equities_investor_types",
         "markets_breakdown",
+    }
+)
+
+# Event entry modes
+_EVENT_ENTRY_SAFE: tuple[str, ...] = ("same_day_close_if_pre_close",)
+_EVENT_ENTRY_FORBIDDEN: frozenset[str] = frozenset(
+    {
+        "same_day_close_always",
+        "pre_disclosure_close",
+        "look_ahead_close",
+        "event_open_before_disc",
     }
 )
 
@@ -178,23 +240,409 @@ def _freeze() -> dict[str, Any]:
         "hypothesis_classes_mass": HC_MASS,
         "hypothesis_classes_phase7": HC_PHASE7,
         "hypothesis_classes_ready": HC_READY,
+        "frozen_default_path": [
+            r["representative_id"] for r in FROZEN_DEFAULT_PATH
+        ],
+        "frozen_defaults_retuned": False,
     }
 
 
 # ---------------------------------------------------------------------------
-# Family definitions (direction + sampling rules)
+# Logic templates (economic logic, not param grids)
 # ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
+class LogicTemplate:
+    """One distinct economic logic (counts toward unique_logic).
+
+    Counts as different from another template only if it differs in
+    info source, entry logic, position construction, or economic thesis.
+    """
+
+    logic_id: str
+    thesis: str
+    signal_definition: str
+    position_rule: str
+    datasets_used: tuple[str, ...]
+    # Eval dispatch family (class_hyp / factory-local)
+    family_id: str
+    # Canonical params for the logic (not a grid)
+    base_params: Mapping[str, Any]
+    # Coarse structural axes that are part of the logic fingerprint
+    # (modes / entry structures — NOT hold/mom/frac alone)
+    structural_keys: tuple[str, ...] = ()
+    display_name: str = ""
+    generation_enabled: bool = True
+    notes: str = ""
+
+    def logic_fingerprint(self) -> str:
+        """Stable fingerprint of the economic logic (no numeric knobs)."""
+        payload = {
+            "logic_id": self.logic_id,
+            "family_id": self.family_id,
+            "signal_definition": self.signal_definition,
+            "position_rule": self.position_rule,
+            "datasets": list(self.datasets_used),
+            "structural": {
+                k: self.base_params.get(k)
+                for k in self.structural_keys
+                if k in self.base_params
+            },
+        }
+        raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "logic_id": self.logic_id,
+            "display_name": self.display_name or self.logic_id,
+            "thesis": self.thesis,
+            "signal_definition": self.signal_definition,
+            "position_rule": self.position_rule,
+            "datasets_used": list(self.datasets_used),
+            "family_id": self.family_id,
+            "base_params": dict(self.base_params),
+            "structural_keys": list(self.structural_keys),
+            "logic_fingerprint": self.logic_fingerprint(),
+            "generation_enabled": self.generation_enabled,
+            "notes": self.notes,
+        }
+
+
+def _build_logic_templates() -> dict[str, LogicTemplate]:
+    """Catalog of distinct economic logics (prefer many templates, few clones)."""
+    bars = ("equities_bars_daily", "markets_calendar")
+    bars_idx = bars + ("indices_bars_daily_topix",)
+    tpls: list[LogicTemplate] = [
+        LogicTemplate(
+            logic_id="mdh_sticky_momentum",
+            display_name="Sticky multi-day momentum",
+            thesis="Short-horizon winners continue over multi-day sticky holds",
+            signal_definition="sign(momentum_n) with n=hold; no daily flip",
+            position_rule="fixed_horizon sticky hold; equal-weight active longs/shorts",
+            datasets_used=bars_idx,
+            family_id=CLASS_MULTI_DAY_HOLD,
+            base_params={
+                "hold_days": 10,
+                "momentum_n": 10,
+                "rebalance_mode": "fixed_horizon",
+                "signal_polarity": 1,
+            },
+            structural_keys=("rebalance_mode", "signal_polarity"),
+        ),
+        LogicTemplate(
+            logic_id="mdh_mean_reversion",
+            display_name="Sticky multi-day mean reversion",
+            thesis="Short-horizon moves reverse over multi-day holds (opposite entry)",
+            signal_definition="−sign(momentum_n); reversion entry (not eval-time sign flip)",
+            position_rule="fixed_horizon sticky hold of reversion signs",
+            datasets_used=bars_idx,
+            family_id=CLASS_MULTI_DAY_HOLD,
+            base_params={
+                "hold_days": 10,
+                "momentum_n": 10,
+                "rebalance_mode": "fixed_horizon",
+                "signal_polarity": -1,
+            },
+            structural_keys=("rebalance_mode", "signal_polarity"),
+            notes="Distinct entry logic vs mdh_sticky_momentum; not an eval sign flip.",
+        ),
+        LogicTemplate(
+            logic_id="event_post_disclosure_hold",
+            display_name="Post-disclosure PIT hold",
+            thesis="Post-earnings / disclosure drift after PIT-available close only",
+            signal_definition="earnings surprise proxy; entry only when DiscTime pre-close",
+            position_rule="fixed post_hold after first non-look-ahead session close",
+            datasets_used=("fins_summary",) + bars,
+            family_id=CLASS_EVENT_POST,
+            base_params={
+                "post_hold_days": 5,
+                "entry_mode": "same_day_close_if_pre_close",
+            },
+            structural_keys=("entry_mode",),
+            notes="Look-ahead entry modes gen-time rejected.",
+        ),
+        LogicTemplate(
+            logic_id="xs_rank_ls_sticky",
+            display_name="Cross-section rank L-S sticky",
+            thesis="Relative strength: long top rank mom, short bottom, multi-day sticky",
+            signal_definition="same-day cross-section momentum ranks → L/S signs",
+            position_rule="sticky fixed_horizon hold of daily rank signs; balanced L/S book",
+            datasets_used=bars_idx,
+            family_id=CLASS_CROSS_SECTION_RELATIVE,
+            base_params={
+                "hold_days": 10,
+                "momentum_n": 5,
+                "long_frac": 0.3,
+                "short_frac": 0.3,
+                "book_mode": "balanced_ls",
+            },
+            structural_keys=("book_mode",),
+            notes="Canonical structure matches frozen cross_section_hold_10 (mom5) shape; not a retune.",
+        ),
+        LogicTemplate(
+            logic_id="xs_rank_ls_daily",
+            display_name="Cross-section rank L-S daily rebalance",
+            thesis="Relative strength harvested via daily rebalance (higher turnover)",
+            signal_definition="same-day rank L/S on momentum",
+            position_rule="hold_days=1 daily rebalance; balanced L/S",
+            datasets_used=bars_idx,
+            family_id=CLASS_CROSS_SECTION_RELATIVE,
+            base_params={
+                "hold_days": 1,
+                "momentum_n": 5,
+                "long_frac": 0.3,
+                "short_frac": 0.3,
+                "book_mode": "balanced_ls_daily",
+            },
+            structural_keys=("book_mode",),
+            notes="Position construction differs from sticky (daily vs multi-day).",
+        ),
+        LogicTemplate(
+            logic_id="macro_repo_rate_change",
+            display_name="Macro-conditioned mom (repo rate change)",
+            thesis="Equity mom works differently under repo tightening vs easing",
+            signal_definition="momentum gated/conditioned by Tokyo repo rate_change regime",
+            position_rule="sticky multi-day hold under regime filter",
+            datasets_used=bars_idx + ("jsda_tokyo_repo_rates",),
+            family_id=CLASS_MACRO_CONDITIONED,
+            base_params={
+                "mode": "rate_change",
+                "momentum_n": 10,
+                "hold_days": 10,
+                "high_threshold": 0.05,
+                "low_threshold": 0.0,
+            },
+            structural_keys=("mode",),
+        ),
+        LogicTemplate(
+            logic_id="macro_repo_rate_level",
+            display_name="Macro-conditioned mom (repo rate level)",
+            thesis="Equity mom differs in high vs low absolute funding-rate regimes",
+            signal_definition="momentum conditioned on Tokyo repo rate_level regime",
+            position_rule="sticky multi-day hold under level regime filter",
+            datasets_used=bars_idx + ("jsda_tokyo_repo_rates",),
+            family_id=CLASS_MACRO_CONDITIONED,
+            base_params={
+                "mode": "rate_level",
+                "momentum_n": 10,
+                "hold_days": 10,
+                "high_threshold": 0.05,
+                "low_threshold": 0.0,
+            },
+            structural_keys=("mode",),
+        ),
+        LogicTemplate(
+            logic_id="fund_value_only",
+            display_name="Fundamentals value-only",
+            thesis="Cheap (PIT value) names earn a multi-day premium vs expensive",
+            signal_definition="PIT fundamental_value_score sign only (no mom confirm)",
+            position_rule="sticky fixed_horizon hold of value signs",
+            datasets_used=("fins_summary",) + bars,
+            family_id=CLASS_FUNDAMENTALS_PRICE,
+            base_params={
+                "hold_days": 10,
+                "momentum_n": 10,
+                "mode": "value_only",
+            },
+            structural_keys=("mode",),
+        ),
+        LogicTemplate(
+            logic_id="fund_value_mom_agree",
+            display_name="Fundamentals value × momentum agree",
+            thesis="Value and price momentum agreement improves multi-day edge",
+            signal_definition="enter only when value score and mom agree in sign",
+            position_rule="sticky fixed_horizon hold of agree-filtered signs",
+            datasets_used=("fins_summary",) + bars,
+            family_id=CLASS_FUNDAMENTALS_PRICE,
+            base_params={
+                "hold_days": 10,
+                "momentum_n": 10,
+                "mode": "value_momentum_agree",
+            },
+            structural_keys=("mode",),
+            notes="Canonical shape matches frozen fundamentals_hold_10; not a retune.",
+        ),
+        LogicTemplate(
+            logic_id="flow_margin_pressure",
+            display_name="Margin flow multi-day pressure",
+            thesis="Rising margin interest proxies demand that persists multi-day",
+            signal_definition="multi-day margin flow pressure (not S4 daily)",
+            position_rule="min_hold sticky; no short-sale confirm",
+            datasets_used=("markets_margin_interest",) + bars,
+            family_id=CLASS_FLOW_DEMAND,
+            base_params={
+                "hold_days": 10,
+                "short_confirm_mode": "off",
+                "require_short_confirm": False,
+            },
+            structural_keys=("short_confirm_mode",),
+        ),
+        LogicTemplate(
+            logic_id="flow_margin_short_hard",
+            display_name="Margin flow + hard short confirm",
+            thesis="Margin demand only when short-interest confirms directional pressure",
+            signal_definition="margin flow AND hard short-ratio confirm filter",
+            position_rule="min_hold sticky; hard short confirm required",
+            datasets_used=(
+                "markets_margin_interest",
+                "markets_short_ratio",
+            )
+            + bars,
+            family_id=CLASS_FLOW_DEMAND,
+            base_params={
+                "hold_days": 10,
+                "short_confirm_mode": "hard",
+                "require_short_confirm": True,
+            },
+            structural_keys=("short_confirm_mode",),
+        ),
+        LogicTemplate(
+            logic_id="flow_margin_short_soft",
+            display_name="Margin flow + soft short confirm",
+            thesis="Margin demand with soft short-interest tilt (not hard veto)",
+            signal_definition="margin flow with soft short-ratio modulation",
+            position_rule="min_hold sticky; soft short confirm",
+            datasets_used=(
+                "markets_margin_interest",
+                "markets_short_ratio",
+            )
+            + bars,
+            family_id=CLASS_FLOW_DEMAND,
+            base_params={
+                "hold_days": 10,
+                "short_confirm_mode": "soft",
+                "require_short_confirm": False,
+            },
+            structural_keys=("short_confirm_mode",),
+        ),
+        LogicTemplate(
+            logic_id="vol_risk_adjusted_mom",
+            display_name="Vol-risk gated momentum",
+            thesis="Momentum only when conviction |mom|/vol exceeds a risk floor",
+            signal_definition="sign(mom) only if |mom|/realized_vol ≥ threshold else flat",
+            position_rule="fixed_horizon sticky hold of risk-gated signs",
+            datasets_used=bars,
+            family_id=FAMILY_VOL_RISK_ADJUSTED,
+            base_params={
+                "hold_days": 10,
+                "momentum_n": 10,
+                "vol_n": 10,
+                "vol_threshold": 1.0,
+                "gate_mode": "mom_over_vol",
+            },
+            structural_keys=("gate_mode",),
+            notes="Research-only family; not in hypothesis_classes registry.",
+        ),
+        LogicTemplate(
+            logic_id="vol_breakout_expand",
+            display_name="Vol-expansion breakout mom",
+            thesis="Trend entries only when realized vol is expanding (breakout regime)",
+            signal_definition="sign(mom) only if recent_vol / prior_vol ≥ expand_ratio",
+            position_rule="fixed_horizon sticky hold of expansion-gated signs",
+            datasets_used=bars,
+            family_id=FAMILY_VOL_RISK_ADJUSTED,
+            base_params={
+                "hold_days": 10,
+                "momentum_n": 10,
+                "vol_n": 10,
+                "vol_threshold": 1.0,  # expand ratio floor
+                "gate_mode": "vol_expand",
+            },
+            structural_keys=("gate_mode",),
+            notes="Different gate structure vs mom_over_vol (info used differently).",
+        ),
+        LogicTemplate(
+            logic_id="xs_rank_mom_slow",
+            display_name="Cross-section slow-mom L-S sticky",
+            thesis="Slower cross-section ranking horizon captures different relative book",
+            signal_definition="rank on longer momentum window; sticky L/S",
+            position_rule="sticky balanced L/S; structural mom horizon = slow",
+            datasets_used=bars_idx,
+            family_id=CLASS_CROSS_SECTION_RELATIVE,
+            base_params={
+                "hold_days": 10,
+                "momentum_n": 20,
+                "long_frac": 0.3,
+                "short_frac": 0.3,
+                "book_mode": "balanced_ls_slow_mom",
+            },
+            structural_keys=("book_mode",),
+            notes=(
+                "book_mode encodes slow-rank construction (mom=20 pin of the logic). "
+                "Not a free mom grid: one template, one structural horizon."
+            ),
+        ),
+        LogicTemplate(
+            logic_id="mdh_short_horizon_mom",
+            display_name="Short-horizon sticky momentum",
+            thesis="Very short multi-day continuation (5d structure) is a different hold economy",
+            signal_definition="sign(mom) with 5d structural horizon",
+            position_rule="fixed_horizon hold=5 (structure, not grid sample)",
+            datasets_used=bars_idx,
+            family_id=CLASS_MULTI_DAY_HOLD,
+            base_params={
+                "hold_days": 5,
+                "momentum_n": 5,
+                "rebalance_mode": "fixed_horizon",
+                "signal_polarity": 1,
+                "horizon_structure": "short_5d",
+            },
+            structural_keys=("rebalance_mode", "signal_polarity", "horizon_structure"),
+            notes=(
+                "horizon_structure is part of thesis (cost amortization / turnover regime), "
+                "not a hold_days grid clone of mdh_sticky_momentum."
+            ),
+        ),
+        LogicTemplate(
+            logic_id="event_post_long_horizon",
+            display_name="Post-disclosure long drift hold",
+            thesis="Longer post-disclosure drift (20d) harvests slower earnings information",
+            signal_definition="surprise proxy; longer post_hold structure",
+            position_rule="post_hold_days=20 PIT entry",
+            datasets_used=("fins_summary",) + bars,
+            family_id=CLASS_EVENT_POST,
+            base_params={
+                "post_hold_days": 20,
+                "entry_mode": "same_day_close_if_pre_close",
+                "horizon_structure": "long_20d",
+            },
+            structural_keys=("entry_mode", "horizon_structure"),
+        ),
+        LogicTemplate(
+            logic_id="fund_value_mom_agree_slow",
+            display_name="Value×mom agree (slow price confirm)",
+            thesis="Value confirmed by slower price mom (20d) is a different agreement filter",
+            signal_definition="value × slow mom agree",
+            position_rule="sticky hold; slow mom confirm pin",
+            datasets_used=("fins_summary",) + bars,
+            family_id=CLASS_FUNDAMENTALS_PRICE,
+            base_params={
+                "hold_days": 10,
+                "momentum_n": 20,
+                "mode": "value_momentum_agree",
+                "mom_structure": "slow_20",
+            },
+            structural_keys=("mode", "mom_structure"),
+            notes="Distinct mom_structure tag; not a free mom grid over fund_value_mom_agree.",
+        ),
+    ]
+    return {t.logic_id: t for t in tpls}
+
+
+LOGIC_TEMPLATES: dict[str, LogicTemplate] = _build_logic_templates()
+LOGIC_TEMPLATE_IDS: tuple[str, ...] = tuple(LOGIC_TEMPLATES.keys())
+
+# Back-compat family definitions (derived from templates; not grid sources)
+@dataclass(frozen=True)
 class FamilyDefinition:
-    """One strategy family (direction) for mass generation."""
+    """Legacy family document (W87 API); diversity now lives on LogicTemplate."""
 
     family_id: str
     display_name: str
     description: str
     datasets_required: tuple[str, ...]
-    # Distinct param axes used for diversity (not a single-axis mom grid).
     param_axes: tuple[str, ...]
     generation_enabled: bool = True
     notes: str = ""
@@ -211,116 +659,86 @@ class FamilyDefinition:
         }
 
 
-FAMILY_DEFINITIONS: dict[str, FamilyDefinition] = {
-    CLASS_MULTI_DAY_HOLD: FamilyDefinition(
-        family_id=CLASS_MULTI_DAY_HOLD,
-        display_name="Multi-day hold",
-        description=(
-            "Sticky multi-day momentum hold (not 1d flip). "
-            "Axes: hold_days × rebalance_mode."
-        ),
-        datasets_required=(
-            "equities_bars_daily",
-            "markets_calendar",
-            "indices_bars_daily_topix",
-        ),
-        param_axes=("hold_days", "rebalance_mode"),
-    ),
-    CLASS_EVENT_POST: FamilyDefinition(
-        family_id=CLASS_EVENT_POST,
-        display_name="Post-event",
-        description=(
-            "Post-disclosure hold with PIT DiscDate+DiscTime entry only. "
-            "Axes: post_hold_days × entry_mode (lookahead modes rejected)."
-        ),
-        datasets_required=(
-            "fins_summary",
-            "equities_bars_daily",
-            "markets_calendar",
-        ),
-        param_axes=("post_hold_days", "entry_mode"),
-        notes="Look-ahead entry modes are gen-time rejected.",
-    ),
-    CLASS_CROSS_SECTION_RELATIVE: FamilyDefinition(
-        family_id=CLASS_CROSS_SECTION_RELATIVE,
-        display_name="Cross-section relative",
-        description=(
-            "Same-day rank L-S with optional sticky hold. "
-            "Axes: hold_days × momentum_n × long_frac × short_frac "
-            "(not mom-only microgrid)."
-        ),
-        datasets_required=(
-            "equities_bars_daily",
-            "markets_calendar",
-            "indices_bars_daily_topix",
-        ),
-        param_axes=("hold_days", "momentum_n", "long_frac", "short_frac"),
-    ),
-    CLASS_MACRO_CONDITIONED: FamilyDefinition(
-        family_id=CLASS_MACRO_CONDITIONED,
-        display_name="Macro-conditioned",
-        description=(
-            "Momentum conditioned on Tokyo repo regime. "
-            "Axes: mode × momentum_n × hold_days × high/low thresholds."
-        ),
-        datasets_required=(
-            "equities_bars_daily",
-            "jsda_tokyo_repo_rates",
-            "markets_calendar",
-            "indices_bars_daily_topix",
-        ),
-        param_axes=("mode", "momentum_n", "hold_days", "high_threshold", "low_threshold"),
-    ),
-    CLASS_FUNDAMENTALS_PRICE: FamilyDefinition(
-        family_id=CLASS_FUNDAMENTALS_PRICE,
-        display_name="Fundamentals vs price",
-        description=(
-            "PIT fundamentals × price (value / value×mom). "
-            "Axes: hold_days × momentum_n × mode."
-        ),
-        datasets_required=(
-            "fins_summary",
-            "equities_bars_daily",
-            "markets_calendar",
-        ),
-        param_axes=("hold_days", "momentum_n", "mode"),
-    ),
-    CLASS_FLOW_DEMAND: FamilyDefinition(
-        family_id=CLASS_FLOW_DEMAND,
-        display_name="Flow / demand",
-        description=(
-            "Multi-day margin flow pressure (not S4 daily). "
-            "Axes: hold_days × short_confirm_mode."
-        ),
-        datasets_required=(
-            "markets_margin_interest",
-            "equities_bars_daily",
-            "markets_calendar",
-        ),
-        param_axes=("hold_days", "short_confirm_mode"),
-    ),
-    FAMILY_VOL_RISK_ADJUSTED: FamilyDefinition(
-        family_id=FAMILY_VOL_RISK_ADJUSTED,
-        display_name="Vol / risk-adjusted",
-        description=(
-            "Multi-day momentum gated by realized-vol floor "
-            "(enter only when |mom|/vol ≥ threshold). Pure bars; "
-            "risk filter is the structural difference vs multi_day_hold."
-        ),
-        datasets_required=(
-            "equities_bars_daily",
-            "markets_calendar",
-        ),
-        param_axes=("hold_days", "vol_n", "vol_threshold"),
-        notes="Research-only family; not in hypothesis_classes registry.",
-    ),
+def _derive_family_definitions() -> dict[str, FamilyDefinition]:
+    by_fam: dict[str, list[LogicTemplate]] = {}
+    for t in LOGIC_TEMPLATES.values():
+        by_fam.setdefault(t.family_id, []).append(t)
+    out: dict[str, FamilyDefinition] = {}
+    for fid, tpls in by_fam.items():
+        ds: list[str] = []
+        for t in tpls:
+            for d in t.datasets_used:
+                if d not in ds:
+                    ds.append(d)
+        axes = sorted(
+            {
+                k
+                for t in tpls
+                for k in (list(t.structural_keys) + list(t.base_params.keys()))
+                if k not in NUMERIC_ONLY_KNOBS or k in t.structural_keys
+            }
+        )
+        out[fid] = FamilyDefinition(
+            family_id=fid,
+            display_name=fid,
+            description=(
+                f"Eval family covering logic_ids: "
+                f"{', '.join(t.logic_id for t in tpls)}. "
+                "Diversity is logic-template based (W88), not param grids."
+            ),
+            datasets_required=tuple(ds),
+            param_axes=tuple(axes) if axes else ("logic_id",),
+            notes="W88: family is eval dispatch only; logic templates define diversity.",
+        )
+    return out
+
+
+FAMILY_DEFINITIONS: dict[str, FamilyDefinition] = _derive_family_definitions()
+FACTORY_FAMILY_IDS: tuple[str, ...] = tuple(FAMILY_DEFINITIONS.keys())
+
+# Soft ratios for optional numeric fill only (not primary diversity)
+DEFAULT_FAMILY_RATIOS: dict[str, float] = {
+    fid: 1.0 / max(1, len(FACTORY_FAMILY_IDS)) for fid in FACTORY_FAMILY_IDS
 }
 
-FACTORY_FAMILY_IDS: tuple[str, ...] = tuple(FAMILY_DEFINITIONS.keys())
+
+def logic_templates_document() -> dict[str, Any]:
+    """Document logic templates + diversity rules."""
+    return {
+        "version": MASS_FACTORY_VERSION,
+        "wave": MASS_FACTORY_WAVE,
+        "n_logic_templates": len(LOGIC_TEMPLATES),
+        "logic_ids": list(LOGIC_TEMPLATE_IDS),
+        "templates": {
+            lid: LOGIC_TEMPLATES[lid].to_dict() for lid in LOGIC_TEMPLATE_IDS
+        },
+        "diversity_rules": {
+            "counts_as_different": [
+                "info source / datasets",
+                "entry / signal logic",
+                "position construction",
+                "economic thesis",
+            ],
+            "does_not_count": [
+                "hold_days only",
+                "momentum_window only",
+                "long_frac/short_frac only (e.g. 0.3→0.4)",
+                "sign flip as separate strategy (sign is eval aspect)",
+            ],
+            "near_dup_threshold": DEFAULT_NEAR_DUP_THRESHOLD,
+            "numeric_only_knobs": sorted(NUMERIC_ONLY_KNOBS),
+            "prefer": "many distinct templates over many param clones",
+        },
+        "frozen_default_path": list(FROZEN_DEFAULT_PATH),
+        "simple_daily_sign": "forbidden as diversity source",
+        "s1_s5_unreject": "forbidden",
+        "look_ahead": "gen-time reject",
+        **_freeze(),
+    }
 
 
 def family_definitions_document() -> dict[str, Any]:
-    """Document families + sampling / anti-bias rules."""
+    """Back-compat family document; points primary diversity to logic templates."""
     return {
         "version": MASS_FACTORY_VERSION,
         "wave": MASS_FACTORY_WAVE,
@@ -329,29 +747,20 @@ def family_definitions_document() -> dict[str, Any]:
         },
         "family_ids": list(FACTORY_FAMILY_IDS),
         "default_family_ratios": dict(DEFAULT_FAMILY_RATIOS),
+        "logic_templates": logic_templates_document(),
         "sampling_rules": {
             "seed_reproducible": True,
-            "target_n_min": DEFAULT_N,
-            "max_family_share": DEFAULT_MAX_FAMILY_SHARE,
+            "primary_unit": "logic_template",
+            "target_n_capacity": DEFAULT_N,
             "anti_bias": (
-                "No flooding one family with micro param grids "
-                "(e.g. mom 3/4/5… alone as the 100). "
-                "Batch must sample across multiple families; "
-                "within family, multi-axis combinatorial slots "
-                "cycled with seed, not sequential single-axis flood."
+                "Prefer one individual per distinct logic template. "
+                "Numeric knob clones are near-dup scored and dropped. "
+                "hold/mom/frac grids do NOT count as diversity."
             ),
             "simple_daily_sign": "forbidden as diversity source",
             "s1_s5_unreject": "forbidden",
             "look_ahead": "gen-time reject",
-            "gen_time_reject": [
-                REJECT_SIMPLE_DAILY_SIGN,
-                REJECT_LOOKAHEAD,
-                REJECT_MISSING_DATASETS,
-                REJECT_INVALID_PARAMS,
-                REJECT_S1_S5,
-                REJECT_UNKNOWN_FAMILY,
-            ],
-            "quality_filter_stage": "eval (not gen)",
+            "quality_filter_stage": "eval (after logic dedup)",
         },
         "hypothesis_class_alignment": {
             "registry_default_generation": list(DEFAULT_GENERATION_CLASS_IDS),
@@ -363,146 +772,13 @@ def family_definitions_document() -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Param catalogs (multi-axis; intentionally NOT a mom-only grid of 100)
-# ---------------------------------------------------------------------------
-
-# hold / horizon diversity
-_HOLD_DAYS: tuple[int, ...] = (5, 10, 15, 20)
-_MOM_N: tuple[int, ...] = (3, 5, 10, 20)  # used with hold/frac — not alone
-_REBALANCE: tuple[str, ...] = ("fixed_horizon",)
-_XS_LONG_FRAC: tuple[float, ...] = (0.2, 0.3, 0.4)
-_XS_SHORT_FRAC: tuple[float, ...] = (0.2, 0.3, 0.4)
-_MACRO_MODE: tuple[str, ...] = ("rate_change", "rate_level")
-_MACRO_HIGH: tuple[float, ...] = (0.03, 0.05, 0.10)
-_MACRO_LOW: tuple[float, ...] = (-0.02, 0.0, 0.02)
-_EVENT_HOLD: tuple[int, ...] = (3, 5, 10, 20)
-# Only PIT-safe entry mode is allowed; others exist for reject tests.
-_EVENT_ENTRY_SAFE: tuple[str, ...] = ("same_day_close_if_pre_close",)
-_EVENT_ENTRY_FORBIDDEN: frozenset[str] = frozenset(
-    {
-        "same_day_close_always",
-        "pre_disclosure_close",
-        "look_ahead_close",
-        "event_open_before_disc",
-    }
-)
-_FUND_MODE: tuple[str, ...] = ("value_momentum_agree", "value_only")
-_FUND_HOLD: tuple[int, ...] = (5, 10, 15, 20)
-_FUND_MOM: tuple[int, ...] = (5, 10, 20)
-_FLOW_HOLD: tuple[int, ...] = (5, 10, 20)
-_FLOW_CONFIRM: tuple[str, ...] = ("off", "soft", "hard")
-_VOL_N: tuple[int, ...] = (5, 10, 20)
-_VOL_THRESH: tuple[float, ...] = (0.5, 1.0, 1.5, 2.0)
-
-
-def _param_slots_for_family(family_id: str) -> list[dict[str, Any]]:
-    """Build diverse multi-axis param slots for a family (not mom-only flood)."""
-    slots: list[dict[str, Any]] = []
-    if family_id == CLASS_MULTI_DAY_HOLD:
-        for h in _HOLD_DAYS:
-            for rb in _REBALANCE:
-                slots.append(
-                    {
-                        "hold_days": h,
-                        "rebalance_mode": rb,
-                        # momentum lookback matches hold (class_hyp convention)
-                        "momentum_n": h,
-                    }
-                )
-    elif family_id == CLASS_EVENT_POST:
-        for h in _EVENT_HOLD:
-            for em in _EVENT_ENTRY_SAFE:
-                slots.append({"post_hold_days": h, "entry_mode": em})
-    elif family_id == CLASS_CROSS_SECTION_RELATIVE:
-        for h in (5, 10, 20):
-            for mom in _MOM_N:
-                for lf in _XS_LONG_FRAC:
-                    for sf in _XS_SHORT_FRAC:
-                        # skip pure micro-dupes where long==short only when
-                        # mom==h and only one frac — keep all structural combos
-                        # but cap later via cycle index (not 100 mom steps)
-                        if abs(lf - sf) > 0.15 and mom in (3, 20):
-                            # keep asymmetric books only for extreme moms
-                            slots.append(
-                                {
-                                    "hold_days": h,
-                                    "momentum_n": mom,
-                                    "long_frac": lf,
-                                    "short_frac": sf,
-                                }
-                            )
-                        elif abs(lf - sf) <= 0.15:
-                            slots.append(
-                                {
-                                    "hold_days": h,
-                                    "momentum_n": mom,
-                                    "long_frac": lf,
-                                    "short_frac": sf,
-                                }
-                            )
-    elif family_id == CLASS_MACRO_CONDITIONED:
-        for mode in _MACRO_MODE:
-            for mom in (5, 10, 20):
-                for h in (5, 10, 20):
-                    for hi in _MACRO_HIGH:
-                        for lo in _MACRO_LOW:
-                            if lo >= hi:
-                                continue
-                            slots.append(
-                                {
-                                    "mode": mode,
-                                    "momentum_n": mom,
-                                    "hold_days": h,
-                                    "high_threshold": hi,
-                                    "low_threshold": lo,
-                                }
-                            )
-    elif family_id == CLASS_FUNDAMENTALS_PRICE:
-        for h in _FUND_HOLD:
-            for mom in _FUND_MOM:
-                for mode in _FUND_MODE:
-                    slots.append(
-                        {
-                            "hold_days": h,
-                            "momentum_n": mom,
-                            "mode": mode,
-                        }
-                    )
-    elif family_id == CLASS_FLOW_DEMAND:
-        for h in _FLOW_HOLD:
-            for sc in _FLOW_CONFIRM:
-                slots.append(
-                    {
-                        "hold_days": h,
-                        "short_confirm_mode": sc,
-                        "require_short_confirm": sc == "hard",
-                    }
-                )
-    elif family_id == FAMILY_VOL_RISK_ADJUSTED:
-        for h in (5, 10, 20):
-            for vn in _VOL_N:
-                for thr in _VOL_THRESH:
-                    slots.append(
-                        {
-                            "hold_days": h,
-                            "momentum_n": h,
-                            "vol_n": vn,
-                            "vol_threshold": thr,
-                        }
-                    )
-    else:
-        raise KeyError(f"unknown family for param slots: {family_id!r}")
-    return slots
-
-
-# ---------------------------------------------------------------------------
 # Config + generated strategy
 # ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
 class MassFactoryConfig:
-    """Batch generation / eval configuration."""
+    """Batch generation / eval configuration (logic-diversity factory)."""
 
     seed: int = DEFAULT_SEED
     n: int = DEFAULT_N
@@ -515,11 +791,16 @@ class MassFactoryConfig:
     # Eval lite knobs
     max_days_per_period: int = 80
     max_codes: int = 20
-    use_q4_periods: bool = True  # lite multi-year; document tradeoff
-    paper_sample_k: int = 0  # short paper for top-k only; 0 = off
+    use_q4_periods: bool = True
+    paper_sample_k: int = 0
     near_zero_abs: float = DEFAULT_NEAR_ZERO_ABS
     min_activation: float = DEFAULT_MIN_ACTIVATION
     fail_one_continue: bool = True
+    # W88: allow limited numeric fill after unique logics (still near-duped)
+    allow_numeric_variants: bool = True
+    near_dup_threshold: float = DEFAULT_NEAR_DUP_THRESHOLD
+    # Eval only after dedup (distinct logics)
+    eval_after_dedup: bool = True
 
     def normalized_ratios(self) -> dict[str, float]:
         raw = {
@@ -529,7 +810,6 @@ class MassFactoryConfig:
         }
         if not raw:
             raw = dict(DEFAULT_FAMILY_RATIOS)
-        # Drop simple_daily_sign if sneaked in
         raw.pop(CLASS_SIMPLE_DAILY_SIGN, None)
         total = sum(raw.values())
         if total <= 0:
@@ -551,6 +831,9 @@ class MassFactoryConfig:
             "near_zero_abs": float(self.near_zero_abs),
             "min_activation": float(self.min_activation),
             "fail_one_continue": bool(self.fail_one_continue),
+            "allow_numeric_variants": bool(self.allow_numeric_variants),
+            "near_dup_threshold": float(self.near_dup_threshold),
+            "eval_after_dedup": bool(self.eval_after_dedup),
             "continuous_paper": CONTINUOUS_PAPER,
             **_freeze(),
         }
@@ -558,7 +841,7 @@ class MassFactoryConfig:
 
 @dataclass(frozen=True)
 class GeneratedStrategy:
-    """One generated strategy spec (research factory output)."""
+    """One generated strategy individual (logic-centric)."""
 
     strategy_id: str
     family_id: str
@@ -567,12 +850,25 @@ class GeneratedStrategy:
     generation_index: int
     seed: int
     status: str  # accepted | rejected_at_gen
+    logic_id: str
+    thesis: str
+    signal_definition: str
+    position_rule: str
+    datasets_used: tuple[str, ...]
+    logic_fingerprint: str
+    is_numeric_variant: bool = False
     reject_reason: str | None = None
     hypothesis_class: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "strategy_id": self.strategy_id,
+            "logic_id": self.logic_id,
+            "logic_fingerprint": self.logic_fingerprint,
+            "thesis": self.thesis,
+            "signal_definition": self.signal_definition,
+            "position_rule": self.position_rule,
+            "datasets_used": list(self.datasets_used),
             "family_id": self.family_id,
             "hypothesis_class": self.hypothesis_class or self.family_id,
             "params": dict(self.params),
@@ -580,6 +876,7 @@ class GeneratedStrategy:
             "generation_index": int(self.generation_index),
             "seed": int(self.seed),
             "status": self.status,
+            "is_numeric_variant": bool(self.is_numeric_variant),
             "reject_reason": self.reject_reason,
             "version": MASS_FACTORY_VERSION,
             "wave": MASS_FACTORY_WAVE,
@@ -593,19 +890,21 @@ def stable_strategy_id(
     family_id: str,
     params: Mapping[str, Any],
     generation_index: int,
+    logic_id: str | None = None,
 ) -> str:
-    """Deterministic stable ID from seed + family + params + index."""
+    """Deterministic stable ID from seed + logic + params + index."""
     payload = {
         "seed": int(seed),
         "family_id": str(family_id),
+        "logic_id": str(logic_id or ""),
         "params": _canonical_params(params),
         "i": int(generation_index),
         "v": MASS_FACTORY_VERSION,
     }
     raw = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12]
-    fam = str(family_id).replace("_", "")[:8]
-    return f"msf_{int(seed):08x}_{int(generation_index):04d}_{fam}_{digest}"
+    tag = str(logic_id or family_id).replace("_", "")[:8]
+    return f"msf_{int(seed):08x}_{int(generation_index):04d}_{tag}_{digest}"
 
 
 def _canonical_params(params: Mapping[str, Any]) -> dict[str, Any]:
@@ -621,54 +920,142 @@ def _canonical_params(params: Mapping[str, Any]) -> dict[str, Any]:
     return out
 
 
-def _split_counts(n: int, ratios: Mapping[str, float], max_share: float) -> dict[str, int]:
-    """Allocate integer counts per family with anti-bias cap."""
-    fams = [k for k, v in ratios.items() if v > 0]
-    if not fams:
-        raise ValueError("no families in ratios")
-    cap = max(1, int(math.floor(float(max_share) * n)))
-    # largest remainder method with iterative rebalance under cap
-    raw = {f: ratios[f] * n for f in fams}
-    counts = {f: int(math.floor(raw[f])) for f in fams}
-    rem = n - sum(counts.values())
-    order = sorted(fams, key=lambda f: (raw[f] - counts[f], ratios[f], f), reverse=True)
-    i = 0
-    while rem > 0 and i < 10_000:
-        f = order[i % len(order)]
-        if counts[f] < cap:
-            counts[f] += 1
-            rem -= 1
-        i += 1
-        if i % len(order) == 0 and all(counts[x] >= cap for x in fams):
-            # all capped — allow overflow on highest-ratio families to hit N
-            for f2 in order:
-                if rem <= 0:
-                    break
-                counts[f2] += 1
-                rem -= 1
-            break
-    # ensure at least 1 for each enabled family when n is large enough
-    if n >= len(fams):
-        for f in fams:
-            if counts[f] == 0:
-                donor = max(fams, key=lambda x: counts[x])
-                if counts[donor] > 1:
-                    counts[donor] -= 1
-                    counts[f] = 1
-    # final pad/trim to exact n
-    diff = n - sum(counts.values())
-    order2 = sorted(fams, key=lambda f: (-ratios[f], f))
-    j = 0
-    while diff != 0 and j < 10_000:
-        f = order2[j % len(order2)]
-        if diff > 0:
-            counts[f] += 1
-            diff -= 1
-        elif counts[f] > 0:
-            counts[f] -= 1
-            diff += 1
-        j += 1
-    return counts
+def _coarse_bucket(key: str, value: Any) -> Any:
+    """Coarse bucket for near-dup scoring (collapses micro grids)."""
+    if value is None:
+        return None
+    if key in {"hold_days", "post_hold_days", "momentum_n", "vol_n"}:
+        try:
+            v = int(value)
+        except (TypeError, ValueError):
+            return str(value)
+        # buckets: short / mid / long
+        if v <= 5:
+            return "short"
+        if v <= 12:
+            return "mid"
+        return "long"
+    if key in {"long_frac", "short_frac", "vol_threshold", "high_threshold", "low_threshold"}:
+        try:
+            v = float(value)
+        except (TypeError, ValueError):
+            return str(value)
+        return round(v, 1)  # 0.3 and 0.4 → different only at 0.1; still high sim
+    return value
+
+
+def individual_similarity_features(ind: Mapping[str, Any]) -> dict[str, Any]:
+    """Features used for near-duplicate scoring."""
+    params = dict(ind.get("params") or {})
+    structural = {
+        k: params.get(k)
+        for k in params
+        if k not in NUMERIC_ONLY_KNOBS
+    }
+    coarse_knobs = {
+        k: _coarse_bucket(k, params.get(k))
+        for k in sorted(NUMERIC_ONLY_KNOBS)
+        if k in params
+    }
+    return {
+        "logic_id": str(ind.get("logic_id") or ""),
+        "logic_fingerprint": str(ind.get("logic_fingerprint") or ""),
+        "family_id": str(ind.get("family_id") or ""),
+        "signal_definition": str(ind.get("signal_definition") or ""),
+        "position_rule": str(ind.get("position_rule") or ""),
+        "datasets": tuple(sorted(ind.get("datasets_used") or ind.get("datasets_required") or [])),
+        "structural": structural,
+        "coarse_knobs": coarse_knobs,
+    }
+
+
+def similarity_score(a: Mapping[str, Any], b: Mapping[str, Any]) -> float:
+    """Score near-duplicate similarity in [0, 1].
+
+    High score when only grid knobs differ (hold/mom/frac) under same
+    signal family + position rule + datasets. Low when thesis / entry /
+    position / datasets differ.
+    """
+    fa = individual_similarity_features(a)
+    fb = individual_similarity_features(b)
+
+    # Exact same logic fingerprint → pure clone / numeric twin
+    if fa["logic_fingerprint"] and fa["logic_fingerprint"] == fb["logic_fingerprint"]:
+        if fa["coarse_knobs"] == fb["coarse_knobs"]:
+            return 1.0
+        # same logic, different coarse knobs → still near-dup (grid mutation)
+        return 0.95
+
+    # Same logic_id different fingerprint (shouldn't happen often)
+    if fa["logic_id"] and fa["logic_id"] == fb["logic_id"]:
+        return 0.92
+
+    score = 0.0
+    # Family / signal / position / datasets (core of logic diversity)
+    if fa["family_id"] == fb["family_id"] and fa["family_id"]:
+        score += 0.25
+    if fa["signal_definition"] == fb["signal_definition"] and fa["signal_definition"]:
+        score += 0.25
+    if fa["position_rule"] == fb["position_rule"] and fa["position_rule"]:
+        score += 0.25
+    if fa["datasets"] == fb["datasets"] and fa["datasets"]:
+        score += 0.15
+
+    # Structural keys agreement
+    sa, sb = fa["structural"], fb["structural"]
+    if sa or sb:
+        keys = set(sa) | set(sb)
+        if keys:
+            agree = sum(1 for k in keys if sa.get(k) == sb.get(k))
+            score += 0.10 * (agree / len(keys))
+
+    # Coarse knob agreement alone cannot push past threshold without logic match
+    ca, cb = fa["coarse_knobs"], fb["coarse_knobs"]
+    if ca and cb and ca == cb and score >= 0.7:
+        score = min(1.0, score + 0.05)
+
+    return min(1.0, score)
+
+
+def dedup_strategies(
+    strategies: Sequence[Mapping[str, Any]],
+    *,
+    threshold: float = DEFAULT_NEAR_DUP_THRESHOLD,
+) -> dict[str, Any]:
+    """Drop high-similarity grid mutations; keep first of each logic cluster."""
+    kept: list[dict[str, Any]] = []
+    dropped: list[dict[str, Any]] = []
+    for raw in strategies:
+        s = dict(raw)
+        is_dup = False
+        matched_id = None
+        best_sim = 0.0
+        for k in kept:
+            sim = similarity_score(s, k)
+            if sim >= threshold and sim > best_sim:
+                is_dup = True
+                matched_id = k.get("strategy_id")
+                best_sim = sim
+        if is_dup:
+            dropped.append(
+                {
+                    **s,
+                    "dedup_status": "dropped",
+                    "near_dup_of": matched_id,
+                    "similarity": round(best_sim, 4),
+                    "reject_reason": REJECT_NEAR_DUPLICATE,
+                }
+            )
+        else:
+            kept.append({**s, "dedup_status": "kept"})
+    return {
+        "n_input": len(strategies),
+        "n_after_dedup": len(kept),
+        "n_dropped": len(dropped),
+        "threshold": float(threshold),
+        "kept": kept,
+        "dropped": dropped,
+    }
 
 
 def validate_strategy_at_gen(
@@ -676,6 +1063,7 @@ def validate_strategy_at_gen(
     params: Mapping[str, Any],
     *,
     available_datasets: frozenset[str] | set[str] = FACTORY_AVAILABLE_DATASETS,
+    logic_id: str | None = None,
 ) -> tuple[bool, str | None]:
     """Gen-time validity: PIT, datasets, forbidden classes/params."""
     fid = str(family_id).strip()
@@ -683,18 +1071,30 @@ def validate_strategy_at_gen(
         return False, REJECT_SIMPLE_DAILY_SIGN
     if fid.startswith("s") and fid[1:].isdigit() and int(fid[1:]) <= 5:
         return False, REJECT_S1_S5
-    if fid not in FAMILY_DEFINITIONS:
-        return False, REJECT_UNKNOWN_FAMILY
+    if logic_id is not None and str(logic_id) not in LOGIC_TEMPLATES:
+        return False, REJECT_UNKNOWN_LOGIC
+    if fid not in FAMILY_DEFINITIONS and fid != FAMILY_VOL_RISK_ADJUSTED:
+        # FAMILY_VOL_RISK is in FAMILY_DEFINITIONS when templates include it
+        if fid not in {t.family_id for t in LOGIC_TEMPLATES.values()}:
+            return False, REJECT_UNKNOWN_FAMILY
 
-    fam = FAMILY_DEFINITIONS[fid]
-    missing = [d for d in fam.datasets_required if d not in available_datasets]
+    # Datasets from template if available
+    if logic_id and logic_id in LOGIC_TEMPLATES:
+        req = LOGIC_TEMPLATES[logic_id].datasets_used
+    elif fid in FAMILY_DEFINITIONS:
+        req = FAMILY_DEFINITIONS[fid].datasets_required
+    else:
+        req = ()
+    missing = [d for d in req if d not in available_datasets]
     if missing:
         return False, f"{REJECT_MISSING_DATASETS}:{','.join(missing)}"
 
     p = dict(params)
     if fid == CLASS_EVENT_POST:
         em = str(p.get("entry_mode") or "")
-        if em in _EVENT_ENTRY_FORBIDDEN or "look" in em.lower() and "ahead" in em.lower():
+        if em in _EVENT_ENTRY_FORBIDDEN or (
+            "look" in em.lower() and "ahead" in em.lower()
+        ):
             return False, REJECT_LOOKAHEAD
         if em and em not in _EVENT_ENTRY_SAFE:
             return False, REJECT_LOOKAHEAD
@@ -720,6 +1120,29 @@ def validate_strategy_at_gen(
     return True, None
 
 
+def _minimal_numeric_variants(tpl: LogicTemplate) -> list[dict[str, Any]]:
+    """At most a couple coarse numeric variants (will near-dup collapse).
+
+    Not a hold/mom/frac mass grid. Used only when allow_numeric_variants and
+    capacity remains after unique logics are placed.
+    """
+    base = dict(tpl.base_params)
+    variants: list[dict[str, Any]] = []
+    # One mild hold shift if hold-like key exists (explicitly a numeric variant)
+    if "hold_days" in base and int(base["hold_days"]) not in (1,):
+        v = dict(base)
+        h = int(base["hold_days"])
+        v["hold_days"] = 15 if h <= 10 else 10
+        if "momentum_n" in v and int(v.get("momentum_n") or 0) == h:
+            v["momentum_n"] = v["hold_days"]
+        variants.append(v)
+    if "post_hold_days" in base:
+        v = dict(base)
+        v["post_hold_days"] = 10 if int(base["post_hold_days"]) != 10 else 3
+        variants.append(v)
+    return variants[:1]  # at most one numeric variant per logic
+
+
 def generate_strategy_batch(
     config: MassFactoryConfig | None = None,
     *,
@@ -727,17 +1150,20 @@ def generate_strategy_batch(
     n: int | None = None,
     family_ratios: Mapping[str, float] | None = None,
 ) -> dict[str, Any]:
-    """Generate N strategy specs with stable IDs across multiple families.
+    """Generate strategy individuals from distinct logic templates.
 
-    Returns machine-readable pack with accepted + gen-rejected rows.
-    Target: N>=100 accepted when datasets available; quality filter at eval.
+    Primary unit = logic template. Numeric knob clones are secondary and
+    near-dup scored. Returns metrics: n_generated, n_unique_logic,
+    n_numeric_variant, n_after_dedup.
     """
     cfg = config or MassFactoryConfig()
     if seed is not None or n is not None or family_ratios is not None:
         cfg = MassFactoryConfig(
             seed=int(seed if seed is not None else cfg.seed),
             n=int(n if n is not None else cfg.n),
-            family_ratios=dict(family_ratios if family_ratios is not None else cfg.family_ratios),
+            family_ratios=dict(
+                family_ratios if family_ratios is not None else cfg.family_ratios
+            ),
             max_family_share=cfg.max_family_share,
             one_way_cost=cfg.one_way_cost,
             available_datasets=cfg.available_datasets,
@@ -748,141 +1174,181 @@ def generate_strategy_batch(
             near_zero_abs=cfg.near_zero_abs,
             min_activation=cfg.min_activation,
             fail_one_continue=cfg.fail_one_continue,
+            allow_numeric_variants=cfg.allow_numeric_variants,
+            near_dup_threshold=cfg.near_dup_threshold,
+            eval_after_dedup=cfg.eval_after_dedup,
         )
     if cfg.n < 1:
         raise ValueError("n must be >= 1")
 
-    ratios = cfg.normalized_ratios()
-    counts = _split_counts(cfg.n, ratios, cfg.max_family_share)
-    slots_by_fam = {f: _param_slots_for_family(f) for f in counts}
-
-    # Deterministic shuffle of slot order per family using seed
     rng_state = int(cfg.seed) & 0xFFFFFFFF
 
     def _next_rand() -> int:
         nonlocal rng_state
-        # LCG (Numerical Recipes); pure python, reproducible
         rng_state = (1664525 * rng_state + 1013904223) & 0xFFFFFFFF
         return rng_state
 
+    # Deterministic order of logic templates
+    logic_ids = list(LOGIC_TEMPLATE_IDS)
+    for i in range(len(logic_ids) - 1, 0, -1):
+        j = _next_rand() % (i + 1)
+        logic_ids[i], logic_ids[j] = logic_ids[j], logic_ids[i]
+
     strategies: list[GeneratedStrategy] = []
     gen_rejected: list[GeneratedStrategy] = []
-    family_dist: dict[str, int] = {f: 0 for f in counts}
+    family_dist: dict[str, int] = {}
+    logic_dist: dict[str, int] = {}
+    n_numeric = 0
     index = 0
 
-    # Build ordered worklist: interleave families by ratio weight
-    work: list[str] = []
-    for f, c in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])):
-        work.extend([f] * c)
-    # seed-stable interleave shuffle
-    for i in range(len(work) - 1, 0, -1):
-        j = _next_rand() % (i + 1)
-        work[i], work[j] = work[j], work[i]
-
-    # per-family cursor into shuffled multi-axis slots (anti micro-grid flood:
-    # Fisher–Yates with seed so consecutive picks diversify hold/mom/frac axes)
-    cursors: dict[str, int] = {}
-    rotated_slots: dict[str, list[dict[str, Any]]] = {}
-    for f, slots in slots_by_fam.items():
-        if not slots:
-            rotated_slots[f] = [{}]
-            continue
-        shuffled = list(slots)
-        for i in range(len(shuffled) - 1, 0, -1):
-            j = _next_rand() % (i + 1)
-            shuffled[i], shuffled[j] = shuffled[j], shuffled[i]
-        rotated_slots[f] = shuffled
-        cursors[f] = 0
-
-    for fam in work:
-        slots = rotated_slots[fam]
-        cursor = cursors.get(fam, 0)
-        # try up to len(slots) param variants to find a valid one
-        accepted_local: GeneratedStrategy | None = None
-        for attempt in range(max(1, len(slots))):
-            params = dict(slots[(cursor + attempt) % len(slots)])
-            # tiny seed-based jitter on continuous params without creating
-            # a 100-step microgrid: pick alternate threshold index
-            if fam == CLASS_MACRO_CONDITIONED and attempt > 0:
-                params = dict(slots[(cursor + attempt) % len(slots)])
-            ok, reason = validate_strategy_at_gen(
-                fam, params, available_datasets=cfg.available_datasets
-            )
-            sid = stable_strategy_id(
-                seed=cfg.seed,
-                family_id=fam,
-                params=params,
-                generation_index=index,
-            )
-            hyp = fam if fam in HYPOTHESIS_CLASS_REGISTRY else fam
-            if ok:
-                accepted_local = GeneratedStrategy(
-                    strategy_id=sid,
-                    family_id=fam,
-                    params=params,
-                    datasets_required=FAMILY_DEFINITIONS[fam].datasets_required,
-                    generation_index=index,
-                    seed=cfg.seed,
-                    status="accepted",
-                    reject_reason=None,
-                    hypothesis_class=hyp,
-                )
-                cursors[fam] = (cursor + attempt + 1) % max(1, len(slots))
-                break
-            else:
-                gen_rejected.append(
-                    GeneratedStrategy(
-                        strategy_id=sid,
-                        family_id=fam,
-                        params=params,
-                        datasets_required=FAMILY_DEFINITIONS[fam].datasets_required,
-                        generation_index=index,
-                        seed=cfg.seed,
-                        status="rejected_at_gen",
-                        reject_reason=reason,
-                        hypothesis_class=hyp,
-                    )
-                )
-        if accepted_local is not None:
-            strategies.append(accepted_local)
-            family_dist[fam] = family_dist.get(fam, 0) + 1
-        else:
-            # could not place valid strategy for this slot
-            family_dist.setdefault(fam, 0)
+    def _try_emit(tpl: LogicTemplate, params: dict[str, Any], *, numeric: bool) -> bool:
+        nonlocal index, n_numeric
+        if len(strategies) >= cfg.n:
+            return False
+        ok, reason = validate_strategy_at_gen(
+            tpl.family_id,
+            params,
+            available_datasets=cfg.available_datasets,
+            logic_id=tpl.logic_id,
+        )
+        sid = stable_strategy_id(
+            seed=cfg.seed,
+            family_id=tpl.family_id,
+            params=params,
+            generation_index=index,
+            logic_id=tpl.logic_id,
+        )
+        hyp = tpl.family_id if tpl.family_id in HYPOTHESIS_CLASS_REGISTRY else tpl.family_id
+        row = GeneratedStrategy(
+            strategy_id=sid,
+            family_id=tpl.family_id,
+            params=params,
+            datasets_required=tpl.datasets_used,
+            generation_index=index,
+            seed=cfg.seed,
+            status="accepted" if ok else "rejected_at_gen",
+            logic_id=tpl.logic_id,
+            thesis=tpl.thesis,
+            signal_definition=tpl.signal_definition,
+            position_rule=tpl.position_rule,
+            datasets_used=tpl.datasets_used,
+            logic_fingerprint=tpl.logic_fingerprint(),
+            is_numeric_variant=numeric,
+            reject_reason=None if ok else reason,
+            hypothesis_class=hyp,
+        )
         index += 1
+        if ok:
+            strategies.append(row)
+            family_dist[tpl.family_id] = family_dist.get(tpl.family_id, 0) + 1
+            logic_dist[tpl.logic_id] = logic_dist.get(tpl.logic_id, 0) + 1
+            if numeric:
+                n_numeric += 1
+            return True
+        gen_rejected.append(row)
+        return False
 
-    n_accepted = len(strategies)
+    # Pass 1: one primary individual per distinct logic template
+    for lid in logic_ids:
+        if len(strategies) >= cfg.n:
+            break
+        tpl = LOGIC_TEMPLATES[lid]
+        if not tpl.generation_enabled:
+            continue
+        _try_emit(tpl, dict(tpl.base_params), numeric=False)
+
+    # Pass 2: optional limited numeric variants (capacity fill; near-dup later)
+    if cfg.allow_numeric_variants and len(strategies) < cfg.n:
+        for lid in logic_ids:
+            if len(strategies) >= cfg.n:
+                break
+            tpl = LOGIC_TEMPLATES[lid]
+            for vp in _minimal_numeric_variants(tpl):
+                if len(strategies) >= cfg.n:
+                    break
+                # skip if identical to base
+                if _canonical_params(vp) == _canonical_params(tpl.base_params):
+                    continue
+                _try_emit(tpl, vp, numeric=True)
+
+    n_generated = len(strategies)
+    unique_logic_ids = sorted({s.logic_id for s in strategies})
+    n_unique_logic = len(unique_logic_ids)
+
+    # Near-duplicate collapse (grid mutations out)
+    dedup = dedup_strategies(
+        [s.to_dict() for s in strategies],
+        threshold=cfg.near_dup_threshold,
+    )
+    after_dedup = list(dedup["kept"])
+    n_after_dedup = int(dedup["n_after_dedup"])
+
     shares = {
-        f: (family_dist.get(f, 0) / n_accepted if n_accepted else 0.0)
-        for f in sorted(set(list(counts) + list(family_dist)))
+        f: (family_dist.get(f, 0) / n_generated if n_generated else 0.0)
+        for f in sorted(set(list(FACTORY_FAMILY_IDS) + list(family_dist)))
     }
+    max_share = max(shares.values()) if shares and n_generated else 0.0
+
+    # Logic diversity ok: after_dedup close to unique_logic; not flooded by clones
+    logic_diversity_ok = (
+        n_unique_logic >= min(10, len(LOGIC_TEMPLATES))
+        and n_after_dedup >= n_unique_logic  # kept at least one per unique
+        and (n_numeric == 0 or n_after_dedup <= n_unique_logic + 2)
+    )
+
     return {
         "version": MASS_FACTORY_VERSION,
         "wave": MASS_FACTORY_WAVE,
         "config": cfg.to_dict(),
         "n_requested": int(cfg.n),
-        "n_generated_accepted": n_accepted,
+        # W88 primary metrics
+        "n_generated": n_generated,
+        "n_generated_accepted": n_generated,  # back-compat alias
+        "n_unique_logic": n_unique_logic,
+        "n_numeric_variant": n_numeric,
+        "n_after_dedup": n_after_dedup,
+        "n_dropped_near_dup": int(dedup["n_dropped"]),
+        "unique_logic_ids": unique_logic_ids,
+        "logic_distribution": logic_dist,
+        "unique_logic_count": n_unique_logic,
+        "numeric_variant_count": n_numeric,
+        # capacity / legacy
+        "n_ge_100": n_generated >= 100 or n_after_dedup >= len(LOGIC_TEMPLATES),
         "n_rejected_at_gen": len(gen_rejected),
-        "n_ge_100": n_accepted >= 100,
-        "family_counts_requested": counts,
         "family_distribution": family_dist,
         "family_shares": shares,
-        "max_family_share_observed": max(shares.values()) if shares else 0.0,
+        "max_family_share_observed": max_share,
         "anti_bias_ok": (
-            (max(shares.values()) <= cfg.max_family_share + 1e-9)
-            if shares and n_accepted
-            else False
+            max_share <= cfg.max_family_share + 1e-9 if n_generated else False
         ),
+        "logic_diversity_ok": logic_diversity_ok,
         "n_families_used": sum(1 for v in family_dist.values() if v > 0),
+        "n_logic_templates_catalog": len(LOGIC_TEMPLATES),
         "strategies": [s.to_dict() for s in strategies],
+        "strategies_after_dedup": after_dedup,
+        "near_dup_dropped": dedup["dropped"],
+        "dedup": {
+            "threshold": dedup["threshold"],
+            "n_input": dedup["n_input"],
+            "n_after_dedup": dedup["n_after_dedup"],
+            "n_dropped": dedup["n_dropped"],
+        },
         "gen_rejected": [s.to_dict() for s in gen_rejected],
         "families_document": family_definitions_document(),
+        "logic_templates_document": logic_templates_document(),
+        "frozen_default_path": list(FROZEN_DEFAULT_PATH),
+        "note": (
+            "Diversity = unique economic logics after near-dup. "
+            "n_generated may exceed n_unique_logic when numeric fill is on; "
+            "eval should use strategies_after_dedup. "
+            "3 default-path reps frozen (not retuned)."
+        ),
         **_freeze(),
     }
 
 
 # ---------------------------------------------------------------------------
-# Vol-risk pure evaluator (bars only)
+# Vol-risk / vol-expand pure evaluators (bars only)
 # ---------------------------------------------------------------------------
 
 
@@ -911,13 +1377,15 @@ def evaluate_vol_risk_adjusted_on_bars(
     vol_n: int = 10,
     vol_threshold: float = 1.0,
     one_way_cost: float = DEFAULT_ONE_WAY,
+    gate_mode: str = "mom_over_vol",
 ) -> dict[str, Any]:
-    """Multi-day mom hold gated by |mom|/vol ≥ threshold (research only)."""
+    """Vol-gated multi-day mom (mom_over_vol or vol_expand)."""
     from research.class_hyp_eval import momentum_series
 
     h = int(hold_days)
     vn = int(vol_n)
     thr = float(vol_threshold)
+    mode = str(gate_mode or "mom_over_vol")
     am_cost = amortized_one_way_cost(one_way_cost, h)
     signed_returns: list[float] = []
     n_active = 0
@@ -941,12 +1409,26 @@ def evaluate_vol_risk_adjusted_on_bars(
                 entry_signs.append(None)
                 n_filtered += 1
                 continue
-            score = abs(float(mom)) / vol
-            if score < thr:
-                entry_signs.append(0.0)
-                n_filtered += 1
-                continue
-            entry_signs.append(sign_from_numeric(mom))
+            if mode == "vol_expand":
+                # prior window vol
+                prior = _realized_vol(closes, i - vn, vn) if i >= 2 * vn else None
+                if prior is None or prior <= 1e-12:
+                    entry_signs.append(None)
+                    n_filtered += 1
+                    continue
+                expand = vol / prior
+                if expand < thr:
+                    entry_signs.append(0.0)
+                    n_filtered += 1
+                    continue
+                entry_signs.append(sign_from_numeric(mom))
+            else:
+                score = abs(float(mom)) / vol
+                if score < thr:
+                    entry_signs.append(0.0)
+                    n_filtered += 1
+                    continue
+                entry_signs.append(sign_from_numeric(mom))
         held = apply_sticky_hold(
             entry_signs, hold_days=h, rebalance_mode="fixed_horizon"
         )
@@ -969,11 +1451,12 @@ def evaluate_vol_risk_adjusted_on_bars(
     n_code_days = len(holding_records)
     n_trading_days = len({r["date"] for r in holding_records})
     return {
-        "signal_id": "c21_vol_risk_adjusted_hold",
+        "signal_id": f"c21_vol_risk_{mode}",
         "hypothesis_class": FAMILY_VOL_RISK_ADJUSTED,
         "hold_days": h,
         "vol_n": vn,
         "vol_threshold": thr,
+        "gate_mode": mode,
         "gross_signed_mean_active": gross,
         "net_one_way_mean_active": net,
         "amortized_one_way_cost": am_cost,
@@ -992,7 +1475,7 @@ def evaluate_vol_risk_adjusted_on_bars(
         },
         **_freeze(),
         "note": (
-            f"Vol-risk gate |mom|/vol>={thr} hold={h} vol_n={vn}. "
+            f"Vol gate mode={mode} thr={thr} hold={h} vol_n={vn}. "
             "Not READY / not Mass."
         ),
     }
@@ -1008,7 +1491,7 @@ class BatchDataContext:
     """Cached offline panels for fail-fast batch eval."""
 
     periods: list[dict[str, Any]]
-    panels: list[dict[str, Any]]  # per period: bars, repo, fins, margin, short
+    panels: list[dict[str, Any]]
     one_way_cost: float
     load_notes: dict[str, Any] = field(default_factory=dict)
 
@@ -1043,9 +1526,17 @@ def load_batch_data_context(
     if synthetic:
         return _synthetic_batch_context(config)
 
-    period_list = [dict(p) for p in (periods or (
-        DEFAULT_PERIODS_Q4 if config.use_q4_periods else DEFAULT_PERIODS
-    ))]
+    period_list = [
+        dict(p)
+        for p in (
+            periods
+            or (
+                DEFAULT_PERIODS_Q4
+                if config.use_q4_periods
+                else DEFAULT_PERIODS
+            )
+        )
+    ]
     selected = (
         [str(c).strip() for c in codes if str(c).strip()]
         if codes is not None
@@ -1108,9 +1599,7 @@ def load_batch_data_context(
         margin: dict[str, list[tuple[str, float]]] = {}
         if margin_path is not None and Path(margin_path).exists():
             try:
-                margin = load_margin_ndjson(
-                    margin_path, codes=selected
-                )
+                margin = load_margin_ndjson(margin_path, codes=selected)
             except Exception:
                 margin = {}
         panels.append(
@@ -1146,7 +1635,7 @@ def load_batch_data_context(
             "max_days_per_period": int(config.max_days_per_period),
             "tradeoff": (
                 "Lite multi-year: Q4 (or capped full) windows + code subsample "
-                "for N>=100 wall-time. Not production research_candidate SoT; "
+                "for wall-time. Not production research_candidate SoT; "
                 "survivors need deeper class_hyp re-eval before any promotion."
             ),
         },
@@ -1162,7 +1651,6 @@ def _synthetic_batch_context(config: MassFactoryConfig) -> BatchDataContext:
         margin: dict[str, list[tuple[str, float]]] = {}
         for ci, code in enumerate(("13010", "72030", "67580", "99840")):
             base = 100.0 + 10 * ci + yi
-            # trending + mild noise
             series = [
                 (d, base + 0.4 * i + (0.2 if (i + ci) % 5 == 0 else 0.0))
                 for i, d in enumerate(dates)
@@ -1172,7 +1660,6 @@ def _synthetic_batch_context(config: MassFactoryConfig) -> BatchDataContext:
                 (dates[i], 1000.0 + 20 * i + 5 * ci)
                 for i in range(0, len(dates), 3)
             ]
-        # simple repo series
         rates = {d: 0.05 + 0.001 * i for i, d in enumerate(dates)}
         repo_series = {
             "rates_by_date": rates,
@@ -1212,7 +1699,9 @@ def _synthetic_batch_context(config: MassFactoryConfig) -> BatchDataContext:
                 "margin": margin,
                 "repo_series": repo_series,
                 "fins_events": fins_events,
-                "short_series": [(d, 0.01 + 0.0001 * i) for i, d in enumerate(dates)],
+                "short_series": [
+                    (d, 0.01 + 0.0001 * i) for i, d in enumerate(dates)
+                ],
             }
         )
     return BatchDataContext(
@@ -1238,6 +1727,7 @@ def _eval_on_panel(
         evaluate_fundamentals_price_on_bars,
         evaluate_macro_conditioned_on_bars,
         evaluate_multi_day_hold_on_bars,
+        momentum_series,
     )
 
     bars = panel.get("bars") or {}
@@ -1252,12 +1742,24 @@ def _eval_on_panel(
     fid = str(family_id)
     p = dict(params)
     if fid == CLASS_MULTI_DAY_HOLD:
-        out = evaluate_multi_day_hold_on_bars(
-            bars,
-            hold_days=int(p.get("hold_days") or DEFAULT_HOLD_DAYS),
-            one_way_cost=one_way_cost,
-            rebalance_mode=str(p.get("rebalance_mode") or "fixed_horizon"),
-        )
+        polarity = int(p.get("signal_polarity") or 1)
+        if polarity >= 0:
+            out = evaluate_multi_day_hold_on_bars(
+                bars,
+                hold_days=int(p.get("hold_days") or DEFAULT_HOLD_DAYS),
+                one_way_cost=one_way_cost,
+                rebalance_mode=str(p.get("rebalance_mode") or "fixed_horizon"),
+            )
+        else:
+            # Mean-reversion entry: invert momentum sign at signal time
+            out = _evaluate_mdh_polarity_on_bars(
+                bars,
+                hold_days=int(p.get("hold_days") or DEFAULT_HOLD_DAYS),
+                one_way_cost=one_way_cost,
+                rebalance_mode=str(p.get("rebalance_mode") or "fixed_horizon"),
+                polarity=-1,
+                momentum_series_fn=momentum_series,
+            )
     elif fid == CLASS_CROSS_SECTION_RELATIVE:
         out = evaluate_cross_section_on_bars(
             bars,
@@ -1314,6 +1816,7 @@ def _eval_on_panel(
             vol_n=int(p.get("vol_n") or 10),
             vol_threshold=float(p.get("vol_threshold") or 1.0),
             one_way_cost=one_way_cost,
+            gate_mode=str(p.get("gate_mode") or "mom_over_vol"),
         )
     else:
         return {
@@ -1336,6 +1839,77 @@ def _eval_on_panel(
     }
 
 
+def _evaluate_mdh_polarity_on_bars(
+    bars_by_code: Mapping[str, Sequence[tuple[str, float]]],
+    *,
+    hold_days: int,
+    one_way_cost: float,
+    rebalance_mode: str,
+    polarity: int,
+    momentum_series_fn: Callable[..., Any],
+) -> dict[str, Any]:
+    """Multi-day hold with explicit entry polarity (reversion when −1)."""
+    h = int(hold_days)
+    am_cost = amortized_one_way_cost(one_way_cost, h)
+    signed_returns: list[float] = []
+    n_active = 0
+    holding_records: list[dict[str, Any]] = []
+    pol = -1.0 if int(polarity) < 0 else 1.0
+
+    for code, pairs in sorted(bars_by_code.items()):
+        pairs_l = list(pairs)
+        if len(pairs_l) < h + 2:
+            continue
+        moms = momentum_series_fn(pairs_l, n=h)
+        entry_signs = []
+        for _, m in moms:
+            s = sign_from_numeric(m)
+            if s is None:
+                entry_signs.append(None)
+            else:
+                entry_signs.append(float(s) * pol)
+        held = apply_sticky_hold(
+            entry_signs, hold_days=h, rebalance_mode=rebalance_mode
+        )
+        closes = [c for _, c in pairs_l]
+        dates = [d for d, _ in pairs_l]
+        for i, pos in enumerate(held):
+            holding_records.append({"date": dates[i], "code": code, "sign": pos})
+            if pos is None or pos == 0.0:
+                continue
+            if rebalance_mode == "fixed_horizon" and i % h != 0:
+                continue
+            fwd = multi_day_forward_return(closes, hold_days=h, entry_index=i)
+            if fwd is None:
+                continue
+            n_active += 1
+            signed_returns.append(float(pos) * float(fwd))
+
+    gross = mean(signed_returns) if signed_returns else None
+    net = (gross - am_cost) if gross is not None else None
+    n_code_days = len(holding_records)
+    return {
+        "signal_id": "c21_multi_day_hold_reversion",
+        "hypothesis_class": CLASS_MULTI_DAY_HOLD,
+        "hold_days": h,
+        "signal_polarity": int(polarity),
+        "gross_signed_mean_active": gross,
+        "net_one_way_mean_active": net,
+        "amortized_one_way_cost": am_cost,
+        "one_way_cost": float(one_way_cost),
+        "n_active_positions": n_active,
+        "n_signed_returns": len(signed_returns),
+        "occurrence": {
+            "activation_rate": (
+                float(n_active) / float(n_code_days) if n_code_days else None
+            ),
+            "n_active": n_active,
+        },
+        **_freeze(),
+        "note": "Mean-reversion entry polarity=-1. Not eval sign flip. Not READY.",
+    }
+
+
 def evaluate_one_strategy(
     strategy: Mapping[str, Any],
     ctx: BatchDataContext,
@@ -1347,6 +1921,7 @@ def evaluate_one_strategy(
     sid = str(strategy.get("strategy_id") or "")
     family = str(strategy.get("family_id") or "")
     params = dict(strategy.get("params") or {})
+    logic_id = str(strategy.get("logic_id") or "")
     period_rows: list[dict[str, Any]] = []
     errors: list[str] = []
 
@@ -1372,7 +1947,7 @@ def evaluate_one_strategy(
                 **ev,
             }
             period_rows.append(row)
-        except Exception as exc:  # fail-one-continue at period level
+        except Exception as exc:
             errors.append(f"{pid}:{type(exc).__name__}:{exc}")
             period_rows.append(
                 {
@@ -1416,9 +1991,10 @@ def evaluate_one_strategy(
     )
     choice = choose_sign(both, near_zero_abs=near_zero_abs)
     chosen_sign = choice.get("chosen_sign")
-    # Metrics on chosen side nets
-    side_key = "original" if chosen_sign == SIGN_ORIGINAL else (
-        "inverted" if chosen_sign == SIGN_INVERTED else "original"
+    side_key = (
+        "original"
+        if chosen_sign == SIGN_ORIGINAL
+        else ("inverted" if chosen_sign == SIGN_INVERTED else "original")
     )
     side = dict(both.get(side_key) or {})
     side_nets = list(side.get("nets") or nets)
@@ -1433,6 +2009,9 @@ def evaluate_one_strategy(
 
     return {
         "strategy_id": sid,
+        "logic_id": logic_id,
+        "logic_fingerprint": strategy.get("logic_fingerprint"),
+        "thesis": strategy.get("thesis"),
         "family_id": family,
         "params": params,
         "n_periods_ok": len(ok_rows),
@@ -1475,7 +2054,6 @@ def screen_strategy_result(
     if any(r.get("status") == "data_missing" for r in period_rows) and n_ok == 0:
         reasons.append(SCREEN_DATA_MISSING)
     if result.get("errors"):
-        # errors alone don't reject if some periods ok
         if n_ok == 0:
             reasons.append(SCREEN_EVAL_ERROR)
 
@@ -1484,11 +2062,9 @@ def screen_strategy_result(
     if mean_gross is not None and mean_net is not None:
         try:
             g, n = float(mean_gross), float(mean_net)
-            # collapse: gross positive-ish but net near-zero/negative much worse
             if abs(g) >= near_zero_abs and abs(n) < near_zero_abs:
                 reasons.append(SCREEN_POST_COST_COLLAPSE)
             if g > near_zero_abs and n < -near_zero_abs and (g - n) > abs(g):
-                # cost ate more than gross magnitude
                 if SCREEN_POST_COST_COLLAPSE not in reasons:
                     reasons.append(SCREEN_POST_COST_COLLAPSE)
         except (TypeError, ValueError):
@@ -1517,7 +2093,6 @@ def screen_strategy_result(
         except (TypeError, ValueError):
             pass
 
-    # de-dupe preserve order
     seen: set[str] = set()
     uniq: list[str] = []
     for r in reasons:
@@ -1528,6 +2103,7 @@ def screen_strategy_result(
     survived = len(uniq) == 0 and n_ok > 0
     return {
         "strategy_id": result.get("strategy_id"),
+        "logic_id": result.get("logic_id"),
         "family_id": result.get("family_id"),
         "survived": survived,
         "reject_reasons": uniq,
@@ -1549,9 +2125,10 @@ def run_batch_eval(
     synthetic: bool = False,
     progress_cb: Callable[[int, int, str], None] | None = None,
 ) -> dict[str, Any]:
-    """Batch-evaluate accepted strategies; fail-one-continue; screen survivors.
+    """Batch-evaluate distinct logics (after dedup); fail-one-continue.
 
     Does **not** pick human main candidates. continuous paper UNARMED.
+    Does **not** retune frozen default-path representatives.
     """
     t0 = time.perf_counter()
     cfg = config or MassFactoryConfig(
@@ -1561,7 +2138,14 @@ def run_batch_eval(
     if ctx is None:
         ctx = load_batch_data_context(cfg, synthetic=synthetic)
 
-    strategies = list(generation.get("strategies") or [])
+    # Prefer after-dedup strategies (distinct logics)
+    if cfg.eval_after_dedup and generation.get("strategies_after_dedup"):
+        strategies = list(generation.get("strategies_after_dedup") or [])
+        eval_set = "after_dedup"
+    else:
+        strategies = list(generation.get("strategies") or [])
+        eval_set = "generated_all"
+
     results: list[dict[str, Any]] = []
     screens: list[dict[str, Any]] = []
     n_fail = 0
@@ -1585,6 +2169,7 @@ def run_batch_eval(
                 raise
             res = {
                 "strategy_id": sid,
+                "logic_id": strat.get("logic_id"),
                 "family_id": strat.get("family_id"),
                 "params": strat.get("params"),
                 "status": "eval_error",
@@ -1613,7 +2198,6 @@ def run_batch_eval(
     survivors = [s for s in screens if s.get("survived")]
     rejected = [s for s in screens if not s.get("survived")]
 
-    # Rank survivors by |t| then mean_net (research ranking only)
     def _rank_key(s: Mapping[str, Any]) -> tuple[float, float]:
         t = s.get("t_stat")
         m = s.get("mean_net")
@@ -1623,16 +2207,17 @@ def run_batch_eval(
 
     survivors_ranked = sorted(survivors, key=_rank_key, reverse=True)
 
-    # Family summary for survivors (few top per family)
     by_family: dict[str, list[dict[str, Any]]] = {}
+    by_logic: dict[str, list[dict[str, Any]]] = {}
     for s in survivors_ranked:
         by_family.setdefault(str(s.get("family_id")), []).append(dict(s))
+        by_logic.setdefault(str(s.get("logic_id") or ""), []).append(dict(s))
     family_top: dict[str, list[dict[str, Any]]] = {
         f: rows[:3] for f, rows in sorted(by_family.items())
     }
     survivor_family_dist = {f: len(v) for f, v in by_family.items()}
+    survivor_logic_dist = {k: len(v) for k, v in by_logic.items() if k}
 
-    # Reject reason histogram
     reason_hist: dict[str, int] = {}
     for s in rejected:
         for r in s.get("reject_reasons") or ["unspecified"]:
@@ -1643,6 +2228,7 @@ def run_batch_eval(
         {
             "rank": i + 1,
             "strategy_id": s.get("strategy_id"),
+            "logic_id": s.get("logic_id"),
             "family_id": s.get("family_id"),
             "mean_net": s.get("mean_net"),
             "t_stat": s.get("t_stat"),
@@ -1659,7 +2245,7 @@ def run_batch_eval(
         "paper_ran": False,
         "note": (
             "Optional short paper only for sample subset (top-k); "
-            "not 100 full papers. continuous paper UNARMED this wave."
+            "not full papers. continuous paper UNARMED this wave."
         ),
     }
     if cfg.paper_sample_k > 0 and survivors_ranked:
@@ -1673,6 +2259,7 @@ def run_batch_eval(
         "wave": MASS_FACTORY_WAVE,
         "config": cfg.to_dict(),
         "data_load_notes": ctx.load_notes,
+        "eval_set": eval_set,
         "n_strategies_evaluated": len(strategies),
         "n_eval_ok": n_ok_eval,
         "n_eval_fail": n_fail,
@@ -1680,10 +2267,17 @@ def run_batch_eval(
         "n_survivors": len(survivors),
         "n_screen_rejected": len(rejected),
         "wall_time_sec": round(wall, 3),
+        "n_generated": generation.get("n_generated")
+        or generation.get("n_generated_accepted"),
+        "n_unique_logic": generation.get("n_unique_logic"),
+        "n_after_dedup": generation.get("n_after_dedup"),
+        "n_numeric_variant": generation.get("n_numeric_variant"),
         "n_ge_100_generated": bool(generation.get("n_ge_100")),
         "n_generated_accepted": generation.get("n_generated_accepted"),
         "generation_family_distribution": generation.get("family_distribution"),
+        "generation_logic_distribution": generation.get("logic_distribution"),
         "survivor_family_distribution": survivor_family_dist,
+        "survivor_logic_distribution": survivor_logic_dist,
         "family_top_survivors": family_top,
         "ranking": ranking,
         "reject_reason_histogram": reason_hist,
@@ -1691,11 +2285,13 @@ def run_batch_eval(
         "results": results,
         "paper": paper_note,
         "human_main_candidates_selected": False,
+        "frozen_default_path": list(FROZEN_DEFAULT_PATH),
+        "frozen_defaults_retuned": False,
         "note": (
-            "Auto screen only. Do NOT treat survivors as human main candidates "
-            "or research_candidate production defaults this wave. "
-            "Deeper class_hyp re-eval required before any promotion. "
-            "Mass/READY/ops GO remain closed."
+            "Auto screen on distinct logics only (after near-dup). "
+            "Do NOT treat survivors as human main candidates or "
+            "research_candidate production defaults. "
+            "3 frozen defaults untouched. Mass/READY/ops GO remain closed."
         ),
         **_freeze(),
     }
@@ -1711,13 +2307,15 @@ def run_mass_factory(
     out_dir: str | Path | None = None,
     progress: bool = False,
 ) -> dict[str, Any]:
-    """End-to-end: generate → batch eval → screen → optional write logs."""
+    """End-to-end: generate logics → near-dup → batch eval → screen."""
     cfg = config or MassFactoryConfig(
         seed=seed,
         n=n,
         family_ratios=dict(family_ratios or DEFAULT_FAMILY_RATIOS),
     )
-    if seed != DEFAULT_SEED or n != DEFAULT_N or family_ratios is not None:
+    if config is None and (
+        seed != DEFAULT_SEED or n != DEFAULT_N or family_ratios is not None
+    ):
         cfg = MassFactoryConfig(
             seed=int(seed),
             n=int(n),
@@ -1732,6 +2330,9 @@ def run_mass_factory(
             near_zero_abs=cfg.near_zero_abs,
             min_activation=cfg.min_activation,
             fail_one_continue=cfg.fail_one_continue,
+            allow_numeric_variants=cfg.allow_numeric_variants,
+            near_dup_threshold=cfg.near_dup_threshold,
+            eval_after_dedup=cfg.eval_after_dedup,
         )
 
     t0 = time.perf_counter()
@@ -1739,11 +2340,15 @@ def run_mass_factory(
     ctx = load_batch_data_context(cfg, synthetic=synthetic)
 
     def _cb(i: int, total: int, sid: str) -> None:
-        if progress and (i == 1 or i == total or i % 10 == 0):
+        if progress and (i == 1 or i == total or i % 5 == 0):
             print(f"[mass-factory] eval {i}/{total} {sid}", flush=True)
 
     batch = run_batch_eval(
-        gen, config=cfg, ctx=ctx, synthetic=synthetic, progress_cb=_cb if progress else None
+        gen,
+        config=cfg,
+        ctx=ctx,
+        synthetic=synthetic,
+        progress_cb=_cb if progress else None,
     )
     wall = time.perf_counter() - t0
 
@@ -1754,33 +2359,58 @@ def run_mass_factory(
         "generation": {
             k: gen[k]
             for k in gen
-            if k not in {"strategies", "gen_rejected", "families_document"}
+            if k
+            not in {
+                "strategies",
+                "strategies_after_dedup",
+                "near_dup_dropped",
+                "gen_rejected",
+                "families_document",
+                "logic_templates_document",
+            }
         },
         "generation_strategies": gen.get("strategies"),
+        "strategies_after_dedup": gen.get("strategies_after_dedup"),
+        "near_dup_dropped": gen.get("near_dup_dropped"),
         "generation_rejected": gen.get("gen_rejected"),
         "families": family_definitions_document(),
+        "logic_templates": logic_templates_document(),
         "batch": {
-            k: batch[k]
-            for k in batch
-            if k not in {"results", "screens"}
+            k: batch[k] for k in batch if k not in {"results", "screens"}
         },
         "batch_ranking": batch.get("ranking"),
         "batch_screens": batch.get("screens"),
         "batch_results": batch.get("results"),
         "summary": {
             "n_requested": gen.get("n_requested"),
+            "n_generated": gen.get("n_generated"),
             "n_generated_accepted": gen.get("n_generated_accepted"),
+            "n_unique_logic": gen.get("n_unique_logic"),
+            "n_numeric_variant": gen.get("n_numeric_variant"),
+            "n_after_dedup": gen.get("n_after_dedup"),
+            "n_dropped_near_dup": gen.get("n_dropped_near_dup"),
+            "unique_logic_ids": gen.get("unique_logic_ids"),
+            "logic_distribution": gen.get("logic_distribution"),
+            "logic_diversity_ok": gen.get("logic_diversity_ok"),
             "n_ge_100": gen.get("n_ge_100"),
             "n_families_used": gen.get("n_families_used"),
             "anti_bias_ok": gen.get("anti_bias_ok"),
             "family_distribution": gen.get("family_distribution"),
             "n_survivors": batch.get("n_survivors"),
+            "n_strategies_evaluated": batch.get("n_strategies_evaluated"),
+            "eval_set": batch.get("eval_set"),
             "fail_rate": batch.get("fail_rate"),
             "wall_time_sec": round(wall, 3),
-            "survivor_family_distribution": batch.get("survivor_family_distribution"),
+            "survivor_family_distribution": batch.get(
+                "survivor_family_distribution"
+            ),
+            "survivor_logic_distribution": batch.get(
+                "survivor_logic_distribution"
+            ),
             "top5": (batch.get("ranking") or [])[:5],
             "human_main_candidates_selected": False,
             "continuous_paper": CONTINUOUS_PAPER,
+            "frozen_defaults_retuned": False,
         },
         **_freeze(),
     }
@@ -1791,7 +2421,9 @@ def run_mass_factory(
     return pack
 
 
-def write_factory_outputs(pack: Mapping[str, Any], out_dir: str | Path) -> dict[str, str]:
+def write_factory_outputs(
+    pack: Mapping[str, Any], out_dir: str | Path
+) -> dict[str, str]:
     """Write machine-readable factory outputs under out_dir."""
     od = Path(out_dir)
     od.mkdir(parents=True, exist_ok=True)
@@ -1799,7 +2431,9 @@ def write_factory_outputs(pack: Mapping[str, Any], out_dir: str | Path) -> dict[
 
     def _w(name: str, obj: Any) -> None:
         p = od / name
-        p.write_text(json.dumps(obj, indent=2, default=str) + "\n", encoding="utf-8")
+        p.write_text(
+            json.dumps(obj, indent=2, default=str) + "\n", encoding="utf-8"
+        )
         paths[name] = str(p)
 
     _w("factory_run.json", pack)
@@ -1808,10 +2442,22 @@ def write_factory_outputs(pack: Mapping[str, Any], out_dir: str | Path) -> dict[
         {
             "summary": pack.get("summary"),
             "generation": pack.get("generation"),
-            "family_distribution": (pack.get("summary") or {}).get("family_distribution"),
+            "family_distribution": (pack.get("summary") or {}).get(
+                "family_distribution"
+            ),
+            "logic_distribution": (pack.get("summary") or {}).get(
+                "logic_distribution"
+            ),
+            "n_unique_logic": (pack.get("summary") or {}).get("n_unique_logic"),
+            "n_after_dedup": (pack.get("summary") or {}).get("n_after_dedup"),
+            "n_numeric_variant": (pack.get("summary") or {}).get(
+                "n_numeric_variant"
+            ),
         },
     )
     _w("strategies.json", pack.get("generation_strategies") or [])
+    _w("strategies_after_dedup.json", pack.get("strategies_after_dedup") or [])
+    _w("near_dup_dropped.json", pack.get("near_dup_dropped") or [])
     _w("ranking.json", pack.get("batch_ranking") or [])
     _w(
         "screens.json",
@@ -1823,10 +2469,14 @@ def write_factory_outputs(pack: Mapping[str, Any], out_dir: str | Path) -> dict[
             "survivor_family_distribution": (pack.get("batch") or {}).get(
                 "survivor_family_distribution"
             ),
-            "family_top_survivors": (pack.get("batch") or {}).get("family_top_survivors"),
+            "survivor_logic_distribution": (pack.get("batch") or {}).get(
+                "survivor_logic_distribution"
+            ),
+            "family_top_survivors": (pack.get("batch") or {}).get(
+                "family_top_survivors"
+            ),
         },
     )
-    # Compact results without full period holding dumps
     compact_results = []
     for r in pack.get("batch_results") or []:
         compact_results.append(
@@ -1834,6 +2484,9 @@ def write_factory_outputs(pack: Mapping[str, Any], out_dir: str | Path) -> dict[
                 k: r.get(k)
                 for k in (
                     "strategy_id",
+                    "logic_id",
+                    "logic_fingerprint",
+                    "thesis",
                     "family_id",
                     "params",
                     "n_periods_ok",
@@ -1853,23 +2506,41 @@ def write_factory_outputs(pack: Mapping[str, Any], out_dir: str | Path) -> dict[
         )
     _w("results_compact.json", compact_results)
     _w("families.json", pack.get("families") or family_definitions_document())
+    _w(
+        "logic_templates.json",
+        pack.get("logic_templates") or logic_templates_document(),
+    )
+    _w("frozen_defaults.json", list(FROZEN_DEFAULT_PATH))
 
-    # Markdown summary
     sm = pack.get("summary") or {}
     lines = [
-        f"# Mass strategy factory run — {MASS_FACTORY_WAVE}",
+        f"# Mass strategy logic-diversity factory run — {MASS_FACTORY_WAVE}",
         "",
         f"- version: `{MASS_FACTORY_VERSION}`",
         f"- n_requested: **{sm.get('n_requested')}**",
-        f"- n_generated_accepted: **{sm.get('n_generated_accepted')}** (N≥100: **{sm.get('n_ge_100')}**)",
+        f"- n_generated: **{sm.get('n_generated')}**",
+        f"- n_unique_logic: **{sm.get('n_unique_logic')}**",
+        f"- n_numeric_variant: **{sm.get('n_numeric_variant')}**",
+        f"- n_after_dedup: **{sm.get('n_after_dedup')}**",
+        f"- n_dropped_near_dup: **{sm.get('n_dropped_near_dup')}**",
+        f"- logic_diversity_ok: **{sm.get('logic_diversity_ok')}**",
         f"- n_families_used: **{sm.get('n_families_used')}**",
-        f"- anti_bias_ok: **{sm.get('anti_bias_ok')}**",
+        f"- n_strategies_evaluated: **{sm.get('n_strategies_evaluated')}** "
+        f"(eval_set={sm.get('eval_set')})",
         f"- n_survivors: **{sm.get('n_survivors')}**",
         f"- fail_rate: **{sm.get('fail_rate')}**",
         f"- wall_time_sec: **{sm.get('wall_time_sec')}**",
         f"- continuous_paper: **{sm.get('continuous_paper')}**",
+        f"- frozen_defaults_retuned: **{sm.get('frozen_defaults_retuned')}**",
         f"- human_main_candidates_selected: **{sm.get('human_main_candidates_selected')}**",
-        f"- mass_research: **{MASS_RESEARCH}** · READY: **{READY_DECLARED}** · ops GO: **{OPERATIONAL_GO}**",
+        f"- mass_research: **{MASS_RESEARCH}** · READY: **{READY_DECLARED}** · "
+        f"ops GO: **{OPERATIONAL_GO}**",
+        "",
+        "## Logic distribution (generated)",
+        "",
+        "```json",
+        json.dumps(sm.get("logic_distribution") or {}, indent=2),
+        "```",
         "",
         "## Family distribution (generated)",
         "",
@@ -1877,10 +2548,10 @@ def write_factory_outputs(pack: Mapping[str, Any], out_dir: str | Path) -> dict[
         json.dumps(sm.get("family_distribution") or {}, indent=2),
         "```",
         "",
-        "## Survivor family distribution",
+        "## Survivor logic distribution",
         "",
         "```json",
-        json.dumps(sm.get("survivor_family_distribution") or {}, indent=2),
+        json.dumps(sm.get("survivor_logic_distribution") or {}, indent=2),
         "```",
         "",
         "## Top 5 (research ranking only — not human main candidates)",
@@ -1889,23 +2560,33 @@ def write_factory_outputs(pack: Mapping[str, Any], out_dir: str | Path) -> dict[
     for row in sm.get("top5") or []:
         lines.append(
             f"- rank {row.get('rank')}: `{row.get('strategy_id')}` "
-            f"family={row.get('family_id')} mean_net={row.get('mean_net')} "
-            f"t={row.get('t_stat')} sign={row.get('chosen_sign')}"
+            f"logic={row.get('logic_id')} family={row.get('family_id')} "
+            f"mean_net={row.get('mean_net')} t={row.get('t_stat')} "
+            f"sign={row.get('chosen_sign')}"
         )
     lines.extend(
         [
+            "",
+            "## Frozen defaults (not retuned)",
+            "",
+            "```json",
+            json.dumps(
+                [r["representative_id"] for r in FROZEN_DEFAULT_PATH], indent=2
+            ),
+            "```",
             "",
             "## Re-run recipe",
             "",
             "```bash",
             "python scripts/run_mass_strategy_batch.py --seed 870816 --n 100 \\",
-            "  --out-dir .glm-logs/w0816v_w87_mass/",
+            "  --out-dir .glm-logs/w0816w_w88_logic/",
             "```",
             "",
             "Synthetic (tests / no mirrors):",
             "",
             "```bash",
-            "python scripts/run_mass_strategy_batch.py --synthetic --n 100 --out-dir /tmp/msf",
+            "python scripts/run_mass_strategy_batch.py --synthetic --n 100 "
+            "--out-dir /tmp/msf",
             "```",
             "",
         ]
@@ -1916,32 +2597,102 @@ def write_factory_outputs(pack: Mapping[str, Any], out_dir: str | Path) -> dict[
     return paths
 
 
+# ---------------------------------------------------------------------------
+# CF minimal path (honest blocker if no mass-factory CF job)
+# ---------------------------------------------------------------------------
+
+
+def try_cf_minimal_mass_batch() -> dict[str, Any]:
+    """Prefer a stable minimal CF job returning one small batch result.
+
+    Status
+    ------
+    **Blocked for mass-logic batch:** CF infrastructure today exposes
+    single-shot tip signal jobs (``research.single_shot_job``) and D1/R2
+    planes — not a mass logic-diversity factory worker. Scaling to 200/500
+    on CF is explicitly deferred.
+
+    Local batch remains the supported path via ``run_mass_factory``.
+    """
+    return {
+        "status": "blocked",
+        "wave": MASS_FACTORY_WAVE,
+        "version": MASS_FACTORY_VERSION,
+        "blocker": (
+            "No CF worker / queue job for mass logic-diversity factory. "
+            "Existing CF path is single_shot_job (D1 tip signal + R2 artifact) "
+            "— orthogonal to multi-period offline logic batch eval. "
+            "Do not force 200/500 CF scale this wave."
+        ),
+        "existing_cf_paths": [
+            "research.single_shot_job.execute_single_shot_job",
+            "research.single_shot_job.execute_multiday_signal_eval",
+            "packages/edge/cf_platform (ingestion / ops — not mass factory)",
+        ],
+        "supported_path": "local run_mass_factory / scripts/run_mass_strategy_batch.py",
+        "scale_deferred": True,
+        "n_cf_batch": 0,
+        **_freeze(),
+    }
+
+
+def llm_logic_entry_status() -> dict[str, Any]:
+    """Optional LLM entry for different profit hypotheses (not window tweaks)."""
+    return {
+        "status": "unconnected",
+        "wave": MASS_FACTORY_WAVE,
+        "note": (
+            "research.idea_generator emits ResearchIdea declarations only "
+            "(hypothesis class mix). It is not wired to the logic factory "
+            "evaluator or profit-hypothesis LLM prompts. "
+            "If connected later: prompt for different economic theses "
+            "(info source / entry / position / thesis), never hold/mom/frac "
+            "window tweaks; always through evaluator."
+        ),
+        "hook": "research.idea_generator.generate_idea_payloads",
+        "always_through_evaluator": True,
+        **_freeze(),
+    }
+
+
 def mass_factory_document() -> dict[str, Any]:
-    """Public document for the mass strategy factory."""
+    """Public document for the logic-diversity mass strategy factory."""
     return {
         "version": MASS_FACTORY_VERSION,
         "wave": MASS_FACTORY_WAVE,
         "purpose": (
-            "Generate 100+ diverse strategies across families and "
-            "batch-evaluate automatically (research factory)."
+            "Generate distinct economic logic templates and batch-evaluate "
+            "after near-dup (research factory). Not hold/mom/frac grid mass."
         ),
+        "primary_metrics": [
+            "n_generated",
+            "n_unique_logic",
+            "n_numeric_variant",
+            "n_after_dedup",
+        ],
+        "logic_templates": logic_templates_document(),
         "families": family_definitions_document(),
         "default_config": MassFactoryConfig().to_dict(),
+        "frozen_default_path": list(FROZEN_DEFAULT_PATH),
+        "cf_minimal": try_cf_minimal_mass_batch(),
+        "llm_entry": llm_logic_entry_status(),
         "not_goals": [
-            "polishing 3 candidates",
+            "hold/mom/frac grid as 100 strategies",
+            "retune 3 frozen defaults (mom5/mom3/fund)",
             "operational GO / Mass / READY / live",
             "simple_daily_sign mass as diversity",
             "S1–S5 un-reject",
-            "mom grid only as the 100",
             "human main candidate selection this wave",
+            "CF 200/500 scale",
         ],
         "eval_tradeoffs": (
-            "Lite multi-year (Q4 windows + code subsample) so N>=100 fits "
-            "wall-time. Survivors need deeper class_hyp re-eval before promotion."
+            "Lite multi-year (Q4 windows + code subsample). "
+            "Eval after near-dup only. Survivors need deeper class_hyp "
+            "re-eval before promotion."
         ),
         "continuous_paper": CONTINUOUS_PAPER,
         **_freeze(),
-        "proof": "docs/proof/w0816v_w87_mass_strategy_factory_20260817.md",
+        "proof": "docs/proof/w0816w_w88_logic_diversity_factory_20260817.md",
     }
 
 
@@ -1959,14 +2710,26 @@ __all__ = [
     "DEFAULT_FAMILY_RATIOS",
     "DEFAULT_SEED",
     "DEFAULT_N",
+    "DEFAULT_NEAR_DUP_THRESHOLD",
+    "DEFAULT_MAX_FAMILY_SHARE",
+    "FROZEN_DEFAULT_PATH",
+    "LOGIC_TEMPLATES",
+    "LOGIC_TEMPLATE_IDS",
+    "LogicTemplate",
     "MassFactoryConfig",
     "GeneratedStrategy",
     "BatchDataContext",
+    "REJECT_SIMPLE_DAILY_SIGN",
+    "REJECT_LOOKAHEAD",
+    "REJECT_NEAR_DUPLICATE",
     "family_definitions_document",
+    "logic_templates_document",
     "mass_factory_document",
     "stable_strategy_id",
     "validate_strategy_at_gen",
     "generate_strategy_batch",
+    "similarity_score",
+    "dedup_strategies",
     "evaluate_vol_risk_adjusted_on_bars",
     "load_batch_data_context",
     "evaluate_one_strategy",
@@ -1974,4 +2737,6 @@ __all__ = [
     "run_batch_eval",
     "run_mass_factory",
     "write_factory_outputs",
+    "try_cf_minimal_mass_batch",
+    "llm_logic_entry_status",
 ]
