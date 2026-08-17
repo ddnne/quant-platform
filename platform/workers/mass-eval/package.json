@@ -1,0 +1,16 @@
+{
+  "name": "quant-platform-mass-eval",
+  "private": true,
+  "version": "0.1.0",
+  "description": "W90 multi-logic multi-period mass eval (research only, Mass OFF)",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "tail": "wrangler tail",
+    "dev": "wrangler dev"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250801.0",
+    "typescript": "^5.8.0",
+    "wrangler": "^4.20.0"
+  }
+}

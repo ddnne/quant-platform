@@ -67,7 +67,11 @@ def test_freezes_closed():
     assert READY_DECLARED is False
     assert OPERATIONAL_GO is False
     assert CONTINUOUS_PAPER == "UNARMED"
-    assert "W89" in MASS_FACTORY_WAVE or "W88" in MASS_FACTORY_WAVE
+    assert (
+        "W90" in MASS_FACTORY_WAVE
+        or "W89" in MASS_FACTORY_WAVE
+        or "W88" in MASS_FACTORY_WAVE
+    )
     assert MASS_FACTORY_VERSION.startswith("mass-strategy-factory/")
     assert doc["frozen_defaults_retuned"] is False
 
