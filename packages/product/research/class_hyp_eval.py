@@ -45,6 +45,7 @@ from features.class_signals import (
     CLASS_FLOW_DEMAND,
     CLASS_FUNDAMENTALS_PRICE,
     CLASS_INDEX_VOL_REGIME,
+    CLASS_OPTIONS_VOL_REGIME,
     CLASS_MACRO_CONDITIONED,
     CLASS_MULTI_DAY_HOLD,
     CLASS_MULTI_FACTOR,
@@ -92,8 +93,23 @@ from features.class_signals import (
     SIGNAL_ID_NKY_VOL_ABS_LEVEL,
     SIGNAL_ID_NKY_VOL_TERM_LEVELS,
     SIGNAL_ID_NKY_VOL_TERM_RATIO,
+    SIGNAL_ID_OPT225_BASEVOL_ABS,
+    SIGNAL_ID_OPT225_BASEVOL_TERM_LEVELS,
+    SIGNAL_ID_OPT225_BASEVOL_TERM_RATIO,
+    SIGNAL_ID_OPT225_ATM_IV_ABS,
+    SIGNAL_ID_OPT225_ATM_IV_TERM_LEVELS,
+    SIGNAL_ID_OPT225_ATM_IV_TERM_RATIO,
+    SIGNAL_ID_OPT225_SPREAD_ABS,
+    SIGNAL_ID_OPT225_SPREAD_CHANGE,
     SIGNAL_ID_RATE_CURVE_XS,
     SIGNAL_ID_RATE_LEVEL_XS,
+    DEFAULT_OPT225_VOL_HIGH_THRESHOLD,
+    DEFAULT_OPT225_VOL_LOW_THRESHOLD,
+    DEFAULT_OPT225_SPREAD_HIGH_THRESHOLD,
+    DEFAULT_OPT225_SPREAD_LOW_THRESHOLD,
+    DEFAULT_OPT225_VOL_EXPAND_RATIO,
+    DEFAULT_OPT225_VOL_COMPRESS_RATIO,
+    OPT225_SPREAD_CONVENTION,
     SUPPORTED_HOLD_DAYS,
     TRADING_DAYS_ANN,
     amortized_one_way_cost,
@@ -109,6 +125,7 @@ from features.class_signals import (
     compute_nky_vol_abs_level_signal,
     compute_nky_vol_term_levels_signal,
     compute_nky_vol_term_ratio_signal,
+    compute_opt225_vol_signal,
     compute_rate_curve_xs_signal,
     compute_rate_level_xs_signal,
     cross_section_rank_signs,
@@ -2196,6 +2213,207 @@ def evaluate_nky_vol_term_ratio_on_bars(
         low_threshold=DEFAULT_NKY_VOL_LOW_THRESHOLD,
         expand_ratio=expand_ratio,
         compress_ratio=compress_ratio,
+    )
+
+
+_OPT225_SIGNAL_IDS: dict[str, str] = {
+    "opt225_basevol_abs_level": SIGNAL_ID_OPT225_BASEVOL_ABS,
+    "opt225_basevol_term_levels": SIGNAL_ID_OPT225_BASEVOL_TERM_LEVELS,
+    "opt225_basevol_term_ratio": SIGNAL_ID_OPT225_BASEVOL_TERM_RATIO,
+    "opt225_atm_iv_abs_level": SIGNAL_ID_OPT225_ATM_IV_ABS,
+    "opt225_atm_iv_term_levels": SIGNAL_ID_OPT225_ATM_IV_TERM_LEVELS,
+    "opt225_atm_iv_term_ratio": SIGNAL_ID_OPT225_ATM_IV_TERM_RATIO,
+    "opt225_iv_base_spread_abs": SIGNAL_ID_OPT225_SPREAD_ABS,
+    "opt225_iv_base_spread_change": SIGNAL_ID_OPT225_SPREAD_CHANGE,
+}
+
+
+def evaluate_opt225_vol_on_bars(
+    bars_by_code: Mapping[str, Sequence[tuple[str, float]]],
+    opt225_series: Mapping[str, Any] | None,
+    *,
+    mode: str = "opt225_basevol_abs_level",
+    series_kind: str = "basevol",
+    momentum_n: int = 5,
+    hold_days: int = 10,
+    long_frac: float = 0.3,
+    short_frac: float = 0.3,
+    one_way_cost: float = DEFAULT_ONE_WAY_COST,
+    high_threshold: float = DEFAULT_OPT225_VOL_HIGH_THRESHOLD,
+    low_threshold: float = DEFAULT_OPT225_VOL_LOW_THRESHOLD,
+    expand_ratio: float = DEFAULT_OPT225_VOL_EXPAND_RATIO,
+    compress_ratio: float = DEFAULT_OPT225_VOL_COMPRESS_RATIO,
+) -> dict[str, Any]:
+    """options_225 BaseVol / ATM IV / spread regime × CS book."""
+    n = int(momentum_n)
+    h = int(hold_days)
+    am_cost = amortized_one_way_cost(one_way_cost, h)
+    m = str(mode or "opt225_basevol_abs_level")
+    sk = str(series_kind or "basevol")
+    series = opt225_series or {}
+    # Accept either a single regime map or a bundle keyed by series_kind.
+    if "rv_abs_by_date" not in series and sk in series:
+        series = dict(series.get(sk) or {})
+    short_by = dict(series.get("rv_short_by_date") or {})
+    long_by = dict(series.get("rv_long_by_date") or {})
+    abs_by = dict(
+        series.get("rv_abs_by_date")
+        or series.get("level_by_date")
+        or series.get("rv_short_by_date")
+        or {}
+    )
+    transform = "abs_level"
+    if "term_ratio" in m:
+        transform = "term_ratio"
+    elif "term_levels" in m:
+        transform = "term_levels"
+
+    sid = _OPT225_SIGNAL_IDS.get(m, SIGNAL_ID_OPT225_BASEVOL_ABS)
+    feature_id = {
+        "basevol": "opt225_basevol_level",
+        "atm_iv": "opt225_atm_iv_level",
+        "spread": "opt225_iv_base_spread",
+        "spread_change": "opt225_iv_base_spread",
+    }.get(sk, "opt225_basevol_level")
+
+    by_date: dict[str, dict[str, float | None]] = {}
+    dates_by_code: dict[str, list[str]] = {}
+    closes_list: dict[str, list[float]] = {}
+    for code, pairs in bars_by_code.items():
+        if str(code).startswith("__"):
+            continue
+        pairs_l = list(pairs)
+        moms = momentum_series(pairs_l, n=n)
+        for d, mom in moms:
+            by_date.setdefault(d, {})[code] = mom
+        dates_by_code[code] = [d for d, _ in pairs_l]
+        closes_list[code] = [c for _, c in pairs_l]
+
+    dates = sorted(by_date.keys())
+    daily_adj: dict[str, dict[str, float | None]] = {c: {} for c in dates_by_code}
+    n_regime_gap = 0
+    regime_counts: dict[str, int] = {}
+    for d in dates:
+        ranks = cross_section_rank_signs(
+            by_date[d], long_frac=long_frac, short_frac=short_frac
+        )
+        dk = str(d)[:10]
+        for code, cs_sign in ranks.items():
+            rec = compute_opt225_vol_signal(
+                mode=transform,
+                cs_sign=cs_sign,
+                vol_level=abs_by.get(dk),
+                short_vol=short_by.get(dk),
+                long_vol=long_by.get(dk),
+                high_threshold=high_threshold,
+                low_threshold=low_threshold,
+                expand_ratio=expand_ratio,
+                compress_ratio=compress_ratio,
+                signal_id=sid,
+                feature_id=feature_id,
+                series_kind=sk,
+                code=code,
+                date=d,
+            )
+            if rec.get("regime") is None and rec.get("value") is None:
+                n_regime_gap += 1
+            reg = rec.get("regime")
+            if reg is not None:
+                regime_counts[str(reg)] = regime_counts.get(str(reg), 0) + 1
+            daily_adj.setdefault(code, {})[d] = rec.get("value")
+
+    signed_returns: list[float] = []
+    n_active = 0
+    holding_records: list[dict[str, Any]] = []
+    for code, dlist in dates_by_code.items():
+        entries = [daily_adj.get(code, {}).get(d) for d in dlist]
+        held = apply_sticky_hold(entries, hold_days=h, rebalance_mode="fixed_horizon")
+        closes = closes_list[code]
+        for i, pos in enumerate(held):
+            holding_records.append({"date": dlist[i], "code": code, "sign": pos})
+            if pos is None or pos == 0.0:
+                continue
+            if i % h != 0:
+                continue
+            fwd = multi_day_forward_return(closes, hold_days=h, entry_index=i)
+            if fwd is None:
+                continue
+            n_active += 1
+            signed_returns.append(float(pos) * float(fwd))
+
+    gross = mean(signed_returns) if signed_returns else None
+    net = (gross - am_cost) if gross is not None else None
+    n_code_days = len(holding_records)
+    n_trading_days = len({r["date"] for r in holding_records})
+    occ = occurrence_rate_multiday(
+        n_active=n_active,
+        n_code_days=n_code_days,
+        n_trading_days=n_trading_days,
+        n_codes=len(dates_by_code),
+        hold_days=h,
+        min_activation_rate=MIN_ACTIVATION_RATE_MULTIDAY,
+    )
+    return {
+        "signal_id": sid,
+        "hypothesis_class": CLASS_OPTIONS_VOL_REGIME,
+        "mode": m,
+        "series_kind": sk,
+        "transform": transform,
+        "momentum_n": n,
+        "hold_days": h,
+        "vol_source": series.get("source"),
+        "vol_dataset": series.get("dataset") or "derivatives_bars_daily_options_225",
+        "units": series.get("units") or "percent_vol_points",
+        "spread_convention": OPT225_SPREAD_CONVENTION,
+        "short_n": series.get("short_n"),
+        "long_n": series.get("long_n"),
+        "gross_signed_mean_active": gross,
+        "net_one_way_mean_active": net,
+        "amortized_one_way_cost": am_cost,
+        "one_way_cost": float(one_way_cost),
+        "n_active_positions": n_active,
+        "n_signed_returns": len(signed_returns),
+        "n_regime_gap": n_regime_gap,
+        "regime_counts": regime_counts,
+        "n_codes": len(dates_by_code),
+        "n_code_days": n_code_days,
+        "n_trading_days": n_trading_days,
+        "occurrence": occ,
+        **_freeze(),
+        "note": (
+            f"options_225 {sk} regime mode={m} × CS book. Canonical Nikkei vol SoT. "
+            "nky_vol_* remains proxy/compare only. Not READY / not Mass."
+        ),
+    }
+
+
+def load_opt225_regime_bundle_for_eval(
+    *,
+    log_dir: str | Path | None = None,
+    short_n: int = DEFAULT_NKY_VOL_SHORT_N,
+    long_n: int = DEFAULT_NKY_VOL_LONG_N,
+) -> dict[str, Any] | None:
+    """Load cached options_225 series and build regime maps for factory/CF."""
+    try:
+        from research.options_225_vol_series import (
+            DEFAULT_OPT225_LONG_N,
+            DEFAULT_OPT225_SHORT_N,
+            build_opt225_regime_bundle,
+            load_opt225_series_cache,
+        )
+    except Exception:
+        return None
+    cache = load_opt225_series_cache(log_dir)
+    if not cache:
+        return None
+    sn = int(short_n) if short_n else DEFAULT_OPT225_SHORT_N
+    ln = int(long_n) if long_n else DEFAULT_OPT225_LONG_N
+    return build_opt225_regime_bundle(
+        cache.get("base_vol_series") or [],
+        cache.get("atm_iv_series") or [],
+        cache.get("spread_series"),
+        short_n=sn,
+        long_n=ln,
     )
 
 

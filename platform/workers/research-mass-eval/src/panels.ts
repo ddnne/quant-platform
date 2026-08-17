@@ -268,6 +268,10 @@ export async function loadR2Panels(
         dataset?: string;
         source?: string;
         nky_vol_series?: PeriodPanel["nky_vol_series"];
+        opt225_regime?: PeriodPanel["opt225_regime"];
+        base_vol_series?: PeriodPanel["base_vol_series"];
+        atm_iv_series?: PeriodPanel["atm_iv_series"];
+        iv_base_spread?: PeriodPanel["iv_base_spread"];
         nky_proxy?: string;
       };
       const bars = normalizeBars(raw.bars || {});
@@ -292,6 +296,19 @@ export async function loadR2Panels(
           raw.nky_vol_series.rv_abs_by_date)
           ? raw.nky_vol_series
           : buildNkyVolFromBars(bars);
+      const opt225 = raw.opt225_regime || null;
+      const baseVolSeries =
+        raw.base_vol_series ||
+        (opt225 && opt225.basevol && opt225.basevol.rv_abs_by_date) ||
+        null;
+      const atmIvSeries =
+        raw.atm_iv_series ||
+        (opt225 && opt225.atm_iv && opt225.atm_iv.rv_abs_by_date) ||
+        null;
+      const ivBaseSpread =
+        raw.iv_base_spread ||
+        (opt225 && opt225.spread && opt225.spread.rv_abs_by_date) ||
+        null;
       panels.push({
         period_id: String(raw.period_id || p.period_id),
         year: Number(raw.year ?? p.year ?? 0),
@@ -300,10 +317,14 @@ export async function loadR2Panels(
         status: "ok",
         bars,
         nky_vol_series: nky,
+        opt225_regime: opt225,
+        base_vol_series: baseVolSeries,
+        atm_iv_series: atmIvSeries,
+        iv_base_spread: ivBaseSpread,
         source: raw.source || `r2:${keyUsed}`,
       });
       notes.push(
-        `loaded:${keyUsed}:codes=${nCodes}:nky=${nky?.source || "none"}`,
+        `loaded:${keyUsed}:codes=${nCodes}:nky=${nky?.source || "none"}:opt225=${opt225?.dataset || (opt225 ? "staged" : "none")}:basevol=${baseVolSeries ? Object.keys(baseVolSeries).length : 0}`,
       );
     } catch (e) {
       notes.push(`parse_error:${keyUsed}:${String(e)}`);

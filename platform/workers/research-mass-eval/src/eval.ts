@@ -526,6 +526,67 @@ export function evalLogicOnPanel(
         numParam(params, "expand_ratio", 1.2),
         numParam(params, "compress_ratio", 0.8),
       );
+    } else if (
+      family === "options_vol_regime" ||
+      lid.startsWith("opt225_")
+    ) {
+      holdDays = Math.floor(numParam(params, "hold_days", 10));
+      const mode = strParam(params, "mode", lid || "opt225_basevol_abs_level");
+      const seriesKind = strParam(params, "series_kind", "basevol");
+      const bundle = panel.opt225_regime || null;
+      let series =
+        bundle && seriesKind in bundle
+          ? (bundle as Record<string, unknown>)[seriesKind]
+          : null;
+      if (!series && bundle) {
+        if (mode.includes("spread_change")) series = bundle.spread_change;
+        else if (mode.includes("spread")) series = bundle.spread;
+        else if (mode.includes("atm_iv")) series = bundle.atm_iv;
+        else series = bundle.basevol;
+      }
+      // Fallback: build abs map from top-level by-date series on the panel.
+      if (!series) {
+        const absMap = mode.includes("spread")
+          ? panel.iv_base_spread
+          : mode.includes("atm_iv")
+            ? panel.atm_iv_series
+            : panel.base_vol_series;
+        if (absMap && Object.keys(absMap).length > 0) {
+          series = {
+            source: "panel_top_level_series",
+            rv_abs_by_date: absMap,
+            rv_short_by_date: absMap,
+            rv_long_by_date: absMap,
+            rv_ratio_by_date: {},
+          };
+        }
+      }
+      // Reuse nky regime evaluator; thresholds are percent vol points for opt225.
+      const defaultHigh = mode.includes("spread") ? 1.0 : 24.0;
+      const defaultLow = mode.includes("spread") ? -0.5 : 12.0;
+      out = evalNkyVolRegime(
+        panel.bars,
+        (series as PeriodPanel["nky_vol_series"]) || null,
+        mode.includes("term_ratio")
+          ? "nky_vol_term_ratio"
+          : mode.includes("term_levels")
+            ? "nky_vol_term_levels"
+            : "nky_vol_abs_level",
+        numParam(params, "momentum_n", 5),
+        holdDays,
+        numParam(params, "long_frac", 0.3),
+        numParam(params, "short_frac", 0.3),
+        oneWay,
+        numParam(params, "high_threshold", defaultHigh),
+        numParam(params, "low_threshold", defaultLow),
+        numParam(params, "expand_ratio", 1.2),
+        numParam(params, "compress_ratio", 0.8),
+      );
+      // Retag signal id for options_225 family.
+      out = {
+        ...out,
+        signalId: `c21_${mode}_xs`,
+      };
     } else {
       // multi_day_hold + generic fallback for rate/multi_factor/etc.
       // Full factor legs not-yet-implemented on CF pure-TS path.
@@ -540,7 +601,10 @@ export function evalLogicOnPanel(
         family !== "multi_day_hold" &&
         !lid.includes("multi_day") &&
         family !== "vol_risk_adjusted" &&
-        family !== "index_vol_regime"
+        family !== "index_vol_regime" &&
+        family !== "options_vol_regime" &&
+        !lid.startsWith("opt225_") &&
+        !lid.startsWith("nky_vol_")
       ) {
         out = {
           ...out,

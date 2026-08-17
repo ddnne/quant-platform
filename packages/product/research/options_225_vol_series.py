@@ -655,6 +655,84 @@ def build_series_bundle_from_rows(
     }
 
 
+def build_series_bundle_from_raw_files(
+    raw_files: Sequence[str | Path] | None = None,
+    *,
+    start: str | None = None,
+    end: str | None = None,
+) -> dict[str, Any]:
+    """Stream monthly raw JSON files → daily series (memory-friendly).
+
+    Processes one file at a time and merges by date (later/larger file wins on
+    date collision via last-write). Avoids materialising multi-million row lists.
+    """
+    files = (
+        [Path(p) for p in raw_files]
+        if raw_files is not None
+        else discover_options_225_raw_files()
+    )
+    p_start = str(start)[:10] if start else None
+    p_end = str(end)[:10] if end else None
+    base_by: dict[str, dict[str, Any]] = {}
+    atm_by: dict[str, dict[str, Any]] = {}
+    n_rows = 0
+    n_files_used = 0
+    for fp in files:
+        rows: list[dict[str, Any]] = []
+        for row in iter_options_225_rows_from_raw_json(fp):
+            d = _as_date(_row_get(row, "Date", "date"))
+            if d is None:
+                continue
+            if p_start and d < p_start:
+                continue
+            if p_end and d > p_end:
+                continue
+            rows.append(row)
+        if not rows:
+            continue
+        n_files_used += 1
+        n_rows += len(rows)
+        for r in build_daily_basevol_series(rows):
+            base_by[str(r["date"])[:10]] = r
+        for r in build_daily_atm_iv_series(rows):
+            atm_by[str(r["date"])[:10]] = r
+    base = [base_by[d] for d in sorted(base_by)]
+    atm = [atm_by[d] for d in sorted(atm_by)]
+    spread = build_spread_series(base, atm)
+    stats = summarize_vol_series(base, atm, spread)
+    stats["n_raw_files_used"] = n_files_used
+    stats["n_rows_scanned"] = n_rows
+    return {
+        "base_vol_series": base,
+        "atm_iv_series": atm,
+        "spread_series": spread,
+        "stats": stats,
+        "rules": {
+            "base_vol": (
+                "Per-date median/unique finite BaseVol among settlement-preferring "
+                "rows; omit day if none (no ffill)."
+            ),
+            "atm_iv": (
+                "Front CM (min CM with LTD>Date) nearest strike to UnderPx; "
+                "avg put/call IV when both finite else available side."
+            ),
+            "spread": "atm_iv - base_vol on inner-joined dates.",
+            "gap_policy": GAP_POLICY,
+            "iv_fields_available_from": IV_FIELDS_AVAILABLE_FROM,
+        },
+        "version": OPTIONS_225_VOL_SERIES_VERSION,
+        "wave": OPTIONS_225_VOL_SERIES_WAVE,
+        "dataset": DATASET_ID,
+        "mass_research": MASS_RESEARCH,
+        "phase7": PHASE7,
+        "ready_declared": READY_DECLARED,
+        "operational_go": OPERATIONAL_GO,
+        "ffill_applied": False,
+        "n_raw_files_used": n_files_used,
+        "n_rows_scanned": n_rows,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Regime maps for factory / CF (rolling short/long on daily level series)
 # ---------------------------------------------------------------------------
@@ -989,6 +1067,7 @@ __all__ = [
     "discover_options_225_raw_files",
     "load_options_225_rows",
     "build_series_bundle_from_rows",
+    "build_series_bundle_from_raw_files",
     "DEFAULT_OPT225_SHORT_N",
     "DEFAULT_OPT225_LONG_N",
     "DEFAULT_OPT225_BASEVOL_HIGH",

@@ -77,6 +77,24 @@ export interface NkyVolSeries {
   rv_ratio_by_date?: Record<string, number>;
 }
 
+/** W92 options_225 BaseVol / ATM IV / spread regime maps (percent vol points). */
+export interface Opt225RegimeSeries extends NkyVolSeries {
+  series_kind?: string;
+  units?: string;
+  dataset?: string;
+}
+
+export interface Opt225RegimeBundle {
+  spread_convention?: string;
+  units?: string;
+  dataset?: string;
+  version?: string;
+  basevol?: Opt225RegimeSeries | null;
+  atm_iv?: Opt225RegimeSeries | null;
+  spread?: Opt225RegimeSeries | null;
+  spread_change?: Opt225RegimeSeries | null;
+}
+
 export interface PeriodPanel {
   period_id: string;
   year: number;
@@ -85,8 +103,16 @@ export interface PeriodPanel {
   status: "ok" | "data_missing";
   bars: BarsByCode;
   source: string;
-  /** Optional W91 Nikkei/TOPIX realized-vol regime series. */
+  /** Optional W91 Nikkei/TOPIX realized-vol regime series (proxy/compare). */
   nky_vol_series?: NkyVolSeries | null;
+  /** Optional W92 options_225 canonical Nikkei vol SoT. */
+  opt225_regime?: Opt225RegimeBundle | null;
+  /** W92 daily BaseVol by date (percent vol points). */
+  base_vol_series?: Record<string, number> | null;
+  /** W92 daily ATM IV by date (percent vol points). */
+  atm_iv_series?: Record<string, number> | null;
+  /** W92 daily (ATM IV − BaseVol) spread by date. */
+  iv_base_spread?: Record<string, number> | null;
 }
 
 export interface PeriodEvalRow {

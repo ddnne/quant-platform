@@ -59,8 +59,8 @@ from research.mass_strategy_factory import (
 )
 from research.single_shot_job import COMPLETE_21_DATASETS, default_r2_put
 
-CF_MASS_EVAL_VERSION: str = "cf-mass-eval-job/v2"
-CF_MASS_EVAL_WAVE: str = "W91 / w0818a"
+CF_MASS_EVAL_VERSION: str = "cf-mass-eval-job/v3"
+CF_MASS_EVAL_WAVE: str = "W92 / w0818b"
 RESEARCH_ARTIFACT_BUCKET: str = "quant-structured"
 RESEARCH_ARTIFACT_PREFIX: str = "research/mass_eval"
 DEFAULT_WORKER_NAME: str = "quant-platform-research-mass-eval"
@@ -103,6 +103,7 @@ if COMPLETE_22_DATASET_SET & PERMANENT_DEFER_DATASETS:
 
 # Bar-native logics the CF Worker can evaluate without extra panels.
 # W91: nky_vol_* need staged index closes (__NKY_PROXY__) in panels.
+# W92: opt225_* need staged opt225_regime maps (BaseVol/ATM IV/spread).
 CF_BAR_NATIVE_LOGIC_IDS: tuple[str, ...] = (
     "mdh_sticky_momentum",
     "mdh_mean_reversion",
@@ -113,6 +114,14 @@ CF_BAR_NATIVE_LOGIC_IDS: tuple[str, ...] = (
     "nky_vol_abs_level",
     "nky_vol_term_levels",
     "nky_vol_term_ratio",
+    "opt225_basevol_abs_level",
+    "opt225_basevol_term_levels",
+    "opt225_basevol_term_ratio",
+    "opt225_atm_iv_abs_level",
+    "opt225_atm_iv_term_levels",
+    "opt225_atm_iv_term_ratio",
+    "opt225_iv_base_spread_abs",
+    "opt225_iv_base_spread_change",
 )
 
 # Lite multi-period shards (W90 residual; synthetic / tip smoke).
@@ -454,6 +463,63 @@ def build_real_period_panel(
     except Exception as exc:  # pragma: no cover - best-effort
         nky_meta = {"nky_proxy_error": str(exc)}
 
+    # W92: stage options_225 BaseVol / ATM IV / spread regime maps (canonical SoT).
+    opt225_meta: dict[str, Any] = {}
+    try:
+        from research.class_hyp_eval import load_opt225_regime_bundle_for_eval
+
+        opt225 = load_opt225_regime_bundle_for_eval()
+        if opt225:
+            # Compact maps only (drop bulky level_by_date duplicates when staging).
+            compact: dict[str, Any] = {
+                "spread_convention": opt225.get("spread_convention"),
+                "units": opt225.get("units"),
+                "dataset": opt225.get("dataset"),
+                "version": opt225.get("version"),
+            }
+            for kind in ("basevol", "atm_iv", "spread", "spread_change"):
+                ser = dict(opt225.get(kind) or {})
+                if not ser:
+                    continue
+                compact[kind] = {
+                    "source": ser.get("source"),
+                    "dataset": ser.get("dataset"),
+                    "series_kind": ser.get("series_kind"),
+                    "units": ser.get("units"),
+                    "short_n": ser.get("short_n"),
+                    "long_n": ser.get("long_n"),
+                    "rv_abs_by_date": ser.get("rv_abs_by_date") or {},
+                    "rv_short_by_date": ser.get("rv_short_by_date") or {},
+                    "rv_long_by_date": ser.get("rv_long_by_date") or {},
+                    "rv_ratio_by_date": ser.get("rv_ratio_by_date") or {},
+                    "n_obs_level": ser.get("n_obs_level"),
+                }
+            # Explicit by-date series aliases requested by W92 CF wire.
+            base_vol_series = dict(
+                (compact.get("basevol") or {}).get("rv_abs_by_date") or {}
+            )
+            atm_iv_series = dict(
+                (compact.get("atm_iv") or {}).get("rv_abs_by_date") or {}
+            )
+            iv_base_spread = dict(
+                (compact.get("spread") or {}).get("rv_abs_by_date") or {}
+            )
+            opt225_meta = {
+                "opt225_regime": compact,
+                "base_vol_series": base_vol_series,
+                "atm_iv_series": atm_iv_series,
+                "iv_base_spread": iv_base_spread,
+                "opt225_dataset": "derivatives_bars_daily_options_225",
+                "opt225_role": "canonical_nky_vol_sot",
+                "opt225_spread_convention": compact.get("spread_convention")
+                or "atm_iv - base_vol",
+                "opt225_n_base_vol": len(base_vol_series),
+                "opt225_n_atm_iv": len(atm_iv_series),
+                "opt225_n_spread": len(iv_base_spread),
+            }
+    except Exception as exc:  # pragma: no cover - best-effort
+        opt225_meta = {"opt225_error": str(exc)}
+
     n_days = max(
         (len(v) for k, v in bars_json.items() if not str(k).startswith("__")),
         default=0,
@@ -470,6 +536,7 @@ def build_real_period_panel(
         "bars_path": str(bars_path),
         "codes": sorted(k for k in bars_json if not str(k).startswith("__")),
         **nky_meta,
+        **opt225_meta,
     }
 
 

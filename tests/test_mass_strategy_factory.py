@@ -18,6 +18,7 @@ from research.mass_strategy_factory import (
     DEFAULT_NEAR_DUP_THRESHOLD,
     FAMILY_DEFINITIONS,
     FAMILY_INDEX_VOL_REGIME,
+    FAMILY_OPTIONS_VOL_REGIME,
     FAMILY_MULTI_FACTOR,
     FAMILY_RATE_FACTOR,
     FAMILY_VOL_RISK_ADJUSTED,
@@ -69,7 +70,8 @@ def test_freezes_closed():
     assert OPERATIONAL_GO is False
     assert CONTINUOUS_PAPER == "UNARMED"
     assert (
-        "W91" in MASS_FACTORY_WAVE
+        "W92" in MASS_FACTORY_WAVE
+        or "W91" in MASS_FACTORY_WAVE
         or "W90" in MASS_FACTORY_WAVE
         or "W89" in MASS_FACTORY_WAVE
         or "W88" in MASS_FACTORY_WAVE
@@ -131,7 +133,7 @@ def test_logic_templates_distinct_economic_logic():
     assert "mf_flow_price" in LOGIC_TEMPLATES
     assert LOGIC_TEMPLATES["rate_abs_level_xs"].family_id == FAMILY_RATE_FACTOR
     assert LOGIC_TEMPLATES["mf_value_mom_rate"].family_id == FAMILY_MULTI_FACTOR
-    # W91 Nikkei / index vol regime
+    # W91 Nikkei / index vol regime (proxy/compare)
     assert "nky_vol_abs_level" in LOGIC_TEMPLATES
     assert "nky_vol_term_levels" in LOGIC_TEMPLATES
     assert "nky_vol_term_ratio" in LOGIC_TEMPLATES
@@ -139,19 +141,35 @@ def test_logic_templates_distinct_economic_logic():
     assert LOGIC_TEMPLATES["nky_vol_term_levels"].family_id == FAMILY_INDEX_VOL_REGIME
     assert LOGIC_TEMPLATES["nky_vol_term_ratio"].family_id == FAMILY_INDEX_VOL_REGIME
     assert "nky_vol_abs_level" in doc.get("w91_index_vol_logic_ids", [])
+    # W92 options_225 BaseVol / ATM IV / spread (canonical SoT)
+    for lid in (
+        "opt225_basevol_abs_level",
+        "opt225_basevol_term_levels",
+        "opt225_basevol_term_ratio",
+        "opt225_atm_iv_abs_level",
+        "opt225_atm_iv_term_levels",
+        "opt225_atm_iv_term_ratio",
+        "opt225_iv_base_spread_abs",
+        "opt225_iv_base_spread_change",
+    ):
+        assert lid in LOGIC_TEMPLATES
+        assert LOGIC_TEMPLATES[lid].family_id == FAMILY_OPTIONS_VOL_REGIME
+    assert "opt225_basevol_abs_level" in doc.get("w92_options_vol_logic_ids", [])
     # diversity rules documented
     rules = doc["diversity_rules"]
     assert "hold_days only" in str(rules["does_not_count"])
     assert "info source" in str(rules["counts_as_different"]).lower() or any(
         "info" in x.lower() for x in rules["counts_as_different"]
     )
-    # near-groups parallel (includes vol name-vs-index + index_vol trio)
+    # near-groups parallel (includes vol name-vs-index + index_vol + options)
     ng = near_logic_groups_document()
-    assert len(ng["groups"]) >= 4
-    assert len(NEAR_LOGIC_GROUPS) >= 4
+    assert len(ng["groups"]) >= 5
+    assert len(NEAR_LOGIC_GROUPS) >= 5
     group_ids = {g["group_id"] for g in NEAR_LOGIC_GROUPS}
     assert "vol_family_name_vs_index" in group_ids
     assert "index_vol_regime_family" in group_ids
+    assert "options_vol_regime_family" in group_ids
+    assert "nky_vol_proxy_vs_options_sot" in group_ids
 
 
 def test_families_still_documented_for_eval_dispatch():
@@ -170,6 +188,7 @@ def test_families_still_documented_for_eval_dispatch():
     assert FAMILY_RATE_FACTOR in FAMILY_DEFINITIONS
     assert FAMILY_MULTI_FACTOR in FAMILY_DEFINITIONS
     assert FAMILY_INDEX_VOL_REGIME in FAMILY_DEFINITIONS
+    assert FAMILY_OPTIONS_VOL_REGIME in FAMILY_DEFINITIONS
     assert CLASS_SIMPLE_DAILY_SIGN not in FAMILY_DEFINITIONS
 
 
@@ -569,6 +588,66 @@ def test_nky_vol_logics_templates_and_eval_synthetic():
     assert reason_bad is not None
 
 
+def test_opt225_vol_logics_templates_and_eval_synthetic():
+    """W92: options_225 BaseVol / ATM IV / spread logics (canonical SoT)."""
+    lids = (
+        "opt225_basevol_abs_level",
+        "opt225_basevol_term_levels",
+        "opt225_basevol_term_ratio",
+        "opt225_atm_iv_abs_level",
+        "opt225_atm_iv_term_levels",
+        "opt225_atm_iv_term_ratio",
+        "opt225_iv_base_spread_abs",
+        "opt225_iv_base_spread_change",
+    )
+    for lid in lids:
+        tpl = LOGIC_TEMPLATES[lid]
+        assert tpl.family_id == FAMILY_OPTIONS_VOL_REGIME
+        assert "derivatives_bars_daily_options_225" in tpl.datasets_used
+        ok, reason = validate_strategy_at_gen(
+            FAMILY_OPTIONS_VOL_REGIME,
+            dict(tpl.base_params),
+            logic_id=lid,
+        )
+        assert ok is True, reason
+
+    cfg = MassFactoryConfig(seed=92, n=5, max_codes=4)
+    ctx = load_batch_data_context(cfg, synthetic=True)
+    assert all(p.get("opt225_regime") for p in ctx.panels)
+    for lid in lids:
+        tpl = LOGIC_TEMPLATES[lid]
+        strat = {
+            "strategy_id": f"test_{lid}",
+            "logic_id": lid,
+            "family_id": FAMILY_OPTIONS_VOL_REGIME,
+            "params": dict(tpl.base_params),
+            "thesis": tpl.thesis,
+            "signal_definition": tpl.signal_definition,
+            "position_rule": tpl.position_rule,
+            "datasets_used": list(tpl.datasets_used),
+        }
+        res = evaluate_one_strategy(strat, ctx)
+        assert res["status"] == "evaluated", res
+        assert res["n_periods_total"] >= 1
+        assert res.get("logic_id") == lid
+        assert res["mass_research"] == "NO-GO"
+
+    ok_bad, reason_bad = validate_strategy_at_gen(
+        FAMILY_OPTIONS_VOL_REGIME,
+        {
+            "mode": "not_a_mode",
+            "series_kind": "basevol",
+            "vol_short_n": 10,
+            "vol_long_n": 60,
+            "hold_days": 10,
+            "momentum_n": 5,
+        },
+        logic_id="opt225_basevol_abs_level",
+    )
+    assert ok_bad is False
+    assert reason_bad is not None
+
+
 def test_nky_vol_signal_helpers_pure():
     from features.class_signals import (
         compute_nky_vol_abs_level_signal,
@@ -604,3 +683,31 @@ def test_nky_vol_signal_helpers_pure():
     )
     assert ratio["value"] == -1.0  # expanding → reverse
     assert ratio["hypothesis_class"] == FAMILY_INDEX_VOL_REGIME
+
+
+def test_opt225_signal_helpers_pure():
+    from features.class_signals import (
+        CLASS_OPTIONS_VOL_REGIME,
+        compute_opt225_basevol_abs_level_signal,
+        compute_opt225_iv_base_spread_abs_signal,
+        compute_opt225_vol_signal,
+    )
+
+    low = compute_opt225_basevol_abs_level_signal(cs_sign=1.0, vol_level=10.0)
+    assert low["hypothesis_class"] == CLASS_OPTIONS_VOL_REGIME
+    assert low["value"] == 1.0
+    high = compute_opt225_basevol_abs_level_signal(cs_sign=1.0, vol_level=30.0)
+    assert high["value"] == -1.0
+    mid = compute_opt225_basevol_abs_level_signal(cs_sign=1.0, vol_level=18.0)
+    assert mid["value"] is None
+    sp = compute_opt225_iv_base_spread_abs_signal(cs_sign=1.0, vol_level=2.0)
+    assert sp["value"] == -1.0
+    ratio = compute_opt225_vol_signal(
+        mode="term_ratio",
+        cs_sign=1.0,
+        short_vol=20.0,
+        long_vol=10.0,
+        series_kind="atm_iv",
+    )
+    assert ratio["regime"] == "expanding"
+    assert ratio["value"] == -1.0
