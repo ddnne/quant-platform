@@ -2,6 +2,7 @@
 
 **Wave:** W92 / `w0818b` · 2026-08-18  
 **Status:** **CLOSED** as residual TOP (research factory only)  
+**Code tip:** `dad90784f8cbea3d3dd96bbf4cc8ad80dc637fa6`
 **Primary proof:** [`w0818b_w92_options_basevol_atm_20260818.md`](w0818b_w92_options_basevol_atm_20260818.md)  
 **Logs:** [`.glm-logs/w0818b_w92_options_vol/`](../../.glm-logs/w0818b_w92_options_vol/)  
 **Implementer:** GLM5.3 only. Grok did **not** implement.
