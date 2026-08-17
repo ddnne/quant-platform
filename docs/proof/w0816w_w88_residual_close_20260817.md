@@ -39,7 +39,7 @@
 | CF minimal or blocker | **yes** · blocked documented |
 | GO judgment deferred | **yes** |
 | residual TOP updated | **yes** · grid→logic · defaults frozen · GO deferred |
-| Commit + push past W87 tip `979157f` | **yes** (this close) |
+| Commit + push past W87 tip `979157f` | **yes** · feature `44d248e` |
 
 ---
 
