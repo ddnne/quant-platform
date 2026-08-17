@@ -8,6 +8,8 @@ Wave
   (repo-linked v2 kept; short low/mid/high sensitivity retained)
 * W85 / w0816t — **wire short cost = f(repo[t]) + fixed spread** into research
   remeasure (CS L-S) and paper short-leg financing; low/mid/high sensitivity
+* W86 / w0816u — **connect daily repo series into paper engine** (mid spread +
+  repo when series present; leverage = repo only — no short-spread double-count)
 
 Purpose
 -------
@@ -60,14 +62,17 @@ from typing import Any, Mapping, Sequence
 
 COST_MODELS_VERSION: str = "research-cost-models/v2"
 COST_MODELS_VERSION_V1: str = "research-cost-models/v1"
-COST_MODELS_WAVE: str = "W85 / w0816t"
+COST_MODELS_WAVE: str = "W86 / w0816u"
 COST_MODELS_LABEL: str = (
     "研究用コストモデル v2・未宣言 "
     "(取引 + 空売り借入 + レバ調達・repo連動優先 + 流動性連動 + "
-    "short=repo+spread 感度 L/M/H を remeasure/paper に配線 / "
+    "short=repo+spread 感度 L/M/H + paper 日次repo配線 / "
     "READY未接続 / Mass NO-GO)"
 )
 COST_MODELS_PROOF: str = (
+    "docs/proof/w0816u_w86_paper_repo_financing_20260817.md"
+)
+COST_MODELS_PROOF_SHORT_COST_W85: str = (
     "docs/proof/w0816t_w85_short_cost_repo_spread_20260817.md"
 )
 COST_MODELS_PROOF_REPO_LINKED: str = (
@@ -2902,6 +2907,7 @@ __all__ = [
     "CONNECTED_TO_READY",
     "COST_MODELS_LABEL",
     "COST_MODELS_PROOF",
+    "COST_MODELS_PROOF_SHORT_COST_W85",
     "COST_MODELS_PROOF_LIQUIDITY_LINKED",
     "COST_MODELS_PROOF_REPO_LINKED",
     "COST_MODELS_VERSION",

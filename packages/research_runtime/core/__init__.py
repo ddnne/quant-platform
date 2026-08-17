@@ -30,12 +30,16 @@ from __future__ import annotations
 
 from .costs import (
     CostModel,
+    LeverageFinancingModel,
     ShortFinancingModel,
+    leverage_financing,
+    rates_by_date_from_repo_rows,
     short_financing,
     standard_cost,
     stress_cost,
 )
 from .engine import CORE_ENGINE_VERSION, describe_strategy, run_backtest
+from .repo_rates import load_repo_rates_by_date_for_paper
 from .execution import (
     MODES,
     NEXT_CLOSE,
@@ -90,12 +94,16 @@ __all__ = [
     "MODES",
     "get_mode",
     "close_as_of",
-    # costs
+    # costs / financing
     "CostModel",
     "ShortFinancingModel",
+    "LeverageFinancingModel",
     "standard_cost",
     "stress_cost",
     "short_financing",
+    "leverage_financing",
+    "rates_by_date_from_repo_rows",
+    "load_repo_rates_by_date_for_paper",
     # universe
     "build_universe",
     "load_master",

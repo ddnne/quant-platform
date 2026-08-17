@@ -34,7 +34,12 @@ import pit
 from pit.query import resolve_db_path
 from price_basis import RAW, PriceBasis, require_supported_price_basis
 
-from .costs import CostModel, ShortFinancingModel, standard_cost
+from .costs import (
+    CostModel,
+    LeverageFinancingModel,
+    ShortFinancingModel,
+    standard_cost,
+)
 from .execution import close_as_of, get_mode
 from .metrics import compute_metrics
 from .result import BacktestResult
@@ -44,7 +49,9 @@ from .universe import load_master
 # Bumped per Phase 3 handoff. Surfaced in every result's metadata so a consumer
 # can tell which engine contract a given backtest obeys.
 # 0.6.1 — W85 short-leg financing (repo + fixed spread) optional charge.
-CORE_ENGINE_VERSION = "0.6.1"
+# 0.6.2 — W86 daily repo series + leverage financing (repo only; no short-spread
+#         double-count) optional charge.
+CORE_ENGINE_VERSION = "0.6.2"
 
 # J-Quants HolidayDivision: "1" == trading day (exchange open).
 _TRADING_HOLIDAY_DIVISION = "1"
@@ -343,6 +350,24 @@ def _trading_days(
     return days
 
 
+def _position_price(
+    code: str,
+    marks: Mapping[str, tuple[float, str]],
+    closes: Mapping[str, float] | None = None,
+) -> float | None:
+    """Same-session close when available; else last PIT mark."""
+    px = None
+    if closes is not None:
+        px = closes.get(code)
+    if px is None or px <= 0:
+        mark = marks.get(code)
+        if mark is not None:
+            px = mark[0]
+    if px is None or px <= 0:
+        return None
+    return float(px)
+
+
 def _short_market_value(
     shares: Mapping[str, float],
     marks: Mapping[str, tuple[float, str]],
@@ -356,20 +381,31 @@ def _short_market_value(
     for code, qty in shares.items():
         if qty >= 0:
             continue
-        px = None
-        if closes is not None:
-            px = closes.get(code)
-        if px is None or px <= 0:
-            mark = marks.get(code)
-            if mark is not None:
-                px = mark[0]
-        if px is None or px <= 0:
+        px = _position_price(code, marks, closes)
+        if px is None:
             continue
         total += abs(float(qty)) * float(px)
     return total
 
 
-def _apply_short_financing(
+def _long_market_value(
+    shares: Mapping[str, float],
+    marks: Mapping[str, tuple[float, str]],
+    closes: Mapping[str, float] | None = None,
+) -> float:
+    """Market value of long (positive share) positions."""
+    total = 0.0
+    for code, qty in shares.items():
+        if qty <= 0:
+            continue
+        px = _position_price(code, marks, closes)
+        if px is None:
+            continue
+        total += float(qty) * float(px)
+    return total
+
+
+def _apply_daily_financing(
     *,
     date: str,
     shares: dict[str, float],
@@ -377,42 +413,94 @@ def _apply_short_financing(
     closes: dict[str, float],
     cash: float,
     short_financing: ShortFinancingModel | None,
+    leverage_financing: LeverageFinancingModel | None,
     financing_events: list[dict[str, Any]],
     trades: list[dict[str, Any]],
-) -> tuple[float, int]:
-    """Charge daily short financing; return (cash, gap_flag 0/1)."""
-    if short_financing is None or not short_financing.enabled:
-        return cash, 0
+) -> tuple[float, int, int]:
+    """Charge short + leverage financing; return (cash, short_gap, lev_gap).
+
+    Short uses (repo + spread); leverage uses **repo only** on excess gross
+    notional above equity — never re-applies short spread (no double-count).
+    Both use pre-charge marks for notionals; cash is reduced after both costs
+    are computed so order of application does not change bases.
+    """
+    short_gap = 0
+    lev_gap = 0
     short_nv = _short_market_value(shares, marks, closes)
-    if short_nv <= 0:
-        return cash, 0
-    cost, is_gap = short_financing.daily_cost(short_nv, date=date)
-    financing_events.append(
-        {
-            "date": date,
-            "short_notional": short_nv,
-            "cost": float(cost),
-            "is_gap": bool(is_gap),
-            "side": "short_financing",
-        }
-    )
-    if cost > 0:
-        cash -= cost
-        # Include in trade log so compute_metrics cost_drag counts it.
-        trades.append(
+    long_nv = _long_market_value(shares, marks, closes)
+    gross_nv = float(long_nv) + float(short_nv)
+    equity = _mark_equity(shares, marks, cash)
+
+    short_cost = 0.0
+    if short_financing is not None and short_financing.enabled and short_nv > 0:
+        short_cost, is_gap = short_financing.daily_cost(short_nv, date=date)
+        financing_events.append(
             {
-                "decision_date": date,
-                "fill_date": date,
-                "code": "_short_financing",
-                "side": "short_financing",
-                "shares": 0.0,
-                "price": 0.0,
-                "notional": 0.0,
-                "cost": float(cost),
+                "date": date,
                 "short_notional": short_nv,
+                "cost": float(short_cost),
+                "is_gap": bool(is_gap),
+                "side": "short_financing",
             }
         )
-    return cash, (1 if is_gap else 0)
+        if is_gap:
+            short_gap = 1
+        if short_cost > 0:
+            trades.append(
+                {
+                    "decision_date": date,
+                    "fill_date": date,
+                    "code": "_short_financing",
+                    "side": "short_financing",
+                    "shares": 0.0,
+                    "price": 0.0,
+                    "notional": 0.0,
+                    "cost": float(short_cost),
+                    "short_notional": short_nv,
+                }
+            )
+
+    lev_cost = 0.0
+    if leverage_financing is not None and leverage_financing.enabled:
+        lev_cost, is_gap = leverage_financing.daily_cost(
+            gross_notional=gross_nv,
+            equity=equity,
+            date=date,
+        )
+        # Record only when there is excess leverage (gross > equity).
+        excess = max(gross_nv - float(equity), 0.0) if equity > 0 else 0.0
+        if excess > 0:
+            financing_events.append(
+                {
+                    "date": date,
+                    "gross_notional": gross_nv,
+                    "equity": equity,
+                    "excess_notional": excess,
+                    "cost": float(lev_cost),
+                    "is_gap": bool(is_gap),
+                    "side": "leverage_financing",
+                }
+            )
+            if is_gap:
+                lev_gap = 1
+        if lev_cost > 0:
+            trades.append(
+                {
+                    "decision_date": date,
+                    "fill_date": date,
+                    "code": "_leverage_financing",
+                    "side": "leverage_financing",
+                    "shares": 0.0,
+                    "price": 0.0,
+                    "notional": 0.0,
+                    "cost": float(lev_cost),
+                    "gross_notional": gross_nv,
+                    "excess_notional": excess,
+                }
+            )
+
+    cash -= float(short_cost) + float(lev_cost)
+    return cash, short_gap, lev_gap
 
 
 def run_backtest(
@@ -424,6 +512,7 @@ def run_backtest(
     execution_mode: str = "next_close",
     cost_model: CostModel | None = None,
     short_financing: ShortFinancingModel | None = None,
+    leverage_financing: LeverageFinancingModel | None = None,
     universe: tuple[str, ...] | list[str] | None = None,
     starting_capital: float = 1_000_000.0,
     lookback_days: int = 30,
@@ -447,6 +536,9 @@ def run_backtest(
         short_financing: Optional :class:`ShortFinancingModel` charging daily
             borrow on short market value = f(repo[t] + fixed spread). ``None``
             keeps prior long-only / no-borrow behaviour (default).
+        leverage_financing: Optional :class:`LeverageFinancingModel` charging
+            daily repo on excess gross leverage above 1× (repo only — does
+            **not** re-apply short spread). ``None`` keeps prior behaviour.
         universe: Optional fixed code list; otherwise built per decision day
             from the PIT equity master as-of (anti-survivorship).
         starting_capital: Initial cash (defaults to 1,000,000 JPY).
@@ -489,6 +581,7 @@ def run_backtest(
     trades: list[dict[str, Any]] = []
     financing_events: list[dict[str, Any]] = []
     n_short_financing_gaps = 0
+    n_leverage_financing_gaps = 0
     # Portfolio valuation is independent of the rolling signal window. Each
     # entry is (last PIT-visible exact-session price, that session's date).
     marks: dict[str, tuple[float, str]] = {}
@@ -547,18 +640,20 @@ def run_backtest(
             snap_dec = snap_close  # next_close decides at close(d)
             decision_equity = _mark_equity(shares, marks, cash)
             # The next-close decision occurs after this close's fills and mark.
-            # Short financing accrues on end-of-day short book (post-fill).
-            cash, gap_f = _apply_short_financing(
+            # Short + leverage financing accrues on end-of-day book (post-fill).
+            cash, s_gap, l_gap = _apply_daily_financing(
                 date=d,
                 shares=shares,
                 marks=marks,
                 closes=fill_closes,
                 cash=cash,
                 short_financing=short_financing,
+                leverage_financing=leverage_financing,
                 financing_events=financing_events,
                 trades=trades,
             )
-            n_short_financing_gaps += gap_f
+            n_short_financing_gaps += s_gap
+            n_leverage_financing_gaps += l_gap
             equity_curve.append(
                 _equity_point(
                     date=d, shares=shares, marks=marks, cash=cash
@@ -623,17 +718,19 @@ def run_backtest(
                 trades=trades,
             )
             _update_marks(marks, fill_closes, d)
-            cash, gap_f = _apply_short_financing(
+            cash, s_gap, l_gap = _apply_daily_financing(
                 date=d,
                 shares=shares,
                 marks=marks,
                 closes=fill_closes,
                 cash=cash,
                 short_financing=short_financing,
+                leverage_financing=leverage_financing,
                 financing_events=financing_events,
                 trades=trades,
             )
-            n_short_financing_gaps += gap_f
+            n_short_financing_gaps += s_gap
+            n_leverage_financing_gaps += l_gap
             # The published curve is a post-fill, post-cost close-time mark.
             equity_curve.append(
                 _equity_point(
@@ -642,12 +739,25 @@ def run_backtest(
             )
 
     metrics = compute_metrics(equity_curve=equity_curve, trades=trades)
+    short_events = [
+        e for e in financing_events if e.get("side") == "short_financing"
+    ]
+    lev_events = [
+        e for e in financing_events if e.get("side") == "leverage_financing"
+    ]
     short_fin_total = float(
-        sum(float(e.get("cost") or 0.0) for e in financing_events)
+        sum(float(e.get("cost") or 0.0) for e in short_events)
+    )
+    lev_fin_total = float(
+        sum(float(e.get("cost") or 0.0) for e in lev_events)
     )
     metrics["short_financing_cost"] = short_fin_total
-    metrics["n_short_financing_days"] = len(financing_events)
+    metrics["n_short_financing_days"] = len(short_events)
     metrics["n_short_financing_gaps"] = int(n_short_financing_gaps)
+    metrics["leverage_financing_cost"] = lev_fin_total
+    metrics["n_leverage_financing_days"] = len(lev_events)
+    metrics["n_leverage_financing_gaps"] = int(n_leverage_financing_gaps)
+    metrics["repo_financing_cost"] = short_fin_total + lev_fin_total
 
     strategy_id, strategy_params = describe_strategy(strategy)
     metadata = {
@@ -666,6 +776,17 @@ def run_backtest(
         ),
         "n_short_financing_gaps": int(n_short_financing_gaps),
         "short_financing_total_cost": short_fin_total,
+        "leverage_financing": (
+            leverage_financing.describe()
+            if leverage_financing is not None
+            else None
+        ),
+        "leverage_financing_applied": bool(
+            leverage_financing is not None and leverage_financing.enabled
+        ),
+        "n_leverage_financing_gaps": int(n_leverage_financing_gaps),
+        "leverage_financing_total_cost": lev_fin_total,
+        "repo_financing_total_cost": short_fin_total + lev_fin_total,
         "universe_rule": (
             "fixed: " + ",".join(fixed_universe)
             if fixed_universe is not None

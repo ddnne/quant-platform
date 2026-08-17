@@ -21,6 +21,9 @@ Hard constraints
 * W81+: ``research_candidate=True`` only when production bar fully met
   including |t| / Sharpe / period win-rate (still never auto-connects
   Mass / READY / operational GO)
+* W86+: sign flip both-sides after cost for default/main explore
+  (xs hold10 mom5/mom3 · fund hold10); record ``chosen_sign``;
+  both near-zero / non-positive → reject or explore demote
 * No mean-bp-only promotion
 * weak consistent-negative is **not_candidate** (economic net bar)
 * noisy low t/Sharpe / unstable yearly signs → demote to discussion_only
@@ -97,6 +100,14 @@ from research.stats_metrics import (
     stats_metrics_document,
     trade_stats_report,
 )
+from research.sign_selection import (
+    SIGN_INVERTED,
+    SIGN_ORIGINAL,
+    SIGN_SELECTION_VERSION,
+    SIGN_SELECTION_WAVE,
+    sign_selection_document,
+    sign_selection_from_period_rows,
+)
 from research.cost_models import (
     DEFAULT_ONE_WAY_COST,
     REPO_DATASET_ID,
@@ -132,8 +143,8 @@ from research.robustness_gate import evaluate_research_robustness_gate
 # Freeze / identity
 # ---------------------------------------------------------------------------
 
-CLASS_HYP_EVAL_VERSION: str = "class-hyp-eval/v6"
-CLASS_HYP_EVAL_WAVE: str = CLASS_SIGNALS_WAVE
+CLASS_HYP_EVAL_VERSION: str = "class-hyp-eval/v7"
+CLASS_HYP_EVAL_WAVE: str = "W86 / w0816u"
 MASS_RESEARCH: str = "NO-GO"
 PHASE7: str = "OFF"
 READY_DECLARED: bool = False
@@ -3234,6 +3245,7 @@ def run_class_hyp_multi_year_eval(
                 "note": (
                     f"W83 default-path sticky hold=10 with momentum_n="
                     f"{xs10_mom_n} (W82 pin; mom=10 collapses). "
+                    "W86 sign-selection applies both sides after cost. "
                     "Not Mass/READY."
                 ),
             },
@@ -3260,7 +3272,8 @@ def run_class_hyp_multi_year_eval(
                     f"W85 promote_default: sticky hold=10 momentum_n="
                     f"{xs10_mom3_n}. Research hard RC (t≈3.0) + multi-window "
                     "paper majority positive. Parallel to mom=5 pin — does not "
-                    "replace W82 pin. Not Mass/READY/live."
+                    "replace W82 pin. W86 sign-selection both sides. "
+                    "Not Mass/READY/live."
                 ),
             },
         )
@@ -3332,10 +3345,205 @@ def run_class_hyp_multi_year_eval(
                 "n_ok": n_ok_fund10,
                 "note": (
                     "W83 default-path fund hold=10 mom-matched. "
-                    "Not Mass/READY."
+                    "W86 sign-selection applies both sides after cost "
+                    "(paper-negative → flip-first). Not Mass/READY."
                 ),
             },
         )
+
+    # ------------------------------------------------------------------
+    # W86 / w0816u: sign flip both-sides after cost for default/main
+    # explore representatives. Record chosen_sign for reproducibility.
+    # ------------------------------------------------------------------
+    # paper_mean_negative flags from W85 multi-window paper honesty:
+    # xs mom5 −0.49% · fund mom10 −1.77% · mom3 +0.66% (not paper-neg).
+    _SIGN_FLIP_TARGETS: tuple[tuple[str, bool, int | None], ...] = (
+        # key, paper_mean_negative, hold_days override
+        ("cross_section_hold_10", True, 10),
+        ("cross_section_hold_10_mom3", False, 10),
+        ("fundamentals_hold_10", True, 10),
+    )
+    sign_selection_blocks: dict[str, Any] = {}
+    for skey, paper_neg, hold_ov in _SIGN_FLIP_TARGETS:
+        block = out.get(skey)
+        if not isinstance(block, Mapping):
+            continue
+        rows_ss = list(block.get("years") or block.get("cross_year_table") or [])
+        hold_ss = hold_ov
+        if hold_ss is None:
+            hold_ss = int(block.get("hold_days") or 10)
+        sel = sign_selection_from_period_rows(
+            rows_ss,
+            hold_days=int(hold_ss),
+            min_mean_net=float(min_economic_net),
+            paper_mean_negative=bool(paper_neg),
+        )
+        # Attach to block (mutable dicts produced by _class_block)
+        if isinstance(block, dict):
+            block["sign_selection"] = sel
+            block["chosen_sign"] = sel.get("chosen_sign")
+            block["chosen_sign_label"] = sel.get("chosen_label")
+            block["sign_selection_decision"] = sel.get("decision")
+            # Effective metrics after selection (chosen side)
+            if sel.get("chosen_sign") == SIGN_INVERTED:
+                inv = sel.get("inverted") or {}
+                block["metrics_after_sign"] = {
+                    "sign": SIGN_INVERTED,
+                    "mean_net": inv.get("mean_net"),
+                    "mean_net_bp": inv.get("mean_net_bp"),
+                    "t_stat": inv.get("t_stat"),
+                    "sharpe": inv.get("sharpe"),
+                    "win_rate": inv.get("win_rate"),
+                    "n_pos": inv.get("n_pos"),
+                    "n_neg": inv.get("n_neg"),
+                }
+            elif sel.get("chosen_sign") == SIGN_ORIGINAL:
+                orig = sel.get("original") or {}
+                block["metrics_after_sign"] = {
+                    "sign": SIGN_ORIGINAL,
+                    "mean_net": orig.get("mean_net"),
+                    "mean_net_bp": orig.get("mean_net_bp"),
+                    "t_stat": orig.get("t_stat"),
+                    "sharpe": orig.get("sharpe"),
+                    "win_rate": orig.get("win_rate"),
+                    "n_pos": orig.get("n_pos"),
+                    "n_neg": orig.get("n_neg"),
+                }
+            else:
+                block["metrics_after_sign"] = {
+                    "sign": None,
+                    "mean_net": None,
+                    "reason": sel.get("decision"),
+                }
+            # Demote research_candidate when both sides fail non-zero
+            cand_b = block.get("candidate")
+            if isinstance(cand_b, dict) and sel.get("chosen_sign") is None:
+                cand_b["sign_selection_demote"] = True
+                cand_b["research_candidate"] = False
+                cand_b["research_candidate_allowed"] = False
+                cand_b["candidate_yes_no"] = "no"
+                cand_b["verdict"] = "not_candidate_sign_both_sides_fail"
+                cand_b["note_sign"] = (
+                    "W86 both sides fail non-zero / non-positive after cost "
+                    "→ demote (not Mass/READY path)."
+                )
+            elif isinstance(cand_b, dict):
+                cand_b["chosen_sign"] = sel.get("chosen_sign")
+                cand_b["chosen_sign_label"] = sel.get("chosen_label")
+                cand_b["sign_selection_decision"] = sel.get("decision")
+                # If flipped, expose chosen-side stats for transparency
+                if sel.get("chosen_sign") == SIGN_INVERTED:
+                    inv = sel.get("inverted") or {}
+                    cand_b["stats_original_side"] = cand_b.get("stats")
+                    cand_b["stats_chosen_side"] = {
+                        "mean_net": inv.get("mean_net"),
+                        "t_stat": inv.get("t_stat"),
+                        "sharpe": inv.get("sharpe"),
+                        "win_rate": inv.get("win_rate"),
+                        "n_pos": inv.get("n_pos"),
+                        "n_neg": inv.get("n_neg"),
+                        "sign": SIGN_INVERTED,
+                    }
+        sign_selection_blocks[skey] = {
+            "chosen_sign": sel.get("chosen_sign"),
+            "chosen_label": sel.get("chosen_label"),
+            "decision": sel.get("decision"),
+            "verdict": sel.get("verdict"),
+            "chosen_mean_net_bp": sel.get("chosen_mean_net_bp"),
+            "chosen_t_stat": sel.get("chosen_t_stat"),
+            "chosen_sharpe": sel.get("chosen_sharpe"),
+            "original_mean_net_bp": (sel.get("original") or {}).get("mean_net_bp"),
+            "original_t_stat": (sel.get("original") or {}).get("t_stat"),
+            "original_sharpe": (sel.get("original") or {}).get("sharpe"),
+            "inverted_mean_net_bp": (sel.get("inverted") or {}).get("mean_net_bp"),
+            "inverted_t_stat": (sel.get("inverted") or {}).get("t_stat"),
+            "inverted_sharpe": (sel.get("inverted") or {}).get("sharpe"),
+            "paper_mean_negative": bool(paper_neg),
+            "reasons": sel.get("reasons"),
+        }
+
+    out["sign_selection"] = {
+        "version": SIGN_SELECTION_VERSION,
+        "wave": SIGN_SELECTION_WAVE,
+        "document": sign_selection_document(),
+        "blocks": sign_selection_blocks,
+        "note": (
+            "W86 evaluate both original and inverted after costs; "
+            "prefer positive mean net with non-zero evidence (t guideline). "
+            "Both fail → reject/explore demote. Not Mass/READY/live."
+        ),
+    }
+
+    # Default-path representatives after sign selection.
+    # Policy: do not over-invest mom3 vs mom5 — keep both if both survive,
+    # else keep the surviving primary. Primary = mom5 pin if survives,
+    # else mom3; fund separate.
+    survivors: list[dict[str, Any]] = []
+    for skey, _pn, _h in _SIGN_FLIP_TARGETS:
+        ss = sign_selection_blocks.get(skey) or {}
+        block = out.get(skey)
+        if not isinstance(block, Mapping):
+            continue
+        cand = block.get("candidate") or {}
+        chosen = ss.get("chosen_sign")
+        if chosen is None:
+            continue
+        rc = bool(cand.get("research_candidate"))
+        survivors.append(
+            {
+                "block_key": skey,
+                "chosen_sign": chosen,
+                "chosen_label": ss.get("chosen_label"),
+                "momentum_n": block.get("momentum_n"),
+                "hold_days": block.get("hold_days"),
+                "research_candidate": rc,
+                "mean_net_bp_chosen": ss.get("chosen_mean_net_bp"),
+                "t_stat_chosen": ss.get("chosen_t_stat"),
+                "sharpe_chosen": ss.get("chosen_sharpe"),
+                "decision": ss.get("decision"),
+            }
+        )
+
+    xs_surv = [s for s in survivors if s["block_key"].startswith("cross_section")]
+    fund_surv = [s for s in survivors if s["block_key"].startswith("fundamentals")]
+    # mom3 vs mom5 compression rule
+    mom_compress_note: str
+    xs_default: list[dict[str, Any]]
+    if len(xs_surv) >= 2:
+        # both survive → keep both as parallel defaults (W85 already promoted mom3)
+        xs_default = list(xs_surv)
+        mom_compress_note = (
+            "both xs mom5 and mom3 survive sign selection → keep both "
+            "as parallel default representatives (no over-invest; not merge)"
+        )
+    elif len(xs_surv) == 1:
+        xs_default = list(xs_surv)
+        mom_compress_note = (
+            f"single xs survivor after sign selection: {xs_surv[0]['block_key']}"
+        )
+    else:
+        xs_default = []
+        mom_compress_note = "no xs survivor after sign selection → demote both"
+
+    default_reps = {
+        "wave": SIGN_SELECTION_WAVE,
+        "xs_representatives": xs_default,
+        "fund_representatives": fund_surv,
+        "all_survivors": survivors,
+        "mom3_vs_mom5": mom_compress_note,
+        "n_default_wired_candidates": len(xs_default) + len(fund_surv),
+        "mass_research": MASS_RESEARCH,
+        "ready_declared": False,
+        "operational_go": False,
+        "phase7": PHASE7,
+        "note": (
+            "Default representatives after W86 sign selection. "
+            "research_candidate on block still requires full production bar; "
+            "chosen_sign is recorded for StrategySpec signal_sign wiring. "
+            "Not Mass / READY / ops GO / live."
+        ),
+    }
+    out["default_path_representatives"] = default_reps
 
     # Summary yes/no per class (honest; may be yes if research_candidate)
     summary: dict[str, Any] = {}
@@ -3360,6 +3568,7 @@ def run_class_hyp_multi_year_eval(
         if rc:
             any_research_candidate = True
         stats = cand.get("stats") or {}
+        ss_sum = sign_selection_blocks.get(key) or {}
         summary[key] = {
             "signal_id": block.get("signal_id"),
             "gate_passed": cand.get("gate_passed"),
@@ -3381,13 +3590,25 @@ def run_class_hyp_multi_year_eval(
             "max_dd": stats.get("max_dd"),
             "calmar": stats.get("calmar"),
             "n_ok_periods": cand.get("n_ok_periods"),
+            "chosen_sign": ss_sum.get("chosen_sign", block.get("chosen_sign")),
+            "chosen_sign_label": ss_sum.get(
+                "chosen_label", block.get("chosen_sign_label")
+            ),
+            "sign_selection_decision": ss_sum.get("decision"),
+            "mean_net_bp_original": ss_sum.get("original_mean_net_bp"),
+            "mean_net_bp_inverted": ss_sum.get("inverted_mean_net_bp"),
+            "t_stat_original": ss_sum.get("original_t_stat"),
+            "t_stat_inverted": ss_sum.get("inverted_t_stat"),
             "decision": (
                 "keep"
                 if rc
                 else (
                     "demote"
-                    if (cand.get("production_criteria") or {}).get("w80_core_ok")
-                    and not cand.get("stats_ok")
+                    if (
+                        (cand.get("production_criteria") or {}).get("w80_core_ok")
+                        and not cand.get("stats_ok")
+                    )
+                    or cand.get("sign_selection_demote")
                     else "not_candidate"
                 )
             ),
@@ -3442,4 +3663,6 @@ __all__ = [
     "resolve_bars_path",
     "resolve_margin_path",
     "run_class_hyp_multi_year_eval",
+    "sign_selection_document",
+    "sign_selection_from_period_rows",
 ]

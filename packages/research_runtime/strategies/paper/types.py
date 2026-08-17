@@ -71,6 +71,16 @@ class PaperRunConfig:
     short_financing_repo_rates: dict[str, float] | None = None
     # Fixed repo annual bp when no series (disclosed placeholder; default 0).
     short_financing_fallback_repo_annual_bp: float = 0.0
+    # W86 / w0816u — when financing enabled and rates not supplied, load daily
+    # repo series from the paper DB via PIT (core helper). Default mid spread
+    # + repo when series present; gaps disclosed only (no invent).
+    short_financing_auto_load_repo: bool = True
+    # Leverage financing = f(repo[t]) on excess gross above 1× (repo only —
+    # never re-applies short spread). None → follow short_financing_enabled.
+    leverage_financing_enabled: bool | None = None
+    leverage_financing_repo_rates: dict[str, float] | None = None
+    leverage_financing_fallback_repo_annual_bp: float = 0.0
+    leverage_financing_auto_load_repo: bool = True
 
     def __post_init__(self) -> None:
         if not self.start or not self.end or self.start > self.end:
@@ -91,6 +101,12 @@ class PaperRunConfig:
                 "short_financing_sensitivity must be one of low|mid|high"
             )
         object.__setattr__(self, "short_financing_sensitivity", sens)
+        if self.leverage_financing_enabled is not None:
+            object.__setattr__(
+                self,
+                "leverage_financing_enabled",
+                bool(self.leverage_financing_enabled),
+            )
 
         object.__setattr__(self, "lifecycle", Lifecycle.parse(self.lifecycle))
         object.__setattr__(

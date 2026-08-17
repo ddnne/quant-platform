@@ -1,20 +1,117 @@
 # Phase 6.2 / 6.3 residual status
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
-**Live verified:** 2026-08-17 · **W85** multi-window paper + short cost residual **COMPLETE** · **GO = pre-live-order final gate** · **3 default research_candidates** (`cross_section_hold_10` mom=5 KEEP · `cross_section_hold_10_mom3` mom=3 **PROMOTE** · `fundamentals_hold_10` mom=10 KEEP · **not Mass**) · StrategySpec **v3** · multi-window paper honesty xs mean **−0.49%** · fund **−1.77%** · mom3 **+0.66%** · short cost mid xs **+83.4bp** t=1.59 · fund **+44.8bp** t=1.78 hard RC · explore stay (frac0.4 · fund hold15/5) · flow near-miss · OTC **4499→4499 (Δ0)** tip-wait · COMPLETE 22 health · FRESH · live verified ops COMPLETE **22** held · DEFER **4** remaining (bars_am · earn_cal · master · OTC dataset PARTIAL) · segs **7888** · empty **0** · **OTC 4499** (dataset still PARTIAL; pre-2008 not main claim) · bars_am COMPLETE tip **1** / PARTIAL **31** · Mass/READY/Phase7/operational GO **NO-GO/未宣言/OFF/未宣言** · continuous paper **UNARMED** · FRESH `projgen-4ef65c7bd3114f1caf999b4ebc661b21` · S1–S5 **research_baseline_rejected** untouched · densify **none** · **no invent** · **no Mass/READY ON** · **no operational GO** · **no S1–S5 un-reject** · **no OTC bulk densify** · **no fins roll-back** · **no simple_daily_sign mass gen** · **no live orders** · **no mean-bp-only** · **no research simplify** · **no hide paper negatives** · COMPLETE expand = **tip-wait** · research entry **linked** · checklist **v2** · `simple_daily_sign` default **OFF** · W84 underneath held  
-**Repo tip:** `605d40c00efea0616b2dc75615f5e9489c6fb22b` — W85 multi-window paper honesty + short cost + 3 defaults + OTC tip-wait residual close · COMPLETE **22** / DEFER **4** / segs **7888** / OTC **4499** / READY **未宣言** · operational GO **未宣言** · FRESH `projgen-4ef65c7bd3114f1caf999b4ebc661b21`
+**Live verified:** 2026-08-17 · **W86** sign flip + paper repo financing + same-condition compare residual **COMPLETE** · **GO = pre-live-order final gate** · **repo + compare table required before GO consideration** (both **ready**; GO **未宣言**) · **3 default research_candidates** (`cross_section_hold_10` mom=5 KEEP · `cross_section_hold_10_mom3` mom=3 PROMOTE · `fundamentals_hold_10` mom=10 KEEP · all **chosen_sign=+1** · **not Mass**) · StrategySpec **v3** · paper multi-window **with repo financing** xs mean **−0.55%** · fund **−1.83%** · mom3 **+0.60%** · research short mid xs **+83.4bp** t=1.59 · fund **+44.8bp** t=1.77 · mom3 tx **+120.0bp** t=3.04 · OTC **4499→4499 (Δ0)** tip-wait · COMPLETE 22 health · FRESH · live verified ops COMPLETE **22** held · DEFER **4** remaining (bars_am · earn_cal · master · OTC dataset PARTIAL) · segs **7888** · empty **0** · **OTC 4499** (dataset still PARTIAL; pre-2008 not main claim) · bars_am COMPLETE tip **1** / PARTIAL **31** · Mass/READY/Phase7/operational GO **NO-GO/未宣言/OFF/未宣言** · continuous paper **UNARMED** · FRESH `projgen-5f574bfa112a4872aa469b7b0f5466b5` · S1–S5 **research_baseline_rejected** untouched · densify **none** · **no invent** · **no Mass/READY ON** · **no operational GO** · **no S1–S5 un-reject** · **no OTC bulk densify** · **no fins roll-back** · **no simple_daily_sign mass gen** · **no live orders** · **no mean-bp-only** · **no research simplify** · **no hide paper negatives** · COMPLETE expand = **tip-wait** · research entry **linked** · checklist **v2** · `simple_daily_sign` default **OFF** · W85 underneath held  
+**Repo tip:** *(feature commit after push — pin residual SHA in follow-up docs commit if needed)* · W86 sign flip + paper repo financing + same-condition compare + residual FRESH close · COMPLETE **22** / DEFER **4** / segs **7888** / OTC **4499** / READY **未宣言** · operational GO **未宣言** · FRESH `projgen-5f574bfa112a4872aa469b7b0f5466b5`
 
-## Research entry (W74 · ready · freeze W75 · redesign W77 · GO-build W78 · GO-final W79 · candidate W80 · stats W81 · PIT W82 · parallel W83 · realign W84 · multi-window W85)
+## Research entry (W74 · ready · freeze W75 · redesign W77 · GO-build W78 · GO-final W79 · candidate W80 · stats W81 · PIT W82 · parallel W83 · realign W84 · multi-window W85 · sign+repo+compare W86)
 
 **Entry path:** [`docs/proof/w0816h_w74_research_entry_complete22_20260816.md`](proof/w0816h_w74_research_entry_complete22_20260816.md)  
 **Checklist:** `run_standard_research_eval` / `standard-research-eval-checklist/v2`  
 **Hypothesis classes:** [`docs/proof/w0816k_w77_hypothesis_space_redesign_20260816.md`](proof/w0816k_w77_hypothesis_space_redesign_20260816.md) · `simple_daily_sign` default **OFF**  
-**Cost models:** `research-cost-models/v2` · prefer repo-linked + liquidity-linked + **short = repo[t]×100+spread** ([`w0816t_w85_short_cost_repo_spread_20260817.md`](proof/w0816t_w85_short_cost_repo_spread_20260817.md) · [`w0816n_w79_liquidity_linked_cost_20260816.md`](proof/w0816n_w79_liquidity_linked_cost_20260816.md) · [`w0816m_w78_repo_linked_cost_model_20260816.md`](proof/w0816m_w78_repo_linked_cost_model_20260816.md))  
-**Stats bar:** `research-stats-metrics/v1` · class-signals **v6** (W83) · W81 stats floors held · W82 PIT held · W84 paper align toward research · W85 multi-window paper honesty  
-**GO final gates:** [`docs/proof/w0816t_w85_go_gates_20260817.md`](proof/w0816t_w85_go_gates_20260817.md) · GO = **pre-live-order final gate** · operational GO **未宣言**  
-**Status:** research entry **linked** under COMPLETE **22** · Mass/READY/Phase7/operational GO **NO-GO/未宣言/OFF/未宣言** · default gen = multi-structure classes (not simple daily sign mass) · class hyps **implemented** · **3 default production research_candidates** (xs hold=10 mom=5 · xs hold=10 mom=3 · fund hold=10 mom=10; **not** Mass/READY) · StrategySpec **v3** · continuous paper **UNARMED** · multi-window rehearsal only (honest negatives retained)
+**Cost models:** `research-cost-models/v2` · prefer repo-linked + liquidity-linked + **short = repo[t]×100+spread** + **paper daily repo financing** (opt-in) ([`w0816u_w86_paper_repo_financing_20260817.md`](proof/w0816u_w86_paper_repo_financing_20260817.md) · [`w0816t_w85_short_cost_repo_spread_20260817.md`](proof/w0816t_w85_short_cost_repo_spread_20260817.md) · [`w0816n_w79_liquidity_linked_cost_20260816.md`](proof/w0816n_w79_liquidity_linked_cost_20260816.md) · [`w0816m_w78_repo_linked_cost_model_20260816.md`](proof/w0816m_w78_repo_linked_cost_model_20260816.md))  
+**Stats bar:** `research-stats-metrics/v1` · class-signals **v6** (W83) · W81 stats floors held · W82 PIT held · W84 paper align toward research · W85 multi-window paper honesty · W86 sign selection + paper repo + same-condition compare  
+**GO final gates:** [`docs/proof/w0816u_w86_go_gates_20260817.md`](proof/w0816u_w86_go_gates_20260817.md) · GO = **pre-live-order final gate** · **repo + compare table required before GO consideration** · operational GO **未宣言**  
+**Status:** research entry **linked** under COMPLETE **22** · Mass/READY/Phase7/operational GO **NO-GO/未宣言/OFF/未宣言** · default gen = multi-structure classes (not simple daily sign mass) · class hyps **implemented** · **3 default production research_candidates** (xs hold=10 mom=5 · xs hold=10 mom=3 · fund hold=10 mom=10; all **chosen_sign=+1**; **not** Mass/READY) · StrategySpec **v3** · continuous paper **UNARMED** · multi-window rehearsal with repo financing only (honest negatives retained)
+
+## Sign flip + paper repo financing + same-condition compare residual close（Dataset COMPLETE 22 held · OTC segs 4499 tip-wait · 3 defaults chosen_sign=+1 · compare table ready · GO 未宣言）· W86
+
+**Phase name:** sign flip rule + paper daily repo financing + same-condition comparison table + OTC tip-wait + residual FRESH close（宣言なし · invent なし · NOT Mass · NOT operational GO · NOT simple_daily_sign mass gen · NOT live orders · NOT mean-bp-only · NOT research simplify · NOT hide paper negatives · NOT edge claim from multi-window paper）  
+**Wave:** W86 / w0816u  
+**GO definition:** **GO** = **pre-live-order final gate** (not operational GO declare)  
+**GO prerequisite (explicit):** **repo + compare table required before GO consideration** — both **ready** · GO still **未宣言**  
+**Close:** [`docs/proof/w0816u_w86_go_pre_close_20260817.md`](proof/w0816u_w86_go_pre_close_20260817.md)  
+**Sign flip A:** [`docs/proof/w0816u_w86_sign_flip_nonzero_20260817.md`](proof/w0816u_w86_sign_flip_nonzero_20260817.md) · both sides after cost · **3 defaults all chosen_sign=+1** · fund paper flip weak · mom3+mom5 keep both · class_hyp_eval **v7**  
+**Paper repo B:** [`docs/proof/w0816u_w86_paper_repo_financing_20260817.md`](proof/w0816u_w86_paper_repo_financing_20260817.md) · opt-in mid+repo · multi-window drag ~**−6 bp** · xs **−0.55%** · fund **−1.83%** · mom3 **+0.60%** · stance held  
+**Same-condition C:** [`docs/proof/w0816u_w86_same_condition_compare_20260817.md`](proof/w0816u_w86_same_condition_compare_20260817.md) · chosen_sign only · research short mid + paper repo fin · **table ready**  
+**Default path after W86:** **3** candidates (xs mom5 · xs mom3 · fund mom10) · all **+1** · continuous **UNARMED**  
+**OTC tip-wait:** **4499 → 4499 (Δ0)** · dataset **PARTIAL** · no bulk re-scan · segs **7888**  
+**GO gates:** [`docs/proof/w0816u_w86_go_gates_20260817.md`](proof/w0816u_w86_go_gates_20260817.md)  
+**Health smoke:** `scripts/check_complete22_health.py` local+remote **all_checks_pass** (OTC **4499** ≥ floor 93)  
+**Final verify:** [`.glm-logs/w0816u_w86_residual/`](../.glm-logs/w0816u_w86_residual/) · [`.glm-logs/w0816u_w86_go_pre/`](../.glm-logs/w0816u_w86_go_pre/)  
+**FRESH:** `projgen-5f574bfa112a4872aa469b7b0f5466b5` · coverage_segments untouched (reeval) · mass=NO-GO · densify **none**  
+**S1–S5:** stay **research_baseline_rejected** (no un-reject)  
+**Prior W85 residual:** held underneath  
+
+| gate | status |
+|------|--------|
+| READY | **未宣言** |
+| Mass / Phase7 | **NO-GO / OFF** |
+| operational GO | **未宣言** |
+| GO (pre-live-order final gate) | residual inventory only · **not declared** |
+| **repo + compare table before GO** | **required** · both **ready** · GO still closed |
+| Dataset COMPLETE | **22** held |
+| DEFER | **4** (bars_am · earn_cal · master · OTC **dataset** PARTIAL) |
+| COMPLETE segs | **7888** |
+| empty COMPLETE | **0** |
+| OTC segs COMPLETE | **4499** (tip-wait Δ0 from W85; **dataset still PARTIAL**) |
+| fins_earnings_date | **104/104** COMPLETE · `dataset_coverage` **COMPLETE** |
+| bars_am | COMPLETE **1** tip / PARTIAL **31** · history **DEFER** · tip continuous only |
+| densify | **none** (OTC bulk densify forbidden; tip-wait only) |
+| coverage expand | **tip-wait** |
+| research entry | **linked** ([`w0816h_w74_research_entry_complete22_20260816.md`](proof/w0816h_w74_research_entry_complete22_20260816.md)) |
+| checklist | **v2** (`standard-research-eval-checklist/v2`) |
+| cost models | **v2** repo-linked + liquidity-linked preferred · **short = repo+spread L/M/H** · **paper daily repo financing** opt-in |
+| stats bar | **v1** · \|t\|≥1.5 · Sharpe≥0.50 · win-rate≥0.60 · ≥4 pos years |
+| PIT integrity | **v6** event_post entry held (W82) · no look-ahead · no invent DiscTime |
+| StrategySpec | **v3** sticky fixed_horizon + CS rank + value×mom · optional **signal_sign** · v2 compat |
+| sign selection | **v1** · both sides after cost · **chosen_sign** recorded · defaults all **+1** |
+| same-condition compare | **ready** · strategy / sign / mean / t / Sharpe / paper MW (repo fin) |
+| hyp classes | landed · **3 default research_candidates** · explore stay_explore not default-wired · event_post/multi_day/flow/macro demoted · harness wiring still `research_candidate=False` · `simple_daily_sign` default **OFF** |
+| paper path | multi-window **with repo financing** xs **−0.55%** · fund **−1.83%** · mom3 **+0.60%** · W85 tx-only **−0.49% / −1.77% / +0.66%** retained as before · continuous **UNARMED** · residuals disclosed · not live |
+| JSDA repo | tip held · short cost date-matched · paper daily series connected · no invent ffill |
+| S1–S5 catalog | **research_baseline_rejected** untouched |
+| FRESH | `projgen-5f574bfa112a4872aa469b7b0f5466b5` |
+| COMPLETE 22 health check | **held** (`check_complete22_health.py`) |
+| LIVE_API_EMPTY (bars_am history) | **true** · history_reprobe **FORBIDDEN** |
+| TIP_ONLY_POLICY | **locked** |
+
+### Explicit non-declarations (held)
+
+- **READY** — not declared  
+- **Mass** — **NO-GO / OFF**  
+- **Phase7** — **OFF**  
+- **operational GO** — **未宣言**  
+- **GO final gate declare** — residual only (pre-live-order inventory; not ops arm)  
+- **bars_am history COMPLETE invent** — not claimed (re-probe locked)  
+- **OTC dataset COMPLETE invent / bulk densify** — not claimed / not run (segment COMPLETE 4499 only)  
+- **pre-2008 OTC as main claim** — not claimed  
+- **densify success** — not claimed as coverage expand  
+- **fins segment invent / roll-back** — not done (104/104 held)  
+- **Dataset COMPLETE 23** — not invented (COMPLETE expand = tip-wait)  
+- **research_candidate → Mass/READY/ops GO** — never auto-connects (class_hyp True ≠ Mass)  
+- **S1–S5 un-reject** — not done  
+- **simple_daily_sign mass generation** — forbidden (default OFF)  
+- **earn_cal/master bulk densify** — not done  
+- **edge / significance / orders / live** — none / separate gate / **no live orders**  
+- **paper continuous** — UNARMED; multi-window trial not auto-arm  
+- **multi-window paper PnL as edge claim** — not claimed (honest negatives + mom3 positive shown)  
+- **gate pass → READY/Mass/GO** — never auto-connects  
+- **mean-bp-only promotion** — forbidden  
+- **simplify research to match paper** — forbidden  
+- **hide paper negatives** — forbidden  
+- **event_post W81 KEEP sustained** — **no** (look-ahead contaminated; demoted)  
+- **multi_day force revive** — **no**  
+- **xs mom=10 default** — **rejected** (explore collapse)  
+- **weak explore auto default-wire** — **not done** (frac0.4 · fund hold15/5 stay_explore)  
+- **short cost / paper repo as broker HTB** — not claimed  
+- **sign selection → Mass/READY** — forbidden  
+- **compare table → GO declare** — forbidden (prerequisite only)  
+
+### Residual TOP (W86)
+
+1. **Sign flip rule** — both sides after cost · `chosen_sign` · 3 defaults all **+1** · fund paper flip weak · research stays +1  
+2. **Paper repo connected** — daily repo + short mid opt-in · leverage no double-count · multi-window drag ~**−6 bp** · stance held  
+3. **Comparison table ready** — same-condition · chosen_sign only · research short mid + paper repo fin  
+4. **GO not until these held** — **repo + compare table required before GO consideration** · held · GO **未宣言**  
+5. **3 defaults · no Mass** — xs mom5 KEEP · xs mom3 PROMOTE · fund mom10 KEEP  
+6. **OTC tip-wait** — **4499→4499 (Δ0)** · dataset **PARTIAL** · no bulk re-scan  
+7. **COMPLETE 22 held** · empty **0** · no invent 23 · segs **7888** · costs v2 + short + paper repo · stats bar · PIT integrity held  
+8. **FRESH residual** — `projgen-5f574bfa112a4872aa469b7b0f5466b5` · coverage_segments untouched  
+9. **W85 underneath** — multi-window honesty · short cost mid · StrategySpec v3 · explore stay · OTC 4499  
 
 ## Multi-window paper + short cost residual close（Dataset COMPLETE 22 held · OTC segs 4499 tip-wait · 3 default candidates · multi-window paper honesty · short cost · explore stay · GO 未宣言）· W85
+
 
 **Phase name:** multi-window paper honesty + short cost = f(repo)+spread + xs mom3 promote_default + explore stay + OTC tip-wait + residual FRESH close（宣言なし · invent なし · NOT Mass · NOT operational GO · NOT simple_daily_sign mass gen · NOT live orders · NOT mean-bp-only · NOT research simplify · NOT hide paper negatives · NOT edge claim from multi-window paper）  
 **Wave:** W85 / w0816t  

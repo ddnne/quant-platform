@@ -50,10 +50,12 @@ def _series(**kwargs):
 
 
 def test_wave_and_proof_pin():
+    from research.cost_models import COST_MODELS_PROOF_SHORT_COST_W85
+
     assert COST_MODELS_VERSION == "research-cost-models/v2"
-    assert "W85" in COST_MODELS_WAVE
-    assert "w0816t" in COST_MODELS_WAVE
-    assert "w0816t_w85_short_cost" in COST_MODELS_PROOF
+    # Wave tip advanced to W86 paper-repo connect; W85 short-cost proof pinned.
+    assert "W86" in COST_MODELS_WAVE or "W85" in COST_MODELS_WAVE
+    assert "w0816t_w85_short_cost" in COST_MODELS_PROOF_SHORT_COST_W85
     assert SHORT_BORROW_SPREAD_SENSITIVITY == {
         "low": 25.0,
         "mid": 50.0,

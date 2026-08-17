@@ -243,6 +243,11 @@ class StrategySpecStrategy:
                 short_frac=rule.short_frac,
                 allow_short=rule.allow_short,
             )
+            # W86: optional signal_sign invert (−1) after research sign-selection.
+            sig = int(getattr(rule, "signal_sign", 1) or 1)
+            if sig == -1:
+                signed = {c: (-s if s else s) for c, s in signed.items()}
+                # after invert, shorts may become longs; allow_short already applied
             self._last_signed = dict(signed)
             return _signed_equal_weight_intents(
                 ctx, signed, note="StrategySpec cross_section_rank"
@@ -273,6 +278,15 @@ class StrategySpecStrategy:
                 if s < 0 and not rule.allow_short:
                     s = 0.0
                 signed[code] = s
+            sig = int(getattr(rule, "signal_sign", 1) or 1)
+            if sig == -1:
+                flipped: dict[str, float] = {}
+                for c, s in signed.items():
+                    ns = -s if s else s
+                    if ns < 0 and not rule.allow_short:
+                        ns = 0.0
+                    flipped[c] = ns
+                signed = flipped
             self._last_signed = dict(signed)
             return _signed_equal_weight_intents(
                 ctx, signed, note="StrategySpec value_momentum_agree"

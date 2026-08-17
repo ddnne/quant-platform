@@ -570,8 +570,9 @@ def test_w83_wave_tags_and_default_path_params():
 
     assert CLASS_SIGNALS_VERSION == "class-signals/v6"
     assert "W83" in CLASS_SIGNALS_WAVE
-    assert CLASS_HYP_EVAL_VERSION == "class-hyp-eval/v6"
-    assert "W83" in CLASS_HYP_EVAL_WAVE
+    # W86 / w0816u: class_hyp_eval v7 adds sign-selection both-sides
+    assert CLASS_HYP_EVAL_VERSION == "class-hyp-eval/v7"
+    assert "W86" in CLASS_HYP_EVAL_WAVE
     # PIT event entry held (no look-ahead revival)
     assert EVENT_POST_ENTRY_MODE == "same_day_close_if_pre_close"
 

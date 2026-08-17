@@ -1,0 +1,659 @@
+"""Sign-side selection: evaluate original and inverted after costs (W86 / w0816u).
+
+Purpose
+-------
+For research (and paper) period nets, evaluate **both** signal sides after costs
+and choose the side with positive mean net supported by non-zero evidence.
+This is a **research helper only** — never arms Mass / READY / ops GO / live.
+
+Policy (W86 Task A)
+-------------------
+1. Evaluate BOTH original (+1) and inverted (−1) **after costs**.
+2. Prefer the side with **positive mean net** supported by **non-zero**
+   evidence (``t`` is a guideline, not a hard one-strike gate).
+3. If **both** fail non-zero / near-zero after cost → ``reject`` /
+   ``explore_demote``.
+4. Record ``chosen_sign`` for reproducibility.
+5. Fund paths with multi-window paper mean negative **must** evaluate flip
+   first (caller marks ``paper_mean_negative=True`` → bias toward flip
+   evaluation; still subject to positive-mean + non-zero evidence).
+6. Not simple_daily_sign · no S1–S5 un-reject · no look-ahead.
+
+Cost model for inverted side
+----------------------------
+Given per-period ``gross`` and amortized one-way cost ``c``:
+
+* original net = ``gross − c``
+* inverted net = ``−gross − c``
+
+Costs are paid on both sides (symmetric one-way assumption). When only nets
+and grosses are known, ``c = gross − net``. When only nets are known and
+``amortized_cost`` is supplied as a constant, inverted nets are
+``−(net + c) − c = −net − 2c``.
+
+Hard freezes
+------------
+* Mass = NO-GO · Phase7 = OFF · READY 未宣言 · operational GO closed
+* continuous paper UNARMED · live orders OFF
+"""
+
+from __future__ import annotations
+
+import math
+from typing import Any, Mapping, Sequence
+
+from research.stats_metrics import (
+    DEFAULT_MIN_ABS_T_STAT,
+    period_stats_report,
+    sample_mean,
+    t_stat_vs_zero,
+)
+
+SIGN_SELECTION_VERSION: str = "research-sign-selection/v1"
+SIGN_SELECTION_WAVE: str = "W86 / w0816u"
+
+MASS_RESEARCH: str = "NO-GO"
+PHASE7: str = "OFF"
+READY_DECLARED: bool = False
+OPERATIONAL_GO: bool = False
+SIGNIFICANCE_CLAIMED: bool = False
+EDGE_CLAIMED: bool = False
+
+SIGN_ORIGINAL: int = 1
+SIGN_INVERTED: int = -1
+
+# Near-zero after cost: residual << research economic floor (default 20bp).
+DEFAULT_NEAR_ZERO_ABS_NET: float = 0.0005  # 5bp absolute mean
+# Soft t guideline (not a hard one-strike reject when mean clearly positive).
+DEFAULT_T_GUIDELINE: float = 1.0
+# Research economic mean floor (matches class_signals DEFAULT_MIN_ECONOMIC_NET).
+DEFAULT_MIN_MEAN_NET: float = 0.002  # 20bp
+# Absolute mean floor used as "non-zero evidence" when t is weak/missing.
+DEFAULT_NONZERO_ABS_MEAN: float = 0.0005  # 5bp
+
+
+def _freeze() -> dict[str, Any]:
+    return {
+        "mass_research": MASS_RESEARCH,
+        "phase7": PHASE7,
+        "ready_declared": READY_DECLARED,
+        "operational_go": OPERATIONAL_GO,
+        "significance_claimed": SIGNIFICANCE_CLAIMED,
+        "edge_claimed": EDGE_CLAIMED,
+        "connected_to_ready": False,
+        "connected_to_mass": False,
+        "simple_daily_sign": False,
+        "s1_s5_unreject": False,
+    }
+
+
+def _finite(x: Any) -> float | None:
+    if x is None:
+        return None
+    try:
+        v = float(x)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(v):
+        return None
+    return v
+
+
+def invert_period_net(
+    *,
+    gross: float | None = None,
+    net: float | None = None,
+    amortized_cost: float | None = None,
+) -> float | None:
+    """Compute inverted-side net after the same amortized cost.
+
+    Prefer ``gross`` + ``amortized_cost``; else derive cost from gross−net;
+    else when only net + cost known: ``−net − 2*cost``.
+    """
+    g = _finite(gross)
+    n = _finite(net)
+    c = _finite(amortized_cost)
+    if g is not None and c is not None:
+        return float(-g - c)
+    if g is not None and n is not None:
+        # c = g − n
+        return float(-g - (g - n))
+    if n is not None and c is not None:
+        return float(-n - 2.0 * c)
+    return None
+
+
+def _side_pack(
+    nets: Sequence[float | None],
+    *,
+    period_ids: Sequence[str] | None,
+    hold_days: int | None,
+    sign: int,
+    label: str,
+) -> dict[str, Any]:
+    vals = [_finite(v) for v in nets]
+    clean = [v for v in vals if v is not None]
+    stats = period_stats_report(
+        clean, period_ids=period_ids, hold_days=hold_days
+    )
+    tpack = t_stat_vs_zero(clean)
+    mean_net = sample_mean(clean)
+    n_pos = sum(1 for v in clean if v is not None and v > 0)
+    n_neg = sum(1 for v in clean if v is not None and v < 0)
+    return {
+        "sign": int(sign),
+        "label": label,
+        "period_nets": list(clean),
+        "period_ids": list(period_ids) if period_ids is not None else None,
+        "n_periods": len(clean),
+        "mean_net": mean_net,
+        "mean_net_bp": None if mean_net is None else float(mean_net) * 10_000.0,
+        "t_stat": tpack.get("t_stat"),
+        "abs_t_stat": tpack.get("abs_t_stat"),
+        "sharpe": stats.get("sharpe"),
+        "win_rate": stats.get("win_rate"),
+        "n_pos": n_pos,
+        "n_neg": n_neg,
+        "payoff": stats.get("payoff"),
+        "max_dd": stats.get("max_dd"),
+        "std_net": stats.get("std_net"),
+        "stats": stats,
+        "t_detail": tpack,
+    }
+
+
+def _nonzero_evidence(
+    side: Mapping[str, Any],
+    *,
+    near_zero_abs: float,
+    t_guideline: float,
+) -> dict[str, Any]:
+    """Soft non-zero evidence: |mean| above floor and/or |t| ≥ guideline.
+
+    ``t`` is a **guideline**, not a hard one-strike reject when mean is
+    clearly above the near-zero floor.
+    """
+    mean_net = _finite(side.get("mean_net"))
+    t = _finite(side.get("t_stat"))
+    abs_mean = None if mean_net is None else abs(mean_net)
+    abs_t = None if t is None else abs(t)
+
+    mean_ok = bool(abs_mean is not None and abs_mean >= float(near_zero_abs))
+    t_ok = bool(abs_t is not None and abs_t >= float(t_guideline))
+    # Evidence: clear |mean| alone can pass even if t soft-fails (guideline).
+    # Also: t ok with mean not exactly null.
+    has_evidence = bool(
+        mean_ok
+        or (t_ok and mean_net is not None and abs_mean is not None and abs_mean > 0.0)
+    )
+    near_zero = bool(
+        mean_net is None
+        or abs_mean is None
+        or abs_mean < float(near_zero_abs)
+    )
+    return {
+        "has_nonzero_evidence": has_evidence,
+        "mean_ok": mean_ok,
+        "t_guideline_ok": t_ok,
+        "near_zero": near_zero,
+        "near_zero_abs": float(near_zero_abs),
+        "t_guideline": float(t_guideline),
+        "mean_net": mean_net,
+        "t_stat": t,
+    }
+
+
+def evaluate_sign_both_sides(
+    *,
+    period_grosses: Sequence[float | None] | None = None,
+    period_nets: Sequence[float | None] | None = None,
+    amortized_costs: Sequence[float | None] | float | None = None,
+    period_ids: Sequence[str] | None = None,
+    hold_days: int | None = None,
+    near_zero_abs: float = DEFAULT_NEAR_ZERO_ABS_NET,
+    t_guideline: float = DEFAULT_T_GUIDELINE,
+) -> dict[str, Any]:
+    """Evaluate original and inverted sides after costs.
+
+    Provide either:
+    * ``period_grosses`` (+ optional costs / nets), or
+    * ``period_nets`` + ``amortized_costs`` (scalar or per-period).
+
+    Returns packs for both sides plus evidence flags (no choice yet).
+    """
+    grosses = list(period_grosses) if period_grosses is not None else None
+    nets_in = list(period_nets) if period_nets is not None else None
+
+    n = 0
+    if grosses is not None:
+        n = len(grosses)
+    elif nets_in is not None:
+        n = len(nets_in)
+    if n == 0:
+        empty = _side_pack([], period_ids=period_ids, hold_days=hold_days, sign=1, label="original")
+        empty_i = _side_pack([], period_ids=period_ids, hold_days=hold_days, sign=-1, label="inverted")
+        out = {
+            "version": SIGN_SELECTION_VERSION,
+            "wave": SIGN_SELECTION_WAVE,
+            "original": empty,
+            "inverted": empty_i,
+            "evidence_original": _nonzero_evidence(
+                empty, near_zero_abs=near_zero_abs, t_guideline=t_guideline
+            ),
+            "evidence_inverted": _nonzero_evidence(
+                empty_i, near_zero_abs=near_zero_abs, t_guideline=t_guideline
+            ),
+            "cost_model": "net_inv = -gross - amortized_cost",
+            "reason": "no_periods",
+            **_freeze(),
+        }
+        return out
+
+    # Normalize costs
+    if isinstance(amortized_costs, (int, float)):
+        costs: list[float | None] = [float(amortized_costs)] * n
+    elif amortized_costs is None:
+        costs = [None] * n
+    else:
+        costs = list(amortized_costs)
+        if len(costs) < n:
+            costs = costs + [None] * (n - len(costs))
+
+    orig_nets: list[float | None] = []
+    inv_nets: list[float | None] = []
+    derived_costs: list[float | None] = []
+
+    for i in range(n):
+        g = _finite(grosses[i]) if grosses is not None else None
+        n_i = _finite(nets_in[i]) if nets_in is not None else None
+        c = _finite(costs[i]) if i < len(costs) else None
+        if c is None and g is not None and n_i is not None:
+            c = g - n_i
+        if n_i is None and g is not None and c is not None:
+            n_i = g - c
+        if g is None and n_i is not None and c is not None:
+            g = n_i + c
+        derived_costs.append(c)
+        orig_nets.append(n_i)
+        inv_nets.append(
+            invert_period_net(gross=g, net=n_i, amortized_cost=c)
+        )
+
+    pids = list(period_ids) if period_ids is not None else None
+    if pids is not None and len(pids) != n:
+        pids = None
+
+    original = _side_pack(
+        orig_nets, period_ids=pids, hold_days=hold_days, sign=SIGN_ORIGINAL, label="original"
+    )
+    inverted = _side_pack(
+        inv_nets, period_ids=pids, hold_days=hold_days, sign=SIGN_INVERTED, label="inverted"
+    )
+    ev_o = _nonzero_evidence(
+        original, near_zero_abs=near_zero_abs, t_guideline=t_guideline
+    )
+    ev_i = _nonzero_evidence(
+        inverted, near_zero_abs=near_zero_abs, t_guideline=t_guideline
+    )
+    return {
+        "version": SIGN_SELECTION_VERSION,
+        "wave": SIGN_SELECTION_WAVE,
+        "n_periods": n,
+        "period_ids": pids,
+        "amortized_costs": derived_costs,
+        "original": original,
+        "inverted": inverted,
+        "evidence_original": ev_o,
+        "evidence_inverted": ev_i,
+        "cost_model": "original: gross-c; inverted: -gross-c",
+        "hold_days": int(hold_days) if hold_days is not None else None,
+        **_freeze(),
+    }
+
+
+def choose_sign(
+    both: Mapping[str, Any],
+    *,
+    min_mean_net: float = DEFAULT_MIN_MEAN_NET,
+    near_zero_abs: float = DEFAULT_NEAR_ZERO_ABS_NET,
+    t_guideline: float = DEFAULT_T_GUIDELINE,
+    paper_mean_negative: bool = False,
+    min_abs_t_hard: float | None = None,
+) -> dict[str, Any]:
+    """Choose original or inverted side per W86 policy.
+
+    Rules (in order):
+    1. Side must have **positive** mean net to be preferred.
+    2. Side must have non-zero evidence (|mean|≥near_zero or soft t).
+    3. Optional hard t floor (default **None** — t is guideline only).
+    4. Among eligible positive sides, pick higher mean_net (tie → higher t).
+    5. If only inverted is eligible → chosen_sign = −1 (flip).
+    6. If only original is eligible → chosen_sign = +1.
+    7. If neither eligible → reject / explore_demote.
+    8. When ``paper_mean_negative`` and original mean ≤ 0, prefer flip **if**
+       inverted is eligible (fund path "evaluate flip first").
+    """
+    original = dict(both.get("original") or {})
+    inverted = dict(both.get("inverted") or {})
+    ev_o = dict(
+        both.get("evidence_original")
+        or _nonzero_evidence(
+            original, near_zero_abs=near_zero_abs, t_guideline=t_guideline
+        )
+    )
+    ev_i = dict(
+        both.get("evidence_inverted")
+        or _nonzero_evidence(
+            inverted, near_zero_abs=near_zero_abs, t_guideline=t_guideline
+        )
+    )
+
+    def _eligible(side: Mapping[str, Any], ev: Mapping[str, Any]) -> dict[str, Any]:
+        mean_net = _finite(side.get("mean_net"))
+        t = _finite(side.get("t_stat"))
+        positive = bool(mean_net is not None and mean_net > 0.0)
+        econ_ok = bool(mean_net is not None and mean_net >= float(min_mean_net))
+        evidence = bool(ev.get("has_nonzero_evidence"))
+        hard_t_ok = True
+        if min_abs_t_hard is not None:
+            hard_t_ok = bool(t is not None and abs(t) >= float(min_abs_t_hard))
+        # Prefer positive + evidence. Economic floor is soft for selection
+        # (strict RC still applied by production bar on chosen side).
+        ok = bool(positive and evidence and hard_t_ok)
+        return {
+            "eligible": ok,
+            "positive_mean": positive,
+            "economic_floor_ok": econ_ok,
+            "nonzero_evidence": evidence,
+            "hard_t_ok": hard_t_ok,
+            "mean_net": mean_net,
+            "t_stat": t,
+            "sharpe": side.get("sharpe"),
+            "near_zero": bool(ev.get("near_zero")),
+        }
+
+    elig_o = _eligible(original, ev_o)
+    elig_i = _eligible(inverted, ev_i)
+
+    reasons: list[str] = []
+    chosen: int | None = None
+    decision: str
+
+    # Paper-negative path: evaluate flip first (must still pass eligibility).
+    if paper_mean_negative:
+        reasons.append("paper_mean_negative → evaluate flip first")
+        o_mean = _finite(original.get("mean_net"))
+        if elig_i["eligible"] and (
+            o_mean is None or o_mean <= 0.0 or not elig_o["eligible"]
+        ):
+            chosen = SIGN_INVERTED
+            reasons.append(
+                "inverted eligible with positive mean + non-zero evidence "
+                "(paper-negative flip preference)"
+            )
+
+    if chosen is None:
+        if elig_o["eligible"] and elig_i["eligible"]:
+            mo = float(elig_o["mean_net"] or 0.0)
+            mi = float(elig_i["mean_net"] or 0.0)
+            if mi > mo + 1e-15:
+                chosen = SIGN_INVERTED
+                reasons.append(
+                    f"both eligible; inverted mean_net {mi:.6g} > original {mo:.6g}"
+                )
+            elif mo > mi + 1e-15:
+                chosen = SIGN_ORIGINAL
+                reasons.append(
+                    f"both eligible; original mean_net {mo:.6g} > inverted {mi:.6g}"
+                )
+            else:
+                # tie on mean → higher t
+                to = abs(float(elig_o["t_stat"] or 0.0))
+                ti = abs(float(elig_i["t_stat"] or 0.0))
+                if ti > to:
+                    chosen = SIGN_INVERTED
+                    reasons.append("mean tie; inverted higher |t|")
+                else:
+                    chosen = SIGN_ORIGINAL
+                    reasons.append("mean tie; original higher or equal |t|")
+        elif elig_o["eligible"]:
+            chosen = SIGN_ORIGINAL
+            reasons.append("only original eligible (positive mean + evidence)")
+        elif elig_i["eligible"]:
+            chosen = SIGN_INVERTED
+            reasons.append("only inverted eligible (positive mean + evidence)")
+        else:
+            chosen = None
+            # Distinguish near-zero both vs both negative
+            both_near = bool(ev_o.get("near_zero") and ev_i.get("near_zero"))
+            both_neg = bool(
+                (_finite(original.get("mean_net")) or 0.0) <= 0.0
+                and (_finite(inverted.get("mean_net")) or 0.0) <= 0.0
+            )
+            if both_near:
+                decision = "reject_near_zero_both_sides"
+                reasons.append(
+                    "both sides near-zero after cost → reject/explore_demote"
+                )
+            elif both_neg:
+                decision = "reject_both_non_positive"
+                reasons.append(
+                    "neither side has positive mean with non-zero evidence"
+                )
+            else:
+                decision = "reject_no_eligible_side"
+                reasons.append(
+                    "no side with positive mean + non-zero evidence "
+                    "(t is guideline only)"
+                )
+            out = {
+                "version": SIGN_SELECTION_VERSION,
+                "wave": SIGN_SELECTION_WAVE,
+                "chosen_sign": None,
+                "chosen_label": None,
+                "decision": decision,
+                "verdict": "reject_or_explore_demote",
+                "eligible_original": elig_o,
+                "eligible_inverted": elig_i,
+                "evidence_original": ev_o,
+                "evidence_inverted": ev_i,
+                "original": original,
+                "inverted": inverted,
+                "reasons": reasons,
+                "policy": {
+                    "min_mean_net": float(min_mean_net),
+                    "near_zero_abs": float(near_zero_abs),
+                    "t_guideline": float(t_guideline),
+                    "min_abs_t_hard": min_abs_t_hard,
+                    "paper_mean_negative": bool(paper_mean_negative),
+                    "t_is_guideline_not_hard": True,
+                },
+                **_freeze(),
+            }
+            return out
+
+    label = "original" if chosen == SIGN_ORIGINAL else "inverted"
+    chosen_side = original if chosen == SIGN_ORIGINAL else inverted
+    elig = elig_o if chosen == SIGN_ORIGINAL else elig_i
+    decision = "keep_original" if chosen == SIGN_ORIGINAL else "flip_to_inverted"
+    if not elig.get("economic_floor_ok"):
+        # Still chosen by positive mean + evidence but below econ floor
+        # → explore stay / weak keep note
+        reasons.append(
+            "chosen mean below economic floor "
+            f"({float(min_mean_net)*1e4:.1f}bp) — weak; not hard RC alone"
+        )
+        verdict = "weak_keep_or_explore"
+    else:
+        verdict = "selected"
+
+    return {
+        "version": SIGN_SELECTION_VERSION,
+        "wave": SIGN_SELECTION_WAVE,
+        "chosen_sign": int(chosen),
+        "chosen_label": label,
+        "decision": decision,
+        "verdict": verdict,
+        "chosen_mean_net": chosen_side.get("mean_net"),
+        "chosen_mean_net_bp": chosen_side.get("mean_net_bp"),
+        "chosen_t_stat": chosen_side.get("t_stat"),
+        "chosen_sharpe": chosen_side.get("sharpe"),
+        "chosen_win_rate": chosen_side.get("win_rate"),
+        "eligible_original": elig_o,
+        "eligible_inverted": elig_i,
+        "evidence_original": ev_o,
+        "evidence_inverted": ev_i,
+        "original": original,
+        "inverted": inverted,
+        "reasons": reasons,
+        "policy": {
+            "min_mean_net": float(min_mean_net),
+            "near_zero_abs": float(near_zero_abs),
+            "t_guideline": float(t_guideline),
+            "min_abs_t_hard": min_abs_t_hard,
+            "paper_mean_negative": bool(paper_mean_negative),
+            "t_is_guideline_not_hard": True,
+            "default_min_abs_t_stat_ref": DEFAULT_MIN_ABS_T_STAT,
+        },
+        **_freeze(),
+    }
+
+
+def evaluate_and_choose_sign(
+    *,
+    period_grosses: Sequence[float | None] | None = None,
+    period_nets: Sequence[float | None] | None = None,
+    amortized_costs: Sequence[float | None] | float | None = None,
+    period_ids: Sequence[str] | None = None,
+    hold_days: int | None = None,
+    min_mean_net: float = DEFAULT_MIN_MEAN_NET,
+    near_zero_abs: float = DEFAULT_NEAR_ZERO_ABS_NET,
+    t_guideline: float = DEFAULT_T_GUIDELINE,
+    paper_mean_negative: bool = False,
+    min_abs_t_hard: float | None = None,
+) -> dict[str, Any]:
+    """Convenience: evaluate both sides then choose."""
+    both = evaluate_sign_both_sides(
+        period_grosses=period_grosses,
+        period_nets=period_nets,
+        amortized_costs=amortized_costs,
+        period_ids=period_ids,
+        hold_days=hold_days,
+        near_zero_abs=near_zero_abs,
+        t_guideline=t_guideline,
+    )
+    choice = choose_sign(
+        both,
+        min_mean_net=min_mean_net,
+        near_zero_abs=near_zero_abs,
+        t_guideline=t_guideline,
+        paper_mean_negative=paper_mean_negative,
+        min_abs_t_hard=min_abs_t_hard,
+    )
+    # Merge both-sides detail under one report
+    out = dict(choice)
+    out["both_sides"] = both
+    return out
+
+
+def sign_selection_from_period_rows(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    hold_days: int | None = None,
+    min_mean_net: float = DEFAULT_MIN_MEAN_NET,
+    near_zero_abs: float = DEFAULT_NEAR_ZERO_ABS_NET,
+    t_guideline: float = DEFAULT_T_GUIDELINE,
+    paper_mean_negative: bool = False,
+    min_abs_t_hard: float | None = None,
+    gross_key: str = "gross_signed_mean_active",
+    net_key: str = "net_one_way_mean_active",
+    cost_key: str = "amortized_one_way_cost",
+    status_key: str = "status",
+    period_id_key: str = "period_id",
+) -> dict[str, Any]:
+    """Apply sign selection to class_hyp-style period rows (status==ok)."""
+    ok = [
+        r
+        for r in rows
+        if (status_key is None or r.get(status_key) == "ok")
+        and (
+            r.get(net_key) is not None
+            or r.get(gross_key) is not None
+        )
+    ]
+    grosses = [r.get(gross_key) for r in ok]
+    nets = [r.get(net_key) for r in ok]
+    costs = [r.get(cost_key) for r in ok]
+    pids = [str(r.get(period_id_key) or r.get("year") or f"p{i}") for i, r in enumerate(ok)]
+    # If all costs missing, leave None and let helper derive from gross−net.
+    if all(c is None for c in costs):
+        costs_arg: Sequence[float | None] | None = None
+    else:
+        costs_arg = costs
+    return evaluate_and_choose_sign(
+        period_grosses=grosses,
+        period_nets=nets,
+        amortized_costs=costs_arg,
+        period_ids=pids,
+        hold_days=hold_days,
+        min_mean_net=min_mean_net,
+        near_zero_abs=near_zero_abs,
+        t_guideline=t_guideline,
+        paper_mean_negative=paper_mean_negative,
+        min_abs_t_hard=min_abs_t_hard,
+    )
+
+
+def sign_selection_document() -> dict[str, Any]:
+    """Public document for the sign-selection surface."""
+    doc = {
+        "version": SIGN_SELECTION_VERSION,
+        "wave": SIGN_SELECTION_WAVE,
+        "policy": {
+            "evaluate_both_sides_after_cost": True,
+            "prefer_positive_mean_with_nonzero_evidence": True,
+            "t_is_guideline_not_hard": True,
+            "both_fail_near_zero_or_nonpositive": "reject_or_explore_demote",
+            "record_chosen_sign": True,
+            "paper_negative_fund_evaluate_flip_first": True,
+            "not_simple_daily_sign": True,
+            "no_s1_s5_unreject": True,
+        },
+        "defaults": {
+            "near_zero_abs_net": DEFAULT_NEAR_ZERO_ABS_NET,
+            "t_guideline": DEFAULT_T_GUIDELINE,
+            "min_mean_net": DEFAULT_MIN_MEAN_NET,
+            "nonzero_abs_mean": DEFAULT_NONZERO_ABS_MEAN,
+            "sign_original": SIGN_ORIGINAL,
+            "sign_inverted": SIGN_INVERTED,
+        },
+        "cost_model": {
+            "original": "net = gross - amortized_one_way_cost",
+            "inverted": "net = -gross - amortized_one_way_cost",
+            "note": "symmetric one-way cost assumption; short-borrow remeasure optional upstream",
+        },
+        "note": (
+            "Research-only sign flip helper. chosen_sign recorded for "
+            "reproducibility. Never auto-connects Mass / READY / ops GO / live."
+        ),
+    }
+    doc.update(_freeze())
+    return doc
+
+
+__all__ = [
+    "DEFAULT_MIN_MEAN_NET",
+    "DEFAULT_NEAR_ZERO_ABS_NET",
+    "DEFAULT_NONZERO_ABS_MEAN",
+    "DEFAULT_T_GUIDELINE",
+    "SIGN_INVERTED",
+    "SIGN_ORIGINAL",
+    "SIGN_SELECTION_VERSION",
+    "SIGN_SELECTION_WAVE",
+    "choose_sign",
+    "evaluate_and_choose_sign",
+    "evaluate_sign_both_sides",
+    "invert_period_net",
+    "sign_selection_document",
+    "sign_selection_from_period_rows",
+]

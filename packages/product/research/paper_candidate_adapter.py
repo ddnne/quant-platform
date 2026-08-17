@@ -65,7 +65,7 @@ from research.hypothesis_classes import (
 
 PAPER_CANDIDATE_SPEC_VERSION: str = "paper-candidate-spec/v1"
 PAPER_CANDIDATE_ADAPTER_VERSION: str = "paper-candidate-adapter/v2"
-PAPER_CANDIDATE_WAVE: str = "W85 / w0816t"
+PAPER_CANDIDATE_WAVE: str = "W86 / w0816u"
 MASS_RESEARCH: str = "NO-GO"
 PHASE7: str = "OFF"
 READY_DECLARED: bool = False
@@ -337,6 +337,7 @@ def build_cross_section_hold_strategy_spec(
     long_frac: float = DEFAULT_CS_LONG_FRAC,
     short_frac: float = DEFAULT_CS_SHORT_FRAC,
     allow_short: bool = True,
+    signal_sign: int = 1,
     momentum_version: str = DEFAULT_MOMENTUM_FEATURE_VERSION,
     strategy_id: str | None = None,
     rationale: str = "",
@@ -344,10 +345,14 @@ def build_cross_section_hold_strategy_spec(
     """Research-aligned CS sticky hold: rank L-S + fixed_horizon hold.
 
     Defaults match W83/W84 production candidate: hold=10 · mom=5 · frac=0.3.
+    ``signal_sign``: +1 original / −1 inverted (W86 sign selection).
     """
     h = max(1, int(hold_days))
     n_mom = max(1, int(momentum_n))
+    s_sign = int(signal_sign) if int(signal_sign) in (1, -1) else 1
     sid = strategy_id or f"paper_xs_hold{h}_mom{n_mom}_cs_rank"
+    if s_sign == -1 and strategy_id is None:
+        sid = f"{sid}_inv"
     return StrategySpec(
         strategy_id=sid,
         version=STRATEGY_SPEC_VERSION,
@@ -360,13 +365,14 @@ def build_cross_section_hold_strategy_spec(
             long_frac=float(long_frac),
             short_frac=float(short_frac),
             allow_short=bool(allow_short),
+            signal_sign=s_sign,
         ),
         rationale=rationale
         or (
             f"Paper for cross_section sticky hold={h}d mom_n={n_mom}: "
             f"rank L-S long_frac={long_frac} short_frac={short_frac} "
-            f"allow_short={allow_short}; fixed_horizon rebalance. "
-            "UNARMED limited trial only."
+            f"allow_short={allow_short} signal_sign={s_sign}; "
+            f"fixed_horizon rebalance. UNARMED limited trial only."
         ),
         rebalance=REBALANCE_FIXED_HORIZON if h > 1 else "daily",
         hold_days=h if h > 1 else None,
@@ -379,15 +385,22 @@ def build_fundamentals_hold_strategy_spec(
     momentum_n: int = DEFAULT_FUND_MOMENTUM_N,
     mode: str = "value_momentum_agree",
     allow_short: bool = True,
+    signal_sign: int = 1,
     momentum_version: str = DEFAULT_MOMENTUM_FEATURE_VERSION,
     value_version: str = DEFAULT_FUND_VALUE_FEATURE_VERSION,
     strategy_id: str | None = None,
     rationale: str = "",
 ) -> StrategySpec:
-    """Research-aligned fund path: value×mom agree + fixed_horizon hold."""
+    """Research-aligned fund path: value×mom agree + fixed_horizon hold.
+
+    ``signal_sign``: +1 original / −1 inverted (W86 sign selection).
+    """
     h = max(1, int(hold_days))
     n_mom = max(1, int(momentum_n))
+    s_sign = int(signal_sign) if int(signal_sign) in (1, -1) else 1
     sid = strategy_id or f"paper_fund_hold{h}_mom{n_mom}_value_mom"
+    if s_sign == -1 and strategy_id is None:
+        sid = f"{sid}_inv"
     return StrategySpec(
         strategy_id=sid,
         version=STRATEGY_SPEC_VERSION,
@@ -404,12 +417,13 @@ def build_fundamentals_hold_strategy_spec(
             ),
             mode=str(mode or "value_momentum_agree"),
             allow_short=bool(allow_short),
+            signal_sign=s_sign,
         ),
         rationale=rationale
         or (
-            f"Paper for fundamentals_price hold={h}d mom_n={n_mom} mode={mode}: "
-            "value score (BPS/P|EPS/P PIT) × momentum agree; fixed_horizon. "
-            "UNARMED limited trial only."
+            f"Paper for fundamentals_price hold={h}d mom_n={n_mom} mode={mode} "
+            f"signal_sign={s_sign}: value score (BPS/P|EPS/P PIT) × momentum "
+            "agree; fixed_horizon. UNARMED limited trial only."
         ),
         rebalance=REBALANCE_FIXED_HORIZON if h > 1 else "daily",
         hold_days=h if h > 1 else None,
@@ -693,12 +707,19 @@ def adapt_class_hyp_candidate(
         long_frac = float(payload.get("long_frac", DEFAULT_CS_LONG_FRAC))
         short_frac = float(payload.get("short_frac", DEFAULT_CS_SHORT_FRAC))
         allow_short = bool(payload.get("allow_short", True))
+        # W86 chosen_sign from sign selection (default +1 original)
+        s_sign_raw = payload.get("chosen_sign", payload.get("signal_sign", 1))
+        try:
+            s_sign = int(s_sign_raw) if int(s_sign_raw) in (1, -1) else 1
+        except (TypeError, ValueError):
+            s_sign = 1
         spec = build_cross_section_hold_strategy_spec(
             hold_days=h,
             momentum_n=n_mom_i,
             long_frac=long_frac,
             short_frac=short_frac,
             allow_short=allow_short,
+            signal_sign=s_sign,
             strategy_id=strategy_id,
         )
         horizon = f"hold_{h}d_mom{n_mom_i}"
@@ -737,11 +758,17 @@ def adapt_class_hyp_candidate(
         n_mom_i = int(n_mom) if n_mom is not None else (10 if h == 10 else h)
         mode = str(payload.get("mode") or "value_momentum_agree")
         allow_short = bool(payload.get("allow_short", True))
+        s_sign_raw = payload.get("chosen_sign", payload.get("signal_sign", 1))
+        try:
+            s_sign = int(s_sign_raw) if int(s_sign_raw) in (1, -1) else 1
+        except (TypeError, ValueError):
+            s_sign = 1
         spec = build_fundamentals_hold_strategy_spec(
             hold_days=h,
             momentum_n=n_mom_i,
             mode=mode,
             allow_short=allow_short,
+            signal_sign=s_sign,
             strategy_id=strategy_id,
         )
         horizon = f"hold_{h}d_mom{n_mom_i}"

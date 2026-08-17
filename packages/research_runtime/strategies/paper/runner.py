@@ -8,7 +8,14 @@ from pathlib import Path
 from typing import Any
 
 import features
-from core import BacktestResult, run_backtest, short_financing, standard_cost
+from core import (
+    BacktestResult,
+    leverage_financing,
+    load_repo_rates_by_date_for_paper,
+    run_backtest,
+    short_financing,
+    standard_cost,
+)
 from paper_runtime import (
     DATA_SNAPSHOT_FORMAT,
     data_snapshot_id,
@@ -21,7 +28,10 @@ from .store import JsonPaperStore
 from .types import PaperRunConfig, PaperRunResult
 
 
-PAPER_RUNNER_VERSION = "0.6.0"
+# 0.6.0 — Phase 5 paper runner baseline
+# 0.6.1 — W85 optional short financing via PaperRunConfig
+# 0.7.0 — W86 daily repo auto-load + leverage financing (mid + repo default)
+PAPER_RUNNER_VERSION = "0.7.0"
 
 
 def fingerprint_db(db_path: str | Path) -> str:
@@ -59,6 +69,149 @@ def _feature_versions(strategy: Any) -> dict[str, str]:
     }
 
 
+def _resolve_repo_rates(
+    config: PaperRunConfig,
+    *,
+    explicit: dict[str, float] | None,
+    auto_load: bool,
+    db_path: Path,
+) -> tuple[dict[str, float] | None, dict[str, Any] | None]:
+    """Resolve date→repo_pct for financing.
+
+    Prefer explicit config rates; else auto-load from the paper DB via the
+    core PIT helper when ``auto_load`` is True. Empty DB → ``None`` (fixed
+    placeholder path). Never invents gap fills.
+    """
+    if explicit is not None:
+        rates = {str(k)[:10]: float(v) for k, v in explicit.items()}
+        return rates, {
+            "load_path": "config_explicit",
+            "series_present": bool(rates),
+            "n_obs": len(rates),
+            "gap_policy": "disclose_only_no_ffill_no_invent",
+            "ffill_applied": False,
+            "invent_fill": False,
+        }
+    if not auto_load:
+        return None, {
+            "load_path": "disabled",
+            "series_present": False,
+            "n_obs": 0,
+            "gap_policy": "disclose_only_no_ffill_no_invent",
+            "ffill_applied": False,
+            "invent_fill": False,
+        }
+    try:
+        pack = load_repo_rates_by_date_for_paper(
+            db_path=db_path,
+            start=config.start,
+            end=config.end,
+        )
+    except Exception as exc:  # pragma: no cover - disclosed failure path
+        return None, {
+            "load_path": "pit.get_jsda_repo_rates",
+            "series_present": False,
+            "n_obs": 0,
+            "error": f"{type(exc).__name__}: {exc}",
+            "gap_policy": "disclose_only_no_ffill_no_invent",
+            "ffill_applied": False,
+            "invent_fill": False,
+            "note": "Repo auto-load failed; falling back to fixed placeholder.",
+        }
+    rates = dict(pack.get("rates_by_date") or {})
+    if not rates:
+        return None, pack
+    return rates, pack
+
+
+def _build_financing_models(
+    config: PaperRunConfig,
+    *,
+    db_path: Path,
+) -> tuple[Any, Any, dict[str, Any]]:
+    """Build short + leverage financing models for one paper run.
+
+    Defaults when enabled: **mid** short spread + date-matched repo when the
+    series is present. Leverage uses the same repo series with **no** short
+    spread (no double-count).
+    """
+    load_meta: dict[str, Any] = {
+        "short_financing_enabled": bool(config.short_financing_enabled),
+        "default_sensitivity": "mid",
+        "double_count_policy": (
+            "short = repo + spread; leverage = repo only on excess gross"
+        ),
+    }
+
+    short_enabled = bool(config.short_financing_enabled)
+    lev_flag = config.leverage_financing_enabled
+    lev_enabled = bool(short_enabled if lev_flag is None else lev_flag)
+
+    shared_rates: dict[str, float] | None = None
+    shared_meta: dict[str, Any] | None = None
+
+    sf_model = None
+    if short_enabled:
+        rates, meta = _resolve_repo_rates(
+            config,
+            explicit=config.short_financing_repo_rates,
+            auto_load=bool(config.short_financing_auto_load_repo),
+            db_path=db_path,
+        )
+        shared_rates, shared_meta = rates, meta
+        load_meta["short_repo_load"] = meta
+        sf_model = short_financing(
+            sensitivity=str(config.short_financing_sensitivity or "mid"),
+            spread_bp=config.short_financing_spread_bp,
+            repo_rates_by_date=rates,
+            fallback_repo_annual_bp=float(
+                config.short_financing_fallback_repo_annual_bp or 0.0
+            ),
+            enabled=True,
+        )
+
+    lev_model = None
+    if lev_enabled:
+        if config.leverage_financing_repo_rates is not None:
+            rates, meta = _resolve_repo_rates(
+                config,
+                explicit=config.leverage_financing_repo_rates,
+                auto_load=False,
+                db_path=db_path,
+            )
+        elif shared_rates is not None or shared_meta is not None:
+            # Reuse short-leg series when both enabled (single load).
+            rates, meta = shared_rates, shared_meta or {
+                "load_path": "shared_with_short",
+                "series_present": bool(shared_rates),
+                "n_obs": len(shared_rates or {}),
+            }
+        else:
+            rates, meta = _resolve_repo_rates(
+                config,
+                explicit=None,
+                auto_load=bool(config.leverage_financing_auto_load_repo),
+                db_path=db_path,
+            )
+        load_meta["leverage_repo_load"] = meta
+        lev_model = leverage_financing(
+            repo_rates_by_date=rates,
+            fallback_repo_annual_bp=float(
+                config.leverage_financing_fallback_repo_annual_bp or 0.0
+            ),
+            enabled=True,
+        )
+
+    load_meta["leverage_financing_enabled"] = lev_enabled
+    load_meta["short_has_repo_series"] = bool(
+        sf_model is not None and sf_model.has_repo_series
+    )
+    load_meta["leverage_has_repo_series"] = bool(
+        lev_model is not None and lev_model.has_repo_series
+    )
+    return sf_model, lev_model, load_meta
+
+
 def _reproducibility(
     result: BacktestResult,
     *,
@@ -68,6 +221,7 @@ def _reproducibility(
     feature_hashes: dict[str, str],
     strategy_hash: str,
     commit: str,
+    financing_load: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     core_md = result.metadata
     return {
@@ -83,6 +237,9 @@ def _reproducibility(
         "cost_model": dict(core_md["cost_model"]),
         "short_financing": core_md.get("short_financing"),
         "short_financing_applied": core_md.get("short_financing_applied"),
+        "leverage_financing": core_md.get("leverage_financing"),
+        "leverage_financing_applied": core_md.get("leverage_financing_applied"),
+        "repo_financing_load": financing_load,
         "universe": list(config.universe) if config.universe is not None else None,
         "universe_rule": core_md["universe_rule"],
         "lookback_days": core_md["lookback_days"],
@@ -123,6 +280,7 @@ def _experiment_id(reproduction: dict[str, Any]) -> str:
             "as_of_rule": reproduction["as_of_rule"],
             "cost_model": reproduction["cost_model"],
             "short_financing": reproduction.get("short_financing"),
+            "leverage_financing": reproduction.get("leverage_financing"),
             "universe": reproduction["universe"],
             "universe_rule": reproduction["universe_rule"],
             "lookback_days": reproduction["lookback_days"],
@@ -149,29 +307,23 @@ def run_paper(
     concurrent mutation fails closed rather than emitting reproduction
     metadata for a mixed snapshot.  For this deterministic pure-backtest
     runner, ``run_id == experiment_id`` by policy.
+
+    W86 financing defaults (when enabled): mid short spread + daily repo
+    series auto-loaded from the paper DB when present; leverage financing
+    uses the same repo without re-applying short spread.
     """
     configured_path = Path(config.db_path or "data/structured/ingestion.sqlite")
-    before = data_snapshot_id(configured_path)
     feature_versions = _feature_versions(strategy)
     feature_hashes = feature_definition_hashes(feature_versions)
     strategy_hash = strategy_definition_hash(strategy)
     commit = git_commit()
-    sf_model = None
-    if bool(getattr(config, "short_financing_enabled", False)):
-        sf_model = short_financing(
-            sensitivity=str(
-                getattr(config, "short_financing_sensitivity", "mid") or "mid"
-            ),
-            spread_bp=getattr(config, "short_financing_spread_bp", None),
-            repo_rates_by_date=getattr(
-                config, "short_financing_repo_rates", None
-            ),
-            fallback_repo_annual_bp=float(
-                getattr(config, "short_financing_fallback_repo_annual_bp", 0.0)
-                or 0.0
-            ),
-            enabled=True,
-        )
+    # Resolve financing (may open DB via PIT for repo auto-load) **before**
+    # the mutation-guard snapshot so a read-side WAL open is not mistaken for
+    # concurrent data mutation during the backtest.
+    sf_model, lev_model, financing_load = _build_financing_models(
+        config, db_path=configured_path
+    )
+    before = data_snapshot_id(configured_path)
     backtest = run_backtest(
         strategy,
         config.start,
@@ -180,6 +332,7 @@ def run_paper(
         execution_mode=config.execution_mode,
         cost_model=standard_cost(config.cost_bps),
         short_financing=sf_model,
+        leverage_financing=lev_model,
         universe=config.universe,
         starting_capital=config.starting_capital,
         lookback_days=config.lookback_days,
@@ -201,6 +354,7 @@ def run_paper(
         feature_hashes=feature_hashes,
         strategy_hash=strategy_hash,
         commit=commit,
+        financing_load=financing_load,
     )
     experiment_id = _experiment_id(reproduction)
     result = PaperRunResult(

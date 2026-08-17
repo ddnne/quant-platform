@@ -12,6 +12,9 @@ Version history
   with ``hold_days``, plus research-aligned rules:
   ``cross_section_rank`` (CS L-S) and ``value_momentum_agree`` (fund value×mom).
   v2 payloads remain parseable and interpretable.
+* W86 / w0816u — optional ``signal_sign`` (+1 original / −1 inverted) on
+  ``cross_section_rank`` and ``value_momentum_agree`` for reproducibility of
+  research sign-selection. Default +1; omitted from to_dict when +1.
 """
 
 from __future__ import annotations
@@ -209,6 +212,19 @@ class TopKRule:
         }
 
 
+def _signal_sign(value: Any, where: str) -> int:
+    """+1 original / −1 inverted (W86 sign selection). Default +1."""
+    if value is None:
+        return 1
+    try:
+        s = int(value)
+    except (TypeError, ValueError) as exc:
+        raise StrategySpecError(f"{where} must be +1 or -1") from exc
+    if s not in (1, -1):
+        raise StrategySpecError(f"{where} must be +1 or -1, got {s!r}")
+    return s
+
+
 @dataclass(frozen=True)
 class CrossSectionRankRule:
     """Same-day rank long/short from one approved feature (research CS L-S).
@@ -216,12 +232,16 @@ class CrossSectionRankRule:
     Top ``long_frac`` → long equal weight; bottom ``short_frac`` → short equal
     weight (when ``allow_short``). Middle band is flat. Sticky hold is expressed
     via StrategySpec ``rebalance=fixed_horizon`` + ``hold_days``.
+
+    ``signal_sign``: +1 keep rank direction; −1 invert (short winners / long
+    losers) after research sign-selection (W86).
     """
 
     feature: FeatureRef
     long_frac: float = 0.3
     short_frac: float = 0.3
     allow_short: bool = True
+    signal_sign: int = 1
     type: str = field(default="cross_section_rank", init=False)
 
     def __post_init__(self) -> None:
@@ -235,6 +255,11 @@ class CrossSectionRankRule:
         )
         if not isinstance(self.allow_short, bool):
             raise StrategySpecError("cross_section_rank.allow_short must be a boolean")
+        object.__setattr__(
+            self,
+            "signal_sign",
+            _signal_sign(self.signal_sign, "cross_section_rank.signal_sign"),
+        )
 
     @property
     def feature_id(self) -> str:
@@ -249,13 +274,17 @@ class CrossSectionRankRule:
         return self.feature.params
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        out = {
             "type": self.type,
             "feature": self.feature.to_dict(),
             "long_frac": self.long_frac,
             "short_frac": self.short_frac,
             "allow_short": self.allow_short,
         }
+        # Omit default +1 so legacy payloads still round-trip equal.
+        if int(self.signal_sign) != 1:
+            out["signal_sign"] = int(self.signal_sign)
+        return out
 
 
 @dataclass(frozen=True)
@@ -265,12 +294,15 @@ class ValueMomentumAgreeRule:
     Long when value_score > CS median (or 0 when no CS) AND momentum > 0;
     short when value_score < median AND momentum < 0; else flat. Sticky hold
     via ``rebalance=fixed_horizon`` + ``hold_days``.
+
+    ``signal_sign``: +1 keep; −1 invert after research sign-selection (W86).
     """
 
     value_feature: FeatureRef
     momentum_feature: FeatureRef
     mode: str = "value_momentum_agree"
     allow_short: bool = True
+    signal_sign: int = 1
     type: str = field(default="value_momentum_agree", init=False)
 
     def __post_init__(self) -> None:
@@ -293,15 +325,23 @@ class ValueMomentumAgreeRule:
             raise StrategySpecError(
                 "value_momentum_agree.allow_short must be a boolean"
             )
+        object.__setattr__(
+            self,
+            "signal_sign",
+            _signal_sign(self.signal_sign, "value_momentum_agree.signal_sign"),
+        )
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        out = {
             "type": self.type,
             "value_feature": self.value_feature.to_dict(),
             "momentum_feature": self.momentum_feature.to_dict(),
             "mode": self.mode,
             "allow_short": self.allow_short,
         }
+        if int(self.signal_sign) != 1:
+            out["signal_sign"] = int(self.signal_sign)
+        return out
 
 
 Rule = ThresholdRule | TopKRule | CrossSectionRankRule | ValueMomentumAgreeRule
@@ -350,7 +390,14 @@ def _parse_rule(payload: Any, *, version: str) -> Rule:
             )
         _strict_keys(
             payload,
-            {"type", "feature", "long_frac", "short_frac", "allow_short"},
+            {
+                "type",
+                "feature",
+                "long_frac",
+                "short_frac",
+                "allow_short",
+                "signal_sign",
+            },
             "cross_section_rank rule",
         )
         required = {"feature"} - set(payload)
@@ -363,6 +410,7 @@ def _parse_rule(payload: Any, *, version: str) -> Rule:
             long_frac=payload.get("long_frac", 0.3),
             short_frac=payload.get("short_frac", 0.3),
             allow_short=payload.get("allow_short", True),
+            signal_sign=payload.get("signal_sign", 1),
         )
     if rule_type == "value_momentum_agree":
         if rule_type not in allowed:
@@ -377,6 +425,7 @@ def _parse_rule(payload: Any, *, version: str) -> Rule:
                 "momentum_feature",
                 "mode",
                 "allow_short",
+                "signal_sign",
             },
             "value_momentum_agree rule",
         )
@@ -390,6 +439,7 @@ def _parse_rule(payload: Any, *, version: str) -> Rule:
             momentum_feature=FeatureRef.from_dict(payload["momentum_feature"]),
             mode=payload.get("mode", "value_momentum_agree"),
             allow_short=payload.get("allow_short", True),
+            signal_sign=payload.get("signal_sign", 1),
         )
     raise StrategySpecError(
         f"unknown rule type {rule_type!r}; allowed: {sorted(allowed)}"
