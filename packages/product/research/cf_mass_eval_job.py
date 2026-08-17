@@ -1,26 +1,31 @@
-"""Cloudflare multi-logic × multi-period mass eval job (W90 / w0816y).
+"""Cloudflare multi-logic × multi-period mass eval job (W91 / w0818a).
 
 Implements a real CF Worker path for evaluating **multiple economic logics**
 across **multiple period windows**, writing artifacts to R2
-``quant-structured`` under ``research/mass_factory/job={id}/…``.
+``quant-structured`` under ``research/mass_eval/job={id}/…``.
 
 Architecture
 ------------
-* **Worker:** ``platform/workers/mass-eval`` (TypeScript)
-  - Loads lite bar panels from D1 ``jquants_daily_bars``
+* **Worker:** ``platform/workers/research-mass-eval`` (TypeScript)
+  - ``mode=r2_panels`` — staged COMPLETE-backed real bars (W91 preferred)
+  - ``mode=d1_bars`` — D1 ``jquants_records`` tip extract (hot window only)
+  - ``mode=synthetic`` — deterministic PRNG (W90 residual smoke)
+  - ``mode=nets_only`` — pre-baked period nets
   - Evaluates bar-native logics (mdh / xs / vol) across period shards
-  - Writes ``batch_summary.json`` + ``results.json`` to R2
-* **Driver (this module):** builds job payload, invokes Worker via HTTPS,
-  records job id / counts / artifact keys. Optionally uploads a denser
-  input shard to R2 for non-bar-native logics.
+  - Writes summary/results/ranking to R2
+* **Driver (this module):** builds job payload, stages real panels from
+  local COMPLETE-backed R2 mirrors (W63/W64), invokes Worker via HTTPS,
+  records job id / counts / artifact keys.
 
-Lite shard policy (first cut)
------------------------------
-* max_codes ≤ 20, max_days ≤ 80 per period, ≤ 6 periods
-* Full multi-year deep eval remains local ``run_mass_factory`` /
+W91 multi-period policy
+-----------------------
+* ≥4–6 multi-year windows (full-prefer 2015/19/21/23 + Q4 2017/25)
+* max_codes ≤ 20, max_days ≤ 200 per period (CF wall-clock safe)
+* Heavy multi-year deep eval remains local ``run_mass_factory`` /
   ``class_hyp_eval`` for promising survivors only
 
 Does **not** arm Mass / READY / GO / continuous paper / live.
+Does **not** retune the three frozen default-path representatives.
 """
 
 from __future__ import annotations
@@ -37,6 +42,10 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 from uuid import uuid4
 
+from data_contracts.permanent_defer import (
+    PERMANENT_DEFER_DATASETS,
+    PERMANENT_DEFER_IDS,
+)
 from research.mass_strategy_factory import (
     CONTINUOUS_PAPER,
     LOGIC_TEMPLATES,
@@ -48,10 +57,10 @@ from research.mass_strategy_factory import (
     generate_strategy_batch,
     run_batch_eval,
 )
-from research.single_shot_job import default_r2_put
+from research.single_shot_job import COMPLETE_21_DATASETS, default_r2_put
 
-CF_MASS_EVAL_VERSION: str = "cf-mass-eval-job/v1"
-CF_MASS_EVAL_WAVE: str = "W90 / w0816y"
+CF_MASS_EVAL_VERSION: str = "cf-mass-eval-job/v2"
+CF_MASS_EVAL_WAVE: str = "W91 / w0818a"
 RESEARCH_ARTIFACT_BUCKET: str = "quant-structured"
 RESEARCH_ARTIFACT_PREFIX: str = "research/mass_eval"
 DEFAULT_WORKER_NAME: str = "quant-platform-research-mass-eval"
@@ -60,20 +69,53 @@ DEFAULT_WORKER_URL: str = (
 )
 RESEARCH_ARTIFACT_PREFIX_LEGACY: str = "research/mass_factory"
 DEFAULT_MAX_CODES: int = 15
-DEFAULT_MAX_DAYS: int = 60
+DEFAULT_MAX_DAYS: int = 120
 DEFAULT_ONE_WAY: float = 0.001
 
+# W91 preferred default is real staged panels (not synthetic).
+DEFAULT_W91_MODE: str = "r2_panels"
+ALLOWED_MODES: frozenset[str] = frozenset(
+    {"r2_panels", "d1_bars", "synthetic", "nets_only"}
+)
+
+# COMPLETE 22 = COMPLETE 21 + fins_earnings_date (W68 tip4 seal).
+# Permanent DEFER residual (n=4) stays PARTIAL / tip-only.
+COMPLETE_22_DATASETS: tuple[str, ...] = tuple(
+    sorted(set(COMPLETE_21_DATASETS) | {"fins_earnings_date"})
+)
+COMPLETE_22_DATASET_SET: frozenset[str] = frozenset(COMPLETE_22_DATASETS)
+# Bar-native primary for CF mass-eval real panels.
+PRIMARY_BARS_DATASET: str = "equities_bars_daily"
+PRIMARY_INDEX_DATASETS: tuple[str, ...] = (
+    "indices_bars_daily_topix",
+    "indices_bars_daily",
+)
+
+if len(COMPLETE_22_DATASETS) != 22:
+    raise RuntimeError(
+        f"COMPLETE_22_DATASETS must have 22 ids, got {len(COMPLETE_22_DATASETS)}"
+    )
+if COMPLETE_22_DATASET_SET & PERMANENT_DEFER_DATASETS:
+    raise RuntimeError(
+        "COMPLETE_22_DATASETS must not intersect permanent DEFER: "
+        f"{sorted(COMPLETE_22_DATASET_SET & PERMANENT_DEFER_DATASETS)}"
+    )
+
 # Bar-native logics the CF Worker can evaluate without extra panels.
+# W91: nky_vol_* need staged index closes (__NKY_PROXY__) in panels.
 CF_BAR_NATIVE_LOGIC_IDS: tuple[str, ...] = (
     "mdh_sticky_momentum",
     "mdh_mean_reversion",
     "xs_rank_ls_sticky",
     "xs_rank_ls_daily",
-    "vol_mom_over_vol",
-    "vol_low_vol_long",
+    "vol_risk_adjusted_mom",
+    "vol_breakout_expand",
+    "nky_vol_abs_level",
+    "nky_vol_term_levels",
+    "nky_vol_term_ratio",
 )
 
-# Lite multi-period shards (documented; wall-clock safe on CF).
+# Lite multi-period shards (W90 residual; synthetic / tip smoke).
 DEFAULT_LITE_PERIODS: tuple[dict[str, str], ...] = (
     {"period_id": "p2024_q4", "start": "2024-10-01", "end": "2024-12-27"},
     {"period_id": "p2025_q1", "start": "2025-01-06", "end": "2025-03-28"},
@@ -81,6 +123,53 @@ DEFAULT_LITE_PERIODS: tuple[dict[str, str], ...] = (
     {"period_id": "p2025_q3", "start": "2025-07-01", "end": "2025-09-26"},
     {"period_id": "p2025_q4", "start": "2025-10-01", "end": "2025-12-26"},
     {"period_id": "p2026_h1", "start": "2026-01-05", "end": "2026-06-30"},
+)
+
+# W91 real multi-year windows (≥6; longer than W90 Q4-only smoke when data allows).
+# Full-prefer 2015/19/21/23 from W64 COMPLETE-backed mirrors; Q4 for 2017/2025.
+DEFAULT_REAL_MULTIYEAR_PERIODS: tuple[dict[str, Any], ...] = (
+    {
+        "period_id": "y2015_full",
+        "year": 2015,
+        "period_start": "2015-01-05",
+        "period_end": "2015-10-21",
+        "window_kind": "full_prefer",
+    },
+    {
+        "period_id": "y2017_q4",
+        "year": 2017,
+        "period_start": "2017-09-01",
+        "period_end": "2017-12-29",
+        "window_kind": "q4",
+    },
+    {
+        "period_id": "y2019_full",
+        "year": 2019,
+        "period_start": "2019-01-04",
+        "period_end": "2019-10-18",
+        "window_kind": "full_prefer",
+    },
+    {
+        "period_id": "y2021_full",
+        "year": 2021,
+        "period_start": "2021-01-04",
+        "period_end": "2021-10-15",
+        "window_kind": "full_prefer",
+    },
+    {
+        "period_id": "y2023_full",
+        "year": 2023,
+        "period_start": "2023-01-04",
+        "period_end": "2023-10-13",
+        "window_kind": "full_prefer",
+    },
+    {
+        "period_id": "y2025_q4",
+        "year": 2025,
+        "period_start": "2025-09-01",
+        "period_end": "2025-12-29",
+        "window_kind": "q4",
+    },
 )
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -190,43 +279,331 @@ def default_logic_specs(
     return out
 
 
+def normalize_period_row(raw: Mapping[str, Any]) -> dict[str, Any]:
+    """Normalize period dict to worker shape (period_start/end + year)."""
+    p = dict(raw)
+    pid = str(p.get("period_id") or p.get("id") or "period")
+    start = (
+        p.get("period_start")
+        or p.get("start")
+        or ""
+    )
+    end = p.get("period_end") or p.get("end") or ""
+    year = p.get("year")
+    if year is None and start:
+        try:
+            year = int(str(start)[:4])
+        except ValueError:
+            year = None
+    if year is None:
+        # try parse from period_id like y2015_full
+        for token in pid.replace("-", "_").split("_"):
+            if token.startswith("y") and token[1:].isdigit() and len(token) == 5:
+                year = int(token[1:])
+                break
+            if token.isdigit() and len(token) == 4:
+                year = int(token)
+                break
+    out: dict[str, Any] = {"period_id": pid}
+    if year is not None:
+        out["year"] = int(year)
+    if start:
+        out["period_start"] = str(start)[:10]
+        out["start"] = str(start)[:10]
+    if end:
+        out["period_end"] = str(end)[:10]
+        out["end"] = str(end)[:10]
+    if p.get("window_kind"):
+        out["window_kind"] = p["window_kind"]
+    return out
+
+
+def inventory_complete22() -> dict[str, Any]:
+    """Machine inventory of COMPLETE 22 + permanent DEFER residual."""
+    return {
+        "wave": CF_MASS_EVAL_WAVE,
+        "dataset_complete_n": len(COMPLETE_22_DATASETS),
+        "complete_22": list(COMPLETE_22_DATASETS),
+        "primary_bars_dataset": PRIMARY_BARS_DATASET,
+        "primary_index_datasets": list(PRIMARY_INDEX_DATASETS),
+        "permanent_defer_n": len(PERMANENT_DEFER_DATASETS),
+        "permanent_defer": sorted(PERMANENT_DEFER_DATASETS),
+        "permanent_defer_ids": dict(PERMANENT_DEFER_IDS),
+        "note": (
+            "COMPLETE 22 = COMPLETE 21 + fins_earnings_date (W68). "
+            "History research must exclude permanent DEFER (bars_am, "
+            "earn_cal, master, OTC tip-island)."
+        ),
+        "bars_source_for_w91": (
+            "Local R2 mirrors of structured/jsonl equities_bars_daily "
+            "(W63 Q4 + W64 full) staged to quant-structured under "
+            "research/mass_eval/job={id}/panels/ for mode=r2_panels. "
+            "D1 tip (jquants_records) is hot-window only (~2026-07..08)."
+        ),
+    }
+
+
+def build_real_period_panel(
+    period: Mapping[str, Any],
+    *,
+    codes: Sequence[str] | None = None,
+    max_codes: int = DEFAULT_MAX_CODES,
+    max_days: int = DEFAULT_MAX_DAYS,
+    mirror_dir: str | Path | None = None,
+) -> dict[str, Any]:
+    """Load one real bars panel from COMPLETE-backed local R2 mirrors.
+
+    Returns worker-ready panel JSON:
+      {period_id, year, period_start, period_end, bars: {code: [[d, px], ...]},
+       dataset, source, status, n_codes, n_days}
+    """
+    from research.class_hyp_eval import (
+        DEFAULT_EVAL_CODES,
+        bars_rich_to_close_panel,
+        load_bars_ndjson_rich,
+        resolve_bars_path,
+    )
+
+    p = normalize_period_row(period)
+    pid = str(p["period_id"])
+    selected = (
+        [str(c).strip() for c in codes if str(c).strip()]
+        if codes is not None
+        else list(DEFAULT_EVAL_CODES)[: int(max_codes)]
+    )
+    selected = selected[: int(max_codes)]
+    if mirror_dir is not None:
+        bars_path = resolve_bars_path(
+            pid, mirror_dir=mirror_dir, prefer_full=True
+        )
+    else:
+        bars_path = resolve_bars_path(pid, prefer_full=True)
+    if bars_path is None or not Path(bars_path).exists():
+        return {
+            **p,
+            "status": "missing_bars",
+            "bars": {},
+            "dataset": PRIMARY_BARS_DATASET,
+            "source": "mirror_missing",
+            "n_codes": 0,
+            "n_days": 0,
+            "bars_path": str(bars_path) if bars_path else None,
+        }
+    rich = load_bars_ndjson_rich(
+        bars_path,
+        codes=selected,
+        max_days=int(max_days),
+        period_start=p.get("period_start"),
+        period_end=p.get("period_end"),
+    )
+    close = bars_rich_to_close_panel(rich)
+    bars_json: dict[str, list[list[Any]]] = {
+        code: [[d, float(px)] for d, px in pairs]
+        for code, pairs in close.items()
+        if pairs
+    }
+    # W91: stage Nikkei-proxy index closes as reserved code for CF pure-TS
+    # index_vol_regime eval (filtered out of CS universe in worker).
+    nky_meta: dict[str, Any] = {}
+    try:
+        from research.class_hyp_eval import load_nky_vol_series_from_sqlite
+
+        nky = load_nky_vol_series_from_sqlite(
+            start=p.get("period_start"),
+            end=p.get("period_end"),
+            prefer="ndjson_topix",
+        )
+        closes_by = dict(nky.get("closes_by_date") or {})
+        p_start = str(p.get("period_start") or "")[:10]
+        p_end = str(p.get("period_end") or "")[:10]
+        idx_pairs = [
+            [d, float(px)]
+            for d, px in sorted(closes_by.items())
+            if (not p_start or d >= p_start) and (not p_end or d <= p_end)
+        ]
+        # include lookback burn-in for long RV window
+        if closes_by:
+            all_pairs = sorted(closes_by.items())
+            # keep last max_days*2 or full lookback around window
+            if p_start:
+                burn = [x for x in all_pairs if x[0] < p_start][-80:]
+                in_win = [
+                    x
+                    for x in all_pairs
+                    if x[0] >= p_start and (not p_end or x[0] <= p_end)
+                ]
+                idx_pairs = [[d, float(px)] for d, px in (burn + in_win)]
+            if idx_pairs:
+                bars_json["__NKY_PROXY__"] = idx_pairs
+                nky_meta = {
+                    "nky_proxy": nky.get("source"),
+                    "nky_dataset": nky.get("dataset"),
+                    "nky_n_closes": len(idx_pairs),
+                }
+    except Exception as exc:  # pragma: no cover - best-effort
+        nky_meta = {"nky_proxy_error": str(exc)}
+
+    n_days = max(
+        (len(v) for k, v in bars_json.items() if not str(k).startswith("__")),
+        default=0,
+    )
+    n_eq = sum(1 for k in bars_json if not str(k).startswith("__"))
+    return {
+        **p,
+        "status": "ok" if n_eq > 0 else "empty_bars",
+        "bars": bars_json,
+        "dataset": PRIMARY_BARS_DATASET,
+        "source": f"complete22_mirror:{Path(bars_path).name}",
+        "n_codes": n_eq,
+        "n_days": n_days,
+        "bars_path": str(bars_path),
+        "codes": sorted(k for k in bars_json if not str(k).startswith("__")),
+        **nky_meta,
+    }
+
+
+def stage_real_panels_to_r2(
+    job_id: str,
+    periods: Sequence[Mapping[str, Any]] | None = None,
+    *,
+    codes: Sequence[str] | None = None,
+    max_codes: int = DEFAULT_MAX_CODES,
+    max_days: int = DEFAULT_MAX_DAYS,
+    dry_run: bool = False,
+    staging_dir: str | Path | None = None,
+    r2_put: Callable[..., Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Build real multi-year panels and put under job-scoped R2 prefix.
+
+    Keys: research/mass_eval/job={id}/panels/{period_id}.json
+    """
+    jid = str(job_id).strip() or "unknown"
+    period_list = [
+        normalize_period_row(p)
+        for p in (periods or DEFAULT_REAL_MULTIYEAR_PERIODS)
+    ]
+    prefix = f"{RESEARCH_ARTIFACT_PREFIX}/job={jid}/panels"
+    put_fn = r2_put or (
+        lambda bucket, key, body: default_r2_put(
+            bucket,
+            key,
+            body,
+            dry_run=dry_run,
+            staging_dir=staging_dir,
+        )
+    )
+    panels: list[dict[str, Any]] = []
+    puts: list[dict[str, Any]] = []
+    for raw in period_list:
+        panel = build_real_period_panel(
+            raw,
+            codes=codes,
+            max_codes=max_codes,
+            max_days=max_days,
+        )
+        key = f"{prefix}/{panel['period_id']}.json"
+        body = json.dumps(panel, indent=2, default=str).encode("utf-8")
+        meta = put_fn(RESEARCH_ARTIFACT_BUCKET, key, body)
+        puts.append(dict(meta) if isinstance(meta, Mapping) else {"key": key})
+        panels.append(
+            {
+                "period_id": panel.get("period_id"),
+                "year": panel.get("year"),
+                "period_start": panel.get("period_start"),
+                "period_end": panel.get("period_end"),
+                "status": panel.get("status"),
+                "n_codes": panel.get("n_codes"),
+                "n_days": panel.get("n_days"),
+                "source": panel.get("source"),
+                "dataset": panel.get("dataset"),
+                "r2_key": key,
+                "bars_path": panel.get("bars_path"),
+            }
+        )
+    n_ok = sum(1 for p in panels if p.get("status") == "ok")
+    return {
+        "job_id": jid,
+        "panels_prefix": prefix,
+        "bucket": RESEARCH_ARTIFACT_BUCKET,
+        "n_periods": len(panels),
+        "n_ok": n_ok,
+        "n_missing": len(panels) - n_ok,
+        "panels": panels,
+        "puts": puts,
+        "dataset": PRIMARY_BARS_DATASET,
+        "complete22": inventory_complete22(),
+        "wave": CF_MASS_EVAL_WAVE,
+        "dry_run": bool(dry_run),
+    }
+
+
 def build_cf_mass_eval_job_spec(
     *,
     job_id: str | None = None,
     logic_ids: Sequence[str] | None = None,
-    periods: Sequence[Mapping[str, str]] | None = None,
+    periods: Sequence[Mapping[str, Any]] | None = None,
     max_codes: int = DEFAULT_MAX_CODES,
     max_days: int = DEFAULT_MAX_DAYS,
     one_way_cost: float = DEFAULT_ONE_WAY,
     seed: int = 870816,
     extra_logics: Sequence[Mapping[str, Any]] | None = None,
+    mode: str = DEFAULT_W91_MODE,
+    panels_prefix: str | None = None,
 ) -> dict[str, Any]:
     """Declarative job payload for the CF mass-eval Worker."""
-    jid = str(job_id or f"w90-cf-{uuid4().hex[:12]}")
+    mode_s = str(mode or DEFAULT_W91_MODE).strip()
+    if mode_s not in ALLOWED_MODES:
+        raise CfMassEvalError(
+            f"mode must be one of {sorted(ALLOWED_MODES)}, got {mode_s!r}"
+        )
+    jid = str(job_id or f"w91-real-{uuid4().hex[:12]}")
     paths = design_mass_factory_paths(jid)
     logics = default_logic_specs(logic_ids)
     if extra_logics:
         for raw in extra_logics:
             logics.append(dict(raw))
-    period_rows = [dict(p) for p in (periods or DEFAULT_LITE_PERIODS)]
+    default_periods: Sequence[Mapping[str, Any]] = (
+        DEFAULT_REAL_MULTIYEAR_PERIODS
+        if mode_s in {"r2_panels", "d1_bars"}
+        else DEFAULT_LITE_PERIODS
+    )
+    period_rows = [
+        normalize_period_row(p) for p in (periods or default_periods)
+    ]
+    pfx = panels_prefix or f"{RESEARCH_ARTIFACT_PREFIX}/job={jid}/panels"
     return {
         "version": CF_MASS_EVAL_VERSION,
         "wave": CF_MASS_EVAL_WAVE,
         "job_id": jid,
         "seed": int(seed),
+        "mode": mode_s,
+        "panels_prefix": pfx,
         "logics": logics,
         "periods": period_rows,
         "max_codes": int(max_codes),
         "max_days": int(max_days),
         "one_way_cost": float(one_way_cost),
         "artifact": paths,
+        "datasets": {
+            "primary_bars": PRIMARY_BARS_DATASET,
+            "complete_22": list(COMPLETE_22_DATASETS),
+            "permanent_defer": sorted(PERMANENT_DEFER_DATASETS),
+        },
         "shard_policy": {
-            "kind": "lite_multi_period",
+            "kind": (
+                "real_multiyear_r2_panels"
+                if mode_s == "r2_panels"
+                else (
+                    "d1_tip_bars"
+                    if mode_s == "d1_bars"
+                    else "lite_multi_period"
+                )
+            ),
             "note": (
-                "Documented lite shard for CF wall-clock: "
-                f"≤{max_codes} codes × ≤{max_days} days × "
+                f"mode={mode_s}; ≤{max_codes} codes × ≤{max_days} days × "
                 f"{len(period_rows)} periods × {len(logics)} logics. "
-                "Heavy multi-year stays local for promising survivors."
+                "Heavy multi-year stays local for promising survivors. "
+                "W91 default is real staged panels (not synthetic)."
             ),
         },
         "freezes": _freeze(),
@@ -251,11 +628,13 @@ def invoke_cf_mass_eval_worker(
     body = json.dumps(dict(job_spec), default=str).encode("utf-8")
     headers = {
         "Content-Type": "application/json",
-        "User-Agent": "quant-platform-w90-cf-mass-eval/1.0",
+        "User-Agent": "quant-platform-w91-cf-mass-eval/1.0",
     }
     if tok:
         headers["Authorization"] = f"Bearer {tok}"
         headers["X-Research-Run-Token"] = tok
+        headers["X-Mass-Eval-Token"] = tok
+        headers["X-Ingestion-Token"] = tok
 
     t0 = time.perf_counter()
     if http_post is not None:
@@ -402,11 +781,13 @@ def run_cf_mass_eval_job(
     job_id: str | None = None,
     logic_ids: Sequence[str] | None = None,
     extra_logics: Sequence[Mapping[str, Any]] | None = None,
-    periods: Sequence[Mapping[str, str]] | None = None,
+    periods: Sequence[Mapping[str, Any]] | None = None,
     max_codes: int = DEFAULT_MAX_CODES,
     max_days: int = DEFAULT_MAX_DAYS,
     one_way_cost: float = DEFAULT_ONE_WAY,
     seed: int = 870816,
+    mode: str = DEFAULT_W91_MODE,
+    stage_panels: bool | None = None,
     worker_url: str = DEFAULT_WORKER_URL,
     deploy_if_needed: bool = True,
     mirror_r2_from_driver: bool = True,
@@ -414,22 +795,66 @@ def run_cf_mass_eval_job(
     staging_dir: str | Path | None = None,
     http_post: Callable[..., Any] | None = None,
     skip_invoke: bool = False,
+    timeout: int = 300,
 ) -> dict[str, Any]:
-    """Build → (optional deploy) → invoke CF job → record artifacts.
+    """Build → stage real panels (r2_panels) → deploy → invoke CF job.
 
+    W91 default ``mode=r2_panels`` (real COMPLETE-backed multi-year panels).
     Returns a pack with job_id, status, counts, artifact paths, and the
     Worker response body.
     """
     t0 = time.perf_counter()
+    mode_s = str(mode or DEFAULT_W91_MODE).strip()
+    do_stage = (
+        bool(stage_panels)
+        if stage_panels is not None
+        else mode_s == "r2_panels"
+    )
+    jid_pre = str(job_id or f"w91-real-{uuid4().hex[:12]}")
+    period_rows = [
+        normalize_period_row(p)
+        for p in (
+            periods
+            or (
+                DEFAULT_REAL_MULTIYEAR_PERIODS
+                if mode_s in {"r2_panels", "d1_bars"}
+                else DEFAULT_LITE_PERIODS
+            )
+        )
+    ]
+
+    stage_meta: dict[str, Any] | None = None
+    if do_stage:
+        stage_meta = stage_real_panels_to_r2(
+            jid_pre,
+            period_rows,
+            max_codes=max_codes,
+            max_days=max_days,
+            dry_run=dry_run_r2,
+            staging_dir=staging_dir,
+        )
+        if int(stage_meta.get("n_ok") or 0) <= 0 and mode_s == "r2_panels":
+            raise CfMassEvalError(
+                "r2_panels staging produced 0 ok panels; "
+                "check COMPLETE-backed mirrors under "
+                ".glm-logs/w0815bd_w63_multiyear and w0815be_w64_cost_full"
+            )
+
+    panels_prefix = (
+        (stage_meta or {}).get("panels_prefix")
+        or f"{RESEARCH_ARTIFACT_PREFIX}/job={jid_pre}/panels"
+    )
     spec = build_cf_mass_eval_job_spec(
-        job_id=job_id,
+        job_id=jid_pre,
         logic_ids=logic_ids,
-        periods=periods,
+        periods=period_rows,
         max_codes=max_codes,
         max_days=max_days,
         one_way_cost=one_way_cost,
         seed=seed,
         extra_logics=extra_logics,
+        mode=mode_s,
+        panels_prefix=str(panels_prefix),
     )
     jid = str(spec["job_id"])
     paths = design_mass_factory_paths(jid)
@@ -451,6 +876,7 @@ def run_cf_mass_eval_job(
                 spec,
                 worker_url=url,
                 http_post=http_post,
+                timeout=timeout,
             )
         except CfMassEvalError as exc:
             invoke_error = str(exc)
@@ -459,7 +885,9 @@ def run_cf_mass_eval_job(
     status = "ok"
     if worker_resp is None:
         status = "invoke_failed"
-    elif worker_resp.get("error"):
+    elif worker_resp.get("error") and not worker_resp.get("ok"):
+        status = "worker_error"
+    elif worker_resp.get("ok") is False:
         status = "worker_error"
     elif str(worker_resp.get("status") or "").lower() not in {
         "ok",
@@ -469,13 +897,14 @@ def run_cf_mass_eval_job(
     }:
         # accept missing status if results present
         if not worker_resp.get("results") and not worker_resp.get("n_logics"):
-            status = "worker_error"
+            if worker_resp.get("ok") is not True:
+                status = "worker_error"
 
     # Prefer Worker-reported artifact keys; mirror if requested and needed.
     if worker_resp and mirror_r2_from_driver and status == "ok":
         # If worker already wrote R2, still optionally mirror summary from driver
-        # only when worker did not claim r2_puts.
-        if not worker_resp.get("r2_puts") and not worker_resp.get("artifacts"):
+        # only when worker did not claim r2_puts / r2_keys.
+        if not worker_resp.get("r2_puts") and not worker_resp.get("r2_keys"):
             try:
                 r2_puts = put_local_fallback_artifacts(
                     spec,
@@ -496,24 +925,48 @@ def run_cf_mass_eval_job(
         (worker_resp or {}).get("n_periods")
         or len(spec.get("periods") or [])
     )
-    n_evaluated = int((worker_resp or {}).get("n_evaluated") or 0)
+    n_evaluated = int(
+        (worker_resp or {}).get("n_eval_ok")
+        or (worker_resp or {}).get("n_evaluated")
+        or 0
+    )
     n_survivors = int((worker_resp or {}).get("n_survivors") or 0)
+    r2_keys = dict((worker_resp or {}).get("r2_keys") or {})
+    if not r2_keys:
+        r2_keys = {
+            "manifest": paths["manifest_r2_key"],
+            "summary": paths["batch_summary_r2_key"],
+            "results": paths["results_r2_key"],
+            "ranking": paths["ranking_r2_key"],
+            "panels_prefix": str(panels_prefix),
+        }
 
     return {
         "version": CF_MASS_EVAL_VERSION,
         "wave": CF_MASS_EVAL_WAVE,
         "status": status,
         "job_id": jid,
+        "mode": mode_s,
         "worker_url": url,
         "deploy": deploy_meta,
+        "stage_panels": stage_meta,
         "invoke_error": invoke_error,
         "n_logics": n_logics,
         "n_periods": n_periods,
         "n_logic_period_cells": n_logics * n_periods,
         "n_evaluated": n_evaluated,
+        "n_eval_ok": n_evaluated,
         "n_survivors": n_survivors,
         "artifact_paths": paths,
+        "r2_prefix": f"{RESEARCH_ARTIFACT_PREFIX}/job={jid}/",
+        "r2_keys": r2_keys,
         "r2_puts": r2_puts,
+        "panels_prefix": str(panels_prefix),
+        "datasets_used": {
+            "primary_bars": PRIMARY_BARS_DATASET,
+            "complete_22": list(COMPLETE_22_DATASETS),
+            "permanent_defer_excluded": sorted(PERMANENT_DEFER_DATASETS),
+        },
         "job_spec": {
             k: spec[k]
             for k in (
@@ -521,15 +974,19 @@ def run_cf_mass_eval_job(
                 "version",
                 "wave",
                 "seed",
+                "mode",
+                "panels_prefix",
                 "max_codes",
                 "max_days",
                 "one_way_cost",
                 "shard_policy",
+                "datasets",
             )
             if k in spec
         },
         "logic_ids": [L.get("logic_id") for L in (spec.get("logics") or [])],
         "period_ids": [P.get("period_id") for P in (spec.get("periods") or [])],
+        "periods": list(spec.get("periods") or []),
         "worker_response": worker_resp,
         "wall_time_sec": round(time.perf_counter() - t0, 3),
         **_freeze(),
@@ -547,11 +1004,22 @@ def try_cf_mass_eval_status() -> dict[str, Any]:
         "entry": "research.cf_mass_eval_job.run_cf_mass_eval_job",
         "artifact_prefix": f"{RESEARCH_ARTIFACT_PREFIX}/job={{id}}/",
         "bucket": RESEARCH_ARTIFACT_BUCKET,
-        "shard_policy": "lite_multi_period",
+        "default_mode": DEFAULT_W91_MODE,
+        "modes": sorted(ALLOWED_MODES),
+        "shard_policy": "real_multiyear_r2_panels",
         "bar_native_logics": list(CF_BAR_NATIVE_LOGIC_IDS),
+        "complete_22": list(COMPLETE_22_DATASETS),
+        "real_multiyear_periods": [
+            p["period_id"] for p in DEFAULT_REAL_MULTIYEAR_PERIODS
+        ],
         "scale_note": (
-            "Lite shard on CF (codes×days×periods). Heavy multi-year "
-            "promising-only remains local class_hyp_eval."
+            "W91: real COMPLETE-backed multi-year panels staged to R2 "
+            "(mode=r2_panels). D1 tip-only via mode=d1_bars. "
+            "Heavy multi-year promising-only remains local class_hyp_eval."
+        ),
+        "synthetic_gap": (
+            "rate/mf factor legs still not-yet-implemented on pure-TS CF path; "
+            "synthetic remains available for smoke only."
         ),
         **_freeze(),
     }
@@ -648,7 +1116,14 @@ __all__ = [
     "CF_MASS_EVAL_VERSION",
     "CF_MASS_EVAL_WAVE",
     "CF_BAR_NATIVE_LOGIC_IDS",
+    "COMPLETE_22_DATASETS",
+    "COMPLETE_22_DATASET_SET",
+    "PRIMARY_BARS_DATASET",
+    "PRIMARY_INDEX_DATASETS",
     "DEFAULT_LITE_PERIODS",
+    "DEFAULT_REAL_MULTIYEAR_PERIODS",
+    "DEFAULT_W91_MODE",
+    "ALLOWED_MODES",
     "DEFAULT_WORKER_URL",
     "RESEARCH_ARTIFACT_BUCKET",
     "RESEARCH_ARTIFACT_PREFIX",
@@ -656,6 +1131,10 @@ __all__ = [
     "resolve_research_run_token",
     "design_mass_factory_paths",
     "default_logic_specs",
+    "normalize_period_row",
+    "inventory_complete22",
+    "build_real_period_panel",
+    "stage_real_panels_to_r2",
     "build_cf_mass_eval_job_spec",
     "invoke_cf_mass_eval_worker",
     "deploy_cf_mass_eval_worker",

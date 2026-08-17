@@ -1,25 +1,32 @@
 /// <reference types="@cloudflare/workers-types" />
 /**
- * quant-platform-research-mass-eval (W90 / w0816y)
+ * quant-platform-research-mass-eval (W91 / w0818a)
  *
  * POST /v1/mass-eval
- *   body: { seed, logics[], periods[], job_id, mode? }
- *   → lite multi-period metrics per logic
+ *   body: { seed, logics[], periods[], job_id, mode?, panels_prefix? }
+ *   → multi-period metrics per logic on real or synthetic panels
  *   → write R2 quant-structured research/mass_eval/job={id}/…
+ *
+ * Modes:
+ *   r2_panels — staged COMPLETE-backed real bars (W91 preferred default path)
+ *   d1_bars   — D1 jquants_records tip extract (hot window only)
+ *   synthetic — deterministic PRNG (W90 smoke residual)
+ *   nets_only — pre-baked period_nets
  *
  * Freezes held:
  *   Mass=NO-GO · READY=false · ops GO=false · continuous paper UNARMED
  *   3 default-path representatives not retuned
  *
  * Pure TS (no Python). Full factor legs (repo/fins/margin) for rate/mf
- * families are not-yet-implemented on this path — use synthetic/mdh
- * fallback or nets_only / staged r2_panels.
+ * families are not-yet-implemented on this path — use mdh fallback or
+ * nets_only / staged r2_panels.
  */
 
 import { evaluateLogicAcrossPeriods, rankSurvivors } from "./eval";
 import {
   buildSyntheticPanels,
   defaultPeriodsFromRequest,
+  loadD1BarsPanels,
   loadR2Panels,
 } from "./panels";
 import type { Env, LogicSpec, MassEvalJobResult, MassEvalRequest } from "./types";
@@ -131,18 +138,35 @@ function parseRequest(body: unknown): { ok: true; value: MassEvalRequest } | { o
     }
     periods = body.periods.map((p, i) => {
       const o = isObject(p) ? p : {};
+      // Accept period_start/end and driver aliases start/end.
+      const pStart =
+        o.period_start != null
+          ? String(o.period_start)
+          : o.start != null
+            ? String(o.start)
+            : undefined;
+      const pEnd =
+        o.period_end != null
+          ? String(o.period_end)
+          : o.end != null
+            ? String(o.end)
+            : undefined;
       return {
         period_id: String(o.period_id ?? `p${i}`),
         year: o.year != null ? Number(o.year) : undefined,
-        period_start: o.period_start != null ? String(o.period_start) : undefined,
-        period_end: o.period_end != null ? String(o.period_end) : undefined,
+        period_start: pStart,
+        period_end: pEnd,
       };
     });
   }
 
   const modeRaw = body.mode != null ? String(body.mode) : "synthetic";
-  if (modeRaw !== "synthetic" && modeRaw !== "r2_panels" && modeRaw !== "nets_only") {
-    return { ok: false, error: "mode must be synthetic | r2_panels | nets_only" };
+  const allowedModes = new Set(["synthetic", "r2_panels", "d1_bars", "nets_only"]);
+  if (!allowedModes.has(modeRaw)) {
+    return {
+      ok: false,
+      error: "mode must be synthetic | r2_panels | d1_bars | nets_only",
+    };
   }
 
   return {
@@ -152,7 +176,9 @@ function parseRequest(body: unknown): { ok: true; value: MassEvalRequest } | { o
       logics,
       periods,
       job_id: jobId,
-      mode: modeRaw,
+      mode: modeRaw as MassEvalRequest["mode"],
+      panels_prefix:
+        body.panels_prefix != null ? String(body.panels_prefix) : undefined,
       one_way_cost:
         body.one_way_cost != null ? Number(body.one_way_cost) : undefined,
       max_codes: body.max_codes != null ? Number(body.max_codes) : undefined,
@@ -176,7 +202,7 @@ async function putJson(
     httpMetadata: { contentType: "application/json; charset=utf-8" },
     customMetadata: {
       plane: "research_mass_eval",
-      wave: "W90",
+      wave: "W91",
     },
   });
   return { key, bytes: bytes.byteLength };
@@ -187,13 +213,16 @@ async function runMassEval(
   req: MassEvalRequest,
 ): Promise<MassEvalJobResult> {
   const t0 = Date.now();
-  const version = env.MASS_EVAL_VERSION || "research-mass-eval/v1";
-  const wave = env.MASS_EVAL_WAVE || "W90 / w0816y";
+  const version = env.MASS_EVAL_VERSION || "research-mass-eval/v2";
+  const wave = env.MASS_EVAL_WAVE || "W91 / w0818a";
   const mode = req.mode || "synthetic";
   const oneWay = req.one_way_cost ?? 0.001;
   const maxCodes = Math.max(2, Math.min(40, req.max_codes ?? 8));
-  const maxDays = Math.max(20, Math.min(120, req.max_days ?? 60));
+  // W91: allow multi-year windows up to ~1 trading year per panel.
+  const maxDays = Math.max(20, Math.min(260, req.max_days ?? 120));
   const periodSpecs = defaultPeriodsFromRequest(req.periods, req.seed);
+  const panelsPrefix =
+    req.panels_prefix || `research/mass_eval/job=${req.job_id}/panels`;
 
   let panels =
     mode === "nets_only"
@@ -202,9 +231,35 @@ async function runMassEval(
   let panelNotes: string[] = [];
 
   if (mode === "r2_panels") {
-    const loaded = await loadR2Panels(env.STRUCTURED_BUCKET, periodSpecs);
+    const loaded = await loadR2Panels(
+      env.STRUCTURED_BUCKET,
+      periodSpecs,
+      panelsPrefix,
+    );
     panels = loaded.panels;
     panelNotes = loaded.notes;
+  } else if (mode === "d1_bars") {
+    if (!env.DB) {
+      panelNotes = ["d1_not_bound"];
+      panels = periodSpecs.map((p) => ({
+        period_id: String(p.period_id),
+        year: Number(p.year ?? 0),
+        period_start: p.period_start || "",
+        period_end: p.period_end || "",
+        status: "data_missing" as const,
+        bars: {},
+        source: "d1_not_bound",
+      }));
+    } else {
+      const loaded = await loadD1BarsPanels(
+        env.DB,
+        periodSpecs,
+        maxCodes,
+        maxDays,
+      );
+      panels = loaded.panels;
+      panelNotes = loaded.notes;
+    }
   }
 
   const results = req.logics.map((logic, index) =>
@@ -241,11 +296,13 @@ async function runMassEval(
     ranking_top: ranking.slice(0, 20),
     freezes,
     note:
-      "CF lite multi-period mass-eval. Research only. " +
+      "CF multi-period mass-eval (W91). Research only. " +
       "Does not arm Mass/READY/GO. continuous paper UNARMED. " +
       "3 default-path representatives not retuned. " +
+      `mode=${mode}. ` +
       "Full rate/mf factor legs not-yet-implemented on pure-TS path " +
-      "(fallback multi_day_hold or nets_only).",
+      "(fallback multi_day_hold or nets_only). " +
+      "d1_bars is tip-only; multi-year uses staged r2_panels.",
   };
 
   const manifest = {
@@ -356,14 +413,17 @@ export default {
       return json({
         ok: true,
         service: "quant-platform-research-mass-eval",
-        version: env.MASS_EVAL_VERSION || "research-mass-eval/v1",
-        wave: env.MASS_EVAL_WAVE || "W90 / w0816y",
+        version: env.MASS_EVAL_VERSION || "research-mass-eval/v2",
+        wave: env.MASS_EVAL_WAVE || "W91 / w0818a",
         has_structured_bucket: Boolean(env.STRUCTURED_BUCKET),
+        has_d1: Boolean(env.DB),
         token_required: Boolean(env.MASS_EVAL_TOKEN),
+        modes: ["r2_panels", "d1_bars", "synthetic", "nets_only"],
         freezes: freezePayload(env),
         endpoints: {
           "GET /health": "liveness",
-          "POST /v1/mass-eval": "{seed, logics[], periods[], job_id}",
+          "POST /v1/mass-eval":
+            "{seed, logics[], periods[], job_id, mode?, panels_prefix?}",
         },
       });
     }

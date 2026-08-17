@@ -7,6 +7,8 @@
 
 export interface Env {
   STRUCTURED_BUCKET: R2Bucket;
+  /** Optional D1 tip/history bind for mode=d1_bars (hot window only). */
+  DB?: D1Database;
   /** Optional gate for POST /v1/mass-eval (X-Mass-Eval-Token). */
   MASS_EVAL_TOKEN?: string;
   MASS_EVAL_VERSION?: string;
@@ -45,8 +47,15 @@ export interface MassEvalRequest {
   logics: LogicSpec[];
   periods?: PeriodSpec[];
   job_id: string;
-  /** synthetic (default) | r2_panels (staged) | nets_only (use period_nets) */
-  mode?: "synthetic" | "r2_panels" | "nets_only";
+  /**
+   * synthetic — deterministic PRNG panels (W90 default / smoke)
+   * r2_panels — staged COMPLETE-backed panels under panels_prefix or default keys
+   * d1_bars — live D1 jquants_records tip extract (hot window only; not multi-year)
+   * nets_only — use pre-baked period_nets on each logic
+   */
+  mode?: "synthetic" | "r2_panels" | "d1_bars" | "nets_only";
+  /** Override panel key prefix for r2_panels (default: research/mass_eval/panels). */
+  panels_prefix?: string;
   one_way_cost?: number;
   max_codes?: number;
   max_days?: number;
@@ -57,6 +66,17 @@ export interface MassEvalRequest {
 export type BarSeries = Array<[string, number]>; // [date, close]
 export type BarsByCode = Record<string, BarSeries>;
 
+/** Index-level realized-vol series for W91 nky_vol_* logics (date → ann. RV). */
+export interface NkyVolSeries {
+  source?: string;
+  short_n?: number;
+  long_n?: number;
+  rv_short_by_date?: Record<string, number>;
+  rv_long_by_date?: Record<string, number>;
+  rv_abs_by_date?: Record<string, number>;
+  rv_ratio_by_date?: Record<string, number>;
+}
+
 export interface PeriodPanel {
   period_id: string;
   year: number;
@@ -65,6 +85,8 @@ export interface PeriodPanel {
   status: "ok" | "data_missing";
   bars: BarsByCode;
   source: string;
+  /** Optional W91 Nikkei/TOPIX realized-vol regime series. */
+  nky_vol_series?: NkyVolSeries | null;
 }
 
 export interface PeriodEvalRow {
