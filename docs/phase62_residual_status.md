@@ -1,18 +1,90 @@
 # Phase 6.2 / 6.3 residual status
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
-**Live verified:** 2026-08-17 · **W86** sign flip + paper repo financing + same-condition compare residual **COMPLETE** · **GO = pre-live-order final gate** · **repo + compare table required before GO consideration** (both **ready**; GO **未宣言**) · **3 default research_candidates** (`cross_section_hold_10` mom=5 KEEP · `cross_section_hold_10_mom3` mom=3 PROMOTE · `fundamentals_hold_10` mom=10 KEEP · all **chosen_sign=+1** · **not Mass**) · StrategySpec **v3** · paper multi-window **with repo financing** xs mean **−0.55%** · fund **−1.83%** · mom3 **+0.60%** · research short mid xs **+83.4bp** t=1.59 · fund **+44.8bp** t=1.77 · mom3 tx **+120.0bp** t=3.04 · OTC **4499→4499 (Δ0)** tip-wait · COMPLETE 22 health · FRESH · live verified ops COMPLETE **22** held · DEFER **4** remaining (bars_am · earn_cal · master · OTC dataset PARTIAL) · segs **7888** · empty **0** · **OTC 4499** (dataset still PARTIAL; pre-2008 not main claim) · bars_am COMPLETE tip **1** / PARTIAL **31** · Mass/READY/Phase7/operational GO **NO-GO/未宣言/OFF/未宣言** · continuous paper **UNARMED** · FRESH `projgen-5f574bfa112a4872aa469b7b0f5466b5` · S1–S5 **research_baseline_rejected** untouched · densify **none** · **no invent** · **no Mass/READY ON** · **no operational GO** · **no S1–S5 un-reject** · **no OTC bulk densify** · **no fins roll-back** · **no simple_daily_sign mass gen** · **no live orders** · **no mean-bp-only** · **no research simplify** · **no hide paper negatives** · COMPLETE expand = **tip-wait** · research entry **linked** · checklist **v2** · `simple_daily_sign` default **OFF** · W85 underneath held  
-**Repo tip:** `9be6af5f49e1d1fa056406d011a5f207763fbe9b` — W86 sign flip + paper repo financing + same-condition compare + residual FRESH close · COMPLETE **22** / DEFER **4** / segs **7888** / OTC **4499** / READY **未宣言** · operational GO **未宣言** · FRESH `projgen-5f574bfa112a4872aa469b7b0f5466b5`
+**Live verified:** 2026-08-17 · **W87** mass strategy generation factory **started** · **1 run** seed **870816** N=**100** generated · **7** families · **anti_bias_ok** · survivors **79** · fail_rate **0** · wall **~8.8s** · recipe `scripts/run_mass_strategy_batch.py` · reject_reason_histogram `both_signs_near_zero_or_nonpositive` **21** · `near_zero_after_cost` **7** · human main candidate **NOT selected this wave** · **GO judgment deferred** · next deepen multi-year **class_hyp** on survivors · Mass/READY/Phase7/operational GO **NO-GO/未宣言/OFF/未宣言** · continuous paper **UNARMED** · COMPLETE **22** held (no invent **23**) · DEFER **4** · segs **7888** · empty **0** · OTC **4499** tip-wait · W86 underneath held (sign flip + paper repo + compare table ready · 3 defaults chosen_sign=+1) · S1–S5 **research_baseline_rejected** untouched · densify **none** · **no invent** · **no Mass/READY ON** · **no operational GO** · **no live orders** · **no simple_daily_sign mass gen** · research entry **linked** · checklist **v2** · proofs [`w0816v_w87_mass_strategy_factory_20260817.md`](proof/w0816v_w87_mass_strategy_factory_20260817.md) · [`w0816v_w87_residual_close_20260817.md`](proof/w0816v_w87_residual_close_20260817.md)  
+**Repo tip:** `470971e1083bf5e4159e93dd0944404329b2ed5e` — W87 mass strategy factory + batch auto-eval + residual close · COMPLETE **22** / DEFER **4** / segs **7888** / OTC **4499** / Mass/READY/ops GO **NO-GO/未宣言/未宣言** · continuous paper **UNARMED** · human main **not selected**
 
-## Research entry (W74 · ready · freeze W75 · redesign W77 · GO-build W78 · GO-final W79 · candidate W80 · stats W81 · PIT W82 · parallel W83 · realign W84 · multi-window W85 · sign+repo+compare W86)
+## Research entry (W74 · ready · freeze W75 · redesign W77 · GO-build W78 · GO-final W79 · candidate W80 · stats W81 · PIT W82 · parallel W83 · realign W84 · multi-window W85 · sign+repo+compare W86 · mass factory W87)
 
 **Entry path:** [`docs/proof/w0816h_w74_research_entry_complete22_20260816.md`](proof/w0816h_w74_research_entry_complete22_20260816.md)  
 **Checklist:** `run_standard_research_eval` / `standard-research-eval-checklist/v2`  
 **Hypothesis classes:** [`docs/proof/w0816k_w77_hypothesis_space_redesign_20260816.md`](proof/w0816k_w77_hypothesis_space_redesign_20260816.md) · `simple_daily_sign` default **OFF**  
 **Cost models:** `research-cost-models/v2` · prefer repo-linked + liquidity-linked + **short = repo[t]×100+spread** + **paper daily repo financing** (opt-in) ([`w0816u_w86_paper_repo_financing_20260817.md`](proof/w0816u_w86_paper_repo_financing_20260817.md) · [`w0816t_w85_short_cost_repo_spread_20260817.md`](proof/w0816t_w85_short_cost_repo_spread_20260817.md) · [`w0816n_w79_liquidity_linked_cost_20260816.md`](proof/w0816n_w79_liquidity_linked_cost_20260816.md) · [`w0816m_w78_repo_linked_cost_model_20260816.md`](proof/w0816m_w78_repo_linked_cost_model_20260816.md))  
-**Stats bar:** `research-stats-metrics/v1` · class-signals **v6** (W83) · W81 stats floors held · W82 PIT held · W84 paper align toward research · W85 multi-window paper honesty · W86 sign selection + paper repo + same-condition compare  
-**GO final gates:** [`docs/proof/w0816u_w86_go_gates_20260817.md`](proof/w0816u_w86_go_gates_20260817.md) · GO = **pre-live-order final gate** · **repo + compare table required before GO consideration** · operational GO **未宣言**  
-**Status:** research entry **linked** under COMPLETE **22** · Mass/READY/Phase7/operational GO **NO-GO/未宣言/OFF/未宣言** · default gen = multi-structure classes (not simple daily sign mass) · class hyps **implemented** · **3 default production research_candidates** (xs hold=10 mom=5 · xs hold=10 mom=3 · fund hold=10 mom=10; all **chosen_sign=+1**; **not** Mass/READY) · StrategySpec **v3** · continuous paper **UNARMED** · multi-window rehearsal with repo financing only (honest negatives retained)
+**Stats bar:** `research-stats-metrics/v1` · class-signals **v6** (W83) · W81 stats floors held · W82 PIT held · W84 paper align toward research · W85 multi-window paper honesty · W86 sign selection + paper repo + same-condition compare · W87 mass factory (lite batch screen only)  
+**Mass factory:** [`docs/proof/w0816v_w87_mass_strategy_factory_20260817.md`](proof/w0816v_w87_mass_strategy_factory_20260817.md) · residual close [`w0816v_w87_residual_close_20260817.md`](proof/w0816v_w87_residual_close_20260817.md) · `mass-strategy-factory/v1` · seed **870816** · recipe `scripts/run_mass_strategy_batch.py`  
+**GO final gates:** [`docs/proof/w0816u_w86_go_gates_20260817.md`](proof/w0816u_w86_go_gates_20260817.md) · GO = **pre-live-order final gate** · **repo + compare table required before GO consideration** · operational GO **未宣言** · **W87 GO judgment deferred**  
+**Status:** research entry **linked** under COMPLETE **22** · Mass/READY/Phase7/operational GO **NO-GO/未宣言/OFF/未宣言** · mass factory **pipeline started** (not Mass ON) · default gen = multi-structure classes (not simple daily sign mass) · class hyps **implemented** · **3 default production research_candidates** (xs hold=10 mom=5 · xs hold=10 mom=3 · fund hold=10 mom=10; all **chosen_sign=+1**; **not** Mass/READY) · factory survivors **≠** production research_candidate · StrategySpec **v3** · continuous paper **UNARMED** · multi-window rehearsal with repo financing only (honest negatives retained)
+
+## Mass strategy generation factory residual close（Dataset COMPLETE 22 held · N=100 · 7 families · anti_bias_ok · survivors 79 · fail_rate 0 · GO deferred · human main NOT selected）· W87
+
+**Phase name:** mass strategy generation factory + batch auto-eval + auto screen + residual FRESH close（宣言なし · invent なし · NOT Mass ON · NOT READY · NOT operational GO · NOT human main select · NOT continuous paper arm · NOT simple_daily_sign mass gen · NOT live orders · NOT mean-bp-only · GO judgment deferred）  
+**Wave:** W87 / w0816v  
+**GO definition:** **GO** = **pre-live-order final gate** (not operational GO declare) · **GO judgment deferred this wave**  
+**Close:** [`docs/proof/w0816v_w87_residual_close_20260817.md`](proof/w0816v_w87_residual_close_20260817.md)  
+**Factory proof:** [`docs/proof/w0816v_w87_mass_strategy_factory_20260817.md`](proof/w0816v_w87_mass_strategy_factory_20260817.md) · module `packages/product/research/mass_strategy_factory.py` · CLI `scripts/run_mass_strategy_batch.py` · version `mass-strategy-factory/v1`  
+**1 run (real mirrors):** seed **870816** · N=**100** generated accepted · **7** families · **anti_bias_ok=True** · survivors **79** · fail_rate **0.0** · wall **~8.805s** · continuous paper **UNARMED** · human_main_candidates_selected **False**  
+**reject_reason_histogram** (from [`.glm-logs/w0816v_w87_mass/screens.json`](../.glm-logs/w0816v_w87_mass/screens.json)): `both_signs_near_zero_or_nonpositive` **21** · `near_zero_after_cost` **7** (some rows carry both; n_screen_rejected **21**)  
+**Family generated:** multi_day_hold 16 · event_post 14 · cross_section_relative 20 · macro_conditioned 14 · fundamentals_price 14 · flow_demand 12 · vol_risk_adjusted 10  
+**Survivor family dist:** cross_section_relative 19 · multi_day_hold 16 · event_post 14 · flow_demand 12 · vol_risk_adjusted 9 · fundamentals_price 8 · macro_conditioned 1  
+**Next residual:** deepen multi-year **class_hyp** (+ short-cost mid) on factory survivors · optional short paper sample top-k · human main selection **not this wave**  
+**W86 underneath held:** sign flip · paper repo financing · same-condition compare · 3 defaults all **chosen_sign=+1** · repo+compare table ready · GO **未宣言**  
+**OTC tip-wait:** **4499** · dataset **PARTIAL** · no bulk re-scan · segs **7888**  
+**Health smoke:** COMPLETE **22** held · no invent **23** · empty **0**  
+**Final verify:** [`.glm-logs/w0816v_w87_mass/`](../.glm-logs/w0816v_w87_mass/) · SUMMARY / factory_run / screens / ranking  
+**S1–S5:** stay **research_baseline_rejected** (no un-reject)  
+**Prior W86 residual:** held underneath  
+
+| gate | status |
+|------|--------|
+| READY | **未宣言** |
+| Mass / Phase7 | **NO-GO / OFF** (factory pipeline ≠ Mass ON) |
+| operational GO | **未宣言** |
+| GO (pre-live-order final gate) | **deferred** this wave · residual inventory only |
+| human main candidate | **NOT selected** this wave |
+| continuous paper | **UNARMED** |
+| mass factory run | **1** · seed **870816** · N=**100** · 7 families · anti_bias_ok · survivors **79** · fail_rate **0** · wall **~8.8s** |
+| reject_reason_histogram | both_signs_near_zero_or_nonpositive **21** · near_zero_after_cost **7** |
+| Dataset COMPLETE | **22** held (no invent **23**) |
+| DEFER | **4** (bars_am · earn_cal · master · OTC **dataset** PARTIAL) |
+| COMPLETE segs | **7888** |
+| empty COMPLETE | **0** |
+| OTC segs COMPLETE | **4499** (tip-wait; **dataset still PARTIAL**) |
+| densify | **none** |
+| coverage expand | **tip-wait** |
+| research entry | **linked** |
+| checklist | **v2** |
+| factory survivors → research_candidate | **never auto** (≠ production default-wire) |
+| factory survivors → Mass/READY/ops GO | **never auto** |
+| S1–S5 catalog | **research_baseline_rejected** untouched |
+| COMPLETE 22 health check | **held** |
+| W86 defaults / compare table | **held underneath** |
+
+### Explicit non-declarations (held · W87)
+
+- **READY** — not declared  
+- **Mass** operational ON — **NO-GO / OFF** (pipeline started only)  
+- **Phase7** — **OFF**  
+- **operational GO** — **未宣言**  
+- **GO final gate declare** — **deferred** (not this wave)  
+- **human main candidate selection** — **not this wave**  
+- **continuous paper arm** — **UNARMED**  
+- **factory survivors as production research_candidates** — not claimed  
+- **Dataset COMPLETE 23** — not invented (COMPLETE **22** held)  
+- **S1–S5 un-reject** — not done  
+- **simple_daily_sign mass generation** — forbidden (default OFF)  
+- **live orders / edge claim from lite factory screen** — none  
+- **gate pass → READY/Mass/GO** — never auto-connects  
+
+### Residual TOP (W87)
+
+1. **Mass strategy pipeline started** — factory generate + batch auto-eval + auto screen · residual TOP  
+2. **1 run held** — seed **870816** · N=**100** · 7 families · anti_bias_ok · survivors **79** · fail_rate **0** · wall **~8.8s** · recipe `scripts/run_mass_strategy_batch.py`  
+3. **reject_reason_histogram** — both_signs_near_zero_or_nonpositive **21** · near_zero_after_cost **7**  
+4. **GO judgment deferred** — Mass/READY/ops GO **未宣言** · continuous paper **UNARMED** · human main **NOT selected**  
+5. **Next** — deepen multi-year **class_hyp** on survivors (production bar · short-cost mid)  
+6. **COMPLETE 22 held** · no invent **23** · empty **0** · segs **7888** · OTC **4499** tip-wait  
+7. **W86 underneath held** — sign flip · paper repo · same-condition compare · 3 defaults +1  
+8. **Proofs** — [`w0816v_w87_mass_strategy_factory_20260817.md`](proof/w0816v_w87_mass_strategy_factory_20260817.md) · [`w0816v_w87_residual_close_20260817.md`](proof/w0816v_w87_residual_close_20260817.md)  
 
 ## Sign flip + paper repo financing + same-condition compare residual close（Dataset COMPLETE 22 held · OTC segs 4499 tip-wait · 3 defaults chosen_sign=+1 · compare table ready · GO 未宣言）· W86
 

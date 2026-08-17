@@ -36,8 +36,8 @@
 | Multi-family anti-bias sampling | **yes** · 7 families |
 | Batch auto eval + screen | **yes** · fail_rate 0 · ~8.8s |
 | GO judgment deferred | **yes** |
-| residual TOP updated | **yes** (this file) |
-| Commit + push past W86 tip `70507b1` | **yes** · feature `470971e` |
+| residual TOP updated | **yes** · live SoT [`docs/phase62_residual_status.md`](../phase62_residual_status.md) leads with W87 · this close |
+| Commit + push past W86 tip `70507b1` | **yes** · feature `470971e` · residual SoT fix follow-up |
 
 ---
 
@@ -68,6 +68,7 @@
 | continuous_paper | **UNARMED** |
 | human_main_candidates_selected | **False** |
 | mass_research | **NO-GO** |
+| reject_reason_histogram | both_signs_near_zero_or_nonpositive **21** · near_zero_after_cost **7** |
 
 ### Family distribution (generated)
 
@@ -139,5 +140,6 @@ Log: `.glm-logs/w0816v_w87_mass/pytest_factory.log`
 
 W87 residual TOP is **mass strategy pipeline started**.  
 Generation factory + batch auto-experiment operational for research.  
+Live residual SoT [`docs/phase62_residual_status.md`](../phase62_residual_status.md) **TOP leads with W87** (mass factory).  
 **GO / Mass / READY / live remain closed.** continuous paper **UNARMED**.  
-Human main candidates **not** selected. Push past W86 tip `70507b1`.
+Human main candidates **not** selected. Feature tip `470971e` · residual SoT fix on main.
