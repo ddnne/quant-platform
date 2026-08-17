@@ -103,6 +103,14 @@
 
 ---
 
+## Residual TOP (W90)
+
+1. **strong-model hyp gen** — ran · **grok-4.6** · n=10/10/10 · no human seed wait  
+2. **CF multi-logic multi-period** — **executed** · `w90-wide-20260817T145205Z` (+ corroborating `w90-full-20260817T235519Z`) · R2 written · **not blocked**  
+3. **wide eval** — 32 evaluated · 18 survivors · mf_value_mom_rate most promising (held)  
+4. **3 defaults frozen** — not retuned  
+5. **GO deferred** · Mass/READY/ops GO closed · continuous paper UNARMED  
+
 ## Not yet implemented (honest · not "blocked")
 
 | item | note |

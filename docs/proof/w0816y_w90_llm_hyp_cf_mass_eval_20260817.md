@@ -130,6 +130,21 @@ Code: `platform/workers/research-mass-eval/` · `research.llm_hyp_generator.run_
 
 Machine: [`.glm-logs/w0816y_w90_llm_cf/cf_mass_eval_job.json`](../../.glm-logs/w0816y_w90_llm_cf/cf_mass_eval_job.json)
 
+### Corroborating CF job (same worker · second invoke)
+
+| field | value |
+|-------|------:|
+| job_id | **`w90-full-20260817T235519Z`** |
+| mode | `synthetic` |
+| n_logics | **27** |
+| n_eval_ok | **27** |
+| n_survivors | **4** |
+| wall_time_ms | **~1890** |
+| R2 prefix | `research/mass_eval/job=w90-full-20260817T235519Z/` |
+| recipe | `scripts/run_w90_llm_hyp_cf_eval.py --provider xai` |
+
+Evidence: [`.glm-logs/w0816y_w90_llm_cf/cf_job_run.json`](../../.glm-logs/w0816y_w90_llm_cf/cf_job_run.json) · `cf_mass_eval_response.json` · `w90_summary.json`
+
 ---
 
 ## C. Wide evaluation (local real mirrors)

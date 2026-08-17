@@ -86,10 +86,18 @@
 - **CF 200/500 scale** — deferred  
 - **heavy multi-year auto for non-promising** — deferred  
 
-### Residual TOP (W89)
+### Residual TOP (W90)
 
-1. **rate + multi-factor logics** — residual TOP (lite landed; deeper multi-year only for promising)  
-2. **CF status** — **blocked** (local mainline; no mass-logic CF worker)  
+1. **strong-model hyp generation** — **ran** · model **grok-4.6** (xai) · n_proposed **10** · n_accepted **10** · n_evaluated **10** · always through evaluator · no human seed wait · window tweaks forbidden  
+2. **CF multi-logic multi-period eval** — **implemented + executed** · worker `quant-platform-research-mass-eval` · job_id **`w90-wide-20260817T145205Z`** (corroborating **`w90-full-20260817T235519Z`**) · path **cf_worker_mass_eval** · R2 `research/mass_eval/job={id}/` · **not** "blocked"  
+3. **wide eval table** — catalog after_dedup + LLM hyps · evaluated **32** · survivors **18** · fail_rate **0** · top: flow_margin_short_soft / flow_margin_pressure / **mf_value_mom_rate**  
+4. **defaults frozen** — mom5 · mom3 · fund; **not retuned**  
+5. **GO deferred** · Mass/READY/ops GO closed · continuous paper **UNARMED** · human main **NOT selected**  
+
+### Residual TOP (W89 underneath)
+
+1. **rate + multi-factor logics** — held (lite landed; deeper multi-year only for promising)  
+2. **CF status (as-of W89)** — was **not yet implemented** then; **superseded in W90** by research-mass-eval worker (executed)  
 3. **defaults frozen** — mom5 · mom3 · fund; not retuned  
 4. **near-groups parallel** — flow hard/soft · fund slow · rate cousins  
 5. **GO deferred** · Mass/READY/ops GO closed · continuous paper UNARMED  

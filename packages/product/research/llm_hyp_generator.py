@@ -1000,7 +1000,13 @@ def generate_and_evaluate_hypotheses(
             lid = str(pp.get("logic_id") or "")
             if lid not in LOGIC_TEMPLATES:
                 fam = str(pp.get("family_id") or "")
-                mapped_id = prefer.get(fam) or family_to_logic.get(fam)
+                mapped_id = (
+                    prefer.get(fam)
+                    or prefer.get(fam.lower())
+                    or prefer.get(fam.upper())
+                    or family_to_logic.get(fam)
+                    or family_to_logic.get(fam.lower())
+                )
                 if mapped_id:
                     pp["mapped_from_logic_id"] = lid
                     pp["logic_id"] = mapped_id
