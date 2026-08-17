@@ -137,20 +137,20 @@ Machine: [`comparison_table.json`](../../.glm-logs/w0818b_w92_options_vol/compar
 
 | item | value |
 |------|-------|
-| job_id | **`w92-opt225-20260817T231531Z`** |
+| job_id | **`w92-opt225-20260817T231812Z`** (confirm re-run; prior `…T231531Z` also ok) |
 | mode | **`r2_panels`** (NOT synthetic) |
 | status | **ok** |
 | n_logics × n_periods | 14 × 6 |
 | stage | **6 / 6 ok** |
 | n_survivors (CF screen) | **2** (`xs_rank_ls_sticky`, `nky_vol_term_ratio` proxy) |
 | opt225 CF path | **`c21_opt225_*_xs`** regime eval (not MDH fallback) |
-| R2 prefix | `research/mass_eval/job=w92-opt225-20260817T231531Z/` |
-| panels | `…/panels/` with `opt225_regime` staged |
+| R2 prefix | `research/mass_eval/job=w92-opt225-20260817T231812Z/` |
+| panels | `…/panels/` with `opt225_regime` + `base_vol_series` / `atm_iv_series` / `iv_base_spread` by date |
 | datasets | equities_bars_daily + options_225 regime maps (+ nky proxy maps) |
 
 y2015 periods: opt225 nets **null** honestly (IV fields pre-2016-07-19 gap).
 
-Pack: [`cf_mass_eval_job.json`](../../.glm-logs/w0818b_w92_options_vol/cf_mass_eval_job.json) · [`cf_opt225_results.json`](../../.glm-logs/w0818b_w92_options_vol/cf_opt225_results.json)
+Pack: [`cf_job_run.json`](../../.glm-logs/w0818b_w92_options_vol/cf_job_run.json) · [`cf_mass_eval_job.json`](../../.glm-logs/w0818b_w92_options_vol/cf_mass_eval_job.json) · [`w92_summary.json`](../../.glm-logs/w0818b_w92_options_vol/w92_summary.json)
 
 ---
 

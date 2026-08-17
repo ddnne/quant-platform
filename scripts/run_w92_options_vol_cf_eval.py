@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""W92 / w0818b — options_225 BaseVol/ATM IV/spread + CF real mass-eval.
+"""W92 / w0818b — CF wire options_225 BaseVol/ATM/spread panels + real mass-eval.
 
 Canonical Nikkei vol SoT = ``derivatives_bars_daily_options_225`` (COMPLETE).
 W91 ``nky_vol_*`` TOPIX/NK225F RV remains proxy/compare only.
@@ -11,10 +11,10 @@ Does **not** retune the three frozen default-path representatives.
 
 Examples
 --------
-    uv run python scripts/run_w92_options_vol_cf_mass_eval.py \\
+    uv run python scripts/run_w92_options_vol_cf_eval.py \\
         --out-dir .glm-logs/w0818b_w92_options_vol/
 
-    uv run python scripts/run_w92_options_vol_cf_mass_eval.py --skip-cf
+    uv run python scripts/run_w92_options_vol_cf_eval.py --skip-cf
 """
 
 from __future__ import annotations
