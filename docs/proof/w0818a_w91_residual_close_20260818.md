@@ -2,7 +2,7 @@
 
 **Wave:** W91 / `w0818a` · 2026-08-18  
 **Status:** **CLOSED** as residual TOP (research factory only)  
-**Code tip (pre-proof pin):** `8b6defa` · post-proof pin follows residual TOP rewrite  
+**Code tip:** `4dbab0183a823dcf01e19d02ae8bb0a2fc61969f`  
 **Primary proof:** [`w0818a_w91_real_nky_vol_cf_20260818.md`](w0818a_w91_real_nky_vol_cf_20260818.md)  
 **Logs:** [`.glm-logs/w0818a_w91_real_vol/`](../../.glm-logs/w0818a_w91_real_vol/)
 
