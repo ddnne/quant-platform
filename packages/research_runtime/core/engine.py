@@ -251,17 +251,19 @@ def _resolve_targets(
 ) -> dict[str, float]:
     """Convert target weights to target shares at the decision ``as_of``.
 
-    Codes without a visible positive price are skipped (cannot size). Shorts
-    are clipped to flat — shorting is out of scope for the minimal engine.
+    Codes without a visible positive price are skipped (cannot size).
+    Negative weights are permitted (simple short book for paper L-S).
+    Gross |weight| is not hard-capped here — StrategySpec signed equal-weight
+    keeps long and short books at ~50% each when both sides are present.
     """
     targets: dict[str, float] = {}
     for intent in intents:
         price = prices.get(intent.code)
         if price is None or price <= 0:
             continue
-        weight = intent.target_weight
-        if weight < 0:
-            weight = 0.0
+        weight = float(intent.target_weight)
+        if not (weight == weight):  # NaN guard
+            continue
         targets[intent.code] = weight * equity / price
     return targets
 

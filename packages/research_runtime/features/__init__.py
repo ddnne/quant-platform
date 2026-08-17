@@ -57,6 +57,7 @@ from .complete21_min import (
     Return1dC21,
     MarginAlertFlag,
     FuturesActivityProxy,
+    FundamentalValueScore,
 )
 from .minimal_signal import (
     SIGNAL_ID as MINIMAL_SIGNAL_ID,

@@ -32,6 +32,8 @@ Implemented (W49–W50, 7):
 * ``volume_change_1d`` — one-session volume change from equity daily bars.
 * ``topix_relative_1d`` — equity 1d return minus TOPIX 1d return.
 * ``disclosure_flag_fins`` — binary flag if any ``fins_summary`` row is visible.
+* ``fundamental_value_score`` — PIT BPS/P or EPS/P from ``fins_summary`` + close
+  (W84 / w0816s; approved for StrategySpec fund value×mom).
 * ``margin_interest_change_1d`` — session-over-session margin interest change.
 * ``short_ratio_level`` — short-sale ratio level for a sector (S33).
 * ``is_trading_day`` — calendar utility: 1.0 if ``date`` is a trading day.
@@ -56,7 +58,7 @@ Approved v0 ``return_1d`` remains in ``features.v0`` (DEFER-guarded via
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, Mapping
 
 from price_basis import RAW
 
@@ -1037,6 +1039,140 @@ FuturesActivityProxy: FeatureDefinition = register(
 )
 
 
+# ---------------------------------------------------------------------------
+# fundamental_value_score (W84 — fund value×mom paper alignment)
+# ---------------------------------------------------------------------------
+
+_FUND_VALUE_DATASETS = ("fins_summary", "equities_bars_daily")
+
+
+def _as_float_or_none(x: Any) -> float | None:
+    if x is None or x == "":
+        return None
+    try:
+        return float(x)
+    except (TypeError, ValueError):
+        return None
+
+
+def fundamental_value_score_from_parts(
+    *,
+    close: float | None,
+    eps: float | None = None,
+    bps: float | None = None,
+) -> tuple[float | None, dict[str, Any]]:
+    """Cheap value score: prefer BPS/price, else EPS/price. None if missing."""
+    c = _as_float_or_none(close)
+    if c is None or c == 0.0:
+        return None, {"reason": "close missing or zero", "close": c}
+    b = _as_float_or_none(bps)
+    e = _as_float_or_none(eps)
+    if b is not None:
+        score = b / c
+        return score, {"mode": "bps_over_price", "bps": b, "close": c, "score": score}
+    if e is not None:
+        score = e / c
+        return score, {"mode": "eps_over_price", "eps": e, "close": c, "score": score}
+    return None, {"reason": "no BPS or EPS", "close": c}
+
+
+def _latest_fins_eps_bps(
+    rows: list[dict[str, Any]],
+) -> tuple[float | None, float | None, dict[str, Any]]:
+    """Walk PIT-visible fins_summary rows; take latest non-empty EPS/BPS."""
+    eps: float | None = None
+    bps: float | None = None
+    disc_date: str | None = None
+    n = 0
+    for row in rows or []:
+        payload = row.get("payload") if isinstance(row, Mapping) else None
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                continue
+        if not isinstance(payload, Mapping):
+            continue
+        n += 1
+        e = _as_float_or_none(
+            payload.get("EPS") if payload.get("EPS") is not None else payload.get("eps")
+        )
+        b = _as_float_or_none(
+            payload.get("BPS") if payload.get("BPS") is not None else payload.get("bps")
+        )
+        if e is not None:
+            eps = e
+        if b is not None:
+            bps = b
+        if e is not None or b is not None:
+            disc_date = (
+                str(payload.get("DiscDate") or payload.get("disc_date") or "")[:10]
+                or disc_date
+            )
+    return eps, bps, {"fins_rows": n, "disc_date": disc_date}
+
+
+def _fundamental_value_score(ctx) -> FeatureOutput:
+    require_feature_datasets(
+        _FUND_VALUE_DATASETS, context="feature fundamental_value_score"
+    )
+    code = ctx.get_input("code")
+    bar_res = ctx.get_equity_bars_daily(code=code)
+    closes: list[tuple[str, float]] = []
+    for r in (bar_res.rows if bar_res is not None else []) or []:
+        c = r.get("close")
+        d = r.get("date")
+        if c is None or d is None:
+            continue
+        try:
+            closes.append((str(d), float(c)))
+        except (TypeError, ValueError):
+            continue
+    closes.sort(key=lambda x: x[0])
+    if not closes:
+        return FeatureOutput(
+            value=None,
+            metadata={"code": code, "reason": "no PIT close"},
+        )
+    last_date, last_close = closes[-1]
+    fins_res = ctx.get_jquants_records(dataset="fins_summary", code=code)
+    rows = list(fins_res.rows) if fins_res is not None and fins_res.rows else []
+    eps, bps, fins_meta = _latest_fins_eps_bps(rows)
+    value, meta = fundamental_value_score_from_parts(
+        close=last_close, eps=eps, bps=bps
+    )
+    meta = {
+        **meta,
+        **fins_meta,
+        "code": code,
+        "last_date": last_date,
+        "datasets": list(_FUND_VALUE_DATASETS),
+    }
+    return FeatureOutput(value=value, metadata=meta)
+
+
+FundamentalValueScore: FeatureDefinition = register(
+    FeatureDefinition(
+        id="fundamental_value_score",
+        version=FeatureVersion(1, 0, 0),
+        inputs=FeatureInput(
+            required_kwargs=("code",),
+            as_of_rule="session_close",
+        ),
+        description=(
+            "PIT fundamental value score: BPS/price preferred, else EPS/price, "
+            "from fins_summary + equities_bars_daily close at as_of. W84 paper "
+            "alignment for fundamentals_price value×momentum agree. Not READY."
+        ),
+        compute=_fundamental_value_score,
+        tags=("fundamentals", "value", "fins", "complete21"),
+        intended_role="signal",
+        status="approved",  # W84 paper realign; version pin 1.0.0
+        price_basis=RAW,
+    )
+)
+
+
 __all__ = [
     "VolumeChange1d",
     "TopixRelative1d",
@@ -1049,6 +1185,7 @@ __all__ = [
     "Return1dC21",
     "MarginAlertFlag",
     "FuturesActivityProxy",
+    "FundamentalValueScore",
     "volume_change_from_pairs",
     "simple_return_from_closes",
     "topix_relative_from_returns",
@@ -1060,4 +1197,5 @@ __all__ = [
     "repo_rate_change_from_rows",
     "margin_alert_flag_from_count",
     "futures_activity_from_volume_pairs",
+    "fundamental_value_score_from_parts",
 ]

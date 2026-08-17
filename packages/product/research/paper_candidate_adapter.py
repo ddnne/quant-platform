@@ -3,6 +3,8 @@
 Wave
 ----
 W80 / w0816o Task D — **UNARMED** paper receptacle for candidates.
+W84 / w0816s — StrategySpec **v3** alignment: sticky fixed_horizon hold,
+cross_section_rank L-S, value_momentum_agree (fund). No research simplification.
 
 Purpose
 -------
@@ -20,13 +22,15 @@ Hard constraints (must never arm)
 * ``research_candidate`` is never auto-promoted to True by this adapter
 * Input flags that claim arm/live/go are **stripped and overridden** closed
 
-StrategySpec alignment
-----------------------
-Closed StrategySpec schema only allows ``rebalance="daily"`` and approved
-feature rules (``top_k`` / ``threshold``). Research multi-day / event
-rebalance intent is recorded on the envelope (``horizon`` / ``rebalance`` /
-``costs`` / ``universe``) while the nested StrategySpec stays interpreter-
-valid for a future single-shot paper run (still UNARMED by default).
+StrategySpec alignment (W84)
+----------------------------
+* ``strategy-spec/v3`` supports ``rebalance=fixed_horizon`` + ``hold_days``
+  (sticky multi-day hold — research semantics).
+* ``cross_section_rank`` rule for CS L-S (long_frac / short_frac).
+* ``value_momentum_agree`` rule for fund value×mom with
+  ``fundamental_value_score`` + ``momentum_n``.
+* Residual approximations documented on envelope (portfolio MTM vs trade-level
+  research mean; no margin model on shorts).
 """
 
 from __future__ import annotations
@@ -37,14 +41,20 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from strategies.spec import (
+    CrossSectionRankRule,
     FeatureRef,
+    REBALANCE_FIXED_HORIZON,
+    STRATEGY_SPEC_VERSION,
     StrategySpec,
     ThresholdRule,
     TopKRule,
+    ValueMomentumAgreeRule,
 )
 
 from research.hypothesis_classes import (
+    CLASS_CROSS_SECTION_RELATIVE,
     CLASS_EVENT_POST,
+    CLASS_FUNDAMENTALS_PRICE,
     CLASS_MULTI_DAY_HOLD,
     get_hypothesis_class,
 )
@@ -54,9 +64,8 @@ from research.hypothesis_classes import (
 # ---------------------------------------------------------------------------
 
 PAPER_CANDIDATE_SPEC_VERSION: str = "paper-candidate-spec/v1"
-PAPER_CANDIDATE_ADAPTER_VERSION: str = "paper-candidate-adapter/v1"
-PAPER_CANDIDATE_WAVE: str = "W80 / w0816o"
-
+PAPER_CANDIDATE_ADAPTER_VERSION: str = "paper-candidate-adapter/v2"
+PAPER_CANDIDATE_WAVE: str = "W84 / w0816s"
 MASS_RESEARCH: str = "NO-GO"
 PHASE7: str = "OFF"
 READY_DECLARED: bool = False
@@ -74,8 +83,13 @@ S1_S5_UNREJECT: bool = False
 DEFAULT_ONE_WAY_COST: float = 0.001  # 10bp
 DEFAULT_MOMENTUM_FEATURE_VERSION: str = "1.0.0"
 DEFAULT_DISCLOSURE_FEATURE_VERSION: str = "1.0.0"
+DEFAULT_FUND_VALUE_FEATURE_VERSION: str = "1.0.0"
 DEFAULT_TOP_K: int = 5
 DEFAULT_LOOKBACK_DAYS: int = 30
+DEFAULT_CS_LONG_FRAC: float = 0.3
+DEFAULT_CS_SHORT_FRAC: float = 0.3
+DEFAULT_CS_MOMENTUM_N: int = 5  # W82 pin for hold=10
+DEFAULT_FUND_MOMENTUM_N: int = 10
 
 # Boolean keys that must be False on adapter output (never arm / live / go).
 _ARM_BOOL_FALSE_KEYS: tuple[str, ...] = (
@@ -279,34 +293,126 @@ def build_multi_day_hold_strategy_spec(
     top_k: int = DEFAULT_TOP_K,
     min_score: float = 0.0,
     momentum_version: str = DEFAULT_MOMENTUM_FEATURE_VERSION,
+    momentum_n: int | None = None,
     strategy_id: str | None = None,
     rationale: str = "",
+    sticky: bool = True,
 ) -> StrategySpec:
-    """Map multi_day_hold entry (momentum_n) into closed StrategySpec.
+    """Map multi_day_hold entry (momentum_n) into closed StrategySpec v3.
 
-    Note: sticky multi-day hold is research semantics; StrategySpec rebalance
-    remains daily (schema). Envelope records research rebalance separately.
+    Sticky multi-day hold uses ``rebalance=fixed_horizon`` + ``hold_days``
+    (W84). Entry still top_k on momentum (research is sign(momentum); top_k is
+    a residual long-only portfolio approximation).
     """
     h = max(1, int(hold_days))
+    n_mom = max(1, int(momentum_n if momentum_n is not None else h))
     sid = strategy_id or f"paper_mdh_hold{h}_momentum_topk"
     return StrategySpec(
         strategy_id=sid,
+        version=STRATEGY_SPEC_VERSION,
         rule=TopKRule(
             feature=FeatureRef(
                 id="momentum_n",
                 version=str(momentum_version),
-                params={"n": h},
+                params={"n": n_mom},
             ),
             k=max(1, int(top_k)),
             min_score=float(min_score),
         ),
         rationale=rationale
         or (
-            f"Paper receptacle for multi_day_hold {h}d: entry ≈ sign/rank of "
-            f"momentum_n(n={h}). Sticky hold is research-only; StrategySpec "
-            "rebalance stays daily. UNARMED — no continuous paper scheduler."
+            f"Paper receptacle for multi_day_hold {h}d: entry ≈ top_k of "
+            f"momentum_n(n={n_mom}). Sticky fixed_horizon hold={h}d (v3). "
+            "UNARMED — no continuous paper scheduler."
         ),
-        rebalance="daily",
+        rebalance=REBALANCE_FIXED_HORIZON if sticky and h > 1 else "daily",
+        hold_days=h if sticky and h > 1 else None,
+    )
+
+
+def build_cross_section_hold_strategy_spec(
+    *,
+    hold_days: int = 10,
+    momentum_n: int = DEFAULT_CS_MOMENTUM_N,
+    long_frac: float = DEFAULT_CS_LONG_FRAC,
+    short_frac: float = DEFAULT_CS_SHORT_FRAC,
+    allow_short: bool = True,
+    momentum_version: str = DEFAULT_MOMENTUM_FEATURE_VERSION,
+    strategy_id: str | None = None,
+    rationale: str = "",
+) -> StrategySpec:
+    """Research-aligned CS sticky hold: rank L-S + fixed_horizon hold.
+
+    Defaults match W83/W84 production candidate: hold=10 · mom=5 · frac=0.3.
+    """
+    h = max(1, int(hold_days))
+    n_mom = max(1, int(momentum_n))
+    sid = strategy_id or f"paper_xs_hold{h}_mom{n_mom}_cs_rank"
+    return StrategySpec(
+        strategy_id=sid,
+        version=STRATEGY_SPEC_VERSION,
+        rule=CrossSectionRankRule(
+            feature=FeatureRef(
+                id="momentum_n",
+                version=str(momentum_version),
+                params={"n": n_mom},
+            ),
+            long_frac=float(long_frac),
+            short_frac=float(short_frac),
+            allow_short=bool(allow_short),
+        ),
+        rationale=rationale
+        or (
+            f"Paper for cross_section sticky hold={h}d mom_n={n_mom}: "
+            f"rank L-S long_frac={long_frac} short_frac={short_frac} "
+            f"allow_short={allow_short}; fixed_horizon rebalance. "
+            "UNARMED limited trial only."
+        ),
+        rebalance=REBALANCE_FIXED_HORIZON if h > 1 else "daily",
+        hold_days=h if h > 1 else None,
+    )
+
+
+def build_fundamentals_hold_strategy_spec(
+    *,
+    hold_days: int = 10,
+    momentum_n: int = DEFAULT_FUND_MOMENTUM_N,
+    mode: str = "value_momentum_agree",
+    allow_short: bool = True,
+    momentum_version: str = DEFAULT_MOMENTUM_FEATURE_VERSION,
+    value_version: str = DEFAULT_FUND_VALUE_FEATURE_VERSION,
+    strategy_id: str | None = None,
+    rationale: str = "",
+) -> StrategySpec:
+    """Research-aligned fund path: value×mom agree + fixed_horizon hold."""
+    h = max(1, int(hold_days))
+    n_mom = max(1, int(momentum_n))
+    sid = strategy_id or f"paper_fund_hold{h}_mom{n_mom}_value_mom"
+    return StrategySpec(
+        strategy_id=sid,
+        version=STRATEGY_SPEC_VERSION,
+        rule=ValueMomentumAgreeRule(
+            value_feature=FeatureRef(
+                id="fundamental_value_score",
+                version=str(value_version),
+                params={},
+            ),
+            momentum_feature=FeatureRef(
+                id="momentum_n",
+                version=str(momentum_version),
+                params={"n": n_mom},
+            ),
+            mode=str(mode or "value_momentum_agree"),
+            allow_short=bool(allow_short),
+        ),
+        rationale=rationale
+        or (
+            f"Paper for fundamentals_price hold={h}d mom_n={n_mom} mode={mode}: "
+            "value score (BPS/P|EPS/P PIT) × momentum agree; fixed_horizon. "
+            "UNARMED limited trial only."
+        ),
+        rebalance=REBALANCE_FIXED_HORIZON if h > 1 else "daily",
+        hold_days=h if h > 1 else None,
     )
 
 
@@ -317,17 +423,19 @@ def build_event_post_strategy_spec(
     disclosure_version: str = DEFAULT_DISCLOSURE_FEATURE_VERSION,
     strategy_id: str | None = None,
     rationale: str = "",
+    sticky: bool = True,
 ) -> StrategySpec:
-    """Map event_post into closed StrategySpec using disclosure_flag_fins.
+    """Map event_post into StrategySpec using disclosure_flag_fins.
 
-    Full surprise-proxy sticky hold is not expressible in StrategySpec v2
-    rule language; this is a **discussion_only proxy** that selects names with
-    a PIT-visible disclosure flag. Envelope marks fidelity=proxy.
+    Full surprise-proxy is still not expressible (no signed surprise feature
+    on the whitelist). Sticky hold on the disclosure flag is now expressible
+    via fixed_horizon (v3). Envelope marks fidelity=proxy for the signal.
     """
     h = max(1, int(post_hold_days))
     sid = strategy_id or f"paper_event_post_hold{h}_disclosure_proxy"
     return StrategySpec(
         strategy_id=sid,
+        version=STRATEGY_SPEC_VERSION,
         rule=ThresholdRule(
             feature=FeatureRef(
                 id="disclosure_flag_fins",
@@ -339,12 +447,12 @@ def build_event_post_strategy_spec(
         rationale=rationale
         or (
             f"Paper receptacle for event_post {h}d (discussion_only proxy): "
-            "threshold on disclosure_flag_fins. Full surprise-hold signal is "
-            "not in StrategySpec v2; UNARMED receptacle only."
+            "threshold on disclosure_flag_fins + sticky hold. Full signed "
+            "surprise not on feature whitelist. UNARMED receptacle only."
         ),
-        rebalance="daily",
+        rebalance=REBALANCE_FIXED_HORIZON if sticky and h > 1 else "daily",
+        hold_days=h if sticky and h > 1 else None,
     )
-
 
 # ---------------------------------------------------------------------------
 # Receptacle
@@ -517,6 +625,8 @@ def adapt_class_hyp_candidate(
         # still force discussion_only — adapter never promotes
         discussion_only = True
 
+    residual_notes: list[str] = []
+
     if cid == CLASS_MULTI_DAY_HOLD:
         h = int(
             hold_days
@@ -526,20 +636,114 @@ def adapt_class_hyp_candidate(
         # multi_day_hold_10 convention
         if str(payload.get("variant") or "") in {"hold_10", "10", "10d"}:
             h = 10
+        n_mom = payload.get("momentum_n")
+        n_mom_i = int(n_mom) if n_mom is not None else h
         spec = build_multi_day_hold_strategy_spec(
             hold_days=h,
             top_k=top_k,
+            momentum_n=n_mom_i,
             strategy_id=strategy_id,
         )
         horizon = f"{h}d_hold"
-        rebalance = f"every_{h}d_fixed_horizon"
-        fidelity = "aligned"
+        rebalance = f"fixed_horizon_{h}d"
+        fidelity = "aligned_with_residuals"
+        residual_notes.append(
+            "entry is top_k momentum (research uses sign(momentum) L/S per name)"
+        )
         if not signal_id:
             signal_id = "c21_multi_day_momentum_hold"
         note = (
-            f"multi_day_hold paper receptacle hold={h}d. StrategySpec uses "
-            f"momentum_n(n={h}) top_k. Research rebalance={rebalance}; "
-            "StrategySpec.rebalance=daily (schema). UNARMED."
+            f"multi_day_hold paper receptacle hold={h}d sticky fixed_horizon. "
+            f"StrategySpec v3 momentum_n(n={n_mom_i}) top_k. UNARMED."
+        )
+    elif cid == CLASS_CROSS_SECTION_RELATIVE:
+        h = int(
+            hold_days
+            if hold_days is not None
+            else _hold_days_from_payload(payload, default=10, class_id=cid)
+        )
+        if str(payload.get("variant") or "") in {
+            "hold_10",
+            "cross_section_hold_10",
+            "10",
+            "10d",
+        }:
+            h = 10
+        n_mom = payload.get("momentum_n")
+        if n_mom is None:
+            n_mom = payload.get("cross_section_hold10_momentum_n")
+        # W82 pin: sticky hold=10 uses mom=5 (not content-matched to hold)
+        n_mom_i = int(n_mom) if n_mom is not None else (5 if h == 10 else h)
+        long_frac = float(payload.get("long_frac", DEFAULT_CS_LONG_FRAC))
+        short_frac = float(payload.get("short_frac", DEFAULT_CS_SHORT_FRAC))
+        allow_short = bool(payload.get("allow_short", True))
+        spec = build_cross_section_hold_strategy_spec(
+            hold_days=h,
+            momentum_n=n_mom_i,
+            long_frac=long_frac,
+            short_frac=short_frac,
+            allow_short=allow_short,
+            strategy_id=strategy_id,
+        )
+        horizon = f"hold_{h}d_mom{n_mom_i}"
+        rebalance = f"fixed_horizon_{h}d"
+        fidelity = "aligned_with_residuals"
+        residual_notes.extend(
+            [
+                "paper portfolio MTM (equal-weight long/short books) vs research "
+                "trade-level mean of signed multi-day returns",
+                "no margin/borrow model on short leg",
+            ]
+        )
+        if not signal_id:
+            signal_id = "c21_cross_section_momentum_rank"
+        note = (
+            f"cross_section sticky hold={h}d mom_n={n_mom_i} L-S "
+            f"frac={long_frac}/{short_frac}. StrategySpec v3 cross_section_rank "
+            f"+ fixed_horizon. UNARMED."
+        )
+    elif cid == CLASS_FUNDAMENTALS_PRICE:
+        h = int(
+            hold_days
+            if hold_days is not None
+            else _hold_days_from_payload(payload, default=10, class_id=cid)
+        )
+        if str(payload.get("variant") or "") in {
+            "hold_10",
+            "fundamentals_hold_10",
+            "10",
+            "10d",
+        }:
+            h = 10
+        n_mom = payload.get("momentum_n")
+        if n_mom is None:
+            n_mom = payload.get("fund_hold10_momentum_n")
+        n_mom_i = int(n_mom) if n_mom is not None else (10 if h == 10 else h)
+        mode = str(payload.get("mode") or "value_momentum_agree")
+        allow_short = bool(payload.get("allow_short", True))
+        spec = build_fundamentals_hold_strategy_spec(
+            hold_days=h,
+            momentum_n=n_mom_i,
+            mode=mode,
+            allow_short=allow_short,
+            strategy_id=strategy_id,
+        )
+        horizon = f"hold_{h}d_mom{n_mom_i}"
+        rebalance = f"fixed_horizon_{h}d"
+        fidelity = "aligned_with_residuals"
+        residual_notes.extend(
+            [
+                "value benchmark = same-bar CS median of visible scores "
+                "(research uses global-window median of value scores)",
+                "paper portfolio MTM vs research trade-level mean",
+                "no margin/borrow model on short leg",
+            ]
+        )
+        if not signal_id:
+            signal_id = "c21_fundamentals_price_value"
+        note = (
+            f"fundamentals_price hold={h}d mom_n={n_mom_i} mode={mode}. "
+            "StrategySpec v3 value_momentum_agree + fixed_horizon. UNARMED."
         )
     elif cid == CLASS_EVENT_POST:
         h = int(
@@ -554,14 +758,17 @@ def adapt_class_hyp_candidate(
             strategy_id=strategy_id,
         )
         horizon = f"1d_to_{h}d_post_event"
-        rebalance = f"event_entry_hold_{h}d"
+        rebalance = f"event_entry_hold_{h}d_sticky"
         fidelity = "proxy"
+        residual_notes.append(
+            "signal is disclosure_flag threshold, not signed surprise on event day"
+        )
         if not signal_id:
             signal_id = "c21_event_post_disclosure_hold"
         note = (
-            f"event_post paper receptacle post_hold={h}d (discussion_only). "
-            "StrategySpec proxy = disclosure_flag_fins threshold. Full "
-            "surprise sticky-hold not in StrategySpec v2. UNARMED."
+            f"event_post paper receptacle post_hold={h}d sticky (discussion_only). "
+            "StrategySpec proxy = disclosure_flag_fins threshold + fixed_horizon. "
+            "Full surprise not on whitelist. UNARMED."
         )
     else:
         # Generic fallback: still emit a multi_day momentum receptacle, marked proxy
@@ -586,13 +793,20 @@ def adapt_class_hyp_candidate(
                 "UNARMED discussion_only."
             ),
         )
-        rebalance = f"every_{h}d_fixed_horizon"
+        rebalance = f"fixed_horizon_{h}d"
         fidelity = "proxy"
+        residual_notes.append("generic class falls back to momentum top_k sticky")
         note = (
             f"Generic unarmed paper receptacle for class={cid}. "
-            "Proxy StrategySpec (momentum_n). Not live. Not armed."
+            "Proxy StrategySpec (momentum_n sticky). Not live. Not armed."
         )
-
+    residual_block = {
+        "notes": residual_notes,
+        "policy": (
+            "Align paper/StrategySpec toward research; do not simplify research. "
+            "Residuals only when unavoidable."
+        ),
+    }
     return PaperCandidateReceptacle(
         strategy_spec=spec,
         hypothesis_class=cid,
@@ -615,10 +829,12 @@ def adapt_class_hyp_candidate(
             "lookback_days": max(DEFAULT_LOOKBACK_DAYS, h + 5),
             "cost_bps": float(one_way) * 10_000.0,
             "universe": list(universe),
+            "hold_days": h,
+            "strategy_spec_version": STRATEGY_SPEC_VERSION,
+            "residual_approximations": residual_block,
         },
         note=note,
     )
-
 
 def adapt_from_class_hyp_bundle(
     bundle: Mapping[str, Any],
@@ -657,6 +873,18 @@ def adapt_from_class_hyp_bundle(
         if "10" in class_key:
             block.setdefault("variant", "hold_10")
             block.setdefault("hold_days", 10)
+    elif class_key.startswith("cross_section"):
+        block.setdefault("hypothesis_class", CLASS_CROSS_SECTION_RELATIVE)
+        if "hold_10" in class_key or class_key.endswith("_10"):
+            block.setdefault("variant", "hold_10")
+            block.setdefault("hold_days", 10)
+            block.setdefault("momentum_n", DEFAULT_CS_MOMENTUM_N)
+    elif class_key.startswith("fundamentals"):
+        block.setdefault("hypothesis_class", CLASS_FUNDAMENTALS_PRICE)
+        if "hold_10" in class_key or class_key.endswith("_10"):
+            block.setdefault("variant", "hold_10")
+            block.setdefault("hold_days", 10)
+            block.setdefault("momentum_n", DEFAULT_FUND_MOMENTUM_N)
     elif class_key == "event_post":
         block.setdefault("hypothesis_class", CLASS_EVENT_POST)
 
@@ -836,6 +1064,10 @@ def emit_example_paper_specs(
 __all__ = [
     "CONNECTED_TO_MASS",
     "CONNECTED_TO_READY",
+    "DEFAULT_CS_LONG_FRAC",
+    "DEFAULT_CS_MOMENTUM_N",
+    "DEFAULT_CS_SHORT_FRAC",
+    "DEFAULT_FUND_MOMENTUM_N",
     "DEFAULT_ONE_WAY_COST",
     "EDGE_CLAIMED",
     "LIVE_ORDER_PATH_ENABLED",
@@ -854,7 +1086,9 @@ __all__ = [
     "adapt_class_hyp_candidate",
     "adapt_from_class_hyp_bundle",
     "assert_unarmed",
+    "build_cross_section_hold_strategy_spec",
     "build_event_post_strategy_spec",
+    "build_fundamentals_hold_strategy_spec",
     "build_multi_day_hold_strategy_spec",
     "emit_example_paper_specs",
     "example_event_post_payload",

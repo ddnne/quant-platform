@@ -28,14 +28,15 @@ from research.paper_candidate_adapter import (
     adapt_class_hyp_candidate,
     adapt_from_class_hyp_bundle,
     assert_unarmed,
+    build_cross_section_hold_strategy_spec,
     build_event_post_strategy_spec,
+    build_fundamentals_hold_strategy_spec,
     build_multi_day_hold_strategy_spec,
     emit_example_paper_specs,
     example_event_post_payload,
     example_multi_day_hold_10d_payload,
 )
 from strategies.spec import STRATEGY_SPEC_VERSION, StrategySpec, interpret_strategy_spec
-
 REPO = Path(__file__).resolve().parents[1]
 ADAPTER_PATH = (
     REPO / "packages" / "product" / "research" / "paper_candidate_adapter.py"
@@ -56,7 +57,8 @@ def test_multi_day_hold_10d_strategy_spec_is_closed_and_interpretable():
     spec = build_multi_day_hold_strategy_spec(hold_days=10, top_k=5)
     assert isinstance(spec, StrategySpec)
     assert spec.version == STRATEGY_SPEC_VERSION
-    assert spec.rebalance == "daily"
+    assert spec.rebalance == "fixed_horizon"
+    assert spec.hold_days == 10
     assert spec.rule.type == "top_k"
     assert spec.rule.feature.id == "momentum_n"
     assert spec.rule.feature.params["n"] == 10
@@ -81,14 +83,15 @@ def test_adapt_multi_day_hold_10d_aligns_horizon_costs_universe_rebalance():
     assert body["hypothesis_class"] == "multi_day_hold"
     assert body["horizon"] == "10d_hold"
     assert body["hold_days"] == 10
-    assert body["rebalance"] == "every_10d_fixed_horizon"
+    assert body["rebalance"] == "fixed_horizon_10d"
     assert "tse_prime_liquid" in body["universe"] or body["universe"]
     assert body["costs"]["one_way_cost"] == pytest.approx(0.001)
     assert body["costs"]["cost_bps"] == pytest.approx(10.0)
     assert body["costs"]["amortization"] == "hold_days"
-    assert body["strategy_spec"]["rebalance"] == "daily"
+    assert body["strategy_spec"]["rebalance"] == "fixed_horizon"
+    assert body["strategy_spec"]["hold_days"] == 10
     assert body["strategy_spec"]["rule"]["feature"]["params"]["n"] == 10
-    assert body["strategy_spec_fidelity"] == "aligned"
+    assert body["strategy_spec_fidelity"] in {"aligned", "aligned_with_residuals"}
     assert body["status"] == "paper_receptacle_unarmed"
     assert body["discussion_only"] is True
     # nested StrategySpec round-trip
@@ -100,7 +103,7 @@ def test_adapt_event_post_discussion_only_proxy():
     body = rec.to_dict()
     assert body["hypothesis_class"] == "event_post"
     assert body["horizon"] == "1d_to_5d_post_event"
-    assert body["rebalance"] == "event_entry_hold_5d"
+    assert body["rebalance"] == "event_entry_hold_5d_sticky"
     assert body["strategy_spec_fidelity"] == "proxy"
     assert body["discussion_only"] is True
     assert body["signal_id"] == "c21_event_post_disclosure_hold"
@@ -311,3 +314,64 @@ def test_paper_candidate_receptacle_type():
     rec = adapt_class_hyp_candidate(example_multi_day_hold_10d_payload())
     assert isinstance(rec, PaperCandidateReceptacle)
     assert rec.status == "paper_receptacle_unarmed"
+
+
+def test_cross_section_hold_10_strategy_spec_aligned_v3():
+    """W84: xs hold=10 mom=5 sticky CS L-S expressible in StrategySpec v3."""
+    spec = build_cross_section_hold_strategy_spec(
+        hold_days=10, momentum_n=5, long_frac=0.3, short_frac=0.3
+    )
+    assert spec.version == STRATEGY_SPEC_VERSION
+    assert spec.rebalance == "fixed_horizon"
+    assert spec.hold_days == 10
+    assert spec.rule.type == "cross_section_rank"
+    assert spec.rule.feature.params["n"] == 5
+    strategy = interpret_strategy_spec(spec)
+    assert strategy.feature_ids == ("momentum_n",)
+
+    rec = adapt_class_hyp_candidate(
+        {
+            "hypothesis_class": "cross_section_relative",
+            "variant": "hold_10",
+            "hold_days": 10,
+            "momentum_n": 5,
+            "one_way_cost": 0.001,
+            "signal_id": "c21_cross_section_momentum_rank",
+        }
+    )
+    body = rec.to_dict()
+    assert body["strategy_spec"]["rebalance"] == "fixed_horizon"
+    assert body["strategy_spec"]["hold_days"] == 10
+    assert body["strategy_spec"]["rule"]["type"] == "cross_section_rank"
+    assert body["strategy_spec"]["rule"]["feature"]["params"]["n"] == 5
+    assert body["strategy_spec_fidelity"] == "aligned_with_residuals"
+    assert_unarmed(body)
+
+
+def test_fundamentals_hold_10_strategy_spec_aligned_v3():
+    """W84: fund hold=10 mom=10 value×mom agree expressible in StrategySpec v3."""
+    spec = build_fundamentals_hold_strategy_spec(hold_days=10, momentum_n=10)
+    assert spec.rebalance == "fixed_horizon"
+    assert spec.hold_days == 10
+    assert spec.rule.type == "value_momentum_agree"
+    assert spec.rule.momentum_feature.params["n"] == 10
+    strategy = interpret_strategy_spec(spec)
+    assert set(strategy.feature_ids) == {"fundamental_value_score", "momentum_n"}
+
+    rec = adapt_class_hyp_candidate(
+        {
+            "hypothesis_class": "fundamentals_price",
+            "variant": "hold_10",
+            "hold_days": 10,
+            "momentum_n": 10,
+            "mode": "value_momentum_agree",
+            "one_way_cost": 0.001,
+            "signal_id": "c21_fundamentals_price_value",
+        }
+    )
+    body = rec.to_dict()
+    assert body["strategy_spec"]["rule"]["type"] == "value_momentum_agree"
+    assert body["strategy_spec"]["rule"]["momentum_feature"]["params"]["n"] == 10
+    assert body["strategy_spec"]["hold_days"] == 10
+    assert body["strategy_spec_fidelity"] == "aligned_with_residuals"
+    assert_unarmed(body)

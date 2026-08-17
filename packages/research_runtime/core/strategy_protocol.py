@@ -58,8 +58,8 @@ class OrderIntent:
 
     * ``1.0``  -> 100% of equity in this one code
     * ``0.0``  -> flat / exit
-    * negative -> short (the minimal engine will reject / clip to flat; full
-      shorting is out of scope)
+    * negative -> short (paper L-S / StrategySpec cross_section_rank and
+      value_momentum_agree may emit signed weights; no margin model)
 
     The engine converts weights to target shares using the last PIT-visible
     close at the decision ``as_of`` and trades the delta. Codes the strategy

@@ -13,6 +13,7 @@ from strategies.spec import (
     TopKRule,
     interpret_strategy_spec,
 )
+# v3 rules imported via from_dict in new tests
 
 
 def test_strategy_spec_round_trip_supports_only_whitelisted_rules():
@@ -41,6 +42,102 @@ def test_strategy_spec_round_trip_supports_only_whitelisted_rules():
     assert strategy.feature_ids == ("momentum_n",)
     assert strategy.feature_versions == {"momentum_n": "1.0.0"}
     assert strategy.params == {"strategy_spec": payload}
+
+
+def test_strategy_spec_v3_cross_section_rank_sticky_round_trip():
+    payload = {
+        "version": "strategy-spec/v3",
+        "strategy_id": "xs_hold10_mom5",
+        "rebalance": "fixed_horizon",
+        "hold_days": 10,
+        "rule": {
+            "type": "cross_section_rank",
+            "feature": {
+                "id": "momentum_n",
+                "version": "1.0.0",
+                "params": {"n": 5},
+            },
+            "long_frac": 0.3,
+            "short_frac": 0.3,
+            "allow_short": True,
+        },
+        "rationale": "W84 xs sticky",
+    }
+    spec = StrategySpec.from_dict(payload)
+    assert spec.rebalance == "fixed_horizon"
+    assert spec.hold_days == 10
+    assert spec.to_dict() == payload
+    strategy = interpret_strategy_spec(spec)
+    assert strategy.feature_ids == ("momentum_n",)
+
+
+def test_strategy_spec_v3_value_momentum_agree_round_trip():
+    payload = {
+        "version": "strategy-spec/v3",
+        "strategy_id": "fund_hold10_mom10",
+        "rebalance": "fixed_horizon",
+        "hold_days": 10,
+        "rule": {
+            "type": "value_momentum_agree",
+            "value_feature": {
+                "id": "fundamental_value_score",
+                "version": "1.0.0",
+                "params": {},
+            },
+            "momentum_feature": {
+                "id": "momentum_n",
+                "version": "1.0.0",
+                "params": {"n": 10},
+            },
+            "mode": "value_momentum_agree",
+            "allow_short": True,
+        },
+        "rationale": "W84 fund sticky",
+    }
+    spec = StrategySpec.from_dict(payload)
+    assert spec.to_dict() == payload
+    strategy = interpret_strategy_spec(spec)
+    assert set(strategy.feature_ids) == {
+        "fundamental_value_score",
+        "momentum_n",
+    }
+
+
+def test_strategy_spec_v2_rejects_fixed_horizon_and_new_rules():
+    with pytest.raises(StrategySpecError, match="unsupported rebalance|fixed_horizon"):
+        StrategySpec.from_dict(
+            {
+                "version": "strategy-spec/v2",
+                "strategy_id": "bad",
+                "rebalance": "fixed_horizon",
+                "hold_days": 10,
+                "rule": {
+                    "type": "top_k",
+                    "feature": {
+                        "id": "momentum_n",
+                        "version": "1.0.0",
+                        "params": {"n": 5},
+                    },
+                    "k": 1,
+                },
+            }
+        )
+    with pytest.raises(StrategySpecError, match="requires strategy-spec/v3|unknown rule"):
+        StrategySpec.from_dict(
+            {
+                "version": "strategy-spec/v2",
+                "strategy_id": "bad",
+                "rebalance": "daily",
+                "rule": {
+                    "type": "cross_section_rank",
+                    "feature": {
+                        "id": "momentum_n",
+                        "version": "1.0.0",
+                        "params": {"n": 5},
+                    },
+                },
+            }
+        )
 
 
 @pytest.mark.parametrize(
