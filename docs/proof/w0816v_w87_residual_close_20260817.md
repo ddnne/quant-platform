@@ -5,7 +5,8 @@
 **Implementer:** GLM5.3 (Grok does **not** implement)  
 **Logs:** [`.glm-logs/w0816v_w87_mass/`](../../.glm-logs/w0816v_w87_mass/)  
 **Proof:** [`w0816v_w87_mass_strategy_factory_20260817.md`](w0816v_w87_mass_strategy_factory_20260817.md)  
-**Prior tip:** W86 `70507b1`
+**Prior tip:** W86 `70507b1`  
+**This feature tip:** `470971e`
 
 ---
 
@@ -36,7 +37,7 @@
 | Batch auto eval + screen | **yes** · fail_rate 0 · ~8.8s |
 | GO judgment deferred | **yes** |
 | residual TOP updated | **yes** (this file) |
-| Commit + push past W86 tip `70507b1` | residual |
+| Commit + push past W86 tip `70507b1` | **yes** · feature `470971e` |
 
 ---
 
