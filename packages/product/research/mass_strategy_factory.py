@@ -1,4 +1,4 @@
-"""Mass strategy logic-diversity factory + batch auto-experiment (W89 / w0816x).
+"""Mass strategy logic-diversity factory + batch auto-experiment (W90 / w0816y).
 
 Purpose
 -------
@@ -6,7 +6,12 @@ Research factory that generates strategy **individuals** around **distinct
 economic logic templates** (thesis + signal structure + position rule +
 datasets), not hold_days / momentum_window / long_frac param grids.
 
-W89 extends W88 with:
+W90 extends W89 with:
+* strong-model profit-hypothesis generation (xAI grok-4.6 preferred)
+* CF multi-logic × multi-period mass-eval Worker + R2 artifacts
+* wide local eval of LLM-accepted + catalog survivors
+
+W89 held:
 * interest-rate factor logics (absolute level + curve-shape × CS)
 * multi-factor logics (value×mom×rate, flow×price) with required theses
 * near-group labels (flow hard/soft, fund slow kept parallel)
@@ -38,8 +43,9 @@ Building blocks reused
 * ``hypothesis_classes`` — family ids / datasets
 * ``class_signals`` / ``class_hyp_eval`` — pure bar evaluators
 * ``cost_models`` · ``sign_selection`` · ``stats_metrics``
+* ``llm_hyp_generator`` · ``cf_mass_eval_job`` (W90)
 
-See: ``docs/proof/w0816x_w89_rate_multifactor_cf_20260817.md``
+See: ``docs/proof/w0816y_w90_llm_hyp_cf_mass_eval_20260817.md``
 """
 
 from __future__ import annotations
@@ -92,8 +98,8 @@ from features.class_signals import (
 # Identity / freezes (must never arm operational Mass)
 # ---------------------------------------------------------------------------
 
-MASS_FACTORY_VERSION: str = "mass-strategy-factory/v2.1"
-MASS_FACTORY_WAVE: str = "W89 / w0816x"
+MASS_FACTORY_VERSION: str = "mass-strategy-factory/v2.2"
+MASS_FACTORY_WAVE: str = "W90 / w0816y"
 
 MASS_RESEARCH: str = "NO-GO"  # operational Mass remains NO-GO
 PHASE7: str = "OFF"
@@ -2887,31 +2893,61 @@ def try_cf_minimal_mass_batch() -> dict[str, Any]:
 
     Status
     ------
-    **Blocked for mass-logic batch:** CF infrastructure today exposes
-    single-shot tip signal jobs (``research.single_shot_job``) and D1/R2
-    planes — not a mass logic-diversity factory worker. Scaling to 200/500
-    on CF is explicitly deferred.
+    **W90 / w0816y:** CF worker ``quant-platform-research-mass-eval`` exists
+    under ``platform/workers/research-mass-eval/`` with
+    ``POST /v1/mass-eval`` → R2 ``research/mass_eval/job={id}/``.
 
-    Local batch remains the supported path via ``run_mass_factory``.
+    Pure-TS lite multi-period path (synthetic / r2_panels / nets_only).
+    Full rate/mf factor legs on CF remain **not-yet-implemented** (fallback
+    multi_day_hold or nets_only). Local ``run_mass_factory`` remains the
+    full-factory path. Scaling to 200/500 queue fan-out is not-yet-implemented.
     """
     return {
-        "status": "blocked",
-        "wave": MASS_FACTORY_WAVE,
-        "version": MASS_FACTORY_VERSION,
-        "blocker": (
-            "No CF worker / queue job for mass logic-diversity factory. "
-            "Existing CF path is single_shot_job (D1 tip signal + R2 artifact) "
-            "— orthogonal to multi-period offline logic batch eval. "
-            "Do not force 200/500 CF scale this wave."
-        ),
+        "status": "available",
+        "wave": "W90 / w0816y",
+        "version": "research-mass-eval/v1",
+        "factory_wave": MASS_FACTORY_WAVE,
+        "factory_version": MASS_FACTORY_VERSION,
+        # Primary W90 task path: POST /v1/mass-eval → research/mass_eval/job=
+        "worker": "quant-platform-research-mass-eval",
+        "worker_path": "platform/workers/research-mass-eval/",
+        "endpoint": "POST /v1/mass-eval",
+        "request_shape": {
+            "seed": "int",
+            "logics": "list[{logic_id, family_id?, params?, thesis?}]",
+            "periods": "list[{period_id, year?}]",
+            "job_id": "str",
+            "mode": "synthetic | r2_panels | nets_only",
+        },
+        "r2_prefix": "research/mass_eval/job={id}/",
+        "r2_bucket": "quant-structured",
+        # Parallel W90 track (D1 tip bars + research/mass_factory/):
+        "alt_worker": "quant-platform-mass-eval",
+        "alt_worker_path": "platform/workers/mass-eval/",
+        "alt_endpoint": "POST /v1/research/mass_eval",
+        "alt_r2_prefix": "research/mass_factory/job={id}/",
         "existing_cf_paths": [
+            "platform/workers/research-mass-eval (POST /v1/mass-eval → research/mass_eval/)",
+            "platform/workers/mass-eval (POST /v1/research/mass_eval → research/mass_factory/)",
             "research.single_shot_job.execute_single_shot_job",
             "research.single_shot_job.execute_multiday_signal_eval",
-            "packages/edge/cf_platform (ingestion / ops — not mass factory)",
+            "packages/edge/cf_platform (ingestion / ops)",
         ],
-        "supported_path": "local run_mass_factory / scripts/run_mass_strategy_batch.py",
-        "scale_deferred": True,
-        "n_cf_batch": 0,
+        "supported_path_cf": (
+            "wrangler deploy platform/workers/research-mass-eval && "
+            "POST /v1/mass-eval"
+        ),
+        "supported_path_local": (
+            "local run_mass_factory / scripts/run_mass_strategy_batch.py"
+        ),
+        "python_driver": "research.cf_mass_eval_job (alt mass-eval worker driver)",
+        "not_yet_implemented": [
+            "full rate/mf factor legs on pure-TS CF path",
+            "direct structured/jsonl historical bar load",
+            "queue/DO fan-out for 200-500 logics",
+        ],
+        "scale_queue_fanout": False,
+        "n_cf_batch_cap": 200,
         **_freeze(),
     }
 
@@ -3147,6 +3183,11 @@ def llm_logic_entry_status() -> dict[str, Any]:
         "wave": MASS_FACTORY_WAVE,
         "version": MASS_FACTORY_VERSION,
         "entry_fn": "research.mass_strategy_factory.propose_profit_hypotheses",
+        "strong_model_entry": (
+            "research.llm_hyp_generator.generate_profit_hypotheses_via_llm"
+        ),
+        "preferred_model": "grok-4.6 (xAI api.x.ai)",
+        "fallback_model": "@cf/openai/gpt-oss-120b (Workers AI)",
         "declaration_helper": "research.idea_generator.generate_idea_payloads",
         "rules": {
             "require": [
@@ -3172,9 +3213,9 @@ def llm_logic_entry_status() -> dict[str, Any]:
         "catalog_logic_ids": list(LOGIC_TEMPLATE_IDS),
         "near_logic_groups": near_logic_groups_document(),
         "note": (
-            "Programmatic entry connected (W89). LLM provider API is optional; "
-            "agents call propose_profit_hypotheses with thesis payloads. "
-            "idea_generator remains a ResearchIdea declaration helper."
+            "W90: strong-model path generate_profit_hypotheses_via_llm "
+            "(xAI grok-4.6 preferred) → near-dup → propose_profit_hypotheses "
+            "(always through evaluator). idea_generator remains ResearchIdea helper."
         ),
         "always_through_evaluator": True,
         **_freeze(),
@@ -3188,8 +3229,9 @@ def mass_factory_document() -> dict[str, Any]:
         "wave": MASS_FACTORY_WAVE,
         "purpose": (
             "Generate distinct economic logic templates and batch-evaluate "
-            "after near-dup (research factory). W89 adds rate factors + "
-            "multi-factor logics. Not hold/mom/frac grid mass."
+            "after near-dup (research factory). W90 adds strong-model hyp "
+            "generation + CF multi-logic multi-period eval. W89 rate + "
+            "multi-factor logics held. Not hold/mom/frac grid mass."
         ),
         "primary_metrics": [
             "n_generated",
@@ -3212,18 +3254,18 @@ def mass_factory_document() -> dict[str, Any]:
             "simple_daily_sign mass as diversity",
             "S1–S5 un-reject",
             "human main candidate selection this wave",
-            "CF 200/500 scale",
+            "CF 200/500 full multi-year scale",
             "merge near-groups early",
         ],
         "eval_tradeoffs": (
-            "Lite multi-year (Q4 windows + code subsample). "
-            "Eval after near-dup only. Heavy multi-year / distributed only "
-            "for promising survivors. Survivors need deeper class_hyp "
-            "re-eval before promotion."
+            "CF lite multi-period (bounded codes/days) via mass-eval Worker. "
+            "Local wide eval after near-dup. Heavy multi-year only for "
+            "promising survivors. Survivors need deeper class_hyp re-eval "
+            "before promotion."
         ),
         "continuous_paper": CONTINUOUS_PAPER,
         **_freeze(),
-        "proof": "docs/proof/w0816x_w89_rate_multifactor_cf_20260817.md",
+        "proof": "docs/proof/w0816y_w90_llm_hyp_cf_mass_eval_20260817.md",
     }
 
 

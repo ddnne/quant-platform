@@ -407,9 +407,14 @@ def test_default_n_capacity_and_cf_llm_residuals():
     cfg = MassFactoryConfig()
     assert cfg.n >= 100
     cf = try_cf_minimal_mass_batch()
-    assert cf["status"] == "blocked"
-    assert "blocker" in cf
-    assert cf["scale_deferred"] is True
+    assert cf["status"] == "available"
+    assert cf["worker"] == "quant-platform-research-mass-eval"
+    assert "POST /v1/mass-eval" in str(cf.get("endpoint") or "")
+    assert cf.get("r2_prefix", "").startswith("research/mass_eval/")
+    assert cf.get("r2_bucket") == "quant-structured"
+    assert isinstance(cf.get("not_yet_implemented"), list)
+    assert cf.get("scale_queue_fanout") is False
+    assert int(cf.get("n_cf_batch_cap") or 0) >= 1
     llm = llm_logic_entry_status()
     assert llm["status"] == "connected"
     assert llm.get("always_through_evaluator") is True

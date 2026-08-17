@@ -1,0 +1,17 @@
+{
+  "name": "quant-platform-research-mass-eval",
+  "private": true,
+  "version": "0.1.0",
+  "description": "W90 — multi-logic lite multi-period mass-eval on Cloudflare Workers",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev",
+    "typecheck": "tsc --noEmit",
+    "tail": "wrangler tail"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250101.0",
+    "typescript": "^5.5.0",
+    "wrangler": "^4.120.1"
+  }
+}
