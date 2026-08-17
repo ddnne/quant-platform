@@ -1,19 +1,101 @@
 # Phase 6.2 / 6.3 residual status
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).  
-**Live verified:** 2026-08-17 · **W90** strong-model hyp gen + CF multi-logic multi-period mass eval · model **grok-4.6** (xai) · n_proposed **10** · n_accepted **10** · n_evaluated **10** · wide **32** eval · survivors **18** · fail_rate **0** · CF job **`w90-wide-20260817T145205Z`** · path **`cf_worker_mass_eval`** · n_logics **32** · n_periods **6** · CF survivors **20** · R2 `research/mass_eval/job=w90-wide-20260817T145205Z/` · worker `quant-platform-research-mass-eval` · factory **v2.2** · **3 defaults frozen** · near-groups **parallel** · most promising **mf_value_mom_rate** (t≈1.48 · Sharpe≈0.60) · human main **NOT selected** · **GO deferred** · Mass/READY/Phase7/ops GO **NO-GO/未宣言/OFF/未宣言** · continuous paper **UNARMED** · COMPLETE **22** held · DEFER **4** · segs **7888** · empty **0** · OTC **4499** tip-wait · W89/W88/W87 underneath held · S1–S5 **research_baseline_rejected** · densify **none** · **no invent** · **no Mass/READY ON** · **no operational GO** · **no live** · **no simple_daily_sign mass** · **no hold/mom/frac grid** · proofs [`w0816y_w90_llm_hyp_cf_mass_eval_20260817.md`](proof/w0816y_w90_llm_hyp_cf_mass_eval_20260817.md) · [`w0816y_w90_residual_close_20260817.md`](proof/w0816y_w90_residual_close_20260817.md)  
-**Repo tip:** `dbeaf6db92a94ebeae1f8d48e5a2ad7d3f0976e4` — W90 residual TOP fix · feature `220419e` · COMPLETE **22** / DEFER **4** / segs **7888** / OTC **4499** / Mass/READY/ops GO **NO-GO/未宣言/未宣言** · continuous paper **UNARMED** · 3 defaults **frozen**
+**Live verified:** 2026-08-18 · **W91** real COMPLETE-backed CF mass-eval (`r2_panels`) + Nikkei/index vol regime logics · factory **v2.3** · class-signals **v8** · CF job **`w91-real-20260817T222940Z`** · mode **`r2_panels`** (NOT synthetic-as-final) · n_logics **25** · n_periods **6** (y2015_full…y2025_q4) · CF survivors **6** · stage **6/6 ok** · R2 `research/mass_eval/job=w91-real-20260817T222940Z/` · panels `…/panels/` · datasets **equities_bars_daily** + **indices_bars_daily_topix** (TOPIX RV proxy for Nikkei) · wide local **real_mirrors** **25** eval · survivors **22** · nky all **3 survived** local (term_levels t≈0.93 · ratio t≈0.72 · abs t≈0.40) · CF nky **term_ratio survived** · **3 defaults frozen** · near-groups **parallel** · human main **NOT selected** · **GO deferred** · Mass/READY/Phase7/ops GO **NO-GO/未宣言/OFF/未宣言** · continuous paper **UNARMED** · COMPLETE **22** held · DEFER **4** · segs **7888** · empty **0** · OTC **4499** tip-wait · W90/W89/W88/W87 underneath held · S1–S5 **research_baseline_rejected** · densify **none** · **no invent** · **no Mass/READY ON** · **no operational GO** · **no live** · **no simple_daily_sign mass** · **no hold/mom/frac grid** · **no synthetic-as-final** · proofs [`w0818a_w91_real_nky_vol_cf_20260818.md`](proof/w0818a_w91_real_nky_vol_cf_20260818.md) · [`w0818a_w91_residual_close_20260818.md`](proof/w0818a_w91_residual_close_20260818.md)  
+**Repo tip:** `8b6defae52313c18c5e108ac9499407325d2d87c` — W91 feature tip (nky + real r2_panels); residual pin follows proof commit · COMPLETE **22** / DEFER **4** / segs **7888** / OTC **4499** / Mass/READY/ops GO **NO-GO/未宣言/未宣言** · continuous paper **UNARMED** · 3 defaults **frozen**
 
-## Research entry (W74 · ready · freeze W75 · redesign W77 · GO-build W78 · GO-final W79 · candidate W80 · stats W81 · PIT W82 · parallel W83 · realign W84 · multi-window W85 · sign+repo+compare W86 · mass factory W87 · logic diversity W88 · rate+multifactor W89 · LLM+CF mass-eval W90)
+## Research entry (W74 · ready · freeze W75 · redesign W77 · GO-build W78 · GO-final W79 · candidate W80 · stats W81 · PIT W82 · parallel W83 · realign W84 · multi-window W85 · sign+repo+compare W86 · mass factory W87 · logic diversity W88 · rate+multifactor W89 · LLM+CF mass-eval W90 · real CF + Nikkei vol W91)
 
 **Entry path:** [`docs/proof/w0816h_w74_research_entry_complete22_20260816.md`](proof/w0816h_w74_research_entry_complete22_20260816.md)  
 **Checklist:** `run_standard_research_eval` / `standard-research-eval-checklist/v2`  
 **Hypothesis classes:** [`docs/proof/w0816k_w77_hypothesis_space_redesign_20260816.md`](proof/w0816k_w77_hypothesis_space_redesign_20260816.md) · `simple_daily_sign` default **OFF**  
 **Cost models:** `research-cost-models/v2` · prefer repo-linked + liquidity-linked + **short = repo[t]×100+spread** + **paper daily repo financing** (opt-in) ([`w0816u_w86_paper_repo_financing_20260817.md`](proof/w0816u_w86_paper_repo_financing_20260817.md) · [`w0816t_w85_short_cost_repo_spread_20260817.md`](proof/w0816t_w85_short_cost_repo_spread_20260817.md) · [`w0816n_w79_liquidity_linked_cost_20260816.md`](proof/w0816n_w79_liquidity_linked_cost_20260816.md) · [`w0816m_w78_repo_linked_cost_model_20260816.md`](proof/w0816m_w78_repo_linked_cost_model_20260816.md))  
-**Stats bar:** `research-stats-metrics/v1` · class-signals **v7** · W81 stats floors held · W82 PIT held · W84 paper align · W85 multi-window · W86 sign+repo+compare · W87 mass factory · W88 logic-diversity · W89 rate+multifactor · **W90 LLM+CF** (`mass-strategy-factory/v2.2`)  
-**Mass factory + LLM/CF (W90):** [`docs/proof/w0816y_w90_llm_hyp_cf_mass_eval_20260817.md`](proof/w0816y_w90_llm_hyp_cf_mass_eval_20260817.md) · residual close [`w0816y_w90_residual_close_20260817.md`](proof/w0816y_w90_residual_close_20260817.md) · `mass-strategy-factory/v2.2` · seed **870816** · recipe `scripts/run_w90_llm_cf_mass_eval.py` · logs [`.glm-logs/w0816y_w90_llm_cf/`](../.glm-logs/w0816y_w90_llm_cf/)  
-**GO final gates:** [`docs/proof/w0816u_w86_go_gates_20260817.md`](proof/w0816u_w86_go_gates_20260817.md) · GO = **pre-live-order final gate** · **repo + compare table required before GO consideration** · operational GO **未宣言** · **W90 GO judgment deferred**  
-**Status:** research entry **linked** under COMPLETE **22** · Mass/READY/Phase7/operational GO **NO-GO/未宣言/OFF/未宣言** · factory = **logic diversification** + **LLM hyp gen** + **CF multi-logic mass-eval** (not grid mass · not Mass ON) · **3 default production research_candidates frozen** (xs hold=10 mom=5 · xs hold=10 mom=3 · fund hold=10 mom=10; **not retuned this wave**; **not** Mass/READY) · factory survivors **≠** production research_candidate · StrategySpec **v3** · continuous paper **UNARMED**
+**Stats bar:** `research-stats-metrics/v1` · class-signals **v8** · W81 stats floors held · W82 PIT held · W84 paper align · W85 multi-window · W86 sign+repo+compare · W87 mass factory · W88 logic-diversity · W89 rate+multifactor · W90 LLM+CF · **W91 real CF + nky vol** (`mass-strategy-factory/v2.3`)  
+**Mass factory + real CF + nky vol (W91):** [`docs/proof/w0818a_w91_real_nky_vol_cf_20260818.md`](proof/w0818a_w91_real_nky_vol_cf_20260818.md) · residual close [`w0818a_w91_residual_close_20260818.md`](proof/w0818a_w91_residual_close_20260818.md) · `mass-strategy-factory/v2.3` · seed **870816** · recipe `scripts/run_w91_real_cf_mass_eval.py` · logs [`.glm-logs/w0818a_w91_real_vol/`](../.glm-logs/w0818a_w91_real_vol/) · CF mode **`r2_panels`** · job **`w91-real-20260817T222940Z`**  
+**W90 underneath:** [`docs/proof/w0816y_w90_llm_hyp_cf_mass_eval_20260817.md`](proof/w0816y_w90_llm_hyp_cf_mass_eval_20260817.md) · residual [`w0816y_w90_residual_close_20260817.md`](proof/w0816y_w90_residual_close_20260817.md) · synthetic CF residual path superseded for final quality by W91 real panels  
+**GO final gates:** [`docs/proof/w0816u_w86_go_gates_20260817.md`](proof/w0816u_w86_go_gates_20260817.md) · GO = **pre-live-order final gate** · **repo + compare table required before GO consideration** · operational GO **未宣言** · **W91 GO judgment deferred**  
+**Status:** research entry **linked** under COMPLETE **22** · Mass/READY/Phase7/operational GO **NO-GO/未宣言/OFF/未宣言** · factory = **logic diversification** + **real CF multi-year mass-eval** + **index vol regime** (not grid mass · not Mass ON) · **3 default production research_candidates frozen** (xs hold=10 mom=5 · xs hold=10 mom=3 · fund hold=10 mom=10; **not retuned this wave**; **not** Mass/READY) · factory survivors **≠** production research_candidate · StrategySpec **v3** · continuous paper **UNARMED**
+
+## Real CF multi-year + Nikkei vol residual close（Dataset COMPLETE 22 held · mode r2_panels · job w91-real-20260817T222940Z · 25 logics × 6 multi-year periods · stage 6/6 · wide real 25 eval · survivors 22 · nky 3 local survivors · CF nky term_ratio · 3 defaults frozen · near-groups parallel · GO deferred · human main NOT selected）· W91
+
+**Phase name:** real COMPLETE-backed CF mass-eval + Nikkei/index realized-vol regime logics + wide real eval + residual FRESH close（宣言なし · invent なし · NOT synthetic-as-final · NOT Mass ON · NOT READY · NOT operational GO · NOT human main select · NOT continuous paper arm · NOT simple_daily_sign mass gen · NOT hold/mom/frac grid · NOT retune 3 defaults · NOT near-group merge · NOT live orders · GO judgment deferred）  
+**Wave:** W91 / w0818a  
+**GO definition:** **GO** = **pre-live-order final gate** (not operational GO declare) · **GO judgment deferred this wave**  
+**Close:** [`docs/proof/w0818a_w91_residual_close_20260818.md`](proof/w0818a_w91_residual_close_20260818.md)  
+**Factory proof:** [`docs/proof/w0818a_w91_real_nky_vol_cf_20260818.md`](proof/w0818a_w91_real_nky_vol_cf_20260818.md) · module `packages/product/research/mass_strategy_factory.py` + `cf_mass_eval_job.py` + `class_hyp_eval.py` · class-signals **v8** · Worker `platform/workers/research-mass-eval/` · CLI `scripts/run_w91_real_cf_mass_eval.py` · version `mass-strategy-factory/v2.3`  
+**CF job:** job_id **`w91-real-20260817T222940Z`** · mode **`r2_panels`** · status **ok** · n_logics **25** · n_periods **6** · n_survivors **6** · R2 **`quant-structured/research/mass_eval/job=w91-real-20260817T222940Z/`** · panels staged **6/6** from COMPLETE-backed mirrors  
+**Periods:** y2015_full · y2017_q4 · y2019_full · y2021_full · y2023_full · y2025_q4  
+**Datasets:** equities_bars_daily (CS book) · indices_bars_daily_topix (Nikkei RV proxy) · markets_calendar · COMPLETE **22** held · DEFER **4** excluded  
+**Nikkei vol:** `nky_vol_abs_level` · `nky_vol_term_levels` · `nky_vol_term_ratio` · proxy **topix_realized** (cash Nikkei not in indices_bars_daily; NK225F optional) · distinct from per-name `vol_risk_adjusted_mom` / `vol_breakout_expand`  
+**Wide local (real mirrors):** evaluated **25** · survivors **22** · nky all **3 survived** · continuous paper **UNARMED** · frozen_defaults_retuned **False** · human_main_candidates_selected **False**  
+**Most promising nky (local):** `nky_vol_term_levels` (t≈0.93 · Sharpe≈0.66 · mean_net≈1.3%) — not auto-promoted  
+**CF status:** **available / executed real** · synthetic residual only for smoke · D1 multi-year **not connected** (tip-only) · rate/mf full factor legs on pure-TS CF **not-yet**  
+**Near-groups:** flow · fund · rate · **index_vol_regime** · **vol name vs index** — **keep parallel**  
+**Next residual:** deeper multi-year class_hyp on nky term_levels / promising cousins · optional NK225F prefer when indexed · NKVIF optional · human main **not this wave**  
+**W90 underneath held:** LLM+CF · synthetic CF residual superseded for final quality by W91 r2_panels  
+**W89–W86 underneath held**  
+**OTC tip-wait:** **4499** · dataset **PARTIAL** · no bulk re-scan · segs **7888**  
+**Health smoke:** COMPLETE **22** held · no invent **23** · empty **0**  
+**Final verify:** [`.glm-logs/w0818a_w91_real_vol/`](../.glm-logs/w0818a_w91_real_vol/) · w91_summary / wide_eval / cf_mass_eval_job / SUMMARY  
+**S1–S5:** stay **research_baseline_rejected** (no un-reject)  
+
+| gate | status |
+|------|--------|
+| READY | **未宣言** |
+| Mass / Phase7 | **NO-GO / OFF** (factory pipeline ≠ Mass ON) |
+| operational GO | **未宣言** |
+| GO (pre-live-order final gate) | **deferred** this wave |
+| human main candidate | **NOT selected** this wave |
+| continuous paper | **UNARMED** |
+| CF mode | **r2_panels** (real) · job **w91-real-20260817T222940Z** |
+| wide local eval | **25** evaluated · survivors **22** · path **real_mirrors** |
+| nky vol logics | **3** · local all survived · CF term_ratio survived |
+| logic catalog | unique_logic **25** (22 + 3 nky) |
+| 3 defaults retuned | **False** (frozen) |
+| near-groups merged | **False** (parallel) |
+| Dataset COMPLETE | **22** held (no invent **23**) |
+| DEFER | **4** (bars_am · earn_cal · master · OTC **dataset** PARTIAL) |
+| COMPLETE segs | **7888** |
+| empty COMPLETE | **0** |
+| OTC segs COMPLETE | **4499** (tip-wait; **dataset still PARTIAL**) |
+| densify | **none** |
+| research entry | **linked** |
+| checklist | **v2** |
+| factory survivors → research_candidate | **never auto** |
+| factory survivors → Mass/READY/ops GO | **never auto** |
+| S1–S5 catalog | **research_baseline_rejected** untouched |
+| W86–W90 underneath | **held** |
+
+### Explicit non-declarations (held · W91)
+
+- **READY** — not declared  
+- **Mass** operational ON — **NO-GO / OFF**  
+- **Phase7** — **OFF**  
+- **operational GO** — **未宣言**  
+- **GO final gate declare** — **deferred**  
+- **human main candidate selection** — **not this wave**  
+- **continuous paper arm** — **UNARMED**  
+- **factory survivors as production research_candidates** — not claimed  
+- **3 defaults retune** — forbidden / not done  
+- **hold/mom/frac grid as 100 strategies** — forbidden  
+- **near-group early merge** — forbidden  
+- **Dataset COMPLETE 23** — not invented  
+- **S1–S5 un-reject** — not done  
+- **simple_daily_sign mass generation** — forbidden  
+- **synthetic-as-final success** — forbidden (this wave used real r2_panels)  
+- **live orders / edge claim from lite factory screen** — none  
+- **CF 200/500 scale** — deferred  
+- **heavy multi-year auto for non-promising** — deferred  
+
+### Residual TOP (W91)
+
+1. **CF real multi-year mass-eval** — **executed** · mode **`r2_panels`** · job_id **`w91-real-20260817T222940Z`** · path **cf_worker_mass_eval** · datasets equities_bars_daily + TOPIX proxy · periods y2015_full…y2025_q4 · R2 `research/mass_eval/job={id}/` · **not** synthetic-as-final  
+2. **Nikkei vol logics** — **landed** · `nky_vol_abs_level` / `nky_vol_term_levels` / `nky_vol_term_ratio` · local all 3 survivors · CF term_ratio survivor · distinct from per-name vol gates  
+3. **wide eval table** — catalog after_dedup **25** · survivors **22** · real_mirrors  
+4. **defaults frozen** — mom5 · mom3 · fund; **not retuned**  
+5. **GO deferred** · Mass/READY/ops GO closed · continuous paper **UNARMED** · human main **NOT selected**  
+
+### Residual TOP (W90 underneath)
 
 ## Strong-model hyp + CF multi-logic mass-eval residual close（Dataset COMPLETE 22 held · grok-4.6 n=10/10/10 · wide 32 eval · survivors 18 · fail_rate 0 · CF job w90-wide-20260817T145205Z · path cf_worker_mass_eval · 32 logics × 6 periods · R2 written · 3 defaults frozen · near-groups parallel · GO deferred · human main NOT selected）· W90
 
