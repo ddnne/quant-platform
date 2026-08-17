@@ -44,6 +44,7 @@ from features.class_signals import (
     CLASS_EVENT_POST,
     CLASS_FLOW_DEMAND,
     CLASS_FUNDAMENTALS_PRICE,
+    CLASS_INDEX_VOL_REGIME,
     CLASS_MACRO_CONDITIONED,
     CLASS_MULTI_DAY_HOLD,
     CLASS_MULTI_FACTOR,
@@ -67,9 +68,17 @@ from features.class_signals import (
     DEFAULT_MIN_POSITIVE_PERIODS,
     DEFAULT_MIN_SHARPE_PERIOD,
     DEFAULT_MIN_YEARS_RESEARCH_CANDIDATE,
+    DEFAULT_NKY_VOL_COMPRESS_RATIO,
+    DEFAULT_NKY_VOL_EXPAND_RATIO,
+    DEFAULT_NKY_VOL_HIGH_THRESHOLD,
+    DEFAULT_NKY_VOL_LONG_N,
+    DEFAULT_NKY_VOL_LOW_THRESHOLD,
+    DEFAULT_NKY_VOL_SHORT_N,
     DEFAULT_REPO_HIGH_THRESHOLD,
     DEFAULT_REPO_LOW_THRESHOLD,
     DEFAULT_TRADING_DAYS_PER_YEAR,
+    NKY_VOL_PROXY_NK225F,
+    NKY_VOL_PROXY_TOPIX,
     REPO_CURVE_LONG_TENOR,
     REPO_CURVE_SHORT_TENOR,
     SIGNAL_ID_CROSS_SECTION,
@@ -80,9 +89,13 @@ from features.class_signals import (
     SIGNAL_ID_MF_FLOW_PRICE,
     SIGNAL_ID_MF_VALUE_MOM_RATE,
     SIGNAL_ID_MULTI_DAY_HOLD,
+    SIGNAL_ID_NKY_VOL_ABS_LEVEL,
+    SIGNAL_ID_NKY_VOL_TERM_LEVELS,
+    SIGNAL_ID_NKY_VOL_TERM_RATIO,
     SIGNAL_ID_RATE_CURVE_XS,
     SIGNAL_ID_RATE_LEVEL_XS,
     SUPPORTED_HOLD_DAYS,
+    TRADING_DAYS_ANN,
     amortized_one_way_cost,
     apply_sticky_hold,
     class_signal_definitions,
@@ -93,6 +106,9 @@ from features.class_signals import (
     compute_macro_conditioned_signal,
     compute_mf_flow_price_signal,
     compute_mf_value_mom_rate_signal,
+    compute_nky_vol_abs_level_signal,
+    compute_nky_vol_term_levels_signal,
+    compute_nky_vol_term_ratio_signal,
     compute_rate_curve_xs_signal,
     compute_rate_level_xs_signal,
     cross_section_rank_signs,
@@ -541,6 +557,373 @@ def build_repo_curve_series(
             {t for m in by_date_tenor.values() for t in m.keys()}
         ),
     }
+
+
+def _annualized_realized_vol(
+    closes: Sequence[float], end_i: int, window: int
+) -> float | None:
+    """Sample stdev of 1-session returns over ``window``, annualized √252."""
+    if end_i < window or window < 2:
+        return None
+    rets: list[float] = []
+    for j in range(end_i - window + 1, end_i + 1):
+        if j < 1:
+            return None
+        c0, c1 = closes[j - 1], closes[j]
+        if c0 is None or c1 is None or float(c0) == 0.0:
+            return None
+        rets.append((float(c1) / float(c0)) - 1.0)
+    if len(rets) < 2:
+        return None
+    m = mean(rets)
+    var = sum((r - m) ** 2 for r in rets) / (len(rets) - 1)
+    if var < 0:
+        return None
+    return float(var ** 0.5) * (float(TRADING_DAYS_ANN) ** 0.5)
+
+
+def load_topix_close_series_from_sqlite(
+    db_path: str | Path = DEFAULT_SQLITE,
+    *,
+    start: str | None = None,
+    end: str | None = None,
+) -> list[tuple[str, float]]:
+    """Load TOPIX closes from indices_bars_daily_topix (prefer) or code 0000."""
+    db = Path(db_path)
+    if not db.exists():
+        return []
+    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    try:
+        out: list[tuple[str, float]] = []
+        # Prefer dedicated TOPIX dataset
+        sql = (
+            "SELECT natural_key, event_time, payload FROM jquants_records "
+            "WHERE dataset = 'indices_bars_daily_topix'"
+        )
+        params: list[Any] = []
+        if start:
+            sql += " AND event_time >= ?"
+            params.append(str(start)[:10])
+        if end:
+            sql += " AND event_time <= ?"
+            params.append(str(end)[:10] + "T23:59:59")
+        sql += " ORDER BY event_time ASC"
+        for _nk, event_time, payload in con.execute(sql, params):
+            try:
+                pl = json.loads(payload) if isinstance(payload, str) else payload
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if not isinstance(pl, Mapping):
+                continue
+            d = str(pl.get("Date") or str(event_time or "")[:10])[:10]
+            c = pl.get("C") if pl.get("C") is not None else pl.get("Close")
+            if not d or c is None or c == "":
+                continue
+            try:
+                out.append((d, float(c)))
+            except (TypeError, ValueError):
+                continue
+        if out:
+            return out
+        # Fallback: indices_bars_daily code 0000 (TOPIX)
+        sql2 = (
+            "SELECT natural_key, event_time, payload FROM jquants_records "
+            "WHERE dataset = 'indices_bars_daily' "
+            "AND (natural_key LIKE '%\"Code\":\"0000\"%' OR natural_key LIKE '%\"code\":\"0000\"%')"
+        )
+        params2: list[Any] = []
+        if start:
+            sql2 += " AND event_time >= ?"
+            params2.append(str(start)[:10])
+        if end:
+            sql2 += " AND event_time <= ?"
+            params2.append(str(end)[:10] + "T23:59:59")
+        sql2 += " ORDER BY event_time ASC"
+        for _nk, event_time, payload in con.execute(sql2, params2):
+            try:
+                pl = json.loads(payload) if isinstance(payload, str) else payload
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if not isinstance(pl, Mapping):
+                continue
+            d = str(pl.get("Date") or str(event_time or "")[:10])[:10]
+            c = pl.get("C") if pl.get("C") is not None else pl.get("Close")
+            if not d or c is None or c == "":
+                continue
+            try:
+                out.append((d, float(c)))
+            except (TypeError, ValueError):
+                continue
+        return out
+    finally:
+        con.close()
+
+
+def load_nk225f_front_close_series_from_sqlite(
+    db_path: str | Path = DEFAULT_SQLITE,
+    *,
+    start: str | None = None,
+    end: str | None = None,
+) -> list[tuple[str, float]]:
+    """Continuous front Nikkei 225 futures closes (max open interest per day).
+
+    Cash Nikkei average is not in indices_bars_daily; NK225F front is the
+    primary price proxy for Nikkei realized-vol construction.
+    """
+    db = Path(db_path)
+    if not db.exists():
+        return []
+    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    try:
+        sql = (
+            "SELECT natural_key, event_time, payload FROM jquants_records "
+            "WHERE dataset = 'derivatives_bars_daily_futures' "
+            "AND payload LIKE '%\"ProdCat\":\"NK225F\"%'"
+        )
+        params: list[Any] = []
+        if start:
+            # lookback buffer for long RV window
+            sql += " AND event_time >= ?"
+            params.append(str(start)[:10])
+        if end:
+            sql += " AND event_time <= ?"
+            params.append(str(end)[:10] + "T23:59:59")
+        sql += " ORDER BY event_time ASC"
+        by_date: dict[str, list[tuple[float, float]]] = {}
+        for _nk, event_time, payload in con.execute(sql, params):
+            try:
+                pl = json.loads(payload) if isinstance(payload, str) else payload
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if not isinstance(pl, Mapping):
+                continue
+            if str(pl.get("ProdCat") or "") != "NK225F":
+                continue
+            d = str(pl.get("Date") or str(event_time or "")[:10])[:10]
+            if not d:
+                continue
+            px = pl.get("C")
+            if px is None or px == "" or float(px or 0) <= 0:
+                px = pl.get("Settle")
+            if px is None or px == "" or float(px or 0) <= 0:
+                px = pl.get("AC")
+            try:
+                px_f = float(px) if px is not None and px != "" else 0.0
+            except (TypeError, ValueError):
+                continue
+            if px_f <= 0:
+                continue
+            try:
+                oi = float(pl.get("OI") or 0.0)
+            except (TypeError, ValueError):
+                oi = 0.0
+            by_date.setdefault(d, []).append((oi, px_f))
+        out: list[tuple[str, float]] = []
+        for d in sorted(by_date.keys()):
+            best = max(by_date[d], key=lambda x: x[0])
+            out.append((d, best[1]))
+        return out
+    finally:
+        con.close()
+
+
+def build_nky_vol_series(
+    close_pairs: Sequence[tuple[str, float]] | None,
+    *,
+    short_n: int = DEFAULT_NKY_VOL_SHORT_N,
+    long_n: int = DEFAULT_NKY_VOL_LONG_N,
+    source: str = NKY_VOL_PROXY_NK225F,
+    dataset: str = "derivatives_bars_daily_futures",
+) -> dict[str, Any]:
+    """Build date-keyed short/long annualized realized vol + ratio.
+
+    Gaps disclosed; no invent/ffill of missing sessions.
+    """
+    sn = int(short_n)
+    ln = int(long_n)
+    if sn < 2:
+        sn = DEFAULT_NKY_VOL_SHORT_N
+    if ln < sn:
+        ln = max(sn + 1, DEFAULT_NKY_VOL_LONG_N)
+    pairs = sorted(
+        [(str(d)[:10], float(c)) for d, c in (close_pairs or []) if d and c is not None],
+        key=lambda x: x[0],
+    )
+    # de-dup last wins
+    by_d: dict[str, float] = {}
+    for d, c in pairs:
+        by_d[d] = c
+    dates = sorted(by_d.keys())
+    closes = [by_d[d] for d in dates]
+    short_by: dict[str, float] = {}
+    long_by: dict[str, float] = {}
+    ratio_by: dict[str, float] = {}
+    for i, d in enumerate(dates):
+        s = _annualized_realized_vol(closes, i, sn)
+        lo = _annualized_realized_vol(closes, i, ln)
+        if s is not None:
+            short_by[d] = s
+        if lo is not None:
+            long_by[d] = lo
+        if s is not None and lo is not None and lo > 1e-12:
+            ratio_by[d] = s / lo
+    return {
+        "kind": "nky_vol_series",
+        "dataset": dataset,
+        "source": source,
+        "proxy_note": (
+            "Cash Nikkei not in indices_bars_daily. Prefer NK225F front "
+            "realized; TOPIX fallback. NKVIF is implied-vol futures (optional)."
+        ),
+        "short_n": sn,
+        "long_n": ln,
+        "annualization": f"sample_stdev * sqrt({TRADING_DAYS_ANN})",
+        "closes_by_date": dict(sorted(by_d.items())),
+        "rv_short_by_date": dict(sorted(short_by.items())),
+        "rv_long_by_date": dict(sorted(long_by.items())),
+        "rv_ratio_by_date": dict(sorted(ratio_by.items())),
+        # abs-level uses short window by default
+        "rv_abs_by_date": dict(sorted(short_by.items())),
+        "n_close_obs": len(by_d),
+        "n_obs_short": len(short_by),
+        "n_obs_long": len(long_by),
+        "n_obs_ratio": len(ratio_by),
+        "ffill_applied": False,
+        "invent_fill": False,
+    }
+
+
+def load_topix_close_series_from_ndjson(
+    path: str | Path,
+    *,
+    start: str | None = None,
+    end: str | None = None,
+) -> list[tuple[str, float]]:
+    """Load TOPIX closes from a local indices_bars_daily_topix ndjson mirror."""
+    p = Path(path)
+    if not p.is_file():
+        return []
+    p_start = str(start)[:10] if start else None
+    p_end = str(end)[:10] if end else None
+    by_date: dict[str, float] = {}
+    with p.open() as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            payload = row.get("payload") if isinstance(row, Mapping) else None
+            if isinstance(payload, str):
+                try:
+                    payload = json.loads(payload)
+                except json.JSONDecodeError:
+                    continue
+            if not isinstance(payload, Mapping):
+                payload = row if isinstance(row, Mapping) else None
+            if not isinstance(payload, Mapping):
+                continue
+            d = str(payload.get("Date") or payload.get("date") or "")[:10]
+            if not d:
+                continue
+            if p_start and d < p_start:
+                continue
+            if p_end and d > p_end:
+                continue
+            c = payload.get("C")
+            if c is None:
+                c = payload.get("Close") or payload.get("close")
+            try:
+                px = float(c)  # type: ignore[arg-type]
+            except (TypeError, ValueError):
+                continue
+            if px > 0:
+                by_date[d] = px
+    return sorted(by_date.items(), key=lambda x: x[0])
+
+
+def load_nky_vol_series_from_sqlite(
+    db_path: str | Path = DEFAULT_SQLITE,
+    *,
+    start: str | None = None,
+    end: str | None = None,
+    short_n: int = DEFAULT_NKY_VOL_SHORT_N,
+    long_n: int = DEFAULT_NKY_VOL_LONG_N,
+    prefer: str = "ndjson_topix",
+) -> dict[str, Any]:
+    """Load Nikkei-proxy closes and build short/long realized-vol series.
+
+    Priority (W91 wall-clock safe):
+      1. Local TOPIX ndjson mirror (fast, multi-year COMPLETE-backed)
+      2. Optional sqlite NK225F / TOPIX (slow on full D1 dump — skipped by default)
+    Prefer=ndjson_topix is the default for factory/CF staging.
+    """
+    pref = str(prefer or "ndjson_topix").strip().lower()
+    lookback_days = max(int(long_n) * 3, 120)
+    load_start = start
+    if start:
+        try:
+            from datetime import date as _date
+            from datetime import timedelta
+
+            ds = _date.fromisoformat(str(start)[:10])
+            load_start = (ds - timedelta(days=lookback_days)).isoformat()
+        except ValueError:
+            load_start = start
+
+    nk_pairs: list[tuple[str, float]] = []
+    source = NKY_VOL_PROXY_TOPIX
+    dataset = "indices_bars_daily_topix"
+
+    # Fast path: local TOPIX ndjson (W60 multi-signal mirror).
+    if pref in {"ndjson_topix", "topix", "auto", "ndjson"}:
+        topix_ndjson = (
+            _REPO_ROOT
+            / ".glm-logs"
+            / "w0815ba_w60_long_multisignal"
+            / "r2_mirror"
+            / "indices_bars_daily_topix.ndjson"
+        )
+        if topix_ndjson.is_file():
+            nk_pairs = load_topix_close_series_from_ndjson(
+                topix_ndjson, start=load_start, end=end
+            )
+            if nk_pairs:
+                source = NKY_VOL_PROXY_TOPIX
+                dataset = "indices_bars_daily_topix"
+                return build_nky_vol_series(
+                    nk_pairs,
+                    short_n=short_n,
+                    long_n=long_n,
+                    source=source,
+                    dataset=dataset,
+                )
+
+    # Slow optional path: sqlite (only when explicitly requested).
+    if pref in {"nk225f", "sqlite", "sqlite_nk225f"}:
+        nk_pairs = load_nk225f_front_close_series_from_sqlite(
+            db_path, start=load_start, end=end
+        )
+        source = NKY_VOL_PROXY_NK225F
+        dataset = "derivatives_bars_daily_futures"
+    if len(nk_pairs) < max(int(long_n) + 2, 30) and pref in {
+        "nk225f",
+        "sqlite",
+        "sqlite_topix",
+        "sqlite_nk225f",
+    }:
+        topix = load_topix_close_series_from_sqlite(
+            db_path, start=load_start, end=end
+        )
+        if len(topix) > len(nk_pairs):
+            nk_pairs = topix
+            source = NKY_VOL_PROXY_TOPIX
+            dataset = "indices_bars_daily_topix"
+    return build_nky_vol_series(
+        nk_pairs, short_n=short_n, long_n=long_n, source=source, dataset=dataset
+    )
 
 
 def _period_year(period_id: str) -> int | None:
@@ -1576,6 +1959,244 @@ def evaluate_rate_curve_xs_on_bars(
             "JSDA tenors only; no invent. Not READY / not Mass."
         ),
     }
+
+
+def _evaluate_nky_vol_xs_core(
+    bars_by_code: Mapping[str, Sequence[tuple[str, float]]],
+    nky_vol_series: Mapping[str, Any] | None,
+    *,
+    mode: str,
+    momentum_n: int,
+    hold_days: int,
+    long_frac: float,
+    short_frac: float,
+    one_way_cost: float,
+    high_threshold: float,
+    low_threshold: float,
+    expand_ratio: float,
+    compress_ratio: float,
+) -> dict[str, Any]:
+    """Shared CS × index-vol regime evaluator for abs / term_levels / term_ratio."""
+    n = int(momentum_n)
+    h = int(hold_days)
+    am_cost = amortized_one_way_cost(one_way_cost, h)
+    m = str(mode or "nky_vol_abs_level")
+    short_by = dict((nky_vol_series or {}).get("rv_short_by_date") or {})
+    long_by = dict((nky_vol_series or {}).get("rv_long_by_date") or {})
+    abs_by = dict(
+        (nky_vol_series or {}).get("rv_abs_by_date")
+        or (nky_vol_series or {}).get("rv_short_by_date")
+        or {}
+    )
+
+    by_date: dict[str, dict[str, float | None]] = {}
+    dates_by_code: dict[str, list[str]] = {}
+    closes_list: dict[str, list[float]] = {}
+    for code, pairs in bars_by_code.items():
+        pairs_l = list(pairs)
+        moms = momentum_series(pairs_l, n=n)
+        for d, mom in moms:
+            by_date.setdefault(d, {})[code] = mom
+        dates_by_code[code] = [d for d, _ in pairs_l]
+        closes_list[code] = [c for _, c in pairs_l]
+
+    dates = sorted(by_date.keys())
+    daily_adj: dict[str, dict[str, float | None]] = {c: {} for c in bars_by_code}
+    n_regime_gap = 0
+    regime_counts: dict[str, int] = {}
+    for d in dates:
+        ranks = cross_section_rank_signs(
+            by_date[d], long_frac=long_frac, short_frac=short_frac
+        )
+        dk = str(d)[:10]
+        for code, cs_sign in ranks.items():
+            if m == "nky_vol_term_ratio":
+                rec = compute_nky_vol_term_ratio_signal(
+                    cs_sign=cs_sign,
+                    short_vol=short_by.get(dk),
+                    long_vol=long_by.get(dk),
+                    expand_ratio=expand_ratio,
+                    compress_ratio=compress_ratio,
+                    code=code,
+                    date=d,
+                )
+            elif m == "nky_vol_term_levels":
+                rec = compute_nky_vol_term_levels_signal(
+                    cs_sign=cs_sign,
+                    short_vol=short_by.get(dk),
+                    long_vol=long_by.get(dk),
+                    high_threshold=high_threshold,
+                    low_threshold=low_threshold,
+                    code=code,
+                    date=d,
+                )
+            else:
+                rec = compute_nky_vol_abs_level_signal(
+                    cs_sign=cs_sign,
+                    vol_level=abs_by.get(dk),
+                    high_threshold=high_threshold,
+                    low_threshold=low_threshold,
+                    code=code,
+                    date=d,
+                )
+            if rec.get("regime") is None and rec.get("value") is None:
+                n_regime_gap += 1
+            reg = rec.get("regime")
+            if reg is not None:
+                regime_counts[str(reg)] = regime_counts.get(str(reg), 0) + 1
+            daily_adj.setdefault(code, {})[d] = rec.get("value")
+
+    signed_returns: list[float] = []
+    n_active = 0
+    holding_records: list[dict[str, Any]] = []
+    for code, dlist in dates_by_code.items():
+        entries = [daily_adj.get(code, {}).get(d) for d in dlist]
+        held = apply_sticky_hold(entries, hold_days=h, rebalance_mode="fixed_horizon")
+        closes = closes_list[code]
+        for i, pos in enumerate(held):
+            holding_records.append({"date": dlist[i], "code": code, "sign": pos})
+            if pos is None or pos == 0.0:
+                continue
+            if i % h != 0:
+                continue
+            fwd = multi_day_forward_return(closes, hold_days=h, entry_index=i)
+            if fwd is None:
+                continue
+            n_active += 1
+            signed_returns.append(float(pos) * float(fwd))
+
+    gross = mean(signed_returns) if signed_returns else None
+    net = (gross - am_cost) if gross is not None else None
+    n_code_days = len(holding_records)
+    n_trading_days = len({r["date"] for r in holding_records})
+    occ = occurrence_rate_multiday(
+        n_active=n_active,
+        n_code_days=n_code_days,
+        n_trading_days=n_trading_days,
+        n_codes=len(bars_by_code),
+        hold_days=h,
+        min_activation_rate=MIN_ACTIVATION_RATE_MULTIDAY,
+    )
+    sid = {
+        "nky_vol_abs_level": SIGNAL_ID_NKY_VOL_ABS_LEVEL,
+        "nky_vol_term_levels": SIGNAL_ID_NKY_VOL_TERM_LEVELS,
+        "nky_vol_term_ratio": SIGNAL_ID_NKY_VOL_TERM_RATIO,
+    }.get(m, SIGNAL_ID_NKY_VOL_ABS_LEVEL)
+    return {
+        "signal_id": sid,
+        "hypothesis_class": CLASS_INDEX_VOL_REGIME,
+        "mode": m,
+        "momentum_n": n,
+        "hold_days": h,
+        "vol_source": (nky_vol_series or {}).get("source"),
+        "vol_dataset": (nky_vol_series or {}).get("dataset"),
+        "short_n": (nky_vol_series or {}).get("short_n"),
+        "long_n": (nky_vol_series or {}).get("long_n"),
+        "gross_signed_mean_active": gross,
+        "net_one_way_mean_active": net,
+        "amortized_one_way_cost": am_cost,
+        "one_way_cost": float(one_way_cost),
+        "n_active_positions": n_active,
+        "n_signed_returns": len(signed_returns),
+        "n_regime_gap": n_regime_gap,
+        "regime_counts": regime_counts,
+        "n_codes": len(bars_by_code),
+        "n_code_days": n_code_days,
+        "n_trading_days": n_trading_days,
+        "occurrence": occ,
+        **_freeze(),
+        "note": (
+            f"Index-level Nikkei/TOPIX vol regime mode={m} × CS book. "
+            "Not per-name vol_risk_adjusted. Not READY / not Mass."
+        ),
+    }
+
+
+def evaluate_nky_vol_abs_level_on_bars(
+    bars_by_code: Mapping[str, Sequence[tuple[str, float]]],
+    nky_vol_series: Mapping[str, Any] | None,
+    *,
+    momentum_n: int = 5,
+    hold_days: int = 10,
+    long_frac: float = 0.3,
+    short_frac: float = 0.3,
+    one_way_cost: float = DEFAULT_ONE_WAY_COST,
+    high_threshold: float = DEFAULT_NKY_VOL_HIGH_THRESHOLD,
+    low_threshold: float = DEFAULT_NKY_VOL_LOW_THRESHOLD,
+) -> dict[str, Any]:
+    """Absolute index RV level × CS risk-on/off book."""
+    return _evaluate_nky_vol_xs_core(
+        bars_by_code,
+        nky_vol_series,
+        mode="nky_vol_abs_level",
+        momentum_n=momentum_n,
+        hold_days=hold_days,
+        long_frac=long_frac,
+        short_frac=short_frac,
+        one_way_cost=one_way_cost,
+        high_threshold=high_threshold,
+        low_threshold=low_threshold,
+        expand_ratio=DEFAULT_NKY_VOL_EXPAND_RATIO,
+        compress_ratio=DEFAULT_NKY_VOL_COMPRESS_RATIO,
+    )
+
+
+def evaluate_nky_vol_term_levels_on_bars(
+    bars_by_code: Mapping[str, Sequence[tuple[str, float]]],
+    nky_vol_series: Mapping[str, Any] | None,
+    *,
+    momentum_n: int = 5,
+    hold_days: int = 10,
+    long_frac: float = 0.3,
+    short_frac: float = 0.3,
+    one_way_cost: float = DEFAULT_ONE_WAY_COST,
+    high_threshold: float = DEFAULT_NKY_VOL_HIGH_THRESHOLD,
+    low_threshold: float = DEFAULT_NKY_VOL_LOW_THRESHOLD,
+) -> dict[str, Any]:
+    """Short+long absolute RV levels (agreement) × CS book."""
+    return _evaluate_nky_vol_xs_core(
+        bars_by_code,
+        nky_vol_series,
+        mode="nky_vol_term_levels",
+        momentum_n=momentum_n,
+        hold_days=hold_days,
+        long_frac=long_frac,
+        short_frac=short_frac,
+        one_way_cost=one_way_cost,
+        high_threshold=high_threshold,
+        low_threshold=low_threshold,
+        expand_ratio=DEFAULT_NKY_VOL_EXPAND_RATIO,
+        compress_ratio=DEFAULT_NKY_VOL_COMPRESS_RATIO,
+    )
+
+
+def evaluate_nky_vol_term_ratio_on_bars(
+    bars_by_code: Mapping[str, Sequence[tuple[str, float]]],
+    nky_vol_series: Mapping[str, Any] | None,
+    *,
+    momentum_n: int = 5,
+    hold_days: int = 10,
+    long_frac: float = 0.3,
+    short_frac: float = 0.3,
+    one_way_cost: float = DEFAULT_ONE_WAY_COST,
+    expand_ratio: float = DEFAULT_NKY_VOL_EXPAND_RATIO,
+    compress_ratio: float = DEFAULT_NKY_VOL_COMPRESS_RATIO,
+) -> dict[str, Any]:
+    """Short/long RV ratio × CS risk-on/off book."""
+    return _evaluate_nky_vol_xs_core(
+        bars_by_code,
+        nky_vol_series,
+        mode="nky_vol_term_ratio",
+        momentum_n=momentum_n,
+        hold_days=hold_days,
+        long_frac=long_frac,
+        short_frac=short_frac,
+        one_way_cost=one_way_cost,
+        high_threshold=DEFAULT_NKY_VOL_HIGH_THRESHOLD,
+        low_threshold=DEFAULT_NKY_VOL_LOW_THRESHOLD,
+        expand_ratio=expand_ratio,
+        compress_ratio=compress_ratio,
+    )
 
 
 def evaluate_mf_value_mom_rate_on_bars(
@@ -4217,6 +4838,7 @@ __all__ = [
     "MIN_YEARS_RESEARCH_CANDIDATE",
     "bars_rich_to_close_panel",
     "collect_liquidity_bar_rows",
+    "build_nky_vol_series",
     "build_repo_curve_series",
     "evaluate_cross_section_on_bars",
     "evaluate_event_post_on_bars",
@@ -4226,6 +4848,9 @@ __all__ = [
     "evaluate_mf_flow_price_on_bars",
     "evaluate_mf_value_mom_rate_on_bars",
     "evaluate_multi_day_hold_on_bars",
+    "evaluate_nky_vol_abs_level_on_bars",
+    "evaluate_nky_vol_term_levels_on_bars",
+    "evaluate_nky_vol_term_ratio_on_bars",
     "evaluate_rate_curve_xs_on_bars",
     "evaluate_rate_level_xs_on_bars",
     "fins_asof",
@@ -4235,9 +4860,12 @@ __all__ = [
     "load_fins_events_from_sqlite",
     "load_margin_from_sqlite",
     "load_margin_ndjson",
+    "load_nk225f_front_close_series_from_sqlite",
+    "load_nky_vol_series_from_sqlite",
     "load_repo_rows_all_tenors_from_sqlite",
     "load_repo_rows_from_sqlite",
     "load_short_ratio_series_from_sqlite",
+    "load_topix_close_series_from_sqlite",
     "merge_event_calendars",
     "momentum_series",
     "resolve_bars_path",

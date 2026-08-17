@@ -33,8 +33,8 @@ from typing import Any, Mapping, Sequence
 # Identity / freeze
 # ---------------------------------------------------------------------------
 
-CLASS_SIGNALS_VERSION: str = "class-signals/v7"
-CLASS_SIGNALS_WAVE: str = "W89 / w0816x"
+CLASS_SIGNALS_VERSION: str = "class-signals/v8"
+CLASS_SIGNALS_WAVE: str = "W91 / w0818a"
 
 SIGNAL_STATUS: str = "candidate"
 SIGNAL_VERSION: str = "1.5.0"
@@ -60,6 +60,8 @@ CLASS_FUNDAMENTALS_PRICE: str = "fundamentals_price"
 # W89 research families (factory/eval dispatch; not necessarily in registry)
 CLASS_RATE_FACTOR: str = "rate_factor"
 CLASS_MULTI_FACTOR: str = "multi_factor"
+# W91: index-level Nikkei/TOPIX vol regime (not per-name vol gate)
+CLASS_INDEX_VOL_REGIME: str = "index_vol_regime"
 
 # Signal ids (stable R2 / catalog keys)
 SIGNAL_ID_MULTI_DAY_HOLD: str = "c21_multi_day_momentum_hold"
@@ -72,6 +74,9 @@ SIGNAL_ID_RATE_LEVEL_XS: str = "c21_rate_level_xs_risk_adj"
 SIGNAL_ID_RATE_CURVE_XS: str = "c21_rate_curve_shape_xs"
 SIGNAL_ID_MF_VALUE_MOM_RATE: str = "c21_mf_value_mom_rate"
 SIGNAL_ID_MF_FLOW_PRICE: str = "c21_mf_flow_price_confirm"
+SIGNAL_ID_NKY_VOL_ABS_LEVEL: str = "c21_nky_vol_abs_level_xs"
+SIGNAL_ID_NKY_VOL_TERM_LEVELS: str = "c21_nky_vol_term_levels_xs"
+SIGNAL_ID_NKY_VOL_TERM_RATIO: str = "c21_nky_vol_term_ratio_xs"
 
 # Feature legs (prefer registry-approved)
 MOMENTUM_FEATURE_ID: str = "momentum_n"
@@ -84,6 +89,9 @@ DISCLOSURE_FEATURE_ID: str = "disclosure_flag_fins"
 MARGIN_CHANGE_FEATURE_ID: str = "margin_interest_change_1d"
 SHORT_RATIO_FEATURE_ID: str = "short_ratio_level"
 FUNDAMENTAL_RATIO_FEATURE_ID: str = "fundamental_ratio"
+NKY_VOL_ABS_FEATURE_ID: str = "nky_realized_vol_abs"
+NKY_VOL_TERM_LEVELS_FEATURE_ID: str = "nky_realized_vol_term_levels"
+NKY_VOL_TERM_RATIO_FEATURE_ID: str = "nky_realized_vol_term_ratio"
 
 # Tokyo repo tenor pins for curve-shape proxy (no invent; only observed tenors).
 # Definition: spread = rate(long_tenor) − rate(short_tenor) on same as_of_date.
@@ -92,6 +100,19 @@ REPO_CURVE_SHORT_TENOR: str = "overnight/翌日物/T+0"
 REPO_CURVE_LONG_TENOR: str = "3M/T+1"
 DEFAULT_CURVE_STEEP_THRESHOLD: float = 0.0
 DEFAULT_CURVE_INVERT_THRESHOLD: float = 0.0
+
+# W91 Nikkei / index realized-vol regime defaults (annualized sample stdev).
+# No cash Nikkei code in indices_bars_daily; proxy = NK225F front (prefer) or TOPIX.
+DEFAULT_NKY_VOL_SHORT_N: int = 10
+DEFAULT_NKY_VOL_LONG_N: int = 60
+DEFAULT_NKY_VOL_HIGH_THRESHOLD: float = 0.20  # 20% ann. RV → high
+DEFAULT_NKY_VOL_LOW_THRESHOLD: float = 0.10  # 10% ann. RV → low
+DEFAULT_NKY_VOL_EXPAND_RATIO: float = 1.20  # short/long ≥ → expanding
+DEFAULT_NKY_VOL_COMPRESS_RATIO: float = 0.80  # short/long ≤ → compressing
+NKY_VOL_PROXY_NK225F: str = "nk225f_front_realized"
+NKY_VOL_PROXY_TOPIX: str = "topix_realized"
+NKY_VOL_PROXY_NKVIF: str = "nkvif_front_implied"  # optional abs-level only
+TRADING_DAYS_ANN: int = 252
 
 DEFAULT_HOLD_DAYS: int = 5
 SUPPORTED_HOLD_DAYS: tuple[int, ...] = (5, 10, 20)
@@ -191,6 +212,15 @@ FUNDAMENTALS_PRICE_DATASETS: tuple[str, ...] = (
     "fins_summary",
     "equities_bars_daily",
     "markets_calendar",
+)
+# W91 index-vol regime: equity CS book + index/futures vol proxy.
+# Prefer NK225F continuous front realized vol; TOPIX fallback; NKVIF optional.
+INDEX_VOL_REGIME_DATASETS: tuple[str, ...] = (
+    "equities_bars_daily",
+    "markets_calendar",
+    "indices_bars_daily_topix",
+    "indices_bars_daily",
+    "derivatives_bars_daily_futures",
 )
 
 
@@ -2100,6 +2130,426 @@ def compute_rate_curve_xs_signal(
 
 
 # ---------------------------------------------------------------------------
+# W91 index_vol_regime — Nikkei/index realized-vol abs / term levels / ratio
+# ---------------------------------------------------------------------------
+
+
+def nky_vol_regime_from_abs_level(
+    vol_level: float | None,
+    *,
+    high_threshold: float = DEFAULT_NKY_VOL_HIGH_THRESHOLD,
+    low_threshold: float = DEFAULT_NKY_VOL_LOW_THRESHOLD,
+) -> tuple[str | None, dict[str, Any]]:
+    """Label index vol absolute-level regime: high / mid / low."""
+    if vol_level is None:
+        return None, {"reason": "vol_level missing"}
+    try:
+        v = float(vol_level)
+    except (TypeError, ValueError):
+        return None, {"reason": "vol_level not numeric", "raw": vol_level}
+    if v != v or v < 0:  # NaN / negative
+        return None, {"reason": "vol_level invalid", "raw": v}
+    if v >= float(high_threshold):
+        label = "high"
+    elif v <= float(low_threshold):
+        label = "low"
+    else:
+        label = "mid"
+    return label, {
+        "vol_level": v,
+        "high_threshold": float(high_threshold),
+        "low_threshold": float(low_threshold),
+        "regime": label,
+    }
+
+
+def nky_vol_regime_from_term_levels(
+    short_vol: float | None,
+    long_vol: float | None,
+    *,
+    high_threshold: float = DEFAULT_NKY_VOL_HIGH_THRESHOLD,
+    low_threshold: float = DEFAULT_NKY_VOL_LOW_THRESHOLD,
+) -> tuple[str | None, dict[str, Any]]:
+    """Dual short/long absolute levels: agree high/low → regime; else mid/flat.
+
+    * both high → high (risk-off)
+    * both low  → low  (risk-on)
+    * otherwise → mid (no trade) — including disagreement
+    """
+    if short_vol is None or long_vol is None:
+        return None, {
+            "reason": "missing short or long vol",
+            "short_vol": short_vol,
+            "long_vol": long_vol,
+        }
+    s_lab, s_meta = nky_vol_regime_from_abs_level(
+        short_vol, high_threshold=high_threshold, low_threshold=low_threshold
+    )
+    l_lab, l_meta = nky_vol_regime_from_abs_level(
+        long_vol, high_threshold=high_threshold, low_threshold=low_threshold
+    )
+    if s_lab is None or l_lab is None:
+        return None, {
+            "reason": "leg regime missing",
+            "short": s_meta,
+            "long": l_meta,
+        }
+    if s_lab == "high" and l_lab == "high":
+        label = "high"
+    elif s_lab == "low" and l_lab == "low":
+        label = "low"
+    else:
+        label = "mid"
+    return label, {
+        "short_vol": float(short_vol),
+        "long_vol": float(long_vol),
+        "short_regime": s_lab,
+        "long_regime": l_lab,
+        "high_threshold": float(high_threshold),
+        "low_threshold": float(low_threshold),
+        "regime": label,
+        "agreement": s_lab == l_lab and s_lab in {"high", "low"},
+    }
+
+
+def nky_vol_regime_from_term_ratio(
+    short_vol: float | None,
+    long_vol: float | None,
+    *,
+    expand_ratio: float = DEFAULT_NKY_VOL_EXPAND_RATIO,
+    compress_ratio: float = DEFAULT_NKY_VOL_COMPRESS_RATIO,
+) -> tuple[str | None, dict[str, Any]]:
+    """Term-structure of realized vol: short/long ratio.
+
+    * ratio ≥ expand   → expanding (risk-off)
+    * ratio ≤ compress → compressing (risk-on)
+    * else             → mid (no trade)
+    """
+    if short_vol is None or long_vol is None:
+        return None, {
+            "reason": "missing short or long vol",
+            "short_vol": short_vol,
+            "long_vol": long_vol,
+        }
+    try:
+        s = float(short_vol)
+        lo = float(long_vol)
+    except (TypeError, ValueError):
+        return None, {"reason": "non_numeric_vol"}
+    if lo <= 1e-12 or s < 0:
+        return None, {"reason": "invalid_vol_for_ratio", "short": s, "long": lo}
+    ratio = s / lo
+    if ratio >= float(expand_ratio):
+        label = "expanding"
+    elif ratio <= float(compress_ratio):
+        label = "compressing"
+    else:
+        label = "mid"
+    return label, {
+        "short_vol": s,
+        "long_vol": lo,
+        "ratio": ratio,
+        "expand_ratio": float(expand_ratio),
+        "compress_ratio": float(compress_ratio),
+        "regime": label,
+    }
+
+
+def nky_vol_risk_adjust_sign(
+    cs_sign: float | None,
+    regime: str | None,
+    *,
+    mode: str = "vol_risk_on_off",
+) -> tuple[float | None, dict[str, Any]]:
+    """Transform CS sign by index-vol regime.
+
+    vol_risk_on_off (abs / term_levels):
+        * low  → keep CS (risk-on / calm)
+        * high → reverse CS (risk-off / stress)
+        * mid  → no trade
+
+    vol_term_ratio:
+        * compressing → keep CS (risk-on)
+        * expanding   → reverse CS (risk-off)
+        * mid         → no trade
+    """
+    m = str(mode or "vol_risk_on_off").strip().lower()
+    if cs_sign is None or regime is None:
+        return None, {
+            "adjusted": False,
+            "reason": "missing cs_sign or regime",
+            "mode": m,
+            "regime": regime,
+            "cs_sign": cs_sign,
+        }
+    try:
+        e = float(cs_sign)
+    except (TypeError, ValueError):
+        return None, {"adjusted": False, "reason": "cs_sign not numeric", "mode": m}
+    if e == 0.0:
+        return 0.0, {
+            "adjusted": True,
+            "mode": m,
+            "regime": regime,
+            "rule": "cs_flat",
+            "value": 0.0,
+        }
+    reg = str(regime).strip().lower()
+    if m == "vol_term_ratio":
+        if reg == "compressing":
+            out, rule = e, "vol compressing → risk_on keep CS"
+        elif reg == "expanding":
+            out, rule = -e, "vol expanding → risk_off reverse CS"
+        elif reg == "mid":
+            out, rule = None, "vol ratio mid → no_trade"
+        else:
+            out, rule = None, f"unknown vol-ratio regime {reg!r}"
+    else:
+        # vol_risk_on_off for abs level + term levels agreement
+        if reg == "low":
+            out, rule = e, "low index vol → risk_on keep CS"
+        elif reg == "high":
+            out, rule = -e, "high index vol → risk_off reverse CS"
+        elif reg == "mid":
+            out, rule = None, "mid index vol → no_trade"
+        else:
+            out, rule = None, f"unknown vol-level regime {reg!r}"
+    return out, {
+        "adjusted": True,
+        "mode": m,
+        "regime": reg,
+        "cs_sign": e,
+        "rule": rule,
+        "value": out,
+    }
+
+
+def compute_nky_vol_abs_level_signal(
+    *,
+    cs_sign: float | None,
+    vol_level: float | None,
+    high_threshold: float = DEFAULT_NKY_VOL_HIGH_THRESHOLD,
+    low_threshold: float = DEFAULT_NKY_VOL_LOW_THRESHOLD,
+    code: str | None = None,
+    date: str | None = None,
+    as_of: str | None = None,
+    extra_meta: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Absolute Nikkei/index realized-vol level × CS risk-on/off book."""
+    regime, regime_meta = nky_vol_regime_from_abs_level(
+        vol_level,
+        high_threshold=high_threshold,
+        low_threshold=low_threshold,
+    )
+    adjusted, adj_meta = nky_vol_risk_adjust_sign(
+        cs_sign, regime, mode="vol_risk_on_off"
+    )
+    meta: dict[str, Any] = {
+        "signal_id": SIGNAL_ID_NKY_VOL_ABS_LEVEL,
+        "signal_version": SIGNAL_VERSION,
+        "status": SIGNAL_STATUS,
+        "hypothesis_class": CLASS_INDEX_VOL_REGIME,
+        "primary_feature_id": NKY_VOL_ABS_FEATURE_ID,
+        "secondary_feature_id": MOMENTUM_FEATURE_ID,
+        "datasets_required": list(INDEX_VOL_REGIME_DATASETS),
+        "cs_sign": cs_sign,
+        "vol_level": vol_level,
+        "regime": regime_meta,
+        "adjust": adj_meta,
+        "formula": (
+            "CS rank mom L-S; abs index RV level risk-adjusts "
+            "(low keep / high reverse / mid flat)"
+        ),
+        "not_simple_daily_sign": True,
+        "not_per_name_vol_gate": True,
+        "distinct_from": [
+            "vol_risk_adjusted_mom",
+            "vol_breakout_expand",
+        ],
+        "note": (
+            "Index-level Nikkei/TOPIX realized vol absolute regime × CS book. "
+            "Not per-name mom/vol gate. Not READY. Not mass."
+        ),
+    }
+    meta.update(_freeze_meta())
+    if code is not None:
+        meta["code"] = str(code)
+    if date is not None:
+        meta["date"] = str(date)[:10]
+    if as_of is not None:
+        meta["as_of"] = str(as_of)
+    if extra_meta:
+        meta.update(dict(extra_meta))
+    return {
+        "signal_id": SIGNAL_ID_NKY_VOL_ABS_LEVEL,
+        "version": SIGNAL_VERSION,
+        "status": SIGNAL_STATUS,
+        "candidate_only": CANDIDATE_ONLY,
+        "hypothesis_class": CLASS_INDEX_VOL_REGIME,
+        "value": adjusted,
+        "regime": regime,
+        "code": str(code) if code is not None else None,
+        "date": str(date)[:10] if date is not None else None,
+        "as_of": as_of,
+        "metadata": meta,
+    }
+
+
+def compute_nky_vol_term_levels_signal(
+    *,
+    cs_sign: float | None,
+    short_vol: float | None,
+    long_vol: float | None,
+    high_threshold: float = DEFAULT_NKY_VOL_HIGH_THRESHOLD,
+    low_threshold: float = DEFAULT_NKY_VOL_LOW_THRESHOLD,
+    code: str | None = None,
+    date: str | None = None,
+    as_of: str | None = None,
+    extra_meta: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Short+long absolute RV levels (agreement) × CS risk-on/off book."""
+    regime, regime_meta = nky_vol_regime_from_term_levels(
+        short_vol,
+        long_vol,
+        high_threshold=high_threshold,
+        low_threshold=low_threshold,
+    )
+    adjusted, adj_meta = nky_vol_risk_adjust_sign(
+        cs_sign, regime, mode="vol_risk_on_off"
+    )
+    meta: dict[str, Any] = {
+        "signal_id": SIGNAL_ID_NKY_VOL_TERM_LEVELS,
+        "signal_version": SIGNAL_VERSION,
+        "status": SIGNAL_STATUS,
+        "hypothesis_class": CLASS_INDEX_VOL_REGIME,
+        "primary_feature_id": NKY_VOL_TERM_LEVELS_FEATURE_ID,
+        "secondary_feature_id": MOMENTUM_FEATURE_ID,
+        "datasets_required": list(INDEX_VOL_REGIME_DATASETS),
+        "cs_sign": cs_sign,
+        "short_vol": short_vol,
+        "long_vol": long_vol,
+        "regime": regime_meta,
+        "adjust": adj_meta,
+        "formula": (
+            "CS rank mom L-S; both short+long RV high → reverse; "
+            "both low → keep; disagree/mid → flat"
+        ),
+        "not_simple_daily_sign": True,
+        "not_per_name_vol_gate": True,
+        "not_ratio_only": True,
+        "distinct_from": [
+            "vol_risk_adjusted_mom",
+            "vol_breakout_expand",
+            "nky_vol_abs_level",
+            "nky_vol_term_ratio",
+        ],
+        "note": (
+            "Dual short/long absolute index RV levels (agreement). "
+            "Not READY. Not mass."
+        ),
+    }
+    meta.update(_freeze_meta())
+    if code is not None:
+        meta["code"] = str(code)
+    if date is not None:
+        meta["date"] = str(date)[:10]
+    if as_of is not None:
+        meta["as_of"] = str(as_of)
+    if extra_meta:
+        meta.update(dict(extra_meta))
+    return {
+        "signal_id": SIGNAL_ID_NKY_VOL_TERM_LEVELS,
+        "version": SIGNAL_VERSION,
+        "status": SIGNAL_STATUS,
+        "candidate_only": CANDIDATE_ONLY,
+        "hypothesis_class": CLASS_INDEX_VOL_REGIME,
+        "value": adjusted,
+        "regime": regime,
+        "code": str(code) if code is not None else None,
+        "date": str(date)[:10] if date is not None else None,
+        "as_of": as_of,
+        "metadata": meta,
+    }
+
+
+def compute_nky_vol_term_ratio_signal(
+    *,
+    cs_sign: float | None,
+    short_vol: float | None,
+    long_vol: float | None,
+    expand_ratio: float = DEFAULT_NKY_VOL_EXPAND_RATIO,
+    compress_ratio: float = DEFAULT_NKY_VOL_COMPRESS_RATIO,
+    code: str | None = None,
+    date: str | None = None,
+    as_of: str | None = None,
+    extra_meta: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Short/long realized-vol ratio × CS risk-on/off book."""
+    regime, regime_meta = nky_vol_regime_from_term_ratio(
+        short_vol,
+        long_vol,
+        expand_ratio=expand_ratio,
+        compress_ratio=compress_ratio,
+    )
+    adjusted, adj_meta = nky_vol_risk_adjust_sign(
+        cs_sign, regime, mode="vol_term_ratio"
+    )
+    meta: dict[str, Any] = {
+        "signal_id": SIGNAL_ID_NKY_VOL_TERM_RATIO,
+        "signal_version": SIGNAL_VERSION,
+        "status": SIGNAL_STATUS,
+        "hypothesis_class": CLASS_INDEX_VOL_REGIME,
+        "primary_feature_id": NKY_VOL_TERM_RATIO_FEATURE_ID,
+        "secondary_feature_id": MOMENTUM_FEATURE_ID,
+        "datasets_required": list(INDEX_VOL_REGIME_DATASETS),
+        "cs_sign": cs_sign,
+        "short_vol": short_vol,
+        "long_vol": long_vol,
+        "regime": regime_meta,
+        "adjust": adj_meta,
+        "formula": (
+            "ratio=RV_short/RV_long; compressing keep CS / expanding reverse / mid flat"
+        ),
+        "not_simple_daily_sign": True,
+        "not_per_name_vol_gate": True,
+        "not_abs_level_only": True,
+        "distinct_from": [
+            "vol_risk_adjusted_mom",
+            "vol_breakout_expand",
+            "vol_breakout_expand_name_level",
+            "nky_vol_abs_level",
+            "nky_vol_term_levels",
+        ],
+        "note": (
+            "Index RV term-structure ratio (short/long). Distinct from "
+            "per-name vol_breakout_expand. Not READY. Not mass."
+        ),
+    }
+    meta.update(_freeze_meta())
+    if code is not None:
+        meta["code"] = str(code)
+    if date is not None:
+        meta["date"] = str(date)[:10]
+    if as_of is not None:
+        meta["as_of"] = str(as_of)
+    if extra_meta:
+        meta.update(dict(extra_meta))
+    return {
+        "signal_id": SIGNAL_ID_NKY_VOL_TERM_RATIO,
+        "version": SIGNAL_VERSION,
+        "status": SIGNAL_STATUS,
+        "candidate_only": CANDIDATE_ONLY,
+        "hypothesis_class": CLASS_INDEX_VOL_REGIME,
+        "value": adjusted,
+        "regime": regime,
+        "code": str(code) if code is not None else None,
+        "date": str(date)[:10] if date is not None else None,
+        "as_of": as_of,
+        "metadata": meta,
+    }
+
+
+# ---------------------------------------------------------------------------
 # W89 multi_factor — value×mom×rate · flow×price (thesis-required combinations)
 # ---------------------------------------------------------------------------
 
@@ -2521,6 +2971,81 @@ def class_signal_definitions(
             "not_short_confirm_variant": True,
             "role": "multi_factor_flow_price",
         },
+        {
+            "signal_id": SIGNAL_ID_NKY_VOL_ABS_LEVEL,
+            "version": SIGNAL_VERSION,
+            "status": SIGNAL_STATUS,
+            "candidate_only": CANDIDATE_ONLY,
+            "hypothesis_class": CLASS_INDEX_VOL_REGIME,
+            "horizon": "multi_day_cs_index_vol_abs",
+            "primary_feature_id": NKY_VOL_ABS_FEATURE_ID,
+            "feature_kinds": [
+                "index_realized_vol",
+                "cross_section_rank",
+                "risk_on_off_book",
+            ],
+            "datasets_required": list(INDEX_VOL_REGIME_DATASETS),
+            "formula": (
+                "CS mom L-S risk-adjusted by absolute Nikkei/TOPIX realized vol "
+                f"(high≥{DEFAULT_NKY_VOL_HIGH_THRESHOLD} reverse / "
+                f"low≤{DEFAULT_NKY_VOL_LOW_THRESHOLD} keep / mid flat)"
+            ),
+            "not_simple_daily_sign": True,
+            "not_per_name_vol_gate": True,
+            "role": "index_vol_abs_level",
+            "proxy_note": (
+                "No cash Nikkei code in indices_bars_daily; prefer NK225F front "
+                "realized vol, TOPIX fallback; NKVIF optional abs-level overlay."
+            ),
+        },
+        {
+            "signal_id": SIGNAL_ID_NKY_VOL_TERM_LEVELS,
+            "version": SIGNAL_VERSION,
+            "status": SIGNAL_STATUS,
+            "candidate_only": CANDIDATE_ONLY,
+            "hypothesis_class": CLASS_INDEX_VOL_REGIME,
+            "horizon": "multi_day_cs_index_vol_term_levels",
+            "primary_feature_id": NKY_VOL_TERM_LEVELS_FEATURE_ID,
+            "feature_kinds": [
+                "index_realized_vol_short",
+                "index_realized_vol_long",
+                "cross_section_rank",
+                "risk_on_off_book",
+            ],
+            "datasets_required": list(INDEX_VOL_REGIME_DATASETS),
+            "formula": (
+                f"short RV n={DEFAULT_NKY_VOL_SHORT_N} + long RV n="
+                f"{DEFAULT_NKY_VOL_LONG_N}; both high reverse / both low keep"
+            ),
+            "not_simple_daily_sign": True,
+            "not_per_name_vol_gate": True,
+            "not_ratio_only": True,
+            "role": "index_vol_term_levels",
+        },
+        {
+            "signal_id": SIGNAL_ID_NKY_VOL_TERM_RATIO,
+            "version": SIGNAL_VERSION,
+            "status": SIGNAL_STATUS,
+            "candidate_only": CANDIDATE_ONLY,
+            "hypothesis_class": CLASS_INDEX_VOL_REGIME,
+            "horizon": "multi_day_cs_index_vol_term_ratio",
+            "primary_feature_id": NKY_VOL_TERM_RATIO_FEATURE_ID,
+            "feature_kinds": [
+                "index_realized_vol_term_ratio",
+                "cross_section_rank",
+                "vol_term_structure",
+            ],
+            "datasets_required": list(INDEX_VOL_REGIME_DATASETS),
+            "formula": (
+                f"ratio=RV({DEFAULT_NKY_VOL_SHORT_N})/RV({DEFAULT_NKY_VOL_LONG_N}); "
+                f"≥{DEFAULT_NKY_VOL_EXPAND_RATIO} expand reverse / "
+                f"≤{DEFAULT_NKY_VOL_COMPRESS_RATIO} compress keep"
+            ),
+            "not_simple_daily_sign": True,
+            "not_per_name_vol_gate": True,
+            "not_name_level_vol_expand": True,
+            "role": "index_vol_term_ratio",
+        },
     ]
 
 
@@ -2543,10 +3068,11 @@ def class_signals_document() -> dict[str, Any]:
         "s1_s5_unreject": S1_S5_UNREJECT,
         **_freeze_meta(),
         "note": (
-            "W89 class-based research signals. multi_day_hold + event_post + "
+            "W91 class-based research signals. multi_day_hold + event_post + "
             "macro_conditioned + flow_demand + fundamentals_price "
             "(+ optional cross_section) + rate_factor (abs level / curve) + "
-            "multi_factor (value×mom×rate / flow×price). Production "
+            "multi_factor (value×mom×rate / flow×price) + index_vol_regime "
+            "(nky abs / term levels / term ratio). Production "
             "research_candidate only if economic net + occurrence rate + "
             "multi-year no extreme skew + risk OK + statistical bar. "
             "READY/Mass never auto-connect. No S1–S5 un-reject."
@@ -2562,6 +3088,7 @@ __all__ = [
     "CLASS_FUNDAMENTALS_PRICE",
     "CLASS_MACRO_CONDITIONED",
     "CLASS_MULTI_DAY_HOLD",
+    "CLASS_INDEX_VOL_REGIME",
     "CLASS_MULTI_FACTOR",
     "CLASS_RATE_FACTOR",
     "CLASS_SIGNALS_VERSION",
@@ -2587,6 +3114,12 @@ __all__ = [
     "DEFAULT_MOMENTUM_N",
     "DEFAULT_CURVE_INVERT_THRESHOLD",
     "DEFAULT_CURVE_STEEP_THRESHOLD",
+    "DEFAULT_NKY_VOL_COMPRESS_RATIO",
+    "DEFAULT_NKY_VOL_EXPAND_RATIO",
+    "DEFAULT_NKY_VOL_HIGH_THRESHOLD",
+    "DEFAULT_NKY_VOL_LONG_N",
+    "DEFAULT_NKY_VOL_LOW_THRESHOLD",
+    "DEFAULT_NKY_VOL_SHORT_N",
     "DEFAULT_REPO_CHANGE_EPS",
     "DEFAULT_REPO_HIGH_THRESHOLD",
     "DEFAULT_REPO_LOW_THRESHOLD",
@@ -2596,12 +3129,19 @@ __all__ = [
     "FLOW_DEMAND_DATASETS",
     "FUNDAMENTALS_PRICE_DATASETS",
     "FUNDAMENTAL_RATIO_FEATURE_ID",
+    "INDEX_VOL_REGIME_DATASETS",
     "MACRO_CONDITIONED_DATASETS",
     "MARGIN_CHANGE_FEATURE_ID",
     "MASS_RESEARCH",
     "MOMENTUM_FEATURE_ID",
     "MULTI_DAY_HOLD_DATASETS",
     "MULTI_FACTOR_DATASETS",
+    "NKY_VOL_ABS_FEATURE_ID",
+    "NKY_VOL_PROXY_NK225F",
+    "NKY_VOL_PROXY_NKVIF",
+    "NKY_VOL_PROXY_TOPIX",
+    "NKY_VOL_TERM_LEVELS_FEATURE_ID",
+    "NKY_VOL_TERM_RATIO_FEATURE_ID",
     "ORDER_EXECUTION",
     "PHASE7",
     "RATE_FACTOR_DATASETS",
@@ -2620,6 +3160,9 @@ __all__ = [
     "SIGNAL_ID_MF_FLOW_PRICE",
     "SIGNAL_ID_MF_VALUE_MOM_RATE",
     "SIGNAL_ID_MULTI_DAY_HOLD",
+    "SIGNAL_ID_NKY_VOL_ABS_LEVEL",
+    "SIGNAL_ID_NKY_VOL_TERM_LEVELS",
+    "SIGNAL_ID_NKY_VOL_TERM_RATIO",
     "SIGNAL_ID_RATE_CURVE_XS",
     "SIGNAL_ID_RATE_LEVEL_XS",
     "SIGNAL_STATUS",
@@ -2627,6 +3170,7 @@ __all__ = [
     "SUPPORTED_HOLD_DAYS",
     "TOPIX_REL_FEATURE_ID",
     "TRADING_DAY_FEATURE_ID",
+    "TRADING_DAYS_ANN",
     "amortized_one_way_cost",
     "apply_sticky_hold",
     "apply_trading_day_filter",
@@ -2640,6 +3184,9 @@ __all__ = [
     "compute_mf_flow_price_signal",
     "compute_mf_value_mom_rate_signal",
     "compute_multi_day_hold_signal",
+    "compute_nky_vol_abs_level_signal",
+    "compute_nky_vol_term_levels_signal",
+    "compute_nky_vol_term_ratio_signal",
     "compute_rate_curve_xs_signal",
     "compute_rate_level_xs_signal",
     "condition_signal_on_regime",
@@ -2647,6 +3194,10 @@ __all__ = [
     "earnings_surprise_proxy",
     "economic_net_meaningful",
     "event_post_available_at_from_fields",
+    "nky_vol_regime_from_abs_level",
+    "nky_vol_regime_from_term_levels",
+    "nky_vol_regime_from_term_ratio",
+    "nky_vol_risk_adjust_sign",
     "event_post_entry_bar_index",
     "fundamental_value_score",
     "multi_day_forward_return",

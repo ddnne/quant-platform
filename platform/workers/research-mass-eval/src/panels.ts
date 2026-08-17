@@ -98,35 +98,51 @@ export function defaultPeriodsFromRequest(
   }));
 }
 
-/** Build equal-weight market index RV series from panel bars (CF lite proxy). */
+/**
+ * Build index RV series from panel bars.
+ * Prefer reserved __NKY_PROXY__ / __TOPIX__ / __NK225F__ closes when staged
+ * (W91 real panels); else equal-weight equity path (disclosed fallback).
+ */
 function buildNkyVolFromBars(
   bars: BarsByCode,
   shortN = 10,
-  longN = 40,
+  longN = 60,
 ): PeriodPanel["nky_vol_series"] {
-  // Equal-weight average close path as Nikkei proxy when futures not staged.
-  const codes = Object.keys(bars);
-  if (!codes.length) return null;
-  const dateSet = new Set<string>();
-  for (const c of codes) for (const [d] of bars[c] || []) dateSet.add(d);
-  const dates = [...dateSet].sort();
-  const idxCloses: number[] = [];
-  const idxDates: string[] = [];
-  for (const d of dates) {
-    let s = 0;
-    let n = 0;
-    for (const c of codes) {
-      const hit = (bars[c] || []).find((p) => p[0] === d);
-      if (hit) {
-        s += hit[1];
-        n += 1;
-      }
-    }
-    if (n > 0) {
-      idxDates.push(d);
-      idxCloses.push(s / n);
+  const proxyCodes = ["__NKY_PROXY__", "__TOPIX__", "__NK225F__", "__INDEX__"];
+  let idxSeries: Array<[string, number]> | null = null;
+  let source = "ew_equity_panel_proxy";
+  for (const pc of proxyCodes) {
+    if (bars[pc] && bars[pc].length >= shortN + 2) {
+      idxSeries = bars[pc].map(([d, c]) => [d, c] as [string, number]);
+      source = `staged_index:${pc}`;
+      break;
     }
   }
+  if (!idxSeries) {
+    // Equal-weight average of equity codes only (skip reserved).
+    const codes = Object.keys(bars).filter((c) => !c.startsWith("__"));
+    if (!codes.length) return null;
+    const dateSet = new Set<string>();
+    for (const c of codes) for (const [d] of bars[c] || []) dateSet.add(d);
+    const dates = [...dateSet].sort();
+    idxSeries = [];
+    for (const d of dates) {
+      let s = 0;
+      let n = 0;
+      for (const c of codes) {
+        const hit = (bars[c] || []).find((p) => p[0] === d);
+        if (hit) {
+          s += hit[1];
+          n += 1;
+        }
+      }
+      if (n > 0) idxSeries.push([d, s / n]);
+    }
+    source = "ew_equity_panel_proxy";
+  }
+  if (!idxSeries.length) return null;
+  const idxDates = idxSeries.map(([d]) => d);
+  const idxCloses = idxSeries.map(([, c]) => c);
   const ann = Math.sqrt(252);
   const rvShort: Record<string, number> = {};
   const rvLong: Record<string, number> = {};
@@ -156,7 +172,7 @@ function buildNkyVolFromBars(
     if (s !== null && lo !== null && lo > 1e-12) rvRatio[d] = s / lo;
   }
   return {
-    source: "synthetic_ew_panel_proxy",
+    source,
     short_n: shortN,
     long_n: longN,
     rv_short_by_date: rvShort,
@@ -251,9 +267,11 @@ export async function loadR2Panels(
         bars?: BarsByCode;
         dataset?: string;
         source?: string;
+        nky_vol_series?: PeriodPanel["nky_vol_series"];
+        nky_proxy?: string;
       };
       const bars = normalizeBars(raw.bars || {});
-      const nCodes = Object.keys(bars).length;
+      const nCodes = Object.keys(bars).filter((c) => !c.startsWith("__")).length;
       if (nCodes === 0) {
         notes.push(`empty_bars:${keyUsed}`);
         panels.push({
@@ -267,6 +285,13 @@ export async function loadR2Panels(
         });
         continue;
       }
+      // Prefer staged nky_vol_series; else derive from __NKY_PROXY__ / EW.
+      const nky =
+        raw.nky_vol_series &&
+        (raw.nky_vol_series.rv_short_by_date ||
+          raw.nky_vol_series.rv_abs_by_date)
+          ? raw.nky_vol_series
+          : buildNkyVolFromBars(bars);
       panels.push({
         period_id: String(raw.period_id || p.period_id),
         year: Number(raw.year ?? p.year ?? 0),
@@ -274,9 +299,12 @@ export async function loadR2Panels(
         period_end: raw.period_end || p.period_end || "",
         status: "ok",
         bars,
+        nky_vol_series: nky,
         source: raw.source || `r2:${keyUsed}`,
       });
-      notes.push(`loaded:${keyUsed}:codes=${nCodes}`);
+      notes.push(
+        `loaded:${keyUsed}:codes=${nCodes}:nky=${nky?.source || "none"}`,
+      );
     } catch (e) {
       notes.push(`parse_error:${keyUsed}:${String(e)}`);
       panels.push({

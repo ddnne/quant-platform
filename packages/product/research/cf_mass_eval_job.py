@@ -439,6 +439,17 @@ def build_real_period_panel(
                     "nky_proxy": nky.get("source"),
                     "nky_dataset": nky.get("dataset"),
                     "nky_n_closes": len(idx_pairs),
+                    # Stage compact RV maps for CF pure-TS (avoid recompute drift).
+                    "nky_vol_series": {
+                        "source": nky.get("source"),
+                        "dataset": nky.get("dataset"),
+                        "short_n": nky.get("short_n"),
+                        "long_n": nky.get("long_n"),
+                        "rv_short_by_date": nky.get("rv_short_by_date") or {},
+                        "rv_long_by_date": nky.get("rv_long_by_date") or {},
+                        "rv_abs_by_date": nky.get("rv_abs_by_date") or {},
+                        "rv_ratio_by_date": nky.get("rv_ratio_by_date") or {},
+                    },
                 }
     except Exception as exc:  # pragma: no cover - best-effort
         nky_meta = {"nky_proxy_error": str(exc)}

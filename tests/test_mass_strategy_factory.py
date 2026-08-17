@@ -17,6 +17,7 @@ from research.mass_strategy_factory import (
     DEFAULT_N,
     DEFAULT_NEAR_DUP_THRESHOLD,
     FAMILY_DEFINITIONS,
+    FAMILY_INDEX_VOL_REGIME,
     FAMILY_MULTI_FACTOR,
     FAMILY_RATE_FACTOR,
     FAMILY_VOL_RISK_ADJUSTED,
@@ -68,7 +69,8 @@ def test_freezes_closed():
     assert OPERATIONAL_GO is False
     assert CONTINUOUS_PAPER == "UNARMED"
     assert (
-        "W90" in MASS_FACTORY_WAVE
+        "W91" in MASS_FACTORY_WAVE
+        or "W90" in MASS_FACTORY_WAVE
         or "W89" in MASS_FACTORY_WAVE
         or "W88" in MASS_FACTORY_WAVE
     )
@@ -129,16 +131,27 @@ def test_logic_templates_distinct_economic_logic():
     assert "mf_flow_price" in LOGIC_TEMPLATES
     assert LOGIC_TEMPLATES["rate_abs_level_xs"].family_id == FAMILY_RATE_FACTOR
     assert LOGIC_TEMPLATES["mf_value_mom_rate"].family_id == FAMILY_MULTI_FACTOR
+    # W91 Nikkei / index vol regime
+    assert "nky_vol_abs_level" in LOGIC_TEMPLATES
+    assert "nky_vol_term_levels" in LOGIC_TEMPLATES
+    assert "nky_vol_term_ratio" in LOGIC_TEMPLATES
+    assert LOGIC_TEMPLATES["nky_vol_abs_level"].family_id == FAMILY_INDEX_VOL_REGIME
+    assert LOGIC_TEMPLATES["nky_vol_term_levels"].family_id == FAMILY_INDEX_VOL_REGIME
+    assert LOGIC_TEMPLATES["nky_vol_term_ratio"].family_id == FAMILY_INDEX_VOL_REGIME
+    assert "nky_vol_abs_level" in doc.get("w91_index_vol_logic_ids", [])
     # diversity rules documented
     rules = doc["diversity_rules"]
     assert "hold_days only" in str(rules["does_not_count"])
     assert "info source" in str(rules["counts_as_different"]).lower() or any(
         "info" in x.lower() for x in rules["counts_as_different"]
     )
-    # near-groups parallel
+    # near-groups parallel (includes vol name-vs-index + index_vol trio)
     ng = near_logic_groups_document()
-    assert len(ng["groups"]) >= 2
-    assert len(NEAR_LOGIC_GROUPS) >= 2
+    assert len(ng["groups"]) >= 4
+    assert len(NEAR_LOGIC_GROUPS) >= 4
+    group_ids = {g["group_id"] for g in NEAR_LOGIC_GROUPS}
+    assert "vol_family_name_vs_index" in group_ids
+    assert "index_vol_regime_family" in group_ids
 
 
 def test_families_still_documented_for_eval_dispatch():
@@ -156,6 +169,7 @@ def test_families_still_documented_for_eval_dispatch():
     assert FAMILY_VOL_RISK_ADJUSTED in FAMILY_DEFINITIONS
     assert FAMILY_RATE_FACTOR in FAMILY_DEFINITIONS
     assert FAMILY_MULTI_FACTOR in FAMILY_DEFINITIONS
+    assert FAMILY_INDEX_VOL_REGIME in FAMILY_DEFINITIONS
     assert CLASS_SIMPLE_DAILY_SIGN not in FAMILY_DEFINITIONS
 
 
@@ -476,3 +490,117 @@ def test_propose_profit_hypotheses_rejects_window_tweaks_and_evals():
     assert good["eval"].get("n_strategies_evaluated") == 2
     assert good["mass_research"] == "NO-GO"
     assert good["continuous_paper"] == "UNARMED"
+
+
+def test_nky_vol_logics_templates_and_eval_synthetic():
+    """W91: nky_vol abs/term_levels/term_ratio are distinct index-vol logics."""
+    for lid in (
+        "nky_vol_abs_level",
+        "nky_vol_term_levels",
+        "nky_vol_term_ratio",
+    ):
+        tpl = LOGIC_TEMPLATES[lid]
+        assert tpl.family_id == FAMILY_INDEX_VOL_REGIME
+        assert tpl.thesis
+        assert "CS" in tpl.signal_definition or "rank" in tpl.signal_definition
+        assert "derivatives_bars_daily_futures" in tpl.datasets_used
+        assert "indices_bars_daily" in tpl.datasets_used or (
+            "indices_bars_daily_topix" in tpl.datasets_used
+        )
+        ok, reason = validate_strategy_at_gen(
+            FAMILY_INDEX_VOL_REGIME,
+            dict(tpl.base_params),
+            logic_id=lid,
+        )
+        assert ok is True, reason
+        assert reason is None
+
+    # Distinct fingerprints vs name-level vol gates
+    name_fps = {
+        LOGIC_TEMPLATES["vol_risk_adjusted_mom"].logic_fingerprint(),
+        LOGIC_TEMPLATES["vol_breakout_expand"].logic_fingerprint(),
+    }
+    for lid in (
+        "nky_vol_abs_level",
+        "nky_vol_term_levels",
+        "nky_vol_term_ratio",
+    ):
+        assert LOGIC_TEMPLATES[lid].logic_fingerprint() not in name_fps
+
+    # Synthetic eval of all three
+    cfg = MassFactoryConfig(seed=91, n=5, max_codes=4)
+    ctx = load_batch_data_context(cfg, synthetic=True)
+    assert all(p.get("nky_vol_series") for p in ctx.panels)
+    for lid in (
+        "nky_vol_abs_level",
+        "nky_vol_term_levels",
+        "nky_vol_term_ratio",
+    ):
+        tpl = LOGIC_TEMPLATES[lid]
+        strat = {
+            "strategy_id": f"test_{lid}",
+            "logic_id": lid,
+            "family_id": FAMILY_INDEX_VOL_REGIME,
+            "params": dict(tpl.base_params),
+            "thesis": tpl.thesis,
+            "signal_definition": tpl.signal_definition,
+            "position_rule": tpl.position_rule,
+            "datasets_used": list(tpl.datasets_used),
+        }
+        res = evaluate_one_strategy(strat, ctx)
+        assert res["status"] == "evaluated"
+        assert res["n_periods_total"] >= 1
+        assert res.get("logic_id") == lid
+        assert res["mass_research"] == "NO-GO"
+
+    # Gen-time reject bad mode
+    ok_bad, reason_bad = validate_strategy_at_gen(
+        FAMILY_INDEX_VOL_REGIME,
+        {
+            "mode": "not_a_mode",
+            "vol_short_n": 10,
+            "vol_long_n": 60,
+            "hold_days": 10,
+            "momentum_n": 5,
+        },
+        logic_id="nky_vol_abs_level",
+    )
+    assert ok_bad is False
+    assert reason_bad is not None
+
+
+def test_nky_vol_signal_helpers_pure():
+    from features.class_signals import (
+        compute_nky_vol_abs_level_signal,
+        compute_nky_vol_term_levels_signal,
+        compute_nky_vol_term_ratio_signal,
+        nky_vol_regime_from_abs_level,
+        nky_vol_regime_from_term_levels,
+        nky_vol_regime_from_term_ratio,
+    )
+
+    assert nky_vol_regime_from_abs_level(0.05)[0] == "low"
+    assert nky_vol_regime_from_abs_level(0.30)[0] == "high"
+    assert nky_vol_regime_from_abs_level(0.15)[0] == "mid"
+    assert nky_vol_regime_from_term_levels(0.05, 0.08)[0] == "low"
+    assert nky_vol_regime_from_term_levels(0.30, 0.25)[0] == "high"
+    assert nky_vol_regime_from_term_levels(0.05, 0.25)[0] == "mid"  # disagree
+    assert nky_vol_regime_from_term_ratio(0.30, 0.20)[0] == "expanding"
+    assert nky_vol_regime_from_term_ratio(0.10, 0.20)[0] == "compressing"
+
+    abs_s = compute_nky_vol_abs_level_signal(cs_sign=1.0, vol_level=0.05)
+    assert abs_s["value"] == 1.0  # low → keep
+    abs_h = compute_nky_vol_abs_level_signal(cs_sign=1.0, vol_level=0.30)
+    assert abs_h["value"] == -1.0  # high → reverse
+    abs_m = compute_nky_vol_abs_level_signal(cs_sign=1.0, vol_level=0.15)
+    assert abs_m["value"] is None  # mid → flat
+
+    term = compute_nky_vol_term_levels_signal(
+        cs_sign=1.0, short_vol=0.05, long_vol=0.08
+    )
+    assert term["value"] == 1.0
+    ratio = compute_nky_vol_term_ratio_signal(
+        cs_sign=1.0, short_vol=0.30, long_vol=0.20
+    )
+    assert ratio["value"] == -1.0  # expanding → reverse
+    assert ratio["hypothesis_class"] == FAMILY_INDEX_VOL_REGIME

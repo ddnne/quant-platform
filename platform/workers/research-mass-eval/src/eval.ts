@@ -21,6 +21,7 @@ import type {
   BarsByCode,
   LogicEvalResult,
   LogicSpec,
+  NkyVolSeries,
   PeriodEvalRow,
   PeriodPanel,
 } from "./types";
@@ -166,6 +167,7 @@ function evalMultiDayHold(
   const pol = polarity < 0 ? -1 : 1;
 
   for (const code of Object.keys(bars).sort()) {
+    if (String(code).startsWith("__")) continue;
     const pairs = bars[code];
     if (!pairs || pairs.length < h + 2) continue;
     const moms = momentumSeries(pairs, h);
@@ -219,6 +221,7 @@ function evalCrossSection(
   const datesByCode: Record<string, string[]> = {};
   const closesList: Record<string, number[]> = {};
   for (const code of Object.keys(bars)) {
+    if (String(code).startsWith("__")) continue;
     const pairs = bars[code];
     const moms = momentumSeries(pairs, n);
     for (const [d, m] of moms) {
@@ -308,6 +311,154 @@ function strParam(params: Record<string, unknown>, key: string, fallback: string
   return fallback;
 }
 
+/**
+ * W91 index-level Nikkei/TOPIX vol regime × CS book (lite TS port).
+ * Distinct from per-name vol_risk_adjusted / vol_breakout_expand.
+ */
+function evalNkyVolRegime(
+  bars: BarsByCode,
+  nky: NkyVolSeries | null,
+  mode: string,
+  momentumN: number,
+  holdDays: number,
+  longFrac: number,
+  shortFrac: number,
+  oneWay: number,
+  highThr: number,
+  lowThr: number,
+  expandRatio: number,
+  compressRatio: number,
+): {
+  gross: number | null;
+  net: number | null;
+  amCost: number;
+  nActive: number;
+  activation: number | null;
+  signalId: string;
+} {
+  const h = Math.max(1, Math.floor(holdDays));
+  const n = Math.max(1, Math.floor(momentumN));
+  const amCost = amortizedOneWayCost(oneWay, h);
+  const m = (mode || "nky_vol_abs_level").toLowerCase();
+  if (!nky) {
+    return {
+      gross: null,
+      net: null,
+      amCost,
+      nActive: 0,
+      activation: null,
+      signalId: `c21_nky_vol_${m}_missing_series`,
+    };
+  }
+  const absBy = nky.rv_abs_by_date || nky.rv_short_by_date || {};
+  const shortBy = nky.rv_short_by_date || {};
+  const longBy = nky.rv_long_by_date || {};
+
+  const byDate: Record<string, Record<string, number | null>> = {};
+  const datesByCode: Record<string, string[]> = {};
+  const closesList: Record<string, number[]> = {};
+  for (const [code, pairs] of Object.entries(bars)) {
+    // Skip reserved index proxy codes from CS universe.
+    if (String(code).startsWith("__")) continue;
+    const moms = momentumSeries(pairs, n);
+    for (const [d, mom] of moms) {
+      if (!byDate[d]) byDate[d] = {};
+      byDate[d][code] = mom;
+    }
+    datesByCode[code] = pairs.map((p) => p[0]);
+    closesList[code] = pairs.map((p) => p[1]);
+  }
+  const dates = Object.keys(byDate).sort();
+  const dailyAdj: Record<string, Record<string, number | null>> = {};
+  for (const code of Object.keys(bars)) dailyAdj[code] = {};
+
+  function regimeFor(d: string): string | null {
+    const dk = d.slice(0, 10);
+    if (m.includes("term_ratio") || m === "nky_vol_term_ratio") {
+      const s = shortBy[dk];
+      const lo = longBy[dk];
+      if (s === undefined || lo === undefined || !(lo > 1e-12)) return null;
+      const ratio = s / lo;
+      if (ratio >= expandRatio) return "expanding";
+      if (ratio <= compressRatio) return "compressing";
+      return "mid";
+    }
+    if (m.includes("term_levels") || m === "nky_vol_term_levels") {
+      const s = shortBy[dk];
+      const lo = longBy[dk];
+      if (s === undefined || lo === undefined) return null;
+      const sLab = s >= highThr ? "high" : s <= lowThr ? "low" : "mid";
+      const lLab = lo >= highThr ? "high" : lo <= lowThr ? "low" : "mid";
+      if (sLab === "high" && lLab === "high") return "high";
+      if (sLab === "low" && lLab === "low") return "low";
+      return "mid";
+    }
+    // abs level
+    const v = absBy[dk];
+    if (v === undefined) return null;
+    if (v >= highThr) return "high";
+    if (v <= lowThr) return "low";
+    return "mid";
+  }
+
+  function adjust(cs: number | null, reg: string | null): number | null {
+    if (cs === null || reg === null) return null;
+    if (cs === 0) return 0;
+    if (m.includes("term_ratio") || m === "nky_vol_term_ratio") {
+      if (reg === "compressing") return cs;
+      if (reg === "expanding") return -cs;
+      return null;
+    }
+    if (reg === "low") return cs;
+    if (reg === "high") return -cs;
+    return null;
+  }
+
+  for (const d of dates) {
+    const ranks = crossSectionRankSigns(byDate[d], longFrac, shortFrac);
+    const reg = regimeFor(d);
+    for (const [code, cs] of Object.entries(ranks)) {
+      dailyAdj[code][d] = adjust(cs, reg);
+    }
+  }
+
+  const signed: number[] = [];
+  let nActive = 0;
+  let nCodeDays = 0;
+  for (const code of Object.keys(datesByCode)) {
+    const dlist = datesByCode[code];
+    const entries = dlist.map((d) => dailyAdj[code]?.[d] ?? null);
+    const held = applyStickyHold(entries, h, "fixed_horizon");
+    const closes = closesList[code];
+    for (let i = 0; i < held.length; i++) {
+      nCodeDays += 1;
+      const pos = held[i];
+      if (pos === null || pos === 0) continue;
+      if (i % h !== 0) continue;
+      const fwd = multiDayForwardReturn(closes, h, i);
+      if (fwd === null) continue;
+      nActive += 1;
+      signed.push(pos * fwd);
+    }
+  }
+  const gross = signed.length ? sampleMean(signed) : null;
+  const net = gross !== null ? gross - amCost : null;
+  const sid =
+    m.includes("term_ratio")
+      ? "c21_nky_vol_term_ratio_xs"
+      : m.includes("term_levels")
+        ? "c21_nky_vol_term_levels_xs"
+        : "c21_nky_vol_abs_level_xs";
+  return {
+    gross,
+    net,
+    amCost,
+    nActive,
+    activation: nCodeDays > 0 ? nActive / nCodeDays : null,
+    signalId: sid,
+  };
+}
+
 /** Evaluate one logic on one panel. */
 export function evalLogicOnPanel(
   logic: LogicSpec,
@@ -355,6 +506,26 @@ export function evalLogicOnPanel(
         numParam(params, "short_frac", 0.3),
         oneWay,
       );
+    } else if (
+      family === "index_vol_regime" ||
+      lid.startsWith("nky_vol_")
+    ) {
+      holdDays = Math.floor(numParam(params, "hold_days", 10));
+      const mode = strParam(params, "mode", lid || "nky_vol_abs_level");
+      out = evalNkyVolRegime(
+        panel.bars,
+        panel.nky_vol_series || null,
+        mode,
+        numParam(params, "momentum_n", 5),
+        holdDays,
+        numParam(params, "long_frac", 0.3),
+        numParam(params, "short_frac", 0.3),
+        oneWay,
+        numParam(params, "high_threshold", 0.2),
+        numParam(params, "low_threshold", 0.1),
+        numParam(params, "expand_ratio", 1.2),
+        numParam(params, "compress_ratio", 0.8),
+      );
     } else {
       // multi_day_hold + generic fallback for rate/multi_factor/etc.
       // Full factor legs not-yet-implemented on CF pure-TS path.
@@ -368,7 +539,8 @@ export function evalLogicOnPanel(
       if (
         family !== "multi_day_hold" &&
         !lid.includes("multi_day") &&
-        family !== "vol_risk_adjusted"
+        family !== "vol_risk_adjusted" &&
+        family !== "index_vol_regime"
       ) {
         out = {
           ...out,

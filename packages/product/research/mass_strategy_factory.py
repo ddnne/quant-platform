@@ -1,4 +1,4 @@
-"""Mass strategy logic-diversity factory + batch auto-experiment (W90 / w0816y).
+"""Mass strategy logic-diversity factory + batch auto-experiment (W91 / w0818a).
 
 Purpose
 -------
@@ -6,7 +6,11 @@ Research factory that generates strategy **individuals** around **distinct
 economic logic templates** (thesis + signal structure + position rule +
 datasets), not hold_days / momentum_window / long_frac param grids.
 
-W90 extends W89 with:
+W91 extends W90 with:
+* Nikkei/index realized-vol regime logics (abs level · term levels · ratio)
+* CF real multi-year panels (mode=r2_panels; synthetic not final success)
+
+W90 held:
 * strong-model profit-hypothesis generation (xAI grok-4.6 preferred)
 * CF multi-logic × multi-period mass-eval Worker + R2 artifacts
 * wide local eval of LLM-accepted + catalog survivors
@@ -98,8 +102,8 @@ from features.class_signals import (
 # Identity / freezes (must never arm operational Mass)
 # ---------------------------------------------------------------------------
 
-MASS_FACTORY_VERSION: str = "mass-strategy-factory/v2.2"
-MASS_FACTORY_WAVE: str = "W90 / w0816y"
+MASS_FACTORY_VERSION: str = "mass-strategy-factory/v2.3"
+MASS_FACTORY_WAVE: str = "W91 / w0818a"
 
 MASS_RESEARCH: str = "NO-GO"  # operational Mass remains NO-GO
 PHASE7: str = "OFF"
@@ -121,6 +125,7 @@ FACTORY_MASS_LOOP: str = "research_batch_only"
 FAMILY_VOL_RISK_ADJUSTED: str = "vol_risk_adjusted"
 FAMILY_RATE_FACTOR: str = "rate_factor"
 FAMILY_MULTI_FACTOR: str = "multi_factor"
+FAMILY_INDEX_VOL_REGIME: str = "index_vol_regime"
 
 # Near-groups kept parallel for comparison (do not merge early).
 NEAR_LOGIC_GROUPS: tuple[dict[str, Any], ...] = (
@@ -163,6 +168,35 @@ NEAR_LOGIC_GROUPS: tuple[dict[str, Any], ...] = (
         "note": (
             "macro_* = mom gate; rate_* = CS risk-adj factor logics. "
             "Keep distinct (not merge)."
+        ),
+    },
+    {
+        "group_id": "vol_family_name_vs_index",
+        "label": "vol family: per-name gate vs index-vol regime (parallel)",
+        "logic_ids": (
+            "vol_risk_adjusted_mom",
+            "vol_breakout_expand",
+            "nky_vol_abs_level",
+            "nky_vol_term_levels",
+            "nky_vol_term_ratio",
+        ),
+        "note": (
+            "vol_risk_adjusted_mom / vol_breakout_expand = per-name vol gate. "
+            "nky_vol_* = index-level Nikkei/TOPIX RV regime × CS book. "
+            "Keep parallel; do not merge name-level with index-level."
+        ),
+    },
+    {
+        "group_id": "index_vol_regime_family",
+        "label": "index vol regime (abs vs term levels vs ratio)",
+        "logic_ids": (
+            "nky_vol_abs_level",
+            "nky_vol_term_levels",
+            "nky_vol_term_ratio",
+        ),
+        "note": (
+            "Three transforms of the same Nikkei/TOPIX RV series. "
+            "Keep abs / dual-levels / ratio parallel for comparison."
         ),
     },
 )
@@ -254,6 +288,7 @@ FACTORY_AVAILABLE_DATASETS: frozenset[str] = frozenset(
         "markets_calendar",
         "indices_bars_daily_topix",
         "indices_bars_daily",
+        "derivatives_bars_daily_futures",
         "jsda_tokyo_repo_rates",
         "fins_summary",
         "fins_details",
@@ -799,6 +834,105 @@ def _build_logic_templates() -> dict[str, LogicTemplate]:
                 "Keep parallel in flow near-group; do not merge."
             ),
         ),
+        # ----- W91 Nikkei / index vol regime logics -----
+        LogicTemplate(
+            logic_id="nky_vol_abs_level",
+            display_name="Nikkei abs vol-level × CS risk-on/off",
+            thesis=(
+                "Absolute Nikkei (NK225F) / TOPIX realized-vol level is a risk "
+                "regime: low index RV → risk-on keep CS relative strength; "
+                "high index RV → risk-off reverse CS; mid → flat"
+            ),
+            signal_definition=(
+                "CS rank(mom) L-S risk-adjusted by absolute index RV "
+                "(short-window annualized); not per-name |mom|/vol gate"
+            ),
+            position_rule="sticky fixed_horizon balanced L/S after abs-vol book transform",
+            datasets_used=bars_idx
+            + ("indices_bars_daily", "derivatives_bars_daily_futures"),
+            family_id=FAMILY_INDEX_VOL_REGIME,
+            base_params={
+                "mode": "nky_vol_abs_level",
+                "momentum_n": 5,
+                "hold_days": 10,
+                "long_frac": 0.3,
+                "short_frac": 0.3,
+                "vol_short_n": 10,
+                "vol_long_n": 60,
+                "high_threshold": 0.20,
+                "low_threshold": 0.10,
+            },
+            structural_keys=("mode",),
+            notes=(
+                "Index-level vol regime. Distinct from vol_risk_adjusted_mom "
+                "(per-name mom/vol gate). Proxy: NK225F front RV → TOPIX fallback. "
+                "NKVIF exists but abs path uses realized for term consistency."
+            ),
+        ),
+        LogicTemplate(
+            logic_id="nky_vol_term_levels",
+            display_name="Nikkei short+long vol levels × CS",
+            thesis=(
+                "Joint short- and long-window index RV levels: both calm → "
+                "risk-on CS; both stressed → risk-off reverse; disagreement → flat"
+            ),
+            signal_definition=(
+                "CS rank mom L-S; regime requires short RV and long RV to agree "
+                "on high or low absolute levels (not ratio-only)"
+            ),
+            position_rule="sticky fixed_horizon balanced L/S after dual-level vol transform",
+            datasets_used=bars_idx
+            + ("indices_bars_daily", "derivatives_bars_daily_futures"),
+            family_id=FAMILY_INDEX_VOL_REGIME,
+            base_params={
+                "mode": "nky_vol_term_levels",
+                "momentum_n": 5,
+                "hold_days": 10,
+                "long_frac": 0.3,
+                "short_frac": 0.3,
+                "vol_short_n": 10,
+                "vol_long_n": 60,
+                "high_threshold": 0.20,
+                "low_threshold": 0.10,
+            },
+            structural_keys=("mode", "vol_short_n", "vol_long_n"),
+            notes=(
+                "Dual absolute levels (not ratio). Distinct from nky_vol_abs_level "
+                "and from per-name vol_breakout_expand."
+            ),
+        ),
+        LogicTemplate(
+            logic_id="nky_vol_term_ratio",
+            display_name="Nikkei short/long vol ratio × CS",
+            thesis=(
+                "Index RV term structure (short/long): compressing → risk-on keep "
+                "CS; expanding → risk-off reverse; mid → no trade"
+            ),
+            signal_definition=(
+                "ratio = RV_short/RV_long on Nikkei proxy; CS L-S risk-adjusted "
+                "by expand/compress regime (index-level, not per-name expand)"
+            ),
+            position_rule="sticky fixed_horizon balanced L/S after vol-term-ratio transform",
+            datasets_used=bars_idx
+            + ("indices_bars_daily", "derivatives_bars_daily_futures"),
+            family_id=FAMILY_INDEX_VOL_REGIME,
+            base_params={
+                "mode": "nky_vol_term_ratio",
+                "momentum_n": 5,
+                "hold_days": 10,
+                "long_frac": 0.3,
+                "short_frac": 0.3,
+                "vol_short_n": 10,
+                "vol_long_n": 60,
+                "expand_ratio": 1.20,
+                "compress_ratio": 0.80,
+            },
+            structural_keys=("mode", "vol_short_n", "vol_long_n"),
+            notes=(
+                "Index-level term ratio. Name-level cousin is vol_breakout_expand "
+                "(per-name recent/prior vol); keep parallel in vol near-group."
+            ),
+        ),
     ]
     return {t.logic_id: t for t in tpls}
 
@@ -898,6 +1032,11 @@ def logic_templates_document() -> dict[str, Any]:
     mf_ids = [
         lid for lid, t in LOGIC_TEMPLATES.items() if t.family_id == FAMILY_MULTI_FACTOR
     ]
+    nky_vol_ids = [
+        lid
+        for lid, t in LOGIC_TEMPLATES.items()
+        if t.family_id == FAMILY_INDEX_VOL_REGIME
+    ]
     return {
         "version": MASS_FACTORY_VERSION,
         "wave": MASS_FACTORY_WAVE,
@@ -908,6 +1047,7 @@ def logic_templates_document() -> dict[str, Any]:
         },
         "w89_rate_factor_logic_ids": rate_ids,
         "w89_multi_factor_logic_ids": mf_ids,
+        "w91_index_vol_logic_ids": nky_vol_ids,
         "near_logic_groups": near_logic_groups_document(),
         "diversity_rules": {
             "counts_as_different": [
@@ -966,6 +1106,7 @@ def family_definitions_document() -> dict[str, Any]:
                 FAMILY_VOL_RISK_ADJUSTED,
                 FAMILY_RATE_FACTOR,
                 FAMILY_MULTI_FACTOR,
+                FAMILY_INDEX_VOL_REGIME,
             ],
             "excluded": [CLASS_SIMPLE_DAILY_SIGN],
         },
@@ -1318,6 +1459,20 @@ def validate_strategy_at_gen(
         if float(p.get("vol_threshold") or 0) <= 0:
             return False, REJECT_INVALID_PARAMS
         if int(p.get("vol_n") or 0) < 2:
+            return False, REJECT_INVALID_PARAMS
+    if fid == FAMILY_INDEX_VOL_REGIME:
+        mode = str(p.get("mode") or "")
+        if mode not in {
+            "nky_vol_abs_level",
+            "nky_vol_term_levels",
+            "nky_vol_term_ratio",
+        }:
+            return False, REJECT_INVALID_PARAMS
+        if int(p.get("vol_short_n") or 0) < 2:
+            return False, REJECT_INVALID_PARAMS
+        if int(p.get("vol_long_n") or 0) < int(p.get("vol_short_n") or 0):
+            return False, REJECT_INVALID_PARAMS
+        if int(p.get("hold_days") or 0) < 1 or int(p.get("momentum_n") or 0) < 1:
             return False, REJECT_INVALID_PARAMS
     return True, None
 
@@ -1719,6 +1874,7 @@ def load_batch_data_context(
         load_bars_ndjson_rich,
         load_fins_events_from_sqlite,
         load_margin_ndjson,
+        load_nky_vol_series_from_sqlite,
         load_repo_rows_all_tenors_from_sqlite,
         load_repo_rows_from_sqlite,
         load_short_ratio_series_from_sqlite,
@@ -1756,6 +1912,14 @@ def load_batch_data_context(
     # Multi-tenor for curve-shape factor (W89); overnight-only rows lack 3M.
     repo_all = load_repo_rows_all_tenors_from_sqlite(db) if db.exists() else []
     curve_series = build_repo_curve_series(repo_all) if repo_all else None
+    # W91: Nikkei/TOPIX realized-vol series (NK225F prefer → TOPIX fallback)
+    nky_vol_series = (
+        load_nky_vol_series_from_sqlite(
+            db, start="2014-01-01", end="2026-12-31"
+        )
+        if db.exists()
+        else None
+    )
     fins_events = (
         load_fins_events_from_sqlite(
             db, codes=selected, start="2014-01-01", end="2026-12-31"
@@ -1790,6 +1954,7 @@ def load_batch_data_context(
                     "margin": {},
                     "repo_series": repo_series,
                     "curve_series": curve_series,
+                    "nky_vol_series": nky_vol_series,
                     "fins_events": fins_events,
                     "short_series": short_series,
                 }
@@ -1821,6 +1986,7 @@ def load_batch_data_context(
                 "margin": margin,
                 "repo_series": repo_series,
                 "curve_series": curve_series,
+                "nky_vol_series": nky_vol_series,
                 "fins_events": fins_events,
                 "short_series": short_series,
                 "bars_path": str(bars_path),
@@ -1844,6 +2010,10 @@ def load_batch_data_context(
                 int((curve_series or {}).get("n_obs_spread") or 0)
             ),
             "curve_definition": (curve_series or {}).get("definition"),
+            "nky_vol_source": (nky_vol_series or {}).get("source"),
+            "nky_vol_dataset": (nky_vol_series or {}).get("dataset"),
+            "n_nky_vol_short": int((nky_vol_series or {}).get("n_obs_short") or 0),
+            "n_nky_vol_long": int((nky_vol_series or {}).get("n_obs_long") or 0),
             "n_fins_codes": len(fins_events),
             "use_q4_periods": bool(config.use_q4_periods),
             "max_days_per_period": int(config.max_days_per_period),
@@ -1900,6 +2070,24 @@ def _synthetic_batch_context(config: MassFactoryConfig) -> BatchDataContext:
             "n_obs_spread": len(spread),
             "source": "synthetic",
         }
+        # Synthetic Nikkei-proxy RV: oscillate short/long levels + ratio regimes
+        from research.class_hyp_eval import build_nky_vol_series
+
+        nky_closes = []
+        px = 38000.0 + 500 * yi
+        for i, d in enumerate(dates):
+            # mild trend + regime-ish noise so short/long RV differ
+            shock = 0.02 if (i % 11 == 0) else (0.005 if i % 3 == 0 else 0.001)
+            sign = 1.0 if i % 2 == 0 else -1.0
+            px = max(1000.0, px * (1.0 + sign * shock * (1.0 + 0.1 * (i % 5))))
+            nky_closes.append((d, px))
+        nky_vol_series = build_nky_vol_series(
+            nky_closes,
+            short_n=5,
+            long_n=15,
+            source="synthetic_nk225f",
+            dataset="synthetic",
+        )
         fins_events = {
             "13010": [
                 {
@@ -1933,6 +2121,7 @@ def _synthetic_batch_context(config: MassFactoryConfig) -> BatchDataContext:
                 "margin": margin,
                 "repo_series": repo_series,
                 "curve_series": curve_series,
+                "nky_vol_series": nky_vol_series,
                 "fins_events": fins_events,
                 "short_series": [
                     (d, 0.01 + 0.0001 * i) for i, d in enumerate(dates)
@@ -1964,6 +2153,9 @@ def _eval_on_panel(
         evaluate_mf_flow_price_on_bars,
         evaluate_mf_value_mom_rate_on_bars,
         evaluate_multi_day_hold_on_bars,
+        evaluate_nky_vol_abs_level_on_bars,
+        evaluate_nky_vol_term_levels_on_bars,
+        evaluate_nky_vol_term_ratio_on_bars,
         evaluate_rate_curve_xs_on_bars,
         evaluate_rate_level_xs_on_bars,
         momentum_series,
@@ -2104,6 +2296,40 @@ def _eval_on_panel(
             one_way_cost=one_way_cost,
             gate_mode=str(p.get("gate_mode") or "mom_over_vol"),
         )
+    elif fid == FAMILY_INDEX_VOL_REGIME:
+        mode = str(p.get("mode") or "nky_vol_abs_level")
+        nky = panel.get("nky_vol_series")
+        common_kw = dict(
+            momentum_n=int(p.get("momentum_n") or 5),
+            hold_days=int(p.get("hold_days") or 10),
+            long_frac=float(p.get("long_frac") or 0.3),
+            short_frac=float(p.get("short_frac") or 0.3),
+            one_way_cost=one_way_cost,
+        )
+        if mode == "nky_vol_term_ratio":
+            out = evaluate_nky_vol_term_ratio_on_bars(
+                bars,
+                nky,
+                expand_ratio=float(p.get("expand_ratio") or 1.20),
+                compress_ratio=float(p.get("compress_ratio") or 0.80),
+                **common_kw,
+            )
+        elif mode == "nky_vol_term_levels":
+            out = evaluate_nky_vol_term_levels_on_bars(
+                bars,
+                nky,
+                high_threshold=float(p.get("high_threshold") or 0.20),
+                low_threshold=float(p.get("low_threshold") or 0.10),
+                **common_kw,
+            )
+        else:
+            out = evaluate_nky_vol_abs_level_on_bars(
+                bars,
+                nky,
+                high_threshold=float(p.get("high_threshold") or 0.20),
+                low_threshold=float(p.get("low_threshold") or 0.10),
+                **common_kw,
+            )
     else:
         return {
             "status": "error",
@@ -3266,6 +3492,19 @@ def mass_factory_document() -> dict[str, Any]:
         "continuous_paper": CONTINUOUS_PAPER,
         **_freeze(),
         "proof": "docs/proof/w0816y_w90_llm_hyp_cf_mass_eval_20260817.md",
+        "w91_index_vol": {
+            "family": FAMILY_INDEX_VOL_REGIME,
+            "logic_ids": [
+                "nky_vol_abs_level",
+                "nky_vol_term_levels",
+                "nky_vol_term_ratio",
+            ],
+            "proxy": "NK225F front realized → TOPIX fallback; NKVIF available",
+            "distinct_from": [
+                "vol_risk_adjusted_mom",
+                "vol_breakout_expand",
+            ],
+        },
     }
 
 
@@ -3280,6 +3519,7 @@ __all__ = [
     "FAMILY_VOL_RISK_ADJUSTED",
     "FAMILY_RATE_FACTOR",
     "FAMILY_MULTI_FACTOR",
+    "FAMILY_INDEX_VOL_REGIME",
     "FAMILY_DEFINITIONS",
     "FACTORY_FAMILY_IDS",
     "DEFAULT_FAMILY_RATIOS",

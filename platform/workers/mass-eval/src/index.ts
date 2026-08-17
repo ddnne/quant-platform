@@ -424,8 +424,29 @@ function evaluateLogicOnBars(
     const pol = Number(params.signal_polarity ?? (lid.includes("reversion") ? -1 : 1));
     return evalMdh(bars, params, oneWay, pol);
   }
-  if (fid === "vol_risk_adjusted" || lid.startsWith("vol_")) {
+  // Per-name vol gates only (not nky_vol_* index regime)
+  if (
+    fid === "vol_risk_adjusted" ||
+    lid === "vol_risk_adjusted_mom" ||
+    lid === "vol_breakout_expand" ||
+    (lid.startsWith("vol_") && !lid.startsWith("vol_nky") && !lid.startsWith("nky_vol"))
+  ) {
     return evalVol(bars, params, oneWay);
+  }
+  // W91 index-level Nikkei vol regime needs index series panel (not per-name bars alone).
+  // Honest data_missing on mass-eval lite unless staged with nky series (research-mass-eval path).
+  if (
+    fid === "index_vol_regime" ||
+    lid.startsWith("nky_vol_")
+  ) {
+    return {
+      status: "data_missing",
+      net: null,
+      gross: null,
+      n: 0,
+      activation: null,
+      note: "index_vol_regime_requires_nky_vol_series_use_research_mass_eval_or_local",
+    };
   }
   // Non-bar-native on CF without extra panels → data_missing (honest)
   return {
