@@ -232,7 +232,7 @@ See also: [`w0816s_w84_go_gates_20260817.md`](w0816s_w84_go_gates_20260817.md)
 |------|-------|
 | W83 tip (start) | `4ca4ce5` — docs pin after parallel default-candidate close |
 | W83 feature tip | `12e3e46` — parallel default candidates + paper negatives + OTC tip-wait + FRESH close |
-| W84 feature tip | *(this commit)* — StrategySpec v3 realign + KEEP both + paper validity + explore notes + FRESH close |
+| W84 feature tip | `791648365a7e72d4b5d8d329adb2befe60d9fb95` — StrategySpec v3 realign + KEEP both + paper validity + explore notes + FRESH close |
 | This wave | commit + push on `main` past `4ca4ce5` |
 
 ---
