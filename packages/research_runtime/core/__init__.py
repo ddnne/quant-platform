@@ -28,7 +28,13 @@ for the full contract.
 
 from __future__ import annotations
 
-from .costs import CostModel, standard_cost, stress_cost
+from .costs import (
+    CostModel,
+    ShortFinancingModel,
+    short_financing,
+    standard_cost,
+    stress_cost,
+)
 from .engine import CORE_ENGINE_VERSION, describe_strategy, run_backtest
 from .execution import (
     MODES,
@@ -86,8 +92,10 @@ __all__ = [
     "close_as_of",
     # costs
     "CostModel",
+    "ShortFinancingModel",
     "standard_cost",
     "stress_cost",
+    "short_financing",
     # universe
     "build_universe",
     "load_master",

@@ -27,14 +27,14 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, Mapping
 
 import features
 import pit
 from pit.query import resolve_db_path
 from price_basis import RAW, PriceBasis, require_supported_price_basis
 
-from .costs import CostModel, standard_cost
+from .costs import CostModel, ShortFinancingModel, standard_cost
 from .execution import close_as_of, get_mode
 from .metrics import compute_metrics
 from .result import BacktestResult
@@ -43,7 +43,8 @@ from .universe import load_master
 
 # Bumped per Phase 3 handoff. Surfaced in every result's metadata so a consumer
 # can tell which engine contract a given backtest obeys.
-CORE_ENGINE_VERSION = "0.6.0"
+# 0.6.1 — W85 short-leg financing (repo + fixed spread) optional charge.
+CORE_ENGINE_VERSION = "0.6.1"
 
 # J-Quants HolidayDivision: "1" == trading day (exchange open).
 _TRADING_HOLIDAY_DIVISION = "1"
@@ -342,6 +343,78 @@ def _trading_days(
     return days
 
 
+def _short_market_value(
+    shares: Mapping[str, float],
+    marks: Mapping[str, tuple[float, str]],
+    closes: Mapping[str, float] | None = None,
+) -> float:
+    """Absolute market value of short (negative share) positions.
+
+    Prefers same-session ``closes`` when available; else last PIT mark.
+    """
+    total = 0.0
+    for code, qty in shares.items():
+        if qty >= 0:
+            continue
+        px = None
+        if closes is not None:
+            px = closes.get(code)
+        if px is None or px <= 0:
+            mark = marks.get(code)
+            if mark is not None:
+                px = mark[0]
+        if px is None or px <= 0:
+            continue
+        total += abs(float(qty)) * float(px)
+    return total
+
+
+def _apply_short_financing(
+    *,
+    date: str,
+    shares: dict[str, float],
+    marks: dict[str, tuple[float, str]],
+    closes: dict[str, float],
+    cash: float,
+    short_financing: ShortFinancingModel | None,
+    financing_events: list[dict[str, Any]],
+    trades: list[dict[str, Any]],
+) -> tuple[float, int]:
+    """Charge daily short financing; return (cash, gap_flag 0/1)."""
+    if short_financing is None or not short_financing.enabled:
+        return cash, 0
+    short_nv = _short_market_value(shares, marks, closes)
+    if short_nv <= 0:
+        return cash, 0
+    cost, is_gap = short_financing.daily_cost(short_nv, date=date)
+    financing_events.append(
+        {
+            "date": date,
+            "short_notional": short_nv,
+            "cost": float(cost),
+            "is_gap": bool(is_gap),
+            "side": "short_financing",
+        }
+    )
+    if cost > 0:
+        cash -= cost
+        # Include in trade log so compute_metrics cost_drag counts it.
+        trades.append(
+            {
+                "decision_date": date,
+                "fill_date": date,
+                "code": "_short_financing",
+                "side": "short_financing",
+                "shares": 0.0,
+                "price": 0.0,
+                "notional": 0.0,
+                "cost": float(cost),
+                "short_notional": short_nv,
+            }
+        )
+    return cash, (1 if is_gap else 0)
+
+
 def run_backtest(
     strategy: Any,
     start: str,
@@ -350,6 +423,7 @@ def run_backtest(
     db_path: Any = None,
     execution_mode: str = "next_close",
     cost_model: CostModel | None = None,
+    short_financing: ShortFinancingModel | None = None,
     universe: tuple[str, ...] | list[str] | None = None,
     starting_capital: float = 1_000_000.0,
     lookback_days: int = 30,
@@ -370,6 +444,9 @@ def run_backtest(
         db_path: Structured DB path (defaults to PIT's default location).
         execution_mode: ``"next_close"`` (default) or ``"same_day_close"``.
         cost_model: :class:`CostModel` (defaults to 5 bps one-way standard).
+        short_financing: Optional :class:`ShortFinancingModel` charging daily
+            borrow on short market value = f(repo[t] + fixed spread). ``None``
+            keeps prior long-only / no-borrow behaviour (default).
         universe: Optional fixed code list; otherwise built per decision day
             from the PIT equity master as-of (anti-survivorship).
         starting_capital: Initial cash (defaults to 1,000,000 JPY).
@@ -410,6 +487,8 @@ def run_backtest(
     cash = float(starting_capital)
     equity_curve: list[dict[str, Any]] = []
     trades: list[dict[str, Any]] = []
+    financing_events: list[dict[str, Any]] = []
+    n_short_financing_gaps = 0
     # Portfolio valuation is independent of the rolling signal window. Each
     # entry is (last PIT-visible exact-session price, that session's date).
     marks: dict[str, tuple[float, str]] = {}
@@ -468,6 +547,18 @@ def run_backtest(
             snap_dec = snap_close  # next_close decides at close(d)
             decision_equity = _mark_equity(shares, marks, cash)
             # The next-close decision occurs after this close's fills and mark.
+            # Short financing accrues on end-of-day short book (post-fill).
+            cash, gap_f = _apply_short_financing(
+                date=d,
+                shares=shares,
+                marks=marks,
+                closes=fill_closes,
+                cash=cash,
+                short_financing=short_financing,
+                financing_events=financing_events,
+                trades=trades,
+            )
+            n_short_financing_gaps += gap_f
             equity_curve.append(
                 _equity_point(
                     date=d, shares=shares, marks=marks, cash=cash
@@ -532,6 +623,17 @@ def run_backtest(
                 trades=trades,
             )
             _update_marks(marks, fill_closes, d)
+            cash, gap_f = _apply_short_financing(
+                date=d,
+                shares=shares,
+                marks=marks,
+                closes=fill_closes,
+                cash=cash,
+                short_financing=short_financing,
+                financing_events=financing_events,
+                trades=trades,
+            )
+            n_short_financing_gaps += gap_f
             # The published curve is a post-fill, post-cost close-time mark.
             equity_curve.append(
                 _equity_point(
@@ -540,6 +642,12 @@ def run_backtest(
             )
 
     metrics = compute_metrics(equity_curve=equity_curve, trades=trades)
+    short_fin_total = float(
+        sum(float(e.get("cost") or 0.0) for e in financing_events)
+    )
+    metrics["short_financing_cost"] = short_fin_total
+    metrics["n_short_financing_days"] = len(financing_events)
+    metrics["n_short_financing_gaps"] = int(n_short_financing_gaps)
 
     strategy_id, strategy_params = describe_strategy(strategy)
     metadata = {
@@ -550,6 +658,14 @@ def run_backtest(
         "execution_mode": mode.name,
         "as_of_rule": mode.as_of_rule,
         "cost_model": cost_model.describe(),
+        "short_financing": (
+            short_financing.describe() if short_financing is not None else None
+        ),
+        "short_financing_applied": bool(
+            short_financing is not None and short_financing.enabled
+        ),
+        "n_short_financing_gaps": int(n_short_financing_gaps),
+        "short_financing_total_cost": short_fin_total,
         "universe_rule": (
             "fixed: " + ",".join(fixed_universe)
             if fixed_universe is not None

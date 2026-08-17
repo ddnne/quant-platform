@@ -61,6 +61,16 @@ class PaperRunConfig:
     ready_manifest_digest: str = ""
     # When True, empty ready_snapshot_id is refused (default False keeps unit tests).
     require_ready_snapshot: bool = False
+    # W85 / w0816t — short-leg financing = f(repo[t] + fixed spread).
+    # Default **off** preserves long-only / legacy paper numerics. Enable
+    # for CS L-S paper trials (short notional × (repo+spread)/days).
+    short_financing_enabled: bool = False
+    short_financing_sensitivity: str = "mid"  # low / mid / high → 25/50/150
+    short_financing_spread_bp: float | None = None
+    # Optional date→repo_pct (JSDA percent). Gaps → no invent charge.
+    short_financing_repo_rates: dict[str, float] | None = None
+    # Fixed repo annual bp when no series (disclosed placeholder; default 0).
+    short_financing_fallback_repo_annual_bp: float = 0.0
 
     def __post_init__(self) -> None:
         if not self.start or not self.end or self.start > self.end:
@@ -75,6 +85,12 @@ class PaperRunConfig:
             raise ValueError("starting_capital must be > 0")
         if int(self.lookback_days) < 1:
             raise ValueError("lookback_days must be >= 1")
+        sens = str(self.short_financing_sensitivity or "mid").strip().lower()
+        if sens not in {"low", "mid", "high"}:
+            raise ValueError(
+                "short_financing_sensitivity must be one of low|mid|high"
+            )
+        object.__setattr__(self, "short_financing_sensitivity", sens)
 
         object.__setattr__(self, "lifecycle", Lifecycle.parse(self.lifecycle))
         object.__setattr__(

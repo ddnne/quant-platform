@@ -52,7 +52,19 @@ def compute_metrics(
     start_equity = equities[0] if equities else 0.0
     end_equity = equities[-1] if equities else 0.0
     total_cost = float(sum(t.get("cost", 0.0) for t in trades))
-    turnover = float(sum(abs(t.get("notional", 0.0)) for t in trades))
+    # W85 short_financing ledger rows are costs, not fills — exclude from
+    # trade count / turnover, keep in cost_drag.
+    fill_trades = [
+        t for t in trades if str(t.get("side") or "") != "short_financing"
+    ]
+    turnover = float(sum(abs(t.get("notional", 0.0)) for t in fill_trades))
+    short_fin_cost = float(
+        sum(
+            float(t.get("cost") or 0.0)
+            for t in trades
+            if str(t.get("side") or "") == "short_financing"
+        )
+    )
 
     post_return = end_equity / start_equity - 1.0 if start_equity else 0.0
     # Counterfactual terminal equity had no costs been deducted from cash.
@@ -64,7 +76,8 @@ def compute_metrics(
         "total_return_post_cost": post_return,
         "cost_drag": total_cost,
         "max_drawdown": max_drawdown(equities),
-        "num_trades": len(trades),
+        "num_trades": len(fill_trades),
         "turnover_notional": turnover,
         "num_trading_days": len(equity_curve),
+        "short_financing_cost_from_trades": short_fin_cost,
     }

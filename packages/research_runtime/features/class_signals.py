@@ -1510,6 +1510,7 @@ def compute_flow_demand_signal(
     is_trading_day: float | None = 1.0,
     hold_days: int = DEFAULT_FLOW_HOLD_DAYS,
     require_short_confirm: bool = False,
+    short_confirm_mode: str | None = None,
     code: str | None = None,
     date: str | None = None,
     as_of: str | None = None,
@@ -1517,22 +1518,43 @@ def compute_flow_demand_signal(
 ) -> dict[str, Any]:
     """Multi-day flow/demand from margin interest change (not S4 1d flip).
 
-    Entry = sign(margin_change). Optional short_ratio_change confirmation
-    (same-sign required when ``require_short_confirm``). Hold via sticky
-    multi-day structure at the eval layer — this returns the **entry** sign.
+    Entry = sign(margin_change). Optional short_ratio_change confirmation:
+
+    * ``short_confirm_mode="off"`` (default) — margin only
+    * ``"hard"`` / ``require_short_confirm=True`` — same-sign required;
+      missing short → no entry
+    * ``"soft"`` (W85) — same-sign when short present; margin-only on short
+      gap (cheap occurrence improve; no look-ahead)
+
+    Hold via sticky multi-day structure at the eval layer — this returns the
+    **entry** sign.
     """
     h = int(hold_days)
+    if short_confirm_mode is None:
+        mode_s = "hard" if require_short_confirm else "off"
+    else:
+        mode_s = str(short_confirm_mode).strip().lower()
+        if mode_s in {"true", "1", "yes", "on", "require"}:
+            mode_s = "hard"
+        elif mode_s in {"false", "0", "no", "none"}:
+            mode_s = "off"
+        elif mode_s not in {"off", "hard", "soft"}:
+            raise ValueError(
+                f"short_confirm_mode must be off|hard|soft, got "
+                f"{short_confirm_mode!r}"
+            )
     raw = sign_from_numeric(margin_change)
     filtered, filter_meta = apply_trading_day_filter(raw, is_trading_day)
     short_sign = sign_from_numeric(short_ratio_change)
     confirmed = True
     confirm_meta: dict[str, Any] = {
-        "require_short_confirm": bool(require_short_confirm),
+        "require_short_confirm": mode_s == "hard",
+        "short_confirm_mode": mode_s,
         "short_ratio_change": short_ratio_change,
         "short_sign": short_sign,
     }
     value = filtered
-    if require_short_confirm:
+    if mode_s == "hard":
         if short_sign is None or filtered is None:
             value = None
             confirmed = False
@@ -1546,6 +1568,29 @@ def compute_flow_demand_signal(
             confirm_meta["reason"] = "short_margin_sign_conflict"
         else:
             confirm_meta["reason"] = "confirmed_same_sign"
+    elif mode_s == "soft":
+        # Soft (W85 cheap near-miss improve):
+        # * same-sign short when available → preferred entry
+        # * short gap → margin-only
+        # * sign conflict → keep margin entry (confirmation optional, not a hard gate)
+        # Distinct from hard confirm (conflict → no entry) and from S4 daily flip.
+        if filtered is None:
+            value = None
+            confirmed = False
+            confirm_meta["reason"] = "margin_missing"
+        elif short_sign is None:
+            value = filtered
+            confirmed = True
+            confirm_meta["reason"] = "soft_margin_only_short_gap"
+        elif short_sign == 0.0 or filtered == 0.0:
+            value = 0.0
+            confirm_meta["reason"] = "flat_leg"
+        elif (short_sign > 0) != (filtered > 0):
+            value = filtered
+            confirmed = False
+            confirm_meta["reason"] = "soft_conflict_keep_margin"
+        else:
+            confirm_meta["reason"] = "soft_confirmed_same_sign"
     confirm_meta["confirmed"] = confirmed
 
     meta: dict[str, Any] = {
@@ -1564,7 +1609,7 @@ def compute_flow_demand_signal(
         "confirm": confirm_meta,
         "formula": (
             f"entry=sign(margin_interest_change); sticky hold={h}d "
-            f"(not S4 daily); short_confirm={bool(require_short_confirm)}"
+            f"(not S4 daily); short_confirm_mode={mode_s}"
         ),
         "not_simple_daily_sign": True,
         "not_s4_rehash": True,

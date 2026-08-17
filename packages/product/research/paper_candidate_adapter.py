@@ -65,7 +65,7 @@ from research.hypothesis_classes import (
 
 PAPER_CANDIDATE_SPEC_VERSION: str = "paper-candidate-spec/v1"
 PAPER_CANDIDATE_ADAPTER_VERSION: str = "paper-candidate-adapter/v2"
-PAPER_CANDIDATE_WAVE: str = "W84 / w0816s"
+PAPER_CANDIDATE_WAVE: str = "W85 / w0816t"
 MASS_RESEARCH: str = "NO-GO"
 PHASE7: str = "OFF"
 READY_DECLARED: bool = False
@@ -662,9 +662,12 @@ def adapt_class_hyp_candidate(
             if hold_days is not None
             else _hold_days_from_payload(payload, default=10, class_id=cid)
         )
-        if str(payload.get("variant") or "") in {
+        variant_s = str(payload.get("variant") or "")
+        if variant_s in {
             "hold_10",
             "cross_section_hold_10",
+            "hold_10_mom3",
+            "cross_section_hold_10_mom3",
             "10",
             "10d",
         }:
@@ -672,8 +675,21 @@ def adapt_class_hyp_candidate(
         n_mom = payload.get("momentum_n")
         if n_mom is None:
             n_mom = payload.get("cross_section_hold10_momentum_n")
-        # W82 pin: sticky hold=10 uses mom=5 (not content-matched to hold)
-        n_mom_i = int(n_mom) if n_mom is not None else (5 if h == 10 else h)
+        if n_mom is None and variant_s in {
+            "hold_10_mom3",
+            "cross_section_hold_10_mom3",
+        }:
+            n_mom = payload.get("cross_section_hold10_mom3_momentum_n", 3)
+        # W82 pin: sticky hold=10 uses mom=5 (not content-matched to hold).
+        # W85 promote: hold_10_mom3 defaults to mom=3 when variant says so.
+        if n_mom is not None:
+            n_mom_i = int(n_mom)
+        elif variant_s in {"hold_10_mom3", "cross_section_hold_10_mom3"}:
+            n_mom_i = 3
+        elif h == 10:
+            n_mom_i = 5
+        else:
+            n_mom_i = h
         long_frac = float(payload.get("long_frac", DEFAULT_CS_LONG_FRAC))
         short_frac = float(payload.get("short_frac", DEFAULT_CS_SHORT_FRAC))
         allow_short = bool(payload.get("allow_short", True))

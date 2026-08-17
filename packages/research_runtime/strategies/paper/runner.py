@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import features
-from core import BacktestResult, run_backtest, standard_cost
+from core import BacktestResult, run_backtest, short_financing, standard_cost
 from paper_runtime import (
     DATA_SNAPSHOT_FORMAT,
     data_snapshot_id,
@@ -81,6 +81,8 @@ def _reproducibility(
         "execution_mode": core_md["execution_mode"],
         "as_of_rule": core_md["as_of_rule"],
         "cost_model": dict(core_md["cost_model"]),
+        "short_financing": core_md.get("short_financing"),
+        "short_financing_applied": core_md.get("short_financing_applied"),
         "universe": list(config.universe) if config.universe is not None else None,
         "universe_rule": core_md["universe_rule"],
         "lookback_days": core_md["lookback_days"],
@@ -120,6 +122,7 @@ def _experiment_id(reproduction: dict[str, Any]) -> str:
             "execution_mode": reproduction["execution_mode"],
             "as_of_rule": reproduction["as_of_rule"],
             "cost_model": reproduction["cost_model"],
+            "short_financing": reproduction.get("short_financing"),
             "universe": reproduction["universe"],
             "universe_rule": reproduction["universe_rule"],
             "lookback_days": reproduction["lookback_days"],
@@ -153,6 +156,22 @@ def run_paper(
     feature_hashes = feature_definition_hashes(feature_versions)
     strategy_hash = strategy_definition_hash(strategy)
     commit = git_commit()
+    sf_model = None
+    if bool(getattr(config, "short_financing_enabled", False)):
+        sf_model = short_financing(
+            sensitivity=str(
+                getattr(config, "short_financing_sensitivity", "mid") or "mid"
+            ),
+            spread_bp=getattr(config, "short_financing_spread_bp", None),
+            repo_rates_by_date=getattr(
+                config, "short_financing_repo_rates", None
+            ),
+            fallback_repo_annual_bp=float(
+                getattr(config, "short_financing_fallback_repo_annual_bp", 0.0)
+                or 0.0
+            ),
+            enabled=True,
+        )
     backtest = run_backtest(
         strategy,
         config.start,
@@ -160,6 +179,7 @@ def run_paper(
         db_path=config.db_path,
         execution_mode=config.execution_mode,
         cost_model=standard_cost(config.cost_bps),
+        short_financing=sf_model,
         universe=config.universe,
         starting_capital=config.starting_capital,
         lookback_days=config.lookback_days,

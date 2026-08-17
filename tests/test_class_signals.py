@@ -581,6 +581,9 @@ def test_w83_wave_tags_and_default_path_params():
     # W82 pin mom lookback for sticky hold=10 (content-matched mom=10 fails)
     assert sig.parameters["cross_section_hold10_momentum_n"].default == 5
     assert sig.parameters["fund_hold10_momentum_n"].default == 10
+    # W85 promote_default: sticky hold=10 mom=3 parallel to mom=5 pin
+    assert sig.parameters["include_cross_section_hold_10_mom3"].default is True
+    assert sig.parameters["cross_section_hold10_mom3_momentum_n"].default == 3
     # Freezes: no Mass/READY auto
     doc = class_signals_document()
     assert doc["mass_research"] == "NO-GO"

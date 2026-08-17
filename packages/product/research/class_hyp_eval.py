@@ -100,6 +100,7 @@ from research.stats_metrics import (
 from research.cost_models import (
     DEFAULT_ONE_WAY_COST,
     REPO_DATASET_ID,
+    SHORT_BORROW_SPREAD_SENSITIVITY,
     annotate_period_rows_with_extended_costs,
     apply_liquidity_to_one_way_cost,
     build_leverage_short_cost_assumption,
@@ -110,6 +111,7 @@ from research.cost_models import (
     load_repo_rate_series_from_rows,
     lookup_repo_rate,
     mean_repo_rate_pct,
+    remeasure_period_rows_with_short_cost,
 )
 from research.holding_metrics import (
     cost_amortization_report,
@@ -1529,14 +1531,36 @@ def evaluate_flow_demand_on_bars(
     hold_days: int = DEFAULT_FLOW_HOLD_DAYS,
     one_way_cost: float = DEFAULT_ONE_WAY_COST,
     require_short_confirm: bool = False,
+    short_confirm_mode: str | None = None,
 ) -> dict[str, Any]:
     """Evaluate flow_demand: multi-day sticky hold of margin change sign.
 
     Distinct from rejected S4 (daily sign flip). Rebalance on margin
     observation updates; hold sticky for ``hold_days`` sessions.
+
+    ``short_confirm_mode`` (W85):
+    * ``off`` — margin only (default when require_short_confirm=False)
+    * ``hard`` — same-sign short required; missing short → no entry
+    * ``soft`` — same-sign when short present; margin-only on short gap
+      (cheap near-miss improve for occurrence without look-ahead)
     """
     h = int(hold_days)
     am_cost = amortized_one_way_cost(one_way_cost, h)
+    # Resolve confirm mode (backward-compat with require_short_confirm bool).
+    mode_raw = short_confirm_mode
+    if mode_raw is None:
+        mode_s = "hard" if require_short_confirm else "off"
+    else:
+        mode_s = str(mode_raw).strip().lower()
+        if mode_s in {"true", "1", "yes", "on", "require"}:
+            mode_s = "hard"
+        elif mode_s in {"false", "0", "no", "none", "off"}:
+            mode_s = "off"
+        elif mode_s not in {"off", "hard", "soft"}:
+            raise ValueError(
+                f"short_confirm_mode must be off|hard|soft, got {mode_raw!r}"
+            )
+    require_hard = mode_s == "hard"
     # short ratio change map by date
     short_chg: dict[str, float | None] = {}
     if short_series:
@@ -1594,7 +1618,8 @@ def evaluate_flow_demand_on_bars(
                     short_ratio_change=last_short,
                     is_trading_day=1.0,
                     hold_days=h,
-                    require_short_confirm=require_short_confirm,
+                    require_short_confirm=require_hard,
+                    short_confirm_mode=mode_s,
                     code=code,
                     date=d,
                 )
@@ -1638,7 +1663,8 @@ def evaluate_flow_demand_on_bars(
         "signal_id": SIGNAL_ID_FLOW_DEMAND,
         "hypothesis_class": CLASS_FLOW_DEMAND,
         "hold_days": h,
-        "require_short_confirm": bool(require_short_confirm),
+        "require_short_confirm": bool(require_hard),
+        "short_confirm_mode": mode_s,
         "gross_signed_mean_active": gross,
         "net_one_way_mean_active": net,
         "amortized_one_way_cost": am_cost,
@@ -1658,7 +1684,7 @@ def evaluate_flow_demand_on_bars(
         **_freeze(),
         "note": (
             f"Flow demand multi-day hold={h} from margin change "
-            f"(short_confirm={require_short_confirm}). Not S4 daily. "
+            f"(short_confirm_mode={mode_s}). Not S4 daily. "
             "Not READY / not Mass."
         ),
     }
@@ -1807,6 +1833,8 @@ def run_class_hyp_multi_year_eval(
     sqlite_path: str | Path = DEFAULT_SQLITE,
     include_cross_section: bool = True,
     include_cross_section_hold_10: bool = True,
+    # W85: promote explore xs hold=10 mom=3 after multi-window paper align.
+    include_cross_section_hold_10_mom3: bool = True,
     include_event_post: bool = True,
     include_flow_demand: bool = True,
     include_fundamentals_price: bool = True,
@@ -1817,11 +1845,18 @@ def run_class_hyp_multi_year_eval(
     # Sticky hold=10 uses short mom lookback (W82 pin). Content-matched
     # mom=10 collapses residual (W83 explore) — do not "align" blindly.
     cross_section_hold10_momentum_n: int = 5,
+    # W85 promoted: sticky hold=10 with mom=3 (research standout + multi-window paper).
+    cross_section_hold10_mom3_momentum_n: int = 3,
     cross_section_long_frac: float = 0.3,
     cross_section_short_frac: float = 0.3,
     event_hold_days: int = DEFAULT_EVENT_POST_HOLD_DAYS,
     flow_hold_days: int = DEFAULT_FLOW_HOLD_DAYS,
     flow_require_short_confirm: bool = False,
+    flow_short_confirm_mode: str | None = None,  # off|hard|soft (W85)
+    # W85: apply short = f(repo[t]+spread) remeasure on L-S classes (default on).
+    apply_short_cost_remeasure: bool = True,
+    short_borrow_sensitivity: str = "mid",
+    short_fraction_ls: float = 0.5,
     fund_hold_days: int = DEFAULT_FUND_HOLD_DAYS,
     fund_momentum_n: int = DEFAULT_FUND_MOMENTUM_N,
     # W83 candidate: hold=10 mom=10 value×momentum agree (separate block).
@@ -1968,6 +2003,7 @@ def run_class_hyp_multi_year_eval(
     results_macro: list[dict[str, Any]] = []
     results_xs: list[dict[str, Any]] = []
     results_xs10: list[dict[str, Any]] = []
+    results_xs10_mom3: list[dict[str, Any]] = []
     results_event: list[dict[str, Any]] = []
     results_flow: list[dict[str, Any]] = []
     results_fund: list[dict[str, Any]] = []
@@ -1978,6 +2014,7 @@ def run_class_hyp_multi_year_eval(
         else int(cross_section_hold_days)
     )
     xs10_mom_n = int(cross_section_hold10_momentum_n)
+    xs10_mom3_n = int(cross_section_hold10_mom3_momentum_n)
     xs_long_frac = float(cross_section_long_frac)
     xs_short_frac = float(cross_section_short_frac)
     fund_mom_n = int(fund_momentum_n)
@@ -2007,6 +2044,8 @@ def run_class_hyp_multi_year_eval(
                 results_xs.append(dict(skip))
             if include_cross_section_hold_10:
                 results_xs10.append(dict(skip))
+            if include_cross_section_hold_10_mom3:
+                results_xs10_mom3.append(dict(skip))
             if include_event_post:
                 results_event.append(dict(skip))
             if include_flow_demand:
@@ -2217,6 +2256,38 @@ def run_class_hyp_multi_year_eval(
                     )
                 )
 
+            if include_cross_section_hold_10_mom3 and not (
+                include_cross_section_hold_10 and int(xs10_mom_n) == int(xs10_mom3_n)
+            ):
+                # W85 promote_default: sticky hold=10 mom=3 (research standout
+                # t≈3.0 + multi-window paper majority positive). Parallel to
+                # mom=5 pin — does not replace W82 pin block.
+                xs10m3 = evaluate_cross_section_on_bars(
+                    bars,
+                    momentum_n=xs10_mom3_n,
+                    one_way_cost=one_way_eff,
+                    hold_days=10,
+                    long_frac=xs_long_frac,
+                    short_frac=xs_short_frac,
+                )
+                results_xs10_mom3.append(
+                    _period_row(
+                        xs10m3,
+                        signal_id=SIGNAL_ID_CROSS_SECTION,
+                        extra={
+                            "hold_days": 10,
+                            "momentum_n": xs10_mom3_n,
+                            "variant": "hold_10_mom3",
+                            "long_frac": xs_long_frac,
+                            "short_frac": xs_short_frac,
+                            "amortized_one_way_cost": xs10m3.get(
+                                "amortized_one_way_cost"
+                            ),
+                            "promoted_wave": "W85 / w0816t",
+                        },
+                    )
+                )
+
             if include_event_post:
                 ep = evaluate_event_post_on_bars(
                     bars,
@@ -2274,6 +2345,7 @@ def run_class_hyp_multi_year_eval(
                     hold_days=int(flow_hold_days),
                     one_way_cost=one_way_eff,
                     require_short_confirm=flow_short_confirm,
+                    short_confirm_mode=flow_short_confirm_mode,
                 )
                 results_flow.append(
                     _period_row(
@@ -2281,7 +2353,12 @@ def run_class_hyp_multi_year_eval(
                         signal_id=SIGNAL_ID_FLOW_DEMAND,
                         extra={
                             "hold_days": int(flow_hold_days),
-                            "require_short_confirm": flow_short_confirm,
+                            "require_short_confirm": bool(
+                                flow.get("require_short_confirm")
+                            ),
+                            "short_confirm_mode": flow.get(
+                                "short_confirm_mode"
+                            ),
                             "margin_source": margin_src,
                             "n_margin_obs": flow.get("n_margin_obs"),
                             "n_codes_with_margin": flow.get(
@@ -2370,6 +2447,8 @@ def run_class_hyp_multi_year_eval(
                 results_xs.append(dict(err))
             if include_cross_section_hold_10:
                 results_xs10.append(dict(err))
+            if include_cross_section_hold_10_mom3:
+                results_xs10_mom3.append(dict(err))
             if include_event_post:
                 results_event.append(dict(err))
             if include_flow_demand:
@@ -2380,6 +2459,84 @@ def run_class_hyp_multi_year_eval(
                 results_fund10.append(dict(err))
             if include_multi_day_hold_10:
                 results_md10.append(dict(err))
+
+    # ------------------------------------------------------------------
+    # W85: short cost remeasure on L-S classes
+    # short = f(repo[t] + fixed spread bp); low/mid/high sensitivity
+    # Primary (default mid) overwrites net_one_way_mean_active for gates/stats.
+    # ------------------------------------------------------------------
+    short_cost_remeasure_blocks: dict[str, Any] = {}
+    short_frac_ls = float(short_fraction_ls)
+    short_sens = str(short_borrow_sensitivity or "mid").strip().lower()
+    if short_sens not in SHORT_BORROW_SPREAD_SENSITIVITY:
+        short_sens = "mid"
+
+    def _apply_short_remeasure(
+        rows: list[dict[str, Any]],
+        *,
+        hold_days: int,
+        block_key: str,
+    ) -> list[dict[str, Any]]:
+        if not apply_short_cost_remeasure or not rows:
+            return rows
+        # Per-row liquidity short_spread_mult when present (else 1.0)
+        # Remeasure uses date-matched repo; no invent on gaps.
+        pack = remeasure_period_rows_with_short_cost(
+            rows,
+            repo_rate_series=repo_series,
+            short_fraction=short_frac_ls,
+            hold_days=int(hold_days),
+            default_sensitivity=short_sens,
+            sensitivities=("low", "mid", "high"),
+            apply_primary_net=True,
+            fallback_mean_repo_when_date_gap=False,
+        )
+        short_cost_remeasure_blocks[block_key] = {
+            "summary_by_sensitivity": pack.get("summary_by_sensitivity"),
+            "n_short_cost_obs": pack.get("n_short_cost_obs"),
+            "n_repo_gaps": pack.get("n_repo_gaps"),
+            "default_sensitivity": pack.get("default_sensitivity"),
+            "short_fraction": pack.get("short_fraction"),
+            "formula": pack.get("formula"),
+            "assumptions": pack.get("assumptions"),
+            "mean_repo": pack.get("mean_repo"),
+        }
+        return list(pack.get("period_rows") or rows)
+
+    if apply_short_cost_remeasure:
+        results_macro = _apply_short_remeasure(
+            results_macro, hold_days=h, block_key="macro_conditioned"
+        )
+        if include_cross_section:
+            results_xs = _apply_short_remeasure(
+                results_xs,
+                hold_days=int(cross_section_hold_days),
+                block_key="cross_section_relative",
+            )
+        if include_cross_section_hold_10 and results_xs10:
+            results_xs10 = _apply_short_remeasure(
+                results_xs10,
+                hold_days=10,
+                block_key="cross_section_hold_10",
+            )
+        if include_cross_section_hold_10_mom3 and results_xs10_mom3:
+            results_xs10_mom3 = _apply_short_remeasure(
+                results_xs10_mom3,
+                hold_days=10,
+                block_key="cross_section_hold_10_mom3",
+            )
+        if include_fundamentals_price:
+            results_fund = _apply_short_remeasure(
+                results_fund,
+                hold_days=int(fund_hold_days),
+                block_key="fundamentals_price",
+            )
+        if include_fundamentals_hold_10 and results_fund10:
+            results_fund10 = _apply_short_remeasure(
+                results_fund10,
+                hold_days=10,
+                block_key="fundamentals_hold_10",
+            )
 
     def _gate(rows: list[dict[str, Any]], signal_id: str) -> dict[str, Any] | None:
         if not apply_robustness_gate:
@@ -2436,6 +2593,11 @@ def run_class_hyp_multi_year_eval(
         if include_cross_section_hold_10 and results_xs10
         else None
     )
+    gate_xs10_mom3 = (
+        _gate(results_xs10_mom3, SIGNAL_ID_CROSS_SECTION + "_hold10_mom3")
+        if include_cross_section_hold_10_mom3 and results_xs10_mom3
+        else None
+    )
     gate_event = (
         _gate(results_event, SIGNAL_ID_EVENT_POST)
         if include_event_post
@@ -2468,19 +2630,37 @@ def run_class_hyp_multi_year_eval(
     cost_macro = build_leverage_short_cost_assumption(
         position_style="long_short",
         gross_leverage=1.0,
-        short_fraction=0.5,
+        short_fraction=short_frac_ls,
         one_way_cost=one_way_cost,
         uses_short=True,
         uses_leverage=False,
+        repo_rate_series=repo_series,
+        prefer_repo_linked=True,
+        short_borrow_sensitivity=short_sens,
     )
     cost_ls = build_leverage_short_cost_assumption(
         position_style="long_short",
         gross_leverage=1.0,
-        short_fraction=0.5,
+        short_fraction=short_frac_ls,
         one_way_cost=one_way_cost,
         uses_short=True,
         uses_leverage=False,
+        repo_rate_series=repo_series,
+        prefer_repo_linked=True,
+        short_borrow_sensitivity=short_sens,
     )
+    cost_ls["short_cost_remeasure"] = {
+        "applied": bool(apply_short_cost_remeasure),
+        "default_sensitivity": short_sens,
+        "sensitivity_bands_bp": dict(SHORT_BORROW_SPREAD_SENSITIVITY),
+        "formula": (
+            "net = gross - amortized_one_way - "
+            "short_borrow_daily(repo[t]+spread)*hold_days"
+        ),
+        "blocks": short_cost_remeasure_blocks,
+        "proof": "docs/proof/w0816t_w85_short_cost_repo_spread_20260817.md",
+    }
+    cost_macro["short_cost_remeasure"] = dict(cost_ls["short_cost_remeasure"])
     if repo_series is not None:
         mean_repo = mean_repo_rate_pct(repo_series)
         cost_macro["repo_linked"] = {
@@ -2490,8 +2670,8 @@ def run_class_hyp_multi_year_eval(
             "mean_annual_bp": mean_repo.get("mean_annual_bp"),
             "n_obs": mean_repo.get("n_obs"),
             "note": (
-                "Task A cost_models v2 prefers date-matched repo rates; "
-                "period-level mean disclosed for short/financing context."
+                "W85: date-matched repo[t]+spread applied to L-S period nets; "
+                "mean disclosed for summary. Gaps never invent-filled."
             ),
         }
         cost_ls["repo_linked"] = dict(cost_macro["repo_linked"])
@@ -2602,6 +2782,11 @@ def run_class_hyp_multi_year_eval(
     risk_xs10 = (
         _risk(results_xs10, SIGNAL_ID_CROSS_SECTION)
         if include_cross_section_hold_10 and results_xs10
+        else None
+    )
+    risk_xs10_mom3 = (
+        _risk(results_xs10_mom3, SIGNAL_ID_CROSS_SECTION)
+        if include_cross_section_hold_10_mom3 and results_xs10_mom3
         else None
     )
     risk_event = _risk(results_event, SIGNAL_ID_EVENT_POST) if include_event_post else None
@@ -2851,6 +3036,7 @@ def run_class_hyp_multi_year_eval(
     n_ok_macro = _n_ok(results_macro)
     n_ok_xs = _n_ok(results_xs)
     n_ok_xs10 = _n_ok(results_xs10)
+    n_ok_xs10_mom3 = _n_ok(results_xs10_mom3)
     n_ok_event = _n_ok(results_event)
     n_ok_flow = _n_ok(results_flow)
     n_ok_fund = _n_ok(results_fund)
@@ -2922,6 +3108,11 @@ def run_class_hyp_multi_year_eval(
         "one_way_cost": float(one_way_cost),
         "one_way_cost_bp": float(one_way_cost) * 10_000.0,
         "prefer_liquidity_linked": bool(prefer_liquidity_linked),
+        "apply_short_cost_remeasure": bool(apply_short_cost_remeasure),
+        "short_borrow_sensitivity": short_sens,
+        "short_fraction_ls": short_frac_ls,
+        "short_cost_sensitivity_bands_bp": dict(SHORT_BORROW_SPREAD_SENSITIVITY),
+        "short_cost_remeasure": short_cost_remeasure_blocks,
         "min_economic_net": float(min_economic_net),
         "min_activation_rate_multiday": float(min_activation_rate_multiday),
         "min_events_per_code_year": float(min_events_per_code_year),
@@ -2974,12 +3165,13 @@ def run_class_hyp_multi_year_eval(
         "label": "研究用・複数年クラス仮説評価・W81統計バー再判定・未宣言",
         **_freeze(),
         "note": (
-            "W83 class hyp multi-year offline eval with occurrence rates + "
-            "liquidity-linked costs + extended full-year windows + "
+            "W85 class hyp multi-year offline eval with occurrence rates + "
+            "liquidity-linked costs + short=repo[t]+spread (L/M/H) remeasure "
+            "on CS L-S / fund L-S / macro + extended full-year windows + "
             "statistical bar (|t|≥1.5, Sharpe≥0.5, period win-rate≥0.6, "
             "≥4 positive periods). No mean-bp-only promotion. "
-            "Default path includes sticky cross_section hold=10 (mom=5 pin) "
-            "and fundamentals hold=10 mom=10. "
+            "Default path includes sticky cross_section hold=10 (mom=5 pin), "
+            "W85-promoted hold=10 mom=3, and fundamentals hold=10 mom=10. "
             "event_post uses W82 PIT DiscDate+DiscTime entry only. "
             "research_candidate=True only if checklist v2 + gate + risk + "
             "economic net meaningful + occurrence rate sufficient + "
@@ -3043,6 +3235,32 @@ def run_class_hyp_multi_year_eval(
                     f"W83 default-path sticky hold=10 with momentum_n="
                     f"{xs10_mom_n} (W82 pin; mom=10 collapses). "
                     "Not Mass/READY."
+                ),
+            },
+        )
+    if include_cross_section_hold_10_mom3 and results_xs10_mom3:
+        out["cross_section_hold_10_mom3"] = _class_block(
+            signal_id=SIGNAL_ID_CROSS_SECTION,
+            hyp_class="cross_section_relative",
+            rows=results_xs10_mom3,
+            gate=gate_xs10_mom3,
+            risk=risk_xs10_mom3,
+            cost=cost_ls,
+            hyp_kind="generic",
+            hold_days_for_occ=10,
+            extra={
+                "hold_days": 10,
+                "momentum_n": xs10_mom3_n,
+                "variant": "hold_10_mom3",
+                "long_frac": xs_long_frac,
+                "short_frac": xs_short_frac,
+                "n_ok": n_ok_xs10_mom3,
+                "promoted_wave": "W85 / w0816t",
+                "note": (
+                    f"W85 promote_default: sticky hold=10 momentum_n="
+                    f"{xs10_mom3_n}. Research hard RC (t≈3.0) + multi-window "
+                    "paper majority positive. Parallel to mom=5 pin — does not "
+                    "replace W82 pin. Not Mass/READY/live."
                 ),
             },
         )
@@ -3129,6 +3347,7 @@ def run_class_hyp_multi_year_eval(
         "macro_conditioned",
         "cross_section_relative",
         "cross_section_hold_10",
+        "cross_section_hold_10_mom3",
         "flow_demand",
         "fundamentals_price",
         "fundamentals_hold_10",

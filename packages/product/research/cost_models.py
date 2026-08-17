@@ -6,6 +6,8 @@ Wave
 * W78 / w0816m — **prefer date-matched ``jsda_tokyo_repo_rates``** over fixed bp
 * W79 / w0816n — **liquidity-linked** modulation of tx cost and/or short spread
   (repo-linked v2 kept; short low/mid/high sensitivity retained)
+* W85 / w0816t — **wire short cost = f(repo[t]) + fixed spread** into research
+  remeasure (CS L-S) and paper short-leg financing; low/mid/high sensitivity
 
 Purpose
 -------
@@ -30,6 +32,8 @@ Models
    documented low/mid/high spread sensitivity; fallback: fixed annual bp
    placeholder or pure ``borrow_proxy``. Spread may be further scaled by
    liquidity bucket (combined with sensitivity).
+   **Hold cost (W85):** ``short_borrow_daily * hold_days`` on multi-day L-S
+   nets (approved approximation; continuous borrow over sticky hold).
 3. **Leverage / financing** — preferred: ``f(repo_rate[t], leverage excess)``;
    fallback: fixed annual bp placeholder when no repo series is supplied.
 4. **Long-only unlevered** — tx cost only; leverage/short **N/A** with explicit
@@ -56,17 +60,21 @@ from typing import Any, Mapping, Sequence
 
 COST_MODELS_VERSION: str = "research-cost-models/v2"
 COST_MODELS_VERSION_V1: str = "research-cost-models/v1"
-COST_MODELS_WAVE: str = "W79 / w0816n"
+COST_MODELS_WAVE: str = "W85 / w0816t"
 COST_MODELS_LABEL: str = (
     "研究用コストモデル v2・未宣言 "
-    "(取引 + 空売り借入 + レバ調達・repo連動優先 + 流動性連動 / "
+    "(取引 + 空売り借入 + レバ調達・repo連動優先 + 流動性連動 + "
+    "short=repo+spread 感度 L/M/H を remeasure/paper に配線 / "
     "READY未接続 / Mass NO-GO)"
 )
 COST_MODELS_PROOF: str = (
-    "docs/proof/w0816n_w79_liquidity_linked_cost_20260816.md"
+    "docs/proof/w0816t_w85_short_cost_repo_spread_20260817.md"
 )
 COST_MODELS_PROOF_REPO_LINKED: str = (
     "docs/proof/w0816m_w78_repo_linked_cost_model_20260816.md"
+)
+COST_MODELS_PROOF_LIQUIDITY_LINKED: str = (
+    "docs/proof/w0816n_w79_liquidity_linked_cost_20260816.md"
 )
 
 MASS_RESEARCH: str = "NO-GO"
@@ -1405,6 +1413,425 @@ def short_borrow_daily_cost_from_proxy(
     )
 
 
+def resolve_short_borrow_spread_bp(
+    *,
+    sensitivity: str | None = None,
+    spread_bp: float | None = None,
+) -> tuple[float, str | None]:
+    """Resolve short-borrow spread bp and band label (low/mid/high).
+
+    ``sensitivity`` overrides ``spread_bp`` via documented bands
+    (25 / 50 / 150). When only ``spread_bp`` is given, label is inferred on
+    exact band match (else ``None``). Default = mid 50bp.
+    """
+    if sensitivity is not None:
+        key = str(sensitivity).strip().lower()
+        if key not in SHORT_BORROW_SPREAD_SENSITIVITY:
+            raise ValueError(
+                f"sensitivity must be one of "
+                f"{list(SHORT_BORROW_SPREAD_SENSITIVITY)}, got {sensitivity!r}"
+            )
+        return float(SHORT_BORROW_SPREAD_SENSITIVITY[key]), key
+    bp = (
+        float(spread_bp)
+        if spread_bp is not None
+        else float(DEFAULT_SHORT_BORROW_SPREAD_BP)
+    )
+    label: str | None = None
+    for k, v in SHORT_BORROW_SPREAD_SENSITIVITY.items():
+        if abs(bp - float(v)) < 1e-12:
+            label = k
+            break
+    return bp, label
+
+
+def short_borrow_hold_cost_from_repo(
+    repo_rate_pct: float,
+    *,
+    hold_days: int = 1,
+    short_fraction: float = 0.5,
+    spread_bp: float = DEFAULT_SHORT_BORROW_SPREAD_BP,
+    sensitivity: str | None = None,
+    trading_days_per_year: int = DEFAULT_TRADING_DAYS_PER_YEAR,
+) -> float:
+    """Hold-period short cost = daily(repo[t] + spread) * hold_days.
+
+    Approved multi-day L-S approximation (W85): continuous borrow over the
+    sticky hold horizon. ``short_fraction`` scales book short exposure
+    (0.5 for equal L-S books).
+    """
+    h = max(int(hold_days), 1)
+    daily = short_borrow_daily_cost_from_repo(
+        float(repo_rate_pct),
+        short_fraction=short_fraction,
+        spread_bp=spread_bp,
+        sensitivity=sensitivity,
+        trading_days_per_year=trading_days_per_year,
+    )
+    return float(daily) * float(h)
+
+
+def short_cost_sensitivity_bands(
+    repo_rate_pct: float | None,
+    *,
+    hold_days: int = 1,
+    short_fraction: float = 0.5,
+    trading_days_per_year: int = DEFAULT_TRADING_DAYS_PER_YEAR,
+    liquidity_short_spread_mult: float = 1.0,
+) -> dict[str, Any]:
+    """Low/mid/high short-cost table for a single repo observation (or gap).
+
+    On repo gap (``repo_rate_pct is None``) costs are ``None`` — never invent.
+    """
+    h = max(int(hold_days), 1)
+    mult = float(liquidity_short_spread_mult)
+    bands: dict[str, Any] = {}
+    for label, base_bp in SHORT_BORROW_SPREAD_SENSITIVITY.items():
+        spread_eff = float(base_bp) * mult
+        if repo_rate_pct is None:
+            bands[label] = {
+                "sensitivity": label,
+                "spread_base_bp": float(base_bp),
+                "spread_eff_bp": spread_eff,
+                "is_gap": True,
+                "repo_rate_pct": None,
+                "short_annual_bp": None,
+                "short_borrow_daily": None,
+                "short_borrow_hold": None,
+                "short_borrow_daily_bp": None,
+                "short_borrow_hold_bp": None,
+            }
+            continue
+        repo_bp = repo_rate_pct_to_annual_bp(float(repo_rate_pct))
+        annual_bp = repo_bp + spread_eff
+        daily = short_borrow_daily_cost(
+            short_borrow_annual_bp=annual_bp,
+            trading_days_per_year=trading_days_per_year,
+            short_fraction=short_fraction,
+        )
+        hold = float(daily) * float(h)
+        bands[label] = {
+            "sensitivity": label,
+            "spread_base_bp": float(base_bp),
+            "spread_eff_bp": spread_eff,
+            "is_gap": False,
+            "repo_rate_pct": float(repo_rate_pct),
+            "repo_annual_bp": repo_bp,
+            "short_annual_bp": annual_bp,
+            "short_borrow_daily": daily,
+            "short_borrow_hold": hold,
+            "short_borrow_daily_bp": daily * 10_000.0,
+            "short_borrow_hold_bp": hold * 10_000.0,
+        }
+    return {
+        "kind": "short_cost_sensitivity_bands",
+        "version": COST_MODELS_VERSION,
+        "wave": COST_MODELS_WAVE,
+        "formula": (
+            "short_annual_bp = repo_pct*100 + spread_base*liq_mult; "
+            "daily = (annual_bp/10000)/trading_days * short_fraction; "
+            "hold = daily * hold_days"
+        ),
+        "hold_days": h,
+        "short_fraction": float(short_fraction),
+        "trading_days_per_year": int(trading_days_per_year),
+        "liquidity_short_spread_mult": mult,
+        "sensitivity_bands_bp": dict(SHORT_BORROW_SPREAD_SENSITIVITY),
+        "bands": bands,
+        "gap_policy": "disclose_only_no_ffill_no_invent",
+        "default_sensitivity": "mid",
+        **_freeze_fields(),
+    }
+
+
+def research_net_with_short_hold_cost(
+    gross_signed_mean: float | None,
+    *,
+    amortized_one_way_cost: float = 0.0,
+    short_borrow_hold: float | None = 0.0,
+) -> float | None:
+    """Multi-day research net = gross − am_tx − short_hold.
+
+    ``short_borrow_hold`` may be ``None`` on repo gap (no invent → net None).
+    """
+    if gross_signed_mean is None:
+        return None
+    if short_borrow_hold is None:
+        return None
+    try:
+        g = float(gross_signed_mean)
+    except (TypeError, ValueError):
+        return None
+    return g - float(amortized_one_way_cost) - float(short_borrow_hold)
+
+
+def remeasure_period_rows_with_short_cost(
+    period_rows: Sequence[Mapping[str, Any]],
+    *,
+    repo_rate_series: Mapping[str, Any] | None = None,
+    short_fraction: float = 0.5,
+    hold_days: int | None = None,
+    hold_days_field: str = "hold_days",
+    date_field: str = "period_end",
+    default_sensitivity: str = "mid",
+    sensitivities: Sequence[str] = ("low", "mid", "high"),
+    trading_days_per_year: int = DEFAULT_TRADING_DAYS_PER_YEAR,
+    liquidity_short_spread_mult: float = 1.0,
+    apply_primary_net: bool = True,
+    fallback_mean_repo_when_date_gap: bool = False,
+) -> dict[str, Any]:
+    """Remeasure L-S period rows with short = f(repo[t] + spread) · hold.
+
+    Primary net (``default_sensitivity``, mid) is written to
+    ``net_one_way_mean_active`` when ``apply_primary_net`` (CS L-S remeasure
+    path). Full low/mid/high nets kept under ``short_cost_sensitivity``.
+
+    **Gap policy:** date-matched repo lookup; missing date → short cost None
+    for that row (never ffill). Optional ``fallback_mean_repo_when_date_gap``
+    is **off by default** (no invent). When True, uses observed-only mean
+    with explicit ``rate_source=mean_repo_fallback`` disclosure — still not
+    a per-date invent fill.
+    """
+    sens_list = [str(s).strip().lower() for s in sensitivities]
+    for s in sens_list:
+        if s not in SHORT_BORROW_SPREAD_SENSITIVITY:
+            raise ValueError(
+                f"unknown sensitivity {s!r}; "
+                f"expected one of {list(SHORT_BORROW_SPREAD_SENSITIVITY)}"
+            )
+    primary = str(default_sensitivity).strip().lower()
+    if primary not in SHORT_BORROW_SPREAD_SENSITIVITY:
+        raise ValueError(f"default_sensitivity must be a known band, got {primary!r}")
+
+    mean_repo: dict[str, Any] | None = None
+    mean_pct: float | None = None
+    if repo_rate_series is not None:
+        mean_repo = mean_repo_rate_pct(repo_rate_series)
+        mean_pct = mean_repo.get("mean_rate_pct")
+        if mean_pct is not None:
+            mean_pct = float(mean_pct)
+
+    out_rows: list[dict[str, Any]] = []
+    n_gaps = 0
+    n_obs = 0
+    primary_nets: list[float] = []
+
+    for raw in period_rows:
+        row = dict(raw)
+        status = str(row.get("status") or "ok")
+        gross = row.get("gross_signed_mean_active")
+        if gross is None:
+            gross = row.get("gross_signed_mean")
+        try:
+            g = float(gross) if gross is not None else None
+        except (TypeError, ValueError):
+            g = None
+
+        am_tx = row.get("amortized_one_way_cost")
+        if am_tx is None:
+            am_tx = row.get("one_way_cost_eff")
+        if am_tx is None:
+            am_tx = row.get("one_way_cost", 0.0)
+        try:
+            am = float(am_tx) if am_tx is not None else 0.0
+        except (TypeError, ValueError):
+            am = 0.0
+
+        h = hold_days
+        if h is None:
+            try:
+                h = int(row.get(hold_days_field) or 1)
+            except (TypeError, ValueError):
+                h = 1
+        h = max(int(h), 1)
+
+        d = _date_key(
+            row.get(date_field) or row.get("date") or row.get("as_of_date")
+        )
+        repo_pct: float | None = None
+        repo_gap = False
+        rate_source = RATE_SOURCE_FIXED_BP
+        if status != "ok" or g is None:
+            row["short_cost_sensitivity"] = {}
+            row["short_borrow_hold"] = None
+            row["short_borrow_sensitivity"] = primary
+            row["repo_rate_gap"] = False
+            out_rows.append(row)
+            continue
+
+        if repo_rate_series is not None and d is not None:
+            hit = lookup_repo_rate(repo_rate_series, d)
+            if hit["is_gap"]:
+                repo_gap = True
+                if fallback_mean_repo_when_date_gap and mean_pct is not None:
+                    repo_pct = mean_pct
+                    rate_source = "mean_repo_fallback"
+                    repo_gap = False  # cost computable via disclosed mean
+                else:
+                    rate_source = RATE_SOURCE_REPO_PLUS_SPREAD
+            else:
+                repo_pct = float(hit["rate_pct"])
+                rate_source = RATE_SOURCE_REPO_PLUS_SPREAD
+        elif mean_pct is not None:
+            # No per-date key — use observed mean (disclosed)
+            repo_pct = mean_pct
+            rate_source = "mean_repo_series"
+        else:
+            # No series at all → fixed-bp placeholder path (disclosed)
+            repo_pct = 0.0
+            rate_source = RATE_SOURCE_FIXED_BP
+
+        if repo_gap and repo_pct is None:
+            n_gaps += 1
+            sens_map: dict[str, Any] = {}
+            for label in sens_list:
+                sens_map[label] = {
+                    "sensitivity": label,
+                    "is_gap": True,
+                    "short_borrow_hold": None,
+                    "net_with_short": None,
+                }
+            row["short_cost_sensitivity"] = sens_map
+            row["short_borrow_hold"] = None
+            row["short_borrow_sensitivity"] = primary
+            row["repo_rate_pct"] = None
+            row["repo_rate_gap"] = True
+            row["repo_rate_date"] = d
+            row["short_rate_source"] = rate_source
+            row["net_tx_only_mean_active"] = g - am
+            if apply_primary_net:
+                # Gap: do not invent short cost; leave tx-only net and flag.
+                row["net_one_way_mean_active"] = g - am
+                row["short_cost_applied"] = False
+            out_rows.append(row)
+            continue
+
+        n_obs += 1
+        bands = short_cost_sensitivity_bands(
+            repo_pct,
+            hold_days=h,
+            short_fraction=short_fraction,
+            trading_days_per_year=trading_days_per_year,
+            liquidity_short_spread_mult=liquidity_short_spread_mult,
+        )["bands"]
+        sens_map = {}
+        for label in sens_list:
+            b = bands[label]
+            hold_cost = b.get("short_borrow_hold")
+            net_s = research_net_with_short_hold_cost(
+                g, amortized_one_way_cost=am, short_borrow_hold=hold_cost
+            )
+            sens_map[label] = {
+                "sensitivity": label,
+                "spread_base_bp": b.get("spread_base_bp"),
+                "spread_eff_bp": b.get("spread_eff_bp"),
+                "short_annual_bp": b.get("short_annual_bp"),
+                "short_borrow_daily": b.get("short_borrow_daily"),
+                "short_borrow_hold": hold_cost,
+                "short_borrow_hold_bp": (
+                    (hold_cost * 10_000.0) if hold_cost is not None else None
+                ),
+                "net_with_short": net_s,
+                "net_with_short_bp": (
+                    (net_s * 10_000.0) if net_s is not None else None
+                ),
+                "is_gap": False,
+            }
+        primary_hold = sens_map[primary]["short_borrow_hold"]
+        primary_net = sens_map[primary]["net_with_short"]
+        row["short_cost_sensitivity"] = sens_map
+        row["short_borrow_hold"] = primary_hold
+        row["short_borrow_hold_bp"] = (
+            (primary_hold * 10_000.0) if primary_hold is not None else None
+        )
+        row["short_borrow_sensitivity"] = primary
+        row["repo_rate_pct"] = repo_pct
+        row["repo_rate_gap"] = False
+        row["repo_rate_date"] = d
+        row["short_rate_source"] = rate_source
+        row["short_fraction"] = float(short_fraction)
+        row["hold_days_for_short_cost"] = h
+        row["net_tx_only_mean_active"] = g - am
+        row["short_cost_applied"] = True
+        row["short_cost_formula"] = (
+            "net = gross - amortized_one_way - "
+            "short_borrow_daily(repo[t]+spread)*hold_days"
+        )
+        if apply_primary_net and primary_net is not None:
+            row["net_one_way_mean_active"] = primary_net
+            primary_nets.append(float(primary_net))
+        elif primary_net is not None:
+            row["net_with_short_mean_active"] = primary_net
+            primary_nets.append(float(primary_net))
+        out_rows.append(row)
+
+    # Summary table low/mid/high over ok rows with short applied
+    summary_bands: dict[str, Any] = {}
+    for label in sens_list:
+        nets: list[float] = []
+        holds: list[float] = []
+        for r in out_rows:
+            if r.get("status") not in (None, "ok"):
+                continue
+            sc = (r.get("short_cost_sensitivity") or {}).get(label) or {}
+            n = sc.get("net_with_short")
+            if n is not None:
+                nets.append(float(n))
+            hc = sc.get("short_borrow_hold")
+            if hc is not None:
+                holds.append(float(hc))
+        summary_bands[label] = {
+            "sensitivity": label,
+            "spread_bp": float(SHORT_BORROW_SPREAD_SENSITIVITY[label]),
+            "n_periods": len(nets),
+            "mean_net": (sum(nets) / len(nets)) if nets else None,
+            "mean_net_bp": (
+                (sum(nets) / len(nets)) * 10_000.0 if nets else None
+            ),
+            "mean_short_hold": (sum(holds) / len(holds)) if holds else None,
+            "mean_short_hold_bp": (
+                (sum(holds) / len(holds)) * 10_000.0 if holds else None
+            ),
+        }
+
+    return {
+        "kind": "remeasure_period_rows_with_short_cost",
+        "version": COST_MODELS_VERSION,
+        "wave": COST_MODELS_WAVE,
+        "proof": COST_MODELS_PROOF,
+        "formula": (
+            "short_annual = repo_annual_bp + spread_bp[low|mid|high]; "
+            "hold_cost = daily(short_annual, short_frac) * hold_days; "
+            "net = gross - amortized_one_way - hold_cost"
+        ),
+        "default_sensitivity": primary,
+        "sensitivities": list(sens_list),
+        "sensitivity_bands_bp": dict(SHORT_BORROW_SPREAD_SENSITIVITY),
+        "short_fraction": float(short_fraction),
+        "trading_days_per_year": int(trading_days_per_year),
+        "liquidity_short_spread_mult": float(liquidity_short_spread_mult),
+        "apply_primary_net": bool(apply_primary_net),
+        "fallback_mean_repo_when_date_gap": bool(fallback_mean_repo_when_date_gap),
+        "n_rows": len(out_rows),
+        "n_short_cost_obs": n_obs,
+        "n_repo_gaps": n_gaps,
+        "mean_repo": mean_repo,
+        "summary_by_sensitivity": summary_bands,
+        "period_rows": out_rows,
+        "gap_policy": "disclose_only_no_ffill_no_invent",
+        "assumptions": {
+            "short_cost": "f(repo_rate[t]) + fixed_spread_bp",
+            "spread_sensitivity_bp": dict(SHORT_BORROW_SPREAD_SENSITIVITY),
+            "hold_scaling": "daily * hold_days (continuous borrow over sticky hold)",
+            "short_fraction_default": 0.5,
+            "repo_gaps": "no invent / no ffill; cost None or tx-only net flagged",
+            "not_broker_quote": True,
+            "research_only": True,
+        },
+        **_freeze_fields(),
+    }
+
+
 def date_matched_leverage_financing_costs(
     series: Mapping[str, Any] | None,
     dates: Sequence[Any],
@@ -1611,6 +2038,7 @@ def cost_models_document() -> dict[str, Any]:
         "label": COST_MODELS_LABEL,
         "proof": COST_MODELS_PROOF,
         "proof_repo_linked": COST_MODELS_PROOF_REPO_LINKED,
+        "proof_liquidity_linked": COST_MODELS_PROOF_LIQUIDITY_LINKED,
         "preferred_rate_source": RATE_SOURCE_REPO_SERIES,
         "transaction": {
             "one_way_cost_bp": DEFAULT_ONE_WAY_COST_BP,
@@ -1652,9 +2080,14 @@ def cost_models_document() -> dict[str, Any]:
             "note": (
                 "Prefer repo[t] + explicit borrow spread (low/mid/high). "
                 "Spread further scaled by liquidity bucket (W79). "
+                "W85: wired into CS L-S remeasure (hold = daily * hold_days) "
+                "and paper short-leg daily financing. "
                 "Fixed 50bp annual is a fallback placeholder when no repo series. "
                 "Not a broker borrow quote. Hard-to-borrow names need higher spreads."
             ),
+            "remeasure_api": "remeasure_period_rows_with_short_cost",
+            "hold_cost_api": "short_borrow_hold_cost_from_repo",
+            "sensitivity_table_api": "short_cost_sensitivity_bands",
         },
         "leverage_financing": {
             "preferred_model": RATE_SOURCE_REPO_SERIES,
@@ -2469,6 +2902,7 @@ __all__ = [
     "CONNECTED_TO_READY",
     "COST_MODELS_LABEL",
     "COST_MODELS_PROOF",
+    "COST_MODELS_PROOF_LIQUIDITY_LINKED",
     "COST_MODELS_PROOF_REPO_LINKED",
     "COST_MODELS_VERSION",
     "COST_MODELS_VERSION_V1",
@@ -2540,12 +2974,17 @@ __all__ = [
     "load_repo_rate_series_from_rows",
     "lookup_repo_rate",
     "mean_repo_rate_pct",
+    "remeasure_period_rows_with_short_cost",
     "repo_rate_pct_to_annual_bp",
     "repo_rate_pct_to_annual_fraction",
     "research_net_with_extended_costs",
+    "research_net_with_short_hold_cost",
     "resolve_liquidity_modulation",
+    "resolve_short_borrow_spread_bp",
     "short_borrow_daily_cost",
     "short_borrow_daily_cost_from_proxy",
     "short_borrow_daily_cost_from_repo",
+    "short_borrow_hold_cost_from_repo",
+    "short_cost_sensitivity_bands",
     "yen_turnover_from_bar",
 ]
