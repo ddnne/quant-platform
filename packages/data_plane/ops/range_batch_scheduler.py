@@ -72,7 +72,8 @@ TRACK_A_FOCUS_RANGES: dict[str, tuple[str, str]] = {
     "indices_bars_daily_topix": ("2008-05-01", "2099-12-31"),
     "markets_breakdown": ("2015-04-01", "2099-12-31"),
     "fins_summary": ("2008-07-01", "2099-12-31"),
-    "equities_master": ("2000-07-13", "2099-12-31"),  # not raised (misdate band)
+    # W98: PRE_PLAN de-scoped to subscription-era start; MISDATE band still in focus.
+    "equities_master": ("2006-08-13", "2099-12-31"),
     # Latest-only preference is applied via max_jobs / latest_only, not range.
     "markets_margin_interest": ("2013-01-04", "2099-12-31"),
 }

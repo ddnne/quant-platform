@@ -49,7 +49,9 @@ LIVE_GATES: dict[str, float] = {
 # pick the latest plausible public start. **These are assumptions, not
 # contractual truths** — update as the spec evolves.
 EXPECTED_START: dict[str, str] = {
-    "equities_master": "2000-07-13",
+    # W98 / w0819a: PRE_PLAN 2000-07..2006-07 de-scoped (subscription OOS).
+    # MISDATE 2006-08..2008-04 remains required-window PARTIAL (PD-D2-MASTER).
+    "equities_master": "2006-08-13",
     # Raised to proven observed floors (w0815ae/W38; docs/proof/observed_floor_catalog_20260815.md)
     "equities_bars_daily": "2008-05-01",
     "equities_bars_daily_am": "2024-01-04",   # AM is recent-only by spec

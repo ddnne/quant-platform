@@ -36,10 +36,13 @@ PREMIUM_DRIVER_FINS_RPM = 495
 DATE_RANGE_BATCH_STANDARD = True
 
 # J-Quants Premium subscription floor (API HTTP 400 for earlier dates).
-# Evidence: collection_receipts run_id=2522, segment 2006-08-12 FAILED with
+# Historical evidence: collection_receipts run_id=2522 FAILED with
 # "Your subscription covers the following dates: 2006-08-13 ~ ."
+# W98 / w0819a live re-probe (equities_master date=2006-08-13/18): HTTP 400 with
+# "Your subscription covers the following dates: 2006-08-19 ~ ."
 # Planner must never emit OOS jobs before this calendar day.
-JQUANTS_SUBSCRIPTION_FLOOR = date(2006, 8, 13)
+# NOTE: this is entitlement clamp only — not a catalog COMPLETE invent floor.
+JQUANTS_SUBSCRIPTION_FLOOR = date(2006, 8, 19)
 
 JobState = Literal[
     "pending",

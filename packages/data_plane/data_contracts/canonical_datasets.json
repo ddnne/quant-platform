@@ -16,7 +16,7 @@
       "natural_key_fields": [
         "code"
       ],
-      "historical_start": "2000-07-13",
+      "historical_start": "2006-08-13",
       "coverage_segment_granularity": "calendar_month",
       "expected_frequency": "trading_day",
       "inventory_status": "GOVERNED",

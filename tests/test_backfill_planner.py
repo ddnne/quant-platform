@@ -72,12 +72,14 @@ def test_planner_dataset_and_range_filter():
     assert all("raw" in j.expected_evidence for j in plan.jobs)
 
 
-def test_planner_clamps_subscription_floor_no_oos_before_2006_08_13():
-    """Fail id 2522: requested_from=2006-08-12 → HTTP 400 subscription.
+def test_planner_clamps_subscription_floor_no_oos_before_live_floor():
+    """Live entitlement clamp: dates before JQUANTS_SUBSCRIPTION_FLOOR → HTTP 400.
 
-    Planner must never emit jobs starting before JQUANTS_SUBSCRIPTION_FLOOR.
-    Uses equities_master (history still pre-floor) — equities_bars_daily floor
-    was raised to 2008-05-01 (w0815ae) so it no longer exercises the clamp.
+    Historical fail id 2522 used floor 2006-08-13; W98 live re-probe shows
+    vendor message ``2006-08-19 ~``. Planner must never emit jobs starting
+    before the live floor. Uses equities_master (MISDATE band still in
+    contract) — equities_bars_daily floor was raised to 2008-05-01 (w0815ae)
+    so it no longer exercises the clamp.
     """
     from datetime import date
 
@@ -86,7 +88,7 @@ def test_planner_clamps_subscription_floor_no_oos_before_2006_08_13():
         BackfillPlanner,
     )
 
-    assert JQUANTS_SUBSCRIPTION_FLOOR == date(2006, 8, 13)
+    assert JQUANTS_SUBSCRIPTION_FLOOR == date(2006, 8, 19)
     plan = BackfillPlanner(
         cutoff=date(2006, 8, 31),
         prefer_month_chunks_for_today=False,
@@ -98,11 +100,13 @@ def test_planner_clamps_subscription_floor_no_oos_before_2006_08_13():
     )
     assert plan.jobs, "expected jobs on/after subscription floor"
     assert all(
-        j.requested_from >= "2006-08-13" for j in plan.jobs
+        j.requested_from >= "2006-08-19" for j in plan.jobs
     ), min(j.requested_from for j in plan.jobs)
     assert all(j.requested_to >= j.requested_from for j in plan.jobs)
-    # Explicit OOS day must not appear as a job window start.
+    # Explicit OOS days must not appear as a job window start.
     assert not any(j.requested_from == "2006-08-12" for j in plan.jobs)
+    assert not any(j.requested_from == "2006-08-13" for j in plan.jobs)
+    assert not any(j.requested_from == "2006-08-18" for j in plan.jobs)
 
 
 def test_premium_rate_constants_documented():

@@ -26,6 +26,16 @@ via this module. Other PD ids (bars_am, OTC, master, earn_cal) remain.
   (COMPLETE tip island held at 93). Wait for official FULL_OK tip advance;
   **no bulk densify** of archive PARTIALs.
 
+**W98 / w0819a equities_master scope (PD-D2-MASTER):**
+
+* ``PRE_PLAN`` months ``2000-07…2006-07`` (n=73) are **catalog OUT_OF_SCOPE**
+  via ``history_target_start=2006-08-13`` — not “missing”, not densify targets.
+* ``MISDATE`` months ``2006-08…2008-04`` (n=21) remain **required-window**
+  PARTIAL under this permanent DEFER id until vendor returns in-window ``Date``.
+* Never raise floor to ``2008-05-01`` to invent Dataset COMPLETE while MISDATE
+  is still required-window residual.
+* Honest COMPLETE island remains ``2008-05→latest`` (tip continuous).
+
 Ops / tip / SCD2 CURRENT reads are out of scope for this module — only
 history-grade research loaders should call the guards below. Tip continuous
 collect + seal + ``sync_dataset_coverage_from_segments`` remain allowed
@@ -39,7 +49,7 @@ from typing import Iterable, Mapping, Sequence
 # Canonical permanent DEFER dataset ids (n=4 after W68). Names match residual SoT.
 PERMANENT_DEFER_DATASETS: frozenset[str] = frozenset(
     {
-        "equities_master",  # PD-D2-MASTER (MISDATE + PRE_PLAN)
+        "equities_master",  # PD-D2-MASTER (MISDATE required-window; PRE_PLAN OOS)
         "equities_earnings_calendar",  # PD-D4-EARN-CAL (vendor tip-only history)
         "equities_bars_daily_am",  # PD-D4-BARS-AM (tip-only AM; history LIVE_API_EMPTY)
         "jsda_otc_bond_reference_prices",  # PD-D5-JSDA-OTC (tip island only)
@@ -60,10 +70,70 @@ SUPERSEDED_PERMANENT_DEFER_IDS: dict[str, str] = {
     "fins_earnings_date": "PD-MX-EARN-TIP",  # W44 FINAL NO_RAW → W68 LIVE SEAL tip4 COMPLETE
 }
 
+# W98 / w0819a — equities_master coverage bands (PD-D2-MASTER).
+# PRE_PLAN is explicit **coverage out-of-scope (de-scope)** — not "missing".
+# Do NOT raise history_target_start to 2008-05-01 to invent Dataset COMPLETE.
+# Focus seal/ops on POST_ISLAND 2008-05→latest; MISDATE only if vendor Date in-window.
+MASTER_JQ_SCOPE: dict[str, object] = {
+    "dataset": "equities_master",
+    "pd_id": "PD-D2-MASTER",
+    "history_target_start": "2006-08-13",
+    "wave_locked": "W98 / w0819a",
+    "bands": {
+        "PRE_PLAN": {
+            "span": "2000-07..2006-07",
+            "n_segs": 73,
+            "coverage": "OUT_OF_SCOPE",
+            "status": "coverage_out_of_scope",
+            "de_scope": True,
+            "vs_missing": "de-scoped (not missing)",
+            "densify": "FORBIDDEN",
+            "seal": "FORBIDDEN",
+            "invent_fill": "FORBIDDEN",
+            "reason": (
+                "Below Premium subscription entitlement; catalog "
+                "history_target_start raised to 2006-08-13 (W98 product de-scope). "
+                "Not missing-to-invent; never densify / never raise floor to fake COMPLETE."
+            ),
+        },
+        "MISDATE": {
+            "span": "2006-08..2008-04",
+            "n_segs": 21,
+            "coverage": "REQUIRED_PARTIAL",
+            "status": "PARTIAL_held",
+            "de_scope": False,
+            "densify": "FORBIDDEN",
+            "seal": "only_if_window_ok_Date",
+            "invent_fill": "FORBIDDEN",
+            "reason": (
+                "Vendor bodies return Date=2008-05-07 only (window_ok=0). "
+                "Re-probe allowed; seal ONLY if J-Quants returns proper in-window Date."
+            ),
+        },
+        "POST_ISLAND": {
+            "span": "2008-05..latest",
+            "coverage": "REQUIRED_COMPLETE_TARGET",
+            "status": "COMPLETE_focus",
+            "de_scope": False,
+            "note": "honest continuous COMPLETE island; tip continuous + gap fill via official re-fetch only",
+            "seal": "tip_continuous_and_gap_refetch",
+        },
+    },
+    "subscription_floor_live": "2006-08-19",
+    "invent_complete_via_floor_to_2008_05": "FORBIDDEN",
+    "dataset_complete_invent": "FORBIDDEN",
+    "empty_raw_complete": "FORBIDDEN",
+}
+
+# Alias kept for callers / docs that used the interim name.
+MASTER_COVERAGE_POLICY = MASTER_JQ_SCOPE
+
 # W72 tip-only ops policy (comments + machine-readable fields).
 # History densify / regular history re-probe remain FORBIDDEN for these ids.
 # Tip continuous collect → seal (nz only) → sync_dataset_coverage_from_segments
 # is the only COMPLETE-expand path; never invent empty-raw COMPLETE.
+
+
 TIP_ONLY_POLICY: dict[str, dict[str, object]] = {
     "equities_bars_daily_am": {
         "pd_id": "PD-D4-BARS-AM",
@@ -200,7 +270,29 @@ def require_history_eligible(dataset: str, *, context: str = "research history l
     return value
 
 
+def master_coverage_policy() -> Mapping[str, object]:
+    """Return W98 equities_master band policy (PRE_PLAN de-scope)."""
+    return MASTER_COVERAGE_POLICY
+
+
+def master_band_for_segment(segment_id: str) -> str:
+    """Classify master calendar-month segment_id into PRE_PLAN/MISDATE/POST_ISLAND."""
+    sid = str(segment_id).strip()[:7]
+    if sid < "2006-08":
+        return "PRE_PLAN"
+    if sid < "2008-05":
+        return "MISDATE"
+    return "POST_ISLAND"
+
+
+def master_pre_plan_descope(segment_id: str) -> bool:
+    """True when segment is PRE_PLAN coverage-out-of-scope (do not invent/seal)."""
+    return master_band_for_segment(segment_id) == "PRE_PLAN"
+
+
 __all__ = [
+    "MASTER_COVERAGE_POLICY",
+    "MASTER_JQ_SCOPE",
     "PERMANENT_DEFER_DATASETS",
     "PERMANENT_DEFER_IDS",
     "SUPERSEDED_PERMANENT_DEFER_IDS",
@@ -211,7 +303,11 @@ __all__ = [
     "history_reprobe_forbidden",
     "is_permanent_defer",
     "is_tip_only_policy",
+    "master_band_for_segment",
+    "master_coverage_policy",
+    "master_pre_plan_descope",
     "reject_permanent_defer_for_history",
     "require_history_eligible",
     "tip_only_policy_for",
 ]
+

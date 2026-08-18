@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from data_contracts import (
+    MASTER_JQ_SCOPE,
     PERMANENT_DEFER_DATASETS,
     SUPERSEDED_PERMANENT_DEFER_IDS,
     TIP_ONLY_POLICY,
@@ -14,10 +15,13 @@ from data_contracts import (
     history_reprobe_forbidden,
     is_permanent_defer,
     is_tip_only_policy,
+    master_band_for_segment,
+    master_pre_plan_descope,
     reject_permanent_defer_for_history,
     require_history_eligible,
     tip_only_policy_for,
 )
+from data_contracts.coverage import coverage_contract_for
 from data_access.adapter import QuantDataAccess
 
 
@@ -134,3 +138,23 @@ def test_w72_tip_only_policy_bars_am_and_otc():
         "equities_bars_daily_am",
         "jsda_otc_bond_reference_prices",
     }
+
+
+def test_w98_master_jq_scope_pre_plan_descope():
+    """W98: PRE_PLAN is coverage OUT_OF_SCOPE; MISDATE stays required PARTIAL."""
+    assert coverage_contract_for("equities_master").history_target_start == "2006-08-13"
+    assert MASTER_JQ_SCOPE["history_target_start"] == "2006-08-13"
+    bands = MASTER_JQ_SCOPE["bands"]
+    assert isinstance(bands, dict)
+    assert bands["PRE_PLAN"]["coverage"] == "OUT_OF_SCOPE"
+    assert bands["PRE_PLAN"]["de_scope"] is True
+    assert bands["MISDATE"]["coverage"] == "REQUIRED_PARTIAL"
+    assert bands["MISDATE"]["seal"] == "only_if_window_ok_Date"
+    assert MASTER_JQ_SCOPE["invent_complete_via_floor_to_2008_05"] == "FORBIDDEN"
+
+    assert master_band_for_segment("2006-07") == "PRE_PLAN"
+    assert master_band_for_segment("2006-08") == "MISDATE"
+    assert master_band_for_segment("2008-04") == "MISDATE"
+    assert master_band_for_segment("2008-05") == "POST_ISLAND"
+    assert master_pre_plan_descope("2000-07") is True
+    assert master_pre_plan_descope("2007-01") is False
