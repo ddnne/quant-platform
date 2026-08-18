@@ -1,6 +1,6 @@
-"""Daily BaseVol + ATM IV series from ``derivatives_bars_daily_options_225``.
+"""Daily BaseVol + ATM IV + skew / CM-term / ΔBaseVol series from options_225.
 
-W92 / w0818b track A — research-only helpers. Mass / GO stay frozen.
+W92–W94 research-only helpers. Mass / GO stay frozen.
 
 Dataset
 -------
@@ -16,19 +16,24 @@ implied volatility of the at-the-money put and call. ``IV`` / ``UnderPx`` /
 ``LTD`` / ``SQD`` are blank before that date — those days are **gaps**, not
 filled.
 
+**Canonical level = BaseVol.** Reconstructed ATM IV is **compare-only**
+(W93: post ``min_dte=6`` roll, BaseVol≡ATM on matched abs/term transforms;
+spread logics non-informative at frozen thresholds). Prefer BaseVol for
+level / short-long regime; keep ATM series parallel for comparison only.
+
 Written rules
 -------------
 **Settlement filter.** Prefer rows with ``EmMrgnTrgDiv == "002"`` (settlement
 price calculation). If a day has only ``001`` (emergency margin) rows, use
 those; never invent.
 
-**Daily BaseVol.** For each ``Date``, collect finite ``BaseVol`` among
-settlement-preferring rows. Exchange publishes one BaseVol per day (constant
-across the chain). Take the unique value; if multiple distinct values appear,
-take the median and flag ``base_vol_conflict``. Omit the day when no finite
-BaseVol exists (**no ffill**).
+**Daily BaseVol (canonical level).** For each ``Date``, collect finite
+``BaseVol`` among settlement-preferring rows. Exchange publishes one BaseVol
+per day (constant across the chain). Take the unique value; if multiple
+distinct values appear, take the median and flag ``base_vol_conflict``. Omit
+the day when no finite BaseVol exists (**no ffill**).
 
-**Daily ATM IV (independent reconstruction).**
+**Daily ATM IV (compare-only reconstruction).**
 
 1. ``under_px`` = median finite ``UnderPx`` that day (usually unique).
 2. Front contract month ``cm`` = earliest ``CM`` among rows with
@@ -50,7 +55,32 @@ BaseVol exists (**no ffill**).
 ``spread = atm_iv - base_vol``. Dates missing either leg are omitted.
 W93 autopsy (legacy ``min_dte=0``/``1``): ~86.7% of days have spread==0;
 **all** nonzero residuals sit at front-CM DTE∈{1,2,3} (expiry-week noise,
-not a risk-premium structure).
+not a risk-premium structure). Post ``min_dte=6``: exact-zero ≈99.76%.
+
+**Daily skew (W94).** ``skew = put_iv(strike*) − atm_mid_iv`` where:
+
+* front CM + ATM mid IV as above (``min_dte`` default 6)
+* target moneyness ``0.95 * under_px`` (≈95% put)
+* ``strike*`` = available **put** strike in front CM minimizing
+  ``|Strike − 0.95*under_px|`` among puts with finite IV
+  (ties → lower strike). Prefer OTM put when equally close by taking the
+  lower strike. **Never interpolate / invent** smile points beyond listed
+  strikes — if no finite-IV put exists that day → omit (**no ffill**).
+
+**Daily CM term (W94).** ``cm_term = near_atm_iv − next_atm_iv`` where:
+
+* ``near_cm`` = front CM with ``min_dte≥6`` (same picker as ATM)
+* ``next_cm`` = earliest CM **strictly after** ``near_cm`` that is also
+  LTD-eligible at the same min-DTE floor (fallback: earliest later CM with
+  ``LTD > Date``)
+* ATM-ish IV per CM = nearest-strike put/call mid (same ATM rule, scoped to
+  that CM). Omit day if either leg missing (**no ffill**).
+
+**Daily BaseVol delta (W94).** On consecutive **observed** BaseVol dates
+``t-1, t``: ``delta = BaseVol[t] − BaseVol[t-1]`` (arithmetic primary).
+Also record ``log_delta = ln(BaseVol[t]/BaseVol[t-1])`` when both > 0.
+First observed day is a gap (omitted). No invent / no ffill of missing
+calendar days between observations.
 
 **Gap policy.** ``gap_policy = disclose_only_no_ffill_no_invent``. Calendar
 holes between observed dates are listed in stats; never forward-filled.
@@ -65,8 +95,8 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Mapping, Sequence
 
-OPTIONS_225_VOL_SERIES_VERSION: str = "research-options-225-vol-series/v1.1"
-OPTIONS_225_VOL_SERIES_WAVE: str = "W93 / w0818c"
+OPTIONS_225_VOL_SERIES_VERSION: str = "research-options-225-vol-series/v1.2"
+OPTIONS_225_VOL_SERIES_WAVE: str = "W94 / w0818d"
 
 DATASET_ID: str = "derivatives_bars_daily_options_225"
 GAP_POLICY: str = "disclose_only_no_ffill_no_invent"
@@ -86,10 +116,21 @@ IV_FIELDS_AVAILABLE_FROM: str = "2016-07-19"
 # front only if no eligible CM exists. Never drop BaseVol or ATM series.
 DEFAULT_ATM_MIN_DTE_DAYS: int = 6
 
+# W94 skew: target put moneyness = SKEW_PUT_MONEYNESS * UnderPx (≈95% put).
+DEFAULT_SKEW_PUT_MONEYNESS: float = 0.95
+
+# Role pins (W94): BaseVol = canonical level; ATM reconstructed = compare-only.
+BASEVOL_ROLE: str = "canonical_level"
+ATM_IV_ROLE: str = "compare_only"
+
 PC_PUT: str = "1"
 PC_CALL: str = "2"
 EM_SETTLE: str = "002"
 EM_EMERGENCY: str = "001"
+
+SKEW_CONVENTION: str = "put_iv(~0.95*UnderPx) - atm_mid_iv"
+CM_TERM_CONVENTION: str = "near_cm_atm_iv - next_cm_atm_iv"
+BASEVOL_DELTA_CONVENTION: str = "BaseVol[t] - BaseVol[t-1]"
 
 
 def _as_date(value: Any) -> str | None:
@@ -339,6 +380,169 @@ def _median(xs: Sequence[float]) -> float:
     return float(statistics.median(xs))
 
 
+def _nearest_strike(
+    day_rows: Sequence[Mapping[str, Any]],
+    *,
+    cm: str,
+    target: float,
+    pc_div: str | None = None,
+    require_finite_iv: bool = False,
+) -> float | None:
+    """Pick listed strike nearest to ``target`` within ``cm`` (ties → lower).
+
+    Never invents strikes. When ``pc_div`` is set, only that put/call side is
+    considered. When ``require_finite_iv``, rows without finite IV are skipped.
+    """
+    best_dist: float | None = None
+    best_strike: float | None = None
+    for r in day_rows:
+        if r.get("cm") != cm or r.get("strike") is None:
+            continue
+        if pc_div is not None and r.get("pc_div") != pc_div:
+            continue
+        if require_finite_iv and r.get("iv") is None:
+            continue
+        strike = float(r["strike"])  # type: ignore[arg-type]
+        dist = abs(strike - target)
+        if best_dist is None or dist < best_dist or (
+            dist == best_dist and best_strike is not None and strike < best_strike
+        ):
+            best_dist = dist
+            best_strike = strike
+    return best_strike
+
+
+def _atm_iv_at_cm(
+    day_rows: Sequence[Mapping[str, Any]],
+    *,
+    cm: str,
+    under_px: float,
+) -> dict[str, Any] | None:
+    """ATM-ish put/call mid IV within a fixed CM. None if no finite IV.
+
+    Strike = listed strike minimizing |Strike − under_px| (ties → lower).
+    Never invents strikes beyond the available chain.
+    """
+    best_strike = _nearest_strike(day_rows, cm=cm, target=under_px)
+    if best_strike is None:
+        return None
+    atm_rows = [
+        r
+        for r in day_rows
+        if r.get("cm") == cm
+        and r.get("strike") is not None
+        and float(r["strike"]) == best_strike  # type: ignore[arg-type]
+    ]
+    put_ivs = [
+        float(r["iv"])
+        for r in atm_rows
+        if r.get("pc_div") == PC_PUT and r.get("iv") is not None
+    ]
+    call_ivs = [
+        float(r["iv"])
+        for r in atm_rows
+        if r.get("pc_div") == PC_CALL and r.get("iv") is not None
+    ]
+    put_iv = _median(put_ivs) if put_ivs else None
+    call_iv = _median(call_ivs) if call_ivs else None
+    if put_iv is not None and call_iv is not None:
+        atm_iv = (put_iv + call_iv) / 2.0
+        pc_used = "avg"
+    elif call_iv is not None:
+        atm_iv = call_iv
+        pc_used = PC_CALL
+    elif put_iv is not None:
+        atm_iv = put_iv
+        pc_used = PC_PUT
+    else:
+        return None
+    vo_sum = sum(float(r["vo"]) for r in atm_rows if r.get("vo") is not None)
+    oi_sum = sum(float(r["oi"]) for r in atm_rows if r.get("oi") is not None)
+    ltds = sorted({r["ltd"] for r in atm_rows if r.get("ltd")})
+    sqds = sorted({r["sqd"] for r in atm_rows if r.get("sqd")})
+    return {
+        "atm_iv": float(atm_iv),
+        "strike": float(best_strike),
+        "pc_used": pc_used,
+        "put_iv": put_iv,
+        "call_iv": call_iv,
+        "abs_moneyness": abs(best_strike - under_px),
+        "rel_moneyness": (
+            abs(best_strike - under_px) / under_px if under_px else None
+        ),
+        "ltd": ltds[0] if ltds else None,
+        "sqd": sqds[0] if sqds else None,
+        "vo_atm": vo_sum if vo_sum else None,
+        "oi_atm": oi_sum if oi_sum else None,
+    }
+
+
+def _eligible_cms_by_ltd(
+    date: str,
+    day_rows: Sequence[Mapping[str, Any]],
+    *,
+    min_dte_days: int,
+) -> dict[str, int]:
+    """Map CM → min LTD DTE for CMs with LTD > Date and DTE >= min_dte."""
+    min_dte = max(0, int(min_dte_days))
+    out: dict[str, int] = {}
+    for r in day_rows:
+        cm = r.get("cm")
+        ltd = r.get("ltd")
+        if not cm or not ltd or str(ltd) <= date:
+            continue
+        dte = _cm_dte_days(date, str(ltd))
+        if dte is None or dte < min_dte:
+            continue
+        cm_s = str(cm)
+        out[cm_s] = dte if cm_s not in out else min(out[cm_s], dte)
+    return out
+
+
+def _pick_next_cm(
+    date: str,
+    day_rows: Sequence[Mapping[str, Any]],
+    *,
+    near_cm: str,
+    min_dte_days: int = DEFAULT_ATM_MIN_DTE_DAYS,
+) -> tuple[str | None, dict[str, Any]]:
+    """Earliest CM strictly after ``near_cm`` with min_dte eligibility."""
+    meta: dict[str, Any] = {
+        "min_dte_days": max(0, int(min_dte_days)),
+        "cm_pick_rule": None,
+        "dte": None,
+        "near_expiry_fallback": False,
+    }
+    eligible = _eligible_cms_by_ltd(date, day_rows, min_dte_days=min_dte_days)
+    later = {cm: dte for cm, dte in eligible.items() if cm > near_cm}
+    if later:
+        cm = min(later)
+        meta["cm_pick_rule"] = "ltd_min_dte_after_near"
+        meta["dte"] = later[cm]
+        return cm, meta
+    # fallback: any later CM with LTD > Date (ignore min_dte)
+    any_later: dict[str, int] = {}
+    for r in day_rows:
+        cm = r.get("cm")
+        ltd = r.get("ltd")
+        if not cm or str(cm) <= near_cm or not ltd or str(ltd) <= date:
+            continue
+        dte = _cm_dte_days(date, str(ltd))
+        if dte is None:
+            continue
+        cm_s = str(cm)
+        any_later[cm_s] = (
+            dte if cm_s not in any_later else min(any_later[cm_s], dte)
+        )
+    if any_later:
+        cm = min(any_later)
+        meta["cm_pick_rule"] = "ltd_any_after_near_fallback"
+        meta["dte"] = any_later[cm]
+        meta["near_expiry_fallback"] = True
+        return cm, meta
+    return None, meta
+
+
 def build_daily_basevol_series(
     rows: Sequence[Mapping[str, Any]] | Iterable[Mapping[str, Any]],
 ) -> list[dict[str, Any]]:
@@ -381,9 +585,10 @@ def build_daily_atm_iv_series(
 ) -> list[dict[str, Any]]:
     """Build ``[{date, atm_iv, strike, under_px, cm, pc_used, ...}]`` — no ffill.
 
-    W93: ``min_dte_days`` rolls off near-expiry front CM (default 5) so ATM IV
-    tracks exchange BaseVol instead of SQ-week DTE∈{1,2,3} blow-ups. Pass
-    ``min_dte_days=0`` for legacy earliest-LTD>Date behavior.
+    **Compare-only** vs canonical BaseVol level (W94). W93 ``min_dte_days``
+    rolls off near-expiry front CM (default 6) so ATM IV tracks exchange
+    BaseVol instead of SQ-week DTE∈{1,2,3} blow-ups. Pass ``min_dte_days=0``
+    for legacy earliest-LTD>Date behavior. Never invents strikes.
     """
     by_date = _group_by_date(rows)
     out: list[dict[str, Any]] = []
@@ -396,78 +601,37 @@ def build_daily_atm_iv_series(
         cm, cm_meta = _pick_front_cm(date, day, min_dte_days=min_dte_days)
         if not cm:
             continue
-        cm_rows = [
-            r
-            for r in day
-            if r.get("cm") == cm and r.get("strike") is not None
-        ]
-        if not cm_rows:
+        atm = _atm_iv_at_cm(day, cm=cm, under_px=under_px)
+        if atm is None:
             continue
-        # nearest strike to under
-        best_dist: float | None = None
-        best_strike: float | None = None
-        for r in cm_rows:
-            strike = float(r["strike"])  # type: ignore[arg-type]
-            dist = abs(strike - under_px)
-            if best_dist is None or dist < best_dist or (
-                dist == best_dist and best_strike is not None and strike < best_strike
-            ):
-                best_dist = dist
-                best_strike = strike
-        assert best_strike is not None and best_dist is not None
-        atm_rows = [r for r in cm_rows if float(r["strike"]) == best_strike]  # type: ignore[arg-type]
-        put_ivs = [
-            float(r["iv"])
-            for r in atm_rows
-            if r.get("pc_div") == PC_PUT and r.get("iv") is not None
-        ]
-        call_ivs = [
-            float(r["iv"])
-            for r in atm_rows
-            if r.get("pc_div") == PC_CALL and r.get("iv") is not None
-        ]
-        put_iv = _median(put_ivs) if put_ivs else None
-        call_iv = _median(call_ivs) if call_ivs else None
-        if put_iv is not None and call_iv is not None:
-            atm_iv = (put_iv + call_iv) / 2.0
-            pc_used = "avg"
-        elif call_iv is not None:
-            atm_iv = call_iv
-            pc_used = PC_CALL
-        elif put_iv is not None:
-            atm_iv = put_iv
-            pc_used = PC_PUT
-        else:
-            continue
-        vo_sum = sum(float(r["vo"]) for r in atm_rows if r.get("vo") is not None)
-        oi_sum = sum(float(r["oi"]) for r in atm_rows if r.get("oi") is not None)
-        ltds = sorted({r["ltd"] for r in atm_rows if r.get("ltd")})
-        sqds = sorted({r["sqd"] for r in atm_rows if r.get("sqd")})
-        ltd = ltds[0] if ltds else None
+        ltd = atm.get("ltd")
         dte = cm_meta.get("dte")
         if dte is None and ltd is not None:
             dte = _cm_dte_days(date, str(ltd))
         out.append(
             {
                 "date": date,
-                "atm_iv": float(atm_iv),
-                "strike": float(best_strike),
+                "atm_iv": float(atm["atm_iv"]),
+                "strike": float(atm["strike"]),
                 "under_px": float(under_px),
                 "cm": cm,
-                "pc_used": pc_used,
-                "put_iv": put_iv,
-                "call_iv": call_iv,
-                "abs_moneyness": float(best_dist),
-                "rel_moneyness": float(best_dist / under_px) if under_px else None,
+                "pc_used": atm["pc_used"],
+                "put_iv": atm["put_iv"],
+                "call_iv": atm["call_iv"],
+                "abs_moneyness": atm["abs_moneyness"],
+                "rel_moneyness": atm["rel_moneyness"],
                 "ltd": ltd,
-                "sqd": sqds[0] if sqds else None,
+                "sqd": atm.get("sqd"),
                 "dte": dte,
                 "cm_pick_rule": cm_meta.get("cm_pick_rule"),
                 "near_expiry_fallback": bool(cm_meta.get("near_expiry_fallback")),
                 "min_dte_days": int(cm_meta.get("min_dte_days") or min_dte_days),
-                "vo_atm": vo_sum if vo_sum else None,
-                "oi_atm": oi_sum if oi_sum else None,
+                "vo_atm": atm.get("vo_atm"),
+                "oi_atm": atm.get("oi_atm"),
                 "n_contracts_day": len(day),
+                "role": ATM_IV_ROLE,
+                "compare_only": True,
+                "canonical_level": BASEVOL_ROLE,
                 "gap_policy": GAP_POLICY,
                 "ffill_applied": False,
             }
@@ -508,6 +672,220 @@ def build_spread_series(
                 "pc_used": a.get("pc_used"),
                 "gap_policy": GAP_POLICY,
                 "ffill_applied": False,
+            }
+        )
+    return out
+
+
+def build_daily_skew_series(
+    rows: Sequence[Mapping[str, Any]] | Iterable[Mapping[str, Any]],
+    *,
+    min_dte_days: int = DEFAULT_ATM_MIN_DTE_DAYS,
+    put_moneyness: float = DEFAULT_SKEW_PUT_MONEYNESS,
+) -> list[dict[str, Any]]:
+    """Build daily put-skew series — no ffill, no invented strikes.
+
+    Exact rule (W94)::
+
+        skew = put_iv(strike*) − atm_mid_iv
+
+    * front CM via ``_pick_front_cm(min_dte_days)`` (default 6)
+    * ``atm_mid_iv`` = nearest-strike put/call mid within front CM
+    * ``target = put_moneyness * under_px`` (default 0.95)
+    * ``strike*`` = listed put strike minimizing ``|Strike − target|``
+      among puts with finite IV (ties → lower strike). Never interpolate.
+    * Gap / missing put or ATM → omit day.
+    """
+    target_m = float(put_moneyness)
+    if not math.isfinite(target_m) or target_m <= 0.0:
+        raise ValueError(f"put_moneyness must be finite > 0, got {put_moneyness!r}")
+    by_date = _group_by_date(rows)
+    out: list[dict[str, Any]] = []
+    for date in sorted(by_date):
+        day = _prefer_settlement(by_date[date])
+        unders = [float(r["under_px"]) for r in day if r.get("under_px") is not None]
+        if not unders:
+            continue
+        under_px = _median(unders)
+        cm, cm_meta = _pick_front_cm(date, day, min_dte_days=min_dte_days)
+        if not cm:
+            continue
+        atm = _atm_iv_at_cm(day, cm=cm, under_px=under_px)
+        if atm is None:
+            continue
+        target_strike = target_m * under_px
+        skew_strike = _nearest_strike(
+            day,
+            cm=cm,
+            target=target_strike,
+            pc_div=PC_PUT,
+            require_finite_iv=True,
+        )
+        if skew_strike is None:
+            continue
+        put_ivs = [
+            float(r["iv"])
+            for r in day
+            if r.get("cm") == cm
+            and r.get("pc_div") == PC_PUT
+            and r.get("strike") is not None
+            and float(r["strike"]) == skew_strike  # type: ignore[arg-type]
+            and r.get("iv") is not None
+        ]
+        if not put_ivs:
+            continue
+        put_iv = _median(put_ivs)
+        atm_iv = float(atm["atm_iv"])
+        skew = put_iv - atm_iv
+        out.append(
+            {
+                "date": date,
+                "skew": float(skew),
+                "put_iv": float(put_iv),
+                "atm_iv": atm_iv,
+                "strike": float(skew_strike),
+                "atm_strike": float(atm["strike"]),
+                "target_strike": float(target_strike),
+                "put_moneyness_target": target_m,
+                "realized_moneyness": (
+                    float(skew_strike) / under_px if under_px else None
+                ),
+                "under_px": float(under_px),
+                "cm": cm,
+                "dte": cm_meta.get("dte"),
+                "cm_pick_rule": cm_meta.get("cm_pick_rule"),
+                "near_expiry_fallback": bool(cm_meta.get("near_expiry_fallback")),
+                "min_dte_days": int(cm_meta.get("min_dte_days") or min_dte_days),
+                "convention": SKEW_CONVENTION,
+                "invent_strike": False,
+                "gap_policy": GAP_POLICY,
+                "ffill_applied": False,
+            }
+        )
+    return out
+
+
+def build_daily_term_series(
+    rows: Sequence[Mapping[str, Any]] | Iterable[Mapping[str, Any]],
+    *,
+    min_dte_days: int = DEFAULT_ATM_MIN_DTE_DAYS,
+) -> list[dict[str, Any]]:
+    """Build daily near−next CM ATM-ish term series — no ffill.
+
+    Exact rule (W94)::
+
+        cm_term = near_atm_iv − next_atm_iv
+
+    * ``near_cm`` = front CM with ``LTD`` DTE ``>= min_dte_days`` (default 6)
+    * ``next_cm`` = earliest CM > near_cm also meeting the min-DTE floor
+      (fallback: earliest later CM with LTD > Date)
+    * ATM-ish IV per CM = nearest listed strike to UnderPx, put/call mid
+    * Never invents strikes; omit day if either leg missing.
+    """
+    by_date = _group_by_date(rows)
+    out: list[dict[str, Any]] = []
+    for date in sorted(by_date):
+        day = _prefer_settlement(by_date[date])
+        unders = [float(r["under_px"]) for r in day if r.get("under_px") is not None]
+        if not unders:
+            continue
+        under_px = _median(unders)
+        near_cm, near_meta = _pick_front_cm(date, day, min_dte_days=min_dte_days)
+        if not near_cm:
+            continue
+        next_cm, next_meta = _pick_next_cm(
+            date, day, near_cm=near_cm, min_dte_days=min_dte_days
+        )
+        if not next_cm:
+            continue
+        near_atm = _atm_iv_at_cm(day, cm=near_cm, under_px=under_px)
+        next_atm = _atm_iv_at_cm(day, cm=next_cm, under_px=under_px)
+        if near_atm is None or next_atm is None:
+            continue
+        near_iv = float(near_atm["atm_iv"])
+        next_iv = float(next_atm["atm_iv"])
+        out.append(
+            {
+                "date": date,
+                "cm_term": near_iv - next_iv,
+                "near_atm_iv": near_iv,
+                "next_atm_iv": next_iv,
+                "near_cm": near_cm,
+                "next_cm": next_cm,
+                "near_strike": float(near_atm["strike"]),
+                "next_strike": float(next_atm["strike"]),
+                "near_dte": near_meta.get("dte"),
+                "next_dte": next_meta.get("dte"),
+                "near_cm_pick_rule": near_meta.get("cm_pick_rule"),
+                "next_cm_pick_rule": next_meta.get("cm_pick_rule"),
+                "near_expiry_fallback": bool(
+                    near_meta.get("near_expiry_fallback")
+                    or next_meta.get("near_expiry_fallback")
+                ),
+                "min_dte_days": int(min_dte_days),
+                "under_px": float(under_px),
+                "convention": CM_TERM_CONVENTION,
+                "invent_strike": False,
+                "gap_policy": GAP_POLICY,
+                "ffill_applied": False,
+            }
+        )
+    return out
+
+
+def build_daily_basevol_delta_series(
+    base: Sequence[Mapping[str, Any]] | None = None,
+    rows: Sequence[Mapping[str, Any]] | Iterable[Mapping[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """Build day-over-day BaseVol delta on observed dates — no ffill.
+
+    Exact rule (W94)::
+
+        delta = BaseVol[t] − BaseVol[t-1]   # arithmetic primary
+        log_delta = ln(BaseVol[t] / BaseVol[t-1])  # when both > 0
+
+    First observed BaseVol day is omitted (gap). Dates are consecutive in the
+    **observed** series (calendar holes between observations are not filled;
+    delta still spans the gap). Pass either pre-built ``base`` rows or raw
+    ``rows`` (which are reduced via :func:`build_daily_basevol_series`).
+    """
+    if base is None:
+        if rows is None:
+            raise ValueError("build_daily_basevol_delta_series requires base or rows")
+        base = build_daily_basevol_series(rows)
+    ordered = sorted(
+        (
+            r
+            for r in base
+            if r.get("date") is not None and r.get("base_vol") is not None
+        ),
+        key=lambda r: str(r["date"])[:10],
+    )
+    out: list[dict[str, Any]] = []
+    for i in range(1, len(ordered)):
+        prev = ordered[i - 1]
+        cur = ordered[i]
+        bv0 = float(prev["base_vol"])  # type: ignore[arg-type]
+        bv1 = float(cur["base_vol"])  # type: ignore[arg-type]
+        d0 = str(prev["date"])[:10]
+        d1 = str(cur["date"])[:10]
+        log_delta: float | None
+        if bv0 > 0.0 and bv1 > 0.0:
+            log_delta = math.log(bv1 / bv0)
+        else:
+            log_delta = None
+        out.append(
+            {
+                "date": d1,
+                "basevol_delta": bv1 - bv0,
+                "log_delta": log_delta,
+                "base_vol": bv1,
+                "base_vol_prev": bv0,
+                "prev_date": d0,
+                "convention": BASEVOL_DELTA_CONVENTION,
+                "gap_policy": GAP_POLICY,
+                "ffill_applied": False,
+                "first_day_omitted": False,
             }
         )
     return out
@@ -729,33 +1107,69 @@ def load_options_225_rows(
     return out
 
 
+def _series_rules_doc() -> dict[str, Any]:
+    return {
+        "base_vol": (
+            "Canonical level. Per-date median/unique finite BaseVol among "
+            "settlement-preferring rows; omit day if none (no ffill)."
+        ),
+        "atm_iv": (
+            "COMPARE-ONLY vs BaseVol. Front CM (min_dte>=6) nearest strike to "
+            "UnderPx; avg put/call IV when both finite else available side. "
+            "Never invent strikes."
+        ),
+        "spread": "atm_iv - base_vol on inner-joined dates (mostly ~0 post min_dte=6).",
+        "skew": (
+            f"{SKEW_CONVENTION}. Listed put strike nearest 0.95*UnderPx within "
+            "front CM (min_dte>=6); never interpolate/invent; omit if missing."
+        ),
+        "cm_term": (
+            f"{CM_TERM_CONVENTION}. Near+next CM ATM-ish IVs (min_dte>=6); "
+            "omit if either leg missing; never invent strikes."
+        ),
+        "basevol_delta": (
+            f"{BASEVOL_DELTA_CONVENTION} on consecutive observed BaseVol dates; "
+            "first day omitted; optional log_delta when both > 0."
+        ),
+        "gap_policy": GAP_POLICY,
+        "iv_fields_available_from": IV_FIELDS_AVAILABLE_FROM,
+        "canonical_level": "base_vol",
+        "compare_only": ["atm_iv"],
+    }
+
+
 def build_series_bundle_from_rows(
     rows: Sequence[Mapping[str, Any]] | Iterable[Mapping[str, Any]],
 ) -> dict[str, Any]:
-    """Convenience: BaseVol + ATM IV + spread + stats from row iterable."""
+    """Convenience: BaseVol + ATM + spread + skew + CM-term + ΔBaseVol + stats."""
     materialised = list(rows)
     base = build_daily_basevol_series(materialised)
     atm = build_daily_atm_iv_series(materialised)
     spread = build_spread_series(base, atm)
+    skew = build_daily_skew_series(materialised)
+    term = build_daily_term_series(materialised)
+    delta = build_daily_basevol_delta_series(base=base)
     stats = summarize_vol_series(base, atm, spread)
+    stats["n_skew_days"] = len(skew)
+    stats["n_cm_term_days"] = len(term)
+    stats["n_basevol_delta_days"] = len(delta)
+    if skew:
+        stats["skew_mean"] = statistics.mean(float(r["skew"]) for r in skew)
+    if term:
+        stats["cm_term_mean"] = statistics.mean(float(r["cm_term"]) for r in term)
+    if delta:
+        stats["basevol_delta_mean"] = statistics.mean(
+            float(r["basevol_delta"]) for r in delta
+        )
     return {
         "base_vol_series": base,
         "atm_iv_series": atm,
         "spread_series": spread,
+        "skew_series": skew,
+        "cm_term_series": term,
+        "basevol_delta_series": delta,
         "stats": stats,
-        "rules": {
-            "base_vol": (
-                "Per-date median/unique finite BaseVol among settlement-preferring "
-                "rows; omit day if none (no ffill)."
-            ),
-            "atm_iv": (
-                "Front CM (min CM with LTD>Date) nearest strike to UnderPx; "
-                "avg put/call IV when both finite else available side."
-            ),
-            "spread": "atm_iv - base_vol on inner-joined dates.",
-            "gap_policy": GAP_POLICY,
-            "iv_fields_available_from": IV_FIELDS_AVAILABLE_FROM,
-        },
+        "rules": _series_rules_doc(),
         "version": OPTIONS_225_VOL_SERIES_VERSION,
         "wave": OPTIONS_225_VOL_SERIES_WAVE,
         "dataset": DATASET_ID,
@@ -764,6 +1178,8 @@ def build_series_bundle_from_rows(
         "ready_declared": READY_DECLARED,
         "operational_go": OPERATIONAL_GO,
         "ffill_applied": False,
+        "canonical_level": "base_vol",
+        "atm_iv_role": ATM_IV_ROLE,
     }
 
 
@@ -787,6 +1203,8 @@ def build_series_bundle_from_raw_files(
     p_end = str(end)[:10] if end else None
     base_by: dict[str, dict[str, Any]] = {}
     atm_by: dict[str, dict[str, Any]] = {}
+    skew_by: dict[str, dict[str, Any]] = {}
+    term_by: dict[str, dict[str, Any]] = {}
     n_rows = 0
     n_files_used = 0
     for fp in files:
@@ -808,30 +1226,39 @@ def build_series_bundle_from_raw_files(
             base_by[str(r["date"])[:10]] = r
         for r in build_daily_atm_iv_series(rows):
             atm_by[str(r["date"])[:10]] = r
+        for r in build_daily_skew_series(rows):
+            skew_by[str(r["date"])[:10]] = r
+        for r in build_daily_term_series(rows):
+            term_by[str(r["date"])[:10]] = r
     base = [base_by[d] for d in sorted(base_by)]
     atm = [atm_by[d] for d in sorted(atm_by)]
+    skew = [skew_by[d] for d in sorted(skew_by)]
+    term = [term_by[d] for d in sorted(term_by)]
     spread = build_spread_series(base, atm)
+    delta = build_daily_basevol_delta_series(base=base)
     stats = summarize_vol_series(base, atm, spread)
     stats["n_raw_files_used"] = n_files_used
     stats["n_rows_scanned"] = n_rows
+    stats["n_skew_days"] = len(skew)
+    stats["n_cm_term_days"] = len(term)
+    stats["n_basevol_delta_days"] = len(delta)
+    if skew:
+        stats["skew_mean"] = statistics.mean(float(r["skew"]) for r in skew)
+    if term:
+        stats["cm_term_mean"] = statistics.mean(float(r["cm_term"]) for r in term)
+    if delta:
+        stats["basevol_delta_mean"] = statistics.mean(
+            float(r["basevol_delta"]) for r in delta
+        )
     return {
         "base_vol_series": base,
         "atm_iv_series": atm,
         "spread_series": spread,
+        "skew_series": skew,
+        "cm_term_series": term,
+        "basevol_delta_series": delta,
         "stats": stats,
-        "rules": {
-            "base_vol": (
-                "Per-date median/unique finite BaseVol among settlement-preferring "
-                "rows; omit day if none (no ffill)."
-            ),
-            "atm_iv": (
-                "Front CM (min CM with LTD>Date) nearest strike to UnderPx; "
-                "avg put/call IV when both finite else available side."
-            ),
-            "spread": "atm_iv - base_vol on inner-joined dates.",
-            "gap_policy": GAP_POLICY,
-            "iv_fields_available_from": IV_FIELDS_AVAILABLE_FROM,
-        },
+        "rules": _series_rules_doc(),
         "version": OPTIONS_225_VOL_SERIES_VERSION,
         "wave": OPTIONS_225_VOL_SERIES_WAVE,
         "dataset": DATASET_ID,
@@ -840,6 +1267,8 @@ def build_series_bundle_from_raw_files(
         "ready_declared": READY_DECLARED,
         "operational_go": OPERATIONAL_GO,
         "ffill_applied": False,
+        "canonical_level": "base_vol",
+        "atm_iv_role": ATM_IV_ROLE,
         "n_raw_files_used": n_files_used,
         "n_rows_scanned": n_rows,
     }
@@ -860,12 +1289,22 @@ DEFAULT_OPT225_ATM_IV_LOW: float = 12.0
 # Spread = atm_iv - base_vol (percent vol points). Median≈0; use mild bands.
 DEFAULT_OPT225_SPREAD_HIGH: float = 1.0
 DEFAULT_OPT225_SPREAD_LOW: float = -0.5
+# W94 skew / CM-term / ΔBaseVol research thresholds (percent vol points).
+DEFAULT_OPT225_SKEW_HIGH: float = 3.0
+DEFAULT_OPT225_SKEW_LOW: float = 0.5
+DEFAULT_OPT225_CM_TERM_HIGH: float = 2.0
+DEFAULT_OPT225_CM_TERM_LOW: float = -1.0
+DEFAULT_OPT225_BASEVOL_DELTA_HIGH: float = 1.0
+DEFAULT_OPT225_BASEVOL_DELTA_LOW: float = -1.0
 DEFAULT_OPT225_EXPAND_RATIO: float = 1.20
 DEFAULT_OPT225_COMPRESS_RATIO: float = 0.80
 SPREAD_CONVENTION: str = "atm_iv - base_vol"
 
 _DEFAULT_LOG_DIR = (
     Path(__file__).resolve().parents[3] / ".glm-logs" / "w0818b_w92_options_vol"
+)
+_W94_LOG_DIR = (
+    Path(__file__).resolve().parents[3] / ".glm-logs" / "w0818d_w94_opt_skew_thick"
 )
 
 
@@ -955,22 +1394,37 @@ def build_opt225_regime_bundle(
     atm_rows: Sequence[Mapping[str, Any]],
     spread_rows: Sequence[Mapping[str, Any]] | None = None,
     *,
+    skew_rows: Sequence[Mapping[str, Any]] | None = None,
+    term_rows: Sequence[Mapping[str, Any]] | None = None,
+    basevol_delta_rows: Sequence[Mapping[str, Any]] | None = None,
     short_n: int = DEFAULT_OPT225_SHORT_N,
     long_n: int = DEFAULT_OPT225_LONG_N,
 ) -> dict[str, Any]:
-    """Build BaseVol / ATM IV / spread regime maps for factory + CF panels."""
+    """Build BaseVol / ATM / spread / skew / CM-term / ΔBaseVol regime maps.
+
+    BaseVol = canonical level. ATM IV maps are included as **compare-only**.
+    """
     if spread_rows is None:
         spread_rows = build_spread_series(base_rows, atm_rows)
+    if basevol_delta_rows is None:
+        basevol_delta_rows = build_daily_basevol_delta_series(base=base_rows)
     base_lvl = series_rows_to_level_map(base_rows, "base_vol")
     atm_lvl = series_rows_to_level_map(atm_rows, "atm_iv")
     spread_lvl = series_rows_to_level_map(spread_rows, "spread")
+    skew_lvl = (
+        series_rows_to_level_map(skew_rows, "skew") if skew_rows is not None else {}
+    )
+    term_lvl = (
+        series_rows_to_level_map(term_rows, "cm_term") if term_rows is not None else {}
+    )
+    delta_lvl = series_rows_to_level_map(basevol_delta_rows, "basevol_delta")
     # day-over-day change of spread (skip first obs / gaps → no invent)
     spread_chg: dict[str, float] = {}
     sp_dates = sorted(spread_lvl)
     for i in range(1, len(sp_dates)):
         d0, d1 = sp_dates[i - 1], sp_dates[i]
         spread_chg[d1] = spread_lvl[d1] - spread_lvl[d0]
-    return {
+    bundle: dict[str, Any] = {
         "basevol": level_series_to_regime_maps(
             base_lvl,
             short_n=short_n,
@@ -982,7 +1436,7 @@ def build_opt225_regime_bundle(
             atm_lvl,
             short_n=short_n,
             long_n=long_n,
-            source="options_225_atm_iv",
+            source="options_225_atm_iv_compare_only",
             series_kind="atm_iv",
         ),
         "spread": level_series_to_regime_maps(
@@ -1000,13 +1454,47 @@ def build_opt225_regime_bundle(
             series_kind="spread_change",
         ),
         "spread_convention": SPREAD_CONVENTION,
+        "skew_convention": SKEW_CONVENTION,
+        "cm_term_convention": CM_TERM_CONVENTION,
+        "basevol_delta_convention": BASEVOL_DELTA_CONVENTION,
         "units": "percent_vol_points",
         "dataset": DATASET_ID,
         "version": OPTIONS_225_VOL_SERIES_VERSION,
         "wave": OPTIONS_225_VOL_SERIES_WAVE,
+        "canonical_level": "basevol",
+        "atm_iv_role": ATM_IV_ROLE,
         "ffill_applied": False,
         "invent_fill": False,
     }
+    # Mark ATM series compare-only on the regime map itself.
+    bundle["atm_iv"]["compare_only"] = True
+    bundle["atm_iv"]["role"] = ATM_IV_ROLE
+    bundle["basevol"]["role"] = BASEVOL_ROLE
+    if skew_lvl:
+        bundle["skew"] = level_series_to_regime_maps(
+            skew_lvl,
+            short_n=short_n,
+            long_n=long_n,
+            source="options_225_skew_95put",
+            series_kind="skew",
+        )
+    if term_lvl:
+        bundle["cm_term"] = level_series_to_regime_maps(
+            term_lvl,
+            short_n=short_n,
+            long_n=long_n,
+            source="options_225_cm_term_near_minus_next",
+            series_kind="cm_term",
+        )
+    if delta_lvl:
+        bundle["basevol_delta"] = level_series_to_regime_maps(
+            delta_lvl,
+            short_n=short_n,
+            long_n=long_n,
+            source="options_225_basevol_delta",
+            series_kind="basevol_delta",
+        )
+    return bundle
 
 
 def load_ndjson_series(path: str | Path) -> list[dict[str, Any]]:
@@ -1032,16 +1520,44 @@ def load_ndjson_series(path: str | Path) -> list[dict[str, Any]]:
 def load_opt225_series_cache(
     log_dir: str | Path | None = None,
 ) -> dict[str, Any] | None:
-    """Load pre-built BaseVol / ATM / spread ndjson from W92 log dir."""
-    d = Path(log_dir) if log_dir else _DEFAULT_LOG_DIR
-    base_p = d / "base_vol_series.ndjson"
-    atm_p = d / "atm_iv_series.ndjson"
-    spread_p = d / "spread_series.ndjson"
-    if not (base_p.is_file() and atm_p.is_file()):
+    """Load pre-built series ndjson from W92/W94 log dirs.
+
+    Prefers explicit ``log_dir``. Otherwise tries W94 thick dir first, then
+    W92 cache (BaseVol/ATM/spread). Skew / CM-term / ΔBaseVol loaded when
+    present; ΔBaseVol can be derived from BaseVol if missing.
+    """
+    candidates: list[Path] = []
+    if log_dir is not None:
+        candidates.append(Path(log_dir))
+    else:
+        candidates.extend([_W94_LOG_DIR, _DEFAULT_LOG_DIR])
+    d: Path | None = None
+    for c in candidates:
+        if (c / "base_vol_series.ndjson").is_file() and (
+            c / "atm_iv_series.ndjson"
+        ).is_file():
+            d = c
+            break
+    if d is None:
         return None
-    base = load_ndjson_series(base_p)
-    atm = load_ndjson_series(atm_p)
-    spread = load_ndjson_series(spread_p) if spread_p.is_file() else build_spread_series(base, atm)
+    base = load_ndjson_series(d / "base_vol_series.ndjson")
+    atm = load_ndjson_series(d / "atm_iv_series.ndjson")
+    spread_p = d / "spread_series.ndjson"
+    spread = (
+        load_ndjson_series(spread_p)
+        if spread_p.is_file()
+        else build_spread_series(base, atm)
+    )
+    skew_p = d / "skew_series.ndjson"
+    term_p = d / "cm_term_series.ndjson"
+    delta_p = d / "basevol_delta_series.ndjson"
+    skew = load_ndjson_series(skew_p) if skew_p.is_file() else []
+    term = load_ndjson_series(term_p) if term_p.is_file() else []
+    delta = (
+        load_ndjson_series(delta_p)
+        if delta_p.is_file()
+        else build_daily_basevol_delta_series(base=base)
+    )
     meta: dict[str, Any] = {}
     meta_p = d / "meta.json"
     if meta_p.is_file():
@@ -1053,10 +1569,15 @@ def load_opt225_series_cache(
         "base_vol_series": base,
         "atm_iv_series": atm,
         "spread_series": spread,
+        "skew_series": skew,
+        "cm_term_series": term,
+        "basevol_delta_series": delta,
         "meta": meta,
         "log_dir": str(d),
         "dataset": DATASET_ID,
-        "source": "w92_log_cache",
+        "source": "opt225_log_cache",
+        "canonical_level": "base_vol",
+        "atm_iv_role": ATM_IV_ROLE,
     }
 
 
@@ -1065,7 +1586,7 @@ def write_definition_rules(
     *,
     stats: Mapping[str, Any] | None = None,
 ) -> dict[str, Path]:
-    """Write ``basevol_rule.json`` / ``atm_iv_rule.json`` / ``series_meta.json``."""
+    """Write rule JSONs + ``series_meta.json`` (BaseVol canonical; ATM compare-only)."""
     d = Path(out_dir)
     d.mkdir(parents=True, exist_ok=True)
     basevol_rule = {
@@ -1074,6 +1595,8 @@ def write_definition_rules(
         "version": OPTIONS_225_VOL_SERIES_VERSION,
         "dataset": DATASET_ID,
         "units": "percent_vol_points",
+        "role": BASEVOL_ROLE,
+        "canonical_level": True,
         "aggregation": (
             "Per Date: prefer EmMrgnTrgDiv==002 settlement rows; collect finite "
             "BaseVol; unique value if constant across chain else median; flag "
@@ -1095,6 +1618,9 @@ def write_definition_rules(
         "version": OPTIONS_225_VOL_SERIES_VERSION,
         "dataset": DATASET_ID,
         "units": "percent_vol_points",
+        "role": ATM_IV_ROLE,
+        "compare_only": True,
+        "canonical_level": False,
         "front_cm": (
             f"Earliest CM with LTD > Date and DTE >= {DEFAULT_ATM_MIN_DTE_DAYS} "
             "(W93 near-expiry roll); fallback SQD with min_dte; then LTD/SQD any "
@@ -1104,23 +1630,82 @@ def write_definition_rules(
         "atm_strike": "argmin |Strike - median(UnderPx)| within front CM (ties → lower strike).",
         "atm_iv": (
             "At (cm, strike): avg(put IV, call IV) when both finite; else available "
-            "side. Optional Vo/OI recorded but not required filters."
+            "side. Optional Vo/OI recorded but not required filters. Never invent."
         ),
         "missing_days": GAP_POLICY,
         "ffill_applied": False,
         "invent_fill": False,
         "iv_fields_available_from": IV_FIELDS_AVAILABLE_FROM,
         "note_vs_basevol": (
-            "J-Quants BaseVol ≈ ATM put/call mid by definition. Pre-W93 reconstructed "
-            "ATM IV matched BaseVol on ~86.7% of days (exact 0 spread) but diverged "
-            "exclusively on SQ-week DTE in {1,2,3}; min_dte_days=5 rolls to next CM."
+            "COMPARE-ONLY (W94). J-Quants BaseVol ≈ ATM put/call mid by definition. "
+            "Post W93 min_dte=6: corr≈0.99994 / exact-zero spread≈99.76%. Prefer "
+            "BaseVol as canonical level; keep ATM parallel for comparison."
         ),
+    }
+    skew_rule = {
+        "rule_id": "opt225_daily_skew_95put",
+        "wave": OPTIONS_225_VOL_SERIES_WAVE,
+        "version": OPTIONS_225_VOL_SERIES_VERSION,
+        "dataset": DATASET_ID,
+        "units": "percent_vol_points",
+        "convention": SKEW_CONVENTION,
+        "put_moneyness_target": DEFAULT_SKEW_PUT_MONEYNESS,
+        "rule": (
+            "Front CM (min_dte>=6). ATM mid IV at nearest listed strike to UnderPx. "
+            "Put strike* = listed put strike minimizing |Strike−0.95*UnderPx| among "
+            "finite-IV puts (ties→lower). skew=put_iv(strike*)−atm_mid_iv. "
+            "Never interpolate/invent smile points; omit day if either leg missing."
+        ),
+        "missing_days": GAP_POLICY,
+        "ffill_applied": False,
+        "invent_fill": False,
+        "invent_strike": False,
+    }
+    cm_term_rule = {
+        "rule_id": "opt225_daily_cm_term",
+        "wave": OPTIONS_225_VOL_SERIES_WAVE,
+        "version": OPTIONS_225_VOL_SERIES_VERSION,
+        "dataset": DATASET_ID,
+        "units": "percent_vol_points",
+        "convention": CM_TERM_CONVENTION,
+        "rule": (
+            "near_cm = front CM with LTD DTE>=6; next_cm = earliest CM > near_cm "
+            "also meeting min_dte (fallback LTD>Date). ATM-ish IV per CM = nearest "
+            "listed strike put/call mid. cm_term = near_atm_iv − next_atm_iv. "
+            "Omit if either leg missing; never invent strikes."
+        ),
+        "min_dte_days": DEFAULT_ATM_MIN_DTE_DAYS,
+        "missing_days": GAP_POLICY,
+        "ffill_applied": False,
+        "invent_fill": False,
+        "invent_strike": False,
+    }
+    basevol_delta_rule = {
+        "rule_id": "opt225_daily_basevol_delta",
+        "wave": OPTIONS_225_VOL_SERIES_WAVE,
+        "version": OPTIONS_225_VOL_SERIES_VERSION,
+        "dataset": DATASET_ID,
+        "units": "percent_vol_points",
+        "convention": BASEVOL_DELTA_CONVENTION,
+        "rule": (
+            "On consecutive observed BaseVol dates: delta=BaseVol[t]−BaseVol[t-1] "
+            "(arithmetic primary). log_delta=ln(BaseVol[t]/BaseVol[t-1]) when both>0. "
+            "First observed day omitted. No ffill of calendar holes."
+        ),
+        "missing_days": GAP_POLICY,
+        "ffill_applied": False,
+        "invent_fill": False,
     }
     series_meta = {
         "wave": OPTIONS_225_VOL_SERIES_WAVE,
         "version": OPTIONS_225_VOL_SERIES_VERSION,
         "dataset": DATASET_ID,
+        "canonical_level": "base_vol",
+        "atm_iv_role": ATM_IV_ROLE,
         "spread_convention": SPREAD_CONVENTION,
+        "skew_convention": SKEW_CONVENTION,
+        "cm_term_convention": CM_TERM_CONVENTION,
+        "basevol_delta_convention": BASEVOL_DELTA_CONVENTION,
         "spread_units": "percent_vol_points",
         "gap_policy": GAP_POLICY,
         "regime_windows": {
@@ -1134,14 +1719,24 @@ def write_definition_rules(
             "atm_iv_low": DEFAULT_OPT225_ATM_IV_LOW,
             "spread_high": DEFAULT_OPT225_SPREAD_HIGH,
             "spread_low": DEFAULT_OPT225_SPREAD_LOW,
+            "skew_high": DEFAULT_OPT225_SKEW_HIGH,
+            "skew_low": DEFAULT_OPT225_SKEW_LOW,
+            "cm_term_high": DEFAULT_OPT225_CM_TERM_HIGH,
+            "cm_term_low": DEFAULT_OPT225_CM_TERM_LOW,
+            "basevol_delta_high": DEFAULT_OPT225_BASEVOL_DELTA_HIGH,
+            "basevol_delta_low": DEFAULT_OPT225_BASEVOL_DELTA_LOW,
             "expand_ratio": DEFAULT_OPT225_EXPAND_RATIO,
             "compress_ratio": DEFAULT_OPT225_COMPRESS_RATIO,
         },
         "proxy_compare_only": {
             "nky_vol_*": (
                 "W91 TOPIX/NK225F realized-vol proxy — keep parallel; "
-                "options_225 BaseVol/ATM IV is canonical Nikkei vol SoT."
-            )
+                "options_225 BaseVol is canonical Nikkei vol SoT."
+            ),
+            "opt225_atm_iv_*": (
+                "W94: reconstructed ATM IV marked compare-only; BaseVol is "
+                "canonical level (post-W93 near-cointegrated)."
+            ),
         },
         "stats": dict(stats) if stats else None,
         "mass_research": MASS_RESEARCH,
@@ -1152,10 +1747,18 @@ def write_definition_rules(
     paths = {
         "basevol_rule": d / "basevol_rule.json",
         "atm_iv_rule": d / "atm_iv_rule.json",
+        "skew_rule": d / "skew_rule.json",
+        "cm_term_rule": d / "cm_term_rule.json",
+        "basevol_delta_rule": d / "basevol_delta_rule.json",
         "series_meta": d / "series_meta.json",
     }
     paths["basevol_rule"].write_text(json.dumps(basevol_rule, indent=2) + "\n")
     paths["atm_iv_rule"].write_text(json.dumps(atm_iv_rule, indent=2) + "\n")
+    paths["skew_rule"].write_text(json.dumps(skew_rule, indent=2) + "\n")
+    paths["cm_term_rule"].write_text(json.dumps(cm_term_rule, indent=2) + "\n")
+    paths["basevol_delta_rule"].write_text(
+        json.dumps(basevol_delta_rule, indent=2) + "\n"
+    )
     paths["series_meta"].write_text(json.dumps(series_meta, indent=2, default=str) + "\n")
     return paths
 
@@ -1170,10 +1773,15 @@ __all__ = [
     "PHASE7",
     "READY_DECLARED",
     "OPERATIONAL_GO",
+    "BASEVOL_ROLE",
+    "ATM_IV_ROLE",
     "normalize_options_225_row",
     "build_daily_basevol_series",
     "build_daily_atm_iv_series",
     "build_spread_series",
+    "build_daily_skew_series",
+    "build_daily_term_series",
+    "build_daily_basevol_delta_series",
     "calendar_gap_dates",
     "pearson_corr",
     "summarize_vol_series",
@@ -1191,9 +1799,19 @@ __all__ = [
     "DEFAULT_OPT225_ATM_IV_LOW",
     "DEFAULT_OPT225_SPREAD_HIGH",
     "DEFAULT_OPT225_SPREAD_LOW",
+    "DEFAULT_OPT225_SKEW_HIGH",
+    "DEFAULT_OPT225_SKEW_LOW",
+    "DEFAULT_OPT225_CM_TERM_HIGH",
+    "DEFAULT_OPT225_CM_TERM_LOW",
+    "DEFAULT_OPT225_BASEVOL_DELTA_HIGH",
+    "DEFAULT_OPT225_BASEVOL_DELTA_LOW",
     "DEFAULT_OPT225_EXPAND_RATIO",
     "DEFAULT_OPT225_COMPRESS_RATIO",
+    "DEFAULT_SKEW_PUT_MONEYNESS",
     "SPREAD_CONVENTION",
+    "SKEW_CONVENTION",
+    "CM_TERM_CONVENTION",
+    "BASEVOL_DELTA_CONVENTION",
     "DEFAULT_ATM_MIN_DTE_DAYS",
     "level_series_to_regime_maps",
     "series_rows_to_level_map",

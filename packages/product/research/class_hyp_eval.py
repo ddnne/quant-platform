@@ -101,6 +101,9 @@ from features.class_signals import (
     SIGNAL_ID_OPT225_ATM_IV_TERM_RATIO,
     SIGNAL_ID_OPT225_SPREAD_ABS,
     SIGNAL_ID_OPT225_SPREAD_CHANGE,
+    SIGNAL_ID_OPT225_SKEW_ABS,
+    SIGNAL_ID_OPT225_CM_TERM_ABS,
+    SIGNAL_ID_OPT225_BASEVOL_DELTA_ABS,
     SIGNAL_ID_RATE_CURVE_XS,
     SIGNAL_ID_RATE_LEVEL_XS,
     DEFAULT_OPT225_VOL_HIGH_THRESHOLD,
@@ -2225,6 +2228,9 @@ _OPT225_SIGNAL_IDS: dict[str, str] = {
     "opt225_atm_iv_term_ratio": SIGNAL_ID_OPT225_ATM_IV_TERM_RATIO,
     "opt225_iv_base_spread_abs": SIGNAL_ID_OPT225_SPREAD_ABS,
     "opt225_iv_base_spread_change": SIGNAL_ID_OPT225_SPREAD_CHANGE,
+    "opt225_skew_abs_level": SIGNAL_ID_OPT225_SKEW_ABS,
+    "opt225_cm_term_abs_level": SIGNAL_ID_OPT225_CM_TERM_ABS,
+    "opt225_basevol_delta_abs": SIGNAL_ID_OPT225_BASEVOL_DELTA_ABS,
 }
 
 
@@ -2274,6 +2280,9 @@ def evaluate_opt225_vol_on_bars(
         "atm_iv": "opt225_atm_iv_level",
         "spread": "opt225_iv_base_spread",
         "spread_change": "opt225_iv_base_spread",
+        "skew": "opt225_skew_95put",
+        "cm_term": "opt225_cm_term_near_next",
+        "basevol_delta": "opt225_basevol_delta",
     }.get(sk, "opt225_basevol_level")
 
     by_date: dict[str, dict[str, float | None]] = {}
@@ -2412,6 +2421,9 @@ def load_opt225_regime_bundle_for_eval(
         cache.get("base_vol_series") or [],
         cache.get("atm_iv_series") or [],
         cache.get("spread_series"),
+        skew_rows=cache.get("skew_series") or None,
+        term_rows=cache.get("cm_term_series") or None,
+        basevol_delta_rows=cache.get("basevol_delta_series") or None,
         short_n=sn,
         long_n=ln,
     )

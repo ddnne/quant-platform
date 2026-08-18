@@ -1,10 +1,13 @@
-"""W92 / w0818b — options_225 BaseVol + ATM IV daily series (synthetic chains)."""
+"""W92–W94 — options_225 BaseVol + ATM + skew / CM-term / ΔBaseVol series."""
 
 from __future__ import annotations
 
 import pytest
 
 from research.options_225_vol_series import (
+    ATM_IV_ROLE,
+    BASEVOL_ROLE,
+    CM_TERM_CONVENTION,
     DATASET_ID,
     GAP_POLICY,
     IV_FIELDS_AVAILABLE_FROM,
@@ -14,8 +17,12 @@ from research.options_225_vol_series import (
     OPTIONS_225_VOL_SERIES_WAVE,
     PHASE7,
     READY_DECLARED,
+    SKEW_CONVENTION,
     build_daily_atm_iv_series,
+    build_daily_basevol_delta_series,
     build_daily_basevol_series,
+    build_daily_skew_series,
+    build_daily_term_series,
     build_series_bundle_from_rows,
     build_spread_series,
     calendar_gap_dates,
@@ -148,10 +155,8 @@ def _mini_chain_day(
 
 
 def test_wave_pins_and_freezes():
-    assert OPTIONS_225_VOL_SERIES_VERSION.startswith(
-        "research-options-225-vol-series/v1"
-    )
-    assert "W93" in OPTIONS_225_VOL_SERIES_WAVE or "W92" in OPTIONS_225_VOL_SERIES_WAVE
+    assert OPTIONS_225_VOL_SERIES_VERSION == "research-options-225-vol-series/v1.2"
+    assert "W94" in OPTIONS_225_VOL_SERIES_WAVE
     assert DATASET_ID == "derivatives_bars_daily_options_225"
     assert GAP_POLICY == "disclose_only_no_ffill_no_invent"
     assert IV_FIELDS_AVAILABLE_FROM == "2016-07-19"
@@ -159,6 +164,8 @@ def test_wave_pins_and_freezes():
     assert PHASE7 == "OFF"
     assert READY_DECLARED is False
     assert OPERATIONAL_GO is False
+    assert BASEVOL_ROLE == "canonical_level"
+    assert ATM_IV_ROLE == "compare_only"
 
 
 def test_normalize_blank_iv_fields():
@@ -380,6 +387,8 @@ def test_corr_and_bundle_stats():
     bundle = build_series_bundle_from_rows(rows)
     assert bundle["mass_research"] == "NO-GO"
     assert bundle["ffill_applied"] is False
+    assert bundle["canonical_level"] == "base_vol"
+    assert bundle["atm_iv_role"] == "compare_only"
     stats = bundle["stats"]
     assert stats["n_base_vol_days"] == 3
     assert stats["n_atm_iv_days"] == 3
@@ -392,3 +401,194 @@ def test_corr_and_bundle_stats():
         bundle["base_vol_series"], bundle["atm_iv_series"], bundle["spread_series"]
     )
     assert summary["gap_policy"] == GAP_POLICY
+    assert bundle["atm_iv_series"][0].get("compare_only") is True
+
+
+def _chain_with_skew_strikes(
+    date: str,
+    *,
+    under: float = 40000.0,
+    base_vol: float = 20.0,
+    atm_put_iv: float = 20.0,
+    atm_call_iv: float = 20.0,
+    put95_iv: float = 24.0,
+    next_atm_iv: float = 18.0,
+    front_cm: str = "2024-02",
+    next_cm: str = "2024-03",
+    ltd: str = "2024-02-08",
+    next_ltd: str = "2024-03-07",
+) -> list[dict]:
+    """ATM + exact 0.95*Under put + next-CM ATM for skew/term tests."""
+    atm_strike = 40000.0
+    put95_strike = 38000.0  # exactly 0.95 * 40000
+    rows = [
+        _contract(
+            date=date,
+            code="P_ATM",
+            strike=atm_strike,
+            pc="1",
+            cm=front_cm,
+            ltd=ltd,
+            sqd="2024-02-09",
+            under=under,
+            base_vol=base_vol,
+            iv=atm_put_iv,
+        ),
+        _contract(
+            date=date,
+            code="C_ATM",
+            strike=atm_strike,
+            pc="2",
+            cm=front_cm,
+            ltd=ltd,
+            sqd="2024-02-09",
+            under=under,
+            base_vol=base_vol,
+            iv=atm_call_iv,
+        ),
+        _contract(
+            date=date,
+            code="P_95",
+            strike=put95_strike,
+            pc="1",
+            cm=front_cm,
+            ltd=ltd,
+            sqd="2024-02-09",
+            under=under,
+            base_vol=base_vol,
+            iv=put95_iv,
+        ),
+        # next CM ATM
+        _contract(
+            date=date,
+            code="P_NEXT",
+            strike=atm_strike,
+            pc="1",
+            cm=next_cm,
+            ltd=next_ltd,
+            sqd="2024-03-08",
+            under=under,
+            base_vol=base_vol,
+            iv=next_atm_iv + 0.2,
+        ),
+        _contract(
+            date=date,
+            code="C_NEXT",
+            strike=atm_strike,
+            pc="2",
+            cm=next_cm,
+            ltd=next_ltd,
+            sqd="2024-03-08",
+            under=under,
+            base_vol=base_vol,
+            iv=next_atm_iv - 0.2,
+        ),
+    ]
+    return rows
+
+
+def test_skew_series_95put_minus_atm_no_invent():
+    rows = _chain_with_skew_strikes(
+        "2024-01-10", put95_iv=24.0, atm_put_iv=20.0, atm_call_iv=20.0
+    )
+    # Far OTM put with blank IV must not invent a smile point
+    rows.append(
+        _contract(
+            date="2024-01-10",
+            code="P_FAR_BLANK",
+            strike=30000.0,
+            pc="1",
+            cm="2024-02",
+            ltd="2024-02-08",
+            sqd="2024-02-09",
+            under=40000.0,
+            base_vol=20.0,
+            iv="",
+        )
+    )
+    skew = build_daily_skew_series(rows)
+    assert len(skew) == 1
+    row = skew[0]
+    assert row["date"] == "2024-01-10"
+    assert row["strike"] == 38000.0
+    assert row["put_iv"] == pytest.approx(24.0)
+    assert row["atm_iv"] == pytest.approx(20.0)
+    assert row["skew"] == pytest.approx(4.0)
+    assert row["invent_strike"] is False
+    assert row["ffill_applied"] is False
+    assert row["convention"] == SKEW_CONVENTION
+    # gap day omitted
+    rows2 = rows + _chain_with_skew_strikes("2024-01-12", put95_iv=25.0)
+    skew2 = build_daily_skew_series(rows2)
+    assert [r["date"] for r in skew2] == ["2024-01-10", "2024-01-12"]
+
+
+def test_skew_omits_day_without_finite_put():
+    rows = [
+        _contract(
+            date="2024-01-11",
+            code="C_ONLY",
+            strike=40000.0,
+            pc="2",
+            cm="2024-02",
+            ltd="2024-02-08",
+            sqd="2024-02-09",
+            under=40000.0,
+            base_vol=15.0,
+            iv=15.0,
+        )
+    ]
+    assert build_daily_skew_series(rows) == []
+
+
+def test_cm_term_near_minus_next():
+    rows = _chain_with_skew_strikes(
+        "2024-01-10",
+        atm_put_iv=21.0,
+        atm_call_iv=19.0,  # near ATM mid = 20
+        next_atm_iv=18.0,  # next mid = 18
+    )
+    term = build_daily_term_series(rows)
+    assert len(term) == 1
+    row = term[0]
+    assert row["near_cm"] == "2024-02"
+    assert row["next_cm"] == "2024-03"
+    assert row["near_atm_iv"] == pytest.approx(20.0)
+    assert row["next_atm_iv"] == pytest.approx(18.0)
+    assert row["cm_term"] == pytest.approx(2.0)
+    assert row["convention"] == CM_TERM_CONVENTION
+    assert row["invent_strike"] is False
+    assert row["ffill_applied"] is False
+
+
+def test_cm_term_omits_when_next_cm_missing():
+    rows = _mini_chain_day("2024-01-10")
+    # mini_chain has a back month C_BACK but only call — still has CM 2024-03
+    # Strip next-month rows to force omit.
+    rows = [r for r in rows if r["CM"] == "2024-02"]
+    assert build_daily_term_series(rows) == []
+
+
+def test_basevol_delta_first_day_gap_and_no_ffill():
+    base = [
+        {"date": "2024-01-04", "base_vol": 18.0},
+        {"date": "2024-01-05", "base_vol": 20.0},
+        # calendar gap 01-06/07 not filled; delta still computed across obs
+        {"date": "2024-01-08", "base_vol": 22.0},
+    ]
+    delta = build_daily_basevol_delta_series(base=base)
+    assert [r["date"] for r in delta] == ["2024-01-05", "2024-01-08"]
+    assert delta[0]["basevol_delta"] == pytest.approx(2.0)
+    assert delta[0]["prev_date"] == "2024-01-04"
+    assert delta[0]["log_delta"] == pytest.approx(__import__("math").log(20.0 / 18.0))
+    assert delta[1]["basevol_delta"] == pytest.approx(2.0)
+    assert all(r["ffill_applied"] is False for r in delta)
+    # first day never appears
+    assert "2024-01-04" not in [r["date"] for r in delta]
+
+
+def test_atm_marked_compare_only():
+    rows = _mini_chain_day("2024-01-10")
+    atm = build_daily_atm_iv_series(rows)
+    assert atm[0]["compare_only"] is True
+    assert atm[0]["role"] == "compare_only"

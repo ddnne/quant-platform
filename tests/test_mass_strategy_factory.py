@@ -141,7 +141,7 @@ def test_logic_templates_distinct_economic_logic():
     assert LOGIC_TEMPLATES["nky_vol_term_levels"].family_id == FAMILY_INDEX_VOL_REGIME
     assert LOGIC_TEMPLATES["nky_vol_term_ratio"].family_id == FAMILY_INDEX_VOL_REGIME
     assert "nky_vol_abs_level" in doc.get("w91_index_vol_logic_ids", [])
-    # W92 options_225 BaseVol / ATM IV / spread (canonical SoT)
+    # W92/W94 options_225 BaseVol / skew / CM-term / Δvol (+ ATM compare-only)
     for lid in (
         "opt225_basevol_abs_level",
         "opt225_basevol_term_levels",
@@ -151,10 +151,19 @@ def test_logic_templates_distinct_economic_logic():
         "opt225_atm_iv_term_ratio",
         "opt225_iv_base_spread_abs",
         "opt225_iv_base_spread_change",
+        "opt225_skew_abs_level",
+        "opt225_cm_term_abs_level",
+        "opt225_basevol_delta_abs",
     ):
         assert lid in LOGIC_TEMPLATES
         assert LOGIC_TEMPLATES[lid].family_id == FAMILY_OPTIONS_VOL_REGIME
     assert "opt225_basevol_abs_level" in doc.get("w92_options_vol_logic_ids", [])
+    assert "opt225_skew_abs_level" in doc.get("w94_options_vol_logic_ids", [])
+    assert doc.get("opt225_canonical_level") == "basevol"
+    assert doc.get("opt225_atm_iv_role") == "compare_only"
+    assert LOGIC_TEMPLATES["opt225_atm_iv_abs_level"].base_params.get(
+        "compare_only"
+    ) is True
     # diversity rules documented
     rules = doc["diversity_rules"]
     assert "hold_days only" in str(rules["does_not_count"])
@@ -599,6 +608,9 @@ def test_opt225_vol_logics_templates_and_eval_synthetic():
         "opt225_atm_iv_term_ratio",
         "opt225_iv_base_spread_abs",
         "opt225_iv_base_spread_change",
+        "opt225_skew_abs_level",
+        "opt225_cm_term_abs_level",
+        "opt225_basevol_delta_abs",
     )
     for lid in lids:
         tpl = LOGIC_TEMPLATES[lid]
@@ -689,7 +701,10 @@ def test_opt225_signal_helpers_pure():
     from features.class_signals import (
         CLASS_OPTIONS_VOL_REGIME,
         compute_opt225_basevol_abs_level_signal,
+        compute_opt225_basevol_delta_abs_signal,
+        compute_opt225_cm_term_abs_level_signal,
         compute_opt225_iv_base_spread_abs_signal,
+        compute_opt225_skew_abs_level_signal,
         compute_opt225_vol_signal,
     )
 
@@ -711,3 +726,14 @@ def test_opt225_signal_helpers_pure():
     )
     assert ratio["regime"] == "expanding"
     assert ratio["value"] == -1.0
+    # W94 skew / CM-term / ΔBaseVol
+    skew_hi = compute_opt225_skew_abs_level_signal(cs_sign=1.0, vol_level=4.0)
+    assert skew_hi["value"] == -1.0
+    skew_lo = compute_opt225_skew_abs_level_signal(cs_sign=1.0, vol_level=0.2)
+    assert skew_lo["value"] == 1.0
+    term_hi = compute_opt225_cm_term_abs_level_signal(cs_sign=1.0, vol_level=3.0)
+    assert term_hi["value"] == -1.0
+    dlt_hi = compute_opt225_basevol_delta_abs_signal(cs_sign=1.0, vol_level=2.0)
+    assert dlt_hi["value"] == -1.0
+    dlt_lo = compute_opt225_basevol_delta_abs_signal(cs_sign=1.0, vol_level=-2.0)
+    assert dlt_lo["value"] == 1.0

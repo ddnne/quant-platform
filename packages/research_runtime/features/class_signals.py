@@ -33,8 +33,8 @@ from typing import Any, Mapping, Sequence
 # Identity / freeze
 # ---------------------------------------------------------------------------
 
-CLASS_SIGNALS_VERSION: str = "class-signals/v9"
-CLASS_SIGNALS_WAVE: str = "W92 / w0818b"
+CLASS_SIGNALS_VERSION: str = "class-signals/v10"
+CLASS_SIGNALS_WAVE: str = "W94 / w0818d"
 
 SIGNAL_STATUS: str = "candidate"
 SIGNAL_VERSION: str = "1.5.0"
@@ -87,6 +87,10 @@ SIGNAL_ID_OPT225_ATM_IV_TERM_LEVELS: str = "c21_opt225_atm_iv_term_levels_xs"
 SIGNAL_ID_OPT225_ATM_IV_TERM_RATIO: str = "c21_opt225_atm_iv_term_ratio_xs"
 SIGNAL_ID_OPT225_SPREAD_ABS: str = "c21_opt225_iv_base_spread_abs_xs"
 SIGNAL_ID_OPT225_SPREAD_CHANGE: str = "c21_opt225_iv_base_spread_change_xs"
+# W94 skew / CM-term / ΔBaseVol
+SIGNAL_ID_OPT225_SKEW_ABS: str = "c21_opt225_skew_abs_level_xs"
+SIGNAL_ID_OPT225_CM_TERM_ABS: str = "c21_opt225_cm_term_abs_level_xs"
+SIGNAL_ID_OPT225_BASEVOL_DELTA_ABS: str = "c21_opt225_basevol_delta_abs_xs"
 
 # Feature legs (prefer registry-approved)
 MOMENTUM_FEATURE_ID: str = "momentum_n"
@@ -105,6 +109,9 @@ NKY_VOL_TERM_RATIO_FEATURE_ID: str = "nky_realized_vol_term_ratio"
 OPT225_BASEVOL_FEATURE_ID: str = "opt225_basevol_level"
 OPT225_ATM_IV_FEATURE_ID: str = "opt225_atm_iv_level"
 OPT225_SPREAD_FEATURE_ID: str = "opt225_iv_base_spread"
+OPT225_SKEW_FEATURE_ID: str = "opt225_skew_95put"
+OPT225_CM_TERM_FEATURE_ID: str = "opt225_cm_term_near_next"
+OPT225_BASEVOL_DELTA_FEATURE_ID: str = "opt225_basevol_delta"
 
 # Tokyo repo tenor pins for curve-shape proxy (no invent; only observed tenors).
 # Definition: spread = rate(long_tenor) − rate(short_tenor) on same as_of_date.
@@ -249,9 +256,21 @@ DEFAULT_OPT225_VOL_HIGH_THRESHOLD: float = 24.0
 DEFAULT_OPT225_VOL_LOW_THRESHOLD: float = 12.0
 DEFAULT_OPT225_SPREAD_HIGH_THRESHOLD: float = 1.0
 DEFAULT_OPT225_SPREAD_LOW_THRESHOLD: float = -0.5
+DEFAULT_OPT225_SKEW_HIGH_THRESHOLD: float = 3.0
+DEFAULT_OPT225_SKEW_LOW_THRESHOLD: float = 0.5
+DEFAULT_OPT225_CM_TERM_HIGH_THRESHOLD: float = 2.0
+DEFAULT_OPT225_CM_TERM_LOW_THRESHOLD: float = -1.0
+DEFAULT_OPT225_BASEVOL_DELTA_HIGH_THRESHOLD: float = 1.0
+DEFAULT_OPT225_BASEVOL_DELTA_LOW_THRESHOLD: float = -1.0
 DEFAULT_OPT225_VOL_EXPAND_RATIO: float = 1.20
 DEFAULT_OPT225_VOL_COMPRESS_RATIO: float = 0.80
 OPT225_SPREAD_CONVENTION: str = "atm_iv - base_vol"
+OPT225_SKEW_CONVENTION: str = "put_iv(~0.95*UnderPx) - atm_mid_iv"
+OPT225_CM_TERM_CONVENTION: str = "near_cm_atm_iv - next_cm_atm_iv"
+OPT225_BASEVOL_DELTA_CONVENTION: str = "BaseVol[t] - BaseVol[t-1]"
+# W94: BaseVol = canonical level; reconstructed ATM = compare-only.
+OPT225_CANONICAL_LEVEL: str = "basevol"
+OPT225_ATM_IV_ROLE: str = "compare_only"
 
 
 def _freeze_meta() -> dict[str, Any]:
@@ -2177,7 +2196,7 @@ def nky_vol_regime_from_abs_level(
         v = float(vol_level)
     except (TypeError, ValueError):
         return None, {"reason": "vol_level not numeric", "raw": vol_level}
-    if v != v or v < 0:  # NaN / negative
+    if v != v:  # NaN — signed series (spread / ΔBaseVol / CM-term) may be < 0
         return None, {"reason": "vol_level invalid", "raw": v}
     if v >= float(high_threshold):
         label = "high"
@@ -2807,6 +2826,72 @@ def compute_opt225_iv_base_spread_change_signal(**kwargs: Any) -> dict[str, Any]
     )
 
 
+def compute_opt225_skew_abs_level_signal(**kwargs: Any) -> dict[str, Any]:
+    """W94: 95% put skew abs × CS (canonical smile feature; no invent)."""
+    return compute_opt225_vol_signal(
+        mode="abs_level",
+        signal_id=SIGNAL_ID_OPT225_SKEW_ABS,
+        feature_id=OPT225_SKEW_FEATURE_ID,
+        series_kind="skew",
+        high_threshold=kwargs.pop(
+            "high_threshold", DEFAULT_OPT225_SKEW_HIGH_THRESHOLD
+        ),
+        low_threshold=kwargs.pop(
+            "low_threshold", DEFAULT_OPT225_SKEW_LOW_THRESHOLD
+        ),
+        extra_meta={
+            "skew_convention": OPT225_SKEW_CONVENTION,
+            "invent_strike": False,
+            **dict(kwargs.pop("extra_meta", None) or {}),
+        },
+        **kwargs,
+    )
+
+
+def compute_opt225_cm_term_abs_level_signal(**kwargs: Any) -> dict[str, Any]:
+    """W94: near−next CM ATM-ish term abs × CS."""
+    return compute_opt225_vol_signal(
+        mode="abs_level",
+        signal_id=SIGNAL_ID_OPT225_CM_TERM_ABS,
+        feature_id=OPT225_CM_TERM_FEATURE_ID,
+        series_kind="cm_term",
+        high_threshold=kwargs.pop(
+            "high_threshold", DEFAULT_OPT225_CM_TERM_HIGH_THRESHOLD
+        ),
+        low_threshold=kwargs.pop(
+            "low_threshold", DEFAULT_OPT225_CM_TERM_LOW_THRESHOLD
+        ),
+        extra_meta={
+            "cm_term_convention": OPT225_CM_TERM_CONVENTION,
+            "invent_strike": False,
+            **dict(kwargs.pop("extra_meta", None) or {}),
+        },
+        **kwargs,
+    )
+
+
+def compute_opt225_basevol_delta_abs_signal(**kwargs: Any) -> dict[str, Any]:
+    """W94: BaseVol[t]−BaseVol[t-1] abs × CS (canonical level change)."""
+    return compute_opt225_vol_signal(
+        mode="abs_level",
+        signal_id=SIGNAL_ID_OPT225_BASEVOL_DELTA_ABS,
+        feature_id=OPT225_BASEVOL_DELTA_FEATURE_ID,
+        series_kind="basevol_delta",
+        high_threshold=kwargs.pop(
+            "high_threshold", DEFAULT_OPT225_BASEVOL_DELTA_HIGH_THRESHOLD
+        ),
+        low_threshold=kwargs.pop(
+            "low_threshold", DEFAULT_OPT225_BASEVOL_DELTA_LOW_THRESHOLD
+        ),
+        extra_meta={
+            "basevol_delta_convention": OPT225_BASEVOL_DELTA_CONVENTION,
+            "canonical_level": OPT225_CANONICAL_LEVEL,
+            **dict(kwargs.pop("extra_meta", None) or {}),
+        },
+        **kwargs,
+    )
+
+
 # ---------------------------------------------------------------------------
 # W89 multi_factor — value×mom×rate · flow×price (thesis-required combinations)
 # ---------------------------------------------------------------------------
@@ -3366,7 +3451,10 @@ def class_signal_definitions(
             "datasets_required": list(OPTIONS_VOL_REGIME_DATASETS),
             "not_simple_daily_sign": True,
             "role": "opt225_atm_iv_abs_level",
-            "canonical_nky_vol": True,
+            "compare_only": True,
+            "atm_iv_role": OPT225_ATM_IV_ROLE,
+            "canonical_level": OPT225_CANONICAL_LEVEL,
+            "note": "W94: ATM reconstructed compare-only; BaseVol is canonical level.",
         },
         {
             "signal_id": SIGNAL_ID_OPT225_ATM_IV_TERM_LEVELS,
@@ -3378,7 +3466,8 @@ def class_signal_definitions(
             "datasets_required": list(OPTIONS_VOL_REGIME_DATASETS),
             "not_simple_daily_sign": True,
             "role": "opt225_atm_iv_term_levels",
-            "canonical_nky_vol": True,
+            "compare_only": True,
+            "atm_iv_role": OPT225_ATM_IV_ROLE,
         },
         {
             "signal_id": SIGNAL_ID_OPT225_ATM_IV_TERM_RATIO,
@@ -3390,7 +3479,8 @@ def class_signal_definitions(
             "datasets_required": list(OPTIONS_VOL_REGIME_DATASETS),
             "not_simple_daily_sign": True,
             "role": "opt225_atm_iv_term_ratio",
-            "canonical_nky_vol": True,
+            "compare_only": True,
+            "atm_iv_role": OPT225_ATM_IV_ROLE,
         },
         {
             "signal_id": SIGNAL_ID_OPT225_SPREAD_ABS,
@@ -3407,7 +3497,8 @@ def class_signal_definitions(
             ),
             "not_simple_daily_sign": True,
             "role": "opt225_iv_base_spread_abs",
-            "canonical_nky_vol": True,
+            "compare_only": True,
+            "note": "W93/W94: non-informative at frozen thresholds post min_dte=6.",
         },
         {
             "signal_id": SIGNAL_ID_OPT225_SPREAD_CHANGE,
@@ -3419,6 +3510,63 @@ def class_signal_definitions(
             "datasets_required": list(OPTIONS_VOL_REGIME_DATASETS),
             "not_simple_daily_sign": True,
             "role": "opt225_iv_base_spread_change",
+            "compare_only": True,
+        },
+        {
+            "signal_id": SIGNAL_ID_OPT225_SKEW_ABS,
+            "version": SIGNAL_VERSION,
+            "status": SIGNAL_STATUS,
+            "candidate_only": CANDIDATE_ONLY,
+            "hypothesis_class": CLASS_OPTIONS_VOL_REGIME,
+            "horizon": "multi_day_cs_opt225_skew_abs",
+            "primary_feature_id": OPT225_SKEW_FEATURE_ID,
+            "datasets_required": list(OPTIONS_VOL_REGIME_DATASETS),
+            "formula": (
+                f"skew={OPT225_SKEW_CONVENTION}; listed put only (no invent); "
+                f"high≥{DEFAULT_OPT225_SKEW_HIGH_THRESHOLD} reverse / "
+                f"low≤{DEFAULT_OPT225_SKEW_LOW_THRESHOLD} keep"
+            ),
+            "not_simple_daily_sign": True,
+            "role": "opt225_skew_abs_level",
+            "invent_strike": False,
+            "canonical_nky_vol": True,
+        },
+        {
+            "signal_id": SIGNAL_ID_OPT225_CM_TERM_ABS,
+            "version": SIGNAL_VERSION,
+            "status": SIGNAL_STATUS,
+            "candidate_only": CANDIDATE_ONLY,
+            "hypothesis_class": CLASS_OPTIONS_VOL_REGIME,
+            "horizon": "multi_day_cs_opt225_cm_term_abs",
+            "primary_feature_id": OPT225_CM_TERM_FEATURE_ID,
+            "datasets_required": list(OPTIONS_VOL_REGIME_DATASETS),
+            "formula": (
+                f"cm_term={OPT225_CM_TERM_CONVENTION}; min_dte>=6; "
+                f"high≥{DEFAULT_OPT225_CM_TERM_HIGH_THRESHOLD} reverse / "
+                f"low≤{DEFAULT_OPT225_CM_TERM_LOW_THRESHOLD} keep"
+            ),
+            "not_simple_daily_sign": True,
+            "role": "opt225_cm_term_abs_level",
+            "invent_strike": False,
+            "canonical_nky_vol": True,
+        },
+        {
+            "signal_id": SIGNAL_ID_OPT225_BASEVOL_DELTA_ABS,
+            "version": SIGNAL_VERSION,
+            "status": SIGNAL_STATUS,
+            "candidate_only": CANDIDATE_ONLY,
+            "hypothesis_class": CLASS_OPTIONS_VOL_REGIME,
+            "horizon": "multi_day_cs_opt225_basevol_delta_abs",
+            "primary_feature_id": OPT225_BASEVOL_DELTA_FEATURE_ID,
+            "datasets_required": list(OPTIONS_VOL_REGIME_DATASETS),
+            "formula": (
+                f"delta={OPT225_BASEVOL_DELTA_CONVENTION}; first day omitted; "
+                f"high≥{DEFAULT_OPT225_BASEVOL_DELTA_HIGH_THRESHOLD} reverse / "
+                f"low≤{DEFAULT_OPT225_BASEVOL_DELTA_LOW_THRESHOLD} keep"
+            ),
+            "not_simple_daily_sign": True,
+            "role": "opt225_basevol_delta_abs",
+            "canonical_level": OPT225_CANONICAL_LEVEL,
             "canonical_nky_vol": True,
         },
     ]
@@ -3443,13 +3591,14 @@ def class_signals_document() -> dict[str, Any]:
         "s1_s5_unreject": S1_S5_UNREJECT,
         **_freeze_meta(),
         "note": (
-            "W92 class-based research signals. multi_day_hold + event_post + "
+            "W94 class-based research signals. multi_day_hold + event_post + "
             "macro_conditioned + flow_demand + fundamentals_price "
             "(+ optional cross_section) + rate_factor (abs level / curve) + "
             "multi_factor (value×mom×rate / flow×price) + index_vol_regime "
             "(nky abs / term levels / term ratio; TOPIX/NK225F proxy/compare) + "
-            "options_vol_regime (canonical options_225 BaseVol / ATM IV / "
-            "spread). Production research_candidate only if economic net + "
+            "options_vol_regime (canonical options_225 BaseVol level + W94 "
+            "skew / CM-term / ΔBaseVol; ATM IV compare-only; spread compare). "
+            "Production research_candidate only if economic net + "
             "occurrence rate + multi-year no extreme skew + risk OK + "
             "statistical bar. READY/Mass never auto-connect. No S1–S5 un-reject."
         ),
@@ -3523,11 +3672,25 @@ __all__ = [
     "OPT225_BASEVOL_FEATURE_ID",
     "OPT225_ATM_IV_FEATURE_ID",
     "OPT225_SPREAD_FEATURE_ID",
+    "OPT225_SKEW_FEATURE_ID",
+    "OPT225_CM_TERM_FEATURE_ID",
+    "OPT225_BASEVOL_DELTA_FEATURE_ID",
     "OPT225_SPREAD_CONVENTION",
+    "OPT225_SKEW_CONVENTION",
+    "OPT225_CM_TERM_CONVENTION",
+    "OPT225_BASEVOL_DELTA_CONVENTION",
+    "OPT225_CANONICAL_LEVEL",
+    "OPT225_ATM_IV_ROLE",
     "DEFAULT_OPT225_VOL_HIGH_THRESHOLD",
     "DEFAULT_OPT225_VOL_LOW_THRESHOLD",
     "DEFAULT_OPT225_SPREAD_HIGH_THRESHOLD",
     "DEFAULT_OPT225_SPREAD_LOW_THRESHOLD",
+    "DEFAULT_OPT225_SKEW_HIGH_THRESHOLD",
+    "DEFAULT_OPT225_SKEW_LOW_THRESHOLD",
+    "DEFAULT_OPT225_CM_TERM_HIGH_THRESHOLD",
+    "DEFAULT_OPT225_CM_TERM_LOW_THRESHOLD",
+    "DEFAULT_OPT225_BASEVOL_DELTA_HIGH_THRESHOLD",
+    "DEFAULT_OPT225_BASEVOL_DELTA_LOW_THRESHOLD",
     "DEFAULT_OPT225_VOL_EXPAND_RATIO",
     "DEFAULT_OPT225_VOL_COMPRESS_RATIO",
     "ORDER_EXECUTION",
@@ -3559,6 +3722,9 @@ __all__ = [
     "SIGNAL_ID_OPT225_ATM_IV_TERM_RATIO",
     "SIGNAL_ID_OPT225_SPREAD_ABS",
     "SIGNAL_ID_OPT225_SPREAD_CHANGE",
+    "SIGNAL_ID_OPT225_SKEW_ABS",
+    "SIGNAL_ID_OPT225_CM_TERM_ABS",
+    "SIGNAL_ID_OPT225_BASEVOL_DELTA_ABS",
     "SIGNAL_ID_RATE_CURVE_XS",
     "SIGNAL_ID_RATE_LEVEL_XS",
     "SIGNAL_STATUS",
@@ -3592,6 +3758,9 @@ __all__ = [
     "compute_opt225_atm_iv_term_ratio_signal",
     "compute_opt225_iv_base_spread_abs_signal",
     "compute_opt225_iv_base_spread_change_signal",
+    "compute_opt225_skew_abs_level_signal",
+    "compute_opt225_cm_term_abs_level_signal",
+    "compute_opt225_basevol_delta_abs_signal",
     "compute_rate_curve_xs_signal",
     "compute_rate_level_xs_signal",
     "condition_signal_on_regime",

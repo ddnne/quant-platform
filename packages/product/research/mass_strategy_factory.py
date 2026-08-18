@@ -102,8 +102,8 @@ from features.class_signals import (
 # Identity / freezes (must never arm operational Mass)
 # ---------------------------------------------------------------------------
 
-MASS_FACTORY_VERSION: str = "mass-strategy-factory/v2.4"
-MASS_FACTORY_WAVE: str = "W92 / w0818b"
+MASS_FACTORY_VERSION: str = "mass-strategy-factory/v2.5"
+MASS_FACTORY_WAVE: str = "W94 / w0818d"
 
 MASS_RESEARCH: str = "NO-GO"  # operational Mass remains NO-GO
 PHASE7: str = "OFF"
@@ -202,11 +202,14 @@ NEAR_LOGIC_GROUPS: tuple[dict[str, Any], ...] = (
     },
     {
         "group_id": "options_vol_regime_family",
-        "label": "options_225 BaseVol / ATM IV / spread (canonical Nikkei vol)",
+        "label": "options_225 BaseVol / skew / CM-term / Δvol (+ ATM compare-only)",
         "logic_ids": (
             "opt225_basevol_abs_level",
             "opt225_basevol_term_levels",
             "opt225_basevol_term_ratio",
+            "opt225_basevol_delta_abs",
+            "opt225_skew_abs_level",
+            "opt225_cm_term_abs_level",
             "opt225_atm_iv_abs_level",
             "opt225_atm_iv_term_levels",
             "opt225_atm_iv_term_ratio",
@@ -215,9 +218,10 @@ NEAR_LOGIC_GROUPS: tuple[dict[str, Any], ...] = (
         ),
         "note": (
             "Canonical Nikkei vol SoT = derivatives_bars_daily_options_225. "
-            "Keep BaseVol-only, ATM-IV-only, and spread logics parallel "
-            "(do not drop either side). Near-dup of W91 nky_vol_* proxy — "
-            "label proxy vs options SoT; do not merge."
+            "W94: BaseVol = canonical level; ATM IV + spread = compare-only; "
+            "skew / CM-term / ΔBaseVol are primary new features. "
+            "Near-dup of W91 nky_vol_* proxy — label proxy vs options SoT; "
+            "do not merge."
         ),
     },
     {
@@ -228,13 +232,13 @@ NEAR_LOGIC_GROUPS: tuple[dict[str, Any], ...] = (
             "nky_vol_term_levels",
             "nky_vol_term_ratio",
             "opt225_basevol_abs_level",
+            "opt225_skew_abs_level",
             "opt225_atm_iv_abs_level",
-            "opt225_iv_base_spread_abs",
         ),
         "note": (
             "W91 nky_vol_* = TOPIX/NK225F realized proxy/compare only. "
-            "W92 opt225_* = options_225 BaseVol/ATM IV canonical SoT. "
-            "Keep parallel for comparison."
+            "W92/W94 opt225_* = options_225 BaseVol canonical SoT "
+            "(ATM compare-only). Keep parallel for comparison."
         ),
     },
 )
@@ -1066,13 +1070,13 @@ def _build_logic_templates() -> dict[str, LogicTemplate]:
         ),
         LogicTemplate(
             logic_id="opt225_atm_iv_abs_level",
-            display_name="options_225 ATM IV abs × CS risk-on/off",
+            display_name="options_225 ATM IV abs × CS (compare-only)",
             thesis=(
-                "Reconstructed front-CM ATM IV (call+put mid) level is a risk "
-                "regime independent of (but near) exchange BaseVol"
+                "Reconstructed front-CM ATM IV (call+put mid) — compare-only vs "
+                "canonical BaseVol level (W94)"
             ),
             signal_definition=(
-                "CS rank mom L-S × abs ATM IV; front CM LTD>Date; "
+                "CS rank mom L-S × abs ATM IV; front CM min_dte>=6; "
                 "strike≈UnderPx; avg put/call IV"
             ),
             position_rule="sticky fixed_horizon balanced L/S after abs-ATM-IV transform",
@@ -1090,19 +1094,19 @@ def _build_logic_templates() -> dict[str, LogicTemplate]:
                 "vol_long_n": 60,
                 "high_threshold": 25.0,
                 "low_threshold": 12.0,
+                "compare_only": True,
             },
             structural_keys=("mode", "series_kind"),
             notes=(
-                "ATM-IV-only. Keep parallel to BaseVol-only (corr≈0.9; residual "
-                "spread is microstructure / CM selection). Not TOPIX RV proxy."
+                "COMPARE-ONLY (W94). Prefer BaseVol as canonical level "
+                "(post-W93 corr≈0.99994). Keep parallel for comparison."
             ),
         ),
         LogicTemplate(
             logic_id="opt225_atm_iv_term_levels",
-            display_name="options_225 ATM IV short+long levels × CS",
+            display_name="options_225 ATM IV short+long levels × CS (compare-only)",
             thesis=(
-                "Joint short/long ATM IV levels: both calm → risk-on; both "
-                "stressed → risk-off; disagree → flat"
+                "Joint short/long ATM IV levels (compare-only vs BaseVol dual levels)"
             ),
             signal_definition="CS rank mom L-S; short+long ATM IV rolling means agree",
             position_rule="sticky fixed_horizon balanced L/S after dual-level ATM IV transform",
@@ -1120,16 +1124,16 @@ def _build_logic_templates() -> dict[str, LogicTemplate]:
                 "vol_long_n": 60,
                 "high_threshold": 25.0,
                 "low_threshold": 12.0,
+                "compare_only": True,
             },
             structural_keys=("mode", "series_kind", "vol_short_n", "vol_long_n"),
-            notes="ATM-IV-only dual levels. Do not drop in favor of BaseVol-only.",
+            notes="COMPARE-ONLY ATM dual levels. Prefer BaseVol dual levels.",
         ),
         LogicTemplate(
             logic_id="opt225_atm_iv_term_ratio",
-            display_name="options_225 ATM IV short/long ratio × CS",
+            display_name="options_225 ATM IV short/long ratio × CS (compare-only)",
             thesis=(
-                "ATM IV term structure (short/long): compressing → risk-on; "
-                "expanding → risk-off; mid → no trade"
+                "ATM IV short/long ratio (compare-only vs BaseVol term ratio)"
             ),
             signal_definition="ratio=ATM_IV_short/ATM_IV_long; expand/compress thresholds",
             position_rule="sticky fixed_horizon balanced L/S after ATM IV term-ratio transform",
@@ -1147,17 +1151,17 @@ def _build_logic_templates() -> dict[str, LogicTemplate]:
                 "vol_long_n": 60,
                 "expand_ratio": 1.20,
                 "compress_ratio": 0.80,
+                "compare_only": True,
             },
             structural_keys=("mode", "series_kind", "vol_short_n", "vol_long_n"),
-            notes="ATM-IV-only term ratio.",
+            notes="COMPARE-ONLY ATM term ratio. Prefer BaseVol term ratio.",
         ),
         LogicTemplate(
             logic_id="opt225_iv_base_spread_abs",
-            display_name="options_225 (ATM IV − BaseVol) abs × CS",
+            display_name="options_225 (ATM IV − BaseVol) abs × CS (compare-only)",
             thesis=(
-                "Spread = ATM IV − BaseVol (percent vol points) captures residual "
-                "smile/microstructure vs exchange base; high spread → risk-off "
-                "reverse CS; low/negative → risk-on keep"
+                "Spread = ATM IV − BaseVol — compare-only residual (W93: "
+                "non-informative at frozen thresholds post min_dte=6)"
             ),
             signal_definition=(
                 "CS rank mom L-S × abs(atm_iv - base_vol); convention documented "
@@ -1178,19 +1182,19 @@ def _build_logic_templates() -> dict[str, LogicTemplate]:
                 "vol_long_n": 60,
                 "high_threshold": 1.0,
                 "low_threshold": -0.5,
+                "compare_only": True,
             },
             structural_keys=("mode", "series_kind"),
             notes=(
-                "Spread convention: atm_iv - base_vol. Median≈0 (BaseVol≈ATM mid "
-                "by J-Quants def); residual still evaluated honestly."
+                "COMPARE-ONLY. Spread convention: atm_iv - base_vol. "
+                "Post-W93 exact-zero ≈99.76%."
             ),
         ),
         LogicTemplate(
             logic_id="opt225_iv_base_spread_change",
-            display_name="options_225 (ATM−BaseVol) change × CS",
+            display_name="options_225 (ATM−BaseVol) change × CS (compare-only)",
             thesis=(
-                "Day-over-day change in (ATM IV − BaseVol): rising residual → "
-                "risk-off reverse; falling → risk-on keep; mid → flat"
+                "Day-over-day change in (ATM IV − BaseVol) — compare-only residual"
             ),
             signal_definition=(
                 "CS rank mom L-S × Δ(atm_iv - base_vol); gaps → no trade "
@@ -1211,9 +1215,110 @@ def _build_logic_templates() -> dict[str, LogicTemplate]:
                 "vol_long_n": 60,
                 "high_threshold": 0.5,
                 "low_threshold": -0.5,
+                "compare_only": True,
             },
             structural_keys=("mode", "series_kind"),
-            notes="Optional spread-change leg; parallel to abs spread.",
+            notes="COMPARE-ONLY spread-change leg; parallel to abs spread.",
+        ),
+        # ----- W94 skew / CM-term / ΔBaseVol -----
+        LogicTemplate(
+            logic_id="opt225_skew_abs_level",
+            display_name="options_225 95% put skew abs × CS",
+            thesis=(
+                "Put skew = IV(listed strike≈0.95*UnderPx) − ATM mid IV: elevated "
+                "crash-premium / risk-off → reverse CS; calm skew → risk-on keep"
+            ),
+            signal_definition=(
+                "CS rank mom L-S × abs skew; front CM min_dte>=6; listed put "
+                "nearest 0.95*UnderPx (never invent/interpolate strikes)"
+            ),
+            position_rule="sticky fixed_horizon balanced L/S after abs-skew transform",
+            datasets_used=bars + ("derivatives_bars_daily_options_225",),
+            family_id=FAMILY_OPTIONS_VOL_REGIME,
+            base_params={
+                "mode": "opt225_skew_abs_level",
+                "series_kind": "skew",
+                "transform": "abs_level",
+                "momentum_n": 5,
+                "hold_days": 10,
+                "long_frac": 0.3,
+                "short_frac": 0.3,
+                "vol_short_n": 10,
+                "vol_long_n": 60,
+                "high_threshold": 3.0,
+                "low_threshold": 0.5,
+            },
+            structural_keys=("mode", "series_kind"),
+            notes=(
+                "W94 primary smile feature. Convention: put_iv(~0.95*S)−atm_mid. "
+                "No invent of smile points beyond available strikes."
+            ),
+        ),
+        LogicTemplate(
+            logic_id="opt225_cm_term_abs_level",
+            display_name="options_225 near−next CM ATM term abs × CS",
+            thesis=(
+                "Calendar-month IV term (near ATM − next ATM): steep/inverted "
+                "term structure is a risk regime for CS books"
+            ),
+            signal_definition=(
+                "CS rank mom L-S × abs(near_atm_iv − next_atm_iv); both CMs "
+                "min_dte>=6; listed ATM strikes only"
+            ),
+            position_rule="sticky fixed_horizon balanced L/S after abs CM-term transform",
+            datasets_used=bars + ("derivatives_bars_daily_options_225",),
+            family_id=FAMILY_OPTIONS_VOL_REGIME,
+            base_params={
+                "mode": "opt225_cm_term_abs_level",
+                "series_kind": "cm_term",
+                "transform": "abs_level",
+                "momentum_n": 5,
+                "hold_days": 10,
+                "long_frac": 0.3,
+                "short_frac": 0.3,
+                "vol_short_n": 10,
+                "vol_long_n": 60,
+                "high_threshold": 2.0,
+                "low_threshold": -1.0,
+            },
+            structural_keys=("mode", "series_kind"),
+            notes=(
+                "W94 CM term feature (distinct from short/long rolling 'term' "
+                "transforms on a single level series)."
+            ),
+        ),
+        LogicTemplate(
+            logic_id="opt225_basevol_delta_abs",
+            display_name="options_225 BaseVol Δ abs × CS",
+            thesis=(
+                "Day-over-day BaseVol change (canonical level): rising → risk-off "
+                "reverse CS; falling → risk-on keep; mid → flat"
+            ),
+            signal_definition=(
+                "CS rank mom L-S × abs(BaseVol[t]−BaseVol[t-1]); first day omitted; "
+                "no invent/ffill"
+            ),
+            position_rule="sticky fixed_horizon balanced L/S after abs-ΔBaseVol transform",
+            datasets_used=bars + ("derivatives_bars_daily_options_225",),
+            family_id=FAMILY_OPTIONS_VOL_REGIME,
+            base_params={
+                "mode": "opt225_basevol_delta_abs",
+                "series_kind": "basevol_delta",
+                "transform": "abs_level",
+                "momentum_n": 5,
+                "hold_days": 10,
+                "long_frac": 0.3,
+                "short_frac": 0.3,
+                "vol_short_n": 10,
+                "vol_long_n": 60,
+                "high_threshold": 1.0,
+                "low_threshold": -1.0,
+            },
+            structural_keys=("mode", "series_kind"),
+            notes=(
+                "W94 canonical-level change. Arithmetic delta primary; log_delta "
+                "recorded on series but not required by this logic."
+            ),
         ),
     ]
     return {t.logic_id: t for t in tpls}
@@ -1324,6 +1429,16 @@ def logic_templates_document() -> dict[str, Any]:
         for lid, t in LOGIC_TEMPLATES.items()
         if t.family_id == FAMILY_OPTIONS_VOL_REGIME
     ]
+    w94_opt225_ids = [
+        lid
+        for lid in opt225_ids
+        if lid
+        in {
+            "opt225_skew_abs_level",
+            "opt225_cm_term_abs_level",
+            "opt225_basevol_delta_abs",
+        }
+    ]
     return {
         "version": MASS_FACTORY_VERSION,
         "wave": MASS_FACTORY_WAVE,
@@ -1336,6 +1451,9 @@ def logic_templates_document() -> dict[str, Any]:
         "w89_multi_factor_logic_ids": mf_ids,
         "w91_index_vol_logic_ids": nky_vol_ids,
         "w92_options_vol_logic_ids": opt225_ids,
+        "w94_options_vol_logic_ids": w94_opt225_ids,
+        "opt225_canonical_level": "basevol",
+        "opt225_atm_iv_role": "compare_only",
         "near_logic_groups": near_logic_groups_document(),
         "diversity_rules": {
             "counts_as_different": [
@@ -1774,6 +1892,9 @@ def validate_strategy_at_gen(
             "opt225_atm_iv_term_ratio",
             "opt225_iv_base_spread_abs",
             "opt225_iv_base_spread_change",
+            "opt225_skew_abs_level",
+            "opt225_cm_term_abs_level",
+            "opt225_basevol_delta_abs",
         }:
             return False, REJECT_INVALID_PARAMS
         if str(p.get("series_kind") or "") not in {
@@ -1781,6 +1902,9 @@ def validate_strategy_at_gen(
             "atm_iv",
             "spread",
             "spread_change",
+            "skew",
+            "cm_term",
+            "basevol_delta",
         }:
             return False, REJECT_INVALID_PARAMS
         if int(p.get("vol_short_n") or 0) < 2:
@@ -2421,19 +2545,40 @@ def _synthetic_batch_context(config: MassFactoryConfig) -> BatchDataContext:
             source="synthetic_nk225f",
             dataset="synthetic",
         )
-        # Synthetic options_225 BaseVol / ATM IV / spread (percent vol points)
+        # Synthetic options_225 BaseVol / ATM / skew / CM-term / Δvol
         from research.options_225_vol_series import build_opt225_regime_bundle
 
         base_rows = []
         atm_rows = []
+        skew_rows = []
+        term_rows = []
         for i, d in enumerate(dates):
             # oscillate around ~18% with occasional spikes
             bv = 14.0 + 6.0 * ((i % 17) / 16.0) + (8.0 if i % 13 == 0 else 0.0)
             atm = bv + (0.8 if i % 5 == 0 else (-0.3 if i % 7 == 0 else 0.0))
             base_rows.append({"date": d, "base_vol": bv})
             atm_rows.append({"date": d, "atm_iv": atm})
+            skew_rows.append(
+                {
+                    "date": d,
+                    "skew": 1.0 + 2.5 * ((i % 11) / 10.0) + (2.0 if i % 9 == 0 else 0.0),
+                }
+            )
+            term_rows.append(
+                {
+                    "date": d,
+                    "cm_term": -0.5
+                    + 2.0 * ((i % 13) / 12.0)
+                    + (1.5 if i % 8 == 0 else 0.0),
+                }
+            )
         opt225_regime = build_opt225_regime_bundle(
-            base_rows, atm_rows, short_n=5, long_n=15
+            base_rows,
+            atm_rows,
+            skew_rows=skew_rows,
+            term_rows=term_rows,
+            short_n=5,
+            long_n=15,
         )
         fins_events = {
             "13010": [
@@ -2686,6 +2831,25 @@ def _eval_on_panel(
     elif fid == FAMILY_OPTIONS_VOL_REGIME:
         mode = str(p.get("mode") or "opt225_basevol_abs_level")
         sk = str(p.get("series_kind") or "basevol")
+        # Sensible defaults by series_kind when params omit thresholds.
+        _hi = {
+            "basevol": 24.0,
+            "atm_iv": 25.0,
+            "spread": 1.0,
+            "spread_change": 0.5,
+            "skew": 3.0,
+            "cm_term": 2.0,
+            "basevol_delta": 1.0,
+        }.get(sk, 24.0)
+        _lo = {
+            "basevol": 12.0,
+            "atm_iv": 12.0,
+            "spread": -0.5,
+            "spread_change": -0.5,
+            "skew": 0.5,
+            "cm_term": -1.0,
+            "basevol_delta": -1.0,
+        }.get(sk, 12.0)
         out = evaluate_opt225_vol_on_bars(
             bars,
             panel.get("opt225_regime"),
@@ -2696,8 +2860,12 @@ def _eval_on_panel(
             long_frac=float(p.get("long_frac") or 0.3),
             short_frac=float(p.get("short_frac") or 0.3),
             one_way_cost=one_way_cost,
-            high_threshold=float(p.get("high_threshold") or 24.0),
-            low_threshold=float(p.get("low_threshold") or 12.0),
+            high_threshold=float(
+                p["high_threshold"] if p.get("high_threshold") is not None else _hi
+            ),
+            low_threshold=float(
+                p["low_threshold"] if p.get("low_threshold") is not None else _lo
+            ),
             expand_ratio=float(p.get("expand_ratio") or 1.20),
             compress_ratio=float(p.get("compress_ratio") or 0.80),
         )
