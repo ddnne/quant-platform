@@ -1,6 +1,6 @@
 /// <reference types="@cloudflare/workers-types" />
 /**
- * quant-platform-research-mass-eval (W93 / w0818c)
+ * quant-platform-research-mass-eval (W94 / w0818d)
  *
  * POST /v1/mass-eval
  *   body: { seed, logics[], periods[], job_id, mode?, panels_prefix? }
@@ -18,8 +18,8 @@
  *   3 default-path representatives not retuned
  *
  * Pure TS (no Python). W93: macro_repo_* consume staged repo_rate_regime.
- * Flow/fund factor legs remain not-yet on this path (sidecars staged;
- * use local factory or nets_only for full legs).
+ * W94: flow_margin_* / fund_* / mf_* consume staged flow/fund sidecars;
+ * missing sidecar → disclosed MDH fallback (c21_lite_fallback_mdh:…).
  */
 
 import { evaluateLogicAcrossPeriods, rankSurvivors } from "./eval";
@@ -296,13 +296,12 @@ async function runMassEval(
     ranking_top: ranking.slice(0, 20),
     freezes,
     note:
-      "CF multi-period mass-eval (W93). Research only. " +
+      "CF multi-period mass-eval (W94). Research only. " +
       "Does not arm Mass/READY/GO. continuous paper UNARMED. " +
       "3 default-path representatives not retuned. " +
       `mode=${mode}. ` +
-      "macro_repo_* consume staged repo_rate_regime; " +
-      "flow/fund factor legs still local_only on pure-TS " +
-      "(sidecars staged on r2_panels; nets_only/local for full legs). " +
+      "macro_repo_* / flow_margin_* / fund_* / mf_* consume thicken " +
+      "sidecars when present; missing → disclosed MDH fallback. " +
       "d1_bars is tip-only; multi-year uses staged r2_panels.",
   };
 

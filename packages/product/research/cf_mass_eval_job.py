@@ -59,8 +59,8 @@ from research.mass_strategy_factory import (
 )
 from research.single_shot_job import COMPLETE_21_DATASETS, default_r2_put
 
-CF_MASS_EVAL_VERSION: str = "cf-mass-eval-job/v4"
-CF_MASS_EVAL_WAVE: str = "W93 / w0818c"
+CF_MASS_EVAL_VERSION: str = "cf-mass-eval-job/v5"
+CF_MASS_EVAL_WAVE: str = "W94 / w0818d"
 RESEARCH_ARTIFACT_BUCKET: str = "quant-structured"
 RESEARCH_ARTIFACT_PREFIX: str = "research/mass_eval"
 DEFAULT_WORKER_NAME: str = "quant-platform-research-mass-eval"
@@ -90,8 +90,8 @@ PRIMARY_INDEX_DATASETS: tuple[str, ...] = (
     "indices_bars_daily_topix",
     "indices_bars_daily",
 )
-# W93 thicken sidecars staged into r2_panels when COMPLETE-backed local data
-# is available (never claim COMPLETE missing). TOPIX remains proxy label only.
+# W93/W94 thicken sidecars staged into r2_panels when COMPLETE-backed local
+# data is available (never claim COMPLETE missing). TOPIX remains proxy label.
 THICKEN_PANEL_DATASETS: tuple[str, ...] = (
     "markets_calendar",
     "jsda_tokyo_repo_rates",
@@ -115,6 +115,8 @@ if COMPLETE_22_DATASET_SET & PERMANENT_DEFER_DATASETS:
 # W91: nky_vol_* need staged index closes (__NKY_PROXY__) in panels.
 # W92: opt225_* need staged opt225_regime maps (BaseVol/ATM IV/spread).
 # W93: macro_repo_rate_* consume staged repo_rate_regime when present.
+# W94: opt225 skew / CM-term / ΔBaseVol on opt225_regime; flow/fund/mf
+#      consume flow_regime / fund_regime (missing sidecar → disclosed MDH).
 CF_BAR_NATIVE_LOGIC_IDS: tuple[str, ...] = (
     "mdh_sticky_momentum",
     "mdh_mean_reversion",
@@ -133,8 +135,19 @@ CF_BAR_NATIVE_LOGIC_IDS: tuple[str, ...] = (
     "opt225_atm_iv_term_ratio",
     "opt225_iv_base_spread_abs",
     "opt225_iv_base_spread_change",
+    "opt225_skew_abs_level",
+    "opt225_cm_term_abs_level",
+    "opt225_basevol_delta_abs",
     "macro_repo_rate_change",
     "macro_repo_rate_level",
+    "flow_margin_pressure",
+    "flow_margin_short_hard",
+    "flow_margin_short_soft",
+    "fund_value_only",
+    "fund_value_mom_agree",
+    "fund_value_mom_agree_slow",
+    "mf_value_mom_rate",
+    "mf_flow_price",
 )
 
 # Lite multi-period shards (W90 residual; synthetic / tip smoke).
@@ -363,10 +376,11 @@ def inventory_complete22() -> dict[str, Any]:
             "research/mass_eval/job={id}/panels/ for mode=r2_panels. "
             "D1 tip (jquants_records) is hot-window only (~2026-07..08)."
         ),
-        "thicken_note_w93": (
-            "W93 stages denser r2_panels sidecars when COMPLETE-backed "
-            "local sqlite/mirrors are available: markets_calendar, "
-            "jsda_tokyo_repo_rates, markets_margin_interest, "
+        "thicken_note_w94": (
+            "W93 staged denser r2_panels sidecars; W94 CF pure-TS consumes "
+            "macro_repo_* / flow_margin_* / fund_* / mf_* from them "
+            "(disclosed MDH fallback if empty). Sidecar sources: "
+            "markets_calendar, jsda_tokyo_repo_rates, markets_margin_interest, "
             "markets_short_ratio, fins_summary, plus TOPIX proxy label. "
             "Never claim COMPLETE data missing."
         ),
@@ -397,6 +411,9 @@ def inventory_cf_panel_wiring() -> dict[str, Any]:
                 "nky_vol_*",
                 "opt225_*",
                 "macro_repo_rate_*",
+                "flow_margin_*",
+                "fund_*",
+                "mf_*",
             ],
         },
         "indices_bars_daily_topix": {
@@ -453,7 +470,8 @@ def inventory_cf_panel_wiring() -> dict[str, Any]:
             "status": "wired_on_cf",
             "reason": (
                 "W93 thicken: staged repo_rate_regime (level + curve spread); "
-                "CF macro_repo_rate_change/level consume when present."
+                "CF macro_repo_rate_change/level + mf_value_mom_rate consume "
+                "when present."
             ),
             "factory_logics": [
                 "macro_repo_rate_change",
@@ -463,16 +481,17 @@ def inventory_cf_panel_wiring() -> dict[str, Any]:
                 "mf_value_mom_rate",
             ],
             "cf_eval_note": (
-                "macro_repo_* wired on CF; rate_* XS / mf_* remain local_only "
-                "factor legs (CF falls back to MDH unless nets_only)."
+                "macro_repo_* + mf_value_mom_rate wired on CF (W94). "
+                "rate_* XS remain local_only / disclosed MDH fallback on CF. "
+                "Missing repo map → c21_lite_fallback_mdh:macro_conditioned."
             ),
         },
         "markets_margin_interest": {
-            "status": "local_only",
+            "status": "wired_on_cf",
             "reason": (
-                "COMPLETE flow SoT. W93 stages compact margin level/change "
-                "by code on r2_panels; CF flow factor eval not-yet "
-                "(local factory flow_* logics)."
+                "COMPLETE flow SoT. Staged compact margin level/change by "
+                "code on r2_panels; W94 CF flow_margin_* / mf_flow_price "
+                "consume flow_regime (MDH fallback disclosed if empty)."
             ),
             "factory_logics": [
                 "flow_margin_pressure",
@@ -481,12 +500,17 @@ def inventory_cf_panel_wiring() -> dict[str, Any]:
                 "mf_flow_price",
             ],
             "staged_on_panel": True,
+            "cf_eval_note": (
+                "Missing margin map → c21_lite_fallback_mdh:flow_demand "
+                "(or multi_factor for mf_flow_price)."
+            ),
         },
         "markets_short_ratio": {
-            "status": "local_only",
+            "status": "wired_on_cf",
             "reason": (
-                "COMPLETE short-flow SoT. W93 stages section-0050 "
-                "short_ratio_by_date on panels; CF flow confirm eval not-yet."
+                "COMPLETE short-flow SoT. Staged section-0050 "
+                "short_ratio_by_date on panels; W94 CF hard/soft short "
+                "confirm consumes via flow_regime."
             ),
             "factory_logics": [
                 "flow_margin_short_hard",
@@ -495,11 +519,11 @@ def inventory_cf_panel_wiring() -> dict[str, Any]:
             "staged_on_panel": True,
         },
         "fins_summary": {
-            "status": "local_only",
+            "status": "wired_on_cf",
             "reason": (
-                "COMPLETE fund SoT. W93 stages compact disclosure events "
-                "for panel codes; CF fund/value factor eval not-yet "
-                "(local fund_* / mf_*)."
+                "COMPLETE fund SoT. Staged compact disclosure events for "
+                "panel codes; W94 CF fund_* / mf_value_mom_rate consume "
+                "fund_regime (MDH fallback disclosed if empty)."
             ),
             "factory_logics": [
                 "fund_value_only",
@@ -508,6 +532,10 @@ def inventory_cf_panel_wiring() -> dict[str, Any]:
                 "mf_value_mom_rate",
             ],
             "staged_on_panel": True,
+            "cf_eval_note": (
+                "Missing events → c21_lite_fallback_mdh:fundamentals_price "
+                "(or multi_factor for mf_value_mom_rate)."
+            ),
         },
         "fins_earnings_date": {
             "status": "local_only",
@@ -608,8 +636,9 @@ def inventory_cf_panel_wiring() -> dict[str, Any]:
         "freezes": _freeze(),
         "note": (
             "COMPLETE data is never 'missing'. Status describes CF panel "
-            "wiring / factory-logic consumption only. W93 thickens calendar "
-            "+ rate + flow + fund sidecars onto r2_panels when available."
+            "wiring / factory-logic consumption only. W93/W94 thickens "
+            "calendar + rate + flow + fund sidecars onto r2_panels; W94 "
+            "CF pure-TS consumes flow/fund/mf (disclosed MDH if empty)."
         ),
     }
 
@@ -910,8 +939,8 @@ def _build_thicken_sidecars(
             "role": "fundamentals_sidecar",
             "note": (
                 "Compact fins_summary disclosures for panel codes. "
-                "CF fund factor eval remains local_only; staging thickens "
-                "panels for future / nets_only paths."
+                "W94 CF fund_* / mf_value_mom_rate consume when present; "
+                "empty → disclosed MDH fallback."
             ),
         }
     except Exception as exc:  # pragma: no cover
@@ -1080,11 +1109,19 @@ def build_real_period_panel(
                 "dataset": opt225.get("dataset"),
                 "version": opt225.get("version"),
             }
-            for kind in ("basevol", "atm_iv", "spread", "spread_change"):
+            for kind in (
+                "basevol",
+                "atm_iv",
+                "spread",
+                "spread_change",
+                "skew",
+                "cm_term",
+                "basevol_delta",
+            ):
                 ser = dict(opt225.get(kind) or {})
                 if not ser:
                     continue
-                compact[kind] = {
+                entry = {
                     "source": ser.get("source"),
                     "dataset": ser.get("dataset"),
                     "series_kind": ser.get("series_kind"),
@@ -1097,7 +1134,20 @@ def build_real_period_panel(
                     "rv_ratio_by_date": ser.get("rv_ratio_by_date") or {},
                     "n_obs_level": ser.get("n_obs_level"),
                 }
-            # Explicit by-date series aliases requested by W92 CF wire.
+                if kind == "atm_iv":
+                    entry["compare_only"] = True
+                    entry["role"] = "compare_only"
+                if kind == "basevol":
+                    entry["role"] = "canonical_level"
+                compact[kind] = entry
+            compact["canonical_level"] = opt225.get("canonical_level") or "basevol"
+            compact["atm_iv_role"] = opt225.get("atm_iv_role") or "compare_only"
+            compact["skew_convention"] = opt225.get("skew_convention")
+            compact["cm_term_convention"] = opt225.get("cm_term_convention")
+            compact["basevol_delta_convention"] = opt225.get(
+                "basevol_delta_convention"
+            )
+            # Explicit by-date series aliases requested by W92/W94 CF wire.
             base_vol_series = dict(
                 (compact.get("basevol") or {}).get("rv_abs_by_date") or {}
             )
@@ -1107,18 +1157,37 @@ def build_real_period_panel(
             iv_base_spread = dict(
                 (compact.get("spread") or {}).get("rv_abs_by_date") or {}
             )
+            skew_series = dict(
+                (compact.get("skew") or {}).get("rv_abs_by_date") or {}
+            )
+            cm_term_series = dict(
+                (compact.get("cm_term") or {}).get("rv_abs_by_date") or {}
+            )
+            basevol_delta_series = dict(
+                (compact.get("basevol_delta") or {}).get("rv_abs_by_date") or {}
+            )
             opt225_meta = {
                 "opt225_regime": compact,
                 "base_vol_series": base_vol_series,
                 "atm_iv_series": atm_iv_series,
                 "iv_base_spread": iv_base_spread,
+                "skew_series": skew_series,
+                "cm_term_series": cm_term_series,
+                "basevol_delta_series": basevol_delta_series,
                 "opt225_dataset": "derivatives_bars_daily_options_225",
                 "opt225_role": "canonical_nky_vol_sot",
+                "opt225_canonical_level": "basevol",
+                "opt225_atm_iv_role": "compare_only",
                 "opt225_spread_convention": compact.get("spread_convention")
                 or "atm_iv - base_vol",
+                "opt225_skew_convention": compact.get("skew_convention"),
+                "opt225_cm_term_convention": compact.get("cm_term_convention"),
                 "opt225_n_base_vol": len(base_vol_series),
                 "opt225_n_atm_iv": len(atm_iv_series),
                 "opt225_n_spread": len(iv_base_spread),
+                "opt225_n_skew": len(skew_series),
+                "opt225_n_cm_term": len(cm_term_series),
+                "opt225_n_basevol_delta": len(basevol_delta_series),
             }
     except Exception as exc:  # pragma: no cover - best-effort
         opt225_meta = {"opt225_error": str(exc)}
@@ -1158,13 +1227,14 @@ def _build_thicken_panel_sidecars(
     codes: Sequence[str],
     max_days: int,
 ) -> dict[str, Any]:
-    """Attach COMPLETE-backed aux maps for W93 panel thickening.
+    """Attach COMPLETE-backed aux maps for W93/W94 panel thickening.
 
     Delegates to ``_build_thicken_sidecars`` (sqlite + mirror backed) and adds
     compatibility aliases (`repo_rate_by_date`, `thicken_status`, …).
 
-    DONE when sidecar maps are present in panel JSON. Full CF factor-leg eval
-    for flow/fund remains local_only; macro_repo_* consumes repo_rate_regime.
+    DONE when sidecar maps are present in panel JSON. W94 CF pure-TS consumes
+    macro_repo_* / flow_margin_* / fund_* / mf_* from these sidecars; missing
+    maps yield disclosed MDH fallback (never silent).
     ``max_days`` reserved for future clip policy (sidecars already windowed).
     """
     _ = max_days  # windowing handled inside _build_thicken_sidecars burn/end
@@ -1226,8 +1296,14 @@ def _build_thicken_panel_sidecars(
         k for k, v in status.items() if str(v).startswith("DONE")
     )
     out["thicken_todo"] = [
-        "cf_worker_flow_fund_factor_legs_consume_sidecars",
-        "rate_abs_level_xs_and_mf_on_cf_pure_ts",
+        "rate_abs_level_xs_and_rate_curve_shape_xs_on_cf_pure_ts",
+    ]
+    out["thicken_consumed_on_cf"] = [
+        "macro_repo_rate_*",
+        "flow_margin_*",
+        "fund_*",
+        "mf_value_mom_rate",
+        "mf_flow_price",
     ]
     out["panel_thicken"] = True
     return out
@@ -1801,8 +1877,9 @@ def try_cf_mass_eval_status() -> dict[str, Any]:
             "Heavy multi-year promising-only remains local class_hyp_eval."
         ),
         "synthetic_gap": (
-            "rate/mf factor legs still not-yet-implemented on pure-TS CF path; "
-            "synthetic remains available for smoke only."
+            "rate_abs_level_xs / rate_curve_shape_xs still local_only on "
+            "pure-TS CF (disclosed MDH fallback). flow/fund/mf/macro_repo "
+            "consume thicken sidecars as of W94 v5. Synthetic = smoke only."
         ),
         **_freeze(),
     }

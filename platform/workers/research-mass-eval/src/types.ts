@@ -77,22 +77,35 @@ export interface NkyVolSeries {
   rv_ratio_by_date?: Record<string, number>;
 }
 
-/** W92 options_225 BaseVol / ATM IV / spread regime maps (percent vol points). */
+/** W92/W94 options_225 BaseVol / ATM / skew / CM-term / Δvol (percent vol points). */
 export interface Opt225RegimeSeries extends NkyVolSeries {
   series_kind?: string;
   units?: string;
   dataset?: string;
+  role?: string;
+  compare_only?: boolean;
 }
 
 export interface Opt225RegimeBundle {
   spread_convention?: string;
+  skew_convention?: string;
+  cm_term_convention?: string;
+  basevol_delta_convention?: string;
   units?: string;
   dataset?: string;
   version?: string;
+  canonical_level?: string;
+  atm_iv_role?: string;
   basevol?: Opt225RegimeSeries | null;
   atm_iv?: Opt225RegimeSeries | null;
   spread?: Opt225RegimeSeries | null;
   spread_change?: Opt225RegimeSeries | null;
+  /** W94: put_iv(~0.95*UnderPx) − atm_mid_iv */
+  skew?: Opt225RegimeSeries | null;
+  /** W94: near_cm_atm_iv − next_cm_atm_iv */
+  cm_term?: Opt225RegimeSeries | null;
+  /** W94: BaseVol[t] − BaseVol[t-1] */
+  basevol_delta?: Opt225RegimeSeries | null;
 }
 
 /** W93 jsda_tokyo_repo_rates compact regime (percent). */
@@ -165,21 +178,27 @@ export interface PeriodPanel {
   nky_vol_series?: NkyVolSeries | null;
   /** Optional W92 options_225 canonical Nikkei vol SoT. */
   opt225_regime?: Opt225RegimeBundle | null;
-  /** W92 daily BaseVol by date (percent vol points). */
+  /** W92 daily BaseVol by date (percent vol points) — canonical level. */
   base_vol_series?: Record<string, number> | null;
-  /** W92 daily ATM IV by date (percent vol points). */
+  /** W92 daily ATM IV by date (percent vol points) — compare-only. */
   atm_iv_series?: Record<string, number> | null;
   /** W92 daily (ATM IV − BaseVol) spread by date. */
   iv_base_spread?: Record<string, number> | null;
+  /** W94 daily 95% put skew by date. */
+  skew_series?: Record<string, number> | null;
+  /** W94 daily near−next CM term by date. */
+  cm_term_series?: Record<string, number> | null;
+  /** W94 daily BaseVol delta by date. */
+  basevol_delta_series?: Record<string, number> | null;
   /** W93 repo rate regime (jsda_tokyo_repo_rates). */
   repo_rate_regime?: RepoRateRegime | null;
   /** Flat alias of repo rates_by_date. */
   repo_rate_by_date?: Record<string, number> | null;
   /** W93 markets_calendar sidecar. */
   calendar?: CalendarSideCar | null;
-  /** W93 flow (margin/short) sidecar — staged; CF flow eval still local_only. */
+  /** W93/W94 flow (margin/short) sidecar — CF flow_margin_* / mf_flow_price consume. */
   flow_regime?: FlowRegime | null;
-  /** W93 fund (fins_summary) sidecar — staged; CF fund eval still local_only. */
+  /** W93/W94 fund (fins_summary) sidecar — CF fund_* / mf_value_mom_rate consume. */
   fund_regime?: FundRegime | null;
 }
 

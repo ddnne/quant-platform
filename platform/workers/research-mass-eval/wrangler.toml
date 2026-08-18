@@ -37,8 +37,8 @@ database_name = "quant-ingest"
 database_id = "be6fdcf8-40be-41fc-9535-7facd1fc2ffc"
 
 [vars]
-MASS_EVAL_VERSION = "research-mass-eval/v4"
-MASS_EVAL_WAVE = "W93 / w0818c"
+MASS_EVAL_VERSION = "research-mass-eval/v5"
+MASS_EVAL_WAVE = "W94 / w0818d"
 # Freezes — do not flip operational gates from this worker.
 MASS_RESEARCH = "NO-GO"
 PHASE7 = "OFF"

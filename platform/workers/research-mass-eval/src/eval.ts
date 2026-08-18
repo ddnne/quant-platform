@@ -5,8 +5,9 @@
  * mass_strategy_factory.evaluate_one_strategy / class_hyp_eval.
  *
  * W93: macro_repo_rate_* consume staged repo_rate_regime when present.
- * Full flow/fund factor legs remain not-yet-implemented on CF (use local
- * factory; sidecars are staged on r2_panels for thicken / future).
+ * W94: flow_margin_* / fund_* / mf_* consume staged flow_regime / fund_regime
+ * when present. Missing sidecars → disclosed MDH fallback
+ * (`c21_lite_fallback_mdh:<family>`), never silent.
  */
 
 import {
@@ -150,6 +151,525 @@ function repoRatesFromPanel(panel: PeriodPanel): Record<string, number> {
     (regime && (regime.rates_by_date || regime.rate_by_date)) || null;
   const flat = panel.repo_rate_by_date || null;
   return { ...(fromRegime || {}), ...(flat || {}) };
+}
+
+type EvalOut = {
+  gross: number | null;
+  net: number | null;
+  amCost: number;
+  nActive: number;
+  activation: number | null;
+  signalId: string;
+};
+
+function mdhFallback(
+  bars: BarsByCode,
+  holdDays: number,
+  oneWay: number,
+  familyTag: string,
+): EvalOut {
+  const fb = evalMultiDayHold(bars, holdDays, oneWay, "fixed_horizon", 1);
+  return { ...fb, signalId: `c21_lite_fallback_mdh:${familyTag}` };
+}
+
+/** PIT latest fins event with disc_date ≤ asOf. */
+function finsAsof(
+  events: Array<{
+    disc_date?: string;
+    eps?: number | null;
+    bps?: number | null;
+  }>,
+  asOf: string,
+): { eps: number | null; bps: number | null } | null {
+  let best: { eps: number | null; bps: number | null } | null = null;
+  let bestD = "";
+  for (const ev of events || []) {
+    const d = String(ev.disc_date || "").slice(0, 10);
+    if (!d || d > asOf) continue;
+    if (d >= bestD) {
+      bestD = d;
+      best = {
+        eps:
+          ev.eps === null || ev.eps === undefined || !Number.isFinite(ev.eps)
+            ? null
+            : Number(ev.eps),
+        bps:
+          ev.bps === null || ev.bps === undefined || !Number.isFinite(ev.bps)
+            ? null
+            : Number(ev.bps),
+      };
+    }
+  }
+  return best;
+}
+
+/** Prefer BPS/price else EPS/price (matches class_signals.fundamental_value_score). */
+function fundamentalValueScore(
+  close: number,
+  eps: number | null,
+  bps: number | null,
+): number | null {
+  if (!Number.isFinite(close) || close === 0) return null;
+  if (bps !== null && Number.isFinite(bps)) return bps / close;
+  if (eps !== null && Number.isFinite(eps)) return eps / close;
+  return null;
+}
+
+function shortChangeByDate(
+  shortByDate: Record<string, number> | null | undefined,
+): Record<string, number | null> {
+  const out: Record<string, number | null> = {};
+  const dates = Object.keys(shortByDate || {}).sort();
+  for (let i = 0; i < dates.length; i++) {
+    const d = dates[i];
+    if (i === 0) {
+      out[d] = null;
+      continue;
+    }
+    const prev = (shortByDate as Record<string, number>)[dates[i - 1]];
+    const cur = (shortByDate as Record<string, number>)[d];
+    out[d] = prev === 0 ? null : (cur - prev) / prev;
+  }
+  return out;
+}
+
+function flowConfirmEntry(
+  marginChange: number | null,
+  shortChange: number | null,
+  mode: string,
+): number | null {
+  const ms = signFromNumeric(marginChange);
+  const ss = signFromNumeric(shortChange);
+  const m = String(mode || "off").toLowerCase();
+  if (ms === null) return null;
+  if (m === "hard") {
+    if (ss === null) return null;
+    if (ss === 0 || ms === 0) return 0;
+    if ((ss > 0) !== (ms > 0)) return null;
+    return ms;
+  }
+  if (m === "soft") {
+    if (ss === null) return ms; // gap → margin-only
+    if (ss === 0 || ms === 0) return 0;
+    // conflict keeps margin (soft)
+    return ms;
+  }
+  // off
+  return ms;
+}
+
+function fundEntrySign(
+  valueScore: number | null,
+  momentum: number | null,
+  benchmark: number | null,
+  mode: string,
+): number | null {
+  if (valueScore === null) return null;
+  const bench = benchmark === null ? 0 : benchmark;
+  const vs = signFromNumeric(valueScore - bench);
+  const mom = signFromNumeric(momentum);
+  const m = String(mode || "value_momentum_agree").toLowerCase();
+  if (m === "value_only") return vs;
+  // value_momentum_agree
+  if (vs === null || mom === null || vs === 0) return vs === null ? null : 0;
+  if (mom === 0) return null;
+  if ((vs > 0 && mom > 0) || (vs < 0 && mom < 0)) return vs;
+  return null;
+}
+
+function repoLevelRegime(
+  rate: number | null,
+  highThr: number,
+  lowThr: number,
+): string | null {
+  if (rate === null || !Number.isFinite(rate)) return null;
+  if (rate >= highThr) return "high";
+  if (rate <= lowThr) return "low";
+  return "mid";
+}
+
+/**
+ * W94: flow_margin_* using staged flow_regime (margin change ± short confirm).
+ * Falls back to disclosed MDH when margin map empty.
+ */
+function evalFlowDemand(
+  bars: BarsByCode,
+  flow: PeriodPanel["flow_regime"],
+  shortConfirmMode: string,
+  holdDays: number,
+  oneWay: number,
+): EvalOut {
+  const h = Math.max(1, Math.floor(holdDays));
+  const amCost = amortizedOneWayCost(oneWay, h);
+  const mode = String(shortConfirmMode || "off").toLowerCase();
+  const changeByCode = (flow && flow.margin_change_by_code) || null;
+  const levelByCode = (flow && flow.margin_level_by_code) || null;
+  const nCodesWithMargin = changeByCode
+    ? Object.keys(changeByCode).length
+    : levelByCode
+      ? Object.keys(levelByCode).length
+      : 0;
+  if (!flow || nCodesWithMargin === 0) {
+    return mdhFallback(bars, h, oneWay, "flow_demand");
+  }
+  const shortChg = shortChangeByDate(flow.short_ratio_by_date || null);
+  const shortDates = Object.keys(shortChg).sort();
+  const signed: number[] = [];
+  let nActive = 0;
+  let nCodeDays = 0;
+
+  for (const code of Object.keys(bars).sort()) {
+    if (String(code).startsWith("__")) continue;
+    const pairs = bars[code];
+    if (!pairs || pairs.length < h + 2) continue;
+    let chgMap = (changeByCode && changeByCode[code]) || null;
+    if (!chgMap && levelByCode && levelByCode[code]) {
+      // derive change from levels if only levels staged
+      const levelDates = Object.keys(levelByCode[code]).sort();
+      const derived: Record<string, number> = {};
+      for (let i = 1; i < levelDates.length; i++) {
+        const d0 = levelDates[i - 1];
+        const d1 = levelDates[i];
+        const v0 = levelByCode[code][d0];
+        const v1 = levelByCode[code][d1];
+        if (v0 !== 0) derived[d1] = v1 / v0 - 1;
+      }
+      chgMap = derived;
+    }
+    if (!chgMap || Object.keys(chgMap).length === 0) continue;
+
+    let lastShort: number | null = null;
+    const entrySigns: Array<number | null> = [];
+    for (const [d] of pairs) {
+      // last short change ≤ d
+      if (shortDates.length) {
+        const earlier = shortDates.filter((x) => x <= d);
+        if (earlier.length) {
+          const last = earlier[earlier.length - 1];
+          const sc = shortChg[last];
+          if (sc !== null && sc !== undefined) lastShort = sc;
+        }
+      }
+      if (Object.prototype.hasOwnProperty.call(chgMap, d)) {
+        entrySigns.push(flowConfirmEntry(chgMap[d], lastShort, mode));
+      } else {
+        entrySigns.push(null); // between margin prints
+      }
+    }
+    const held = applyStickyHold(entrySigns, h, "min_hold");
+    const closes = pairs.map(([, c]) => c);
+    for (let i = 0; i < held.length; i++) {
+      nCodeDays += 1;
+      const pos = held[i];
+      if (pos === null || pos === 0) continue;
+      // Score on fresh margin entry days (matches local factory).
+      if (entrySigns[i] === null || entrySigns[i] === 0) continue;
+      const fwd = multiDayForwardReturn(closes, h, i);
+      if (fwd === null) continue;
+      nActive += 1;
+      signed.push(pos * fwd);
+    }
+  }
+  const gross = signed.length ? sampleMean(signed) : null;
+  const net = gross !== null ? gross - amCost : null;
+  const modeTag = mode === "hard" ? "hard" : mode === "soft" ? "soft" : "off";
+  return {
+    gross,
+    net,
+    amCost,
+    nActive,
+    activation: nCodeDays > 0 ? nActive / nCodeDays : null,
+    signalId: `c21_flow_demand_${modeTag}`,
+  };
+}
+
+/**
+ * W94: fund_value_* using staged fund_regime events + bars.
+ * Falls back to disclosed MDH when events empty.
+ */
+function evalFundPrice(
+  bars: BarsByCode,
+  fund: PeriodPanel["fund_regime"],
+  mode: string,
+  momentumN: number,
+  holdDays: number,
+  oneWay: number,
+): EvalOut {
+  const h = Math.max(1, Math.floor(holdDays));
+  const n = Math.max(1, Math.floor(momentumN));
+  const amCost = amortizedOneWayCost(oneWay, h);
+  const events = (fund && fund.events_by_code) || null;
+  if (!fund || !events || Object.keys(events).length === 0) {
+    return mdhFallback(bars, h, oneWay, "fundamentals_price");
+  }
+
+  // Pass 1: value scores + global median benchmark.
+  const valueByCodeDate: Record<string, Record<string, number | null>> = {};
+  const allScores: number[] = [];
+  for (const code of Object.keys(bars)) {
+    if (String(code).startsWith("__")) continue;
+    const pairs = bars[code];
+    const evs = events[code] || [];
+    valueByCodeDate[code] = {};
+    for (const [d, close] of pairs) {
+      const fin = finsAsof(evs, d);
+      if (!fin) {
+        valueByCodeDate[code][d] = null;
+        continue;
+      }
+      const score = fundamentalValueScore(close, fin.eps, fin.bps);
+      valueByCodeDate[code][d] = score;
+      if (score !== null) allScores.push(score);
+    }
+  }
+  let median: number | null = null;
+  if (allScores.length) {
+    const ss = [...allScores].sort((a, b) => a - b);
+    median = ss[Math.floor(ss.length / 2)];
+  }
+
+  const signed: number[] = [];
+  let nActive = 0;
+  let nCodeDays = 0;
+  const m = String(mode || "value_momentum_agree").toLowerCase();
+
+  for (const code of Object.keys(bars).sort()) {
+    if (String(code).startsWith("__")) continue;
+    const pairs = bars[code];
+    if (!pairs || pairs.length < Math.max(h, n) + 2) continue;
+    const moms = momentumSeries(pairs, n);
+    const momByDate: Record<string, number | null> = {};
+    for (const [d, mom] of moms) momByDate[d] = mom;
+    const entries: Array<number | null> = [];
+    for (const [d] of pairs) {
+      entries.push(
+        fundEntrySign(valueByCodeDate[code]?.[d] ?? null, momByDate[d] ?? null, median, m),
+      );
+    }
+    const held = applyStickyHold(entries, h, "fixed_horizon");
+    const closes = pairs.map(([, c]) => c);
+    for (let i = 0; i < held.length; i++) {
+      nCodeDays += 1;
+      const pos = held[i];
+      if (pos === null || pos === 0) continue;
+      if (i % h !== 0) continue;
+      const fwd = multiDayForwardReturn(closes, h, i);
+      if (fwd === null) continue;
+      nActive += 1;
+      signed.push(pos * fwd);
+    }
+  }
+  const gross = signed.length ? sampleMean(signed) : null;
+  const net = gross !== null ? gross - amCost : null;
+  return {
+    gross,
+    net,
+    amCost,
+    nActive,
+    activation: nCodeDays > 0 ? nActive / nCodeDays : null,
+    signalId:
+      m === "value_only" ? "c21_fund_value_only" : "c21_fund_value_mom_agree",
+  };
+}
+
+/**
+ * W94: mf_value_mom_rate — value×mom agree + funding-level alignment.
+ */
+function evalMfValueMomRate(
+  bars: BarsByCode,
+  fund: PeriodPanel["fund_regime"],
+  ratesByDate: Record<string, number>,
+  momentumN: number,
+  holdDays: number,
+  oneWay: number,
+  highThr: number,
+  lowThr: number,
+): EvalOut {
+  const h = Math.max(1, Math.floor(holdDays));
+  const n = Math.max(1, Math.floor(momentumN));
+  const amCost = amortizedOneWayCost(oneWay, h);
+  const events = (fund && fund.events_by_code) || null;
+  const rateDates = Object.keys(ratesByDate).sort();
+  if (!fund || !events || Object.keys(events).length === 0 || rateDates.length < 1) {
+    return mdhFallback(bars, h, oneWay, "multi_factor");
+  }
+
+  const valueByCodeDate: Record<string, Record<string, number | null>> = {};
+  const allScores: number[] = [];
+  for (const code of Object.keys(bars)) {
+    if (String(code).startsWith("__")) continue;
+    const pairs = bars[code];
+    const evs = events[code] || [];
+    valueByCodeDate[code] = {};
+    for (const [d, close] of pairs) {
+      const fin = finsAsof(evs, d);
+      if (!fin) {
+        valueByCodeDate[code][d] = null;
+        continue;
+      }
+      const score = fundamentalValueScore(close, fin.eps, fin.bps);
+      valueByCodeDate[code][d] = score;
+      if (score !== null) allScores.push(score);
+    }
+  }
+  let median: number | null = null;
+  if (allScores.length) {
+    const ss = [...allScores].sort((a, b) => a - b);
+    median = ss[Math.floor(ss.length / 2)];
+  }
+
+  const signed: number[] = [];
+  let nActive = 0;
+  let nCodeDays = 0;
+
+  for (const code of Object.keys(bars).sort()) {
+    if (String(code).startsWith("__")) continue;
+    const pairs = bars[code];
+    if (!pairs || pairs.length < Math.max(h, n) + 2) continue;
+    const moms = momentumSeries(pairs, n);
+    const momByDate: Record<string, number | null> = {};
+    for (const [d, mom] of moms) momByDate[d] = mom;
+    const entries: Array<number | null> = [];
+    for (const [d] of pairs) {
+      const base = fundEntrySign(
+        valueByCodeDate[code]?.[d] ?? null,
+        momByDate[d] ?? null,
+        median,
+        "value_momentum_agree",
+      );
+      let rate: number | null = null;
+      if (ratesByDate[d] !== undefined) rate = ratesByDate[d];
+      else {
+        const earlier = rateDates.filter((x) => x <= d);
+        if (earlier.length) rate = ratesByDate[earlier[earlier.length - 1]];
+      }
+      const regime = repoLevelRegime(rate, highThr, lowThr);
+      if (base === null) {
+        entries.push(null);
+      } else if (base === 0) {
+        entries.push(0);
+      } else if (regime === null) {
+        entries.push(null);
+      } else if (base > 0 && (regime === "low" || regime === "mid")) {
+        entries.push(base);
+      } else if (base < 0 && (regime === "high" || regime === "mid")) {
+        entries.push(base);
+      } else {
+        entries.push(null);
+      }
+    }
+    const held = applyStickyHold(entries, h, "fixed_horizon");
+    const closes = pairs.map(([, c]) => c);
+    for (let i = 0; i < held.length; i++) {
+      nCodeDays += 1;
+      const pos = held[i];
+      if (pos === null || pos === 0) continue;
+      if (i % h !== 0) continue;
+      const fwd = multiDayForwardReturn(closes, h, i);
+      if (fwd === null) continue;
+      nActive += 1;
+      signed.push(pos * fwd);
+    }
+  }
+  const gross = signed.length ? sampleMean(signed) : null;
+  const net = gross !== null ? gross - amCost : null;
+  return {
+    gross,
+    net,
+    amCost,
+    nActive,
+    activation: nCodeDays > 0 ? nActive / nCodeDays : null,
+    signalId: "c21_mf_value_mom_rate",
+  };
+}
+
+/**
+ * W94: mf_flow_price — margin flow × price mom agree.
+ */
+function evalMfFlowPrice(
+  bars: BarsByCode,
+  flow: PeriodPanel["flow_regime"],
+  momentumN: number,
+  holdDays: number,
+  oneWay: number,
+): EvalOut {
+  const h = Math.max(1, Math.floor(holdDays));
+  const n = Math.max(1, Math.floor(momentumN));
+  const amCost = amortizedOneWayCost(oneWay, h);
+  const changeByCode = (flow && flow.margin_change_by_code) || null;
+  const levelByCode = (flow && flow.margin_level_by_code) || null;
+  const nCodesWithMargin = changeByCode
+    ? Object.keys(changeByCode).length
+    : levelByCode
+      ? Object.keys(levelByCode).length
+      : 0;
+  if (!flow || nCodesWithMargin === 0) {
+    return mdhFallback(bars, h, oneWay, "multi_factor");
+  }
+
+  const signed: number[] = [];
+  let nActive = 0;
+  let nCodeDays = 0;
+
+  for (const code of Object.keys(bars).sort()) {
+    if (String(code).startsWith("__")) continue;
+    const pairs = bars[code];
+    if (!pairs || pairs.length < Math.max(h, n) + 2) continue;
+    let chgMap = (changeByCode && changeByCode[code]) || null;
+    if (!chgMap && levelByCode && levelByCode[code]) {
+      const levelDates = Object.keys(levelByCode[code]).sort();
+      const derived: Record<string, number> = {};
+      for (let i = 1; i < levelDates.length; i++) {
+        const d0 = levelDates[i - 1];
+        const d1 = levelDates[i];
+        const v0 = levelByCode[code][d0];
+        const v1 = levelByCode[code][d1];
+        if (v0 !== 0) derived[d1] = v1 / v0 - 1;
+      }
+      chgMap = derived;
+    }
+    if (!chgMap || Object.keys(chgMap).length === 0) continue;
+
+    const moms = momentumSeries(pairs, n);
+    const momByDate: Record<string, number | null> = {};
+    for (const [d, mom] of moms) momByDate[d] = mom;
+    const entrySigns: Array<number | null> = [];
+    for (const [d] of pairs) {
+      if (Object.prototype.hasOwnProperty.call(chgMap, d)) {
+        const fs = signFromNumeric(chgMap[d]);
+        const ms = signFromNumeric(momByDate[d] ?? null);
+        if (fs === null) entrySigns.push(null);
+        else if (ms === null || ms === 0) entrySigns.push(null);
+        else if (fs === 0) entrySigns.push(0);
+        else if ((fs > 0 && ms > 0) || (fs < 0 && ms < 0)) entrySigns.push(fs);
+        else entrySigns.push(null);
+      } else {
+        entrySigns.push(null);
+      }
+    }
+    const held = applyStickyHold(entrySigns, h, "min_hold");
+    const closes = pairs.map(([, c]) => c);
+    for (let i = 0; i < held.length; i++) {
+      nCodeDays += 1;
+      const pos = held[i];
+      if (pos === null || pos === 0) continue;
+      if (entrySigns[i] === null || entrySigns[i] === 0) continue;
+      const fwd = multiDayForwardReturn(closes, h, i);
+      if (fwd === null) continue;
+      nActive += 1;
+      signed.push(pos * fwd);
+    }
+  }
+  const gross = signed.length ? sampleMean(signed) : null;
+  const net = gross !== null ? gross - amCost : null;
+  return {
+    gross,
+    net,
+    amCost,
+    nActive,
+    activation: nCodeDays > 0 ? nActive / nCodeDays : null,
+    signalId: "c21_mf_flow_price",
+  };
 }
 
 function repoRegimeLabel(
@@ -686,18 +1206,37 @@ export function evalLogicOnPanel(
           ? (bundle as Record<string, unknown>)[seriesKind]
           : null;
       if (!series && bundle) {
-        if (mode.includes("spread_change")) series = bundle.spread_change;
-        else if (mode.includes("spread")) series = bundle.spread;
-        else if (mode.includes("atm_iv")) series = bundle.atm_iv;
+        if (mode.includes("spread_change") || seriesKind === "spread_change")
+          series = bundle.spread_change;
+        else if (mode.includes("spread") || seriesKind === "spread")
+          series = bundle.spread;
+        else if (mode.includes("skew") || seriesKind === "skew")
+          series = bundle.skew;
+        else if (mode.includes("cm_term") || seriesKind === "cm_term")
+          series = bundle.cm_term;
+        else if (
+          mode.includes("basevol_delta") ||
+          seriesKind === "basevol_delta"
+        )
+          series = bundle.basevol_delta;
+        else if (mode.includes("atm_iv") || seriesKind === "atm_iv")
+          series = bundle.atm_iv;
         else series = bundle.basevol;
       }
       // Fallback: build abs map from top-level by-date series on the panel.
       if (!series) {
-        const absMap = mode.includes("spread")
-          ? panel.iv_base_spread
-          : mode.includes("atm_iv")
-            ? panel.atm_iv_series
-            : panel.base_vol_series;
+        const absMap =
+          seriesKind === "skew" || mode.includes("skew")
+            ? panel.skew_series
+            : seriesKind === "cm_term" || mode.includes("cm_term")
+              ? panel.cm_term_series
+              : seriesKind === "basevol_delta" || mode.includes("basevol_delta")
+                ? panel.basevol_delta_series
+                : mode.includes("spread")
+                  ? panel.iv_base_spread
+                  : mode.includes("atm_iv")
+                    ? panel.atm_iv_series
+                    : panel.base_vol_series;
         if (absMap && Object.keys(absMap).length > 0) {
           series = {
             source: "panel_top_level_series",
@@ -709,8 +1248,26 @@ export function evalLogicOnPanel(
         }
       }
       // Reuse nky regime evaluator; thresholds are percent vol points for opt225.
-      const defaultHigh = mode.includes("spread") ? 1.0 : 24.0;
-      const defaultLow = mode.includes("spread") ? -0.5 : 12.0;
+      const defaultHigh =
+        seriesKind === "skew" || mode.includes("skew")
+          ? 3.0
+          : seriesKind === "cm_term" || mode.includes("cm_term")
+            ? 2.0
+            : seriesKind === "basevol_delta" || mode.includes("basevol_delta")
+              ? 1.0
+              : mode.includes("spread")
+                ? 1.0
+                : 24.0;
+      const defaultLow =
+        seriesKind === "skew" || mode.includes("skew")
+          ? 0.5
+          : seriesKind === "cm_term" || mode.includes("cm_term")
+            ? -1.0
+            : seriesKind === "basevol_delta" || mode.includes("basevol_delta")
+              ? -1.0
+              : mode.includes("spread")
+                ? -0.5
+                : 12.0;
       out = evalNkyVolRegime(
         panel.bars,
         (series as PeriodPanel["nky_vol_series"]) || null,
@@ -750,27 +1307,93 @@ export function evalLogicOnPanel(
         numParam(params, "high_threshold", 0.05),
         numParam(params, "low_threshold", 0.0),
       );
+    } else if (
+      family === "flow_demand" ||
+      lid.startsWith("flow_margin_")
+    ) {
+      holdDays = Math.floor(numParam(params, "hold_days", 10));
+      let mode = strParam(params, "short_confirm_mode", "off");
+      if (lid.includes("short_hard")) mode = "hard";
+      else if (lid.includes("short_soft")) mode = "soft";
+      else if (lid.includes("pressure")) mode = "off";
+      if (params.require_short_confirm === true && mode === "off") mode = "hard";
+      out = evalFlowDemand(
+        panel.bars,
+        panel.flow_regime || null,
+        mode,
+        holdDays,
+        oneWay,
+      );
+    } else if (
+      family === "fundamentals_price" ||
+      lid.startsWith("fund_")
+    ) {
+      holdDays = Math.floor(numParam(params, "hold_days", 10));
+      const mode = strParam(
+        params,
+        "mode",
+        lid.includes("value_only") ? "value_only" : "value_momentum_agree",
+      );
+      out = evalFundPrice(
+        panel.bars,
+        panel.fund_regime || null,
+        mode,
+        numParam(params, "momentum_n", 10),
+        holdDays,
+        oneWay,
+      );
+    } else if (
+      family === "multi_factor" ||
+      lid.startsWith("mf_")
+    ) {
+      holdDays = Math.floor(numParam(params, "hold_days", 10));
+      if (lid.includes("flow") || strParam(params, "mode", "") === "flow_price") {
+        out = evalMfFlowPrice(
+          panel.bars,
+          panel.flow_regime || null,
+          numParam(params, "momentum_n", 10),
+          holdDays,
+          oneWay,
+        );
+      } else {
+        // default / value_mom_rate
+        out = evalMfValueMomRate(
+          panel.bars,
+          panel.fund_regime || null,
+          repoRatesFromPanel(panel),
+          numParam(params, "momentum_n", 10),
+          holdDays,
+          oneWay,
+          numParam(params, "high_threshold", 0.05),
+          numParam(params, "low_threshold", 0.0),
+        );
+      }
     } else {
-      // multi_day_hold + generic fallback for flow/fund/multi_factor/etc.
-      // Flow/fund factor legs not-yet-implemented on CF pure-TS path
-      // (sidecars staged on r2_panels; local factory evaluates).
+      // multi_day_hold + generic fallback for remaining families
       holdDays = Math.floor(
         numParam(params, "hold_days", numParam(params, "post_hold_days", 5)),
       );
       const polarity = Math.floor(numParam(params, "signal_polarity", 1));
       const rebalance = strParam(params, "rebalance_mode", "fixed_horizon");
       out = evalMultiDayHold(panel.bars, holdDays, oneWay, rebalance, polarity);
-      // tag fallback families honestly
+      // tag fallback families honestly (never silent MDH)
       if (
         family !== "multi_day_hold" &&
         !lid.includes("multi_day") &&
+        !lid.startsWith("mdh_") &&
         family !== "vol_risk_adjusted" &&
         family !== "index_vol_regime" &&
         family !== "options_vol_regime" &&
         family !== "macro_conditioned" &&
+        family !== "flow_demand" &&
+        family !== "fundamentals_price" &&
+        family !== "multi_factor" &&
         !lid.startsWith("opt225_") &&
         !lid.startsWith("nky_vol_") &&
-        !lid.startsWith("macro_repo_rate_")
+        !lid.startsWith("macro_repo_rate_") &&
+        !lid.startsWith("flow_margin_") &&
+        !lid.startsWith("fund_") &&
+        !lid.startsWith("mf_")
       ) {
         out = {
           ...out,
