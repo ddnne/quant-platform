@@ -2,7 +2,7 @@
 
 **Wave:** W94 / `w0818d` · 2026-08-18  
 **Status:** **CLOSED** as residual TOP (research factory only)  
-**Code tip:** `TIP_SHA_PLACEHOLDER`  
+**Code tip:** `cf7477603dac363fcc5c04fca67e2121108db54d`  
 **Primary proof:** [`w0818d_w94_opt_skew_thick_20260818.md`](w0818d_w94_opt_skew_thick_20260818.md)  
 **Logs:** [`.glm-logs/w0818d_w94_opt_skew_thick/`](../../.glm-logs/w0818d_w94_opt_skew_thick/)  
 **Implementer:** GLM5.3 only. Grok did **not** implement.
