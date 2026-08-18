@@ -8,7 +8,7 @@
 
 ---
 
-## Survivors under test (from W96 `hyp_xai_eval` ranking)
+## Survivors under test (W96 catalog / lite survivors)
 
 1. `mf_value_mom_rate`
 2. `rate_abs_level_xs`
@@ -16,13 +16,15 @@
 4. `flow_margin_short_hard`
 5. `xs_rank_ls_sticky`
 
+Windows: **2017–19 / 2020–22 / 2023–25** (honest shards) · gates **cost + PIT + sign + low-var** · CF **`r2_panels`** preferred · local corroboration written.
+
 ## CF deep job
 
 | field | value |
 |-------|-------|
 | job_id | `w97-survivors-20260818T145732Z` |
 | status | `ok` |
-| mode | `cf_r2_panels` |
+| mode | `r2_panels` (preferred) |
 | window survivor cells | **13/15** |
 | research_only | **5/5** |
 | unstable_or_weak | **4** |
