@@ -232,6 +232,10 @@ export interface LogicEvalResult {
   mean_net_inverted: number | null;
   t_stat: number | null;
   t_stat_inverted: number | null;
+  /** W95: ok | low_variance_artifact | n_lt_2 | … */
+  t_stat_reason?: string;
+  raw_t_stat?: number | null;
+  low_variance_artifact?: boolean;
   sharpe_period: number | null;
   sharpe_period_inverted: number | null;
   chosen_sign: "original" | "inverted" | "reject" | null;
@@ -246,6 +250,9 @@ export interface LogicEvalResult {
     family_id: string;
     logic_id: string;
     strategy_id: string;
+    low_variance_artifact?: boolean;
+    t_stat_reason?: string;
+    raw_t_stat?: number | null;
   };
   errors: string[];
   mass_research: string;

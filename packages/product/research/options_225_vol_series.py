@@ -96,7 +96,7 @@ from pathlib import Path
 from typing import Any, Iterable, Iterator, Mapping, Sequence
 
 OPTIONS_225_VOL_SERIES_VERSION: str = "research-options-225-vol-series/v1.2"
-OPTIONS_225_VOL_SERIES_WAVE: str = "W94 / w0818d"
+OPTIONS_225_VOL_SERIES_WAVE: str = "W95 / w0818e"
 
 DATASET_ID: str = "derivatives_bars_daily_options_225"
 GAP_POLICY: str = "disclose_only_no_ffill_no_invent"

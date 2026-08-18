@@ -11,10 +11,12 @@
  */
 
 import {
+  hasPairwiseLowVarianceArtifact,
   invertNets,
   sampleMean,
   sharpePeriod,
   tStatVsZero,
+  tStatVsZeroDetail,
 } from "./metrics";
 import type {
   BarSeries,
@@ -1499,12 +1501,17 @@ export function evaluateLogicAcrossPeriods(
 
   const meanGross = sampleMean(grosses);
   const meanNetOrig = sampleMean(nets);
-  const tOrig = tStatVsZero(nets);
+  const tOrigDetail = tStatVsZeroDetail(nets);
+  const tOrig = tOrigDetail.t_stat;
   const sharpeOrig = sharpePeriod(nets);
+  const lowVarArtifact =
+    tOrigDetail.reason === "low_variance_artifact" ||
+    hasPairwiseLowVarianceArtifact(nets);
 
   const netsInv = invertNets(nets, costs);
   const meanNetInv = sampleMean(netsInv);
-  const tInv = tStatVsZero(netsInv);
+  const tInvDetail = tStatVsZeroDetail(netsInv);
+  const tInv = tInvDetail.t_stat;
   const sharpeInv = sharpePeriod(netsInv);
 
   // choose_sign: prefer side with |t| higher among non-near-zero positive mean
@@ -1555,6 +1562,9 @@ export function evaluateLogicAcrossPeriods(
     rejectReasons.push("low_activation");
   }
   if (chosen === "reject") rejectReasons.push("sign_selection_reject");
+  // W95: demote/exclude when full-window or any 2-period subset is an
+  // inflated-t low-variance artifact (fund_value_mom_agree_slow 2017 case).
+  if (lowVarArtifact) rejectReasons.push("inflated_t_low_variance");
 
   const survived = rejectReasons.length === 0;
   const freezes = freezeFields();
@@ -1574,6 +1584,9 @@ export function evaluateLogicAcrossPeriods(
     mean_net_inverted: meanNetInv,
     t_stat: tStat,
     t_stat_inverted: tInv,
+    t_stat_reason: tOrigDetail.reason,
+    raw_t_stat: tOrigDetail.raw_t_stat,
+    low_variance_artifact: lowVarArtifact,
     sharpe_period: sharpe,
     sharpe_period_inverted: sharpeInv,
     chosen_sign: chosen,
@@ -1588,6 +1601,9 @@ export function evaluateLogicAcrossPeriods(
       family_id: family,
       logic_id: logicId,
       strategy_id: sid,
+      low_variance_artifact: lowVarArtifact,
+      t_stat_reason: tOrigDetail.reason,
+      raw_t_stat: tOrigDetail.raw_t_stat,
     },
     errors,
     ...freezes,

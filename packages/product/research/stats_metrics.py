@@ -31,8 +31,8 @@ import math
 from statistics import mean, pstdev, stdev
 from typing import Any, Mapping, Sequence
 
-STATS_METRICS_VERSION: str = "research-stats-metrics/v1"
-STATS_METRICS_WAVE: str = "W81 / w0816p"
+STATS_METRICS_VERSION: str = "research-stats-metrics/v1.1"
+STATS_METRICS_WAVE: str = "W95 / w0818e"
 
 MASS_RESEARCH: str = "NO-GO"
 PHASE7: str = "OFF"
@@ -58,6 +58,15 @@ DEFAULT_MIN_POSITIVE_PERIODS: int = 4
 # Optional soft floors (documented; fail only when set and violated).
 DEFAULT_MIN_PAYOFF: float | None = None  # e.g. 1.0 if enforced
 DEFAULT_MAX_ABS_DRAWDOWN: float | None = None  # e.g. 0.03 if enforced
+
+# W95 / w0818e — low-variance / inflated-t artifact gate.
+# With tiny n, near-identical period nets make t = m/(s/sqrt(n)) explode
+# without economic meaning (W94 fund_value_mom_agree_slow w2017_2019:
+# m≈82.8bp, s≈0.76bp → t≈153). Null t and disclose reason.
+LOW_VARIANCE_SMALL_N_MAX: int = 3
+LOW_VARIANCE_MIN_REL_STD: float = 0.05  # require CV = s/|m| ≥ 5%
+LOW_VARIANCE_MAX_ABS_T: float = 12.0
+LOW_VARIANCE_REASON: str = "low_variance_artifact"
 
 
 def _freeze() -> dict[str, Any]:
@@ -107,10 +116,53 @@ def sample_std(values: Sequence[float | None], *, ddof: int = 1) -> float | None
     return float(stdev(vals))
 
 
+def is_low_variance_t_artifact(
+    *,
+    n: int,
+    mean_net: float | None,
+    std_net: float | None,
+    t_stat: float | None,
+    min_rel_std: float = LOW_VARIANCE_MIN_REL_STD,
+    max_abs_t: float = LOW_VARIANCE_MAX_ABS_T,
+    small_n_max: int = LOW_VARIANCE_SMALL_N_MAX,
+) -> bool:
+    """True when small-n near-identical nets would inflate |t| without meaning."""
+    if n < 2 or n > int(small_n_max):
+        return False
+    if mean_net is None or std_net is None or t_stat is None:
+        return False
+    if not (math.isfinite(mean_net) and math.isfinite(std_net) and math.isfinite(t_stat)):
+        return False
+    abs_m = abs(float(mean_net))
+    if abs_m <= 0.0:
+        return False
+    cv = float(std_net) / abs_m
+    # Strict: near-identical nets (CV below floor) AND implausibly large |t|.
+    # Do not loosen CV to 2× floor — that false-positives mild pairs
+    # (e.g. macro_repo_rate_level 2021≈2025 with CV≈9%).
+    return bool(cv < float(min_rel_std) and abs(float(t_stat)) > float(max_abs_t))
+
+
+def has_pairwise_low_variance_artifact(
+    values: Sequence[float | None],
+) -> bool:
+    """True if any 2-period subset trips the low-variance inflated-t gate."""
+    vals = _finite_floats(values)
+    if len(vals) < 2:
+        return False
+    for i in range(len(vals)):
+        for j in range(i + 1, len(vals)):
+            if t_stat_vs_zero([vals[i], vals[j]]).get("reason") == LOW_VARIANCE_REASON:
+                return True
+    return False
+
+
 def t_stat_vs_zero(values: Sequence[float | None]) -> dict[str, Any]:
     """One-sample t-stat of values vs 0 (sample std).
 
     ``t = mean / (s / sqrt(n))``. Empty / zero-std → t None.
+    W95: small-n low-variance (near-identical period nets) → t None with
+    ``reason=low_variance_artifact`` (raw_t retained for audit).
     """
     vals = _finite_floats(values)
     n = len(vals)
@@ -137,18 +189,40 @@ def t_stat_vs_zero(values: Sequence[float | None]) -> dict[str, Any]:
         }
     s = float(stdev(vals))
     if s == 0.0:
-        t = None if m == 0.0 else (math.inf if m > 0 else -math.inf)
+        # Exact zero std on n>=2 is the extreme low-variance artifact.
+        # Do not emit ±inf into screens / rankings.
         return {
             "n": n,
             "mean": m,
             "std": 0.0,
             "se": 0.0,
-            "t_stat": t,
-            "abs_t_stat": None if t is None else abs(t),
-            "reason": "zero_std",
+            "t_stat": None,
+            "abs_t_stat": None,
+            "raw_t_stat": None if m == 0.0 else (math.inf if m > 0 else -math.inf),
+            "reason": LOW_VARIANCE_REASON if m != 0.0 else "zero_std",
+            "cv": 0.0,
         }
     se = s / math.sqrt(float(n))
     t = m / se
+    cv = s / abs(m) if m != 0.0 else None
+    if is_low_variance_t_artifact(n=n, mean_net=m, std_net=s, t_stat=t):
+        return {
+            "n": n,
+            "mean": m,
+            "std": s,
+            "se": se,
+            "t_stat": None,
+            "abs_t_stat": None,
+            "raw_t_stat": t,
+            "cv": cv,
+            "reason": LOW_VARIANCE_REASON,
+            "formula": "t = mean / (s / sqrt(n)), sample std ddof=1",
+            "gate": {
+                "min_rel_std": LOW_VARIANCE_MIN_REL_STD,
+                "max_abs_t": LOW_VARIANCE_MAX_ABS_T,
+                "small_n_max": LOW_VARIANCE_SMALL_N_MAX,
+            },
+        }
     return {
         "n": n,
         "mean": m,
@@ -156,6 +230,8 @@ def t_stat_vs_zero(values: Sequence[float | None]) -> dict[str, Any]:
         "se": se,
         "t_stat": t,
         "abs_t_stat": abs(t),
+        "raw_t_stat": t,
+        "cv": cv,
         "reason": "ok",
         "formula": "t = mean / (s / sqrt(n)), sample std ddof=1",
     }
@@ -632,7 +708,13 @@ __all__ = [
     "sharpe_ratio",
     "stats_bar_check",
     "stats_metrics_document",
+    "is_low_variance_t_artifact",
+    "has_pairwise_low_variance_artifact",
     "t_stat_vs_zero",
+    "LOW_VARIANCE_REASON",
+    "LOW_VARIANCE_MIN_REL_STD",
+    "LOW_VARIANCE_MAX_ABS_T",
+    "LOW_VARIANCE_SMALL_N_MAX",
     "trade_stats_report",
     "win_rate",
 ]

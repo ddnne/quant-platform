@@ -60,7 +60,7 @@ from research.mass_strategy_factory import (
 from research.single_shot_job import COMPLETE_21_DATASETS, default_r2_put
 
 CF_MASS_EVAL_VERSION: str = "cf-mass-eval-job/v5"
-CF_MASS_EVAL_WAVE: str = "W94 / w0818d"
+CF_MASS_EVAL_WAVE: str = "W95 / w0818e"
 RESEARCH_ARTIFACT_BUCKET: str = "quant-structured"
 RESEARCH_ARTIFACT_PREFIX: str = "research/mass_eval"
 DEFAULT_WORKER_NAME: str = "quant-platform-research-mass-eval"

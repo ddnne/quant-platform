@@ -323,10 +323,19 @@ def _reaggregate_window_from_period_rows(
     if mean_net is None:
         mean_net = sample_mean(nets)
     mean_gross = sample_mean(grosses)
-    t_stat = side.get("t_stat")
-    if t_stat is None:
-        t_stat = t_stat_vs_zero(side_nets)
+    t_pack = t_stat_vs_zero(side_nets)
+    # Prefer gated t from stats_metrics (null on low-variance artifact).
+    t_stat = t_pack.get("t_stat")
+    if t_stat is None and t_pack.get("reason") not in {
+        "low_variance_artifact",
+        "zero_std",
+        "n_lt_2",
+        "no_values",
+    }:
+        t_stat = side.get("t_stat")
     sharpe = side.get("sharpe")
+    if t_pack.get("reason") == "low_variance_artifact":
+        sharpe = None
 
     probe = {
         "strategy_id": result.get("strategy_id"),
@@ -336,9 +345,13 @@ def _reaggregate_window_from_period_rows(
         "mean_gross": mean_gross,
         "mean_net": mean_net,
         "t_stat": t_stat,
+        "t_stat_reason": t_pack.get("reason"),
+        "raw_t_stat": t_pack.get("raw_t_stat"),
+        "low_variance_artifact": t_pack.get("reason") == "low_variance_artifact",
         "sharpe_period": sharpe,
         "mean_activation": mean_activation,
         "chosen_sign": chosen_sign,
+        "sign_selection": dict(choice),
         "n_periods_ok": len(ok_rows),
         "n_periods_total": len(period_rows),
         "period_rows": period_rows,

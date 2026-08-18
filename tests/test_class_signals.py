@@ -448,6 +448,12 @@ def test_stats_metrics_period_and_bar():
     t0 = t_stat_vs_zero([])
     assert t0["t_stat"] is None
 
+    # W95: near-identical 2-period nets → null t (fund 2017 giant-t case).
+    giant = t_stat_vs_zero([0.008229283197313041, 0.008337431738535494])
+    assert giant["reason"] == "low_variance_artifact"
+    assert giant["t_stat"] is None
+    assert giant.get("raw_t_stat") is not None and abs(giant["raw_t_stat"]) > 100
+
     trades = trade_stats_report(
         [0.02, -0.01, 0.015, 0.005, -0.008],
         hold_days=10,
@@ -568,7 +574,7 @@ def test_w83_wave_tags_and_default_path_params():
         run_class_hyp_multi_year_eval,
     )
 
-    # W94 / w0818d: class-signals/v10 (+ skew/CM-term/ΔBaseVol); prior waves held
+    # W95 / w0818e: class-signals/v10 held (+ skew/CM-term/ΔBaseVol deep-dive)
     assert CLASS_SIGNALS_VERSION in {
         "class-signals/v6",
         "class-signals/v7",
@@ -582,6 +588,7 @@ def test_w83_wave_tags_and_default_path_params():
         or "W91" in CLASS_SIGNALS_WAVE
         or "W92" in CLASS_SIGNALS_WAVE
         or "W94" in CLASS_SIGNALS_WAVE
+        or "W95" in CLASS_SIGNALS_WAVE
     )
     # W86 / w0816u: class_hyp_eval v7 adds sign-selection both-sides
     assert CLASS_HYP_EVAL_VERSION == "class-hyp-eval/v7"

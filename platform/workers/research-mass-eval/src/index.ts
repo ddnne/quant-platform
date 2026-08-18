@@ -1,6 +1,6 @@
 /// <reference types="@cloudflare/workers-types" />
 /**
- * quant-platform-research-mass-eval (W94 / w0818d)
+ * quant-platform-research-mass-eval (W95 / w0818e)
  *
  * POST /v1/mass-eval
  *   body: { seed, logics[], periods[], job_id, mode?, panels_prefix? }

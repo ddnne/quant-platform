@@ -34,7 +34,7 @@ from typing import Any, Mapping, Sequence
 # ---------------------------------------------------------------------------
 
 CLASS_SIGNALS_VERSION: str = "class-signals/v10"
-CLASS_SIGNALS_WAVE: str = "W94 / w0818d"
+CLASS_SIGNALS_WAVE: str = "W95 / w0818e"
 
 SIGNAL_STATUS: str = "candidate"
 SIGNAL_VERSION: str = "1.5.0"

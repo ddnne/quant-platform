@@ -103,7 +103,7 @@ from features.class_signals import (
 # ---------------------------------------------------------------------------
 
 MASS_FACTORY_VERSION: str = "mass-strategy-factory/v2.5"
-MASS_FACTORY_WAVE: str = "W94 / w0818d"
+MASS_FACTORY_WAVE: str = "W95 / w0818e"
 
 MASS_RESEARCH: str = "NO-GO"  # operational Mass remains NO-GO
 PHASE7: str = "OFF"
@@ -154,7 +154,9 @@ NEAR_LOGIC_GROUPS: tuple[dict[str, Any], ...] = (
         ),
         "note": (
             "Keep slow variant parallel; mf_value_mom_rate adds rate factor "
-            "(not a near-dup of fund_value_mom_agree)."
+            "(not a near-dup of fund_value_mom_agree). "
+            "W95: fund_value_mom_agree_slow demoted from window-headline / "
+            "promising set (w2017_2019 giant-t = n=2 low-variance artifact)."
         ),
     },
     {
@@ -263,6 +265,8 @@ SCREEN_EVAL_ERROR: str = "eval_error"
 SCREEN_NO_PERIODS: str = "no_ok_periods"
 SCREEN_LOW_ACTIVATION: str = "low_activation"
 SCREEN_BOTH_SIGNS_FAIL: str = "both_signs_near_zero_or_nonpositive"
+# W95: small-n near-identical period nets inflate |t|; demote/exclude survivors.
+SCREEN_INFLATED_T_LOW_VARIANCE: str = "inflated_t_low_variance"
 
 DEFAULT_SEED: int = 870816
 DEFAULT_N: int = 100  # capacity; uniqueness measured by unique_logic / after_dedup
@@ -762,7 +766,12 @@ def _build_logic_templates() -> dict[str, LogicTemplate]:
                 "mom_structure": "slow_20",
             },
             structural_keys=("mode", "mom_structure"),
-            notes="Distinct mom_structure tag; not a free mom grid over fund_value_mom_agree.",
+            notes=(
+                "Distinct mom_structure tag; not a free mom grid over fund_value_mom_agree. "
+                "W95: window giant-t on w2017_2019 (t≈153) is an n=2 near-equal-nets "
+                "low-variance artifact (var≈5.8e-9); demoted from window-headline / "
+                "promising set. Keep parallel near-group; do not promote on giant-t alone."
+            ),
         ),
         # ----- W89 interest-rate factor logics -----
         LogicTemplate(
@@ -3142,6 +3151,31 @@ def screen_strategy_result(
             if float(act) < float(min_activation) and n_ok > 0:
                 reasons.append(SCREEN_LOW_ACTIVATION)
         except (TypeError, ValueError):
+            pass
+
+    # W95 low-variance / inflated-t demotion (window or pairwise subset).
+    t_reason = str(result.get("t_stat_reason") or "")
+    if t_reason == "low_variance_artifact" or result.get("low_variance_artifact"):
+        reasons.append(SCREEN_INFLATED_T_LOW_VARIANCE)
+    elif n_ok >= 2:
+        try:
+            from research.stats_metrics import (
+                LOW_VARIANCE_REASON,
+                has_pairwise_low_variance_artifact,
+                t_stat_vs_zero,
+            )
+
+            nets = [
+                r.get("net_one_way_mean_active")
+                for r in period_rows
+                if r.get("status") == "ok"
+            ]
+            full = t_stat_vs_zero(nets)
+            if full.get("reason") == LOW_VARIANCE_REASON or has_pairwise_low_variance_artifact(
+                nets
+            ):
+                reasons.append(SCREEN_INFLATED_T_LOW_VARIANCE)
+        except Exception:
             pass
 
     seen: set[str] = set()
