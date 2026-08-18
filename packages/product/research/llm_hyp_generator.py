@@ -53,8 +53,8 @@ OPERATIONAL_GO = False
 CONTINUOUS_PAPER = "UNARMED"
 LIVE_ORDERS = False
 
-LLM_HYP_WAVE = "W90 / w0816y"
-LLM_HYP_VERSION = "llm-hyp-generator/v1"
+LLM_HYP_WAVE = "W96 / w0818f"
+LLM_HYP_VERSION = "llm-hyp-generator/v1.1"
 
 # Forbidden numeric-only knobs as sole differentiation.
 _NUMERIC_ONLY = frozenset(
@@ -400,6 +400,70 @@ def _extract_json_array(text: str) -> list[Any]:
     return []
 
 
+# W95 failure-mode reject patterns (W96 hyp gen must not re-polish these).
+_W95_REHASH_PATTERNS: tuple[tuple[str, str], ...] = (
+    ("fund_value_mom_agree_slow", "demoted_fund_slow_rehash"),
+    ("fund_slow", "demoted_fund_slow_rehash"),
+    ("soft≡pressure", "soft_eq_pressure_forbidden"),
+    ("soft==pressure", "soft_eq_pressure_forbidden"),
+    ("soft = pressure", "soft_eq_pressure_forbidden"),
+    ("dual options level", "dual_options_level_forbidden"),
+    ("smile≡level", "dual_options_level_forbidden"),
+    ("atm as sole", "dual_options_level_forbidden"),
+    ("basevol+atm sole", "dual_options_level_forbidden"),
+    ("low-var t", "low_var_t_trust_forbidden"),
+    ("low variance t", "low_var_t_trust_forbidden"),
+    ("inflated t artifact", "low_var_t_trust_forbidden"),
+)
+
+
+def _w95_failure_mode_reject(prop: Mapping[str, Any]) -> str | None:
+    """Return reject_reason if proposal rehashes W95 demoted/weak patterns."""
+    lid = str(prop.get("logic_id") or "").lower()
+    blob = " ".join(
+        [
+            lid,
+            str(prop.get("thesis") or ""),
+            str(prop.get("signal_definition") or prop.get("signal") or ""),
+            str(prop.get("position_rule") or prop.get("position") or ""),
+            str(prop.get("family_id") or prop.get("family") or ""),
+        ]
+    ).lower()
+    if "fund_value_mom_agree_slow" in lid or lid.endswith("_slow") and "fund" in lid:
+        return "demoted_fund_slow_rehash"
+    # Soft confirm that explicitly equals pressure / off
+    if ("soft" in blob and "pressure" in blob) and any(
+        x in blob for x in ("≡", "==", "identical", "same as pressure", "equals pressure")
+    ):
+        return "soft_eq_pressure_forbidden"
+    # Shape/skew/cm_term/Δ as sole main candidate re-polish
+    shape_hits = sum(
+        1
+        for k in ("skew", "cm_term", "basevol_delta", "shape feature")
+        if k in blob
+    )
+    if shape_hits >= 1 and any(
+        w in blob for w in ("as main", "promote", "main candidate", "sole edge")
+    ):
+        return "shape_rate_flow_repolish_forbidden"
+    if any(
+        w in blob
+        for w in (
+            "re-polish rate",
+            "repolish rate",
+            "rate weak_thesis",
+            "flow weak_thesis",
+            "sign-flip single-regime only",
+            "sign flip as sole",
+        )
+    ):
+        return "shape_rate_flow_repolish_forbidden"
+    for needle, reason in _W95_REHASH_PATTERNS:
+        if needle in blob:
+            return reason
+    return None
+
+
 def _normalize_proposals(
     raw_list: Sequence[Any],
     *,
@@ -419,6 +483,17 @@ def _normalize_proposals(
                     "index": i,
                     "proposal": prop,
                     "reject_reason": "window_tweak_only_forbidden",
+                }
+            )
+            continue
+        fm_reason = _w95_failure_mode_reject(prop)
+        if fm_reason:
+            rejected.append(
+                {
+                    "index": i,
+                    "proposal": prop,
+                    "reject_reason": fm_reason,
+                    "note": "W95 failure-mode constraint (W96)",
                 }
             )
             continue
@@ -461,8 +536,15 @@ def _normalize_proposals(
 _HYP_SYSTEM = """You are a quant research hypothesizer for Japanese equities (TSE).
 Propose DISTINCT economic profit hypotheses. Each MUST have:
 thesis, signal_definition, position_rule, datasets, family_id, logic_id, params.
-FORBIDDEN: window/hold/mom/frac-only variants; sign flip as strategy; simple_daily_sign;
-inventing data; claiming READY/Mass/GO/live.
+
+HARD CONSTRAINTS (W96 failure-mode):
+1. Avoid single-regime sign-flip dependency (or explicitly disclose regime dependency + both-side plan).
+2. Do NOT repeat soft≡pressure non-differentiation (flow soft confirm that equals no-pressure).
+3. Do NOT trust / propose logics that rely on low-variance inflated t (tiny n artifacts).
+4. FORBIDDEN: hold/mom/frac-only variants; dual options-level eval as sole edge; sign flip as strategy; simple_daily_sign; inventing data; claiming READY/Mass/GO/live.
+5. Prefer distinct economic mechanisms vs demoted/weak negative examples: shape/skew-as-main, rate/flow weak_thesis, demoted fund_slow inflated-t.
+6. Always include thesis + signal_definition + position_rule + datasets.
+
 Return ONLY a JSON array of objects."""
 
 
@@ -512,7 +594,10 @@ def _call_openai_compatible(
     user = (
         f"Generate {n} distinct multi-day JP equity profit hypotheses. "
         "Diversify families (flow, fund, rate, multi-factor, event, vol, XS, macro). "
-        "No hold/mom/frac window tweaks. JSON array only."
+        "No hold/mom/frac window tweaks. Obey HARD CONSTRAINTS "
+        "(no sign-flip-only single-regime reliance; no soft≡pressure; "
+        "no low-var t trust; no window-only; no dual options-level-as-sole-edge; "
+        "do not re-polish shape/rate/flow/demoted fund_slow). JSON array only."
     )
     out = _http_json(
         f"{base_url.rstrip('/')}/chat/completions",
@@ -529,7 +614,7 @@ def _call_openai_compatible(
             "temperature": 0.7,
             "max_tokens": 4096,
         },
-        timeout=180.0 if provider in {"xai", "grok"} else 90.0,
+        timeout=300.0 if provider in {"xai", "grok"} else 120.0,
     )
     choices = out.get("choices") or []
     text = ""
@@ -550,7 +635,7 @@ def _call_anthropic(
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], str]:
     user = (
         f"Generate {n} distinct multi-day JP equity profit hypotheses. "
-        "Diversify families. No window tweaks. JSON array only."
+        "Diversify families. No window tweaks. Obey HARD CONSTRAINTS (no sign-flip-only, no soft≡pressure, no low-var-t, no demoted rehash). JSON array only."
     )
     out = _http_json(
         "https://api.anthropic.com/v1/messages",
