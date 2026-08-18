@@ -2,7 +2,7 @@
 
 **Wave:** W93 / `w0818c` · 2026-08-18  
 **Status:** **CLOSED** as residual TOP (research factory only)  
-**Code tip:** `8f62c17ebffc6c9322433405c5a0e99e1362d5f2`  
+**Code tip:** `8acdb8cf8a106ae00ff6fdf64a2e548437538759`  
 **Primary proof:** [`w0818c_w93_opt225_basevol_atm_diff_20260818.md`](w0818c_w93_opt225_basevol_atm_diff_20260818.md)  
 **Logs:** [`.glm-logs/w0818c_w93_opt225_diff/`](../../.glm-logs/w0818c_w93_opt225_diff/)  
 **Implementer:** GLM5.3 only. Grok did **not** implement.
