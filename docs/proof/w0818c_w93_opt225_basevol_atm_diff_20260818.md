@@ -65,7 +65,7 @@
 ### Diagnosis — why spread logics had low activation
 
 1. **J-Quants BaseVol ≈ ATM put/call mid by definition** (from 2016-07-19).
-2. Pre-fix: **all** nonzero `atm_iv − base_vol` residuals sat exclusively at front-CM **DTE≤5** (SQ-week blow-ups) — expiry noise, not a durable risk-premium structure.
+2. Pre-fix: **all** nonzero `atm_iv − base_vol` residuals sat exclusively at front-CM **DTE ∈ {1,2,3}** (SQ-week blow-ups; DTE≥5 always exact 0) — expiry noise, not a durable risk-premium structure.
 3. Default thresholds `spread_high=1.0` / `spread_low=−0.5` therefore rarely fire → `low_activation` reject on lite windows.
 4. **Not** a sign-convention bug.
 

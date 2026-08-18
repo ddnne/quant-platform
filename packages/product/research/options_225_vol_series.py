@@ -32,7 +32,7 @@ BaseVol exists (**no ffill**).
 
 1. ``under_px`` = median finite ``UnderPx`` that day (usually unique).
 2. Front contract month ``cm`` = earliest ``CM`` among rows with
-   ``LTD`` DTE ``>= min_dte_days`` (default ``5``; W93: residuals vs
+   ``LTD`` DTE ``>= min_dte_days`` (default ``6``; W93: residuals vs
    BaseVol occur only at DTE in {1,2,3}). Fallback chain: ``SQD`` with the
    same min-DTE floor → unrestricted ``LTD > Date`` (``near_expiry_fallback``)
    → ``SQD > Date`` → earliest ``CM`` with ``YYYY-MM >= Date[:7]``.
