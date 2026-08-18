@@ -2,7 +2,7 @@
 
 **Logic:** `xs_rank_ls_sticky`  
 **Data path:** `local_real_mirrors` (CF mass-eval cannot emit daily equity path)  
-**HEAD:** `5f514978e8b27b89d57564fc57ee0feca16df7be`  
+**HEAD:** `afbd7c687eb241902a9ff50847da112994309270`  
 **Policy:** `promote_as_main=false` · `go=false` · no pin retune · no hold/mom grid  
 
 ## Why this wave
