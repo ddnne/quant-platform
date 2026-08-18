@@ -2,7 +2,7 @@
 
 **Wave:** W99 / `w0819b` · 2026-08-19  
 **Status:** **CLOSED** as residual TOP (OTC Batch3 + sticky true daily DD + constrained hyps + MISDATE re-probe)  
-**Code tip:**   
+**Code tip:** `f1369b7edfaff73d68fe3ad38ea24e323039bdb9`  
 **Prior tip:** W98 `00cf879` · OTC COMPLETE **4651** / PARTIAL **4132**  
 **Primary proofs:**  
 - [`w0819b_w99_otc_backfill_batch3_20260819.md`](w0819b_w99_otc_backfill_batch3_20260819.md)  
