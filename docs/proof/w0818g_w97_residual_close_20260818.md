@@ -2,7 +2,7 @@
 
 **Wave:** W97 / `w0818g` · 2026-08-18  
 **Status:** **CLOSED** as residual TOP (research factory + planned OTC official PARTIAL backfill)  
-**Code tip:** `b790fbcc9cc8c0a92fab1b6c8a62f66260fd6da0`  
+**Code tip:** `de5aad7c84aa61f054dc7594ace14f591a56ec83`  
 **Prior tip:** W96 `f0e8b33` · OTC tip 4501 · PARTIAL held  
 **Primary proofs:**  
 - [`w0818g_w97_otc_backfill_batch1_20260818.md`](w0818g_w97_otc_backfill_batch1_20260818.md)  
