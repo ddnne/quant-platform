@@ -70,7 +70,9 @@ def test_freezes_closed():
     assert OPERATIONAL_GO is False
     assert CONTINUOUS_PAPER == "UNARMED"
     assert (
-        "W92" in MASS_FACTORY_WAVE
+        "W94" in MASS_FACTORY_WAVE
+        or "W93" in MASS_FACTORY_WAVE
+        or "W92" in MASS_FACTORY_WAVE
         or "W91" in MASS_FACTORY_WAVE
         or "W90" in MASS_FACTORY_WAVE
         or "W89" in MASS_FACTORY_WAVE
