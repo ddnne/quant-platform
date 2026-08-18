@@ -148,8 +148,10 @@ def _mini_chain_day(
 
 
 def test_wave_pins_and_freezes():
-    assert OPTIONS_225_VOL_SERIES_VERSION == "research-options-225-vol-series/v1"
-    assert "W92" in OPTIONS_225_VOL_SERIES_WAVE
+    assert OPTIONS_225_VOL_SERIES_VERSION.startswith(
+        "research-options-225-vol-series/v1"
+    )
+    assert "W93" in OPTIONS_225_VOL_SERIES_WAVE or "W92" in OPTIONS_225_VOL_SERIES_WAVE
     assert DATASET_ID == "derivatives_bars_daily_options_225"
     assert GAP_POLICY == "disclose_only_no_ffill_no_invent"
     assert IV_FIELDS_AVAILABLE_FROM == "2016-07-19"
@@ -237,6 +239,61 @@ def test_atm_iv_picks_front_cm_nearest_strike_avg_pc():
     assert row["put_iv"] == 20.5
     assert row["call_iv"] == 19.5
     assert row["ffill_applied"] is False
+    assert row["near_expiry_fallback"] is False
+    assert int(row["dte"] or 0) >= 6
+
+
+def test_atm_iv_rolls_near_expiry_front_cm():
+    """W93: DTE<=5 front CM must lose to next month when available."""
+    date = "2024-02-05"  # LTD 2024-02-08 → DTE=3 < min_dte=6
+    rows = _mini_chain_day(
+        date,
+        under=40000.0,
+        atm_strike=40000.0,
+        put_iv=80.0,  # blown-up front IV
+        call_iv=70.0,
+        base_vol=25.0,
+        front_cm="2024-02",
+        ltd="2024-02-08",
+        sqd="2024-02-09",
+    )
+    # next CM with calm IV (should win after min_dte roll)
+    rows += [
+        _contract(
+            date=date,
+            code="P_NEXT",
+            strike=40000.0,
+            pc="1",
+            cm="2024-03",
+            ltd="2024-03-07",
+            sqd="2024-03-08",
+            under=40000.0,
+            base_vol=25.0,
+            iv=25.2,
+        ),
+        _contract(
+            date=date,
+            code="C_NEXT",
+            strike=40000.0,
+            pc="2",
+            cm="2024-03",
+            ltd="2024-03-07",
+            sqd="2024-03-08",
+            under=40000.0,
+            base_vol=25.0,
+            iv=24.8,
+        ),
+    ]
+    atm = build_daily_atm_iv_series(rows)
+    assert len(atm) == 1
+    assert atm[0]["cm"] == "2024-03"
+    # mini_chain also seeds C_BACK@2024-03 IV=25.0; median(call)=24.9 → avg≈25.05
+    assert atm[0]["atm_iv"] == pytest.approx(25.05)
+    assert atm[0]["cm_pick_rule"] == "ltd_min_dte"
+    assert atm[0]["near_expiry_fallback"] is False
+    assert int(atm[0]["dte"] or 0) >= 6
+    # blown-up front IV must NOT be selected
+    assert atm[0]["atm_iv"] < 40.0
 
 
 def test_atm_iv_call_only_when_put_missing():

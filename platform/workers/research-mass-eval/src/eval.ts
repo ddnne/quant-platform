@@ -4,10 +4,9 @@
  * Ports the essential multi_day_hold + cross_section_relative paths used by
  * mass_strategy_factory.evaluate_one_strategy / class_hyp_eval.
  *
- * Other families fall back to multi_day_hold-style momentum sticky hold with
- * family-specific hold/momentum knobs when present — full factor legs
- * (repo/fins/margin) remain not-yet-implemented on CF (use local factory or
- * stage r2_panels + nets_only for those).
+ * W93: macro_repo_rate_* consume staged repo_rate_regime when present.
+ * Full flow/fund factor legs remain not-yet-implemented on CF (use local
+ * factory; sidecars are staged on r2_panels for thicken / future).
  */
 
 import {
@@ -143,6 +142,154 @@ function crossSectionRankSigns(
     else out[code] = 0;
   }
   return out;
+}
+
+function repoRatesFromPanel(panel: PeriodPanel): Record<string, number> {
+  const regime = panel.repo_rate_regime;
+  const fromRegime =
+    (regime && (regime.rates_by_date || regime.rate_by_date)) || null;
+  const flat = panel.repo_rate_by_date || null;
+  return { ...(fromRegime || {}), ...(flat || {}) };
+}
+
+function repoRegimeLabel(
+  rate: number | null,
+  prev: number | null,
+  mode: string,
+  highThreshold: number,
+  lowThreshold: number,
+  eps: number,
+): string | null {
+  if (rate === null || !Number.isFinite(rate)) return null;
+  const m = String(mode || "rate_change").toLowerCase();
+  if (m.includes("level")) {
+    if (rate >= highThreshold) return "high";
+    if (rate <= lowThreshold) return "low";
+    return "mid";
+  }
+  // rate_change
+  if (prev === null || !Number.isFinite(prev)) return null;
+  const delta = rate - prev;
+  if (delta > eps) return "rate_up";
+  if (delta < -eps) return "rate_down";
+  return "flat";
+}
+
+function conditionMomOnRepoRegime(
+  entrySign: number | null,
+  regime: string | null,
+  mode: string,
+): number | null {
+  if (entrySign === null || regime === null) return null;
+  const m = String(mode || "rate_change").toLowerCase();
+  if (m.includes("level")) {
+    if (regime === "low") return entrySign > 0 ? entrySign : null;
+    if (regime === "high") return entrySign < 0 ? entrySign : null;
+    return null; // mid → no trade
+  }
+  if (regime === "rate_down") return entrySign > 0 ? entrySign : null;
+  if (regime === "rate_up") return entrySign < 0 ? entrySign : null;
+  return null; // flat → no trade
+}
+
+/**
+ * W93: macro-conditioned momentum using staged jsda_tokyo_repo_rates.
+ * Falls back to plain MDH when repo map is empty (disclosed).
+ */
+function evalMacroRepoConditioned(
+  bars: BarsByCode,
+  ratesByDate: Record<string, number>,
+  mode: string,
+  momentumN: number,
+  holdDays: number,
+  oneWay: number,
+  highThreshold: number,
+  lowThreshold: number,
+): {
+  gross: number | null;
+  net: number | null;
+  amCost: number;
+  nActive: number;
+  activation: number | null;
+  signalId: string;
+} {
+  const n = Math.max(1, Math.floor(momentumN));
+  const h = Math.max(1, Math.floor(holdDays));
+  const amCost = amortizedOneWayCost(oneWay, h);
+  const rateDates = Object.keys(ratesByDate).sort();
+  if (rateDates.length < 2) {
+    // No staged repo → honest MDH fallback tag.
+    const fb = evalMultiDayHold(bars, h, oneWay, "fixed_horizon", 1);
+    return { ...fb, signalId: `c21_lite_fallback_mdh:macro_conditioned` };
+  }
+  const prevMap: Record<string, number | null> = {};
+  for (let i = 0; i < rateDates.length; i++) {
+    prevMap[rateDates[i]] = i > 0 ? ratesByDate[rateDates[i - 1]] : null;
+  }
+  const signed: number[] = [];
+  let nActive = 0;
+  let nCodeDays = 0;
+  const eps = 1e-6;
+
+  for (const code of Object.keys(bars).sort()) {
+    if (String(code).startsWith("__")) continue;
+    const pairs = bars[code];
+    if (!pairs || pairs.length < n + 2) continue;
+    const moms = momentumSeries(pairs, n);
+    const entrySigns = moms.map(([, m]) => signFromNumeric(m));
+    // Apply regime filter to daily entries, then sticky hold.
+    const conditioned: Array<number | null> = [];
+    for (let i = 0; i < moms.length; i++) {
+      const d = moms[i][0];
+      let rate = ratesByDate[d];
+      let prev = prevMap[d] ?? null;
+      if (rate === undefined) {
+        // last repo date ≤ d (no invent/ffill beyond observed as_of)
+        const earlier = rateDates.filter((x) => x <= d);
+        if (!earlier.length) {
+          conditioned.push(null);
+          continue;
+        }
+        const last = earlier[earlier.length - 1];
+        rate = ratesByDate[last];
+        prev = prevMap[last] ?? null;
+      }
+      const regime = repoRegimeLabel(
+        rate,
+        prev,
+        mode,
+        highThreshold,
+        lowThreshold,
+        eps,
+      );
+      conditioned.push(conditionMomOnRepoRegime(entrySigns[i], regime, mode));
+    }
+    const held = applyStickyHold(conditioned, h, "fixed_horizon");
+    const closes = pairs.map(([, c]) => c);
+    for (let i = 0; i < held.length; i++) {
+      nCodeDays += 1;
+      const pos = held[i];
+      if (pos === null || pos === 0) continue;
+      if (i % h !== 0) continue;
+      const fwd = multiDayForwardReturn(closes, h, i);
+      if (fwd === null) continue;
+      nActive += 1;
+      signed.push(pos * fwd);
+    }
+  }
+  const gross = signed.length ? sampleMean(signed) : null;
+  const net = gross !== null ? gross - amCost : null;
+  const modeTag = String(mode || "rate_change").includes("level")
+    ? "rate_level"
+    : "rate_change";
+  return {
+    gross,
+    net,
+    amCost,
+    nActive,
+    activation: nCodeDays > 0 ? nActive / nCodeDays : null,
+    signalId: `c21_macro_repo_${modeTag}`,
+  };
 }
 
 function evalMultiDayHold(
@@ -587,9 +734,26 @@ export function evalLogicOnPanel(
         ...out,
         signalId: `c21_${mode}_xs`,
       };
+    } else if (
+      family === "macro_conditioned" ||
+      lid.startsWith("macro_repo_rate_")
+    ) {
+      holdDays = Math.floor(numParam(params, "hold_days", 10));
+      const mode = strParam(params, "mode", lid.includes("level") ? "rate_level" : "rate_change");
+      out = evalMacroRepoConditioned(
+        panel.bars,
+        repoRatesFromPanel(panel),
+        mode,
+        numParam(params, "momentum_n", 10),
+        holdDays,
+        oneWay,
+        numParam(params, "high_threshold", 0.05),
+        numParam(params, "low_threshold", 0.0),
+      );
     } else {
-      // multi_day_hold + generic fallback for rate/multi_factor/etc.
-      // Full factor legs not-yet-implemented on CF pure-TS path.
+      // multi_day_hold + generic fallback for flow/fund/multi_factor/etc.
+      // Flow/fund factor legs not-yet-implemented on CF pure-TS path
+      // (sidecars staged on r2_panels; local factory evaluates).
       holdDays = Math.floor(
         numParam(params, "hold_days", numParam(params, "post_hold_days", 5)),
       );
@@ -603,8 +767,10 @@ export function evalLogicOnPanel(
         family !== "vol_risk_adjusted" &&
         family !== "index_vol_regime" &&
         family !== "options_vol_regime" &&
+        family !== "macro_conditioned" &&
         !lid.startsWith("opt225_") &&
-        !lid.startsWith("nky_vol_")
+        !lid.startsWith("nky_vol_") &&
+        !lid.startsWith("macro_repo_rate_")
       ) {
         out = {
           ...out,

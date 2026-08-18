@@ -95,6 +95,64 @@ export interface Opt225RegimeBundle {
   spread_change?: Opt225RegimeSeries | null;
 }
 
+/** W93 jsda_tokyo_repo_rates compact regime (percent). */
+export interface RepoRateRegime {
+  dataset?: string;
+  status?: string;
+  units?: string;
+  rates_by_date?: Record<string, number>;
+  rate_by_date?: Record<string, number>;
+  spread_by_date?: Record<string, number>;
+  n_rates?: number;
+  n_obs?: number;
+  short_tenor?: string;
+  long_tenor?: string;
+  role?: string;
+}
+
+/** W93 markets_calendar HolDiv map. */
+export interface CalendarSideCar {
+  dataset?: string;
+  hol_div_by_date?: Record<string, string>;
+  n_dates?: number;
+  n_trading_dates?: number;
+  dates?: string[];
+}
+
+/** W93 flow sidecar (margin + short_ratio). */
+export interface FlowRegime {
+  dataset_margin?: string;
+  dataset_short?: string;
+  status?: string;
+  margin_level_by_code?: Record<string, Record<string, number>>;
+  margin_change_by_code?: Record<string, Record<string, number>>;
+  short_ratio_by_date?: Record<string, number>;
+  short_section?: string;
+  n_codes?: number;
+  n_obs?: number;
+  n_short_obs?: number;
+  role?: string;
+}
+
+/** W93 fins_summary compact events. */
+export interface FundRegime {
+  dataset?: string;
+  status?: string;
+  events_by_code?: Record<
+    string,
+    Array<{
+      disc_date?: string;
+      disc_time?: string | null;
+      eps?: number | null;
+      feps?: number | null;
+      bps?: number | null;
+    }>
+  >;
+  n_codes?: number;
+  n_events?: number;
+  role?: string;
+}
+
 export interface PeriodPanel {
   period_id: string;
   year: number;
@@ -113,6 +171,16 @@ export interface PeriodPanel {
   atm_iv_series?: Record<string, number> | null;
   /** W92 daily (ATM IV − BaseVol) spread by date. */
   iv_base_spread?: Record<string, number> | null;
+  /** W93 repo rate regime (jsda_tokyo_repo_rates). */
+  repo_rate_regime?: RepoRateRegime | null;
+  /** Flat alias of repo rates_by_date. */
+  repo_rate_by_date?: Record<string, number> | null;
+  /** W93 markets_calendar sidecar. */
+  calendar?: CalendarSideCar | null;
+  /** W93 flow (margin/short) sidecar — staged; CF flow eval still local_only. */
+  flow_regime?: FlowRegime | null;
+  /** W93 fund (fins_summary) sidecar — staged; CF fund eval still local_only. */
+  fund_regime?: FundRegime | null;
 }
 
 export interface PeriodEvalRow {

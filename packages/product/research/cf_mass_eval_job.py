@@ -59,8 +59,8 @@ from research.mass_strategy_factory import (
 )
 from research.single_shot_job import COMPLETE_21_DATASETS, default_r2_put
 
-CF_MASS_EVAL_VERSION: str = "cf-mass-eval-job/v3"
-CF_MASS_EVAL_WAVE: str = "W92 / w0818b"
+CF_MASS_EVAL_VERSION: str = "cf-mass-eval-job/v4"
+CF_MASS_EVAL_WAVE: str = "W93 / w0818c"
 RESEARCH_ARTIFACT_BUCKET: str = "quant-structured"
 RESEARCH_ARTIFACT_PREFIX: str = "research/mass_eval"
 DEFAULT_WORKER_NAME: str = "quant-platform-research-mass-eval"
@@ -90,6 +90,16 @@ PRIMARY_INDEX_DATASETS: tuple[str, ...] = (
     "indices_bars_daily_topix",
     "indices_bars_daily",
 )
+# W93 thicken sidecars staged into r2_panels when COMPLETE-backed local data
+# is available (never claim COMPLETE missing). TOPIX remains proxy label only.
+THICKEN_PANEL_DATASETS: tuple[str, ...] = (
+    "markets_calendar",
+    "jsda_tokyo_repo_rates",
+    "markets_margin_interest",
+    "markets_short_ratio",
+    "fins_summary",
+    "indices_bars_daily_topix",
+)
 
 if len(COMPLETE_22_DATASETS) != 22:
     raise RuntimeError(
@@ -104,6 +114,7 @@ if COMPLETE_22_DATASET_SET & PERMANENT_DEFER_DATASETS:
 # Bar-native logics the CF Worker can evaluate without extra panels.
 # W91: nky_vol_* need staged index closes (__NKY_PROXY__) in panels.
 # W92: opt225_* need staged opt225_regime maps (BaseVol/ATM IV/spread).
+# W93: macro_repo_rate_* consume staged repo_rate_regime when present.
 CF_BAR_NATIVE_LOGIC_IDS: tuple[str, ...] = (
     "mdh_sticky_momentum",
     "mdh_mean_reversion",
@@ -122,6 +133,8 @@ CF_BAR_NATIVE_LOGIC_IDS: tuple[str, ...] = (
     "opt225_atm_iv_term_ratio",
     "opt225_iv_base_spread_abs",
     "opt225_iv_base_spread_change",
+    "macro_repo_rate_change",
+    "macro_repo_rate_level",
 )
 
 # Lite multi-period shards (W90 residual; synthetic / tip smoke).
@@ -335,6 +348,7 @@ def inventory_complete22() -> dict[str, Any]:
         "complete_22": list(COMPLETE_22_DATASETS),
         "primary_bars_dataset": PRIMARY_BARS_DATASET,
         "primary_index_datasets": list(PRIMARY_INDEX_DATASETS),
+        "thicken_panel_datasets": list(THICKEN_PANEL_DATASETS),
         "permanent_defer_n": len(PERMANENT_DEFER_DATASETS),
         "permanent_defer": sorted(PERMANENT_DEFER_DATASETS),
         "permanent_defer_ids": dict(PERMANENT_DEFER_IDS),
@@ -349,7 +363,596 @@ def inventory_complete22() -> dict[str, Any]:
             "research/mass_eval/job={id}/panels/ for mode=r2_panels. "
             "D1 tip (jquants_records) is hot-window only (~2026-07..08)."
         ),
+        "thicken_note_w93": (
+            "W93 stages denser r2_panels sidecars when COMPLETE-backed "
+            "local sqlite/mirrors are available: markets_calendar, "
+            "jsda_tokyo_repo_rates, markets_margin_interest, "
+            "markets_short_ratio, fins_summary, plus TOPIX proxy label. "
+            "Never claim COMPLETE data missing."
+        ),
     }
+
+
+def inventory_cf_panel_wiring() -> dict[str, Any]:
+    """Per-COMPLETE-22 wiring status for CF mass-eval panels / factory logics.
+
+    Status values:
+      * wired_on_cf — staged onto r2_panels and CF worker eval consumes it
+      * local_only — COMPLETE; local factory uses; CF eval factor path absent
+        (may still be staged as panel sidecar for future/thicken)
+      * not_yet — COMPLETE exists; not required by current CF factory logics
+        (or only tip/secondary); do not claim missing
+    """
+    rows: dict[str, dict[str, Any]] = {
+        "equities_bars_daily": {
+            "status": "wired_on_cf",
+            "reason": (
+                "Primary bars panel payload for all CF bar-native logics "
+                "(mdh/xs/vol/opt225/macro)."
+            ),
+            "factory_logics": [
+                "mdh_*",
+                "xs_*",
+                "vol_*",
+                "nky_vol_*",
+                "opt225_*",
+                "macro_repo_rate_*",
+            ],
+        },
+        "indices_bars_daily_topix": {
+            "status": "wired_on_cf",
+            "reason": (
+                "Staged as __NKY_PROXY__ + nky_vol_series for CF nky_vol_*; "
+                "explicitly labeled TOPIX proxy/compare only (not primary "
+                "Nikkei vol SoT — that is options_225)."
+            ),
+            "proxy_label": "TOPIX",
+            "factory_logics": ["nky_vol_*"],
+        },
+        "indices_bars_daily": {
+            "status": "local_only",
+            "reason": (
+                "COMPLETE generic indices bars; CF/nky path prefers "
+                "indices_bars_daily_topix as TOPIX proxy label."
+            ),
+            "factory_logics": [],
+        },
+        "derivatives_bars_daily_options_225": {
+            "status": "wired_on_cf",
+            "reason": (
+                "Canonical Nikkei vol SoT staged as opt225_regime / "
+                "base_vol_series / atm_iv_series / iv_base_spread (W92)."
+            ),
+            "factory_logics": ["opt225_*"],
+        },
+        "derivatives_bars_daily_options": {
+            "status": "not_yet",
+            "reason": (
+                "COMPLETE options chain (non-225); factory CF path uses "
+                "options_225 canonical SoT. Not required for current CF logics."
+            ),
+            "factory_logics": [],
+        },
+        "derivatives_bars_daily_futures": {
+            "status": "local_only",
+            "reason": (
+                "COMPLETE futures; local nky/NK225F compare path may use; "
+                "CF stages TOPIX proxy, not futures primary."
+            ),
+            "factory_logics": [],
+        },
+        "markets_calendar": {
+            "status": "wired_on_cf",
+            "reason": (
+                "W93 thicken: staged as calendar HolDiv map on r2_panels; "
+                "available to CF consumers / trading-day filters."
+            ),
+            "factory_logics": ["* (session calendar)"],
+        },
+        "jsda_tokyo_repo_rates": {
+            "status": "wired_on_cf",
+            "reason": (
+                "W93 thicken: staged repo_rate_regime (level + curve spread); "
+                "CF macro_repo_rate_change/level consume when present."
+            ),
+            "factory_logics": [
+                "macro_repo_rate_change",
+                "macro_repo_rate_level",
+                "rate_abs_level_xs",
+                "rate_curve_shape_xs",
+                "mf_value_mom_rate",
+            ],
+            "cf_eval_note": (
+                "macro_repo_* wired on CF; rate_* XS / mf_* remain local_only "
+                "factor legs (CF falls back to MDH unless nets_only)."
+            ),
+        },
+        "markets_margin_interest": {
+            "status": "local_only",
+            "reason": (
+                "COMPLETE flow SoT. W93 stages compact margin level/change "
+                "by code on r2_panels; CF flow factor eval not-yet "
+                "(local factory flow_* logics)."
+            ),
+            "factory_logics": [
+                "flow_margin_pressure",
+                "flow_margin_short_hard",
+                "flow_margin_short_soft",
+                "mf_flow_price",
+            ],
+            "staged_on_panel": True,
+        },
+        "markets_short_ratio": {
+            "status": "local_only",
+            "reason": (
+                "COMPLETE short-flow SoT. W93 stages section-0050 "
+                "short_ratio_by_date on panels; CF flow confirm eval not-yet."
+            ),
+            "factory_logics": [
+                "flow_margin_short_hard",
+                "flow_margin_short_soft",
+            ],
+            "staged_on_panel": True,
+        },
+        "fins_summary": {
+            "status": "local_only",
+            "reason": (
+                "COMPLETE fund SoT. W93 stages compact disclosure events "
+                "for panel codes; CF fund/value factor eval not-yet "
+                "(local fund_* / mf_*)."
+            ),
+            "factory_logics": [
+                "fund_value_only",
+                "fund_value_mom_agree",
+                "fund_value_mom_agree_slow",
+                "mf_value_mom_rate",
+            ],
+            "staged_on_panel": True,
+        },
+        "fins_earnings_date": {
+            "status": "local_only",
+            "reason": (
+                "COMPLETE; thickens local event calendar with fins_summary. "
+                "Not separately staged on CF panels (fund sidecar uses "
+                "fins_summary primary)."
+            ),
+            "factory_logics": ["event_post_* (local)"],
+        },
+        "fins_details": {
+            "status": "not_yet",
+            "reason": (
+                "COMPLETE details; current factory fund logics use "
+                "fins_summary PIT value scores, not details panels."
+            ),
+            "factory_logics": [],
+        },
+        "fins_dividend": {
+            "status": "not_yet",
+            "reason": (
+                "COMPLETE dividend; not required by current CF/factory "
+                "bar-native or fund template set."
+            ),
+            "factory_logics": [],
+        },
+        "equities_investor_types": {
+            "status": "not_yet",
+            "reason": (
+                "COMPLETE investor-type flow; not in current CF factory "
+                "logic templates (distinct from margin/short flow_*)."
+            ),
+            "factory_logics": [],
+        },
+        "markets_breakdown": {
+            "status": "not_yet",
+            "reason": "COMPLETE market breakdown; not wired into CF factory logics.",
+            "factory_logics": [],
+        },
+        "markets_margin_alert": {
+            "status": "not_yet",
+            "reason": (
+                "COMPLETE margin alert; factory flow_* uses "
+                "markets_margin_interest levels, not alert flags."
+            ),
+            "factory_logics": [],
+        },
+        "markets_short_sale_report": {
+            "status": "not_yet",
+            "reason": (
+                "COMPLETE short-sale report; factory short confirm uses "
+                "markets_short_ratio section series."
+            ),
+            "factory_logics": [],
+        },
+        "edinet_cross_shareholdings": {
+            "status": "not_yet",
+            "reason": "COMPLETE EDINET; not in current CF mass-eval factory logics.",
+            "factory_logics": [],
+        },
+        "edinet_large_volume_shareholders": {
+            "status": "not_yet",
+            "reason": "COMPLETE EDINET; not in current CF mass-eval factory logics.",
+            "factory_logics": [],
+        },
+        "edinet_major_shareholders": {
+            "status": "not_yet",
+            "reason": "COMPLETE EDINET; not in current CF mass-eval factory logics.",
+            "factory_logics": [],
+        },
+        "jsda_corporate_bond_transactions": {
+            "status": "not_yet",
+            "reason": (
+                "COMPLETE JSDA corporate-bond prints; rate path uses "
+                "jsda_tokyo_repo_rates funding SoT."
+            ),
+            "factory_logics": [],
+        },
+    }
+    # Ensure every COMPLETE-22 id is present (fail closed on drift).
+    missing = [d for d in COMPLETE_22_DATASETS if d not in rows]
+    extra = [d for d in rows if d not in COMPLETE_22_DATASET_SET]
+    if missing or extra:
+        raise RuntimeError(
+            f"inventory_cf_panel_wiring drift missing={missing} extra={extra}"
+        )
+    counts = {"wired_on_cf": 0, "local_only": 0, "not_yet": 0}
+    for row in rows.values():
+        counts[str(row["status"])] = counts.get(str(row["status"]), 0) + 1
+    return {
+        "wave": CF_MASS_EVAL_WAVE,
+        "version": CF_MASS_EVAL_VERSION,
+        "dataset_complete_n": len(COMPLETE_22_DATASETS),
+        "status_counts": counts,
+        "datasets": rows,
+        "thicken_panel_datasets": list(THICKEN_PANEL_DATASETS),
+        "cf_bar_native_logic_ids": list(CF_BAR_NATIVE_LOGIC_IDS),
+        "freezes": _freeze(),
+        "note": (
+            "COMPLETE data is never 'missing'. Status describes CF panel "
+            "wiring / factory-logic consumption only. W93 thickens calendar "
+            "+ rate + flow + fund sidecars onto r2_panels when available."
+        ),
+    }
+
+
+def _load_markets_calendar_map(
+    *,
+    start: str | None,
+    end: str | None,
+    sqlite_path: str | Path | None = None,
+) -> dict[str, Any]:
+    """Compact markets_calendar HolDiv map for one period window."""
+    import sqlite3
+
+    from research.class_hyp_eval import DEFAULT_SQLITE
+
+    db = Path(sqlite_path) if sqlite_path else DEFAULT_SQLITE
+    if not db.exists():
+        return {
+            "dataset": "markets_calendar",
+            "status": "sqlite_missing",
+            "hol_div_by_date": {},
+            "n_dates": 0,
+        }
+    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    try:
+        sql = (
+            "SELECT event_time, payload FROM jquants_records "
+            "WHERE dataset = 'markets_calendar'"
+        )
+        params: list[Any] = []
+        if start:
+            sql += " AND event_time >= ?"
+            params.append(str(start)[:10])
+        if end:
+            sql += " AND event_time <= ?"
+            params.append(str(end)[:10] + "T23:59:59")
+        sql += " ORDER BY event_time ASC"
+        hol: dict[str, str] = {}
+        trading_dates: list[str] = []
+        for event_time, payload in con.execute(sql, params):
+            try:
+                pl = json.loads(payload) if isinstance(payload, str) else payload
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if not isinstance(pl, Mapping):
+                continue
+            d = str(pl.get("Date") or str(event_time or "")[:10])[:10]
+            if not d:
+                continue
+            hol_div = pl.get("HolDiv")
+            if hol_div is None:
+                hol_div = pl.get("HolidayDivision")
+            hol[d] = str(hol_div) if hol_div is not None else ""
+            # HolDiv 0/1 typically trading-ish; keep raw + trading list for 0.
+            if str(hol_div) in {"0", "1"}:
+                trading_dates.append(d)
+        return {
+            "dataset": "markets_calendar",
+            "status": "ok" if hol else "empty",
+            "source": "local_sqlite_jquants_records",
+            "hol_div_by_date": hol,
+            "trading_dates": trading_dates,
+            "n_dates": len(hol),
+            "n_trading_dates": len(trading_dates),
+        }
+    finally:
+        con.close()
+
+
+def _build_thicken_sidecars(
+    period: Mapping[str, Any],
+    *,
+    codes: Sequence[str],
+    sqlite_path: str | Path | None = None,
+) -> dict[str, Any]:
+    """Build compact rate/flow/fund/calendar sidecars for denser CF panels.
+
+    Uses COMPLETE-backed local sqlite / mirrors. Gaps disclosed; no invent/ffill.
+    """
+    from research.class_hyp_eval import (
+        DEFAULT_SQLITE,
+        build_repo_curve_series,
+        load_fins_events_from_sqlite,
+        load_margin_from_sqlite,
+        load_margin_ndjson,
+        load_repo_rows_all_tenors_from_sqlite,
+        load_repo_rows_from_sqlite,
+        load_short_ratio_series_from_sqlite,
+        resolve_margin_path,
+    )
+    from research.cost_models import load_repo_rate_series_from_rows
+
+    db = Path(sqlite_path) if sqlite_path else DEFAULT_SQLITE
+    p_start = str(period.get("period_start") or period.get("start") or "")[:10]
+    p_end = str(period.get("period_end") or period.get("end") or "")[:10]
+    # Small burn-in for rate/flow change regimes.
+    burn_start = p_start
+    if p_start:
+        try:
+            y, m, d = int(p_start[:4]), int(p_start[5:7]), int(p_start[8:10])
+            # naive ~90d lookback by month step (good enough for staging window)
+            m -= 3
+            while m <= 0:
+                m += 12
+                y -= 1
+            burn_start = f"{y:04d}-{m:02d}-{d:02d}"
+        except ValueError:
+            burn_start = p_start
+
+    out: dict[str, Any] = {
+        "thicken_wave": CF_MASS_EVAL_WAVE,
+        "thicken_version": CF_MASS_EVAL_VERSION,
+    }
+
+    # --- markets_calendar ---
+    try:
+        cal = _load_markets_calendar_map(
+            start=burn_start or None, end=p_end or None, sqlite_path=db
+        )
+        out["markets_calendar"] = cal
+        out["calendar"] = {
+            "dataset": "markets_calendar",
+            "hol_div_by_date": cal.get("hol_div_by_date") or {},
+            "n_dates": cal.get("n_dates") or 0,
+            "n_trading_dates": cal.get("n_trading_dates") or 0,
+        }
+    except Exception as exc:  # pragma: no cover - best-effort
+        out["markets_calendar"] = {
+            "dataset": "markets_calendar",
+            "status": "error",
+            "error": str(exc),
+        }
+
+    # --- jsda_tokyo_repo_rates ---
+    try:
+        overnight = load_repo_rows_from_sqlite(
+            db, start=burn_start or None, end=p_end or None
+        )
+        series = (
+            load_repo_rate_series_from_rows(overnight) if overnight else None
+        )
+        all_tenors = load_repo_rows_all_tenors_from_sqlite(
+            db, start=burn_start or None, end=p_end or None
+        )
+        curve = build_repo_curve_series(all_tenors) if all_tenors else {}
+        rates_by_date = dict((series or {}).get("rates_by_date") or {})
+        # Clip to period with burn kept for change calc.
+        if p_start or p_end:
+            rates_by_date = {
+                d: float(v)
+                for d, v in rates_by_date.items()
+                if (not burn_start or d >= burn_start)
+                and (not p_end or d <= p_end)
+            }
+        spread_by = dict(curve.get("spread_by_date") or {})
+        if p_start or p_end:
+            spread_by = {
+                d: float(v)
+                for d, v in spread_by.items()
+                if (not burn_start or d >= burn_start)
+                and (not p_end or d <= p_end)
+            }
+        out["repo_rate_regime"] = {
+            "dataset": "jsda_tokyo_repo_rates",
+            "status": "ok" if rates_by_date else "empty",
+            "source": "local_sqlite_jsda_repo_rates",
+            "rates_by_date": rates_by_date,
+            "spread_by_date": spread_by,
+            "short_tenor": curve.get("short_tenor"),
+            "long_tenor": curve.get("long_tenor"),
+            "n_rates": len(rates_by_date),
+            "n_spread": len(spread_by),
+            "ffill_applied": False,
+            "invent_fill": False,
+            "role": "funding_rate_sot",
+        }
+    except Exception as exc:  # pragma: no cover
+        out["repo_rate_regime"] = {
+            "dataset": "jsda_tokyo_repo_rates",
+            "status": "error",
+            "error": str(exc),
+        }
+
+    # --- markets_margin_interest (flow) ---
+    try:
+        margin_levels: dict[str, list[tuple[str, float]]] = {}
+        margin_source = "local_sqlite_jquants_records"
+        pid = str(period.get("period_id") or "")
+        margin_path = resolve_margin_path(pid) if pid else None
+        if margin_path is not None and Path(margin_path).exists():
+            margin_levels = load_margin_ndjson(margin_path, codes=codes)
+            margin_source = f"complete22_mirror:{Path(margin_path).name}"
+        if not margin_levels:
+            margin_levels = load_margin_from_sqlite(
+                db,
+                codes=codes,
+                start=burn_start or None,
+                end=p_end or None,
+            )
+            margin_source = "local_sqlite_jquants_records"
+        level_by_code: dict[str, dict[str, float]] = {}
+        change_by_code: dict[str, dict[str, float]] = {}
+        for code, pairs in margin_levels.items():
+            clipped = [
+                (d, float(v))
+                for d, v in pairs
+                if (not burn_start or d >= burn_start)
+                and (not p_end or d <= p_end)
+            ]
+            if not clipped:
+                continue
+            level_by_code[code] = {d: v for d, v in clipped}
+            chg: dict[str, float] = {}
+            for i in range(1, len(clipped)):
+                d0, v0 = clipped[i - 1]
+                d1, v1 = clipped[i]
+                if v0 != 0:
+                    chg[d1] = (v1 / v0) - 1.0
+            change_by_code[code] = chg
+        out["flow_regime"] = {
+            "dataset_margin": "markets_margin_interest",
+            "dataset_short": "markets_short_ratio",
+            "status": "ok" if level_by_code else "empty",
+            "source": margin_source,
+            "margin_level_by_code": level_by_code,
+            "margin_change_by_code": change_by_code,
+            "n_codes": len(level_by_code),
+            "n_obs": sum(len(v) for v in level_by_code.values()),
+            "role": "flow_demand_sidecar",
+        }
+    except Exception as exc:  # pragma: no cover
+        out["flow_regime"] = {
+            "dataset_margin": "markets_margin_interest",
+            "status": "error",
+            "error": str(exc),
+        }
+
+    # --- markets_short_ratio (attach into flow_regime) ---
+    try:
+        short_pairs = load_short_ratio_series_from_sqlite(
+            db,
+            section="0050",
+            start=burn_start or None,
+            end=p_end or None,
+        )
+        short_by = {
+            d: float(v)
+            for d, v in short_pairs
+            if (not burn_start or d >= burn_start) and (not p_end or d <= p_end)
+        }
+        fr = dict(out.get("flow_regime") or {})
+        fr["short_ratio_by_date"] = short_by
+        fr["short_section"] = "0050"
+        fr["n_short_obs"] = len(short_by)
+        if fr.get("status") == "empty" and short_by:
+            fr["status"] = "ok"
+        out["flow_regime"] = fr
+    except Exception as exc:  # pragma: no cover
+        fr = dict(out.get("flow_regime") or {})
+        fr["short_ratio_error"] = str(exc)
+        out["flow_regime"] = fr
+
+    # --- fins_summary (fund) ---
+    try:
+        events = load_fins_events_from_sqlite(
+            db,
+            codes=codes,
+            start=burn_start or "2014-01-01",
+            end=p_end or None,
+        )
+        compact: dict[str, list[dict[str, Any]]] = {}
+        for code, evs in events.items():
+            rows: list[dict[str, Any]] = []
+            for ev in evs:
+                d = str(ev.get("disc_date") or "")[:10]
+                if not d:
+                    continue
+                if p_end and d > p_end:
+                    continue
+                rows.append(
+                    {
+                        "disc_date": d,
+                        "disc_time": ev.get("disc_time"),
+                        "eps": ev.get("eps"),
+                        "feps": ev.get("feps"),
+                        "bps": ev.get("bps"),
+                    }
+                )
+            if rows:
+                compact[code] = rows
+        out["fund_regime"] = {
+            "dataset": "fins_summary",
+            "status": "ok" if compact else "empty",
+            "source": "local_sqlite_jquants_records",
+            "events_by_code": compact,
+            "n_codes": len(compact),
+            "n_events": sum(len(v) for v in compact.values()),
+            "role": "fundamentals_sidecar",
+            "note": (
+                "Compact fins_summary disclosures for panel codes. "
+                "CF fund factor eval remains local_only; staging thickens "
+                "panels for future / nets_only paths."
+            ),
+        }
+    except Exception as exc:  # pragma: no cover
+        out["fund_regime"] = {
+            "dataset": "fins_summary",
+            "status": "error",
+            "error": str(exc),
+        }
+
+    # TOPIX proxy label (index already staged as __NKY_PROXY__ / nky_vol_series).
+    out["index_proxy"] = {
+        "dataset": "indices_bars_daily_topix",
+        "label": "TOPIX",
+        "role": "nky_vol_proxy_compare_only",
+        "note": (
+            "TOPIX closes staged as __NKY_PROXY__ for nky_vol_* only. "
+            "Canonical Nikkei vol SoT remains derivatives_bars_daily_options_225."
+        ),
+    }
+
+    # Compact counts for stage_meta / logs (avoid dumping full maps twice).
+    out["thicken_counts"] = {
+        "calendar_n_dates": int(
+            (out.get("calendar") or {}).get("n_dates") or 0
+        ),
+        "repo_n_rates": int(
+            (out.get("repo_rate_regime") or {}).get("n_rates") or 0
+        ),
+        "repo_n_spread": int(
+            (out.get("repo_rate_regime") or {}).get("n_spread") or 0
+        ),
+        "flow_n_codes": int((out.get("flow_regime") or {}).get("n_codes") or 0),
+        "flow_n_short": int(
+            (out.get("flow_regime") or {}).get("n_short_obs") or 0
+        ),
+        "fund_n_codes": int((out.get("fund_regime") or {}).get("n_codes") or 0),
+        "fund_n_events": int(
+            (out.get("fund_regime") or {}).get("n_events") or 0
+        ),
+    }
+    return out
 
 
 def build_real_period_panel(
@@ -520,6 +1123,14 @@ def build_real_period_panel(
     except Exception as exc:  # pragma: no cover - best-effort
         opt225_meta = {"opt225_error": str(exc)}
 
+    # W93: prefer-wire COMPLETE sidecars into staged panels (compact maps).
+    # Worker may ignore unknown keys; local / future CF rate legs consume them.
+    thicken_meta = _build_thicken_panel_sidecars(
+        period=p,
+        codes=selected,
+        max_days=int(max_days),
+    )
+
     n_days = max(
         (len(v) for k, v in bars_json.items() if not str(k).startswith("__")),
         default=0,
@@ -537,7 +1148,89 @@ def build_real_period_panel(
         "codes": sorted(k for k in bars_json if not str(k).startswith("__")),
         **nky_meta,
         **opt225_meta,
+        **thicken_meta,
     }
+
+
+def _build_thicken_panel_sidecars(
+    *,
+    period: Mapping[str, Any],
+    codes: Sequence[str],
+    max_days: int,
+) -> dict[str, Any]:
+    """Attach COMPLETE-backed aux maps for W93 panel thickening.
+
+    Delegates to ``_build_thicken_sidecars`` (sqlite + mirror backed) and adds
+    compatibility aliases (`repo_rate_by_date`, `thicken_status`, …).
+
+    DONE when sidecar maps are present in panel JSON. Full CF factor-leg eval
+    for flow/fund remains local_only; macro_repo_* consumes repo_rate_regime.
+    ``max_days`` reserved for future clip policy (sidecars already windowed).
+    """
+    _ = max_days  # windowing handled inside _build_thicken_sidecars burn/end
+    out = _build_thicken_sidecars(period, codes=codes)
+    rates = dict((out.get("repo_rate_regime") or {}).get("rates_by_date") or {})
+    out["repo_rate_by_date"] = rates
+    # Alias rate_by_date inside regime for older consumers.
+    if isinstance(out.get("repo_rate_regime"), dict):
+        out["repo_rate_regime"] = {
+            **out["repo_rate_regime"],
+            "rate_by_date": rates,
+            "n_obs": len(rates),
+            "units": "percent",
+        }
+    cal = out.get("calendar") or {}
+    hol = dict(cal.get("hol_div_by_date") or {})
+    out["calendar_dates"] = sorted(hol.keys())
+    fr = out.get("flow_regime") or {}
+    # Flat aliases used by early W93 drafts / worker loaders.
+    margin_compact: dict[str, list[list[Any]]] = {}
+    for code, dmap in dict(fr.get("margin_level_by_code") or {}).items():
+        margin_compact[str(code)] = [
+            [d, float(v)] for d, v in sorted(dict(dmap).items())
+        ]
+    out["margin_interest"] = margin_compact
+    out["margin_n_obs"] = int(fr.get("n_obs") or 0)
+    out["short_ratio_by_date"] = dict(fr.get("short_ratio_by_date") or {})
+    fund = out.get("fund_regime") or {}
+    out["fins_summary_n_events"] = int(fund.get("n_events") or 0)
+    out["fins_summary_n_codes"] = int(fund.get("n_codes") or 0)
+
+    status: dict[str, str] = {
+        "equities_bars_daily": "DONE",
+        "derivatives_bars_daily_options_225": "DONE_via_opt225",
+        "indices_bars_daily_topix": "DONE_via_nky_proxy",
+        "markets_calendar": (
+            "DONE"
+            if int((out.get("calendar") or {}).get("n_dates") or 0) > 0
+            else "EMPTY"
+        ),
+        "jsda_tokyo_repo_rates": (
+            "DONE" if rates else "EMPTY"
+        ),
+        "markets_margin_interest": (
+            "DONE" if margin_compact else "EMPTY"
+        ),
+        "markets_short_ratio": (
+            "DONE" if out.get("short_ratio_by_date") else "EMPTY"
+        ),
+        "fins_summary": (
+            "DONE"
+            if int(out.get("fins_summary_n_events") or 0) > 0
+            else "EMPTY"
+        ),
+    }
+    out["thicken_datasets_requested"] = list(THICKEN_PANEL_DATASETS)
+    out["thicken_status"] = status
+    out["thicken_done"] = sorted(
+        k for k, v in status.items() if str(v).startswith("DONE")
+    )
+    out["thicken_todo"] = [
+        "cf_worker_flow_fund_factor_legs_consume_sidecars",
+        "rate_abs_level_xs_and_mf_on_cf_pure_ts",
+    ]
+    out["panel_thicken"] = True
+    return out
 
 
 def stage_real_panels_to_r2(
@@ -596,6 +1289,18 @@ def stage_real_panels_to_r2(
                 "dataset": panel.get("dataset"),
                 "r2_key": key,
                 "bars_path": panel.get("bars_path"),
+                "thicken_counts": panel.get("thicken_counts"),
+                "thicken_done": panel.get("thicken_done"),
+                "opt225_n_base_vol": panel.get("opt225_n_base_vol"),
+                "repo_n_rates": (panel.get("repo_rate_regime") or {}).get(
+                    "n_rates"
+                )
+                or (panel.get("repo_rate_regime") or {}).get("n_obs"),
+                "calendar_n_dates": (panel.get("calendar") or {}).get("n_dates"),
+                "flow_n_codes": (panel.get("flow_regime") or {}).get("n_codes"),
+                "fund_n_events": (panel.get("fund_regime") or {}).get(
+                    "n_events"
+                ),
             }
         )
     n_ok = sum(1 for p in panels if p.get("status") == "ok")
@@ -1198,6 +1903,7 @@ __all__ = [
     "COMPLETE_22_DATASET_SET",
     "PRIMARY_BARS_DATASET",
     "PRIMARY_INDEX_DATASETS",
+    "THICKEN_PANEL_DATASETS",
     "DEFAULT_LITE_PERIODS",
     "DEFAULT_REAL_MULTIYEAR_PERIODS",
     "DEFAULT_W91_MODE",
@@ -1211,6 +1917,7 @@ __all__ = [
     "default_logic_specs",
     "normalize_period_row",
     "inventory_complete22",
+    "inventory_cf_panel_wiring",
     "build_real_period_panel",
     "stage_real_panels_to_r2",
     "build_cf_mass_eval_job_spec",

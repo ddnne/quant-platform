@@ -32,8 +32,10 @@ BaseVol exists (**no ffill**).
 
 1. ``under_px`` = median finite ``UnderPx`` that day (usually unique).
 2. Front contract month ``cm`` = earliest ``CM`` among rows with
-   ``LTD > Date`` (fallback: ``SQD > Date``; last resort: earliest ``CM``
-   whose ``YYYY-MM >= Date[:7]``).
+   ``LTD`` DTE ``>= min_dte_days`` (default ``5``; W93: residuals vs
+   BaseVol occur only at DTE in {1,2,3}). Fallback chain: ``SQD`` with the
+   same min-DTE floor → unrestricted ``LTD > Date`` (``near_expiry_fallback``)
+   → ``SQD > Date`` → earliest ``CM`` with ``YYYY-MM >= Date[:7]``.
 3. ATM ``strike`` = strike minimizing ``|Strike - under_px|`` within that
    ``cm`` (ties → lower strike).
 4. At ``(cm, strike)``, take finite put (``PCDiv=1``) and call (``PCDiv=2``)
@@ -46,6 +48,9 @@ BaseVol exists (**no ffill**).
 
 **Spread.** Inner-join BaseVol and ATM series on ``date``:
 ``spread = atm_iv - base_vol``. Dates missing either leg are omitted.
+W93 autopsy (legacy ``min_dte=0``/``1``): ~86.7% of days have spread==0;
+**all** nonzero residuals sit at front-CM DTE∈{1,2,3} (expiry-week noise,
+not a risk-premium structure).
 
 **Gap policy.** ``gap_policy = disclose_only_no_ffill_no_invent``. Calendar
 holes between observed dates are listed in stats; never forward-filled.
@@ -60,8 +65,8 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Mapping, Sequence
 
-OPTIONS_225_VOL_SERIES_VERSION: str = "research-options-225-vol-series/v1"
-OPTIONS_225_VOL_SERIES_WAVE: str = "W92 / w0818b"
+OPTIONS_225_VOL_SERIES_VERSION: str = "research-options-225-vol-series/v1.1"
+OPTIONS_225_VOL_SERIES_WAVE: str = "W93 / w0818c"
 
 DATASET_ID: str = "derivatives_bars_daily_options_225"
 GAP_POLICY: str = "disclose_only_no_ffill_no_invent"
@@ -73,6 +78,13 @@ OPERATIONAL_GO: bool = False
 
 # J-Quants: theoretical / IV fields populated from this date inclusive.
 IV_FIELDS_AVAILABLE_FROM: str = "2016-07-19"
+
+# W93 / w0818c: require front-CM LTD DTE >= this many calendar days.
+# On the W92 cache, atm_iv - base_vol is nonzero exclusively for front-CM
+# DTE in {1,2,3} and exactly 0 for every DTE >= 5. Default 6 prefers the
+# next CM past the empirical exact-match boundary; fall back to near-expiry
+# front only if no eligible CM exists. Never drop BaseVol or ATM series.
+DEFAULT_ATM_MIN_DTE_DAYS: int = 6
 
 PC_PUT: str = "1"
 PC_CALL: str = "2"
@@ -211,31 +223,116 @@ def _prefer_settlement(day_rows: Sequence[Mapping[str, Any]]) -> list[Mapping[st
     return list(day_rows)
 
 
-def _pick_front_cm(date: str, day_rows: Sequence[Mapping[str, Any]]) -> str | None:
-    cms_ltd: set[str] = set()
-    cms_sqd: set[str] = set()
+def _cm_dte_days(date: str, expiry: str | None) -> int | None:
+    """Calendar days from ``date`` to expiry (LTD/SQD); None if unparseable."""
+    if not expiry:
+        return None
+    try:
+        from datetime import date as _date
+
+        d0 = _date.fromisoformat(str(date)[:10])
+        d1 = _date.fromisoformat(str(expiry)[:10])
+    except ValueError:
+        return None
+    return (d1 - d0).days
+
+
+def _pick_front_cm(
+    date: str,
+    day_rows: Sequence[Mapping[str, Any]],
+    *,
+    min_dte_days: int = DEFAULT_ATM_MIN_DTE_DAYS,
+) -> tuple[str | None, dict[str, Any]]:
+    """Pick front CM with optional near-expiry roll (W93).
+
+    Preference order (eligible = expiry > Date AND DTE >= min_dte_days):
+      1. earliest CM with LTD eligible
+      2. earliest CM with SQD eligible
+      3. earliest CM with LTD > Date (ignore min_dte; flag near_expiry_fallback)
+      4. earliest CM with SQD > Date
+      5. earliest CM >= Date[:7] / any CM
+
+    Returns ``(cm, meta)`` where meta records roll reason / dte.
+    """
+    min_dte = max(0, int(min_dte_days))
+    cms_ltd_ok: dict[str, int] = {}
+    cms_sqd_ok: dict[str, int] = {}
+    cms_ltd_any: dict[str, int] = {}
+    cms_sqd_any: dict[str, int] = {}
     cms_ge: set[str] = set()
     month = date[:7]
     for r in day_rows:
         cm = r.get("cm")
         if not cm:
             continue
+        cm_s = str(cm)
         ltd = r.get("ltd")
         sqd = r.get("sqd")
         if ltd and str(ltd) > date:
-            cms_ltd.add(str(cm))
+            dte = _cm_dte_days(date, str(ltd))
+            if dte is not None:
+                cms_ltd_any[cm_s] = (
+                    dte if cm_s not in cms_ltd_any else min(cms_ltd_any[cm_s], dte)
+                )
+                if dte >= min_dte:
+                    cms_ltd_ok[cm_s] = (
+                        dte
+                        if cm_s not in cms_ltd_ok
+                        else min(cms_ltd_ok[cm_s], dte)
+                    )
         if sqd and str(sqd) > date:
-            cms_sqd.add(str(cm))
+            dte = _cm_dte_days(date, str(sqd))
+            if dte is not None:
+                cms_sqd_any[cm_s] = (
+                    dte if cm_s not in cms_sqd_any else min(cms_sqd_any[cm_s], dte)
+                )
+                if dte >= min_dte:
+                    cms_sqd_ok[cm_s] = (
+                        dte
+                        if cm_s not in cms_sqd_ok
+                        else min(cms_sqd_ok[cm_s], dte)
+                    )
         if str(cm) >= month:
-            cms_ge.add(str(cm))
-    if cms_ltd:
-        return min(cms_ltd)
-    if cms_sqd:
-        return min(cms_sqd)
+            cms_ge.add(cm_s)
+
+    meta: dict[str, Any] = {
+        "min_dte_days": min_dte,
+        "near_expiry_fallback": False,
+        "cm_pick_rule": None,
+        "dte": None,
+    }
+    if cms_ltd_ok:
+        cm = min(cms_ltd_ok)
+        meta["cm_pick_rule"] = "ltd_min_dte"
+        meta["dte"] = cms_ltd_ok[cm]
+        return cm, meta
+    if cms_sqd_ok:
+        cm = min(cms_sqd_ok)
+        meta["cm_pick_rule"] = "sqd_min_dte"
+        meta["dte"] = cms_sqd_ok[cm]
+        return cm, meta
+    if cms_ltd_any:
+        cm = min(cms_ltd_any)
+        meta["cm_pick_rule"] = "ltd_any_near_expiry_fallback"
+        meta["dte"] = cms_ltd_any[cm]
+        meta["near_expiry_fallback"] = True
+        return cm, meta
+    if cms_sqd_any:
+        cm = min(cms_sqd_any)
+        meta["cm_pick_rule"] = "sqd_any_near_expiry_fallback"
+        meta["dte"] = cms_sqd_any[cm]
+        meta["near_expiry_fallback"] = True
+        return cm, meta
     if cms_ge:
-        return min(cms_ge)
+        cm = min(cms_ge)
+        meta["cm_pick_rule"] = "cm_ge_month"
+        return cm, meta
     cms_all = {str(r["cm"]) for r in day_rows if r.get("cm")}
-    return min(cms_all) if cms_all else None
+    if cms_all:
+        cm = min(cms_all)
+        meta["cm_pick_rule"] = "any_cm"
+        return cm, meta
+    return None, meta
 
 
 def _median(xs: Sequence[float]) -> float:
@@ -279,8 +376,15 @@ def build_daily_basevol_series(
 
 def build_daily_atm_iv_series(
     rows: Sequence[Mapping[str, Any]] | Iterable[Mapping[str, Any]],
+    *,
+    min_dte_days: int = DEFAULT_ATM_MIN_DTE_DAYS,
 ) -> list[dict[str, Any]]:
-    """Build ``[{date, atm_iv, strike, under_px, cm, pc_used, ...}]`` — no ffill."""
+    """Build ``[{date, atm_iv, strike, under_px, cm, pc_used, ...}]`` — no ffill.
+
+    W93: ``min_dte_days`` rolls off near-expiry front CM (default 5) so ATM IV
+    tracks exchange BaseVol instead of SQ-week DTE∈{1,2,3} blow-ups. Pass
+    ``min_dte_days=0`` for legacy earliest-LTD>Date behavior.
+    """
     by_date = _group_by_date(rows)
     out: list[dict[str, Any]] = []
     for date in sorted(by_date):
@@ -289,7 +393,7 @@ def build_daily_atm_iv_series(
         if not unders:
             continue
         under_px = _median(unders)
-        cm = _pick_front_cm(date, day)
+        cm, cm_meta = _pick_front_cm(date, day, min_dte_days=min_dte_days)
         if not cm:
             continue
         cm_rows = [
@@ -339,6 +443,10 @@ def build_daily_atm_iv_series(
         oi_sum = sum(float(r["oi"]) for r in atm_rows if r.get("oi") is not None)
         ltds = sorted({r["ltd"] for r in atm_rows if r.get("ltd")})
         sqds = sorted({r["sqd"] for r in atm_rows if r.get("sqd")})
+        ltd = ltds[0] if ltds else None
+        dte = cm_meta.get("dte")
+        if dte is None and ltd is not None:
+            dte = _cm_dte_days(date, str(ltd))
         out.append(
             {
                 "date": date,
@@ -351,8 +459,12 @@ def build_daily_atm_iv_series(
                 "call_iv": call_iv,
                 "abs_moneyness": float(best_dist),
                 "rel_moneyness": float(best_dist / under_px) if under_px else None,
-                "ltd": ltds[0] if ltds else None,
+                "ltd": ltd,
                 "sqd": sqds[0] if sqds else None,
+                "dte": dte,
+                "cm_pick_rule": cm_meta.get("cm_pick_rule"),
+                "near_expiry_fallback": bool(cm_meta.get("near_expiry_fallback")),
+                "min_dte_days": int(cm_meta.get("min_dte_days") or min_dte_days),
                 "vo_atm": vo_sum if vo_sum else None,
                 "oi_atm": oi_sum if oi_sum else None,
                 "n_contracts_day": len(day),
@@ -984,9 +1096,11 @@ def write_definition_rules(
         "dataset": DATASET_ID,
         "units": "percent_vol_points",
         "front_cm": (
-            "Earliest CM among rows with LTD > Date; fallback SQD > Date; "
-            "last resort CM >= Date[:7]."
+            f"Earliest CM with LTD > Date and DTE >= {DEFAULT_ATM_MIN_DTE_DAYS} "
+            "(W93 near-expiry roll); fallback SQD with min_dte; then LTD/SQD any "
+            "(near_expiry_fallback); last resort CM >= Date[:7]."
         ),
+        "min_dte_days": DEFAULT_ATM_MIN_DTE_DAYS,
         "atm_strike": "argmin |Strike - median(UnderPx)| within front CM (ties → lower strike).",
         "atm_iv": (
             "At (cm, strike): avg(put IV, call IV) when both finite; else available "
@@ -997,8 +1111,9 @@ def write_definition_rules(
         "invent_fill": False,
         "iv_fields_available_from": IV_FIELDS_AVAILABLE_FROM,
         "note_vs_basevol": (
-            "J-Quants BaseVol ≈ ATM put/call mid by definition; reconstructed ATM IV "
-            "corr≈0.9 with small residual spread (microstructure / CM selection)."
+            "J-Quants BaseVol ≈ ATM put/call mid by definition. Pre-W93 reconstructed "
+            "ATM IV matched BaseVol on ~86.7% of days (exact 0 spread) but diverged "
+            "exclusively on SQ-week DTE in {1,2,3}; min_dte_days=5 rolls to next CM."
         ),
     }
     series_meta = {
@@ -1079,6 +1194,7 @@ __all__ = [
     "DEFAULT_OPT225_EXPAND_RATIO",
     "DEFAULT_OPT225_COMPRESS_RATIO",
     "SPREAD_CONVENTION",
+    "DEFAULT_ATM_MIN_DTE_DAYS",
     "level_series_to_regime_maps",
     "series_rows_to_level_map",
     "build_opt225_regime_bundle",

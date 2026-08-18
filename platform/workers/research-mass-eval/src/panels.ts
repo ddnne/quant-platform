@@ -272,6 +272,11 @@ export async function loadR2Panels(
         base_vol_series?: PeriodPanel["base_vol_series"];
         atm_iv_series?: PeriodPanel["atm_iv_series"];
         iv_base_spread?: PeriodPanel["iv_base_spread"];
+        repo_rate_regime?: PeriodPanel["repo_rate_regime"];
+        repo_rate_by_date?: PeriodPanel["repo_rate_by_date"];
+        calendar?: PeriodPanel["calendar"];
+        flow_regime?: PeriodPanel["flow_regime"];
+        fund_regime?: PeriodPanel["fund_regime"];
         nky_proxy?: string;
       };
       const bars = normalizeBars(raw.bars || {});
@@ -309,6 +314,14 @@ export async function loadR2Panels(
         raw.iv_base_spread ||
         (opt225 && opt225.spread && opt225.spread.rv_abs_by_date) ||
         null;
+      const repoRegime = raw.repo_rate_regime || null;
+      const repoByDate =
+        raw.repo_rate_by_date ||
+        (repoRegime && (repoRegime.rates_by_date || repoRegime.rate_by_date)) ||
+        null;
+      const calendar = raw.calendar || null;
+      const flowRegime = raw.flow_regime || null;
+      const fundRegime = raw.fund_regime || null;
       panels.push({
         period_id: String(raw.period_id || p.period_id),
         year: Number(raw.year ?? p.year ?? 0),
@@ -321,10 +334,21 @@ export async function loadR2Panels(
         base_vol_series: baseVolSeries,
         atm_iv_series: atmIvSeries,
         iv_base_spread: ivBaseSpread,
+        repo_rate_regime: repoRegime,
+        repo_rate_by_date: repoByDate,
+        calendar,
+        flow_regime: flowRegime,
+        fund_regime: fundRegime,
         source: raw.source || `r2:${keyUsed}`,
       });
+      const nRepo = repoByDate ? Object.keys(repoByDate).length : 0;
+      const nCal = calendar
+        ? calendar.n_dates ||
+          Object.keys(calendar.hol_div_by_date || {}).length ||
+          (calendar.dates || []).length
+        : 0;
       notes.push(
-        `loaded:${keyUsed}:codes=${nCodes}:nky=${nky?.source || "none"}:opt225=${opt225?.dataset || (opt225 ? "staged" : "none")}:basevol=${baseVolSeries ? Object.keys(baseVolSeries).length : 0}`,
+        `loaded:${keyUsed}:codes=${nCodes}:nky=${nky?.source || "none"}:opt225=${opt225?.dataset || (opt225 ? "staged" : "none")}:basevol=${baseVolSeries ? Object.keys(baseVolSeries).length : 0}:repo=${nRepo}:cal=${nCal}:flow=${flowRegime?.n_codes || 0}:fund=${fundRegime?.n_events || 0}`,
       );
     } catch (e) {
       notes.push(`parse_error:${keyUsed}:${String(e)}`);
