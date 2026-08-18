@@ -2,7 +2,7 @@
 
 **Wave:** W93 / `w0818c` · 2026-08-18  
 **Status:** **CLOSED** as residual TOP (research factory only)  
-**Code tip:** `d48e70688f859a677b793e3c943e9ba34ff87d4a`  
+**Code tip:** `658ff6db857550c96e9011b5ff2e8da2a473f7ff`  
 **Primary proof:** [`w0818c_w93_opt225_basevol_atm_diff_20260818.md`](w0818c_w93_opt225_basevol_atm_diff_20260818.md)  
 **Logs:** [`.glm-logs/w0818c_w93_opt225_diff/`](../../.glm-logs/w0818c_w93_opt225_diff/)  
 **Implementer:** GLM5.3 only. Grok did **not** implement.
@@ -15,7 +15,7 @@
 2. **Spread activation autopsy** — BaseVol≈ATM by J-Quants def; pre-fix nonzero residuals **100%** at DTE≤5; not a sign bug  
 3. **Minimal ATM fix** — `min_dte_days=6` front-CM roll · series **v1.1** · corr **0.99994** · exact-zero spread **99.76%** · rebuild 2452 days  
 4. **Multi-year windows** — w2017_2019 / w2020_2022 / w2023_2025 (honest shards) · local real + CF `r2_panels` · BaseVol≡ATM nets on matched transforms  
-5. **CF thicken** — `cf-mass-eval-job/v4` · repo/margin/short/fins/calendar sidecars · job **`w93-opt225-20260818T120810Z`** · status **ok** · survivors **2**  
+5. **CF thicken** — `cf-mass-eval-job/v4` · repo/margin/short/fins/calendar sidecars · primary job **`w93-opt225-20260818T120810Z`** · status **ok** · survivors **2** · corroborating **`w93-opt225-20260818T121627Z`** (full 8 logics × windows · survivors **4**) · **`w93-thicken-20260818T121404Z`** (thicken · survivors **3**)  
 6. **Freezes held** — Mass NO-GO · READY 未宣言 · Phase7 OFF · ops GO 未宣言 · continuous paper UNARMED · 3 defaults not retuned · TOPIX proxy only  
 
 ---
@@ -66,7 +66,7 @@
 | differential BaseVol vs ATM (both kept) | **yes** |
 | multi-year windows both families | **yes** |
 | spread diagnosis + min_dte fix | **yes** |
-| CF real job + thicken | **yes** · `w93-opt225-20260818T120810Z` |
+| CF real job + thicken | **yes** · primary `w93-opt225-20260818T120810Z` · corroborating `w93-opt225-20260818T121627Z` · `w93-thicken-20260818T121404Z` |
 | synthetic not claimed final | **yes** |
 | TOPIX proxy label | **yes** |
 | 3 defaults frozen | **yes** |

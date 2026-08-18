@@ -17,7 +17,7 @@
 | No new human hyps — thicken existing options vol line | **yes** |
 | TOPIX RV = proxy only; options_225 = SoT | **yes** |
 | 3 defaults frozen; no GO/Mass/READY/live; no grid mass | **yes** |
-| CF real preferred; must push | **yes** · job `w93-opt225-20260818T120810Z` |
+| CF real preferred; must push | **yes** · primary `w93-opt225-20260818T120810Z` · corroborating `w93-opt225-20260818T121627Z` · `w93-thicken-20260818T121404Z` |
 | residual TOP=W93 · proofs · git push | **yes** (this close) |
 
 ---
@@ -111,11 +111,12 @@ Machine: [`window_eval_local.json`](../../.glm-logs/w0818c_w93_opt225_diff/windo
 
 | item | value |
 |------|-------|
-| job_id | **`w93-opt225-20260818T120810Z`** |
+| job_id (primary) | **`w93-opt225-20260818T120810Z`** |
+| corroborating | **`w93-opt225-20260818T121627Z`** (full 8 logics × windows · survivors **4**) · **`w93-thicken-20260818T121404Z`** (thicken · survivors **3**) |
 | mode | **`r2_panels`** (NOT synthetic) |
 | status | **ok** |
 | n_periods (shards) | 5 |
-| n_survivors (CF screen) | **2** |
+| n_survivors (CF screen, primary) | **2** |
 | opt225 BaseVol vs ATM | **identical mean_net** on abs / term_ratio (twins) |
 | spread abs/change | activation **0** · reject |
 | R2 prefix | `research/mass_eval/job=w93-opt225-20260818T120810Z/` |
