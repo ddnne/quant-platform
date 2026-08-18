@@ -309,9 +309,18 @@ def main(argv: list[str] | None = None) -> int:
             "operational_go": False,
             "continuous_paper": CONTINUOUS_PAPER,
             "frozen_defaults_retuned": False,
-            "frozen_default_path": list(FROZEN_DEFAULT_PATH)
-            if not isinstance(FROZEN_DEFAULT_PATH, dict)
-            else sorted(FROZEN_DEFAULT_PATH.keys()),
+            "frozen_default_path": [
+                (
+                    r.get("representative_id")
+                    if isinstance(r, dict)
+                    else str(r)
+                )
+                for r in (
+                    FROZEN_DEFAULT_PATH.values()
+                    if isinstance(FROZEN_DEFAULT_PATH, dict)
+                    else list(FROZEN_DEFAULT_PATH)
+                )
+            ],
         },
         "wall_s": round(time.perf_counter() - t0, 3),
         "ts": ts,
