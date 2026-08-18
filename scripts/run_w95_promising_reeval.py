@@ -277,9 +277,19 @@ def _reaggregate_window_from_period_rows(
     mean_net = side.get("mean_net")
     if mean_net is None:
         mean_net = sample_mean(nets)
-    t_stat = side.get("t_stat")
-    if t_stat is None:
-        t_stat = t_stat_vs_zero(side_nets)
+    mean_gross = sample_mean(grosses)
+    t_pack = t_stat_vs_zero(side_nets)
+    t_stat = t_pack.get("t_stat")
+    if t_stat is None and t_pack.get("reason") not in {
+        "low_variance_artifact",
+        "zero_std",
+        "n_lt_2",
+        "no_values",
+    }:
+        t_stat = side.get("t_stat")
+    sharpe = stats.get("sharpe") if isinstance(stats, Mapping) else None
+    if t_pack.get("reason") == "low_variance_artifact":
+        sharpe = None
     pack = {
         "strategy_id": result.get("strategy_id"),
         "logic_id": result.get("logic_id"),
@@ -289,10 +299,20 @@ def _reaggregate_window_from_period_rows(
         "n_periods_ok": len(ok_rows),
         "n_periods_total": len(period_rows),
         "period_rows": period_rows,
+        "mean_gross": mean_gross,
         "mean_net": mean_net,
         "t_stat": t_stat,
-        "sharpe_period": stats.get("sharpe") if isinstance(stats, Mapping) else None,
+        "t_stat_reason": t_pack.get("reason"),
+        "raw_t_stat": t_pack.get("raw_t_stat"),
+        "low_variance_artifact": t_pack.get("reason") == "low_variance_artifact",
+        "sharpe_period": sharpe,
         "mean_activation": mean_activation,
+        "sign_selection": {
+            "chosen_sign": chosen_sign,
+            "decision": choice.get("decision"),
+            "reason": choice.get("reason"),
+            "verdict": choice.get("verdict"),
+        },
         "chosen_sign": chosen_sign,
         "status": "evaluated" if ok_rows else "no_ok_periods",
     }
