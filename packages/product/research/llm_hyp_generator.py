@@ -53,7 +53,7 @@ OPERATIONAL_GO = False
 CONTINUOUS_PAPER = "UNARMED"
 LIVE_ORDERS = False
 
-LLM_HYP_WAVE = "W97 / w0818g"
+LLM_HYP_WAVE = "W98 / w0819a"
 LLM_HYP_VERSION = "llm-hyp-generator/v1.1"
 
 # Forbidden numeric-only knobs as sole differentiation.
@@ -1047,21 +1047,37 @@ def generate_and_evaluate_hypotheses(
         allow_catalog_seed=True,
     )
     proposals = list(gen.get("accepted") or [])
+    n_skipped_weak_map = 0
 
     # Map unknown logic_ids to nearest executable catalog template when
     # family matches a known template (keeps thesis text from LLM).
+    # W98: reduce mapping onto known weak / demoted catalog targets —
+    # prefer non-weak cousins; if only weak targets exist, keep ad-hoc.
     if map_unknown_to_nearest_catalog:
+        weak_catalog_targets = frozenset(
+            {
+                "rate_abs_level_xs",  # W95/W97 weak_thesis / sign-flip family
+                "flow_margin_short_hard",  # W95/W97 weak_thesis family
+                "flow_margin_short_soft",  # soft≡pressure / demoted
+                "flow_margin_pressure",  # demoted pressure twin
+                "fund_value_mom_agree_slow",  # W95 low-var t artifact demoted
+                "opt225_skew_abs_level",
+                "opt225_cm_term_abs_level",
+                "opt225_basevol_delta_abs",
+                "macro_repo_rate_level",  # level twin often weak/low-var
+            }
+        )
         family_to_logic: dict[str, str] = {}
         for lid, tpl in LOGIC_TEMPLATES.items():
+            if lid in weak_catalog_targets:
+                continue
             family_to_logic.setdefault(tpl.family_id, lid)
-        # Prefer richer mappings
+        # Prefer richer non-weak mappings (rate → curve_shape, not abs_level)
         prefer = {
-            "flow_demand": "flow_margin_short_hard",
-            "flow": "flow_margin_short_hard",
             "event_post": "event_post_disclosure_hold",
             "event": "event_post_disclosure_hold",
-            "rate_factor": "rate_abs_level_xs",
-            "rate": "rate_abs_level_xs",
+            "rate_factor": "rate_curve_shape_xs",
+            "rate": "rate_curve_shape_xs",
             "multi_factor": "mf_value_mom_rate",
             "multi-factor": "mf_value_mom_rate",
             "multifactor": "mf_value_mom_rate",
@@ -1078,6 +1094,8 @@ def generate_and_evaluate_hypotheses(
             "fundamentals": "fund_value_mom_agree",
             "multi_day_hold": "mdh_sticky_momentum",
             "mdh": "mdh_sticky_momentum",
+            # flow_* intentionally omitted: all catalog cousins are weak/demoted
+            # → leave ad-hoc (do not remap onto flow_margin_short_hard/soft/pressure)
         }
         mapped: list[dict[str, Any]] = []
         for p in proposals:
@@ -1092,6 +1110,12 @@ def generate_and_evaluate_hypotheses(
                     or family_to_logic.get(fam)
                     or family_to_logic.get(fam.lower())
                 )
+                if mapped_id and mapped_id in weak_catalog_targets:
+                    # Reduce weak-template mapping: keep original ad-hoc id.
+                    pp["skipped_weak_catalog_map"] = mapped_id
+                    pp["eval_mapped_to_catalog"] = False
+                    n_skipped_weak_map += 1
+                    mapped_id = None
                 if mapped_id:
                     pp["mapped_from_logic_id"] = lid
                     pp["logic_id"] = mapped_id
@@ -1145,6 +1169,8 @@ def generate_and_evaluate_hypotheses(
         "n_accepted": gen.get("n_accepted"),
         "n_evaluated": n_evaluated,
         "n_survivors": len(survivors),
+        "n_skipped_weak_catalog_map": n_skipped_weak_map,
+        "reduce_weak_template_mapping": True,
         "model": gen.get("model"),
         "provider": gen.get("provider"),
         "representative_theses": gen.get("representative_theses"),
