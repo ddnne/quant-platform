@@ -855,6 +855,10 @@ def run_local_window_eval(
     return pack
 
 
+def _row_logic_id(row: Mapping[str, Any]) -> str:
+    return str(row.get("logic") or row.get("logic_id") or "")
+
+
 def build_diff_results_table(
     window_pack: Mapping[str, Any],
     *,
@@ -864,8 +868,22 @@ def build_diff_results_table(
     for transform, b_id, a_id in TRANSFORM_PAIRS:
         per_window = []
         for w in window_pack.get("window_tables") or []:
-            b = next((x for x in w.get("basevol") or [] if x["logic_id"] == b_id), None)
-            a = next((x for x in w.get("atm_iv") or [] if x["logic_id"] == a_id), None)
+            b = next(
+                (
+                    x
+                    for x in w.get("basevol") or []
+                    if _row_logic_id(x) == b_id
+                ),
+                None,
+            )
+            a = next(
+                (
+                    x
+                    for x in w.get("atm_iv") or []
+                    if _row_logic_id(x) == a_id
+                ),
+                None,
+            )
             per_window.append(
                 {
                     "window_id": w.get("window_id"),
@@ -874,7 +892,10 @@ def build_diff_results_table(
                     "atm_iv": a,
                     "delta_mean_net_base_minus_atm": (
                         None
-                        if not b or not a or b.get("mean_net") is None or a.get("mean_net") is None
+                        if not b
+                        or not a
+                        or b.get("mean_net") is None
+                        or a.get("mean_net") is None
                         else float(b["mean_net"]) - float(a["mean_net"])
                     ),
                 }
@@ -922,7 +943,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--skip-rebuild", action="store_true")
     p.add_argument("--skip-deploy", action="store_true")
     p.add_argument("--max-codes", type=int, default=15)
-    p.add_argument("--max-days", type=int, default=120)
+    p.add_argument(
+        "--max-days",
+        type=int,
+        default=200,
+        help="Local real_mirrors max days/shard (full mirrors ~193). CF uses min(max_days,120).",
+    )
     p.add_argument(
         "--worker-url",
         type=str,
@@ -1061,11 +1087,18 @@ def main(argv: list[str] | None = None) -> int:
             log=log,
         )
         for w in window_pack.get("window_tables") or []:
-            log(f"  · window {w['window_id']} shards={w['shard_ids']}")
+            log(
+                f"  · window {w['window_id']} shards={w['shard_ids']} "
+                f"survivors={w.get('n_survivors')}"
+            )
             for d in w.get("transform_deltas") or []:
+                b = d.get("basevol") or {}
+                a = d.get("atm_iv") or {}
                 log(
-                    f"    {d['transform']}: base_net={d['basevol_mean_net']} "
-                    f"atm_net={d['atm_mean_net']} delta={d['delta_mean_net_base_minus_atm']}"
+                    f"    {d['transform']}: base_net={b.get('mean_net')} "
+                    f"atm_net={a.get('mean_net')} "
+                    f"delta={d.get('delta_mean_net_base_minus_atm')} "
+                    f"surv={b.get('survived')}/{a.get('survived')}"
                 )
     else:
         log("[w93] B: local window eval skipped")
@@ -1101,13 +1134,14 @@ def main(argv: list[str] | None = None) -> int:
             "xs_rank_ls_sticky",
         ]
         try:
+            cf_max_days = min(int(args.max_days), 120)
             cf_pack = run_cf_mass_eval_job(
                 job_id=job_id,
                 logic_ids=logic_ids,
                 periods=shards,
                 mode=mode,
                 max_codes=int(args.max_codes),
-                max_days=int(args.max_days),
+                max_days=cf_max_days,
                 seed=int(args.seed),
                 worker_url=str(args.worker_url),
                 deploy_if_needed=not bool(args.skip_deploy),
@@ -1119,13 +1153,44 @@ def main(argv: list[str] | None = None) -> int:
             cf_pack = {"status": "error", "error": str(exc), "job_id": job_id}
         _dump(out_dir / "cf_mass_eval_job.json", cf_pack)
         wr = cf_pack.get("worker_response") or {}
-        # CF per-window aggregation
+        from research.mass_strategy_factory import MassFactoryConfig as _MFC
+
+        _cfg = _MFC()
         cf_window_rows = []
+        cf_rows_flat: list[dict[str, Any]] = []
+        cf_side_flat: list[dict[str, Any]] = []
         for w in W93_WINDOWS:
+            wid = str(w["window_id"])
             shard_ids = {s["period_id"] for s in w["shards"]}
-            fam: dict[str, list] = {"basevol": [], "atm_iv": [], "spread": [], "other": []}
+            fam: dict[str, list] = {
+                "basevol": [],
+                "atm_iv": [],
+                "spread": [],
+                "other": [],
+            }
+            window_opt_rows: list[dict[str, Any]] = []
             for r in wr.get("results") or []:
                 lid = str(r.get("logic_id") or "")
+                if not lid.startswith("opt225_"):
+                    # keep non-opt thicken/compare logics in 'other' lightly
+                    if lid:
+                        fam["other"].append(
+                            {
+                                "logic_id": lid,
+                                "mean_net": r.get("mean_net"),
+                                "t_stat": r.get("t_stat"),
+                                "chosen_sign": r.get("chosen_sign"),
+                            }
+                        )
+                    continue
+                reagg = _reaggregate_window_from_period_rows(
+                    r,
+                    keep_period_ids=shard_ids,
+                    near_zero_abs=_cfg.near_zero_abs,
+                    min_activation=_cfg.min_activation,
+                )
+                row = _track_b_row(reagg, window_id=wid)
+                window_opt_rows.append(row)
                 key = (
                     "basevol"
                     if "basevol" in lid
@@ -1135,42 +1200,49 @@ def main(argv: list[str] | None = None) -> int:
                     if "spread" in lid
                     else "other"
                 )
-                prs = [
-                    pr
-                    for pr in (r.get("period_rows") or [])
-                    if pr.get("period_id") in shard_ids
-                ]
-                nets = [
-                    float(pr["net_one_way_mean_active"])
-                    for pr in prs
-                    if pr.get("net_one_way_mean_active") is not None
-                ]
-                acts = [
-                    float(pr["activation_rate"])
-                    for pr in prs
-                    if pr.get("activation_rate") is not None
-                ]
-                fam[key].append(
+                fam[key].append(row)
+            by_logic = {str(r["logic"]): r for r in window_opt_rows}
+            deltas = []
+            for transform, b_id, a_id in TRANSFORM_PAIRS:
+                b = by_logic.get(b_id)
+                a = by_logic.get(a_id)
+                delta = None
+                if (
+                    b
+                    and a
+                    and b.get("mean_net") is not None
+                    and a.get("mean_net") is not None
+                ):
+                    delta = float(b["mean_net"]) - float(a["mean_net"])
+                deltas.append(
                     {
-                        "logic_id": lid,
-                        "mean_net": statistics.mean(nets) if nets else None,
-                        "mean_activation": statistics.mean(acts) if acts else None,
-                        "n_shards_with_net": len(nets),
-                        "chosen_sign": r.get("chosen_sign"),
-                        "overall_mean_net": r.get("mean_net"),
-                        "overall_t_stat": r.get("t_stat"),
+                        "window": wid,
+                        "transform": transform,
+                        "basevol": b,
+                        "atm_iv": a,
+                        "delta_mean_net_base_minus_atm": delta,
                     }
                 )
             cf_window_rows.append(
                 {
-                    "window_id": w["window_id"],
+                    "window_id": wid,
                     "label": w["label"],
                     "data_note": w["data_note"],
+                    "shard_ids": sorted(shard_ids),
+                    "rows": window_opt_rows,
+                    "transform_deltas": deltas,
+                    "n_survivors": sum(1 for r in window_opt_rows if r.get("survived")),
                     **fam,
                 }
             )
+            cf_rows_flat.extend(window_opt_rows)
+            cf_side_flat.extend(deltas)
+        jid = cf_pack.get("job_id") or job_id
         cf_summary = {
-            "job_id": cf_pack.get("job_id") or job_id,
+            "wave": "W93 / w0818c",
+            "track": "B_multi_year_windows",
+            "job_id": jid,
+            "job_ids": [jid],
             "status": cf_pack.get("status"),
             "mode": cf_pack.get("mode") or mode,
             "n_survivors": cf_pack.get("n_survivors"),
@@ -1178,8 +1250,17 @@ def main(argv: list[str] | None = None) -> int:
             "n_periods": cf_pack.get("n_periods"),
             "r2_prefix": cf_pack.get("r2_prefix")
             or (cf_pack.get("artifact_paths") or {}).get("prefix"),
-            "stage_panels": cf_pack.get("stage_panels"),
+            "stage_panels": {
+                "n_ok": (cf_pack.get("stage_panels") or {}).get("n_ok"),
+                "n_periods": (cf_pack.get("stage_panels") or {}).get("n_periods"),
+                "panels_prefix": (cf_pack.get("stage_panels") or {}).get(
+                    "panels_prefix"
+                ),
+            },
             "window_tables": cf_window_rows,
+            "rows_flat": cf_rows_flat,
+            "side_by_side_flat": cf_side_flat,
+            "markdown_table": _markdown_window_table(cf_rows_flat),
             "thicken_panel_datasets": list(THICKEN_PANEL_DATASETS),
             "opt225_results": [
                 {
@@ -1189,26 +1270,142 @@ def main(argv: list[str] | None = None) -> int:
                     "chosen_sign": r.get("chosen_sign"),
                     "mean_activation": r.get("mean_activation"),
                     "n_periods_ok": r.get("n_periods_ok"),
-                    "signal_ids": sorted(
-                        {
-                            pr.get("signal_id")
-                            for pr in (r.get("period_rows") or [])
-                            if pr.get("signal_id")
-                        }
-                    ),
+                    "survived": (r.get("screen") or {}).get("survived"),
                 }
                 for r in (wr.get("results") or [])
                 if str(r.get("logic_id") or "").startswith("opt225_")
             ],
+            "iv_fields_available_from": "2016-07-19",
+            "mass_research": "NO-GO",
+            "operational_go": False,
+            "ready_declared": False,
+            "frozen_defaults_retuned": False,
         }
         _dump(out_dir / "cf_window_summary.json", cf_summary)
         _dump(out_dir / "cf_job_run.json", cf_summary)
+        _dump(out_dir / "cf_window_table.json", cf_rows_flat)
+        (out_dir / "cf_window_table.md").write_text(
+            cf_summary["markdown_table"] + "\n", encoding="utf-8"
+        )
+        _dump(out_dir / "cf_side_by_side.json", cf_side_flat)
         log(
             f"[w93] C done · status={cf_pack.get('status')} "
-            f"survivors={cf_pack.get('n_survivors')} job={cf_pack.get('job_id') or job_id}"
+            f"survivors={cf_pack.get('n_survivors')} job={jid}"
         )
     else:
-        log("[w93] C: CF skipped")
+        log("[w93] C: CF skipped — reaggregate from prior cf_mass_eval_job.json if present")
+        prior = out_dir / "cf_mass_eval_job.json"
+        if prior.is_file():
+            try:
+                cf_pack = json.loads(prior.read_text())
+            except json.JSONDecodeError:
+                cf_pack = {}
+            wr = cf_pack.get("worker_response") or {}
+            if wr.get("results"):
+                from research.mass_strategy_factory import MassFactoryConfig as _MFC
+
+                _cfg = _MFC()
+                cf_rows_flat = []
+                cf_side_flat = []
+                cf_window_rows = []
+                for w in W93_WINDOWS:
+                    wid = str(w["window_id"])
+                    shard_ids = {s["period_id"] for s in w["shards"]}
+                    fam: dict[str, list] = {
+                        "basevol": [],
+                        "atm_iv": [],
+                        "spread": [],
+                        "other": [],
+                    }
+                    window_opt_rows: list[dict[str, Any]] = []
+                    for r in wr.get("results") or []:
+                        lid = str(r.get("logic_id") or "")
+                        if not lid.startswith("opt225_"):
+                            continue
+                        reagg = _reaggregate_window_from_period_rows(
+                            r,
+                            keep_period_ids=shard_ids,
+                            near_zero_abs=_cfg.near_zero_abs,
+                            min_activation=_cfg.min_activation,
+                        )
+                        row = _track_b_row(reagg, window_id=wid)
+                        window_opt_rows.append(row)
+                        key = (
+                            "basevol"
+                            if "basevol" in lid
+                            else "atm_iv"
+                            if "atm_iv" in lid
+                            else "spread"
+                            if "spread" in lid
+                            else "other"
+                        )
+                        fam[key].append(row)
+                    by_logic = {str(r["logic"]): r for r in window_opt_rows}
+                    deltas = []
+                    for transform, b_id, a_id in TRANSFORM_PAIRS:
+                        b = by_logic.get(b_id)
+                        a = by_logic.get(a_id)
+                        delta = None
+                        if (
+                            b
+                            and a
+                            and b.get("mean_net") is not None
+                            and a.get("mean_net") is not None
+                        ):
+                            delta = float(b["mean_net"]) - float(a["mean_net"])
+                        deltas.append(
+                            {
+                                "window": wid,
+                                "transform": transform,
+                                "basevol": b,
+                                "atm_iv": a,
+                                "delta_mean_net_base_minus_atm": delta,
+                            }
+                        )
+                    cf_window_rows.append(
+                        {
+                            "window_id": wid,
+                            "label": w["label"],
+                            "data_note": w["data_note"],
+                            "shard_ids": sorted(shard_ids),
+                            "rows": window_opt_rows,
+                            "transform_deltas": deltas,
+                            "n_survivors": sum(
+                                1 for r in window_opt_rows if r.get("survived")
+                            ),
+                            **fam,
+                        }
+                    )
+                    cf_rows_flat.extend(window_opt_rows)
+                    cf_side_flat.extend(deltas)
+                jid = cf_pack.get("job_id")
+                cf_summary = {
+                    "wave": "W93 / w0818c",
+                    "track": "B_multi_year_windows",
+                    "job_id": jid,
+                    "job_ids": [jid] if jid else [],
+                    "status": cf_pack.get("status"),
+                    "mode": cf_pack.get("mode"),
+                    "reaggregated_from_prior": True,
+                    "window_tables": cf_window_rows,
+                    "rows_flat": cf_rows_flat,
+                    "side_by_side_flat": cf_side_flat,
+                    "markdown_table": _markdown_window_table(cf_rows_flat),
+                    "n_survivors": cf_pack.get("n_survivors"),
+                    "n_logics": cf_pack.get("n_logics"),
+                    "n_periods": cf_pack.get("n_periods"),
+                    "r2_prefix": cf_pack.get("r2_prefix"),
+                }
+                _dump(out_dir / "cf_window_summary.json", cf_summary)
+                _dump(out_dir / "cf_window_table.json", cf_rows_flat)
+                (out_dir / "cf_window_table.md").write_text(
+                    cf_summary["markdown_table"] + "\n", encoding="utf-8"
+                )
+                _dump(out_dir / "cf_side_by_side.json", cf_side_flat)
+                log(
+                    f"[w93] C reagg from prior job={jid} "
+                    f"rows={len(cf_rows_flat)}"
+                )
 
     # ------------------------------------------------------------------ wiring inventory
     thicken_status: dict[str, Counter] = {}
@@ -1243,14 +1440,51 @@ def main(argv: list[str] | None = None) -> int:
     }
     _dump(out_dir / "cf_wiring_inventory.json", wiring)
 
+    # Primary Track B tables: prefer CF r2_panels window rows, else local.
+    cf_summary_path = out_dir / "cf_window_summary.json"
+    cf_summary_obj: dict[str, Any] = {}
+    if cf_summary_path.is_file():
+        try:
+            cf_summary_obj = json.loads(cf_summary_path.read_text())
+        except json.JSONDecodeError:
+            cf_summary_obj = {}
+    primary_rows = list(
+        cf_summary_obj.get("rows_flat")
+        or (window_pack or {}).get("rows_flat")
+        or []
+    )
+    primary_side = list(
+        cf_summary_obj.get("side_by_side_flat")
+        or (window_pack or {}).get("side_by_side_flat")
+        or []
+    )
+    primary_source = (
+        "cf_r2_panels"
+        if cf_summary_obj.get("rows_flat")
+        else "local_real_mirrors"
+    )
+    job_ids = list(cf_summary_obj.get("job_ids") or [])
+    if not job_ids and (cf_pack or {}).get("job_id"):
+        job_ids = [str(cf_pack["job_id"])]
+    primary_md = _markdown_window_table(primary_rows)
+    _dump(out_dir / "window_table.json", primary_rows)
+    _dump(out_dir / "side_by_side.json", primary_side)
+    (out_dir / "window_table.md").write_text(primary_md + "\n", encoding="utf-8")
+
     summary = {
         "wave": "W93 / w0818c",
+        "track": "B_multi_year_windows",
         "elapsed_sec": time.perf_counter() - t0,
         "series_version": OPTIONS_225_VOL_SERIES_VERSION,
         "min_dte_days": DEFAULT_ATM_MIN_DTE_DAYS,
         "spread_convention": SPREAD_CONVENTION,
         "canonical_dataset": "derivatives_bars_daily_options_225",
+        "iv_fields_available_from": "2016-07-19",
         "nky_vol_role": "proxy_compare_only",
+        "topix_primary": False,
+        "primary_table_source": primary_source,
+        "job_ids": job_ids,
+        "job_id": job_ids[0] if job_ids else None,
         "diff": {
             "n_days": diff_stats.get("n_days"),
             "corr_pearson": (diff_stats.get("corr") or {}).get("pearson_level"),
@@ -1261,16 +1495,46 @@ def main(argv: list[str] | None = None) -> int:
                 diff_stats.get("spread_activation_context") or {}
             ).get("frac_active_abs"),
         },
-        "windows": [w["window_id"] for w in W93_WINDOWS],
+        "windows": [
+            {
+                "window_id": w["window_id"],
+                "label": w["label"],
+                "start": w["start"],
+                "end": w["end"],
+                "shards": [s["period_id"] for s in w["shards"]],
+                "data_note": w["data_note"],
+                "window_short": True,
+            }
+            for w in W93_WINDOWS
+        ],
         "local_window_eval": {
             "n_strategies": (window_pack or {}).get("n_strategies"),
             "data_path": (window_pack or {}).get("data_path"),
+            "n_rows": len((window_pack or {}).get("rows_flat") or []),
+            "n_survivors": sum(
+                1
+                for r in ((window_pack or {}).get("rows_flat") or [])
+                if r.get("survived")
+            ),
+            "max_days_per_period": (window_pack or {}).get("max_days_per_period"),
         },
         "cf": {
-            "status": cf_pack.get("status") if cf_pack else "skipped",
-            "job_id": (cf_pack or {}).get("job_id"),
-            "n_survivors": (cf_pack or {}).get("n_survivors"),
-            "mode": (cf_pack or {}).get("mode"),
+            "status": (cf_pack or {}).get("status")
+            or cf_summary_obj.get("status")
+            or "skipped",
+            "job_id": (cf_pack or {}).get("job_id") or cf_summary_obj.get("job_id"),
+            "job_ids": job_ids,
+            "n_survivors": (cf_pack or {}).get("n_survivors")
+            or cf_summary_obj.get("n_survivors"),
+            "mode": (cf_pack or {}).get("mode") or cf_summary_obj.get("mode"),
+            "n_window_rows": len(cf_summary_obj.get("rows_flat") or []),
+            "n_window_survivors": sum(
+                1
+                for r in (cf_summary_obj.get("rows_flat") or [])
+                if r.get("survived")
+            ),
+            "r2_prefix": (cf_pack or {}).get("r2_prefix")
+            or cf_summary_obj.get("r2_prefix"),
         },
         "freezes": {
             "mass_research": MASS_RESEARCH,
@@ -1281,6 +1545,7 @@ def main(argv: list[str] | None = None) -> int:
             "frozen_defaults_retuned": False,
             "frozen_defaults": [r["representative_id"] for r in FROZEN_DEFAULT_PATH],
         },
+        "primary_markdown_table": primary_md,
         "artifacts": {
             "diff_series_stats": str(out_dir / "diff_series_stats.json"),
             "diff_results_table": str(out_dir / "diff_results_table.json"),
@@ -1288,12 +1553,27 @@ def main(argv: list[str] | None = None) -> int:
                 out_dir / "spread_activation_diagnosis.md"
             ),
             "window_eval_local": str(out_dir / "window_eval_local.json"),
+            "window_table": str(out_dir / "window_table.json"),
+            "local_window_table": str(out_dir / "local_window_table.json"),
+            "cf_window_table": str(out_dir / "cf_window_table.json"),
             "cf_wiring_inventory": str(out_dir / "cf_wiring_inventory.json"),
         },
         "implementer": "GLM5.3 only. Grok did not implement.",
     }
     _dump(out_dir / "w93_summary.json", summary)
+    _dump(
+        out_dir / "commit_meta.json",
+        {
+            "wave": "W93 / w0818c",
+            "track": "B_multi_year_windows",
+            "built_at": datetime.now(timezone.utc).isoformat(),
+            "job_ids": job_ids,
+            "summary": summary,
+        },
+    )
     log(f"[w93] done · elapsed={summary['elapsed_sec']:.1f}s · out={out_dir}")
+    log(f"[w93] primary={primary_source} job_ids={job_ids}")
+    log("\n" + primary_md)
     return 0 if (not cf_pack or cf_pack.get("status") in {None, "ok", "skipped", "error"}) else 1
 
 
