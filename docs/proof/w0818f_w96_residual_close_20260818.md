@@ -2,6 +2,7 @@
 
 **Wave:** W96 / `w0818f` · 2026-08-18  
 **Status:** **CLOSED** as residual TOP (research factory + tip data only)  
+**Code tip:** `e2b9d195ca5eb1c6ccb49548b1036dda160a3b3d`  
 **Prior tip:** W95 `942a43d` · OTC tip underneath `a780fb9`  
 **Primary proofs:**  
 - [`w0818f_w96_otc_partial_progress_20260818.md`](w0818f_w96_otc_partial_progress_20260818.md)  
