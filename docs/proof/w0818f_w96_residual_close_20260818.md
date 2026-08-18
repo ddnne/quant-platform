@@ -2,6 +2,7 @@
 
 **Wave:** W96 / `w0818f` · 2026-08-18  
 **Status:** **CLOSED** as residual TOP (research factory + tip data only)  
+**Code tip:** `PENDING`  
 **Prior tip:** W95 `942a43d`  
 **Primary proofs:**  
 - [`w0818f_w96_otc_partial_progress_20260818.md`](w0818f_w96_otc_partial_progress_20260818.md)  
