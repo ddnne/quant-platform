@@ -2,7 +2,7 @@
 
 **Wave:** W98 / `w0819a` · 2026-08-19  
 **Status:** **CLOSED** as residual TOP (OTC Batch2 + master PRE_PLAN de-scope + sticky deep + constrained hyps)  
-**Code tip:** `b0ffc6e2993b54e79630d88f4212ca970f65fe02`  
+**Code tip:** `6c2ebb6f7b4936ea1240a6f5b34e79bea8994377`
 **Prior tip:** W97 `f1e0e28` · OTC COMPLETE **4551** / PARTIAL **4232** · master 220/94  
 **Primary proofs:**  
 - [`w0819a_w98_otc_backfill_batch2_20260819.md`](w0819a_w98_otc_backfill_batch2_20260819.md)  
