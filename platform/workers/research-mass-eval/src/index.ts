@@ -1,6 +1,6 @@
 /// <reference types="@cloudflare/workers-types" />
 /**
- * quant-platform-research-mass-eval (W91 / w0818a)
+ * quant-platform-research-mass-eval (W93 / w0818c)
  *
  * POST /v1/mass-eval
  *   body: { seed, logics[], periods[], job_id, mode?, panels_prefix? }
@@ -17,9 +17,9 @@
  *   Mass=NO-GO · READY=false · ops GO=false · continuous paper UNARMED
  *   3 default-path representatives not retuned
  *
- * Pure TS (no Python). Full factor legs (repo/fins/margin) for rate/mf
- * families are not-yet-implemented on this path — use mdh fallback or
- * nets_only / staged r2_panels.
+ * Pure TS (no Python). W93: macro_repo_* consume staged repo_rate_regime.
+ * Flow/fund factor legs remain not-yet on this path (sidecars staged;
+ * use local factory or nets_only for full legs).
  */
 
 import { evaluateLogicAcrossPeriods, rankSurvivors } from "./eval";
@@ -296,12 +296,13 @@ async function runMassEval(
     ranking_top: ranking.slice(0, 20),
     freezes,
     note:
-      "CF multi-period mass-eval (W91). Research only. " +
+      "CF multi-period mass-eval (W93). Research only. " +
       "Does not arm Mass/READY/GO. continuous paper UNARMED. " +
       "3 default-path representatives not retuned. " +
       `mode=${mode}. ` +
-      "Full rate/mf factor legs not-yet-implemented on pure-TS path " +
-      "(fallback multi_day_hold or nets_only). " +
+      "macro_repo_* consume staged repo_rate_regime; " +
+      "flow/fund factor legs still local_only on pure-TS " +
+      "(sidecars staged on r2_panels; nets_only/local for full legs). " +
       "d1_bars is tip-only; multi-year uses staged r2_panels.",
   };
 

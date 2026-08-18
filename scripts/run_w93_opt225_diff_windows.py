@@ -506,43 +506,85 @@ def _compact_eval_row(r: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def run_local_window_eval(
-    *,
-    out_dir: Path,
-    seed: int,
-    max_codes: int,
-    max_days: int,
-    synthetic: bool,
-    log,
-) -> dict[str, Any]:
-    from research.mass_strategy_factory import (
-        MASS_FACTORY_VERSION,
-        FROZEN_DEFAULT_PATH,
-        LOGIC_TEMPLATES,
-        MassFactoryConfig,
-        generate_strategy_batch,
-        run_batch_eval,
-    )
+def _scalar_t(t: Any) -> float | None:
+    if t is None:
+        return None
+    if isinstance(t, Mapping):
+        v = t.get("t_stat")
+        if v is None:
+            return None
+        try:
+            fv = float(v)
+        except (TypeError, ValueError):
+            return None
+        return fv if math.isfinite(fv) else None
+    try:
+        fv = float(t)
+    except (TypeError, ValueError):
+        return None
+    return fv if math.isfinite(fv) else None
 
-    all_shards: list[dict[str, Any]] = []
-    for w in W93_WINDOWS:
-        for s in w["shards"]:
-            all_shards.append(dict(s))
 
-    cfg = MassFactoryConfig(
-        seed=int(seed),
-        n=80,
-        max_codes=int(max_codes),
-        max_days_per_period=int(max_days),
-        use_q4_periods=False,
+def _scalar_f(v: Any) -> float | None:
+    if v is None:
+        return None
+    try:
+        fv = float(v)
+    except (TypeError, ValueError):
+        return None
+    return fv if math.isfinite(fv) else None
+
+
+def _track_b_row(r: Mapping[str, Any], *, window_id: str) -> dict[str, Any]:
+    scr = r.get("screen") or {}
+    return {
+        "window": window_id,
+        "logic": r.get("logic_id"),
+        "family": r.get("family_id") or "options_vol_regime",
+        "mean_net": _scalar_f(r.get("mean_net")),
+        "t": _scalar_t(r.get("t_stat")),
+        "act": _scalar_f(r.get("mean_activation")),
+        "sign": r.get("chosen_sign"),
+        "survived": bool(scr.get("survived"))
+        if "survived" in scr
+        else bool(r.get("survived")),
+        "reject_reasons": list(
+            scr.get("reject_reasons") or r.get("reject_reasons") or []
+        ),
+        "n_periods_ok": r.get("n_periods_ok"),
+        "n_periods_total": r.get("n_periods_total"),
+    }
+
+
+def _markdown_window_table(rows: Sequence[Mapping[str, Any]]) -> str:
+    header = (
+        "| window | logic | family | mean_net | t | act | sign | survived |"
     )
-    gen = generate_strategy_batch(cfg)
-    strategies = []
+    sep = "|---|---|---|---:|---:|---:|---:|---|"
+    lines = [header, sep]
+    for r in rows:
+        mn, t, act = r.get("mean_net"), r.get("t"), r.get("act")
+        mn_s = f"{mn:.6f}" if isinstance(mn, float) else "—"
+        t_s = f"{t:.4f}" if isinstance(t, float) else "—"
+        act_s = f"{act:.4f}" if isinstance(act, float) else "—"
+        sign = r.get("sign")
+        sign_s = "—" if sign is None else str(sign)
+        lines.append(
+            f"| {r.get('window')} | `{r.get('logic')}` | {r.get('family')} | "
+            f"{mn_s} | {t_s} | {act_s} | {sign_s} | {r.get('survived')} |"
+        )
+    return "\n".join(lines)
+
+
+def _opt225_strategies_only() -> list[dict[str, Any]]:
+    from research.mass_strategy_factory import LOGIC_TEMPLATES
+
+    out: list[dict[str, Any]] = []
     for lid in OPT225_LOGIC_IDS:
         if lid not in LOGIC_TEMPLATES:
             continue
         tpl = LOGIC_TEMPLATES[lid]
-        strategies.append(
+        out.append(
             {
                 "strategy_id": f"msf_w93_{lid}",
                 "logic_id": lid,
@@ -552,177 +594,264 @@ def run_local_window_eval(
                 "signal_definition": tpl.signal_definition,
                 "position_rule": tpl.position_rule,
                 "datasets_used": list(tpl.datasets_used),
-                "source": "w93_force_include",
+                "source": "w93_track_b_force_include",
             }
         )
-    # rate/flow/fund thicken re-eval sample (local already has repo/fins/margin)
-    for lid in (
-        "macro_repo_rate_level",
-        "macro_repo_rate_change",
-        "mf_value_mom_rate",
-        "flow_hard_demand",
-    ):
-        if lid in LOGIC_TEMPLATES:
-            tpl = LOGIC_TEMPLATES[lid]
-            strategies.append(
-                {
-                    "strategy_id": f"msf_w93_{lid}",
-                    "logic_id": lid,
-                    "family_id": tpl.family_id,
-                    "params": dict(tpl.base_params),
-                    "thesis": tpl.thesis,
-                    "signal_definition": tpl.signal_definition,
-                    "position_rule": tpl.position_rule,
-                    "datasets_used": list(tpl.datasets_used),
-                    "source": "w93_thicken_reeval",
-                }
-            )
+    return out
 
-    gen_for_eval = {
-        **gen,
-        "strategies_after_dedup": strategies,
-        "n_after_dedup": len(strategies),
+
+def _reaggregate_window_from_period_rows(
+    result: Mapping[str, Any],
+    *,
+    keep_period_ids: set[str],
+    near_zero_abs: float,
+    min_activation: float,
+) -> dict[str, Any]:
+    """Recompute window-level mean_net/t/act/sign/screen over shard subset."""
+    from research.mass_strategy_factory import screen_strategy_result
+    from research.sign_selection import (
+        SIGN_INVERTED,
+        SIGN_ORIGINAL,
+        choose_sign,
+        evaluate_sign_both_sides,
+    )
+    from research.stats_metrics import period_stats_report, sample_mean, t_stat_vs_zero
+
+    period_rows = [
+        dict(r)
+        for r in (result.get("period_rows") or [])
+        if str(r.get("period_id") or "") in keep_period_ids
+    ]
+    ok_rows = [r for r in period_rows if r.get("status") == "ok"]
+    grosses = [r.get("gross_signed_mean_active") for r in ok_rows]
+    nets = [r.get("net_one_way_mean_active") for r in ok_rows]
+    costs = [r.get("amortized_one_way_cost") for r in ok_rows]
+    pids = [str(r.get("period_id")) for r in ok_rows]
+
+    hold = None
+    for r in ok_rows:
+        if r.get("hold_days") is not None:
+            hold = int(r["hold_days"])
+            break
+
+    act_rates: list[float] = []
+    for r in ok_rows:
+        ar = r.get("activation_rate")
+        if ar is None:
+            occ = r.get("occurrence") or {}
+            ar = occ.get("activation_rate")
+        if ar is not None:
+            try:
+                act_rates.append(float(ar))
+            except (TypeError, ValueError):
+                pass
+    mean_activation = sample_mean(act_rates)
+
+    both = evaluate_sign_both_sides(
+        period_grosses=grosses,
+        period_nets=nets,
+        amortized_costs=costs if any(c is not None for c in costs) else None,
+        period_ids=pids,
+        hold_days=hold,
+        near_zero_abs=near_zero_abs,
+    )
+    choice = choose_sign(both, near_zero_abs=near_zero_abs)
+    chosen_sign = choice.get("chosen_sign")
+    side_key = (
+        "original"
+        if chosen_sign == SIGN_ORIGINAL
+        else ("inverted" if chosen_sign == SIGN_INVERTED else "original")
+    )
+    side = dict(both.get(side_key) or {})
+    side_nets = list(side.get("nets") or nets)
+    stats = period_stats_report(side_nets)
+    mean_net = side.get("mean_net")
+    if mean_net is None:
+        mean_net = sample_mean(nets)
+    mean_gross = sample_mean(grosses)
+    t_stat = side.get("t_stat")
+    if t_stat is None:
+        t_stat = t_stat_vs_zero(side_nets)
+
+    pack = {
+        "strategy_id": result.get("strategy_id"),
+        "logic_id": result.get("logic_id"),
+        "family_id": result.get("family_id") or "options_vol_regime",
+        "params": result.get("params"),
+        "n_periods_ok": len(ok_rows),
+        "n_periods_total": len(period_rows),
+        "period_rows": period_rows,
+        "mean_gross": mean_gross,
+        "mean_net": mean_net,
+        "t_stat": t_stat,
+        "sharpe_period": stats.get("sharpe"),
+        "mean_activation": mean_activation,
+        "sign_selection": {
+            "chosen_sign": chosen_sign,
+            "decision": choice.get("decision"),
+            "reason": choice.get("reason"),
+        },
+        "chosen_sign": chosen_sign,
+        "errors": [],
+        "status": "evaluated" if ok_rows else "no_ok_periods",
     }
-    from research.mass_strategy_factory import load_batch_data_context
+    scr = screen_strategy_result(
+        pack, near_zero_abs=near_zero_abs, min_activation=min_activation
+    )
+    pack["screen"] = scr
+    pack["survived"] = scr.get("survived")
+    pack["reject_reasons"] = scr.get("reject_reasons")
+    return pack
 
+
+def run_local_window_eval(
+    *,
+    out_dir: Path,
+    seed: int,
+    max_codes: int,
+    max_days: int,
+    synthetic: bool,
+    log,
+) -> dict[str, Any]:
+    """Track B: evaluate ALL opt225 BaseVol + ATM + spread logics PER window.
+
+    Runs each multi-year window independently (shard-per-window) so sign /
+    activation / survival are window-specific. Avoids factory ``_rank_key``
+    crash on dict-shaped ``t_stat`` when a window has only one ok shard.
+    """
+    from research.mass_strategy_factory import (
+        MASS_FACTORY_VERSION,
+        FROZEN_DEFAULT_PATH,
+        MassFactoryConfig,
+        evaluate_one_strategy,
+        load_batch_data_context,
+        screen_strategy_result,
+    )
+
+    strategies = _opt225_strategies_only()
+    cfg = MassFactoryConfig(
+        seed=int(seed),
+        n=len(strategies),
+        max_codes=int(max_codes),
+        max_days_per_period=int(max_days),
+        use_q4_periods=False,
+    )
     log(
-        f"[w93] local window eval · n_strategies={len(strategies)} "
-        f"n_shards={len(all_shards)} factory={MASS_FACTORY_VERSION}"
+        f"[w93] local per-window eval · n_logics={len(strategies)} "
+        f"max_days={max_days} factory={MASS_FACTORY_VERSION} path=real_mirrors"
     )
-    ctx = load_batch_data_context(
-        cfg,
-        periods=all_shards,
-        synthetic=bool(synthetic),
-    )
-    batch = run_batch_eval(
-        gen_for_eval,
-        config=cfg,
-        ctx=ctx,
-        synthetic=bool(synthetic),
-    )
-    results = list(batch.get("results") or [])
-    by_logic = {str(r.get("logic_id")): r for r in results}
 
-    # aggregate per window
     window_tables: list[dict[str, Any]] = []
+    rows_flat: list[dict[str, Any]] = []
+    side_flat: list[dict[str, Any]] = []
+    results_all: list[dict[str, Any]] = []
+
     for w in W93_WINDOWS:
-        shard_ids = {s["period_id"] for s in w["shards"]}
-        side: dict[str, Any] = {
-            "window_id": w["window_id"],
-            "label": w["label"],
-            "data_note": w["data_note"],
-            "shard_ids": sorted(shard_ids),
-            "basevol": [],
-            "atm_iv": [],
-            "spread": [],
-            "thicken_reeval": [],
-        }
-        for lid, family_key in (
-            *[(x, "basevol") for x in BASEVOL_LOGIC_IDS],
-            *[(x, "atm_iv") for x in ATM_LOGIC_IDS],
-            *[(x, "spread") for x in SPREAD_LOGIC_IDS],
-            *(
-                (x, "thicken_reeval")
-                for x in (
-                    "macro_repo_rate_level",
-                    "macro_repo_rate_change",
-                    "mf_value_mom_rate",
-                    "flow_hard_demand",
-                )
-            ),
-        ):
-            r = by_logic.get(lid)
-            if not r:
-                continue
-            prs = [
-                pr
-                for pr in (r.get("period_rows") or [])
-                if pr.get("period_id") in shard_ids
-            ]
-            nets = []
-            acts = []
-            for pr in prs:
-                net = pr.get("net_one_way_mean_active")
-                if net is None:
-                    net = pr.get("net")
-                if net is not None:
-                    nets.append(float(net))
-                act = pr.get("activation_rate")
-                if act is None:
-                    act = pr.get("activation")
-                if act is not None:
-                    acts.append(float(act))
-            mean_net = statistics.mean(nets) if nets else None
-            t_stat = None
-            if nets and len(nets) >= 2:
-                m = statistics.mean(nets)
-                sd = statistics.stdev(nets)
-                if sd > 0:
-                    t_stat = m / (sd / math.sqrt(len(nets)))
-            elif nets and len(nets) == 1:
-                t_stat = None
-            row = {
-                "logic_id": lid,
-                "n_shards_with_net": len(nets),
-                "mean_net": mean_net,
-                "t_stat": t_stat,
-                "mean_activation": statistics.mean(acts) if acts else None,
-                "chosen_sign_overall": r.get("chosen_sign"),
-                "shard_rows": [
-                    {
-                        "period_id": pr.get("period_id"),
-                        "net": pr.get("net_one_way_mean_active")
-                        if pr.get("net_one_way_mean_active") is not None
-                        else pr.get("net"),
-                        "activation": pr.get("activation_rate")
-                        if pr.get("activation_rate") is not None
-                        else pr.get("activation"),
-                        "status": pr.get("status"),
-                    }
-                    for pr in prs
-                ],
-            }
-            side[family_key].append(row)
-        # side-by-side deltas for matching transforms
+        wid = str(w["window_id"])
+        periods = [dict(s) for s in w["shards"]]
+        log(
+            f"[w93]   local {wid} shards={[s['period_id'] for s in periods]} "
+            f"note={w['data_note']}"
+        )
+        ctx = load_batch_data_context(
+            cfg, periods=periods, synthetic=bool(synthetic)
+        )
+        window_results: list[dict[str, Any]] = []
+        for strat in strategies:
+            res = evaluate_one_strategy(
+                strat,
+                ctx,
+                near_zero_abs=cfg.near_zero_abs,
+                min_activation=cfg.min_activation,
+            )
+            res["t_stat"] = _scalar_t(res.get("t_stat"))
+            scr = screen_strategy_result(
+                res,
+                near_zero_abs=cfg.near_zero_abs,
+                min_activation=cfg.min_activation,
+            )
+            res["screen"] = scr
+            window_results.append(res)
+            results_all.append({**res, "window_id": wid})
+
+        rows = [_track_b_row(r, window_id=wid) for r in window_results]
+        by_logic = {str(r["logic"]): r for r in rows}
+        basevol = [r for r in rows if "basevol" in str(r.get("logic"))]
+        atm_iv = [r for r in rows if "atm_iv" in str(r.get("logic"))]
+        spread = [r for r in rows if "spread" in str(r.get("logic"))]
         deltas = []
         for transform, b_id, a_id in TRANSFORM_PAIRS:
-            b = next((x for x in side["basevol"] if x["logic_id"] == b_id), None)
-            a = next((x for x in side["atm_iv"] if x["logic_id"] == a_id), None)
+            b = by_logic.get(b_id)
+            a = by_logic.get(a_id)
+            delta = None
+            if (
+                b
+                and a
+                and b.get("mean_net") is not None
+                and a.get("mean_net") is not None
+            ):
+                delta = float(b["mean_net"]) - float(a["mean_net"])
             deltas.append(
                 {
+                    "window": wid,
                     "transform": transform,
-                    "basevol_mean_net": (b or {}).get("mean_net"),
-                    "atm_mean_net": (a or {}).get("mean_net"),
-                    "delta_mean_net_base_minus_atm": (
-                        None
-                        if not b or not a or b.get("mean_net") is None or a.get("mean_net") is None
-                        else float(b["mean_net"]) - float(a["mean_net"])
-                    ),
-                    "basevol_t": (b or {}).get("t_stat"),
-                    "atm_t": (a or {}).get("t_stat"),
-                    "basevol_activation": (b or {}).get("mean_activation"),
-                    "atm_activation": (a or {}).get("mean_activation"),
+                    "basevol": b,
+                    "atm_iv": a,
+                    "delta_mean_net_base_minus_atm": delta,
                 }
             )
-        side["transform_deltas"] = deltas
+            log(
+                f"    {transform}: base_net={(b or {}).get('mean_net')} "
+                f"atm_net={(a or {}).get('mean_net')} delta={delta} "
+                f"base_surv={(b or {}).get('survived')} "
+                f"atm_surv={(a or {}).get('survived')}"
+            )
+        side = {
+            "window_id": wid,
+            "label": w["label"],
+            "start": w["start"],
+            "end": w["end"],
+            "data_note": w["data_note"],
+            "short_disclose": True,
+            "shard_ids": [s["period_id"] for s in periods],
+            "basevol": basevol,
+            "atm_iv": atm_iv,
+            "spread": spread,
+            "rows": rows,
+            "transform_deltas": deltas,
+            "n_survivors": sum(1 for r in rows if r.get("survived")),
+            "load_notes": ctx.load_notes,
+        }
         window_tables.append(side)
+        rows_flat.extend(rows)
+        side_flat.extend(deltas)
 
     pack = {
         "wave": "W93 / w0818c",
+        "track": "B_multi_year_windows",
         "kind": "local_multi_year_window_eval",
         "factory_version": MASS_FACTORY_VERSION,
         "synthetic": bool(synthetic),
         "data_path": "synthetic" if synthetic else "real_mirrors",
+        "max_days_per_period": int(max_days),
+        "iv_fields_available_from": "2016-07-19",
         "windows": [dict(w) for w in W93_WINDOWS],
         "n_strategies": len(strategies),
-        "n_shards": len(all_shards),
-        "results_compact": [_compact_eval_row(r) for r in results],
+        "n_shards": sum(len(w["shards"]) for w in W93_WINDOWS),
+        "results_compact": [_compact_eval_row(r) for r in results_all],
         "window_tables": window_tables,
-        "load_notes": batch.get("load_notes") or {},
+        "rows_flat": rows_flat,
+        "side_by_side_flat": side_flat,
+        "markdown_table": _markdown_window_table(rows_flat),
         "frozen_defaults": [r["representative_id"] for r in FROZEN_DEFAULT_PATH],
         "frozen_defaults_retuned": False,
     }
     _dump(out_dir / "window_eval_local.json", pack)
+    _dump(out_dir / "local_window_table.json", rows_flat)
+    (out_dir / "local_window_table.md").write_text(
+        pack["markdown_table"] + "\n", encoding="utf-8"
+    )
+    _dump(out_dir / "local_side_by_side.json", side_flat)
     return pack
 
 
