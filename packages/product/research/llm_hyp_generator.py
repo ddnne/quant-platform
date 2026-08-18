@@ -53,7 +53,7 @@ OPERATIONAL_GO = False
 CONTINUOUS_PAPER = "UNARMED"
 LIVE_ORDERS = False
 
-LLM_HYP_WAVE = "W96 / w0818f"
+LLM_HYP_WAVE = "W97 / w0818g"
 LLM_HYP_VERSION = "llm-hyp-generator/v1.1"
 
 # Forbidden numeric-only knobs as sole differentiation.
