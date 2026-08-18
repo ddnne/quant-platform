@@ -2,7 +2,7 @@
 
 **Wave:** W95 / `w0818e` · 2026-08-18  
 **Status:** **CLOSED** as residual TOP (research factory only)  
-**Code tip:** `75af920b1954e6d256e814218844e412f006432f`  
+**Code tip:** `46b397d7352d2a6d14376e2076e8f40d96b09b07`  
 **Primary proof:** [`w0818e_w95_shape_factor_decomp_20260818.md`](w0818e_w95_shape_factor_decomp_20260818.md)  
 **Logs:** [`.glm-logs/w0818e_w95_shape_factor_decomp/`](../../.glm-logs/w0818e_w95_shape_factor_decomp/)  
 **Prior tip:** W94 `d855116`  
