@@ -102,8 +102,8 @@ from features.class_signals import (
 # Identity / freezes (must never arm operational Mass)
 # ---------------------------------------------------------------------------
 
-MASS_FACTORY_VERSION: str = "mass-strategy-factory/v2.5"
-MASS_FACTORY_WAVE: str = "W95 / w0818e"
+MASS_FACTORY_VERSION: str = "mass-strategy-factory/v2.6"
+MASS_FACTORY_WAVE: str = "W105 / w0820b"
 
 MASS_RESEARCH: str = "NO-GO"  # operational Mass remains NO-GO
 PHASE7: str = "OFF"
@@ -127,6 +127,45 @@ FAMILY_RATE_FACTOR: str = "rate_factor"
 FAMILY_MULTI_FACTOR: str = "multi_factor"
 FAMILY_INDEX_VOL_REGIME: str = "index_vol_regime"
 FAMILY_OPTIONS_VOL_REGIME: str = "options_vol_regime"
+# W105: research-family recognition only (not promotion / not generation).
+# Distinct unique family_ids so factory period-net is not stuck at
+# unknown_family. Registration = recognition, not a pass.
+FAMILY_EVENT_FUNDING_COMBO: str = "event_funding_combo"
+FAMILY_EVENT_MACRO_CURVE_COMBO: str = "event_macro_curve_combo"
+FAMILY_DISCLOSURE_CLUSTER_GATE: str = "disclosure_cluster_gate"
+FAMILY_SURPRISE_XS_RANK: str = "surprise_xs_rank"
+FAMILY_LARGE_SURPRISE_FILTER: str = "large_surprise_filter"
+FAMILY_AFTERCLOSE_EVENT_TIMING: str = "afterclose_event_timing"
+FAMILY_EVENT_MOM_AGREE_COMBO: str = "event_mom_agree_combo"
+FAMILY_EVENT_MARGIN_CROWD_COMBO: str = "event_margin_crowd_combo"
+FAMILY_RESEARCH_UNIQUE_LOGIC: str = "research_unique_logic"
+RESEARCH_UNIQUE_FAMILY_IDS: frozenset[str] = frozenset(
+    {
+        FAMILY_EVENT_FUNDING_COMBO,
+        FAMILY_EVENT_MACRO_CURVE_COMBO,
+        FAMILY_DISCLOSURE_CLUSTER_GATE,
+        FAMILY_SURPRISE_XS_RANK,
+        FAMILY_LARGE_SURPRISE_FILTER,
+        FAMILY_AFTERCLOSE_EVENT_TIMING,
+        FAMILY_EVENT_MOM_AGREE_COMBO,
+        FAMILY_EVENT_MARGIN_CROWD_COMBO,
+    }
+)
+RESEARCH_UNIQUE_LOGIC_IDS: frozenset[str] = frozenset(
+    {
+        "event_funding_stress_skip",
+        "curve_steep_event_confirm",
+        "disclosure_cluster_mom_gate",
+        "surprise_xs_rank_hold",
+        "large_surprise_event_hold",
+        "afterclose_only_event_hold",
+        "event_pre_mom_agree_hold",
+        "event_margin_crowding_skip",
+    }
+)
+RESEARCH_FAMILY_REGISTER_ID: str = "w104_w105_unique_logic_research_family"
+RESEARCH_FAMILY_REGISTRATION_IS_NOT_A_PASS: bool = True
+RESEARCH_FAMILY_AUTO_RESEARCH_CANDIDATE: bool = False
 
 # Near-groups kept parallel for comparison (do not merge early).
 NEAR_LOGIC_GROUPS: tuple[dict[str, Any], ...] = (
@@ -241,6 +280,26 @@ NEAR_LOGIC_GROUPS: tuple[dict[str, Any], ...] = (
             "W91 nky_vol_* = TOPIX/NK225F realized proxy/compare only. "
             "W92/W94 opt225_* = options_225 BaseVol canonical SoT "
             "(ATM compare-only). Keep parallel for comparison."
+        ),
+    },
+    {
+        "group_id": "w104_w105_unique_logic_research_family",
+        "label": "W104/W105 unique_logic research family (recognition only)",
+        "logic_ids": (
+            "event_funding_stress_skip",
+            "curve_steep_event_confirm",
+            "disclosure_cluster_mom_gate",
+            "surprise_xs_rank_hold",
+            "large_surprise_event_hold",
+            "afterclose_only_event_hold",
+            "event_pre_mom_agree_hold",
+            "event_margin_crowding_skip",
+        ),
+        "note": (
+            "W105 research-family registration = recognition, not pass / "
+            "not promotion. generation_enabled=False. Not remapped onto "
+            "sticky / event_post_disclosure_hold / vol_risk_adjusted_mom. "
+            "Not auto research_candidate / Mass / READY / GO / main."
         ),
     },
 )
@@ -1329,6 +1388,272 @@ def _build_logic_templates() -> dict[str, LogicTemplate]:
                 "recorded on series but not required by this logic."
             ),
         ),
+        # W105 research-family recognition (NOT promotion / NOT generation).
+        # W104 unique_logic: factory period-net must not skip as unknown_family.
+        LogicTemplate(
+            logic_id="event_funding_stress_skip",
+            display_name="Event funding-stress skip (research family)",
+            thesis=(
+                "Post-earnings surprise drift is financing-sensitive. When overnight "
+                "Tokyo repo is at/above its PIT trailing median, skip the event "
+                "entry; take surprise-sign hold only when funding is easy."
+            ),
+            signal_definition=(
+                "earnings surprise proxy; enter only if overnight repo on entry "
+                "date is strictly below PIT trailing median of prior overnight "
+                "prints; missing same-date overnight → skip (no ffill)"
+            ),
+            position_rule=(
+                "PIT post_hold after first non-look-ahead close; skip entire "
+                "event when funding-stress gate is on or overnight is missing"
+            ),
+            datasets_used=("fins_summary", "jsda_tokyo_repo_rates") + bars,
+            family_id=FAMILY_EVENT_FUNDING_COMBO,
+            base_params={
+                "post_hold_days": 5,
+                "entry_mode": "same_day_close_if_pre_close",
+                "min_hist": 20,
+                "mode": "funding_stress_skip",
+                "gate": "overnight_lt_pit_trailing_median",
+            },
+            structural_keys=("mode", "gate", "entry_mode"),
+            generation_enabled=False,
+            notes=(
+                "W105 research-family recognition only. Not event_post_disclosure_hold "
+                "remap. generation_enabled=False. Not research_candidate / not GO."
+            ),
+        ),
+        LogicTemplate(
+            logic_id="curve_steep_event_confirm",
+            display_name="Curve-steep event confirm (research family)",
+            thesis=(
+                "Event surprise drift is confirmed only in a carry-friendly term-"
+                "funding regime: take PIT surprise-sign hold iff the JSDA Tokyo "
+                "repo curve (3M−overnight) is steep on the entry date."
+            ),
+            signal_definition=(
+                "surprise-sign AND same-date repo spread (3M/T+1 − overnight/T+0) "
+                "> 0; missing either tenor → skip (no ffill / no invent)"
+            ),
+            position_rule=(
+                "PIT post_hold after first non-look-ahead close; flatten/skip "
+                "when curve is flat, inverted, or gapped"
+            ),
+            datasets_used=("fins_summary", "jsda_tokyo_repo_rates") + bars,
+            family_id=FAMILY_EVENT_MACRO_CURVE_COMBO,
+            base_params={
+                "post_hold_days": 5,
+                "entry_mode": "same_day_close_if_pre_close",
+                "steep_threshold": 0.0,
+                "mode": "curve_steep_event_confirm",
+                "gate": "repo_curve_spread_gt_0",
+            },
+            structural_keys=("mode", "gate", "entry_mode"),
+            generation_enabled=False,
+            notes=(
+                "W105 research-family recognition only. Not rate_curve_shape_xs remap. "
+                "generation_enabled=False. Not research_candidate / not GO."
+            ),
+        ),
+        LogicTemplate(
+            logic_id="disclosure_cluster_mom_gate",
+            display_name="Disclosure-cluster mom gate (research family)",
+            thesis=(
+                "Relative-strength L-S is more informative during earnings-season "
+                "information flow. Gate the CS mom book ON only when the PIT "
+                "count of disclosures in the last N sessions is at/above its "
+                "trailing median."
+            ),
+            signal_definition=(
+                "CS rank mom L-S × PIT disclosure-cluster count vs trailing "
+                "median (strict: DiscDate < today; no same-day look-ahead)"
+            ),
+            position_rule=(
+                "sticky fixed_horizon hold of gated rank signs; flat when "
+                "disclosure cluster is below PIT trailing median"
+            ),
+            datasets_used=("fins_summary",) + bars,
+            family_id=FAMILY_DISCLOSURE_CLUSTER_GATE,
+            base_params={
+                "hold_days": 10,
+                "momentum_n": 5,
+                "long_frac": 0.3,
+                "short_frac": 0.3,
+                "cluster_lookback": 5,
+                "min_hist": 10,
+                "mode": "disclosure_cluster_gate",
+                "gate": "n_recent_disclosures_ge_pit_median",
+            },
+            structural_keys=("mode", "gate"),
+            generation_enabled=False,
+            notes=(
+                "W105 research-family recognition only. Not sticky / not "
+                "xs_cs_dispersion_gate remap. generation_enabled=False. "
+                "Not research_candidate / not GO."
+            ),
+        ),
+        LogicTemplate(
+            logic_id="surprise_xs_rank_hold",
+            display_name="Surprise XS rank hold (research family)",
+            thesis=(
+                "Among names that have a PIT-available disclosure in the last H "
+                "sessions, long high-surprise / short low-surprise. Relative "
+                "surprise, not own-sign PEAD hold."
+            ),
+            signal_definition=(
+                "CS rank of surprise among names whose PIT event entry is inside "
+                "the last post_hold_days sessions; <2 names → flat (no invent)"
+            ),
+            position_rule=(
+                "balanced L/S on surprise ranks for currently-in-window names; "
+                "names with no recent PIT disclosure stay flat"
+            ),
+            datasets_used=("fins_summary",) + bars,
+            family_id=FAMILY_SURPRISE_XS_RANK,
+            base_params={
+                "post_hold_days": 5,
+                "entry_mode": "same_day_close_if_pre_close",
+                "long_frac": 0.3,
+                "short_frac": 0.3,
+                "mode": "surprise_xs_rank",
+            },
+            structural_keys=("mode", "entry_mode"),
+            generation_enabled=False,
+            notes=(
+                "W105 research-family recognition only. Not own-sign event hold. "
+                "generation_enabled=False. Not research_candidate / not GO."
+            ),
+        ),
+        LogicTemplate(
+            logic_id="large_surprise_event_hold",
+            display_name="Large-surprise event hold (research family)",
+            thesis=(
+                "Small earnings surprises are noise. Hold the surprise sign only "
+                "when |surprise| is at/above its PIT trailing median across prior "
+                "universe disclosures — large-surprise PEAD, not all-event PEAD."
+            ),
+            signal_definition=(
+                "earnings surprise proxy; enter iff abs(surprise) >= PIT median "
+                "of abs(surprise) on events with disc_date < this disc_date "
+                "(min_hist=20); median unformed → skip"
+            ),
+            position_rule=(
+                "PIT post_hold after first non-look-ahead close; skip entire "
+                "event when |surprise| is below the PIT median or median unformed"
+            ),
+            datasets_used=("fins_summary",) + bars,
+            family_id=FAMILY_LARGE_SURPRISE_FILTER,
+            base_params={
+                "post_hold_days": 5,
+                "entry_mode": "same_day_close_if_pre_close",
+                "min_hist": 20,
+                "mode": "large_surprise_event_hold",
+                "gate": "abs_surprise_ge_pit_trailing_median",
+            },
+            structural_keys=("mode", "gate", "entry_mode"),
+            generation_enabled=False,
+            notes=(
+                "W105 research-family recognition only. Not event_post remap. "
+                "generation_enabled=False. Not research_candidate / not GO."
+            ),
+        ),
+        LogicTemplate(
+            logic_id="afterclose_only_event_hold",
+            display_name="After-close-only event hold (research family)",
+            thesis=(
+                "After-hours disclosures avoid same-session leakage. Take the PIT "
+                "surprise-sign hold only for DiscTime ≥ session close; skip "
+                "intraday prints and time-unknown rows."
+            ),
+            signal_definition=(
+                "surprise-sign AND parseable DiscTime >= session_close_hhmmss"
+                "(disc_date); missing/unparseable DiscTime → skip (no invent)"
+            ),
+            position_rule=(
+                "PIT post_hold after first non-look-ahead close; flatten/skip "
+                "when DiscTime is pre-close or unknown"
+            ),
+            datasets_used=("fins_summary",) + bars,
+            family_id=FAMILY_AFTERCLOSE_EVENT_TIMING,
+            base_params={
+                "post_hold_days": 5,
+                "entry_mode": "same_day_close_if_pre_close",
+                "mode": "afterclose_only_event_hold",
+                "gate": "disctime_ge_session_close",
+            },
+            structural_keys=("mode", "gate", "entry_mode"),
+            generation_enabled=False,
+            notes=(
+                "W105 research-family recognition only. Not event_post remap. "
+                "generation_enabled=False. Not research_candidate / not GO."
+            ),
+        ),
+        LogicTemplate(
+            logic_id="event_pre_mom_agree_hold",
+            display_name="Event pre-mom agree hold (research family)",
+            thesis=(
+                "PEAD is more informative when the name was already drifting in "
+                "the surprise direction. Confirm surprise-sign hold with own-name "
+                "pre-entry momentum; skip disagreement and missing history."
+            ),
+            signal_definition=(
+                "surprise-sign AND sign(close[entry-1]/close[entry-1-n]-1) == "
+                "surprise-sign; n=5; insufficient bars or zero mom → skip"
+            ),
+            position_rule=(
+                "PIT post_hold after first non-look-ahead close; skip when "
+                "pre-entry mom disagrees, is flat, or history is short"
+            ),
+            datasets_used=("fins_summary",) + bars,
+            family_id=FAMILY_EVENT_MOM_AGREE_COMBO,
+            base_params={
+                "post_hold_days": 5,
+                "entry_mode": "same_day_close_if_pre_close",
+                "momentum_n": 5,
+                "mode": "event_pre_mom_agree_hold",
+                "gate": "own_pre_entry_mom_sign_agrees",
+            },
+            structural_keys=("mode", "gate", "entry_mode"),
+            generation_enabled=False,
+            notes=(
+                "W105 research-family recognition only. Not sticky remap. "
+                "generation_enabled=False. Not research_candidate / not GO."
+            ),
+        ),
+        LogicTemplate(
+            logic_id="event_margin_crowding_skip",
+            display_name="Event margin-crowding skip (research family)",
+            thesis=(
+                "PEAD is weaker when the name is already crowded in margin. Skip "
+                "the event when last-known name-level LongVol+ShrtVol is at/above "
+                "its PIT trailing median; missing/stale margin → skip (no ffill)."
+            ),
+            signal_definition=(
+                "surprise-sign; enter only if last margin print with date < "
+                "entry_date and age<=14d is strictly below PIT trailing median "
+                "of that name's prior prints (min_hist=20); missing/stale → skip"
+            ),
+            position_rule=(
+                "PIT post_hold after first non-look-ahead close; skip entire "
+                "event when margin is crowded, unformed, missing, or stale"
+            ),
+            datasets_used=("fins_summary", "markets_margin_interest") + bars,
+            family_id=FAMILY_EVENT_MARGIN_CROWD_COMBO,
+            base_params={
+                "post_hold_days": 5,
+                "entry_mode": "same_day_close_if_pre_close",
+                "min_hist": 20,
+                "stale_calendar_days": 14,
+                "mode": "event_margin_crowding_skip",
+                "gate": "name_margin_lt_pit_trailing_median",
+            },
+            structural_keys=("mode", "gate", "entry_mode"),
+            generation_enabled=False,
+            notes=(
+                "W105 research-family recognition only. Not flow_margin_pressure. "
+                "generation_enabled=False. Not research_candidate / not GO."
+            ),
+        ),
     ]
     return {t.logic_id: t for t in tpls}
 
@@ -1380,6 +1705,15 @@ def _derive_family_definitions() -> dict[str, FamilyDefinition]:
                 if k not in NUMERIC_ONLY_KNOBS or k in t.structural_keys
             }
         )
+        gen_on = any(bool(t.generation_enabled) for t in tpls)
+        research_only = fid in RESEARCH_UNIQUE_FAMILY_IDS
+        notes = "W88: family is eval dispatch only; logic templates define diversity."
+        if research_only:
+            notes = (
+                "W105 research-family recognition only — not pass / not promotion. "
+                "generation_enabled=False. Not auto research_candidate / Mass / "
+                "READY / GO / main. Factory period-net is recognition eval, not a pass."
+            )
         out[fid] = FamilyDefinition(
             family_id=fid,
             display_name=fid,
@@ -1387,10 +1721,16 @@ def _derive_family_definitions() -> dict[str, FamilyDefinition]:
                 f"Eval family covering logic_ids: "
                 f"{', '.join(t.logic_id for t in tpls)}. "
                 "Diversity is logic-template based (W88), not param grids."
+                + (
+                    " RESEARCH FAMILY: recognition, not promotion."
+                    if research_only
+                    else ""
+                )
             ),
             datasets_required=tuple(ds),
             param_axes=tuple(axes) if axes else ("logic_id",),
-            notes="W88: family is eval dispatch only; logic templates define diversity.",
+            generation_enabled=gen_on,
+            notes=notes,
         )
     return out
 
@@ -1414,6 +1754,73 @@ def near_logic_groups_document() -> dict[str, Any]:
             "stay parallel for now — label as near-group; do not merge early."
         ),
         "groups": [dict(g) for g in NEAR_LOGIC_GROUPS],
+    }
+
+
+def research_family_register_document() -> dict[str, Any]:
+    """W105 research-family registration (recognition, not promotion).
+
+    W104 unique_logic (and this-wave additions, if any) were accepted as
+    ad-hoc family_ids, so factory period-net returned 0 from unknown_family.
+    Registering them as known research families lets catalog dispatch
+    evaluate them. That evaluation is **recognition**, not a pass, not
+    research_candidate, not Mass/READY/GO/main.
+    """
+    rows = []
+    for lid in sorted(RESEARCH_UNIQUE_LOGIC_IDS):
+        tpl = LOGIC_TEMPLATES.get(lid)
+        if tpl is None:
+            continue
+        rows.append(
+            {
+                "logic_id": lid,
+                "family_id": tpl.family_id,
+                "generation_enabled": bool(tpl.generation_enabled),
+                "research_candidate": False,
+                "promote_as_main": False,
+                "go": False,
+                "catalog_remap": None,
+                "registration": "recognition",
+            }
+        )
+    return {
+        "register_id": RESEARCH_FAMILY_REGISTER_ID,
+        "wave": MASS_FACTORY_WAVE,
+        "version": MASS_FACTORY_VERSION,
+        "kind": "research_family",
+        "registration": "recognition",
+        "registration_is_not_a_pass": RESEARCH_FAMILY_REGISTRATION_IS_NOT_A_PASS,
+        "registration_is_not_promotion": True,
+        "auto_research_candidate": RESEARCH_FAMILY_AUTO_RESEARCH_CANDIDATE,
+        "generation_enabled": False,
+        "promote_as_main": False,
+        "go": False,
+        "mass_research": MASS_RESEARCH,
+        "ready_declared": READY_DECLARED,
+        "connected_to_mass": CONNECTED_TO_MASS,
+        "connected_to_ready": CONNECTED_TO_READY,
+        "family_group": FAMILY_RESEARCH_UNIQUE_LOGIC,
+        "family_ids": sorted(RESEARCH_UNIQUE_FAMILY_IDS),
+        "logic_ids": sorted(RESEARCH_UNIQUE_LOGIC_IDS),
+        "members": rows,
+        "purpose": (
+            "So factory period-net is not stuck at 0 from unknown family. "
+            "Factory synthetic period-net after recognition is still not a pass. "
+            "daily_path_DD of the min-impl remains the required eval."
+        ),
+        "must_not": [
+            "auto research_candidate",
+            "Mass ON",
+            "READY",
+            "operational GO",
+            "promote_as_main",
+            "remap onto sticky / event_post_disclosure_hold / vol_risk_adjusted_mom",
+        ],
+        "note": (
+            "registration = recognition, not pass / not promotion. "
+            "Grok did not implement."
+        ),
+        **_freeze(),
     }
 
 
@@ -1461,6 +1868,9 @@ def logic_templates_document() -> dict[str, Any]:
         "w91_index_vol_logic_ids": nky_vol_ids,
         "w92_options_vol_logic_ids": opt225_ids,
         "w94_options_vol_logic_ids": w94_opt225_ids,
+        "w105_research_unique_logic_ids": sorted(RESEARCH_UNIQUE_LOGIC_IDS),
+        "w105_research_unique_family_ids": sorted(RESEARCH_UNIQUE_FAMILY_IDS),
+        "research_family_registration": research_family_register_document(),
         "opt225_canonical_level": "basevol",
         "opt225_atm_iv_role": "compare_only",
         "near_logic_groups": near_logic_groups_document(),
@@ -1500,6 +1910,7 @@ def family_definitions_document() -> dict[str, Any]:
         },
         "family_ids": list(FACTORY_FAMILY_IDS),
         "default_family_ratios": dict(DEFAULT_FAMILY_RATIOS),
+        "research_family_registration": research_family_register_document(),
         "logic_templates": logic_templates_document(),
         "sampling_rules": {
             "seed_reproducible": True,
@@ -1523,6 +1934,14 @@ def family_definitions_document() -> dict[str, Any]:
                 FAMILY_MULTI_FACTOR,
                 FAMILY_INDEX_VOL_REGIME,
                 FAMILY_OPTIONS_VOL_REGIME,
+                FAMILY_EVENT_FUNDING_COMBO,
+                FAMILY_EVENT_MACRO_CURVE_COMBO,
+                FAMILY_DISCLOSURE_CLUSTER_GATE,
+                FAMILY_SURPRISE_XS_RANK,
+                FAMILY_LARGE_SURPRISE_FILTER,
+                FAMILY_AFTERCLOSE_EVENT_TIMING,
+                FAMILY_EVENT_MOM_AGREE_COMBO,
+                FAMILY_EVENT_MARGIN_CROWD_COMBO,
             ],
             "excluded": [CLASS_SIMPLE_DAILY_SIGN],
         },
@@ -2068,6 +2487,8 @@ def generate_strategy_batch(
             if len(strategies) >= cfg.n:
                 break
             tpl = LOGIC_TEMPLATES[lid]
+            if not tpl.generation_enabled:
+                continue
             for vp in _minimal_numeric_variants(tpl):
                 if len(strategies) >= cfg.n:
                     break
@@ -2642,12 +3063,194 @@ def _synthetic_batch_context(config: MassFactoryConfig) -> BatchDataContext:
     )
 
 
+def _eval_research_unique_on_panel(
+    logic_id: str,
+    params: Mapping[str, Any],
+    panel: Mapping[str, Any],
+    *,
+    one_way_cost: float,
+) -> dict[str, Any]:
+    """Factory dispatch for W104/W105 research-family unique_logic.
+
+    Recognition eval only. Does not mint research_candidate / GO / main.
+    Factory synthetic period-net is not a pass.
+    """
+    import sys
+
+    scripts = _REPO_ROOT / "scripts"
+    if str(scripts) not in sys.path:
+        sys.path.insert(0, str(scripts))
+    import run_w104_new_hyps_daily_dd as w104  # noqa: WPS433
+    import run_w105_new_hyps_daily_dd as w105  # noqa: WPS433
+
+    spec: dict[str, Any] = {"logic_id": logic_id, "params": dict(params)}
+    for cand in list(w104.NEW_UNIQUE_LOGIC) + list(w105.NEW_UNIQUE_LOGIC):
+        if cand.get("logic_id") == logic_id:
+            spec = dict(cand)
+            merged = dict(cand.get("params") or {})
+            merged.update(dict(params or {}))
+            spec["params"] = merged
+            break
+    bars = panel.get("bars") or {}
+    events = panel.get("fins_events") or {}
+    repo = panel.get("repo_series") or {}
+    curve = panel.get("curve_series") or {}
+    overnight = dict(
+        (curve or {}).get("short_rates_by_date")
+        or (repo or {}).get("rates_by_date")
+        or {}
+    )
+    margin_raw = panel.get("margin") or {}
+    margin_by_code: dict[str, dict[str, float]] = {}
+    for code, pairs in (margin_raw or {}).items():
+        if isinstance(pairs, Mapping):
+            margin_by_code[str(code)] = {
+                str(k)[:10]: float(v) for k, v in pairs.items() if v is not None
+            }
+        else:
+            margin_by_code[str(code)] = {
+                str(d)[:10]: float(v) for d, v in (pairs or []) if v is not None
+            }
+    p0 = panel.get("period_start")
+    p1 = panel.get("period_end")
+    if logic_id == "event_funding_stress_skip":
+        pack = w104.evaluate_event_funding_stress_skip_daily_mtm(
+            bars,
+            events,
+            overnight,
+            spec=spec,
+            one_way_cost=one_way_cost,
+            period_start=p0,
+            period_end=p1,
+        )
+    elif logic_id == "curve_steep_event_confirm":
+        pack = w104.evaluate_curve_steep_event_confirm_daily_mtm(
+            bars,
+            events,
+            curve,
+            spec=spec,
+            one_way_cost=one_way_cost,
+            period_start=p0,
+            period_end=p1,
+        )
+    elif logic_id == "disclosure_cluster_mom_gate":
+        pack = w104.evaluate_disclosure_cluster_mom_gate_daily_mtm(
+            bars,
+            events,
+            spec=spec,
+            one_way_cost=one_way_cost,
+        )
+    elif logic_id == "surprise_xs_rank_hold":
+        pack = w104.evaluate_surprise_xs_rank_hold_daily_mtm(
+            bars,
+            events,
+            spec=spec,
+            one_way_cost=one_way_cost,
+            period_start=p0,
+            period_end=p1,
+        )
+    elif logic_id == "large_surprise_event_hold":
+        pack = w105.evaluate_large_surprise_event_hold_daily_mtm(
+            bars,
+            events,
+            spec=spec,
+            one_way_cost=one_way_cost,
+            period_start=p0,
+            period_end=p1,
+        )
+    elif logic_id == "afterclose_only_event_hold":
+        pack = w105.evaluate_afterclose_only_event_hold_daily_mtm(
+            bars,
+            events,
+            spec=spec,
+            one_way_cost=one_way_cost,
+            period_start=p0,
+            period_end=p1,
+        )
+    elif logic_id == "event_pre_mom_agree_hold":
+        pack = w105.evaluate_event_pre_mom_agree_hold_daily_mtm(
+            bars,
+            events,
+            spec=spec,
+            one_way_cost=one_way_cost,
+            period_start=p0,
+            period_end=p1,
+        )
+    elif logic_id == "event_margin_crowding_skip":
+        pack = w105.evaluate_event_margin_crowding_skip_daily_mtm(
+            bars,
+            events,
+            margin_by_code,
+            spec=spec,
+            one_way_cost=one_way_cost,
+            period_start=p0,
+            period_end=p1,
+        )
+    else:
+        return {
+            "status": "error",
+            "skip_reason": f"unregistered_research_unique:{logic_id}",
+            "gross_signed_mean_active": None,
+            "net_one_way_mean_active": None,
+            "research_family_recognition": True,
+            "registration_is_not_a_pass": True,
+            "promote_as_main": False,
+            "go": False,
+            "research_candidate": False,
+        }
+
+    if pack.get("status") != "ok":
+        return {
+            "status": "data_missing" if pack.get("daily_path_complete") is False else "error",
+            "skip_reason": str(
+                pack.get("incomplete_reason") or pack.get("status") or "research_unique_incomplete"
+            ),
+            "gross_signed_mean_active": None,
+            "net_one_way_mean_active": None,
+            "research_family_recognition": True,
+            "registration_is_not_a_pass": True,
+            "promote_as_main": False,
+            "go": False,
+            "research_candidate": False,
+            "n_entered": pack.get("n_entered"),
+            "n_events": pack.get("n_events"),
+        }
+
+    n_cal = int(pack.get("n_calendar_days") or 0)
+    n_act = int(pack.get("n_active_days") or 0)
+    h = pack.get("hold_days") or pack.get("post_hold_days") or 5
+    return {
+        "status": "ok",
+        "gross_signed_mean_active": pack.get("mean_gross_daily"),
+        "net_one_way_mean_active": pack.get("mean_net_daily"),
+        "amortized_one_way_cost": pack.get("amortized_one_way_cost")
+        or pack.get("one_way_cost"),
+        "n_active_positions": n_act,
+        "occurrence": {
+            "activation_rate": (float(n_act) / float(n_cal) if n_cal else None),
+            "n_active": n_act,
+            "n_calendar": n_cal,
+            "n_entered": pack.get("n_entered"),
+            "n_events": pack.get("n_events"),
+            "n_ranked_days": pack.get("n_ranked_days"),
+        },
+        "signal_id": logic_id,
+        "hold_days": int(h) if h is not None else None,
+        "research_family_recognition": True,
+        "registration_is_not_a_pass": True,
+        "research_candidate": False,
+        "promote_as_main": False,
+        "go": False,
+    }
+
+
 def _eval_on_panel(
     family_id: str,
     params: Mapping[str, Any],
     panel: Mapping[str, Any],
     *,
     one_way_cost: float,
+    logic_id: str | None = None,
 ) -> dict[str, Any]:
     """Dispatch pure evaluator for one strategy × one period panel."""
     from research.class_hyp_eval import (
@@ -2878,6 +3481,16 @@ def _eval_on_panel(
             expand_ratio=float(p.get("expand_ratio") or 1.20),
             compress_ratio=float(p.get("compress_ratio") or 0.80),
         )
+    elif fid in RESEARCH_UNIQUE_FAMILY_IDS or (
+        logic_id and str(logic_id) in RESEARCH_UNIQUE_LOGIC_IDS
+    ):
+        out = _eval_research_unique_on_panel(
+            str(logic_id or p.get("mode") or ""),
+            p,
+            panel,
+            one_way_cost=one_way_cost,
+        )
+        return out
     else:
         return {
             "status": "error",
@@ -2999,7 +3612,11 @@ def evaluate_one_strategy(
             continue
         try:
             ev = _eval_on_panel(
-                family, params, panel, one_way_cost=ctx.one_way_cost
+                family,
+                params,
+                panel,
+                one_way_cost=ctx.one_way_cost,
+                logic_id=logic_id,
             )
             row = {
                 "period_id": pid,
@@ -3873,6 +4490,15 @@ def propose_profit_hypotheses(
                 "generation_index": i,
                 "seed": cfg.seed,
             }
+            if logic_id in RESEARCH_UNIQUE_LOGIC_IDS:
+                # Recognition, not a catalog remap / not a promotion.
+                ind["eval_mapped_to_catalog"] = False
+                ind["research_family_recognition"] = True
+                ind["research_candidate"] = False
+                ind["promote_as_main"] = False
+                ind["go"] = False
+                ind["registration"] = "recognition"
+                ind["registration_is_not_a_pass"] = True
             accepted.append(ind)
         else:
             # Ad-hoc: require family_id + full thesis fields
@@ -4055,7 +4681,10 @@ def mass_factory_document() -> dict[str, Any]:
             "human main candidate selection this wave",
             "CF 200/500 full multi-year scale",
             "merge near-groups early",
+            "treat research-family registration as pass / promotion",
+            "auto research_candidate from unique_logic register",
         ],
+        "research_family_registration": research_family_register_document(),
         "eval_tradeoffs": (
             "CF lite multi-period (bounded codes/days) via mass-eval Worker. "
             "Local wide eval after near-dup. Heavy multi-year only for "
@@ -4117,6 +4746,20 @@ __all__ = [
     "FAMILY_MULTI_FACTOR",
     "FAMILY_INDEX_VOL_REGIME",
     "FAMILY_OPTIONS_VOL_REGIME",
+    "FAMILY_EVENT_FUNDING_COMBO",
+    "FAMILY_EVENT_MACRO_CURVE_COMBO",
+    "FAMILY_DISCLOSURE_CLUSTER_GATE",
+    "FAMILY_SURPRISE_XS_RANK",
+    "FAMILY_LARGE_SURPRISE_FILTER",
+    "FAMILY_AFTERCLOSE_EVENT_TIMING",
+    "FAMILY_EVENT_MOM_AGREE_COMBO",
+    "FAMILY_EVENT_MARGIN_CROWD_COMBO",
+    "FAMILY_RESEARCH_UNIQUE_LOGIC",
+    "RESEARCH_UNIQUE_FAMILY_IDS",
+    "RESEARCH_UNIQUE_LOGIC_IDS",
+    "RESEARCH_FAMILY_REGISTER_ID",
+    "RESEARCH_FAMILY_REGISTRATION_IS_NOT_A_PASS",
+    "RESEARCH_FAMILY_AUTO_RESEARCH_CANDIDATE",
     "FAMILY_DEFINITIONS",
     "FACTORY_FAMILY_IDS",
     "DEFAULT_FAMILY_RATIOS",
@@ -4138,6 +4781,7 @@ __all__ = [
     "family_definitions_document",
     "logic_templates_document",
     "near_logic_groups_document",
+    "research_family_register_document",
     "mass_factory_document",
     "stable_strategy_id",
     "validate_strategy_at_gen",

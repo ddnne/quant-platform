@@ -17,12 +17,25 @@ from research.mass_strategy_factory import (
     DEFAULT_N,
     DEFAULT_NEAR_DUP_THRESHOLD,
     FAMILY_DEFINITIONS,
+    FAMILY_AFTERCLOSE_EVENT_TIMING,
+    FAMILY_DISCLOSURE_CLUSTER_GATE,
+    FAMILY_EVENT_FUNDING_COMBO,
+    FAMILY_EVENT_MACRO_CURVE_COMBO,
+    FAMILY_EVENT_MARGIN_CROWD_COMBO,
+    FAMILY_EVENT_MOM_AGREE_COMBO,
+    FAMILY_LARGE_SURPRISE_FILTER,
     FAMILY_INDEX_VOL_REGIME,
     FAMILY_OPTIONS_VOL_REGIME,
     FAMILY_MULTI_FACTOR,
     FAMILY_RATE_FACTOR,
+    FAMILY_SURPRISE_XS_RANK,
     FAMILY_VOL_RISK_ADJUSTED,
     FACTORY_FAMILY_IDS,
+    RESEARCH_FAMILY_AUTO_RESEARCH_CANDIDATE,
+    RESEARCH_FAMILY_REGISTER_ID,
+    RESEARCH_FAMILY_REGISTRATION_IS_NOT_A_PASS,
+    RESEARCH_UNIQUE_FAMILY_IDS,
+    RESEARCH_UNIQUE_LOGIC_IDS,
     FROZEN_DEFAULT_PATH,
     LOGIC_TEMPLATE_IDS,
     LOGIC_TEMPLATES,
@@ -41,6 +54,7 @@ from research.mass_strategy_factory import (
     evaluate_one_strategy,
     family_definitions_document,
     generate_strategy_batch,
+    research_family_register_document,
     llm_logic_entry_status,
     load_batch_data_context,
     logic_templates_document,
@@ -70,7 +84,9 @@ def test_freezes_closed():
     assert OPERATIONAL_GO is False
     assert CONTINUOUS_PAPER == "UNARMED"
     assert (
-        "W95" in MASS_FACTORY_WAVE
+        "W105" in MASS_FACTORY_WAVE
+        or "W104" in MASS_FACTORY_WAVE
+        or "W95" in MASS_FACTORY_WAVE
         or "W94" in MASS_FACTORY_WAVE
         or "W93" in MASS_FACTORY_WAVE
         or "W92" in MASS_FACTORY_WAVE
@@ -167,6 +183,24 @@ def test_logic_templates_distinct_economic_logic():
     assert LOGIC_TEMPLATES["opt225_atm_iv_abs_level"].base_params.get(
         "compare_only"
     ) is True
+    # W105 research-family unique_logic: recognized, not generated, not remapped.
+    for lid in (
+        "event_funding_stress_skip",
+        "curve_steep_event_confirm",
+        "disclosure_cluster_mom_gate",
+        "surprise_xs_rank_hold",
+        "large_surprise_event_hold",
+        "afterclose_only_event_hold",
+        "event_pre_mom_agree_hold",
+        "event_margin_crowding_skip",
+    ):
+        assert lid in LOGIC_TEMPLATES
+        assert lid in RESEARCH_UNIQUE_LOGIC_IDS
+        assert LOGIC_TEMPLATES[lid].generation_enabled is False
+        assert LOGIC_TEMPLATES[lid].family_id in RESEARCH_UNIQUE_FAMILY_IDS
+    assert "event_funding_stress_skip" in doc.get(
+        "w105_research_unique_logic_ids", []
+    )
     # diversity rules documented
     rules = doc["diversity_rules"]
     assert "hold_days only" in str(rules["does_not_count"])
@@ -201,7 +235,28 @@ def test_families_still_documented_for_eval_dispatch():
     assert FAMILY_MULTI_FACTOR in FAMILY_DEFINITIONS
     assert FAMILY_INDEX_VOL_REGIME in FAMILY_DEFINITIONS
     assert FAMILY_OPTIONS_VOL_REGIME in FAMILY_DEFINITIONS
+    for fid in (
+        FAMILY_EVENT_FUNDING_COMBO,
+        FAMILY_EVENT_MACRO_CURVE_COMBO,
+        FAMILY_DISCLOSURE_CLUSTER_GATE,
+        FAMILY_SURPRISE_XS_RANK,
+        FAMILY_LARGE_SURPRISE_FILTER,
+        FAMILY_AFTERCLOSE_EVENT_TIMING,
+        FAMILY_EVENT_MOM_AGREE_COMBO,
+        FAMILY_EVENT_MARGIN_CROWD_COMBO,
+    ):
+        assert fid in FAMILY_DEFINITIONS
+        assert FAMILY_DEFINITIONS[fid].generation_enabled is False
     assert CLASS_SIMPLE_DAILY_SIGN not in FAMILY_DEFINITIONS
+    reg = research_family_register_document()
+    assert reg["register_id"] == RESEARCH_FAMILY_REGISTER_ID
+    assert reg["registration"] == "recognition"
+    assert reg["registration_is_not_a_pass"] is True
+    assert RESEARCH_FAMILY_REGISTRATION_IS_NOT_A_PASS is True
+    assert RESEARCH_FAMILY_AUTO_RESEARCH_CANDIDATE is False
+    assert reg["auto_research_candidate"] is False
+    assert reg["promote_as_main"] is False
+    assert reg["go"] is False
 
 
 def test_generation_logic_diversity_metrics():
