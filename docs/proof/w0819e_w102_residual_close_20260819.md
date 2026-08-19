@@ -2,7 +2,7 @@
 
 **Wave:** W102 / `w0819e` · 2026-08-19  
 **Status:** **CLOSED** as residual TOP for **all tracks** (OTC Batch6 + event/rate daily_path_DD + dispersion_gate quality + failure-constrained hyps + MISDATE wait + pins frozen).  
-**Code tip:** `90f0a2e07464a8ff847925d3eaa62b742fc90cba`  
+**Code tip:** `1b470b6832a430daba1cdaddd8245bb3844319b8`  
 **Prior tip:** W101 `6186cc9` · Track B `fa16889` · Track A Batch6 `2361d9e` · OTC COMPLETE **5052** / PARTIAL **3732** (Batch6 already on `origin/main`)  
 **Primary proofs:**  
 - [`w0819e_w102_otc_backfill_batch6_20260819.md`](w0819e_w102_otc_backfill_batch6_20260819.md) (Track A)  
