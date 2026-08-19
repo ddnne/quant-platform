@@ -2,7 +2,7 @@
 
 **Wave:** W103 / `w0819f` · 2026-08-19  
 **Status:** **CLOSED** as residual TOP for **all tracks** (OTC Batch7 + repo-linked short cost + dispersion_gate extra deep-dive + failure-constrained hyps + MISDATE wait + pins frozen).  
-**Code tip:** `6cfbdbc6a6d470d684b537e5066c98bf3d786baf`  
+**Code tip:** `d779accdb2ffb5f4a88a8aa172573b4414ccac08`  
 **Prior tip:** W102 `0b72ff9` · Track B `bfd32b9` · Track A Batch7 `2e0511a` · OTC COMPLETE **5152** / PARTIAL **3632** (Batch7 already on `origin/main` at `2e0511a`)  
 **Primary proofs:**  
 - [`w0819f_w103_otc_backfill_batch7_20260819.md`](w0819f_w103_otc_backfill_batch7_20260819.md) (Track A)  
