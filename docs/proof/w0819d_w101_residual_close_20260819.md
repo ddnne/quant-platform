@@ -2,7 +2,7 @@
 
 **Wave:** W101 / `w0819d` · 2026-08-19  
 **Status:** **CLOSED** as residual TOP for **all tracks** (OTC Batch5 + cited peer daily_path_DD + continue-hyps + sticky STABLE_RESEARCH_ONLY + MISDATE re-probe + projection FRESH).  
-**Code tip:** *pinned after this commit*  
+**Code tip:** `60f9d10c7c99efeef09da7e6063bd25b775af63f`  
 **Prior tip:** W100 `b54a436` · OTC COMPLETE **4852** / PARTIAL **3932** · `84874fb` already on `origin/main`  
 **Primary proofs:**  
 - [`w0819d_w101_otc_backfill_batch5_20260819.md`](w0819d_w101_otc_backfill_batch5_20260819.md) (Track A)  
