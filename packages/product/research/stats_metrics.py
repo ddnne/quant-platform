@@ -31,8 +31,8 @@ import math
 from statistics import mean, pstdev, stdev
 from typing import Any, Mapping, Sequence
 
-STATS_METRICS_VERSION: str = "research-stats-metrics/v1.1"
-STATS_METRICS_WAVE: str = "W95 / w0818e"
+STATS_METRICS_VERSION: str = "research-stats-metrics/v1.2"
+STATS_METRICS_WAVE: str = "W100 / w0819c"
 
 MASS_RESEARCH: str = "NO-GO"
 PHASE7: str = "OFF"
@@ -67,6 +67,72 @@ LOW_VARIANCE_SMALL_N_MAX: int = 3
 LOW_VARIANCE_MIN_REL_STD: float = 0.05  # require CV = s/|m| ≥ 5%
 LOW_VARIANCE_MAX_ABS_T: float = 12.0
 LOW_VARIANCE_REASON: str = "low_variance_artifact"
+
+# ---------------------------------------------------------------------------
+# W100 / w0819c — daily_path_DD is mandatory (period-net DD cannot pass alone)
+# ---------------------------------------------------------------------------
+# W98 reported max_dd_proxy=0 from period-net cumsum when all period nets were
+# positive. That is an aggregation artifact, not “no risk”. True path risk is
+# daily mark-to-market equity peak-to-trough (W99 sticky table is the example).
+DAILY_PATH_DD_VERSION: str = "research-daily-path-dd/v1"
+DAILY_PATH_DD_WAVE: str = "W100 / w0819c"
+DAILY_PATH_DD_PROOF: str = "docs/proof/w0819c_w100_daily_path_dd_gate_20260819.md"
+DAILY_PATH_DD_REFERENCE_PROOF: str = (
+    "docs/proof/w0819b_w99_sticky_daily_dd_20260819.md"
+)
+DAILY_PATH_DD_REQUIRED_FIELDS: tuple[str, ...] = (
+    "daily_path_DD",
+    "dd_duration",
+    "recovery",
+    "total_ret_net",
+)
+PERIOD_NET_ONLY_METHODS: frozenset[str] = frozenset(
+    {
+        "period_net_cumsum_proxy",
+        "period_net_DD",
+        "period_net_dd",
+        "period_net",
+    }
+)
+# Sticky W99 daily path (local_real_mirrors; promote_as_main=false · go=false).
+W99_STICKY_DAILY_PATH_DD_REFERENCE: tuple[dict[str, Any], ...] = (
+    {
+        "window": "w2017_2019",
+        "logic_id": "xs_rank_ls_sticky",
+        "n_days": 272,
+        "daily_path_DD": -0.143741,
+        "dd_duration": 85,
+        "recovery_days": None,
+        "recovered": False,
+        "total_ret_net": 0.034975,
+        "period_net_DD_w98_cf_artifact": 0.0,
+        "period_net_DD_local_proxy": -0.0023,
+    },
+    {
+        "window": "w2020_2022",
+        "logic_id": "xs_rank_ls_sticky",
+        "n_days": 193,
+        "daily_path_DD": -0.037971,
+        "dd_duration": 14,
+        "recovery_days": 1,
+        "recovered": True,
+        "total_ret_net": 0.201923,
+        "period_net_DD_w98_cf_artifact": 0.0,
+        "period_net_DD_local_proxy": 0.0,
+    },
+    {
+        "window": "w2023_2025",
+        "logic_id": "xs_rank_ls_sticky",
+        "n_days": 273,
+        "daily_path_DD": -0.108415,
+        "dd_duration": 17,
+        "recovery_days": 52,
+        "recovered": True,
+        "total_ret_net": 0.081073,
+        "period_net_DD_w98_cf_artifact": 0.0,
+        "period_net_DD_local_proxy": 0.0,
+    },
+)
 
 
 def _freeze() -> dict[str, Any]:
@@ -397,6 +463,347 @@ def max_drawdown(values: Sequence[float | None]) -> dict[str, Any]:
     }
 
 
+def _scalar_finite(v: Any) -> float | None:
+    if v is None:
+        return None
+    try:
+        x = float(v)
+    except (TypeError, ValueError):
+        return None
+    return x if math.isfinite(x) else None
+
+
+def equity_path_drawdown(
+    equities: Sequence[float],
+    dates: Sequence[str] | None = None,
+) -> dict[str, Any]:
+    """Max DD / duration / recovery on a *level* equity curve (post-cost).
+
+    Distinct from :func:`max_drawdown`, which peaks-to-troughs the
+    **cumulative sum of period nets** (the W98 aggregation grain that can
+    report 0 whenever every period net is positive).
+    """
+    if not equities:
+        return {
+            "n": 0,
+            "max_dd": None,
+            "abs_max_dd": None,
+            "dd_duration_days": None,
+            "recovery_days": None,
+            "recovered": None,
+            "peak_index": None,
+            "trough_index": None,
+            "peak_date": None,
+            "trough_date": None,
+            "recovery_date": None,
+            "final_equity": None,
+            "total_return": None,
+            "method": "daily_equity_level_peak_to_trough",
+            "reason": "empty",
+        }
+    eq = [float(x) for x in equities]
+    peak = eq[0]
+    peak_i = 0
+    max_dd = 0.0
+    trough_i = 0
+    peak_at_dd = 0
+    for i, v in enumerate(eq):
+        if v > peak:
+            peak = v
+            peak_i = i
+        if peak > 0:
+            dd = v / peak - 1.0
+            if dd < max_dd:
+                max_dd = dd
+                trough_i = i
+                peak_at_dd = peak_i
+
+    dd_duration = int(trough_i - peak_at_dd) if max_dd < 0 else 0
+    recovery_days: int | None = None
+    recovery_i: int | None = None
+    recovered = True if max_dd >= 0 else False
+    if max_dd < 0:
+        peak_level = eq[peak_at_dd]
+        recovered = False
+        for i in range(trough_i + 1, len(eq)):
+            if eq[i] >= peak_level - 1e-15:
+                recovery_days = int(i - trough_i)
+                recovery_i = i
+                recovered = True
+                break
+
+    def _d(i: int | None) -> str | None:
+        if i is None or dates is None or i < 0 or i >= len(dates):
+            return None
+        return str(dates[i])[:10]
+
+    total_ret = eq[-1] / eq[0] - 1.0 if eq[0] else None
+    return {
+        "n": len(eq),
+        "max_dd": float(max_dd),
+        "abs_max_dd": abs(float(max_dd)),
+        "dd_duration_days": dd_duration,
+        "recovery_days": recovery_days,
+        "recovered": recovered,
+        "peak_index": peak_at_dd if max_dd < 0 else None,
+        "trough_index": trough_i if max_dd < 0 else None,
+        "peak_date": _d(peak_at_dd) if max_dd < 0 else None,
+        "trough_date": _d(trough_i) if max_dd < 0 else None,
+        "recovery_date": _d(recovery_i),
+        "final_equity": eq[-1],
+        "total_return": total_ret,
+        "method": "daily_equity_level_peak_to_trough",
+        "reason": "ok",
+    }
+
+
+def _pick_first(mapping: Mapping[str, Any], *keys: str) -> Any:
+    for k in keys:
+        if k in mapping and mapping[k] is not None:
+            return mapping[k]
+    return None
+
+
+def _as_int(v: Any) -> int | None:
+    if v is None or isinstance(v, bool):
+        return None
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def w99_sticky_daily_path_dd_reference() -> dict[str, Any]:
+    """W99 sticky daily DD table — reference example, not a pass/promote."""
+    return {
+        "logic_id": "xs_rank_ls_sticky",
+        "stance": "STABLE_RESEARCH_ONLY",
+        "promote_as_main": False,
+        "go": False,
+        "research_only": True,
+        "proof": DAILY_PATH_DD_REFERENCE_PROOF,
+        "windows": [dict(r) for r in W99_STICKY_DAILY_PATH_DD_REFERENCE],
+        "warning": (
+            "period_net_DD=0 is an aggregation artifact when all period nets "
+            "> 0 — NOT riskless. Use daily_path_DD / dd_duration / recovery / "
+            "total_ret_net."
+        ),
+        **_freeze(),
+    }
+
+
+def evaluate_daily_path_dd_gate(
+    *,
+    daily_path_dd: float | Mapping[str, Any] | None = None,
+    dd_duration: int | None = None,
+    recovered: bool | None = None,
+    recovery_days: int | None = None,
+    total_ret_net: float | None = None,
+    period_net_dd: float | None = None,
+    daily_path_pack: Mapping[str, Any] | None = None,
+    equities: Sequence[float] | None = None,
+    dates: Sequence[str] | None = None,
+    method: str | None = None,
+) -> dict[str, Any]:
+    """Mandatory daily-path DD scorecard + gate (W100 / w0819c).
+
+    Required scorecard fields
+    -------------------------
+    * ``daily_path_DD`` — max peak-to-trough on the daily (after-cost) path
+    * ``dd_duration`` — days peak → trough
+    * ``recovery`` — whether recovered + days from trough (None if not recovered)
+    * ``total_ret_net`` — after-cost total return on the same path
+
+    Fail / warn
+    -----------
+    * **fail (incomplete):** daily unmeasured — missing required fields
+    * **fail (incomplete):** ``period_net_DD=0`` AND daily unmeasured
+    * **fail (forbidden):** treating period-net DD as the pass number
+    * **warn:** ``period_net_DD=0`` even when daily is measured (artifact)
+    * Magnitude is **not** scored here — this is a measurement gate, not a
+      DD-size floor. Pass ≠ READY / Mass / GO.
+    """
+    pack: dict[str, Any] = {}
+    if isinstance(daily_path_dd, Mapping):
+        pack.update(dict(daily_path_dd))
+        daily_path_dd = None
+    if daily_path_pack is not None:
+        pack.update(dict(daily_path_pack))
+
+    nested = pack.get("drawdown")
+    if isinstance(nested, Mapping):
+        # Nested W99-style pack: fill aliases without clobbering top-level.
+        for k, v in nested.items():
+            pack.setdefault(k, v)
+
+    computed: dict[str, Any] | None = None
+    if equities:
+        computed = equity_path_drawdown(equities, dates)
+        pack.setdefault("max_dd", computed.get("max_dd"))
+        pack.setdefault("dd_duration_days", computed.get("dd_duration_days"))
+        pack.setdefault("recovered", computed.get("recovered"))
+        pack.setdefault("recovery_days", computed.get("recovery_days"))
+        pack.setdefault("total_return", computed.get("total_return"))
+        pack.setdefault("method", computed.get("method"))
+
+    dd_val = _scalar_finite(daily_path_dd)
+    if dd_val is None:
+        dd_val = _scalar_finite(
+            _pick_first(
+                pack,
+                "daily_path_DD",
+                "daily_path_dd",
+                "max_dd",
+                "max_drawdown",
+            )
+        )
+    dur_val = _as_int(dd_duration)
+    if dur_val is None:
+        dur_val = _as_int(
+            _pick_first(pack, "dd_duration", "dd_duration_days", "dd_dur")
+        )
+    rec_flag = recovered
+    if rec_flag is None:
+        rec_raw = _pick_first(pack, "recovered")
+        if rec_raw is None and isinstance(pack.get("recovery"), Mapping):
+            rec_raw = pack["recovery"].get("recovered")
+        if rec_raw is not None:
+            rec_flag = bool(rec_raw)
+    rec_days = _as_int(recovery_days)
+    if rec_days is None:
+        rec_src = _pick_first(pack, "recovery_days")
+        if rec_src is None and isinstance(pack.get("recovery"), Mapping):
+            rec_src = pack["recovery"].get("recovery_days")
+        # Bare "recovery" may be an int (days) or the W99 "—" missing marker.
+        if rec_src is None and not isinstance(pack.get("recovery"), Mapping):
+            rec_src = pack.get("recovery")
+        rec_days = _as_int(rec_src)
+    tot_net = _scalar_finite(total_ret_net)
+    if tot_net is None:
+        tot_net = _scalar_finite(
+            _pick_first(
+                pack,
+                "total_ret_net",
+                "total_return_net",
+                "total_return",
+            )
+        )
+    pdd = _scalar_finite(period_net_dd)
+    if pdd is None:
+        pdd = _scalar_finite(
+            _pick_first(
+                pack,
+                "period_net_DD",
+                "period_net_dd",
+                "period_net_DD_w98_cf_artifact",
+                "period_net_DD_local_proxy",
+            )
+        )
+
+    method_s = str(
+        method
+        or pack.get("method")
+        or (computed or {}).get("method")
+        or ""
+    ).strip()
+    method_is_period_net = method_s in PERIOD_NET_ONLY_METHODS
+
+    missing: list[str] = []
+    if dd_val is None:
+        missing.append("daily_path_DD")
+    if dur_val is None:
+        missing.append("dd_duration")
+    if rec_flag is None:
+        missing.append("recovery")
+    elif rec_flag is True and rec_days is None:
+        # recovery_days required only when there was a drawdown to recover from
+        if dd_val is not None and float(dd_val) < -1e-15:
+            missing.append("recovery_days")
+    if tot_net is None:
+        missing.append("total_ret_net")
+
+    # A period-net method stuffed into daily_path_DD is not a daily measurement.
+    daily_measured = not missing and not method_is_period_net
+    period_net_present = pdd is not None or method_is_period_net
+    period_net_only = bool(period_net_present and not daily_measured)
+    period_net_zero = pdd is not None and abs(float(pdd)) <= 1e-15
+    period_net_zero_daily_unmeasured = bool(period_net_zero and not daily_measured)
+
+    fails: list[str] = []
+    warnings: list[str] = []
+    if method_is_period_net:
+        fails.append("period_net_DD_method_is_not_daily_path")
+    if not daily_measured:
+        fails.append("daily_path_DD_unmeasured")
+        if missing:
+            fails.append("missing_required: " + ", ".join(missing))
+    if period_net_only:
+        fails.append("period_net_DD_only_pass_forbidden")
+        warnings.append(
+            "Passing on period_net_DD alone is forbidden. "
+            "Use daily_path_DD / dd_duration / recovery / total_ret_net."
+        )
+    if period_net_zero_daily_unmeasured:
+        fails.append("period_net_DD_zero_daily_unmeasured")
+        warnings.append(
+            "period_net_DD=0 AND daily unmeasured is an incomplete evaluation "
+            "(aggregation artifact, not riskless)."
+        )
+    elif period_net_zero and daily_measured:
+        warnings.append(
+            "period_net_DD=0 is an aggregation artifact when all period nets "
+            "> 0 — NOT riskless. daily_path_DD is the path-risk number."
+        )
+
+    complete = bool(daily_measured)
+    scorecard = {
+        "daily_path_DD": dd_val,
+        "dd_duration": dur_val,
+        "recovery": {
+            "recovered": rec_flag,
+            "recovery_days": rec_days,
+        },
+        "total_ret_net": tot_net,
+        "period_net_DD": pdd,
+    }
+    out: dict[str, Any] = {
+        "version": DAILY_PATH_DD_VERSION,
+        "wave": DAILY_PATH_DD_WAVE,
+        "proof": DAILY_PATH_DD_PROOF,
+        "reference_example_proof": DAILY_PATH_DD_REFERENCE_PROOF,
+        "measured": bool(daily_measured),
+        "complete": complete,
+        "passed": complete,  # measurement gate, not a DD-size floor
+        "daily_path_DD": dd_val,
+        "dd_duration": dur_val,
+        "recovery": scorecard["recovery"],
+        "recovered": rec_flag,
+        "recovery_days": rec_days,
+        "total_ret_net": tot_net,
+        "period_net_DD": pdd,
+        "method": method_s or None,
+        "period_net_dd_only": period_net_only,
+        "period_net_dd_zero_daily_unmeasured": period_net_zero_daily_unmeasured,
+        "period_net_dd_only_pass_forbidden": True,
+        "missing_required": missing,
+        "fails": fails,
+        "warnings": warnings,
+        "scorecard": scorecard,
+        "computed": computed,
+        "required_fields": list(DAILY_PATH_DD_REQUIRED_FIELDS),
+        "reference_example": w99_sticky_daily_path_dd_reference(),
+        "note": (
+            "daily_path_DD is mandatory on the standard eval checklist. "
+            "period_net_DD alone cannot pass. period_net_DD=0 + daily "
+            "unmeasured = incomplete. W99 sticky table is the reference "
+            "example (STABLE_RESEARCH_ONLY; promote_as_main/GO=false). "
+            "Pass ≠ READY / Mass / GO."
+        ),
+    }
+    out.update(_freeze())
+    return out
+
+
 def calmar_ratio(
     mean_return: float | None,
     max_dd: float | None,
@@ -675,12 +1082,27 @@ def stats_metrics_document() -> dict[str, Any]:
             "sharpe_trade": "(mean/std)*sqrt(245/hold_days) on hold nets",
             "win_rate": "share of obs with value > 0",
             "payoff": "mean(wins)/|mean(losses)|",
-            "max_dd": "peak-to-trough of cumulative sum",
+            "max_dd": "peak-to-trough of cumulative sum (period-net grain)",
+            "daily_path_DD": (
+                "peak-to-trough of daily after-cost equity level "
+                "(mandatory W100; period-net DD cannot substitute)"
+            ),
             "calmar": "mean / |max_dd|",
             "ir": "Sharpe of residual vs constant benchmark (default 0)",
         },
+        "daily_path_dd": {
+            "version": DAILY_PATH_DD_VERSION,
+            "wave": DAILY_PATH_DD_WAVE,
+            "required_fields": list(DAILY_PATH_DD_REQUIRED_FIELDS),
+            "period_net_dd_only_pass_forbidden": True,
+            "period_net_dd_zero_daily_unmeasured": "incomplete",
+            "reference_example_proof": DAILY_PATH_DD_REFERENCE_PROOF,
+            "proof": DAILY_PATH_DD_PROOF,
+        },
         "note": (
             "W81 raises research_candidate bar beyond mean bp. "
+            "W100 requires daily_path_DD / dd_duration / recovery / "
+            "total_ret_net; period_net_DD alone cannot pass. "
             "Research-only; READY/Mass/Phase7 never auto-connect."
         ),
     }
@@ -689,6 +1111,11 @@ def stats_metrics_document() -> dict[str, Any]:
 
 
 __all__ = [
+    "DAILY_PATH_DD_PROOF",
+    "DAILY_PATH_DD_REFERENCE_PROOF",
+    "DAILY_PATH_DD_REQUIRED_FIELDS",
+    "DAILY_PATH_DD_VERSION",
+    "DAILY_PATH_DD_WAVE",
     "DEFAULT_MAX_ABS_DRAWDOWN",
     "DEFAULT_MIN_ABS_T_STAT",
     "DEFAULT_MIN_PAYOFF",
@@ -696,9 +1123,13 @@ __all__ = [
     "DEFAULT_MIN_POSITIVE_PERIODS",
     "DEFAULT_MIN_SHARPE_PERIOD",
     "DEFAULT_TRADING_DAYS_PER_YEAR",
+    "PERIOD_NET_ONLY_METHODS",
     "STATS_METRICS_VERSION",
     "STATS_METRICS_WAVE",
+    "W99_STICKY_DAILY_PATH_DD_REFERENCE",
     "calmar_ratio",
+    "equity_path_drawdown",
+    "evaluate_daily_path_dd_gate",
     "information_ratio",
     "max_drawdown",
     "payoff_ratio",
@@ -716,5 +1147,6 @@ __all__ = [
     "LOW_VARIANCE_MAX_ABS_T",
     "LOW_VARIANCE_SMALL_N_MAX",
     "trade_stats_report",
+    "w99_sticky_daily_path_dd_reference",
     "win_rate",
 ]

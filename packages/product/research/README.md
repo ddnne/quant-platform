@@ -120,6 +120,7 @@ standard checklist **v2** (`standard-research-eval-checklist/v2`):
 * robustness_gate v2 with `net_sign_majority`
 * data-gap disclosure
 * **risk scenario evaluation** (crash · high_vol · rate up/down if usable · liquidity if available)
+* **daily_path_DD** (max DD + `dd_duration` + recovery + `total_ret_net` after cost). `period_net_DD` alone **cannot pass**; `period_net_DD=0` AND daily unmeasured = **incomplete**
 * pass ≠ READY/Mass
 * holding/turnover **near-required** for high-frequency hyps
 
@@ -145,11 +146,14 @@ assert out["research_candidate_allowed"] is False  # wiring leaves scenarios inc
 | Gate | cost-aware v2 (`net_sign_majority`, 10bp one-way) |
 | Cost models | `research.cost_models` (short borrow · leverage financing) |
 | Risk scenarios | `research.risk_scenarios` (min set) |
+| daily_path_DD | `research.stats_metrics.evaluate_daily_path_dd_gate` (W100; period-net DD cannot substitute) |
 | S1–S5 | remain `research_baseline_rejected` (catalog); demo re-run only |
 | READY / Mass / Phase7 | **not** connected on pass |
 | New signals | **not** invented by this entry |
 
 Checklist v2 proof: `docs/proof/w0816k_w77_eval_checklist_v2_20260816.md`.  
+daily_path_DD gate (W100): `docs/proof/w0819c_w100_daily_path_dd_gate_20260819.md`.  
+Sticky daily DD reference (W99): `docs/proof/w0819b_w99_sticky_daily_dd_20260819.md`.  
 Checklist v1 (prior): `docs/proof/w0815bg_w66_standard_research_eval_checklist_20260815.md`.  
 Harness proof: `docs/proof/w0815bg_w66_standard_eval_harness_entry_20260815.md`.  
 COMPLETE 22 research entry (W74): `docs/proof/w0816h_w74_research_entry_complete22_20260816.md`.  

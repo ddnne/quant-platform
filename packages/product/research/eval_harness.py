@@ -1736,10 +1736,11 @@ def multi_year_availability_table(
 
 CHECKLIST_VERSION: str = "standard-research-eval-checklist/v2"
 CHECKLIST_VERSION_V1: str = "standard-research-eval-checklist/v1"
-CHECKLIST_WAVE: str = "W77 / w0816k"
+CHECKLIST_WAVE: str = "W77 / w0816k + W100 / w0819c"
 CHECKLIST_LABEL: str = (
     "標準研究評価チェックリスト v2・未宣言 "
-    "(レバ/空売りコスト + リスクシナリオ / 合格≠research_candidate / "
+    "(レバ/空売りコスト + リスクシナリオ + daily_path_DD必須 / "
+    "period_net_DD単独合格禁止 / 合格≠research_candidate / "
     "READY未接続 / Mass NO-GO / 運用GOではない)"
 )
 STANDARD_EVAL_PROOF: str = (
@@ -1747,6 +1748,9 @@ STANDARD_EVAL_PROOF: str = (
 )
 STANDARD_EVAL_PROOF_V1: str = (
     "docs/proof/w0815bg_w66_standard_research_eval_checklist_20260815.md"
+)
+STANDARD_EVAL_DAILY_PATH_DD_PROOF: str = (
+    "docs/proof/w0819c_w100_daily_path_dd_gate_20260819.md"
 )
 # W78 additive: prefer date-matched jsda_tokyo_repo_rates for lev/short costs.
 # W79 additive: liquidity-linked tx / short-spread modulation (repo-linked kept).
@@ -1779,6 +1783,7 @@ CHECKLIST_V2_REQUIRED: tuple[str, ...] = (
     "robustness_gate_v2_with_cost",
     "explicit_data_gap_disclosure",
     "risk_scenario_evaluation",
+    "daily_path_dd",
     "pass_does_not_connect_ready_mass_go",
 )
 CHECKLIST_V2_NEAR_REQUIRED: tuple[str, ...] = (
@@ -1791,6 +1796,8 @@ CHECKLIST_V2_INSUFFICIENT: tuple[str, ...] = (
     "incomplete_leverage_short_costs",
     "incomplete_risk_scenarios",
     "scenario_sign_break_undisclosed",
+    "period_net_dd_only_pass",
+    "period_net_dd_zero_daily_unmeasured",
 )
 
 
@@ -1804,6 +1811,11 @@ def standard_research_eval_checklist_document() -> dict[str, Any]:
     from research.holding_metrics import holding_metrics_document
     from research.risk_scenarios import risk_scenarios_document
     from research.robustness_gate import research_robustness_gate_document
+    from research.stats_metrics import (
+        DAILY_PATH_DD_REQUIRED_FIELDS,
+        stats_metrics_document,
+        w99_sticky_daily_path_dd_reference,
+    )
 
     cat = rejected_baseline_catalog()
     return {
@@ -1813,6 +1825,7 @@ def standard_research_eval_checklist_document() -> dict[str, Any]:
         "label": CHECKLIST_LABEL,
         "proof": STANDARD_EVAL_PROOF,
         "proof_v1": STANDARD_EVAL_PROOF_V1,
+        "daily_path_dd_proof": STANDARD_EVAL_DAILY_PATH_DD_PROOF,
         "cost_model_proof": STANDARD_EVAL_COST_MODEL_PROOF,
         "required": list(CHECKLIST_V2_REQUIRED),
         "near_required": list(CHECKLIST_V2_NEAR_REQUIRED),
@@ -1852,6 +1865,21 @@ def standard_research_eval_checklist_document() -> dict[str, Any]:
         },
         "risk_scenarios_surface": risk_scenarios_document(),
         "holding_surface": holding_metrics_document(),
+        "daily_path_dd_surface": {
+            "required_fields": list(DAILY_PATH_DD_REQUIRED_FIELDS),
+            "period_net_dd_only_pass_forbidden": True,
+            "period_net_dd_zero_daily_unmeasured": "incomplete",
+            "reference_example": w99_sticky_daily_path_dd_reference(),
+            "stats_metrics": stats_metrics_document(),
+            "note": (
+                "W100 / w0819c: daily_path_DD, dd_duration, recovery "
+                "(recovered + days), and total_ret_net (after cost) are "
+                "mandatory. Passing on period_net_DD alone is forbidden. "
+                "period_net_DD=0 AND daily unmeasured = incomplete. "
+                "W99 sticky table is the reference example "
+                "(STABLE_RESEARCH_ONLY; promote_as_main/GO=false)."
+            ),
+        },
         "rejected_baseline_examples": {
             "research_status": RESEARCH_STATUS_REJECTED,
             "signal_ids": list(cat.get("signal_ids") or []),
@@ -1883,6 +1911,8 @@ def standard_research_eval_checklist_document() -> dict[str, Any]:
             "(W78); fixed bp is disclosed fallback. "
             "Liquidity modulates tx + short spread when ADV proxy available "
             "(W79); missing liquidity disclosed, never invented. "
+            "W100: daily_path_DD / dd_duration / recovery / total_ret_net "
+            "are required; period_net_DD alone cannot pass. "
             "This entry does not invent new signals. S1–S5 stay rejected."
         ),
     }
@@ -1902,6 +1932,9 @@ def evaluate_checklist_v2_completeness(
     high_frequency_hyp: bool = False,
     require_holding_for_hf: bool = True,
     checklist_skipped: bool = False,
+    daily_path_dd_complete: bool = False,
+    period_net_dd_only: bool = False,
+    period_net_dd_zero_daily_unmeasured: bool = False,
 ) -> dict[str, Any]:
     """Evaluate whether checklist v2 items are complete for candidate discussion.
 
@@ -1943,6 +1976,21 @@ def evaluate_checklist_v2_completeness(
             "scenario_passed": bool(risk_scenarios_passed),
             "scenario_candidate_allowed": bool(risk_scenarios_candidate_allowed),
         },
+        "daily_path_dd": {
+            "required": True,
+            "present": bool(daily_path_dd_complete),
+            "passed": bool(daily_path_dd_complete) and not bool(period_net_dd_only),
+            "period_net_dd_only_pass_forbidden": True,
+            "period_net_dd_only": bool(period_net_dd_only),
+            "period_net_dd_zero_daily_unmeasured": bool(
+                period_net_dd_zero_daily_unmeasured
+            ),
+            "note": (
+                "daily_path_DD / dd_duration / recovery / total_ret_net "
+                "required. period_net_DD alone cannot pass. "
+                "period_net_DD=0 AND daily unmeasured = incomplete."
+            ),
+        },
         "pass_does_not_connect_ready_mass_go": {
             "required": True,
             "present": bool(freeze_closed),
@@ -1979,6 +2027,14 @@ def evaluate_checklist_v2_completeness(
             "incomplete_checklist_items: " + ", ".join(missing)
             + " → not research_candidate"
         )
+    if period_net_dd_only:
+        reasons.append(
+            "period_net_DD_only_pass_forbidden → not research_candidate"
+        )
+    if period_net_dd_zero_daily_unmeasured:
+        reasons.append(
+            "period_net_DD=0 AND daily unmeasured = incomplete evaluation"
+        )
     if complete:
         reasons.append(
             "checklist_v2_complete (still not auto research_candidate; "
@@ -2000,7 +2056,12 @@ def evaluate_checklist_v2_completeness(
         "phase7": PHASE7,
         "note": (
             "Incomplete checklist v2 cannot become research_candidate. "
-            "Complete still does not auto-promote or connect READY/Mass."
+            "Complete still does not auto-promote or connect READY/Mass. "
+            "daily_path_DD is required; period_net_DD alone cannot pass."
+        ),
+        "period_net_dd_only": bool(period_net_dd_only),
+        "period_net_dd_zero_daily_unmeasured": bool(
+            period_net_dd_zero_daily_unmeasured
         ),
     }
 
@@ -2070,6 +2131,17 @@ def run_standard_research_eval(
     # --- holding near-required for HF ---
     high_frequency_hyp: bool = False,
     require_holding_for_hf: bool = True,
+    # --- W100 / w0819c: daily_path_DD mandatory ---
+    daily_path_dd: float | Mapping[str, Any] | None = None,
+    dd_duration: int | None = None,
+    recovered: bool | None = None,
+    recovery_days: int | None = None,
+    total_ret_net: float | None = None,
+    period_net_dd: float | None = None,
+    daily_path_pack: Mapping[str, Any] | None = None,
+    daily_equities: Sequence[float] | None = None,
+    daily_dates: Sequence[str] | None = None,
+    daily_path_method: str | None = None,
     d1_execute: D1ExecuteFn | None = None,
     r2_put: R2PutFn | None = None,
     staging_dir: str | Path | None = None,
@@ -2083,7 +2155,8 @@ def run_standard_research_eval(
 
     Bundles multi-year window design, base 10bp transaction cost, **explicit
     leverage/short cost assumptions**, cost-aware robustness gate v2, **risk
-    scenario evaluation**, optional/near-required holding annotation, and
+    scenario evaluation**, **daily_path_DD** (max DD / duration / recovery /
+    after-cost total return), optional/near-required holding annotation, and
     mandatory freeze / data-gap disclosure.
 
     This is the **default entry for future hypotheses**. Short-window-only is
@@ -2133,6 +2206,7 @@ def run_standard_research_eval(
         default_na_scenario_bundle,
         evaluate_risk_scenarios,
     )
+    from research.stats_metrics import evaluate_daily_path_dd_gate
 
     assert_harness_closed()
     mode_s = str(mode or "wiring_only").strip().lower()
@@ -2700,6 +2774,21 @@ def run_standard_research_eval(
     )
     steps.append("risk_scenario_evaluation")
 
+    # W100: daily_path_DD is mandatory. period_net_DD alone cannot pass.
+    daily_path = evaluate_daily_path_dd_gate(
+        daily_path_dd=daily_path_dd,
+        dd_duration=dd_duration,
+        recovered=recovered,
+        recovery_days=recovery_days,
+        total_ret_net=total_ret_net,
+        period_net_dd=period_net_dd,
+        daily_path_pack=daily_path_pack,
+        equities=daily_equities,
+        dates=daily_dates,
+        method=daily_path_method,
+    )
+    steps.append("daily_path_dd")
+
     # Pass does NOT connect READY / Mass / GO (always restate).
     steps.append("freeze_ready_mass_phase7_closed")
 
@@ -2734,6 +2823,11 @@ def run_standard_research_eval(
         high_frequency_hyp=bool(high_frequency_hyp),
         require_holding_for_hf=bool(require_holding_for_hf),
         checklist_skipped=False,
+        daily_path_dd_complete=bool(daily_path.get("complete")),
+        period_net_dd_only=bool(daily_path.get("period_net_dd_only")),
+        period_net_dd_zero_daily_unmeasured=bool(
+            daily_path.get("period_net_dd_zero_daily_unmeasured")
+        ),
     )
     steps.append("checklist_v2_completeness")
 
@@ -2753,6 +2847,7 @@ def run_standard_research_eval(
         "wave": CHECKLIST_WAVE,
         "label": CHECKLIST_LABEL,
         "proof": STANDARD_EVAL_PROOF,
+        "daily_path_dd_proof": STANDARD_EVAL_DAILY_PATH_DD_PROOF,
         "mode": mode_s,
         "dry_run": bool(dry_run),
         "job_id_prefix": job_id_prefix,
@@ -2772,6 +2867,7 @@ def run_standard_research_eval(
         "liquidity": lev_short.get("liquidity"),
         "cost_model_proof": STANDARD_EVAL_COST_MODEL_PROOF,
         "risk_scenarios": risk_scen,
+        "daily_path_dd": daily_path,
         "checklist_completeness": completeness,
         "data_gap_notes": gap_notes,
         "holding": holding,
@@ -2802,8 +2898,11 @@ def run_standard_research_eval(
         "local_sot": LOCAL_SOT,
         "order_execution": ORDER_EXECUTION,
         "note": (
-            "Standard research eval checklist v2 (W77). Default entry for future "
-            "hyps. Requires leverage/short cost assumptions + risk scenarios. "
+            "Standard research eval checklist v2 (W77 + W100 daily_path_DD). "
+            "Default entry for future hyps. Requires leverage/short cost "
+            "assumptions + risk scenarios + daily_path_DD / dd_duration / "
+            "recovery / total_ret_net. period_net_DD alone cannot pass. "
+            "period_net_DD=0 AND daily unmeasured = incomplete. "
             "Incomplete checklist cannot become research_candidate. "
             "Short-window-only is insufficient. Does not invent signals. "
             "Gate pass ≠ research_candidate ≠ READY/Mass/GO. "
@@ -2870,6 +2969,7 @@ __all__ = [
     "COST_MODEL_REQUIRE_REPO_LINKED",
     "STANDARD_EVAL_COST_MODEL_PROOF",
     "STANDARD_EVAL_COST_MODEL_PROOF_REPO_LINKED",
+    "STANDARD_EVAL_DAILY_PATH_DD_PROOF",
     "STANDARD_EVAL_MODES",
     "STANDARD_EVAL_PROOF",
     "STANDARD_EVAL_PROOF_V1",
