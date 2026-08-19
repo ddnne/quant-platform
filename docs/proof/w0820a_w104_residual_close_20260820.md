@@ -2,7 +2,7 @@
 
 **Wave:** W104 / `w0820a` · 2026-08-20  
 **Status:** **CLOSED** as residual TOP for **all tracks** (OTC Batch8 + NEW unique_logic hyps + gate/sticky confirm **without extra grid** + repo-short confirm + MISDATE wait + pins frozen).  
-**Code tip:** `4bee9eba2a1589adccd602f83d22fdb02c58cab4`  
+**Code tip:** `997294b7995780460dd8f37d918fb1a7a2dbcccf`  
 **Prior tip:** W103 `0160e70` · Track B hyps `f94f290` · Track A Batch8 `4bee9eb` · OTC COMPLETE **5252** / PARTIAL **3532** (Batch8 already on `origin/main` at `4bee9eb`)  
 **Primary proofs:**  
 - [`w0820a_w104_otc_backfill_batch8_20260820.md`](w0820a_w104_otc_backfill_batch8_20260820.md) (Track A)  
