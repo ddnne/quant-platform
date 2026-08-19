@@ -2,7 +2,7 @@
 
 **Wave:** W100 / `w0819c` · 2026-08-19  
 **Status:** **CLOSED** as residual TOP for C+D+E+F (peer daily_path_DD + sticky STABLE_RESEARCH_ONLY + constrained hyps + MISDATE re-probe + projection FRESH). Track A Batch4 and Track B daily_path_DD gate already on `origin/main` underneath.  
-**Code tip:** `84874fb888326947d5bd43874e7ec519e632107c`  
+**Code tip:** `f0a1b3b095e9f665a8f50f8425f21d3a8056960e`  
 **Prior tip:** W100 A+B `50ceafd` · OTC COMPLETE **4852** / PARTIAL **3932**  
 **Primary proofs:**  
 - [`w0819c_w100_peer_daily_dd_20260819.md`](w0819c_w100_peer_daily_dd_20260819.md)  
