@@ -4,7 +4,6 @@
 **Dataset:** `jsda_otc_bond_reference_prices` (PD-D5-JSDA-OTC)  
 **Policy:** planned official PARTIAL backfill (NOT tip-only densify invent)  
 **Forbidden held:** invent COMPLETE · empty COMPLETE · fake densify · Mass ON · Dataset COMPLETE force · pin retune · GO/Mass/READY/live  
-**Plan:** [`.glm-logs/w0818g_w97_otc_master_hyps/otc_backfill_plan.md`](../../.glm-logs/w0818g_w97_otc_master_hyps/otc_backfill_plan.md) (Batch7)  
 **Prior:** [`w0819e_w102_otc_backfill_batch6_20260819.md`](w0819e_w102_otc_backfill_batch6_20260819.md)  
 **Artifacts:** [`.glm-logs/w0819f_w103_otc7_repo_gate/`](../../.glm-logs/w0819f_w103_otc7_repo_gate/)  
 **Implementer:** GLM5.3 only. Grok did **not** implement.
@@ -53,7 +52,7 @@ Logs: `pre_complete22_health_local.json` · `post_complete22_health_local.json` 
 
 | bucket | n | span | result |
 |--------|--:|------|--------|
-| 2005 archive newer-first (continue) | **100** | `2005-12-28…2005-08-03` | sealed COMPLETE |
+| 2005 archive newer-first | **100** | `2005-12-28…2005-08-03` | sealed COMPLETE |
 | Tip `S260821`…`S260826` | — | unpublished | **404** tip-wait |
 | Weekend / holiday 404 | — | not on archive index | stay PARTIAL (**no invent**) |
 
@@ -73,7 +72,7 @@ Artifacts: `otc_discover_2005.json` · `otc_batch7_items.json` · `otc_batch7_fu
 
 ### Batch7 days (100)
 
-`2005-12-28`, `2005-12-27`, `2005-12-26`, `2005-12-22`, `2005-12-21`, `2005-12-20`, `2005-12-19`, `2005-12-16`, `2005-12-15`, `2005-12-14`, `2005-12-13`, `2005-12-12`, `2005-12-09`, `2005-12-08`, `2005-12-07`, `2005-12-06`, `2005-12-05`, `2005-12-02`, `2005-12-01`, `2005-11-30`, `2005-11-29`, `2005-11-28`, `2005-11-25`, `2005-11-24`, `2005-11-22`, `2005-11-21`, `2005-11-18`, `2005-11-17`, `2005-11-16`, `2005-11-15`, `2005-11-14`, `2005-11-11`, `2005-11-10`, `2005-11-09`, `2005-11-08`, `2005-11-07`, `2005-11-04`, `2005-11-02`, `2005-11-01`, `2005-10-31`, `2005-10-28`, `2005-10-27`, `2005-10-26`, `2005-10-25`, `2005-10-24`, `2005-10-21`, `2005-10-20`, `2005-10-19`, `2005-10-18`, `2005-10-17`, `2005-10-14`, `2005-10-13`, `2005-10-12`, `2005-10-11`, `2005-10-07`, `2005-10-06`, `2005-10-05`, `2005-10-04`, `2005-10-03`, `2005-09-30`, `2005-09-29`, `2005-09-28`, `2005-09-27`, `2005-09-26`, `2005-09-22`, `2005-09-21`, `2005-09-20`, `2005-09-16`, `2005-09-15`, `2005-09-14`, `2005-09-13`, `2005-09-12`, `2005-09-09`, `2005-09-08`, `2005-09-07`, `2005-09-06`, `2005-09-05`, `2005-09-02`, `2005-09-01`, `2005-08-31`, `2005-08-30`, `2005-08-29`, `2005-08-26`, `2005-08-25`, `2005-08-24`, `2005-08-23`, `2005-08-22`, `2005-08-19`, `2005-08-18`, `2005-08-17`, `2005-08-16`, `2005-08-15`, `2005-08-12`, `2005-08-11`, `2005-08-10`, `2005-08-09`, `2005-08-08`, `2005-08-05`, `2005-08-04`, `2005-08-03`
+`2005-12-28` … `2005-08-03` (newer-first; see `otc_batch7_plan.json` `days`).
 
 CSV sizes **848,735–897,265** bytes (HTML ~46KB excluded). **html=0 · small=0 · empty COMPLETE=0**.
 
@@ -98,12 +97,7 @@ Empty COMPLETE **0**. No invent / no fake densify. PARTIAL −100 while COMPLETE
 
 | code | result |
 |------|--------|
-| `S260821` | **404** all paths |
-| `S260822` | **404** all paths |
-| `S260823` | **404** all paths |
-| `S260824` | **404** all paths |
-| `S260825` | **404** all paths |
-| `S260826` | **404** all paths |
+| `S260821`…`S260826` | **404** all paths |
 | `full_ok_n` | **0** |
 
 `S260821+` tip-wait only. **No invent.** Artifact: `tip_probe_S260821plus.json`.
@@ -112,7 +106,7 @@ Empty COMPLETE **0**. No invent / no fake densify. PARTIAL −100 while COMPLETE
 
 ## 5. Dataset status
 
-OTC dataset remains **PARTIAL** until true archive reconciliation criteria are met. **Mass NO-GO.** Dataset COMPLETE **22** held. 3-default pins **untouched**. GO/READY/live **not declared**.
+OTC dataset remains **PARTIAL** (5152/8784) until true archive reconciliation criteria are met. **Mass NO-GO.** Dataset COMPLETE **22** held. 3-default pins **untouched**. GO/READY/live **not declared**.
 
 Next: continue pre-2008 archive newer-first (remaining ~143 official 2005 days before `2005-08-03`, then 2004→…); tip-wait `S260821+`.
 
@@ -142,3 +136,5 @@ Next: continue pre-2008 archive newer-first (remaining ~143 official 2005 days b
 ```
 
 **COMPLETE: 5052 → 5152 (+100).** Dataset remains **PARTIAL**.
+
+GLM5.3 only. Grok did not implement.

@@ -504,6 +504,11 @@ def evaluate_cs_dispersion_gate_daily_mtm(
     Thesis: relative-strength L-S is compensation for cross-sectional
     dispersion; when dispersion is compressed the book is noise → flat.
     Trailing median uses dates strictly before today (PIT).
+
+    Optional ``spec['thresh_mult']`` (default 1.0) scales the trailing
+    median — coarse sensitivity only (W103). Optional
+    ``spec['keep_gate_diag']=True`` attaches per-date gate/dispersion
+    diagnostics (research deepen; not a retune).
     """
     from features.class_signals import apply_sticky_hold, cross_section_rank_signs
     from statistics import pstdev
@@ -514,6 +519,8 @@ def evaluate_cs_dispersion_gate_daily_mtm(
     sf = float(spec.get("short_frac") or 0.3)
     sgn = 1 if int(spec.get("signal_sign") or 1) >= 0 else -1
     min_hist = int(spec.get("min_hist") or 10)
+    thresh_mult = float(spec.get("thresh_mult") or 1.0)
+    keep_diag = bool(spec.get("keep_gate_diag") or False)
     panel = _panel_index(bars_by_code, momentum_n=n)
     dates = panel["dates"]
     dates_by_code = panel["dates_by_code"]
@@ -527,15 +534,22 @@ def evaluate_cs_dispersion_gate_daily_mtm(
 
     disp_hist: list[float] = []
     gate_on: dict[str, bool] = {}
+    disp_by_date: dict[str, float] = {}
+    thresh_by_date: dict[str, float | None] = {}
     daily_rank: dict[str, dict[str, float | None]] = {c: {} for c in dates_by_code}
     n_gated_off = 0
     for d in dates:
         moms = [m for m in (by_date.get(d) or {}).values() if m is not None]
         moms_f = [float(m) for m in moms if math.isfinite(float(m))]
         disp = float(pstdev(moms_f)) if len(moms_f) >= 2 else 0.0
-        thresh = median(disp_hist) if len(disp_hist) >= min_hist else None
+        raw_thresh = median(disp_hist) if len(disp_hist) >= min_hist else None
+        thresh = (
+            None if raw_thresh is None else float(raw_thresh) * float(thresh_mult)
+        )
         on = True if thresh is None else disp >= float(thresh)
         gate_on[d] = on
+        disp_by_date[d] = disp
+        thresh_by_date[d] = thresh
         if not on:
             n_gated_off += 1
         ranks = cross_section_rank_signs(
@@ -556,6 +570,26 @@ def evaluate_cs_dispersion_gate_daily_mtm(
             dlist[i]: (None if held[i] is None else float(held[i]) * sgn)
             for i in range(len(dlist))
         }
+    extra: dict[str, Any] = {
+        "momentum_n": n,
+        "long_frac": lf,
+        "short_frac": sf,
+        "signal_sign": sgn,
+        "kind": spec.get("kind"),
+        "new_thesis": True,
+        "gate": "cs_mom_std_vs_trailing_median",
+        "min_hist": min_hist,
+        "thresh_mult": thresh_mult,
+        "n_gated_off_days": n_gated_off,
+        "n_gate_on_days": sum(1 for v in gate_on.values() if v),
+        "promote_as_main": False,
+        "go": False,
+        "catalog": False,
+    }
+    if keep_diag:
+        extra["gate_on_by_date"] = dict(gate_on)
+        extra["disp_by_date"] = dict(disp_by_date)
+        extra["thresh_by_date"] = dict(thresh_by_date)
     return _held_book_daily_mtm(
         held_by_code_date=held_by_code_date,
         close_by=panel["close_by"],
@@ -563,21 +597,7 @@ def evaluate_cs_dispersion_gate_daily_mtm(
         hold_days=h,
         one_way_cost=one_way_cost,
         logic_id=str(spec["logic_id"]),
-        extra={
-            "momentum_n": n,
-            "long_frac": lf,
-            "short_frac": sf,
-            "signal_sign": sgn,
-            "kind": spec.get("kind"),
-            "new_thesis": True,
-            "gate": "cs_mom_std_vs_trailing_median",
-            "min_hist": min_hist,
-            "n_gated_off_days": n_gated_off,
-            "n_gate_on_days": sum(1 for v in gate_on.values() if v),
-            "promote_as_main": False,
-            "go": False,
-            "catalog": False,
-        },
+        extra=extra,
     )
 
 
