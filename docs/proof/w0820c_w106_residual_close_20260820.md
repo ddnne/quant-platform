@@ -2,6 +2,7 @@
 
 **Wave:** W106 / `w0820c` · 2026-08-20  
 **Status:** **CLOSED** as residual TOP for **all tracks** (OTC Batch10 + NEW mixed unique_logic hyps + funding/surprise L/S min variants + research-family append + gate/sticky confirm **without extra grid** + pins/MISDATE/projection FRESH).  
+**Code tip:** `cae8445`  
 **Prior tip:** W105 `19f4fc3` · Track B hyps `5fe6a12` · Track A Batch10 `f694473` · OTC COMPLETE **5452** / PARTIAL **3332** (Batch10 already on `origin/main` at `f694473`)  
 **Primary proofs:**  
 - [`w0820c_w106_otc_backfill_batch10_20260820.md`](w0820c_w106_otc_backfill_batch10_20260820.md) (Track A)  
