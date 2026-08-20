@@ -102,8 +102,8 @@ from features.class_signals import (
 # Identity / freezes (must never arm operational Mass)
 # ---------------------------------------------------------------------------
 
-MASS_FACTORY_VERSION: str = "mass-strategy-factory/v2.7"
-MASS_FACTORY_WAVE: str = "W106 / w0820c"
+MASS_FACTORY_VERSION: str = "mass-strategy-factory/v2.8"
+MASS_FACTORY_WAVE: str = "W107 / w0820d"
 
 MASS_RESEARCH: str = "NO-GO"  # operational Mass remains NO-GO
 PHASE7: str = "OFF"
@@ -142,6 +142,10 @@ FAMILY_FUNDING_IMPULSE_CS: str = "funding_impulse_cs"
 FAMILY_CURVE_STEEPEN_IMPULSE_CS: str = "curve_steepen_impulse_cs"
 FAMILY_XS_MARGIN_DELTA: str = "xs_margin_delta"
 FAMILY_IDIO_MOM_MACRO: str = "idio_mom_macro"
+FAMILY_OVERNIGHT_LEVEL_CS: str = "overnight_level_cs"
+FAMILY_MONTH_END_CS: str = "month_end_cs"
+FAMILY_XS_LOW_VOL_MOM: str = "xs_low_vol_mom"
+FAMILY_REPO_3M_LEVEL_CS: str = "repo_3m_level_cs"
 FAMILY_RESEARCH_UNIQUE_LOGIC: str = "research_unique_logic"
 RESEARCH_UNIQUE_FAMILY_IDS: frozenset[str] = frozenset(
     {
@@ -157,6 +161,10 @@ RESEARCH_UNIQUE_FAMILY_IDS: frozenset[str] = frozenset(
         FAMILY_CURVE_STEEPEN_IMPULSE_CS,
         FAMILY_XS_MARGIN_DELTA,
         FAMILY_IDIO_MOM_MACRO,
+        FAMILY_OVERNIGHT_LEVEL_CS,
+        FAMILY_MONTH_END_CS,
+        FAMILY_XS_LOW_VOL_MOM,
+        FAMILY_REPO_3M_LEVEL_CS,
     }
 )
 RESEARCH_UNIQUE_LOGIC_IDS: frozenset[str] = frozenset(
@@ -176,21 +184,26 @@ RESEARCH_UNIQUE_LOGIC_IDS: frozenset[str] = frozenset(
         "event_funding_easy_short",
         "event_funding_stress_ls",
         "surprise_xs_rank_flip",
+        "overnight_level_cs_tilt",
+        "month_end_cs_fade",
+        "xs_low_vol_mom",
+        "repo_3m_level_cs",
+        "event_funding_adaptive_side",
+        "surprise_xs_rank_adaptive",
     }
 )
 RESEARCH_FAMILY_APPEND_LOGIC_IDS: frozenset[str] = frozenset(
     {
-        "funding_impulse_cs_tilt",
-        "curve_steepen_impulse_cs",
-        "xs_margin_delta_rank",
-        "idio_mom_macro_impulse",
-        "event_funding_easy_short",
-        "event_funding_stress_ls",
-        "surprise_xs_rank_flip",
+        "overnight_level_cs_tilt",
+        "month_end_cs_fade",
+        "xs_low_vol_mom",
+        "repo_3m_level_cs",
+        "event_funding_adaptive_side",
+        "surprise_xs_rank_adaptive",
     }
 )
 RESEARCH_FAMILY_REGISTER_ID: str = "w104_w105_unique_logic_research_family"
-RESEARCH_FAMILY_APPEND_ID: str = "w106_unique_logic_family_append"
+RESEARCH_FAMILY_APPEND_ID: str = "w107_unique_logic_family_append"
 RESEARCH_FAMILY_REGISTRATION_IS_NOT_A_PASS: bool = True
 RESEARCH_FAMILY_AUTO_RESEARCH_CANDIDATE: bool = False
 
@@ -328,12 +341,18 @@ NEAR_LOGIC_GROUPS: tuple[dict[str, Any], ...] = (
             "curve_steepen_impulse_cs",
             "xs_margin_delta_rank",
             "idio_mom_macro_impulse",
+            "overnight_level_cs_tilt",
+            "month_end_cs_fade",
+            "xs_low_vol_mom",
+            "repo_3m_level_cs",
+            "event_funding_adaptive_side",
+            "surprise_xs_rank_adaptive",
         ),
         "note": (
             "W105 research-family registration = recognition, not pass / "
-            "not promotion. W106 appends this-wave newly min-implemented "
-            "mixed unique_logic + funding/surprise L/S variants (not a "
-            "promotion). generation_enabled=False. Not remapped onto "
+            "not promotion. W106/W107 append this-wave newly min-implemented "
+            "mixed unique_logic + funding/surprise L/S / adaptive variants "
+            "(not a promotion). generation_enabled=False. Not remapped onto "
             "sticky / event_post_disclosure_hold / vol_risk_adjusted_mom. "
             "Not auto research_candidate / Mass / READY / GO / main. "
             "Sign-flip is not a kill of funding/surprise."
@@ -354,6 +373,24 @@ NEAR_LOGIC_GROUPS: tuple[dict[str, Any], ...] = (
         "note": (
             "W106 family append of this-wave newly min-implemented logics "
             "only (B mixed unique_logic + C funding/surprise L/S). "
+            "recognition, not pass / not promotion. generation_enabled=False. "
+            "Did not kill funding/surprise for window sign-flip."
+        ),
+    },
+    {
+        "group_id": "w107_unique_logic_family_append",
+        "label": "W107 this-wave unique_logic family append (recognition only)",
+        "logic_ids": (
+            "overnight_level_cs_tilt",
+            "month_end_cs_fade",
+            "xs_low_vol_mom",
+            "repo_3m_level_cs",
+            "event_funding_adaptive_side",
+            "surprise_xs_rank_adaptive",
+        ),
+        "note": (
+            "W107 family append of this-wave newly min-implemented logics "
+            "only (B mixed unique_logic + C funding/surprise adaptive). "
             "recognition, not pass / not promotion. generation_enabled=False. "
             "Did not kill funding/surprise for window sign-flip."
         ),
@@ -1958,6 +1995,217 @@ def _build_logic_templates() -> dict[str, LogicTemplate]:
                 "generation_enabled=False. Not research_candidate / not GO."
             ),
         ),
+        LogicTemplate(
+            logic_id="overnight_level_cs_tilt",
+            display_name="Overnight-level CS tilt (research family append)",
+            thesis=(
+                "Tight overnight *level* (not a large Δ) is when relative-strength "
+                "crowds and should be faded. Easy overnight and missing prints "
+                "stay flat — occupancy is the tight half, not sticky-always-on."
+            ),
+            signal_definition=(
+                "enter iff overnight[d] >= PIT median of overnight with date < d "
+                "(min_hist=20); tilt = −1 (fade CS mom); missing/unformed → flatten"
+            ),
+            position_rule=(
+                "sticky fixed_horizon CS rank mom L-S × fade tilt on tight-overnight "
+                "days; flat when overnight is easy, unformed, or missing same-date"
+            ),
+            datasets_used=("jsda_tokyo_repo_rates",) + bars,
+            family_id=FAMILY_OVERNIGHT_LEVEL_CS,
+            base_params={
+                "hold_days": 10,
+                "momentum_n": 5,
+                "long_frac": 0.3,
+                "short_frac": 0.3,
+                "min_hist": 20,
+                "mode": "overnight_level_cs_tilt",
+                "gate": "overnight_ge_pit_trailing_median",
+            },
+            structural_keys=("mode", "gate"),
+            generation_enabled=False,
+            notes=(
+                "W107 family append of mixed unique_logic (funding level). "
+                "generation_enabled=False. Not research_candidate / not GO."
+            ),
+        ),
+        LogicTemplate(
+            logic_id="month_end_cs_fade",
+            display_name="Month-end CS fade (research family append)",
+            thesis=(
+                "Month-end rebalance / window-dressing fades relative-strength. "
+                "Take the inverted CS book only on the last three sessions of the "
+                "month; stay flat otherwise so occupancy stays sparse."
+            ),
+            signal_definition=(
+                "month-end days = last 3 dates of YYYY-MM on the bar calendar; "
+                "tilt = −1 on those days; else flatten (no invent, no ffill)"
+            ),
+            position_rule=(
+                "sticky fixed_horizon CS rank mom L-S inverted on month-end days; "
+                "flat otherwise"
+            ),
+            datasets_used=bars,
+            family_id=FAMILY_MONTH_END_CS,
+            base_params={
+                "hold_days": 10,
+                "momentum_n": 5,
+                "long_frac": 0.3,
+                "short_frac": 0.3,
+                "month_end_sessions": 3,
+                "mode": "month_end_cs_fade",
+                "gate": "last_n_sessions_of_calendar_month",
+            },
+            structural_keys=("mode", "gate"),
+            generation_enabled=False,
+            notes=(
+                "W107 family append of mixed unique_logic (calendar). "
+                "generation_enabled=False. Not research_candidate / not GO."
+            ),
+        ),
+        LogicTemplate(
+            logic_id="xs_low_vol_mom",
+            display_name="XS low-vol mom (research family append)",
+            thesis=(
+                "When the cross-section is noisy, momentum among the quieter half "
+                "is cleaner. Stay flat in low-vol regimes so this is not a sticky "
+                "clone with a vol haircut."
+            ),
+            signal_definition=(
+                "vol = trailing stdev of daily returns (lookback=20, PIT on bars); "
+                "cs_med = median vol of names with vol that day; enter iff "
+                "cs_med >= PIT median of cs_med (min_hist=20); rank mom among "
+                "names with vol < cs_med; <2 names → flatten"
+            ),
+            position_rule=(
+                "sticky fixed_horizon CS rank mom L-S inside the low-vol half on "
+                "high CS-vol days; flat otherwise"
+            ),
+            datasets_used=bars,
+            family_id=FAMILY_XS_LOW_VOL_MOM,
+            base_params={
+                "hold_days": 10,
+                "momentum_n": 5,
+                "long_frac": 0.3,
+                "short_frac": 0.3,
+                "vol_lookback": 20,
+                "min_hist": 20,
+                "mode": "xs_low_vol_mom",
+                "gate": "cs_median_vol_ge_pit_median_then_low_vol_universe",
+            },
+            structural_keys=("mode", "gate"),
+            generation_enabled=False,
+            notes=(
+                "W107 family append of mixed unique_logic (cross-section). "
+                "generation_enabled=False. Not research_candidate / not GO. "
+                "Not vol_risk_adjusted_mom."
+            ),
+        ),
+        LogicTemplate(
+            logic_id="repo_3m_level_cs",
+            display_name="Repo 3M-level CS (research family append)",
+            thesis=(
+                "Tight term funding (3M level) is when carry-friendly relative "
+                "strength can be followed. Easy 3M and missing prints stay flat."
+            ),
+            signal_definition=(
+                "enter iff 3M[d] >= PIT median of 3M with date < d (min_hist=20); "
+                "tilt = +1 (follow CS mom); missing/unformed → flatten"
+            ),
+            position_rule=(
+                "sticky fixed_horizon CS rank mom L-S on tight-3M days; flat when "
+                "3M is easy, unformed, or missing same-date"
+            ),
+            datasets_used=("jsda_tokyo_repo_rates",) + bars,
+            family_id=FAMILY_REPO_3M_LEVEL_CS,
+            base_params={
+                "hold_days": 10,
+                "momentum_n": 5,
+                "long_frac": 0.3,
+                "short_frac": 0.3,
+                "min_hist": 20,
+                "mode": "repo_3m_level_cs",
+                "gate": "term_3m_ge_pit_trailing_median",
+            },
+            structural_keys=("mode", "gate"),
+            generation_enabled=False,
+            notes=(
+                "W107 family append of mixed unique_logic (macro level). "
+                "generation_enabled=False. Not research_candidate / not GO."
+            ),
+        ),
+        LogicTemplate(
+            logic_id="event_funding_adaptive_side",
+            display_name="Event funding adaptive side (research family append)",
+            thesis=(
+                "Window sign-flip of easy-funding surprise is a side table. "
+                "A PIT trail-K overlay can pick the recently-working side without "
+                "discarding either parent."
+            ),
+            signal_definition=(
+                "same PIT overnight-lt-median gate as skip; sign = orig if mean "
+                "orig hold of last 10 completed (min 5) >= mean flip, else flip; "
+                "insufficient history → orig (no invent)"
+            ),
+            position_rule=(
+                "PIT post_hold after first non-look-ahead close; enter only when "
+                "funding is easy; side chosen from completed holds only"
+            ),
+            datasets_used=("fins_summary", "jsda_tokyo_repo_rates") + bars,
+            family_id=FAMILY_EVENT_FUNDING_COMBO,
+            base_params={
+                "post_hold_days": 5,
+                "entry_mode": "same_day_close_if_pre_close",
+                "min_hist": 20,
+                "trail_k": 10,
+                "trail_min": 5,
+                "mode": "funding_easy_adaptive_side",
+                "gate": "overnight_lt_pit_trailing_median",
+                "side": "trail_k_orig_vs_flip",
+            },
+            structural_keys=("mode", "gate", "side"),
+            generation_enabled=False,
+            notes=(
+                "W107 family append of funding adaptive side. "
+                "generation_enabled=False. Not a kill of orig/flip. "
+                "Not research_candidate / not GO."
+            ),
+        ),
+        LogicTemplate(
+            logic_id="surprise_xs_rank_adaptive",
+            display_name="Surprise XS rank adaptive (research family append)",
+            thesis=(
+                "Relative-surprise rank is window-unstable in sign. A PIT trail-K "
+                "overlay sits beside orig and flip rather than killing either."
+            ),
+            signal_definition=(
+                "same CS surprise rank occupancy as parent; tilt = +1 if mean of "
+                "last 10 completed orig daily nets (min 5) >= 0 else −1; "
+                "insufficient history → orig"
+            ),
+            position_rule=(
+                "balanced L/S on (possibly flipped) surprise ranks for currently-"
+                "in-window names; occupancy held vs parent"
+            ),
+            datasets_used=("fins_summary",) + bars,
+            family_id=FAMILY_SURPRISE_XS_RANK,
+            base_params={
+                "post_hold_days": 5,
+                "entry_mode": "same_day_close_if_pre_close",
+                "long_frac": 0.3,
+                "short_frac": 0.3,
+                "trail_k": 10,
+                "trail_min": 5,
+                "mode": "surprise_xs_rank_adaptive",
+            },
+            structural_keys=("mode", "entry_mode"),
+            generation_enabled=False,
+            notes=(
+                "W107 family append of surprise adaptive side. "
+                "generation_enabled=False. Not a kill of orig/flip. "
+                "Not research_candidate / not GO."
+            ),
+        ),
     ]
     return {t.logic_id: t for t in tpls}
 
@@ -2014,7 +2262,7 @@ def _derive_family_definitions() -> dict[str, FamilyDefinition]:
         notes = "W88: family is eval dispatch only; logic templates define diversity."
         if research_only:
             notes = (
-                "W105 research-family recognition / W106 family append — "
+                "W105 research-family recognition / W106–W107 family append — "
                 "not pass / not promotion. generation_enabled=False. Not auto "
                 "research_candidate / Mass / READY / GO / main. Factory "
                 "period-net is recognition eval, not a pass. Sign-flip of "
@@ -2131,10 +2379,10 @@ def research_family_register_document() -> dict[str, Any]:
 
 
 def research_family_append_document() -> dict[str, Any]:
-    """W106 family append of this-wave newly min-implemented logics only.
+    """W107 family append of this-wave newly min-implemented logics only.
 
     Append is recognition, not a pass, not promotion. Does not re-promote
-    W104/W105 members. Sign-flip of funding/surprise is not a kill.
+    W104/W105/W106 members. Sign-flip of funding/surprise is not a kill.
     """
     rows = []
     for lid in sorted(RESEARCH_FAMILY_APPEND_LOGIC_IDS):
@@ -3456,7 +3704,7 @@ def _eval_research_unique_on_panel(
     *,
     one_way_cost: float,
 ) -> dict[str, Any]:
-    """Factory dispatch for W104/W105/W106 research-family unique_logic.
+    """Factory dispatch for W104–W107 research-family unique_logic.
 
     Recognition eval only. Does not mint research_candidate / GO / main.
     Factory synthetic period-net is not a pass. Family append is not promotion.
@@ -3470,6 +3718,8 @@ def _eval_research_unique_on_panel(
     import run_w105_new_hyps_daily_dd as w105  # noqa: WPS433
     import run_w106_new_hyps_daily_dd as w106b  # noqa: WPS433
     import run_w106_funding_surprise_ls as w106  # noqa: WPS433
+    import run_w107_new_hyps_daily_dd as w107b  # noqa: WPS433
+    import run_w107_funding_surprise_adaptive as w107c  # noqa: WPS433
 
     spec: dict[str, Any] = {"logic_id": logic_id, "params": dict(params)}
     catalog = (
@@ -3477,6 +3727,8 @@ def _eval_research_unique_on_panel(
         + list(w105.NEW_UNIQUE_LOGIC)
         + list(w106b.NEW_UNIQUE_LOGIC)
         + list(w106.NEW_LS_VARIANTS)
+        + list(w107b.NEW_UNIQUE_LOGIC)
+        + list(w107c.ADAPTIVE_VARIANTS)
     )
     for cand in catalog:
         if cand.get("logic_id") == logic_id:
@@ -3637,6 +3889,51 @@ def _eval_research_unique_on_panel(
             topix,
             spec=spec,
             one_way_cost=one_way_cost,
+        )
+    elif logic_id == "overnight_level_cs_tilt":
+        pack = w107b.evaluate_overnight_level_cs_tilt_daily_mtm(
+            bars,
+            overnight,
+            spec=spec,
+            one_way_cost=one_way_cost,
+        )
+    elif logic_id == "month_end_cs_fade":
+        pack = w107b.evaluate_month_end_cs_fade_daily_mtm(
+            bars,
+            spec=spec,
+            one_way_cost=one_way_cost,
+        )
+    elif logic_id == "xs_low_vol_mom":
+        pack = w107b.evaluate_xs_low_vol_mom_daily_mtm(
+            bars,
+            spec=spec,
+            one_way_cost=one_way_cost,
+        )
+    elif logic_id == "repo_3m_level_cs":
+        pack = w107b.evaluate_repo_3m_level_cs_daily_mtm(
+            bars,
+            curve,
+            spec=spec,
+            one_way_cost=one_way_cost,
+        )
+    elif logic_id == "event_funding_adaptive_side":
+        pack = w107c.evaluate_event_funding_adaptive_side_daily_mtm(
+            bars,
+            events,
+            overnight,
+            spec=spec,
+            one_way_cost=one_way_cost,
+            period_start=p0,
+            period_end=p1,
+        )
+    elif logic_id == "surprise_xs_rank_adaptive":
+        pack = w107c.evaluate_surprise_xs_rank_adaptive_daily_mtm(
+            bars,
+            events,
+            spec=spec,
+            one_way_cost=one_way_cost,
+            period_start=p0,
+            period_end=p1,
         )
     else:
         return {
@@ -5210,6 +5507,10 @@ __all__ = [
     "FAMILY_CURVE_STEEPEN_IMPULSE_CS",
     "FAMILY_XS_MARGIN_DELTA",
     "FAMILY_IDIO_MOM_MACRO",
+    "FAMILY_OVERNIGHT_LEVEL_CS",
+    "FAMILY_MONTH_END_CS",
+    "FAMILY_XS_LOW_VOL_MOM",
+    "FAMILY_REPO_3M_LEVEL_CS",
     "FAMILY_RESEARCH_UNIQUE_LOGIC",
     "RESEARCH_UNIQUE_FAMILY_IDS",
     "RESEARCH_UNIQUE_LOGIC_IDS",
