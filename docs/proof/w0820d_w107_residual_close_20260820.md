@@ -2,6 +2,7 @@
 
 **Wave:** W107 / `w0820d` · 2026-08-20  
 **Status:** **CLOSED** as residual TOP for **all tracks** (OTC Batch11 + NEW mixed unique_logic hyps + funding/surprise adaptive + fixed L/S table + curve_steepen light deep-dive + research-family append + gate/sticky confirm **without extra grid** + pins/MISDATE/projection FRESH).  
+**Code tip:** `b1d0fde`  
 **Prior tip:** W106 `871876d` · OTC COMPLETE **5452** / PARTIAL **3332**  
 **Primary proofs:**  
 - [`w0820d_w107_otc_backfill_batch11_20260820.md`](w0820d_w107_otc_backfill_batch11_20260820.md) (Track A)  
