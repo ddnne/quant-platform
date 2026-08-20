@@ -1,0 +1,191 @@
+"""Experiment job index contract (R2 artifacts + small D1 rows).
+
+Git is not the eval warehouse. Local ``.glm-logs`` is scratch.
+A run is recorded only when a manifest is written under
+``quant-structured/research/eval/job={id}/`` (and, when wired, a D1 row).
+
+Mass / READY / GO remain closed. This module does not promote candidates.
+"""
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from typing import Any, Mapping, Sequence
+
+EVAL_REGISTRY_VERSION: str = "research-eval-registry/v1"
+R2_BUCKET: str = "quant-structured"
+R2_PREFIX: str = "research/eval"
+PROTOCOL_CF_SCREEN: str = "cf_mass_eval_period_net"
+PROTOCOL_DAILY_PATH: str = "daily_path_mtm_after_cost/v1"
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def r2_job_prefix(job_id: str) -> str:
+    jid = str(job_id).strip()
+    if not jid:
+        raise ValueError("job_id required")
+    return f"{R2_PREFIX}/job={jid}"
+
+
+def r2_manifest_key(job_id: str) -> str:
+    return f"{r2_job_prefix(job_id)}/manifest.json"
+
+
+def r2_cells_key(job_id: str) -> str:
+    return f"{r2_job_prefix(job_id)}/cells.json"
+
+
+@dataclass(frozen=True)
+class EvalCell:
+    logic_id: str
+    window_id: str
+    daily_path_DD: float | None = None
+    total_ret_net: float | None = None
+    occupancy: float | None = None
+    dd_duration: int | None = None
+    recovered: bool | None = None
+    n_days: int | None = None
+    survived: bool = False
+    daily_path_complete: bool = False
+    params_hash: str | None = None
+    extra: Mapping[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        row = {
+            "logic_id": self.logic_id,
+            "window_id": self.window_id,
+            "daily_path_DD": self.daily_path_DD,
+            "total_ret_net": self.total_ret_net,
+            "occupancy": self.occupancy,
+            "dd_duration": self.dd_duration,
+            "recovered": self.recovered,
+            "n_days": self.n_days,
+            "survived": self.survived,
+            "daily_path_complete": self.daily_path_complete,
+            "params_hash": self.params_hash,
+        }
+        if self.extra:
+            row["extra"] = dict(self.extra)
+        return row
+
+
+@dataclass(frozen=True)
+class EvalJobManifest:
+    job_id: str
+    protocol: str
+    git_sha: str | None
+    logic_ids: tuple[str, ...]
+    window_ids: tuple[str, ...]
+    one_way_cost: float
+    cells: tuple[EvalCell, ...]
+    created_at: str = field(default_factory=_now)
+    factory_version: str | None = None
+    promote_as_main: bool = False
+    go: bool = False
+    mass: str = "NO-GO"
+    research_candidate: bool = False
+    notes: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "version": EVAL_REGISTRY_VERSION,
+            "job_id": self.job_id,
+            "protocol": self.protocol,
+            "git_sha": self.git_sha,
+            "created_at": self.created_at,
+            "factory_version": self.factory_version,
+            "logic_ids": list(self.logic_ids),
+            "window_ids": list(self.window_ids),
+            "one_way_cost": self.one_way_cost,
+            "n_logics": len(self.logic_ids),
+            "n_windows": len(self.window_ids),
+            "n_cells": len(self.cells),
+            "r2_prefix": r2_job_prefix(self.job_id),
+            "r2_manifest_key": r2_manifest_key(self.job_id),
+            "r2_cells_key": r2_cells_key(self.job_id),
+            "promote_as_main": False,
+            "go": False,
+            "mass": "NO-GO",
+            "research_candidate": False,
+            "notes": self.notes,
+            "cells": [c.to_dict() for c in self.cells],
+        }
+
+
+def manifest_from_window_rows(
+    *,
+    job_id: str,
+    protocol: str,
+    git_sha: str | None,
+    rows: Sequence[Mapping[str, Any]],
+    one_way_cost: float,
+    factory_version: str | None = None,
+    notes: str = "",
+) -> EvalJobManifest:
+    cells: list[EvalCell] = []
+    logics: list[str] = []
+    windows: list[str] = []
+    for row in rows:
+        lid = str(row.get("logic_id") or "")
+        wid = str(row.get("window") or row.get("window_id") or "")
+        if not lid or not wid:
+            continue
+        if lid not in logics:
+            logics.append(lid)
+        if wid not in windows:
+            windows.append(wid)
+        dd = row.get("daily_path_DD")
+        if dd is None:
+            dd = row.get("max_dd")
+        occ = row.get("occupancy_frac")
+        if occ is None:
+            occ = row.get("occupancy")
+        cells.append(
+            EvalCell(
+                logic_id=lid,
+                window_id=wid,
+                daily_path_DD=None if dd is None else float(dd),
+                total_ret_net=(
+                    None
+                    if row.get("total_ret_net") is None
+                    else float(row.get("total_ret_net"))  # type: ignore[arg-type]
+                ),
+                occupancy=None if occ is None else float(occ),
+                dd_duration=(
+                    None
+                    if row.get("dd_duration") is None
+                    and row.get("dd_duration_days") is None
+                    else int(row.get("dd_duration") or row.get("dd_duration_days") or 0)
+                ),
+                recovered=row.get("recovered"),
+                n_days=(
+                    None if row.get("n_days") is None else int(row.get("n_days"))
+                ),
+                survived=bool(row.get("survived")),
+                daily_path_complete=bool(row.get("daily_path_complete")),
+                params_hash=(
+                    None
+                    if row.get("params_hash") is None
+                    else str(row.get("params_hash"))
+                ),
+            )
+        )
+    return EvalJobManifest(
+        job_id=job_id,
+        protocol=protocol,
+        git_sha=git_sha,
+        logic_ids=tuple(logics),
+        window_ids=tuple(windows),
+        one_way_cost=float(one_way_cost),
+        cells=tuple(cells),
+        factory_version=factory_version,
+        notes=notes,
+    )
+
+
+def dumps_manifest(manifest: EvalJobManifest) -> str:
+    return json.dumps(manifest.to_dict(), indent=2, ensure_ascii=False, default=str) + "\n"

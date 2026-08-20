@@ -41,6 +41,10 @@
 ✗ Treat docs/phase62*_status.md / final_report as current residual SoT
 ✗ Weaken publish fail-closed guards or mass_research operator_override rejection
 ✗ Delete Python↔TS parity mirrors or governed.js codegen without replacement
+✗ Create scripts/run_wNN_*.py or docs/proof/w08*_wNN_*.md as an eval warehouse
+✗ Append ALL-TRACK experiment scorecards to phase62_residual_status.md
+✗ Import scripts/run_w* from mass_strategy_factory (evaluators live in packages)
+✗ Treat .glm-logs or local sqlite as experiment SoT (R2 + D1 index only)
 ```
 
 ---
@@ -111,6 +115,8 @@ Details + exceptions: ADR §5.
 | A3 seal raw+struct months | `scripts/issue_receipts_parallel.py` | residual + [`../proof/complete_plus8_r2_raw_seal_20260813.md`](../proof/complete_plus8_r2_raw_seal_20260813.md); **never** invent COMPLETE; R2 mirror OK if usable raw |
 | Packaging / paths | `pyproject.toml`, `qp_paths.py` | this map + layout migration |
 | LLM-friendly refactor | plane READMEs + `tests/test_plane_import_boundaries.py` | [ADR](./adr_llm_friendly_refactor.md) (**Accepted**); residual for live status |
+| New research hyp / daily_path_DD | `research.daily_path_eval` · `research.eval_registry` · `research.cf_mass_eval_job` | [ADR recording](./adr_research_recording.md) — **no new run_wNN script** |
+| Eval job index (D1/R2) | `research.eval_registry` · `platform/workers/quant-ops-mcp/migrations/0006_research_eval_jobs.sql` | recording ADR |
 | Test tiers (G0/G1/G2) | `tests/README.md` | this map §11 B1-d |
 
 ---
@@ -174,6 +180,7 @@ Full policy: ADR §5.2.
 | `docs/architecture/phase7_fail_closed.md` | **current** (Phase 7 **OFF**) |
 | `docs/operations/phase7_foundation_off.md` | **current** ops note (Phase 7 **OFF**) |
 | `docs/architecture/adr_llm_friendly_refactor.md` | **Accepted ADR (Grok 2026-08-12)** |
+| `docs/architecture/adr_research_recording.md` | **Accepted** — experiment SoT = R2 + D1 index; no wave-script warehouse |
 | `docs/architecture/adr_historical_raw_acceleration.md` | Track A ADR (infra/execute evidence in proof/) |
 | `docs/complete_segment_checklist.md` | **current** COMPLETE evidence contract (not residual counts) |
 | `docs/phase6_snapshot_publication.md` | domain (READY publication machine; production READY still **NO-GO**) |

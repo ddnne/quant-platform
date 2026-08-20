@@ -55,65 +55,20 @@ PROOF_DEFAULT = ROOT / "docs" / "proof" / "w0819b_w99_sticky_daily_dd_20260819.m
 
 LOGIC_ID = "xs_rank_ls_sticky"
 
-# Same honest shards as W98 (contiguous 3y bars mirrors absent).
-W99_WINDOWS: tuple[dict[str, Any], ...] = (
-    {
-        "window_id": "w2017_2019",
-        "label": "2017–2019",
-        "data_note": "2018 mirror absent; y2017_q4 + y2019_full",
-        "shards": (
-            {
-                "period_id": "y2017_q4",
-                "year": 2017,
-                "period_start": "2017-09-01",
-                "period_end": "2017-12-29",
-                "window_kind": "q4",
-            },
-            {
-                "period_id": "y2019_full",
-                "year": 2019,
-                "period_start": "2019-01-04",
-                "period_end": "2019-10-18",
-                "window_kind": "full_prefer",
-            },
-        ),
-    },
-    {
-        "window_id": "w2020_2022",
-        "label": "2020–2022",
-        "data_note": "2020/2022 mirrors absent; y2021_full only",
-        "shards": (
-            {
-                "period_id": "y2021_full",
-                "year": 2021,
-                "period_start": "2021-01-04",
-                "period_end": "2021-10-15",
-                "window_kind": "full_prefer",
-            },
-        ),
-    },
-    {
-        "window_id": "w2023_2025",
-        "label": "2023–2025",
-        "data_note": "2024 mirror absent; y2023_full + y2025_q4",
-        "shards": (
-            {
-                "period_id": "y2023_full",
-                "year": 2023,
-                "period_start": "2023-01-04",
-                "period_end": "2023-10-13",
-                "window_kind": "full_prefer",
-            },
-            {
-                "period_id": "y2025_q4",
-                "year": 2025,
-                "period_start": "2025-09-01",
-                "period_end": "2025-12-29",
-                "window_kind": "q4",
-            },
-        ),
-    },
+# Shared catalog — do not fork windows in new wave scripts.
+from research.eval_windows import (  # noqa: E402
+    FROZEN_PIN_SNAPSHOT,
+    HONEST_3Y_WINDOWS as W99_WINDOWS,
 )
+from research.daily_path_eval import (  # noqa: E402
+    assert_frozen_pins_untouched as _assert_frozen_pins_untouched,
+    dump_json as _dump,
+    fmt as _fmt,
+    load_shard_bars as _load_shard_bars,
+    scalar_f as _scalar_f,
+    summarize_path as _summarize_path,
+)
+from research.stats_metrics import equity_path_drawdown  # noqa: E402,F401
 
 # W98 CF preferred period-net DD proxy (all-positive nets → 0 artifact).
 W98_CF_PERIOD_NET_DD: dict[str, float] = {
@@ -126,85 +81,6 @@ W98_CF_PERIOD_NETS: dict[str, list[float]] = {
     "w2020_2022": [0.003867],
     "w2023_2025": [0.028537, 0.016140],
 }
-
-FROZEN_PIN_SNAPSHOT: tuple[tuple[str, int, int | None, str], ...] = (
-    ("cross_section_hold_10", 10, 5, "KEEP"),
-    ("cross_section_hold_10_mom3", 10, 3, "PROMOTE"),
-    ("fundamentals_hold_10", 10, 10, "KEEP"),
-)
-
-
-def _dump(path: Path, obj: object) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(obj, indent=2, ensure_ascii=False, default=str) + "\n",
-        encoding="utf-8",
-    )
-
-
-def _scalar_f(v: Any) -> float | None:
-    if v is None:
-        return None
-    try:
-        fv = float(v)
-    except (TypeError, ValueError):
-        return None
-    return fv if math.isfinite(fv) else None
-
-
-def _fmt(v: Any, nd: int = 6) -> str:
-    x = _scalar_f(v)
-    return f"{x:.{nd}f}" if x is not None else "—"
-
-
-def _assert_frozen_pins_untouched() -> dict[str, Any]:
-    from research.mass_strategy_factory import FROZEN_DEFAULT_PATH
-
-    by_id = {r["representative_id"]: r for r in FROZEN_DEFAULT_PATH}
-    ok = True
-    details: list[dict[str, Any]] = []
-    for rid, hold, mom, stance in FROZEN_PIN_SNAPSHOT:
-        r = by_id.get(rid)
-        if r is None:
-            ok = False
-            details.append({"representative_id": rid, "status": "MISSING"})
-            continue
-        match = (
-            int(r.get("hold_days") or -1) == hold
-            and int(r.get("momentum_n") or -1) == int(mom or -1)
-            and str(r.get("stance") or "") == stance
-        )
-        if not match:
-            ok = False
-        details.append(
-            {
-                "representative_id": rid,
-                "expected": {
-                    "hold_days": hold,
-                    "momentum_n": mom,
-                    "stance": stance,
-                },
-                "actual": {
-                    "hold_days": r.get("hold_days"),
-                    "momentum_n": r.get("momentum_n"),
-                    "stance": r.get("stance"),
-                },
-                "match": match,
-            }
-        )
-    pack = {
-        "pins_untouched": ok,
-        "n_pins": len(FROZEN_DEFAULT_PATH),
-        "details": details,
-        "frozen_defaults_retuned": False,
-        "note": "W99 sticky daily DD must not mutate 3-default pins",
-    }
-    if not ok:
-        raise RuntimeError(
-            "FROZEN_DEFAULT_PATH drift — abort W99 sticky daily DD: "
-            + json.dumps(details, default=str)
-        )
-    return pack
 
 
 def _period_net_dd_proxy(nets: Sequence[float | None]) -> dict[str, Any]:
@@ -232,84 +108,6 @@ def _period_net_dd_proxy(nets: Sequence[float | None]) -> dict[str, Any]:
             "Aggregation artifact when all period nets > 0 → max_dd=0. "
             "NOT a daily equity-curve risk number. NOT riskless."
         ),
-    }
-
-
-def equity_path_drawdown(
-    equities: Sequence[float],
-    dates: Sequence[str] | None = None,
-) -> dict[str, Any]:
-    """Max DD / duration / recovery on a level equity curve (post-cost)."""
-    if not equities:
-        return {
-            "n": 0,
-            "max_dd": None,
-            "abs_max_dd": None,
-            "dd_duration_days": None,
-            "recovery_days": None,
-            "recovered": None,
-            "peak_index": None,
-            "trough_index": None,
-            "peak_date": None,
-            "trough_date": None,
-            "recovery_date": None,
-            "final_equity": None,
-            "total_return": None,
-            "reason": "empty",
-        }
-    eq = [float(x) for x in equities]
-    peak = eq[0]
-    peak_i = 0
-    max_dd = 0.0
-    trough_i = 0
-    peak_at_dd = 0
-    for i, v in enumerate(eq):
-        if v > peak:
-            peak = v
-            peak_i = i
-        if peak > 0:
-            dd = v / peak - 1.0
-            if dd < max_dd:
-                max_dd = dd
-                trough_i = i
-                peak_at_dd = peak_i
-
-    dd_duration = int(trough_i - peak_at_dd) if max_dd < 0 else 0
-    recovery_days: int | None = None
-    recovery_i: int | None = None
-    recovered = True if max_dd >= 0 else False
-    if max_dd < 0:
-        peak_level = eq[peak_at_dd]
-        recovered = False
-        for i in range(trough_i + 1, len(eq)):
-            if eq[i] >= peak_level - 1e-15:
-                recovery_days = int(i - trough_i)
-                recovery_i = i
-                recovered = True
-                break
-
-    def _d(i: int | None) -> str | None:
-        if i is None or dates is None or i < 0 or i >= len(dates):
-            return None
-        return str(dates[i])[:10]
-
-    total_ret = eq[-1] / eq[0] - 1.0 if eq[0] else None
-    return {
-        "n": len(eq),
-        "max_dd": float(max_dd),
-        "abs_max_dd": abs(float(max_dd)),
-        "dd_duration_days": dd_duration,
-        "recovery_days": recovery_days,
-        "recovered": recovered,
-        "peak_index": peak_at_dd if max_dd < 0 else None,
-        "trough_index": trough_i if max_dd < 0 else None,
-        "peak_date": _d(peak_at_dd) if max_dd < 0 else None,
-        "trough_date": _d(trough_i) if max_dd < 0 else None,
-        "recovery_date": _d(recovery_i),
-        "final_equity": eq[-1],
-        "total_return": total_ret,
-        "method": "daily_equity_level_peak_to_trough",
-        "reason": "ok",
     }
 
 
@@ -543,76 +341,6 @@ def evaluate_xs_sticky_daily_mtm(
         ),
     }
 
-
-def _load_shard_bars(
-    shard: Mapping[str, Any],
-    *,
-    codes: Sequence[str],
-    max_days: int,
-) -> dict[str, Any]:
-    from research.class_hyp_eval import (
-        bars_rich_to_close_panel,
-        load_bars_ndjson_rich,
-        resolve_bars_path,
-    )
-
-    pid = str(shard.get("period_id"))
-    p_start = str(shard.get("period_start") or "")[:10] or None
-    p_end = str(shard.get("period_end") or "")[:10] or None
-    bars_path = resolve_bars_path(pid)
-    if bars_path is None or not Path(bars_path).exists():
-        return {
-            "period_id": pid,
-            "status": "missing_bars",
-            "bars": {},
-            "bars_path": None,
-            "period_start": p_start,
-            "period_end": p_end,
-            "year": shard.get("year"),
-        }
-    rich = load_bars_ndjson_rich(
-        bars_path,
-        codes=list(codes),
-        max_days=int(max_days),
-        period_start=p_start,
-        period_end=p_end,
-    )
-    bars = bars_rich_to_close_panel(rich)
-    return {
-        "period_id": pid,
-        "status": "ok" if bars else "empty_bars",
-        "bars": bars,
-        "bars_path": str(bars_path),
-        "period_start": p_start,
-        "period_end": p_end,
-        "year": shard.get("year"),
-        "n_codes": len(bars),
-        "n_days_max": max((len(v) for v in bars.values()), default=0),
-    }
-
-
-def _summarize_path(pack: Mapping[str, Any]) -> dict[str, Any]:
-    dd = pack.get("drawdown") or {}
-    return {
-        "status": pack.get("status"),
-        "n_equity_points": pack.get("n_equity_points"),
-        "n_active_days": pack.get("n_active_days"),
-        "mean_gross_daily": pack.get("mean_gross_daily"),
-        "mean_net_daily": pack.get("mean_net_daily"),
-        "total_return_gross": pack.get("total_return_gross"),
-        "total_return_net": pack.get("total_return_net"),
-        "period_ref_net_mean_active": pack.get("period_ref_net_mean_active"),
-        "period_ref_gross_mean_active": pack.get("period_ref_gross_mean_active"),
-        "max_dd": dd.get("max_dd"),
-        "abs_max_dd": dd.get("abs_max_dd"),
-        "dd_duration_days": dd.get("dd_duration_days"),
-        "recovery_days": dd.get("recovery_days"),
-        "recovered": dd.get("recovered"),
-        "peak_date": dd.get("peak_date"),
-        "trough_date": dd.get("trough_date"),
-        "recovery_date": dd.get("recovery_date"),
-        "data_path": pack.get("data_path"),
-    }
 
 
 def run_analysis(

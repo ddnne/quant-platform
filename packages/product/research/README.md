@@ -2,6 +2,12 @@
 
 Phase 7 research control plane: readiness attestation, experiment plans, evaluation harness.
 
+**Recording:** experiment results belong in Cloudflare R2 (`research/eval` / `research/mass_eval`) plus a small D1 job index. Git holds catalogs and evaluators. Do **not** add `scripts/run_wNN_*.py` or wave proof scorecards. See [`docs/architecture/adr_research_recording.md`](../../../docs/architecture/adr_research_recording.md).
+
+Candidate-grade daily path: `from research.daily_path_eval import load_shard_bars, stitch_net`.
+CF screen: `research.cf_mass_eval_job.run_cf_mass_eval_job`.
+Job manifest: `research.eval_registry.EvalJobManifest`.
+
 ## Public entry
 
 ```python

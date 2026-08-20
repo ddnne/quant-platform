@@ -22,8 +22,9 @@ and packaging policy.
 
 | 項目 | 方針 |
 |------|------|
-| 正本 | **GitHub リポジトリ 1 本（公開・非公開は運用で変更可）**（本リポジトリ） |
-| 実験の枝分かれ | Cloudflare **Artifacts**（後続） |
+| 正本 | **GitHub リポジトリ 1 本**（コード・契約・logic catalog。公開・非公開は運用で変更可） |
+| 実験の枝分かれ | **Cloudflare**: R2 `quant-structured/research/{eval,mass_eval}/job={id}/` + D1 索引行。local sqlite / `.glm-logs` / wave markdown は SoT ではない |
+| 実験の足し方 | logic spec + `evaluate_*` 関数 + 既存ランナー。**新規 `scripts/run_wNN_*.py` と wave proof 倉庫は禁止**（[ADR](architecture/adr_research_recording.md)） |
 | CI/CD | **Cloudflare**（後続）。**GitHub Actions には載せない** |
 
 ## データ取得と境界
