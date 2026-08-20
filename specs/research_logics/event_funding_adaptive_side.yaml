@@ -1,0 +1,24 @@
+logic_id: event_funding_adaptive_side
+family_id: event_funding_combo
+axis: funding
+headline: true
+generation_enabled: false
+promote_as_main: false
+go: false
+sign_flip_is_not_a_kill: true
+thesis: >
+  Window sign-flip of easy-funding surprise is a side table. A PIT trail-K
+  overlay picks the recently-working side without discarding orig or flip.
+signal_definition: >
+  same easy-overnight occupancy as event_funding_stress_skip; trail-K completed
+  holds with hold_end < entry_date choose orig vs flip
+datasets:
+  - fins_summary
+  - jsda_tokyo_repo_rates
+  - equities_bars_daily
+  - markets_calendar
+params:
+  post_hold_days: 5
+  trail_k: 10
+  trail_min: 5
+evaluator: run_w107_funding_surprise_adaptive.evaluate_event_funding_adaptive_side_daily_mtm

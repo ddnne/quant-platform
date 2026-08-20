@@ -189,3 +189,69 @@ def manifest_from_window_rows(
 
 def dumps_manifest(manifest: EvalJobManifest) -> str:
     return json.dumps(manifest.to_dict(), indent=2, ensure_ascii=False, default=str) + "\n"
+
+
+def write_manifest_local(manifest: EvalJobManifest, staging_dir: Path) -> Path:
+    """Scratch copy only — not SoT. R2/D1 is the record."""
+    from pathlib import Path as P
+
+    staging = P(staging_dir)
+    job_dir = staging / "research_eval" / f"job={manifest.job_id}"
+    job_dir.mkdir(parents=True, exist_ok=True)
+    path = job_dir / "manifest.json"
+    path.write_text(dumps_manifest(manifest), encoding="utf-8")
+    cells_path = job_dir / "cells.json"
+    cells_path.write_text(
+        json.dumps([c.to_dict() for c in manifest.cells], indent=2, default=str) + "\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def d1_upsert_sql(manifest: EvalJobManifest) -> str:
+    """Small index rows for D1. No bars. MCP remains read-only."""
+    job = manifest.to_dict()
+    notes = (job.get("notes") or "").replace("'", "''")
+    sha = job.get("git_sha") or ""
+    sha_sql = "NULL" if not sha else f"'{sha}'"
+    fv = job.get("factory_version") or ""
+    fv_sql = "NULL" if not fv else f"'{str(fv).replace(chr(39), chr(39)*2)}'"
+    lines = [
+        "INSERT INTO research_eval_jobs ("
+        "job_id, created_at, protocol, git_sha, factory_version, "
+        "n_logics, n_windows, n_cells, one_way_cost, r2_prefix, status, "
+        "promote_as_main, go_flag, mass, research_candidate, notes"
+        ") VALUES ("
+        f"'{job['job_id']}', '{job['created_at']}', '{job['protocol']}', "
+        f"{sha_sql}, {fv_sql}, {job['n_logics']}, {job['n_windows']}, "
+        f"{job['n_cells']}, {float(job['one_way_cost'])}, "
+        f"'{job['r2_prefix']}', 'recorded', 0, 0, 'NO-GO', 0, '{notes}'"
+        ") ON CONFLICT(job_id) DO UPDATE SET "
+        "n_cells=excluded.n_cells, status='recorded';",
+    ]
+    for cell in job["cells"]:
+        rec = 1 if cell.get("recovered") else 0 if cell.get("recovered") is not None else "NULL"
+        dd = cell.get("daily_path_DD")
+        net = cell.get("total_ret_net")
+        occ = cell.get("occupancy")
+        dur = cell.get("dd_duration")
+        nd = cell.get("n_days")
+        ph = cell.get("params_hash")
+        ph_sql = "NULL" if not ph else f"'{str(ph).replace(chr(39), chr(39)*2)}'"
+
+        def _n(v: object) -> str:
+            return "NULL" if v is None else str(v)
+
+        lines.append(
+            "INSERT INTO research_eval_cells ("
+            "job_id, logic_id, window_id, daily_path_DD, total_ret_net, occupancy, "
+            "dd_duration, recovered, n_days, survived, daily_path_complete, params_hash"
+            ") VALUES ("
+            f"'{job['job_id']}', '{cell['logic_id']}', '{cell['window_id']}', "
+            f"{_n(dd)}, {_n(net)}, {_n(occ)}, {_n(dur)}, {rec}, {_n(nd)}, "
+            f"{1 if cell.get('survived') else 0}, "
+            f"{1 if cell.get('daily_path_complete') else 0}, {ph_sql}"
+            ") ON CONFLICT(job_id, logic_id, window_id) DO UPDATE SET "
+            "daily_path_DD=excluded.daily_path_DD, total_ret_net=excluded.total_ret_net;"
+        )
+    return "\n".join(lines) + "\n"

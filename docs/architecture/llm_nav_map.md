@@ -116,6 +116,7 @@ Details + exceptions: ADR §5.
 | Packaging / paths | `pyproject.toml`, `qp_paths.py` | this map + layout migration |
 | LLM-friendly refactor | plane READMEs + `tests/test_plane_import_boundaries.py` | [ADR](./adr_llm_friendly_refactor.md) (**Accepted**); residual for live status |
 | New research hyp / daily_path_DD | `research.daily_path_eval` · `research.eval_registry` · `research.cf_mass_eval_job` | [ADR recording](./adr_research_recording.md) — **no new run_wNN script** |
+| Existing `run_w*` / wave proofs | keep, deprecated | [`wave_assets_deprecated.md`](./wave_assets_deprecated.md) |
 | Eval job index (D1/R2) | `research.eval_registry` · `platform/workers/quant-ops-mcp/migrations/0006_research_eval_jobs.sql` | recording ADR |
 | Test tiers (G0/G1/G2) | `tests/README.md` | this map §11 B1-d |
 

@@ -1,0 +1,23 @@
+logic_id: curve_steepen_impulse_cs
+family_id: curve_steepen_impulse_cs
+axis: macro
+headline: false
+generation_enabled: false
+promote_as_main: false
+go: false
+thesis: >
+  A carry-friendly funding curve is informative when it is actively steepening,
+  not merely steep. CS relative-strength only on large 3M−ON steepening impulses.
+signal_definition: >
+  Δspread > 0 AND abs(Δspread) >= PIT median of abs(Δspread); missing tenor → flatten
+datasets:
+  - jsda_tokyo_repo_rates
+  - equities_bars_daily
+  - markets_calendar
+params:
+  hold_days: 10
+  momentum_n: 5
+  long_frac: 0.3
+  short_frac: 0.3
+  min_hist: 20
+evaluator: run_w106_new_hyps_daily_dd.evaluate_curve_steepen_impulse_cs_daily_mtm

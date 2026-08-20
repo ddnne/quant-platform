@@ -19,6 +19,30 @@ Phase 6 hardening utilities:
 
 開発・運用用の補助スクリプト。
 
+## Deprecated: `scripts/run_w*.py`
+
+Wave eval runners (`run_w90_*.py` … `run_w107_*.py`) are **frozen**. Do **not**
+add new `run_wNN_*.py`. Existing files stay until staged deletion.
+
+New research:
+
+- catalog: `specs/research_logics/`
+- daily path: `research.daily_path_eval`
+- CF screen: `research.cf_mass_eval_job`
+- record: `research.eval_registry` → R2 + D1 index
+
+See [`docs/architecture/adr_research_recording.md`](../docs/architecture/adr_research_recording.md)
+and [`docs/architecture/wave_assets_deprecated.md`](../docs/architecture/wave_assets_deprecated.md).
+Guard: `tests/test_wave_script_freeze.py`.
+
+Official OTC archive backfill (not wave-named):
+
+```bash
+uv run python scripts/jsda_otc_official_backfill.py --year 2003 --n 100 --log-dir data/ops/otc_official_backfill --fetch
+uv run python scripts/jsda_otc_seal_official.py --log-dir data/ops/otc_official_backfill
+uv run python scripts/publish_ops_projection.py --apply-remote
+```
+
 ## run_ingestion_once.py（Phase 1）
 
 1 パスのデータ取得。local ランタイム主系。

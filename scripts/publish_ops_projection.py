@@ -70,17 +70,11 @@ def count_remote_complete(
     Returns None for any transport / parse / non-zero exit failure so that
     enforce_complete_count_guard can apply fail-closed semantics.
     """
+    # Probe the same D1 the Ops MCP reads (quant-ops-mcp wrangler.toml).
+    # ingestion-premium config can 7403 against this account even when MCP works.
     cwd = wrangler_cwd or (ROOT / "platform" / "workers" / "quant-ops-mcp")
-    wrangler_bin = (
-        ROOT
-        / "platform"
-        / "workers"
-        / "ingestion-premium"
-        / "node_modules"
-        / ".bin"
-        / "wrangler"
-    )
-    config = ROOT / "platform" / "workers" / "ingestion-premium" / "wrangler.toml"
+    wrangler_bin = cwd / "node_modules" / ".bin" / "wrangler"
+    config = cwd / "wrangler.toml"
     use_local_bin = wrangler_bin.is_file()
     cmd: list[str] = []
     if use_local_bin:

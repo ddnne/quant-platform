@@ -3709,17 +3709,15 @@ def _eval_research_unique_on_panel(
     Recognition eval only. Does not mint research_candidate / GO / main.
     Factory synthetic period-net is not a pass. Family append is not promotion.
     """
-    import sys
+    from research.unique_logic.legacy import wave_eval_modules
 
-    scripts = _REPO_ROOT / "scripts"
-    if str(scripts) not in sys.path:
-        sys.path.insert(0, str(scripts))
-    import run_w104_new_hyps_daily_dd as w104  # noqa: WPS433
-    import run_w105_new_hyps_daily_dd as w105  # noqa: WPS433
-    import run_w106_new_hyps_daily_dd as w106b  # noqa: WPS433
-    import run_w106_funding_surprise_ls as w106  # noqa: WPS433
-    import run_w107_new_hyps_daily_dd as w107b  # noqa: WPS433
-    import run_w107_funding_surprise_adaptive as w107c  # noqa: WPS433
+    mods = wave_eval_modules()
+    w104 = mods["w104"]
+    w105 = mods["w105"]
+    w106 = mods["w106"]
+    w106b = mods["w106b"]
+    w107b = mods["w107b"]
+    w107c = mods["w107c"]
 
     spec: dict[str, Any] = {"logic_id": logic_id, "params": dict(params)}
     catalog = (
