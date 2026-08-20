@@ -102,8 +102,8 @@ from features.class_signals import (
 # Identity / freezes (must never arm operational Mass)
 # ---------------------------------------------------------------------------
 
-MASS_FACTORY_VERSION: str = "mass-strategy-factory/v2.6"
-MASS_FACTORY_WAVE: str = "W105 / w0820b"
+MASS_FACTORY_VERSION: str = "mass-strategy-factory/v2.7"
+MASS_FACTORY_WAVE: str = "W106 / w0820c"
 
 MASS_RESEARCH: str = "NO-GO"  # operational Mass remains NO-GO
 PHASE7: str = "OFF"
@@ -138,6 +138,10 @@ FAMILY_LARGE_SURPRISE_FILTER: str = "large_surprise_filter"
 FAMILY_AFTERCLOSE_EVENT_TIMING: str = "afterclose_event_timing"
 FAMILY_EVENT_MOM_AGREE_COMBO: str = "event_mom_agree_combo"
 FAMILY_EVENT_MARGIN_CROWD_COMBO: str = "event_margin_crowd_combo"
+FAMILY_FUNDING_IMPULSE_CS: str = "funding_impulse_cs"
+FAMILY_CURVE_STEEPEN_IMPULSE_CS: str = "curve_steepen_impulse_cs"
+FAMILY_XS_MARGIN_DELTA: str = "xs_margin_delta"
+FAMILY_IDIO_MOM_MACRO: str = "idio_mom_macro"
 FAMILY_RESEARCH_UNIQUE_LOGIC: str = "research_unique_logic"
 RESEARCH_UNIQUE_FAMILY_IDS: frozenset[str] = frozenset(
     {
@@ -149,6 +153,10 @@ RESEARCH_UNIQUE_FAMILY_IDS: frozenset[str] = frozenset(
         FAMILY_AFTERCLOSE_EVENT_TIMING,
         FAMILY_EVENT_MOM_AGREE_COMBO,
         FAMILY_EVENT_MARGIN_CROWD_COMBO,
+        FAMILY_FUNDING_IMPULSE_CS,
+        FAMILY_CURVE_STEEPEN_IMPULSE_CS,
+        FAMILY_XS_MARGIN_DELTA,
+        FAMILY_IDIO_MOM_MACRO,
     }
 )
 RESEARCH_UNIQUE_LOGIC_IDS: frozenset[str] = frozenset(
@@ -161,9 +169,28 @@ RESEARCH_UNIQUE_LOGIC_IDS: frozenset[str] = frozenset(
         "afterclose_only_event_hold",
         "event_pre_mom_agree_hold",
         "event_margin_crowding_skip",
+        "funding_impulse_cs_tilt",
+        "curve_steepen_impulse_cs",
+        "xs_margin_delta_rank",
+        "idio_mom_macro_impulse",
+        "event_funding_easy_short",
+        "event_funding_stress_ls",
+        "surprise_xs_rank_flip",
+    }
+)
+RESEARCH_FAMILY_APPEND_LOGIC_IDS: frozenset[str] = frozenset(
+    {
+        "funding_impulse_cs_tilt",
+        "curve_steepen_impulse_cs",
+        "xs_margin_delta_rank",
+        "idio_mom_macro_impulse",
+        "event_funding_easy_short",
+        "event_funding_stress_ls",
+        "surprise_xs_rank_flip",
     }
 )
 RESEARCH_FAMILY_REGISTER_ID: str = "w104_w105_unique_logic_research_family"
+RESEARCH_FAMILY_APPEND_ID: str = "w106_unique_logic_family_append"
 RESEARCH_FAMILY_REGISTRATION_IS_NOT_A_PASS: bool = True
 RESEARCH_FAMILY_AUTO_RESEARCH_CANDIDATE: bool = False
 
@@ -294,12 +321,41 @@ NEAR_LOGIC_GROUPS: tuple[dict[str, Any], ...] = (
             "afterclose_only_event_hold",
             "event_pre_mom_agree_hold",
             "event_margin_crowding_skip",
+            "event_funding_easy_short",
+            "event_funding_stress_ls",
+            "surprise_xs_rank_flip",
+            "funding_impulse_cs_tilt",
+            "curve_steepen_impulse_cs",
+            "xs_margin_delta_rank",
+            "idio_mom_macro_impulse",
         ),
         "note": (
             "W105 research-family registration = recognition, not pass / "
-            "not promotion. generation_enabled=False. Not remapped onto "
+            "not promotion. W106 appends this-wave newly min-implemented "
+            "mixed unique_logic + funding/surprise L/S variants (not a "
+            "promotion). generation_enabled=False. Not remapped onto "
             "sticky / event_post_disclosure_hold / vol_risk_adjusted_mom. "
-            "Not auto research_candidate / Mass / READY / GO / main."
+            "Not auto research_candidate / Mass / READY / GO / main. "
+            "Sign-flip is not a kill of funding/surprise."
+        ),
+    },
+    {
+        "group_id": "w106_unique_logic_family_append",
+        "label": "W106 this-wave unique_logic family append (recognition only)",
+        "logic_ids": (
+            "funding_impulse_cs_tilt",
+            "curve_steepen_impulse_cs",
+            "xs_margin_delta_rank",
+            "idio_mom_macro_impulse",
+            "event_funding_easy_short",
+            "event_funding_stress_ls",
+            "surprise_xs_rank_flip",
+        ),
+        "note": (
+            "W106 family append of this-wave newly min-implemented logics "
+            "only (B mixed unique_logic + C funding/surprise L/S). "
+            "recognition, not pass / not promotion. generation_enabled=False. "
+            "Did not kill funding/surprise for window sign-flip."
         ),
     },
 )
@@ -1654,6 +1710,254 @@ def _build_logic_templates() -> dict[str, LogicTemplate]:
                 "generation_enabled=False. Not research_candidate / not GO."
             ),
         ),
+        # W106 family append: funding/surprise L/S variants (recognition only).
+        LogicTemplate(
+            logic_id="event_funding_easy_short",
+            display_name="Event funding easy-short (research family append)",
+            thesis=(
+                "If post-earnings surprise drift under easy Tokyo overnight repo "
+                "is window-unstable in sign, the short side of the same skip book "
+                "is the other side of that table — not evidence to kill funding."
+            ),
+            signal_definition=(
+                "same PIT overnight-lt-median gate as event_funding_stress_skip; "
+                "hold −surprise sign; missing overnight → skip (no ffill)"
+            ),
+            position_rule=(
+                "PIT post_hold after first non-look-ahead close; enter only when "
+                "funding is easy; position is opposite of surprise sign"
+            ),
+            datasets_used=("fins_summary", "jsda_tokyo_repo_rates") + bars,
+            family_id=FAMILY_EVENT_FUNDING_COMBO,
+            base_params={
+                "post_hold_days": 5,
+                "entry_mode": "same_day_close_if_pre_close",
+                "min_hist": 20,
+                "mode": "funding_easy_short",
+                "gate": "overnight_lt_pit_trailing_median",
+                "side": "short_surprise",
+            },
+            structural_keys=("mode", "gate", "entry_mode", "side"),
+            generation_enabled=False,
+            notes=(
+                "W106 family append of event_funding_stress_skip sign-flip. "
+                "generation_enabled=False. Not a kill of the parent. "
+                "Not research_candidate / not GO."
+            ),
+        ),
+        LogicTemplate(
+            logic_id="event_funding_stress_ls",
+            display_name="Event funding-stress conditional L/S (research family append)",
+            thesis=(
+                "Funding-stress is a side switch, not a skip-to-empty. Stay in "
+                "the event book under both easy and stress overnight regimes; "
+                "flip only the surprise sign under stress."
+            ),
+            signal_definition=(
+                "overnight present and PIT median formed; +surprise if overnight "
+                "< median, −surprise if overnight >= median; missing → skip"
+            ),
+            position_rule=(
+                "PIT post_hold after first non-look-ahead close; original sign "
+                "when easy, opposite only under stress; occupancy = classified "
+                "events (easy + stress)"
+            ),
+            datasets_used=("fins_summary", "jsda_tokyo_repo_rates") + bars,
+            family_id=FAMILY_EVENT_FUNDING_COMBO,
+            base_params={
+                "post_hold_days": 5,
+                "entry_mode": "same_day_close_if_pre_close",
+                "min_hist": 20,
+                "mode": "funding_stress_ls",
+                "gate": "overnight_present_pit_median",
+                "side": "original_easy_opposite_stress",
+            },
+            structural_keys=("mode", "gate", "entry_mode", "side"),
+            generation_enabled=False,
+            notes=(
+                "W106 family append: conditional L/S of event_funding_stress_skip. "
+                "Occupancy must not collapse. generation_enabled=False. "
+                "Not research_candidate / not GO."
+            ),
+        ),
+        LogicTemplate(
+            logic_id="surprise_xs_rank_flip",
+            display_name="Surprise XS rank flip (research family append)",
+            thesis=(
+                "Relative-surprise rank is window-unstable in sign. The flipped "
+                "CS book is the other side of that table, with occupancy held."
+            ),
+            signal_definition=(
+                "CS rank of surprise among names whose PIT event entry is inside "
+                "the last post_hold_days sessions; flip rank signs; <2 names → "
+                "flat (no invent)"
+            ),
+            position_rule=(
+                "balanced L/S on flipped surprise ranks for currently-in-window "
+                "names; names with no recent PIT disclosure stay flat"
+            ),
+            datasets_used=("fins_summary",) + bars,
+            family_id=FAMILY_SURPRISE_XS_RANK,
+            base_params={
+                "post_hold_days": 5,
+                "entry_mode": "same_day_close_if_pre_close",
+                "long_frac": 0.3,
+                "short_frac": 0.3,
+                "mode": "surprise_xs_rank_flip",
+                "sign_flip": True,
+            },
+            structural_keys=("mode", "entry_mode", "sign_flip"),
+            generation_enabled=False,
+            notes=(
+                "W106 family append of surprise_xs_rank_hold sign-flip. "
+                "generation_enabled=False. Not a kill of the parent. "
+                "Not research_candidate / not GO."
+            ),
+        ),
+        LogicTemplate(
+            logic_id="funding_impulse_cs_tilt",
+            display_name="Funding-impulse CS tilt (research family append)",
+            thesis=(
+                "Large overnight funding impulses reprice relative-strength. "
+                "When Tokyo repo tightens vs the prior print by at least the PIT "
+                "median |Δ|, fade CS momentum; when it eases by that much, follow. "
+                "Small noise moves and missing prints stay flat."
+            ),
+            signal_definition=(
+                "Δovernight = overnight[d] − prior overnight print (date < d); "
+                "enter iff abs(Δ) >= PIT median of abs(Δ) with delta-date < d "
+                "(min_hist=20); tilt = −sign(Δ); missing/unformed/zero → flatten"
+            ),
+            position_rule=(
+                "sticky fixed_horizon CS rank mom L-S × funding-impulse tilt; "
+                "flat when |Δ| is below PIT median, median unformed, or overnight "
+                "missing same-date (no ffill)"
+            ),
+            datasets_used=("jsda_tokyo_repo_rates",) + bars,
+            family_id=FAMILY_FUNDING_IMPULSE_CS,
+            base_params={
+                "hold_days": 10,
+                "momentum_n": 5,
+                "long_frac": 0.3,
+                "short_frac": 0.3,
+                "min_hist": 20,
+                "mode": "funding_impulse_cs_tilt",
+                "gate": "abs_overnight_delta_ge_pit_median",
+            },
+            structural_keys=("mode", "gate"),
+            generation_enabled=False,
+            notes=(
+                "W106 family append of mixed unique_logic (funding). "
+                "generation_enabled=False. Not research_candidate / not GO."
+            ),
+        ),
+        LogicTemplate(
+            logic_id="curve_steepen_impulse_cs",
+            display_name="Curve-steepen impulse CS (research family append)",
+            thesis=(
+                "A carry-friendly funding curve is informative when it is actively "
+                "steepening, not merely steep. Take CS relative-strength only on "
+                "large same-date 3M−ON steepening impulses; otherwise flat."
+            ),
+            signal_definition=(
+                "Δspread = (3M−ON)[d] − prior same-tenor spread; enter iff "
+                "Δspread > 0 AND abs(Δspread) >= PIT median of abs(Δspread) "
+                "with date < d (min_hist=20); missing either tenor → flatten "
+                "(no ffill)"
+            ),
+            position_rule=(
+                "sticky fixed_horizon CS rank mom L-S on steepening-impulse days; "
+                "flat otherwise"
+            ),
+            datasets_used=("jsda_tokyo_repo_rates",) + bars,
+            family_id=FAMILY_CURVE_STEEPEN_IMPULSE_CS,
+            base_params={
+                "hold_days": 10,
+                "momentum_n": 5,
+                "long_frac": 0.3,
+                "short_frac": 0.3,
+                "min_hist": 20,
+                "mode": "curve_steepen_impulse_cs",
+                "gate": "spread_delta_gt_0_and_abs_ge_pit_median",
+            },
+            structural_keys=("mode", "gate"),
+            generation_enabled=False,
+            notes=(
+                "W106 family append of mixed unique_logic (macro). "
+                "generation_enabled=False. Not research_candidate / not GO."
+            ),
+        ),
+        LogicTemplate(
+            logic_id="xs_margin_delta_rank",
+            display_name="XS margin-delta rank (research family append)",
+            thesis=(
+                "Expanding margin is crowding; shrinking margin is de-crowding. "
+                "Among names with two recent PIT margin prints, long the "
+                "de-crowding tail and short the crowding tail — a flow CS book, "
+                "not a price CS book."
+            ),
+            signal_definition=(
+                "score = −(last−prev)/|prev| from two prints with last_date < "
+                "today and age<=14d; CS rank L-S of scores; <2 names or "
+                "missing/stale → flatten that name / day (no ffill, no invent)"
+            ),
+            position_rule=(
+                "sticky fixed_horizon balanced L/S on margin-delta ranks; names "
+                "without two fresh PIT prints stay flat"
+            ),
+            datasets_used=("markets_margin_interest",) + bars,
+            family_id=FAMILY_XS_MARGIN_DELTA,
+            base_params={
+                "hold_days": 10,
+                "long_frac": 0.3,
+                "short_frac": 0.3,
+                "stale_calendar_days": 14,
+                "mode": "xs_margin_delta_rank",
+                "gate": "name_margin_delta_cs_rank",
+            },
+            structural_keys=("mode", "gate"),
+            generation_enabled=False,
+            notes=(
+                "W106 family append of mixed unique_logic (cross-section). "
+                "generation_enabled=False. Not research_candidate / not GO."
+            ),
+        ),
+        LogicTemplate(
+            logic_id="idio_mom_macro_impulse",
+            display_name="Idio-mom macro impulse (research family append)",
+            thesis=(
+                "Idiosyncratic relative strength is more informative on large "
+                "index-move days. Rank residual momentum vs TOPIX only when the "
+                "index itself has moved by at least its PIT median |mom|; stay "
+                "flat on quiet macro days."
+            ),
+            signal_definition=(
+                "residual = mom_n(name) − mom_n(TOPIX) on the bar calendar; "
+                "enter iff abs(TOPIX_mom) >= PIT median of abs(TOPIX_mom) "
+                "with date < d (min_hist=20); missing TOPIX print → flatten"
+            ),
+            position_rule=(
+                "sticky fixed_horizon CS rank of residual mom on macro-impulse "
+                "days; flat when |TOPIX mom| is below PIT median or TOPIX missing"
+            ),
+            datasets_used=("indices_bars_daily_topix",) + bars,
+            family_id=FAMILY_IDIO_MOM_MACRO,
+            base_params={
+                "hold_days": 10,
+                "momentum_n": 5,
+                "long_frac": 0.3,
+                "short_frac": 0.3,
+                "min_hist": 20,
+                "mode": "idio_mom_macro_impulse",
+                "gate": "abs_topix_mom_ge_pit_median",
+            },
+            structural_keys=("mode", "gate"),
+            generation_enabled=False,
+            notes=(
+                "W106 family append of mixed unique_logic (macro×XS). "
+                "generation_enabled=False. Not research_candidate / not GO."
+            ),
+        ),
     ]
     return {t.logic_id: t for t in tpls}
 
@@ -1710,9 +2014,11 @@ def _derive_family_definitions() -> dict[str, FamilyDefinition]:
         notes = "W88: family is eval dispatch only; logic templates define diversity."
         if research_only:
             notes = (
-                "W105 research-family recognition only — not pass / not promotion. "
-                "generation_enabled=False. Not auto research_candidate / Mass / "
-                "READY / GO / main. Factory period-net is recognition eval, not a pass."
+                "W105 research-family recognition / W106 family append — "
+                "not pass / not promotion. generation_enabled=False. Not auto "
+                "research_candidate / Mass / READY / GO / main. Factory "
+                "period-net is recognition eval, not a pass. Sign-flip of "
+                "funding/surprise is not a kill."
             )
         out[fid] = FamilyDefinition(
             family_id=fid,
@@ -1824,6 +2130,77 @@ def research_family_register_document() -> dict[str, Any]:
     }
 
 
+def research_family_append_document() -> dict[str, Any]:
+    """W106 family append of this-wave newly min-implemented logics only.
+
+    Append is recognition, not a pass, not promotion. Does not re-promote
+    W104/W105 members. Sign-flip of funding/surprise is not a kill.
+    """
+    rows = []
+    for lid in sorted(RESEARCH_FAMILY_APPEND_LOGIC_IDS):
+        tpl = LOGIC_TEMPLATES.get(lid)
+        if tpl is None:
+            continue
+        rows.append(
+            {
+                "logic_id": lid,
+                "family_id": tpl.family_id,
+                "generation_enabled": bool(tpl.generation_enabled),
+                "research_candidate": False,
+                "promote_as_main": False,
+                "go": False,
+                "catalog_remap": None,
+                "registration": "recognition",
+                "append": True,
+            }
+        )
+    return {
+        "append_id": RESEARCH_FAMILY_APPEND_ID,
+        "register_id": RESEARCH_FAMILY_REGISTER_ID,
+        "wave": MASS_FACTORY_WAVE,
+        "version": MASS_FACTORY_VERSION,
+        "kind": "research_family_append",
+        "registration": "recognition",
+        "registration_is_not_a_pass": RESEARCH_FAMILY_REGISTRATION_IS_NOT_A_PASS,
+        "registration_is_not_promotion": True,
+        "auto_research_candidate": RESEARCH_FAMILY_AUTO_RESEARCH_CANDIDATE,
+        "generation_enabled": False,
+        "promote_as_main": False,
+        "go": False,
+        "mass_research": MASS_RESEARCH,
+        "ready_declared": READY_DECLARED,
+        "connected_to_mass": CONNECTED_TO_MASS,
+        "connected_to_ready": CONNECTED_TO_READY,
+        "family_group": FAMILY_RESEARCH_UNIQUE_LOGIC,
+        "this_wave_only": True,
+        "appended_logic_ids": sorted(RESEARCH_FAMILY_APPEND_LOGIC_IDS),
+        "appended_family_ids": sorted(
+            {
+                LOGIC_TEMPLATES[lid].family_id
+                for lid in RESEARCH_FAMILY_APPEND_LOGIC_IDS
+                if lid in LOGIC_TEMPLATES
+            }
+        ),
+        "members": rows,
+        "did_not_kill_funding_surprise": True,
+        "sign_flip_is_not_a_kill": True,
+        "must_not": [
+            "auto research_candidate",
+            "Mass ON",
+            "READY",
+            "operational GO",
+            "promote_as_main",
+            "treat family append as a pass",
+            "kill funding/surprise because window sign flipped",
+        ],
+        "note": (
+            "family append = recognition of this-wave newly min-implemented "
+            "logics only, not pass / not promotion. Grok did not implement."
+        ),
+        **_freeze(),
+    }
+
+
 def logic_templates_document() -> dict[str, Any]:
     """Document logic templates + diversity rules."""
     rate_ids = [
@@ -1870,7 +2247,11 @@ def logic_templates_document() -> dict[str, Any]:
         "w94_options_vol_logic_ids": w94_opt225_ids,
         "w105_research_unique_logic_ids": sorted(RESEARCH_UNIQUE_LOGIC_IDS),
         "w105_research_unique_family_ids": sorted(RESEARCH_UNIQUE_FAMILY_IDS),
+        "w106_research_family_append_logic_ids": sorted(
+            RESEARCH_FAMILY_APPEND_LOGIC_IDS
+        ),
         "research_family_registration": research_family_register_document(),
+        "research_family_append": research_family_append_document(),
         "opt225_canonical_level": "basevol",
         "opt225_atm_iv_role": "compare_only",
         "near_logic_groups": near_logic_groups_document(),
@@ -1911,6 +2292,7 @@ def family_definitions_document() -> dict[str, Any]:
         "family_ids": list(FACTORY_FAMILY_IDS),
         "default_family_ratios": dict(DEFAULT_FAMILY_RATIOS),
         "research_family_registration": research_family_register_document(),
+        "research_family_append": research_family_append_document(),
         "logic_templates": logic_templates_document(),
         "sampling_rules": {
             "seed_reproducible": True,
@@ -1942,6 +2324,10 @@ def family_definitions_document() -> dict[str, Any]:
                 FAMILY_AFTERCLOSE_EVENT_TIMING,
                 FAMILY_EVENT_MOM_AGREE_COMBO,
                 FAMILY_EVENT_MARGIN_CROWD_COMBO,
+                FAMILY_FUNDING_IMPULSE_CS,
+                FAMILY_CURVE_STEEPEN_IMPULSE_CS,
+                FAMILY_XS_MARGIN_DELTA,
+                FAMILY_IDIO_MOM_MACRO,
             ],
             "excluded": [CLASS_SIMPLE_DAILY_SIGN],
         },
@@ -3070,10 +3456,10 @@ def _eval_research_unique_on_panel(
     *,
     one_way_cost: float,
 ) -> dict[str, Any]:
-    """Factory dispatch for W104/W105 research-family unique_logic.
+    """Factory dispatch for W104/W105/W106 research-family unique_logic.
 
     Recognition eval only. Does not mint research_candidate / GO / main.
-    Factory synthetic period-net is not a pass.
+    Factory synthetic period-net is not a pass. Family append is not promotion.
     """
     import sys
 
@@ -3082,9 +3468,17 @@ def _eval_research_unique_on_panel(
         sys.path.insert(0, str(scripts))
     import run_w104_new_hyps_daily_dd as w104  # noqa: WPS433
     import run_w105_new_hyps_daily_dd as w105  # noqa: WPS433
+    import run_w106_new_hyps_daily_dd as w106b  # noqa: WPS433
+    import run_w106_funding_surprise_ls as w106  # noqa: WPS433
 
     spec: dict[str, Any] = {"logic_id": logic_id, "params": dict(params)}
-    for cand in list(w104.NEW_UNIQUE_LOGIC) + list(w105.NEW_UNIQUE_LOGIC):
+    catalog = (
+        list(w104.NEW_UNIQUE_LOGIC)
+        + list(w105.NEW_UNIQUE_LOGIC)
+        + list(w106b.NEW_UNIQUE_LOGIC)
+        + list(w106.NEW_LS_VARIANTS)
+    )
+    for cand in catalog:
         if cand.get("logic_id") == logic_id:
             spec = dict(cand)
             merged = dict(cand.get("params") or {})
@@ -3185,6 +3579,64 @@ def _eval_research_unique_on_panel(
             one_way_cost=one_way_cost,
             period_start=p0,
             period_end=p1,
+        )
+    elif logic_id == "event_funding_easy_short":
+        pack = w106.evaluate_event_funding_easy_short_daily_mtm(
+            bars,
+            events,
+            overnight,
+            spec=spec,
+            one_way_cost=one_way_cost,
+            period_start=p0,
+            period_end=p1,
+        )
+    elif logic_id == "event_funding_stress_ls":
+        pack = w106.evaluate_event_funding_stress_ls_daily_mtm(
+            bars,
+            events,
+            overnight,
+            spec=spec,
+            one_way_cost=one_way_cost,
+            period_start=p0,
+            period_end=p1,
+        )
+    elif logic_id == "surprise_xs_rank_flip":
+        pack = w106.evaluate_surprise_xs_rank_flip_daily_mtm(
+            bars,
+            events,
+            spec=spec,
+            one_way_cost=one_way_cost,
+            period_start=p0,
+            period_end=p1,
+        )
+    elif logic_id == "funding_impulse_cs_tilt":
+        pack = w106b.evaluate_funding_impulse_cs_tilt_daily_mtm(
+            bars,
+            overnight,
+            spec=spec,
+            one_way_cost=one_way_cost,
+        )
+    elif logic_id == "curve_steepen_impulse_cs":
+        pack = w106b.evaluate_curve_steepen_impulse_cs_daily_mtm(
+            bars,
+            curve,
+            spec=spec,
+            one_way_cost=one_way_cost,
+        )
+    elif logic_id == "xs_margin_delta_rank":
+        pack = w106b.evaluate_xs_margin_delta_rank_daily_mtm(
+            bars,
+            margin_by_code,
+            spec=spec,
+            one_way_cost=one_way_cost,
+        )
+    elif logic_id == "idio_mom_macro_impulse":
+        topix = dict(panel.get("topix") or panel.get("topix_by_date") or {})
+        pack = w106b.evaluate_idio_mom_macro_impulse_daily_mtm(
+            bars,
+            topix,
+            spec=spec,
+            one_way_cost=one_way_cost,
         )
     else:
         return {
@@ -4754,12 +5206,19 @@ __all__ = [
     "FAMILY_AFTERCLOSE_EVENT_TIMING",
     "FAMILY_EVENT_MOM_AGREE_COMBO",
     "FAMILY_EVENT_MARGIN_CROWD_COMBO",
+    "FAMILY_FUNDING_IMPULSE_CS",
+    "FAMILY_CURVE_STEEPEN_IMPULSE_CS",
+    "FAMILY_XS_MARGIN_DELTA",
+    "FAMILY_IDIO_MOM_MACRO",
     "FAMILY_RESEARCH_UNIQUE_LOGIC",
     "RESEARCH_UNIQUE_FAMILY_IDS",
     "RESEARCH_UNIQUE_LOGIC_IDS",
+    "RESEARCH_FAMILY_APPEND_LOGIC_IDS",
     "RESEARCH_FAMILY_REGISTER_ID",
+    "RESEARCH_FAMILY_APPEND_ID",
     "RESEARCH_FAMILY_REGISTRATION_IS_NOT_A_PASS",
     "RESEARCH_FAMILY_AUTO_RESEARCH_CANDIDATE",
+    "research_family_append_document",
     "FAMILY_DEFINITIONS",
     "FACTORY_FAMILY_IDS",
     "DEFAULT_FAMILY_RATIOS",

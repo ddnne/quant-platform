@@ -405,8 +405,13 @@ def _held_from_event_entries(
     collected: Mapping[str, Any],
     *,
     accept: Mapping[str, bool] | None = None,
+    sign_mult_by_key: Mapping[str, float] | None = None,
 ) -> dict[str, dict[str, float | None]]:
-    """Build last-event-wins held book; accept[entry_key] gates entries."""
+    """Build last-event-wins held book; accept[entry_key] gates entries.
+
+    sign_mult_by_key: optional per-entry sign multiplier (e.g. -1 short side).
+    Missing multiplier after accept is skip (no invent).
+    """
     h = int(collected["hold_days"])
     held_by_code_date: dict[str, dict[str, float | None]] = {}
     for code, pack in (collected.get("per_code") or {}).items():
@@ -418,6 +423,15 @@ def _held_from_event_entries(
                 continue
             idx = int(ev["entry_idx"])
             sgn = float(ev["sign"])
+            if sign_mult_by_key is not None:
+                if key not in sign_mult_by_key:
+                    continue
+                try:
+                    sgn = sgn * float(sign_mult_by_key[key])
+                except (TypeError, ValueError):
+                    continue
+                if sgn == 0.0:
+                    continue
             end = min(idx + h, len(dlist))
             for j in range(idx, end):
                 held[j] = sgn
@@ -797,6 +811,7 @@ def evaluate_surprise_xs_rank_hold_daily_mtm(
     params = dict(spec.get("params") or {})
     lf = float(spec.get("long_frac") or params.get("long_frac") or 0.3)
     sf = float(spec.get("short_frac") or params.get("short_frac") or 0.3)
+    sign_flip = bool(spec.get("sign_flip") or params.get("sign_flip") or False)
     collected = _collect_event_entries(
         bars_by_code,
         events_by_code,
@@ -814,6 +829,7 @@ def evaluate_surprise_xs_rank_hold_daily_mtm(
         "entry_mode": collected["entry_mode"],
         "long_frac": lf,
         "short_frac": sf,
+        "sign_flip": sign_flip,
         "n_events": collected["n_events"],
         "n_eligible": collected["n_eligible"],
         "n_no_surprise": collected["n_no_surprise"],
@@ -873,9 +889,10 @@ def evaluate_surprise_xs_rank_hold_daily_mtm(
         n_ranked_days += 1
         n_names_ranked += len(scores)
         for code, sign in ranks.items():
-            held_by_code_date.setdefault(code, {})[d] = (
-                None if sign is None else float(sign)
-            )
+            s = None if sign is None else float(sign)
+            if s is not None and sign_flip:
+                s = -s
+            held_by_code_date.setdefault(code, {})[d] = s
 
     extra.update(
         {

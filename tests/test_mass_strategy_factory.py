@@ -21,8 +21,11 @@ from research.mass_strategy_factory import (
     FAMILY_DISCLOSURE_CLUSTER_GATE,
     FAMILY_EVENT_FUNDING_COMBO,
     FAMILY_EVENT_MACRO_CURVE_COMBO,
+    FAMILY_CURVE_STEEPEN_IMPULSE_CS,
     FAMILY_EVENT_MARGIN_CROWD_COMBO,
     FAMILY_EVENT_MOM_AGREE_COMBO,
+    FAMILY_FUNDING_IMPULSE_CS,
+    FAMILY_IDIO_MOM_MACRO,
     FAMILY_LARGE_SURPRISE_FILTER,
     FAMILY_INDEX_VOL_REGIME,
     FAMILY_OPTIONS_VOL_REGIME,
@@ -30,10 +33,14 @@ from research.mass_strategy_factory import (
     FAMILY_RATE_FACTOR,
     FAMILY_SURPRISE_XS_RANK,
     FAMILY_VOL_RISK_ADJUSTED,
+    FAMILY_XS_MARGIN_DELTA,
     FACTORY_FAMILY_IDS,
+    RESEARCH_FAMILY_APPEND_ID,
+    RESEARCH_FAMILY_APPEND_LOGIC_IDS,
     RESEARCH_FAMILY_AUTO_RESEARCH_CANDIDATE,
     RESEARCH_FAMILY_REGISTER_ID,
     RESEARCH_FAMILY_REGISTRATION_IS_NOT_A_PASS,
+    research_family_append_document,
     RESEARCH_UNIQUE_FAMILY_IDS,
     RESEARCH_UNIQUE_LOGIC_IDS,
     FROZEN_DEFAULT_PATH,
@@ -85,6 +92,7 @@ def test_freezes_closed():
     assert CONTINUOUS_PAPER == "UNARMED"
     assert (
         "W105" in MASS_FACTORY_WAVE
+        or "W106" in MASS_FACTORY_WAVE
         or "W104" in MASS_FACTORY_WAVE
         or "W95" in MASS_FACTORY_WAVE
         or "W94" in MASS_FACTORY_WAVE
@@ -193,6 +201,13 @@ def test_logic_templates_distinct_economic_logic():
         "afterclose_only_event_hold",
         "event_pre_mom_agree_hold",
         "event_margin_crowding_skip",
+        "event_funding_easy_short",
+        "event_funding_stress_ls",
+        "surprise_xs_rank_flip",
+        "funding_impulse_cs_tilt",
+        "curve_steepen_impulse_cs",
+        "xs_margin_delta_rank",
+        "idio_mom_macro_impulse",
     ):
         assert lid in LOGIC_TEMPLATES
         assert lid in RESEARCH_UNIQUE_LOGIC_IDS
@@ -200,6 +215,9 @@ def test_logic_templates_distinct_economic_logic():
         assert LOGIC_TEMPLATES[lid].family_id in RESEARCH_UNIQUE_FAMILY_IDS
     assert "event_funding_stress_skip" in doc.get(
         "w105_research_unique_logic_ids", []
+    )
+    assert "event_funding_easy_short" in doc.get(
+        "w106_research_family_append_logic_ids", []
     )
     # diversity rules documented
     rules = doc["diversity_rules"]
@@ -244,6 +262,10 @@ def test_families_still_documented_for_eval_dispatch():
         FAMILY_AFTERCLOSE_EVENT_TIMING,
         FAMILY_EVENT_MOM_AGREE_COMBO,
         FAMILY_EVENT_MARGIN_CROWD_COMBO,
+        FAMILY_FUNDING_IMPULSE_CS,
+        FAMILY_CURVE_STEEPEN_IMPULSE_CS,
+        FAMILY_XS_MARGIN_DELTA,
+        FAMILY_IDIO_MOM_MACRO,
     ):
         assert fid in FAMILY_DEFINITIONS
         assert FAMILY_DEFINITIONS[fid].generation_enabled is False
@@ -257,6 +279,15 @@ def test_families_still_documented_for_eval_dispatch():
     assert reg["auto_research_candidate"] is False
     assert reg["promote_as_main"] is False
     assert reg["go"] is False
+    append = research_family_append_document()
+    assert append["append_id"] == RESEARCH_FAMILY_APPEND_ID
+    assert append["registration"] == "recognition"
+    assert append["registration_is_not_a_pass"] is True
+    assert append["registration_is_not_promotion"] is True
+    assert append["generation_enabled"] is False
+    assert append["this_wave_only"] is True
+    assert append["did_not_kill_funding_surprise"] is True
+    assert set(append["appended_logic_ids"]) == set(RESEARCH_FAMILY_APPEND_LOGIC_IDS)
 
 
 def test_generation_logic_diversity_metrics():
