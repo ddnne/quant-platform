@@ -255,3 +255,96 @@ def d1_upsert_sql(manifest: EvalJobManifest) -> str:
             "daily_path_DD=excluded.daily_path_DD, total_ret_net=excluded.total_ret_net;"
         )
     return "\n".join(lines) + "\n"
+
+
+def list_eval_jobs_from_d1(*, limit: int = 20) -> list[dict[str, Any]]:
+    """Thin D1 job index (no scores copied into Git)."""
+    import subprocess
+    from qp_paths import repo_root
+
+    root = repo_root()
+    wr = (
+        root
+        / "platform"
+        / "workers"
+        / "ingestion-premium"
+        / "node_modules"
+        / ".bin"
+        / "wrangler"
+    )
+    wr_bin = str(wr) if wr.is_file() else "npx"
+    cmd = [wr_bin] if wr.is_file() else ["npx", "wrangler"]
+    sql = (
+        "SELECT job_id, protocol, n_logics, n_cells, status, r2_prefix, "
+        "created_at FROM research_eval_jobs "
+        f"ORDER BY created_at DESC LIMIT {int(limit)};"
+    )
+    cmd += [
+        "d1",
+        "execute",
+        "quant-ingest",
+        "--remote",
+        "--json",
+        f"--command={sql}",
+    ]
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    if proc.returncode != 0:
+        return [{"error": (proc.stderr or proc.stdout or "d1 list failed")[:500]}]
+    try:
+        payload = json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        return [{"error": "d1 json parse failed", "stdout": proc.stdout[:300]}]
+    rows: list[dict[str, Any]] = []
+    if isinstance(payload, list):
+        for block in payload:
+            for r in (block.get("results") or []) if isinstance(block, dict) else []:
+                if isinstance(r, dict):
+                    rows.append(r)
+    elif isinstance(payload, dict):
+        for r in payload.get("results") or []:
+            if isinstance(r, dict):
+                rows.append(r)
+    return rows
+
+
+def family_counts(logic_ids: Sequence[str]) -> dict[str, int]:
+    """Bucket logic_ids for a job listing (no scores)."""
+    from research.unique_logic.constants import (
+        CF_EVENT_DAILY_PATH_IDS,
+        CF_NEW_CS_THESIS_IDS,
+        CF_NEW_EVENT_THESIS_IDS,
+        CS_LOGIC_IDS,
+    )
+
+    out = {"event": 0, "event_new": 0, "unique_cs": 0, "cs_new": 0, "other": 0}
+    for lid in logic_ids:
+        if lid in CF_NEW_EVENT_THESIS_IDS:
+            out["event_new"] += 1
+        elif lid in CF_EVENT_DAILY_PATH_IDS:
+            out["event"] += 1
+        elif lid in CF_NEW_CS_THESIS_IDS:
+            out["cs_new"] += 1
+        elif lid in CS_LOGIC_IDS:
+            out["unique_cs"] += 1
+        else:
+            out["other"] += 1
+    return out
+
+
+def main(argv: list[str] | None = None) -> int:
+    import argparse
+
+    p = argparse.ArgumentParser(description="Eval registry index (D1/R2). No Git scores.")
+    p.add_argument("--list", action="store_true", help="List recent D1 research_eval_jobs")
+    p.add_argument("--limit", type=int, default=20)
+    args = p.parse_args(argv)
+    if args.list:
+        rows = list_eval_jobs_from_d1(limit=int(args.limit))
+        print(json.dumps({"n": len(rows), "jobs": rows, "scores_in_git": False}, indent=2, default=str))
+        return 0
+    p.print_help()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

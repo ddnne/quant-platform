@@ -165,6 +165,7 @@ export interface FundRegime {
       disc_time?: string | null;
       eps?: number | null;
       feps?: number | null;
+      prior_eps?: number | null;
       bps?: number | null;
     }>
   >;

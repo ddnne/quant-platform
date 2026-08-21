@@ -1,0 +1,26 @@
+logic_id: event_cluster_easy_pead
+family_id: disclosure_cluster_gate
+axis: mixed
+headline: false
+generation_enabled: false
+promote_as_main: false
+go: false
+thesis: >
+  Own-sign PEAD only in an earnings-cluster and easy overnight.
+signal_definition: >
+  Own-sign PEAD only in an earnings-cluster and easy overnight.
+datasets:
+  - equities_bars_daily
+  - fins_summary
+  - jsda_tokyo_repo_rates
+  - markets_calendar
+params:
+  post_hold_days: 5
+  hold_days: 10
+  momentum_n: 5
+  min_hist: 20
+  mode: event_cluster_easy_pead
+  side: orig
+  cs_gate: None
+evaluator: research.unique_logic.event_combos.evaluate_combo_daily_mtm
+notes: combo thesis; CF daily_path is candidate-grade path

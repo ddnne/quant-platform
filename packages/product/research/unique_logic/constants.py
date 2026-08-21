@@ -73,8 +73,60 @@ CS_LOGIC_IDS: frozenset[str] = frozenset(
 CS_AND_SIDE_LOGIC_IDS: frozenset[str] = frozenset(
     set(CS_LOGIC_IDS) | set(EVENT_SIDES_LOGIC_IDS)
 )
+# Distinct economic theses added after the 52-logic path check.
+# Not numeric hold/momentum variants of an existing thesis.
+CF_NEW_EVENT_THESIS_IDS: frozenset[str] = frozenset(
+    {
+        "event_funding_tight_fade",
+        "event_curve_invert_fade",
+        "event_afterclose_easy_funding",
+        "event_large_surprise_easy_funding",
+        "event_pre_mom_easy_funding",
+        "event_margin_or_funding_skip",
+        "event_large_surprise_steep_curve",
+        "event_afterclose_steep_curve",
+        "event_tight_and_crowded_fade",
+        "event_cluster_easy_pead",
+        "surprise_xs_rank_easy_funding",
+        "surprise_xs_rank_steep_curve",
+        "event_pre_mom_steep_curve",
+        "event_large_surprise_afterclose",
+        "event_margin_uncrowded_steep",
+        "event_easy_funding_curve_steep",
+    }
+)
+CF_NEW_CS_THESIS_IDS: frozenset[str] = frozenset(
+    {
+        "overnight_tight_cs_fade",
+        "curve_invert_cs_fade",
+        "xs_high_vol_fade",
+        "month_start_cs_follow",
+        "rate_change_cs_confirm",
+        "flow_price_margin_triple",
+        "opt225_skew_cs_gate",
+        "nky_vol_term_cs_gate",
+        "opt225_spread_cs_tilt",
+        "repo_3m_change_cs",
+        "flow_margin_price_agree",
+        "cs_mom_easy_funding",
+    }
+)
+CF_NEW_THESIS_IDS: frozenset[str] = CF_NEW_EVENT_THESIS_IDS | CF_NEW_CS_THESIS_IDS
 # CF daily_path eventHeld set (Python unique_logic event family on Worker).
 CF_EVENT_DAILY_PATH_IDS: frozenset[str] = (
-    EVENT_LOGIC_IDS | EVENT_FILTER_LOGIC_IDS | EVENT_SIDES_LOGIC_IDS | ADAPTIVE_LOGIC_IDS
+    EVENT_LOGIC_IDS
+    | EVENT_FILTER_LOGIC_IDS
+    | EVENT_SIDES_LOGIC_IDS
+    | ADAPTIVE_LOGIC_IDS
+    | CF_NEW_EVENT_THESIS_IDS
 )
+# Intended lite vs filled gaps. Worker CF_EVENT_FIDELITY must match this.
+CF_EVENT_FIDELITY: dict[str, str] = {
+    "surprise": "aligned: feps-eps else eps-prior_eps (no invent)",
+    "adaptive_trail_k": "aligned: last K completed holds orig vs flip; min K",
+    "margin_pit": "aligned: last print < entry, stale<=14d, level < PIT median",
+    "surprise_xs": "aligned: rank surprise among in-window names (not price mom)",
+    "intended_lite_windows": "Worker period shards vs Python HONEST_3Y stitch",
+    "intended_lite_entry": "disc_time hour>=15 vs full event_post_entry_bar_index",
+}
 ALWAYS_ON_OCCUPANCY_WARN: float = 0.85

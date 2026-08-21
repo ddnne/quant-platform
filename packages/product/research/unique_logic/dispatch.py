@@ -115,6 +115,21 @@ def evaluate_logic_daily_mtm(
         return adaptive.evaluate_surprise_xs_rank_adaptive_daily_mtm(
             bars, events, period_start=period_start, period_end=period_end, **kw
         )
+    from research.unique_logic.event_combos import COMBO_LOGIC_IDS, evaluate_combo_daily_mtm
+
+    if lid in COMBO_LOGIC_IDS:
+        return evaluate_combo_daily_mtm(
+            spec,
+            bars=bars,
+            overnight=overnight,
+            curve=curve,
+            events=events,
+            margin_by_code=margin_by_code,
+            topix_by_date=topix_by_date,
+            one_way_cost=one_way_cost,
+            period_start=period_start,
+            period_end=period_end,
+        )
     return {
         "status": "unknown_logic",
         "logic_id": lid,

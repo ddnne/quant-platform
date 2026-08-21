@@ -80,6 +80,14 @@ def test_event_daily_path_ids_cover_filters_and_sides() -> None:
     assert set(EVENT_SIDES_LOGIC_IDS) <= set(CF_EVENT_DAILY_PATH_IDS)
     assert set(ADAPTIVE_LOGIC_IDS) <= set(CF_EVENT_DAILY_PATH_IDS)
     assert len(CF_EVENT_DAILY_PATH_IDS) >= 13
+    from research.unique_logic.constants import (
+        CF_EVENT_FIDELITY,
+        CF_NEW_THESIS_IDS,
+    )
+
+    assert "aligned" in CF_EVENT_FIDELITY["surprise"]
+    assert "intended_lite_windows" in CF_EVENT_FIDELITY
+    assert len(CF_NEW_THESIS_IDS) == 28
 
 
 def test_panels_cache_id_stable() -> None:

@@ -301,6 +301,18 @@ export const CF_UNIQUE_CS_LOGIC_IDS = [
   "month_end_cs_fade",
   "xs_low_vol_mom",
   "repo_3m_level_cs",
+  "overnight_tight_cs_fade",
+  "curve_invert_cs_fade",
+  "xs_high_vol_fade",
+  "month_start_cs_follow",
+  "rate_change_cs_confirm",
+  "flow_price_margin_triple",
+  "opt225_skew_cs_gate",
+  "nky_vol_term_cs_gate",
+  "opt225_spread_cs_tilt",
+  "repo_3m_change_cs",
+  "flow_margin_price_agree",
+  "cs_mom_easy_funding",
 ] as const;
 
 function usesCrossSection(logic: LogicSpec): boolean {
@@ -325,6 +337,51 @@ function usesCrossSection(logic: LogicSpec): boolean {
   );
 }
 
+/** Filled vs intended-lite gaps vs Python unique_logic. Keep in sync with
+ * research.unique_logic.constants.CF_EVENT_FIDELITY. */
+export const CF_EVENT_FIDELITY = {
+  surprise: "aligned: feps-eps else eps-prior_eps (no invent)",
+  adaptive_trail_k: "aligned: last K completed holds orig vs flip; min K",
+  margin_pit: "aligned: last print < entry, stale<=14d, level < PIT median",
+  surprise_xs: "aligned: rank surprise among in-window names (not price mom)",
+  intended_lite_windows: "Worker period shards vs Python HONEST_3Y stitch",
+  intended_lite_entry: "disc_time hour>=15 vs full event_post_entry_bar_index",
+} as const;
+
+export const CF_NEW_EVENT_THESIS_IDS = [
+  "event_funding_tight_fade",
+  "event_curve_invert_fade",
+  "event_afterclose_easy_funding",
+  "event_large_surprise_easy_funding",
+  "event_pre_mom_easy_funding",
+  "event_margin_or_funding_skip",
+  "event_large_surprise_steep_curve",
+  "event_afterclose_steep_curve",
+  "event_tight_and_crowded_fade",
+  "event_cluster_easy_pead",
+  "surprise_xs_rank_easy_funding",
+  "surprise_xs_rank_steep_curve",
+  "event_pre_mom_steep_curve",
+  "event_large_surprise_afterclose",
+  "event_margin_uncrowded_steep",
+  "event_easy_funding_curve_steep",
+] as const;
+
+export const CF_NEW_CS_THESIS_IDS = [
+  "overnight_tight_cs_fade",
+  "curve_invert_cs_fade",
+  "xs_high_vol_fade",
+  "month_start_cs_follow",
+  "rate_change_cs_confirm",
+  "flow_price_margin_triple",
+  "opt225_skew_cs_gate",
+  "nky_vol_term_cs_gate",
+  "opt225_spread_cs_tilt",
+  "repo_3m_change_cs",
+  "flow_margin_price_agree",
+  "cs_mom_easy_funding",
+] as const;
+
 export const CF_EVENT_LOGIC_IDS = [
   "event_funding_stress_skip",
   "curve_steep_event_confirm",
@@ -339,6 +396,7 @@ export const CF_EVENT_LOGIC_IDS = [
   "surprise_xs_rank_flip",
   "event_funding_adaptive_side",
   "surprise_xs_rank_adaptive",
+  ...CF_NEW_EVENT_THESIS_IDS,
 ] as const;
 
 function isEventLogic(lid: string): boolean {
@@ -348,10 +406,13 @@ function isEventLogic(lid: string): boolean {
 function surpriseProxy(ev: {
   eps?: number | null;
   feps?: number | null;
+  prior_eps?: number | null;
 }): number | null {
   const e = ev.eps;
   const f = ev.feps;
+  const p = ev.prior_eps;
   if (finite(e) && finite(f)) return (f as number) - (e as number);
+  if (finite(e) && finite(p)) return (e as number) - (p as number);
   return null;
 }
 
@@ -415,6 +476,7 @@ function eventHeld(
     entryIdx: number;
     sign: number;
     abs: number;
+    surprise: number;
     after: boolean;
   };
   const perCode: Record<string, { dlist: string[]; entries: Entry[] }> = {};
@@ -449,6 +511,7 @@ function eventHeld(
         entryIdx: i,
         sign: sgn,
         abs: Math.abs(sur),
+        surprise: sur,
         after,
       });
       absSurprises.push({ d: disc, abs: Math.abs(sur) });
@@ -509,26 +572,142 @@ function eventHeld(
           if (ms === null || ms === 0 || ms !== ev.sign) ok = false;
         }
       }
-      if (lid === "event_margin_crowding_skip") {
+      const marginGate = (wantCrowded: boolean): boolean => {
         const levels =
           panel.flow_regime?.margin_level_by_code?.[code] || {};
         const prior = Object.keys(levels)
           .filter((d) => d < ev.entryDate)
           .sort();
-        if (!prior.length) ok = false;
+        if (!prior.length) return false;
+        const lastD = prior[prior.length - 1];
+        const ageDays =
+          (Date.parse(ev.entryDate + "T00:00:00Z") -
+            Date.parse(lastD + "T00:00:00Z")) /
+          86400000;
+        const med = pitMedian(levels, ev.entryDate, minHist);
+        if (!Number.isFinite(ageDays) || ageDays > 14 || med === null) return false;
+        const crowded = (levels[lastD] as number) >= med;
+        return wantCrowded ? crowded : !crowded;
+      };
+      const easyOn = (): boolean => {
+        const on = overnight[ev.entryDate];
+        const med = pitMedian(overnight, ev.entryDate, minHist);
+        return on !== undefined && med !== null && on < med;
+      };
+      const tightOn = (): boolean => {
+        const on = overnight[ev.entryDate];
+        const med = pitMedian(overnight, ev.entryDate, minHist);
+        return on !== undefined && med !== null && on >= med;
+      };
+      const steepOn = (): boolean => {
+        const sp = spread[ev.entryDate];
+        return sp !== undefined && sp > 0;
+      };
+      const invertOn = (): boolean => {
+        const sp = spread[ev.entryDate];
+        return sp !== undefined && sp <= 0;
+      };
+      if (lid === "event_margin_crowding_skip") {
+        if (!marginGate(false)) ok = false;
+      }
+      if (lid === "event_funding_tight_fade") {
+        if (!tightOn()) ok = false;
+        else sgn = -ev.sign;
+      }
+      if (lid === "event_curve_invert_fade") {
+        if (!invertOn()) ok = false;
+        else sgn = -ev.sign;
+      }
+      if (lid === "event_afterclose_easy_funding") {
+        if (!ev.after || !easyOn()) ok = false;
+      }
+      if (lid === "event_large_surprise_easy_funding") {
+        if (!easyOn()) ok = false;
+        const prior = absSurprises.filter((x) => x.d < ev.disc).map((x) => x.abs);
+        if (prior.length < minHist) ok = false;
         else {
-          const lastD = prior[prior.length - 1];
-          const ageDays =
-            (Date.parse(ev.entryDate + "T00:00:00Z") -
-              Date.parse(lastD + "T00:00:00Z")) /
-            86400000;
-          const med = pitMedian(levels, ev.entryDate, minHist);
-          if (!Number.isFinite(ageDays) || ageDays > 14 || med === null) {
-            ok = false;
-          } else if ((levels[lastD] as number) >= med) {
-            ok = false;
-          }
+          const s = prior.slice().sort((a, b) => a - b);
+          const mid = Math.floor(s.length / 2);
+          const med = s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+          if (ev.abs < med) ok = false;
         }
+      }
+      if (lid === "event_pre_mom_easy_funding") {
+        if (!easyOn()) ok = false;
+        const pairs = bars[code];
+        const i = ev.entryIdx;
+        if (!pairs || i < 5) ok = false;
+        else {
+          const m = momentumAt(pairs, 5, i);
+          const ms = signNum(m);
+          if (ms === null || ms === 0 || ms !== ev.sign) ok = false;
+        }
+      }
+      if (lid === "event_margin_or_funding_skip") {
+        if (!marginGate(false) || !easyOn()) ok = false;
+      }
+      if (lid === "event_large_surprise_steep_curve") {
+        if (!steepOn()) ok = false;
+        const prior = absSurprises.filter((x) => x.d < ev.disc).map((x) => x.abs);
+        if (prior.length < minHist) ok = false;
+        else {
+          const s = prior.slice().sort((a, b) => a - b);
+          const mid = Math.floor(s.length / 2);
+          const med = s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+          if (ev.abs < med) ok = false;
+        }
+      }
+      if (lid === "event_afterclose_steep_curve") {
+        if (!ev.after || !steepOn()) ok = false;
+      }
+      if (lid === "event_tight_and_crowded_fade") {
+        if (!tightOn() || !marginGate(true)) ok = false;
+        else sgn = -ev.sign;
+      }
+      if (lid === "event_cluster_easy_pead") {
+        if (!easyOn()) ok = false;
+        const nDisc = discDates.filter(
+          (x) => x < ev.entryDate && x >= addDays(ev.entryDate, -clusterLookback),
+        ).length;
+        const medC = pitMedian(
+          Object.fromEntries(
+            unionDates(bars).map((dd) => [
+              dd,
+              discDates.filter((x) => x < dd && x >= addDays(dd, -clusterLookback)).length,
+            ]),
+          ),
+          ev.entryDate,
+          10,
+        );
+        if (medC === null || nDisc < medC) ok = false;
+      }
+      if (lid === "event_pre_mom_steep_curve") {
+        if (!steepOn()) ok = false;
+        const pairs = bars[code];
+        const i = ev.entryIdx;
+        if (!pairs || i < 5) ok = false;
+        else {
+          const m = momentumAt(pairs, 5, i);
+          const ms = signNum(m);
+          if (ms === null || ms === 0 || ms !== ev.sign) ok = false;
+        }
+      }
+      if (lid === "event_large_surprise_afterclose") {
+        if (!ev.after) ok = false;
+        const prior = absSurprises.filter((x) => x.d < ev.disc).map((x) => x.abs);
+        if (prior.length < minHist) ok = false;
+        else {
+          const s = prior.slice().sort((a, b) => a - b);
+          const mid = Math.floor(s.length / 2);
+          const med = s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+          if (ev.abs < med) ok = false;
+        }
+      }
+      if (lid === "event_margin_uncrowded_steep") {
+        if (!marginGate(false) || !steepOn()) ok = false;
+      }
+      if (lid === "event_easy_funding_curve_steep") {
+        if (!easyOn() || !steepOn()) ok = false;
       }
       if (!ok) continue;
       const end = Math.min(ev.entryIdx + holdDays, pack.dlist.length);
@@ -541,40 +720,150 @@ function eventHeld(
     held[code] = pos;
   }
 
+  if (lid === "disclosure_cluster_mom_gate") {
+    const cs = csHeld(panel.bars, 5, 10, 0.3, 0.3, false);
+    const dates = unionDates(panel.bars);
+    const gated: Record<string, Record<string, number>> = {};
+    for (const [code, cmap] of Object.entries(cs)) {
+      gated[code] = {};
+      for (const [d, v] of Object.entries(cmap)) {
+        const nDisc = discDates.filter(
+          (x) => x < d && x >= addDays(d, -clusterLookback),
+        ).length;
+        const med = pitMedian(
+          Object.fromEntries(
+            dates.map((dd) => [
+              dd,
+              discDates.filter(
+                (x) => x < dd && x >= addDays(dd, -clusterLookback),
+              ).length,
+            ]),
+          ),
+          d,
+          10,
+        );
+        if (med === null || nDisc < med) continue;
+        gated[code][d] = v;
+      }
+    }
+    return gated;
+  }
+
   if (
     lid === "surprise_xs_rank_hold" ||
     lid === "surprise_xs_rank_flip" ||
     lid === "surprise_xs_rank_adaptive" ||
-    lid === "disclosure_cluster_mom_gate"
+    lid === "surprise_xs_rank_easy_funding" ||
+    lid === "surprise_xs_rank_steep_curve"
   ) {
     const invert = lid.includes("flip");
-    const cs = csHeld(
-      panel.bars,
-      5,
-      10,
-      0.3,
-      0.3,
-      invert,
-    );
-    if (lid === "disclosure_cluster_mom_gate") {
-      const dates = unionDates(panel.bars);
-      const gated: Record<string, Record<string, number>> = {};
-      for (const [code, cmap] of Object.entries(cs)) {
-        gated[code] = {};
-        for (const [d, v] of Object.entries(cmap)) {
-          const nDisc = discDates.filter((x) => x < d && x >= addDays(d, -clusterLookback)).length;
-          const med = pitMedian(
-            Object.fromEntries(dates.map((dd) => [dd, discDates.filter((x) => x < dd && x >= addDays(dd, -clusterLookback)).length])),
-            d,
-            10,
-          );
-          if (med === null || nDisc < med) continue;
-          gated[code][d] = v;
+    const dates = unionDates(panel.bars);
+    const surpriseByDate: Record<string, Record<string, number>> = {};
+    for (const pack of Object.values(perCode)) {
+      for (const ev of pack.entries) {
+        if (
+          lid === "surprise_xs_rank_easy_funding"
+        ) {
+          const on = overnight[ev.entryDate];
+          const med = pitMedian(overnight, ev.entryDate, minHist);
+          if (on === undefined || med === null || on >= med) continue;
+        }
+        if (lid === "surprise_xs_rank_steep_curve") {
+          const sp = spread[ev.entryDate];
+          if (sp === undefined || sp <= 0) continue;
+        }
+        for (let j = ev.entryIdx; j < Math.min(ev.entryIdx + holdDays, pack.dlist.length); j++) {
+          const d = pack.dlist[j];
+          if (!surpriseByDate[d]) surpriseByDate[d] = {};
+          surpriseByDate[d][ev.code] = ev.surprise;
         }
       }
-      return gated;
     }
-    return cs;
+    const dailyRank: Record<string, Record<string, number | null>> = {};
+    for (const d of dates) {
+      const ranks = csRank(surpriseByDate[d] || {}, 0.3, 0.3);
+      for (const [code, sign] of Object.entries(ranks)) {
+        if (!dailyRank[code]) dailyRank[code] = {};
+        dailyRank[code][d] = invert ? -sign : sign;
+      }
+    }
+    const xsHeld: Record<string, Record<string, number>> = {};
+    for (const [code, pack] of Object.entries(perCode)) {
+      const entries = pack.dlist.map((d) => dailyRank[code]?.[d] ?? null);
+      const sticky = stickyHold(entries, holdDays);
+      xsHeld[code] = {};
+      for (let i = 0; i < pack.dlist.length; i++) {
+        const pos = sticky[i];
+        if (pos !== null) xsHeld[code][pack.dlist[i]] = pos;
+      }
+    }
+    if (lid !== "surprise_xs_rank_adaptive") return xsHeld;
+    // trail-K orig vs flip on completed daily orig nets
+    const trailK = Math.max(5, Math.floor(finite(params.trail_k as number) ? (params.trail_k as number) : 10));
+    const trailMin = Math.max(3, Math.floor(finite(params.trail_min as number) ? (params.trail_min as number) : 5));
+    const origMtm = heldBookDailyMtm(xsHeld, closeMap, dates, holdDays, 0);
+    const hist: number[] = [];
+    const tilted: Record<string, Record<string, number>> = {};
+    for (const code of Object.keys(xsHeld)) tilted[code] = {};
+    for (let i = 0; i < dates.length; i++) {
+      const lastk = hist.slice(-trailK);
+      const tilt = lastk.length < trailMin ? 1 : lastk.reduce((a, b) => a + b, 0) / lastk.length >= 0 ? 1 : -1;
+      for (const code of Object.keys(xsHeld)) {
+        const v = xsHeld[code]?.[dates[i]];
+        if (v) tilted[code][dates[i]] = v * tilt;
+      }
+      if (i > 0) hist.push(origMtm.net_daily[i] || 0);
+    }
+    return tilted;
+  }
+
+  if (lid === "event_funding_adaptive_side") {
+    const trailK = Math.max(5, Math.floor(finite(params.trail_k as number) ? (params.trail_k as number) : 10));
+    const trailMin = Math.max(3, Math.floor(finite(params.trail_min as number) ? (params.trail_min as number) : 5));
+    type H = { holdEnd: string; orig: number; flip: number };
+    const history: H[] = [];
+    const adaptHeld: Record<string, Record<string, number>> = {};
+    const ordered: Array<{ code: string; ev: Entry; dlist: string[] }> = [];
+    for (const [code, pack] of Object.entries(perCode)) {
+      for (const ev of pack.entries) {
+        const on = overnight[ev.entryDate];
+        const med = pitMedian(overnight, ev.entryDate, minHist);
+        if (on === undefined || med === null || on >= med) continue;
+        ordered.push({ code, ev, dlist: pack.dlist });
+      }
+    }
+    ordered.sort((a, b) =>
+      a.ev.entryDate < b.ev.entryDate ? -1 : a.ev.entryDate > b.ev.entryDate ? 1 : a.code.localeCompare(b.code),
+    );
+    for (const row of ordered) {
+      const completed = history.filter((h) => h.holdEnd < row.ev.entryDate);
+      const lastk = completed.slice(-trailK);
+      let mult = 1;
+      if (lastk.length >= trailMin) {
+        const mOrig = lastk.reduce((s, h) => s + h.orig, 0) / lastk.length;
+        const mFlip = lastk.reduce((s, h) => s + h.flip, 0) / lastk.length;
+        if (mOrig < mFlip) mult = -1;
+      }
+      const end = Math.min(row.ev.entryIdx + holdDays, row.dlist.length);
+      if (!adaptHeld[row.code]) adaptHeld[row.code] = {};
+      for (let j = row.ev.entryIdx; j < end; j++) {
+        adaptHeld[row.code][row.dlist[j]] = row.ev.sign * mult;
+      }
+      const i0 = row.ev.entryIdx;
+      const i1 = end - 1;
+      const c0 = closeMap[row.code]?.[row.dlist[i0]];
+      const c1 = closeMap[row.code]?.[row.dlist[i1]];
+      if (finite(c0) && finite(c1) && c0 !== 0 && i1 > i0) {
+        const raw = c1 / c0 - 1;
+        const cost = 2 * 0.001;
+        history.push({
+          holdEnd: row.dlist[i1],
+          orig: row.ev.sign * raw - cost,
+          flip: -row.ev.sign * raw - cost,
+        });
+      }
+    }
+    return adaptHeld;
   }
 
   if (nOn === 0) return {};
@@ -586,6 +875,88 @@ function addDays(iso: string, n: number): string {
   if (!Number.isFinite(t)) return iso;
   const d = new Date(t + n * 86400000);
   return d.toISOString().slice(0, 10);
+}
+
+function gatedCsHeld(
+  logic: LogicSpec,
+  panel: PeriodPanel,
+): Record<string, Record<string, number>> {
+  const lid = String(logic.logic_id || "");
+  const invert =
+    lid === "xs_high_vol_fade" ||
+    lid === "overnight_tight_cs_fade" ||
+    lid === "curve_invert_cs_fade";
+  const base = csHeld(panel.bars, 5, 10, 0.3, 0.3, invert);
+  const overnight =
+    panel.repo_rate_regime?.rates_by_date ||
+    panel.repo_rate_regime?.rate_by_date ||
+    panel.repo_rate_by_date ||
+    {};
+  const spread = panel.repo_rate_regime?.spread_by_date || {};
+  const skew =
+    panel.skew_series ||
+    panel.opt225_regime?.skew?.rv_abs_by_date ||
+    {};
+  const nkyTerm =
+    panel.nky_vol_series?.rv_ratio_by_date || {};
+  const ivSpread = panel.iv_base_spread || {};
+  const repo3mApprox = (d: string): number | undefined => {
+    const on = overnight[d];
+    const sp = spread[d];
+    if (!finite(on) || !finite(sp)) return undefined;
+    return on + sp;
+  };
+  const dates = unionDates(panel.bars);
+  const out: Record<string, Record<string, number>> = {};
+  for (const [code, cmap] of Object.entries(base)) {
+    out[code] = {};
+    for (const [d, v] of Object.entries(cmap)) {
+      let keep = true;
+      const on = overnight[d];
+      const medOn = pitMedian(overnight, d, 20);
+      const i = dates.indexOf(d);
+      const prev = i > 0 ? dates[i - 1] : null;
+      if (lid === "cs_mom_easy_funding") {
+        keep = on !== undefined && medOn !== null && on < medOn;
+      } else if (lid === "overnight_tight_cs_fade") {
+        keep = on !== undefined && medOn !== null && on >= medOn;
+      } else if (lid === "curve_invert_cs_fade") {
+        keep = spread[d] !== undefined && spread[d] <= 0;
+      } else if (lid === "month_start_cs_follow") {
+        keep = d.slice(8, 10) <= "05";
+      } else if (lid === "rate_change_cs_confirm") {
+        keep =
+          prev !== null &&
+          overnight[prev] !== undefined &&
+          on !== undefined &&
+          on > overnight[prev];
+      } else if (lid === "opt225_skew_cs_gate") {
+        const med = pitMedian(skew, d, 20);
+        keep = med !== null && finite(skew[d]) && skew[d] >= med;
+      } else if (lid === "nky_vol_term_cs_gate") {
+        const med = pitMedian(nkyTerm, d, 20);
+        keep = med !== null && finite(nkyTerm[d]) && nkyTerm[d] >= med;
+      } else if (lid === "opt225_spread_cs_tilt") {
+        const med = pitMedian(ivSpread, d, 20);
+        keep = med !== null && finite(ivSpread[d]) && Math.abs(ivSpread[d]) >= med;
+      } else if (lid === "repo_3m_change_cs") {
+        const a = prev ? repo3mApprox(d) : undefined;
+        const b = prev ? repo3mApprox(prev) : undefined;
+        keep = a !== undefined && b !== undefined && a > b;
+      } else if (
+        lid === "flow_price_margin_triple" ||
+        lid === "flow_margin_price_agree"
+      ) {
+        const chg = panel.flow_regime?.margin_change_by_code?.[code]?.[d];
+        keep = finite(chg) && chg !== 0;
+        if (lid === "flow_price_margin_triple" && finite(chg)) {
+          keep = chg < 0; // de-crowd
+        }
+      }
+      if (keep) out[code][d] = v;
+    }
+  }
+  return out;
 }
 
 export function evalLogicDailyPathOnPanel(
@@ -623,9 +994,11 @@ export function evalLogicDailyPathOnPanel(
   const polarity = lid.includes("reversion") ? -1 : 1;
   const held = isEventLogic(lid)
     ? eventHeld(logic, panel) || {}
-    : usesCrossSection(logic)
-      ? csHeld(panel.bars, momN, holdDays, lf, sf, invert)
-      : mdhHeld(panel.bars, holdDays, polarity);
+    : (CF_NEW_CS_THESIS_IDS as readonly string[]).includes(lid)
+      ? gatedCsHeld(logic, panel)
+      : usesCrossSection(logic)
+        ? csHeld(panel.bars, momN, holdDays, lf, sf, invert)
+        : mdhHeld(panel.bars, holdDays, polarity);
   const dates = unionDates(panel.bars);
   const pack = heldBookDailyMtm(
     held,

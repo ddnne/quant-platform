@@ -1,0 +1,26 @@
+logic_id: opt225_skew_cs_gate
+family_id: xs_low_vol_mom
+axis: mixed
+headline: false
+generation_enabled: false
+promote_as_main: false
+go: false
+thesis: >
+  CS mom only when NKY 225 put skew is at/above its PIT median.
+signal_definition: >
+  CS mom only when NKY 225 put skew is at/above its PIT median.
+datasets:
+  - equities_bars_daily
+  - fins_summary
+  - jsda_tokyo_repo_rates
+  - markets_calendar
+params:
+  post_hold_days: 5
+  hold_days: 10
+  momentum_n: 5
+  min_hist: 20
+  mode: opt225_skew_cs_gate
+  side: orig
+  cs_gate: opt225_skew_high
+evaluator: research.unique_logic.event_combos.evaluate_combo_daily_mtm
+notes: combo thesis; CF daily_path is candidate-grade path

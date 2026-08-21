@@ -946,6 +946,7 @@ def _build_thicken_sidecars(
                         "disc_time": ev.get("disc_time"),
                         "eps": ev.get("eps"),
                         "feps": ev.get("feps"),
+                        "prior_eps": ev.get("prior_eps"),
                         "bps": ev.get("bps"),
                     }
                 )
@@ -1430,7 +1431,7 @@ def panels_cache_id(
     max_days: int,
 ) -> str:
     ids = ",".join(str(p.get("period_id") or "") for p in periods)
-    raw = f"{ids}|c{int(max_codes)}|d{int(max_days)}"
+    raw = f"v2_prior_eps|{ids}|c{int(max_codes)}|d{int(max_days)}"
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
 

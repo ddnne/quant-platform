@@ -188,6 +188,11 @@ RESEARCH_UNIQUE_LOGIC_IDS: frozenset[str] = frozenset(
         "surprise_xs_rank_adaptive",
     }
 )
+from research.unique_logic.constants import CF_NEW_THESIS_IDS as _CF_NEW_THESIS_IDS
+
+RESEARCH_UNIQUE_LOGIC_IDS = frozenset(RESEARCH_UNIQUE_LOGIC_IDS) | frozenset(
+    _CF_NEW_THESIS_IDS
+)
 RESEARCH_FAMILY_APPEND_LOGIC_IDS: frozenset[str] = frozenset(
     {
         "overnight_level_cs_tilt",
@@ -199,8 +204,8 @@ RESEARCH_FAMILY_APPEND_LOGIC_IDS: frozenset[str] = frozenset(
         "surprise_xs_rank_adaptive",
     }
 )
-RESEARCH_FAMILY_REGISTER_ID: str = "w104_w105_unique_logic_research_family"
-RESEARCH_FAMILY_APPEND_ID: str = "w107_unique_logic_family_append"
+RESEARCH_FAMILY_REGISTER_ID: str = "unique_logic_research_family"
+RESEARCH_FAMILY_APPEND_ID: str = "unique_logic_family_append"
 RESEARCH_FAMILY_REGISTRATION_IS_NOT_A_PASS: bool = True
 RESEARCH_FAMILY_AUTO_RESEARCH_CANDIDATE: bool = False
 
@@ -320,7 +325,7 @@ NEAR_LOGIC_GROUPS: tuple[dict[str, Any], ...] = (
         ),
     },
     {
-        "group_id": "w104_w105_unique_logic_research_family",
+        "group_id": "unique_logic_research_family",
         "label": "W104/W105 unique_logic research family (recognition only)",
         "logic_ids": (
             "event_funding_stress_skip",
@@ -357,7 +362,7 @@ NEAR_LOGIC_GROUPS: tuple[dict[str, Any], ...] = (
         ),
     },
     {
-        "group_id": "w106_unique_logic_family_append",
+        "group_id": "unique_logic_ls_append",
         "label": "W106 this-wave unique_logic family append (recognition only)",
         "logic_ids": (
             "funding_impulse_cs_tilt",
@@ -376,7 +381,7 @@ NEAR_LOGIC_GROUPS: tuple[dict[str, Any], ...] = (
         ),
     },
     {
-        "group_id": "w107_unique_logic_family_append",
+        "group_id": "unique_logic_overlay_append",
         "label": "W107 this-wave unique_logic family append (recognition only)",
         "logic_ids": (
             "overnight_level_cs_tilt",
@@ -2234,12 +2239,31 @@ def _build_logic_templates() -> dict[str, LogicTemplate]:
             structural_keys=("mode", "entry_mode"),
             generation_enabled=False,
             notes=(
-                "W107 family append of surprise adaptive side. "
+                "unique_logic overlay append of surprise adaptive side. "
                 "generation_enabled=False. Not a kill of orig/flip. "
                 "Not research_candidate / not GO."
             ),
         ),
     ]
+    from research.unique_logic.event_combos import NEW_COMBO_LOGIC
+
+    bars = ("equities_bars_daily", "markets_calendar")
+    for spec in NEW_COMBO_LOGIC:
+        tpls.append(
+            LogicTemplate(
+                logic_id=str(spec["logic_id"]),
+                display_name=str(spec["logic_id"]).replace("_", " "),
+                thesis=str(spec.get("thesis") or ""),
+                signal_definition=str(spec.get("signal_definition") or spec.get("thesis") or ""),
+                position_rule=str(spec.get("position_rule") or ""),
+                datasets_used=tuple(spec.get("datasets") or bars),
+                family_id=str(spec.get("family_id") or "event_funding_combo"),
+                base_params=dict(spec.get("params") or {}),
+                structural_keys=("mode", "gates", "cs_gate", "side"),
+                generation_enabled=False,
+                notes="combo thesis; generation_enabled=False; not GO",
+            )
+        )
     return {t.logic_id: t for t in tpls}
 
 
@@ -2526,11 +2550,9 @@ def logic_templates_document() -> dict[str, Any]:
         "w91_index_vol_logic_ids": nky_vol_ids,
         "w92_options_vol_logic_ids": opt225_ids,
         "w94_options_vol_logic_ids": w94_opt225_ids,
-        "w105_research_unique_logic_ids": sorted(RESEARCH_UNIQUE_LOGIC_IDS),
-        "w105_research_unique_family_ids": sorted(RESEARCH_UNIQUE_FAMILY_IDS),
-        "w106_research_family_append_logic_ids": sorted(
-            RESEARCH_FAMILY_APPEND_LOGIC_IDS
-        ),
+        "unique_logic_ids": sorted(RESEARCH_UNIQUE_LOGIC_IDS),
+        "unique_logic_family_ids": sorted(RESEARCH_UNIQUE_FAMILY_IDS),
+        "unique_logic_append_logic_ids": sorted(RESEARCH_FAMILY_APPEND_LOGIC_IDS),
         "research_family_registration": research_family_register_document(),
         "research_family_append": research_family_append_document(),
         "opt225_canonical_level": "basevol",

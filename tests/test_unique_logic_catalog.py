@@ -115,5 +115,12 @@ def test_yaml_dispatch_worker_event_ids_align() -> None:
     assert set(CF_EVENT_DAILY_PATH_IDS) == set(CONST_EVENT)
     assert set(CF_EVENT_DAILY_PATH_IDS) <= yaml_ids
     src = inspect.getsource(evaluate_logic_daily_mtm)
-    missing = [lid for lid in sorted(yaml_ids) if f'lid == "{lid}"' not in src]
+    from research.unique_logic.event_combos import COMBO_LOGIC_IDS
+
+    missing = [
+        lid
+        for lid in sorted(yaml_ids)
+        if f'lid == "{lid}"' not in src and lid not in COMBO_LOGIC_IDS
+    ]
     assert missing == []
+    assert "COMBO_LOGIC_IDS" in src

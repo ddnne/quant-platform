@@ -201,13 +201,13 @@ def test_logic_templates_distinct_economic_logic():
         assert lid in RESEARCH_UNIQUE_LOGIC_IDS
         assert LOGIC_TEMPLATES[lid].generation_enabled is False
         assert LOGIC_TEMPLATES[lid].family_id in RESEARCH_UNIQUE_FAMILY_IDS
-    assert "event_funding_stress_skip" in doc.get(
-        "w105_research_unique_logic_ids", []
-    )
+    assert "event_funding_stress_skip" in doc.get("unique_logic_ids", [])
     assert "event_funding_easy_short" in RESEARCH_UNIQUE_LOGIC_IDS
     assert "overnight_level_cs_tilt" in doc.get(
-        "w106_research_family_append_logic_ids", []
+        "unique_logic_append_logic_ids", []
     )
+    assert "w105_research_unique_logic_ids" not in doc
+    assert "w104_w105" not in str(doc.get("research_family_registration", {}).get("register_id", ""))
     # diversity rules documented
     rules = doc["diversity_rules"]
     assert "hold_days only" in str(rules["does_not_count"])

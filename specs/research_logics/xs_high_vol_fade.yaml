@@ -1,0 +1,26 @@
+logic_id: xs_high_vol_fade
+family_id: xs_low_vol_mom
+axis: mixed
+headline: false
+generation_enabled: false
+promote_as_main: false
+go: false
+thesis: >
+  Fade CS winners (high-vol unwind), opposite of low-vol mom follow.
+signal_definition: >
+  Fade CS winners (high-vol unwind), opposite of low-vol mom follow.
+datasets:
+  - equities_bars_daily
+  - fins_summary
+  - jsda_tokyo_repo_rates
+  - markets_calendar
+params:
+  post_hold_days: 5
+  hold_days: 10
+  momentum_n: 5
+  min_hist: 20
+  mode: xs_high_vol_fade
+  side: orig
+  cs_gate: always_invert
+evaluator: research.unique_logic.event_combos.evaluate_combo_daily_mtm
+notes: combo thesis; CF daily_path is candidate-grade path

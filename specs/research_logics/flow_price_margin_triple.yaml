@@ -1,0 +1,26 @@
+logic_id: flow_price_margin_triple
+family_id: xs_margin_delta
+axis: mixed
+headline: false
+generation_enabled: false
+promote_as_main: false
+go: false
+thesis: >
+  CS mom only when name-level margin is de-crowding (flow confirms price).
+signal_definition: >
+  CS mom only when name-level margin is de-crowding (flow confirms price).
+datasets:
+  - equities_bars_daily
+  - fins_summary
+  - jsda_tokyo_repo_rates
+  - markets_calendar
+params:
+  post_hold_days: 5
+  hold_days: 10
+  momentum_n: 5
+  min_hist: 20
+  mode: flow_price_margin_triple
+  side: orig
+  cs_gate: margin_decrowd
+evaluator: research.unique_logic.event_combos.evaluate_combo_daily_mtm
+notes: combo thesis; CF daily_path is candidate-grade path

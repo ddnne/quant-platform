@@ -1,0 +1,26 @@
+logic_id: cs_mom_easy_funding
+family_id: overnight_level_cs
+axis: mixed
+headline: false
+generation_enabled: false
+promote_as_main: false
+go: false
+thesis: >
+  CS mom occupancy only when overnight is easy (below PIT median).
+signal_definition: >
+  CS mom occupancy only when overnight is easy (below PIT median).
+datasets:
+  - equities_bars_daily
+  - fins_summary
+  - jsda_tokyo_repo_rates
+  - markets_calendar
+params:
+  post_hold_days: 5
+  hold_days: 10
+  momentum_n: 5
+  min_hist: 20
+  mode: cs_mom_easy_funding
+  side: orig
+  cs_gate: overnight_easy
+evaluator: research.unique_logic.event_combos.evaluate_combo_daily_mtm
+notes: combo thesis; CF daily_path is candidate-grade path

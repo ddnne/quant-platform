@@ -44,6 +44,9 @@ def all_unique_logic_specs() -> list[dict[str, Any]]:
     out.extend(list(event_sides.NEW_LS_VARIANTS))
     out.extend(list(cs_overlays.NEW_UNIQUE_LOGIC))
     out.extend(list(adaptive.ADAPTIVE_VARIANTS))
+    from research.unique_logic.event_combos import NEW_COMBO_LOGIC
+
+    out.extend(list(NEW_COMBO_LOGIC))
     return out
 
 
