@@ -208,6 +208,8 @@ export interface PeriodPanel {
   flow_regime?: FlowRegime | null;
   /** W93/W94 fund (fins_summary) sidecar — CF fund_* / mf_value_mom_rate consume. */
   fund_regime?: FundRegime | null;
+  /** Average daily yen turnover by code (liquidity cost). Missing → tx+repo only. */
+  adv_by_code?: Record<string, number> | null;
 }
 
 export interface PeriodEvalRow {
@@ -261,6 +263,10 @@ export interface LogicEvalResult {
     low_variance_artifact?: boolean;
     t_stat_reason?: string;
     raw_t_stat?: number | null;
+    screen_kind?: string;
+    daily_path_complete?: boolean;
+    candidate_grade?: boolean;
+    n_survivors_are_not_a_pass?: boolean;
   };
   errors: string[];
   mass_research: string;
@@ -282,6 +288,10 @@ export interface MassEvalJobResult {
   n_eval_ok: number;
   n_eval_fail: number;
   n_survivors: number;
+  n_survivors_are_not_a_pass?: boolean;
+  screen_kind?: string;
+  daily_path_complete?: boolean;
+  candidate_grade?: boolean;
   wall_time_ms: number;
   ranking: Array<Record<string, unknown>>;
   results: LogicEvalResult[];

@@ -280,6 +280,7 @@ export async function loadR2Panels(
         calendar?: PeriodPanel["calendar"];
         flow_regime?: PeriodPanel["flow_regime"];
         fund_regime?: PeriodPanel["fund_regime"];
+        adv_by_code?: PeriodPanel["adv_by_code"];
         nky_proxy?: string;
       };
       const bars = normalizeBars(raw.bars || {});
@@ -337,6 +338,7 @@ export async function loadR2Panels(
       const calendar = raw.calendar || null;
       const flowRegime = raw.flow_regime || null;
       const fundRegime = raw.fund_regime || null;
+      const advByCode = raw.adv_by_code || null;
       panels.push({
         period_id: String(raw.period_id || p.period_id),
         year: Number(raw.year ?? p.year ?? 0),
@@ -357,6 +359,7 @@ export async function loadR2Panels(
         calendar,
         flow_regime: flowRegime,
         fund_regime: fundRegime,
+        adv_by_code: advByCode,
         source: raw.source || `r2:${keyUsed}`,
       });
       const nRepo = repoByDate ? Object.keys(repoByDate).length : 0;

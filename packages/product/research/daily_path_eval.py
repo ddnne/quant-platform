@@ -248,8 +248,15 @@ def held_book_daily_mtm(
     logic_id: str,
     extra: Mapping[str, Any] | None = None,
     repo_by_date: Mapping[str, float] | None = None,
+    adv_by_code: Mapping[str, float] | None = None,
 ) -> dict[str, Any]:
-    """Equal-weight daily MTM of a pre-built held book."""
+    """Equal-weight daily MTM of a pre-built held book.
+
+    Cost stack: amortized one-way tx + optional short-repo drag.
+    When ``adv_by_code`` is present, both tx and repo drag are scaled by a
+    liquidity bucket (ADV≥1e9×1.0, ≥1e8×1.5, else ×2.5). Missing ADV is
+    disclosed as tx+repo only — never invented.
+    """
     from features.class_signals import amortized_one_way_cost
 
     h = int(hold_days)
@@ -313,12 +320,30 @@ def held_book_daily_mtm(
             net = 0.0
         else:
             g = float(sum(contribs) / n_active)
+            liq = 1.0
+            if adv_by_code:
+                mults: list[float] = []
+                for code, cmap in held_by_code_date.items():
+                    pos = cmap.get(d_prev)
+                    if not pos:
+                        continue
+                    adv = adv_by_code.get(code)
+                    if adv is None:
+                        continue
+                    if float(adv) >= 1e9:
+                        mults.append(1.0)
+                    elif float(adv) >= 1e8:
+                        mults.append(1.5)
+                    else:
+                        mults.append(2.5)
+                if mults:
+                    liq = sum(mults) / len(mults)
             short_drag = 0.0
             if n_short and repo_by_date is not None:
                 repo = repo_by_date.get(d_prev)
                 if repo is not None:
-                    short_drag = (n_short / n_active) * (float(repo) / 100.0 / 252.0)
-            cost_drag = daily_cost + short_drag
+                    short_drag = (n_short / n_active) * (float(repo) / 100.0 / 252.0) * liq
+            cost_drag = daily_cost * liq + short_drag
             net = g - cost_drag
         equity = equity * (1.0 + net)
         gross_daily.append(g)

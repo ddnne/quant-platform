@@ -1428,6 +1428,436 @@ export function evalLogicOnPanel(
   }
 }
 
+/** Daily held book for bar-native families (not generic CS/MDH collapse). */
+export type HeldBook = Record<string, Record<string, number>>;
+
+function stickyToHeld(
+  bars: BarsByCode,
+  entriesByCode: Record<string, Array<number | null>>,
+  holdDays: number,
+  rebalance: string,
+): HeldBook {
+  const held: HeldBook = {};
+  for (const [code, pairs] of Object.entries(bars || {})) {
+    if (code.startsWith("__") || !pairs) continue;
+    const entries = entriesByCode[code];
+    if (!entries) continue;
+    const sticky = applyStickyHold(entries, holdDays, rebalance);
+    held[code] = {};
+    for (let i = 0; i < pairs.length; i++) {
+      const pos = sticky[i];
+      if (pos !== null && pos !== 0) held[code][pairs[i][0]] = pos;
+    }
+  }
+  return held;
+}
+
+function realizedVol(pairs: BarSeries, endI: number, n: number): number | null {
+  if (endI < n || n < 2) return null;
+  const rets: number[] = [];
+  for (let i = endI - n + 1; i <= endI; i++) {
+    const c0 = pairs[i - 1]?.[1];
+    const c1 = pairs[i]?.[1];
+    if (!Number.isFinite(c0) || !Number.isFinite(c1) || c0 === 0) continue;
+    rets.push(c1 / c0 - 1);
+  }
+  if (rets.length < 3) return null;
+  const m = rets.reduce((a, b) => a + b, 0) / rets.length;
+  let acc = 0;
+  for (const r of rets) acc += (r - m) ** 2;
+  const s = Math.sqrt(acc / (rets.length - 1));
+  return Number.isFinite(s) && s > 0 ? s : null;
+}
+
+/**
+ * Candidate-grade daily positions for bar-native logics.
+ * Returns null when the caller should use eventHeld / gatedCsHeld.
+ */
+export function barNativeHeldBook(
+  logic: LogicSpec,
+  panel: PeriodPanel,
+): { held: HeldBook; path: string; fallback?: string } | null {
+  const lid = String(logic.logic_id || "");
+  const fam = String(logic.family_id || "");
+  const params = logic.params || {};
+  if (
+    lid.startsWith("event_") ||
+    lid.startsWith("surprise_xs_") ||
+    lid.startsWith("afterclose_") ||
+    lid.startsWith("large_surprise_") ||
+    lid.startsWith("disclosure_") ||
+    lid.startsWith("curve_steep_event") ||
+    fam.includes("event") ||
+    fam.includes("surprise_xs")
+  ) {
+    return null;
+  }
+  const bars = panel.bars || {};
+  const holdDays = Math.floor(numParam(params, "hold_days", numParam(params, "post_hold_days", 10)));
+  const momN = Math.floor(numParam(params, "momentum_n", 5));
+  const lf = numParam(params, "long_frac", 0.3);
+  const sf = numParam(params, "short_frac", 0.3);
+
+  if (lid.startsWith("nky_vol_") || fam === "index_vol_regime") {
+    const nky = panel.nky_vol_series || null;
+    if (!nky) return { held: {}, path: "nky_vol_missing", fallback: "path_broken_missing_sidecar" };
+    const mode = strParam(params, "mode", lid);
+    const highThr = numParam(params, "high_threshold", 0.2);
+    const lowThr = numParam(params, "low_threshold", 0.1);
+    const expandRatio = numParam(params, "expand_ratio", 1.2);
+    const compressRatio = numParam(params, "compress_ratio", 0.8);
+    const absBy = nky.rv_abs_by_date || nky.rv_short_by_date || {};
+    const shortBy = nky.rv_short_by_date || {};
+    const longBy = nky.rv_long_by_date || {};
+    const byDate: Record<string, Record<string, number | null>> = {};
+    const datesByCode: Record<string, string[]> = {};
+    for (const [code, pairs] of Object.entries(bars)) {
+      if (code.startsWith("__") || !pairs) continue;
+      const moms = momentumSeries(pairs, momN);
+      datesByCode[code] = pairs.map(([d]) => d);
+      for (const [d, mom] of moms) {
+        if (!byDate[d]) byDate[d] = {};
+        byDate[d][code] = mom;
+      }
+    }
+    const m = mode.toLowerCase();
+    function regimeFor(d: string): string | null {
+      const dk = d.slice(0, 10);
+      if (m.includes("term_ratio")) {
+        const s = shortBy[dk];
+        const lo = longBy[dk];
+        if (s === undefined || lo === undefined || !(lo > 1e-12)) return null;
+        const ratio = s / lo;
+        if (ratio >= expandRatio) return "expanding";
+        if (ratio <= compressRatio) return "compressing";
+        return "mid";
+      }
+      if (m.includes("term_levels")) {
+        const s = shortBy[dk];
+        const lo = longBy[dk];
+        if (s === undefined || lo === undefined) return null;
+        const sLab = s >= highThr ? "high" : s <= lowThr ? "low" : "mid";
+        const lLab = lo >= highThr ? "high" : lo <= lowThr ? "low" : "mid";
+        if (sLab === "high" && lLab === "high") return "high";
+        if (sLab === "low" && lLab === "low") return "low";
+        return "mid";
+      }
+      const v = absBy[dk];
+      if (v === undefined) return null;
+      if (v >= highThr) return "high";
+      if (v <= lowThr) return "low";
+      return "mid";
+    }
+    const entriesByCode: Record<string, Array<number | null>> = {};
+    for (const code of Object.keys(datesByCode)) {
+      const dlist = datesByCode[code];
+      entriesByCode[code] = dlist.map((d) => {
+        const ranks = crossSectionRankSigns(byDate[d] || {}, lf, sf);
+        const cs = ranks[code] ?? 0;
+        const reg = regimeFor(d);
+        if (cs === 0) return 0;
+        if (reg === null) return null;
+        if (m.includes("term_ratio")) {
+          if (reg === "compressing") return cs;
+          if (reg === "expanding") return -cs;
+          return null;
+        }
+        if (reg === "low") return cs;
+        if (reg === "high") return -cs;
+        return null;
+      });
+    }
+    return {
+      held: stickyToHeld(bars, entriesByCode, holdDays, "fixed_horizon"),
+      path: `nky_vol:${m}`,
+    };
+  }
+
+  if (lid.startsWith("opt225_") || fam === "options_vol_regime") {
+    const mode = strParam(params, "mode", lid);
+    const sk = strParam(params, "series_kind", "");
+    const bundle = panel.opt225_regime || null;
+    let absMap: Record<string, number> | null = null;
+    if (mode.includes("skew") || sk === "skew") {
+      absMap = panel.skew_series || bundle?.skew?.rv_abs_by_date || null;
+    } else if (mode.includes("cm_term") || sk === "cm_term") {
+      absMap = panel.cm_term_series || bundle?.cm_term?.rv_abs_by_date || null;
+    } else if (mode.includes("spread") || sk === "spread" || sk === "spread_change") {
+      absMap = panel.iv_base_spread || bundle?.spread?.rv_abs_by_date || null;
+    } else if (mode.includes("atm_iv") || sk === "atm_iv") {
+      absMap = panel.atm_iv_series || bundle?.atm_iv?.rv_abs_by_date || null;
+    } else if (mode.includes("basevol_delta") || sk === "basevol_delta") {
+      absMap = panel.basevol_delta_series || bundle?.basevol_delta?.rv_abs_by_date || null;
+    } else {
+      absMap = panel.base_vol_series || bundle?.basevol?.rv_abs_by_date || null;
+    }
+    const wantChange = mode.includes("change") || sk === "spread_change";
+    if (wantChange && absMap) {
+      const ds = Object.keys(absMap).sort();
+      const chg: Record<string, number> = {};
+      for (let i = 1; i < ds.length; i++) {
+        chg[ds[i]] = absMap[ds[i]] - absMap[ds[i - 1]];
+      }
+      absMap = chg;
+    }
+    const nkyLike: NkyVolSeries | null = absMap
+      ? { rv_abs_by_date: absMap, rv_short_by_date: absMap, rv_long_by_date: absMap }
+      : panel.nky_vol_series || null;
+    const hiDefault = wantChange
+      ? 0.5
+      : mode.includes("skew") || sk === "skew"
+        ? 3
+        : mode.includes("spread") || sk === "spread"
+          ? 1
+          : 24;
+    const loDefault = wantChange
+      ? -0.5
+      : mode.includes("skew") || sk === "skew"
+        ? 0.5
+        : mode.includes("spread") || sk === "spread"
+          ? -0.5
+          : 12;
+    const inner = barNativeHeldBook(
+      {
+        ...logic,
+        logic_id: mode.includes("term_ratio")
+          ? "nky_vol_term_ratio"
+          : mode.includes("term_levels")
+            ? "nky_vol_term_levels"
+            : "nky_vol_abs_level",
+        family_id: "index_vol_regime",
+        params: {
+          ...params,
+          high_threshold: numParam(params, "high_threshold", hiDefault),
+          low_threshold: numParam(params, "low_threshold", loDefault),
+        },
+      },
+      { ...panel, nky_vol_series: nkyLike },
+    );
+    if (!inner) return { held: {}, path: "opt225_unmapped", fallback: "path_broken" };
+    return { held: inner.held, path: `opt225:${mode}` };
+  }
+
+  if (lid.startsWith("flow_margin_") || fam === "flow_demand") {
+    const flow = panel.flow_regime || null;
+    const changeByCode = flow?.margin_change_by_code || null;
+    const levelByCode = flow?.margin_level_by_code || null;
+    const nCodes = Object.keys(changeByCode || levelByCode || {}).length;
+    if (!flow || nCodes === 0) {
+      return {
+        held: {},
+        path: "flow_demand",
+        fallback: "path_broken_missing_sidecar",
+      };
+    }
+    let mode = strParam(params, "short_confirm_mode", "off");
+    if (lid.includes("short_hard")) mode = "hard";
+    else if (lid.includes("short_soft")) mode = "soft";
+    else if (lid.includes("pressure")) mode = "off";
+    const shortChg = shortChangeByDate(flow.short_ratio_by_date || undefined);
+    const entriesByCode: Record<string, Array<number | null>> = {};
+    for (const [code, pairs] of Object.entries(bars)) {
+      if (code.startsWith("__") || !pairs) continue;
+      let chgMap = (changeByCode && changeByCode[code]) || null;
+      if (!chgMap && levelByCode && levelByCode[code]) {
+        const levelDates = Object.keys(levelByCode[code]).sort();
+        const derived: Record<string, number> = {};
+        for (let i = 1; i < levelDates.length; i++) {
+          const v0 = levelByCode[code][levelDates[i - 1]];
+          const v1 = levelByCode[code][levelDates[i]];
+          if (v0 !== 0) derived[levelDates[i]] = v1 / v0 - 1;
+        }
+        chgMap = derived;
+      }
+      if (!chgMap) continue;
+      entriesByCode[code] = pairs.map(([d]) =>
+        Object.prototype.hasOwnProperty.call(chgMap, d)
+          ? flowConfirmEntry(chgMap[d], shortChg[d] ?? null, mode)
+          : null,
+      );
+    }
+    return {
+      held: stickyToHeld(bars, entriesByCode, holdDays, "min_hold"),
+      path: `flow_demand:${mode}`,
+    };
+  }
+
+  if (lid.startsWith("fund_") || fam === "fundamentals_price") {
+    const events = panel.fund_regime?.events_by_code || null;
+    if (!events || !Object.keys(events).length) {
+      return {
+        held: {},
+        path: "fundamentals_price",
+        fallback: "path_broken_missing_sidecar",
+      };
+    }
+    const mode = strParam(params, "mode", lid.includes("value_only") ? "value_only" : "value_momentum_agree");
+    const allScores: number[] = [];
+    const valueBy: Record<string, Record<string, number | null>> = {};
+    for (const [code, pairs] of Object.entries(bars)) {
+      if (code.startsWith("__") || !pairs) continue;
+      valueBy[code] = {};
+      for (const [d, close] of pairs) {
+        const fin = finsAsof(events[code] || [], d);
+        const score = fin ? fundamentalValueScore(close, fin.eps, fin.bps) : null;
+        valueBy[code][d] = score;
+        if (score !== null) allScores.push(score);
+      }
+    }
+    const median = allScores.length ? [...allScores].sort((a, b) => a - b)[Math.floor(allScores.length / 2)] : null;
+    const entriesByCode: Record<string, Array<number | null>> = {};
+    for (const [code, pairs] of Object.entries(bars)) {
+      if (code.startsWith("__") || !pairs) continue;
+      const moms = momentumSeries(pairs, momN);
+      const momBy: Record<string, number | null> = {};
+      for (const [d, m] of moms) momBy[d] = m;
+      entriesByCode[code] = pairs.map(([d]) =>
+        fundEntrySign(valueBy[code]?.[d] ?? null, momBy[d] ?? null, median, mode),
+      );
+    }
+    return {
+      held: stickyToHeld(bars, entriesByCode, holdDays, "fixed_horizon"),
+      path: `fund:${mode}`,
+    };
+  }
+
+  if (lid.startsWith("macro_repo_rate_") || fam === "macro_conditioned") {
+    const rates = repoRatesFromPanel(panel);
+    const mode = strParam(params, "mode", lid.includes("level") ? "rate_level" : "rate_change");
+    if (Object.keys(rates).length < 2) {
+      return {
+        held: {},
+        path: "macro_conditioned",
+        fallback: "path_broken_missing_sidecar",
+      };
+    }
+    const highThr = numParam(params, "high_threshold", 0.05);
+    const lowThr = numParam(params, "low_threshold", 0.0);
+    const rateDates = Object.keys(rates).sort();
+    const prevMap: Record<string, number | null> = {};
+    for (let i = 0; i < rateDates.length; i++) prevMap[rateDates[i]] = i > 0 ? rates[rateDates[i - 1]] : null;
+    const entriesByCode: Record<string, Array<number | null>> = {};
+    for (const [code, pairs] of Object.entries(bars)) {
+      if (code.startsWith("__") || !pairs) continue;
+      const moms = momentumSeries(pairs, momN);
+      entriesByCode[code] = moms.map(([d, m]) => {
+        let rate = rates[d];
+        let prev = prevMap[d] ?? null;
+        if (rate === undefined) {
+          const earlier = rateDates.filter((x) => x <= d);
+          if (!earlier.length) return null;
+          const last = earlier[earlier.length - 1];
+          rate = rates[last];
+          prev = prevMap[last] ?? null;
+        }
+        const regime = repoRegimeLabel(rate, prev, mode, highThr, lowThr, 1e-6);
+        return conditionMomOnRepoRegime(signFromNumeric(m), regime, mode);
+      });
+    }
+    return {
+      held: stickyToHeld(bars, entriesByCode, holdDays, "fixed_horizon"),
+      path: `macro:${mode}`,
+    };
+  }
+
+  if (lid.startsWith("mf_") || fam === "multi_factor") {
+    if (lid.includes("flow")) {
+      const inner = barNativeHeldBook({ ...logic, logic_id: "flow_margin_pressure", family_id: "flow_demand" }, panel);
+      return inner ? { held: inner.held, path: "mf_flow_price" } : { held: {}, path: "mf_flow_price", fallback: "empty" };
+    }
+    const inner = barNativeHeldBook({ ...logic, logic_id: "fund_value_mom_agree", family_id: "fundamentals_price" }, panel);
+    return inner ? { held: inner.held, path: "mf_value_mom_rate" } : { held: {}, path: "mf_value_mom_rate", fallback: "empty" };
+  }
+
+  if (lid === "vol_risk_adjusted_mom" || lid === "vol_breakout_expand" || fam === "vol_risk_adjusted") {
+    const volN = Math.floor(numParam(params, "vol_n", 10));
+    const thr = numParam(params, "vol_threshold", 1.0);
+    const expand = lid.includes("breakout") || strParam(params, "gate_mode", "") === "vol_expand";
+    const entriesByCode: Record<string, Array<number | null>> = {};
+    for (const [code, pairs] of Object.entries(bars)) {
+      if (code.startsWith("__") || !pairs) continue;
+      entriesByCode[code] = pairs.map((_, i) => {
+        const mom = i >= momN && pairs[i - momN][1] !== 0 ? (pairs[i][1] - pairs[i - momN][1]) / pairs[i - momN][1] : null;
+        if (mom === null || mom === 0) return mom === 0 ? 0 : null;
+        const sgn = mom > 0 ? 1 : -1;
+        if (expand) {
+          const rec = realizedVol(pairs, i, volN);
+          const pri = realizedVol(pairs, i - volN, volN);
+          if (rec === null || pri === null || pri === 0) return null;
+          return rec / pri >= thr ? sgn : 0;
+        }
+        const vol = realizedVol(pairs, i, volN);
+        if (vol === null) return null;
+        return Math.abs(mom) / vol >= thr ? sgn : 0;
+      });
+    }
+    return {
+      held: stickyToHeld(bars, entriesByCode, holdDays, "fixed_horizon"),
+      path: expand ? "vol_breakout_expand" : "vol_risk_adjusted_mom",
+    };
+  }
+
+  if (
+    lid === "xs_rank_ls_sticky" ||
+    lid === "xs_rank_ls_daily" ||
+    (fam.includes("cross_section") &&
+      !lid.startsWith("xs_margin") &&
+      !lid.startsWith("xs_low_vol") &&
+      !lid.startsWith("xs_high_vol"))
+  ) {
+    const daily = lid.includes("daily") || holdDays <= 1;
+    const h = daily ? 1 : holdDays;
+    const byDate: Record<string, Record<string, number | null>> = {};
+    const datesByCode: Record<string, string[]> = {};
+    for (const [code, pairs] of Object.entries(bars)) {
+      if (code.startsWith("__") || !pairs) continue;
+      datesByCode[code] = pairs.map(([d]) => d);
+      const moms = momentumSeries(pairs, momN);
+      for (const [d, m] of moms) {
+        if (!byDate[d]) byDate[d] = {};
+        byDate[d][code] = m;
+      }
+    }
+    const entriesByCode: Record<string, Array<number | null>> = {};
+    for (const code of Object.keys(datesByCode)) {
+      entriesByCode[code] = datesByCode[code].map((d) => {
+        const ranks = crossSectionRankSigns(byDate[d] || {}, lf, sf);
+        return ranks[code] ?? 0;
+      });
+    }
+    return {
+      held: stickyToHeld(bars, entriesByCode, h, "fixed_horizon"),
+      path: daily ? "xs_rank_daily" : "xs_rank_sticky",
+    };
+  }
+
+  if (lid.startsWith("mdh_") || fam === "multi_day_hold") {
+    const pol = lid.includes("reversion") ? -1 : 1;
+    return { held: mdhHeldLocal(bars, holdDays, pol), path: pol < 0 ? "mdh_reversion" : "mdh_sticky" };
+  }
+
+  return null;
+}
+
+function mdhHeldLocal(bars: BarsByCode, holdDays: number, polarity: number): HeldBook {
+  const entriesByCode: Record<string, Array<number | null>> = {};
+  const n = Math.max(1, holdDays);
+  for (const [code, pairs] of Object.entries(bars || {})) {
+    if (code.startsWith("__") || !pairs) continue;
+    entriesByCode[code] = pairs.map((_, i) => {
+      if (i < n) return null;
+      const b = pairs[i - n][1];
+      const last = pairs[i][1];
+      if (!Number.isFinite(b) || !Number.isFinite(last) || b === 0) return null;
+      const m = (last - b) / b;
+      if (m > 0) return polarity;
+      if (m < 0) return -polarity;
+      return 0;
+    });
+  }
+  return stickyToHeld(bars, entriesByCode, holdDays, "fixed_horizon");
+}
+
 function freezeFields() {
   return {
     mass_research: "NO-GO",

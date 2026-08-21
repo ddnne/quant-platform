@@ -70,9 +70,6 @@ CS_LOGIC_IDS: frozenset[str] = frozenset(
         "repo_3m_level_cs",
     }
 )
-CS_AND_SIDE_LOGIC_IDS: frozenset[str] = frozenset(
-    set(CS_LOGIC_IDS) | set(EVENT_SIDES_LOGIC_IDS)
-)
 # Distinct economic theses added after the 52-logic path check.
 # Not numeric hold/momentum variants of an existing thesis.
 CF_NEW_EVENT_THESIS_IDS: frozenset[str] = frozenset(

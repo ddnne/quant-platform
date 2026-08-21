@@ -70,3 +70,62 @@ def test_summarize_path_passes_gate_fields() -> None:
     )
     assert row["daily_path_DD"] == -0.14
     assert row["daily_path_complete"] is True
+
+
+def test_summarize_marks_path_broken_not_suspicious() -> None:
+    from research.eval_registry import summarize_daily_path_cells
+
+    cells = [
+        {
+            "logic_id": "unwired_overlay",
+            "window_id": "y2015_full",
+            "occupancy": 0.87,
+            "total_ret_net": 0.04,
+            "eval_path": "cs_generic",
+            "path_fallback": "path_broken",
+            "t_stat": 1.2,
+            "sharpe_daily": 0.3,
+            "daily_path_DD": -0.1,
+        }
+    ]
+    summary = summarize_daily_path_cells(cells, job_id="eval-test-path")
+    row = summary["logics"][0]
+    assert "path_broken" in row["flags"]
+    assert row["tag"] == "path_broken"
+    assert row["explore_only"] is True
+    assert row["go"] is False
+    assert summary["n_path_broken"] == 1
+
+
+def test_proposal_schema_reads_summary_weakness_flags() -> None:
+    from research.unique_logic.proposal_schema import (
+        proposal_blocked_by_summary,
+        weakness_flags_from_summary,
+    )
+
+    summary = {
+        "logics": [
+            {
+                "logic_id": "xs_rank_ls_sticky",
+                "flags": ["always_on"],
+                "tag": "suspicious",
+            },
+            {
+                "logic_id": "unwired_overlay",
+                "flags": ["path_broken"],
+                "tag": "path_broken",
+            },
+        ]
+    }
+    flags = weakness_flags_from_summary(summary)
+    assert "always_on" in flags["xs_rank_ls_sticky"]
+    assert "path_broken" in flags["unwired_overlay"]
+    blocked = proposal_blocked_by_summary(
+        {
+            "logic_id": "clone",
+            "why_different_from": ["unwired_overlay"],
+            "signal_definition": "x",
+        },
+        summary,
+    )
+    assert any("path_broken" in r for r in blocked)

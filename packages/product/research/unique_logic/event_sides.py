@@ -21,7 +21,6 @@ from research.unique_logic.constants import (
     LOGIC_CATALOG_HEADLINE_BAN,
     EVENT_LOGIC_IDS,
     EVENT_FILTER_LOGIC_IDS,
-    CS_AND_SIDE_LOGIC_IDS,
 )
 
 _assert_frozen_pins_untouched = assert_frozen_pins_untouched

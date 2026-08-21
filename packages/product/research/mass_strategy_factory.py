@@ -4904,15 +4904,14 @@ def write_factory_outputs(
             "## Re-run recipe",
             "",
             "```bash",
-            "python scripts/run_mass_strategy_batch.py --seed 870816 --n 100 \\",
-            "  --out-dir .glm-logs/w0816x_w89_rate_mf/",
+            "python -m research.cf_daily_path_job  # CF isolate fan-out",
+            "python -m research.unique_logic --all --backend local  # serial fallback",
             "```",
             "",
             "Synthetic (tests / no mirrors):",
             "",
             "```bash",
-            "python scripts/run_mass_strategy_batch.py --synthetic --n 100 "
-            "--out-dir /tmp/msf",
+            "python -m research.mass_strategy_factory --synthetic --n 100",
             "```",
             "",
         ]
@@ -4975,7 +4974,7 @@ def try_cf_minimal_mass_batch() -> dict[str, Any]:
             "POST /v1/mass-eval"
         ),
         "supported_path_local": (
-            "local run_mass_factory / scripts/run_mass_strategy_batch.py"
+            "local run_mass_factory / python -m research.unique_logic --backend local"
         ),
         "python_driver": "research.cf_mass_eval_job",
         "not_yet_implemented": [

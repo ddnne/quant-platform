@@ -172,6 +172,16 @@ def manifest_from_window_rows(
                     if row.get("params_hash") is None
                     else str(row.get("params_hash"))
                 ),
+                extra={
+                    k: row[k]
+                    for k in (
+                        "t_stat",
+                        "sharpe_daily",
+                        "eval_path",
+                        "path_fallback",
+                    )
+                    if k in row
+                },
             )
         )
     return EvalJobManifest(
@@ -382,7 +392,26 @@ def summarize_daily_path_cells(
         n_neg = sum(s < 0 for s in signs)
         m_occ = _mean(occs)
         m_net = _mean(nets)
+        paths = sorted(
+            {
+                str(c.get("eval_path") or "")
+                for c in cs
+                if c.get("eval_path")
+            }
+        )
+        fallbacks = sorted(
+            {
+                str(c.get("path_fallback") or "")
+                for c in cs
+                if c.get("path_fallback")
+            }
+        )
         flags: list[str] = []
+        if any(p in {"cs_generic", "mdh_generic"} for p in paths) or any(
+            str(f).startswith("path_broken") or str(f).startswith("mdh_empty")
+            for f in fallbacks
+        ):
+            flags.append("path_broken")
         if m_occ is not None and m_occ >= ALWAYS_ON_OCCUPANCY_WARN:
             flags.append("always_on")
         if m_occ is not None and m_occ <= 0.05:
@@ -392,12 +421,17 @@ def summarize_daily_path_cells(
         if n_pos >= 2 and n_neg >= 2:
             flags.append("sign_unstable")
         tag = "weak"
-        if "always_on" in flags or "near_empty" in flags:
+        if "path_broken" in flags:
+            tag = "path_broken"
+        elif "always_on" in flags or "near_empty" in flags:
             tag = "suspicious"
         elif m_net is not None and m_net > 0 and n_pos >= 4 and "sign_unstable" not in flags:
             tag = "strong"
         elif "sign_unstable" in flags:
             tag = "unstable"
+        t_stats = [c.get("t_stat") for c in cs]
+        sharpes = [c.get("sharpe_daily") for c in cs]
+        dds = [c.get("daily_path_DD") for c in cs]
         logics.append(
             {
                 "logic_id": lid,
@@ -405,11 +439,16 @@ def summarize_daily_path_cells(
                 "n_windows": len(cs),
                 "mean_occupancy": m_occ,
                 "mean_total_ret_net": m_net,
+                "mean_t_stat": _mean(t_stats),
+                "mean_sharpe_daily": _mean(sharpes),
+                "mean_daily_path_DD": _mean(dds),
                 "n_pos_windows": n_pos,
                 "n_neg_windows": n_neg,
+                "eval_paths": paths,
+                "path_fallbacks": fallbacks,
                 "flags": flags,
                 "tag": tag,
-                "explore_only": tag != "strong",
+                "explore_only": True,
                 "promote_as_main": False,
                 "go": False,
             }
@@ -427,6 +466,7 @@ def summarize_daily_path_cells(
         "n_weak": int(tags.get("weak") or 0),
         "n_suspicious": int(tags.get("suspicious") or 0),
         "n_unstable": int(tags.get("unstable") or 0),
+        "n_path_broken": int(tags.get("path_broken") or 0),
         "always_on_warn": ALWAYS_ON_OCCUPANCY_WARN,
         "n_survivors_are_not_a_pass": True,
         "promote_as_main": False,

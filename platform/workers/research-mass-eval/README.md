@@ -114,7 +114,7 @@ cat /tmp/mass_eval_summary.json | jq .
 | path | role |
 |------|------|
 | **this worker** | CF minimal multi-logic batch + R2 artifacts |
-| `scripts/run_mass_strategy_batch.py` | Full local factory (all factor legs, near-dup, generation) |
+| `python -m research.unique_logic --backend local` | Serial local unique_logic fallback |
 | `research.single_shot_job` | Orthogonal tip signal jobs (not mass logic batch) |
 
 Python helper: `research.mass_strategy_factory.try_cf_minimal_mass_batch()` reports this worker.

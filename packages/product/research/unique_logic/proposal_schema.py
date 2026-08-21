@@ -7,7 +7,7 @@ hold_days/momentum_n alone.
 """
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Mapping
 
 PROPOSAL_SCHEMA_VERSION: str = "research-hyp-proposal/v1"
 
@@ -47,3 +47,40 @@ PROPOSAL_EXAMPLE: dict[str, Any] = {
 def validate_proposal(payload: dict[str, Any]) -> list[str]:
     missing = [k for k in PROPOSAL_REQUIRED_KEYS if not payload.get(k)]
     return missing
+
+
+def weakness_flags_from_summary(summary: Mapping[str, Any]) -> dict[str, list[str]]:
+    """Read ``summary_family.json`` weakness flags. Does not execute a proposal."""
+    out: dict[str, list[str]] = {}
+    for row in summary.get("logics") or []:
+        if not isinstance(row, Mapping):
+            continue
+        lid = str(row.get("logic_id") or "").strip()
+        if not lid:
+            continue
+        flags = [str(x) for x in (row.get("flags") or [])]
+        tag = str(row.get("tag") or "")
+        if tag and tag not in flags:
+            flags = [*flags, f"tag:{tag}"]
+        out[lid] = flags
+    return out
+
+
+def proposal_blocked_by_summary(
+    payload: Mapping[str, Any],
+    summary: Mapping[str, Any],
+) -> list[str]:
+    """Return reasons a proposal is blocked by known path/occupancy flags.
+
+    Numeric hold/mom clones of a path_broken or always_on parent are rejected.
+    """
+    flags = weakness_flags_from_summary(summary)
+    reasons: list[str] = []
+    parents = [str(x) for x in (payload.get("why_different_from") or [])]
+    for parent in parents:
+        pf = flags.get(parent) or []
+        if "path_broken" in pf:
+            reasons.append(f"parent_path_broken:{parent}")
+        if "always_on" in pf and not payload.get("signal_definition"):
+            reasons.append(f"parent_always_on_needs_new_signal:{parent}")
+    return reasons

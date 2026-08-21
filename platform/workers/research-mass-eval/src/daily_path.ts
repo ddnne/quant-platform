@@ -5,6 +5,8 @@
  * fans out concurrent POSTs so batch wall-clock ≈ longest isolate.
  * n_survivors from /v1/mass-eval is not a pass.
  */
+import { barNativeHeldBook } from "./eval";
+import { sharpePeriod, tStatVsZero } from "./metrics";
 import type { BarsByCode, LogicSpec, PeriodPanel } from "./types";
 
 const DEFAULT_ONE_WAY = 0.001;
@@ -254,6 +256,7 @@ function heldBookDailyMtm(
   holdDays: number,
   oneWay: number,
   repoByDate?: Record<string, number>,
+  advByCode?: Record<string, number>,
 ): {
   dates: string[];
   net_daily: number[];
@@ -273,6 +276,7 @@ function heldBookDailyMtm(
     const d = dates[i];
     const contribs: number[] = [];
     let nShort = 0;
+    const liqMults: number[] = [];
     for (const [code, cmap] of Object.entries(held)) {
       const pos = cmap[prev];
       if (!pos) continue;
@@ -281,17 +285,27 @@ function heldBookDailyMtm(
       if (!finite(c0) || !finite(c1) || c0 === 0) continue;
       contribs.push(pos * (c1 / c0 - 1));
       if (pos < 0) nShort += 1;
+      const adv = advByCode?.[code];
+      if (finite(adv)) {
+        if (adv >= 1e9) liqMults.push(1.0);
+        else if (adv >= 1e8) liqMults.push(1.5);
+        else liqMults.push(2.5);
+      }
     }
     let net = 0;
     if (contribs.length) {
       const g = contribs.reduce((a, b) => a + b, 0) / contribs.length;
+      const liq =
+        liqMults.length > 0
+          ? liqMults.reduce((a, b) => a + b, 0) / liqMults.length
+          : 1.0;
       let shortDrag = 0;
       const repo = repoByDate?.[prev];
       if (nShort && finite(repo)) {
-        // JSDA percent → daily fraction. Missing repo → no invent, tx-only.
-        shortDrag = (nShort / contribs.length) * ((repo as number) / 100 / 252);
+        shortDrag =
+          (nShort / contribs.length) * ((repo as number) / 100 / 252) * liq;
       }
-      net = g - dailyCost - shortDrag;
+      net = g - dailyCost * liq - shortDrag;
       nOn += 1;
     }
     netDaily.push(net);
@@ -979,6 +993,15 @@ function gatedCsHeld(
   panel: PeriodPanel,
 ): Record<string, Record<string, number>> {
   const lid = String(logic.logic_id || "");
+  if (lid === "xs_margin_delta_rank") {
+    return xsMarginDeltaHeld(panel);
+  }
+  if (lid === "xs_low_vol_mom") {
+    return xsLowVolMomHeld(panel);
+  }
+  if (lid === "idio_mom_macro_impulse") {
+    return idioMomMacroHeld(panel);
+  }
   const invert =
     lid === "xs_high_vol_fade" ||
     lid === "overnight_tight_cs_fade" ||
@@ -986,7 +1009,9 @@ function gatedCsHeld(
     lid === "fy_end_cs_fade" ||
     lid === "overnight_p90_cs_flip" ||
     lid === "flow_price_disagree_fade" ||
-    lid === "basevol_up_day_fade";
+    lid === "basevol_up_day_fade" ||
+    lid === "overnight_level_cs_tilt" ||
+    lid === "month_end_cs_fade";
   const base = csHeld(panel.bars, 5, 10, 0.3, 0.3, invert);
   const overnight =
     panel.repo_rate_regime?.rates_by_date ||
@@ -1008,11 +1033,31 @@ function gatedCsHeld(
     return on + sp;
   };
   const dates = unionDates(panel.bars);
+  const onDates = Object.keys(overnight).sort();
+  const onDelta: Record<string, number> = {};
+  for (let i = 1; i < onDates.length; i++) {
+    onDelta[onDates[i]] = overnight[onDates[i]] - overnight[onDates[i - 1]];
+  }
+  const absOnDelta: Record<string, number> = {};
+  for (const [d, v] of Object.entries(onDelta)) absOnDelta[d] = Math.abs(v);
+  const spDates = Object.keys(spread).sort();
+  const spDelta: Record<string, number> = {};
+  for (let i = 1; i < spDates.length; i++) {
+    spDelta[spDates[i]] = spread[spDates[i]] - spread[spDates[i - 1]];
+  }
+  const absSpDelta: Record<string, number> = {};
+  for (const [d, v] of Object.entries(spDelta)) absSpDelta[d] = Math.abs(v);
+  const r3By: Record<string, number> = {};
+  for (const d of dates) {
+    const v = repo3mApprox(d);
+    if (v !== undefined) r3By[d] = v;
+  }
   const out: Record<string, Record<string, number>> = {};
   for (const [code, cmap] of Object.entries(base)) {
     out[code] = {};
     for (const [d, v] of Object.entries(cmap)) {
       let keep = true;
+      let signed = v;
       const on = overnight[d];
       const medOn = pitMedian(overnight, d, 20);
       const i = dates.indexOf(d);
@@ -1095,8 +1140,197 @@ function gatedCsHeld(
           prev !== null && finite(bv[d]) && finite(bv[prev]) && bv[d] > bv[prev];
       } else if (lid === "iv_below_basevol_cs") {
         keep = finite(ivSpread[d]) && ivSpread[d] < 0;
+      } else if (lid === "overnight_level_cs_tilt") {
+        keep = on !== undefined && medOn !== null && on >= medOn;
+      } else if (lid === "overnight_easy_cs_follow") {
+        keep = on !== undefined && medOn !== null && on < medOn;
+      } else if (lid === "month_end_cs_fade") {
+        const ym = d.slice(0, 7);
+        const inMonth = dates.filter((x) => x.slice(0, 7) === ym);
+        keep = inMonth.slice(-3).includes(d);
+      } else if (lid === "funding_impulse_cs_tilt") {
+        const dv = onDelta[d];
+        const medAbs = pitMedian(absOnDelta, d, 20);
+        keep =
+          on !== undefined &&
+          finite(dv) &&
+          medAbs !== null &&
+          Math.abs(dv) >= medAbs;
+        if (keep && finite(dv) && dv !== 0) signed = v * (dv > 0 ? -1 : 1);
+      } else if (lid === "curve_steepen_impulse_cs") {
+        const dv = spDelta[d];
+        const medAbs = pitMedian(absSpDelta, d, 20);
+        keep =
+          finite(dv) &&
+          dv > 0 &&
+          medAbs !== null &&
+          Math.abs(dv) >= medAbs;
+      } else if (lid === "repo_3m_level_cs") {
+        const r3 = r3By[d];
+        const med = pitMedian(r3By, d, 20);
+        keep = finite(r3) && med !== null && r3 >= med;
       }
-      if (keep) out[code][d] = v;
+      if (keep) out[code][d] = signed;
+    }
+  }
+  return out;
+}
+
+function xsMarginDeltaHeld(
+  panel: PeriodPanel,
+): Record<string, Record<string, number>> {
+  const chgBy = panel.flow_regime?.margin_change_by_code || {};
+  if (!Object.keys(chgBy).length) return {};
+  const dates = unionDates(panel.bars);
+  const byDate: Record<string, Record<string, number | null>> = {};
+  for (const d of dates) {
+    byDate[d] = {};
+    for (const [code, cmap] of Object.entries(chgBy)) {
+      const v = cmap?.[d];
+      if (finite(v)) byDate[d][code] = v;
+    }
+  }
+  const out: Record<string, Record<string, number>> = {};
+  for (const [code, pairs] of Object.entries(panel.bars || {})) {
+    if (code.startsWith("__") || !pairs) continue;
+    const entries = pairs.map(([d]) => {
+      const ranks = csRank(byDate[d] || {}, 0.3, 0.3);
+      return ranks[code] ?? 0;
+    });
+    const sticky = stickyHold(entries, 10);
+    out[code] = {};
+    for (let i = 0; i < pairs.length; i++) {
+      const pos = sticky[i];
+      if (pos) out[code][pairs[i][0]] = pos as number;
+    }
+  }
+  return out;
+}
+
+function xsLowVolMomHeld(
+  panel: PeriodPanel,
+): Record<string, Record<string, number>> {
+  const bars = panel.bars || {};
+  const dates = unionDates(bars);
+  const volN = 20;
+  const volByCodeDate: Record<string, Record<string, number | null>> = {};
+  for (const [code, pairs] of Object.entries(bars)) {
+    if (code.startsWith("__") || !pairs) continue;
+    volByCodeDate[code] = {};
+    const rets: Array<number | null> = [];
+    for (let i = 0; i < pairs.length; i++) {
+      const d = pairs[i][0];
+      if (i === 0) {
+        rets.push(null);
+        volByCodeDate[code][d] = null;
+        continue;
+      }
+      const c0 = pairs[i - 1][1];
+      const c1 = pairs[i][1];
+      rets.push(c0 && finite(c0) && finite(c1) ? c1 / c0 - 1 : null);
+      const window = rets.slice(-volN).filter((x): x is number => x !== null);
+      if (window.length < 8) {
+        volByCodeDate[code][d] = null;
+        continue;
+      }
+      const m = window.reduce((a, b) => a + b, 0) / window.length;
+      const v =
+        window.reduce((a, b) => a + (b - m) ** 2, 0) / (window.length - 1);
+      volByCodeDate[code][d] = v > 0 ? Math.sqrt(v) : 0;
+    }
+  }
+  const csMedBy: Record<string, number> = {};
+  for (const d of dates) {
+    const vs = Object.values(volByCodeDate)
+      .map((m) => m[d])
+      .filter((x): x is number => finite(x));
+    if (vs.length < 2) continue;
+    const s = vs.slice().sort((a, b) => a - b);
+    csMedBy[d] = s[Math.floor(s.length / 2)];
+  }
+  const byDate: Record<string, Record<string, number | null>> = {};
+  for (const [code, pairs] of Object.entries(bars)) {
+    if (code.startsWith("__") || !pairs) continue;
+    const moms = pairs.map(([d, px], i) => {
+      if (i < 5) return [d, null] as [string, number | null];
+      const b = pairs[i - 5][1];
+      if (!b) return [d, null] as [string, number | null];
+      return [d, (px - b) / b] as [string, number | null];
+    });
+    for (const [d, m] of moms) {
+      if (!byDate[d]) byDate[d] = {};
+      byDate[d][code] = m;
+    }
+  }
+  const out: Record<string, Record<string, number>> = {};
+  for (const [code, pairs] of Object.entries(bars)) {
+    if (code.startsWith("__") || !pairs) continue;
+    const entries = pairs.map(([d]) => {
+      const csMed = csMedBy[d];
+      const medHist = pitMedian(csMedBy, d, 20);
+      if (!finite(csMed) || medHist === null || csMed < medHist) return 0;
+      const vol = volByCodeDate[code]?.[d];
+      if (!finite(vol) || vol >= csMed) return 0;
+      const scores: Record<string, number | null> = {};
+      for (const [c, mom] of Object.entries(byDate[d] || {})) {
+        const v = volByCodeDate[c]?.[d];
+        if (finite(v) && v < csMed) scores[c] = mom;
+      }
+      const ranks = csRank(scores, 0.3, 0.3);
+      return ranks[code] ?? 0;
+    });
+    const sticky = stickyHold(entries, 10);
+    out[code] = {};
+    for (let i = 0; i < pairs.length; i++) {
+      const pos = sticky[i];
+      if (pos) out[code][pairs[i][0]] = pos as number;
+    }
+  }
+  return out;
+}
+
+function idioMomMacroHeld(
+  panel: PeriodPanel,
+): Record<string, Record<string, number>> {
+  const idx = panel.bars?.["__NKY_PROXY__"] || [];
+  if (idx.length < 6) return {};
+  const idxMom: Record<string, number> = {};
+  for (let i = 5; i < idx.length; i++) {
+    const b = idx[i - 5][1];
+    const last = idx[i][1];
+    if (b && finite(b) && finite(last)) idxMom[idx[i][0]] = (last - b) / b;
+  }
+  const absMom: Record<string, number> = {};
+  for (const [d, v] of Object.entries(idxMom)) absMom[d] = Math.abs(v);
+  const byDate: Record<string, Record<string, number | null>> = {};
+  for (const [code, pairs] of Object.entries(panel.bars || {})) {
+    if (code.startsWith("__") || !pairs) continue;
+    for (let i = 5; i < pairs.length; i++) {
+      const b = pairs[i - 5][1];
+      const last = pairs[i][1];
+      const d = pairs[i][0];
+      if (!b || !finite(b) || !finite(last)) continue;
+      if (!byDate[d]) byDate[d] = {};
+      const nameMom = (last - b) / b;
+      const im = idxMom[d];
+      byDate[d][code] = finite(im) ? nameMom - im : nameMom;
+    }
+  }
+  const out: Record<string, Record<string, number>> = {};
+  for (const [code, pairs] of Object.entries(panel.bars || {})) {
+    if (code.startsWith("__") || !pairs) continue;
+    const entries = pairs.map(([d]) => {
+      const im = idxMom[d];
+      const med = pitMedian(absMom, d, 20);
+      if (!finite(im) || med === null || Math.abs(im) < med) return 0;
+      const ranks = csRank(byDate[d] || {}, 0.3, 0.3);
+      return ranks[code] ?? 0;
+    });
+    const sticky = stickyHold(entries, 10);
+    out[code] = {};
+    for (let i = 0; i < pairs.length; i++) {
+      const pos = sticky[i];
+      if (pos) out[code][pairs[i][0]] = pos as number;
     }
   }
   return out;
@@ -1125,23 +1359,33 @@ export function evalLogicDailyPathOnPanel(
         ? (params.post_hold_days as number)
         : 10,
   );
-  const momN = Math.floor(
-    finite(params.momentum_n as number) ? (params.momentum_n as number) : 5,
-  );
-  const lf = finite(params.long_frac as number) ? (params.long_frac as number) : 0.3;
-  const sf = finite(params.short_frac as number)
-    ? (params.short_frac as number)
-    : 0.3;
   const lid = String(logic.logic_id || "");
-  const invert = lid.includes("reversion") || lid.includes("fade");
-  const polarity = lid.includes("reversion") ? -1 : 1;
-  const held = isEventLogic(lid)
-    ? eventHeld(logic, panel) || {}
-    : (CF_NEW_CS_THESIS_IDS as readonly string[]).includes(lid)
-      ? gatedCsHeld(logic, panel)
-      : usesCrossSection(logic)
-        ? csHeld(panel.bars, momN, holdDays, lf, sf, invert)
-        : mdhHeld(panel.bars, holdDays, polarity);
+  let evalPath = "unknown";
+  let pathFallback: string | undefined;
+  let held: Record<string, Record<string, number>> = {};
+  if (isEventLogic(lid)) {
+    held = eventHeld(logic, panel) || {};
+    evalPath = "event";
+  } else if ((CF_UNIQUE_CS_LOGIC_IDS as readonly string[]).includes(lid)) {
+    held = gatedCsHeld(logic, panel);
+    evalPath = "gated_cs";
+  } else {
+    const bn = barNativeHeldBook(logic, panel);
+    if (bn) {
+      held = bn.held;
+      evalPath = bn.path;
+      pathFallback = bn.fallback;
+    } else if (usesCrossSection(logic)) {
+      // Unwired CS overlay — do not silently share the generic CS book.
+      held = {};
+      evalPath = "cs_generic";
+      pathFallback = "path_broken";
+    } else {
+      held = {};
+      evalPath = "mdh_generic";
+      pathFallback = "path_broken";
+    }
+  }
   const dates = unionDates(panel.bars);
   const pack = heldBookDailyMtm(
     held,
@@ -1153,6 +1397,7 @@ export function evalLogicDailyPathOnPanel(
       panel.repo_rate_regime?.rate_by_date ||
       panel.repo_rate_by_date ||
       undefined,
+    panel.adv_by_code || undefined,
   );
   if (pack.net_daily.length < 2) {
     return {
@@ -1177,6 +1422,9 @@ export function evalLogicDailyPathOnPanel(
     dd.dd_duration_days !== null &&
     dd.recovered !== null &&
     dd.total_return !== null;
+  const nets = pack.net_daily.slice(1);
+  const tStat = tStatVsZero(nets);
+  const sh = sharpePeriod(nets);
   return {
     period_id: pid,
     year: panel.year,
@@ -1186,6 +1434,7 @@ export function evalLogicDailyPathOnPanel(
     dates: pack.dates,
     net_daily: pack.net_daily,
     occupancy_frac: pack.occupancy,
+    occupancy: pack.occupancy,
     n_gate_on_days: pack.n_gate_on,
     n_days: pack.dates.length,
     daily_path_DD: dd.max_dd,
@@ -1193,6 +1442,10 @@ export function evalLogicDailyPathOnPanel(
     dd_duration: dd.dd_duration_days,
     recovered: dd.recovered,
     recovery_days: dd.recovery_days,
+    t_stat: tStat,
+    sharpe_daily: sh,
+    eval_path: evalPath,
+    path_fallback: pathFallback || null,
     daily_path_complete: complete,
     method: dd.method,
     survived: false,
@@ -1235,6 +1488,10 @@ export function cellsFromPeriodPacks(
       recovered: p.recovered,
       recovery_days: p.recovery_days,
       n_days: p.n_days,
+      t_stat: p.t_stat,
+      sharpe_daily: p.sharpe_daily,
+      eval_path: p.eval_path,
+      path_fallback: p.path_fallback ?? null,
       daily_path_complete: Boolean(p.daily_path_complete),
       survived: false,
       promote_as_main: false,

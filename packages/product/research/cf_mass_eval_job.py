@@ -761,11 +761,8 @@ def _build_thicken_sidecars(
     if p_start:
         try:
             y, m, d = int(p_start[:4]), int(p_start[5:7]), int(p_start[8:10])
-            # naive ~90d lookback by month step (good enough for staging window)
-            m -= 3
-            while m <= 0:
-                m += 12
-                y -= 1
+            # ~2y lookback so weekly margin can form PIT min_hist=20.
+            y -= 2
             burn_start = f"{y:04d}-{m:02d}-{d:02d}"
         except ValueError:
             burn_start = p_start
@@ -850,17 +847,23 @@ def _build_thicken_sidecars(
         margin_source = "local_sqlite_jquants_records"
         pid = str(period.get("period_id") or "")
         margin_path = resolve_margin_path(pid) if pid else None
+        # PIT median min_hist=20 on weekly margin needs ~2y. Period-clipped
+        # complete22 ndjson is not a substitute for sqlite lookback.
+        margin_levels = load_margin_from_sqlite(
+            db,
+            codes=codes,
+            start=burn_start or None,
+            end=p_end or None,
+        )
         if margin_path is not None and Path(margin_path).exists():
-            margin_levels = load_margin_ndjson(margin_path, codes=codes)
-            margin_source = f"complete22_mirror:{Path(margin_path).name}"
-        if not margin_levels:
-            margin_levels = load_margin_from_sqlite(
-                db,
-                codes=codes,
-                start=burn_start or None,
-                end=p_end or None,
-            )
-            margin_source = "local_sqlite_jquants_records"
+            nd = load_margin_ndjson(margin_path, codes=codes)
+            if nd:
+                for code, pairs in nd.items():
+                    existing = {d: float(v) for d, v in (margin_levels.get(code) or [])}
+                    for d, v in pairs:
+                        existing.setdefault(str(d)[:10], float(v))
+                    margin_levels[code] = sorted(existing.items())
+                margin_source = f"sqlite+complete22_mirror:{Path(margin_path).name}"
         level_by_code: dict[str, dict[str, float]] = {}
         change_by_code: dict[str, dict[str, float]] = {}
         for code, pairs in margin_levels.items():
@@ -1066,6 +1069,26 @@ def build_real_period_panel(
         for code, pairs in close.items()
         if pairs
     }
+    adv_by_code: dict[str, float] = {}
+    for code, pairs in (rich or {}).items():
+        vals: list[float] = []
+        for _d, rec in pairs:
+            va = rec.get("Va") if isinstance(rec, dict) else None
+            try:
+                if va is not None:
+                    vals.append(float(va))
+                    continue
+            except (TypeError, ValueError):
+                pass
+            try:
+                vo = rec.get("Vo") if isinstance(rec, dict) else None
+                px = rec.get("close") if isinstance(rec, dict) else None
+                if vo is not None and px is not None:
+                    vals.append(float(vo) * float(px))
+            except (TypeError, ValueError):
+                continue
+        if vals:
+            adv_by_code[str(code)] = sum(vals) / len(vals)
     # Stage Nikkei-proxy index closes as reserved code for CF pure-TS
     # index_vol_regime eval (filtered out of CS universe in worker).
     nky_meta: dict[str, Any] = {}
@@ -1232,6 +1255,7 @@ def build_real_period_panel(
         **p,
         "status": "ok" if n_eq > 0 else "empty_bars",
         "bars": bars_json,
+        "adv_by_code": adv_by_code,
         "dataset": PRIMARY_BARS_DATASET,
         "source": f"complete22_mirror:{Path(bars_path).name}",
         "n_codes": n_eq,
@@ -1431,7 +1455,7 @@ def panels_cache_id(
     max_days: int,
 ) -> str:
     ids = ",".join(str(p.get("period_id") or "") for p in periods)
-    raw = f"v2_prior_eps|{ids}|c{int(max_codes)}|d{int(max_days)}"
+    raw = f"v4_margin_burn|{ids}|c{int(max_codes)}|d{int(max_days)}"
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
 

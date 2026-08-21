@@ -6,7 +6,7 @@ same gate names. Does not promote / GO.
 """
 from __future__ import annotations
 
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping
 
 from research.daily_path_eval import held_book_daily_mtm, panel_index
 from research.unique_logic.constants import CF_NEW_THESIS_IDS
@@ -778,9 +778,10 @@ def _eval_cs_combo(
             "basevol_up",
             "iv_below_basevol",
         }:
-            # Vol sidecars are staged on CF panels only. Local skip (no invent).
-            keep = False
-            extra_cf_only.append(gate)
+            vol = _vol_sidecar()
+            keep = _apply_vol_gate(gate, d, dates[i - 1] if i else None, vol)
+            if not vol:
+                extra_cf_only.append(gate)
         scores = scores_by_date.get(d) or {}
         if not keep or len(scores) < 2:
             continue
@@ -837,6 +838,97 @@ def _add_days(iso: str, n: int) -> str:
         return (date(y, m, d) + timedelta(days=n)).isoformat()
     except (TypeError, ValueError):
         return iso
+
+
+_VOL_CACHE: dict[str, dict[str, float]] | None = None
+
+
+def _vol_sidecar() -> dict[str, dict[str, float]]:
+    global _VOL_CACHE
+    if _VOL_CACHE is not None:
+        return _VOL_CACHE
+    out: dict[str, dict[str, float]] = {}
+    try:
+        from research.class_hyp_eval import (
+            load_nky_vol_series_from_sqlite,
+            load_opt225_regime_bundle_for_eval,
+        )
+
+        nky = load_nky_vol_series_from_sqlite() or {}
+        out["nky_term"] = {
+            str(k)[:10]: float(v)
+            for k, v in dict(nky.get("rv_ratio_by_date") or {}).items()
+            if v is not None
+        }
+        opt = load_opt225_regime_bundle_for_eval() or {}
+        def _abs(series: Any) -> dict[str, float]:
+            if not isinstance(series, dict):
+                return {}
+            raw = series.get("rv_abs_by_date") or series
+            if not isinstance(raw, dict):
+                return {}
+            return {str(k)[:10]: float(v) for k, v in raw.items() if v is not None}
+
+        out["skew"] = _abs(opt.get("skew") or {})
+        out["spread"] = _abs(opt.get("spread") or {})
+        out["basevol"] = _abs(opt.get("basevol") or {})
+        out["nky_abs"] = {
+            str(k)[:10]: float(v)
+            for k, v in dict(nky.get("rv_abs_by_date") or {}).items()
+            if v is not None
+        }
+    except Exception:
+        out = {}
+    _VOL_CACHE = out
+    return out
+
+
+def _apply_vol_gate(
+    gate: str,
+    d: str,
+    prev: str | None,
+    vol: Mapping[str, Mapping[str, float]],
+) -> bool:
+    if not vol:
+        return False
+    if gate == "nky_term_high":
+        series = vol.get("nky_term") or {}
+        med = event.pit_median_on_dates(series, [d], min_hist=20).get(d)
+        v = series.get(d)
+        return med is not None and v is not None and float(v) >= float(med)
+    if gate == "nky_term_compress":
+        series = vol.get("nky_term") or {}
+        if not prev:
+            return False
+        a, b = series.get(d), series.get(prev)
+        return a is not None and b is not None and float(a) < float(b)
+    if gate == "opt225_skew_high":
+        series = vol.get("skew") or {}
+        med = event.pit_median_on_dates(series, [d], min_hist=20).get(d)
+        v = series.get(d)
+        return med is not None and v is not None and float(v) >= float(med)
+    if gate == "opt225_spread_wide":
+        series = vol.get("spread") or {}
+        med = event.pit_median_on_dates(
+            {k: abs(float(x)) for k, x in series.items()}, [d], min_hist=20
+        ).get(d)
+        v = series.get(d)
+        return med is not None and v is not None and abs(float(v)) >= float(med)
+    if gate == "opt225_skew_and_term":
+        return _apply_vol_gate("opt225_skew_high", d, prev, vol) and _apply_vol_gate(
+            "nky_term_high", d, prev, vol
+        )
+    if gate == "basevol_up":
+        series = vol.get("basevol") or {}
+        if not prev:
+            return False
+        a, b = series.get(d), series.get(prev)
+        return a is not None and b is not None and float(a) > float(b)
+    if gate == "iv_below_basevol":
+        series = vol.get("spread") or {}
+        v = series.get(d)
+        return v is not None and float(v) < 0
+    return False
 
 
 def _universe_margin_delta(
