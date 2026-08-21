@@ -26,6 +26,7 @@ Do **not** add `scripts/run_wNN_*.py` or `docs/proof/w08*_wNN_*.md` scorecards.
 | projection | **FRESH** (`projgen-ef18b4f86ee946048161d25e2a30a2a8`) |
 | COMPLETE datasets | **22** held |
 | DEFER | **4** |
+| PARTIAL (4, not invented COMPLETE) | `equities_earnings_calendar` · `equities_bars_daily_am` (tip-wait) · `equities_master` · OTC |
 | `jsda_tokyo_repo_rates` | **COMPLETE** (1/1 · 2012-10-29…2026-08-14 · research eval uses local sqlite history; D1 is hot tip only) |
 
 Coverage SoT is quant-mcp (`dataset_coverage` / `backfill_status`), not this

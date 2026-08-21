@@ -8,24 +8,20 @@ via the live collection path (or a future --verify-structured mode).
 """
 from __future__ import annotations
 
+import argparse
+import re
 import sys
 from pathlib import Path
 
-# Bootstrap repo root onto sys.path before importing qp_paths (plain script runs).
-for _parent in Path(__file__).resolve().parents:
-    if (_parent / "qp_paths.py").is_file() and (_parent / "pyproject.toml").is_file():
-        if str(_parent) not in sys.path:
-            sys.path.insert(0, str(_parent))
+_here = Path(__file__).resolve().parent
+for _d in (_here, _here.parent):
+    if (_d / "_bootstrap.py").is_file():
+        if str(_d) not in sys.path:
+            sys.path.insert(0, str(_d))
         break
-else:
-    raise RuntimeError("quant-platform repo root not found from script")
+from _bootstrap import ensure_repo_root
 
-from qp_paths import repo_root
-import argparse
-import re
-
-ROOT = repo_root()
-sys.path.insert(0, str(ROOT))
+ROOT = ensure_repo_root()
 
 from data_contracts import coverage_contract_for
 from storage.coverage_ledger import (

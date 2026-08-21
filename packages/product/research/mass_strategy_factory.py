@@ -296,7 +296,7 @@ NEAR_LOGIC_GROUPS: tuple[dict[str, Any], ...] = (
             "Canonical Nikkei vol SoT = derivatives_bars_daily_options_225. "
             "W94: BaseVol = canonical level; ATM IV + spread = compare-only; "
             "skew / CM-term / ΔBaseVol are primary new features. "
-            "Near-dup of W91 nky_vol_* proxy — label proxy vs options SoT; "
+            "Near-dup of nky_vol_* proxy — label proxy vs options SoT; "
             "do not merge."
         ),
     },
@@ -312,8 +312,8 @@ NEAR_LOGIC_GROUPS: tuple[dict[str, Any], ...] = (
             "opt225_atm_iv_abs_level",
         ),
         "note": (
-            "W91 nky_vol_* = TOPIX/NK225F realized proxy/compare only. "
-            "W92/W94 opt225_* = options_225 BaseVol canonical SoT "
+            "nky_vol_* = TOPIX/NK225F realized proxy/compare only. "
+            "opt225_* = options_225 BaseVol canonical SoT "
             "(ATM compare-only). Keep parallel for comparison."
         ),
     },
@@ -1033,7 +1033,7 @@ def _build_logic_templates() -> dict[str, LogicTemplate]:
                 "Keep parallel in flow near-group; do not merge."
             ),
         ),
-        # ----- W91 Nikkei / index vol regime logics -----
+        # ----- Nikkei / index vol regime logics -----
         LogicTemplate(
             logic_id="nky_vol_abs_level",
             display_name="Nikkei abs vol-level × CS risk-on/off",
@@ -3411,7 +3411,7 @@ def load_batch_data_context(
     # Multi-tenor for curve-shape factor (W89); overnight-only rows lack 3M.
     repo_all = load_repo_rows_all_tenors_from_sqlite(db) if db.exists() else []
     curve_series = build_repo_curve_series(repo_all) if repo_all else None
-    # W91: Nikkei/TOPIX realized-vol series (NK225F prefer → TOPIX fallback)
+    # Nikkei/TOPIX realized-vol series (NK225F prefer → TOPIX fallback)
     # Kept as proxy/compare only vs W92 options_225 SoT.
     nky_vol_series = (
         load_nky_vol_series_from_sqlite(

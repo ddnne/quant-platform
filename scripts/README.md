@@ -8,7 +8,8 @@ CLIs (`issue_receipts_parallel`, `publish_ops_projection`, `export_ops_projectio
 `restore_local_complete_from_receipt`, `evaluate_collection_sla`,
 `record_research_eval`, `rebuild_paper_index`, `drive_governed_progress`,
 `parse_jsda_from_r2_mirror`, `backfill_status_report`,
-`generate_governed_js`, `verify_governed_js_drift`) use it.
+`generate_governed_js`, `verify_governed_js_drift`,
+`report_raw_throughput`, `rebuild_receipts_from_raw`) use it.
 Other scripts may still use local `sys.path` inserts until migrated. Live counts / GO gates: [docs/phase62_residual_status.md](../docs/phase62_residual_status.md)
 only. Do not launch Mass / READY / Phase7 / `cf_premium_backfill` from residual prose alone.
 

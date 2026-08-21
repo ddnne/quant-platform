@@ -928,7 +928,7 @@ def load_nky_vol_series_from_sqlite(
 ) -> dict[str, Any]:
     """Load Nikkei-proxy closes and build short/long realized-vol series.
 
-    Priority (W91 wall-clock safe):
+    Priority (wall-clock safe):
       1. Local TOPIX ndjson mirror (fast, multi-year COMPLETE-backed)
       2. Optional sqlite NK225F / TOPIX (slow on full D1 dump — skipped by default)
     Prefer=ndjson_topix is the default for factory/CF staging.

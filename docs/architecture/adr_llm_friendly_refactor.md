@@ -347,7 +347,7 @@ Layer 3 — EVIDENCE (cite, do not “upgrade” status from these alone)
   docs/proof/*
 
 Layer 4 — HISTORICAL / ARCHIVE (do not treat as current GO)
-  pre_phase7_full_code_review.md (snapshot review)
+  dated `docs/proof/*` and ops notes (not residual SoT)
 ```
 
 ### 7.3 B1-a concrete doc actions

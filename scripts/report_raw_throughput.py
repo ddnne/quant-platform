@@ -23,28 +23,23 @@ Usage:
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-# Bootstrap repo root onto sys.path before importing qp_paths (plain script runs).
-for _parent in Path(__file__).resolve().parents:
-    if (_parent / "qp_paths.py").is_file() and (_parent / "pyproject.toml").is_file():
-        if str(_parent) not in sys.path:
-            sys.path.insert(0, str(_parent))
-        break
-else:
-    raise RuntimeError("quant-platform repo root not found from script")
-
-from qp_paths import repo_root
 import argparse
 import json
 import sqlite3
+import sys
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
-ROOT = repo_root()
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+_here = Path(__file__).resolve().parent
+for _d in (_here, _here.parent):
+    if (_d / "_bootstrap.py").is_file():
+        if str(_d) not in sys.path:
+            sys.path.insert(0, str(_d))
+        break
+from _bootstrap import ensure_repo_root
+
+ROOT = ensure_repo_root()
 
 from ops.range_batch_scheduler import (  # noqa: E402
     DEFAULT_FINS_RPM,
