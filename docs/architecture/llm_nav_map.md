@@ -193,14 +193,9 @@ Full policy: ADR §5.2.
 | `docs/phase35_4_ops_verify_20260811.md` | historical ops verify snapshot |
 | `docs/phase6_hardening_acceptance.md` | historical acceptance snapshot |
 | `docs/phase61_plan.md` | historical plan |
-| `docs/phase62_status.md` | historical snapshot |
-| `docs/phase621_status.md` | historical snapshot |
-| `docs/phase622_status.md` | historical snapshot |
-| `docs/phase623_status.md` | historical snapshot |
 | `docs/phase621_test_audit.md` | historical / audit |
 | `docs/phase622_independent_review.md` | historical review |
 | `docs/phase62_completion_checklist.md` | historical / checklist |
-| `docs/phase62_final_report.md` | historical report — **not** FULL DONE alone |
 | `docs/pre_phase7_full_code_review.md` | historical Wave-0 review |
 | `docs/operations/phase63_live_sync.md` | historical live-vs-code note (counts may be stale) |
 | `docs/proof/*` | dated evidence |

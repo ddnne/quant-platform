@@ -1,0 +1,25 @@
+logic_id: surprise_xs_rank_adaptive
+family_id: surprise_xs_rank
+axis: mixed
+headline: true
+generation_enabled: false
+promote_as_main: false
+go: false
+thesis: >
+  Relative-surprise rank is window-unstable in sign. A PIT trail-K overlay sits beside orig and flip rather than killing either.
+signal_definition: >
+  same CS surprise rank occupancy as parent; tilt = +1 if mean of last 10 completed orig daily nets (min 5) >= 0 else −1; insufficient history → orig
+datasets:
+  - fins_summary
+  - equities_bars_daily
+  - markets_calendar
+params:
+  post_hold_days: 5
+  entry_mode: same_day_close_if_pre_close
+  long_frac: 0.3
+  short_frac: 0.3
+  trail_k: 10
+  trail_min: 5
+  mode: surprise_xs_rank_adaptive
+evaluator: research.unique_logic.dispatch.evaluate_logic_daily_mtm
+notes: catalog declaration; evaluate via unique_logic.dispatch

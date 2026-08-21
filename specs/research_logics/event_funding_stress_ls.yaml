@@ -1,0 +1,25 @@
+logic_id: event_funding_stress_ls
+family_id: event_funding_combo
+axis: mixed
+headline: true
+generation_enabled: false
+promote_as_main: false
+go: false
+thesis: >
+  Funding-stress is a side switch, not a skip-to-empty. Stay in the event book under both easy and stress overnight regimes; flip only the surprise sign under stress.
+signal_definition: >
+  overnight present and PIT median formed; +surprise if overnight < median, −surprise if overnight >= median; missing → skip
+datasets:
+  - fins_summary
+  - jsda_tokyo_repo_rates
+  - equities_bars_daily
+  - markets_calendar
+params:
+  post_hold_days: 5
+  entry_mode: same_day_close_if_pre_close
+  min_hist: 20
+  mode: funding_stress_ls
+  gate: overnight_present_pit_median
+  side: original_easy_opposite_stress
+evaluator: research.unique_logic.dispatch.evaluate_logic_daily_mtm
+notes: catalog declaration; evaluate via unique_logic.dispatch

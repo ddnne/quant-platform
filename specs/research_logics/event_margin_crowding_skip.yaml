@@ -1,0 +1,25 @@
+logic_id: event_margin_crowding_skip
+family_id: event_margin_crowd_combo
+axis: mixed
+headline: true
+generation_enabled: false
+promote_as_main: false
+go: false
+thesis: >
+  PEAD is weaker when the name is already crowded in margin. Skip the event when last-known name-level LongVol+ShrtVol is at/above its PIT trailing median; missing/stale margin → skip (no ffill).
+signal_definition: >
+  surprise-sign; enter only if last margin print with date < entry_date and age<=14d is strictly below PIT trailing median of that name's prior prints (min_hist=20); missing/stale → skip
+datasets:
+  - fins_summary
+  - markets_margin_interest
+  - equities_bars_daily
+  - markets_calendar
+params:
+  post_hold_days: 5
+  entry_mode: same_day_close_if_pre_close
+  min_hist: 20
+  stale_calendar_days: 14
+  mode: event_margin_crowding_skip
+  gate: name_margin_lt_pit_trailing_median
+evaluator: research.unique_logic.dispatch.evaluate_logic_daily_mtm
+notes: catalog declaration; evaluate via unique_logic.dispatch

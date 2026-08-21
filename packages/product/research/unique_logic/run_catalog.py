@@ -39,6 +39,8 @@ def _log(msg: str) -> None:
 def _load_extras(
     sqlite_path: Path, *, codes: Sequence[str]
 ) -> dict[str, Any]:
+    # History SoT for repo is local sqlite / R2 (COMPLETE time-series file).
+    # D1 holds hot tip only (~days), not the 2012+ history needed for eval.
     rows = load_repo_rows_all_tenors_from_sqlite(
         sqlite_path, start="2016-01-01", end="2026-12-31"
     )

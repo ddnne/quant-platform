@@ -1,0 +1,24 @@
+logic_id: curve_steep_event_confirm
+family_id: event_macro_curve_combo
+axis: mixed
+headline: true
+generation_enabled: false
+promote_as_main: false
+go: false
+thesis: >
+  Event surprise drift is confirmed only in a carry-friendly term-funding regime: take PIT surprise-sign hold iff the JSDA Tokyo repo curve (3M−overnight) is steep on the entry date.
+signal_definition: >
+  surprise-sign AND same-date repo spread (3M/T+1 − overnight/T+0) > 0; missing either tenor → skip (no ffill / no invent)
+datasets:
+  - fins_summary
+  - jsda_tokyo_repo_rates
+  - equities_bars_daily
+  - markets_calendar
+params:
+  post_hold_days: 5
+  entry_mode: same_day_close_if_pre_close
+  steep_threshold: 0.0
+  mode: curve_steep_event_confirm
+  gate: repo_curve_spread_gt_0
+evaluator: research.unique_logic.dispatch.evaluate_logic_daily_mtm
+notes: catalog declaration; evaluate via unique_logic.dispatch

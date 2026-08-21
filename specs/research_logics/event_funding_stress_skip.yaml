@@ -1,0 +1,24 @@
+logic_id: event_funding_stress_skip
+family_id: event_funding_combo
+axis: mixed
+headline: true
+generation_enabled: false
+promote_as_main: false
+go: false
+thesis: >
+  Post-earnings surprise drift is financing-sensitive. When overnight Tokyo repo is at/above its PIT trailing median, skip the event entry; take surprise-sign hold only when funding is easy.
+signal_definition: >
+  earnings surprise proxy; enter only if overnight repo on entry date is strictly below PIT trailing median of prior overnight prints; missing same-date overnight → skip (no ffill)
+datasets:
+  - fins_summary
+  - jsda_tokyo_repo_rates
+  - equities_bars_daily
+  - markets_calendar
+params:
+  post_hold_days: 5
+  entry_mode: same_day_close_if_pre_close
+  min_hist: 20
+  mode: funding_stress_skip
+  gate: overnight_lt_pit_trailing_median
+evaluator: research.unique_logic.dispatch.evaluate_logic_daily_mtm
+notes: catalog declaration; evaluate via unique_logic.dispatch

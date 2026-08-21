@@ -1,0 +1,22 @@
+logic_id: afterclose_only_event_hold
+family_id: afterclose_event_timing
+axis: mixed
+headline: false
+generation_enabled: false
+promote_as_main: false
+go: false
+thesis: >
+  After-hours disclosures avoid same-session leakage. Take the PIT surprise-sign hold only for DiscTime ≥ session close; skip intraday prints and time-unknown rows.
+signal_definition: >
+  surprise-sign AND parseable DiscTime >= session_close_hhmmss(disc_date); missing/unparseable DiscTime → skip (no invent)
+datasets:
+  - fins_summary
+  - equities_bars_daily
+  - markets_calendar
+params:
+  post_hold_days: 5
+  entry_mode: same_day_close_if_pre_close
+  mode: afterclose_only_event_hold
+  gate: disctime_ge_session_close
+evaluator: research.unique_logic.dispatch.evaluate_logic_daily_mtm
+notes: catalog declaration; evaluate via unique_logic.dispatch

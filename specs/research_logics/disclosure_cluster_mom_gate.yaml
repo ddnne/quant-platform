@@ -1,0 +1,26 @@
+logic_id: disclosure_cluster_mom_gate
+family_id: disclosure_cluster_gate
+axis: mixed
+headline: false
+generation_enabled: false
+promote_as_main: false
+go: false
+thesis: >
+  Relative-strength L-S is more informative during earnings-season information flow. Gate the CS mom book ON only when the PIT count of disclosures in the last N sessions is at/above its trailing median.
+signal_definition: >
+  CS rank mom L-S × PIT disclosure-cluster count vs trailing median (strict: DiscDate < today; no same-day look-ahead)
+datasets:
+  - fins_summary
+  - equities_bars_daily
+  - markets_calendar
+params:
+  hold_days: 10
+  momentum_n: 5
+  long_frac: 0.3
+  short_frac: 0.3
+  cluster_lookback: 5
+  min_hist: 10
+  mode: disclosure_cluster_gate
+  gate: n_recent_disclosures_ge_pit_median
+evaluator: research.unique_logic.dispatch.evaluate_logic_daily_mtm
+notes: catalog declaration; evaluate via unique_logic.dispatch

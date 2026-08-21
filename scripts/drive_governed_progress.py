@@ -2,24 +2,24 @@
 """Report governed COMPLETE progress (honest, no faking)."""
 from __future__ import annotations
 
+import json
+import sqlite3
 import sys
 from pathlib import Path
 
-# Bootstrap repo root onto sys.path before importing qp_paths (plain script runs).
-for _parent in Path(__file__).resolve().parents:
-    if (_parent / "qp_paths.py").is_file() and (_parent / "pyproject.toml").is_file():
-        if str(_parent) not in sys.path:
-            sys.path.insert(0, str(_parent))
+_here = Path(__file__).resolve().parent
+for _d in (_here, _here.parent):
+    if (_d / "_bootstrap.py").is_file():
+        if str(_d) not in sys.path:
+            sys.path.insert(0, str(_d))
         break
 else:
-    raise RuntimeError("quant-platform repo root not found from script")
+    raise RuntimeError("scripts/_bootstrap.py not found")
+from _bootstrap import ensure_repo_root
 
-from qp_paths import repo_root
-import json, sqlite3, sys
-
-ROOT = repo_root()
-sys.path.insert(0, str(ROOT))
 from data_contracts import all_coverage_contracts
+
+ROOT = ensure_repo_root()
 
 def main():
     db = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT/"data/structured/ingestion.sqlite"
