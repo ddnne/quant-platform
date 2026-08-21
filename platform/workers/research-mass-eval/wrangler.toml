@@ -1,4 +1,4 @@
-# W91 / w0818a — Research multi-logic mass-eval on Cloudflare Workers.
+# Research multi-logic mass-eval on Cloudflare Workers (period-net screen).
 #
 # Purpose: batch-evaluate distinct economic logics with multi-period metrics
 # on real COMPLETE-backed panels (mode=r2_panels) or D1 tip (mode=d1_bars);

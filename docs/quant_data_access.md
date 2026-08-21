@@ -320,6 +320,6 @@ grok mcp doctor quant_data
 | `data_access/` | shared Ops/Research read-domain + PIT Gatekeeper |
 | `scripts/ops_status.py` | チャット無しの同じ確認口 |
 | `docs/phase6_snapshot_publication.md` | READY 発行 |
-| `docs/phase6_hardening_acceptance.md` | 境界と P0 監査 |
+| `docs/phase6_hardening_acceptance.md` | 境界と P0 監査（historical） |
 
 Operational writes（ingestion trigger 等）は別 DataOps MCP とし、本サーバと process / credential を共有しない。

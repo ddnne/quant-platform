@@ -1,6 +1,6 @@
 /// <reference types="@cloudflare/workers-types" />
 /**
- * quant-platform-research-mass-eval (W95 / w0818e)
+ * quant-platform-research-mass-eval
  *
  * POST /v1/mass-eval
  *   body: { seed, logics[], periods[], job_id, mode?, panels_prefix? }
@@ -8,17 +8,20 @@
  *   → write R2 quant-structured research/mass_eval/job={id}/…
  *
  * Modes:
- *   r2_panels — staged COMPLETE-backed real bars (W91 preferred default path)
+ *   r2_panels — staged COMPLETE-backed real bars (preferred)
  *   d1_bars   — D1 jquants_records tip extract (hot window only)
- *   synthetic — deterministic PRNG (W90 smoke residual)
+ *   synthetic — deterministic PRNG (smoke)
  *   nets_only — pre-baked period_nets
+ *
+ * This worker is a **period-net screen only**. ``n_survivors`` is not
+ * candidate-grade. Missing ``daily_path_DD`` must not be treated as a pass.
  *
  * Freezes held:
  *   Mass=NO-GO · READY=false · ops GO=false · continuous paper UNARMED
  *   3 default-path representatives not retuned
  *
- * Pure TS (no Python). W93: macro_repo_* consume staged repo_rate_regime.
- * W94: flow_margin_* / fund_* / mf_* consume staged flow/fund sidecars;
+ * Pure TS (no Python). macro_repo_* consume staged repo_rate_regime.
+ * flow_margin_* / fund_* / mf_* consume staged flow/fund sidecars;
  * missing sidecar → disclosed MDH fallback (c21_lite_fallback_mdh:…).
  */
 
@@ -202,7 +205,7 @@ async function putJson(
     httpMetadata: { contentType: "application/json; charset=utf-8" },
     customMetadata: {
       plane: "research_mass_eval",
-      wave: "W91",
+      wave: "research-mass-eval",
     },
   });
   return { key, bytes: bytes.byteLength };
@@ -214,11 +217,11 @@ async function runMassEval(
 ): Promise<MassEvalJobResult> {
   const t0 = Date.now();
   const version = env.MASS_EVAL_VERSION || "research-mass-eval/v2";
-  const wave = env.MASS_EVAL_WAVE || "W91 / w0818a";
+  const wave = env.MASS_EVAL_WAVE || "research-mass-eval";
   const mode = req.mode || "synthetic";
   const oneWay = req.one_way_cost ?? 0.001;
   const maxCodes = Math.max(2, Math.min(40, req.max_codes ?? 8));
-  // W91: allow multi-year windows up to ~1 trading year per panel.
+  // Allow multi-year windows up to ~1 trading year per panel.
   const maxDays = Math.max(20, Math.min(260, req.max_days ?? 120));
   const periodSpecs = defaultPeriodsFromRequest(req.periods, req.seed);
   const panelsPrefix =
@@ -291,12 +294,17 @@ async function runMassEval(
     n_eval_ok: nOk,
     n_eval_fail: nFail,
     n_survivors: nSurvivors,
+    n_survivors_are_not_a_pass: true,
+    screen_kind: "period_net",
+    daily_path_complete: false,
+    candidate_grade: false,
     wall_time_ms: Date.now() - t0,
     period_ids: periodSpecs.map((p) => p.period_id),
     ranking_top: ranking.slice(0, 20),
     freezes,
     note:
-      "CF multi-period mass-eval (W94). Research only. " +
+      "CF multi-period mass-eval is a period-net screen only. " +
+      "n_survivors is not a daily_path_DD pass and does not promote. " +
       "Does not arm Mass/READY/GO. continuous paper UNARMED. " +
       "3 default-path representatives not retuned. " +
       `mode=${mode}. ` +
@@ -393,6 +401,10 @@ async function runMassEval(
     n_eval_ok: nOk,
     n_eval_fail: nFail,
     n_survivors: nSurvivors,
+    n_survivors_are_not_a_pass: true,
+    screen_kind: "period_net",
+    daily_path_complete: false,
+    candidate_grade: false,
     wall_time_ms: Date.now() - t0,
     ranking,
     results,
@@ -414,7 +426,7 @@ export default {
         ok: true,
         service: "quant-platform-research-mass-eval",
         version: env.MASS_EVAL_VERSION || "research-mass-eval/v2",
-        wave: env.MASS_EVAL_WAVE || "W91 / w0818a",
+        wave: env.MASS_EVAL_WAVE || "research-mass-eval",
         has_structured_bucket: Boolean(env.STRUCTURED_BUCKET),
         has_d1: Boolean(env.DB),
         token_required: Boolean(env.MASS_EVAL_TOKEN),

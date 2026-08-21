@@ -4893,7 +4893,7 @@ def try_cf_minimal_mass_batch() -> dict[str, Any]:
         "version": "research-mass-eval/v1",
         "factory_wave": MASS_FACTORY_WAVE,
         "factory_version": MASS_FACTORY_VERSION,
-        # Primary W90 task path: POST /v1/mass-eval → research/mass_eval/job=
+        # Primary path: POST /v1/mass-eval → research/mass_eval/job=
         "worker": "quant-platform-research-mass-eval",
         "worker_path": "platform/workers/research-mass-eval/",
         "endpoint": "POST /v1/mass-eval",

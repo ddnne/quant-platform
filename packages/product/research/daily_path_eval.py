@@ -1,8 +1,8 @@
-"""Candidate-grade daily MTM path helpers (extracted from wave scripts).
+"""Candidate-grade daily MTM path helpers.
 
-CF ``research-mass-eval`` returns period aggregates only. Daily equity-curve
-drawdown lives here. New code should import this module instead of
-``scripts/run_w99_sticky_daily_dd``.
+CF ``research-mass-eval`` returns period-net screens only (``n_survivors`` is
+not a pass). Daily equity-curve drawdown lives here. Record via
+``scripts/record_research_eval.py --put-r2``.
 
 Does not arm Mass / READY / GO. Does not retune frozen default pins.
 """
@@ -19,8 +19,6 @@ from research.stats_metrics import (
     equity_path_drawdown,
     evaluate_daily_path_dd_gate,
 )
-
-W99_WINDOWS = HONEST_3Y_WINDOWS
 
 EVAL_PROTOCOL: str = "daily_path_mtm_after_cost/v1"
 R2_EVAL_PREFIX: str = "research/eval"

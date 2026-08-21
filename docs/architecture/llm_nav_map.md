@@ -115,7 +115,7 @@ Details + exceptions: ADR §5.
 | A3 seal raw+struct months | `scripts/issue_receipts_parallel.py` | residual + [`../proof/complete_plus8_r2_raw_seal_20260813.md`](../proof/complete_plus8_r2_raw_seal_20260813.md); **never** invent COMPLETE; R2 mirror OK if usable raw |
 | Packaging / paths | `pyproject.toml`, `qp_paths.py` | this map + layout migration |
 | LLM-friendly refactor | plane READMEs + `tests/test_plane_import_boundaries.py` | [ADR](./adr_llm_friendly_refactor.md) (**Accepted**); residual for live status |
-| New research hyp / daily_path_DD | `research.daily_path_eval` · `research.eval_registry` · `research.cf_mass_eval_job` | [ADR recording](./adr_research_recording.md) — **no new run_wNN script** |
+| New research hyp / daily_path_DD | `research.daily_path_eval` · `research.eval_registry` · `research.cf_mass_eval_job` | [ADR recording](./adr_research_recording.md) — **completion requires an R2 `research/eval/job={id}/` put**; no new `run_wNN` script |
 | Existing `run_w*` / wave proofs | **deleted** | [`wave_assets_deprecated.md`](./wave_assets_deprecated.md) |
 | Eval job index (D1/R2) | `research.eval_registry` · `platform/workers/quant-ops-mcp/migrations/0006_research_eval_jobs.sql` | recording ADR |
 | Test tiers (G0/G1/G2) | `tests/README.md` | this map §11 B1-d |
@@ -168,7 +168,7 @@ Full policy: ADR §5.2.
 | **1 Domain** | `pit_api`, `core_engine`, `features`, `paper`, `agents`, `quant_data_access`, `data_sources` | By task |
 | **2 Ops** | `docs/operations/*`, phase runbooks, worker READMEs | When operating live systems; not residual counts |
 | **3 Proof** | `docs/proof/*` | Cite evidence; do not invent status |
-| **4 Historical** | `phase62_status`, `phase621_*`, `phase622_*`, `phase623_*`, `phase62_*checklist/final*`, `pre_phase7_*`, `phase6_hardening_*`, `phase61_plan`, dated `phase35_4_*` acceptance/ops verify, dated ops live-sync notes | Banner / archive; **not** residual SoT |
+| **4 Historical** | `pre_phase7_*`, `phase6_hardening_*`, dated ops live-sync notes | Banner / archive; **not** residual SoT |
 
 ### 7.1 Phase / residual file index (maintenance)
 
@@ -189,10 +189,7 @@ Full policy: ADR §5.2.
 | `docs/phase62_production_runbook.md` | runbook (not residual counts) |
 | `docs/phase62_cf_edge_cron.md` | runbook / design note |
 | `docs/phase35_cf_ingest.md`, `phase35_s0_secrets.md`, `phase35_storage_scale.md`, `phase35_validation_matrix.md` | domain + runbook (Phase 3.5) |
-| `docs/phase35_4_acceptance_status.md` | historical acceptance snapshot |
-| `docs/phase35_4_ops_verify_20260811.md` | historical ops verify snapshot |
 | `docs/phase6_hardening_acceptance.md` | historical acceptance snapshot |
-| `docs/phase61_plan.md` | historical plan |
 | `docs/pre_phase7_full_code_review.md` | historical Wave-0 review |
 | `docs/operations/phase63_live_sync.md` | historical live-vs-code note (counts may be stale) |
 | `docs/proof/*` | dated evidence |

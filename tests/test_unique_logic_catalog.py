@@ -74,6 +74,18 @@ def test_repo_history_plane_status_discloses_sqlite_not_d1() -> None:
     assert note["sqlite_rows"] >= 0
 
 
+def test_mass_eval_screen_is_not_candidate_grade() -> None:
+    from research.cf_mass_eval_job import try_cf_mass_eval_status
+
+    st = try_cf_mass_eval_status()
+    assert st["status"] == "implemented"
+    assert st["default_mode"] == "r2_panels"
+    assert st["screen_kind"] == "period_net"
+    assert st["candidate_grade"] is False
+    assert st["n_survivors_are_not_a_pass"] is True
+    assert st["daily_path_complete"] is False
+
+
 def test_factory_unique_eval_uses_package_dispatch() -> None:
     import inspect
 

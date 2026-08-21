@@ -1,9 +1,9 @@
 """Shared honest multi-year eval windows (not per-wave copies).
 
-These shards match the local COMPLETE-backed bar mirrors used since W98/W99.
+These shards match the local COMPLETE-backed bar mirrors.
 Contiguous 3y files are absent; occupancy of a window is the stitch of shards.
 
-Do not fork a new window list in ``scripts/run_wNN_*.py``.
+Do not fork a new window list in a wave script.
 """
 from __future__ import annotations
 
@@ -67,9 +67,6 @@ HONEST_3Y_WINDOWS: tuple[dict[str, Any], ...] = (
         ),
     },
 )
-
-# Backward alias used by W99–W107 scripts.
-W99_WINDOWS = HONEST_3Y_WINDOWS
 
 FROZEN_PIN_SNAPSHOT: tuple[tuple[str, int, int | None, str], ...] = (
     ("cross_section_hold_10", 10, 5, "KEEP"),

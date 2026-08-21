@@ -1,5 +1,5 @@
 /**
- * Period panels for CF multi-logic mass-eval (W91 / w0818a).
+ * Period panels for CF multi-logic mass-eval.
  *
  * * mode=synthetic: deterministic PRNG panels (W90 smoke default)
  * * mode=r2_panels: staged COMPLETE-backed real bars under

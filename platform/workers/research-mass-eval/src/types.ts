@@ -66,7 +66,7 @@ export interface MassEvalRequest {
 export type BarSeries = Array<[string, number]>; // [date, close]
 export type BarsByCode = Record<string, BarSeries>;
 
-/** Index-level realized-vol series for W91 nky_vol_* logics (date → ann. RV). */
+/** Index-level realized-vol series for nky_vol_* logics (date → ann. RV). */
 export interface NkyVolSeries {
   source?: string;
   short_n?: number;
@@ -174,7 +174,7 @@ export interface PeriodPanel {
   status: "ok" | "data_missing";
   bars: BarsByCode;
   source: string;
-  /** Optional W91 Nikkei/TOPIX realized-vol regime series (proxy/compare). */
+  /** Optional Nikkei/TOPIX realized-vol regime series (proxy/compare). */
   nky_vol_series?: NkyVolSeries | null;
   /** Optional W92 options_225 canonical Nikkei vol SoT. */
   opt225_regime?: Opt225RegimeBundle | null;

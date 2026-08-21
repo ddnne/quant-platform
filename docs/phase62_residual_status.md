@@ -54,9 +54,10 @@ prose. Update the table after a published projection.
 
 | Plane | Path |
 |-------|------|
-| candidate-grade | `research.daily_path_eval` (`daily_path_mtm_after_cost/v1`) |
-| CF screen | `research.cf_mass_eval_job` (period-net; incomplete vs checklist) |
+| candidate-grade | `research.daily_path_eval` (`daily_path_mtm_after_cost/v1`) → R2 `research/eval/job={id}/` |
+| CF screen | `research.cf_mass_eval_job` period-net only; `n_survivors` is **not** a pass |
 | index | `research.eval_registry` → R2 + D1 |
 | catalog | `specs/research_logics/` |
 
+Completion of a research turn requires an R2 eval job, not local JSON.
 Do not paste cell scores into this file. Latest recorded job id belongs in D1.

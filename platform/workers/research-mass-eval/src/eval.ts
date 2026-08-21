@@ -1593,6 +1593,10 @@ export function evaluateLogicAcrossPeriods(
     mean_activation: meanActivation,
     screen: {
       survived,
+      screen_kind: "period_net",
+      daily_path_complete: false,
+      candidate_grade: false,
+      n_survivors_are_not_a_pass: true,
       reject_reasons: rejectReasons,
       mean_net: meanNet,
       t_stat: tStat,
@@ -1630,5 +1634,9 @@ export function rankSurvivors(results: LogicEvalResult[]): Array<Record<string, 
     sharpe_period: s.sharpe_period,
     chosen_sign: s.chosen_sign,
     mean_activation: s.mean_activation,
+    screen_kind: "period_net",
+    daily_path_complete: false,
+    candidate_grade: false,
+    n_survivors_are_not_a_pass: true,
   }));
 }

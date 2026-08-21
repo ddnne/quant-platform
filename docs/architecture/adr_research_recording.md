@@ -45,8 +45,14 @@ Markdown that restates numbers already in R2/D1 is not a record.
 
 ## Two eval planes
 
-1. **CF screen** — `platform/workers/research-mass-eval` period-net. Incomplete vs checklist.
-2. **Candidate-grade** — `run_standard_research_eval` + daily_path_DD. Still never auto-promotes.
+1. **CF screen** — `platform/workers/research-mass-eval` period-net ranking
+   (`n_survivors`). Filter only. Incomplete vs checklist. **Not** a pass.
+2. **Candidate-grade** — `research.daily_path_eval` + `daily_path_DD` recorded
+   to R2 `research/eval/job={id}/` (and D1 index). Still never auto-promotes.
+
+A turn is not complete until a candidate-grade job exists on R2. Worker
+`n_survivors` without `daily_path_complete` must not be treated as a survivor
+for promotion.
 
 ## Consequences
 

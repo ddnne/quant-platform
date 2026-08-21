@@ -422,10 +422,10 @@ Remote Ops MCP was implemented with GitHub OAuth but ops-specific tools were not
 Documentation shows drift between Phase 6.1 and 6.2 plans, runbooks, and actual implementation.
 
 **Files Affected**:
-- `docs/phase61_plan.md`
 - `docs/phase61_production_runbook.md`
 - `docs/phase6_hardening_acceptance.md`
 - `docs/roadmap.md` (if exists)
+- (historical `docs/phase61_plan.md` removed; live residual is `phase62_residual_status.md`)
 
 **Impact**:
 - Confusing operational guidance

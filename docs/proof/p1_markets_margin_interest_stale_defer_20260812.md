@@ -121,4 +121,4 @@ Required segments are **`calendar_month`** (`collection_coverage.json` default).
 - Policy: `data_contracts/collection_coverage.json` → `markets_margin_interest` weekly / history_target_start `2013-01-04`.
 - STALE gate: `storage/coverage_ledger.py` `_dataset_status` C8 fail → STALE; then segment aggregate only if validation COMPLETE.
 - Segment identity: `evaluate_segment` requires receipt scope match monthly required segment.
-- Known ops note: `docs/phase35_4_acceptance_status.md` — “markets_margin_interest often empty market-wide”.
+- Known ops note: markets_margin_interest can be empty market-wide (historical Phase 3.5 acceptance).

@@ -75,7 +75,6 @@ DEFAULT_ONE_WAY: float = 0.001
 
 # Preferred default is real staged panels (not synthetic).
 DEFAULT_MASS_EVAL_MODE: str = "r2_panels"
-DEFAULT_W91_MODE: str = DEFAULT_MASS_EVAL_MODE  # compat alias
 ALLOWED_MODES: frozenset[str] = frozenset(
     {"r2_panels", "d1_bars", "synthetic", "nets_only"}
 )
@@ -1873,15 +1872,20 @@ def try_cf_mass_eval_status() -> dict[str, Any]:
         "real_multiyear_periods": [
             p["period_id"] for p in DEFAULT_REAL_MULTIYEAR_PERIODS
         ],
+        "screen_kind": "period_net",
+        "daily_path_complete": False,
+        "candidate_grade": False,
+        "n_survivors_are_not_a_pass": True,
         "scale_note": (
             "Real COMPLETE-backed multi-year panels staged to R2 "
             "(mode=r2_panels). D1 tip-only via mode=d1_bars. "
+            "Period-net n_survivors is a screen, not a daily_path_DD pass. "
             "Heavy multi-year promising-only remains local class_hyp_eval."
         ),
         "synthetic_gap": (
             "rate_abs_level_xs / rate_curve_shape_xs still local_only on "
             "pure-TS CF (disclosed MDH fallback). flow/fund/mf/macro_repo "
-            "consume thicken sidecars as of W94 v5. Synthetic = smoke only."
+            "consume thicken sidecars when present. Synthetic = smoke only."
         ),
         **_freeze(),
     }
@@ -1986,7 +1990,6 @@ __all__ = [
     "DEFAULT_LITE_PERIODS",
     "DEFAULT_REAL_MULTIYEAR_PERIODS",
     "DEFAULT_MASS_EVAL_MODE",
-    "DEFAULT_W91_MODE",
     "ALLOWED_MODES",
     "DEFAULT_WORKER_URL",
     "RESEARCH_ARTIFACT_BUCKET",
