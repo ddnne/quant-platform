@@ -18,7 +18,7 @@ datasets:
 params:
   hold_days: 10
   momentum_n: 5
-evaluator: research.unique_logic.w107b.evaluate_overnight_level_cs_tilt_daily_mtm
+evaluator: research.unique_logic.cs_overlays.evaluate_overnight_level_cs_tilt_daily_mtm
 """
     )
     assert spec["logic_id"] == "overnight_level_cs_tilt"

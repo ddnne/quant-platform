@@ -20,4 +20,4 @@ params:
   long_frac: 0.3
   short_frac: 0.3
   min_hist: 20
-evaluator: research.unique_logic.w106b.evaluate_curve_steepen_impulse_cs_daily_mtm
+evaluator: research.unique_logic.cross_section.evaluate_curve_steepen_impulse_cs_daily_mtm

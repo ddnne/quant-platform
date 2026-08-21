@@ -1,6 +1,6 @@
-"""Unique-logic evaluators (moved from scripts/run_w*).
+"""Unique-logic evaluators (candidate-grade daily MTM).
 
-Candidate-grade daily MTM. Does not promote / GO / retune pins.
+Does not promote / GO / retune pins.
 """
 from __future__ import annotations
 
@@ -14,18 +14,16 @@ from research.daily_path_eval import (
     held_book_daily_mtm,
     panel_index,
 )
-from research.eval_windows import HONEST_3Y_WINDOWS
 from research.unique_logic.constants import (
     ALWAYS_ON_OCCUPANCY_WARN,
     KNOWN_DEMOTED_OR_WEAK,
     KNOWN_WEAK_THESIS,
     LOGIC_CATALOG_HEADLINE_BAN,
-    W104_UNIQUE_LOGIC_IDS,
-    W105_UNIQUE_LOGIC_IDS,
-    W106_UNIQUE_LOGIC_IDS,
+    EVENT_LOGIC_IDS,
+    EVENT_FILTER_LOGIC_IDS,
+    CS_AND_SIDE_LOGIC_IDS,
 )
 
-W99_WINDOWS = HONEST_3Y_WINDOWS
 _assert_frozen_pins_untouched = assert_frozen_pins_untouched
 
 NEW_UNIQUE_LOGIC: tuple[dict[str, Any], ...] = (

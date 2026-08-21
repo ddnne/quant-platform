@@ -1,4 +1,4 @@
-"""W105 / w0820b — research-family registration is recognition, not promotion."""
+"""Research-family registration is recognition, not promotion."""
 
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ from research.mass_strategy_factory import (
     validate_strategy_at_gen,
 )
 
-from research.unique_logic import w104, w105
+from research.unique_logic import event, event_filters
 
 
 def test_research_family_register_is_recognition_not_pass():
@@ -52,11 +52,11 @@ def test_research_family_register_is_recognition_not_pass():
     assert set(doc["family_ids"]) == set(RESEARCH_UNIQUE_FAMILY_IDS)
 
 
-def test_w104_unique_logic_is_registered_not_generated():
-    lids = [s["logic_id"] for s in w104.NEW_UNIQUE_LOGIC]
-    lids += [s["logic_id"] for s in w105.NEW_UNIQUE_LOGIC]
+def test_event_unique_logic_is_registered_not_generated():
+    lids = [s["logic_id"] for s in event.NEW_UNIQUE_LOGIC]
+    lids += [s["logic_id"] for s in event_filters.NEW_UNIQUE_LOGIC]
     assert set(lids) <= set(RESEARCH_UNIQUE_LOGIC_IDS)
-    for spec in list(w104.NEW_UNIQUE_LOGIC) + list(w105.NEW_UNIQUE_LOGIC):
+    for spec in list(event.NEW_UNIQUE_LOGIC) + list(event_filters.NEW_UNIQUE_LOGIC):
         lid = spec["logic_id"]
         tpl = LOGIC_TEMPLATES[lid]
         assert tpl.family_id == spec["family_id"]
@@ -78,7 +78,7 @@ def test_w104_unique_logic_is_registered_not_generated():
 
 def test_factory_period_net_not_unknown_family_and_not_a_pass():
     out = propose_profit_hypotheses(
-        w104.proposals_for_factory(),
+        event.proposals_for_factory(),
         evaluate=True,
         synthetic=True,
         config=MassFactoryConfig(seed=8908195, n=20),

@@ -1,4 +1,4 @@
-"""W106 / w0820c — family append is recognition, not promotion."""
+"""Research-family append is recognition, not promotion."""
 
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ from research.mass_strategy_factory import (
     validate_strategy_at_gen,
 )
 
-from research.unique_logic import w106
+from research.unique_logic import event_sides
 
 
 def test_family_append_is_recognition_not_pass():
@@ -58,7 +58,7 @@ def test_family_append_is_recognition_not_pass():
 
 
 def test_append_logics_registered_not_generated():
-    lids = [s["logic_id"] for s in w106.NEW_LS_VARIANTS]
+    lids = [s["logic_id"] for s in event_sides.NEW_LS_VARIANTS]
     assert set(lids) <= set(RESEARCH_UNIQUE_LOGIC_IDS)
     assert RESEARCH_FAMILY_APPEND_LOGIC_IDS <= RESEARCH_UNIQUE_LOGIC_IDS
     for lid in sorted(RESEARCH_FAMILY_APPEND_LOGIC_IDS):
@@ -83,7 +83,7 @@ def test_append_logics_registered_not_generated():
 
 def test_append_factory_period_net_not_unknown_and_not_a_pass():
     out = propose_profit_hypotheses(
-        w106.proposals_for_factory(),
+        event_sides.proposals_for_factory(),
         evaluate=True,
         synthetic=True,
         config=MassFactoryConfig(seed=8908206, n=20),

@@ -1,4 +1,4 @@
-"""W106 / w0820c — NEW unique_logic min-impl (mixed funding/macro/XS, not event-only)."""
+"""Cross-section unique_logic min-impl (mixed funding/macro/XS)."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from research.mass_strategy_factory import (
     FROZEN_DEFAULT_PATH,
     propose_profit_hypotheses,
 )
-from research.unique_logic import w106b as w106
+from research.unique_logic import cross_section
 
 
 def _bars(n: int = 40, start: str = "2019-01-") -> dict[str, list[tuple[str, float]]]:
@@ -67,8 +67,8 @@ def _topix(*, quiet: bool = False) -> dict[str, float]:
     return out
 
 
-def test_w106_proposals_are_new_unique_logic_mixed_not_event_only():
-    ids = [s["logic_id"] for s in w106.NEW_UNIQUE_LOGIC]
+def test_cross_section_proposals_are_new_unique_logic_mixed_not_event_only():
+    ids = [s["logic_id"] for s in cross_section.NEW_UNIQUE_LOGIC]
     assert ids == [
         "funding_impulse_cs_tilt",
         "curve_steepen_impulse_cs",
@@ -76,21 +76,21 @@ def test_w106_proposals_are_new_unique_logic_mixed_not_event_only():
         "idio_mom_macro_impulse",
     ]
     assert len(ids) == 4
-    axes = {s["axis"] for s in w106.NEW_UNIQUE_LOGIC}
+    axes = {s["axis"] for s in cross_section.NEW_UNIQUE_LOGIC}
     assert "funding" in axes
     assert "macro" in axes
     assert "cross_section" in axes
     assert "event" not in axes
-    assert w106.PACK_BIAS == "mixed"
-    for s in w106.NEW_UNIQUE_LOGIC:
+    assert cross_section.PACK_BIAS == "mixed"
+    for s in cross_section.NEW_UNIQUE_LOGIC:
         assert s["new_unique_logic"] is True
         assert s["catalog"] is False
         assert s["catalog_map"] is None
-        assert s["logic_id"] not in w106.LOGIC_CATALOG_HEADLINE_BAN
-        assert s["logic_id"] not in w106.W104_UNIQUE_LOGIC_IDS
-        assert s["logic_id"] not in w106.W105_UNIQUE_LOGIC_IDS
-        assert s["logic_id"] not in w106.KNOWN_WEAK_THESIS
-        assert s["logic_id"] not in w106.KNOWN_DEMOTED_OR_WEAK
+        assert s["logic_id"] not in cross_section.LOGIC_CATALOG_HEADLINE_BAN
+        assert s["logic_id"] not in cross_section.EVENT_LOGIC_IDS
+        assert s["logic_id"] not in cross_section.EVENT_FILTER_LOGIC_IDS
+        assert s["logic_id"] not in cross_section.KNOWN_WEAK_THESIS
+        assert s["logic_id"] not in cross_section.KNOWN_DEMOTED_OR_WEAK
         params = s["params"]
         assert "mode" in params or "gate" in params
         # Not an event-book filter pack.
@@ -98,22 +98,22 @@ def test_w106_proposals_are_new_unique_logic_mixed_not_event_only():
         assert "fins_summary" not in s["datasets"]
 
 
-def test_w106_propose_profit_hypotheses_accepts_adhoc_no_catalog_map():
+def test_cross_section_propose_profit_hypotheses_accepts_adhoc_no_catalog_map():
     out = propose_profit_hypotheses(
-        w106.proposals_for_factory(),
+        cross_section.proposals_for_factory(),
         evaluate=False,
     )
     assert out["n_accepted"] == 4
     assert out["n_rejected"] == 0
     lids = [a["logic_id"] for a in out["accepted"]]
-    assert lids == [s["logic_id"] for s in w106.NEW_UNIQUE_LOGIC]
+    assert lids == [s["logic_id"] for s in cross_section.NEW_UNIQUE_LOGIC]
     for a in out["accepted"]:
-        assert a["logic_id"] not in w106.LOGIC_CATALOG_HEADLINE_BAN
+        assert a["logic_id"] not in cross_section.LOGIC_CATALOG_HEADLINE_BAN
         assert a.get("eval_mapped_to_catalog") in (None, False)
 
 
-def test_w106_frozen_pins_untouched():
-    pack = w106._assert_frozen_pins_untouched()
+def test_cross_section_frozen_pins_untouched():
+    pack = cross_section._assert_frozen_pins_untouched()
     assert pack["pins_untouched"] is True
     assert pack["frozen_defaults_retuned"] is False
     assert len(FROZEN_DEFAULT_PATH) == 3
@@ -121,14 +121,14 @@ def test_w106_frozen_pins_untouched():
 
 def test_prior_delta_by_date_uses_strictly_prior_print():
     series = {"2019-01-01": 1.0, "2019-01-03": 1.5, "2019-01-04": 1.4}
-    dlt = w106.prior_delta_by_date(series)
+    dlt = cross_section.prior_delta_by_date(series)
     assert "2019-01-01" not in dlt
     assert dlt["2019-01-03"] == pytest.approx(0.5)
     assert dlt["2019-01-04"] == pytest.approx(-0.1)
 
 
 def _funding_spec(*, min_hist: int = 5) -> dict:
-    spec = dict(w106.NEW_UNIQUE_LOGIC[0])
+    spec = dict(cross_section.NEW_UNIQUE_LOGIC[0])
     spec["params"] = dict(spec["params"])
     spec["params"]["min_hist"] = min_hist
     spec["min_hist"] = min_hist
@@ -136,7 +136,7 @@ def _funding_spec(*, min_hist: int = 5) -> dict:
 
 
 def test_funding_impulse_empty_overnight_is_incomplete_not_approximated():
-    pack = w106.evaluate_funding_impulse_cs_tilt_daily_mtm(
+    pack = cross_section.evaluate_funding_impulse_cs_tilt_daily_mtm(
         _bars(),
         {},
         spec=_funding_spec(),
@@ -153,7 +153,7 @@ def test_funding_impulse_skips_missing_overnight_no_ffill():
     bars = _bars()
     overnight = {f"2019-01-{d:02d}": 0.01 for d in range(1, 10)}
     overnight["2019-01-20"] = 0.50  # isolated print, no ffill onto gap days
-    pack = w106.evaluate_funding_impulse_cs_tilt_daily_mtm(
+    pack = cross_section.evaluate_funding_impulse_cs_tilt_daily_mtm(
         bars,
         overnight,
         spec=_funding_spec(min_hist=3),
@@ -168,7 +168,7 @@ def test_funding_impulse_skips_missing_overnight_no_ffill():
 def test_funding_impulse_tilts_fade_on_large_tightening():
     bars = _bars()
     overnight = _overnight(jump_date="2019-01-20", jump=0.80)
-    pack = w106.evaluate_funding_impulse_cs_tilt_daily_mtm(
+    pack = cross_section.evaluate_funding_impulse_cs_tilt_daily_mtm(
         bars,
         overnight,
         spec=_funding_spec(min_hist=5),
@@ -182,10 +182,10 @@ def test_funding_impulse_tilts_fade_on_large_tightening():
 
 
 def test_curve_steepen_empty_series_is_incomplete_not_approximated():
-    pack = w106.evaluate_curve_steepen_impulse_cs_daily_mtm(
+    pack = cross_section.evaluate_curve_steepen_impulse_cs_daily_mtm(
         _bars(),
         {"spread_by_date": {}},
-        spec=w106.NEW_UNIQUE_LOGIC[1],
+        spec=cross_section.NEW_UNIQUE_LOGIC[1],
         one_way_cost=0.001,
     )
     assert pack.get("daily_path_complete") is False
@@ -194,7 +194,7 @@ def test_curve_steepen_empty_series_is_incomplete_not_approximated():
 
 def test_curve_steepen_skips_gap_and_flattening():
     bars = _bars()
-    spec = dict(w106.NEW_UNIQUE_LOGIC[1])
+    spec = dict(cross_section.NEW_UNIQUE_LOGIC[1])
     spec["params"] = dict(spec["params"])
     spec["params"]["min_hist"] = 5
     spec["min_hist"] = 5
@@ -205,7 +205,7 @@ def test_curve_steepen_skips_gap_and_flattening():
     }
     curve["spread_by_date"]["2019-01-12"] = 0.00  # flattening / not steepen
     # 2019-01-13+ missing → gap, no ffill
-    pack = w106.evaluate_curve_steepen_impulse_cs_daily_mtm(
+    pack = cross_section.evaluate_curve_steepen_impulse_cs_daily_mtm(
         bars,
         curve,
         spec=spec,
@@ -220,11 +220,11 @@ def test_curve_steepen_skips_gap_and_flattening():
 
 def test_curve_steepen_turns_on_for_large_positive_delta():
     bars = _bars()
-    spec = dict(w106.NEW_UNIQUE_LOGIC[1])
+    spec = dict(cross_section.NEW_UNIQUE_LOGIC[1])
     spec["params"] = dict(spec["params"])
     spec["params"]["min_hist"] = 5
     spec["min_hist"] = 5
-    pack = w106.evaluate_curve_steepen_impulse_cs_daily_mtm(
+    pack = cross_section.evaluate_curve_steepen_impulse_cs_daily_mtm(
         bars,
         _curve(steepen_date="2019-01-20"),
         spec=spec,
@@ -237,10 +237,10 @@ def test_curve_steepen_turns_on_for_large_positive_delta():
 
 
 def test_xs_margin_delta_empty_is_incomplete_not_approximated():
-    pack = w106.evaluate_xs_margin_delta_rank_daily_mtm(
+    pack = cross_section.evaluate_xs_margin_delta_rank_daily_mtm(
         _bars(),
         {},
-        spec=w106.NEW_UNIQUE_LOGIC[2],
+        spec=cross_section.NEW_UNIQUE_LOGIC[2],
         one_way_cost=0.001,
     )
     assert pack.get("daily_path_complete") is False
@@ -250,10 +250,10 @@ def test_xs_margin_delta_empty_is_incomplete_not_approximated():
 
 def test_xs_margin_delta_ranks_decrowd_long_crowd_short():
     bars = _bars()
-    pack = w106.evaluate_xs_margin_delta_rank_daily_mtm(
+    pack = cross_section.evaluate_xs_margin_delta_rank_daily_mtm(
         bars,
         _margin(),
-        spec=w106.NEW_UNIQUE_LOGIC[2],
+        spec=cross_section.NEW_UNIQUE_LOGIC[2],
         one_way_cost=0.001,
     )
     assert pack.get("status") == "ok"
@@ -267,10 +267,10 @@ def test_xs_margin_delta_ranks_decrowd_long_crowd_short():
 
 
 def test_idio_mom_empty_topix_is_incomplete_not_approximated():
-    pack = w106.evaluate_idio_mom_macro_impulse_daily_mtm(
+    pack = cross_section.evaluate_idio_mom_macro_impulse_daily_mtm(
         _bars(),
         {},
-        spec=w106.NEW_UNIQUE_LOGIC[3],
+        spec=cross_section.NEW_UNIQUE_LOGIC[3],
         one_way_cost=0.001,
     )
     assert pack.get("daily_path_complete") is False
@@ -279,11 +279,11 @@ def test_idio_mom_empty_topix_is_incomplete_not_approximated():
 
 def test_idio_mom_skips_quiet_macro_days():
     bars = _bars()
-    spec = dict(w106.NEW_UNIQUE_LOGIC[3])
+    spec = dict(cross_section.NEW_UNIQUE_LOGIC[3])
     spec["params"] = dict(spec["params"])
     spec["params"]["min_hist"] = 5
     spec["min_hist"] = 5
-    pack = w106.evaluate_idio_mom_macro_impulse_daily_mtm(
+    pack = cross_section.evaluate_idio_mom_macro_impulse_daily_mtm(
         bars,
         _topix(quiet=True),
         spec=spec,
@@ -298,11 +298,11 @@ def test_idio_mom_skips_quiet_macro_days():
 
 def test_idio_mom_turns_on_for_large_index_move():
     bars = _bars()
-    spec = dict(w106.NEW_UNIQUE_LOGIC[3])
+    spec = dict(cross_section.NEW_UNIQUE_LOGIC[3])
     spec["params"] = dict(spec["params"])
     spec["params"]["min_hist"] = 5
     spec["min_hist"] = 5
-    pack = w106.evaluate_idio_mom_macro_impulse_daily_mtm(
+    pack = cross_section.evaluate_idio_mom_macro_impulse_daily_mtm(
         bars,
         _topix(quiet=False),
         spec=spec,

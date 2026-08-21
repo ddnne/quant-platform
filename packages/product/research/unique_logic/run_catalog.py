@@ -1,7 +1,6 @@
 """Run catalog YAML logics through daily_path_eval (candidate-grade).
 
 Does not add a wave script. Does not promote. Scores go to eval_registry.
-Evaluators still live in unique_logic.legacy until economics move.
 """
 from __future__ import annotations
 
@@ -26,7 +25,7 @@ from research.daily_path_eval import (
 from research.eval_windows import HONEST_3Y_WINDOWS
 from research.stats_metrics import evaluate_daily_path_dd_gate
 from research.unique_logic.catalog import catalog_spec
-from research.unique_logic import w107b
+from research.unique_logic import cs_overlays
 
 
 def _log(msg: str) -> None:
@@ -53,15 +52,15 @@ def _eval_shard(
     lid = str(spec.get("logic_id") or "")
     bars = loaded.get("bars") or {}
     if lid == "overnight_level_cs_tilt":
-        return w107b.evaluate_overnight_level_cs_tilt_daily_mtm(
+        return cs_overlays.evaluate_overnight_level_cs_tilt_daily_mtm(
             bars, overnight, spec=spec, one_way_cost=one_way_cost
         )
     if lid == "xs_low_vol_mom":
-        return w107b.evaluate_xs_low_vol_mom_daily_mtm(
+        return cs_overlays.evaluate_xs_low_vol_mom_daily_mtm(
             bars, spec=spec, one_way_cost=one_way_cost
         )
     if lid == "repo_3m_level_cs":
-        return w107b.evaluate_repo_3m_level_cs_daily_mtm(
+        return cs_overlays.evaluate_repo_3m_level_cs_daily_mtm(
             bars, curve, spec=spec, one_way_cost=one_way_cost
         )
     return {

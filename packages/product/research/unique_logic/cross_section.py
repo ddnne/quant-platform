@@ -1,6 +1,6 @@
-"""Unique-logic evaluators (moved from scripts/run_w*).
+"""Unique-logic evaluators (candidate-grade daily MTM).
 
-Candidate-grade daily MTM. Does not promote / GO / retune pins.
+Does not promote / GO / retune pins.
 """
 from __future__ import annotations
 
@@ -14,21 +14,19 @@ from research.daily_path_eval import (
     held_book_daily_mtm,
     panel_index,
 )
-from research.eval_windows import HONEST_3Y_WINDOWS
 from research.unique_logic.constants import (
     ALWAYS_ON_OCCUPANCY_WARN,
     KNOWN_DEMOTED_OR_WEAK,
     KNOWN_WEAK_THESIS,
     LOGIC_CATALOG_HEADLINE_BAN,
-    W104_UNIQUE_LOGIC_IDS,
-    W105_UNIQUE_LOGIC_IDS,
-    W106_UNIQUE_LOGIC_IDS,
+    EVENT_LOGIC_IDS,
+    EVENT_FILTER_LOGIC_IDS,
+    CS_AND_SIDE_LOGIC_IDS,
 )
 
-W99_WINDOWS = HONEST_3Y_WINDOWS
 _assert_frozen_pins_untouched = assert_frozen_pins_untouched
 
-from research.unique_logic import w104  # noqa: E402
+from research.unique_logic import event  # noqa: E402
 
 PACK_BIAS = "mixed"
 
@@ -447,7 +445,7 @@ def evaluate_funding_impulse_cs_tilt_daily_mtm(
 
     deltas = prior_delta_by_date(overnight)
     abs_deltas = {d: abs(v) for d, v in deltas.items()}
-    med_by = w104.pit_median_on_dates(abs_deltas, dates, min_hist=min_hist)
+    med_by = event.pit_median_on_dates(abs_deltas, dates, min_hist=min_hist)
 
     daily_rank: dict[str, dict[str, float | None]] = {c: {} for c in dates_by_code}
     n_on = 0
@@ -575,7 +573,7 @@ def evaluate_curve_steepen_impulse_cs_daily_mtm(
 
     deltas = prior_delta_by_date(spread_by)
     abs_deltas = {d: abs(v) for d, v in deltas.items()}
-    med_by = w104.pit_median_on_dates(abs_deltas, dates, min_hist=min_hist)
+    med_by = event.pit_median_on_dates(abs_deltas, dates, min_hist=min_hist)
 
     daily_rank: dict[str, dict[str, float | None]] = {c: {} for c in dates_by_code}
     n_on = 0
@@ -863,7 +861,7 @@ def evaluate_idio_mom_macro_impulse_daily_mtm(
     abs_mom = {
         d: abs(v) for d, v in topix_mom.items() if v is not None and math.isfinite(v)
     }
-    med_by = w104.pit_median_on_dates(abs_mom, dates, min_hist=min_hist)
+    med_by = event.pit_median_on_dates(abs_mom, dates, min_hist=min_hist)
 
     daily_rank: dict[str, dict[str, float | None]] = {c: {} for c in dates_by_code}
     n_on = 0

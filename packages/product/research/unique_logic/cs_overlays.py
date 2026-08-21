@@ -1,6 +1,6 @@
-"""Unique-logic evaluators (moved from scripts/run_w*).
+"""Unique-logic evaluators (candidate-grade daily MTM).
 
-Candidate-grade daily MTM. Does not promote / GO / retune pins.
+Does not promote / GO / retune pins.
 """
 from __future__ import annotations
 
@@ -14,21 +14,19 @@ from research.daily_path_eval import (
     held_book_daily_mtm,
     panel_index,
 )
-from research.eval_windows import HONEST_3Y_WINDOWS
 from research.unique_logic.constants import (
     ALWAYS_ON_OCCUPANCY_WARN,
     KNOWN_DEMOTED_OR_WEAK,
     KNOWN_WEAK_THESIS,
     LOGIC_CATALOG_HEADLINE_BAN,
-    W104_UNIQUE_LOGIC_IDS,
-    W105_UNIQUE_LOGIC_IDS,
-    W106_UNIQUE_LOGIC_IDS,
+    EVENT_LOGIC_IDS,
+    EVENT_FILTER_LOGIC_IDS,
+    CS_AND_SIDE_LOGIC_IDS,
 )
 
-W99_WINDOWS = HONEST_3Y_WINDOWS
 _assert_frozen_pins_untouched = assert_frozen_pins_untouched
 
-from research.unique_logic import w104, w106b  # noqa: E402
+from research.unique_logic import event, cross_section  # noqa: E402
 
 PACK_BIAS = "mixed"
 
@@ -267,7 +265,7 @@ def evaluate_overnight_level_cs_tilt_daily_mtm(
     """CS mom faded when overnight LEVEL is tight vs PIT median."""
     from features.class_signals import cross_section_rank_signs
 
-    p = w106b._cs_params(spec)
+    p = cross_section._cs_params(spec)
     n, h, lf, sf, min_hist = (
         p["momentum_n"],
         p["hold_days"],
@@ -275,7 +273,7 @@ def evaluate_overnight_level_cs_tilt_daily_mtm(
         p["short_frac"],
         p["min_hist"],
     )
-    extra = w106b._base_cs_extra(
+    extra = cross_section._base_cs_extra(
         spec,
         n=n,
         h=h,
@@ -289,7 +287,7 @@ def evaluate_overnight_level_cs_tilt_daily_mtm(
     extra["pack_bias"] = PACK_BIAS
     overnight = dict(overnight_by_date or {})
     if not overnight:
-        return w106b._empty_extra(
+        return cross_section._empty_extra(
             spec=spec,
             extra=extra,
             status="missing_overnight_series",
@@ -311,7 +309,7 @@ def evaluate_overnight_level_cs_tilt_daily_mtm(
             **extra,
         }
 
-    med_by = w104.pit_median_on_dates(overnight, dates, min_hist=min_hist)
+    med_by = event.pit_median_on_dates(overnight, dates, min_hist=min_hist)
     daily_rank: dict[str, dict[str, float | None]] = {c: {} for c in dates_by_code}
     n_on = 0
     n_off = 0
@@ -350,7 +348,7 @@ def evaluate_overnight_level_cs_tilt_daily_mtm(
 
     extra.update(
         {
-            **w106b._occupancy_note(n_on, len(dates)),
+            **cross_section._occupancy_note(n_on, len(dates)),
             "n_gated_off_days": n_off,
             "n_skip_missing_overnight": n_skip_missing,
             "n_skip_median_unformed": n_skip_unformed,
@@ -358,7 +356,7 @@ def evaluate_overnight_level_cs_tilt_daily_mtm(
             "n_overnight_prints": len(overnight),
         }
     )
-    return w106b._finish_cs_book(
+    return cross_section._finish_cs_book(
         spec=spec,
         panel=panel,
         daily_rank=daily_rank,
@@ -377,7 +375,7 @@ def evaluate_month_end_cs_fade_daily_mtm(
     """Invert CS mom on last N bar sessions of each calendar month."""
     from features.class_signals import cross_section_rank_signs
 
-    p = w106b._cs_params(spec)
+    p = cross_section._cs_params(spec)
     n, h, lf, sf, min_hist = (
         p["momentum_n"],
         p["hold_days"],
@@ -390,7 +388,7 @@ def evaluate_month_end_cs_fade_daily_mtm(
         or p["params"].get("month_end_sessions")
         or 3
     )
-    extra = w106b._base_cs_extra(
+    extra = cross_section._base_cs_extra(
         spec,
         n=n,
         h=h,
@@ -437,12 +435,12 @@ def evaluate_month_end_cs_fade_daily_mtm(
 
     extra.update(
         {
-            **w106b._occupancy_note(n_on, len(dates)),
+            **cross_section._occupancy_note(n_on, len(dates)),
             "n_gated_off_days": n_off,
             "n_month_end_days": len(me),
         }
     )
-    return w106b._finish_cs_book(
+    return cross_section._finish_cs_book(
         spec=spec,
         panel=panel,
         daily_rank=daily_rank,
@@ -461,7 +459,7 @@ def evaluate_xs_low_vol_mom_daily_mtm(
     """High CS-vol regime: rank mom among the low-vol half."""
     from features.class_signals import cross_section_rank_signs
 
-    p = w106b._cs_params(spec)
+    p = cross_section._cs_params(spec)
     n, h, lf, sf, min_hist = (
         p["momentum_n"],
         p["hold_days"],
@@ -472,7 +470,7 @@ def evaluate_xs_low_vol_mom_daily_mtm(
     lookback = int(
         spec.get("vol_lookback") or p["params"].get("vol_lookback") or 20
     )
-    extra = w106b._base_cs_extra(
+    extra = cross_section._base_cs_extra(
         spec,
         n=n,
         h=h,
@@ -516,7 +514,7 @@ def evaluate_xs_low_vol_mom_daily_mtm(
         if len(vals) >= 2:
             cs_med_vol[d] = float(median(vals))
 
-    med_by = w104.pit_median_on_dates(cs_med_vol, dates, min_hist=min_hist)
+    med_by = event.pit_median_on_dates(cs_med_vol, dates, min_hist=min_hist)
     daily_rank: dict[str, dict[str, float | None]] = {c: {} for c in dates_by_code}
     n_on = 0
     n_off = 0
@@ -568,7 +566,7 @@ def evaluate_xs_low_vol_mom_daily_mtm(
 
     extra.update(
         {
-            **w106b._occupancy_note(n_on, len(dates)),
+            **cross_section._occupancy_note(n_on, len(dates)),
             "n_gated_off_days": n_off,
             "n_skip_median_unformed": n_skip_unformed,
             "n_skip_quiet_vol_regime": n_skip_quiet,
@@ -578,7 +576,7 @@ def evaluate_xs_low_vol_mom_daily_mtm(
             ),
         }
     )
-    return w106b._finish_cs_book(
+    return cross_section._finish_cs_book(
         spec=spec,
         panel=panel,
         daily_rank=daily_rank,
@@ -598,7 +596,7 @@ def evaluate_repo_3m_level_cs_daily_mtm(
     """CS mom followed when 3M repo LEVEL is tight vs PIT median."""
     from features.class_signals import cross_section_rank_signs
 
-    p = w106b._cs_params(spec)
+    p = cross_section._cs_params(spec)
     n, h, lf, sf, min_hist = (
         p["momentum_n"],
         p["hold_days"],
@@ -606,7 +604,7 @@ def evaluate_repo_3m_level_cs_daily_mtm(
         p["short_frac"],
         p["min_hist"],
     )
-    extra = w106b._base_cs_extra(
+    extra = cross_section._base_cs_extra(
         spec,
         n=n,
         h=h,
@@ -620,7 +618,7 @@ def evaluate_repo_3m_level_cs_daily_mtm(
     extra["pack_bias"] = PACK_BIAS
     long_by = dict((curve_series or {}).get("long_rates_by_date") or {})
     if not long_by:
-        return w106b._empty_extra(
+        return cross_section._empty_extra(
             spec=spec,
             extra=extra,
             status="missing_3m_series",
@@ -642,7 +640,7 @@ def evaluate_repo_3m_level_cs_daily_mtm(
             **extra,
         }
 
-    med_by = w104.pit_median_on_dates(long_by, dates, min_hist=min_hist)
+    med_by = event.pit_median_on_dates(long_by, dates, min_hist=min_hist)
     daily_rank: dict[str, dict[str, float | None]] = {c: {} for c in dates_by_code}
     n_on = 0
     n_off = 0
@@ -681,7 +679,7 @@ def evaluate_repo_3m_level_cs_daily_mtm(
 
     extra.update(
         {
-            **w106b._occupancy_note(n_on, len(dates)),
+            **cross_section._occupancy_note(n_on, len(dates)),
             "n_gated_off_days": n_off,
             "n_skip_missing_3m": n_skip_missing,
             "n_skip_median_unformed": n_skip_unformed,
@@ -689,7 +687,7 @@ def evaluate_repo_3m_level_cs_daily_mtm(
             "n_3m_prints": len(long_by),
         }
     )
-    return w106b._finish_cs_book(
+    return cross_section._finish_cs_book(
         spec=spec,
         panel=panel,
         daily_rank=daily_rank,

@@ -28,7 +28,7 @@ LOGIC_CATALOG_HEADLINE_BAN: frozenset[str] = frozenset(
         "vol_risk_adjusted_mom",
     }
 )
-W104_UNIQUE_LOGIC_IDS: frozenset[str] = frozenset(
+EVENT_LOGIC_IDS: frozenset[str] = frozenset(
     {
         "event_funding_stress_skip",
         "curve_steep_event_confirm",
@@ -36,7 +36,7 @@ W104_UNIQUE_LOGIC_IDS: frozenset[str] = frozenset(
         "surprise_xs_rank_hold",
     }
 )
-W105_UNIQUE_LOGIC_IDS: frozenset[str] = frozenset(
+EVENT_FILTER_LOGIC_IDS: frozenset[str] = frozenset(
     {
         "large_surprise_event_hold",
         "afterclose_only_event_hold",
@@ -44,7 +44,7 @@ W105_UNIQUE_LOGIC_IDS: frozenset[str] = frozenset(
         "event_margin_crowding_skip",
     }
 )
-W106_UNIQUE_LOGIC_IDS: frozenset[str] = frozenset(
+CS_AND_SIDE_LOGIC_IDS: frozenset[str] = frozenset(
     {
         "funding_impulse_cs_tilt",
         "curve_steepen_impulse_cs",

@@ -1,6 +1,6 @@
-"""Unique-logic evaluators (moved from scripts/run_w*).
+"""Unique-logic evaluators (candidate-grade daily MTM).
 
-Candidate-grade daily MTM. Does not promote / GO / retune pins.
+Does not promote / GO / retune pins.
 """
 from __future__ import annotations
 
@@ -14,21 +14,19 @@ from research.daily_path_eval import (
     held_book_daily_mtm,
     panel_index,
 )
-from research.eval_windows import HONEST_3Y_WINDOWS
 from research.unique_logic.constants import (
     ALWAYS_ON_OCCUPANCY_WARN,
     KNOWN_DEMOTED_OR_WEAK,
     KNOWN_WEAK_THESIS,
     LOGIC_CATALOG_HEADLINE_BAN,
-    W104_UNIQUE_LOGIC_IDS,
-    W105_UNIQUE_LOGIC_IDS,
-    W106_UNIQUE_LOGIC_IDS,
+    EVENT_LOGIC_IDS,
+    EVENT_FILTER_LOGIC_IDS,
+    CS_AND_SIDE_LOGIC_IDS,
 )
 
-W99_WINDOWS = HONEST_3Y_WINDOWS
 _assert_frozen_pins_untouched = assert_frozen_pins_untouched
 
-from research.unique_logic import w104  # noqa: E402
+from research.unique_logic import event  # noqa: E402
 
 PARENT_LOGIC_IDS: tuple[str, ...] = (
     "event_funding_stress_skip",
@@ -181,7 +179,7 @@ def classify_funding_entries(
 ) -> dict[str, Any]:
     """PIT overnight vs trailing median. Missing overnight → skip (no ffill)."""
     entry_dates = sorted({e["entry_date"] for e in collected["entries"]})
-    med_by = w104.pit_median_on_dates(
+    med_by = event.pit_median_on_dates(
         overnight_by_date, entry_dates, min_hist=min_hist
     )
     easy: dict[str, bool] = {}
@@ -293,7 +291,7 @@ def _finish_signed_event_book(
     sign_mult_by_key: Mapping[str, float] | None = None,
 ) -> dict[str, Any]:
     dates = list(collected["calendar"])
-    held = w104._held_from_event_entries(
+    held = event._held_from_event_entries(
         collected, accept=accept, sign_mult_by_key=sign_mult_by_key
     )
     pack = held_book_daily_mtm(
@@ -327,7 +325,7 @@ def evaluate_event_funding_easy_short_daily_mtm(
     """Easy-funding occupancy of skip, flipped surprise sign."""
     params = dict(spec.get("params") or {})
     min_hist = int(spec.get("min_hist") or params.get("min_hist") or 20)
-    collected = w104._collect_event_entries(
+    collected = event._collect_event_entries(
         bars_by_code,
         events_by_code,
         spec=spec,
@@ -386,7 +384,7 @@ def evaluate_event_funding_stress_ls_daily_mtm(
     """Conditional L/S: original when easy, opposite only under stress."""
     params = dict(spec.get("params") or {})
     min_hist = int(spec.get("min_hist") or params.get("min_hist") or 20)
-    collected = w104._collect_event_entries(
+    collected = event._collect_event_entries(
         bars_by_code,
         events_by_code,
         spec=spec,
@@ -445,7 +443,7 @@ def evaluate_surprise_xs_rank_flip_daily_mtm(
     params["sign_flip"] = True
     flipped["params"] = params
     flipped["sign_flip"] = True
-    pack = w104.evaluate_surprise_xs_rank_hold_daily_mtm(
+    pack = event.evaluate_surprise_xs_rank_hold_daily_mtm(
         bars_by_code,
         events_by_code,
         spec=flipped,
@@ -466,7 +464,7 @@ def evaluate_surprise_xs_rank_flip_daily_mtm(
 
 
 def _parent_spec(logic_id: str) -> dict[str, Any]:
-    for s in w104.NEW_UNIQUE_LOGIC:
+    for s in event.NEW_UNIQUE_LOGIC:
         if s["logic_id"] == logic_id:
             return dict(s)
     raise KeyError(logic_id)

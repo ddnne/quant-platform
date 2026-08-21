@@ -23,5 +23,5 @@ params:
   long_frac: 0.3
   short_frac: 0.3
   min_hist: 20
-evaluator: research.unique_logic.w107b.evaluate_overnight_level_cs_tilt_daily_mtm
+evaluator: research.unique_logic.cs_overlays.evaluate_overnight_level_cs_tilt_daily_mtm
 notes: catalog declaration; evaluator in packages/product/research/unique_logic

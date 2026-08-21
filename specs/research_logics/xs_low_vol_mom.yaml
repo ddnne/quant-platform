@@ -20,4 +20,4 @@ params:
   short_frac: 0.3
   vol_lookback: 20
   min_hist: 20
-evaluator: research.unique_logic.w107b.evaluate_xs_low_vol_mom_daily_mtm
+evaluator: research.unique_logic.cs_overlays.evaluate_xs_low_vol_mom_daily_mtm

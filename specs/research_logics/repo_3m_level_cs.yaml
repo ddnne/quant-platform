@@ -20,4 +20,4 @@ params:
   long_frac: 0.3
   short_frac: 0.3
   min_hist: 20
-evaluator: research.unique_logic.w107b.evaluate_repo_3m_level_cs_daily_mtm
+evaluator: research.unique_logic.cs_overlays.evaluate_repo_3m_level_cs_daily_mtm

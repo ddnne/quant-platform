@@ -3704,29 +3704,28 @@ def _eval_research_unique_on_panel(
     *,
     one_way_cost: float,
 ) -> dict[str, Any]:
-    """Factory dispatch for W104–W107 research-family unique_logic.
+    """Factory dispatch for research-family unique_logic.
 
     Recognition eval only. Does not mint research_candidate / GO / main.
     Factory synthetic period-net is not a pass. Family append is not promotion.
     """
-    from research.unique_logic.legacy import wave_eval_modules
-
-    mods = wave_eval_modules()
-    w104 = mods["w104"]
-    w105 = mods["w105"]
-    w106 = mods["w106"]
-    w106b = mods["w106b"]
-    w107b = mods["w107b"]
-    w107c = mods["w107c"]
+    from research.unique_logic import (
+        adaptive,
+        cross_section,
+        cs_overlays,
+        event,
+        event_filters,
+        event_sides,
+    )
 
     spec: dict[str, Any] = {"logic_id": logic_id, "params": dict(params)}
     catalog = (
-        list(w104.NEW_UNIQUE_LOGIC)
-        + list(w105.NEW_UNIQUE_LOGIC)
-        + list(w106b.NEW_UNIQUE_LOGIC)
-        + list(w106.NEW_LS_VARIANTS)
-        + list(w107b.NEW_UNIQUE_LOGIC)
-        + list(w107c.ADAPTIVE_VARIANTS)
+        list(event.NEW_UNIQUE_LOGIC)
+        + list(event_filters.NEW_UNIQUE_LOGIC)
+        + list(cross_section.NEW_UNIQUE_LOGIC)
+        + list(event_sides.NEW_LS_VARIANTS)
+        + list(cs_overlays.NEW_UNIQUE_LOGIC)
+        + list(adaptive.ADAPTIVE_VARIANTS)
     )
     for cand in catalog:
         if cand.get("logic_id") == logic_id:
@@ -3758,7 +3757,7 @@ def _eval_research_unique_on_panel(
     p0 = panel.get("period_start")
     p1 = panel.get("period_end")
     if logic_id == "event_funding_stress_skip":
-        pack = w104.evaluate_event_funding_stress_skip_daily_mtm(
+        pack = event.evaluate_event_funding_stress_skip_daily_mtm(
             bars,
             events,
             overnight,
@@ -3768,7 +3767,7 @@ def _eval_research_unique_on_panel(
             period_end=p1,
         )
     elif logic_id == "curve_steep_event_confirm":
-        pack = w104.evaluate_curve_steep_event_confirm_daily_mtm(
+        pack = event.evaluate_curve_steep_event_confirm_daily_mtm(
             bars,
             events,
             curve,
@@ -3778,14 +3777,14 @@ def _eval_research_unique_on_panel(
             period_end=p1,
         )
     elif logic_id == "disclosure_cluster_mom_gate":
-        pack = w104.evaluate_disclosure_cluster_mom_gate_daily_mtm(
+        pack = event.evaluate_disclosure_cluster_mom_gate_daily_mtm(
             bars,
             events,
             spec=spec,
             one_way_cost=one_way_cost,
         )
     elif logic_id == "surprise_xs_rank_hold":
-        pack = w104.evaluate_surprise_xs_rank_hold_daily_mtm(
+        pack = event.evaluate_surprise_xs_rank_hold_daily_mtm(
             bars,
             events,
             spec=spec,
@@ -3794,7 +3793,7 @@ def _eval_research_unique_on_panel(
             period_end=p1,
         )
     elif logic_id == "large_surprise_event_hold":
-        pack = w105.evaluate_large_surprise_event_hold_daily_mtm(
+        pack = event_filters.evaluate_large_surprise_event_hold_daily_mtm(
             bars,
             events,
             spec=spec,
@@ -3803,7 +3802,7 @@ def _eval_research_unique_on_panel(
             period_end=p1,
         )
     elif logic_id == "afterclose_only_event_hold":
-        pack = w105.evaluate_afterclose_only_event_hold_daily_mtm(
+        pack = event_filters.evaluate_afterclose_only_event_hold_daily_mtm(
             bars,
             events,
             spec=spec,
@@ -3812,7 +3811,7 @@ def _eval_research_unique_on_panel(
             period_end=p1,
         )
     elif logic_id == "event_pre_mom_agree_hold":
-        pack = w105.evaluate_event_pre_mom_agree_hold_daily_mtm(
+        pack = event_filters.evaluate_event_pre_mom_agree_hold_daily_mtm(
             bars,
             events,
             spec=spec,
@@ -3821,7 +3820,7 @@ def _eval_research_unique_on_panel(
             period_end=p1,
         )
     elif logic_id == "event_margin_crowding_skip":
-        pack = w105.evaluate_event_margin_crowding_skip_daily_mtm(
+        pack = event_filters.evaluate_event_margin_crowding_skip_daily_mtm(
             bars,
             events,
             margin_by_code,
@@ -3831,7 +3830,7 @@ def _eval_research_unique_on_panel(
             period_end=p1,
         )
     elif logic_id == "event_funding_easy_short":
-        pack = w106.evaluate_event_funding_easy_short_daily_mtm(
+        pack = event_sides.evaluate_event_funding_easy_short_daily_mtm(
             bars,
             events,
             overnight,
@@ -3841,7 +3840,7 @@ def _eval_research_unique_on_panel(
             period_end=p1,
         )
     elif logic_id == "event_funding_stress_ls":
-        pack = w106.evaluate_event_funding_stress_ls_daily_mtm(
+        pack = event_sides.evaluate_event_funding_stress_ls_daily_mtm(
             bars,
             events,
             overnight,
@@ -3851,7 +3850,7 @@ def _eval_research_unique_on_panel(
             period_end=p1,
         )
     elif logic_id == "surprise_xs_rank_flip":
-        pack = w106.evaluate_surprise_xs_rank_flip_daily_mtm(
+        pack = event_sides.evaluate_surprise_xs_rank_flip_daily_mtm(
             bars,
             events,
             spec=spec,
@@ -3860,21 +3859,21 @@ def _eval_research_unique_on_panel(
             period_end=p1,
         )
     elif logic_id == "funding_impulse_cs_tilt":
-        pack = w106b.evaluate_funding_impulse_cs_tilt_daily_mtm(
+        pack = cross_section.evaluate_funding_impulse_cs_tilt_daily_mtm(
             bars,
             overnight,
             spec=spec,
             one_way_cost=one_way_cost,
         )
     elif logic_id == "curve_steepen_impulse_cs":
-        pack = w106b.evaluate_curve_steepen_impulse_cs_daily_mtm(
+        pack = cross_section.evaluate_curve_steepen_impulse_cs_daily_mtm(
             bars,
             curve,
             spec=spec,
             one_way_cost=one_way_cost,
         )
     elif logic_id == "xs_margin_delta_rank":
-        pack = w106b.evaluate_xs_margin_delta_rank_daily_mtm(
+        pack = cross_section.evaluate_xs_margin_delta_rank_daily_mtm(
             bars,
             margin_by_code,
             spec=spec,
@@ -3882,40 +3881,40 @@ def _eval_research_unique_on_panel(
         )
     elif logic_id == "idio_mom_macro_impulse":
         topix = dict(panel.get("topix") or panel.get("topix_by_date") or {})
-        pack = w106b.evaluate_idio_mom_macro_impulse_daily_mtm(
+        pack = cross_section.evaluate_idio_mom_macro_impulse_daily_mtm(
             bars,
             topix,
             spec=spec,
             one_way_cost=one_way_cost,
         )
     elif logic_id == "overnight_level_cs_tilt":
-        pack = w107b.evaluate_overnight_level_cs_tilt_daily_mtm(
+        pack = cs_overlays.evaluate_overnight_level_cs_tilt_daily_mtm(
             bars,
             overnight,
             spec=spec,
             one_way_cost=one_way_cost,
         )
     elif logic_id == "month_end_cs_fade":
-        pack = w107b.evaluate_month_end_cs_fade_daily_mtm(
+        pack = cs_overlays.evaluate_month_end_cs_fade_daily_mtm(
             bars,
             spec=spec,
             one_way_cost=one_way_cost,
         )
     elif logic_id == "xs_low_vol_mom":
-        pack = w107b.evaluate_xs_low_vol_mom_daily_mtm(
+        pack = cs_overlays.evaluate_xs_low_vol_mom_daily_mtm(
             bars,
             spec=spec,
             one_way_cost=one_way_cost,
         )
     elif logic_id == "repo_3m_level_cs":
-        pack = w107b.evaluate_repo_3m_level_cs_daily_mtm(
+        pack = cs_overlays.evaluate_repo_3m_level_cs_daily_mtm(
             bars,
             curve,
             spec=spec,
             one_way_cost=one_way_cost,
         )
     elif logic_id == "event_funding_adaptive_side":
-        pack = w107c.evaluate_event_funding_adaptive_side_daily_mtm(
+        pack = adaptive.evaluate_event_funding_adaptive_side_daily_mtm(
             bars,
             events,
             overnight,
@@ -3925,7 +3924,7 @@ def _eval_research_unique_on_panel(
             period_end=p1,
         )
     elif logic_id == "surprise_xs_rank_adaptive":
-        pack = w107c.evaluate_surprise_xs_rank_adaptive_daily_mtm(
+        pack = adaptive.evaluate_surprise_xs_rank_adaptive_daily_mtm(
             bars,
             events,
             spec=spec,

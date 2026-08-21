@@ -1,4 +1,4 @@
-"""W105 / w0820b — NEW unique_logic min-impl (not catalog remaps)."""
+"""Event-filter unique_logic min-impl (not catalog remaps)."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from research.mass_strategy_factory import (
     FROZEN_DEFAULT_PATH,
     propose_profit_hypotheses,
 )
-from research.unique_logic import w105
+from research.unique_logic import event_filters
 
 
 def _bars(n: int = 40, start: str = "2019-01-") -> dict[str, list[tuple[str, float]]]:
@@ -52,8 +52,8 @@ def _events() -> dict[str, list[dict]]:
     }
 
 
-def test_w105_proposals_are_new_unique_logic_not_catalog_or_w104():
-    ids = [s["logic_id"] for s in w105.NEW_UNIQUE_LOGIC]
+def test_event_filters_proposals_are_new_unique_logic_not_catalog_or_prior_event():
+    ids = [s["logic_id"] for s in event_filters.NEW_UNIQUE_LOGIC]
     assert ids == [
         "large_surprise_event_hold",
         "afterclose_only_event_hold",
@@ -61,34 +61,34 @@ def test_w105_proposals_are_new_unique_logic_not_catalog_or_w104():
         "event_margin_crowding_skip",
     ]
     assert len(ids) == 4
-    for s in w105.NEW_UNIQUE_LOGIC:
+    for s in event_filters.NEW_UNIQUE_LOGIC:
         assert s["new_unique_logic"] is True
         assert s["catalog"] is False
         assert s["catalog_map"] is None
-        assert s["logic_id"] not in w105.LOGIC_CATALOG_HEADLINE_BAN
-        assert s["logic_id"] not in w105.W104_UNIQUE_LOGIC_IDS
-        assert s["logic_id"] not in w105.KNOWN_WEAK_THESIS
-        assert s["logic_id"] not in w105.KNOWN_DEMOTED_OR_WEAK
+        assert s["logic_id"] not in event_filters.LOGIC_CATALOG_HEADLINE_BAN
+        assert s["logic_id"] not in event_filters.EVENT_LOGIC_IDS
+        assert s["logic_id"] not in event_filters.KNOWN_WEAK_THESIS
+        assert s["logic_id"] not in event_filters.KNOWN_DEMOTED_OR_WEAK
         params = s["params"]
         assert "mode" in params or "gate" in params
 
 
-def test_w105_propose_profit_hypotheses_accepts_adhoc_no_catalog_map():
+def test_event_filters_propose_profit_hypotheses_accepts_adhoc_no_catalog_map():
     out = propose_profit_hypotheses(
-        w105.proposals_for_factory(),
+        event_filters.proposals_for_factory(),
         evaluate=False,
     )
     assert out["n_accepted"] == 4
     assert out["n_rejected"] == 0
     lids = [a["logic_id"] for a in out["accepted"]]
-    assert lids == [s["logic_id"] for s in w105.NEW_UNIQUE_LOGIC]
+    assert lids == [s["logic_id"] for s in event_filters.NEW_UNIQUE_LOGIC]
     for a in out["accepted"]:
-        assert a["logic_id"] not in w105.LOGIC_CATALOG_HEADLINE_BAN
+        assert a["logic_id"] not in event_filters.LOGIC_CATALOG_HEADLINE_BAN
         assert a.get("eval_mapped_to_catalog") in (None, False)
 
 
-def test_w105_frozen_pins_untouched():
-    pack = w105._assert_frozen_pins_untouched()
+def test_event_filters_frozen_pins_untouched():
+    pack = event_filters._assert_frozen_pins_untouched()
     assert pack["pins_untouched"] is True
     assert pack["frozen_defaults_retuned"] is False
     assert len(FROZEN_DEFAULT_PATH) == 3
@@ -100,7 +100,7 @@ def test_pit_median_from_pairs_keeps_same_date_multiset():
         ("2019-01-01", 3.0),
         ("2019-01-02", 5.0),
     ]
-    med = w105.pit_median_from_pairs(
+    med = event_filters.pit_median_from_pairs(
         pairs, ["2019-01-01", "2019-01-02", "2019-01-03"], min_hist=2
     )
     assert med["2019-01-01"] is None
@@ -130,11 +130,11 @@ def test_large_surprise_skips_below_pit_median():
         "feps": 10.0,  # |surprise| = 0.1 << 10
         "prior_eps": 9.0,
     }
-    spec = dict(w105.NEW_UNIQUE_LOGIC[0])
+    spec = dict(event_filters.NEW_UNIQUE_LOGIC[0])
     spec["params"] = dict(spec["params"])
     spec["params"]["min_hist"] = 5
     spec["min_hist"] = 5
-    pack = w105.evaluate_large_surprise_event_hold_daily_mtm(
+    pack = event_filters.evaluate_large_surprise_event_hold_daily_mtm(
         bars,
         events,
         spec=spec,
@@ -153,10 +153,10 @@ def test_afterclose_skips_preclose_and_missing_disctime():
     bars = _bars()
     events = _events()
     events["13010"][0]["disc_time"] = None  # missing → skip
-    pack = w105.evaluate_afterclose_only_event_hold_daily_mtm(
+    pack = event_filters.evaluate_afterclose_only_event_hold_daily_mtm(
         bars,
         events,
-        spec=w105.NEW_UNIQUE_LOGIC[1],
+        spec=event_filters.NEW_UNIQUE_LOGIC[1],
         one_way_cost=0.001,
         period_start="2019-01-01",
         period_end="2019-01-28",
@@ -182,10 +182,10 @@ def test_afterclose_accepts_post_session_close():
             }
         ]
     }
-    pack = w105.evaluate_afterclose_only_event_hold_daily_mtm(
+    pack = event_filters.evaluate_afterclose_only_event_hold_daily_mtm(
         bars,
         events,
-        spec=w105.NEW_UNIQUE_LOGIC[1],
+        spec=event_filters.NEW_UNIQUE_LOGIC[1],
         one_way_cost=0.001,
         period_start="2019-01-01",
         period_end="2019-01-28",
@@ -209,10 +209,10 @@ def test_event_pre_mom_agree_skips_disagreement():
             }
         ]
     }
-    pack = w105.evaluate_event_pre_mom_agree_hold_daily_mtm(
+    pack = event_filters.evaluate_event_pre_mom_agree_hold_daily_mtm(
         bars,
         events,
-        spec=w105.NEW_UNIQUE_LOGIC[2],
+        spec=event_filters.NEW_UNIQUE_LOGIC[2],
         one_way_cost=0.001,
         period_start="2019-01-01",
         period_end="2019-01-28",
@@ -226,11 +226,11 @@ def test_event_pre_mom_agree_skips_disagreement():
 def test_event_margin_crowding_skips_missing_and_empty_is_incomplete():
     bars = _bars()
     events = _events()
-    empty = w105.evaluate_event_margin_crowding_skip_daily_mtm(
+    empty = event_filters.evaluate_event_margin_crowding_skip_daily_mtm(
         bars,
         events,
         {},
-        spec=w105.NEW_UNIQUE_LOGIC[3],
+        spec=event_filters.NEW_UNIQUE_LOGIC[3],
         one_way_cost=0.001,
         period_start="2019-01-01",
         period_end="2019-01-28",
@@ -243,11 +243,11 @@ def test_event_margin_crowding_skips_missing_and_empty_is_incomplete():
         "72030": {f"2019-01-{d:02d}": 100.0 for d in range(1, 12)},
     }
     margin["72030"]["2019-01-11"] = 500.0  # last print before 01-12 entry, crowded
-    spec = dict(w105.NEW_UNIQUE_LOGIC[3])
+    spec = dict(event_filters.NEW_UNIQUE_LOGIC[3])
     spec["params"] = dict(spec["params"])
     spec["params"]["min_hist"] = 5
     spec["min_hist"] = 5
-    pack = w105.evaluate_event_margin_crowding_skip_daily_mtm(
+    pack = event_filters.evaluate_event_margin_crowding_skip_daily_mtm(
         bars,
         events,
         margin,

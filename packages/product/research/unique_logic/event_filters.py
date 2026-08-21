@@ -1,6 +1,6 @@
-"""Unique-logic evaluators (moved from scripts/run_w*).
+"""Unique-logic evaluators (candidate-grade daily MTM).
 
-Candidate-grade daily MTM. Does not promote / GO / retune pins.
+Does not promote / GO / retune pins.
 """
 from __future__ import annotations
 
@@ -14,26 +14,24 @@ from research.daily_path_eval import (
     held_book_daily_mtm,
     panel_index,
 )
-from research.eval_windows import HONEST_3Y_WINDOWS
 from research.unique_logic.constants import (
     ALWAYS_ON_OCCUPANCY_WARN,
     KNOWN_DEMOTED_OR_WEAK,
     KNOWN_WEAK_THESIS,
     LOGIC_CATALOG_HEADLINE_BAN,
-    W104_UNIQUE_LOGIC_IDS,
-    W105_UNIQUE_LOGIC_IDS,
-    W106_UNIQUE_LOGIC_IDS,
+    EVENT_LOGIC_IDS,
+    EVENT_FILTER_LOGIC_IDS,
+    CS_AND_SIDE_LOGIC_IDS,
 )
 
-W99_WINDOWS = HONEST_3Y_WINDOWS
 _assert_frozen_pins_untouched = assert_frozen_pins_untouched
 
-from research.unique_logic.w104 import (  # noqa: E402
+from research.unique_logic.event import (  # noqa: E402
     _collect_event_entries,
     _held_from_event_entries,
     pit_median_on_dates,
 )
-import research.unique_logic.w104 as w104  # noqa: E402
+import research.unique_logic.event as event  # noqa: E402
 
 NEW_UNIQUE_LOGIC: tuple[dict[str, Any], ...] = (
     {
@@ -348,7 +346,7 @@ def _collect(
     period_start: str | None,
     period_end: str | None,
 ) -> dict[str, Any]:
-    collected = w104._collect_event_entries(
+    collected = event._collect_event_entries(
         bars_by_code,
         events_by_code,
         spec=spec,
@@ -419,7 +417,7 @@ def _finish_event_book(
     one_way_cost: float,
 ) -> dict[str, Any]:
     dates = list(collected["calendar"])
-    held = w104._held_from_event_entries(collected, accept=accept)
+    held = event._held_from_event_entries(collected, accept=accept)
     pack = held_book_daily_mtm(
         held_by_code_date=held,
         close_by=collected["close_by"],
@@ -730,7 +728,7 @@ def evaluate_event_margin_crowding_skip_daily_mtm(
             accept[key] = False
             n_skip_stale += 1
             continue
-        med_by = w104.pit_median_on_dates(
+        med_by = event.pit_median_on_dates(
             series, [ev["entry_date"]], min_hist=min_hist
         )
         med = med_by.get(ev["entry_date"])

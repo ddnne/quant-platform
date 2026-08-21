@@ -16,14 +16,14 @@ Do **not** add `scripts/run_wNN_*.py` or `docs/proof/w08*_wNN_*.md` scorecards.
 | Flag | Value |
 |------|-------|
 | OTC dataset | `jsda_otc_bond_reference_prices` **PARTIAL** |
-| OTC COMPLETE | **5852** |
-| OTC PARTIAL | **2932** |
+| OTC COMPLETE | **5886** |
+| OTC PARTIAL | **2898** |
 | required | 8784 |
-| span | **2002-09-25…2026-08-20** |
+| span | **2002-08-06…2026-08-20** |
 | remaining official 2003 | **0** |
-| remaining official 2002 | **36** |
+| remaining official 2002 | **2** PARSE_ZERO (`2002-08-02`, `2002-08-05`; not invented COMPLETE) |
 | remaining official 2004 | **0** |
-| projection | **FRESH** (`projgen-96b8bd434c4c4b21a2f8fad79bc182f7`) |
+| projection | **FRESH** (`projgen-ef18b4f86ee946048161d25e2a30a2a8`) |
 | COMPLETE datasets | **22** held |
 | DEFER | **4** |
 

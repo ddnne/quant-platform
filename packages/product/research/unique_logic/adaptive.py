@@ -1,6 +1,6 @@
-"""Unique-logic evaluators (moved from scripts/run_w*).
+"""Unique-logic evaluators (candidate-grade daily MTM).
 
-Candidate-grade daily MTM. Does not promote / GO / retune pins.
+Does not promote / GO / retune pins.
 """
 from __future__ import annotations
 
@@ -14,21 +14,19 @@ from research.daily_path_eval import (
     held_book_daily_mtm,
     panel_index,
 )
-from research.eval_windows import HONEST_3Y_WINDOWS
 from research.unique_logic.constants import (
     ALWAYS_ON_OCCUPANCY_WARN,
     KNOWN_DEMOTED_OR_WEAK,
     KNOWN_WEAK_THESIS,
     LOGIC_CATALOG_HEADLINE_BAN,
-    W104_UNIQUE_LOGIC_IDS,
-    W105_UNIQUE_LOGIC_IDS,
-    W106_UNIQUE_LOGIC_IDS,
+    EVENT_LOGIC_IDS,
+    EVENT_FILTER_LOGIC_IDS,
+    CS_AND_SIDE_LOGIC_IDS,
 )
 
-W99_WINDOWS = HONEST_3Y_WINDOWS
 _assert_frozen_pins_untouched = assert_frozen_pins_untouched
 
-from research.unique_logic import w104, w106  # noqa: E402
+from research.unique_logic import event, event_sides  # noqa: E402
 from research.daily_path_eval import stitch_net  # noqa: E402
 
 TRAIL_K = 10
@@ -228,7 +226,7 @@ def evaluate_event_funding_adaptive_side_daily_mtm(
     min_hist = int(spec.get("min_hist") or params.get("min_hist") or 20)
     trail_k = int(spec.get("trail_k") or params.get("trail_k") or TRAIL_K)
     trail_min = int(spec.get("trail_min") or params.get("trail_min") or TRAIL_MIN)
-    collected = w104._collect_event_entries(
+    collected = event._collect_event_entries(
         bars_by_code,
         events_by_code,
         spec=spec,
@@ -236,14 +234,14 @@ def evaluate_event_funding_adaptive_side_daily_mtm(
         period_end=period_end,
     )
     extra = {
-        **w106._funding_base_extra(spec, collected, min_hist=min_hist),
+        **event_sides._funding_base_extra(spec, collected, min_hist=min_hist),
         "gate": "overnight_lt_pit_trailing_median",
         "side": "trail_k_orig_vs_flip",
         "trail_k": trail_k,
         "trail_min": trail_min,
         "occupancy_vs_parent": "same_as_skip",
     }
-    blocked = w106._blocked_overnight_or_events(
+    blocked = event_sides._blocked_overnight_or_events(
         spec=spec,
         collected=collected,
         overnight_by_date=overnight_by_date,
@@ -251,13 +249,13 @@ def evaluate_event_funding_adaptive_side_daily_mtm(
     )
     if blocked:
         return blocked
-    gate = w106.classify_funding_entries(
+    gate = event_sides.classify_funding_entries(
         collected, overnight_by_date, min_hist=min_hist
     )
     easy_keys = dict(gate["easy"])
     cost = 2.0 * float(one_way_cost)
     ordered = sorted(
-        [e for e in collected["entries"] if easy_keys.get(w106._event_key(e))],
+        [e for e in collected["entries"] if easy_keys.get(event_sides._event_key(e))],
         key=lambda e: (e["entry_date"], e["code"], e["disc_date"]),
     )
     history: list[dict[str, Any]] = []
@@ -266,7 +264,7 @@ def evaluate_event_funding_adaptive_side_daily_mtm(
     n_flip = 0
     n_default_orig = 0
     for ev in ordered:
-        key = w106._event_key(ev)
+        key = event_sides._event_key(ev)
         entry_d = str(ev["entry_date"])
         completed = [h for h in history if str(h["hold_end"]) < entry_d]
         lastk = completed[-trail_k:]
@@ -308,7 +306,7 @@ def evaluate_event_funding_adaptive_side_daily_mtm(
             "n_adaptive_default_orig": n_default_orig,
         }
     )
-    return w106._finish_signed_event_book(
+    return event_sides._finish_signed_event_book(
         spec=spec,
         collected=collected,
         accept=easy_keys,
@@ -336,7 +334,7 @@ def evaluate_surprise_xs_rank_adaptive_daily_mtm(
     orig_params["sign_flip"] = False
     orig_spec["params"] = orig_params
     orig_spec["sign_flip"] = False
-    orig = w104.evaluate_surprise_xs_rank_hold_daily_mtm(
+    orig = event.evaluate_surprise_xs_rank_hold_daily_mtm(
         bars_by_code,
         events_by_code,
         spec=orig_spec,
