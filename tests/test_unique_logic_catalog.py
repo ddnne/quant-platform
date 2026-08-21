@@ -48,11 +48,38 @@ def test_dispatch_unknown_logic_is_incomplete() -> None:
 
 
 def test_repo_catalog_yaml_loads() -> None:
+    from research.unique_logic import all_unique_logic_specs
+
     specs = load_catalog_specs()
     ids = {s["logic_id"] for s in specs}
+    py_ids = {s["logic_id"] for s in all_unique_logic_specs()}
     assert "overnight_level_cs_tilt" in ids
     assert "xs_low_vol_mom" in ids
     assert "month_end_cs_fade" in ids
+    assert len(ids) >= 20
+    assert ids == py_ids
     for spec in specs:
         assert spec.get("go") is not True
         assert spec.get("promote_as_main") is not True
+
+
+def test_repo_history_plane_status_discloses_sqlite_not_d1() -> None:
+    from research.class_hyp_eval import repo_history_plane_status
+
+    note = repo_history_plane_status()
+    assert note["invent_complete"] is False
+    assert note["ffill_applied"] is False
+    assert note["d1_role"] == "hot_tip_only"
+    assert note["pit_path"] == "fail_closed_until_READY"
+    assert note["sqlite_rows"] >= 0
+
+
+def test_factory_unique_eval_uses_package_dispatch() -> None:
+    import inspect
+
+    from research.mass_strategy_factory import _eval_research_unique_on_panel
+
+    src = inspect.getsource(_eval_research_unique_on_panel)
+    assert "evaluate_logic_daily_mtm" in src
+    assert "scripts.run_w" not in src
+    assert "from research.unique_logic.dispatch import" in src

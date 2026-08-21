@@ -1,6 +1,6 @@
 """New wave runners and proof scorecards are frozen (ADR research recording).
 
-Existing scripts/run_w*.py may remain until staged deletion. Adding new ones
+scripts/run_w*.py are gone (ALLOWED_RUN_W empty). Adding new ones
 fails this test. Same for docs/proof/w08*_wNN_*.md scorecards.
 """
 from __future__ import annotations

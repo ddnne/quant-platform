@@ -116,7 +116,7 @@ Details + exceptions: ADR §5.
 | Packaging / paths | `pyproject.toml`, `qp_paths.py` | this map + layout migration |
 | LLM-friendly refactor | plane READMEs + `tests/test_plane_import_boundaries.py` | [ADR](./adr_llm_friendly_refactor.md) (**Accepted**); residual for live status |
 | New research hyp / daily_path_DD | `research.daily_path_eval` · `research.eval_registry` · `research.cf_mass_eval_job` | [ADR recording](./adr_research_recording.md) — **no new run_wNN script** |
-| Existing `run_w*` / wave proofs | keep, deprecated | [`wave_assets_deprecated.md`](./wave_assets_deprecated.md) |
+| Existing `run_w*` / wave proofs | **deleted** | [`wave_assets_deprecated.md`](./wave_assets_deprecated.md) |
 | Eval job index (D1/R2) | `research.eval_registry` · `platform/workers/quant-ops-mcp/migrations/0006_research_eval_jobs.sql` | recording ADR |
 | Test tiers (G0/G1/G2) | `tests/README.md` | this map §11 B1-d |
 
@@ -193,9 +193,6 @@ Full policy: ADR §5.2.
 | `docs/phase35_4_ops_verify_20260811.md` | historical ops verify snapshot |
 | `docs/phase6_hardening_acceptance.md` | historical acceptance snapshot |
 | `docs/phase61_plan.md` | historical plan |
-| `docs/phase621_test_audit.md` | historical / audit |
-| `docs/phase622_independent_review.md` | historical review |
-| `docs/phase62_completion_checklist.md` | historical / checklist |
 | `docs/pre_phase7_full_code_review.md` | historical Wave-0 review |
 | `docs/operations/phase63_live_sync.md` | historical live-vs-code note (counts may be stale) |
 | `docs/proof/*` | dated evidence |

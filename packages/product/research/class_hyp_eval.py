@@ -449,6 +449,55 @@ def collect_liquidity_bar_rows(
     return rows
 
 
+def repo_history_plane_status(
+    db_path: str | Path = DEFAULT_SQLITE,
+) -> dict[str, Any]:
+    """Disclose sqlite history vs D1 hot tip vs PIT fail-closed.
+
+    Coverage V2 COMPLETE is receipt-owned (quant-mcp). This helper does not
+    invent COMPLETE, does not ffill, and does not declare READY.
+    """
+    db = Path(db_path)
+    n = 0
+    mn = mx = None
+    tenors = 0
+    if db.exists():
+        con = sqlite3.connect(str(db))
+        try:
+            n, mn, mx = con.execute(
+                "SELECT COUNT(*), MIN(as_of_date), MAX(as_of_date) "
+                "FROM jsda_repo_rates"
+            ).fetchone()
+            tenors = int(
+                con.execute(
+                    "SELECT COUNT(DISTINCT tenor) FROM jsda_repo_rates"
+                ).fetchone()[0]
+                or 0
+            )
+        except sqlite3.Error:
+            n = 0
+        finally:
+            con.close()
+    return {
+        "dataset": "jsda_tokyo_repo_rates",
+        "table": "jsda_repo_rates",
+        "sqlite_rows": int(n or 0),
+        "sqlite_min": mn,
+        "sqlite_max": mx,
+        "sqlite_tenors": int(tenors or 0),
+        "d1_role": "hot_tip_only",
+        "pit_path": "fail_closed_until_READY",
+        "research_loader": "load_repo_rows_all_tenors_from_sqlite",
+        "invent_complete": False,
+        "ffill_applied": False,
+        "note": (
+            "D1 jsda_repo_rates is hot tip (~days). Historical eval reads "
+            "this sqlite / R2. PIT get_jsda_repo_rates stays fail-closed "
+            "while production READY is undeclared."
+        ),
+    }
+
+
 def load_repo_rows_from_sqlite(
     db_path: str | Path = DEFAULT_SQLITE,
     *,
@@ -456,7 +505,11 @@ def load_repo_rows_from_sqlite(
     end: str | None = None,
     tenor_contains: str | None = "overnight",
 ) -> list[dict[str, Any]]:
-    """Load jsda_repo_rates rows from local SQLite (research offline path)."""
+    """Load jsda_repo_rates rows from local SQLite (research offline path).
+
+    Not the PIT path. PIT ``get_jsda_repo_rates`` is fail-closed until READY.
+    D1 holds hot tip only; this sqlite holds the COMPLETE time-series history.
+    """
     db = Path(db_path)
     if not db.exists():
         return []
@@ -5094,6 +5147,7 @@ __all__ = [
     "load_nky_vol_series_from_sqlite",
     "load_repo_rows_all_tenors_from_sqlite",
     "load_repo_rows_from_sqlite",
+    "repo_history_plane_status",
     "load_short_ratio_series_from_sqlite",
     "load_topix_close_series_from_sqlite",
     "merge_event_calendars",

@@ -50,6 +50,6 @@ Markdown that restates numbers already in R2/D1 is not a record.
 
 ## Consequences
 
-Importer-zero `run_w*` scripts are deleted on a staged schedule
+All `scripts/run_w*` are deleted (`ALLOWED_RUN_W` empty)
 (`wave_assets_deprecated.md`). Residual is live flags only. Query is D1/R2,
 not grep of markdown.

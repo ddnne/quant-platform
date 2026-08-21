@@ -90,12 +90,7 @@ def test_freezes_closed():
     assert READY_DECLARED is False
     assert OPERATIONAL_GO is False
     assert CONTINUOUS_PAPER == "UNARMED"
-    assert (
-        "W107" in MASS_FACTORY_WAVE
-        or "W106" in MASS_FACTORY_WAVE
-        or "W105" in MASS_FACTORY_WAVE
-        or "W104" in MASS_FACTORY_WAVE
-    )
+    assert MASS_FACTORY_WAVE == "research-unique-logic"
     assert MASS_FACTORY_VERSION.startswith("mass-strategy-factory/")
     assert doc["frozen_defaults_retuned"] is False
 
@@ -184,7 +179,7 @@ def test_logic_templates_distinct_economic_logic():
     assert LOGIC_TEMPLATES["opt225_atm_iv_abs_level"].base_params.get(
         "compare_only"
     ) is True
-    # W105 research-family unique_logic: recognized, not generated, not remapped.
+    # research-family unique_logic: recognized, not generated, not remapped.
     for lid in (
         "event_funding_stress_skip",
         "curve_steep_event_confirm",

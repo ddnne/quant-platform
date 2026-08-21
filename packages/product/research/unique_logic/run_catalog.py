@@ -17,6 +17,7 @@ from research.class_hyp_eval import (
     load_margin_from_sqlite,
     load_repo_rows_all_tenors_from_sqlite,
     load_topix_close_series_from_sqlite,
+    repo_history_plane_status,
 )
 from research.daily_path_eval import (
     assert_frozen_pins_untouched,
@@ -76,6 +77,7 @@ def _load_extras(
         "n_events": sum(len(v) for v in events.values()) if events else 0,
         "n_margin_codes": len(margin_by_code),
         "n_topix": len(topix_by_date),
+        "repo_history_plane": repo_history_plane_status(sqlite_path),
     }
 
 
@@ -242,6 +244,7 @@ def main(argv: list[str] | None = None) -> int:
                 "n_events": extras.get("n_events"),
                 "n_margin_codes": extras.get("n_margin_codes"),
                 "n_topix": extras.get("n_topix"),
+                "repo_history_plane": extras.get("repo_history_plane"),
             }
         )
     )

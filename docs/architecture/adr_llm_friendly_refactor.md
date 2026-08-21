@@ -318,8 +318,7 @@ Under `docs/` today (non-exhaustive):
 | Cluster | Examples | Risk if agent reads only these |
 |---------|----------|--------------------------------|
 | **Current residual** | `phase62_residual_status.md` | Correct live residual SoT |
-| **Phase status shards** | `phase62_status.md`, `phase621_status.md`, `phase622_status.md`, `phase623_status.md` | Stale HEAD / developer notes; may contradict residual |
-| **Checklists / finals** | `phase62_completion_checklist.md`, `phase62_final_report.md` | Easy to misread as “FULL DONE” |
+| **Phase status shards** | deleted (`phase62*_status.md`, `phase62_final_report.md`) | Use residual + R2/D1 |
 | **Runbooks** | `phase61_production_runbook.md`, `phase62_production_runbook.md`, `operations/*` | Operationally valid but long |
 | **Proof** | `docs/proof/*` | Evidence snapshots — dated; must not override residual without new proof |
 | **Architecture** | `architecture.md`, `architecture/*` | Boundaries; layout SoT |
@@ -348,8 +347,6 @@ Layer 3 — EVIDENCE (cite, do not “upgrade” status from these alone)
   docs/proof/*
 
 Layer 4 — HISTORICAL / ARCHIVE (do not treat as current GO)
-  phase62_status, phase621_*, phase622_*, phase623_*, 
-  phase62_final_report, phase62_completion_checklist (unless residual points here),
   pre_phase7_full_code_review.md (snapshot review)
 ```
 

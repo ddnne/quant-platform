@@ -1,4 +1,4 @@
-"""Cloudflare multi-logic × multi-period mass eval job (W91 / w0818a).
+"""Cloudflare multi-logic × multi-period mass eval job.
 
 Implements a real CF Worker path for evaluating **multiple economic logics**
 across **multiple period windows**, writing artifacts to R2
@@ -7,18 +7,18 @@ across **multiple period windows**, writing artifacts to R2
 Architecture
 ------------
 * **Worker:** ``platform/workers/research-mass-eval`` (TypeScript)
-  - ``mode=r2_panels`` — staged COMPLETE-backed real bars (W91 preferred)
+  - ``mode=r2_panels`` — staged COMPLETE-backed real bars (preferred)
   - ``mode=d1_bars`` — D1 ``jquants_records`` tip extract (hot window only)
-  - ``mode=synthetic`` — deterministic PRNG (W90 residual smoke)
+  - ``mode=synthetic`` — deterministic PRNG (smoke)
   - ``mode=nets_only`` — pre-baked period nets
   - Evaluates bar-native logics (mdh / xs / vol) across period shards
   - Writes summary/results/ranking to R2
 * **Driver (this module):** builds job payload, stages real panels from
-  local COMPLETE-backed R2 mirrors (W63/W64), invokes Worker via HTTPS,
+  local COMPLETE-backed R2 mirrors, invokes Worker via HTTPS,
   records job id / counts / artifact keys.
 
-W91 multi-period policy
------------------------
+Multi-period policy
+-------------------
 * ≥4–6 multi-year windows (full-prefer 2015/19/21/23 + Q4 2017/25)
 * max_codes ≤ 20, max_days ≤ 200 per period (CF wall-clock safe)
 * Heavy multi-year deep eval remains local ``run_mass_factory`` /
@@ -26,6 +26,7 @@ W91 multi-period policy
 
 Does **not** arm Mass / READY / GO / continuous paper / live.
 Does **not** retune the three frozen default-path representatives.
+Period-net screen survivors are **not** a pass (``daily_path_DD`` required).
 """
 
 from __future__ import annotations
@@ -72,8 +73,9 @@ DEFAULT_MAX_CODES: int = 15
 DEFAULT_MAX_DAYS: int = 120
 DEFAULT_ONE_WAY: float = 0.001
 
-# W91 preferred default is real staged panels (not synthetic).
-DEFAULT_W91_MODE: str = "r2_panels"
+# Preferred default is real staged panels (not synthetic).
+DEFAULT_MASS_EVAL_MODE: str = "r2_panels"
+DEFAULT_W91_MODE: str = DEFAULT_MASS_EVAL_MODE  # compat alias
 ALLOWED_MODES: frozenset[str] = frozenset(
     {"r2_panels", "d1_bars", "synthetic", "nets_only"}
 )
@@ -1406,11 +1408,11 @@ def build_cf_mass_eval_job_spec(
     one_way_cost: float = DEFAULT_ONE_WAY,
     seed: int = 870816,
     extra_logics: Sequence[Mapping[str, Any]] | None = None,
-    mode: str = DEFAULT_W91_MODE,
+    mode: str = DEFAULT_MASS_EVAL_MODE,
     panels_prefix: str | None = None,
 ) -> dict[str, Any]:
     """Declarative job payload for the CF mass-eval Worker."""
-    mode_s = str(mode or DEFAULT_W91_MODE).strip()
+    mode_s = str(mode or DEFAULT_MASS_EVAL_MODE).strip()
     if mode_s not in ALLOWED_MODES:
         raise CfMassEvalError(
             f"mode must be one of {sorted(ALLOWED_MODES)}, got {mode_s!r}"
@@ -1462,7 +1464,7 @@ def build_cf_mass_eval_job_spec(
                 f"mode={mode_s}; ≤{max_codes} codes × ≤{max_days} days × "
                 f"{len(period_rows)} periods × {len(logics)} logics. "
                 "Heavy multi-year stays local for promising survivors. "
-                "W91 default is real staged panels (not synthetic)."
+                "Default is real staged panels (not synthetic)."
             ),
         },
         "freezes": _freeze(),
@@ -1645,7 +1647,7 @@ def run_cf_mass_eval_job(
     max_days: int = DEFAULT_MAX_DAYS,
     one_way_cost: float = DEFAULT_ONE_WAY,
     seed: int = 870816,
-    mode: str = DEFAULT_W91_MODE,
+    mode: str = DEFAULT_MASS_EVAL_MODE,
     stage_panels: bool | None = None,
     worker_url: str = DEFAULT_WORKER_URL,
     deploy_if_needed: bool = True,
@@ -1658,18 +1660,18 @@ def run_cf_mass_eval_job(
 ) -> dict[str, Any]:
     """Build → stage real panels (r2_panels) → deploy → invoke CF job.
 
-    W91 default ``mode=r2_panels`` (real COMPLETE-backed multi-year panels).
+    Default ``mode=r2_panels`` (real COMPLETE-backed multi-year panels).
     Returns a pack with job_id, status, counts, artifact paths, and the
     Worker response body.
     """
     t0 = time.perf_counter()
-    mode_s = str(mode or DEFAULT_W91_MODE).strip()
+    mode_s = str(mode or DEFAULT_MASS_EVAL_MODE).strip()
     do_stage = (
         bool(stage_panels)
         if stage_panels is not None
         else mode_s == "r2_panels"
     )
-    jid_pre = str(job_id or f"w91-real-{uuid4().hex[:12]}")
+    jid_pre = str(job_id or f"mass-eval-{uuid4().hex[:12]}")
     period_rows = [
         normalize_period_row(p)
         for p in (
@@ -1863,7 +1865,7 @@ def try_cf_mass_eval_status() -> dict[str, Any]:
         "entry": "research.cf_mass_eval_job.run_cf_mass_eval_job",
         "artifact_prefix": f"{RESEARCH_ARTIFACT_PREFIX}/job={{id}}/",
         "bucket": RESEARCH_ARTIFACT_BUCKET,
-        "default_mode": DEFAULT_W91_MODE,
+        "default_mode": DEFAULT_MASS_EVAL_MODE,
         "modes": sorted(ALLOWED_MODES),
         "shard_policy": "real_multiyear_r2_panels",
         "bar_native_logics": list(CF_BAR_NATIVE_LOGIC_IDS),
@@ -1872,7 +1874,7 @@ def try_cf_mass_eval_status() -> dict[str, Any]:
             p["period_id"] for p in DEFAULT_REAL_MULTIYEAR_PERIODS
         ],
         "scale_note": (
-            "W91: real COMPLETE-backed multi-year panels staged to R2 "
+            "Real COMPLETE-backed multi-year panels staged to R2 "
             "(mode=r2_panels). D1 tip-only via mode=d1_bars. "
             "Heavy multi-year promising-only remains local class_hyp_eval."
         ),
@@ -1983,6 +1985,7 @@ __all__ = [
     "THICKEN_PANEL_DATASETS",
     "DEFAULT_LITE_PERIODS",
     "DEFAULT_REAL_MULTIYEAR_PERIODS",
+    "DEFAULT_MASS_EVAL_MODE",
     "DEFAULT_W91_MODE",
     "ALLOWED_MODES",
     "DEFAULT_WORKER_URL",

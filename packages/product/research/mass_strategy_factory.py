@@ -103,7 +103,7 @@ from features.class_signals import (
 # ---------------------------------------------------------------------------
 
 MASS_FACTORY_VERSION: str = "mass-strategy-factory/v2.8"
-MASS_FACTORY_WAVE: str = "W107 / w0820d"
+MASS_FACTORY_WAVE: str = "research-unique-logic"
 
 MASS_RESEARCH: str = "NO-GO"  # operational Mass remains NO-GO
 PHASE7: str = "OFF"
@@ -3709,25 +3709,11 @@ def _eval_research_unique_on_panel(
     Recognition eval only. Does not mint research_candidate / GO / main.
     Factory synthetic period-net is not a pass. Family append is not promotion.
     """
-    from research.unique_logic import (
-        adaptive,
-        cross_section,
-        cs_overlays,
-        event,
-        event_filters,
-        event_sides,
-    )
+    from research.unique_logic import all_unique_logic_specs
+    from research.unique_logic.dispatch import evaluate_logic_daily_mtm
 
     spec: dict[str, Any] = {"logic_id": logic_id, "params": dict(params)}
-    catalog = (
-        list(event.NEW_UNIQUE_LOGIC)
-        + list(event_filters.NEW_UNIQUE_LOGIC)
-        + list(cross_section.NEW_UNIQUE_LOGIC)
-        + list(event_sides.NEW_LS_VARIANTS)
-        + list(cs_overlays.NEW_UNIQUE_LOGIC)
-        + list(adaptive.ADAPTIVE_VARIANTS)
-    )
-    for cand in catalog:
+    for cand in all_unique_logic_specs():
         if cand.get("logic_id") == logic_id:
             spec = dict(cand)
             merged = dict(cand.get("params") or {})
@@ -3756,183 +3742,20 @@ def _eval_research_unique_on_panel(
             }
     p0 = panel.get("period_start")
     p1 = panel.get("period_end")
-    if logic_id == "event_funding_stress_skip":
-        pack = event.evaluate_event_funding_stress_skip_daily_mtm(
-            bars,
-            events,
-            overnight,
-            spec=spec,
-            one_way_cost=one_way_cost,
-            period_start=p0,
-            period_end=p1,
-        )
-    elif logic_id == "curve_steep_event_confirm":
-        pack = event.evaluate_curve_steep_event_confirm_daily_mtm(
-            bars,
-            events,
-            curve,
-            spec=spec,
-            one_way_cost=one_way_cost,
-            period_start=p0,
-            period_end=p1,
-        )
-    elif logic_id == "disclosure_cluster_mom_gate":
-        pack = event.evaluate_disclosure_cluster_mom_gate_daily_mtm(
-            bars,
-            events,
-            spec=spec,
-            one_way_cost=one_way_cost,
-        )
-    elif logic_id == "surprise_xs_rank_hold":
-        pack = event.evaluate_surprise_xs_rank_hold_daily_mtm(
-            bars,
-            events,
-            spec=spec,
-            one_way_cost=one_way_cost,
-            period_start=p0,
-            period_end=p1,
-        )
-    elif logic_id == "large_surprise_event_hold":
-        pack = event_filters.evaluate_large_surprise_event_hold_daily_mtm(
-            bars,
-            events,
-            spec=spec,
-            one_way_cost=one_way_cost,
-            period_start=p0,
-            period_end=p1,
-        )
-    elif logic_id == "afterclose_only_event_hold":
-        pack = event_filters.evaluate_afterclose_only_event_hold_daily_mtm(
-            bars,
-            events,
-            spec=spec,
-            one_way_cost=one_way_cost,
-            period_start=p0,
-            period_end=p1,
-        )
-    elif logic_id == "event_pre_mom_agree_hold":
-        pack = event_filters.evaluate_event_pre_mom_agree_hold_daily_mtm(
-            bars,
-            events,
-            spec=spec,
-            one_way_cost=one_way_cost,
-            period_start=p0,
-            period_end=p1,
-        )
-    elif logic_id == "event_margin_crowding_skip":
-        pack = event_filters.evaluate_event_margin_crowding_skip_daily_mtm(
-            bars,
-            events,
-            margin_by_code,
-            spec=spec,
-            one_way_cost=one_way_cost,
-            period_start=p0,
-            period_end=p1,
-        )
-    elif logic_id == "event_funding_easy_short":
-        pack = event_sides.evaluate_event_funding_easy_short_daily_mtm(
-            bars,
-            events,
-            overnight,
-            spec=spec,
-            one_way_cost=one_way_cost,
-            period_start=p0,
-            period_end=p1,
-        )
-    elif logic_id == "event_funding_stress_ls":
-        pack = event_sides.evaluate_event_funding_stress_ls_daily_mtm(
-            bars,
-            events,
-            overnight,
-            spec=spec,
-            one_way_cost=one_way_cost,
-            period_start=p0,
-            period_end=p1,
-        )
-    elif logic_id == "surprise_xs_rank_flip":
-        pack = event_sides.evaluate_surprise_xs_rank_flip_daily_mtm(
-            bars,
-            events,
-            spec=spec,
-            one_way_cost=one_way_cost,
-            period_start=p0,
-            period_end=p1,
-        )
-    elif logic_id == "funding_impulse_cs_tilt":
-        pack = cross_section.evaluate_funding_impulse_cs_tilt_daily_mtm(
-            bars,
-            overnight,
-            spec=spec,
-            one_way_cost=one_way_cost,
-        )
-    elif logic_id == "curve_steepen_impulse_cs":
-        pack = cross_section.evaluate_curve_steepen_impulse_cs_daily_mtm(
-            bars,
-            curve,
-            spec=spec,
-            one_way_cost=one_way_cost,
-        )
-    elif logic_id == "xs_margin_delta_rank":
-        pack = cross_section.evaluate_xs_margin_delta_rank_daily_mtm(
-            bars,
-            margin_by_code,
-            spec=spec,
-            one_way_cost=one_way_cost,
-        )
-    elif logic_id == "idio_mom_macro_impulse":
-        topix = dict(panel.get("topix") or panel.get("topix_by_date") or {})
-        pack = cross_section.evaluate_idio_mom_macro_impulse_daily_mtm(
-            bars,
-            topix,
-            spec=spec,
-            one_way_cost=one_way_cost,
-        )
-    elif logic_id == "overnight_level_cs_tilt":
-        pack = cs_overlays.evaluate_overnight_level_cs_tilt_daily_mtm(
-            bars,
-            overnight,
-            spec=spec,
-            one_way_cost=one_way_cost,
-        )
-    elif logic_id == "month_end_cs_fade":
-        pack = cs_overlays.evaluate_month_end_cs_fade_daily_mtm(
-            bars,
-            spec=spec,
-            one_way_cost=one_way_cost,
-        )
-    elif logic_id == "xs_low_vol_mom":
-        pack = cs_overlays.evaluate_xs_low_vol_mom_daily_mtm(
-            bars,
-            spec=spec,
-            one_way_cost=one_way_cost,
-        )
-    elif logic_id == "repo_3m_level_cs":
-        pack = cs_overlays.evaluate_repo_3m_level_cs_daily_mtm(
-            bars,
-            curve,
-            spec=spec,
-            one_way_cost=one_way_cost,
-        )
-    elif logic_id == "event_funding_adaptive_side":
-        pack = adaptive.evaluate_event_funding_adaptive_side_daily_mtm(
-            bars,
-            events,
-            overnight,
-            spec=spec,
-            one_way_cost=one_way_cost,
-            period_start=p0,
-            period_end=p1,
-        )
-    elif logic_id == "surprise_xs_rank_adaptive":
-        pack = adaptive.evaluate_surprise_xs_rank_adaptive_daily_mtm(
-            bars,
-            events,
-            spec=spec,
-            one_way_cost=one_way_cost,
-            period_start=p0,
-            period_end=p1,
-        )
-    else:
+    topix = dict(panel.get("topix") or panel.get("topix_by_date") or {})
+    pack = evaluate_logic_daily_mtm(
+        spec,
+        bars=bars,
+        overnight=overnight,
+        curve=curve,
+        events=events,
+        margin_by_code=margin_by_code,
+        topix_by_date=topix,
+        one_way_cost=one_way_cost,
+        period_start=p0,
+        period_end=p1,
+    )
+    if pack.get("status") == "unknown_logic":
         return {
             "status": "error",
             "skip_reason": f"unregistered_research_unique:{logic_id}",
