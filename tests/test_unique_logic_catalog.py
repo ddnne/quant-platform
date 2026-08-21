@@ -30,11 +30,29 @@ evaluator: research.unique_logic.cs_overlays.evaluate_overnight_level_cs_tilt_da
     assert spec["params"]["momentum_n"] == 5
 
 
+def test_dispatch_unknown_logic_is_incomplete() -> None:
+    from research.unique_logic.dispatch import evaluate_logic_daily_mtm
+
+    pack = evaluate_logic_daily_mtm(
+        {"logic_id": "not_a_real_logic"},
+        bars={},
+        overnight={},
+        curve={},
+        events={},
+        margin_by_code={},
+        topix_by_date={},
+        one_way_cost=0.001,
+    )
+    assert pack["daily_path_complete"] is False
+    assert pack["status"] == "unknown_logic"
+
+
 def test_repo_catalog_yaml_loads() -> None:
     specs = load_catalog_specs()
     ids = {s["logic_id"] for s in specs}
     assert "overnight_level_cs_tilt" in ids
     assert "xs_low_vol_mom" in ids
+    assert "month_end_cs_fade" in ids
     for spec in specs:
         assert spec.get("go") is not True
         assert spec.get("promote_as_main") is not True

@@ -28,7 +28,7 @@ YAML files here are the declaration path. Evaluators live in
 `packages/product/research/unique_logic/`. Run:
 
 ```bash
-uv run python -m research.unique_logic --logic-id overnight_level_cs_tilt --logic-id xs_low_vol_mom
+uv run python -m research.unique_logic --all
 uv run python scripts/record_research_eval.py --job-id eval-… --table data/ops/research_eval/catalog_table.json --put-r2 --apply-d1
 ```
 

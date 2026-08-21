@@ -43,7 +43,7 @@
 ✗ Delete Python↔TS parity mirrors or governed.js codegen without replacement
 ✗ Create scripts/run_wNN_*.py or docs/proof/w08*_wNN_*.md as an eval warehouse
 ✗ Append ALL-TRACK experiment scorecards to phase62_residual_status.md
-✗ Import scripts/run_w* from mass_strategy_factory (evaluators live in packages)
+✗ Import scripts/run_w* (gone; evaluators in research.unique_logic.{event,event_filters,event_sides,cross_section,cs_overlays,adaptive})
 ✗ Treat .glm-logs or local sqlite as experiment SoT (R2 + D1 index only)
 ```
 

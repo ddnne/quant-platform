@@ -28,9 +28,9 @@ Wave eval runners (`run_w*.py`) are **gone**. Do **not** add new
 New research:
 
 - catalog: `specs/research_logics/`
-- daily path: `research.daily_path_eval`
-- CF screen: `research.cf_mass_eval_job`
-- record: `research.eval_registry` → R2 + D1 index
+- daily path: `uv run python -m research.unique_logic --all`
+- CF screen: `research.cf_mass_eval_job.run_cf_mass_eval_job` (Worker `quant-platform-research-mass-eval`)
+- record: `uv run python scripts/record_research_eval.py --job-id … --table … --put-r2 --apply-d1`
 
 See [`docs/architecture/adr_research_recording.md`](../docs/architecture/adr_research_recording.md)
 and [`docs/architecture/wave_assets_deprecated.md`](../docs/architecture/wave_assets_deprecated.md).

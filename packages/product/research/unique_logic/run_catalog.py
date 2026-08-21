@@ -13,7 +13,10 @@ from qp_paths import repo_root
 from research.class_hyp_eval import (
     DEFAULT_EVAL_CODES,
     build_repo_curve_series,
+    load_fins_events_from_sqlite,
+    load_margin_from_sqlite,
     load_repo_rows_all_tenors_from_sqlite,
+    load_topix_close_series_from_sqlite,
 )
 from research.daily_path_eval import (
     assert_frozen_pins_untouched,
@@ -24,59 +27,82 @@ from research.daily_path_eval import (
 )
 from research.eval_windows import HONEST_3Y_WINDOWS
 from research.stats_metrics import evaluate_daily_path_dd_gate
+from research.unique_logic import all_unique_logic_specs
 from research.unique_logic.catalog import catalog_spec
-from research.unique_logic import cs_overlays
+from research.unique_logic.dispatch import evaluate_logic_daily_mtm
 
 
 def _log(msg: str) -> None:
     print(msg, flush=True)
 
 
-def _load_funding(sqlite_path: Path) -> tuple[dict[str, float], dict[str, Any]]:
+def _load_extras(
+    sqlite_path: Path, *, codes: Sequence[str]
+) -> dict[str, Any]:
     rows = load_repo_rows_all_tenors_from_sqlite(
         sqlite_path, start="2016-01-01", end="2026-12-31"
     )
     curve = build_repo_curve_series(rows)
     overnight = dict(curve.get("short_rates_by_date") or curve.get("rates_by_date") or {})
-    return overnight, curve
+    events = load_fins_events_from_sqlite(
+        sqlite_path, codes=list(codes), start="2016-01-01", end="2026-12-31"
+    )
+    margin_raw = load_margin_from_sqlite(
+        sqlite_path, codes=list(codes), start="2016-01-01", end="2026-12-31"
+    )
+    margin_by_code: dict[str, dict[str, float]] = {}
+    for code, pairs in (margin_raw or {}).items():
+        margin_by_code[str(code)] = {
+            str(d)[:10]: float(v) for d, v in (pairs or []) if v is not None
+        }
+    topix_pairs = load_topix_close_series_from_sqlite(
+        sqlite_path, start="2016-01-01", end="2026-12-31"
+    )
+    topix_by_date: dict[str, float] = {}
+    for d, v in topix_pairs or []:
+        try:
+            topix_by_date[str(d)[:10]] = float(v)
+        except (TypeError, ValueError):
+            continue
+    return {
+        "overnight": overnight,
+        "curve": curve,
+        "events": events,
+        "margin_by_code": margin_by_code,
+        "topix_by_date": topix_by_date,
+        "n_overnight": len(overnight),
+        "n_events": sum(len(v) for v in events.values()) if events else 0,
+        "n_margin_codes": len(margin_by_code),
+        "n_topix": len(topix_by_date),
+    }
 
 
 def _eval_shard(
     *,
     spec: Mapping[str, Any],
     loaded: Mapping[str, Any],
-    overnight: Mapping[str, float],
-    curve: Mapping[str, Any],
+    extras: Mapping[str, Any],
     one_way_cost: float,
 ) -> dict[str, Any]:
-    lid = str(spec.get("logic_id") or "")
-    bars = loaded.get("bars") or {}
-    if lid == "overnight_level_cs_tilt":
-        return cs_overlays.evaluate_overnight_level_cs_tilt_daily_mtm(
-            bars, overnight, spec=spec, one_way_cost=one_way_cost
-        )
-    if lid == "xs_low_vol_mom":
-        return cs_overlays.evaluate_xs_low_vol_mom_daily_mtm(
-            bars, spec=spec, one_way_cost=one_way_cost
-        )
-    if lid == "repo_3m_level_cs":
-        return cs_overlays.evaluate_repo_3m_level_cs_daily_mtm(
-            bars, curve, spec=spec, one_way_cost=one_way_cost
-        )
-    return {
-        "status": "unknown_logic",
-        "logic_id": lid,
-        "daily_path_complete": False,
-        "incomplete_reason": f"no catalog dispatch for {lid}",
-    }
+    return evaluate_logic_daily_mtm(
+        spec,
+        bars=loaded.get("bars") or {},
+        overnight=extras.get("overnight") or {},
+        curve=extras.get("curve") or {},
+        events=extras.get("events") or {},
+        margin_by_code=extras.get("margin_by_code") or {},
+        topix_by_date=extras.get("topix_by_date") or {},
+        one_way_cost=one_way_cost,
+        period_start=loaded.get("period_start"),
+        period_end=loaded.get("period_end"),
+    )
 
 
 def eval_logic_windows(
     spec: Mapping[str, Any],
     *,
     codes: Sequence[str],
-    overnight: Mapping[str, float],
-    curve: Mapping[str, Any],
+    extras: Mapping[str, Any],
     max_days: int,
     one_way_cost: float,
 ) -> list[dict[str, Any]]:
@@ -99,8 +125,7 @@ def eval_logic_windows(
             pack = _eval_shard(
                 spec=spec,
                 loaded=loaded,
-                overnight=overnight,
-                curve=curve,
+                extras=extras,
                 one_way_cost=one_way_cost,
             )
             summary = summarize_path(pack)
@@ -172,6 +197,11 @@ def eval_logic_windows(
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--logic-id", action="append", default=[])
+    p.add_argument(
+        "--all",
+        action="store_true",
+        help="Evaluate every unique_logic spec (Python tuples + catalog YAML).",
+    )
     p.add_argument("--max-codes", type=int, default=15)
     p.add_argument("--max-days", type=int, default=200)
     p.add_argument("--one-way-cost", type=float, default=0.001)
@@ -190,26 +220,36 @@ def main(argv: list[str] | None = None) -> int:
     pins = assert_frozen_pins_untouched()
     if not pins.get("pins_untouched"):
         raise SystemExit("frozen pins drifted")
-    wanted = [str(x) for x in args.logic_id] or [
-        "overnight_level_cs_tilt",
-        "xs_low_vol_mom",
-    ]
-    specs = []
-    for lid in wanted:
-        spec = catalog_spec(lid)
-        if spec is None:
-            raise SystemExit(f"catalog missing logic_id={lid}")
-        specs.append(spec)
+    if args.all or not args.logic_id:
+        specs = list(all_unique_logic_specs())
+    else:
+        specs = []
+        by_id = {str(s.get("logic_id")): s for s in all_unique_logic_specs()}
+        for lid in args.logic_id:
+            spec = by_id.get(str(lid)) or catalog_spec(str(lid))
+            if spec is None:
+                raise SystemExit(f"unknown logic_id={lid}")
+            specs.append(spec)
     codes = list(DEFAULT_EVAL_CODES)[: int(args.max_codes)]
-    overnight, curve = _load_funding(args.sqlite)
+    extras = _load_extras(args.sqlite, codes=codes)
+    _log(
+        json.dumps(
+            {
+                "n_logics": len(specs),
+                "n_overnight": extras.get("n_overnight"),
+                "n_events": extras.get("n_events"),
+                "n_margin_codes": extras.get("n_margin_codes"),
+                "n_topix": extras.get("n_topix"),
+            }
+        )
+    )
     rows: list[dict[str, Any]] = []
     for spec in specs:
         rows.extend(
             eval_logic_windows(
                 spec,
                 codes=codes,
-                overnight=overnight,
-                curve=curve,
+                extras=extras,
                 max_days=int(args.max_days),
                 one_way_cost=float(args.one_way_cost),
             )
