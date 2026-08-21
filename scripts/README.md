@@ -6,7 +6,7 @@ CLIs (`issue_receipts_parallel`, `publish_ops_projection`, `export_ops_projectio
 `refresh_coverage_ledger`, `sync_dataset_coverage_from_segments`, `ops_status`,
 `ops_reeval_*`, `write_collection_receipts`, `issue_signed_receipts_for_segments`,
 `restore_local_complete_from_receipt`, `evaluate_collection_sla`,
-`record_research_eval`, `rebuild_paper_index`, `drive_governed_progress`,
+`record_research_eval`, `rebuild_paper_index`, `list_research_eval`,
 `parse_jsda_from_r2_mirror`, `backfill_status_report`,
 `generate_governed_js`, `verify_governed_js_drift`,
 `report_raw_throughput`, `rebuild_receipts_from_raw`) use it.

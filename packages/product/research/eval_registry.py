@@ -331,16 +331,134 @@ def family_counts(logic_ids: Sequence[str]) -> dict[str, int]:
     return out
 
 
+def summarize_daily_path_cells(
+    cells: Sequence[Mapping[str, Any]],
+    *,
+    job_id: str,
+) -> dict[str, Any]:
+    """Family/logic flags from daily_path cells. Scores stay off Git."""
+    from collections import Counter, defaultdict
+
+    from research.cf_mass_eval_job import CF_BAR_NATIVE_LOGIC_IDS
+    from research.unique_logic.constants import (
+        ALWAYS_ON_OCCUPANCY_WARN,
+        CF_EVENT_DAILY_PATH_IDS,
+        CF_NEW_CS_THESIS_IDS,
+        CF_NEW_EVENT_THESIS_IDS,
+        CS_LOGIC_IDS,
+    )
+
+    def _fam(lid: str) -> str:
+        if lid in CF_NEW_EVENT_THESIS_IDS:
+            return "event_new"
+        if lid in CF_EVENT_DAILY_PATH_IDS:
+            return "event"
+        if lid in CF_NEW_CS_THESIS_IDS:
+            return "cs_new"
+        if lid in CS_LOGIC_IDS:
+            return "unique_cs"
+        if lid in CF_BAR_NATIVE_LOGIC_IDS:
+            return "bar_native"
+        return "other"
+
+    by: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
+    for c in cells:
+        by[str(c.get("logic_id") or "")].append(c)
+
+    def _mean(xs: list[Any]) -> float | None:
+        vs = [float(x) for x in xs if x is not None]
+        return (sum(vs) / len(vs)) if vs else None
+
+    logics: list[dict[str, Any]] = []
+    for lid, cs in by.items():
+        if not lid:
+            continue
+        occs = [c.get("occupancy") if c.get("occupancy") is not None else c.get("occupancy_frac") for c in cs]
+        nets = [c.get("total_ret_net") for c in cs]
+        signs = [
+            1 if (n or 0) > 1e-6 else (-1 if (n or 0) < -1e-6 else 0) for n in nets
+        ]
+        n_pos = sum(s > 0 for s in signs)
+        n_neg = sum(s < 0 for s in signs)
+        m_occ = _mean(occs)
+        m_net = _mean(nets)
+        flags: list[str] = []
+        if m_occ is not None and m_occ >= ALWAYS_ON_OCCUPANCY_WARN:
+            flags.append("always_on")
+        if m_occ is not None and m_occ <= 0.05:
+            flags.append("near_empty")
+        if m_net is not None and abs(m_net) < 1e-4:
+            flags.append("near_zero_net")
+        if n_pos >= 2 and n_neg >= 2:
+            flags.append("sign_unstable")
+        tag = "weak"
+        if "always_on" in flags or "near_empty" in flags:
+            tag = "suspicious"
+        elif m_net is not None and m_net > 0 and n_pos >= 4 and "sign_unstable" not in flags:
+            tag = "strong"
+        elif "sign_unstable" in flags:
+            tag = "unstable"
+        logics.append(
+            {
+                "logic_id": lid,
+                "family": _fam(lid),
+                "n_windows": len(cs),
+                "mean_occupancy": m_occ,
+                "mean_total_ret_net": m_net,
+                "n_pos_windows": n_pos,
+                "n_neg_windows": n_neg,
+                "flags": flags,
+                "tag": tag,
+                "explore_only": tag != "strong",
+                "promote_as_main": False,
+                "go": False,
+            }
+        )
+    tags = Counter(r["tag"] for r in logics)
+    fams = Counter(r["family"] for r in logics)
+    return {
+        "version": "eval-family-summary/v1",
+        "job_id": job_id,
+        "n_logics": len(logics),
+        "n_cells": len(cells),
+        "tag_counts": dict(tags),
+        "family_counts": dict(fams),
+        "n_strong": int(tags.get("strong") or 0),
+        "n_weak": int(tags.get("weak") or 0),
+        "n_suspicious": int(tags.get("suspicious") or 0),
+        "n_unstable": int(tags.get("unstable") or 0),
+        "always_on_warn": ALWAYS_ON_OCCUPANCY_WARN,
+        "n_survivors_are_not_a_pass": True,
+        "promote_as_main": False,
+        "go": False,
+        "logics": logics,
+        "notes": (
+            "always_on often means CF daily_path CS/MDH collapse on small panels. "
+            "near_empty margin gates usually mean missing flow sidecar. "
+            "Scores live here / D1, not Git."
+        ),
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     import argparse
+    from pathlib import Path
 
     p = argparse.ArgumentParser(description="Eval registry index (D1/R2). No Git scores.")
     p.add_argument("--list", action="store_true", help="List recent D1 research_eval_jobs")
     p.add_argument("--limit", type=int, default=20)
+    p.add_argument("--summarize-table", type=Path, help="JSON cells array")
+    p.add_argument("--job-id", default="")
     args = p.parse_args(argv)
     if args.list:
         rows = list_eval_jobs_from_d1(limit=int(args.limit))
         print(json.dumps({"n": len(rows), "jobs": rows, "scores_in_git": False}, indent=2, default=str))
+        return 0
+    if args.summarize_table:
+        cells = json.loads(Path(args.summarize_table).read_text(encoding="utf-8"))
+        if not isinstance(cells, list):
+            raise SystemExit("summarize-table must be a JSON array")
+        print(json.dumps(summarize_daily_path_cells(cells, job_id=str(args.job_id or "unknown")), indent=2, default=str))
         return 0
     p.print_help()
     return 0

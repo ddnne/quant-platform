@@ -1,14 +1,14 @@
-logic_id: event_large_surprise_steep_curve
-family_id: event_macro_curve_combo
+logic_id: event_late_hold_only
+family_id: afterclose_event_timing
 axis: mixed
 headline: false
 generation_enabled: false
 promote_as_main: false
 go: false
 thesis: >
-  Large surprise confirmed only when the repo curve is steep.
+  Only the last two days of the post-event hold — late drift, not announcement pop.
 signal_definition: >
-  Large surprise confirmed only when the repo curve is steep.
+  Only the last two days of the post-event hold — late drift, not announcement pop.
 datasets:
   - equities_bars_daily
   - fins_summary
@@ -19,10 +19,10 @@ params:
   hold_days: 10
   momentum_n: 5
   min_hist: 20
-  mode: event_large_surprise_steep_curve
+  mode: event_late_hold_only
   side: orig
   cs_gate: None
   entry_shift: 0
-  hold_tail_days: 0
+  hold_tail_days: 2
 evaluator: research.unique_logic.event_combos.evaluate_combo_daily_mtm
 notes: combo thesis; CF daily_path is candidate-grade path

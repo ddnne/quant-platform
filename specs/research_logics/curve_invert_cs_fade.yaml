@@ -22,5 +22,7 @@ params:
   mode: curve_invert_cs_fade
   side: orig
   cs_gate: curve_invert_invert
+  entry_shift: 0
+  hold_tail_days: 0
 evaluator: research.unique_logic.event_combos.evaluate_combo_daily_mtm
 notes: combo thesis; CF daily_path is candidate-grade path

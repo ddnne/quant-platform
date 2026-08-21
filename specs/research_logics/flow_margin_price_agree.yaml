@@ -22,5 +22,7 @@ params:
   mode: flow_margin_price_agree
   side: orig
   cs_gate: margin_change_nonzero
+  entry_shift: 0
+  hold_tail_days: 0
 evaluator: research.unique_logic.event_combos.evaluate_combo_daily_mtm
 notes: combo thesis; CF daily_path is candidate-grade path

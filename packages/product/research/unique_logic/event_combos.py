@@ -228,6 +228,161 @@ _SPECS: tuple[dict[str, Any], ...] = (
         "cs_gate": "overnight_easy",
         "kind": "cs",
     },
+    # Wave-3: time structure / flow-price disagree / rate reversal / vol nonlinear.
+    {
+        "logic_id": "event_skip_announce_day",
+        "family_id": "afterclose_event_timing",
+        "thesis": "Skip the announcement close; PEAD starts the next session (overnight info delay).",
+        "gates": (),
+        "side": "orig",
+        "kind": "event",
+        "entry_shift": 1,
+    },
+    {
+        "logic_id": "event_late_hold_only",
+        "family_id": "afterclose_event_timing",
+        "thesis": "Only the last two days of the post-event hold — late drift, not announcement pop.",
+        "gates": (),
+        "side": "orig",
+        "kind": "event",
+        "hold_tail_days": 2,
+    },
+    {
+        "logic_id": "month_end_event_skip",
+        "family_id": "event_funding_combo",
+        "thesis": "Skip PEAD in the last calendar days of the month (rebalance/window dressing).",
+        "gates": ("month_end_skip",),
+        "side": "orig",
+        "kind": "event",
+    },
+    {
+        "logic_id": "event_first_half_month",
+        "family_id": "event_funding_combo",
+        "thesis": "PEAD only in the first half of the month, when positioning is less crowded.",
+        "gates": ("first_half_month",),
+        "side": "orig",
+        "kind": "event",
+    },
+    {
+        "logic_id": "overnight_easing_event",
+        "family_id": "event_funding_combo",
+        "thesis": "PEAD only on days when overnight fell versus the prior print (funding easing).",
+        "gates": ("overnight_easing",),
+        "side": "orig",
+        "kind": "event",
+    },
+    {
+        "logic_id": "overnight_tightening_fade_event",
+        "family_id": "event_funding_combo",
+        "thesis": "Fade surprise when overnight rose versus the prior print (funding shock).",
+        "gates": ("overnight_tightening",),
+        "side": "flip",
+        "kind": "event",
+    },
+    {
+        "logic_id": "event_cluster_fade",
+        "family_id": "disclosure_cluster_gate",
+        "thesis": "In a disclosure cluster, fade own-sign PEAD (information overload / crowding).",
+        "gates": ("cluster",),
+        "side": "flip",
+        "kind": "event",
+    },
+    {
+        "logic_id": "margin_crowd_fade_event",
+        "family_id": "event_margin_crowd_combo",
+        "thesis": "When the name is PIT-crowded in margin, fade the surprise instead of skipping.",
+        "gates": ("crowded_margin",),
+        "side": "flip",
+        "kind": "event",
+    },
+    {
+        "logic_id": "surprise_xs_month_start",
+        "family_id": "surprise_xs_rank",
+        "thesis": "Relative-surprise CS rank only in the first five calendar days of the month.",
+        "gates": ("first_half_month",),
+        "side": "orig",
+        "kind": "surprise_xs",
+    },
+    {
+        "logic_id": "surprise_xs_fy_end",
+        "family_id": "surprise_xs_rank",
+        "thesis": "Relative-surprise CS rank concentrated in late March FY-end positioning.",
+        "gates": ("fy_end",),
+        "side": "orig",
+        "kind": "surprise_xs",
+    },
+    {
+        "logic_id": "fy_end_cs_fade",
+        "family_id": "month_end_cs",
+        "thesis": "Fade CS momentum in late March (Japan FY-end unwind), not generic month-end.",
+        "cs_gate": "fy_end_invert",
+        "kind": "cs",
+    },
+    {
+        "logic_id": "fy_start_cs_follow",
+        "family_id": "month_end_cs",
+        "thesis": "Follow CS momentum in April (FY-start re-risk), opposite of FY-end fade.",
+        "cs_gate": "fy_start",
+        "kind": "cs",
+    },
+    {
+        "logic_id": "curve_steep_cs_follow",
+        "family_id": "curve_steepen_impulse_cs",
+        "thesis": "CS mom only when 3M-ON spread is strictly positive (carry-friendly).",
+        "cs_gate": "curve_steep",
+        "kind": "cs",
+    },
+    {
+        "logic_id": "overnight_p90_cs_flip",
+        "family_id": "overnight_level_cs",
+        "thesis": "Invert CS only in the right tail of overnight (PIT 90th pct), not at the median.",
+        "cs_gate": "overnight_p90_invert",
+        "kind": "cs",
+    },
+    {
+        "logic_id": "flow_price_disagree_fade",
+        "family_id": "xs_margin_delta",
+        "thesis": "Fade CS when name-level margin is crowding with the price move (chase).",
+        "cs_gate": "margin_crowd_chase",
+        "kind": "cs",
+    },
+    {
+        "logic_id": "nky_vol_compress_cs",
+        "family_id": "xs_low_vol_mom",
+        "thesis": "CS mom when index vol term ratio is falling (compression, not a level).",
+        "cs_gate": "nky_term_compress",
+        "kind": "cs",
+    },
+    {
+        "logic_id": "opt225_skew_and_term_cs",
+        "family_id": "xs_low_vol_mom",
+        "thesis": "CS mom only when both 225 put skew and vol term are elevated (joint crash-hedge).",
+        "cs_gate": "opt225_skew_and_term",
+        "kind": "cs",
+    },
+    {
+        "logic_id": "basevol_up_day_fade",
+        "family_id": "xs_low_vol_mom",
+        "thesis": "Fade CS on days BaseVol rose (vol-of-vol shock), not a static level book.",
+        "cs_gate": "basevol_up",
+        "kind": "cs",
+    },
+    {
+        "logic_id": "iv_below_basevol_cs",
+        "family_id": "xs_low_vol_mom",
+        "thesis": "CS mom only when ATM IV sits below BaseVol (negative vol spread).",
+        "cs_gate": "iv_below_basevol",
+        "kind": "cs",
+    },
+    {
+        "logic_id": "event_afterclose_delay2",
+        "family_id": "afterclose_event_timing",
+        "thesis": "After-close disclosure, enter two sessions later (slow overnight digestion).",
+        "gates": ("afterclose",),
+        "side": "orig",
+        "kind": "event",
+        "entry_shift": 2,
+    },
 )
 
 NEW_COMBO_LOGIC: tuple[dict[str, Any], ...] = tuple(
@@ -249,6 +404,8 @@ NEW_COMBO_LOGIC: tuple[dict[str, Any], ...] = tuple(
             "gates": list(s.get("gates") or ()),
             "side": s.get("side") or "orig",
             "cs_gate": s.get("cs_gate"),
+            "entry_shift": s.get("entry_shift") or 0,
+            "hold_tail_days": s.get("hold_tail_days") or 0,
             "mode": s["logic_id"],
         },
         "datasets": [
@@ -421,11 +578,79 @@ def _eval_event_combo(
                 if mom is None or mom == 0 or (1 if mom > 0 else -1) != int(ev["sign"]):
                     ok = False
             elif g == "cluster":
-                # CF Worker applies disclosure-count vs PIT median; Python
-                # fallback does not invent a cluster series here.
-                ok = True
+                disc_dates = sorted(
+                    {str(e.get("disc_date") or "")[:10] for e in collected["entries"]}
+                )
+                entry_d = str(ev["entry_date"])[:10]
+                n_disc = sum(
+                    1
+                    for x in disc_dates
+                    if x < entry_d and x >= _add_days(entry_d, -5)
+                )
+                hist = {
+                    dd: float(
+                        sum(1 for x in disc_dates if x < dd and x >= _add_days(dd, -5))
+                    )
+                    for dd in disc_dates
+                    if dd < entry_d
+                }
+                med_c = event.pit_median_on_dates(hist, [entry_d], min_hist=10).get(
+                    entry_d
+                )
+                if med_c is None or n_disc < float(med_c):
+                    ok = False
+            elif g == "first_half_month":
+                if str(ev["entry_date"])[8:10] > "15":
+                    ok = False
+            elif g == "month_end_skip":
+                if str(ev["entry_date"])[8:10] >= "28":
+                    ok = False
+            elif g == "fy_end":
+                if not (
+                    str(ev["entry_date"])[5:7] == "03"
+                    and str(ev["entry_date"])[8:10] >= "15"
+                ):
+                    ok = False
+            elif g == "fy_start":
+                if str(ev["entry_date"])[5:7] != "04":
+                    ok = False
+            elif g == "overnight_easing":
+                d = str(ev["entry_date"])[:10]
+                prevs = sorted(x for x in overnight if x < d)
+                if not prevs or overnight.get(d) is None:
+                    ok = False
+                elif float(overnight[d]) >= float(overnight[prevs[-1]]):
+                    ok = False
+            elif g == "overnight_tightening":
+                d = str(ev["entry_date"])[:10]
+                prevs = sorted(x for x in overnight if x < d)
+                if not prevs or overnight.get(d) is None:
+                    ok = False
+                elif float(overnight[d]) <= float(overnight[prevs[-1]]):
+                    ok = False
         accept[key] = ok
         sign_mult[key] = -1.0 if side == "flip" else 1.0
+    shift = int(params.get("entry_shift") or spec.get("entry_shift") or 0)
+    tail = int(params.get("hold_tail_days") or spec.get("hold_tail_days") or 0)
+    if shift or tail:
+        new_entries = []
+        per = dict(collected.get("per_code") or {})
+        for ev in collected["entries"]:
+            rec = dict(ev)
+            pack = per.get(rec["code"]) or {}
+            dlist = list(pack.get("dlist") or [])
+            i0 = int(rec["entry_idx"]) + shift
+            if tail:
+                end0 = min(int(rec["entry_idx"]) + int(collected["hold_days"]), len(dlist))
+                i0 = max(i0, end0 - tail)
+            if i0 < 0 or i0 >= len(dlist):
+                accept[event_sides._event_key(ev)] = False
+                continue
+            rec["entry_idx"] = i0
+            rec["entry_date"] = dlist[i0]
+            new_entries.append(rec)
+        collected = dict(collected)
+        collected["entries"] = new_entries
     if str(spec.get("kind")) == "surprise_xs":
         pack = event.evaluate_surprise_xs_rank_hold_daily_mtm(
             bars,
@@ -447,6 +672,7 @@ def _eval_event_combo(
         extra=extra,
         one_way_cost=one_way_cost,
         sign_mult_by_key=sign_mult,
+        repo_by_date=overnight,
     )
 
 
@@ -489,6 +715,7 @@ def _eval_cs_combo(
     }
     spread = dict((curve or {}).get("spread_by_date") or {})
     gate = str(spec.get("cs_gate") or params.get("cs_gate") or "")
+    extra_cf_only: list[str] = []
     for i, d in enumerate(dates):
         on = overnight.get(d)
         prev_on = overnight.get(dates[i - 1]) if i else None
@@ -509,16 +736,51 @@ def _eval_cs_combo(
             keep = d[8:10] <= "05"
         elif gate == "overnight_up":
             keep = prev_on is not None and on is not None and float(on) > float(prev_on)
+        elif gate == "fy_end_invert":
+            keep = d[5:7] == "03" and d[8:10] >= "15"
+            loc_invert = True
+        elif gate == "fy_start":
+            keep = d[5:7] == "04"
+        elif gate == "curve_steep":
+            keep = float(spread.get(d) or 0) > 0
+        elif gate == "overnight_p90_invert":
+            hist = [overnight[x] for x in overnight if x < d]
+            if len(hist) < 20 or on is None:
+                keep = False
+            else:
+                srt = sorted(hist)
+                p90 = srt[int(0.9 * (len(srt) - 1))]
+                keep = float(on) >= float(p90)
+                loc_invert = True
+        elif gate == "margin_crowd_chase":
+            keep = _universe_margin_delta(margin_by_code, d) > 0
+            loc_invert = True
+        elif gate == "margin_decrowd":
+            keep = _universe_margin_delta(margin_by_code, d) < 0
+        elif gate == "margin_change_nonzero":
+            keep = _universe_margin_delta(margin_by_code, d) != 0
+        elif gate == "repo_3m_up":
+            prev_sp = spread.get(dates[i - 1]) if i else None
+            sp = spread.get(d)
+            keep = (
+                prev_on is not None
+                and on is not None
+                and prev_sp is not None
+                and sp is not None
+                and (float(on) + float(sp)) > (float(prev_on) + float(prev_sp))
+            )
         elif gate in {
-            "margin_decrowd",
             "opt225_skew_high",
             "nky_term_high",
             "opt225_spread_wide",
-            "repo_3m_up",
-            "margin_change_nonzero",
+            "nky_term_compress",
+            "opt225_skew_and_term",
+            "basevol_up",
+            "iv_below_basevol",
         }:
-            # Sidecar-specific gates: Python fallback does not invent; CF applies.
-            keep = True
+            # Vol sidecars are staged on CF panels only. Local skip (no invent).
+            keep = False
+            extra_cf_only.append(gate)
         scores = scores_by_date.get(d) or {}
         if not keep or len(scores) < 2:
             continue
@@ -550,6 +812,7 @@ def _eval_cs_combo(
         one_way_cost=one_way_cost,
         logic_id=str(spec["logic_id"]),
         extra={"cs_gate": gate, "cf_native": True},
+        repo_by_date=overnight,
     )
     pack.update(
         {
@@ -559,6 +822,39 @@ def _eval_cs_combo(
             "promote_as_main": False,
             "go": False,
             "cf_native": True,
+            "cf_only_gates": extra_cf_only,
+            "python_skipped_cf_only": bool(extra_cf_only),
         }
     )
     return pack
+
+
+def _add_days(iso: str, n: int) -> str:
+    from datetime import date, timedelta
+
+    try:
+        y, m, d = int(iso[:4]), int(iso[5:7]), int(iso[8:10])
+        return (date(y, m, d) + timedelta(days=n)).isoformat()
+    except (TypeError, ValueError):
+        return iso
+
+
+def _universe_margin_delta(
+    margin_by_code: Mapping[str, Mapping[str, float]],
+    query: str,
+) -> float:
+    deltas: list[float] = []
+    q = str(query)[:10]
+    for series in (margin_by_code or {}).values():
+        prior = sorted(d for d in series if str(d)[:10] < q)
+        if len(prior) < 2:
+            continue
+        a = series[prior[-2]]
+        b = series[prior[-1]]
+        try:
+            deltas.append(float(b) - float(a))
+        except (TypeError, ValueError):
+            continue
+    if not deltas:
+        return 0.0
+    return sum(deltas) / len(deltas)

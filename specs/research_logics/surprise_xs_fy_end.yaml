@@ -1,14 +1,14 @@
-logic_id: event_large_surprise_steep_curve
-family_id: event_macro_curve_combo
+logic_id: surprise_xs_fy_end
+family_id: surprise_xs_rank
 axis: mixed
 headline: false
 generation_enabled: false
 promote_as_main: false
 go: false
 thesis: >
-  Large surprise confirmed only when the repo curve is steep.
+  Relative-surprise CS rank concentrated in late March FY-end positioning.
 signal_definition: >
-  Large surprise confirmed only when the repo curve is steep.
+  Relative-surprise CS rank concentrated in late March FY-end positioning.
 datasets:
   - equities_bars_daily
   - fins_summary
@@ -19,7 +19,7 @@ params:
   hold_days: 10
   momentum_n: 5
   min_hist: 20
-  mode: event_large_surprise_steep_curve
+  mode: surprise_xs_fy_end
   side: orig
   cs_gate: None
   entry_shift: 0

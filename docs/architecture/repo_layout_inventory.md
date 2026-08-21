@@ -189,7 +189,7 @@ Counts = number of `from X …` / `import X` statements under `tests/**/*.py` (s
 | Script | Bootstrap | Notable hard paths / deps |
 |--------|-----------|---------------------------|
 | `backfill_status_report.py` | A | `data_contracts`, `storage`; default `data/structured` |
-| `drive_governed_progress.py` | A | `data_contracts`; default DB path |
+
 | `evaluate_collection_sla.py` | A | `storage`, `data_contracts` |
 | `export_ops_projection.py` | A | `paper_runtime`; publisher string |
 | `generate_governed_js.py` | A | writes `platform/workers/quant-ops-mcp/src/governed.js` |

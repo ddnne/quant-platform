@@ -253,6 +253,7 @@ function heldBookDailyMtm(
   dates: string[],
   holdDays: number,
   oneWay: number,
+  repoByDate?: Record<string, number>,
 ): {
   dates: string[];
   net_daily: number[];
@@ -271,6 +272,7 @@ function heldBookDailyMtm(
     const prev = dates[i - 1];
     const d = dates[i];
     const contribs: number[] = [];
+    let nShort = 0;
     for (const [code, cmap] of Object.entries(held)) {
       const pos = cmap[prev];
       if (!pos) continue;
@@ -278,11 +280,18 @@ function heldBookDailyMtm(
       const c1 = closeBy[code]?.[d];
       if (!finite(c0) || !finite(c1) || c0 === 0) continue;
       contribs.push(pos * (c1 / c0 - 1));
+      if (pos < 0) nShort += 1;
     }
     let net = 0;
     if (contribs.length) {
       const g = contribs.reduce((a, b) => a + b, 0) / contribs.length;
-      net = g - dailyCost;
+      let shortDrag = 0;
+      const repo = repoByDate?.[prev];
+      if (nShort && finite(repo)) {
+        // JSDA percent → daily fraction. Missing repo → no invent, tx-only.
+        shortDrag = (nShort / contribs.length) * ((repo as number) / 100 / 252);
+      }
+      net = g - dailyCost - shortDrag;
       nOn += 1;
     }
     netDaily.push(net);
@@ -313,6 +322,15 @@ export const CF_UNIQUE_CS_LOGIC_IDS = [
   "repo_3m_change_cs",
   "flow_margin_price_agree",
   "cs_mom_easy_funding",
+  "fy_end_cs_fade",
+  "fy_start_cs_follow",
+  "curve_steep_cs_follow",
+  "overnight_p90_cs_flip",
+  "flow_price_disagree_fade",
+  "nky_vol_compress_cs",
+  "opt225_skew_and_term_cs",
+  "basevol_up_day_fade",
+  "iv_below_basevol_cs",
 ] as const;
 
 function usesCrossSection(logic: LogicSpec): boolean {
@@ -365,6 +383,17 @@ export const CF_NEW_EVENT_THESIS_IDS = [
   "event_large_surprise_afterclose",
   "event_margin_uncrowded_steep",
   "event_easy_funding_curve_steep",
+  "event_skip_announce_day",
+  "event_late_hold_only",
+  "month_end_event_skip",
+  "event_first_half_month",
+  "overnight_easing_event",
+  "overnight_tightening_fade_event",
+  "event_cluster_fade",
+  "margin_crowd_fade_event",
+  "surprise_xs_month_start",
+  "surprise_xs_fy_end",
+  "event_afterclose_delay2",
 ] as const;
 
 export const CF_NEW_CS_THESIS_IDS = [
@@ -380,6 +409,15 @@ export const CF_NEW_CS_THESIS_IDS = [
   "repo_3m_change_cs",
   "flow_margin_price_agree",
   "cs_mom_easy_funding",
+  "fy_end_cs_fade",
+  "fy_start_cs_follow",
+  "curve_steep_cs_follow",
+  "overnight_p90_cs_flip",
+  "flow_price_disagree_fade",
+  "nky_vol_compress_cs",
+  "opt225_skew_and_term_cs",
+  "basevol_up_day_fade",
+  "iv_below_basevol_cs",
 ] as const;
 
 export const CF_EVENT_LOGIC_IDS = [
@@ -709,9 +747,59 @@ function eventHeld(
       if (lid === "event_easy_funding_curve_steep") {
         if (!easyOn() || !steepOn()) ok = false;
       }
+      if (lid === "month_end_event_skip") {
+        if (ev.entryDate.slice(8, 10) >= "28") ok = false;
+      }
+      if (lid === "event_first_half_month") {
+        if (ev.entryDate.slice(8, 10) > "15") ok = false;
+      }
+      if (lid === "overnight_easing_event") {
+        const prevs = Object.keys(overnight)
+          .filter((x) => x < ev.entryDate)
+          .sort();
+        const on = overnight[ev.entryDate];
+        if (!prevs.length || on === undefined || on >= overnight[prevs[prevs.length - 1]])
+          ok = false;
+      }
+      if (lid === "overnight_tightening_fade_event") {
+        const prevs = Object.keys(overnight)
+          .filter((x) => x < ev.entryDate)
+          .sort();
+        const on = overnight[ev.entryDate];
+        if (!prevs.length || on === undefined || on <= overnight[prevs[prevs.length - 1]])
+          ok = false;
+        else sgn = -ev.sign;
+      }
+      if (lid === "event_cluster_fade") {
+        const nDisc = discDates.filter(
+          (x) => x < ev.entryDate && x >= addDays(ev.entryDate, -clusterLookback),
+        ).length;
+        const medC = pitMedian(
+          Object.fromEntries(
+            unionDates(bars).map((dd) => [
+              dd,
+              discDates.filter((x) => x < dd && x >= addDays(dd, -clusterLookback)).length,
+            ]),
+          ),
+          ev.entryDate,
+          10,
+        );
+        if (medC === null || nDisc < medC) ok = false;
+        else sgn = -ev.sign;
+      }
+      if (lid === "margin_crowd_fade_event") {
+        if (!marginGate(true)) ok = false;
+        else sgn = -ev.sign;
+      }
+      if (lid === "event_afterclose_delay2" && !ev.after) ok = false;
       if (!ok) continue;
+      let i0 = ev.entryIdx;
+      if (lid === "event_skip_announce_day") i0 += 1;
+      if (lid === "event_afterclose_delay2") i0 += 2;
       const end = Math.min(ev.entryIdx + holdDays, pack.dlist.length);
-      for (let j = ev.entryIdx; j < end; j++) arr[j] = sgn;
+      if (lid === "event_late_hold_only") i0 = Math.max(i0, end - 2);
+      if (i0 >= end || i0 >= pack.dlist.length) continue;
+      for (let j = i0; j < end; j++) arr[j] = sgn;
       nOn += 1;
     }
     for (let i = 0; i < pack.dlist.length; i++) {
@@ -754,7 +842,9 @@ function eventHeld(
     lid === "surprise_xs_rank_flip" ||
     lid === "surprise_xs_rank_adaptive" ||
     lid === "surprise_xs_rank_easy_funding" ||
-    lid === "surprise_xs_rank_steep_curve"
+    lid === "surprise_xs_rank_steep_curve" ||
+    lid === "surprise_xs_month_start" ||
+    lid === "surprise_xs_fy_end"
   ) {
     const invert = lid.includes("flip");
     const dates = unionDates(panel.bars);
@@ -772,6 +862,13 @@ function eventHeld(
           const sp = spread[ev.entryDate];
           if (sp === undefined || sp <= 0) continue;
         }
+        if (lid === "surprise_xs_month_start" && ev.entryDate.slice(8, 10) > "05")
+          continue;
+        if (
+          lid === "surprise_xs_fy_end" &&
+          !(ev.entryDate.slice(5, 7) === "03" && ev.entryDate.slice(8, 10) >= "15")
+        )
+          continue;
         for (let j = ev.entryIdx; j < Math.min(ev.entryIdx + holdDays, pack.dlist.length); j++) {
           const d = pack.dlist[j];
           if (!surpriseByDate[d]) surpriseByDate[d] = {};
@@ -885,7 +982,11 @@ function gatedCsHeld(
   const invert =
     lid === "xs_high_vol_fade" ||
     lid === "overnight_tight_cs_fade" ||
-    lid === "curve_invert_cs_fade";
+    lid === "curve_invert_cs_fade" ||
+    lid === "fy_end_cs_fade" ||
+    lid === "overnight_p90_cs_flip" ||
+    lid === "flow_price_disagree_fade" ||
+    lid === "basevol_up_day_fade";
   const base = csHeld(panel.bars, 5, 10, 0.3, 0.3, invert);
   const overnight =
     panel.repo_rate_regime?.rates_by_date ||
@@ -952,6 +1053,48 @@ function gatedCsHeld(
         if (lid === "flow_price_margin_triple" && finite(chg)) {
           keep = chg < 0; // de-crowd
         }
+      } else if (lid === "fy_end_cs_fade") {
+        keep = d.slice(5, 7) === "03" && d.slice(8, 10) >= "15";
+      } else if (lid === "fy_start_cs_follow") {
+        keep = d.slice(5, 7) === "04";
+      } else if (lid === "curve_steep_cs_follow") {
+        keep = spread[d] !== undefined && spread[d] > 0;
+      } else if (lid === "overnight_p90_cs_flip") {
+        const hist = Object.keys(overnight)
+          .filter((x) => x < d)
+          .map((x) => overnight[x])
+          .filter((v) => finite(v))
+          .sort((a, b) => a - b);
+        if (hist.length < 20 || on === undefined) keep = false;
+        else {
+          const p90 = hist[Math.floor(0.9 * (hist.length - 1))];
+          keep = on >= p90;
+        }
+      } else if (lid === "flow_price_disagree_fade") {
+        const chg = panel.flow_regime?.margin_change_by_code?.[code]?.[d];
+        keep = finite(chg) && chg > 0;
+      } else if (lid === "nky_vol_compress_cs") {
+        keep =
+          prev !== null &&
+          finite(nkyTerm[d]) &&
+          finite(nkyTerm[prev]) &&
+          nkyTerm[d] < nkyTerm[prev];
+      } else if (lid === "opt225_skew_and_term_cs") {
+        const medS = pitMedian(skew, d, 20);
+        const medT = pitMedian(nkyTerm, d, 20);
+        keep =
+          medS !== null &&
+          medT !== null &&
+          finite(skew[d]) &&
+          finite(nkyTerm[d]) &&
+          skew[d] >= medS &&
+          nkyTerm[d] >= medT;
+      } else if (lid === "basevol_up_day_fade") {
+        const bv = panel.base_vol_series || panel.opt225_regime?.basevol?.rv_abs_by_date || {};
+        keep =
+          prev !== null && finite(bv[d]) && finite(bv[prev]) && bv[d] > bv[prev];
+      } else if (lid === "iv_below_basevol_cs") {
+        keep = finite(ivSpread[d]) && ivSpread[d] < 0;
       }
       if (keep) out[code][d] = v;
     }
@@ -1006,6 +1149,10 @@ export function evalLogicDailyPathOnPanel(
     dates,
     holdDays,
     oneWay,
+    panel.repo_rate_regime?.rates_by_date ||
+      panel.repo_rate_regime?.rate_by_date ||
+      panel.repo_rate_by_date ||
+      undefined,
   );
   if (pack.net_daily.length < 2) {
     return {

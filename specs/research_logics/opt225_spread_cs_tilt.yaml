@@ -22,5 +22,7 @@ params:
   mode: opt225_spread_cs_tilt
   side: orig
   cs_gate: opt225_spread_wide
+  entry_shift: 0
+  hold_tail_days: 0
 evaluator: research.unique_logic.event_combos.evaluate_combo_daily_mtm
 notes: combo thesis; CF daily_path is candidate-grade path

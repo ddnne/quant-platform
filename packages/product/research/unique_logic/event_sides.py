@@ -289,6 +289,7 @@ def _finish_signed_event_book(
     extra: Mapping[str, Any],
     one_way_cost: float,
     sign_mult_by_key: Mapping[str, float] | None = None,
+    repo_by_date: Mapping[str, float] | None = None,
 ) -> dict[str, Any]:
     dates = list(collected["calendar"])
     held = event._held_from_event_entries(
@@ -302,6 +303,7 @@ def _finish_signed_event_book(
         one_way_cost=one_way_cost,
         logic_id=str(spec["logic_id"]),
         extra=extra,
+        repo_by_date=repo_by_date,
     )
     pack["data_path"] = extra.get("data_path")
     pack["new_unique_logic"] = True

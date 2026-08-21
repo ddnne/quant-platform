@@ -1,14 +1,14 @@
-logic_id: event_large_surprise_steep_curve
-family_id: event_macro_curve_combo
+logic_id: flow_price_disagree_fade
+family_id: xs_margin_delta
 axis: mixed
 headline: false
 generation_enabled: false
 promote_as_main: false
 go: false
 thesis: >
-  Large surprise confirmed only when the repo curve is steep.
+  Fade CS when name-level margin is crowding with the price move (chase).
 signal_definition: >
-  Large surprise confirmed only when the repo curve is steep.
+  Fade CS when name-level margin is crowding with the price move (chase).
 datasets:
   - equities_bars_daily
   - fins_summary
@@ -19,9 +19,9 @@ params:
   hold_days: 10
   momentum_n: 5
   min_hist: 20
-  mode: event_large_surprise_steep_curve
+  mode: flow_price_disagree_fade
   side: orig
-  cs_gate: None
+  cs_gate: margin_crowd_chase
   entry_shift: 0
   hold_tail_days: 0
 evaluator: research.unique_logic.event_combos.evaluate_combo_daily_mtm

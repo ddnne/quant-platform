@@ -22,5 +22,7 @@ params:
   mode: event_margin_uncrowded_steep
   side: orig
   cs_gate: None
+  entry_shift: 0
+  hold_tail_days: 0
 evaluator: research.unique_logic.event_combos.evaluate_combo_daily_mtm
 notes: combo thesis; CF daily_path is candidate-grade path

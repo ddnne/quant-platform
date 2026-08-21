@@ -247,6 +247,7 @@ def held_book_daily_mtm(
     one_way_cost: float,
     logic_id: str,
     extra: Mapping[str, Any] | None = None,
+    repo_by_date: Mapping[str, float] | None = None,
 ) -> dict[str, Any]:
     """Equal-weight daily MTM of a pre-built held book."""
     from features.class_signals import amortized_one_way_cost
@@ -292,6 +293,7 @@ def held_book_daily_mtm(
         d_prev = dates[i - 1]
         d = dates[i]
         contribs: list[float] = []
+        n_short = 0
         for code, cmap in held_by_code_date.items():
             pos = cmap.get(d_prev)
             if pos is None or pos == 0.0:
@@ -302,6 +304,8 @@ def held_book_daily_mtm(
                 continue
             r1 = (float(c1) / float(c0)) - 1.0
             contribs.append(float(pos) * r1)
+            if float(pos) < 0:
+                n_short += 1
         n_active = len(contribs)
         if n_active == 0:
             g = 0.0
@@ -309,7 +313,12 @@ def held_book_daily_mtm(
             net = 0.0
         else:
             g = float(sum(contribs) / n_active)
-            cost_drag = daily_cost
+            short_drag = 0.0
+            if n_short and repo_by_date is not None:
+                repo = repo_by_date.get(d_prev)
+                if repo is not None:
+                    short_drag = (n_short / n_active) * (float(repo) / 100.0 / 252.0)
+            cost_drag = daily_cost + short_drag
             net = g - cost_drag
         equity = equity * (1.0 + net)
         gross_daily.append(g)

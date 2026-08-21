@@ -93,6 +93,17 @@ CF_NEW_EVENT_THESIS_IDS: frozenset[str] = frozenset(
         "event_large_surprise_afterclose",
         "event_margin_uncrowded_steep",
         "event_easy_funding_curve_steep",
+        "event_skip_announce_day",
+        "event_late_hold_only",
+        "month_end_event_skip",
+        "event_first_half_month",
+        "overnight_easing_event",
+        "overnight_tightening_fade_event",
+        "event_cluster_fade",
+        "margin_crowd_fade_event",
+        "surprise_xs_month_start",
+        "surprise_xs_fy_end",
+        "event_afterclose_delay2",
     }
 )
 CF_NEW_CS_THESIS_IDS: frozenset[str] = frozenset(
@@ -109,6 +120,15 @@ CF_NEW_CS_THESIS_IDS: frozenset[str] = frozenset(
         "repo_3m_change_cs",
         "flow_margin_price_agree",
         "cs_mom_easy_funding",
+        "fy_end_cs_fade",
+        "fy_start_cs_follow",
+        "curve_steep_cs_follow",
+        "overnight_p90_cs_flip",
+        "flow_price_disagree_fade",
+        "nky_vol_compress_cs",
+        "opt225_skew_and_term_cs",
+        "basevol_up_day_fade",
+        "iv_below_basevol_cs",
     }
 )
 CF_NEW_THESIS_IDS: frozenset[str] = CF_NEW_EVENT_THESIS_IDS | CF_NEW_CS_THESIS_IDS
