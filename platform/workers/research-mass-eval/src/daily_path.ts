@@ -291,18 +291,301 @@ function heldBookDailyMtm(
   return { dates, net_daily: netDaily, occupancy: occ, n_gate_on: nOn };
 }
 
+export const CF_UNIQUE_CS_LOGIC_IDS = [
+  "funding_impulse_cs_tilt",
+  "curve_steepen_impulse_cs",
+  "xs_margin_delta_rank",
+  "idio_mom_macro_impulse",
+  "overnight_level_cs_tilt",
+  "overnight_easy_cs_follow",
+  "month_end_cs_fade",
+  "xs_low_vol_mom",
+  "repo_3m_level_cs",
+] as const;
+
 function usesCrossSection(logic: LogicSpec): boolean {
   const lid = String(logic.logic_id || "");
   const fam = String(logic.family_id || "");
   return (
+    (CF_UNIQUE_CS_LOGIC_IDS as readonly string[]).includes(lid) ||
     lid.startsWith("xs_") ||
     lid.includes("cross_section") ||
     fam.includes("cross_section") ||
     lid.startsWith("nky_vol_") ||
     lid.startsWith("opt225_") ||
     lid.startsWith("fund_") ||
-    lid.startsWith("mf_")
+    lid.startsWith("mf_") ||
+    lid.startsWith("overnight_") ||
+    lid.startsWith("funding_impulse") ||
+    lid.startsWith("curve_steepen") ||
+    lid.startsWith("month_end") ||
+    lid.startsWith("repo_3m") ||
+    lid.startsWith("idio_mom") ||
+    lid.startsWith("xs_margin")
   );
+}
+
+export const CF_EVENT_LOGIC_IDS = [
+  "event_funding_stress_skip",
+  "curve_steep_event_confirm",
+  "disclosure_cluster_mom_gate",
+  "surprise_xs_rank_hold",
+  "large_surprise_event_hold",
+  "afterclose_only_event_hold",
+  "event_pre_mom_agree_hold",
+  "event_margin_crowding_skip",
+  "event_funding_easy_short",
+  "event_funding_stress_ls",
+  "surprise_xs_rank_flip",
+  "event_funding_adaptive_side",
+  "surprise_xs_rank_adaptive",
+] as const;
+
+function isEventLogic(lid: string): boolean {
+  return (CF_EVENT_LOGIC_IDS as readonly string[]).includes(lid);
+}
+
+function surpriseProxy(ev: {
+  eps?: number | null;
+  feps?: number | null;
+}): number | null {
+  const e = ev.eps;
+  const f = ev.feps;
+  if (finite(e) && finite(f)) return (f as number) - (e as number);
+  return null;
+}
+
+function afterClose(discTime: string | null | undefined): boolean {
+  const t = String(discTime || "").trim();
+  if (t.length < 4) return false;
+  const hh = Number(t.slice(0, 2));
+  return Number.isFinite(hh) && hh >= 15;
+}
+
+function pitMedian(
+  series: Record<string, number>,
+  query: string,
+  minHist: number,
+): number | null {
+  const hist = Object.keys(series)
+    .filter((d) => d < query)
+    .sort()
+    .map((d) => series[d])
+    .filter((v) => finite(v));
+  if (hist.length < minHist) return null;
+  const s = hist.slice().sort((a, b) => a - b);
+  const mid = Math.floor(s.length / 2);
+  return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+}
+
+function eventHeld(
+  logic: LogicSpec,
+  panel: PeriodPanel,
+): Record<string, Record<string, number>> | null {
+  const lid = String(logic.logic_id || "");
+  const params = logic.params || {};
+  const holdDays = Math.max(
+    1,
+    Math.floor(
+      finite(params.post_hold_days as number)
+        ? (params.post_hold_days as number)
+        : finite(params.hold_days as number)
+          ? (params.hold_days as number)
+          : 5,
+    ),
+  );
+  const minHist = Math.max(
+    5,
+    Math.floor(finite(params.min_hist as number) ? (params.min_hist as number) : 20),
+  );
+  const events = panel.fund_regime?.events_by_code || {};
+  const overnight =
+    panel.repo_rate_regime?.rates_by_date ||
+    panel.repo_rate_regime?.rate_by_date ||
+    panel.repo_rate_by_date ||
+    {};
+  const spread = panel.repo_rate_regime?.spread_by_date || {};
+  const bars = panel.bars || {};
+  const closeMap = closeByMap(bars);
+  const absSurprises: Array<{ d: string; abs: number }> = [];
+  type Entry = {
+    code: string;
+    disc: string;
+    entryDate: string;
+    entryIdx: number;
+    sign: number;
+    abs: number;
+    after: boolean;
+  };
+  const perCode: Record<string, { dlist: string[]; entries: Entry[] }> = {};
+
+  for (const [code, pairs] of Object.entries(bars)) {
+    if (code.startsWith("__") || !pairs || pairs.length < holdDays + 1) continue;
+    const dlist = pairs.map(([d]) => String(d).slice(0, 10));
+    const idx: Record<string, number> = {};
+    dlist.forEach((d, i) => {
+      idx[d] = i;
+    });
+    const entries: Entry[] = [];
+    for (const ev of events[code] || []) {
+      const disc = String(ev.disc_date || "").slice(0, 10);
+      if (!disc) continue;
+      const sur = surpriseProxy(ev);
+      const sgn = signNum(sur);
+      if (sgn === null || sgn === 0 || sur === null) continue;
+      let i = idx[disc];
+      const after = afterClose(ev.disc_time);
+      if (i === undefined) {
+        const later = dlist.find((d) => d > disc);
+        if (later === undefined) continue;
+        i = idx[later];
+      } else if (after && i + 1 < dlist.length) {
+        i = i + 1;
+      }
+      entries.push({
+        code,
+        disc,
+        entryDate: dlist[i],
+        entryIdx: i,
+        sign: sgn,
+        abs: Math.abs(sur),
+        after,
+      });
+      absSurprises.push({ d: disc, abs: Math.abs(sur) });
+    }
+    perCode[code] = { dlist, entries };
+  }
+
+  const clusterLookback = 5;
+  const discDates = absSurprises.map((x) => x.d).sort();
+
+  const held: Record<string, Record<string, number>> = {};
+  let nOn = 0;
+  for (const [code, pack] of Object.entries(perCode)) {
+    const pos: Record<string, number> = {};
+    const arr: Array<number | null> = pack.dlist.map(() => null);
+    for (const ev of pack.entries) {
+      let ok = true;
+      let sgn = ev.sign;
+      if (lid === "afterclose_only_event_hold" && !ev.after) ok = false;
+      if (lid === "event_funding_stress_skip" || lid === "event_funding_adaptive_side") {
+        const on = overnight[ev.entryDate];
+        const med = pitMedian(overnight, ev.entryDate, minHist);
+        if (on === undefined || med === null || on >= med) ok = false;
+      }
+      if (lid === "event_funding_easy_short") {
+        const on = overnight[ev.entryDate];
+        const med = pitMedian(overnight, ev.entryDate, minHist);
+        if (on === undefined || med === null || on >= med) ok = false;
+        else sgn = -ev.sign;
+      }
+      if (lid === "event_funding_stress_ls") {
+        const on = overnight[ev.entryDate];
+        const med = pitMedian(overnight, ev.entryDate, minHist);
+        if (on === undefined || med === null) ok = false;
+        else sgn = on >= med ? -ev.sign : ev.sign;
+      }
+      if (lid === "curve_steep_event_confirm") {
+        const sp = spread[ev.entryDate];
+        if (sp === undefined || sp <= 0) ok = false;
+      }
+      if (lid === "large_surprise_event_hold") {
+        const prior = absSurprises.filter((x) => x.d < ev.disc).map((x) => x.abs);
+        if (prior.length < minHist) ok = false;
+        else {
+          const s = prior.slice().sort((a, b) => a - b);
+          const mid = Math.floor(s.length / 2);
+          const med = s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+          if (ev.abs < med) ok = false;
+        }
+      }
+      if (lid === "event_pre_mom_agree_hold") {
+        const pairs = bars[code];
+        const i = ev.entryIdx;
+        if (!pairs || i < 5) ok = false;
+        else {
+          const m = momentumAt(pairs, 5, i);
+          const ms = signNum(m);
+          if (ms === null || ms === 0 || ms !== ev.sign) ok = false;
+        }
+      }
+      if (lid === "event_margin_crowding_skip") {
+        const levels =
+          panel.flow_regime?.margin_level_by_code?.[code] || {};
+        const prior = Object.keys(levels)
+          .filter((d) => d < ev.entryDate)
+          .sort();
+        if (!prior.length) ok = false;
+        else {
+          const lastD = prior[prior.length - 1];
+          const ageDays =
+            (Date.parse(ev.entryDate + "T00:00:00Z") -
+              Date.parse(lastD + "T00:00:00Z")) /
+            86400000;
+          const med = pitMedian(levels, ev.entryDate, minHist);
+          if (!Number.isFinite(ageDays) || ageDays > 14 || med === null) {
+            ok = false;
+          } else if ((levels[lastD] as number) >= med) {
+            ok = false;
+          }
+        }
+      }
+      if (!ok) continue;
+      const end = Math.min(ev.entryIdx + holdDays, pack.dlist.length);
+      for (let j = ev.entryIdx; j < end; j++) arr[j] = sgn;
+      nOn += 1;
+    }
+    for (let i = 0; i < pack.dlist.length; i++) {
+      if (arr[i] !== null) pos[pack.dlist[i]] = arr[i] as number;
+    }
+    held[code] = pos;
+  }
+
+  if (
+    lid === "surprise_xs_rank_hold" ||
+    lid === "surprise_xs_rank_flip" ||
+    lid === "surprise_xs_rank_adaptive" ||
+    lid === "disclosure_cluster_mom_gate"
+  ) {
+    const invert = lid.includes("flip");
+    const cs = csHeld(
+      panel.bars,
+      5,
+      10,
+      0.3,
+      0.3,
+      invert,
+    );
+    if (lid === "disclosure_cluster_mom_gate") {
+      const dates = unionDates(panel.bars);
+      const gated: Record<string, Record<string, number>> = {};
+      for (const [code, cmap] of Object.entries(cs)) {
+        gated[code] = {};
+        for (const [d, v] of Object.entries(cmap)) {
+          const nDisc = discDates.filter((x) => x < d && x >= addDays(d, -clusterLookback)).length;
+          const med = pitMedian(
+            Object.fromEntries(dates.map((dd) => [dd, discDates.filter((x) => x < dd && x >= addDays(dd, -clusterLookback)).length])),
+            d,
+            10,
+          );
+          if (med === null || nDisc < med) continue;
+          gated[code][d] = v;
+        }
+      }
+      return gated;
+    }
+    return cs;
+  }
+
+  if (nOn === 0) return {};
+  return held;
+}
+
+function addDays(iso: string, n: number): string {
+  const t = Date.parse(iso + "T00:00:00Z");
+  if (!Number.isFinite(t)) return iso;
+  const d = new Date(t + n * 86400000);
+  return d.toISOString().slice(0, 10);
 }
 
 export function evalLogicDailyPathOnPanel(
@@ -322,7 +605,11 @@ export function evalLogicDailyPathOnPanel(
   }
   const params = logic.params || {};
   const holdDays = Math.floor(
-    finite(params.hold_days as number) ? (params.hold_days as number) : 10,
+    finite(params.hold_days as number)
+      ? (params.hold_days as number)
+      : finite(params.post_hold_days as number)
+        ? (params.post_hold_days as number)
+        : 10,
   );
   const momN = Math.floor(
     finite(params.momentum_n as number) ? (params.momentum_n as number) : 5,
@@ -334,9 +621,11 @@ export function evalLogicDailyPathOnPanel(
   const lid = String(logic.logic_id || "");
   const invert = lid.includes("reversion") || lid.includes("fade");
   const polarity = lid.includes("reversion") ? -1 : 1;
-  const held = usesCrossSection(logic)
-    ? csHeld(panel.bars, momN, holdDays, lf, sf, invert)
-    : mdhHeld(panel.bars, holdDays, polarity);
+  const held = isEventLogic(lid)
+    ? eventHeld(logic, panel) || {}
+    : usesCrossSection(logic)
+      ? csHeld(panel.bars, momN, holdDays, lf, sf, invert)
+      : mdhHeld(panel.bars, holdDays, polarity);
   const dates = unionDates(panel.bars);
   const pack = heldBookDailyMtm(
     held,

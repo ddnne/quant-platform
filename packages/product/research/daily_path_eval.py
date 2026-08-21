@@ -424,13 +424,4 @@ def panel_index(
     }
 
 
-# Wave-script aliases (do not add new run_w* files; import these names).
-_dump = dump_json
-_scalar_f = scalar_f
-_fmt = fmt
-_assert_frozen_pins_untouched = assert_frozen_pins_untouched
-_load_shard_bars = load_shard_bars
-_summarize_path = summarize_path
-_stitch_net = stitch_net
-_held_book_daily_mtm = held_book_daily_mtm
-_panel_index = panel_index
+

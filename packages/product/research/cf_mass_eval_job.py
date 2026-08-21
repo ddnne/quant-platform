@@ -31,6 +31,7 @@ Period-net screen survivors are **not** a pass (``daily_path_DD`` required).
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -281,12 +282,33 @@ def design_mass_factory_paths(job_id: str) -> dict[str, Any]:
 def default_logic_specs(
     logic_ids: Sequence[str] | None = None,
 ) -> list[dict[str, Any]]:
-    """Build CF-ready logic specs from catalog templates."""
+    """Build CF-ready logic specs from factory templates, then YAML catalog."""
     ids = list(logic_ids) if logic_ids is not None else list(CF_BAR_NATIVE_LOGIC_IDS)
     out: list[dict[str, Any]] = []
+    yaml_by_id: dict[str, dict[str, Any]] | None = None
     for lid in ids:
         tpl = LOGIC_TEMPLATES.get(lid)
         if tpl is None:
+            if yaml_by_id is None:
+                from research.unique_logic.catalog import load_catalog_specs
+
+                yaml_by_id = {
+                    str(s.get("logic_id")): s for s in load_catalog_specs()
+                }
+            spec = (yaml_by_id or {}).get(str(lid))
+            if spec:
+                out.append(
+                    {
+                        "logic_id": str(spec.get("logic_id") or lid),
+                        "family_id": str(spec.get("family_id") or "unique_logic"),
+                        "params": dict(spec.get("params") or {}),
+                        "thesis": spec.get("thesis") or "",
+                        "signal_definition": spec.get("signal_definition") or "",
+                        "position_rule": spec.get("position_rule") or "",
+                        "datasets_used": list(spec.get("datasets") or []),
+                    }
+                )
+                continue
             out.append(
                 {
                     "logic_id": lid,
@@ -1319,17 +1341,19 @@ def stage_real_panels_to_r2(
     dry_run: bool = False,
     staging_dir: str | Path | None = None,
     r2_put: Callable[..., Mapping[str, Any]] | None = None,
+    panels_prefix: str | None = None,
 ) -> dict[str, Any]:
     """Build real multi-year panels and put under job-scoped R2 prefix.
 
     Keys: research/mass_eval/job={id}/panels/{period_id}.json
+    ``panels_prefix`` overrides the default job-scoped prefix (cache reuse).
     """
     jid = str(job_id).strip() or "unknown"
     period_list = [
         normalize_period_row(p)
         for p in (periods or DEFAULT_REAL_MULTIYEAR_PERIODS)
     ]
-    prefix = f"{RESEARCH_ARTIFACT_PREFIX}/job={jid}/panels"
+    prefix = panels_prefix or f"{RESEARCH_ARTIFACT_PREFIX}/job={jid}/panels"
     put_fn = r2_put or (
         lambda bucket, key, body: default_r2_put(
             bucket,
@@ -1394,6 +1418,129 @@ def stage_real_panels_to_r2(
         "wave": CF_MASS_EVAL_WAVE,
         "dry_run": bool(dry_run),
     }
+
+
+PANELS_CACHE_PREFIX = "research/mass_eval/panels_cache"
+
+
+def panels_cache_id(
+    periods: Sequence[Mapping[str, Any]],
+    *,
+    max_codes: int,
+    max_days: int,
+) -> str:
+    ids = ",".join(str(p.get("period_id") or "") for p in periods)
+    raw = f"{ids}|c{int(max_codes)}|d{int(max_days)}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def try_r2_get_json(key: str) -> dict[str, Any] | None:
+    """Best-effort remote R2 JSON get via wrangler (None if missing)."""
+    wr = _DEFAULT_WRANGLER
+    cfg = (
+        _REPO_ROOT
+        / "platform"
+        / "workers"
+        / "ingestion-premium"
+        / "wrangler.toml"
+    )
+    wr_bin = str(wr) if wr.is_file() else "npx"
+    cmd = [wr_bin] if wr.is_file() else ["npx", "wrangler"]
+    cmd += [
+        "r2",
+        "object",
+        "get",
+        f"{RESEARCH_ARTIFACT_BUCKET}/{key}",
+        "--pipe",
+        f"--config={cfg}",
+        "--remote",
+    ]
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=str(cfg.parent),
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0:
+        return None
+    try:
+        obj = json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        return None
+    return obj if isinstance(obj, dict) else None
+
+
+def resolve_or_stage_panels(
+    *,
+    job_id: str,
+    periods: Sequence[Mapping[str, Any]] | None = None,
+    max_codes: int = DEFAULT_MAX_CODES,
+    max_days: int = DEFAULT_MAX_DAYS,
+    force_stage: bool = False,
+    staging_dir: str | Path | None = None,
+) -> dict[str, Any]:
+    """Reuse a content-keyed panel cache, or stage once and record meta on R2.
+
+    Cache key is period_ids × max_codes × max_days. Subsequent fan-out jobs
+    skip the serial stage. ``stage_sec`` is 0.0 on reuse.
+    """
+    t0 = time.perf_counter()
+    period_rows = [
+        normalize_period_row(p)
+        for p in (periods or DEFAULT_REAL_MULTIYEAR_PERIODS)
+    ]
+    cid = panels_cache_id(period_rows, max_codes=max_codes, max_days=max_days)
+    meta_key = f"{PANELS_CACHE_PREFIX}/{cid}/meta.json"
+    prefix = f"{PANELS_CACHE_PREFIX}/{cid}/panels"
+    if not force_stage:
+        existing = try_r2_get_json(meta_key)
+        if existing and int(existing.get("n_ok") or 0) > 0:
+            existing["reused"] = True
+            existing["force_stage"] = False
+            existing["stage_sec"] = 0.0
+            existing["cache_id"] = cid
+            existing["meta_key"] = meta_key
+            return existing
+    staged = stage_real_panels_to_r2(
+        job_id,
+        period_rows,
+        max_codes=max_codes,
+        max_days=max_days,
+        staging_dir=staging_dir,
+        panels_prefix=prefix,
+    )
+    stage_sec = round(time.perf_counter() - t0, 3)
+    meta = {
+        "cache_id": cid,
+        "meta_key": meta_key,
+        "panels_prefix": prefix,
+        "n_ok": int(staged.get("n_ok") or 0),
+        "n_periods": int(staged.get("n_periods") or 0),
+        "max_codes": int(max_codes),
+        "max_days": int(max_days),
+        "period_ids": [p.get("period_id") for p in period_rows],
+        "reused": False,
+        "force_stage": bool(force_stage),
+        "stage_sec": stage_sec,
+        "job_id_staged": str(job_id),
+    }
+    try:
+        from research.single_shot_job import default_r2_put
+
+        default_r2_put(
+            RESEARCH_ARTIFACT_BUCKET,
+            meta_key,
+            json.dumps(meta, indent=2, default=str).encode("utf-8"),
+        )
+    except Exception:
+        meta["meta_put_error"] = True
+    meta["stage"] = {k: staged.get(k) for k in ("n_ok", "n_missing", "dataset")}
+    return meta
 
 
 def build_cf_mass_eval_job_spec(
@@ -1684,14 +1831,23 @@ def run_cf_mass_eval_job(
 
     stage_meta: dict[str, Any] | None = None
     if do_stage:
-        stage_meta = stage_real_panels_to_r2(
-            jid_pre,
-            period_rows,
-            max_codes=max_codes,
-            max_days=max_days,
-            dry_run=dry_run_r2,
-            staging_dir=staging_dir,
-        )
+        if dry_run_r2:
+            stage_meta = stage_real_panels_to_r2(
+                jid_pre,
+                period_rows,
+                max_codes=max_codes,
+                max_days=max_days,
+                dry_run=True,
+                staging_dir=staging_dir,
+            )
+        else:
+            stage_meta = resolve_or_stage_panels(
+                job_id=jid_pre,
+                periods=period_rows,
+                max_codes=max_codes,
+                max_days=max_days,
+                staging_dir=staging_dir,
+            )
         if int(stage_meta.get("n_ok") or 0) <= 0 and mode_s == "r2_panels":
             raise CfMassEvalError(
                 "r2_panels staging produced 0 ok panels; "
@@ -1729,6 +1885,7 @@ def run_cf_mass_eval_job(
         except CfMassEvalError as exc:
             deploy_meta = {"status": "deploy_failed", "error": str(exc)}
 
+    t_fan0 = time.perf_counter()
     if not skip_invoke:
         try:
             worker_resp = invoke_cf_mass_eval_worker(
@@ -1739,6 +1896,7 @@ def run_cf_mass_eval_job(
             )
         except CfMassEvalError as exc:
             invoke_error = str(exc)
+    fanout_sec = round(time.perf_counter() - t_fan0, 3)
 
     r2_puts: list[dict[str, Any]] = []
     status = "ok"
@@ -1809,6 +1967,18 @@ def run_cf_mass_eval_job(
         "worker_url": url,
         "deploy": deploy_meta,
         "stage_panels": stage_meta,
+        "stage_sec": (
+            0.0
+            if not stage_meta
+            else float(
+                stage_meta.get("stage_sec")
+                or stage_meta.get("wall_time_sec")
+                or 0.0
+            )
+        ),
+        "stage_reused": bool((stage_meta or {}).get("reused")),
+        "stage_cache_id": (stage_meta or {}).get("cache_id"),
+        "fanout_sec": fanout_sec,
         "invoke_error": invoke_error,
         "n_logics": n_logics,
         "n_periods": n_periods,
@@ -1997,6 +2167,9 @@ __all__ = [
     "resolve_research_run_token",
     "design_mass_factory_paths",
     "default_logic_specs",
+    "resolve_or_stage_panels",
+    "panels_cache_id",
+    "PANELS_CACHE_PREFIX",
     "normalize_period_row",
     "inventory_complete22",
     "inventory_cf_panel_wiring",

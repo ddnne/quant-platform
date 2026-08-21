@@ -1,8 +1,12 @@
 """CF isolate fan-out daily_path driver (not a period-net pass)."""
 from __future__ import annotations
 
-from research.cf_daily_path_job import FANOUT_VERSION, run_cf_daily_path_fanout
-from research.cf_mass_eval_job import CF_BAR_NATIVE_LOGIC_IDS
+from research.cf_daily_path_job import (
+    CF_EVENT_DAILY_PATH_IDS,
+    FANOUT_VERSION,
+    run_cf_daily_path_fanout,
+)
+from research.cf_mass_eval_job import CF_BAR_NATIVE_LOGIC_IDS, panels_cache_id
 
 
 def test_fanout_aggregates_cells_and_does_not_promote() -> None:
@@ -57,3 +61,37 @@ def test_fanout_aggregates_cells_and_does_not_promote() -> None:
 
 def test_bar_native_count_meets_thirty() -> None:
     assert len(CF_BAR_NATIVE_LOGIC_IDS) >= 30
+
+
+def test_event_daily_path_ids_cover_filters_and_sides() -> None:
+    from research.unique_logic.constants import (
+        ADAPTIVE_LOGIC_IDS,
+        EVENT_FILTER_LOGIC_IDS,
+        EVENT_LOGIC_IDS,
+        EVENT_SIDES_LOGIC_IDS,
+    )
+
+    assert "event_funding_stress_skip" in CF_EVENT_DAILY_PATH_IDS
+    assert "afterclose_only_event_hold" in CF_EVENT_DAILY_PATH_IDS
+    assert "event_funding_easy_short" in CF_EVENT_DAILY_PATH_IDS
+    assert "event_margin_crowding_skip" in CF_EVENT_DAILY_PATH_IDS
+    assert set(EVENT_LOGIC_IDS) <= set(CF_EVENT_DAILY_PATH_IDS)
+    assert set(EVENT_FILTER_LOGIC_IDS) <= set(CF_EVENT_DAILY_PATH_IDS)
+    assert set(EVENT_SIDES_LOGIC_IDS) <= set(CF_EVENT_DAILY_PATH_IDS)
+    assert set(ADAPTIVE_LOGIC_IDS) <= set(CF_EVENT_DAILY_PATH_IDS)
+    assert len(CF_EVENT_DAILY_PATH_IDS) >= 13
+
+
+def test_panels_cache_id_stable() -> None:
+    a = panels_cache_id(
+        [{"period_id": "y2015_full"}, {"period_id": "y2017_q4"}],
+        max_codes=12,
+        max_days=80,
+    )
+    b = panels_cache_id(
+        [{"period_id": "y2015_full"}, {"period_id": "y2017_q4"}],
+        max_codes=12,
+        max_days=80,
+    )
+    assert a == b
+    assert len(a) == 16

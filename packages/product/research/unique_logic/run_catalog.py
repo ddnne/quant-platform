@@ -1,4 +1,7 @@
-"""Run catalog YAML logics through daily_path_eval (candidate-grade).
+"""Run catalog YAML logics through candidate-grade daily_path.
+
+Default backend is Cloudflare isolate fan-out (``--backend cf``).
+``--backend local`` is the serial Python HONEST_3Y fallback.
 
 Does not add a wave script. Does not promote. Scores go to eval_registry.
 """
@@ -206,6 +209,20 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Evaluate every unique_logic spec (Python tuples + catalog YAML).",
     )
+    p.add_argument(
+        "--backend",
+        choices=("cf", "local"),
+        default="cf",
+        help=(
+            "cf (default): Cloudflare isolate fan-out POST /v1/daily-path. "
+            "local: serial Python daily_path_eval (fallback; HONEST_3Y stitch)."
+        ),
+    )
+    p.add_argument(
+        "--job-id",
+        default=None,
+        help="Optional eval-registry job id for --backend cf.",
+    )
     p.add_argument("--max-codes", type=int, default=15)
     p.add_argument("--max-days", type=int, default=200)
     p.add_argument("--one-way-cost", type=float, default=0.001)
@@ -234,17 +251,55 @@ def main(argv: list[str] | None = None) -> int:
             if spec is None:
                 raise SystemExit(f"unknown logic_id={lid}")
             specs.append(spec)
+
+    if args.backend == "cf":
+        from research.cf_daily_path_job import run_cf_daily_path_fanout
+
+        ids = [str(s["logic_id"]) for s in specs]
+        pack = run_cf_daily_path_fanout(
+            job_id=args.job_id,
+            logic_ids=ids,
+            max_codes=int(args.max_codes),
+            max_days=int(args.max_days),
+            one_way_cost=float(args.one_way_cost),
+        )
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        dump_json(args.out, pack)
+        _log(
+            json.dumps(
+                {
+                    "backend": "cf",
+                    "job_id": pack.get("job_id"),
+                    "n_logics": pack.get("n_logics"),
+                    "n_cells": pack.get("n_cells"),
+                    "stage_sec": pack.get("stage_sec"),
+                    "fanout_sec": pack.get("fanout_sec"),
+                    "longest_isolate_sec": pack.get("longest_isolate_sec"),
+                    "out": str(args.out),
+                    "promote_as_main": False,
+                    "go": False,
+                    "note": (
+                        "CF isolate fan-out is the --all default. "
+                        "Use --backend local for Python HONEST_3Y serial fallback."
+                    ),
+                }
+            )
+        )
+        return 0
+
     codes = list(DEFAULT_EVAL_CODES)[: int(args.max_codes)]
     extras = _load_extras(args.sqlite, codes=codes)
     _log(
         json.dumps(
             {
+                "backend": "local",
                 "n_logics": len(specs),
                 "n_overnight": extras.get("n_overnight"),
                 "n_events": extras.get("n_events"),
                 "n_margin_codes": extras.get("n_margin_codes"),
                 "n_topix": extras.get("n_topix"),
                 "repo_history_plane": extras.get("repo_history_plane"),
+                "note": "serial Python fallback; CF is the default --all path",
             }
         )
     )

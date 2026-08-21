@@ -2,7 +2,8 @@
 
 Declare a new hypothesis in ``specs/research_logics/*.yaml``. Add an
 ``evaluate_*_daily_mtm`` function in this package **only when the economics
-are new**. Run via ``python -m research.unique_logic`` and record with
+are new**. ``python -m research.unique_logic --all`` defaults to CF isolate
+fan-out (``--backend local`` is the serial fallback). Record with
 ``scripts/record_research_eval.py`` (R2 + D1). Do not add
 ``scripts/run_wNN_*.py``.
 """

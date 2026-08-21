@@ -214,7 +214,7 @@ Counts = number of `from X …` / `import X` statements under `tests/**/*.py` (s
 | `verify_governed_js_drift.py` | A | reads `platform/workers/quant-ops-mcp/src/governed.js` |
 | `write_collection_receipts.py` | A | mentions premium migrations path in messages |
 
-**Shell:** `cron_publish_ops.sh`, `ops/cf_premium_backfill.sh` — treat as path-sensitive wrappers (same tree).
+**Shell:** `cron_publish_ops.sh` — path-sensitive wrapper (same tree). `ops/cf_premium_backfill.py` is the backfill driver.
 
 **Reorg rule:** any move of `scripts/` depth or of a package consumed only via `sys.path` breaks Pattern A/B/C. Prefer installing packages over path hacks long-term; short-term keep `parents[N]` consistent with new depth.
 

@@ -40,14 +40,17 @@ from research.cf_mass_eval_job import (
     build_cf_mass_eval_job_spec,
     invoke_cf_mass_eval_worker,
     normalize_period_row,
-    stage_real_panels_to_r2,
+    resolve_or_stage_panels,
 )
 from research.daily_path_eval import git_sha
 from research.eval_registry import PROTOCOL_DAILY_PATH
 from research.mass_strategy_factory import MASS_FACTORY_VERSION, MASS_RESEARCH
+from research.unique_logic.constants import CF_EVENT_DAILY_PATH_IDS as _CF_EVENT_SET
+
+CF_EVENT_DAILY_PATH_IDS: tuple[str, ...] = tuple(sorted(_CF_EVENT_SET))
 
 ROOT = repo_root()
-FANOUT_VERSION = "cf-daily-path-fanout/v1"
+FANOUT_VERSION = "cf-daily-path-fanout/v2"
 DEFAULT_FANOUT_WORKERS = 16
 
 
@@ -127,11 +130,25 @@ def run_cf_daily_path_fanout(
         for p in (periods or DEFAULT_REAL_MULTIYEAR_PERIODS)
     ]
     stage_meta: dict[str, Any] | None = None
-    panels_prefix = panels_prefix or f"research/mass_eval/job={jid}/panels"
-    if not skip_stage and mode == "r2_panels":
-        stage_meta = stage_real_panels_to_r2(
-            jid,
-            period_rows,
+    if panels_prefix:
+        stage_meta = {
+            "reused": True,
+            "stage_sec": 0.0,
+            "panels_prefix": panels_prefix,
+            "note": "explicit panels_prefix",
+        }
+    elif skip_stage:
+        panels_prefix = f"research/mass_eval/job={jid}/panels"
+        stage_meta = {
+            "reused": True,
+            "stage_sec": 0.0,
+            "panels_prefix": panels_prefix,
+            "note": "skip_stage job-scoped prefix",
+        }
+    elif mode == "r2_panels":
+        stage_meta = resolve_or_stage_panels(
+            job_id=jid,
+            periods=period_rows,
             max_codes=max_codes,
             max_days=max_days,
             staging_dir=staging_dir,
@@ -141,6 +158,8 @@ def run_cf_daily_path_fanout(
                 "r2_panels staging produced 0 ok panels for daily_path fan-out"
             )
         panels_prefix = str(stage_meta.get("panels_prefix") or panels_prefix)
+    else:
+        panels_prefix = panels_prefix or f"research/mass_eval/job={jid}/panels"
 
     t_fan0 = time.perf_counter()
     per_logic: list[dict[str, Any]] = []
@@ -236,10 +255,12 @@ def run_cf_daily_path_fanout(
         "stage_panels": stage_meta,
         "panels_prefix": panels_prefix,
         "stage_sec": (
-            None
-            if stage_meta is None
-            else stage_meta.get("wall_time_sec")
+            0.0
+            if not stage_meta
+            else float(stage_meta.get("stage_sec") or stage_meta.get("wall_time_sec") or 0.0)
         ),
+        "stage_reused": bool((stage_meta or {}).get("reused")),
+        "stage_cache_id": (stage_meta or {}).get("cache_id"),
         "fanout_sec": round(fan_sec, 3),
         "longest_isolate_sec": round(longest, 3) if longest is not None else None,
         "wall_sec": round(time.perf_counter() - t0, 3),
