@@ -24,8 +24,8 @@ params:
 evaluator: research.unique_logic.funding.evaluate_overnight_level_cs_tilt_daily_mtm
 ```
 
-YAML files here are the declaration path. W104–W107 evaluator *functions* still
-load through `research.unique_logic.legacy` until extracted. Run:
+YAML files here are the declaration path. Evaluators live in
+`packages/product/research/unique_logic/`. Run:
 
 ```bash
 uv run python -m research.unique_logic --logic-id overnight_level_cs_tilt --logic-id xs_low_vol_mom

@@ -2,22 +2,13 @@
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
 from research.mass_strategy_factory import (
     FROZEN_DEFAULT_PATH,
     RESEARCH_FAMILY_APPEND_LOGIC_IDS,
     RESEARCH_UNIQUE_LOGIC_IDS,
     propose_profit_hypotheses,
 )
-
-_SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
-if str(_SCRIPTS) not in sys.path:
-    sys.path.insert(0, str(_SCRIPTS))
-
-import run_w104_new_hyps_daily_dd as w104  # noqa: E402
-import run_w106_funding_surprise_ls as w106  # noqa: E402
+from research.unique_logic import w104, w106
 
 
 def _bars(n: int = 40, start: str = "2019-01-") -> dict[str, list[tuple[str, float]]]:

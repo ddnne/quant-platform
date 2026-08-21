@@ -91,17 +91,10 @@ def test_freezes_closed():
     assert OPERATIONAL_GO is False
     assert CONTINUOUS_PAPER == "UNARMED"
     assert (
-        "W105" in MASS_FACTORY_WAVE
+        "W107" in MASS_FACTORY_WAVE
         or "W106" in MASS_FACTORY_WAVE
+        or "W105" in MASS_FACTORY_WAVE
         or "W104" in MASS_FACTORY_WAVE
-        or "W95" in MASS_FACTORY_WAVE
-        or "W94" in MASS_FACTORY_WAVE
-        or "W93" in MASS_FACTORY_WAVE
-        or "W92" in MASS_FACTORY_WAVE
-        or "W91" in MASS_FACTORY_WAVE
-        or "W90" in MASS_FACTORY_WAVE
-        or "W89" in MASS_FACTORY_WAVE
-        or "W88" in MASS_FACTORY_WAVE
     )
     assert MASS_FACTORY_VERSION.startswith("mass-strategy-factory/")
     assert doc["frozen_defaults_retuned"] is False
@@ -216,7 +209,8 @@ def test_logic_templates_distinct_economic_logic():
     assert "event_funding_stress_skip" in doc.get(
         "w105_research_unique_logic_ids", []
     )
-    assert "event_funding_easy_short" in doc.get(
+    assert "event_funding_easy_short" in RESEARCH_UNIQUE_LOGIC_IDS
+    assert "overnight_level_cs_tilt" in doc.get(
         "w106_research_family_append_logic_ids", []
     )
     # diversity rules documented

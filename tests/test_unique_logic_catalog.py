@@ -18,7 +18,7 @@ datasets:
 params:
   hold_days: 10
   momentum_n: 5
-evaluator: run_w107_new_hyps_daily_dd.evaluate_overnight_level_cs_tilt_daily_mtm
+evaluator: research.unique_logic.w107b.evaluate_overnight_level_cs_tilt_daily_mtm
 """
     )
     assert spec["logic_id"] == "overnight_level_cs_tilt"

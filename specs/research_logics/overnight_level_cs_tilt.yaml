@@ -23,5 +23,5 @@ params:
   long_frac: 0.3
   short_frac: 0.3
   min_hist: 20
-evaluator: run_w107_new_hyps_daily_dd.evaluate_overnight_level_cs_tilt_daily_mtm
-notes: catalog declaration; evaluator still in deprecated wave script until unique_logic extract
+evaluator: research.unique_logic.w107b.evaluate_overnight_level_cs_tilt_daily_mtm
+notes: catalog declaration; evaluator in packages/product/research/unique_logic

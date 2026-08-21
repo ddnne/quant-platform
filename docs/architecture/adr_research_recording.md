@@ -41,7 +41,7 @@ Markdown that restates numbers already in R2/D1 is not a record.
 - Create `scripts/run_wNN_*.py`
 - Create `docs/proof/w08*_wNN_*.md` except a genuine policy ADR
 - Append ALL-TRACK experiment logs to `phase62_residual_status.md`
-- Import `scripts/run_w*` from `mass_strategy_factory`
+- Import `scripts/run_w*` from `mass_strategy_factory` (evaluators are in `research.unique_logic`)
 
 ## Two eval planes
 

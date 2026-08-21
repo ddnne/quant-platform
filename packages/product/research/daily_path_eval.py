@@ -240,6 +240,192 @@ def stitch_net(nets: Sequence[float], dates: Sequence[str]) -> dict[str, Any]:
     }
 
 
+def held_book_daily_mtm(
+    *,
+    held_by_code_date: Mapping[str, Mapping[str, float | None]],
+    close_by: Mapping[str, Mapping[str, float]],
+    dates: Sequence[str],
+    hold_days: int,
+    one_way_cost: float,
+    logic_id: str,
+    extra: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Equal-weight daily MTM of a pre-built held book."""
+    from features.class_signals import amortized_one_way_cost
+
+    h = int(hold_days)
+    am_cost = float(amortized_one_way_cost(float(one_way_cost), h))
+    daily_cost = float(am_cost) / float(h) if h > 0 else float(am_cost)
+
+    if len(dates) < 2:
+        return {
+            "status": "insufficient_dates",
+            "logic_id": logic_id,
+            "n_days": len(dates),
+            "dates": [],
+            "equities": [],
+            "gross_daily": [],
+            "net_daily": [],
+        }
+
+    daily_rows: list[dict[str, Any]] = []
+    gross_daily: list[float] = []
+    net_daily: list[float] = []
+    eq_dates: list[str] = []
+    equities: list[float] = []
+    equity = 1.0
+    eq_dates.append(dates[0])
+    equities.append(equity)
+    gross_daily.append(0.0)
+    net_daily.append(0.0)
+    daily_rows.append(
+        {
+            "date": dates[0],
+            "gross": 0.0,
+            "net": 0.0,
+            "n_active": 0,
+            "cost_drag": 0.0,
+            "equity": equity,
+            "note": "start_mark",
+        }
+    )
+
+    for i in range(1, len(dates)):
+        d_prev = dates[i - 1]
+        d = dates[i]
+        contribs: list[float] = []
+        for code, cmap in held_by_code_date.items():
+            pos = cmap.get(d_prev)
+            if pos is None or pos == 0.0:
+                continue
+            c0 = close_by.get(code, {}).get(d_prev)
+            c1 = close_by.get(code, {}).get(d)
+            if c0 is None or c1 is None or c0 == 0:
+                continue
+            r1 = (float(c1) / float(c0)) - 1.0
+            contribs.append(float(pos) * r1)
+        n_active = len(contribs)
+        if n_active == 0:
+            g = 0.0
+            cost_drag = 0.0
+            net = 0.0
+        else:
+            g = float(sum(contribs) / n_active)
+            cost_drag = daily_cost
+            net = g - cost_drag
+        equity = equity * (1.0 + net)
+        gross_daily.append(g)
+        net_daily.append(net)
+        eq_dates.append(d)
+        equities.append(equity)
+        daily_rows.append(
+            {
+                "date": d,
+                "gross": g,
+                "net": net,
+                "n_active": n_active,
+                "cost_drag": cost_drag,
+                "equity": equity,
+            }
+        )
+
+    dd = equity_path_drawdown(equities, eq_dates)
+    g_eq = 1.0
+    for g in gross_daily[1:]:
+        g_eq *= 1.0 + g
+    active_days = sum(1 for r in daily_rows[1:] if int(r.get("n_active") or 0) > 0)
+    mean_net = (
+        sum(net_daily[1:]) / max(1, len(net_daily) - 1) if len(net_daily) > 1 else None
+    )
+    mean_gross = (
+        sum(gross_daily[1:]) / max(1, len(gross_daily) - 1)
+        if len(gross_daily) > 1
+        else None
+    )
+    gate = evaluate_daily_path_dd_gate(
+        daily_path_dd=dd.get("max_dd"),
+        dd_duration=dd.get("dd_duration_days"),
+        recovered=dd.get("recovered"),
+        recovery_days=dd.get("recovery_days"),
+        total_ret_net=dd.get("total_return"),
+        method="daily_equity_level_peak_to_trough",
+    )
+    out = {
+        "status": "ok",
+        "logic_id": logic_id,
+        "hold_days": h,
+        "one_way_cost": float(one_way_cost),
+        "amortized_one_way_cost": am_cost,
+        "daily_cost_drag": daily_cost,
+        "n_codes": len(held_by_code_date),
+        "n_calendar_days": len(dates),
+        "n_equity_points": len(equities),
+        "n_active_days": active_days,
+        "mean_gross_daily": mean_gross,
+        "mean_net_daily": mean_net,
+        "total_return_gross": g_eq - 1.0,
+        "total_return_net": dd.get("total_return"),
+        "drawdown": dd,
+        "daily_path_dd_gate": {
+            "complete": gate.get("complete"),
+            "measured": gate.get("measured"),
+            "fails": gate.get("fails"),
+            "warnings": gate.get("warnings"),
+            "period_net_dd_only_pass_forbidden": True,
+        },
+        "dates": eq_dates,
+        "equities": equities,
+        "gross_daily": gross_daily,
+        "net_daily": net_daily,
+        "cost_convention": (
+            "python_local: daily_cost = (one_way/hold_days)/hold_days while active; "
+            "over H active days ≈ amortized once (matches period-net am_cost)."
+        ),
+        "data_path": "local_real_mirrors",
+        "promote_as_main": False,
+        "go": False,
+        "research_only": True,
+        "note": (
+            "Daily MTM after amortized cost drag. Research-only. "
+            "Not READY / not Mass / not GO."
+        ),
+    }
+    if extra:
+        out.update(dict(extra))
+    return out
+
+
+def panel_index(
+    bars_by_code: Mapping[str, Sequence[tuple[str, float]]],
+    *,
+    momentum_n: int,
+) -> dict[str, Any]:
+    from research.class_hyp_eval import momentum_series
+
+    n = int(momentum_n)
+    by_date: dict[str, dict[str, float | None]] = {}
+    dates_by_code: dict[str, list[str]] = {}
+    close_by: dict[str, dict[str, float]] = {}
+    for code, pairs in bars_by_code.items():
+        pairs_l = list(pairs)
+        if len(pairs_l) < n + 2:
+            continue
+        moms = momentum_series(pairs_l, n=n)
+        for d, m in moms:
+            by_date.setdefault(d, {})[code] = m
+        dates_by_code[code] = [d for d, _ in pairs_l]
+        for d, c in pairs_l:
+            close_by.setdefault(code, {})[d] = float(c)
+    dates = sorted(by_date.keys())
+    return {
+        "by_date": by_date,
+        "dates_by_code": dates_by_code,
+        "close_by": close_by,
+        "dates": dates,
+        "momentum_n": n,
+    }
+
+
 # Wave-script aliases (do not add new run_w* files; import these names).
 _dump = dump_json
 _scalar_f = scalar_f
@@ -248,3 +434,5 @@ _assert_frozen_pins_untouched = assert_frozen_pins_untouched
 _load_shard_bars = load_shard_bars
 _summarize_path = summarize_path
 _stitch_net = stitch_net
+_held_book_daily_mtm = held_book_daily_mtm
+_panel_index = panel_index

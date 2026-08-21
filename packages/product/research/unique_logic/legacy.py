@@ -1,46 +1,22 @@
-"""Transitional imports of wave-script unique_logic evaluators.
+"""Compatibility aliases for unique_logic evaluators.
 
-Factory and catalog runners should import from here, not ``scripts/run_w*``.
-New evaluators belong in this package, not a new run_w file.
+Factory and tests import through this module. Implementations live in
+``research.unique_logic.w104`` … ``w107c``, not ``scripts/run_w*``.
 """
 from __future__ import annotations
 
-import sys
-from pathlib import Path
+import importlib
 from typing import Any
-
-def _repo_root() -> Path:
-    here = Path(__file__).resolve()
-    for parent in here.parents:
-        if (parent / "pyproject.toml").is_file() and (parent / "scripts").is_dir():
-            return parent
-    raise RuntimeError("quant-platform repo root not found")
-
-
-def _ensure_scripts_path() -> Path:
-    scripts = _repo_root() / "scripts"
-    if str(scripts) not in sys.path:
-        sys.path.insert(0, str(scripts))
-    return scripts
 
 
 def wave_eval_modules() -> dict[str, Any]:
-    """Load existing wave modules once (deprecated location)."""
-    _ensure_scripts_path()
-    import run_w104_new_hyps_daily_dd as w104  # noqa: WPS433
-    import run_w105_new_hyps_daily_dd as w105  # noqa: WPS433
-    import run_w106_funding_surprise_ls as w106  # noqa: WPS433
-    import run_w106_new_hyps_daily_dd as w106b  # noqa: WPS433
-    import run_w107_funding_surprise_adaptive as w107c  # noqa: WPS433
-    import run_w107_new_hyps_daily_dd as w107b  # noqa: WPS433
-
     return {
-        "w104": w104,
-        "w105": w105,
-        "w106": w106,
-        "w106b": w106b,
-        "w107b": w107b,
-        "w107c": w107c,
+        "w104": importlib.import_module("research.unique_logic.w104"),
+        "w105": importlib.import_module("research.unique_logic.w105"),
+        "w106": importlib.import_module("research.unique_logic.w106"),
+        "w106b": importlib.import_module("research.unique_logic.w106b"),
+        "w107b": importlib.import_module("research.unique_logic.w107b"),
+        "w107c": importlib.import_module("research.unique_logic.w107c"),
     }
 
 

@@ -26,7 +26,7 @@ from research.daily_path_eval import (
 from research.eval_windows import HONEST_3Y_WINDOWS
 from research.stats_metrics import evaluate_daily_path_dd_gate
 from research.unique_logic.catalog import catalog_spec
-from research.unique_logic.legacy import wave_eval_modules
+from research.unique_logic import w107b
 
 
 def _log(msg: str) -> None:
@@ -50,10 +50,8 @@ def _eval_shard(
     curve: Mapping[str, Any],
     one_way_cost: float,
 ) -> dict[str, Any]:
-    mods = wave_eval_modules()
     lid = str(spec.get("logic_id") or "")
     bars = loaded.get("bars") or {}
-    w107b = mods["w107b"]
     if lid == "overnight_level_cs_tilt":
         return w107b.evaluate_overnight_level_cs_tilt_daily_mtm(
             bars, overnight, spec=spec, one_way_cost=one_way_cost

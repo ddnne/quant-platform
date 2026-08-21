@@ -1,76 +1,37 @@
-#!/usr/bin/env python3
-"""W106 / w0820c Track B — NEW unique_logic hyps with daily_path_DD required.
+"""Unique-logic evaluators (moved from scripts/run_w*).
 
-Headline is **new unique_logic** that is **MIXED** (funding / macro /
-cross-section), not an event-filter-only pack. W105 was event-hold variants;
-this wave does **not** repeat that.
-
-Weak-template mapping OFF. Catalog remaps of sticky / event_post_disclosure_hold
-/ vol_risk_adjusted_mom are **not** headlined. Do **not** build sticky-approx
-always-on CS-mom gates (W104 disclosure_cluster_mom_gate was ~90% on).
-
-Modest N=4 (not a count race). Failure constraints ON. 3-default pins
-untouched. Survivors research-only: promote_as_main=false · go=false.
-
-If extra datasets cannot be loaded, the row stays **incomplete** — never
-approximated into complete.
-
-Examples
---------
-    uv run python scripts/run_w106_new_hyps_daily_dd.py \\
-        --out-dir .glm-logs/w0820c_w106_otc10_ls_hyps/
+Candidate-grade daily MTM. Does not promote / GO / retune pins.
 """
 from __future__ import annotations
 
-import argparse
-import json
 import math
-import subprocess
-import sys
-import time
-from datetime import date, datetime, timezone
+from datetime import date
+from statistics import median
 from typing import Any, Mapping, Sequence
 
-from pathlib import Path
+from research.daily_path_eval import (
+    assert_frozen_pins_untouched,
+    held_book_daily_mtm,
+    panel_index,
+)
+from research.eval_windows import HONEST_3Y_WINDOWS
+from research.unique_logic.constants import (
+    ALWAYS_ON_OCCUPANCY_WARN,
+    KNOWN_DEMOTED_OR_WEAK,
+    KNOWN_WEAK_THESIS,
+    LOGIC_CATALOG_HEADLINE_BAN,
+    W104_UNIQUE_LOGIC_IDS,
+    W105_UNIQUE_LOGIC_IDS,
+    W106_UNIQUE_LOGIC_IDS,
+)
 
-_here = Path(__file__).resolve().parent
-for _d in (_here, _here.parent):
-    if (_d / "_bootstrap.py").is_file():
-        if str(_d) not in sys.path:
-            sys.path.insert(0, str(_d))
-        break
-else:
-    raise RuntimeError("scripts/_bootstrap.py not found")
-from _bootstrap import ensure_repo_root
+W99_WINDOWS = HONEST_3Y_WINDOWS
+_assert_frozen_pins_untouched = assert_frozen_pins_untouched
 
-ROOT = ensure_repo_root()
-OUT_DEFAULT = ROOT / ".glm-logs" / "w0820c_w106_otc10_ls_hyps"
-PROOF_DEFAULT = ROOT / "docs" / "proof" / "w0820c_w106_hyps_new_logic_20260820.md"
-SQLITE_DEFAULT = ROOT / "data" / "structured" / "ingestion.sqlite"
+from research.unique_logic import w104  # noqa: E402
 
-if str(_here) not in sys.path:
-    sys.path.insert(0, str(_here))
-import run_w99_sticky_daily_dd as w99  # noqa: E402
-import run_w100_peer_daily_dd as w100  # noqa: E402
-import run_w102_event_rate_daily_dd as w102  # noqa: E402
-import run_w104_new_hyps_daily_dd as w104  # noqa: E402
-import run_w105_new_hyps_daily_dd as w105  # noqa: E402
-
-from research.stats_metrics import evaluate_daily_path_dd_gate  # noqa: E402
-
-WAVE = "W106 / w0820c"
-W106_WINDOWS = w99.W99_WINDOWS
-FROZEN_PIN_SNAPSHOT = w99.FROZEN_PIN_SNAPSHOT
 PACK_BIAS = "mixed"
 
-# ---------------------------------------------------------------------------
-# 4 NEW unique_logic proposals (NOT event-filter-only; not catalog remaps;
-# not hold/mom grids; not sticky-approx always-on CS-mom gates)
-# ---------------------------------------------------------------------------
-# P1 FUNDING — overnight repo |Δ| impulse tilts CS mom (not event skip)
-# P2 MACRO  — 3M−ON curve steepening impulse gates CS mom (not rate_curve level)
-# P3 XS     — CS rank of name-level margin Δ (not price mom, not event skip)
-# P4 MACRO×XS — idiosyncratic mom vs TOPIX on large index-move days
 
 NEW_UNIQUE_LOGIC: tuple[dict[str, Any], ...] = (
     {
@@ -261,61 +222,6 @@ NEW_UNIQUE_LOGIC: tuple[dict[str, Any], ...] = (
     },
 )
 
-KNOWN_WEAK_THESIS = w100.KNOWN_WEAK_THESIS
-KNOWN_DEMOTED_OR_WEAK = w100.KNOWN_DEMOTED_OR_WEAK
-LOGIC_CATALOG_HEADLINE_BAN = frozenset(
-    {
-        "xs_rank_ls_sticky",
-        "event_post_disclosure_hold",
-        "vol_risk_adjusted_mom",
-    }
-)
-W104_UNIQUE_LOGIC_IDS = frozenset(
-    {
-        "event_funding_stress_skip",
-        "curve_steep_event_confirm",
-        "disclosure_cluster_mom_gate",
-        "surprise_xs_rank_hold",
-    }
-)
-W105_UNIQUE_LOGIC_IDS = frozenset(
-    {
-        "large_surprise_event_hold",
-        "afterclose_only_event_hold",
-        "event_pre_mom_agree_hold",
-        "event_margin_crowding_skip",
-    }
-)
-ALWAYS_ON_OCCUPANCY_WARN = 0.85
-
-
-def _dump(path: Path, obj: object) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(obj, indent=2, ensure_ascii=False, default=str) + "\n",
-        encoding="utf-8",
-    )
-
-
-def _fmt(v: Any, nd: int = 6) -> str:
-    return w100._fmt(v, nd)
-
-
-def _git_sha() -> str | None:
-    try:
-        out = subprocess.check_output(
-            ["git", "rev-parse", "HEAD"], cwd=str(ROOT), text=True
-        )
-        return out.strip() or None
-    except (OSError, subprocess.CalledProcessError):
-        return None
-
-
-def _assert_frozen_pins_untouched() -> dict[str, Any]:
-    pack = w99._assert_frozen_pins_untouched()
-    pack["note"] = "W106 new unique_logic hyps must not mutate 3-default pins"
-    return pack
-
 
 def _ymd(s: str) -> date:
     return date.fromisoformat(str(s)[:10])
@@ -452,7 +358,7 @@ def _finish_cs_book(
         daily_rank=daily_rank,
         hold_days=hold_days,
     )
-    pack = w100._held_book_daily_mtm(
+    pack = held_book_daily_mtm(
         held_by_code_date=held,
         close_by=panel["close_by"],
         dates=list(panel["dates"]),
@@ -527,7 +433,7 @@ def evaluate_funding_impulse_cs_tilt_daily_mtm(
             ),
         )
 
-    panel = w100._panel_index(bars_by_code, momentum_n=n)
+    panel = panel_index(bars_by_code, momentum_n=n)
     dates = panel["dates"]
     dates_by_code = panel["dates_by_code"]
     by_date = panel["by_date"]
@@ -655,7 +561,7 @@ def evaluate_curve_steepen_impulse_cs_daily_mtm(
             ),
         )
 
-    panel = w100._panel_index(bars_by_code, momentum_n=n)
+    panel = panel_index(bars_by_code, momentum_n=n)
     dates = panel["dates"]
     dates_by_code = panel["dates_by_code"]
     by_date = panel["by_date"]
@@ -805,7 +711,7 @@ def evaluate_xs_margin_delta_rank_daily_mtm(
         )
 
     # Panel uses mom only to share the bar calendar / close map.
-    panel = w100._panel_index(bars_by_code, momentum_n=max(1, int(n)))
+    panel = panel_index(bars_by_code, momentum_n=max(1, int(n)))
     dates = panel["dates"]
     dates_by_code = panel["dates_by_code"]
     if len(dates) < 2:
@@ -941,7 +847,7 @@ def evaluate_idio_mom_macro_impulse_daily_mtm(
             ),
         )
 
-    panel = w100._panel_index(bars_by_code, momentum_n=n)
+    panel = panel_index(bars_by_code, momentum_n=n)
     dates = panel["dates"]
     dates_by_code = panel["dates_by_code"]
     by_date = panel["by_date"]
@@ -1029,241 +935,6 @@ def evaluate_idio_mom_macro_impulse_daily_mtm(
     )
 
 
-def _incomplete_row(
-    *,
-    logic_id: str,
-    window_id: str,
-    reason: str,
-    extra: Mapping[str, Any] | None = None,
-) -> dict[str, Any]:
-    gate = evaluate_daily_path_dd_gate(period_net_dd=0.0)
-    row = {
-        "logic_id": logic_id,
-        "window": window_id,
-        "n_days": None,
-        "daily_path_DD": None,
-        "dd_duration": None,
-        "recovery_days": None,
-        "recovered": None,
-        "total_ret_net": None,
-        "daily_path_complete": False,
-        "daily_path_measured": False,
-        "incomplete_reason": reason,
-        "promote_as_main": False,
-        "go": False,
-        "stance": "RESEARCH_ONLY",
-        "new_unique_logic": True,
-        "catalog": False,
-        "pack_bias": PACK_BIAS,
-        "gate": {
-            "complete": gate.get("complete"),
-            "fails": gate.get("fails"),
-            "warnings": gate.get("warnings"),
-            "period_net_dd_only_pass_forbidden": True,
-        },
-    }
-    if extra:
-        row.update(dict(extra))
-    return row
-
-
-def _eval_one_shard(
-    *,
-    spec: Mapping[str, Any],
-    loaded: Mapping[str, Any],
-    overnight_by_date: Mapping[str, float],
-    curve_series: Mapping[str, Any] | None,
-    margin_by_code: Mapping[str, Mapping[str, float]] | None,
-    topix_by_date: Mapping[str, float] | None,
-    one_way_cost: float,
-) -> dict[str, Any]:
-    lid = str(spec["logic_id"])
-    bars = loaded["bars"]
-    if lid == "funding_impulse_cs_tilt":
-        return evaluate_funding_impulse_cs_tilt_daily_mtm(
-            bars,
-            overnight_by_date,
-            spec=spec,
-            one_way_cost=one_way_cost,
-        )
-    if lid == "curve_steepen_impulse_cs":
-        return evaluate_curve_steepen_impulse_cs_daily_mtm(
-            bars,
-            curve_series,
-            spec=spec,
-            one_way_cost=one_way_cost,
-        )
-    if lid == "xs_margin_delta_rank":
-        return evaluate_xs_margin_delta_rank_daily_mtm(
-            bars,
-            margin_by_code,
-            spec=spec,
-            one_way_cost=one_way_cost,
-        )
-    if lid == "idio_mom_macro_impulse":
-        return evaluate_idio_mom_macro_impulse_daily_mtm(
-            bars,
-            topix_by_date,
-            spec=spec,
-            one_way_cost=one_way_cost,
-        )
-    return {
-        "status": "unknown_logic",
-        "logic_id": lid,
-        "daily_path_complete": False,
-        "incomplete_reason": f"no min-impl evaluator for {lid}",
-    }
-
-
-def run_unique_logic_daily_dd(
-    *,
-    out_dir: Path,
-    spec: Mapping[str, Any],
-    codes: Sequence[str],
-    overnight_by_date: Mapping[str, float],
-    curve_series: Mapping[str, Any] | None,
-    margin_by_code: Mapping[str, Mapping[str, float]] | None,
-    topix_by_date: Mapping[str, float] | None,
-    max_days: int,
-    one_way_cost: float,
-    log,
-) -> dict[str, Any]:
-    lid = str(spec["logic_id"])
-    rows: list[dict[str, Any]] = []
-    for w in W106_WINDOWS:
-        wid = str(w["window_id"])
-        log(f"[w106/{lid}] window {wid}")
-        stitch_dates: list[str] = []
-        stitch_net: list[float] = []
-        stitch_gross: list[float] = []
-        shard_summaries: list[dict[str, Any]] = []
-        n_gate_on_win = 0
-        n_ranked_win = 0
-        n_bar_win = 0
-        for shard in w["shards"]:
-            loaded = w99._load_shard_bars(shard, codes=codes, max_days=max_days)
-            pid = str(loaded.get("period_id"))
-            if loaded.get("status") != "ok":
-                shard_summaries.append(
-                    {"period_id": pid, "status": loaded.get("status")}
-                )
-                log(f"[w106/{lid}]   {pid}: {loaded.get('status')}")
-                continue
-            pack = _eval_one_shard(
-                spec=spec,
-                loaded=loaded,
-                overnight_by_date=overnight_by_date,
-                curve_series=curve_series,
-                margin_by_code=margin_by_code,
-                topix_by_date=topix_by_date,
-                one_way_cost=float(one_way_cost),
-            )
-            summary = w100._summarize_path(pack)
-            summary["period_id"] = pid
-            summary["window_id"] = wid
-            summary["n_gate_on_days"] = pack.get("n_gate_on_days")
-            summary["n_gated_off_days"] = pack.get("n_gated_off_days")
-            summary["n_ranked_days"] = pack.get("n_ranked_days")
-            summary["occupancy_frac"] = pack.get("occupancy_frac")
-            shard_summaries.append(summary)
-            n_gate_on_win += int(pack.get("n_gate_on_days") or 0)
-            n_ranked_win += int(pack.get("n_ranked_days") or 0)
-            n_bar_win += int(pack.get("n_bar_dates") or 0)
-            dlist = list(pack.get("dates") or [])
-            nlist = list(pack.get("net_daily") or [])
-            glist = list(pack.get("gross_daily") or [])
-            if pack.get("status") == "ok" and dlist:
-                if not stitch_dates:
-                    stitch_dates = list(dlist)
-                    stitch_net = list(nlist)
-                    stitch_gross = list(glist)
-                else:
-                    stitch_dates.extend(dlist[1:])
-                    stitch_net.extend(nlist[1:])
-                    stitch_gross.extend(glist[1:])
-            log(
-                f"[w106/{lid}]   {pid}: status={pack.get('status')} "
-                f"n={summary.get('n_equity_points')} "
-                f"gate_on={pack.get('n_gate_on_days')} "
-                f"ranked={pack.get('n_ranked_days')} "
-                f"occ={_fmt(pack.get('occupancy_frac'))} "
-                f"daily_path_DD={_fmt(summary.get('daily_path_DD'))} "
-                f"total_net={_fmt(summary.get('total_return_net'))}"
-            )
-        occ = (float(n_gate_on_win) / float(n_bar_win)) if n_bar_win else None
-        if not stitch_net:
-            row = _incomplete_row(
-                logic_id=lid,
-                window_id=wid,
-                reason=(
-                    "no ok daily path stitched for this window "
-                    f"(n_gate_on={n_gate_on_win} n_ranked={n_ranked_win})"
-                ),
-                extra={
-                    "data_path": "local_real_mirrors+local_sqlite",
-                    "n_gate_on_days": n_gate_on_win,
-                    "n_ranked_days": n_ranked_win,
-                    "n_bar_dates": n_bar_win,
-                    "occupancy_frac": occ,
-                    "shard_summaries": shard_summaries,
-                    "new_unique_logic": True,
-                    "catalog": False,
-                    "axis": spec.get("axis"),
-                },
-            )
-        else:
-            stitched = w100._stitch_net(stitch_net, stitch_dates)
-            row = w102._window_row_from_stitch(
-                logic_id=lid,
-                window=w,
-                stitched=stitched,
-                stitch_net=stitch_net,
-                stitch_gross=stitch_gross,
-                shard_summaries=shard_summaries,
-                extra={
-                    "data_path": "local_real_mirrors+local_sqlite",
-                    "n_gate_on_days": n_gate_on_win,
-                    "n_ranked_days": n_ranked_win,
-                    "n_bar_dates": n_bar_win,
-                    "occupancy_frac": occ,
-                    "occupancy_always_on_warning": bool(
-                        occ is not None and float(occ) >= ALWAYS_ON_OCCUPANCY_WARN
-                    ),
-                    "new_unique_logic": True,
-                    "catalog": False,
-                    "catalog_map": None,
-                    "why_unique": spec.get("why_unique"),
-                    "headline": spec.get("headline"),
-                    "axis": spec.get("axis"),
-                    "pack_bias": PACK_BIAS,
-                },
-            )
-        rows.append(row)
-        _dump(out_dir / f"{lid}_{wid}.json", row)
-
-    _dump(out_dir / f"{lid}_daily_dd.json", rows)
-    complete = bool(rows) and all(bool(r.get("daily_path_complete")) for r in rows)
-    worst = None
-    for r in rows:
-        dd = r.get("daily_path_DD")
-        if dd is None:
-            continue
-        if worst is None or float(dd) < float(worst):
-            worst = float(dd)
-    return {
-        "table": rows,
-        "logic_id": lid,
-        "complete": complete,
-        "worst_daily_path_DD": worst,
-        "new_unique_logic": True,
-        "catalog": False,
-        "promote_as_main": False,
-        "go": False,
-        "pack_bias": PACK_BIAS,
-        "axis": spec.get("axis"),
-    }
-
-
 def proposals_for_factory() -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for spec in NEW_UNIQUE_LOGIC:
@@ -1285,378 +956,3 @@ def proposals_for_factory() -> list[dict[str, Any]]:
         )
     return out
 
-
-def run_hyp_pack(*, out_dir: Path, seed: int, log) -> dict[str, Any]:
-    """Route 4 NEW unique_logic through propose_profit_hypotheses.
-
-    Weak-template mapping OFF: ad-hoc family_ids do **not** remap onto
-    sticky / event_post_disclosure_hold / vol_risk_adjusted_mom.
-    Factory period-net of unknown families is **not** a pass; daily_path_DD
-    of the min-impl is the required eval.
-    """
-    from research.mass_strategy_factory import (
-        CONTINUOUS_PAPER,
-        FROZEN_DEFAULT_PATH,
-        MASS_RESEARCH,
-        MassFactoryConfig,
-        propose_profit_hypotheses,
-    )
-
-    proposals = proposals_for_factory()
-    cfg = MassFactoryConfig(seed=int(seed), n=max(20, len(proposals) + 5))
-    log(
-        f"[w106/B] propose n={len(proposals)} seed={seed} "
-        "weak_template_mapping=OFF map_unknown_to_nearest_catalog=false "
-        "not_a_count_race=True daily_path_DD_required=True pack_bias=mixed"
-    )
-    eval_out = propose_profit_hypotheses(
-        proposals,
-        evaluate=True,
-        synthetic=True,
-        config=cfg,
-    )
-    compact = {
-        k: eval_out[k]
-        for k in eval_out
-        if k
-        not in {
-            "accepted",
-            "rejected",
-            "eval_results",
-            "eval_screens",
-            "eval_ranking",
-        }
-    }
-    _dump(out_dir / "hyp_propose_compact.json", compact)
-    _dump(out_dir / "hyp_proposals.json", proposals)
-    _dump(out_dir / "hyp_accepted.json", eval_out.get("accepted") or [])
-    _dump(out_dir / "hyp_rejected.json", eval_out.get("rejected") or [])
-    _dump(out_dir / "hyp_eval_screens.json", eval_out.get("eval_screens") or [])
-    _dump(out_dir / "hyp_eval_ranking.json", eval_out.get("eval_ranking") or [])
-
-    mapped = []
-    skipped_weak = []
-    for p in eval_out.get("accepted") or []:
-        lid = str(p.get("logic_id") or "")
-        if p.get("eval_mapped_to_catalog"):
-            mapped.append(lid)
-        if lid in LOGIC_CATALOG_HEADLINE_BAN:
-            mapped.append(lid)
-        if lid in KNOWN_DEMOTED_OR_WEAK or lid in KNOWN_WEAK_THESIS:
-            skipped_weak.append(lid)
-
-    n_proposed = int(eval_out.get("n_proposals") or len(proposals))
-    n_accepted = int(eval_out.get("n_accepted") or 0)
-    n_rejected = int(eval_out.get("n_rejected") or 0)
-    n_evaluated = int((eval_out.get("eval") or {}).get("n_strategies_evaluated") or 0)
-    n_survivors_period_net = sum(
-        1
-        for s in (eval_out.get("eval_screens") or [])
-        if isinstance(s, Mapping) and s.get("survived")
-    )
-    summary = {
-        "wave": WAVE,
-        "track": "B_new_unique_logic_hyps",
-        "pack_bias": PACK_BIAS,
-        "event_filter_only": False,
-        "n_requested": 4,
-        "n_proposed": n_proposed,
-        "n_accepted": n_accepted,
-        "n_rejected_generation": n_rejected,
-        "n_evaluated_factory_synthetic": n_evaluated,
-        "n_survivors_period_net": n_survivors_period_net,
-        "period_net_is_not_a_pass": True,
-        "period_net_dd_only_pass_forbidden": True,
-        "factory_note": (
-            "Ad-hoc unique family_ids are unknown to catalog dispatch. "
-            "Factory synthetic period-net is NOT the unique_logic eval and "
-            "cannot pass. daily_path_DD of min-impl is required."
-        ),
-        "n_skipped_weak_catalog_map": 0,
-        "skipped_weak_catalog_targets": skipped_weak,
-        "weak_mapped_despite_off": mapped,
-        "weak_template_mapping": "OFF",
-        "map_unknown_to_nearest_catalog": False,
-        "not_a_count_race": True,
-        "failure_mode_constraints": [
-            "no_sign_flip_single_regime_reliance",
-            "no_soft_eq_pressure",
-            "no_low_var_t_trust",
-            "no_window_only",
-            "no_dual_options_level",
-            "no_repolish_shape_rate_flow_demoted_fund_slow",
-            "no_hold_mom_frac_grid",
-            "weak_template_mapping_off",
-            "daily_path_DD_required",
-            "no_event_filter_only_pack",
-            "no_sticky_approx_always_on_gate",
-        ],
-        "routed_through": "propose_profit_hypotheses",
-        "gates": ["cost", "PIT", "low_var", "daily_path_DD"],
-        "daily_path_DD_required": True,
-        "representative_theses": [
-            {
-                "logic_id": s["logic_id"],
-                "family_id": s["family_id"],
-                "axis": s.get("axis"),
-                "new_unique_logic": True,
-                "catalog": False,
-                "catalog_map": None,
-                "headline": s.get("headline"),
-                "why_unique": s.get("why_unique"),
-                "thesis": s["thesis"],
-            }
-            for s in NEW_UNIQUE_LOGIC
-        ],
-        "frozen_defaults_retuned": False,
-        "frozen_defaults": [r["representative_id"] for r in FROZEN_DEFAULT_PATH],
-        "mass_research": MASS_RESEARCH,
-        "continuous_paper": CONTINUOUS_PAPER,
-        "promote_as_main": False,
-        "go": False,
-        "seed": int(seed),
-        "do_not_headline_catalog_remap": list(LOGIC_CATALOG_HEADLINE_BAN),
-        "do_not_repeat_w104_ids": list(W104_UNIQUE_LOGIC_IDS),
-        "do_not_repeat_w105_ids": list(W105_UNIQUE_LOGIC_IDS),
-    }
-    _dump(out_dir / "hyp_summary.json", summary)
-    log(
-        f"[w106/B] pack proposed={n_proposed} accepted={n_accepted} "
-        f"factory_eval={n_evaluated} period_net_survivors={n_survivors_period_net} "
-        f"weak_map_off mapped={mapped or '[]'} pack_bias={PACK_BIAS}"
-    )
-    return {"summary": summary, "eval_out": eval_out}
-
-
-def inspect_unique_logic_datasets(
-    *,
-    codes: Sequence[str],
-    sqlite_path: Path,
-    log,
-) -> dict[str, Any]:
-    extra = w105.inspect_unique_logic_datasets(
-        codes=codes, sqlite_path=sqlite_path, log=log
-    )
-    from research.class_hyp_eval import load_topix_close_series_from_sqlite
-
-    pairs = load_topix_close_series_from_sqlite(
-        sqlite_path, start="2016-01-01", end="2026-12-31"
-    )
-    topix_by_date: dict[str, float] = {}
-    for d, v in pairs or []:
-        ds = str(d)[:10]
-        try:
-            fv = float(v)
-        except (TypeError, ValueError):
-            continue
-        if ds and math.isfinite(fv):
-            topix_by_date[ds] = fv
-    extra["topix_by_date"] = topix_by_date
-    extra["topix"] = {
-        "required_dataset": "indices_bars_daily_topix",
-        "loader": "load_topix_close_series_from_sqlite",
-        "status": "ok" if topix_by_date else "empty",
-        "n_obs": len(topix_by_date),
-        "date_min": min(topix_by_date) if topix_by_date else None,
-        "date_max": max(topix_by_date) if topix_by_date else None,
-        "no_ffill": True,
-        "no_invent": True,
-    }
-    log(
-        f"[w106] topix n_obs={len(topix_by_date)} "
-        f"{extra['topix']['date_min']}..{extra['topix']['date_max']}"
-    )
-    return extra
-
-
-def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--out-dir", type=str, default=str(OUT_DEFAULT))
-    p.add_argument("--max-codes", type=int, default=15)
-    p.add_argument("--max-days", type=int, default=200)
-    p.add_argument("--one-way-cost", type=float, default=0.001)
-    p.add_argument("--seed", type=int, default=8908206)
-    p.add_argument("--sqlite", type=str, default=str(SQLITE_DEFAULT))
-    p.add_argument("--skip-hyps", action="store_true")
-    p.add_argument("--skip-daily", action="store_true")
-    args = p.parse_args(argv)
-
-    out_dir = Path(args.out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    log_path = out_dir / "w106_new_hyps_daily_dd.log"
-
-    def log(msg: str) -> None:
-        line = f"{datetime.now(timezone.utc).isoformat()} {msg}"
-        print(line, flush=True)
-        with log_path.open("a", encoding="utf-8") as fh:
-            fh.write(line + "\n")
-
-    t0 = time.time()
-    pins = _assert_frozen_pins_untouched()
-    _dump(out_dir / "frozen_pins_assert.json", pins)
-    log(f"[w106] pins_untouched={pins['pins_untouched']}")
-    log(
-        "[w106] promote_as_main=false go=false hold_mom_grid=false "
-        "dispersion_thresh_grid=false weak_template_mapping=OFF "
-        "period_net_dd_only=forbidden complete≠GO "
-        "pack_bias=mixed (funding/macro/xs, NOT event-filter-only) "
-        "no sticky-approx always-on gate "
-        "GLM implementer only. Grok did not implement."
-    )
-
-    from research.class_hyp_eval import DEFAULT_EVAL_CODES
-
-    codes = list(DEFAULT_EVAL_CODES)[: int(args.max_codes)]
-    sqlite_path = Path(args.sqlite)
-    extra = inspect_unique_logic_datasets(
-        codes=codes, sqlite_path=sqlite_path, log=log
-    )
-    extra_dump = {
-        k: v
-        for k, v in extra.items()
-        if k
-        not in {
-            "fins_events",
-            "curve_series",
-            "overnight_by_date",
-            "margin_by_code",
-            "topix_by_date",
-        }
-    }
-    extra_dump["pack_bias"] = PACK_BIAS
-    extra_dump["event_filter_only"] = False
-    _dump(out_dir / "extra_dataset_wiring.json", extra_dump)
-
-    hyp_pack: dict[str, Any] | None = None
-    if not args.skip_hyps:
-        hyp_pack = run_hyp_pack(out_dir=out_dir, seed=int(args.seed), log=log)
-    else:
-        log("[w106/B] propose skipped")
-
-    daily_packs: dict[str, Any] = {}
-    if not args.skip_daily:
-        overnight = extra.get("overnight_by_date") or {}
-        curve = extra.get("curve_series")
-        margin = extra.get("margin_by_code") or {}
-        topix = extra.get("topix_by_date") or {}
-        for spec in NEW_UNIQUE_LOGIC:
-            lid = str(spec["logic_id"])
-            daily_packs[lid] = run_unique_logic_daily_dd(
-                out_dir=out_dir,
-                spec=spec,
-                codes=codes,
-                overnight_by_date=overnight,
-                curve_series=curve,
-                margin_by_code=margin,
-                topix_by_date=topix,
-                max_days=int(args.max_days),
-                one_way_cost=float(args.one_way_cost),
-                log=log,
-            )
-    else:
-        log("[w106/B] daily_path_DD skipped")
-
-    compact: list[dict[str, Any]] = []
-    for spec in NEW_UNIQUE_LOGIC:
-        lid = str(spec["logic_id"])
-        pack = daily_packs.get(lid) or {}
-        for row in pack.get("table") or []:
-            compact.append(
-                {
-                    "logic_id": row.get("logic_id"),
-                    "new_unique_logic": True,
-                    "catalog": False,
-                    "catalog_map": None,
-                    "headline": spec.get("headline"),
-                    "axis": spec.get("axis"),
-                    "pack_bias": PACK_BIAS,
-                    "window": row.get("window"),
-                    "n_days": row.get("n_days"),
-                    "daily_path_DD": row.get("daily_path_DD"),
-                    "dd_duration": row.get("dd_duration"),
-                    "recovery_days": row.get("recovery_days"),
-                    "recovered": row.get("recovered"),
-                    "total_ret_net": row.get("total_ret_net"),
-                    "daily_path_complete": row.get("daily_path_complete"),
-                    "incomplete_reason": row.get("incomplete_reason"),
-                    "n_gate_on_days": row.get("n_gate_on_days"),
-                    "n_ranked_days": row.get("n_ranked_days"),
-                    "n_bar_dates": row.get("n_bar_dates"),
-                    "occupancy_frac": row.get("occupancy_frac"),
-                    "occupancy_always_on_warning": row.get(
-                        "occupancy_always_on_warning"
-                    ),
-                    "promote_as_main": False,
-                    "go": False,
-                    "stance": "RESEARCH_ONLY",
-                    "data_path": row.get("data_path"),
-                }
-            )
-    _dump(out_dir / "new_unique_logic_daily_dd_table.json", compact)
-
-    n_impl = sum(1 for s in NEW_UNIQUE_LOGIC if daily_packs.get(s["logic_id"]))
-    n_complete = sum(1 for p in daily_packs.values() if p.get("complete"))
-    pins_after = _assert_frozen_pins_untouched()
-    pins_after["note"] = "W106 after unique_logic hyps; 3-default pins must match"
-    _dump(out_dir / "frozen_pins_assert_after.json", pins_after)
-
-    summary = {
-        "wave": WAVE,
-        "track": "B_new_unique_logic_hyps",
-        "pack_bias": PACK_BIAS,
-        "event_filter_only": False,
-        "n_event_filter_logics": 0,
-        "n_funding": 1,
-        "n_macro": 1,
-        "n_cross_section": 1,
-        "n_macro_xs": 1,
-        "n_requested": 4,
-        "n_proposed": 4,
-        "n_accepted": (hyp_pack or {}).get("summary", {}).get("n_accepted"),
-        "n_min_implemented": n_impl,
-        "n_daily_path_complete_logics": n_complete,
-        "new_unique_logic_ids": [s["logic_id"] for s in NEW_UNIQUE_LOGIC],
-        "headline_unique_logic": [
-            s["logic_id"] for s in NEW_UNIQUE_LOGIC if s.get("headline")
-        ],
-        "axes": {s["logic_id"]: s.get("axis") for s in NEW_UNIQUE_LOGIC},
-        "catalog_map_headline": False,
-        "sticky_approx_always_on_gate": False,
-        "do_not_headline": list(LOGIC_CATALOG_HEADLINE_BAN),
-        "do_not_repeat_w104": list(W104_UNIQUE_LOGIC_IDS),
-        "do_not_repeat_w105": list(W105_UNIQUE_LOGIC_IDS),
-        "weak_template_mapping": "OFF",
-        "hold_mom_microgrid": False,
-        "dispersion_thresh_grid": False,
-        "period_net_dd_only_pass_forbidden": True,
-        "daily_path_DD_required": True,
-        "pins_untouched": pins_after.get("pins_untouched"),
-        "promote_as_main": False,
-        "go": False,
-        "mass": "NO-GO",
-        "ready": False,
-        "continuous_paper": "UNARMED",
-        "implementer": "GLM5.3",
-        "orchestrator_implemented": False,
-        "worst_daily_path_DD_by_logic": {
-            lid: p.get("worst_daily_path_DD") for lid, p in daily_packs.items()
-        },
-        "complete_by_logic": {
-            lid: p.get("complete") for lid, p in daily_packs.items()
-        },
-        "hyps": (hyp_pack or {}).get("summary") if hyp_pack else None,
-        "git_sha": _git_sha(),
-        "wall_sec": round(time.time() - t0, 1),
-    }
-    _dump(out_dir / "w106_b_summary.json", summary)
-    log(
-        f"[w106] done wall={summary['wall_sec']}s "
-        f"impl={n_impl} daily_complete_logics={n_complete} "
-        f"pins={pins_after.get('pins_untouched')} pack_bias={PACK_BIAS} "
-        f"worst={summary['worst_daily_path_DD_by_logic']}"
-    )
-    return 0 if pins_after.get("pins_untouched") else 2
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

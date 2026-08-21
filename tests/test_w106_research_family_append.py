@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
 from research.mass_strategy_factory import (
     CONNECTED_TO_MASS,
     CONNECTED_TO_READY,
@@ -29,11 +26,7 @@ from research.mass_strategy_factory import (
     validate_strategy_at_gen,
 )
 
-_SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
-if str(_SCRIPTS) not in sys.path:
-    sys.path.insert(0, str(_SCRIPTS))
-
-import run_w106_funding_surprise_ls as w106  # noqa: E402
+from research.unique_logic import w106
 
 
 def test_family_append_is_recognition_not_pass():

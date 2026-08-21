@@ -11,25 +11,9 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
 PROOF = ROOT / "docs" / "proof"
 
-# Snapshot after staged deletion (2026-08-21). Only shrink this set.
-# Kept because packages/tests still import them (not importer-zero).
-ALLOWED_RUN_W = frozenset(
-    {
-        "run_w100_peer_daily_dd.py",
-        "run_w102_dispersion_quality.py",
-        "run_w102_event_rate_daily_dd.py",
-        "run_w103_dispersion_deepen.py",
-        "run_w104_new_hyps_daily_dd.py",
-        "run_w105_new_hyps_daily_dd.py",
-        "run_w105_research_family_register.py",
-        "run_w106_funding_surprise_ls.py",
-        "run_w106_new_hyps_daily_dd.py",
-        "run_w106_research_family_append.py",
-        "run_w107_funding_surprise_adaptive.py",
-        "run_w107_new_hyps_daily_dd.py",
-        "run_w99_sticky_daily_dd.py",
-    }
-)
+# Snapshot after unique_logic extract (2026-08-21). Empty = no remaining
+# scripts/run_w*.py. New files still fail. Deletions remain allowed.
+ALLOWED_RUN_W = frozenset()
 
 
 def test_no_new_run_w_scripts() -> None:

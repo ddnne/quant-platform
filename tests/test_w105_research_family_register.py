@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
 from research.mass_strategy_factory import (
     CONNECTED_TO_MASS,
     CONNECTED_TO_READY,
@@ -26,12 +23,7 @@ from research.mass_strategy_factory import (
     validate_strategy_at_gen,
 )
 
-_SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
-if str(_SCRIPTS) not in sys.path:
-    sys.path.insert(0, str(_SCRIPTS))
-
-import run_w104_new_hyps_daily_dd as w104  # noqa: E402
-import run_w105_new_hyps_daily_dd as w105  # noqa: E402
+from research.unique_logic import w104, w105
 
 
 def test_research_family_register_is_recognition_not_pass():
