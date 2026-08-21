@@ -536,6 +536,8 @@ def test_default_n_capacity_and_cf_llm_residuals():
     assert "POST /v1/mass-eval" in str(cf.get("endpoint") or "")
     assert cf.get("r2_prefix", "").startswith("research/mass_eval/")
     assert cf.get("r2_bucket") == "quant-structured"
+    assert cf.get("n_survivors_are_not_a_pass") is True
+    assert cf.get("candidate_grade") is False
     assert isinstance(cf.get("not_yet_implemented"), list)
     assert cf.get("scale_queue_fanout") is False
     assert int(cf.get("n_cf_batch_cap") or 0) >= 1

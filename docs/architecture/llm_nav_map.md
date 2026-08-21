@@ -168,7 +168,7 @@ Full policy: ADR §5.2.
 | **1 Domain** | `pit_api`, `core_engine`, `features`, `paper`, `agents`, `quant_data_access`, `data_sources` | By task |
 | **2 Ops** | `docs/operations/*`, phase runbooks, worker READMEs | When operating live systems; not residual counts |
 | **3 Proof** | `docs/proof/*` | Cite evidence; do not invent status |
-| **4 Historical** | `pre_phase7_*`, `phase6_hardening_*`, dated ops live-sync notes | Banner / archive; **not** residual SoT |
+| **4 Historical** | `pre_phase7_*`, dated ops live-sync notes | Banner / archive; **not** residual SoT |
 
 ### 7.1 Phase / residual file index (maintenance)
 
@@ -189,7 +189,6 @@ Full policy: ADR §5.2.
 | `docs/phase62_production_runbook.md` | runbook (not residual counts) |
 | `docs/phase62_cf_edge_cron.md` | runbook / design note |
 | `docs/phase35_cf_ingest.md`, `phase35_s0_secrets.md`, `phase35_storage_scale.md`, `phase35_validation_matrix.md` | domain + runbook (Phase 3.5) |
-| `docs/phase6_hardening_acceptance.md` | historical acceptance snapshot |
 | `docs/pre_phase7_full_code_review.md` | historical Wave-0 review |
 | `docs/operations/phase63_live_sync.md` | historical live-vs-code note (counts may be stale) |
 | `docs/proof/*` | dated evidence |

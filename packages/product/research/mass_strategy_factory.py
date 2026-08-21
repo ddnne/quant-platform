@@ -1,4 +1,4 @@
-"""Mass strategy logic-diversity factory + batch auto-experiment (W91 / w0818a).
+"""Mass strategy logic-diversity factory + batch auto-experiment.
 
 Purpose
 -------
@@ -6,20 +6,15 @@ Research factory that generates strategy **individuals** around **distinct
 economic logic templates** (thesis + signal structure + position rule +
 datasets), not hold_days / momentum_window / long_frac param grids.
 
-W91 extends W90 with:
+Includes:
 * Nikkei/index realized-vol regime logics (abs level · term levels · ratio)
-* CF real multi-year panels (mode=r2_panels; synthetic not final success)
-
-W90 held:
-* strong-model profit-hypothesis generation (xAI grok-4.6 preferred)
-* CF multi-logic × multi-period mass-eval Worker + R2 artifacts
-* wide local eval of LLM-accepted + catalog survivors
-
-W89 held:
+* CF real multi-year panels (mode=r2_panels; synthetic not a pass)
 * interest-rate factor logics (absolute level + curve-shape × CS)
 * multi-factor logics (value×mom×rate, flow×price) with required theses
-* near-group labels (flow hard/soft, fund slow kept parallel)
 * programmatic profit-hypothesis entry (always through evaluator)
+
+CF ``n_survivors`` is a period-net screen only. Candidate-grade eval is
+``research.daily_path_eval`` recorded to R2 ``research/eval/job={id}/``.
 
 W87 risk addressed
 ------------------
@@ -4878,22 +4873,22 @@ def try_cf_minimal_mass_batch() -> dict[str, Any]:
 
     Status
     ------
-    **W90 / w0816y:** CF worker ``quant-platform-research-mass-eval`` exists
-    under ``platform/workers/research-mass-eval/`` with
+    CF worker ``quant-platform-research-mass-eval`` exists under
+    ``platform/workers/research-mass-eval/`` with
     ``POST /v1/mass-eval`` → R2 ``research/mass_eval/job={id}/``.
 
     Pure-TS lite multi-period path (synthetic / r2_panels / nets_only).
+    Period-net ``n_survivors`` is a screen, not a ``daily_path_DD`` pass.
     Full rate/mf factor legs on CF remain **not-yet-implemented** (fallback
     multi_day_hold or nets_only). Local ``run_mass_factory`` remains the
     full-factory path. Scaling to 200/500 queue fan-out is not-yet-implemented.
     """
     return {
         "status": "available",
-        "wave": "W90 / w0816y",
-        "version": "research-mass-eval/v1",
+        "wave": MASS_FACTORY_WAVE,
+        "version": "research-mass-eval/v6",
         "factory_wave": MASS_FACTORY_WAVE,
         "factory_version": MASS_FACTORY_VERSION,
-        # Primary path: POST /v1/mass-eval → research/mass_eval/job=
         "worker": "quant-platform-research-mass-eval",
         "worker_path": "platform/workers/research-mass-eval/",
         "endpoint": "POST /v1/mass-eval",
@@ -4902,18 +4897,15 @@ def try_cf_minimal_mass_batch() -> dict[str, Any]:
             "logics": "list[{logic_id, family_id?, params?, thesis?}]",
             "periods": "list[{period_id, year?}]",
             "job_id": "str",
-            "mode": "synthetic | r2_panels | nets_only",
+            "mode": "synthetic | r2_panels | nets_only | d1_bars",
         },
         "r2_prefix": "research/mass_eval/job={id}/",
         "r2_bucket": "quant-structured",
-        # Parallel W90 track (D1 tip bars + research/mass_factory/):
-        "alt_worker": "quant-platform-mass-eval",
-        "alt_worker_path": "platform/workers/mass-eval/",
-        "alt_endpoint": "POST /v1/research/mass_eval",
-        "alt_r2_prefix": "research/mass_factory/job={id}/",
+        "screen_kind": "period_net",
+        "n_survivors_are_not_a_pass": True,
+        "candidate_grade": False,
         "existing_cf_paths": [
             "platform/workers/research-mass-eval (POST /v1/mass-eval → research/mass_eval/)",
-            "platform/workers/mass-eval (POST /v1/research/mass_eval → research/mass_factory/)",
             "research.single_shot_job.execute_single_shot_job",
             "research.single_shot_job.execute_multiday_signal_eval",
             "packages/edge/cf_platform (ingestion / ops)",
@@ -4925,7 +4917,7 @@ def try_cf_minimal_mass_batch() -> dict[str, Any]:
         "supported_path_local": (
             "local run_mass_factory / scripts/run_mass_strategy_batch.py"
         ),
-        "python_driver": "research.cf_mass_eval_job (alt mass-eval worker driver)",
+        "python_driver": "research.cf_mass_eval_job",
         "not_yet_implemented": [
             "full rate/mf factor legs on pure-TS CF path",
             "direct structured/jsonl historical bar load",

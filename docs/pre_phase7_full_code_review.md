@@ -423,9 +423,8 @@ Documentation shows drift between Phase 6.1 and 6.2 plans, runbooks, and actual 
 
 **Files Affected**:
 - `docs/phase61_production_runbook.md`
-- `docs/phase6_hardening_acceptance.md`
 - `docs/roadmap.md` (if exists)
-- (historical `docs/phase61_plan.md` removed; live residual is `phase62_residual_status.md`)
+- live residual is `docs/phase62_residual_status.md`
 
 **Impact**:
 - Confusing operational guidance

@@ -113,11 +113,10 @@ if COMPLETE_22_DATASET_SET & PERMANENT_DEFER_DATASETS:
     )
 
 # Bar-native logics the CF Worker can evaluate without extra panels.
-# W91: nky_vol_* need staged index closes (__NKY_PROXY__) in panels.
-# W92: opt225_* need staged opt225_regime maps (BaseVol/ATM IV/spread).
-# W93: macro_repo_rate_* consume staged repo_rate_regime when present.
-# W94: opt225 skew / CM-term / ΔBaseVol on opt225_regime; flow/fund/mf
-#      consume flow_regime / fund_regime (missing sidecar → disclosed MDH).
+# nky_vol_* need staged index closes (__NKY_PROXY__) in panels.
+# opt225_* need staged opt225_regime maps (BaseVol/ATM IV/spread).
+# macro_repo_rate_* consume staged repo_rate_regime when present.
+# flow/fund/mf consume flow_regime / fund_regime (missing sidecar → disclosed MDH).
 CF_BAR_NATIVE_LOGIC_IDS: tuple[str, ...] = (
     "mdh_sticky_momentum",
     "mdh_mean_reversion",
@@ -151,7 +150,7 @@ CF_BAR_NATIVE_LOGIC_IDS: tuple[str, ...] = (
     "mf_flow_price",
 )
 
-# Lite multi-period shards (W90 residual; synthetic / tip smoke).
+# Lite multi-period shards (synthetic / tip smoke).
 DEFAULT_LITE_PERIODS: tuple[dict[str, str], ...] = (
     {"period_id": "p2024_q4", "start": "2024-10-01", "end": "2024-12-27"},
     {"period_id": "p2025_q1", "start": "2025-01-06", "end": "2025-03-28"},
@@ -161,8 +160,8 @@ DEFAULT_LITE_PERIODS: tuple[dict[str, str], ...] = (
     {"period_id": "p2026_h1", "start": "2026-01-05", "end": "2026-06-30"},
 )
 
-# W91 real multi-year windows (≥6; longer than W90 Q4-only smoke when data allows).
-# Full-prefer 2015/19/21/23 from W64 COMPLETE-backed mirrors; Q4 for 2017/2025.
+# Real multi-year windows (≥6). Full-prefer 2015/19/21/23 from COMPLETE-backed
+# mirrors; Q4 for 2017/2025.
 DEFAULT_REAL_MULTIYEAR_PERIODS: tuple[dict[str, Any], ...] = (
     {
         "period_id": "y2015_full",
@@ -1044,7 +1043,7 @@ def build_real_period_panel(
         for code, pairs in close.items()
         if pairs
     }
-    # W91: stage Nikkei-proxy index closes as reserved code for CF pure-TS
+    # Stage Nikkei-proxy index closes as reserved code for CF pure-TS
     # index_vol_regime eval (filtered out of CS universe in worker).
     nky_meta: dict[str, Any] = {}
     try:
@@ -1488,7 +1487,7 @@ def invoke_cf_mass_eval_worker(
     body = json.dumps(dict(job_spec), default=str).encode("utf-8")
     headers = {
         "Content-Type": "application/json",
-        "User-Agent": "quant-platform-w91-cf-mass-eval/1.0",
+        "User-Agent": "quant-platform-cf-mass-eval/1.0",
     }
     if tok:
         headers["Authorization"] = f"Bearer {tok}"
