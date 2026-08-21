@@ -13,8 +13,11 @@
  *   synthetic — deterministic PRNG (smoke)
  *   nets_only — pre-baked period_nets
  *
- * This worker is a **period-net screen only**. ``n_survivors`` is not
- * candidate-grade. Missing ``daily_path_DD`` must not be treated as a pass.
+ * Default POST /v1/mass-eval is a **period-net screen only**.
+ * ``n_survivors`` is not candidate-grade.
+ * POST /v1/daily-path (or eval_kind=daily_path) is candidate-grade daily MTM.
+ * The Python driver fans out one isolate per logic so batch wall-clock
+ * ≈ the longest isolate (not the sum).
  *
  * Freezes held:
  *   Mass=NO-GO · READY=false · ops GO=false · continuous paper UNARMED
@@ -26,6 +29,10 @@
  */
 
 import { evaluateLogicAcrossPeriods, rankSurvivors } from "./eval";
+import {
+  cellsFromPeriodPacks,
+  evalLogicDailyPathOnPanel,
+} from "./daily_path";
 import {
   buildSyntheticPanels,
   defaultPeriodsFromRequest,
@@ -184,6 +191,10 @@ function parseRequest(body: unknown): { ok: true; value: MassEvalRequest } | { o
         body.panels_prefix != null ? String(body.panels_prefix) : undefined,
       one_way_cost:
         body.one_way_cost != null ? Number(body.one_way_cost) : undefined,
+      eval_kind:
+        body.eval_kind === "daily_path" ? "daily_path" : "screen",
+      write_artifacts:
+        body.write_artifacts === false ? false : true,
       max_codes: body.max_codes != null ? Number(body.max_codes) : undefined,
       max_days: body.max_days != null ? Number(body.max_days) : undefined,
       near_zero_abs:
@@ -414,6 +425,101 @@ async function runMassEval(
   };
 }
 
+/**
+ * Candidate-grade daily MTM. Designed for one-logic fan-out: the driver
+ * issues concurrent POSTs so batch wall-clock ≈ longest isolate.
+ */
+async function runDailyPath(
+  env: Env,
+  req: MassEvalRequest,
+): Promise<Record<string, unknown>> {
+  const t0 = Date.now();
+  const version = env.MASS_EVAL_VERSION || "research-mass-eval/v6";
+  const mode = req.mode || "r2_panels";
+  const oneWay = req.one_way_cost ?? 0.001;
+  const maxCodes = Math.max(2, Math.min(40, req.max_codes ?? 8));
+  const maxDays = Math.max(20, Math.min(260, req.max_days ?? 120));
+  const periodSpecs = defaultPeriodsFromRequest(req.periods, req.seed);
+  const panelsPrefix =
+    req.panels_prefix || `research/mass_eval/job=${req.job_id}/panels`;
+
+  let panels =
+    mode === "nets_only"
+      ? []
+      : buildSyntheticPanels(periodSpecs, req.seed, maxCodes, maxDays);
+  let panelNotes: string[] = [];
+  if (mode === "r2_panels") {
+    const loaded = await loadR2Panels(
+      env.STRUCTURED_BUCKET,
+      periodSpecs,
+      panelsPrefix,
+    );
+    panels = loaded.panels;
+    panelNotes = loaded.notes;
+  } else if (mode === "d1_bars" && env.DB) {
+    const loaded = await loadD1BarsPanels(
+      env.DB,
+      periodSpecs,
+      maxCodes,
+      maxDays,
+    );
+    panels = loaded.panels;
+    panelNotes = loaded.notes;
+  }
+
+  const cells: Array<Record<string, unknown>> = [];
+  const logicTimings: Array<Record<string, unknown>> = [];
+  for (const logic of req.logics) {
+    const lt0 = Date.now();
+    const packs = panels.map((p) =>
+      evalLogicDailyPathOnPanel(logic, p, oneWay),
+    );
+    const logicCells = cellsFromPeriodPacks(String(logic.logic_id), packs);
+    cells.push(...logicCells);
+    logicTimings.push({
+      logic_id: logic.logic_id,
+      wall_ms: Date.now() - lt0,
+      n_cells: logicCells.length,
+      n_complete: logicCells.filter((c) => c.daily_path_complete).length,
+    });
+  }
+
+  const nComplete = cells.filter((c) => c.daily_path_complete).length;
+  const freezes = freezePayload(env);
+  const payload: Record<string, unknown> = {
+    version,
+    wave: env.MASS_EVAL_WAVE || "research-mass-eval",
+    job_id: req.job_id,
+    eval_kind: "daily_path",
+    candidate_grade: true,
+    parallel_model: "isolate_fanout_one_logic",
+    wall_clock_target: "batch ≈ longest isolate",
+    mode,
+    n_logics: req.logics.length,
+    n_periods: periodSpecs.length,
+    n_cells: cells.length,
+    n_daily_path_complete: nComplete,
+    cells,
+    logic_timings: logicTimings,
+    panel_notes: panelNotes,
+    panels_prefix: panelsPrefix,
+    wall_time_ms: Date.now() - t0,
+    survived: false,
+    promote_as_main: false,
+    go: false,
+    freezes,
+    note:
+      "Candidate-grade daily MTM after cost. Fan-out one POST per logic. " +
+      "Not a promotion. period-net n_survivors is not this protocol.",
+  };
+  if (req.write_artifacts === true) {
+    const prefix = `research/eval/job=${req.job_id}`;
+    await putJson(env.STRUCTURED_BUCKET, `${prefix}/daily_path.json`, payload);
+    payload.r2_keys = { daily_path: `${prefix}/daily_path.json` };
+  }
+  return payload;
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
@@ -435,7 +541,9 @@ export default {
         endpoints: {
           "GET /health": "liveness",
           "POST /v1/mass-eval":
-            "{seed, logics[], periods[], job_id, mode?, panels_prefix?}",
+            "period-net screen {seed, logics[], periods[], job_id, mode?}",
+          "POST /v1/daily-path":
+            "candidate-grade daily MTM; fan-out one logic per isolate",
         },
       });
     }
@@ -475,6 +583,47 @@ export default {
           {
             ok: false,
             error: "mass_eval_failed",
+            detail: msg,
+            freezes: freezePayload(env),
+          },
+          500,
+        );
+      }
+    }
+
+    if (url.pathname === "/v1/daily-path") {
+      if (request.method !== "POST") {
+        return json({ error: "POST required" }, 405);
+      }
+      if (!(await authorized(request, env.MASS_EVAL_TOKEN))) {
+        return json({ error: "unauthorized" }, 401);
+      }
+      if (!env.STRUCTURED_BUCKET) {
+        return json({ error: "STRUCTURED_BUCKET not bound" }, 500);
+      }
+      let body: unknown;
+      try {
+        body = await request.json();
+      } catch {
+        return json({ error: "invalid JSON body" }, 400);
+      }
+      const parsed = parseRequest(body);
+      if (!parsed.ok) {
+        return json({ error: parsed.error }, 400);
+      }
+      parsed.value.eval_kind = "daily_path";
+      if ((body as { write_artifacts?: boolean }).write_artifacts !== true) {
+        parsed.value.write_artifacts = false;
+      }
+      try {
+        const result = await runDailyPath(env, parsed.value);
+        return json({ ok: true, ...result });
+      } catch (e) {
+        const msg = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+        return json(
+          {
+            ok: false,
+            error: "daily_path_failed",
             detail: msg,
             freezes: freezePayload(env),
           },

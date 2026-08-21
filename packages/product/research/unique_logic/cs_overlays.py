@@ -204,6 +204,49 @@ NEW_UNIQUE_LOGIC: tuple[dict[str, Any], ...] = (
             "gate": "term_3m_ge_pit_trailing_median",
         },
     },
+    {
+        "logic_id": "overnight_easy_cs_follow",
+        "family_id": "overnight_level_cs",
+        "kind": "overnight_easy_cs_follow",
+        "new_unique_logic": True,
+        "catalog": True,
+        "catalog_map": None,
+        "headline": True,
+        "axis": "funding",
+        "why_unique": (
+            "NEW FUNDING LEVEL (follow-easy): CS mom followed only when "
+            "same-date overnight Tokyo repo LEVEL is < PIT trailing median. "
+            "Flatten when tight, unformed, or missing. Opposite occupancy of "
+            "overnight_level_cs_tilt (fade-tight), not a hold/mom grid."
+        ),
+        "thesis": (
+            "Easy overnight funding is when relative-strength can be followed "
+            "instead of faded. Tight overnight and missing prints stay flat."
+        ),
+        "signal_definition": (
+            "enter iff overnight[d] < PIT median of overnight with date < d "
+            "(min_hist=20); tilt = +1 (follow CS mom); missing/unformed → flatten"
+        ),
+        "position_rule": (
+            "sticky fixed_horizon CS rank mom L-S on easy-overnight days; "
+            "flat when overnight is tight, unformed, or missing same-date"
+        ),
+        "datasets": [
+            "jsda_tokyo_repo_rates",
+            "equities_bars_daily",
+            "markets_calendar",
+        ],
+        "params": {
+            "hold_days": 10,
+            "momentum_n": 5,
+            "long_frac": 0.3,
+            "short_frac": 0.3,
+            "min_hist": 20,
+            "mode": "overnight_easy_cs_follow",
+            "tilt": "follow_easy",
+            "gate": "overnight_lt_pit_trailing_median",
+        },
+    },
 )
 
 
@@ -262,7 +305,11 @@ def evaluate_overnight_level_cs_tilt_daily_mtm(
     spec: Mapping[str, Any],
     one_way_cost: float,
 ) -> dict[str, Any]:
-    """CS mom faded when overnight LEVEL is tight vs PIT median."""
+    """CS mom faded when overnight LEVEL is tight vs PIT median.
+
+    ``params.tilt=follow_easy`` inverts occupancy: follow CS when overnight
+    is *below* the PIT median (overnight_easy_cs_follow).
+    """
     from features.class_signals import cross_section_rank_signs
 
     p = cross_section._cs_params(spec)
@@ -280,7 +327,7 @@ def evaluate_overnight_level_cs_tilt_daily_mtm(
         lf=lf,
         sf=sf,
         min_hist=min_hist,
-        gate="overnight_ge_pit_trailing_median",
+        gate=str((spec.get("params") or {}).get("gate") or "overnight_ge_pit_trailing_median"),
         extra_dataset="jsda_tokyo_repo_rates",
         data_path="local_real_mirrors+local_sqlite_jsda_repo_rates",
     )
@@ -334,17 +381,31 @@ def evaluate_overnight_level_cs_tilt_daily_mtm(
             for code in ranks:
                 daily_rank.setdefault(code, {})[d] = 0.0
             continue
-        if float(on) < float(med):
-            n_skip_easy += 1
-            n_off += 1
-            for code in ranks:
-                daily_rank.setdefault(code, {})[d] = 0.0
-            continue
-        n_on += 1
-        for code, sign in ranks.items():
-            daily_rank.setdefault(code, {})[d] = (
-                0.0 if sign is None else -float(sign)
-            )
+        follow_easy = str((spec.get("params") or {}).get("tilt") or "") == "follow_easy"
+        if follow_easy:
+            if float(on) >= float(med):
+                n_skip_easy += 1
+                n_off += 1
+                for code in ranks:
+                    daily_rank.setdefault(code, {})[d] = 0.0
+                continue
+            n_on += 1
+            for code, sign in ranks.items():
+                daily_rank.setdefault(code, {})[d] = (
+                    0.0 if sign is None else float(sign)
+                )
+        else:
+            if float(on) < float(med):
+                n_skip_easy += 1
+                n_off += 1
+                for code in ranks:
+                    daily_rank.setdefault(code, {})[d] = 0.0
+                continue
+            n_on += 1
+            for code, sign in ranks.items():
+                daily_rank.setdefault(code, {})[d] = (
+                    0.0 if sign is None else -float(sign)
+                )
 
     extra.update(
         {

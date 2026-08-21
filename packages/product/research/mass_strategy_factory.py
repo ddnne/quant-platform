@@ -42,9 +42,9 @@ Building blocks reused
 * ``hypothesis_classes`` — family ids / datasets
 * ``class_signals`` / ``class_hyp_eval`` — pure bar evaluators
 * ``cost_models`` · ``sign_selection`` · ``stats_metrics``
-* ``llm_hyp_generator`` · ``cf_mass_eval_job`` (W90)
+* ``llm_hyp_generator`` · ``cf_mass_eval_job`` · ``cf_daily_path_job``
 
-See: ``docs/proof/w0816y_w90_llm_hyp_cf_mass_eval_20260817.md``
+See: ``docs/architecture/adr_research_recording.md``
 """
 
 from __future__ import annotations
@@ -180,6 +180,7 @@ RESEARCH_UNIQUE_LOGIC_IDS: frozenset[str] = frozenset(
         "event_funding_stress_ls",
         "surprise_xs_rank_flip",
         "overnight_level_cs_tilt",
+        "overnight_easy_cs_follow",
         "month_end_cs_fade",
         "xs_low_vol_mom",
         "repo_3m_level_cs",
@@ -190,6 +191,7 @@ RESEARCH_UNIQUE_LOGIC_IDS: frozenset[str] = frozenset(
 RESEARCH_FAMILY_APPEND_LOGIC_IDS: frozenset[str] = frozenset(
     {
         "overnight_level_cs_tilt",
+        "overnight_easy_cs_follow",
         "month_end_cs_fade",
         "xs_low_vol_mom",
         "repo_3m_level_cs",
@@ -337,6 +339,7 @@ NEAR_LOGIC_GROUPS: tuple[dict[str, Any], ...] = (
             "xs_margin_delta_rank",
             "idio_mom_macro_impulse",
             "overnight_level_cs_tilt",
+            "overnight_easy_cs_follow",
             "month_end_cs_fade",
             "xs_low_vol_mom",
             "repo_3m_level_cs",
@@ -377,6 +380,7 @@ NEAR_LOGIC_GROUPS: tuple[dict[str, Any], ...] = (
         "label": "W107 this-wave unique_logic family append (recognition only)",
         "logic_ids": (
             "overnight_level_cs_tilt",
+            "overnight_easy_cs_follow",
             "month_end_cs_fade",
             "xs_low_vol_mom",
             "repo_3m_level_cs",
@@ -2020,7 +2024,41 @@ def _build_logic_templates() -> dict[str, LogicTemplate]:
             structural_keys=("mode", "gate"),
             generation_enabled=False,
             notes=(
-                "W107 family append of mixed unique_logic (funding level). "
+                "Family append of mixed unique_logic (funding level). "
+                "generation_enabled=False. Not research_candidate / not GO."
+            ),
+        ),
+        LogicTemplate(
+            logic_id="overnight_easy_cs_follow",
+            display_name="Overnight-easy CS follow (research family append)",
+            thesis=(
+                "Easy overnight funding is when relative-strength can be followed "
+                "instead of faded. Tight overnight and missing prints stay flat."
+            ),
+            signal_definition=(
+                "enter iff overnight[d] < PIT median of overnight with date < d "
+                "(min_hist=20); tilt = +1 (follow CS mom); missing/unformed → flatten"
+            ),
+            position_rule=(
+                "sticky fixed_horizon CS rank mom L-S on easy-overnight days; "
+                "flat when overnight is tight, unformed, or missing same-date"
+            ),
+            datasets_used=("jsda_tokyo_repo_rates",) + bars,
+            family_id=FAMILY_OVERNIGHT_LEVEL_CS,
+            base_params={
+                "hold_days": 10,
+                "momentum_n": 5,
+                "long_frac": 0.3,
+                "short_frac": 0.3,
+                "min_hist": 20,
+                "mode": "overnight_easy_cs_follow",
+                "tilt": "follow_easy",
+                "gate": "overnight_lt_pit_trailing_median",
+            },
+            structural_keys=("mode", "gate", "tilt"),
+            generation_enabled=False,
+            notes=(
+                "Opposite occupancy of overnight_level_cs_tilt. "
                 "generation_enabled=False. Not research_candidate / not GO."
             ),
         ),
@@ -5254,7 +5292,7 @@ def mass_factory_document() -> dict[str, Any]:
         ),
         "continuous_paper": CONTINUOUS_PAPER,
         **_freeze(),
-        "proof": "docs/proof/w0816y_w90_llm_hyp_cf_mass_eval_20260817.md",
+        "proof": "docs/architecture/adr_research_recording.md",
         "w91_index_vol": {
             "family": FAMILY_INDEX_VOL_REGIME,
             "logic_ids": [

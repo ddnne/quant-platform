@@ -97,6 +97,10 @@ def evaluate_logic_daily_mtm(
         return cs_overlays.evaluate_overnight_level_cs_tilt_daily_mtm(
             bars, overnight, **kw
         )
+    if lid == "overnight_easy_cs_follow":
+        return cs_overlays.evaluate_overnight_level_cs_tilt_daily_mtm(
+            bars, overnight, **kw
+        )
     if lid == "month_end_cs_fade":
         return cs_overlays.evaluate_month_end_cs_fade_daily_mtm(bars, **kw)
     if lid == "xs_low_vol_mom":

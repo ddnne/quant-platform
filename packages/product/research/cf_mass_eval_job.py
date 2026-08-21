@@ -1415,7 +1415,7 @@ def build_cf_mass_eval_job_spec(
         raise CfMassEvalError(
             f"mode must be one of {sorted(ALLOWED_MODES)}, got {mode_s!r}"
         )
-    jid = str(job_id or f"w91-real-{uuid4().hex[:12]}")
+    jid = str(job_id or f"mass-eval-{uuid4().hex[:12]}")
     paths = design_mass_factory_paths(jid)
     logics = default_logic_specs(logic_ids)
     if extra_logics:

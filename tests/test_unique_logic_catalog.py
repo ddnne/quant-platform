@@ -54,6 +54,7 @@ def test_repo_catalog_yaml_loads() -> None:
     ids = {s["logic_id"] for s in specs}
     py_ids = {s["logic_id"] for s in all_unique_logic_specs()}
     assert "overnight_level_cs_tilt" in ids
+    assert "overnight_easy_cs_follow" in ids
     assert "xs_low_vol_mom" in ids
     assert "month_end_cs_fade" in ids
     assert len(ids) >= 20

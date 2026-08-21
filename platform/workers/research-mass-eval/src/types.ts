@@ -54,6 +54,13 @@ export interface MassEvalRequest {
    * nets_only — use pre-baked period_nets on each logic
    */
   mode?: "synthetic" | "r2_panels" | "d1_bars" | "nets_only";
+  /**
+   * screen — period-net ranking (not a pass)
+   * daily_path — candidate-grade daily MTM equity DD
+   */
+  eval_kind?: "screen" | "daily_path";
+  /** Fan-out shards skip R2 writes; the driver aggregates to eval_registry. */
+  write_artifacts?: boolean;
   /** Override panel key prefix for r2_panels (default: research/mass_eval/panels). */
   panels_prefix?: string;
   one_way_cost?: number;
