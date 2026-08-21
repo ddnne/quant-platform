@@ -59,6 +59,52 @@ def test_fanout_aggregates_cells_and_does_not_promote() -> None:
     assert pack["mass_research"] == "NO-GO"
 
 
+def test_fanout_path_broken_cells_are_not_complete() -> None:
+    def fake_post(*, url: str, body: bytes, headers: dict) -> dict:
+        import json
+
+        spec = json.loads(body.decode("utf-8"))
+        lid = spec["logics"][0]["logic_id"]
+        pid = spec["periods"][0]["period_id"]
+        return {
+            "ok": True,
+            "cells": [
+                {
+                    "logic_id": lid,
+                    "window_id": pid,
+                    "daily_path_complete": True,
+                    "eval_path": "cs_generic",
+                    "path_fallback": "path_broken",
+                    "daily_path_DD": -0.02,
+                    "total_ret_net": 0.01,
+                    "n_days": 40,
+                    "survived": False,
+                    "go": False,
+                }
+            ],
+        }
+
+    pack = run_cf_daily_path_fanout(
+        job_id="test-fanout-broken",
+        logic_ids=["unwired_overlay"],
+        skip_stage=True,
+        mode="synthetic",
+        http_post=fake_post,
+        max_workers=1,
+        periods=[
+            {
+                "period_id": "y2015_full",
+                "period_start": "2015-01-05",
+                "period_end": "2015-03-01",
+            }
+        ],
+    )
+    assert pack["n_cells"] == 1
+    assert pack["n_daily_path_complete"] == 0
+    assert pack["n_logic_ok"] == 0
+    assert pack["go"] is False
+
+
 def test_bar_native_count_meets_thirty() -> None:
     assert len(CF_BAR_NATIVE_LOGIC_IDS) >= 30
 

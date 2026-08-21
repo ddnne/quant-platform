@@ -42,7 +42,7 @@ Building blocks reused
 * ``hypothesis_classes`` — family ids / datasets
 * ``class_signals`` / ``class_hyp_eval`` — pure bar evaluators
 * ``cost_models`` · ``sign_selection`` · ``stats_metrics``
-* ``llm_hyp_generator`` · ``cf_mass_eval_job`` · ``cf_daily_path_job``
+* ``cf_mass_eval_job`` · ``cf_daily_path_job``
 
 See: ``docs/architecture/adr_research_recording.md``
 """
@@ -5229,7 +5229,7 @@ def llm_logic_entry_status() -> dict[str, Any]:
         "version": MASS_FACTORY_VERSION,
         "entry_fn": "research.mass_strategy_factory.propose_profit_hypotheses",
         "strong_model_entry": (
-            "research.llm_hyp_generator.generate_profit_hypotheses_via_llm"
+            "research.mass_strategy_factory.propose_profit_hypotheses"
         ),
         "preferred_model": "grok-4.6 (xAI api.x.ai)",
         "fallback_model": "@cf/openai/gpt-oss-120b (Workers AI)",
@@ -5258,8 +5258,7 @@ def llm_logic_entry_status() -> dict[str, Any]:
         "catalog_logic_ids": list(LOGIC_TEMPLATE_IDS),
         "near_logic_groups": near_logic_groups_document(),
         "note": (
-            "W90: strong-model path generate_profit_hypotheses_via_llm "
-            "(xAI grok-4.6 preferred) → near-dup → propose_profit_hypotheses "
+            "Hypothesis entry is propose_profit_hypotheses "
             "(always through evaluator). idea_generator remains ResearchIdea helper."
         ),
         "always_through_evaluator": True,

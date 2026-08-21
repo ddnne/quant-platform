@@ -62,3 +62,4 @@ prose. Update the table after a published projection.
 
 Completion of a research turn requires an R2 eval job, not local JSON.
 Do not paste cell scores into this file. Latest recorded job id belongs in D1.
+Latest empirical jobs (ids only): `eval-cf-dp-pathfix-20260822c`, `eval-cf-dp-strong7-20260822b`.

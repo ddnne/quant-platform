@@ -20,6 +20,23 @@ PROTOCOL_CF_SCREEN: str = "cf_mass_eval_period_net"
 PROTOCOL_DAILY_PATH: str = "daily_path_mtm_after_cost/v1"
 
 
+def is_path_broken_cell(cell: Mapping[str, Any]) -> bool:
+    """True when the eval path is generic CS/MDH fallback or tagged broken."""
+    extra = cell.get("extra") if isinstance(cell.get("extra"), Mapping) else {}
+    path = str(cell.get("eval_path") or extra.get("eval_path") or "")
+    fallback = str(cell.get("path_fallback") or extra.get("path_fallback") or "")
+    if path in {"cs_generic", "mdh_generic", "unknown"}:
+        return True
+    return fallback.startswith("path_broken") or fallback.startswith("mdh_empty")
+
+
+def is_daily_path_complete_cell(cell: Mapping[str, Any]) -> bool:
+    """Candidate-grade complete: DD measured and the path is not broken."""
+    if is_path_broken_cell(cell):
+        return False
+    return bool(cell.get("daily_path_complete"))
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -104,6 +121,9 @@ class EvalJobManifest:
             "n_logics": len(self.logic_ids),
             "n_windows": len(self.window_ids),
             "n_cells": len(self.cells),
+            "n_daily_path_complete": sum(
+                1 for c in self.cells if c.daily_path_complete
+            ),
             "r2_prefix": r2_job_prefix(self.job_id),
             "r2_manifest_key": r2_manifest_key(self.job_id),
             "r2_cells_key": r2_cells_key(self.job_id),
@@ -166,7 +186,7 @@ def manifest_from_window_rows(
                     None if row.get("n_days") is None else int(row.get("n_days"))
                 ),
                 survived=bool(row.get("survived")),
-                daily_path_complete=bool(row.get("daily_path_complete")),
+                daily_path_complete=is_daily_path_complete_cell(row),
                 params_hash=(
                     None
                     if row.get("params_hash") is None
@@ -425,7 +445,14 @@ def summarize_daily_path_cells(
             tag = "path_broken"
         elif "always_on" in flags or "near_empty" in flags:
             tag = "suspicious"
-        elif m_net is not None and m_net > 0 and n_pos >= 4 and "sign_unstable" not in flags:
+        elif (
+            m_net is not None
+            and m_net > 0
+            and n_pos >= 4
+            and "sign_unstable" not in flags
+            and "path_broken" not in flags
+            and "always_on" not in flags
+        ):
             tag = "strong"
         elif "sign_unstable" in flags:
             tag = "unstable"
@@ -467,14 +494,23 @@ def summarize_daily_path_cells(
         "n_suspicious": int(tags.get("suspicious") or 0),
         "n_unstable": int(tags.get("unstable") or 0),
         "n_path_broken": int(tags.get("path_broken") or 0),
+        "n_always_on": sum(1 for r in logics if "always_on" in r["flags"]),
+        "n_complete_cells": sum(1 for c in cells if is_daily_path_complete_cell(c)),
+        "n_candidate_logics": sum(
+            1
+            for r in logics
+            if r["tag"] not in {"path_broken"} and "always_on" not in r["flags"]
+        ),
+        "always_on_excluded_from_main": True,
+        "path_broken_excluded_from_complete": True,
         "always_on_warn": ALWAYS_ON_OCCUPANCY_WARN,
         "n_survivors_are_not_a_pass": True,
         "promote_as_main": False,
         "go": False,
         "logics": logics,
         "notes": (
-            "always_on often means CF daily_path CS/MDH collapse on small panels. "
-            "near_empty margin gates usually mean missing flow sidecar. "
+            "path_broken is excluded from complete and from strong. "
+            "always_on is excluded from main candidate compare. "
             "Scores live here / D1, not Git."
         ),
     }

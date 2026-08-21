@@ -43,7 +43,7 @@ from research.cf_mass_eval_job import (
     resolve_or_stage_panels,
 )
 from research.daily_path_eval import git_sha
-from research.eval_registry import PROTOCOL_DAILY_PATH
+from research.eval_registry import PROTOCOL_DAILY_PATH, is_daily_path_complete_cell
 from research.mass_strategy_factory import MASS_FACTORY_VERSION, MASS_RESEARCH
 from research.unique_logic.constants import CF_EVENT_DAILY_PATH_IDS as _CF_EVENT_SET
 
@@ -186,7 +186,7 @@ def run_cf_daily_path_fanout(
         )
         elapsed = time.perf_counter() - t_i
         logic_cells = list(resp.get("cells") or [])
-        n_ok = sum(1 for c in logic_cells if c.get("daily_path_complete"))
+        n_ok = sum(1 for c in logic_cells if is_daily_path_complete_cell(c))
         return {
             "logic_id": lid,
             "wall_sec": round(elapsed, 3),
@@ -245,7 +245,7 @@ def run_cf_daily_path_fanout(
         "period_ids": [p.get("period_id") for p in period_rows],
         "n_cells": len(cells),
         "n_daily_path_complete": sum(
-            1 for c in cells if c.get("daily_path_complete")
+            1 for c in cells if is_daily_path_complete_cell(c)
         ),
         "n_logic_ok": n_ok_logic,
         "n_errors": len(errors),

@@ -20,6 +20,17 @@ function amortizedOneWayCost(oneWay: number, holdDays: number): number {
   return (2 * oneWay) / h;
 }
 
+/** Generic CS/MDH fallback is not a candidate-grade complete path. */
+export function isPathBroken(
+  evalPath: unknown,
+  fallback?: unknown,
+): boolean {
+  const p = String(evalPath || "");
+  const fb = String(fallback || "");
+  if (p === "cs_generic" || p === "mdh_generic" || p === "unknown") return true;
+  return fb.startsWith("path_broken") || fb.startsWith("mdh_empty");
+}
+
 function unionDates(bars: BarsByCode): string[] {
   const s = new Set<string>();
   for (const [code, pairs] of Object.entries(bars || {})) {
@@ -1417,7 +1428,9 @@ export function evalLogicDailyPathOnPanel(
     }
   }
   const dd = equityPathDrawdown(equities, pack.dates);
+  const pathBroken = isPathBroken(evalPath, pathFallback);
   const complete =
+    !pathBroken &&
     dd.max_dd !== null &&
     dd.dd_duration_days !== null &&
     dd.recovered !== null &&
@@ -1492,7 +1505,9 @@ export function cellsFromPeriodPacks(
       sharpe_daily: p.sharpe_daily,
       eval_path: p.eval_path,
       path_fallback: p.path_fallback ?? null,
-      daily_path_complete: Boolean(p.daily_path_complete),
+      daily_path_complete:
+        Boolean(p.daily_path_complete) &&
+        !isPathBroken(p.eval_path, p.path_fallback),
       survived: false,
       promote_as_main: false,
       go: false,
