@@ -3,7 +3,7 @@
 **Status:** **Live** (Track B1 — productionized in README).  
 **Paired ADR:** [`adr_llm_friendly_refactor.md`](./adr_llm_friendly_refactor.md) (**Accepted (Grok 2026-08-12)**).  
 **Live residual SoT (sole):** [`../phase62_residual_status.md`](../phase62_residual_status.md)  
-— **only** file that may hold live COMPLETE segs / raw_n / C8 / tip / Phase7 / Mass·READY.  
+— **live flags only** (COMPLETE segs / Mass·READY / pins / DEFER). Experiment scores: R2 + D1.  
 **This map never embeds live counts** (acq / residual agents own those numbers).  
 **Layout SoT:** [`repo_layout_migration.md`](./repo_layout_migration.md) (**DONE** Batches 0–E; Batch Z DEFER)  
 **Architecture hub:** [`../architecture.md`](../architecture.md) (PIT / Coverage V2 / MCP; not residual counts)

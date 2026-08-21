@@ -21,8 +21,10 @@ Phase 6 hardening utilities:
 
 ## Deprecated: `scripts/run_w*.py`
 
-Wave eval runners (`run_w90_*.py` … `run_w107_*.py`) are **frozen**. Do **not**
-add new `run_wNN_*.py`. Existing files stay until staged deletion.
+Wave eval runners (`run_w*.py`) are **frozen**. Do **not** add new
+`run_wNN_*.py`. Importer-zero scripts were deleted 2026-08-21; remaining files
+stay until tests/`unique_logic.legacy` stop importing them. See
+[`docs/architecture/wave_assets_deprecated.md`](../docs/architecture/wave_assets_deprecated.md).
 
 New research:
 

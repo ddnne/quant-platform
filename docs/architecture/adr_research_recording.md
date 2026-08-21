@@ -50,4 +50,6 @@ Markdown that restates numbers already in R2/D1 is not a record.
 
 ## Consequences
 
-Wave runners stay until extracted (shims / archive). Residual shrinks to live flags. Query is D1/R2, not grep of markdown.
+Importer-zero `run_w*` scripts are deleted on a staged schedule
+(`wave_assets_deprecated.md`). Residual is live flags only. Query is D1/R2,
+not grep of markdown.

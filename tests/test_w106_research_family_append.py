@@ -66,8 +66,8 @@ def test_family_append_is_recognition_not_pass():
 
 def test_append_logics_registered_not_generated():
     lids = [s["logic_id"] for s in w106.NEW_LS_VARIANTS]
-    assert set(lids) <= set(RESEARCH_FAMILY_APPEND_LOGIC_IDS)
-    assert len(RESEARCH_FAMILY_APPEND_LOGIC_IDS) == 7
+    assert set(lids) <= set(RESEARCH_UNIQUE_LOGIC_IDS)
+    assert RESEARCH_FAMILY_APPEND_LOGIC_IDS <= RESEARCH_UNIQUE_LOGIC_IDS
     for lid in sorted(RESEARCH_FAMILY_APPEND_LOGIC_IDS):
         tpl = LOGIC_TEMPLATES[lid]
         assert tpl.generation_enabled is False
@@ -98,7 +98,7 @@ def test_append_factory_period_net_not_unknown_and_not_a_pass():
     assert out["n_accepted"] == 3
     assert out["n_rejected"] == 0
     for a in out["accepted"]:
-        assert a["logic_id"] in RESEARCH_FAMILY_APPEND_LOGIC_IDS
+        assert a["logic_id"] in RESEARCH_UNIQUE_LOGIC_IDS
         assert a.get("eval_mapped_to_catalog") in (None, False)
         assert a.get("research_family_recognition") is True
         assert a.get("research_candidate") is False

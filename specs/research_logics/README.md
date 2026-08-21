@@ -24,5 +24,12 @@ params:
 evaluator: research.unique_logic.funding.evaluate_overnight_level_cs_tilt_daily_mtm
 ```
 
-Existing W104–W107 logics still live as Python tuples until B2 migrates them here.
-YAML files in this directory are the target shape; empty until that migration.
+YAML files here are the declaration path. W104–W107 evaluator *functions* still
+load through `research.unique_logic.legacy` until extracted. Run:
+
+```bash
+uv run python -m research.unique_logic --logic-id overnight_level_cs_tilt --logic-id xs_low_vol_mom
+uv run python scripts/record_research_eval.py --job-id eval-… --table data/ops/research_eval/catalog_table.json --put-r2 --apply-d1
+```
+
+Scores go to R2 + D1. Do not add `scripts/run_wNN_*.py`.

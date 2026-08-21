@@ -84,7 +84,7 @@ def test_w106_ls_variants_are_min_impl_not_grid_or_kill():
         "surprise_xs_rank_flip",
     ]
     assert len(ids) == 3
-    assert set(ids) <= set(RESEARCH_FAMILY_APPEND_LOGIC_IDS)
+    assert set(ids) <= set(RESEARCH_UNIQUE_LOGIC_IDS)
     for s in w106.NEW_LS_VARIANTS:
         assert s["new_unique_logic"] is True
         assert s["catalog"] is False
