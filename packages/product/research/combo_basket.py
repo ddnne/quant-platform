@@ -1,16 +1,14 @@
 """Equal-weight mini-combination of candidate-grade daily paths.
 
 Picks 2–5 occupancy-gated theses and blends their ``net_daily`` series
-per window. Not a promote / GO. Schema is the extension point for later
-risk-parity weights.
+per window. Metas are equal-weight 2–3 sleeve blends. Not a promote / GO.
+No correlation weights. Sleeve-count and liq majority prints are not a pass.
 """
 from __future__ import annotations
 
-import json
 from typing import Any, Mapping, Sequence
 
-from research.daily_path_eval import git_sha
-from research.eval_registry import PROTOCOL_DAILY_PATH, summarize_daily_path_cells
+from research.eval_registry import PROTOCOL_DAILY_PATH
 from research.stats_metrics import equity_path_drawdown, evaluate_daily_path_dd_gate
 from research.unique_logic.constants import (
     ALWAYS_ON_CS_STICKY,
@@ -26,61 +24,9 @@ DEFAULT_CANDIDATE_BASKET: tuple[str, ...] = (
     "overnight_down_cs_follow",
 )
 
-# Lessons (descriptive, never a pass / not GO):
-# univ50 vs univ80 cross-sleeve (same members, not a single-job call):
-# - fundamentals_sleeve / margin_flow_sleeve: keep primary_candidate
-# - event_fund_cross: keep, mixed not a flip
-# - known_candidate_head / event_family_only / family_spread:
-#   universe-unstable, drop primary_candidate
-# - repo_rate_sleeve: redesigned members; demote if still weak
-# - surprise_xs_only / two_member_easing / low_occupancy_band — retired
-# Candidate occupancy is sleeve mean, not union. No correlation optimization. No GO.
+# Candidate occupancy is sleeve mean, not union. No correlation weights. No GO.
 RETIRED_BASKET_RULES: frozenset[str] = frozenset(
     {"low_occupancy_band", "surprise_xs_only", "two_member_easing"}
-)
-DEPRECATED_MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
-    {
-        "basket_id": "basket_sparse4",
-        "rule": "low_occupancy_band",
-        "deprecated": True,
-        "deprecated_reason": (
-            "eval-cf-dp-baskets8-20260822a: "
-            "unconditional low-occupancy mix is systematically weak"
-        ),
-        "members": (
-            "flow_disagree_midmonth",
-            "event_friday_easing",
-            "curve_steep_midmonth_cs",
-            "fy_end_event_fade",
-        ),
-    },
-    {
-        "basket_id": "basket_surprise3",
-        "rule": "surprise_xs_only",
-        "deprecated": True,
-        "deprecated_reason": (
-            "eval-cf-dp-baskets50-20260822a: "
-            "surprise-only mix is systematically weak"
-        ),
-        "members": (
-            "surprise_xs_easing_change",
-            "surprise_xs_afterclose_easing",
-            "surprise_xs_skip_monday",
-        ),
-    },
-    {
-        "basket_id": "basket_pair_easing",
-        "rule": "two_member_easing",
-        "deprecated": True,
-        "deprecated_reason": (
-            "eval-cf-dp-baskets50-20260822a: lowest sleeve occupancy; "
-            "thin two-member easing pair"
-        ),
-        "members": (
-            "event_easing_midmonth",
-            "cs_easing_midmonth",
-        ),
-    },
 )
 MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
     {
@@ -235,7 +181,7 @@ def blend_net_daily(
     return out
 
 
-def _occupancy_ok(occ: float | None) -> bool:
+def occupancy_in_candidate_band(occ: float | None) -> bool:
     if occ is None:
         return False
     return float(NEAR_EMPTY_OCCUPANCY) < float(occ) < float(ALWAYS_ON_OCCUPANCY_WARN)
@@ -365,78 +311,6 @@ def _sharpe(net_daily: Sequence[float]) -> float | None:
     return m / (var ** 0.5) * (252 ** 0.5)
 
 
-def run_combo_basket_job(
-    *,
-    job_id: str,
-    logic_ids: Sequence[str] | None = None,
-    panels_prefix: str | None = None,
-    member_job_id: str | None = None,
-) -> dict[str, Any]:
-    """Fan-out member daily_paths (or reuse cells) and record a blended basket."""
-    from pathlib import Path
-
-    from qp_paths import repo_root
-    from research.cf_daily_path_job import run_cf_daily_path_fanout
-
-    ids = list(logic_ids or DEFAULT_CANDIDATE_BASKET)
-    reasons = validate_basket_members(ids)
-    if reasons:
-        raise ValueError(",".join(reasons))
-    basket_id = "basket_" + "_".join(ids[:2])
-    pack = run_cf_daily_path_fanout(
-        job_id=member_job_id or f"{job_id}__members",
-        logic_ids=ids,
-        panels_prefix=panels_prefix,
-    )
-    cells = list(pack.get("cells") or [])
-    if not cells and pack.get("table_path"):
-        from pathlib import Path as P
-
-        tp = P(str(pack["table_path"]))
-        if tp.is_file():
-            cells = json.loads(tp.read_text(encoding="utf-8"))
-    blended = blend_window_cells(cells, basket_id=basket_id, logic_ids=ids)
-    summary = summarize_daily_path_cells(blended, job_id=job_id)
-    out_dir = repo_root() / "data" / "ops" / "research_eval"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    table_path = out_dir / f"{job_id}_cells.json"
-    table_path.write_text(json.dumps(blended, indent=2, default=str) + "\n")
-    return {
-        "version": BASKET_SCHEMA_VERSION,
-        "job_id": job_id,
-        "protocol": PROTOCOL_DAILY_PATH,
-        "basket_id": basket_id,
-        "members": ids,
-        "weights": equal_weights(len(ids)),
-        "n_member_cells": len(cells),
-        "n_basket_cells": len(blended),
-        "member_fanout": {
-            "job_id": pack.get("job_id"),
-            "n_cells": pack.get("n_cells"),
-            "n_daily_path_complete": pack.get("n_daily_path_complete"),
-            "n_errors": pack.get("n_errors"),
-        },
-        "table_path": str(table_path),
-        "summary": {
-            "n_candidate_logics": summary.get("n_candidate_logics"),
-            "n_always_on": summary.get("n_always_on"),
-            "n_near_empty": summary.get("n_near_empty"),
-        },
-        "git_sha": git_sha(cwd=repo_root()),
-        "promote_as_main": False,
-        "go": False,
-        "notes": (
-            "Equal-weight blend of candidate-grade daily net_daily series. "
-            "Not a promotion. Occupancy of the blend is days with non-zero "
-            "blended net, not a member always_on."
-        ),
-    }
-
-
-def occupancy_in_candidate_band(occ: float | None) -> bool:
-    return _occupancy_ok(occ)
-
-
 def primary_mechanical_basket_defs() -> list[dict[str, Any]]:
     """Primary / primary_candidate mechanical rules. Retired stay out. Not GO."""
     return [
@@ -446,48 +320,28 @@ def primary_mechanical_basket_defs() -> list[dict[str, Any]]:
     ]
 
 
-def blend_primary_baskets(
-    cells: Sequence[Mapping[str, Any]],
-) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    for spec in primary_mechanical_basket_defs():
-        rows.extend(
-            blend_window_cells(
-                cells,
-                basket_id=spec["basket_id"],
-                logic_ids=spec["members"],
-            )
-        )
-    return rows
-
-
-def mechanical_basket_defs(*, include_deprecated: bool = False) -> list[dict[str, Any]]:
+def mechanical_basket_defs() -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
-    src: tuple[dict[str, object], ...] = MECHANICAL_BASKETS
-    if include_deprecated:
-        src = MECHANICAL_BASKETS + DEPRECATED_MECHANICAL_BASKETS
-    for raw in src:
+    for raw in MECHANICAL_BASKETS:
         rule = str(raw.get("rule") or "mechanical")
-        deprecated = bool(raw.get("deprecated")) or rule in RETIRED_BASKET_RULES
-        if deprecated and not include_deprecated:
+        if rule in RETIRED_BASKET_RULES:
             continue
         members = tuple(str(x) for x in (raw.get("members") or ()))
         reasons = validate_basket_members(members)
         if any(m in ALWAYS_ON_CS_STICKY for m in members):
             reasons.append("always_on_cs_member")
-        pc = bool(raw.get("primary_candidate")) and not deprecated
-        prim = bool(raw.get("primary")) and not deprecated
+        prim = bool(raw.get("primary"))
+        pc = bool(raw.get("primary_candidate")) or prim
         out.append(
             {
                 "basket_id": str(raw["basket_id"]),
                 "rule": rule,
                 "primary": prim,
-                "primary_candidate": pc or prim,
-                "deprecated": deprecated,
-                "deprecated_reason": raw.get("deprecated_reason"),
+                "primary_candidate": pc,
+                "deprecated": False,
                 "members": list(members),
                 "weights": equal_weights(len(members)),
-                "valid": not reasons and not deprecated,
+                "valid": not reasons,
                 "reject": reasons,
                 "promote_as_main": False,
                 "go": False,
@@ -592,7 +446,6 @@ def summarize_basket_trends(
         "notes": (
             "Mechanical equal-weight basket trends for later fund design. "
             "t/Sharpe/DD are descriptive only and never a promote/GO. "
-            "low_occupancy_band retired after baskets8 (systematically weak). "
             "Candidate occupancy is sleeve mean, not union."
         ),
     }
@@ -603,9 +456,7 @@ def _mean(xs: Sequence[Any]) -> float | None:
     return (sum(vs) / len(vs)) if vs else None
 
 
-# Equal-weight blends of mechanical sleeves. Not GO. No correlation weights.
-# univ100 summary_meta: event4/head metas contaminate flipped sleeves — retired.
-# Keep fund+flow / fund+event. Secondary: flow+event, three-sleeve.
+# Equal-weight 2–3 sleeve blends. Not GO. No correlation weights.
 META_BASKETS: tuple[dict[str, object], ...] = (
     {
         "meta_id": "meta_fund_flow",
@@ -624,69 +475,34 @@ META_BASKETS: tuple[dict[str, object], ...] = (
         ),
     },
 )
-META_SECONDARY: tuple[dict[str, object], ...] = (
-    {
-        "meta_id": "meta_flow_event",
-        "sleeves": ("basket_theme_flow", "basket_event_fund"),
-        "secondary": True,
-    },
-)
-DEPRECATED_META_BASKETS: tuple[dict[str, object], ...] = (
-    {
-        "meta_id": "meta_event4_flow",
-        "sleeves": ("basket_event4", "basket_theme_flow"),
-        "deprecated": True,
-        "deprecated_reason": "eval-cf-dp-baskets100: uses demoted event4",
-    },
-    {
-        "meta_id": "meta_event4_fund",
-        "sleeves": ("basket_event4", "basket_theme_fund"),
-        "deprecated": True,
-        "deprecated_reason": "eval-cf-dp-baskets100: uses demoted event4 sleeve",
-    },
-    {
-        "meta_id": "meta_head_fund",
-        "sleeves": ("basket_head4", "basket_theme_fund"),
-        "deprecated": True,
-        "deprecated_reason": "eval-cf-dp-baskets100: uses universe-unstable head4",
-    },
-)
 RETIRED_META_IDS: frozenset[str] = frozenset(
-    str(d["meta_id"]) for d in DEPRECATED_META_BASKETS
+    {"meta_event4_flow", "meta_event4_fund", "meta_head_fund"}
 )
 
 
-def meta_basket_defs(*, include_secondary: bool = False, include_deprecated: bool = False) -> list[dict[str, Any]]:
+def meta_basket_defs() -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     known = {d["basket_id"] for d in mechanical_basket_defs()}
-    src: tuple[dict[str, object], ...] = META_BASKETS
-    if include_secondary:
-        src = META_BASKETS + META_SECONDARY
-    if include_deprecated:
-        src = src + DEPRECATED_META_BASKETS
-    for raw in src:
+    for raw in META_BASKETS:
+        mid = str(raw["meta_id"])
+        if mid in RETIRED_META_IDS:
+            continue
         sleeves = tuple(str(x) for x in (raw.get("sleeves") or ()))
         reasons = []
         if not (2 <= len(sleeves) <= 3):
             reasons.append("need_2_or_3_sleeves")
         if len(set(sleeves)) != len(sleeves):
             reasons.append("duplicate_sleeves")
-        missing = [s for s in sleeves if s not in known]
-        if missing:
+        if any(s not in known for s in sleeves):
             reasons.append("unknown_sleeve")
-        deprecated = bool(raw.get("deprecated")) or str(raw.get("meta_id")) in RETIRED_META_IDS
-        if deprecated and not include_deprecated:
-            continue
         out.append(
             {
-                "meta_id": str(raw["meta_id"]),
+                "meta_id": mid,
                 "sleeves": list(sleeves),
                 "weights": equal_weights(len(sleeves)),
-                "valid": not reasons and not deprecated,
+                "valid": not reasons,
                 "reject": reasons,
-                "secondary": bool(raw.get("secondary")),
-                "deprecated": deprecated,
-                "deprecated_reason": raw.get("deprecated_reason"),
+                "deprecated": False,
                 "promote_as_main": False,
                 "go": False,
                 "not_a_pass": True,
@@ -867,24 +683,9 @@ def classify_sleeves_three_n(
         "go": False,
         "not_a_pass": True,
         "notes": (
-            "theme_fund/flow are stable_mid and dilute_at_large. "
             "A 100-only print is never stable. univ100_is_not_stable. "
             "not a pass / not GO."
         ),
-        "primary_candidate_notes": {
-            "basket_theme_fund": (
-                "keep primary_candidate: relatively better at mid-N; "
-                "dilutes at 100; not a pass / not GO"
-            ),
-            "basket_theme_flow": (
-                "keep primary_candidate: relatively better at mid-N; "
-                "dilutes at 100; not a pass / not GO"
-            ),
-            "basket_event_fund": (
-                "keep primary_candidate as fund-cross material; mixed at "
-                "80/100; not a pass / not GO"
-            ),
-        },
         "primary_candidate_is_not_a_pass": True,
     }
 
@@ -1024,27 +825,7 @@ def compare_mid_vs_liq(
         "go": False,
         "promote_as_main": False,
         "notes": (
-            "ADV mid_n_explore vs liq_large on the same sleeve/meta set "
-            "(refreshed ADV sleeve members). liq_print_is_not_stable. "
-            "not a pass / not GO."
+            "ADV mid_n_explore vs liq_large on the same sleeve/meta set. "
+            "liq_print_is_not_stable. not a pass / not GO."
         ),
     }
-
-
-def summarize_meta_trends(
-    cells: Sequence[Mapping[str, Any]],
-    *,
-    job_id: str,
-) -> dict[str, Any]:
-    """Active meta-basket trend. Not a pass. Retired metas stay out."""
-    pack = summarize_basket_trends(cells, job_id=job_id)
-    pack["version"] = "meta-basket-trend-summary/v1"
-    pack["not_a_pass"] = True
-    pack["retired_meta_ids"] = sorted(RETIRED_META_IDS)
-    pack["active_meta_ids"] = [d["meta_id"] for d in meta_basket_defs()]
-    pack["secondary_meta_ids"] = [d["meta_id"] for d in META_SECONDARY]
-    pack["notes"] = (
-        "Fund+flow / fund+event / fund+flow+event stay on the active line. "
-        "event4/head metas retired. flow+event is secondary. Not a pass."
-    )
-    return pack

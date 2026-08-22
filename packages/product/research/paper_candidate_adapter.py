@@ -1,36 +1,11 @@
-"""Paper receptacle adapter — class_hyp / research candidate → StrategySpec.
+"""UNARMED paper receptacle: class_hyp / research candidate → StrategySpec.
 
-Wave
-----
-W80 / w0816o Task D — **UNARMED** paper receptacle for candidates.
-W84 / w0816s — StrategySpec **v3** alignment: sticky fixed_horizon hold,
-cross_section_rank L-S, value_momentum_agree (fund). No research simplification.
-
-Purpose
--------
-Bridge research class-hypothesis candidates into a **paper-readable** envelope
-that carries a closed :class:`~strategies.spec.StrategySpec` plus aligned
-fields (horizon, costs, universe, rebalance). Paper is the pseudo-ops layer
-between research and live; this module is a **receptacle only**.
-
-Hard constraints (must never arm)
----------------------------------
-* Does **not** arm the paper scheduler continuously
-* Does **not** call ``run_paper`` / ``PaperExecutionService`` / trader prepare
-* Does **not** enable live orders or touch the live order path
-* Mass = NO-GO · Phase7 = OFF · READY undeclared · operational GO closed
-* ``research_candidate`` is never auto-promoted to True by this adapter
-* Input flags that claim arm/live/go are **stripped and overridden** closed
-
-StrategySpec alignment (W84)
-----------------------------
-* ``strategy-spec/v3`` supports ``rebalance=fixed_horizon`` + ``hold_days``
-  (sticky multi-day hold — research semantics).
-* ``cross_section_rank`` rule for CS L-S (long_frac / short_frac).
-* ``value_momentum_agree`` rule for fund value×mom with
-  ``fundamental_value_score`` + ``momentum_n``.
-* Residual approximations documented on envelope (portfolio MTM vs trade-level
-  research mean; no margin model on shorts).
+Closed envelope with nested StrategySpec plus horizon / costs / universe /
+rebalance. Does not arm the paper scheduler, call ``run_paper``, or touch
+the live order path. Mass NO-GO · Phase7 OFF · READY undeclared · GO closed.
+``research_candidate`` is never auto-promoted. Hostile arm/live/go input is
+stripped. Residuals (portfolio MTM vs trade-level mean; no short-margin
+model) stay on the envelope. Do not simplify research.
 """
 
 from __future__ import annotations
@@ -637,10 +612,6 @@ def adapt_class_hyp_candidate(
         cost_assumption = None
 
     discussion_only = True
-    if source.get("candidate_yes_no") in {"yes"} and source.get("research_candidate"):
-        # still force discussion_only — adapter never promotes
-        discussion_only = True
-
     residual_notes: list[str] = []
 
     if cid == CLASS_MULTI_DAY_HOLD:
@@ -696,12 +667,9 @@ def adapt_class_hyp_candidate(
             "cross_section_hold_10_mom3",
         }:
             n_mom = payload.get("cross_section_hold10_mom3_momentum_n", 3)
-        # W82 pin: sticky hold=10 uses mom=5 (not content-matched to hold).
-        # W85 promote: hold_10_mom3 defaults to mom=3 when variant says so.
+        # Sticky hold=10 uses mom=5 unless variant pins mom=3. Do not retune.
         if n_mom is not None:
             n_mom_i = int(n_mom)
-        elif variant_s in {"hold_10_mom3", "cross_section_hold_10_mom3"}:
-            n_mom_i = 3
         elif h == 10:
             n_mom_i = 5
         else:
@@ -1005,65 +973,12 @@ def example_event_post_payload() -> dict[str, Any]:
     }
 
 
-def emit_example_paper_specs(
-    out_dir: str | Path,
-    *,
-    bundle_path: str | Path | None = None,
-) -> dict[str, Path]:
-    """Write multi_day_hold 10d + event_post paper specs (UNARMED).
-
-    Prefers a class_hyp multi-year bundle when ``bundle_path`` exists; otherwise
-    uses synthetic discussion_only payloads (still unarmed).
-    """
+def emit_example_paper_specs(out_dir: str | Path) -> dict[str, Path]:
+    """Write multi_day_hold 10d + event_post paper specs (UNARMED)."""
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
-
-    mdh: PaperCandidateReceptacle
-    ep: PaperCandidateReceptacle
-
-    bundle: Mapping[str, Any] | None = None
-    if bundle_path is not None and Path(bundle_path).is_file():
-        bundle = json.loads(Path(bundle_path).read_text(encoding="utf-8"))
-    else:
-        # well-known W79 path (optional)
-        default_bundle = (
-            Path(__file__).resolve().parents[3]
-            / ".glm-logs"
-            / "w0816n_w79_go_final"
-            / "class_hyp_multi_year_bundle.json"
-        )
-        if default_bundle.is_file():
-            bundle = json.loads(default_bundle.read_text(encoding="utf-8"))
-
-    if bundle is not None and (
-        "multi_day_hold_10" in bundle or "multi_day_hold" in bundle
-    ):
-        key = "multi_day_hold_10" if "multi_day_hold_10" in bundle else "multi_day_hold"
-        mdh = adapt_from_class_hyp_bundle(bundle, key)
-        # force hold=10 for the named example when using multi_day_hold base
-        if key == "multi_day_hold":
-            mdh = adapt_class_hyp_candidate(
-                {
-                    **(dict(bundle.get(key) or {})),
-                    "hypothesis_class": CLASS_MULTI_DAY_HOLD,
-                    "variant": "hold_10",
-                    "hold_days": 10,
-                    "one_way_cost": bundle.get("one_way_cost", DEFAULT_ONE_WAY_COST),
-                    "codes": bundle.get("codes"),
-                    "candidate_summary": (bundle.get("candidate_summary") or {}).get(
-                        "multi_day_hold_10"
-                    )
-                    or (bundle.get("candidate_summary") or {}).get(key),
-                }
-            )
-    else:
-        mdh = adapt_class_hyp_candidate(example_multi_day_hold_10d_payload())
-
-    if bundle is not None and "event_post" in bundle:
-        ep = adapt_from_class_hyp_bundle(bundle, "event_post")
-    else:
-        ep = adapt_class_hyp_candidate(example_event_post_payload())
-
+    mdh = adapt_class_hyp_candidate(example_multi_day_hold_10d_payload())
+    ep = adapt_class_hyp_candidate(example_event_post_payload())
     paths: dict[str, Path] = {}
     for name, rec in (
         ("multi_day_hold_10d.json", mdh),
@@ -1093,7 +1008,7 @@ def emit_example_paper_specs(
         "files": sorted(paths.keys()),
         **_freeze_arm_flags(),
         "note": (
-            "Example paper receptacles for W80 Task D. UNARMED. "
+            "Example paper receptacles. UNARMED. "
             "Not continuous paper scheduler. Not live orders."
         ),
     }
