@@ -263,17 +263,30 @@ def test_mechanical_baskets_are_four_valid_defs() -> None:
     assert "known_candidate_head" not in {d["rule"] for d in prim}
 
 
-def test_meta_baskets_are_six_and_not_a_pass() -> None:
-    from research.combo_basket import META_BASKETS, meta_basket_defs
+def test_meta_baskets_are_fund_line_and_not_a_pass() -> None:
+    from research.combo_basket import (
+        META_BASKETS,
+        RETIRED_META_IDS,
+        meta_basket_defs,
+    )
 
     defs = meta_basket_defs()
-    assert len(defs) >= 6
-    assert len(META_BASKETS) >= 6
+    assert len(META_BASKETS) == 3
+    assert {d["meta_id"] for d in defs} == {
+        "meta_fund_flow",
+        "meta_fund_event",
+        "meta_fund_flow_event",
+    }
+    assert "meta_event4_flow" in RETIRED_META_IDS
+    assert "meta_event4_fund" in RETIRED_META_IDS
+    assert "meta_head_fund" in RETIRED_META_IDS
     for d in defs:
         assert d["valid"] is True
         assert d["go"] is False
         assert d["not_a_pass"] is True
+        assert d["deprecated"] is False
         assert 2 <= len(d["sleeves"]) <= 3
+        assert d["meta_id"] not in RETIRED_META_IDS
 
 
 def test_compare_basket_summaries_classifies_flip() -> None:
@@ -321,6 +334,63 @@ def test_compare_basket_summaries_classifies_flip() -> None:
     assert "basket_theme_fund" in out["stable_majority"]
     assert "basket_head4" in out["flipped"]
     assert "basket_theme_fund" in out["preferred_materials"]
+
+
+def test_classify_sleeves_three_n_dilutes_at_100() -> None:
+    from research.combo_basket import classify_sleeves_three_n
+
+    s50 = {
+        "baskets": [
+            {
+                "basket_id": "basket_theme_fund",
+                "n_pos_windows": 4,
+                "n_neg_windows": 2,
+            },
+            {
+                "basket_id": "basket_head4",
+                "n_pos_windows": 5,
+                "n_neg_windows": 1,
+            },
+        ]
+    }
+    s80 = {
+        "baskets": [
+            {
+                "basket_id": "basket_theme_fund",
+                "n_pos_windows": 4,
+                "n_neg_windows": 2,
+            },
+            {
+                "basket_id": "basket_head4",
+                "n_pos_windows": 2,
+                "n_neg_windows": 4,
+            },
+        ]
+    }
+    s100 = {
+        "baskets": [
+            {
+                "basket_id": "basket_theme_fund",
+                "n_pos_windows": 3,
+                "n_neg_windows": 3,
+            },
+            {
+                "basket_id": "basket_head4",
+                "n_pos_windows": 3,
+                "n_neg_windows": 3,
+            },
+        ]
+    }
+    out = classify_sleeves_three_n(s50, s80, s100)
+    assert out["version"] == "sleeve-universe-stability/v2"
+    assert out["univ100_is_not_stable"] is True
+    assert out["go"] is False
+    assert out["not_a_pass"] is True
+    assert "basket_theme_fund" in out["stable_mid"]
+    assert "basket_theme_fund" in out["dilutes_at_large"]
+    assert "basket_head4" in out["unstable"]
+    by = {r["basket_id"]: r for r in out["sleeves"]}
+    assert by["basket_theme_fund"]["class"] != "stable"
 
 
 def test_summarize_emits_candidate_family_counts() -> None:
@@ -447,6 +517,7 @@ def test_economic_themes_exist_in_catalog() -> None:
     assert len(ECONOMIC_THEME_IDS["vol_conditional"]) >= 4
     assert len(ECONOMIC_THEME_IDS["fundamentals"]) >= 6
     assert len(ECONOMIC_THEME_IDS["fund_leverage_cross"]) >= 5
+    assert len(ECONOMIC_THEME_IDS["fund_flow_liq"]) >= 8
     assert len(ECONOMIC_THEME_IDS["margin_surprise"]) >= 5
     assert len(ECONOMIC_THEME_IDS["repo_event"]) >= 4
     assert len(ECONOMIC_THEME_IDS["vol_fund_cross"]) >= 4
@@ -514,6 +585,14 @@ def test_sparse_gate_combo_parks_at_generation() -> None:
 
     assert is_ungated_name_level_cs(kind="cs", cs_gate="eq_ar_high") is True
     assert is_ungated_name_level_cs(kind="cs", cs_gate="eq_ar_high_easy") is False
+    assert is_ungated_name_level_cs(
+        kind="cs", cs_gate="eq_ar_high_margin_down", logic_id="cs_eqar_high_margin_down"
+    ) is False
+    by = {s["logic_id"]: s for s in NEW_COMBO_LOGIC}
+    assert by["cs_eqar_high"]["always_on_cs_sticky"] is True
+    assert by["cs_eqar_high"]["main_pool"] is False
+    assert by["cs_eqar_high_margin_down"]["always_on_cs_sticky"] is False
+    assert by["cs_eqar_high_margin_down"]["main_pool"] is True
     cells = [
         {
             "logic_id": "cs_eqar_high",

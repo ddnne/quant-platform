@@ -62,5 +62,5 @@ prose. Update the table after a published projection.
 
 Completion of a research turn requires an R2 **daily_path** job, not local JSON.
 Do not paste cell scores into this file. Latest recorded job id belongs in D1.
-Candidate pool (code: `CANDIDATE_POLICY`) excludes path_broken / path_collapsed / always_on / near_empty / data_requirement_unmet / near_duplicate.
-Latest empirical jobs (ids only): `eval-cf-dp-univ100-20260822a`, `eval-cf-dp-baskets100-20260822a`. Eval universe default **100 names** (was 80). Sleeve stability `research/eval/sleeve_stability/univ50_vs_univ80.json`. `theme_repo` demoted. Meta baskets recorded. TA/EqAR wired. Worker `research-mass-eval/v18-univ100`. GO deferred.
+Candidate pool (code: `CANDIDATE_POLICY`) excludes path_broken / path_collapsed / always_on / near_empty / data_requirement_unmet / near_duplicate / always_on_cs_sticky / worker_isolate_limit.
+Latest empirical jobs (ids only): `eval-cf-dp-liq100-20260822b` (ADV/fins composition, distinct from head-N `eval-cf-dp-univ100-20260822a`; thin 7-name `eval-cf-dp-liq100-20260822a` discarded), `eval-cf-dp-baskets-liq100-20260822b`, `eval-cf-dp-meta100-20260822a`. Sleeve triad `research/eval/sleeve_stability/univ50_vs_univ80_vs_univ100.json` (v2; 100-only is not stable). Universe rule `adv_desc_skip_missing_bars_and_fins`. Weak metas retired (`meta_event4_flow` / `meta_event4_fund` / `meta_head_fund`). Worker `research-mass-eval/v19-liq100`. GO deferred.

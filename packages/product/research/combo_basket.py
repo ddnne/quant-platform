@@ -604,6 +604,8 @@ def _mean(xs: Sequence[Any]) -> float | None:
 
 
 # Equal-weight blends of mechanical sleeves. Not GO. No correlation weights.
+# univ100 summary_meta: event4/head metas 2/4 or contaminate flipped sleeves — retired.
+# Keep fund+flow / fund+event. Secondary: flow+event, three-sleeve.
 META_BASKETS: tuple[dict[str, object], ...] = (
     {
         "meta_id": "meta_fund_flow",
@@ -614,10 +616,6 @@ META_BASKETS: tuple[dict[str, object], ...] = (
         "sleeves": ("basket_theme_fund", "basket_event_fund"),
     },
     {
-        "meta_id": "meta_flow_event",
-        "sleeves": ("basket_theme_flow", "basket_event_fund"),
-    },
-    {
         "meta_id": "meta_fund_flow_event",
         "sleeves": (
             "basket_theme_fund",
@@ -625,25 +623,48 @@ META_BASKETS: tuple[dict[str, object], ...] = (
             "basket_event_fund",
         ),
     },
+)
+META_SECONDARY: tuple[dict[str, object], ...] = (
     {
-        "meta_id": "meta_event4_fund",
-        "sleeves": ("basket_event4", "basket_theme_fund"),
+        "meta_id": "meta_flow_event",
+        "sleeves": ("basket_theme_flow", "basket_event_fund"),
+        "secondary": True,
     },
+)
+DEPRECATED_META_BASKETS: tuple[dict[str, object], ...] = (
     {
         "meta_id": "meta_event4_flow",
         "sleeves": ("basket_event4", "basket_theme_flow"),
+        "deprecated": True,
+        "deprecated_reason": "eval-cf-dp-baskets100: 2 pos / 4 neg; uses demoted event4",
+    },
+    {
+        "meta_id": "meta_event4_fund",
+        "sleeves": ("basket_event4", "basket_theme_fund"),
+        "deprecated": True,
+        "deprecated_reason": "eval-cf-dp-baskets100: uses demoted event4 sleeve",
     },
     {
         "meta_id": "meta_head_fund",
         "sleeves": ("basket_head4", "basket_theme_fund"),
+        "deprecated": True,
+        "deprecated_reason": "eval-cf-dp-baskets100: uses universe-unstable head4",
     },
+)
+RETIRED_META_IDS: frozenset[str] = frozenset(
+    str(d["meta_id"]) for d in DEPRECATED_META_BASKETS
 )
 
 
-def meta_basket_defs() -> list[dict[str, Any]]:
+def meta_basket_defs(*, include_secondary: bool = False, include_deprecated: bool = False) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     known = {d["basket_id"] for d in mechanical_basket_defs()}
-    for raw in META_BASKETS:
+    src: tuple[dict[str, object], ...] = META_BASKETS
+    if include_secondary:
+        src = META_BASKETS + META_SECONDARY
+    if include_deprecated:
+        src = src + DEPRECATED_META_BASKETS
+    for raw in src:
         sleeves = tuple(str(x) for x in (raw.get("sleeves") or ()))
         reasons = []
         if not (2 <= len(sleeves) <= 3):
@@ -653,13 +674,19 @@ def meta_basket_defs() -> list[dict[str, Any]]:
         missing = [s for s in sleeves if s not in known]
         if missing:
             reasons.append("unknown_sleeve")
+        deprecated = bool(raw.get("deprecated")) or str(raw.get("meta_id")) in RETIRED_META_IDS
+        if deprecated and not include_deprecated:
+            continue
         out.append(
             {
                 "meta_id": str(raw["meta_id"]),
                 "sleeves": list(sleeves),
                 "weights": equal_weights(len(sleeves)),
-                "valid": not reasons,
+                "valid": not reasons and not deprecated,
                 "reject": reasons,
+                "secondary": bool(raw.get("secondary")),
+                "deprecated": deprecated,
+                "deprecated_reason": raw.get("deprecated_reason"),
                 "promote_as_main": False,
                 "go": False,
                 "not_a_pass": True,
@@ -751,3 +778,129 @@ def compare_basket_summaries(
             "theme_fund / theme_flow kept 4/2 on both univ50 and univ80."
         ),
     }
+
+
+def classify_sleeves_three_n(
+    summary_50: Mapping[str, Any],
+    summary_80: Mapping[str, Any],
+    summary_100: Mapping[str, Any],
+) -> dict[str, Any]:
+    """stable_mid / dilutes_at_large / unstable. A 100-only print is not stable."""
+
+    def _rows(summary: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+        return {
+            str(r.get("basket_id")): r
+            for r in (summary.get("baskets") or [])
+            if r.get("basket_id")
+        }
+
+    def _maj(row: Mapping[str, Any] | None) -> int:
+        if not row:
+            return 0
+        p, n = int(row.get("n_pos_windows") or 0), int(row.get("n_neg_windows") or 0)
+        if p > n:
+            return 1
+        if n > p:
+            return -1
+        return 0
+
+    a, b, c = _rows(summary_50), _rows(summary_80), _rows(summary_100)
+    ids = sorted(set(a) | set(b) | set(c))
+    sleeves: list[dict[str, Any]] = []
+    stable_mid: list[str] = []
+    dilutes: list[str] = []
+    unstable: list[str] = []
+    for bid in ids:
+        m50, m80, m100 = _maj(a.get(bid)), _maj(b.get(bid)), _maj(c.get(bid))
+        # Mid-N agreement with a positive majority, then 100 goes mixed/flip.
+        mid_ok = m50 == m80 == 1
+        large_dilute = mid_ok and m100 != 1
+        flipped = (m50 != 0 and m80 != 0 and m50 != m80) or (
+            m50 == 1 and m80 == -1
+        )
+        if flipped or (m50 == 1 and m80 == 1 and m100 == -1):
+            kind = "unstable"
+            unstable.append(bid)
+        elif large_dilute:
+            kind = "dilutes_at_large"
+            dilutes.append(bid)
+            if mid_ok:
+                stable_mid.append(bid)
+        elif mid_ok and m100 == 1:
+            kind = "stable_mid"
+            stable_mid.append(bid)
+        else:
+            kind = "unstable" if (m50 != 0 and m80 != 0 and m50 != m80) else "mixed"
+            if kind == "unstable":
+                unstable.append(bid)
+        sleeves.append(
+            {
+                "basket_id": bid,
+                "class": kind,
+                "univ50_maj": m50,
+                "univ80_maj": m80,
+                "univ100_maj": m100,
+                "univ50": {
+                    "n_pos": int((a.get(bid) or {}).get("n_pos_windows") or 0),
+                    "n_neg": int((a.get(bid) or {}).get("n_neg_windows") or 0),
+                },
+                "univ80": {
+                    "n_pos": int((b.get(bid) or {}).get("n_pos_windows") or 0),
+                    "n_neg": int((b.get(bid) or {}).get("n_neg_windows") or 0),
+                },
+                "univ100": {
+                    "n_pos": int((c.get(bid) or {}).get("n_pos_windows") or 0),
+                    "n_neg": int((c.get(bid) or {}).get("n_neg_windows") or 0),
+                },
+            }
+        )
+    return {
+        "version": "sleeve-universe-stability/v2",
+        "stable_mid": stable_mid,
+        "dilutes_at_large": dilutes,
+        "unstable": unstable,
+        "preferred_materials": ["basket_theme_fund", "basket_theme_flow"],
+        "sleeves": sleeves,
+        "univ100_is_not_stable": True,
+        "promote_as_main": False,
+        "go": False,
+        "not_a_pass": True,
+        "notes": (
+            "theme_fund/flow are stable_mid (4/2 at 50 and 80) and "
+            "dilute_at_large (3/3 at 100). A 100-only print is never stable."
+        ),
+        "primary_candidate_notes": {
+            "basket_theme_fund": (
+                "keep primary_candidate: relatively better at mid-N; "
+                "dilutes at 100; not a pass / not GO"
+            ),
+            "basket_theme_flow": (
+                "keep primary_candidate: relatively better at mid-N; "
+                "dilutes at 100; not a pass / not GO"
+            ),
+            "basket_event_fund": (
+                "keep primary_candidate as fund-cross material; mixed at "
+                "80/100; not a pass / not GO"
+            ),
+        },
+        "primary_candidate_is_not_a_pass": True,
+    }
+
+
+def summarize_meta_trends(
+    cells: Sequence[Mapping[str, Any]],
+    *,
+    job_id: str,
+) -> dict[str, Any]:
+    """Active meta-basket trend. Not a pass. Retired metas stay out."""
+    pack = summarize_basket_trends(cells, job_id=job_id)
+    pack["version"] = "meta-basket-trend-summary/v1"
+    pack["not_a_pass"] = True
+    pack["retired_meta_ids"] = sorted(RETIRED_META_IDS)
+    pack["active_meta_ids"] = [d["meta_id"] for d in meta_basket_defs()]
+    pack["secondary_meta_ids"] = [d["meta_id"] for d in META_SECONDARY]
+    pack["notes"] = (
+        "Fund+flow / fund+event / fund+flow+event stay on the active line. "
+        "event4/head metas retired. flow+event is secondary. Not a pass."
+    )
+    return pack

@@ -15,7 +15,6 @@ from typing import Any, Mapping, Sequence
 from qp_paths import repo_root
 from research.cf_mass_eval_job import DEFAULT_MAX_CODES
 from research.class_hyp_eval import (
-    DEFAULT_EVAL_CODES,
     build_repo_curve_series,
     load_fins_events_from_sqlite,
     load_margin_from_sqlite,
@@ -295,7 +294,9 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 0
 
-    codes = list(DEFAULT_EVAL_CODES)[: int(args.max_codes)]
+    from research.class_hyp_eval import select_eval_universe
+
+    codes = select_eval_universe(max_codes=int(args.max_codes))
     extras = _load_extras(args.sqlite, codes=codes)
     _log(
         json.dumps(

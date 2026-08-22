@@ -321,6 +321,150 @@ DEFAULT_EVAL_CODES: tuple[str, ...] = (
     "95320",
 )
 
+# Ranked pool for ADV/fins selection. DEFAULT_EVAL_CODES is the legacy head-N
+# list; production panels use select_eval_universe (skip missing, no invent).
+EVAL_UNIVERSE_POOL: tuple[str, ...] = DEFAULT_EVAL_CODES + (
+    "70110",
+    "72050",
+    "72610",
+    "73090",
+    "80530",
+    "82670",
+    "86970",
+    "90070",
+    "90220",
+    "91040",
+    "91070",
+    "95020",
+    "95130",
+    "57110",
+    "63020",
+    "65020",
+    "67010",
+    "67620",
+    "68410",
+    "70120",
+    "77350",
+    "79510",
+    "80320",
+    "82520",
+    "83090",
+    "84180",
+    "84730",
+    "85930",
+    "86980",
+    "87290",
+)
+UNIVERSE_SELECT_RULE: str = "adv_desc_skip_missing_bars_and_fins"
+UNIVERSE_MIN_BAR_DAYS: int = 40
+# One TA/EqAR print is enough to keep a name. Requiring 4 in a 10-month
+# window collapsed the pool to quarterly-only names (~7). Skip zero; no invent.
+UNIVERSE_MIN_FINS_TA: int = 1
+UNIVERSE_MIN_FINS_EQAR: int = 1
+
+
+def rank_eval_codes(
+    scored: Sequence[Mapping[str, Any]],
+    *,
+    max_codes: int,
+    min_bar_days: int = UNIVERSE_MIN_BAR_DAYS,
+    min_fins_ta: int = UNIVERSE_MIN_FINS_TA,
+    min_fins_eqar: int = UNIVERSE_MIN_FINS_EQAR,
+) -> list[str]:
+    """Rank by ADV; skip missing bars/TA/EqAR. No invent, not list-order."""
+    rows: list[tuple[float, str]] = []
+    for raw in scored:
+        code = str(raw.get("code") or "").strip()
+        if not code:
+            continue
+        try:
+            adv = float(raw.get("adv"))
+        except (TypeError, ValueError):
+            continue
+        if adv <= 0:
+            continue
+        try:
+            n_bars = int(raw.get("n_bars") or 0)
+            n_ta = int(raw.get("n_ta") or 0)
+            n_eqar = int(raw.get("n_eqar") or 0)
+        except (TypeError, ValueError):
+            continue
+        if n_bars < int(min_bar_days):
+            continue
+        if n_ta < int(min_fins_ta) or n_eqar < int(min_fins_eqar):
+            continue
+        rows.append((adv, code))
+    rows.sort(key=lambda x: (-x[0], x[1]))
+    out: list[str] = []
+    seen: set[str] = set()
+    for _adv, code in rows:
+        if code in seen:
+            continue
+        seen.add(code)
+        out.append(code)
+        if len(out) >= int(max_codes):
+            break
+    return out
+
+
+def select_eval_universe(
+    *,
+    max_codes: int,
+    pool: Sequence[str] | None = None,
+    period_start: str = "2019-01-01",
+    period_end: str = "2019-10-21",
+) -> list[str]:
+    """Liquidity-first universe. Missing bars/fins → skip. Never invent."""
+    want = [str(c).strip() for c in (pool or EVAL_UNIVERSE_POOL) if str(c).strip()]
+    n = max(1, int(max_codes))
+    if not want:
+        return list(DEFAULT_EVAL_CODES)[:n]
+    rich = load_bars_from_sqlite_rich(
+        codes=want,
+        period_start=period_start,
+        period_end=period_end,
+    )
+    fins = load_fins_events_from_sqlite(
+        codes=want, start=period_start, end=period_end
+    )
+    scored: list[dict[str, Any]] = []
+    for code in want:
+        pairs = list(rich.get(code) or [])
+        adv_vals: list[float] = []
+        for _d, rec in pairs:
+            if not isinstance(rec, Mapping):
+                continue
+            va = rec.get("Va")
+            try:
+                if va is not None:
+                    adv_vals.append(float(va))
+                    continue
+            except (TypeError, ValueError):
+                pass
+            try:
+                vo = rec.get("Vo")
+                px = rec.get("close")
+                if vo is not None and px is not None:
+                    adv_vals.append(float(vo) * float(px))
+            except (TypeError, ValueError):
+                continue
+        evs = list(fins.get(code) or [])
+        scored.append(
+            {
+                "code": code,
+                "adv": (sum(adv_vals) / len(adv_vals)) if adv_vals else 0.0,
+                "n_bars": len(pairs),
+                "n_ta": sum(1 for e in evs if e.get("ta") is not None),
+                "n_eqar": sum(1 for e in evs if e.get("eq_ar") is not None),
+            }
+        )
+    ranked = rank_eval_codes(scored, max_codes=n)
+    if len(ranked) >= n:
+        return ranked
+    # Fill only from ranked-eligible remainder; never invent empty names.
+    return ranked
+
+
 # W80: prefer full-year windows when W64 full mirrors exist; else Q4.
 # Full mirrors currently cover 2015/2019/2021/2023 (~Jan–Oct). Q4 kept for
 # 2017/2025 so multi-year span remains ≥6 years with rate-based sufficiency.
@@ -5367,6 +5511,10 @@ __all__ = [
     "DEFAULT_BARS_FULL_MIRROR_DIR",
     "DEFAULT_BARS_MIRROR_DIR",
     "DEFAULT_EVAL_CODES",
+    "EVAL_UNIVERSE_POOL",
+    "UNIVERSE_SELECT_RULE",
+    "rank_eval_codes",
+    "select_eval_universe",
     "DEFAULT_PERIODS",
     "DEFAULT_PERIODS_Q4",
     "DEFAULT_SQLITE",

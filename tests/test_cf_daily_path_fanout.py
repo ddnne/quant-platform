@@ -122,10 +122,40 @@ def test_daily_path_spec_keeps_unique_event() -> None:
 
 def test_eval_universe_is_not_fifteen() -> None:
     from research.cf_mass_eval_job import DEFAULT_MAX_CODES
-    from research.class_hyp_eval import DEFAULT_EVAL_CODES
+    from research.class_hyp_eval import (
+        DEFAULT_EVAL_CODES,
+        EVAL_UNIVERSE_POOL,
+        UNIVERSE_SELECT_RULE,
+    )
 
     assert DEFAULT_MAX_CODES > 80
     assert len(DEFAULT_EVAL_CODES) >= DEFAULT_MAX_CODES
+    assert UNIVERSE_SELECT_RULE == "adv_desc_skip_missing_bars_and_fins"
+    assert len(EVAL_UNIVERSE_POOL) > len(DEFAULT_EVAL_CODES)
+    from research.class_hyp_eval import UNIVERSE_MIN_FINS_TA, UNIVERSE_MIN_FINS_EQAR
+
+    assert UNIVERSE_MIN_FINS_TA == 1
+    assert UNIVERSE_MIN_FINS_EQAR == 1
+
+
+def test_rank_eval_codes_is_not_head_n_and_skips_missing() -> None:
+    from research.class_hyp_eval import rank_eval_codes
+
+    scored = [
+        {"code": "AAAAA", "adv": 10.0, "n_bars": 50, "n_ta": 1, "n_eqar": 1},
+        {"code": "BBBBB", "adv": 100.0, "n_bars": 50, "n_ta": 1, "n_eqar": 1},
+        {"code": "CCCCC", "adv": 90.0, "n_bars": 10, "n_ta": 1, "n_eqar": 1},
+        {"code": "DDDDD", "adv": 80.0, "n_bars": 50, "n_ta": 0, "n_eqar": 1},
+        {"code": "EEEEE", "adv": 70.0, "n_bars": 50, "n_ta": 1, "n_eqar": 0},
+        {"code": "FFFFF", "adv": 60.0, "n_bars": 50, "n_ta": 1, "n_eqar": 1},
+    ]
+    ranked = rank_eval_codes(scored, max_codes=10)
+    assert ranked[0] == "BBBBB"
+    assert ranked != [row["code"] for row in scored][: len(ranked)]
+    assert "CCCCC" not in ranked
+    assert "DDDDD" not in ranked
+    assert "EEEEE" not in ranked
+    assert "AAAAA" in ranked
 
 
 def test_bar_native_count_meets_thirty() -> None:

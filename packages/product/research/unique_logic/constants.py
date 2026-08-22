@@ -252,6 +252,32 @@ CF_NEW_EVENT_THESIS_IDS: frozenset[str] = frozenset(
         "surprise_xs_positive_eps_easy",
         "event_repo3m_down_afterclose",
         "surprise_xs_margin_down_on_impulse",
+        "event_eqar_high_cluster",
+        "event_ta_up_cluster",
+        "event_cheap_pb_cluster",
+        "event_eqar_high_large_surprise",
+        "event_ta_up_large_surprise",
+        "event_cheap_pb_large_surprise",
+        "event_eqar_high_margin_up_fade",
+        "event_ta_up_margin_up_fade",
+        "event_cheap_pb_margin_up_fade",
+        "event_eqar_high_liq_high",
+        "event_ta_up_liq_high",
+        "event_cheap_pb_liq_high",
+        "event_eqar_high_price_down",
+        "event_ta_up_price_down",
+        "event_cheap_pb_price_down",
+        "event_margin_up_price_down_fade",
+        "event_margin_down_price_down",
+        "event_eqar_high_eps_up",
+        "event_ta_up_eps_up",
+        "event_positive_eps_margin_down",
+        "event_div_payer_margin_down",
+        "event_eqar_low_margin_up_fade",
+        "event_liq_high_large_surprise",
+        "surprise_xs_eqar_high_liq_high",
+        "surprise_xs_margin_up_price_down",
+        "surprise_xs_eqar_high_price_down",
     }
 )
 CF_NEW_CS_THESIS_IDS: frozenset[str] = frozenset(
@@ -348,6 +374,10 @@ CF_NEW_CS_THESIS_IDS: frozenset[str] = frozenset(
         "cs_margin_up_easy",
         "cs_curve_flatten_easy",
         "cs_eqar_low_tight",
+        "cs_eqar_high_margin_down",
+        "cs_ta_up_margin_down",
+        "cs_cheap_pb_easy",
+        "cs_eqar_high_on_impulse",
     }
 )
 CF_NEW_THESIS_IDS: frozenset[str] = CF_NEW_EVENT_THESIS_IDS | CF_NEW_CS_THESIS_IDS
@@ -390,6 +420,15 @@ TERM_STRUCTURE_REQUIRED: frozenset[str] = frozenset(
 )
 # Small-universe shards historically emptied these AND-gates. Parked until a
 # larger-universe re-eval fills occupancy. data_requirement_unmet / main_pool=false.
+# Isolate CPU/memory limit on 100-name r2_panels (CF 1102). Parked, not densified.
+WORKER_ISOLATE_LIMIT_IDS: frozenset[str] = frozenset(
+    {
+        "event_eqar_high_cluster",
+        "event_ta_up_cluster",
+        "event_cheap_pb_cluster",
+        "cs_eqar_high_on_impulse",
+    }
+)
 SPARSE_ON_15NAME_SHARD: frozenset[str] = frozenset(
     {
         "event_may_easing",
@@ -488,6 +527,7 @@ CANDIDATE_POLICY: dict[str, object] = {
         "path_collapsed",
         "near_duplicate",
         "always_on_cs_sticky",
+        "worker_isolate_limit",
     ),
     "always_on_occupancy": ALWAYS_ON_OCCUPANCY_WARN,
     "near_empty_occupancy": NEAR_EMPTY_OCCUPANCY,
@@ -576,6 +616,28 @@ ECONOMIC_THEME_IDS: dict[str, frozenset[str]] = {
             "cs_eqar_high_flatten",
             "surprise_xs_eqar_low_fade",
             "event_ta_up_on_impulse",
+            "event_eqar_high_cluster",
+            "event_eqar_high_large_surprise",
+            "event_eqar_high_liq_high",
+            "event_eqar_high_price_down",
+            "event_ta_up_liq_high",
+            "cs_eqar_high_margin_down",
+            "cs_eqar_high_on_impulse",
+        }
+    ),
+    "fund_flow_liq": frozenset(
+        {
+            "event_eqar_high_liq_high",
+            "event_ta_up_liq_high",
+            "event_cheap_pb_liq_high",
+            "event_liq_high_large_surprise",
+            "event_eqar_high_price_down",
+            "event_margin_up_price_down_fade",
+            "event_margin_down_price_down",
+            "event_eqar_high_margin_up_fade",
+            "surprise_xs_eqar_high_liq_high",
+            "cs_cheap_pb_easy",
+            "cs_ta_up_margin_down",
         }
     ),
     "margin_surprise": frozenset(

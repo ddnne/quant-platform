@@ -20,7 +20,7 @@ Architecture
 Multi-period policy
 -------------------
 * ≥4–6 multi-year windows (full-prefer 2015/19/21/23 + Q4 2017/25)
-* max_codes default 30 (was 15); max_days ≤ 200 per period (CF wall-clock)
+* max_codes default 100 (ADV-ranked, skip missing bars/TA/EqAR); max_days ≤ 200 per period (CF wall-clock)
 * Heavy multi-year deep eval remains local ``run_mass_factory`` /
   ``class_hyp_eval`` for promising survivors only
 
@@ -1495,7 +1495,7 @@ def panels_cache_id(
     max_days: int,
 ) -> str:
     ids = ",".join(str(p.get("period_id") or "") for p in periods)
-    raw = f"v8_univ100_ta|{ids}|c{int(max_codes)}|d{int(max_days)}"
+    raw = f"v10_liq_adv_fins|{ids}|c{int(max_codes)}|d{int(max_days)}"
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
 
@@ -1562,6 +1562,8 @@ def resolve_or_stage_panels(
     cid = panels_cache_id(period_rows, max_codes=max_codes, max_days=max_days)
     meta_key = f"{PANELS_CACHE_PREFIX}/{cid}/meta.json"
     prefix = f"{PANELS_CACHE_PREFIX}/{cid}/panels"
+    from research.class_hyp_eval import UNIVERSE_SELECT_RULE, select_eval_universe
+
     if not force_stage:
         existing = try_r2_get_json(meta_key)
         if existing and int(existing.get("n_ok") or 0) > 0:
@@ -1571,9 +1573,12 @@ def resolve_or_stage_panels(
             existing["cache_id"] = cid
             existing["meta_key"] = meta_key
             return existing
+    # Rank by ADV, skip missing bars/TA/EqAR. Cache miss / force_stage only.
+    selected_codes = select_eval_universe(max_codes=int(max_codes))
     staged = stage_real_panels_to_r2(
         job_id,
         period_rows,
+        codes=selected_codes,
         max_codes=max_codes,
         max_days=max_days,
         staging_dir=staging_dir,
@@ -1588,6 +1593,9 @@ def resolve_or_stage_panels(
         "n_periods": int(staged.get("n_periods") or 0),
         "max_codes": int(max_codes),
         "max_days": int(max_days),
+        "universe_select": UNIVERSE_SELECT_RULE,
+        "n_selected_codes": len(selected_codes),
+        "selected_codes": list(selected_codes),
         "period_ids": [p.get("period_id") for p in period_rows],
         "reused": False,
         "force_stage": bool(force_stage),

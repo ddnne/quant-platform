@@ -47,6 +47,16 @@ describe("comboEventGateOk", () => {
     expect(comboEventGateOk("ta_up", up, {}, {}, 8, dummyPanel)).toBe(true);
     expect(comboEventGateOk("ta_up", down, {}, {}, 8, dummyPanel)).toBe(false);
   });
+
+  it("liq_high skips missing ADV and keeps above-median names", () => {
+    const panel = {
+      adv_by_code: { "13010": 200, "72030": 50, "67580": 40, "99840": 30 },
+    } as PeriodPanel;
+    expect(comboEventGateOk("liq_high", ev, {}, {}, 8, panel)).toBe(true);
+    const thin = { ...ev, code: "99840" };
+    expect(comboEventGateOk("liq_high", thin, {}, {}, 8, panel)).toBe(false);
+    expect(comboEventGateOk("liq_high", ev, {}, {}, 8, dummyPanel)).toBe(false);
+  });
 });
 
 describe("crossed CS gates fail closed without extras", () => {

@@ -11,6 +11,7 @@ from typing import Any, Mapping
 from research.daily_path_eval import held_book_daily_mtm, panel_index
 from research.unique_logic.constants import (
     CF_NEW_THESIS_IDS,
+    WORKER_ISOLATE_LIMIT_IDS,
     is_ungated_name_level_cs,
     sparse_15name_reason,
 )
@@ -2130,6 +2131,272 @@ _SPECS: tuple[dict[str, Any], ...] = (
         "kind": "surprise_xs",
         "why_different_from": ["event_margin_down_on_impulse", "surprise_xs_margin_down"],
     },
+    {
+        "logic_id": "event_eqar_high_cluster",
+        "family_id": "event_fund_cross",
+        "thesis": "PEAD when EqAR is high AND disclosures are clustered (quality in a busy week).",
+        "gates": ("eq_ar_high", "cluster"),
+        "side": "orig",
+        "kind": "event",
+        "why_different_from": ["event_eqar_high_pead", "event_cluster_easy_pead"],
+    },
+    {
+        "logic_id": "event_ta_up_cluster",
+        "family_id": "event_fund_cross",
+        "thesis": "PEAD when TA rose AND disclosures are clustered.",
+        "gates": ("ta_up", "cluster"),
+        "side": "orig",
+        "kind": "event",
+        "why_different_from": ["event_ta_up_pead", "event_eqar_high_cluster"],
+    },
+    {
+        "logic_id": "event_cheap_pb_cluster",
+        "family_id": "event_fund_cross",
+        "thesis": "PEAD when P/B is cheap AND disclosures are clustered.",
+        "gates": ("cheap_pb", "cluster"),
+        "side": "orig",
+        "kind": "event",
+        "why_different_from": ["event_cheap_pb_pead", "event_eqar_high_cluster"],
+    },
+    {
+        "logic_id": "event_eqar_high_large_surprise",
+        "family_id": "event_fund_cross",
+        "thesis": "Large-surprise PEAD only when EqAR is high (quality confirms the surprise).",
+        "gates": ("eq_ar_high", "large_surprise"),
+        "side": "orig",
+        "kind": "event",
+        "why_different_from": ["event_eqar_high_pead", "event_large_surprise_easy_funding"],
+    },
+    {
+        "logic_id": "event_ta_up_large_surprise",
+        "family_id": "event_fund_cross",
+        "thesis": "Large-surprise PEAD only when TA rose (growth confirms the surprise).",
+        "gates": ("ta_up", "large_surprise"),
+        "side": "orig",
+        "kind": "event",
+        "why_different_from": ["event_ta_up_pead", "event_eqar_high_large_surprise"],
+    },
+    {
+        "logic_id": "event_cheap_pb_large_surprise",
+        "family_id": "event_fund_cross",
+        "thesis": "Large-surprise PEAD only when P/B is cheap (value PEAD).",
+        "gates": ("cheap_pb", "large_surprise"),
+        "side": "orig",
+        "kind": "event",
+        "why_different_from": ["event_cheap_pb_pead", "event_eqar_high_large_surprise"],
+    },
+    {
+        "logic_id": "event_eqar_high_margin_up_fade",
+        "family_id": "event_margin_crowd_combo",
+        "thesis": "Fade quality PEAD when the name is crowding on margin (quality crowding).",
+        "gates": ("eq_ar_high", "margin_up"),
+        "side": "flip",
+        "kind": "event",
+        "why_different_from": ["event_eqar_high_margin_down", "event_eqar_high_uncrowded"],
+    },
+    {
+        "logic_id": "event_ta_up_margin_up_fade",
+        "family_id": "event_margin_crowd_combo",
+        "thesis": "Fade TA-up PEAD when the name is crowding on margin.",
+        "gates": ("ta_up", "margin_up"),
+        "side": "flip",
+        "kind": "event",
+        "why_different_from": ["event_ta_up_margin_down", "event_eqar_high_margin_up_fade"],
+    },
+    {
+        "logic_id": "event_cheap_pb_margin_up_fade",
+        "family_id": "event_margin_crowd_combo",
+        "thesis": "Fade cheap-PB PEAD when the name is crowding on margin.",
+        "gates": ("cheap_pb", "margin_up"),
+        "side": "flip",
+        "kind": "event",
+        "why_different_from": ["event_cheap_pb_uncrowded", "event_eqar_high_margin_up_fade"],
+    },
+    {
+        "logic_id": "event_eqar_high_liq_high",
+        "family_id": "event_fund_cross",
+        "thesis": "PEAD when EqAR is high AND the name's ADV is above the universe median (liquid quality).",
+        "gates": ("eq_ar_high", "liq_high"),
+        "side": "orig",
+        "kind": "event",
+        "why_different_from": ["event_eqar_high_pead", "event_eqar_high_uncrowded"],
+    },
+    {
+        "logic_id": "event_ta_up_liq_high",
+        "family_id": "event_fund_cross",
+        "thesis": "PEAD when TA rose AND ADV is above the universe median.",
+        "gates": ("ta_up", "liq_high"),
+        "side": "orig",
+        "kind": "event",
+        "why_different_from": ["event_ta_up_pead", "event_eqar_high_liq_high"],
+    },
+    {
+        "logic_id": "event_cheap_pb_liq_high",
+        "family_id": "event_fund_cross",
+        "thesis": "PEAD when P/B is cheap AND ADV is above the universe median (liquid value).",
+        "gates": ("cheap_pb", "liq_high"),
+        "side": "orig",
+        "kind": "event",
+        "why_different_from": ["event_cheap_pb_pead", "event_eqar_high_liq_high"],
+    },
+    {
+        "logic_id": "event_eqar_high_price_down",
+        "family_id": "event_fund_cross",
+        "thesis": "PEAD when EqAR is high AND the name sold off into the event (quality dip).",
+        "gates": ("eq_ar_high", "price_down"),
+        "side": "orig",
+        "kind": "event",
+        "why_different_from": ["event_eqar_high_pead", "event_eqar_high_on_impulse"],
+    },
+    {
+        "logic_id": "event_ta_up_price_down",
+        "family_id": "event_fund_cross",
+        "thesis": "PEAD when TA rose AND the name sold off into the event.",
+        "gates": ("ta_up", "price_down"),
+        "side": "orig",
+        "kind": "event",
+        "why_different_from": ["event_ta_up_pead", "event_eqar_high_price_down"],
+    },
+    {
+        "logic_id": "event_cheap_pb_price_down",
+        "family_id": "event_fund_cross",
+        "thesis": "PEAD when P/B is cheap AND the name sold off into the event (value dip).",
+        "gates": ("cheap_pb", "price_down"),
+        "side": "orig",
+        "kind": "event",
+        "why_different_from": ["event_cheap_pb_pead", "event_eqar_high_price_down"],
+    },
+    {
+        "logic_id": "event_margin_up_price_down_fade",
+        "family_id": "event_margin_crowd_combo",
+        "thesis": "Fade PEAD when margin interest rose AND price already sold off (crowded unwind).",
+        "gates": ("margin_up", "price_down"),
+        "side": "flip",
+        "kind": "event",
+        "why_different_from": ["event_margin_delta_fade", "cs_margin_up_chase"],
+    },
+    {
+        "logic_id": "event_margin_down_price_down",
+        "family_id": "event_margin_crowd_combo",
+        "thesis": "PEAD when margin interest fell AND price sold off (de-crowding dip follow).",
+        "gates": ("margin_down", "price_down"),
+        "side": "orig",
+        "kind": "event",
+        "why_different_from": ["event_margin_down_follow", "event_margin_up_price_down_fade"],
+    },
+    {
+        "logic_id": "event_eqar_high_eps_up",
+        "family_id": "event_fund_cross",
+        "thesis": "PEAD when EqAR is high AND EPS rose versus the prior print.",
+        "gates": ("eq_ar_high", "eps_up"),
+        "side": "orig",
+        "kind": "event",
+        "why_different_from": ["event_eqar_high_pead", "event_eps_up_easy"],
+    },
+    {
+        "logic_id": "event_ta_up_eps_up",
+        "family_id": "event_fund_cross",
+        "thesis": "PEAD when TA rose AND EPS rose versus the prior print.",
+        "gates": ("ta_up", "eps_up"),
+        "side": "orig",
+        "kind": "event",
+        "why_different_from": ["event_ta_up_pead", "event_eqar_high_eps_up"],
+    },
+    {
+        "logic_id": "event_positive_eps_margin_down",
+        "family_id": "event_margin_crowd_combo",
+        "thesis": "PEAD when EPS is positive AND name margin interest fell.",
+        "gates": ("positive_eps", "margin_down"),
+        "side": "orig",
+        "kind": "event",
+        "why_different_from": ["event_positive_eps_pead", "event_eqar_high_margin_down"],
+    },
+    {
+        "logic_id": "event_div_payer_margin_down",
+        "family_id": "event_margin_crowd_combo",
+        "thesis": "PEAD when the name pays a dividend AND margin interest fell.",
+        "gates": ("div_positive", "margin_down"),
+        "side": "orig",
+        "kind": "event",
+        "why_different_from": ["event_div_payer_pead", "event_positive_eps_margin_down"],
+    },
+    {
+        "logic_id": "event_eqar_low_margin_up_fade",
+        "family_id": "event_margin_crowd_combo",
+        "thesis": "Fade PEAD when EqAR is low AND the name is crowding (weak BS + leverage).",
+        "gates": ("eq_ar_low", "margin_up"),
+        "side": "flip",
+        "kind": "event",
+        "why_different_from": ["event_eqar_low_fade", "event_eqar_high_margin_up_fade"],
+    },
+    {
+        "logic_id": "event_liq_high_large_surprise",
+        "family_id": "event_fund_cross",
+        "thesis": "Large-surprise PEAD only in above-median ADV names (liquidity-conditioned PEAD).",
+        "gates": ("liq_high", "large_surprise"),
+        "side": "orig",
+        "kind": "event",
+        "why_different_from": ["event_eqar_high_large_surprise", "event_eqar_high_liq_high"],
+    },
+    {
+        "logic_id": "surprise_xs_eqar_high_liq_high",
+        "family_id": "surprise_xs_rank",
+        "thesis": "Surprise CS rank when EqAR is high AND ADV is above the universe median.",
+        "gates": ("eq_ar_high", "liq_high"),
+        "side": "orig",
+        "kind": "surprise_xs",
+        "why_different_from": ["surprise_xs_eqar_high", "event_eqar_high_liq_high"],
+    },
+    {
+        "logic_id": "surprise_xs_margin_up_price_down",
+        "family_id": "surprise_xs_rank",
+        "thesis": "Surprise CS rank when margin rose AND price sold off (crowded dip).",
+        "gates": ("margin_up", "price_down"),
+        "side": "orig",
+        "kind": "surprise_xs",
+        "why_different_from": ["surprise_xs_margin_up", "event_margin_up_price_down_fade"],
+    },
+    {
+        "logic_id": "surprise_xs_eqar_high_price_down",
+        "family_id": "surprise_xs_rank",
+        "thesis": "Surprise CS rank when EqAR is high AND price sold off into the event.",
+        "gates": ("eq_ar_high", "price_down"),
+        "side": "orig",
+        "kind": "surprise_xs",
+        "why_different_from": ["surprise_xs_eqar_high", "event_eqar_high_price_down"],
+    },
+    {
+        "logic_id": "cs_eqar_high_margin_down",
+        "family_id": "overnight_level_cs",
+        "thesis": "CS mom when EqAR is high AND name margin interest fell (quality de-crowding).",
+        "cs_gate": "eq_ar_high_margin_down",
+        "kind": "cs",
+        "why_different_from": ["cs_eqar_high_easy", "cs_margin_down_easy"],
+    },
+    {
+        "logic_id": "cs_ta_up_margin_down",
+        "family_id": "overnight_level_cs",
+        "thesis": "CS mom when TA rose AND name margin interest fell.",
+        "cs_gate": "ta_up_margin_down",
+        "kind": "cs",
+        "why_different_from": ["cs_ta_up_easy", "cs_eqar_high_margin_down"],
+    },
+    {
+        "logic_id": "cs_cheap_pb_easy",
+        "family_id": "overnight_level_cs",
+        "thesis": "CS mom when P/B is cheap AND overnight is easy (value with cheap carry).",
+        "cs_gate": "cheap_pb_easy",
+        "kind": "cs",
+        "why_different_from": ["cs_eqar_high_easy", "event_cheap_pb_easy_funding"],
+    },
+    {
+        "logic_id": "cs_eqar_high_on_impulse",
+        "family_id": "overnight_level_cs",
+        "thesis": "CS mom when EqAR is high AND overnight impulse is large.",
+        "cs_gate": "eq_ar_high_on_impulse",
+        "kind": "cs",
+        "why_different_from": ["cs_eqar_high_easy", "cs_on_impulse"],
+    },
 )
 
 def _combo_row(s: Mapping[str, Any]) -> dict[str, Any]:
@@ -2144,7 +2411,8 @@ def _combo_row(s: Mapping[str, Any]) -> dict[str, Any]:
         cs_gate=str(s.get("cs_gate") or ""),
         logic_id=str(s.get("logic_id") or ""),
     )
-    main_pool = False if (sparse or dup or ao) else bool(s.get("main_pool", True))
+    isolate = str(s.get("logic_id") or "") in WORKER_ISOLATE_LIMIT_IDS
+    main_pool = False if (sparse or dup or ao or isolate) else bool(s.get("main_pool", True))
     return {
         **dict(s),
         "new_unique_logic": True,
@@ -2155,6 +2423,7 @@ def _combo_row(s: Mapping[str, Any]) -> dict[str, Any]:
         "generation_enabled": False,
         "main_pool": main_pool,
         "data_requirement_unmet": bool(sparse),
+        "worker_isolate_limit": isolate,
         "near_duplicate": dup,
         "always_on_cs_sticky": ao,
         "sparse_15name_reason": sparse,
@@ -2203,15 +2472,19 @@ def evaluate_combo_daily_mtm(
     curve: Mapping[str, Any],
     events: Mapping[str, Any],
     margin_by_code: Mapping[str, Mapping[str, float]],
-    topix_by_date: Mapping[str, float],
-    one_way_cost: float,
+    topix_by_date: Mapping[str, float] | None = None,
+    one_way_cost: float = 0.001,
     period_start: str | None = None,
     period_end: str | None = None,
+    adv_by_code: Mapping[str, float] | None = None,
 ) -> dict[str, Any]:
     """Python fallback for combo theses. CF Worker is the SoT path."""
     lid = str(spec.get("logic_id") or "")
     declared = spec_by_id(lid) or dict(spec)
     kind = str(declared.get("kind") or "event")
+    extra_adv = adv_by_code or dict(
+        ((declared.get("extra") or spec.get("extra") or {}).get("adv_by_code") or {})
+    )
     if kind in {"event", "surprise_xs"}:
         return _eval_event_combo(
             declared,
@@ -2223,6 +2496,7 @@ def evaluate_combo_daily_mtm(
             one_way_cost=one_way_cost,
             period_start=period_start,
             period_end=period_end,
+            adv_by_code=extra_adv,
         )
     return _eval_cs_combo(
         declared,
@@ -2245,6 +2519,7 @@ def _eval_event_combo(
     one_way_cost: float,
     period_start: str | None,
     period_end: str | None,
+    adv_by_code: Mapping[str, float] | None = None,
 ) -> dict[str, Any]:
     params = dict(spec.get("params") or {})
     gates = tuple(params.get("gates") or spec.get("gates") or ())
@@ -2554,6 +2829,30 @@ def _eval_event_combo(
                         ok = False
                     elif float(on) + float(sp) >= float(pon) + float(psp):
                         ok = False
+            elif g == "liq_high":
+                adv_map = dict(adv_by_code or {})
+                adv = adv_map.get(ev["code"])
+                vals = [float(v) for v in adv_map.values() if v is not None]
+                if adv is None or len(vals) < 4:
+                    ok = False
+                else:
+                    med = sorted(vals)[len(vals) // 2]
+                    if float(adv) < float(med):
+                        ok = False
+            elif g == "price_down":
+                pack = (collected.get("per_code") or {}).get(ev["code"]) or {}
+                dlist = list(pack.get("dlist") or [])
+                close_by = (collected.get("close_by") or {}).get(ev["code"]) or {}
+                i = int(ev.get("entry_idx") or 0)
+                if i < 5 or not dlist:
+                    ok = False
+                else:
+                    c0 = close_by.get(dlist[i - 5])
+                    c1 = close_by.get(dlist[i] if i < len(dlist) else None)
+                    if c0 is None or c1 is None or float(c0) == 0:
+                        ok = False
+                    elif (float(c1) / float(c0) - 1.0) >= 0:
+                        ok = False
             elif g in {"cheap_iv", "rich_iv", "nky_vol_high_skip"}:
                 # Worker SoT: needs panel vol sidecar. Missing → skip, no invent.
                 ok = False
@@ -2778,6 +3077,14 @@ def _eval_cs_combo(
             prev_sp = spread.get(dates[i - 1]) if i else None
             sp = spread.get(d)
             keep = prev_sp is not None and sp is not None and float(sp) < float(prev_sp)
+        elif gate in {
+            "eq_ar_high_margin_down",
+            "ta_up_margin_down",
+            "cheap_pb_easy",
+            "eq_ar_high_on_impulse",
+        }:
+            extra_cf_only.append(gate)
+            keep = False
         elif gate == "tue_thu":
             keep = _weekday(d) in {1, 2, 3}
         elif gate == "overnight_down":

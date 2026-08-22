@@ -4,6 +4,21 @@ from __future__ import annotations
 from research.unique_logic.catalog import load_catalog_specs, parse_catalog_yaml
 
 
+def test_event_sides_ls_variants_stay_registered() -> None:
+    from research.mass_strategy_factory import RESEARCH_UNIQUE_LOGIC_IDS
+    from research.unique_logic import event_sides
+
+    ids = [s["logic_id"] for s in event_sides.NEW_LS_VARIANTS]
+    assert ids == [
+        "event_funding_easy_short",
+        "event_funding_stress_ls",
+        "surprise_xs_rank_flip",
+    ]
+    assert set(ids) <= set(RESEARCH_UNIQUE_LOGIC_IDS)
+    pack = event_sides._assert_frozen_pins_untouched()
+    assert pack["pins_untouched"] is True
+
+
 def test_parse_catalog_yaml_folded_and_params() -> None:
     spec = parse_catalog_yaml(
         """
@@ -194,7 +209,35 @@ def test_yaml_dispatch_worker_event_ids_align() -> None:
     assert "event_skip_monday" in yaml_ids
     assert "cs_not_month_end" in yaml_ids
     assert "event_skip_monday" in CF_NEW_THESIS_IDS
-    assert len(CF_NEW_THESIS_IDS) >= 253
+    assert len(CF_NEW_THESIS_IDS) >= 278
+    from research.unique_logic.event_combos import NEW_COMBO_LOGIC
+    from research.unique_logic.constants import is_ungated_name_level_cs
+
+    fresh = [
+        "event_eqar_high_liq_high",
+        "event_liq_high_large_surprise",
+        "event_eqar_high_price_down",
+        "event_margin_up_price_down_fade",
+        "cs_eqar_high_margin_down",
+        "cs_cheap_pb_easy",
+    ]
+    ids = {s["logic_id"] for s in NEW_COMBO_LOGIC}
+    assert set(fresh) <= ids
+    assert set(fresh) <= set(CF_NEW_THESIS_IDS)
+    from research.unique_logic.constants import WORKER_ISOLATE_LIMIT_IDS
+
+    parked = [s for s in NEW_COMBO_LOGIC if s["logic_id"] in WORKER_ISOLATE_LIMIT_IDS]
+    assert len(parked) == 4
+    assert all(s.get("main_pool") is False for s in parked)
+    assert all(s.get("worker_isolate_limit") is True for s in parked)
+    for spec in NEW_COMBO_LOGIC:
+        if spec["logic_id"] in fresh:
+            assert spec.get("always_on_cs_sticky") is False
+            assert is_ungated_name_level_cs(
+                kind=str(spec.get("kind") or ""),
+                cs_gate=str(spec.get("cs_gate") or ""),
+                logic_id=str(spec["logic_id"]),
+            ) is False
 
 
 def test_fins_events_keep_ta_eqar_from_payload() -> None:

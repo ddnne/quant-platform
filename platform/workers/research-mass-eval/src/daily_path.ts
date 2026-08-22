@@ -603,6 +603,32 @@ export const CF_NEW_EVENT_THESIS_IDS = [
   "surprise_xs_positive_eps_easy",
   "event_repo3m_down_afterclose",
   "surprise_xs_margin_down_on_impulse",
+  "event_eqar_high_cluster",
+  "event_ta_up_cluster",
+  "event_cheap_pb_cluster",
+  "event_eqar_high_large_surprise",
+  "event_ta_up_large_surprise",
+  "event_cheap_pb_large_surprise",
+  "event_eqar_high_margin_up_fade",
+  "event_ta_up_margin_up_fade",
+  "event_cheap_pb_margin_up_fade",
+  "event_eqar_high_liq_high",
+  "event_ta_up_liq_high",
+  "event_cheap_pb_liq_high",
+  "event_eqar_high_price_down",
+  "event_ta_up_price_down",
+  "event_cheap_pb_price_down",
+  "event_margin_up_price_down_fade",
+  "event_margin_down_price_down",
+  "event_eqar_high_eps_up",
+  "event_ta_up_eps_up",
+  "event_positive_eps_margin_down",
+  "event_div_payer_margin_down",
+  "event_eqar_low_margin_up_fade",
+  "event_liq_high_large_surprise",
+  "surprise_xs_eqar_high_liq_high",
+  "surprise_xs_margin_up_price_down",
+  "surprise_xs_eqar_high_price_down",
 ] as const;
 
 export const CF_NEW_CS_THESIS_IDS = [
@@ -698,6 +724,10 @@ export const CF_NEW_CS_THESIS_IDS = [
   "cs_margin_up_easy",
   "cs_curve_flatten_easy",
   "cs_eqar_low_tight",
+  "cs_eqar_high_margin_down",
+  "cs_ta_up_margin_down",
+  "cs_cheap_pb_easy",
+  "cs_eqar_high_on_impulse",
 ] as const;
 
 export const CF_EVENT_LOGIC_IDS = [
@@ -777,6 +807,9 @@ const COMBO_EVENT_GATES = new Set([
   "curve_flatten",
   "repo_3m_down",
   "nky_vol_high_skip",
+  "large_surprise",
+  "liq_high",
+  "price_down",
 ]);
 
 function comboGatesOf(params: Record<string, unknown>): string[] {
@@ -1025,6 +1058,41 @@ export function comboEventGateOk(
     if (med === null || !finite(nky[d])) return false;
     return nky[d] < med;
   }
+  if (gate === "large_surprise") {
+    const events = panel.fund_regime?.events_by_code || {};
+    const abs: number[] = [];
+    for (const rows of Object.values(events)) {
+      for (const row of rows || []) {
+        const dd = String(row.disc_date || "").slice(0, 10);
+        if (!dd || dd >= ev.disc) continue;
+        const s = surpriseProxy(row);
+        if (s !== null) abs.push(Math.abs(s));
+      }
+    }
+    if (abs.length < minHist) return false;
+    abs.sort((a, b) => a - b);
+    const mid = Math.floor(abs.length / 2);
+    const med = abs.length % 2 ? abs[mid] : (abs[mid - 1] + abs[mid]) / 2;
+    return finite(ev.abs) && ev.abs >= med;
+  }
+  if (gate === "liq_high") {
+    const advMap = panel.adv_by_code || {};
+    const adv = advMap[ev.code];
+    const vals = Object.values(advMap).filter((v) => finite(v)) as number[];
+    if (!finite(adv) || vals.length < 4) return false;
+    const srt = vals.slice().sort((a, b) => a - b);
+    const med = srt[Math.floor(srt.length / 2)];
+    return (adv as number) >= med;
+  }
+  if (gate === "price_down") {
+    const pairs = panel.bars?.[ev.code] || [];
+    const i = ev.entryIdx;
+    if (i < 5 || !pairs[i] || !pairs[i - 5]) return false;
+    const c0 = pairs[i - 5][1];
+    const c1 = pairs[i][1];
+    if (!finite(c0) || !finite(c1) || (c0 as number) === 0) return false;
+    return (c1 as number) / (c0 as number) - 1 < 0;
+  }
   // Unknown gate fails closed (do not silently always-on).
   return false;
 }
@@ -1252,6 +1320,36 @@ export function comboCsGateOk(
     keep =
       extras?.eqArLow === true && extras?.tightOn === true;
     invert = true;
+  } else if (gate === "eq_ar_high_margin_down") {
+    keep =
+      extras?.eqArHigh === true &&
+      marginChg !== null &&
+      marginChg < 0;
+  } else if (gate === "ta_up_margin_down") {
+    keep =
+      extras?.taUp === true &&
+      marginChg !== null &&
+      marginChg < 0;
+  } else if (gate === "cheap_pb_easy") {
+    keep =
+      extras?.cheapPb === true &&
+      on !== undefined &&
+      medOn !== null &&
+      on < medOn;
+  } else if (gate === "eq_ar_high_on_impulse") {
+    let impulse = false;
+    if (prev !== null && on !== undefined && finite(overnight[prev])) {
+      const absCh = Math.abs(on - overnight[prev]);
+      const hist: Record<string, number> = {};
+      const keys = Object.keys(overnight).sort();
+      for (let i = 1; i < keys.length; i++) {
+        if (keys[i] >= d) break;
+        hist[keys[i]] = Math.abs(overnight[keys[i]] - overnight[keys[i - 1]]);
+      }
+      const med = pitMedian(hist, d, 20);
+      impulse = med !== null && absCh >= med;
+    }
+    keep = extras?.eqArHigh === true && impulse;
   } else {
     return { keep: false, invert: false };
   }

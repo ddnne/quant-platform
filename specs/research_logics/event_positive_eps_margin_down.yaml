@@ -1,0 +1,29 @@
+logic_id: event_positive_eps_margin_down
+family_id: event_margin_crowd_combo
+axis: mixed
+headline: false
+generation_enabled: false
+promote_as_main: false
+go: false
+main_pool: true
+thesis: >
+  PEAD when EPS is positive AND name margin interest fell.
+signal_definition: >
+  PEAD when EPS is positive AND name margin interest fell.
+datasets:
+  - equities_bars_daily
+  - fins_summary
+  - jsda_tokyo_repo_rates
+  - markets_calendar
+params:
+  post_hold_days: 5
+  hold_days: 10
+  momentum_n: 5
+  min_hist: 20
+  mode: event_positive_eps_margin_down
+  side: orig
+  cs_gate: None
+  entry_shift: 0
+  hold_tail_days: 0
+evaluator: research.unique_logic.event_combos.evaluate_combo_daily_mtm
+notes: combo thesis; occupancy-gated; CF daily_path is SoT
