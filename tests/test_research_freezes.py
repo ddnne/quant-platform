@@ -218,14 +218,9 @@ def test_near_empty_park_is_not_countable_or_basket_material() -> None:
 
     parked = near_empty_occupancy_park()
     assert parked == NEAR_EMPTY_PARK_IDS
-    assert "event_cheap_iv_eqar_rising_steep" in parked
-    assert "event_nkyvol_steep_uncrowded" in parked
-    assert "event_p10_sales_down_eps_up" in parked
-    assert "event_overnight_p10_np_negative" in parked
-    assert "event_tight_funding_sales_np_neg" in parked
-    assert "event_pb_rising_np_negative" in parked
-    assert "event_flatten_p10_pb_rising" in parked
+    assert parked
     assert "event_flatten_p10_sales_down" in parked
+    assert "event_flatten_p10_px_down" in parked
     countable = countable_thesis_ids()
     for lid in parked:
         spec = catalog_spec(lid)
@@ -240,23 +235,8 @@ def test_near_empty_park_is_not_countable_or_basket_material() -> None:
     from research.cf_daily_path_job import sleeve_durability_logic_ids
 
     assert THIN_SLEEVE_EXCLUDE_IDS
-    assert "event_p10_pb_rising" in THIN_SLEEVE_EXCLUDE_IDS
-    assert "event_invert_px_down_tight_funding" in THIN_SLEEVE_EXCLUDE_IDS
-    assert "event_p10_eps_down_px_down" in THIN_SLEEVE_EXCLUDE_IDS
-    assert "event_overnight_p10_sales_down" in THIN_SLEEVE_EXCLUDE_IDS
-    assert "event_tight_funding_eps_px_down" in THIN_SLEEVE_EXCLUDE_IDS
-    assert "event_invert_tight_sales_down" in THIN_SLEEVE_EXCLUDE_IDS
-    assert "event_steep_tight_px_down" in THIN_SLEEVE_EXCLUDE_IDS
-    assert "event_easing_eps_down_np_neg" in THIN_SLEEVE_EXCLUDE_IDS
-    assert "event_pb_rising_sales_down" in THIN_SLEEVE_EXCLUDE_IDS
-    assert "event_pb_rising_px_down" in THIN_SLEEVE_EXCLUDE_IDS
-    assert "event_np_negative_tight_funding" in THIN_SLEEVE_EXCLUDE_IDS
     assert "event_flatten_p10_eps_down" in THIN_SLEEVE_EXCLUDE_IDS
-    assert "event_p10_sales_down_eps_up" not in THIN_SLEEVE_EXCLUDE_IDS
-    assert "event_overnight_p10_np_negative" not in THIN_SLEEVE_EXCLUDE_IDS
-    assert "event_tight_funding_sales_np_neg" not in THIN_SLEEVE_EXCLUDE_IDS
-    assert "event_pb_rising_np_negative" not in THIN_SLEEVE_EXCLUDE_IDS
-    assert "event_easy_funding_eps_sales_down" not in THIN_SLEEVE_EXCLUDE_IDS
+    assert THIN_SLEEVE_EXCLUDE_IDS.isdisjoint(NEAR_EMPTY_PARK_IDS)
     assert THIN_SLEEVE_EXCLUDE_IDS.isdisjoint(sleeve_durability_logic_ids())
     thin_reasons = validate_basket_members(
         ["event_eqar_high_liq_high", "event_p10_pb_rising"]

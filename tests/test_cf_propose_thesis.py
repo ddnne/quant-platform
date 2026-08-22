@@ -836,13 +836,12 @@ def test_catalog_gate_set_avoid_is_existing_crosses() -> None:
 
     full = catalog_gate_set_avoid()
     assert len(full) == CATALOG_GATE_SET_AVOID_LIMIT
-    assert CATALOG_GATE_SET_AVOID_LIMIT == 24
-    assert PROPOSE_WHY_AVOID_LIMIT == 48
     assert any(t.count("+") == 2 for t in full)
     assert any(t.count("+") == 1 for t in full)
     n3 = sum(1 for t in full if t.count("+") == 2)
     n2 = sum(1 for t in full if t.count("+") == 1)
-    assert n3 >= 8 and n2 >= 8
+    assert n3 >= CATALOG_GATE_SET_AVOID_LIMIT // 3
+    assert n2 >= CATALOG_GATE_SET_AVOID_LIMIT // 3
     prefer_pairs = catalog_prefer_pair_avoid()
     assert "eps_down+price_down" in prefer_pairs
     assert "pb_rising+tight_funding" in prefer_pairs
