@@ -62,6 +62,43 @@ MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
             "cs_skip_monday",
         ),
     },
+    {
+        "basket_id": "basket_event4",
+        "rule": "event_family_only",
+        "members": (
+            "event_easing_uncrowded",
+            "event_friday_skip",
+            "event_tue_thu_easing",
+            "event_afterclose_easing",
+        ),
+    },
+    {
+        "basket_id": "basket_cs4",
+        "rule": "cs_family_only",
+        "members": (
+            "cs_skip_monday",
+            "cs_easing_midmonth",
+            "overnight_down_cs_follow",
+            "cs_tue_thu_down",
+        ),
+    },
+    {
+        "basket_id": "basket_surprise3",
+        "rule": "surprise_xs_only",
+        "members": (
+            "surprise_xs_easing_change",
+            "surprise_xs_afterclose_easing",
+            "surprise_xs_skip_monday",
+        ),
+    },
+    {
+        "basket_id": "basket_pair_easing",
+        "rule": "two_member_easing",
+        "members": (
+            "event_easing_midmonth",
+            "cs_easing_midmonth",
+        ),
+    },
 )
 
 
@@ -204,9 +241,33 @@ def blend_window_cells(
                 "go": False,
                 "candidate_grade": True,
                 "period_net_dd_only_pass_forbidden": True,
+                "t_stat": _t_stat(blended),
+                "sharpe_daily": _sharpe(blended),
             }
         )
     return rows
+
+
+def _t_stat(net_daily: Sequence[float]) -> float | None:
+    vs = [float(x) for x in list(net_daily)[1:] if x is not None]
+    if len(vs) < 2:
+        return None
+    m = sum(vs) / len(vs)
+    var = sum((x - m) ** 2 for x in vs) / (len(vs) - 1)
+    if var <= 1e-18:
+        return None
+    return m / ((var ** 0.5) / (len(vs) ** 0.5))
+
+
+def _sharpe(net_daily: Sequence[float]) -> float | None:
+    vs = [float(x) for x in list(net_daily)[1:] if x is not None]
+    if len(vs) < 2:
+        return None
+    m = sum(vs) / len(vs)
+    var = sum((x - m) ** 2 for x in vs) / (len(vs) - 1)
+    if var <= 1e-18:
+        return None
+    return m / (var ** 0.5) * (252 ** 0.5)
 
 
 def run_combo_basket_job(
@@ -317,3 +378,87 @@ def blend_mechanical_baskets(
             )
         )
     return rows
+
+
+def summarize_basket_trends(
+    cells: Sequence[Mapping[str, Any]],
+    *,
+    job_id: str,
+) -> dict[str, Any]:
+    """Family/occupancy/sign structure for mechanical baskets. Not a pass."""
+    from collections import defaultdict
+
+    by: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
+    for c in cells:
+        lid = str(c.get("logic_id") or "")
+        if lid:
+            by[lid].append(c)
+    defs = {d["basket_id"]: d for d in mechanical_basket_defs()}
+    rows: list[dict[str, Any]] = []
+    for bid, group in sorted(by.items()):
+        spec = defs.get(bid) or {}
+        occs = [
+            c.get("occupancy") if c.get("occupancy") is not None else c.get("occupancy_frac")
+            for c in group
+        ]
+        unions = [c.get("union_occupancy") for c in group]
+        nets = [c.get("total_ret_net") for c in group]
+        tstats = [c.get("t_stat") for c in group]
+        sharpes = [c.get("sharpe_daily") for c in group]
+        dds = [c.get("daily_path_DD") for c in group]
+        signs = [
+            1 if (n or 0) > 1e-6 else (-1 if (n or 0) < -1e-6 else 0) for n in nets
+        ]
+        n_pos = sum(s > 0 for s in signs)
+        n_neg = sum(s < 0 for s in signs)
+        m_occ = _mean(occs)
+        flags: list[str] = []
+        if m_occ is not None and m_occ >= ALWAYS_ON_OCCUPANCY_WARN:
+            flags.append("always_on")
+        if m_occ is not None and m_occ <= NEAR_EMPTY_OCCUPANCY:
+            flags.append("near_empty")
+        candidate = not bool(set(flags) & {"always_on", "near_empty"})
+        rows.append(
+            {
+                "basket_id": bid,
+                "rule": spec.get("rule") or "mechanical",
+                "members": list(spec.get("members") or group[0].get("members") or []),
+                "n_windows": len(group),
+                "mean_member_occupancy": m_occ,
+                "mean_union_occupancy": _mean(unions),
+                "n_pos_windows": n_pos,
+                "n_neg_windows": n_neg,
+                "sign_stable": (n_pos >= 4 and n_neg == 0) or (n_neg >= 4 and n_pos == 0),
+                "mean_t_stat": _mean(tstats),
+                "mean_sharpe_daily": _mean(sharpes),
+                "mean_daily_path_DD": _mean(dds),
+                "mean_total_ret_net": _mean(nets),
+                "window_net_signs": signs,
+                "flags": flags,
+                "candidate": candidate,
+                "explore_only": True,
+                "promote_as_main": False,
+                "go": False,
+            }
+        )
+    return {
+        "version": "basket-trend-summary/v1",
+        "job_id": job_id,
+        "n_baskets": len(rows),
+        "n_cells": len(cells),
+        "not_a_pass": True,
+        "n_survivors_are_not_a_pass": True,
+        "promote_as_main": False,
+        "go": False,
+        "candidate_eval_sot": PROTOCOL_DAILY_PATH,
+        "baskets": rows,
+        "notes": (
+            "Mechanical equal-weight basket trends for later fund design. "
+            "t/Sharpe/DD are descriptive only and never a promote/GO."
+        ),
+    }
+
+
+def _mean(xs: Sequence[Any]) -> float | None:
+    vs = [float(x) for x in xs if x is not None]
+    return (sum(vs) / len(vs)) if vs else None

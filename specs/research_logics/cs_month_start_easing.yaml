@@ -5,10 +5,11 @@ headline: false
 generation_enabled: false
 promote_as_main: false
 go: false
+main_pool: true
 thesis: >
-  CS mom in the first five calendar days only when overnight declined.
+  CS mom in the first ten calendar days only when overnight declined.
 signal_definition: >
-  CS mom in the first five calendar days only when overnight declined.
+  CS mom in the first ten calendar days only when overnight declined.
 datasets:
   - equities_bars_daily
   - fins_summary
@@ -21,8 +22,8 @@ params:
   min_hist: 20
   mode: cs_month_start_easing
   side: orig
-  cs_gate: month_start_overnight_down
+  cs_gate: month_start10_overnight_down
   entry_shift: 0
   hold_tail_days: 0
 evaluator: research.unique_logic.event_combos.evaluate_combo_daily_mtm
-notes: combo thesis; occupancy-gated (target 0.05-0.85); CF daily_path is SoT
+notes: combo thesis; occupancy-gated; CF daily_path is SoT

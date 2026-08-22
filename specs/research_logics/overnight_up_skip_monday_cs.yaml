@@ -1,15 +1,15 @@
-logic_id: flow_disagree_tue_thu
-family_id: xs_margin_delta
+logic_id: overnight_up_skip_monday_cs
+family_id: overnight_level_cs
 axis: mixed
 headline: false
 generation_enabled: false
 promote_as_main: false
 go: false
-main_pool: false
+main_pool: true
 thesis: >
-  Fade CS when margin crowded, Tuesday–Thursday only. Crowd+weekday is empty on 15-name shards (data_requirement_unmet).
+  CS mom when overnight rose, skipping Mondays.
 signal_definition: >
-  Fade CS when margin crowded, Tuesday–Thursday only. Crowd+weekday is empty on 15-name shards (data_requirement_unmet).
+  CS mom when overnight rose, skipping Mondays.
 datasets:
   - equities_bars_daily
   - fins_summary
@@ -20,9 +20,9 @@ params:
   hold_days: 10
   momentum_n: 5
   min_hist: 20
-  mode: flow_disagree_tue_thu
+  mode: overnight_up_skip_monday_cs
   side: orig
-  cs_gate: margin_crowd_tue_thu_invert
+  cs_gate: overnight_up_skip_monday
   entry_shift: 0
   hold_tail_days: 0
 evaluator: research.unique_logic.event_combos.evaluate_combo_daily_mtm

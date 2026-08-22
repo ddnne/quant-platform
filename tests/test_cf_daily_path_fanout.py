@@ -105,6 +105,21 @@ def test_fanout_path_broken_cells_are_not_complete() -> None:
     assert pack["go"] is False
 
 
+def test_daily_path_spec_keeps_unique_event() -> None:
+    from research.cf_mass_eval_job import build_cf_mass_eval_job_spec
+
+    spec = build_cf_mass_eval_job_spec(
+        job_id="eval-test-dp-keep-unique",
+        logic_ids=["event_skip_monday", "nky_vol_abs_level"],
+        mode="synthetic",
+        drop_unique_unsupported=False,
+    )
+    lids = [str(L.get("logic_id")) for L in spec["logics"]]
+    assert "event_skip_monday" in lids
+    assert "nky_vol_abs_level" in lids
+    assert spec.get("dropped_unique_unsupported") in (None, [], ())
+
+
 def test_bar_native_count_meets_thirty() -> None:
     assert len(CF_BAR_NATIVE_LOGIC_IDS) >= 30
 
@@ -133,7 +148,7 @@ def test_event_daily_path_ids_cover_filters_and_sides() -> None:
 
     assert "aligned" in CF_EVENT_FIDELITY["surprise"]
     assert "intended_lite_windows" in CF_EVENT_FIDELITY
-    assert len(CF_NEW_THESIS_IDS) >= 96
+    assert len(CF_NEW_THESIS_IDS) >= 116
 
 
 def test_panels_cache_id_stable() -> None:

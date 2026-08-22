@@ -195,7 +195,7 @@ def test_mechanical_baskets_are_four_valid_defs() -> None:
     from research.unique_logic.constants import CANDIDATE_POLICY
 
     defs = mechanical_basket_defs()
-    assert len(defs) >= 4
+    assert len(defs) >= 8
     ids = [d["basket_id"] for d in defs]
     assert len(ids) == len(set(ids))
     for d in defs:
@@ -247,6 +247,64 @@ def test_combo_basket_blend_is_equal_weight() -> None:
     assert rows[0]["go"] is False
     assert rows[0]["eval_path"] == "equal_weight_basket"
     assert rows[0]["daily_path_complete"] is True
+
+
+def test_summarize_basket_trends_is_not_a_pass() -> None:
+    from research.combo_basket import summarize_basket_trends
+
+    cells = [
+        {
+            "logic_id": "basket_head4",
+            "window_id": f"y{y}",
+            "occupancy": 0.3,
+            "union_occupancy": 0.7,
+            "total_ret_net": 0.01,
+            "t_stat": 0.4,
+            "sharpe_daily": 0.2,
+            "daily_path_DD": -0.05,
+            "members": ["a", "b"],
+        }
+        for y in (2015, 2017, 2019, 2021, 2023, 2025)
+    ]
+    summary = summarize_basket_trends(cells, job_id="eval-test-baskets")
+    assert summary["n_baskets"] == 1
+    assert summary["go"] is False
+    assert summary["not_a_pass"] is True
+    row = summary["baskets"][0]
+    assert row["candidate"] is True
+    assert row["n_pos_windows"] == 6
+    assert row["go"] is False
+
+
+def test_sparse_15name_is_data_requirement_unmet() -> None:
+    from research.eval_registry import summarize_daily_path_cells
+    from research.unique_logic.constants import SPARSE_ON_15NAME_SHARD
+
+    assert SPARSE_ON_15NAME_SHARD == frozenset(
+        {
+            "event_may_easing",
+            "flow_disagree_tue_thu",
+            "event_midmonth_steep",
+            "cs_steep_friday",
+        }
+    )
+    for lid in sorted(SPARSE_ON_15NAME_SHARD):
+        cells = [
+            {
+                "logic_id": lid,
+                "window_id": "y2015_full",
+                "occupancy": 0.03,
+                "total_ret_net": 0.0,
+                "eval_path": "eventHeld",
+                "daily_path_complete": True,
+            }
+        ]
+        summary = summarize_daily_path_cells(cells, job_id="eval-test-sparse")
+        row = summary["logics"][0]
+        assert "near_empty" in row["flags"]
+        assert "data_requirement_unmet" in row["flags"]
+        assert row["candidate"] is False
+        assert row["main_pool"] is False
 
 
 def test_near_empty_and_term_ratio_are_not_candidates() -> None:
@@ -303,6 +361,63 @@ def test_modest_t_gated_thesis_stays_candidate() -> None:
     assert "always_on" not in row["flags"]
 
 
+def test_path_collapsed_is_not_candidate() -> None:
+    from research.eval_registry import (
+        is_daily_path_complete_cell,
+        is_path_collapsed_cell,
+        summarize_daily_path_cells,
+    )
+
+    cells = [
+        {
+            "logic_id": "event_skip_monday",
+            "window_id": f"y{y}",
+            "occupancy": 0.20,
+            "total_ret_net": 0.02,
+            "eval_path": "mdh_generic",
+            "signal_id": "c21_lite_fallback_mdh:event_calendar_gate",
+            "skip_reason": "unique_unsupported_on_period_net",
+            "path_collapsed": True,
+            "t_stat": 2.0,
+            "daily_path_complete": True,
+        }
+        for y in (2015, 2017, 2019, 2021, 2023, 2025)
+    ]
+    assert is_path_collapsed_cell(cells[0]) is True
+    assert is_daily_path_complete_cell(cells[0]) is False
+    summary = summarize_daily_path_cells(cells, job_id="eval-test-collapsed")
+    row = summary["logics"][0]
+    assert "path_collapsed" in row["flags"]
+    assert row["candidate"] is False
+    assert row["main_pool"] is False
+    assert row["tag"] == "path_collapsed"
+    assert summary["n_candidate_logics"] == 0
+    assert summary["n_path_collapsed"] == 1
+    assert summary["path_collapsed_excluded_from_candidate"] is True
+
+
+def test_mf_value_at_always_on_threshold_is_parked() -> None:
+    from research.eval_registry import summarize_daily_path_cells
+    from research.unique_logic.constants import ALWAYS_ON_OCCUPANCY_WARN
+
+    cells = [
+        {
+            "logic_id": "mf_value_mom_rate",
+            "window_id": f"y{y}",
+            "occupancy": ALWAYS_ON_OCCUPANCY_WARN,
+            "total_ret_net": 0.01,
+            "eval_path": "mf_unique",
+            "daily_path_complete": True,
+        }
+        for y in (2015, 2017, 2019, 2021, 2023, 2025)
+    ]
+    summary = summarize_daily_path_cells(cells, job_id="eval-test-mf-park")
+    row = summary["logics"][0]
+    assert "always_on" in row["flags"]
+    assert row["candidate"] is False
+    assert row["main_pool"] is False
+
+
 def test_path_broken_is_not_candidate() -> None:
     from research.eval_registry import summarize_daily_path_cells
 
@@ -350,6 +465,7 @@ def test_proposal_schema_reads_summary_weakness_flags() -> None:
     from research.unique_logic.proposal_schema import CANDIDATE_KEEP_SIMPLE
 
     assert "path_broken" in CANDIDATE_KEEP_SIMPLE
+    assert "path_collapsed" in CANDIDATE_KEEP_SIMPLE
     assert "always_on" in CANDIDATE_KEEP_SIMPLE
     assert "near_empty" in CANDIDATE_KEEP_SIMPLE
     blocked = proposal_blocked_by_summary(

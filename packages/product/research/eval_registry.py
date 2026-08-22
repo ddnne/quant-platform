@@ -396,6 +396,7 @@ def summarize_daily_path_cells(
         CS_LOGIC_IDS,
         NEAR_EMPTY_OCCUPANCY,
         TERM_STRUCTURE_REQUIRED,
+        SPARSE_ON_15NAME_SHARD,
     )
 
     def _fam(lid: str) -> str:
@@ -447,7 +448,11 @@ def summarize_daily_path_cells(
             }
         )
         flags: list[str] = []
-        if any(p in {"cs_generic", "mdh_generic"} for p in paths) or any(
+        if any(is_path_collapsed_cell(c) for c in cs):
+            flags.append("path_collapsed")
+        if any(is_path_broken_cell(c) for c in cs) or any(
+            p in {"cs_generic", "mdh_generic"} for p in paths
+        ) or any(
             str(f).startswith("path_broken") or str(f).startswith("mdh_empty")
             for f in fallbacks
         ):
@@ -460,12 +465,16 @@ def summarize_daily_path_cells(
             m_occ is None or m_occ <= float(NEAR_EMPTY_OCCUPANCY)
         ):
             flags.append("data_requirement_unmet")
+        if lid in SPARSE_ON_15NAME_SHARD:
+            flags.append("data_requirement_unmet")
         if m_net is not None and abs(m_net) < 1e-4:
             flags.append("near_zero_net")
         if n_pos >= 2 and n_neg >= 2:
             flags.append("sign_unstable")
         tag = "weak"
-        if "path_broken" in flags:
+        if "path_collapsed" in flags:
+            tag = "path_collapsed"
+        elif "path_broken" in flags:
             tag = "path_broken"
         elif "always_on" in flags or "near_empty" in flags:
             tag = "suspicious"
@@ -523,6 +532,7 @@ def summarize_daily_path_cells(
         "n_suspicious": int(tags.get("suspicious") or 0),
         "n_unstable": int(tags.get("unstable") or 0),
         "n_path_broken": int(tags.get("path_broken") or 0),
+        "n_path_collapsed": int(tags.get("path_collapsed") or 0),
         "n_always_on": sum(1 for r in logics if "always_on" in r["flags"]),
         "n_complete_cells": sum(1 for c in cells if is_daily_path_complete_cell(c)),
         "n_candidate_logics": sum(1 for r in logics if r.get("candidate")),
@@ -533,6 +543,8 @@ def summarize_daily_path_cells(
         "always_on_excluded_from_main": True,
         "near_empty_excluded_from_candidate": True,
         "path_broken_excluded_from_complete": True,
+        "path_collapsed_excluded_from_complete": True,
+        "path_collapsed_excluded_from_candidate": True,
         "strong_t_floor": None,
         "strong_sharpe_floor": None,
         "simple_strategies_kept_for_combinations": True,
@@ -543,8 +555,8 @@ def summarize_daily_path_cells(
         "go": False,
         "logics": logics,
         "notes": (
-            "candidate = not path_broken, not always_on, not near_empty, "
-            "not data_requirement_unmet. Simple gated theses stay for "
+            "candidate = not path_broken, not path_collapsed, not always_on, "
+            "not near_empty, not data_requirement_unmet. Simple gated theses stay for "
             "combination/funds even with modest t/Sharpe. strong is an "
             "interest flag with no t/Sharpe floor and is never a promote/GO."
         ),

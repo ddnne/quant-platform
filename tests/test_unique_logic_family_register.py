@@ -119,6 +119,23 @@ def test_factory_period_net_not_unknown_family_and_not_a_pass():
                 assert prow.get("go") is False
 
 
+def test_family_append_is_subset_recognition_not_pass():
+    from research.mass_strategy_factory import (
+        RESEARCH_FAMILY_APPEND_ID,
+        RESEARCH_FAMILY_APPEND_LOGIC_IDS,
+        research_family_append_document,
+    )
+
+    doc = research_family_append_document()
+    assert doc["append_id"] == RESEARCH_FAMILY_APPEND_ID
+    assert doc["registration"] == "recognition"
+    assert doc["registration_is_not_a_pass"] is True
+    assert doc["go"] is False
+    assert doc["promote_as_main"] is False
+    assert set(RESEARCH_FAMILY_APPEND_LOGIC_IDS) <= set(RESEARCH_UNIQUE_LOGIC_IDS)
+    assert set(doc["appended_logic_ids"]) == set(RESEARCH_FAMILY_APPEND_LOGIC_IDS)
+
+
 def test_research_family_does_not_retune_pins():
     assert len(FROZEN_DEFAULT_PATH) == 3
     by_id = {r["representative_id"]: r for r in FROZEN_DEFAULT_PATH}

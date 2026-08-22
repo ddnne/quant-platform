@@ -5,10 +5,11 @@ headline: false
 generation_enabled: false
 promote_as_main: false
 go: false
+main_pool: true
 thesis: >
-  CS mom mid-month only when ATM IV sits below BaseVol.
+  CS mom skipping Mondays when ATM IV sits below BaseVol (midmonth was empty).
 signal_definition: >
-  CS mom mid-month only when ATM IV sits below BaseVol.
+  CS mom skipping Mondays when ATM IV sits below BaseVol (midmonth was empty).
 datasets:
   - equities_bars_daily
   - fins_summary
@@ -21,8 +22,8 @@ params:
   min_hist: 20
   mode: iv_below_midmonth_cs
   side: orig
-  cs_gate: iv_below_midmonth
+  cs_gate: iv_below_skip_monday
   entry_shift: 0
   hold_tail_days: 0
 evaluator: research.unique_logic.event_combos.evaluate_combo_daily_mtm
-notes: combo thesis; occupancy-gated (target 0.05-0.85); CF daily_path is SoT
+notes: combo thesis; occupancy-gated; CF daily_path is SoT

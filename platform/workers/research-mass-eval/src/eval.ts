@@ -18,7 +18,7 @@ import {
   tStatVsZero,
   tStatVsZeroDetail,
 } from "./metrics";
-import { isMdhCollapseSignal } from "./mdh_collapse";
+import { isMdhCollapseSignal, isPathCollapsedRow } from "./mdh_collapse";
 import type {
   BarSeries,
   BarsByCode,
@@ -2068,11 +2068,7 @@ export function evaluateLogicAcrossPeriods(
   // W95: demote/exclude when full-window or any 2-period subset is an
   // inflated-t low-variance artifact (fund_value_mom_agree_slow 2017 case).
   if (lowVarArtifact) rejectReasons.push("inflated_t_low_variance");
-  if (
-    periodRows.some(
-      (r) => r.path_collapsed || r.status === "path_collapsed",
-    )
-  ) {
+  if (periodRows.some((r) => isPathCollapsedRow(r))) {
     rejectReasons.push("path_collapsed_unique_on_period_net");
   }
 

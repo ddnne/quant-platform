@@ -164,36 +164,22 @@ RESEARCH_UNIQUE_FAMILY_IDS: frozenset[str] = frozenset(
         FAMILY_EVENT_CALENDAR_GATE,
     }
 )
-RESEARCH_UNIQUE_LOGIC_IDS: frozenset[str] = frozenset(
-    {
-        "event_funding_stress_skip",
-        "curve_steep_event_confirm",
-        "disclosure_cluster_mom_gate",
-        "surprise_xs_rank_hold",
-        "large_surprise_event_hold",
-        "afterclose_only_event_hold",
-        "event_pre_mom_agree_hold",
-        "event_margin_crowding_skip",
-        "funding_impulse_cs_tilt",
-        "curve_steepen_impulse_cs",
-        "xs_margin_delta_rank",
-        "idio_mom_macro_impulse",
-        "event_funding_easy_short",
-        "event_funding_stress_ls",
-        "surprise_xs_rank_flip",
-        "overnight_level_cs_tilt",
-        "overnight_easy_cs_follow",
-        "month_end_cs_fade",
-        "xs_low_vol_mom",
-        "repo_3m_level_cs",
-        "event_funding_adaptive_side",
-        "surprise_xs_rank_adaptive",
-    }
+from research.unique_logic.constants import (
+    ADAPTIVE_LOGIC_IDS,
+    CF_NEW_THESIS_IDS,
+    CS_LOGIC_IDS,
+    EVENT_FILTER_LOGIC_IDS,
+    EVENT_LOGIC_IDS,
+    EVENT_SIDES_LOGIC_IDS,
 )
-from research.unique_logic.constants import CF_NEW_THESIS_IDS as _CF_NEW_THESIS_IDS
 
-RESEARCH_UNIQUE_LOGIC_IDS = frozenset(RESEARCH_UNIQUE_LOGIC_IDS) | frozenset(
-    _CF_NEW_THESIS_IDS
+RESEARCH_UNIQUE_LOGIC_IDS: frozenset[str] = (
+    EVENT_LOGIC_IDS
+    | EVENT_FILTER_LOGIC_IDS
+    | EVENT_SIDES_LOGIC_IDS
+    | ADAPTIVE_LOGIC_IDS
+    | CS_LOGIC_IDS
+    | CF_NEW_THESIS_IDS
 )
 RESEARCH_FAMILY_APPEND_LOGIC_IDS: frozenset[str] = frozenset(
     {

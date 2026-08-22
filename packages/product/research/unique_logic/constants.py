@@ -127,6 +127,17 @@ CF_NEW_EVENT_THESIS_IDS: frozenset[str] = frozenset(
         "surprise_xs_skip_monday",
         "surprise_xs_friday_skip",
         "surprise_xs_uncrowded",
+        "event_friday_uncrowded",
+        "event_skip_monday_easing",
+        "event_afterclose_skip_monday",
+        "event_easing_skip_friday",
+        "event_first_half_uncrowded",
+        "event_tue_thu_steep",
+        "event_midmonth_steep",
+        "surprise_xs_first_half",
+        "surprise_xs_afterclose_skip_monday",
+        "surprise_xs_steep_skip_monday",
+        "surprise_xs_uncrowded_skip_monday",
     }
 )
 CF_NEW_CS_THESIS_IDS: frozenset[str] = frozenset(
@@ -174,6 +185,15 @@ CF_NEW_CS_THESIS_IDS: frozenset[str] = frozenset(
         "rate_up_midmonth_cs",
         "cs_month_start_easing",
         "nky_vol_compress_midmonth_cs",
+        "cs_friday_down",
+        "cs_tue_thu_steep",
+        "overnight_up_skip_monday_cs",
+        "flow_disagree_skip_monday",
+        "cs_easy_tue_thu",
+        "cs_easy_skip_monday",
+        "cs_not_friday_down",
+        "cs_midmonth_easy",
+        "cs_steep_friday",
     }
 )
 CF_NEW_THESIS_IDS: frozenset[str] = CF_NEW_EVENT_THESIS_IDS | CF_NEW_CS_THESIS_IDS
@@ -224,6 +244,8 @@ ALWAYS_ON_22C_IDS: frozenset[str] = frozenset(
 MF_VALUE_MOM_RATE_DELEGATES: bool = False
 MF_VALUE_MOM_RATE_PATH: str = "unique_rate_gated_value_mom"
 MF_VALUE_MOM_RATE_PARKED_ALWAYS_ON: bool = False
+# If a re-eval of mf_value_mom_rate has occupancy >= ALWAYS_ON_OCCUPANCY_WARN,
+# summarize parks it (always_on). Do not densify to stay under the line.
 # Candidate-grade SoT. Period-net mass-eval is bar-native auxiliary only.
 CANDIDATE_EVAL_PROTOCOL: str = "daily_path_mtm_after_cost/v1"
 PERIOD_NET_ROLE: str = "bar_native_auxiliary_unique_unsupported"
@@ -234,10 +256,26 @@ TERM_STRUCTURE_REQUIRED: frozenset[str] = frozenset(
         "opt225_basevol_term_ratio",
     }
 )
+# 15-name shards cannot populate these AND-gates (May+easing, crowd+weekday,
+# midmonth+steep, Friday+steep). Parked: data_requirement_unmet / main_pool=false.
+SPARSE_ON_15NAME_SHARD: frozenset[str] = frozenset(
+    {
+        "event_may_easing",
+        "flow_disagree_tue_thu",
+        "event_midmonth_steep",
+        "cs_steep_friday",
+    }
+)
 # Candidate pool: path ok, not always-on, not empty. Simple gated theses stay
 # even with modest t/Sharpe — combination/funds may still use them.
 CANDIDATE_POLICY: dict[str, object] = {
-    "exclude": ("path_broken", "always_on", "near_empty", "data_requirement_unmet"),
+    "exclude": (
+        "path_broken",
+        "always_on",
+        "near_empty",
+        "data_requirement_unmet",
+        "path_collapsed",
+    ),
     "always_on_occupancy": ALWAYS_ON_OCCUPANCY_WARN,
     "near_empty_occupancy": NEAR_EMPTY_OCCUPANCY,
     "strong_is_interest_flag": True,

@@ -650,10 +650,14 @@ _SPECS: tuple[dict[str, Any], ...] = (
     {
         "logic_id": "event_may_easing",
         "family_id": "event_calendar_gate",
-        "thesis": "PEAD in May FY-results only when overnight eased.",
+        "thesis": (
+            "PEAD in May FY-results only when overnight eased. "
+            "15-name shards are too sparse (data_requirement_unmet)."
+        ),
         "gates": ("fy_results", "overnight_easing"),
         "side": "orig",
         "kind": "event",
+        "main_pool": False,
     },
     {
         "logic_id": "event_skip_monday_uncrowded",
@@ -712,15 +716,19 @@ _SPECS: tuple[dict[str, Any], ...] = (
     {
         "logic_id": "flow_disagree_tue_thu",
         "family_id": "xs_margin_delta",
-        "thesis": "Fade CS when margin crowded, Tuesday–Thursday only.",
+        "thesis": (
+            "Fade CS when margin crowded, Tuesday–Thursday only. "
+            "Crowd+weekday is empty on 15-name shards (data_requirement_unmet)."
+        ),
         "cs_gate": "margin_crowd_tue_thu_invert",
         "kind": "cs",
+        "main_pool": False,
     },
     {
         "logic_id": "iv_below_midmonth_cs",
         "family_id": "xs_low_vol_mom",
-        "thesis": "CS mom mid-month only when ATM IV sits below BaseVol.",
-        "cs_gate": "iv_below_midmonth",
+        "thesis": "CS mom skipping Mondays when ATM IV sits below BaseVol (midmonth was empty).",
+        "cs_gate": "iv_below_skip_monday",
         "kind": "cs",
     },
     {
@@ -740,8 +748,8 @@ _SPECS: tuple[dict[str, Any], ...] = (
     {
         "logic_id": "cs_month_start_easing",
         "family_id": "event_calendar_gate",
-        "thesis": "CS mom in the first five calendar days only when overnight declined.",
-        "cs_gate": "month_start_overnight_down",
+        "thesis": "CS mom in the first ten calendar days only when overnight declined.",
+        "cs_gate": "month_start10_overnight_down",
         "kind": "cs",
     },
     {
@@ -750,6 +758,165 @@ _SPECS: tuple[dict[str, Any], ...] = (
         "thesis": "CS mom mid-month only when NKY vol term compressed versus the prior print.",
         "cs_gate": "nky_compress_midmonth",
         "kind": "cs",
+    },
+    {
+        "logic_id": "event_friday_uncrowded",
+        "family_id": "event_margin_crowd_combo",
+        "thesis": "PEAD only on Fridays when the name is uncrowded.",
+        "gates": ("friday_only", "uncrowded_margin"),
+        "side": "orig",
+        "kind": "event",
+    },
+    {
+        "logic_id": "event_skip_monday_easing",
+        "family_id": "event_calendar_gate",
+        "thesis": "Skip Monday PEAD; remaining days only when overnight eased.",
+        "gates": ("skip_monday", "overnight_easing"),
+        "side": "orig",
+        "kind": "event",
+    },
+    {
+        "logic_id": "event_afterclose_skip_monday",
+        "family_id": "afterclose_event_timing",
+        "thesis": "After-close PEAD skipping Monday entries.",
+        "gates": ("afterclose", "skip_monday"),
+        "side": "orig",
+        "kind": "event",
+    },
+    {
+        "logic_id": "event_easing_skip_friday",
+        "family_id": "event_calendar_gate",
+        "thesis": "PEAD when overnight eased, skipping Friday entries.",
+        "gates": ("overnight_easing", "friday_skip"),
+        "side": "orig",
+        "kind": "event",
+    },
+    {
+        "logic_id": "event_first_half_uncrowded",
+        "family_id": "event_margin_crowd_combo",
+        "thesis": "PEAD in the first half of the month only when uncrowded.",
+        "gates": ("first_half_month", "uncrowded_margin"),
+        "side": "orig",
+        "kind": "event",
+    },
+    {
+        "logic_id": "event_tue_thu_steep",
+        "family_id": "event_macro_curve_combo",
+        "thesis": "PEAD Tuesday–Thursday only when the repo curve is steep.",
+        "gates": ("tue_thu", "steep_curve"),
+        "side": "orig",
+        "kind": "event",
+    },
+    {
+        "logic_id": "event_midmonth_steep",
+        "family_id": "event_macro_curve_combo",
+        "thesis": (
+            "PEAD mid-month only when the repo curve is steep. "
+            "15-name shards are too sparse (data_requirement_unmet)."
+        ),
+        "gates": ("midmonth", "steep_curve"),
+        "side": "orig",
+        "kind": "event",
+        "main_pool": False,
+    },
+    {
+        "logic_id": "surprise_xs_first_half",
+        "family_id": "surprise_xs_rank",
+        "thesis": "Surprise CS rank only in the first half of the month.",
+        "gates": ("first_half_month",),
+        "side": "orig",
+        "kind": "surprise_xs",
+    },
+    {
+        "logic_id": "surprise_xs_afterclose_skip_monday",
+        "family_id": "surprise_xs_rank",
+        "thesis": "After-close surprise CS rank skipping Mondays.",
+        "gates": ("afterclose", "skip_monday"),
+        "side": "orig",
+        "kind": "surprise_xs",
+    },
+    {
+        "logic_id": "surprise_xs_steep_skip_monday",
+        "family_id": "surprise_xs_rank",
+        "thesis": "Steep-curve surprise CS rank skipping Mondays.",
+        "gates": ("steep_curve", "skip_monday"),
+        "side": "orig",
+        "kind": "surprise_xs",
+    },
+    {
+        "logic_id": "cs_friday_down",
+        "family_id": "event_calendar_gate",
+        "thesis": "CS mom on Fridays when overnight declined.",
+        "cs_gate": "friday_overnight_down",
+        "kind": "cs",
+    },
+    {
+        "logic_id": "cs_tue_thu_steep",
+        "family_id": "event_macro_curve_combo",
+        "thesis": "CS mom Tuesday–Thursday when the repo curve is steep.",
+        "cs_gate": "tue_thu_curve_steep",
+        "kind": "cs",
+    },
+    {
+        "logic_id": "overnight_up_skip_monday_cs",
+        "family_id": "overnight_level_cs",
+        "thesis": "CS mom when overnight rose, skipping Mondays.",
+        "cs_gate": "overnight_up_skip_monday",
+        "kind": "cs",
+    },
+    {
+        "logic_id": "flow_disagree_skip_monday",
+        "family_id": "xs_margin_delta",
+        "thesis": "Fade CS when margin crowded, skipping Mondays.",
+        "cs_gate": "margin_crowd_skip_monday_invert",
+        "kind": "cs",
+    },
+    {
+        "logic_id": "cs_easy_tue_thu",
+        "family_id": "overnight_level_cs",
+        "thesis": "CS mom Tuesday–Thursday when overnight is easy versus PIT median.",
+        "cs_gate": "tue_thu_overnight_easy",
+        "kind": "cs",
+    },
+    {
+        "logic_id": "cs_easy_skip_monday",
+        "family_id": "overnight_level_cs",
+        "thesis": "CS mom when overnight is easy (below PIT median), skipping Mondays.",
+        "cs_gate": "overnight_easy_skip_monday",
+        "kind": "cs",
+    },
+    {
+        "logic_id": "cs_not_friday_down",
+        "family_id": "event_calendar_gate",
+        "thesis": "CS mom on overnight decline, skipping Fridays.",
+        "cs_gate": "overnight_down_skip_friday",
+        "kind": "cs",
+    },
+    {
+        "logic_id": "cs_midmonth_easy",
+        "family_id": "overnight_level_cs",
+        "thesis": "CS mom mid-month only when overnight is easy versus PIT median.",
+        "cs_gate": "midmonth_overnight_easy",
+        "kind": "cs",
+    },
+    {
+        "logic_id": "cs_steep_friday",
+        "family_id": "event_macro_curve_combo",
+        "thesis": (
+            "CS mom on Fridays when the repo curve is steep. "
+            "Friday+steep is empty on 15-name shards (data_requirement_unmet)."
+        ),
+        "cs_gate": "friday_curve_steep",
+        "kind": "cs",
+        "main_pool": False,
+    },
+    {
+        "logic_id": "surprise_xs_uncrowded_skip_monday",
+        "family_id": "surprise_xs_rank",
+        "thesis": "Uncrowded surprise CS rank skipping Mondays.",
+        "gates": ("uncrowded_margin", "skip_monday"),
+        "side": "orig",
+        "kind": "surprise_xs",
     },
 )
 
@@ -1276,6 +1443,73 @@ def _eval_cs_combo(
                 and on is not None
                 and float(on) < float(prev_on)
             )
+        elif gate == "month_start10_overnight_down":
+            keep = (
+                d[8:10] <= "10"
+                and prev_on is not None
+                and on is not None
+                and float(on) < float(prev_on)
+            )
+        elif gate == "iv_below_skip_monday":
+            vol = _vol_sidecar()
+            keep = _weekday(d) != 0 and _apply_vol_gate(
+                "iv_below_basevol", d, dates[i - 1] if i else None, vol
+            )
+            if not vol:
+                extra_cf_only.append(gate)
+        elif gate == "friday_overnight_down":
+            keep = (
+                _weekday(d) == 4
+                and prev_on is not None
+                and on is not None
+                and float(on) < float(prev_on)
+            )
+        elif gate == "tue_thu_curve_steep":
+            keep = _weekday(d) in {1, 2, 3} and float(spread.get(d) or 0) > 0
+        elif gate == "overnight_up_skip_monday":
+            keep = (
+                _weekday(d) != 0
+                and prev_on is not None
+                and on is not None
+                and float(on) > float(prev_on)
+            )
+        elif gate == "margin_crowd_skip_monday_invert":
+            keep = _weekday(d) != 0 and _universe_margin_delta(margin_by_code, d) > 0
+            loc_invert = True
+        elif gate == "overnight_easy_skip_monday":
+            med_on = event.pit_median_on_dates(overnight, [d], min_hist=20).get(d) if overnight else None
+            keep = (
+                _weekday(d) != 0
+                and on is not None
+                and med_on is not None
+                and float(on) < float(med_on)
+            )
+        elif gate == "overnight_down_skip_friday":
+            keep = (
+                _weekday(d) != 4
+                and prev_on is not None
+                and on is not None
+                and float(on) < float(prev_on)
+            )
+        elif gate == "midmonth_overnight_easy":
+            med_on = event.pit_median_on_dates(overnight, [d], min_hist=20).get(d) if overnight else None
+            keep = (
+                d[8:10] >= "10"
+                and d[8:10] <= "20"
+                and on is not None
+                and med_on is not None
+                and float(on) < float(med_on)
+            )
+        elif gate == "tue_thu_overnight_easy":
+            med_on = event.pit_median_on_dates(overnight, [d], min_hist=20).get(d) if overnight else None
+            keep = (
+                _weekday(d) in {1, 2, 3}
+                and on is not None
+                and med_on is not None
+                and float(on) < float(med_on)
+            )
+        elif gate == "friday_curve_steep":
+            keep = _weekday(d) == 4 and float(spread.get(d) or 0) > 0
         elif gate == "nky_compress_midmonth":
             vol = _vol_sidecar()
             keep = (
