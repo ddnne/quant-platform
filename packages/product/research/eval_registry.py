@@ -350,19 +350,6 @@ def list_eval_jobs_from_d1(*, limit: int = 20) -> list[dict[str, Any]]:
     return rows
 
 
-def __getattr__(name: str) -> Any:
-    if name in {
-        "CANDIDATE_KEEP_SIMPLE",
-        "proposal_blocked_by_summary",
-        "summarize_daily_path_cells",
-        "weakness_flags_from_summary",
-    }:
-        from research import eval_summary
-
-        return getattr(eval_summary, name)
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
-
 def main(argv: list[str] | None = None) -> int:
     import argparse
 

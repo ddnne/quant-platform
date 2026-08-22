@@ -303,10 +303,6 @@ def panel_run_length_stats(
         "n_runs_total": dist["n_runs"],
         "run_length": dist,
         "turnover_proxy_per_day": turnover_proxy,
-        "turnover_proxy_note": (
-            "1/mean_run_length — research proxy for fraction of codes "
-            "expected to flip per day if holds equal mean; 仮定に依存"
-        ),
         "per_code_mean_run_length": per_code_mean,
         "non_zero_only": bool(non_zero_only),
     }
@@ -436,11 +432,6 @@ def extract_sign_panel_from_batch_summary(
         "unanimous_days": unanimous_days,
         "mixed_days": mixed_days,
         "records": records,
-        "note": (
-            "研究用パネル再構成。sample_values は部分標本。"
-            "majority expand は当日全コード同符号のときのみ厳密。"
-            "仮定に依存・研究用・未宣言。"
-        ),
     }
     out.update(_freeze_fields())
     return out
@@ -476,7 +467,6 @@ def cost_amortization_table(
                 "effective_daily_cost_bp": eff * 10_000.0,
                 "effective_daily_cost_round_trip": eff_rt,
                 "effective_daily_cost_round_trip_bp": eff_rt * 10_000.0,
-                "formula": "effective_daily_cost = one_way_cost / hold_days_N",
             }
         )
     return rows
@@ -503,15 +493,7 @@ def cost_amortization_report(
         "one_way_cost_bp": bp,
         "round_trip_cost": 2.0 * c,
         "round_trip_cost_bp": 2.0 * bp,
-        "formula_one_way": "effective_daily_cost ≈ one_way_cost / hold_days_N",
-        "formula_round_trip": (
-            "effective_daily_cost_rt ≈ 2*one_way_cost / hold_days_N"
-        ),
         "rows": rows,
-        "note": (
-            "研究用コスト償却イラストのみ。スリッページ校正でも執行モデルでもない。"
-            "仮定に依存・研究用・未宣言。"
-        ),
     }
     out.update(_freeze_fields())
     return out
@@ -552,10 +534,6 @@ def holding_metrics_report(
                 "one_way_cost": c,
                 "effective_daily_cost": c / float(mean_hold),
                 "effective_daily_cost_bp": (c / float(mean_hold)) * 10_000.0,
-                "note": (
-                    "イラスト: 平均保有日数で one_way を割った実効日次コスト。"
-                    "仮定に依存・研究用・未宣言。"
-                ),
             }
         else:
             out["implied_at_mean_hold"] = None
@@ -567,7 +545,6 @@ def holding_metrics_report(
 
 __all__ = [
     "DEFAULT_HOLD_DAYS",
-    "DEFAULT_HISTOGRAM_BUCKETS",
     "DEFAULT_ONE_WAY_COST",
     "DEFAULT_ONE_WAY_COST_BP",
     "HOLDING_METRICS_LABEL",
@@ -575,11 +552,8 @@ __all__ = [
     "cost_amortization_report",
     "cost_amortization_table",
     "extract_sign_panel_from_batch_summary",
-    "histogram_run_lengths",
     "holding_metrics_report",
-    "majority_sign_from_distribution",
     "panel_run_length_stats",
-    "panel_run_lengths_by_code",
     "run_length_distribution",
     "run_lengths_for_sign_sequence",
     "sign_from_value",

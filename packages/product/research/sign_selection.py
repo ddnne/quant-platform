@@ -533,19 +533,6 @@ def sign_selection_from_period_rows(
     )
 
 
-def sign_selection_document() -> dict[str, Any]:
-    """Public document for the sign-selection surface."""
-    doc = {
-        "version": SIGN_SELECTION_VERSION,
-        "policy": {
-            "t_is_guideline_not_hard": True,
-            "not_simple_daily_sign": True,
-        },
-    }
-    doc.update(_freeze())
-    return doc
-
-
 __all__ = [
     "DEFAULT_MIN_MEAN_NET",
     "DEFAULT_NEAR_ZERO_ABS_NET",
@@ -558,6 +545,5 @@ __all__ = [
     "evaluate_and_choose_sign",
     "evaluate_sign_both_sides",
     "invert_period_net",
-    "sign_selection_document",
     "sign_selection_from_period_rows",
 ]

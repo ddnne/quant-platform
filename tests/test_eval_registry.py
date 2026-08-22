@@ -8,9 +8,14 @@ from research.eval_registry import (
     manifest_from_window_rows,
     r2_manifest_key,
 )
+from research.eval_summary import (
+    CANDIDATE_KEEP_SIMPLE,
+    proposal_blocked_by_summary,
+    summarize_daily_path_cells,
+    weakness_flags_from_summary,
+)
 from research.eval_windows import HONEST_3Y_WINDOWS
 from research.daily_path_eval import stitch_net, summarize_path
-
 
 def test_honest_windows_are_the_shared_catalog() -> None:
     ids = [w["window_id"] for w in HONEST_3Y_WINDOWS]
@@ -72,7 +77,6 @@ def test_summarize_path_passes_gate_fields() -> None:
 
 
 def test_summarize_marks_path_broken_not_suspicious() -> None:
-    from research.eval_registry import summarize_daily_path_cells
 
     cells = [
         {
@@ -147,7 +151,6 @@ def test_path_broken_cell_is_not_complete() -> None:
 
 
 def test_always_on_is_not_strong() -> None:
-    from research.eval_registry import summarize_daily_path_cells
 
     cells = [
         {
@@ -169,7 +172,6 @@ def test_always_on_is_not_strong() -> None:
 
 
 def test_always_on_gate_is_never_candidate() -> None:
-    from research.eval_registry import summarize_daily_path_cells
 
     cells = [
         {
@@ -512,7 +514,6 @@ def test_sleeve_majority_prints_are_not_a_pass() -> None:
 
 
 def test_summarize_emits_candidate_family_counts() -> None:
-    from research.eval_registry import summarize_daily_path_cells
 
     cells = [
         {
@@ -603,7 +604,6 @@ def test_summarize_basket_trends_is_not_a_pass() -> None:
 
 
 def test_near_duplicate_is_not_candidate() -> None:
-    from research.eval_registry import summarize_daily_path_cells
     from research.unique_logic.near_duplicate import NEAR_DUPLICATE_PARK
 
     lid = sorted(NEAR_DUPLICATE_PARK)[0]
@@ -697,7 +697,6 @@ def test_sparse_gate_combo_parks_at_generation() -> None:
         row = next(s for s in NEW_COMBO_LOGIC if s["logic_id"] == lid)
         assert row.get("main_pool") is False
         assert row.get("always_on_cs_sticky") is True
-    from research.eval_registry import summarize_daily_path_cells
     from research.unique_logic.constants import is_ungated_name_level_cs
 
     assert is_ungated_name_level_cs(kind="cs", cs_gate="eq_ar_high") is True
@@ -730,7 +729,6 @@ def test_sparse_gate_combo_parks_at_generation() -> None:
 
 
 def test_isolate_limit_logic_is_not_candidate() -> None:
-    from research.eval_registry import summarize_daily_path_cells
     from research.unique_logic.constants import WORKER_ISOLATE_LIMIT_IDS
 
     assert WORKER_ISOLATE_LIMIT_IDS == frozenset()
@@ -750,7 +748,6 @@ def test_isolate_limit_logic_is_not_candidate() -> None:
 
 
 def test_sparse_15name_is_data_requirement_unmet() -> None:
-    from research.eval_registry import summarize_daily_path_cells
     from research.unique_logic.constants import SPARSE_ON_15NAME_SHARD
 
     assert SPARSE_ON_15NAME_SHARD == frozenset(
@@ -782,7 +779,6 @@ def test_sparse_15name_is_data_requirement_unmet() -> None:
 
 
 def test_near_empty_and_term_ratio_are_not_candidates() -> None:
-    from research.eval_registry import summarize_daily_path_cells
 
     cells = [
         {
@@ -808,7 +804,6 @@ def test_near_empty_and_term_ratio_are_not_candidates() -> None:
 
 
 def test_modest_t_gated_thesis_stays_candidate() -> None:
-    from research.eval_registry import summarize_daily_path_cells
 
     cells = [
         {
@@ -839,7 +834,6 @@ def test_path_collapsed_is_not_candidate() -> None:
     from research.eval_registry import (
         is_daily_path_complete_cell,
         is_path_collapsed_cell,
-        summarize_daily_path_cells,
     )
 
     cells = [
@@ -871,7 +865,6 @@ def test_path_collapsed_is_not_candidate() -> None:
 
 
 def test_mf_value_at_always_on_threshold_is_parked() -> None:
-    from research.eval_registry import summarize_daily_path_cells
     from research.unique_logic.constants import ALWAYS_ON_OCCUPANCY_WARN
 
     cells = [
@@ -893,7 +886,6 @@ def test_mf_value_at_always_on_threshold_is_parked() -> None:
 
 
 def test_path_broken_is_not_candidate() -> None:
-    from research.eval_registry import summarize_daily_path_cells
 
     cells = [
         {
@@ -914,11 +906,6 @@ def test_path_broken_is_not_candidate() -> None:
 
 
 def test_proposal_schema_reads_summary_weakness_flags() -> None:
-    from research.eval_registry import (
-        proposal_blocked_by_summary,
-        weakness_flags_from_summary,
-    )
-
     summary = {
         "logics": [
             {
@@ -936,8 +923,6 @@ def test_proposal_schema_reads_summary_weakness_flags() -> None:
     flags = weakness_flags_from_summary(summary)
     assert "always_on" in flags["xs_rank_ls_sticky"]
     assert "path_broken" in flags["unwired_overlay"]
-    from research.eval_registry import CANDIDATE_KEEP_SIMPLE
-
     assert "path_broken" in CANDIDATE_KEEP_SIMPLE
     assert "path_collapsed" in CANDIDATE_KEEP_SIMPLE
     assert "always_on" in CANDIDATE_KEEP_SIMPLE

@@ -14,7 +14,6 @@ from research.sign_selection import (
     evaluate_and_choose_sign,
     evaluate_sign_both_sides,
     invert_period_net,
-    sign_selection_document,
     sign_selection_from_period_rows,
 )
 
@@ -223,13 +222,17 @@ def test_both_eligible_picks_higher_mean():
 
 
 def test_sign_selection_document_freezes():
-    doc = sign_selection_document()
-    assert doc["version"] == SIGN_SELECTION_VERSION
-    assert doc["mass_research"] == "NO-GO"
-    assert doc["ready_declared"] is False
-    assert doc["phase7"] == "OFF"
-    assert doc["policy"]["t_is_guideline_not_hard"] is True
-    assert doc["policy"]["not_simple_daily_sign"] is True
+    both = evaluate_sign_both_sides(
+        period_grosses=[0.01, 0.008, 0.012, 0.009, 0.011, 0.007],
+        amortized_costs=0.001,
+    )
+    choice = choose_sign(both)
+    assert both["version"] == SIGN_SELECTION_VERSION
+    assert both["simple_daily_sign"] is False
+    assert choice["mass_research"] == "NO-GO"
+    assert choice["ready_declared"] is False
+    assert choice["phase7"] == "OFF"
+    assert choice["policy"]["t_is_guideline_not_hard"] is True
 
 
 def test_strategy_spec_signal_sign_round_trip():

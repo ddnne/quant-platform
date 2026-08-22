@@ -959,16 +959,6 @@ def stats_bar_check(
     }
 
 
-def stats_metrics_document() -> dict[str, Any]:
-    """Public document for statistical bar surface."""
-    doc = {
-        "version": STATS_METRICS_VERSION,
-        "period_net_dd_only_pass_forbidden": True,
-    }
-    doc.update(_freeze())
-    return doc
-
-
 __all__ = [
     "DAILY_PATH_DD_PROOF",
     "DAILY_PATH_DD_REFERENCE_PROOF",
@@ -996,7 +986,6 @@ __all__ = [
     "sample_mean",
     "sharpe_ratio",
     "stats_bar_check",
-    "stats_metrics_document",
     "is_low_variance_t_artifact",
     "has_pairwise_low_variance_artifact",
     "t_stat_vs_zero",

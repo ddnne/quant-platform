@@ -103,16 +103,6 @@ def _freeze() -> dict[str, Any]:
     }
 
 
-def research_robustness_gate_document() -> dict[str, Any]:
-    """Public document for the research robustness gate."""
-    return {
-        "version": GATE_VERSION,
-        "label": GATE_LABEL,
-        **_freeze(),
-        "note": "Research checklist only. Pass is not operational GO.",
-    }
-
-
 def evaluate_research_robustness_gate(
     period_rows: Sequence[Mapping[str, Any]],
     *,
@@ -445,6 +435,5 @@ __all__ = [
     "evaluate_research_robustness_gate",
     "period_rows_from_cross_table",
     "research_net_one_way",
-    "research_robustness_gate_document",
     "walk_forward_gross_from_compare",
 ]

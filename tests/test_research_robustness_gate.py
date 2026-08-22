@@ -8,10 +8,10 @@ from pathlib import Path
 import pytest
 
 from research.robustness_gate import (
+    GATE_LABEL,
     GATE_VERSION,
     evaluate_research_robustness_gate,
     period_rows_from_cross_table,
-    research_robustness_gate_document,
     walk_forward_gross_from_compare,
 )
 
@@ -20,14 +20,16 @@ GATE_PATH = REPO / "packages" / "product" / "research" / "robustness_gate.py"
 
 
 def test_gate_document_closed_to_ready_mass():
-    doc = research_robustness_gate_document()
-    assert doc["version"] == GATE_VERSION
-    assert doc["ready_declared"] is False
-    assert doc["operational_go"] is False
-    assert doc["connected_to_ready"] is False
-    assert doc["connected_to_mass"] is False
-    assert doc["mass_research"] == "NO-GO"
-    assert doc["phase7"] == "OFF"
+    assert GATE_VERSION.startswith("research-robustness-gate/")
+    assert "運用GO" in GATE_LABEL
+    out = evaluate_research_robustness_gate([], signal_id="s")
+    assert out["version"] == GATE_VERSION
+    assert out["ready_declared"] is False
+    assert out["operational_go"] is False
+    assert out["connected_to_ready"] is False
+    assert out["connected_to_mass"] is False
+    assert out["mass_research"] == "NO-GO"
+    assert out["phase7"] == "OFF"
 
 
 def test_gate_fails_single_period_tip_like_win():
