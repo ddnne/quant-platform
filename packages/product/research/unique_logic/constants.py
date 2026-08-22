@@ -28,13 +28,19 @@ COMBO_EVENT_GATES: frozenset[str] = frozenset(
         "month_start7",
         "not_first_week",
         "first_half_month",
+        "month_end_skip",
+        "fy_end",
+        "fy_results",
+        "fy_start",
         "midmonth",
         "afterclose",
         "overnight_easing",
+        "overnight_tightening",
         "easy_funding",
         "tight_funding",
         "steep_curve",
         "uncrowded_margin",
+        "crowded_margin",
         "cluster",
         "invert_curve",
         "on_impulse",
@@ -60,13 +66,7 @@ COMBO_EVENT_GATES: frozenset[str] = frozenset(
 )
 PYTHON_ONLY_EVENT_GATES: frozenset[str] = frozenset(
     {
-        "crowded_margin",
         "pre_mom",
-        "month_end_skip",
-        "fy_end",
-        "fy_results",
-        "fy_start",
-        "overnight_tightening",
     }
 )
 KNOWN_EVENT_GATES: frozenset[str] = COMBO_EVENT_GATES | PYTHON_ONLY_EVENT_GATES
@@ -80,8 +80,9 @@ def python_only_gate_logic_ids() -> frozenset[str]:
     """Combo lids whose params.gates intersect PYTHON_ONLY_EVENT_GATES.
 
     Lazy import: ``event_combos`` imports this module. Worker lid branches
-    cover the returned set; do not copy the 7 names onto Worker
-    ``COMBO_EVENT_GATES``.
+    cover the returned set; do not copy remaining PYTHON_ONLY names onto
+    Worker ``COMBO_EVENT_GATES`` until comboEventGateOk occupancy equals
+    the leftover lid body.
     """
     from research.unique_logic.event_combos import NEW_COMBO_LOGIC
 

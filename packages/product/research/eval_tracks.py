@@ -69,7 +69,10 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
     {
         "id": "python_only_gates",
         "track": EVAL_TRACK_LIQ_LARGE,
-        "why": "skip catalog exists; Worker bodies still missing",
+        "why": (
+            "six occupancy-equal gates lifted into comboEventGateOk; "
+            "pre_mom stays PYTHON_ONLY (leftover includes entry close)"
+        ),
         "not_a_pass": True,
         "go": False,
     },

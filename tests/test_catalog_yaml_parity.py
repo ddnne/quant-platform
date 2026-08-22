@@ -132,15 +132,6 @@ def test_python_only_event_gates_skip_catalog() -> None:
         {
             "event_pre_mom_easy_funding",
             "event_pre_mom_steep_curve",
-            "event_tight_and_crowded_fade",
-            "margin_crowd_fade_event",
-            "month_end_event_skip",
-            "overnight_tightening_fade_event",
-            "surprise_xs_fy_end",
-            "fy_end_event_fade",
-            "event_may_results_follow",
-            "event_may_easing",
-            "fy_start_event_follow",
         }
     )
 

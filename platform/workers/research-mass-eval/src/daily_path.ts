@@ -731,6 +731,7 @@ const COMBO_EVENT_GATES = new Set([
   "cheap_iv",
   "cheap_pb",
   "cluster",
+  "crowded_margin",
   "curve_flatten",
   "div_positive",
   "easy_funding",
@@ -740,12 +741,16 @@ const COMBO_EVENT_GATES = new Set([
   "first_half_month",
   "friday_only",
   "friday_skip",
+  "fy_end",
+  "fy_results",
+  "fy_start",
   "invert_curve",
   "large_surprise",
   "liq_high",
   "margin_down",
   "margin_up",
   "midmonth",
+  "month_end_skip",
   "month_start7",
   "nky_vol_high_skip",
   "not_first_week",
@@ -753,6 +758,7 @@ const COMBO_EVENT_GATES = new Set([
   "on_impulse",
   "overnight_easing",
   "overnight_p10",
+  "overnight_tightening",
   "positive_eps",
   "price_down",
   "repo_3m_down",
@@ -842,6 +848,18 @@ function overnightEased(
   return on < overnight[prevs[prevs.length - 1]];
 }
 
+function overnightTightened(
+  overnight: Record<string, number>,
+  d: string,
+): boolean {
+  const prevs = Object.keys(overnight)
+    .filter((x) => x < d)
+    .sort();
+  const on = overnight[d];
+  if (!prevs.length || on === undefined) return false;
+  return on > overnight[prevs[prevs.length - 1]];
+}
+
 export function comboEventGateOk(
   gate: string,
   ev: {
@@ -880,9 +898,14 @@ export function comboEventGateOk(
   if (gate === "month_start7") return dd <= "07";
   if (gate === "not_first_week") return dd > "07";
   if (gate === "first_half_month") return dd <= "15";
+  if (gate === "month_end_skip") return dd < "28";
+  if (gate === "fy_end") return d.slice(5, 7) === "03" && dd >= "15";
+  if (gate === "fy_results") return d.slice(5, 7) === "05";
+  if (gate === "fy_start") return d.slice(5, 7) === "04";
   if (gate === "midmonth") return dd >= "10" && dd <= "20";
   if (gate === "afterclose") return ev.after;
   if (gate === "overnight_easing") return overnightEased(overnight, d);
+  if (gate === "overnight_tightening") return overnightTightened(overnight, d);
   if (gate === "easy_funding") {
     const on = overnight[d];
     const med = pitMedian(overnight, d, minHist);
@@ -897,7 +920,7 @@ export function comboEventGateOk(
     const sp = spread[d];
     return sp !== undefined && sp > 0;
   }
-  if (gate === "uncrowded_margin") {
+  if (gate === "uncrowded_margin" || gate === "crowded_margin") {
     const levels = panel.flow_regime?.margin_level_by_code?.[ev.code] || {};
     const prior = Object.keys(levels)
       .filter((x) => x < d)
@@ -909,7 +932,8 @@ export function comboEventGateOk(
       86400000;
     const med = pitMedian(levels, d, minHist);
     if (!Number.isFinite(age) || age > 14 || med === null) return false;
-    return (levels[lastD] as number) < med;
+    const crowded = (levels[lastD] as number) >= med;
+    return gate === "crowded_margin" ? crowded : !crowded;
   }
   if (gate === "cluster") {
     const series = clusterWindowSeries(panel);
@@ -1078,6 +1102,22 @@ export function comboEventGateOk(
     if (!finite(c0) || !finite(c1) || (c0 as number) === 0) return false;
     return (c1 as number) / (c0 as number) - 1 < 0;
   }
+  // Python _pre_entry_mom: last close strictly before entry (entryIdx-1).
+  // Leftover lid uses momentumAt(entryIdx) (includes entry close) so occupancy
+  // differs — pre_mom stays PYTHON_ONLY until leftover is rewritten.
+  if (gate === "pre_mom") {
+    const pairs = panel.bars?.[ev.code] || [];
+    const j = ev.entryIdx - 1;
+    const i = j - 5;
+    if (i < 0 || j < 0 || j >= pairs.length || !pairs[i] || !pairs[j])
+      return false;
+    const c0 = pairs[i][1];
+    const c1 = pairs[j][1];
+    if (!finite(c0) || !finite(c1) || (c0 as number) === 0) return false;
+    const mom = (c1 as number) / (c0 as number) - 1;
+    const ms = signNum(mom);
+    return ms !== null && ms !== 0 && ms === ev.sign;
+  }
   // Unknown gate fails closed (do not silently always-on).
   return false;
 }
@@ -1117,7 +1157,12 @@ export function comboCsGateOk(
   else if (gate === "not_last_week") keep = dd < "24";
   else if (gate === "month_start7") keep = dd <= "07";
   else if (gate === "not_first_week") keep = dd > "07";
-  else if (gate === "overnight_easy_skip_friday") {
+  else if (gate === "fy_end_invert") {
+    keep = d.slice(5, 7) === "03" && dd >= "15";
+    invert = true;
+  } else if (gate === "fy_start") {
+    keep = d.slice(5, 7) === "04";
+  } else if (gate === "overnight_easy_skip_friday") {
     keep = wd !== 4 && on !== undefined && medOn !== null && on < medOn;
   } else if (gate === "margin_crowd_skip_friday_invert") {
     keep = wd !== 4 && marginChg !== null && marginChg > 0;
@@ -1468,8 +1513,8 @@ function eventHeld(
         );
         if (String(params.side || "orig") === "flip") sgn = -ev.sign;
       }
-      // Leftover lid bodies + python-only gates (crowded_margin/pre_mom/
-      // month_end_skip/fy_end/fy_results/fy_start/overnight_tightening).
+      // Leftover lid bodies + python-only gates (pre_mom: leftover includes
+      // entry close; comboEventGateOk uses Python entryIdx-1).
       if (!comboImpl) {
       if (lid === "afterclose_only_event_hold" && !ev.after) ok = false;
       if (lid === "event_funding_stress_skip" || lid === "event_funding_adaptive_side") {
@@ -2008,7 +2053,8 @@ function eventHeld(
         // Catalog gate is first_half_month (dd<=15); leftover is dd>"05".
         if (lid === "surprise_xs_month_start" && ev.entryDate.slice(8, 10) > "05")
           continue;
-        // fy_end is PYTHON_ONLY, not in Worker COMBO_EVENT_GATES.
+        // Catalog fy_end is Mar>=15 (same predicate). Keep leftover so
+        // occupancy cannot widen if comboImpl/gate drift.
         if (
           lid === "surprise_xs_fy_end" &&
           !(ev.entryDate.slice(5, 7) === "03" && ev.entryDate.slice(8, 10) >= "15")

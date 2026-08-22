@@ -89,6 +89,115 @@ describe("comboEventGateOk", () => {
     expect(comboEventGateOk("liq_high", thin, {}, {}, 8, panel)).toBe(false);
     expect(comboEventGateOk("liq_high", ev, {}, {}, 8, dummyPanel)).toBe(false);
   });
+
+  it("month_end_skip fails on and after the 28th", () => {
+    const late = { ...ev, entryDate: "2019-01-28" };
+    const ok = { ...ev, entryDate: "2019-01-27" };
+    expect(comboEventGateOk("month_end_skip", late, {}, {}, 20, dummyPanel)).toBe(
+      false,
+    );
+    expect(comboEventGateOk("month_end_skip", ok, {}, {}, 20, dummyPanel)).toBe(
+      true,
+    );
+  });
+
+  it("fy_end is late March (Mar>=15), fy_results May, fy_start April", () => {
+    const mar15 = { ...ev, entryDate: "2019-03-15" };
+    const mar14 = { ...ev, entryDate: "2019-03-14" };
+    const apr = { ...ev, entryDate: "2019-04-01" };
+    const may = { ...ev, entryDate: "2019-05-02" };
+    expect(comboEventGateOk("fy_end", mar15, {}, {}, 20, dummyPanel)).toBe(true);
+    expect(comboEventGateOk("fy_end", mar14, {}, {}, 20, dummyPanel)).toBe(false);
+    expect(comboEventGateOk("fy_end", apr, {}, {}, 20, dummyPanel)).toBe(false);
+    expect(comboEventGateOk("fy_results", may, {}, {}, 20, dummyPanel)).toBe(
+      true,
+    );
+    expect(comboEventGateOk("fy_results", apr, {}, {}, 20, dummyPanel)).toBe(
+      false,
+    );
+    expect(comboEventGateOk("fy_start", apr, {}, {}, 20, dummyPanel)).toBe(true);
+    expect(comboEventGateOk("fy_start", may, {}, {}, 20, dummyPanel)).toBe(false);
+  });
+
+  it("overnight_tightening keeps a rise versus the prior print", () => {
+    const up = { "2019-01-07": 0.1, "2019-01-08": 0.2 };
+    const down = { "2019-01-07": 0.2, "2019-01-08": 0.1 };
+    const flat = { "2019-01-07": 0.2, "2019-01-08": 0.2 };
+    expect(comboEventGateOk("overnight_tightening", ev, up, {}, 20, dummyPanel)).toBe(
+      true,
+    );
+    expect(
+      comboEventGateOk("overnight_tightening", ev, down, {}, 20, dummyPanel),
+    ).toBe(false);
+    expect(
+      comboEventGateOk("overnight_tightening", ev, flat, {}, 20, dummyPanel),
+    ).toBe(false);
+    expect(
+      comboEventGateOk("overnight_tightening", ev, { "2019-01-08": 0.2 }, {}, 20, dummyPanel),
+    ).toBe(false);
+  });
+
+  it("crowded_margin is the invert of uncrowded_margin (stale<=14d)", () => {
+    const levels: Record<string, number> = {};
+    for (let i = 1; i <= 20; i++) {
+      levels[`2018-12-${String(i).padStart(2, "0")}`] = 10;
+    }
+    levels["2019-01-07"] = 20;
+    const panel = {
+      flow_regime: { margin_level_by_code: { "13010": levels } },
+    } as PeriodPanel;
+    expect(comboEventGateOk("crowded_margin", ev, {}, {}, 8, panel)).toBe(true);
+    expect(comboEventGateOk("uncrowded_margin", ev, {}, {}, 8, panel)).toBe(
+      false,
+    );
+    const thin = { ...levels, "2019-01-07": 5 };
+    const thinPanel = {
+      flow_regime: { margin_level_by_code: { "13010": thin } },
+    } as PeriodPanel;
+    expect(comboEventGateOk("crowded_margin", ev, {}, {}, 8, thinPanel)).toBe(
+      false,
+    );
+    expect(comboEventGateOk("uncrowded_margin", ev, {}, {}, 8, thinPanel)).toBe(
+      true,
+    );
+    const stale: Record<string, number> = {};
+    for (let i = 1; i <= 20; i++) {
+      stale[`2018-12-${String(i).padStart(2, "0")}`] = 20;
+    }
+    const stalePanel = {
+      flow_regime: { margin_level_by_code: { "13010": stale } },
+    } as PeriodPanel;
+    expect(comboEventGateOk("crowded_margin", ev, {}, {}, 8, stalePanel)).toBe(
+      false,
+    );
+    expect(comboEventGateOk("crowded_margin", ev, {}, {}, 8, dummyPanel)).toBe(
+      false,
+    );
+  });
+
+  it("pre_mom uses last close strictly before entry (Python lookback)", () => {
+    const pairs: Array<[string, number]> = [
+      ["2019-01-02", 100],
+      ["2019-01-03", 101],
+      ["2019-01-04", 102],
+      ["2019-01-05", 103],
+      ["2019-01-07", 104],
+      ["2019-01-08", 80],
+      ["2019-01-09", 70],
+    ];
+    const panel = { bars: { "13010": pairs } } as PeriodPanel;
+    const agree = { ...ev, entryDate: "2019-01-09", entryIdx: 6, sign: -1 };
+    const disagree = { ...agree, sign: 1 };
+    const shortHist = { ...ev, entryDate: "2019-01-08", entryIdx: 5, sign: -1 };
+    expect(comboEventGateOk("pre_mom", agree, {}, {}, 20, panel)).toBe(true);
+    expect(comboEventGateOk("pre_mom", disagree, {}, {}, 20, panel)).toBe(false);
+    expect(comboEventGateOk("pre_mom", shortHist, {}, {}, 20, panel)).toBe(
+      false,
+    );
+    expect(comboEventGateOk("pre_mom", agree, {}, {}, 20, dummyPanel)).toBe(
+      false,
+    );
+  });
 });
 
 describe("crossed CS gates fail closed without extras", () => {
@@ -127,6 +236,19 @@ describe("comboCsGateOk", () => {
     const late = comboCsGateOk("month_start7", "2019-01-20", {}, {}, null, null, null);
     expect(start.keep).toBe(true);
     expect(late.keep).toBe(false);
+  });
+
+  it("fy_end_invert is late March fade; fy_start is April follow", () => {
+    const mar15 = comboCsGateOk("fy_end_invert", "2019-03-15", {}, {}, null, null, null);
+    const mar14 = comboCsGateOk("fy_end_invert", "2019-03-14", {}, {}, null, null, null);
+    const apr = comboCsGateOk("fy_start", "2019-04-02", {}, {}, null, null, null);
+    const may = comboCsGateOk("fy_start", "2019-05-02", {}, {}, null, null, null);
+    expect(mar15.keep).toBe(true);
+    expect(mar15.invert).toBe(true);
+    expect(mar14.keep).toBe(false);
+    expect(apr.keep).toBe(true);
+    expect(apr.invert).toBe(false);
+    expect(may.keep).toBe(false);
   });
 
   it("unknown gate fails closed", () => {
