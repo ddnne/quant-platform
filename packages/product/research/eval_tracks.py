@@ -80,9 +80,9 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "id": "inventory_bias_recorded",
         "track": EVAL_TRACK_LIQ_LARGE,
         "why": (
-            "recorded research/eval/job=eval-inventory-bias-20260823a/ and "
-            "eval-inventory-bias-20260823e/inventory_bias.json; "
-            "assert_new_batch_cheap_pb_cap refuses new batches at 20%"
+            "recorded research/eval/job=eval-inventory-bias-20260823a/e/h/"
+            "inventory_bias.json; assert_new_batch_cheap_pb_cap refuses "
+            "new batches at 20%"
         ),
         "not_a_pass": True,
         "go": False,
@@ -194,9 +194,9 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "tracks": BOTH_EVAL_TRACK_IDS,
         "entry": "research.cf_daily_path_job.run_both_track_sleeve_fanout",
         "why": (
-            "recorded eval-cf-dp-both-sleeves-20260822c/m/p and "
-            "eval-cf-dp-both-sleeves-20260823a mid+liq reblend; "
-            "not a pass; do not narrate majority as stable"
+            "recorded eval-cf-dp-both-sleeves-20260823e mid+liq; "
+            "descriptive summary eval-durability-summary-20260823h "
+            "not_a_pass; do not narrate majority as stable"
         ),
         "not_a_pass": True,
         "go": False,
