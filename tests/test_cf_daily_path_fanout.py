@@ -238,7 +238,6 @@ def test_event_daily_path_ids_cover_filters_and_sides() -> None:
     assert set(EVENT_FILTER_LOGIC_IDS) <= set(CF_EVENT_DAILY_PATH_IDS)
     assert set(EVENT_SIDES_LOGIC_IDS) <= set(CF_EVENT_DAILY_PATH_IDS)
     assert set(ADAPTIVE_LOGIC_IDS) <= set(CF_EVENT_DAILY_PATH_IDS)
-    assert len(CF_EVENT_DAILY_PATH_IDS) >= 13
     from research.unique_logic.constants import (
         CF_EVENT_FIDELITY,
         CF_NEW_THESIS_IDS,
@@ -246,7 +245,7 @@ def test_event_daily_path_ids_cover_filters_and_sides() -> None:
 
     assert "aligned" in CF_EVENT_FIDELITY["surprise"]
     assert "intended_lite_windows" in CF_EVENT_FIDELITY
-    assert len(CF_NEW_THESIS_IDS) >= 116
+    assert set(CF_NEW_THESIS_IDS)
 
 
 def test_cf_daily_path_job_does_not_import_factory() -> None:

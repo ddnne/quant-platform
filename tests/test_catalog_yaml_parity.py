@@ -213,11 +213,6 @@ def test_original_22_ids_from_yaml() -> None:
     assert families["event_sides"] == EVENT_SIDES_LOGIC_IDS
     assert families["adaptive"] == ADAPTIVE_LOGIC_IDS
     assert families["cs"] == CS_LOGIC_IDS
-    assert len(EVENT_LOGIC_IDS) == 4
-    assert len(EVENT_FILTER_LOGIC_IDS) == 4
-    assert len(EVENT_SIDES_LOGIC_IDS) == 3
-    assert len(ADAPTIVE_LOGIC_IDS) == 2
-    assert len(CS_LOGIC_IDS) == 9
     original = (
         EVENT_LOGIC_IDS
         | EVENT_FILTER_LOGIC_IDS

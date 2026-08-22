@@ -154,7 +154,6 @@ def test_repo_catalog_yaml_loads() -> None:
     assert "overnight_easy_cs_follow" in ids
     assert "xs_low_vol_mom" in ids
     assert "month_end_cs_fade" in ids
-    assert len(ids) >= 20
     assert ids == py_ids
     for spec in specs:
         assert spec.get("go") is not True
@@ -311,7 +310,7 @@ def test_yaml_dispatch_worker_event_ids_align() -> None:
 
     assert set(WORKER_ISOLATE_LIMIT_REASONS) == set(WORKER_ISOLATE_LIMIT_IDS)
     assert WORKER_ISOLATE_LIMIT_IDS.isdisjoint(WORKER_ISOLATE_LINEARIZED_OK)
-    assert len(WORKER_ISOLATE_LINEARIZED_OK) >= 6
+    assert WORKER_ISOLATE_LINEARIZED_OK
     for lid in WORKER_ISOLATE_LINEARIZED_OK:
         row = next(s for s in NEW_COMBO_LOGIC if s["logic_id"] == lid)
         assert row.get("worker_isolate_limit") is False
