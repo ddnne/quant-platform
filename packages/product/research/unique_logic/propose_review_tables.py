@@ -262,7 +262,13 @@ GATE_OCCUPANCY_LABEL: tuple[tuple[str, tuple[str, ...]], ...] = (
         "yield curve",
     )),
     ("steep_curve", ("curve is steep", "is steep", "yield curve")),
-    ("np_negative", ("profitability is weak", "weak profitability", "weak profit")),
+    ("np_negative", (
+        "profitability is weak",
+        "weak profitability",
+        "weak profit",
+        "earnings per share are negative",
+        "eps are negative",
+    )),
     ("eps_down", (
         "earnings disappointment",
         "earnings disappoint",
@@ -312,6 +318,8 @@ EXTRA_TITLE_GATES: tuple[tuple[str, str], ...] = (
     ("funding is easing", "overnight_easing"),
     ("positive earnings surprise", "eps_up"),
     ("positive earnings", "eps_up"),
+    ("earnings per share are negative", "eps_down"),
+    ("eps are negative", "eps_down"),
     ("eps surprises", "eps_down"),
     ("eps surprise", "eps_down"),
     ("earnings surprises", "eps_down"),
