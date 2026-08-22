@@ -275,6 +275,8 @@ def review_proposal_row(proposal: Mapping[str, Any]) -> dict[str, Any]:
             ("easy funding", "easy_funding"),
             ("sales contraction", "sales_down"),
             ("sales contracted", "sales_down"),
+            ("poor sales", "sales_down"),
+            ("sales performance", "sales_down"),
             ("roe decline", "roe_low"),
             ("roe is low", "roe_low"),
         )

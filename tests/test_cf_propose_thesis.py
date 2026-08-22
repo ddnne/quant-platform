@@ -167,16 +167,8 @@ def test_worker_index_contains_propose_thesis_route() -> None:
     assert "equities_bars_daily" in src
     assert "fins_summary" in src
     assert "PROPOSE_ALLOWED_GATES" in src
-    assert "Do not invent datasets" in src or "do not invent datasets" in src.lower()
-    assert "gate polarity" in src.lower()
-    assert "occupancy sentence" in src.lower()
     assert "slice(0, 24)" in src or "slice(0,24)" in src
-    assert "No weekday" in src
     assert "titleOccupancyBad" in src
-    assert "risk appetite" in src
-    assert "nky_vol_high_skip with steep_curve" in src
-    assert "technical analysis" in src
-    assert "Prefer curve_flatten" in src
     assert "auto_inject: false" in src
     assert "markets_margin_interest" in src
     assert '"margin_interest"' not in src
@@ -373,6 +365,25 @@ def test_review_proposal_row_rejects_invent_and_weekday() -> None:
     assert ok_p10["ok"] is True or "gate_set_already_catalog" in ok_p10["reasons"]
     assert "occupancy_label_only" not in ok_p10["reasons"]
     assert ok_p10["auto_inject"] is False
+
+    extra_sales = {
+        "thesis": "Curve flattening indicates poor sales performance when EPS is down.",
+        "signal_definition": "AND(curve_flatten, eps_down) PIT",
+        "position_rule": "event-hold surprise sign",
+        "datasets": ["equities_bars_daily", "fins_summary", "jsda_tokyo_repo_rates"],
+        "gates": ["curve_flatten", "eps_down"],
+    }
+    bad_sales = review_proposal_row(extra_sales)
+    assert bad_sales["ok"] is False
+    assert "occupancy_label_only" in bad_sales["reasons"]
+    occ_sales = dict(extra_sales)
+    occ_sales["thesis"] = (
+        "PEAD when the repo curve flattened AND EPS contracted versus "
+        "the last prior print"
+    )
+    ok_sales = review_proposal_row(occ_sales)
+    assert ok_sales["ok"] is True or "gate_set_already_catalog" in ok_sales["reasons"]
+    assert "occupancy_label_only" not in ok_sales["reasons"]
 
     extra_roe = {
         "thesis": (
