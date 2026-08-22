@@ -58,6 +58,36 @@ if "cheap_pb" in PROPOSE_PROMPT_PREFER_GATES:
 if "roe_low" in PROPOSE_PROMPT_PREFER_GATES:
     raise RuntimeError("roe_low empty crosses stay SPARSE, not prefer")
 
+# Occupancy-correct format example for the Worker prompt. Follows GATES.
+PROPOSE_PROMPT_GOOD: dict[str, object] = {
+    "thesis": (
+        "PEAD when overnight funding is tight AND sales contracted versus "
+        "the last prior print."
+    ),
+    "signal_definition": (
+        "AND(tight_funding, sales_down) PIT; skip missing prints (no invent)."
+    ),
+    "position_rule": (
+        "Event-hold original surprise sign when both gates are PIT-true; "
+        "otherwise flat."
+    ),
+    "datasets": [
+        "equities_bars_daily",
+        "fins_summary",
+        "jsda_tokyo_repo_rates",
+    ],
+    "gates": ["tight_funding", "sales_down"],
+    "why_different_from": ["ungated PEAD"],
+}
+if frozenset(str(g) for g in PROPOSE_PROMPT_GOOD["gates"]) - PROPOSE_ALLOWED_GATES:
+    raise RuntimeError("PROPOSE_PROMPT_GOOD gates must be propose-allowed")
+if "cheap_pb" in set(str(g) for g in PROPOSE_PROMPT_GOOD["gates"]):
+    raise RuntimeError("PROPOSE_PROMPT_GOOD must not seed cheap_pb")
+
+PROPOSE_PROMPT_BAD: str = (
+    'thesis "Rising Sales" with gates sales_down, or "Liquidity × Price × Margin"'
+)
+
 
 def prompt_direction_echo_x() -> tuple[str, ...]:
     """Unique lowercase x-normalized direction echoes for Worker drop."""
@@ -76,7 +106,15 @@ def prompt_direction_echo_x() -> tuple[str, ...]:
 GATE_TITLE_CONTRA: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("sales_down", ("rising sales", "sales up", "sales growth", "high sales", "sales increase")),
     ("np_negative", ("positive np", "positive profit", "rising profit", "profit up")),
-    ("price_down", ("price up", "rising price", "increase in price", "price increase")),
+    ("price_down", (
+        "price up",
+        "rising price",
+        "increase in price",
+        "price increase",
+        "prices tend to rise",
+        "prices rise",
+        "price rise",
+    )),
     ("ta_down", ("ta up", "rising ta")),
     ("ta_up", ("ta down", "falling ta")),
     ("eq_ar_falling", (
@@ -226,6 +264,8 @@ def sparse_gate_combos_for_propose() -> tuple[tuple[str, ...], ...]:
 __all__ = [
     "DEFAULT_PROPOSE_DATASETS",
     "EXTRA_TITLE_GATES",
+    "PROPOSE_PROMPT_BAD",
+    "PROPOSE_PROMPT_GOOD",
     "PROPOSE_PROMPT_PREFER_GATES",
     "GATE_OCCUPANCY_LABEL",
     "GATE_TITLE_CONTRA",

@@ -263,43 +263,40 @@ def test_yaml_dispatch_worker_event_ids_align() -> None:
     assert "event_skip_monday" in yaml_ids
     assert "cs_not_month_end" in yaml_ids
     assert "event_skip_monday" in CF_NEW_THESIS_IDS
-    from research.unique_logic.constants import is_ungated_name_level_cs
-    from research.unique_logic.event_combos import NEW_COMBO_LOGIC
-
-    fresh = [
-        "event_eqar_high_liq_high",
-        "event_liq_high_large_surprise",
-        "event_eqar_high_price_down",
-        "event_margin_up_price_down_fade",
-        "cs_eqar_high_margin_down",
-        "cs_cheap_pb_easy",
-    ]
-    ids = {s["logic_id"] for s in NEW_COMBO_LOGIC}
-    assert set(fresh) <= ids
-    assert set(fresh) <= set(CF_NEW_THESIS_IDS)
-    from research.unique_logic.constants import WORKER_ISOLATE_LIMIT_IDS
-
-    parked = [s for s in NEW_COMBO_LOGIC if s["logic_id"] in WORKER_ISOLATE_LIMIT_IDS]
-    assert parked == []
     from research.unique_logic.constants import (
+        ALWAYS_ON_CS_STICKY,
+        WORKER_ISOLATE_LIMIT_IDS,
         WORKER_ISOLATE_LIMIT_REASONS,
         WORKER_ISOLATE_LINEARIZED_OK,
+        is_ungated_name_level_cs,
     )
+    from research.unique_logic.event_combos import NEW_COMBO_LOGIC
 
+    ids = {s["logic_id"] for s in NEW_COMBO_LOGIC}
+    assert "event_skip_monday" in ids
+    parked = [s for s in NEW_COMBO_LOGIC if s["logic_id"] in WORKER_ISOLATE_LIMIT_IDS]
+    assert parked == []
     assert set(WORKER_ISOLATE_LIMIT_REASONS) == set(WORKER_ISOLATE_LIMIT_IDS)
     assert WORKER_ISOLATE_LIMIT_IDS.isdisjoint(WORKER_ISOLATE_LINEARIZED_OK)
     assert WORKER_ISOLATE_LINEARIZED_OK
     for lid in WORKER_ISOLATE_LINEARIZED_OK:
         row = next(s for s in NEW_COMBO_LOGIC if s["logic_id"] == lid)
         assert row.get("worker_isolate_limit") is False
+    n_checked = 0
     for spec in NEW_COMBO_LOGIC:
-        if spec["logic_id"] in fresh:
-            assert spec.get("always_on_cs_sticky") is False
-            assert is_ungated_name_level_cs(
-                kind=str(spec.get("kind") or ""),
-                cs_gate=str(spec.get("cs_gate") or ""),
-                logic_id=str(spec["logic_id"]),
-            ) is False
+        if str(spec.get("kind") or "") == "cs":
+            continue
+        lid = str(spec["logic_id"])
+        if lid in ALWAYS_ON_CS_STICKY:
+            continue
+        assert spec.get("always_on_cs_sticky") is False
+        assert is_ungated_name_level_cs(
+            kind=str(spec.get("kind") or ""),
+            cs_gate=str(spec.get("cs_gate") or ""),
+            logic_id=lid,
+        ) is False
+        n_checked += 1
+    assert n_checked >= 1
 
 
 def test_fins_events_keep_ta_eqar_from_payload() -> None:

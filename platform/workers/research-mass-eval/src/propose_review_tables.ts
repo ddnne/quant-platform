@@ -3,7 +3,7 @@
 export const GATE_TITLE_CONTRA: Array<[string, string[]]> = [
   ["sales_down", ["rising sales", "sales up", "sales growth", "high sales", "sales increase"]],
   ["np_negative", ["positive np", "positive profit", "rising profit", "profit up"]],
-  ["price_down", ["price up", "rising price", "increase in price", "price increase"]],
+  ["price_down", ["price up", "rising price", "increase in price", "price increase", "prices tend to rise", "prices rise", "price rise"]],
   ["ta_down", ["ta up", "rising ta"]],
   ["ta_up", ["ta down", "falling ta"]],
   ["eq_ar_falling", ["rising eqar", "eqar rising", "eq ar rising", "high eqar", "high equity", "rising equity", "equity risk premium is rising", "rising equity risk"]],

@@ -7,6 +7,8 @@ import {
   PROMPT_DIRECTION_ECHO_X,
   PROPOSE_ALLOWED_DATASETS,
   PROPOSE_ALLOWED_GATES,
+  PROPOSE_PROMPT_BAD,
+  PROPOSE_PROMPT_GOOD,
   PROPOSE_PROMPT_PREFER_GATES,
   PROPOSE_TWEAK_WORDS,
 } from "./propose_allowed";
@@ -190,13 +192,8 @@ async function llmProposals(
     "Do not invent datasets, fields, or gates. No logic_id. No inject.";
   const user =
     `Propose exactly ${n} JSON theses. Avoid: ${avoid}.\n` +
-    "GOOD: {\"thesis\":\"PEAD when overnight funding is tight AND sales contracted.\"," +
-    "\"signal_definition\":\"AND(tight_funding, sales_down) PIT; skip missing.\"," +
-    "\"position_rule\":\"Event-hold surprise sign when both gates hold; else flat.\"," +
-    "\"datasets\":[\"equities_bars_daily\",\"fins_summary\",\"jsda_tokyo_repo_rates\"]," +
-    "\"gates\":[\"tight_funding\",\"sales_down\"]," +
-    "\"why_different_from\":[\"ungated PEAD\"]}\n" +
-    "BAD: thesis \"Rising Sales\" with gates sales_down, or \"Liquidity × Price × Margin\".";
+    `GOOD: ${JSON.stringify(PROPOSE_PROMPT_GOOD)}\n` +
+    `BAD: ${PROPOSE_PROMPT_BAD}.`;
   let lastReason = "parse_empty";
   let lastModel: string | null = null;
   const notes: string[] = [];
