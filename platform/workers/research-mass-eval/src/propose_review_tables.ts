@@ -46,7 +46,7 @@ export const GATE_OCCUPANCY_LABEL: Array<[string, string[]]> = [
   ["eps_down", ["earnings disappointment", "earnings disappoint", "earnings per share are falling", "eps are falling", "earnings per share tend to decrease", "eps down", "eps is down"]],
   ["eps_up", ["earnings per share are rising", "eps are rising", "eps is rising", "rising earnings per share", "rising eps"]],
   ["sales_down", ["sales are down", "sales down"]],
-  ["price_down", ["under pressure", "price pressure"]],
+  ["price_down", ["under pressure", "price pressure", "price is low"]],
   ["crowded_margin", ["market is crowded"]],
 ];
 
@@ -144,6 +144,7 @@ export const OCCUPANCY_EXTRA_TITLE: Array<[string, string[]]> = [
   ["pb tends to rise", ["pb_rising"]],
   ["positive momentum", ["pre_mom"]],
   ["positive price momentum", ["pre_mom"]],
+  ["price is low", ["price_down"]],
   ["price pressure", ["price_down"]],
   ["price to book is rising", ["pb_rising"]],
   ["price to book ratio increase", ["pb_rising"]],
@@ -209,6 +210,7 @@ export const SPARSE_GATE_COMBOS_REVIEW: string[][] = [
   ["invert_curve", "roe_low"],
   ["np_negative", "overnight_p10", "price_down"],
   ["eps_up", "overnight_p10", "sales_down"],
+  ["np_negative", "overnight_p10"],
 ];
 
 export const OCCUPANCY_LABEL_EXCEPTIONS: Array<[string, string[]]> = [

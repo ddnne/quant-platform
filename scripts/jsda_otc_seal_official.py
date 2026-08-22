@@ -21,8 +21,6 @@ for _d in (_here, _here.parent):
 from _bootstrap import ensure_repo_root  # noqa: E402
 
 ROOT = ensure_repo_root()
-sys.path.insert(0, str(ROOT / "packages" / "data_plane"))
-sys.path.insert(0, str(ROOT / "packages" / "edge"))
 
 from ingestion.jsda.normalize import normalize_otc_reference_prices  # noqa: E402
 from ingestion.jsda.parse import parse_otc_reference_csv, parse_otc_reference_xlsx  # noqa: E402

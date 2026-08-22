@@ -39,23 +39,21 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-# Bootstrap repo root onto sys.path before importing qp_paths (plain script runs).
-for _parent in Path(__file__).resolve().parents:
-    if (_parent / "qp_paths.py").is_file() and (_parent / "pyproject.toml").is_file():
-        if str(_parent) not in sys.path:
-            sys.path.insert(0, str(_parent))
+_here = Path(__file__).resolve().parent
+for _d in (_here, _here.parent):
+    if (_d / "_bootstrap.py").is_file():
+        if str(_d) not in sys.path:
+            sys.path.insert(0, str(_d))
         break
 else:
-    raise RuntimeError("quant-platform repo root not found from script")
+    raise RuntimeError("scripts/_bootstrap.py not found")
+from _bootstrap import ensure_repo_root  # noqa: E402
 
-from qp_paths import repo_root
 import argparse
 import json
 import os
 
-_REPO_ROOT = str(repo_root())
-if _REPO_ROOT not in sys.path:
-    sys.path.insert(0, _REPO_ROOT)
+ROOT = ensure_repo_root()
 
 from cf_platform.ingest_premium.coverage import (  # noqa: E402
     has_failures,
@@ -114,7 +112,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--reports-dir",
-        default=str(Path(_REPO_ROOT) / "data" / "reports"),
+        default=str(ROOT / "data" / "reports"),
         help="Directory for persisted JSON reports (default: data/reports).",
     )
     p.add_argument(

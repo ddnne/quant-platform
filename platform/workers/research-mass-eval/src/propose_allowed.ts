@@ -81,6 +81,6 @@ export const PROPOSE_PROMPT_PREFER_GATES = [
   "price_down",
 ] as const;
 
-export const PROPOSE_PROMPT_GOOD = {"thesis": "PEAD when overnight is in the easiest PIT decile AND net profit is negative. Skip missing PIT prints (no invent).", "signal_definition": "AND(overnight_p10, np_negative) PIT; skip missing prints (no invent).", "position_rule": "Event-hold original surprise sign when both gates are PIT-true; otherwise flat.", "datasets": ["equities_bars_daily", "fins_summary", "markets_calendar", "jsda_tokyo_repo_rates"], "gates": ["overnight_p10", "np_negative"], "why_different_from": ["ungated PEAD"]} as const;
+export const PROPOSE_PROMPT_GOOD = {"thesis": "PEAD when overnight is in the easiest PIT decile AND the repo curve inverted. Skip missing PIT prints (no invent).", "signal_definition": "AND(overnight_p10, invert_curve) PIT; skip missing prints (no invent).", "position_rule": "Event-hold original surprise sign when both gates are PIT-true; otherwise flat.", "datasets": ["equities_bars_daily", "fins_summary", "markets_calendar", "jsda_tokyo_repo_rates"], "gates": ["overnight_p10", "invert_curve"], "why_different_from": ["ungated PEAD"]} as const;
 
 export const PROPOSE_PROMPT_BAD = "thesis \"Rising Sales\" with gates sales_down, or \"Liquidity \u00d7 Price \u00d7 Margin\"";

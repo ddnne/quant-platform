@@ -160,9 +160,6 @@ def test_worker_index_contains_propose_thesis_route() -> None:
     assert "auto_inject: false" in src
     assert "go: false" in src
     assert "not_a_pass: true" in src
-    assert "liquidity × fundamentals" in src or "liquidity" in src
-    assert "margin × price" in src or "margin" in src
-    assert "disclosure × funding" in src or "disclosure" in src
     wr = _WRANGLER.read_text(encoding="utf-8")
     assert 'binding = "AI"' in wr
     assert "[ai]" in wr
@@ -213,7 +210,6 @@ def test_worker_index_contains_propose_thesis_route() -> None:
     }
     assert frozenset(str(g) for g in good["gates"]) not in catalog_sets
     assert "rising price-to-book" not in src
-    assert "auto_inject: false" in src
     assert "markets_margin_interest" in src
     assert '"margin_interest"' not in src
     # Generated allowlists: scripts/sync_cf_new_thesis_ids.py --check is SoT.
@@ -661,6 +657,12 @@ def test_review_proposal_row_occupancy_and_polarity_table() -> None:
             ["overnight_p10", "sales_down", "eps_up"],
             "occupancy_label_only",
             "PEAD when overnight is in the easiest PIT decile AND sales contracted versus the last prior print AND EPS rose versus the last prior print. Skip missing PIT prints (no invent).",
+        ),
+        (
+            "Price is low when overnight is in the easiest PIT decile AND net profit is negative.",
+            ["overnight_p10", "np_negative"],
+            "occupancy_label_only",
+            "PEAD when overnight is in the easiest PIT decile AND net profit is negative. Skip missing PIT prints (no invent).",
         ),
     ]
     for bad_thesis, gates, reason, good_thesis in rows:

@@ -228,7 +228,6 @@ def _hoist_daily_path_ids(src: str) -> str:
 def main(argv: list[str] | None = None) -> int:
     check = "--check" in list(argv if argv is not None else sys.argv[1:])
     root = ensure_repo_root()
-    sys.path.insert(0, str(root / "packages" / "product"))
     from research.unique_logic.constants import (
         ADAPTIVE_LOGIC_IDS,
         CF_NEW_CS_THESIS_IDS,

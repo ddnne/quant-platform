@@ -271,7 +271,7 @@ GATE_OCCUPANCY_LABEL: tuple[tuple[str, tuple[str, ...]], ...] = (
         "sales are down",
         "sales down",
     )),
-    ("price_down", ("under pressure", "price pressure")),
+    ("price_down", ("under pressure", "price pressure", "price is low")),
     ("crowded_margin", ("market is crowded",)),
 )
 
