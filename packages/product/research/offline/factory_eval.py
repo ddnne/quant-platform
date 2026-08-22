@@ -73,11 +73,7 @@ def _eval_research_unique_on_panel(
     *,
     one_way_cost: float,
 ) -> dict[str, Any]:
-    """Factory dispatch for research-family unique_logic.
-
-    Recognition eval only. Does not mint research_candidate / GO / main.
-    Factory synthetic period-net is not a pass. Family append is not promotion.
-    """
+    """Factory dispatch for research-family unique_logic. Recognition only."""
     from research.unique_logic import all_unique_logic_specs
     from research.unique_logic.dispatch import evaluate_logic_daily_mtm
 
@@ -412,13 +408,12 @@ def _eval_on_panel(
     elif fid in RESEARCH_UNIQUE_FAMILY_IDS or (
         logic_id and str(logic_id) in RESEARCH_UNIQUE_LOGIC_IDS
     ):
-        out = _eval_research_unique_on_panel(
+        return _eval_research_unique_on_panel(
             str(logic_id or p.get("mode") or ""),
             p,
             panel,
             one_way_cost=one_way_cost,
         )
-        return out
     else:
         return {
             "status": "error",
@@ -516,7 +511,6 @@ def evaluate_one_strategy(
     ctx: BatchDataContext,
     *,
     near_zero_abs: float = DEFAULT_NEAR_ZERO_ABS,
-    min_activation: float = DEFAULT_MIN_ACTIVATION,
 ) -> dict[str, Any]:
     """Evaluate one strategy across all periods; both signs after cost."""
     sid = str(strategy.get("strategy_id") or "")
@@ -723,13 +717,7 @@ def screen_strategy_result(
         except Exception:
             pass
 
-    seen: set[str] = set()
-    uniq: list[str] = []
-    for r in reasons:
-        if r not in seen:
-            seen.add(r)
-            uniq.append(r)
-
+    uniq = list(dict.fromkeys(reasons))
     survived = len(uniq) == 0 and n_ok > 0
     return {
         "strategy_id": result.get("strategy_id"),
@@ -755,11 +743,7 @@ def run_batch_eval(
     synthetic: bool = False,
     progress_cb: Callable[[int, int, str], None] | None = None,
 ) -> dict[str, Any]:
-    """Batch-evaluate distinct logics (after dedup); fail-one-continue.
-
-    Does **not** pick human main candidates. continuous paper UNARMED.
-    Does **not** retune frozen default-path representatives.
-    """
+    """Batch-evaluate distinct logics (after dedup); fail-one-continue."""
     t0 = time.perf_counter()
     cfg = config or MassFactoryConfig(
         seed=int((generation.get("config") or {}).get("seed") or DEFAULT_SEED),
@@ -768,7 +752,6 @@ def run_batch_eval(
     if ctx is None:
         ctx = load_batch_data_context(cfg, synthetic=synthetic)
 
-    # Prefer after-dedup strategies (distinct logics)
     if cfg.eval_after_dedup and generation.get("strategies_after_dedup"):
         strategies = list(generation.get("strategies_after_dedup") or [])
         eval_set = "after_dedup"
@@ -790,7 +773,6 @@ def run_batch_eval(
                 strat,
                 ctx,
                 near_zero_abs=cfg.near_zero_abs,
-                min_activation=cfg.min_activation,
             )
             n_ok_eval += 1
         except Exception as exc:
@@ -873,16 +855,12 @@ def run_batch_eval(
         "continuous_paper": CONTINUOUS_PAPER,
         "paper_sample_k": int(cfg.paper_sample_k),
         "paper_ran": False,
-        "note": (
-            "Optional short paper only for sample subset (top-k); "
-            "not full papers. continuous paper UNARMED this wave."
-        ),
+        "note": "Sample subset only; paper runner UNARMED.",
     }
     if cfg.paper_sample_k > 0 and survivors_ranked:
         paper_note["sample_ids"] = [
             s.get("strategy_id") for s in survivors_ranked[: cfg.paper_sample_k]
         ]
-        paper_note["note"] += " Sample ids recorded only; paper runner not armed."
 
     return {
         "version": MASS_FACTORY_VERSION,
@@ -918,10 +896,8 @@ def run_batch_eval(
         "frozen_default_path": list(FROZEN_DEFAULT_PATH),
         "frozen_defaults_retuned": False,
         "note": (
-            "Auto screen on distinct logics only (after near-dup). "
-            "Do NOT treat survivors as human main candidates or "
-            "research_candidate production defaults. "
-            "3 frozen defaults untouched. Mass/READY/ops GO remain closed."
+            "Auto screen on distinct logics. Survivors are not human main "
+            "or research_candidate defaults. Frozen defaults untouched."
         ),
         **_freeze(),
     }
@@ -941,9 +917,7 @@ from research.offline.factory import (  # noqa: E402
 )
 
 __all__ = [
-    "BatchDataContext",
     "evaluate_one_strategy",
-    "load_batch_data_context",
     "run_batch_eval",
     "screen_strategy_result",
 ]

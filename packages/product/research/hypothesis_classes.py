@@ -59,9 +59,7 @@ class HypothesisClassSpec:
     generation_enabled_by_default: bool
     priority: int
     display_name: str = ""
-    description: str = ""
     opt_in_required: bool = False
-    research_status_note: str = ""
 
     def __post_init__(self) -> None:
         if not str(self.class_id).strip():
@@ -83,7 +81,6 @@ class HypothesisClassSpec:
         return {
             "class_id": self.class_id,
             "display_name": self.display_name or self.class_id,
-            "description": self.description,
             "horizon": self.horizon,
             "universe": list(self.universe),
             "datasets_required": list(self.datasets_required),
@@ -92,7 +89,6 @@ class HypothesisClassSpec:
             "generation_enabled_by_default": self.generation_enabled_by_default,
             "priority": self.priority,
             "opt_in_required": self.opt_in_required,
-            "research_status_note": self.research_status_note,
         }
 
     def research_idea_defaults(self) -> dict[str, Any]:
@@ -125,9 +121,7 @@ def _spec(
     generation_enabled_by_default: bool,
     priority: int,
     display_name: str,
-    description: str = "",
     opt_in_required: bool = False,
-    research_status_note: str = "",
 ) -> HypothesisClassSpec:
     return HypothesisClassSpec(
         class_id=class_id,
@@ -139,9 +133,7 @@ def _spec(
         generation_enabled_by_default=generation_enabled_by_default,
         priority=int(priority),
         display_name=display_name,
-        description=description,
         opt_in_required=opt_in_required,
-        research_status_note=research_status_note,
     )
 
 
@@ -395,9 +387,7 @@ def is_generation_enabled(
     opt_in = {str(x).strip() for x in (explicit_opt_in or ()) if str(x).strip()}
     if spec.generation_enabled_by_default and not spec.opt_in_required:
         return True
-    if spec.opt_in_required or not spec.generation_enabled_by_default:
-        return spec.class_id in opt_in
-    return False
+    return spec.class_id in opt_in
 
 
 def select_generation_classes(
@@ -428,14 +418,7 @@ def select_generation_classes(
         for cid in dict.fromkeys(candidates)
         if is_generation_enabled(cid, explicit_opt_in=opt_in_list)
     ]
-    selected.sort(
-        key=lambda c: (
-            HYPOTHESIS_CLASS_REGISTRY[c].priority
-            if c in HYPOTHESIS_CLASS_REGISTRY
-            else 10_000,
-            c,
-        )
-    )
+    selected.sort(key=lambda c: (HYPOTHESIS_CLASS_REGISTRY[c].priority, c))
 
     if n is not None:
         if n < 0:
@@ -489,9 +472,7 @@ def build_research_idea_payload(
     ):
         raise ValueError(
             f"hypothesis class {class_id!r} is not generation-enabled "
-            f"(simple_daily_sign and other opt-in classes require "
-            f"explicit_opt_in; default generation OFF for "
-            f"{CLASS_SIMPLE_DAILY_SIGN!r})"
+            f"(opt-in classes require explicit_opt_in)"
         )
     defaults = spec.research_idea_defaults()
     constraints = list(defaults["constraints"])
@@ -560,26 +541,17 @@ def assert_simple_daily_sign_not_default_enabled() -> None:
     """Unit/guard helper: simple_daily_sign is not in default generation set."""
     spec = get_hypothesis_class(CLASS_SIMPLE_DAILY_SIGN)
     if spec.generation_enabled_by_default:
-        raise AssertionError(
-            "simple_daily_sign.generation_enabled_by_default must be False"
-        )
+        raise AssertionError("simple_daily_sign.generation_enabled_by_default must be False")
     if not spec.opt_in_required:
         raise AssertionError("simple_daily_sign.opt_in_required must be True")
     if CLASS_SIMPLE_DAILY_SIGN in DEFAULT_GENERATION_CLASS_IDS:
-        raise AssertionError(
-            "simple_daily_sign must not appear in DEFAULT_GENERATION_CLASS_IDS"
-        )
+        raise AssertionError("simple_daily_sign must not appear in DEFAULT_GENERATION_CLASS_IDS")
     if is_generation_enabled(CLASS_SIMPLE_DAILY_SIGN):
-        raise AssertionError(
-            "simple_daily_sign must not be generation-enabled without opt-in"
-        )
-    if is_generation_enabled(
-        CLASS_SIMPLE_DAILY_SIGN,
-        explicit_opt_in=(CLASS_SIMPLE_DAILY_SIGN,),
-    ) is not True:
-        raise AssertionError(
-            "simple_daily_sign must be generation-enabled with explicit opt-in"
-        )
+        raise AssertionError("simple_daily_sign must not be generation-enabled without opt-in")
+    if not is_generation_enabled(
+        CLASS_SIMPLE_DAILY_SIGN, explicit_opt_in=(CLASS_SIMPLE_DAILY_SIGN,)
+    ):
+        raise AssertionError("simple_daily_sign must be generation-enabled with explicit opt-in")
 
 
 def validate_all_classes_have_required_fields() -> None:

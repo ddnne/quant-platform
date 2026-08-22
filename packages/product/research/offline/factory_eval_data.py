@@ -79,11 +79,8 @@ def load_batch_data_context(
     repo_series = (
         load_repo_rate_series_from_rows(repo_rows) if repo_rows else None
     )
-    # Multi-tenor for curve-shape factor (W89); overnight-only rows lack 3M.
     repo_all = load_repo_rows_all_tenors_from_sqlite(db) if db.exists() else []
     curve_series = build_repo_curve_series(repo_all) if repo_all else None
-    # Nikkei/TOPIX realized-vol series (NK225F prefer → TOPIX fallback)
-    # Kept as proxy/compare only vs W92 options_225 SoT.
     nky_vol_series = (
         load_nky_vol_series_from_sqlite(
             db, start="2014-01-01", end="2026-12-31"
@@ -91,7 +88,6 @@ def load_batch_data_context(
         if db.exists()
         else None
     )
-    # W92: canonical Nikkei vol from options_225 BaseVol / ATM IV / spread
     opt225_regime = load_opt225_regime_bundle_for_eval()
     fins_events = (
         load_fins_events_from_sqlite(
@@ -107,6 +103,14 @@ def load_batch_data_context(
         if db.exists()
         else []
     )
+    sidecars = {
+        "repo_series": repo_series,
+        "curve_series": curve_series,
+        "nky_vol_series": nky_vol_series,
+        "opt225_regime": opt225_regime,
+        "fins_events": fins_events,
+        "short_series": short_series,
+    }
 
     panels: list[dict[str, Any]] = []
     for raw in period_list:
@@ -114,25 +118,16 @@ def load_batch_data_context(
         pid = str(p.get("period_id") or p.get("year") or "period")
         p_start = str(p.get("period_start") or "")[:10] or None
         p_end = str(p.get("period_end") or "")[:10] or None
+        head = {
+            "period_id": pid,
+            "year": p.get("year"),
+            "period_start": p_start,
+            "period_end": p_end,
+            **sidecars,
+        }
         bars_path = p.get("bars_path") or resolve_bars_path(pid, mirror_dir=mdir)
         if bars_path is None or not Path(bars_path).exists():
-            panels.append(
-                {
-                    "period_id": pid,
-                    "year": p.get("year"),
-                    "period_start": p_start,
-                    "period_end": p_end,
-                    "status": "missing_bars",
-                    "bars": {},
-                    "margin": {},
-                    "repo_series": repo_series,
-                    "curve_series": curve_series,
-                    "nky_vol_series": nky_vol_series,
-                    "opt225_regime": opt225_regime,
-                    "fins_events": fins_events,
-                    "short_series": short_series,
-                }
-            )
+            panels.append({**head, "status": "missing_bars", "bars": {}, "margin": {}})
             continue
         rich = load_bars_ndjson_rich(
             bars_path,
@@ -151,19 +146,10 @@ def load_batch_data_context(
                 margin = {}
         panels.append(
             {
-                "period_id": pid,
-                "year": p.get("year"),
-                "period_start": p_start,
-                "period_end": p_end,
+                **head,
                 "status": "ok" if bars else "empty_bars",
                 "bars": bars,
                 "margin": margin,
-                "repo_series": repo_series,
-                "curve_series": curve_series,
-                "nky_vol_series": nky_vol_series,
-                "opt225_regime": opt225_regime,
-                "fins_events": fins_events,
-                "short_series": short_series,
                 "bars_path": str(bars_path),
             }
         )
@@ -179,29 +165,6 @@ def load_batch_data_context(
             "mirror_dir": str(mdir),
             "sqlite": str(db),
             "sqlite_exists": db.exists(),
-            "n_repo_rows": len(repo_rows),
-            "n_repo_all_tenor_rows": len(repo_all),
-            "n_curve_spread_obs": (
-                int((curve_series or {}).get("n_obs_spread") or 0)
-            ),
-            "curve_definition": (curve_series or {}).get("definition"),
-            "nky_vol_source": (nky_vol_series or {}).get("source"),
-            "nky_vol_dataset": (nky_vol_series or {}).get("dataset"),
-            "n_nky_vol_short": int((nky_vol_series or {}).get("n_obs_short") or 0),
-            "n_nky_vol_long": int((nky_vol_series or {}).get("n_obs_long") or 0),
-            "nky_vol_role": "proxy_compare_only",
-            "opt225_dataset": "derivatives_bars_daily_options_225",
-            "opt225_role": "canonical_nky_vol_sot",
-            "opt225_spread_convention": "atm_iv - base_vol",
-            "n_opt225_basevol": int(
-                ((opt225_regime or {}).get("basevol") or {}).get("n_obs_level")
-                or 0
-            ),
-            "n_opt225_atm_iv": int(
-                ((opt225_regime or {}).get("atm_iv") or {}).get("n_obs_level")
-                or 0
-            ),
-            "n_fins_codes": len(fins_events),
             "use_q4_periods": bool(config.use_q4_periods),
             "max_days_per_period": int(config.max_days_per_period),
         },
@@ -251,13 +214,12 @@ def _synthetic_batch_context(config: MassFactoryConfig) -> BatchDataContext:
             "n_obs_spread": len(spread),
             "source": "synthetic",
         }
-        # Synthetic Nikkei-proxy RV: oscillate short/long levels + ratio regimes
         from research.eval_loaders import build_nky_vol_series
+        from research.options_225_vol_series import build_opt225_regime_bundle
 
         nky_closes = []
         px = 38000.0 + 500 * yi
         for i, d in enumerate(dates):
-            # mild trend + regime-ish noise so short/long RV differ
             shock = 0.02 if (i % 11 == 0) else (0.005 if i % 3 == 0 else 0.001)
             sign = 1.0 if i % 2 == 0 else -1.0
             px = max(1000.0, px * (1.0 + sign * shock * (1.0 + 0.1 * (i % 5))))
@@ -269,15 +231,11 @@ def _synthetic_batch_context(config: MassFactoryConfig) -> BatchDataContext:
             source="synthetic_nk225f",
             dataset="synthetic",
         )
-        # Synthetic options_225 BaseVol / ATM / skew / CM-term / Δvol
-        from research.options_225_vol_series import build_opt225_regime_bundle
-
         base_rows = []
         atm_rows = []
         skew_rows = []
         term_rows = []
         for i, d in enumerate(dates):
-            # oscillate around ~18% with occasional spikes
             bv = 14.0 + 6.0 * ((i % 17) / 16.0) + (8.0 if i % 13 == 0 else 0.0)
             atm = bv + (0.8 if i % 5 == 0 else (-0.3 if i % 7 == 0 else 0.0))
             base_rows.append({"date": d, "base_vol": bv})

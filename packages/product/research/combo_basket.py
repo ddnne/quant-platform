@@ -5,7 +5,6 @@ from typing import Any, Mapping, Sequence
 
 from research.combo_basket_catalog import (
     DEFAULT_CANDIDATE_BASKET,
-    MECHANICAL_BASKETS,
     META_BASKETS,
     RETIRED_BASKET_RULES,
     RETIRED_META_IDS,
@@ -16,7 +15,6 @@ from research.combo_basket_catalog import (
     validate_basket_members,
 )
 from research.combo_basket_compare import (
-    COMPARE_COMPOSITION_IDS,
     classify_sleeves_three_n,
     compare_basket_summaries,
     compare_headn_vs_liq,
@@ -177,24 +175,6 @@ def _sharpe(net_daily: Sequence[float]) -> float | None:
     return None if got is None else got[0] / got[1] * (252 ** 0.5)
 
 
-def blend_mechanical_baskets(
-    cells: Sequence[Mapping[str, Any]],
-) -> list[dict[str, Any]]:
-    """Blend every mechanical basket from a shared member-cell pool."""
-    rows: list[dict[str, Any]] = []
-    for spec in mechanical_basket_defs():
-        if not spec["valid"]:
-            continue
-        rows.extend(
-            blend_window_cells(
-                cells,
-                basket_id=spec["basket_id"],
-                logic_ids=spec["members"],
-            )
-        )
-    return rows
-
-
 def summarize_basket_trends(
     cells: Sequence[Mapping[str, Any]],
     *,
@@ -279,38 +259,17 @@ def _mean(xs: Sequence[Any]) -> float | None:
     return (sum(vs) / len(vs)) if vs else None
 
 
-def blend_meta_baskets(sleeve_cells: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
-    """Equal-weight blend of sleeve basket net_daily series. Not a pass."""
-    rows: list[dict[str, Any]] = []
-    for spec in meta_basket_defs():
-        if not spec["valid"]:
-            continue
-        rows.extend(
-            blend_window_cells(
-                sleeve_cells,
-                basket_id=spec["meta_id"],
-                logic_ids=spec["sleeves"],
-            )
-        )
-    return rows
-
-
 __all__ = [
-    "COMPARE_COMPOSITION_IDS",
     "DEFAULT_CANDIDATE_BASKET",
-    "MECHANICAL_BASKETS",
     "META_BASKETS",
     "RETIRED_BASKET_RULES",
     "RETIRED_META_IDS",
-    "blend_mechanical_baskets",
-    "blend_meta_baskets",
     "blend_net_daily",
     "blend_window_cells",
     "classify_sleeves_three_n",
     "compare_basket_summaries",
     "compare_headn_vs_liq",
     "compare_mid_vs_liq",
-    "equal_weights",
     "mechanical_basket_defs",
     "meta_basket_defs",
     "occupancy_in_candidate_band",

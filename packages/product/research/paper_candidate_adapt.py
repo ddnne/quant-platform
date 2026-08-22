@@ -399,20 +399,18 @@ def adapt_class_hyp_candidate(
             class_id=cid,
         )
     )
+    _mtm = ["paper MTM vs research trade-level mean", "no margin/borrow on short leg"]
 
     if cid == CLASS_MULTI_DAY_HOLD:
         h = _pin_hold_10(payload, {"hold_10", "10", "10d"}, h)
-        n_mom = payload.get("momentum_n")
-        n_mom_i = int(n_mom) if n_mom is not None else h
+        n_mom_i = int(payload["momentum_n"]) if payload.get("momentum_n") is not None else h
         spec = build_multi_day_hold_strategy_spec(
             hold_days=h, top_k=top_k, momentum_n=n_mom_i, strategy_id=strategy_id
         )
-        horizon = f"{h}d_hold"
-        rebalance = f"fixed_horizon_{h}d"
+        horizon, rebalance = f"{h}d_hold", f"fixed_horizon_{h}d"
         fidelity = "aligned_with_residuals"
         residual_notes.append("entry is top_k momentum (research uses sign(momentum) L/S)")
-        if not signal_id:
-            signal_id = "c21_multi_day_momentum_hold"
+        signal_id = signal_id or "c21_multi_day_momentum_hold"
         note = f"multi_day_hold hold={h}d mom_n={n_mom_i} top_k. UNARMED."
     elif cid == CLASS_CROSS_SECTION_RELATIVE:
         h = _pin_hold_10(
@@ -430,25 +428,19 @@ def adapt_class_hyp_candidate(
         n_mom_i = _cs_momentum_n(payload, h)
         long_frac = float(payload.get("long_frac", DEFAULT_CS_LONG_FRAC))
         short_frac = float(payload.get("short_frac", DEFAULT_CS_SHORT_FRAC))
-        allow_short = bool(payload.get("allow_short", True))
-        s_sign = _signal_sign(payload)
         spec = build_cross_section_hold_strategy_spec(
             hold_days=h,
             momentum_n=n_mom_i,
             long_frac=long_frac,
             short_frac=short_frac,
-            allow_short=allow_short,
-            signal_sign=s_sign,
+            allow_short=bool(payload.get("allow_short", True)),
+            signal_sign=_signal_sign(payload),
             strategy_id=strategy_id,
         )
-        horizon = f"hold_{h}d_mom{n_mom_i}"
-        rebalance = f"fixed_horizon_{h}d"
+        horizon, rebalance = f"hold_{h}d_mom{n_mom_i}", f"fixed_horizon_{h}d"
         fidelity = "aligned_with_residuals"
-        residual_notes.extend(
-            ["paper MTM vs research trade-level mean", "no margin/borrow on short leg"]
-        )
-        if not signal_id:
-            signal_id = "c21_cross_section_momentum_rank"
+        residual_notes.extend(_mtm)
+        signal_id = signal_id or "c21_cross_section_momentum_rank"
         note = (
             f"cross_section hold={h}d mom_n={n_mom_i} L-S "
             f"{long_frac}/{short_frac}. UNARMED."
@@ -457,33 +449,23 @@ def adapt_class_hyp_candidate(
         h = _pin_hold_10(
             payload, {"hold_10", "fundamentals_hold_10", "10", "10d"}, h
         )
-        n_mom = payload.get("momentum_n")
-        if n_mom is None:
-            n_mom = payload.get("fund_hold10_momentum_n")
+        n_mom = payload.get("momentum_n", payload.get("fund_hold10_momentum_n"))
         n_mom_i = int(n_mom) if n_mom is not None else (10 if h == 10 else h)
         mode = str(payload.get("mode") or "value_momentum_agree")
-        allow_short = bool(payload.get("allow_short", True))
-        s_sign = _signal_sign(payload)
         spec = build_fundamentals_hold_strategy_spec(
             hold_days=h,
             momentum_n=n_mom_i,
             mode=mode,
-            allow_short=allow_short,
-            signal_sign=s_sign,
+            allow_short=bool(payload.get("allow_short", True)),
+            signal_sign=_signal_sign(payload),
             strategy_id=strategy_id,
         )
-        horizon = f"hold_{h}d_mom{n_mom_i}"
-        rebalance = f"fixed_horizon_{h}d"
+        horizon, rebalance = f"hold_{h}d_mom{n_mom_i}", f"fixed_horizon_{h}d"
         fidelity = "aligned_with_residuals"
         residual_notes.extend(
-            [
-                "value benchmark = same-bar CS median (research uses global-window)",
-                "paper MTM vs research trade-level mean",
-                "no margin/borrow on short leg",
-            ]
+            ["value benchmark = same-bar CS median (research uses global-window)", *_mtm]
         )
-        if not signal_id:
-            signal_id = "c21_fundamentals_price_value"
+        signal_id = signal_id or "c21_fundamentals_price_value"
         note = f"fundamentals_price hold={h}d mom_n={n_mom_i} mode={mode}. UNARMED."
     elif cid == CLASS_EVENT_POST:
         if payload.get("post_hold_days") is not None:
@@ -491,12 +473,10 @@ def adapt_class_hyp_candidate(
         spec = build_event_post_strategy_spec(
             post_hold_days=h, strategy_id=strategy_id
         )
-        horizon = f"1d_to_{h}d_post_event"
-        rebalance = f"event_entry_hold_{h}d_sticky"
+        horizon, rebalance = f"1d_to_{h}d_post_event", f"event_entry_hold_{h}d_sticky"
         fidelity = "proxy"
         residual_notes.append("disclosure_flag threshold, not signed surprise")
-        if not signal_id:
-            signal_id = "c21_event_post_disclosure_hold"
+        signal_id = signal_id or "c21_event_post_disclosure_hold"
         note = f"event_post post_hold={h}d sticky discussion_only proxy. UNARMED."
     else:
         try:

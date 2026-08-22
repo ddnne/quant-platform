@@ -215,28 +215,6 @@ def primary_mechanical_basket_defs() -> list[dict[str, Any]]:
     ]
 
 
-# Fund/flow/event sleeves for both-track durability. Not a pass.
-SLEEVE_DURABILITY_RULES: frozenset[str] = frozenset(
-    {"fundamentals_sleeve", "margin_flow_sleeve", "event_fund_cross"}
-)
-
-
-def sleeve_durability_member_ids() -> list[str]:
-    """Unique members of fund/flow/event sleeves. Never a pass."""
-    ids: list[str] = []
-    seen: set[str] = set()
-    want = SLEEVE_DURABILITY_RULES
-    for d in mechanical_basket_defs():
-        if str(d.get("rule") or "") not in want:
-            continue
-        for m in d.get("members") or []:
-            lid = str(m)
-            if lid and lid not in seen:
-                seen.add(lid)
-                ids.append(lid)
-    return ids
-
-
 def meta_basket_defs() -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     known = {d["basket_id"] for d in mechanical_basket_defs()}

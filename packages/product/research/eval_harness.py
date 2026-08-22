@@ -8,14 +8,12 @@ Implementation: :mod:`research.single_shot_job`. Candidate SoT:
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any, Mapping, Sequence
 
 from features.minimal_signal import (
     CANDIDATE_ONLY as SIGNAL_CANDIDATE_ONLY,
     DEFAULT_FEATURE_IDS as APPROVED_SIGNAL_LEGS,
     DEFAULT_SIGNAL_DATASETS,
-    DEFAULT_VOLUME_CHANGE_ABS_MIN,
     DEFAULT_VOLUME_SIGN_ABS_MIN,
     FEATURE_STATUS_PINS,
     SIGNAL_ID as DEFAULT_SIGNAL_ID,
@@ -29,22 +27,18 @@ from research.freezes import (
     EDGE_CLAIMED,
     LOCAL_SOT,
     MASS_RESEARCH,
-    MASS_RESEARCH_ENV_ARMING_SWITCHES,
     OPERATIONAL_GO,
     ORDER_EXECUTION,
     PHASE7,
-    PHASE7_ENV_ARMING_SWITCHES,
     READY_DECLARED,
     SIGNIFICANCE_CLAIMED,
 )
 from research.single_shot_job import (
     COMPLETE_21_DATASET_SET,
     DEFAULT_FEATURE_ROW_LIMIT,
-    D1ExecuteFn,
     MultidaySignalEval,
     NEXTDAY_RESEARCH_LABEL,
     RESEARCH_ONE_WAY_COST,
-    R2PutFn,
     SingleShotJobError,
     assert_mass_and_phase7_off,
     execute_multiday_multisignal_compare,
@@ -194,22 +188,8 @@ def harness_freeze_status() -> dict[str, Any]:
 def assert_harness_closed() -> Mapping[str, Any]:
     """Hard-check freeze constants for the harness surface."""
     status = assert_mass_and_phase7_off()
-    if MASS_RESEARCH != "NO-GO":
-        raise RuntimeError(f"harness mass_research must be NO-GO, got {MASS_RESEARCH!r}")
-    if PHASE7 != "OFF":
-        raise RuntimeError(f"harness phase7 must be OFF, got {PHASE7!r}")
-    if READY_DECLARED is not False:
-        raise RuntimeError("harness READY_DECLARED must be False")
-    if ORDER_EXECUTION is not False:
-        raise RuntimeError("harness ORDER_EXECUTION must be False")
-    if CONNECTED_TO_MASS_RESEARCH_LOOP is not False:
-        raise RuntimeError("harness must not connect to mass research loop")
     if DENSIFY is not False:
         raise RuntimeError("harness densify must remain False")
-    if PHASE7_ENV_ARMING_SWITCHES:
-        raise RuntimeError("PHASE7 env arming switches must remain empty")
-    if MASS_RESEARCH_ENV_ARMING_SWITCHES:
-        raise RuntimeError("MASS_RESEARCH env arming switches must remain empty")
     require_approved_signal_legs(context="harness freeze approved legs")
     require_harness_datasets(context="harness freeze default datasets")
     return status
@@ -221,25 +201,8 @@ def run_multiday_signal_eval(
     period_end: str,
     job_id: str = "eval-harness-multiday",
     codes: Sequence[str] | None = None,
-    as_of_days: Sequence[str] | None = None,
-    max_days: int = 10,
-    min_days: int = 5,
-    feature_row_limit: int = DEFAULT_FEATURE_ROW_LIMIT,
-    volume_change_abs_min: float | None = DEFAULT_VOLUME_CHANGE_ABS_MIN,
     attach_nextday_returns: bool = False,
-    write_per_day_artifacts: bool = True,
-    dry_run: bool = False,
-    d1_execute: D1ExecuteFn | None = None,
-    r2_put: R2PutFn | None = None,
-    staging_dir: str | Path | None = None,
-    wrangler: str | Path | None = None,
-    wrangler_config: str | Path | None = None,
-    history_source: str = "d1_tip",
-    r2_object_keys_by_dataset: Mapping[str, Sequence[str]] | None = None,
-    r2_local_paths_by_dataset: Mapping[str, Sequence[str | Path]] | None = None,
-    r2_raw_lines_by_dataset: Mapping[str, Sequence[Any]] | None = None,
-    r2_get: Any | None = None,
-    r2_bucket: str = "quant-structured",
+    **kwargs: Any,
 ) -> MultidaySignalEval:
     """Multiday approved-leg signal batch → R2 ``batch_summary.json``."""
     assert_harness_closed()
@@ -250,25 +213,8 @@ def run_multiday_signal_eval(
         period_end=period_end,
         job_id=job_id,
         codes=_selected_codes(codes),
-        as_of_days=as_of_days,
-        max_days=max_days,
-        min_days=min_days,
-        feature_row_limit=feature_row_limit,
-        volume_change_abs_min=volume_change_abs_min,
         attach_nextday_returns=attach_nextday_returns,
-        write_per_day_artifacts=write_per_day_artifacts,
-        dry_run=dry_run,
-        d1_execute=d1_execute,
-        r2_put=r2_put,
-        staging_dir=staging_dir,
-        wrangler=wrangler,
-        wrangler_config=wrangler_config,
-        history_source=history_source,
-        r2_object_keys_by_dataset=r2_object_keys_by_dataset,
-        r2_local_paths_by_dataset=r2_local_paths_by_dataset,
-        r2_raw_lines_by_dataset=r2_raw_lines_by_dataset,
-        r2_get=r2_get,
-        r2_bucket=r2_bucket,
+        **kwargs,
     )
 
 
@@ -374,47 +320,22 @@ def run_research_walk_forward_multisignal(
     train_fraction: float = 0.5,
     min_train_days: int = 10,
     min_test_days: int = 10,
-    feature_row_limit: int = DEFAULT_FEATURE_ROW_LIMIT,
     volume_sign_abs_min: float = DEFAULT_VOLUME_SIGN_ABS_MIN,
     one_way_cost: float = RESEARCH_ONE_WAY_COST,
-    write_per_day_artifacts: bool = False,
-    dry_run: bool = False,
-    d1_execute: D1ExecuteFn | None = None,
-    r2_put: R2PutFn | None = None,
-    staging_dir: str | Path | None = None,
-    wrangler: str | Path | None = None,
-    wrangler_config: str | Path | None = None,
-    history_source: str = "r2",
-    r2_object_keys_by_dataset: Mapping[str, Sequence[str]] | None = None,
-    r2_local_paths_by_dataset: Mapping[str, Sequence[str | Path]] | None = None,
-    r2_raw_lines_by_dataset: Mapping[str, Sequence[Any]] | None = None,
-    r2_get: Callable[[str, str], bytes] | None = None,
-    r2_bucket: str = "quant-structured",
-    r2_allow_empty_datasets: Sequence[str] | None = None,
+    **kwargs: Any,
 ) -> dict[str, Any]:
     """Fixed S1/S2/S3 on chronological train then test. No threshold fit on train."""
     assert_harness_closed()
     jid = str(job_id).strip()
+    kwargs.setdefault("feature_row_limit", DEFAULT_FEATURE_ROW_LIMIT)
+    kwargs.setdefault("write_per_day_artifacts", False)
+    kwargs.setdefault("history_source", "r2")
     shared: dict[str, Any] = {
         "period_start": period_start,
         "period_end": period_end,
-        "feature_row_limit": feature_row_limit,
         "volume_sign_abs_min": volume_sign_abs_min,
         "one_way_cost": one_way_cost,
-        "write_per_day_artifacts": write_per_day_artifacts,
-        "dry_run": dry_run,
-        "d1_execute": d1_execute,
-        "r2_put": r2_put,
-        "staging_dir": staging_dir,
-        "wrangler": wrangler,
-        "wrangler_config": wrangler_config,
-        "history_source": history_source,
-        "r2_object_keys_by_dataset": r2_object_keys_by_dataset,
-        "r2_local_paths_by_dataset": r2_local_paths_by_dataset,
-        "r2_raw_lines_by_dataset": r2_raw_lines_by_dataset,
-        "r2_get": r2_get,
-        "r2_bucket": r2_bucket,
-        "r2_allow_empty_datasets": r2_allow_empty_datasets,
+        **kwargs,
     }
     full = execute_multiday_multisignal_compare(
         job_id=f"{jid}-full",
@@ -450,7 +371,7 @@ def run_research_walk_forward_multisignal(
         "version": WALK_FORWARD_VERSION,
         "job_id": jid,
         "label": RESEARCH_WALK_FORWARD_LABEL,
-        "history_source": history_source,
+        "history_source": kwargs.get("history_source", "r2"),
         "period_start": str(period_start)[:10],
         "period_end": str(period_end)[:10],
         "codes": list(full.codes),
@@ -472,24 +393,17 @@ def run_multi_period_multisignal_compare(
     codes: Sequence[str] | None = None,
     max_days: int = 50,
     min_days: int = 20,
-    feature_row_limit: int = DEFAULT_FEATURE_ROW_LIMIT,
     volume_sign_abs_min: float = DEFAULT_VOLUME_SIGN_ABS_MIN,
     one_way_cost: float = RESEARCH_ONE_WAY_COST,
-    write_per_day_artifacts: bool = False,
-    dry_run: bool = False,
-    d1_execute: D1ExecuteFn | None = None,
-    r2_put: R2PutFn | None = None,
-    staging_dir: str | Path | None = None,
-    wrangler: str | Path | None = None,
-    wrangler_config: str | Path | None = None,
     history_source: str = "r2",
-    r2_get: Callable[[str, str], bytes] | None = None,
-    r2_bucket: str = "quant-structured",
+    **kwargs: Any,
 ) -> dict[str, Any]:
     """Fixed S1/S2/S3 on non-overlapping periods. Skips recorded; never invent."""
     assert_harness_closed()
     if not periods:
         raise EvalHarnessError("multi-period compare requires at least one period")
+    kwargs.setdefault("feature_row_limit", DEFAULT_FEATURE_ROW_LIMIT)
+    kwargs.setdefault("write_per_day_artifacts", False)
 
     results: list[dict[str, Any]] = []
     for i, raw in enumerate(periods):
@@ -517,23 +431,14 @@ def run_multi_period_multisignal_compare(
                 as_of_days=p.get("as_of_days"),
                 max_days=int(p.get("max_days") or max_days),
                 min_days=int(p.get("min_days") or min_days),
-                feature_row_limit=feature_row_limit,
                 volume_sign_abs_min=volume_sign_abs_min,
                 one_way_cost=one_way_cost,
-                write_per_day_artifacts=write_per_day_artifacts,
-                dry_run=dry_run,
-                d1_execute=d1_execute,
-                r2_put=r2_put,
-                staging_dir=staging_dir,
-                wrangler=wrangler,
-                wrangler_config=wrangler_config,
                 history_source=str(p.get("history_source") or history_source),
                 r2_object_keys_by_dataset=p.get("r2_object_keys_by_dataset"),
                 r2_local_paths_by_dataset=p.get("r2_local_paths_by_dataset"),
                 r2_raw_lines_by_dataset=p.get("r2_raw_lines_by_dataset"),
-                r2_get=r2_get,
-                r2_bucket=r2_bucket,
                 r2_allow_empty_datasets=p.get("r2_allow_empty_datasets"),
+                **kwargs,
             )
             results.append(
                 {
