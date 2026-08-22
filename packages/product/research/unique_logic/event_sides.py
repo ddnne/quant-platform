@@ -6,7 +6,6 @@ from __future__ import annotations
 
 from typing import Any, Mapping, Sequence
 
-from research.daily_path_eval import held_book_daily_mtm
 from research.unique_logic.catalog import yaml_unique_rows
 from research.unique_logic import event
 
@@ -21,8 +20,7 @@ NEW_LS_VARIANTS: tuple[dict[str, Any], ...] = tuple(
 )
 
 
-def _event_key(ev: Mapping[str, Any]) -> str:
-    return f"{ev['code']}|{ev['entry_date']}|{ev['disc_date']}"
+_event_key = event._event_key
 
 
 def classify_funding_entries(
@@ -77,26 +75,11 @@ def _funding_base_extra(
     spec: Mapping[str, Any], collected: Mapping[str, Any], *, min_hist: int
 ) -> dict[str, Any]:
     return {
-        "kind": spec.get("kind"),
-        "variant_kind": spec.get("variant_kind"),
-        "parent_logic_id": spec.get("parent_logic_id"),
-        "new_unique_logic": True,
-        "catalog": False,
-        "catalog_map": None,
-        "post_hold_days": collected["hold_days"],
-        "entry_mode": collected["entry_mode"],
+        **event._base_extra(spec, collected),
         "min_hist": min_hist,
-        "n_events": collected["n_events"],
         "n_eligible_pre_gate": collected["n_eligible"],
-        "n_no_surprise": collected["n_no_surprise"],
-        "n_no_bar_match": collected["n_no_bar"],
         "extra_dataset": "fins_summary+jsda_tokyo_repo_rates",
         "data_path": "local_real_mirrors+local_sqlite_fins+repo",
-        "ffill_applied": False,
-        "invent_fill": False,
-        "promote_as_main": False,
-        "go": False,
-        "research_only": True,
         "sign_flip_is_not_a_kill": True,
     }
 
@@ -121,42 +104,11 @@ def _blocked_overnight_or_events(
             **extra,
         }
     if collected["n_events"] == 0:
-        return {
-            "status": "no_events_in_shard",
-            "logic_id": spec["logic_id"],
-            "n_days": len(dates),
-            "daily_path_complete": False,
-            "incomplete_reason": (
-                "fins_summary loaded but no DiscDate events in this shard "
-                "for eval codes — daily book empty. Not approximated."
-            ),
-            **extra,
-        }
+        return event._no_events_pack(spec, extra, n_days=len(dates))
     return None
 
 
-def _finish_signed_event_book(
-    *,
-    spec: Mapping[str, Any],
-    collected: Mapping[str, Any],
-    accept: Mapping[str, bool],
-    extra: Mapping[str, Any],
-    one_way_cost: float,
-    sign_mult_by_key: Mapping[str, float] | None = None,
-    repo_by_date: Mapping[str, float] | None = None,
-) -> dict[str, Any]:
-    return held_book_daily_mtm(
-        held_by_code_date=event._held_from_event_entries(
-            collected, accept=accept, sign_mult_by_key=sign_mult_by_key
-        ),
-        close_by=collected["close_by"],
-        dates=list(collected["calendar"]),
-        hold_days=int(collected["hold_days"]),
-        one_way_cost=one_way_cost,
-        logic_id=str(spec["logic_id"]),
-        extra=extra,
-        repo_by_date=repo_by_date,
-    )
+_finish_signed_event_book = event._finish_event_book
 
 
 def evaluate_event_funding_easy_short_daily_mtm(
@@ -299,13 +251,7 @@ def evaluate_surprise_xs_rank_flip_daily_mtm(
         period_end=period_end,
     )
     pack["logic_id"] = spec["logic_id"]
-    pack["kind"] = spec.get("kind")
-    pack["variant_kind"] = spec.get("variant_kind")
-    pack["parent_logic_id"] = spec.get("parent_logic_id")
-    pack["sign_flip"] = True
     pack["occupancy_vs_parent"] = "same_as_rank_hold"
     pack["sign_flip_is_not_a_kill"] = True
-    pack["promote_as_main"] = False
-    pack["go"] = False
     return pack
 

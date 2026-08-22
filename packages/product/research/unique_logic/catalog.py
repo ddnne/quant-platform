@@ -213,11 +213,7 @@ def combo_row_from_yaml(spec: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def yaml_combo_rows(*, root: Path | None = None) -> list[dict[str, Any]]:
-    """Combo runtime rows from catalog YAML.
-
-    Filter only by evaluator. Do not import the combo runtime tuple here
-    (that tuple is built from this helper).
-    """
+    """Combo runtime rows from catalog YAML. Filter by evaluator; do not import combo runtime."""
     rows: list[dict[str, Any]] = []
     for spec in load_catalog_specs(root=root):
         if str(spec.get("evaluator") or "") != _COMBO_EVALUATOR:
@@ -254,13 +250,7 @@ def yaml_unique_rows(
     logic_ids: Sequence[str] | None = None,
     root: Path | None = None,
 ) -> list[dict[str, Any]]:
-    """Original unique runtime rows from catalog YAML.
-
-    Filter by evaluator and/or logic_ids. Combo evaluator is excluded unless
-    that evaluator is requested. Order follows ``logic_ids`` when given.
-    Do not import the module runtime tuples here (those tuples are built
-    from this helper).
-    """
+    """Original unique runtime rows from catalog YAML. Filter by evaluator/logic_ids; combo excluded unless requested."""
     want = list(logic_ids) if logic_ids is not None else None
     want_set = set(want) if want is not None else None
     by_id: dict[str, dict[str, Any]] = {}

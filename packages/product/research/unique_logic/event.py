@@ -62,6 +62,10 @@ def _ymd(s: str) -> date:
     return date.fromisoformat(str(s)[:10])
 
 
+def _event_key(ev: Mapping[str, Any]) -> str:
+    return f"{ev['code']}|{ev['entry_date']}|{ev['disc_date']}"
+
+
 def _last_print_before(
     series_by_date: Mapping[str, float],
     query_date: str,
@@ -201,7 +205,7 @@ def _held_from_event_entries(
         dlist = list(pack.get("dlist") or [])
         held: list[float | None] = [None] * len(dlist)
         for ev in pack.get("entries") or []:
-            key = f"{code}|{ev['entry_date']}|{ev['disc_date']}"
+            key = _event_key(ev)
             if accept is not None and not accept.get(key, False):
                 continue
             idx = int(ev["entry_idx"])
@@ -220,6 +224,72 @@ def _held_from_event_entries(
                 held[j] = sgn
         held_by_code_date[code] = {dlist[i]: held[i] for i in range(len(dlist))}
     return held_by_code_date
+
+
+_NO_EVENTS_REASON = (
+    "fins_summary loaded but no DiscDate events in this shard "
+    "for eval codes — daily book empty. Not approximated."
+)
+
+
+def _base_extra(spec: Mapping[str, Any], collected: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "kind": spec.get("kind"),
+        "new_unique_logic": True,
+        "catalog": False,
+        "post_hold_days": collected["hold_days"],
+        "entry_mode": collected["entry_mode"],
+        "n_events": collected["n_events"],
+        "n_no_surprise": collected["n_no_surprise"],
+        "n_no_bar_match": collected["n_no_bar"],
+        "ffill_applied": False,
+        "invent_fill": False,
+        "promote_as_main": False,
+        "go": False,
+        "research_only": True,
+    }
+
+
+def _no_events_pack(
+    spec: Mapping[str, Any],
+    extra: Mapping[str, Any],
+    *,
+    n_days: int | None = None,
+) -> dict[str, Any]:
+    pack: dict[str, Any] = {
+        "status": "no_events_in_shard",
+        "logic_id": spec["logic_id"],
+        "daily_path_complete": False,
+        "incomplete_reason": _NO_EVENTS_REASON,
+        **extra,
+    }
+    if n_days is not None:
+        pack["n_days"] = n_days
+    return pack
+
+
+def _finish_event_book(
+    *,
+    spec: Mapping[str, Any],
+    collected: Mapping[str, Any],
+    accept: Mapping[str, bool],
+    extra: Mapping[str, Any],
+    one_way_cost: float,
+    sign_mult_by_key: Mapping[str, float] | None = None,
+    repo_by_date: Mapping[str, float] | None = None,
+) -> dict[str, Any]:
+    return held_book_daily_mtm(
+        held_by_code_date=_held_from_event_entries(
+            collected, accept=accept, sign_mult_by_key=sign_mult_by_key
+        ),
+        close_by=collected["close_by"],
+        dates=list(collected["calendar"]),
+        hold_days=int(collected["hold_days"]),
+        one_way_cost=one_way_cost,
+        logic_id=str(spec["logic_id"]),
+        extra=extra,
+        repo_by_date=repo_by_date,
+    )
 
 
 def evaluate_event_funding_stress_skip_daily_mtm(
@@ -246,26 +316,13 @@ def evaluate_event_funding_stress_skip_daily_mtm(
         period_start=period_start,
         period_end=period_end,
     )
-    dates = list(collected["calendar"])
     extra = {
-        "kind": spec.get("kind"),
-        "new_unique_logic": True,
-        "catalog": False,
-        "post_hold_days": collected["hold_days"],
-        "entry_mode": collected["entry_mode"],
+        **_base_extra(spec, collected),
         "min_hist": min_hist,
         "gate": "overnight_lt_pit_trailing_median",
-        "n_events": collected["n_events"],
         "n_eligible_pre_gate": collected["n_eligible"],
-        "n_no_surprise": collected["n_no_surprise"],
-        "n_no_bar_match": collected["n_no_bar"],
         "extra_dataset": "fins_summary+jsda_tokyo_repo_rates",
         "data_path": "local_real_mirrors+local_sqlite_fins+repo",
-        "ffill_applied": False,
-        "invent_fill": False,
-        "promote_as_main": False,
-        "go": False,
-        "research_only": True,
     }
     if not overnight_by_date:
         return {
@@ -279,17 +336,7 @@ def evaluate_event_funding_stress_skip_daily_mtm(
             **extra,
         }
     if collected["n_events"] == 0:
-        return {
-            "status": "no_events_in_shard",
-            "logic_id": spec["logic_id"],
-            "n_days": len(dates),
-            "daily_path_complete": False,
-            "incomplete_reason": (
-                "fins_summary loaded but no DiscDate events in this shard "
-                "for eval codes — daily book empty. Not approximated."
-            ),
-            **extra,
-        }
+        return _no_events_pack(spec, extra, n_days=len(collected["calendar"]))
 
     entry_dates = sorted({e["entry_date"] for e in collected["entries"]})
     med_by = pit_median_on_dates(overnight_by_date, entry_dates, min_hist=min_hist)
@@ -299,7 +346,7 @@ def evaluate_event_funding_stress_skip_daily_mtm(
     n_skip_stress = 0
     n_entered = 0
     for ev in collected["entries"]:
-        key = f"{ev['code']}|{ev['entry_date']}|{ev['disc_date']}"
+        key = _event_key(ev)
         d = ev["entry_date"]
         on = overnight_by_date.get(d)
         if on is None:
@@ -326,17 +373,13 @@ def evaluate_event_funding_stress_skip_daily_mtm(
             "n_skip_funding_stress": n_skip_stress,
         }
     )
-    held = _held_from_event_entries(collected, accept=accept)
-    pack = held_book_daily_mtm(
-        held_by_code_date=held,
-        close_by=collected["close_by"],
-        dates=dates,
-        hold_days=int(collected["hold_days"]),
-        one_way_cost=one_way_cost,
-        logic_id=str(spec["logic_id"]),
+    return _finish_event_book(
+        spec=spec,
+        collected=collected,
+        accept=accept,
         extra=extra,
+        one_way_cost=one_way_cost,
     )
-    return pack
 
 
 def evaluate_curve_steep_event_confirm_daily_mtm(
@@ -359,27 +402,14 @@ def evaluate_curve_steep_event_confirm_daily_mtm(
         period_start=period_start,
         period_end=period_end,
     )
-    dates = list(collected["calendar"])
     spread_by = dict((curve_series or {}).get("spread_by_date") or {})
     extra = {
-        "kind": spec.get("kind"),
-        "new_unique_logic": True,
-        "catalog": False,
-        "post_hold_days": collected["hold_days"],
-        "entry_mode": collected["entry_mode"],
+        **_base_extra(spec, collected),
         "steep_threshold": steep,
         "gate": "repo_curve_spread_gt_steep_threshold",
-        "n_events": collected["n_events"],
         "n_eligible_pre_gate": collected["n_eligible"],
-        "n_no_surprise": collected["n_no_surprise"],
-        "n_no_bar_match": collected["n_no_bar"],
         "extra_dataset": "fins_summary+jsda_tokyo_repo_rates",
         "data_path": "local_real_mirrors+local_sqlite_fins+repo",
-        "ffill_applied": False,
-        "invent_fill": False,
-        "promote_as_main": False,
-        "go": False,
-        "research_only": True,
     }
     if not spread_by:
         return {
@@ -393,24 +423,14 @@ def evaluate_curve_steep_event_confirm_daily_mtm(
             **extra,
         }
     if collected["n_events"] == 0:
-        return {
-            "status": "no_events_in_shard",
-            "logic_id": spec["logic_id"],
-            "n_days": len(dates),
-            "daily_path_complete": False,
-            "incomplete_reason": (
-                "fins_summary loaded but no DiscDate events in this shard "
-                "for eval codes — daily book empty. Not approximated."
-            ),
-            **extra,
-        }
+        return _no_events_pack(spec, extra, n_days=len(collected["calendar"]))
 
     accept: dict[str, bool] = {}
     n_skip_gap = 0
     n_skip_not_steep = 0
     n_entered = 0
     for ev in collected["entries"]:
-        key = f"{ev['code']}|{ev['entry_date']}|{ev['disc_date']}"
+        key = _event_key(ev)
         sp = spread_by.get(ev["entry_date"])
         if sp is None:
             accept[key] = False
@@ -429,17 +449,13 @@ def evaluate_curve_steep_event_confirm_daily_mtm(
             "n_skip_not_steep": n_skip_not_steep,
         }
     )
-    held = _held_from_event_entries(collected, accept=accept)
-    pack = held_book_daily_mtm(
-        held_by_code_date=held,
-        close_by=collected["close_by"],
-        dates=dates,
-        hold_days=int(collected["hold_days"]),
-        one_way_cost=one_way_cost,
-        logic_id=str(spec["logic_id"]),
+    return _finish_event_book(
+        spec=spec,
+        collected=collected,
+        accept=accept,
         extra=extra,
+        one_way_cost=one_way_cost,
     )
-    return pack
 
 
 def evaluate_disclosure_cluster_mom_gate_daily_mtm(
@@ -449,10 +465,7 @@ def evaluate_disclosure_cluster_mom_gate_daily_mtm(
     spec: Mapping[str, Any],
     one_way_cost: float,
 ) -> dict[str, Any]:
-    """CS mom L-S sticky gated by PIT universe disclosure-cluster count.
-
-    Distinct from xs_cs_dispersion_gate (mom std). DiscDate < today only.
-    """
+    """CS mom L-S sticky gated by PIT universe disclosure-cluster count."""
     from features.class_signals import apply_sticky_hold, cross_section_rank_signs
 
     params = dict(spec.get("params") or {})
@@ -561,7 +574,7 @@ def evaluate_disclosure_cluster_mom_gate_daily_mtm(
         "n_disclosure_prints": n_disc,
         "n_bar_dates": len(dates),
     }
-    pack = held_book_daily_mtm(
+    return held_book_daily_mtm(
         held_by_code_date=held_by_code_date,
         close_by=panel["close_by"],
         dates=dates,
@@ -570,7 +583,6 @@ def evaluate_disclosure_cluster_mom_gate_daily_mtm(
         logic_id=str(spec["logic_id"]),
         extra=extra,
     )
-    return pack
 
 
 def evaluate_surprise_xs_rank_hold_daily_mtm(
@@ -583,7 +595,7 @@ def evaluate_surprise_xs_rank_hold_daily_mtm(
     period_end: str | None = None,
     entries: Sequence[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """CS rank of surprise among names in a PIT event window (new signal)."""
+    """CS rank of surprise among names in a PIT event window."""
     from features.class_signals import cross_section_rank_signs
 
     params = dict(spec.get("params") or {})
@@ -604,38 +616,16 @@ def evaluate_surprise_xs_rank_hold_daily_mtm(
     h = int(collected["hold_days"])
     dates = list(collected["calendar"])
     extra = {
-        "kind": spec.get("kind"),
-        "new_unique_logic": True,
-        "catalog": False,
-        "post_hold_days": h,
-        "entry_mode": collected["entry_mode"],
+        **_base_extra(spec, collected),
         "long_frac": lf,
         "short_frac": sf,
         "sign_flip": sign_flip,
-        "n_events": collected["n_events"],
         "n_eligible": collected["n_eligible"],
-        "n_no_surprise": collected["n_no_surprise"],
-        "n_no_bar_match": collected["n_no_bar"],
         "extra_dataset": "fins_summary",
         "data_path": "local_real_mirrors+local_sqlite_fins_summary",
-        "ffill_applied": False,
-        "invent_fill": False,
-        "promote_as_main": False,
-        "go": False,
-        "research_only": True,
     }
     if collected["n_events"] == 0:
-        return {
-            "status": "no_events_in_shard",
-            "logic_id": spec["logic_id"],
-            "n_days": len(dates),
-            "daily_path_complete": False,
-            "incomplete_reason": (
-                "fins_summary loaded but no DiscDate events in this shard "
-                "for eval codes — daily book empty. Not approximated."
-            ),
-            **extra,
-        }
+        return _no_events_pack(spec, extra, n_days=len(dates))
     if not dates:
         return {
             "status": "insufficient_dates",
@@ -681,13 +671,9 @@ def evaluate_surprise_xs_rank_hold_daily_mtm(
             "mean_names_on_ranked_days": (
                 float(n_names_ranked) / float(n_ranked_days) if n_ranked_days else 0.0
             ),
-            "occupancy_note": (
-                "Sparse occupancy is honest: CS surprise rank needs ≥2 names "
-                "in-window. Not filled."
-            ),
         }
     )
-    pack = held_book_daily_mtm(
+    return held_book_daily_mtm(
         held_by_code_date=held_by_code_date,
         close_by=collected["close_by"],
         dates=dates,
@@ -696,5 +682,4 @@ def evaluate_surprise_xs_rank_hold_daily_mtm(
         logic_id=str(spec["logic_id"]),
         extra=extra,
     )
-    return pack
 

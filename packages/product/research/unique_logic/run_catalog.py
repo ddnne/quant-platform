@@ -1,9 +1,7 @@
 """Run catalog YAML logics through candidate-grade daily_path.
 
-Default backend is Cloudflare isolate fan-out (``--backend cf``).
-``--backend local`` is the serial Python HONEST_3Y fallback.
-
-Does not add a wave script. Does not promote. Scores go to eval_registry.
+``--backend cf`` (default) is isolate fan-out; ``local`` is serial HONEST_3Y.
+Does not promote. Scores go to eval_registry.
 """
 from __future__ import annotations
 

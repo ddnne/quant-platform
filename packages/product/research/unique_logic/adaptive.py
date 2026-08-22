@@ -96,7 +96,7 @@ def evaluate_event_funding_adaptive_side_daily_mtm(
     easy_keys = dict(gate["easy"])
     cost = 2.0 * float(one_way_cost)
     ordered = sorted(
-        [e for e in collected["entries"] if easy_keys.get(event_sides._event_key(e))],
+        [e for e in collected["entries"] if easy_keys.get(event._event_key(e))],
         key=lambda e: (e["entry_date"], e["code"], e["disc_date"]),
     )
     history: list[dict[str, Any]] = []
@@ -105,7 +105,7 @@ def evaluate_event_funding_adaptive_side_daily_mtm(
     n_flip = 0
     n_default_orig = 0
     for ev in ordered:
-        key = event_sides._event_key(ev)
+        key = event._event_key(ev)
         entry_d = str(ev["entry_date"])
         completed = [h for h in history if str(h["hold_end"]) < entry_d]
         lastk = completed[-trail_k:]
@@ -184,13 +184,8 @@ def evaluate_surprise_xs_rank_adaptive_daily_mtm(
         period_end=period_end,
     )
     orig["logic_id"] = spec["logic_id"]
-    orig["kind"] = spec.get("kind")
-    orig["variant_kind"] = spec.get("variant_kind")
-    orig["parent_logic_id"] = spec.get("parent_logic_id")
     orig["occupancy_vs_parent"] = "same_as_rank_hold"
     orig["sign_flip_is_not_a_kill"] = True
-    orig["promote_as_main"] = False
-    orig["go"] = False
     orig["adaptive_side"] = True
     orig["trail_k"] = trail_k
     orig["trail_min"] = trail_min

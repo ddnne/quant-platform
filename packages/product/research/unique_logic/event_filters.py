@@ -8,7 +8,6 @@ import math
 from statistics import median
 from typing import Any, Mapping, Sequence
 
-from research.daily_path_eval import held_book_daily_mtm
 from research.unique_logic.catalog import yaml_unique_rows
 import research.unique_logic.event as event
 
@@ -55,8 +54,7 @@ def pit_median_from_pairs(
     return out
 
 
-def _event_key(ev: Mapping[str, Any]) -> str:
-    return f"{ev['code']}|{ev['entry_date']}|{ev['disc_date']}"
+_event_key = event._event_key
 
 
 def _abs_surprise_pairs(
@@ -163,20 +161,8 @@ def _collect(
 
 def _base_extra(spec: Mapping[str, Any], collected: Mapping[str, Any]) -> dict[str, Any]:
     return {
-        "kind": spec.get("kind"),
-        "new_unique_logic": True,
-        "catalog": False,
-        "post_hold_days": collected["hold_days"],
-        "entry_mode": collected["entry_mode"],
-        "n_events": collected["n_events"],
+        **event._base_extra(spec, collected),
         "n_eligible_pre_gate": collected["n_eligible"],
-        "n_no_surprise": collected["n_no_surprise"],
-        "n_no_bar_match": collected["n_no_bar"],
-        "ffill_applied": False,
-        "invent_fill": False,
-        "promote_as_main": False,
-        "go": False,
-        "research_only": True,
     }
 
 
@@ -198,37 +184,11 @@ def _empty_extra_or_events(
             **extra,
         }
     if collected["n_events"] == 0:
-        return {
-            "status": "no_events_in_shard",
-            "logic_id": spec["logic_id"],
-            "n_days": len(dates),
-            "daily_path_complete": False,
-            "incomplete_reason": (
-                "fins_summary loaded but no DiscDate events in this shard "
-                "for eval codes — daily book empty. Not approximated."
-            ),
-            **extra,
-        }
+        return event._no_events_pack(spec, extra, n_days=len(dates))
     return None
 
 
-def _finish_event_book(
-    *,
-    spec: Mapping[str, Any],
-    collected: Mapping[str, Any],
-    accept: Mapping[str, bool],
-    extra: Mapping[str, Any],
-    one_way_cost: float,
-) -> dict[str, Any]:
-    return held_book_daily_mtm(
-        held_by_code_date=event._held_from_event_entries(collected, accept=accept),
-        close_by=collected["close_by"],
-        dates=list(collected["calendar"]),
-        hold_days=int(collected["hold_days"]),
-        one_way_cost=one_way_cost,
-        logic_id=str(spec["logic_id"]),
-        extra=extra,
-    )
+_finish_event_book = event._finish_event_book
 
 
 def evaluate_large_surprise_event_hold_daily_mtm(

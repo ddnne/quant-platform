@@ -12,7 +12,7 @@ from research.unique_logic.constants import (
     sparse_15name_reason,
 )
 from research.unique_logic.near_duplicate import is_near_duplicate
-from research.unique_logic import event, event_sides
+from research.unique_logic import event
 
 COMBO_LOGIC_IDS: frozenset[str] = frozenset(CF_NEW_THESIS_IDS)
 
@@ -45,7 +45,6 @@ def _combo_row(s: Mapping[str, Any]) -> dict[str, Any]:
         "near_duplicate": dup,
         "always_on_cs_sticky": ao,
         "sparse_15name_reason": sparse,
-        "why_different_from": list(s.get("why_different_from") or []),
         "params": {
             "post_hold_days": 5,
             "hold_days": 10,
@@ -89,9 +88,7 @@ def spec_by_id(logic_id: str) -> dict[str, Any] | None:
     return None
 
 
-def combo_runtime_spec(logic_id: str) -> dict[str, Any] | None:
-    """YAML-derived combo runtime row."""
-    return spec_by_id(logic_id)
+combo_runtime_spec = spec_by_id
 
 
 def assert_yaml_matches_specs(*, root: Any = None) -> None:
@@ -214,7 +211,7 @@ def _eval_event_combo(
     accept: dict[str, bool] = {}
     sign_mult: dict[str, float] = {}
     for ev in collected["entries"]:
-        key = event_sides._event_key(ev)
+        key = event._event_key(ev)
         # Worker comboEventGateOk is SoT; local fallback is ungated only.
         ok = not gates
         accept[key] = ok
@@ -233,7 +230,7 @@ def _eval_event_combo(
                 end0 = min(int(rec["entry_idx"]) + int(collected["hold_days"]), len(dlist))
                 i0 = max(i0, end0 - tail)
             if i0 < 0 or i0 >= len(dlist):
-                accept[event_sides._event_key(ev)] = False
+                accept[event._event_key(ev)] = False
                 continue
             rec["entry_idx"] = i0
             rec["entry_date"] = dlist[i0]
@@ -251,12 +248,12 @@ def _eval_event_combo(
             entries=[
                 ev
                 for ev in collected["entries"]
-                if accept.get(event_sides._event_key(ev), False)
+                if accept.get(event._event_key(ev), False)
             ],
         )
         pack["combo_gates"] = list(gates)
         return pack
-    return event_sides._finish_signed_event_book(
+    return event._finish_event_book(
         spec=spec,
         collected=collected,
         accept=accept,
@@ -346,12 +343,6 @@ def _eval_cs_combo(
     )
     pack.update(
         {
-            "logic_id": spec["logic_id"],
-            "status": "ok",
-            "cs_gate": gate,
-            "promote_as_main": False,
-            "go": False,
-            "cf_native": True,
             "cf_only_gates": extra_cf_only,
             "python_skipped_cf_only": bool(extra_cf_only),
         }

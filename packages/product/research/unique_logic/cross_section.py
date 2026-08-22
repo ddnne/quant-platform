@@ -15,8 +15,6 @@ from research.unique_logic.constants import ALWAYS_ON_OCCUPANCY_WARN
 from research.unique_logic.catalog import yaml_unique_rows
 from research.unique_logic import event
 
-PACK_BIAS = "mixed"
-
 NEW_UNIQUE_LOGIC: tuple[dict[str, Any], ...] = tuple(
     yaml_unique_rows(
         logic_ids=(
@@ -94,8 +92,6 @@ def _base_cs_extra(
         "promote_as_main": False,
         "go": False,
         "research_only": True,
-        "sticky_approx_always_on_gate": False,
-        "pack_bias": PACK_BIAS,
     }
 
 
@@ -106,7 +102,6 @@ def _occupancy_note(n_on: int, n_dates: int) -> dict[str, Any]:
         "n_bar_dates": n_dates,
         "occupancy_frac": frac,
         "occupancy_always_on_warning": bool(frac >= ALWAYS_ON_OCCUPANCY_WARN),
-        "sticky_approx_always_on_gate": False,
     }
 
 
@@ -536,10 +531,6 @@ def evaluate_xs_margin_delta_rank_daily_mtm(
             "n_skip_stale_or_missing": n_skip_stale_or_missing,
             "mean_names_on_ranked_days": (
                 float(n_names_ranked) / float(n_ranked) if n_ranked else 0.0
-            ),
-            "occupancy_note": (
-                "Ranked occupancy is honest: needs ≥2 names with two PIT "
-                "margin prints, last print age ≤ stale cap. Not filled."
             ),
         }
     )
