@@ -1,14 +1,9 @@
-"""Experiment scheduler — readiness signature re-checked at schedule time.
-
-W77 / w0816k: hypothesis-class mix helpers ensure schedule/generation selection
-is **not** mass-defaulted to ``simple_daily_sign`` (opt-in only).
-Mass experiment start remains fail-closed without VerifiedResearchReadiness.
-"""
+"""Experiment scheduler. Mix is not mass-defaulted to simple_daily_sign."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Mapping, Sequence
+from typing import Any, Sequence
 
 from research.artifacts import ExperimentPlan
 from research.hypothesis_classes import (
@@ -17,7 +12,6 @@ from research.hypothesis_classes import (
     assert_generation_mix_not_skewed,
     default_generation_class_ids,
     is_generation_enabled,
-    is_simple_daily_sign,
     select_generation_classes,
 )
 from research.readiness import (
@@ -73,12 +67,7 @@ def select_schedule_hypothesis_classes(
     explicit_opt_in: Sequence[str] | None = None,
     include_simple_daily_sign: bool = False,
 ) -> HypothesisClassScheduleSelection:
-    """Select hypothesis classes for scheduling / generation planning.
-
-    ``simple_daily_sign`` is **not** included unless
-    ``include_simple_daily_sign=True`` or listed in ``explicit_opt_in``.
-    Mix is fail-closed against simple_daily_sign-only / majority skew.
-    """
+    """Select classes for scheduling. simple_daily_sign is opt-in only."""
     selected = select_generation_classes(
         n=n,
         class_ids=class_ids,
@@ -91,38 +80,6 @@ def select_schedule_hypothesis_classes(
         simple_daily_sign_included=CLASS_SIMPLE_DAILY_SIGN in selected,
         simple_daily_sign_default_off=True,
     )
-
-
-def require_plan_hypothesis_class_allowed(
-    plan: ExperimentPlan | Mapping[str, Any],
-    *,
-    explicit_opt_in: Sequence[str] | None = None,
-) -> str | None:
-    """If plan lineage declares hypothesis_class, enforce generation policy.
-
-    Returns the class_id when present and allowed; None when no class pinned.
-    Raises ValueError when class is known but not generation-enabled.
-    """
-    if isinstance(plan, ExperimentPlan):
-        # ExperimentPlan has no lineage field; callers may pass idea lineage
-        # via budget_allocation markers or wrap with Mapping.
-        return None
-    lineage = plan.get("lineage") if isinstance(plan, Mapping) else None
-    if not isinstance(lineage, Mapping):
-        return None
-    class_id = lineage.get("hypothesis_class")
-    if class_id is None or not str(class_id).strip():
-        return None
-    cid = str(class_id).strip()
-    if not is_generation_enabled(cid, explicit_opt_in=explicit_opt_in):
-        raise ValueError(
-            f"plan hypothesis_class {cid!r} not allowed without explicit "
-            f"opt-in (simple_daily_sign default generation OFF)"
-        )
-    if is_simple_daily_sign(cid):
-        # Allowed only via opt-in path above; surface for callers.
-        pass
-    return cid
 
 
 class ExperimentScheduler:
@@ -146,8 +103,6 @@ class ExperimentScheduler:
             raise MassResearchDisabledError("ExperimentPlan required")
         if not plan.ready_snapshot_id.strip():
             raise MassResearchDisabledError("plan.ready_snapshot_id required")
-        # W77: if caller pins a hypothesis class, enforce generation policy
-        # before any mass-gated lease (still fails closed without readiness).
         if hypothesis_class is not None and str(hypothesis_class).strip():
             cid = str(hypothesis_class).strip()
             if not is_generation_enabled(cid, explicit_opt_in=explicit_opt_in):
@@ -161,7 +116,6 @@ class ExperimentScheduler:
             readiness=readiness,
             expected_snapshot_id=plan.ready_snapshot_id,
         )
-        # Re-verify immediately before lease (expired/forged rejection).
         att.require_valid(expected_snapshot_id=plan.ready_snapshot_id)
         lease = cap.acquire_slot(ttl_seconds=lease_ttl_seconds)
         try:
@@ -185,6 +139,5 @@ __all__ = [
     "ExperimentScheduler",
     "HypothesisClassScheduleSelection",
     "ScheduledExperiment",
-    "require_plan_hypothesis_class_allowed",
     "select_schedule_hypothesis_classes",
 ]

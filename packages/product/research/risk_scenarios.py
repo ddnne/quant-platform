@@ -1,37 +1,17 @@
-"""Research risk-scenario evaluation helpers (W77 / w0816k) — 研究用・未宣言.
+"""Research risk-scenario helpers — 研究用・未宣言.
 
-Purpose
--------
-Checklist v2 requires a **minimum risk-scenario set** before a hyp may be
-discussed as ``research_candidate``. Scenarios that break sign/stability
-prefer **fail candidate** (or force explicit scenario-weakness disclosure).
-
-Hard constraints
-----------------
-* Research-only · does **not** mint READY / arm Mass / open Phase7
-* Pass ≠ operational GO · no edge / significance claim
-* Pure helpers preferred (unit-testable without R2 / D1)
-
-Minimum scenario set
---------------------
-1. **crash** — large negative market-return regime
-2. **high_vol** — elevated realized-vol regime
-3. **rate_up** / **rate_down** — if rate data usable; else disclose N/A
-4. **liquidity_stress** — if available; else disclose N/A
+Min set: crash, high_vol, rate_up/down (N/A if unused), liquidity_stress
+(N/A if unavailable). Sign-break prefers fail-candidate.
 """
 
 from __future__ import annotations
 
 from typing import Any, Mapping, Sequence
 
-# ---------------------------------------------------------------------------
-# Identity / freeze (must never arm)
-# ---------------------------------------------------------------------------
-
 RISK_SCENARIOS_VERSION: str = "research-risk-scenarios/v1"
 RISK_SCENARIOS_LABEL: str = (
     "研究用リスクシナリオ評価・未宣言 "
-    "(crash/high_vol/rate/liquidity / READY未接続 / Mass NO-GO)"
+    "(crash/high_vol/rate/liquidity / READY未接続 / Mass closed)"
 )
 
 from features.research_freezes import (
@@ -45,7 +25,6 @@ from features.research_freezes import (
     SIGNIFICANCE_CLAIMED,
 )
 
-# Minimum required scenario ids (rate/liquidity may be N/A with disclosure).
 SCENARIO_CRASH: str = "crash"
 SCENARIO_HIGH_VOL: str = "high_vol"
 SCENARIO_RATE_UP: str = "rate_up"
@@ -93,10 +72,7 @@ def risk_scenarios_document() -> dict[str, Any]:
         "required_core": list(REQUIRED_CORE_SCENARIOS),
         "data_dependent": list(OPTIONAL_DATA_DEPENDENT_SCENARIOS),
         "stability_policy": {"prefer_fail_candidate": True},
-        "note": (
-            "Research scenario checklist only. Completing scenarios does not "
-            "mint READY, arm Mass, or claim edge. Incomplete → not candidate."
-        ),
+        "note": "Research scenario checklist only. Incomplete → not candidate.",
     }
     doc.update(_freeze_fields())
     return doc
@@ -168,11 +144,7 @@ def default_na_scenario_bundle(
     rate_na_reason: str = "rate data not usable in this research plane",
     liquidity_na_reason: str = "liquidity stress data not available",
 ) -> list[dict[str, Any]]:
-    """Minimal wiring bundle: core scenarios missing metrics + data-dep N/A.
-
-    Callers should replace crash/high_vol rows with real metrics before
-    claiming scenario evaluation complete. Used by wiring_only checklist.
-    """
+    """Wiring bundle: core scenarios pending metrics; data-dependent N/A."""
     rows = [
         scenario_row(
             SCENARIO_CRASH,
@@ -247,33 +219,13 @@ def evaluate_risk_scenarios(
     scenario_weakness_notes: str | None = None,
     signal_id: str | None = None,
 ) -> dict[str, Any]:
-    """Evaluate min risk-scenario set for checklist v2.
-
-    Parameters
-    ----------
-    scenario_rows:
-        Rows with ``scenario_id``, metrics, optional ``not_applicable``.
-    baseline_majority_sign / baseline_net_majority_sign:
-        Baseline multi-year majority signs to compare stability against.
-    rate_data_usable / liquidity_data_available:
-        When True, corresponding scenarios must have metrics (not N/A).
-    prefer_fail_on_sign_break:
-        When a core scenario flips sign vs baseline, mark stability broken
-        and set ``research_candidate_allowed=False`` unless weakness is
-        disclosed (still preferred fail when prefer_fail is True).
-    scenario_weakness_disclosed:
-        Caller attests scenario weakness is documented (still not READY).
-
-    Returns freeze-closed result. ``passed`` means min set covered and
-    no undisclosed stability break — **not** READY/Mass/candidate.
-    """
+    """Evaluate min risk-scenario set. passed ≠ READY / candidate."""
     rows_in = [dict(r) for r in (scenario_rows or [])]
     by_id: dict[str, dict[str, Any]] = {}
     for r in rows_in:
         sid = str(r.get("scenario_id") or "").strip()
         if not sid:
             continue
-        # Normalize
         if r.get("not_applicable") or str(r.get("status") or "").lower() in (
             "not_applicable",
             "n/a",
@@ -323,7 +275,6 @@ def evaluate_risk_scenarios(
                     "not_applicable": True,
                     "na_reason": row.get("na_reason"),
                 }
-            # N/A not allowed when data usable
             reasons.append(
                 f"{sid}: marked not_applicable but data is marked usable/available"
             )
@@ -365,17 +316,14 @@ def evaluate_risk_scenarios(
             "net_one_way_mean": row.get("net_one_way_mean"),
         }
 
-    # Core required
     for sid in REQUIRED_CORE_SCENARIOS:
         details[sid] = _coverage(sid, required=True, allow_na=False)
 
-    # Rate scenarios
     for sid in (SCENARIO_RATE_UP, SCENARIO_RATE_DOWN):
         details[sid] = _coverage(
             sid, required=True, allow_na=not rate_data_usable
         )
 
-    # Liquidity
     details[SCENARIO_LIQUIDITY_STRESS] = _coverage(
         SCENARIO_LIQUIDITY_STRESS,
         required=True,
@@ -391,7 +339,6 @@ def evaluate_risk_scenarios(
             "missing_or_pending_scenarios: " + ", ".join(sorted(set(missing_required)))
         )
 
-    # Sign / stability breaks vs baseline
     sign_breaks: list[dict[str, Any]] = []
     for sid in REQUIRED_CORE_SCENARIOS:
         row = by_id.get(sid)
@@ -434,7 +381,6 @@ def evaluate_risk_scenarios(
             + ", ".join(b["scenario_id"] for b in sign_breaks)
         )
 
-    # Candidate policy
     research_candidate_allowed = True
     if not coverage_ok:
         research_candidate_allowed = False
@@ -446,7 +392,6 @@ def evaluate_risk_scenarios(
                 "prefer_fail_on_sign_break: stability break → not research_candidate"
             )
         elif allow_scenario_weakness_disclosure and scenario_weakness_disclosed:
-            # Disclosure path still discouraged; mark allowed only if not prefer fail
             research_candidate_allowed = True
             reasons.append(
                 "scenario_weakness_disclosed (allowed only when prefer_fail=False)"
@@ -459,7 +404,6 @@ def evaluate_risk_scenarios(
             )
 
     passed = bool(coverage_ok and not (stability_broken and prefer_fail_on_sign_break))
-    # When weakness disclosed and prefer_fail False, passed can be True with warning
     if (
         coverage_ok
         and stability_broken
@@ -495,8 +439,7 @@ def evaluate_risk_scenarios(
         "reasons": reasons,
         "min_scenario_set": list(MIN_SCENARIO_SET),
         "note": (
-            "Research risk-scenario result only. passed=True does NOT mean "
-            "READY, Mass GO, or research_candidate. Incomplete or sign-break "
+            "Research risk-scenario result only. Incomplete or sign-break "
             "(prefer fail) blocks research_candidate."
         ),
     }
@@ -505,15 +448,8 @@ def evaluate_risk_scenarios(
 
 
 __all__ = [
-    "CONNECTED_TO_MASS",
-    "CONNECTED_TO_READY",
-    "EDGE_CLAIMED",
-    "MASS_RESEARCH",
     "MIN_SCENARIO_SET",
-    "OPERATIONAL_GO",
     "OPTIONAL_DATA_DEPENDENT_SCENARIOS",
-    "PHASE7",
-    "READY_DECLARED",
     "REQUIRED_CORE_SCENARIOS",
     "RISK_SCENARIOS_LABEL",
     "RISK_SCENARIOS_VERSION",
@@ -522,7 +458,6 @@ __all__ = [
     "SCENARIO_LIQUIDITY_STRESS",
     "SCENARIO_RATE_DOWN",
     "SCENARIO_RATE_UP",
-    "SIGNIFICANCE_CLAIMED",
     "default_na_scenario_bundle",
     "evaluate_risk_scenarios",
     "risk_scenarios_document",

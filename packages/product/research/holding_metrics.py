@@ -1,34 +1,7 @@
-"""Research holding-period / turnover metrics (W65 / w0815bf) — 研究用・未宣言.
+"""Research holding-period / turnover metrics — 研究用・未宣言.
 
-Purpose
--------
-Illustrate **how long a discrete signal sign (+1 / −1) persists** per code,
-and how a fixed one-way cost assumption amortizes over a hold of N days.
-
-This module is **research-only**:
-
-* labels: **仮定に依存・研究用・未宣言**
-* does **not** mint READY / arm Mass / open Phase7 / authorize orders
-* does **not** claim edge / significance / operational GO
-* pure functions preferred (unit-testable without R2 / D1)
-
-Run-length definition
----------------------
-Given a chronological sequence of per-(day, code) signal signs:
-
-* consecutive **same non-zero** signs form a run of length N (days)
-* ``0`` (flat) and ``None`` (missing) **break** the current run
-* a sign flip (+1 ↔ −1) ends the current run and starts a new one
-
-Cost amortization (research illustration)
------------------------------------------
-For a fixed one-way cost ``c`` (default 10bp = 0.001), if a position is
-entered once and held N days without re-trading, a simple illustration is:
-
-    effective_daily_cost ≈ c / N
-
-This is **not** a trading model, not slippage calibration, and not GO.
-Round-trip illustration uses ``2c / N``.
+Same-sign run length per code; 0/None break a run. Cost illustration:
+effective_daily_cost ≈ one_way / N. Not a trading model.
 """
 
 from __future__ import annotations
@@ -47,23 +20,16 @@ from features.research_freezes import (
     SIGNIFICANCE_CLAIMED,
 )
 
-# ---------------------------------------------------------------------------
-# Identity / freeze (must never arm)
-# ---------------------------------------------------------------------------
-
 HOLDING_METRICS_VERSION: str = "research-holding-metrics/v1"
 HOLDING_METRICS_LABEL: str = (
     "仮定に依存・研究用保有・回転メトリクス・未宣言 "
-    "(READY未接続 / Mass NO-GO / 運用GOではない)"
+    "(READY未接続 / Mass closed / 運用GOではない)"
 )
 
-# Match robustness_gate / cost_models / multiyear research cost convention.
 DEFAULT_ONE_WAY_COST_BP: float = 10.0
 DEFAULT_ONE_WAY_COST: float = DEFAULT_ONE_WAY_COST_BP / 10_000.0  # 0.001
-DEFAULT_ROUND_TRIP_COST: float = DEFAULT_ONE_WAY_COST * 2.0  # 0.002
 
 DEFAULT_HOLD_DAYS: tuple[int, ...] = (1, 2, 3, 5, 10, 20)
-# Histogram bucket right-edges (inclusive): 1, 2, 3, 4-5, 6-10, 11+
 DEFAULT_HISTOGRAM_BUCKETS: tuple[tuple[int, int | None], ...] = (
     (1, 1),
     (2, 2),
@@ -89,7 +55,7 @@ def _freeze_fields() -> dict[str, Any]:
 
 
 def holding_metrics_document() -> dict[str, Any]:
-    """Public document for the research holding / turnover metrics surface."""
+    """Public document for the holding / turnover metrics surface."""
     doc = {
         "version": HOLDING_METRICS_VERSION,
         "label": HOLDING_METRICS_LABEL,
@@ -98,28 +64,14 @@ def holding_metrics_document() -> dict[str, Any]:
             {"lo": lo, "hi": hi, "label": _bucket_label(lo, hi)}
             for lo, hi in DEFAULT_HISTOGRAM_BUCKETS
         ],
-        "note": (
-            "Research helpers only. No READY, no Mass, no Phase7, no orders, "
-            "no edge/significance claim. 仮定に依存・研究用・未宣言."
-        ),
+        "note": "Research helpers only. 仮定に依存・研究用・未宣言.",
     }
     doc.update(_freeze_fields())
     return doc
 
 
-# ---------------------------------------------------------------------------
-# Sign helpers
-# ---------------------------------------------------------------------------
-
-
 def sign_from_value(x: Any) -> int | None:
-    """Map a raw signal value to discrete sign ``+1 / 0 / −1``, or ``None``.
-
-    * ``None`` / non-numeric → ``None``
-    * ``> 0`` → ``+1``
-    * ``< 0`` → ``−1``
-    * ``== 0`` → ``0``
-    """
+    """Map a raw signal to discrete ``+1 / 0 / −1``, or ``None``."""
     if x is None:
         return None
     if isinstance(x, str):
@@ -147,36 +99,12 @@ def sign_from_value(x: Any) -> int | None:
     return 0
 
 
-# ---------------------------------------------------------------------------
-# Run-length (pure)
-# ---------------------------------------------------------------------------
-
-
 def run_lengths_for_sign_sequence(
     signs: Sequence[Any],
     *,
     non_zero_only: bool = True,
 ) -> list[int]:
-    """Compute consecutive same non-zero sign run lengths from a day sequence.
-
-    Parameters
-    ----------
-    signs:
-        Chronological sequence of sign-like values (``+1/0/−1/None`` or raw).
-    non_zero_only:
-        When True (default), ``0`` breaks a run (only non-zero signs count).
-        When False, ``0`` is treated as a sign that can form its own runs.
-
-    Returns
-    -------
-    list[int]
-        Lengths of completed runs (empty if no non-zero consecutive blocks).
-
-    Notes
-    -----
-    * ``None`` always breaks the current run (missing observation).
-    * A sign flip ends the current run and starts a new one of length 1.
-    """
+    """Consecutive same-sign run lengths. None always breaks; 0 breaks by default."""
     runs: list[int] = []
     cur: int | None = None
     n = 0
@@ -207,7 +135,9 @@ def run_lengths_for_sign_sequence(
 
 
 def _percentile_nearest_rank(sorted_vals: Sequence[float], p: float) -> float | None:
-    """Nearest-rank percentile on a pre-sorted non-empty sequence; p in [0, 100]."""
+    """Nearest-rank percentile on a pre-sorted sequence; p in [0, 100]."""
+    import math
+
     if not sorted_vals:
         return None
     if p <= 0:
@@ -215,15 +145,6 @@ def _percentile_nearest_rank(sorted_vals: Sequence[float], p: float) -> float | 
     if p >= 100:
         return float(sorted_vals[-1])
     n = len(sorted_vals)
-    # Nearest-rank: rank = ceil(p/100 * n), 1-indexed.
-    rank = int((p / 100.0) * n)
-    if rank < 1:
-        rank = 1
-    if rank > n:
-        rank = n
-    # If p/100*n is exact integer, nearest-rank uses that rank; ceil when fractional.
-    import math
-
     rank = max(1, min(n, int(math.ceil((p / 100.0) * n))))
     return float(sorted_vals[rank - 1])
 
@@ -262,7 +183,6 @@ def histogram_run_lengths(
                 placed = True
                 break
         if not placed:
-            # Longer than last finite bucket and no open-ended tail: skip.
             pass
     out: list[dict[str, Any]] = []
     for (lo, hi), c in zip(bks, counts):
@@ -283,10 +203,7 @@ def run_length_distribution(
     *,
     histogram_buckets: Sequence[tuple[int, int | None]] | None = None,
 ) -> dict[str, Any]:
-    """Summarize run lengths: mean / median / p50 / p90 + histogram.
-
-    Empty input → null stats, empty histogram counts, ``n_runs=0``.
-    """
+    """Summarize run lengths: mean / median / p50 / p90 + histogram."""
     vals: list[int] = []
     for raw in run_lengths:
         try:
@@ -323,11 +240,6 @@ def run_length_distribution(
     }
 
 
-# ---------------------------------------------------------------------------
-# Panel helpers (day × code)
-# ---------------------------------------------------------------------------
-
-
 def panel_run_lengths_by_code(
     records: Sequence[Mapping[str, Any]],
     *,
@@ -336,11 +248,7 @@ def panel_run_lengths_by_code(
     sign_key: str = "sign",
     non_zero_only: bool = True,
 ) -> dict[str, list[int]]:
-    """Group panel records by code, sort by day, return per-code run lengths.
-
-    Each record should include day, code, and a sign-like field (``sign`` or
-    ``value`` — pass ``sign_key`` accordingly).
-    """
+    """Group panel records by code, sort by day, return per-code run lengths."""
     by_code: dict[str, list[tuple[str, Any]]] = {}
     for raw in records:
         if not isinstance(raw, Mapping):
@@ -353,7 +261,6 @@ def panel_run_lengths_by_code(
         day_s = str(day).strip()[:10]
         if not code_s or not day_s:
             continue
-        # Prefer explicit sign_key; fall back to value if missing.
         if sign_key in raw:
             sig = raw.get(sign_key)
         else:
@@ -363,7 +270,6 @@ def panel_run_lengths_by_code(
     out: dict[str, list[int]] = {}
     for code, pairs in by_code.items():
         pairs_sorted = sorted(pairs, key=lambda t: t[0])
-        # Deduplicate same day (keep last).
         dedup: list[tuple[str, Any]] = []
         for day_s, sig in pairs_sorted:
             if dedup and dedup[-1][0] == day_s:
@@ -386,10 +292,7 @@ def panel_run_length_stats(
     non_zero_only: bool = True,
     histogram_buckets: Sequence[tuple[int, int | None]] | None = None,
 ) -> dict[str, Any]:
-    """Aggregate run-length distribution over a (day, code, sign) panel.
-
-    Returns a research report dict with freeze flags always closed.
-    """
+    """Aggregate run-length distribution over a (day, code, sign) panel."""
     by_code = panel_run_lengths_by_code(
         records,
         day_key=day_key,
@@ -406,9 +309,6 @@ def panel_run_length_stats(
     dist = run_length_distribution(all_runs, histogram_buckets=histogram_buckets)
     n_codes = len(by_code)
     n_records = len(records)
-
-    # Rough turnover illustration: average flips per code-day.
-    # turnover_proxy = 1 / mean_hold when mean_hold is defined.
     mean_hold = dist.get("mean")
     turnover_proxy = (1.0 / mean_hold) if mean_hold and mean_hold > 0 else None
 
@@ -465,22 +365,7 @@ def extract_sign_panel_from_batch_summary(
     prefer_sample_values: bool = True,
     expand_majority_to_codes: bool = True,
 ) -> dict[str, Any]:
-    """Best-effort (day, code, sign) panel from a multiday ``batch_summary``.
-
-    Strategy
-    --------
-    1. If ``per_day[].sample_values`` has ``code`` + ``value``, use those rows
-       (partial coverage — only the sample slice stored in the artifact).
-    2. If ``expand_majority_to_codes`` and ``codes`` + ``sign_distribution``
-       are present, expand the **majority sign of each day to every code**.
-       This is exact only when all codes share the same sign that day
-       (observed for S1 topix_rel batches where distribution is 30/0).
-       Documented as research reconstruction; not a full row re-eval.
-
-    Returns
-    -------
-    dict with ``records``, ``source``, ``codes``, ``dates``, freeze flags.
-    """
+    """Best-effort (day, code, sign) panel from a multiday ``batch_summary``."""
     codes = [str(c).strip() for c in (batch_summary.get("codes") or []) if str(c).strip()]
     per_day = list(batch_summary.get("per_day") or [])
     records: list[dict[str, Any]] = []
@@ -525,7 +410,6 @@ def extract_sign_panel_from_batch_summary(
             m1 = int(sd.get("-1") or 0)
             z = int(sd.get("0") or 0)
             active = p1 + m1 + z
-            # Unanimous among non-null discrete signs if one bucket == active.
             if active > 0 and max(p1, m1, z) == active:
                 unanimous_days += 1
             elif active > 0:
@@ -578,33 +462,13 @@ def extract_sign_panel_from_batch_summary(
     return out
 
 
-# ---------------------------------------------------------------------------
-# Cost amortization table (research illustration)
-# ---------------------------------------------------------------------------
-
-
 def cost_amortization_table(
     *,
     one_way_cost: float = DEFAULT_ONE_WAY_COST,
     hold_days: Sequence[int] | None = None,
     one_way_cost_bp: float | None = None,
 ) -> list[dict[str, Any]]:
-    """Reference table: effective daily cost ≈ one_way / N for hold N days.
-
-    Parameters
-    ----------
-    one_way_cost:
-        Fractional one-way cost (default 0.001 = 10bp).
-    hold_days:
-        Positive integers N (default 1,2,3,5,10,20).
-    one_way_cost_bp:
-        If set, overrides ``one_way_cost`` via ``bp / 10_000``.
-
-    Returns
-    -------
-    list of row dicts (no READY / Mass fields — pure table). Use
-    :func:`cost_amortization_report` for a freeze-wrapped document.
-    """
+    """Reference table: effective daily cost ≈ one_way / N for hold N days."""
     if one_way_cost_bp is not None:
         c = float(one_way_cost_bp) / 10_000.0
         bp = float(one_way_cost_bp)
@@ -680,10 +544,7 @@ def holding_metrics_report(
     include_amortization: bool = True,
     meta: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Full research report: run-length stats + optional amortization table.
-
-    Always returns closed freeze flags (Mass NO-GO / READY false / no edge).
-    """
+    """Full research report: run-length stats + optional amortization table."""
     stats = panel_run_length_stats(
         records,
         day_key=day_key,
@@ -699,7 +560,6 @@ def holding_metrics_report(
             one_way_cost=one_way_cost,
             hold_days=hold_days,
         )
-        # Cross-walk: at mean hold, what effective daily cost would be.
         mean_hold = (stats.get("run_length") or {}).get("mean")
         c = float(one_way_cost)
         if mean_hold and mean_hold > 0:
@@ -722,21 +582,12 @@ def holding_metrics_report(
 
 
 __all__ = [
-    "CONNECTED_TO_MASS",
-    "CONNECTED_TO_READY",
     "DEFAULT_HOLD_DAYS",
     "DEFAULT_HISTOGRAM_BUCKETS",
     "DEFAULT_ONE_WAY_COST",
     "DEFAULT_ONE_WAY_COST_BP",
-    "DEFAULT_ROUND_TRIP_COST",
-    "EDGE_CLAIMED",
     "HOLDING_METRICS_LABEL",
     "HOLDING_METRICS_VERSION",
-    "MASS_RESEARCH",
-    "OPERATIONAL_GO",
-    "PHASE7",
-    "READY_DECLARED",
-    "SIGNIFICANCE_CLAIMED",
     "cost_amortization_report",
     "cost_amortization_table",
     "extract_sign_panel_from_batch_summary",

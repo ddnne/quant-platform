@@ -1,11 +1,6 @@
-"""Research readiness attestation bound to immutable READY verifier only.
+"""Research readiness attestation bound to the immutable READY verifier.
 
-Phase 6.2.3: does NOT re-implement Coverage/B0/raw/sync. Sole path:
-
-  immutable READY artifact → describe_snapshot / verify_ready_snapshot
-  → VerifiedResearchReadiness (signed, expiring)
-
-Operator override cannot substitute for readiness (PIT/Coverage/raw/READY).
+Operator override cannot substitute for readiness.
 """
 
 from __future__ import annotations
@@ -30,10 +25,6 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _now_iso() -> str:
-    return _now().isoformat()
-
-
 def _digest(payload: Mapping[str, Any] | list[Any] | str) -> str:
     if isinstance(payload, str):
         raw = payload.encode("utf-8")
@@ -46,12 +37,7 @@ def _digest(payload: Mapping[str, Any] | list[Any] | str) -> str:
 
 @dataclass(frozen=True)
 class VerifiedResearchReadiness:
-    """Attestation minted only after READY verifier PASS.
-
-    Public construction with arbitrary fields is possible in Python, but
-    :meth:`is_valid` re-checks signature binding + expiry + snapshot fields.
-    Schedulers must call ``is_valid`` / ``require_valid`` immediately before use.
-    """
+    """Attestation minted only after READY verifier PASS."""
 
     attestation_id: str
     snapshot_id: str
@@ -129,10 +115,7 @@ class VerifiedResearchReadiness:
 
 
 def _attestation_secret() -> bytes:
-    """HMAC secret for attestation MAC (separate from receipt Ed25519).
-
-    Uses QUANT_READINESS_HMAC_SECRET or a file under ~/.config. Not agent-accessible.
-    """
+    """HMAC secret for attestation MAC (QUANT_READINESS_HMAC_SECRET or ~/.config)."""
     import os
 
     env = os.environ.get("QUANT_READINESS_HMAC_SECRET", "").strip()
@@ -141,7 +124,6 @@ def _attestation_secret() -> bytes:
     path = Path.home() / ".config" / "quant-platform" / "readiness_hmac_secret"
     if path.is_file():
         return path.read_bytes().strip()
-    # Dev fallback: derive from receipt key if present (still local-only).
     key = Path.home() / ".config" / "quant-platform" / "receipt_signing_key.pem"
     if key.is_file():
         return hashlib.sha256(key.read_bytes() + b"|readiness-v2").digest()
@@ -164,11 +146,7 @@ def _hmac_eq(a: str, b: str) -> bool:
 
 @dataclass(frozen=True)
 class OperatorOverrideCapability:
-    """Non-safety policy override only — NEVER substitutes for readiness.
-
-    Allowed scopes: hold_period | selection_threshold | single_extra_experiment
-    Forbidden: mass_research readiness, PIT, Coverage, raw, B0, READY, sync.
-    """
+    """Non-safety policy override only — never substitutes for readiness."""
 
     override_id: str
     reason: str
@@ -273,7 +251,6 @@ class ResearchReadinessService:
         from paper_runtime.snapshot import (
             describe_snapshot,
             latest_ready_snapshot,
-            data_snapshot_id,
         )
 
         if not self._snapshot_dir.is_dir():
@@ -290,11 +267,9 @@ class ResearchReadinessService:
                 f"READY verifier failed: {exc}"
             ) from exc
 
-        # describe_snapshot / latest already verified manifest digests + immutability.
         manifest = dict(ready.manifest)
         artifact_path = ready.artifact_path
         db_digest = _file_sha256(artifact_path)
-        # Prefer embedded digests from manifest; never invent PASS from partial tables.
         coverage_proof = str(
             manifest.get("coverage_proof_digest")
             or manifest.get("coverage_digest")
@@ -335,10 +310,8 @@ class ResearchReadinessService:
             raise MassResearchDisabledError(
                 "READY manifest missing source/applied sync generation pins"
             )
-        # Require explicit pin correspondence in manifest (not equal-copy cheat).
         pin = manifest.get("export_apply_pin") or {}
         if not isinstance(pin, Mapping) or not pin:
-            # Accept if both gens present and manifest declares them bound.
             if source_gen != applied_gen and not manifest.get("export_apply_bound"):
                 raise MassResearchDisabledError(
                     "READY manifest lacks export/apply generation binding"
@@ -398,10 +371,7 @@ def require_mass_research_start(
     readiness: VerifiedResearchReadiness | None,
     expected_snapshot_id: str | None = None,
 ) -> tuple[ResearchBudgetCapability, VerifiedResearchReadiness]:
-    """Fail-closed mass start: budget + valid unexpired readiness only.
-
-    Operator override is intentionally not accepted as readiness substitute.
-    """
+    """Fail-closed mass start: budget + valid unexpired readiness only."""
     cap = require_budget_capability(budget)
     if readiness is None:
         raise MassResearchDisabledError(
@@ -413,7 +383,6 @@ def require_mass_research_start(
     return cap, readiness
 
 
-# Re-export for mass_research imports
 __all__ = [
     "MassResearchDisabledError",
     "OperatorOverrideCapability",

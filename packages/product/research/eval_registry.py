@@ -11,7 +11,10 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Mapping, Sequence
+
+from features.research_freezes import MASS_RESEARCH
 
 EVAL_REGISTRY_VERSION: str = "research-eval-registry/v1"
 R2_PREFIX: str = "research/eval"
@@ -116,7 +119,7 @@ class EvalJobManifest:
     factory_version: str | None = None
     promote_as_main: bool = False
     go: bool = False
-    mass: str = "NO-GO"
+    mass: str = MASS_RESEARCH
     research_candidate: bool = False
     notes: str = ""
 
@@ -142,7 +145,7 @@ class EvalJobManifest:
             "r2_cells_key": r2_cells_key(self.job_id),
             "promote_as_main": False,
             "go": False,
-            "mass": "NO-GO",
+            "mass": MASS_RESEARCH,
             "research_candidate": False,
             "notes": self.notes,
             "cells": [c.to_dict() for c in self.cells],
@@ -236,9 +239,7 @@ def dumps_manifest(manifest: EvalJobManifest) -> str:
 
 def write_manifest_local(manifest: EvalJobManifest, staging_dir: Path) -> Path:
     """Scratch copy only — not SoT. R2/D1 is the record."""
-    from pathlib import Path as P
-
-    staging = P(staging_dir)
+    staging = Path(staging_dir)
     job_dir = staging / "research_eval" / f"job={manifest.job_id}"
     job_dir.mkdir(parents=True, exist_ok=True)
     path = job_dir / "manifest.json"
@@ -268,7 +269,7 @@ def d1_upsert_sql(manifest: EvalJobManifest) -> str:
         f"'{job['job_id']}', '{job['created_at']}', '{job['protocol']}', "
         f"{sha_sql}, {fv_sql}, {job['n_logics']}, {job['n_windows']}, "
         f"{job['n_cells']}, {float(job['one_way_cost'])}, "
-        f"'{job['r2_prefix']}', 'recorded', 0, 0, 'NO-GO', 0, '{notes}'"
+        f"'{job['r2_prefix']}', 'recorded', 0, 0, '{MASS_RESEARCH}', 0, '{notes}'"
         ") ON CONFLICT(job_id) DO UPDATE SET "
         "n_cells=excluded.n_cells, status='recorded';",
     ]
@@ -582,17 +583,15 @@ def summarize_daily_path_cells(
         "go": False,
         "logics": logics,
         "notes": (
-            "candidate = not path_broken, not path_collapsed, not always_on, "
-            "not near_empty, not data_requirement_unmet, not near_duplicate. Simple gated theses stay for "
-            "combination/funds even with modest t/Sharpe. strong is an "
-            "interest flag with no t/Sharpe floor and is never a promote/GO."
+            "candidate = not path_broken/collapsed/always_on/near_empty/"
+            "data_requirement_unmet/near_duplicate. Simple gated theses stay "
+            "for combinations. strong is an interest flag, never a promote."
         ),
     }
 
 
 def main(argv: list[str] | None = None) -> int:
     import argparse
-    from pathlib import Path
 
     p = argparse.ArgumentParser(description="Eval registry index (D1/R2). No Git scores.")
     p.add_argument("--list", action="store_true", help="List recent D1 research_eval_jobs")

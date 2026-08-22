@@ -1,28 +1,8 @@
-"""Statistical research metrics for class-hyp re-judge (W81 / w0816p).
+"""Statistical research metrics (t, Sharpe, win rate, payoff, DD, Calmar, IR).
 
-Pure helpers: t-stat, Sharpe, win rate, payoff, max drawdown, optional
-Calmar / IR. Used to **raise the research_candidate bar** beyond mean bp.
-
-Definitions (disclosed)
------------------------
-* **Period-net t-stat**: one-sample t of period mean nets vs 0
-  ``t = mean / (s / sqrt(n))`` with sample std (n−1).
-* **Period Sharpe**: ``mean(period_net) / std(period_net)``.
-  When each period is ~one independent year-window, this is already
-  approximately an annualized Sharpe of *period-average* residuals.
-  No extra ``sqrt(N)`` factor (that would be t-stat).
-* **Trade Sharpe (optional)**: on hold-period signed returns after costs,
-  ``(mean / std) * sqrt(TRADING_DAYS_PER_YEAR / hold_days)``.
-* **Win rate**: share of observations with value > 0.
-* **Payoff**: mean(wins) / |mean(losses)| (None if no losses).
-* **Max DD**: peak-to-trough of cumulative sum of the series (fraction).
-* **Calmar**: mean / |max_dd| when max_dd < 0 (period-level research).
-* **IR**: vs zero benchmark → same as Sharpe on residual series.
-
-Hard constraints
-----------------
-* Research-only · no READY / Mass / Phase7 / orders
-* Does not un-reject S1–S5 · not simple_daily_sign
+Period t = mean / (s / sqrt(n)) with sample std. Period Sharpe uses
+periods_per_year=1. Trade Sharpe annualizes by TRADING_DAYS_PER_YEAR / hold.
+Research-only; does not un-reject S1–S5.
 """
 
 from __future__ import annotations
@@ -52,27 +32,17 @@ from features.research_freezes import (
 STATS_METRICS_VERSION: str = "research-stats-metrics/v1.2"
 STATS_METRICS_WAVE: str = "W100 / w0819c"
 
-# Optional soft floors (documented; fail only when set and violated).
-# t / Sharpe / win-rate / positive-year floors live on class_signals
-# (aliased by offline/multiyear). Do not retune here.
-DEFAULT_MIN_PAYOFF: float | None = None  # e.g. 1.0 if enforced
-DEFAULT_MAX_ABS_DRAWDOWN: float | None = None  # e.g. 0.03 if enforced
+# Optional floors (None = not enforced). t/Sharpe/win-rate live on class_signals.
+DEFAULT_MIN_PAYOFF: float | None = None
+DEFAULT_MAX_ABS_DRAWDOWN: float | None = None
 
-# W95 / w0818e — low-variance / inflated-t artifact gate.
-# With tiny n, near-identical period nets make t = m/(s/sqrt(n)) explode
-# without economic meaning (W94 fund_value_mom_agree_slow w2017_2019:
-# m≈82.8bp, s≈0.76bp → t≈153). Null t and disclose reason.
+# Small-n near-identical nets inflate t; null t and disclose.
 LOW_VARIANCE_SMALL_N_MAX: int = 3
-LOW_VARIANCE_MIN_REL_STD: float = 0.05  # require CV = s/|m| ≥ 5%
+LOW_VARIANCE_MIN_REL_STD: float = 0.05  # CV = s/|m| ≥ 5%
 LOW_VARIANCE_MAX_ABS_T: float = 12.0
 LOW_VARIANCE_REASON: str = "low_variance_artifact"
 
-# ---------------------------------------------------------------------------
-# W100 / w0819c — daily_path_DD is mandatory (period-net DD cannot pass alone)
-# ---------------------------------------------------------------------------
-# W98 reported max_dd_proxy=0 from period-net cumsum when all period nets were
-# positive. That is an aggregation artifact, not “no risk”. True path risk is
-# daily mark-to-market equity peak-to-trough (W99 sticky table is the example).
+# daily_path_DD is mandatory; period-net DD cannot pass alone.
 DAILY_PATH_DD_VERSION: str = "research-daily-path-dd/v1"
 DAILY_PATH_DD_WAVE: str = "W100 / w0819c"
 DAILY_PATH_DD_PROOF: str = "docs/proof/w0819c_w100_daily_path_dd_gate_20260819.md"
@@ -93,7 +63,7 @@ PERIOD_NET_ONLY_METHODS: frozenset[str] = frozenset(
         "period_net",
     }
 )
-# Sticky W99 daily path (local_real_mirrors; promote_as_main=false · go=false).
+# Sticky W99 daily path (promote_as_main=false · go=false).
 W99_STICKY_DAILY_PATH_DD_REFERENCE: tuple[dict[str, Any], ...] = (
     {
         "window": "w2017_2019",
@@ -168,19 +138,6 @@ def sample_mean(values: Sequence[float | None]) -> float | None:
     return float(mean(vals))
 
 
-def sample_std(values: Sequence[float | None], *, ddof: int = 1) -> float | None:
-    """Sample (ddof=1) or population (ddof=0) standard deviation."""
-    vals = _finite_floats(values)
-    n = len(vals)
-    if n == 0:
-        return None
-    if n == 1:
-        return 0.0
-    if int(ddof) <= 0:
-        return float(pstdev(vals))
-    return float(stdev(vals))
-
-
 def is_low_variance_t_artifact(
     *,
     n: int,
@@ -202,9 +159,6 @@ def is_low_variance_t_artifact(
     if abs_m <= 0.0:
         return False
     cv = float(std_net) / abs_m
-    # Strict: near-identical nets (CV below floor) AND implausibly large |t|.
-    # Do not loosen CV to 2× floor — that false-positives mild pairs
-    # (e.g. macro_repo_rate_level 2021≈2025 with CV≈9%).
     return bool(cv < float(min_rel_std) and abs(float(t_stat)) > float(max_abs_t))
 
 
@@ -223,12 +177,7 @@ def has_pairwise_low_variance_artifact(
 
 
 def t_stat_vs_zero(values: Sequence[float | None]) -> dict[str, Any]:
-    """One-sample t-stat of values vs 0 (sample std).
-
-    ``t = mean / (s / sqrt(n))``. Empty / zero-std → t None.
-    W95: small-n low-variance (near-identical period nets) → t None with
-    ``reason=low_variance_artifact`` (raw_t retained for audit).
-    """
+    """One-sample t vs 0: ``t = mean / (s / sqrt(n))``. Empty / zero-std → None."""
     vals = _finite_floats(values)
     n = len(vals)
     if n == 0:
@@ -254,8 +203,6 @@ def t_stat_vs_zero(values: Sequence[float | None]) -> dict[str, Any]:
         }
     s = float(stdev(vals))
     if s == 0.0:
-        # Exact zero std on n>=2 is the extreme low-variance artifact.
-        # Do not emit ±inf into screens / rankings.
         return {
             "n": n,
             "mean": m,
@@ -309,13 +256,7 @@ def sharpe_ratio(
     risk_free: float = 0.0,
     ddof: int = 1,
 ) -> dict[str, Any]:
-    """Sharpe = (mean − rf) / std * sqrt(periods_per_year).
-
-    * Period nets with one year-window per observation → ``periods_per_year=1``
-      (no extra annualization).
-    * Hold-period trade returns of length H sessions →
-      ``periods_per_year = TRADING_DAYS_PER_YEAR / H``.
-    """
+    """Sharpe = (mean − rf) / std * sqrt(periods_per_year). Period nets use 1."""
     vals = _finite_floats(values)
     n = len(vals)
     ppy = float(periods_per_year)
@@ -421,10 +362,7 @@ def payoff_ratio(values: Sequence[float | None]) -> dict[str, Any]:
 
 
 def max_drawdown(values: Sequence[float | None]) -> dict[str, Any]:
-    """Max peak-to-trough of cumulative sum of the series.
-
-    Returns ``max_dd`` as a non-positive number (0 if never draws down).
-    """
+    """Peak-to-trough of the series cumulative sum (non-positive)."""
     vals = _finite_floats(values)
     if not vals:
         return {
@@ -476,12 +414,7 @@ def equity_path_drawdown(
     equities: Sequence[float],
     dates: Sequence[str] | None = None,
 ) -> dict[str, Any]:
-    """Max DD / duration / recovery on a *level* equity curve (post-cost).
-
-    Distinct from :func:`max_drawdown`, which peaks-to-troughs the
-    **cumulative sum of period nets** (the W98 aggregation grain that can
-    report 0 whenever every period net is positive).
-    """
+    """Max DD / duration / recovery on a level equity curve (post-cost)."""
     if not equities:
         return {
             "n": 0,
@@ -573,7 +506,7 @@ def _as_int(v: Any) -> int | None:
 
 
 def w99_sticky_daily_path_dd_reference() -> dict[str, Any]:
-    """W99 sticky daily DD table — reference example, not a pass/promote."""
+    """Sticky daily DD table — reference example, not a pass/promote."""
     return {
         "logic_id": "xs_rank_ls_sticky",
         "stance": "STABLE_RESEARCH_ONLY",
@@ -604,24 +537,7 @@ def evaluate_daily_path_dd_gate(
     dates: Sequence[str] | None = None,
     method: str | None = None,
 ) -> dict[str, Any]:
-    """Mandatory daily-path DD scorecard + gate (W100 / w0819c).
-
-    Required scorecard fields
-    -------------------------
-    * ``daily_path_DD`` — max peak-to-trough on the daily (after-cost) path
-    * ``dd_duration`` — days peak → trough
-    * ``recovery`` — whether recovered + days from trough (None if not recovered)
-    * ``total_ret_net`` — after-cost total return on the same path
-
-    Fail / warn
-    -----------
-    * **fail (incomplete):** daily unmeasured — missing required fields
-    * **fail (incomplete):** ``period_net_DD=0`` AND daily unmeasured
-    * **fail (forbidden):** treating period-net DD as the pass number
-    * **warn:** ``period_net_DD=0`` even when daily is measured (artifact)
-    * Magnitude is **not** scored here — this is a measurement gate, not a
-      DD-size floor. Pass ≠ READY / Mass / GO.
-    """
+    """Mandatory daily-path DD scorecard. Period-net DD cannot pass alone."""
     pack: dict[str, Any] = {}
     if isinstance(daily_path_dd, Mapping):
         pack.update(dict(daily_path_dd))
@@ -631,7 +547,6 @@ def evaluate_daily_path_dd_gate(
 
     nested = pack.get("drawdown")
     if isinstance(nested, Mapping):
-        # Nested W99-style pack: fill aliases without clobbering top-level.
         for k, v in nested.items():
             pack.setdefault(k, v)
 
@@ -673,7 +588,6 @@ def evaluate_daily_path_dd_gate(
         rec_src = _pick_first(pack, "recovery_days")
         if rec_src is None and isinstance(pack.get("recovery"), Mapping):
             rec_src = pack["recovery"].get("recovery_days")
-        # Bare "recovery" may be an int (days) or the W99 "—" missing marker.
         if rec_src is None and not isinstance(pack.get("recovery"), Mapping):
             rec_src = pack.get("recovery")
         rec_days = _as_int(rec_src)
@@ -715,13 +629,11 @@ def evaluate_daily_path_dd_gate(
     if rec_flag is None:
         missing.append("recovery")
     elif rec_flag is True and rec_days is None:
-        # recovery_days required only when there was a drawdown to recover from
         if dd_val is not None and float(dd_val) < -1e-15:
             missing.append("recovery_days")
     if tot_net is None:
         missing.append("total_ret_net")
 
-    # A period-net method stuffed into daily_path_DD is not a daily measurement.
     daily_measured = not missing and not method_is_period_net
     period_net_present = pdd is not None or method_is_period_net
     period_net_only = bool(period_net_present and not daily_measured)
@@ -792,11 +704,8 @@ def evaluate_daily_path_dd_gate(
         "required_fields": list(DAILY_PATH_DD_REQUIRED_FIELDS),
         "reference_example": w99_sticky_daily_path_dd_reference(),
         "note": (
-            "daily_path_DD is mandatory on the standard eval checklist. "
-            "period_net_DD alone cannot pass. period_net_DD=0 + daily "
-            "unmeasured = incomplete. W99 sticky table is the reference "
-            "example (STABLE_RESEARCH_ONLY; promote_as_main/GO=false). "
-            "Pass ≠ READY / Mass / GO."
+            "daily_path_DD is mandatory. period_net_DD alone cannot pass. "
+            "period_net_DD=0 + daily unmeasured = incomplete."
         ),
     }
     out.update(_freeze())
@@ -843,7 +752,7 @@ def period_stats_report(
     period_ids: Sequence[str] | None = None,
     hold_days: int | None = None,
 ) -> dict[str, Any]:
-    """Full period-net stats pack for W81 re-judge."""
+    """Period-net stats pack (t / Sharpe / win rate / payoff / DD)."""
     vals = _finite_floats(period_nets)
     tpack = t_stat_vs_zero(vals)
     sh = sharpe_ratio(vals, periods_per_year=1.0)
@@ -896,16 +805,12 @@ def trade_stats_report(
     amortize_cost: bool = True,
     trading_days_per_year: int = DEFAULT_TRADING_DAYS_PER_YEAR,
 ) -> dict[str, Any]:
-    """Trade-level stats on signed hold returns (optional net of amortized cost).
-
-    Annualization: ``periods_per_year = trading_days_per_year / hold_days``.
-    """
+    """Trade-level stats on signed hold returns. ppy = trading_days / hold."""
     h = max(int(hold_days), 1)
     am = (float(one_way_cost) / float(h)) if amortize_cost else float(one_way_cost)
     nets: list[float] = []
     for v in _finite_floats(signed_returns):
         nets.append(v - am if amortize_cost or one_way_cost else v)
-    # if not amortize and cost already applied by caller, signed_returns are nets
     if not amortize_cost and float(one_way_cost) == 0.0:
         nets = _finite_floats(signed_returns)
 
@@ -955,10 +860,7 @@ def stats_bar_check(
     min_payoff: float | None = DEFAULT_MIN_PAYOFF,
     max_abs_dd: float | None = DEFAULT_MAX_ABS_DRAWDOWN,
 ) -> dict[str, Any]:
-    """Evaluate W81 statistical bar against a period_stats_report (or compatible).
-
-    All enforced floors must pass for ``stats_ok=True``.
-    """
+    """Evaluate statistical bar against a period_stats_report. All floors must pass."""
     t_signed = stats.get("t_stat")
     if t_signed is not None:
         try:
@@ -991,7 +893,6 @@ def stats_bar_check(
     }
     fails: list[str] = []
 
-    # Require *positive* edge: signed t >= floor (not just |t|).
     t_ok = bool(t_signed is not None and float(t_signed) >= float(min_abs_t))
     if not t_ok:
         fails.append("t_stat_below_min")
@@ -1017,7 +918,6 @@ def stats_bar_check(
         if not dd_ok:
             fails.append("abs_max_dd_above_max")
 
-    # Noisy heuristic (for demote messaging; not a separate hard gate)
     noisy = bool(
         (t_signed is not None and float(t_signed) < 1.0)
         or (sharpe is not None and float(sharpe) < 0.30)
@@ -1052,10 +952,8 @@ def stats_bar_check(
         },
         "fails": fails,
         "note": (
-            "W81 statistical bar: require signed t≥min (positive edge), "
-            "Sharpe≥min, period win-rate and positive-year count. "
-            "Noisy low t/Sharpe / unstable signs → demote research_candidate. "
-            "Not a significance claim / not READY."
+            "Require signed t≥min, Sharpe≥min, period win-rate and "
+            "positive-year count. Not a significance claim."
         ),
         **_freeze(),
     }
@@ -1085,10 +983,9 @@ def stats_metrics_document() -> dict[str, Any]:
             "proof": DAILY_PATH_DD_PROOF,
         },
         "note": (
-            "W81 raises research_candidate bar beyond mean bp. "
-            "W100 requires daily_path_DD / dd_duration / recovery / "
-            "total_ret_net; period_net_DD alone cannot pass. "
-            "Research-only; READY/Mass/Phase7 never auto-connect."
+            "Raises research_candidate bar beyond mean bp. Requires "
+            "daily_path_DD / dd_duration / recovery / total_ret_net; "
+            "period_net_DD alone cannot pass."
         ),
     }
     doc.update(_freeze())
@@ -1120,7 +1017,6 @@ __all__ = [
     "payoff_ratio",
     "period_stats_report",
     "sample_mean",
-    "sample_std",
     "sharpe_ratio",
     "stats_bar_check",
     "stats_metrics_document",

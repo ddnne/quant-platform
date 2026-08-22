@@ -1,37 +1,7 @@
-"""Research robustness gate (W62 / w0815bc) — 研究用・未宣言.
+"""Research robustness gate — 研究用・未宣言.
 
-Purpose
--------
-Prevent treating a single short tip-window win as an actionable signal.
-The gate is a **research checklist helper**: it returns pass/fail + reasons.
-It does **not** mint READY, arm Mass, or authorize orders.
-
-Hard constraints
-----------------
-* Mass = NO-GO · Phase7 = OFF · READY not declared
-* Gate pass ≠ operational GO (enforced by constants + tests)
-* No look-ahead, no densify, no edge/significance claim
-
-Gate criteria (research-only, non-forcing)
-------------------------------------------
-A signal hypothesis **passes the research robustness gate** only if **all** of:
-
-1. **multi_period**: at least ``min_periods`` (default 2) non-skipped periods
-   with a comparable metric row.
-2. **sign_majority**: among periods with enough active rows
-   (``min_active_per_period``), a strict majority share the same
-   ``gross_signed_mean`` sign (+ or −), and that common sign is not null.
-3. **not_catastrophic**: no majority-period has ``|gross_signed_mean|`` above
-   ``catastrophic_abs`` (default 0.05 = 5% / day — regime explosion flag).
-4. **net_sign_majority** (W64 · cost-aware; default on): majority share the
-   same sign of ``net_one_way = gross − one_way_cost`` (default 10bp).
-   Gross-only soft PASS is no longer enough when cost gate is on.
-5. **wf_not_full_flip** (optional, when walk-forward provided): train and test
-   ``gross_signed_mean`` must not be opposite non-zero signs (full flip).
-
-Failing any criterion → ``passed=False`` with explicit reasons.
-Even on pass: ``ready_declared=False``, ``operational_go=False``,
-``mass_research="NO-GO"``.
+Multi-period + sign majority + not catastrophic + cost-after net sign
+majority. Optional walk-forward full-flip check. Pass ≠ operational GO.
 """
 
 from __future__ import annotations
@@ -57,7 +27,6 @@ DEFAULT_MIN_ACTIVE_PER_PERIOD: int = 20
 DEFAULT_CATASTROPHIC_ABS: float = 0.05
 DEFAULT_ONE_WAY_COST_BP: float = 10.0
 DEFAULT_ONE_WAY_COST: float = DEFAULT_ONE_WAY_COST_BP / 10_000.0  # 0.001
-DEFAULT_ROUND_TRIP_COST: float = DEFAULT_ONE_WAY_COST * 2.0  # 0.002
 
 
 def research_net_one_way(
@@ -65,11 +34,7 @@ def research_net_one_way(
     *,
     one_way_cost: float = DEFAULT_ONE_WAY_COST,
 ) -> float | None:
-    """Research-only: net = gross_signed_mean − one_way_cost (per active).
-
-    Matches the research cost field convention in single_shot (仮定に依存).
-    Round-trip would subtract ``2 * one_way_cost``. Not operational GO.
-    """
+    """Research-only: net = gross_signed_mean − one_way_cost (per active)."""
     g = _as_float(gross_signed_mean)
     if g is None:
         return None
@@ -90,7 +55,6 @@ def annotate_period_rows_with_cost(
             if row.get("gross_signed_mean_active") is not None
             else row.get("gross_signed_mean")
         )
-        # Prefer precomputed net if present (from batch_summary).
         net_ow = _as_float(row.get("net_one_way_mean_active"))
         if net_ow is None:
             net_ow = research_net_one_way(gross, one_way_cost=one_way_cost)
@@ -152,11 +116,7 @@ def research_robustness_gate_document() -> dict[str, Any]:
             "require_net_sign_majority": True,
         },
         **_freeze(),
-        "note": (
-            "Research checklist only (v2 adds cost-after net sign majority). "
-            "Pass does not mint READY, arm Mass, authorize orders, or claim "
-            "edge/significance. Fail is a valid research outcome."
-        ),
+        "note": "Research checklist only. Pass is not operational GO.",
     }
 
 
@@ -172,22 +132,7 @@ def evaluate_research_robustness_gate(
     one_way_cost: float | None = DEFAULT_ONE_WAY_COST,
     require_net_sign_majority: bool = True,
 ) -> dict[str, Any]:
-    """Evaluate multi-period (+ optional WF + cost) metrics against the gate.
-
-    Each ``period_rows`` item should include at least:
-
-    * ``period_id``
-    * ``status`` optional (``ok`` / ``skipped`` / ``error``); skipped/error ignored
-    * ``gross_signed_mean_active`` or ``gross_signed_mean``
-    * ``n_active_positions`` optional (defaults to ``non_null``)
-    * optional ``net_one_way_mean_active`` (else derived as gross − one_way_cost)
-
-    ``require_net_sign_majority`` (default True, W64): cost-after sign majority
-    is required for overall pass. Set False for gross-only legacy checks.
-
-    Returns a dict with ``passed: bool``, ``reasons: list[str]``, criterion
-    detail, and freeze flags always closed for READY/Mass/GO.
-    """
+    """Evaluate multi-period (+ optional WF + cost) metrics against the gate."""
     reasons: list[str] = []
     details: dict[str, Any] = {}
     cost = float(one_way_cost) if one_way_cost is not None else None
@@ -235,7 +180,6 @@ def evaluate_research_robustness_gate(
             }
         )
 
-    # Criterion 1: multi_period
     n_elig = len(eligible)
     multi_ok = n_elig >= int(min_periods)
     details["multi_period"] = {
@@ -250,7 +194,6 @@ def evaluate_research_robustness_gate(
             f"(need >= {min_periods})"
         )
 
-    # Criterion 2: sign_majority
     sign_ok = False
     majority_sign: int | None = None
     if n_elig > 0:
@@ -259,7 +202,6 @@ def evaluate_research_robustness_gate(
             s = e.get("sign")
             if s in counts:
                 counts[s] += 1  # type: ignore[index]
-        # strict majority among non-zero if any non-zero, else zeros
         pos, neg, zero = counts[1], counts[-1], counts[0]
         if pos > n_elig / 2:
             majority_sign = 1
@@ -285,7 +227,6 @@ def evaluate_research_robustness_gate(
         ],
     }
 
-    # Criterion 3: not_catastrophic
     cat_hits = [
         e
         for e in eligible
@@ -306,7 +247,6 @@ def evaluate_research_robustness_gate(
             f"|gross|>{catastrophic_abs}"
         )
 
-    # Criterion 4 (W64): cost-after net sign majority
     net_ok = True
     net_majority: int | None = None
     if require_net_sign_majority:
@@ -363,7 +303,6 @@ def evaluate_research_robustness_gate(
             "note": "require_net_sign_majority=False (gross-only mode)",
         }
 
-    # Criterion 5: optional WF full-flip check
     wf_ok = True
     wf_detail: dict[str, Any] = {"applied": False, "passed": True}
     if walk_forward is not None:
@@ -400,7 +339,6 @@ def evaluate_research_robustness_gate(
                 "wf_not_full_flip: train/test gross signs fully reverse"
             )
         elif flipped and not require_wf_check:
-            # advisory reason only — does not force fail unless require_wf_check
             wf_detail["advisory"] = (
                 "train/test full sign flip observed (reference; not hard fail)"
             )
@@ -410,7 +348,6 @@ def evaluate_research_robustness_gate(
         wf_detail = {"applied": False, "passed": False, "missing": True}
     details["wf_not_full_flip"] = wf_detail
 
-    # Gross-only soft pass (for comparison tables; not overall pass when cost on)
     gross_only_ok = multi_ok and sign_ok and cat_ok
     hard_ok = gross_only_ok
     if require_net_sign_majority:
@@ -425,7 +362,6 @@ def evaluate_research_robustness_gate(
         reasons.append(
             "gross_sign_majority alone is insufficient when cost gate is on"
         )
-    # Freeze: never connect to READY/Mass even on pass
     return {
         "version": GATE_VERSION,
         "label": GATE_LABEL,
@@ -449,10 +385,7 @@ def evaluate_research_robustness_gate(
         "n_period_rows_in": len(list(period_rows)),
         "n_eligible_periods": n_elig,
         **_freeze(),
-        "note": (
-            "Research robustness gate result only (v2 cost-aware). "
-            "passed=True does NOT mean READY, Mass GO, or operational GO."
-        ),
+        "note": "Research robustness gate only. passed=True is not operational GO.",
     }
 
 
@@ -508,22 +441,13 @@ def walk_forward_gross_from_compare(
 
 
 __all__ = [
-    "CONNECTED_TO_MASS",
-    "CONNECTED_TO_READY",
     "DEFAULT_CATASTROPHIC_ABS",
     "DEFAULT_MIN_ACTIVE_PER_PERIOD",
     "DEFAULT_MIN_PERIODS",
     "DEFAULT_ONE_WAY_COST",
     "DEFAULT_ONE_WAY_COST_BP",
-    "DEFAULT_ROUND_TRIP_COST",
-    "EDGE_CLAIMED",
     "GATE_LABEL",
     "GATE_VERSION",
-    "MASS_RESEARCH",
-    "OPERATIONAL_GO",
-    "PHASE7",
-    "READY_DECLARED",
-    "SIGNIFICANCE_CLAIMED",
     "annotate_period_rows_with_cost",
     "evaluate_research_robustness_gate",
     "period_rows_from_cross_table",

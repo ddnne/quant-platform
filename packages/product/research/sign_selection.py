@@ -1,40 +1,7 @@
-"""Sign-side selection: evaluate original and inverted after costs (W86 / w0816u).
+"""Sign-side selection: evaluate original and inverted after costs.
 
-Purpose
--------
-For research (and paper) period nets, evaluate **both** signal sides after costs
-and choose the side with positive mean net supported by non-zero evidence.
-This is a **research helper only** — never arms Mass / READY / ops GO / live.
-
-Policy (W86 Task A)
--------------------
-1. Evaluate BOTH original (+1) and inverted (−1) **after costs**.
-2. Prefer the side with **positive mean net** supported by **non-zero**
-   evidence (``t`` is a guideline, not a hard one-strike gate).
-3. If **both** fail non-zero / near-zero after cost → ``reject`` /
-   ``explore_demote``.
-4. Record ``chosen_sign`` for reproducibility.
-5. Fund paths with multi-window paper mean negative **must** evaluate flip
-   first (caller marks ``paper_mean_negative=True`` → bias toward flip
-   evaluation; still subject to positive-mean + non-zero evidence).
-6. Not simple_daily_sign · no S1–S5 un-reject · no look-ahead.
-
-Cost model for inverted side
-----------------------------
-Given per-period ``gross`` and amortized one-way cost ``c``:
-
-* original net = ``gross − c``
-* inverted net = ``−gross − c``
-
-Costs are paid on both sides (symmetric one-way assumption). When only nets
-and grosses are known, ``c = gross − net``. When only nets are known and
-``amortized_cost`` is supplied as a constant, inverted nets are
-``−(net + c) − c = −net − 2c``.
-
-Hard freezes
-------------
-* Mass = NO-GO · Phase7 = OFF · READY 未宣言 · operational GO closed
-* continuous paper UNARMED · live orders OFF
+Prefer the positive-mean side with non-zero evidence (t is a guideline).
+original net = gross − c; inverted net = −gross − c. Research helper only.
 """
 
 from __future__ import annotations
@@ -68,11 +35,8 @@ SIGN_SELECTION_WAVE: str = "W86 / w0816u"
 SIGN_ORIGINAL: int = 1
 SIGN_INVERTED: int = -1
 
-# Near-zero after cost: residual << research economic floor (default 20bp).
 DEFAULT_NEAR_ZERO_ABS_NET: float = 0.0005  # 5bp absolute mean
-# Soft t guideline (not a hard one-strike reject when mean clearly positive).
 DEFAULT_T_GUIDELINE: float = 1.0
-# Absolute mean floor used as "non-zero evidence" when t is weak/missing.
 DEFAULT_NONZERO_ABS_MEAN: float = DEFAULT_NEAR_ZERO_ABS_NET
 
 
@@ -109,11 +73,7 @@ def invert_period_net(
     net: float | None = None,
     amortized_cost: float | None = None,
 ) -> float | None:
-    """Compute inverted-side net after the same amortized cost.
-
-    Prefer ``gross`` + ``amortized_cost``; else derive cost from gross−net;
-    else when only net + cost known: ``−net − 2*cost``.
-    """
+    """Inverted-side net after the same amortized cost (−gross − c)."""
     g = _finite(gross)
     n = _finite(net)
     c = _finite(amortized_cost)
@@ -172,11 +132,7 @@ def _nonzero_evidence(
     near_zero_abs: float,
     t_guideline: float,
 ) -> dict[str, Any]:
-    """Soft non-zero evidence: |mean| above floor and/or |t| ≥ guideline.
-
-    ``t`` is a **guideline**, not a hard one-strike reject when mean is
-    clearly above the near-zero floor.
-    """
+    """Soft non-zero evidence: |mean| above floor and/or |t| ≥ guideline."""
     mean_net = _finite(side.get("mean_net"))
     t = _finite(side.get("t_stat"))
     abs_mean = None if mean_net is None else abs(mean_net)
@@ -184,8 +140,6 @@ def _nonzero_evidence(
 
     mean_ok = bool(abs_mean is not None and abs_mean >= float(near_zero_abs))
     t_ok = bool(abs_t is not None and abs_t >= float(t_guideline))
-    # Evidence: clear |mean| alone can pass even if t soft-fails (guideline).
-    # Also: t ok with mean not exactly null.
     has_evidence = bool(
         mean_ok
         or (t_ok and mean_net is not None and abs_mean is not None and abs_mean > 0.0)
@@ -217,14 +171,7 @@ def evaluate_sign_both_sides(
     near_zero_abs: float = DEFAULT_NEAR_ZERO_ABS_NET,
     t_guideline: float = DEFAULT_T_GUIDELINE,
 ) -> dict[str, Any]:
-    """Evaluate original and inverted sides after costs.
-
-    Provide either:
-    * ``period_grosses`` (+ optional costs / nets), or
-    * ``period_nets`` + ``amortized_costs`` (scalar or per-period).
-
-    Returns packs for both sides plus evidence flags (no choice yet).
-    """
+    """Evaluate original and inverted sides after costs (no choice yet)."""
     grosses = list(period_grosses) if period_grosses is not None else None
     nets_in = list(period_nets) if period_nets is not None else None
 
@@ -324,19 +271,7 @@ def choose_sign(
     paper_mean_negative: bool = False,
     min_abs_t_hard: float | None = None,
 ) -> dict[str, Any]:
-    """Choose original or inverted side per W86 policy.
-
-    Rules (in order):
-    1. Side must have **positive** mean net to be preferred.
-    2. Side must have non-zero evidence (|mean|≥near_zero or soft t).
-    3. Optional hard t floor (default **None** — t is guideline only).
-    4. Among eligible positive sides, pick higher mean_net (tie → higher t).
-    5. If only inverted is eligible → chosen_sign = −1 (flip).
-    6. If only original is eligible → chosen_sign = +1.
-    7. If neither eligible → reject / explore_demote.
-    8. When ``paper_mean_negative`` and original mean ≤ 0, prefer flip **if**
-       inverted is eligible (fund path "evaluate flip first").
-    """
+    """Choose original or inverted: positive mean + non-zero evidence."""
     original = dict(both.get("original") or {})
     inverted = dict(both.get("inverted") or {})
     ev_o = dict(
@@ -361,8 +296,6 @@ def choose_sign(
         hard_t_ok = True
         if min_abs_t_hard is not None:
             hard_t_ok = bool(t is not None and abs(t) >= float(min_abs_t_hard))
-        # Prefer positive + evidence. Economic floor is soft for selection
-        # (strict RC still applied by production bar on chosen side).
         ok = bool(positive and evidence and hard_t_ok)
         return {
             "eligible": ok,
@@ -383,7 +316,6 @@ def choose_sign(
     chosen: int | None = None
     decision: str
 
-    # Paper-negative path: evaluate flip first (must still pass eligibility).
     if paper_mean_negative:
         reasons.append("paper_mean_negative → evaluate flip first")
         o_mean = _finite(original.get("mean_net"))
@@ -411,7 +343,6 @@ def choose_sign(
                     f"both eligible; original mean_net {mo:.6g} > inverted {mi:.6g}"
                 )
             else:
-                # tie on mean → higher t
                 to = abs(float(elig_o["t_stat"] or 0.0))
                 ti = abs(float(elig_i["t_stat"] or 0.0))
                 if ti > to:
@@ -428,7 +359,6 @@ def choose_sign(
             reasons.append("only inverted eligible (positive mean + evidence)")
         else:
             chosen = None
-            # Distinguish near-zero both vs both negative
             both_near = bool(ev_o.get("near_zero") and ev_i.get("near_zero"))
             both_neg = bool(
                 (_finite(original.get("mean_net")) or 0.0) <= 0.0
@@ -481,8 +411,6 @@ def choose_sign(
     elig = elig_o if chosen == SIGN_ORIGINAL else elig_i
     decision = "keep_original" if chosen == SIGN_ORIGINAL else "flip_to_inverted"
     if not elig.get("economic_floor_ok"):
-        # Still chosen by positive mean + evidence but below econ floor
-        # → explore stay / weak keep note
         reasons.append(
             "chosen mean below economic floor "
             f"({float(min_mean_net)*1e4:.1f}bp) — weak; not hard RC alone"
@@ -554,7 +482,6 @@ def evaluate_and_choose_sign(
         paper_mean_negative=paper_mean_negative,
         min_abs_t_hard=min_abs_t_hard,
     )
-    # Merge both-sides detail under one report
     out = dict(choice)
     out["both_sides"] = both
     return out
@@ -589,7 +516,6 @@ def sign_selection_from_period_rows(
     nets = [r.get(net_key) for r in ok]
     costs = [r.get(cost_key) for r in ok]
     pids = [str(r.get(period_id_key) or r.get("year") or f"p{i}") for i, r in enumerate(ok)]
-    # If all costs missing, leave None and let helper derive from gross−net.
     if all(c is None for c in costs):
         costs_arg: Sequence[float | None] | None = None
     else:
@@ -631,10 +557,7 @@ def sign_selection_document() -> dict[str, Any]:
             "sign_original": SIGN_ORIGINAL,
             "sign_inverted": SIGN_INVERTED,
         },
-        "note": (
-            "Research-only sign flip helper. chosen_sign recorded for "
-            "reproducibility. Never auto-connects Mass / READY / ops GO / live."
-        ),
+        "note": "Research-only sign flip helper. Records chosen_sign.",
     }
     doc.update(_freeze())
     return doc

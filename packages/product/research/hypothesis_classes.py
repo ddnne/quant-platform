@@ -1,33 +1,4 @@
-"""Hypothesis class registry — research entry space redesign (W77 / w0816k).
-
-Purpose
--------
-Split research hypothesis space into explicit **classes** so generation is not
-skewed to simple daily sign mass production (S1–S5 already
-``research_baseline_rejected``).
-
-Hard constraints
-----------------
-* Does **not** mint READY / VerifiedResearchReadiness
-* Does **not** arm Mass / Phase7
-* Does **not** un-reject S1–S5
-* Does **not** invent COMPLETE 23 or densify
-* ``simple_daily_sign`` is **lowest priority** and **default generation OFF**
-  (explicit opt-in only)
-
-Field alignment with :class:`research.artifacts.ResearchIdea`
--------------------------------------------------------------
-| HypothesisClassSpec field | ResearchIdea field / home      |
-|---------------------------|--------------------------------|
-| ``horizon``               | ``target_horizon``             |
-| ``universe``              | ``intended_universe``          |
-| ``feature_kinds``         | ``candidate_concepts``         |
-| ``constraints``           | ``constraints``                |
-| ``class_id`` / datasets   | ``lineage["hypothesis_class"]``|
-|                           | + ``lineage["datasets_required"]`` |
-
-See: ``docs/proof/w0816k_w77_hypothesis_space_redesign_20260816.md``
-"""
+"""Hypothesis class registry. simple_daily_sign is opt-in, lowest priority."""
 
 from __future__ import annotations
 
@@ -51,7 +22,6 @@ from features.research_freezes import (
 REGISTRY_VERSION: str = "hypothesis-class-registry/v1"
 REGISTRY_WAVE: str = "W77 / w0816k"
 
-# Class ids (stable keys)
 CLASS_MULTI_DAY_HOLD: str = "multi_day_hold"
 CLASS_EVENT_POST: str = "event_post"
 CLASS_CROSS_SECTION_RELATIVE: str = "cross_section_relative"
@@ -60,10 +30,8 @@ CLASS_FUNDAMENTALS_PRICE: str = "fundamentals_price"
 CLASS_FLOW_DEMAND: str = "flow_demand"
 CLASS_SIMPLE_DAILY_SIGN: str = "simple_daily_sign"
 
-# Lowest priority rank (higher number = lower priority).
 _SIMPLE_DAILY_SIGN_PRIORITY: int = 99
 
-# Required registry fields every class must declare (tests + validate).
 REQUIRED_CLASS_FIELDS: tuple[str, ...] = (
     "class_id",
     "horizon",
@@ -78,15 +46,7 @@ REQUIRED_CLASS_FIELDS: tuple[str, ...] = (
 
 @dataclass(frozen=True)
 class HypothesisClassSpec:
-    """One hypothesis class in the research entry space.
-
-    Required fields (task contract):
-      horizon, universe, datasets_required, feature_kinds, constraints
-
-    Generation policy:
-      ``generation_enabled_by_default`` — if False, class is opt-in only
-      ``priority`` — lower number is preferred in default mix
-    """
+    """One hypothesis class. Opt-in if generation_enabled_by_default is False."""
 
     class_id: str
     horizon: str
@@ -134,7 +94,7 @@ class HypothesisClassSpec:
         }
 
     def research_idea_defaults(self) -> dict[str, Any]:
-        """Map class fields onto ResearchIdea-aligned keys (no READY claim)."""
+        """Map class fields onto ResearchIdea-aligned keys."""
         return {
             "target_horizon": self.horizon,
             "intended_universe": list(self.universe),
@@ -182,10 +142,6 @@ def _spec(
         research_status_note=research_status_note,
     )
 
-
-# ---------------------------------------------------------------------------
-# Registry (ordered by default priority; simple_daily_sign last)
-# ---------------------------------------------------------------------------
 
 HYPOTHESIS_CLASS_REGISTRY: dict[str, HypothesisClassSpec] = {
     CLASS_MULTI_DAY_HOLD: _spec(
@@ -377,7 +333,6 @@ HYPOTHESIS_CLASS_REGISTRY: dict[str, HypothesisClassSpec] = {
         generation_enabled_by_default=True,
         priority=60,
     ),
-    # LOWEST priority · default generation OFF · explicit opt-in only.
     CLASS_SIMPLE_DAILY_SIGN: _spec(
         CLASS_SIMPLE_DAILY_SIGN,
         display_name="Simple daily sign",
@@ -412,15 +367,12 @@ HYPOTHESIS_CLASS_REGISTRY: dict[str, HypothesisClassSpec] = {
         priority=_SIMPLE_DAILY_SIGN_PRIORITY,
         opt_in_required=True,
         research_status_note=(
-            "S1–S5 catalogued as research_baseline_rejected (W65). "
-            "This class is retained for documentation and explicit opt-in "
-            "re-runs only — not for mass idea generation."
+            "S1–S5 are research_baseline_rejected. Opt-in re-runs only."
         ),
     ),
 }
 
 
-# Stable ordered list of all class ids (priority ascending).
 ALL_CLASS_IDS: tuple[str, ...] = tuple(
     sorted(
         HYPOTHESIS_CLASS_REGISTRY.keys(),
@@ -431,8 +383,6 @@ ALL_CLASS_IDS: tuple[str, ...] = tuple(
     )
 )
 
-# Default generation set: all classes with generation_enabled_by_default=True.
-# Explicitly excludes simple_daily_sign.
 DEFAULT_GENERATION_CLASS_IDS: tuple[str, ...] = tuple(
     cid
     for cid in ALL_CLASS_IDS
@@ -476,12 +426,7 @@ def is_generation_enabled(
     *,
     explicit_opt_in: Sequence[str] | None = None,
 ) -> bool:
-    """True if class may be used in idea generation under current policy.
-
-    * Default-enabled classes → True
-    * ``simple_daily_sign`` (and any opt_in_required class) → True only when
-      ``class_id`` is listed in ``explicit_opt_in``
-    """
+    """True if class may be used in idea generation (opt-in for simple_daily_sign)."""
     spec = get_hypothesis_class(class_id)
     opt_in = {str(x).strip() for x in (explicit_opt_in or ()) if str(x).strip()}
     if spec.generation_enabled_by_default and not spec.opt_in_required:
@@ -498,24 +443,7 @@ def select_generation_classes(
     include_simple_daily_sign: bool = False,
     class_ids: Sequence[str] | None = None,
 ) -> tuple[str, ...]:
-    """Select hypothesis classes for idea generation.
-
-    Policy
-    ------
-    * Default pool = :data:`DEFAULT_GENERATION_CLASS_IDS` (no simple_daily_sign)
-    * ``include_simple_daily_sign=True`` is an explicit opt-in flag; still
-      requires listing or is appended once at the end (lowest priority)
-    * ``explicit_opt_in`` may add opt-in-only classes (e.g. simple_daily_sign)
-    * Result is never majority-skewed to simple_daily_sign when other classes
-      exist (see :func:`assert_generation_mix_not_skewed`)
-
-    Parameters
-    ----------
-    n:
-        Max classes to return (default = all default-enabled).
-    class_ids:
-        Optional explicit list; still filtered by generation policy.
-    """
+    """Select hypothesis classes. simple_daily_sign is opt-in only."""
     opt_in_list = list(explicit_opt_in or ())
     if include_simple_daily_sign and CLASS_SIMPLE_DAILY_SIGN not in {
         str(x).strip() for x in opt_in_list
@@ -526,7 +454,6 @@ def select_generation_classes(
         candidates = [str(x).strip() for x in class_ids if str(x).strip()]
     else:
         candidates = list(DEFAULT_GENERATION_CLASS_IDS)
-        # Append opt-in classes not already present (e.g. simple_daily_sign).
         for cid in opt_in_list:
             c = str(cid).strip()
             if c and c not in candidates:
@@ -539,7 +466,6 @@ def select_generation_classes(
         if cid not in selected:
             selected.append(cid)
 
-    # Sort by registry priority (simple_daily_sign last).
     selected.sort(
         key=lambda c: (
             HYPOTHESIS_CLASS_REGISTRY[c].priority
@@ -563,15 +489,7 @@ def assert_generation_mix_not_skewed(
     *,
     max_simple_daily_sign_share: float = 0.34,
 ) -> None:
-    """Fail closed if generation mix is mass-skewed to simple_daily_sign.
-
-    Rules:
-    * Empty mix is allowed (no generation).
-    * If mix length == 1 and that class is simple_daily_sign → reject
-      (mass-default of only daily sign forbidden).
-    * If simple_daily_sign share > max_simple_daily_sign_share → reject
-      (default 1/3 so it cannot dominate a multi-class mix).
-    """
+    """Fail closed if mix is simple_daily_sign-only or majority-skewed."""
     ids = [str(x).strip() for x in class_ids if str(x).strip()]
     if not ids:
         return
@@ -602,11 +520,7 @@ def build_research_idea_payload(
     extra_lineage: Mapping[str, Any] | None = None,
     allow_disabled_class: bool = False,
 ) -> dict[str, Any]:
-    """Build a ResearchIdea-compatible dict from a hypothesis class.
-
-    Does **not** construct Live READY or schedule mass jobs. Validates
-    generation policy unless ``allow_disabled_class=True`` (template-only).
-    """
+    """Build a ResearchIdea-compatible dict from a hypothesis class."""
     spec = get_hypothesis_class(class_id)
     if not allow_disabled_class and not is_generation_enabled(
         class_id, explicit_opt_in=explicit_opt_in
@@ -663,11 +577,8 @@ def hypothesis_class_registry_document() -> dict[str, Any]:
         "s1_s5_unreject": S1_S5_UNREJECT,
         "complete_invent": COMPLETE_INVENT,
         "note": (
-            "Hypothesis class registry (W77). Redesigns research entry space "
-            "away from simple daily sign mass production. "
             "simple_daily_sign is lowest priority and default generation OFF "
-            "(explicit opt-in only). Does not mint READY, arm Mass, un-reject "
-            "S1–S5, or invent COMPLETE 23."
+            "(explicit opt-in only)."
         ),
         "proof": (
             "docs/proof/w0816k_w77_hypothesis_space_redesign_20260816.md"
@@ -761,21 +672,15 @@ __all__ = [
     "CLASS_MACRO_CONDITIONED",
     "CLASS_MULTI_DAY_HOLD",
     "CLASS_SIMPLE_DAILY_SIGN",
-    "CONNECTED_TO_MASS",
-    "CONNECTED_TO_READY",
     "DEFAULT_GENERATION_CLASS_IDS",
-    "EDGE_CLAIMED",
     "HYPOTHESIS_CLASS_REGISTRY",
     "HypothesisClassSpec",
-    "MASS_GENERATE_SIGNALS",
     "MASS_RESEARCH",
-    "OPERATIONAL_GO",
     "PHASE7",
     "READY_DECLARED",
     "REGISTRY_VERSION",
     "REGISTRY_WAVE",
     "REQUIRED_CLASS_FIELDS",
-    "SIGNIFICANCE_CLAIMED",
     "assert_generation_mix_not_skewed",
     "assert_registry_closed_to_ready_mass",
     "assert_simple_daily_sign_not_default_enabled",
