@@ -368,8 +368,6 @@ def run_class_hyp_multi_year_eval(
                     "status": "ok",
                     "period_start": p_start,
                     "period_end": p_end,
-                    "bars_path": str(bars_path),
-                    "window_kind": window_kind or None,
                     "n_codes": eval_out.get("n_codes"),
                     "gross_signed_mean_active": eval_out.get(
                         "gross_signed_mean_active"

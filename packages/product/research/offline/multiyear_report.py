@@ -758,7 +758,6 @@ def assemble_class_hyp_multi_year_report(
         "n_years_ok_multi_day_hold": n_ok_md,
         "n_years_ok_macro_conditioned": n_ok_macro,
         "history_source": "local_r2_mirror_ndjson + local_sqlite",
-        "label": "研究用・複数年クラス仮説評価・未宣言",
         **_freeze(),
     }
 
@@ -777,7 +776,7 @@ def assemble_class_hyp_multi_year_report(
         cost=cost_md,
         hyp_kind="multi_day_hold_10",
         hold_days_for_occ=10,
-        extra={"variant": "hold_10", "n_ok": _n_ok(results_md10)},
+        extra={"variant": "hold_10"},
     )
     xs_frac = {
         "long_frac": xs_long_frac,
@@ -815,7 +814,6 @@ def assemble_class_hyp_multi_year_report(
             "hold_days": 10,
             "momentum_n": xs10_mom_n,
             "variant": "hold_10",
-            "n_ok": _n_ok(results_xs10),
             **xs_frac,
         },
     )
@@ -834,7 +832,6 @@ def assemble_class_hyp_multi_year_report(
             "hold_days": 10,
             "momentum_n": xs10_mom3_n,
             "variant": "hold_10_mom3",
-            "n_ok": _n_ok(results_xs10_mom3),
             **xs_frac,
         },
     )
@@ -851,7 +848,6 @@ def assemble_class_hyp_multi_year_report(
         hold_days_for_occ=int(event_hold_days),
         extra={
             "post_hold_days": int(event_hold_days),
-            "n_ok": _n_ok(results_event),
             "entry_mode": EVENT_POST_ENTRY_MODE,
         },
     )
@@ -869,7 +865,6 @@ def assemble_class_hyp_multi_year_report(
         extra={
             "hold_days": int(flow_hold_days),
             "require_short_confirm": flow_short_confirm,
-            "n_ok": _n_ok(results_flow),
         },
     )
     _put(
@@ -887,7 +882,6 @@ def assemble_class_hyp_multi_year_report(
             "hold_days": int(fund_hold_days),
             "momentum_n": fund_mom_n,
             "mode": fund_mode_s,
-            "n_ok": _n_ok(results_fund),
         },
     )
     _put(
@@ -906,7 +900,6 @@ def assemble_class_hyp_multi_year_report(
             "momentum_n": fund10_mom_n,
             "mode": fund_mode_s,
             "variant": "hold_10_mom_matched",
-            "n_ok": _n_ok(results_fund10),
         },
     )
 
