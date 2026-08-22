@@ -5,7 +5,6 @@ COMPLETE 21 + approved legs; AST/freezes ban mass / READY / orders.
 
 from __future__ import annotations
 
-import ast
 import json
 from datetime import date, timedelta
 from pathlib import Path
@@ -16,6 +15,12 @@ from agents.mass_research import start_mass_research
 from data_contracts.permanent_defer import (
     PERMANENT_DEFER_DATASETS,
     PermanentDeferHistoryError,
+)
+from tests.research_eval_util import (
+    _assert_mass_ready_off,
+    _capture_puts,
+    _injected_multiday,
+    assert_ast_bans_mass_ready_orders,
 )
 from research.eval_harness import (
     APPROVED_SIGNAL_LEGS,
@@ -52,106 +57,6 @@ HARNESS_AST_PATHS = (
 )
 
 _CODES = ("13010", "72030", "67580")
-_MD_BARS = (
-    ("2026-08-03", 1000.0, 100.0),
-    ("2026-08-04", 1010.0, 110.0),
-    ("2026-08-05", 1005.0, 120.0),
-    ("2026-08-06", 1020.0, 130.0),
-    ("2026-08-07", 1015.0, 140.0),
-    ("2026-08-10", 1030.0, 150.0),
-    ("2026-08-11", 1025.0, 160.0),
-    ("2026-08-12", 1040.0, 170.0),
-)
-_MD_TOPIX = (
-    ("2026-08-03", 3000.0),
-    ("2026-08-04", 3005.0),
-    ("2026-08-05", 3010.0),
-    ("2026-08-06", 3000.0),
-    ("2026-08-07", 3015.0),
-    ("2026-08-10", 3020.0),
-    ("2026-08-11", 3010.0),
-    ("2026-08-12", 3030.0),
-)
-_MD_CAL = (
-    "2026-08-03",
-    "2026-08-04",
-    "2026-08-05",
-    "2026-08-06",
-    "2026-08-07",
-    "2026-08-08",
-    "2026-08-09",
-    "2026-08-10",
-    "2026-08-11",
-    "2026-08-12",
-)
-
-
-def _d1_row(nk: dict, day: str, payload: dict | None = None, *, aa: str = "T15:30:00+09:00"):
-    row = {
-        "natural_key": json.dumps(nk),
-        "event_time": f"{day}T09:00:00+09:00",
-        "available_at": f"{day}{aa}",
-    }
-    if payload is not None:
-        row["payload"] = json.dumps(payload)
-    return row
-
-
-def _fake_d1_multiday(sql: str):
-    s = sql.lower()
-    if "count(*)" in s:
-        return [
-            {
-                "n": 12,
-                "min_event_time": "2026-08-03",
-                "max_event_time": "2026-08-12",
-            }
-        ]
-    if "payload" in s and "equities_bars_daily" in s:
-        return [
-            _d1_row(
-                {"Code": code, "Date": d},
-                d,
-                {"Code": code, "Date": d, "C": c + base, "Vo": vo},
-            )
-            for code, base in (("13010", 0.0), ("72030", 50.0))
-            for d, c, vo in _MD_BARS
-        ]
-    if "payload" in s and "indices_bars_daily_topix" in s:
-        return [
-            _d1_row({"Date": d}, d, {"Date": d, "C": c}) for d, c in _MD_TOPIX
-        ]
-    if "payload" in s and "markets_calendar" in s:
-        return [
-            _d1_row(
-                {"Date": d},
-                d,
-                {"Date": d, "HolidayDivision": "0" if d in ("2026-08-08", "2026-08-09") else "1"},
-                aa="T00:00:00+09:00",
-            )
-            | {"event_time": d}
-            for d in _MD_CAL
-        ]
-    if "equities_bars_daily" in s:
-        return [_d1_row({"Code": "13010", "Date": d}, d) for d, _, _ in _MD_BARS]
-    return [_d1_row({"Date": "2026-08-04"}, "2026-08-04") | {"event_time": "2026-08-04", "available_at": "2026-08-04"}]
-
-
-def _capture_puts():
-    puts: dict[str, bytes] = {}
-
-    def fake_put(bucket: str, key: str, body: bytes, **kwargs):
-        puts[key] = body
-        return {"bucket": bucket, "key": key, "bytes": len(body), "status": "injected"}
-
-    return puts, fake_put
-
-
-def _assert_mass_ready_off(pack) -> None:
-    ready = pack["ready_declared"] if isinstance(pack, dict) else pack.ready_declared
-    mass = pack["mass_research"] if isinstance(pack, dict) else pack.mass_research
-    assert ready is False
-    assert mass == "NO-GO"
 
 
 def _r2_jsonl(
@@ -304,27 +209,10 @@ def test_pipeline_constant_and_harness_version():
 
 
 def test_run_nextday_return_eval_full_pipeline(tmp_path: Path):
-    puts, fake_put = _capture_puts()
-    result = run_nextday_return_eval(
-        period_start="2026-08-01",
-        period_end="2026-08-14",
-        job_id="w0815aw-g2-harness-unit",
-        codes=["13010", "72030"],
-        as_of_days=[
-            "2026-08-04",
-            "2026-08-05",
-            "2026-08-06",
-            "2026-08-07",
-            "2026-08-10",
-            "2026-08-11",
-        ],
-        max_days=10,
-        min_days=5,
-        dry_run=True,
-        d1_execute=_fake_d1_multiday,
-        r2_put=fake_put,
-        staging_dir=tmp_path,
+    puts, kw = _injected_multiday(
+        tmp_path, job_id="w0815aw-g2-harness-unit", n_asof=6
     )
+    result = run_nextday_return_eval(**kw)
 
     assert result.attach_nextday_returns is True
     assert result.n_days == 6
@@ -353,38 +241,20 @@ def test_run_nextday_return_eval_full_pipeline(tmp_path: Path):
 
 
 def test_run_full_pipeline_alias(tmp_path: Path):
-    puts, fake_put = _capture_puts()
-    result = run_full_pipeline(
-        period_start="2026-08-01",
-        period_end="2026-08-14",
-        job_id="w0815aw-g2-full-alias",
-        codes=["13010", "72030"],
-        as_of_days=["2026-08-04", "2026-08-05", "2026-08-06", "2026-08-07", "2026-08-10"],
-        max_days=10,
-        min_days=5,
-        dry_run=True,
-        d1_execute=_fake_d1_multiday,
-        r2_put=fake_put,
-        staging_dir=tmp_path,
-    )
+    puts, kw = _injected_multiday(tmp_path, job_id="w0815aw-g2-full-alias", n_asof=5)
+    result = run_full_pipeline(**kw)
     assert result.attach_nextday_returns is True
     assert result.n_days == 5
 
 
 def test_run_multiday_without_nextday(tmp_path: Path):
-    puts, fake_put = _capture_puts()
-    result = run_multiday_signal_eval(
-        period_start="2026-08-01",
-        period_end="2026-08-14",
+    puts, kw = _injected_multiday(
+        tmp_path,
         job_id="w0815aw-g2-multiday-only",
-        codes=["13010", "72030"],
-        as_of_days=["2026-08-04", "2026-08-05", "2026-08-06", "2026-08-07", "2026-08-10"],
+        n_asof=5,
         attach_nextday_returns=False,
-        dry_run=True,
-        d1_execute=_fake_d1_multiday,
-        r2_put=fake_put,
-        staging_dir=tmp_path,
     )
+    result = run_multiday_signal_eval(**kw)
     assert result.attach_nextday_returns is False
     body = json.loads(puts[result.batch_summary_r2_key].decode("utf-8"))
     assert "nextday_return" not in body
@@ -438,51 +308,10 @@ def test_mass_research_still_hard_reject():
         start_mass_research(budget=None, readiness=None)
 
 
-def _ast_imports_and_calls(path: Path) -> tuple[set[str], set[str]]:
-    tree = ast.parse(path.read_text(encoding="utf-8"))
-    imported: set[str] = set()
-    called: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            for alias in node.names:
-                imported.add(alias.name.split(".")[0])
-        elif isinstance(node, ast.ImportFrom):
-            if node.module:
-                imported.add(node.module.split(".")[0])
-                for alias in node.names:
-                    imported.add(alias.name)
-        elif isinstance(node, ast.Call):
-            func = node.func
-            if isinstance(func, ast.Name):
-                called.add(func.id)
-            elif isinstance(func, ast.Attribute):
-                called.add(func.attr)
-    return imported, called
-
-
 def test_eval_harness_ast_bans_mass_ready_orders():
     """T7: harness module must not import/call mass, READY mint, or orders."""
     for path in HARNESS_AST_PATHS:
-        imported, called = _ast_imports_and_calls(path)
-        src = path.read_text(encoding="utf-8")
-        assert "agents" not in imported, path.name
-        assert "mass_research" not in imported, path.name
-        assert "start_mass_research" not in imported, path.name
-        assert "require_mass_research_start" not in imported, path.name
-        assert "VerifiedResearchReadiness" not in imported, path.name
-        assert "ResearchReadinessService" not in imported, path.name
-        assert "OrderIntent" not in imported, path.name
-        assert "paper_service" not in imported, path.name
-        assert "start_mass_research" not in called, path.name
-        assert "place_order" not in called, path.name
-        assert "submit_order" not in called, path.name
-        assert "mint_ready" not in called, path.name
-        assert "MASS_RESEARCH_ENABLE" not in src
-        assert "PHASE7_ENABLE" not in src
-        assert 'MASS_RESEARCH_STATUS: str = "GO"' not in src
-        assert 'PHASE7_STATUS: str = "ON"' not in src
-        assert "READY_DECLARED: bool = True" not in src
-        assert "ORDER_EXECUTION: bool = True" not in src
+        assert_ast_bans_mass_ready_orders(path)
 
 
 def test_split_asof_days_walk_forward_chronological():
@@ -520,11 +349,7 @@ def test_multi_period_and_walk_forward_multisignal_r2_fixtures(tmp_path: Path):
 
     days_a, lines_a = _synth_window(date(2022, 9, 1), 24, with_fins=True)
     days_b, lines_b = _synth_window(date(2023, 9, 1), 24, with_fins=True)
-    puts: list[tuple[str, str]] = []
-
-    def fake_put(bucket: str, key: str, body: bytes, **kwargs):
-        puts.append((bucket, key))
-        return {"bucket": bucket, "key": key, "status": "dry_run", "bytes": len(body)}
+    puts, fake_put = _capture_puts()
 
     empty_margin = ("markets_margin_interest",)
     mp = run_multi_period_multisignal_compare(
@@ -618,11 +443,7 @@ def test_design_yearly_eval_windows_and_multi_year_s1_isolation(tmp_path: Path):
         date(2019, 9, 1), 24, with_margin=True, close_fn=_close, vol_fn=lambda i: 1000 + i * 15
     )
 
-    puts: list[str] = []
-
-    def fake_put(bucket: str, key: str, body: bytes, **kwargs):
-        puts.append(key)
-        return {"bucket": bucket, "key": key, "status": "dry_run", "bytes": len(body)}
+    puts, fake_put = _capture_puts()
 
     periods = [
         _r2_period("y2015_q4", days_a, lines_a, year=2015, s4_eligible=True),
@@ -766,10 +587,7 @@ def test_multi_year_ast_and_mass_off_freezes():
         for p in (EVAL_HARNESS_PATH, EVAL_HARNESS_MULTIYEAR_PATH)
     )
     for path in (EVAL_HARNESS_PATH, EVAL_HARNESS_MULTIYEAR_PATH):
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        for node in ast.walk(tree):
-            if isinstance(node, ast.ImportFrom) and node.module:
-                assert "mass_research" not in (node.module or "")
+        assert_ast_bans_mass_ready_orders(path)
     assert "CONNECTED_TO_READY" in src or "connected_to_ready" in src
     assert "fail_one_year_safe" in src
     assert "design_yearly_eval_windows" in src

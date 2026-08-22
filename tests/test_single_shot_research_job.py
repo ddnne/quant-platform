@@ -5,7 +5,6 @@ Phase7/Mass OFF freeze + AST bans stay; no READY mint.
 
 from __future__ import annotations
 
-import ast
 import json
 from pathlib import Path
 
@@ -15,6 +14,14 @@ from agents.mass_research import start_mass_research
 from data_contracts.permanent_defer import (
     PERMANENT_DEFER_DATASETS,
     PermanentDeferHistoryError,
+)
+from tests.research_eval_util import (
+    _assert_mass_ready_off,
+    _capture_puts,
+    _d1_row,
+    _fake_d1_tables,
+    _injected_multiday,
+    assert_ast_bans_mass_ready_orders,
 )
 from research.single_shot_job import (
     COMPLETE_21_DATASETS,
@@ -58,65 +65,6 @@ MINIMAL_SIGNAL_PATH = (
 MINIMAL_SIGNAL_DOCS_PATH = (
     REPO_ROOT / "packages" / "research_runtime" / "features" / "minimal_signal_docs.py"
 )
-
-
-def _d1_row(nk: dict, day: str, payload: dict | None = None, *, aa: str = "T15:30:00+09:00"):
-    row = {
-        "natural_key": json.dumps(nk),
-        "event_time": f"{day}T09:00:00+09:00",
-        "available_at": f"{day}{aa}",
-    }
-    if payload is not None:
-        row["payload"] = json.dumps(payload)
-    return row
-
-
-def _fake_d1_tables(tables: dict[str, list[dict]]):
-    def fake_d1(sql: str):
-        sl = sql.lower()
-        for ds, rows in tables.items():
-            if ds not in sl:
-                continue
-            if "count(*)" in sl and "payload" not in sl:
-                et = [r.get("event_time") or r.get("available_at") for r in rows]
-                return [
-                    {
-                        "n": len(rows),
-                        "min_event_time": et[0],
-                        "max_event_time": et[-1],
-                    }
-                ]
-            if "SELECT natural_key FROM" in sql:
-                return [{"natural_key": r["natural_key"]} for r in rows]
-            return rows
-        if "count(*)" in sl:
-            return [{"n": 0}]
-        return [
-            {
-                "natural_key": json.dumps({"Date": "2026-08-04"}),
-                "event_time": "2026-08-04",
-                "available_at": "2026-08-04",
-            }
-        ]
-
-    return fake_d1
-
-
-def _capture_puts():
-    puts: dict[str, bytes] = {}
-
-    def fake_put(bucket: str, key: str, body: bytes):
-        puts[key] = body
-        return {"bucket": bucket, "key": key, "bytes": len(body), "status": "injected"}
-
-    return puts, fake_put
-
-
-def _assert_mass_ready_off(obj) -> None:
-    ready = obj["ready_declared"] if isinstance(obj, dict) else obj.ready_declared
-    mass = obj["mass_research"] if isinstance(obj, dict) else obj.mass_research
-    assert ready is False
-    assert mass == "NO-GO"
 
 
 def test_complete_21_is_exactly_twenty_one_and_excludes_permanent_defer():
@@ -264,11 +212,7 @@ def test_execute_dry_run_with_injected_d1(tmp_path: Path):
             }
         ]
 
-    puts: list[tuple[str, str, int]] = []
-
-    def fake_put(bucket: str, key: str, body: bytes):
-        puts.append((bucket, key, len(body)))
-        return {"bucket": bucket, "key": key, "bytes": len(body), "status": "injected"}
+    puts, fake_put = _capture_puts()
 
     ex = execute_single_shot_job(
         dataset_ids=["equities_bars_daily", "markets_calendar"],
@@ -286,9 +230,8 @@ def test_execute_dry_run_with_injected_d1(tmp_path: Path):
     assert ex.content_hash.startswith("sha256:")
     assert ex.result_r2_key.startswith("research/single_shot/job=w0815aq-unit-demo/")
     assert len(puts) == 3
-    assert all(p[0] == "quant-structured" for p in puts)
-    keys = {p[1] for p in puts}
-    assert {ex.manifest_r2_key, ex.input_plan_r2_key, ex.result_r2_key} <= keys
+    assert all(b == "quant-structured" for b in fake_put.buckets)
+    assert {ex.manifest_r2_key, ex.input_plan_r2_key, ex.result_r2_key} <= set(puts)
     assert ex.tip_extracts["extracts"]["equities_bars_daily"]["row_count"] == 3
     assert ex.tip_extracts["extracts"]["markets_calendar"]["row_count"] == 2
     body = ex.to_dict()
@@ -674,53 +617,10 @@ def test_mass_research_still_hard_reject_without_readiness(tmp_path: Path):
         start_mass_research(budget=cap, readiness=None)
 
 
-def _ast_imports_and_calls(path: Path) -> tuple[set[str], set[str]]:
-    tree = ast.parse(path.read_text(encoding="utf-8"))
-    imported: set[str] = set()
-    called: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            for alias in node.names:
-                imported.add(alias.name.split(".")[0])
-        elif isinstance(node, ast.ImportFrom):
-            if node.module:
-                imported.add(node.module.split(".")[0])
-                for alias in node.names:
-                    imported.add(alias.name)
-        elif isinstance(node, ast.Call):
-            func = node.func
-            if isinstance(func, ast.Name):
-                called.add(func.id)
-            elif isinstance(func, ast.Attribute):
-                called.add(func.attr)
-    return imported, called
-
-
 def test_t7_signal_and_single_shot_no_mass_ready_or_orders():
     """Hard AST/comment — no mass import, no READY mint, no order exec."""
     for path in (SINGLE_SHOT_PATH, MINIMAL_SIGNAL_PATH, MINIMAL_SIGNAL_DOCS_PATH):
-        imported, called = _ast_imports_and_calls(path)
-        src = path.read_text(encoding="utf-8")
-        assert "agents" not in imported, path.name
-        assert "mass_research" not in imported, path.name
-        assert "start_mass_research" not in imported, path.name
-        assert "require_mass_research_start" not in imported, path.name
-        assert "VerifiedResearchReadiness" not in imported, path.name
-        assert "ResearchReadinessService" not in imported, path.name
-        # No order / paper execution surface.
-        assert "OrderIntent" not in imported, path.name
-        assert "paper_service" not in imported, path.name
-        assert "execution" not in imported, path.name
-        assert "start_mass_research" not in called, path.name
-        assert "place_order" not in called, path.name
-        assert "submit_order" not in called, path.name
-        assert "mint_ready" not in called, path.name
-        assert "MASS_RESEARCH_ENABLE" not in src
-        assert "PHASE7_ENABLE" not in src
-        assert 'MASS_RESEARCH_STATUS: str = "GO"' not in src
-        assert 'PHASE7_STATUS: str = "ON"' not in src
-        assert "READY_DECLARED: bool = True" not in src
-        assert "ORDER_EXECUTION: bool = True" not in src
+        assert_ast_bans_mass_ready_orders(path, extra_banned_imports=("execution",))
 
 
 def test_no_phase7_or_mass_env_arming_switches_in_skeleton_source():
@@ -732,84 +632,6 @@ def test_no_phase7_or_mass_env_arming_switches_in_skeleton_source():
     assert 'MASS_RESEARCH_STATUS: str = "GO"' not in src
     assert "order_execution" in src
     assert "ORDER_EXECUTION" not in src or "ORDER_EXECUTION: bool = True" not in src
-
-
-_MD_BARS = (
-    ("2026-08-03", 1000.0, 100.0),
-    ("2026-08-04", 1010.0, 110.0),
-    ("2026-08-05", 1005.0, 120.0),
-    ("2026-08-06", 1020.0, 130.0),
-    ("2026-08-07", 1015.0, 140.0),
-    ("2026-08-10", 1030.0, 150.0),
-    ("2026-08-11", 1025.0, 160.0),
-    ("2026-08-12", 1040.0, 170.0),
-)
-_MD_TOPIX = (
-    ("2026-08-03", 3000.0),
-    ("2026-08-04", 3005.0),
-    ("2026-08-05", 3010.0),
-    ("2026-08-06", 3000.0),
-    ("2026-08-07", 3015.0),
-    ("2026-08-10", 3020.0),
-    ("2026-08-11", 3010.0),
-    ("2026-08-12", 3030.0),
-)
-_MD_CAL = (
-    "2026-08-03",
-    "2026-08-04",
-    "2026-08-05",
-    "2026-08-06",
-    "2026-08-07",
-    "2026-08-08",
-    "2026-08-09",
-    "2026-08-10",
-    "2026-08-11",
-    "2026-08-12",
-)
-
-
-def _fake_d1_multiday(sql: str):
-    s = sql.lower()
-    if "count(*)" in s:
-        return [
-            {
-                "n": 12,
-                "min_event_time": "2026-08-03",
-                "max_event_time": "2026-08-12",
-            }
-        ]
-    if "payload" in s and "equities_bars_daily" in s:
-        return [
-            _d1_row(
-                {"Code": code, "Date": d},
-                d,
-                {"Code": code, "Date": d, "C": c + base, "Vo": vo},
-            )
-            for code, base in (("13010", 0.0), ("72030", 50.0))
-            for d, c, vo in _MD_BARS
-        ]
-    if "payload" in s and "indices_bars_daily_topix" in s:
-        return [_d1_row({"Date": d}, d, {"Date": d, "C": c}) for d, c in _MD_TOPIX]
-    if "payload" in s and "markets_calendar" in s:
-        return [
-            _d1_row(
-                {"Date": d},
-                d,
-                {"Date": d, "HolidayDivision": "0" if d in ("2026-08-08", "2026-08-09") else "1"},
-                aa="T00:00:00+09:00",
-            )
-            | {"event_time": d}
-            for d in _MD_CAL
-        ]
-    if "equities_bars_daily" in s:
-        return [_d1_row({"Code": "13010", "Date": d}, d) for d, _, _ in _MD_BARS]
-    return [
-        {
-            "natural_key": json.dumps({"Date": "2026-08-04"}),
-            "event_time": "2026-08-04",
-            "available_at": "2026-08-04",
-        }
-    ]
 
 
 def test_discover_tip_trading_days_filters_non_trading():
@@ -849,28 +671,8 @@ def test_summarize_signal_day_sign_distribution():
 
 
 def test_execute_multiday_signal_eval_batch_summary(tmp_path: Path):
-    puts, fake_put = _capture_puts()
-    eval_result = execute_multiday_signal_eval(
-        period_start="2026-08-01",
-        period_end="2026-08-14",
-        job_id="w0815au-g1-multiday-unit",
-        codes=["13010", "72030"],
-        as_of_days=[
-            "2026-08-04",
-            "2026-08-05",
-            "2026-08-06",
-            "2026-08-07",
-            "2026-08-10",
-            "2026-08-11",
-            "2026-08-12",
-        ],
-        max_days=10,
-        min_days=5,
-        dry_run=True,
-        d1_execute=_fake_d1_multiday,
-        r2_put=fake_put,
-        staging_dir=tmp_path,
-    )
+    puts, kw = _injected_multiday(tmp_path, job_id="w0815au-g1-multiday-unit")
+    eval_result = execute_multiday_signal_eval(**kw)
 
     assert eval_result.n_days == 7
     _assert_mass_ready_off(eval_result)
@@ -1058,27 +860,10 @@ def test_summarize_nextday_by_sign_means_and_null_rates():
 
 
 def test_execute_multiday_nextday_return_eval_batch(tmp_path: Path):
-    puts, fake_put = _capture_puts()
-    eval_result = execute_multiday_nextday_return_eval(
-        period_start="2026-08-01",
-        period_end="2026-08-14",
-        job_id="w0815av-g1-nextday-unit",
-        codes=["13010", "72030"],
-        as_of_days=[
-            "2026-08-04",
-            "2026-08-05",
-            "2026-08-06",
-            "2026-08-07",
-            "2026-08-10",
-            "2026-08-11",
-        ],
-        max_days=10,
-        min_days=5,
-        dry_run=True,
-        d1_execute=_fake_d1_multiday,
-        r2_put=fake_put,
-        staging_dir=tmp_path,
+    puts, kw = _injected_multiday(
+        tmp_path, job_id="w0815av-g1-nextday-unit", n_asof=6
     )
+    eval_result = execute_multiday_nextday_return_eval(**kw)
 
     assert eval_result.attach_nextday_returns is True
     assert eval_result.n_days == 6
@@ -1127,21 +912,13 @@ def test_execute_multiday_nextday_return_eval_batch(tmp_path: Path):
 
 def test_nextday_flag_off_preserves_w54_shape(tmp_path: Path):
     """attach_nextday_returns=False keeps batch shape (no nextday_return)."""
-    puts, fake_put = _capture_puts()
-    eval_result = execute_multiday_signal_eval(
-        period_start="2026-08-01",
-        period_end="2026-08-14",
+    puts, kw = _injected_multiday(
+        tmp_path,
         job_id="w0815au-g1-multiday-unit-compat",
-        codes=["13010", "72030"],
-        as_of_days=["2026-08-04", "2026-08-05", "2026-08-06", "2026-08-07", "2026-08-10"],
-        max_days=10,
-        min_days=5,
+        n_asof=5,
         attach_nextday_returns=False,
-        dry_run=True,
-        d1_execute=_fake_d1_multiday,
-        r2_put=fake_put,
-        staging_dir=tmp_path,
     )
+    eval_result = execute_multiday_signal_eval(**kw)
     assert eval_result.attach_nextday_returns is False
     body = json.loads(puts[eval_result.batch_summary_r2_key].decode("utf-8"))
     assert "nextday_return" not in body

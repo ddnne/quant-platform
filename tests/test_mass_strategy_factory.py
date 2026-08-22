@@ -117,6 +117,41 @@ _RESEARCH_FAMILY_IDS = (
 )
 
 
+def _tpl_proposal(lid: str) -> dict:
+    tpl = LOGIC_TEMPLATES[lid]
+    return {
+        "logic_id": lid,
+        "thesis": tpl.thesis,
+        "signal_definition": tpl.signal_definition,
+        "position_rule": tpl.position_rule,
+        "datasets_used": list(tpl.datasets_used),
+    }
+
+
+def _eval_vol_family(
+    lids,
+    family_id,
+    *,
+    seed: int,
+    panel_key: str,
+    dataset: str,
+    bad_params: dict,
+    bad_logic_id: str,
+):
+    for lid in lids:
+        assert dataset in LOGIC_TEMPLATES[lid].datasets_used
+    cfg = MassFactoryConfig(seed=seed, n=5, max_codes=4)
+    ctx = load_batch_data_context(cfg, synthetic=True)
+    assert all(p.get(panel_key) for p in ctx.panels)
+    for lid in lids:
+        _eval_template(lid, family_id, ctx)
+    ok_bad, reason_bad = validate_strategy_at_gen(
+        family_id, bad_params, logic_id=bad_logic_id
+    )
+    assert ok_bad is False
+    assert reason_bad is not None
+
+
 def _eval_template(lid: str, family_id: str, ctx) -> None:
     tpl = LOGIC_TEMPLATES[lid]
     assert tpl.family_id == family_id
@@ -522,30 +557,8 @@ def test_propose_profit_hypotheses_rejects_window_tweaks_and_evals():
     # full thesis rate factor → accept + evaluate synthetic
     good = propose_profit_hypotheses(
         [
-            {
-                "logic_id": "rate_abs_level_xs",
-                "thesis": LOGIC_TEMPLATES["rate_abs_level_xs"].thesis,
-                "signal_definition": LOGIC_TEMPLATES[
-                    "rate_abs_level_xs"
-                ].signal_definition,
-                "position_rule": LOGIC_TEMPLATES[
-                    "rate_abs_level_xs"
-                ].position_rule,
-                "datasets_used": list(
-                    LOGIC_TEMPLATES["rate_abs_level_xs"].datasets_used
-                ),
-            },
-            {
-                "logic_id": "mf_flow_price",
-                "thesis": LOGIC_TEMPLATES["mf_flow_price"].thesis,
-                "signal_definition": LOGIC_TEMPLATES[
-                    "mf_flow_price"
-                ].signal_definition,
-                "position_rule": LOGIC_TEMPLATES["mf_flow_price"].position_rule,
-                "datasets_used": list(
-                    LOGIC_TEMPLATES["mf_flow_price"].datasets_used
-                ),
-            },
+            _tpl_proposal("rate_abs_level_xs"),
+            _tpl_proposal("mf_flow_price"),
         ],
         evaluate=True,
         synthetic=True,
@@ -566,39 +579,32 @@ def test_nky_vol_logics_templates_and_eval_synthetic():
     for lid in _NKY_VOL_IDS:
         tpl = LOGIC_TEMPLATES[lid]
         assert "CS" in tpl.signal_definition or "rank" in tpl.signal_definition
-        assert "derivatives_bars_daily_futures" in tpl.datasets_used
         assert LOGIC_TEMPLATES[lid].logic_fingerprint() not in name_fps
-    cfg = MassFactoryConfig(seed=91, n=5, max_codes=4)
-    ctx = load_batch_data_context(cfg, synthetic=True)
-    assert all(p.get("nky_vol_series") for p in ctx.panels)
-    for lid in _NKY_VOL_IDS:
-        _eval_template(lid, FAMILY_INDEX_VOL_REGIME, ctx)
-    ok_bad, reason_bad = validate_strategy_at_gen(
+    _eval_vol_family(
+        _NKY_VOL_IDS,
         FAMILY_INDEX_VOL_REGIME,
-        {
+        seed=91,
+        panel_key="nky_vol_series",
+        dataset="derivatives_bars_daily_futures",
+        bad_params={
             "mode": "not_a_mode",
             "vol_short_n": 10,
             "vol_long_n": 60,
             "hold_days": 10,
             "momentum_n": 5,
         },
-        logic_id="nky_vol_abs_level",
+        bad_logic_id="nky_vol_abs_level",
     )
-    assert ok_bad is False
-    assert reason_bad is not None
 
 
 def test_opt225_vol_logics_templates_and_eval_synthetic():
-    for lid in _OPT225_IDS:
-        assert "derivatives_bars_daily_options_225" in LOGIC_TEMPLATES[lid].datasets_used
-    cfg = MassFactoryConfig(seed=92, n=5, max_codes=4)
-    ctx = load_batch_data_context(cfg, synthetic=True)
-    assert all(p.get("opt225_regime") for p in ctx.panels)
-    for lid in _OPT225_IDS:
-        _eval_template(lid, FAMILY_OPTIONS_VOL_REGIME, ctx)
-    ok_bad, reason_bad = validate_strategy_at_gen(
+    _eval_vol_family(
+        _OPT225_IDS,
         FAMILY_OPTIONS_VOL_REGIME,
-        {
+        seed=92,
+        panel_key="opt225_regime",
+        dataset="derivatives_bars_daily_options_225",
+        bad_params={
             "mode": "not_a_mode",
             "series_kind": "basevol",
             "vol_short_n": 10,
@@ -606,10 +612,8 @@ def test_opt225_vol_logics_templates_and_eval_synthetic():
             "hold_days": 10,
             "momentum_n": 5,
         },
-        logic_id="opt225_basevol_abs_level",
+        bad_logic_id="opt225_basevol_abs_level",
     )
-    assert ok_bad is False
-    assert reason_bad is not None
 
 
 def test_nky_vol_signal_helpers_pure():

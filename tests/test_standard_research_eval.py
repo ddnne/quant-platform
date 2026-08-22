@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import ast
 from pathlib import Path
 
 from research.baseline_catalog import (
@@ -52,6 +51,10 @@ from research.risk_scenarios import (
     scenario_row,
 )
 from research.robustness_gate import evaluate_research_robustness_gate
+from tests.research_eval_util import (
+    _assert_mass_ready_off,
+    assert_ast_bans_mass_ready_orders,
+)
 
 REPO = Path(__file__).resolve().parents[1]
 EVAL_HARNESS_PATH = REPO / "packages" / "product" / "research" / "eval_harness.py"
@@ -79,6 +82,15 @@ _GATE_PASS_ROWS = [
 ]
 
 
+_CHECKLIST_BASE = dict(
+    multi_year_present=True,
+    cost_assumption_present=True,
+    robustness_gate_present=True,
+    data_gap_disclosed=True,
+    freeze_closed=True,
+)
+
+
 def _complete_scenario_rows():
     return [
         scenario_row(SCENARIO_CRASH, gross_signed_mean=-0.001, net_one_way_mean=-0.002),
@@ -93,21 +105,6 @@ def _complete_scenario_rows():
             na_reason="no liquidity stress series",
         ),
     ]
-
-
-def _assert_mass_ready_off(out) -> None:
-    assert out["ready_declared"] is False
-    assert out["mass_research"] == "NO-GO"
-    if "phase7" in out:
-        assert out["phase7"] == "OFF"
-    if "connected_to_ready" in out:
-        assert out["connected_to_ready"] is False
-    if "connected_to_mass" in out:
-        assert out["connected_to_mass"] is False
-    if "research_candidate" in out:
-        assert out["research_candidate"] is False
-    if "operational_go" in out:
-        assert out["operational_go"] is False
 
 
 def test_dry_run_wiring_completes_mass_ready_phase7_closed():
@@ -295,10 +292,7 @@ def test_standard_eval_ast_no_mass_import_no_new_signal_mint():
     paths = (EVAL_HARNESS_PATH, EVAL_HARNESS_MULTIYEAR_PATH)
     src = "\n".join(p.read_text(encoding="utf-8") for p in paths)
     for path in paths:
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        for node in ast.walk(tree):
-            if isinstance(node, ast.ImportFrom) and node.module:
-                assert "mass_research" not in (node.module or "")
+        assert_ast_bans_mass_ready_orders(path)
     assert "run_standard_research_eval" in src
     assert "CHECKLIST_VERSION" in src
     assert "research_candidate" in src
@@ -408,15 +402,7 @@ def test_leverage_short_costs_long_only_and_long_short():
 
 def test_high_frequency_hyp_requires_holding_for_completeness():
     """HF hyps without holding_records → holding near-required fails completeness."""
-    scen = [
-        scenario_row(SCENARIO_CRASH, gross_signed_mean=-0.001, net_one_way_mean=-0.002),
-        scenario_row(
-            SCENARIO_HIGH_VOL, gross_signed_mean=-0.0008, net_one_way_mean=-0.0018
-        ),
-        scenario_row(SCENARIO_RATE_UP, not_applicable=True, na_reason="n/a"),
-        scenario_row(SCENARIO_RATE_DOWN, not_applicable=True, na_reason="n/a"),
-        scenario_row(SCENARIO_LIQUIDITY_STRESS, not_applicable=True, na_reason="n/a"),
-    ]
+    scen = _complete_scenario_rows()
     out = run_standard_research_eval(
         dry_run=True,
         scenario_rows=scen,
@@ -448,14 +434,10 @@ def test_high_frequency_hyp_requires_holding_for_completeness():
 
 def test_evaluate_checklist_v2_completeness_helper():
     incomplete = evaluate_checklist_v2_completeness(
-        multi_year_present=True,
-        cost_assumption_present=True,
+        **_CHECKLIST_BASE,
         leverage_short_complete=False,
-        robustness_gate_present=True,
-        data_gap_disclosed=True,
         risk_scenarios_passed=False,
         risk_scenarios_candidate_allowed=False,
-        freeze_closed=True,
     )
     assert incomplete["complete"] is False
     assert incomplete["research_candidate_allowed"] is False
@@ -463,14 +445,10 @@ def test_evaluate_checklist_v2_completeness_helper():
     _assert_mass_ready_off(incomplete)
 
     complete = evaluate_checklist_v2_completeness(
-        multi_year_present=True,
-        cost_assumption_present=True,
+        **_CHECKLIST_BASE,
         leverage_short_complete=True,
-        robustness_gate_present=True,
-        data_gap_disclosed=True,
         risk_scenarios_passed=True,
         risk_scenarios_candidate_allowed=True,
-        freeze_closed=True,
         daily_path_dd_complete=True,
     )
     assert complete["complete"] is True
@@ -657,14 +635,10 @@ def test_no_drawdown_path_does_not_require_recovery_days():
 def test_evaluate_checklist_blocks_period_net_only_even_if_flagged_complete():
     """period_net_dd_only=True cannot pass the daily_path_dd item."""
     blocked = evaluate_checklist_v2_completeness(
-        multi_year_present=True,
-        cost_assumption_present=True,
+        **_CHECKLIST_BASE,
         leverage_short_complete=True,
-        robustness_gate_present=True,
-        data_gap_disclosed=True,
         risk_scenarios_passed=True,
         risk_scenarios_candidate_allowed=True,
-        freeze_closed=True,
         daily_path_dd_complete=True,  # caller lied
         period_net_dd_only=True,
     )

@@ -574,22 +574,8 @@ def test_w83_wave_tags_and_default_path_params():
         run_class_hyp_multi_year_eval,
     )
 
-    # W95 / w0818e: class-signals/v10 held (+ skew/CM-term/ΔBaseVol deep-dive)
-    assert CLASS_SIGNALS_VERSION in {
-        "class-signals/v6",
-        "class-signals/v7",
-        "class-signals/v8",
-        "class-signals/v9",
-        "class-signals/v10",
-    }
-    assert (
-        "W83" in CLASS_SIGNALS_WAVE
-        or "W89" in CLASS_SIGNALS_WAVE
-        or "W91" in CLASS_SIGNALS_WAVE
-        or "W92" in CLASS_SIGNALS_WAVE
-        or "W94" in CLASS_SIGNALS_WAVE
-        or "W95" in CLASS_SIGNALS_WAVE
-    )
+    assert CLASS_SIGNALS_VERSION == "class-signals/v10"
+    assert "W95" in CLASS_SIGNALS_WAVE
     # W86 / w0816u: offline.multiyear v7 adds sign-selection both-sides
     assert CLASS_HYP_EVAL_VERSION == "class-hyp-eval/v7"
     assert "W86" in CLASS_HYP_EVAL_WAVE
