@@ -259,3 +259,49 @@ def test_event_margin_crowding_skips_missing_and_empty_is_incomplete():
     assert pack.get("n_skip_margin_crowded", 0) >= 1
     assert pack.get("n_entered", 0) == 0
     assert pack.get("go") is False
+
+
+def test_worker_leftover_pre_mom_uses_entryidx_not_combo_pre_mom() -> None:
+    """Unique-22 leftover is still needed; do not unify with combo pre_mom."""
+    from pathlib import Path
+
+    from research.unique_logic.catalog import load_catalog_specs
+
+    leftover = (
+        "afterclose_only_event_hold",
+        "curve_steep_event_confirm",
+        "event_funding_adaptive_side",
+        "event_funding_easy_short",
+        "event_funding_stress_ls",
+        "event_funding_stress_skip",
+        "event_margin_crowding_skip",
+        "event_pre_mom_agree_hold",
+        "large_surprise_event_hold",
+    )
+    by_id = {s["logic_id"]: s for s in load_catalog_specs()}
+    for lid in leftover:
+        params = by_id[lid].get("params") or {}
+        assert not params.get("gates"), f"{lid} leftover still needed (not comboImpl)"
+
+    src = (
+        Path(__file__).resolve().parents[1]
+        / "platform"
+        / "workers"
+        / "research-mass-eval"
+        / "src"
+        / "daily_path.ts"
+    ).read_text(encoding="utf-8")
+    leftover_block = src.split("if (!comboImpl)", 1)[1].split(
+        'if (lid === "event_afterclose_delay2")', 1
+    )[0]
+    assert 'if (lid === "event_pre_mom_agree_hold")' in leftover_block
+    agree = leftover_block.split('if (lid === "event_pre_mom_agree_hold")', 1)[1]
+    assert "const i = ev.entryIdx;" in agree
+    assert "ev.entryIdx - 1" not in agree
+    assert "momentumAt(entryIdx)" in agree
+    assert "momentumAt(pairs, 5, i)" in agree
+    pre = src.split('if (gate === "pre_mom")', 1)[1].split(
+        "Unknown gate fails closed", 1
+    )[0]
+    assert "ev.entryIdx - 1" in pre
+

@@ -207,12 +207,26 @@ describe("comboEventGateOk", () => {
       join(dirname(fileURLToPath(import.meta.url)), "daily_path.ts"),
       "utf8",
     );
+    const leftover = src.slice(
+      src.indexOf("if (!comboImpl)"),
+      src.indexOf('if (lid === "event_afterclose_delay2"'),
+    );
+    expect(leftover).toContain('if (lid === "event_pre_mom_agree_hold")');
     const agree = src.slice(
       src.indexOf('if (lid === "event_pre_mom_agree_hold")'),
       src.indexOf('if (lid === "event_margin_crowding_skip")'),
     );
+    // Occupancy ≠ comboEventGateOk("pre_mom") (entryIdx-1). Do not unify.
+    expect(agree).toContain("const i = ev.entryIdx;");
+    expect(agree).not.toContain("ev.entryIdx - 1");
+    expect(agree).toContain("momentumAt(entryIdx)");
     expect(agree).toContain("momentumAt(pairs, 5, i)");
     expect(agree).not.toContain("momentumAt(pairs, 5, i - 1)");
+    const preMom = src.slice(
+      src.indexOf('if (gate === "pre_mom")'),
+      src.indexOf("// Unknown gate fails closed"),
+    );
+    expect(preMom).toContain("ev.entryIdx - 1");
     expect(src).not.toContain('if (lid === "event_pre_mom_easy_funding")');
     expect(src).not.toContain('if (lid === "event_pre_mom_steep_curve")');
     expect(src).toContain(
