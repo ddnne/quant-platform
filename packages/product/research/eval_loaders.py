@@ -121,6 +121,76 @@ def bars_rich_to_close_panel(
     }
 
 
+def load_bars_from_sqlite_rich(
+    *,
+    codes: Sequence[str],
+    period_start: str,
+    period_end: str,
+    db_path: str | Path = DEFAULT_SQLITE,
+    max_days: int | None = None,
+) -> dict[str, list[tuple[str, dict[str, Any]]]]:
+    """Load extra names from sqlite ``jquants_records`` via PK range per code.
+
+    Local ndjson mirrors are a 30-name shard. Missing requested codes are
+    filled from COMPLETE-backed sqlite (no invent). Empty code → omitted.
+    """
+    db = Path(db_path)
+    want = [str(c).strip() for c in codes if str(c).strip()]
+    if not db.exists() or not want:
+        return {}
+    p0 = str(period_start)[:10]
+    p1 = str(period_end)[:10]
+    out: dict[str, list[tuple[str, dict[str, Any]]]] = {}
+    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    try:
+        sql = (
+            "SELECT payload FROM jquants_records "
+            "WHERE source = 'jquants' AND dataset = 'equities_bars_daily' "
+            "AND natural_key >= ? AND natural_key <= ?"
+        )
+        for code in want:
+            lo = json.dumps({"Code": code, "Date": p0}, separators=(",", ":"))
+            hi = json.dumps({"Code": code, "Date": p1 + "~"}, separators=(",", ":"))
+            dmap: dict[str, dict[str, Any]] = {}
+            for (payload,) in con.execute(sql, (lo, hi)):
+                try:
+                    pl = json.loads(payload) if isinstance(payload, str) else payload
+                except (TypeError, json.JSONDecodeError):
+                    continue
+                if not isinstance(pl, Mapping):
+                    continue
+                date = str(pl.get("Date") or pl.get("date") or "")[:10]
+                if not date or date < p0 or date > p1:
+                    continue
+                close = pl.get("C")
+                if close is None:
+                    close = pl.get("Close") or pl.get("AdjC") or pl.get("AAdjC")
+                try:
+                    c = float(close)
+                except (TypeError, ValueError):
+                    continue
+                dmap[date] = {
+                    "close": c,
+                    "C": c,
+                    "Close": c,
+                    "Code": code,
+                    "Date": date,
+                    "date": date,
+                    "Va": pl.get("Va") or pl.get("AVa") or pl.get("MVa"),
+                    "Vo": pl.get("Vo") or pl.get("AVo") or pl.get("MVo"),
+                    "AdjC": pl.get("AdjC") or pl.get("AAdjC"),
+                    "AdjVo": pl.get("AdjVo") or pl.get("AAdjVo"),
+                }
+            if not dmap:
+                continue
+            pairs = sorted(dmap.items(), key=lambda x: x[0])
+            if max_days is not None and len(pairs) > int(max_days):
+                pairs = pairs[-int(max_days) :]
+            out[code] = pairs
+    finally:
+        con.close()
+    return out
+
 def _annualized_realized_vol(
     closes: Sequence[float], end_i: int, window: int
 ) -> float | None:
@@ -1085,6 +1155,123 @@ def load_short_ratio_series_from_sqlite(
         con.close()
 
 
+def load_fins_events_from_sqlite(
+    db_path: str | Path = DEFAULT_SQLITE,
+    *,
+    codes: Sequence[str] | None = None,
+    start: str | None = None,
+    end: str | None = None,
+) -> dict[str, list[dict[str, Any]]]:
+    """Load fins_summary disclosure events → ``{code: [event_dict, ...]}``.
+
+    Each event: disc_date, disc_time, eps, feps, bps, prior_eps, event_time,
+    available_at (row envelope when selected). DiscTime never invented.
+    """
+    db = Path(db_path)
+    if not db.exists():
+        return {}
+    code_list = [str(c).strip() for c in (codes or []) if str(c).strip()]
+    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    try:
+        # Prefer available_at when column present (PIT envelope).
+        cols = {
+            r[1]
+            for r in con.execute("PRAGMA table_info(jquants_records)").fetchall()
+        }
+        has_aa = "available_at" in cols
+        aa_sel = ", available_at" if has_aa else ""
+        sql = (
+            "SELECT natural_key, event_time, payload"
+            f"{aa_sel} FROM jquants_records "
+            "WHERE dataset = 'fins_summary'"
+        )
+        params: list[Any] = []
+        if start:
+            # include a lookback buffer for prior EPS
+            sql += " AND event_time >= ?"
+            params.append(str(start)[:10])
+        if end:
+            sql += " AND event_time <= ?"
+            params.append(str(end)[:10] + "T23:59:59")
+        if code_list:
+            clauses = " OR ".join(["natural_key LIKE ?" for _ in code_list])
+            sql += f" AND ({clauses})"
+            params.extend([f'%"{c}"%' for c in code_list])
+        sql += " ORDER BY event_time ASC"
+        code_set = set(code_list) if code_list else None
+        by_code: dict[str, list[dict[str, Any]]] = {}
+        for row in con.execute(sql, params):
+            if has_aa:
+                _nk, event_time, payload, row_aa = row
+            else:
+                _nk, event_time, payload = row
+                row_aa = None
+            try:
+                pl = json.loads(payload) if isinstance(payload, str) else payload
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if not isinstance(pl, Mapping):
+                continue
+            code = str(pl.get("Code") or "").strip()
+            if not code:
+                continue
+            if code_set is not None and code not in code_set:
+                continue
+            disc = str(pl.get("DiscDate") or pl.get("DisclosedDate") or str(event_time or "")[:10])[:10]
+            if not disc:
+                continue
+            disc_time = pl.get("DiscTime") or pl.get("DisclosedTime")
+            if disc_time is not None:
+                disc_time = str(disc_time).strip() or None
+
+            def _f(key: str) -> float | None:
+                v = pl.get(key)
+                if v is None or v == "":
+                    return None
+                try:
+                    return float(v)
+                except (TypeError, ValueError):
+                    return None
+
+            by_code.setdefault(code, []).append(
+                {
+                    "disc_date": disc,
+                    "disc_time": disc_time,
+                    "eps": _f("EPS"),
+                    "feps": _f("FEPS"),
+                    "bps": _f("BPS"),
+                    "roe": _f("ROE"),
+                    "div_ann": _f("DivAnn"),
+                    "np": _f("NP"),
+                    "sales": _f("Sales"),
+                    "eq": (
+                        _f(FINS_SUMMARY_EQ_KEY)
+                        if _f(FINS_SUMMARY_EQ_KEY) is not None
+                        else _f("ShEq")
+                    ),
+                    "ta": _f(FINS_SUMMARY_TA_KEY),
+                    "eq_ar": _f(FINS_SUMMARY_EQAR_KEY),
+                    "event_time": str(event_time) if event_time else None,
+                    "available_at": str(row_aa) if row_aa else None,
+                    "source": "fins_summary",
+                }
+            )
+        # Attach prior_eps chronologically
+        for code, events in by_code.items():
+            events.sort(key=lambda e: e["disc_date"])
+            last_eps = None
+            last_ta = None
+            for ev in events:
+                ev["prior_eps"] = last_eps
+                ev["prior_ta"] = last_ta
+                if ev.get("eps") is not None:
+                    last_eps = ev["eps"]
+                if ev.get("ta") is not None:
+                    last_ta = ev["ta"]
+        return by_code
+    finally:
+        con.close()
+
 def load_fins_earnings_date_from_sqlite(
     db_path: str | Path = DEFAULT_SQLITE,
     *,
@@ -1264,9 +1451,11 @@ __all__ = [
     "collect_liquidity_bar_rows",
     "fins_asof",
     "fins_summary_ta_eqar_stats",
+    "load_bars_from_sqlite_rich",
     "load_bars_ndjson",
     "load_bars_ndjson_rich",
     "load_fins_earnings_date_from_sqlite",
+    "load_fins_events_from_sqlite",
     "load_fins_latest_asof_map",
     "load_margin_from_sqlite",
     "load_margin_ndjson",

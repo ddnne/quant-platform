@@ -236,12 +236,12 @@ def test_cf_daily_path_job_does_not_import_factory() -> None:
         / "product"
         / "research"
     )
-    # AST import walk only — comments that mention class_hyp_eval (eval_universe)
-    # are not imports.
+    # AST import walk only — comments are not imports.
     banned_both = ("mass_strategy_factory", "class_hyp_eval")
     files: dict[str, tuple[str, ...]] = {
         "cf_daily_path_job.py": banned_both,
         "cf_mass_eval_job.py": banned_both,
+        "cf_mass_eval_stage.py": banned_both,
         "bar_native_specs.py": banned_both,
         "eval_universe.py": banned_both,
         "eval_loaders.py": banned_both,

@@ -80,7 +80,7 @@ def load_shard_bars(
     codes: Sequence[str],
     max_days: int,
 ) -> dict[str, Any]:
-    from research.eval_universe import (
+    from research.eval_loaders import (
         bars_rich_to_close_panel,
         load_bars_ndjson_rich,
         resolve_bars_path,
@@ -425,7 +425,7 @@ def panel_index(
     *,
     momentum_n: int,
 ) -> dict[str, Any]:
-    from research.eval_universe import momentum_series
+    from research.eval_loaders import momentum_series
 
     n = int(momentum_n)
     by_date: dict[str, dict[str, float | None]] = {}

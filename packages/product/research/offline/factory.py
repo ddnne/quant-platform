@@ -2494,7 +2494,7 @@ def evaluate_vol_risk_adjusted_on_bars(
     gate_mode: str = "mom_over_vol",
 ) -> dict[str, Any]:
     """Vol-gated multi-day mom (mom_over_vol or vol_expand)."""
-    from research.eval_universe import momentum_series
+    from research.eval_loaders import momentum_series
 
     h = int(hold_days)
     vn = int(vol_n)
@@ -2623,22 +2623,19 @@ def load_batch_data_context(
     from research.eval_loaders import (
         DEFAULT_BARS_MIRROR_DIR,
         bars_rich_to_close_panel,
-        load_bars_ndjson_rich,
-        load_nky_vol_series_from_sqlite,
-        load_opt225_regime_bundle_for_eval,
-        resolve_bars_path,
-    )
-    from research.eval_universe import (
-        DEFAULT_SQLITE,
         build_repo_curve_series,
+        load_bars_ndjson_rich,
         load_fins_events_from_sqlite,
         load_margin_ndjson,
+        load_nky_vol_series_from_sqlite,
+        load_opt225_regime_bundle_for_eval,
         load_repo_rows_all_tenors_from_sqlite,
         load_repo_rows_from_sqlite,
         load_short_ratio_series_from_sqlite,
+        resolve_bars_path,
         resolve_margin_path,
-        select_eval_universe,
     )
+    from research.eval_universe import DEFAULT_SQLITE, select_eval_universe
     from research.eval_windows import (
         DEFAULT_PERIODS,
         DEFAULT_PERIODS_Q4,
@@ -3080,7 +3077,7 @@ def _eval_on_panel(
     logic_id: str | None = None,
 ) -> dict[str, Any]:
     """Dispatch pure evaluator for one strategy × one period panel."""
-    from research.eval_universe import momentum_series
+    from research.eval_loaders import momentum_series
     from research.offline.bar_eval import (
         evaluate_cross_section_on_bars,
         evaluate_event_post_on_bars,

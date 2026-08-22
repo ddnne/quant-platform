@@ -1102,7 +1102,7 @@ def _vol_sidecar() -> dict[str, dict[str, float]]:
         return _VOL_CACHE
     out: dict[str, dict[str, float]] = {}
     try:
-        from research.eval_universe import (
+        from research.eval_loaders import (
             load_nky_vol_series_from_sqlite,
             load_opt225_regime_bundle_for_eval,
         )

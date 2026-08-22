@@ -68,6 +68,7 @@ from research.eval_loaders import (
     collect_liquidity_bar_rows,
     load_bars_ndjson_rich,
     load_fins_earnings_date_from_sqlite,
+    load_fins_events_from_sqlite,
     load_margin_from_sqlite,
     load_margin_ndjson,
     load_repo_rows_from_sqlite,
@@ -79,7 +80,6 @@ from research.eval_loaders import (
 from research.eval_tracks import EVAL_TRACK_LIQ_LARGE, EVAL_TRACKS
 from research.eval_universe import (
     DEFAULT_SQLITE,
-    load_fins_events_from_sqlite,
     select_eval_universe,
 )
 from research.eval_windows import DEFAULT_PERIODS
