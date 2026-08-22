@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from research.baseline_catalog import (
     RESEARCH_STATUS_REJECTED,
     SIGNAL_ID_S1,
@@ -52,18 +50,12 @@ from research.risk_scenarios import (
 )
 from research.robustness_gate import evaluate_research_robustness_gate
 from tests.research_eval_util import (
+    EVAL_HARNESS_EXTRA_HYP_PATH,
+    EVAL_HARNESS_MULTIYEAR_PATH,
+    EVAL_HARNESS_PATH,
+    EVAL_HARNESS_S1_PATH,
     _assert_mass_ready_off,
     assert_ast_bans_mass_ready_orders,
-)
-
-REPO = Path(__file__).resolve().parents[1]
-EVAL_HARNESS_PATH = REPO / "packages" / "product" / "research" / "eval_harness.py"
-EVAL_HARNESS_MULTIYEAR_PATH = (
-    REPO / "packages" / "product" / "research" / "eval_harness_multiyear.py"
-)
-EVAL_HARNESS_S1_PATH = REPO / "packages" / "product" / "research" / "eval_harness_s1.py"
-EVAL_HARNESS_EXTRA_HYP_PATH = (
-    REPO / "packages" / "product" / "research" / "eval_harness_extra_hyp.py"
 )
 
 _W99_REF0 = W99_STICKY_DAILY_PATH_DD_REFERENCE[0]
@@ -111,8 +103,26 @@ def _complete_scenario_rows():
     ]
 
 
+def _std_eval(**kw):
+    return run_standard_research_eval(dry_run=True, **kw)
+
+
+def _std_eval_scen(**kw):
+    return _std_eval(scenario_rows=_complete_scenario_rows(), **kw)
+
+
+_HOLDING_RECORDS = [
+    {"date": "2015-09-01", "code": "13010", "sign": 1},
+    {"date": "2015-09-02", "code": "13010", "sign": 1},
+    {"date": "2015-09-03", "code": "13010", "sign": -1},
+    {"date": "2015-09-01", "code": "72030", "sign": 1},
+    {"date": "2015-09-02", "code": "72030", "sign": 1},
+    {"date": "2015-09-03", "code": "72030", "sign": 1},
+]
+
+
 def test_dry_run_wiring_completes_mass_ready_phase7_closed():
-    out = run_standard_research_eval(dry_run=True)
+    out = _std_eval()
     assert out["checklist_version"] == CHECKLIST_VERSION
     assert out["checklist_version"] == "standard-research-eval-checklist/v2"
     assert out["prior_checklist_version"] == CHECKLIST_VERSION_V1
@@ -174,8 +184,7 @@ def test_gate_pass_still_not_ready_or_candidate():
     assert gate["ready_declared"] is False
     assert gate["operational_go"] is False
 
-    out = run_standard_research_eval(
-        dry_run=True,
+    out = _std_eval(
         mode="wiring_only",
         period_rows_for_gate=_GATE_PASS_ROWS,
         min_active_per_period=20,
@@ -190,7 +199,7 @@ def test_gate_pass_still_not_ready_or_candidate():
 
 
 def test_does_not_register_new_signals():
-    out = run_standard_research_eval(dry_run=True)
+    out = _std_eval()
     assert out["new_signals_registered"] is False
     assert out["baseline_demo"]["new_signals_registered"] is False
     # No new signal ids appear outside catalog surface.
@@ -224,8 +233,7 @@ def test_rejected_baselines_still_rejected():
         assert entry["research_status"] == RESEARCH_STATUS_REJECTED
         _assert_mass_ready_off(entry)
 
-    out = run_standard_research_eval(
-        dry_run=True,
+    out = _std_eval(
         mode="s1_rejected_baseline",
     )
     assert out["mode"] == "s1_rejected_baseline"
@@ -234,8 +242,7 @@ def test_rejected_baselines_still_rejected():
     _assert_mass_ready_off(out)
     assert is_research_baseline_rejected(SIGNAL_ID_S1) is True
 
-    out4 = run_standard_research_eval(
-        dry_run=True,
+    out4 = _std_eval(
         mode="s4_rejected_baseline",
     )
     assert out4["baseline_demo"]["still_rejected"] is True
@@ -245,13 +252,12 @@ def test_rejected_baselines_still_rejected():
 
 def test_cost_change_requires_reason():
     try:
-        run_standard_research_eval(dry_run=True, one_way_cost=0.002)
+        _std_eval(one_way_cost=0.002)
         raise AssertionError("expected EvalHarnessError for cost change without reason")
     except EvalHarnessError as exc:
         assert "cost_change_reason" in str(exc)
 
-    out = run_standard_research_eval(
-        dry_run=True,
+    out = _std_eval(
         one_way_cost=0.002,
         cost_change_reason="unit-test override only",
     )
@@ -261,18 +267,7 @@ def test_cost_change_requires_reason():
 
 
 def test_holding_records_optional_annotation():
-    records = [
-        {"date": "2015-09-01", "code": "13010", "sign": 1},
-        {"date": "2015-09-02", "code": "13010", "sign": 1},
-        {"date": "2015-09-03", "code": "13010", "sign": -1},
-        {"date": "2015-09-01", "code": "72030", "sign": 1},
-        {"date": "2015-09-02", "code": "72030", "sign": 1},
-        {"date": "2015-09-03", "code": "72030", "sign": 1},
-    ]
-    out = run_standard_research_eval(
-        dry_run=True,
-        holding_records=records,
-    )
+    out = _std_eval(holding_records=_HOLDING_RECORDS)
     assert "holding_turnover_metrics" in out["steps_completed"]
     assert out["holding"]["run_length_stats"]["n_runs_total"] >= 1
     _assert_mass_ready_off(out["holding"])
@@ -280,7 +275,7 @@ def test_holding_records_optional_annotation():
 
 def test_invalid_mode_rejected():
     try:
-        run_standard_research_eval(dry_run=True, mode="invent_new_signal")
+        _std_eval(mode="invent_new_signal")
         raise AssertionError("expected EvalHarnessError")
     except EvalHarnessError as exc:
         assert "mode" in str(exc).lower()
@@ -315,7 +310,7 @@ def test_standard_eval_ast_no_mass_import_no_new_signal_mint():
 
 def test_checklist_incomplete_not_research_candidate():
     """Incomplete checklist (default wiring) cannot become research_candidate."""
-    out = run_standard_research_eval(dry_run=True)
+    out = _std_eval()
     _assert_mass_ready_off(out)
     assert out["research_candidate_allowed"] is False
     assert out["checklist_complete"] is False
@@ -326,8 +321,7 @@ def test_checklist_incomplete_not_research_candidate():
 
 def test_checklist_complete_still_not_auto_candidate_and_freeze():
     """Even with full scenario metrics + daily_path_DD, harness never auto-promotes."""
-    out = run_standard_research_eval(
-        dry_run=True,
+    out = _std_eval(
         mode="wiring_only",
         period_rows_for_gate=_GATE_PASS_ROWS,
         scenario_rows=_complete_scenario_rows(),
@@ -362,8 +356,7 @@ def test_scenario_sign_break_prefers_fail_candidate():
         scenario_row(SCENARIO_RATE_DOWN, not_applicable=True, na_reason="n/a"),
         scenario_row(SCENARIO_LIQUIDITY_STRESS, not_applicable=True, na_reason="n/a"),
     ]
-    out = run_standard_research_eval(
-        dry_run=True,
+    out = _std_eval(
         scenario_rows=scen,
         baseline_majority_sign=-1,
         baseline_net_majority_sign=-1,
@@ -399,8 +392,7 @@ def test_leverage_short_costs_long_only_and_long_short():
     )
     assert abs(ls["short_borrow"]["daily_cost"] - expected) < 1e-12
 
-    out = run_standard_research_eval(
-        dry_run=True,
+    out = _std_eval(
         position_style=POSITION_STYLE_LONG_SHORT,
         short_fraction=0.5,
         uses_short=True,
@@ -412,8 +404,7 @@ def test_leverage_short_costs_long_only_and_long_short():
 def test_high_frequency_hyp_requires_holding_for_completeness():
     """HF hyps without holding_records → holding near-required fails completeness."""
     scen = _complete_scenario_rows()
-    out = run_standard_research_eval(
-        dry_run=True,
+    out = _std_eval(
         scenario_rows=scen,
         high_frequency_hyp=True,
         # no holding_records
@@ -428,8 +419,7 @@ def test_high_frequency_hyp_requires_holding_for_completeness():
         {"date": "2015-09-02", "code": "13010", "sign": 1},
         {"date": "2015-09-03", "code": "13010", "sign": -1},
     ]
-    out2 = run_standard_research_eval(
-        dry_run=True,
+    out2 = _std_eval(
         scenario_rows=scen,
         high_frequency_hyp=True,
         holding_records=records,
@@ -490,8 +480,7 @@ def test_evaluate_risk_scenarios_standalone():
 
 def test_daily_path_dd_unmeasured_is_incomplete():
     """Scenarios alone are not enough — missing daily_path_DD → incomplete."""
-    out = run_standard_research_eval(
-        dry_run=True,
+    out = _std_eval(
         scenario_rows=_complete_scenario_rows(),
         baseline_majority_sign=-1,
         baseline_net_majority_sign=-1,
@@ -508,8 +497,7 @@ def test_daily_path_dd_unmeasured_is_incomplete():
 
 def test_period_net_dd_zero_daily_unmeasured_is_incomplete():
     """period_net_DD=0 AND daily unmeasured = incomplete (not riskless)."""
-    out = run_standard_research_eval(
-        dry_run=True,
+    out = _std_eval(
         scenario_rows=_complete_scenario_rows(),
         period_net_dd=0.0,
     )
@@ -537,8 +525,7 @@ def test_period_net_dd_only_cannot_pass_even_if_nonzero():
     assert "period_net_DD_only_pass_forbidden" in gate["fails"]
     assert gate["ready_declared"] is False
 
-    out = run_standard_research_eval(
-        dry_run=True,
+    out = _std_eval(
         scenario_rows=_complete_scenario_rows(),
         period_net_dd=-0.0023,
         daily_path_method="period_net_cumsum_proxy",

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from tests.research_eval_util import _assert_mass_ready_off
 from features.class_signals import (
     CLASS_EVENT_POST,
     CLASS_FLOW_DEMAND,
@@ -84,8 +85,7 @@ def test_compute_multi_day_hold_signal():
     assert rec["hypothesis_class"] == CLASS_MULTI_DAY_HOLD
     assert rec["value"] == 1.0
     assert rec["metadata"]["not_simple_daily_sign"] is True
-    assert rec["metadata"]["ready_declared"] is False
-    assert rec["metadata"]["mass_research"] == "NO-GO"
+    _assert_mass_ready_off(rec["metadata"])
 
     off = compute_multi_day_hold_signal(
         momentum=0.03, is_trading_day=0.0, hold_days=5
@@ -169,8 +169,7 @@ def test_class_signal_definitions_not_daily_sign():
         assert d.get("not_simple_daily_sign") is True
         assert d.get("hypothesis_class") != "simple_daily_sign"
     doc = class_signals_document()
-    assert doc["mass_research"] == "NO-GO"
-    assert doc["ready_declared"] is False
+    _assert_mass_ready_off(doc)
     assert doc["s1_s5_unreject"] is False
 
 
@@ -344,65 +343,44 @@ def test_occurrence_rate_not_count_alone():
     assert md["sufficient"] is True
 
 
+_PROD_OK = dict(
+    checklist_complete=True,
+    gate_passed=True,
+    risk_ok=True,
+    economic_net_ok=True,
+    occurrence_ok=True,
+    multi_year_ok=True,
+    skew_ok=True,
+    n_ok_periods=6,
+    stats_ok=True,
+)
+
+
+def _prod_bar(**overrides):
+    return production_candidate_bar(**{**_PROD_OK, **overrides})
+
+
 def test_production_candidate_bar_all_criteria():
     """research_candidate True only when all production criteria pass."""
-    ok = production_candidate_bar(
-        checklist_complete=True,
-        gate_passed=True,
-        risk_ok=True,
-        economic_net_ok=True,
-        occurrence_ok=True,
-        multi_year_ok=True,
-        skew_ok=True,
-        n_ok_periods=6,
-        stats_ok=True,
-    )
+    ok = _prod_bar()
     assert ok["research_candidate"] is True
     assert ok["candidate_yes_no"] == "yes"
-    assert ok["ready_declared"] is False
-    assert ok["mass_research"] == "NO-GO"
-    assert ok["connected_to_ready"] is False
+    _assert_mass_ready_off(ok, allow_research_candidate=True)
 
     # missing occurrence → discussion_only (not production)
-    disc = production_candidate_bar(
-        checklist_complete=True,
-        gate_passed=True,
-        risk_ok=True,
-        economic_net_ok=True,
-        occurrence_ok=False,
-        multi_year_ok=True,
-        skew_ok=True,
-        n_ok_periods=6,
-        stats_ok=True,
-    )
+    disc = _prod_bar(occurrence_ok=False)
     assert disc["research_candidate"] is False
     assert disc["candidate_yes_no"] == "no_discussion_only"
+    _assert_mass_ready_off(disc)
 
     # weak econ → not_candidate
-    weak = production_candidate_bar(
-        checklist_complete=True,
-        gate_passed=True,
-        risk_ok=True,
-        economic_net_ok=False,
-        occurrence_ok=True,
-        multi_year_ok=True,
-        skew_ok=True,
-        n_ok_periods=6,
-        stats_ok=True,
-    )
+    weak = _prod_bar(economic_net_ok=False)
     assert weak["research_candidate"] is False
     assert weak["verdict"] == "not_candidate_economic_net_not_meaningful"
+    _assert_mass_ready_off(weak)
 
     # W81: stats bar fail with W80 core ok → demote discussion_only
-    noisy = production_candidate_bar(
-        checklist_complete=True,
-        gate_passed=True,
-        risk_ok=True,
-        economic_net_ok=True,
-        occurrence_ok=True,
-        multi_year_ok=True,
-        skew_ok=True,
-        n_ok_periods=6,
+    noisy = _prod_bar(
         stats_ok=False,
         stats_bar={"noisy": True, "stats_ok": False},
         require_stats=True,
@@ -485,7 +463,7 @@ def test_offline_bar_eval_pure_on_synthetic_bars():
     md = evaluate_multi_day_hold_on_bars(bars, hold_days=5, one_way_cost=0.001)
     assert md["signal_id"] == SIGNAL_ID_MULTI_DAY_HOLD
     assert md["hold_days"] == 5
-    assert md["ready_declared"] is False
+    _assert_mass_ready_off(md)
     assert md.get("occurrence") is not None
     assert "activation_rate" in md["occurrence"]
 
@@ -591,8 +569,5 @@ def test_w83_wave_tags_and_default_path_params():
     # W85 promote_default: sticky hold=10 mom=3 parallel to mom=5 pin
     assert sig.parameters["include_cross_section_hold_10_mom3"].default is True
     assert sig.parameters["cross_section_hold10_mom3_momentum_n"].default == 3
-    # Freezes: no Mass/READY auto
     doc = class_signals_document()
-    assert doc["mass_research"] == "NO-GO"
-    assert doc["ready_declared"] is False
-    assert doc["phase7"] == "OFF"
+    _assert_mass_ready_off(doc)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import Counter
 
+from tests.research_eval_util import _assert_mass_ready_off
 from research.hypothesis_classes import (
     CLASS_CROSS_SECTION_RELATIVE,
     CLASS_EVENT_POST,
@@ -128,6 +129,20 @@ def _tpl_proposal(lid: str) -> dict:
     }
 
 
+_VOL_BAD = {
+    "mode": "not_a_mode",
+    "vol_short_n": 10,
+    "vol_long_n": 60,
+    "hold_days": 10,
+    "momentum_n": 5,
+}
+
+
+def _synth_ctx(*, seed: int, n: int = 5, max_codes: int = 4):
+    cfg = MassFactoryConfig(seed=seed, n=n, max_codes=max_codes)
+    return cfg, load_batch_data_context(cfg, synthetic=True)
+
+
 def _eval_vol_family(
     lids,
     family_id,
@@ -135,18 +150,17 @@ def _eval_vol_family(
     seed: int,
     panel_key: str,
     dataset: str,
-    bad_params: dict,
     bad_logic_id: str,
+    bad_params: dict | None = None,
 ):
     for lid in lids:
         assert dataset in LOGIC_TEMPLATES[lid].datasets_used
-    cfg = MassFactoryConfig(seed=seed, n=5, max_codes=4)
-    ctx = load_batch_data_context(cfg, synthetic=True)
+    _, ctx = _synth_ctx(seed=seed)
     assert all(p.get(panel_key) for p in ctx.panels)
     for lid in lids:
         _eval_template(lid, family_id, ctx)
     ok_bad, reason_bad = validate_strategy_at_gen(
-        family_id, bad_params, logic_id=bad_logic_id
+        family_id, dict(bad_params or _VOL_BAD), logic_id=bad_logic_id
     )
     assert ok_bad is False
     assert reason_bad is not None
@@ -163,17 +177,14 @@ def _eval_template(lid: str, family_id: str, ctx) -> None:
             "logic_id": lid,
             "family_id": family_id,
             "params": dict(tpl.base_params),
-            "thesis": tpl.thesis,
-            "signal_definition": tpl.signal_definition,
-            "position_rule": tpl.position_rule,
-            "datasets_used": list(tpl.datasets_used),
+            **_tpl_proposal(lid),
         },
         ctx,
     )
     assert res["status"] == "evaluated"
     assert res["n_periods_total"] >= 1
     assert res.get("logic_id") == lid
-    assert res["mass_research"] == "NO-GO"
+    _assert_mass_ready_off(res)
 
 
 def test_logic_templates_distinct_economic_logic():
@@ -447,9 +458,8 @@ def test_gen_time_reject_missing_datasets():
 
 
 def test_fail_one_continue_and_screen():
-    cfg = MassFactoryConfig(seed=7, n=12, max_codes=4)
+    cfg, ctx = _synth_ctx(seed=7, n=12)
     gen = generate_strategy_batch(cfg)
-    ctx = load_batch_data_context(cfg, synthetic=True)
     poison = {
         "strategy_id": "poison_unknown_family",
         "family_id": "not_a_real_family_xyz",
@@ -463,11 +473,7 @@ def test_fail_one_continue_and_screen():
     assert batch["n_strategies_evaluated"] == len(gen2["strategies_after_dedup"])
     assert batch["n_eval_ok"] + batch["n_eval_fail"] == batch["n_strategies_evaluated"]
     assert len(batch["screens"]) == batch["n_strategies_evaluated"]
-    assert batch["continuous_paper"] == "UNARMED"
-    assert batch["human_main_candidates_selected"] is False
-    assert batch["ready_declared"] is False
-    assert batch["mass_research"] == "NO-GO"
-    assert batch["frozen_defaults_retuned"] is False
+    _assert_mass_ready_off(batch)
     assert batch["eval_set"] == "after_dedup"
 
     scr = screen_strategy_result(
@@ -498,22 +504,21 @@ def test_run_mass_factory_synthetic_smoke():
     assert sm["human_main_candidates_selected"] is False
     assert sm["continuous_paper"] == "UNARMED"
     assert sm["frozen_defaults_retuned"] is False
-    assert pack["mass_research"] == "NO-GO"
+    _assert_mass_ready_off(pack)
     assert pack["batch"]["n_strategies_evaluated"] == sm["n_after_dedup"]
     assert isinstance(pack["batch_ranking"], list)
 
 
 def test_evaluate_one_strategy_synthetic():
-    cfg = MassFactoryConfig(seed=1, n=5)
+    cfg, ctx = _synth_ctx(seed=1)
     gen = generate_strategy_batch(cfg)
-    ctx = load_batch_data_context(cfg, synthetic=True)
     strat = gen["strategies_after_dedup"][0]
     res = evaluate_one_strategy(strat, ctx)
     assert res["strategy_id"] == strat["strategy_id"]
     assert res["status"] == "evaluated"
     assert res["n_periods_total"] >= 1
     assert "sign_selection" in res
-    assert res["mass_research"] == "NO-GO"
+    _assert_mass_ready_off(res)
     assert res.get("logic_id") == strat.get("logic_id")
 
 
@@ -567,8 +572,7 @@ def test_propose_profit_hypotheses_rejects_window_tweaks_and_evals():
     assert good["n_rejected"] == 0
     assert good.get("eval") is not None
     assert good["eval"].get("n_strategies_evaluated") == 2
-    assert good["mass_research"] == "NO-GO"
-    assert good["continuous_paper"] == "UNARMED"
+    _assert_mass_ready_off(good)
 
 
 def test_nky_vol_logics_templates_and_eval_synthetic():
@@ -586,13 +590,6 @@ def test_nky_vol_logics_templates_and_eval_synthetic():
         seed=91,
         panel_key="nky_vol_series",
         dataset="derivatives_bars_daily_futures",
-        bad_params={
-            "mode": "not_a_mode",
-            "vol_short_n": 10,
-            "vol_long_n": 60,
-            "hold_days": 10,
-            "momentum_n": 5,
-        },
         bad_logic_id="nky_vol_abs_level",
     )
 
@@ -604,14 +601,7 @@ def test_opt225_vol_logics_templates_and_eval_synthetic():
         seed=92,
         panel_key="opt225_regime",
         dataset="derivatives_bars_daily_options_225",
-        bad_params={
-            "mode": "not_a_mode",
-            "series_kind": "basevol",
-            "vol_short_n": 10,
-            "vol_long_n": 60,
-            "hold_days": 10,
-            "momentum_n": 5,
-        },
+        bad_params={**_VOL_BAD, "series_kind": "basevol"},
         bad_logic_id="opt225_basevol_abs_level",
     )
 

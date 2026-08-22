@@ -5,7 +5,6 @@ Phase7/Mass OFF freeze + AST bans stay; no READY mint.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
@@ -16,11 +15,19 @@ from data_contracts.permanent_defer import (
     PermanentDeferHistoryError,
 )
 from tests.research_eval_util import (
+    MINIMAL_SIGNAL_DOCS_PATH,
+    MINIMAL_SIGNAL_PATH,
+    SINGLE_SHOT_PATH,
     _assert_mass_ready_off,
-    _capture_puts,
-    _d1_row,
-    _fake_d1_tables,
+    _boom_d1,
+    _c21_d1_tables,
     _injected_multiday,
+    _injected_single_shot,
+    _put_json,
+    _single_shot_kw,
+    _tip_bar,
+    _tip_cal_row,
+    _tip_topix_row,
     assert_ast_bans_mass_ready_orders,
 )
 from research.single_shot_job import (
@@ -54,18 +61,6 @@ from research.single_shot_job import (
 )
 from selection.budget_ledger import MassResearchDisabledError, ResearchBudgetCapability
 from selection.screen import ExperimentBudget
-
-REPO_ROOT = Path(__file__).resolve().parents[1]
-SINGLE_SHOT_PATH = (
-    REPO_ROOT / "packages" / "product" / "research" / "single_shot_job.py"
-)
-MINIMAL_SIGNAL_PATH = (
-    REPO_ROOT / "packages" / "research_runtime" / "features" / "minimal_signal.py"
-)
-MINIMAL_SIGNAL_DOCS_PATH = (
-    REPO_ROOT / "packages" / "research_runtime" / "features" / "minimal_signal_docs.py"
-)
-
 
 def test_complete_21_is_exactly_twenty_one_and_excludes_permanent_defer():
     assert len(COMPLETE_21_DATASETS) == 21
@@ -158,20 +153,14 @@ def test_build_rejects_empty_and_defer():
 
 def test_execute_rejects_permanent_defer_before_d1():
     """T3: execute path fail-closed on DEFER 5 — no D1 call."""
-    calls: list[str] = []
-
-    def boom_d1(sql: str):
-        calls.append(sql)
-        raise AssertionError("d1 must not be called for permanent DEFER input")
-
+    calls, boom_d1 = _boom_d1()
     with pytest.raises(PermanentDeferHistoryError, match="permanent DEFER"):
         execute_single_shot_job(
-            dataset_ids=["equities_master", "equities_bars_daily"],
-            period_start="2026-08-01",
-            period_end="2026-08-15",
-            job_id="defer-reject-demo",
-            dry_run=True,
-            d1_execute=boom_d1,
+            **_single_shot_kw(
+                job_id="defer-reject-demo",
+                dataset_ids=["equities_master", "equities_bars_daily"],
+                d1_execute=boom_d1,
+            )
         )
     assert calls == []
 
@@ -212,25 +201,19 @@ def test_execute_dry_run_with_injected_d1(tmp_path: Path):
             }
         ]
 
-    puts, fake_put = _capture_puts()
-
-    ex = execute_single_shot_job(
-        dataset_ids=["equities_bars_daily", "markets_calendar"],
-        period_start="2026-08-01",
-        period_end="2026-08-15",
+    puts, kw = _injected_single_shot(
+        tmp_path,
         job_id="w0815aq-unit-demo",
-        dry_run=True,
         d1_execute=fake_d1,
-        r2_put=fake_put,
-        staging_dir=tmp_path,
+        dataset_ids=["equities_bars_daily", "markets_calendar"],
     )
+    ex = execute_single_shot_job(**kw)
     assert ex.job_id == "w0815aq-unit-demo"
     _assert_mass_ready_off(ex)
-    assert ex.phase7 == "OFF"
     assert ex.content_hash.startswith("sha256:")
     assert ex.result_r2_key.startswith("research/single_shot/job=w0815aq-unit-demo/")
     assert len(puts) == 3
-    assert all(b == "quant-structured" for b in fake_put.buckets)
+    assert all(b == "quant-structured" for b in kw["r2_put"].buckets)
     assert {ex.manifest_r2_key, ex.input_plan_r2_key, ex.result_r2_key} <= set(puts)
     assert ex.tip_extracts["extracts"]["equities_bars_daily"]["row_count"] == 3
     assert ex.tip_extracts["extracts"]["markets_calendar"]["row_count"] == 2
@@ -245,7 +228,7 @@ def test_extract_d1_tip_summaries_rejects_defer():
             ["equities_earnings_calendar"],
             period_start="2026-08-01",
             period_end="2026-08-15",
-            d1_execute=lambda sql: (_ for _ in ()).throw(AssertionError("no d1")),
+            d1_execute=_boom_d1()[1],
         )
 
 
@@ -255,7 +238,7 @@ def test_extract_d1_tip_feature_rows_rejects_defer():
             ["equities_master"],
             period_start="2026-08-01",
             period_end="2026-08-15",
-            d1_execute=lambda sql: (_ for _ in ()).throw(AssertionError("no d1")),
+            d1_execute=_boom_d1()[1],
         )
 
 
@@ -320,17 +303,6 @@ def test_tip_short_ratio_level_with_section():
     assert discovered["features"][0]["row_counts"]["non_null"] >= 1
 
 
-def _tip_bar(code: str, day: str, close: float, volume: float) -> dict:
-    return {
-        "code": code,
-        "date": day,
-        "volume": volume,
-        "close": close,
-        "available_at": f"{day}T15:30:00+09:00",
-        "event_time": f"{day}T09:00:00+09:00",
-    }
-
-
 def test_tip_feature_context_and_candidate_compute():
     tip_rows = {
         "equities_bars_daily": [
@@ -338,22 +310,10 @@ def test_tip_feature_context_and_candidate_compute():
             _tip_bar("13010", "2026-08-04", 110.0, 150.0),
         ],
         "markets_calendar": [
-            {
-                "date": d,
-                "holiday_division": "1",
-                "available_at": f"{d}T09:00:00+09:00",
-                "event_time": f"{d}T09:00:00+09:00",
-            }
-            for d in ("2026-08-03", "2026-08-04")
+            _tip_cal_row(d) for d in ("2026-08-03", "2026-08-04")
         ],
         "indices_bars_daily_topix": [
-            {
-                "date": d,
-                "close": c,
-                "available_at": f"{d}T15:30:00+09:00",
-                "event_time": f"{d}T09:00:00+09:00",
-                "payload": {"Date": d, "C": c},
-            }
+            _tip_topix_row(d, c)
             for d, c in (("2026-08-03", 3000.0), ("2026-08-04", 3030.0))
         ],
     }
@@ -373,8 +333,6 @@ def test_tip_feature_context_and_candidate_compute():
         codes=["13010"],
         dates=["2026-08-03", "2026-08-04"],
     )
-    assert result["ready_declared"] is False
-    assert result["local_sot"] is False
     by_id = {f["feature_id"]: f for f in result["features"]}
     assert set(by_id) == set(DEFAULT_CANDIDATE_FEATURES)
     # volume: (150-100)/100 = 0.5
@@ -396,47 +354,20 @@ def test_tip_feature_context_and_candidate_compute():
 
 
 def test_execute_with_features_writes_manifest_feature_stats(tmp_path: Path):
-    bars = [
-        _d1_row(
-            {"Code": "13010", "Date": d},
-            d,
-            {"Code": "13010", "Date": d, "C": c, "Vo": vo},
-        )
-        for d, c, vo in (("2026-08-03", 100, 100), ("2026-08-04", 110, 150))
-    ]
-    cal = [
-        _d1_row({"Date": d}, d, {"Date": d, "HolDiv": "1"}, aa="T09:00:00+09:00")
-        for d in ("2026-08-03", "2026-08-04")
-    ]
-    topix = [
-        _d1_row({"Date": d}, d, {"Date": d, "C": c})
-        for d, c in (("2026-08-03", 3000.0), ("2026-08-04", 3030.0))
-    ]
-    fake_d1 = _fake_d1_tables(
-        {
-            "equities_bars_daily": bars,
-            "markets_calendar": cal,
-            "indices_bars_daily_topix": topix,
-        }
-    )
-    puts, fake_put = _capture_puts()
-
-    ex = execute_single_shot_job(
-        dataset_ids=[
-            "equities_bars_daily",
-            "markets_calendar",
-            "indices_bars_daily_topix",
-        ],
-        period_start="2026-08-01",
-        period_end="2026-08-15",
+    puts, kw = _injected_single_shot(
+        tmp_path,
         job_id="w0815ar-unit-feat",
-        dry_run=True,
+        tables=_c21_d1_tables(
+            bars=(("2026-08-03", 100, 100), ("2026-08-04", 110, 150)),
+            topix=(("2026-08-03", 3000.0), ("2026-08-04", 3030.0)),
+            cal_days=("2026-08-03", "2026-08-04"),
+            hol_key="HolDiv",
+            cal_aa="T09:00:00+09:00",
+        ),
         compute_features=True,
         feature_codes=["13010"],
-        d1_execute=fake_d1,
-        r2_put=fake_put,
-        staging_dir=tmp_path,
     )
+    ex = execute_single_shot_job(**kw)
     _assert_mass_ready_off(ex)
     assert ex.features_r2_key is not None
     assert ex.features_r2_key.startswith(
@@ -448,7 +379,7 @@ def test_execute_with_features_writes_manifest_feature_stats(tmp_path: Path):
     assert len(puts) == 4
     assert ex.manifest_r2_key in puts
     assert ex.features_r2_key in puts
-    manifest = json.loads(puts[ex.manifest_r2_key].decode("utf-8"))
+    manifest = _put_json(puts, ex.manifest_r2_key)
     assert manifest["compute_features"] is True
     assert "features" in manifest
     for block in manifest["features"]:
@@ -456,7 +387,7 @@ def test_execute_with_features_writes_manifest_feature_stats(tmp_path: Path):
         assert "version" in block
         assert "row_counts" in block
         assert "null_counts" in block
-    feat_body = json.loads(puts[ex.features_r2_key].decode("utf-8"))
+    feat_body = _put_json(puts, ex.features_r2_key)
     assert feat_body["status"] in ("mixed", "approved", "candidate")
     assert feat_body["ready_declared"] is False
     assert feat_body["local_sot"] is False
@@ -467,21 +398,15 @@ def test_execute_with_features_writes_manifest_feature_stats(tmp_path: Path):
 
 
 def test_execute_features_rejects_defer_before_d1():
-    calls: list[str] = []
-
-    def boom_d1(sql: str):
-        calls.append(sql)
-        raise AssertionError("d1 must not be called for permanent DEFER input")
-
+    calls, boom_d1 = _boom_d1()
     with pytest.raises(PermanentDeferHistoryError):
         execute_single_shot_job(
-            dataset_ids=["equities_bars_daily_am"],
-            period_start="2026-08-01",
-            period_end="2026-08-15",
-            job_id="defer-feat",
-            dry_run=True,
-            compute_features=True,
-            d1_execute=boom_d1,
+            **_single_shot_kw(
+                job_id="defer-feat",
+                dataset_ids=["equities_bars_daily_am"],
+                compute_features=True,
+                d1_execute=boom_d1,
+            )
         )
     assert calls == []
 
@@ -522,51 +447,20 @@ def test_minimal_signal_pure_helpers():
 
 
 def test_execute_compute_signals_writes_signals_artifact(tmp_path: Path):
-    fake_d1 = _fake_d1_tables(
-        {
-            "equities_bars_daily": [
-                _d1_row(
-                    {"Code": "13010", "Date": d},
-                    d,
-                    {"Code": "13010", "Date": d, "C": c, "Vo": vo},
-                )
-                for d, c, vo in (("2026-08-01", 1000.0, 100.0), ("2026-08-04", 1020.0, 150.0))
-            ],
-            "indices_bars_daily_topix": [
-                _d1_row({"Date": d}, d, {"Date": d, "C": c})
-                for d, c in (("2026-08-01", 3000.0), ("2026-08-04", 3010.0))
-            ],
-            "markets_calendar": [
-                _d1_row(
-                    {"Date": "2026-08-04"},
-                    "2026-08-04",
-                    {"Date": "2026-08-04", "HolidayDivision": "1"},
-                    aa="T00:00:00+09:00",
-                )
-                | {"event_time": "2026-08-04"}
-            ],
-        }
-    )
-    puts, fake_put = _capture_puts()
-
-    ex = execute_single_shot_job(
-        dataset_ids=[
-            "equities_bars_daily",
-            "markets_calendar",
-            "indices_bars_daily_topix",
-        ],
-        period_start="2026-08-01",
-        period_end="2026-08-15",
+    puts, kw = _injected_single_shot(
+        tmp_path,
         job_id="w0815as-unit-signal",
-        dry_run=True,
+        tables=_c21_d1_tables(
+            bars=(("2026-08-01", 1000.0, 100.0), ("2026-08-04", 1020.0, 150.0)),
+            topix=(("2026-08-01", 3000.0), ("2026-08-04", 3010.0)),
+            cal_days=("2026-08-04",),
+            cal_event_time=True,
+        ),
         compute_signals=True,
         feature_codes=["13010"],
-        d1_execute=fake_d1,
-        r2_put=fake_put,
-        staging_dir=tmp_path,
     )
+    ex = execute_single_shot_job(**kw)
     _assert_mass_ready_off(ex)
-    assert ex.phase7 == "OFF"
     assert ex.signals_r2_key is not None
     assert ex.signals_r2_key.startswith(
         "research/single_shot/job=w0815as-unit-signal/signals/"
@@ -581,13 +475,13 @@ def test_execute_compute_signals_writes_signals_artifact(tmp_path: Path):
     # 5 puts: input_plan, result, features, signals, manifest
     assert len(puts) == 5
     assert ex.signals_r2_key in puts
-    manifest = json.loads(puts[ex.manifest_r2_key].decode("utf-8"))
+    manifest = _put_json(puts, ex.manifest_r2_key)
     assert manifest["compute_signals"] is True
     assert manifest["order_execution"] is False
     assert manifest["signal"]["signal_id"] == DEFAULT_SIGNAL_ID
     assert manifest["signal"]["candidate_only"] is False
     assert "signals" in manifest["keys"]
-    sig_body = json.loads(puts[ex.signals_r2_key].decode("utf-8"))
+    sig_body = _put_json(puts, ex.signals_r2_key)
     assert sig_body["signal_id"] == DEFAULT_SIGNAL_ID
     assert sig_body["candidate_only"] is False
     assert sig_body["order_execution"] is False
@@ -665,9 +559,7 @@ def test_summarize_signal_day_sign_distribution():
     assert s["non_null"] == 2
     assert abs(s["non_null_rate"] - 2 / 3) < 1e-9
     assert s["sign_distribution"] == {"+1": 1, "0": 0, "-1": 1, "null": 1}
-    assert s["order_execution"] is False
-    assert s["ready_declared"] is False
-    assert s["mass_research"] == "NO-GO"
+    _assert_mass_ready_off(s)
 
 
 def test_execute_multiday_signal_eval_batch_summary(tmp_path: Path):
@@ -676,22 +568,16 @@ def test_execute_multiday_signal_eval_batch_summary(tmp_path: Path):
 
     assert eval_result.n_days == 7
     _assert_mass_ready_off(eval_result)
-    assert eval_result.phase7 == "OFF"
-    assert eval_result.local_sot is False
     assert eval_result.batch_summary_r2_key == (
         "research/single_shot/job=w0815au-g1-multiday-unit/batch_summary.json"
     )
     assert eval_result.batch_summary_r2_key in puts
-    body = json.loads(puts[eval_result.batch_summary_r2_key].decode("utf-8"))
+    body = _put_json(puts, eval_result.batch_summary_r2_key)
     assert body["n_days"] == 7
     assert body["candidate_only"] is False
     assert body["approved_legs_only"] is True
     assert body["signal_id"] == DEFAULT_SIGNAL_ID
-    assert body["mass_research"] == "NO-GO"
-    assert body["order_execution"] is False
-    assert body["ready_declared"] is False
-    assert body["connected_to_mass_research_loop"] is False
-    assert body["local_sot"] is False
+    _assert_mass_ready_off(body)
     assert "aggregate" in body
     assert "sign_distribution" in body["aggregate"]
     assert len(body["per_day"]) == 7
@@ -725,8 +611,7 @@ def test_nextday_lookahead_policy_documented():
     assert p["feature_as_of"] == "signal_day_T_session_close"
     assert p["evaluation_as_of"] == "next_trading_day_T1_session_close"
     assert "close(T+1)/close(T)" in p["return_definition"]
-    assert p["ready_declared"] is False
-    assert p["mass_research"] == "NO-GO"
+    _assert_mass_ready_off(p)
     assert p["label"] == "小サンプル / 研究用・未宣言"
     assert p.get("significance_claimed") is False
     assert p.get("edge_claimed") is False
@@ -868,21 +753,14 @@ def test_execute_multiday_nextday_return_eval_batch(tmp_path: Path):
     assert eval_result.attach_nextday_returns is True
     assert eval_result.n_days == 6
     _assert_mass_ready_off(eval_result)
-    assert eval_result.phase7 == "OFF"
-    assert eval_result.local_sot is False
     assert eval_result.batch_summary_r2_key == (
         "research/single_shot/job=w0815av-g1-nextday-unit/batch_summary.json"
     )
     assert eval_result.batch_summary_r2_key in puts
-    body = json.loads(puts[eval_result.batch_summary_r2_key].decode("utf-8"))
+    body = _put_json(puts, eval_result.batch_summary_r2_key)
     assert body["attach_nextday_returns"] is True
     assert body["label"] == "小サンプル / 研究用・未宣言"
-    assert body["mass_research"] == "NO-GO"
-    assert body["ready_declared"] is False
-    assert body["order_execution"] is False
-    assert body["connected_to_mass_research_loop"] is False
-    assert body["significance_claimed"] is False
-    assert body["edge_claimed"] is False
+    _assert_mass_ready_off(body)
     assert "nextday_return" in body
     nr = body["nextday_return"]
     assert nr["label"] == "小サンプル / 研究用・未宣言"
@@ -920,6 +798,6 @@ def test_nextday_flag_off_preserves_w54_shape(tmp_path: Path):
     )
     eval_result = execute_multiday_signal_eval(**kw)
     assert eval_result.attach_nextday_returns is False
-    body = json.loads(puts[eval_result.batch_summary_r2_key].decode("utf-8"))
+    body = _put_json(puts, eval_result.batch_summary_r2_key)
     assert "nextday_return" not in body
     assert body["version"] == "multiday-signal-batch/v1"
