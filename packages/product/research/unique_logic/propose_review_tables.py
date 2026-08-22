@@ -276,7 +276,9 @@ GATE_OCCUPANCY_LABEL: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("sales_down", (
         "sales are down",
         "sales down",
+        "falling sales",
     )),
+    ("tight_funding", ("funding conditions are tight",)),
     ("price_down", ("under pressure", "price pressure", "price is low")),
     ("crowded_margin", ("market is crowded",)),
 )
@@ -293,6 +295,7 @@ EXTRA_TITLE_GATES: tuple[tuple[str, str], ...] = (
     ("funding is tight", "tight_funding"),
     ("funding tight", "tight_funding"),
     ("funding became tight", "tight_funding"),
+    ("funding conditions are tight", "tight_funding"),
     ("became tight", "tight_funding"),
     ("easy funding", "easy_funding"),
     ("funding is easy", "easy_funding"),

@@ -492,6 +492,7 @@ export const CF_NEW_EVENT_THESIS_IDS = [
   "event_tight_funding_eps_px_down",
   "event_tight_funding_eps_sales_down",
   "event_tight_funding_px_down",
+  "event_tight_funding_sales_np_neg",
   "event_tight_invert_fade",
   "event_tight_on_np_neg",
   "event_tight_skip_monday",

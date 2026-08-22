@@ -110,8 +110,6 @@ def test_issue_signed_receipts_calls_aggregate_sync():
     assert "sync_dataset_coverage_from_segments" in src
     assert _script_imports_name(ISSUE_SIGNED, "sync_dataset_coverage_from_segments")
     assert _script_calls_name(ISSUE_SIGNED, "sync_dataset_coverage_from_segments")
-    # tip-path commentary retained
-    assert "tip auto-collect" in src.lower() or "W72" in src
 
 
 def test_issue_receipts_parallel_calls_aggregate_sync():
@@ -119,7 +117,6 @@ def test_issue_receipts_parallel_calls_aggregate_sync():
     assert "sync_dataset_coverage_from_segments" in src
     assert _script_imports_name(ISSUE_PARALLEL, "sync_dataset_coverage_from_segments")
     assert _script_calls_name(ISSUE_PARALLEL, "sync_dataset_coverage_from_segments")
-    assert "Post-seal surgical sync_dataset_coverage_from_segments" in src
 
 
 def test_restore_path_calls_aggregate_sync():

@@ -15,6 +15,13 @@ WORKER = "https://quant-platform-jsda-otc-probe-w80.taku-haga.workers.dev"
 FULL_OK_MIN = 100_000
 
 
+def _repo_root() -> Path:
+    for parent in Path(__file__).resolve().parents:
+        if (parent / "qp_paths.py").is_file() and (parent / "pyproject.toml").is_file():
+            return parent
+    raise RuntimeError("quant-platform repo root not found")
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--log-dir", type=Path, required=True)
@@ -22,7 +29,7 @@ def main() -> int:
     p.add_argument("--repo", type=Path, default=None)
     args = p.parse_args()
     log = args.log_dir
-    root = args.repo or Path(__file__).resolve().parents[1]
+    root = args.repo or _repo_root()
     raw = root / "data/raw/jsda/jsda_otc_bond_reference_prices"
     items_path = args.items or (log / "otc_items.json")
     progress = log / "otc_download_progress.jsonl"

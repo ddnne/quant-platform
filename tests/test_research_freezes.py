@@ -222,6 +222,7 @@ def test_near_empty_park_is_not_countable_or_basket_material() -> None:
     assert "event_nkyvol_steep_uncrowded" in parked
     assert "event_p10_sales_down_eps_up" in parked
     assert "event_overnight_p10_np_negative" in parked
+    assert "event_tight_funding_sales_np_neg" in parked
     countable = countable_thesis_ids()
     for lid in parked:
         spec = catalog_spec(lid)
@@ -246,6 +247,7 @@ def test_near_empty_park_is_not_countable_or_basket_material() -> None:
     assert "event_easing_eps_down_np_neg" in THIN_SLEEVE_EXCLUDE_IDS
     assert "event_p10_sales_down_eps_up" not in THIN_SLEEVE_EXCLUDE_IDS
     assert "event_overnight_p10_np_negative" not in THIN_SLEEVE_EXCLUDE_IDS
+    assert "event_tight_funding_sales_np_neg" not in THIN_SLEEVE_EXCLUDE_IDS
     assert "event_easy_funding_eps_sales_down" not in THIN_SLEEVE_EXCLUDE_IDS
     assert THIN_SLEEVE_EXCLUDE_IDS.isdisjoint(sleeve_durability_logic_ids())
     thin_reasons = validate_basket_members(

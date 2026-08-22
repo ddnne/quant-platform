@@ -45,7 +45,8 @@ export const GATE_OCCUPANCY_LABEL: Array<[string, string[]]> = [
   ["np_negative", ["profitability is weak", "weak profitability", "weak profit"]],
   ["eps_down", ["earnings disappointment", "earnings disappoint", "earnings per share are falling", "eps are falling", "earnings per share tend to decrease", "eps down", "eps is down"]],
   ["eps_up", ["earnings per share are rising", "eps are rising", "eps is rising", "rising earnings per share", "rising eps"]],
-  ["sales_down", ["sales are down", "sales down"]],
+  ["sales_down", ["sales are down", "sales down", "falling sales"]],
+  ["tight_funding", ["funding conditions are tight"]],
   ["price_down", ["under pressure", "price pressure", "price is low"]],
   ["crowded_margin", ["market is crowded"]],
 ];
@@ -59,6 +60,7 @@ export const EXTRA_TITLE_GATES: Array<[string, string]> = [
   ["funding is tight", "tight_funding"],
   ["funding tight", "tight_funding"],
   ["funding became tight", "tight_funding"],
+  ["funding conditions are tight", "tight_funding"],
   ["became tight", "tight_funding"],
   ["easy funding", "easy_funding"],
   ["funding is easy", "easy_funding"],
@@ -127,8 +129,10 @@ export const OCCUPANCY_EXTRA_TITLE: Array<[string, string[]]> = [
   ["eps down", ["eps_down"]],
   ["eps is down", ["eps_down"]],
   ["eps is rising", ["eps_up"]],
+  ["falling sales", ["sales_down"]],
   ["flattening", ["curve_flatten"]],
   ["funding at 10", ["overnight_p10"]],
+  ["funding conditions are tight", ["tight_funding"]],
   ["funding is loose", ["overnight_p10"]],
   ["high price momentum", ["pre_mom"]],
   ["increase in pb", ["pb_rising"]],
@@ -213,6 +217,7 @@ export const SPARSE_GATE_COMBOS_REVIEW: string[][] = [
   ["np_negative", "overnight_p10", "price_down"],
   ["eps_up", "overnight_p10", "sales_down"],
   ["np_negative", "overnight_p10"],
+  ["np_negative", "sales_down", "tight_funding"],
 ];
 
 export const OCCUPANCY_LABEL_EXCEPTIONS: Array<[string, string[]]> = [
