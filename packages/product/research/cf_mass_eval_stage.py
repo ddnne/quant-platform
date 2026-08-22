@@ -1,8 +1,4 @@
-"""COMPLETE-backed r2_panels staging for CF mass-eval.
-
-Period-net panels are bar-native auxiliary. Candidate SoT is daily_path.
-Universe pick is select_eval_universe — never head-N.
-"""
+"""COMPLETE-backed r2_panels staging. Universe is select_eval_universe — never head-N."""
 from __future__ import annotations
 
 import json
@@ -31,13 +27,11 @@ from research.single_shot_job import COMPLETE_21_DATASETS, default_r2_put
 
 RESEARCH_ARTIFACT_BUCKET: str = "quant-structured"
 RESEARCH_ARTIFACT_PREFIX: str = "research/mass_eval"
-# Default is the liq_large track (ADV 100). mid_n_explore uses 80.
-# Never fall back to head-N list order.
+# liq_large default (100). Never head-N.
 DEFAULT_MAX_CODES: int = 100
 DEFAULT_MAX_DAYS: int = 120
 
-# COMPLETE 22 = COMPLETE 21 + fins_earnings_date (W68 tip4 seal).
-# Permanent DEFER residual (n=4) stays PARTIAL / tip-only.
+# COMPLETE 22 = COMPLETE 21 + fins_earnings_date. Permanent DEFER excluded.
 COMPLETE_22_DATASETS: tuple[str, ...] = tuple(
     sorted(set(COMPLETE_21_DATASETS) | {"fins_earnings_date"})
 )
@@ -269,10 +263,6 @@ def stage_real_panels_to_r2(
                 "source": panel.get("source"),
                 "dataset": panel.get("dataset"),
                 "r2_key": key,
-                "bars_path": panel.get("bars_path"),
-                "thicken_counts": panel.get("thicken_counts"),
-                "thicken_done": panel.get("thicken_done"),
-                "opt225_n_base_vol": panel.get("opt225_n_base_vol"),
                 "repo_n_rates": (panel.get("repo_rate_regime") or {}).get(
                     "n_rates"
                 )

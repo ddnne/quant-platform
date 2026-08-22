@@ -49,7 +49,6 @@ ALLOWED_MODES: frozenset[str] = frozenset(
     {"r2_panels", "d1_bars", "synthetic", "nets_only"}
 )
 
-# Bar-native ids from bar_native_specs (not factory). Missing sidecars → MDH.
 CF_BAR_NATIVE_LOGIC_IDS: tuple[str, ...] = tuple(BAR_NATIVE_SPECS)
 
 DEFAULT_LITE_PERIODS: tuple[dict[str, str], ...] = (
@@ -153,10 +152,7 @@ def is_unique_period_net_unsupported(logic_id: str) -> bool:
 def default_logic_specs(
     logic_ids: Sequence[str] | None = None,
 ) -> list[dict[str, Any]]:
-    """CF-ready logic specs from catalog/YAML (YAML gates may be a comma string).
-
-    Bar-native ids from bar_native_specs. Leftover unknown ids get family_id=unknown.
-    """
+    """CF-ready specs from catalog/YAML. Leftover unknown ids get family_id=unknown."""
     ids = list(logic_ids) if logic_ids is not None else list(CF_BAR_NATIVE_LOGIC_IDS)
     out: list[dict[str, Any]] = []
     from research.unique_logic import all_unique_logic_specs

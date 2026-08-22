@@ -1,11 +1,6 @@
-"""Candidate-grade daily_path on Cloudflare via isolate fan-out.
+"""CF isolate fan-out daily_path. Stage once, POST /v1/daily-path per logic.
 
-Stage panels once, POST ``/v1/daily-path`` once per logic
-(write_artifacts=false), aggregate cells. Batch wall-clock ≈ longest isolate
-+ staging, not the sum of logics.
-
-Does not promote / GO / Mass / retune pins. period-net n_survivors is not
-this protocol.
+Not a pass / not GO. period-net n_survivors is not this protocol.
 """
 from __future__ import annotations
 
@@ -317,9 +312,7 @@ def run_both_track_sleeve_fanout(
 ) -> dict[str, Any]:
     """Fan out fund/flow/event sleeves on mid_n_explore AND liq_large.
 
-    Default is dry_run (off-network). Universe is select_eval_universe —
-    never head-N. max_codes come from EVAL_TRACKS. Not a pass / not GO.
-    Sleeve 5/1 or liq 4/2 majority prints stay not a pass.
+    Default dry_run. select_eval_universe only (never head-N). Not a pass / not GO.
     """
     from research.combo_basket import compare_mid_vs_liq
     from research.eval_tracks import (

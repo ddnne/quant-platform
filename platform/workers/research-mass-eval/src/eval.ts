@@ -1,6 +1,5 @@
 /**
- * Period-net screen (pure TS). Python: offline.factory / offline.bar_eval.
- * Candidate-grade path is daily_path. Missing sidecars → disclosed MDH
+ * Period-net screen. Missing sidecars → disclosed MDH
  * (`c21_lite_fallback_mdh:<family>`), never silent.
  */
 
@@ -346,7 +345,7 @@ function evalFlowDemand(
       nCodeDays += 1;
       const pos = held[i];
       if (pos === null || pos === 0) continue;
-      // Fresh margin-print days only (matches local factory).
+      // Fresh margin-print days only.
       if (entrySigns[i] === null || entrySigns[i] === 0) continue;
       const fwd = multiDayForwardReturn(closes, h, i);
       if (fwd === null) continue;

@@ -2,8 +2,6 @@
 /**
  * POST /v1/mass-eval — period-net screen (n_survivors is not a pass).
  * POST /v1/daily-path — candidate-grade daily MTM; one isolate per logic.
- * Modes: r2_panels (preferred) | d1_bars (tip only) | synthetic | nets_only
- * Missing flow/fund/repo sidecars → disclosed MDH fallback.
  */
 
 import { evaluateLogicAcrossPeriods, rankSurvivors } from "./eval";
@@ -46,7 +44,7 @@ async function tokenMatches(provided: string, expected: string): Promise<boolean
 }
 
 async function authorized(request: Request, expected?: string): Promise<boolean> {
-  // Unset token → allow (workers.dev research worker; ops should set MASS_EVAL_TOKEN).
+  // Unset token → allow.
   if (!expected) return true;
   const got =
     request.headers.get("X-Mass-Eval-Token") ||
@@ -287,7 +285,6 @@ async function runMassEval(
     candidate_grade: false,
     wall_time_ms: Date.now() - t0,
     period_ids: periodSpecs.map((p) => p.period_id),
-    ranking_top: ranking.slice(0, 20),
     freezes,
     note:
       "Period-net screen only; n_survivors is not a daily_path_DD pass. " +
@@ -473,8 +470,7 @@ async function runDailyPath(
     go: false,
     freezes,
     note:
-      "Candidate-grade daily MTM after cost. Fan-out one POST per logic. " +
-      "Not a promotion. period-net n_survivors is not this protocol.",
+      "Candidate-grade daily MTM. Fan-out one POST per logic. Not a promotion.",
   };
   if (req.write_artifacts === true) {
     const prefix = `research/eval/job=${req.job_id}`;

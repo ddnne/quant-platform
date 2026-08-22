@@ -1,7 +1,6 @@
 """CF mass-eval Worker invoke / deploy / run. Not a pass / not GO.
 
-Job spec, panel cache, and default_logic_specs stay in
-``research.cf_mass_eval_job``. Period-net n_survivors is not candidate-grade.
+Job spec stays in ``research.cf_mass_eval_job``. Period-net n_survivors is not candidate-grade.
 """
 from __future__ import annotations
 
@@ -398,8 +397,6 @@ def run_cf_mass_eval_job(
         "invoke_error": invoke_error,
         "n_logics": n_logics,
         "n_periods": n_periods,
-        "n_logic_period_cells": n_logics * n_periods,
-        "n_evaluated": n_evaluated,
         "n_eval_ok": n_evaluated,
         "n_survivors": n_survivors,
         "artifact_paths": paths,
@@ -439,7 +436,7 @@ def run_cf_mass_eval_job(
 
 
 def try_cf_mass_eval_status() -> dict[str, Any]:
-    """Status helper replacing the old 'blocked' stub for residual docs."""
+    """Mass-eval implementation status for residual docs. Not a pass."""
     return {
         "status": "implemented",
         "version": CF_MASS_EVAL_VERSION,

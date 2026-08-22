@@ -1,10 +1,7 @@
-/** Shared types for the research mass-eval worker. */
-
 export interface Env {
   STRUCTURED_BUCKET: R2Bucket;
-  /** Optional D1 bind for mode=d1_bars (hot window only). */
+  /** D1 bind for mode=d1_bars (hot window only). */
   DB?: D1Database;
-  /** Optional gate for POST /v1/mass-eval (X-Mass-Eval-Token). */
   MASS_EVAL_TOKEN?: string;
   MASS_EVAL_VERSION?: string;
   MASS_EVAL_WAVE?: string;
@@ -41,21 +38,12 @@ export interface MassEvalRequest {
   logics: LogicSpec[];
   periods?: PeriodSpec[];
   job_id: string;
-  /**
-   * synthetic — deterministic PRNG (smoke)
-   * r2_panels — staged COMPLETE-backed panels
-   * d1_bars — D1 jquants_records tip extract (not multi-year)
-   * nets_only — pre-baked period_nets on each logic
-   */
+  /** synthetic | r2_panels | d1_bars (tip) | nets_only */
   mode?: "synthetic" | "r2_panels" | "d1_bars" | "nets_only";
-  /**
-   * screen — period-net ranking (not a pass)
-   * daily_path — candidate-grade daily MTM equity DD
-   */
+  /** screen (period-net, not a pass) | daily_path */
   eval_kind?: "screen" | "daily_path";
-  /** Fan-out shards skip R2 writes; the driver aggregates to eval_registry. */
+  /** Fan-out shards skip R2 writes; the driver aggregates. */
   write_artifacts?: boolean;
-  /** Override panel key prefix for r2_panels (default: research/mass_eval/panels). */
   panels_prefix?: string;
   one_way_cost?: number;
   max_codes?: number;
@@ -67,7 +55,6 @@ export interface MassEvalRequest {
 export type BarSeries = Array<[string, number]>; // [date, close]
 export type BarsByCode = Record<string, BarSeries>;
 
-/** Index-level realized-vol for nky_vol_* (date → ann. RV). */
 export interface NkyVolSeries {
   source?: string;
   short_n?: number;
@@ -78,7 +65,6 @@ export interface NkyVolSeries {
   rv_ratio_by_date?: Record<string, number>;
 }
 
-/** options_225 BaseVol / ATM / skew / CM-term / Δvol (percent vol points). */
 export interface Opt225RegimeSeries extends NkyVolSeries {
   series_kind?: string;
   units?: string;
@@ -180,13 +166,11 @@ export interface PeriodPanel {
   status: "ok" | "data_missing";
   bars: BarsByCode;
   source: string;
-  /** Nikkei/TOPIX realized-vol (proxy/compare). */
   nky_vol_series?: NkyVolSeries | null;
-  /** options_225 canonical Nikkei vol SoT. */
   opt225_regime?: Opt225RegimeBundle | null;
-  /** Daily BaseVol (percent vol points) — canonical level. */
+  /** Canonical BaseVol level (percent vol points). */
   base_vol_series?: Record<string, number> | null;
-  /** Daily ATM IV (percent vol points) — compare-only. */
+  /** ATM IV — compare-only. */
   atm_iv_series?: Record<string, number> | null;
   iv_base_spread?: Record<string, number> | null;
   skew_series?: Record<string, number> | null;
@@ -196,9 +180,7 @@ export interface PeriodPanel {
   /** Flat alias of repo rates_by_date. */
   repo_rate_by_date?: Record<string, number> | null;
   calendar?: CalendarSideCar | null;
-  /** Margin/short sidecar — flow_margin_* / mf_flow_price. */
   flow_regime?: FlowRegime | null;
-  /** fins_summary sidecar — fund_* / mf_value_mom_rate. */
   fund_regime?: FundRegime | null;
   /** Average daily yen turnover by code. Missing → tx+repo only. */
   adv_by_code?: Record<string, number> | null;

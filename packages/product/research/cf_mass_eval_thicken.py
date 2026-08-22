@@ -1,8 +1,4 @@
-"""Rate/flow/fund thicken sidecars + NKY/opt225 panel attach.
-
-Period-net panels are bar-native auxiliary. Candidate SoT is daily_path.
-Gaps disclosed; no invent/ffill. Not a pass / not GO.
-"""
+"""Rate/flow/fund thicken sidecars + NKY/opt225 attach. No invent/ffill. Not GO."""
 from __future__ import annotations
 
 import json
@@ -323,35 +319,6 @@ def _build_thicken_sidecars(
             "n_obs": len(rates),
             "units": "percent",
         }
-    fr = out.get("flow_regime") or {}
-    fund = out.get("fund_regime") or {}
-    out["thicken_counts"] = {
-        "calendar_n_dates": int(
-            (out.get("calendar") or {}).get("n_dates") or 0
-        ),
-        "repo_n_rates": int(
-            (out.get("repo_rate_regime") or {}).get("n_rates") or 0
-        ),
-        "repo_n_spread": int(
-            (out.get("repo_rate_regime") or {}).get("n_spread") or 0
-        ),
-        "flow_n_codes": int(fr.get("n_codes") or 0),
-        "flow_n_short": int(fr.get("n_short_obs") or 0),
-        "fund_n_codes": int(fund.get("n_codes") or 0),
-        "fund_n_events": int(fund.get("n_events") or 0),
-    }
-    done: list[str] = []
-    if int((out.get("calendar") or {}).get("n_dates") or 0) > 0:
-        done.append("markets_calendar")
-    if rates:
-        done.append("jsda_tokyo_repo_rates")
-    if fr.get("n_codes"):
-        done.append("markets_margin_interest")
-    if fr.get("n_short_obs"):
-        done.append("markets_short_ratio")
-    if fund.get("n_events"):
-        done.append("fins_summary")
-    out["thicken_done"] = done
     return out
 
 
@@ -441,7 +408,6 @@ def attach_opt225_regime() -> dict[str, Any]:
                     "rv_short_by_date": ser.get("rv_short_by_date") or {},
                     "rv_long_by_date": ser.get("rv_long_by_date") or {},
                     "rv_ratio_by_date": ser.get("rv_ratio_by_date") or {},
-                    "n_obs_level": ser.get("n_obs_level"),
                 }
                 if kind == "atm_iv":
                     entry["compare_only"] = True
@@ -482,7 +448,6 @@ def attach_opt225_regime() -> dict[str, Any]:
                 "skew_series": skew_series,
                 "cm_term_series": cm_term_series,
                 "basevol_delta_series": basevol_delta_series,
-                "opt225_n_base_vol": len(base_vol_series),
             }
     except Exception as exc:  # pragma: no cover - best-effort
         opt225_meta = {"opt225_error": str(exc)}
