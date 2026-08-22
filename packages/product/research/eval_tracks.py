@@ -195,9 +195,8 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "tracks": BOTH_EVAL_TRACK_IDS,
         "entry": "research.cf_daily_path_job.run_both_track_sleeve_fanout",
         "why": (
-            "recorded eval-cf-dp-both-sleeves-20260823e mid+liq; "
-            "descriptive summary eval-durability-summary-20260823h "
-            "not_a_pass; do not narrate majority as stable"
+            "recorded eval-cf-dp-both-sleeves-20260823e/n mid+liq; "
+            "descriptive summary not_a_pass; do not narrate majority as stable"
         ),
         "not_a_pass": True,
         "go": False,

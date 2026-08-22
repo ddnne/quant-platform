@@ -549,6 +549,7 @@ def test_countable_thesis_ids_require_worker_body() -> None:
 
     assert "worker_body_missing" in CANDIDATE_POLICY["exclude"]
     assert "near_empty_parked" in CANDIDATE_POLICY["exclude"]
+    assert "always_on_parked" in CANDIDATE_POLICY["exclude"]
     cells = [
         _eval_complete_cell(
             "xs_high_vol_fade", occupancy=0.20, eval_path="gated_cs"

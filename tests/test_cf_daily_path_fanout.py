@@ -183,7 +183,7 @@ def test_eval_tracks_are_two_and_not_head_n() -> None:
     assert both["not_a_pass"] is True
     assert both["go"] is False
     assert "recorded" in both["why"]
-    assert "eval-cf-dp-both-sleeves-20260822c" in both["why"]
+    assert "eval-cf-dp-both-sleeves-20260823" in both["why"]
     assert "thesis_counts_only_with_worker_body" in qids
     assert "no_go_until_both_tracks" in qids
     assert "unique22_leftover_lids" in qids
@@ -352,10 +352,14 @@ def test_both_track_sleeve_fanout_default_is_off_network(monkeypatch) -> None:
     assert pack["sleeve_majority_is_not_a_pass"] is True
     assert pack["logic_ids"] == sleeve_durability_logic_ids()
     assert "event_eqar_high_liq_high" in pack["logic_ids"]
-    assert "cs_margin_up_chase" in pack["logic_ids"]
-    assert "event_eqar_rising_nkyvol" in pack["logic_ids"]
-    assert "event_cheap_iv_uncrowded" in pack["logic_ids"] or "event_nkyvol_liq_margin_down" in pack["logic_ids"]
+    assert "event_eqar_rising_ta_up_liq" in pack["logic_ids"]
+    assert "event_uncrowded_liq_eqar_rising" in pack["logic_ids"]
+    assert "event_cheap_iv_liq_uncrowded" not in pack["logic_ids"]
     assert "event_cheap_pb_liq_high" not in pack["logic_ids"]
+    from research.unique_logic.constants import ALWAYS_ON_PARK_IDS, NEAR_EMPTY_PARK_IDS
+
+    assert NEAR_EMPTY_PARK_IDS.isdisjoint(pack["logic_ids"])
+    assert ALWAYS_ON_PARK_IDS.isdisjoint(pack["logic_ids"])
     tracks = {t["eval_track"]: t for t in pack["tracks"]}
     assert set(tracks) == {EVAL_TRACK_MID_N, EVAL_TRACK_LIQ_LARGE}
     assert tracks[EVAL_TRACK_MID_N]["max_codes"] == EVAL_TRACKS[EVAL_TRACK_MID_N]["max_codes"]

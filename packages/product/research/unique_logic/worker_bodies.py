@@ -16,6 +16,8 @@ from research.unique_logic.constants import (
     EVENT_FILTER_LOGIC_IDS,
     EVENT_LOGIC_IDS,
     EVENT_SIDES_LOGIC_IDS,
+    ALWAYS_ON_OCCUPANCY_WARN,
+    ALWAYS_ON_PARK_IDS,
     NEAR_EMPTY_OCCUPANCY,
     NEAR_EMPTY_PARK_IDS,
     PYTHON_ONLY_EVENT_GATES,
@@ -75,6 +77,11 @@ def unique22_occupancy_park() -> frozenset[str]:
 def near_empty_occupancy_park() -> frozenset[str]:
     """Recorded near_empty IDs. Not countable, not basket material. Not a pass."""
     return NEAR_EMPTY_PARK_IDS
+
+
+def always_on_occupancy_park() -> frozenset[str]:
+    """Recorded always-on IDs. Not countable, not basket material. Not a pass."""
+    return ALWAYS_ON_PARK_IDS
 
 
 @lru_cache(maxsize=1)
@@ -188,6 +195,8 @@ def is_countable_spec(spec: Mapping[str, Any]) -> bool:
     if lid in unique22_occupancy_park():
         return False
     if lid in near_empty_occupancy_park():
+        return False
+    if lid in always_on_occupancy_park():
         return False
     if lid in CF_NEW_THESIS_IDS:
         return combo_worker_gates_ok(spec)
@@ -349,6 +358,80 @@ def assert_near_empty_park_covers(
     return out
 
 
+class AlwaysOnBatchError(ValueError):
+    """New batch has occupancy ≥ always_on threshold. Not a pass."""
+
+
+def recorded_always_on_ids(
+    occupancy_by_logic: Mapping[str, float],
+    *,
+    threshold: float = ALWAYS_ON_OCCUPANCY_WARN,
+) -> frozenset[str]:
+    """IDs whose recorded mean occupancy is ≥ threshold. Does not GO."""
+    out: set[str] = set()
+    for lid, occ in occupancy_by_logic.items():
+        name = str(lid).strip()
+        if name and float(occ) >= float(threshold):
+            out.add(name)
+    return frozenset(out)
+
+
+def assert_new_batch_occupancy_not_always_on(
+    occupancy_by_logic: Mapping[str, float],
+    *,
+    threshold: float = ALWAYS_ON_OCCUPANCY_WARN,
+) -> dict[str, Any]:
+    """Refuse a new batch that contains always-on occupancy. Does not GO."""
+    rows = {
+        str(lid): float(occ)
+        for lid, occ in occupancy_by_logic.items()
+        if str(lid).strip()
+    }
+    sticky = sorted(lid for lid, occ in rows.items() if occ >= float(threshold))
+    out = {
+        "n": len(rows),
+        "n_always_on": len(sticky),
+        "always_on_ids": sticky,
+        "threshold": float(threshold),
+        "ok": bool(len(rows) > 0 and not sticky),
+        "go": False,
+        "not_a_pass": True,
+    }
+    if not rows:
+        raise AlwaysOnBatchError("occupancy map is empty")
+    if sticky:
+        raise AlwaysOnBatchError(
+            "always_on occupancy "
+            f"n={len(sticky)} threshold={float(threshold):.4f} ids={sticky[:12]}"
+        )
+    return out
+
+
+def assert_new_batch_occupancy_in_material_band(
+    occupancy_by_logic: Mapping[str, float],
+    *,
+    near_empty: float = NEAR_EMPTY_OCCUPANCY,
+    always_on: float = ALWAYS_ON_OCCUPANCY_WARN,
+) -> dict[str, Any]:
+    """Refuse a new batch outside (near_empty, always_on). Does not GO."""
+    lo = assert_new_batch_occupancy_not_near_empty(
+        occupancy_by_logic, threshold=near_empty
+    )
+    hi = assert_new_batch_occupancy_not_always_on(
+        occupancy_by_logic, threshold=always_on
+    )
+    return {
+        "n": lo["n"],
+        "n_near_empty": lo["n_near_empty"],
+        "n_always_on": hi["n_always_on"],
+        "near_empty_ids": lo["near_empty_ids"],
+        "always_on_ids": hi["always_on_ids"],
+        "ok": bool(lo["ok"] and hi["ok"]),
+        "go": False,
+        "not_a_pass": True,
+    }
+
+
 def countable_inventory_bias() -> dict[str, Any]:
     """Family / primary-gate / dataset occupancy of countable theses. Not a pass."""
     from collections import Counter
@@ -390,6 +473,7 @@ def countable_inventory_bias() -> dict[str, Any]:
         "afterclose_primary": n_ac_primary,
         "afterclose_primary_share": round(n_ac_primary / n, 4) if n else 0.0,
         "n_near_empty_parked": len(near_empty_occupancy_park()),
+        "n_always_on_parked": len(always_on_occupancy_park()),
         "go": False,
         "not_a_pass": True,
     }
@@ -404,6 +488,8 @@ def worker_body_missing(logic_id: str) -> bool:
         return False
     if lid in near_empty_occupancy_park():
         return False
+    if lid in always_on_occupancy_park():
+        return False
     return lid not in countable_thesis_ids()
 
 
@@ -413,14 +499,19 @@ __all__ = [
     "CHEAP_PB_PRIMARY_GATE_CAP",
     "CheapPbPrimaryCapError",
     "NearEmptyBatchError",
+    "AlwaysOnBatchError",
     "assert_new_batch_cheap_pb_cap",
     "assert_new_batch_occupancy_not_near_empty",
+    "assert_new_batch_occupancy_not_always_on",
+    "assert_new_batch_occupancy_in_material_band",
     "assert_near_empty_park_covers",
     "recorded_near_empty_ids",
+    "recorded_always_on_ids",
     "countable_inventory_bias",
     "countable_thesis_ids",
     "mean_occupancy_by_logic",
     "near_empty_occupancy_park",
+    "always_on_occupancy_park",
     "primary_gate_of",
     "is_countable_spec",
     "unique_leftover_logic_ids",

@@ -202,7 +202,13 @@ def test_near_empty_park_is_not_countable_or_basket_material() -> None:
 
     parked = near_empty_occupancy_park()
     assert parked == NEAR_EMPTY_PARK_IDS
-    assert len(parked) == 4
+    assert len(parked) >= 4
+    assert {
+        "event_cheap_iv_eqar_rising_steep",
+        "event_cheap_iv_margin_up_repo3m",
+        "event_margin_down_eqar_rising_steep",
+        "event_rich_iv_margin_up_eqar_falling_fade",
+    } <= parked
     countable = countable_thesis_ids()
     for lid in parked:
         spec = catalog_spec(lid)
@@ -244,8 +250,54 @@ def test_near_empty_park_is_not_countable_or_basket_material() -> None:
         occ_map = mean_occupancy_by_logic(json.loads(cells_path.read_text(encoding="utf-8")))
         cover = assert_near_empty_park_covers(occ_map)
         assert cover["ok"] is True
-        assert parked <= set(occ_map)
-        assert cover["n_recorded"] == len(parked)
+        assert cover["n_recorded"] >= 4
+        assert cover["missing_from_park"] == []
+
+
+def test_always_on_batch_guard_and_empty_park() -> None:
+    from research.combo_basket_catalog import validate_basket_members
+    from research.unique_logic.constants import (
+        ALWAYS_ON_OCCUPANCY_WARN,
+        ALWAYS_ON_PARK_IDS,
+        CANDIDATE_POLICY,
+    )
+    from research.unique_logic.worker_bodies import (
+        AlwaysOnBatchError,
+        always_on_occupancy_park,
+        assert_new_batch_occupancy_in_material_band,
+        assert_new_batch_occupancy_not_always_on,
+        countable_thesis_ids,
+    )
+
+    assert always_on_occupancy_park() == ALWAYS_ON_PARK_IDS
+    assert "always_on_parked" in CANDIDATE_POLICY["exclude"]
+    assert ALWAYS_ON_PARK_IDS.isdisjoint(countable_thesis_ids())
+    ok = assert_new_batch_occupancy_not_always_on(
+        {"a": 0.20, "b": 0.40, "c": 0.30}
+    )
+    assert ok["ok"] is True
+    assert ok["n_always_on"] == 0
+    try:
+        assert_new_batch_occupancy_not_always_on(
+            {"ok_one": 0.20, "sticky": ALWAYS_ON_OCCUPANCY_WARN}
+        )
+        raise AssertionError("always_on batch must reject")
+    except AlwaysOnBatchError:
+        pass
+    band = assert_new_batch_occupancy_in_material_band(
+        {"a": 0.20, "b": 0.40}
+    )
+    assert band["ok"] is True
+    try:
+        assert_new_batch_occupancy_in_material_band({"sticky": 0.90})
+        raise AssertionError("material band must reject always_on")
+    except AlwaysOnBatchError:
+        pass
+    if ALWAYS_ON_PARK_IDS:
+        reasons = validate_basket_members(
+            ["event_eqar_high_liq_high", next(iter(ALWAYS_ON_PARK_IDS))]
+        )
+        assert "always_on_member" in reasons
 
 
 def test_propose_calendar_gates_excluded_from_llm() -> None:

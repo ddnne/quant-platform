@@ -196,8 +196,13 @@ NEAR_EMPTY_PARK_IDS: frozenset[str] = frozenset(
         "event_cheap_iv_margin_up_repo3m",
         "event_margin_down_eqar_rising_steep",
         "event_rich_iv_margin_up_eqar_falling_fade",
+        "event_nkyvol_steep_uncrowded",
+        "event_nkyvol_steep_pre_mom",
     }
 )
+# Recorded mean occupancy ≥ ALWAYS_ON_OCCUPANCY_WARN. Not countable, not
+# basket material. Empty until a batch records always-on occupancy.
+ALWAYS_ON_PARK_IDS: frozenset[str] = frozenset()
 MF_VALUE_MOM_RATE_DELEGATES: bool = False
 MF_VALUE_MOM_RATE_PATH: str = "unique_rate_gated_value_mom"
 MF_VALUE_MOM_RATE_PARKED_ALWAYS_ON: bool = False
@@ -329,6 +334,7 @@ CANDIDATE_POLICY: dict[str, object] = {
         "worker_body_missing",
         "unique22_occupancy_mismatch",
         "near_empty_parked",
+        "always_on_parked",
     ),
     "always_on_occupancy": ALWAYS_ON_OCCUPANCY_WARN,
     "near_empty_occupancy": NEAR_EMPTY_OCCUPANCY,

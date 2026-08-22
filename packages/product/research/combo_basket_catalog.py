@@ -3,13 +3,17 @@ from __future__ import annotations
 
 from typing import Any, Sequence
 
-from research.unique_logic.constants import ALWAYS_ON_CS_STICKY, NEAR_EMPTY_PARK_IDS
+from research.unique_logic.constants import (
+    ALWAYS_ON_CS_STICKY,
+    ALWAYS_ON_PARK_IDS,
+    NEAR_EMPTY_PARK_IDS,
+)
 
 DEFAULT_CANDIDATE_BASKET: tuple[str, ...] = (
     "event_eqar_high_liq_high",
-    "event_cheap_iv_uncrowded",
-    "event_nkyvol_repo3m_down",
-    "cs_margin_up_chase",
+    "event_ta_up_liq_high",
+    "event_eqar_rising_ta_up_liq",
+    "event_uncrowded_liq_eqar_rising",
 )
 
 RETIRED_BASKET_RULES: frozenset[str] = frozenset(
@@ -34,8 +38,8 @@ MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
         "members": (
             "event_eqar_high_liq_high",
             "event_ta_up_liq_high",
-            "event_eqar_rising_nkyvol",
-            "event_ta_up_repo3m_down",
+            "event_positive_eps_liq_high",
+            "event_eqar_rising_ta_up_liq",
         ),
     },
     {
@@ -78,8 +82,8 @@ MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
         "members": (
             "event_eqar_high_liq_high",
             "event_ta_up_liq_high",
-            "event_eqar_rising_nkyvol",
-            "event_ta_up_repo3m_down",
+            "event_positive_eps_liq_high",
+            "event_eqar_rising_ta_up_liq",
         ),
     },
     {
@@ -87,10 +91,10 @@ MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
         "rule": "margin_flow_sleeve",
         "primary": True,
         "members": (
-            "cs_margin_up_chase",
-            "event_margin_down_liq_high",
-            "event_nkyvol_liq_margin_down",
-            "event_crowded_repo3m_down",
+            "event_crowded_liq_ta_up_fade",
+            "event_crowded_liq_eqar_rising_fade",
+            "event_uncrowded_liq_eqar_rising",
+            "event_uncrowded_ta_up_easing",
         ),
     },
     {
@@ -110,9 +114,9 @@ MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
         "primary": True,
         "members": (
             "event_eqar_high_liq_high",
-            "event_positive_eps_liq_high",
-            "event_cheap_iv_liq_uncrowded",
             "event_pre_mom_liq_high",
+            "event_eqar_rising_ta_up_uncrowded",
+            "event_uncrowded_cluster_eqar_rising",
         ),
     },
 )
@@ -153,6 +157,8 @@ def validate_basket_members(logic_ids: Sequence[str]) -> list[str]:
         reasons.append("always_on_cs_member")
     if any(m in NEAR_EMPTY_PARK_IDS for m in ids):
         reasons.append("near_empty_member")
+    if any(m in ALWAYS_ON_PARK_IDS for m in ids):
+        reasons.append("always_on_member")
     return reasons
 
 

@@ -62,8 +62,8 @@ prose. Update the table after a published projection.
 
 Completion of a research turn requires an R2 **daily_path** job, not local JSON.
 Do not paste cell scores into this file. Latest recorded job id belongs in D1.
-Candidate pool (code: `CANDIDATE_POLICY`) excludes path_broken / path_collapsed / always_on / near_empty / near_empty_parked / data_requirement_unmet / near_duplicate / always_on_cs_sticky / worker_isolate_limit / worker_body_missing / unique22_occupancy_mismatch.
+Candidate pool (code: `CANDIDATE_POLICY`) excludes path_broken / path_collapsed / always_on / always_on_parked / near_empty / near_empty_parked / data_requirement_unmet / near_duplicate / always_on_cs_sticky / worker_isolate_limit / worker_body_missing / unique22_occupancy_mismatch.
 Latest empirical jobs (ids only; older ids stay on R2/D1). Two tracks — do not narrate from one print:
-- **mid_n_explore** (ADV 80): `eval-cf-dp-mid80-plus28q-20260823l`, `eval-cf-dp-mid80-adopt1m-20260823m`, `eval-cf-dp-both-sleeves-20260823e-mid_n_explore`
-- **liq_large** (ADV 100): `eval-cf-dp-liq100-plus28q-20260823l`, `eval-cf-dp-liq100-adopt1m-20260823m`, `eval-cf-dp-both-sleeves-20260823e-liq_large`
-Universe `adv_desc_skip_missing_bars_and_fins` (head-N forbidden). Worker `research-mass-eval/v31-propose-parse`. plus32vf 4 near_empty parked; park must cover recorded empty (`assert_near_empty_park_covers`). plus28q occupancy `eval-occupancy-audit-20260823l` material near_empty 0. Inventory `eval-inventory-bias-20260823m`. Propose 23m 70B adopt 1 (`event_easing_margin_up_ta_up`, mid occ) / clone 1 / nkyvol polarity 1. unique22 5/17. GO deferred. HOLD: cost_models / options_225 / daily_path leftover / unique22 park YAML / CLI `__main__.py`.
+- **mid_n_explore** (ADV 80): `eval-cf-dp-mid80-plus32q-20260823n`, `eval-cf-dp-both-sleeves-20260823n-mid_n_explore`
+- **liq_large** (ADV 100): `eval-cf-dp-liq100-plus32q-20260823n`, `eval-cf-dp-both-sleeves-20260823n-liq_large`
+Universe `adv_desc_skip_missing_bars_and_fins` (head-N forbidden). Worker `research-mass-eval/v31-propose-parse`. Baskets reblend `eval-cf-dp-both-sleeves-20260823n` not_a_pass; near_empty park 6 (plus32vf 4 + plus32q steep 2). plus32q material 30 occupancy band ok (`eval-occupancy-audit-20260823n`; always_on 0). Inventory `eval-inventory-bias-20260823n`. Propose 23n 70B adopt 1 / clone 2. unique22 5/17. GO deferred. HOLD: cost_models / options_225 / daily_path leftover / unique22 park YAML / CLI `__main__.py` (importer-zero tracked py = 0).
