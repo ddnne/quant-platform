@@ -2,7 +2,7 @@
 /// Python research.unique_logic.propose_review_tables is SoT.
 export const GATE_TITLE_CONTRA: Array<[string, string[]]> = [
   ["sales_down", ["rising sales", "sales up", "sales growth", "high sales", "sales increase", "sales tend to rise", "sales rise"]],
-  ["np_negative", ["positive np", "positive profit", "rising profit", "profit up", "profits tend to rise", "profit tends to rise"]],
+  ["np_negative", ["positive np", "positive profit", "rising profit", "profit up", "profits tend to rise", "profit tends to rise", "high np", "high profit"]],
   ["price_down", ["price up", "rising price", "increase in price", "price increase", "prices tend to rise", "prices rise", "price rise", "price is rising", "the price is rising"]],
   ["ta_down", ["ta up", "rising ta"]],
   ["ta_up", ["ta down", "falling ta"]],
@@ -54,6 +54,7 @@ export const EXTRA_TITLE_GATES: Array<[string, string]> = [
   ["eps surprises", "eps_down"],
   ["eps surprise", "eps_down"],
   ["eps growth", "eps_up"],
+  ["high np", "np_negative"],
   ["sales contraction", "sales_down"],
   ["sales contracted", "sales_down"],
   ["poor sales", "sales_down"],

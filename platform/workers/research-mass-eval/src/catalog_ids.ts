@@ -196,6 +196,7 @@ export const CF_NEW_EVENT_THESIS_IDS = [
   "event_flatten_eps_down",
   "event_flatten_eqar_rising",
   "event_flatten_overnight_p10",
+  "event_flatten_pb_rising",
   "event_flatten_px_down",
   "event_flatten_roe_low_np_neg",
   "event_flatten_tight_eps_down",

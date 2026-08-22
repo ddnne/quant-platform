@@ -120,6 +120,8 @@ GATE_TITLE_CONTRA: tuple[tuple[str, tuple[str, ...]], ...] = (
         "profit up",
         "profits tend to rise",
         "profit tends to rise",
+        "high np",
+        "high profit",
     )),
     ("price_down", (
         "price up",
@@ -232,6 +234,7 @@ EXTRA_TITLE_GATES: tuple[tuple[str, str], ...] = (
     ("eps surprises", "eps_down"),
     ("eps surprise", "eps_down"),
     ("eps growth", "eps_up"),
+    ("high np", "np_negative"),
     ("sales contraction", "sales_down"),
     ("sales contracted", "sales_down"),
     ("poor sales", "sales_down"),

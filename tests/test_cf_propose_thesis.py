@@ -515,6 +515,12 @@ def test_review_proposal_row_occupancy_and_polarity_table() -> None:
             "occupancy_label_only",
             "PEAD when price is down AND sales contracted versus the last prior print",
         ),
+        (
+            "Stocks with high NP margins outperform when the curve is inverting AND funding is tight.",
+            ["invert_curve", "tight_funding"],
+            "occupancy_label_only",
+            "PEAD when the repo curve inverted AND overnight funding is tight",
+        ),
     ]
     for bad_thesis, gates, reason, good_thesis in rows:
         payload = {
