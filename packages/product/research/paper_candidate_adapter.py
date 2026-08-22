@@ -4,8 +4,7 @@ Closed envelope with nested StrategySpec plus horizon / costs / universe /
 rebalance. Does not arm the paper scheduler, call ``run_paper``, or touch
 the live order path. Mass NO-GO · Phase7 OFF · READY undeclared · GO closed.
 ``research_candidate`` is never auto-promoted. Hostile arm/live/go input is
-stripped. Residuals (portfolio MTM vs trade-level mean; no short-margin
-model) stay on the envelope. Do not simplify research.
+stripped. Residuals stay on the envelope. Do not simplify research.
 """
 
 from __future__ import annotations
@@ -49,10 +48,6 @@ from research.hypothesis_classes import (
     get_hypothesis_class,
 )
 
-# ---------------------------------------------------------------------------
-# Identity / freeze (must never arm)
-# ---------------------------------------------------------------------------
-
 PAPER_CANDIDATE_SPEC_VERSION: str = "paper-candidate-spec/v1"
 PAPER_CANDIDATE_ADAPTER_VERSION: str = "paper-candidate-adapter/v2"
 PAPER_CANDIDATE_WAVE: str = "W86 / w0816u"
@@ -65,10 +60,9 @@ DEFAULT_TOP_K: int = 5
 DEFAULT_LOOKBACK_DAYS: int = 30
 DEFAULT_CS_LONG_FRAC: float = 0.3
 DEFAULT_CS_SHORT_FRAC: float = 0.3
-DEFAULT_CS_MOMENTUM_N: int = 5  # W82 pin for hold=10
+DEFAULT_CS_MOMENTUM_N: int = 5  # hold=10 pin
 DEFAULT_FUND_MOMENTUM_N: int = 10
 
-# Boolean keys that must be False on adapter output (never arm / live / go).
 _ARM_BOOL_FALSE_KEYS: tuple[str, ...] = (
     "paper_scheduler_armed",
     "paper_continuous",
@@ -82,9 +76,24 @@ _ARM_BOOL_FALSE_KEYS: tuple[str, ...] = (
     "significance_claimed",
     "edge_claimed",
     "s1_s5_unreject",
-    "research_candidate",  # never auto-promote
+    "research_candidate",
     "armed",
     "go",
+)
+_HINT_CLOSED: frozenset[str] = frozenset(
+    {"scheduler_armed", "run_now", "continuous", "require_ready_snapshot"}
+)
+_COST_STRIP: frozenset[str] = frozenset(
+    {
+        "mass_research",
+        "phase7",
+        "ready_declared",
+        "operational_go",
+        "connected_to_ready",
+        "connected_to_mass",
+        "significance_claimed",
+        "edge_claimed",
+    }
 )
 
 
@@ -110,7 +119,6 @@ def _freeze_arm_flags() -> dict[str, Any]:
 
 
 def _assert_closed_flags(block: Mapping[str, Any], *, where: str) -> None:
-    """Validate one flag surface (top-level or arm.*)."""
     prefix = f"{where}." if where else ""
     for key in _ARM_BOOL_FALSE_KEYS:
         if key not in block:
@@ -145,11 +153,6 @@ def assert_unarmed(payload: Mapping[str, Any]) -> None:
     status = str(payload.get("status") or "")
     if status in {"armed", "live", "go", "paper_armed", "scheduler_armed"}:
         raise ValueError(f"paper receptacle status must not arm: {status!r}")
-
-
-# ---------------------------------------------------------------------------
-# Costs / horizon helpers
-# ---------------------------------------------------------------------------
 
 
 def _one_way_cost_from_payload(payload: Mapping[str, Any]) -> float:
@@ -196,11 +199,22 @@ def _hold_days_from_payload(
     for token in ("20d", "10d", "5d"):
         if token in horizon:
             return int(token.replace("d", ""))
-    # class_hyp multi_day_hold_10 style keys
     cid = str(payload.get("hypothesis_class") or class_id)
     if cid == CLASS_MULTI_DAY_HOLD and "10" in str(payload.get("label") or ""):
         return 10
     return max(1, int(default))
+
+
+def _pin_hold_10(payload: Mapping[str, Any], variants: set[str], current: int) -> int:
+    return 10 if str(payload.get("variant") or "") in variants else current
+
+
+def _signal_sign(payload: Mapping[str, Any]) -> int:
+    raw = payload.get("chosen_sign", payload.get("signal_sign", 1))
+    try:
+        return int(raw) if int(raw) in (1, -1) else 1
+    except (TypeError, ValueError):
+        return 1
 
 
 def _universe_from_payload(
@@ -218,8 +232,7 @@ def _universe_from_payload(
     if isinstance(codes, (list, tuple)) and codes:
         return [str(c).strip() for c in codes if str(c).strip()]
     try:
-        spec = get_hypothesis_class(class_id)
-        return list(spec.universe)
+        return list(get_hypothesis_class(class_id).universe)
     except KeyError:
         return ["tse_prime_liquid"]
 
@@ -232,7 +245,7 @@ def _source_candidate_block(payload: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(summary, Mapping):
         summary = {}
     return {
-        "research_candidate": False,  # never promote
+        "research_candidate": False,
         "research_candidate_allowed": bool(
             cand.get("research_candidate_allowed", summary.get("research_candidate_allowed", False))
         ),
@@ -259,11 +272,6 @@ def _source_candidate_block(payload: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-# ---------------------------------------------------------------------------
-# StrategySpec builders (approved features only)
-# ---------------------------------------------------------------------------
-
-
 def build_multi_day_hold_strategy_spec(
     *,
     hold_days: int = 10,
@@ -275,12 +283,7 @@ def build_multi_day_hold_strategy_spec(
     rationale: str = "",
     sticky: bool = True,
 ) -> StrategySpec:
-    """Map multi_day_hold entry (momentum_n) into closed StrategySpec v3.
-
-    Sticky multi-day hold uses ``rebalance=fixed_horizon`` + ``hold_days``
-    (W84). Entry still top_k on momentum (research is sign(momentum); top_k is
-    a residual long-only portfolio approximation).
-    """
+    """Map multi_day_hold entry (momentum_n) into closed StrategySpec v3."""
     h = max(1, int(hold_days))
     n_mom = max(1, int(momentum_n if momentum_n is not None else h))
     sid = strategy_id or f"paper_mdh_hold{h}_momentum_topk"
@@ -319,11 +322,7 @@ def build_cross_section_hold_strategy_spec(
     strategy_id: str | None = None,
     rationale: str = "",
 ) -> StrategySpec:
-    """Research-aligned CS sticky hold: rank L-S + fixed_horizon hold.
-
-    Defaults match W83/W84 production candidate: hold=10 · mom=5 · frac=0.3.
-    ``signal_sign``: +1 original / −1 inverted (W86 sign selection).
-    """
+    """CS sticky hold: rank L-S + fixed_horizon. ``signal_sign`` +1 / −1."""
     h = max(1, int(hold_days))
     n_mom = max(1, int(momentum_n))
     s_sign = int(signal_sign) if int(signal_sign) in (1, -1) else 1
@@ -368,10 +367,7 @@ def build_fundamentals_hold_strategy_spec(
     strategy_id: str | None = None,
     rationale: str = "",
 ) -> StrategySpec:
-    """Research-aligned fund path: value×mom agree + fixed_horizon hold.
-
-    ``signal_sign``: +1 original / −1 inverted (W86 sign selection).
-    """
+    """Fund path: value×mom agree + fixed_horizon. ``signal_sign`` +1 / −1."""
     h = max(1, int(hold_days))
     n_mom = max(1, int(momentum_n))
     s_sign = int(signal_sign) if int(signal_sign) in (1, -1) else 1
@@ -416,12 +412,7 @@ def build_event_post_strategy_spec(
     rationale: str = "",
     sticky: bool = True,
 ) -> StrategySpec:
-    """Map event_post into StrategySpec using disclosure_flag_fins.
-
-    Full surprise-proxy is still not expressible (no signed surprise feature
-    on the whitelist). Sticky hold on the disclosure flag is now expressible
-    via fixed_horizon (v3). Envelope marks fidelity=proxy for the signal.
-    """
+    """Map event_post into StrategySpec using disclosure_flag_fins (proxy)."""
     h = max(1, int(post_hold_days))
     sid = strategy_id or f"paper_event_post_hold{h}_disclosure_proxy"
     return StrategySpec(
@@ -445,18 +436,10 @@ def build_event_post_strategy_spec(
         hold_days=h if sticky and h > 1 else None,
     )
 
-# ---------------------------------------------------------------------------
-# Receptacle
-# ---------------------------------------------------------------------------
-
 
 @dataclass(frozen=True)
 class PaperCandidateReceptacle:
-    """Paper-readable, unarmed receptacle for a research candidate.
-
-    Aligns StrategySpec (nested) with research fields:
-    horizon · costs · universe · rebalance
-    """
+    """Paper-readable, unarmed receptacle for a research candidate."""
 
     strategy_spec: StrategySpec
     hypothesis_class: str
@@ -466,7 +449,7 @@ class PaperCandidateReceptacle:
     costs: Mapping[str, Any]
     signal_id: str = ""
     hold_days: int | None = None
-    strategy_spec_fidelity: str = "aligned"  # aligned | proxy
+    strategy_spec_fidelity: str = "aligned"
     discussion_only: bool = True
     source_candidate: Mapping[str, Any] = field(default_factory=dict)
     paper_run_hints: Mapping[str, Any] = field(default_factory=dict)
@@ -504,15 +487,8 @@ class PaperCandidateReceptacle:
                 **{
                     k: v
                     for k, v in dict(self.paper_run_hints).items()
-                    if k
-                    not in {
-                        "scheduler_armed",
-                        "run_now",
-                        "continuous",
-                        "require_ready_snapshot",
-                    }
+                    if k not in _HINT_CLOSED
                 },
-                # force closed even if paper_run_hints tried to open
                 "scheduler_armed": False,
                 "run_now": False,
                 "continuous": False,
@@ -547,31 +523,31 @@ def _costs_block(
         "amortized_one_way_cost": am,
         "amortization": "hold_days",
         "hold_days": int(hold_days),
-        # PaperRunConfig.cost_bps alignment (basis points one-way)
         "cost_bps": float(one_way_cost) * 10_000.0,
         "position_style": "long_only_unlevered",
         "uses_short": False,
         "uses_leverage": False,
     }
     if cost_assumption:
-        # keep research disclosure, strip any arm keys
-        safe = {
-            k: v
-            for k, v in cost_assumption.items()
-            if k
-            not in {
-                "mass_research",
-                "phase7",
-                "ready_declared",
-                "operational_go",
-                "connected_to_ready",
-                "connected_to_mass",
-                "significance_claimed",
-                "edge_claimed",
-            }
+        out["research_cost_assumption"] = {
+            k: v for k, v in cost_assumption.items() if k not in _COST_STRIP
         }
-        out["research_cost_assumption"] = safe
     return out
+
+
+def _cs_momentum_n(payload: Mapping[str, Any], hold_days: int) -> int:
+    variant_s = str(payload.get("variant") or "")
+    n_mom = payload.get("momentum_n")
+    if n_mom is None:
+        n_mom = payload.get("cross_section_hold10_momentum_n")
+    if n_mom is None and variant_s in {
+        "hold_10_mom3",
+        "cross_section_hold_10_mom3",
+    }:
+        n_mom = payload.get("cross_section_hold10_mom3_momentum_n", 3)
+    if n_mom is not None:
+        return int(n_mom)
+    return 5 if hold_days == 10 else hold_days
 
 
 def adapt_class_hyp_candidate(
@@ -583,11 +559,6 @@ def adapt_class_hyp_candidate(
     strategy_id: str | None = None,
 ) -> PaperCandidateReceptacle:
     """Adapt a class_hyp / research candidate payload → unarmed paper receptacle.
-
-    Accepts:
-    * class block from ``class_hyp_multi_year_bundle`` (multi_day_hold_10, event_post, …)
-    * free-form research candidate with ``hypothesis_class`` / ``signal_id``
-    * candidate_summary row plus optional overrides
 
     Always returns UNARMED; never sets live/go/mass/ready.
     """
@@ -611,25 +582,28 @@ def adapt_class_hyp_candidate(
     if not isinstance(cost_assumption, Mapping):
         cost_assumption = None
 
-    discussion_only = True
     residual_notes: list[str] = []
+    known_hold10 = {
+        CLASS_MULTI_DAY_HOLD,
+        CLASS_CROSS_SECTION_RELATIVE,
+        CLASS_FUNDAMENTALS_PRICE,
+    }
+    h = int(
+        hold_days
+        if hold_days is not None
+        else _hold_days_from_payload(
+            payload,
+            default=10 if cid in known_hold10 else 5,
+            class_id=cid,
+        )
+    )
 
     if cid == CLASS_MULTI_DAY_HOLD:
-        h = int(
-            hold_days
-            if hold_days is not None
-            else _hold_days_from_payload(payload, default=10, class_id=cid)
-        )
-        # multi_day_hold_10 convention
-        if str(payload.get("variant") or "") in {"hold_10", "10", "10d"}:
-            h = 10
+        h = _pin_hold_10(payload, {"hold_10", "10", "10d"}, h)
         n_mom = payload.get("momentum_n")
         n_mom_i = int(n_mom) if n_mom is not None else h
         spec = build_multi_day_hold_strategy_spec(
-            hold_days=h,
-            top_k=top_k,
-            momentum_n=n_mom_i,
-            strategy_id=strategy_id,
+            hold_days=h, top_k=top_k, momentum_n=n_mom_i, strategy_id=strategy_id
         )
         horizon = f"{h}d_hold"
         rebalance = f"fixed_horizon_{h}d"
@@ -644,45 +618,23 @@ def adapt_class_hyp_candidate(
             f"StrategySpec v3 momentum_n(n={n_mom_i}) top_k. UNARMED."
         )
     elif cid == CLASS_CROSS_SECTION_RELATIVE:
-        h = int(
-            hold_days
-            if hold_days is not None
-            else _hold_days_from_payload(payload, default=10, class_id=cid)
+        h = _pin_hold_10(
+            payload,
+            {
+                "hold_10",
+                "cross_section_hold_10",
+                "hold_10_mom3",
+                "cross_section_hold_10_mom3",
+                "10",
+                "10d",
+            },
+            h,
         )
-        variant_s = str(payload.get("variant") or "")
-        if variant_s in {
-            "hold_10",
-            "cross_section_hold_10",
-            "hold_10_mom3",
-            "cross_section_hold_10_mom3",
-            "10",
-            "10d",
-        }:
-            h = 10
-        n_mom = payload.get("momentum_n")
-        if n_mom is None:
-            n_mom = payload.get("cross_section_hold10_momentum_n")
-        if n_mom is None and variant_s in {
-            "hold_10_mom3",
-            "cross_section_hold_10_mom3",
-        }:
-            n_mom = payload.get("cross_section_hold10_mom3_momentum_n", 3)
-        # Sticky hold=10 uses mom=5 unless variant pins mom=3. Do not retune.
-        if n_mom is not None:
-            n_mom_i = int(n_mom)
-        elif h == 10:
-            n_mom_i = 5
-        else:
-            n_mom_i = h
+        n_mom_i = _cs_momentum_n(payload, h)
         long_frac = float(payload.get("long_frac", DEFAULT_CS_LONG_FRAC))
         short_frac = float(payload.get("short_frac", DEFAULT_CS_SHORT_FRAC))
         allow_short = bool(payload.get("allow_short", True))
-        # W86 chosen_sign from sign selection (default +1 original)
-        s_sign_raw = payload.get("chosen_sign", payload.get("signal_sign", 1))
-        try:
-            s_sign = int(s_sign_raw) if int(s_sign_raw) in (1, -1) else 1
-        except (TypeError, ValueError):
-            s_sign = 1
+        s_sign = _signal_sign(payload)
         spec = build_cross_section_hold_strategy_spec(
             hold_days=h,
             momentum_n=n_mom_i,
@@ -710,29 +662,16 @@ def adapt_class_hyp_candidate(
             f"+ fixed_horizon. UNARMED."
         )
     elif cid == CLASS_FUNDAMENTALS_PRICE:
-        h = int(
-            hold_days
-            if hold_days is not None
-            else _hold_days_from_payload(payload, default=10, class_id=cid)
+        h = _pin_hold_10(
+            payload, {"hold_10", "fundamentals_hold_10", "10", "10d"}, h
         )
-        if str(payload.get("variant") or "") in {
-            "hold_10",
-            "fundamentals_hold_10",
-            "10",
-            "10d",
-        }:
-            h = 10
         n_mom = payload.get("momentum_n")
         if n_mom is None:
             n_mom = payload.get("fund_hold10_momentum_n")
         n_mom_i = int(n_mom) if n_mom is not None else (10 if h == 10 else h)
         mode = str(payload.get("mode") or "value_momentum_agree")
         allow_short = bool(payload.get("allow_short", True))
-        s_sign_raw = payload.get("chosen_sign", payload.get("signal_sign", 1))
-        try:
-            s_sign = int(s_sign_raw) if int(s_sign_raw) in (1, -1) else 1
-        except (TypeError, ValueError):
-            s_sign = 1
+        s_sign = _signal_sign(payload)
         spec = build_fundamentals_hold_strategy_spec(
             hold_days=h,
             momentum_n=n_mom_i,
@@ -759,16 +698,10 @@ def adapt_class_hyp_candidate(
             "StrategySpec v3 value_momentum_agree + fixed_horizon. UNARMED."
         )
     elif cid == CLASS_EVENT_POST:
-        h = int(
-            hold_days
-            if hold_days is not None
-            else _hold_days_from_payload(payload, default=5, class_id=cid)
-        )
         if payload.get("post_hold_days") is not None:
             h = max(1, int(payload["post_hold_days"]))
         spec = build_event_post_strategy_spec(
-            post_hold_days=h,
-            strategy_id=strategy_id,
+            post_hold_days=h, strategy_id=strategy_id
         )
         horizon = f"1d_to_{h}d_post_event"
         rebalance = f"event_entry_hold_{h}d_sticky"
@@ -784,12 +717,6 @@ def adapt_class_hyp_candidate(
             "Full surprise not on whitelist. UNARMED."
         )
     else:
-        # Generic fallback: still emit a multi_day momentum receptacle, marked proxy
-        h = int(
-            hold_days
-            if hold_days is not None
-            else _hold_days_from_payload(payload, default=5, class_id=cid)
-        )
         try:
             class_spec = get_hypothesis_class(cid)
             horizon = class_spec.horizon
@@ -813,6 +740,7 @@ def adapt_class_hyp_candidate(
             f"Generic unarmed paper receptacle for class={cid}. "
             "Proxy StrategySpec (momentum_n sticky). Not live. Not armed."
         )
+
     residual_block = {
         "notes": residual_notes,
         "policy": (
@@ -834,7 +762,7 @@ def adapt_class_hyp_candidate(
         signal_id=signal_id,
         hold_days=h,
         strategy_spec_fidelity=fidelity,
-        discussion_only=discussion_only,
+        discussion_only=True,
         source_candidate=source,
         paper_run_hints={
             "lifecycle": "Draft",
@@ -849,38 +777,8 @@ def adapt_class_hyp_candidate(
         note=note,
     )
 
-def adapt_from_class_hyp_bundle(
-    bundle: Mapping[str, Any],
-    class_key: str,
-    *,
-    top_k: int = DEFAULT_TOP_K,
-) -> PaperCandidateReceptacle:
-    """Pull one class block (e.g. multi_day_hold_10, event_post) from a bundle."""
-    if class_key not in bundle:
-        # try candidate_summary-only construction
-        summary = bundle.get("candidate_summary")
-        if isinstance(summary, Mapping) and class_key in summary:
-            row = dict(summary[class_key])
-            # map multi_day_hold_10 → class
-            if class_key.startswith("multi_day_hold"):
-                row.setdefault("hypothesis_class", CLASS_MULTI_DAY_HOLD)
-                if "10" in class_key:
-                    row.setdefault("variant", "hold_10")
-                    row.setdefault("hold_days", 10)
-            elif class_key == "event_post":
-                row.setdefault("hypothesis_class", CLASS_EVENT_POST)
-                row.setdefault("post_hold_days", 5)
-            if bundle.get("one_way_cost") is not None:
-                row.setdefault("one_way_cost", bundle["one_way_cost"])
-            if bundle.get("codes") is not None:
-                row.setdefault("codes", bundle["codes"])
-            return adapt_class_hyp_candidate(row, top_k=top_k)
-        raise KeyError(f"class_key {class_key!r} not in bundle")
 
-    block = dict(bundle[class_key])
-    if not isinstance(bundle[class_key], Mapping):
-        raise TypeError(f"bundle[{class_key!r}] must be a mapping")
-
+def _apply_class_key_defaults(block: dict[str, Any], class_key: str) -> None:
     if class_key.startswith("multi_day_hold"):
         block.setdefault("hypothesis_class", CLASS_MULTI_DAY_HOLD)
         if "10" in class_key:
@@ -901,26 +799,50 @@ def adapt_from_class_hyp_bundle(
     elif class_key == "event_post":
         block.setdefault("hypothesis_class", CLASS_EVENT_POST)
 
-    # attach candidate_summary row if present
+
+def adapt_from_class_hyp_bundle(
+    bundle: Mapping[str, Any],
+    class_key: str,
+    *,
+    top_k: int = DEFAULT_TOP_K,
+) -> PaperCandidateReceptacle:
+    """Pull one class block (e.g. multi_day_hold_10, event_post) from a bundle."""
+    if class_key not in bundle:
+        summary = bundle.get("candidate_summary")
+        if isinstance(summary, Mapping) and class_key in summary:
+            row = dict(summary[class_key])
+            if class_key.startswith("multi_day_hold"):
+                row.setdefault("hypothesis_class", CLASS_MULTI_DAY_HOLD)
+                if "10" in class_key:
+                    row.setdefault("variant", "hold_10")
+                    row.setdefault("hold_days", 10)
+            elif class_key == "event_post":
+                row.setdefault("hypothesis_class", CLASS_EVENT_POST)
+                row.setdefault("post_hold_days", 5)
+            if bundle.get("one_way_cost") is not None:
+                row.setdefault("one_way_cost", bundle["one_way_cost"])
+            if bundle.get("codes") is not None:
+                row.setdefault("codes", bundle["codes"])
+            return adapt_class_hyp_candidate(row, top_k=top_k)
+        raise KeyError(f"class_key {class_key!r} not in bundle")
+
+    if not isinstance(bundle[class_key], Mapping):
+        raise TypeError(f"bundle[{class_key!r}] must be a mapping")
+    block = dict(bundle[class_key])
+    _apply_class_key_defaults(block, class_key)
     summary = bundle.get("candidate_summary")
     if isinstance(summary, Mapping) and class_key in summary:
         block.setdefault("candidate_summary", summary[class_key])
-
     if bundle.get("one_way_cost") is not None:
         block.setdefault("one_way_cost", bundle["one_way_cost"])
     if bundle.get("codes") is not None:
         block.setdefault("codes", bundle["codes"])
-
     return adapt_class_hyp_candidate(block, top_k=top_k)
 
 
-def example_multi_day_hold_10d_payload() -> dict[str, Any]:
-    """Synthetic discussion_only multi_day_hold 10d candidate payload."""
+def _discussion_payload(signal_id: str) -> dict[str, Any]:
     return {
-        "hypothesis_class": CLASS_MULTI_DAY_HOLD,
-        "signal_id": "c21_multi_day_momentum_hold",
-        "variant": "hold_10",
-        "hold_days": 10,
+        "signal_id": signal_id,
         "one_way_cost": DEFAULT_ONE_WAY_COST,
         "candidate": {
             "research_candidate": False,
@@ -934,9 +856,18 @@ def example_multi_day_hold_10d_payload() -> dict[str, Any]:
             "research_candidate": False,
             "research_candidate_allowed": True,
             "verdict": "discussion_only_not_auto_promoted",
-            "signal_id": "c21_multi_day_momentum_hold",
+            "signal_id": signal_id,
         },
-        # hostile input: must be stripped
+    }
+
+
+def example_multi_day_hold_10d_payload() -> dict[str, Any]:
+    """Synthetic discussion_only multi_day_hold 10d candidate payload."""
+    return {
+        "hypothesis_class": CLASS_MULTI_DAY_HOLD,
+        "variant": "hold_10",
+        "hold_days": 10,
+        **_discussion_payload("c21_multi_day_momentum_hold"),
         "paper_scheduler_armed": True,
         "live_orders": True,
         "operational_go": True,
@@ -950,23 +881,8 @@ def example_event_post_payload() -> dict[str, Any]:
     """Synthetic discussion_only event_post candidate payload."""
     return {
         "hypothesis_class": CLASS_EVENT_POST,
-        "signal_id": "c21_event_post_disclosure_hold",
         "post_hold_days": 5,
-        "one_way_cost": DEFAULT_ONE_WAY_COST,
-        "candidate": {
-            "research_candidate": False,
-            "research_candidate_allowed": True,
-            "gate_passed": True,
-            "economic_net_ok": True,
-            "verdict": "discussion_only_not_auto_promoted",
-        },
-        "candidate_summary": {
-            "candidate_yes_no": "no_discussion_only",
-            "research_candidate": False,
-            "research_candidate_allowed": True,
-            "verdict": "discussion_only_not_auto_promoted",
-            "signal_id": "c21_event_post_disclosure_hold",
-        },
+        **_discussion_payload("c21_event_post_disclosure_hold"),
         "paper_scheduler_armed": True,
         "live_orders": True,
         "go": True,
@@ -987,7 +903,6 @@ def emit_example_paper_specs(out_dir: str | Path) -> dict[str, Path]:
         path = out / name
         body = rec.to_dict()
         assert_unarmed(body)
-        # also write nested strategy_spec alone for paper consumers
         path.write_text(
             json.dumps(body, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
             encoding="utf-8",

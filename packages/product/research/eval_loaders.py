@@ -2,6 +2,9 @@
 
 CF staging imports this module. Offline bar eval is ``research.offline.bar_eval``.
 No ffill. Empty / missing inputs return empty or None.
+
+Bars, nky, opt, margin, and repo share payload/sqlite helpers here. That is
+the extract boundary — not a split into per-dataset modules.
 """
 from __future__ import annotations
 
@@ -9,7 +12,7 @@ import json
 import sqlite3
 from pathlib import Path
 from statistics import mean
-from typing import Any, Mapping, Sequence
+from typing import Any, Iterator, Mapping, Sequence
 
 from qp_paths import repo_root
 from features.class_signals import (
@@ -37,24 +40,43 @@ DEFAULT_BARS_FULL_MIRROR_DIR: Path = (
 )
 
 
-def load_bars_ndjson_rich(
-    path: str | Path,
-    *,
-    codes: Sequence[str] | None = None,
-    max_days: int | None = None,
-    period_start: str | None = None,
-    period_end: str | None = None,
-) -> dict[str, list[tuple[str, dict[str, Any]]]]:
-    """Load bars with close + liquidity fields for W80 cost modulation.
+def _payload_map(raw: Any) -> Mapping[str, Any] | None:
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except json.JSONDecodeError:
+            return None
+    return raw if isinstance(raw, Mapping) else None
 
-    Each value: ``(date, {close, Va, Vo, AdjC, AdjVo, Code, Date})``.
-    """
-    p = Path(path)
-    code_filter = {str(c).strip() for c in codes} if codes else None
-    p_start = str(period_start)[:10] if period_start else None
-    p_end = str(period_end)[:10] if period_end else None
-    by_code: dict[str, dict[str, dict[str, Any]]] = {}
-    with p.open() as fh:
+
+def _fnum(v: Any) -> float | None:
+    if v is None or v == "":
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _code_of(pl: Mapping[str, Any]) -> str:
+    return str(pl.get("Code") or pl.get("code") or "").strip()
+
+
+def _date_of(pl: Mapping[str, Any], event_time: Any = None) -> str:
+    return str(pl.get("Date") or pl.get("date") or str(event_time or "")[:10])[:10]
+
+
+def _open_ro(db_path: str | Path) -> sqlite3.Connection | None:
+    db = Path(db_path)
+    if not db.exists():
+        return None
+    return sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+
+
+def _iter_ndjson(
+    path: str | Path, *, payload_or_row: bool = False
+) -> Iterator[Mapping[str, Any]]:
+    with Path(path).open() as fh:
         for line in fh:
             line = line.strip()
             if not line:
@@ -63,52 +85,125 @@ def load_bars_ndjson_rich(
                 row = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            payload = row.get("payload")
-            if isinstance(payload, str):
-                try:
-                    payload = json.loads(payload)
-                except json.JSONDecodeError:
-                    continue
-            if not isinstance(payload, Mapping):
-                continue
-            code = str(payload.get("Code") or payload.get("code") or "").strip()
-            date = str(payload.get("Date") or payload.get("date") or "")[:10]
-            if not code or not date:
-                continue
-            if code_filter is not None and code not in code_filter:
-                continue
-            if p_start and date < p_start:
-                continue
-            if p_end and date > p_end:
-                continue
-            close = payload.get("C")
-            if close is None:
-                close = payload.get("Close") or payload.get("AdjC")
-            try:
-                c = float(close)
-            except (TypeError, ValueError):
-                continue
-            rec = {
-                "close": c,
-                "C": c,
-                "Close": c,
-                "Code": code,
-                "Date": date,
-                "date": date,
-                "Va": payload.get("Va") or payload.get("AVa") or payload.get("MVa"),
-                "Vo": payload.get("Vo") or payload.get("AVo") or payload.get("MVo"),
-                "AdjC": payload.get("AdjC") or payload.get("AAdjC"),
-                "AdjVo": payload.get("AdjVo") or payload.get("AAdjVo"),
-            }
-            by_code.setdefault(code, {})[date] = rec
+            pl = _payload_map(row.get("payload") if isinstance(row, Mapping) else None)
+            if pl is None and payload_or_row and isinstance(row, Mapping):
+                pl = row
+            if pl is not None:
+                yield pl
 
-    out: dict[str, list[tuple[str, dict[str, Any]]]] = {}
-    for code, dmap in by_code.items():
-        pairs = sorted(dmap.items(), key=lambda x: x[0])
-        if max_days is not None and len(pairs) > int(max_days):
-            pairs = pairs[-int(max_days) :]
-        out[code] = pairs
+
+def _bar_rec(
+    code: str, date: str, close: float, pl: Mapping[str, Any]
+) -> dict[str, Any]:
+    return {
+        "close": close,
+        "C": close,
+        "Close": close,
+        "Code": code,
+        "Date": date,
+        "date": date,
+        "Va": pl.get("Va") or pl.get("AVa") or pl.get("MVa"),
+        "Vo": pl.get("Vo") or pl.get("AVo") or pl.get("MVo"),
+        "AdjC": pl.get("AdjC") or pl.get("AAdjC"),
+        "AdjVo": pl.get("AdjVo") or pl.get("AAdjVo"),
+    }
+
+
+def _trim_dated(dmap: Mapping[str, Any], max_days: int | None) -> list:
+    pairs = sorted(dmap.items(), key=lambda x: x[0])
+    if max_days is not None and len(pairs) > int(max_days):
+        pairs = pairs[-int(max_days) :]
+    return pairs
+
+
+def _code_like(codes: Sequence[str]) -> tuple[str, list[str]]:
+    if not codes:
+        return "", []
+    clauses = " OR ".join(["natural_key LIKE ?" for _ in codes])
+    return f" AND ({clauses})", [f'%"{c}"%' for c in codes]
+
+
+def _event_time_filters(
+    start: str | None, end: str | None
+) -> tuple[str, list[Any]]:
+    sql = ""
+    params: list[Any] = []
+    if start:
+        sql += " AND event_time >= ?"
+        params.append(str(start)[:10])
+    if end:
+        sql += " AND event_time <= ?"
+        params.append(str(end)[:10] + "T23:59:59")
+    return sql, params
+
+
+def _margin_total(pl: Mapping[str, Any]) -> float | None:
+    long_v = pl.get("LongVol")
+    shrt_v = pl.get("ShrtVol")
+    try:
+        if long_v is not None and shrt_v is not None:
+            return float(long_v) + float(shrt_v)
+        if long_v is not None:
+            return float(long_v)
+        if shrt_v is not None:
+            return float(shrt_v)
+    except (TypeError, ValueError):
+        return None
+    return None
+
+
+def _index_close_pairs(
+    con: sqlite3.Connection, sql: str, params: Sequence[Any]
+) -> list[tuple[str, float]]:
+    out: list[tuple[str, float]] = []
+    for _nk, event_time, payload in con.execute(sql, params):
+        pl = _payload_map(payload)
+        if pl is None:
+            continue
+        d = str(pl.get("Date") or str(event_time or "")[:10])[:10]
+        c = pl.get("C") if pl.get("C") is not None else pl.get("Close")
+        if not d or c is None or c == "":
+            continue
+        try:
+            out.append((d, float(c)))
+        except (TypeError, ValueError):
+            continue
     return out
+
+
+def load_bars_ndjson_rich(
+    path: str | Path,
+    *,
+    codes: Sequence[str] | None = None,
+    max_days: int | None = None,
+    period_start: str | None = None,
+    period_end: str | None = None,
+) -> dict[str, list[tuple[str, dict[str, Any]]]]:
+    """Load bars with close + liquidity fields. Skip missing. Never invent."""
+    code_filter = {str(c).strip() for c in codes} if codes else None
+    p_start = str(period_start)[:10] if period_start else None
+    p_end = str(period_end)[:10] if period_end else None
+    by_code: dict[str, dict[str, dict[str, Any]]] = {}
+    for payload in _iter_ndjson(path):
+        code = _code_of(payload)
+        date = _date_of(payload)
+        if not code or not date:
+            continue
+        if code_filter is not None and code not in code_filter:
+            continue
+        if p_start and date < p_start:
+            continue
+        if p_end and date > p_end:
+            continue
+        close = payload.get("C")
+        if close is None:
+            close = payload.get("Close") or payload.get("AdjC")
+        try:
+            c = float(close)
+        except (TypeError, ValueError):
+            continue
+        by_code.setdefault(code, {})[date] = _bar_rec(code, date, c, payload)
+    return {code: _trim_dated(dmap, max_days) for code, dmap in by_code.items()}
 
 
 def bars_rich_to_close_panel(
@@ -131,33 +226,28 @@ def load_bars_from_sqlite_rich(
 ) -> dict[str, list[tuple[str, dict[str, Any]]]]:
     """Load extra names from sqlite ``jquants_records`` via PK range per code.
 
-    Local ndjson mirrors are a 30-name shard. Missing requested codes are
-    filled from COMPLETE-backed sqlite (no invent). Empty code → omitted.
+    Missing requested codes are omitted (no invent). Empty code → omitted.
     """
-    db = Path(db_path)
     want = [str(c).strip() for c in codes if str(c).strip()]
-    if not db.exists() or not want:
+    con = _open_ro(db_path)
+    if con is None or not want:
         return {}
     p0 = str(period_start)[:10]
     p1 = str(period_end)[:10]
     out: dict[str, list[tuple[str, dict[str, Any]]]] = {}
-    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    sql = (
+        "SELECT payload FROM jquants_records "
+        "WHERE source = 'jquants' AND dataset = 'equities_bars_daily' "
+        "AND natural_key >= ? AND natural_key <= ?"
+    )
     try:
-        sql = (
-            "SELECT payload FROM jquants_records "
-            "WHERE source = 'jquants' AND dataset = 'equities_bars_daily' "
-            "AND natural_key >= ? AND natural_key <= ?"
-        )
         for code in want:
             lo = json.dumps({"Code": code, "Date": p0}, separators=(",", ":"))
             hi = json.dumps({"Code": code, "Date": p1 + "~"}, separators=(",", ":"))
             dmap: dict[str, dict[str, Any]] = {}
             for (payload,) in con.execute(sql, (lo, hi)):
-                try:
-                    pl = json.loads(payload) if isinstance(payload, str) else payload
-                except (TypeError, json.JSONDecodeError):
-                    continue
-                if not isinstance(pl, Mapping):
+                pl = _payload_map(payload)
+                if pl is None:
                     continue
                 date = str(pl.get("Date") or pl.get("date") or "")[:10]
                 if not date or date < p0 or date > p1:
@@ -169,27 +259,14 @@ def load_bars_from_sqlite_rich(
                     c = float(close)
                 except (TypeError, ValueError):
                     continue
-                dmap[date] = {
-                    "close": c,
-                    "C": c,
-                    "Close": c,
-                    "Code": code,
-                    "Date": date,
-                    "date": date,
-                    "Va": pl.get("Va") or pl.get("AVa") or pl.get("MVa"),
-                    "Vo": pl.get("Vo") or pl.get("AVo") or pl.get("MVo"),
-                    "AdjC": pl.get("AdjC") or pl.get("AAdjC"),
-                    "AdjVo": pl.get("AdjVo") or pl.get("AAdjVo"),
-                }
+                dmap[date] = _bar_rec(code, date, c, pl)
             if not dmap:
                 continue
-            pairs = sorted(dmap.items(), key=lambda x: x[0])
-            if max_days is not None and len(pairs) > int(max_days):
-                pairs = pairs[-int(max_days) :]
-            out[code] = pairs
+            out[code] = _trim_dated(dmap, max_days)
     finally:
         con.close()
     return out
+
 
 def _annualized_realized_vol(
     closes: Sequence[float], end_i: int, window: int
@@ -221,140 +298,27 @@ def load_topix_close_series_from_sqlite(
     end: str | None = None,
 ) -> list[tuple[str, float]]:
     """Load TOPIX closes from indices_bars_daily_topix (prefer) or code 0000."""
-    db = Path(db_path)
-    if not db.exists():
+    con = _open_ro(db_path)
+    if con is None:
         return []
-    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
     try:
-        out: list[tuple[str, float]] = []
-        # Prefer dedicated TOPIX dataset
+        filt, params = _event_time_filters(start, end)
         sql = (
             "SELECT natural_key, event_time, payload FROM jquants_records "
             "WHERE dataset = 'indices_bars_daily_topix'"
+            f"{filt} ORDER BY event_time ASC"
         )
-        params: list[Any] = []
-        if start:
-            sql += " AND event_time >= ?"
-            params.append(str(start)[:10])
-        if end:
-            sql += " AND event_time <= ?"
-            params.append(str(end)[:10] + "T23:59:59")
-        sql += " ORDER BY event_time ASC"
-        for _nk, event_time, payload in con.execute(sql, params):
-            try:
-                pl = json.loads(payload) if isinstance(payload, str) else payload
-            except (TypeError, json.JSONDecodeError):
-                continue
-            if not isinstance(pl, Mapping):
-                continue
-            d = str(pl.get("Date") or str(event_time or "")[:10])[:10]
-            c = pl.get("C") if pl.get("C") is not None else pl.get("Close")
-            if not d or c is None or c == "":
-                continue
-            try:
-                out.append((d, float(c)))
-            except (TypeError, ValueError):
-                continue
+        out = _index_close_pairs(con, sql, params)
         if out:
             return out
-        # Fallback: indices_bars_daily code 0000 (TOPIX)
         sql2 = (
             "SELECT natural_key, event_time, payload FROM jquants_records "
             "WHERE dataset = 'indices_bars_daily' "
-            "AND (natural_key LIKE '%\"Code\":\"0000\"%' OR natural_key LIKE '%\"code\":\"0000\"%')"
+            "AND (natural_key LIKE '%\"Code\":\"0000\"%' "
+            "OR natural_key LIKE '%\"code\":\"0000\"%')"
+            f"{filt} ORDER BY event_time ASC"
         )
-        params2: list[Any] = []
-        if start:
-            sql2 += " AND event_time >= ?"
-            params2.append(str(start)[:10])
-        if end:
-            sql2 += " AND event_time <= ?"
-            params2.append(str(end)[:10] + "T23:59:59")
-        sql2 += " ORDER BY event_time ASC"
-        for _nk, event_time, payload in con.execute(sql2, params2):
-            try:
-                pl = json.loads(payload) if isinstance(payload, str) else payload
-            except (TypeError, json.JSONDecodeError):
-                continue
-            if not isinstance(pl, Mapping):
-                continue
-            d = str(pl.get("Date") or str(event_time or "")[:10])[:10]
-            c = pl.get("C") if pl.get("C") is not None else pl.get("Close")
-            if not d or c is None or c == "":
-                continue
-            try:
-                out.append((d, float(c)))
-            except (TypeError, ValueError):
-                continue
-        return out
-    finally:
-        con.close()
-
-
-def load_nk225f_front_close_series_from_sqlite(
-    db_path: str | Path = DEFAULT_SQLITE,
-    *,
-    start: str | None = None,
-    end: str | None = None,
-) -> list[tuple[str, float]]:
-    """Continuous front Nikkei 225 futures closes (max open interest per day).
-
-    Cash Nikkei average is not in indices_bars_daily; NK225F front is the
-    primary price proxy for Nikkei realized-vol construction.
-    """
-    db = Path(db_path)
-    if not db.exists():
-        return []
-    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
-    try:
-        sql = (
-            "SELECT natural_key, event_time, payload FROM jquants_records "
-            "WHERE dataset = 'derivatives_bars_daily_futures' "
-            "AND payload LIKE '%\"ProdCat\":\"NK225F\"%'"
-        )
-        params: list[Any] = []
-        if start:
-            # lookback buffer for long RV window
-            sql += " AND event_time >= ?"
-            params.append(str(start)[:10])
-        if end:
-            sql += " AND event_time <= ?"
-            params.append(str(end)[:10] + "T23:59:59")
-        sql += " ORDER BY event_time ASC"
-        by_date: dict[str, list[tuple[float, float]]] = {}
-        for _nk, event_time, payload in con.execute(sql, params):
-            try:
-                pl = json.loads(payload) if isinstance(payload, str) else payload
-            except (TypeError, json.JSONDecodeError):
-                continue
-            if not isinstance(pl, Mapping):
-                continue
-            if str(pl.get("ProdCat") or "") != "NK225F":
-                continue
-            d = str(pl.get("Date") or str(event_time or "")[:10])[:10]
-            if not d:
-                continue
-            px = pl.get("C")
-            if px is None or px == "" or float(px or 0) <= 0:
-                px = pl.get("Settle")
-            if px is None or px == "" or float(px or 0) <= 0:
-                px = pl.get("AC")
-            try:
-                px_f = float(px) if px is not None and px != "" else 0.0
-            except (TypeError, ValueError):
-                continue
-            if px_f <= 0:
-                continue
-            try:
-                oi = float(pl.get("OI") or 0.0)
-            except (TypeError, ValueError):
-                oi = 0.0
-            by_date.setdefault(d, []).append((oi, px_f))
-        out: list[tuple[str, float]] = []
-        for d in sorted(by_date.keys()):
-            best = max(by_date[d], key=lambda x: x[0])
-            out.append((d, best[1]))
-        return out
+        return _index_close_pairs(con, sql2, params)
     finally:
         con.close()
 
@@ -381,7 +345,6 @@ def build_nky_vol_series(
         [(str(d)[:10], float(c)) for d, c in (close_pairs or []) if d and c is not None],
         key=lambda x: x[0],
     )
-    # de-dup last wins
     by_d: dict[str, float] = {}
     for d, c in pairs:
         by_d[d] = c
@@ -414,7 +377,6 @@ def build_nky_vol_series(
         "rv_short_by_date": dict(sorted(short_by.items())),
         "rv_long_by_date": dict(sorted(long_by.items())),
         "rv_ratio_by_date": dict(sorted(ratio_by.items())),
-        # abs-level uses short window by default
         "rv_abs_by_date": dict(sorted(short_by.items())),
         "n_close_obs": len(by_d),
         "n_obs_short": len(short_by),
@@ -438,41 +400,23 @@ def load_topix_close_series_from_ndjson(
     p_start = str(start)[:10] if start else None
     p_end = str(end)[:10] if end else None
     by_date: dict[str, float] = {}
-    with p.open() as fh:
-        for line in fh:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                row = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            payload = row.get("payload") if isinstance(row, Mapping) else None
-            if isinstance(payload, str):
-                try:
-                    payload = json.loads(payload)
-                except json.JSONDecodeError:
-                    continue
-            if not isinstance(payload, Mapping):
-                payload = row if isinstance(row, Mapping) else None
-            if not isinstance(payload, Mapping):
-                continue
-            d = str(payload.get("Date") or payload.get("date") or "")[:10]
-            if not d:
-                continue
-            if p_start and d < p_start:
-                continue
-            if p_end and d > p_end:
-                continue
-            c = payload.get("C")
-            if c is None:
-                c = payload.get("Close") or payload.get("close")
-            try:
-                px = float(c)  # type: ignore[arg-type]
-            except (TypeError, ValueError):
-                continue
-            if px > 0:
-                by_date[d] = px
+    for payload in _iter_ndjson(p, payload_or_row=True):
+        d = str(payload.get("Date") or payload.get("date") or "")[:10]
+        if not d:
+            continue
+        if p_start and d < p_start:
+            continue
+        if p_end and d > p_end:
+            continue
+        c = payload.get("C")
+        if c is None:
+            c = payload.get("Close") or payload.get("close")
+        try:
+            px = float(c)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            continue
+        if px > 0:
+            by_date[d] = px
     return sorted(by_date.items(), key=lambda x: x[0])
 
 
@@ -487,10 +431,8 @@ def load_nky_vol_series_from_sqlite(
 ) -> dict[str, Any]:
     """Load Nikkei-proxy closes and build short/long realized-vol series.
 
-    Priority (wall-clock safe):
-      1. Local TOPIX ndjson mirror (fast, multi-year COMPLETE-backed)
-      2. Optional sqlite NK225F / TOPIX (slow on full D1 dump — skipped by default)
-    Prefer=ndjson_topix is the default for factory/CF staging.
+    Factory/CF default is local TOPIX ndjson. Optional sqlite TOPIX when
+    ``prefer`` is sqlite*. Missing → empty series (no invent/ffill).
     """
     pref = str(prefer or "ndjson_topix").strip().lower()
     lookback_days = max(int(long_n) * 3, 120)
@@ -506,10 +448,6 @@ def load_nky_vol_series_from_sqlite(
             load_start = start
 
     nk_pairs: list[tuple[str, float]] = []
-    source = NKY_VOL_PROXY_TOPIX
-    dataset = "indices_bars_daily_topix"
-
-    # Fast path: local TOPIX ndjson (W60 multi-signal mirror).
     if pref in {"ndjson_topix", "topix", "auto", "ndjson"}:
         topix_ndjson = (
             repo_root()
@@ -518,43 +456,24 @@ def load_nky_vol_series_from_sqlite(
             / "r2_mirror"
             / "indices_bars_daily_topix.ndjson"
         )
-        if topix_ndjson.is_file():
-            nk_pairs = load_topix_close_series_from_ndjson(
-                topix_ndjson, start=load_start, end=end
-            )
-            if nk_pairs:
-                source = NKY_VOL_PROXY_TOPIX
-                dataset = "indices_bars_daily_topix"
-                return build_nky_vol_series(
-                    nk_pairs,
-                    short_n=short_n,
-                    long_n=long_n,
-                    source=source,
-                    dataset=dataset,
-                )
-
-    # Slow optional path: sqlite (only when explicitly requested).
-    if pref in {"nk225f", "sqlite", "sqlite_nk225f"}:
-        nk_pairs = load_nk225f_front_close_series_from_sqlite(
-            db_path, start=load_start, end=end
+        nk_pairs = load_topix_close_series_from_ndjson(
+            topix_ndjson, start=load_start, end=end
         )
-        source = NKY_VOL_PROXY_NK225F
-        dataset = "derivatives_bars_daily_futures"
-    if len(nk_pairs) < max(int(long_n) + 2, 30) and pref in {
+    if (not nk_pairs) and pref in {
         "nk225f",
         "sqlite",
         "sqlite_topix",
         "sqlite_nk225f",
     }:
-        topix = load_topix_close_series_from_sqlite(
+        nk_pairs = load_topix_close_series_from_sqlite(
             db_path, start=load_start, end=end
         )
-        if len(topix) > len(nk_pairs):
-            nk_pairs = topix
-            source = NKY_VOL_PROXY_TOPIX
-            dataset = "indices_bars_daily_topix"
     return build_nky_vol_series(
-        nk_pairs, short_n=short_n, long_n=long_n, source=source, dataset=dataset
+        nk_pairs,
+        short_n=short_n,
+        long_n=long_n,
+        source=NKY_VOL_PROXY_TOPIX,
+        dataset="indices_bars_daily_topix",
     )
 
 
@@ -573,11 +492,7 @@ def resolve_bars_path(
     mirror_dir: str | Path = DEFAULT_BARS_MIRROR_DIR,
     prefer_full: bool = True,
 ) -> Path | None:
-    """Map period_id like y2015_q4 / y2015_full → local ndjson mirror path.
-
-    W80: prefer full-year W64 mirrors when ``prefer_full`` and period is full
-    or period_id contains ``full``.
-    """
+    """Map period_id like y2015_q4 / y2015_full → local ndjson mirror path."""
     d = Path(mirror_dir)
     year = _period_year(period_id)
     if year is None:
@@ -588,23 +503,11 @@ def resolve_bars_path(
         DEFAULT_BARS_FULL_MIRROR_DIR / f"equities_bars_daily_y{year}_full.ndjson"
     )
     q4_path = d / f"equities_bars_daily_y{year}_q4.ndjson"
-    candidates: list[Path] = []
-    if want_full:
-        candidates.extend(
-            [
-                full_path,
-                d / f"equities_bars_daily_y{year}_full.ndjson",
-                q4_path,
-            ]
-        )
-    else:
-        candidates.extend(
-            [
-                q4_path,
-                full_path,
-                d / f"equities_bars_daily_y{year}_full.ndjson",
-            ]
-        )
+    candidates = (
+        [full_path, d / f"equities_bars_daily_y{year}_full.ndjson", q4_path]
+        if want_full
+        else [q4_path, full_path, d / f"equities_bars_daily_y{year}_full.ndjson"]
+    )
     for c in candidates:
         if c.exists():
             return c
@@ -644,25 +547,6 @@ def load_opt225_regime_bundle_for_eval(
     )
 
 
-def load_bars_ndjson(
-    path: str | Path,
-    *,
-    codes: Sequence[str] | None = None,
-    max_days: int | None = None,
-    period_start: str | None = None,
-    period_end: str | None = None,
-) -> dict[str, list[tuple[str, float]]]:
-    """Load equities_bars_daily ndjson → ``{code: [(date, close), ...]}`` sorted."""
-    rich = load_bars_ndjson_rich(
-        path,
-        codes=codes,
-        max_days=max_days,
-        period_start=period_start,
-        period_end=period_end,
-    )
-    return {c: [(d, float(r["close"])) for d, r in pairs] for c, pairs in rich.items()}
-
-
 def fins_summary_ta_eqar_stats(
     db_path: str | Path = DEFAULT_SQLITE,
     *,
@@ -698,25 +582,11 @@ def fins_summary_ta_eqar_stats(
         samples_ta: list[dict[str, Any]] = []
         samples_eqar: list[dict[str, Any]] = []
         for (payload,) in con.execute(sql):
-            try:
-                pl = json.loads(payload) if isinstance(payload, str) else payload
-            except (TypeError, json.JSONDecodeError):
-                continue
-            if not isinstance(pl, Mapping):
+            pl = _payload_map(payload)
+            if pl is None:
                 continue
             n += 1
-
-            def _ok(key: str) -> bool:
-                v = pl.get(key)
-                if v in (None, ""):
-                    return False
-                try:
-                    float(v)
-                    return True
-                except (TypeError, ValueError):
-                    return False
-
-            if _ok(FINS_SUMMARY_TA_KEY):
+            if _fnum(pl.get(FINS_SUMMARY_TA_KEY)) is not None:
                 n_ta += 1
                 if len(samples_ta) < 3:
                     samples_ta.append(
@@ -727,7 +597,7 @@ def fins_summary_ta_eqar_stats(
                             "doctype": pl.get("DocType"),
                         }
                     )
-            if _ok(FINS_SUMMARY_EQAR_KEY):
+            if _fnum(pl.get(FINS_SUMMARY_EQAR_KEY)) is not None:
                 n_eqar += 1
                 if len(samples_eqar) < 3:
                     samples_eqar.append(
@@ -738,9 +608,9 @@ def fins_summary_ta_eqar_stats(
                             "doctype": pl.get("DocType"),
                         }
                     )
-            if _ok(FINS_SUMMARY_EQ_KEY):
+            if _fnum(pl.get(FINS_SUMMARY_EQ_KEY)) is not None:
                 n_eq += 1
-            if _ok("NCTA"):
+            if _fnum(pl.get("NCTA")) is not None:
                 n_ncta += 1
         out.update(
             {
@@ -779,11 +649,7 @@ def collect_liquidity_bar_rows(
 def repo_history_plane_status(
     db_path: str | Path = DEFAULT_SQLITE,
 ) -> dict[str, Any]:
-    """Disclose sqlite history vs D1 hot tip vs PIT fail-closed.
-
-    Coverage V2 COMPLETE is receipt-owned (quant-mcp). This helper does not
-    invent COMPLETE, does not ffill, and does not declare READY.
-    """
+    """Disclose sqlite history vs D1 hot tip vs PIT fail-closed. No invent."""
     db = Path(db_path)
     n = 0
     mn = mx = None
@@ -835,7 +701,6 @@ def load_repo_rows_from_sqlite(
     """Load jsda_repo_rates rows from local SQLite (research offline path).
 
     Not the PIT path. PIT ``get_jsda_repo_rates`` is fail-closed until READY.
-    D1 holds hot tip only; this sqlite holds the COMPLETE time-series history.
     """
     db = Path(db_path)
     if not db.exists():
@@ -857,9 +722,10 @@ def load_repo_rows_from_sqlite(
             sql += " AND lower(tenor) LIKE ?"
             params.append(f"%{str(tenor_contains).lower()}%")
         sql += " ORDER BY as_of_date ASC"
-        cur = con.execute(sql, params)
         rows: list[dict[str, Any]] = []
-        for as_of_date, tenor, rate_type, rate, available_at, event_time in cur:
+        for as_of_date, tenor, rate_type, rate, available_at, event_time in con.execute(
+            sql, params
+        ):
             rows.append(
                 {
                     "as_of_date": str(as_of_date)[:10],
@@ -893,25 +759,15 @@ def build_repo_curve_series(
     short_tenor: str = REPO_CURVE_SHORT_TENOR,
     long_tenor: str = REPO_CURVE_LONG_TENOR,
 ) -> dict[str, Any]:
-    """Build date-keyed short/long rates + spread from multi-tenor rows.
-
-    Curve definition (documented):
-    ``spread[d] = rate(long_tenor, d) − rate(short_tenor, d)``.
-    Only observed JSDA repo tenors; missing either leg → gap (no invent/ffill).
-    This is a **funding term-structure proxy**, not a sovereign JGB/OIS curve.
-    """
+    """Build date-keyed short/long rates + spread. Missing either leg → gap."""
     by_date_tenor: dict[str, dict[str, float]] = {}
     for raw in rows or []:
         d = str(raw.get("as_of_date") or raw.get("date") or "")[:10]
         if not d or len(d) < 10:
             continue
         t = str(raw.get("tenor") or "")
-        rate = raw.get("rate")
-        if rate is None or rate == "":
-            continue
-        try:
-            rate_f = float(rate)
-        except (TypeError, ValueError):
+        rate_f = _fnum(raw.get("rate"))
+        if rate_f is None:
             continue
         by_date_tenor.setdefault(d, {})[t] = rate_f
 
@@ -944,7 +800,6 @@ def build_repo_curve_series(
         "short_rates_by_date": dict(sorted(short_by.items())),
         "long_rates_by_date": dict(sorted(long_by.items())),
         "spread_by_date": dict(sorted(spread_by.items())),
-        # Alias used by rate-level path when overnight preferred
         "rates_by_date": dict(sorted(short_by.items())),
         "n_obs_short": len(short_by),
         "n_obs_long": len(long_by),
@@ -969,11 +824,10 @@ def resolve_margin_path(
     year = _period_year(period_id)
     if year is None:
         return None
-    candidates = [
+    for c in (
         d / f"markets_margin_interest_y{year}_q4.ndjson",
         d / f"markets_margin_interest_y{year}_full.ndjson",
-    ]
-    for c in candidates:
+    ):
         if c.exists():
             return c
     return None
@@ -988,51 +842,20 @@ def load_margin_ndjson(
 
     total_vol = LongVol + ShrtVol when both present, else LongVol or ShrtVol.
     """
-    p = Path(path)
     code_filter = {str(c).strip() for c in codes} if codes else None
     by_code: dict[str, dict[str, float]] = {}
-    with p.open() as fh:
-        for line in fh:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                row = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            payload = row.get("payload")
-            if isinstance(payload, str):
-                try:
-                    payload = json.loads(payload)
-                except json.JSONDecodeError:
-                    continue
-            if not isinstance(payload, Mapping):
-                continue
-            code = str(payload.get("Code") or payload.get("code") or "").strip()
-            date = str(payload.get("Date") or payload.get("date") or "")[:10]
-            if not code or not date:
-                continue
-            if code_filter is not None and code not in code_filter:
-                continue
-            long_v = payload.get("LongVol")
-            shrt_v = payload.get("ShrtVol")
-            total = None
-            try:
-                if long_v is not None and shrt_v is not None:
-                    total = float(long_v) + float(shrt_v)
-                elif long_v is not None:
-                    total = float(long_v)
-                elif shrt_v is not None:
-                    total = float(shrt_v)
-            except (TypeError, ValueError):
-                continue
-            if total is None:
-                continue
-            by_code.setdefault(code, {})[date] = total
-    out: dict[str, list[tuple[str, float]]] = {}
-    for code, dmap in by_code.items():
-        out[code] = sorted(dmap.items(), key=lambda x: x[0])
-    return out
+    for payload in _iter_ndjson(path):
+        code = _code_of(payload)
+        date = _date_of(payload)
+        if not code or not date:
+            continue
+        if code_filter is not None and code not in code_filter:
+            continue
+        total = _margin_total(payload)
+        if total is None:
+            continue
+        by_code.setdefault(code, {})[date] = total
+    return {code: sorted(dmap.items(), key=lambda x: x[0]) for code, dmap in by_code.items()}
 
 
 def load_margin_from_sqlite(
@@ -1043,59 +866,33 @@ def load_margin_from_sqlite(
     end: str | None = None,
 ) -> dict[str, list[tuple[str, float]]]:
     """Load margin interest levels from jquants_records (research offline)."""
-    db = Path(db_path)
-    if not db.exists():
+    con = _open_ro(db_path)
+    if con is None:
         return {}
     code_list = [str(c).strip() for c in (codes or []) if str(c).strip()]
-    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
     try:
+        filt, params = _event_time_filters(start, end)
+        like_sql, like_params = _code_like(code_list)
         sql = (
             "SELECT natural_key, event_time, payload FROM jquants_records "
             "WHERE dataset = 'markets_margin_interest'"
+            f"{filt}{like_sql} ORDER BY event_time ASC"
         )
-        params: list[Any] = []
-        if start:
-            sql += " AND event_time >= ?"
-            params.append(str(start)[:10])
-        if end:
-            sql += " AND event_time <= ?"
-            params.append(str(end)[:10] + "T23:59:59")
-        if code_list:
-            # natural_key is JSON {"Code":"...","Date":"..."} — LIKE filter
-            clauses = " OR ".join(["natural_key LIKE ?" for _ in code_list])
-            sql += f" AND ({clauses})"
-            params.extend([f'%"{c}"%' for c in code_list])
-        sql += " ORDER BY event_time ASC"
-        cur = con.execute(sql, params)
+        params.extend(like_params)
         by_code: dict[str, dict[str, float]] = {}
         code_set = set(code_list) if code_list else None
-        for natural_key, event_time, payload in cur:
-            try:
-                pl = json.loads(payload) if isinstance(payload, str) else payload
-            except (TypeError, json.JSONDecodeError):
-                continue
-            if not isinstance(pl, Mapping):
+        for _nk, event_time, payload in con.execute(sql, params):
+            pl = _payload_map(payload)
+            if pl is None:
                 continue
             code = str(pl.get("Code") or "").strip()
-            if not code:
-                continue
-            if code_set is not None and code not in code_set:
+            if not code or (code_set is not None and code not in code_set):
                 continue
             date = str(pl.get("Date") or str(event_time or "")[:10])[:10]
             if not date:
                 continue
-            long_v = pl.get("LongVol")
-            shrt_v = pl.get("ShrtVol")
-            try:
-                if long_v is not None and shrt_v is not None:
-                    total = float(long_v) + float(shrt_v)
-                elif long_v is not None:
-                    total = float(long_v)
-                elif shrt_v is not None:
-                    total = float(shrt_v)
-                else:
-                    continue
-            except (TypeError, ValueError):
+            total = _margin_total(pl)
+            if total is None:
                 continue
             by_code.setdefault(code, {})[date] = total
         return {
@@ -1113,30 +910,21 @@ def load_short_ratio_series_from_sqlite(
     end: str | None = None,
 ) -> list[tuple[str, float]]:
     """Load market-level short ratio for one S33 section → sorted (date, ratio)."""
-    db = Path(db_path)
-    if not db.exists():
+    con = _open_ro(db_path)
+    if con is None:
         return []
-    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
     try:
+        filt, params = _event_time_filters(start, end)
         sql = (
             "SELECT event_time, payload FROM jquants_records "
             "WHERE dataset = 'markets_short_ratio' AND natural_key LIKE ?"
+            f"{filt} ORDER BY event_time ASC"
         )
-        params: list[Any] = [f'%"{section}"%']
-        if start:
-            sql += " AND event_time >= ?"
-            params.append(str(start)[:10])
-        if end:
-            sql += " AND event_time <= ?"
-            params.append(str(end)[:10] + "T23:59:59")
-        sql += " ORDER BY event_time ASC"
+        params = [f'%"{section}"%', *params]
         out: dict[str, float] = {}
         for event_time, payload in con.execute(sql, params):
-            try:
-                pl = json.loads(payload) if isinstance(payload, str) else payload
-            except (TypeError, json.JSONDecodeError):
-                continue
-            if not isinstance(pl, Mapping):
+            pl = _payload_map(payload)
+            if pl is None:
                 continue
             date = str(pl.get("Date") or str(event_time or "")[:10])[:10]
             if not date:
@@ -1164,40 +952,28 @@ def load_fins_events_from_sqlite(
 ) -> dict[str, list[dict[str, Any]]]:
     """Load fins_summary disclosure events → ``{code: [event_dict, ...]}``.
 
-    Each event: disc_date, disc_time, eps, feps, bps, prior_eps, event_time,
-    available_at (row envelope when selected). DiscTime never invented.
+    DiscTime never invented. Missing codes / fields omitted or left None.
     """
-    db = Path(db_path)
-    if not db.exists():
+    con = _open_ro(db_path)
+    if con is None:
         return {}
     code_list = [str(c).strip() for c in (codes or []) if str(c).strip()]
-    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
     try:
-        # Prefer available_at when column present (PIT envelope).
         cols = {
             r[1]
             for r in con.execute("PRAGMA table_info(jquants_records)").fetchall()
         }
         has_aa = "available_at" in cols
         aa_sel = ", available_at" if has_aa else ""
+        filt, params = _event_time_filters(start, end)
+        like_sql, like_params = _code_like(code_list)
         sql = (
             "SELECT natural_key, event_time, payload"
             f"{aa_sel} FROM jquants_records "
             "WHERE dataset = 'fins_summary'"
+            f"{filt}{like_sql} ORDER BY event_time ASC"
         )
-        params: list[Any] = []
-        if start:
-            # include a lookback buffer for prior EPS
-            sql += " AND event_time >= ?"
-            params.append(str(start)[:10])
-        if end:
-            sql += " AND event_time <= ?"
-            params.append(str(end)[:10] + "T23:59:59")
-        if code_list:
-            clauses = " OR ".join(["natural_key LIKE ?" for _ in code_list])
-            sql += f" AND ({clauses})"
-            params.extend([f'%"{c}"%' for c in code_list])
-        sql += " ORDER BY event_time ASC"
+        params.extend(like_params)
         code_set = set(code_list) if code_list else None
         by_code: dict[str, list[dict[str, Any]]] = {}
         for row in con.execute(sql, params):
@@ -1206,58 +982,43 @@ def load_fins_events_from_sqlite(
             else:
                 _nk, event_time, payload = row
                 row_aa = None
-            try:
-                pl = json.loads(payload) if isinstance(payload, str) else payload
-            except (TypeError, json.JSONDecodeError):
-                continue
-            if not isinstance(pl, Mapping):
+            pl = _payload_map(payload)
+            if pl is None:
                 continue
             code = str(pl.get("Code") or "").strip()
-            if not code:
+            if not code or (code_set is not None and code not in code_set):
                 continue
-            if code_set is not None and code not in code_set:
-                continue
-            disc = str(pl.get("DiscDate") or pl.get("DisclosedDate") or str(event_time or "")[:10])[:10]
+            disc = str(
+                pl.get("DiscDate") or pl.get("DisclosedDate") or str(event_time or "")[:10]
+            )[:10]
             if not disc:
                 continue
             disc_time = pl.get("DiscTime") or pl.get("DisclosedTime")
             if disc_time is not None:
                 disc_time = str(disc_time).strip() or None
-
-            def _f(key: str) -> float | None:
-                v = pl.get(key)
-                if v is None or v == "":
-                    return None
-                try:
-                    return float(v)
-                except (TypeError, ValueError):
-                    return None
-
+            eq = _fnum(pl.get(FINS_SUMMARY_EQ_KEY))
+            if eq is None:
+                eq = _fnum(pl.get("ShEq"))
             by_code.setdefault(code, []).append(
                 {
                     "disc_date": disc,
                     "disc_time": disc_time,
-                    "eps": _f("EPS"),
-                    "feps": _f("FEPS"),
-                    "bps": _f("BPS"),
-                    "roe": _f("ROE"),
-                    "div_ann": _f("DivAnn"),
-                    "np": _f("NP"),
-                    "sales": _f("Sales"),
-                    "eq": (
-                        _f(FINS_SUMMARY_EQ_KEY)
-                        if _f(FINS_SUMMARY_EQ_KEY) is not None
-                        else _f("ShEq")
-                    ),
-                    "ta": _f(FINS_SUMMARY_TA_KEY),
-                    "eq_ar": _f(FINS_SUMMARY_EQAR_KEY),
+                    "eps": _fnum(pl.get("EPS")),
+                    "feps": _fnum(pl.get("FEPS")),
+                    "bps": _fnum(pl.get("BPS")),
+                    "roe": _fnum(pl.get("ROE")),
+                    "div_ann": _fnum(pl.get("DivAnn")),
+                    "np": _fnum(pl.get("NP")),
+                    "sales": _fnum(pl.get("Sales")),
+                    "eq": eq,
+                    "ta": _fnum(pl.get(FINS_SUMMARY_TA_KEY)),
+                    "eq_ar": _fnum(pl.get(FINS_SUMMARY_EQAR_KEY)),
                     "event_time": str(event_time) if event_time else None,
                     "available_at": str(row_aa) if row_aa else None,
                     "source": "fins_summary",
                 }
             )
-        # Attach prior_eps chronologically
-        for code, events in by_code.items():
+        for _code, events in by_code.items():
             events.sort(key=lambda e: e["disc_date"])
             last_eps = None
             last_ta = None
@@ -1272,6 +1033,7 @@ def load_fins_events_from_sqlite(
     finally:
         con.close()
 
+
 def load_fins_earnings_date_from_sqlite(
     db_path: str | Path = DEFAULT_SQLITE,
     *,
@@ -1279,46 +1041,28 @@ def load_fins_earnings_date_from_sqlite(
     start: str | None = None,
     end: str | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
-    """Load fins_earnings_date calendar → ``{code: [event_dict, ...]}``.
-
-    Event keys: disc_date (PubDate prefer, else SchDate), sch_date, pub_date,
-    source=fins_earnings_date. No invent; missing PubDate uses SchDate.
-    """
-    db = Path(db_path)
-    if not db.exists():
+    """Load fins_earnings_date calendar. Missing PubDate uses SchDate; no invent."""
+    con = _open_ro(db_path)
+    if con is None:
         return {}
     code_list = [str(c).strip() for c in (codes or []) if str(c).strip()]
-    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
     try:
+        filt, params = _event_time_filters(start, end)
+        like_sql, like_params = _code_like(code_list)
         sql = (
             "SELECT natural_key, event_time, payload FROM jquants_records "
             "WHERE dataset = 'fins_earnings_date'"
+            f"{filt}{like_sql} ORDER BY event_time ASC"
         )
-        params: list[Any] = []
-        if start:
-            sql += " AND event_time >= ?"
-            params.append(str(start)[:10])
-        if end:
-            sql += " AND event_time <= ?"
-            params.append(str(end)[:10] + "T23:59:59")
-        if code_list:
-            clauses = " OR ".join(["natural_key LIKE ?" for _ in code_list])
-            sql += f" AND ({clauses})"
-            params.extend([f'%"{c}"%' for c in code_list])
-        sql += " ORDER BY event_time ASC"
+        params.extend(like_params)
         code_set = set(code_list) if code_list else None
         by_code: dict[str, list[dict[str, Any]]] = {}
         for _nk, event_time, payload in con.execute(sql, params):
-            try:
-                pl = json.loads(payload) if isinstance(payload, str) else payload
-            except (TypeError, json.JSONDecodeError):
-                continue
-            if not isinstance(pl, Mapping):
+            pl = _payload_map(payload)
+            if pl is None:
                 continue
             code = str(pl.get("Code") or "").strip()
-            if not code:
-                continue
-            if code_set is not None and code not in code_set:
+            if not code or (code_set is not None and code not in code_set):
                 continue
             pub = str(pl.get("PubDate") or "")[:10] or None
             sch = str(pl.get("SchDate") or "")[:10] or None
@@ -1339,7 +1083,7 @@ def load_fins_earnings_date_from_sqlite(
                     "fq_name": pl.get("FQName"),
                 }
             )
-        for code, events in by_code.items():
+        for _code, events in by_code.items():
             events.sort(key=lambda e: e["disc_date"])
         return by_code
     finally:
@@ -1352,9 +1096,7 @@ def merge_event_calendars(
 ) -> dict[str, list[dict[str, Any]]]:
     """Thicken event calendar: fins_summary primary; earnings_date fills gaps.
 
-    Same (code, disc_date) prefers fins_summary (has EPS/FEPS for surprise).
-    Earnings-only dates enter with null surprise (skipped by scoring unless
-    later joined). Disclosed; no invent of surprise.
+    Same (code, disc_date) prefers fins_summary (has EPS/FEPS). No invent of surprise.
     """
     out: dict[str, list[dict[str, Any]]] = {}
     codes = set(fins_summary.keys()) | set((earnings_date or {}).keys())
@@ -1379,7 +1121,6 @@ def merge_event_calendars(
             by_date[d] = merged
         events = list(by_date.values())
         events.sort(key=lambda e: e["disc_date"])
-        # re-attach prior_eps from fins_summary eps chain
         last_eps = None
         for ev in events:
             if ev.get("prior_eps") is None:
@@ -1452,14 +1193,12 @@ __all__ = [
     "fins_asof",
     "fins_summary_ta_eqar_stats",
     "load_bars_from_sqlite_rich",
-    "load_bars_ndjson",
     "load_bars_ndjson_rich",
     "load_fins_earnings_date_from_sqlite",
     "load_fins_events_from_sqlite",
     "load_fins_latest_asof_map",
     "load_margin_from_sqlite",
     "load_margin_ndjson",
-    "load_nk225f_front_close_series_from_sqlite",
     "load_nky_vol_series_from_sqlite",
     "load_opt225_regime_bundle_for_eval",
     "load_repo_rows_all_tenors_from_sqlite",
