@@ -259,6 +259,7 @@ GATE_OCCUPANCY_LABEL: tuple[tuple[str, tuple[str, ...]], ...] = (
         "inverting",
         "is inverted",
         "curve inverted",
+        "curve inversion",
         "yield curve",
     )),
     ("steep_curve", ("curve is steep", "is steep", "yield curve")),
@@ -292,7 +293,13 @@ GATE_OCCUPANCY_LABEL: tuple[tuple[str, tuple[str, ...]], ...] = (
         "falling sales",
     )),
     ("tight_funding", ("funding conditions are tight",)),
-    ("price_down", ("under pressure", "price pressure", "price is low")),
+    ("price_down", (
+        "under pressure",
+        "price pressure",
+        "price is low",
+        "price is falling",
+        "price falling",
+    )),
     ("crowded_margin", ("market is crowded",)),
 )
 
@@ -309,6 +316,7 @@ EXTRA_TITLE_GATES: tuple[tuple[str, str], ...] = (
     ("funding tight", "tight_funding"),
     ("funding became tight", "tight_funding"),
     ("funding conditions are tight", "tight_funding"),
+    ("curve inversion", "invert_curve"),
     ("became tight", "tight_funding"),
     ("easy funding", "easy_funding"),
     ("funding is easy", "easy_funding"),
@@ -456,6 +464,7 @@ OCCUPANCY_LABEL_EXCEPTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("curve_flatten", ("repo curve",)),
     ("invert_curve", ("repo curve",)),
     ("steep_curve", ("repo curve",)),
+    ("price_down", ("price is down",)),
 )
 
 

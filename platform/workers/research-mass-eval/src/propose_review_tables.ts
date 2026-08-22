@@ -40,14 +40,14 @@ export const GATE_OCCUPANCY_LABEL: Array<[string, string[]]> = [
   ["pb_rising", ["is rising", "pb rose", "rising price to book", "price to book is rising", "price to book ratio increase", "price to book ratio increases", "pb ratio increase", "pb ratio increases", "pb increase", "increase in pb", "price to book ratio tends to rise", "price to book tends to rise", "pb tends to rise"]],
   ["pre_mom", ["positive price momentum", "positive momentum", "momentum is positive", "high price momentum"]],
   ["curve_flatten", ["yield curve", "is flattening", "flattening", "curve flattened", "is flattened"]],
-  ["invert_curve", ["invert curve", "inverting", "is inverted", "curve inverted", "yield curve"]],
+  ["invert_curve", ["invert curve", "inverting", "is inverted", "curve inverted", "curve inversion", "yield curve"]],
   ["steep_curve", ["curve is steep", "is steep", "yield curve"]],
   ["np_negative", ["profitability is weak", "weak profitability", "weak profit", "earnings per share are negative", "eps are negative"]],
   ["eps_down", ["earnings disappointment", "earnings disappoint", "earnings per share are falling", "eps are falling", "earnings per share tend to decrease", "earnings per share are down", "eps down", "eps is down"]],
   ["eps_up", ["earnings per share are rising", "eps are rising", "eps is rising", "rising earnings per share", "rising eps"]],
   ["sales_down", ["sales are down", "sales down", "falling sales"]],
   ["tight_funding", ["funding conditions are tight"]],
-  ["price_down", ["under pressure", "price pressure", "price is low"]],
+  ["price_down", ["under pressure", "price pressure", "price is low", "price is falling", "price falling"]],
   ["crowded_margin", ["market is crowded"]],
 ];
 
@@ -61,6 +61,7 @@ export const EXTRA_TITLE_GATES: Array<[string, string]> = [
   ["funding tight", "tight_funding"],
   ["funding became tight", "tight_funding"],
   ["funding conditions are tight", "tight_funding"],
+  ["curve inversion", "invert_curve"],
   ["became tight", "tight_funding"],
   ["easy funding", "easy_funding"],
   ["funding is easy", "easy_funding"],
@@ -120,6 +121,7 @@ export const OCCUPANCY_EXTRA_TITLE: Array<[string, string[]]> = [
   ["10% predicts", ["overnight_p10"]],
   ["appetite for risk", ["eq_ar_falling", "eq_ar_high", "eq_ar_low", "eq_ar_rising"]],
   ["curve flattened", ["curve_flatten"]],
+  ["curve inversion", ["invert_curve"]],
   ["curve inverted", ["invert_curve"]],
   ["curve is steep", ["steep_curve"]],
   ["earnings disappoint", ["eps_down"]],
@@ -157,6 +159,8 @@ export const OCCUPANCY_EXTRA_TITLE: Array<[string, string[]]> = [
   ["pb tends to rise", ["pb_rising"]],
   ["positive momentum", ["pre_mom"]],
   ["positive price momentum", ["pre_mom"]],
+  ["price falling", ["price_down"]],
+  ["price is falling", ["price_down"]],
   ["price is low", ["price_down"]],
   ["price pressure", ["price_down"]],
   ["price to book is rising", ["pb_rising"]],
@@ -246,6 +250,7 @@ export const OCCUPANCY_LABEL_EXCEPTIONS: Array<[string, string[]]> = [
   ["curve_flatten", ["repo curve"]],
   ["invert_curve", ["repo curve"]],
   ["steep_curve", ["repo curve"]],
+  ["price_down", ["price is down"]],
 ];
 
 export const TITLE_OCCUPANCY_META = [
