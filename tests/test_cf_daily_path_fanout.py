@@ -4,7 +4,9 @@ from __future__ import annotations
 from research.cf_daily_path_job import (
     CF_EVENT_DAILY_PATH_IDS,
     FANOUT_VERSION,
+    run_both_track_sleeve_fanout,
     run_cf_daily_path_fanout,
+    sleeve_durability_logic_ids,
 )
 from research.cf_mass_eval_job import CF_BAR_NATIVE_LOGIC_IDS, panels_cache_id
 
@@ -53,6 +55,7 @@ def test_fanout_aggregates_cells_and_does_not_promote() -> None:
     assert pack["n_cells"] == 3
     assert pack["n_daily_path_complete"] == 3
     assert pack["go"] is False
+    assert pack["not_a_pass"] is True
     assert pack["promote_as_main"] is False
     assert pack["longest_isolate_sec"] is not None
     assert pack["fanout_sec"] is not None
@@ -138,6 +141,7 @@ def test_eval_universe_is_not_fifteen() -> None:
 
 def test_eval_tracks_are_two_and_not_head_n() -> None:
     from research.eval_tracks import (
+        BOTH_EVAL_TRACK_IDS,
         EVAL_TRACK_LIQ_LARGE,
         EVAL_TRACK_MID_N,
         EVAL_TRACKS,
@@ -146,6 +150,7 @@ def test_eval_tracks_are_two_and_not_head_n() -> None:
     )
 
     assert set(EVAL_TRACKS) == {EVAL_TRACK_MID_N, EVAL_TRACK_LIQ_LARGE}
+    assert BOTH_EVAL_TRACK_IDS == (EVAL_TRACK_MID_N, EVAL_TRACK_LIQ_LARGE)
     mid = eval_track(EVAL_TRACK_MID_N)
     large = eval_track(EVAL_TRACK_LIQ_LARGE)
     assert mid["max_codes"] == 80
@@ -163,6 +168,10 @@ def test_eval_tracks_are_two_and_not_head_n() -> None:
     assert len(NEXT_RESEARCH_QUEUE) >= 5
     assert all(q.get("not_a_pass") is True for q in NEXT_RESEARCH_QUEUE)
     assert all(q.get("go") is not True for q in NEXT_RESEARCH_QUEUE)
+    q0 = NEXT_RESEARCH_QUEUE[0]
+    assert q0["id"] == "both_track_sleeve_durability"
+    assert q0["tracks"] == BOTH_EVAL_TRACK_IDS
+    assert q0["entry"] == "research.cf_daily_path_job.run_both_track_sleeve_fanout"
 
 
 def test_rank_eval_codes_is_not_head_n_and_skips_missing() -> None:
@@ -244,6 +253,8 @@ def test_cf_daily_path_job_does_not_import_factory() -> None:
         "cf_daily_path_job.py": banned_cf,
         "cf_mass_eval_job.py": banned_cf,
         "cf_mass_eval_stage.py": banned_cf,
+        "cf_mass_eval_run.py": banned_cf,
+        "cf_mass_eval_thicken.py": banned_cf,
         "bar_native_specs.py": banned_cf,
         "eval_universe.py": banned_cf,
         "eval_loaders.py": banned_cf,
@@ -282,3 +293,151 @@ def test_panels_cache_id_stable() -> None:
     )
     assert a == b
     assert len(a) == 16
+
+
+def _fake_select_not_head_n(*, max_codes: int, **kwargs):
+    from research.eval_universe import EVAL_UNIVERSE_POOL
+
+    n = int(max_codes)
+    codes = [f"Z{i:04d}" for i in range(n)]
+    assert codes != list(EVAL_UNIVERSE_POOL)[:n]
+    return codes
+
+
+def test_both_track_sleeve_fanout_default_is_off_network(monkeypatch) -> None:
+    from research import cf_daily_path_job as mod
+    from research.eval_tracks import (
+        EVAL_TRACK_LIQ_LARGE,
+        EVAL_TRACK_MID_N,
+        EVAL_TRACKS,
+    )
+    from research.eval_universe import EVAL_UNIVERSE_POOL
+
+    seen_max: list[int] = []
+
+    def fake_select(*, max_codes: int, **kwargs):
+        seen_max.append(int(max_codes))
+        return _fake_select_not_head_n(max_codes=max_codes)
+
+    def boom(*_a, **_k):
+        raise AssertionError("live CF must not be called on dry_run default")
+
+    monkeypatch.setattr(mod, "invoke_cf_daily_path", boom)
+    monkeypatch.setattr(mod, "run_cf_daily_path_fanout", boom)
+
+    pack = run_both_track_sleeve_fanout(
+        job_id="test-both-sleeve-offnet",
+        select_universe=fake_select,
+    )
+    assert pack["dry_run"] is True
+    assert pack["skipped_live_cf"] is True
+    assert pack["go"] is False
+    assert pack["not_a_pass"] is True
+    assert pack["promote_as_main"] is False
+    assert pack["head_n_forbidden"] is True
+    assert pack["sleeve_majority_is_not_a_pass"] is True
+    assert pack["logic_ids"] == sleeve_durability_logic_ids()
+    assert "event_eqar_high_pead" in pack["logic_ids"]
+    assert "cs_margin_up_chase" in pack["logic_ids"]
+    assert "event_cheap_pb_liq_high" in pack["logic_ids"]
+    tracks = {t["eval_track"]: t for t in pack["tracks"]}
+    assert set(tracks) == {EVAL_TRACK_MID_N, EVAL_TRACK_LIQ_LARGE}
+    assert tracks[EVAL_TRACK_MID_N]["max_codes"] == EVAL_TRACKS[EVAL_TRACK_MID_N]["max_codes"]
+    assert tracks[EVAL_TRACK_LIQ_LARGE]["max_codes"] == EVAL_TRACKS[EVAL_TRACK_LIQ_LARGE]["max_codes"]
+    assert seen_max == [
+        int(EVAL_TRACKS[EVAL_TRACK_MID_N]["max_codes"]),
+        int(EVAL_TRACKS[EVAL_TRACK_LIQ_LARGE]["max_codes"]),
+    ]
+    assert tracks[EVAL_TRACK_MID_N]["selected_codes"] != list(EVAL_UNIVERSE_POOL)[:80]
+    assert tracks[EVAL_TRACK_LIQ_LARGE]["selected_codes"] != list(EVAL_UNIVERSE_POOL)[:100]
+    assert tracks[EVAL_TRACK_MID_N]["universe_select"] == "adv_desc_skip_missing_bars_and_fins"
+    assert pack["compare"]["not_a_pass"] is True
+    assert pack["compare"]["go"] is False
+    assert pack["compare"]["liq_print_is_not_stable"] is True
+
+
+def test_both_track_sleeve_fanout_records_via_daily_path() -> None:
+    from research.eval_tracks import EVAL_TRACK_LIQ_LARGE, EVAL_TRACK_MID_N, EVAL_TRACKS
+
+    posts: list[tuple[str, int, str]] = []
+
+    def fake_post(*, url: str, body: bytes, headers: dict) -> dict:
+        import json
+
+        spec = json.loads(body.decode("utf-8"))
+        lid = spec["logics"][0]["logic_id"]
+        pid = spec["periods"][0]["period_id"]
+        posts.append((url, int(spec["max_codes"]), lid))
+        return {
+            "ok": True,
+            "cells": [
+                {
+                    "logic_id": lid,
+                    "window_id": pid,
+                    "daily_path_DD": -0.02,
+                    "total_ret_net": 0.01,
+                    "n_days": 40,
+                    "daily_path_complete": True,
+                    "survived": False,
+                    "go": False,
+                }
+            ],
+        }
+
+    pack = run_both_track_sleeve_fanout(
+        job_id="test-both-sleeve-record",
+        dry_run=True,
+        logic_ids=["event_eqar_high_pead", "cs_margin_up_chase"],
+        select_universe=_fake_select_not_head_n,
+        http_post=fake_post,
+        skip_stage=True,
+        mode="synthetic",
+        max_workers=2,
+        periods=[
+            {
+                "period_id": "y2015_full",
+                "period_start": "2015-01-05",
+                "period_end": "2015-03-01",
+            }
+        ],
+    )
+    assert pack["go"] is False
+    assert pack["not_a_pass"] is True
+    assert pack["skipped_live_cf"] is True
+    assert pack["n_tracks"] == 2
+    tracks = {t["eval_track"]: t for t in pack["tracks"]}
+    assert tracks[EVAL_TRACK_MID_N]["max_codes"] == EVAL_TRACKS[EVAL_TRACK_MID_N]["max_codes"]
+    assert tracks[EVAL_TRACK_LIQ_LARGE]["max_codes"] == EVAL_TRACKS[EVAL_TRACK_LIQ_LARGE]["max_codes"]
+    assert tracks[EVAL_TRACK_MID_N]["n_cells"] == 2
+    assert tracks[EVAL_TRACK_LIQ_LARGE]["n_cells"] == 2
+    assert all(url.endswith("/v1/daily-path") for url, _n, _lid in posts)
+    max_codes = {n for _url, n, _lid in posts}
+    assert max_codes == {
+        int(EVAL_TRACKS[EVAL_TRACK_MID_N]["max_codes"]),
+        int(EVAL_TRACKS[EVAL_TRACK_LIQ_LARGE]["max_codes"]),
+    }
+    assert pack["compare"]["go"] is False
+    assert pack["compare"]["not_a_pass"] is True
+
+
+def test_both_track_sleeve_fanout_uses_select_eval_universe() -> None:
+    import ast
+    from pathlib import Path
+
+    src = (
+        Path(__file__).resolve().parents[1]
+        / "packages"
+        / "product"
+        / "research"
+        / "cf_daily_path_job.py"
+    ).read_text(encoding="utf-8")
+    assert "select_eval_universe" in src
+    assert "selected[: int(max_codes)]" not in src
+    assert "run_both_track_sleeve_fanout" in src
+    tree = ast.parse(src)
+    names = [
+        node.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef)
+    ]
+    assert "run_both_track_sleeve_fanout" in names

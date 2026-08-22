@@ -18,6 +18,7 @@ UNIVERSE_SELECT_ADV: str = "adv_desc_skip_missing_bars_and_fins"
 
 EVAL_TRACK_MID_N: str = "mid_n_explore"
 EVAL_TRACK_LIQ_LARGE: str = "liq_large"
+BOTH_EVAL_TRACK_IDS: tuple[str, ...] = (EVAL_TRACK_MID_N, EVAL_TRACK_LIQ_LARGE)
 
 EVAL_TRACKS: dict[str, dict[str, Any]] = {
     EVAL_TRACK_MID_N: {
@@ -71,6 +72,8 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
     {
         "id": "both_track_sleeve_durability",
         "track": EVAL_TRACK_LIQ_LARGE,
+        "tracks": BOTH_EVAL_TRACK_IDS,
+        "entry": "research.cf_daily_path_job.run_both_track_sleeve_fanout",
         "why": (
             "re-eval fund/flow/event sleeves on mid_n_explore AND liq_large; "
             "R2 only; still not a pass"

@@ -41,6 +41,8 @@ CF_EVENT_DAILY_PATH_IDS: tuple[str, ...] = tuple(sorted(_CF_EVENT_SET))
 
 ROOT = repo_root()
 FANOUT_VERSION = "cf-daily-path-fanout/v2"
+BOTH_TRACK_SLEEVE_FANOUT_VERSION = "both-track-sleeve-fanout/v1"
+BOTH_TRACK_QUEUE_ID = "both_track_sleeve_durability"
 DEFAULT_FANOUT_WORKERS = 16
 
 
@@ -261,6 +263,7 @@ def run_cf_daily_path_fanout(
         "factory_version": FANOUT_VERSION,
         "promote_as_main": False,
         "go": False,
+        "not_a_pass": True,
         "mass_research": MASS_RESEARCH,
         "survived": False,
         "candidate_grade": True,
@@ -271,4 +274,195 @@ def run_cf_daily_path_fanout(
             "Not a promotion."
         ),
     }
+    return pack
+
+
+def sleeve_durability_logic_ids() -> list[str]:
+    """Unique fund/flow/event sleeve members. Not a pass."""
+    from research.combo_basket import mechanical_basket_defs
+
+    want = {"fundamentals_sleeve", "margin_flow_sleeve", "event_fund_cross"}
+    ids: list[str] = []
+    seen: set[str] = set()
+    for d in mechanical_basket_defs():
+        if str(d.get("rule") or "") not in want:
+            continue
+        for m in d.get("members") or []:
+            lid = str(m)
+            if lid and lid not in seen:
+                seen.add(lid)
+                ids.append(lid)
+    return ids
+
+
+def run_both_track_sleeve_fanout(
+    *,
+    job_id: str | None = None,
+    dry_run: bool = True,
+    logic_ids: Sequence[str] | None = None,
+    periods: Sequence[Mapping[str, Any]] | None = None,
+    select_universe: Callable[..., list[str]] | None = None,
+    run_fanout: Callable[..., Mapping[str, Any]] | None = None,
+    http_post: Callable[..., Any] | None = None,
+    skip_stage: bool | None = None,
+    mode: str | None = None,
+    max_workers: int = DEFAULT_FANOUT_WORKERS,
+    timeout: int = 180,
+    worker_url: str = DEFAULT_WORKER_URL,
+    staging_dir: str | Path | None = None,
+    panels_prefix: str | None = None,
+    max_days: int = DEFAULT_MAX_DAYS,
+    one_way_cost: float = DEFAULT_ONE_WAY,
+    universe_pool: Sequence[str] | None = None,
+) -> dict[str, Any]:
+    """Fan out fund/flow/event sleeves on mid_n_explore AND liq_large.
+
+    Default is dry_run (off-network). Universe is select_eval_universe —
+    never head-N. max_codes come from EVAL_TRACKS. Not a pass / not GO.
+    Sleeve 5/1 or liq 4/2 majority prints stay not a pass.
+    """
+    from research.combo_basket import compare_mid_vs_liq
+    from research.eval_tracks import (
+        EVAL_TRACK_LIQ_LARGE,
+        EVAL_TRACK_MID_N,
+        EVAL_TRACKS,
+        eval_track,
+        track_is_not_a_pass,
+    )
+    from research.eval_universe import select_eval_universe
+
+    t0 = time.perf_counter()
+    jid = str(job_id or f"eval-cf-dp-both-sleeves-{uuid4().hex[:10]}")
+    ids = (
+        list(logic_ids)
+        if logic_ids is not None
+        else sleeve_durability_logic_ids()
+    )
+    if len(ids) < 1:
+        raise CfMassEvalError("logic_ids required")
+    selector = select_universe or select_eval_universe
+    fan = run_fanout or run_cf_daily_path_fanout
+    invoke_fanout = (not dry_run) or http_post is not None or run_fanout is not None
+    use_skip_stage = True if skip_stage is None and dry_run else bool(skip_stage)
+    use_mode = (
+        "synthetic"
+        if mode is None and dry_run
+        else (mode or DEFAULT_MASS_EVAL_MODE)
+    )
+    skipped_live_cf = bool(dry_run) or http_post is not None or run_fanout is not None
+    tracks_out: list[dict[str, Any]] = []
+    by_tid: dict[str, dict[str, Any]] = {}
+
+    track_ids = (EVAL_TRACK_MID_N, EVAL_TRACK_LIQ_LARGE)
+    if set(track_ids) != set(EVAL_TRACKS):
+        raise CfMassEvalError("both-track fanout requires mid_n_explore and liq_large")
+    for tid in track_ids:
+        spec = eval_track(tid)
+        max_codes = int(spec["max_codes"])
+        if select_universe is not None:
+            codes = list(selector(max_codes=max_codes) or [])
+        else:
+            codes = list(
+                selector(max_codes=max_codes, pool=universe_pool) or []
+            )
+        track_jid = f"{jid}-{tid}"
+        fan_pack: dict[str, Any] | None = None
+        if invoke_fanout:
+            fan_pack = dict(
+                fan(
+                    job_id=track_jid,
+                    logic_ids=ids,
+                    periods=periods,
+                    max_codes=max_codes,
+                    max_days=max_days,
+                    one_way_cost=one_way_cost,
+                    mode=use_mode,
+                    worker_url=worker_url,
+                    max_workers=max_workers,
+                    timeout=timeout,
+                    http_post=http_post,
+                    skip_stage=use_skip_stage,
+                    staging_dir=staging_dir,
+                    panels_prefix=panels_prefix,
+                    track=tid,
+                )
+            )
+            fan_pack["not_a_pass"] = True
+            fan_pack["go"] = False
+            fan_pack["promote_as_main"] = False
+        row = {
+            "eval_track": tid,
+            "max_codes": max_codes,
+            "min_codes": int(spec["min_codes"]),
+            "universe_select": spec["universe_select"],
+            "head_n_forbidden": True,
+            "n_selected_codes": len(codes),
+            "selected_codes": list(codes),
+            "job_id": (fan_pack or {}).get("job_id") or track_jid,
+            "logic_ids": ids,
+            "n_logics": len(ids),
+            "dry_run": bool(dry_run),
+            "skipped_live_cf": skipped_live_cf,
+            "table_path": (fan_pack or {}).get("table_path"),
+            "n_cells": (fan_pack or {}).get("n_cells"),
+            "n_daily_path_complete": (fan_pack or {}).get("n_daily_path_complete"),
+            "not_a_pass": True,
+            "go": False,
+            "promote_as_main": False,
+        }
+        if not track_is_not_a_pass(spec):
+            raise CfMassEvalError(f"eval track {tid} must stay not_a_pass")
+        tracks_out.append(row)
+        by_tid[tid] = row
+
+    compare = compare_mid_vs_liq(
+        {"job_id": by_tid[EVAL_TRACK_MID_N]["job_id"], "baskets": []},
+        {"job_id": by_tid[EVAL_TRACK_LIQ_LARGE]["job_id"], "baskets": []},
+    )
+    compare["not_a_pass"] = True
+    compare["go"] = False
+    compare["promote_as_main"] = False
+    compare["liq_print_is_not_stable"] = True
+
+    out_dir = ROOT / "data" / "ops" / "research_eval"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    table_path = out_dir / f"{jid}_both_track.json"
+    pack = {
+        "version": BOTH_TRACK_SLEEVE_FANOUT_VERSION,
+        "queue_id": BOTH_TRACK_QUEUE_ID,
+        "job_id": jid,
+        "protocol": PROTOCOL_DAILY_PATH,
+        "eval_kind": "daily_path",
+        "parallel_model": "both_track_sleeve_fanout",
+        "dry_run": bool(dry_run),
+        "skipped_live_cf": skipped_live_cf,
+        "logic_ids": ids,
+        "n_logics": len(ids),
+        "tracks": tracks_out,
+        "n_tracks": len(tracks_out),
+        "head_n_forbidden": True,
+        "universe_select": "adv_desc_skip_missing_bars_and_fins",
+        "compare": compare,
+        "table_path": str(table_path),
+        "git_sha": git_sha(cwd=ROOT),
+        "factory_version": BOTH_TRACK_SLEEVE_FANOUT_VERSION,
+        "promote_as_main": False,
+        "go": False,
+        "not_a_pass": True,
+        "mass_research": MASS_RESEARCH,
+        "survived": False,
+        "candidate_grade": True,
+        "period_net_dd_only_pass_forbidden": True,
+        "liq_print_is_not_stable": True,
+        "sleeve_majority_is_not_a_pass": True,
+        "wall_sec": round(time.perf_counter() - t0, 3),
+        "notes": (
+            "Both-track fund/flow/event sleeve daily_path fan-out. "
+            "select_eval_universe only (never head-N). "
+            "max_codes from EVAL_TRACKS. Sleeve majority prints are not a pass."
+        ),
+    }
+    table_path.write_text(
+        json.dumps(pack, indent=2, default=str) + "\n", encoding="utf-8"
+    )
     return pack
