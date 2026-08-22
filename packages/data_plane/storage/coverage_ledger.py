@@ -99,8 +99,7 @@ def plan_required_segments(
             if policy.expected_frequency == "event_driven"
             else "source_query"
         )
-        # Non-event source_query segments need an explicit expected_items for
-        # COMPLETE (evaluate_segment). Default one exhausted query plan.
+        # Non-event source_query needs expected_items for COMPLETE; default one exhausted query.
         if expected_items is None and unit == "source_query":
             expected_items = 1
         scope = {
@@ -139,9 +138,7 @@ def plan_required_segments(
             _append(cursor.isoformat(), cursor, cursor)
             cursor = date.fromordinal(cursor.toordinal() + 1)
     elif granularity == "source_time_series_file":
-        # Stable single-file identity must match discovery/ingest (e.g.
-        # jsda-era-timeseries). Date-range ids like 2012-10-29_2026-08-11
-        # create phantom PARTIAL inventory with no receipt.
+        # Stable id must match discovery/ingest. Date-range ids create phantom PARTIAL inventory.
         stable_ids = {
             "jsda_tokyo_repo_rates": "jsda-era-timeseries",
         }
@@ -295,7 +292,6 @@ def _merge_observed_window(
         return hot_start, hot_end
     merged_start = min(candidates_start) if candidates_start else None
     merged_end = max(candidates_end) if candidates_end else None
-    # Preserve original hot timestamp when it still wins on the same day prefix.
     if (
         merged_start is not None
         and hot_start is not None
@@ -350,7 +346,6 @@ def _apply_receipt_freshness_c8(
             continue
         hot_hi = result.metrics.get("latest_event_time")
         hot_prefix = _date_prefix(str(hot_hi)) if hot_hi is not None else None
-        # Keep hot C8 when it is at least as fresh as the receipt plane.
         if hot_prefix is not None and hot_prefix >= receipt_hi:
             out.append(result)
             continue
@@ -378,7 +373,7 @@ def _apply_receipt_freshness_c8(
         )
         replaced = True
     if not replaced:
-        # No C8 row from hot plane (empty dataset) — still emit receipt C8.
+        # No hot C8 (empty dataset) — still emit receipt C8.
         if days <= freshness_days:
             status = "pass"
             detail = f"{days} day(s) since latest event_time"
@@ -425,16 +420,14 @@ def _dataset_status(
     if freshness is not None and freshness.status == "fail":
         return "STALE", row_count, observed_start, observed_end
 
-    # A complete row requires a real per-dataset validation verdict. Facts-only
-    # fallbacks remain UNKNOWN even when facts happen to exist.
+    # Facts-only fallbacks stay UNKNOWN; COMPLETE needs a real C2 validation verdict.
     validation = checks.get("C2")
     if validation is None or validation.metrics.get("source") != "ingestion_validation":
         return "UNKNOWN", row_count, observed_start, observed_end
     if validation.metrics.get("validation_status") != "pass":
         return "FAILED", row_count, observed_start, observed_end
 
-    # A successful validation (including a legitimate empty event window) is
-    # only a prerequisite. Required segments and their receipts own COMPLETE.
+    # Validation is a prerequisite only; required segments/receipts own COMPLETE.
     return "COMPLETE", row_count, observed_start, observed_end
 
 
@@ -722,8 +715,7 @@ def refresh_coverage_ledger(
             by_dataset[str(result.dataset)].append(result)
 
     placeholders = ",".join("?" for _ in selected)
-    # Include status (+ receipt_run_id) so sticky COMPLETE can see prior COMPLETE
-    # inventory. Omitting status made demotion guards no-ops (prior_status always None).
+    # status + receipt_run_id: sticky COMPLETE needs prior COMPLETE inventory.
     inventory_cursor = conn.execute(
         "SELECT source,dataset,segment_id,segment_start,segment_end,"
         "expected_scope,expected_items,status,receipt_run_id FROM coverage_segments "
@@ -762,9 +754,7 @@ def refresh_coverage_ledger(
     for dataset in selected:
         policy = policies[dataset]
         source = _coverage_source(dataset)
-        # CF-native R2 structured path: D1 jquants_records is hot-window only.
-        # Expand observed_* / C8 from SUCCESS receipts that actually retained
-        # raw rows so history backfill and freshness use receipt SoT.
+        # D1 jquants_records is hot-window only; observed_*/C8 expand from SUCCESS raw receipts.
         receipt_start, receipt_end, receipt_raw_rows = _receipt_observed_window(
             receipts_by_dataset[dataset]
         )
@@ -793,9 +783,7 @@ def refresh_coverage_ledger(
         if policy.segment_granularity in {
             "official_archive_day", "source_time_series_file"
         }:
-            # Keep inventory through target_end. Also retain already-COMPLETE
-            # days that sit past UTC target_end (JST archive day can lead UTC
-            # calendar) so refresh does not wipe honest seals.
+            # Keep inventory through target_end, plus already-COMPLETE days past UTC (JST can lead).
             required_segments = tuple(sorted(
                 (
                     _required_from_inventory(row)
@@ -838,10 +826,8 @@ def refresh_coverage_ledger(
         for (
             required_segment, receipt, segment_status, segment_detail
         ) in segment_evaluations:
-            # Fail-closed sticky COMPLETE: never demote a previously COMPLETE
-            # segment while a COMPLETE-eligible SUCCESS receipt remains for the
-            # same segment_id. Exact window match may fail after day-roll replan
-            # (segment_end advanced); fall back to segment_id-level lookup.
+            # Sticky COMPLETE: never demote while a COMPLETE-eligible SUCCESS receipt remains
+            # for the same segment_id (exact window may fail after day-roll replan).
             prior_inv = inventory_by_dataset[dataset].get(
                 required_segment.segment_id
             )
@@ -897,9 +883,7 @@ def refresh_coverage_ledger(
                 "evaluated_at": evaluated_at,
                 "detail_json": _canonical_json(segment_detail),
             })
-        # Recompute aggregate after sticky COMPLETE upgrades so a day-roll
-        # that only fails exact window match does not pin dataset PARTIAL
-        # while every segment row is COMPLETE.
+        # Recompute aggregate after sticky upgrades so day-roll does not pin dataset PARTIAL.
         if any(status == "FAILED" for status in segment_statuses):
             segment_aggregate = "FAILED"
         elif segment_statuses and all(
@@ -1291,9 +1275,7 @@ def sync_dataset_coverage_from_segments(
             results.append({**base, "action": "skip_empty_inventory"})
             continue
 
-        # COMPLETE promotion gates (empty-raw COMPLETE forbidden).
-        # Already-COMPLETE datasets are never demoted solely for historical C*
-        # fail noise or empty-receipt audit; only PARTIAL→COMPLETE is gated.
+        # Only PARTIAL→COMPLETE is gated; never demote COMPLETE for historical C* noise.
         if derived == "COMPLETE":
             promoting = old_status != "COMPLETE"
             if promoting and require_no_failing_checks and failing:
@@ -1438,8 +1420,7 @@ def build_collection_receipt(
     raw_rows = int(raw_row_count) if raw_row_count is not None else structured
     digests: dict[str, Any] = {
         "raw": compute_raw_digest(raw),
-        # Default is NOT trusted. COMPLETE requires Ed25519-signed digests
-        # verified by is_complete_eligible_receipt (not issuer strings alone).
+        # Default is NOT trusted. COMPLETE needs verified Ed25519, not issuer strings.
         "eligibility": "RECOVERED_RAW_ONLY",
     }
     if extra_digests:
@@ -1499,10 +1480,7 @@ def build_synthetic_complete_receipt(
     if observed_items is None:
         observed_items = 0 if expected == 0 else 1
     digests: dict[str, Any] = {
-        # Deterministic placeholder digest; the synthetic sentinel is what
-        # matters, not the hex value. eligibility is explicitly TRUSTED so
-        # offline fixtures can exercise COMPLETE; production rebuild path
-        # must never set this combination.
+        # Placeholder digest + TRUSTED so fixtures can exercise COMPLETE; production must not.
         "raw": "sha256:" + "0" * 64,
         "eligibility": "TRUSTED_COLLECTION",
         **SYNTHETIC_RECEIPT_MARKER,

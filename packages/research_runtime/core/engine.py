@@ -1,25 +1,9 @@
-"""The core backtest engine — a trusted black box over the PIT Data API.
+"""PIT-only backtest engine.
 
-``run_backtest`` walks trading days (from the PIT market calendar) and, on
-each decision day *D*, hands the strategy a :class:`~core.strategy_protocol.BarContext`
-built entirely from facts the engine read through ``pit.get_*`` at *D*'s
-decision ``as_of``. Orders become fills according to the chosen
-:class:`~core.execution.ExecutionMode`; costs come from a
-:class:`~core.costs.CostModel`; the result always carries reproducibility
-metadata.
-
-Hard rules enforced here and by the data boundary:
-
-* **Facts enter only via PIT.** This module imports :mod:`pit` (and
-  :mod:`ingestion.common.timeutil` for date helpers) and nothing else for
-  data. No ``sqlite3`` / ``storage`` / HTTP. A static test pins this.
-* **Every read is PIT-gated on the decision ``as_of``** — look-ahead is
-  impossible because PIT hides rows whose ``available_at > as_of``.
-* **A signal on *D* cannot fill on *D* under ``next_close``** — orders decided
-  on *D* fill at the next session's close, so seeing *D*'s close is harmless.
-
-The result is deterministic given identical inputs (no wall-clock time, no
-randomness) — see :mod:`core.result`.
+Facts enter via ``pit.get_*`` at the decision ``as_of`` (a static test pins
+the import boundary). Fills follow :class:`~core.execution.ExecutionMode`;
+costs follow :class:`~core.costs.CostModel`. Under ``next_close``, a signal
+on *D* cannot fill on *D*. Deterministic given identical inputs.
 """
 
 from __future__ import annotations
@@ -46,11 +30,7 @@ from .result import BacktestResult
 from .strategy_protocol import Bar, BarContext, OrderIntent, Position
 from .universe import load_master
 
-# Bumped per Phase 3 handoff. Surfaced in every result's metadata so a consumer
-# can tell which engine contract a given backtest obeys.
-# 0.6.1 — W85 short-leg financing (repo + fixed spread) optional charge.
-# 0.6.2 — W86 daily repo series + leverage financing (repo only; no short-spread
-#         double-count) optional charge.
+# Result metadata. 0.6.2: W86 daily repo + leverage (repo only).
 CORE_ENGINE_VERSION = "0.6.2"
 
 # J-Quants HolidayDivision: "1" == trading day (exchange open).
@@ -58,12 +38,7 @@ _TRADING_HOLIDAY_DIVISION = "1"
 
 
 def describe_strategy(strategy: Any) -> tuple[str, dict[str, Any]]:
-    """Best-effort deterministic identity of ``strategy`` for metadata.
-
-    A strategy may expose ``strategy_id`` (str) and ``params`` (dict); both
-    default gracefully (class name / empty dict) so any object implementing
-    :class:`~core.strategy_protocol.Strategy` works.
-    """
+    """``strategy_id`` / ``params`` for metadata; class name / {} if omitted."""
     sid = getattr(strategy, "strategy_id", None) or type(strategy).__name__
     params = getattr(strategy, "params", None)
     if not isinstance(params, dict):
@@ -82,10 +57,8 @@ def _make_feature_accessor(as_of: str, db_path: Any):
     def compute_feature(
         feature_id: str, *, version: str | None = None, **inputs: Any
     ) -> Any:
-        # Declarative strategies always supply ``version``. Resolve that exact
-        # definition before entering compute so a later registry addition can
-        # never change a persisted StrategySpec's meaning. Hand-written local
-        # strategies may continue to omit it and intentionally follow latest.
+        # Pin ``version`` when given so a later registry add cannot change a
+        # persisted StrategySpec. Omit version = follow latest (hand-written).
         definition = (
             features.get(feature_id, version=version)
             if version is not None
@@ -116,13 +89,7 @@ def _bar_from_row(row: dict[str, Any]) -> Bar:
 
 
 def _bar_price(bar: Bar, *, price_basis: PriceBasis) -> float | None:
-    """Return a bar price under the runtime's explicit price-basis contract.
-
-    Phase 6 enables ``RAW`` only.  The vendor ``adjustment_close`` column is
-    retained on :class:`Bar` for inspection, but is never selected implicitly:
-    an adjusted historical series can be retrospectively restated and is not
-    PIT-safe until its adjustment factors are versioned as-of.
-    """
+    """RAW close only. ``adjustment_close`` is inspectable, never implicit (not PIT-safe)."""
     if price_basis != RAW:  # validated at entry; defensive against misuse
         raise ValueError(f"unsupported runtime price basis: {price_basis!r}")
     return bar.close
@@ -143,14 +110,7 @@ def _load_snapshot(
     db_path: Any,
     price_basis: PriceBasis,
 ) -> dict[str, dict[str, Any]]:
-    """PIT-visible recent bars per code at ``as_of``, via ``get_equity_bars_daily``.
-
-    Returns ``{code: {"close": float|None, "bars": [Bar, ...]}}``. PIT returns
-    rows ordered by ``(code, date)``; ``close`` is the most recent visible
-    raw close (``None`` if no bar is visible in the signal window). Only the
-    requested universe + held codes are read and exposed. Portfolio valuation
-    does not depend on this window; it uses the independent mark ledger.
-    """
+    """PIT-visible recent bars per code at ``as_of``. Valuation uses the mark ledger, not this window."""
     snapshot: dict[str, dict[str, Any]] = {
         c: {"close": None, "bars": []} for c in codes
     }
@@ -180,13 +140,7 @@ def _load_snapshot(
 def _session_prices(
     snapshot: dict[str, dict[str, Any]], session_date: str, *, price_basis: PriceBasis
 ) -> dict[str, float]:
-    """Prices backed by a PIT-visible bar from exactly ``session_date``.
-
-    A snapshot's general ``close`` is intentionally the latest visible mark,
-    which can be older than the requested session during a suspension or data
-    delay.  Execution must be stricter: an order can fill only when the actual
-    fill session has a visible, positive price.
-    """
+    """Exact-session prices only. Snapshot ``close`` may be an older visible mark."""
     prices: dict[str, float] = {}
     for code, entry in snapshot.items():
         for bar in reversed(entry["bars"]):
@@ -202,13 +156,7 @@ def _session_prices(
 def _mark_equity(
     shares: dict[str, float], marks: dict[str, tuple[float, str]], cash: float
 ) -> float:
-    """Total equity using the last PIT-safe valuation mark for each holding.
-
-    The mark ledger is independent of the signal lookback window. A session
-    without a bar carries the last mark; the engine never fabricates a price.
-    A position normally cannot exist without a prior exact-session fill price,
-    so the zero fallback is only a fail-closed defensive case.
-    """
+    """Equity from last PIT-safe mark; never fabricates a price. Zero is fail-closed."""
     positions_value = 0.0
     for code, qty in shares.items():
         if not qty:
@@ -257,13 +205,7 @@ def _resolve_targets(
     equity: float,
     prices: dict[str, float | None],
 ) -> dict[str, float]:
-    """Convert target weights to target shares at the decision ``as_of``.
-
-    Codes without a visible positive price are skipped (cannot size).
-    Negative weights are permitted (simple short book for paper L-S).
-    Gross |weight| is not hard-capped here — StrategySpec signed equal-weight
-    keeps long and short books at ~50% each when both sides are present.
-    """
+    """Target weights → shares. Skip unpriced codes; negative weights allowed (no gross cap)."""
     targets: dict[str, float] = {}
     for intent in intents:
         price = prices.get(intent.code)
@@ -287,14 +229,7 @@ def _apply_fills(
     cash: float,
     trades: list[dict[str, Any]],
 ) -> tuple[dict[str, float], float, dict[str, float]]:
-    """Trade each target to its desired shares at ``fill_date``'s close.
-
-    Returns ``(shares, cash, leftover)`` where ``leftover`` holds target codes
-    whose fill price was not (yet) visible — the caller carries them forward
-    to a later session under ``next_close``. A target equal to the current
-    position produces no trade (so a buy & hold strategy incurs no cost after
-    its first fill).
-    """
+    """Fill targets at ``fill_date`` close. Unpriced codes go to leftover; no-op if already at target."""
     leftover: dict[str, float] = {}
     for code, target_shares in targets.items():
         price = closes.get(code)
@@ -330,13 +265,7 @@ def _apply_fills(
 def _trading_days(
     start: str, end: str, *, db_path: Any, calendar_as_of: str | None
 ) -> list[str]:
-    """Trading days in ``[start, end]`` from the PIT market calendar.
-
-    A day is a trading day when ``holiday_division == "1"`` (exchange open).
-    The calendar is read at ``close_as_of(end)`` (or an explicit override); the
-    calendar is published in advance, so it is visible by then. Non-trading
-    days are skipped by construction.
-    """
+    """Trading days in ``[start, end]`` (``holiday_division == "1"``). Calendar is read at close(end)."""
     as_of = calendar_as_of or close_as_of(end)
     result = pit.get_market_calendar(
         as_of=as_of, from_date=start, to_date=end, db_path=db_path
@@ -373,10 +302,7 @@ def _short_market_value(
     marks: Mapping[str, tuple[float, str]],
     closes: Mapping[str, float] | None = None,
 ) -> float:
-    """Absolute market value of short (negative share) positions.
-
-    Prefers same-session ``closes`` when available; else last PIT mark.
-    """
+    """Absolute market value of short (negative share) positions."""
     total = 0.0
     for code, qty in shares.items():
         if qty >= 0:
@@ -417,13 +343,7 @@ def _apply_daily_financing(
     financing_events: list[dict[str, Any]],
     trades: list[dict[str, Any]],
 ) -> tuple[float, int, int]:
-    """Charge short + leverage financing; return (cash, short_gap, lev_gap).
-
-    Short uses (repo + spread); leverage uses **repo only** on excess gross
-    notional above equity — never re-applies short spread (no double-count).
-    Both use pre-charge marks for notionals; cash is reduced after both costs
-    are computed so order of application does not change bases.
-    """
+    """Charge short (repo+spread) then leverage (repo only on excess); return (cash, short_gap, lev_gap)."""
     short_gap = 0
     lev_gap = 0
     short_nv = _short_market_value(shares, marks, closes)
@@ -467,7 +387,6 @@ def _apply_daily_financing(
             equity=equity,
             date=date,
         )
-        # Record only when there is excess leverage (gross > equity).
         excess = max(gross_nv - float(equity), 0.0) if equity > 0 else 0.0
         if excess > 0:
             financing_events.append(
@@ -519,40 +438,12 @@ def run_backtest(
     calendar_as_of: str | None = None,
     price_basis: str = RAW,
 ) -> BacktestResult:
-    """Run a minimal PIT-only backtest of ``strategy`` over ``[start, end]``.
+    """PIT-only backtest of ``strategy`` over ``[start, end]``.
 
-    Daily loop: on each trading day *D* the engine reads decision information
-    via PIT at *D*'s decision ``as_of`` (session close for ``next_close``,
-    session open for ``same_day_close``), builds a :class:`BarContext`, calls
-    ``strategy.on_bar(ctx)``, and fills the resulting orders per the execution
-    mode. See module docstring for the data-boundary and look-ahead guarantees.
-
-    Args:
-        strategy: Anything implementing ``on_bar(ctx) -> list[OrderIntent]``.
-        start, end: Period bounds, ``YYYY-MM-DD`` (inclusive trading days).
-        db_path: Structured DB path (defaults to PIT's default location).
-        execution_mode: ``"next_close"`` (default) or ``"same_day_close"``.
-        cost_model: :class:`CostModel` (defaults to 5 bps one-way standard).
-        short_financing: Optional :class:`ShortFinancingModel` charging daily
-            borrow on short market value = f(repo[t] + fixed spread). ``None``
-            keeps prior long-only / no-borrow behaviour (default).
-        leverage_financing: Optional :class:`LeverageFinancingModel` charging
-            daily repo on excess gross leverage above 1× (repo only — does
-            **not** re-apply short spread). ``None`` keeps prior behaviour.
-        universe: Optional fixed code list; otherwise built per decision day
-            from the PIT equity master as-of (anti-survivorship).
-        starting_capital: Initial cash (defaults to 1,000,000 JPY).
-        lookback_days: Signal bar-history window handed to the strategy each
-            day. Portfolio valuation is independent and carries its last
-            PIT-safe mark across sessions without a bar.
-        calendar_as_of: Override the PIT ``as_of`` used to read the calendar.
-        price_basis: Explicit price convention. Phase 6 enables ``"RAW"``.
-            ``"PIT_ADJUSTED"`` fails closed until adjustment provenance is
-            versioned and demonstrably PIT-safe.
-
-    Returns:
-        A :class:`BacktestResult` with equity curve, trade log, metrics, and
-        reproducibility metadata.
+    Each trading day *D*: read PIT at the mode's decision ``as_of``, call
+    ``strategy.on_bar(ctx)``, fill per execution mode. Valuation marks are
+    independent of ``lookback_days``. ``price_basis`` is RAW; ``PIT_ADJUSTED``
+    fails closed.
     """
     mode = get_mode(execution_mode)
     resolved_price_basis = require_supported_price_basis(price_basis)
@@ -582,14 +473,12 @@ def run_backtest(
     financing_events: list[dict[str, Any]] = []
     n_short_financing_gaps = 0
     n_leverage_financing_gaps = 0
-    # Portfolio valuation is independent of the rolling signal window. Each
-    # entry is (last PIT-visible exact-session price, that session's date).
+    # (last PIT-visible exact-session price, that session's date)
     marks: dict[str, tuple[float, str]] = {}
     # next_close only: orders decided on day D fill on day D+1.
     pending: dict[str, Any] | None = None
 
     for d in days:
-        # --- universe + held set for this day --------------------------------
         decision_as_of = mode.decision_as_of(d)
         master_d = load_master(decision_as_of, db_path=resolved_db_path)
         universe_d = fixed_universe if fixed_universe is not None else tuple(
@@ -597,7 +486,6 @@ def run_backtest(
         )
         held = set(shares) | set(universe_d)
 
-        # --- close snapshot at close(d): used for marking and fills ----------
         snap_close = _load_snapshot(
             close_as_of(d),
             held,
@@ -610,14 +498,10 @@ def run_backtest(
             snap_close, d, price_basis=resolved_price_basis
         )
 
-        # Under next_close the session close is inside the decision information
-        # set, so exact-bar marks may advance before fills and valuation. Under
-        # same_day_close the decision occurs at the open; marks advance only
-        # after that decision and its close-time fills below.
+        # next_close: close is in the decision set, so marks may advance before fills.
         if mode.fill_offset == 1:
             _update_marks(marks, fill_closes, d)
 
-        # --- apply pending next_close orders at d's close --------------------
         if mode.fill_offset == 1 and pending is not None:
             shares, cash, leftover = _apply_fills(
                 pending["targets"],
@@ -635,12 +519,10 @@ def run_backtest(
                 else None
             )
 
-        # --- decision information set at decision_as_of ----------------------
         if mode.fill_offset == 1:
             snap_dec = snap_close  # next_close decides at close(d)
             decision_equity = _mark_equity(shares, marks, cash)
-            # The next-close decision occurs after this close's fills and mark.
-            # Short + leverage financing accrues on end-of-day book (post-fill).
+            # next_close: financing on post-fill end-of-day book.
             cash, s_gap, l_gap = _apply_daily_financing(
                 date=d,
                 shares=shares,
@@ -686,27 +568,21 @@ def run_backtest(
             bars=bars_d,
             master=master_d,
         )
-        # Bind a private callable rather than exposing a database field.  The
-        # public BarContext shape remains facts + ctx.feature(...), while this
-        # trusted closure owns both PIT scope inputs.
+        # Private PIT-scoped closure; BarContext stays facts + ctx.feature(...).
         object.__setattr__(
             ctx,
             "_feature_accessor",
             _make_feature_accessor(decision_as_of, resolved_db_path),
         )
 
-        # --- ask the strategy -----------------------------------------------
         intents = strategy.on_bar(ctx)
         targets = _resolve_targets(intents, decision_equity, prices_d)
 
-        # --- fill -----------------------------------------------------------
         if mode.fill_offset == 1:
-            # A non-empty target set replaces any carried order.  With no new
-            # replacement, preserve targets that could not fill this session.
+            # Non-empty targets replace any carried leftover.
             if targets:
                 pending = {"targets": targets, "decision_date": d}
         else:
-            # same_day_close fills immediately at d's close.
             shares, cash, _ = _apply_fills(
                 targets,
                 decision_date=d,
@@ -731,7 +607,6 @@ def run_backtest(
             )
             n_short_financing_gaps += s_gap
             n_leverage_financing_gaps += l_gap
-            # The published curve is a post-fill, post-cost close-time mark.
             equity_curve.append(
                 _equity_point(
                     date=d, shares=shares, marks=marks, cash=cash

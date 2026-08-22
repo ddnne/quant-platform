@@ -1,12 +1,7 @@
 """Fetcher vs Registrar orchestration (Pattern B).
 
-Fetcher is local-only (HTTP + raw bytes + normalize). Registrar validates
-``available_at`` and upserts structured rows. Each ``run_*`` returns
-:class:`RunReport` rows; :func:`decide_exit` maps them to a CLI code.
-
-``skipped`` is a clean skip. ``error`` is a raised failure or schema miss
-(fetched>0, registered=0, not expected_empty). ``ok`` requires registered>0
-or an explicit expected-empty endpoint.
+Fetcher is local-only. Registrar validates ``available_at`` and upserts.
+``decide_exit`` maps :class:`RunReport` rows: 1 error, 0 any ok, 2 all skips.
 """
 
 from __future__ import annotations
@@ -101,7 +96,6 @@ class Registrar:
 
 def _compact_stamp(iso_ts: str) -> str:
     s = (iso_ts or "").replace(":", "").replace("-", "")
-    # e.g. "20250402T090000+0900"
     return s[:15] if len(s) >= 15 else s
 
 
@@ -166,10 +160,6 @@ def _choose_jsda_repo_parser(filename: str, data: bytes):
     return parse_repo_csv, "csv"
 
 
-# ---------------------------------------------------------------------------
-# J-Quants
-# ---------------------------------------------------------------------------
-
 def run_jquants(
     *,
     http,
@@ -222,7 +212,6 @@ def run_jquants(
             chunk_days=chunk_days,
         )
 
-    # 1) listed info
     try:
         info = client.listed_info()
         when = now_iso()
@@ -236,7 +225,6 @@ def run_jquants(
     except Exception as exc:  # noqa: BLE001
         reports.append(RunReport("jquants", "listed_info", error=f"{exc}"))
 
-    # 2) daily bars
     try:
         bars = client.daily_bars(code=code, from_date=date_from, to_date=date_to)
         when = now_iso()
@@ -250,7 +238,6 @@ def run_jquants(
     except Exception as exc:  # noqa: BLE001
         reports.append(RunReport("jquants", "daily_bars", error=f"{exc}"))
 
-    # 3) market calendar
     try:
         cal = client.market_calendar(from_date=date_from, to_date=date_to)
         when = now_iso()
@@ -264,7 +251,6 @@ def run_jquants(
     except Exception as exc:  # noqa: BLE001
         reports.append(RunReport("jquants", "calendar", error=f"{exc}"))
 
-    # 4) fins/summary — raw-only; skip cleanly on failure.
     try:
         summ = client.fins_summary(code=code)
         when = now_iso()
@@ -376,9 +362,7 @@ def _run_jquants_catalog(
                     rows, dataset=job.dataset_id, ingested_at=when
                 )
                 n = reg.register("jquants_records", norm)
-                # Coverage V2: emit a real collection receipt for this job's
-                # window when we can map it to a planned segment. Never fakes
-                # COMPLETE — evaluate_segment decides after ledger refresh.
+                # Coverage V2 receipt for this job window. Never fakes COMPLETE.
                 try:
                     from data_contracts import coverage_contract_for
                     from storage.coverage_ledger import (
@@ -505,10 +489,6 @@ def _run_jquants_catalog(
     return reports
 
 
-# ---------------------------------------------------------------------------
-# JSDA
-# ---------------------------------------------------------------------------
-
 def run_jsda(
     *,
     http,
@@ -597,8 +577,6 @@ def _run_jsda_repo(fetcher, reg, data_base, today, ingested, target_url) -> RunR
     except Exception as exc:  # noqa: BLE001
         return RunReport("jsda", "repo_rates", error=f"{exc}")
 
-
-# ---------------------------------------------------------------------------
 
 def _log(store, source: str, runtime: str, reports: List[RunReport]) -> None:
     try:
