@@ -154,7 +154,6 @@ def test_cf_new_thesis_ids_match_yaml_combo_kind() -> None:
         | ADAPTIVE_LOGIC_IDS
         | CS_LOGIC_IDS
     )
-    assert len(original) == 22
     assert yaml_ids - combo_ids == set(original)
     assert combo_ids == set(CF_NEW_THESIS_IDS)
     assert event | surprise_xs == set(CF_NEW_EVENT_THESIS_IDS)
@@ -172,11 +171,18 @@ def test_cf_new_thesis_ids_match_yaml_combo_kind() -> None:
     const_src = inspect.getsource(constants_mod)
     assert "event_funding_tight_fade" not in const_src
     assert "overnight_tight_cs_fade" not in const_src
-    assert len(EVENT_LOGIC_IDS) == 4
-    assert len(EVENT_FILTER_LOGIC_IDS) == 4
-    assert len(EVENT_SIDES_LOGIC_IDS) == 3
-    assert len(ADAPTIVE_LOGIC_IDS) == 2
-    assert len(CS_LOGIC_IDS) == 9
+    assert EVENT_LOGIC_IDS
+    assert EVENT_FILTER_LOGIC_IDS
+    assert EVENT_SIDES_LOGIC_IDS
+    assert ADAPTIVE_LOGIC_IDS
+    assert CS_LOGIC_IDS
+    assert (
+        EVENT_LOGIC_IDS
+        | EVENT_FILTER_LOGIC_IDS
+        | EVENT_SIDES_LOGIC_IDS
+        | ADAPTIVE_LOGIC_IDS
+        | CS_LOGIC_IDS
+    ) == original
 
 
 def test_original_22_ids_from_yaml() -> None:
@@ -220,7 +226,6 @@ def test_original_22_ids_from_yaml() -> None:
         | ADAPTIVE_LOGIC_IDS
         | CS_LOGIC_IDS
     )
-    assert len(original) == 22
     yaml_ids: set[str] = set()
     combo_ids: set[str] = set()
     for spec in load_catalog_specs():

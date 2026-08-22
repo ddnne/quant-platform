@@ -374,6 +374,28 @@ def test_review_proposal_row_rejects_invent_and_weekday() -> None:
     assert "occupancy_label_only" not in ok_p10["reasons"]
     assert ok_p10["auto_inject"] is False
 
+    extra_roe = {
+        "thesis": (
+            "ROE decline when price-to-book is high AND overnight funding "
+            "is loose."
+        ),
+        "signal_definition": "AND(pb_rising, overnight_p10) PIT",
+        "position_rule": "event-hold surprise sign",
+        "datasets": ["equities_bars_daily", "fins_summary", "jsda_tokyo_repo_rates"],
+        "gates": ["pb_rising", "overnight_p10"],
+    }
+    bad_roe = review_proposal_row(extra_roe)
+    assert bad_roe["ok"] is False
+    assert "occupancy_label_only" in bad_roe["reasons"]
+    occ_roe = dict(extra_roe)
+    occ_roe["thesis"] = (
+        "PEAD when PB is above its PIT median AND overnight is in the "
+        "easiest PIT decile"
+    )
+    ok_roe = review_proposal_row(occ_roe)
+    assert ok_roe["ok"] is True or "gate_set_already_catalog" in ok_roe["reasons"]
+    assert "occupancy_label_only" not in ok_roe["reasons"]
+
     extra_funding = {
         "thesis": "Tight funding regime when EPS is down AND NP is negative.",
         "signal_definition": "AND(eps_down, np_negative) PIT",

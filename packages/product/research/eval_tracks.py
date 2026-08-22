@@ -80,10 +80,10 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "id": "inventory_bias_recorded",
         "track": EVAL_TRACK_LIQ_LARGE,
         "why": (
-            "recorded research/eval/job=eval-inventory-bias-20260823r/ "
+            "recorded research/eval/job=eval-inventory-bias-20260823s/ "
             "inventory_bias.json; assert_new_batch_cheap_pb_cap refuses "
-            "new batches at 20%; plus41 occupancy audit 20260823r "
-            "40 material-band / 1 near_empty parked — not materials"
+            "new batches at 20%; 23s occupancy audit material-band thin; "
+            "plus41 40 material-band / parked empties — not materials"
         ),
         "not_a_pass": True,
         "go": False,

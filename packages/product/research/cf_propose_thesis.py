@@ -98,7 +98,7 @@ _GATE_OCCUPANCY_LABEL: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("repo_3m_down", ("repo rates are low", "low repo", "repo is low")),
     ("ta_up", ("technical analysis", "technical signal", "ta signals")),
     ("ta_down", ("technical analysis", "technical signal", "ta signals")),
-    ("overnight_p10", ("at 10%", "funding at 10", "10 percent", "10% predicts")),
+    ("overnight_p10", ("at 10%", "funding at 10", "10 percent", "10% predicts", "funding is loose", "loose")),
     ("pb_rising", ("is rising", "pb rose", "rising price-to-book", "price-to-book is rising")),
 )
 
@@ -275,6 +275,8 @@ def review_proposal_row(proposal: Mapping[str, Any]) -> dict[str, Any]:
             ("easy funding", "easy_funding"),
             ("sales contraction", "sales_down"),
             ("sales contracted", "sales_down"),
+            ("roe decline", "roe_low"),
+            ("roe is low", "roe_low"),
         )
         for phrase, gate in extra_title:
             if phrase in polar_blob and gate not in kept_set:
