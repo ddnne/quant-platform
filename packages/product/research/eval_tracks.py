@@ -75,8 +75,8 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "tracks": BOTH_EVAL_TRACK_IDS,
         "entry": "research.cf_daily_path_job.run_both_track_sleeve_fanout",
         "why": (
-            "re-eval fund/flow/event sleeves on mid_n_explore AND liq_large; "
-            "R2 only; still not a pass"
+            "live run_both_track_sleeve_fanout(dry_run=False) to R2; "
+            "do not narrate from dry-run empty-basket compare; still not a pass"
         ),
         "not_a_pass": True,
         "go": False,
@@ -106,9 +106,23 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "go": False,
     },
     {
-        "id": "options_225_vol_series_shrink",
+        "id": "options_225_vol_series_hold",
         "track": EVAL_TRACK_MID_N,
-        "why": "options_225_vol_series.py ~1140 live series math; shrink dumps only",
+        "why": "options_225_vol_series.py ~1140 is live ATM/skew/term math; do not fake-split",
+        "not_a_pass": True,
+        "go": False,
+    },
+    {
+        "id": "derive_original_22_ids_from_yaml",
+        "track": EVAL_TRACK_MID_N,
+        "why": "EVENT/CS unique 22 frozensets still duplicate YAML stems; derive like CF_NEW",
+        "not_a_pass": True,
+        "go": False,
+    },
+    {
+        "id": "eval_harness_standard_shrink",
+        "track": EVAL_TRACK_MID_N,
+        "why": "eval_harness_standard.py ~760 W56 runner after checklist split; not daily_path SoT",
         "not_a_pass": True,
         "go": False,
     },
