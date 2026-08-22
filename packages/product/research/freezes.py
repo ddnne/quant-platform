@@ -1,7 +1,7 @@
 """Research freeze surface: flags + 3-default pins.
 
 Flags come from ``features.research_freezes``. Pin tuples live here so
-``daily_path_eval`` / CF drivers do not import ``mass_strategy_factory``.
+``daily_path_eval`` / CF drivers do not import ``offline.factory``.
 Do not retune the three representatives.
 """
 from __future__ import annotations

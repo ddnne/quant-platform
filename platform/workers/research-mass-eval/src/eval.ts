@@ -1,8 +1,8 @@
 /**
  * Pure-TS lite multi-period logic evaluation for CF Workers.
  *
- * Ports the essential multi_day_hold + cross_section_relative paths used by
- * mass_strategy_factory.evaluate_one_strategy / class_hyp_eval.
+ * Period-net screen (this module). Python counterparts:
+ * offline.factory / offline.bar_eval. Candidate-grade path is daily_path.
  *
  * W93: macro_repo_rate_* consume staged repo_rate_regime when present.
  * W94: flow_margin_* / fund_* / mf_* consume staged flow_regime / fund_regime

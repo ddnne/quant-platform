@@ -111,7 +111,7 @@ if COMPLETE_22_DATASET_SET & PERMANENT_DEFER_DATASETS:
     )
 
 # Bar-native logics the CF Worker can evaluate without extra panels.
-# Catalog: research.bar_native_specs (not mass_strategy_factory.LOGIC_TEMPLATES).
+# Catalog: research.bar_native_specs (not offline.factory).
 # nky_vol_* need staged index closes (__NKY_PROXY__) in panels.
 # opt225_* need staged opt225_regime maps (BaseVol/ATM IV/spread).
 # macro_repo_rate_* consume staged repo_rate_regime when present.

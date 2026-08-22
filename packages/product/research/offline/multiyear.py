@@ -121,7 +121,7 @@ from research.stats_metrics import (
     stats_metrics_document,
 )
 
-# Floors SoT is this module (CLASS_HYP_EVAL_VERSION lives here, not class_hyp_eval).
+# Floors SoT is this module (CLASS_HYP_EVAL_VERSION).
 CLASS_HYP_EVAL_VERSION: str = "class-hyp-eval/v7"
 CLASS_HYP_EVAL_WAVE: str = "W86 / w0816u"
 MIN_ECONOMIC_NET: float = DEFAULT_MIN_ECONOMIC_NET
