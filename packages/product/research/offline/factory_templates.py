@@ -10,23 +10,19 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping
 
 from research.bar_native_specs import BAR_NATIVE_LOGIC_IDS, BAR_NATIVE_SPECS
 from research.freezes import (
     CONNECTED_TO_MASS,
     CONNECTED_TO_READY,
-    FROZEN_DEFAULT_PATH,
     MASS_RESEARCH,
     READY_DECLARED,
 )
 from research.hypothesis_classes import (
     CLASS_CROSS_SECTION_RELATIVE,
     CLASS_EVENT_POST,
-    CLASS_MACRO_CONDITIONED,
     CLASS_MULTI_DAY_HOLD,
-    CLASS_SIMPLE_DAILY_SIGN,
-    DEFAULT_GENERATION_CLASS_IDS,
 )
 from research.unique_logic.constants import RESEARCH_UNIQUE_LOGIC_IDS
 
@@ -461,15 +457,13 @@ def _ov(
 
 # Preserve factory display_name / notes / main_pool / generation_enabled.
 _BAR_NATIVE_TEMPLATE_OVERLAY: dict[str, dict[str, Any]] = {
-    "mdh_sticky_momentum": _ov("Sticky multi-day momentum", generation_enabled=True),
+    "mdh_sticky_momentum": _ov("Sticky multi-day momentum"),
     "mdh_mean_reversion": _ov(
         "Sticky multi-day mean reversion",
-        generation_enabled=True,
         notes="Distinct entry logic vs mdh_sticky_momentum; not an eval sign flip.",
     ),
     "xs_rank_ls_sticky": _ov(
         "Cross-section rank L-S sticky",
-        generation_enabled=True,
         notes=(
             "Canonical structure matches frozen cross_section_hold_10 (mom5) "
             "shape; not a retune."
@@ -477,48 +471,28 @@ _BAR_NATIVE_TEMPLATE_OVERLAY: dict[str, dict[str, Any]] = {
     ),
     "xs_rank_ls_daily": _ov(
         "Cross-section rank L-S daily rebalance",
-        generation_enabled=True,
         notes="Position construction differs from sticky (daily vs multi-day).",
     ),
-    "macro_repo_rate_change": _ov(
-        "Macro-conditioned mom (repo rate change)",
-        generation_enabled=True,
-    ),
-    "macro_repo_rate_level": _ov(
-        "Macro-conditioned mom (repo rate level)",
-        generation_enabled=True,
-    ),
-    "fund_value_only": _ov("Fundamentals value-only", generation_enabled=True),
+    "macro_repo_rate_change": _ov("Macro-conditioned mom (repo rate change)"),
+    "macro_repo_rate_level": _ov("Macro-conditioned mom (repo rate level)"),
+    "fund_value_only": _ov("Fundamentals value-only"),
     "fund_value_mom_agree": _ov(
         "Fundamentals value × momentum agree",
-        generation_enabled=True,
         notes="Canonical shape matches frozen fundamentals_hold_10; not a retune.",
     ),
-    "flow_margin_pressure": _ov(
-        "Margin flow multi-day pressure",
-        generation_enabled=True,
-    ),
-    "flow_margin_short_hard": _ov(
-        "Margin flow + hard short confirm",
-        generation_enabled=True,
-    ),
-    "flow_margin_short_soft": _ov(
-        "Margin flow + soft short confirm",
-        generation_enabled=True,
-    ),
+    "flow_margin_pressure": _ov("Margin flow multi-day pressure"),
+    "flow_margin_short_hard": _ov("Margin flow + hard short confirm"),
+    "flow_margin_short_soft": _ov("Margin flow + soft short confirm"),
     "vol_risk_adjusted_mom": _ov(
         "Vol-risk gated momentum",
-        generation_enabled=True,
         notes="Research-only family; not in hypothesis_classes registry.",
     ),
     "vol_breakout_expand": _ov(
         "Vol-expansion breakout mom",
-        generation_enabled=True,
         notes="Different gate structure vs mom_over_vol (info used differently).",
     ),
     "fund_value_mom_agree_slow": _ov(
         "Value×mom agree (slow price confirm)",
-        generation_enabled=True,
         notes=(
             "Distinct mom_structure tag; not a free mom grid over fund_value_mom_agree. "
             "W95: window giant-t on w2017_2019 (t≈153) is an n=2 near-equal-nets "
@@ -528,7 +502,6 @@ _BAR_NATIVE_TEMPLATE_OVERLAY: dict[str, dict[str, Any]] = {
     ),
     "mf_value_mom_rate": _ov(
         "Value × mom × rate multi-factor",
-        generation_enabled=True,
         notes=(
             "Unique rate-gated value×mom (not an alias of fund_value_mom_agree). "
             "Long only on overnight decline in easy regime; short only on "
@@ -539,7 +512,6 @@ _BAR_NATIVE_TEMPLATE_OVERLAY: dict[str, dict[str, Any]] = {
     ),
     "mf_flow_price": _ov(
         "Flow × price multi-factor",
-        generation_enabled=True,
         notes=(
             "Distinct from flow_margin_short_hard/soft (short confirm). "
             "Keep parallel in flow near-group; do not merge."
@@ -547,7 +519,6 @@ _BAR_NATIVE_TEMPLATE_OVERLAY: dict[str, dict[str, Any]] = {
     ),
     "nky_vol_abs_level": _ov(
         "Nikkei abs vol-level × CS risk-on/off",
-        generation_enabled=True,
         notes=(
             "Index-level vol regime. Distinct from vol_risk_adjusted_mom "
             "(per-name mom/vol gate). Proxy: NK225F front RV → TOPIX fallback. "
@@ -556,7 +527,6 @@ _BAR_NATIVE_TEMPLATE_OVERLAY: dict[str, dict[str, Any]] = {
     ),
     "nky_vol_term_levels": _ov(
         "Nikkei short+long vol levels × CS",
-        generation_enabled=True,
         notes=(
             "Dual absolute levels (not ratio). Distinct from nky_vol_abs_level "
             "and from per-name vol_breakout_expand."
@@ -564,7 +534,6 @@ _BAR_NATIVE_TEMPLATE_OVERLAY: dict[str, dict[str, Any]] = {
     ),
     "nky_vol_term_ratio": _ov(
         "Nikkei short/long vol ratio × CS",
-        generation_enabled=True,
         notes=(
             "Index-level term ratio. Name-level cousin is vol_breakout_expand "
             "(per-name recent/prior vol); keep parallel in vol near-group. "
@@ -573,7 +542,6 @@ _BAR_NATIVE_TEMPLATE_OVERLAY: dict[str, dict[str, Any]] = {
     ),
     "opt225_basevol_abs_level": _ov(
         "options_225 BaseVol abs × CS risk-on/off",
-        generation_enabled=True,
         notes=(
             "Canonical Nikkei vol SoT. Distinct from nky_vol_* TOPIX/NK225F "
             "RV proxy (keep parallel). Units=percent_vol_points."
@@ -581,12 +549,10 @@ _BAR_NATIVE_TEMPLATE_OVERLAY: dict[str, dict[str, Any]] = {
     ),
     "opt225_basevol_term_levels": _ov(
         "options_225 BaseVol short+long levels × CS",
-        generation_enabled=True,
         notes="BaseVol-only dual levels. Do not drop in favor of ATM-only.",
     ),
     "opt225_basevol_term_ratio": _ov(
         "options_225 BaseVol short/long ratio × CS",
-        generation_enabled=True,
         notes=(
             "BaseVol-only term ratio. Parallel to ATM IV term ratio. "
             "Requires distinct short/long vol maps; occupancy 0 = "
@@ -597,7 +563,6 @@ _BAR_NATIVE_TEMPLATE_OVERLAY: dict[str, dict[str, Any]] = {
     ),
     "opt225_atm_iv_abs_level": _ov(
         "options_225 ATM IV abs × CS (compare-only)",
-        generation_enabled=True,
         notes=(
             "COMPARE-ONLY (W94). Prefer BaseVol as canonical level "
             "(post-W93 corr≈0.99994). Keep parallel for comparison."
@@ -605,12 +570,10 @@ _BAR_NATIVE_TEMPLATE_OVERLAY: dict[str, dict[str, Any]] = {
     ),
     "opt225_atm_iv_term_levels": _ov(
         "options_225 ATM IV short+long levels × CS (compare-only)",
-        generation_enabled=True,
         notes="COMPARE-ONLY ATM dual levels. Prefer BaseVol dual levels.",
     ),
     "opt225_atm_iv_term_ratio": _ov(
         "options_225 ATM IV short/long ratio × CS (compare-only)",
-        generation_enabled=True,
         notes=(
             "COMPARE-ONLY ATM term ratio. Prefer BaseVol term ratio. "
             "Requires distinct short/long ATM IV maps; occupancy 0 = "
@@ -621,7 +584,6 @@ _BAR_NATIVE_TEMPLATE_OVERLAY: dict[str, dict[str, Any]] = {
     ),
     "opt225_iv_base_spread_abs": _ov(
         "options_225 (ATM IV − BaseVol) abs × CS (compare-only)",
-        generation_enabled=True,
         notes=(
             "COMPARE-ONLY. Spread convention: atm_iv - base_vol. "
             "Post-W93 exact-zero ≈99.76%."
@@ -629,12 +591,10 @@ _BAR_NATIVE_TEMPLATE_OVERLAY: dict[str, dict[str, Any]] = {
     ),
     "opt225_iv_base_spread_change": _ov(
         "options_225 (ATM−BaseVol) change × CS (compare-only)",
-        generation_enabled=True,
         notes="COMPARE-ONLY spread-change leg; parallel to abs spread.",
     ),
     "opt225_skew_abs_level": _ov(
         "options_225 95% put skew abs × CS",
-        generation_enabled=True,
         notes=(
             "W94 primary smile feature. Convention: put_iv(~0.95*S)−atm_mid. "
             "No invent of smile points beyond available strikes."
@@ -642,7 +602,6 @@ _BAR_NATIVE_TEMPLATE_OVERLAY: dict[str, dict[str, Any]] = {
     ),
     "opt225_cm_term_abs_level": _ov(
         "options_225 near−next CM ATM term abs × CS",
-        generation_enabled=True,
         notes=(
             "W94 CM term feature (distinct from short/long rolling 'term' "
             "transforms on a single level series)."
@@ -650,7 +609,6 @@ _BAR_NATIVE_TEMPLATE_OVERLAY: dict[str, dict[str, Any]] = {
     ),
     "opt225_basevol_delta_abs": _ov(
         "options_225 BaseVol Δ abs × CS",
-        generation_enabled=True,
         notes=(
             "W94 canonical-level change. Arithmetic delta primary; log_delta "
             "recorded on series but not required by this logic."
@@ -948,37 +906,13 @@ def _factory_doc_meta() -> tuple[str, str, dict[str, Any]]:
 
 def near_logic_groups_document() -> dict[str, Any]:
     """Near-groups kept parallel for comparison (do not merge early)."""
-    version, wave, _freeze = _factory_doc_meta()
+    version, wave, _unused = _factory_doc_meta()
     return {
         "version": version,
         "wave": wave,
         "policy": "Near-similar logics stay parallel; label; do not merge early.",
         "groups": [dict(g) for g in NEAR_LOGIC_GROUPS],
     }
-
-
-def _research_family_members(
-    logic_ids: Sequence[str], *, append: bool = False
-) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    for lid in sorted(logic_ids):
-        tpl = LOGIC_TEMPLATES.get(lid)
-        if tpl is None:
-            continue
-        row = {
-            "logic_id": lid,
-            "family_id": tpl.family_id,
-            "generation_enabled": bool(tpl.generation_enabled),
-            "research_candidate": False,
-            "promote_as_main": False,
-            "go": False,
-            "catalog_remap": None,
-            "registration": "recognition",
-        }
-        if append:
-            row["append"] = True
-        rows.append(row)
-    return rows
 
 
 def _research_family_base() -> dict[str, Any]:
@@ -1010,14 +944,6 @@ def research_family_register_document() -> dict[str, Any]:
         "kind": "research_family",
         "family_ids": sorted(RESEARCH_UNIQUE_FAMILY_IDS),
         "logic_ids": sorted(RESEARCH_UNIQUE_LOGIC_IDS),
-        "members": _research_family_members(RESEARCH_UNIQUE_LOGIC_IDS),
-        "must_not": [
-            "auto research_candidate",
-            "Mass ON",
-            "READY",
-            "operational GO",
-            "promote_as_main",
-        ],
         "note": "registration = recognition, not pass / not promotion.",
     }
 
@@ -1031,26 +957,7 @@ def research_family_append_document() -> dict[str, Any]:
         "kind": "research_family_append",
         "this_wave_only": True,
         "appended_logic_ids": sorted(RESEARCH_FAMILY_APPEND_LOGIC_IDS),
-        "appended_family_ids": sorted(
-            {
-                LOGIC_TEMPLATES[lid].family_id
-                for lid in RESEARCH_FAMILY_APPEND_LOGIC_IDS
-                if lid in LOGIC_TEMPLATES
-            }
-        ),
-        "members": _research_family_members(
-            RESEARCH_FAMILY_APPEND_LOGIC_IDS, append=True
-        ),
         "did_not_kill_funding_surprise": True,
-        "sign_flip_is_not_a_kill": True,
-        "must_not": [
-            "auto research_candidate",
-            "Mass ON",
-            "READY",
-            "operational GO",
-            "promote_as_main",
-            "treat family append as a pass",
-        ],
         "note": "family append = recognition of this-wave logics, not promotion.",
     }
 
@@ -1060,15 +967,6 @@ def logic_templates_document() -> dict[str, Any]:
     from research.offline.factory import DEFAULT_NEAR_DUP_THRESHOLD
 
     version, wave, freeze = _factory_doc_meta()
-    rate_ids = [
-        lid
-        for lid, t in LOGIC_TEMPLATES.items()
-        if t.family_id in {FAMILY_RATE_FACTOR, CLASS_MACRO_CONDITIONED}
-        and ("rate" in lid or "macro_repo" in lid)
-    ]
-    mf_ids = [
-        lid for lid, t in LOGIC_TEMPLATES.items() if t.family_id == FAMILY_MULTI_FACTOR
-    ]
     nky_vol_ids = [
         lid
         for lid, t in LOGIC_TEMPLATES.items()
@@ -1079,37 +977,28 @@ def logic_templates_document() -> dict[str, Any]:
         for lid, t in LOGIC_TEMPLATES.items()
         if t.family_id == FAMILY_OPTIONS_VOL_REGIME
     ]
-    w94_opt225_ids = [
-        lid
-        for lid in opt225_ids
-        if lid
-        in {
-            "opt225_skew_abs_level",
-            "opt225_cm_term_abs_level",
-            "opt225_basevol_delta_abs",
-        }
-    ]
     return {
         "version": version,
         "wave": wave,
         "n_logic_templates": len(LOGIC_TEMPLATES),
         "logic_ids": list(LOGIC_TEMPLATE_IDS),
-        "templates": {
-            lid: LOGIC_TEMPLATES[lid].to_dict() for lid in LOGIC_TEMPLATE_IDS
-        },
-        "w89_rate_factor_logic_ids": rate_ids,
-        "w89_multi_factor_logic_ids": mf_ids,
         "w91_index_vol_logic_ids": nky_vol_ids,
         "w92_options_vol_logic_ids": opt225_ids,
-        "w94_options_vol_logic_ids": w94_opt225_ids,
+        "w94_options_vol_logic_ids": [
+            lid
+            for lid in opt225_ids
+            if lid
+            in {
+                "opt225_skew_abs_level",
+                "opt225_cm_term_abs_level",
+                "opt225_basevol_delta_abs",
+            }
+        ],
         "unique_logic_ids": sorted(RESEARCH_UNIQUE_LOGIC_IDS),
-        "unique_logic_family_ids": sorted(RESEARCH_UNIQUE_FAMILY_IDS),
         "unique_logic_append_logic_ids": sorted(RESEARCH_FAMILY_APPEND_LOGIC_IDS),
         "research_family_registration": research_family_register_document(),
-        "research_family_append": research_family_append_document(),
         "opt225_canonical_level": "basevol",
         "opt225_atm_iv_role": "compare_only",
-        "near_logic_groups": near_logic_groups_document(),
         "diversity_rules": {
             "counts_as_different": [
                 "info source / datasets",
@@ -1125,21 +1014,13 @@ def logic_templates_document() -> dict[str, Any]:
             ],
             "near_dup_threshold": DEFAULT_NEAR_DUP_THRESHOLD,
             "numeric_only_knobs": sorted(NUMERIC_ONLY_KNOBS),
-            "prefer": "many distinct templates over many param clones",
-            "near_group_policy": "keep parallel; label; do not merge early",
         },
-        "frozen_default_path": list(FROZEN_DEFAULT_PATH),
-        "simple_daily_sign": "forbidden as diversity source",
-        "s1_s5_unreject": "forbidden",
-        "look_ahead": "gen-time reject",
         **freeze,
     }
 
 
 def family_definitions_document() -> dict[str, Any]:
     """Back-compat family document; points primary diversity to logic templates."""
-    from research.offline.factory import DEFAULT_N
-
     version, wave, freeze = _factory_doc_meta()
     return {
         "version": version,
@@ -1149,47 +1030,6 @@ def family_definitions_document() -> dict[str, Any]:
         },
         "family_ids": list(FACTORY_FAMILY_IDS),
         "default_family_ratios": dict(DEFAULT_FAMILY_RATIOS),
-        "research_family_registration": research_family_register_document(),
-        "research_family_append": research_family_append_document(),
-        "logic_templates": logic_templates_document(),
-        "sampling_rules": {
-            "seed_reproducible": True,
-            "primary_unit": "logic_template",
-            "target_n_capacity": DEFAULT_N,
-            "anti_bias": (
-                "Prefer one individual per distinct logic template. "
-                "Numeric knob clones are near-dup scored and dropped. "
-                "hold/mom/frac grids do NOT count as diversity."
-            ),
-            "simple_daily_sign": "forbidden as diversity source",
-            "s1_s5_unreject": "forbidden",
-            "look_ahead": "gen-time reject",
-            "quality_filter_stage": "eval (after logic dedup)",
-        },
-        "hypothesis_class_alignment": {
-            "registry_default_generation": list(DEFAULT_GENERATION_CLASS_IDS),
-            "extra_factory_families": [
-                FAMILY_VOL_RISK_ADJUSTED,
-                FAMILY_RATE_FACTOR,
-                FAMILY_MULTI_FACTOR,
-                FAMILY_INDEX_VOL_REGIME,
-                FAMILY_OPTIONS_VOL_REGIME,
-                FAMILY_EVENT_FUNDING_COMBO,
-                FAMILY_EVENT_MACRO_CURVE_COMBO,
-                FAMILY_DISCLOSURE_CLUSTER_GATE,
-                FAMILY_SURPRISE_XS_RANK,
-                FAMILY_LARGE_SURPRISE_FILTER,
-                FAMILY_AFTERCLOSE_EVENT_TIMING,
-                FAMILY_EVENT_MOM_AGREE_COMBO,
-                FAMILY_EVENT_MARGIN_CROWD_COMBO,
-                FAMILY_FUNDING_IMPULSE_CS,
-                FAMILY_CURVE_STEEPEN_IMPULSE_CS,
-                FAMILY_XS_MARGIN_DELTA,
-                FAMILY_IDIO_MOM_MACRO,
-                FAMILY_EVENT_CALENDAR_GATE,
-            ],
-            "excluded": [CLASS_SIMPLE_DAILY_SIGN],
-        },
         **freeze,
     }
 

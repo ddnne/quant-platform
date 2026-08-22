@@ -44,45 +44,16 @@ from research.unique_logic.constants import RESEARCH_UNIQUE_LOGIC_IDS
 from research.offline.factory_templates import (
     DEFAULT_FAMILY_RATIOS,
     FACTORY_FAMILY_IDS,
-    FAMILY_AFTERCLOSE_EVENT_TIMING,
-    FAMILY_CURVE_STEEPEN_IMPULSE_CS,
     FAMILY_DEFINITIONS,
-    FAMILY_DISCLOSURE_CLUSTER_GATE,
-    FAMILY_EVENT_FUNDING_COMBO,
-    FAMILY_EVENT_MACRO_CURVE_COMBO,
-    FAMILY_EVENT_MARGIN_CROWD_COMBO,
-    FAMILY_EVENT_MOM_AGREE_COMBO,
-    FAMILY_FUNDING_IMPULSE_CS,
-    FAMILY_IDIO_MOM_MACRO,
     FAMILY_INDEX_VOL_REGIME,
-    FAMILY_LARGE_SURPRISE_FILTER,
-    FAMILY_MONTH_END_CS,
-    FAMILY_MULTI_FACTOR,
     FAMILY_OPTIONS_VOL_REGIME,
-    FAMILY_OVERNIGHT_LEVEL_CS,
-    FAMILY_RATE_FACTOR,
-    FAMILY_REPO_3M_LEVEL_CS,
-    FAMILY_RESEARCH_UNIQUE_LOGIC,
-    FAMILY_SURPRISE_XS_RANK,
     FAMILY_VOL_RISK_ADJUSTED,
-    FAMILY_XS_LOW_VOL_MOM,
-    FAMILY_XS_MARGIN_DELTA,
     LOGIC_TEMPLATE_IDS,
     LOGIC_TEMPLATES,
     LogicTemplate,
-    NEAR_LOGIC_GROUPS,
     NUMERIC_ONLY_KNOBS,
-    RESEARCH_FAMILY_APPEND_ID,
-    RESEARCH_FAMILY_APPEND_LOGIC_IDS,
-    RESEARCH_FAMILY_AUTO_RESEARCH_CANDIDATE,
-    RESEARCH_FAMILY_REGISTER_ID,
-    RESEARCH_FAMILY_REGISTRATION_IS_NOT_A_PASS,
-    RESEARCH_UNIQUE_FAMILY_IDS,
     family_definitions_document,
     logic_templates_document,
-    near_logic_groups_document,
-    research_family_append_document,
-    research_family_register_document,
 )
 
 # ---------------------------------------------------------------------------
@@ -104,19 +75,6 @@ REJECT_S1_S5: str = "s1_s5_unreject_forbidden"
 REJECT_UNKNOWN_FAMILY: str = "unknown_family"
 REJECT_UNKNOWN_LOGIC: str = "unknown_logic_template"
 REJECT_NEAR_DUPLICATE: str = "near_duplicate_grid_mutation"
-REJECT_FROZEN_DEFAULT_RETUNE: str = "frozen_default_retune_forbidden"
-
-# Eval / screen reason codes
-SCREEN_NEAR_ZERO: str = "near_zero_after_cost"
-SCREEN_POST_COST_COLLAPSE: str = "post_cost_collapse"
-SCREEN_DATA_MISSING: str = "data_missing"
-SCREEN_PIT_VIOLATION: str = "pit_violation"
-SCREEN_EVAL_ERROR: str = "eval_error"
-SCREEN_NO_PERIODS: str = "no_ok_periods"
-SCREEN_LOW_ACTIVATION: str = "low_activation"
-SCREEN_BOTH_SIGNS_FAIL: str = "both_signs_near_zero_or_nonpositive"
-# W95: small-n near-identical period nets inflate |t|; demote/exclude survivors.
-SCREEN_INFLATED_T_LOW_VARIANCE: str = "inflated_t_low_variance"
 
 DEFAULT_SEED: int = 870816
 DEFAULT_N: int = 100  # capacity; uniqueness measured by unique_logic / after_dedup
@@ -160,8 +118,6 @@ _EVENT_ENTRY_FORBIDDEN: frozenset[str] = frozenset(
         "event_open_before_disc",
     }
 )
-
-_REPO_ROOT = Path(__file__).resolve().parents[4]
 
 def _freeze() -> dict[str, Any]:
     return {
@@ -794,8 +750,6 @@ def generate_strategy_batch(
             "n_dropped": dedup["n_dropped"],
         },
         "gen_rejected": [s.to_dict() for s in gen_rejected],
-        "families_document": family_definitions_document(),
-        "logic_templates_document": logic_templates_document(),
         "frozen_default_path": list(FROZEN_DEFAULT_PATH),
         "note": (
             "Diversity = unique economic logics after near-dup. "
@@ -892,16 +846,12 @@ def run_mass_factory(
                 "strategies_after_dedup",
                 "near_dup_dropped",
                 "gen_rejected",
-                "families_document",
-                "logic_templates_document",
             }
         },
         "generation_strategies": gen.get("strategies"),
         "strategies_after_dedup": gen.get("strategies_after_dedup"),
         "near_dup_dropped": gen.get("near_dup_dropped"),
         "generation_rejected": gen.get("gen_rejected"),
-        "families": family_definitions_document(),
-        "logic_templates": logic_templates_document(),
         "batch": {
             k: batch[k] for k in batch if k not in {"results", "screens"}
         },
@@ -1102,35 +1052,9 @@ __all__ = [
     "OPERATIONAL_GO",
     "CONTINUOUS_PAPER",
     "FAMILY_VOL_RISK_ADJUSTED",
-    "FAMILY_RATE_FACTOR",
-    "FAMILY_MULTI_FACTOR",
     "FAMILY_INDEX_VOL_REGIME",
     "FAMILY_OPTIONS_VOL_REGIME",
-    "FAMILY_EVENT_FUNDING_COMBO",
-    "FAMILY_EVENT_MACRO_CURVE_COMBO",
-    "FAMILY_DISCLOSURE_CLUSTER_GATE",
-    "FAMILY_SURPRISE_XS_RANK",
-    "FAMILY_LARGE_SURPRISE_FILTER",
-    "FAMILY_AFTERCLOSE_EVENT_TIMING",
-    "FAMILY_EVENT_MOM_AGREE_COMBO",
-    "FAMILY_EVENT_MARGIN_CROWD_COMBO",
-    "FAMILY_FUNDING_IMPULSE_CS",
-    "FAMILY_CURVE_STEEPEN_IMPULSE_CS",
-    "FAMILY_XS_MARGIN_DELTA",
-    "FAMILY_IDIO_MOM_MACRO",
-    "FAMILY_OVERNIGHT_LEVEL_CS",
-    "FAMILY_MONTH_END_CS",
-    "FAMILY_XS_LOW_VOL_MOM",
-    "FAMILY_REPO_3M_LEVEL_CS",
-    "FAMILY_RESEARCH_UNIQUE_LOGIC",
-    "RESEARCH_UNIQUE_FAMILY_IDS",
     "RESEARCH_UNIQUE_LOGIC_IDS",
-    "RESEARCH_FAMILY_APPEND_LOGIC_IDS",
-    "RESEARCH_FAMILY_REGISTER_ID",
-    "RESEARCH_FAMILY_APPEND_ID",
-    "RESEARCH_FAMILY_REGISTRATION_IS_NOT_A_PASS",
-    "RESEARCH_FAMILY_AUTO_RESEARCH_CANDIDATE",
-    "research_family_append_document",
     "FAMILY_DEFINITIONS",
     "FACTORY_FAMILY_IDS",
     "DEFAULT_FAMILY_RATIOS",
@@ -1139,7 +1063,6 @@ __all__ = [
     "DEFAULT_NEAR_DUP_THRESHOLD",
     "DEFAULT_MAX_FAMILY_SHARE",
     "FROZEN_DEFAULT_PATH",
-    "NEAR_LOGIC_GROUPS",
     "LOGIC_TEMPLATES",
     "LOGIC_TEMPLATE_IDS",
     "LogicTemplate",
@@ -1151,8 +1074,6 @@ __all__ = [
     "REJECT_NEAR_DUPLICATE",
     "family_definitions_document",
     "logic_templates_document",
-    "near_logic_groups_document",
-    "research_family_register_document",
     "stable_strategy_id",
     "validate_strategy_at_gen",
     "generate_strategy_batch",

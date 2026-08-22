@@ -54,9 +54,17 @@ from research.stats_metrics import (
 )
 from research.unique_logic.constants import RESEARCH_UNIQUE_LOGIC_IDS
 
-# Function-default bindings; must match research.offline.factory (rebound below).
+# Function-default bindings; must match research.offline.factory.
 DEFAULT_NEAR_ZERO_ABS: float = 0.0005
 DEFAULT_MIN_ACTIVATION: float = 0.01
+SCREEN_NEAR_ZERO: str = "near_zero_after_cost"
+SCREEN_POST_COST_COLLAPSE: str = "post_cost_collapse"
+SCREEN_DATA_MISSING: str = "data_missing"
+SCREEN_EVAL_ERROR: str = "eval_error"
+SCREEN_NO_PERIODS: str = "no_ok_periods"
+SCREEN_LOW_ACTIVATION: str = "low_activation"
+SCREEN_BOTH_SIGNS_FAIL: str = "both_signs_near_zero_or_nonpositive"
+SCREEN_INFLATED_T_LOW_VARIANCE: str = "inflated_t_low_variance"
 
 
 @dataclass
@@ -252,12 +260,6 @@ def load_batch_data_context(
             "n_fins_codes": len(fins_events),
             "use_q4_periods": bool(config.use_q4_periods),
             "max_days_per_period": int(config.max_days_per_period),
-            "tradeoff": (
-                "Lite multi-year: Q4 (or capped full) windows + code subsample "
-                "for wall-time. Not production research_candidate SoT; "
-                "survivors need deeper class_hyp re-eval before any promotion. "
-                "Heavy multi-year only for promising survivors."
-            ),
         },
     )
 
@@ -1273,21 +1275,11 @@ def run_batch_eval(
 
 
 from research.offline.factory import (  # noqa: E402
-    DEFAULT_MIN_ACTIVATION,
     DEFAULT_N,
-    DEFAULT_NEAR_ZERO_ABS,
     DEFAULT_SEED,
     MASS_FACTORY_VERSION,
     MASS_FACTORY_WAVE,
     MassFactoryConfig,
-    SCREEN_BOTH_SIGNS_FAIL,
-    SCREEN_DATA_MISSING,
-    SCREEN_EVAL_ERROR,
-    SCREEN_INFLATED_T_LOW_VARIANCE,
-    SCREEN_LOW_ACTIVATION,
-    SCREEN_NEAR_ZERO,
-    SCREEN_NO_PERIODS,
-    SCREEN_POST_COST_COLLAPSE,
     _freeze,
 )
 
