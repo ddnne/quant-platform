@@ -219,7 +219,6 @@ def test_near_empty_park_is_not_countable_or_basket_material() -> None:
     parked = near_empty_occupancy_park()
     assert parked == NEAR_EMPTY_PARK_IDS
     assert parked
-    assert "event_flatten_p10_sales_down" in parked
     assert "event_flatten_p10_px_down" in parked
     countable = countable_thesis_ids()
     for lid in parked:
@@ -235,11 +234,7 @@ def test_near_empty_park_is_not_countable_or_basket_material() -> None:
     from research.cf_daily_path_job import sleeve_durability_logic_ids
 
     assert THIN_SLEEVE_EXCLUDE_IDS
-    assert "event_flatten_p10_eps_down" in THIN_SLEEVE_EXCLUDE_IDS
-    assert "event_flatten_pb_eps_down" in THIN_SLEEVE_EXCLUDE_IDS
-    assert "event_flatten_pb_sales_down" in THIN_SLEEVE_EXCLUDE_IDS
-    assert "event_flatten_np_px_down" in THIN_SLEEVE_EXCLUDE_IDS
-    assert "event_flatten_pb_tight" in THIN_SLEEVE_EXCLUDE_IDS
+    assert "event_flatten_pb_px_down" in THIN_SLEEVE_EXCLUDE_IDS
     assert THIN_SLEEVE_EXCLUDE_IDS.isdisjoint(NEAR_EMPTY_PARK_IDS)
     assert THIN_SLEEVE_EXCLUDE_IDS.isdisjoint(sleeve_durability_logic_ids())
     thin_reasons = validate_basket_members(

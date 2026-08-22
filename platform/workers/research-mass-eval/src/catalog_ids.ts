@@ -209,6 +209,7 @@ export const CF_NEW_EVENT_THESIS_IDS = [
   "event_flatten_p10_px_down",
   "event_flatten_p10_sales_down",
   "event_flatten_pb_eps_down",
+  "event_flatten_pb_px_down",
   "event_flatten_pb_rising",
   "event_flatten_pb_sales_down",
   "event_flatten_pb_tight",
