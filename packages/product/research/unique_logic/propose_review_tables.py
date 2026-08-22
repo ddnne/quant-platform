@@ -425,8 +425,7 @@ PROPOSE_CONTRADICTORY_GATE_PAIRS: tuple[frozenset[str], ...] = (
 )
 
 
-def propose_prompt_good() -> dict[str, object]:
-    """Occupancy-correct 2-AND that is not already catalog. Format example only."""
+def _catalog_gate_sets() -> set[frozenset[str]]:
     from research.unique_logic.catalog import yaml_combo_rows
 
     catalog: set[frozenset[str]] = set()
@@ -438,39 +437,76 @@ def propose_prompt_good() -> dict[str, object]:
         )
         if gates:
             catalog.add(gates)
+    return catalog
+
+
+def _good_row(gates: list[str]) -> dict[str, object] | None:
+    sentences = [_GATE_OCCUPANCY_SENTENCE.get(g) for g in gates]
+    if not all(sentences):
+        return None
+    gset = frozenset(gates)
+    datasets = list(DEFAULT_PROPOSE_DATASETS)
+    if gset & _FUNDING_GATES and "jsda_tokyo_repo_rates" not in datasets:
+        datasets.append("jsda_tokyo_repo_rates")
+    joined = " AND ".join(str(s) for s in sentences)
+    names = ", ".join(gates)
+    n = len(gates)
+    hold = "both" if n == 2 else "all"
+    return {
+        "thesis": (
+            f"PEAD when {joined}. Skip missing PIT prints (no invent)."
+        ),
+        "signal_definition": (
+            f"AND({names}) PIT; skip missing prints (no invent)."
+        ),
+        "position_rule": (
+            f"Event-hold original surprise sign when {hold} gates are "
+            "PIT-true; otherwise flat."
+        ),
+        "datasets": datasets,
+        "gates": list(gates),
+        "why_different_from": ["ungated PEAD"],
+    }
+
+
+def _unique_prefer_and(*, n: int) -> dict[str, object] | None:
+    catalog = _catalog_gate_sets()
     prefer = list(PROPOSE_PROMPT_PREFER_GATES)
-    for i, a in enumerate(prefer):
-        for b in prefer[i + 1 :]:
-            pair = frozenset({a, b})
-            if pair in catalog:
-                continue
-            if any(combo <= pair for combo, _reason in SPARSE_GATE_COMBOS):
-                continue
-            if any(contra <= pair for contra in PROPOSE_CONTRADICTORY_GATE_PAIRS):
-                continue
-            sa = _GATE_OCCUPANCY_SENTENCE.get(a)
-            sb = _GATE_OCCUPANCY_SENTENCE.get(b)
-            if not sa or not sb:
-                continue
-            datasets = list(DEFAULT_PROPOSE_DATASETS)
-            if pair & _FUNDING_GATES and "jsda_tokyo_repo_rates" not in datasets:
-                datasets.append("jsda_tokyo_repo_rates")
-            return {
-                "thesis": (
-                    f"PEAD when {sa} AND {sb}. Skip missing PIT prints (no invent)."
-                ),
-                "signal_definition": (
-                    f"AND({a}, {b}) PIT; skip missing prints (no invent)."
-                ),
-                "position_rule": (
-                    "Event-hold original surprise sign when both gates are "
-                    "PIT-true; otherwise flat."
-                ),
-                "datasets": datasets,
-                "gates": [a, b],
-                "why_different_from": ["ungated PEAD"],
-            }
-    raise RuntimeError("no unique prefer 2-AND for PROPOSE_PROMPT_GOOD")
+    if n == 2:
+        candidates = (
+            [a, b]
+            for i, a in enumerate(prefer)
+            for b in prefer[i + 1 :]
+        )
+    elif n == 3:
+        candidates = (
+            [a, b, c]
+            for i, a in enumerate(prefer)
+            for j, b in enumerate(prefer[i + 1 :], i + 1)
+            for c in prefer[j + 1 :]
+        )
+    else:
+        raise ValueError("n must be 2 or 3")
+    for gates in candidates:
+        gset = frozenset(gates)
+        if gset in catalog:
+            continue
+        if any(combo <= gset for combo, _reason in SPARSE_GATE_COMBOS):
+            continue
+        if any(contra <= gset for contra in PROPOSE_CONTRADICTORY_GATE_PAIRS):
+            continue
+        row = _good_row(gates)
+        if row is not None:
+            return row
+    return None
+
+
+def propose_prompt_good() -> dict[str, object]:
+    """Occupancy-correct unique prefer 2-AND, else unique 3-AND. Format only."""
+    row = _unique_prefer_and(n=2) or _unique_prefer_and(n=3)
+    if row is None:
+        raise RuntimeError("no unique prefer 2-AND or 3-AND for PROPOSE_PROMPT_GOOD")
+    return row
 
 
 PROPOSE_PROMPT_GOOD: dict[str, object] = propose_prompt_good()

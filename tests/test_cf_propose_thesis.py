@@ -200,7 +200,7 @@ def test_worker_index_contains_propose_thesis_route() -> None:
     }
     assert frozenset(str(g) for g in good["gates"]) not in catalog_sets
     prefer = list(PROPOSE_PROMPT_PREFER_GATES)
-    first: list[str] | None = None
+    first2: list[str] | None = None
     for i, a in enumerate(prefer):
         for b in prefer[i + 1 :]:
             pair = frozenset({a, b})
@@ -210,11 +210,16 @@ def test_worker_index_contains_propose_thesis_route() -> None:
                 continue
             if any(contra <= pair for contra in PROPOSE_CONTRADICTORY_GATE_PAIRS):
                 continue
-            first = [a, b]
+            first2 = [a, b]
             break
-        if first is not None:
+        if first2 is not None:
             break
-    assert first == list(good["gates"])
+    if first2 is not None:
+        assert list(good["gates"]) == first2
+        assert len(good["gates"]) == 2
+    else:
+        assert len(good["gates"]) == 3
+        assert frozenset(str(g) for g in good["gates"]) not in catalog_sets
     assert "markets_margin_interest" in src
     assert '"margin_interest"' not in src
     # Generated allowlists: scripts/sync_cf_new_thesis_ids.py --check is SoT.
