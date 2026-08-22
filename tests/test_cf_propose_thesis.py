@@ -101,4 +101,7 @@ def test_worker_index_contains_propose_thesis_route() -> None:
     assert "env.AI.run" in src
     assert "llm_not_catalog" in src
     assert "stubProposals" in src
+    assert "equities_bars_daily" in src
+    assert "fins_summary" in src
+    assert "Do not invent datasets" in src or "do not invent datasets" in src.lower()
     assert "auto_inject: false" in src

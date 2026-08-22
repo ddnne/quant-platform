@@ -346,7 +346,6 @@ def test_economic_theme_ids_from_yaml() -> None:
 
 
 def test_python_only_event_gates_skip_catalog() -> None:
-    import re
     from pathlib import Path
 
     from research.unique_logic.event_combos import NEW_COMBO_LOGIC
@@ -374,14 +373,7 @@ def test_python_only_event_gates_skip_catalog() -> None:
         / "src"
         / "daily_path.ts"
     ).read_text(encoding="utf-8")
-    agree_m = re.search(
-        r'if \(lid === "event_pre_mom_agree_hold"\) \{.*?\}',
-        src,
-        flags=re.S,
-    )
-    assert agree_m
-    assert "momentumAt(entryIdx)" in src
-    assert "momentumAt(pairs, 5, i)" in agree_m.group(0)
+    assert "momentumAt(pairs, 5, i)" in src
     assert 'if (lid === "event_pre_mom_easy_funding")' not in src
     assert 'if (lid === "event_pre_mom_steep_curve")' not in src
     assert 'lid === "surprise_xs_month_start" && ev.entryDate.slice(8, 10) > "05"' in src

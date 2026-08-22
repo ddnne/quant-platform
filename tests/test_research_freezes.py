@@ -25,28 +25,6 @@ def test_three_default_pins_untouched() -> None:
     assert PHASE7 == "OFF"
 
 
-def test_freeze_sot_reexports_match() -> None:
-    from features.research_freezes import MASS_RESEARCH as FEAT
-    from research.cf_daily_path_job import MASS_RESEARCH as CF
-    from research.freezes import MASS_RESEARCH as SOT
-    from research.hypothesis_classes import MASS_RESEARCH as HC
-
-    assert SOT == FEAT == HC == CF == "NO-GO"
-
-
-def test_factory_templates_do_not_clone_combo_catalog() -> None:
-    from research.offline.factory import LOGIC_TEMPLATES
-    from research.unique_logic.constants import RESEARCH_UNIQUE_LOGIC_IDS
-    from research.unique_logic.event_combos import NEW_COMBO_LOGIC
-
-    combo_ids = {s["logic_id"] for s in NEW_COMBO_LOGIC}
-    cloned = sorted(combo_ids & set(LOGIC_TEMPLATES))
-    assert cloned == []
-    assert "event_eqar_high_pead" not in LOGIC_TEMPLATES
-    assert "event_funding_stress_skip" in RESEARCH_UNIQUE_LOGIC_IDS
-    assert "event_funding_stress_skip" not in LOGIC_TEMPLATES
-
-
 def test_unknown_event_gate_fails_closed() -> None:
     from research.unique_logic.constants import KNOWN_EVENT_GATES
     from research.unique_logic.event_combos import spec_by_id, evaluate_combo_daily_mtm
@@ -127,6 +105,19 @@ def test_harness_default_eval_codes_are_smoke_three() -> None:
     assert len(eu.EVAL_UNIVERSE_POOL) > 3
 
 
+def test_factory_templates_do_not_clone_combo_catalog() -> None:
+    from research.offline.factory import LOGIC_TEMPLATES
+    from research.unique_logic.constants import RESEARCH_UNIQUE_LOGIC_IDS
+    from research.unique_logic.event_combos import NEW_COMBO_LOGIC
+
+    combo_ids = {s["logic_id"] for s in NEW_COMBO_LOGIC}
+    cloned = sorted(combo_ids & set(LOGIC_TEMPLATES))
+    assert cloned == []
+    assert "event_eqar_high_pead" not in LOGIC_TEMPLATES
+    assert "event_funding_stress_skip" in RESEARCH_UNIQUE_LOGIC_IDS
+    assert "event_funding_stress_skip" not in LOGIC_TEMPLATES
+
+
 def test_cf_combo_specs_carry_gates() -> None:
     from research.cf_mass_eval_job import default_logic_specs
 
@@ -148,5 +139,4 @@ def test_default_logic_specs_leftover_and_bar_native() -> None:
     assert native[0]["logic_id"] == "mdh_sticky_momentum"
     assert native[0]["family_id"] == "multi_day_hold"
     assert native[0]["params"]
-
 

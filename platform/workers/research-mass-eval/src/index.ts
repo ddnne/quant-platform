@@ -489,43 +489,80 @@ function hasWorkersAi(env: Env): boolean {
 
 const PROPOSE_AI_MODEL = "@cf/meta/llama-3.1-8b-instruct-fp8";
 
+const PROPOSE_ALLOWED_DATASETS = [
+  "equities_bars_daily",
+  "fins_summary",
+  "markets_calendar",
+  "markets_margin_interest",
+  "markets_short_ratio",
+  "jsda_tokyo_repo_rates",
+] as const;
+
+function normalizeProposalRow(
+  row: Record<string, unknown>,
+): Record<string, unknown> | null {
+  if (isWindowTweakOnly(row)) return null;
+  const thesis = String(row.thesis ?? "").trim();
+  const signal = String(row.signal_definition ?? row.signal ?? "").trim();
+  const position = String(row.position_rule ?? row.position ?? "").trim();
+  if (!thesis || !signal || !position) return null;
+  const allow = new Set<string>(PROPOSE_ALLOWED_DATASETS);
+  const datasets = (
+    Array.isArray(row.datasets) ? row.datasets : []
+  )
+    .map((x) => String(x))
+    .filter((x) => allow.has(x));
+  if (datasets.length < 1) return null;
+  const why = Array.isArray(row.why_different_from)
+    ? row.why_different_from.map((x) => String(x)).filter(Boolean)
+    : [];
+  return {
+    thesis,
+    signal_definition: signal,
+    position_rule: position,
+    datasets,
+    why_different_from: why,
+    not_injected: true,
+    status: "llm_not_catalog",
+  };
+}
+
 function parseProposalArray(raw: string, n: number): Array<Record<string, unknown>> {
   const text = String(raw || "");
-  const start = text.indexOf("[");
-  const end = text.lastIndexOf("]");
-  if (start < 0 || end <= start) return [];
-  try {
-    const parsed = JSON.parse(text.slice(start, end + 1));
-    if (!Array.isArray(parsed)) return [];
-    const out: Array<Record<string, unknown>> = [];
-    for (const row of parsed) {
-      if (!isObject(row)) continue;
-      if (isWindowTweakOnly(row)) continue;
-      const thesis = String(row.thesis ?? "").trim();
-      const signal = String(row.signal_definition ?? row.signal ?? "").trim();
-      const position = String(row.position_rule ?? row.position ?? "").trim();
-      if (!thesis || !signal || !position) continue;
-      const datasets = Array.isArray(row.datasets)
-        ? row.datasets.map((x) => String(x)).filter(Boolean)
-        : [];
-      const why = Array.isArray(row.why_different_from)
-        ? row.why_different_from.map((x) => String(x)).filter(Boolean)
-        : [];
-      out.push({
-        thesis,
-        signal_definition: signal,
-        position_rule: position,
-        datasets,
-        why_different_from: why,
-        not_injected: true,
-        status: "llm_not_catalog",
-      });
-      if (out.length >= n) break;
+  const out: Array<Record<string, unknown>> = [];
+  const tryParse = (blob: string): unknown => {
+    try {
+      return JSON.parse(blob);
+    } catch {
+      return null;
     }
-    return out;
-  } catch {
-    return [];
+  };
+  const arrStart = text.indexOf("[");
+  const arrEnd = text.lastIndexOf("]");
+  let parsed: unknown = null;
+  if (arrStart >= 0 && arrEnd > arrStart) {
+    parsed = tryParse(text.slice(arrStart, arrEnd + 1));
   }
+  if (parsed == null) {
+    const oStart = text.indexOf("{");
+    const oEnd = text.lastIndexOf("}");
+    if (oStart >= 0 && oEnd > oStart) {
+      parsed = tryParse(text.slice(oStart, oEnd + 1));
+    }
+  }
+  const rows = Array.isArray(parsed)
+    ? parsed
+    : isObject(parsed)
+      ? [parsed]
+      : [];
+  for (const row of rows) {
+    if (!isObject(row)) continue;
+    const norm = normalizeProposalRow(row);
+    if (!norm) continue;
+    out.push(norm);
+    if (out.length >= n) break;
+  }
+  return out;
 }
 
 async function llmProposals(
@@ -542,18 +579,23 @@ async function llmProposals(
           role: "system",
           content:
             "You propose Japanese-equity overnight/event/CS profit theses. " +
-            "Return ONLY a JSON array. Each object: thesis, signal_definition, " +
-            "position_rule, datasets (string array), why_different_from (string array). " +
+            "Return ONLY a JSON array of exactly the requested length. " +
+            "Each object: thesis, signal_definition, position_rule, " +
+            "datasets (string array), why_different_from (string array). " +
+            "datasets MUST be a subset of: equities_bars_daily, fins_summary, " +
+            "markets_calendar, markets_margin_interest, markets_short_ratio, " +
+            "jsda_tokyo_repo_rates. Do not invent datasets or fields. " +
             "No logic_id. No hold_days/window/mom-only tweaks. No catalog inject. " +
-            "Economic difference only. Skip missing data (no invent).",
+            "Skip missing prints (no invent). Economic difference only.",
         },
         {
           role: "user",
           content:
-            `Propose ${n} theses. Avoid resembling: ${avoid}. ` +
+            `Propose exactly ${n} theses as a JSON array. Avoid resembling: ${avoid}. ` +
             "Directions: liquidity×fundamentals, margin×price, disclosure×funding, EqAR/TA change×event.",
         },
       ],
+      max_tokens: 900,
     });
     const text =
       typeof res === "string"
