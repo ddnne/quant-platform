@@ -7,8 +7,8 @@ from research.unique_logic.constants import ALWAYS_ON_CS_STICKY
 
 DEFAULT_CANDIDATE_BASKET: tuple[str, ...] = (
     "event_eqar_high_liq_high",
-    "event_ta_up_liq_high",
-    "event_margin_down_liq_high",
+    "event_margin_up_overnight_tight",
+    "event_repo3m_down_eqar_rising",
     "cs_margin_up_chase",
 )
 
@@ -34,8 +34,8 @@ MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
         "members": (
             "event_eqar_high_liq_high",
             "event_ta_up_liq_high",
-            "event_afterclose_easing",
-            "event_eqar_rising_afterclose",
+            "event_eqar_rising_margin_up",
+            "event_ta_up_repo3m_down",
         ),
     },
     {
@@ -78,8 +78,8 @@ MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
         "members": (
             "event_eqar_high_liq_high",
             "event_ta_up_liq_high",
-            "event_eqar_rising_afterclose",
-            "event_eqar_high_pead",
+            "event_eqar_rising_margin_up",
+            "event_ta_up_repo3m_down",
         ),
     },
     {
@@ -89,8 +89,8 @@ MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
         "members": (
             "cs_margin_up_chase",
             "event_margin_down_liq_high",
-            "event_pre_mom_uncrowded",
-            "event_margin_up_price_down_fade",
+            "event_margin_up_overnight_tight",
+            "event_crowded_repo3m_down",
         ),
     },
     {
@@ -99,9 +99,9 @@ MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
         "primary": False,
         "members": (
             "event_repo3m_down_pead",
-            "event_overnight_p10_pead",
+            "event_repo3m_down_eqar_rising",
+            "event_ta_up_repo3m_down",
             "cs_repo3m_down_easy",
-            "event_eqar_high_repo3m_down",
         ),
     },
     {
@@ -111,7 +111,7 @@ MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
         "members": (
             "event_eqar_high_liq_high",
             "event_positive_eps_liq_high",
-            "event_cheap_pb_liq_high",
+            "event_eqar_rising_margin_up",
             "event_pre_mom_liq_high",
         ),
     },

@@ -375,7 +375,7 @@ def invoke_cf_propose_thesis(
     write_artifacts: bool = False,
     job_id: str | None = None,
     worker_url: str = DEFAULT_WORKER_URL,
-    timeout: int = 60,
+    timeout: int = 120,
     http_post: Callable[..., Any] | None = None,
     proposal: Mapping[str, Any] | None = None,
     proposals: Sequence[Mapping[str, Any]] | None = None,
@@ -474,12 +474,22 @@ def invoke_cf_propose_thesis(
         except urllib.error.HTTPError as exc:
             detail = ""
             try:
-                detail = exc.read().decode("utf-8")[:2000]
+                detail = exc.read().decode("utf-8")[:4000]
             except Exception:
                 detail = str(exc)
-            raise CfMassEvalError(
-                f"propose-thesis HTTP {exc.code}: {detail}"
-            ) from exc
+            try:
+                failed = json.loads(detail)
+            except json.JSONDecodeError:
+                failed = None
+            if (
+                isinstance(failed, dict)
+                and failed.get("error") == "llm_failed"
+            ):
+                raw = json.dumps(failed)
+            else:
+                raise CfMassEvalError(
+                    f"propose-thesis HTTP {exc.code}: {detail}"
+                ) from exc
         except urllib.error.URLError as exc:
             raise CfMassEvalError(f"propose-thesis network error: {exc}") from exc
         try:

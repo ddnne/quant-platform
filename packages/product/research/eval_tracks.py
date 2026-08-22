@@ -69,11 +69,20 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "id": "cf_propose_llm_not_stub",
         "track": EVAL_TRACK_LIQ_LARGE,
         "why": (
-            "POST /v1/propose-thesis Workers AI; review_proposal_row requires "
-            "2-3 economic gates, no catalog clone, no prompt-direction echo, "
-            "no contradictory/sparse/4-AND; why_avoid includes catalog gate-sets; "
-            "title polarity must match gates; clone-retry on live path; "
+            "recorded: Workers AI @cf/meta/llama-3.3-70b-instruct-fp8-fast "
+            "then 8B CF-internal fallback; llm_failed is ok:false not stub "
+            "ok:true; review_proposal_row still 2-3 economic AND, no clone, "
             "no auto-inject"
+        ),
+        "not_a_pass": True,
+        "go": False,
+    },
+    {
+        "id": "inventory_bias_recorded",
+        "track": EVAL_TRACK_LIQ_LARGE,
+        "why": (
+            "recorded research/eval/job=eval-inventory-bias-20260823a/"
+            "inventory_bias.json; cheap_pb primary cap on new countable"
         ),
         "not_a_pass": True,
         "go": False,
@@ -184,9 +193,8 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "tracks": BOTH_EVAL_TRACK_IDS,
         "entry": "research.cf_daily_path_job.run_both_track_sleeve_fanout",
         "why": (
-            "recorded eval-cf-dp-both-sleeves-20260822c and "
-            "eval-cf-dp-both-sleeves-20260822m and "
-            "eval-cf-dp-both-sleeves-20260822p mid+liq; "
+            "recorded eval-cf-dp-both-sleeves-20260822c/m/p and "
+            "eval-cf-dp-both-sleeves-20260823a mid+liq reblend; "
             "not a pass; do not narrate majority as stable"
         ),
         "not_a_pass": True,

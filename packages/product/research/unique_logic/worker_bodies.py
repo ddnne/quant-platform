@@ -195,6 +195,50 @@ def countable_thesis_ids() -> frozenset[str]:
     return frozenset(out)
 
 
+def countable_inventory_bias() -> dict[str, Any]:
+    """Family / primary-gate / dataset occupancy of countable theses. Not a pass."""
+    from collections import Counter
+
+    ids = countable_thesis_ids()
+    primary: Counter[str] = Counter()
+    all_gates: Counter[str] = Counter()
+    prefix: Counter[str] = Counter()
+    n_pb = n_pb_primary = n_ac = n_ac_primary = 0
+    for spec in load_catalog_specs():
+        lid = str(spec.get("logic_id") or "")
+        if lid not in ids:
+            continue
+        prefix[lid.split("_")[0]] += 1
+        gates = _gates_of(spec)
+        if gates:
+            primary[gates[0]] += 1
+            for g in gates:
+                all_gates[g] += 1
+            if "cheap_pb" in gates:
+                n_pb += 1
+            if gates[0] == "cheap_pb":
+                n_pb_primary += 1
+            if "afterclose" in gates:
+                n_ac += 1
+            if gates[0] == "afterclose":
+                n_ac_primary += 1
+    n = len(ids)
+    return {
+        "n_countable": n,
+        "prefix": dict(prefix),
+        "primary_gate": dict(primary),
+        "all_gates": dict(all_gates),
+        "cheap_pb_in_gates": n_pb,
+        "cheap_pb_primary": n_pb_primary,
+        "cheap_pb_primary_share": round(n_pb_primary / n, 4) if n else 0.0,
+        "afterclose_in_gates": n_ac,
+        "afterclose_primary": n_ac_primary,
+        "afterclose_primary_share": round(n_ac_primary / n, 4) if n else 0.0,
+        "go": False,
+        "not_a_pass": True,
+    }
+
+
 def worker_body_missing(logic_id: str) -> bool:
     """True for unique catalog lids that must not enter the candidate pool."""
     lid = str(logic_id or "").strip()
@@ -208,6 +252,7 @@ def worker_body_missing(logic_id: str) -> bool:
 __all__ = [
     "combo_cs_gates_implemented",
     "combo_worker_gates_ok",
+    "countable_inventory_bias",
     "countable_thesis_ids",
     "is_countable_spec",
     "unique_leftover_logic_ids",

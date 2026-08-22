@@ -3,63 +3,15 @@
 import type { Env } from "./types";
 import { isObject, putJson } from "./http";
 
-const PROPOSE_STUB_TEMPLATES: Array<{
-  thesis: string;
-  signal_definition: string;
-  position_rule: string;
-  datasets: string[];
-  gates: string[];
-  why_different_from: string[];
-}> = [
-  {
-    thesis:
-      "STUB (not catalog): liquidity × fundamentals — high-ADV names with conservative EqAR/TA change after disclosure.",
-    signal_definition:
-      "AND(liq_high, EqAR-or-TA-change) on the event window; skip missing ADV/EqAR/TA (no invent).",
-    position_rule:
-      "Event-hold original surprise sign when both gates are PIT-true; otherwise flat.",
-    datasets: ["equities_bars_daily", "fins_summary", "markets_calendar"],
-    gates: ["liq_high", "eq_ar_high"],
-    why_different_from: ["ungated PEAD", "always-on CS EqAR sticky"],
-  },
-  {
-    thesis:
-      "STUB (not catalog): margin × price disagreement — fade names where margin is crowded while price still rises.",
-    signal_definition:
-      "AND(crowded_margin, price_up) occupancy; skip missing margin PIT prints (no ffill).",
-    position_rule:
-      "CS fade (invert mom) while both gates hold; otherwise flat.",
-    datasets: [
-      "equities_bars_daily",
-      "markets_margin_interest",
-      "markets_calendar",
-    ],
-    gates: ["crowded_margin"],
-    why_different_from: ["ungated CS mom", "margin-only crowd fade"],
-  },
-  {
-    thesis:
-      "STUB (not catalog): disclosure × funding — PEAD only when overnight repo eased into the print cluster.",
-    signal_definition:
-      "AND(afterclose-or-cluster, overnight_easing) on disclosure; skip missing repo (no invent).",
-    position_rule:
-      "Event-hold original surprise sign when funding eased; otherwise flat.",
-    datasets: [
-      "equities_bars_daily",
-      "fins_summary",
-      "jsda_tokyo_repo_rates",
-      "markets_calendar",
-    ],
-    gates: ["afterclose", "overnight_easing"],
-    why_different_from: ["ungated PEAD", "overnight-level CS sticky"],
-  },
-];
-
 function hasWorkersAi(env: Env): boolean {
   return Boolean(env.AI);
 }
 
-const PROPOSE_AI_MODEL = "@cf/meta/llama-3.1-8b-instruct-fp8";
+/** Prefer 70B instruct; 8B is CF-internal fallback only. Never leave CF. */
+const PROPOSE_AI_MODELS = [
+  "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+  "@cf/meta/llama-3.1-8b-instruct-fp8",
+] as const;
 
 const PROPOSE_ALLOWED_DATASETS = [
   "equities_bars_daily",
@@ -213,71 +165,64 @@ async function llmProposals(
 ): Promise<{
   rows: Array<Record<string, unknown>> | null;
   reason: string | null;
+  model: string | null;
 }> {
-  if (!env.AI) return { rows: null, reason: "ai_unbound" };
+  if (!env.AI) return { rows: null, reason: "ai_unbound", model: null };
   const avoid = whyAvoid.filter(Boolean).slice(0, 24).join(", ") || "(none)";
+  const system =
+    "Return ONLY a JSON array. Each object: thesis, signal_definition, " +
+    "position_rule, datasets, gates, why_different_from. " +
+    "gates: 2 or 3 from margin_up, margin_down, crowded_margin, uncrowded_margin, " +
+    "repo_3m_down, overnight_easing, overnight_tightening, steep_curve, " +
+    "invert_curve, eq_ar_rising, eq_ar_falling, ta_up, ta_down, cheap_iv, " +
+    "rich_iv, nky_vol_high_skip, large_surprise, on_impulse, pre_mom, " +
+    "liq_high, eps_up, eps_down, sales_down, np_negative, price_down, " +
+    "easy_funding, tight_funding, cluster. Prefer margin/repo/EqAR-TA/vol. " +
+    "Do not start with cheap_pb. No weekday. No opposite pairs. " +
+    "Thesis is an occupancy sentence matching gate polarity. No A×B×C labels. " +
+    "Do not invent datasets, fields, or gates. No logic_id. No inject.";
+  const user =
+    `Propose exactly ${n} JSON theses. Avoid: ${avoid}.\n` +
+    "GOOD: {\"thesis\":\"PEAD when overnight funding is tight AND sales contracted.\"," +
+    "\"gates\":[\"tight_funding\",\"sales_down\"]}\n" +
+    "BAD: thesis \"Rising Sales\" with gates sales_down, or \"Liquidity × Price × Margin\".";
   let lastReason = "parse_empty";
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      const res = await env.AI.run(PROPOSE_AI_MODEL, {
-        messages: [
-          {
-            role: "system",
-            content:
-              "You propose Japanese-equity overnight/event/CS profit theses. " +
-              "Return ONLY a JSON array of exactly the requested length. " +
-              "Each object: thesis, signal_definition, position_rule, " +
-              "datasets (string array), gates (string array), why_different_from (string array). " +
-              "datasets MUST be a subset of: equities_bars_daily, fins_summary, " +
-              "markets_calendar, markets_margin_interest, markets_short_ratio, " +
-              "jsda_tokyo_repo_rates. gates MUST be 2 or 3 distinct economic gates " +
-              "(AND-cross, not a single-gate PEAD filter, not 4+ sparse AND) from: liq_high, cheap_pb, " +
-              "eq_ar_high, eq_ar_rising, ta_up, ta_down, margin_up, margin_down, " +
-              "crowded_margin, uncrowded_margin, easy_funding, tight_funding, " +
-              "afterclose, cluster, pre_mom, price_down, eps_up, eps_down, " +
-              "np_negative, pb_rising, roe_low, sales_down, steep_curve, " +
-              "overnight_easing, overnight_tightening, on_impulse, large_surprise, " +
-              "repo_3m_down, cheap_iv, rich_iv. No opposite pairs (easy+tight). " +
-              "No weekday-only gates. Thesis title must NOT be the labels " +
-              "'Liquidity × Fundamentals', 'Margin × Price', or 'Disclosure × Funding'. " +
-              "Title polarity MUST match gates: sales_down is not Rising Sales; " +
-              "eq_ar_rising is not falling EqAR; np_negative is not positive profit. " +
-              "Thesis MUST be an occupancy sentence (when/while/after/PEAD), " +
-              "not only 'A × B × C' labels. " +
-              "Do not invent datasets, fields, or gates. " +
-              "No logic_id. No hold_days/window/mom-only tweaks. No catalog inject. " +
-              "Skip missing prints (no invent). Economic difference only.",
-          },
-          {
-            role: "user",
-            content:
-              `Propose exactly ${n} theses as a JSON array. Avoid resembling: ${avoid}. ` +
-              "Use AND-crosses of 2 or 3 economic gates. Do not echo direction labels as titles.",
-          },
-        ],
-        max_tokens: 1600,
-      });
-      const text =
-        typeof res === "string"
-          ? res
-          : isObject(res)
-            ? String(
-                (res as { response?: unknown }).response ??
-                  (res as { result?: unknown }).result ??
-                  JSON.stringify(res),
-              )
-            : "";
-      const rows = parseProposalArray(text, n);
-      if (rows.length) return { rows, reason: null };
-      lastReason = `parse_empty:raw_len=${text.length}:attempt=${attempt}`;
-    } catch (e) {
-      lastReason = `ai_error:${e instanceof Error ? e.message : String(e)}`.slice(
-        0,
-        180,
-      );
+  let lastModel: string | null = null;
+  const notes: string[] = [];
+  for (const model of PROPOSE_AI_MODELS) {
+    lastModel = model;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const res = await env.AI.run(model, {
+          messages: [
+            { role: "system", content: system },
+            { role: "user", content: user },
+          ],
+          max_tokens: 1400,
+        });
+        const text =
+          typeof res === "string"
+            ? res
+            : isObject(res)
+              ? String(
+                  (res as { response?: unknown }).response ??
+                    (res as { result?: unknown }).result ??
+                    JSON.stringify(res),
+                )
+              : "";
+        const rows = parseProposalArray(text, n);
+        if (rows.length) return { rows, reason: null, model };
+        lastReason = `parse_empty:${model}:raw_len=${text.length}:attempt=${attempt}`;
+      } catch (e) {
+        lastReason = `ai_error:${model}:${e instanceof Error ? e.message : String(e)}`.slice(
+          0,
+          180,
+        );
+      }
     }
+    notes.push(lastReason);
   }
-  return { rows: null, reason: lastReason };
+  return { rows: null, reason: notes.join("|") || lastReason, model: lastModel };
 }
 
 function isWindowTweakOnly(o: Record<string, unknown>): boolean {
@@ -303,28 +248,6 @@ function isWindowTweakOnly(o: Record<string, unknown>): boolean {
     if (!Array.isArray(ds) || ds.length === 0) return true;
   }
   return false;
-}
-
-function stubProposals(
-  n: number,
-  whyAvoid: string[],
-): Array<Record<string, unknown>> {
-  const avoid = new Set(whyAvoid.map((x) => String(x)));
-  const out: Array<Record<string, unknown>> = [];
-  for (const t of PROPOSE_STUB_TEMPLATES) {
-    if (out.length >= n) break;
-    out.push({
-      thesis: t.thesis,
-      signal_definition: t.signal_definition,
-      position_rule: t.position_rule,
-      datasets: t.datasets,
-      gates: t.gates,
-      why_different_from: t.why_different_from.filter((x) => !avoid.has(x)),
-      not_injected: true,
-      status: "stub_not_catalog",
-    });
-  }
-  return out;
 }
 
 export async function runProposeThesis(
@@ -363,22 +286,36 @@ export async function runProposeThesis(
   const writeArtifacts = body.write_artifacts === true;
   const llm = await llmProposals(env, n, whyAvoid);
   const usedLlm = Array.isArray(llm.rows) && llm.rows.length > 0;
-  const proposals = usedLlm
-    ? (llm.rows as Array<Record<string, unknown>>)
-    : stubProposals(n, whyAvoid);
-  const payload: Record<string, unknown> = {
-    ok: true,
-    proposals,
-    auto_inject: false,
-    go: false,
-    not_a_pass: true,
-    catalog_written: false,
-    ids_injected: false,
-    workers_ai_bound: hasWorkersAi(env),
-    workers_ai_used: usedLlm,
-    proposal_source: usedLlm ? "workers_ai" : "stub",
-    llm_fallback_reason: usedLlm ? null : llm.reason,
-  };
+  const payload: Record<string, unknown> = usedLlm
+    ? {
+        ok: true,
+        proposals: llm.rows as Array<Record<string, unknown>>,
+        auto_inject: false,
+        go: false,
+        not_a_pass: true,
+        catalog_written: false,
+        ids_injected: false,
+        workers_ai_bound: hasWorkersAi(env),
+        workers_ai_used: true,
+        proposal_source: "workers_ai",
+        propose_ai_model: llm.model,
+        llm_fallback_reason: null,
+      }
+    : {
+        ok: false,
+        error: "llm_failed",
+        proposals: [],
+        auto_inject: false,
+        go: false,
+        not_a_pass: true,
+        catalog_written: false,
+        ids_injected: false,
+        workers_ai_bound: hasWorkersAi(env),
+        workers_ai_used: false,
+        proposal_source: "llm_failed",
+        propose_ai_model: llm.model,
+        llm_fallback_reason: llm.reason,
+      };
   if (writeArtifacts) {
     const jobId = String(body.job_id ?? "").trim();
     if (!jobId || /[\\/]|\.\./.test(jobId)) {

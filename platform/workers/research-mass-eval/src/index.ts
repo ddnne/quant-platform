@@ -129,7 +129,7 @@ async function runMassEval(
   req: MassEvalRequest,
 ): Promise<MassEvalJobResult> {
   const t0 = Date.now();
-  const version = env.MASS_EVAL_VERSION || "research-mass-eval/v29-catalog-ids";
+  const version = env.MASS_EVAL_VERSION || "research-mass-eval/v30-propose-70b";
   const wave = env.MASS_EVAL_WAVE || "research-mass-eval";
   const mode = req.mode || "synthetic";
   const oneWay = req.one_way_cost ?? 0.001;
@@ -301,7 +301,7 @@ async function runDailyPath(
   req: MassEvalRequest,
 ): Promise<Record<string, unknown>> {
   const t0 = Date.now();
-  const version = env.MASS_EVAL_VERSION || "research-mass-eval/v29-catalog-ids";
+  const version = env.MASS_EVAL_VERSION || "research-mass-eval/v30-propose-70b";
   const mode = req.mode || "r2_panels";
   const oneWay = req.one_way_cost ?? 0.001;
   const maxCodes = Math.max(2, Math.min(40, req.max_codes ?? 8));
@@ -385,7 +385,7 @@ export default {
       return json({
         ok: true,
         service: "quant-platform-research-mass-eval",
-        version: env.MASS_EVAL_VERSION || "research-mass-eval/v29-catalog-ids",
+        version: env.MASS_EVAL_VERSION || "research-mass-eval/v30-propose-70b",
         wave: env.MASS_EVAL_WAVE || "research-mass-eval",
         has_structured_bucket: Boolean(env.STRUCTURED_BUCKET),
         has_d1: Boolean(env.DB),
@@ -500,7 +500,13 @@ export default {
       const obj = isObject(body) ? body : {};
       try {
         const result = await runProposeThesis(env, obj);
-        const status = result.ok === false ? 400 : 200;
+        // llm_failed is fail-closed success-of-contract (HTTP 200, ok:false).
+        const status =
+          result.error === "window_tweak_only_forbidden" ||
+          result.error === "job_id required for write_artifacts" ||
+          result.error === "STRUCTURED_BUCKET not bound"
+            ? 400
+            : 200;
         return json(result, status);
       } catch (e) {
         const msg = e instanceof Error ? `${e.name}: ${e.message}` : String(e);

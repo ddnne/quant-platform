@@ -107,6 +107,30 @@ def test_stub_output_not_injected() -> None:
     assert out["n_adoptable"] == 0
     assert "reviews" in out
 
+    failed: dict[str, object] = {}
+
+    def _fail(*, url: str, body: bytes, headers: dict[str, str]) -> dict:
+        failed["url"] = url
+        return {
+            "ok": False,
+            "error": "llm_failed",
+            "proposals": [],
+            "proposal_source": "llm_failed",
+            "llm_fallback_reason": "parse_empty",
+            "workers_ai_used": False,
+            "auto_inject": False,
+            "go": False,
+            "not_a_pass": True,
+        }
+
+    fail_out = invoke_cf_propose_thesis(n=2, http_post=_fail)
+    assert fail_out["ok"] is False
+    assert fail_out.get("proposal_source") == "llm_failed"
+    assert fail_out["n_adoptable"] == 0
+    assert fail_out["auto_inject"] is False
+    assert fail_out["go"] is False
+    assert "llm_failed" in (_WORKER_PROPOSE.read_text(encoding="utf-8"))
+
 
 def test_worker_index_contains_propose_thesis_route() -> None:
     src = (
@@ -115,8 +139,9 @@ def test_worker_index_contains_propose_thesis_route() -> None:
         + _WORKER_PROPOSE.read_text(encoding="utf-8")
     )
     assert "/v1/propose-thesis" in src
-    assert "stub_not_catalog" in src
-    assert "not_injected: true" in src
+    assert "llm_failed" in src
+    assert "llama-3.3-70b-instruct-fp8-fast" in src
+    assert "proposal_source: \"llm_failed\"" in src or "proposal_source: 'llm_failed'" in src or 'proposal_source: "llm_failed"' in src
     assert "auto_inject: false" in src
     assert "go: false" in src
     assert "not_a_pass: true" in src
@@ -131,17 +156,17 @@ def test_worker_index_contains_propose_thesis_route() -> None:
     assert "llm_fallback_reason" in src
     assert "parse_empty" in src
     assert "ai_unbound" in src
-    assert "stubProposals" in src
+    assert "stubProposals" not in src
     assert "equities_bars_daily" in src
     assert "fins_summary" in src
     assert "PROPOSE_ALLOWED_GATES" in src
     assert "Do not invent datasets" in src or "do not invent datasets" in src.lower()
-    assert "Title polarity MUST match gates" in src or "title polarity" in src.lower()
+    assert "gate polarity" in src.lower()
     assert "occupancy sentence" in src.lower()
     assert "slice(0, 24)" in src or "slice(0,24)" in src
-    assert "weekday-only" in src or "No weekday" in src
-    assert "2+" in src or "AND-cross" in src or "2 or 3" in src
-    assert "Liquidity × Fundamentals" in src or "direction labels" in src
+    assert "No weekday" in src
+    assert "2 or 3" in src
+    assert "Liquidity × Price × Margin" in src
     assert "auto_inject: false" in src
     assert "markets_margin_interest" in src
     assert '"margin_interest"' not in src

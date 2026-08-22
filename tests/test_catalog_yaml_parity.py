@@ -514,6 +514,12 @@ def test_countable_thesis_ids_require_worker_body() -> None:
     assert known >= 1
     assert len(countable) >= 30
     assert "event_eqar_high_pead" in countable
+    from research.unique_logic.worker_bodies import countable_inventory_bias
+
+    bias = countable_inventory_bias()
+    assert bias["n_countable"] == len(countable)
+    assert bias["go"] is False
+    assert 0 <= float(bias["cheap_pb_primary_share"]) < 0.2
 
     assert "worker_body_missing" in CANDIDATE_POLICY["exclude"]
     cells = [
