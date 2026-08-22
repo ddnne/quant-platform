@@ -241,6 +241,18 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "go": False,
     },
     {
+        "id": "near_empty_parked_not_countable",
+        "track": EVAL_TRACK_LIQ_LARGE,
+        "why": (
+            "NEAR_EMPTY_PARK_IDS plus32vf 4; is_countable_spec and "
+            "validate_basket_members exclude them; "
+            "assert_new_batch_occupancy_not_near_empty refuses empty batches; "
+            "plus28q audit 20260823l near_empty 0"
+        ),
+        "not_a_pass": True,
+        "go": False,
+    },
+    {
         "id": "factory_template_default_off",
         "track": EVAL_TRACK_MID_N,
         "why": (

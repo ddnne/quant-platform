@@ -70,6 +70,7 @@ def summarize_daily_path_cells(
         CF_NEW_EVENT_THESIS_IDS,
         CS_LOGIC_IDS,
         NEAR_EMPTY_OCCUPANCY,
+        NEAR_EMPTY_PARK_IDS,
         RESEARCH_UNIQUE_LOGIC_IDS,
         TERM_STRUCTURE_REQUIRED,
         SPARSE_ON_15NAME_SHARD,
@@ -157,6 +158,9 @@ def summarize_daily_path_cells(
             flags.append("worker_isolate_limit")
         if lid in unique22_occupancy_park():
             flags.append("unique22_occupancy_mismatch")
+        elif lid in NEAR_EMPTY_PARK_IDS:
+            flags.append("near_empty")
+            flags.append("near_empty_parked")
         elif lid in RESEARCH_UNIQUE_LOGIC_IDS and lid not in _countable:
             flags.append("worker_body_missing")
         if m_net is not None and abs(m_net) < 1e-4:

@@ -458,6 +458,7 @@ def test_countable_thesis_ids_require_worker_body() -> None:
         CANDIDATE_POLICY,
         CF_NEW_THESIS_IDS,
         COMBO_EVENT_GATES,
+        NEAR_EMPTY_PARK_IDS,
         RESEARCH_UNIQUE_LOGIC_IDS,
         countable_thesis_ids,
         worker_implemented_logic_ids,
@@ -502,6 +503,9 @@ def test_countable_thesis_ids_require_worker_body() -> None:
         if is_near_duplicate(lid):
             assert lid not in countable
             continue
+        if lid in NEAR_EMPTY_PARK_IDS:
+            assert lid not in countable
+            continue
         if combo_worker_gates_ok(spec):
             known += 1
             assert lid in countable
@@ -544,6 +548,7 @@ def test_countable_thesis_ids_require_worker_body() -> None:
         pass
 
     assert "worker_body_missing" in CANDIDATE_POLICY["exclude"]
+    assert "near_empty_parked" in CANDIDATE_POLICY["exclude"]
     cells = [
         _eval_complete_cell(
             "xs_high_vol_fade", occupancy=0.20, eval_path="gated_cs"

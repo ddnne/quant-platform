@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any, Sequence
 
-from research.unique_logic.constants import ALWAYS_ON_CS_STICKY
+from research.unique_logic.constants import ALWAYS_ON_CS_STICKY, NEAR_EMPTY_PARK_IDS
 
 DEFAULT_CANDIDATE_BASKET: tuple[str, ...] = (
     "event_eqar_high_liq_high",
@@ -149,6 +149,10 @@ def validate_basket_members(logic_ids: Sequence[str]) -> list[str]:
         reasons.append("need_at_most_5_members")
     if len(set(ids)) != len(ids):
         reasons.append("duplicate_members")
+    if any(m in ALWAYS_ON_CS_STICKY for m in ids):
+        reasons.append("always_on_cs_member")
+    if any(m in NEAR_EMPTY_PARK_IDS for m in ids):
+        reasons.append("near_empty_member")
     return reasons
 
 
@@ -167,8 +171,6 @@ def mechanical_basket_defs() -> list[dict[str, Any]]:
             continue
         members = tuple(str(x) for x in (raw.get("members") or ()))
         reasons = validate_basket_members(members)
-        if any(m in ALWAYS_ON_CS_STICKY for m in members):
-            reasons.append("always_on_cs_member")
         prim = bool(raw.get("primary"))
         pc = bool(raw.get("primary_candidate")) or prim
         out.append(

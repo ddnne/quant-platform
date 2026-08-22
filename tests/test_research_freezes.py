@@ -184,6 +184,49 @@ def test_unique22_lift_park_partition() -> None:
     assert len(parked) == 17
 
 
+def test_near_empty_park_is_not_countable_or_basket_material() -> None:
+    from research.combo_basket_catalog import validate_basket_members
+    from research.unique_logic.constants import (
+        CANDIDATE_POLICY,
+        NEAR_EMPTY_OCCUPANCY,
+        NEAR_EMPTY_PARK_IDS,
+    )
+    from research.unique_logic.worker_bodies import (
+        NearEmptyBatchError,
+        assert_new_batch_occupancy_not_near_empty,
+        countable_thesis_ids,
+        is_countable_spec,
+        near_empty_occupancy_park,
+    )
+    from research.unique_logic.catalog import catalog_spec
+
+    parked = near_empty_occupancy_park()
+    assert parked == NEAR_EMPTY_PARK_IDS
+    assert len(parked) == 4
+    countable = countable_thesis_ids()
+    for lid in parked:
+        spec = catalog_spec(lid)
+        assert spec is not None
+        assert is_countable_spec(spec) is False
+        assert lid not in countable
+    reasons = validate_basket_members(
+        ["event_eqar_high_liq_high", next(iter(parked))]
+    )
+    assert "near_empty_member" in reasons
+    assert "near_empty_parked" in CANDIDATE_POLICY["exclude"]
+    occ = {lid: 0.20 for lid in ("a", "b", "c")}
+    ok = assert_new_batch_occupancy_not_near_empty(occ)
+    assert ok["ok"] is True
+    assert ok["n_near_empty"] == 0
+    try:
+        assert_new_batch_occupancy_not_near_empty(
+            {"ok_one": 0.20, "empty_one": NEAR_EMPTY_OCCUPANCY}
+        )
+        raise AssertionError("near_empty batch must reject")
+    except NearEmptyBatchError:
+        pass
+
+
 def test_propose_calendar_gates_excluded_from_llm() -> None:
     from research.unique_logic.constants import (
         COMBO_EVENT_GATES,
