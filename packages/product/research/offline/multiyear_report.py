@@ -49,7 +49,6 @@ from research.sign_selection import (
 )
 from research.stats_metrics import period_stats_report, stats_bar_check
 
-# key, paper_mean_negative, hold_days.
 _SIGN_FLIP_TARGETS: tuple[tuple[str, bool, int], ...] = (
     ("cross_section_hold_10", True, 10),
     ("cross_section_hold_10_mom3", False, 10),
@@ -406,9 +405,7 @@ def _apply_sign_selection_to_block(
         cand_b["research_candidate_allowed"] = False
         cand_b["candidate_yes_no"] = "no"
         cand_b["verdict"] = "not_candidate_sign_both_sides_fail"
-        cand_b["note_sign"] = (
-            "both sides fail non-zero / non-positive after cost → demote"
-        )
+        cand_b["note_sign"] = "both sides fail after cost → demote"
     elif isinstance(cand_b, dict):
         cand_b["chosen_sign"] = chosen
         cand_b["chosen_sign_label"] = sel.get("chosen_label")

@@ -32,9 +32,6 @@ FAMILY_RATE_FACTOR: str = "rate_factor"
 FAMILY_MULTI_FACTOR: str = "multi_factor"
 FAMILY_INDEX_VOL_REGIME: str = "index_vol_regime"
 FAMILY_OPTIONS_VOL_REGIME: str = "options_vol_regime"
-# W105: research-family recognition only (not promotion / not generation).
-# Distinct unique family_ids so factory period-net is not stuck at
-# unknown_family. Registration = recognition, not a pass.
 FAMILY_EVENT_FUNDING_COMBO: str = "event_funding_combo"
 FAMILY_EVENT_MACRO_CURVE_COMBO: str = "event_macro_curve_combo"
 FAMILY_DISCLOSURE_CLUSTER_GATE: str = "disclosure_cluster_gate"
@@ -101,7 +98,6 @@ NEAR_LOGIC_GROUPS: tuple[dict[str, Any], ...] = (
             "flow_margin_short_soft",
             "mf_flow_price",
         ),
-        "note": "Keep hard/soft/pressure + mf_flow_price parallel.",
     },
     {
         "group_id": "fund_value_mom",
@@ -111,7 +107,6 @@ NEAR_LOGIC_GROUPS: tuple[dict[str, Any], ...] = (
             "fund_value_mom_agree_slow",
             "mf_value_mom_rate",
         ),
-        "note": "Slow variant + unique rate-gated book stay parallel.",
     },
     {
         "group_id": "rate_macro_family",
@@ -122,7 +117,6 @@ NEAR_LOGIC_GROUPS: tuple[dict[str, Any], ...] = (
             "rate_abs_level_xs",
             "rate_curve_shape_xs",
         ),
-        "note": "macro_* mom-gate vs rate_* CS factor; do not merge.",
     },
     {
         "group_id": "vol_family_name_vs_index",
@@ -134,7 +128,6 @@ NEAR_LOGIC_GROUPS: tuple[dict[str, Any], ...] = (
             "nky_vol_term_levels",
             "nky_vol_term_ratio",
         ),
-        "note": "Per-name vol gate vs index-level nky_vol_*; do not merge.",
     },
     {
         "group_id": "index_vol_regime_family",
@@ -144,7 +137,6 @@ NEAR_LOGIC_GROUPS: tuple[dict[str, Any], ...] = (
             "nky_vol_term_levels",
             "nky_vol_term_ratio",
         ),
-        "note": "Abs / dual-levels / ratio stay parallel.",
     },
     {
         "group_id": "options_vol_regime_family",
@@ -162,7 +154,6 @@ NEAR_LOGIC_GROUPS: tuple[dict[str, Any], ...] = (
             "opt225_iv_base_spread_abs",
             "opt225_iv_base_spread_change",
         ),
-        "note": "BaseVol canonical; ATM/spread compare-only; keep vs nky_vol_*.",
     },
     {
         "group_id": "nky_vol_proxy_vs_options_sot",
@@ -175,7 +166,6 @@ NEAR_LOGIC_GROUPS: tuple[dict[str, Any], ...] = (
             "opt225_skew_abs_level",
             "opt225_atm_iv_abs_level",
         ),
-        "note": "nky_vol_* proxy vs opt225 BaseVol SoT; keep parallel.",
     },
     {
         "group_id": "unique_logic_research_family",
@@ -204,7 +194,6 @@ NEAR_LOGIC_GROUPS: tuple[dict[str, Any], ...] = (
             "event_funding_adaptive_side",
             "surprise_xs_rank_adaptive",
         ),
-        "note": "Recognition only; generation_enabled=False; not a pass.",
     },
     {
         "group_id": "unique_logic_ls_append",
@@ -218,7 +207,6 @@ NEAR_LOGIC_GROUPS: tuple[dict[str, Any], ...] = (
             "event_funding_stress_ls",
             "surprise_xs_rank_flip",
         ),
-        "note": "Recognition-only L/S append; not a pass.",
     },
     {
         "group_id": "unique_logic_overlay_append",
@@ -232,11 +220,9 @@ NEAR_LOGIC_GROUPS: tuple[dict[str, Any], ...] = (
             "event_funding_adaptive_side",
             "surprise_xs_rank_adaptive",
         ),
-        "note": "Recognition-only overlay append; not a pass.",
     },
 )
 
-# Numeric-only knobs that do **not** create a new logic by themselves.
 NUMERIC_ONLY_KNOBS: frozenset[str] = frozenset(
     {
         "hold_days",
@@ -260,7 +246,6 @@ FACTORY_ONLY_LOGIC_IDS: tuple[str, ...] = (
     "xs_rank_mom_slow",
 )
 
-# Catalog order matches the historical factory template list.
 _LOGIC_TEMPLATE_ORDER: tuple[str, ...] = (
     "mdh_sticky_momentum",
     "mdh_mean_reversion",
@@ -303,28 +288,19 @@ _LOGIC_TEMPLATE_ORDER: tuple[str, ...] = (
 
 @dataclass(frozen=True)
 class LogicTemplate:
-    """One distinct economic logic (counts toward unique_logic).
-
-    Counts as different from another template only if it differs in
-    info source, entry logic, position construction, or economic thesis.
-    """
+    """One distinct economic logic (counts toward unique_logic)."""
 
     logic_id: str
     thesis: str
     signal_definition: str
     position_rule: str
     datasets_used: tuple[str, ...]
-    # Eval dispatch family (class_hyp / factory-local)
     family_id: str
-    # Canonical params for the logic (not a grid)
     base_params: Mapping[str, Any]
-    # Coarse structural axes that are part of the logic fingerprint
-    # (modes / entry structures — NOT hold/mom/frac alone)
     structural_keys: tuple[str, ...] = ()
     display_name: str = ""
     generation_enabled: bool = True
     notes: str = ""
-    # Occupancy filter is the live candidate rule. Catalog hint only.
     main_pool: bool = True
     data_requirement: str = ""
 
@@ -409,114 +385,54 @@ def _ov(
     }
 
 
-# Preserve factory display_name / notes / main_pool / generation_enabled.
 _BAR_NATIVE_TEMPLATE_OVERLAY: dict[str, dict[str, Any]] = {
     "mdh_sticky_momentum": _ov("Sticky multi-day momentum"),
-    "mdh_mean_reversion": _ov(
-        "Sticky multi-day mean reversion",
-        notes="Distinct entry logic vs mdh_sticky_momentum; not an eval sign flip.",
-    ),
-    "xs_rank_ls_sticky": _ov(
-        "Cross-section rank L-S sticky",
-        notes="Canonical frozen cross_section_hold_10 (mom5) shape; not a retune.",
-    ),
-    "xs_rank_ls_daily": _ov(
-        "Cross-section rank L-S daily rebalance",
-        notes="Daily vs sticky position construction.",
-    ),
+    "mdh_mean_reversion": _ov("Sticky multi-day mean reversion"),
+    "xs_rank_ls_sticky": _ov("Cross-section rank L-S sticky"),
+    "xs_rank_ls_daily": _ov("Cross-section rank L-S daily rebalance"),
     "macro_repo_rate_change": _ov("Macro-conditioned mom (repo rate change)"),
     "macro_repo_rate_level": _ov("Macro-conditioned mom (repo rate level)"),
     "fund_value_only": _ov("Fundamentals value-only"),
-    "fund_value_mom_agree": _ov(
-        "Fundamentals value × momentum agree",
-        notes="Canonical shape matches frozen fundamentals_hold_10; not a retune.",
-    ),
+    "fund_value_mom_agree": _ov("Fundamentals value × momentum agree"),
     "flow_margin_pressure": _ov("Margin flow multi-day pressure"),
     "flow_margin_short_hard": _ov("Margin flow + hard short confirm"),
     "flow_margin_short_soft": _ov("Margin flow + soft short confirm"),
-    "vol_risk_adjusted_mom": _ov(
-        "Vol-risk gated momentum",
-        notes="Research-only family; not in hypothesis_classes registry.",
-    ),
-    "vol_breakout_expand": _ov(
-        "Vol-expansion breakout mom",
-        notes="Different gate vs mom_over_vol.",
-    ),
-    "fund_value_mom_agree_slow": _ov(
-        "Value×mom agree (slow price confirm)",
-        notes="Distinct mom_structure; not a mom grid. Keep parallel.",
-    ),
+    "vol_risk_adjusted_mom": _ov("Vol-risk gated momentum"),
+    "vol_breakout_expand": _ov("Vol-expansion breakout mom"),
+    "fund_value_mom_agree_slow": _ov("Value×mom agree (slow price confirm)"),
     "mf_value_mom_rate": _ov(
         "Value × mom × rate multi-factor",
-        notes=(
-            "Unique rate-gated value×mom (not an alias of fund_value_mom_agree). "
-            "Occupancy is the live candidate filter. No densify."
-        ),
+        notes="Unique rate-gated value×mom (not an alias of fund_value_mom_agree).",
     ),
-    "mf_flow_price": _ov(
-        "Flow × price multi-factor",
-        notes="Keep parallel in flow near-group; do not merge.",
-    ),
-    "nky_vol_abs_level": _ov(
-        "Nikkei abs vol-level × CS risk-on/off",
-        notes="Index-level vol; distinct from per-name vol_risk_adjusted_mom.",
-    ),
-    "nky_vol_term_levels": _ov(
-        "Nikkei short+long vol levels × CS",
-        notes="Dual absolute levels; keep parallel to abs and ratio.",
-    ),
-    "nky_vol_term_ratio": _ov(
-        "Nikkei short/long vol ratio × CS",
-        notes="Index-level term ratio; proxy/compare vs options_225 SoT.",
-    ),
-    "opt225_basevol_abs_level": _ov(
-        "options_225 BaseVol abs × CS risk-on/off",
-        notes="Canonical Nikkei vol SoT; keep parallel to nky_vol_* proxy.",
-    ),
-    "opt225_basevol_term_levels": _ov(
-        "options_225 BaseVol short+long levels × CS",
-        notes="BaseVol-only dual levels. Do not drop in favor of ATM-only.",
-    ),
+    "mf_flow_price": _ov("Flow × price multi-factor"),
+    "nky_vol_abs_level": _ov("Nikkei abs vol-level × CS risk-on/off"),
+    "nky_vol_term_levels": _ov("Nikkei short+long vol levels × CS"),
+    "nky_vol_term_ratio": _ov("Nikkei short/long vol ratio × CS"),
+    "opt225_basevol_abs_level": _ov("options_225 BaseVol abs × CS risk-on/off"),
+    "opt225_basevol_term_levels": _ov("options_225 BaseVol short+long levels × CS"),
     "opt225_basevol_term_ratio": _ov(
         "options_225 BaseVol short/long ratio × CS",
-        notes="Requires distinct short/long BaseVol maps.",
         main_pool=False,
         data_requirement="distinct short/long BaseVol maps",
     ),
-    "opt225_atm_iv_abs_level": _ov(
-        "options_225 ATM IV abs × CS (compare-only)",
-        notes="COMPARE-ONLY. Prefer BaseVol as canonical level.",
-    ),
+    "opt225_atm_iv_abs_level": _ov("options_225 ATM IV abs × CS (compare-only)"),
     "opt225_atm_iv_term_levels": _ov(
-        "options_225 ATM IV short+long levels × CS (compare-only)",
-        notes="COMPARE-ONLY ATM dual levels. Prefer BaseVol dual levels.",
+        "options_225 ATM IV short+long levels × CS (compare-only)"
     ),
     "opt225_atm_iv_term_ratio": _ov(
         "options_225 ATM IV short/long ratio × CS (compare-only)",
-        notes="COMPARE-ONLY. Requires distinct short/long ATM IV maps.",
         main_pool=False,
         data_requirement="distinct short/long ATM IV maps",
     ),
     "opt225_iv_base_spread_abs": _ov(
-        "options_225 (ATM IV − BaseVol) abs × CS (compare-only)",
-        notes="COMPARE-ONLY. Spread = atm_iv - base_vol.",
+        "options_225 (ATM IV − BaseVol) abs × CS (compare-only)"
     ),
     "opt225_iv_base_spread_change": _ov(
-        "options_225 (ATM−BaseVol) change × CS (compare-only)",
-        notes="COMPARE-ONLY spread-change leg; parallel to abs spread.",
+        "options_225 (ATM−BaseVol) change × CS (compare-only)"
     ),
-    "opt225_skew_abs_level": _ov(
-        "options_225 95% put skew abs × CS",
-        notes="put_iv(~0.95*S)−atm_mid. Never invent strikes.",
-    ),
-    "opt225_cm_term_abs_level": _ov(
-        "options_225 near−next CM ATM term abs × CS",
-        notes="Near−next CM term; distinct from rolling short/long term.",
-    ),
-    "opt225_basevol_delta_abs": _ov(
-        "options_225 BaseVol Δ abs × CS",
-        notes="Canonical-level arithmetic delta.",
-    ),
+    "opt225_skew_abs_level": _ov("options_225 95% put skew abs × CS"),
+    "opt225_cm_term_abs_level": _ov("options_225 near−next CM ATM term abs × CS"),
+    "opt225_basevol_delta_abs": _ov("options_225 BaseVol Δ abs × CS"),
 }
 
 
@@ -538,7 +454,6 @@ def _factory_only_templates() -> list[LogicTemplate]:
                 "entry_mode": "same_day_close_if_pre_close",
             },
             structural_keys=("entry_mode",),
-            notes="Look-ahead entry modes gen-time rejected.",
         ),
         LogicTemplate(
             logic_id="xs_rank_mom_slow",
@@ -556,7 +471,6 @@ def _factory_only_templates() -> list[LogicTemplate]:
                 "book_mode": "balanced_ls_slow_mom",
             },
             structural_keys=("book_mode",),
-            notes="Slow-rank construction (mom=20 pin); not a free mom grid.",
         ),
         LogicTemplate(
             logic_id="mdh_short_horizon_mom",
@@ -574,7 +488,6 @@ def _factory_only_templates() -> list[LogicTemplate]:
                 "horizon_structure": "short_5d",
             },
             structural_keys=("rebalance_mode", "signal_polarity", "horizon_structure"),
-            notes="5d horizon structure; not a hold_days clone of mdh_sticky_momentum.",
         ),
         LogicTemplate(
             logic_id="event_post_long_horizon",
@@ -594,15 +507,8 @@ def _factory_only_templates() -> list[LogicTemplate]:
         LogicTemplate(
             logic_id="rate_abs_level_xs",
             display_name="Absolute rate-level × CS risk-on/off",
-            thesis=(
-                "Absolute Tokyo repo funding level is a risk-appetite factor: "
-                "low rates → risk-on keep CS relative strength book; "
-                "high rates → risk-off reverse CS book; mid → flat"
-            ),
-            signal_definition=(
-                "CS rank(mom) L-S signs risk-adjusted by absolute repo rate_level "
-                "(not unidirectional mom gate)"
-            ),
+            thesis="Absolute Tokyo repo level as CS risk-on/off factor",
+            signal_definition="CS rank(mom) L-S risk-adjusted by abs repo rate_level",
             position_rule="sticky fixed_horizon balanced L/S after rate-level book transform",
             datasets_used=bars_idx + ("jsda_tokyo_repo_rates",),
             family_id=FAMILY_RATE_FACTOR,
@@ -616,22 +522,12 @@ def _factory_only_templates() -> list[LogicTemplate]:
                 "low_threshold": 0.0,
             },
             structural_keys=("mode",),
-            notes=(
-                "Distinct from macro_repo_rate_level (mom gate). Combines rate "
-                "factor with CS position construction."
-            ),
         ),
         LogicTemplate(
             logic_id="rate_curve_shape_xs",
             display_name="Repo curve-shape × CS risk-on/off",
-            thesis=(
-                "Funding term-structure steepness proxies risk appetite: "
-                "steep (3M−ON > 0) → keep CS book; inverted → reverse; flat → no trade"
-            ),
-            signal_definition=(
-                "curve_spread = rate(3M/T+1) − rate(overnight/T+0) from "
-                "jsda_tokyo_repo_rates; CS rank mom L-S risk-adjusted by curve regime"
-            ),
+            thesis="Repo curve steepness as CS risk-on/off factor",
+            signal_definition="CS rank mom L-S risk-adjusted by 3M−ON repo curve",
             position_rule="sticky fixed_horizon balanced L/S after curve-shape book transform",
             datasets_used=bars_idx + ("jsda_tokyo_repo_rates",),
             family_id=FAMILY_RATE_FACTOR,
@@ -647,10 +543,6 @@ def _factory_only_templates() -> list[LogicTemplate]:
                 "curve_long_tenor": "3M/T+1",
             },
             structural_keys=("mode", "curve_short_tenor", "curve_long_tenor"),
-            notes=(
-                "Curve definition uses only observed JSDA repo tenors "
-                "(no JGB/OIS invent). Funding term-structure proxy, not sovereign curve."
-            ),
         ),
     ]
 
@@ -741,7 +633,6 @@ def _derive_family_definitions() -> dict[str, FamilyDefinition]:
             }
         )
         gen_on = any(bool(t.generation_enabled) for t in tpls)
-        notes = "Family is eval dispatch; logic templates define diversity."
         out[fid] = FamilyDefinition(
             family_id=fid,
             display_name=fid,
@@ -752,9 +643,7 @@ def _derive_family_definitions() -> dict[str, FamilyDefinition]:
             datasets_required=tuple(ds),
             param_axes=tuple(axes) if axes else ("logic_id",),
             generation_enabled=gen_on,
-            notes=notes,
         )
-    # Unique families stay as recognition-only eval dispatch (no factory templates).
     research_notes = "Recognition only; generation_enabled=False; not a pass."
     for fid in RESEARCH_UNIQUE_FAMILY_IDS:
         if fid in out:
@@ -774,7 +663,6 @@ def _derive_family_definitions() -> dict[str, FamilyDefinition]:
 FAMILY_DEFINITIONS: dict[str, FamilyDefinition] = _derive_family_definitions()
 FACTORY_FAMILY_IDS: tuple[str, ...] = tuple(FAMILY_DEFINITIONS.keys())
 
-# Soft ratios for optional numeric fill only (not primary diversity)
 DEFAULT_FAMILY_RATIOS: dict[str, float] = {
     fid: 1.0 / max(1, len(FACTORY_FAMILY_IDS)) for fid in FACTORY_FAMILY_IDS
 }

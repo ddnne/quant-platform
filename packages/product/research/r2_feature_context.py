@@ -107,10 +107,7 @@ COMPLETE_21_R2_INVENTORY: dict[str, dict[str, Any]] = {
         "complete": True,
         "jsonl_prefix": f"structured/jsonl/{ds}/",
         "archive_prefix": f"archive/jquants_records/{ds}/",
-        "family": next(
-            (fam for pre, fam in _FAMILY_PREFIXES if ds.startswith(pre)),
-            "other",
-        ),
+        "family": next((fam for pre, fam in _FAMILY_PREFIXES if ds.startswith(pre)), "other"),
     }
     for ds in COMPLETE_21_DATASETS
 }
@@ -126,7 +123,6 @@ FEATURE_CONTEXT_SCHEMA_MAP: dict[str, dict[str, Any]] = {
     "jquants_records": {"dataset": "{dataset}"},
 }
 
-# Code-keyed datasets: apply Code filter when codes selected (bars + fins/margin…).
 _CODE_KEYED_HISTORY_DATASETS: frozenset[str] = frozenset(
     {
         "equities_bars_daily",
@@ -184,13 +180,11 @@ def parse_r2_structured_line(line: str | bytes | Mapping[str, Any]) -> dict[str,
     if dataset is None or str(dataset).strip() == "":
         return None
 
-    # Archive batches may include rid; keep if present but not required.
     payload = _maybe_json(obj.get("payload"))
     raw_payload = _maybe_json(obj.get("raw_payload"))
     if raw_payload is None:
         raw_payload = payload
     natural_key = obj.get("natural_key")
-    # natural_key may be JSON string or object; keep both forms usable.
     if isinstance(natural_key, dict):
         natural_key_out: Any = json.dumps(natural_key, ensure_ascii=True, sort_keys=True)
         natural_key_obj = natural_key
@@ -253,7 +247,6 @@ def normalize_r2_history_row(
             available_at=available_at,
             natural_key=natural_key,
         )
-        # Live R2 calendar uses HolDiv; tip normalizer already maps HolidayDivision/HolDiv.
         if row is not None and row.get("holiday_division") is None:
             hol = _pick_str(payload or {}, "HolDiv", "HolidayDivision", "holiday_division")
             if hol is not None:
@@ -268,7 +261,6 @@ def normalize_r2_history_row(
         )
     if row is None:
         return None
-    # Preserve ingested_at for disposable mirror / debug (not used in PIT gate).
     if envelope.get("ingested_at") is not None:
         row["ingested_at"] = envelope.get("ingested_at")
     return row
@@ -334,7 +326,6 @@ def filter_history_rows(
         out.append(row)
     return out
 
-# Datasets that may carry 2026 ingest wall-clock as available_at on historical events.
 _ARCHIVE_INGEST_POLLUTION_DATASETS: frozenset[str] = frozenset(
     {
         "markets_margin_interest",
@@ -392,11 +383,9 @@ def repair_available_at_research(
                 row["_aa_repair"] = "archive_ingest_pollution"
                 n_fixed += 1
                 repair_tags.append("archive_ingest_pollution")
-        # post_date_preserve: leave other rows as-is (including real lag).
         out.append(row)
     applied = "none"
     if n_fixed:
-        # Prefer the specific tag used.
         if "archive_ingest_pollution" in repair_tags:
             applied = "archive_ingest_pollution"
         elif "calendar_ingest_pollution" in repair_tags:
@@ -485,7 +474,6 @@ def _load_envelopes_from_sources(
             if row is not None and row.get("dataset") == dataset:
                 envelopes.append(row)
             elif row is not None and not row.get("dataset"):
-                # Allow undated test lines tagged later
                 row = dict(row)
                 row["dataset"] = dataset
                 envelopes.append(row)
@@ -531,13 +519,8 @@ def extract_r2_history_feature_rows(
     apply_available_at_repair: bool = True,
     context: str = "r2 history feature extract",
 ) -> dict[str, Any]:
-    """Load R2 structured history and normalize to FeatureContext row shapes.
-
-    Fail-closed on DEFER / non-COMPLETE-21. Empty allowed datasets stay empty.
-    Local paths / lines are disposable mirrors, never SoT.
-    """
+    """Load R2 structured history and normalize to FeatureContext row shapes."""
     ids = require_complete_21_only(dataset_ids, context=context)
-    # Belt-and-suspenders: explicit DEFER reject even if allowlist drifts.
     reject_permanent_defer_for_history(ids, context=context)
 
     start = str(period_start).strip()[:10]
@@ -566,11 +549,7 @@ def extract_r2_history_feature_rows(
                 source_channels[ds] = ["empty_allowed"]
                 raw_counts[ds] = 0
                 rows_by_dataset[ds] = []
-                aa_repairs[ds] = {
-                    "repair_applied": "none",
-                    "n_fixed": 0,
-                    "note": "channel missing · empty_allowed",
-                }
+                aa_repairs[ds] = {"repair_applied": "none", "n_fixed": 0}
                 continue
             raise R2FeatureContextError(
                 f"{context}: dataset {ds!r} has no R2 input channel "
@@ -598,7 +577,6 @@ def extract_r2_history_feature_rows(
 
         normalized: list[dict[str, Any]] = []
         for env in envelopes:
-            # Force dataset match (reject cross-dataset pollution).
             if str(env.get("dataset") or ds) != ds:
                 continue
             row = normalize_r2_history_row(env, dataset=ds)
@@ -633,7 +611,6 @@ def extract_r2_history_feature_rows(
             code_filter=code_filter,
             require_available_at=True,
         )
-        # Stable order then cap.
         filtered.sort(
             key=lambda r: (
                 str(_row_event_day(r) or ""),
@@ -668,7 +645,6 @@ def build_r2_feature_context(
     inputs: Mapping[str, Any] | None = None,
 ) -> FeatureContext:
     """Build FeatureContext from R2 history rows (PIT-gated available_at)."""
-    # DEFER hard reject if any store key is permanent DEFER.
     reject_permanent_defer_for_history(
         list(rows_by_dataset.keys()),
         context="build_r2_feature_context",
@@ -707,55 +683,30 @@ def materialize_disposable_sqlite_mirror(
     conn = sqlite3.connect(str(path))
     try:
         conn.execute(
-            """
-            CREATE TABLE jquants_records (
-                source       TEXT NOT NULL,
-                dataset      TEXT NOT NULL,
-                natural_key  TEXT NOT NULL,
-                event_time   TEXT NOT NULL,
-                available_at TEXT NOT NULL,
-                ingested_at  TEXT NOT NULL,
-                payload      TEXT,
-                raw_payload  TEXT,
-                PRIMARY KEY (source, dataset, natural_key)
-            )
-            """
-        )
-        # Minimal curated tables used by some pit shortcuts.
-        conn.execute(
-            """
-            CREATE TABLE jquants_daily_bars (
-                source TEXT NOT NULL,
-                code TEXT NOT NULL,
-                date TEXT NOT NULL,
-                event_time TEXT NOT NULL,
-                available_at TEXT NOT NULL,
-                ingested_at TEXT NOT NULL,
-                open REAL, high REAL, low REAL, close REAL, volume REAL,
-                payload TEXT,
-                PRIMARY KEY (source, code, date)
-            )
-            """
+            "CREATE TABLE jquants_records ("
+            "source TEXT NOT NULL, dataset TEXT NOT NULL, natural_key TEXT NOT NULL, "
+            "event_time TEXT NOT NULL, available_at TEXT NOT NULL, ingested_at TEXT NOT NULL, "
+            "payload TEXT, raw_payload TEXT, "
+            "PRIMARY KEY (source, dataset, natural_key))"
         )
         conn.execute(
-            """
-            CREATE TABLE jquants_market_calendar (
-                source TEXT NOT NULL,
-                date TEXT NOT NULL,
-                event_time TEXT NOT NULL,
-                available_at TEXT NOT NULL,
-                ingested_at TEXT NOT NULL,
-                holiday_division TEXT,
-                payload TEXT,
-                PRIMARY KEY (source, date)
-            )
-            """
+            "CREATE TABLE jquants_daily_bars ("
+            "source TEXT NOT NULL, code TEXT NOT NULL, date TEXT NOT NULL, "
+            "event_time TEXT NOT NULL, available_at TEXT NOT NULL, ingested_at TEXT NOT NULL, "
+            "open REAL, high REAL, low REAL, close REAL, volume REAL, payload TEXT, "
+            "PRIMARY KEY (source, code, date))"
+        )
+        conn.execute(
+            "CREATE TABLE jquants_market_calendar ("
+            "source TEXT NOT NULL, date TEXT NOT NULL, event_time TEXT NOT NULL, "
+            "available_at TEXT NOT NULL, ingested_at TEXT NOT NULL, "
+            "holiday_division TEXT, payload TEXT, PRIMARY KEY (source, date))"
         )
         for ds, rows in rows_by_dataset.items():
             for row in rows:
                 aa = row.get("available_at")
                 if aa is None or aa == "":
-                    continue  # PIT: never store null available_at
+                    continue
                 et = row.get("event_time") or aa
                 ingested = row.get("ingested_at") or aa
                 source = str(row.get("source") or "jquants")
@@ -838,7 +789,6 @@ def materialize_disposable_sqlite_mirror(
                     if isinstance(nk, dict):
                         nk_s = json.dumps(nk, ensure_ascii=True, sort_keys=True)
                     elif nk is None or nk == "":
-                        # Fallback synthetic key from date/code
                         d = _row_event_day(row) or "0000-01-01"
                         c = _row_code(row)
                         nk_obj = {"Date": d}
@@ -893,8 +843,7 @@ def schema_mapping_document() -> dict[str, Any]:
             "markets_calendar": {"Date": "row.date", "holiday_division": "HolDiv"},
         },
         "bridge_expand_column_map": {
-            ds: {"Date": "row.date", "available_at": "envelope.available_at"}
-            for ds in BRIDGE_EXPAND_DATASETS
+            ds: {"Date": "row.date"} for ds in BRIDGE_EXPAND_DATASETS
         },
     }
 

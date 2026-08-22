@@ -1,13 +1,7 @@
 """Multiday / nextday research eval (Mass OFF / READY not declared).
 
-W54 multi-day as_of batches and W55/W56 next-day return attach.
-Cost/compare lives in :mod:`research.single_shot_compare` and is re-exported
-here. Spec, freeze, and :func:`execute_single_shot_job` stay in
-:mod:`research.single_shot_job`; this module is re-exported from there.
-
-Fail-closed: COMPLETE 21 only, permanent DEFER 5 hard-reject, Mass OFF,
-READY not declared. No densify, no orders. Outputs remain
-**小サンプル / 研究用・未宣言** (no significance / no edge claim).
+Cost/compare re-exported from :mod:`research.single_shot_compare`.
+Fail-closed COMPLETE-21. No densify, no orders, no significance claim.
 """
 
 from __future__ import annotations
@@ -55,21 +49,7 @@ from research.single_shot_tip import (
     discover_tip_trading_days,
 )
 
-# ---------------------------------------------------------------------------
-# W54 — multi-day as_of signal eval (single_shot only · Mass OFF)
-# W55 — next-day return alignment (research only · 研究用・未宣言)
-# ---------------------------------------------------------------------------
-
-# Look-ahead policy (documented for tests + proofs; do not weaken).
-# Convention:
-#   * At end of day T, signal S_T uses only data available at T session close
-#     (feature as_of = ``{T}T15:30:00+09:00``; available_at ≤ feature as_of).
-#   * Realized next-day return R_{T→T+1} = close(T+1)/close(T) − 1 uses bars
-#     for trading days T and next trading day T+1.
-#   * evaluation_as_of defaults to T+1 session close so the T+1 bar is
-#     PIT-available (available_at ≤ evaluation_as_of). This is historical
-#     research labeling — not a live trading claim, not READY, not Mass.
-# Research-only sample label for nextday metrics (W55/W56). Never an edge claim.
+# Feature as_of = T close; return uses T+1 close at T+1 evaluation_as_of.
 NEXTDAY_RESEARCH_LABEL: str = "小サンプル / 研究用・未宣言"
 
 NEXTDAY_LOOKAHEAD_POLICY: Mapping[str, Any] = MappingProxyType(
@@ -88,12 +68,6 @@ NEXTDAY_LOOKAHEAD_POLICY: Mapping[str, Any] = MappingProxyType(
         "mass_research": "NO-GO",
         "significance_claimed": False,
         "edge_claimed": False,
-        "note": (
-            "Signal features never see T+1 bars. Returns are attached only "
-            "when both T and T+1 closes pass the evaluation PIT gate. "
-            "Missing T+1 (tip edge) → null return, counted in null rate. "
-            "小サンプル — no statistical significance / no edge claim."
-        ),
     }
 )
 
@@ -204,10 +178,7 @@ def session_close_as_of(date: str) -> str:
 def build_equity_close_index(
     tip_rows_by_dataset: Mapping[str, Sequence[Mapping[str, Any]]],
 ) -> dict[tuple[str, str], dict[str, Any]]:
-    """Map ``(code, date)`` → ``{close, available_at, ...}`` from tip equity bars.
-
-    Used only for research next-day return attachment (not feature compute).
-    """
+    """Map ``(code, date)`` → close/available_at from tip equity bars."""
     out: dict[tuple[str, str], dict[str, Any]] = {}
     for row in tip_rows_by_dataset.get("equities_bars_daily") or []:
         code = str(row.get("code") or "").strip()
@@ -287,17 +258,7 @@ def attach_next_day_returns(
     evaluation_as_of: str | None = None,
     feature_as_of: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Attach close-to-close next-day return per signal observation.
-
-    Look-ahead policy (研究用・未宣言 — see :data:`NEXTDAY_LOOKAHEAD_POLICY`):
-
-    * ``feature_as_of`` = signal day T session close (features already gated).
-    * ``evaluation_as_of`` = next trading day T+1 session close so the T+1 bar
-      is PIT-available; both T and T+1 closes require
-      ``available_at <= evaluation_as_of``.
-    * Features themselves never use T+1 data (caller must keep feature as_of
-      at T close when computing the signal).
-    """
+    """Attach close-to-close next-day return per signal observation."""
     sig_d = str(signal_date).strip()[:10]
     feat_as_of = feature_as_of or session_close_as_of(sig_d)
     nxt_d = str(next_date).strip()[:10] if next_date else None
@@ -379,11 +340,7 @@ def _median_f(values: Sequence[float]) -> float | None:
 def summarize_nextday_by_sign(
     aligned_rows: Sequence[Mapping[str, Any]],
 ) -> dict[str, Any]:
-    """T2: mean/median next-day return by signal sign (+1 / 0 / −1), counts, null rates.
-
-    Output is research-only (**小サンプル / 研究用・未宣言**). Does not claim
-    READY / Mass / edge / statistical significance.
-    """
+    """Mean/median next-day return by signal sign (+1 / 0 / −1)."""
 
     def _sign_key(value: Any) -> str:
         if value is None:
@@ -428,7 +385,6 @@ def summarize_nextday_by_sign(
     by_sign = {k: _bucket_summary(v) for k, v in buckets.items()}
     overall = _bucket_summary([row.get("next_day_return") for row in aligned_rows])
 
-    # Sign-aligned only (exclude null signal) for a compact research view.
     signed_rows = [
         row
         for row in aligned_rows
@@ -453,11 +409,6 @@ def summarize_nextday_by_sign(
         "order_execution": False,
         "significance_claimed": False,
         "edge_claimed": False,
-        "note": (
-            "Mean and median next-day close-to-close return by signal sign. "
-            "小サンプル / 研究用・未宣言 — not READY, not Mass, no order claim, "
-            "no statistical significance, no edge claim."
-        ),
     }
 
 
@@ -487,27 +438,7 @@ def execute_multiday_signal_eval(
     r2_get: Callable[[str, str], bytes] | None = None,
     r2_bucket: str = "quant-structured",
 ) -> MultidaySignalEval:
-    """Run single_shot-equivalent signal compute across multiple as_of days.
-
-    Flow (Mass OFF · no READY · no orders):
-
-    1. One history/tip payload extract for the window (not local SQLite SoT).
-       Default ``history_source="d1_tip"`` (CF D1 hot tip). Optional
-       ``history_source="r2"`` loads R2 structured JSONL/archive via
-       :mod:`research.r2_feature_context` (keys/fixtures required).
-    2. Discover trading days (or use caller ``as_of_days``).
-    3. For each day: FeatureContext → approved-leg features → signal.
-       Feature ``as_of`` is always T session close (no T+1 feature leak).
-    4. Aggregate per-day counts / non-null rate / sign distribution.
-    5. Optional (W55): attach next-day return per code/day when T+1 bar is
-       PIT-available at evaluation_as_of = T+1 session close; summarize mean
-       return by signal sign.
-    6. Write ``research/single_shot/job={id}/batch_summary.json`` (+ optional
-       per-day ``days/date=YYYY-MM-DD/signals.json``).
-
-    Does **not** call ``agents.mass_research``, mint READY, or paper execution.
-    Labels remain 研究用・未宣言 when next-day returns are attached.
-    """
+    """Run single_shot-equivalent signal compute across multiple as_of days."""
     assert_mass_and_phase7_off()
     start, end, jid = _require_job_window(period_start, period_end, job_id)
     _ = min_days  # accepted for API compat; short windows still run honestly
@@ -556,7 +487,6 @@ def execute_multiday_signal_eval(
 
     day_results: list[dict[str, Any]] = []
     for d in day_list:
-        # Feature as_of is ALWAYS T session close — never T+1 (no look-ahead).
         as_of = session_close_as_of(d)
         feature_payload = compute_tip_candidate_features(
             rows_by_ds,
@@ -624,7 +554,6 @@ def execute_multiday_signal_eval(
 
         day_results.append(day_summary)
 
-    # Aggregate across days.
     total_computed = sum(int(d.get("signal_count") or 0) for d in day_results)
     total_non_null = sum(int(d.get("non_null") or 0) for d in day_results)
     total_null = sum(int(d.get("null") or 0) for d in day_results)
@@ -733,23 +662,6 @@ def execute_multiday_signal_eval(
         ),
         "significance_claimed": False,
         "edge_claimed": False,
-        "note": (
-            (
-                "W55/W56 multi-day tip signal + next-day return alignment via "
-                "single_shot only. Feature as_of = T close; evaluation_as_of = "
-                "T+1 close for return PIT. Approved-leg signal "
-                "c21_topix_relative_sign (candidate_only=False). "
-                "小サンプル / 研究用・未宣言 — no significance / no edge claim. "
-                "Not READY. Not mass research. No order execution. "
-                "CF D1 tip only. No densify."
-            )
-            if attach_nextday_returns
-            else (
-                "W54 multi-day tip signal eval via single_shot only. "
-                "Approved-leg signal c21_topix_relative_sign (candidate_only=False). "
-                "Not READY. Not mass research. No order execution. CF D1 tip only."
-            )
-        ),
     }
 
     if attach_nextday_returns:
@@ -798,7 +710,6 @@ def execute_multiday_signal_eval(
             puts.append(_put(day_key, day_body))
             d["signals_r2_key"] = day_key
 
-    # Parent manifest (freeze surface + keys; no READY claim).
     manifest_key = str(paths["manifest_r2_key"])
     manifest = {
         "version": (
@@ -899,18 +810,7 @@ def execute_multiday_nextday_return_eval(
     r2_get: Callable[[str, str], bytes] | None = None,
     r2_bucket: str = "quant-structured",
 ) -> MultidaySignalEval:
-    """W55/W56 entry: multiday signal eval with next-day return alignment.
-
-    Thin wrapper around :func:`execute_multiday_signal_eval` with
-    ``attach_nextday_returns=True``. Default ``max_days=20`` (W56 expand toward
-    ~20 trading days within available CF tip). Research only
-    (**小サンプル / 研究用・未宣言**) — Mass OFF, READY not declared, no orders,
-    no densify, no significance / edge claim. If tip yields fewer than 20
-    trading days, returns max available (honest n_days).
-
-    Optional ``history_source="r2"`` (W59) loads R2 structured history instead
-    of D1 tip — see :mod:`research.r2_feature_context`.
-    """
+    """Multiday signal eval with next-day return alignment."""
     return execute_multiday_signal_eval(
         period_start=period_start,
         period_end=period_end,
@@ -938,8 +838,6 @@ def execute_multiday_nextday_return_eval(
     )
 
 
-# Cost / extra-hyp / multi-signal compare lives in research.single_shot_compare
-# (re-exported). Lazy getattr so eval-first and compare-first loads both bind.
 _COMPARE_EXPORTS: frozenset[str] = frozenset(
     {
         "RESEARCH_COST_LABEL",

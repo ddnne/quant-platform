@@ -137,10 +137,7 @@ def build_nky_vol_series(
     source: str = NKY_VOL_PROXY_NK225F,
     dataset: str = "derivatives_bars_daily_futures",
 ) -> dict[str, Any]:
-    """Build date-keyed short/long annualized realized vol + ratio.
-
-    Gaps disclosed; no invent/ffill of missing sessions.
-    """
+    """Build date-keyed short/long annualized realized vol + ratio."""
     sn = int(short_n)
     ln = int(long_n)
     if sn < 2:
@@ -230,11 +227,7 @@ def load_nky_vol_series_from_sqlite(
     long_n: int = DEFAULT_NKY_VOL_LONG_N,
     prefer: str = "ndjson_topix",
 ) -> dict[str, Any]:
-    """Load Nikkei-proxy closes and build short/long realized-vol series.
-
-    Factory/CF default is local TOPIX ndjson. Optional sqlite TOPIX when
-    ``prefer`` is sqlite*. Missing → empty series (no invent/ffill).
-    """
+    """Load Nikkei-proxy closes and build short/long realized-vol series."""
     pref = str(prefer or "ndjson_topix").strip().lower()
     lookback_days = max(int(long_n) * 3, 120)
     load_start = start
@@ -530,11 +523,6 @@ def build_repo_curve_series(
         "dataset": "jsda_tokyo_repo_rates",
         "short_tenor": short_tenor,
         "long_tenor": long_tenor,
-        "definition": "spread = long_tenor_rate - short_tenor_rate (same as_of_date)",
-        "note": (
-            "Funding term-structure proxy from JSDA Tokyo repo tenors only. "
-            "Not JGB/OIS. Gaps disclosed; never ffilled or invented."
-        ),
         "short_rates_by_date": dict(sorted(short_by.items())),
         "long_rates_by_date": dict(sorted(long_by.items())),
         "spread_by_date": dict(sorted(spread_by.items())),
@@ -576,10 +564,7 @@ def load_margin_ndjson(
     *,
     codes: Sequence[str] | None = None,
 ) -> dict[str, list[tuple[str, float]]]:
-    """Load markets_margin_interest ndjson → ``{code: [(date, total_vol), ...]}``.
-
-    total_vol = LongVol + ShrtVol when both present, else LongVol or ShrtVol.
-    """
+    """Load markets_margin_interest ndjson → ``{code: [(date, total_vol), ...]}``."""
     code_filter = {str(c).strip() for c in codes} if codes else None
     by_code: dict[str, dict[str, float]] = {}
     for payload in _iter_ndjson(path):
@@ -688,10 +673,7 @@ def load_fins_events_from_sqlite(
     start: str | None = None,
     end: str | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
-    """Load fins_summary disclosure events → ``{code: [event_dict, ...]}``.
-
-    DiscTime never invented. Missing codes / fields omitted or left None.
-    """
+    """Load fins_summary disclosure events → ``{code: [event_dict, ...]}``."""
     con = _open_ro(db_path)
     if con is None:
         return {}

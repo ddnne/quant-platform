@@ -32,17 +32,14 @@ from features.research_freezes import (
 STATS_METRICS_VERSION: str = "research-stats-metrics/v1.2"
 STATS_METRICS_WAVE: str = "W100 / w0819c"
 
-# Optional floors (None = not enforced). t/Sharpe/win-rate live on class_signals.
 DEFAULT_MIN_PAYOFF: float | None = None
 DEFAULT_MAX_ABS_DRAWDOWN: float | None = None
 
-# Small-n near-identical nets inflate t; null t and disclose.
 LOW_VARIANCE_SMALL_N_MAX: int = 3
-LOW_VARIANCE_MIN_REL_STD: float = 0.05  # CV = s/|m| ≥ 5%
+LOW_VARIANCE_MIN_REL_STD: float = 0.05
 LOW_VARIANCE_MAX_ABS_T: float = 12.0
 LOW_VARIANCE_REASON: str = "low_variance_artifact"
 
-# daily_path_DD is mandatory; period-net DD cannot pass alone.
 DAILY_PATH_DD_VERSION: str = "research-daily-path-dd/v1"
 DAILY_PATH_DD_WAVE: str = "W100 / w0819c"
 DAILY_PATH_DD_PROOF: str = "docs/proof/w0819c_w100_daily_path_dd_gate_20260819.md"
@@ -63,7 +60,6 @@ PERIOD_NET_ONLY_METHODS: frozenset[str] = frozenset(
         "period_net",
     }
 )
-# Sticky W99 daily path (promote_as_main=false · go=false).
 W99_STICKY_DAILY_PATH_DD_REFERENCE: tuple[dict[str, Any], ...] = (
     {
         "window": "w2017_2019",
@@ -633,21 +629,12 @@ def evaluate_daily_path_dd_gate(
             fails.append("missing_required: " + ", ".join(missing))
     if period_net_only:
         fails.append("period_net_DD_only_pass_forbidden")
-        warnings.append(
-            "Passing on period_net_DD alone is forbidden. "
-            "Use daily_path_DD / dd_duration / recovery / total_ret_net."
-        )
+        warnings.append("period_net_DD alone cannot pass; use daily_path_DD.")
     if period_net_zero_daily_unmeasured:
         fails.append("period_net_DD_zero_daily_unmeasured")
-        warnings.append(
-            "period_net_DD=0 AND daily unmeasured is an incomplete evaluation "
-            "(aggregation artifact, not riskless)."
-        )
+        warnings.append("period_net_DD=0 + daily unmeasured is an aggregation artifact.")
     elif period_net_zero and daily_measured:
-        warnings.append(
-            "period_net_DD=0 is an aggregation artifact when all period nets "
-            "> 0 — NOT riskless. daily_path_DD is the path-risk number."
-        )
+        warnings.append("period_net_DD=0 is an aggregation artifact, not riskless.")
 
     complete = bool(daily_measured)
     scorecard = {
@@ -666,7 +653,7 @@ def evaluate_daily_path_dd_gate(
         "proof": DAILY_PATH_DD_PROOF,
         "measured": bool(daily_measured),
         "complete": complete,
-        "passed": complete,  # measurement gate, not a DD-size floor
+        "passed": complete,
         "daily_path_DD": dd_val,
         "dd_duration": dur_val,
         "recovery": scorecard["recovery"],

@@ -136,8 +136,6 @@ def extract_d1_tip_summaries(
     for ds in ids:
         jsda_table = _JSDA_TIP_TABLE_BY_DATASET.get(ds)
         if jsda_table is not None:
-            # Dedicated JSDA fact table (e.g. jsda_repo_rates). Date grain is
-            # as_of_date; event_time is present for PIT ordering.
             count_sql = (
                 "SELECT COUNT(*) AS n, "
                 "MIN(event_time) AS min_event_time, "
@@ -229,16 +227,7 @@ def extract_d1_tip_summaries(
         "period_end": end,
         "dataset_ids": list(ids),
         "extracts": extracts,
-        "note": (
-            "Bounded tip extract from remote D1. Not a READY snapshot. "
-            "Not full-history SoT (history lives on R2 quant-structured)."
-        ),
     }
-
-
-# ---------------------------------------------------------------------------
-# W51 — tip FeatureContext + COMPLETE-21 candidate feature compute
-# ---------------------------------------------------------------------------
 
 
 def _decode_json_obj(value: Any) -> dict[str, Any]:
@@ -366,20 +355,17 @@ def _normalize_tip_catalog_row(
         "available_at": available_at,
         "payload": dict(payload),
         "raw_payload": dict(payload),
-        # Flatten common fields for pure helpers that inspect row tops.
         "date": _pick_str(payload, "Date", "date", "DiscDate", "PublishedDate")
         or (str(event_time)[:10] if event_time else None),
         "close": _pick_num(payload, "Close", "C", "AdjC", "AC"),
         "volume": _pick_num(payload, "Volume", "Vo", "AdjVo", "AVo"),
         "Code": _pick_str(payload, "Code", "code"),
         "Date": _pick_str(payload, "Date", "date", "DiscDate", "PublishedDate"),
-        # S33 sector code for markets_short_ratio (short_ratio_level tip path).
         "S33": _pick_str(payload, "S33", "section"),
         "section": _pick_str(payload, "S33", "section"),
     }
 
 
-# COMPLETE-21 JSDA datasets live on dedicated D1 fact tables (not jquants_records).
 _JSDA_TIP_TABLE_BY_DATASET: dict[str, str] = {
     "jsda_tokyo_repo_rates": "jsda_repo_rates",
 }
@@ -425,12 +411,9 @@ def _discover_tip_codes(
     code_limit: int,
 ) -> list[str]:
     """Pick tip codes that have multi-day bar history (for 1d features)."""
-    # Prefer a small fixed probe set that is known liquid on TSE; fall back to
-    # first multi-day codes if those miss in the tip window.
     preferred = ("13010", "72030", "67580", "99840", "83060")
     found: list[str] = []
     for code in preferred:
-        # Precompute LIKE pattern: nested f-string backslashes are illegal in 3.11.
         nk_pat = '%"Code":"' + code + '"%'
         sql = (
             "SELECT COUNT(*) AS n FROM jquants_records WHERE "
@@ -448,7 +431,6 @@ def _discover_tip_codes(
     if found:
         return found[:code_limit]
 
-    # Fallback: sample natural keys and group by Code in Python.
     sample_sql = (
         "SELECT natural_key FROM jquants_records WHERE "
         f"dataset = {_sql_str('equities_bars_daily')} "
@@ -619,16 +601,7 @@ def build_tip_feature_context(
     source: str = "cloudflare_d1_tip",
     table_prefix: str = "tip",
 ) -> FeatureContext:
-    """Build a FeatureContext whose PIT reads come from in-memory rows.
-
-    Local SQLite is **not** used as SoT. Rows are gated by
-    ``available_at <= as_of`` (NULL/empty ``available_at`` excluded).
-
-    ``plane`` / ``source`` / ``table_prefix`` default to the D1 hot-tip
-    path. The R2 history bridge reuses this builder with
-    ``plane="R2_history"`` / ``source="cloudflare_r2_structured"`` /
-    ``table_prefix="r2"`` (see :mod:`research.r2_feature_context`).
-    """
+    """Build a FeatureContext whose PIT reads come from in-memory rows."""
     as_of_s = str(as_of).strip()
     if not as_of_s:
         raise SingleShotJobError("as_of is required for tip FeatureContext")
@@ -636,7 +609,6 @@ def build_tip_feature_context(
     source_s = str(source).strip() or "cloudflare_d1_tip"
     prefix = str(table_prefix).strip() or "tip"
 
-    # Materialize plain dicts once.
     store: dict[str, list[dict[str, Any]]] = {
         str(ds): [dict(r) for r in (rows or [])]
         for ds, rows in tip_rows_by_dataset.items()
@@ -742,7 +714,6 @@ def build_tip_feature_context(
             )
 
         if resource == "equity_master":
-            # Permanent DEFER is blocked by FeatureContext before this reader.
             return SimpleNamespace(rows=[], metadata={"as_of": as_of_s, "count": 0})
 
         if resource == "jsda_repo_rates":
@@ -1069,7 +1040,6 @@ def discover_tip_trading_days(
 
 
 def _reexport_on_job() -> None:
-    """Copy this module's public tip surface onto ``single_shot_job`` after load."""
     import sys
 
     job = sys.modules.get("research.single_shot_job")
