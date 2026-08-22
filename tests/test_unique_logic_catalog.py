@@ -443,6 +443,8 @@ def test_worker_new_thesis_ids_match_python() -> None:
     )
     assert "(CF_UNIQUE_CS_LOGIC_IDS as readonly string[]).includes(lid)" in src
     assert "(CF_NEW_CS_THESIS_IDS as readonly string[]).includes(lid)" in src
+    assert 'lid.startsWith("event_")' in daily
+    assert 'lid.startsWith("surprise_xs_")' in daily
 
 
 _NEW_COMBO_22 = (

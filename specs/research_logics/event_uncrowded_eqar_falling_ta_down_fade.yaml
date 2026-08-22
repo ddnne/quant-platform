@@ -1,0 +1,27 @@
+logic_id: event_uncrowded_eqar_falling_ta_down_fade
+headline: false
+generation_enabled: false
+promote_as_main: false
+go: false
+main_pool: true
+thesis: >
+  Fade PEAD when margin is uncrowded AND EqAR is falling AND TA contracted.
+signal_definition: >
+  Fade PEAD when margin is uncrowded AND EqAR is falling AND TA contracted. Skip missing PIT prints (no invent).
+datasets:
+  - equities_bars_daily
+  - fins_summary
+  - markets_calendar
+  - markets_margin_interest
+params:
+  post_hold_days: 5
+  hold_days: 10
+  momentum_n: 5
+  min_hist: 20
+  mode: event_uncrowded_eqar_falling_ta_down_fade
+  side: flip
+  gates: uncrowded_margin,eq_ar_falling,ta_down
+  cs_gate: None
+  entry_shift: 0
+  hold_tail_days: 0
+evaluator: research.unique_logic.event_combos.evaluate_combo_daily_mtm

@@ -141,6 +141,11 @@ def test_worker_index_contains_propose_thesis_route() -> None:
     assert "/v1/propose-thesis" in src
     assert "llm_failed" in src
     assert "llama-3.3-70b-instruct-fp8-fast" in src
+    assert "glm-4.7-flash" in src
+    assert "extractAiText" in src
+    assert "coerceGateList" in src
+    assert "DEFAULT_PROPOSE_DATASETS" in src
+    assert "signal_definition" in src
     assert "proposal_source: \"llm_failed\"" in src or "proposal_source: 'llm_failed'" in src or 'proposal_source: "llm_failed"' in src
     assert "auto_inject: false" in src
     assert "go: false" in src

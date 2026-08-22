@@ -7,10 +7,17 @@ function hasWorkersAi(env: Env): boolean {
   return Boolean(env.AI);
 }
 
-/** Prefer 70B instruct; 8B is CF-internal fallback only. Never leave CF. */
+/** CF-internal only. 70B first; GLM flash then 8B. Never leave CF. */
 const PROPOSE_AI_MODELS = [
   "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+  "@cf/zai-org/glm-4.7-flash",
   "@cf/meta/llama-3.1-8b-instruct-fp8",
+] as const;
+
+const DEFAULT_PROPOSE_DATASETS = [
+  "equities_bars_daily",
+  "fins_summary",
+  "markets_calendar",
 ] as const;
 
 const PROPOSE_ALLOWED_DATASETS = [
@@ -64,26 +71,56 @@ const PROPOSE_ALLOWED_GATES = [
   "uncrowded_margin",
 ] as const;
 
+function coerceGateList(raw: unknown): string[] {
+  const gateAllow = new Set<string>(PROPOSE_ALLOWED_GATES);
+  const parts: string[] = [];
+  if (Array.isArray(raw)) {
+    for (const x of raw) parts.push(String(x));
+  } else if (typeof raw === "string") {
+    for (const x of raw.split(/[+,]/)) parts.push(x);
+  }
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const p of parts) {
+    const g = p.trim();
+    if (!g || !gateAllow.has(g) || seen.has(g)) continue;
+    seen.add(g);
+    out.push(g);
+  }
+  return out;
+}
+
 function normalizeProposalRow(
   row: Record<string, unknown>,
 ): Record<string, unknown> | null {
-  if (isWindowTweakOnly(row)) return null;
   const thesis = String(row.thesis ?? "").trim();
-  const signal = String(row.signal_definition ?? row.signal ?? "").trim();
-  const position = String(row.position_rule ?? row.position ?? "").trim();
-  if (!thesis || !signal || !position) return null;
+  const gates = coerceGateList(row.gates);
+  if (!thesis || gates.length < 2 || gates.length > 3) return null;
+  let signal = String(row.signal_definition ?? row.signal ?? "").trim();
+  if (!signal) signal = `AND(${gates.join(", ")}) PIT; skip missing prints (no invent).`;
+  let position = String(row.position_rule ?? row.position ?? "").trim();
+  if (!position) {
+    position =
+      "Event-hold original surprise sign when gates are PIT-true; otherwise flat.";
+  }
   const allow = new Set<string>(PROPOSE_ALLOWED_DATASETS);
-  const datasets = (
+  let datasets = (
     Array.isArray(row.datasets) ? row.datasets : []
   )
     .map((x) => String(x))
     .filter((x) => allow.has(x));
-  if (datasets.length < 1) return null;
-  const gateAllow = new Set<string>(PROPOSE_ALLOWED_GATES);
-  const gates = (Array.isArray(row.gates) ? row.gates : [])
-    .map((x) => String(x))
-    .filter((x) => gateAllow.has(x));
-  if (gates.length < 2 || gates.length > 3) return null;
+  if (datasets.length < 1) datasets = [...DEFAULT_PROPOSE_DATASETS];
+  if (
+    isWindowTweakOnly({
+      ...row,
+      thesis,
+      signal_definition: signal,
+      position_rule: position,
+      datasets,
+    })
+  ) {
+    return null;
+  }
   const gset = new Set(gates);
   const contra: string[][] = [
     ["easy_funding", "tight_funding"],
@@ -120,14 +157,34 @@ function normalizeProposalRow(
   };
 }
 
+function extractAiText(res: unknown): string {
+  if (typeof res === "string") return res;
+  if (Array.isArray(res)) return JSON.stringify(res);
+  if (!isObject(res)) return "";
+  const nested =
+    res.response ?? res.result ?? res.output_text ?? res.text ?? res.content;
+  if (typeof nested === "string") return nested;
+  if (Array.isArray(nested)) return JSON.stringify(nested);
+  if (isObject(nested)) {
+    if (typeof nested.response === "string") return nested.response;
+    if (Array.isArray(nested.response)) return JSON.stringify(nested.response);
+    return JSON.stringify(nested);
+  }
+  return JSON.stringify(res);
+}
+
 function parseProposalArray(raw: string, n: number): Array<Record<string, unknown>> {
-  const text = String(raw || "");
+  let text = String(raw || "").replace(/```(?:json)?/gi, "").trim();
   const out: Array<Record<string, unknown>> = [];
   const tryParse = (blob: string): unknown => {
     try {
       return JSON.parse(blob);
     } catch {
-      return null;
+      try {
+        return JSON.parse(blob.replace(/,\s*([}\]])/g, "$1"));
+      } catch {
+        return null;
+      }
     }
   };
   const arrStart = text.indexOf("[");
@@ -146,7 +203,9 @@ function parseProposalArray(raw: string, n: number): Array<Record<string, unknow
   const rows = Array.isArray(parsed)
     ? parsed
     : isObject(parsed)
-      ? [parsed]
+      ? Array.isArray((parsed as { proposals?: unknown }).proposals)
+        ? ((parsed as { proposals: unknown[] }).proposals)
+        : [parsed]
       : [];
   for (const row of rows) {
     if (!isObject(row)) continue;
@@ -184,7 +243,11 @@ async function llmProposals(
   const user =
     `Propose exactly ${n} JSON theses. Avoid: ${avoid}.\n` +
     "GOOD: {\"thesis\":\"PEAD when overnight funding is tight AND sales contracted.\"," +
-    "\"gates\":[\"tight_funding\",\"sales_down\"]}\n" +
+    "\"signal_definition\":\"AND(tight_funding, sales_down) PIT; skip missing.\"," +
+    "\"position_rule\":\"Event-hold surprise sign when both gates hold; else flat.\"," +
+    "\"datasets\":[\"equities_bars_daily\",\"fins_summary\",\"jsda_tokyo_repo_rates\"]," +
+    "\"gates\":[\"tight_funding\",\"sales_down\"]," +
+    "\"why_different_from\":[\"ungated PEAD\"]}\n" +
     "BAD: thesis \"Rising Sales\" with gates sales_down, or \"Liquidity × Price × Margin\".";
   let lastReason = "parse_empty";
   let lastModel: string | null = null;
@@ -200,19 +263,15 @@ async function llmProposals(
           ],
           max_tokens: 1400,
         });
-        const text =
-          typeof res === "string"
-            ? res
-            : isObject(res)
-              ? String(
-                  (res as { response?: unknown }).response ??
-                    (res as { result?: unknown }).result ??
-                    JSON.stringify(res),
-                )
-              : "";
+        if (Array.isArray(res)) {
+          const direct = parseProposalArray(JSON.stringify(res), n);
+          if (direct.length) return { rows: direct, reason: null, model };
+        }
+        const text = extractAiText(res);
         const rows = parseProposalArray(text, n);
         if (rows.length) return { rows, reason: null, model };
-        lastReason = `parse_empty:${model}:raw_len=${text.length}:attempt=${attempt}`;
+        const preview = text.replace(/\s+/g, " ").slice(0, 80);
+        lastReason = `parse_empty:${model}:raw_len=${text.length}:attempt=${attempt}:preview=${preview}`;
       } catch (e) {
         lastReason = `ai_error:${model}:${e instanceof Error ? e.message : String(e)}`.slice(
           0,

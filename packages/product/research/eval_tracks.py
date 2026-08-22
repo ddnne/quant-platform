@@ -69,10 +69,9 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "id": "cf_propose_llm_not_stub",
         "track": EVAL_TRACK_LIQ_LARGE,
         "why": (
-            "recorded: Workers AI @cf/meta/llama-3.3-70b-instruct-fp8-fast "
-            "then 8B CF-internal fallback; llm_failed is ok:false not stub "
-            "ok:true; review_proposal_row still 2-3 economic AND, no clone, "
-            "no auto-inject"
+            "Workers AI 70B then glm-4.7-flash then 8B CF-internal; "
+            "parse fills missing signal/datasets; llm_failed is ok:false not "
+            "stub ok:true; no auto-inject"
         ),
         "not_a_pass": True,
         "go": False,

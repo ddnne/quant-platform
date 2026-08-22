@@ -345,7 +345,9 @@ export const CF_EVENT_FIDELITY = {
 
 
 function isEventLogic(lid: string): boolean {
-  return (CF_EVENT_LOGIC_IDS as readonly string[]).includes(lid);
+  if ((CF_EVENT_LOGIC_IDS as readonly string[]).includes(lid)) return true;
+  // YAML combo IDs are event_/surprise_xs_; prefix covers deploy lag vs catalog_ids.
+  return lid.startsWith("event_") || lid.startsWith("surprise_xs_");
 }
 
 function surpriseProxy(ev: {
