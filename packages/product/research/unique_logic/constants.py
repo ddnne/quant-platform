@@ -69,24 +69,16 @@ COMBO_EVENT_GATES: frozenset[str] = frozenset(
 )
 PYTHON_ONLY_EVENT_GATES: frozenset[str] = frozenset()
 KNOWN_EVENT_GATES: frozenset[str] = COMBO_EVENT_GATES | PYTHON_ONLY_EVENT_GATES
-# Worker COMBO_EVENT_GATES stays disjoint of PYTHON_ONLY_EVENT_GATES:
-# names-only (no generic bodies) would empty occupancy. Python local eval
-# or lid-specific daily_path.ts branches cover the intersecting combos.
+# Worker COMBO_EVENT_GATES stays disjoint of PYTHON_ONLY_EVENT_GATES.
 WORKER_PYTHON_ONLY_GATE_POLICY: str = "python_local_or_lid_branch"
-# Event cheap_pb current PB = close/ev.bps; hist is bars×fins reverse-find at
-# minHist. CS cheap_pb is csFundSnaps last-fin + pitMedian(..., 20) on union
-# dates. Not occupancy-equal (current bps, hist keys, missing-bar last-fin).
-# Keep event math; park reuse until proven equal (eval_tracks cheap_pb_event_reuse).
+# Event cheap_pb is bars×fins, not CS csFundSnaps. Not occupancy-equal.
 CHEAP_PB_EVENT_VS_CS: str = "event_bars_x_fins_not_csfundsnaps"
 
 
 def python_only_gate_logic_ids() -> frozenset[str]:
     """Combo lids whose params.gates intersect PYTHON_ONLY_EVENT_GATES.
 
-    Lazy import: ``event_combos`` imports this module. Worker lid branches
-    cover the returned set; do not copy remaining PYTHON_ONLY names onto
-    Worker ``COMBO_EVENT_GATES`` until leftover occupancy equals
-    comboEventGateOk.
+    Lazy import: ``event_combos`` imports this module.
     """
     from research.unique_logic.event_combos import NEW_COMBO_LOGIC
 
@@ -165,14 +157,12 @@ CS_LOGIC_IDS: frozenset[str] = frozenset(
         "repo_3m_level_cs",
     }
 )
-# Combo evaluator YAML rows. kind cs → CS; event|surprise_xs → EVENT.
 _kinds = combo_thesis_ids_by_kind()
 _event = _kinds["event"] | _kinds["surprise_xs"]
 _cs = _kinds["cs"]
 CF_NEW_EVENT_THESIS_IDS: frozenset[str] = _event
 CF_NEW_CS_THESIS_IDS: frozenset[str] = _cs
 CF_NEW_THESIS_IDS: frozenset[str] = _event | _cs
-# Unique-logic recognition set (catalog + factory). Not generation / not GO.
 RESEARCH_UNIQUE_LOGIC_IDS: frozenset[str] = (
     EVENT_LOGIC_IDS
     | EVENT_FILTER_LOGIC_IDS
@@ -181,7 +171,6 @@ RESEARCH_UNIQUE_LOGIC_IDS: frozenset[str] = (
     | CS_LOGIC_IDS
     | CF_NEW_THESIS_IDS
 )
-# CF daily_path eventHeld set (Python unique_logic event family on Worker).
 CF_EVENT_DAILY_PATH_IDS: frozenset[str] = (
     EVENT_LOGIC_IDS
     | EVENT_FILTER_LOGIC_IDS
@@ -189,7 +178,7 @@ CF_EVENT_DAILY_PATH_IDS: frozenset[str] = (
     | ADAPTIVE_LOGIC_IDS
     | CF_NEW_EVENT_THESIS_IDS
 )
-# Intended lite vs filled gaps. Worker CF_EVENT_FIDELITY must match this.
+# Worker CF_EVENT_FIDELITY must match these intended-lite vs filled gaps.
 CF_EVENT_FIDELITY: dict[str, str] = {
     "surprise": "aligned: feps-eps else eps-prior_eps (no invent)",
     "adaptive_trail_k": "aligned: last K completed holds orig vs flip; min K",
@@ -200,13 +189,11 @@ CF_EVENT_FIDELITY: dict[str, str] = {
 }
 ALWAYS_ON_OCCUPANCY_WARN: float = 0.85
 NEAR_EMPTY_OCCUPANCY: float = 0.05
-# CF daily_path implements a unique rate-gated book (not fund_value_mom_agree).
-# Live candidate filter is occupancy, not this flag.
+# Unique rate-gated book (not fund_value_mom_agree). Occupancy is the live filter.
 MF_VALUE_MOM_RATE_DELEGATES: bool = False
 MF_VALUE_MOM_RATE_PATH: str = "unique_rate_gated_value_mom"
 MF_VALUE_MOM_RATE_PARKED_ALWAYS_ON: bool = False
-# If occupancy >= ALWAYS_ON_OCCUPANCY_WARN, summarize parks it (always_on).
-# Do not densify to stay under the line.
+# Occupancy >= ALWAYS_ON_OCCUPANCY_WARN parks always_on. Do not densify.
 # Candidate-grade SoT. Period-net mass-eval is bar-native auxiliary only.
 CANDIDATE_EVAL_PROTOCOL: str = "daily_path_mtm_after_cost/v1"
 PERIOD_NET_ROLE: str = "bar_native_auxiliary_unique_unsupported"
@@ -217,8 +204,6 @@ TERM_STRUCTURE_REQUIRED: frozenset[str] = frozenset(
         "opt225_basevol_term_ratio",
     }
 )
-# Linearized (no longer isolate-parked). Cluster hist was O(n²) per event;
-# Worker now uses a linear window series.
 WORKER_ISOLATE_LINEARIZED_OK: frozenset[str] = frozenset(
     {
         "event_eqar_high_cluster",
@@ -229,12 +214,10 @@ WORKER_ISOLATE_LINEARIZED_OK: frozenset[str] = frozenset(
         "cs_eqar_low_margin_up",
     }
 )
-# Keep the set as the park mechanism; do not restore isolate-limited lids
-# without a Worker path.
+# Park mechanism; do not restore isolate-limited lids without a Worker path.
 WORKER_ISOLATE_LIMIT_IDS: frozenset[str] = frozenset()
 WORKER_ISOLATE_LIMIT_REASONS: dict[str, str] = {}
-# Small-universe shards historically emptied these AND-gates. Parked until a
-# larger-universe re-eval fills occupancy. data_requirement_unmet / main_pool=false.
+# AND-gates that emptied 15-name shards. Parked (data_requirement_unmet).
 SPARSE_ON_15NAME_SHARD: frozenset[str] = frozenset(
     {
         "event_may_easing",
@@ -244,8 +227,7 @@ SPARSE_ON_15NAME_SHARD: frozenset[str] = frozenset(
         "flow_disagree_skip_friday",
     }
 )
-# Gate combinations that empty a 15-name shard. New specs matching these
-# are parked at generation (do not wait for a near_empty eval).
+# New specs matching these combos park at generation (do not wait for eval).
 SPARSE_GATE_COMBOS: tuple[tuple[frozenset[str], str], ...] = (
     (frozenset({"fy_results", "overnight_easing"}), "may_plus_easing"),
     (frozenset({"tue_thu", "crowded_margin"}), "crowd_plus_weekday"),
@@ -258,8 +240,7 @@ SPARSE_GATE_COMBOS: tuple[tuple[frozenset[str], str], ...] = (
     (frozenset({"overnight_p10_steep"}), "overnight_p10_plus_steep"),
     (frozenset({"div_positive", "cheap_iv"}), "div_payer_and_cheap_iv"),
 )
-# Name-level CS + sticky hold=10 is structurally always_on. Parked
-# (main_pool=false). Crossed with overnight/IV/repo (cs_eqar_high_easy etc.) stay.
+# Name-level CS + sticky hold=10 is structurally always_on. Crossed gates stay.
 NAME_LEVEL_FUND_CS_GATES: frozenset[str] = frozenset(
     {
         "eq_ar_high",
@@ -322,8 +303,9 @@ def sparse_15name_reason(
         if combo <= names:
             return reason
     return None
-# Candidate pool: path ok, not always-on, not empty. Simple gated theses stay
-# even with modest t/Sharpe — combination/funds may still use them.
+
+
+# Path-ok, not always-on, not empty. Modest t/Sharpe still kept for combinations.
 CANDIDATE_POLICY: dict[str, object] = {
     "exclude": (
         "path_broken",
@@ -345,6 +327,5 @@ CANDIDATE_POLICY: dict[str, object] = {
     "go": False,
 }
 
-# Distinct economic themes added after the calendar-permutation audit.
-# Gate reorderings are not listed here. YAML is the SoT.
+# YAML is the SoT (gate reorderings are not themes).
 ECONOMIC_THEME_IDS: dict[str, frozenset[str]] = economic_theme_ids()

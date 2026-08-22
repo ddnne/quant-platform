@@ -5,7 +5,6 @@ Does not promote / GO / retune pins.
 from __future__ import annotations
 
 import math
-from datetime import date
 from statistics import median
 from typing import Any, Mapping, Sequence
 
@@ -54,10 +53,6 @@ def pit_median_from_pairs(
             j += 1
         out[ds] = float(median(hist)) if len(hist) >= int(min_hist) else None
     return out
-
-
-def _ymd(s: str) -> date:
-    return date.fromisoformat(str(s)[:10])
 
 
 def _event_key(ev: Mapping[str, Any]) -> str:
@@ -148,20 +143,6 @@ def _pre_entry_mom(
     return (f1 / f0) - 1.0
 
 
-def _last_print_before(
-    series_by_date: Mapping[str, float],
-    query_date: str,
-) -> tuple[str, float] | None:
-    prior = [d for d in series_by_date if str(d)[:10] < str(query_date)[:10]]
-    if not prior:
-        return None
-    d = max(prior)
-    try:
-        return str(d)[:10], float(series_by_date[d])
-    except (TypeError, ValueError):
-        return None
-
-
 def _collect(
     bars_by_code: Mapping[str, Sequence[tuple[str, float]]],
     events_by_code: Mapping[str, Sequence[Mapping[str, Any]]],
@@ -204,8 +185,8 @@ def _empty_extra_or_events(
     spec: Mapping[str, Any],
     collected: Mapping[str, Any],
     extra: Mapping[str, Any],
-    empty_dataset: bool,
-    empty_reason: str,
+    empty_dataset: bool = False,
+    empty_reason: str = "",
 ) -> dict[str, Any] | None:
     dates = list(collected["calendar"])
     if empty_dataset:
@@ -239,23 +220,15 @@ def _finish_event_book(
     extra: Mapping[str, Any],
     one_way_cost: float,
 ) -> dict[str, Any]:
-    dates = list(collected["calendar"])
-    held = event._held_from_event_entries(collected, accept=accept)
-    pack = held_book_daily_mtm(
-        held_by_code_date=held,
+    return held_book_daily_mtm(
+        held_by_code_date=event._held_from_event_entries(collected, accept=accept),
         close_by=collected["close_by"],
-        dates=dates,
+        dates=list(collected["calendar"]),
         hold_days=int(collected["hold_days"]),
         one_way_cost=one_way_cost,
         logic_id=str(spec["logic_id"]),
         extra=extra,
     )
-    pack["data_path"] = extra.get("data_path")
-    pack["new_unique_logic"] = True
-    pack["catalog"] = False
-    pack["promote_as_main"] = False
-    pack["go"] = False
-    return pack
 
 
 def evaluate_large_surprise_event_hold_daily_mtm(
@@ -288,8 +261,6 @@ def evaluate_large_surprise_event_hold_daily_mtm(
         spec=spec,
         collected=collected,
         extra=extra,
-        empty_dataset=False,
-        empty_reason="",
     )
     if blocked:
         return blocked
@@ -360,8 +331,6 @@ def evaluate_afterclose_only_event_hold_daily_mtm(
         spec=spec,
         collected=collected,
         extra=extra,
-        empty_dataset=False,
-        empty_reason="",
     )
     if blocked:
         return blocked
@@ -432,8 +401,6 @@ def evaluate_event_pre_mom_agree_hold_daily_mtm(
         spec=spec,
         collected=collected,
         extra=extra,
-        empty_dataset=False,
-        empty_reason="",
     )
     if blocked:
         return blocked
@@ -540,13 +507,13 @@ def evaluate_event_margin_crowding_skip_daily_mtm(
     for ev in collected["entries"]:
         key = _event_key(ev)
         series = dict((margin_by_code or {}).get(ev["code"]) or {})
-        last = _last_print_before(series, ev["entry_date"])
+        last = event._last_print_before(series, ev["entry_date"])
         if last is None:
             accept[key] = False
             n_skip_missing += 1
             continue
         last_d, last_v = last
-        age = (_ymd(ev["entry_date"]) - _ymd(last_d)).days
+        age = (event._ymd(ev["entry_date"]) - event._ymd(last_d)).days
         if age > int(stale_days):
             accept[key] = False
             n_skip_stale += 1

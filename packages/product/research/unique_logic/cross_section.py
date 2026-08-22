@@ -5,7 +5,6 @@ Does not promote / GO / retune pins.
 from __future__ import annotations
 
 import math
-from datetime import date
 from typing import Any, Mapping, Sequence
 
 from research.daily_path_eval import (
@@ -30,10 +29,6 @@ NEW_UNIQUE_LOGIC: tuple[dict[str, Any], ...] = tuple(
 )
 
 
-def _ymd(s: str) -> date:
-    return date.fromisoformat(str(s)[:10])
-
-
 def prior_delta_by_date(series_by_date: Mapping[str, float]) -> dict[str, float]:
     """Same-date minus strictly-prior print. No ffill onto missing dates."""
     items: list[tuple[str, float]] = []
@@ -52,20 +47,6 @@ def prior_delta_by_date(series_by_date: Mapping[str, float]) -> dict[str, float]
     for i in range(1, len(items)):
         out[items[i][0]] = items[i][1] - items[i - 1][1]
     return out
-
-
-def _last_print_before(
-    series_by_date: Mapping[str, float],
-    query_date: str,
-) -> tuple[str, float] | None:
-    prior = [d for d in series_by_date if str(d)[:10] < str(query_date)[:10]]
-    if not prior:
-        return None
-    d = max(prior)
-    try:
-        return str(d)[:10], float(series_by_date[d])
-    except (TypeError, ValueError):
-        return None
 
 
 def _cs_params(spec: Mapping[str, Any]) -> dict[str, Any]:
@@ -164,7 +145,7 @@ def _finish_cs_book(
         daily_rank=daily_rank,
         hold_days=hold_days,
     )
-    pack = held_book_daily_mtm(
+    return held_book_daily_mtm(
         held_by_code_date=held,
         close_by=panel["close_by"],
         dates=list(panel["dates"]),
@@ -173,13 +154,6 @@ def _finish_cs_book(
         logic_id=str(spec["logic_id"]),
         extra=extra,
     )
-    pack["data_path"] = extra.get("data_path")
-    pack["new_unique_logic"] = True
-    pack["catalog"] = False
-    pack["promote_as_main"] = False
-    pack["go"] = False
-    pack["pack_bias"] = PACK_BIAS
-    return pack
 
 
 def _empty_extra(
@@ -454,20 +428,19 @@ def _margin_delta_score(
     *,
     stale_days: int,
 ) -> float | None:
-    last = _last_print_before(series_by_date, query_date)
+    last = event._last_print_before(series_by_date, query_date)
     if last is None:
         return None
     last_d, last_v = last
-    age = (_ymd(query_date) - _ymd(last_d)).days
+    age = (event._ymd(query_date) - event._ymd(last_d)).days
     if age > int(stale_days):
         return None
-    prev = _last_print_before(series_by_date, last_d)
+    prev = event._last_print_before(series_by_date, last_d)
     if prev is None:
         return None
     _prev_d, prev_v = prev
     if prev_v == 0.0 or not math.isfinite(prev_v) or not math.isfinite(last_v):
         return None
-    # Shrinking margin (de-crowd) → positive score → long.
     return -((last_v - prev_v) / abs(prev_v))
 
 
@@ -501,7 +474,7 @@ def evaluate_xs_margin_delta_rank_daily_mtm(
         data_path="local_real_mirrors+local_sqlite_margin",
     )
     extra["stale_calendar_days"] = stale_days
-    extra["momentum_n"] = None  # signal is margin Δ, not price mom
+    extra["momentum_n"] = None
     margin_ok = bool(margin_by_code) and any(
         bool(v) for v in (margin_by_code or {}).values()
     )
@@ -516,7 +489,6 @@ def evaluate_xs_margin_delta_rank_daily_mtm(
             ),
         )
 
-    # Panel uses mom only to share the bar calendar / close map.
     panel = panel_index(bars_by_code, momentum_n=max(1, int(n)))
     dates = panel["dates"]
     dates_by_code = panel["dates_by_code"]

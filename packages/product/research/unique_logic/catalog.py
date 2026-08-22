@@ -1,13 +1,7 @@
 """Load unique_logic declarations from ``specs/research_logics/*.yaml``.
 
-YAML catalog is the declaration source of truth (gates, cs_gate, side)
-and the runtime dispatch table (``yaml_combo_rows`` →
-``event_combos.NEW_COMBO_LOGIC``, ``yaml_unique_rows`` → original unique
-module tuples). YAML is declaration and runtime.
-``specs/research_themes.yaml`` groups combo ids into economic themes
-(``economic_theme_ids`` → ``constants.ECONOMIC_THEME_IDS``).
-Scores live in R2/D1, not markdown.
-The schema is intentionally small (no general YAML dependency).
+YAML is declaration and runtime (gates, cs_gate, side). Themes from
+``specs/research_themes.yaml``. Constrained schema (no generic YAML lib).
 """
 from __future__ import annotations
 
@@ -244,8 +238,7 @@ def yaml_combo_rows(*, root: Path | None = None) -> list[dict[str, Any]]:
 def unique_row_from_yaml(spec: Mapping[str, Any]) -> dict[str, Any]:
     """Map catalog YAML to an original-unique runtime row.
 
-    YAML is the declaration SoT. Does not GO. Evaluator bodies stay in the
-    unique_logic modules.
+    YAML is the declaration SoT. Does not GO.
     """
     lid = str(spec.get("logic_id") or "")
     if not lid:

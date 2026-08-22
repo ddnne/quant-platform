@@ -5,6 +5,7 @@ Does not promote / GO / retune pins.
 from __future__ import annotations
 
 import math
+from datetime import date
 from statistics import median
 from typing import Any, Mapping, Sequence
 
@@ -55,6 +56,24 @@ def pit_median_on_dates(
             j += 1
         out[ds] = float(median(hist)) if len(hist) >= int(min_hist) else None
     return out
+
+
+def _ymd(s: str) -> date:
+    return date.fromisoformat(str(s)[:10])
+
+
+def _last_print_before(
+    series_by_date: Mapping[str, float],
+    query_date: str,
+) -> tuple[str, float] | None:
+    prior = [d for d in series_by_date if str(d)[:10] < str(query_date)[:10]]
+    if not prior:
+        return None
+    d = max(prior)
+    try:
+        return str(d)[:10], float(series_by_date[d])
+    except (TypeError, ValueError):
+        return None
 
 
 def _collect_event_entries(
@@ -317,7 +336,6 @@ def evaluate_event_funding_stress_skip_daily_mtm(
         logic_id=str(spec["logic_id"]),
         extra=extra,
     )
-    pack["data_path"] = extra["data_path"]
     return pack
 
 
@@ -421,7 +439,6 @@ def evaluate_curve_steep_event_confirm_daily_mtm(
         logic_id=str(spec["logic_id"]),
         extra=extra,
     )
-    pack["data_path"] = extra["data_path"]
     return pack
 
 
@@ -498,11 +515,10 @@ def evaluate_disclosure_cluster_mom_gate_daily_mtm(
                 disc_dates.append(d)
     disc_dates.sort()
 
-    # Per bar date: count DiscDate in the previous `lookback` bar dates (strict).
     cluster_by: dict[str, float] = {}
     for i, d in enumerate(dates):
         lo = max(0, i - lookback)
-        window = set(dates[lo:i])  # excludes today
+        window = set(dates[lo:i])
         c = sum(1 for dd in disc_dates if dd in window)
         cluster_by[d] = float(c)
     med_by = pit_median_on_dates(cluster_by, dates, min_hist=min_hist)
@@ -554,7 +570,6 @@ def evaluate_disclosure_cluster_mom_gate_daily_mtm(
         logic_id=str(spec["logic_id"]),
         extra=extra,
     )
-    pack["data_path"] = extra["data_path"]
     return pack
 
 
@@ -629,7 +644,6 @@ def evaluate_surprise_xs_rank_hold_daily_mtm(
             **extra,
         }
 
-    # Rank names currently held-in-window: position lives on [entry, entry+h).
     date_to_idx = {d: i for i, d in enumerate(dates)}
     surprise_by_date: dict[str, dict[str, float]] = {d: {} for d in dates}
     for ev in collected["entries"]:
@@ -682,6 +696,5 @@ def evaluate_surprise_xs_rank_hold_daily_mtm(
         logic_id=str(spec["logic_id"]),
         extra=extra,
     )
-    pack["data_path"] = extra["data_path"]
     return pack
 
