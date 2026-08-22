@@ -242,6 +242,8 @@ GATE_OCCUPANCY_LABEL: tuple[tuple[str, tuple[str, ...]], ...] = (
         "price to book ratio tends to rise",
         "price to book tends to rise",
         "pb tends to rise",
+        "pb ratio rising",
+        "ratio rising",
     )),
     # pre_mom occupancy is surprise-sign agreement at entryIdx-1, not "mom is positive".
     ("pre_mom", (
@@ -309,6 +311,7 @@ GATE_OCCUPANCY_LABEL: tuple[tuple[str, tuple[str, ...]], ...] = (
         "falling price",
         "prices drop",
         "price drops",
+        "price contracted",
     )),
     ("crowded_margin", ("market is crowded",)),
 )
@@ -489,6 +492,8 @@ TITLE_OCCUPANCY_META: tuple[str, ...] = (
     "occupancy increase",
     "occupancy is high",
     "occupancy is low",
+    "occupancy when",
+    "equities occupancy",
     "tends to be occupied",
     "occupy lower",
     "occupy",

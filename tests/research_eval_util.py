@@ -288,6 +288,44 @@ def _weekdays(start: date, n: int) -> list[str]:
     return days
 
 
+def assert_unique_family_specs(
+    specs: list[dict[str, Any]],
+    expected_ids: frozenset[str],
+    *,
+    disjoint_from: tuple[frozenset[str], ...] = (),
+) -> None:
+    """YAML-backed unique family identity. generation_enabled/go: catalog parity."""
+    from research.offline.factory import propose_profit_hypotheses
+    from research.unique_logic.constants import (
+        KNOWN_DEMOTED_OR_WEAK,
+        KNOWN_WEAK_THESIS,
+        LOGIC_CATALOG_HEADLINE_BAN,
+    )
+
+    ids = [s["logic_id"] for s in specs]
+    assert ids == sorted(expected_ids)
+    assert ids
+    for s in specs:
+        assert s["new_unique_logic"] is True
+        assert s["catalog"] is True
+        assert s["catalog_map"] is None
+        lid = s["logic_id"]
+        assert lid not in LOGIC_CATALOG_HEADLINE_BAN
+        assert lid not in KNOWN_WEAK_THESIS
+        assert lid not in KNOWN_DEMOTED_OR_WEAK
+        for other in disjoint_from:
+            assert lid not in other
+        params = s["params"]
+        assert "mode" in params or "gate" in params
+    out = propose_profit_hypotheses(specs, evaluate=False)
+    assert out["n_accepted"] == len(specs)
+    assert out["n_rejected"] == 0
+    assert [a["logic_id"] for a in out["accepted"]] == ids
+    for a in out["accepted"]:
+        assert a["logic_id"] not in LOGIC_CATALOG_HEADLINE_BAN
+        assert a.get("eval_mapped_to_catalog") in (None, False)
+
+
 def _eval_cell(logic_id: str, **fields):
     return {"logic_id": logic_id, **fields}
 

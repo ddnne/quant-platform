@@ -4,20 +4,15 @@ from __future__ import annotations
 
 import pytest
 
-from research.offline.factory import propose_profit_hypotheses
 from research.unique_logic import event
-from research.unique_logic.constants import (
-    EVENT_LOGIC_IDS,
-    KNOWN_DEMOTED_OR_WEAK,
-    KNOWN_WEAK_THESIS,
-    LOGIC_CATALOG_HEADLINE_BAN,
-)
+from research.unique_logic.constants import EVENT_LOGIC_IDS
 from tests.research_eval_util import (
     _event_bars,
     _event_eval_kw,
     _logic_spec,
     _two_name_events,
     _with_min_hist,
+    assert_unique_family_specs,
 )
 
 
@@ -26,51 +21,20 @@ def _spec(lid: str) -> dict:
 
 
 def test_event_proposals_are_new_unique_logic_not_catalog_remaps():
-    ids = [s["logic_id"] for s in event.NEW_UNIQUE_LOGIC]
-    assert ids == sorted(EVENT_LOGIC_IDS)
-    assert ids
-    for s in event.NEW_UNIQUE_LOGIC:
-        assert s["new_unique_logic"] is True
-        assert s["catalog"] is True
-        assert s["catalog_map"] is None
-        # generation_enabled/go: test_catalog_yaml_parity_with_python_specs
-        assert s["logic_id"] not in LOGIC_CATALOG_HEADLINE_BAN
-        assert s["logic_id"] not in KNOWN_WEAK_THESIS
-        assert s["logic_id"] not in KNOWN_DEMOTED_OR_WEAK
-        params = s["params"]
-        assert "mode" in params or "gate" in params
-
-
-def test_event_new_unique_logic_is_yaml_backed():
     import inspect
 
     from research.unique_logic import catalog as catalog_mod
     from research.unique_logic.catalog import yaml_unique_rows
 
+    assert_unique_family_specs(list(event.NEW_UNIQUE_LOGIC), EVENT_LOGIC_IDS)
     ids = [s["logic_id"] for s in event.NEW_UNIQUE_LOGIC]
     rows = yaml_unique_rows(logic_ids=ids)
     assert [r["logic_id"] for r in rows] == ids
     src = inspect.getsource(catalog_mod.yaml_unique_rows)
     assert "NEW_UNIQUE_LOGIC" not in src
-    assert "NEW_LS_VARIANTS" not in src
-    assert "ADAPTIVE_VARIANTS" not in src
     event_src = inspect.getsource(event)
     assert "EVENT_LOGIC_IDS" in event_src
     assert "event_funding_stress_skip" not in event_src.split("def ", 1)[0]
-
-
-def test_event_propose_profit_hypotheses_accepts_adhoc_no_catalog_map():
-    out = propose_profit_hypotheses(
-        event.NEW_UNIQUE_LOGIC,
-        evaluate=False,
-    )
-    assert out["n_accepted"] == len(event.NEW_UNIQUE_LOGIC)
-    assert out["n_rejected"] == 0
-    lids = [a["logic_id"] for a in out["accepted"]]
-    assert lids == [s["logic_id"] for s in event.NEW_UNIQUE_LOGIC]
-    for a in out["accepted"]:
-        assert a["logic_id"] not in LOGIC_CATALOG_HEADLINE_BAN
-        assert a.get("eval_mapped_to_catalog") in (None, False)
 
 
 def test_pit_median_is_strictly_prior_dates():

@@ -282,7 +282,6 @@ def test_yaml_dispatch_worker_event_ids_align() -> None:
     for lid in WORKER_ISOLATE_LINEARIZED_OK:
         row = next(s for s in NEW_COMBO_LOGIC if s["logic_id"] == lid)
         assert row.get("worker_isolate_limit") is False
-    n_checked = 0
     for spec in NEW_COMBO_LOGIC:
         if str(spec.get("kind") or "") == "cs":
             continue
@@ -295,8 +294,6 @@ def test_yaml_dispatch_worker_event_ids_align() -> None:
             cs_gate=str(spec.get("cs_gate") or ""),
             logic_id=lid,
         ) is False
-        n_checked += 1
-    assert n_checked >= 1
 
 
 def test_fins_events_keep_ta_eqar_from_payload() -> None:

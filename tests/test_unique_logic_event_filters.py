@@ -4,15 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from research.offline.factory import propose_profit_hypotheses
 from research.unique_logic import event_filters
-from research.unique_logic.constants import (
-    EVENT_FILTER_LOGIC_IDS,
-    EVENT_LOGIC_IDS,
-    KNOWN_DEMOTED_OR_WEAK,
-    KNOWN_WEAK_THESIS,
-    LOGIC_CATALOG_HEADLINE_BAN,
-)
+from research.unique_logic.constants import EVENT_FILTER_LOGIC_IDS, EVENT_LOGIC_IDS
 from tests.research_eval_util import (
     _disc_event,
     _event_bars,
@@ -20,6 +13,7 @@ from tests.research_eval_util import (
     _logic_spec,
     _two_name_events,
     _with_min_hist,
+    assert_unique_family_specs,
 )
 
 
@@ -32,34 +26,11 @@ def _spec(lid: str) -> dict:
 
 
 def test_event_filters_proposals_are_new_unique_logic_not_catalog_or_prior_event():
-    ids = [s["logic_id"] for s in event_filters.NEW_UNIQUE_LOGIC]
-    assert ids == sorted(EVENT_FILTER_LOGIC_IDS)
-    assert ids
-    for s in event_filters.NEW_UNIQUE_LOGIC:
-        assert s["new_unique_logic"] is True
-        assert s["catalog"] is True
-        assert s["catalog_map"] is None
-        # generation_enabled/go: test_catalog_yaml_parity_with_python_specs
-        assert s["logic_id"] not in LOGIC_CATALOG_HEADLINE_BAN
-        assert s["logic_id"] not in EVENT_LOGIC_IDS
-        assert s["logic_id"] not in KNOWN_WEAK_THESIS
-        assert s["logic_id"] not in KNOWN_DEMOTED_OR_WEAK
-        params = s["params"]
-        assert "mode" in params or "gate" in params
-
-
-def test_event_filters_propose_profit_hypotheses_accepts_adhoc_no_catalog_map():
-    out = propose_profit_hypotheses(
-        event_filters.NEW_UNIQUE_LOGIC,
-        evaluate=False,
+    assert_unique_family_specs(
+        list(event_filters.NEW_UNIQUE_LOGIC),
+        EVENT_FILTER_LOGIC_IDS,
+        disjoint_from=(EVENT_LOGIC_IDS,),
     )
-    assert out["n_accepted"] == len(event_filters.NEW_UNIQUE_LOGIC)
-    assert out["n_rejected"] == 0
-    lids = [a["logic_id"] for a in out["accepted"]]
-    assert lids == [s["logic_id"] for s in event_filters.NEW_UNIQUE_LOGIC]
-    for a in out["accepted"]:
-        assert a["logic_id"] not in LOGIC_CATALOG_HEADLINE_BAN
-        assert a.get("eval_mapped_to_catalog") in (None, False)
 
 
 def test_pit_median_from_pairs_keeps_same_date_multiset():

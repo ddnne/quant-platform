@@ -9,8 +9,8 @@ from research.cf_propose_thesis import (
     invoke_cf_propose_thesis,
     reject_window_tweak,
     review_proposal_row,
-    stub_propose_thesis_result,
 )
+from tests.cf_propose_stub import stub_propose_thesis_result
 from research.unique_logic.constants import (
     COMBO_EVENT_GATES,
     PROPOSE_ALLOWED_GATES,
@@ -164,7 +164,11 @@ def test_worker_index_contains_propose_thesis_route() -> None:
     assert "llm_not_catalog" in src
     assert "stubProposals" not in src
     assert "stub_propose_thesis_result" not in src
-    assert "STUB_PROPOSAL_TEMPLATES" not in src
+    live_propose = (
+        _REPO / "packages" / "product" / "research" / "cf_propose_thesis.py"
+    ).read_text(encoding="utf-8")
+    assert "stub_propose_thesis_result" not in live_propose
+    assert "STUB_PROPOSAL_TEMPLATES" not in live_propose
     assert "titleOccupancyBad" in src
     propose_src = _WORKER_PROPOSE.read_text(encoding="utf-8")
     assert "const PROPOSE_ALLOWED_GATES = [" not in propose_src
@@ -740,6 +744,18 @@ def test_review_proposal_row_occupancy_and_polarity_table() -> None:
             ["tight_funding", "price_down"],
             "occupancy_label_only",
             "PEAD when overnight funding is tight AND price is down. Skip missing PIT prints (no invent).",
+        ),
+        (
+            "Equities occupancy when price contracted versus the last prior print AND EPS contracted versus the last prior print.",
+            ["price_down", "eps_down"],
+            "occupancy_label_only",
+            "PEAD when EPS contracted versus the last prior print AND price is down. Skip missing PIT prints (no invent).",
+        ),
+        (
+            "Equities occupancy when PB ratio rising AND tight funding.",
+            ["pb_rising", "tight_funding"],
+            "occupancy_label_only",
+            "PEAD when PB is above its PIT median AND overnight funding is tight. Skip missing PIT prints (no invent).",
         ),
     ]
     for bad_thesis, gates, reason, good_thesis in rows:
