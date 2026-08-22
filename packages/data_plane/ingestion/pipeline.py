@@ -1,28 +1,12 @@
 """Fetcher vs Registrar orchestration (Pattern B).
 
-* **Fetcher** runs on **local**: it issues HTTP, saves verbatim raw bytes to
-  ``data/raw/{source}/...`` and normalizes them.
-* **Registrar** validates ``available_at`` and persists structured rows. It
-  has no network dependency, so it is the only part that could later run on
-  Cloudflare reading from storage (Phase 2+).
+Fetcher is local-only (HTTP + raw bytes + normalize). Registrar validates
+``available_at`` and upserts structured rows. Each ``run_*`` returns
+:class:`RunReport` rows; :func:`decide_exit` maps them to a CLI code.
 
-Each ``run_*`` function returns a list of :class:`RunReport` so the CLI can
-print a per-source, per-kind summary and choose an exit code via
-:func:`decide_exit`.
-
-Report semantics (Phase 1 fix):
-
-* ``skipped`` — *clean* skip (missing API key, unsupported runtime, optional
-  endpoint absent, or an auto-sampled optional sub-fetch that failed). Not a
-  failure.
-* ``error`` — a fetch/parse/register step raised, **or** a silent schema miss:
-  ``fetched > 0`` but ``registered == 0`` with no skip reason and not
-  ``expected_empty`` (normalize produced nothing — schema drift / empty parse).
-  Both are failures.
-* ``ok`` — registered at least one row, OR an explicitly expected-empty case
-  (e.g. the raw-only ``fins/summary`` endpoint). A zero-row result without a
-  skip reason is **not** ``ok`` (guards against a silent schema miss looking
-  like success).
+``skipped`` is a clean skip. ``error`` is a raised failure or schema miss
+(fetched>0, registered=0, not expected_empty). ``ok`` requires registered>0
+or an explicit expected-empty endpoint.
 """
 
 from __future__ import annotations
@@ -51,10 +35,6 @@ class RunReport:
 
     @property
     def schema_miss(self) -> bool:
-        """``fetched > 0`` but ``registered == 0`` with no skip/error and not
-        ``expected_empty``: normalize produced nothing (schema drift or empty
-        parse). Treated as an error so a silent miss can never read as success.
-        """
         return (
             not self.skipped
             and not self.error
@@ -65,7 +45,6 @@ class RunReport:
 
     @property
     def effective_error(self) -> str:
-        """Error text for display/exit: an explicit error, or a schema miss."""
         if self.error:
             return self.error
         if self.schema_miss:
@@ -96,12 +75,7 @@ class RunReport:
 
 
 def decide_exit(reports: List[RunReport]) -> int:
-    """CLI exit code from a flat list of reports.
-
-    ``1`` if any report errored (explicit error or schema miss); else ``0`` if
-    any succeeded; else ``2`` (every source cleanly skipped, e.g. all API keys
-    absent / cloudflare).
-    """
+    """1 on error/schema miss, 0 if any ok, else 2 (all clean skips)."""
     if any(r.effective_error for r in reports):
         return 1
     if any(r.ok for r in reports):
@@ -116,11 +90,7 @@ class Registrar:
         self._store = store
 
     def register(self, table: str, rows) -> int:
-        # Canonicalize available_at on every row before it reaches the store.
-        # validate_available_at is the PIT hard gate (raises on missing/empty)
-        # AND returns the canonical +09:00 ISO form; persisting that form is
-        # what makes the store's lexicographic MIN(available_at) chronologically
-        # correct across rows that may have arrived in different offsets.
+        # Persist canonical +09:00 available_at so lexicographic MIN is chronological.
         canonical = []
         for r in rows:
             r = dict(r)
@@ -130,15 +100,12 @@ class Registrar:
 
 
 def _compact_stamp(iso_ts: str) -> str:
-    """``2025-04-02T09:00:00+09:00`` -> ``20250402T090000`` (filename-safe)."""
     s = (iso_ts or "").replace(":", "").replace("-", "")
     # e.g. "20250402T090000+0900"
     return s[:15] if len(s) >= 15 else s
 
 
 def _stamped(name: str, stamp: str) -> str:
-    """Append a compact timestamp before the extension so same-day re-fetches
-    of the same source do not clobber each other under the day partition."""
     stamp = _compact_stamp(stamp)
     if not stamp:
         return name
@@ -149,7 +116,6 @@ def _stamped(name: str, stamp: str) -> str:
 def save_raw(
     data_base: Path, source: str, filename: str, data: bytes, when
 ) -> Path:
-    """Persist verbatim source bytes under the raw partition for ``when``."""
     p = raw_path(data_base, source, when, filename)
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_bytes(data)
@@ -170,11 +136,7 @@ def _cannot_fetch(source: str, runtime: str) -> List[RunReport]:
 
 
 def _choose_jsda_parser(filename: str, data: bytes):
-    """Pick the JSDA parser for a downloaded file.
-
-    Returns ``(parser_callable, kind)``. Raises ``ValueError`` for legacy
-    ``.xls`` (unsupported) instead of silently parsing zero rows.
-    """
+    """Return ``(parser, kind)``. Legacy ``.xls`` raises (not a silent zero-row parse)."""
     from .jsda.parse import parse_csv, parse_xlsx
 
     low = (filename or "").lower()
@@ -191,11 +153,7 @@ def _choose_jsda_parser(filename: str, data: bytes):
 
 
 def _choose_jsda_repo_parser(filename: str, data: bytes):
-    """Pick the JSDA repo-rate parser for a downloaded file.
-
-    The official full time-series file is legacy ``.xls`` and is parsed with
-    xlrd. It must never be treated as an optional/cleanly-skipped format.
-    """
+    """Return ``(parser, kind)``. Official ``.xls`` is required, never a clean skip."""
     from .jsda.parse import parse_repo_csv, parse_repo_xls, parse_repo_xlsx
 
     low = (filename or "").lower()
@@ -228,25 +186,7 @@ def run_jquants(
     max_workers: int = 8,
     chunk_days: int = 30,
 ) -> List[RunReport]:
-    """Run a J-Quants pass.
-
-    Two modes of operation:
-
-    * **catalog-driven** (``datasets`` is a non-empty list): for each dataset
-      id fetch via :meth:`JQuantsClient.fetch_dataset`, save raw, normalize
-      with :func:`normalize_generic`, and upsert into the generic
-      ``jquants_records`` table. This is the full Premium + add-on coverage
-      path. ``mode`` (``incremental``/``backfill``) controls the default date
-      window when ``date_from``/``date_to`` are not supplied.
-      Long ranges are split into ``chunk_days`` grids and run with up to
-      ``max_workers`` threads under a shared Premium rate limit.
-    * **legacy default** (``datasets`` is ``None``): the Phase-1 curated path
-      (listed_info / daily_bars / market_calendar / fins_summary raw-only)
-      into the specialized tables — unchanged behaviour.
-
-    The API key is required for direct fetch, but **not** when ``http`` is the
-    Cloudflare proxy client (the Worker injects the key upstream).
-    """
+    """J-Quants pass: catalog-driven ``datasets`` or the Phase-1 curated path."""
     via_proxy = getattr(http, "name", "") == "cf-jquants-proxy"
     if not api_key and not via_proxy:
         return [
@@ -281,12 +221,6 @@ def run_jquants(
             max_workers=max_workers,
             chunk_days=chunk_days,
         )
-
-    # Each sub-fetch stamps its own ``when`` right after the HTTP call returns —
-    # the per-job fetch-completion time. The raw partition (yyyy/mm/dd) follows
-    # ``when`` (not the process-start ``today``) so a sub-fetch that finishes
-    # after midnight lands in the correct day; the same ``when`` drives the
-    # filename stamp and the rows' ``ingested_at`` for consistency.
 
     # 1) listed info
     try:
@@ -330,8 +264,7 @@ def run_jquants(
     except Exception as exc:  # noqa: BLE001
         reports.append(RunReport("jquants", "calendar", error=f"{exc}"))
 
-    # 4) OPTIONAL fins/summary — save raw only; skip cleanly on failure.
-    #    registered==0 is intentional here (raw-only endpoint).
+    # 4) fins/summary — raw-only; skip cleanly on failure.
     try:
         summ = client.fins_summary(code=code)
         when = now_iso()
@@ -355,12 +288,7 @@ def run_jquants(
 
 
 def _jquants_default_window(today, mode: str) -> tuple[Optional[str], Optional[str]]:
-    """Default date window when the caller passes none.
-
-    ``incremental`` -> the last ~5 calendar days (catch the latest bars /
-    filings without a heavy backfill). ``backfill`` -> no window (let the
-    server return its full default range, or rely on explicit CLI dates).
-    """
+    """incremental: last 5 calendar days. backfill: no default window."""
     if mode == "incremental":
         try:
             start = today - _days(5)
@@ -375,24 +303,6 @@ def _days(n: int):
     from datetime import timedelta
 
     return timedelta(days=n)
-
-
-def _dataset_params(accept: list[str], code, date_from, date_to) -> dict:
-    """Build request params for a dataset, limited to what it accepts.
-
-    ``accept`` is the catalog entry's ``params`` list. Avoids sending
-    ``code``/``from``/``to`` to endpoints that don't take them (e.g. a
-    market-wide calendar or index series).
-    """
-    ok = set(accept or [])
-    p: dict = {}
-    if code and "code" in ok:
-        p["code"] = code
-    if date_from and "from" in ok:
-        p["from_date"] = date_from
-    if date_to and "to" in ok:
-        p["to_date"] = date_to
-    return p
 
 
 def _run_jquants_catalog(
@@ -411,18 +321,7 @@ def _run_jquants_catalog(
     max_workers: int = 8,
     chunk_days: int = 30,
 ) -> List[RunReport]:
-    """Catalog-driven parallel fetch -> raw -> normalize_generic -> jquants_records.
-
-    Jobs = datasets × optional codes × date windows (``chunk_days``). Execution
-    uses a thread pool with a **shared** rate limiter on the client (Premium
-    500/min budget). Pagination within each job stays sequential.
-
-    PIT: each job's ``available_at``/``ingested_at`` default to **that job's
-    own fetch-completion time** (stamped in the worker right after the fetch
-    returns), not a single pre-pool timestamp shared across every job. Parallel
-    jobs finish at different wall-clock instants, so they must carry different
-    PIT stamps.
-    """
+    """Catalog-driven parallel fetch → raw → normalize_generic → jquants_records."""
     from .jquants import normalize as JN
     from .jquants.catalog import DATASETS
     from .jquants.parallel import expand_jobs, run_parallel, summarize_results
@@ -456,19 +355,11 @@ def _run_jquants_catalog(
     write_lock = __import__("threading").Lock()
 
     def _stamp_completion(res) -> None:
-        # Capture this job's fetch-completion time inside the worker, the
-        # instant its data landed. Used as the per-job available_at/ingested_at
-        # default so parallel jobs that finish at different times do not share
-        # one stale pre-pool timestamp. ``now_iso`` is resolved from the module
-        # namespace at call time (thread-safe; reads the system clock).
+        # Per-job PIT stamp; parallel jobs must not share a pre-pool timestamp.
         res.completed_at = now_iso()
 
     def _persist(job, rows: list, when: str) -> RunReport:
-        # kind stays the dataset id (tests / aggregators key on it). Window
-        # detail is only in the raw filename so multi-window jobs don't clobber.
-        # The raw partition (yyyy/mm/dd) follows ``when`` — this job's own
-        # fetch-completion time — not the process-start ``today``, so a job that
-        # finishes after midnight lands in the correct day.
+        # kind = dataset id. Window lives in the filename so jobs don't clobber.
         kind = job.dataset_id
         stamp_name = job.label.replace(" ", "_")[:120]
         raw_bytes = json.dumps(rows, ensure_ascii=False).encode("utf-8")
@@ -525,8 +416,6 @@ def _run_jquants_catalog(
                         unit = (req0.expected_scope or {}).get(
                             "expected_item_unit", "source_query"
                         )
-                        # Non-event source_query: one exhausted fetch for the
-                        # segment window is the explicit expected plan (1).
                         exp_map = None
                         if (
                             policy.expected_frequency != "event_driven"
@@ -555,8 +444,6 @@ def _run_jquants_catalog(
                             obs = 1 if len(rows) > 0 else 0
                         else:
                             obs = len(rows)
-                        # Phase 6.2.3: signed receipt is part of governed success.
-                        # Same connection as structured register; commit together.
                         from ingestion.runtime_authority import (
                             open_ingestion_signing_authority,
                         )
@@ -577,8 +464,7 @@ def _run_jquants_catalog(
                         )
                         store._conn.commit()
                 except Exception as rec_exc:  # noqa: BLE001
-                    # Governed datasets: receipt failure fails the run.
-                    # Do not leave structured rows looking like full PASS.
+                    # Governed: receipt failure must not leave structured rows as PASS.
                     try:
                         store._conn.rollback()
                     except Exception:  # noqa: BLE001
@@ -635,19 +521,7 @@ def run_jsda(
     bond: bool = True,
     repo: bool = True,
 ) -> List[RunReport]:
-    """Run a JSDA pass — bond trades and/or repo rates.
-
-    By default **both** series run in one ``--source jsda`` pass, each as an
-    independent :class:`RunReport` (so a repo skip/error never poisons the
-    bond-trade result). Pass ``bond=False`` / ``repo=False`` to limit the run.
-
-    * ``target_url``      — explicit bond-trade file URL (skips index scrape).
-    * ``repo_target_url`` — explicit repo-rate file URL (skips TRR index scrape).
-
-    Both are local-only in Phase 1 (bot/DC risk on the edge). The repo path
-    parses the official legacy ``.xls`` workbook with xlrd; corrupt or
-    unparseable input is an error, never a clean format skip.
-    """
+    """JSDA pass: bond trades and/or repo rates. Local-only; independent reports."""
     if runtime != "local":
         return [
             RunReport(
@@ -677,7 +551,6 @@ def run_jsda(
 
 
 def _run_jsda_bond(fetcher, reg, data_base, today, ingested, target_url) -> RunReport:
-    """Fetch + store JSDA bond trades (引値 equivalent). Unchanged behaviour."""
     from .jsda import normalize as SN
 
     try:
@@ -702,12 +575,6 @@ def _run_jsda_bond(fetcher, reg, data_base, today, ingested, target_url) -> RunR
 
 
 def _run_jsda_repo(fetcher, reg, data_base, today, ingested, target_url) -> RunReport:
-    """Fetch + store JSDA repo rates (東京レポ・レート).
-
-    The legacy adapter now parses the official ``.xls`` source. Governed
-    collection receipts and full-history bounds are owned by the explicit
-    Phase 6.1 archive runner.
-    """
     from .jsda import normalize as SN
 
     try:

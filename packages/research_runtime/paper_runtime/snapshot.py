@@ -95,7 +95,6 @@ def _quote_identifier(identifier: str) -> str:
 
 
 def _stable_value(value: Any) -> Any:
-    """Return a JSON-safe value without losing SQLite storage-class identity."""
     if value is None or isinstance(value, (bool, int, str)):
         return value
     if isinstance(value, float):
@@ -252,7 +251,7 @@ def _fact_table_state(
     conn: sqlite3.Connection,
     tables: set[str],
 ) -> list[dict[str, Any]]:
-    """Summarize PIT fact tables only for the no-watermark fallback path."""
+    """PIT fact-table counts for the no-watermark fallback path."""
     summaries: list[dict[str, Any]] = []
     for table in sorted(tables):
         if table.startswith("sqlite_") or table.startswith("ingestion_"):
@@ -292,7 +291,7 @@ def _canonical_digest(value: Any) -> str:
 
 
 def begin_snapshot_sync(conn: sqlite3.Connection, *, started_at: str) -> str:
-    """Invalidate research access and enter ``BUILDING`` before any write."""
+    """Invalidate research access and enter BUILDING before any write."""
     build_id = "build-" + uuid4().hex
     conn.execute(
         """
@@ -317,7 +316,7 @@ def begin_snapshot_sync(conn: sqlite3.Connection, *, started_at: str) -> str:
 
 
 def fail_snapshot_sync(conn: sqlite3.Connection, error: str) -> None:
-    """Keep a partially updated local DB unavailable to paper research."""
+    """Keep a partial local DB unavailable to paper research."""
     conn.execute(
         """
         INSERT INTO local_snapshot_policy
@@ -400,12 +399,7 @@ def commit_snapshot_manifest(
     *,
     required_datasets: Iterable[str],
 ) -> str:
-    """Commit the legacy in-place manifest used by compatibility fixtures.
-
-    Production sync uses :func:`publish_ready_snapshot`, which copies into a
-    content-addressed, read-only artifact.  This helper remains for older
-    local callers while retaining the same fail-closed lifecycle states.
-    """
+    """Legacy in-place manifest for compatibility fixtures (not production READY)."""
     required = tuple(sorted(set(str(item) for item in required_datasets)))
     if not required:
         raise ValueError("required_datasets must not be empty")
@@ -486,10 +480,7 @@ def commit_snapshot_manifest(
 def _research_manifest_id(manifest: dict[str, Any]) -> str:
     identity = dict(manifest)
     identity.pop("snapshot_id", None)
-    # The artifact filename is deterministically derived from snapshot_id and
-    # therefore excluded to avoid a circular hash/name dependency.
-    identity.pop("artifact", None)
-    # Publication bookkeeping does not change the logical data generation.
+    identity.pop("artifact", None)  # derived from snapshot_id; avoid circular hash
     identity.pop("committed_at", None)
     identity.pop("manifest_digest", None)
     return _canonical_digest(identity)
@@ -543,9 +534,7 @@ def _watermarks_for(
     coverage = {
         str(row["dataset"]): row for row in (coverage_rows or [])
     }
-    # JSDA is locally collected and therefore has no D1 export watermark.
-    # Its independently evaluated Coverage V2 aggregate is derived from the
-    # required-segment/receipt ledger and supplies an honest bounded watermark.
+    # JSDA has no D1 watermark; COMPLETE Coverage V2 observed_end is the bound.
     for dataset in sorted(set(required) - present):
         row = coverage.get(dataset)
         if (
@@ -571,7 +560,7 @@ def _watermarks_for(
 def _raw_manifests_for(
     conn: sqlite3.Connection, run_id: int, required: tuple[str, ...]
 ) -> dict[str, dict[str, Any]]:
-    """Require one COMPLETE full-page R2 manifest attestation per dataset."""
+    """Require one COMPLETE R2 raw-retention attestation per dataset."""
     table = conn.execute(
         "SELECT 1 FROM sqlite_master WHERE type='table' "
         "AND name='raw_retention_manifests'"
@@ -604,7 +593,7 @@ def _coverage_v2_proof(
     required: tuple[str, ...],
     coverage_rows: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Verify governed segment receipts and return a bounded manifest proof."""
+    """Verify governed segment receipts; return a bounded manifest proof."""
     if COVERAGE_POLICY_VERSION != "collection-coverage/v2":
         raise SnapshotRejected(
             "READY publication requires collection-coverage/v2"
@@ -767,7 +756,7 @@ def _coverage_v2_proof(
 def _verify_coverage_v2_manifest(
     conn: sqlite3.Connection, manifest: dict[str, Any]
 ) -> None:
-    """Recompute the embedded proof before accepting a research READY DB."""
+    """Recompute the embedded Coverage V2 proof before accepting a READY DB."""
     if manifest.get("coverage_policy_version") != COVERAGE_POLICY_VERSION:
         raise RuntimeError("READY snapshot does not use Coverage V2")
     required_raw = manifest.get("required_datasets")
@@ -808,7 +797,7 @@ def _evaluate_publication_gate(
     dict[str, int], list[dict[str, Any]], dict[str, dict[str, Any]],
     dict[str, Any],
 ]:
-    """Reuse strict B0, Phase 3.5 daily checks, and the coverage ledger."""
+    """Strict B0 + Phase 3.5 daily checks + Coverage V2 ledger."""
     jquants_required = tuple(
         dataset for dataset in required if dataset in _JQUANTS_DATASETS
     )
@@ -816,9 +805,7 @@ def _evaluate_publication_gate(
         raise SnapshotRejected(
             "READY publication requires the governed J-Quants foundation"
         )
-    # Phase 6 run validation and R2 raw manifests belong to the Cloudflare
-    # J-Quants batch. Governed JSDA raw/structured completeness is proven by
-    # Coverage V2 receipts below, including its source URL and raw digest.
+    # J-Quants run+R2 manifests; JSDA completeness is Coverage V2 receipts.
     run_id, run_detail, validations = _latest_complete_run(
         conn, jquants_required
     )
@@ -940,12 +927,7 @@ def publish_ready_snapshot(
     *,
     required_datasets: Iterable[str],
 ) -> ReadySnapshot:
-    """Gate a staging DB and atomically publish a read-only READY copy.
-
-    The staging database remains write-capable but never becomes research
-    readable.  Only the content-addressed copy embeds ``snapshot_ready=1``;
-    it is chmod 0444 before the atomic rename into the READY directory.
-    """
+    """Gate a staging DB and atomically publish a read-only READY copy."""
     staging_path = Path(staging_db).resolve()
     if not staging_path.is_file():
         raise FileNotFoundError(f"staging database does not exist: {staging_path}")
@@ -977,7 +959,6 @@ def publish_ready_snapshot(
     quality_policy_version = QUALITY_POLICY_VERSION
     published_ready: ReadySnapshot | None = None
     try:
-        # Publication always starts from a non-readable staging generation.
         conn.execute(
             """
             INSERT INTO local_snapshot_policy
@@ -1027,11 +1008,9 @@ def publish_ready_snapshot(
                 conn, staging_path, build_id=build_id, required=required
             )
             watermarks = _watermarks_for(conn, required, coverage_rows)
-            # Single READY publication policy (typed evidence → sole PASS/FAIL).
             from paper_runtime.ready_policy import ReadyPublicationPolicy
 
-            # raw_manifests already validated inside _evaluate_publication_gate;
-            # pass None so policy does not double-fail on shape differences.
+            # raw_manifests already validated; None avoids a second shape fail.
             policy = ReadyPublicationPolicy()
             bundle = policy.evaluate(
                 conn,
@@ -1194,9 +1173,7 @@ def publish_ready_snapshot(
                     mode=0o644,
                 )
             except OSError:
-                # The mutable pointer is an optimization only. Discovery
-                # scans and verifies immutable manifests if pointer refresh
-                # fails after the artifact is already READY.
+                # Pointer is optional; discovery scans verified manifests.
                 pass
         except Exception:
             temp_db.unlink(missing_ok=True)
@@ -1214,7 +1191,6 @@ def publish_ready_snapshot(
                 build_id,
             ),
         )
-        # Staging is intentionally not research-readable after publication.
         conn.execute(
             "UPDATE local_snapshot_policy SET snapshot_ready=0, "
             "publication_state='READY', active_snapshot_id=?, last_error=NULL "
@@ -1225,9 +1201,6 @@ def publish_ready_snapshot(
         return ready
     except Exception as exc:
         if published_ready is not None:
-            # The immutable artifact + sidecar are the publication authority.
-            # A later staging-ledger failure must not make a successfully
-            # published snapshot disappear or be reported as half-published.
             return published_ready
         try:
             conn.rollback()
@@ -1253,7 +1226,7 @@ def publish_ready_snapshot(
 def describe_snapshot(
     snapshot_dir: str | Path, snapshot_id: str
 ) -> ReadySnapshot:
-    """Verify a READY sidecar, immutable artifact, and embedded manifest."""
+    """Verify sidecar, immutable artifact, and embedded manifest."""
     directory = Path(snapshot_dir).resolve()
     stem = _artifact_stem(snapshot_id)
     manifest_path = directory / f"{stem}.manifest.json"
@@ -1305,11 +1278,8 @@ def list_ready_snapshots(snapshot_dir: str | Path) -> list[ReadySnapshot]:
 
 
 def latest_ready_snapshot(snapshot_dir: str | Path) -> ReadySnapshot:
-    """Resolve the latest verified READY snapshot; never return a build."""
+    """Latest verified READY snapshot; never return a BUILDING artifact."""
     directory = Path(snapshot_dir).resolve()
-    # `latest-ready.json` is operationally convenient but not authoritative:
-    # scanning immutable verified manifests prevents a stale/tampered pointer
-    # from making an older artifact appear latest.
     ready = list_ready_snapshots(directory)
     if not ready:
         raise FileNotFoundError(f"no READY research snapshot under {directory}")
@@ -1319,7 +1289,7 @@ def latest_ready_snapshot(snapshot_dir: str | Path) -> ReadySnapshot:
 def open_ready_snapshot(
     snapshot_dir: str | Path, snapshot_id: str | None = None
 ) -> sqlite3.Connection:
-    """Open only a verified READY artifact via immutable SQLite URI flags."""
+    """Open a verified READY artifact with immutable SQLite URI flags."""
     ready = (
         latest_ready_snapshot(snapshot_dir)
         if snapshot_id is None
@@ -1329,30 +1299,6 @@ def open_ready_snapshot(
     conn = sqlite3.connect(uri, uri=True)
     conn.row_factory = sqlite3.Row
     return conn
-
-
-def snapshot_quality_summary(
-    snapshot_dir: str | Path, snapshot_id: str | None = None
-) -> dict[str, Any]:
-    ready = (
-        latest_ready_snapshot(snapshot_dir)
-        if snapshot_id is None
-        else describe_snapshot(snapshot_dir, snapshot_id)
-    )
-    quality = ready.manifest.get("quality")
-    if not isinstance(quality, dict):
-        raise RuntimeError("READY snapshot has no quality summary")
-    return dict(quality)
-
-
-def snapshot_quality_failures(
-    snapshot_dir: str | Path, snapshot_id: str | None = None
-) -> list[dict[str, Any]]:
-    quality = snapshot_quality_summary(snapshot_dir, snapshot_id)
-    failures = quality.get("failures", [])
-    if not isinstance(failures, list):
-        raise RuntimeError("READY snapshot quality failures are malformed")
-    return [dict(item) for item in failures if isinstance(item, dict)]
 
 
 def _manifest_snapshot_state(
@@ -1407,13 +1353,7 @@ def _manifest_snapshot_state(
 
 
 def data_snapshot_id(db_path: str | Path) -> str:
-    """Return a lightweight logical identifier for a local data snapshot.
-
-    Watermarks and validation summaries are the authoritative fast path.  A
-    database without usable watermark rows falls back to fact-table counts,
-    maximum ingestion timestamps, and weak main-file metadata.  No database
-    payload or SQLite file is read byte-for-byte.
-    """
+    """Logical snapshot id from watermarks/validation (not a byte hash)."""
     path = Path(db_path)
     if not path.is_file():
         raise FileNotFoundError(f"paper database does not exist: {path}")
@@ -1429,9 +1369,6 @@ def data_snapshot_id(db_path: str | Path) -> str:
         }
         manifest_state = _manifest_snapshot_state(conn, tables)
         if manifest_state is not None:
-            # A READY publication already has a content address. Returning it
-            # directly keeps paper/feature provenance identical to the
-            # artifact name and manifest snapshot_id.
             return str(manifest_state["manifest_id"])
         else:
             watermarks = _watermark_state(conn, tables)
@@ -1469,6 +1406,4 @@ __all__ = [
     "list_ready_snapshots",
     "open_ready_snapshot",
     "publish_ready_snapshot",
-    "snapshot_quality_failures",
-    "snapshot_quality_summary",
 ]

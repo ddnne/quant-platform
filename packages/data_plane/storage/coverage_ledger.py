@@ -80,14 +80,7 @@ def plan_required_segments(
     source: str = "jquants",
     expected_items_by_segment: Mapping[str, int] | None = None,
 ) -> tuple[RequiredCoverageSegment, ...]:
-    """Create the required inventory independently of observed rows/receipts.
-
-    Supported granularities:
-    - calendar_month: one segment per calendar month
-    - official_archive_year: one segment per year (JSDA annual archives)
-    - official_archive_day: one segment per day within [start, end]
-    - source_time_series_file: single segment covering full target window
-    """
+    """Create the required inventory independently of observed rows/receipts."""
     start = date.fromisoformat(policy.history_target_start)
     end = date.fromisoformat(target_end)
     if end < start:
@@ -252,7 +245,6 @@ def _latest_run_id(conn: sqlite3.Connection, dataset: str) -> int | None:
 
 
 def _date_prefix(value: str | None) -> str | None:
-    """Normalize ISO timestamps / calendar dates to YYYY-MM-DD for ordering."""
     if value is None:
         return None
     text = str(value).strip()
@@ -264,14 +256,7 @@ def _date_prefix(value: str | None) -> str | None:
 def _receipt_observed_window(
     receipts: Sequence[CollectionReceipt],
 ) -> tuple[str | None, str | None, int]:
-    """Observed calendar span from SUCCESS receipts with real raw rows.
-
-    R2-only structured paths leave D1 ``jquants_records`` as a hot window only
-    (often starting 2024+). Historical evidence still lands in
-    ``collection_receipts`` with ``raw_row_count > 0`` (and matching structured
-    count when the worker wrote R2 JSONL). Empty SUCCESS shells
-    (``raw_row_count=0``) must not extend ``observed_start``.
-    """
+    """Observed calendar span from SUCCESS receipts with ``raw_row_count > 0``."""
     starts: list[str] = []
     ends: list[str] = []
     raw_total = 0
@@ -299,11 +284,7 @@ def _merge_observed_window(
     receipt_start: str | None,
     receipt_end: str | None,
 ) -> tuple[str | None, str | None]:
-    """Union D1-hot C4 window with receipt-plane evidence (calendar dates).
-
-    Prefer keeping a richer hot-window timestamp when it is the extreme, but
-    never hide earlier receipt evidence behind a hot-only min.
-    """
+    """Union D1-hot C4 window with receipt-plane evidence (calendar dates)."""
     candidates_start = [
         v for v in (_date_prefix(hot_start), _date_prefix(receipt_start)) if v
     ]
@@ -335,7 +316,6 @@ def _merge_observed_window(
 
 
 def _calendar_days_between(start: str, end: str) -> int | None:
-    """Inclusive-of-order calendar-day delta (end - start) on YYYY-MM-DD prefixes."""
     try:
         a = date.fromisoformat(str(start)[:10])
         b = date.fromisoformat(str(end)[:10])
@@ -352,13 +332,7 @@ def _apply_receipt_freshness_c8(
     reference: str,
     freshness_days: int,
 ) -> list[CheckResult]:
-    """Re-score C8 from SUCCESS receipt plane when it is newer than D1-hot.
-
-    CF-native R2 structured paths leave ``jquants_records`` as a residual hot
-    window (or empty). Freshness SoT for those datasets is SUCCESS receipts
-    with ``raw_row_count > 0`` (segment_end). Never invents dates — only uses
-    the provided ``receipt_end`` evidence.
-    """
+    """Re-score C8 from SUCCESS receipt ``segment_end`` when newer than D1-hot."""
     if not receipt_end:
         return evidence
     receipt_hi = _date_prefix(receipt_end)
@@ -433,7 +407,7 @@ def _apply_receipt_freshness_c8(
 def _dataset_status(
     results: list[CheckResult],
 ) -> tuple[str, int, str | None, str | None]:
-    """Apply validation/freshness gates without claiming collection coverage."""
+    """Validation/freshness gates only; segments/receipts own COMPLETE."""
     checks = {result.check_id: result for result in results}
     c3 = checks.get("C3")
     row_count = int(c3.metrics.get("row_count", 0)) if c3 is not None else 0
@@ -471,12 +445,7 @@ def _coverage_source(dataset: str) -> str:
 def _jsda_validation_status(
     conn: sqlite3.Connection, dataset: str
 ) -> tuple[str, int, str | None, str | None]:
-    """PIT-shape prerequisite for locally governed JSDA facts.
-
-    Collection completeness remains receipt-owned. An empty table is not a
-    validation failure when every expected source segment is still missing;
-    those independently planned segments correctly aggregate to PARTIAL.
-    """
+    """PIT-shape prerequisite; collection completeness stays receipt-owned."""
     # Every jsda_* governed dataset MUST map here or validation stays UNKNOWN.
     # Corporate bond transactions is NOT legacy jsda_bond_trades (different NK).
     fact_tables = {
@@ -558,7 +527,7 @@ def _receipt_from_row(row: Mapping[str, Any]) -> CollectionReceipt:
 def record_collection_receipt(
     conn: sqlite3.Connection, receipt: CollectionReceipt
 ) -> None:
-    """Upsert one run-scoped receipt; callers own the surrounding transaction."""
+    """Upsert one run-scoped receipt; caller owns the transaction."""
     if receipt.status not in {"SUCCESS", "FAILED"}:
         raise ValueError("receipt status must be SUCCESS or FAILED")
     counts = (
@@ -635,7 +604,7 @@ def record_required_segments(
 
 
 def _rank_receipt_for_match(item: CollectionReceipt) -> tuple:
-    """Rank receipts: trusted first, recovered last, then structured/time."""
+    """Trusted first, recovered last, then structured/time."""
     trusted = 1 if is_complete_eligible_receipt(item) else 0
     origin = str(item.digests.get("origin") or "")
     recovered = 1 if (
@@ -655,11 +624,7 @@ def _latest_receipt_for(
     receipts: Sequence[CollectionReceipt],
     required: RequiredCoverageSegment,
 ) -> CollectionReceipt | None:
-    """Pick best receipt for a segment.
-
-    Prefer COMPLETE-eligible TRUSTED_COLLECTION over RECOVERED_RAW_ONLY even if
-    a recovery rebuild is newer (recovery must not clobber live trust).
-    """
+    """Best receipt for a segment; trusted wins over a newer recovered rebuild."""
     exact = [
         receipt for receipt in receipts
         if receipt.source == required.source
@@ -680,12 +645,7 @@ def _latest_eligible_success_for_segment_id(
     dataset: str,
     segment_id: str,
 ) -> CollectionReceipt | None:
-    """Best COMPLETE-eligible SUCCESS receipt for a segment_id.
-
-    Used by sticky COMPLETE when exact window match fails after a day-roll
-    replan (segment_end advanced) but an honest signed SUCCESS still exists
-    for the same segment_id.
-    """
+    """Best COMPLETE-eligible SUCCESS receipt for a segment_id (sticky fallback)."""
     candidates = [
         receipt
         for receipt in receipts
@@ -705,7 +665,7 @@ def evaluate_required_segments(
     required_segments: Sequence[RequiredCoverageSegment],
     receipts: Sequence[CollectionReceipt],
 ) -> tuple[str, list[tuple[RequiredCoverageSegment, CollectionReceipt | None, str, dict[str, Any]]]]:
-    """Evaluate the complete planned inventory, including missing receipts."""
+    """Evaluate the planned inventory, including missing receipts."""
     evaluated = []
     for required in required_segments:
         receipt = _latest_receipt_for(receipts, required)
@@ -1160,32 +1120,10 @@ def coverage_gaps(db_path: str | Path) -> list[dict[str, Any]]:
     ]
 
 
-# ---------------------------------------------------------------------------
-# Surgical dataset_coverage re-aggregate from coverage_segments (SoT)
-# ---------------------------------------------------------------------------
-#
-# Segment seals (restore/issue) can leave ``dataset_coverage.status`` stale
-# (e.g. segs 104/104 COMPLETE while aggregate stays PARTIAL). Full
-# ``refresh_coverage_ledger`` re-evaluates every segment from receipts and is
-# riskier than necessary when the segment plane is already correct.
-#
-# These helpers re-aggregate **only** ``dataset_coverage`` from existing
-# ``coverage_segments`` rows. They never invent segments and never rewrite
-# the segment plane. Prefer this path after a seal when all required segs
-# are already COMPLETE (W10-G12 / W13-G3 / W69 class).
-
-
 def aggregate_status_from_segment_counts(
     status_counts: Mapping[str, int],
 ) -> str:
-    """Pure: derive dataset aggregate status from a segment status histogram.
-
-    Rules (fail-closed, never invent COMPLETE from empty inventory):
-    - total == 0 → ``UNKNOWN`` (caller must not promote)
-    - any ``FAILED`` → ``FAILED``
-    - every segment ``COMPLETE`` (total > 0) → ``COMPLETE``
-    - otherwise → ``PARTIAL``
-    """
+    """Fail-closed aggregate: empty→UNKNOWN; any FAILED→FAILED; else all COMPLETE."""
     counts = {
         str(status): int(n)
         for status, n in dict(status_counts or {}).items()
@@ -1204,7 +1142,7 @@ def aggregate_status_from_segment_counts(
 def honest_status_counts(
     status_counts: Mapping[str, int],
 ) -> dict[str, int]:
-    """Normalize a segment status histogram (drop zeros; int values)."""
+    """Drop zero counts; coerce values to int."""
     return {
         str(status): int(n)
         for status, n in sorted(dict(status_counts or {}).items())
@@ -1231,7 +1169,7 @@ def build_surgical_reagg_detail(
     required_segments: int,
     audit: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Merge honest coverage_v2 status_counts into dataset detail_json."""
+    """Merge honest coverage_v2 status_counts into ``detail_json``."""
     detail = dict(existing_detail or {})
     cov = dict(detail.get("coverage_v2") or {})
     prev_counts = cov.get("status_counts")
@@ -1257,20 +1195,7 @@ def sync_dataset_coverage_from_segments(
     refuse_empty_complete: bool = True,
     wave: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Re-aggregate ``dataset_coverage`` from live ``coverage_segments`` rows.
-
-    For each dataset:
-    1. Read segment status histogram (policy_version scoped).
-    2. Compute honest ``status_counts`` and aggregate status.
-    3. Promote to COMPLETE only when all segs COMPLETE, no FAILED, inventory
-       non-empty, optional C* checks pass, and no empty COMPLETE segs
-       (null/0 ``receipt_run_id``).
-    4. Update **only** ``dataset_coverage.status`` + ``detail_json`` /
-       ``evaluated_at``. Never invent or rewrite ``coverage_segments``.
-
-    Returns a list of per-dataset action dicts (promoted / counts_refreshed /
-    verify_only / skip_* / demoted).
-    """
+    """Re-aggregate ``dataset_coverage`` from ``coverage_segments``; never rewrite segs."""
     if datasets is None:
         selected = [
             str(row[0])
@@ -1482,37 +1407,8 @@ def sync_dataset_coverage_from_segments(
     return results
 
 
-# ---------------------------------------------------------------------------
-# Receipt construction helpers (Lane H)
-# ---------------------------------------------------------------------------
-#
-# The JSDA governed archive runners (ingestion/jsda/archive.py,
-# repo_archive.py, corrections.py) already write real collection receipts
-# inline as each archive segment is fetched. The J-Quants catalog path
-# (ingestion.pipeline.run_jquants) historically persisted raw bytes and
-# structured rows but emitted **no** receipts — leaving every J-Quants
-# governed dataset at PARTIAL/UNKNOWN with zero receipts.
-#
-# The helpers below give the J-Quants emit path (ingestion/jquants/receipts.py)
-# and the operational CLI (scripts/write_collection_receipts.py) a single,
-# honest way to build a receipt whose ``raw`` digest is computed over the
-# *actual* persisted source bytes — never a placeholder — so any COMPLETE
-# verdict is always backed by verifiable raw retention.
-#
-# ``build_synthetic_complete_receipt`` exists ONLY for offline fixture
-# databases (tests). It carries an explicit ``synthetic`` sentinel in its
-# digests so it can never be mistaken for a live collection receipt and must
-# never be written to a production database.
-
-
 def compute_raw_digest(raw: bytes) -> str:
-    """SHA-256 over the verbatim source bytes, in the ledger's digest form.
-
-    Returns ``"sha256:" + hex``. ``raw`` must be the exact bytes persisted
-    under ``data/raw/...`` for the segment — the digest is what makes raw
-    retention auditable, so it must be computed over real bytes, not a
-    placeholder string.
-    """
+    """SHA-256 over the verbatim persisted source bytes (``sha256:`` + hex)."""
     if not isinstance(raw, (bytes, bytearray)):
         raise TypeError(
             "raw must be bytes (the verbatim persisted source bytes), "
@@ -1535,19 +1431,7 @@ def build_collection_receipt(
     checked_at: str | None = None,
     extra_digests: Mapping[str, Any] | None = None,
 ) -> CollectionReceipt:
-    """Build a REAL receipt whose raw digest is computed over ``raw`` bytes.
-
-    The receipt inherits ``expected_scope``/``expected_items`` from the planned
-    ``required`` segment, so it is identity-compatible with
-    :func:`evaluate_segment` (which demands an exact scope match). The ``raw``
-    digest is always a real SHA-256 over the supplied source bytes; callers
-    MUST pass the bytes actually persisted for the segment.
-
-    This helper records the truth. Whether the segment later evaluates to
-    COMPLETE is decided by :func:`evaluate_segment` against the policy — it
-    never fakes a verdict (a non-event segment without explicit expected items
-    stays PARTIAL, correctly).
-    """
+    """Build a receipt with a real SHA-256 over ``raw``; never fakes COMPLETE."""
     if status not in {"SUCCESS", "FAILED"}:
         raise ValueError("receipt status must be SUCCESS or FAILED")
     structured = int(structured_row_count)
@@ -1596,8 +1480,7 @@ def build_collection_receipt(
     )
 
 
-# Sentinel embedded in every offline-fixture (synthetic) receipt's digests so
-# it is distinguishable from any live collection receipt and auditable.
+# Offline-fixture sentinel; never write to a production database.
 SYNTHETIC_RECEIPT_MARKER = {
     "synthetic": True,
     "origin": "offline-test-fixture",
@@ -1611,20 +1494,7 @@ def build_synthetic_complete_receipt(
     observed_items: int | None = None,
     checked_at: str | None = None,
 ) -> CollectionReceipt:
-    """Build a COMPLETE-shaped receipt for an OFFLINE FIXTURE DATABASE ONLY.
-
-    This is the documented offline synthetic receipt writer used by tests and
-    by the CLI's hard-gated ``--synthetic`` fixture mode. It embeds the
-    :data:`SYNTHETIC_RECEIPT_MARKER` (``synthetic: True`` /
-    ``origin: offline-test-fixture``) in its digests so it can be distinguished
-    from any live collection receipt and **must never be written to a
-    production database**.
-
-    ``observed_items`` defaults to a non-zero count (or ``0`` for event-driven
-    segments whose ``expected_items`` is ``0``) so the receipt can satisfy
-    :func:`evaluate_segment` in a fixture. It records no real raw bytes — the
-    digest is a deterministic placeholder, intentionally marked synthetic.
-    """
+    """Offline-fixture COMPLETE-shaped receipt. Never write to production."""
     expected = required.expected_items
     if observed_items is None:
         observed_items = 0 if expected == 0 else 1
@@ -1660,16 +1530,11 @@ def build_synthetic_complete_receipt(
 
 
 def is_synthetic_receipt(receipt: CollectionReceipt) -> bool:
-    """True if a receipt carries the offline-fixture synthetic sentinel."""
     return bool(receipt.digests.get("synthetic"))
 
 
 def receipt_eligibility(receipt: CollectionReceipt) -> str:
-    """Return COMPLETE-eligibility class for a receipt.
-
-    Phase 6.2.3: only Ed25519-verified signed receipts are TRUSTED_COLLECTION.
-    issuer_class / issuer_id strings alone are never sufficient.
-    """
+    """TRUSTED_COLLECTION only with a verified Ed25519 signature, never issuer strings."""
     if is_synthetic_receipt(receipt) or receipt.digests.get("origin") in {
         "offline-test-fixture",
         "recovered-raw-only",
