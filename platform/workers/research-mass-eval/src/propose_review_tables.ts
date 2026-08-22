@@ -24,7 +24,7 @@ export const GATE_TITLE_CONTRA: Array<[string, string[]]> = [
   ["rich_iv", ["cheap iv", "iv is cheap"]],
   ["overnight_easing", ["tightening"]],
   ["overnight_tightening", ["easing", "easy funding"]],
-  ["repo_3m_down", ["high repo", "repo rate is high", "rising repo", "repo up"]],
+  ["repo_3m_down", ["high repo", "repo rate is high", "rising repo", "repo up", "3m rate is high", "repo 3m rate is high", "rate is high"]],
   ["overnight_p10", ["rates are high", "high overnight", "overnight is high", "overnight rate is high", "overnight rates are high", "funding is tight", "tight overnight"]],
 ];
 
@@ -47,7 +47,7 @@ export const GATE_OCCUPANCY_LABEL: Array<[string, string[]]> = [
   ["eps_up", ["earnings per share are rising", "eps are rising", "eps is rising", "rising earnings per share", "rising eps"]],
   ["sales_down", ["sales are down", "sales down", "falling sales"]],
   ["tight_funding", ["funding conditions are tight", "funding conditions tighten", "conditions tighten", "funding tightness"]],
-  ["price_down", ["under pressure", "price pressure", "price is low", "price is falling", "price falling", "falling price", "prices drop", "price drops", "price contracted", "prices are declining", "prices declining"]],
+  ["price_down", ["under pressure", "price pressure", "price is low", "price is falling", "price falling", "falling price", "prices drop", "price drops", "price contracted", "prices are declining", "prices declining", "has been falling", "been falling"]],
   ["crowded_margin", ["market is crowded"]],
 ];
 
@@ -82,6 +82,7 @@ export const EXTRA_TITLE_GATES: Array<[string, string]> = [
   ["earnings disappointment", "eps_down"],
   ["earnings disappoint", "eps_down"],
   ["earnings per share tend to decrease", "eps_down"],
+  ["earnings per share is expected to fall", "eps_down"],
   ["eps growth", "eps_up"],
   ["earnings growth", "eps_up"],
   ["high np", "np_negative"],
@@ -121,6 +122,7 @@ export const OCCUPANCY_EXTRA_TITLE: Array<[string, string[]]> = [
   ["10 percent", ["overnight_p10"]],
   ["10% predicts", ["overnight_p10"]],
   ["appetite for risk", ["eq_ar_falling", "eq_ar_high", "eq_ar_low", "eq_ar_rising"]],
+  ["been falling", ["price_down"]],
   ["conditions tighten", ["tight_funding"]],
   ["curve flattened", ["curve_flatten"]],
   ["curve inversion", ["invert_curve"]],
@@ -147,6 +149,7 @@ export const OCCUPANCY_EXTRA_TITLE: Array<[string, string[]]> = [
   ["funding conditions tighten", ["tight_funding"]],
   ["funding is loose", ["overnight_p10"]],
   ["funding tightness", ["tight_funding"]],
+  ["has been falling", ["price_down"]],
   ["high price momentum", ["pre_mom"]],
   ["increase in pb", ["pb_rising"]],
   ["invert curve", ["invert_curve"]],

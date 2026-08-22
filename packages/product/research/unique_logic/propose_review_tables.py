@@ -186,7 +186,15 @@ GATE_TITLE_CONTRA: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("rich_iv", ("cheap iv", "iv is cheap")),
     ("overnight_easing", ("tightening",)),
     ("overnight_tightening", ("easing", "easy funding")),
-    ("repo_3m_down", ("high repo", "repo rate is high", "rising repo", "repo up")),
+    ("repo_3m_down", (
+        "high repo",
+        "repo rate is high",
+        "rising repo",
+        "repo up",
+        "3m rate is high",
+        "repo 3m rate is high",
+        "rate is high",
+    )),
     # overnight_p10 = easiest/low overnight. "rates are high" is inverted.
     (
         "overnight_p10",
@@ -319,6 +327,8 @@ GATE_OCCUPANCY_LABEL: tuple[tuple[str, tuple[str, ...]], ...] = (
         "price contracted",
         "prices are declining",
         "prices declining",
+        "has been falling",
+        "been falling",
     )),
     ("crowded_margin", ("market is crowded",)),
 )
@@ -357,6 +367,7 @@ EXTRA_TITLE_GATES: tuple[tuple[str, str], ...] = (
     ("earnings disappointment", "eps_down"),
     ("earnings disappoint", "eps_down"),
     ("earnings per share tend to decrease", "eps_down"),
+    ("earnings per share is expected to fall", "eps_down"),
     ("eps growth", "eps_up"),
     ("earnings growth", "eps_up"),
     ("high np", "np_negative"),

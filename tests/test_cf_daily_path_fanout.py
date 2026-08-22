@@ -107,6 +107,31 @@ def test_fanout_path_broken_cells_are_not_complete() -> None:
     assert pack["go"] is False
 
 
+def test_fanout_rejects_job_scoped_panels_prefix_on_r2() -> None:
+    """Occupancy reuse must be panels_cache/{track cache id}, not job=.../panels."""
+    from research.cf_mass_eval_job import CfMassEvalError
+
+    try:
+        run_cf_daily_path_fanout(
+            job_id="test-bad-prefix",
+            logic_ids=["event_eps_down_sales_down"],
+            mode="r2_panels",
+            track="mid_n_explore",
+            max_codes=80,
+            panels_prefix=(
+                "research/mass_eval/job="
+                "eval-occupancy-audit-20260824ar-mid_n_explore/panels"
+            ),
+            http_post=lambda **_k: (_ for _ in ()).throw(
+                AssertionError("must not POST mismatched panels_prefix")
+            ),
+        )
+    except CfMassEvalError as exc:
+        assert "panels_prefix must match" in str(exc)
+    else:
+        raise AssertionError("expected CfMassEvalError")
+
+
 def test_daily_path_spec_keeps_unique_event() -> None:
     from research.cf_mass_eval_job import build_cf_mass_eval_job_spec
 

@@ -18,10 +18,12 @@ from research.cf_mass_eval_job import (
     DEFAULT_ONE_WAY,
     DEFAULT_REAL_MULTIYEAR_PERIODS,
     DEFAULT_WORKER_URL,
+    PANELS_CACHE_PREFIX,
     CfMassEvalError,
     build_cf_mass_eval_job_spec,
     invoke_cf_mass_eval_worker,
     normalize_period_row,
+    panels_cache_id,
     resolve_or_stage_panels,
 )
 from research.daily_path_eval import git_sha
@@ -111,6 +113,20 @@ def run_cf_daily_path_fanout(
         normalize_period_row(p)
         for p in (periods or DEFAULT_REAL_MULTIYEAR_PERIODS)
     ]
+    if panels_prefix and mode == "r2_panels":
+        cid = panels_cache_id(
+            period_rows,
+            max_codes=max_codes,
+            max_days=max_days,
+            track=track,
+        )
+        expected = f"{PANELS_CACHE_PREFIX}/{cid}/panels"
+        got = str(panels_prefix).rstrip("/")
+        if got != expected:
+            raise CfMassEvalError(
+                "panels_prefix must match track×periods×codes cache "
+                f"expected={expected} got={got}"
+            )
     stage_meta: dict[str, Any] | None = None
     if panels_prefix:
         stage_meta = {
