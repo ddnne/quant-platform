@@ -2,7 +2,8 @@
 
 Distinct economic-logic individuals, then near-dup, then batch eval.
 Profit-hypothesis LLM entry: ``research.offline.factory_propose``.
-Eval: ``research.offline.factory_eval``. Unique/combo stay ungenerated.
+Eval: ``research.offline.factory_eval``. Panels: ``factory_eval_data``.
+Unique/combo stay ungenerated (generation_enabled=False).
 """
 
 from __future__ import annotations
@@ -763,12 +764,15 @@ def generate_strategy_batch(
 # ---------------------------------------------------------------------------
 # Batch evaluation context + per-strategy eval
 # ---------------------------------------------------------------------------
-# Bodies live in research.offline.factory_eval (import after MassFactoryConfig).
+# Panels: research.offline.factory_eval_data. Eval/screen: factory_eval.
+# Import after MassFactoryConfig.
 
-from research.offline.factory_eval import (  # noqa: E402
+from research.offline.factory_eval_data import (  # noqa: E402
     BatchDataContext,
-    evaluate_one_strategy,
     load_batch_data_context,
+)
+from research.offline.factory_eval import (  # noqa: E402
+    evaluate_one_strategy,
     run_batch_eval,
     screen_strategy_result,
 )
