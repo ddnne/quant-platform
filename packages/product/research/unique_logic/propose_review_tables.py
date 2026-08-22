@@ -423,6 +423,14 @@ _OCCUPANCY_EXTRA_SKIP: frozenset[str] = frozenset(
     {"is rising", "loose", "pb rose", "at 10%"}
 )
 
+# Title talks about occupancy as a metric, not the gate predicate.
+TITLE_OCCUPANCY_META: tuple[str, ...] = (
+    "occupancy increases",
+    "occupancy increase",
+    "occupancy is high",
+    "occupancy is low",
+)
+
 
 def occupancy_extra_families() -> tuple[tuple[str, tuple[str, ...]], ...]:
     """Occupancy-label phrases → owner gates. Extra-title if none are in the AND."""
@@ -464,6 +472,7 @@ def sparse_gate_combos_for_propose() -> tuple[tuple[str, ...], ...]:
 __all__ = [
     "DEFAULT_PROPOSE_DATASETS",
     "EXTRA_TITLE_GATES",
+    "TITLE_OCCUPANCY_META",
     "PROPOSE_PROMPT_BAD",
     "PROPOSE_PROMPT_GOOD",
     "propose_prompt_good",

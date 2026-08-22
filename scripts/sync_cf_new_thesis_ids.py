@@ -109,6 +109,7 @@ def _propose_review_tables_source() -> str:
         PROPOSE_CONTRADICTORY_GATE_PAIRS,
         occupancy_extra_families,
         sparse_gate_combos_for_propose,
+        TITLE_OCCUPANCY_META,
     )
 
     def pair_rows(rows: tuple[tuple[str, tuple[str, ...]], ...]) -> str:
@@ -162,6 +163,10 @@ def _propose_review_tables_source() -> str:
             "export const OCCUPANCY_LABEL_EXCEPTIONS: Array<[string, string[]]> = [",
             except_lines,
             "];",
+            "",
+            "export const TITLE_OCCUPANCY_META = [",
+            ",\n".join(f"  {_ts_str(p)}" for p in TITLE_OCCUPANCY_META),
+            "] as const;",
             "",
         ]
     )

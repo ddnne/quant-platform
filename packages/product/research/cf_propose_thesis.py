@@ -28,6 +28,7 @@ from research.unique_logic.propose_review_tables import (
     PROMPT_DIRECTION_ECHO,
     PROPOSE_CONTRADICTORY_GATE_PAIRS,
     PROPOSE_TWEAK_WORDS,
+    TITLE_OCCUPANCY_META,
     occupancy_exception_tokens,
     occupancy_extra_families,
 )
@@ -173,21 +174,24 @@ def review_proposal_row(proposal: Mapping[str, Any]) -> dict[str, Any]:
         ):
             reasons.append("title_not_occupancy")
         polar_blob = blob.replace("_", " ").replace("-", " ")
+        if any(p in polar_blob for p in TITLE_OCCUPANCY_META):
+            reasons.append("occupancy_label_only")
         for gate, forbidden in GATE_TITLE_CONTRA:
             if gate not in kept_set:
                 continue
             if any(w in polar_blob for w in forbidden):
                 reasons.append("title_gate_polarity_mismatch")
                 break
-        for gate, labels in GATE_OCCUPANCY_LABEL:
-            if gate not in kept_set:
-                continue
-            if not any(w in polar_blob for w in labels):
-                continue
-            if any(t in polar_blob for t in occupancy_exception_tokens(gate)):
-                continue
-            reasons.append("occupancy_label_only")
-            break
+        if "occupancy_label_only" not in reasons:
+            for gate, labels in GATE_OCCUPANCY_LABEL:
+                if gate not in kept_set:
+                    continue
+                if not any(w in polar_blob for w in labels):
+                    continue
+                if any(t in polar_blob for t in occupancy_exception_tokens(gate)):
+                    continue
+                reasons.append("occupancy_label_only")
+                break
         if "occupancy_label_only" not in reasons:
             for phrase, owners in occupancy_extra_families():
                 if phrase in polar_blob and kept_set.isdisjoint(owners):

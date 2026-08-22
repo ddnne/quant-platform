@@ -20,6 +20,7 @@ import {
   OCCUPANCY_LABEL_EXCEPTIONS,
   PROPOSE_CONTRADICTORY_GATE_PAIRS,
   SPARSE_GATE_COMBOS_REVIEW,
+  TITLE_OCCUPANCY_META,
 } from "./propose_review_tables";
 
 function hasWorkersAi(env: Env): boolean {
@@ -245,6 +246,7 @@ function occupancyExceptionTokens(gate: string): string[] {
 function titleOccupancyBad(title: string, gates: string[]): boolean {
   const polar = title.replace(/_/g, " ").replace(/-/g, " ");
   const gset = new Set(gates);
+  if (TITLE_OCCUPANCY_META.some((p) => polar.includes(p))) return true;
   for (const [gate, words] of GATE_TITLE_CONTRA) {
     if (!gset.has(gate)) continue;
     if (words.some((w) => polar.includes(w))) return true;

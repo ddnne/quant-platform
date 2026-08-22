@@ -216,3 +216,10 @@ export const OCCUPANCY_LABEL_EXCEPTIONS: Array<[string, string[]]> = [
   ["curve_flatten", ["repo curve", "flattened"]],
   ["invert_curve", ["repo curve", "inverted"]],
 ];
+
+export const TITLE_OCCUPANCY_META = [
+  "occupancy increases",
+  "occupancy increase",
+  "occupancy is high",
+  "occupancy is low"
+] as const;
