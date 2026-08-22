@@ -456,4 +456,15 @@ def run_both_track_sleeve_fanout(
     table_path.write_text(
         json.dumps(pack, indent=2, default=str) + "\n", encoding="utf-8"
     )
+    if not dry_run:
+        from research.cf_mass_eval_stage import RESEARCH_ARTIFACT_BUCKET
+        from research.r2_io import default_r2_put
+
+        key = f"research/eval/job={jid}/both_track.json"
+        default_r2_put(
+            RESEARCH_ARTIFACT_BUCKET,
+            key,
+            json.dumps(pack, default=str).encode("utf-8"),
+        )
+        pack["r2_keys"] = {"both_track": key}
     return pack

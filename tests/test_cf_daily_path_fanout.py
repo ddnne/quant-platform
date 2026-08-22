@@ -350,9 +350,10 @@ def test_both_track_sleeve_fanout_default_is_off_network(monkeypatch) -> None:
     assert pack["head_n_forbidden"] is True
     assert pack["sleeve_majority_is_not_a_pass"] is True
     assert pack["logic_ids"] == sleeve_durability_logic_ids()
-    assert "event_eqar_high_pead" in pack["logic_ids"]
+    assert "event_eqar_high_liq_high" in pack["logic_ids"]
     assert "cs_margin_up_chase" in pack["logic_ids"]
     assert "event_cheap_pb_liq_high" in pack["logic_ids"]
+    assert "event_eqar_rising_afterclose" in pack["logic_ids"]
     tracks = {t["eval_track"]: t for t in pack["tracks"]}
     assert set(tracks) == {EVAL_TRACK_MID_N, EVAL_TRACK_LIQ_LARGE}
     assert tracks[EVAL_TRACK_MID_N]["max_codes"] == EVAL_TRACKS[EVAL_TRACK_MID_N]["max_codes"]
@@ -367,6 +368,7 @@ def test_both_track_sleeve_fanout_default_is_off_network(monkeypatch) -> None:
     assert pack["compare"]["not_a_pass"] is True
     assert pack["compare"]["go"] is False
     assert pack["compare"]["liq_print_is_not_stable"] is True
+    assert pack.get("r2_keys") is None  # dry_run does not write R2
 
 
 def test_both_track_sleeve_fanout_records_via_daily_path() -> None:

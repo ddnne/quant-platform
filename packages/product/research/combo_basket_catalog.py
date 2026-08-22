@@ -6,10 +6,10 @@ from typing import Any, Sequence
 from research.unique_logic.constants import ALWAYS_ON_CS_STICKY
 
 DEFAULT_CANDIDATE_BASKET: tuple[str, ...] = (
-    "event_easing_uncrowded",
-    "event_friday_skip",
-    "cs_skip_monday",
-    "overnight_down_cs_follow",
+    "event_eqar_high_liq_high",
+    "event_ta_up_liq_high",
+    "event_margin_down_liq_high",
+    "cs_margin_up_chase",
 )
 
 RETIRED_BASKET_RULES: frozenset[str] = frozenset(
@@ -83,9 +83,9 @@ MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
         "primary": True,
         "members": (
             "event_eqar_high_liq_high",
-            "event_eqar_high_pead",
             "event_ta_up_liq_high",
-            "cs_eqar_high_margin_down",
+            "event_eqar_rising_afterclose",
+            "event_eqar_high_pead",
         ),
     },
     {
@@ -95,7 +95,8 @@ MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
         "members": (
             "cs_margin_up_chase",
             "event_margin_down_liq_high",
-            "event_margin_delta_fade",
+            "event_pre_mom_uncrowded",
+            "event_margin_up_price_down_fade",
         ),
     },
     {
@@ -117,6 +118,7 @@ MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
             "event_eqar_high_liq_high",
             "event_positive_eps_liq_high",
             "event_cheap_pb_liq_high",
+            "event_pre_mom_liq_high",
         ),
     },
 )

@@ -210,59 +210,70 @@ async function llmProposals(
   env: Env,
   n: number,
   whyAvoid: string[],
-): Promise<Array<Record<string, unknown>> | null> {
-  if (!env.AI) return null;
+): Promise<{
+  rows: Array<Record<string, unknown>> | null;
+  reason: string | null;
+}> {
+  if (!env.AI) return { rows: null, reason: "ai_unbound" };
   const avoid = whyAvoid.filter(Boolean).slice(0, 12).join(", ") || "(none)";
-  try {
-    const res = await env.AI.run(PROPOSE_AI_MODEL, {
-      messages: [
-        {
-          role: "system",
-          content:
-            "You propose Japanese-equity overnight/event/CS profit theses. " +
-            "Return ONLY a JSON array of exactly the requested length. " +
-            "Each object: thesis, signal_definition, position_rule, " +
-            "datasets (string array), gates (string array), why_different_from (string array). " +
-            "datasets MUST be a subset of: equities_bars_daily, fins_summary, " +
-            "markets_calendar, markets_margin_interest, markets_short_ratio, " +
-            "jsda_tokyo_repo_rates. gates MUST be 2 or 3 distinct economic gates " +
-            "(AND-cross, not a single-gate PEAD filter, not 4+ sparse AND) from: liq_high, cheap_pb, " +
-            "eq_ar_high, eq_ar_rising, ta_up, ta_down, margin_up, margin_down, " +
-            "crowded_margin, uncrowded_margin, easy_funding, tight_funding, " +
-            "afterclose, cluster, pre_mom, price_down, eps_up, eps_down, " +
-            "np_negative, pb_rising, roe_low, sales_down, steep_curve, " +
-            "overnight_easing, overnight_tightening, on_impulse, large_surprise, " +
-            "repo_3m_down, cheap_iv, rich_iv. No opposite pairs (easy+tight). " +
-            "No weekday-only gates. Thesis title must NOT be the labels " +
-            "'Liquidity × Fundamentals', 'Margin × Price', or 'Disclosure × Funding'. " +
-            "Do not invent datasets, fields, or gates. " +
-            "No logic_id. No hold_days/window/mom-only tweaks. No catalog inject. " +
-            "Skip missing prints (no invent). Economic difference only.",
-        },
-        {
-          role: "user",
-          content:
-            `Propose exactly ${n} theses as a JSON array. Avoid resembling: ${avoid}. ` +
-            "Use AND-crosses of 2+ economic gates. Do not echo direction labels as titles.",
-        },
-      ],
-      max_tokens: 900,
-    });
-    const text =
-      typeof res === "string"
-        ? res
-        : isObject(res)
-          ? String(
-              (res as { response?: unknown }).response ??
-                (res as { result?: unknown }).result ??
-                JSON.stringify(res),
-            )
-          : "";
-    const rows = parseProposalArray(text, n);
-    return rows.length ? rows : null;
-  } catch {
-    return null;
+  let lastReason = "parse_empty";
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const res = await env.AI.run(PROPOSE_AI_MODEL, {
+        messages: [
+          {
+            role: "system",
+            content:
+              "You propose Japanese-equity overnight/event/CS profit theses. " +
+              "Return ONLY a JSON array of exactly the requested length. " +
+              "Each object: thesis, signal_definition, position_rule, " +
+              "datasets (string array), gates (string array), why_different_from (string array). " +
+              "datasets MUST be a subset of: equities_bars_daily, fins_summary, " +
+              "markets_calendar, markets_margin_interest, markets_short_ratio, " +
+              "jsda_tokyo_repo_rates. gates MUST be 2 or 3 distinct economic gates " +
+              "(AND-cross, not a single-gate PEAD filter, not 4+ sparse AND) from: liq_high, cheap_pb, " +
+              "eq_ar_high, eq_ar_rising, ta_up, ta_down, margin_up, margin_down, " +
+              "crowded_margin, uncrowded_margin, easy_funding, tight_funding, " +
+              "afterclose, cluster, pre_mom, price_down, eps_up, eps_down, " +
+              "np_negative, pb_rising, roe_low, sales_down, steep_curve, " +
+              "overnight_easing, overnight_tightening, on_impulse, large_surprise, " +
+              "repo_3m_down, cheap_iv, rich_iv. No opposite pairs (easy+tight). " +
+              "No weekday-only gates. Thesis title must NOT be the labels " +
+              "'Liquidity × Fundamentals', 'Margin × Price', or 'Disclosure × Funding'. " +
+              "Do not invent datasets, fields, or gates. " +
+              "No logic_id. No hold_days/window/mom-only tweaks. No catalog inject. " +
+              "Skip missing prints (no invent). Economic difference only.",
+          },
+          {
+            role: "user",
+            content:
+              `Propose exactly ${n} theses as a JSON array. Avoid resembling: ${avoid}. ` +
+              "Use AND-crosses of 2 or 3 economic gates. Do not echo direction labels as titles.",
+          },
+        ],
+        max_tokens: 1600,
+      });
+      const text =
+        typeof res === "string"
+          ? res
+          : isObject(res)
+            ? String(
+                (res as { response?: unknown }).response ??
+                  (res as { result?: unknown }).result ??
+                  JSON.stringify(res),
+              )
+            : "";
+      const rows = parseProposalArray(text, n);
+      if (rows.length) return { rows, reason: null };
+      lastReason = `parse_empty:raw_len=${text.length}:attempt=${attempt}`;
+    } catch (e) {
+      lastReason = `ai_error:${e instanceof Error ? e.message : String(e)}`.slice(
+        0,
+        180,
+      );
+    }
   }
+  return { rows: null, reason: lastReason };
 }
 
 function isWindowTweakOnly(o: Record<string, unknown>): boolean {
@@ -347,8 +358,10 @@ export async function runProposeThesis(
     : [];
   const writeArtifacts = body.write_artifacts === true;
   const llm = await llmProposals(env, n, whyAvoid);
-  const usedLlm = Array.isArray(llm) && llm.length > 0;
-  const proposals = usedLlm ? llm : stubProposals(n, whyAvoid);
+  const usedLlm = Array.isArray(llm.rows) && llm.rows.length > 0;
+  const proposals = usedLlm
+    ? (llm.rows as Array<Record<string, unknown>>)
+    : stubProposals(n, whyAvoid);
   const payload: Record<string, unknown> = {
     ok: true,
     proposals,
@@ -360,6 +373,7 @@ export async function runProposeThesis(
     workers_ai_bound: hasWorkersAi(env),
     workers_ai_used: usedLlm,
     proposal_source: usedLlm ? "workers_ai" : "stub",
+    llm_fallback_reason: usedLlm ? null : llm.reason,
   };
   if (writeArtifacts) {
     const jobId = String(body.job_id ?? "").trim();

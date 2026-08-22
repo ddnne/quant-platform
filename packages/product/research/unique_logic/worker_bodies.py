@@ -60,7 +60,12 @@ def unique22_occupancy_equal_lifted() -> frozenset[str]:
 
 @lru_cache(maxsize=1)
 def unique22_occupancy_park() -> frozenset[str]:
-    """Leftover unique-22 whose occupancy is not combo-equal. Not a candidate."""
+    """Leftover unique-22 whose occupancy is not combo-equal. Not a candidate.
+
+    Re-audit 2026-08-22: no additional occupancy-equal lifts. Remaining 17 are
+    dedicated CS books, sticky surprise-xs, trail-K, side-switch, or
+    momentumAt(entryIdx) leftover. Do not silently unpark.
+    """
     return unique_leftover_logic_ids() - unique22_occupancy_equal_lifted()
 
 

@@ -127,6 +127,9 @@ def test_worker_index_contains_propose_thesis_route() -> None:
     assert "[ai]" in wr
     assert "env.AI.run" in src
     assert "llm_not_catalog" in src
+    assert "llm_fallback_reason" in src
+    assert "parse_empty" in src
+    assert "ai_unbound" in src
     assert "stubProposals" in src
     assert "equities_bars_daily" in src
     assert "fins_summary" in src

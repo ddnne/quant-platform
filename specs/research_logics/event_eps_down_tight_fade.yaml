@@ -1,0 +1,30 @@
+logic_id: event_eps_down_tight_fade
+family_id: event_fund_flow_cross
+axis: mixed
+headline: false
+generation_enabled: false
+promote_as_main: false
+go: false
+main_pool: true
+thesis: >
+  Fade PEAD when EPS fell AND overnight funding is tight.
+signal_definition: >
+  Fade PEAD when EPS fell AND overnight funding is tight. Skip missing PIT prints (no invent).
+datasets:
+  - equities_bars_daily
+  - fins_summary
+  - jsda_tokyo_repo_rates
+  - markets_calendar
+  - markets_margin_interest
+params:
+  post_hold_days: 5
+  hold_days: 10
+  momentum_n: 5
+  min_hist: 20
+  mode: event_eps_down_tight_fade
+  side: flip
+  gates: eps_down,tight_funding
+  cs_gate: None
+  entry_shift: 0
+  hold_tail_days: 0
+evaluator: research.unique_logic.event_combos.evaluate_combo_daily_mtm
