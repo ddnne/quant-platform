@@ -292,20 +292,24 @@ from .class_signals_hold import (
     amortized_one_way_cost,
     apply_sticky_hold,
     apply_trading_day_filter,
-    compute_event_post_signal,
     compute_multi_day_hold_signal,
+    multi_day_forward_return,
+    sign_from_numeric,
+)
+from .class_signals_event_index import (
+    compute_event_post_signal,
     earnings_surprise_proxy,
-    economic_net_meaningful,
     event_post_available_at_from_fields,
     event_post_entry_bar_index,
-    multi_day_forward_return,
+    parse_disc_time_hhmmss,
+    session_close_hhmmss,
+)
+from .class_signals_metrics import (
+    economic_net_meaningful,
     multi_year_skew_check,
     occurrence_rate_event_post,
     occurrence_rate_multiday,
-    parse_disc_time_hhmmss,
     production_candidate_bar,
-    session_close_hhmmss,
-    sign_from_numeric,
 )
 from .class_signals_macro import (
     compute_macro_conditioned_signal,

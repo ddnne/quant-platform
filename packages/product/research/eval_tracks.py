@@ -148,13 +148,6 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "go": False,
     },
     {
-        "id": "class_signals_hold_split",
-        "track": EVAL_TRACK_MID_N,
-        "why": "class_signals_hold.py ~987 after family split; entry-index vs sticky hold",
-        "not_a_pass": True,
-        "go": False,
-    },
-    {
         "id": "local_combo_fail_closed",
         "track": EVAL_TRACK_MID_N,
         "why": (
