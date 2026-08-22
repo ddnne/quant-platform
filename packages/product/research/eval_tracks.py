@@ -134,13 +134,6 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "go": False,
     },
     {
-        "id": "multiyear_report_shrink",
-        "track": EVAL_TRACK_MID_N,
-        "why": "offline/multiyear_report.py ~1290 document/gates after stitch extract",
-        "not_a_pass": True,
-        "go": False,
-    },
-    {
         "id": "local_combo_fail_closed",
         "track": EVAL_TRACK_MID_N,
         "why": (
