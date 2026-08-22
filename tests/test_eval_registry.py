@@ -207,7 +207,9 @@ def test_mechanical_baskets_are_four_valid_defs() -> None:
     assert "event_family_only" in rules
     assert "family_spread" in rules
     assert "known_candidate_head" in rules
-    assert RETIRED_BASKET_RULES == frozenset({"low_occupancy_band"})
+    assert "low_occupancy_band" in RETIRED_BASKET_RULES
+    assert "surprise_xs_only" in RETIRED_BASKET_RULES
+    assert "two_member_easing" in RETIRED_BASKET_RULES
     for d in defs:
         assert d["valid"] is True
         assert d["deprecated"] is False
@@ -227,13 +229,29 @@ def test_mechanical_baskets_are_four_valid_defs() -> None:
     assert "cs_eqar_high" not in fund["members"]
     assert "event_eqar_high_pead" in fund["members"]
     assert "event_ta_up_pead" in fund["members"]
+    assert fund["primary_candidate"] is True
+    assert fund["go"] is False
+    flow = next(d for d in defs if d["rule"] == "margin_flow_sleeve")
+    repo = next(d for d in defs if d["rule"] == "repo_rate_sleeve")
+    evf = next(d for d in defs if d["rule"] == "event_fund_cross")
+    assert flow["primary_candidate"] is True
+    assert repo["primary_candidate"] is True
+    assert evf["primary_candidate"] is True
     from research.combo_basket import primary_mechanical_basket_defs
 
     prim = primary_mechanical_basket_defs()
     assert prim
-    assert all(d["primary"] for d in prim)
+    assert all(d.get("primary") or d.get("primary_candidate") for d in prim)
     assert all(d["rule"] != "cs_family_only" for d in prim)
     assert all(d["rule"] != "low_occupancy_band" for d in prim)
+    assert all(d["rule"] != "surprise_xs_only" for d in prim)
+    assert {d["rule"] for d in prim} >= {
+        "fundamentals_sleeve",
+        "margin_flow_sleeve",
+        "repo_rate_sleeve",
+        "event_fund_cross",
+        "event_family_only",
+    }
 
 
 def test_summarize_emits_candidate_family_counts() -> None:
@@ -390,7 +408,7 @@ def test_sparse_gate_combo_parks_at_generation() -> None:
         for s in NEW_COMBO_LOGIC
         if s["logic_id"]
         in {
-            "cs_cheap_pb",
+            "cs_eqar_high_easy",
             "surprise_xs_tight_fade",
             "cs_on_impulse",
         }
@@ -412,10 +430,34 @@ def test_sparse_gate_combo_parks_at_generation() -> None:
         assert row.get("data_requirement_unmet") is False
         assert row.get("main_pool") is True
         assert row.get("always_on_cs_sticky") is False
-    for lid in ("cs_eqar_high", "cs_eqar_low_fade", "cs_ta_up"):
+    for lid in (
+        "cs_eqar_high",
+        "cs_eqar_low_fade",
+        "cs_ta_up",
+        "cs_cheap_pb",
+        "cs_np_positive",
+    ):
         row = next(s for s in NEW_COMBO_LOGIC if s["logic_id"] == lid)
         assert row.get("main_pool") is False
         assert row.get("always_on_cs_sticky") is True
+    from research.eval_registry import summarize_daily_path_cells
+    from research.unique_logic.constants import is_ungated_name_level_cs
+
+    assert is_ungated_name_level_cs(kind="cs", cs_gate="eq_ar_high") is True
+    assert is_ungated_name_level_cs(kind="cs", cs_gate="eq_ar_high_easy") is False
+    cells = [
+        {
+            "logic_id": "cs_eqar_high",
+            "window_id": "y2015_full",
+            "occupancy": 0.20,
+            "total_ret_net": 0.01,
+            "eval_path": "gated_cs",
+            "daily_path_complete": True,
+        }
+    ]
+    summary = summarize_daily_path_cells(cells, job_id="eval-test-cs-sticky")
+    assert "always_on_cs_sticky" in summary["logics"][0]["flags"]
+    assert summary["logics"][0]["candidate"] is False
     cheap_and = next(
         s for s in NEW_COMBO_LOGIC if s["logic_id"] == "event_cheap_iv_cheap_pb"
     )

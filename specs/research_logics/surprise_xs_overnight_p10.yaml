@@ -1,15 +1,15 @@
-logic_id: cs_cheap_pb
-family_id: xs_low_vol_mom
+logic_id: surprise_xs_overnight_p10
+family_id: surprise_xs_rank
 axis: mixed
 headline: false
 generation_enabled: false
 promote_as_main: false
 go: false
-main_pool: false
+main_pool: true
 thesis: >
-  CS mom when name P/B (close/BPS) is below its own PIT median (value tilt).
+  Surprise CS rank only when overnight is in the easiest decile.
 signal_definition: >
-  CS mom when name P/B (close/BPS) is below its own PIT median (value tilt).
+  Surprise CS rank only when overnight is in the easiest decile.
 datasets:
   - equities_bars_daily
   - fins_summary
@@ -20,10 +20,10 @@ params:
   hold_days: 10
   momentum_n: 5
   min_hist: 20
-  mode: cs_cheap_pb
+  mode: surprise_xs_overnight_p10
   side: orig
-  cs_gate: cheap_pb
+  cs_gate: None
   entry_shift: 0
   hold_tail_days: 0
 evaluator: research.unique_logic.event_combos.evaluate_combo_daily_mtm
-notes: combo thesis; parked always_on CS sticky; CF daily_path is SoT
+notes: combo thesis; occupancy-gated; CF daily_path is SoT

@@ -49,6 +49,32 @@ describe("comboEventGateOk", () => {
   });
 });
 
+describe("crossed CS gates fail closed without extras", () => {
+  it("eq_ar_high_repo3m_down and cheap_pb_cheap_iv skip when extras missing", () => {
+    const miss = comboCsGateOk(
+      "eq_ar_high_repo3m_down",
+      "2019-01-08",
+      {},
+      {},
+      null,
+      null,
+      null,
+    );
+    expect(miss.keep).toBe(false);
+    const iv = comboCsGateOk(
+      "cheap_pb_cheap_iv",
+      "2019-01-08",
+      {},
+      {},
+      null,
+      null,
+      null,
+      { cheapPb: true, cheapIv: false },
+    );
+    expect(iv.keep).toBe(false);
+  });
+});
+
 describe("comboCsGateOk", () => {
   it("skip_wednesday and month_start7 are calendar-only", () => {
     const wed = comboCsGateOk("skip_wednesday", "2019-01-09", {}, {}, null, null, null);

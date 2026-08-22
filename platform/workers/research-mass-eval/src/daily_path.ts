@@ -550,6 +550,32 @@ export const CF_NEW_EVENT_THESIS_IDS = [
   "event_nky_high_skip",
   "surprise_xs_div_payer",
   "event_eqar_high_easy",
+  "event_eqar_high_on_impulse",
+  "event_eqar_low_tight_fade",
+  "event_ta_up_easy_funding",
+  "surprise_xs_eqar_high_easy",
+  "event_eqar_high_repo3m_down",
+  "event_ta_up_curve_flatten",
+  "surprise_xs_ta_up",
+  "event_eqar_low_on_impulse_fade",
+  "event_eqar_high_overnight_p10",
+  "surprise_xs_margin_down",
+  "event_margin_up_tight_fade",
+  "event_margin_down_easy",
+  "surprise_xs_margin_up_on_impulse",
+  "event_repo3m_down_uncrowded",
+  "surprise_xs_overnight_p10",
+  "event_curve_flatten_uncrowded",
+  "event_on_impulse_uncrowded",
+  "event_eqar_high_cheap_iv",
+  "surprise_xs_eqar_high_cheap_iv",
+  "event_ta_up_cheap_iv",
+  "event_rich_iv_eqar_low_fade",
+  "event_div_payer_easy",
+  "surprise_xs_eqar_low_fade",
+  "event_positive_eps_easy",
+  "event_cheap_pb_on_impulse",
+  "event_ta_up_on_impulse",
 ] as const;
 
 export const CF_NEW_CS_THESIS_IDS = [
@@ -634,6 +660,12 @@ export const CF_NEW_CS_THESIS_IDS = [
   "cs_eqar_high_cheap_iv",
   "cs_margin_up_tight_fade",
   "cs_short_ratio_down_follow",
+  "cs_eqar_high_repo3m_down",
+  "cs_margin_down_easy",
+  "cs_overnight_p10_steep",
+  "cs_repo3m_down_easy",
+  "cs_cheap_pb_cheap_iv",
+  "cs_eqar_high_flatten",
 ] as const;
 
 export const CF_EVENT_LOGIC_IDS = [
@@ -1097,6 +1129,60 @@ export function comboCsGateOk(
     invert = true;
   } else if (gate === "short_ratio_down") {
     keep = extras?.shortDown === true;
+  } else if (gate === "eq_ar_high_repo3m_down") {
+    let repoDown = false;
+    if (prev !== null && on !== undefined) {
+      const sp = spread[d];
+      const psp = spread[prev];
+      repoDown =
+        finite(sp) &&
+        finite(psp) &&
+        finite(overnight[prev]) &&
+        on + (sp as number) < overnight[prev] + (psp as number);
+    }
+    keep = extras?.eqArHigh === true && repoDown;
+  } else if (gate === "eq_ar_high_flatten") {
+    let flat = false;
+    if (prev !== null) {
+      const sp = spread[d];
+      const psp = spread[prev];
+      flat = finite(sp) && finite(psp) && (sp as number) < (psp as number);
+    }
+    keep = extras?.eqArHigh === true && flat;
+  } else if (gate === "margin_down_easy") {
+    keep =
+      marginChg !== null &&
+      marginChg < 0 &&
+      on !== undefined &&
+      medOn !== null &&
+      on < medOn;
+  } else if (gate === "overnight_p10_steep") {
+    const hist = Object.keys(overnight)
+      .filter((x) => x < d)
+      .map((x) => overnight[x])
+      .filter((v) => finite(v))
+      .sort((a, b) => a - b);
+    let p10ok = false;
+    if (hist.length >= 20 && on !== undefined) {
+      const p10 = hist[Math.max(0, Math.floor(0.1 * (hist.length - 1)))];
+      p10ok = on <= p10;
+    }
+    keep = p10ok && spread[d] !== undefined && spread[d] > 0;
+  } else if (gate === "repo3m_down_easy") {
+    let repoDown = false;
+    if (prev !== null && on !== undefined) {
+      const sp = spread[d];
+      const psp = spread[prev];
+      repoDown =
+        finite(sp) &&
+        finite(psp) &&
+        finite(overnight[prev]) &&
+        on + (sp as number) < overnight[prev] + (psp as number);
+    }
+    keep =
+      repoDown && on !== undefined && medOn !== null && on < medOn;
+  } else if (gate === "cheap_pb_cheap_iv") {
+    keep = extras?.cheapPb === true && extras?.cheapIv === true;
   } else {
     return { keep: false, invert: false };
   }

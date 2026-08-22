@@ -13,6 +13,7 @@ from research.daily_path_eval import git_sha
 from research.eval_registry import PROTOCOL_DAILY_PATH, summarize_daily_path_cells
 from research.stats_metrics import equity_path_drawdown, evaluate_daily_path_dd_gate
 from research.unique_logic.constants import (
+    ALWAYS_ON_CS_STICKY,
     ALWAYS_ON_OCCUPANCY_WARN,
     NEAR_EMPTY_OCCUPANCY,
 )
@@ -25,15 +26,22 @@ DEFAULT_CANDIDATE_BASKET: tuple[str, ...] = (
     "overnight_down_cs_follow",
 )
 
-# Lessons from eval-cf-dp-baskets8-20260822a/summary_baskets.json
-# (descriptive, never a pass):
-# - event_family_only: lowest union occupancy, 5/1 window signs (best of the 8)
-# - known_candidate_head: sleeve stays in candidate band; union can look always_on
+# Lessons from eval-cf-dp-baskets8-20260822a and
+# eval-cf-dp-baskets50-20260822a/summary_baskets.json (descriptive, never a pass):
+# - event_family_only: 5 pos / 1 neg at univ50; keep
+# - known_candidate_head: 5/1; sleeve occupancy in band; union can look always_on
 #   — candidate uses sleeve mean, do not switch to union
-# - family_spread: mixed signs but diversified
-# - low_occupancy_band: 1/5, systematically weak — retired
+# - family_spread: 4/2 mixed but diversified; keep
+# - fundamentals_sleeve / repo_rate_sleeve / event_fund_cross / margin_flow_sleeve:
+#   4/2 at univ50 after dropping always_on CS members — primary_candidate (not GO)
+# - event_calendar_only: 3/3 calendar mix; demoted from primary
+# - surprise_xs_only: 2/4 systematically weak — retired
+# - two_member_easing: 3/3, thinnest occupancy — retired
+# - low_occupancy_band: 1/5 — retired
 # No correlation optimization. No promote / GO.
-RETIRED_BASKET_RULES: frozenset[str] = frozenset({"low_occupancy_band"})
+RETIRED_BASKET_RULES: frozenset[str] = frozenset(
+    {"low_occupancy_band", "surprise_xs_only", "two_member_easing"}
+)
 DEPRECATED_MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
     {
         "basket_id": "basket_sparse4",
@@ -50,18 +58,47 @@ DEPRECATED_MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
             "fy_end_event_fade",
         ),
     },
+    {
+        "basket_id": "basket_surprise3",
+        "rule": "surprise_xs_only",
+        "deprecated": True,
+        "deprecated_reason": (
+            "eval-cf-dp-baskets50-20260822a: 2 pos / 4 neg; "
+            "surprise-only mix is systematically weak"
+        ),
+        "members": (
+            "surprise_xs_easing_change",
+            "surprise_xs_afterclose_easing",
+            "surprise_xs_skip_monday",
+        ),
+    },
+    {
+        "basket_id": "basket_pair_easing",
+        "rule": "two_member_easing",
+        "deprecated": True,
+        "deprecated_reason": (
+            "eval-cf-dp-baskets50-20260822a: 3/3, lowest sleeve occupancy; "
+            "thin two-member easing pair"
+        ),
+        "members": (
+            "event_easing_midmonth",
+            "cs_easing_midmonth",
+        ),
+    },
 )
 MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
     {
         "basket_id": "basket_head4",
         "rule": "known_candidate_head",
         "primary": True,
+        "primary_candidate": True,
         "members": DEFAULT_CANDIDATE_BASKET,
     },
     {
         "basket_id": "basket_event4",
         "rule": "event_family_only",
         "primary": True,
+        "primary_candidate": True,
         "members": (
             "event_easing_uncrowded",
             "event_friday_skip",
@@ -73,6 +110,7 @@ MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
         "basket_id": "basket_family4",
         "rule": "family_spread",
         "primary": True,
+        "primary_candidate": True,
         "members": (
             "event_tue_thu_easing",
             "surprise_xs_easing_change",
@@ -83,7 +121,8 @@ MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
     {
         "basket_id": "basket_event_cal4",
         "rule": "event_calendar_only",
-        "primary": True,
+        "primary": False,
+        "primary_candidate": False,
         "members": (
             "event_skip_monday",
             "event_friday_skip",
@@ -103,25 +142,6 @@ MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
         ),
     },
     {
-        "basket_id": "basket_pair_easing",
-        "rule": "two_member_easing",
-        "primary": False,
-        "members": (
-            "event_easing_midmonth",
-            "cs_easing_midmonth",
-        ),
-    },
-    {
-        "basket_id": "basket_surprise3",
-        "rule": "surprise_xs_only",
-        "primary": False,
-        "members": (
-            "surprise_xs_easing_change",
-            "surprise_xs_afterclose_easing",
-            "surprise_xs_skip_monday",
-        ),
-    },
-    {
         "basket_id": "basket_cs4",
         "rule": "cs_family_only",
         "primary": False,
@@ -135,7 +155,8 @@ MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
     {
         "basket_id": "basket_theme_fund",
         "rule": "fundamentals_sleeve",
-        "primary": False,
+        "primary": True,
+        "primary_candidate": True,
         "members": (
             "event_eqar_high_pead",
             "event_eqar_low_fade",
@@ -146,7 +167,8 @@ MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
     {
         "basket_id": "basket_theme_flow",
         "rule": "margin_flow_sleeve",
-        "primary": False,
+        "primary": True,
+        "primary_candidate": True,
         "members": (
             "cs_margin_up_chase",
             "cs_short_ratio_up_fade",
@@ -156,7 +178,8 @@ MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
     {
         "basket_id": "basket_theme_repo",
         "rule": "repo_rate_sleeve",
-        "primary": False,
+        "primary": True,
+        "primary_candidate": True,
         "members": (
             "cs_on_impulse",
             "cs_overnight_p10",
@@ -167,7 +190,8 @@ MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
     {
         "basket_id": "basket_event_fund",
         "rule": "event_fund_cross",
-        "primary": False,
+        "primary": True,
+        "primary_candidate": True,
         "members": (
             "event_eqar_high_pead",
             "event_cheap_pb_pead",
@@ -418,8 +442,12 @@ def occupancy_in_candidate_band(occ: float | None) -> bool:
 
 
 def primary_mechanical_basket_defs() -> list[dict[str, Any]]:
-    """Primary mechanical rules only. Secondary / retired stay out."""
-    return [d for d in mechanical_basket_defs() if d.get("primary") and d.get("valid")]
+    """Primary / primary_candidate mechanical rules. Retired stay out. Not GO."""
+    return [
+        d
+        for d in mechanical_basket_defs()
+        if d.get("valid") and (d.get("primary") or d.get("primary_candidate"))
+    ]
 
 
 def blend_primary_baskets(
@@ -449,11 +477,16 @@ def mechanical_basket_defs(*, include_deprecated: bool = False) -> list[dict[str
             continue
         members = tuple(str(x) for x in (raw.get("members") or ()))
         reasons = validate_basket_members(members)
+        if any(m in ALWAYS_ON_CS_STICKY for m in members):
+            reasons.append("always_on_cs_member")
+        pc = bool(raw.get("primary_candidate")) and not deprecated
+        prim = bool(raw.get("primary")) and not deprecated
         out.append(
             {
                 "basket_id": str(raw["basket_id"]),
                 "rule": rule,
-                "primary": bool(raw.get("primary")) and not deprecated,
+                "primary": prim,
+                "primary_candidate": pc or prim,
                 "deprecated": deprecated,
                 "deprecated_reason": raw.get("deprecated_reason"),
                 "members": list(members),
@@ -528,6 +561,7 @@ def summarize_basket_trends(
                 "basket_id": bid,
                 "rule": spec.get("rule") or "mechanical",
                 "primary": bool(spec.get("primary")),
+                "primary_candidate": bool(spec.get("primary_candidate")),
                 "members": list(spec.get("members") or group[0].get("members") or []),
                 "n_windows": len(group),
                 "mean_member_occupancy": m_occ,

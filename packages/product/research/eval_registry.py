@@ -388,6 +388,7 @@ def summarize_daily_path_cells(
 
     from research.cf_mass_eval_job import CF_BAR_NATIVE_LOGIC_IDS
     from research.unique_logic.constants import (
+        ALWAYS_ON_CS_STICKY,
         ALWAYS_ON_OCCUPANCY_WARN,
         CANDIDATE_POLICY,
         CF_EVENT_DAILY_PATH_IDS,
@@ -470,6 +471,8 @@ def summarize_daily_path_cells(
             flags.append("data_requirement_unmet")
         if is_near_duplicate(lid):
             flags.append("near_duplicate")
+        if lid in ALWAYS_ON_CS_STICKY:
+            flags.append("always_on_cs_sticky")
         if m_net is not None and abs(m_net) < 1e-4:
             flags.append("near_zero_net")
         if n_pos >= 2 and n_neg >= 2:

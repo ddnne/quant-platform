@@ -199,6 +199,32 @@ CF_NEW_EVENT_THESIS_IDS: frozenset[str] = frozenset(
         "event_nky_high_skip",
         "surprise_xs_div_payer",
         "event_eqar_high_easy",
+        "event_eqar_high_on_impulse",
+        "event_eqar_low_tight_fade",
+        "event_ta_up_easy_funding",
+        "surprise_xs_eqar_high_easy",
+        "event_eqar_high_repo3m_down",
+        "event_ta_up_curve_flatten",
+        "surprise_xs_ta_up",
+        "event_eqar_low_on_impulse_fade",
+        "event_eqar_high_overnight_p10",
+        "surprise_xs_margin_down",
+        "event_margin_up_tight_fade",
+        "event_margin_down_easy",
+        "surprise_xs_margin_up_on_impulse",
+        "event_repo3m_down_uncrowded",
+        "surprise_xs_overnight_p10",
+        "event_curve_flatten_uncrowded",
+        "event_on_impulse_uncrowded",
+        "event_eqar_high_cheap_iv",
+        "surprise_xs_eqar_high_cheap_iv",
+        "event_ta_up_cheap_iv",
+        "event_rich_iv_eqar_low_fade",
+        "event_div_payer_easy",
+        "surprise_xs_eqar_low_fade",
+        "event_positive_eps_easy",
+        "event_cheap_pb_on_impulse",
+        "event_ta_up_on_impulse",
     }
 )
 CF_NEW_CS_THESIS_IDS: frozenset[str] = frozenset(
@@ -284,6 +310,12 @@ CF_NEW_CS_THESIS_IDS: frozenset[str] = frozenset(
         "cs_eqar_high_cheap_iv",
         "cs_margin_up_tight_fade",
         "cs_short_ratio_down_follow",
+        "cs_eqar_high_repo3m_down",
+        "cs_margin_down_easy",
+        "cs_overnight_p10_steep",
+        "cs_repo3m_down_easy",
+        "cs_cheap_pb_cheap_iv",
+        "cs_eqar_high_flatten",
     }
 )
 CF_NEW_THESIS_IDS: frozenset[str] = CF_NEW_EVENT_THESIS_IDS | CF_NEW_CS_THESIS_IDS
@@ -346,16 +378,52 @@ SPARSE_GATE_COMBOS: tuple[tuple[frozenset[str], str], ...] = (
     (frozenset({"friday_curve_steep"}), "friday_plus_steep"),
     (frozenset({"margin_crowd_skip_friday_invert"}), "crowd_plus_skip_weekday"),
     (frozenset({"cheap_iv", "cheap_pb"}), "cheap_iv_and_cheap_pb"),
+    (frozenset({"overnight_p10_steep"}), "overnight_p10_plus_steep"),
 )
-# Name-level CS + sticky hold=10 stays always_on even at 50 names. Parked
-# (main_pool=false). Crossed with overnight/IV (cs_eqar_high_easy etc.) stay.
+# Name-level CS + sticky hold=10 is structurally always_on. Parked
+# (main_pool=false). Crossed with overnight/IV/repo (cs_eqar_high_easy etc.) stay.
+NAME_LEVEL_FUND_CS_GATES: frozenset[str] = frozenset(
+    {
+        "eq_ar_high",
+        "eq_ar_low_invert",
+        "ta_up",
+        "cheap_pb",
+        "expensive_pb_invert",
+        "earnings_yield_high",
+        "roe_high",
+        "div_positive",
+        "np_positive",
+    }
+)
 ALWAYS_ON_CS_STICKY: frozenset[str] = frozenset(
     {
         "cs_eqar_high",
         "cs_eqar_low_fade",
         "cs_ta_up",
+        "cs_cheap_pb",
+        "cs_expensive_pb_fade",
+        "cs_earnings_yield_high",
+        "cs_roe_high",
+        "cs_div_positive",
+        "cs_np_positive",
     }
 )
+
+
+def is_ungated_name_level_cs(
+    *,
+    kind: str = "",
+    cs_gate: str | None = None,
+    logic_id: str = "",
+) -> bool:
+    """True when a CS sticky has only a persistent name-level fund gate."""
+    lid = str(logic_id or "")
+    if lid in ALWAYS_ON_CS_STICKY:
+        return True
+    if str(kind or "") != "cs":
+        return False
+    g = str(cs_gate or "").strip()
+    return g in NAME_LEVEL_FUND_CS_GATES
 
 
 def sparse_15name_reason(
@@ -386,6 +454,7 @@ CANDIDATE_POLICY: dict[str, object] = {
         "data_requirement_unmet",
         "path_collapsed",
         "near_duplicate",
+        "always_on_cs_sticky",
     ),
     "always_on_occupancy": ALWAYS_ON_OCCUPANCY_WARN,
     "near_empty_occupancy": NEAR_EMPTY_OCCUPANCY,
@@ -459,6 +528,21 @@ ECONOMIC_THEME_IDS: dict[str, frozenset[str]] = {
             "event_ta_up_pead",
             "event_cheap_pb_easy_funding",
             "cs_eqar_high_cheap_iv",
+            "event_eqar_high_on_impulse",
+            "event_eqar_low_tight_fade",
+            "event_ta_up_easy_funding",
+            "surprise_xs_eqar_high_easy",
+            "event_eqar_high_repo3m_down",
+            "event_ta_up_curve_flatten",
+            "surprise_xs_ta_up",
+            "event_eqar_low_on_impulse_fade",
+            "event_eqar_high_overnight_p10",
+            "cs_eqar_high_repo3m_down",
+            "event_eqar_high_cheap_iv",
+            "event_ta_up_cheap_iv",
+            "cs_eqar_high_flatten",
+            "surprise_xs_eqar_low_fade",
+            "event_ta_up_on_impulse",
         }
     ),
     "margin_surprise": frozenset(
@@ -469,6 +553,11 @@ ECONOMIC_THEME_IDS: dict[str, frozenset[str]] = {
             "event_crowd_on_impulse",
             "cs_margin_up_tight_fade",
             "cs_short_ratio_down_follow",
+            "surprise_xs_margin_down",
+            "event_margin_up_tight_fade",
+            "event_margin_down_easy",
+            "surprise_xs_margin_up_on_impulse",
+            "cs_margin_down_easy",
         }
     ),
     "repo_event": frozenset(
@@ -477,6 +566,12 @@ ECONOMIC_THEME_IDS: dict[str, frozenset[str]] = {
             "event_curve_flatten_pead",
             "event_repo3m_down_pead",
             "surprise_xs_repo3m_down",
+            "event_repo3m_down_uncrowded",
+            "surprise_xs_overnight_p10",
+            "event_curve_flatten_uncrowded",
+            "event_on_impulse_uncrowded",
+            "cs_overnight_p10_steep",
+            "cs_repo3m_down_easy",
         }
     ),
     "vol_fund_cross": frozenset(
@@ -485,6 +580,14 @@ ECONOMIC_THEME_IDS: dict[str, frozenset[str]] = {
             "surprise_xs_rich_iv_fade",
             "event_nky_high_skip",
             "surprise_xs_div_payer",
+            "event_eqar_high_cheap_iv",
+            "surprise_xs_eqar_high_cheap_iv",
+            "event_ta_up_cheap_iv",
+            "event_rich_iv_eqar_low_fade",
+            "cs_cheap_pb_cheap_iv",
+            "event_div_payer_easy",
+            "event_positive_eps_easy",
+            "event_cheap_pb_on_impulse",
         }
     ),
 }
