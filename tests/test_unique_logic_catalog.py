@@ -45,6 +45,46 @@ evaluator: research.unique_logic.cs_overlays.evaluate_overnight_level_cs_tilt_da
     assert spec["params"]["gates"] == ["eq_ar_high", "pead"]
 
 
+def test_parse_catalog_yaml_theme_list_map() -> None:
+    spec = parse_catalog_yaml(
+        """
+go: false
+surprise_funding:
+  - surprise_xs_tight_fade
+  - event_on_impulse_pead
+repo_cs:
+  - cs_on_impulse
+"""
+    )
+    assert spec["go"] is False
+    assert spec["surprise_funding"] == [
+        "surprise_xs_tight_fade",
+        "event_on_impulse_pead",
+    ]
+    assert spec["repo_cs"] == ["cs_on_impulse"]
+
+
+def test_economic_theme_yaml_rejects_go() -> None:
+    from pathlib import Path
+    from tempfile import TemporaryDirectory
+
+    from research.unique_logic.catalog import economic_theme_ids
+
+    with TemporaryDirectory() as td:
+        root = Path(td)
+        (root / "specs").mkdir()
+        (root / "specs" / "research_themes.yaml").write_text(
+            "go: true\nsurprise_funding:\n  - event_on_impulse_pead\n",
+            encoding="utf-8",
+        )
+        try:
+            economic_theme_ids(root=root)
+        except ValueError as exc:
+            assert "go" in str(exc)
+        else:
+            raise AssertionError("research_themes.yaml go: true must fail")
+
+
 def test_combo_row_from_yaml_requires_gates_cs_gate_side() -> None:
     from research.unique_logic.catalog import combo_row_from_yaml, parse_catalog_yaml
 
@@ -147,11 +187,11 @@ def test_mf_value_mom_rate_is_unique_not_alias() -> None:
     assert MF_VALUE_MOM_RATE_PARKED_ALWAYS_ON is False
     src = (
         Path(__file__).resolve().parents[1]
-        / "platform"
-        / "workers"
-        / "research-mass-eval"
-        / "src"
-        / "eval.ts"
+        / "packages"
+        / "product"
+        / "research"
+        / "offline"
+        / "factory_templates.py"
     ).read_text(encoding="utf-8")
     assert "Unique rate-gated value×mom" in src
     assert "not an alias of fund_value_mom_agree" in src

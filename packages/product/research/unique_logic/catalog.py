@@ -4,6 +4,8 @@ YAML catalog is the declaration source of truth (gates, cs_gate, side)
 and the runtime dispatch table (``yaml_combo_rows`` →
 ``event_combos.NEW_COMBO_LOGIC``, ``yaml_unique_rows`` → original unique
 module tuples). YAML is declaration and runtime.
+``specs/research_themes.yaml`` groups combo ids into economic themes
+(``economic_theme_ids`` → ``constants.ECONOMIC_THEME_IDS``).
 Scores live in R2/D1, not markdown.
 The schema is intentionally small (no general YAML dependency).
 """
@@ -18,6 +20,10 @@ from qp_paths import repo_root
 
 def catalog_dir(*, root: Path | None = None) -> Path:
     return (root or repo_root()) / "specs" / "research_logics"
+
+
+def themes_path(*, root: Path | None = None) -> Path:
+    return (root or repo_root()) / "specs" / "research_themes.yaml"
 
 
 def _parse_scalar(raw: str) -> Any:
@@ -85,21 +91,20 @@ def parse_catalog_yaml(text: str) -> dict[str, Any]:
                     i += 1
                 data[key] = params
                 continue
-            if key == "datasets":
-                items: list[Any] = []
-                while i < n:
-                    ln = lines[i]
-                    if not ln.strip() or ln.lstrip().startswith("#"):
-                        i += 1
-                        continue
-                    if not ln.startswith(" "):
-                        break
-                    if ln.strip().startswith("-"):
-                        items.append(_parse_scalar(ln.strip()[1:]))
+            items: list[Any] = []
+            saw_list = False
+            while i < n:
+                ln = lines[i]
+                if not ln.strip() or ln.lstrip().startswith("#"):
                     i += 1
-                data[key] = items
-                continue
-            data[key] = None
+                    continue
+                if not ln.startswith(" "):
+                    break
+                if ln.strip().startswith("-"):
+                    saw_list = True
+                    items.append(_parse_scalar(ln.strip()[1:]))
+                i += 1
+            data[key] = items if saw_list else None
             continue
         if ":" in raw:
             key, _, rest = raw.partition(":")
@@ -331,6 +336,39 @@ def combo_thesis_ids_by_kind(*, root: Path | None = None) -> dict[str, frozenset
         "cs": frozenset(cs),
         "surprise_xs": frozenset(surprise_xs),
     }
+
+
+_THEME_RESERVED = frozenset(
+    {"go", "promote_as_main", "generation_enabled", "headline"}
+)
+
+
+@lru_cache(maxsize=8)
+def _economic_theme_ids_cached(root_key: str) -> dict[str, frozenset[str]]:
+    path = themes_path(root=Path(root_key))
+    data = parse_catalog_yaml(path.read_text(encoding="utf-8"))
+    for flag in _THEME_RESERVED:
+        if data.get(flag) is True:
+            raise ValueError(f"research_themes.yaml must not set {flag}: true")
+    out: dict[str, frozenset[str]] = {}
+    for key, val in data.items():
+        if key in _THEME_RESERVED:
+            continue
+        if not isinstance(val, list):
+            raise ValueError(f"research_themes.yaml {key}: expected list of logic_ids")
+        ids = [str(x).strip() for x in val if str(x).strip()]
+        if not ids:
+            raise ValueError(f"research_themes.yaml {key}: empty theme")
+        out[str(key)] = frozenset(ids)
+    return out
+
+
+def economic_theme_ids(*, root: Path | None = None) -> dict[str, frozenset[str]]:
+    """theme_id → logic_ids from ``specs/research_themes.yaml``.
+
+    YAML is the SoT. Does not GO. Used by constants.ECONOMIC_THEME_IDS.
+    """
+    return dict(_economic_theme_ids_cached(str((root or repo_root()).resolve())))
 
 
 def combo_yaml_text(spec: Mapping[str, Any]) -> str:

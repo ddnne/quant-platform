@@ -170,6 +170,66 @@ def test_cf_new_thesis_ids_match_yaml_combo_kind() -> None:
     assert "overnight_tight_cs_fade" not in const_src
 
 
+# Frozen keys/counts from the former constants.ECONOMIC_THEME_IDS block.
+_PREVIOUS_THEME_COUNTS = {
+    "surprise_funding": 4,
+    "margin_price_disagree": 4,
+    "repo_cs": 4,
+    "vol_conditional": 4,
+    "fundamentals": 10,
+    "fund_leverage_cross": 33,
+    "fund_flow_liq": 16,
+    "margin_surprise": 11,
+    "repo_event": 10,
+    "vol_fund_cross": 15,
+}
+
+
+def test_economic_theme_ids_from_yaml() -> None:
+    import inspect
+    import re
+
+    from research.unique_logic import catalog as catalog_mod
+    from research.unique_logic import constants as constants_mod
+    from research.unique_logic.catalog import (
+        economic_theme_ids,
+        parse_catalog_yaml,
+        themes_path,
+    )
+    from research.unique_logic.constants import (
+        ECONOMIC_THEME_IDS,
+        RESEARCH_UNIQUE_LOGIC_IDS,
+    )
+
+    path = themes_path()
+    assert path.is_file()
+    text = path.read_text(encoding="utf-8")
+    parsed = parse_catalog_yaml(text)
+    assert parsed.get("go") is not True
+    assert re.search(r"(?m)^go:\s*true\s*$", text) is None
+    themes = economic_theme_ids()
+    assert ECONOMIC_THEME_IDS == themes
+    assert set(themes) == set(_PREVIOUS_THEME_COUNTS)
+    assert {k: len(v) for k, v in themes.items()} == _PREVIOUS_THEME_COUNTS
+    listed = set().union(*themes.values()) if themes else set()
+    assert listed <= set(RESEARCH_UNIQUE_LOGIC_IDS)
+    for theme, ids in themes.items():
+        yaml_ids = {str(x) for x in parsed[theme]}
+        assert yaml_ids == set(ids)
+        assert ids <= RESEARCH_UNIQUE_LOGIC_IDS
+    helper_src = inspect.getsource(catalog_mod.economic_theme_ids)
+    assert "research_themes.yaml" in helper_src
+    assert "Does not GO" in helper_src
+    const_src = inspect.getsource(constants_mod)
+    assert "economic_theme_ids()" in const_src
+    assert "surprise_xs_tight_fade" not in const_src
+    assert "event_on_impulse_pead" not in const_src
+    for yml in _YAML_DIR.glob("*.yaml"):
+        body = yml.read_text(encoding="utf-8")
+        assert re.search(r"(?m)^theme:", body) is None
+        assert re.search(r"(?m)^go:\s*true\s*$", body) is None
+
+
 def test_unknown_event_gate_fail_closed_is_declared() -> None:
     import inspect
 
@@ -223,7 +283,6 @@ def test_python_only_event_gates_skip_catalog() -> None:
     worker_gates = set(re.findall(r'"([^"]+)"', m.group(1)))
     assert worker_gates.isdisjoint(PYTHON_ONLY_EVENT_GATES)
     assert worker_gates == set(COMBO_EVENT_GATES)
-
 
 def test_event_cheap_pb_gate_in_combo_and_yaml() -> None:
     """cheap_pb stays a COMBO event gate; YAML pead lists it. Not a CS reuse."""
