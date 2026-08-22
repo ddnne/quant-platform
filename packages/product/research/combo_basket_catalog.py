@@ -7,6 +7,7 @@ from research.unique_logic.constants import (
     ALWAYS_ON_CS_STICKY,
     ALWAYS_ON_PARK_IDS,
     NEAR_EMPTY_PARK_IDS,
+    THIN_SLEEVE_EXCLUDE_IDS,
 )
 
 DEFAULT_CANDIDATE_BASKET: tuple[str, ...] = (
@@ -159,6 +160,8 @@ def validate_basket_members(logic_ids: Sequence[str]) -> list[str]:
         reasons.append("near_empty_member")
     if any(m in ALWAYS_ON_PARK_IDS for m in ids):
         reasons.append("always_on_member")
+    if any(m in THIN_SLEEVE_EXCLUDE_IDS for m in ids):
+        reasons.append("thin_sleeve_member")
     return reasons
 
 

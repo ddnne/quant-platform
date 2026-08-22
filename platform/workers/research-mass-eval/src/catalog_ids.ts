@@ -194,6 +194,7 @@ export const CF_NEW_EVENT_THESIS_IDS = [
   "event_first_half_month",
   "event_first_half_uncrowded",
   "event_flatten_eqar_rising",
+  "event_flatten_roe_low_np_neg",
   "event_friday_easing",
   "event_friday_skip",
   "event_friday_uncrowded",

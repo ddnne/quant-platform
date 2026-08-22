@@ -203,11 +203,21 @@ NEAR_EMPTY_PARK_IDS: frozenset[str] = frozenset(
         "surprise_xs_repo3m_cheap_iv",
         "surprise_xs_roe_low_uncrowded",
         "event_invert_px_down_roe_low",
+        "event_flatten_roe_low_np_neg",
     }
 )
 # Recorded mean occupancy ≥ ALWAYS_ON_OCCUPANCY_WARN. Not countable, not
 # basket material. Empty until a batch records always-on occupancy.
 ALWAYS_ON_PARK_IDS: frozenset[str] = frozenset()
+# Countable but too thin for mechanical sleeves (recorded both-track
+# occupancy in (NEAR_EMPTY, ~0.12]). Do not use as basket material.
+THIN_SLEEVE_EXCLUDE_IDS: frozenset[str] = frozenset(
+    {
+        "event_p10_pb_rising",
+        "event_overnight_p10_eps_down",
+        "event_eps_down_pb_rising",
+    }
+)
 MF_VALUE_MOM_RATE_DELEGATES: bool = False
 MF_VALUE_MOM_RATE_PATH: str = "unique_rate_gated_value_mom"
 MF_VALUE_MOM_RATE_PARKED_ALWAYS_ON: bool = False
@@ -262,6 +272,7 @@ SPARSE_GATE_COMBOS: tuple[tuple[frozenset[str], str], ...] = (
     (frozenset({"repo_3m_down", "cheap_iv"}), "repo3m_plus_cheap_iv"),
     (frozenset({"roe_low", "uncrowded_margin"}), "roe_low_plus_uncrowded"),
     (frozenset({"invert_curve", "price_down", "roe_low"}), "invert_px_down_roe_low"),
+    (frozenset({"curve_flatten", "roe_low", "np_negative"}), "flatten_roe_low_np_neg"),
 )
 NAME_LEVEL_FUND_CS_GATES: frozenset[str] = frozenset(
     {

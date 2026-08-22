@@ -230,6 +230,17 @@ def test_near_empty_park_is_not_countable_or_basket_material() -> None:
         ["event_eqar_high_liq_high", next(iter(parked))]
     )
     assert "near_empty_member" in reasons
+    from research.unique_logic.constants import THIN_SLEEVE_EXCLUDE_IDS
+    from research.cf_daily_path_job import sleeve_durability_logic_ids
+
+    assert THIN_SLEEVE_EXCLUDE_IDS
+    assert "event_p10_pb_rising" in THIN_SLEEVE_EXCLUDE_IDS
+    assert THIN_SLEEVE_EXCLUDE_IDS.isdisjoint(sleeve_durability_logic_ids())
+    thin_reasons = validate_basket_members(
+        ["event_eqar_high_liq_high", "event_p10_pb_rising"]
+    )
+    assert "thin_sleeve_member" in thin_reasons
+    assert "event_p10_pb_rising" in countable_thesis_ids()
     assert "near_empty_parked" in CANDIDATE_POLICY["exclude"]
     occ = {lid: 0.20 for lid in ("a", "b", "c")}
     ok = assert_new_batch_occupancy_not_near_empty(occ)
