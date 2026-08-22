@@ -17,6 +17,7 @@ Hard constraints (T7):
 * does **not** emit order intents / call paper execution
 
 This module is pure compute over already-materialized feature values.
+Identity, pins, and catalog dumps live in ``minimal_signal_docs``.
 CF tip extraction and R2 write live in ``research.single_shot_job``.
 """
 
@@ -31,43 +32,36 @@ from features.research_freezes import (
     READY_DECLARED,
 )
 
-# ---------------------------------------------------------------------------
-# Identity (stable for R2 signal artifacts)
-# ---------------------------------------------------------------------------
-
-SIGNAL_ID: str = "c21_topix_relative_sign"
-SIGNAL_VERSION: str = "1.0.0"
-SIGNAL_STATUS: str = "candidate"  # not READY; not strategy-default
-# Primary + filter + gate are all registry-approved after W53 (still no READY).
-CANDIDATE_ONLY: bool = False
-
-# Feature ids this signal consumes (all approved after W53 primary promote).
-PRIMARY_FEATURE_ID: str = "topix_relative_1d"  # approved (W53)
-FILTER_FEATURE_ID: str = "is_trading_day"  # approved (W52 G1)
-GATE_FEATURE_ID: str = "volume_change_1d"  # approved (W52 G1)
-
-# Registry status pins at signal-definition time (documentation; not a gate).
-FEATURE_STATUS_PINS: dict[str, str] = {
-    PRIMARY_FEATURE_ID: "approved",
-    FILTER_FEATURE_ID: "approved",
-    GATE_FEATURE_ID: "approved",
-}
-
-DEFAULT_FEATURE_IDS: tuple[str, ...] = (
-    PRIMARY_FEATURE_ID,
+from .minimal_signal_docs import (
+    CANDIDATE_ONLY,
+    DEFAULT_FEATURE_IDS,
+    DEFAULT_SHORT_RATIO_SECTION,
+    DEFAULT_SIGNAL_DATASETS,
+    DEFAULT_VOLUME_CHANGE_ABS_MIN,
+    DEFAULT_VOLUME_SIGN_ABS_MIN,
+    DISCLOSURE_FEATURE_ID,
+    EXTRA_HYP_DATASETS,
+    EXTRA_HYP_FEATURE_IDS,
+    FEATURE_STATUS_PINS,
     FILTER_FEATURE_ID,
     GATE_FEATURE_ID,
+    MARGIN_CHANGE_FEATURE_ID,
+    MULTI_SIGNAL_DATASETS,
+    MULTI_SIGNAL_FEATURE_IDS,
+    PRIMARY_FEATURE_ID,
+    SHORT_RATIO_FEATURE_ID,
+    SIGNAL_ID,
+    SIGNAL_ID_MARGIN_CHANGE,
+    SIGNAL_ID_SHORT_RATIO_DELTA,
+    SIGNAL_ID_TOPIX_DISC,
+    SIGNAL_ID_TOPIX_REL,
+    SIGNAL_ID_VOLUME_SIGN,
+    SIGNAL_STATUS,
+    SIGNAL_VERSION,
+    extra_hyp_definitions,
+    multi_signal_definitions,
+    signal_definition,
 )
-
-# Datasets sufficient for the three features (COMPLETE 21 subset).
-DEFAULT_SIGNAL_DATASETS: tuple[str, ...] = (
-    "equities_bars_daily",
-    "markets_calendar",
-    "indices_bars_daily_topix",
-)
-
-# Optional |volume_change_1d| gate. None = no volume gate (sign-only).
-DEFAULT_VOLUME_CHANGE_ABS_MIN: float | None = None
 
 
 def sign_from_topix_relative(topix_relative: float | None) -> float | None:
@@ -338,69 +332,10 @@ def compute_signal_from_feature_observations(
     }
 
 
-def signal_definition() -> dict[str, Any]:
-    """Declarative signal metadata for manifests / proofs."""
-    return {
-        "signal_id": SIGNAL_ID,
-        "version": SIGNAL_VERSION,
-        "status": SIGNAL_STATUS,
-        "candidate_only": CANDIDATE_ONLY,
-        "primary_feature_id": PRIMARY_FEATURE_ID,
-        "filter_feature_id": FILTER_FEATURE_ID,
-        "gate_feature_id": GATE_FEATURE_ID,
-        "feature_ids": list(DEFAULT_FEATURE_IDS),
-        "feature_status_pins": dict(FEATURE_STATUS_PINS),
-        "datasets": list(DEFAULT_SIGNAL_DATASETS),
-        "formula": (
-            "value = sign(topix_relative_1d) "
-            "if is_trading_day==1 "
-            "and (volume_change_abs_min is None or |volume_change_1d| >= abs_min); "
-            "else None"
-        ),
-        "mass_research": MASS_RESEARCH,
-        "phase7": PHASE7,
-        "ready_declared": READY_DECLARED,
-        "order_execution": ORDER_EXECUTION,
-        "note": (
-            "candidate_only=False after W53 primary topix_relative_1d promote; "
-            "all three legs approved (v1.0.0). Signal status remains candidate "
-            "(not READY / Mass OFF / no orders)."
-        ),
-    }
-
-
 # ---------------------------------------------------------------------------
-# Multi-signal research catalog (W58 / w0815ay_g2 · T4)
-# All legs registry-approved. Signal status remains candidate.
+# Multi-signal research compute (W58 / w0815ay_g2 · T4)
+# Catalog dumps live in minimal_signal_docs. Status remains candidate.
 # ---------------------------------------------------------------------------
-
-# S2 defaults: |volume_change_1d| >= 10% to emit sign(volume_change).
-DEFAULT_VOLUME_SIGN_ABS_MIN: float = 0.10
-
-# S3 secondary filter feature (disclosure binary; margin is documented alt).
-DISCLOSURE_FEATURE_ID: str = "disclosure_flag_fins"
-MARGIN_CHANGE_FEATURE_ID: str = "margin_interest_change_1d"
-
-MULTI_SIGNAL_FEATURE_IDS: tuple[str, ...] = (
-    "topix_relative_1d",
-    "is_trading_day",
-    "volume_change_1d",
-    DISCLOSURE_FEATURE_ID,
-    MARGIN_CHANGE_FEATURE_ID,
-)
-
-MULTI_SIGNAL_DATASETS: tuple[str, ...] = (
-    "equities_bars_daily",
-    "markets_calendar",
-    "indices_bars_daily_topix",
-    "fins_summary",
-    "markets_margin_interest",
-)
-
-# Research signal ids (candidate; not READY).
-SIGNAL_ID_TOPIX_REL: str = SIGNAL_ID  # c21_topix_relative_sign
-SIGNAL_ID_VOLUME_SIGN: str = "c21_volume_change_sign"
-SIGNAL_ID_TOPIX_DISC: str = "c21_topix_rel_disclosure_filter"
 
 
 def sign_from_numeric(x: float | None) -> float | None:
@@ -765,26 +700,8 @@ def compute_topix_disc_from_feature_observations(
 # W62 extra research hypotheses (not S1 rehash)
 # S4: sign(margin_interest_change_1d)
 # S5: sign(Δ short_ratio_level) for a fixed section (broadcast to codes)
+# Catalog dumps live in minimal_signal_docs. Status remains candidate.
 # ---------------------------------------------------------------------------
-
-SHORT_RATIO_FEATURE_ID: str = "short_ratio_level"
-SIGNAL_ID_MARGIN_CHANGE: str = "c21_margin_change_sign"
-SIGNAL_ID_SHORT_RATIO_DELTA: str = "c21_short_ratio_delta_sign"
-DEFAULT_SHORT_RATIO_SECTION: str = "0050"  # research pin (TSE 33 sector code)
-
-EXTRA_HYP_FEATURE_IDS: tuple[str, ...] = (
-    "is_trading_day",
-    MARGIN_CHANGE_FEATURE_ID,
-    SHORT_RATIO_FEATURE_ID,
-)
-
-EXTRA_HYP_DATASETS: tuple[str, ...] = (
-    "equities_bars_daily",
-    "markets_calendar",
-    "indices_bars_daily_topix",
-    "markets_margin_interest",
-    "markets_short_ratio",
-)
 
 
 def compute_margin_change_sign_signal(
@@ -1002,133 +919,6 @@ def compute_short_delta_from_feature_observations(
             "prev_short_ratio_level": prev_short_ratio_level,
         },
     )
-
-
-def extra_hyp_definitions(
-    *,
-    section: str = DEFAULT_SHORT_RATIO_SECTION,
-) -> list[dict[str, Any]]:
-    """Declarative catalog for W62 S4/S5 research hypotheses."""
-    return [
-        {
-            "signal_id": SIGNAL_ID_MARGIN_CHANGE,
-            "version": SIGNAL_VERSION,
-            "status": SIGNAL_STATUS,
-            "candidate_only": False,
-            "approved_legs_only": True,
-            "primary_feature_id": MARGIN_CHANGE_FEATURE_ID,
-            "filter_feature_id": FILTER_FEATURE_ID,
-            "feature_status_pins": {
-                MARGIN_CHANGE_FEATURE_ID: "approved",
-                FILTER_FEATURE_ID: "approved",
-            },
-            "formula": (
-                "value = sign(margin_interest_change_1d) if is_trading_day==1"
-            ),
-            "role": "margin_change_sign",
-            "not_s1_rehash": True,
-        },
-        {
-            "signal_id": SIGNAL_ID_SHORT_RATIO_DELTA,
-            "version": SIGNAL_VERSION,
-            "status": SIGNAL_STATUS,
-            "candidate_only": False,
-            "approved_legs_only": True,
-            "primary_feature_id": SHORT_RATIO_FEATURE_ID,
-            "filter_feature_id": FILTER_FEATURE_ID,
-            "section": section,
-            "feature_status_pins": {
-                SHORT_RATIO_FEATURE_ID: "approved",
-                FILTER_FEATURE_ID: "approved",
-            },
-            "formula": (
-                f"value = sign(Δ short_ratio_level[{section}]) "
-                "if is_trading_day==1; broadcast to codes"
-            ),
-            "role": "short_ratio_delta_sign",
-            "not_s1_rehash": True,
-        },
-    ]
-
-
-def multi_signal_definitions(
-    *,
-    volume_sign_abs_min: float = DEFAULT_VOLUME_SIGN_ABS_MIN,
-) -> list[dict[str, Any]]:
-    """Declarative catalog for the three W58 research signals (T4)."""
-    return [
-        {
-            "signal_id": SIGNAL_ID_TOPIX_REL,
-            "version": SIGNAL_VERSION,
-            "status": SIGNAL_STATUS,
-            "candidate_only": False,
-            "approved_legs_only": True,
-            "primary_feature_id": PRIMARY_FEATURE_ID,
-            "filter_feature_id": FILTER_FEATURE_ID,
-            "gate_feature_id": GATE_FEATURE_ID,
-            "feature_ids": list(DEFAULT_FEATURE_IDS),
-            "feature_status_pins": {
-                PRIMARY_FEATURE_ID: "approved",
-                FILTER_FEATURE_ID: "approved",
-                GATE_FEATURE_ID: "approved",
-            },
-            "formula": (
-                "value = sign(topix_relative_1d) if is_trading_day==1 "
-                "(volume gate off by default)"
-            ),
-            "role": "baseline",
-        },
-        {
-            "signal_id": SIGNAL_ID_VOLUME_SIGN,
-            "version": SIGNAL_VERSION,
-            "status": SIGNAL_STATUS,
-            "candidate_only": False,
-            "approved_legs_only": True,
-            "primary_feature_id": GATE_FEATURE_ID,
-            "filter_feature_id": FILTER_FEATURE_ID,
-            "gate_feature_id": GATE_FEATURE_ID,
-            "feature_ids": [GATE_FEATURE_ID, FILTER_FEATURE_ID],
-            "feature_status_pins": {
-                GATE_FEATURE_ID: "approved",
-                FILTER_FEATURE_ID: "approved",
-            },
-            "volume_change_abs_min": volume_sign_abs_min,
-            "formula": (
-                f"value = sign(volume_change_1d) if is_trading_day==1 "
-                f"and |volume_change_1d| >= {volume_sign_abs_min}; else None"
-            ),
-            "role": "volume_sign_abs_threshold",
-        },
-        {
-            "signal_id": SIGNAL_ID_TOPIX_DISC,
-            "version": SIGNAL_VERSION,
-            "status": SIGNAL_STATUS,
-            "candidate_only": False,
-            "approved_legs_only": True,
-            "primary_feature_id": PRIMARY_FEATURE_ID,
-            "filter_feature_id": FILTER_FEATURE_ID,
-            "secondary_filter_feature_id": DISCLOSURE_FEATURE_ID,
-            "feature_ids": [
-                PRIMARY_FEATURE_ID,
-                FILTER_FEATURE_ID,
-                DISCLOSURE_FEATURE_ID,
-            ],
-            "feature_status_pins": {
-                PRIMARY_FEATURE_ID: "approved",
-                FILTER_FEATURE_ID: "approved",
-                DISCLOSURE_FEATURE_ID: "approved",
-            },
-            "formula": (
-                "value = sign(topix_relative_1d) if is_trading_day==1 "
-                "and disclosure_flag_fins==1; else None"
-            ),
-            "alt_filter_documented": (
-                f"{MARGIN_CHANGE_FEATURE_ID} non-null filter "
-                "(approved; not selected for primary S3 in this wave)"
-            ),
-            "role": "topix_rel_disclosure_filter",
-        },
-    ]
 
 
 __all__ = [

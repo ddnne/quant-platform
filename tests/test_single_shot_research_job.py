@@ -55,6 +55,9 @@ SINGLE_SHOT_PATH = (
 MINIMAL_SIGNAL_PATH = (
     REPO_ROOT / "packages" / "research_runtime" / "features" / "minimal_signal.py"
 )
+MINIMAL_SIGNAL_DOCS_PATH = (
+    REPO_ROOT / "packages" / "research_runtime" / "features" / "minimal_signal_docs.py"
+)
 
 
 def _d1_row(nk: dict, day: str, payload: dict | None = None, *, aa: str = "T15:30:00+09:00"):
@@ -695,7 +698,7 @@ def _ast_imports_and_calls(path: Path) -> tuple[set[str], set[str]]:
 
 def test_t7_signal_and_single_shot_no_mass_ready_or_orders():
     """Hard AST/comment — no mass import, no READY mint, no order exec."""
-    for path in (SINGLE_SHOT_PATH, MINIMAL_SIGNAL_PATH):
+    for path in (SINGLE_SHOT_PATH, MINIMAL_SIGNAL_PATH, MINIMAL_SIGNAL_DOCS_PATH):
         imported, called = _ast_imports_and_calls(path)
         src = path.read_text(encoding="utf-8")
         assert "agents" not in imported, path.name
