@@ -58,31 +58,31 @@ if "cheap_pb" in PROPOSE_PROMPT_PREFER_GATES:
 if "roe_low" in PROPOSE_PROMPT_PREFER_GATES:
     raise RuntimeError("roe_low empty crosses stay SPARSE, not prefer")
 
-# Occupancy-correct format example for the Worker prompt. Follows GATES.
-PROPOSE_PROMPT_GOOD: dict[str, object] = {
-    "thesis": (
-        "PEAD when overnight funding is tight AND sales contracted versus "
-        "the last prior print."
-    ),
-    "signal_definition": (
-        "AND(tight_funding, sales_down) PIT; skip missing prints (no invent)."
-    ),
-    "position_rule": (
-        "Event-hold original surprise sign when both gates are PIT-true; "
-        "otherwise flat."
-    ),
-    "datasets": [
-        "equities_bars_daily",
-        "fins_summary",
-        "jsda_tokyo_repo_rates",
-    ],
-    "gates": ["tight_funding", "sales_down"],
-    "why_different_from": ["ungated PEAD"],
+# Occupancy-correct English for prefer gates. YAML follows these predicates.
+_GATE_OCCUPANCY_SENTENCE: dict[str, str] = {
+    "curve_flatten": "the repo curve flattened",
+    "overnight_p10": "overnight is in the easiest PIT decile",
+    "pb_rising": "PB is above its PIT median",
+    "eps_down": "EPS contracted versus the last prior print",
+    "np_negative": "net profit is negative",
+    "sales_down": "sales contracted versus the last prior print",
+    "invert_curve": "the repo curve inverted",
+    "tight_funding": "overnight funding is tight",
+    "price_down": "price is down",
 }
-if frozenset(str(g) for g in PROPOSE_PROMPT_GOOD["gates"]) - PROPOSE_ALLOWED_GATES:
-    raise RuntimeError("PROPOSE_PROMPT_GOOD gates must be propose-allowed")
-if "cheap_pb" in set(str(g) for g in PROPOSE_PROMPT_GOOD["gates"]):
-    raise RuntimeError("PROPOSE_PROMPT_GOOD must not seed cheap_pb")
+_FUNDING_GATES: frozenset[str] = frozenset(
+    {
+        "tight_funding",
+        "easy_funding",
+        "overnight_p10",
+        "overnight_easing",
+        "overnight_tightening",
+        "curve_flatten",
+        "invert_curve",
+        "steep_curve",
+        "repo_3m_down",
+    }
+)
 
 PROPOSE_PROMPT_BAD: str = (
     'thesis "Rising Sales" with gates sales_down, or "Liquidity × Price × Margin"'
@@ -203,7 +203,15 @@ GATE_OCCUPANCY_LABEL: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("ta_up", ("technical analysis", "technical signal", "ta signals")),
     ("ta_down", ("technical analysis", "technical signal", "ta signals")),
     ("overnight_p10", ("at 10%", "funding at 10", "10 percent", "10% predicts", "funding is loose", "loose")),
-    ("pb_rising", ("is rising", "pb rose", "rising price to book", "price to book is rising")),
+    ("pb_rising", (
+        "is rising",
+        "pb rose",
+        "rising price to book",
+        "price to book is rising",
+        "pb ratio increase",
+        "pb increase",
+        "increase in pb",
+    )),
     ("np_negative", ("profitability is weak", "weak profitability", "weak profit")),
     ("crowded_margin", ("market is crowded",)),
 )
@@ -253,6 +261,61 @@ PROPOSE_CONTRADICTORY_GATE_PAIRS: tuple[frozenset[str], ...] = (
     frozenset({"margin_up", "margin_down"}),
     frozenset({"eps_up", "eps_down"}),
 )
+
+
+def propose_prompt_good() -> dict[str, object]:
+    """Occupancy-correct 2-AND that is not already catalog. Format example only."""
+    from research.unique_logic.catalog import yaml_combo_rows
+
+    catalog: set[frozenset[str]] = set()
+    for row in yaml_combo_rows():
+        gates = frozenset(
+            str(x)
+            for x in ((row.get("params") or {}).get("gates") or [])
+            if str(x).strip()
+        )
+        if gates:
+            catalog.add(gates)
+    prefer = list(PROPOSE_PROMPT_PREFER_GATES)
+    for i, a in enumerate(prefer):
+        for b in prefer[i + 1 :]:
+            pair = frozenset({a, b})
+            if pair in catalog:
+                continue
+            if any(combo <= pair for combo, _reason in SPARSE_GATE_COMBOS):
+                continue
+            if any(contra <= pair for contra in PROPOSE_CONTRADICTORY_GATE_PAIRS):
+                continue
+            sa = _GATE_OCCUPANCY_SENTENCE.get(a)
+            sb = _GATE_OCCUPANCY_SENTENCE.get(b)
+            if not sa or not sb:
+                continue
+            datasets = list(DEFAULT_PROPOSE_DATASETS)
+            if pair & _FUNDING_GATES and "jsda_tokyo_repo_rates" not in datasets:
+                datasets.append("jsda_tokyo_repo_rates")
+            return {
+                "thesis": (
+                    f"PEAD when {sa} AND {sb}. Skip missing PIT prints (no invent)."
+                ),
+                "signal_definition": (
+                    f"AND({a}, {b}) PIT; skip missing prints (no invent)."
+                ),
+                "position_rule": (
+                    "Event-hold original surprise sign when both gates are "
+                    "PIT-true; otherwise flat."
+                ),
+                "datasets": datasets,
+                "gates": [a, b],
+                "why_different_from": ["ungated PEAD"],
+            }
+    raise RuntimeError("no unique prefer 2-AND for PROPOSE_PROMPT_GOOD")
+
+
+PROPOSE_PROMPT_GOOD: dict[str, object] = propose_prompt_good()
+if frozenset(str(g) for g in PROPOSE_PROMPT_GOOD["gates"]) - PROPOSE_ALLOWED_GATES:
+    raise RuntimeError("PROPOSE_PROMPT_GOOD gates must be propose-allowed")
+if "cheap_pb" in set(str(g) for g in PROPOSE_PROMPT_GOOD["gates"]):
+    raise RuntimeError("PROPOSE_PROMPT_GOOD must not seed cheap_pb")
 
 # Occupancy-label continue exceptions: slang is OK when the predicate is named.
 OCCUPANCY_LABEL_EXCEPTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
@@ -317,6 +380,7 @@ __all__ = [
     "EXTRA_TITLE_GATES",
     "PROPOSE_PROMPT_BAD",
     "PROPOSE_PROMPT_GOOD",
+    "propose_prompt_good",
     "PROPOSE_PROMPT_PREFER_GATES",
     "GATE_OCCUPANCY_LABEL",
     "GATE_TITLE_CONTRA",

@@ -65,8 +65,8 @@ def _propose_allowed_source() -> str:
     from research.unique_logic.propose_review_tables import (
         DEFAULT_PROPOSE_DATASETS,
         PROPOSE_PROMPT_BAD,
-        PROPOSE_PROMPT_GOOD,
         PROPOSE_PROMPT_PREFER_GATES,
+        propose_prompt_good,
         PROPOSE_TWEAK_WORDS,
         prompt_direction_echo_x,
     )
@@ -91,7 +91,7 @@ def _propose_allowed_source() -> str:
         arr("PROPOSE_PROMPT_PREFER_GATES", list(PROPOSE_PROMPT_PREFER_GATES)),
         "",
         "export const PROPOSE_PROMPT_GOOD = "
-        + json.dumps(PROPOSE_PROMPT_GOOD, ensure_ascii=True)
+        + json.dumps(propose_prompt_good(), ensure_ascii=True)
         + " as const;",
         "",
         f"export const PROPOSE_PROMPT_BAD = {_ts_str(PROPOSE_PROMPT_BAD)};",

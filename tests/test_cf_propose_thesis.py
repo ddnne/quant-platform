@@ -191,11 +191,27 @@ def test_worker_index_contains_propose_thesis_route() -> None:
     assert "JSON.stringify(PROPOSE_PROMPT_GOOD)" in propose_src
     assert "PEAD when overnight funding is tight AND sales contracted." not in propose_src
     assert "Prefer curve_flatten, overnight_p10" not in propose_src
-    from research.unique_logic.propose_review_tables import PROPOSE_PROMPT_PREFER_GATES
+    from research.unique_logic.catalog import yaml_combo_rows
+    from research.unique_logic.propose_review_tables import (
+        PROPOSE_PROMPT_GOOD,
+        PROPOSE_PROMPT_PREFER_GATES,
+        propose_prompt_good,
+    )
 
     assert "roe_low" not in PROPOSE_PROMPT_PREFER_GATES
     assert "cheap_pb" not in PROPOSE_PROMPT_PREFER_GATES
     assert set(PROPOSE_PROMPT_PREFER_GATES) <= set(PROPOSE_ALLOWED_GATES)
+    good = propose_prompt_good()
+    assert good["gates"] == PROPOSE_PROMPT_GOOD["gates"]
+    catalog_sets = {
+        frozenset(
+            str(x)
+            for x in ((row.get("params") or {}).get("gates") or [])
+            if str(x).strip()
+        )
+        for row in yaml_combo_rows()
+    }
+    assert frozenset(str(g) for g in good["gates"]) not in catalog_sets
     assert "rising price-to-book" not in src
     assert "auto_inject: false" in src
     assert "markets_margin_interest" in src
@@ -486,6 +502,12 @@ def test_review_proposal_row_occupancy_and_polarity_table() -> None:
             ["crowded_margin", "large_surprise"],
             "occupancy_label_only",
             "PEAD when margin is crowded AND surprise is large versus the window",
+        ),
+        (
+            "Invert curve regime tends to coincide with sales downturn and PB ratio increase.",
+            ["invert_curve", "sales_down", "pb_rising"],
+            "occupancy_label_only",
+            "PEAD when the repo curve inverted AND sales contracted AND PB is above its PIT median",
         ),
     ]
     for bad_thesis, gates, reason, good_thesis in rows:

@@ -36,7 +36,7 @@ export const GATE_OCCUPANCY_LABEL: Array<[string, string[]]> = [
   ["ta_up", ["technical analysis", "technical signal", "ta signals"]],
   ["ta_down", ["technical analysis", "technical signal", "ta signals"]],
   ["overnight_p10", ["at 10%", "funding at 10", "10 percent", "10% predicts", "funding is loose", "loose"]],
-  ["pb_rising", ["is rising", "pb rose", "rising price to book", "price to book is rising"]],
+  ["pb_rising", ["is rising", "pb rose", "rising price to book", "price to book is rising", "pb ratio increase", "pb increase", "increase in pb"]],
   ["np_negative", ["profitability is weak", "weak profitability", "weak profit"]],
   ["crowded_margin", ["market is crowded"]],
 ];
@@ -78,8 +78,11 @@ export const OCCUPANCY_EXTRA_TITLE: Array<[string, string[]]> = [
   ["appetite for risk", ["eq_ar_falling", "eq_ar_high", "eq_ar_low", "eq_ar_rising"]],
   ["funding at 10", ["overnight_p10"]],
   ["funding is loose", ["overnight_p10"]],
+  ["increase in pb", ["pb_rising"]],
   ["low repo", ["repo_3m_down"]],
   ["market is crowded", ["crowded_margin"]],
+  ["pb increase", ["pb_rising"]],
+  ["pb ratio increase", ["pb_rising"]],
   ["price to book is rising", ["pb_rising"]],
   ["profitability is weak", ["np_negative"]],
   ["repo is low", ["repo_3m_down"]],
@@ -123,6 +126,7 @@ export const SPARSE_GATE_COMBOS_REVIEW: string[][] = [
   ["invert_curve", "price_down", "roe_low"],
   ["curve_flatten", "np_negative", "roe_low"],
   ["invert_curve", "roe_low"],
+  ["np_negative", "overnight_p10", "price_down"],
 ];
 
 export const OCCUPANCY_LABEL_EXCEPTIONS: Array<[string, string[]]> = [

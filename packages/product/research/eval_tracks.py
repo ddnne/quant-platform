@@ -80,10 +80,10 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "id": "inventory_bias_recorded",
         "track": EVAL_TRACK_LIQ_LARGE,
         "why": (
-            "recorded research/eval/job=eval-inventory-bias-20260824g/ "
+            "recorded research/eval/job=eval-inventory-bias-20260824k/ "
             "inventory_bias.json; assert_new_batch_cheap_pb_cap refuses "
-            "new batches at 20%; 24j polarity/slang 0-adopt; 24g "
-            "tight×eps×sales band (not sleeve)"
+            "new batches at 20%; 24k flatten×tight×eps band (not sleeve); "
+            "p10×px×np empty parked"
         ),
         "not_a_pass": True,
         "go": False,
@@ -234,8 +234,8 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "id": "adopt_occupancy_recorded",
         "track": EVAL_TRACK_LIQ_LARGE,
         "why": (
-            "eval-occupancy-audit-20260824g: 24g tight×eps×sales mid-band both "
-            "tracks; not a sleeve member; 0 near_empty sleeve members; not a pass"
+            "eval-occupancy-audit-20260824k: 24k flatten×tight×eps mid-band; "
+            "p10×px×np empty parked; 0 near_empty sleeve members; not a pass"
         ),
         "not_a_pass": True,
         "go": False,
@@ -244,7 +244,7 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "id": "near_empty_parked_not_countable",
         "track": EVAL_TRACK_LIQ_LARGE,
         "why": (
-            "NEAR_EMPTY_PARK_IDS 13; is_countable_spec and "
+            "NEAR_EMPTY_PARK_IDS 14; is_countable_spec and "
             "validate_basket_members exclude them; "
             "assert_new_batch_occupancy_not_near_empty refuses empty batches"
         ),
