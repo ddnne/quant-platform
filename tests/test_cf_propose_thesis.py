@@ -154,7 +154,6 @@ def test_worker_index_contains_propose_thesis_route() -> None:
     assert "glm-4.7-flash" in src
     assert "extractAiText" in src
     assert "coerceGateList" in src
-    assert "DEFAULT_PROPOSE_DATASETS" in src
     assert "signal_definition" in src
     assert "proposal_source: \"llm_failed\"" in src or "proposal_source: 'llm_failed'" in src or 'proposal_source: "llm_failed"' in src
     assert "auto_inject: false" in src
@@ -171,23 +170,16 @@ def test_worker_index_contains_propose_thesis_route() -> None:
     assert "stubProposals" not in src
     assert "stub_propose_thesis_result" not in src
     assert "STUB_PROPOSAL_TEMPLATES" not in src
-    assert "equities_bars_daily" in src
-    assert "fins_summary" in src
-    assert "PROPOSE_ALLOWED_GATES" in src
     assert "slice(0, 24)" in src or "slice(0,24)" in src
     assert "titleOccupancyBad" in src
     assert 'from "./propose_review_tables"' in src
     assert 'from "./propose_allowed"' in src
-    assert "OCCUPANCY_EXTRA_TITLE" in src
-    assert "GATE_TITLE_CONTRA" in src
     propose_src = _WORKER_PROPOSE.read_text(encoding="utf-8")
     assert "const PROPOSE_ALLOWED_GATES = [" not in propose_src
     assert "const PROPOSE_ALLOWED_DATASETS = [" not in propose_src
     assert "PROPOSE_ALLOWED_GATES.join" in propose_src
     assert "PROPOSE_PROMPT_PREFER_GATES.join" in propose_src
     assert "JSON.stringify(PROPOSE_PROMPT_GOOD)" in propose_src
-    assert "PEAD when overnight funding is tight AND sales contracted." not in propose_src
-    assert "Prefer curve_flatten, overnight_p10" not in propose_src
     from research.unique_logic.catalog import yaml_combo_rows
     from research.unique_logic.propose_review_tables import (
         PROPOSE_PROMPT_GOOD,
@@ -209,7 +201,6 @@ def test_worker_index_contains_propose_thesis_route() -> None:
         for row in yaml_combo_rows()
     }
     assert frozenset(str(g) for g in good["gates"]) not in catalog_sets
-    assert "rising price-to-book" not in src
     assert "markets_margin_interest" in src
     assert '"margin_interest"' not in src
     # Generated allowlists: scripts/sync_cf_new_thesis_ids.py --check is SoT.

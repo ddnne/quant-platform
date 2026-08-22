@@ -364,6 +364,7 @@ export const CF_NEW_EVENT_THESIS_IDS = [
   "event_pb_rising_fade",
   "event_pb_rising_liq_high_fade",
   "event_pb_rising_margin_up_fade",
+  "event_pb_rising_np_negative",
   "event_pb_rising_tight_fade",
   "event_pb_rising_tight_on",
   "event_positive_eps_easy",
