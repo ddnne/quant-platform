@@ -229,6 +229,12 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Reuse staged R2 panels prefix (skip serial stage).",
     )
+    p.add_argument(
+        "--track",
+        choices=("mid_n_explore", "liq_large"),
+        default=None,
+        help="Eval track. mid_n_explore=80 ADV; liq_large=100 ADV. Never head-N.",
+    )
     p.add_argument("--max-codes", type=int, default=DEFAULT_MAX_CODES)
     p.add_argument("--max-days", type=int, default=200)
     p.add_argument("--one-way-cost", type=float, default=0.001)
@@ -262,13 +268,22 @@ def main(argv: list[str] | None = None) -> int:
         from research.cf_daily_path_job import run_cf_daily_path_fanout
 
         ids = [str(s["logic_id"]) for s in specs]
+        from research.eval_tracks import eval_track
+
+        max_codes = int(args.max_codes)
+        track = args.track
+        if track:
+            tspec = eval_track(track)
+            if args.max_codes == DEFAULT_MAX_CODES:
+                max_codes = int(tspec["max_codes"])
         pack = run_cf_daily_path_fanout(
             job_id=args.job_id,
             logic_ids=ids,
-            max_codes=int(args.max_codes),
+            max_codes=max_codes,
             max_days=int(args.max_days),
             one_way_cost=float(args.one_way_cost),
             panels_prefix=args.panels_prefix,
+            track=track,
         )
         args.out.parent.mkdir(parents=True, exist_ok=True)
         dump_json(args.out, pack)

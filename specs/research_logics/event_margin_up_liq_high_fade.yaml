@@ -1,5 +1,5 @@
-logic_id: event_eqar_high_cluster
-family_id: event_fund_cross
+logic_id: event_margin_up_liq_high_fade
+family_id: event_margin_crowd_combo
 axis: mixed
 headline: false
 generation_enabled: false
@@ -7,9 +7,9 @@ promote_as_main: false
 go: false
 main_pool: true
 thesis: >
-  PEAD when EqAR is high AND disclosures are clustered (quality in a busy week).
+  Fade PEAD when margin interest rose in a liquid name (crowded and tradable).
 signal_definition: >
-  PEAD when EqAR is high AND disclosures are clustered (quality in a busy week).
+  Fade PEAD when margin interest rose in a liquid name (crowded and tradable).
 datasets:
   - equities_bars_daily
   - fins_summary
@@ -20,8 +20,8 @@ params:
   hold_days: 10
   momentum_n: 5
   min_hist: 20
-  mode: event_eqar_high_cluster
-  side: orig
+  mode: event_margin_up_liq_high_fade
+  side: flip
   cs_gate: None
   entry_shift: 0
   hold_tail_days: 0

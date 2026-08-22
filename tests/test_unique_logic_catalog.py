@@ -209,7 +209,7 @@ def test_yaml_dispatch_worker_event_ids_align() -> None:
     assert "event_skip_monday" in yaml_ids
     assert "cs_not_month_end" in yaml_ids
     assert "event_skip_monday" in CF_NEW_THESIS_IDS
-    assert len(CF_NEW_THESIS_IDS) >= 278
+    assert len(CF_NEW_THESIS_IDS) >= 307
     from research.unique_logic.event_combos import NEW_COMBO_LOGIC
     from research.unique_logic.constants import is_ungated_name_level_cs
 
@@ -227,9 +227,19 @@ def test_yaml_dispatch_worker_event_ids_align() -> None:
     from research.unique_logic.constants import WORKER_ISOLATE_LIMIT_IDS
 
     parked = [s for s in NEW_COMBO_LOGIC if s["logic_id"] in WORKER_ISOLATE_LIMIT_IDS]
-    assert len(parked) == 4
+    assert len(parked) == 3
     assert all(s.get("main_pool") is False for s in parked)
     assert all(s.get("worker_isolate_limit") is True for s in parked)
+    from research.unique_logic.constants import (
+        WORKER_ISOLATE_LIMIT_REASONS,
+        WORKER_ISOLATE_LINEARIZED_OK,
+    )
+
+    assert set(WORKER_ISOLATE_LIMIT_REASONS) == set(WORKER_ISOLATE_LIMIT_IDS)
+    assert WORKER_ISOLATE_LIMIT_IDS.isdisjoint(WORKER_ISOLATE_LINEARIZED_OK)
+    for lid in WORKER_ISOLATE_LINEARIZED_OK:
+        row = next(s for s in NEW_COMBO_LOGIC if s["logic_id"] == lid)
+        assert row.get("worker_isolate_limit") is False
     for spec in NEW_COMBO_LOGIC:
         if spec["logic_id"] in fresh:
             assert spec.get("always_on_cs_sticky") is False

@@ -115,6 +115,7 @@ def run_cf_daily_path_fanout(
     skip_stage: bool = False,
     staging_dir: str | Path | None = None,
     panels_prefix: str | None = None,
+    track: str | None = None,
 ) -> dict[str, Any]:
     """Stage once, fan-out one CF isolate per logic, aggregate cells.
 
@@ -152,6 +153,7 @@ def run_cf_daily_path_fanout(
             max_codes=max_codes,
             max_days=max_days,
             staging_dir=staging_dir,
+            track=track,
         )
         if int(stage_meta.get("n_ok") or 0) <= 0:
             raise CfMassEvalError(

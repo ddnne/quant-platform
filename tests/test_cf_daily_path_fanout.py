@@ -138,6 +138,30 @@ def test_eval_universe_is_not_fifteen() -> None:
     assert UNIVERSE_MIN_FINS_EQAR == 1
 
 
+def test_eval_tracks_are_two_and_not_head_n() -> None:
+    from research.eval_tracks import (
+        EVAL_TRACK_LIQ_LARGE,
+        EVAL_TRACK_MID_N,
+        EVAL_TRACKS,
+        eval_track,
+        infer_eval_track,
+    )
+
+    assert set(EVAL_TRACKS) == {EVAL_TRACK_MID_N, EVAL_TRACK_LIQ_LARGE}
+    mid = eval_track(EVAL_TRACK_MID_N)
+    large = eval_track(EVAL_TRACK_LIQ_LARGE)
+    assert mid["max_codes"] == 80
+    assert large["max_codes"] == 100
+    assert mid["universe_select"] == "adv_desc_skip_missing_bars_and_fins"
+    assert large["universe_select"] == "adv_desc_skip_missing_bars_and_fins"
+    assert mid["head_n_forbidden"] is True
+    assert large["head_n_forbidden"] is True
+    assert mid["not_a_pass"] is True
+    assert large["go"] is False
+    assert infer_eval_track(max_codes=80) == EVAL_TRACK_MID_N
+    assert infer_eval_track(max_codes=100) == EVAL_TRACK_LIQ_LARGE
+
+
 def test_rank_eval_codes_is_not_head_n_and_skips_missing() -> None:
     from research.class_hyp_eval import rank_eval_codes
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { comboCsGateOk, comboEventGateOk } from "./daily_path";
+import { clusterWindowSeries, comboCsGateOk, comboEventGateOk } from "./daily_path";
 import type { PeriodPanel } from "./types";
 
 const dummyPanel = { fund_regime: { events_by_code: {} } } as PeriodPanel;
@@ -46,6 +46,38 @@ describe("comboEventGateOk", () => {
     const down = { ...ev, ta: 100, prior_ta: 150 };
     expect(comboEventGateOk("ta_up", up, {}, {}, 8, dummyPanel)).toBe(true);
     expect(comboEventGateOk("ta_up", down, {}, {}, 8, dummyPanel)).toBe(false);
+  });
+
+  it("cluster uses a linear window series and skips missing dates", () => {
+    const dates = [
+      "2019-01-04",
+      "2019-01-05",
+      "2019-01-07",
+      "2019-01-08",
+      "2019-01-09",
+      "2019-01-10",
+      "2019-01-11",
+      "2019-01-14",
+      "2019-01-15",
+      "2019-01-16",
+      "2019-01-17",
+      "2019-01-18",
+      "2019-01-21",
+    ];
+    const panel = {
+      fund_regime: {
+        events_by_code: {
+          a: dates.map((d) => ({ disc_date: d })),
+          b: [{ disc_date: "2019-01-21" }, { disc_date: "2019-01-21" }],
+        },
+      },
+    } as PeriodPanel;
+    const series = clusterWindowSeries(panel);
+    expect(series["2019-01-04"]).toBe(0);
+    expect(series["2019-01-08"]).toBeGreaterThan(0);
+    expect(series["2019-01-21"]).toBeGreaterThan(series["2019-01-04"]);
+    const quiet = { ...ev, disc: "2019-01-04", entryDate: "2019-01-04" };
+    expect(comboEventGateOk("cluster", quiet, {}, {}, 8, panel)).toBe(false);
   });
 
   it("liq_high skips missing ADV and keeps above-median names", () => {

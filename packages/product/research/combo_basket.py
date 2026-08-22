@@ -887,6 +887,82 @@ def classify_sleeves_three_n(
     }
 
 
+COMPARE_COMPOSITION_IDS: tuple[str, ...] = (
+    "basket_theme_fund",
+    "basket_theme_flow",
+    "basket_event_fund",
+    "meta_fund_flow",
+    "meta_fund_event",
+    "meta_fund_flow_event",
+)
+
+
+def compare_headn_vs_liq(
+    summary_headn: Mapping[str, Any],
+    summary_liq: Mapping[str, Any],
+    *,
+    ids: Sequence[str] | None = None,
+) -> dict[str, Any]:
+    """Same sleeves/metas across head-N 100 vs ADV liq100. Not a pass."""
+
+    def _index(summary: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+        out: dict[str, dict[str, Any]] = {}
+        for r in list(summary.get("baskets") or []) + list(summary.get("metas") or []):
+            if not isinstance(r, Mapping):
+                continue
+            bid = str(r.get("basket_id") or r.get("meta_id") or "")
+            if bid:
+                out[bid] = dict(r)
+        return out
+
+    want = tuple(ids) if ids is not None else COMPARE_COMPOSITION_IDS
+    a = _index(summary_headn)
+    b = _index(summary_liq)
+    rows: list[dict[str, Any]] = []
+    liq_majority_better = []
+    for bid in want:
+        ha, hb = a.get(bid) or {}, b.get(bid) or {}
+        pa, na = int(ha.get("n_pos_windows") or 0), int(ha.get("n_neg_windows") or 0)
+        pb, nb = int(hb.get("n_pos_windows") or 0), int(hb.get("n_neg_windows") or 0)
+        maj_h = 1 if pa > na else (-1 if na > pa else 0)
+        maj_l = 1 if pb > nb else (-1 if nb > pb else 0)
+        if maj_h == 0 and maj_l == 0:
+            kind = "both_mixed"
+        elif maj_h == maj_l:
+            kind = "same_majority"
+        elif maj_l == 1 and maj_h != 1:
+            kind = "liq_majority_better"
+            liq_majority_better.append(bid)
+        elif maj_h == 1 and maj_l != 1:
+            kind = "headn_majority_better"
+        else:
+            kind = "diverged"
+        rows.append(
+            {
+                "id": bid,
+                "class": kind,
+                "head_n": {"n_pos": pa, "n_neg": na, "maj": maj_h},
+                "liq": {"n_pos": pb, "n_neg": nb, "maj": maj_l},
+            }
+        )
+    return {
+        "version": "composition-compare/v1",
+        "head_n_job": summary_headn.get("job_id"),
+        "liq_job": summary_liq.get("job_id"),
+        "ids": list(want),
+        "liq_majority_better": liq_majority_better,
+        "rows": rows,
+        "liq_print_is_not_stable": True,
+        "not_a_pass": True,
+        "go": False,
+        "promote_as_main": False,
+        "notes": (
+            "ADV composition vs head-N on the same sleeve/meta set. "
+            "A liq 4/2 (or 5/1) is not a stability or pass call."
+        ),
+    }
+
+
 def summarize_meta_trends(
     cells: Sequence[Mapping[str, Any]],
     *,

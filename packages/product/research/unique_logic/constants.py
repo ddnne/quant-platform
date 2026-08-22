@@ -278,6 +278,33 @@ CF_NEW_EVENT_THESIS_IDS: frozenset[str] = frozenset(
         "surprise_xs_eqar_high_liq_high",
         "surprise_xs_margin_up_price_down",
         "surprise_xs_eqar_high_price_down",
+        "event_positive_eps_liq_high",
+        "event_div_payer_liq_high",
+        "event_eqar_low_liq_high_fade",
+        "event_margin_down_liq_high",
+        "event_margin_up_liq_high_fade",
+        "event_eps_up_liq_high",
+        "event_eqar_high_positive_eps",
+        "event_ta_up_positive_eps",
+        "event_cheap_pb_positive_eps",
+        "event_eqar_high_div_payer",
+        "event_ta_up_div_payer",
+        "event_cheap_pb_eps_up",
+        "event_eqar_high_price_down_liq",
+        "event_ta_up_price_down_liq",
+        "event_cheap_pb_price_down_liq",
+        "event_eqar_low_price_down_fade",
+        "event_positive_eps_price_down",
+        "event_div_payer_price_down",
+        "event_cheap_pb_margin_down",
+        "event_positive_eps_uncrowded",
+        "event_div_payer_uncrowded",
+        "event_ta_up_uncrowded_liq",
+        "surprise_xs_cheap_pb_liq_high",
+        "surprise_xs_ta_up_liq_high",
+        "surprise_xs_eqar_high_margin_down",
+        "surprise_xs_ta_up_margin_down",
+        "surprise_xs_positive_eps_liq_high",
     }
 )
 CF_NEW_CS_THESIS_IDS: frozenset[str] = frozenset(
@@ -378,6 +405,8 @@ CF_NEW_CS_THESIS_IDS: frozenset[str] = frozenset(
         "cs_ta_up_margin_down",
         "cs_cheap_pb_easy",
         "cs_eqar_high_on_impulse",
+        "cs_cheap_pb_margin_down",
+        "cs_eqar_low_margin_up",
     }
 )
 CF_NEW_THESIS_IDS: frozenset[str] = CF_NEW_EVENT_THESIS_IDS | CF_NEW_CS_THESIS_IDS
@@ -421,14 +450,28 @@ TERM_STRUCTURE_REQUIRED: frozenset[str] = frozenset(
 # Small-universe shards historically emptied these AND-gates. Parked until a
 # larger-universe re-eval fills occupancy. data_requirement_unmet / main_pool=false.
 # Isolate CPU/memory limit on 100-name r2_panels (CF 1102). Parked, not densified.
-WORKER_ISOLATE_LIMIT_IDS: frozenset[str] = frozenset(
+# Cluster hist was O(n²) per event; Worker now uses a linear window series.
+# Cluster three completed on eval-cf-dp-liq100-cross-20260822a after linearize.
+# CS name-level fund extras × dates still 1102 at N=100 — stay parked.
+WORKER_ISOLATE_LINEARIZED_OK: frozenset[str] = frozenset(
     {
         "event_eqar_high_cluster",
         "event_ta_up_cluster",
         "event_cheap_pb_cluster",
-        "cs_eqar_high_on_impulse",
     }
 )
+WORKER_ISOLATE_LIMIT_IDS: frozenset[str] = frozenset(
+    {
+        "cs_eqar_high_on_impulse",
+        "cs_cheap_pb_margin_down",
+        "cs_eqar_low_margin_up",
+    }
+)
+WORKER_ISOLATE_LIMIT_REASONS: dict[str, str] = {
+    "cs_eqar_high_on_impulse": "cs_fund_scan_x_dates; 1102 at liq100 after impulse cache",
+    "cs_cheap_pb_margin_down": "cs_fund_scan_x_dates; 1102 at liq100",
+    "cs_eqar_low_margin_up": "cs_fund_scan_x_dates; 1102 at liq100",
+}
 SPARSE_ON_15NAME_SHARD: frozenset[str] = frozenset(
     {
         "event_may_easing",
@@ -638,6 +681,11 @@ ECONOMIC_THEME_IDS: dict[str, frozenset[str]] = {
             "surprise_xs_eqar_high_liq_high",
             "cs_cheap_pb_easy",
             "cs_ta_up_margin_down",
+            "event_positive_eps_liq_high",
+            "event_eqar_high_price_down_liq",
+            "event_margin_down_liq_high",
+            "surprise_xs_ta_up_liq_high",
+            "cs_cheap_pb_margin_down",
         }
     ),
     "margin_surprise": frozenset(

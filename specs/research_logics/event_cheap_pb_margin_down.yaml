@@ -1,5 +1,5 @@
-logic_id: event_eqar_high_cluster
-family_id: event_fund_cross
+logic_id: event_cheap_pb_margin_down
+family_id: event_margin_crowd_combo
 axis: mixed
 headline: false
 generation_enabled: false
@@ -7,9 +7,9 @@ promote_as_main: false
 go: false
 main_pool: true
 thesis: >
-  PEAD when EqAR is high AND disclosures are clustered (quality in a busy week).
+  PEAD when P/B is cheap AND name margin interest fell.
 signal_definition: >
-  PEAD when EqAR is high AND disclosures are clustered (quality in a busy week).
+  PEAD when P/B is cheap AND name margin interest fell.
 datasets:
   - equities_bars_daily
   - fins_summary
@@ -20,7 +20,7 @@ params:
   hold_days: 10
   momentum_n: 5
   min_hist: 20
-  mode: event_eqar_high_cluster
+  mode: event_cheap_pb_margin_down
   side: orig
   cs_gate: None
   entry_shift: 0

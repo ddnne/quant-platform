@@ -1,15 +1,15 @@
-logic_id: event_eqar_high_cluster
-family_id: event_fund_cross
+logic_id: cs_cheap_pb_margin_down
+family_id: overnight_level_cs
 axis: mixed
 headline: false
 generation_enabled: false
 promote_as_main: false
 go: false
-main_pool: true
+main_pool: false
 thesis: >
-  PEAD when EqAR is high AND disclosures are clustered (quality in a busy week).
+  CS mom when P/B is cheap AND name margin interest fell.
 signal_definition: >
-  PEAD when EqAR is high AND disclosures are clustered (quality in a busy week).
+  CS mom when P/B is cheap AND name margin interest fell.
 datasets:
   - equities_bars_daily
   - fins_summary
@@ -20,10 +20,10 @@ params:
   hold_days: 10
   momentum_n: 5
   min_hist: 20
-  mode: event_eqar_high_cluster
+  mode: cs_cheap_pb_margin_down
   side: orig
-  cs_gate: None
+  cs_gate: cheap_pb_margin_down
   entry_shift: 0
   hold_tail_days: 0
 evaluator: research.unique_logic.event_combos.evaluate_combo_daily_mtm
-notes: combo thesis; occupancy-gated; CF daily_path is SoT
+notes: combo thesis; data_requirement_unmet on small shards; CF daily_path is SoT

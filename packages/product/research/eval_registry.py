@@ -378,6 +378,50 @@ def family_counts(logic_ids: Sequence[str]) -> dict[str, int]:
     return out
 
 
+CANDIDATE_KEEP_SIMPLE: str = (
+    "Simple occupancy-gated theses stay in the candidate pool for later "
+    "combination/funds even when single-name t/Sharpe is modest. "
+    "path_broken, path_collapsed, always_on, and near_empty are excluded."
+)
+
+
+def weakness_flags_from_summary(summary: Mapping[str, Any]) -> dict[str, list[str]]:
+    """Read ``summary_family.json`` weakness flags. Does not execute a proposal."""
+    out: dict[str, list[str]] = {}
+    for row in summary.get("logics") or []:
+        if not isinstance(row, Mapping):
+            continue
+        lid = str(row.get("logic_id") or "").strip()
+        if not lid:
+            continue
+        flags = [str(x) for x in (row.get("flags") or [])]
+        tag = str(row.get("tag") or "")
+        if tag and tag not in flags:
+            flags = [*flags, f"tag:{tag}"]
+        if row.get("candidate") is False and "not_candidate" not in flags:
+            flags.append("not_candidate")
+        out[lid] = flags
+    return out
+
+
+def proposal_blocked_by_summary(
+    payload: Mapping[str, Any],
+    summary: Mapping[str, Any],
+) -> list[str]:
+    flags = weakness_flags_from_summary(summary)
+    reasons: list[str] = []
+    parents = [str(x) for x in (payload.get("why_different_from") or [])]
+    for parent in parents:
+        pf = flags.get(parent) or []
+        if "path_broken" in pf:
+            reasons.append(f"parent_path_broken:{parent}")
+        if "always_on" in pf and not payload.get("signal_definition"):
+            reasons.append(f"parent_always_on_needs_new_signal:{parent}")
+        if "not_candidate" in pf:
+            reasons.append(f"parent_not_candidate:{parent}")
+    return reasons
+
+
 def summarize_daily_path_cells(
     cells: Sequence[Mapping[str, Any]],
     *,
@@ -398,6 +442,7 @@ def summarize_daily_path_cells(
         NEAR_EMPTY_OCCUPANCY,
         TERM_STRUCTURE_REQUIRED,
         SPARSE_ON_15NAME_SHARD,
+        WORKER_ISOLATE_LIMIT_IDS,
     )
     from research.unique_logic.near_duplicate import is_near_duplicate
 
@@ -473,6 +518,8 @@ def summarize_daily_path_cells(
             flags.append("near_duplicate")
         if lid in ALWAYS_ON_CS_STICKY:
             flags.append("always_on_cs_sticky")
+        if lid in WORKER_ISOLATE_LIMIT_IDS:
+            flags.append("worker_isolate_limit")
         if m_net is not None and abs(m_net) < 1e-4:
             flags.append("near_zero_net")
         if n_pos >= 2 and n_neg >= 2:

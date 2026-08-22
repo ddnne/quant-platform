@@ -40,6 +40,14 @@ from pathlib import Path
 from statistics import mean
 from typing import Any, Mapping, Sequence
 
+from research.eval_tracks import (
+    EVAL_TRACK_LIQ_LARGE,
+    EVAL_TRACK_MID_N,
+    EVAL_TRACKS,
+    UNIVERSE_SELECT_ADV,
+    eval_track,
+    infer_eval_track,
+)
 from research.unique_logic.constants import (
     FINS_SUMMARY_EQ_KEY,
     FINS_SUMMARY_EQAR_KEY,
@@ -355,7 +363,7 @@ EVAL_UNIVERSE_POOL: tuple[str, ...] = DEFAULT_EVAL_CODES + (
     "86980",
     "87290",
 )
-UNIVERSE_SELECT_RULE: str = "adv_desc_skip_missing_bars_and_fins"
+UNIVERSE_SELECT_RULE: str = UNIVERSE_SELECT_ADV
 UNIVERSE_MIN_BAR_DAYS: int = 40
 # One TA/EqAR print is enough to keep a name. Requiring 4 in a 10-month
 # window collapsed the pool to quarterly-only names (~7). Skip zero; no invent.
@@ -5513,6 +5521,11 @@ __all__ = [
     "DEFAULT_EVAL_CODES",
     "EVAL_UNIVERSE_POOL",
     "UNIVERSE_SELECT_RULE",
+    "EVAL_TRACKS",
+    "EVAL_TRACK_MID_N",
+    "EVAL_TRACK_LIQ_LARGE",
+    "eval_track",
+    "infer_eval_track",
     "rank_eval_codes",
     "select_eval_universe",
     "DEFAULT_PERIODS",

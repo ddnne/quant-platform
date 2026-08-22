@@ -190,6 +190,7 @@ def write_missing_combo_yaml(*, root: Path | None = None) -> list[str]:
             spec.get("near_duplicate")
             or spec.get("data_requirement_unmet")
             or spec.get("always_on_cs_sticky")
+            or spec.get("worker_isolate_limit")
         ):
             continue
         path.write_text(combo_yaml_text(spec), encoding="utf-8")

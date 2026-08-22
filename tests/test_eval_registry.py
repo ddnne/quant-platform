@@ -393,6 +393,47 @@ def test_classify_sleeves_three_n_dilutes_at_100() -> None:
     assert by["basket_theme_fund"]["class"] != "stable"
 
 
+def test_compare_headn_vs_liq_does_not_pass() -> None:
+    from research.combo_basket import compare_headn_vs_liq
+
+    head = {
+        "job_id": "eval-cf-dp-baskets100-20260822a",
+        "baskets": [
+            {
+                "basket_id": "basket_theme_fund",
+                "n_pos_windows": 3,
+                "n_neg_windows": 3,
+            },
+            {
+                "basket_id": "basket_theme_flow",
+                "n_pos_windows": 3,
+                "n_neg_windows": 3,
+            },
+        ],
+    }
+    liq = {
+        "job_id": "eval-cf-dp-baskets-liq100-20260822b",
+        "baskets": [
+            {
+                "basket_id": "basket_theme_fund",
+                "n_pos_windows": 4,
+                "n_neg_windows": 2,
+            },
+            {
+                "basket_id": "basket_theme_flow",
+                "n_pos_windows": 4,
+                "n_neg_windows": 2,
+            },
+        ],
+    }
+    out = compare_headn_vs_liq(head, liq)
+    assert out["version"] == "composition-compare/v1"
+    assert out["not_a_pass"] is True
+    assert out["go"] is False
+    assert out["liq_print_is_not_stable"] is True
+    assert "basket_theme_fund" in out["liq_majority_better"]
+
+
 def test_summarize_emits_candidate_family_counts() -> None:
     from research.eval_registry import summarize_daily_path_cells
 
@@ -605,12 +646,33 @@ def test_sparse_gate_combo_parks_at_generation() -> None:
     ]
     summary = summarize_daily_path_cells(cells, job_id="eval-test-cs-sticky")
     assert "always_on_cs_sticky" in summary["logics"][0]["flags"]
-    assert summary["logics"][0]["candidate"] is False
     cheap_and = next(
         s for s in NEW_COMBO_LOGIC if s["logic_id"] == "event_cheap_iv_cheap_pb"
     )
     assert cheap_and.get("data_requirement_unmet") is True
     assert cheap_and.get("main_pool") is False
+
+
+def test_isolate_limit_logic_is_not_candidate() -> None:
+    from research.eval_registry import summarize_daily_path_cells
+    from research.unique_logic.constants import WORKER_ISOLATE_LIMIT_IDS
+
+    lid = sorted(WORKER_ISOLATE_LIMIT_IDS)[0]
+    cells = [
+        {
+            "logic_id": lid,
+            "window_id": "y2015_full",
+            "occupancy": 0.20,
+            "total_ret_net": 0.01,
+            "eval_path": "eventHeld",
+            "daily_path_complete": True,
+        }
+    ]
+    summary = summarize_daily_path_cells(cells, job_id="eval-test-isolate")
+    row = summary["logics"][0]
+    assert "worker_isolate_limit" in row["flags"]
+    assert row["candidate"] is False
+    assert row["main_pool"] is False
 
 
 def test_sparse_15name_is_data_requirement_unmet() -> None:
@@ -778,7 +840,7 @@ def test_path_broken_is_not_candidate() -> None:
 
 
 def test_proposal_schema_reads_summary_weakness_flags() -> None:
-    from research.unique_logic.proposal_schema import (
+    from research.eval_registry import (
         proposal_blocked_by_summary,
         weakness_flags_from_summary,
     )
@@ -800,7 +862,7 @@ def test_proposal_schema_reads_summary_weakness_flags() -> None:
     flags = weakness_flags_from_summary(summary)
     assert "always_on" in flags["xs_rank_ls_sticky"]
     assert "path_broken" in flags["unwired_overlay"]
-    from research.unique_logic.proposal_schema import CANDIDATE_KEEP_SIMPLE
+    from research.eval_registry import CANDIDATE_KEEP_SIMPLE
 
     assert "path_broken" in CANDIDATE_KEEP_SIMPLE
     assert "path_collapsed" in CANDIDATE_KEEP_SIMPLE

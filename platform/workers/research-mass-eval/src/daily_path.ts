@@ -629,6 +629,33 @@ export const CF_NEW_EVENT_THESIS_IDS = [
   "surprise_xs_eqar_high_liq_high",
   "surprise_xs_margin_up_price_down",
   "surprise_xs_eqar_high_price_down",
+  "event_positive_eps_liq_high",
+  "event_div_payer_liq_high",
+  "event_eqar_low_liq_high_fade",
+  "event_margin_down_liq_high",
+  "event_margin_up_liq_high_fade",
+  "event_eps_up_liq_high",
+  "event_eqar_high_positive_eps",
+  "event_ta_up_positive_eps",
+  "event_cheap_pb_positive_eps",
+  "event_eqar_high_div_payer",
+  "event_ta_up_div_payer",
+  "event_cheap_pb_eps_up",
+  "event_eqar_high_price_down_liq",
+  "event_ta_up_price_down_liq",
+  "event_cheap_pb_price_down_liq",
+  "event_eqar_low_price_down_fade",
+  "event_positive_eps_price_down",
+  "event_div_payer_price_down",
+  "event_cheap_pb_margin_down",
+  "event_positive_eps_uncrowded",
+  "event_div_payer_uncrowded",
+  "event_ta_up_uncrowded_liq",
+  "surprise_xs_cheap_pb_liq_high",
+  "surprise_xs_ta_up_liq_high",
+  "surprise_xs_eqar_high_margin_down",
+  "surprise_xs_ta_up_margin_down",
+  "surprise_xs_positive_eps_liq_high",
 ] as const;
 
 export const CF_NEW_CS_THESIS_IDS = [
@@ -728,6 +755,8 @@ export const CF_NEW_CS_THESIS_IDS = [
   "cs_ta_up_margin_down",
   "cs_cheap_pb_easy",
   "cs_eqar_high_on_impulse",
+  "cs_cheap_pb_margin_down",
+  "cs_eqar_low_margin_up",
 ] as const;
 
 export const CF_EVENT_LOGIC_IDS = [
@@ -822,6 +851,59 @@ function comboGatesImplemented(gates: string[]): boolean {
   return gates.length > 0 && gates.every((g) => COMBO_EVENT_GATES.has(g));
 }
 
+/** Linear 5-day disclosure density. Cached per panel (not O(n²) per event). */
+const clusterWindowCache = new WeakMap<object, Record<string, number>>();
+
+export function clusterWindowSeries(panel: PeriodPanel): Record<string, number> {
+  const hit = clusterWindowCache.get(panel as object);
+  if (hit) return hit;
+  const freq: Record<string, number> = {};
+  for (const rows of Object.values(panel.fund_regime?.events_by_code || {})) {
+    for (const row of rows || []) {
+      const x = String(row.disc_date || "").slice(0, 10);
+      if (x) freq[x] = (freq[x] || 0) + 1;
+    }
+  }
+  const uniq = Object.keys(freq).sort();
+  const series: Record<string, number> = {};
+  let lo = 0;
+  let run = 0;
+  for (let i = 0; i < uniq.length; i++) {
+    const d = uniq[i];
+    const cut = addDays(d, -5);
+    while (lo < i && uniq[lo] < cut) {
+      run -= freq[uniq[lo]] || 0;
+      lo += 1;
+    }
+    series[d] = run;
+    run += freq[d] || 0;
+  }
+  clusterWindowCache.set(panel as object, series);
+  return series;
+}
+
+const impulseFlagCache = new WeakMap<object, Record<string, boolean>>();
+
+function impulseFlags(
+  overnight: Record<string, number>,
+  minHist: number,
+): Record<string, boolean> {
+  const hit = impulseFlagCache.get(overnight);
+  if (hit) return hit;
+  const keys = Object.keys(overnight).sort();
+  const absCh: Record<string, number> = {};
+  for (let i = 1; i < keys.length; i++) {
+    absCh[keys[i]] = Math.abs(overnight[keys[i]] - overnight[keys[i - 1]]);
+  }
+  const out: Record<string, boolean> = {};
+  for (const d of keys) {
+    const med = pitMedian(absCh, d, minHist);
+    out[d] = med !== null && finite(absCh[d]) && absCh[d] >= med;
+  }
+  impulseFlagCache.set(overnight, out);
+  return out;
+}
+
 function overnightEased(
   overnight: Record<string, number>,
   d: string,
@@ -904,25 +986,10 @@ export function comboEventGateOk(
     return (levels[lastD] as number) < med;
   }
   if (gate === "cluster") {
-    const events = panel.fund_regime?.events_by_code || {};
-    const discs: string[] = [];
-    for (const rows of Object.values(events)) {
-      for (const row of rows || []) {
-        const x = String(row.disc_date || "").slice(0, 10);
-        if (x) discs.push(x);
-      }
-    }
-    const nDisc = discs.filter(
-      (x) => x < ev.disc && x >= addDays(ev.disc, -5),
-    ).length;
-    const hist: Record<string, number> = {};
-    for (const dd0 of discs) {
-      if (dd0 >= ev.disc) continue;
-      hist[dd0] = discs.filter(
-        (x) => x < dd0 && x >= addDays(dd0, -5),
-      ).length;
-    }
-    const med = pitMedian(hist, ev.disc, 10);
+    const series = clusterWindowSeries(panel);
+    const nDisc = series[ev.disc];
+    if (nDisc === undefined) return false;
+    const med = pitMedian(series, ev.disc, 10);
     return med !== null && nDisc >= med;
   }
   if (gate === "invert_curve") {
@@ -930,18 +997,7 @@ export function comboEventGateOk(
     return sp !== undefined && sp <= 0;
   }
   if (gate === "on_impulse") {
-    const prevs = Object.keys(overnight)
-      .filter((x) => x < d)
-      .sort();
-    const on = overnight[d];
-    if (!prevs.length || on === undefined) return false;
-    const absCh = Math.abs(on - overnight[prevs[prevs.length - 1]]);
-    const hist: Record<string, number> = {};
-    for (let i = 1; i < prevs.length; i++) {
-      hist[prevs[i]] = Math.abs(overnight[prevs[i]] - overnight[prevs[i - 1]]);
-    }
-    const med = pitMedian(hist, d, minHist);
-    return med !== null && absCh >= med;
+    return impulseFlags(overnight, minHist)[d] === true;
   }
   if (gate === "cheap_iv") {
     const iv = panel.atm_iv_series?.[d];
@@ -1149,18 +1205,7 @@ export function comboCsGateOk(
   } else if (gate === "margin_down") {
     keep = marginChg !== null && marginChg < 0;
   } else if (gate === "on_impulse") {
-    if (prev === null || on === undefined || !finite(overnight[prev])) keep = false;
-    else {
-      const absCh = Math.abs(on - overnight[prev]);
-      const hist: Record<string, number> = {};
-      const keys = Object.keys(overnight).sort();
-      for (let i = 1; i < keys.length; i++) {
-        if (keys[i] >= d) break;
-        hist[keys[i]] = Math.abs(overnight[keys[i]] - overnight[keys[i - 1]]);
-      }
-      const med = pitMedian(hist, d, 20);
-      keep = med !== null && absCh >= med;
-    }
+    keep = impulseFlags(overnight, 20)[d] === true;
   } else if (gate === "overnight_p10") {
     const hist = Object.keys(overnight)
       .filter((x) => x < d)
@@ -1337,19 +1382,19 @@ export function comboCsGateOk(
       medOn !== null &&
       on < medOn;
   } else if (gate === "eq_ar_high_on_impulse") {
-    let impulse = false;
-    if (prev !== null && on !== undefined && finite(overnight[prev])) {
-      const absCh = Math.abs(on - overnight[prev]);
-      const hist: Record<string, number> = {};
-      const keys = Object.keys(overnight).sort();
-      for (let i = 1; i < keys.length; i++) {
-        if (keys[i] >= d) break;
-        hist[keys[i]] = Math.abs(overnight[keys[i]] - overnight[keys[i - 1]]);
-      }
-      const med = pitMedian(hist, d, 20);
-      impulse = med !== null && absCh >= med;
-    }
-    keep = extras?.eqArHigh === true && impulse;
+    keep =
+      extras?.eqArHigh === true && impulseFlags(overnight, 20)[d] === true;
+  } else if (gate === "cheap_pb_margin_down") {
+    keep =
+      extras?.cheapPb === true &&
+      marginChg !== null &&
+      marginChg < 0;
+  } else if (gate === "eq_ar_low_margin_up_invert") {
+    keep =
+      extras?.eqArLow === true &&
+      marginChg !== null &&
+      marginChg > 0;
+    invert = true;
   } else {
     return { keep: false, invert: false };
   }

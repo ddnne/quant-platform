@@ -73,7 +73,8 @@ DEFAULT_WORKER_URL: str = (
     "https://quant-platform-research-mass-eval.taku-haga.workers.dev"
 )
 RESEARCH_ARTIFACT_PREFIX_LEGACY: str = "research/mass_factory"
-# Expanded universe (was 15 … 80). Default 100.
+# Default is the liq_large track (ADV 100). mid_n_explore uses 80.
+# Never fall back to head-N list order.
 DEFAULT_MAX_CODES: int = 100
 DEFAULT_MAX_DAYS: int = 120
 DEFAULT_ONE_WAY: float = 0.001
@@ -1493,9 +1494,13 @@ def panels_cache_id(
     *,
     max_codes: int,
     max_days: int,
+    track: str | None = None,
 ) -> str:
+    from research.eval_tracks import infer_eval_track
+
+    tid = str(track or infer_eval_track(max_codes=max_codes))
     ids = ",".join(str(p.get("period_id") or "") for p in periods)
-    raw = f"v10_liq_adv_fins|{ids}|c{int(max_codes)}|d{int(max_days)}"
+    raw = f"v11_track|{tid}|{ids}|c{int(max_codes)}|d{int(max_days)}"
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
 
@@ -1548,21 +1553,29 @@ def resolve_or_stage_panels(
     max_days: int = DEFAULT_MAX_DAYS,
     force_stage: bool = False,
     staging_dir: str | Path | None = None,
+    track: str | None = None,
 ) -> dict[str, Any]:
     """Reuse a content-keyed panel cache, or stage once and record meta on R2.
 
-    Cache key is period_ids × max_codes × max_days. Subsequent fan-out jobs
-    skip the serial stage. ``stage_sec`` is 0.0 on reuse.
+    Cache key is track × period_ids × max_codes × max_days. Subsequent
+    fan-out jobs skip the serial stage. ``stage_sec`` is 0.0 on reuse.
+    Selection is ADV/fins on every track — never head-N.
     """
+    from research.eval_tracks import eval_track, infer_eval_track
+
     t0 = time.perf_counter()
     period_rows = [
         normalize_period_row(p)
         for p in (periods or DEFAULT_REAL_MULTIYEAR_PERIODS)
     ]
-    cid = panels_cache_id(period_rows, max_codes=max_codes, max_days=max_days)
+    tid = str(track or infer_eval_track(max_codes=max_codes))
+    tspec = eval_track(tid)
+    cid = panels_cache_id(
+        period_rows, max_codes=max_codes, max_days=max_days, track=tid
+    )
     meta_key = f"{PANELS_CACHE_PREFIX}/{cid}/meta.json"
     prefix = f"{PANELS_CACHE_PREFIX}/{cid}/panels"
-    from research.class_hyp_eval import UNIVERSE_SELECT_RULE, select_eval_universe
+    from research.class_hyp_eval import select_eval_universe
 
     if not force_stage:
         existing = try_r2_get_json(meta_key)
@@ -1593,7 +1606,8 @@ def resolve_or_stage_panels(
         "n_periods": int(staged.get("n_periods") or 0),
         "max_codes": int(max_codes),
         "max_days": int(max_days),
-        "universe_select": UNIVERSE_SELECT_RULE,
+        "universe_select": tspec["universe_select"],
+        "eval_track": tid,
         "n_selected_codes": len(selected_codes),
         "selected_codes": list(selected_codes),
         "period_ids": [p.get("period_id") for p in period_rows],

@@ -1,4 +1,4 @@
-logic_id: event_eqar_high_cluster
+logic_id: event_ta_up_price_down_liq
 family_id: event_fund_cross
 axis: mixed
 headline: false
@@ -7,9 +7,9 @@ promote_as_main: false
 go: false
 main_pool: true
 thesis: >
-  PEAD when EqAR is high AND disclosures are clustered (quality in a busy week).
+  TA-up dip PEAD only in above-median ADV names.
 signal_definition: >
-  PEAD when EqAR is high AND disclosures are clustered (quality in a busy week).
+  TA-up dip PEAD only in above-median ADV names.
 datasets:
   - equities_bars_daily
   - fins_summary
@@ -20,7 +20,7 @@ params:
   hold_days: 10
   momentum_n: 5
   min_hist: 20
-  mode: event_eqar_high_cluster
+  mode: event_ta_up_price_down_liq
   side: orig
   cs_gate: None
   entry_shift: 0
