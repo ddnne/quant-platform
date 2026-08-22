@@ -1,7 +1,4 @@
-"""Unique-logic evaluators (candidate-grade daily MTM).
-
-Does not promote / GO / retune pins.
-"""
+"""Candidate-grade daily MTM. Does not GO."""
 from __future__ import annotations
 
 import math
@@ -67,6 +64,8 @@ def _base_cs_extra(
     sf: float,
     min_hist: int,
     gate: str,
+    extra_dataset: str,
+    data_path: str,
 ) -> dict[str, Any]:
     return {
         "kind": spec.get("kind"),
@@ -78,10 +77,14 @@ def _base_cs_extra(
         "short_frac": sf,
         "min_hist": min_hist,
         "gate": gate,
+        "axis": spec.get("axis"),
+        "extra_dataset": extra_dataset,
+        "data_path": data_path,
         "ffill_applied": False,
         "invent_fill": False,
         "promote_as_main": False,
         "go": False,
+        "research_only": True,
     }
 
 
@@ -183,6 +186,8 @@ def evaluate_funding_impulse_cs_tilt_daily_mtm(
         sf=sf,
         min_hist=min_hist,
         gate="abs_overnight_delta_ge_pit_median",
+        extra_dataset="jsda_tokyo_repo_rates",
+        data_path="local_real_mirrors+local_sqlite_jsda_repo_rates",
     )
     overnight = dict(overnight_by_date or {})
     if not overnight:
@@ -269,6 +274,8 @@ def evaluate_funding_impulse_cs_tilt_daily_mtm(
             "n_skip_small_delta": n_skip_small,
             "n_tilt_fade_days": n_tilt_fade,
             "n_tilt_follow_days": n_tilt_follow,
+            "n_overnight_prints": len(overnight),
+            "n_overnight_deltas": len(deltas),
         }
     )
     return _finish_cs_book(
@@ -307,6 +314,8 @@ def evaluate_curve_steepen_impulse_cs_daily_mtm(
         sf=sf,
         min_hist=min_hist,
         gate="spread_delta_gt_0_and_abs_ge_pit_median",
+        extra_dataset="jsda_tokyo_repo_rates",
+        data_path="local_real_mirrors+local_sqlite_jsda_repo_rates",
     )
     spread_by = dict((curve_series or {}).get("spread_by_date") or {})
     if not spread_by:
@@ -387,6 +396,8 @@ def evaluate_curve_steepen_impulse_cs_daily_mtm(
             "n_skip_median_unformed": n_skip_unformed,
             "n_skip_not_steepen": n_skip_not_steepen,
             "n_skip_small_delta": n_skip_small,
+            "n_spread_prints": len(spread_by),
+            "n_spread_deltas": len(deltas),
         }
     )
     return _finish_cs_book(
@@ -447,6 +458,8 @@ def evaluate_xs_margin_delta_rank_daily_mtm(
         sf=sf,
         min_hist=0,
         gate="name_margin_delta_cs_rank",
+        extra_dataset="markets_margin_interest",
+        data_path="local_real_mirrors+local_sqlite_margin",
     )
     extra["stale_calendar_days"] = stale_days
     extra["momentum_n"] = None
@@ -581,6 +594,8 @@ def evaluate_idio_mom_macro_impulse_daily_mtm(
         sf=sf,
         min_hist=min_hist,
         gate="abs_topix_mom_ge_pit_median",
+        extra_dataset="indices_bars_daily_topix",
+        data_path="local_real_mirrors+local_sqlite_topix",
     )
     topix = dict(topix_by_date or {})
     if not topix:
@@ -668,6 +683,8 @@ def evaluate_idio_mom_macro_impulse_daily_mtm(
             "n_skip_missing_topix": n_skip_missing,
             "n_skip_median_unformed": n_skip_unformed,
             "n_skip_quiet_macro": n_skip_quiet,
+            "n_topix_prints": len(topix),
+            "n_topix_mom": len(abs_mom),
         }
     )
     return _finish_cs_book(

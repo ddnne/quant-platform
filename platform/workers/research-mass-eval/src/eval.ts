@@ -1051,7 +1051,7 @@ function evalNkyVolRegime(
   };
 }
 
-export function evalLogicOnPanel(
+function evalLogicOnPanel(
   logic: LogicSpec,
   panel: PeriodPanel,
   oneWay: number,
@@ -1155,11 +1155,9 @@ export function evalLogicOnPanel(
                     : panel.base_vol_series;
         if (absMap && Object.keys(absMap).length > 0) {
           series = {
-            source: "panel_top_level_series",
             rv_abs_by_date: absMap,
             rv_short_by_date: absMap,
             rv_long_by_date: absMap,
-            rv_ratio_by_date: {},
           };
         }
       }
@@ -1329,7 +1327,7 @@ export function evalLogicOnPanel(
   }
 }
 
-export type HeldBook = Record<string, Record<string, number>>;
+type HeldBook = Record<string, Record<string, number>>;
 
 function stickyToHeld(
   bars: BarsByCode,

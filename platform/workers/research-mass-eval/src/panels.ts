@@ -88,11 +88,9 @@ function buildNkyVolFromBars(
 ): PeriodPanel["nky_vol_series"] {
   const proxyCodes = ["__NKY_PROXY__", "__TOPIX__", "__NK225F__", "__INDEX__"];
   let idxSeries: Array<[string, number]> | null = null;
-  let source = "ew_equity_panel_proxy";
   for (const pc of proxyCodes) {
     if (bars[pc] && bars[pc].length >= shortN + 2) {
       idxSeries = bars[pc].map(([d, c]) => [d, c] as [string, number]);
-      source = `staged_index:${pc}`;
       break;
     }
   }
@@ -115,7 +113,6 @@ function buildNkyVolFromBars(
       }
       if (n > 0) idxSeries.push([d, s / n]);
     }
-    source = "ew_equity_panel_proxy";
   }
   if (!idxSeries.length) return null;
   const idxDates = idxSeries.map(([d]) => d);
@@ -149,9 +146,6 @@ function buildNkyVolFromBars(
     if (s !== null && lo !== null && lo > 1e-12) rvRatio[d] = s / lo;
   }
   return {
-    source,
-    short_n: shortN,
-    long_n: longN,
     rv_short_by_date: rvShort,
     rv_long_by_date: rvLong,
     rv_abs_by_date: rvShort,
@@ -232,7 +226,6 @@ export async function loadR2Panels(
         period_start?: string;
         period_end?: string;
         bars?: BarsByCode;
-        dataset?: string;
         source?: string;
         nky_vol_series?: PeriodPanel["nky_vol_series"];
         opt225_regime?: PeriodPanel["opt225_regime"];

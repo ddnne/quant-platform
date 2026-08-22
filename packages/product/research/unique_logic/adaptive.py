@@ -1,7 +1,4 @@
-"""Unique-logic evaluators (candidate-grade daily MTM).
-
-Does not promote / GO / retune pins.
-"""
+"""Candidate-grade daily MTM. Does not GO."""
 from __future__ import annotations
 
 from typing import Any, Mapping, Sequence

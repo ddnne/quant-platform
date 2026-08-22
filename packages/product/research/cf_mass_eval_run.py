@@ -391,21 +391,6 @@ def run_cf_mass_eval_job(
         "r2_keys": r2_keys,
         "r2_puts": r2_puts,
         "panels_prefix": str(panels_prefix),
-        "job_spec": {
-            k: spec[k]
-            for k in (
-                "job_id",
-                "version",
-                "wave",
-                "seed",
-                "mode",
-                "panels_prefix",
-                "max_codes",
-                "max_days",
-                "one_way_cost",
-            )
-            if k in spec
-        },
         "logic_ids": [L.get("logic_id") for L in (spec.get("logics") or [])],
         "period_ids": [P.get("period_id") for P in (spec.get("periods") or [])],
         "worker_response": worker_resp,

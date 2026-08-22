@@ -333,8 +333,6 @@ async function runMassEval(
     putJson(env.STRUCTURED_BUCKET, manifest.keys.panels_meta, panelsMeta),
   ]);
 
-  const r2Keys: Record<string, string> = { ...manifest.keys };
-
   return {
     version,
     wave,
@@ -353,7 +351,7 @@ async function runMassEval(
     wall_time_ms: Date.now() - t0,
     ranking,
     results,
-    r2_keys: r2Keys,
+    r2_keys: manifest.keys,
     freezes,
     note: summary.note,
   };

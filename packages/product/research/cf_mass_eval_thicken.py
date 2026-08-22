@@ -30,12 +30,7 @@ def _load_markets_calendar_map(
     """Compact markets_calendar HolDiv map for one period window."""
     db = Path(sqlite_path) if sqlite_path else DEFAULT_SQLITE
     if not db.exists():
-        return {
-            "dataset": "markets_calendar",
-            "status": "sqlite_missing",
-            "hol_div_by_date": {},
-            "n_dates": 0,
-        }
+        return {"hol_div_by_date": {}}
     con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
     try:
         sql = (
@@ -51,7 +46,6 @@ def _load_markets_calendar_map(
             params.append(str(end)[:10] + "T23:59:59")
         sql += " ORDER BY event_time ASC"
         hol: dict[str, str] = {}
-        n_trading = 0
         for event_time, payload in con.execute(sql, params):
             try:
                 pl = json.loads(payload) if isinstance(payload, str) else payload
@@ -66,15 +60,8 @@ def _load_markets_calendar_map(
             if hol_div is None:
                 hol_div = pl.get("HolidayDivision")
             hol[d] = str(hol_div) if hol_div is not None else ""
-            if str(hol_div) in {"0", "1"}:
-                n_trading += 1
         return {
-            "dataset": "markets_calendar",
-            "status": "ok" if hol else "empty",
-            "source": "local_sqlite_jquants_records",
             "hol_div_by_date": hol,
-            "n_dates": len(hol),
-            "n_trading_dates": n_trading,
         }
     finally:
         con.close()
@@ -108,10 +95,7 @@ def _build_thicken_sidecars(
             start=burn_start or None, end=p_end or None, sqlite_path=db
         )
         out["calendar"] = {
-            "dataset": "markets_calendar",
             "hol_div_by_date": cal.get("hol_div_by_date") or {},
-            "n_dates": cal.get("n_dates") or 0,
-            "n_trading_dates": cal.get("n_trading_dates") or 0,
         }
     except Exception as exc:  # pragma: no cover - best-effort
         out["calendar"] = {
@@ -148,14 +132,9 @@ def _build_thicken_sidecars(
                 and (not p_end or d <= p_end)
             }
         out["repo_rate_regime"] = {
-            "dataset": "jsda_tokyo_repo_rates",
             "status": "ok" if rates_by_date else "empty",
-            "source": "local_sqlite_jsda_repo_rates",
             "rates_by_date": rates_by_date,
             "spread_by_date": spread_by,
-            "short_tenor": curve.get("short_tenor"),
-            "long_tenor": curve.get("long_tenor"),
-            "n_rates": len(rates_by_date),
         }
     except Exception as exc:  # pragma: no cover
         out["repo_rate_regime"] = {
@@ -166,7 +145,6 @@ def _build_thicken_sidecars(
 
     try:
         margin_levels: dict[str, list[tuple[str, float]]] = {}
-        margin_source = "local_sqlite_jquants_records"
         pid = str(period.get("period_id") or "")
         margin_path = resolve_margin_path(pid) if pid else None
         margin_levels = load_margin_from_sqlite(
@@ -183,7 +161,6 @@ def _build_thicken_sidecars(
                     for d, v in pairs:
                         existing.setdefault(str(d)[:10], float(v))
                     margin_levels[code] = sorted(existing.items())
-                margin_source = f"sqlite+complete22_mirror:{Path(margin_path).name}"
         level_by_code: dict[str, dict[str, float]] = {}
         change_by_code: dict[str, dict[str, float]] = {}
         for code, pairs in margin_levels.items():
@@ -204,14 +181,9 @@ def _build_thicken_sidecars(
                     chg[d1] = (v1 / v0) - 1.0
             change_by_code[code] = chg
         out["flow_regime"] = {
-            "dataset_margin": "markets_margin_interest",
-            "dataset_short": "markets_short_ratio",
             "status": "ok" if level_by_code else "empty",
-            "source": margin_source,
             "margin_level_by_code": level_by_code,
             "margin_change_by_code": change_by_code,
-            "n_codes": len(level_by_code),
-            "n_obs": sum(len(v) for v in level_by_code.values()),
         }
     except Exception as exc:  # pragma: no cover
         out["flow_regime"] = {
@@ -234,8 +206,6 @@ def _build_thicken_sidecars(
         }
         fr = dict(out.get("flow_regime") or {})
         fr["short_ratio_by_date"] = short_by
-        fr["short_section"] = "0050"
-        fr["n_short_obs"] = len(short_by)
         if fr.get("status") == "empty" and short_by:
             fr["status"] = "ok"
         out["flow_regime"] = fr
@@ -281,12 +251,7 @@ def _build_thicken_sidecars(
             if rows:
                 compact[code] = rows
         out["fund_regime"] = {
-            "dataset": "fins_summary",
-            "status": "ok" if compact else "empty",
-            "source": "local_sqlite_jquants_records",
             "events_by_code": compact,
-            "n_codes": len(compact),
-            "n_events": sum(len(v) for v in compact.values()),
         }
     except Exception as exc:  # pragma: no cover
         out["fund_regime"] = {
@@ -301,8 +266,6 @@ def _build_thicken_sidecars(
         out["repo_rate_regime"] = {
             **out["repo_rate_regime"],
             "rate_by_date": rates,
-            "n_obs": len(rates),
-            "units": "percent",
         }
     return out
 
@@ -342,10 +305,6 @@ def attach_nky_proxy(
                 bars_json["__NKY_PROXY__"] = idx_pairs
                 nky_meta = {
                     "nky_vol_series": {
-                        "source": nky.get("source"),
-                        "dataset": nky.get("dataset"),
-                        "short_n": nky.get("short_n"),
-                        "long_n": nky.get("long_n"),
                         "rv_short_by_date": nky.get("rv_short_by_date") or {},
                         "rv_long_by_date": nky.get("rv_long_by_date") or {},
                         "rv_abs_by_date": nky.get("rv_abs_by_date") or {},
@@ -364,11 +323,7 @@ def attach_opt225_regime() -> dict[str, Any]:
     try:
         opt225 = load_opt225_regime_bundle_for_eval()
         if opt225:
-            compact: dict[str, Any] = {
-                "units": opt225.get("units"),
-                "dataset": opt225.get("dataset"),
-                "version": opt225.get("version"),
-            }
+            compact: dict[str, Any] = {}
             for kind in (
                 "basevol",
                 "atm_iv",
@@ -382,12 +337,6 @@ def attach_opt225_regime() -> dict[str, Any]:
                 if not ser:
                     continue
                 compact[kind] = {
-                    "source": ser.get("source"),
-                    "dataset": ser.get("dataset"),
-                    "series_kind": ser.get("series_kind"),
-                    "units": ser.get("units"),
-                    "short_n": ser.get("short_n"),
-                    "long_n": ser.get("long_n"),
                     "rv_abs_by_date": ser.get("rv_abs_by_date") or {},
                     "rv_short_by_date": ser.get("rv_short_by_date") or {},
                     "rv_long_by_date": ser.get("rv_long_by_date") or {},

@@ -1,7 +1,4 @@
-"""Unique-logic evaluators (candidate-grade daily MTM).
-
-Does not promote / GO / retune pins.
-"""
+"""Candidate-grade daily MTM. Does not GO."""
 from __future__ import annotations
 
 import math
@@ -99,6 +96,8 @@ def evaluate_overnight_level_cs_tilt_daily_mtm(
         sf=sf,
         min_hist=min_hist,
         gate=str((spec.get("params") or {}).get("gate") or "overnight_ge_pit_trailing_median"),
+        extra_dataset="jsda_tokyo_repo_rates",
+        data_path="local_real_mirrors+local_sqlite_jsda_repo_rates",
     )
     overnight = dict(overnight_by_date or {})
     if not overnight:
@@ -182,6 +181,7 @@ def evaluate_overnight_level_cs_tilt_daily_mtm(
             "n_skip_missing_overnight": n_skip_missing,
             "n_skip_median_unformed": n_skip_unformed,
             "n_skip_easy_overnight": n_skip_easy,
+            "n_overnight_prints": len(overnight),
         }
     )
     return cross_section._finish_cs_book(
@@ -224,6 +224,8 @@ def evaluate_month_end_cs_fade_daily_mtm(
         sf=sf,
         min_hist=min_hist,
         gate="last_n_sessions_of_calendar_month",
+        extra_dataset="equities_bars_daily",
+        data_path="local_real_mirrors+local_sqlite_bars",
     )
     extra["month_end_sessions"] = n_last
 
@@ -303,8 +305,11 @@ def evaluate_xs_low_vol_mom_daily_mtm(
         sf=sf,
         min_hist=min_hist,
         gate="cs_median_vol_ge_pit_median_then_low_vol_universe",
+        extra_dataset="equities_bars_daily",
+        data_path="local_real_mirrors+local_sqlite_bars",
     )
     extra["vol_lookback"] = lookback
+    extra["not_vol_risk_adjusted_mom"] = True
 
     panel = panel_index(bars_by_code, momentum_n=n)
     dates = panel["dates"]
@@ -433,6 +438,8 @@ def evaluate_repo_3m_level_cs_daily_mtm(
         sf=sf,
         min_hist=min_hist,
         gate="term_3m_ge_pit_trailing_median",
+        extra_dataset="jsda_tokyo_repo_rates",
+        data_path="local_real_mirrors+local_sqlite_jsda_repo_rates",
     )
     long_by = dict((curve_series or {}).get("long_rates_by_date") or {})
     if not long_by:
@@ -502,6 +509,7 @@ def evaluate_repo_3m_level_cs_daily_mtm(
             "n_skip_missing_3m": n_skip_missing,
             "n_skip_median_unformed": n_skip_unformed,
             "n_skip_easy_3m": n_skip_easy,
+            "n_3m_prints": len(long_by),
         }
     )
     return cross_section._finish_cs_book(

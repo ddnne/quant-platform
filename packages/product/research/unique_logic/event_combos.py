@@ -194,9 +194,6 @@ def _eval_event_combo(
         bars, events, spec=spec, period_start=period_start, period_end=period_end
     )
     extra: dict[str, Any] = {
-        "combo_gates": list(gates),
-        "side": side,
-        "cf_native": True,
         "promote_as_main": False,
         "go": False,
     }
@@ -251,7 +248,6 @@ def _eval_event_combo(
                 if accept.get(event._event_key(ev), False)
             ],
         )
-        pack["combo_gates"] = list(gates)
         return pack
     return event._finish_event_book(
         spec=spec,
@@ -300,13 +296,11 @@ def _eval_cs_combo(
         c: {d: None for d in dates} for c in close_by
     }
     gate = str(spec.get("cs_gate") or params.get("cs_gate") or "")
-    extra_cf_only: list[str] = []
     for d in dates:
         keep = True
         loc_invert = invert
         if gate:
             # Worker comboCsGateOk is SoT.
-            extra_cf_only.append(gate)
             keep = False
         scores = scores_by_date.get(d) or {}
         if not keep or len(scores) < 2:
@@ -338,13 +332,7 @@ def _eval_cs_combo(
         hold_days=h,
         one_way_cost=one_way_cost,
         logic_id=str(spec["logic_id"]),
-        extra={"cs_gate": gate, "cf_native": True},
+        extra={"cs_gate": gate},
         repo_by_date=overnight,
-    )
-    pack.update(
-        {
-            "cf_only_gates": extra_cf_only,
-            "python_skipped_cf_only": bool(extra_cf_only),
-        }
     )
     return pack

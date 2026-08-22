@@ -287,10 +287,6 @@ def main(argv: list[str] | None = None) -> int:
                     "out": str(args.out),
                     "promote_as_main": False,
                     "go": False,
-                    "note": (
-                        "CF isolate fan-out is the --all default. "
-                        "Use --backend local for Python HONEST_3Y serial fallback."
-                    ),
                 }
             )
         )
@@ -310,7 +306,6 @@ def main(argv: list[str] | None = None) -> int:
                 "n_margin_codes": extras.get("n_margin_codes"),
                 "n_topix": extras.get("n_topix"),
                 "repo_history_plane": extras.get("repo_history_plane"),
-                "note": "serial Python fallback; CF is the default --all path",
             }
         )
     )

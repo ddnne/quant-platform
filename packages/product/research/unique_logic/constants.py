@@ -74,7 +74,6 @@ COMBO_EVENT_GATES: frozenset[str] = frozenset(
 PYTHON_ONLY_EVENT_GATES: frozenset[str] = frozenset()
 KNOWN_EVENT_GATES: frozenset[str] = COMBO_EVENT_GATES | PYTHON_ONLY_EVENT_GATES
 WORKER_PYTHON_ONLY_GATE_POLICY: str = "python_local_or_lid_branch"
-# Event cheap_pb is bars×fins, not CS csFundSnaps. Not occupancy-equal.
 CHEAP_PB_EVENT_VS_CS: str = "event_bars_x_fins_not_csfundsnaps"
 
 

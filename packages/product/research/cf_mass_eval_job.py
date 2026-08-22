@@ -62,7 +62,7 @@ _WORKER_CONFIG = _WORKER_DIR / "wrangler.toml"
 
 
 class CfMassEvalError(RuntimeError):
-    """CF mass-eval job failed."""
+    pass
 
 
 def _freeze() -> dict[str, Any]:

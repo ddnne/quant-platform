@@ -44,10 +44,10 @@ if COMPLETE_22_DATASET_SET & PERMANENT_DEFER_DATASETS:
     )
 
 
-def _mass_eval_identity() -> tuple[str, str]:
-    from research.cf_mass_eval_job import CF_MASS_EVAL_VERSION, CF_MASS_EVAL_WAVE
+def _mass_eval_wave() -> str:
+    from research.cf_mass_eval_job import CF_MASS_EVAL_WAVE
 
-    return CF_MASS_EVAL_WAVE, CF_MASS_EVAL_VERSION
+    return CF_MASS_EVAL_WAVE
 
 
 def normalize_period_row(raw: Mapping[str, Any]) -> dict[str, Any]:
@@ -116,7 +116,6 @@ def build_real_period_panel(
             "source": "mirror_missing",
             "n_codes": 0,
             "n_days": 0,
-            "bars_path": str(bars_path) if bars_path else None,
         }
     rich = load_bars_ndjson_rich(
         bars_path,
@@ -178,8 +177,6 @@ def build_real_period_panel(
         "source": f"complete22_mirror:{Path(bars_path).name}",
         "n_codes": n_eq,
         "n_days": n_days,
-        "bars_path": str(bars_path),
-        "codes": sorted(k for k in bars_json if not str(k).startswith("__")),
         **nky_meta,
         **opt225_meta,
         **thicken_meta,
@@ -199,7 +196,7 @@ def stage_real_panels_to_r2(
     panels_prefix: str | None = None,
 ) -> dict[str, Any]:
     """Put real multi-year panels under job-scoped R2 prefix (or panels_prefix)."""
-    wave, _ver = _mass_eval_identity()
+    wave = _mass_eval_wave()
     jid = str(job_id).strip() or "unknown"
     period_list = [
         normalize_period_row(p)

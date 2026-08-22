@@ -16,7 +16,6 @@ export interface LogicSpec {
   family_id?: string;
   strategy_id?: string;
   params?: Record<string, unknown>;
-  /** Pre-baked period nets skip the bar path when present. */
   period_nets?: Array<number | null>;
   period_grosses?: Array<number | null>;
 }
@@ -35,7 +34,6 @@ export interface MassEvalRequest {
   job_id: string;
   mode?: "synthetic" | "r2_panels" | "d1_bars" | "nets_only";
   eval_kind?: "screen" | "daily_path";
-  /** Fan-out shards skip R2 writes; the driver aggregates. */
   write_artifacts?: boolean;
   panels_prefix?: string;
   one_way_cost?: number;
@@ -45,79 +43,45 @@ export interface MassEvalRequest {
   min_activation?: number;
 }
 
-export type BarSeries = Array<[string, number]>; // [date, close]
+export type BarSeries = Array<[string, number]>;
 export type BarsByCode = Record<string, BarSeries>;
 
 export interface NkyVolSeries {
-  source?: string;
-  short_n?: number;
-  long_n?: number;
   rv_short_by_date?: Record<string, number>;
   rv_long_by_date?: Record<string, number>;
   rv_abs_by_date?: Record<string, number>;
   rv_ratio_by_date?: Record<string, number>;
 }
 
-export interface Opt225RegimeSeries extends NkyVolSeries {
-  series_kind?: string;
-  units?: string;
-  dataset?: string;
-}
-
 export interface Opt225RegimeBundle {
-  spread_convention?: string;
-  skew_convention?: string;
-  cm_term_convention?: string;
-  basevol_delta_convention?: string;
-  units?: string;
-  dataset?: string;
-  version?: string;
-  basevol?: Opt225RegimeSeries | null;
-  atm_iv?: Opt225RegimeSeries | null;
-  spread?: Opt225RegimeSeries | null;
-  spread_change?: Opt225RegimeSeries | null;
-  skew?: Opt225RegimeSeries | null;
-  cm_term?: Opt225RegimeSeries | null;
-  basevol_delta?: Opt225RegimeSeries | null;
+  basevol?: NkyVolSeries | null;
+  atm_iv?: NkyVolSeries | null;
+  spread?: NkyVolSeries | null;
+  spread_change?: NkyVolSeries | null;
+  skew?: NkyVolSeries | null;
+  cm_term?: NkyVolSeries | null;
+  basevol_delta?: NkyVolSeries | null;
 }
 
 export interface RepoRateRegime {
-  dataset?: string;
   status?: string;
-  units?: string;
   rates_by_date?: Record<string, number>;
   rate_by_date?: Record<string, number>;
   spread_by_date?: Record<string, number>;
-  n_rates?: number;
-  n_obs?: number;
-  short_tenor?: string;
-  long_tenor?: string;
 }
 
 export interface CalendarSideCar {
-  dataset?: string;
   hol_div_by_date?: Record<string, string>;
-  n_dates?: number;
-  n_trading_dates?: number;
-  dates?: string[];
 }
 
 export interface FlowRegime {
-  dataset_margin?: string;
-  dataset_short?: string;
   status?: string;
   margin_level_by_code?: Record<string, Record<string, number>>;
   margin_change_by_code?: Record<string, Record<string, number>>;
   short_ratio_by_date?: Record<string, number>;
-  short_section?: string;
-  n_codes?: number;
-  n_obs?: number;
-  n_short_obs?: number;
 }
 
 export interface FundRegime {
-  dataset?: string;
-  status?: string;
   events_by_code?: Record<
     string,
     Array<{
@@ -137,8 +101,6 @@ export interface FundRegime {
       prior_ta?: number | null;
     }>
   >;
-  n_codes?: number;
-  n_events?: number;
 }
 
 export interface PeriodPanel {
@@ -162,7 +124,6 @@ export interface PeriodPanel {
   calendar?: CalendarSideCar | null;
   flow_regime?: FlowRegime | null;
   fund_regime?: FundRegime | null;
-  /** Missing ADV → tx+repo only. */
   adv_by_code?: Record<string, number> | null;
 }
 
