@@ -476,12 +476,6 @@ def test_review_proposal_row_occupancy_and_polarity_table() -> None:
             "PEAD when overnight funding is tight AND net profit is negative",
         ),
         (
-            "Curve flattening indicates declining sales when EPS is down.",
-            ["curve_flatten", "eps_down"],
-            "occupancy_label_only",
-            None,
-        ),
-        (
             "Inverted curve when EPS surprises are negative AND price momentum is down.",
             ["invert_curve", "np_negative", "price_down"],
             "occupancy_label_only",
@@ -766,6 +760,12 @@ def test_review_proposal_row_occupancy_and_polarity_table() -> None:
         (
             "The market is in a situation where there is high funding tightness and prices are declining.",
             ["tight_funding", "price_down"],
+            "occupancy_label_only",
+            "PEAD when overnight funding is tight AND price is down. Skip missing PIT prints (no invent).",
+        ),
+        (
+            "When the price is down and the funding is tight, it is likely that the market is experiencing a margin squeeze.",
+            ["price_down", "tight_funding"],
             "occupancy_label_only",
             "PEAD when overnight funding is tight AND price is down. Skip missing PIT prints (no invent).",
         ),

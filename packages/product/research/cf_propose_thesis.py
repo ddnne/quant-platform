@@ -390,7 +390,7 @@ def invoke_cf_propose_thesis(
     write_artifacts: bool = False,
     job_id: str | None = None,
     worker_url: str = DEFAULT_WORKER_URL,
-    timeout: int = 120,
+    timeout: int = 300,
     http_post: Callable[..., Any] | None = None,
     proposal: Mapping[str, Any] | None = None,
     proposals: Sequence[Mapping[str, Any]] | None = None,

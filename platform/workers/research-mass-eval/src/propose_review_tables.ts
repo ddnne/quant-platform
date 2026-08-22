@@ -61,6 +61,7 @@ export const EXTRA_TITLE_GATES: Array<[string, string]> = [
   ["funding tight", "tight_funding"],
   ["funding became tight", "tight_funding"],
   ["funding conditions are tight", "tight_funding"],
+  ["margin squeeze", "crowded_margin"],
   ["curve inversion", "invert_curve"],
   ["became tight", "tight_funding"],
   ["easy funding", "easy_funding"],
