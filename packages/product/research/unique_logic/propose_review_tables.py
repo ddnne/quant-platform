@@ -159,6 +159,7 @@ GATE_TITLE_CONTRA: tuple[tuple[str, tuple[str, ...]], ...] = (
         "earnings rise",
     )),
     ("eps_up", ("eps down", "falling eps")),
+    ("roe_low", ("high roe", "high return on equity", "rising roe")),
     ("margin_down", (
         "margin up",
         "rising margin",
@@ -216,13 +217,19 @@ GATE_OCCUPANCY_LABEL: tuple[tuple[str, tuple[str, ...]], ...] = (
         "pb ratio increases",
         "pb increase",
         "increase in pb",
+        "price to book ratio tends to rise",
+        "price to book tends to rise",
+        "pb tends to rise",
     )),
     # pre_mom occupancy is surprise-sign agreement at entryIdx-1, not "mom is positive".
     ("pre_mom", (
         "positive price momentum",
         "positive momentum",
         "momentum is positive",
+        "high price momentum",
     )),
+    # curve_flatten occupancy is the repo curve, not a generic yield curve.
+    ("curve_flatten", ("yield curve",)),
     ("np_negative", ("profitability is weak", "weak profitability", "weak profit")),
     ("crowded_margin", ("market is crowded",)),
 )
@@ -233,6 +240,8 @@ GATE_OCCUPANCY_LABEL: tuple[tuple[str, tuple[str, ...]], ...] = (
 EXTRA_TITLE_GATES: tuple[tuple[str, str], ...] = (
     ("low pb", "cheap_pb"),
     ("low price to book", "cheap_pb"),
+    ("undervaluation", "cheap_pb"),
+    ("undervalued", "cheap_pb"),
     ("tight funding", "tight_funding"),
     ("funding is tight", "tight_funding"),
     ("funding tight", "tight_funding"),
@@ -240,6 +249,7 @@ EXTRA_TITLE_GATES: tuple[tuple[str, str], ...] = (
     ("funding is easy", "easy_funding"),
     ("funding easy", "easy_funding"),
     ("eased funding", "easy_funding"),
+    ("funding conditions are easy", "easy_funding"),
     ("eps surprises", "eps_down"),
     ("eps surprise", "eps_down"),
     ("earnings surprises", "eps_down"),
@@ -264,6 +274,9 @@ EXTRA_TITLE_GATES: tuple[tuple[str, str], ...] = (
     ("roe down", "roe_low"),
     ("falling roe", "roe_low"),
     ("poor roe", "roe_low"),
+    ("high roe", "roe_low"),
+    ("high return on equity", "roe_low"),
+    ("return on equity", "roe_low"),
     ("profitability is weak", "np_negative"),
     ("weak profitability", "np_negative"),
 )
@@ -278,6 +291,10 @@ PROPOSE_CONTRADICTORY_GATE_PAIRS: tuple[frozenset[str], ...] = (
     frozenset({"overnight_easing", "overnight_tightening"}),
     frozenset({"margin_up", "margin_down"}),
     frozenset({"eps_up", "eps_down"}),
+    frozenset({"curve_flatten", "invert_curve"}),
+    frozenset({"curve_flatten", "steep_curve"}),
+    frozenset({"invert_curve", "steep_curve"}),
+    frozenset({"overnight_p10", "tight_funding"}),
 )
 
 
@@ -348,6 +365,7 @@ OCCUPANCY_LABEL_EXCEPTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("pre_mom", ("agrees", "pre-event", "pre entry", "surprise sign")),
     ("np_negative", ("net profit", "np is negative", "np negative")),
     ("crowded_margin", ("margin is crowded", "margin crowding")),
+    ("curve_flatten", ("repo curve", "flattened")),
 )
 
 

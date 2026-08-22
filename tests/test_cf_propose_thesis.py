@@ -216,20 +216,7 @@ def test_worker_index_contains_propose_thesis_route() -> None:
     assert "auto_inject: false" in src
     assert "markets_margin_interest" in src
     assert '"margin_interest"' not in src
-
-    import re
-
-    def _ids(name: str) -> set[str]:
-        m = re.search(
-            rf"(?:export )?const {name} = (?:new Set\()?\[(.*?)](?: as const)?",
-            src,
-            flags=re.S,
-        )
-        assert m, name
-        return set(re.findall(r'"([^"]+)"', m.group(1)))
-
-    assert _ids("PROPOSE_ALLOWED_GATES") == set(PROPOSE_ALLOWED_GATES)
-    assert _ids("PROPOSE_ALLOWED_DATASETS") == set(PROPOSE_ALLOWED_DATASETS)
+    # Generated allowlists: scripts/sync_cf_new_thesis_ids.py --check is SoT.
     assert PROPOSE_CALENDAR_GATES <= COMBO_EVENT_GATES
     assert PROPOSE_CALENDAR_GATES.isdisjoint(PROPOSE_ALLOWED_GATES)
     assert "skip_monday" not in PROPOSE_ALLOWED_GATES
@@ -286,6 +273,20 @@ def test_review_proposal_row_rejects_invent_and_weekday() -> None:
     bad_c = review_proposal_row(contra)
     assert bad_c["ok"] is False
     assert "contradictory_gates" in bad_c["reasons"]
+
+    flatten_invert = dict(good)
+    flatten_invert["gates"] = ["curve_flatten", "invert_curve"]
+    flatten_invert["datasets"] = [
+        "equities_bars_daily",
+        "fins_summary",
+        "jsda_tokyo_repo_rates",
+    ]
+    flatten_invert["thesis"] = (
+        "PEAD when the repo curve flattened AND the repo curve inverted."
+    )
+    bad_fi = review_proposal_row(flatten_invert)
+    assert bad_fi["ok"] is False
+    assert "contradictory_gates" in bad_fi["reasons"]
 
     one = dict(good)
     one["gates"] = ["liq_high"]
@@ -550,6 +551,18 @@ def test_review_proposal_row_occupancy_and_polarity_table() -> None:
             ["easy_funding", "invert_curve"],
             "occupancy_label_only",
             "PEAD when overnight funding is easy AND the repo curve inverted. Skip missing PIT prints (no invent).",
+        ),
+        (
+            "Stocks with high price momentum tend to outperform when the yield curve flattens AND funding conditions are easy, but not overly crowded.",
+            ["curve_flatten", "easy_funding", "uncrowded_margin"],
+            "occupancy_label_only",
+            "PEAD when the repo curve flattened AND overnight funding is easy AND margin is uncrowded. Skip missing PIT prints (no invent).",
+        ),
+        (
+            "The price-to-book ratio tends to rise when the curve inverts AND the company has a high return on equity, signaling a potential undervaluation opportunity.",
+            ["invert_curve", "pb_rising"],
+            "occupancy_label_only",
+            "PEAD when the repo curve inverted AND PB is above its PIT median. Skip missing PIT prints (no invent).",
         ),
     ]
     for bad_thesis, gates, reason, good_thesis in rows:

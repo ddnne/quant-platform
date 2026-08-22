@@ -14,6 +14,7 @@ export const GATE_TITLE_CONTRA: Array<[string, string[]]> = [
   ["easy_funding", ["tight funding", "funding tight"]],
   ["eps_down", ["eps up", "rising eps", "eps tend to rise", "earnings tend to rise", "earnings rise"]],
   ["eps_up", ["eps down", "falling eps"]],
+  ["roe_low", ["high roe", "high return on equity", "rising roe"]],
   ["margin_down", ["margin up", "rising margin", "margins tend to rise", "margins rise"]],
   ["margin_up", ["margin down", "falling margin"]],
   ["nky_vol_high_skip", ["volatility is high", "vol is high", "high volatility", "nky vol high"]],
@@ -36,8 +37,9 @@ export const GATE_OCCUPANCY_LABEL: Array<[string, string[]]> = [
   ["ta_up", ["technical analysis", "technical signal", "ta signals"]],
   ["ta_down", ["technical analysis", "technical signal", "ta signals"]],
   ["overnight_p10", ["at 10%", "funding at 10", "10 percent", "10% predicts", "funding is loose", "loose"]],
-  ["pb_rising", ["is rising", "pb rose", "rising price to book", "price to book is rising", "price to book ratio increase", "price to book ratio increases", "pb ratio increase", "pb ratio increases", "pb increase", "increase in pb"]],
-  ["pre_mom", ["positive price momentum", "positive momentum", "momentum is positive"]],
+  ["pb_rising", ["is rising", "pb rose", "rising price to book", "price to book is rising", "price to book ratio increase", "price to book ratio increases", "pb ratio increase", "pb ratio increases", "pb increase", "increase in pb", "price to book ratio tends to rise", "price to book tends to rise", "pb tends to rise"]],
+  ["pre_mom", ["positive price momentum", "positive momentum", "momentum is positive", "high price momentum"]],
+  ["curve_flatten", ["yield curve"]],
   ["np_negative", ["profitability is weak", "weak profitability", "weak profit"]],
   ["crowded_margin", ["market is crowded"]],
 ];
@@ -45,6 +47,8 @@ export const GATE_OCCUPANCY_LABEL: Array<[string, string[]]> = [
 export const EXTRA_TITLE_GATES: Array<[string, string]> = [
   ["low pb", "cheap_pb"],
   ["low price to book", "cheap_pb"],
+  ["undervaluation", "cheap_pb"],
+  ["undervalued", "cheap_pb"],
   ["tight funding", "tight_funding"],
   ["funding is tight", "tight_funding"],
   ["funding tight", "tight_funding"],
@@ -52,6 +56,7 @@ export const EXTRA_TITLE_GATES: Array<[string, string]> = [
   ["funding is easy", "easy_funding"],
   ["funding easy", "easy_funding"],
   ["eased funding", "easy_funding"],
+  ["funding conditions are easy", "easy_funding"],
   ["eps surprises", "eps_down"],
   ["eps surprise", "eps_down"],
   ["earnings surprises", "eps_down"],
@@ -76,6 +81,9 @@ export const EXTRA_TITLE_GATES: Array<[string, string]> = [
   ["roe down", "roe_low"],
   ["falling roe", "roe_low"],
   ["poor roe", "roe_low"],
+  ["high roe", "roe_low"],
+  ["high return on equity", "roe_low"],
+  ["return on equity", "roe_low"],
   ["profitability is weak", "np_negative"],
   ["weak profitability", "np_negative"],
 ];
@@ -86,6 +94,7 @@ export const OCCUPANCY_EXTRA_TITLE: Array<[string, string[]]> = [
   ["appetite for risk", ["eq_ar_falling", "eq_ar_high", "eq_ar_low", "eq_ar_rising"]],
   ["funding at 10", ["overnight_p10"]],
   ["funding is loose", ["overnight_p10"]],
+  ["high price momentum", ["pre_mom"]],
   ["increase in pb", ["pb_rising"]],
   ["low repo", ["repo_3m_down"]],
   ["market is crowded", ["crowded_margin"]],
@@ -93,11 +102,14 @@ export const OCCUPANCY_EXTRA_TITLE: Array<[string, string[]]> = [
   ["pb increase", ["pb_rising"]],
   ["pb ratio increase", ["pb_rising"]],
   ["pb ratio increases", ["pb_rising"]],
+  ["pb tends to rise", ["pb_rising"]],
   ["positive momentum", ["pre_mom"]],
   ["positive price momentum", ["pre_mom"]],
   ["price to book is rising", ["pb_rising"]],
   ["price to book ratio increase", ["pb_rising"]],
   ["price to book ratio increases", ["pb_rising"]],
+  ["price to book ratio tends to rise", ["pb_rising"]],
+  ["price to book tends to rise", ["pb_rising"]],
   ["profitability is weak", ["np_negative"]],
   ["repo is low", ["repo_3m_down"]],
   ["repo rates are low", ["repo_3m_down"]],
@@ -111,6 +123,7 @@ export const OCCUPANCY_EXTRA_TITLE: Array<[string, string[]]> = [
   ["technical signal", ["ta_down", "ta_up"]],
   ["weak profit", ["np_negative"]],
   ["weak profitability", ["np_negative"]],
+  ["yield curve", ["curve_flatten"]],
 ];
 
 export const PROPOSE_CONTRADICTORY_GATE_PAIRS: string[][] = [
@@ -123,6 +136,10 @@ export const PROPOSE_CONTRADICTORY_GATE_PAIRS: string[][] = [
   ["overnight_easing", "overnight_tightening"],
   ["margin_down", "margin_up"],
   ["eps_down", "eps_up"],
+  ["curve_flatten", "invert_curve"],
+  ["curve_flatten", "steep_curve"],
+  ["invert_curve", "steep_curve"],
+  ["overnight_p10", "tight_funding"],
 ];
 
 export const SPARSE_GATE_COMBOS_REVIEW: string[][] = [
@@ -155,4 +172,5 @@ export const OCCUPANCY_LABEL_EXCEPTIONS: Array<[string, string[]]> = [
   ["pre_mom", ["agrees", "pre-event", "pre entry", "surprise sign"]],
   ["np_negative", ["net profit", "np is negative", "np negative"]],
   ["crowded_margin", ["margin is crowded", "margin crowding"]],
+  ["curve_flatten", ["repo curve", "flattened"]],
 ];
