@@ -34,8 +34,12 @@ from research.paper_candidate_adapter import (
 )
 from strategies.spec import STRATEGY_SPEC_VERSION, StrategySpec, interpret_strategy_spec
 REPO = Path(__file__).resolve().parents[1]
-ADAPTER_PATH = (
-    REPO / "packages" / "product" / "research" / "paper_candidate_adapter.py"
+RESEARCH_DIR = REPO / "packages" / "product" / "research"
+ADAPTER_PATH = RESEARCH_DIR / "paper_candidate_adapter.py"
+ADAPTER_IMPL_PATHS = (
+    ADAPTER_PATH,
+    RESEARCH_DIR / "paper_candidate_adapt.py",
+    RESEARCH_DIR / "paper_candidate_specs.py",
 )
 
 
@@ -256,22 +260,25 @@ def test_emit_example_paper_specs(tmp_path: Path):
 
 def test_adapter_source_has_no_run_paper_or_live_order_calls():
     """Static guard: receptacle must not invoke paper runner or live path."""
-    src = ADAPTER_PATH.read_text(encoding="utf-8")
-    tree = ast.parse(src, filename=str(ADAPTER_PATH))
     imported: set[str] = set()
     called: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            imported.update(alias.name for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.module:
-            imported.add(node.module)
-            for alias in node.names:
-                imported.add(f"{node.module}.{alias.name}")
-        elif isinstance(node, ast.Call):
-            if isinstance(node.func, ast.Name):
-                called.add(node.func.id)
-            elif isinstance(node.func, ast.Attribute):
-                called.add(node.func.attr)
+    srcs: list[str] = []
+    for path in ADAPTER_IMPL_PATHS:
+        src = path.read_text(encoding="utf-8")
+        srcs.append(src)
+        tree = ast.parse(src, filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                imported.update(alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                imported.add(node.module)
+                for alias in node.names:
+                    imported.add(f"{node.module}.{alias.name}")
+            elif isinstance(node, ast.Call):
+                if isinstance(node.func, ast.Name):
+                    called.add(node.func.id)
+                elif isinstance(node.func, ast.Attribute):
+                    called.add(node.func.attr)
 
     forbidden_roots = {
         "execution",
@@ -294,12 +301,12 @@ def test_adapter_source_has_no_run_paper_or_live_order_calls():
     for name in ("run_paper", "PaperExecutionService", "prepare", "place_order"):
         assert name not in called, f"adapter must not call {name}"
 
-    # string surface: no enablement of live path
-    assert "live_order_path_enabled: bool = True" not in src
-    assert "PAPER_SCHEDULER_ARMED: bool = True" not in src
-    assert "LIVE_ORDERS: bool = True" not in src
-    assert "OPERATIONAL_GO: bool = True" not in src
-    assert "READY_DECLARED: bool = True" not in src
+    joined = "\n".join(srcs)
+    assert "live_order_path_enabled: bool = True" not in joined
+    assert "PAPER_SCHEDULER_ARMED: bool = True" not in joined
+    assert "LIVE_ORDERS: bool = True" not in joined
+    assert "OPERATIONAL_GO: bool = True" not in joined
+    assert "READY_DECLARED: bool = True" not in joined
 
 
 def test_paper_candidate_receptacle_type():

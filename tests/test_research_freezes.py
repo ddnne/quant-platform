@@ -192,7 +192,14 @@ def test_cf_mass_eval_job_does_not_import_factory() -> None:
     research_dir = (
         Path(__file__).resolve().parents[1] / "packages" / "product" / "research"
     )
-    for name in ("cf_mass_eval_job.py", "cf_daily_path_job.py", "bar_native_specs.py"):
+    for name in (
+        "cf_mass_eval_job.py",
+        "cf_mass_eval_run.py",
+        "cf_mass_eval_stage.py",
+        "cf_mass_eval_thicken.py",
+        "cf_daily_path_job.py",
+        "bar_native_specs.py",
+    ):
         path = research_dir / name
         if not path.exists():
             continue
