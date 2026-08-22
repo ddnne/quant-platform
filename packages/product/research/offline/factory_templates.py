@@ -10,7 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 from research.bar_native_specs import BAR_NATIVE_LOGIC_IDS, BAR_NATIVE_SPECS
 from research.freezes import (
@@ -952,46 +952,40 @@ def near_logic_groups_document() -> dict[str, Any]:
     return {
         "version": version,
         "wave": wave,
-        "policy": (
-            "Near-similar logics (flow hard/soft, fund slow, rate macro cousins) "
-            "stay parallel for now — label as near-group; do not merge early."
-        ),
+        "policy": "Near-similar logics stay parallel; label; do not merge early.",
         "groups": [dict(g) for g in NEAR_LOGIC_GROUPS],
     }
 
 
-def research_family_register_document() -> dict[str, Any]:
-    """W105 research-family registration (recognition, not promotion).
-
-    W104 unique_logic (and this-wave additions, if any) were accepted as
-    ad-hoc family_ids, so factory period-net returned 0 from unknown_family.
-    Registering them as known research families lets catalog dispatch
-    evaluate them. That evaluation is **recognition**, not a pass, not
-    research_candidate, not Mass/READY/GO/main.
-    """
-    version, wave, freeze = _factory_doc_meta()
-    rows = []
-    for lid in sorted(RESEARCH_UNIQUE_LOGIC_IDS):
+def _research_family_members(
+    logic_ids: Sequence[str], *, append: bool = False
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for lid in sorted(logic_ids):
         tpl = LOGIC_TEMPLATES.get(lid)
         if tpl is None:
             continue
-        rows.append(
-            {
-                "logic_id": lid,
-                "family_id": tpl.family_id,
-                "generation_enabled": bool(tpl.generation_enabled),
-                "research_candidate": False,
-                "promote_as_main": False,
-                "go": False,
-                "catalog_remap": None,
-                "registration": "recognition",
-            }
-        )
+        row = {
+            "logic_id": lid,
+            "family_id": tpl.family_id,
+            "generation_enabled": bool(tpl.generation_enabled),
+            "research_candidate": False,
+            "promote_as_main": False,
+            "go": False,
+            "catalog_remap": None,
+            "registration": "recognition",
+        }
+        if append:
+            row["append"] = True
+        rows.append(row)
+    return rows
+
+
+def _research_family_base() -> dict[str, Any]:
+    version, wave, freeze = _factory_doc_meta()
     return {
-        "register_id": RESEARCH_FAMILY_REGISTER_ID,
         "wave": wave,
         "version": version,
-        "kind": "research_family",
         "registration": "recognition",
         "registration_is_not_a_pass": RESEARCH_FAMILY_REGISTRATION_IS_NOT_A_PASS,
         "registration_is_not_promotion": True,
@@ -1004,73 +998,37 @@ def research_family_register_document() -> dict[str, Any]:
         "connected_to_mass": CONNECTED_TO_MASS,
         "connected_to_ready": CONNECTED_TO_READY,
         "family_group": FAMILY_RESEARCH_UNIQUE_LOGIC,
+        **freeze,
+    }
+
+
+def research_family_register_document() -> dict[str, Any]:
+    """Research-family registration (recognition, not promotion)."""
+    return {
+        **_research_family_base(),
+        "register_id": RESEARCH_FAMILY_REGISTER_ID,
+        "kind": "research_family",
         "family_ids": sorted(RESEARCH_UNIQUE_FAMILY_IDS),
         "logic_ids": sorted(RESEARCH_UNIQUE_LOGIC_IDS),
-        "members": rows,
-        "purpose": (
-            "So factory period-net is not stuck at 0 from unknown family. "
-            "Factory synthetic period-net after recognition is still not a pass. "
-            "daily_path_DD of the min-impl remains the required eval."
-        ),
+        "members": _research_family_members(RESEARCH_UNIQUE_LOGIC_IDS),
         "must_not": [
             "auto research_candidate",
             "Mass ON",
             "READY",
             "operational GO",
             "promote_as_main",
-            "remap onto sticky / event_post_disclosure_hold / vol_risk_adjusted_mom",
         ],
-        "note": (
-            "registration = recognition, not pass / not promotion. "
-            "Grok did not implement."
-        ),
-        **freeze,
+        "note": "registration = recognition, not pass / not promotion.",
     }
 
 
 def research_family_append_document() -> dict[str, Any]:
-    """W107 family append of this-wave newly min-implemented logics only.
-
-    Append is recognition, not a pass, not promotion. Does not re-promote
-    W104/W105/W106 members. Sign-flip of funding/surprise is not a kill.
-    """
-    version, wave, freeze = _factory_doc_meta()
-    rows = []
-    for lid in sorted(RESEARCH_FAMILY_APPEND_LOGIC_IDS):
-        tpl = LOGIC_TEMPLATES.get(lid)
-        if tpl is None:
-            continue
-        rows.append(
-            {
-                "logic_id": lid,
-                "family_id": tpl.family_id,
-                "generation_enabled": bool(tpl.generation_enabled),
-                "research_candidate": False,
-                "promote_as_main": False,
-                "go": False,
-                "catalog_remap": None,
-                "registration": "recognition",
-                "append": True,
-            }
-        )
+    """Family append of this-wave newly min-implemented logics only."""
     return {
+        **_research_family_base(),
         "append_id": RESEARCH_FAMILY_APPEND_ID,
         "register_id": RESEARCH_FAMILY_REGISTER_ID,
-        "wave": wave,
-        "version": version,
         "kind": "research_family_append",
-        "registration": "recognition",
-        "registration_is_not_a_pass": RESEARCH_FAMILY_REGISTRATION_IS_NOT_A_PASS,
-        "registration_is_not_promotion": True,
-        "auto_research_candidate": RESEARCH_FAMILY_AUTO_RESEARCH_CANDIDATE,
-        "generation_enabled": False,
-        "promote_as_main": False,
-        "go": False,
-        "mass_research": MASS_RESEARCH,
-        "ready_declared": READY_DECLARED,
-        "connected_to_mass": CONNECTED_TO_MASS,
-        "connected_to_ready": CONNECTED_TO_READY,
-        "family_group": FAMILY_RESEARCH_UNIQUE_LOGIC,
         "this_wave_only": True,
         "appended_logic_ids": sorted(RESEARCH_FAMILY_APPEND_LOGIC_IDS),
         "appended_family_ids": sorted(
@@ -1080,7 +1038,9 @@ def research_family_append_document() -> dict[str, Any]:
                 if lid in LOGIC_TEMPLATES
             }
         ),
-        "members": rows,
+        "members": _research_family_members(
+            RESEARCH_FAMILY_APPEND_LOGIC_IDS, append=True
+        ),
         "did_not_kill_funding_surprise": True,
         "sign_flip_is_not_a_kill": True,
         "must_not": [
@@ -1090,13 +1050,8 @@ def research_family_append_document() -> dict[str, Any]:
             "operational GO",
             "promote_as_main",
             "treat family append as a pass",
-            "kill funding/surprise because window sign flipped",
         ],
-        "note": (
-            "family append = recognition of this-wave newly min-implemented "
-            "logics only, not pass / not promotion. Grok did not implement."
-        ),
-        **freeze,
+        "note": "family append = recognition of this-wave logics, not promotion.",
     }
 
 

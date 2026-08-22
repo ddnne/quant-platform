@@ -19,7 +19,6 @@ _ADV_CTX: ContextVar[Mapping[str, float] | None] = ContextVar(
     "held_book_adv_by_code", default=None
 )
 
-from research.eval_windows import HONEST_3Y_WINDOWS
 from research.freezes import assert_frozen_pins_untouched
 from research.stats_metrics import (
     equity_path_drawdown,
@@ -33,10 +32,6 @@ def set_held_book_adv(adv_by_code: Mapping[str, float] | None):
 
 def reset_held_book_adv(token) -> None:
     _ADV_CTX.reset(token)
-
-
-EVAL_PROTOCOL: str = "daily_path_mtm_after_cost/v1"
-R2_EVAL_PREFIX: str = "research/eval"
 
 
 def dump_json(path: Path, obj: object) -> None:

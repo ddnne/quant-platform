@@ -727,24 +727,13 @@ def _eval_on_panel(
     elif fid == FAMILY_OPTIONS_VOL_REGIME:
         mode = str(p.get("mode") or "opt225_basevol_abs_level")
         sk = str(p.get("series_kind") or "basevol")
-        # Sensible defaults by series_kind when params omit thresholds.
         _hi = {
-            "basevol": 24.0,
-            "atm_iv": 25.0,
-            "spread": 1.0,
-            "spread_change": 0.5,
-            "skew": 3.0,
-            "cm_term": 2.0,
-            "basevol_delta": 1.0,
+            "basevol": 24.0, "atm_iv": 25.0, "spread": 1.0, "spread_change": 0.5,
+            "skew": 3.0, "cm_term": 2.0, "basevol_delta": 1.0,
         }.get(sk, 24.0)
         _lo = {
-            "basevol": 12.0,
-            "atm_iv": 12.0,
-            "spread": -0.5,
-            "spread_change": -0.5,
-            "skew": 0.5,
-            "cm_term": -1.0,
-            "basevol_delta": -1.0,
+            "basevol": 12.0, "atm_iv": 12.0, "spread": -0.5, "spread_change": -0.5,
+            "skew": 0.5, "cm_term": -1.0, "basevol_delta": -1.0,
         }.get(sk, 12.0)
         out = evaluate_opt225_vol_on_bars(
             bars,

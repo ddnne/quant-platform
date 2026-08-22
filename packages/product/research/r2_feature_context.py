@@ -35,7 +35,6 @@ from typing import Any, Callable, Mapping, Sequence
 
 from data_contracts.permanent_defer import (
     PERMANENT_DEFER_DATASETS,
-    PermanentDeferHistoryError,
     reject_permanent_defer_for_history,
 )
 from features.runtime import FeatureContext
@@ -56,10 +55,6 @@ from research.single_shot_tip import (
     _pick_str,
     build_tip_feature_context,
 )
-
-# ---------------------------------------------------------------------------
-# Freeze / plane labels
-# ---------------------------------------------------------------------------
 
 HISTORY_SOURCE_R2: str = "r2"
 HISTORY_SOURCE_D1_TIP: str = "d1_tip"
@@ -150,30 +145,13 @@ AVAILABLE_AT_REPAIR_POLICY: dict[str, Any] = {
             "look_ahead": False,
         },
     },
-    "forbidden": [
-        "available_at = as_of",
-        "available_at = now()",
-        "available_at = evaluation_as_of",
-        "silent future fill without documented repair",
-    ],
 }
-
-# ---------------------------------------------------------------------------
-# T1 — R2 key patterns per COMPLETE 21 (+ DEFER 5 documented as excluded)
-# ---------------------------------------------------------------------------
 
 R2_JSONL_KEY_PATTERN: str = (
     "structured/jsonl/{dataset}/dt=YYYY-MM-DD/{run_id}.jsonl"
 )
 R2_ARCHIVE_KEY_PATTERN: str = (
     "archive/jquants_records/{dataset}/batch/{run_id}_after{rowid}.ndjson"
-)
-R2_ARCHIVE_META_KEY_PATTERN: str = (
-    "archive/jquants_records/{dataset}/batch/{run_id}_after{rowid}_meta.ndjson"
-)
-R2_RAW_KEY_PATTERN: str = "raw/{dataset}/{run_id}/page-NNNNNN.json"
-R2_PARQUET_KEY_PATTERN: str = (
-    "dataset={DATASET}/year=YYYY/month=MM/day=DD/seg={SEGMENT_ID}/{content_hash}.parquet"
 )
 
 _FAMILY_PREFIXES: tuple[tuple[str, str], ...] = (
@@ -192,14 +170,8 @@ COMPLETE_21_R2_INVENTORY: dict[str, dict[str, Any]] = {
     ds: {
         "dataset": ds,
         "complete": True,
-        "history_sot": "R2 quant-structured",
-        "tip_sot": "D1 jquants_records residual/tip (or JSDA hot table)",
         "jsonl_prefix": f"structured/jsonl/{ds}/",
-        "jsonl_key_pattern": R2_JSONL_KEY_PATTERN.replace("{dataset}", ds),
         "archive_prefix": f"archive/jquants_records/{ds}/",
-        "archive_key_pattern": R2_ARCHIVE_KEY_PATTERN.replace("{dataset}", ds),
-        "raw_prefix": f"raw/{ds}/",
-        "line_schema": R2_LINE_SCHEMA,
         "family": next(
             (fam for pre, fam in _FAMILY_PREFIXES if ds.startswith(pre)),
             "other",
@@ -215,64 +187,10 @@ COMPLETE_21_R2_INVENTORY["jsda_corporate_bond_transactions"][
 ] = "jsda_corporate_bond_transactions"
 
 PERMANENT_DEFER_R2_NOTE: dict[str, dict[str, Any]] = {
-    ds: {
-        "dataset": ds,
-        "complete": False,
-        "permanent_defer": True,
-        "load_policy": "hard_reject",
-        "jsonl_prefix": f"structured/jsonl/{ds}/",
-        "archive_prefix": f"archive/jquants_records/{ds}/",
-        "note": "Permanent DEFER — excluded from research history loads",
-    }
+    ds: {"dataset": ds, "permanent_defer": True, "load_policy": "hard_reject"}
     for ds in sorted(PERMANENT_DEFER_DATASETS)
 }
 
-# Live R2 sample keys proved in W58 (not invented).
-LIVE_R2_SAMPLE_KEYS: dict[str, dict[str, Any]] = {
-    "equities_bars_daily": {
-        "jsonl_sample_key": (
-            "structured/jsonl/equities_bars_daily/dt=2008-05-07/"
-            "r2-equities_bars_daily-1786544255589-mmwbjs.jsonl"
-        ),
-        "event_day_sample": "2008-05-07",
-        "source_log": ".glm-logs/w0815ay_g1_history/",
-    },
-    "indices_bars_daily_topix": {
-        "archive_sample_key": (
-            "archive/jquants_records/indices_bars_daily_topix/batch/"
-            "08088fff-792b-4b1c-9898-38316e881405_after227044.ndjson"
-        ),
-        "event_span_sample": ["2009-12-21", "2011-08-09"],
-        "source_log": ".glm-logs/w0815ay_g1_history/",
-    },
-    "markets_calendar": {
-        "jsonl_sample_key": (
-            "structured/jsonl/markets_calendar/dt=2026-08-01/"
-            "r2-markets_calendar-1786754494429-4qn6pm.jsonl"
-        ),
-        "event_day_sample": "2026-08-01",
-        "source_log": ".glm-logs/w0815ay_g1_history/",
-    },
-}
-
-# ---------------------------------------------------------------------------
-# T2 — Schema mapping R2 row → FeatureContext fields
-# ---------------------------------------------------------------------------
-
-# Envelope fields always present on jquants_records/v1 lines.
-R2_ENVELOPE_FIELDS: tuple[str, ...] = (
-    "source",
-    "dataset",
-    "natural_key",
-    "event_time",
-    "available_at",
-    "ingested_at",
-    "payload",
-    "raw_payload",
-)
-
-# FeatureContext resource → COMPLETE dataset pin (T2). Column detail is in
-# schema_mapping_document; this map is the load-time dataset id.
 FEATURE_CONTEXT_SCHEMA_MAP: dict[str, dict[str, Any]] = {
     "equity_bars_daily": {
         "dataset": "equities_bars_daily",
@@ -317,10 +235,6 @@ R2GetFn = Callable[[str, str], bytes]  # (bucket, key) -> body bytes
 class R2FeatureContextError(SingleShotJobError):
     """Invalid R2 history bridge input or load failure."""
 
-
-# ---------------------------------------------------------------------------
-# Parse / normalize
-# ---------------------------------------------------------------------------
 
 
 def _maybe_json(value: Any) -> Any:
@@ -617,10 +531,6 @@ def available_at_policy_document() -> dict[str, Any]:
     return dict(AVAILABLE_AT_REPAIR_POLICY)
 
 
-# ---------------------------------------------------------------------------
-# R2 object get (wrangler) — injectable for tests
-# ---------------------------------------------------------------------------
-
 
 def default_r2_get_object(
     bucket: str,
@@ -672,10 +582,6 @@ def default_r2_get_object(
         except OSError:
             pass
 
-
-# ---------------------------------------------------------------------------
-# Extract history rows
-# ---------------------------------------------------------------------------
 
 
 def _load_envelopes_from_sources(
@@ -925,10 +831,6 @@ def build_r2_feature_context(
     )
 
 
-# ---------------------------------------------------------------------------
-# Optional disposable in-memory SQLite mirror (not SoT)
-# ---------------------------------------------------------------------------
-
 
 def materialize_disposable_sqlite_mirror(
     rows_by_dataset: Mapping[str, Sequence[Mapping[str, Any]]],
@@ -1115,10 +1017,6 @@ def materialize_disposable_sqlite_mirror(
     return path
 
 
-# ---------------------------------------------------------------------------
-# Inventory export (T1 deliverable helper)
-# ---------------------------------------------------------------------------
-
 
 def r2_inventory_document() -> dict[str, Any]:
     """Return the T1 R2 inventory document (COMPLETE 21 + DEFER exclude)."""
@@ -1130,34 +1028,19 @@ def r2_inventory_document() -> dict[str, Any]:
         "shared_patterns": {
             "jsonl": R2_JSONL_KEY_PATTERN,
             "archive_ndjson": R2_ARCHIVE_KEY_PATTERN,
-            "archive_meta": R2_ARCHIVE_META_KEY_PATTERN,
-            "raw": R2_RAW_KEY_PATTERN,
-            "parquet_target": R2_PARQUET_KEY_PATTERN,
         },
         "complete_21_count": len(COMPLETE_21_DATASETS),
         "complete_21": COMPLETE_21_R2_INVENTORY,
         "permanent_defer_count": len(PERMANENT_DEFER_DATASETS),
         "permanent_defer_excluded": PERMANENT_DEFER_R2_NOTE,
-        "live_samples": LIVE_R2_SAMPLE_KEYS,
         "s1_minimal_datasets": list(S1_SIGNAL_HISTORY_DATASETS),
         "multi_signal_datasets": list(MULTI_SIGNAL_HISTORY_DATASETS),
         "bridge_expand_datasets": list(BRIDGE_EXPAND_DATASETS),
         "available_at_repair_policy": AVAILABLE_AT_REPAIR_POLICY,
-        "sources": [
-            "docs/proof/complete21_cf_read_paths_20260815.md",
-            "docs/architecture/r2_partition_scheme.md",
-            "platform/workers/ingestion-premium/src/r2_structured_writer.ts",
-            ".glm-logs/w0815ay_g1_history/ (W58 live list/get samples)",
-            "packages/product/research/single_shot_job.py history_input_patterns",
-        ],
         "local_sot": False,
         "mass_research": "NO-GO",
         "ready_declared": False,
-        "note": (
-            "History SoT is R2 quant-structured. D1 is hot tip only. "
-            "Local SQLite is never SoT. Permanent DEFER 5 hard-rejected on load. "
-            "W60: bridge expand margin/short/fins/alert + multi-signal long window."
-        ),
+        "note": "History SoT is R2 quant-structured. D1 is hot tip only.",
     }
 
 
@@ -1178,34 +1061,16 @@ def schema_mapping_document() -> dict[str, Any]:
     return {
         "wave": "W59 / w0815az_g1",
         "task": "T2 schema mapping Code/Date/event_time/available_at",
-        "envelope_fields": list(R2_ENVELOPE_FIELDS),
         "line_schema": R2_LINE_SCHEMA,
         "feature_context_map": FEATURE_CONTEXT_SCHEMA_MAP,
         "pit_gate": {
             "rule": "available_at is required and available_at <= as_of",
             "null_available_at": "excluded (hard)",
-            "implementation": [
-                "research.r2_feature_context.filter_history_rows(require_available_at=True)",
-                "research.single_shot_tip._available_at_ok",
-                "research.single_shot_tip.build_tip_feature_context PIT reader",
-            ],
         },
         "s1_column_map": {
-            "equities_bars_daily": {
-                "Code": "payload/natural_key Code → row.code",
-                "Date": "payload/natural_key Date → row.date",
-                "available_at": "envelope.available_at (PIT)",
-            },
-            "indices_bars_daily_topix": {
-                "Date": "payload.Date | event_time[:10] → row.date",
-                "close": "payload.C | payload.Close → row.close",
-                "available_at": "envelope.available_at (PIT)",
-            },
-            "markets_calendar": {
-                "Date": "payload.Date → row.date",
-                "holiday_division": "payload.HolDiv | HolidayDivision",
-                "available_at": "envelope.available_at (PIT)",
-            },
+            "equities_bars_daily": {"Code": "row.code", "Date": "row.date"},
+            "indices_bars_daily_topix": {"Date": "row.date", "close": "row.close"},
+            "markets_calendar": {"Date": "row.date", "holiday_division": "HolDiv"},
         },
         "bridge_expand_column_map": {
             ds: {
@@ -1232,16 +1097,8 @@ def can_build_40d_asof(
         return {
             "can_build_40d_asof": True,
             "code_path": True,
-            "requires": [
-                "R2 object keys or local/raw fixtures for equities_bars_daily",
-                "indices_bars_daily_topix",
-                "markets_calendar (optional but preferred for trading days)",
-                "period covering >= 40 trading days of bars",
-            ],
-            "note": (
-                "Bridge implemented. Live 40d eval needs R2 keys/get (or fixtures) "
-                "spanning the window; D1 tip alone maxes ~28 trading days (hot cutoff)."
-            ),
+            "requires": ["equities_bars_daily", "indices_bars_daily_topix"],
+            "note": "Bridge exists; live 40d eval needs R2 keys/fixtures.",
         }
     bar_days = sorted(
         {
@@ -1292,7 +1149,6 @@ __all__ = [
     "HISTORY_SOURCE_D1_TIP",
     "HISTORY_SOURCE_R2",
     "HISTORY_SOURCES",
-    "LIVE_R2_SAMPLE_KEYS",
     "PERMANENT_DEFER_R2_NOTE",
     "R2GetFn",
     "R2FeatureContextError",
