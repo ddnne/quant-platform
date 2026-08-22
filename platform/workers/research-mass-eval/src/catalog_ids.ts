@@ -200,6 +200,7 @@ export const CF_NEW_EVENT_THESIS_IDS = [
   "event_first_half_uncrowded",
   "event_flatten_easy_uncrowded",
   "event_flatten_eps_down",
+  "event_flatten_eps_np_neg",
   "event_flatten_eqar_rising",
   "event_flatten_np_negative",
   "event_flatten_np_px_down",
