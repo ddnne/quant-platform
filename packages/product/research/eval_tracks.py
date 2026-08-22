@@ -80,10 +80,10 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "id": "inventory_bias_recorded",
         "track": EVAL_TRACK_LIQ_LARGE,
         "why": (
-            "recorded research/eval/job=eval-inventory-bias-20260823m/ "
+            "recorded research/eval/job=eval-inventory-bias-20260823v/ "
             "inventory_bias.json; assert_new_batch_cheap_pb_cap refuses "
-            "new batches at 20%; plus32vf occupancy audit 20260823i "
-            "shows 4 near_empty — not materials"
+            "new batches at 20%; 23t/23v occupancy audit mid-band; plus32vf "
+            "4 + nkyvol×steep parked near_empty — not materials"
         ),
         "not_a_pass": True,
         "go": False,
@@ -233,8 +233,8 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "id": "adopt_occupancy_recorded",
         "track": EVAL_TRACK_LIQ_LARGE,
         "why": (
-            "eval-occupancy-audit-20260823k: 23i/23j adopts mid-band both "
-            "tracks; primary sleeves have 0 near_empty members; not a pass"
+            "eval-occupancy-audit-20260823t: 23t adopt mid-band both "
+            "tracks (occ 0.213); primary sleeves have 0 near_empty members; not a pass"
         ),
         "not_a_pass": True,
         "go": False,

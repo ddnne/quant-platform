@@ -88,6 +88,18 @@ _GATE_TITLE_CONTRA: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("repo_3m_down", ("high repo", "repo rate is high", "rising repo", "repo up")),
 )
 
+# Occupancy is the gate predicate (EqAR change, repo-down). English slang
+# ("risk appetite", "repo is low") is not occupancy — reject rather than adopt.
+_GATE_OCCUPANCY_LABEL: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("eq_ar_falling", ("risk appetite", "risk premia", "risk premium", "risk arbitrage")),
+    ("eq_ar_rising", ("risk appetite", "risk premia", "risk premium", "risk arbitrage")),
+    ("eq_ar_high", ("risk appetite", "risk premia", "risk premium", "risk arbitrage")),
+    ("eq_ar_low", ("risk appetite", "risk premia", "risk premium", "risk arbitrage")),
+    ("repo_3m_down", ("repo rates are low", "low repo", "repo is low")),
+    ("ta_up", ("technical analysis", "technical signal", "ta signals")),
+    ("ta_down", ("technical analysis", "technical signal", "ta signals")),
+)
+
 PROPOSE_MAX_AND_GATES: int = 3
 PROPOSE_WHY_AVOID_LIMIT: int = 24
 
@@ -234,6 +246,19 @@ def review_proposal_row(proposal: Mapping[str, Any]) -> dict[str, Any]:
             if any(w in polar_blob for w in forbidden):
                 reasons.append("title_gate_polarity_mismatch")
                 break
+        for gate, labels in _GATE_OCCUPANCY_LABEL:
+            if gate not in kept_set:
+                continue
+            if not any(w in polar_blob for w in labels):
+                continue
+            if gate.startswith("eq_ar") and any(
+                t in polar_blob for t in ("eqar", "eq ar", "equity to asset")
+            ):
+                continue
+            if gate.startswith("ta_") and "total assets" in polar_blob:
+                continue
+            reasons.append("occupancy_label_only")
+            break
         for combo, _reason in SPARSE_GATE_COMBOS:
             if combo <= kept_set:
                 reasons.append("sparse_gate_combo")
@@ -552,29 +577,41 @@ def invoke_cf_propose_thesis(
         and int(reviewed.get("n_adoptable") or 0) == 0
     ):
         extra = []
+        seen_extra: set[str] = set()
+        # Clone/sparse: avoid those gate sets. Polarity/occupancy-label:
+        # retry once without avoiding the (possibly unique) AND.
+        avoid_reasons = {
+            "gate_set_already_catalog",
+            "sparse_gate_combo",
+        }
         for prop, rev in zip(
             reviewed.get("proposals") or [],
             reviewed.get("reviews") or [],
         ):
             if not isinstance(prop, Mapping) or not isinstance(rev, Mapping):
                 continue
-            if "gate_set_already_catalog" not in (rev.get("reasons") or []):
+            reasons = set(str(x) for x in (rev.get("reasons") or []))
+            if not (reasons & avoid_reasons):
                 continue
             gates = [str(x) for x in (prop.get("gates") or []) if str(x).strip()]
-            if gates:
-                extra.append("+".join(sorted(gates)))
-        if extra:
-            jid = str(body.get("job_id") or "")
-            return invoke_cf_propose_thesis(
-                n=n,
-                why_avoid=extra + list(avoid),
-                write_artifacts=write_artifacts,
-                job_id=f"{jid}-retry" if jid else None,
-                worker_url=worker_url,
-                timeout=timeout,
-                http_post=http_post,
-                retry_on_clone=False,
-            )
+            if not gates:
+                continue
+            token = "+".join(sorted(gates))
+            if token in seen_extra:
+                continue
+            seen_extra.add(token)
+            extra.append(token)
+        jid = str(body.get("job_id") or "")
+        return invoke_cf_propose_thesis(
+            n=n,
+            why_avoid=extra + list(avoid),
+            write_artifacts=write_artifacts,
+            job_id=f"{jid}-retry" if jid else None,
+            worker_url=worker_url,
+            timeout=timeout,
+            http_post=http_post,
+            retry_on_clone=False,
+        )
     return reviewed
 
 

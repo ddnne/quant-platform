@@ -351,6 +351,65 @@ def test_review_proposal_row_rejects_invent_and_weekday() -> None:
     assert "title_gate_polarity_mismatch" in bad_n["reasons"]
     assert bad_n["auto_inject"] is False
 
+    occupancy_ta = {
+        "thesis": (
+            "Stocks are more likely to be bought when the margin is uncrowded "
+            "AND overnight funding is tightening AND technical analysis "
+            "signals are up."
+        ),
+        "signal_definition": "AND(uncrowded_margin, overnight_tightening, ta_up) PIT",
+        "position_rule": "event-hold surprise sign",
+        "datasets": ["equities_bars_daily", "fins_summary", "jsda_tokyo_repo_rates"],
+        "gates": ["uncrowded_margin", "overnight_tightening", "ta_up"],
+    }
+    bad_ta = review_proposal_row(occupancy_ta)
+    assert bad_ta["ok"] is False
+    assert "occupancy_label_only" in bad_ta["reasons"]
+    assert bad_ta["auto_inject"] is False
+
+    occupancy_arb = {
+        "thesis": (
+            "Equity risk arbitrage opportunities arise when TA signals are "
+            "down and funding is easy."
+        ),
+        "signal_definition": "AND(eq_ar_falling, ta_down, easy_funding) PIT",
+        "position_rule": "event-hold surprise sign",
+        "datasets": ["equities_bars_daily", "fins_summary", "jsda_tokyo_repo_rates"],
+        "gates": ["eq_ar_falling", "ta_down", "easy_funding"],
+    }
+    bad_arb = review_proposal_row(occupancy_arb)
+    assert bad_arb["ok"] is False
+    assert "occupancy_label_only" in bad_arb["reasons"]
+    assert bad_arb["auto_inject"] is False
+
+    occupancy_label = {
+        "thesis": (
+            "Market rallies when repo rates are low AND equity risk appetite "
+            "is falling"
+        ),
+        "signal_definition": "AND(repo_3m_down, eq_ar_falling) PIT",
+        "position_rule": "event-hold surprise sign",
+        "datasets": ["equities_bars_daily", "fins_summary", "jsda_tokyo_repo_rates"],
+        "gates": ["repo_3m_down", "eq_ar_falling"],
+    }
+    bad_ol = review_proposal_row(occupancy_label)
+    assert bad_ol["ok"] is False
+    assert "occupancy_label_only" in bad_ol["reasons"]
+    assert bad_ol["auto_inject"] is False
+
+    occ_ok = dict(occupancy_label)
+    occ_ok["thesis"] = (
+        "PEAD when 3m repo rate is down AND EqAR fell versus the last prior print"
+    )
+    # Same 2-AND is already catalog after 23t YAML; clone still fail-closes.
+    occ_review = review_proposal_row(occ_ok)
+    assert occ_review["auto_inject"] is False
+    assert occ_review["go"] is False
+    if occ_review["ok"]:
+        assert "occupancy_label_only" not in occ_review["reasons"]
+    else:
+        assert "gate_set_already_catalog" in occ_review["reasons"]
+
 
 def test_catalog_gate_set_avoid_is_existing_crosses() -> None:
     from research.cf_propose_thesis import catalog_gate_set_avoid
@@ -462,3 +521,66 @@ def test_clone_retry_reposts_catalog_gate_sets() -> None:
     assert len(once) == 1
     assert stuck["n_adoptable"] == 0
     assert "gate_set_already_catalog" in stuck["reviews"][0]["reasons"]
+
+    polar_calls: list[dict] = []
+
+    def _polar(*, url: str, body: bytes, headers: dict[str, str]) -> dict:
+        polar_calls.append(json.loads(body.decode("utf-8")))
+        if len(polar_calls) == 1:
+            return {
+                "ok": True,
+                "workers_ai_used": True,
+                "proposals": [
+                    {
+                        "thesis": (
+                            "Equity price drops when repo rate is high AND "
+                            "margin is crowded AND TA is bearish."
+                        ),
+                        "signal_definition": (
+                            "AND(repo_3m_down, crowded_margin, ta_down) PIT"
+                        ),
+                        "position_rule": "event-hold surprise sign",
+                        "datasets": [
+                            "equities_bars_daily",
+                            "fins_summary",
+                            "jsda_tokyo_repo_rates",
+                        ],
+                        "gates": ["repo_3m_down", "crowded_margin", "ta_down"],
+                        "status": "llm_not_catalog",
+                    }
+                ],
+            }
+        return {
+            "ok": True,
+            "workers_ai_used": True,
+            "proposals": [
+                {
+                    "thesis": (
+                        "PEAD when 3m repo is down AND margin is crowded "
+                        "AND total assets contracted"
+                    ),
+                    "signal_definition": (
+                        "AND(repo_3m_down, crowded_margin, ta_down) PIT"
+                    ),
+                    "position_rule": "event-hold surprise sign",
+                    "datasets": [
+                        "equities_bars_daily",
+                        "fins_summary",
+                        "jsda_tokyo_repo_rates",
+                    ],
+                    "gates": ["repo_3m_down", "crowded_margin", "ta_down"],
+                    "status": "llm_not_catalog",
+                }
+            ],
+        }
+
+    polar_out = invoke_cf_propose_thesis(
+        n=1, job_id="test-polar-retry", http_post=_polar
+    )
+    assert len(polar_calls) == 2
+    # Polarity is a title bug: do not avoid the unique AND on retry.
+    assert polar_calls[1]["why_avoid"][0] != "crowded_margin+repo_3m_down+ta_down"
+    assert polar_calls[1]["job_id"] == "test-polar-retry-retry"
+    assert polar_out["n_adoptable"] == 1
+    assert polar_out["auto_inject"] is False
+    assert polar_out["go"] is False
