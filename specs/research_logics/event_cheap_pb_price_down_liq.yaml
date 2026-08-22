@@ -22,6 +22,7 @@ params:
   min_hist: 20
   mode: event_cheap_pb_price_down_liq
   side: orig
+  gates: cheap_pb,price_down,liq_high
   cs_gate: None
   entry_shift: 0
   hold_tail_days: 0

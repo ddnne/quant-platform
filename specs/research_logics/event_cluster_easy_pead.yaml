@@ -5,6 +5,7 @@ headline: false
 generation_enabled: false
 promote_as_main: false
 go: false
+main_pool: true
 thesis: >
   Own-sign PEAD only in an earnings-cluster and easy overnight.
 signal_definition: >
@@ -21,8 +22,9 @@ params:
   min_hist: 20
   mode: event_cluster_easy_pead
   side: orig
+  gates: cluster,easy_funding
   cs_gate: None
   entry_shift: 0
   hold_tail_days: 0
 evaluator: research.unique_logic.event_combos.evaluate_combo_daily_mtm
-notes: combo thesis; CF daily_path is candidate-grade path
+notes: combo thesis; occupancy-gated; CF daily_path is SoT

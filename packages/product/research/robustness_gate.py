@@ -41,14 +41,16 @@ from typing import Any, Mapping, Sequence
 GATE_VERSION: str = "research-robustness-gate/v2"
 GATE_LABEL: str = "研究用頑健性ゲート・未宣言 (合格≠運用GO / READY未接続 / コスト込み)"
 
-MASS_RESEARCH: str = "NO-GO"
-PHASE7: str = "OFF"
-READY_DECLARED: bool = False
-OPERATIONAL_GO: bool = False
-SIGNIFICANCE_CLAIMED: bool = False
-EDGE_CLAIMED: bool = False
-CONNECTED_TO_READY: bool = False
-CONNECTED_TO_MASS: bool = False
+from research.freezes import (
+    CONNECTED_TO_MASS,
+    CONNECTED_TO_READY,
+    EDGE_CLAIMED,
+    MASS_RESEARCH,
+    OPERATIONAL_GO,
+    PHASE7,
+    READY_DECLARED,
+    SIGNIFICANCE_CLAIMED,
+)
 
 DEFAULT_MIN_PERIODS: int = 2
 DEFAULT_MIN_ACTIVE_PER_PERIOD: int = 20

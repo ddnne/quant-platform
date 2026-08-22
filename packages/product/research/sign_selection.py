@@ -52,12 +52,14 @@ from research.stats_metrics import (
 SIGN_SELECTION_VERSION: str = "research-sign-selection/v1"
 SIGN_SELECTION_WAVE: str = "W86 / w0816u"
 
-MASS_RESEARCH: str = "NO-GO"
-PHASE7: str = "OFF"
-READY_DECLARED: bool = False
-OPERATIONAL_GO: bool = False
-SIGNIFICANCE_CLAIMED: bool = False
-EDGE_CLAIMED: bool = False
+from research.freezes import (
+    EDGE_CLAIMED,
+    MASS_RESEARCH,
+    OPERATIONAL_GO,
+    PHASE7,
+    READY_DECLARED,
+    SIGNIFICANCE_CLAIMED,
+)
 
 SIGN_ORIGINAL: int = 1
 SIGN_INVERTED: int = -1

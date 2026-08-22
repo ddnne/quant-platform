@@ -22,6 +22,7 @@ params:
   min_hist: 20
   mode: event_div_payer_margin_down
   side: orig
+  gates: div_positive,margin_down
   cs_gate: None
   entry_shift: 0
   hold_tail_days: 0

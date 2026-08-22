@@ -5,6 +5,7 @@ headline: false
 generation_enabled: false
 promote_as_main: false
 go: false
+main_pool: true
 thesis: >
   Surprise CS rank skips Friday entries (weekend hold).
 signal_definition: >
@@ -21,8 +22,9 @@ params:
   min_hist: 20
   mode: surprise_xs_friday_skip
   side: orig
+  gates: friday_skip
   cs_gate: None
   entry_shift: 0
   hold_tail_days: 0
 evaluator: research.unique_logic.event_combos.evaluate_combo_daily_mtm
-notes: combo thesis; occupancy-gated (target 0.05-0.85); CF daily_path is SoT
+notes: combo thesis; occupancy-gated; CF daily_path is SoT

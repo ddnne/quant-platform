@@ -22,6 +22,7 @@ params:
   min_hist: 20
   mode: event_margin_down_price_down
   side: orig
+  gates: margin_down,price_down
   cs_gate: None
   entry_shift: 0
   hold_tail_days: 0

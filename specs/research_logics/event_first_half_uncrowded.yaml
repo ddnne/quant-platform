@@ -22,6 +22,7 @@ params:
   min_hist: 20
   mode: event_first_half_uncrowded
   side: orig
+  gates: first_half_month,uncrowded_margin
   cs_gate: None
   entry_shift: 0
   hold_tail_days: 0

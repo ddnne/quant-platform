@@ -897,6 +897,67 @@ COMPARE_COMPOSITION_IDS: tuple[str, ...] = (
 )
 
 
+def _index_composition(summary: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+    out: dict[str, dict[str, Any]] = {}
+    for r in list(summary.get("baskets") or []) + list(summary.get("metas") or []):
+        if not isinstance(r, Mapping):
+            continue
+        bid = str(r.get("basket_id") or r.get("meta_id") or "")
+        if bid:
+            out[bid] = dict(r)
+    return out
+
+
+def _majority_sign(n_pos: int, n_neg: int) -> int:
+    if n_pos > n_neg:
+        return 1
+    if n_neg > n_pos:
+        return -1
+    return 0
+
+
+def _compare_composition_rows(
+    summary_a: Mapping[str, Any],
+    summary_b: Mapping[str, Any],
+    *,
+    ids: Sequence[str],
+    label_a: str,
+    label_b: str,
+    a_better_class: str,
+    b_better_class: str,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    a = _index_composition(summary_a)
+    b = _index_composition(summary_b)
+    rows: list[dict[str, Any]] = []
+    b_majority_better: list[str] = []
+    for bid in ids:
+        ha, hb = a.get(bid) or {}, b.get(bid) or {}
+        pa, na = int(ha.get("n_pos_windows") or 0), int(ha.get("n_neg_windows") or 0)
+        pb, nb = int(hb.get("n_pos_windows") or 0), int(hb.get("n_neg_windows") or 0)
+        maj_a = _majority_sign(pa, na)
+        maj_b = _majority_sign(pb, nb)
+        if maj_a == 0 and maj_b == 0:
+            kind = "both_mixed"
+        elif maj_a == maj_b:
+            kind = "same_majority"
+        elif maj_b == 1 and maj_a != 1:
+            kind = b_better_class
+            b_majority_better.append(bid)
+        elif maj_a == 1 and maj_b != 1:
+            kind = a_better_class
+        else:
+            kind = "diverged"
+        rows.append(
+            {
+                "id": bid,
+                "class": kind,
+                label_a: {"n_pos": pa, "n_neg": na, "maj": maj_a},
+                label_b: {"n_pos": pb, "n_neg": nb, "maj": maj_b},
+            }
+        )
+    return rows, b_majority_better
+
+
 def compare_headn_vs_liq(
     summary_headn: Mapping[str, Any],
     summary_liq: Mapping[str, Any],
@@ -904,47 +965,16 @@ def compare_headn_vs_liq(
     ids: Sequence[str] | None = None,
 ) -> dict[str, Any]:
     """Same sleeves/metas across head-N 100 vs ADV liq100. Not a pass."""
-
-    def _index(summary: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
-        out: dict[str, dict[str, Any]] = {}
-        for r in list(summary.get("baskets") or []) + list(summary.get("metas") or []):
-            if not isinstance(r, Mapping):
-                continue
-            bid = str(r.get("basket_id") or r.get("meta_id") or "")
-            if bid:
-                out[bid] = dict(r)
-        return out
-
     want = tuple(ids) if ids is not None else COMPARE_COMPOSITION_IDS
-    a = _index(summary_headn)
-    b = _index(summary_liq)
-    rows: list[dict[str, Any]] = []
-    liq_majority_better = []
-    for bid in want:
-        ha, hb = a.get(bid) or {}, b.get(bid) or {}
-        pa, na = int(ha.get("n_pos_windows") or 0), int(ha.get("n_neg_windows") or 0)
-        pb, nb = int(hb.get("n_pos_windows") or 0), int(hb.get("n_neg_windows") or 0)
-        maj_h = 1 if pa > na else (-1 if na > pa else 0)
-        maj_l = 1 if pb > nb else (-1 if nb > pb else 0)
-        if maj_h == 0 and maj_l == 0:
-            kind = "both_mixed"
-        elif maj_h == maj_l:
-            kind = "same_majority"
-        elif maj_l == 1 and maj_h != 1:
-            kind = "liq_majority_better"
-            liq_majority_better.append(bid)
-        elif maj_h == 1 and maj_l != 1:
-            kind = "headn_majority_better"
-        else:
-            kind = "diverged"
-        rows.append(
-            {
-                "id": bid,
-                "class": kind,
-                "head_n": {"n_pos": pa, "n_neg": na, "maj": maj_h},
-                "liq": {"n_pos": pb, "n_neg": nb, "maj": maj_l},
-            }
-        )
+    rows, liq_majority_better = _compare_composition_rows(
+        summary_headn,
+        summary_liq,
+        ids=want,
+        label_a="head_n",
+        label_b="liq",
+        a_better_class="headn_majority_better",
+        b_better_class="liq_majority_better",
+    )
     return {
         "version": "composition-compare/v1",
         "head_n_job": summary_headn.get("job_id"),
@@ -959,6 +989,42 @@ def compare_headn_vs_liq(
         "notes": (
             "ADV composition vs head-N on the same sleeve/meta set. "
             "A liq 4/2 (or 5/1) is not a stability or pass call."
+        ),
+    }
+
+
+def compare_mid_vs_liq(
+    summary_mid: Mapping[str, Any],
+    summary_liq: Mapping[str, Any],
+    *,
+    ids: Sequence[str] | None = None,
+) -> dict[str, Any]:
+    """Same sleeves/metas across mid_n_explore vs ADV liq_large. Not a pass."""
+    want = tuple(ids) if ids is not None else COMPARE_COMPOSITION_IDS
+    rows, liq_majority_better = _compare_composition_rows(
+        summary_mid,
+        summary_liq,
+        ids=want,
+        label_a="mid_n",
+        label_b="liq",
+        a_better_class="mid_majority_better",
+        b_better_class="liq_majority_better",
+    )
+    return {
+        "version": "composition-compare/v2",
+        "mid_n_job": summary_mid.get("job_id"),
+        "liq_job": summary_liq.get("job_id"),
+        "ids": list(want),
+        "liq_majority_better": liq_majority_better,
+        "rows": rows,
+        "liq_print_is_not_stable": True,
+        "not_a_pass": True,
+        "go": False,
+        "promote_as_main": False,
+        "notes": (
+            "ADV mid_n_explore vs liq_large on the same sleeve/meta set "
+            "(refreshed ADV sleeve members). A liq 4/2 or 5/1 is not a "
+            "stability or pass call."
         ),
     }
 

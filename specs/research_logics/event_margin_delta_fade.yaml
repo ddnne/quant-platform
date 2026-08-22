@@ -22,6 +22,7 @@ params:
   min_hist: 20
   mode: event_margin_delta_fade
   side: flip
+  gates: margin_up
   cs_gate: None
   entry_shift: 0
   hold_tail_days: 0

@@ -207,11 +207,10 @@ from research.robustness_gate import evaluate_research_robustness_gate
 # Freeze / identity
 # ---------------------------------------------------------------------------
 
+from research.freezes import MASS_RESEARCH, PHASE7, READY_DECLARED
+
 CLASS_HYP_EVAL_VERSION: str = "class-hyp-eval/v7"
 CLASS_HYP_EVAL_WAVE: str = "W86 / w0816u"
-MASS_RESEARCH: str = "NO-GO"
-PHASE7: str = "OFF"
-READY_DECLARED: bool = False
 # Economic net bar (research): weak consistent-negative never candidate.
 MIN_ECONOMIC_NET: float = DEFAULT_MIN_ECONOMIC_NET
 MIN_ACTIVATION_RATE_MULTIDAY: float = DEFAULT_MIN_ACTIVATION_RATE_MULTIDAY

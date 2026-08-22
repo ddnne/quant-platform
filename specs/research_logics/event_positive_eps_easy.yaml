@@ -22,6 +22,7 @@ params:
   min_hist: 20
   mode: event_positive_eps_easy
   side: orig
+  gates: positive_eps,easy_funding
   cs_gate: None
   entry_shift: 0
   hold_tail_days: 0

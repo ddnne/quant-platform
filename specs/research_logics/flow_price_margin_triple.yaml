@@ -5,6 +5,7 @@ headline: false
 generation_enabled: false
 promote_as_main: false
 go: false
+main_pool: true
 thesis: >
   CS mom only when name-level margin is de-crowding (flow confirms price).
 signal_definition: >
@@ -21,8 +22,9 @@ params:
   min_hist: 20
   mode: flow_price_margin_triple
   side: orig
+  gates: 
   cs_gate: margin_decrowd
   entry_shift: 0
   hold_tail_days: 0
 evaluator: research.unique_logic.event_combos.evaluate_combo_daily_mtm
-notes: combo thesis; CF daily_path is candidate-grade path
+notes: combo thesis; occupancy-gated; CF daily_path is SoT

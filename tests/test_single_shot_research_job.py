@@ -1119,11 +1119,21 @@ def test_multiday_signal_eval_no_mass_ready_or_orders_ast():
     assert "place_order" not in called
     assert "submit_order" not in called
     assert "mint_ready" not in called
-    # Multiday must still hard-code freeze constants (not arm).
-    assert 'MASS_RESEARCH_STATUS: str = "NO-GO"' in src
-    assert 'PHASE7_STATUS: str = "OFF"' in src
-    assert "READY_DECLARED: bool = False" in src
+    # Multiday re-exports freeze SoT (not arm).
+    assert "MASS_RESEARCH_STATUS" in src
+    assert "PHASE7_STATUS" in src
+    assert "READY_DECLARED" in src
     assert "connected_to_mass_research_loop" in src
+    freeze_src = (
+        REPO_ROOT
+        / "packages"
+        / "research_runtime"
+        / "features"
+        / "research_freezes.py"
+    ).read_text(encoding="utf-8")
+    assert 'MASS_RESEARCH: str = "NO-GO"' in freeze_src
+    assert 'PHASE7: str = "OFF"' in freeze_src
+    assert "READY_DECLARED: bool = False" in freeze_src
 
 
 def test_multiday_reject_permanent_defer_before_d1():
@@ -1383,9 +1393,19 @@ def test_nextday_eval_no_mass_ready_or_orders_ast():
     assert "place_order" not in called
     assert "submit_order" not in called
     assert "mint_ready" not in called
-    assert 'MASS_RESEARCH_STATUS: str = "NO-GO"' in src
-    assert 'PHASE7_STATUS: str = "OFF"' in src
-    assert "READY_DECLARED: bool = False" in src
+    assert "MASS_RESEARCH_STATUS" in src
+    assert "PHASE7_STATUS" in src
+    assert "READY_DECLARED" in src
+    freeze_src = (
+        REPO_ROOT
+        / "packages"
+        / "research_runtime"
+        / "features"
+        / "research_freezes.py"
+    ).read_text(encoding="utf-8")
+    assert 'MASS_RESEARCH: str = "NO-GO"' in freeze_src
+    assert 'PHASE7: str = "OFF"' in freeze_src
+    assert "READY_DECLARED: bool = False" in freeze_src
     # Look-ahead policy comments / constants present.
     assert "no_feature_lookahead" in src
     assert "研究用・未宣言" in src

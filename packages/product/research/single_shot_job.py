@@ -143,15 +143,14 @@ _CODE_KEYED_TIP_DATASETS: frozenset[str] = frozenset(
 # Freeze constants (T9: tests assert these remain closed — do not arm)
 # ---------------------------------------------------------------------------
 
-MASS_RESEARCH_STATUS: str = "NO-GO"
-PHASE7_STATUS: str = "OFF"
-READY_PUBLICATION_STATUS: str = "OFF"
-READY_DECLARED: bool = False
-
-# No env/flag arming switches exist for Phase7 / mass research.
-# Keep empty frozensets as the explicit contract tests freeze against.
-PHASE7_ENV_ARMING_SWITCHES: frozenset[str] = frozenset()
-MASS_RESEARCH_ENV_ARMING_SWITCHES: frozenset[str] = frozenset()
+from research.freezes import (
+    MASS_RESEARCH as MASS_RESEARCH_STATUS,
+    MASS_RESEARCH_ENV_ARMING_SWITCHES,
+    PHASE7 as PHASE7_STATUS,
+    PHASE7_ENV_ARMING_SWITCHES,
+    READY_DECLARED,
+    READY_PUBLICATION as READY_PUBLICATION_STATUS,
+)
 
 # ---------------------------------------------------------------------------
 # COMPLETE 21 dataset ids (residual SoT held; do not invent 22)

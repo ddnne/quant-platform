@@ -51,6 +51,21 @@ from strategies.spec import (
     ValueMomentumAgreeRule,
 )
 
+from research.freezes import (
+    CONNECTED_TO_MASS,
+    CONNECTED_TO_READY,
+    EDGE_CLAIMED,
+    LIVE_ORDER_PATH_ENABLED,
+    LIVE_ORDERS,
+    MASS_RESEARCH,
+    OPERATIONAL_GO,
+    PAPER_CONTINUOUS,
+    PAPER_SCHEDULER_ARMED,
+    PHASE7,
+    READY_DECLARED,
+    S1_S5_UNREJECT,
+    SIGNIFICANCE_CLAIMED,
+)
 from research.hypothesis_classes import (
     CLASS_CROSS_SECTION_RELATIVE,
     CLASS_EVENT_POST,
@@ -66,19 +81,6 @@ from research.hypothesis_classes import (
 PAPER_CANDIDATE_SPEC_VERSION: str = "paper-candidate-spec/v1"
 PAPER_CANDIDATE_ADAPTER_VERSION: str = "paper-candidate-adapter/v2"
 PAPER_CANDIDATE_WAVE: str = "W86 / w0816u"
-MASS_RESEARCH: str = "NO-GO"
-PHASE7: str = "OFF"
-READY_DECLARED: bool = False
-OPERATIONAL_GO: bool = False
-CONNECTED_TO_READY: bool = False
-CONNECTED_TO_MASS: bool = False
-SIGNIFICANCE_CLAIMED: bool = False
-EDGE_CLAIMED: bool = False
-PAPER_SCHEDULER_ARMED: bool = False
-PAPER_CONTINUOUS: bool = False
-LIVE_ORDERS: bool = False
-LIVE_ORDER_PATH_ENABLED: bool = False
-S1_S5_UNREJECT: bool = False
 
 DEFAULT_ONE_WAY_COST: float = 0.001  # 10bp
 DEFAULT_MOMENTUM_FEATURE_VERSION: str = "1.0.0"

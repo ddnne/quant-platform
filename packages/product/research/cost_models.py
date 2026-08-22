@@ -56,6 +56,17 @@ from __future__ import annotations
 
 from typing import Any, Mapping, Sequence
 
+from research.freezes import (
+    CONNECTED_TO_MASS,
+    CONNECTED_TO_READY,
+    EDGE_CLAIMED,
+    MASS_RESEARCH,
+    OPERATIONAL_GO,
+    PHASE7,
+    READY_DECLARED,
+    SIGNIFICANCE_CLAIMED,
+)
+
 # ---------------------------------------------------------------------------
 # Identity / freeze (must never arm)
 # ---------------------------------------------------------------------------
@@ -81,15 +92,6 @@ COST_MODELS_PROOF_REPO_LINKED: str = (
 COST_MODELS_PROOF_LIQUIDITY_LINKED: str = (
     "docs/proof/w0816n_w79_liquidity_linked_cost_20260816.md"
 )
-
-MASS_RESEARCH: str = "NO-GO"
-PHASE7: str = "OFF"
-READY_DECLARED: bool = False
-OPERATIONAL_GO: bool = False
-SIGNIFICANCE_CLAIMED: bool = False
-EDGE_CLAIMED: bool = False
-CONNECTED_TO_READY: bool = False
-CONNECTED_TO_MASS: bool = False
 
 # Base transaction (matches robustness_gate / holding_metrics).
 DEFAULT_ONE_WAY_COST_BP: float = 10.0

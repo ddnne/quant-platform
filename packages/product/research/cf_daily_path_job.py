@@ -44,7 +44,7 @@ from research.cf_mass_eval_job import (
 )
 from research.daily_path_eval import git_sha
 from research.eval_registry import PROTOCOL_DAILY_PATH, is_daily_path_complete_cell
-from research.mass_strategy_factory import MASS_FACTORY_VERSION, MASS_RESEARCH
+from research.freezes import MASS_RESEARCH
 from research.unique_logic.constants import CF_EVENT_DAILY_PATH_IDS as _CF_EVENT_SET
 
 CF_EVENT_DAILY_PATH_IDS: tuple[str, ...] = tuple(sorted(_CF_EVENT_SET))
@@ -273,7 +273,7 @@ def run_cf_daily_path_fanout(
         "wall_sec": round(time.perf_counter() - t0, 3),
         "table_path": str(table_path),
         "git_sha": git_sha(cwd=ROOT),
-        "factory_version": MASS_FACTORY_VERSION,
+        "factory_version": FANOUT_VERSION,
         "promote_as_main": False,
         "go": False,
         "mass_research": MASS_RESEARCH,

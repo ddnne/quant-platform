@@ -435,6 +435,48 @@ def test_compare_headn_vs_liq_does_not_pass() -> None:
     assert "basket_theme_fund" in out["liq_majority_better"]
 
 
+def test_compare_mid_vs_liq_does_not_pass() -> None:
+    from research.combo_basket import compare_mid_vs_liq
+
+    mid = {
+        "job_id": "eval-cf-dp-baskets80-sleeves-20260822a",
+        "baskets": [
+            {
+                "basket_id": "basket_theme_fund",
+                "n_pos_windows": 3,
+                "n_neg_windows": 3,
+            },
+            {
+                "basket_id": "basket_theme_flow",
+                "n_pos_windows": 3,
+                "n_neg_windows": 3,
+            },
+        ],
+    }
+    liq = {
+        "job_id": "eval-cf-dp-baskets-liq100-sleeves-20260822a",
+        "baskets": [
+            {
+                "basket_id": "basket_theme_fund",
+                "n_pos_windows": 5,
+                "n_neg_windows": 1,
+            },
+            {
+                "basket_id": "basket_theme_flow",
+                "n_pos_windows": 5,
+                "n_neg_windows": 1,
+            },
+        ],
+    }
+    out = compare_mid_vs_liq(mid, liq)
+    assert out["version"] == "composition-compare/v2"
+    assert out["not_a_pass"] is True
+    assert out["go"] is False
+    assert out["liq_print_is_not_stable"] is True
+    assert "basket_theme_fund" in out["liq_majority_better"]
+    assert out["liq_majority_better"]  # majority-better is still not a pass
+
+
 def test_summarize_emits_candidate_family_counts() -> None:
     from research.eval_registry import summarize_daily_path_cells
 

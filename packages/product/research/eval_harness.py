@@ -56,6 +56,15 @@ from features.minimal_signal import (
     signal_definition,
 )
 from features.registry import get as get_feature
+from research.freezes import (
+    CONNECTED_TO_MASS_RESEARCH_LOOP,
+    DENSIFY,
+    LOCAL_SOT,
+    MASS_RESEARCH,
+    ORDER_EXECUTION,
+    PHASE7,
+    READY_PUBLICATION,
+)
 from research.robustness_gate import (
     DEFAULT_ONE_WAY_COST,
     annotate_period_rows_with_cost,
@@ -111,15 +120,6 @@ PIPELINE: tuple[str, ...] = (
     "next_day_return_eval",
     "r2_batch_summary",
 )
-
-# Re-export freeze surface under harness names (same closed values).
-MASS_RESEARCH: str = MASS_RESEARCH_STATUS  # "NO-GO"
-PHASE7: str = PHASE7_STATUS  # "OFF"
-READY_PUBLICATION: str = READY_PUBLICATION_STATUS  # "OFF"
-ORDER_EXECUTION: bool = False
-CONNECTED_TO_MASS_RESEARCH_LOOP: bool = False
-DENSIFY: bool = False
-LOCAL_SOT: bool = False
 
 # Smoke 3 names for harness tip batches. Not the research ADV universe
 # (that is class_hyp_eval.EVAL_UNIVERSE_POOL / select_eval_universe).

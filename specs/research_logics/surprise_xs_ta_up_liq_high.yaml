@@ -22,6 +22,7 @@ params:
   min_hist: 20
   mode: surprise_xs_ta_up_liq_high
   side: orig
+  gates: ta_up,liq_high
   cs_gate: None
   entry_shift: 0
   hold_tail_days: 0

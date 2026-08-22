@@ -22,6 +22,7 @@ params:
   min_hist: 20
   mode: surprise_xs_uncrowded_skip_monday
   side: orig
+  gates: uncrowded_margin,skip_monday
   cs_gate: None
   entry_shift: 0
   hold_tail_days: 0

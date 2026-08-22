@@ -22,6 +22,7 @@ params:
   min_hist: 20
   mode: surprise_xs_not_first_week
   side: orig
+  gates: not_first_week
   cs_gate: None
   entry_shift: 0
   hold_tail_days: 0

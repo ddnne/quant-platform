@@ -22,6 +22,7 @@ params:
   min_hist: 20
   mode: surprise_xs_skip_tuesday
   side: orig
+  gates: skip_tuesday
   cs_gate: None
   entry_shift: 0
   hold_tail_days: 0

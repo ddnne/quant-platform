@@ -22,6 +22,7 @@ params:
   min_hist: 20
   mode: event_cheap_pb_uncrowded
   side: orig
+  gates: cheap_pb,uncrowded_margin
   cs_gate: None
   entry_shift: 0
   hold_tail_days: 0

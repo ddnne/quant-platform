@@ -5,6 +5,7 @@ headline: false
 generation_enabled: false
 promote_as_main: false
 go: false
+main_pool: true
 thesis: >
   CS mom mid-month only when overnight rose.
 signal_definition: >
@@ -21,8 +22,9 @@ params:
   min_hist: 20
   mode: rate_up_midmonth_cs
   side: orig
+  gates: 
   cs_gate: midmonth_overnight_up
   entry_shift: 0
   hold_tail_days: 0
 evaluator: research.unique_logic.event_combos.evaluate_combo_daily_mtm
-notes: combo thesis; occupancy-gated (target 0.05-0.85); CF daily_path is SoT
+notes: combo thesis; occupancy-gated; CF daily_path is SoT

@@ -503,12 +503,10 @@ TERM_STRUCTURE_REQUIRED: frozenset[str] = frozenset(
         "opt225_basevol_term_ratio",
     }
 )
-# Small-universe shards historically emptied these AND-gates. Parked until a
-# larger-universe re-eval fills occupancy. data_requirement_unmet / main_pool=false.
-# Isolate CPU/memory limit on 100-name r2_panels (CF 1102). Parked, not densified.
-# Cluster hist was O(n²) per event; Worker now uses a linear window series.
-# Cluster three completed on eval-cf-dp-liq100-cross-20260822a after linearize.
-# CS name-level fund extras × dates still 1102 at N=100 — stay parked.
+# Linearized (no longer isolate-parked). Cluster hist was O(n²) per event;
+# Worker now uses a linear window series. Cluster three completed on
+# eval-cf-dp-liq100-cross-20260822a. CS name-level fund extras were 1102 at
+# N=100; unparked after v21 csFundSnaps hoist + eval-cf-dp-cs-hoist-20260822a.
 WORKER_ISOLATE_LINEARIZED_OK: frozenset[str] = frozenset(
     {
         "event_eqar_high_cluster",
@@ -523,6 +521,8 @@ WORKER_ISOLATE_LINEARIZED_OK: frozenset[str] = frozenset(
 # Keep the set as the park mechanism; do not restore a 1102 without a path.
 WORKER_ISOLATE_LIMIT_IDS: frozenset[str] = frozenset()
 WORKER_ISOLATE_LIMIT_REASONS: dict[str, str] = {}
+# Small-universe shards historically emptied these AND-gates. Parked until a
+# larger-universe re-eval fills occupancy. data_requirement_unmet / main_pool=false.
 SPARSE_ON_15NAME_SHARD: frozenset[str] = frozenset(
     {
         "event_may_easing",

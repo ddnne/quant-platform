@@ -22,6 +22,7 @@ params:
   min_hist: 20
   mode: surprise_xs_margin_down_on_impulse
   side: orig
+  gates: margin_down,on_impulse
   cs_gate: None
   entry_shift: 0
   hold_tail_days: 0

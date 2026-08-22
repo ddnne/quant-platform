@@ -63,37 +63,78 @@ def infer_eval_track(*, max_codes: int) -> str:
     return EVAL_TRACK_LIQ_LARGE
 
 
-# Next research queue (not GO). Dense work, not +N calendar clones.
+# Next structural debt (not GO). Isolate park set is empty after v21
+# csFundSnaps hoist + eval-cf-dp-cs-hoist-20260822a. Dense work, not +N clones.
 NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
-    {
-        "id": "cs_fund_scan_linear",
-        "track": EVAL_TRACK_LIQ_LARGE,
-        "why": "csFundSnaps hoist shipped in v21; confirm N=100 isolate re-eval",
-        "not_a_pass": True,
-    },
-    {
-        "id": "sleeve_members_refresh",
-        "track": EVAL_TRACK_MID_N,
-        "why": "members refreshed on ADV tracks (eval-cf-dp-*-sleeves-20260822a); still not a pass",
-        "not_a_pass": True,
-    },
-    {
-        "id": "meta_not_a_pass_hold",
-        "track": EVAL_TRACK_LIQ_LARGE,
-        "why": "active metas stay descriptive blends; no correlation weights yet",
-        "not_a_pass": True,
-    },
     {
         "id": "catalog_yaml_as_sot",
         "track": EVAL_TRACK_LIQ_LARGE,
-        "why": "event_combos._SPECS duplicates specs/research_logics YAML",
+        "why": "event_combos._SPECS still duplicates specs/research_logics YAML; YAML should be SoT",
         "not_a_pass": True,
+        "go": False,
     },
     {
         "id": "offline_eval_shrink",
         "track": EVAL_TRACK_MID_N,
         "why": "class_hyp_eval/factory/single_shot are W78-W86 offline; CF daily_path is SoT",
         "not_a_pass": True,
+        "go": False,
+    },
+    {
+        "id": "factory_offline_shrink",
+        "track": EVAL_TRACK_LIQ_LARGE,
+        "why": "factory no longer clones combo templates; 5k-line offline factory still pulled by period-net driver",
+        "not_a_pass": True,
+        "go": False,
+    },
+    {
+        "id": "python_only_gates",
+        "track": EVAL_TRACK_LIQ_LARGE,
+        "why": "PYTHON_ONLY_EVENT_GATES exist in Python but not Worker COMBO_EVENT_GATES; CF path skips them",
+        "not_a_pass": True,
+        "go": False,
+    },
+    {
+        "id": "otc_parse_zero",
+        "track": EVAL_TRACK_MID_N,
+        "why": "jsda_otc remaining official 2002 PARSE_ZERO (2002-08-02, 2002-08-05); not invented COMPLETE",
+        "not_a_pass": True,
+        "go": False,
+    },
+    {
+        "id": "both_track_sleeve_durability",
+        "track": EVAL_TRACK_LIQ_LARGE,
+        "why": "sleeve members exist on ADV tracks; durability needs mid_n_explore AND liq_large, still not a pass",
+        "not_a_pass": True,
+        "go": False,
+    },
+    {
+        "id": "meta_not_a_pass_hold",
+        "track": EVAL_TRACK_LIQ_LARGE,
+        "why": "active metas stay descriptive blends; no correlation weights yet",
+        "not_a_pass": True,
+        "go": False,
+    },
+    {
+        "id": "worker_dispatch_params_gates",
+        "track": EVAL_TRACK_LIQ_LARGE,
+        "why": "Worker comboGatesOf reads params.gates; catalog YAML currently omits gates so CF dispatch can miss them",
+        "not_a_pass": True,
+        "go": False,
+    },
+    {
+        "id": "freeze_sot",
+        "track": EVAL_TRACK_LIQ_LARGE,
+        "why": "research.freezes + worker wrangler vars + features.research_freezes must stay one SoT; pins untouched",
+        "not_a_pass": True,
+        "go": False,
+    },
+    {
+        "id": "test_strip",
+        "track": EVAL_TRACK_MID_N,
+        "why": "offline class_hyp / factory tests still duplicate CF daily_path SoT; strip without adding scorecards",
+        "not_a_pass": True,
+        "go": False,
     },
     {
         "id": "no_go_until_both_tracks",

@@ -22,6 +22,7 @@ params:
   min_hist: 20
   mode: surprise_xs_ta_up_on_impulse
   side: orig
+  gates: ta_up,on_impulse
   cs_gate: None
   entry_shift: 0
   hold_tail_days: 0

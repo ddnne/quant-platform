@@ -5,6 +5,7 @@ headline: false
 generation_enabled: false
 promote_as_main: false
 go: false
+main_pool: true
 thesis: >
   Large surprise confirmed only when the repo curve is steep.
 signal_definition: >
@@ -21,8 +22,9 @@ params:
   min_hist: 20
   mode: event_large_surprise_steep_curve
   side: orig
+  gates: large_surprise,steep_curve
   cs_gate: None
   entry_shift: 0
   hold_tail_days: 0
 evaluator: research.unique_logic.event_combos.evaluate_combo_daily_mtm
-notes: combo thesis; CF daily_path is candidate-grade path
+notes: combo thesis; occupancy-gated; CF daily_path is SoT

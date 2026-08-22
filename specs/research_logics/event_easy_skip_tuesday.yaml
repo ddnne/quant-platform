@@ -22,6 +22,7 @@ params:
   min_hist: 20
   mode: event_easy_skip_tuesday
   side: orig
+  gates: easy_funding,skip_tuesday
   cs_gate: None
   entry_shift: 0
   hold_tail_days: 0

@@ -64,7 +64,21 @@ def parse_catalog_yaml(text: str) -> dict[str, Any]:
                         break
                     if ":" in ln:
                         k, _, rest = ln.strip().partition(":")
-                        params[k.strip()] = _parse_scalar(rest)
+                        key_p = k.strip()
+                        val = _parse_scalar(rest)
+                        if key_p == "gates":
+                            if val in (None, "", "None"):
+                                params[key_p] = []
+                            elif isinstance(val, str):
+                                params[key_p] = [
+                                    x.strip()
+                                    for x in val.split(",")
+                                    if x.strip() and x.strip() != "None"
+                                ]
+                            else:
+                                params[key_p] = [str(val)]
+                        else:
+                            params[key_p] = val
                     i += 1
                 data[key] = params
                 continue
@@ -143,6 +157,13 @@ def combo_yaml_text(spec: Mapping[str, Any]) -> str:
     params = dict(spec.get("params") or {})
     cs_gate = params.get("cs_gate")
     cs_s = "None" if cs_gate in (None, "None", "") else str(cs_gate)
+    gates_raw = params.get("gates")
+    if gates_raw is None:
+        gates_raw = spec.get("gates") or ()
+    if isinstance(gates_raw, str):
+        gates_txt = gates_raw.strip()
+    else:
+        gates_txt = ",".join(str(x) for x in list(gates_raw) if str(x).strip())
     datasets = list(spec.get("datasets") or (
         "equities_bars_daily",
         "fins_summary",
@@ -169,6 +190,7 @@ def combo_yaml_text(spec: Mapping[str, Any]) -> str:
         f"  min_hist: {int(params.get('min_hist') or 20)}\n"
         f"  mode: {lid}\n"
         f"  side: {params.get('side') or spec.get('side') or 'orig'}\n"
+        f"  gates: {gates_txt}\n"
         f"  cs_gate: {cs_s}\n"
         f"  entry_shift: {int(params.get('entry_shift') or 0)}\n"
         f"  hold_tail_days: {int(params.get('hold_tail_days') or 0)}\n"
@@ -193,6 +215,7 @@ def write_missing_combo_yaml(*, root: Path | None = None) -> list[str]:
             or spec.get("data_requirement_unmet")
             or spec.get("always_on_cs_sticky")
             or spec.get("worker_isolate_limit")
+            or "\n  gates:" not in path.read_text(encoding="utf-8")
         ):
             continue
         path.write_text(combo_yaml_text(spec), encoding="utf-8")

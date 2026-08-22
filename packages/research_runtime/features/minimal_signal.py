@@ -24,6 +24,13 @@ from __future__ import annotations
 
 from typing import Any, Mapping, Sequence
 
+from features.research_freezes import (
+    MASS_RESEARCH,
+    ORDER_EXECUTION,
+    PHASE7,
+    READY_DECLARED,
+)
+
 # ---------------------------------------------------------------------------
 # Identity (stable for R2 signal artifacts)
 # ---------------------------------------------------------------------------
@@ -61,12 +68,6 @@ DEFAULT_SIGNAL_DATASETS: tuple[str, ...] = (
 
 # Optional |volume_change_1d| gate. None = no volume gate (sign-only).
 DEFAULT_VOLUME_CHANGE_ABS_MIN: float | None = None
-
-# Freeze surface (must never arm).
-MASS_RESEARCH: str = "NO-GO"
-PHASE7: str = "OFF"
-READY_DECLARED: bool = False
-ORDER_EXECUTION: bool = False
 
 
 def sign_from_topix_relative(topix_relative: float | None) -> float | None:

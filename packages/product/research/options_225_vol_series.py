@@ -101,10 +101,12 @@ OPTIONS_225_VOL_SERIES_WAVE: str = "W95 / w0818e"
 DATASET_ID: str = "derivatives_bars_daily_options_225"
 GAP_POLICY: str = "disclose_only_no_ffill_no_invent"
 
-MASS_RESEARCH: str = "NO-GO"
-PHASE7: str = "OFF"
-READY_DECLARED: bool = False
-OPERATIONAL_GO: bool = False
+from research.freezes import (
+    MASS_RESEARCH,
+    OPERATIONAL_GO,
+    PHASE7,
+    READY_DECLARED,
+)
 
 # J-Quants: theoretical / IV fields populated from this date inclusive.
 IV_FIELDS_AVAILABLE_FROM: str = "2016-07-19"

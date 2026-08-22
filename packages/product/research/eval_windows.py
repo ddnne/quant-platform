@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from research.freezes import FROZEN_PIN_SNAPSHOT
+
 HONEST_3Y_WINDOWS: tuple[dict[str, Any], ...] = (
     {
         "window_id": "w2017_2019",
@@ -68,8 +70,4 @@ HONEST_3Y_WINDOWS: tuple[dict[str, Any], ...] = (
     },
 )
 
-FROZEN_PIN_SNAPSHOT: tuple[tuple[str, int, int | None, str], ...] = (
-    ("cross_section_hold_10", 10, 5, "KEEP"),
-    ("cross_section_hold_10_mom3", 10, 3, "PROMOTE"),
-    ("fundamentals_hold_10", 10, 10, "KEEP"),
-)
+# Re-export: pin tuples live in research.freezes.

@@ -74,6 +74,21 @@ from research.hypothesis_classes import (
     READY_DECLARED as HC_READY,
 )
 from research.cost_models import DEFAULT_ONE_WAY_COST
+from research.freezes import (
+    CONNECTED_TO_MASS,
+    CONNECTED_TO_READY,
+    CONTINUOUS_PAPER,
+    EDGE_CLAIMED,
+    FROZEN_DEFAULT_PATH,
+    LIVE_ORDERS,
+    MASS_RESEARCH,
+    OPERATIONAL_GO,
+    PHASE7,
+    READY_DECLARED,
+    S1_S5_UNREJECT,
+    SIGNIFICANCE_CLAIMED,
+    SIMPLE_DAILY_SIGN_AS_DIVERSITY,
+)
 from research.sign_selection import (
     SIGN_INVERTED,
     SIGN_ORIGINAL,
@@ -99,19 +114,6 @@ from features.class_signals import (
 
 MASS_FACTORY_VERSION: str = "mass-strategy-factory/v2.8"
 MASS_FACTORY_WAVE: str = "research-unique-logic"
-
-MASS_RESEARCH: str = "NO-GO"  # operational Mass remains NO-GO
-PHASE7: str = "OFF"
-READY_DECLARED: bool = False
-OPERATIONAL_GO: bool = False
-CONNECTED_TO_READY: bool = False
-CONNECTED_TO_MASS: bool = False
-EDGE_CLAIMED: bool = False
-SIGNIFICANCE_CLAIMED: bool = False
-S1_S5_UNREJECT: bool = False
-SIMPLE_DAILY_SIGN_AS_DIVERSITY: bool = False
-CONTINUOUS_PAPER: str = "UNARMED"
-LIVE_ORDERS: bool = False
 
 # Factory "mass" here means bulk research generation — never operational Mass.
 FACTORY_MASS_LOOP: str = "research_batch_only"
@@ -435,41 +437,7 @@ NUMERIC_ONLY_KNOBS: frozenset[str] = frozenset(
     }
 )
 
-# ---------------------------------------------------------------------------
-# Frozen default-path representatives (W83–W86) — DO NOT retune here
-# ---------------------------------------------------------------------------
-
-FROZEN_DEFAULT_PATH: tuple[dict[str, Any], ...] = (
-    {
-        "representative_id": "cross_section_hold_10",
-        "family_id": CLASS_CROSS_SECTION_RELATIVE,
-        "hold_days": 10,
-        "momentum_n": 5,
-        "long_frac": 0.3,
-        "short_frac": 0.3,
-        "stance": "KEEP",
-        "note": "W83–W86 default path; factory must not retune",
-    },
-    {
-        "representative_id": "cross_section_hold_10_mom3",
-        "family_id": CLASS_CROSS_SECTION_RELATIVE,
-        "hold_days": 10,
-        "momentum_n": 3,
-        "long_frac": 0.3,
-        "short_frac": 0.3,
-        "stance": "PROMOTE",
-        "note": "W85 promote; factory must not retune",
-    },
-    {
-        "representative_id": "fundamentals_hold_10",
-        "family_id": CLASS_FUNDAMENTALS_PRICE,
-        "hold_days": 10,
-        "momentum_n": 10,
-        "mode": "value_momentum_agree",
-        "stance": "KEEP",
-        "note": "W83–W86 default path; factory must not retune",
-    },
-)
+# Frozen default-path representatives live in research.freezes (do not retune).
 
 # Datasets the factory can satisfy offline (local mirrors + sqlite).
 FACTORY_AVAILABLE_DATASETS: frozenset[str] = frozenset(
@@ -2253,25 +2221,7 @@ def _build_logic_templates() -> dict[str, LogicTemplate]:
             ),
         ),
     ]
-    from research.unique_logic.event_combos import NEW_COMBO_LOGIC
-
-    bars = ("equities_bars_daily", "markets_calendar")
-    for spec in NEW_COMBO_LOGIC:
-        tpls.append(
-            LogicTemplate(
-                logic_id=str(spec["logic_id"]),
-                display_name=str(spec["logic_id"]).replace("_", " "),
-                thesis=str(spec.get("thesis") or ""),
-                signal_definition=str(spec.get("signal_definition") or spec.get("thesis") or ""),
-                position_rule=str(spec.get("position_rule") or ""),
-                datasets_used=tuple(spec.get("datasets") or bars),
-                family_id=str(spec.get("family_id") or "event_funding_combo"),
-                base_params=dict(spec.get("params") or {}),
-                structural_keys=("mode", "gates", "cs_gate", "side"),
-                generation_enabled=False,
-                notes="combo thesis; generation_enabled=False; not GO",
-            )
-        )
+    # Combo theses are YAML catalog + CF daily_path, not factory templates.
     return {t.logic_id: t for t in tpls}
 
 

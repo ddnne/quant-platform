@@ -22,6 +22,7 @@ params:
   min_hist: 20
   mode: overnight_down_skip_tuesday_cs
   side: orig
+  gates: 
   cs_gate: overnight_down_skip_tuesday
   entry_shift: 0
   hold_tail_days: 0

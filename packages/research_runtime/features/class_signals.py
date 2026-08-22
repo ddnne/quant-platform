@@ -29,6 +29,15 @@ from __future__ import annotations
 
 from typing import Any, Mapping, Sequence
 
+from features.research_freezes import (
+    MASS_RESEARCH,
+    ORDER_EXECUTION,
+    PHASE7,
+    READY_DECLARED,
+    S1_S5_UNREJECT,
+    SIMPLE_DAILY_SIGN,
+)
+
 # ---------------------------------------------------------------------------
 # Identity / freeze
 # ---------------------------------------------------------------------------
@@ -39,13 +48,6 @@ CLASS_SIGNALS_WAVE: str = "W95 / w0818e"
 SIGNAL_STATUS: str = "candidate"
 SIGNAL_VERSION: str = "1.5.0"
 CANDIDATE_ONLY: bool = False  # legs may be approved; signal status stays candidate
-
-MASS_RESEARCH: str = "NO-GO"
-PHASE7: str = "OFF"
-READY_DECLARED: bool = False
-ORDER_EXECUTION: bool = False
-S1_S5_UNREJECT: bool = False
-SIMPLE_DAILY_SIGN: bool = False
 
 # ---------------------------------------------------------------------------
 # Class ids (align with research.hypothesis_classes)

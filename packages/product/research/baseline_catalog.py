@@ -21,19 +21,21 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
-# ---------------------------------------------------------------------------
-# Freeze surface (must never arm)
-# ---------------------------------------------------------------------------
+from research.freezes import (
+    CONNECTED_TO_MASS,
+    CONNECTED_TO_READY,
+    EDGE_CLAIMED,
+    MASS_GENERATE_SIGNALS,
+    MASS_RESEARCH,
+    OPERATIONAL_GO,
+    PHASE7,
+    READY_DECLARED,
+    SIGNIFICANCE_CLAIMED,
+)
 
-MASS_RESEARCH: str = "NO-GO"
-PHASE7: str = "OFF"
-READY_DECLARED: bool = False
-OPERATIONAL_GO: bool = False
-CONNECTED_TO_READY: bool = False
-CONNECTED_TO_MASS: bool = False
-EDGE_CLAIMED: bool = False
-SIGNIFICANCE_CLAIMED: bool = False
-MASS_GENERATE_SIGNALS: bool = False
+# ---------------------------------------------------------------------------
+# Freeze surface (must never arm) — re-exported from research.freezes
+# ---------------------------------------------------------------------------
 
 CATALOG_VERSION: str = "research-baseline-catalog/v1"
 CATALOG_WAVE: str = "W65 / w0815bf"

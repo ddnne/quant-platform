@@ -22,6 +22,7 @@ params:
   min_hist: 20
   mode: surprise_xs_overnight_p10
   side: orig
+  gates: overnight_p10
   cs_gate: None
   entry_shift: 0
   hold_tail_days: 0

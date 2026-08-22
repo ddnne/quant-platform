@@ -51,16 +51,10 @@ from data_contracts.permanent_defer import (
     PERMANENT_DEFER_DATASETS,
     PERMANENT_DEFER_IDS,
 )
+from research.freezes import CONTINUOUS_PAPER, MASS_RESEARCH, PHASE7
 from research.mass_strategy_factory import (
-    CONTINUOUS_PAPER,
     LOGIC_TEMPLATES,
-    LOGIC_TEMPLATE_IDS,
     MASS_FACTORY_VERSION,
-    MASS_RESEARCH,
-    PHASE7,
-    MassFactoryConfig,
-    generate_strategy_batch,
-    run_batch_eval,
 )
 from research.single_shot_job import COMPLETE_21_DATASETS, default_r2_put
 
@@ -305,33 +299,46 @@ def is_unique_period_net_unsupported(logic_id: str) -> bool:
 def default_logic_specs(
     logic_ids: Sequence[str] | None = None,
 ) -> list[dict[str, Any]]:
-    """Build CF-ready logic specs from factory templates, then YAML catalog."""
+    """Build CF-ready logic specs.
+
+    Unique/combo params (including ``gates``) come from Python catalog rows.
+    YAML is declaration; it currently stores gates as a comma string. Factory
+    templates cover bar-native logics that have no unique_logic row.
+    """
     ids = list(logic_ids) if logic_ids is not None else list(CF_BAR_NATIVE_LOGIC_IDS)
     out: list[dict[str, Any]] = []
-    yaml_by_id: dict[str, dict[str, Any]] | None = None
+    from research.unique_logic import all_unique_logic_specs
+    from research.unique_logic.catalog import load_catalog_specs
+
+    py_by_id = {str(s.get("logic_id")): s for s in all_unique_logic_specs()}
+    yaml_by_id = {str(s.get("logic_id")): s for s in load_catalog_specs()}
     for lid in ids:
+        spec = py_by_id.get(str(lid)) or yaml_by_id.get(str(lid))
+        if spec:
+            params = dict(spec.get("params") or {})
+            g = params.get("gates")
+            if isinstance(g, str):
+                params["gates"] = [
+                    x.strip()
+                    for x in g.split(",")
+                    if x.strip() and x.strip() != "None"
+                ]
+            elif g is None and spec.get("gates") is not None:
+                params["gates"] = list(spec.get("gates") or [])
+            out.append(
+                {
+                    "logic_id": str(spec.get("logic_id") or lid),
+                    "family_id": str(spec.get("family_id") or "unique_logic"),
+                    "params": params,
+                    "thesis": spec.get("thesis") or "",
+                    "signal_definition": spec.get("signal_definition") or "",
+                    "position_rule": spec.get("position_rule") or "",
+                    "datasets_used": list(spec.get("datasets") or []),
+                }
+            )
+            continue
         tpl = LOGIC_TEMPLATES.get(lid)
         if tpl is None:
-            if yaml_by_id is None:
-                from research.unique_logic.catalog import load_catalog_specs
-
-                yaml_by_id = {
-                    str(s.get("logic_id")): s for s in load_catalog_specs()
-                }
-            spec = (yaml_by_id or {}).get(str(lid))
-            if spec:
-                out.append(
-                    {
-                        "logic_id": str(spec.get("logic_id") or lid),
-                        "family_id": str(spec.get("family_id") or "unique_logic"),
-                        "params": dict(spec.get("params") or {}),
-                        "thesis": spec.get("thesis") or "",
-                        "signal_definition": spec.get("signal_definition") or "",
-                        "position_rule": spec.get("position_rule") or "",
-                        "datasets_used": list(spec.get("datasets") or []),
-                    }
-                )
-                continue
             out.append(
                 {
                     "logic_id": lid,
@@ -1060,17 +1067,17 @@ def build_real_period_panel(
         load_bars_from_sqlite_rich,
         load_bars_ndjson_rich,
         resolve_bars_path,
+        select_eval_universe,
     )
 
     p = normalize_period_row(period)
     pid = str(p["period_id"])
-    if codes is None:
-        from research.class_hyp_eval import select_eval_universe
-
-        selected = select_eval_universe(max_codes=int(max_codes))
-    else:
-        selected = [str(c).strip() for c in codes if str(c).strip()]
-    selected = selected[: int(max_codes)]
+    pool = (
+        None
+        if codes is None
+        else [str(c).strip() for c in codes if str(c).strip()]
+    )
+    selected = select_eval_universe(max_codes=int(max_codes), pool=pool)
     if mirror_dir is not None:
         bars_path = resolve_bars_path(
             pid, mirror_dir=mirror_dir, prefer_full=True

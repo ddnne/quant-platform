@@ -5,17 +5,59 @@ from __future__ import annotations
 
 def test_three_default_pins_untouched() -> None:
     from research.daily_path_eval import assert_frozen_pins_untouched
-    from research.eval_windows import FROZEN_PIN_SNAPSHOT
-    from research.mass_strategy_factory import FROZEN_DEFAULT_PATH, MASS_RESEARCH, PHASE7, READY_DECLARED
+    from research.freezes import (
+        FROZEN_DEFAULT_PATH,
+        FROZEN_PIN_SNAPSHOT,
+        MASS_RESEARCH,
+        PHASE7,
+        READY_DECLARED,
+    )
+    from research.mass_strategy_factory import FROZEN_DEFAULT_PATH as FACTORY_PINS
 
     pack = assert_frozen_pins_untouched()
     assert pack["pins_untouched"] is True
     assert pack["frozen_defaults_retuned"] is False
     assert len(FROZEN_PIN_SNAPSHOT) == 3
     assert len(FROZEN_DEFAULT_PATH) == 3
+    assert FACTORY_PINS is FROZEN_DEFAULT_PATH
     assert MASS_RESEARCH == "NO-GO"
     assert READY_DECLARED is False
     assert PHASE7 == "OFF"
+
+
+def test_freeze_sot_reexports_match() -> None:
+    from features.research_freezes import MASS_RESEARCH as FEAT
+    from research.cf_daily_path_job import MASS_RESEARCH as CF
+    from research.freezes import MASS_RESEARCH as SOT
+    from research.hypothesis_classes import MASS_RESEARCH as HC
+    from research.mass_strategy_factory import MASS_RESEARCH as FAC
+
+    assert SOT == FEAT == HC == FAC == CF == "NO-GO"
+
+
+def test_factory_templates_do_not_clone_combo_catalog() -> None:
+    from research.mass_strategy_factory import LOGIC_TEMPLATES
+    from research.unique_logic.event_combos import NEW_COMBO_LOGIC
+
+    combo_ids = {s["logic_id"] for s in NEW_COMBO_LOGIC}
+    cloned = sorted(combo_ids & set(LOGIC_TEMPLATES))
+    assert cloned == []
+    assert "event_eqar_high_pead" not in LOGIC_TEMPLATES
+    assert "event_funding_stress_skip" in LOGIC_TEMPLATES
+
+
+def test_panel_builder_does_not_head_n_slice() -> None:
+    from pathlib import Path
+
+    src = (
+        Path(__file__).resolve().parents[1]
+        / "packages"
+        / "product"
+        / "research"
+        / "cf_mass_eval_job.py"
+    ).read_text(encoding="utf-8")
+    assert "selected[: int(max_codes)]" not in src
+    assert "select_eval_universe" in src
 
 
 def test_eval_tracks_forbid_head_n_and_are_not_a_pass() -> None:
@@ -75,3 +117,19 @@ def test_unknown_event_gate_fails_closed() -> None:
     occ = pack.get("occupancy") or pack.get("occupancy_frac") or 0.0
     n_on = int(pack.get("n_gate_on_days") or 0)
     assert n_on == 0 or float(occ) == 0.0 or pack.get("status") != "ok" or pack.get("n_entered") in (0, None)
+
+
+def test_harness_default_eval_codes_are_smoke_three() -> None:
+    from research.eval_harness import DEFAULT_EVAL_CODES, HARNESS_SMOKE_CODES
+
+    assert DEFAULT_EVAL_CODES == HARNESS_SMOKE_CODES == ("13010", "72030", "67580")
+
+
+def test_cf_combo_specs_carry_gates() -> None:
+    from research.cf_mass_eval_job import default_logic_specs
+
+    rows = default_logic_specs(["event_eqar_high_pead", "event_eqar_high_liq_high"])
+    by = {r["logic_id"]: r for r in rows}
+    assert by["event_eqar_high_pead"]["params"].get("gates")
+    assert "eq_ar_high" in by["event_eqar_high_pead"]["params"]["gates"]
+    assert "liq_high" in by["event_eqar_high_liq_high"]["params"]["gates"]

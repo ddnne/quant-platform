@@ -36,6 +36,17 @@ from __future__ import annotations
 from statistics import mean, median
 from typing import Any, Mapping, Sequence
 
+from research.freezes import (
+    CONNECTED_TO_MASS,
+    CONNECTED_TO_READY,
+    EDGE_CLAIMED,
+    MASS_RESEARCH,
+    OPERATIONAL_GO,
+    PHASE7,
+    READY_DECLARED,
+    SIGNIFICANCE_CLAIMED,
+)
+
 # ---------------------------------------------------------------------------
 # Identity / freeze (must never arm)
 # ---------------------------------------------------------------------------
@@ -45,15 +56,6 @@ HOLDING_METRICS_LABEL: str = (
     "仮定に依存・研究用保有・回転メトリクス・未宣言 "
     "(READY未接続 / Mass NO-GO / 運用GOではない)"
 )
-
-MASS_RESEARCH: str = "NO-GO"
-PHASE7: str = "OFF"
-READY_DECLARED: bool = False
-OPERATIONAL_GO: bool = False
-SIGNIFICANCE_CLAIMED: bool = False
-EDGE_CLAIMED: bool = False
-CONNECTED_TO_READY: bool = False
-CONNECTED_TO_MASS: bool = False
 
 # Match robustness_gate / single_shot research cost convention.
 DEFAULT_ONE_WAY_COST_BP: float = 10.0

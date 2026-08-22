@@ -22,6 +22,7 @@ params:
   min_hist: 20
   mode: event_cheap_iv_cheap_pb
   side: orig
+  gates: cheap_iv,cheap_pb
   cs_gate: None
   entry_shift: 0
   hold_tail_days: 0

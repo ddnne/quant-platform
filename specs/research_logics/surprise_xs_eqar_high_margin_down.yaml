@@ -22,6 +22,7 @@ params:
   min_hist: 20
   mode: surprise_xs_eqar_high_margin_down
   side: orig
+  gates: eq_ar_high,margin_down
   cs_gate: None
   entry_shift: 0
   hold_tail_days: 0

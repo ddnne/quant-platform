@@ -22,6 +22,7 @@ params:
   min_hist: 20
   mode: event_curve_flatten_pead
   side: orig
+  gates: curve_flatten
   cs_gate: None
   entry_shift: 0
   hold_tail_days: 0

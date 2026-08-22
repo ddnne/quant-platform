@@ -22,6 +22,7 @@ params:
   min_hist: 20
   mode: cs_eqar_low_fade
   side: orig
+  gates: 
   cs_gate: eq_ar_low_invert
   entry_shift: 0
   hold_tail_days: 0

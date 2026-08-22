@@ -22,6 +22,7 @@ params:
   min_hist: 20
   mode: event_margin_up_easy
   side: orig
+  gates: margin_up,easy_funding
   cs_gate: None
   entry_shift: 0
   hold_tail_days: 0

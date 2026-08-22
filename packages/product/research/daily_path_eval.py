@@ -19,7 +19,8 @@ _ADV_CTX: ContextVar[Mapping[str, float] | None] = ContextVar(
     "held_book_adv_by_code", default=None
 )
 
-from research.eval_windows import FROZEN_PIN_SNAPSHOT, HONEST_3Y_WINDOWS
+from research.eval_windows import HONEST_3Y_WINDOWS
+from research.freezes import assert_frozen_pins_untouched
 from research.stats_metrics import (
     equity_path_drawdown,
     evaluate_daily_path_dd_gate,
@@ -71,59 +72,6 @@ def scalar_f(v: Any) -> float | None:
 def fmt(v: Any, nd: int = 6) -> str:
     x = scalar_f(v)
     return f"{x:.{nd}f}" if x is not None else "—"
-
-
-def assert_frozen_pins_untouched(
-    *,
-    note: str = "daily_path_eval must not mutate 3-default pins",
-) -> dict[str, Any]:
-    from research.mass_strategy_factory import FROZEN_DEFAULT_PATH
-
-    by_id = {r["representative_id"]: r for r in FROZEN_DEFAULT_PATH}
-    ok = True
-    details: list[dict[str, Any]] = []
-    for rid, hold, mom, stance in FROZEN_PIN_SNAPSHOT:
-        r = by_id.get(rid)
-        if r is None:
-            ok = False
-            details.append({"representative_id": rid, "status": "MISSING"})
-            continue
-        match = (
-            int(r.get("hold_days") or -1) == hold
-            and int(r.get("momentum_n") or -1) == int(mom or -1)
-            and str(r.get("stance") or "") == stance
-        )
-        if not match:
-            ok = False
-        details.append(
-            {
-                "representative_id": rid,
-                "expected": {
-                    "hold_days": hold,
-                    "momentum_n": mom,
-                    "stance": stance,
-                },
-                "actual": {
-                    "hold_days": r.get("hold_days"),
-                    "momentum_n": r.get("momentum_n"),
-                    "stance": r.get("stance"),
-                },
-                "match": match,
-            }
-        )
-    pack = {
-        "pins_untouched": ok,
-        "n_pins": len(FROZEN_DEFAULT_PATH),
-        "details": details,
-        "frozen_defaults_retuned": False,
-        "note": note,
-    }
-    if not ok:
-        raise RuntimeError(
-            "FROZEN_DEFAULT_PATH drift — abort daily_path_eval: "
-            + json.dumps(details, default=str)
-        )
-    return pack
 
 
 def load_shard_bars(

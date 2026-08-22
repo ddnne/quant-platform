@@ -22,6 +22,7 @@ params:
   min_hist: 20
   mode: event_may_easing
   side: orig
+  gates: fy_results,overnight_easing
   cs_gate: None
   entry_shift: 0
   hold_tail_days: 0

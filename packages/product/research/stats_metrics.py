@@ -34,12 +34,14 @@ from typing import Any, Mapping, Sequence
 STATS_METRICS_VERSION: str = "research-stats-metrics/v1.2"
 STATS_METRICS_WAVE: str = "W100 / w0819c"
 
-MASS_RESEARCH: str = "NO-GO"
-PHASE7: str = "OFF"
-READY_DECLARED: bool = False
-OPERATIONAL_GO: bool = False
-SIGNIFICANCE_CLAIMED: bool = False
-EDGE_CLAIMED: bool = False
+from research.freezes import (
+    EDGE_CLAIMED,
+    MASS_RESEARCH,
+    OPERATIONAL_GO,
+    PHASE7,
+    READY_DECLARED,
+    SIGNIFICANCE_CLAIMED,
+)
 
 DEFAULT_TRADING_DAYS_PER_YEAR: int = 245
 

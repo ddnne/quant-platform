@@ -33,6 +33,7 @@ datasets:
 params:
   hold_days: 10
   momentum_n: 5
+  gates: eq_ar_high,pead
 evaluator: research.unique_logic.cs_overlays.evaluate_overnight_level_cs_tilt_daily_mtm
 """
     )
@@ -43,6 +44,7 @@ evaluator: research.unique_logic.cs_overlays.evaluate_overnight_level_cs_tilt_da
     assert spec["datasets"] == ["jsda_tokyo_repo_rates", "equities_bars_daily"]
     assert spec["params"]["hold_days"] == 10
     assert spec["params"]["momentum_n"] == 5
+    assert spec["params"]["gates"] == ["eq_ar_high", "pead"]
 
 
 def test_dispatch_unknown_logic_is_incomplete() -> None:

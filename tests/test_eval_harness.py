@@ -420,16 +420,28 @@ def test_eval_harness_ast_bans_mass_ready_orders():
 
 def test_eval_harness_source_freeze_literals():
     src = EVAL_HARNESS_PATH.read_text(encoding="utf-8")
+    freeze_src = (
+        REPO_ROOT
+        / "packages"
+        / "research_runtime"
+        / "features"
+        / "research_freezes.py"
+    )
+    # Harness re-exports; literals live in features.research_freezes.
     assert "MASS_RESEARCH" in src
-    assert "NO-GO" in src
-    assert "ORDER_EXECUTION: bool = False" in src
-    assert "CONNECTED_TO_MASS_RESEARCH_LOOP: bool = False" in src
-    assert "DENSIFY: bool = False" in src
+    assert "ORDER_EXECUTION" in src
+    assert "CONNECTED_TO_MASS_RESEARCH_LOOP" in src
+    assert "DENSIFY" in src
     assert "研究用・未宣言" in src
     assert "小サンプル" in src or "NEXTDAY_RESEARCH_LABEL" in src
     assert "os.environ" not in src
     assert "MASS_RESEARCH_ENABLE" not in src
     assert "PHASE7_ENABLE" not in src
+    fs = freeze_src.read_text(encoding="utf-8")
+    assert 'MASS_RESEARCH: str = "NO-GO"' in fs
+    assert "ORDER_EXECUTION: bool = False" in fs
+    assert "CONNECTED_TO_MASS_RESEARCH_LOOP: bool = False" in fs
+    assert "DENSIFY: bool = False" in fs
 
 
 # ---------------------------------------------------------------------------

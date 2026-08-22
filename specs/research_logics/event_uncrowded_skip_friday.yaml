@@ -22,6 +22,7 @@ params:
   min_hist: 20
   mode: event_uncrowded_skip_friday
   side: orig
+  gates: uncrowded_margin,friday_skip
   cs_gate: None
   entry_shift: 0
   hold_tail_days: 0

@@ -22,6 +22,7 @@ params:
   min_hist: 20
   mode: surprise_xs_first_half
   side: orig
+  gates: first_half_month
   cs_gate: None
   entry_shift: 0
   hold_tail_days: 0

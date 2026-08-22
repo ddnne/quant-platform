@@ -22,6 +22,7 @@ params:
   min_hist: 20
   mode: cs_eqar_high
   side: orig
+  gates: 
   cs_gate: eq_ar_high
   entry_shift: 0
   hold_tail_days: 0

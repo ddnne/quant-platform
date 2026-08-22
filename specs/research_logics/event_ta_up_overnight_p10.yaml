@@ -22,6 +22,7 @@ params:
   min_hist: 20
   mode: event_ta_up_overnight_p10
   side: orig
+  gates: ta_up,overnight_p10
   cs_gate: None
   entry_shift: 0
   hold_tail_days: 0
