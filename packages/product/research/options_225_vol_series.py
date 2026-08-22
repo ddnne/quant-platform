@@ -205,101 +205,80 @@ def _cm_dte_days(date: str, expiry: str | None) -> int | None:
     return (d1 - d0).days
 
 
+def _cm_dtes(
+    date: str,
+    day_rows: Sequence[Mapping[str, Any]],
+    *,
+    field: str,
+    min_dte: int | None = None,
+    after_cm: str | None = None,
+) -> dict[str, int]:
+    """Map CM → min DTE for rows whose ``field`` expiry is strictly after date."""
+    out: dict[str, int] = {}
+    floor = 0 if min_dte is None else max(0, int(min_dte))
+    for r in day_rows:
+        cm = r.get("cm")
+        exp = r.get(field)
+        if not cm or not exp or str(exp) <= date:
+            continue
+        if after_cm is not None and str(cm) <= after_cm:
+            continue
+        dte = _cm_dte_days(date, str(exp))
+        if dte is None or (min_dte is not None and dte < floor):
+            continue
+        cm_s = str(cm)
+        out[cm_s] = dte if cm_s not in out else min(out[cm_s], dte)
+    return out
+
+
+def _pick_cm(
+    buckets: Sequence[tuple[dict[str, int], str, bool]],
+    meta: dict[str, Any],
+) -> tuple[str | None, dict[str, Any]]:
+    for mapping, rule, near in buckets:
+        if mapping:
+            cm = min(mapping)
+            meta["cm_pick_rule"] = rule
+            meta["dte"] = mapping[cm]
+            meta["near_expiry_fallback"] = near
+            return cm, meta
+    return None, meta
+
+
 def _pick_front_cm(
     date: str,
     day_rows: Sequence[Mapping[str, Any]],
     *,
     min_dte_days: int = DEFAULT_ATM_MIN_DTE_DAYS,
 ) -> tuple[str | None, dict[str, Any]]:
-    """Pick front CM with optional near-expiry roll (W93).
-
-    Preference order (eligible = expiry > Date AND DTE >= min_dte_days):
-      1. earliest CM with LTD eligible
-      2. earliest CM with SQD eligible
-      3. earliest CM with LTD > Date (ignore min_dte; flag near_expiry_fallback)
-      4. earliest CM with SQD > Date
-      5. earliest CM >= Date[:7] / any CM
-
-    Returns ``(cm, meta)`` where meta records roll reason / dte.
-    """
+    """Pick front CM with optional near-expiry roll (W93)."""
     min_dte = max(0, int(min_dte_days))
-    cms_ltd_ok: dict[str, int] = {}
-    cms_sqd_ok: dict[str, int] = {}
-    cms_ltd_any: dict[str, int] = {}
-    cms_sqd_any: dict[str, int] = {}
-    cms_ge: set[str] = set()
-    month = date[:7]
-    for r in day_rows:
-        cm = r.get("cm")
-        if not cm:
-            continue
-        cm_s = str(cm)
-        ltd = r.get("ltd")
-        sqd = r.get("sqd")
-        if ltd and str(ltd) > date:
-            dte = _cm_dte_days(date, str(ltd))
-            if dte is not None:
-                cms_ltd_any[cm_s] = (
-                    dte if cm_s not in cms_ltd_any else min(cms_ltd_any[cm_s], dte)
-                )
-                if dte >= min_dte:
-                    cms_ltd_ok[cm_s] = (
-                        dte
-                        if cm_s not in cms_ltd_ok
-                        else min(cms_ltd_ok[cm_s], dte)
-                    )
-        if sqd and str(sqd) > date:
-            dte = _cm_dte_days(date, str(sqd))
-            if dte is not None:
-                cms_sqd_any[cm_s] = (
-                    dte if cm_s not in cms_sqd_any else min(cms_sqd_any[cm_s], dte)
-                )
-                if dte >= min_dte:
-                    cms_sqd_ok[cm_s] = (
-                        dte
-                        if cm_s not in cms_sqd_ok
-                        else min(cms_sqd_ok[cm_s], dte)
-                    )
-        if str(cm) >= month:
-            cms_ge.add(cm_s)
-
     meta: dict[str, Any] = {
         "min_dte_days": min_dte,
         "near_expiry_fallback": False,
         "cm_pick_rule": None,
         "dte": None,
     }
-    if cms_ltd_ok:
-        cm = min(cms_ltd_ok)
-        meta["cm_pick_rule"] = "ltd_min_dte"
-        meta["dte"] = cms_ltd_ok[cm]
+    cm, meta = _pick_cm(
+        (
+            (_cm_dtes(date, day_rows, field="ltd", min_dte=min_dte), "ltd_min_dte", False),
+            (_cm_dtes(date, day_rows, field="sqd", min_dte=min_dte), "sqd_min_dte", False),
+            (_cm_dtes(date, day_rows, field="ltd"), "ltd_any_near_expiry_fallback", True),
+            (_cm_dtes(date, day_rows, field="sqd"), "sqd_any_near_expiry_fallback", True),
+        ),
+        meta,
+    )
+    if cm:
         return cm, meta
-    if cms_sqd_ok:
-        cm = min(cms_sqd_ok)
-        meta["cm_pick_rule"] = "sqd_min_dte"
-        meta["dte"] = cms_sqd_ok[cm]
-        return cm, meta
-    if cms_ltd_any:
-        cm = min(cms_ltd_any)
-        meta["cm_pick_rule"] = "ltd_any_near_expiry_fallback"
-        meta["dte"] = cms_ltd_any[cm]
-        meta["near_expiry_fallback"] = True
-        return cm, meta
-    if cms_sqd_any:
-        cm = min(cms_sqd_any)
-        meta["cm_pick_rule"] = "sqd_any_near_expiry_fallback"
-        meta["dte"] = cms_sqd_any[cm]
-        meta["near_expiry_fallback"] = True
-        return cm, meta
+    month = date[:7]
+    cms_ge = {str(r["cm"]) for r in day_rows if r.get("cm") and str(r["cm"]) >= month}
     if cms_ge:
-        cm = min(cms_ge)
         meta["cm_pick_rule"] = "cm_ge_month"
-        return cm, meta
+        return min(cms_ge), meta
     cms_all = {str(r["cm"]) for r in day_rows if r.get("cm")}
     if cms_all:
-        cm = min(cms_all)
         meta["cm_pick_rule"] = "any_cm"
-        return cm, meta
+        return min(cms_all), meta
     return None, meta
 
 
@@ -404,28 +383,6 @@ def _atm_iv_at_cm(
     }
 
 
-def _eligible_cms_by_ltd(
-    date: str,
-    day_rows: Sequence[Mapping[str, Any]],
-    *,
-    min_dte_days: int,
-) -> dict[str, int]:
-    """Map CM → min LTD DTE for CMs with LTD > Date and DTE >= min_dte."""
-    min_dte = max(0, int(min_dte_days))
-    out: dict[str, int] = {}
-    for r in day_rows:
-        cm = r.get("cm")
-        ltd = r.get("ltd")
-        if not cm or not ltd or str(ltd) <= date:
-            continue
-        dte = _cm_dte_days(date, str(ltd))
-        if dte is None or dte < min_dte:
-            continue
-        cm_s = str(cm)
-        out[cm_s] = dte if cm_s not in out else min(out[cm_s], dte)
-    return out
-
-
 def _pick_next_cm(
     date: str,
     day_rows: Sequence[Mapping[str, Any]],
@@ -440,34 +397,23 @@ def _pick_next_cm(
         "dte": None,
         "near_expiry_fallback": False,
     }
-    eligible = _eligible_cms_by_ltd(date, day_rows, min_dte_days=min_dte_days)
-    later = {cm: dte for cm, dte in eligible.items() if cm > near_cm}
-    if later:
-        cm = min(later)
-        meta["cm_pick_rule"] = "ltd_min_dte_after_near"
-        meta["dte"] = later[cm]
-        return cm, meta
-    # fallback: any later CM with LTD > Date (ignore min_dte)
-    any_later: dict[str, int] = {}
-    for r in day_rows:
-        cm = r.get("cm")
-        ltd = r.get("ltd")
-        if not cm or str(cm) <= near_cm or not ltd or str(ltd) <= date:
-            continue
-        dte = _cm_dte_days(date, str(ltd))
-        if dte is None:
-            continue
-        cm_s = str(cm)
-        any_later[cm_s] = (
-            dte if cm_s not in any_later else min(any_later[cm_s], dte)
-        )
-    if any_later:
-        cm = min(any_later)
-        meta["cm_pick_rule"] = "ltd_any_after_near_fallback"
-        meta["dte"] = any_later[cm]
-        meta["near_expiry_fallback"] = True
-        return cm, meta
-    return None, meta
+    return _pick_cm(
+        (
+            (
+                _cm_dtes(
+                    date, day_rows, field="ltd", min_dte=min_dte_days, after_cm=near_cm
+                ),
+                "ltd_min_dte_after_near",
+                False,
+            ),
+            (
+                _cm_dtes(date, day_rows, field="ltd", after_cm=near_cm),
+                "ltd_any_after_near_fallback",
+                True,
+            ),
+        ),
+        meta,
+    )
 
 
 def build_daily_basevol_series(
@@ -505,6 +451,23 @@ def build_daily_basevol_series(
     return out
 
 
+def _settled_under(
+    date: str,
+    by_date: Mapping[str, Sequence[Mapping[str, Any]]],
+    *,
+    min_dte_days: int,
+) -> tuple[list[Mapping[str, Any]], float, str, dict[str, Any]] | None:
+    day = _prefer_settlement(by_date[date])
+    unders = [float(r["under_px"]) for r in day if r.get("under_px") is not None]
+    if not unders:
+        return None
+    under_px = _median(unders)
+    cm, cm_meta = _pick_front_cm(date, day, min_dte_days=min_dte_days)
+    if not cm:
+        return None
+    return list(day), under_px, cm, cm_meta
+
+
 def build_daily_atm_iv_series(
     rows: Sequence[Mapping[str, Any]] | Iterable[Mapping[str, Any]],
     *,
@@ -512,22 +475,16 @@ def build_daily_atm_iv_series(
 ) -> list[dict[str, Any]]:
     """Build ``[{date, atm_iv, strike, under_px, cm, pc_used, ...}]`` — no ffill.
 
-    **Compare-only** vs canonical BaseVol level (W94). W93 ``min_dte_days``
-    rolls off near-expiry front CM (default 6) so ATM IV tracks exchange
-    BaseVol instead of SQ-week DTE∈{1,2,3} blow-ups. Pass ``min_dte_days=0``
-    for legacy earliest-LTD>Date behavior. Never invents strikes.
+    Compare-only vs BaseVol. ``min_dte_days`` (default 6) rolls off SQ-week
+    fronts. Pass 0 for legacy earliest-LTD>Date. Never invents strikes.
     """
     by_date = _group_by_date(rows)
     out: list[dict[str, Any]] = []
     for date in sorted(by_date):
-        day = _prefer_settlement(by_date[date])
-        unders = [float(r["under_px"]) for r in day if r.get("under_px") is not None]
-        if not unders:
+        sess = _settled_under(date, by_date, min_dte_days=min_dte_days)
+        if sess is None:
             continue
-        under_px = _median(unders)
-        cm, cm_meta = _pick_front_cm(date, day, min_dte_days=min_dte_days)
-        if not cm:
-            continue
+        day, under_px, cm, cm_meta = sess
         atm = _atm_iv_at_cm(day, cm=cm, under_px=under_px)
         if atm is None:
             continue
@@ -629,14 +586,10 @@ def build_daily_skew_series(
     by_date = _group_by_date(rows)
     out: list[dict[str, Any]] = []
     for date in sorted(by_date):
-        day = _prefer_settlement(by_date[date])
-        unders = [float(r["under_px"]) for r in day if r.get("under_px") is not None]
-        if not unders:
+        sess = _settled_under(date, by_date, min_dte_days=min_dte_days)
+        if sess is None:
             continue
-        under_px = _median(unders)
-        cm, cm_meta = _pick_front_cm(date, day, min_dte_days=min_dte_days)
-        if not cm:
-            continue
+        day, under_px, cm, cm_meta = sess
         atm = _atm_iv_at_cm(day, cm=cm, under_px=under_px)
         if atm is None:
             continue
@@ -712,14 +665,10 @@ def build_daily_term_series(
     by_date = _group_by_date(rows)
     out: list[dict[str, Any]] = []
     for date in sorted(by_date):
-        day = _prefer_settlement(by_date[date])
-        unders = [float(r["under_px"]) for r in day if r.get("under_px") is not None]
-        if not unders:
+        sess = _settled_under(date, by_date, min_dte_days=min_dte_days)
+        if sess is None:
             continue
-        under_px = _median(unders)
-        near_cm, near_meta = _pick_front_cm(date, day, min_dte_days=min_dte_days)
-        if not near_cm:
-            continue
+        day, under_px, near_cm, near_meta = sess
         next_cm, next_meta = _pick_next_cm(
             date, day, near_cm=near_cm, min_dte_days=min_dte_days
         )

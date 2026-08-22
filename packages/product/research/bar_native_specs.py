@@ -1,8 +1,10 @@
 """CF bar-native logic specs.
 
-SoT for the 30 CF-evaluable bar-native logics. Factory templates consume
-this module for the overlapping ids (six factory-only ids stay offline).
+SoT for the 30 CF-evaluable bar-native logics (period-net). Factory templates
+consume this module for the overlapping ids (six factory-only ids stay offline).
 ``cf_mass_eval_job`` / ``cf_daily_path_job`` load this instead of the factory.
+
+Not the W65 rejected S1–S5 baseline catalog (``research.baseline_catalog``).
 """
 
 from __future__ import annotations

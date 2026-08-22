@@ -40,10 +40,8 @@ from data_contracts.permanent_defer import (
 )
 from features.runtime import FeatureContext
 from research.single_shot_job import (
-    COMPLETE_21_DATASET_SET,
     COMPLETE_21_DATASETS,
     DEFAULT_FEATURE_DATASETS,
-    RESEARCH_ARTIFACT_BUCKET,
     SingleShotJobError,
     _DEFAULT_WRANGLER,
     _DEFAULT_WRANGLER_CONFIG,
@@ -113,11 +111,7 @@ AVAILABLE_AT_REPAIR_POLICY: dict[str, Any] = {
             "datasets": ["markets_calendar"],
             "condition": "envelope.available_at day > event day",
             "action": "available_at = event_time",
-            "rationale": (
-                "Archive calendar available_at sometimes equals ingest wall-clock "
-                "(~2026) which fails historical as_of. Calendar is pre-known; "
-                "event_time is the honest research visibility for holiday flags."
-            ),
+            "rationale": "Calendar ingest wall-clock; event_time is research visibility.",
             "look_ahead": False,
         },
         "archive_ingest_pollution": {
@@ -131,13 +125,7 @@ AVAILABLE_AT_REPAIR_POLICY: dict[str, Any] = {
                 "year(available_at) >= 2026 AND year(event) < 2026"
             ),
             "action": "available_at = event_time",
-            "rationale": (
-                "Some R2 JSONL/archive reseals stamp available_at with 2026 "
-                "ingest wall-clock while event_time is historical (2022–2025). "
-                "That is not real post-event lag; research repair sets "
-                "available_at=event_time so PIT historical as_of works. "
-                "Does not rewrite R2 SoT. Not a densify."
-            ),
+            "rationale": "2026 ingest stamp on historical event; not real lag.",
             "look_ahead": False,
         },
         "missing_available_at_drop": {
@@ -158,10 +146,7 @@ AVAILABLE_AT_REPAIR_POLICY: dict[str, Any] = {
                 "(not archive_ingest_pollution pattern)"
             ),
             "action": "keep envelope available_at unchanged",
-            "rationale": (
-                "Bars/topix/fins envelopes with honest lag stay as-is. "
-                "Do not pull future visibility earlier than envelope evidence."
-            ),
+            "rationale": "Honest post-event lag stays as-is.",
             "look_ahead": False,
         },
     },
@@ -286,70 +271,19 @@ R2_ENVELOPE_FIELDS: tuple[str, ...] = (
     "raw_payload",
 )
 
-# FeatureContext resource → COMPLETE dataset + row field mapping.
+# FeatureContext resource → COMPLETE dataset pin (T2). Column detail is in
+# schema_mapping_document; this map is the load-time dataset id.
 FEATURE_CONTEXT_SCHEMA_MAP: dict[str, dict[str, Any]] = {
     "equity_bars_daily": {
         "dataset": "equities_bars_daily",
-        "code_fields": ("Code", "code"),
-        "date_fields": ("Date", "date"),
-        "natural_key_fields": ("Code", "Date"),
-        "event_time": "session_close ← Date (envelope event_time preferred)",
-        "available_at": "session_close ← Date (envelope available_at required for PIT)",
-        "normalized_row_keys": (
-            "source",
-            "code",
-            "date",
-            "event_time",
-            "available_at",
-            "volume",
-            "close",
-            "open",
-            "high",
-            "low",
-            "payload",
-            "raw_payload",
-        ),
         "feature_context_method": "get_equity_bars_daily",
     },
     "market_calendar": {
         "dataset": "markets_calendar",
-        "code_fields": (),
-        "date_fields": ("Date", "date"),
-        "natural_key_fields": ("Date",),
-        "event_time": "observation_date ← Date",
-        "available_at": "calendar_prepublished / ingest (envelope available_at required)",
-        "normalized_row_keys": (
-            "source",
-            "date",
-            "event_time",
-            "available_at",
-            "holiday_division",
-            "payload",
-            "raw_payload",
-        ),
         "feature_context_method": "get_market_calendar",
     },
     "jquants_records": {
-        "dataset": "{dataset}",  # e.g. indices_bars_daily_topix
-        "code_fields": ("Code", "code"),  # optional; topix has Date only
-        "date_fields": ("Date", "date"),
-        "natural_key_fields": ("Date",),  # or Code+Date depending on dataset
-        "event_time": "envelope event_time",
-        "available_at": "envelope available_at (PIT hard gate)",
-        "normalized_row_keys": (
-            "source",
-            "dataset",
-            "natural_key",
-            "event_time",
-            "available_at",
-            "payload",
-            "raw_payload",
-            "date",
-            "close",
-            "volume",
-            "Code",
-            "Date",
-        ),
+        "dataset": "{dataset}",
         "feature_context_method": "get_jquants_records",
         "s1_datasets": ("indices_bars_daily_topix",),
     },
@@ -1258,52 +1192,27 @@ def schema_mapping_document() -> dict[str, Any]:
         },
         "s1_column_map": {
             "equities_bars_daily": {
-                "Code": "payload.Code | natural_key.Code → row.code",
-                "Date": "payload.Date | natural_key.Date | event_time[:10] → row.date",
-                "event_time": "envelope.event_time",
+                "Code": "payload/natural_key Code → row.code",
+                "Date": "payload/natural_key Date → row.date",
                 "available_at": "envelope.available_at (PIT)",
-                "OHLCV": "payload O/H/L/C/Vo (+ Adj* aliases)",
             },
             "indices_bars_daily_topix": {
-                "Code": "none (Date-only natural key)",
                 "Date": "payload.Date | event_time[:10] → row.date",
-                "event_time": "envelope.event_time",
-                "available_at": "envelope.available_at (PIT)",
                 "close": "payload.C | payload.Close → row.close",
+                "available_at": "envelope.available_at (PIT)",
             },
             "markets_calendar": {
-                "Code": "none",
                 "Date": "payload.Date → row.date",
-                "event_time": "envelope.event_time",
-                "available_at": "envelope.available_at (PIT); research repair if ingest pollution",
                 "holiday_division": "payload.HolDiv | HolidayDivision",
+                "available_at": "envelope.available_at (PIT)",
             },
         },
         "bridge_expand_column_map": {
-            "fins_summary": {
-                "Code": "payload.Code → row.Code",
-                "Date": "payload.DiscDate | payload.Date | event_time[:10]",
-                "event_time": "envelope.event_time (disclosure clock)",
-                "available_at": "envelope.available_at preserved (post_date_preserve)",
-            },
-            "markets_margin_interest": {
-                "Code": "payload.Code → row.Code",
-                "Date": "payload.Date | event_time[:10]",
-                "event_time": "envelope.event_time",
-                "available_at": "envelope.available_at preserved (post_date_preserve)",
-            },
-            "markets_short_ratio": {
-                "S33": "payload.S33 → row.S33 / section",
-                "Date": "payload.Date | event_time[:10]",
-                "event_time": "envelope.event_time",
-                "available_at": "envelope.available_at preserved (post_date_preserve)",
-            },
-            "markets_margin_alert": {
-                "Code": "payload.Code → row.Code",
-                "Date": "payload.Date | event_time[:10]",
-                "event_time": "envelope.event_time",
-                "available_at": "envelope.available_at preserved (post_date_preserve)",
-            },
+            ds: {
+                "Date": "payload date | event_time[:10]",
+                "available_at": "envelope.available_at (PIT; documented repair only)",
+            }
+            for ds in BRIDGE_EXPAND_DATASETS
         },
         "available_at_repair_policy": AVAILABLE_AT_REPAIR_POLICY,
         "local_sot": False,
@@ -1377,8 +1286,6 @@ def resolve_history_source(value: str | None) -> str:
 
 
 __all__ = [
-    "COMPLETE_21_DATASETS",
-    "COMPLETE_21_DATASET_SET",
     "COMPLETE_21_R2_INVENTORY",
     "DEFAULT_R2_ROW_LIMIT_PER_DATASET",
     "FEATURE_CONTEXT_SCHEMA_MAP",
@@ -1386,9 +1293,7 @@ __all__ = [
     "HISTORY_SOURCE_R2",
     "HISTORY_SOURCES",
     "LIVE_R2_SAMPLE_KEYS",
-    "PERMANENT_DEFER_DATASETS",
     "PERMANENT_DEFER_R2_NOTE",
-    "PermanentDeferHistoryError",
     "R2GetFn",
     "R2FeatureContextError",
     "R2_ARCHIVE_KEY_PATTERN",
@@ -1398,7 +1303,6 @@ __all__ = [
     "R2_JSONL_KEY_PATTERN",
     "R2_LINE_SCHEMA",
     "R2_TABLE_PREFIX",
-    "RESEARCH_ARTIFACT_BUCKET",
     "AVAILABLE_AT_REPAIR_POLICY",
     "BRIDGE_EXPAND_DATASETS",
     "MULTI_SIGNAL_HISTORY_DATASETS",

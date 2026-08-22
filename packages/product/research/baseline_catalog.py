@@ -1,5 +1,8 @@
 """Research-only simple daily sign baseline catalog (W65 / w0815bf).
 
+Not the CF bar-native catalog (``research.bar_native_specs``). This module
+is the rejected S1–S5 marker only (W56 approved legs after cost-after eval).
+
 Purpose
 -------
 Document which COMPLETE-21 simple daily sign hypotheses are fixed as
