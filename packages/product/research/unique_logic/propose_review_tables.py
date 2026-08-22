@@ -231,6 +231,7 @@ EXTRA_TITLE_GATES: tuple[tuple[str, str], ...] = (
     ("eased funding", "easy_funding"),
     ("eps surprises", "eps_down"),
     ("eps surprise", "eps_down"),
+    ("eps growth", "eps_up"),
     ("sales contraction", "sales_down"),
     ("sales contracted", "sales_down"),
     ("poor sales", "sales_down"),

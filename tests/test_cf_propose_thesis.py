@@ -509,6 +509,12 @@ def test_review_proposal_row_occupancy_and_polarity_table() -> None:
             "occupancy_label_only",
             "PEAD when the repo curve inverted AND sales contracted AND PB is above its PIT median",
         ),
+        (
+            "EPS growth momentum when price is down AND sales are falling.",
+            ["price_down", "sales_down"],
+            "occupancy_label_only",
+            "PEAD when price is down AND sales contracted versus the last prior print",
+        ),
     ]
     for bad_thesis, gates, reason, good_thesis in rows:
         payload = {
