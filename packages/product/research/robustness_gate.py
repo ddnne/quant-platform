@@ -46,7 +46,7 @@ def annotate_period_rows_with_cost(
     *,
     one_way_cost: float = DEFAULT_ONE_WAY_COST,
 ) -> list[dict[str, Any]]:
-    """Copy period rows adding net_one_way / net_round_trip fields."""
+    """Copy period rows adding net_one_way fields."""
     out: list[dict[str, Any]] = []
     for raw in period_rows:
         row = dict(raw)
@@ -58,14 +58,9 @@ def annotate_period_rows_with_cost(
         net_ow = _as_float(row.get("net_one_way_mean_active"))
         if net_ow is None:
             net_ow = research_net_one_way(gross, one_way_cost=one_way_cost)
-        net_rt = _as_float(row.get("net_round_trip_mean_active"))
-        if net_rt is None and gross is not None:
-            net_rt = float(gross) - 2.0 * float(one_way_cost)
         row["gross_signed_mean_active"] = gross
         row["net_one_way_mean_active"] = net_ow
-        row["net_round_trip_mean_active"] = net_rt
         row["one_way_cost"] = float(one_way_cost)
-        row["one_way_cost_bp"] = float(one_way_cost) * 10_000.0
         out.append(row)
     return out
 

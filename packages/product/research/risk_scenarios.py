@@ -9,10 +9,6 @@ from __future__ import annotations
 from typing import Any, Mapping, Sequence
 
 RISK_SCENARIOS_VERSION: str = "research-risk-scenarios/v1"
-RISK_SCENARIOS_LABEL: str = (
-    "研究用リスクシナリオ評価・未宣言 "
-    "(crash/high_vol/rate/liquidity / READY未接続 / Mass closed)"
-)
 
 from features.research_freezes import (
     CONNECTED_TO_MASS,
@@ -84,7 +80,6 @@ def scenario_row(
     net_one_way_mean: float | None = None,
     not_applicable: bool = False,
     na_reason: str | None = None,
-    notes: str | None = None,
 ) -> dict[str, Any]:
     """Build one scenario metric row for :func:`evaluate_risk_scenarios`."""
     sid = str(scenario_id).strip()
@@ -100,7 +95,6 @@ def scenario_row(
         "net_sign": _sign_of(_as_float(net_one_way_mean)),
         "not_applicable": bool(not_applicable or st == "not_applicable"),
         "na_reason": str(na_reason).strip() if na_reason else None,
-        "notes": notes,
     }
     return row
 
@@ -396,7 +390,6 @@ def evaluate_risk_scenarios(
 __all__ = [
     "MIN_SCENARIO_SET",
     "REQUIRED_CORE_SCENARIOS",
-    "RISK_SCENARIOS_LABEL",
     "RISK_SCENARIOS_VERSION",
     "SCENARIO_CRASH",
     "SCENARIO_HIGH_VOL",

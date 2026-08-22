@@ -29,7 +29,6 @@ from research.stats_metrics import (
 )
 
 SIGN_SELECTION_VERSION: str = "research-sign-selection/v1"
-SIGN_SELECTION_WAVE: str = "W86 / w0816u"
 
 SIGN_ORIGINAL: int = 1
 SIGN_INVERTED: int = -1
@@ -88,17 +87,16 @@ def invert_period_net(
 def _side_pack(
     nets: Sequence[float | None],
     *,
-    hold_days: int | None,
     sign: int,
     label: str,
 ) -> dict[str, Any]:
     vals = [_finite(v) for v in nets]
     clean = [v for v in vals if v is not None]
-    stats = period_stats_report(clean, hold_days=hold_days)
+    stats = period_stats_report(clean)
     tpack = t_stat_vs_zero(clean)
     mean_net = sample_mean(clean)
-    n_pos = sum(1 for v in clean if v is not None and v > 0)
-    n_neg = sum(1 for v in clean if v is not None and v < 0)
+    n_pos = sum(1 for v in clean if v > 0)
+    n_neg = sum(1 for v in clean if v < 0)
     return {
         "sign": int(sign),
         "label": label,
@@ -162,8 +160,8 @@ def evaluate_sign_both_sides(
     elif nets_in is not None:
         n = len(nets_in)
     if n == 0:
-        empty = _side_pack([], hold_days=hold_days, sign=1, label="original")
-        empty_i = _side_pack([], hold_days=hold_days, sign=-1, label="inverted")
+        empty = _side_pack([], sign=1, label="original")
+        empty_i = _side_pack([], sign=-1, label="inverted")
         out = {
             "version": SIGN_SELECTION_VERSION,
             "original": empty,
@@ -207,12 +205,8 @@ def evaluate_sign_both_sides(
             invert_period_net(gross=g, net=n_i, amortized_cost=c)
         )
 
-    original = _side_pack(
-        orig_nets, hold_days=hold_days, sign=SIGN_ORIGINAL, label="original"
-    )
-    inverted = _side_pack(
-        inv_nets, hold_days=hold_days, sign=SIGN_INVERTED, label="inverted"
-    )
+    original = _side_pack(orig_nets, sign=SIGN_ORIGINAL, label="original")
+    inverted = _side_pack(inv_nets, sign=SIGN_INVERTED, label="inverted")
     ev_o = _nonzero_evidence(
         original, near_zero_abs=near_zero_abs, t_guideline=t_guideline
     )
@@ -266,10 +260,7 @@ def choose_sign(
         ok = bool(positive and evidence and hard_t_ok)
         return {
             "eligible": ok,
-            "positive_mean": positive,
             "economic_floor_ok": econ_ok,
-            "nonzero_evidence": evidence,
-            "hard_t_ok": hard_t_ok,
             "mean_net": mean_net,
             "t_stat": t,
         }
@@ -424,7 +415,7 @@ def evaluate_and_choose_sign(
         paper_mean_negative=paper_mean_negative,
         min_abs_t_hard=min_abs_t_hard,
     )
-    return dict(choice)
+    return choice
 
 
 def sign_selection_from_period_rows(
@@ -440,7 +431,6 @@ def sign_selection_from_period_rows(
     net_key: str = "net_one_way_mean_active",
     cost_key: str = "amortized_one_way_cost",
     status_key: str = "status",
-    period_id_key: str = "period_id",
 ) -> dict[str, Any]:
     """Apply sign selection to class_hyp-style period rows (status==ok)."""
     ok = [
@@ -455,7 +445,6 @@ def sign_selection_from_period_rows(
     grosses = [r.get(gross_key) for r in ok]
     nets = [r.get(net_key) for r in ok]
     costs = [r.get(cost_key) for r in ok]
-    pids = [str(r.get(period_id_key) or r.get("year") or f"p{i}") for i, r in enumerate(ok)]
     if all(c is None for c in costs):
         costs_arg: Sequence[float | None] | None = None
     else:
@@ -464,7 +453,6 @@ def sign_selection_from_period_rows(
         period_grosses=grosses,
         period_nets=nets,
         amortized_costs=costs_arg,
-        period_ids=pids,
         hold_days=hold_days,
         min_mean_net=min_mean_net,
         near_zero_abs=near_zero_abs,
@@ -481,7 +469,6 @@ __all__ = [
     "SIGN_INVERTED",
     "SIGN_ORIGINAL",
     "SIGN_SELECTION_VERSION",
-    "SIGN_SELECTION_WAVE",
     "choose_sign",
     "evaluate_and_choose_sign",
     "evaluate_sign_both_sides",

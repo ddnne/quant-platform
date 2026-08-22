@@ -1,4 +1,4 @@
-"""Statistical research metrics (t, Sharpe, win rate, payoff, DD, Calmar, IR).
+"""Statistical research metrics (t, Sharpe, win rate, payoff, DD, Calmar).
 
 Period t = mean / (s / sqrt(n)) with sample std. Period Sharpe uses
 periods_per_year=1. Trade Sharpe annualizes by TRADING_DAYS_PER_YEAR / hold.
@@ -637,27 +637,6 @@ def calmar_ratio(
     return float(mean_return) / abs(float(max_dd))
 
 
-def information_ratio(
-    values: Sequence[float | None],
-    *,
-    benchmark: float = 0.0,
-    periods_per_year: float = 1.0,
-) -> dict[str, Any]:
-    """IR vs constant benchmark (default 0 → same scale as Sharpe)."""
-    vals = _finite_floats(values)
-    residual = [v - float(benchmark) for v in vals]
-    sh = sharpe_ratio(residual, periods_per_year=periods_per_year, risk_free=0.0)
-    return {
-        "benchmark": float(benchmark),
-        "information_ratio": sh.get("sharpe"),
-        "n": sh.get("n"),
-        "tracking_error": sh.get("std"),
-        "excess_mean": sh.get("excess_mean"),
-        "periods_per_year": float(periods_per_year),
-        "reason": sh.get("reason"),
-    }
-
-
 def period_stats_report(
     period_nets: Sequence[float | None],
     *,
@@ -763,7 +742,6 @@ def stats_bar_check(
             abs_dd = None
 
     checks: dict[str, Any] = {
-        "min_t_stat_signed": float(min_abs_t),
         "min_abs_t": float(min_abs_t),
         "min_sharpe": float(min_sharpe),
         "min_win_rate": float(min_win_rate),
@@ -821,14 +799,6 @@ def stats_bar_check(
             "mean_net": stats.get("mean_net"),
             "calmar": stats.get("calmar"),
         },
-        "component_ok": {
-            "t_stat": t_ok,
-            "sharpe": sh_ok,
-            "win_rate": wr_ok,
-            "positive_periods": pos_ok,
-            "payoff": payoff_ok,
-            "max_dd": dd_ok,
-        },
         "fails": fails,
         **_freeze(),
     }
@@ -850,7 +820,6 @@ __all__ = [
     "calmar_ratio",
     "equity_path_drawdown",
     "evaluate_daily_path_dd_gate",
-    "information_ratio",
     "max_drawdown",
     "payoff_ratio",
     "period_stats_report",

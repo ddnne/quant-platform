@@ -145,7 +145,7 @@ def histogram_run_lengths(
     *,
     buckets: Sequence[tuple[int, int | None]] | None = None,
 ) -> list[dict[str, Any]]:
-    """Bucket run lengths into histogram rows ``{label, lo, hi, count}``."""
+    """Bucket run lengths into histogram rows ``{label, count}``."""
     bks = list(buckets) if buckets is not None else list(DEFAULT_HISTOGRAM_BUCKETS)
     counts = [0 for _ in bks]
     for raw in run_lengths:
@@ -163,14 +163,7 @@ def histogram_run_lengths(
                 break
     out: list[dict[str, Any]] = []
     for (lo, hi), c in zip(bks, counts):
-        out.append(
-            {
-                "label": _bucket_label(lo, hi),
-                "lo": lo,
-                "hi": hi,
-                "count": int(c),
-            }
-        )
+        out.append({"label": _bucket_label(lo, hi), "count": int(c)})
     return out
 
 
@@ -293,7 +286,6 @@ def panel_run_length_stats(
         "n_runs_total": dist["n_runs"],
         "run_length": dist,
         "per_code_mean_run_length": per_code_mean,
-        "non_zero_only": bool(non_zero_only),
     }
     out.update(_freeze_fields())
     return out
