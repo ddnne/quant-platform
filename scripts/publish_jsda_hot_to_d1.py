@@ -1,24 +1,9 @@
 #!/usr/bin/env python3
-"""Publish JSDA **hot-window** facts from local research DB → remote D1.
+"""Publish JSDA hot-window facts from local research DB → remote D1.
 
-Architecture (Phase 6.2 / CF-native plane):
-  - Full JSDA history SoT: local research SQLite + R2 structured.
-  - D1: hot tip only (same cutoff as ``storage_plane_status.hot_cutoff``).
-  - Dataset COMPLETE remains **receipt-owned** (coverage projection), not
-    dependent on D1 fact backfill.
-
-This closes the operational confusion where ``tokyo_repo_rows == 0`` on D1
-while ``jsda_tokyo_repo_rates`` is COMPLETE: after a successful hot publish,
-D1 fact counts reflect the hot tip without shipping full history (~30k+
-repo rows / 700k+ OTC).
-
-Usage::
-
-  .venv/bin/python scripts/publish_jsda_hot_to_d1.py --dry-run
-  .venv/bin/python scripts/publish_jsda_hot_to_d1.py --apply-remote
-
-Does **not** invent rows; only copies existing local facts with
-``as_of_date`` / publication date >= hot cutoff.
+Full history SoT is local SQLite + R2. D1 holds the hot tip only. Dataset
+COMPLETE stays receipt-owned. Copies existing local facts with as_of_date /
+publication date >= hot cutoff; does not invent rows.
 """
 
 from __future__ import annotations
@@ -46,7 +31,6 @@ from typing import Any, Iterable, Sequence
 
 ROOT = ensure_repo_root()
 
-# Align with packages/data_plane/data_access/service.py storage_plane_status
 DEFAULT_HOT_CUTOFF = "2026-07-01"
 DEFAULT_DB = ROOT / "data" / "structured" / "ingestion.sqlite"
 DEFAULT_WRANGLER_CWD = ROOT / "platform" / "workers" / "ingestion-premium"
@@ -104,8 +88,6 @@ def export_repo_hot_sql(
     hot_cutoff: str,
 ) -> tuple[list[str], int]:
     """Export jsda_repo_rates rows with as_of_date >= hot_cutoff."""
-    # D1 schema includes optional source_url/raw_digest/segment_id/source_format;
-    # leave them NULL. Core PK + rate + times + raw_payload from local.
     cols = [
         "source",
         "as_of_date",
@@ -133,7 +115,6 @@ def export_repo_hot_sql(
         f"-- table=jsda_repo_rates hot_cutoff={hot_cutoff} n={len(rows)}",
         f"-- policy=D1_hot_tip_only full_history_local_R2",
     ]
-    # Optional: prune cold tip on D1 to keep plane hot-only (idempotent).
     stmts.append(
         f"DELETE FROM jsda_repo_rates WHERE as_of_date < {_sql_escape(hot_cutoff)};"
     )
@@ -217,7 +198,6 @@ def probe_remote_repo_count(
         return None
     try:
         data = json.loads(r.stdout)
-        # wrangler --json shape: list of {results:[{n:..}]}
         if isinstance(data, list) and data:
             res = data[0].get("results") or []
             if res:
@@ -285,7 +265,6 @@ def main(argv: list[str] | None = None) -> int:
     )
     print(f"remote PRE tokyo_repo_rows={pre}")
 
-    # wrangler --file can choke on very large files; 252 rows is fine.
     proc = apply_remote(
         out, database=args.database, wrangler_cwd=args.wrangler_cwd
     )

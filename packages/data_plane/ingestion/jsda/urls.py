@@ -55,7 +55,7 @@ class JsdaArchiveIndex:
 
 @dataclass(frozen=True)
 class JsdaArchiveSegment:
-    """Resumable official segment; publication_label_date is a file label, not quote date."""
+    """Resumable official segment. publication_label_date is a file label, not quote date."""
 
     dataset_id: str
     segment_id: str
@@ -140,7 +140,7 @@ def _publication_date(fragment: str) -> Optional[str]:
 def discover_otc_reference_year_indexes(
     html: str, *, base: str = OTC_REFERENCE_INDEX
 ) -> List[JsdaArchiveIndex]:
-    """Official ``archiveYYYY.html`` links only — no synthesized years."""
+    """Official ``archiveYYYY.html`` links only; no synthesized years."""
     discovered: dict[int, JsdaArchiveIndex] = {}
     for href, _ in _ANCHOR_RE.findall(html or ""):
         absolute = urljoin(base, html_lib.unescape(href).strip())
@@ -157,7 +157,7 @@ def discover_otc_reference_segments(
     year: int,
     index_url: Optional[str] = None,
 ) -> List[JsdaArchiveSegment]:
-    """One official annual archive: CSV preferred; XLSX/XLS only if no CSV."""
+    """One official annual archive. CSV preferred; XLSX/XLS only if no CSV."""
     archive_url = index_url or urljoin(
         OTC_REFERENCE_INDEX, f"archive{int(year):04d}.html"
     )
@@ -213,7 +213,7 @@ def discover_otc_reference_segments(
 
 
 def resolve_download_links(html: str, *, base: str = INDEX) -> List[str]:
-    """Absolute data-file URLs from the JSDA index HTML."""
+    """Absolute data-file URLs from JSDA index HTML."""
     out: List[str] = []
     seen = set()
     for href in _LINK_RE.findall(html or ""):
@@ -231,7 +231,7 @@ def resolve_download_links(html: str, *, base: str = INDEX) -> List[str]:
 
 
 def pick_latest(links: List[str]) -> Optional[str]:
-    """Heuristic: pick the link whose filename contains the largest year token."""
+    """Pick the link whose filename contains the largest year token."""
     if not links:
         return None
     best_year = -1
@@ -251,7 +251,6 @@ def resolve_repo_links(html: str, *, base: str = REPO_INDEX) -> List[str]:
 
 
 def _is_repo_rate_file(url: str) -> bool:
-    """True if the filename looks like a rate-data file (not a 別紙 doc)."""
     name = url.rsplit("/", 1)[-1].lower()
     return not any(tok in name for tok in _REPO_NON_DATA)
 
@@ -281,7 +280,7 @@ def pick_repo_file(links: List[str]) -> Optional[str]:
 def discover_repo_timeseries(
     html: str, *, base: str = REPO_INDEX
 ) -> JsdaRepoTimeseries:
-    """Authoritative ``一覧`` workbook; filename heuristic is the fallback."""
+    """Authoritative ``一覧`` workbook; filename heuristic is fallback."""
     candidates: list[str] = []
     labelled: list[str] = []
     for href, label in _ANCHOR_RE.findall(html or ""):

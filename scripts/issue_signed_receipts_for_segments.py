@@ -1,19 +1,9 @@
 #!/usr/bin/env python3
 """Issue Ed25519-signed receipts for planned segments with real structured rows.
 
-Does NOT invent COMPLETE. It:
-  1. Finds planned coverage_segments for a dataset
-  2. Counts structured rows in jquants_records for the segment window
-  3. Loads matching raw bytes when available under data/raw
-  4. Issues SignedReceiptAuthority receipts with independent counts
-  5. Refreshes coverage ledger for the dataset
-  6. Surgical dataset_coverage re-agg (W70/W72 tip auto-collect path)
-
-RECOVERED rebuilds are never upgraded to signed COMPLETE without raw + structure.
-
-Post-seal tip path (bars_am / OTC continuous tip collect → seal):
-after ledger refresh, ``sync_dataset_coverage_from_segments`` keeps
-``dataset_coverage`` honest without a full rewrite of ``coverage_segments``.
+Does not invent COMPLETE. Counts structured rows, loads matching raw, issues
+signed receipts, refreshes the ledger, then surgically re-aggs dataset_coverage.
+RECOVERED rebuilds stay unsigned without raw + structure.
 """
 
 from __future__ import annotations
@@ -59,7 +49,6 @@ _DATE_ONLY_RE = re.compile(
 def _count_structured(
     conn: sqlite3.Connection, dataset: str, start: str, end: str
 ) -> int:
-    # event_time may be ISO with time; compare by date prefix when possible.
     row = conn.execute(
         """
         SELECT COUNT(*) FROM jquants_records
@@ -76,7 +65,7 @@ def _windows_overlap(a0: str, a1: str, b0: str, b1: str) -> bool:
 
 
 def _is_usable_raw(raw: bytes) -> bool:
-    """Reject empty/stub payloads (e.g. ``[]`` / ``{}``) — not honest evidence."""
+    """Reject empty/stub payloads (``[]`` / ``{}``)."""
     if not raw or len(raw) >= 5_000_000:
         return False
     stripped = raw.strip()
@@ -95,17 +84,10 @@ def _find_raw_bytes(
     segment_start: str,
     segment_end: str,
 ) -> bytes | None:
-    """Locate raw JSON whose filename/path is consistent with the segment window.
-
-    Prefer files that:
-      1. Contain the exact dataset id in the filename (not a sibling *calendar*)
-      2. Declare from=/to= windows that overlap the segment
-      3. Carry non-stub payload (prefer larger over empty ``[]``)
-    """
+    """Locate raw JSON whose filename/path is consistent with the segment window."""
     base = data_dir / "raw" / "jquants"
     if not base.is_dir():
         return None
-    # Exact dataset prefix preferred (markets_calendar_from=... not equities_earnings_calendar)
     prefix = f"{dataset}_"
     candidates = [
         p
@@ -131,7 +113,6 @@ def _find_raw_bytes(
             if _windows_overlap(segment_start, segment_end, fr, to):
                 score += 30
             else:
-                # Named for this dataset but wrong window — do not use.
                 continue
         else:
             md = _DATE_ONLY_RE.match(name)
@@ -152,11 +133,9 @@ def _find_raw_bytes(
             size = path.stat().st_size
         except OSError:
             continue
-        # Empty [] stubs are 2 bytes — never prefer them.
         if size < 8:
             continue
         ranked.append((score, size, path))
-    # Prefer window match score, then larger payload (real rows over stubs).
     ranked.sort(key=lambda item: (item[0], item[1]), reverse=True)
     for _score, _size, path in ranked[:120]:
         try:
@@ -187,27 +166,15 @@ def main() -> int:
     ap.add_argument(
         "--include-complete",
         action="store_true",
-        help="Also re-issue for segments already COMPLETE (default: skip COMPLETE).",
+        help="Also re-issue for segments already COMPLETE.",
     )
     ap.add_argument(
         "--order",
         choices=("asc", "desc"),
         default="desc",
-        help="Segment scan order by segment_start (default: desc = recent first).",
-    )
-    ap.add_argument(
-        "--parallel-hint",
-        action="store_true",
-        help="Print pointer to scripts/issue_receipts_parallel.py and exit 0.",
+        help="Scan order by segment_start.",
     )
     args = ap.parse_args()
-
-    if args.parallel_hint:
-        print(
-            "For multi-dataset worker-pool issuance use: "
-            "scripts/issue_receipts_parallel.py --datasets … --workers N"
-        )
-        return 0
 
     db = Path(args.db)
     if not db.is_file():
@@ -263,8 +230,6 @@ def main() -> int:
                 scope = {}
         scope_dict = dict(scope or {})
         unit = scope_dict.get("expected_item_unit")
-        # Non-event segments need explicit expected_items for COMPLETE
-        # (coverage_ledger.evaluate_segment). source_query unit → 1 plan.
         expected_items = row["expected_items"]
         if expected_items is None and unit == "source_query":
             expected_items = 1
@@ -297,11 +262,9 @@ def main() -> int:
             skipped["no_raw"] += 1
             print(f"skip {required.segment_id}: no raw bytes for window")
             continue
-        # Independent observed: source_query unit expects 1 exhausted query plan.
         observed = 1 if unit == "source_query" else structured
         if required.expected_items is not None and unit == "source_query":
             observed = int(required.expected_items)
-        # structured_reconciliation_required: raw_row_count must equal structured.
         raw_rows = structured
         receipt = authority.issue(
             required=required,
@@ -345,9 +308,6 @@ def main() -> int:
                 f"coverage {r.get('dataset')} status={r.get('status')} "
                 f"detail_keys={list((r.get('detail') or {}).keys())[:5]}"
             )
-        # W72 tip auto-collect path: surgical re-agg after issue+refresh so
-        # dataset_coverage tracks segment SoT (same as restore path / W70).
-        # Never invents segs; refuses empty COMPLETE; does not touch segments.
         reagg = sync_dataset_coverage_from_segments(
             conn,
             datasets=ds_list,

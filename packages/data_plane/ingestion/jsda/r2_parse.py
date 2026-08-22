@@ -1,15 +1,8 @@
 """JSDA R2 mirror parse — staging only, never false COMPLETE receipts.
 
-Phase 6.2.3: this path must NOT write Trusted COMPLETE receipts from
-parse-count alone. Formal path is:
-
-  CF raw → R2 → source-specific adapter → fact table → independent re-read
-  → reconcile → signed receipt → Coverage
-
-This module only:
-  * discovers raw artifacts
-  * parses into staging rows (in-memory or staging table)
-  * emits PARSED_STAGING_ONLY non-COMPLETE evidence
+Does not write Trusted COMPLETE from parse-count. Formal path is CF raw →
+R2 → adapter → fact table → independent re-read → signed receipt → Coverage.
+This module discovers raw, parses staging rows, and emits PARSED_STAGING_ONLY.
 """
 
 from __future__ import annotations
@@ -75,7 +68,6 @@ def discover_local_jsda_raw(
             if path.suffix.lower() not in {".csv", ".xls", ".xlsx"}:
                 continue
             segment_id = path.parent.name if path.parent != dataset_dir else path.stem
-            # Forbid placeholder 1970 segments — require real identity from path.
             if segment_id in {"1970-01-01", "unknown"}:
                 segment_id = f"file_{path.stem}"
             out.append(
@@ -96,12 +88,6 @@ def parse_artifact_rows(artifact: JsdaRawArtifact) -> list[dict[str, Any]]:
     suffix = path.suffix.lower()
     if suffix == ".csv":
         text = data.decode("utf-8", errors="strict")
-        try:
-            # Prefer utf-8; fall back to cp932 for JP market files.
-            pass
-        except Exception:
-            text = data.decode("cp932")
-        # detect encoding if replacement chars dominate
         if text.count("\ufffd") > 0:
             text = data.decode("cp932")
         reader = csv.DictReader(io.StringIO(text))
@@ -166,7 +152,6 @@ def run_jsda_staging_parse(
             rows = parse_artifact_rows(art)
             rows_parsed += len(rows)
             raw = art.path.read_bytes()
-            # Derive segment dates from segment_id when possible (YYYY-MM or file_*).
             seg_start, seg_end = _segment_dates(art.segment_id)
             required = RequiredCoverageSegment(
                 source="jsda",
@@ -192,7 +177,6 @@ def run_jsda_staging_parse(
                 observed_items=len(rows),
                 raw_page_count=1,
                 raw_row_count=len(rows),
-                # structured_row_count=0: no final fact table write in this path
                 structured_row_count=0,
                 pagination_exhausted=True,
                 digests={
@@ -226,21 +210,17 @@ def run_jsda_staging_parse(
 
 def _segment_dates(segment_id: str) -> tuple[str, str]:
     """Map segment_id to start/end; never invent 1970 for unknown."""
-    # calendar month form
     if len(segment_id) == 7 and segment_id[4] == "-":
         y, m = segment_id.split("-")
         import calendar
 
         last = calendar.monthrange(int(y), int(m))[1]
         return f"{y}-{m}-01", f"{y}-{m}-{last:02d}"
-    # ISO date
     if len(segment_id) == 10 and segment_id[4] == "-" and segment_id[7] == "-":
         return segment_id, segment_id
-    # file identity — use unknown range marker that is NOT 1970 epoch fake complete
     return "unknown", "unknown"
 
 
-# Backward-compatible name — clearly non-complete.
 run_trusted_jsda_parse = run_jsda_staging_parse
 
 

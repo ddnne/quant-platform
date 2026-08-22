@@ -30,9 +30,8 @@ def main() -> int:
     items_path = args.items or (log / "otc_items.json")
     progress = log / "otc_download_progress.jsonl"
     items = json.loads(items_path.read_text())
-    # bind names used below
-    global ITEMS, PROGRESS, RAW, ROOT, LOG
-    ITEMS, PROGRESS, RAW, ROOT, LOG = items, progress, raw, root, log
+    global ITEMS, PROGRESS, RAW, LOG
+    ITEMS, PROGRESS, RAW, LOG = items, progress, raw, log
     done: set[str] = set()
     if PROGRESS.exists():
         for ln in PROGRESS.read_text().splitlines():

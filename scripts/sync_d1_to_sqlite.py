@@ -5,13 +5,8 @@ Pulls structured fact tables from the ingestion-premium Worker (`/v1/export/d1`)
 and upserts them into local SQLite matching `storage/schema.py`.
 
 No `--url` / ``INGESTION_PREMIUM_URL`` → exit 2, no network.
-
-``--incremental`` applies ``change_seq > last_applied_change_seq``. The
-watermark advances only after a whole page is durable. Full table export is
-bootstrap; client-side timestamp filtering is compatibility-only.
-
-  python3 scripts/sync_d1_to_sqlite.py --db data/structured/ingestion.sqlite
-  python3 scripts/sync_d1_to_sqlite.py --incremental --db data/structured/ingestion.sqlite
+``--incremental`` applies ``change_seq > last_applied_change_seq`` after each
+durable page. Full table export is bootstrap.
 """
 
 from __future__ import annotations
@@ -142,7 +137,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _new_http_client():
-    """Lazy httpx import + factory. Kept tiny so tests can monkeypatch."""
+    """Lazy httpx factory so tests can monkeypatch."""
     try:
         import httpx  # type: ignore
     except ImportError as exc:  # pragma: no cover
@@ -170,7 +165,7 @@ _NO_AVAILABLE_AT_TABLES = frozenset({
 
 
 def _ensure_control_tables(conn: sqlite3.Connection) -> None:
-    """Create control-plane tables if the local DB was opened before migrations."""
+    """Create control-plane tables if the local DB predates migrations."""
     conn.executescript(
         """
         CREATE TABLE IF NOT EXISTS ingestion_validation (
@@ -285,7 +280,6 @@ def _sync_control_plane(
     cleaned = []
     dropped_cols: set[str] = set()
     for r in rows:
-        # Keep nullable evidence keys so later rows don't inherit the first row's shape.
         row = {}
         for k, v in r.items():
             if k == "__export_cursor":
@@ -375,7 +369,6 @@ def _sync_one(
     for r in rows:
         row = {k: v for k, v in r.items() if v is not None}
         if not row.get("available_at"):
-            # PIT hard gate — skip fact rows that would be rejected anyway.
             continue
         cleaned.append(row)
     if not cleaned:
@@ -539,7 +532,6 @@ def _sync_changes(
         query = {
             "after_seq": after_seq,
             "limit": page_limit,
-            # Harmless on the real endpoint; keeps old fixtures paginating.
             "table": "jquants_records",
         }
         endpoint = f"{base}/v1/export/changes?{urlencode(query)}"
@@ -550,7 +542,6 @@ def _sync_changes(
         pages += 1
 
         if payload.get("format") != "jquants-change-feed/v1":
-            # Fixture/compat only. A live old Worker 404s before this branch.
             filtered, _ = _filter_since(rows, legacy_since or "")
             seen += len(filtered)
             registered += _sync_one(store, "jquants_records", filtered)[1]
@@ -650,7 +641,6 @@ def main(argv=None) -> int:
                 change_feed_done = True
                 continue
             if args.incremental:
-                # Control tables are bootstrap exports; facts use the sequenced feed.
                 since = None if t in _NO_AVAILABLE_AT_TABLES else (
                     args.since or _derive_since(store, t)
                 )
@@ -734,7 +724,6 @@ def main(argv=None) -> int:
 
 
 def _maybe_publish_ops_projection(db_path, *, apply_remote: bool = False) -> None:
-    """Out-of-band ops projection publish after a successful sync."""
     import subprocess
 
     cmd = [

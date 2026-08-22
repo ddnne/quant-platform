@@ -3,11 +3,6 @@
 
 ThreadPool prepares candidates; DB writes stay serial. Never invent COMPLETE
 without raw. No backfill / Mass. Local sqlite is a research mirror, not CF SoT.
-
-  .venv/bin/python scripts/issue_receipts_parallel.py \\
-    --datasets markets_short_ratio,markets_breakdown --limit 8 --dry-run
-  .venv/bin/python scripts/issue_receipts_parallel.py \\
-    --datasets fins_details --struct-hint --limit 20 --workers 4
 """
 
 from __future__ import annotations
@@ -140,7 +135,6 @@ def _is_usable_raw(raw: bytes) -> bool:
     try:
         payload = json.loads(stripped)
     except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
-        # Non-JSON raw is admissible (already size-gated).
         return True
     if isinstance(payload, list) and len(payload) == 0:
         return False
@@ -164,7 +158,7 @@ def find_raw_bytes_indexed(
     segment_start: str,
     segment_end: str,
 ) -> bytes | None:
-    """Pick best non-empty raw file for a segment. None if none usable."""
+    """Best non-empty raw file for a segment, or None."""
     prefix = f"{dataset}_"
     month = segment_id if len(segment_id) == 7 else segment_id[:7]
     ranked: list[tuple[int, int, Path]] = []
@@ -392,7 +386,6 @@ def prepare_parallel(
         }
         for fut in as_completed(futs):
             results.append(fut.result())
-    # Stable order for deterministic run_id assignment: dataset, segment_start desc.
     results.sort(
         key=lambda r: (r.job.dataset, r.job.segment_start, r.job.segment_id),
         reverse=True,
@@ -472,7 +465,7 @@ def main(argv: list[str] | None = None) -> int:
         "--limit",
         type=int,
         default=8,
-        help="Max non-COMPLETE segments to scan per dataset (default 8).",
+        help="Max non-COMPLETE segments to scan per dataset.",
     )
     ap.add_argument("--min-structured", type=int, default=1)
     ap.add_argument("--workers", type=int, default=4, help="ThreadPool size.")
@@ -485,27 +478,27 @@ def main(argv: list[str] | None = None) -> int:
         "--order",
         choices=("asc", "desc"),
         default="desc",
-        help="Segment scan order by segment_start (default: desc).",
+        help="Scan order by segment_start.",
     )
     ap.add_argument(
         "--struct-hint",
         action="store_true",
-        help="Only scan non-COMPLETE segments that already have in-window structured rows.",
+        help="Only scan segments that already have in-window structured rows.",
     )
     ap.add_argument(
         "--dry-run",
         action="store_true",
-        help="Prepare only; do not sign/write receipts or refresh ledger.",
+        help="Prepare only; do not sign or refresh.",
     )
     ap.add_argument(
         "--no-refresh",
         action="store_true",
-        help="Issue receipts but skip coverage ledger refresh.",
+        help="Issue receipts but skip ledger refresh.",
     )
     ap.add_argument(
         "--json-summary",
         action="store_true",
-        help="Print machine-readable JSON summary on stdout (last line).",
+        help="Print JSON summary on stdout (last line).",
     )
     args = ap.parse_args(argv)
 

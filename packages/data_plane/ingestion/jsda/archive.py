@@ -334,8 +334,8 @@ def run_otc_reference_backfill(
 ) -> OtcArchiveBackfillReport:
     """Discover and ingest official OTC-reference files one day at a time.
 
-    Exact-scope receipts resume. Raw is saved before parse; every expected
-    segment gets SUCCESS or FAILED (including missing archive links).
+    Exact-scope receipts resume. Raw is saved before parse. Every expected
+    segment gets SUCCESS or FAILED, including missing archive links.
     """
     checked_at = checked_at or now_iso()
     to_year = to_year or date.today().year

@@ -1,7 +1,4 @@
-"""Parse JSDA bond-trade / OTC-reference / Tokyo-repo CSV (and XLSX/XLS).
-
-Encoding auto-detect, header aliases, number/date coerce. Feeds :mod:`normalize`.
-"""
+"""Parse JSDA bond-trade / OTC-reference / Tokyo-repo CSV (and XLSX/XLS)."""
 
 from __future__ import annotations
 
@@ -117,7 +114,7 @@ def _cell(row: List[str], idx: Optional[int]) -> str:
 
 
 def parse_csv(data, *, encoding: Optional[str] = None) -> List[dict]:
-    """Parse JSDA CSV bytes/text into clean records. ``encoding`` overrides auto-detect."""
+    """Parse JSDA CSV bytes/text. ``encoding`` overrides auto-detect."""
     text = data.decode(encoding, errors="replace") if (
         encoding and isinstance(data, (bytes, bytearray))
     ) else _decode(data)
@@ -197,22 +194,21 @@ _OTC_REFERENCE_ALIASES: dict[str, list[str]] = {
 }
 _OTC_HEADER_MARKERS = ("銘柄コード", "証券コード", "銘柄名", "債券名")
 
-# Official CSV is headerless (baisan_csv.pdf). 2015/2022 precision changes
-# did not move these columns.
+# Official CSV is headerless (baisan_csv.pdf); 2015/2022 did not move columns.
 _OTC_POSITIONAL_COLUMNS: dict[str, int] = {
     "publication_label_date": 0,
     "security_code": 2,
     "bond_name": 3,
     "maturity_date": 4,
     "coupon_rate": 5,
-    "average_yield": 6,   # 平均値・複利
-    "average_price": 7,   # 平均値・単価
-    "individual_investor_flag": 12,  # 銘柄属性・情報2 (2022-04-04+)
+    "average_yield": 6,
+    "average_price": 7,
+    "individual_investor_flag": 12,
     "high_price": 15,
     "low_price": 17,
-    "high_yield": 21,     # 最高値・複利
-    "low_yield": 23,      # 最低値・複利
-    "median_yield": 25,   # 中央値・複利
+    "high_yield": 21,
+    "low_yield": 23,
+    "median_yield": 25,
     "median_price": 27,
 }
 _OTC_POSITIONAL_MIN_COLUMNS = 29
@@ -253,7 +249,7 @@ def _otc_columns(headers: List[str]) -> dict[str, int]:
 
 
 def _looks_like_otc_positional_row(row: List[str]) -> bool:
-    """Recognize the governed JSDA headerless layout conservatively."""
+    """True if the row matches the governed headerless layout."""
     if len(row) < _OTC_POSITIONAL_MIN_COLUMNS:
         return False
     source_date = re.sub(r"\D", "", _cell(row, 0))
@@ -330,7 +326,7 @@ def parse_otc_reference_xlsx(
     publication_label_date: Optional[str] = None,
     quote_effective_date: Optional[str] = None,
 ) -> List[dict]:  # pragma: no cover - optional dependency exercised in dev
-    """Parse an OTC-reference XLSX with the same column contract as CSV."""
+    """Parse an OTC-reference XLSX using the CSV column contract."""
     try:
         from openpyxl import load_workbook
     except ImportError as exc:  # pragma: no cover
@@ -381,7 +377,7 @@ def _find_repo_header(rows: List[List[str]]) -> tuple[int, List[str]]:
         )
         if has_term_hdr and has_overnight:
             return i, list(row)
-    # 2) Explicit date-column headers (long/CSV layouts).
+    # Date-column headers (long/CSV layouts).
     for i, row in enumerate(rows):
         first = (row[0] if row else "") or ""
         if first.strip().startswith("※"):
@@ -389,7 +385,7 @@ def _find_repo_header(rows: List[List[str]]) -> tuple[int, List[str]]:
         normed = [_norm_header(c) for c in row]
         if any(any(mk in cell for mk in _REPO_DATE_MARKERS) for cell in normed):
             return i, list(row)
-    # 3) Fallback: first non-empty non-footnote row.
+    # First non-empty non-footnote row.
     for i, row in enumerate(rows):
         first = (row[0] if row else "") or ""
         if first.strip().startswith("※"):
@@ -400,7 +396,6 @@ def _find_repo_header(rows: List[List[str]]) -> tuple[int, List[str]]:
 
 
 def _col_first(headers: List[str], aliases: list[str]) -> Optional[int]:
-    """First column index whose normalized header contains any alias."""
     for idx, h in enumerate(headers):
         if any(a.lower() in h for a in aliases):
             return idx
@@ -410,7 +405,6 @@ def _col_first(headers: List[str], aliases: list[str]) -> Optional[int]:
 def _first_numeric_col(
     row: List[str], headers: List[str], skip: set[int]
 ) -> Optional[int]:
-    """First column with a parseable number, excluding ``skip`` indices."""
     for idx in range(min(len(row), len(headers))):
         if idx in skip:
             continue
@@ -582,7 +576,7 @@ def parse_repo_xls(data: bytes) -> List[dict]:
                     elif cell.ctype == xlrd.XL_CELL_NUMBER and isinstance(
                         value, (int, float)
                     ):
-                        # Unformatted Excel serial dates (≈41211); rates stay in [0, 10].
+                        # Unformatted Excel serial dates; rates stay in [0, 10].
                         num = float(value)
                         if 20000.0 <= num <= 60000.0:
                             try:

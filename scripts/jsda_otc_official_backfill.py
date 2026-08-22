@@ -3,13 +3,6 @@
 
 Picks remaining official month_csv days that are still PARTIAL, newer-first,
 n=50..100. Does not invent COMPLETE. Tip-wait stays unpublished.
-
-Examples
---------
-    uv run python scripts/jsda_otc_official_backfill.py \\
-        --year 2003 --n 100 --log-dir data/ops/otc_official_backfill
-    uv run python scripts/jsda_otc_fetch_official.py --log-dir data/ops/otc_official_backfill
-    uv run python scripts/jsda_otc_seal_official.py --log-dir data/ops/otc_official_backfill
 """
 from __future__ import annotations
 

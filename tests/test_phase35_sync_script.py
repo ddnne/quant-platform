@@ -1,12 +1,8 @@
 """Phase 3.5 — local sync script behavior.
 
-The sync script must:
-* exit 2 cleanly when no URL/config is available (never touch the network),
-* require a real worker URL — the secrets-proxy worker has no /v1/export/d1
-  endpoint, so falling back to it would silently fail.
-
-We test the offline paths only — live network smokes are marked with
-``@pytest.mark.live`` and skipped by default.
+Exit 2 when no URL/config is available (never touch the network). Require a
+real worker URL — the secrets-proxy worker has no /v1/export/d1. Offline
+paths only; live smokes are ``@pytest.mark.live``.
 """
 
 from __future__ import annotations

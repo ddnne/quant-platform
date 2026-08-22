@@ -41,7 +41,6 @@ RAW_ROOT = ROOT / "data" / "raw" / "jsda" / "jsda_otc_bond_reference_prices"
 DB = ROOT / "data" / "structured" / "ingestion.sqlite"
 FULL_OK_MIN = 100_000
 WAVE = "jsda_otc_official_backfill"
-W_LABEL = "OTC"
 ITEMS: list = []
 LOGDIR = ROOT / "data" / "ops"
 
@@ -392,7 +391,7 @@ def seal_day(conn, day, path, source_url, issuer):
 def main() -> int:
     import argparse
 
-    global ITEMS, LOGDIR, WAVE, W_LABEL
+    global ITEMS, LOGDIR, WAVE
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--log-dir", type=Path, required=True)
     p.add_argument("--items", type=Path, default=None, help="full_ok json; default <log-dir>/otc_full_ok.json")
@@ -400,7 +399,6 @@ def main() -> int:
     args = p.parse_args()
     LOGDIR = args.log_dir
     WAVE = str(args.wave)
-    W_LABEL = WAVE
     items_path = args.items or (LOGDIR / "otc_full_ok.json")
     ITEMS = json.loads(items_path.read_text())
     print(
@@ -524,7 +522,7 @@ def main() -> int:
     sealed = [r for r in results if r.get("status") == "SEALED"]
     summary = {
         "wave": WAVE,
-        "W": W_LABEL,
+        "W": WAVE,
         "as_of": datetime.now(timezone.utc).isoformat(),
         "pre_complete": pre,
         "post_complete": len(post_ids),
