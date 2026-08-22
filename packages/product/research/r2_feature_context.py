@@ -48,13 +48,15 @@ from research.single_shot_job import (
     _DEFAULT_WRANGLER,
     _DEFAULT_WRANGLER_CONFIG,
     _REPO_ROOT,
+    require_complete_21_only,
+)
+from research.single_shot_tip import (
     _decode_json_obj,
     _normalize_tip_bar_row,
     _normalize_tip_calendar_row,
     _normalize_tip_catalog_row,
     _pick_str,
     build_tip_feature_context,
-    require_complete_21_only,
 )
 
 # ---------------------------------------------------------------------------
@@ -1250,8 +1252,8 @@ def schema_mapping_document() -> dict[str, Any]:
             "null_available_at": "excluded (hard)",
             "implementation": [
                 "research.r2_feature_context.filter_history_rows(require_available_at=True)",
-                "research.single_shot_job._available_at_ok",
-                "research.single_shot_job.build_tip_feature_context PIT reader",
+                "research.single_shot_tip._available_at_ok",
+                "research.single_shot_tip.build_tip_feature_context PIT reader",
             ],
         },
         "s1_column_map": {
