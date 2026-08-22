@@ -80,10 +80,10 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "id": "inventory_bias_recorded",
         "track": EVAL_TRACK_LIQ_LARGE,
         "why": (
-            "recorded research/eval/job=eval-inventory-bias-20260824t/ "
+            "recorded research/eval/job=eval-inventory-bias-20260824u/ "
             "inventory_bias.json; assert_new_batch_cheap_pb_cap refuses "
-            "new batches at 20%; 24t flatten×sales and flatten×tight×px "
-            "band not sleeve (event_fund at 5); GOOD rotated to flatten×tight"
+            "new batches at 20%; 24u eps_up×px band not sleeve "
+            "(event_fund at 5, not thicker than flatten_eps); GOOD stays flatten×tight"
         ),
         "not_a_pass": True,
         "go": False,
@@ -234,8 +234,8 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "id": "adopt_occupancy_recorded",
         "track": EVAL_TRACK_LIQ_LARGE,
         "why": (
-            "eval-occupancy-audit-20260824t: 24t flatten×sales and "
-            "flatten×tight×px mid-band; not sleeve (event_fund at 5); not a pass"
+            "eval-occupancy-audit-20260824u: 24u eps_up×px mid-band; "
+            "not a sleeve member (event_fund at 5); not a pass"
         ),
         "not_a_pass": True,
         "go": False,

@@ -590,6 +590,18 @@ def test_review_proposal_row_occupancy_and_polarity_table() -> None:
             "occupancy_label_only",
             "PEAD when the repo curve flattened AND EPS contracted versus the last prior print. Skip missing PIT prints (no invent).",
         ),
+        (
+            "Equity market rallies when the price is down AND the earnings per share are rising, indicating a potential buying opportunity.",
+            ["price_down", "eps_up"],
+            "title_gate_polarity_mismatch",
+            "PEAD when EPS rose versus the last prior print AND price is down. Skip missing PIT prints (no invent).",
+        ),
+        (
+            "Investors become risk-averse when overnight funding is tight AND the repo curve inverted.",
+            ["invert_curve", "tight_funding"],
+            "occupancy_label_only",
+            None,
+        ),
     ]
     for bad_thesis, gates, reason, good_thesis in rows:
         payload = {

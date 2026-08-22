@@ -120,6 +120,7 @@ export const CF_NEW_EVENT_THESIS_IDS = [
   "event_eps_up_liq_high",
   "event_eps_up_margin_up_easing",
   "event_eps_up_overnight_easing",
+  "event_eps_up_px_down",
   "event_eps_up_uncrowded",
   "event_eqar_falling_afterclose_fade",
   "event_eqar_falling_easy_fade",

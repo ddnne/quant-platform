@@ -133,6 +133,9 @@ GATE_TITLE_CONTRA: tuple[tuple[str, tuple[str, ...]], ...] = (
         "price rise",
         "price is rising",
         "the price is rising",
+        "market rallies",
+        "equity market rallies",
+        "rallies",
     )),
     ("ta_down", ("ta up", "rising ta")),
     ("ta_up", ("ta down", "falling ta")),
@@ -158,7 +161,7 @@ GATE_TITLE_CONTRA: tuple[tuple[str, tuple[str, ...]], ...] = (
         "earnings tend to rise",
         "earnings rise",
     )),
-    ("eps_up", ("eps down", "falling eps")),
+    ("eps_up", ("eps down", "falling eps", "earnings down")),
     ("roe_low", ("high roe", "high return on equity", "rising roe")),
     ("margin_down", (
         "margin up",
@@ -242,6 +245,11 @@ GATE_OCCUPANCY_LABEL: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("curve_flatten", ("yield curve",)),
     ("np_negative", ("profitability is weak", "weak profitability", "weak profit")),
     ("eps_down", ("earnings disappointment", "earnings disappoint")),
+    ("eps_up", (
+        "earnings per share are rising",
+        "eps are rising",
+        "eps is rising",
+    )),
     ("price_down", ("under pressure", "price pressure")),
     ("crowded_margin", ("market is crowded",)),
 )
@@ -295,6 +303,9 @@ EXTRA_TITLE_GATES: tuple[tuple[str, str], ...] = (
     ("high roe", "roe_low"),
     ("high return on equity", "roe_low"),
     ("return on equity", "roe_low"),
+    ("risk-averse", "eq_ar_falling"),
+    ("risk averse", "eq_ar_falling"),
+    ("buying opportunity", "cheap_pb"),
     ("profitability is weak", "np_negative"),
     ("weak profitability", "np_negative"),
 )
@@ -384,6 +395,7 @@ OCCUPANCY_LABEL_EXCEPTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("overnight_p10", ("easiest", "percentile", "decile", "p10")),
     ("pb_rising", ("median", "pit median", "above median")),
     ("pre_mom", ("agrees", "pre-event", "pre entry", "surprise sign")),
+    ("eps_up", ("rose", "versus the last prior", "last prior print")),
     ("np_negative", ("net profit", "np is negative", "np negative")),
     ("crowded_margin", ("margin is crowded", "margin crowding")),
     ("curve_flatten", ("repo curve", "flattened")),
