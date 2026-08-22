@@ -2,6 +2,14 @@
 
 import type { Env } from "./types";
 import { isObject, putJson } from "./http";
+import {
+  EXTRA_TITLE_GATES,
+  GATE_OCCUPANCY_LABEL,
+  GATE_TITLE_CONTRA,
+  OCCUPANCY_LABEL_EXCEPTIONS,
+  PROPOSE_CONTRADICTORY_GATE_PAIRS,
+  SPARSE_GATE_COMBOS_REVIEW,
+} from "./propose_review_tables";
 
 function hasWorkersAi(env: Env): boolean {
   return Boolean(env.AI);
@@ -122,18 +130,9 @@ function normalizeProposalRow(
     return null;
   }
   const gset = new Set(gates);
-  const contra: string[][] = [
-    ["easy_funding", "tight_funding"],
-    ["crowded_margin", "uncrowded_margin"],
-    ["eq_ar_high", "eq_ar_low"],
-    ["eq_ar_rising", "eq_ar_falling"],
-    ["cheap_iv", "rich_iv"],
-    ["ta_up", "ta_down"],
-    ["overnight_easing", "overnight_tightening"],
-    ["margin_up", "margin_down"],
-    ["eps_up", "eps_down"],
-  ];
-  if (contra.some((pair) => pair.every((g) => gset.has(g)))) return null;
+  if (PROPOSE_CONTRADICTORY_GATE_PAIRS.some((pair) => pair.every((g) => gset.has(g)))) {
+    return null;
+  }
   const title = thesis.toLowerCase().replace(/×/g, "x");
   if (
     title.includes("liquidity x fundamentals") ||
@@ -293,108 +292,32 @@ async function llmProposals(
 /** Drop inverted / slang titles so they do not occupy an ok:true slot.
  * Python review_proposal_row remains the adopt gate. Never injects.
  */
+function occupancyExceptionTokens(gate: string): string[] {
+  for (const [g, tokens] of OCCUPANCY_LABEL_EXCEPTIONS) {
+    if (g === gate) return tokens;
+  }
+  if (gate.startsWith("eq_ar")) return ["eqar", "eq ar", "equity to asset"];
+  if (gate.startsWith("ta_")) return ["total assets"];
+  return [];
+}
+
 function titleOccupancyBad(title: string, gates: string[]): boolean {
   const polar = title.replace(/_/g, " ").replace(/-/g, " ");
   const gset = new Set(gates);
-  const contra: Array<[string, string[]]> = [
-    ["sales_down", ["rising sales", "sales up", "sales growth", "high sales", "sales increase"]],
-    ["np_negative", ["positive np", "positive profit", "rising profit", "profit up"]],
-    ["price_down", ["price up", "rising price", "increase in price", "price increase"]],
-    ["ta_down", ["ta up", "rising ta"]],
-    ["ta_up", ["ta down", "falling ta"]],
-    [
-      "eq_ar_falling",
-      [
-        "rising eqar",
-        "eqar rising",
-        "eq ar rising",
-        "high eqar",
-        "high equity",
-        "rising equity",
-        "equity risk premium is rising",
-        "rising equity risk",
-      ],
-    ],
-    ["eq_ar_rising", ["falling eqar", "eqar falling", "eq ar falling"]],
-    ["eq_ar_low", ["high eqar", "eqar high", "eq ar high"]],
-    ["eq_ar_high", ["low eqar", "eqar low", "eq ar low"]],
-    ["tight_funding", ["easy funding", "funding easing", "eased funding"]],
-    ["easy_funding", ["tight funding", "funding tight"]],
-    ["eps_down", ["eps up", "rising eps"]],
-    ["eps_up", ["eps down", "falling eps"]],
-    ["margin_down", ["margin up", "rising margin"]],
-    ["margin_up", ["margin down", "falling margin"]],
-    ["nky_vol_high_skip", ["volatility is high", "vol is high", "high volatility", "nky vol high"]],
-    ["crowded_margin", ["uncrowded"]],
-    ["uncrowded_margin", ["is crowded", "margin is crowded"]],
-    ["cheap_iv", ["rich iv", "iv is rich", "expensive iv"]],
-    ["rich_iv", ["cheap iv", "iv is cheap"]],
-    ["overnight_easing", ["tightening"]],
-    ["overnight_tightening", ["easing", "easy funding"]],
-    ["repo_3m_down", ["high repo", "repo rate is high", "rising repo", "repo up"]],
-  ];
-  for (const [gate, words] of contra) {
+  for (const [gate, words] of GATE_TITLE_CONTRA) {
     if (!gset.has(gate)) continue;
     if (words.some((w) => polar.includes(w))) return true;
   }
-  const labels: Array<[string, string[]]> = [
-    ["eq_ar_falling", ["risk appetite", "risk premia", "risk premium", "risk arbitrage"]],
-    ["eq_ar_rising", ["risk appetite", "risk premia", "risk premium", "risk arbitrage"]],
-    ["eq_ar_high", ["risk appetite", "risk premia", "risk premium", "risk arbitrage"]],
-    ["eq_ar_low", ["risk appetite", "risk premia", "risk premium", "risk arbitrage"]],
-    ["repo_3m_down", ["repo rates are low", "low repo", "repo is low"]],
-    ["ta_up", ["technical analysis", "technical signal", "ta signals"]],
-    ["ta_down", ["technical analysis", "technical signal", "ta signals"]],
-    ["overnight_p10", ["at 10%", "funding at 10", "10 percent", "10% predicts", "funding is loose", "loose"]],
-    ["pb_rising", ["is rising", "pb rose", "rising price-to-book", "price-to-book is rising"]],
-  ];
-  for (const [gate, words] of labels) {
+  for (const [gate, words] of GATE_OCCUPANCY_LABEL) {
     if (!gset.has(gate)) continue;
     if (!words.some((w) => polar.includes(w))) continue;
-    if (
-      gate.startsWith("eq_ar") &&
-      (polar.includes("eqar") ||
-        polar.includes("eq ar") ||
-        polar.includes("equity to asset"))
-    ) {
-      continue;
-    }
-    if (gate.startsWith("ta_") && polar.includes("total assets")) continue;
-    if (
-      gate === "overnight_p10" &&
-      ["easiest", "percentile", "decile", "p10"].some((t) => polar.includes(t))
-    ) {
-      continue;
-    }
-    if (
-      gate === "pb_rising" &&
-      ["median", "pit median", "above median"].some((t) => polar.includes(t))
-    ) {
-      continue;
-    }
+    if (occupancyExceptionTokens(gate).some((t) => polar.includes(t))) continue;
     return true;
   }
-  const sparse: string[][] = [
-    ["nky_vol_high_skip", "steep_curve"],
-    ["cheap_iv", "steep_curve"],
-    ["cheap_iv", "cheap_pb"],
-    ["cheap_iv", "margin_up", "repo_3m_down"],
-    ["margin_down", "eq_ar_rising", "steep_curve"],
-    ["rich_iv", "margin_up", "eq_ar_falling"],
-    ["div_positive", "cheap_iv"],
-  ];
-  if (sparse.some((combo) => combo.every((g) => gset.has(g)))) return true;
-  const extraTitle: Array<[string, string]> = [
-    ["tight funding", "tight_funding"],
-    ["easy funding", "easy_funding"],
-    ["sales contraction", "sales_down"],
-    ["sales contracted", "sales_down"],
-    ["poor sales", "sales_down"],
-    ["sales performance", "sales_down"],
-    ["roe decline", "roe_low"],
-    ["roe is low", "roe_low"],
-  ];
-  if (extraTitle.some(([phrase, gate]) => polar.includes(phrase) && !gset.has(gate))) {
+  if (SPARSE_GATE_COMBOS_REVIEW.some((combo) => combo.every((g) => gset.has(g)))) {
+    return true;
+  }
+  if (EXTRA_TITLE_GATES.some(([phrase, gate]) => polar.includes(phrase) && !gset.has(gate))) {
     return true;
   }
   return false;

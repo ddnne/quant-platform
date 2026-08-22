@@ -118,6 +118,7 @@ MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
             "event_pre_mom_liq_high",
             "event_afterclose_crowded",
             "surprise_xs_afterclose_flatten",
+            "event_flatten_eps_down",
         ),
     },
 )

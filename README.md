@@ -84,8 +84,10 @@ Cloudflare 上で immutable READY generation を pin できるまで公開しな
 
 ランタイムは **local 主系**（`LocalHttpClient` / httpx）。Cloudflare は Phase 3.5 から取得閉路も担う（Premium core）。詳細は [docs/data_sources.md](docs/data_sources.md)。
 
-**次は Phase 7（選抜・Knowledge・AI Gateway）** です。Phase 6.1 の framework 完了と、
-credential を使う production backfill / READY / deploy の運用完了は区別する。
+**Phase 7（選抜・Knowledge・AI Gateway）は NO-GO**（production READY + Coverage V2
+COMPLETE まで）。研究の次は propose→occupancy 閉ループであり Mass / GO ではない。
+Phase 6.1 の framework 完了と、credential を使う production backfill / READY / deploy
+の運用完了は区別する。
 
 詳細は [docs/architecture.md](docs/architecture.md) と [docs/roadmap.md](docs/roadmap.md) を参照してください。
 

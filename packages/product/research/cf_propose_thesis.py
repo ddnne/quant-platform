@@ -21,6 +21,13 @@ from research.unique_logic.constants import (
     PROPOSE_ALLOWED_GATES,
     SPARSE_GATE_COMBOS,
 )
+from research.unique_logic.propose_review_tables import (
+    EXTRA_TITLE_GATES,
+    GATE_OCCUPANCY_LABEL,
+    GATE_TITLE_CONTRA,
+    PROPOSE_CONTRADICTORY_GATE_PAIRS,
+    occupancy_exception_tokens,
+)
 
 # Copied from factory_propose._is_window_tweak_only (do not import factory).
 _TWEAK_WORDS = ("window", "hold_days only", "mom only", "frac only")
@@ -47,75 +54,8 @@ _PROMPT_DIRECTION_ECHO: tuple[str, ...] = (
     "disclosure x funding",
 )
 
-# LLM English titles sometimes invert gate polarity (sales_down → "Rising Sales").
-# Review follows GATES, not the title; reject the row rather than adopt inverted copy.
-_GATE_TITLE_CONTRA: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("sales_down", ("rising sales", "sales up", "sales growth", "high sales", "sales increase")),
-    ("np_negative", ("positive np", "positive profit", "rising profit", "profit up")),
-    ("price_down", ("price up", "rising price", "increase in price", "price increase")),
-    ("ta_down", ("ta up", "rising ta")),
-    ("ta_up", ("ta down", "falling ta")),
-    ("eq_ar_falling", (
-        "rising eqar",
-        "eqar rising",
-        "eq ar rising",
-        "high eqar",
-        "high equity",
-        "rising equity",
-        "equity risk premium is rising",
-        "rising equity risk",
-    )),
-    ("eq_ar_rising", ("falling eqar", "eqar falling", "eq ar falling")),
-    ("eq_ar_low", ("high eqar", "eqar high", "eq ar high")),
-    ("eq_ar_high", ("low eqar", "eqar low", "eq ar low")),
-    ("tight_funding", ("easy funding", "funding easing", "eased funding")),
-    ("easy_funding", ("tight funding", "funding tight")),
-    ("eps_down", ("eps up", "rising eps")),
-    ("eps_up", ("eps down", "falling eps")),
-    ("margin_down", ("margin up", "rising margin")),
-    ("margin_up", ("margin down", "falling margin")),
-    # nky_vol_high_skip occupancy is skip-when-high OFF, not "vol is high".
-    (
-        "nky_vol_high_skip",
-        ("volatility is high", "vol is high", "high volatility", "nky vol high"),
-    ),
-    ("crowded_margin", ("uncrowded",)),
-    ("uncrowded_margin", ("is crowded", "margin is crowded")),
-    ("cheap_iv", ("rich iv", "iv is rich", "expensive iv")),
-    ("rich_iv", ("cheap iv", "iv is cheap")),
-    ("overnight_easing", ("tightening",)),
-    ("overnight_tightening", ("easing", "easy funding")),
-    ("repo_3m_down", ("high repo", "repo rate is high", "rising repo", "repo up")),
-)
-
-# Occupancy is the gate predicate (EqAR change, repo-down). English slang
-# ("risk appetite", "repo is low") is not occupancy — reject rather than adopt.
-_GATE_OCCUPANCY_LABEL: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("eq_ar_falling", ("risk appetite", "risk premia", "risk premium", "risk arbitrage")),
-    ("eq_ar_rising", ("risk appetite", "risk premia", "risk premium", "risk arbitrage")),
-    ("eq_ar_high", ("risk appetite", "risk premia", "risk premium", "risk arbitrage")),
-    ("eq_ar_low", ("risk appetite", "risk premia", "risk premium", "risk arbitrage")),
-    ("repo_3m_down", ("repo rates are low", "low repo", "repo is low")),
-    ("ta_up", ("technical analysis", "technical signal", "ta signals")),
-    ("ta_down", ("technical analysis", "technical signal", "ta signals")),
-    ("overnight_p10", ("at 10%", "funding at 10", "10 percent", "10% predicts", "funding is loose", "loose")),
-    ("pb_rising", ("is rising", "pb rose", "rising price-to-book", "price-to-book is rising")),
-)
-
 PROPOSE_MAX_AND_GATES: int = 3
 PROPOSE_WHY_AVOID_LIMIT: int = 24
-
-PROPOSE_CONTRADICTORY_GATE_PAIRS: tuple[frozenset[str], ...] = (
-    frozenset({"easy_funding", "tight_funding"}),
-    frozenset({"crowded_margin", "uncrowded_margin"}),
-    frozenset({"eq_ar_high", "eq_ar_low"}),
-    frozenset({"eq_ar_rising", "eq_ar_falling"}),
-    frozenset({"cheap_iv", "rich_iv"}),
-    frozenset({"ta_up", "ta_down"}),
-    frozenset({"overnight_easing", "overnight_tightening"}),
-    frozenset({"margin_up", "margin_down"}),
-    frozenset({"eps_up", "eps_down"}),
-)
 
 STUB_PROPOSAL_TEMPLATES: tuple[dict[str, Any], ...] = (
     {
@@ -242,45 +182,22 @@ def review_proposal_row(proposal: Mapping[str, Any]) -> dict[str, Any]:
         ):
             reasons.append("title_not_occupancy")
         polar_blob = blob.replace("_", " ").replace("-", " ")
-        for gate, forbidden in _GATE_TITLE_CONTRA:
+        for gate, forbidden in GATE_TITLE_CONTRA:
             if gate not in kept_set:
                 continue
             if any(w in polar_blob for w in forbidden):
                 reasons.append("title_gate_polarity_mismatch")
                 break
-        for gate, labels in _GATE_OCCUPANCY_LABEL:
+        for gate, labels in GATE_OCCUPANCY_LABEL:
             if gate not in kept_set:
                 continue
             if not any(w in polar_blob for w in labels):
                 continue
-            if gate.startswith("eq_ar") and any(
-                t in polar_blob for t in ("eqar", "eq ar", "equity to asset")
-            ):
-                continue
-            if gate.startswith("ta_") and "total assets" in polar_blob:
-                continue
-            if gate == "overnight_p10" and any(
-                t in polar_blob
-                for t in ("easiest", "percentile", "decile", "p10")
-            ):
-                continue
-            if gate == "pb_rising" and any(
-                t in polar_blob for t in ("median", "pit median", "above median")
-            ):
+            if any(t in polar_blob for t in occupancy_exception_tokens(gate)):
                 continue
             reasons.append("occupancy_label_only")
             break
-        extra_title = (
-            ("tight funding", "tight_funding"),
-            ("easy funding", "easy_funding"),
-            ("sales contraction", "sales_down"),
-            ("sales contracted", "sales_down"),
-            ("poor sales", "sales_down"),
-            ("sales performance", "sales_down"),
-            ("roe decline", "roe_low"),
-            ("roe is low", "roe_low"),
-        )
-        for phrase, gate in extra_title:
+        for phrase, gate in EXTRA_TITLE_GATES:
             if phrase in polar_blob and gate not in kept_set:
                 reasons.append("occupancy_label_only")
                 break

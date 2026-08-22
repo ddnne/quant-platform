@@ -1,6 +1,6 @@
 # research
 
-Phase 7 research control plane: readiness attestation, experiment plans.
+Research control plane (Phase 7 stays OFF): readiness attestation, experiment plans.
 
 **Mass is NO-GO.** A track result is not a pass / not GO. READY and Phase 7 stay closed.
 
@@ -12,7 +12,7 @@ Phase 7 research control plane: readiness attestation, experiment plans.
 - **Tracks:** `research.eval_tracks` `mid_n_explore` / `liq_large` (ADV-ranked; **not** head-N).
 - **Thesis count:** `research.unique_logic.worker_bodies.countable_thesis_ids` (catalog + Worker body; YAML clones do not count).
 - **Catalog:** `specs/research_logics/*.yaml`. Worker ID arrays: generated `platform/workers/research-mass-eval/src/catalog_ids.ts` (leftover occupancy stays in `daily_path.ts`).
-- **Propose:** `POST /v1/propose-thesis` (`research.cf_propose_thesis`; Workers AI 70B then 8B CF-internal fallback; LLM failure is `ok:false`/`llm_failed`, not stub-as-success; review_proposal_row; no auto-inject).
+- **Propose:** `POST /v1/propose-thesis` (`research.cf_propose_thesis`; Workers AI 70B then glm-4.7-flash then 8B CF-internal; LLM failure is `ok:false`/`llm_failed`, not stub-as-success; review_proposal_row; no auto-inject).
 - **Smoke codes:** `research.eval_universe.HARNESS_SMOKE_CODES`. Not the eval entry.
 - **`cost_models.py` / `options_225_vol_series.py`:** live math. Do not fake-split.
 

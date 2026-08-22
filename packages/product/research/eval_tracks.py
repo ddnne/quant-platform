@@ -80,10 +80,10 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "id": "inventory_bias_recorded",
         "track": EVAL_TRACK_LIQ_LARGE,
         "why": (
-            "recorded research/eval/job=eval-inventory-bias-20260824d/ "
+            "recorded research/eval/job=eval-inventory-bias-20260824e/ "
             "inventory_bias.json; assert_new_batch_cheap_pb_cap refuses "
-            "new batches at 20%; thin sleeve exclude; 24d flatten+eps band, "
-            "invert+roe empty parked"
+            "new batches at 20%; thin sleeve exclude; 24e polarity SoT; "
+            "flatten+eps sleeve candidate; 24d invert+roe empty parked"
         ),
         "not_a_pass": True,
         "go": False,
@@ -114,8 +114,8 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "track": EVAL_TRACK_LIQ_LARGE,
         "why": (
             "review_proposal_row title_gate_polarity_mismatch and "
-            "occupancy_label_only; Worker titleOccupancyBad drops inverted "
-            "slots; YAML follows GATES not inverted or A×B×C labels"
+            "occupancy_label_only; Worker titleOccupancyBad imports generated "
+            "propose_review_tables.ts; YAML follows GATES not inverted labels"
         ),
         "not_a_pass": True,
         "go": False,
@@ -195,8 +195,9 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "tracks": BOTH_EVAL_TRACK_IDS,
         "entry": "research.cf_daily_path_job.run_both_track_sleeve_fanout",
         "why": (
-            "recorded eval-cf-dp-both-sleeves-20260823q mid+liq; "
-            "descriptive summary not_a_pass; do not narrate majority as stable"
+            "recorded eval-cf-dp-both-sleeves-20260824e mid+liq 12 logics "
+            "including flatten×eps; descriptive summary not_a_pass; do not "
+            "narrate majority as stable"
         ),
         "not_a_pass": True,
         "go": False,
@@ -233,8 +234,9 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "id": "adopt_occupancy_recorded",
         "track": EVAL_TRACK_LIQ_LARGE,
         "why": (
-            "eval-occupancy-audit-20260824b: 24a/24b adopts mid-band both "
-            "tracks; primary sleeves have 0 near_empty members; not a pass"
+            "eval-occupancy-audit-20260824e: 24e tight×px_down mid-band both "
+            "tracks; flatten×eps sleeve member; 0 near_empty sleeve members; "
+            "not a pass"
         ),
         "not_a_pass": True,
         "go": False,
@@ -243,7 +245,7 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "id": "near_empty_parked_not_countable",
         "track": EVAL_TRACK_LIQ_LARGE,
         "why": (
-            "NEAR_EMPTY_PARK_IDS 11; is_countable_spec and "
+            "NEAR_EMPTY_PARK_IDS 13; is_countable_spec and "
             "validate_basket_members exclude them; "
             "assert_new_batch_occupancy_not_near_empty refuses empty batches"
         ),
