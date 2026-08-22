@@ -305,6 +305,18 @@ def test_review_proposal_row_rejects_invent_and_weekday() -> None:
     assert "title_gate_polarity_mismatch" in bad_h["reasons"]
     assert bad_h["auto_inject"] is False
 
+    invert_eqar_english = {
+        "thesis": "Stocks with rising equity risk premia and high volume experience mean reversion.",
+        "signal_definition": "AND(eq_ar_falling, nky_vol_high_skip) PIT",
+        "position_rule": "event-hold surprise sign",
+        "datasets": ["equities_bars_daily", "fins_summary", "jsda_tokyo_repo_rates"],
+        "gates": ["eq_ar_falling", "nky_vol_high_skip"],
+    }
+    bad_e = review_proposal_row(invert_eqar_english)
+    assert bad_e["ok"] is False
+    assert "title_gate_polarity_mismatch" in bad_e["reasons"]
+    assert bad_e["auto_inject"] is False
+
     invert_repo = {
         "thesis": "Stocks with high repo rates and rising equity risk premia outperform when volatility is low.",
         "signal_definition": "AND(repo_3m_down, eq_ar_rising, nky_vol_high_skip) PIT",
