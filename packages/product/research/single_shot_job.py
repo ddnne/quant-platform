@@ -1626,63 +1626,157 @@ def default_r2_put(
             pass
 
 
-def head_r2_object(
-    bucket: str,
-    key: str,
-    *,
-    wrangler: str | Path | None = None,
-    config: str | Path | None = None,
-) -> dict[str, Any]:
-    """Confirm an R2 object exists via ``wrangler r2 object get`` to a temp file."""
-    wr = Path(wrangler) if wrangler else _DEFAULT_WRANGLER
-    cfg = Path(config) if config else _DEFAULT_WRANGLER_CONFIG
-    with tempfile.NamedTemporaryFile(
-        prefix="ssjob_head_", suffix=".bin", delete=False
-    ) as tmp:
-        tmp_path = Path(tmp.name)
-    try:
-        proc = subprocess.run(
-            [
-                str(wr),
-                "r2",
-                "object",
-                "get",
-                f"{bucket}/{key}",
-                f"--file={tmp_path}",
-                "--remote",
-                f"--config={cfg}",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=120,
-            cwd=str(_REPO_ROOT),
-        )
-        if proc.returncode != 0:
-            combined = (proc.stderr or "") + (proc.stdout or "")
-            return {
-                "bucket": bucket,
-                "key": key,
-                "exists": False,
-                "error": combined[-800:],
-            }
-        size = tmp_path.stat().st_size if tmp_path.is_file() else 0
-        return {
-            "bucket": bucket,
-            "key": key,
-            "exists": True,
-            "bytes": size,
-        }
-    finally:
-        try:
-            tmp_path.unlink(missing_ok=True)
-        except OSError:
-            pass
-
-
 def _json_bytes(payload: Mapping[str, Any]) -> bytes:
     return (
         json.dumps(payload, ensure_ascii=True, indent=2, sort_keys=True) + "\n"
     ).encode("utf-8")
+
+
+def _put_research_json(
+    key: str,
+    payload: Mapping[str, Any],
+    *,
+    r2_put: R2PutFn | None,
+    wrangler: str | Path | None = None,
+    wrangler_config: str | Path | None = None,
+    dry_run: bool = False,
+    staging_dir: str | Path | None = None,
+    bucket: str = RESEARCH_ARTIFACT_BUCKET,
+) -> dict[str, Any]:
+    """Put one JSON artifact (injected callable or wrangler / dry-run)."""
+    body = _json_bytes(payload)
+    if r2_put is not None:
+        meta = r2_put(bucket, key, body)
+        if "status" not in meta:
+            meta = {**meta, "status": "injected"}
+        return meta
+    return default_r2_put(
+        bucket,
+        key,
+        body,
+        wrangler=wrangler,
+        config=wrangler_config,
+        dry_run=dry_run,
+        staging_dir=staging_dir,
+    )
+
+
+_DEFAULT_SMOKE_CODES: tuple[str, ...] = ("13010", "72030", "67580")
+
+
+def _require_job_window(
+    period_start: str, period_end: str, job_id: str
+) -> tuple[str, str, str]:
+    start = str(period_start).strip()[:10]
+    end = str(period_end).strip()[:10]
+    if not start or not end:
+        raise SingleShotJobError("period_start and period_end are required")
+    jid = str(job_id).strip()
+    if not jid or "/" in jid or "\\" in jid or ".." in jid:
+        raise SingleShotJobError("job_id must be a non-empty path-safe token")
+    return start, end, jid
+
+
+def _select_codes(codes: Sequence[str] | None) -> list[str]:
+    if codes:
+        return [str(c).strip() for c in codes if str(c).strip()]
+    return list(_DEFAULT_SMOKE_CODES)
+
+
+def _load_history_feature_rows(
+    dataset_ids: Sequence[str],
+    *,
+    period_start: str,
+    period_end: str,
+    codes: Sequence[str],
+    feature_row_limit: int,
+    history_source: str,
+    d1_execute: D1ExecuteFn | None,
+    r2_object_keys_by_dataset: Mapping[str, Sequence[str]] | None,
+    r2_local_paths_by_dataset: Mapping[str, Sequence[str | Path]] | None,
+    r2_raw_lines_by_dataset: Mapping[str, Sequence[Any]] | None,
+    r2_get: Callable[[str, str], bytes] | None,
+    r2_bucket: str,
+    context: str,
+    r2_allow_empty_datasets: Sequence[str] | None = None,
+) -> tuple[str, dict[str, Any]]:
+    """Load tip/history rows from D1 hot tip or R2 structured history."""
+    from research.r2_feature_context import (
+        HISTORY_SOURCE_D1_TIP,
+        HISTORY_SOURCE_R2,
+        extract_r2_history_feature_rows,
+        resolve_history_source,
+    )
+
+    hist_src = resolve_history_source(history_source)
+    if hist_src == HISTORY_SOURCE_R2:
+        extract = extract_r2_history_feature_rows(
+            dataset_ids,
+            period_start=period_start,
+            period_end=period_end,
+            codes=codes,
+            object_keys_by_dataset=r2_object_keys_by_dataset,
+            local_paths_by_dataset=r2_local_paths_by_dataset,
+            raw_lines_by_dataset=r2_raw_lines_by_dataset,
+            r2_get=r2_get,
+            bucket=r2_bucket,
+            row_limit_per_dataset=max(int(feature_row_limit), 5000),
+            allow_empty_datasets=r2_allow_empty_datasets,
+            context=context,
+        )
+        return hist_src, extract
+    if hist_src != HISTORY_SOURCE_D1_TIP:
+        raise SingleShotJobError(f"unsupported history_source={hist_src!r}")
+    extract = extract_d1_tip_feature_rows(
+        dataset_ids,
+        period_start=period_start,
+        period_end=period_end,
+        codes=codes,
+        row_limit_per_dataset=feature_row_limit,
+        d1_execute=d1_execute,
+        context=context,
+    )
+    return hist_src, extract
+
+
+def _nextday_setup(
+    rows_by_ds: Mapping[str, Sequence[Mapping[str, Any]]],
+    *,
+    period_start: str,
+    period_end: str,
+    need_close_index: bool = True,
+) -> tuple[list[str], dict[str, str | None], dict[tuple[str, str], dict[str, Any]]]:
+    full_trading_days = discover_tip_trading_days(
+        rows_by_ds, period_start=period_start, period_end=period_end
+    )
+    bar_days = sorted(
+        {
+            str(r.get("date") or "")[:10]
+            for r in (rows_by_ds.get("equities_bars_daily") or [])
+            if r.get("date")
+        }
+    )
+    next_map = next_trading_day_map(
+        sorted(set(full_trading_days or []) | set(bar_days))
+    )
+    close_index = (
+        build_equity_close_index(rows_by_ds) if need_close_index else {}
+    )
+    return full_trading_days, next_map, close_index
+
+
+def _cap_as_of_days(
+    as_of_days: Sequence[str] | None,
+    full_trading_days: Sequence[str],
+    max_days: int,
+) -> list[str]:
+    if as_of_days:
+        day_list = sorted({str(d).strip()[:10] for d in as_of_days if str(d).strip()})
+    else:
+        day_list = list(full_trading_days)
+    if len(day_list) > max_days:
+        day_list = day_list[-int(max_days) :]
+    return day_list
 
 
 def execute_single_shot_job(
@@ -2082,21 +2176,15 @@ def execute_single_shot_job(
     puts: list[dict[str, Any]] = []
 
     def _put(key: str, payload: Mapping[str, Any]) -> dict[str, Any]:
-        body = _json_bytes(payload)
-        if r2_put is not None:
-            # Injected put: tests pass (bucket, key, body) -> meta
-            meta = r2_put(spec.artifact_bucket, key, body)
-            if "status" not in meta:
-                meta = {**meta, "status": "injected"}
-            return meta
-        return default_r2_put(
-            spec.artifact_bucket,
+        return _put_research_json(
             key,
-            body,
+            payload,
+            r2_put=r2_put,
             wrangler=wrangler,
-            config=wrangler_config,
+            wrangler_config=wrangler_config,
             dry_run=dry_run,
             staging_dir=staging_dir,
+            bucket=spec.artifact_bucket,
         )
 
     puts.append(_put(spec.input_plan_r2_key, input_plan))
@@ -2588,95 +2676,40 @@ def execute_multiday_signal_eval(
     Labels remain 研究用・未宣言 when next-day returns are attached.
     """
     assert_mass_and_phase7_off()
-    start = str(period_start).strip()[:10]
-    end = str(period_end).strip()[:10]
-    if not start or not end:
-        raise SingleShotJobError("period_start and period_end are required")
-    jid = str(job_id).strip()
-    if not jid or "/" in jid or "\\" in jid or ".." in jid:
-        raise SingleShotJobError("job_id must be a non-empty path-safe token")
+    start, end, jid = _require_job_window(period_start, period_end, job_id)
+    _ = min_days  # accepted for API compat; short windows still run honestly
 
     dataset_ids = require_complete_21_only(
         DEFAULT_SIGNAL_DATASETS, context="multiday signal eval datasets"
     )
-    selected_codes = (
-        [str(c).strip() for c in codes if str(c).strip()]
-        if codes
-        else ["13010", "72030", "67580"]
-    )
+    selected_codes = _select_codes(codes)
 
-    # Lazy import avoids circular import at module load
-    # (r2_feature_context imports helpers from this module).
-    from research.r2_feature_context import (
-        HISTORY_SOURCE_D1_TIP,
-        HISTORY_SOURCE_R2,
-        extract_r2_history_feature_rows,
-        resolve_history_source,
+    hist_src, tip_feature_extract = _load_history_feature_rows(
+        dataset_ids,
+        period_start=start,
+        period_end=end,
+        codes=selected_codes,
+        feature_row_limit=feature_row_limit,
+        history_source=history_source,
+        d1_execute=d1_execute,
+        r2_object_keys_by_dataset=r2_object_keys_by_dataset,
+        r2_local_paths_by_dataset=r2_local_paths_by_dataset,
+        r2_raw_lines_by_dataset=r2_raw_lines_by_dataset,
+        r2_get=r2_get,
+        r2_bucket=r2_bucket,
+        context="multiday signal feature extract",
     )
-
-    hist_src = resolve_history_source(history_source)
-    if hist_src == HISTORY_SOURCE_R2:
-        tip_feature_extract = extract_r2_history_feature_rows(
-            dataset_ids,
-            period_start=start,
-            period_end=end,
-            codes=selected_codes,
-            object_keys_by_dataset=r2_object_keys_by_dataset,
-            local_paths_by_dataset=r2_local_paths_by_dataset,
-            raw_lines_by_dataset=r2_raw_lines_by_dataset,
-            r2_get=r2_get,
-            bucket=r2_bucket,
-            row_limit_per_dataset=max(int(feature_row_limit), 5000),
-            context="multiday signal r2 history feature extract",
-        )
-    else:
-        # Default: D1 hot tip (unchanged path).
-        if hist_src != HISTORY_SOURCE_D1_TIP:
-            raise SingleShotJobError(f"unsupported history_source={hist_src!r}")
-        tip_feature_extract = extract_d1_tip_feature_rows(
-            dataset_ids,
-            period_start=start,
-            period_end=end,
-            codes=selected_codes,
-            row_limit_per_dataset=feature_row_limit,
-            d1_execute=d1_execute,
-            context="multiday signal tip feature extract",
-        )
     rows_by_ds = tip_feature_extract.get("rows_by_dataset") or {}
     if codes is None and tip_feature_extract.get("selected_codes"):
         selected_codes = list(tip_feature_extract["selected_codes"])
 
-    # Full tip trading calendar (used for next-day mapping even when as_of_days
-    # is a caller subset).
-    full_trading_days = discover_tip_trading_days(
-        rows_by_ds, period_start=start, period_end=end
+    full_trading_days, next_map, close_index = _nextday_setup(
+        rows_by_ds,
+        period_start=start,
+        period_end=end,
+        need_close_index=bool(attach_nextday_returns),
     )
-    # Bar-date fallback for next-day when calendar is short of tip bars.
-    bar_days = sorted(
-        {
-            str(r.get("date") or "")[:10]
-            for r in (rows_by_ds.get("equities_bars_daily") or [])
-            if r.get("date")
-        }
-    )
-    next_day_source = full_trading_days if full_trading_days else bar_days
-    # Union calendar + bars so T+1 can resolve from either plane.
-    next_day_source = sorted(set(next_day_source) | set(bar_days))
-    next_map = next_trading_day_map(next_day_source)
-    close_index = (
-        build_equity_close_index(rows_by_ds) if attach_nextday_returns else {}
-    )
-
-    if as_of_days:
-        day_list = sorted({str(d).strip()[:10] for d in as_of_days if str(d).strip()})
-    else:
-        day_list = list(full_trading_days)
-    # Prefer mid/late window days so 1d features have prior bars in the tip.
-    if len(day_list) > max_days:
-        day_list = day_list[-int(max_days) :]
-    if len(day_list) < min_days and as_of_days is None:
-        # Still proceed with whatever trading days exist; caller sees n_days.
-        pass
+    day_list = _cap_as_of_days(as_of_days, full_trading_days, max_days)
     if not day_list:
         raise SingleShotJobError(
             "multiday signal eval: no trading days found in tip window "
@@ -2820,13 +2853,13 @@ def execute_multiday_signal_eval(
         "as_of_days": [d.get("date") for d in day_results],
         "history_source": hist_src,
         "tip_plane": tip_feature_extract.get("plane")
-        or ("R2_history" if hist_src == HISTORY_SOURCE_R2 else "D1_hot_tip"),
+        or ("R2_history" if hist_src == "r2" else "D1_hot_tip"),
         "d1_database": (
-            None if hist_src == HISTORY_SOURCE_R2 else D1_DATABASE_NAME
+            None if hist_src == "r2" else D1_DATABASE_NAME
         ),
         "r2_bucket": (
             tip_feature_extract.get("bucket")
-            if hist_src == HISTORY_SOURCE_R2
+            if hist_src == "r2"
             else None
         ),
         "tip_extracted_row_counts": tip_feature_extract.get("extracted_row_counts"),
@@ -2897,18 +2930,12 @@ def execute_multiday_signal_eval(
     puts: list[dict[str, Any]] = []
 
     def _put(key: str, payload: Mapping[str, Any]) -> dict[str, Any]:
-        body = _json_bytes(payload)
-        if r2_put is not None:
-            meta = r2_put(RESEARCH_ARTIFACT_BUCKET, key, body)
-            if "status" not in meta:
-                meta = {**meta, "status": "injected"}
-            return meta
-        return default_r2_put(
-            RESEARCH_ARTIFACT_BUCKET,
+        return _put_research_json(
             key,
-            body,
+            payload,
+            r2_put=r2_put,
             wrangler=wrangler,
-            config=wrangler_config,
+            wrangler_config=wrangler_config,
             dry_run=dry_run,
             staging_dir=staging_dir,
         )
@@ -3281,6 +3308,44 @@ def _summarize_one_signal_batch(
     }
 
 
+def _compare_row_from_signal_body(
+    sid: str, body: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Compact compare-table row from one signal's batch summary body."""
+    nd = body.get("nextday_return") or {}
+    by_sign = nd.get("by_sign") or {}
+    cost = body.get("research_cost") or {}
+    agg = body.get("aggregate") or {}
+    return {
+        "signal_id": sid,
+        "signal_count": agg.get("signal_count"),
+        "non_null": agg.get("non_null"),
+        "non_null_rate": agg.get("non_null_rate"),
+        "sign_plus": (agg.get("sign_distribution") or {}).get("+1"),
+        "sign_zero": (agg.get("sign_distribution") or {}).get("0"),
+        "sign_minus": (agg.get("sign_distribution") or {}).get("-1"),
+        "mean_R_plus": (by_sign.get("+1") or {}).get("mean_next_day_return"),
+        "median_R_plus": (by_sign.get("+1") or {}).get("median_next_day_return"),
+        "mean_R_minus": (by_sign.get("-1") or {}).get("mean_next_day_return"),
+        "median_R_minus": (by_sign.get("-1") or {}).get("median_next_day_return"),
+        "overall_mean_R": (nd.get("overall") or {}).get("mean_next_day_return"),
+        "overall_median_R": (nd.get("overall") or {}).get("median_next_day_return"),
+        "null_return_rate": (nd.get("overall") or {}).get("null_return_rate"),
+        "gross_signed_mean_active": (
+            (cost.get("gross_signed_return") or {}).get("mean_active")
+        ),
+        "net_one_way_mean_active": (
+            (cost.get("net_signed_return_one_way") or {}).get("mean_active")
+        ),
+        "net_round_trip_mean_active": (
+            (cost.get("net_signed_return_round_trip") or {}).get("mean_active")
+        ),
+        "n_active_positions": (
+            (cost.get("gross_signed_return") or {}).get("n_active_positions")
+        ),
+    }
+
+
 def execute_extra_hyp_signals_compare(
     *,
     period_start: str,
@@ -3308,7 +3373,7 @@ def execute_extra_hyp_signals_compare(
     r2_bucket: str = "quant-structured",
     r2_allow_empty_datasets: Sequence[str] | None = None,
 ) -> MultidaySignalEval:
-    """W62 S4/S5 research hypotheses (not S1 rehash) multi-day compare.
+    """S4/S5 research hypotheses (not S1 rehash) multi-day compare.
 
     S4: sign(margin_interest_change_1d)
     S5: sign(Δ short_ratio_level) for ``short_ratio_section``, broadcast.
@@ -3316,22 +3381,13 @@ def execute_extra_hyp_signals_compare(
     Empty datasets → honest null signals. Not READY / Mass OFF.
     """
     assert_mass_and_phase7_off()
-    start = str(period_start).strip()[:10]
-    end = str(period_end).strip()[:10]
-    if not start or not end:
-        raise SingleShotJobError("period_start and period_end are required")
-    jid = str(job_id).strip()
-    if not jid or "/" in jid or "\\" in jid or ".." in jid:
-        raise SingleShotJobError("job_id must be a non-empty path-safe token")
+    start, end, jid = _require_job_window(period_start, period_end, job_id)
+    _ = min_days
 
     dataset_ids = require_complete_21_only(
         EXTRA_HYP_DATASETS, context="extra hyp datasets"
     )
-    selected_codes = (
-        [str(c).strip() for c in codes if str(c).strip()]
-        if codes
-        else ["13010", "72030", "67580"]
-    )
+    selected_codes = _select_codes(codes)
     section = str(short_ratio_section).strip() or DEFAULT_SHORT_RATIO_SECTION
     _fids: list[str] = []
     for x in list(EXTRA_HYP_FEATURE_IDS) + ["is_trading_day"]:
@@ -3342,67 +3398,32 @@ def execute_extra_hyp_signals_compare(
         d["signal_id"]: d for d in extra_hyp_definitions(section=section)
     }
 
-    from research.r2_feature_context import (
-        HISTORY_SOURCE_D1_TIP,
-        HISTORY_SOURCE_R2,
-        extract_r2_history_feature_rows,
-        resolve_history_source,
+    hist_src, tip_feature_extract = _load_history_feature_rows(
+        dataset_ids,
+        period_start=start,
+        period_end=end,
+        codes=selected_codes,
+        feature_row_limit=feature_row_limit,
+        history_source=history_source,
+        d1_execute=d1_execute,
+        r2_object_keys_by_dataset=r2_object_keys_by_dataset,
+        r2_local_paths_by_dataset=r2_local_paths_by_dataset,
+        r2_raw_lines_by_dataset=r2_raw_lines_by_dataset,
+        r2_get=r2_get,
+        r2_bucket=r2_bucket,
+        r2_allow_empty_datasets=r2_allow_empty_datasets
+        or (
+            "markets_margin_interest",
+            "markets_short_ratio",
+        ),
+        context="extra hyp feature extract",
     )
-
-    hist_src = resolve_history_source(history_source)
-    if hist_src == HISTORY_SOURCE_R2:
-        tip_feature_extract = extract_r2_history_feature_rows(
-            dataset_ids,
-            period_start=start,
-            period_end=end,
-            codes=selected_codes,
-            object_keys_by_dataset=r2_object_keys_by_dataset,
-            local_paths_by_dataset=r2_local_paths_by_dataset,
-            raw_lines_by_dataset=r2_raw_lines_by_dataset,
-            r2_get=r2_get,
-            bucket=r2_bucket,
-            row_limit_per_dataset=max(int(feature_row_limit), 5000),
-            allow_empty_datasets=r2_allow_empty_datasets
-            or (
-                "markets_margin_interest",
-                "markets_short_ratio",
-            ),
-            context="extra hyp r2 history feature extract",
-        )
-    else:
-        if hist_src != HISTORY_SOURCE_D1_TIP:
-            raise SingleShotJobError(f"unsupported history_source={hist_src!r}")
-        tip_feature_extract = extract_d1_tip_feature_rows(
-            dataset_ids,
-            period_start=start,
-            period_end=end,
-            codes=selected_codes,
-            row_limit_per_dataset=feature_row_limit,
-            d1_execute=d1_execute,
-            context="extra hyp tip feature extract",
-        )
     rows_by_ds = tip_feature_extract.get("rows_by_dataset") or {}
 
-    full_trading_days = discover_tip_trading_days(
+    full_trading_days, next_map, close_index = _nextday_setup(
         rows_by_ds, period_start=start, period_end=end
     )
-    bar_days = sorted(
-        {
-            str(r.get("date") or "")[:10]
-            for r in (rows_by_ds.get("equities_bars_daily") or [])
-            if r.get("date")
-        }
-    )
-    next_day_source = sorted(set(full_trading_days or []) | set(bar_days))
-    next_map = next_trading_day_map(next_day_source)
-    close_index = build_equity_close_index(rows_by_ds)
-
-    if as_of_days:
-        day_list = sorted({str(d).strip()[:10] for d in as_of_days if str(d).strip()})
-    else:
-        day_list = list(full_trading_days)
-    if len(day_list) > max_days:
-        day_list = day_list[-int(max_days) :]
+    day_list = _cap_as_of_days(as_of_days, full_trading_days, max_days)
     if not day_list:
         raise SingleShotJobError(
             f"extra hyp compare: no trading days in {start}..{end}"
@@ -3505,45 +3526,10 @@ def execute_extra_hyp_signals_compare(
             one_way_cost=one_way_cost,
         )
 
-    compare_rows: list[dict[str, Any]] = []
-    for sid in (SIGNAL_ID_MARGIN_CHANGE, SIGNAL_ID_SHORT_RATIO_DELTA):
-        body = by_signal[sid]
-        nd = body.get("nextday_return") or {}
-        by_sign = nd.get("by_sign") or {}
-        cost = body.get("research_cost") or {}
-        agg = body.get("aggregate") or {}
-        compare_rows.append(
-            {
-                "signal_id": sid,
-                "signal_count": agg.get("signal_count"),
-                "non_null": agg.get("non_null"),
-                "non_null_rate": agg.get("non_null_rate"),
-                "sign_plus": (agg.get("sign_distribution") or {}).get("+1"),
-                "sign_zero": (agg.get("sign_distribution") or {}).get("0"),
-                "sign_minus": (agg.get("sign_distribution") or {}).get("-1"),
-                "mean_R_plus": (by_sign.get("+1") or {}).get("mean_next_day_return"),
-                "median_R_plus": (by_sign.get("+1") or {}).get(
-                    "median_next_day_return"
-                ),
-                "mean_R_minus": (by_sign.get("-1") or {}).get("mean_next_day_return"),
-                "median_R_minus": (by_sign.get("-1") or {}).get(
-                    "median_next_day_return"
-                ),
-                "overall_mean_R": (nd.get("overall") or {}).get(
-                    "mean_next_day_return"
-                ),
-                "null_return_rate": (nd.get("overall") or {}).get("null_return_rate"),
-                "gross_signed_mean_active": (
-                    (cost.get("gross_signed_return") or {}).get("mean_active")
-                ),
-                "net_one_way_mean_active": (
-                    (cost.get("net_signed_return_one_way") or {}).get("mean_active")
-                ),
-                "n_active_positions": (
-                    (cost.get("gross_signed_return") or {}).get("n_active_positions")
-                ),
-            }
-        )
+    compare_rows = [
+        _compare_row_from_signal_body(sid, by_signal[sid])
+        for sid in (SIGNAL_ID_MARGIN_CHANGE, SIGNAL_ID_SHORT_RATIO_DELTA)
+    ]
 
     batch_summary: dict[str, Any] = {
         "version": "extra-hyp-multisignal-nextday-batch/v1",
@@ -3563,7 +3549,7 @@ def execute_extra_hyp_signals_compare(
         "history_source": hist_src,
         "tip_plane": (
             tip_feature_extract.get("plane")
-            if hist_src == HISTORY_SOURCE_R2
+            if hist_src == "r2"
             else "D1_hot_tip"
         ),
         "tip_extracted_row_counts": tip_feature_extract.get("extracted_row_counts"),
@@ -3589,7 +3575,7 @@ def execute_extra_hyp_signals_compare(
         "operational_go": False,
         "not_s1_rehash": True,
         "note": (
-            "W62 S4/S5 research hypotheses (margin change / short ratio Δ). "
+            "S4/S5 research hypotheses (margin change / short ratio Δ). "
             "小サンプル / 研究用・未宣言. Not READY. No Mass. No densify invent."
         ),
     }
@@ -3597,18 +3583,12 @@ def execute_extra_hyp_signals_compare(
     puts: list[dict[str, Any]] = []
 
     def _put(key: str, payload: Mapping[str, Any]) -> dict[str, Any]:
-        body = _json_bytes(payload)
-        if r2_put is not None:
-            meta = r2_put(RESEARCH_ARTIFACT_BUCKET, key, body)
-            if "status" not in meta:
-                meta = {**meta, "status": "injected"}
-            return meta
-        return default_r2_put(
-            RESEARCH_ARTIFACT_BUCKET,
+        return _put_research_json(
             key,
-            body,
+            payload,
+            r2_put=r2_put,
             wrangler=wrangler,
-            config=wrangler_config,
+            wrangler_config=wrangler_config,
             dry_run=dry_run,
             staging_dir=staging_dir,
         )
@@ -3666,7 +3646,7 @@ def execute_multiday_multisignal_compare(
     r2_bucket: str = "quant-structured",
     r2_allow_empty_datasets: Sequence[str] | None = None,
 ) -> MultidaySignalEval:
-    """W58/W60 multi-signal compare (approved legs only).
+    """Multi-signal compare (approved legs only).
 
     Signals (all candidate; candidate_only=False; not READY):
 
@@ -3678,98 +3658,53 @@ def execute_multiday_multisignal_compare(
     research-only net PnL under one-way 10bp cost (仮定に依存・研究用・運用GOではない).
 
     ``history_source``:
-        * ``"d1_tip"`` (default) — CF D1 hot tip extract (W58 tip 20d path)
-        * ``"r2"`` — R2 structured history bridge (W59/W60 long window)
+        * ``"d1_tip"`` (default) — CF D1 hot tip extract
+        * ``"r2"`` — R2 structured history bridge
 
     Does **not** connect Mass, mint READY, densify, or execute orders.
     """
     assert_mass_and_phase7_off()
-    start = str(period_start).strip()[:10]
-    end = str(period_end).strip()[:10]
-    if not start or not end:
-        raise SingleShotJobError("period_start and period_end are required")
-    jid = str(job_id).strip()
-    if not jid or "/" in jid or "\\" in jid or ".." in jid:
-        raise SingleShotJobError("job_id must be a non-empty path-safe token")
+    start, end, jid = _require_job_window(period_start, period_end, job_id)
+    _ = min_days
 
     dataset_ids = require_complete_21_only(
         MULTI_SIGNAL_DATASETS, context="multisignal compare datasets"
     )
-    selected_codes = (
-        [str(c).strip() for c in codes if str(c).strip()]
-        if codes
-        else ["13010", "72030", "67580"]
-    )
+    selected_codes = _select_codes(codes)
     feature_ids = tuple(MULTI_SIGNAL_FEATURE_IDS)
     definitions = {
         d["signal_id"]: d
         for d in multi_signal_definitions(volume_sign_abs_min=volume_sign_abs_min)
     }
 
-    # Lazy import avoids circular import at module load.
-    from research.r2_feature_context import (
-        HISTORY_SOURCE_D1_TIP,
-        HISTORY_SOURCE_R2,
-        extract_r2_history_feature_rows,
-        resolve_history_source,
+    hist_src, tip_feature_extract = _load_history_feature_rows(
+        dataset_ids,
+        period_start=start,
+        period_end=end,
+        codes=selected_codes,
+        feature_row_limit=feature_row_limit,
+        history_source=history_source,
+        d1_execute=d1_execute,
+        r2_object_keys_by_dataset=r2_object_keys_by_dataset,
+        r2_local_paths_by_dataset=r2_local_paths_by_dataset,
+        r2_raw_lines_by_dataset=r2_raw_lines_by_dataset,
+        r2_get=r2_get,
+        r2_bucket=r2_bucket,
+        r2_allow_empty_datasets=r2_allow_empty_datasets
+        or (
+            "fins_summary",
+            "markets_margin_interest",
+        ),
+        context="multisignal feature extract",
     )
-
-    hist_src = resolve_history_source(history_source)
-    if hist_src == HISTORY_SOURCE_R2:
-        tip_feature_extract = extract_r2_history_feature_rows(
-            dataset_ids,
-            period_start=start,
-            period_end=end,
-            codes=selected_codes,
-            object_keys_by_dataset=r2_object_keys_by_dataset,
-            local_paths_by_dataset=r2_local_paths_by_dataset,
-            raw_lines_by_dataset=r2_raw_lines_by_dataset,
-            r2_get=r2_get,
-            bucket=r2_bucket,
-            row_limit_per_dataset=max(int(feature_row_limit), 5000),
-            allow_empty_datasets=r2_allow_empty_datasets
-            or (
-                "fins_summary",
-                "markets_margin_interest",
-            ),
-            context="multisignal r2 history feature extract",
-        )
-    else:
-        if hist_src != HISTORY_SOURCE_D1_TIP:
-            raise SingleShotJobError(f"unsupported history_source={hist_src!r}")
-        tip_feature_extract = extract_d1_tip_feature_rows(
-            dataset_ids,
-            period_start=start,
-            period_end=end,
-            codes=selected_codes,
-            row_limit_per_dataset=feature_row_limit,
-            d1_execute=d1_execute,
-            context="multisignal tip feature extract",
-        )
     rows_by_ds = tip_feature_extract.get("rows_by_dataset") or {}
     if codes is None and tip_feature_extract.get("selected_codes"):
         selected_codes = list(tip_feature_extract["selected_codes"])
 
-    full_trading_days = discover_tip_trading_days(
+    full_trading_days, next_map, close_index = _nextday_setup(
         rows_by_ds, period_start=start, period_end=end
     )
-    bar_days = sorted(
-        {
-            str(r.get("date") or "")[:10]
-            for r in (rows_by_ds.get("equities_bars_daily") or [])
-            if r.get("date")
-        }
-    )
-    next_day_source = sorted(set(full_trading_days or []) | set(bar_days))
-    next_map = next_trading_day_map(next_day_source)
-    close_index = build_equity_close_index(rows_by_ds)
-
-    if as_of_days:
-        day_list = sorted({str(d).strip()[:10] for d in as_of_days if str(d).strip()})
-    else:
-        day_list = list(full_trading_days)
-    if len(day_list) > max_days:
-        day_list = day_list[-int(max_days) :]
+    day_list = _cap_as_of_days(as_of_days, full_trading_days, max_days)
     if not day_list:
         raise SingleShotJobError(
             "multisignal compare: no trading days found in tip window "
@@ -3885,54 +3820,10 @@ def execute_multiday_multisignal_compare(
             one_way_cost=one_way_cost,
         )
 
-    # Compact compare table (mean/median R + cost net).
-    compare_rows: list[dict[str, Any]] = []
-    for sid in (SIGNAL_ID_TOPIX_REL, SIGNAL_ID_VOLUME_SIGN, SIGNAL_ID_TOPIX_DISC):
-        body = by_signal[sid]
-        nd = body.get("nextday_return") or {}
-        by_sign = nd.get("by_sign") or {}
-        cost = body.get("research_cost") or {}
-        agg = body.get("aggregate") or {}
-        compare_rows.append(
-            {
-                "signal_id": sid,
-                "signal_count": agg.get("signal_count"),
-                "non_null": agg.get("non_null"),
-                "non_null_rate": agg.get("non_null_rate"),
-                "sign_plus": (agg.get("sign_distribution") or {}).get("+1"),
-                "sign_zero": (agg.get("sign_distribution") or {}).get("0"),
-                "sign_minus": (agg.get("sign_distribution") or {}).get("-1"),
-                "mean_R_plus": (by_sign.get("+1") or {}).get("mean_next_day_return"),
-                "median_R_plus": (by_sign.get("+1") or {}).get(
-                    "median_next_day_return"
-                ),
-                "mean_R_minus": (by_sign.get("-1") or {}).get("mean_next_day_return"),
-                "median_R_minus": (by_sign.get("-1") or {}).get(
-                    "median_next_day_return"
-                ),
-                "overall_mean_R": (nd.get("overall") or {}).get(
-                    "mean_next_day_return"
-                ),
-                "overall_median_R": (nd.get("overall") or {}).get(
-                    "median_next_day_return"
-                ),
-                "null_return_rate": (nd.get("overall") or {}).get(
-                    "null_return_rate"
-                ),
-                "gross_signed_mean_active": (
-                    (cost.get("gross_signed_return") or {}).get("mean_active")
-                ),
-                "net_one_way_mean_active": (
-                    (cost.get("net_signed_return_one_way") or {}).get("mean_active")
-                ),
-                "net_round_trip_mean_active": (
-                    (cost.get("net_signed_return_round_trip") or {}).get("mean_active")
-                ),
-                "n_active_positions": (
-                    (cost.get("gross_signed_return") or {}).get("n_active_positions")
-                ),
-            }
-        )
+    compare_rows = [
+        _compare_row_from_signal_body(sid, by_signal[sid])
+        for sid in (SIGNAL_ID_TOPIX_REL, SIGNAL_ID_VOLUME_SIGN, SIGNAL_ID_TOPIX_DISC)
+    ]
 
     batch_summary: dict[str, Any] = {
         "version": "multiday-multisignal-nextday-batch/v1",
@@ -3966,10 +3857,10 @@ def execute_multiday_multisignal_compare(
         "history_source": hist_src,
         "tip_plane": (
             tip_feature_extract.get("plane")
-            if hist_src == HISTORY_SOURCE_R2
+            if hist_src == "r2"
             else "D1_hot_tip"
         ),
-        "d1_database": D1_DATABASE_NAME if hist_src == HISTORY_SOURCE_D1_TIP else None,
+        "d1_database": D1_DATABASE_NAME if hist_src == "d1_tip" else None,
         "tip_extracted_row_counts": tip_feature_extract.get("extracted_row_counts"),
         "tip_raw_tip_counts": tip_feature_extract.get("raw_tip_counts")
         or tip_feature_extract.get("raw_envelope_counts"),
@@ -4049,18 +3940,12 @@ def execute_multiday_multisignal_compare(
     puts: list[dict[str, Any]] = []
 
     def _put(key: str, payload: Mapping[str, Any]) -> dict[str, Any]:
-        body = _json_bytes(payload)
-        if r2_put is not None:
-            meta = r2_put(RESEARCH_ARTIFACT_BUCKET, key, body)
-            if "status" not in meta:
-                meta = {**meta, "status": "injected"}
-            return meta
-        return default_r2_put(
-            RESEARCH_ARTIFACT_BUCKET,
+        return _put_research_json(
             key,
-            body,
+            payload,
+            r2_put=r2_put,
             wrangler=wrangler,
-            config=wrangler_config,
+            wrangler_config=wrangler_config,
             dry_run=dry_run,
             staging_dir=staging_dir,
         )
@@ -4211,7 +4096,6 @@ __all__ = [
     "extract_d1_tip_feature_rows",
     "extract_d1_tip_summaries",
     "freeze_status",
-    "head_r2_object",
     "next_trading_day_map",
     "signed_position_from_signal",
     "summarize_research_cost",
