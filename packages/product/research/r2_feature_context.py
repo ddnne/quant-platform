@@ -30,7 +30,6 @@ import json
 import sqlite3
 import subprocess
 import tempfile
-from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
@@ -49,7 +48,6 @@ from research.single_shot_job import (
     _DEFAULT_WRANGLER,
     _DEFAULT_WRANGLER_CONFIG,
     _REPO_ROOT,
-    _available_at_ok,
     _decode_json_obj,
     _normalize_tip_bar_row,
     _normalize_tip_calendar_row,
@@ -99,28 +97,7 @@ BRIDGE_EXPAND_DATASETS: tuple[str, ...] = (
     "markets_margin_alert",
 )
 
-# ---------------------------------------------------------------------------
-# available_at research repair policy (explicit · no silent look-ahead)
-# ---------------------------------------------------------------------------
-#
-# Rule (held): never invent future visibility. PIT gate is always
-# ``available_at <= as_of``. Null available_at rows are dropped (hard).
-#
-# Research-only repairs (disposable mirror, never rewrite R2 SoT):
-#
-# * calendar_ingest_pollution — archive calendar envelopes sometimes carry
-#   ingest wall-clock as available_at (post-dating event day by years).
-#   Repair: set available_at = event_time when envelope available_at day
-#   > event day. Documented in W59 calendar_pit_repair.
-# * missing_available_at_drop — if available_at is null/empty after parse,
-#   drop the row (do **not** backfill from as_of or "now").
-# * post_date_preserve — when available_at is a real post-event disclosure
-#   (e.g. fins DiscDate/time, margin publish lag), keep as-is so PIT
-#   correctly hides the row until as_of reaches available_at.
-#
-# Forbidden: setting available_at to evaluation time, wall-clock now, or
-# any future-of-event instant that is not evidenced on the envelope.
-
+# Research-only PIT repairs. Never invent visibility. Never rewrite R2 SoT.
 AVAILABLE_AT_REPAIR_POLICY: dict[str, Any] = {
     "version": "r2-available-at-repair/v1",
     "wave": "W60 / w0815ba",
@@ -212,6 +189,16 @@ R2_PARQUET_KEY_PATTERN: str = (
     "dataset={DATASET}/year=YYYY/month=MM/day=DD/seg={SEGMENT_ID}/{content_hash}.parquet"
 )
 
+_FAMILY_PREFIXES: tuple[tuple[str, str], ...] = (
+    ("jsda_", "jsda"),
+    ("edinet_", "edinet"),
+    ("derivatives_", "derivatives"),
+    ("fins_", "fins"),
+    ("indices_", "indices"),
+    ("markets_", "markets"),
+    ("equities_", "equities"),
+)
+
 # Per-dataset inventory (code + docs/proof/complete21_cf_read_paths_20260815.md
 # + W58 live samples under .glm-logs/w0815ay_g1_history/).
 COMPLETE_21_R2_INVENTORY: dict[str, dict[str, Any]] = {
@@ -226,34 +213,9 @@ COMPLETE_21_R2_INVENTORY: dict[str, dict[str, Any]] = {
         "archive_key_pattern": R2_ARCHIVE_KEY_PATTERN.replace("{dataset}", ds),
         "raw_prefix": f"raw/{ds}/",
         "line_schema": R2_LINE_SCHEMA,
-        "family": (
-            "jsda"
-            if ds.startswith("jsda_")
-            else (
-                "edinet"
-                if ds.startswith("edinet_")
-                else (
-                    "derivatives"
-                    if ds.startswith("derivatives_")
-                    else (
-                        "fins"
-                        if ds.startswith("fins_")
-                        else (
-                            "indices"
-                            if ds.startswith("indices_")
-                            else (
-                                "markets"
-                                if ds.startswith("markets_")
-                                else (
-                                    "equities"
-                                    if ds.startswith("equities_")
-                                    else "other"
-                                )
-                            )
-                        )
-                    )
-                )
-            )
+        "family": next(
+            (fam for pre, fam in _FAMILY_PREFIXES if ds.startswith(pre)),
+            "other",
         ),
     }
     for ds in COMPLETE_21_DATASETS
@@ -773,36 +735,6 @@ def default_r2_get_object(
             tmp_path.unlink(missing_ok=True)
         except OSError:
             pass
-
-
-def jsonl_key_for(dataset: str, event_date: str, run_id: str) -> str:
-    """Build live JSONL key for a dataset/date/run_id."""
-    ds = str(dataset).strip()
-    d = str(event_date).strip()[:10]
-    rid = str(run_id).strip()
-    return f"structured/jsonl/{ds}/dt={d}/{rid}.jsonl"
-
-
-def archive_prefix_for(dataset: str) -> str:
-    return f"archive/jquants_records/{str(dataset).strip()}/"
-
-
-def jsonl_prefix_for(dataset: str) -> str:
-    return f"structured/jsonl/{str(dataset).strip()}/"
-
-
-def iter_dates(period_start: str, period_end: str) -> list[str]:
-    """Inclusive calendar date list YYYY-MM-DD (helper for key enumeration)."""
-    start = date.fromisoformat(str(period_start).strip()[:10])
-    end = date.fromisoformat(str(period_end).strip()[:10])
-    if end < start:
-        return []
-    out: list[str] = []
-    cur = start
-    while cur <= end:
-        out.append(cur.isoformat())
-        cur += timedelta(days=1)
-    return out
 
 
 # ---------------------------------------------------------------------------
@@ -1469,16 +1401,12 @@ __all__ = [
     "BRIDGE_EXPAND_DATASETS",
     "MULTI_SIGNAL_HISTORY_DATASETS",
     "S1_SIGNAL_HISTORY_DATASETS",
-    "archive_prefix_for",
     "available_at_policy_document",
     "build_r2_feature_context",
     "can_build_40d_asof",
     "default_r2_get_object",
     "extract_r2_history_feature_rows",
     "filter_history_rows",
-    "iter_dates",
-    "jsonl_key_for",
-    "jsonl_prefix_for",
     "materialize_disposable_sqlite_mirror",
     "normalize_r2_history_row",
     "parse_r2_structured_bytes",
@@ -1488,5 +1416,4 @@ __all__ = [
     "resolve_history_source",
     "schema_mapping_document",
     "write_r2_inventory_json",
-    "_available_at_ok",
 ]
