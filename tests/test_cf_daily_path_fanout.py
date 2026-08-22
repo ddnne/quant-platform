@@ -257,10 +257,11 @@ def test_cf_daily_path_job_does_not_import_factory() -> None:
         "cf_mass_eval_thicken.py": banned_cf,
         "bar_native_specs.py": banned_cf,
         "eval_universe.py": banned_cf,
-        "eval_loaders.py": banned_cf,
         "unique_logic/event_combos.py": banned_cf,
         "eval_windows.py": banned_cf,
     }
+    for path in sorted(research_dir.glob("eval_loaders*.py")):
+        files[str(path.relative_to(research_dir))] = banned_cf
     for path in sorted((research_dir / "offline").glob("bar_eval*.py")):
         files[str(path.relative_to(research_dir))] = banned_factory
     for name, banned in files.items():

@@ -141,13 +141,6 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "go": False,
     },
     {
-        "id": "eval_loaders_boundary",
-        "track": EVAL_TRACK_MID_N,
-        "why": "eval_loaders.py ~1214 bars/nky/opt/margin/repo still one module",
-        "not_a_pass": True,
-        "go": False,
-    },
-    {
         "id": "local_combo_fail_closed",
         "track": EVAL_TRACK_MID_N,
         "why": (
