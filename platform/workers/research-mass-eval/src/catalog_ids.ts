@@ -404,6 +404,7 @@ export const CF_NEW_EVENT_THESIS_IDS = [
   "event_pb_rising_tight_fade",
   "event_pb_rising_tight_on",
   "event_pb_sales_invert",
+  "event_pb_sales_px_down",
   "event_pb_sales_tight",
   "event_positive_eps_easy",
   "event_positive_eps_liq_high",

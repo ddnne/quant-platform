@@ -81,6 +81,6 @@ export const PROPOSE_PROMPT_PREFER_GATES = [
   "price_down",
 ] as const;
 
-export const PROPOSE_PROMPT_GOOD = {"thesis": "PEAD when PB is above its PIT median AND sales contracted versus the last prior print AND price is down. Skip missing PIT prints (no invent).", "signal_definition": "AND(pb_rising, sales_down, price_down) PIT; skip missing prints (no invent).", "position_rule": "Event-hold original surprise sign when all gates are PIT-true; otherwise flat.", "datasets": ["equities_bars_daily", "fins_summary", "markets_calendar"], "gates": ["pb_rising", "sales_down", "price_down"], "why_different_from": ["ungated PEAD"]} as const;
+export const PROPOSE_PROMPT_GOOD = {"thesis": "PEAD when PB is above its PIT median AND the repo curve inverted AND overnight funding is tight. Skip missing PIT prints (no invent).", "signal_definition": "AND(pb_rising, invert_curve, tight_funding) PIT; skip missing prints (no invent).", "position_rule": "Event-hold original surprise sign when all gates are PIT-true; otherwise flat.", "datasets": ["equities_bars_daily", "fins_summary", "markets_calendar", "jsda_tokyo_repo_rates"], "gates": ["pb_rising", "invert_curve", "tight_funding"], "why_different_from": ["ungated PEAD"]} as const;
 
 export const PROPOSE_PROMPT_BAD = "thesis \"Rising Sales\" with gates sales_down, or \"Liquidity \u00d7 Price \u00d7 Margin\"";
