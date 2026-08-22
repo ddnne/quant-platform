@@ -63,58 +63,146 @@ def infer_eval_track(*, max_codes: int) -> str:
     return EVAL_TRACK_LIQ_LARGE
 
 
-# Next structural debt (not GO). Isolate park set is empty after v21
-# csFundSnaps hoist + eval-cf-dp-cs-hoist-20260822a. Dense work, not +N clones.
+# Next phase (not GO). Isolate park empty after v21 csFundSnaps hoist.
+# Dense parallel work. Do not +N theses until Worker bodies occupancy-equal.
+# Standing holds (not queue items): freeze SoT, pins untouched, no head-N,
+# no ungated CS sticky, no PARSE_ZERO invent, no correlation weights.
 NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
     {
-        "id": "python_only_gates",
+        "id": "pre_mom_occupancy_equal",
         "track": EVAL_TRACK_LIQ_LARGE,
         "why": (
-            "six occupancy-equal gates lifted into comboEventGateOk; "
-            "pre_mom stays PYTHON_ONLY (leftover includes entry close)"
+            "pre_mom leftover uses momentumAt(entryIdx); comboEventGateOk "
+            "uses entryIdx-1. Rewrite leftover to match, then lift"
         ),
-        "not_a_pass": True,
-        "go": False,
-    },
-    {
-        "id": "otc_parse_zero",
-        "track": EVAL_TRACK_MID_N,
-        "why": "jsda_otc remaining official 2002 PARSE_ZERO (2002-08-02, 2002-08-05); not invented COMPLETE",
         "not_a_pass": True,
         "go": False,
     },
     {
         "id": "both_track_sleeve_durability",
         "track": EVAL_TRACK_LIQ_LARGE,
-        "why": "sleeve members exist on ADV tracks; durability needs mid_n_explore AND liq_large, still not a pass",
-        "not_a_pass": True,
-        "go": False,
-    },
-    {
-        "id": "meta_not_a_pass_hold",
-        "track": EVAL_TRACK_LIQ_LARGE,
-        "why": "active metas stay descriptive blends; no correlation weights yet",
+        "why": (
+            "re-eval fund/flow/event sleeves on mid_n_explore AND liq_large; "
+            "R2 only; still not a pass"
+        ),
         "not_a_pass": True,
         "go": False,
     },
     {
         "id": "cheap_pb_event_reuse",
         "track": EVAL_TRACK_LIQ_LARGE,
-        "why": "event cheap_pb still bars×fins; csFundSnaps not 1:1 with ev.bps hist — park until occupancy-equal",
+        "why": "event cheap_pb still bars×fins; csFundSnaps not 1:1 with ev.bps hist",
         "not_a_pass": True,
         "go": False,
     },
     {
-        "id": "freeze_sot",
+        "id": "otc_parse_zero",
+        "track": EVAL_TRACK_MID_N,
+        "why": "jsda_otc remaining official 2002 PARSE_ZERO (2002-08-02, 2002-08-05)",
+        "not_a_pass": True,
+        "go": False,
+    },
+    {
+        "id": "factory_batch_extract",
+        "track": EVAL_TRACK_MID_N,
+        "why": "offline/factory.py still ~2939 after template extract; batch eval vs generation",
+        "not_a_pass": True,
+        "go": False,
+    },
+    {
+        "id": "single_shot_feature_extract",
+        "track": EVAL_TRACK_MID_N,
+        "why": "single_shot_job.py ~4107; D1 tip extract already used by r2_feature_context",
+        "not_a_pass": True,
+        "go": False,
+    },
+    {
+        "id": "cost_models_boundary",
+        "track": EVAL_TRACK_MID_N,
+        "why": "cost_models.py ~2732; series construction vs modulation vs document",
+        "not_a_pass": True,
+        "go": False,
+    },
+    {
+        "id": "eval_harness_vs_daily_path",
+        "track": EVAL_TRACK_MID_N,
+        "why": "eval_harness.py ~2733 is W56 next-day; candidate SoT is daily_path",
+        "not_a_pass": True,
+        "go": False,
+    },
+    {
+        "id": "event_combos_glue",
+        "track": EVAL_TRACK_MID_N,
+        "why": "event_combos.py ~1205 after _SPECS delete; evaluate_combo_daily_mtm glue",
+        "not_a_pass": True,
+        "go": False,
+    },
+    {
+        "id": "worker_leftover_lid_bodies",
         "track": EVAL_TRACK_LIQ_LARGE,
-        "why": "hold the line: freeze SoT in place; pins untouched",
+        "why": (
+            "daily_path.ts leftover lid branches for unique-22 and pre_mom; "
+            "reduce only when occupancy-equal to comboEventGateOk"
+        ),
+        "not_a_pass": True,
+        "go": False,
+    },
+    {
+        "id": "economic_theme_yaml",
+        "track": EVAL_TRACK_MID_N,
+        "why": "ECONOMIC_THEME_IDS still a Python grouping; YAML theme: would drop dual-def",
+        "not_a_pass": True,
+        "go": False,
+    },
+    {
+        "id": "bar_eval_family_split",
+        "track": EVAL_TRACK_MID_N,
+        "why": "offline/bar_eval.py ~2017 evaluate_*_on_bars; split by family not by wave",
+        "not_a_pass": True,
+        "go": False,
+    },
+    {
+        "id": "multiyear_runner_split",
+        "track": EVAL_TRACK_MID_N,
+        "why": "offline/multiyear.py ~1947 window stitch vs reporting",
+        "not_a_pass": True,
+        "go": False,
+    },
+    {
+        "id": "phase35_matrix_test_split",
+        "track": EVAL_TRACK_MID_N,
+        "why": "tests/test_phase35_coverage_matrix.py ~1241 slows LLM-local iteration",
+        "not_a_pass": True,
+        "go": False,
+    },
+    {
+        "id": "meta_not_a_pass_hold",
+        "track": EVAL_TRACK_LIQ_LARGE,
+        "why": "active metas stay equal-weight descriptive blends; no correlation weights",
+        "not_a_pass": True,
+        "go": False,
+    },
+    {
+        "id": "month_start_leftover_hold",
+        "track": EVAL_TRACK_LIQ_LARGE,
+        "why": (
+            "surprise_xs_month_start leftover dd>05 vs catalog first_half_month "
+            "dd<=15; do not drop leftover without catalog retune + re-eval"
+        ),
+        "not_a_pass": True,
+        "go": False,
+    },
+    {
+        "id": "no_new_theses_until_worker_bodies",
+        "track": EVAL_TRACK_LIQ_LARGE,
+        "why": "+N YAML clones without occupancy-equal Worker bodies is waste",
         "not_a_pass": True,
         "go": False,
     },
     {
         "id": "no_go_until_both_tracks",
         "track": EVAL_TRACK_LIQ_LARGE,
-        "why": "GO needs mid_n_explore AND liq_large agreement plus human main; neither exists",
+        "why": "GO needs mid_n_explore AND liq_large agreement plus human main",
         "not_a_pass": True,
         "go": False,
     },
