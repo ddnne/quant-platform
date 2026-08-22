@@ -1,55 +1,9 @@
 """Research cost models: transaction + short borrow + leverage financing.
 
-Wave
-----
-* W77 / w0816k — explicit leverage/short assumptions (checklist v2)
-* W78 / w0816m — **prefer date-matched ``jsda_tokyo_repo_rates``** over fixed bp
-* W79 / w0816n — **liquidity-linked** modulation of tx cost and/or short spread
-  (repo-linked v2 kept; short low/mid/high sensitivity retained)
-* W85 / w0816t — **wire short cost = f(repo[t]) + fixed spread** into research
-  remeasure (CS L-S) and paper short-leg financing; low/mid/high sensitivity
-* W86 / w0816u — **connect daily repo series into paper engine** (mid spread +
-  repo when series present; leverage = repo only — no short-spread double-count)
+Research-only (仮定に依存). Does not mint READY / arm Mass / open Phase7.
+Repo gaps and missing liquidity are disclosed, never invented or ffilled.
 
-Purpose
--------
-Document **explicit research cost assumptions** beyond the base 10bp one-way
-transaction cost. Used by checklist v2 so leverage/short costs are never
-implicit.
-
-Hard constraints
-----------------
-* Research-only · 仮定に依存 · 運用GOではない
-* Does **not** mint READY / arm Mass / open Phase7 / authorize orders
-* Does **not** claim edge / significance
-* Pure helpers preferred (unit-testable without R2 / D1)
-* **No invent fill** on repo gaps — missing dates are gap-flagged, never ffilled
-* **No invent** on missing liquidity — gap disclosed; costs unmodulated
-
-Models
-------
-1. **Transaction (base)** — one-way default 10bp (matches robustness_gate);
-   optionally scaled by liquidity bucket (high/mid/low).
-2. **Short borrow** — preferred: ``f(repo[t] + borrow_spread, short_frac)`` with
-   documented low/mid/high spread sensitivity; fallback: fixed annual bp
-   placeholder or pure ``borrow_proxy``. Spread may be further scaled by
-   liquidity bucket (combined with sensitivity).
-   **Hold cost (W85):** ``short_borrow_daily * hold_days`` on multi-day L-S
-   nets (approved approximation; continuous borrow over sticky hold).
-3. **Leverage / financing** — preferred: ``f(repo_rate[t], leverage excess)``;
-   fallback: fixed annual bp placeholder when no repo series is supplied.
-4. **Long-only unlevered** — tx cost only; leverage/short **N/A** with explicit
-   assumptions (required even when unused).
-5. **Liquidity proxy** — from equities_bars dollar/yen volume (and optional
-   TOPIX/scale membership); missing data → gap disclose, never invent.
-
-Rate units
-----------
-JSDA ``jsda_repo_rates.rate`` is stored as **percent** (schema /
-``docs/data_sources.md``). Conversion:
-
-* annual fraction = ``rate_pct / 100``
-* annual bp      = ``rate_pct * 100``   (1.0% → 100bp)
+JSDA ``jsda_repo_rates.rate`` is percent: annual = pct/100, annual bp = pct*100.
 """
 
 from __future__ import annotations
@@ -98,29 +52,17 @@ DEFAULT_ONE_WAY_COST_BP: float = 10.0
 DEFAULT_ONE_WAY_COST: float = DEFAULT_ONE_WAY_COST_BP / 10_000.0  # 0.001
 DEFAULT_ROUND_TRIP_COST: float = DEFAULT_ONE_WAY_COST * 2.0
 
-# Short borrow / stock-lending (research defaults; 仮定に依存).
-# Fixed-bp placeholder when no repo series is supplied.
-# ~50bp annualized is a conservative liquid-name research placeholder;
-# TSE large-cap hard-to-borrow is higher; document when overriding.
+# Fixed-bp placeholders when no repo series is supplied (仮定に依存).
 DEFAULT_SHORT_BORROW_ANNUAL_BP: float = 50.0
 DEFAULT_SHORT_BORROW_ANNUAL: float = DEFAULT_SHORT_BORROW_ANNUAL_BP / 10_000.0
-# Trading days per year for daily amortization illustration.
 DEFAULT_TRADING_DAYS_PER_YEAR: int = 245
-
-# Leverage / financing fixed-bp placeholder (used only when no repo series).
-# Prefer date-matched jsda_tokyo_repo_rates over this constant.
 DEFAULT_LEVERAGE_FINANCING_ANNUAL_BP: float = 25.0
 DEFAULT_LEVERAGE_FINANCING_ANNUAL: float = (
     DEFAULT_LEVERAGE_FINANCING_ANNUAL_BP / 10_000.0
 )
 
-# ---------------------------------------------------------------------------
-# Repo-linked model identity / rate sources
-# ---------------------------------------------------------------------------
-
 REPO_DATASET_ID: str = "jsda_tokyo_repo_rates"
 REPO_TABLE: str = "jsda_repo_rates"
-# Preferred tenor for overnight-ish financing (source string kept as-is).
 DEFAULT_REPO_TENOR: str = "隔日物"
 DEFAULT_REPO_RATE_TYPE: str = "東京レポ・レート"
 
@@ -130,9 +72,7 @@ RATE_SOURCE_REPO_PLUS_SPREAD: str = "repo_plus_borrow_spread"
 RATE_SOURCE_BORROW_PROXY: str = "borrow_proxy"
 RATE_SOURCE_NOT_APPLICABLE: str = "not_applicable"
 
-# Short-borrow spread over repo (research sensitivity bands).
-# short_annual ≈ repo_annual + spread; mid matches the historical fixed 50bp
-# placeholder when repo ≈ 0.
+# short_annual ≈ repo_annual + spread; mid matches the historical 50bp fallback.
 SHORT_BORROW_SPREAD_LOW_BP: float = 25.0
 SHORT_BORROW_SPREAD_MID_BP: float = 50.0
 SHORT_BORROW_SPREAD_HIGH_BP: float = 150.0
@@ -143,22 +83,8 @@ SHORT_BORROW_SPREAD_SENSITIVITY: dict[str, float] = {
     "high": SHORT_BORROW_SPREAD_HIGH_BP,
 }
 
-# ---------------------------------------------------------------------------
-# Liquidity-linked modulation (W79 / w0816n)
-# ---------------------------------------------------------------------------
-# Proxy from equities_bars_daily: prefer turnover_value (売買代金 / yen volume);
-# fallback close * volume. Optional TOPIX / scale_category membership is a soft
-# bias only when bars-derived proxy is present — never invents a proxy alone.
-#
-# ADV thresholds are research placeholders in JPY/day (仮定に依存):
-#   high: ADV >= 1e9   (≈¥1bn/day large-cap liquid)
-#   mid:  ADV >= 1e8   (≈¥100m/day)
-#   low:  ADV <  1e8
-# Missing liquidity data → gap disclose; multipliers stay 1.0 (unmodulated).
-
 LIQUIDITY_DATASET_ID: str = "equities_bars_daily"
-LIQUIDITY_PROXY_UNIT: str = "jpy_adv"  # average daily yen turnover
-
+LIQUIDITY_PROXY_UNIT: str = "jpy_adv"
 LIQUIDITY_BUCKET_HIGH: str = "high"
 LIQUIDITY_BUCKET_MID: str = "mid"
 LIQUIDITY_BUCKET_LOW: str = "low"
@@ -168,13 +94,8 @@ KNOWN_LIQUIDITY_BUCKETS: tuple[str, ...] = (
     LIQUIDITY_BUCKET_MID,
     LIQUIDITY_BUCKET_LOW,
 )
-
-# ADV thresholds (JPY / day) — research defaults; override via kwargs.
 LIQUIDITY_ADV_HIGH_JPY: float = 1_000_000_000.0  # 1e9
 LIQUIDITY_ADV_MID_JPY: float = 100_000_000.0  # 1e8
-
-# Multipliers applied to base one-way tx cost and short borrow *spread*.
-# high liquidity → base; low liquidity → higher costs.
 LIQUIDITY_TX_MULT: dict[str, float] = {
     LIQUIDITY_BUCKET_HIGH: 1.0,
     LIQUIDITY_BUCKET_MID: 1.5,
@@ -185,13 +106,8 @@ LIQUIDITY_SHORT_SPREAD_MULT: dict[str, float] = {
     LIQUIDITY_BUCKET_MID: 1.5,
     LIQUIDITY_BUCKET_LOW: 2.0,
 }
-
-# Optional soft bias when TOPIX / large-scale membership is known *and* ADV
-# is observed: bump bucket one step toward high (never invents from membership
-# alone when ADV is missing).
 LIQUIDITY_TOPIX_SOFT_UPGRADE: bool = True
 
-# Position style tags accepted by checklist v2.
 POSITION_STYLE_LONG_ONLY_UNLEVERED: str = "long_only_unlevered"
 POSITION_STYLE_LONG_SHORT: str = "long_short"
 POSITION_STYLE_LEVERED_LONG: str = "levered_long"
@@ -237,13 +153,8 @@ def repo_rate_pct_to_annual_bp(rate_pct: float) -> float:
     return float(rate_pct) * 100.0
 
 
-def annual_bp_to_fraction(annual_bp: float) -> float:
-    """``bp / 10_000`` → annual fraction."""
-    return float(annual_bp) / 10_000.0
-
-
 # ---------------------------------------------------------------------------
-# Repo series load API (keyed by date; gaps disclosed, never ffilled)
+# Repo series (date-keyed; gaps disclosed, never ffilled)
 # ---------------------------------------------------------------------------
 
 
@@ -511,39 +422,8 @@ def load_repo_rate_series_from_pit(
     )
     out["as_of"] = str(as_of) if as_of is not None else None
     out["load_path"] = "pit.get_jsda_repo_rates"
-    out["history_sot_note"] = (
-        "PIT/D1 is tip-capable local/hot read; full history SoT is R2 "
-        "quant-structured (jsda_tokyo_repo_rates). No invent fill."
-    )
     return out
 
-
-def load_repo_rate_series_from_r2_rows(
-    rows: Sequence[Mapping[str, Any]] | None,
-    *,
-    required_dates: Sequence[Any] | None = None,
-    tenor: str | None = None,
-    rate_type: str | None = None,
-    prefer_tenor: str | None = DEFAULT_REPO_TENOR,
-) -> dict[str, Any]:
-    """Normalize R2-extracted ``jsda_tokyo_repo_rates`` rows into a series.
-
-    Caller supplies already-extracted rows (from
-    ``r2_feature_context`` / structured JSONL). This helper does not fetch R2.
-    """
-    out = load_repo_rate_series_from_rows(
-        rows,
-        required_dates=required_dates,
-        tenor=tenor,
-        rate_type=rate_type,
-        prefer_tenor=prefer_tenor,
-        source_label="r2_rows",
-    )
-    out["load_path"] = "r2_rows"
-    out["history_sot_note"] = (
-        "Rows presumed from R2 quant-structured history (SoT). No invent fill."
-    )
-    return out
 
 
 def lookup_repo_rate(
@@ -662,42 +542,12 @@ def mean_repo_rate_pct(
 
 
 # ---------------------------------------------------------------------------
-# Liquidity proxy + cost modulation (W79 / w0816n)
+# Liquidity proxy + cost modulation
 # ---------------------------------------------------------------------------
-#
-# Formula (documented)
-# --------------------
-# Per-bar yen turnover (prefer turnover_value / 売買代金):
-#
-#   yen_turnover[t] =
-#       turnover_value[t]                         if present
-#       else close[t] * volume[t]                 if both present
-#       else adjustment_close[t] * adjustment_volume[t]
-#       else MISSING (gap; never invent)
-#
-# Liquidity proxy (ADV, JPY/day) over supplied bars:
-#
-#   ADV = mean(yen_turnover[t] for observed t)
-#
-# Bucket (research thresholds; 仮定に依存):
-#
-#   high  if ADV >= LIQUIDITY_ADV_HIGH_JPY  (default 1e9)
-#   mid   if ADV >= LIQUIDITY_ADV_MID_JPY   (default 1e8)
-#   low   if ADV observed and < mid threshold
-#   missing if no observed yen_turnover  → gap disclose; no invent
-#
-# Optional soft upgrade (only when ADV observed):
-#   if is_topix or scale_category indicates large-cap → bucket one step up
-#   (low→mid, mid→high). Never invents ADV from membership alone.
-#
-# Cost modulation (combined with short low/mid/high sensitivity):
-#
-#   one_way_cost_eff = one_way_cost_base * LIQUIDITY_TX_MULT[bucket]
-#   spread_eff_bp    = spread_base_bp    * LIQUIDITY_SHORT_SPREAD_MULT[bucket]
-#
-#   where spread_base_bp ∈ {25, 50, 150} from short_borrow_sensitivity.
-#
-# Missing liquidity → mult = 1.0 (unmodulated), liquidity_gap=True disclosed.
+# ADV = mean(turnover_value or close*volume or adj_close*adj_volume).
+# high if ADV>=1e9, mid if >=1e8, else low; missing → mult=1.0, no invent.
+# Optional TOPIX/large soft-upgrade one step only when ADV is observed.
+# one_way_eff = base * LIQUIDITY_TX_MULT; spread_eff = band * SHORT_SPREAD_MULT.
 # ---------------------------------------------------------------------------
 
 
@@ -1406,19 +1256,6 @@ def short_borrow_daily_cost_from_repo(
     )
 
 
-def short_borrow_daily_cost_from_proxy(
-    borrow_proxy_annual_bp: float,
-    *,
-    short_fraction: float = 1.0,
-    trading_days_per_year: int = DEFAULT_TRADING_DAYS_PER_YEAR,
-) -> float:
-    """Daily short cost from an explicit borrow-proxy annual bp (no repo)."""
-    return short_borrow_daily_cost(
-        short_borrow_annual_bp=float(borrow_proxy_annual_bp),
-        trading_days_per_year=trading_days_per_year,
-        short_fraction=short_fraction,
-    )
-
 
 def resolve_short_borrow_spread_bp(
     *,
@@ -2052,125 +1889,47 @@ def cost_models_document() -> dict[str, Any]:
             "one_way_cost": DEFAULT_ONE_WAY_COST,
             "round_trip_cost_bp": DEFAULT_ONE_WAY_COST_BP * 2.0,
             "round_trip_cost": DEFAULT_ROUND_TRIP_COST,
-            "formula_one_way": (
-                "net_one_way = gross_signed_mean_active - one_way_cost; "
-                "one_way_cost = one_way_base * liquidity_tx_mult[bucket]"
-            ),
             "liquidity_tx_mult": dict(LIQUIDITY_TX_MULT),
             "change_requires": "cost_change_reason",
-            "label": "仮定に依存・研究用・運用GOではない",
         },
         "short_borrow": {
             "preferred_model": RATE_SOURCE_REPO_PLUS_SPREAD,
-            "formula_preferred": (
-                "short_borrow_daily[t] ≈ "
-                "(repo_pct[t]/100 + spread_base*liq_mult) "
-                "/ trading_days * short_fraction"
-            ),
             "spread_sensitivity_bp": dict(SHORT_BORROW_SPREAD_SENSITIVITY),
             "default_spread_bp": DEFAULT_SHORT_BORROW_SPREAD_BP,
             "liquidity_short_spread_mult": dict(LIQUIDITY_SHORT_SPREAD_MULT),
-            "combined_spread_formula": (
-                "spread_eff_bp = SHORT_BORROW_SPREAD_SENSITIVITY[low|mid|high] "
-                "* LIQUIDITY_SHORT_SPREAD_MULT[high|mid|low]"
-            ),
             "fallback_fixed_annual_bp": DEFAULT_SHORT_BORROW_ANNUAL_BP,
             "fallback_model": RATE_SOURCE_FIXED_BP,
-            "alt_model": RATE_SOURCE_BORROW_PROXY,
             "default_annual_bp": DEFAULT_SHORT_BORROW_ANNUAL_BP,
             "default_annual": DEFAULT_SHORT_BORROW_ANNUAL,
             "trading_days_per_year": DEFAULT_TRADING_DAYS_PER_YEAR,
-            "formula_daily_fixed": (
-                "short_borrow_daily ≈ short_borrow_annual / trading_days_per_year"
-            ),
-            "applies_when": "position_style uses short side (long_short / levered_long_short)",
-            "note": (
-                "Prefer repo[t] + explicit borrow spread (low/mid/high). "
-                "Spread further scaled by liquidity bucket (W79). "
-                "W85: wired into CS L-S remeasure (hold = daily * hold_days) "
-                "and paper short-leg daily financing. "
-                "Fixed 50bp annual is a fallback placeholder when no repo series. "
-                "Not a broker borrow quote. Hard-to-borrow names need higher spreads."
-            ),
             "remeasure_api": "remeasure_period_rows_with_short_cost",
             "hold_cost_api": "short_borrow_hold_cost_from_repo",
-            "sensitivity_table_api": "short_cost_sensitivity_bands",
         },
         "leverage_financing": {
             "preferred_model": RATE_SOURCE_REPO_SERIES,
-            "formula_preferred": (
-                "financing_daily[t] ≈ (repo_pct[t]/100) "
-                "* max(gross_leverage-1, 0) / trading_days"
-            ),
             "fallback_fixed_annual_bp": DEFAULT_LEVERAGE_FINANCING_ANNUAL_BP,
             "fallback_model": RATE_SOURCE_FIXED_BP,
             "default_annual_bp": DEFAULT_LEVERAGE_FINANCING_ANNUAL_BP,
             "default_annual": DEFAULT_LEVERAGE_FINANCING_ANNUAL,
             "trading_days_per_year": DEFAULT_TRADING_DAYS_PER_YEAR,
-            "formula_daily_fixed": (
-                "financing_daily ≈ leverage_financing_annual "
-                "* max(gross_leverage - 1, 0) / trading_days_per_year"
-            ),
-            "applies_when": "gross_leverage > 1 (levered styles)",
             "repo_dataset": REPO_DATASET_ID,
             "repo_table": REPO_TABLE,
             "default_tenor": DEFAULT_REPO_TENOR,
             "gap_policy": "disclose_only_no_ffill_no_invent",
-            "long_only_unlevered_rule": (
-                "Must state position_style=long_only_unlevered and "
-                "financing_not_applicable=True (or gross_leverage<=1)"
-            ),
-            "note": (
-                "Prefer date-matched jsda_tokyo_repo_rates over fixed bp. "
-                "Fixed 25bp is a research placeholder only when no series. "
-                "Not operational GO."
-            ),
         },
         "liquidity": {
             "dataset": LIQUIDITY_DATASET_ID,
             "proxy_unit": LIQUIDITY_PROXY_UNIT,
-            "formula_proxy": (
-                "ADV = mean_t(turnover_value[t] or close[t]*volume[t] "
-                "or adjustment_close[t]*adjustment_volume[t])"
-            ),
             "bucket_thresholds_jpy": {
                 "high": LIQUIDITY_ADV_HIGH_JPY,
                 "mid": LIQUIDITY_ADV_MID_JPY,
             },
-            "bucket_rule": (
-                "high if ADV>=1e9; mid if ADV>=1e8; low if ADV observed else missing"
-            ),
             "tx_mult": dict(LIQUIDITY_TX_MULT),
             "short_spread_mult": dict(LIQUIDITY_SHORT_SPREAD_MULT),
             "topix_soft_upgrade": LIQUIDITY_TOPIX_SOFT_UPGRADE,
             "gap_policy": "disclose_only_no_ffill_no_invent",
             "prefer_liquidity_linked_default": True,
             "require_liquidity_linked_default": False,
-            "note": (
-                "W79: liquidity modulates tx cost and short spread. "
-                "Missing bars/fields → gap disclose; never invent ADV. "
-                "TOPIX/scale membership alone never invents a bucket."
-            ),
-        },
-        "repo_series_api": {
-            "load_repo_rate_series": "unified loader (mapping / rows / series)",
-            "load_repo_rate_series_from_mapping": "date→rate_pct mapping",
-            "load_repo_rate_series_from_rows": "JSDA/PIT rows",
-            "load_repo_rate_series_from_pit": "pit.get_jsda_repo_rates (D1/local)",
-            "load_repo_rate_series_from_r2_rows": "R2-extracted rows (no fetch)",
-            "lookup_repo_rate": "single-date lookup with gap flag",
-            "date_matched_leverage_financing_costs": "per-date financing",
-            "date_matched_short_borrow_costs": "per-date short cost",
-        },
-        "liquidity_api": {
-            "yen_turnover_from_bar": "single-bar yen turnover (gap-safe)",
-            "compute_liquidity_proxy_from_bars": "ADV from equities_bars rows",
-            "compute_liquidity_proxy_from_adv": "ADV scalar envelope",
-            "liquidity_bucket_from_proxy": "ADV → high/mid/low/missing",
-            "liquidity_cost_multipliers": "bucket → tx/spread mult",
-            "resolve_liquidity_modulation": "unified proxy→bucket→mult",
-            "apply_liquidity_to_one_way_cost": "tx * tx_mult",
-            "apply_liquidity_to_short_spread_bp": "spread * short_spread_mult",
         },
         "known_position_styles": list(KNOWN_POSITION_STYLES),
         "known_liquidity_buckets": list(KNOWN_LIQUIDITY_BUCKETS),
@@ -2181,21 +1940,7 @@ def cost_models_document() -> dict[str, Any]:
             "require_liquidity_linked": False,
             "fixed_bp_fallback_when": "no repo_rate_series supplied",
             "liquidity_unmodulated_when": "no liquidity proxy / bars / bucket",
-            "long_only_unlevered": "tx only (optionally liq-scaled); short/financing N/A explicit",
-            "note": (
-                "Checklist v2 prefers repo-linked financing/short when series "
-                "is available; fixed bp remains valid disclosed fallback. "
-                "Liquidity mult preferred when proxy available; missing "
-                "liquidity never invent-filled (mult=1.0 + gap). "
-                "Gaps never invent-filled."
-            ),
         },
-        "note": (
-            "Research cost models for checklist v2 (v2 surface). Explicit "
-            "short/leverage assumptions required. Prefer date-matched "
-            "jsda_tokyo_repo_rates. Liquidity modulates tx + short spread "
-            "(W79). Pass does not mint READY, arm Mass, or claim edge."
-        ),
     }
     doc.update(_freeze_fields())
     return doc
@@ -2905,8 +2650,6 @@ def annotate_period_rows_with_extended_costs(
 
 
 __all__ = [
-    "CONNECTED_TO_MASS",
-    "CONNECTED_TO_READY",
     "COST_MODELS_LABEL",
     "COST_MODELS_PROOF",
     "COST_MODELS_PROOF_SHORT_COST_W85",
@@ -2926,7 +2669,6 @@ __all__ = [
     "DEFAULT_SHORT_BORROW_ANNUAL_BP",
     "DEFAULT_SHORT_BORROW_SPREAD_BP",
     "DEFAULT_TRADING_DAYS_PER_YEAR",
-    "EDGE_CLAIMED",
     "KNOWN_LIQUIDITY_BUCKETS",
     "KNOWN_POSITION_STYLES",
     "LIQUIDITY_ADV_HIGH_JPY",
@@ -2940,9 +2682,6 @@ __all__ = [
     "LIQUIDITY_SHORT_SPREAD_MULT",
     "LIQUIDITY_TOPIX_SOFT_UPGRADE",
     "LIQUIDITY_TX_MULT",
-    "MASS_RESEARCH",
-    "OPERATIONAL_GO",
-    "PHASE7",
     "POSITION_STYLE_LEVERED_LONG",
     "POSITION_STYLE_LEVERED_LONG_SHORT",
     "POSITION_STYLE_LONG_ONLY_UNLEVERED",
@@ -2952,15 +2691,12 @@ __all__ = [
     "RATE_SOURCE_NOT_APPLICABLE",
     "RATE_SOURCE_REPO_PLUS_SPREAD",
     "RATE_SOURCE_REPO_SERIES",
-    "READY_DECLARED",
     "REPO_DATASET_ID",
     "REPO_TABLE",
     "SHORT_BORROW_SPREAD_HIGH_BP",
     "SHORT_BORROW_SPREAD_LOW_BP",
     "SHORT_BORROW_SPREAD_MID_BP",
     "SHORT_BORROW_SPREAD_SENSITIVITY",
-    "SIGNIFICANCE_CLAIMED",
-    "annual_bp_to_fraction",
     "annotate_period_rows_with_extended_costs",
     "apply_liquidity_to_one_way_cost",
     "apply_liquidity_to_short_spread_bp",
@@ -2978,7 +2714,6 @@ __all__ = [
     "load_repo_rate_series",
     "load_repo_rate_series_from_mapping",
     "load_repo_rate_series_from_pit",
-    "load_repo_rate_series_from_r2_rows",
     "load_repo_rate_series_from_rows",
     "lookup_repo_rate",
     "mean_repo_rate_pct",
@@ -2990,7 +2725,6 @@ __all__ = [
     "resolve_liquidity_modulation",
     "resolve_short_borrow_spread_bp",
     "short_borrow_daily_cost",
-    "short_borrow_daily_cost_from_proxy",
     "short_borrow_daily_cost_from_repo",
     "short_borrow_hold_cost_from_repo",
     "short_cost_sensitivity_bands",
