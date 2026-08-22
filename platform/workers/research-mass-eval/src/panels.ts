@@ -1,12 +1,10 @@
 /**
  * Period panels for CF multi-logic mass-eval.
  *
- * * mode=synthetic: deterministic PRNG panels (W90 smoke default)
- * * mode=r2_panels: staged COMPLETE-backed real bars under
- *     {panels_prefix}/{period_id}.json
- *     (default prefix: research/mass_eval/panels)
- *     also tries job-scoped research/mass_eval/job={id}/panels/{period_id}.json
- * * mode=d1_bars: live tip extract from D1 jquants_records (hot window only)
+ * synthetic — deterministic PRNG (smoke)
+ * r2_panels — staged COMPLETE-backed bars under {panels_prefix}/{period_id}.json
+ *             (default research/mass_eval/panels; also job-scoped prefix)
+ * d1_bars — D1 jquants_records tip extract (hot window only)
  */
 
 import type { BarsByCode, Env, PeriodPanel, PeriodSpec } from "./types";
@@ -26,9 +24,8 @@ function mulberry32(seed: number): () => number {
 }
 
 function q4Dates(year: number, maxDays: number): string[] {
-  // Oct 1 .. mid-Dec lite window (trading-day proxy: weekdays only-ish)
   const out: string[] = [];
-  const start = new Date(Date.UTC(year, 9, 1)); // month 9 = Oct
+  const start = new Date(Date.UTC(year, 9, 1));
   let d = start;
   while (out.length < maxDays) {
     const wd = d.getUTCDay();
@@ -39,7 +36,6 @@ function q4Dates(year: number, maxDays: number): string[] {
       out.push(`${y}-${m}-${day}`);
     }
     d = new Date(d.getTime() + 86400000);
-    // stop if past year end
     if (d.getUTCFullYear() > year) break;
   }
   return out;
@@ -61,7 +57,6 @@ function buildBarsForPeriod(
     const series: Array<[string, number]> = [];
     let px = base;
     for (let i = 0; i < dates.length; i++) {
-      // mild drift + noise; code-specific bias for diversity
       const drift = 0.0004 * (1 + (ci % 3)) + (ci % 2 === 0 ? 0.0002 : -0.0001);
       const noise = (rng() - 0.5) * 0.02;
       px = Math.max(1, px * (1 + drift + noise));
@@ -84,9 +79,7 @@ export function defaultPeriodsFromRequest(
       period_end: p.period_end,
     }));
   }
-  // Default lite multi-year Q4 set (seed-stable order)
   const years = DEFAULT_YEARS.slice();
-  // mild permutation by seed without dropping years
   const rng = mulberry32(seed >>> 0);
   for (let i = years.length - 1; i > 0; i--) {
     const j = Math.floor(rng() * (i + 1));
@@ -98,11 +91,7 @@ export function defaultPeriodsFromRequest(
   }));
 }
 
-/**
- * Build index RV series from panel bars.
- * Prefer reserved __NKY_PROXY__ / __TOPIX__ / __NK225F__ closes when staged
- * (W91 real panels); else equal-weight equity path (disclosed fallback).
- */
+/** Index RV from __NKY_PROXY__ / __TOPIX__ / __NK225F__, else EW equity. */
 function buildNkyVolFromBars(
   bars: BarsByCode,
   shortN = 10,
@@ -119,7 +108,6 @@ function buildNkyVolFromBars(
     }
   }
   if (!idxSeries) {
-    // Equal-weight average of equity codes only (skip reserved).
     const codes = Object.keys(bars).filter((c) => !c.startsWith("__"));
     if (!codes.length) return null;
     const dateSet = new Set<string>();
@@ -208,15 +196,7 @@ export function buildSyntheticPanels(
   });
 }
 
-/**
- * Load staged panels from R2 if present.
- *
- * Lookup order per period:
- *   1. {panelsPrefix}/{period_id}.json  (explicit / job-scoped preferred)
- *   2. research/mass_eval/panels/{period_id}.json  (shared staged)
- *
- * Shape: { period_id, year, bars: { code: [[date, close], ...] } }
- */
+/** Load staged panels. Prefer {panelsPrefix}/{id}.json, else shared prefix. */
 export async function loadR2Panels(
   bucket: R2Bucket,
   periods: PeriodSpec[],
@@ -233,7 +213,6 @@ export async function loadR2Panels(
       `${primaryPrefix}/${p.period_id}.json`,
       `research/mass_eval/panels/${p.period_id}.json`,
     ];
-    // de-dupe if primary equals default
     const keys = [...new Set(candidates)];
     let obj: R2ObjectBody | null = null;
     let keyUsed = keys[0];
@@ -281,7 +260,6 @@ export async function loadR2Panels(
         flow_regime?: PeriodPanel["flow_regime"];
         fund_regime?: PeriodPanel["fund_regime"];
         adv_by_code?: PeriodPanel["adv_by_code"];
-        nky_proxy?: string;
       };
       const bars = normalizeBars(raw.bars || {});
       const nCodes = Object.keys(bars).filter((c) => !c.startsWith("__")).length;
@@ -298,7 +276,6 @@ export async function loadR2Panels(
         });
         continue;
       }
-      // Prefer staged nky_vol_series; else derive from __NKY_PROXY__ / EW.
       const nky =
         raw.nky_vol_series &&
         (raw.nky_vol_series.rv_short_by_date ||
@@ -412,12 +389,7 @@ function normalizeBars(raw: unknown): BarsByCode {
   return out;
 }
 
-/**
- * Load tip bars from D1 jquants_records (equities_bars_daily).
- *
- * Honest limit: D1 is hot-window only (currently ~tip month(s)), not
- * multi-year COMPLETE history. Multi-year research must use r2_panels.
- */
+/** D1 jquants_records tip bars. Hot-window only; multi-year uses r2_panels. */
 export async function loadD1BarsPanels(
   db: D1Database,
   periods: PeriodSpec[],
@@ -437,7 +409,6 @@ export async function loadD1BarsPanels(
       (p.period_end && String(p.period_end).slice(0, 10)) ||
       (p.year ? `${p.year}-12-31` : "2099-12-31");
     try {
-      // Prefer codes that appear most in the window.
       const codeRows = await db
         .prepare(
           `SELECT json_extract(payload, '$.Code') AS code, COUNT(*) AS n

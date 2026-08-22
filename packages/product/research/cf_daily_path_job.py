@@ -1,18 +1,8 @@
 """Candidate-grade daily_path on Cloudflare via isolate fan-out.
 
-Bottleneck this replaces
-------------------------
-``python -m research.unique_logic --all`` evaluates logics × windows × shards
-in **one process**, so wall-clock is the sum. The mass-eval Worker also
-``.map``s logics inside one isolate.
-
-Model
------
-1. Stage COMPLETE-backed panels once (shared R2 prefix).
-2. POST ``/v1/daily-path`` **once per logic** (write_artifacts=false).
-3. Cloudflare runs isolates concurrently; batch wall-clock ≈ longest POST
-   + staging, not the sum of logics.
-4. Driver aggregates cells and records ``research/eval/job={id}/`` (R2+D1).
+Stage panels once, POST ``/v1/daily-path`` once per logic
+(write_artifacts=false), aggregate cells. Batch wall-clock ≈ longest isolate
++ staging, not the sum of logics.
 
 Does not promote / GO / Mass / retune pins. period-net n_survivors is not
 this protocol.
@@ -65,12 +55,10 @@ def invoke_cf_daily_path(
     spec = dict(job_spec)
     spec["eval_kind"] = "daily_path"
     spec["write_artifacts"] = False
-    url = worker_url.rstrip("/") + "/v1/daily-path"
-    # Reuse mass-eval invoker by swapping path via a thin wrapper.
-    patched_url = url
+    patched_url = worker_url.rstrip("/") + "/v1/daily-path"
 
     def _post(*, url: str, body: bytes, headers: dict[str, str]) -> Any:
-        # invoke_cf_mass_eval_worker builds /v1/mass-eval; we ignore that url.
+        # invoke_cf_mass_eval_worker builds /v1/mass-eval; ignore that url.
         from urllib.error import HTTPError
         from urllib.request import Request, urlopen
 
@@ -117,10 +105,7 @@ def run_cf_daily_path_fanout(
     panels_prefix: str | None = None,
     track: str | None = None,
 ) -> dict[str, Any]:
-    """Stage once, fan-out one CF isolate per logic, aggregate cells.
-
-    Wall-clock target: staging + max(isolate), not sum(logics).
-    """
+    """Stage once, fan-out one CF isolate per logic, aggregate cells."""
     from research.eval_tracks import infer_eval_track
 
     t0 = time.perf_counter()

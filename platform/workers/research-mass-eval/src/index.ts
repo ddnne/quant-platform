@@ -1,31 +1,9 @@
 /// <reference types="@cloudflare/workers-types" />
 /**
- * quant-platform-research-mass-eval
- *
- * POST /v1/mass-eval
- *   body: { seed, logics[], periods[], job_id, mode?, panels_prefix? }
- *   → multi-period metrics per logic on real or synthetic panels
- *   → write R2 quant-structured research/mass_eval/job={id}/…
- *
- * Modes:
- *   r2_panels — staged COMPLETE-backed real bars (preferred)
- *   d1_bars   — D1 jquants_records tip extract (hot window only)
- *   synthetic — deterministic PRNG (smoke)
- *   nets_only — pre-baked period_nets
- *
- * Default POST /v1/mass-eval is a **period-net screen only**.
- * ``n_survivors`` is not candidate-grade.
- * POST /v1/daily-path (or eval_kind=daily_path) is candidate-grade daily MTM.
- * The Python driver fans out one isolate per logic so batch wall-clock
- * ≈ the longest isolate (not the sum).
- *
- * Freezes held:
- *   Mass=NO-GO · READY=false · ops GO=false · continuous paper UNARMED
- *   3 default-path representatives not retuned
- *
- * Pure TS (no Python). macro_repo_* consume staged repo_rate_regime.
- * flow_margin_* / fund_* / mf_* consume staged flow/fund sidecars;
- * missing sidecar → disclosed MDH fallback (c21_lite_fallback_mdh:…).
+ * POST /v1/mass-eval — period-net screen (n_survivors is not a pass).
+ * POST /v1/daily-path — candidate-grade daily MTM; one isolate per logic.
+ * Modes: r2_panels (preferred) | d1_bars (tip only) | synthetic | nets_only
+ * Missing flow/fund/repo sidecars → disclosed MDH fallback.
  */
 
 import { evaluateLogicAcrossPeriods, rankSurvivors } from "./eval";
@@ -68,7 +46,7 @@ async function tokenMatches(provided: string, expected: string): Promise<boolean
 }
 
 async function authorized(request: Request, expected?: string): Promise<boolean> {
-  // If no token configured, allow (research worker on workers.dev; ops should set token).
+  // Unset token → allow (workers.dev research worker; ops should set MASS_EVAL_TOKEN).
   if (!expected) return true;
   const got =
     request.headers.get("X-Mass-Eval-Token") ||
@@ -148,7 +126,7 @@ function parseRequest(body: unknown): { ok: true; value: MassEvalRequest } | { o
     }
     periods = body.periods.map((p, i) => {
       const o = isObject(p) ? p : {};
-      // Accept period_start/end and driver aliases start/end.
+      // period_start/end, or driver aliases start/end.
       const pStart =
         o.period_start != null
           ? String(o.period_start)
@@ -232,7 +210,6 @@ async function runMassEval(
   const mode = req.mode || "synthetic";
   const oneWay = req.one_way_cost ?? 0.001;
   const maxCodes = Math.max(2, Math.min(40, req.max_codes ?? 8));
-  // Allow multi-year windows up to ~1 trading year per panel.
   const maxDays = Math.max(20, Math.min(260, req.max_days ?? 120));
   const periodSpecs = defaultPeriodsFromRequest(req.periods, req.seed);
   const panelsPrefix =
@@ -356,8 +333,7 @@ async function runMassEval(
     })),
   };
 
-  // Write artifacts to R2
-  const puts = await Promise.all([
+  await Promise.all([
     putJson(env.STRUCTURED_BUCKET, manifest.keys.manifest, manifest),
     putJson(env.STRUCTURED_BUCKET, manifest.keys.request, {
       ...req,
@@ -382,7 +358,6 @@ async function runMassEval(
     putJson(env.STRUCTURED_BUCKET, manifest.keys.panels_meta, panelsMeta),
   ]);
 
-  // Per-logic compact result (bounded; skip if too many)
   const logicKeys: Record<string, string> = {};
   if (results.length <= 50) {
     await Promise.all(
@@ -425,10 +400,7 @@ async function runMassEval(
   };
 }
 
-/**
- * Candidate-grade daily MTM. Designed for one-logic fan-out: the driver
- * issues concurrent POSTs so batch wall-clock ≈ longest isolate.
- */
+/** Candidate-grade daily MTM; driver fans out one POST per logic. */
 async function runDailyPath(
   env: Env,
   req: MassEvalRequest,

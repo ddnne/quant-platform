@@ -1,13 +1,8 @@
-/**
- * Shared types for research mass-eval worker (W90 / w0816y).
- *
- * Freezes: Mass=NO-GO · READY=false · ops GO=false · continuous paper UNARMED.
- * Does not retune frozen default-path representatives.
- */
+/** Shared types for the research mass-eval worker. */
 
 export interface Env {
   STRUCTURED_BUCKET: R2Bucket;
-  /** Optional D1 tip/history bind for mode=d1_bars (hot window only). */
+  /** Optional D1 bind for mode=d1_bars (hot window only). */
   DB?: D1Database;
   /** Optional gate for POST /v1/mass-eval (X-Mass-Eval-Token). */
   MASS_EVAL_TOKEN?: string;
@@ -20,7 +15,6 @@ export interface Env {
   CONTINUOUS_PAPER?: string;
 }
 
-/** One logic individual to evaluate (distinct economic thesis preferred). */
 export interface LogicSpec {
   logic_id: string;
   family_id?: string;
@@ -30,7 +24,7 @@ export interface LogicSpec {
   signal_definition?: string;
   position_rule?: string;
   datasets?: string[];
-  /** Optional pre-baked period nets (skip bar path when present). */
+  /** Pre-baked period nets skip the bar path when present. */
   period_nets?: Array<number | null>;
   period_grosses?: Array<number | null>;
 }
@@ -48,10 +42,10 @@ export interface MassEvalRequest {
   periods?: PeriodSpec[];
   job_id: string;
   /**
-   * synthetic — deterministic PRNG panels (W90 default / smoke)
-   * r2_panels — staged COMPLETE-backed panels under panels_prefix or default keys
-   * d1_bars — live D1 jquants_records tip extract (hot window only; not multi-year)
-   * nets_only — use pre-baked period_nets on each logic
+   * synthetic — deterministic PRNG (smoke)
+   * r2_panels — staged COMPLETE-backed panels
+   * d1_bars — D1 jquants_records tip extract (not multi-year)
+   * nets_only — pre-baked period_nets on each logic
    */
   mode?: "synthetic" | "r2_panels" | "d1_bars" | "nets_only";
   /**
@@ -73,7 +67,7 @@ export interface MassEvalRequest {
 export type BarSeries = Array<[string, number]>; // [date, close]
 export type BarsByCode = Record<string, BarSeries>;
 
-/** Index-level realized-vol series for nky_vol_* logics (date → ann. RV). */
+/** Index-level realized-vol for nky_vol_* (date → ann. RV). */
 export interface NkyVolSeries {
   source?: string;
   short_n?: number;
@@ -84,7 +78,7 @@ export interface NkyVolSeries {
   rv_ratio_by_date?: Record<string, number>;
 }
 
-/** W92/W94 options_225 BaseVol / ATM / skew / CM-term / Δvol (percent vol points). */
+/** options_225 BaseVol / ATM / skew / CM-term / Δvol (percent vol points). */
 export interface Opt225RegimeSeries extends NkyVolSeries {
   series_kind?: string;
   units?: string;
@@ -107,15 +101,15 @@ export interface Opt225RegimeBundle {
   atm_iv?: Opt225RegimeSeries | null;
   spread?: Opt225RegimeSeries | null;
   spread_change?: Opt225RegimeSeries | null;
-  /** W94: put_iv(~0.95*UnderPx) − atm_mid_iv */
+  /** put_iv(~0.95*UnderPx) − atm_mid_iv */
   skew?: Opt225RegimeSeries | null;
-  /** W94: near_cm_atm_iv − next_cm_atm_iv */
+  /** near_cm_atm_iv − next_cm_atm_iv */
   cm_term?: Opt225RegimeSeries | null;
-  /** W94: BaseVol[t] − BaseVol[t-1] */
+  /** BaseVol[t] − BaseVol[t-1] */
   basevol_delta?: Opt225RegimeSeries | null;
 }
 
-/** W93 jsda_tokyo_repo_rates compact regime (percent). */
+/** jsda_tokyo_repo_rates compact regime (percent). */
 export interface RepoRateRegime {
   dataset?: string;
   status?: string;
@@ -130,7 +124,7 @@ export interface RepoRateRegime {
   role?: string;
 }
 
-/** W93 markets_calendar HolDiv map. */
+/** markets_calendar HolDiv map. */
 export interface CalendarSideCar {
   dataset?: string;
   hol_div_by_date?: Record<string, string>;
@@ -139,7 +133,7 @@ export interface CalendarSideCar {
   dates?: string[];
 }
 
-/** W93 flow sidecar (margin + short_ratio). */
+/** Flow sidecar (margin + short_ratio). */
 export interface FlowRegime {
   dataset_margin?: string;
   dataset_short?: string;
@@ -154,7 +148,7 @@ export interface FlowRegime {
   role?: string;
 }
 
-/** W93 fins_summary compact events. */
+/** fins_summary compact events. */
 export interface FundRegime {
   dataset?: string;
   status?: string;
@@ -190,33 +184,32 @@ export interface PeriodPanel {
   status: "ok" | "data_missing";
   bars: BarsByCode;
   source: string;
-  /** Optional Nikkei/TOPIX realized-vol regime series (proxy/compare). */
+  /** Nikkei/TOPIX realized-vol (proxy/compare). */
   nky_vol_series?: NkyVolSeries | null;
-  /** Optional W92 options_225 canonical Nikkei vol SoT. */
+  /** options_225 canonical Nikkei vol SoT. */
   opt225_regime?: Opt225RegimeBundle | null;
-  /** W92 daily BaseVol by date (percent vol points) — canonical level. */
+  /** Daily BaseVol (percent vol points) — canonical level. */
   base_vol_series?: Record<string, number> | null;
-  /** W92 daily ATM IV by date (percent vol points) — compare-only. */
+  /** Daily ATM IV (percent vol points) — compare-only. */
   atm_iv_series?: Record<string, number> | null;
-  /** W92 daily (ATM IV − BaseVol) spread by date. */
+  /** Daily (ATM IV − BaseVol) spread. */
   iv_base_spread?: Record<string, number> | null;
-  /** W94 daily 95% put skew by date. */
+  /** Daily 95% put skew. */
   skew_series?: Record<string, number> | null;
-  /** W94 daily near−next CM term by date. */
+  /** Daily near−next CM term. */
   cm_term_series?: Record<string, number> | null;
-  /** W94 daily BaseVol delta by date. */
+  /** Daily BaseVol delta. */
   basevol_delta_series?: Record<string, number> | null;
-  /** W93 repo rate regime (jsda_tokyo_repo_rates). */
+  /** jsda_tokyo_repo_rates regime. */
   repo_rate_regime?: RepoRateRegime | null;
   /** Flat alias of repo rates_by_date. */
   repo_rate_by_date?: Record<string, number> | null;
-  /** W93 markets_calendar sidecar. */
   calendar?: CalendarSideCar | null;
-  /** W93/W94 flow (margin/short) sidecar — CF flow_margin_* / mf_flow_price consume. */
+  /** Margin/short sidecar — flow_margin_* / mf_flow_price. */
   flow_regime?: FlowRegime | null;
-  /** W93/W94 fund (fins_summary) sidecar — CF fund_* / mf_value_mom_rate consume. */
+  /** fins_summary sidecar — fund_* / mf_value_mom_rate. */
   fund_regime?: FundRegime | null;
-  /** Average daily yen turnover by code (liquidity cost). Missing → tx+repo only. */
+  /** Average daily yen turnover by code. Missing → tx+repo only. */
   adv_by_code?: Record<string, number> | null;
 }
 
@@ -251,7 +244,7 @@ export interface LogicEvalResult {
   mean_net_inverted: number | null;
   t_stat: number | null;
   t_stat_inverted: number | null;
-  /** W95: ok | low_variance_artifact | n_lt_2 | … */
+  /** ok | low_variance_artifact | n_lt_2 | … */
   t_stat_reason?: string;
   raw_t_stat?: number | null;
   low_variance_artifact?: boolean;

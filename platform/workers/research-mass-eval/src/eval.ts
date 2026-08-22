@@ -1,12 +1,6 @@
 /**
- * Pure-TS lite multi-period logic evaluation for CF Workers.
- *
- * Period-net screen (this module). Python counterparts:
- * offline.factory / offline.bar_eval. Candidate-grade path is daily_path.
- *
- * W93: macro_repo_rate_* consume staged repo_rate_regime when present.
- * W94: flow_margin_* / fund_* / mf_* consume staged flow_regime / fund_regime
- * when present. Missing sidecars → disclosed MDH fallback
+ * Period-net screen (pure TS). Python: offline.factory / offline.bar_eval.
+ * Candidate-grade path is daily_path. Missing sidecars → disclosed MDH
  * (`c21_lite_fallback_mdh:<family>`), never silent.
  */
 
@@ -15,7 +9,6 @@ import {
   invertNets,
   sampleMean,
   sharpePeriod,
-  tStatVsZero,
   tStatVsZeroDetail,
 } from "./metrics";
 import { isMdhCollapseSignal, isPathCollapsedRow } from "./mdh_collapse";
@@ -101,7 +94,6 @@ function applyStickyHold(
       }
       out[i] = held;
     } else {
-      // min_hold
       if (held === null) {
         if (entry !== null && entry !== 0) {
           held = entry;
@@ -252,12 +244,10 @@ function flowConfirmEntry(
     return ms;
   }
   if (m === "soft") {
-    if (ss === null) return ms; // gap → margin-only
+    if (ss === null) return ms;
     if (ss === 0 || ms === 0) return 0;
-    // conflict keeps margin (soft)
     return ms;
   }
-  // off
   return ms;
 }
 
@@ -273,7 +263,6 @@ function fundEntrySign(
   const mom = signFromNumeric(momentum);
   const m = String(mode || "value_momentum_agree").toLowerCase();
   if (m === "value_only") return vs;
-  // value_momentum_agree
   if (vs === null || mom === null || vs === 0) return vs === null ? null : 0;
   if (mom === 0) return null;
   if ((vs > 0 && mom > 0) || (vs < 0 && mom < 0)) return vs;
@@ -291,10 +280,7 @@ function repoLevelRegime(
   return "mid";
 }
 
-/**
- * W94: flow_margin_* using staged flow_regime (margin change ± short confirm).
- * Falls back to disclosed MDH when margin map empty.
- */
+/** flow_margin_* from staged flow_regime; empty margin map → disclosed MDH. */
 function evalFlowDemand(
   bars: BarsByCode,
   flow: PeriodPanel["flow_regime"],
@@ -327,7 +313,6 @@ function evalFlowDemand(
     if (!pairs || pairs.length < h + 2) continue;
     let chgMap = (changeByCode && changeByCode[code]) || null;
     if (!chgMap && levelByCode && levelByCode[code]) {
-      // derive change from levels if only levels staged
       const levelDates = Object.keys(levelByCode[code]).sort();
       const derived: Record<string, number> = {};
       for (let i = 1; i < levelDates.length; i++) {
@@ -344,7 +329,6 @@ function evalFlowDemand(
     let lastShort: number | null = null;
     const entrySigns: Array<number | null> = [];
     for (const [d] of pairs) {
-      // last short change ≤ d
       if (shortDates.length) {
         const earlier = shortDates.filter((x) => x <= d);
         if (earlier.length) {
@@ -356,7 +340,7 @@ function evalFlowDemand(
       if (Object.prototype.hasOwnProperty.call(chgMap, d)) {
         entrySigns.push(flowConfirmEntry(chgMap[d], lastShort, mode));
       } else {
-        entrySigns.push(null); // between margin prints
+        entrySigns.push(null);
       }
     }
     const held = applyStickyHold(entrySigns, h, "min_hold");
@@ -365,7 +349,7 @@ function evalFlowDemand(
       nCodeDays += 1;
       const pos = held[i];
       if (pos === null || pos === 0) continue;
-      // Score on fresh margin entry days (matches local factory).
+      // Fresh margin-print days only (matches local factory).
       if (entrySigns[i] === null || entrySigns[i] === 0) continue;
       const fwd = multiDayForwardReturn(closes, h, i);
       if (fwd === null) continue;
@@ -386,10 +370,7 @@ function evalFlowDemand(
   };
 }
 
-/**
- * W94: fund_value_* using staged fund_regime events + bars.
- * Falls back to disclosed MDH when events empty.
- */
+/** fund_value_* from staged fund_regime; empty events → disclosed MDH. */
 function evalFundPrice(
   bars: BarsByCode,
   fund: PeriodPanel["fund_regime"],
@@ -406,7 +387,6 @@ function evalFundPrice(
     return mdhFallback(bars, h, oneWay, "fundamentals_price");
   }
 
-  // Pass 1: value scores + global median benchmark.
   const valueByCodeDate: Record<string, Record<string, number | null>> = {};
   const allScores: number[] = [];
   for (const code of Object.keys(bars)) {
@@ -475,9 +455,7 @@ function evalFundPrice(
   };
 }
 
-/**
- * W94: mf_value_mom_rate — value×mom agree + funding-level alignment.
- */
+/** mf_value_mom_rate: value×mom agree + funding-level alignment. */
 function evalMfValueMomRate(
   bars: BarsByCode,
   fund: PeriodPanel["fund_regime"],
@@ -586,9 +564,7 @@ function evalMfValueMomRate(
   };
 }
 
-/**
- * W94: mf_flow_price — margin flow × price mom agree.
- */
+/** mf_flow_price: margin flow × price mom agree. */
 function evalMfFlowPrice(
   bars: BarsByCode,
   flow: PeriodPanel["flow_regime"],
@@ -690,7 +666,6 @@ function repoRegimeLabel(
     if (rate <= lowThreshold) return "low";
     return "mid";
   }
-  // rate_change
   if (prev === null || !Number.isFinite(prev)) return null;
   const delta = rate - prev;
   if (delta > eps) return "rate_up";
@@ -708,17 +683,14 @@ function conditionMomOnRepoRegime(
   if (m.includes("level")) {
     if (regime === "low") return entrySign > 0 ? entrySign : null;
     if (regime === "high") return entrySign < 0 ? entrySign : null;
-    return null; // mid → no trade
+    return null;
   }
   if (regime === "rate_down") return entrySign > 0 ? entrySign : null;
   if (regime === "rate_up") return entrySign < 0 ? entrySign : null;
-  return null; // flat → no trade
+  return null;
 }
 
-/**
- * W93: macro-conditioned momentum using staged jsda_tokyo_repo_rates.
- * Falls back to plain MDH when repo map is empty (disclosed).
- */
+/** macro_repo_rate_* from staged repo map; empty map → disclosed MDH. */
 function evalMacroRepoConditioned(
   bars: BarsByCode,
   ratesByDate: Record<string, number>,
@@ -728,22 +700,13 @@ function evalMacroRepoConditioned(
   oneWay: number,
   highThreshold: number,
   lowThreshold: number,
-): {
-  gross: number | null;
-  net: number | null;
-  amCost: number;
-  nActive: number;
-  activation: number | null;
-  signalId: string;
-} {
+): EvalOut {
   const n = Math.max(1, Math.floor(momentumN));
   const h = Math.max(1, Math.floor(holdDays));
   const amCost = amortizedOneWayCost(oneWay, h);
   const rateDates = Object.keys(ratesByDate).sort();
   if (rateDates.length < 2) {
-    // No staged repo → honest MDH fallback tag.
-    const fb = evalMultiDayHold(bars, h, oneWay, "fixed_horizon", 1);
-    return { ...fb, signalId: `c21_lite_fallback_mdh:macro_conditioned` };
+    return mdhFallback(bars, h, oneWay, "macro_conditioned");
   }
   const prevMap: Record<string, number | null> = {};
   for (let i = 0; i < rateDates.length; i++) {
@@ -760,14 +723,13 @@ function evalMacroRepoConditioned(
     if (!pairs || pairs.length < n + 2) continue;
     const moms = momentumSeries(pairs, n);
     const entrySigns = moms.map(([, m]) => signFromNumeric(m));
-    // Apply regime filter to daily entries, then sticky hold.
     const conditioned: Array<number | null> = [];
     for (let i = 0; i < moms.length; i++) {
       const d = moms[i][0];
       let rate = ratesByDate[d];
       let prev = prevMap[d] ?? null;
       if (rate === undefined) {
-        // last repo date ≤ d (no invent/ffill beyond observed as_of)
+        // last observed as_of ≤ d; no invent/ffill
         const earlier = rateDates.filter((x) => x <= d);
         if (!earlier.length) {
           conditioned.push(null);
@@ -821,14 +783,7 @@ function evalMultiDayHold(
   oneWay: number,
   rebalanceMode: string,
   polarity: number,
-): {
-  gross: number | null;
-  net: number | null;
-  amCost: number;
-  nActive: number;
-  activation: number | null;
-  signalId: string;
-} {
+): EvalOut {
   const h = Math.max(1, Math.floor(holdDays));
   const amCost = amortizedOneWayCost(oneWay, h);
   const signed: number[] = [];
@@ -877,14 +832,7 @@ function evalCrossSection(
   longFrac: number,
   shortFrac: number,
   oneWay: number,
-): {
-  gross: number | null;
-  net: number | null;
-  amCost: number;
-  nActive: number;
-  activation: number | null;
-  signalId: string;
-} {
+): EvalOut {
   const n = Math.max(1, Math.floor(momentumN));
   const h = Math.max(1, Math.floor(holdDays));
   const byDate: Record<string, Record<string, number | null>> = {};
@@ -981,10 +929,7 @@ function strParam(params: Record<string, unknown>, key: string, fallback: string
   return fallback;
 }
 
-/**
- * W91 index-level Nikkei/TOPIX vol regime × CS book (lite TS port).
- * Distinct from per-name vol_risk_adjusted / vol_breakout_expand.
- */
+/** Index-level Nikkei/TOPIX vol regime × CS book (not per-name vol_*). */
 function evalNkyVolRegime(
   bars: BarsByCode,
   nky: NkyVolSeries | null,
@@ -998,14 +943,7 @@ function evalNkyVolRegime(
   lowThr: number,
   expandRatio: number,
   compressRatio: number,
-): {
-  gross: number | null;
-  net: number | null;
-  amCost: number;
-  nActive: number;
-  activation: number | null;
-  signalId: string;
-} {
+): EvalOut {
   const h = Math.max(1, Math.floor(holdDays));
   const n = Math.max(1, Math.floor(momentumN));
   const amCost = amortizedOneWayCost(oneWay, h);
@@ -1028,7 +966,6 @@ function evalNkyVolRegime(
   const datesByCode: Record<string, string[]> = {};
   const closesList: Record<string, number[]> = {};
   for (const [code, pairs] of Object.entries(bars)) {
-    // Skip reserved index proxy codes from CS universe.
     if (String(code).startsWith("__")) continue;
     const moms = momentumSeries(pairs, n);
     for (const [d, mom] of moms) {
@@ -1063,7 +1000,6 @@ function evalNkyVolRegime(
       if (sLab === "low" && lLab === "low") return "low";
       return "mid";
     }
-    // abs level
     const v = absBy[dk];
     if (v === undefined) return null;
     if (v >= highThr) return "high";
@@ -1129,7 +1065,6 @@ function evalNkyVolRegime(
   };
 }
 
-/** Evaluate one logic on one panel. */
 export function evalLogicOnPanel(
   logic: LogicSpec,
   panel: PeriodPanel,
@@ -1152,14 +1087,7 @@ export function evalLogicOnPanel(
   const lid = String(logic.logic_id || family);
 
   try {
-    let out: {
-      gross: number | null;
-      net: number | null;
-      amCost: number;
-      nActive: number;
-      activation: number | null;
-      signalId: string;
-    };
+    let out: EvalOut;
     let holdDays = 5;
 
     if (
@@ -1226,7 +1154,6 @@ export function evalLogicOnPanel(
           series = bundle.atm_iv;
         else series = bundle.basevol;
       }
-      // Fallback: build abs map from top-level by-date series on the panel.
       if (!series) {
         const absMap =
           seriesKind === "skew" || mode.includes("skew")
@@ -1250,7 +1177,6 @@ export function evalLogicOnPanel(
           };
         }
       }
-      // Reuse nky regime evaluator; thresholds are percent vol points for opt225.
       const defaultHigh =
         seriesKind === "skew" || mode.includes("skew")
           ? 3.0
@@ -1289,7 +1215,6 @@ export function evalLogicOnPanel(
         numParam(params, "expand_ratio", 1.2),
         numParam(params, "compress_ratio", 0.8),
       );
-      // Retag signal id for options_225 family.
       out = {
         ...out,
         signalId: `c21_${mode}_xs`,
@@ -1359,7 +1284,6 @@ export function evalLogicOnPanel(
           oneWay,
         );
       } else {
-        // default / value_mom_rate
         out = evalMfValueMomRate(
           panel.bars,
           panel.fund_regime || null,
@@ -1372,14 +1296,13 @@ export function evalLogicOnPanel(
         );
       }
     } else {
-      // multi_day_hold + generic fallback for remaining families
       holdDays = Math.floor(
         numParam(params, "hold_days", numParam(params, "post_hold_days", 5)),
       );
       const polarity = Math.floor(numParam(params, "signal_polarity", 1));
       const rebalance = strParam(params, "rebalance_mode", "fixed_horizon");
       out = evalMultiDayHold(panel.bars, holdDays, oneWay, rebalance, polarity);
-      // tag fallback families honestly (never silent MDH)
+      // Never silent MDH on unsupported families.
       if (
         family !== "multi_day_hold" &&
         !lid.includes("multi_day") &&
@@ -1432,7 +1355,6 @@ export function evalLogicOnPanel(
   }
 }
 
-/** Daily held book for bar-native families (not generic CS/MDH collapse). */
 export type HeldBook = Record<string, Record<string, number>>;
 
 function stickyToHeld(
@@ -1473,10 +1395,7 @@ function realizedVol(pairs: BarSeries, endI: number, n: number): number | null {
   return Number.isFinite(s) && s > 0 ? s : null;
 }
 
-/**
- * Candidate-grade daily positions for bar-native logics.
- * Returns null when the caller should use eventHeld / gatedCsHeld.
- */
+/** Daily positions for bar-native logics; null → eventHeld / gatedCsHeld. */
 export function barNativeHeldBook(
   logic: LogicSpec,
   panel: PeriodPanel,
@@ -1769,7 +1688,7 @@ export function barNativeHeldBook(
       const inner = barNativeHeldBook({ ...logic, logic_id: "flow_margin_pressure", family_id: "flow_demand" }, panel);
       return inner ? { held: inner.held, path: "mf_flow_price" } : { held: {}, path: "mf_flow_price", fallback: "empty" };
     }
-    // Unique rate-gated value×mom (not an alias of fund_value_mom_agree).
+    // Rate-gated value×mom — not an alias of fund_value_mom_agree.
     const events = panel.fund_regime?.events_by_code || null;
     const rates = repoRatesFromPanel(panel);
     if (!events || !Object.keys(events).length) {
@@ -1824,7 +1743,7 @@ export function barNativeHeldBook(
         const earlier = rateDates.filter((x) => x < d);
         if (earlier.length) prevRate = rates[earlier[earlier.length - 1]];
         if (prevRate === null) return null;
-        // Skip mid AND require overnight change: otherwise occupancy stays always_on.
+        // Skip mid; require overnight change or occupancy is always_on.
         if (base > 0 && regime === "low" && rate < prevRate) return base;
         if (base < 0 && regime === "high" && rate > prevRate) return base;
         return null;
@@ -1959,7 +1878,6 @@ export function evaluateLogicAcrossPeriods(
   const periodRows: PeriodEvalRow[] = [];
   const errors: string[] = [];
 
-  // nets_only path: use embedded period nets
   if (
     Array.isArray(logic.period_nets) &&
     logic.period_nets.length > 0 &&
@@ -2011,7 +1929,6 @@ export function evaluateLogicAcrossPeriods(
   const tInv = tInvDetail.t_stat;
   const sharpeInv = sharpePeriod(netsInv);
 
-  // choose_sign: prefer side with |t| higher among non-near-zero positive mean
   let chosen: "original" | "inverted" | "reject" = "reject";
   const origOk =
     meanNetOrig !== null &&
@@ -2034,7 +1951,6 @@ export function evaluateLogicAcrossPeriods(
     Math.abs(meanNetOrig) > nearZero &&
     tOrig !== null
   ) {
-    // keep original if any signal but non-positive → reject for screen
     chosen = "reject";
   }
 
@@ -2065,8 +1981,6 @@ export function evaluateLogicAcrossPeriods(
     rejectReasons.push("low_activation");
   }
   if (chosen === "reject") rejectReasons.push("sign_selection_reject");
-  // W95: demote/exclude when full-window or any 2-period subset is an
-  // inflated-t low-variance artifact (fund_value_mom_agree_slow 2017 case).
   if (lowVarArtifact) rejectReasons.push("inflated_t_low_variance");
   if (periodRows.some((r) => isPathCollapsedRow(r))) {
     rejectReasons.push("path_collapsed_unique_on_period_net");
