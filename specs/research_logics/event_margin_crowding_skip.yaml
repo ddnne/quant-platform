@@ -22,4 +22,7 @@ params:
   stale_calendar_days: 14
   mode: event_margin_crowding_skip
   gate: name_margin_lt_pit_trailing_median
+  side: orig
+  gates: uncrowded_margin
+  occupancy_equal_combo_gate: uncrowded_margin
 evaluator: research.unique_logic.dispatch.evaluate_logic_daily_mtm

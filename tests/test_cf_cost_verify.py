@@ -71,6 +71,10 @@ def test_one_way_on_vs_off_changes_net_when_positions_exist() -> None:
     assert pack["on_off"]["occupied"] is True
     assert pack["on_off"]["must_differ"] is True
     assert pack["on_off"]["differs"] is True
+    assert pack["short_book"]["differs"] is True
+    assert pack["high_turnover"]["differs"] is True
+    assert pack["missing_adv"]["skipped_no_invent"] is True
+    assert pack["r2_key"] is None
     on = _mtm(one_way=0.001, adv={"7203": HIGH_ADV_JPY})
     off = _mtm(one_way=0.0, adv={"7203": HIGH_ADV_JPY})
     assert on["n_active_days"] > 0

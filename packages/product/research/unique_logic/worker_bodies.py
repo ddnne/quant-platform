@@ -44,6 +44,27 @@ def unique_leftover_logic_ids() -> frozenset[str]:
 
 
 @lru_cache(maxsize=1)
+def unique22_occupancy_equal_lifted() -> frozenset[str]:
+    """Leftover unique-22 whose YAML params.gates match comboEventGateOk occupancy."""
+    leftover = unique_leftover_logic_ids()
+    out: set[str] = set()
+    for spec in load_catalog_specs():
+        lid = str(spec.get("logic_id") or "")
+        if lid not in leftover:
+            continue
+        params = spec.get("params") if isinstance(spec.get("params"), dict) else {}
+        if params.get("gates"):
+            out.add(lid)
+    return frozenset(out)
+
+
+@lru_cache(maxsize=1)
+def unique22_occupancy_park() -> frozenset[str]:
+    """Leftover unique-22 whose occupancy is not combo-equal. Not a candidate."""
+    return unique_leftover_logic_ids() - unique22_occupancy_equal_lifted()
+
+
+@lru_cache(maxsize=1)
 def _daily_path_src() -> str:
     return _WORKER_DAILY_PATH.read_text(encoding="utf-8")
 
@@ -144,6 +165,8 @@ def is_countable_spec(spec: Mapping[str, Any]) -> bool:
         return False
     if is_near_duplicate(lid):
         return False
+    if lid in unique22_occupancy_park():
+        return False
     if lid in CF_NEW_THESIS_IDS:
         return combo_worker_gates_ok(spec)
     return True
@@ -164,6 +187,8 @@ def worker_body_missing(logic_id: str) -> bool:
     lid = str(logic_id or "").strip()
     if not lid or lid not in RESEARCH_UNIQUE_LOGIC_IDS:
         return False
+    if lid in unique22_occupancy_park():
+        return False
     return lid not in countable_thesis_ids()
 
 
@@ -174,5 +199,7 @@ __all__ = [
     "is_countable_spec",
     "unique_leftover_logic_ids",
     "worker_body_missing",
+    "unique22_occupancy_equal_lifted",
+    "unique22_occupancy_park",
     "worker_implemented_logic_ids",
 ]

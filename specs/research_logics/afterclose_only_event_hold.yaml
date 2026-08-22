@@ -19,4 +19,7 @@ params:
   entry_mode: same_day_close_if_pre_close
   mode: afterclose_only_event_hold
   gate: disctime_ge_session_close
+  side: orig
+  gates: afterclose
+  occupancy_equal_combo_gate: afterclose
 evaluator: research.unique_logic.dispatch.evaluate_logic_daily_mtm

@@ -83,6 +83,9 @@ PYTHON_ONLY_EVENT_GATES: frozenset[str] = frozenset()
 KNOWN_EVENT_GATES: frozenset[str] = COMBO_EVENT_GATES | PYTHON_ONLY_EVENT_GATES
 WORKER_PYTHON_ONLY_GATE_POLICY: str = "python_local_or_lid_branch"
 CHEAP_PB_EVENT_VS_CS: str = "event_bars_x_fins_not_csfundsnaps"
+CHEAP_PB_EVENT_SOURCE: str = "bars_x_fins_bps_over_close"
+CHEAP_PB_CS_SOURCE: str = "cs_fund_snaps"
+CHEAP_PB_UNIFIED: bool = False
 # Calendar/weekday permutations stay in COMBO_EVENT_GATES (existing occupancy).
 # Propose-LLM must not emit them as a new thesis.
 PROPOSE_CALENDAR_GATES: frozenset[str] = frozenset(
@@ -314,6 +317,7 @@ CANDIDATE_POLICY: dict[str, object] = {
         "always_on_cs_sticky",
         "worker_isolate_limit",
         "worker_body_missing",
+        "unique22_occupancy_mismatch",
     ),
     "always_on_occupancy": ALWAYS_ON_OCCUPANCY_WARN,
     "near_empty_occupancy": NEAR_EMPTY_OCCUPANCY,

@@ -25,6 +25,14 @@ _WORKER_INDEX = (
     / "src"
     / "index.ts"
 )
+_WORKER_PROPOSE = (
+    _REPO
+    / "platform"
+    / "workers"
+    / "research-mass-eval"
+    / "src"
+    / "propose_thesis.ts"
+)
 _WRANGLER = (
     _REPO / "platform" / "workers" / "research-mass-eval" / "wrangler.toml"
 )
@@ -98,7 +106,11 @@ def test_stub_output_not_injected() -> None:
 
 
 def test_worker_index_contains_propose_thesis_route() -> None:
-    src = _WORKER_INDEX.read_text(encoding="utf-8")
+    src = (
+        _WORKER_INDEX.read_text(encoding="utf-8")
+        + "\n"
+        + _WORKER_PROPOSE.read_text(encoding="utf-8")
+    )
     assert "/v1/propose-thesis" in src
     assert "stub_not_catalog" in src
     assert "not_injected: true" in src
@@ -186,3 +198,9 @@ def test_review_proposal_row_rejects_invent_and_weekday() -> None:
     assert bad_clone["ok"] is False
     assert "gate_set_already_catalog" in bad_clone["reasons"]
     assert bad_clone["auto_inject"] is False
+
+    contra = dict(good)
+    contra["gates"] = ["easy_funding", "tight_funding"]
+    bad_c = review_proposal_row(contra)
+    assert bad_c["ok"] is False
+    assert "contradictory_gates" in bad_c["reasons"]

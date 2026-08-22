@@ -76,6 +76,7 @@ def summarize_daily_path_cells(
         WORKER_ISOLATE_LIMIT_IDS,
         countable_thesis_ids,
     )
+    from research.unique_logic.worker_bodies import unique22_occupancy_park
     from research.unique_logic.near_duplicate import is_near_duplicate
 
     _countable = countable_thesis_ids()
@@ -154,7 +155,9 @@ def summarize_daily_path_cells(
             flags.append("always_on_cs_sticky")
         if lid in WORKER_ISOLATE_LIMIT_IDS:
             flags.append("worker_isolate_limit")
-        if lid in RESEARCH_UNIQUE_LOGIC_IDS and lid not in _countable:
+        if lid in unique22_occupancy_park():
+            flags.append("unique22_occupancy_mismatch")
+        elif lid in RESEARCH_UNIQUE_LOGIC_IDS and lid not in _countable:
             flags.append("worker_body_missing")
         if m_net is not None and abs(m_net) < 1e-4:
             flags.append("near_zero_net")

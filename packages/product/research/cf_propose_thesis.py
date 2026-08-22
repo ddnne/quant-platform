@@ -35,6 +35,18 @@ PROPOSE_ALLOWED_DATASETS: frozenset[str] = frozenset(
 if not PROPOSE_ALLOWED_DATASETS <= COMPLETE_21_DATASET_SET:
     raise RuntimeError("propose datasets must be a subset of COMPLETE 21")
 
+PROPOSE_CONTRADICTORY_GATE_PAIRS: tuple[frozenset[str], ...] = (
+    frozenset({"easy_funding", "tight_funding"}),
+    frozenset({"crowded_margin", "uncrowded_margin"}),
+    frozenset({"eq_ar_high", "eq_ar_low"}),
+    frozenset({"eq_ar_rising", "eq_ar_falling"}),
+    frozenset({"cheap_iv", "rich_iv"}),
+    frozenset({"ta_up", "ta_down"}),
+    frozenset({"overnight_easing", "overnight_tightening"}),
+    frozenset({"margin_up", "margin_down"}),
+    frozenset({"eps_up", "eps_down"}),
+)
+
 STUB_PROPOSAL_TEMPLATES: tuple[dict[str, Any], ...] = (
     {
         "thesis": (
@@ -134,6 +146,9 @@ def review_proposal_row(proposal: Mapping[str, Any]) -> dict[str, Any]:
         }
         if frozenset(kept_g) in catalog_sets:
             reasons.append("gate_set_already_catalog")
+        kept_set = frozenset(kept_g)
+        if any(pair <= kept_set for pair in PROPOSE_CONTRADICTORY_GATE_PAIRS):
+            reasons.append("contradictory_gates")
     ok = not reasons
     return {
         "ok": ok,

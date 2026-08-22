@@ -204,20 +204,25 @@ def test_worker_leftover_pre_mom_uses_entryidx_not_combo_pre_mom() -> None:
     from research.unique_logic.catalog import load_catalog_specs
 
     leftover = (
-        "afterclose_only_event_hold",
-        "curve_steep_event_confirm",
         "event_funding_adaptive_side",
-        "event_funding_easy_short",
         "event_funding_stress_ls",
-        "event_funding_stress_skip",
-        "event_margin_crowding_skip",
         "event_pre_mom_agree_hold",
         "large_surprise_event_hold",
+    )
+    lifted = (
+        "afterclose_only_event_hold",
+        "curve_steep_event_confirm",
+        "event_funding_easy_short",
+        "event_funding_stress_skip",
+        "event_margin_crowding_skip",
     )
     by_id = {s["logic_id"]: s for s in load_catalog_specs()}
     for lid in leftover:
         params = by_id[lid].get("params") or {}
         assert not params.get("gates"), f"{lid} leftover still needed (not comboImpl)"
+    for lid in lifted:
+        params = by_id[lid].get("params") or {}
+        assert params.get("gates"), f"{lid} occupancy-equal lift needs params.gates"
 
     src = (
         Path(__file__).resolve().parents[1]

@@ -143,6 +143,47 @@ def test_unique22_leftover_occupancy_not_unified() -> None:
     assert "entryIdx - 1" in src or "entryIdx-1" in src
 
 
+def test_cheap_pb_event_not_csfundsnaps() -> None:
+    from pathlib import Path
+
+    from research.unique_logic.constants import (
+        CHEAP_PB_CS_SOURCE,
+        CHEAP_PB_EVENT_SOURCE,
+        CHEAP_PB_UNIFIED,
+    )
+
+    assert CHEAP_PB_UNIFIED is False
+    assert CHEAP_PB_EVENT_SOURCE == "bars_x_fins_bps_over_close"
+    assert CHEAP_PB_CS_SOURCE == "cs_fund_snaps"
+    src = (
+        Path(__file__).resolve().parents[1]
+        / "platform"
+        / "workers"
+        / "research-mass-eval"
+        / "src"
+        / "daily_path.ts"
+    ).read_text(encoding="utf-8")
+    assert "Event cheap_pb is bars×fins" in src
+    assert "CS cheap_pb is csFundSnaps" in src or "csFundSnaps extras.cheapPb" in src
+
+
+def test_unique22_lift_park_partition() -> None:
+    from research.unique_logic.worker_bodies import (
+        unique22_occupancy_equal_lifted,
+        unique22_occupancy_park,
+        unique_leftover_logic_ids,
+    )
+
+    leftover = unique_leftover_logic_ids()
+    lifted = unique22_occupancy_equal_lifted()
+    parked = unique22_occupancy_park()
+    assert lifted | parked == leftover
+    assert "event_pre_mom_agree_hold" in parked
+    assert "afterclose_only_event_hold" in lifted
+    assert len(lifted) == 5
+    assert len(parked) == 17
+
+
 def test_propose_calendar_gates_excluded_from_llm() -> None:
     from research.unique_logic.constants import (
         COMBO_EVENT_GATES,

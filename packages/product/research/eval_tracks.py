@@ -69,9 +69,9 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "id": "cf_propose_llm_not_stub",
         "track": EVAL_TRACK_LIQ_LARGE,
         "why": (
-            "POST /v1/propose-thesis Workers AI; economic-gate allowlist "
-            "(PROPOSE_ALLOWED_GATES); no weekday/calendar; no auto-inject; "
-            "review_proposal_row before YAML+Worker body"
+            "POST /v1/propose-thesis Workers AI; review_proposal_row; adopt 0 "
+            "from e/f/g (invent/clone/underspecified); +28 Worker-bodied event "
+            "crosses instead; no auto-inject"
         ),
         "not_a_pass": True,
         "go": False,
@@ -80,8 +80,8 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "id": "propose_review_no_inject",
         "track": EVAL_TRACK_LIQ_LARGE,
         "why": (
-            "human review of LLM rows via review_proposal_row; occupancy-equal "
-            "Worker body required before a thesis counts; never catalog inject"
+            "review_proposal_row is the adopt gate; occupancy-equal Worker "
+            "body required before a thesis counts; never catalog inject"
         ),
         "not_a_pass": True,
         "go": False,
@@ -89,7 +89,10 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
     {
         "id": "cheap_pb_event_reuse",
         "track": EVAL_TRACK_LIQ_LARGE,
-        "why": "event cheap_pb still bars×fins; csFundSnaps not 1:1 with ev.bps hist",
+        "why": (
+            "event cheap_pb = bars×fins close/bps; CS cheap_pb = csFundSnaps; "
+            "CHEAP_PB_UNIFIED=false; do not invent a shared book"
+        ),
         "not_a_pass": True,
         "go": False,
     },
@@ -104,8 +107,9 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "id": "unique22_leftover_lids",
         "track": EVAL_TRACK_LIQ_LARGE,
         "why": (
-            "unique-22 leftover lid bodies remain (event_pre_mom_agree_hold "
-            "still momentumAt(entryIdx)); lift only occupancy-equal"
+            "5 leftover occupancy-equal lifts send params.gates (comboImpl); "
+            "17 parked unique22_occupancy_mismatch; pre_mom leftover stays "
+            "momentumAt(entryIdx)"
         ),
         "not_a_pass": True,
         "go": False,

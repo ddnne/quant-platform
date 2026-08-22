@@ -21,4 +21,7 @@ params:
   steep_threshold: 0.0
   mode: curve_steep_event_confirm
   gate: repo_curve_spread_gt_0
+  side: orig
+  gates: steep_curve
+  occupancy_equal_combo_gate: steep_curve
 evaluator: research.unique_logic.dispatch.evaluate_logic_daily_mtm

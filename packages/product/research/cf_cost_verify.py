@@ -9,7 +9,7 @@ from typing import Any, Mapping, Sequence
 from uuid import uuid4
 
 from research.daily_path_eval import held_book_daily_mtm
-from research.eval_registry import PROTOCOL_DAILY_PATH, r2_manifest_key
+from research.eval_registry import PROTOCOL_DAILY_PATH
 from research.freezes import MASS_RESEARCH
 
 COST_VERIFY_VERSION = "cf-cost-verify/v1"
@@ -185,8 +185,61 @@ def run_cost_on_off_compare(
         abs(x) < 1e-15 for x in missing_nets
     )
 
+    short_dates, short_held, short_close = _synthetic_book()
+    short_held = {_SYN_CODE: {short_dates[0]: -1.0, short_dates[1]: -1.0}}
+    short_on = _run_mtm(
+        logic_id=lid0,
+        one_way=one_way_on,
+        hold_days=h,
+        held_by_code_date=short_held,
+        close_by=short_close,
+        dates=short_dates,
+        repo_by_date=repo_by_date or {"2024-01-02": 0.001, "2024-01-03": 0.001},
+        adv_by_code=use_adv,
+    )
+    short_off = _run_mtm(
+        logic_id=lid0,
+        one_way=one_way_off,
+        hold_days=h,
+        held_by_code_date=short_held,
+        close_by=short_close,
+        dates=short_dates,
+        repo_by_date=repo_by_date or {"2024-01-02": 0.001, "2024-01-03": 0.001},
+        adv_by_code=use_adv,
+    )
+    short_differs = _nets_differ(
+        list(short_on.get("net_daily") or []),
+        list(short_off.get("net_daily") or []),
+    )
+
+    turn_held = {_SYN_CODE: {short_dates[0]: 1.0, short_dates[1]: -1.0}}
+    turn_on = _run_mtm(
+        logic_id=lid0,
+        one_way=one_way_on,
+        hold_days=1,
+        held_by_code_date=turn_held,
+        close_by=short_close,
+        dates=short_dates,
+        repo_by_date=None,
+        adv_by_code=use_adv,
+    )
+    turn_off = _run_mtm(
+        logic_id=lid0,
+        one_way=one_way_off,
+        hold_days=1,
+        held_by_code_date=turn_held,
+        close_by=short_close,
+        dates=short_dates,
+        repo_by_date=None,
+        adv_by_code=use_adv,
+    )
+    turn_differs = _nets_differ(
+        list(turn_on.get("net_daily") or []),
+        list(turn_off.get("net_daily") or []),
+    )
+
     written = False
-    r2_key = r2_manifest_key(jid) if written else None
+    r2_key = None
     rows = []
     for lid in ids:
         rows.append(
@@ -198,7 +251,7 @@ def run_cost_on_off_compare(
                 "on_off_differs": on_off_differs,
             }
         )
-    return {
+    out = {
         "version": COST_VERIFY_VERSION,
         "protocol": PROTOCOL_DAILY_PATH,
         "job_id": jid,
@@ -235,6 +288,29 @@ def run_cost_on_off_compare(
             "net_daily": list(missing_pack.get("net_daily") or []),
             "skipped_no_invent": missing_skipped,
         },
+        "short_book": {
+            "differs": short_differs,
+            "cost_adv_incomplete": bool(short_on.get("cost_adv_incomplete")),
+        },
+        "high_turnover": {
+            "differs": turn_differs,
+            "cost_adv_incomplete": bool(turn_on.get("cost_adv_incomplete")),
+        },
         "rows": rows,
         "notes": "daily_path cost verify. Not a promotion.",
     }
+    if not dry_run:
+        import json
+
+        from research.cf_mass_eval_stage import RESEARCH_ARTIFACT_BUCKET
+        from research.r2_io import default_r2_put
+
+        key = f"research/eval/job={jid}/cost_verify.json"
+        default_r2_put(
+            RESEARCH_ARTIFACT_BUCKET,
+            key,
+            json.dumps(out, default=str).encode("utf-8"),
+        )
+        out["r2_key"] = key
+        out["written"] = True
+    return out

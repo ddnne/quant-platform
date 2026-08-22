@@ -364,8 +364,10 @@ export const CF_NEW_EVENT_THESIS_IDS = [
   "event_cheap_pb_price_down_liq",
   "event_cheap_pb_repo3m_down",
   "event_cheap_pb_uncrowded",
+  "event_cluster_afterclose",
   "event_cluster_easy_pead",
   "event_cluster_fade",
+  "event_cluster_liq_high",
   "event_cluster_skip_monday",
   "event_crowd_on_impulse",
   "event_curve_flatten_pead",
@@ -386,6 +388,7 @@ export const CF_NEW_EVENT_THESIS_IDS = [
   "event_easy_skip_tuesday",
   "event_eps_down_crowded_fade",
   "event_eps_down_fade",
+  "event_eps_down_liq_high_fade",
   "event_eps_up_easy",
   "event_eps_up_liq_high",
   "event_eqar_falling_fade",
@@ -417,9 +420,17 @@ export const CF_NEW_EVENT_THESIS_IDS = [
   "event_eqar_low_price_down_fade",
   "event_eqar_low_repo3m_down_fade",
   "event_eqar_low_tight_fade",
+  "event_eqar_rising_afterclose",
   "event_eqar_rising_cheap_pb",
+  "event_eqar_rising_cluster",
+  "event_eqar_rising_easy_funding",
+  "event_eqar_rising_large_surprise",
   "event_eqar_rising_liq_high",
+  "event_eqar_rising_on_impulse",
   "event_eqar_rising_pead",
+  "event_eqar_rising_pre_mom",
+  "event_eqar_rising_steep_curve",
+  "event_eqar_rising_uncrowded",
   "event_first_half_easing",
   "event_first_half_month",
   "event_first_half_uncrowded",
@@ -428,8 +439,11 @@ export const CF_NEW_EVENT_THESIS_IDS = [
   "event_friday_uncrowded",
   "event_funding_tight_fade",
   "event_large_surprise_afterclose",
+  "event_large_surprise_cluster",
   "event_large_surprise_easy_funding",
+  "event_large_surprise_overnight_easing",
   "event_large_surprise_steep_curve",
+  "event_large_surprise_uncrowded",
   "event_late_hold_only",
   "event_liq_high_large_surprise",
   "event_margin_delta_fade",
@@ -452,6 +466,7 @@ export const CF_NEW_EVENT_THESIS_IDS = [
   "event_nky_high_skip",
   "event_not_first_week",
   "event_not_last_week",
+  "event_np_negative_crowded_fade",
   "event_np_negative_fade",
   "event_np_negative_liq_high_fade",
   "event_np_negative_ta_down_fade",
@@ -460,6 +475,7 @@ export const CF_NEW_EVENT_THESIS_IDS = [
   "event_overnight_p10_eqar_low_fade",
   "event_overnight_p10_pead",
   "event_pb_rising_fade",
+  "event_pb_rising_liq_high_fade",
   "event_pb_rising_margin_up_fade",
   "event_positive_eps_easy",
   "event_positive_eps_liq_high",
@@ -468,26 +484,38 @@ export const CF_NEW_EVENT_THESIS_IDS = [
   "event_positive_eps_pead",
   "event_positive_eps_price_down",
   "event_positive_eps_uncrowded",
+  "event_pre_mom_afterclose",
+  "event_pre_mom_cluster",
   "event_pre_mom_easy_funding",
+  "event_pre_mom_liq_high",
   "event_pre_mom_steep_curve",
+  "event_pre_mom_uncrowded",
   "event_repo3m_down_afterclose",
   "event_repo3m_down_pead",
   "event_repo3m_down_uncrowded",
   "event_rich_iv_eqar_low_fade",
   "event_rich_iv_fade",
+  "event_roe_low_crowded_fade",
   "event_roe_low_fade",
   "event_roe_low_liq_high_fade",
   "event_sales_down_eqar_falling_fade",
   "event_sales_down_fade",
+  "event_sales_down_liq_high_fade",
   "event_skip_announce_day",
   "event_skip_monday",
   "event_skip_monday_easing",
   "event_skip_monday_uncrowded",
   "event_skip_tuesday",
   "event_skip_wednesday",
+  "event_ta_down_afterclose",
   "event_ta_down_cheap_pb",
+  "event_ta_down_cluster",
+  "event_ta_down_easy_funding",
+  "event_ta_down_large_surprise",
   "event_ta_down_liq_high",
+  "event_ta_down_on_impulse",
   "event_ta_down_pead",
+  "event_ta_down_steep_curve",
   "event_ta_down_uncrowded",
   "event_ta_up_afterclose",
   "event_ta_up_cheap_iv",
@@ -1029,6 +1057,8 @@ export function comboEventGateOk(
     return finite(chg) && (chg as number) > 0;
   }
   if (gate === "cheap_pb") {
+    // Event cheap_pb is bars×fins (close/bps). Not csFundSnaps.
+    // CS cheap_pb uses extras.cheapPb from csFundSnaps. Do not unify.
     const close = panel.bars?.[ev.code]?.find(([x]) => x === d)?.[1];
     if (!finite(close) || ev.bps == null || !finite(ev.bps) || ev.bps === 0)
       return false;
@@ -1339,6 +1369,7 @@ export function comboCsGateOk(
     keep = extras?.nkyHigh === true;
     invert = true;
   } else if (gate === "cheap_pb") {
+    // CS cheap_pb is csFundSnaps extras.cheapPb. Event cheap_pb is bars×fins.
     keep = extras?.cheapPb === true;
   } else if (gate === "expensive_pb_invert") {
     keep = extras?.expensivePb === true;
