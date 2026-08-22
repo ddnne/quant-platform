@@ -13,7 +13,6 @@ from typing import Any, Mapping
 from research.daily_path_eval import held_book_daily_mtm, panel_index
 from research.unique_logic.constants import (
     CF_NEW_THESIS_IDS,
-    KNOWN_EVENT_GATES,
     WORKER_ISOLATE_LIMIT_IDS,
     is_ungated_name_level_cs,
     sparse_15name_reason,
@@ -245,13 +244,9 @@ def _eval_event_combo(
     sign_mult: dict[str, float] = {}
     for ev in collected["entries"]:
         key = event_sides._event_key(ev)
-        ok = True
-        for g in gates:
-            if g not in KNOWN_EVENT_GATES:
-                ok = False
-                continue
-            # Worker comboEventGateOk owns known event gates (PYTHON_ONLY empty).
-            ok = False
+        # CF daily_path comboEventGateOk is SoT. Local fallback only runs
+        # ungated events — do not dual-def Worker predicates (would drift).
+        ok = not gates
         accept[key] = ok
         sign_mult[key] = -1.0 if side == "flip" else 1.0
     shift = int(params.get("entry_shift") or spec.get("entry_shift") or 0)
@@ -355,7 +350,7 @@ def _eval_cs_combo(
         keep = True
         loc_invert = invert
         if gate:
-            # Worker comboCsGateOk / leftover gatedCsHeld owns CS gates.
+            # Worker comboCsGateOk / leftover gatedCsHeld is SoT.
             extra_cf_only.append(gate)
             keep = False
         scores = scores_by_date.get(d) or {}

@@ -69,16 +69,6 @@ def infer_eval_track(*, max_codes: int) -> str:
 # no ungated CS sticky, no PARSE_ZERO invent, no correlation weights.
 NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
     {
-        "id": "pre_mom_occupancy_equal",
-        "track": EVAL_TRACK_LIQ_LARGE,
-        "why": (
-            "pre_mom leftover uses momentumAt(entryIdx); comboEventGateOk "
-            "uses entryIdx-1. Rewrite leftover to match, then lift"
-        ),
-        "not_a_pass": True,
-        "go": False,
-    },
-    {
         "id": "both_track_sleeve_durability",
         "track": EVAL_TRACK_LIQ_LARGE,
         "why": (
@@ -103,23 +93,19 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "go": False,
     },
     {
-        "id": "factory_batch_extract",
-        "track": EVAL_TRACK_MID_N,
-        "why": "offline/factory.py still ~2939 after template extract; batch eval vs generation",
+        "id": "unique22_leftover_lids",
+        "track": EVAL_TRACK_LIQ_LARGE,
+        "why": (
+            "unique-22 leftover lid bodies remain (event_pre_mom_agree_hold "
+            "still momentumAt(entryIdx)); lift only occupancy-equal"
+        ),
         "not_a_pass": True,
         "go": False,
     },
     {
-        "id": "single_shot_feature_extract",
+        "id": "single_shot_runner_extract",
         "track": EVAL_TRACK_MID_N,
-        "why": "single_shot_job.py ~4107; D1 tip extract already used by r2_feature_context",
-        "not_a_pass": True,
-        "go": False,
-    },
-    {
-        "id": "cost_models_boundary",
-        "track": EVAL_TRACK_MID_N,
-        "why": "cost_models.py ~2732; series construction vs modulation vs document",
+        "why": "single_shot_job.py still ~3022 after tip extract; execute_* vs harness",
         "not_a_pass": True,
         "go": False,
     },
@@ -131,40 +117,26 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "go": False,
     },
     {
-        "id": "event_combos_glue",
+        "id": "factory_generation_shrink",
         "track": EVAL_TRACK_MID_N,
-        "why": "event_combos.py ~1205 after _SPECS delete; evaluate_combo_daily_mtm glue",
+        "why": "offline/factory.py ~1700 generation leftover after factory_eval extract",
         "not_a_pass": True,
         "go": False,
     },
     {
-        "id": "worker_leftover_lid_bodies",
-        "track": EVAL_TRACK_LIQ_LARGE,
+        "id": "complete21_min_features_split",
+        "track": EVAL_TRACK_MID_N,
+        "why": "tests/test_complete21_min_features.py ~1470 still one module",
+        "not_a_pass": True,
+        "go": False,
+    },
+    {
+        "id": "local_combo_fail_closed",
+        "track": EVAL_TRACK_MID_N,
         "why": (
-            "daily_path.ts leftover lid branches for unique-22 and pre_mom; "
-            "reduce only when occupancy-equal to comboEventGateOk"
+            "Python evaluate_combo_daily_mtm fail-closes gated combos; "
+            "Worker comboEventGateOk is SoT — do not dual-def predicates"
         ),
-        "not_a_pass": True,
-        "go": False,
-    },
-    {
-        "id": "economic_theme_yaml",
-        "track": EVAL_TRACK_MID_N,
-        "why": "ECONOMIC_THEME_IDS still a Python grouping; YAML theme: would drop dual-def",
-        "not_a_pass": True,
-        "go": False,
-    },
-    {
-        "id": "multiyear_runner_split",
-        "track": EVAL_TRACK_MID_N,
-        "why": "offline/multiyear.py ~1947 window stitch vs reporting",
-        "not_a_pass": True,
-        "go": False,
-    },
-    {
-        "id": "phase35_matrix_test_split",
-        "track": EVAL_TRACK_MID_N,
-        "why": "tests/test_phase35_coverage_matrix.py ~1241 slows LLM-local iteration",
         "not_a_pass": True,
         "go": False,
     },

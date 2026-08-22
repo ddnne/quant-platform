@@ -235,10 +235,10 @@ def test_unknown_event_gate_fail_closed_is_declared() -> None:
 
     import research.unique_logic.event_combos as event_combos
 
-    # Runtime skip is covered in test_research_freezes; keep this source-level.
+    # Local combo fallback fail-closes any declared gate (Worker is SoT).
     assert "not_a_real_gate" not in KNOWN_EVENT_GATES
-    src = inspect.getsource(event_combos)
-    assert "if g not in KNOWN_EVENT_GATES" in src
+    src = inspect.getsource(event_combos._eval_event_combo)
+    assert "ok = not gates" in src
 
 
 def test_python_only_event_gates_skip_catalog() -> None:
