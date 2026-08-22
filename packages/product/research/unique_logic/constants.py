@@ -110,6 +110,15 @@ CF_NEW_EVENT_THESIS_IDS: frozenset[str] = frozenset(
         "surprise_xs_afterclose",
         "event_easing_uncrowded",
         "surprise_xs_tue_thu",
+        "event_afterclose_midmonth",
+        "event_easing_midmonth",
+        "event_friday_easing",
+        "event_uncrowded_midmonth",
+        "event_may_results_follow",
+        "event_tue_thu_easing",
+        "surprise_xs_midmonth",
+        "surprise_xs_easing_change",
+        "surprise_xs_afterclose_easing",
     }
 )
 CF_NEW_CS_THESIS_IDS: frozenset[str] = frozenset(
@@ -142,6 +151,13 @@ CF_NEW_CS_THESIS_IDS: frozenset[str] = frozenset(
         "cs_midmonth_follow",
         "cs_friday_fade",
         "cs_not_month_end",
+        "cs_easing_midmonth",
+        "cs_tue_thu_down",
+        "overnight_down_skip_monday_cs",
+        "cs_friday_tight_fade",
+        "flow_disagree_midmonth",
+        "curve_steep_midmonth_cs",
+        "rate_up_tue_thu_cs",
     }
 )
 CF_NEW_THESIS_IDS: frozenset[str] = CF_NEW_EVENT_THESIS_IDS | CF_NEW_CS_THESIS_IDS
@@ -166,6 +182,8 @@ ALWAYS_ON_OCCUPANCY_WARN: float = 0.85
 NEAR_EMPTY_OCCUPANCY: float = 0.05
 # Occupancy snapshot from eval-cf-dp-pathfix-20260822c (catalog park, not
 # a score table). Live candidate filter is occupancy, not this set.
+# Re-eval may move mf_value_mom_rate off this list; summarize does not
+# read it.
 ALWAYS_ON_22C_IDS: frozenset[str] = frozenset(
     {
         "xs_rank_ls_sticky",

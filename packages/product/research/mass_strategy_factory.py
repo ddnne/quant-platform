@@ -1023,8 +1023,7 @@ def _build_logic_templates() -> dict[str, LogicTemplate]:
             structural_keys=("mode",),
             notes=(
                 "Unique rate-gated value×mom (not an alias of fund_value_mom_agree). "
-                "CF daily_path path=mf_value_mom_rate implements the rate leg. "
-                "Near-group cousin under fund_value_mom for comparison only. "
+                "Long only in easy overnight, short only in tight overnight; mid skipped. "
                 "Occupancy>=0.85 still parks it from the candidate/main pool."
             ),
         ),

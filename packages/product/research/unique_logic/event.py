@@ -726,6 +726,7 @@ def evaluate_surprise_xs_rank_hold_daily_mtm(
     one_way_cost: float,
     period_start: str | None = None,
     period_end: str | None = None,
+    entries: Sequence[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """CS rank of surprise among names in a PIT event window (new signal)."""
     from features.class_signals import cross_section_rank_signs
@@ -741,6 +742,10 @@ def evaluate_surprise_xs_rank_hold_daily_mtm(
         period_start=period_start,
         period_end=period_end,
     )
+    if entries is not None:
+        collected = dict(collected)
+        collected["entries"] = list(entries)
+        collected["n_eligible"] = len(collected["entries"])
     h = int(collected["hold_days"])
     dates = list(collected["calendar"])
     extra = {

@@ -169,6 +169,70 @@ def test_always_on_is_not_strong() -> None:
     assert summary["always_on_excluded_from_main"] is True
 
 
+def test_always_on_gate_is_never_candidate() -> None:
+    from research.eval_registry import summarize_daily_path_cells
+
+    cells = [
+        {
+            "logic_id": "surprise_xs_afterclose",
+            "window_id": f"y{y}",
+            "occupancy": 1.0,
+            "total_ret_net": 0.01,
+            "eval_path": "eventHeld",
+            "daily_path_complete": True,
+        }
+        for y in (2015, 2017, 2019)
+    ]
+    summary = summarize_daily_path_cells(cells, job_id="eval-test-ao-gate")
+    row = summary["logics"][0]
+    assert "always_on" in row["flags"]
+    assert row["candidate"] is False
+    assert row["main_pool"] is False
+
+
+def test_combo_basket_blend_is_equal_weight() -> None:
+    from research.combo_basket import (
+        DEFAULT_CANDIDATE_BASKET,
+        blend_net_daily,
+        blend_window_cells,
+        occupancy_in_candidate_band,
+        validate_basket_members,
+    )
+
+    assert len(DEFAULT_CANDIDATE_BASKET) >= 2
+    assert len(DEFAULT_CANDIDATE_BASKET) <= 5
+    assert validate_basket_members(["a"]) == ["need_at_least_2_members"]
+    blended = blend_net_daily([[0.0, 0.02, 0.00], [0.0, 0.00, 0.02]])
+    assert abs(blended[1] - 0.01) < 1e-12
+    assert abs(blended[2] - 0.01) < 1e-12
+    assert occupancy_in_candidate_band(0.2) is True
+    assert occupancy_in_candidate_band(0.9) is False
+    assert occupancy_in_candidate_band(0.01) is False
+    cells = [
+        {
+            "logic_id": "a",
+            "window_id": "y2015_full",
+            "dates": ["d0", "d1", "d2"],
+            "net_daily": [0.0, 0.02, 0.0],
+            "occupancy": 0.2,
+            "daily_path_complete": True,
+        },
+        {
+            "logic_id": "b",
+            "window_id": "y2015_full",
+            "dates": ["d0", "d1", "d2"],
+            "net_daily": [0.0, 0.0, 0.02],
+            "occupancy": 0.3,
+            "daily_path_complete": True,
+        },
+    ]
+    rows = blend_window_cells(cells, basket_id="basket_a_b", logic_ids=["a", "b"])
+    assert len(rows) == 1
+    assert rows[0]["go"] is False
+    assert rows[0]["eval_path"] == "equal_weight_basket"
+    assert rows[0]["daily_path_complete"] is True
+
+
 def test_near_empty_and_term_ratio_are_not_candidates() -> None:
     from research.eval_registry import summarize_daily_path_cells
 

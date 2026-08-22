@@ -70,6 +70,8 @@ def weakness_flags_from_summary(summary: Mapping[str, Any]) -> dict[str, list[st
         tag = str(row.get("tag") or "")
         if tag and tag not in flags:
             flags = [*flags, f"tag:{tag}"]
+        if row.get("candidate") is False and "not_candidate" not in flags:
+            flags.append("not_candidate")
         out[lid] = flags
     return out
 
@@ -91,4 +93,6 @@ def proposal_blocked_by_summary(
             reasons.append(f"parent_path_broken:{parent}")
         if "always_on" in pf and not payload.get("signal_definition"):
             reasons.append(f"parent_always_on_needs_new_signal:{parent}")
+        if "not_candidate" in pf:
+            reasons.append(f"parent_not_candidate:{parent}")
     return reasons

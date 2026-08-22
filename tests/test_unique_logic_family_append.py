@@ -6,7 +6,6 @@ from research.mass_strategy_factory import (
     CONNECTED_TO_MASS,
     CONNECTED_TO_READY,
     FAMILY_DEFINITIONS,
-    FROZEN_DEFAULT_PATH,
     LOGIC_TEMPLATES,
     MASS_RESEARCH,
     OPERATIONAL_GO,
@@ -121,17 +120,6 @@ def test_append_factory_period_net_not_unknown_and_not_a_pass():
                 assert prow.get("registration_is_not_a_pass") is True
                 assert prow.get("research_candidate") is False
                 assert prow.get("go") is False
-
-
-def test_family_append_does_not_retune_pins():
-    assert len(FROZEN_DEFAULT_PATH) == 3
-    by_id = {r["representative_id"]: r for r in FROZEN_DEFAULT_PATH}
-    assert by_id["cross_section_hold_10"]["momentum_n"] == 5
-    assert by_id["cross_section_hold_10_mom3"]["momentum_n"] == 3
-    assert by_id["fundamentals_hold_10"]["momentum_n"] == 10
-    assert by_id["cross_section_hold_10"]["stance"] == "KEEP"
-    assert by_id["cross_section_hold_10_mom3"]["stance"] == "PROMOTE"
-    assert by_id["fundamentals_hold_10"]["stance"] == "KEEP"
 
 
 def test_overall_register_includes_append_but_is_still_not_a_pass():

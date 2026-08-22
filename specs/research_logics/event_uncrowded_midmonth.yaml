@@ -1,14 +1,14 @@
-logic_id: surprise_xs_afterclose
-family_id: surprise_xs_rank
+logic_id: event_uncrowded_midmonth
+family_id: event_margin_crowd_combo
 axis: mixed
 headline: false
 generation_enabled: false
 promote_as_main: false
 go: false
 thesis: >
-  Relative-surprise CS rank of after-close disclosures only on calendar days 10–20 (afterclose alone is ~always_on).
+  PEAD only when uncrowded AND the calendar is mid-month.
 signal_definition: >
-  Relative-surprise CS rank of after-close disclosures only on calendar days 10–20 (afterclose alone is ~always_on).
+  PEAD only when uncrowded AND the calendar is mid-month.
 datasets:
   - equities_bars_daily
   - fins_summary
@@ -19,7 +19,7 @@ params:
   hold_days: 10
   momentum_n: 5
   min_hist: 20
-  mode: surprise_xs_afterclose
+  mode: event_uncrowded_midmonth
   side: orig
   cs_gate: None
   entry_shift: 0

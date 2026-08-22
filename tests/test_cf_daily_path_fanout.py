@@ -133,7 +133,7 @@ def test_event_daily_path_ids_cover_filters_and_sides() -> None:
 
     assert "aligned" in CF_EVENT_FIDELITY["surprise"]
     assert "intended_lite_windows" in CF_EVENT_FIDELITY
-    assert len(CF_NEW_THESIS_IDS) >= 64
+    assert len(CF_NEW_THESIS_IDS) >= 80
 
 
 def test_panels_cache_id_stable() -> None:

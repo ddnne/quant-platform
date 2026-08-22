@@ -16,5 +16,6 @@ describe("isPathBroken", () => {
     expect(isPathBroken("nky_vol:nky_vol_abs_level")).toBe(false);
     expect(isPathBroken("eventHeld")).toBe(false);
     expect(isPathBroken("gated_cs")).toBe(false);
+    expect(isPathBroken("equal_weight_basket")).toBe(false);
   });
 });

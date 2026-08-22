@@ -63,4 +63,4 @@ prose. Update the table after a published projection.
 Completion of a research turn requires an R2 eval job, not local JSON.
 Do not paste cell scores into this file. Latest recorded job id belongs in D1.
 Candidate pool (code: `CANDIDATE_POLICY`) excludes path_broken / always_on / near_empty.
-Latest empirical jobs (ids only): `eval-cf-dp-pathfix-20260822c`, `eval-cf-dp-gated16-20260822a`, `eval-cf-mass-screen-20260822a`, `eval-cf-dp-surv-20260822a`.
+Latest empirical jobs (ids only): `eval-cf-dp-gatedfix-20260822a`, `eval-cf-dp-mf-unique-20260822a`, `eval-cf-dp-basket-20260822a`, `eval-cf-mass-screen-20260822b`.

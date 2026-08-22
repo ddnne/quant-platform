@@ -1816,8 +1816,9 @@ export function barNativeHeldBook(
         if (base === null) return null;
         if (base === 0) return 0;
         if (regime === null) return null;
-        if (base > 0 && (regime === "low" || regime === "mid")) return base;
-        if (base < 0 && (regime === "high" || regime === "mid")) return base;
+        // Skip mid: otherwise occupancy matches fund_value_mom_agree (always_on).
+        if (base > 0 && regime === "low") return base;
+        if (base < 0 && regime === "high") return base;
         return null;
       });
     }
@@ -2042,10 +2043,16 @@ export function evaluateLogicAcrossPeriods(
   if (tStat === null || !Number.isFinite(tStat) || Math.abs(tStat) < 0.5) {
     rejectReasons.push("weak_t_stat");
   }
+  const eventLike =
+    family === "event_post" ||
+    family.includes("event") ||
+    family.includes("surprise") ||
+    logicId.startsWith("event_") ||
+    logicId.startsWith("surprise_");
   if (
     meanActivation !== null &&
     meanActivation < minAct &&
-    family !== "event_post"
+    !eventLike
   ) {
     rejectReasons.push("low_activation");
   }

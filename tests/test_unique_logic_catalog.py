@@ -153,7 +153,7 @@ def test_yaml_dispatch_worker_event_ids_align() -> None:
     assert "event_skip_monday" in yaml_ids
     assert "cs_not_month_end" in yaml_ids
     assert "event_skip_monday" in CF_NEW_THESIS_IDS
-    assert len(CF_NEW_THESIS_IDS) >= 64
+    assert len(CF_NEW_THESIS_IDS) >= 80
 
 
 def test_worker_new_thesis_ids_match_python() -> None:

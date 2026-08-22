@@ -1,14 +1,14 @@
-logic_id: surprise_xs_afterclose
-family_id: surprise_xs_rank
+logic_id: cs_friday_tight_fade
+family_id: event_calendar_gate
 axis: mixed
 headline: false
 generation_enabled: false
 promote_as_main: false
 go: false
 thesis: >
-  Relative-surprise CS rank of after-close disclosures only on calendar days 10–20 (afterclose alone is ~always_on).
+  Fade CS on Fridays when overnight rose (weekend + tightening).
 signal_definition: >
-  Relative-surprise CS rank of after-close disclosures only on calendar days 10–20 (afterclose alone is ~always_on).
+  Fade CS on Fridays when overnight rose (weekend + tightening).
 datasets:
   - equities_bars_daily
   - fins_summary
@@ -19,9 +19,9 @@ params:
   hold_days: 10
   momentum_n: 5
   min_hist: 20
-  mode: surprise_xs_afterclose
+  mode: cs_friday_tight_fade
   side: orig
-  cs_gate: None
+  cs_gate: friday_overnight_up_invert
   entry_shift: 0
   hold_tail_days: 0
 evaluator: research.unique_logic.event_combos.evaluate_combo_daily_mtm
