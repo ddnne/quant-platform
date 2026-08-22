@@ -99,6 +99,77 @@ def test_combo_yaml_gates_cs_gate_side_match_specs() -> None:
     assert "_COMBO_EVALUATOR" in src
 
 
+def test_cf_new_thesis_ids_match_yaml_combo_kind() -> None:
+    import inspect
+
+    from research.unique_logic import catalog as catalog_mod
+    from research.unique_logic import constants as constants_mod
+    from research.unique_logic.catalog import (
+        _COMBO_EVALUATOR,
+        _yaml_combo_kind,
+        load_catalog_specs,
+    )
+    from research.unique_logic.constants import (
+        ADAPTIVE_LOGIC_IDS,
+        CF_NEW_CS_THESIS_IDS,
+        CF_NEW_EVENT_THESIS_IDS,
+        CF_NEW_THESIS_IDS,
+        CS_LOGIC_IDS,
+        EVENT_FILTER_LOGIC_IDS,
+        EVENT_LOGIC_IDS,
+        EVENT_SIDES_LOGIC_IDS,
+        RESEARCH_UNIQUE_LOGIC_IDS,
+    )
+
+    event: set[str] = set()
+    cs: set[str] = set()
+    surprise_xs: set[str] = set()
+    yaml_ids: set[str] = set()
+    combo_ids: set[str] = set()
+    for spec in load_catalog_specs():
+        lid = str(spec.get("logic_id") or "")
+        yaml_ids.add(lid)
+        if str(spec.get("evaluator") or "") != _COMBO_EVALUATOR:
+            continue
+        combo_ids.add(lid)
+        params = spec.get("params")
+        cs_raw = params.get("cs_gate") if isinstance(params, dict) else None
+        cs_gate = None if cs_raw in (None, "", "None") else str(cs_raw)
+        kind = _yaml_combo_kind(spec, cs_gate=cs_gate)
+        if kind == "cs":
+            cs.add(lid)
+        elif kind == "surprise_xs":
+            surprise_xs.add(lid)
+        else:
+            event.add(lid)
+
+    original = (
+        EVENT_LOGIC_IDS
+        | EVENT_FILTER_LOGIC_IDS
+        | EVENT_SIDES_LOGIC_IDS
+        | ADAPTIVE_LOGIC_IDS
+        | CS_LOGIC_IDS
+    )
+    assert len(original) == 22
+    assert yaml_ids - combo_ids == set(original)
+    assert combo_ids == set(CF_NEW_THESIS_IDS)
+    assert event | surprise_xs == set(CF_NEW_EVENT_THESIS_IDS)
+    assert cs == set(CF_NEW_CS_THESIS_IDS)
+    assert len(CF_NEW_EVENT_THESIS_IDS) == 218
+    assert len(CF_NEW_CS_THESIS_IDS) == 98
+    assert len(CF_NEW_THESIS_IDS) == 316
+    assert len(RESEARCH_UNIQUE_LOGIC_IDS) == 338
+    assert yaml_ids == set(RESEARCH_UNIQUE_LOGIC_IDS)
+
+    helper_src = inspect.getsource(catalog_mod.combo_thesis_ids_by_kind)
+    assert "from research.unique_logic.event_combos" not in helper_src
+    assert "_combo_row" not in helper_src
+    assert "NEW_COMBO_LOGIC" not in helper_src
+    const_src = inspect.getsource(constants_mod)
+    assert "event_funding_tight_fade" not in const_src
+    assert "overnight_tight_cs_fade" not in const_src
+
+
 def test_unknown_event_gate_fail_closed_is_declared() -> None:
     import inspect
 

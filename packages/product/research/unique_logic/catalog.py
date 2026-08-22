@@ -1,15 +1,17 @@
 """Load unique_logic declarations from ``specs/research_logics/*.yaml``.
 
 YAML catalog is the declaration source of truth (gates, cs_gate, side)
-and the combo runtime dispatch table (``yaml_combo_rows`` →
-``event_combos.NEW_COMBO_LOGIC``). YAML is declaration and runtime.
+and the runtime dispatch table (``yaml_combo_rows`` →
+``event_combos.NEW_COMBO_LOGIC``, ``yaml_unique_rows`` → original unique
+module tuples). YAML is declaration and runtime.
 Scores live in R2/D1, not markdown.
 The schema is intentionally small (no general YAML dependency).
 """
 from __future__ import annotations
 
+from functools import lru_cache
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 from qp_paths import repo_root
 
@@ -122,15 +124,20 @@ def parse_catalog_yaml(text: str) -> dict[str, Any]:
     return data
 
 
-def load_catalog_specs(*, root: Path | None = None) -> list[dict[str, Any]]:
+@lru_cache(maxsize=8)
+def _load_catalog_specs_cached(root_key: str) -> tuple[dict[str, Any], ...]:
     specs: list[dict[str, Any]] = []
-    for path in sorted(catalog_dir(root=root).glob("*.yaml")):
+    for path in sorted(catalog_dir(root=Path(root_key)).glob("*.yaml")):
         spec = parse_catalog_yaml(path.read_text(encoding="utf-8"))
         spec["catalog_path"] = str(path)
         spec["catalog"] = True
         if spec.get("logic_id"):
             specs.append(spec)
-    return specs
+    return tuple(specs)
+
+
+def load_catalog_specs(*, root: Path | None = None) -> list[dict[str, Any]]:
+    return list(_load_catalog_specs_cached(str((root or repo_root()).resolve())))
 
 
 def catalog_spec(logic_id: str, *, root: Path | None = None) -> dict[str, Any] | None:
@@ -227,6 +234,103 @@ def yaml_combo_rows(*, root: Path | None = None) -> list[dict[str, Any]]:
             continue
         rows.append(combo_row_from_yaml(spec))
     return rows
+
+
+
+def unique_row_from_yaml(spec: Mapping[str, Any]) -> dict[str, Any]:
+    """Map catalog YAML to an original-unique runtime row.
+
+    YAML is the declaration SoT. Does not GO. Evaluator function bodies stay
+    in the unique_logic modules; this only replaces the duplicate spec tables.
+    """
+    lid = str(spec.get("logic_id") or "")
+    if not lid:
+        raise ValueError("YAML unique row missing logic_id")
+    params = spec.get("params")
+    row = dict(spec)
+    row["logic_id"] = lid
+    row["params"] = dict(params) if isinstance(params, Mapping) else {}
+    row["catalog"] = True
+    row["catalog_map"] = None
+    row["new_unique_logic"] = True
+    row["go"] = False
+    row["generation_enabled"] = False
+    row["promote_as_main"] = False
+    if not row.get("kind"):
+        row["kind"] = lid
+    if not row.get("position_rule"):
+        row["position_rule"] = str(row.get("signal_definition") or "")
+    return row
+
+
+def yaml_unique_rows(
+    *,
+    evaluator: str | None = None,
+    logic_ids: Sequence[str] | None = None,
+    root: Path | None = None,
+) -> list[dict[str, Any]]:
+    """Original unique runtime rows from catalog YAML.
+
+    Filter by evaluator and/or logic_ids. Combo evaluator is excluded unless
+    that evaluator is requested. Order follows ``logic_ids`` when given.
+    Do not import the module runtime tuples here (those tuples are built
+    from this helper).
+    """
+    want = list(logic_ids) if logic_ids is not None else None
+    want_set = set(want) if want is not None else None
+    by_id: dict[str, dict[str, Any]] = {}
+    for spec in load_catalog_specs(root=root):
+        ev = str(spec.get("evaluator") or "")
+        lid = str(spec.get("logic_id") or "")
+        if evaluator is not None:
+            if ev != evaluator:
+                continue
+        elif ev == _COMBO_EVALUATOR:
+            continue
+        if want_set is not None and lid not in want_set:
+            continue
+        by_id[lid] = unique_row_from_yaml(spec)
+    if want is not None:
+        missing = [lid for lid in want if lid not in by_id]
+        if missing:
+            raise ValueError(
+                "yaml_unique_rows missing ids: " + ", ".join(missing[:40])
+            )
+        return [by_id[lid] for lid in want]
+    return list(by_id.values())
+
+
+def combo_thesis_ids_by_kind(*, root: Path | None = None) -> dict[str, frozenset[str]]:
+    """Combo YAML stems grouped by ``_yaml_combo_kind``.
+
+    Does not import combo runtime. Filter only by evaluator. ``cs`` from
+    params.cs_gate; ``surprise_xs`` and ``event`` otherwise. Used by
+    constants.CF_NEW_*.
+    """
+    event: set[str] = set()
+    cs: set[str] = set()
+    surprise_xs: set[str] = set()
+    for spec in load_catalog_specs(root=root):
+        if str(spec.get("evaluator") or "") != _COMBO_EVALUATOR:
+            continue
+        lid = str(spec.get("logic_id") or "")
+        if not lid:
+            continue
+        params = spec.get("params")
+        cs_raw = params.get("cs_gate") if isinstance(params, Mapping) else None
+        cs_gate = None if cs_raw in (None, "", "None") else str(cs_raw)
+        kind = _yaml_combo_kind(spec, cs_gate=cs_gate)
+        if kind == "cs":
+            cs.add(lid)
+        elif kind == "surprise_xs":
+            surprise_xs.add(lid)
+        else:
+            event.add(lid)
+    return {
+        "event": frozenset(event),
+        "cs": frozenset(cs),
+        "surprise_xs": frozenset(surprise_xs),
+    }
 
 
 def combo_yaml_text(spec: Mapping[str, Any]) -> str:
