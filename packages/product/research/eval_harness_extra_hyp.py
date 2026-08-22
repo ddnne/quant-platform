@@ -1,7 +1,6 @@
 """Year-split extra-hyp (S4/S5) multi-year eval (W56 next-day; not SoT).
 
-``run_multi_year_extra_hyp_eval``. Public imports stay on
-:mod:`research.eval_harness` / :mod:`research.eval_harness_multiyear`.
+``run_multi_year_extra_hyp_eval``.
 Gap years skipped honestly — never invent margin. Mass/READY/GO closed.
 """
 

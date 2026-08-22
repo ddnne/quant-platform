@@ -1,8 +1,7 @@
 """Standard research eval runner (W56 next-day; not candidate SoT).
 
-``run_standard_research_eval``. Public imports stay on
-:mod:`research.eval_harness` / :mod:`research.eval_harness_multiyear`.
-Checklist: :mod:`research.eval_harness_checklist`. Mass/READY/GO closed.
+``run_standard_research_eval``. Checklist: :mod:`research.eval_harness_checklist`.
+Mass/READY/GO closed.
 """
 
 from __future__ import annotations

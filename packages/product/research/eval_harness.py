@@ -2,7 +2,7 @@
 
 Approved-leg signal → multiday as_of → next_day_return → R2 ``batch_summary.json``.
 Implementation: :mod:`research.single_shot_job`. Candidate SoT:
-:mod:`research.daily_path_eval`. Multi-year/checklist re-exported from
+:mod:`research.daily_path_eval`. Multi-year names lazy from
 :mod:`research.eval_harness_multiyear`. COMPLETE 21 + approved legs only.
 """
 
@@ -11,11 +11,9 @@ from __future__ import annotations
 from typing import Any, Mapping, Sequence
 
 from features.minimal_signal import (
-    CANDIDATE_ONLY as SIGNAL_CANDIDATE_ONLY,
     DEFAULT_FEATURE_IDS as APPROVED_SIGNAL_LEGS,
     DEFAULT_SIGNAL_DATASETS,
     DEFAULT_VOLUME_SIGN_ABS_MIN,
-    SIGNAL_ID as DEFAULT_SIGNAL_ID,
 )
 from features.registry import get as get_feature
 from research.freezes import (
@@ -33,7 +31,6 @@ from research.freezes import (
     SIGNIFICANCE_CLAIMED,
 )
 from research.single_shot_job import (
-    COMPLETE_21_DATASET_SET,
     DEFAULT_FEATURE_ROW_LIMIT,
     MultidaySignalEval,
     NEXTDAY_RESEARCH_LABEL,
@@ -495,7 +492,7 @@ def run_multi_period_multisignal_compare(
     }
 
 
-# Multi-year / checklist names stay on this module via lazy re-export.
+# Multi-year names stay on this module via lazy re-export.
 
 
 def __getattr__(name: str):
@@ -514,11 +511,9 @@ def __dir__() -> list[str]:
 
 __all__ = [
     "APPROVED_SIGNAL_LEGS",
-    "COMPLETE_21_DATASET_SET",
     "CONNECTED_TO_MASS_RESEARCH_LOOP",
     "DEFAULT_EVAL_CODES",
     "DEFAULT_SIGNAL_DATASETS",
-    "DEFAULT_SIGNAL_ID",
     "EvalHarnessError",
     "HARNESS_SMOKE_CODES",
     "HARNESS_VERSION",
@@ -528,7 +523,6 @@ __all__ = [
     "PHASE7",
     "PIPELINE",
     "RESEARCH_WALK_FORWARD_LABEL",
-    "SIGNAL_CANDIDATE_ONLY",
     "SingleShotJobError",
     "WALK_FORWARD_VERSION",
     "assert_harness_closed",

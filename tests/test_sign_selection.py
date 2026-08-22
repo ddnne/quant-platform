@@ -265,7 +265,7 @@ def test_strategy_spec_signal_sign_round_trip():
 
 
 def test_paper_adapter_wires_chosen_sign():
-    from research.paper_candidate_adapter import (
+    from research.paper_candidate_specs import (
         build_cross_section_hold_strategy_spec,
         build_fundamentals_hold_strategy_spec,
     )

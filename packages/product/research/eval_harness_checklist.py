@@ -1,7 +1,6 @@
 """Standard research eval checklist v2 (W56 next-day; not candidate SoT).
 
-``evaluate_checklist_v2_completeness`` + checklist document. Public imports
-stay on :mod:`research.eval_harness` / :mod:`research.eval_harness_multiyear`.
+``evaluate_checklist_v2_completeness`` + checklist document.
 Runner: :mod:`research.eval_harness_standard`. Mass/READY/GO closed.
 """
 

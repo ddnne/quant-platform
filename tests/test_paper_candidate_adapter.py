@@ -15,22 +15,26 @@ from pathlib import Path
 
 import pytest
 
-from research.paper_candidate_adapter import (
+from research.freezes import (
     LIVE_ORDER_PATH_ENABLED,
     LIVE_ORDERS,
-    PAPER_CANDIDATE_SPEC_VERSION,
     PAPER_SCHEDULER_ARMED,
+)
+from research.paper_candidate_adapter import (
+    PAPER_CANDIDATE_SPEC_VERSION,
     PaperCandidateReceptacle,
     adapt_class_hyp_candidate,
     adapt_from_class_hyp_bundle,
     assert_unarmed,
+    emit_example_paper_specs,
+    example_event_post_payload,
+    example_multi_day_hold_10d_payload,
+)
+from research.paper_candidate_specs import (
     build_cross_section_hold_strategy_spec,
     build_event_post_strategy_spec,
     build_fundamentals_hold_strategy_spec,
     build_multi_day_hold_strategy_spec,
-    emit_example_paper_specs,
-    example_event_post_payload,
-    example_multi_day_hold_10d_payload,
 )
 from strategies.spec import STRATEGY_SPEC_VERSION, StrategySpec, interpret_strategy_spec
 REPO = Path(__file__).resolve().parents[1]

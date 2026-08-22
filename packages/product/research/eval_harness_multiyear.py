@@ -3,7 +3,6 @@
 ``design_yearly_eval_windows``. Checklist: :mod:`research.eval_harness_checklist`.
 Standard run: :mod:`research.eval_harness_standard`.
 S1: :mod:`research.eval_harness_s1`. Extra-hyp: :mod:`research.eval_harness_extra_hyp`.
-Public names stay re-exported here and from :mod:`research.eval_harness`.
 Mass/READY/GO closed.
 """
 
@@ -17,21 +16,6 @@ from research.eval_harness import (
     _closed_flags,
     _selected_codes,
     assert_harness_closed,
-)
-from research.eval_harness_checklist import (
-    CHECKLIST_VERSION,
-    CHECKLIST_VERSION_V1,
-    CHECKLIST_V2_INSUFFICIENT,
-    CHECKLIST_V2_NEAR_REQUIRED,
-    CHECKLIST_V2_REQUIRED,
-    COST_MODEL_PREFER_LIQUIDITY_LINKED,
-    COST_MODEL_PREFER_REPO_LINKED,
-    COST_MODEL_REQUIRE_LIQUIDITY_LINKED,
-    COST_MODEL_REQUIRE_REPO_LINKED,
-    STANDARD_EVAL_DAILY_PATH_DD_PROOF,
-    STANDARD_EVAL_MODES,
-    evaluate_checklist_v2_completeness,
-    standard_research_eval_checklist_document,
 )
 from research.single_shot_job import (
     D1ExecuteFn,
@@ -336,27 +320,14 @@ def __dir__() -> list[str]:
 
 
 __all__ = [
-    "CHECKLIST_VERSION",
-    "CHECKLIST_VERSION_V1",
-    "CHECKLIST_V2_INSUFFICIENT",
-    "CHECKLIST_V2_NEAR_REQUIRED",
-    "CHECKLIST_V2_REQUIRED",
-    "COST_MODEL_PREFER_LIQUIDITY_LINKED",
-    "COST_MODEL_PREFER_REPO_LINKED",
-    "COST_MODEL_REQUIRE_LIQUIDITY_LINKED",
-    "COST_MODEL_REQUIRE_REPO_LINKED",
     "DEFAULT_MULTIYEAR_CODES",
     "DEFAULT_MULTIYEAR_YEARS",
     "MULTI_YEAR_LABEL",
     "MULTI_YEAR_VERSION",
-    "STANDARD_EVAL_DAILY_PATH_DD_PROOF",
-    "STANDARD_EVAL_MODES",
     "design_yearly_eval_windows",
-    "evaluate_checklist_v2_completeness",
     "multi_year_availability_table",
     "run_multi_year_extra_hyp_eval",
     "run_multi_year_s1_eval",
     "run_standard_research_eval",
-    "standard_research_eval_checklist_document",
     "standard_research_eval_checklist_run",
 ]

@@ -47,11 +47,13 @@ from research.cost_models import (
     short_borrow_daily_cost_from_repo,
 )
 from research.eval_harness import (
-    COST_MODEL_PREFER_REPO_LINKED,
-    COST_MODEL_REQUIRE_REPO_LINKED,
     MASS_RESEARCH,
     PHASE7,
     run_standard_research_eval,
+)
+from research.eval_harness_checklist import (
+    COST_MODEL_PREFER_REPO_LINKED,
+    COST_MODEL_REQUIRE_REPO_LINKED,
     standard_research_eval_checklist_document,
 )
 

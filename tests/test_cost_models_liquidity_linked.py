@@ -43,11 +43,13 @@ from research.cost_models import (
     yen_turnover_from_bar,
 )
 from research.eval_harness import (
-    COST_MODEL_PREFER_LIQUIDITY_LINKED,
-    COST_MODEL_REQUIRE_LIQUIDITY_LINKED,
     MASS_RESEARCH,
     PHASE7,
     run_standard_research_eval,
+)
+from research.eval_harness_checklist import (
+    COST_MODEL_PREFER_LIQUIDITY_LINKED,
+    COST_MODEL_REQUIRE_LIQUIDITY_LINKED,
     standard_research_eval_checklist_document,
 )
 

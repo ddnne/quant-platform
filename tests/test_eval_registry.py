@@ -191,11 +191,8 @@ def test_always_on_gate_is_never_candidate() -> None:
 
 
 def test_mechanical_baskets_are_four_valid_defs() -> None:
-    from research.combo_basket import (
-        RETIRED_BASKET_RULES,
-        mechanical_basket_defs,
-        validate_basket_members,
-    )
+    from research.combo_basket import RETIRED_BASKET_RULES, mechanical_basket_defs
+    from research.combo_basket_catalog import validate_basket_members
     from research.unique_logic.constants import CANDIDATE_POLICY
 
     defs = mechanical_basket_defs()
@@ -247,7 +244,7 @@ def test_mechanical_baskets_are_four_valid_defs() -> None:
     assert "event_repo3m_down_pead" in repo["members"]
     assert repo["primary_candidate"] is False
     assert repo["primary"] is False
-    from research.combo_basket import primary_mechanical_basket_defs
+    from research.combo_basket_catalog import primary_mechanical_basket_defs
 
     prim = primary_mechanical_basket_defs()
     assert prim
@@ -265,7 +262,7 @@ def test_mechanical_baskets_are_four_valid_defs() -> None:
 
 
 def test_meta_baskets_are_fund_line_and_not_a_pass() -> None:
-    from research.combo_basket import (
+    from research.combo_basket_catalog import (
         META_BASKETS,
         RETIRED_META_IDS,
         meta_basket_defs,
@@ -291,7 +288,7 @@ def test_meta_baskets_are_fund_line_and_not_a_pass() -> None:
 
 
 def test_compare_basket_summaries_classifies_flip() -> None:
-    from research.combo_basket import compare_basket_summaries
+    from research.combo_basket_compare import compare_basket_summaries
 
     a = _baskets(
         _theme_fund_row(4, 2, rule="fundamentals_sleeve", primary_candidate=True),
@@ -310,7 +307,7 @@ def test_compare_basket_summaries_classifies_flip() -> None:
 
 
 def test_classify_sleeves_three_n_dilutes_at_100() -> None:
-    from research.combo_basket import classify_sleeves_three_n
+    from research.combo_basket_compare import classify_sleeves_three_n
 
     s50 = _fund_head((4, 2), (5, 1))
     s80 = _fund_head((4, 2), (2, 4))
@@ -328,7 +325,7 @@ def test_classify_sleeves_three_n_dilutes_at_100() -> None:
 
 
 def test_compare_headn_vs_liq_does_not_pass() -> None:
-    from research.combo_basket import compare_headn_vs_liq
+    from research.combo_basket_compare import compare_headn_vs_liq
 
     head = _fund_flow((3, 3), (3, 3), job_id="eval-cf-dp-baskets100-20260822a")
     liq = _fund_flow((4, 2), (4, 2), job_id="eval-cf-dp-baskets-liq100-20260822b")
@@ -341,7 +338,7 @@ def test_compare_headn_vs_liq_does_not_pass() -> None:
 
 
 def test_compare_mid_vs_liq_does_not_pass() -> None:
-    from research.combo_basket import compare_mid_vs_liq
+    from research.combo_basket_compare import compare_mid_vs_liq
 
     mid = _fund_flow((3, 3), (3, 3), job_id="eval-cf-dp-baskets80-sleeves-20260822a")
     liq = _fund_flow((5, 1), (5, 1), job_id="eval-cf-dp-baskets-liq100-sleeves-20260822a")
@@ -356,7 +353,7 @@ def test_compare_mid_vs_liq_does_not_pass() -> None:
 
 def test_sleeve_majority_prints_are_not_a_pass() -> None:
     from research.cf_daily_path_job import sleeve_durability_logic_ids
-    from research.combo_basket import compare_mid_vs_liq
+    from research.combo_basket_compare import compare_mid_vs_liq
 
     ids = sleeve_durability_logic_ids()
     assert "event_eqar_high_pead" in ids
@@ -384,10 +381,12 @@ def test_summarize_emits_candidate_family_counts() -> None:
 
 def test_combo_basket_blend_is_equal_weight() -> None:
     from research.combo_basket import (
-        DEFAULT_CANDIDATE_BASKET,
         blend_net_daily,
         blend_window_cells,
         occupancy_in_candidate_band,
+    )
+    from research.combo_basket_catalog import (
+        DEFAULT_CANDIDATE_BASKET,
         validate_basket_members,
     )
 

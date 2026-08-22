@@ -4,21 +4,9 @@ from __future__ import annotations
 from typing import Any, Mapping, Sequence
 
 from research.combo_basket_catalog import (
-    DEFAULT_CANDIDATE_BASKET,
-    META_BASKETS,
     RETIRED_BASKET_RULES,
-    RETIRED_META_IDS,
     equal_weights,
     mechanical_basket_defs,
-    meta_basket_defs,
-    primary_mechanical_basket_defs,
-    validate_basket_members,
-)
-from research.combo_basket_compare import (
-    classify_sleeves_three_n,
-    compare_basket_summaries,
-    compare_headn_vs_liq,
-    compare_mid_vs_liq,
 )
 from research.eval_registry import PROTOCOL_DAILY_PATH
 from research.stats_metrics import equity_path_drawdown, evaluate_daily_path_dd_gate
@@ -251,20 +239,10 @@ def _mean(xs: Sequence[Any]) -> float | None:
 
 
 __all__ = [
-    "DEFAULT_CANDIDATE_BASKET",
-    "META_BASKETS",
     "RETIRED_BASKET_RULES",
-    "RETIRED_META_IDS",
     "blend_net_daily",
     "blend_window_cells",
-    "classify_sleeves_three_n",
-    "compare_basket_summaries",
-    "compare_headn_vs_liq",
-    "compare_mid_vs_liq",
     "mechanical_basket_defs",
-    "meta_basket_defs",
     "occupancy_in_candidate_band",
-    "primary_mechanical_basket_defs",
     "summarize_basket_trends",
-    "validate_basket_members",
 ]

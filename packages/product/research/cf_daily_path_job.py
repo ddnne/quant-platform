@@ -267,7 +267,7 @@ def run_cf_daily_path_fanout(
 
 
 def sleeve_durability_logic_ids() -> list[str]:
-    from research.combo_basket import mechanical_basket_defs
+    from research.combo_basket_catalog import mechanical_basket_defs
 
     want = {"fundamentals_sleeve", "margin_flow_sleeve", "event_fund_cross"}
     ids: list[str] = []
@@ -303,7 +303,7 @@ def run_both_track_sleeve_fanout(
     one_way_cost: float = DEFAULT_ONE_WAY,
     universe_pool: Sequence[str] | None = None,
 ) -> dict[str, Any]:
-    from research.combo_basket import compare_mid_vs_liq
+    from research.combo_basket_compare import compare_mid_vs_liq
     from research.eval_tracks import (
         EVAL_TRACK_LIQ_LARGE,
         EVAL_TRACK_MID_N,

@@ -34,19 +34,21 @@ from tests.research_eval_util import (
 )
 from research.eval_harness import (
     APPROVED_SIGNAL_LEGS,
-    COMPLETE_21_DATASET_SET,
     DEFAULT_SIGNAL_DATASETS,
-    DEFAULT_SIGNAL_ID,
     HARNESS_VERSION,
     NEXTDAY_RESEARCH_LABEL,
     PIPELINE,
-    SIGNAL_CANDIDATE_ONLY,
     EvalHarnessError,
     require_approved_signal_legs,
     require_harness_datasets,
     run_full_pipeline,
     run_multiday_signal_eval,
     run_nextday_return_eval,
+)
+from research.single_shot_job import (
+    COMPLETE_21_DATASET_SET,
+    DEFAULT_SIGNAL_ID,
+    SIGNAL_CANDIDATE_ONLY,
 )
 from selection.budget_ledger import MassResearchDisabledError
 

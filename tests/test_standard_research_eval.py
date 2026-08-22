@@ -21,15 +21,17 @@ from research.cost_models import (
     short_borrow_daily_cost,
 )
 from research.eval_harness import (
+    EvalHarnessError,
+    run_standard_research_eval,
+    standard_research_eval_checklist_run,
+)
+from research.eval_harness_checklist import (
     CHECKLIST_VERSION,
     CHECKLIST_VERSION_V1,
     STANDARD_EVAL_DAILY_PATH_DD_PROOF,
     STANDARD_EVAL_MODES,
-    EvalHarnessError,
     evaluate_checklist_v2_completeness,
-    run_standard_research_eval,
     standard_research_eval_checklist_document,
-    standard_research_eval_checklist_run,
 )
 from research.stats_metrics import (
     DAILY_PATH_DD_REQUIRED_FIELDS,
