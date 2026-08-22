@@ -350,3 +350,19 @@ def test_event_cheap_pb_gate_in_combo_and_yaml() -> None:
     assert "reverse().find" in body
     assert "extras?.cheapPb" not in body
     assert any(q.get("id") == "cheap_pb_event_reuse" for q in NEXT_RESEARCH_QUEUE)
+
+
+def test_otc_parse_zero_2002_not_invented_complete() -> None:
+    from pathlib import Path
+
+    from research.eval_tracks import NEXT_RESEARCH_QUEUE
+
+    residual = (
+        Path(__file__).resolve().parents[1]
+        / "docs"
+        / "phase62_residual_status.md"
+    ).read_text(encoding="utf-8")
+    assert "2002-08-02" in residual
+    assert "2002-08-05" in residual
+    assert "PARSE_ZERO" in residual
+    assert any(q.get("id") == "otc_parse_zero" for q in NEXT_RESEARCH_QUEUE)
