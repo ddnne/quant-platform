@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 from uuid import uuid4
 
+from qp_paths import repo_root as _qp_repo_root
 from research.bar_native_specs import BAR_NATIVE_SPECS
 from research.cf_mass_eval_stage import (
     DEFAULT_MAX_CODES,
@@ -47,7 +48,7 @@ DEFAULT_LITE_PERIODS: tuple[dict[str, str], ...] = (
     {"period_id": "p2026_h1", "start": "2026-01-05", "end": "2026-06-30"},
 )
 
-_REPO_ROOT = Path(__file__).resolve().parents[3]
+_REPO_ROOT = _qp_repo_root()
 _DEFAULT_WRANGLER = (
     _REPO_ROOT
     / "platform"

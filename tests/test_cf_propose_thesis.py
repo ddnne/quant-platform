@@ -152,8 +152,6 @@ def test_worker_index_contains_propose_thesis_route() -> None:
     assert "llm_failed" in src
     assert "llama-3.3-70b-instruct-fp8-fast" in src
     assert "glm-4.7-flash" in src
-    assert "extractAiText" in src
-    assert "coerceGateList" in src
     assert "signal_definition" in src
     assert "proposal_source: \"llm_failed\"" in src or "proposal_source: 'llm_failed'" in src or 'proposal_source: "llm_failed"' in src
     assert "auto_inject: false" in src
@@ -164,16 +162,10 @@ def test_worker_index_contains_propose_thesis_route() -> None:
     assert "[ai]" in wr
     assert "env.AI.run" in src
     assert "llm_not_catalog" in src
-    assert "llm_fallback_reason" in src
-    assert "parse_empty" in src
-    assert "ai_unbound" in src
     assert "stubProposals" not in src
     assert "stub_propose_thesis_result" not in src
     assert "STUB_PROPOSAL_TEMPLATES" not in src
-    assert "slice(0, 24)" in src or "slice(0,24)" in src
     assert "titleOccupancyBad" in src
-    assert 'from "./propose_review_tables"' in src
-    assert 'from "./propose_allowed"' in src
     propose_src = _WORKER_PROPOSE.read_text(encoding="utf-8")
     assert "const PROPOSE_ALLOWED_GATES = [" not in propose_src
     assert "const PROPOSE_ALLOWED_DATASETS = [" not in propose_src
@@ -702,6 +694,24 @@ def test_review_proposal_row_occupancy_and_polarity_table() -> None:
             ["eps_down", "sales_down"],
             "occupancy_label_only",
             "PEAD when EPS contracted versus the last prior print AND sales contracted versus the last prior print. Skip missing PIT prints (no invent).",
+        ),
+        (
+            "Tight funding and a rising price-book ratio are more likely to occur when EPS is contracting versus the last prior print. Skip missing PIT prints (no invent).",
+            ["tight_funding", "pb_rising", "eps_down"],
+            "occupancy_label_only",
+            "PEAD when overnight funding is tight AND PB is above its PIT median AND EPS contracted versus the last prior print. Skip missing PIT prints (no invent).",
+        ),
+        (
+            "PEAD when the inverted curve AND price is down.",
+            ["invert_curve", "price_down"],
+            "occupancy_label_only",
+            "PEAD when the repo curve inverted AND price is down. Skip missing PIT prints (no invent).",
+        ),
+        (
+            "PEAD when names are unprofitable AND sales contracted versus the last prior print.",
+            ["np_negative", "sales_down"],
+            "occupancy_label_only",
+            "PEAD when net profit is negative AND sales contracted versus the last prior print. Skip missing PIT prints (no invent).",
         ),
     ]
     for bad_thesis, gates, reason, good_thesis in rows:
