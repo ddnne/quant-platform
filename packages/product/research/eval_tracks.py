@@ -80,10 +80,10 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "id": "inventory_bias_recorded",
         "track": EVAL_TRACK_LIQ_LARGE,
         "why": (
-            "recorded research/eval/job=eval-inventory-bias-20260823q/ "
+            "recorded research/eval/job=eval-inventory-bias-20260823r/ "
             "inventory_bias.json; assert_new_batch_cheap_pb_cap refuses "
-            "new batches at 20%; plus60 occupancy audit 20260823q "
-            "56 material-band / 4 near_empty parked — not materials"
+            "new batches at 20%; plus41 occupancy audit 20260823r "
+            "40 material-band / 1 near_empty parked — not materials"
         ),
         "not_a_pass": True,
         "go": False,
@@ -243,8 +243,8 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "id": "near_empty_parked_not_countable",
         "track": EVAL_TRACK_LIQ_LARGE,
         "why": (
-            "NEAR_EMPTY_PARK_IDS 10 (plus32vf/q + plus60 roe_low/cheap_iv); "
-            "is_countable_spec and validate_basket_members exclude them; "
+            "NEAR_EMPTY_PARK_IDS 11; is_countable_spec and "
+            "validate_basket_members exclude them; "
             "assert_new_batch_occupancy_not_near_empty refuses empty batches"
         ),
         "not_a_pass": True,

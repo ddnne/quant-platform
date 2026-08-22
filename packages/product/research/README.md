@@ -13,7 +13,7 @@ Phase 7 research control plane: readiness attestation, experiment plans.
 - **Thesis count:** `research.unique_logic.worker_bodies.countable_thesis_ids` (catalog + Worker body; YAML clones do not count).
 - **Catalog:** `specs/research_logics/*.yaml`. Worker ID arrays: generated `platform/workers/research-mass-eval/src/catalog_ids.ts` (leftover occupancy stays in `daily_path.ts`).
 - **Propose:** `POST /v1/propose-thesis` (`research.cf_propose_thesis`; Workers AI 70B then 8B CF-internal fallback; LLM failure is `ok:false`/`llm_failed`, not stub-as-success; review_proposal_row; no auto-inject).
-- **`eval_harness.py`:** smoke-code stub only (`DEFAULT_EVAL_CODES`). Not the eval entry.
+- **Smoke codes:** `research.eval_universe.HARNESS_SMOKE_CODES`. Not the eval entry.
 - **`cost_models.py` / `options_225_vol_series.py`:** live math. Do not fake-split.
 
 CF period-net (`research.cf_mass_eval_job`, `POST /v1/mass-eval`) is auxiliary; `n_survivors` is not a pass. Offline `research.offline.bar_eval` / `multiyear` / `factory` are local helpers, not candidate SoT.

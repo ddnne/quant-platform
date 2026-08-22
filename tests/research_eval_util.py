@@ -33,7 +33,6 @@ _AST_BANNED_CALLS = (
 REPO_ROOT = Path(__file__).resolve().parents[1]
 _RESEARCH_PKG = REPO_ROOT / "packages" / "product" / "research"
 HARNESS_AST_PATHS = (
-    _RESEARCH_PKG / "eval_harness.py",
     _RESEARCH_PKG / "r2_io.py",
     _RESEARCH_PKG / "complete21.py",
     _RESEARCH_PKG / "r2_feature_context.py",

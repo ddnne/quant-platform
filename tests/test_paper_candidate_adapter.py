@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from research.paper_candidate_adapter import (
+from research.paper_candidate_adapt import (
     PAPER_CANDIDATE_SPEC_VERSION,
     PaperCandidateReceptacle,
     adapt_class_hyp_candidate,
@@ -34,10 +34,9 @@ from research.paper_candidate_specs import (
 from strategies.spec import STRATEGY_SPEC_VERSION, StrategySpec, interpret_strategy_spec
 REPO = Path(__file__).resolve().parents[1]
 RESEARCH_DIR = REPO / "packages" / "product" / "research"
-ADAPTER_PATH = RESEARCH_DIR / "paper_candidate_adapter.py"
+ADAPTER_PATH = RESEARCH_DIR / "paper_candidate_adapt.py"
 ADAPTER_IMPL_PATHS = (
     ADAPTER_PATH,
-    RESEARCH_DIR / "paper_candidate_adapt.py",
     RESEARCH_DIR / "paper_candidate_specs.py",
 )
 
