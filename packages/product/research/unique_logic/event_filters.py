@@ -10,7 +10,6 @@ from statistics import median
 from typing import Any, Mapping, Sequence
 
 from research.daily_path_eval import (
-    assert_frozen_pins_untouched,
     held_book_daily_mtm,
     panel_index,
 )
@@ -22,15 +21,12 @@ from research.unique_logic.constants import (
     EVENT_LOGIC_IDS,
     EVENT_FILTER_LOGIC_IDS,
 )
-
-_assert_frozen_pins_untouched = assert_frozen_pins_untouched
-
-from research.unique_logic.event import (  # noqa: E402
+from research.unique_logic.event import (
     _collect_event_entries,
     _held_from_event_entries,
     pit_median_on_dates,
 )
-import research.unique_logic.event as event  # noqa: E402
+import research.unique_logic.event as event
 
 NEW_UNIQUE_LOGIC: tuple[dict[str, Any], ...] = (
     {

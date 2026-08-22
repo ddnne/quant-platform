@@ -8,17 +8,9 @@ from pathlib import Path
 import pytest
 
 from research.holding_metrics import (
-    CONNECTED_TO_MASS,
-    CONNECTED_TO_READY,
     DEFAULT_ONE_WAY_COST,
     DEFAULT_ONE_WAY_COST_BP,
-    EDGE_CLAIMED,
     HOLDING_METRICS_VERSION,
-    MASS_RESEARCH,
-    OPERATIONAL_GO,
-    PHASE7,
-    READY_DECLARED,
-    SIGNIFICANCE_CLAIMED,
     cost_amortization_report,
     cost_amortization_table,
     extract_sign_panel_from_batch_summary,
@@ -42,22 +34,6 @@ MOD_PATH = REPO / "packages" / "product" / "research" / "holding_metrics.py"
 def test_document_freeze_mass_ready_off():
     doc = holding_metrics_document()
     assert doc["version"] == HOLDING_METRICS_VERSION
-    assert doc["ready_declared"] is False
-    assert doc["operational_go"] is False
-    assert doc["connected_to_ready"] is False
-    assert doc["connected_to_mass"] is False
-    assert doc["mass_research"] == "NO-GO"
-    assert doc["phase7"] == "OFF"
-    assert doc["edge_claimed"] is False
-    assert doc["significance_claimed"] is False
-    assert READY_DECLARED is False
-    assert OPERATIONAL_GO is False
-    assert MASS_RESEARCH == "NO-GO"
-    assert PHASE7 == "OFF"
-    assert CONNECTED_TO_READY is False
-    assert CONNECTED_TO_MASS is False
-    assert EDGE_CLAIMED is False
-    assert SIGNIFICANCE_CLAIMED is False
     assert "仮定に依存" in doc["label"]
     assert "研究用" in doc["label"]
     assert "未宣言" in doc["label"]

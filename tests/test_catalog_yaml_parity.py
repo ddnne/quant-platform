@@ -45,20 +45,45 @@ def test_catalog_yaml_parity_with_python_specs() -> None:
 
 
 def test_combo_yaml_params_include_gates() -> None:
-    from research.unique_logic.catalog import parse_catalog_yaml
-    from research.unique_logic.event_combos import spec_by_id
+    from research.unique_logic.catalog import combo_row_from_yaml, parse_catalog_yaml
+    from research.unique_logic.event_combos import combo_runtime_spec
 
-    py = spec_by_id("event_eqar_high_pead")
+    py = combo_runtime_spec("event_eqar_high_pead")
     assert py is not None
     path = _YAML_DIR / "event_eqar_high_pead.yaml"
     yml = parse_catalog_yaml(path.read_text(encoding="utf-8"))
-    py_gates = list((py.get("params") or {}).get("gates") or py.get("gates") or [])
-    yml_gates = yml.get("params", {}).get("gates")
-    if yml_gates is None:
-        # Rewrite may not have landed yet; Python params remain CF SoT.
-        assert py_gates
-        return
-    assert list(yml_gates) == py_gates
+    assert "gates" in (yml.get("params") or {})
+    assert "cs_gate" in (yml.get("params") or {})
+    assert "side" in (yml.get("params") or {})
+    derived = combo_row_from_yaml(yml)
+    py_p = py.get("params") or {}
+    y_p = derived.get("params") or {}
+    assert list(y_p.get("gates") or []) == list(py_p.get("gates") or [])
+    assert y_p.get("cs_gate") == py_p.get("cs_gate")
+    assert y_p.get("side") == py_p.get("side")
+    assert derived.get("go") is False
+    assert derived.get("generation_enabled") is False
+
+
+def test_combo_yaml_gates_cs_gate_side_match_specs() -> None:
+    from research.unique_logic.catalog import yaml_combo_rows
+    from research.unique_logic.event_combos import (
+        NEW_COMBO_LOGIC,
+        assert_yaml_matches_specs,
+        combo_runtime_spec,
+    )
+
+    assert_yaml_matches_specs()
+    yaml_ids = {r["logic_id"] for r in yaml_combo_rows()}
+    py_ids = {s["logic_id"] for s in NEW_COMBO_LOGIC}
+    assert py_ids <= yaml_ids
+    sample = NEW_COMBO_LOGIC[0]
+    rt = combo_runtime_spec(sample["logic_id"])
+    assert rt is not None
+    assert rt["logic_id"] == sample["logic_id"]
+    assert rt.get("go") is not True
+    # Runtime still uses typed _SPECS rows, not YAML-derived dicts.
+    assert rt is sample
 
 
 def test_unknown_event_gate_fail_closed_is_declared() -> None:

@@ -119,10 +119,48 @@ def test_unknown_event_gate_fails_closed() -> None:
     assert n_on == 0 or float(occ) == 0.0 or pack.get("status") != "ok" or pack.get("n_entered") in (0, None)
 
 
+def test_unknown_cs_gate_fails_closed() -> None:
+    from research.unique_logic.event_combos import spec_by_id, evaluate_combo_daily_mtm
+
+    spec = spec_by_id("cs_margin_up_chase")
+    assert spec is not None
+    assert spec.get("kind") == "cs"
+    forged = dict(spec)
+    params = dict(forged.get("params") or {})
+    params["cs_gate"] = "not_a_real_cs_gate"
+    forged["params"] = params
+    forged["cs_gate"] = "not_a_real_cs_gate"
+    pack = evaluate_combo_daily_mtm(
+        forged,
+        bars={
+            "13010": [("2019-01-04", 100.0), ("2019-01-07", 101.0)],
+            "72030": [("2019-01-04", 200.0), ("2019-01-07", 199.0)],
+        },
+        overnight={"2019-01-04": 0.05, "2019-01-07": 0.04},
+        curve={"spread_by_date": {"2019-01-04": 0.01, "2019-01-07": 0.01}},
+        events={},
+        margin_by_code={},
+        one_way_cost=0.001,
+        period_start="2019-01-01",
+        period_end="2019-01-31",
+    )
+    # Unknown CS gate must not silently always-on (elif gate: keep = False).
+    occ = pack.get("occupancy") or pack.get("occupancy_frac") or 0.0
+    n_on = int(pack.get("n_gate_on_days") or 0)
+    assert float(occ) == 0.0
+    assert n_on == 0
+    assert pack.get("n_entered") in (0, None)
+    assert pack.get("always_on_cs_sticky") is not True
+    assert pack.get("go") is not True
+
+
 def test_harness_default_eval_codes_are_smoke_three() -> None:
+    import research.eval_universe as eu
     from research.eval_harness import DEFAULT_EVAL_CODES, HARNESS_SMOKE_CODES
 
     assert DEFAULT_EVAL_CODES == HARNESS_SMOKE_CODES == ("13010", "72030", "67580")
+    assert not hasattr(eu, "DEFAULT_EVAL_CODES")
+    assert len(eu.EVAL_UNIVERSE_POOL) > 3
 
 
 def test_cf_combo_specs_carry_gates() -> None:
@@ -133,3 +171,33 @@ def test_cf_combo_specs_carry_gates() -> None:
     assert by["event_eqar_high_pead"]["params"].get("gates")
     assert "eq_ar_high" in by["event_eqar_high_pead"]["params"]["gates"]
     assert "liq_high" in by["event_eqar_high_liq_high"]["params"]["gates"]
+
+
+def test_default_logic_specs_leftover_and_bar_native() -> None:
+    from research.cf_mass_eval_job import default_logic_specs
+
+    leftover = default_logic_specs(["rate_abs_level_xs"])
+    assert leftover
+    assert leftover[0]["logic_id"] == "rate_abs_level_xs"
+    assert leftover[0]["family_id"] == "unknown"
+    native = default_logic_specs(["mdh_sticky_momentum"])
+    assert native[0]["logic_id"] == "mdh_sticky_momentum"
+    assert native[0]["family_id"] == "multi_day_hold"
+    assert native[0]["params"]
+
+
+def test_cf_mass_eval_job_does_not_import_factory() -> None:
+    import ast
+    from pathlib import Path
+
+    research_dir = (
+        Path(__file__).resolve().parents[1] / "packages" / "product" / "research"
+    )
+    for name in ("cf_mass_eval_job.py", "cf_daily_path_job.py", "bar_native_specs.py"):
+        tree = ast.parse((research_dir / name).read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    assert "mass_strategy_factory" not in alias.name, name
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                assert "mass_strategy_factory" not in node.module, name

@@ -128,4 +128,18 @@ describe("comboCsGateOk", () => {
     expect(start.keep).toBe(true);
     expect(late.keep).toBe(false);
   });
+
+  it("unknown gate fails closed", () => {
+    const miss = comboCsGateOk(
+      "not_a_real_cs_gate",
+      "2019-01-08",
+      {},
+      {},
+      null,
+      null,
+      null,
+    );
+    expect(miss.keep).toBe(false);
+    expect(miss.invert).toBe(false);
+  });
 });

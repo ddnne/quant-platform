@@ -15,8 +15,6 @@ def test_event_sides_ls_variants_stay_registered() -> None:
         "surprise_xs_rank_flip",
     ]
     assert set(ids) <= set(RESEARCH_UNIQUE_LOGIC_IDS)
-    pack = event_sides._assert_frozen_pins_untouched()
-    assert pack["pins_untouched"] is True
 
 
 def test_parse_catalog_yaml_folded_and_params() -> None:
@@ -45,6 +43,48 @@ evaluator: research.unique_logic.cs_overlays.evaluate_overnight_level_cs_tilt_da
     assert spec["params"]["hold_days"] == 10
     assert spec["params"]["momentum_n"] == 5
     assert spec["params"]["gates"] == ["eq_ar_high", "pead"]
+
+
+def test_combo_row_from_yaml_requires_gates_cs_gate_side() -> None:
+    from research.unique_logic.catalog import combo_row_from_yaml, parse_catalog_yaml
+
+    spec = parse_catalog_yaml(
+        """
+logic_id: event_eqar_high_pead
+family_id: event_calendar_gate
+go: false
+generation_enabled: false
+thesis: >
+  PEAD only when EqAR is above the name PIT median.
+params:
+  side: orig
+  gates: eq_ar_high
+  cs_gate: None
+evaluator: research.unique_logic.event_combos.evaluate_combo_daily_mtm
+"""
+    )
+    row = combo_row_from_yaml(spec)
+    assert row["logic_id"] == "event_eqar_high_pead"
+    assert row["params"]["gates"] == ["eq_ar_high"]
+    assert row["params"]["cs_gate"] is None
+    assert row["params"]["side"] == "orig"
+    assert row["go"] is False
+    assert row["generation_enabled"] is False
+    missing = parse_catalog_yaml(
+        """
+logic_id: event_eqar_high_pead
+params:
+  side: orig
+evaluator: research.unique_logic.event_combos.evaluate_combo_daily_mtm
+"""
+    )
+    try:
+        combo_row_from_yaml(missing)
+    except ValueError as exc:
+        assert "gates" in str(exc)
+        assert "cs_gate" in str(exc)
+    else:
+        raise AssertionError("missing YAML params.gates/cs_gate must fail")
 
 
 def test_dispatch_unknown_logic_is_incomplete() -> None:
@@ -293,6 +333,9 @@ def test_worker_new_thesis_ids_match_python() -> None:
     from research.unique_logic.constants import (
         CF_NEW_CS_THESIS_IDS,
         CF_NEW_EVENT_THESIS_IDS,
+        COMBO_EVENT_GATES,
+        CS_LOGIC_IDS,
+        PYTHON_ONLY_EVENT_GATES,
     )
 
     src = (
@@ -306,7 +349,7 @@ def test_worker_new_thesis_ids_match_python() -> None:
 
     def _ids(name: str) -> set[str]:
         m = re.search(
-            rf"export const {name} = \[(.*?)] as const",
+            rf"(?:export )?const {name} = (?:new Set\()?\[(.*?)](?: as const)?",
             src,
             flags=re.S,
         )
@@ -315,6 +358,12 @@ def test_worker_new_thesis_ids_match_python() -> None:
 
     assert _ids("CF_NEW_EVENT_THESIS_IDS") == set(CF_NEW_EVENT_THESIS_IDS)
     assert _ids("CF_NEW_CS_THESIS_IDS") == set(CF_NEW_CS_THESIS_IDS)
+    assert _ids("COMBO_EVENT_GATES") == set(COMBO_EVENT_GATES)
+    assert _ids("COMBO_EVENT_GATES").isdisjoint(PYTHON_ONLY_EVENT_GATES)
+    assert _ids("CF_UNIQUE_CS_LOGIC_IDS") == set(CS_LOGIC_IDS)
+    assert set(CS_LOGIC_IDS).isdisjoint(CF_NEW_CS_THESIS_IDS)
+    assert "(CF_UNIQUE_CS_LOGIC_IDS as readonly string[]).includes(lid)" in src
+    assert "(CF_NEW_CS_THESIS_IDS as readonly string[]).includes(lid)" in src
 
 
 def test_fins_official_keys_are_single_source() -> None:

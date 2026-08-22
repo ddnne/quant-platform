@@ -51,11 +51,8 @@ from data_contracts.permanent_defer import (
     PERMANENT_DEFER_DATASETS,
     PERMANENT_DEFER_IDS,
 )
+from research.bar_native_specs import BAR_NATIVE_SPECS
 from research.freezes import CONTINUOUS_PAPER, MASS_RESEARCH, PHASE7
-from research.mass_strategy_factory import (
-    LOGIC_TEMPLATES,
-    MASS_FACTORY_VERSION,
-)
 from research.single_shot_job import COMPLETE_21_DATASETS, default_r2_put
 
 CF_MASS_EVAL_VERSION: str = "cf-mass-eval-job/v6"
@@ -113,42 +110,12 @@ if COMPLETE_22_DATASET_SET & PERMANENT_DEFER_DATASETS:
     )
 
 # Bar-native logics the CF Worker can evaluate without extra panels.
+# Catalog: research.bar_native_specs (not mass_strategy_factory.LOGIC_TEMPLATES).
 # nky_vol_* need staged index closes (__NKY_PROXY__) in panels.
 # opt225_* need staged opt225_regime maps (BaseVol/ATM IV/spread).
 # macro_repo_rate_* consume staged repo_rate_regime when present.
 # flow/fund/mf consume flow_regime / fund_regime (missing sidecar → disclosed MDH).
-CF_BAR_NATIVE_LOGIC_IDS: tuple[str, ...] = (
-    "mdh_sticky_momentum",
-    "mdh_mean_reversion",
-    "xs_rank_ls_sticky",
-    "xs_rank_ls_daily",
-    "vol_risk_adjusted_mom",
-    "vol_breakout_expand",
-    "nky_vol_abs_level",
-    "nky_vol_term_levels",
-    "nky_vol_term_ratio",
-    "opt225_basevol_abs_level",
-    "opt225_basevol_term_levels",
-    "opt225_basevol_term_ratio",
-    "opt225_atm_iv_abs_level",
-    "opt225_atm_iv_term_levels",
-    "opt225_atm_iv_term_ratio",
-    "opt225_iv_base_spread_abs",
-    "opt225_iv_base_spread_change",
-    "opt225_skew_abs_level",
-    "opt225_cm_term_abs_level",
-    "opt225_basevol_delta_abs",
-    "macro_repo_rate_change",
-    "macro_repo_rate_level",
-    "flow_margin_pressure",
-    "flow_margin_short_hard",
-    "flow_margin_short_soft",
-    "fund_value_only",
-    "fund_value_mom_agree",
-    "fund_value_mom_agree_slow",
-    "mf_value_mom_rate",
-    "mf_flow_price",
-)
+CF_BAR_NATIVE_LOGIC_IDS: tuple[str, ...] = tuple(BAR_NATIVE_SPECS)
 
 # Lite multi-period shards (synthetic / tip smoke).
 DEFAULT_LITE_PERIODS: tuple[dict[str, str], ...] = (
@@ -236,7 +203,7 @@ def _freeze() -> dict[str, Any]:
         "s1_s5_unreject": False,
         "simple_daily_sign_as_diversity": False,
         "frozen_defaults_retuned": False,
-        "factory_version": MASS_FACTORY_VERSION,
+        "factory_version": CF_MASS_EVAL_VERSION,
     }
 
 
@@ -302,8 +269,9 @@ def default_logic_specs(
     """Build CF-ready logic specs.
 
     Unique/combo params (including ``gates``) come from Python catalog rows.
-    YAML is declaration; it currently stores gates as a comma string. Factory
-    templates cover bar-native logics that have no unique_logic row.
+    YAML is declaration; it currently stores gates as a comma string.
+    Bar-native ids come from ``bar_native_specs`` (not factory templates).
+    Leftover unknown ids get ``family_id=unknown``.
     """
     ids = list(logic_ids) if logic_ids is not None else list(CF_BAR_NATIVE_LOGIC_IDS)
     out: list[dict[str, Any]] = []
@@ -337,8 +305,8 @@ def default_logic_specs(
                 }
             )
             continue
-        tpl = LOGIC_TEMPLATES.get(lid)
-        if tpl is None:
+        row = BAR_NATIVE_SPECS.get(str(lid))
+        if row is None:
             out.append(
                 {
                     "logic_id": lid,
@@ -353,14 +321,14 @@ def default_logic_specs(
             continue
         out.append(
             {
-                "logic_id": tpl.logic_id,
-                "family_id": tpl.family_id,
-                "params": dict(tpl.base_params),
-                "thesis": tpl.thesis,
-                "signal_definition": tpl.signal_definition,
-                "position_rule": tpl.position_rule,
-                "datasets_used": list(tpl.datasets_used),
-                "logic_fingerprint": tpl.logic_fingerprint(),
+                "logic_id": row["logic_id"],
+                "family_id": row["family_id"],
+                "params": dict(row.get("params") or {}),
+                "thesis": row.get("thesis") or "",
+                "signal_definition": row.get("signal_definition") or "",
+                "position_rule": row.get("position_rule") or "",
+                "datasets_used": list(row.get("datasets_used") or []),
+                "logic_fingerprint": row.get("logic_fingerprint") or "",
             }
         )
     return out
@@ -1064,11 +1032,10 @@ def build_real_period_panel(
     """
     from research.class_hyp_eval import (
         bars_rich_to_close_panel,
-        load_bars_from_sqlite_rich,
         load_bars_ndjson_rich,
         resolve_bars_path,
-        select_eval_universe,
     )
+    from research.eval_universe import load_bars_from_sqlite_rich, select_eval_universe
 
     p = normalize_period_row(period)
     pid = str(p["period_id"])
@@ -1582,7 +1549,7 @@ def resolve_or_stage_panels(
     )
     meta_key = f"{PANELS_CACHE_PREFIX}/{cid}/meta.json"
     prefix = f"{PANELS_CACHE_PREFIX}/{cid}/panels"
-    from research.class_hyp_eval import select_eval_universe
+    from research.eval_universe import select_eval_universe
 
     if not force_stage:
         existing = try_r2_get_json(meta_key)

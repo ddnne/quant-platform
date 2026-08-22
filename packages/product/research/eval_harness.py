@@ -124,6 +124,7 @@ PIPELINE: tuple[str, ...] = (
 # Smoke 3 names for harness tip batches. Not the research ADV universe
 # (that is class_hyp_eval.EVAL_UNIVERSE_POOL / select_eval_universe).
 HARNESS_SMOKE_CODES: tuple[str, ...] = ("13010", "72030", "67580")
+# Back-compat alias of HARNESS_SMOKE_CODES (exactly 3 names). Not a 100-name pool.
 DEFAULT_EVAL_CODES: tuple[str, ...] = HARNESS_SMOKE_CODES
 
 

@@ -122,18 +122,16 @@ def test_daily_path_spec_keeps_unique_event() -> None:
 
 def test_eval_universe_is_not_fifteen() -> None:
     from research.cf_mass_eval_job import DEFAULT_MAX_CODES
-    from research.class_hyp_eval import (
-        DEFAULT_EVAL_CODES,
+    from research.eval_universe import (
         EVAL_UNIVERSE_POOL,
+        UNIVERSE_MIN_FINS_EQAR,
+        UNIVERSE_MIN_FINS_TA,
         UNIVERSE_SELECT_RULE,
     )
 
     assert DEFAULT_MAX_CODES > 80
-    assert len(DEFAULT_EVAL_CODES) >= DEFAULT_MAX_CODES
+    assert len(EVAL_UNIVERSE_POOL) >= DEFAULT_MAX_CODES
     assert UNIVERSE_SELECT_RULE == "adv_desc_skip_missing_bars_and_fins"
-    assert len(EVAL_UNIVERSE_POOL) > len(DEFAULT_EVAL_CODES)
-    from research.class_hyp_eval import UNIVERSE_MIN_FINS_TA, UNIVERSE_MIN_FINS_EQAR
-
     assert UNIVERSE_MIN_FINS_TA == 1
     assert UNIVERSE_MIN_FINS_EQAR == 1
 
@@ -168,7 +166,7 @@ def test_eval_tracks_are_two_and_not_head_n() -> None:
 
 
 def test_rank_eval_codes_is_not_head_n_and_skips_missing() -> None:
-    from research.class_hyp_eval import rank_eval_codes
+    from research.eval_universe import rank_eval_codes
 
     scored = [
         {"code": "AAAAA", "adv": 10.0, "n_bars": 50, "n_ta": 1, "n_eqar": 1},
@@ -188,11 +186,11 @@ def test_rank_eval_codes_is_not_head_n_and_skips_missing() -> None:
 
 
 def test_empty_pool_does_not_fall_back_to_head_n() -> None:
-    from research.class_hyp_eval import DEFAULT_EVAL_CODES, select_eval_universe
+    from research.eval_universe import EVAL_UNIVERSE_POOL, select_eval_universe
 
     out = select_eval_universe(max_codes=10, pool=())
     assert out == []
-    assert out != list(DEFAULT_EVAL_CODES)[:10]
+    assert out != list(EVAL_UNIVERSE_POOL)[:10]
 
 
 def test_bar_native_count_meets_thirty() -> None:
@@ -224,6 +222,27 @@ def test_event_daily_path_ids_cover_filters_and_sides() -> None:
     assert "aligned" in CF_EVENT_FIDELITY["surprise"]
     assert "intended_lite_windows" in CF_EVENT_FIDELITY
     assert len(CF_NEW_THESIS_IDS) >= 116
+
+
+def test_cf_daily_path_job_does_not_import_factory() -> None:
+    import ast
+    from pathlib import Path
+
+    src = (
+        Path(__file__).resolve().parents[1]
+        / "packages"
+        / "product"
+        / "research"
+        / "cf_daily_path_job.py"
+    )
+    tree = ast.parse(src.read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                assert "mass_strategy_factory" not in alias.name
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            assert "mass_strategy_factory" not in node.module
+            assert node.module != "research.mass_strategy_factory"
 
 
 def test_panels_cache_id_stable() -> None:

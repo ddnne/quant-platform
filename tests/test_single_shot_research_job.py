@@ -18,18 +18,11 @@ from research.single_shot_job import (
     COMPLETE_21_DATASET_SET,
     DEFAULT_CANDIDATE_FEATURES,
     DEFAULT_SIGNAL_ID,
-    MASS_RESEARCH_ENV_ARMING_SWITCHES,
-    MASS_RESEARCH_STATUS,
     NEXTDAY_LOOKAHEAD_POLICY,
-    PHASE7_ENV_ARMING_SWITCHES,
-    PHASE7_STATUS,
-    READY_DECLARED,
-    READY_PUBLICATION_STATUS,
     RESEARCH_ARTIFACT_BUCKET,
     RESEARCH_ARTIFACT_PREFIX,
     SIGNAL_CANDIDATE_ONLY,
     SingleShotJobError,
-    assert_mass_and_phase7_off,
     attach_next_day_returns,
     build_equity_close_index,
     build_single_shot_job_spec,
@@ -779,21 +772,6 @@ def test_execute_compute_signals_writes_signals_artifact(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 
-def test_phase7_mass_ready_freeze_constants():
-    assert MASS_RESEARCH_STATUS == "NO-GO"
-    assert PHASE7_STATUS == "OFF"
-    assert READY_PUBLICATION_STATUS == "OFF"
-    assert READY_DECLARED is False
-    assert PHASE7_ENV_ARMING_SWITCHES == frozenset()
-    assert MASS_RESEARCH_ENV_ARMING_SWITCHES == frozenset()
-    status = assert_mass_and_phase7_off()
-    assert status["mass_research"] == "NO-GO"
-    assert status["phase7"] == "OFF"
-    assert status["ready_declared"] is False
-    assert status["connected_to_mass_research_loop"] is False
-    assert status["sets_ready"] is False
-
-
 def test_freeze_status_matches_constants():
     status = freeze_status()
     assert status["complete_21_count"] == 21
@@ -835,18 +813,6 @@ def _ast_imports_and_calls(path: Path) -> tuple[set[str], set[str]]:
             elif isinstance(func, ast.Attribute):
                 called.add(func.attr)
     return imported, called
-
-
-def test_single_shot_module_does_not_import_mass_research_loop():
-    """AST guard: skeleton must not call into agents.mass_research."""
-    imported, called = _ast_imports_and_calls(SINGLE_SHOT_PATH)
-    assert "agents" not in imported
-    assert "mass_research" not in imported
-    assert "start_mass_research" not in imported
-    assert "require_mass_research_start" not in imported
-    assert "VerifiedResearchReadiness" not in imported
-    assert "start_mass_research" not in called
-    assert "require_mass_research_start" not in called
 
 
 def test_t7_signal_and_single_shot_no_mass_ready_or_orders():
@@ -1105,37 +1071,6 @@ def test_execute_multiday_signal_eval_batch_summary(tmp_path: Path):
     assert SIGNAL_CANDIDATE_ONLY is False
 
 
-def test_multiday_signal_eval_no_mass_ready_or_orders_ast():
-    """W54 T5: multiday path stays inside single_shot; no mass/READY/orders."""
-    imported, called = _ast_imports_and_calls(SINGLE_SHOT_PATH)
-    src = SINGLE_SHOT_PATH.read_text(encoding="utf-8")
-    assert "execute_multiday_signal_eval" in src
-    assert "agents" not in imported
-    assert "mass_research" not in imported
-    assert "start_mass_research" not in imported
-    assert "VerifiedResearchReadiness" not in imported
-    assert "OrderIntent" not in imported
-    assert "paper_service" not in imported
-    assert "place_order" not in called
-    assert "submit_order" not in called
-    assert "mint_ready" not in called
-    # Multiday re-exports freeze SoT (not arm).
-    assert "MASS_RESEARCH_STATUS" in src
-    assert "PHASE7_STATUS" in src
-    assert "READY_DECLARED" in src
-    assert "connected_to_mass_research_loop" in src
-    freeze_src = (
-        REPO_ROOT
-        / "packages"
-        / "research_runtime"
-        / "features"
-        / "research_freezes.py"
-    ).read_text(encoding="utf-8")
-    assert 'MASS_RESEARCH: str = "NO-GO"' in freeze_src
-    assert 'PHASE7: str = "OFF"' in freeze_src
-    assert "READY_DECLARED: bool = False" in freeze_src
-
-
 def test_multiday_reject_permanent_defer_before_d1():
     """Multiday uses DEFAULT_SIGNAL_DATASETS only; DEFER never enters the path."""
     # If a caller tried to force DEFER via wrong datasets, require_complete_21_only
@@ -1374,46 +1309,6 @@ def test_execute_multiday_nextday_return_eval_batch(tmp_path: Path):
     )
     day_keys = [k for k in puts if "/days/date=" in k and k.endswith("/signals.json")]
     assert len(day_keys) == 6
-
-
-def test_nextday_eval_no_mass_ready_or_orders_ast():
-    """T4: nextday path stays single_shot; no mass/READY/orders imports."""
-    imported, called = _ast_imports_and_calls(SINGLE_SHOT_PATH)
-    src = SINGLE_SHOT_PATH.read_text(encoding="utf-8")
-    assert "execute_multiday_nextday_return_eval" in src
-    assert "NEXTDAY_LOOKAHEAD_POLICY" in src
-    assert "attach_next_day_returns" in src
-    assert "summarize_nextday_by_sign" in src
-    assert "agents" not in imported
-    assert "mass_research" not in imported
-    assert "start_mass_research" not in imported
-    assert "VerifiedResearchReadiness" not in imported
-    assert "OrderIntent" not in imported
-    assert "paper_service" not in imported
-    assert "place_order" not in called
-    assert "submit_order" not in called
-    assert "mint_ready" not in called
-    assert "MASS_RESEARCH_STATUS" in src
-    assert "PHASE7_STATUS" in src
-    assert "READY_DECLARED" in src
-    freeze_src = (
-        REPO_ROOT
-        / "packages"
-        / "research_runtime"
-        / "features"
-        / "research_freezes.py"
-    ).read_text(encoding="utf-8")
-    assert 'MASS_RESEARCH: str = "NO-GO"' in freeze_src
-    assert 'PHASE7: str = "OFF"' in freeze_src
-    assert "READY_DECLARED: bool = False" in freeze_src
-    # Look-ahead policy comments / constants present.
-    assert "no_feature_lookahead" in src
-    assert "研究用・未宣言" in src
-    assert "小サンプル" in src
-    assert "median_next_day_return" in src
-    # Feature as_of must remain T close (documented in policy + code).
-    assert "signal_day_T_session_close" in src
-    assert "next_trading_day_T1_session_close" in src
 
 
 def test_nextday_flag_off_preserves_w54_shape(tmp_path: Path):

@@ -309,7 +309,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 0
 
-    from research.class_hyp_eval import select_eval_universe
+    from research.eval_universe import select_eval_universe
 
     codes = select_eval_universe(max_codes=int(args.max_codes))
     extras = _load_extras(args.sqlite, codes=codes)

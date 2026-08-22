@@ -26,13 +26,13 @@ DEFAULT_CANDIDATE_BASKET: tuple[str, ...] = (
     "overnight_down_cs_follow",
 )
 
-# Lessons (descriptive, never a pass):
+# Lessons (descriptive, never a pass / not GO):
 # univ50 vs univ80 cross-sleeve (same members, not a single-job call):
-# - fundamentals_sleeve / margin_flow_sleeve: 4/2 at both — keep primary_candidate
-# - event_fund_cross: 4/2 then 3/3 — keep, mixed not a 2/4 flip
-# - known_candidate_head / event_family_only / family_spread: 5/1 or 4/2 at 50,
-#   2/4 at 80 — universe-unstable, drop primary_candidate
-# - repo_rate_sleeve: 4/2 then 2/4 — redesigned members; demote if still weak
+# - fundamentals_sleeve / margin_flow_sleeve: keep primary_candidate
+# - event_fund_cross: keep, mixed not a flip
+# - known_candidate_head / event_family_only / family_spread:
+#   universe-unstable, drop primary_candidate
+# - repo_rate_sleeve: redesigned members; demote if still weak
 # - surprise_xs_only / two_member_easing / low_occupancy_band — retired
 # Candidate occupancy is sleeve mean, not union. No correlation optimization. No GO.
 RETIRED_BASKET_RULES: frozenset[str] = frozenset(
@@ -44,7 +44,7 @@ DEPRECATED_MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
         "rule": "low_occupancy_band",
         "deprecated": True,
         "deprecated_reason": (
-            "eval-cf-dp-baskets8-20260822a: 1 pos / 5 neg; "
+            "eval-cf-dp-baskets8-20260822a: "
             "unconditional low-occupancy mix is systematically weak"
         ),
         "members": (
@@ -59,7 +59,7 @@ DEPRECATED_MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
         "rule": "surprise_xs_only",
         "deprecated": True,
         "deprecated_reason": (
-            "eval-cf-dp-baskets50-20260822a: 2 pos / 4 neg; "
+            "eval-cf-dp-baskets50-20260822a: "
             "surprise-only mix is systematically weak"
         ),
         "members": (
@@ -73,7 +73,7 @@ DEPRECATED_MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
         "rule": "two_member_easing",
         "deprecated": True,
         "deprecated_reason": (
-            "eval-cf-dp-baskets50-20260822a: 3/3, lowest sleeve occupancy; "
+            "eval-cf-dp-baskets50-20260822a: lowest sleeve occupancy; "
             "thin two-member easing pair"
         ),
         "members": (
@@ -604,7 +604,7 @@ def _mean(xs: Sequence[Any]) -> float | None:
 
 
 # Equal-weight blends of mechanical sleeves. Not GO. No correlation weights.
-# univ100 summary_meta: event4/head metas 2/4 or contaminate flipped sleeves — retired.
+# univ100 summary_meta: event4/head metas contaminate flipped sleeves — retired.
 # Keep fund+flow / fund+event. Secondary: flow+event, three-sleeve.
 META_BASKETS: tuple[dict[str, object], ...] = (
     {
@@ -636,7 +636,7 @@ DEPRECATED_META_BASKETS: tuple[dict[str, object], ...] = (
         "meta_id": "meta_event4_flow",
         "sleeves": ("basket_event4", "basket_theme_flow"),
         "deprecated": True,
-        "deprecated_reason": "eval-cf-dp-baskets100: 2 pos / 4 neg; uses demoted event4",
+        "deprecated_reason": "eval-cf-dp-baskets100: uses demoted event4",
     },
     {
         "meta_id": "meta_event4_fund",
@@ -774,8 +774,9 @@ def compare_basket_summaries(
         "go": False,
         "not_a_pass": True,
         "notes": (
-            "Single-universe 4/2 is not a stability call. "
-            "theme_fund / theme_flow kept 4/2 on both univ50 and univ80."
+            "Single-universe majority is not a stability call. "
+            "theme_fund / theme_flow kept as preferred materials. "
+            "not a pass / not GO."
         ),
     }
 
@@ -866,8 +867,9 @@ def classify_sleeves_three_n(
         "go": False,
         "not_a_pass": True,
         "notes": (
-            "theme_fund/flow are stable_mid (4/2 at 50 and 80) and "
-            "dilute_at_large (3/3 at 100). A 100-only print is never stable."
+            "theme_fund/flow are stable_mid and dilute_at_large. "
+            "A 100-only print is never stable. univ100_is_not_stable. "
+            "not a pass / not GO."
         ),
         "primary_candidate_notes": {
             "basket_theme_fund": (
@@ -988,7 +990,7 @@ def compare_headn_vs_liq(
         "promote_as_main": False,
         "notes": (
             "ADV composition vs head-N on the same sleeve/meta set. "
-            "A liq 4/2 (or 5/1) is not a stability or pass call."
+            "liq_print_is_not_stable. not a pass / not GO."
         ),
     }
 
@@ -1023,8 +1025,8 @@ def compare_mid_vs_liq(
         "promote_as_main": False,
         "notes": (
             "ADV mid_n_explore vs liq_large on the same sleeve/meta set "
-            "(refreshed ADV sleeve members). A liq 4/2 or 5/1 is not a "
-            "stability or pass call."
+            "(refreshed ADV sleeve members). liq_print_is_not_stable. "
+            "not a pass / not GO."
         ),
     }
 

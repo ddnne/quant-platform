@@ -12,8 +12,6 @@ from research.hypothesis_classes import (
     CLASS_SIMPLE_DAILY_SIGN,
 )
 from research.mass_strategy_factory import (
-    CONTINUOUS_PAPER,
-    DEFAULT_MAX_FAMILY_SHARE,
     DEFAULT_N,
     DEFAULT_NEAR_DUP_THRESHOLD,
     FAMILY_DEFINITIONS,
@@ -43,16 +41,9 @@ from research.mass_strategy_factory import (
     research_family_append_document,
     RESEARCH_UNIQUE_FAMILY_IDS,
     RESEARCH_UNIQUE_LOGIC_IDS,
-    FROZEN_DEFAULT_PATH,
     LOGIC_TEMPLATE_IDS,
     LOGIC_TEMPLATES,
-    MASS_FACTORY_VERSION,
-    MASS_FACTORY_WAVE,
-    MASS_RESEARCH,
     NEAR_LOGIC_GROUPS,
-    OPERATIONAL_GO,
-    PHASE7,
-    READY_DECLARED,
     REJECT_LOOKAHEAD,
     REJECT_NEAR_DUPLICATE,
     REJECT_SIMPLE_DAILY_SIGN,
@@ -65,7 +56,6 @@ from research.mass_strategy_factory import (
     llm_logic_entry_status,
     load_batch_data_context,
     logic_templates_document,
-    mass_factory_document,
     near_logic_groups_document,
     propose_profit_hypotheses,
     run_batch_eval,
@@ -76,47 +66,6 @@ from research.mass_strategy_factory import (
     try_cf_minimal_mass_batch,
     validate_strategy_at_gen,
 )
-
-
-def test_freezes_closed():
-    doc = mass_factory_document()
-    assert doc["mass_research"] == "NO-GO"
-    assert doc["phase7"] == "OFF"
-    assert doc["ready_declared"] is False
-    assert doc["operational_go"] is False
-    assert doc["continuous_paper"] == "UNARMED"
-    assert MASS_RESEARCH == "NO-GO"
-    assert PHASE7 == "OFF"
-    assert READY_DECLARED is False
-    assert OPERATIONAL_GO is False
-    assert CONTINUOUS_PAPER == "UNARMED"
-    assert MASS_FACTORY_WAVE == "research-unique-logic"
-    assert MASS_FACTORY_VERSION.startswith("mass-strategy-factory/")
-    assert doc["frozen_defaults_retuned"] is False
-
-
-def test_frozen_defaults_not_retuned():
-    assert len(FROZEN_DEFAULT_PATH) == 3
-    ids = {r["representative_id"] for r in FROZEN_DEFAULT_PATH}
-    assert "cross_section_hold_10" in ids
-    assert "cross_section_hold_10_mom3" in ids
-    assert "fundamentals_hold_10" in ids
-    # pins
-    mom5 = next(
-        r for r in FROZEN_DEFAULT_PATH if r["representative_id"] == "cross_section_hold_10"
-    )
-    mom3 = next(
-        r
-        for r in FROZEN_DEFAULT_PATH
-        if r["representative_id"] == "cross_section_hold_10_mom3"
-    )
-    fund = next(
-        r for r in FROZEN_DEFAULT_PATH if r["representative_id"] == "fundamentals_hold_10"
-    )
-    assert mom5["momentum_n"] == 5 and mom5["hold_days"] == 10
-    assert mom3["momentum_n"] == 3 and mom3["hold_days"] == 10
-    assert fund["momentum_n"] == 10 and fund["hold_days"] == 10
-    assert mass_factory_document()["frozen_defaults_retuned"] is False
 
 
 def test_logic_templates_distinct_economic_logic():

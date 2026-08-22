@@ -421,20 +421,3 @@ def test_long_only_wiring_still_complete_without_repo():
     assert out["prefer_repo_linked"] is True
     assert out["ready_declared"] is False
     assert out["mass_research"] == "NO-GO"
-
-
-def test_mass_ready_frozen_on_repo_paths():
-    s = _series()
-    for kwargs in (
-        {"repo_rate_series": s, "position_style": POSITION_STYLE_LONG_SHORT, "short_fraction": 0.5, "uses_short": True},
-        {"position_style": POSITION_STYLE_LEVERED_LONG, "gross_leverage": 1.5, "uses_leverage": True, "require_repo_linked": True},
-        {},
-    ):
-        out = run_standard_research_eval(dry_run=True, **kwargs)
-        assert out["ready_declared"] is False
-        assert out["operational_go"] is False
-        assert out["mass_research"] == "NO-GO"
-        assert out["phase7"] == "OFF"
-        assert out["connected_to_ready"] is False
-        assert out["connected_to_mass"] is False
-        assert out["research_candidate"] is False

@@ -3380,12 +3380,12 @@ def load_batch_data_context(
     synthetic: bool = False,
 ) -> BatchDataContext:
     """Load period panels once for the batch (lite multi-year by default)."""
+    from research.eval_universe import select_eval_universe
     from research.class_hyp_eval import (
         DEFAULT_PERIODS,
         DEFAULT_PERIODS_Q4,
         DEFAULT_BARS_MIRROR_DIR,
         DEFAULT_SQLITE,
-        select_eval_universe,
         bars_rich_to_close_panel,
         build_repo_curve_series,
         load_bars_ndjson_rich,

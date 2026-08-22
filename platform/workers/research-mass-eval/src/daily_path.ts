@@ -318,89 +318,15 @@ function heldBookDailyMtm(
 }
 
 export const CF_UNIQUE_CS_LOGIC_IDS = [
-  "funding_impulse_cs_tilt",
   "curve_steepen_impulse_cs",
-  "xs_margin_delta_rank",
+  "funding_impulse_cs_tilt",
   "idio_mom_macro_impulse",
-  "overnight_level_cs_tilt",
-  "overnight_easy_cs_follow",
   "month_end_cs_fade",
-  "xs_low_vol_mom",
+  "overnight_easy_cs_follow",
+  "overnight_level_cs_tilt",
   "repo_3m_level_cs",
-  "overnight_tight_cs_fade",
-  "curve_invert_cs_fade",
-  "xs_high_vol_fade",
-  "month_start_cs_follow",
-  "rate_change_cs_confirm",
-  "flow_price_margin_triple",
-  "opt225_skew_cs_gate",
-  "nky_vol_term_cs_gate",
-  "opt225_spread_cs_tilt",
-  "repo_3m_change_cs",
-  "flow_margin_price_agree",
-  "cs_mom_easy_funding",
-  "fy_end_cs_fade",
-  "fy_start_cs_follow",
-  "curve_steep_cs_follow",
-  "overnight_p90_cs_flip",
-  "flow_price_disagree_fade",
-  "nky_vol_compress_cs",
-  "opt225_skew_and_term_cs",
-  "basevol_up_day_fade",
-  "iv_below_basevol_cs",
-  "cs_skip_monday",
-  "cs_tue_thu_follow",
-  "overnight_down_cs_follow",
-  "overnight_up_cs_fade",
-  "cs_midmonth_follow",
-  "cs_friday_fade",
-  "cs_not_month_end",
-  "cs_easing_midmonth",
-  "cs_tue_thu_down",
-  "overnight_down_skip_monday_cs",
-  "cs_friday_tight_fade",
-  "flow_disagree_midmonth",
-  "curve_steep_midmonth_cs",
-  "rate_up_tue_thu_cs",
-  "cs_steep_skip_monday",
-  "cs_midmonth_tight_fade",
-  "flow_disagree_tue_thu",
-  "iv_below_midmonth_cs",
-  "overnight_down_first_half_cs",
-  "rate_up_midmonth_cs",
-  "cs_month_start_easing",
-  "nky_vol_compress_midmonth_cs",
-  "cs_friday_down",
-  "cs_tue_thu_steep",
-  "overnight_up_skip_monday_cs",
-  "flow_disagree_skip_monday",
-  "cs_easy_tue_thu",
-  "cs_easy_skip_monday",
-  "cs_not_friday_down",
-  "cs_midmonth_easy",
-  "cs_steep_friday",
-  "cs_skip_tuesday",
-  "cs_skip_wednesday",
-  "cs_not_last_week",
-  "cs_month_start7",
-  "cs_not_first_week",
-  "cs_easy_skip_friday",
-  "flow_disagree_skip_friday",
-  "overnight_down_skip_tuesday_cs",
-  "cs_margin_up_chase",
-  "cs_margin_down_follow",
-  "cs_short_ratio_up_fade",
-  "cs_on_impulse",
-  "cs_overnight_p10",
-  "cs_repo3m_down",
-  "cs_curve_flatten",
-  "cs_nky_vol_high_fade",
-  "cs_cheap_pb",
-  "cs_expensive_pb_fade",
-  "cs_earnings_yield_high",
-  "cs_roe_high",
-  "cs_div_positive",
-  "cs_np_positive",
+  "xs_low_vol_mom",
+  "xs_margin_delta_rank",
 ] as const;
 
 function usesCrossSection(logic: LogicSpec): boolean {
@@ -438,325 +364,325 @@ export const CF_EVENT_FIDELITY = {
 } as const;
 
 export const CF_NEW_EVENT_THESIS_IDS = [
-  "event_funding_tight_fade",
-  "event_curve_invert_fade",
-  "event_afterclose_easy_funding",
-  "event_large_surprise_easy_funding",
-  "event_pre_mom_easy_funding",
-  "event_margin_or_funding_skip",
-  "event_large_surprise_steep_curve",
-  "event_afterclose_steep_curve",
-  "event_tight_and_crowded_fade",
-  "event_cluster_easy_pead",
-  "surprise_xs_rank_easy_funding",
-  "surprise_xs_rank_steep_curve",
-  "event_pre_mom_steep_curve",
-  "event_large_surprise_afterclose",
-  "event_margin_uncrowded_steep",
-  "event_easy_funding_curve_steep",
-  "event_skip_announce_day",
-  "event_late_hold_only",
-  "month_end_event_skip",
-  "event_first_half_month",
-  "overnight_easing_event",
-  "overnight_tightening_fade_event",
-  "event_cluster_fade",
-  "margin_crowd_fade_event",
-  "surprise_xs_month_start",
-  "surprise_xs_fy_end",
   "event_afterclose_delay2",
-  "event_skip_monday",
-  "event_tue_thu_only",
-  "event_friday_skip",
-  "fy_end_event_fade",
-  "fy_start_event_follow",
-  "event_midmonth_only",
-  "surprise_xs_afterclose",
-  "event_easing_uncrowded",
-  "surprise_xs_tue_thu",
-  "event_afterclose_midmonth",
-  "event_easing_midmonth",
-  "event_friday_easing",
-  "event_uncrowded_midmonth",
-  "event_may_results_follow",
-  "event_tue_thu_easing",
-  "surprise_xs_midmonth",
-  "surprise_xs_easing_change",
-  "surprise_xs_afterclose_easing",
-  "event_tue_thu_uncrowded",
   "event_afterclose_easing",
-  "event_may_easing",
-  "event_skip_monday_uncrowded",
-  "event_first_half_easing",
-  "surprise_xs_skip_monday",
-  "surprise_xs_friday_skip",
-  "surprise_xs_uncrowded",
-  "event_friday_uncrowded",
-  "event_skip_monday_easing",
+  "event_afterclose_easy_funding",
+  "event_afterclose_midmonth",
+  "event_afterclose_not_last_week",
+  "event_afterclose_skip_friday",
   "event_afterclose_skip_monday",
+  "event_afterclose_steep_curve",
+  "event_cheap_iv_cheap_pb",
+  "event_cheap_iv_pead",
+  "event_cheap_pb_cluster",
+  "event_cheap_pb_easy_funding",
+  "event_cheap_pb_eps_up",
+  "event_cheap_pb_large_surprise",
+  "event_cheap_pb_liq_high",
+  "event_cheap_pb_margin_down",
+  "event_cheap_pb_margin_up_fade",
+  "event_cheap_pb_on_impulse",
+  "event_cheap_pb_pead",
+  "event_cheap_pb_positive_eps",
+  "event_cheap_pb_price_down",
+  "event_cheap_pb_price_down_liq",
+  "event_cheap_pb_repo3m_down",
+  "event_cheap_pb_uncrowded",
+  "event_cluster_easy_pead",
+  "event_cluster_fade",
+  "event_cluster_skip_monday",
+  "event_crowd_on_impulse",
+  "event_curve_flatten_pead",
+  "event_curve_flatten_uncrowded",
+  "event_curve_invert_fade",
+  "event_div_payer_cheap_iv",
+  "event_div_payer_easy",
+  "event_div_payer_liq_high",
+  "event_div_payer_margin_down",
+  "event_div_payer_pead",
+  "event_div_payer_price_down",
+  "event_div_payer_uncrowded",
+  "event_easing_midmonth",
   "event_easing_skip_friday",
+  "event_easing_skip_tuesday",
+  "event_easing_uncrowded",
+  "event_easy_funding_curve_steep",
+  "event_easy_skip_tuesday",
+  "event_eps_up_easy",
+  "event_eps_up_liq_high",
+  "event_eqar_high_afterclose",
+  "event_eqar_high_cheap_iv",
+  "event_eqar_high_cluster",
+  "event_eqar_high_div_payer",
+  "event_eqar_high_easy",
+  "event_eqar_high_eps_up",
+  "event_eqar_high_large_surprise",
+  "event_eqar_high_liq_high",
+  "event_eqar_high_margin_down",
+  "event_eqar_high_margin_up_fade",
+  "event_eqar_high_on_impulse",
+  "event_eqar_high_overnight_p10",
+  "event_eqar_high_pead",
+  "event_eqar_high_positive_eps",
+  "event_eqar_high_price_down",
+  "event_eqar_high_price_down_liq",
+  "event_eqar_high_repo3m_down",
+  "event_eqar_high_steep",
+  "event_eqar_high_uncrowded",
+  "event_eqar_low_cheap_iv_fade",
+  "event_eqar_low_fade",
+  "event_eqar_low_liq_high_fade",
+  "event_eqar_low_margin_up_fade",
+  "event_eqar_low_on_impulse_fade",
+  "event_eqar_low_price_down_fade",
+  "event_eqar_low_repo3m_down_fade",
+  "event_eqar_low_tight_fade",
+  "event_first_half_easing",
+  "event_first_half_month",
   "event_first_half_uncrowded",
-  "event_tue_thu_steep",
+  "event_friday_easing",
+  "event_friday_skip",
+  "event_friday_uncrowded",
+  "event_funding_tight_fade",
+  "event_large_surprise_afterclose",
+  "event_large_surprise_easy_funding",
+  "event_large_surprise_steep_curve",
+  "event_late_hold_only",
+  "event_liq_high_large_surprise",
+  "event_margin_delta_fade",
+  "event_margin_down_easy",
+  "event_margin_down_follow",
+  "event_margin_down_liq_high",
+  "event_margin_down_on_impulse",
+  "event_margin_down_price_down",
+  "event_margin_or_funding_skip",
+  "event_margin_uncrowded_steep",
+  "event_margin_up_easy",
+  "event_margin_up_liq_high_fade",
+  "event_margin_up_price_down_fade",
+  "event_margin_up_tight_fade",
+  "event_may_easing",
+  "event_may_results_follow",
+  "event_midmonth_only",
   "event_midmonth_steep",
-  "surprise_xs_first_half",
-  "surprise_xs_afterclose_skip_monday",
-  "surprise_xs_steep_skip_monday",
-  "surprise_xs_uncrowded_skip_monday",
+  "event_month_start7",
+  "event_nky_high_skip",
+  "event_not_first_week",
+  "event_not_last_week",
+  "event_on_impulse_pead",
+  "event_on_impulse_uncrowded",
+  "event_overnight_p10_eqar_low_fade",
+  "event_overnight_p10_pead",
+  "event_positive_eps_easy",
+  "event_positive_eps_liq_high",
+  "event_positive_eps_margin_down",
+  "event_positive_eps_on_impulse",
+  "event_positive_eps_pead",
+  "event_positive_eps_price_down",
+  "event_positive_eps_uncrowded",
+  "event_pre_mom_easy_funding",
+  "event_pre_mom_steep_curve",
+  "event_repo3m_down_afterclose",
+  "event_repo3m_down_pead",
+  "event_repo3m_down_uncrowded",
+  "event_rich_iv_eqar_low_fade",
+  "event_rich_iv_fade",
+  "event_skip_announce_day",
+  "event_skip_monday",
+  "event_skip_monday_easing",
+  "event_skip_monday_uncrowded",
   "event_skip_tuesday",
   "event_skip_wednesday",
-  "event_not_last_week",
-  "event_month_start7",
-  "event_not_first_week",
-  "event_afterclose_skip_friday",
-  "event_easing_skip_tuesday",
-  "event_uncrowded_skip_friday",
+  "event_ta_up_afterclose",
+  "event_ta_up_cheap_iv",
+  "event_ta_up_cluster",
+  "event_ta_up_curve_flatten",
+  "event_ta_up_div_payer",
+  "event_ta_up_easy_funding",
+  "event_ta_up_eps_up",
+  "event_ta_up_large_surprise",
+  "event_ta_up_liq_high",
+  "event_ta_up_margin_down",
+  "event_ta_up_margin_up_fade",
+  "event_ta_up_on_impulse",
+  "event_ta_up_overnight_p10",
+  "event_ta_up_pead",
+  "event_ta_up_positive_eps",
+  "event_ta_up_price_down",
+  "event_ta_up_price_down_liq",
+  "event_ta_up_uncrowded",
+  "event_ta_up_uncrowded_liq",
+  "event_tight_and_crowded_fade",
   "event_tight_skip_monday",
-  "event_cluster_skip_monday",
-  "event_easy_skip_tuesday",
-  "event_afterclose_not_last_week",
-  "surprise_xs_skip_tuesday",
-  "surprise_xs_not_last_week",
+  "event_tue_thu_easing",
+  "event_tue_thu_only",
+  "event_tue_thu_steep",
+  "event_tue_thu_uncrowded",
+  "event_uncrowded_midmonth",
+  "event_uncrowded_skip_friday",
+  "fy_end_event_fade",
+  "fy_start_event_follow",
+  "margin_crowd_fade_event",
+  "month_end_event_skip",
+  "overnight_easing_event",
+  "overnight_tightening_fade_event",
+  "surprise_xs_afterclose",
+  "surprise_xs_afterclose_easing",
+  "surprise_xs_afterclose_skip_friday",
+  "surprise_xs_afterclose_skip_monday",
+  "surprise_xs_cheap_iv",
+  "surprise_xs_cheap_pb_liq_high",
+  "surprise_xs_curve_flatten",
+  "surprise_xs_div_payer",
+  "surprise_xs_div_payer_easy",
+  "surprise_xs_easing_change",
+  "surprise_xs_easing_skip_friday",
+  "surprise_xs_eps_up",
+  "surprise_xs_eqar_high",
+  "surprise_xs_eqar_high_cheap_iv",
+  "surprise_xs_eqar_high_easy",
+  "surprise_xs_eqar_high_liq_high",
+  "surprise_xs_eqar_high_margin_down",
+  "surprise_xs_eqar_high_on_impulse",
+  "surprise_xs_eqar_high_price_down",
+  "surprise_xs_eqar_high_repo3m_down",
+  "surprise_xs_eqar_low_fade",
+  "surprise_xs_first_half",
+  "surprise_xs_friday_skip",
+  "surprise_xs_fy_end",
+  "surprise_xs_invert_fade",
+  "surprise_xs_margin_down",
+  "surprise_xs_margin_down_on_impulse",
+  "surprise_xs_margin_up",
+  "surprise_xs_margin_up_fade",
+  "surprise_xs_margin_up_on_impulse",
+  "surprise_xs_margin_up_price_down",
+  "surprise_xs_midmonth",
+  "surprise_xs_month_start",
   "surprise_xs_month_start7",
   "surprise_xs_not_first_week",
-  "surprise_xs_easing_skip_friday",
-  "surprise_xs_afterclose_skip_friday",
-  "surprise_xs_tight_fade",
+  "surprise_xs_not_last_week",
   "surprise_xs_on_impulse",
-  "surprise_xs_invert_fade",
-  "event_on_impulse_pead",
-  "event_margin_delta_fade",
-  "event_cheap_iv_pead",
-  "event_rich_iv_fade",
-  "surprise_xs_cheap_iv",
-  "event_positive_eps_pead",
-  "event_cheap_pb_pead",
-  "surprise_xs_eps_up",
-  "event_div_payer_pead",
-  "event_eqar_high_pead",
-  "event_eqar_low_fade",
-  "event_ta_up_pead",
-  "surprise_xs_eqar_high",
-  "event_cheap_pb_easy_funding",
-  "surprise_xs_margin_up_fade",
-  "event_margin_down_follow",
-  "event_crowd_on_impulse",
-  "surprise_xs_margin_up",
-  "event_overnight_p10_pead",
-  "event_curve_flatten_pead",
-  "event_repo3m_down_pead",
-  "surprise_xs_repo3m_down",
-  "event_cheap_iv_cheap_pb",
-  "surprise_xs_rich_iv_fade",
-  "event_nky_high_skip",
-  "surprise_xs_div_payer",
-  "event_eqar_high_easy",
-  "event_eqar_high_on_impulse",
-  "event_eqar_low_tight_fade",
-  "event_ta_up_easy_funding",
-  "surprise_xs_eqar_high_easy",
-  "event_eqar_high_repo3m_down",
-  "event_ta_up_curve_flatten",
-  "surprise_xs_ta_up",
-  "event_eqar_low_on_impulse_fade",
-  "event_eqar_high_overnight_p10",
-  "surprise_xs_margin_down",
-  "event_margin_up_tight_fade",
-  "event_margin_down_easy",
-  "surprise_xs_margin_up_on_impulse",
-  "event_repo3m_down_uncrowded",
   "surprise_xs_overnight_p10",
-  "event_curve_flatten_uncrowded",
-  "event_on_impulse_uncrowded",
-  "event_eqar_high_cheap_iv",
-  "surprise_xs_eqar_high_cheap_iv",
-  "event_ta_up_cheap_iv",
-  "event_rich_iv_eqar_low_fade",
-  "event_div_payer_easy",
-  "surprise_xs_eqar_low_fade",
-  "event_positive_eps_easy",
-  "event_cheap_pb_on_impulse",
-  "event_ta_up_on_impulse",
-  "event_eqar_high_uncrowded",
-  "event_ta_up_uncrowded",
-  "surprise_xs_ta_up_easy",
-  "event_eqar_low_repo3m_down_fade",
-  "event_eqar_high_steep",
-  "surprise_xs_eqar_high_repo3m_down",
-  "event_ta_up_overnight_p10",
-  "event_eqar_high_afterclose",
-  "event_margin_down_on_impulse",
-  "event_margin_up_easy",
-  "surprise_xs_eqar_high_on_impulse",
-  "event_eqar_low_cheap_iv_fade",
-  "surprise_xs_div_payer_easy",
-  "event_div_payer_cheap_iv",
-  "event_positive_eps_on_impulse",
-  "event_cheap_pb_repo3m_down",
-  "event_overnight_p10_eqar_low_fade",
-  "surprise_xs_curve_flatten",
-  "event_ta_up_afterclose",
-  "event_eps_up_easy",
-  "surprise_xs_ta_up_on_impulse",
-  "event_eqar_high_margin_down",
-  "event_ta_up_margin_down",
-  "event_cheap_pb_uncrowded",
   "surprise_xs_positive_eps_easy",
-  "event_repo3m_down_afterclose",
-  "surprise_xs_margin_down_on_impulse",
-  "event_eqar_high_cluster",
-  "event_ta_up_cluster",
-  "event_cheap_pb_cluster",
-  "event_eqar_high_large_surprise",
-  "event_ta_up_large_surprise",
-  "event_cheap_pb_large_surprise",
-  "event_eqar_high_margin_up_fade",
-  "event_ta_up_margin_up_fade",
-  "event_cheap_pb_margin_up_fade",
-  "event_eqar_high_liq_high",
-  "event_ta_up_liq_high",
-  "event_cheap_pb_liq_high",
-  "event_eqar_high_price_down",
-  "event_ta_up_price_down",
-  "event_cheap_pb_price_down",
-  "event_margin_up_price_down_fade",
-  "event_margin_down_price_down",
-  "event_eqar_high_eps_up",
-  "event_ta_up_eps_up",
-  "event_positive_eps_margin_down",
-  "event_div_payer_margin_down",
-  "event_eqar_low_margin_up_fade",
-  "event_liq_high_large_surprise",
-  "surprise_xs_eqar_high_liq_high",
-  "surprise_xs_margin_up_price_down",
-  "surprise_xs_eqar_high_price_down",
-  "event_positive_eps_liq_high",
-  "event_div_payer_liq_high",
-  "event_eqar_low_liq_high_fade",
-  "event_margin_down_liq_high",
-  "event_margin_up_liq_high_fade",
-  "event_eps_up_liq_high",
-  "event_eqar_high_positive_eps",
-  "event_ta_up_positive_eps",
-  "event_cheap_pb_positive_eps",
-  "event_eqar_high_div_payer",
-  "event_ta_up_div_payer",
-  "event_cheap_pb_eps_up",
-  "event_eqar_high_price_down_liq",
-  "event_ta_up_price_down_liq",
-  "event_cheap_pb_price_down_liq",
-  "event_eqar_low_price_down_fade",
-  "event_positive_eps_price_down",
-  "event_div_payer_price_down",
-  "event_cheap_pb_margin_down",
-  "event_positive_eps_uncrowded",
-  "event_div_payer_uncrowded",
-  "event_ta_up_uncrowded_liq",
-  "surprise_xs_cheap_pb_liq_high",
-  "surprise_xs_ta_up_liq_high",
-  "surprise_xs_eqar_high_margin_down",
-  "surprise_xs_ta_up_margin_down",
   "surprise_xs_positive_eps_liq_high",
+  "surprise_xs_rank_easy_funding",
+  "surprise_xs_rank_steep_curve",
+  "surprise_xs_repo3m_down",
+  "surprise_xs_rich_iv_fade",
+  "surprise_xs_skip_monday",
+  "surprise_xs_skip_tuesday",
+  "surprise_xs_steep_skip_monday",
+  "surprise_xs_ta_up",
+  "surprise_xs_ta_up_easy",
+  "surprise_xs_ta_up_liq_high",
+  "surprise_xs_ta_up_margin_down",
+  "surprise_xs_ta_up_on_impulse",
+  "surprise_xs_tight_fade",
+  "surprise_xs_tue_thu",
+  "surprise_xs_uncrowded",
+  "surprise_xs_uncrowded_skip_monday",
 ] as const;
 
 export const CF_NEW_CS_THESIS_IDS = [
-  "overnight_tight_cs_fade",
-  "curve_invert_cs_fade",
-  "xs_high_vol_fade",
-  "month_start_cs_follow",
-  "rate_change_cs_confirm",
-  "flow_price_margin_triple",
-  "opt225_skew_cs_gate",
-  "nky_vol_term_cs_gate",
-  "opt225_spread_cs_tilt",
-  "repo_3m_change_cs",
-  "flow_margin_price_agree",
-  "cs_mom_easy_funding",
-  "fy_end_cs_fade",
-  "fy_start_cs_follow",
-  "curve_steep_cs_follow",
-  "overnight_p90_cs_flip",
-  "flow_price_disagree_fade",
-  "nky_vol_compress_cs",
-  "opt225_skew_and_term_cs",
   "basevol_up_day_fade",
-  "iv_below_basevol_cs",
-  "cs_skip_monday",
-  "cs_tue_thu_follow",
-  "overnight_down_cs_follow",
-  "overnight_up_cs_fade",
-  "cs_midmonth_follow",
-  "cs_friday_fade",
-  "cs_not_month_end",
+  "cs_cheap_pb",
+  "cs_cheap_pb_cheap_iv",
+  "cs_cheap_pb_easy",
+  "cs_cheap_pb_margin_down",
+  "cs_curve_flatten",
+  "cs_curve_flatten_easy",
+  "cs_div_positive",
+  "cs_earnings_yield_high",
   "cs_easing_midmonth",
-  "cs_tue_thu_down",
-  "overnight_down_skip_monday_cs",
-  "cs_friday_tight_fade",
-  "flow_disagree_midmonth",
-  "curve_steep_midmonth_cs",
-  "rate_up_tue_thu_cs",
-  "cs_steep_skip_monday",
-  "cs_midmonth_tight_fade",
-  "flow_disagree_tue_thu",
-  "iv_below_midmonth_cs",
-  "overnight_down_first_half_cs",
-  "rate_up_midmonth_cs",
-  "cs_month_start_easing",
-  "nky_vol_compress_midmonth_cs",
-  "cs_friday_down",
-  "cs_tue_thu_steep",
-  "overnight_up_skip_monday_cs",
-  "flow_disagree_skip_monday",
-  "cs_easy_tue_thu",
-  "cs_easy_skip_monday",
-  "cs_not_friday_down",
-  "cs_midmonth_easy",
-  "cs_steep_friday",
-  "cs_skip_tuesday",
-  "cs_skip_wednesday",
-  "cs_not_last_week",
-  "cs_month_start7",
-  "cs_not_first_week",
   "cs_easy_skip_friday",
-  "flow_disagree_skip_friday",
-  "overnight_down_skip_tuesday_cs",
-  "cs_margin_up_chase",
+  "cs_easy_skip_monday",
+  "cs_easy_tue_thu",
+  "cs_eqar_high",
+  "cs_eqar_high_cheap_iv",
+  "cs_eqar_high_easy",
+  "cs_eqar_high_flatten",
+  "cs_eqar_high_margin_down",
+  "cs_eqar_high_on_impulse",
+  "cs_eqar_high_overnight_p10",
+  "cs_eqar_high_repo3m_down",
+  "cs_eqar_low_fade",
+  "cs_eqar_low_margin_up",
+  "cs_eqar_low_tight",
+  "cs_expensive_pb_fade",
+  "cs_friday_down",
+  "cs_friday_fade",
+  "cs_friday_tight_fade",
+  "cs_margin_down_easy",
   "cs_margin_down_follow",
-  "cs_short_ratio_up_fade",
+  "cs_margin_up_chase",
+  "cs_margin_up_easy",
+  "cs_margin_up_tight_fade",
+  "cs_midmonth_easy",
+  "cs_midmonth_follow",
+  "cs_midmonth_tight_fade",
+  "cs_mom_easy_funding",
+  "cs_month_start7",
+  "cs_month_start_easing",
+  "cs_nky_vol_high_fade",
+  "cs_not_first_week",
+  "cs_not_friday_down",
+  "cs_not_last_week",
+  "cs_not_month_end",
+  "cs_np_positive",
   "cs_on_impulse",
   "cs_overnight_p10",
-  "cs_repo3m_down",
-  "cs_curve_flatten",
-  "cs_nky_vol_high_fade",
-  "cs_cheap_pb",
-  "cs_expensive_pb_fade",
-  "cs_earnings_yield_high",
-  "cs_roe_high",
-  "cs_div_positive",
-  "cs_np_positive",
-  "cs_eqar_high",
-  "cs_eqar_low_fade",
-  "cs_ta_up",
-  "cs_eqar_high_easy",
-  "cs_eqar_high_cheap_iv",
-  "cs_margin_up_tight_fade",
-  "cs_short_ratio_down_follow",
-  "cs_eqar_high_repo3m_down",
-  "cs_margin_down_easy",
   "cs_overnight_p10_steep",
+  "cs_repo3m_down",
   "cs_repo3m_down_easy",
-  "cs_cheap_pb_cheap_iv",
-  "cs_eqar_high_flatten",
-  "cs_eqar_high_overnight_p10",
+  "cs_roe_high",
+  "cs_short_ratio_down_follow",
+  "cs_short_ratio_up_fade",
+  "cs_skip_monday",
+  "cs_skip_tuesday",
+  "cs_skip_wednesday",
+  "cs_steep_friday",
+  "cs_steep_skip_monday",
+  "cs_ta_up",
   "cs_ta_up_easy",
-  "cs_margin_up_easy",
-  "cs_curve_flatten_easy",
-  "cs_eqar_low_tight",
-  "cs_eqar_high_margin_down",
   "cs_ta_up_margin_down",
-  "cs_cheap_pb_easy",
-  "cs_eqar_high_on_impulse",
-  "cs_cheap_pb_margin_down",
-  "cs_eqar_low_margin_up",
+  "cs_tue_thu_down",
+  "cs_tue_thu_follow",
+  "cs_tue_thu_steep",
+  "curve_invert_cs_fade",
+  "curve_steep_cs_follow",
+  "curve_steep_midmonth_cs",
+  "flow_disagree_midmonth",
+  "flow_disagree_skip_friday",
+  "flow_disagree_skip_monday",
+  "flow_disagree_tue_thu",
+  "flow_margin_price_agree",
+  "flow_price_disagree_fade",
+  "flow_price_margin_triple",
+  "fy_end_cs_fade",
+  "fy_start_cs_follow",
+  "iv_below_basevol_cs",
+  "iv_below_midmonth_cs",
+  "month_start_cs_follow",
+  "nky_vol_compress_cs",
+  "nky_vol_compress_midmonth_cs",
+  "nky_vol_term_cs_gate",
+  "opt225_skew_and_term_cs",
+  "opt225_skew_cs_gate",
+  "opt225_spread_cs_tilt",
+  "overnight_down_cs_follow",
+  "overnight_down_first_half_cs",
+  "overnight_down_skip_monday_cs",
+  "overnight_down_skip_tuesday_cs",
+  "overnight_p90_cs_flip",
+  "overnight_tight_cs_fade",
+  "overnight_up_cs_fade",
+  "overnight_up_skip_monday_cs",
+  "rate_change_cs_confirm",
+  "rate_up_midmonth_cs",
+  "rate_up_tue_thu_cs",
+  "repo_3m_change_cs",
+  "xs_high_vol_fade",
 ] as const;
 
 export const CF_EVENT_LOGIC_IDS = [
@@ -801,44 +727,44 @@ function afterClose(discTime: string | null | undefined): boolean {
 }
 
 const COMBO_EVENT_GATES = new Set([
+  "afterclose",
+  "cheap_iv",
+  "cheap_pb",
+  "cluster",
+  "curve_flatten",
+  "div_positive",
+  "easy_funding",
+  "eps_up",
+  "eq_ar_high",
+  "eq_ar_low",
+  "first_half_month",
+  "friday_only",
+  "friday_skip",
+  "invert_curve",
+  "large_surprise",
+  "liq_high",
+  "margin_down",
+  "margin_up",
+  "midmonth",
+  "month_start7",
+  "nky_vol_high_skip",
+  "not_first_week",
+  "not_last_week",
+  "on_impulse",
+  "overnight_easing",
+  "overnight_p10",
+  "positive_eps",
+  "price_down",
+  "repo_3m_down",
+  "rich_iv",
   "skip_monday",
   "skip_tuesday",
   "skip_wednesday",
-  "friday_skip",
-  "friday_only",
-  "tue_thu",
-  "not_last_week",
-  "month_start7",
-  "not_first_week",
-  "first_half_month",
-  "midmonth",
-  "afterclose",
-  "overnight_easing",
-  "easy_funding",
-  "tight_funding",
   "steep_curve",
-  "uncrowded_margin",
-  "cluster",
-  "invert_curve",
-  "on_impulse",
-  "cheap_iv",
-  "rich_iv",
-  "cheap_pb",
-  "positive_eps",
-  "eps_up",
-  "div_positive",
-  "margin_up",
-  "margin_down",
-  "eq_ar_high",
-  "eq_ar_low",
   "ta_up",
-  "overnight_p10",
-  "curve_flatten",
-  "repo_3m_down",
-  "nky_vol_high_skip",
-  "large_surprise",
-  "liq_high",
-  "price_down",
+  "tight_funding",
+  "tue_thu",
+  "uncrowded_margin",
 ]);
 
 function comboGatesOf(params: Record<string, unknown>): string[] {
@@ -1029,6 +955,9 @@ export function comboEventGateOk(
     return finite(chg) && (chg as number) > 0;
   }
   if (gate === "cheap_pb") {
+    // csFundSnaps.cheapPb uses last-fin + pitMedian(..., 20) on union dates;
+    // this gate uses ev.bps for current pb and bars×fins reverse-find at minHist.
+    // Not 1:1 — keep occupancy.
     const close = panel.bars?.[ev.code]?.find(([x]) => x === d)?.[1];
     if (!finite(close) || ev.bps == null || !finite(ev.bps) || ev.bps === 0)
       return false;
@@ -1522,8 +1451,8 @@ function eventHeld(
     perCode[code] = { dlist, entries };
   }
 
-  const clusterLookback = 5;
-  const discDates = absSurprises.map((x) => x.d).sort();
+  const comboGates = comboGatesOf(params as Record<string, unknown>);
+  const comboImpl = comboGatesImplemented(comboGates);
 
   const held: Record<string, Record<string, number>> = {};
   let nOn = 0;
@@ -1533,6 +1462,15 @@ function eventHeld(
     for (const ev of pack.entries) {
       let ok = true;
       let sgn = ev.sign;
+      if (comboImpl) {
+        ok = comboGates.every((g) =>
+          comboEventGateOk(g, ev, overnight, spread, minHist, panel),
+        );
+        if (String(params.side || "orig") === "flip") sgn = -ev.sign;
+      }
+      // Leftover lid bodies + python-only gates (crowded_margin/pre_mom/
+      // month_end_skip/fy_end/fy_results/fy_start/overnight_tightening).
+      if (!comboImpl) {
       if (lid === "afterclose_only_event_hold" && !ev.after) ok = false;
       if (lid === "event_funding_stress_skip" || lid === "event_funding_adaptive_side") {
         const on = overnight[ev.entryDate];
@@ -1669,20 +1607,10 @@ function eventHeld(
       }
       if (lid === "event_cluster_easy_pead") {
         if (!easyOn()) ok = false;
-        const nDisc = discDates.filter(
-          (x) => x < ev.entryDate && x >= addDays(ev.entryDate, -clusterLookback),
-        ).length;
-        const medC = pitMedian(
-          Object.fromEntries(
-            unionDates(bars).map((dd) => [
-              dd,
-              discDates.filter((x) => x < dd && x >= addDays(dd, -clusterLookback)).length,
-            ]),
-          ),
-          ev.entryDate,
-          10,
-        );
-        if (medC === null || nDisc < medC) ok = false;
+        const series = clusterWindowSeries(panel);
+        const nDisc = series[ev.disc];
+        const medC = pitMedian(series, ev.disc, 10);
+        if (nDisc === undefined || medC === null || nDisc < medC) ok = false;
       }
       if (lid === "event_pre_mom_steep_curve") {
         if (!steepOn()) ok = false;
@@ -1736,20 +1664,10 @@ function eventHeld(
         else sgn = -ev.sign;
       }
       if (lid === "event_cluster_fade") {
-        const nDisc = discDates.filter(
-          (x) => x < ev.entryDate && x >= addDays(ev.entryDate, -clusterLookback),
-        ).length;
-        const medC = pitMedian(
-          Object.fromEntries(
-            unionDates(bars).map((dd) => [
-              dd,
-              discDates.filter((x) => x < dd && x >= addDays(dd, -clusterLookback)).length,
-            ]),
-          ),
-          ev.entryDate,
-          10,
-        );
-        if (medC === null || nDisc < medC) ok = false;
+        const series = clusterWindowSeries(panel);
+        const nDisc = series[ev.disc];
+        const medC = pitMedian(series, ev.disc, 10);
+        if (nDisc === undefined || medC === null || nDisc < medC) ok = false;
         else sgn = -ev.sign;
       }
       if (lid === "margin_crowd_fade_event") {
@@ -1933,13 +1851,8 @@ function eventHeld(
         if (dd < "10" || dd > "20") ok = false;
         else if (sp === undefined || sp <= 0) ok = false;
       }
-      const comboGates = comboGatesOf(params as Record<string, unknown>);
-      if (comboGatesImplemented(comboGates)) {
-        ok = comboGates.every((g) =>
-          comboEventGateOk(g, ev, overnight, spread, minHist, panel),
-        );
-        if (String(params.side || "orig") === "flip") sgn = -ev.sign;
       }
+      if (lid === "event_afterclose_delay2" && !ev.after) ok = false;
       if (!ok) continue;
       let i0 = ev.entryIdx;
       if (lid === "event_skip_announce_day") i0 += 1;
@@ -1958,26 +1871,14 @@ function eventHeld(
 
   if (lid === "disclosure_cluster_mom_gate") {
     const cs = csHeld(panel.bars, 5, 10, 0.3, 0.3, false);
-    const dates = unionDates(panel.bars);
+    const series = clusterWindowSeries(panel);
     const gated: Record<string, Record<string, number>> = {};
     for (const [code, cmap] of Object.entries(cs)) {
       gated[code] = {};
       for (const [d, v] of Object.entries(cmap)) {
-        const nDisc = discDates.filter(
-          (x) => x < d && x >= addDays(d, -clusterLookback),
-        ).length;
-        const med = pitMedian(
-          Object.fromEntries(
-            dates.map((dd) => [
-              dd,
-              discDates.filter(
-                (x) => x < dd && x >= addDays(dd, -clusterLookback),
-              ).length,
-            ]),
-          ),
-          d,
-          10,
-        );
+        const nDisc = series[d];
+        if (nDisc === undefined) continue;
+        const med = pitMedian(series, d, 10);
         if (med === null || nDisc < med) continue;
         gated[code][d] = v;
       }
@@ -2009,35 +1910,25 @@ function eventHeld(
   ) {
     const invert = lid.includes("flip");
     const dates = unionDates(panel.bars);
-    const comboGates = comboGatesOf(params as Record<string, unknown>);
     const surpriseByDate: Record<string, Record<string, number>> = {};
     for (const pack of Object.values(perCode)) {
       for (const ev of pack.entries) {
-        if (comboGatesImplemented(comboGates)) {
+        if (comboImpl) {
           if (
             !comboGates.every((g) =>
               comboEventGateOk(g, ev, overnight, spread, minHist, panel),
             )
           )
             continue;
-        } else if (
-          lid === "surprise_xs_rank_easy_funding"
-        ) {
+        } else if (lid === "surprise_xs_rank_easy_funding") {
           const on = overnight[ev.entryDate];
           const med = pitMedian(overnight, ev.entryDate, minHist);
           if (on === undefined || med === null || on >= med) continue;
-        }
+        } else {
         if (lid === "surprise_xs_rank_steep_curve") {
           const sp = spread[ev.entryDate];
           if (sp === undefined || sp <= 0) continue;
         }
-        if (lid === "surprise_xs_month_start" && ev.entryDate.slice(8, 10) > "05")
-          continue;
-        if (
-          lid === "surprise_xs_fy_end" &&
-          !(ev.entryDate.slice(5, 7) === "03" && ev.entryDate.slice(8, 10) >= "15")
-        )
-          continue;
         if (lid === "surprise_xs_afterclose") {
           const dd = ev.entryDate.slice(8, 10);
           if (!ev.after || dd < "10" || dd > "20") continue;
@@ -2113,6 +2004,16 @@ function eventHeld(
           const med = pitMedian(levels, ev.entryDate, minHist);
           if (med === null || (levels[lastD] as number) >= med) continue;
         }
+        }
+        // Catalog gate is first_half_month (dd<=15); leftover is dd>"05".
+        if (lid === "surprise_xs_month_start" && ev.entryDate.slice(8, 10) > "05")
+          continue;
+        // fy_end is PYTHON_ONLY, not in Worker COMBO_EVENT_GATES.
+        if (
+          lid === "surprise_xs_fy_end" &&
+          !(ev.entryDate.slice(5, 7) === "03" && ev.entryDate.slice(8, 10) >= "15")
+        )
+          continue;
         for (let j = ev.entryIdx; j < Math.min(ev.entryIdx + holdDays, pack.dlist.length); j++) {
           const d = pack.dlist[j];
           if (!surpriseByDate[d]) surpriseByDate[d] = {};
@@ -2130,21 +2031,9 @@ function eventHeld(
     }
     const xsHeld: Record<string, Record<string, number>> = {};
     const gatedSparse =
-      comboGatesImplemented(comboGates) ||
-      lid === "surprise_xs_afterclose" ||
-      lid === "surprise_xs_tue_thu" ||
+      comboImpl ||
       lid === "surprise_xs_month_start" ||
-      lid === "surprise_xs_fy_end" ||
-      lid === "surprise_xs_midmonth" ||
-      lid === "surprise_xs_easing_change" ||
-      lid === "surprise_xs_afterclose_easing" ||
-      lid === "surprise_xs_skip_monday" ||
-      lid === "surprise_xs_friday_skip" ||
-      lid === "surprise_xs_uncrowded" ||
-      lid === "surprise_xs_first_half" ||
-      lid === "surprise_xs_afterclose_skip_monday" ||
-      lid === "surprise_xs_steep_skip_monday" ||
-      lid === "surprise_xs_uncrowded_skip_monday";
+      lid === "surprise_xs_fy_end";
     for (const [code, pack] of Object.entries(perCode)) {
       xsHeld[code] = {};
       if (gatedSparse) {

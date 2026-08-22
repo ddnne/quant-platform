@@ -1,7 +1,8 @@
 """Load unique_logic declarations from ``specs/research_logics/*.yaml``.
 
-Git catalog is the human declaration. ``event_combos._SPECS`` generates
-missing YAML; runtime dispatch still uses Python rows so gates stay typed.
+YAML catalog is the declaration source of truth (gates, cs_gate, side).
+``event_combos._SPECS`` remains the typed runtime table; do not delete it.
+Runtime dispatch still uses Python rows so gates stay typed.
 Scores live in R2/D1, not markdown.
 The schema is intentionally small (no general YAML dependency).
 """
@@ -138,6 +139,95 @@ def catalog_spec(logic_id: str, *, root: Path | None = None) -> dict[str, Any] |
         if str(spec.get("logic_id")) == lid:
             return spec
     return None
+
+
+_COMBO_EVALUATOR = "research.unique_logic.event_combos.evaluate_combo_daily_mtm"
+
+
+def _yaml_combo_kind(spec: Mapping[str, Any], *, cs_gate: str | None) -> str:
+    lid = str(spec.get("logic_id") or "")
+    family = str(spec.get("family_id") or "")
+    if cs_gate:
+        return "cs"
+    if family == "surprise_xs_rank" or lid.startswith("surprise_xs"):
+        return "surprise_xs"
+    return "event"
+
+
+def combo_row_from_yaml(spec: Mapping[str, Any]) -> dict[str, Any]:
+    """Map catalog YAML to the same keys as ``event_combos._combo_row``.
+
+    YAML is the declaration SoT. Missing ``params.gates`` / ``cs_gate`` /
+    ``side`` fail closed. Does not GO.
+    """
+    from research.unique_logic.event_combos import _combo_row
+
+    lid = str(spec.get("logic_id") or "")
+    params = spec.get("params")
+    if not isinstance(params, Mapping):
+        raise ValueError(f"{lid}: YAML params missing")
+    missing = [k for k in ("gates", "cs_gate", "side") if k not in params]
+    if missing:
+        raise ValueError(f"{lid}: YAML params missing {', '.join(missing)}")
+
+    gates_raw = params["gates"]
+    if gates_raw in (None, "", "None"):
+        gates: list[str] = []
+    elif isinstance(gates_raw, str):
+        gates = [
+            x.strip()
+            for x in gates_raw.split(",")
+            if x.strip() and x.strip() != "None"
+        ]
+    else:
+        gates = [
+            str(x).strip()
+            for x in list(gates_raw)
+            if str(x).strip() and str(x).strip() != "None"
+        ]
+
+    cs_raw = params["cs_gate"]
+    cs_gate = None if cs_raw in (None, "", "None") else str(cs_raw)
+    side = str(params.get("side") or spec.get("side") or "orig")
+    raw: dict[str, Any] = {
+        "logic_id": lid,
+        "family_id": spec.get("family_id"),
+        "thesis": spec.get("thesis"),
+        "kind": _yaml_combo_kind(spec, cs_gate=cs_gate),
+        "gates": tuple(gates),
+        "side": side,
+    }
+    if cs_gate is not None:
+        raw["cs_gate"] = cs_gate
+    entry_shift = int(params.get("entry_shift") or 0)
+    hold_tail_days = int(params.get("hold_tail_days") or 0)
+    if entry_shift:
+        raw["entry_shift"] = entry_shift
+    if hold_tail_days:
+        raw["hold_tail_days"] = hold_tail_days
+    if spec.get("main_pool") is False:
+        raw["main_pool"] = False
+    row = _combo_row(raw)
+    row["go"] = False
+    row["generation_enabled"] = False
+    row["promote_as_main"] = False
+    row["headline"] = False
+    return row
+
+
+def yaml_combo_rows(*, root: Path | None = None) -> list[dict[str, Any]]:
+    """Combo rows from catalog YAML (declaration SoT; not runtime dispatch)."""
+    from research.unique_logic.event_combos import NEW_COMBO_LOGIC
+
+    combo_ids = {str(s["logic_id"]) for s in NEW_COMBO_LOGIC}
+    rows: list[dict[str, Any]] = []
+    for spec in load_catalog_specs(root=root):
+        evaluator = str(spec.get("evaluator") or "")
+        lid = str(spec.get("logic_id") or "")
+        if evaluator != _COMBO_EVALUATOR and lid not in combo_ids:
+            continue
+        rows.append(combo_row_from_yaml(spec))
+    return rows
 
 
 def combo_yaml_text(spec: Mapping[str, Any]) -> str:

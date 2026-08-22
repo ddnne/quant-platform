@@ -25,22 +25,15 @@ from research.eval_harness import (
     CONNECTED_TO_MASS_RESEARCH_LOOP,
     DEFAULT_SIGNAL_DATASETS,
     DEFAULT_SIGNAL_ID,
-    DENSIFY,
     HARNESS_VERSION,
-    LOCAL_SOT,
     MASS_RESEARCH,
-    MASS_RESEARCH_ENV_ARMING_SWITCHES,
-    NEXTDAY_LOOKAHEAD_POLICY,
     NEXTDAY_RESEARCH_LABEL,
     ORDER_EXECUTION,
     PHASE7,
-    PHASE7_ENV_ARMING_SWITCHES,
     PIPELINE,
     READY_DECLARED,
-    READY_PUBLICATION,
     SIGNAL_CANDIDATE_ONLY,
     EvalHarnessError,
-    assert_harness_closed,
     harness_freeze_status,
     require_approved_signal_legs,
     require_harness_datasets,
@@ -338,31 +331,8 @@ def test_require_approved_signal_legs_rejects_empty():
 
 
 # ---------------------------------------------------------------------------
-# T7 — freeze + AST ban mass / READY / orders
+# T7 — AST ban mass / READY / orders
 # ---------------------------------------------------------------------------
-
-
-def test_harness_freeze_constants():
-    assert MASS_RESEARCH == "NO-GO"
-    assert PHASE7 == "OFF"
-    assert READY_PUBLICATION == "OFF"
-    assert READY_DECLARED is False
-    assert ORDER_EXECUTION is False
-    assert CONNECTED_TO_MASS_RESEARCH_LOOP is False
-    assert DENSIFY is False
-    assert LOCAL_SOT is False
-    assert PHASE7_ENV_ARMING_SWITCHES == frozenset()
-    assert MASS_RESEARCH_ENV_ARMING_SWITCHES == frozenset()
-    status = assert_harness_closed()
-    assert status["mass_research"] == "NO-GO"
-    assert status["phase7"] == "OFF"
-    assert status["ready_declared"] is False
-    fs = harness_freeze_status()
-    assert fs["harness_version"] == HARNESS_VERSION
-    assert fs["pipeline"] == list(PIPELINE)
-    assert fs["densify"] is False
-    assert fs["order_execution"] is False
-    assert dict(NEXTDAY_LOOKAHEAD_POLICY)["no_feature_lookahead"] is True
 
 
 def test_mass_research_still_hard_reject():
@@ -416,32 +386,6 @@ def test_eval_harness_ast_bans_mass_ready_orders():
         assert 'PHASE7_STATUS: str = "ON"' not in src
         assert "READY_DECLARED: bool = True" not in src
         assert "ORDER_EXECUTION: bool = True" not in src
-
-
-def test_eval_harness_source_freeze_literals():
-    src = EVAL_HARNESS_PATH.read_text(encoding="utf-8")
-    freeze_src = (
-        REPO_ROOT
-        / "packages"
-        / "research_runtime"
-        / "features"
-        / "research_freezes.py"
-    )
-    # Harness re-exports; literals live in features.research_freezes.
-    assert "MASS_RESEARCH" in src
-    assert "ORDER_EXECUTION" in src
-    assert "CONNECTED_TO_MASS_RESEARCH_LOOP" in src
-    assert "DENSIFY" in src
-    assert "研究用・未宣言" in src
-    assert "小サンプル" in src or "NEXTDAY_RESEARCH_LABEL" in src
-    assert "os.environ" not in src
-    assert "MASS_RESEARCH_ENABLE" not in src
-    assert "PHASE7_ENABLE" not in src
-    fs = freeze_src.read_text(encoding="utf-8")
-    assert 'MASS_RESEARCH: str = "NO-GO"' in fs
-    assert "ORDER_EXECUTION: bool = False" in fs
-    assert "CONNECTED_TO_MASS_RESEARCH_LOOP: bool = False" in fs
-    assert "DENSIFY: bool = False" in fs
 
 
 # ---------------------------------------------------------------------------

@@ -10,9 +10,9 @@ from statistics import median
 from typing import Any, Mapping, Sequence
 
 from research.daily_path_eval import (
-    assert_frozen_pins_untouched,
     held_book_daily_mtm,
     panel_index,
+    stitch_net,
 )
 from research.unique_logic.constants import (
     ALWAYS_ON_OCCUPANCY_WARN,
@@ -22,11 +22,7 @@ from research.unique_logic.constants import (
     EVENT_LOGIC_IDS,
     EVENT_FILTER_LOGIC_IDS,
 )
-
-_assert_frozen_pins_untouched = assert_frozen_pins_untouched
-
-from research.unique_logic import event, event_sides  # noqa: E402
-from research.daily_path_eval import stitch_net  # noqa: E402
+from research.unique_logic import event, event_sides
 
 TRAIL_K = 10
 

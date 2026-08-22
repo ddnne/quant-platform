@@ -4,10 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from research.mass_strategy_factory import (
-    FROZEN_DEFAULT_PATH,
-    propose_profit_hypotheses,
-)
+from research.mass_strategy_factory import propose_profit_hypotheses
 from research.unique_logic import event
 
 
@@ -79,13 +76,6 @@ def test_event_propose_profit_hypotheses_accepts_adhoc_no_catalog_map():
     for a in out["accepted"]:
         assert a["logic_id"] not in event.LOGIC_CATALOG_HEADLINE_BAN
         assert a.get("eval_mapped_to_catalog") in (None, False)
-
-
-def test_event_frozen_pins_untouched():
-    pack = event._assert_frozen_pins_untouched()
-    assert pack["pins_untouched"] is True
-    assert pack["frozen_defaults_retuned"] is False
-    assert len(FROZEN_DEFAULT_PATH) == 3
 
 
 def test_pit_median_is_strictly_prior_dates():

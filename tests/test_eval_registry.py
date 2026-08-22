@@ -8,14 +8,13 @@ from research.eval_registry import (
     manifest_from_window_rows,
     r2_manifest_key,
 )
-from research.eval_windows import FROZEN_PIN_SNAPSHOT, HONEST_3Y_WINDOWS
+from research.eval_windows import HONEST_3Y_WINDOWS
 from research.daily_path_eval import stitch_net, summarize_path
 
 
 def test_honest_windows_are_the_shared_catalog() -> None:
     ids = [w["window_id"] for w in HONEST_3Y_WINDOWS]
     assert ids == ["w2017_2019", "w2020_2022", "w2023_2025"]
-    assert len(FROZEN_PIN_SNAPSHOT) == 3
 
 
 def test_manifest_from_rows_is_queryable_shape() -> None:

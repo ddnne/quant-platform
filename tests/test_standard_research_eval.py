@@ -573,35 +573,6 @@ def test_evaluate_risk_scenarios_standalone():
     assert full["connected_to_mass"] is False
 
 
-def test_mass_ready_frozen_false_on_all_v2_paths():
-    """Mass/READY stay false across wiring, complete scen, and sign-break paths."""
-    for kwargs in (
-        {},
-        {
-            "scenario_rows": [
-                scenario_row(SCENARIO_CRASH, gross_signed_mean=-0.001),
-                scenario_row(SCENARIO_HIGH_VOL, gross_signed_mean=-0.001),
-                scenario_row(SCENARIO_RATE_UP, not_applicable=True, na_reason="n/a"),
-                scenario_row(SCENARIO_RATE_DOWN, not_applicable=True, na_reason="n/a"),
-                scenario_row(
-                    SCENARIO_LIQUIDITY_STRESS, not_applicable=True, na_reason="n/a"
-                ),
-            ]
-        },
-        {
-            "mode": "s1_rejected_baseline",
-        },
-    ):
-        out = run_standard_research_eval(dry_run=True, **kwargs)
-        assert out["ready_declared"] is False
-        assert out["operational_go"] is False
-        assert out["mass_research"] == "NO-GO"
-        assert out["phase7"] == "OFF"
-        assert out["connected_to_ready"] is False
-        assert out["connected_to_mass"] is False
-        assert out["research_candidate"] is False
-
-
 # ---------------------------------------------------------------------------
 # W100 / w0819c — daily_path_DD mandatory gate
 # ---------------------------------------------------------------------------

@@ -1,8 +1,9 @@
 """New unique theses as combo gates (not numeric variants).
 
 CF Worker eventHeld / gatedCsHeld is the candidate-grade path.
-This module declares the specs and a Python fallback that applies the
-same gate names. Does not promote / GO.
+Catalog YAML under ``specs/research_logics`` is the declaration SoT
+(gates / cs_gate / side). ``_SPECS`` remains the typed runtime table.
+Does not promote / GO.
 """
 from __future__ import annotations
 
@@ -2724,6 +2725,67 @@ def spec_by_id(logic_id: str) -> dict[str, Any] | None:
     return None
 
 
+def combo_runtime_spec(logic_id: str) -> dict[str, Any] | None:
+    """Typed runtime row for a combo thesis.
+
+    Catalog YAML under ``specs/research_logics`` is the declaration source of
+    truth for gates, cs_gate, and side. Dispatch still reads the Python
+    ``_SPECS`` / ``NEW_COMBO_LOGIC`` rows so gate names stay typed. Do not
+    switch ``NEW_COMBO_LOGIC`` to YAML rows yet. Does not GO.
+    """
+    return spec_by_id(logic_id)
+
+
+def assert_yaml_matches_specs(*, root: Any = None) -> None:
+    """Fail if catalog YAML gates / cs_gate / side diverge from ``_SPECS``.
+
+    YAML is the declaration SoT. Runtime still uses ``combo_runtime_spec``.
+    A missing YAML field fails (gates were rewritten into the catalog).
+    Does not GO.
+    """
+    from research.unique_logic.catalog import combo_row_from_yaml, load_catalog_specs
+
+    raw_by_id = {str(s["logic_id"]): s for s in load_catalog_specs(root=root)}
+    missing: list[str] = []
+    mismatches: list[str] = []
+    for py in NEW_COMBO_LOGIC:
+        lid = str(py["logic_id"])
+        yml = raw_by_id.get(lid)
+        if yml is None:
+            missing.append(lid)
+            continue
+        params = yml.get("params")
+        if not isinstance(params, Mapping):
+            mismatches.append(f"{lid}: YAML params missing")
+            continue
+        absent = [k for k in ("gates", "cs_gate", "side") if k not in params]
+        if absent:
+            mismatches.append(f"{lid}: YAML params missing {', '.join(absent)}")
+            continue
+        derived = combo_row_from_yaml(yml)
+        py_p = py.get("params") or {}
+        y_p = derived.get("params") or {}
+        y_gates = list(y_p.get("gates") or [])
+        p_gates = list(py_p.get("gates") or [])
+        if y_gates != p_gates:
+            mismatches.append(f"{lid}: gates yaml={y_gates!r} py={p_gates!r}")
+        if y_p.get("cs_gate") != py_p.get("cs_gate"):
+            mismatches.append(
+                f"{lid}: cs_gate yaml={y_p.get('cs_gate')!r} py={py_p.get('cs_gate')!r}"
+            )
+        if str(y_p.get("side") or "orig") != str(py_p.get("side") or "orig"):
+            mismatches.append(
+                f"{lid}: side yaml={y_p.get('side')!r} py={py_p.get('side')!r}"
+            )
+    if missing or mismatches:
+        parts: list[str] = []
+        if missing:
+            parts.append("missing YAML: " + ", ".join(missing[:40]))
+        if mismatches:
+            parts.append("mismatch: " + "; ".join(mismatches[:40]))
+        raise AssertionError("YAML vs _SPECS: " + " | ".join(parts))
+
+
 def evaluate_combo_daily_mtm(
     spec: Mapping[str, Any],
     *,
@@ -2740,7 +2802,7 @@ def evaluate_combo_daily_mtm(
 ) -> dict[str, Any]:
     """Python fallback for combo theses. CF Worker is the SoT path."""
     lid = str(spec.get("logic_id") or "")
-    declared = spec_by_id(lid) or dict(spec)
+    declared = combo_runtime_spec(lid) or dict(spec)
     kind = str(declared.get("kind") or "event")
     extra_adv = adv_by_code or dict(
         ((declared.get("extra") or spec.get("extra") or {}).get("adv_by_code") or {})
