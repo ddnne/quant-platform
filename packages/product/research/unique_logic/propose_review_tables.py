@@ -104,8 +104,23 @@ def prompt_direction_echo_x() -> tuple[str, ...]:
 # LLM English titles sometimes invert gate polarity (sales_down → "Rising Sales").
 # Review follows GATES, not the title; reject the row rather than adopt inverted copy.
 GATE_TITLE_CONTRA: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("sales_down", ("rising sales", "sales up", "sales growth", "high sales", "sales increase")),
-    ("np_negative", ("positive np", "positive profit", "rising profit", "profit up")),
+    ("sales_down", (
+        "rising sales",
+        "sales up",
+        "sales growth",
+        "high sales",
+        "sales increase",
+        "sales tend to rise",
+        "sales rise",
+    )),
+    ("np_negative", (
+        "positive np",
+        "positive profit",
+        "rising profit",
+        "profit up",
+        "profits tend to rise",
+        "profit tends to rise",
+    )),
     ("price_down", (
         "price up",
         "rising price",
@@ -132,9 +147,20 @@ GATE_TITLE_CONTRA: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("eq_ar_high", ("low eqar", "eqar low", "eq ar low")),
     ("tight_funding", ("easy funding", "funding easing", "eased funding")),
     ("easy_funding", ("tight funding", "funding tight")),
-    ("eps_down", ("eps up", "rising eps")),
+    ("eps_down", (
+        "eps up",
+        "rising eps",
+        "eps tend to rise",
+        "earnings tend to rise",
+        "earnings rise",
+    )),
     ("eps_up", ("eps down", "falling eps")),
-    ("margin_down", ("margin up", "rising margin")),
+    ("margin_down", (
+        "margin up",
+        "rising margin",
+        "margins tend to rise",
+        "margins rise",
+    )),
     ("margin_up", ("margin down", "falling margin")),
     # nky_vol_high_skip occupancy is skip-when-high OFF, not "vol is high".
     (
@@ -167,10 +193,10 @@ GATE_TITLE_CONTRA: tuple[tuple[str, tuple[str, ...]], ...] = (
 # ("risk appetite", "repo is low") is not occupancy — reject rather than adopt.
 # Store space-normalized phrases only; polar_blob replaces "-" with " ".
 GATE_OCCUPANCY_LABEL: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("eq_ar_falling", ("risk appetite", "risk premia", "risk premium", "risk arbitrage")),
-    ("eq_ar_rising", ("risk appetite", "risk premia", "risk premium", "risk arbitrage")),
-    ("eq_ar_high", ("risk appetite", "risk premia", "risk premium", "risk arbitrage")),
-    ("eq_ar_low", ("risk appetite", "risk premia", "risk premium", "risk arbitrage")),
+    ("eq_ar_falling", ("risk appetite", "appetite for risk", "risk premia", "risk premium", "risk arbitrage")),
+    ("eq_ar_rising", ("risk appetite", "appetite for risk", "risk premia", "risk premium", "risk arbitrage")),
+    ("eq_ar_high", ("risk appetite", "appetite for risk", "risk premia", "risk premium", "risk arbitrage")),
+    ("eq_ar_low", ("risk appetite", "appetite for risk", "risk premia", "risk premium", "risk arbitrage")),
     ("repo_3m_down", ("repo rates are low", "low repo", "repo is low")),
     ("ta_up", ("technical analysis", "technical signal", "ta signals")),
     ("ta_down", ("technical analysis", "technical signal", "ta signals")),
@@ -181,6 +207,11 @@ GATE_OCCUPANCY_LABEL: tuple[tuple[str, tuple[str, ...]], ...] = (
 
 # Title claims a gate that is not in the AND-set.
 EXTRA_TITLE_GATES: tuple[tuple[str, str], ...] = (
+    ("risk appetite", "eq_ar_falling"),
+    ("appetite for risk", "eq_ar_falling"),
+    ("risk premia", "eq_ar_falling"),
+    ("risk premium", "eq_ar_falling"),
+    ("risk arbitrage", "eq_ar_falling"),
     ("tight funding", "tight_funding"),
     ("funding is tight", "tight_funding"),
     ("funding tight", "tight_funding"),

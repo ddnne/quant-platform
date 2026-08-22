@@ -462,6 +462,18 @@ def test_review_proposal_row_occupancy_and_polarity_table() -> None:
             "title_gate_polarity_mismatch",
             "PEAD when the repo curve flattened AND price is down",
         ),
+        (
+            "Sales tend to rise when overnight funding is tight AND EPS contracted.",
+            ["tight_funding", "sales_down", "eps_down"],
+            "title_gate_polarity_mismatch",
+            "PEAD when overnight funding is tight AND sales contracted AND EPS contracted",
+        ),
+        (
+            "When the yield curve is flattening and price is down, we expect a positive return due to decreased investor appetite for risk.",
+            ["curve_flatten", "price_down"],
+            "occupancy_label_only",
+            "PEAD when the repo curve flattened AND price is down",
+        ),
     ]
     for bad_thesis, gates, reason, good_thesis in rows:
         payload = {

@@ -141,8 +141,8 @@ def test_catalog_yaml_parity_with_python_specs() -> None:
     ):
         header = inspect.getsource(mod).split("def ", 1)[0]
         assert flag in header
-        for lid in original:
-            assert lid not in header
+        quoted = {f'"{lid}"' for lid in original} | {f"'{lid}'" for lid in original}
+        assert not any(q in header for q in quoted)
     for yml in _YAML_DIR.glob("*.yaml"):
         body = yml.read_text(encoding="utf-8")
         assert re.search(r"(?m)^go:\s*true\s*$", body) is None

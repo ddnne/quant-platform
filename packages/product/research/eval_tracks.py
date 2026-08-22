@@ -82,8 +82,8 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "why": (
             "recorded research/eval/job=eval-inventory-bias-20260824g/ "
             "inventory_bias.json; assert_new_batch_cheap_pb_cap refuses "
-            "new batches at 20%; 24h polarity 0-adopt; 24g tight×eps×sales "
-            "band (not sleeve)"
+            "new batches at 20%; 24i appetite-for-risk 0-adopt; 24g "
+            "tight×eps×sales band (not sleeve)"
         ),
         "not_a_pass": True,
         "go": False,
