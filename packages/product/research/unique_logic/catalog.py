@@ -2,8 +2,7 @@
 
 YAML catalog is the declaration source of truth (gates, cs_gate, side)
 and the combo runtime dispatch table (``yaml_combo_rows`` →
-``event_combos.NEW_COMBO_LOGIC``). ``event_combos._SPECS`` is a parity
-shadow only; do not delete it this turn.
+``event_combos.NEW_COMBO_LOGIC``). YAML is declaration and runtime.
 Scores live in R2/D1, not markdown.
 The schema is intentionally small (no general YAML dependency).
 """

@@ -2,6 +2,10 @@
 
 CF staging imports this module instead of the 5500-line class_hyp_eval
 loader for universe selection. Empty pool returns []. No invent.
+
+Bar / sidecar loaders used by CF staging are thin shims: bodies stay in
+eval_loaders (bars/nky/opt225) or class_hyp_eval (margin/repo) lazily
+inside the functions. class_hyp_eval already imports this module.
 """
 from __future__ import annotations
 
@@ -455,6 +459,106 @@ def select_eval_universe(
     return ranked
 
 
+def bars_rich_to_close_panel(
+    rich: Mapping[str, Sequence[tuple[str, Mapping[str, Any]]]],
+) -> dict[str, list[tuple[str, float]]]:
+    from research.eval_loaders import bars_rich_to_close_panel as _impl
+
+    return _impl(rich)
+
+
+def load_bars_ndjson_rich(*args, **kwargs):
+    from research.eval_loaders import load_bars_ndjson_rich as _impl
+
+    return _impl(*args, **kwargs)
+
+
+def resolve_bars_path(*args, **kwargs):
+    from research.eval_loaders import resolve_bars_path as _impl
+
+    return _impl(*args, **kwargs)
+
+
+def resolve_margin_path(*args, **kwargs):
+    from research.class_hyp_eval import resolve_margin_path as _impl
+
+    return _impl(*args, **kwargs)
+
+
+def load_nky_vol_series_from_sqlite(
+    db_path: str | Path = DEFAULT_SQLITE, **kwargs
+):
+    from research.eval_loaders import load_nky_vol_series_from_sqlite as _impl
+
+    return _impl(db_path, **kwargs)
+
+
+def load_opt225_regime_bundle_for_eval(**kwargs):
+    from research.eval_loaders import load_opt225_regime_bundle_for_eval as _impl
+
+    return _impl(**kwargs)
+
+
+def load_margin_from_sqlite(db_path: str | Path = DEFAULT_SQLITE, **kwargs):
+    from research.class_hyp_eval import load_margin_from_sqlite as _impl
+
+    return _impl(db_path, **kwargs)
+
+
+def load_margin_ndjson(*args, **kwargs):
+    from research.class_hyp_eval import load_margin_ndjson as _impl
+
+    return _impl(*args, **kwargs)
+
+
+def load_repo_rows_from_sqlite(db_path: str | Path = DEFAULT_SQLITE, **kwargs):
+    from research.class_hyp_eval import load_repo_rows_from_sqlite as _impl
+
+    return _impl(db_path, **kwargs)
+
+
+def load_repo_rows_all_tenors_from_sqlite(
+    db_path: str | Path = DEFAULT_SQLITE, **kwargs
+):
+    from research.class_hyp_eval import load_repo_rows_all_tenors_from_sqlite as _impl
+
+    return _impl(db_path, **kwargs)
+
+
+def load_short_ratio_series_from_sqlite(
+    db_path: str | Path = DEFAULT_SQLITE, **kwargs
+):
+    from research.class_hyp_eval import load_short_ratio_series_from_sqlite as _impl
+
+    return _impl(db_path, **kwargs)
+
+
+def load_topix_close_series_from_sqlite(
+    db_path: str | Path = DEFAULT_SQLITE, **kwargs
+):
+    from research.eval_loaders import load_topix_close_series_from_sqlite as _impl
+
+    return _impl(db_path, **kwargs)
+
+
+def build_repo_curve_series(*args, **kwargs):
+    from research.class_hyp_eval import build_repo_curve_series as _impl
+
+    return _impl(*args, **kwargs)
+
+
+def repo_history_plane_status(db_path: str | Path = DEFAULT_SQLITE, **kwargs):
+    from research.class_hyp_eval import repo_history_plane_status as _impl
+
+    return _impl(db_path, **kwargs)
+
+
+def momentum_series(*args, **kwargs):
+    from research.class_hyp_eval import momentum_series as _impl
+
+    return _impl(*args, **kwargs)
+
+
 __all__ = [
     "DEFAULT_SQLITE",
     "EVAL_UNIVERSE_POOL",
@@ -463,8 +567,23 @@ __all__ = [
     "UNIVERSE_MIN_FINS_TA",
     "UNIVERSE_SELECT_ADV",
     "UNIVERSE_SELECT_RULE",
+    "bars_rich_to_close_panel",
+    "build_repo_curve_series",
     "load_bars_from_sqlite_rich",
+    "load_bars_ndjson_rich",
     "load_fins_events_from_sqlite",
+    "load_margin_from_sqlite",
+    "load_margin_ndjson",
+    "load_nky_vol_series_from_sqlite",
+    "load_opt225_regime_bundle_for_eval",
+    "load_repo_rows_all_tenors_from_sqlite",
+    "load_repo_rows_from_sqlite",
+    "load_short_ratio_series_from_sqlite",
+    "load_topix_close_series_from_sqlite",
+    "momentum_series",
     "rank_eval_codes",
+    "repo_history_plane_status",
+    "resolve_bars_path",
+    "resolve_margin_path",
     "select_eval_universe",
 ]

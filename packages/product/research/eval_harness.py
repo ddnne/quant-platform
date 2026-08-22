@@ -122,7 +122,7 @@ PIPELINE: tuple[str, ...] = (
 )
 
 # Smoke 3 names for harness tip batches. Not the research ADV universe
-# (that is class_hyp_eval.EVAL_UNIVERSE_POOL / select_eval_universe).
+# (that is research.eval_universe.EVAL_UNIVERSE_POOL / select_eval_universe).
 HARNESS_SMOKE_CODES: tuple[str, ...] = ("13010", "72030", "67580")
 # Back-compat alias of HARNESS_SMOKE_CODES (exactly 3 names). Not a 100-name pool.
 DEFAULT_EVAL_CODES: tuple[str, ...] = HARNESS_SMOKE_CODES
@@ -2470,7 +2470,7 @@ def run_standard_research_eval(
     if mode_s == "class_hyp_offline":
         # W78–W79: class hyps offline multi-year (event/flow/fund + holds).
         # Does not touch S1–S5 catalog. Never auto-promotes candidate.
-        from research.class_hyp_eval import run_class_hyp_multi_year_eval
+        from research.offline.multiyear import run_class_hyp_multi_year_eval
 
         class_hyp_bundle = run_class_hyp_multi_year_eval(
             designed if periods is not None else None,
@@ -2526,7 +2526,7 @@ def run_standard_research_eval(
             # Reload from the same SQLite path class_hyp used (disclosure only
             # when series already embedded in cost_assumption of class hyp).
             try:
-                from research.class_hyp_eval import (
+                from research.offline.multiyear import (
                     DEFAULT_SQLITE,
                     load_repo_rows_from_sqlite,
                 )

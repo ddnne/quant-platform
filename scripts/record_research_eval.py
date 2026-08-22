@@ -18,6 +18,7 @@ for _d in (_here, _here.parent):
             sys.path.insert(0, str(_d))
         break
 from _bootstrap import ensure_repo_root
+from research.cf_daily_path_job import FANOUT_VERSION
 from research.daily_path_eval import git_sha
 from research.eval_registry import (
     PROTOCOL_DAILY_PATH,
@@ -28,7 +29,6 @@ from research.eval_registry import (
     r2_manifest_key,
     write_manifest_local,
 )
-from research.mass_strategy_factory import MASS_FACTORY_VERSION
 
 ROOT = ensure_repo_root()
 
@@ -52,7 +52,7 @@ def main() -> int:
         git_sha=git_sha(cwd=ROOT),
         rows=rows,
         one_way_cost=float(args.one_way_cost),
-        factory_version=MASS_FACTORY_VERSION,
+        factory_version=FANOUT_VERSION,
         notes=args.notes,
     )
     local = write_manifest_local(man, args.staging_dir)

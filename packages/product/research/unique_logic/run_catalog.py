@@ -14,7 +14,7 @@ from typing import Any, Mapping, Sequence
 
 from qp_paths import repo_root
 from research.cf_mass_eval_job import DEFAULT_MAX_CODES
-from research.class_hyp_eval import (
+from research.eval_universe import (
     build_repo_curve_series,
     load_fins_events_from_sqlite,
     load_margin_from_sqlite,

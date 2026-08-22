@@ -67,23 +67,16 @@ def infer_eval_track(*, max_codes: int) -> str:
 # csFundSnaps hoist + eval-cf-dp-cs-hoist-20260822a. Dense work, not +N clones.
 NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
     {
-        "id": "catalog_yaml_as_sot",
-        "track": EVAL_TRACK_LIQ_LARGE,
-        "why": "_SPECS parity shadow still in event_combos.py; delete after one green week",
-        "not_a_pass": True,
-        "go": False,
-    },
-    {
         "id": "offline_eval_shrink",
         "track": EVAL_TRACK_MID_N,
-        "why": "bar_eval is a shim; bodies still in class_hyp_eval",
+        "why": "evaluate_* bodies still in class_hyp_eval",
         "not_a_pass": True,
         "go": False,
     },
     {
         "id": "factory_offline_shrink",
         "track": EVAL_TRACK_LIQ_LARGE,
-        "why": "factory module still exists for W87-W89 generation tests",
+        "why": "shim at mass_strategy_factory; bodies in offline/factory; CF must not import either",
         "not_a_pass": True,
         "go": False,
     },

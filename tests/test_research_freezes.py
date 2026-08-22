@@ -12,14 +12,12 @@ def test_three_default_pins_untouched() -> None:
         PHASE7,
         READY_DECLARED,
     )
-    from research.mass_strategy_factory import FROZEN_DEFAULT_PATH as FACTORY_PINS
 
     pack = assert_frozen_pins_untouched()
     assert pack["pins_untouched"] is True
     assert pack["frozen_defaults_retuned"] is False
     assert len(FROZEN_PIN_SNAPSHOT) == 3
     assert len(FROZEN_DEFAULT_PATH) == 3
-    assert FACTORY_PINS is FROZEN_DEFAULT_PATH
     assert MASS_RESEARCH == "NO-GO"
     assert READY_DECLARED is False
     assert PHASE7 == "OFF"
@@ -30,9 +28,8 @@ def test_freeze_sot_reexports_match() -> None:
     from research.cf_daily_path_job import MASS_RESEARCH as CF
     from research.freezes import MASS_RESEARCH as SOT
     from research.hypothesis_classes import MASS_RESEARCH as HC
-    from research.mass_strategy_factory import MASS_RESEARCH as FAC
 
-    assert SOT == FEAT == HC == FAC == CF == "NO-GO"
+    assert SOT == FEAT == HC == CF == "NO-GO"
 
 
 def test_factory_templates_do_not_clone_combo_catalog() -> None:

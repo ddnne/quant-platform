@@ -87,7 +87,7 @@ def test_combo_yaml_gates_cs_gate_side_match_specs() -> None:
     assert rt is not None
     assert rt["logic_id"] == sample["logic_id"]
     assert rt.get("go") is not True
-    # Runtime dispatch walks YAML-derived NEW_COMBO_LOGIC (not the _SPECS shadow).
+    # Runtime dispatch walks YAML-derived NEW_COMBO_LOGIC.
     assert rt is sample
     import inspect
 

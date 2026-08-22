@@ -21,8 +21,8 @@ Multi-period policy
 -------------------
 * ≥4–6 multi-year windows (full-prefer 2015/19/21/23 + Q4 2017/25)
 * max_codes default 100 (ADV-ranked, skip missing bars/TA/EqAR); max_days ≤ 200 per period (CF wall-clock)
-* Heavy multi-year deep eval remains local ``run_mass_factory`` /
-  ``class_hyp_eval`` for promising survivors only
+* Heavy multi-year deep eval remains local offline eval for promising
+  survivors only
 
 Does **not** arm Mass / READY / GO / continuous paper / live.
 Does **not** retune the three frozen default-path representatives.
@@ -672,7 +672,7 @@ def _load_markets_calendar_map(
     """Compact markets_calendar HolDiv map for one period window."""
     import sqlite3
 
-    from research.class_hyp_eval import DEFAULT_SQLITE
+    from research.eval_universe import DEFAULT_SQLITE
 
     db = Path(sqlite_path) if sqlite_path else DEFAULT_SQLITE
     if not db.exists():
@@ -738,7 +738,7 @@ def _build_thicken_sidecars(
 
     Uses COMPLETE-backed local sqlite / mirrors. Gaps disclosed; no invent/ffill.
     """
-    from research.class_hyp_eval import (
+    from research.eval_universe import (
         DEFAULT_SQLITE,
         build_repo_curve_series,
         load_fins_events_from_sqlite,
@@ -1030,12 +1030,15 @@ def build_real_period_panel(
       {period_id, year, period_start, period_end, bars: {code: [[d, px], ...]},
        dataset, source, status, n_codes, n_days}
     """
-    from research.class_hyp_eval import (
+    from research.eval_universe import (
         bars_rich_to_close_panel,
+        load_bars_from_sqlite_rich,
         load_bars_ndjson_rich,
+        load_nky_vol_series_from_sqlite,
+        load_opt225_regime_bundle_for_eval,
         resolve_bars_path,
+        select_eval_universe,
     )
-    from research.eval_universe import load_bars_from_sqlite_rich, select_eval_universe
 
     p = normalize_period_row(period)
     pid = str(p["period_id"])
@@ -1108,8 +1111,6 @@ def build_real_period_panel(
     # index_vol_regime eval (filtered out of CS universe in worker).
     nky_meta: dict[str, Any] = {}
     try:
-        from research.class_hyp_eval import load_nky_vol_series_from_sqlite
-
         nky = load_nky_vol_series_from_sqlite(
             start=p.get("period_start"),
             end=p.get("period_end"),
@@ -1159,8 +1160,6 @@ def build_real_period_panel(
     # W92: stage options_225 BaseVol / ATM IV / spread regime maps (canonical SoT).
     opt225_meta: dict[str, Any] = {}
     try:
-        from research.class_hyp_eval import load_opt225_regime_bundle_for_eval
-
         opt225 = load_opt225_regime_bundle_for_eval()
         if opt225:
             # Compact maps only (drop bulky level_by_date duplicates when staging).
@@ -2132,7 +2131,7 @@ def try_cf_mass_eval_status() -> dict[str, Any]:
             "Period-net is bar-native auxiliary only. Unique event/CS "
             "logics collapse to MDH on this path and must not be scored "
             "as n_survivors. Candidate SoT is daily_path. "
-            "Heavy multi-year promising-only remains local class_hyp_eval."
+            "Heavy multi-year promising-only remains local offline eval."
         ),
         "synthetic_gap": (
             "rate_abs_level_xs / rate_curve_shape_xs still local_only on "

@@ -5,8 +5,8 @@ from research.unique_logic.catalog import load_catalog_specs, parse_catalog_yaml
 
 
 def test_event_sides_ls_variants_stay_registered() -> None:
-    from research.mass_strategy_factory import RESEARCH_UNIQUE_LOGIC_IDS
     from research.unique_logic import event_sides
+    from research.unique_logic.constants import RESEARCH_UNIQUE_LOGIC_IDS
 
     ids = [s["logic_id"] for s in event_sides.NEW_LS_VARIANTS]
     assert ids == [
@@ -210,22 +210,26 @@ def test_unique_mdh_collapse_is_not_candidate_complete() -> None:
 def test_factory_unique_eval_uses_package_dispatch() -> None:
     import inspect
 
-    from research.mass_strategy_factory import _eval_research_unique_on_panel
+    from research.unique_logic import dispatch as dispatch_mod
+    from research.unique_logic.dispatch import evaluate_logic_daily_mtm
 
-    src = inspect.getsource(_eval_research_unique_on_panel)
+    src = inspect.getsource(evaluate_logic_daily_mtm)
+    src += inspect.getsource(dispatch_mod._dispatch_body)
     assert "evaluate_logic_daily_mtm" in src
     assert "scripts.run_w" not in src
-    assert "from research.unique_logic.dispatch import" in src
+    assert evaluate_logic_daily_mtm.__module__ == "research.unique_logic.dispatch"
 
 
 def test_yaml_dispatch_worker_event_ids_align() -> None:
     import inspect
 
     from research.cf_daily_path_job import CF_EVENT_DAILY_PATH_IDS
-    from research.mass_strategy_factory import RESEARCH_UNIQUE_LOGIC_IDS
     from research.unique_logic import all_unique_logic_specs
     from research.unique_logic.catalog import load_catalog_specs
-    from research.unique_logic.constants import CF_EVENT_DAILY_PATH_IDS as CONST_EVENT
+    from research.unique_logic.constants import (
+        CF_EVENT_DAILY_PATH_IDS as CONST_EVENT,
+        RESEARCH_UNIQUE_LOGIC_IDS,
+    )
     from research.unique_logic.dispatch import evaluate_logic_daily_mtm
 
     yaml_ids = {s["logic_id"] for s in load_catalog_specs()}

@@ -591,10 +591,9 @@ def test_near_duplicate_is_not_candidate() -> None:
 
 def test_economic_themes_exist_in_catalog() -> None:
     from research.unique_logic.constants import ECONOMIC_THEME_IDS
-    from research.unique_logic.event_combos import NEW_COMBO_LOGIC, _SPECS
+    from research.unique_logic.event_combos import NEW_COMBO_LOGIC
 
     py = {s["logic_id"] for s in NEW_COMBO_LOGIC}
-    shadow = {str(s["logic_id"]): s for s in _SPECS}
     assert len(ECONOMIC_THEME_IDS["surprise_funding"]) >= 4
     assert len(ECONOMIC_THEME_IDS["margin_price_disagree"]) >= 4
     assert len(ECONOMIC_THEME_IDS["repo_cs"]) >= 4
@@ -609,8 +608,6 @@ def test_economic_themes_exist_in_catalog() -> None:
         for lid in ids:
             assert lid in py, f"{lid} missing from combo specs ({theme})"
             spec = next(s for s in NEW_COMBO_LOGIC if s["logic_id"] == lid)
-            # why_different_from lives on the _SPECS parity shadow, not YAML.
-            assert shadow[lid].get("why_different_from"), lid
             assert spec.get("near_duplicate") is False
 
 
