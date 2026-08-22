@@ -222,6 +222,7 @@ NEAR_EMPTY_PARK_IDS: frozenset[str] = frozenset(
         "event_pb_eps_tight",
         "event_pb_sales_tight",
         "event_pb_sales_px_down",
+        "event_np_steep_easing",
     }
 )
 # Recorded mean occupancy ≥ ALWAYS_ON_OCCUPANCY_WARN. Not countable, not
@@ -262,6 +263,7 @@ THIN_SLEEVE_EXCLUDE_IDS: frozenset[str] = frozenset(
         "event_pb_eps_invert",
         "event_pb_eps_px_down",
         "event_pb_sales_invert",
+        "event_pb_invert_tight",
     }
 )
 MF_VALUE_MOM_RATE_DELEGATES: bool = False
@@ -337,6 +339,7 @@ SPARSE_GATE_COMBOS: tuple[tuple[frozenset[str], str], ...] = (
     (frozenset({"pb_rising", "eps_down", "tight_funding"}), "pb_eps_tight"),
     (frozenset({"pb_rising", "sales_down", "tight_funding"}), "pb_sales_tight"),
     (frozenset({"pb_rising", "sales_down", "price_down"}), "pb_sales_px_down"),
+    (frozenset({"np_negative", "steep_curve", "overnight_easing"}), "np_steep_easing"),
 )
 NAME_LEVEL_FUND_CS_GATES: frozenset[str] = frozenset(
     {

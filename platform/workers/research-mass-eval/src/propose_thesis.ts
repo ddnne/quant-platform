@@ -11,6 +11,7 @@ import {
   PROPOSE_PROMPT_GOOD,
   PROPOSE_PROMPT_PREFER_GATES,
   PROPOSE_TWEAK_WORDS,
+  PROPOSE_WHY_AVOID_LIMIT,
 } from "./propose_allowed";
 import {
   EXTRA_TITLE_GATES,
@@ -188,7 +189,7 @@ async function llmProposals(
   model: string | null;
 }> {
   if (!env.AI) return { rows: null, reason: "ai_unbound", model: null };
-  const avoidList = whyAvoid.filter(Boolean).slice(0, 48);
+  const avoidList = whyAvoid.filter(Boolean).slice(0, PROPOSE_WHY_AVOID_LIMIT);
   const avoidTokens = new Set(avoidList.map((t) => t.trim()).filter(Boolean));
   const avoid = avoidList.join(", ") || "(none)";
   const sparseBan = SPARSE_GATE_COMBOS_REVIEW.filter((c) => c.length === 2)

@@ -60,7 +60,10 @@ def _ts_str(value: str) -> str:
 
 
 def _propose_allowed_source() -> str:
-    from research.cf_propose_thesis import PROPOSE_ALLOWED_DATASETS
+    from research.cf_propose_thesis import (
+        PROPOSE_ALLOWED_DATASETS,
+        PROPOSE_WHY_AVOID_LIMIT,
+    )
     from research.unique_logic.constants import PROPOSE_ALLOWED_GATES
     from research.unique_logic.propose_review_tables import (
         DEFAULT_PROPOSE_DATASETS,
@@ -95,6 +98,8 @@ def _propose_allowed_source() -> str:
         + " as const;",
         "",
         f"export const PROPOSE_PROMPT_BAD = {_ts_str(PROPOSE_PROMPT_BAD)};",
+        "",
+        f"export const PROPOSE_WHY_AVOID_LIMIT = {int(PROPOSE_WHY_AVOID_LIMIT)};",
         "",
     ]
     return "\n".join(parts)

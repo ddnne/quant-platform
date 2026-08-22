@@ -38,7 +38,7 @@ export const GATE_OCCUPANCY_LABEL: Array<[string, string[]]> = [
   ["ta_up", ["technical analysis", "technical signal", "ta signals", "total assets", "total assets increased", "high total assets"]],
   ["ta_down", ["technical analysis", "technical signal", "ta signals", "total assets", "total assets increased", "high total assets"]],
   ["overnight_p10", ["at 10%", "funding at 10", "10 percent", "10% predicts", "funding is loose", "loose", "repo rate is low", "repo rates are low", "the repo rate is low"]],
-  ["pb_rising", ["is rising", "pb rose", "rising price to book", "rising price book", "rising pb", "price to book is rising", "price book is rising", "price book ratio is rising", "price to book ratio increase", "price to book ratio increases", "pb ratio increase", "pb ratio increases", "pb increase", "increase in pb", "price to book ratio tends to rise", "price to book tends to rise", "pb tends to rise", "pb ratio rising", "ratio rising"]],
+  ["pb_rising", ["is rising", "pb rose", "rising price to book", "rising price book", "rising pb", "price to book is rising", "price book is rising", "price book ratio is rising", "price to book ratio increase", "price to book ratio increases", "pb ratio increase", "pb ratio increases", "pb increase", "increase in pb", "price to book ratio tends to rise", "price to book tends to rise", "pb tends to rise", "pb ratio rising", "ratio rising", "pit median", "below its pit median", "above its pit median"]],
   ["pre_mom", ["positive price momentum", "positive momentum", "momentum is positive", "high price momentum"]],
   ["curve_flatten", ["yield curve", "is flattening", "flattening", "curve flattened", "is flattened"]],
   ["invert_curve", ["invert curve", "inverted curve", "inverting", "is inverted", "curve inverted", "curve inversion", "yield curve"]],
@@ -122,8 +122,10 @@ export const EXTRA_TITLE_GATES: Array<[string, string]> = [
 export const OCCUPANCY_EXTRA_TITLE: Array<[string, string[]]> = [
   ["10 percent", ["overnight_p10"]],
   ["10% predicts", ["overnight_p10"]],
+  ["above its pit median", ["pb_rising"]],
   ["appetite for risk", ["eq_ar_falling", "eq_ar_high", "eq_ar_low", "eq_ar_rising"]],
   ["been falling", ["price_down"]],
+  ["below its pit median", ["pb_rising"]],
   ["conditions tighten", ["tight_funding"]],
   ["curve flattened", ["curve_flatten"]],
   ["curve inversion", ["invert_curve"]],
@@ -171,6 +173,7 @@ export const OCCUPANCY_EXTRA_TITLE: Array<[string, string[]]> = [
   ["pb ratio increases", ["pb_rising"]],
   ["pb ratio rising", ["pb_rising"]],
   ["pb tends to rise", ["pb_rising"]],
+  ["pit median", ["pb_rising"]],
   ["positive momentum", ["pre_mom"]],
   ["positive price momentum", ["pre_mom"]],
   ["price book is rising", ["pb_rising"]],
@@ -270,6 +273,7 @@ export const SPARSE_GATE_COMBOS_REVIEW: string[][] = [
   ["eps_down", "pb_rising", "tight_funding"],
   ["pb_rising", "sales_down", "tight_funding"],
   ["pb_rising", "price_down", "sales_down"],
+  ["np_negative", "overnight_easing", "steep_curve"],
 ];
 
 export const OCCUPANCY_LABEL_EXCEPTIONS: Array<[string, string[]]> = [

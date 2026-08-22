@@ -800,6 +800,12 @@ def test_review_proposal_row_occupancy_and_polarity_table() -> None:
             "title_gate_polarity_mismatch",
             "PEAD when EPS contracted versus the last prior print AND price is down AND the repo curve is steep. Skip missing PIT prints (no invent).",
         ),
+        (
+            "PEAD when EPS is below its PIT median AND the repo curve is flat AND overnight funding is easing. Skip missing PIT prints (no invent).",
+            ["eps_down", "curve_flatten", "overnight_easing"],
+            "occupancy_label_only",
+            "PEAD when EPS contracted versus the last prior print AND the repo curve flattened AND overnight funding eased. Skip missing PIT prints (no invent).",
+        ),
     ]
     for bad_thesis, gates, reason, good_thesis in rows:
         payload = {
@@ -896,7 +902,7 @@ def test_sparse_gate_set_avoid_is_in_why_avoid() -> None:
     avoid = list((posted.get("body") or {}).get("why_avoid") or [])  # type: ignore[union-attr]
     assert avoid
     assert len(avoid) <= PROPOSE_WHY_AVOID_LIMIT
-    # Cap 48: remaining SPARSE may truncate; prefer-subset SPARSE is reserved.
+    # Remaining SPARSE may truncate; prefer-subset SPARSE is reserved.
     for tok in sparse_prefer_subset_avoid():
         assert tok in avoid
     assert out["auto_inject"] is False

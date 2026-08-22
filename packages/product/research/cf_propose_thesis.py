@@ -50,7 +50,9 @@ PROPOSE_MAX_AND_GATES: int = 3
 # Combined payload sent to the Worker. Prefer-catalog 2-ANDs then 3-ANDs
 # then prefer-subset SPARSE (parked prefer ANDs) take the cap first so the
 # LLM does not re-emit those clones. Remaining SPARSE / newest catalog fill.
-PROPOSE_WHY_AVOID_LIMIT: int = 48
+# 48 filled at 32 prefer 2-ANDs + 16 prefer-SPARSE; bump so the next park
+# does not truncate catalog 2-AND clone magnets.
+PROPOSE_WHY_AVOID_LIMIT: int = 64
 CATALOG_GATE_SET_AVOID_LIMIT: int = 24
 
 

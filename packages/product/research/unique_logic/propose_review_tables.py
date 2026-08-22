@@ -272,6 +272,9 @@ GATE_OCCUPANCY_LABEL: tuple[tuple[str, tuple[str, ...]], ...] = (
         "pb tends to rise",
         "pb ratio rising",
         "ratio rising",
+        "pit median",
+        "below its pit median",
+        "above its pit median",
     )),
     # pre_mom occupancy is surprise-sign agreement at entryIdx-1, not "mom is positive".
     ("pre_mom", (
