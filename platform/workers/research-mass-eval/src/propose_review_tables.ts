@@ -43,7 +43,7 @@ export const GATE_OCCUPANCY_LABEL: Array<[string, string[]]> = [
   ["invert_curve", ["invert curve", "inverting", "is inverted", "curve inverted", "yield curve"]],
   ["steep_curve", ["curve is steep", "is steep", "yield curve"]],
   ["np_negative", ["profitability is weak", "weak profitability", "weak profit", "earnings per share are negative", "eps are negative"]],
-  ["eps_down", ["earnings disappointment", "earnings disappoint", "earnings per share are falling", "eps are falling", "earnings per share tend to decrease", "eps down", "eps is down"]],
+  ["eps_down", ["earnings disappointment", "earnings disappoint", "earnings per share are falling", "eps are falling", "earnings per share tend to decrease", "earnings per share are down", "eps down", "eps is down"]],
   ["eps_up", ["earnings per share are rising", "eps are rising", "eps is rising", "rising earnings per share", "rising eps"]],
   ["sales_down", ["sales are down", "sales down", "falling sales"]],
   ["tight_funding", ["funding conditions are tight"]],
@@ -124,6 +124,7 @@ export const OCCUPANCY_EXTRA_TITLE: Array<[string, string[]]> = [
   ["curve is steep", ["steep_curve"]],
   ["earnings disappoint", ["eps_down"]],
   ["earnings disappointment", ["eps_down"]],
+  ["earnings per share are down", ["eps_down"]],
   ["earnings per share are falling", ["eps_down"]],
   ["earnings per share are negative", ["np_negative"]],
   ["earnings per share are rising", ["eps_up"]],
@@ -251,5 +252,8 @@ export const TITLE_OCCUPANCY_META = [
   "occupancy increases",
   "occupancy increase",
   "occupancy is high",
-  "occupancy is low"
+  "occupancy is low",
+  "tends to be occupied",
+  "occupy lower",
+  "occupy"
 ] as const;

@@ -679,6 +679,18 @@ def test_review_proposal_row_occupancy_and_polarity_table() -> None:
             "occupancy_label_only",
             "PEAD when price is down AND net profit is negative. Skip missing PIT prints (no invent).",
         ),
+        (
+            "The market tends to be occupied when PB is above its PIT median AND price is down.",
+            ["pb_rising", "price_down"],
+            "occupancy_label_only",
+            "PEAD when PB is above its PIT median AND price is down. Skip missing PIT prints (no invent).",
+        ),
+        (
+            "The market tends to be occupied when earnings per share are down and price is also down.",
+            ["eps_down", "price_down"],
+            "occupancy_label_only",
+            "PEAD when EPS contracted versus the last prior print AND price is down. Skip missing PIT prints (no invent).",
+        ),
     ]
     for bad_thesis, gates, reason, good_thesis in rows:
         payload = {

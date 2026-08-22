@@ -82,8 +82,8 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "why": (
             "recorded research/eval/job=eval-inventory-bias-20260824ag/ "
             "inventory_bias.json; assert_new_batch_cheap_pb_cap refuses "
-            "new batches at 20%; 24ag px×np material not sleeve; "
-            "GOOD stays pb_rising×price; EPS-vs-NP occupancy-label"
+            "new batches at 20%; 24ah 0-adopt clone; TITLE_OCCUPANCY_META "
+            "occupied slang; GOOD stays pb_rising×price"
         ),
         "not_a_pass": True,
         "go": False,
@@ -234,8 +234,8 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "id": "adopt_occupancy_recorded",
         "track": EVAL_TRACK_LIQ_LARGE,
         "why": (
-            "eval-occupancy-audit-20260824ag: 24ag px×np both-track "
-            "material not sleeve (event_fund at 5); not a pass"
+            "eval-occupancy-audit-20260824ag: 24ag px×np material not sleeve; "
+            "24ah 0-adopt clone (no soup); not a pass"
         ),
         "not_a_pass": True,
         "go": False,
