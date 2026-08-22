@@ -1,9 +1,4 @@
-"""Equal-weight mini-combination of candidate-grade daily paths.
-
-Picks 2–5 occupancy-gated theses and blends their ``net_daily`` series
-per window. Metas are equal-weight 2–3 sleeve blends. Not a promote / GO.
-No correlation weights. Sleeve-count and liq majority prints are not a pass.
-"""
+"""Equal-weight mini-combination of candidate-grade daily paths. Not a promote / GO."""
 from __future__ import annotations
 
 from typing import Any, Mapping, Sequence
@@ -33,9 +28,6 @@ from research.unique_logic.constants import (
     ALWAYS_ON_OCCUPANCY_WARN,
     NEAR_EMPTY_OCCUPANCY,
 )
-
-BASKET_SCHEMA_VERSION: str = "research-combo-basket/v1"
-
 
 def blend_net_daily(
     series: Sequence[Sequence[float]],
@@ -164,7 +156,7 @@ def blend_window_cells(
     return rows
 
 
-def _t_stat(net_daily: Sequence[float]) -> float | None:
+def _mean_std(net_daily: Sequence[float]) -> tuple[float, float, int] | None:
     vs = [float(x) for x in list(net_daily)[1:] if x is not None]
     if len(vs) < 2:
         return None
@@ -172,18 +164,17 @@ def _t_stat(net_daily: Sequence[float]) -> float | None:
     var = sum((x - m) ** 2 for x in vs) / (len(vs) - 1)
     if var <= 1e-18:
         return None
-    return m / ((var ** 0.5) / (len(vs) ** 0.5))
+    return m, var ** 0.5, len(vs)
+
+
+def _t_stat(net_daily: Sequence[float]) -> float | None:
+    got = _mean_std(net_daily)
+    return None if got is None else got[0] / (got[1] / (got[2] ** 0.5))
 
 
 def _sharpe(net_daily: Sequence[float]) -> float | None:
-    vs = [float(x) for x in list(net_daily)[1:] if x is not None]
-    if len(vs) < 2:
-        return None
-    m = sum(vs) / len(vs)
-    var = sum((x - m) ** 2 for x in vs) / (len(vs) - 1)
-    if var <= 1e-18:
-        return None
-    return m / (var ** 0.5) * (252 ** 0.5)
+    got = _mean_std(net_daily)
+    return None if got is None else got[0] / got[1] * (252 ** 0.5)
 
 
 def blend_mechanical_baskets(
@@ -279,11 +270,7 @@ def summarize_basket_trends(
         "candidate_eval_sot": PROTOCOL_DAILY_PATH,
         "baskets": rows,
         "retired_rules": sorted(RETIRED_BASKET_RULES),
-        "notes": (
-            "Mechanical equal-weight basket trends for later fund design. "
-            "t/Sharpe/DD are descriptive only and never a promote/GO. "
-            "Candidate occupancy is sleeve mean, not union."
-        ),
+        "notes": "Mechanical equal-weight basket trends. Descriptive only; never a promote/GO.",
     }
 
 
@@ -309,7 +296,6 @@ def blend_meta_baskets(sleeve_cells: Sequence[Mapping[str, Any]]) -> list[dict[s
 
 
 __all__ = [
-    "BASKET_SCHEMA_VERSION",
     "COMPARE_COMPOSITION_IDS",
     "DEFAULT_CANDIDATE_BASKET",
     "MECHANICAL_BASKETS",

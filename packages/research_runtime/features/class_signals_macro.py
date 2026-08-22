@@ -37,11 +37,6 @@ from .class_signals_hold import (
 )
 
 
-# ---------------------------------------------------------------------------
-# macro_conditioned — condition on repo rate level / change
-# ---------------------------------------------------------------------------
-
-
 def repo_regime_from_level(
     repo_rate: float | None,
     *,
@@ -109,19 +104,7 @@ def condition_signal_on_regime(
     *,
     mode: str = "rate_change",
 ) -> tuple[float | None, dict[str, Any]]:
-    """Apply macro condition to an entry sign.
-
-    Modes
-    -----
-    rate_change (default):
-        * rate_down → keep long only (entry +1 kept; −1 zeroed)
-        * rate_up → keep short only (entry −1 kept; +1 zeroed)
-        * flat → None (no trade)
-    rate_level:
-        * low → keep long only
-        * high → keep short only
-        * mid → None
-    """
+    """Apply macro condition to an entry sign (rate_change or rate_level)."""
     m = str(mode or "rate_change").strip().lower()
     if entry_sign is None or regime is None:
         return None, {
@@ -193,11 +176,7 @@ def compute_macro_conditioned_signal(
     as_of: str | None = None,
     extra_meta: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Macro-conditioned research signal (repo rate level or change).
-
-    Primary entry = sign(momentum_n) (or caller-supplied momentum value).
-    Conditioned on JSDA Tokyo repo rate regime — **not** unconditional daily sign.
-    """
+    """Macro-conditioned research signal (repo rate level or change)."""
     m = str(mode or "rate_change").strip().lower()
     raw = sign_from_numeric(momentum)
     filtered, filter_meta = apply_trading_day_filter(raw, is_trading_day)
@@ -235,15 +214,7 @@ def compute_macro_conditioned_signal(
         "filter": filter_meta,
         "regime": regime_meta,
         "condition": cond_meta,
-        "formula": (
-            f"entry=sign(momentum); regime=repo_{m}; "
-            "condition long_only on rate_down/low, short_only on rate_up/high"
-        ),
         "not_simple_daily_sign": True,
-        "note": (
-            "Macro-conditioned momentum on jsda_tokyo_repo_rates. "
-            "Not READY. Not mass. No orders."
-        ),
     }
     meta.update(_freeze_meta())
     if code is not None:
@@ -269,21 +240,11 @@ def compute_macro_conditioned_signal(
         "metadata": meta,
     }
 
-# ---------------------------------------------------------------------------
-# W89 rate_factor — absolute level + curve-shape (CS / risk-adj, not mom-only gate)
-# ---------------------------------------------------------------------------
-
-
 def repo_curve_spread(
     short_rate: float | None,
     long_rate: float | None,
 ) -> tuple[float | None, dict[str, Any]]:
-    """Term-structure proxy from two repo tenors (no invent on missing leg).
-
-    Definition (documented for repo-only tenors):
-    ``spread = long_rate − short_rate`` on the same as_of_date.
-    Positive = upward sloping (steep); negative = inverted.
-    """
+    """Term-structure proxy: long_rate − short_rate (no invent on missing leg)."""
     if short_rate is None or long_rate is None:
         return None, {
             "reason": "missing_leg",
@@ -337,17 +298,7 @@ def rate_level_risk_adjust_sign(
     *,
     mode: str = "risk_on_off_book",
 ) -> tuple[float | None, dict[str, Any]]:
-    """Transform a cross-section sign by absolute rate-level regime.
-
-    Modes
-    -----
-    risk_on_off_book (default):
-        * low  → keep CS book (risk-on)
-        * high → reverse CS book (risk-off / defensive rotation)
-        * mid  → no trade (neutral funding)
-    This is **not** the same as macro_conditioned rate_level (which gates
-    unidirectional equity mom long_only/short_only).
-    """
+    """Transform a cross-section sign by absolute rate-level regime."""
     m = str(mode or "risk_on_off_book").strip().lower()
     if cs_sign is None or regime is None:
         return None, {
@@ -395,13 +346,7 @@ def rate_curve_risk_adjust_sign(
     *,
     mode: str = "steep_risk_on",
 ) -> tuple[float | None, dict[str, Any]]:
-    """Transform CS sign by repo curve-shape regime.
-
-    steep_risk_on (default):
-        * steep    → keep CS book (risk-on term structure)
-        * inverted → reverse CS book (risk-off / inversion stress)
-        * flat     → no trade
-    """
+    """Transform CS sign by repo curve-shape regime."""
     m = str(mode or "steep_risk_on").strip().lower()
     if cs_sign is None or regime is None:
         return None, {
@@ -473,17 +418,7 @@ def compute_rate_level_xs_signal(
         "repo_rate": repo_rate,
         "regime": regime_meta,
         "adjust": adj_meta,
-        "formula": (
-            "CS rank mom L-S book; absolute repo level risk-adjusts "
-            "(low keep / high reverse / mid flat)"
-        ),
         "not_simple_daily_sign": True,
-        "not_macro_mom_gate_only": True,
-        "note": (
-            "Absolute rate-level factor with CS risk-adjustment on "
-            "jsda_tokyo_repo_rates. Distinct from macro_conditioned rate_level. "
-            "Not READY. Not mass."
-        ),
     }
     meta.update(_freeze_meta())
     if code is not None:
@@ -541,24 +476,12 @@ def compute_rate_curve_xs_signal(
             "short_tenor": REPO_CURVE_SHORT_TENOR,
             "long_tenor": REPO_CURVE_LONG_TENOR,
             "spread": "long - short",
-            "note": (
-                "Only JSDA Tokyo repo tenors available (no JGB/OIS curve). "
-                "3M vs overnight is a funding term-structure proxy, not a "
-                "sovereign yield curve."
-            ),
         },
         "cs_sign": cs_sign,
         "spread": spread_meta,
         "regime": regime_meta,
         "adjust": adj_meta,
-        "formula": (
-            "CS rank mom L-S; repo curve steep keep / inverted reverse / flat no trade"
-        ),
         "not_simple_daily_sign": True,
-        "note": (
-            "Curve-shape rate factor from multi-tenor jsda_tokyo_repo_rates. "
-            "Not READY. Not mass."
-        ),
     }
     meta.update(_freeze_meta())
     if code is not None:

@@ -64,11 +64,6 @@ from .class_signals import (
 )
 
 
-# ---------------------------------------------------------------------------
-# W91 index_vol_regime — Nikkei/index realized-vol abs / term levels / ratio
-# ---------------------------------------------------------------------------
-
-
 def nky_vol_regime_from_abs_level(
     vol_level: float | None,
     *,
@@ -105,12 +100,7 @@ def nky_vol_regime_from_term_levels(
     high_threshold: float = DEFAULT_NKY_VOL_HIGH_THRESHOLD,
     low_threshold: float = DEFAULT_NKY_VOL_LOW_THRESHOLD,
 ) -> tuple[str | None, dict[str, Any]]:
-    """Dual short/long absolute levels: agree high/low → regime; else mid/flat.
-
-    * both high → high (risk-off)
-    * both low  → low  (risk-on)
-    * otherwise → mid (no trade) — including disagreement
-    """
+    """Dual short/long absolute levels: agree high/low → regime; else mid/flat."""
     if short_vol is None or long_vol is None:
         return None, {
             "reason": "missing short or long vol",
@@ -154,12 +144,7 @@ def nky_vol_regime_from_term_ratio(
     expand_ratio: float = DEFAULT_NKY_VOL_EXPAND_RATIO,
     compress_ratio: float = DEFAULT_NKY_VOL_COMPRESS_RATIO,
 ) -> tuple[str | None, dict[str, Any]]:
-    """Term-structure of realized vol: short/long ratio.
-
-    * ratio ≥ expand   → expanding (risk-off)
-    * ratio ≤ compress → compressing (risk-on)
-    * else             → mid (no trade)
-    """
+    """Term-structure of realized vol: short/long ratio → expand / compress / mid."""
     if short_vol is None or long_vol is None:
         return None, {
             "reason": "missing short or long vol",
@@ -196,18 +181,7 @@ def nky_vol_risk_adjust_sign(
     *,
     mode: str = "vol_risk_on_off",
 ) -> tuple[float | None, dict[str, Any]]:
-    """Transform CS sign by index-vol regime.
-
-    vol_risk_on_off (abs / term_levels):
-        * low  → keep CS (risk-on / calm)
-        * high → reverse CS (risk-off / stress)
-        * mid  → no trade
-
-    vol_term_ratio:
-        * compressing → keep CS (risk-on)
-        * expanding   → reverse CS (risk-off)
-        * mid         → no trade
-    """
+    """Transform CS sign by index-vol regime (keep / reverse / flat)."""
     m = str(mode or "vol_risk_on_off").strip().lower()
     if cs_sign is None or regime is None:
         return None, {
@@ -291,20 +265,7 @@ def compute_nky_vol_abs_level_signal(
         "vol_level": vol_level,
         "regime": regime_meta,
         "adjust": adj_meta,
-        "formula": (
-            "CS rank mom L-S; abs index RV level risk-adjusts "
-            "(low keep / high reverse / mid flat)"
-        ),
         "not_simple_daily_sign": True,
-        "not_per_name_vol_gate": True,
-        "distinct_from": [
-            "vol_risk_adjusted_mom",
-            "vol_breakout_expand",
-        ],
-        "note": (
-            "Index-level Nikkei/TOPIX realized vol absolute regime × CS book. "
-            "Not per-name mom/vol gate. Not READY. Not mass."
-        ),
     }
     meta.update(_freeze_meta())
     if code is not None:
@@ -365,23 +326,7 @@ def compute_nky_vol_term_levels_signal(
         "long_vol": long_vol,
         "regime": regime_meta,
         "adjust": adj_meta,
-        "formula": (
-            "CS rank mom L-S; both short+long RV high → reverse; "
-            "both low → keep; disagree/mid → flat"
-        ),
         "not_simple_daily_sign": True,
-        "not_per_name_vol_gate": True,
-        "not_ratio_only": True,
-        "distinct_from": [
-            "vol_risk_adjusted_mom",
-            "vol_breakout_expand",
-            "nky_vol_abs_level",
-            "nky_vol_term_ratio",
-        ],
-        "note": (
-            "Dual short/long absolute index RV levels (agreement). "
-            "Not READY. Not mass."
-        ),
     }
     meta.update(_freeze_meta())
     if code is not None:
@@ -442,23 +387,7 @@ def compute_nky_vol_term_ratio_signal(
         "long_vol": long_vol,
         "regime": regime_meta,
         "adjust": adj_meta,
-        "formula": (
-            "ratio=RV_short/RV_long; compressing keep CS / expanding reverse / mid flat"
-        ),
         "not_simple_daily_sign": True,
-        "not_per_name_vol_gate": True,
-        "not_abs_level_only": True,
-        "distinct_from": [
-            "vol_risk_adjusted_mom",
-            "vol_breakout_expand",
-            "vol_breakout_expand_name_level",
-            "nky_vol_abs_level",
-            "nky_vol_term_levels",
-        ],
-        "note": (
-            "Index RV term-structure ratio (short/long). Distinct from "
-            "per-name vol_breakout_expand. Not READY. Not mass."
-        ),
     }
     meta.update(_freeze_meta())
     if code is not None:
@@ -484,12 +413,6 @@ def compute_nky_vol_term_ratio_signal(
     }
 
 
-# ---------------------------------------------------------------------------
-# W92 options_vol_regime — BaseVol / ATM IV / (ATM−BaseVol) spread
-# Reuses nky regime labelers (high/low/mid · expand/compress) with % vol units.
-# ---------------------------------------------------------------------------
-
-
 def compute_opt225_vol_signal(
     *,
     mode: str,
@@ -509,13 +432,7 @@ def compute_opt225_vol_signal(
     as_of: str | None = None,
     extra_meta: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Generic options_225 vol-regime × CS risk-on/off signal.
-
-    ``mode``:
-      * ``abs_level`` — absolute level of BaseVol / ATM IV / spread
-      * ``term_levels`` — short+long rolling means agree high/low
-      * ``term_ratio`` — short/long rolling-mean ratio expand/compress
-    """
+    """Generic options_225 vol-regime × CS risk-on/off signal."""
     m = str(mode or "abs_level").strip().lower()
     if m in {"term_ratio", "opt225_term_ratio"}:
         regime, regime_meta = nky_vol_regime_from_term_ratio(
@@ -527,10 +444,6 @@ def compute_opt225_vol_signal(
         adjusted, adj_meta = nky_vol_risk_adjust_sign(
             cs_sign, regime, mode="vol_term_ratio"
         )
-        formula = (
-            "ratio=level_short/level_long on options_225 series; "
-            "compressing keep CS / expanding reverse / mid flat"
-        )
     elif m in {"term_levels", "opt225_term_levels"}:
         regime, regime_meta = nky_vol_regime_from_term_levels(
             short_vol,
@@ -541,10 +454,6 @@ def compute_opt225_vol_signal(
         adjusted, adj_meta = nky_vol_risk_adjust_sign(
             cs_sign, regime, mode="vol_risk_on_off"
         )
-        formula = (
-            "short+long rolling means of options_225 level; both high reverse / "
-            "both low keep / disagree mid flat"
-        )
     else:
         regime, regime_meta = nky_vol_regime_from_abs_level(
             vol_level,
@@ -553,10 +462,6 @@ def compute_opt225_vol_signal(
         )
         adjusted, adj_meta = nky_vol_risk_adjust_sign(
             cs_sign, regime, mode="vol_risk_on_off"
-        )
-        formula = (
-            "CS rank mom L-S; abs options_225 vol level risk-adjusts "
-            "(low keep / high reverse / mid flat)"
         )
     meta: dict[str, Any] = {
         "signal_id": signal_id,
@@ -576,25 +481,7 @@ def compute_opt225_vol_signal(
         "long_vol": long_vol,
         "regime": regime_meta,
         "adjust": adj_meta,
-        "formula": formula,
         "not_simple_daily_sign": True,
-        "not_topix_rv_proxy": True,
-        "canonical_nky_vol_dataset": "derivatives_bars_daily_options_225",
-        "distinct_from": [
-            "nky_vol_abs_level",
-            "nky_vol_term_levels",
-            "nky_vol_term_ratio",
-            "vol_risk_adjusted_mom",
-            "vol_breakout_expand",
-        ],
-        "near_group_note": (
-            "Parallel to W91 nky_vol_* (TOPIX/NK225F RV proxy/compare only). "
-            "options_225 BaseVol/ATM IV is canonical Nikkei vol SoT."
-        ),
-        "note": (
-            f"options_225 {series_kind} regime mode={m} × CS book. "
-            "Not READY. Not mass."
-        ),
     }
     meta.update(_freeze_meta())
     if code is not None:
@@ -713,7 +600,7 @@ def compute_opt225_iv_base_spread_change_signal(**kwargs: Any) -> dict[str, Any]
 
 
 def compute_opt225_skew_abs_level_signal(**kwargs: Any) -> dict[str, Any]:
-    """W94: 95% put skew abs × CS (canonical smile feature; no invent)."""
+    """95% put skew abs × CS (no invent)."""
     return compute_opt225_vol_signal(
         mode="abs_level",
         signal_id=SIGNAL_ID_OPT225_SKEW_ABS,
@@ -735,7 +622,7 @@ def compute_opt225_skew_abs_level_signal(**kwargs: Any) -> dict[str, Any]:
 
 
 def compute_opt225_cm_term_abs_level_signal(**kwargs: Any) -> dict[str, Any]:
-    """W94: near−next CM ATM-ish term abs × CS."""
+    """Near−next CM ATM-ish term abs × CS."""
     return compute_opt225_vol_signal(
         mode="abs_level",
         signal_id=SIGNAL_ID_OPT225_CM_TERM_ABS,
@@ -757,7 +644,7 @@ def compute_opt225_cm_term_abs_level_signal(**kwargs: Any) -> dict[str, Any]:
 
 
 def compute_opt225_basevol_delta_abs_signal(**kwargs: Any) -> dict[str, Any]:
-    """W94: BaseVol[t]−BaseVol[t-1] abs × CS (canonical level change)."""
+    """BaseVol[t]−BaseVol[t-1] abs × CS."""
     return compute_opt225_vol_signal(
         mode="abs_level",
         signal_id=SIGNAL_ID_OPT225_BASEVOL_DELTA_ABS,

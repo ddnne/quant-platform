@@ -16,10 +16,7 @@ from research.freezes import (
     PAPER_SCHEDULER_ARMED,
 )
 from research.paper_candidate_adapt import (
-    PAPER_CANDIDATE_ADAPTER_VERSION,
     PAPER_CANDIDATE_SPEC_VERSION,
-    PAPER_CANDIDATE_WAVE,
-    DEFAULT_ONE_WAY_COST,
     PaperCandidateReceptacle,
     adapt_class_hyp_candidate,
     adapt_from_class_hyp_bundle,
@@ -36,12 +33,9 @@ from research.paper_candidate_specs import (
 )
 
 __all__ = [
-    "DEFAULT_ONE_WAY_COST",
     "LIVE_ORDER_PATH_ENABLED",
     "LIVE_ORDERS",
-    "PAPER_CANDIDATE_ADAPTER_VERSION",
     "PAPER_CANDIDATE_SPEC_VERSION",
-    "PAPER_CANDIDATE_WAVE",
     "PAPER_SCHEDULER_ARMED",
     "PaperCandidateReceptacle",
     "adapt_class_hyp_candidate",

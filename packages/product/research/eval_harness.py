@@ -1,17 +1,9 @@
 """Reusable single-shot research eval harness (Mass OFF / Phase7 OFF / READY OFF).
 
-Pipeline: approved-leg signal → multiday as_of → next_day_return → R2
-``batch_summary.json``. Implementation: :mod:`research.single_shot_job`.
-Candidate daily-path SoT: :mod:`research.daily_path_eval`.
-
-Multi-year / checklist helpers live in :mod:`research.eval_harness_multiyear`
-(S1: :mod:`research.eval_harness_s1`; extra-hyp: :mod:`research.eval_harness_extra_hyp`)
-and are re-exported here. This module is W56 next-day, not candidate SoT.
-
-COMPLETE 21 only; permanent DEFER hard-reject; registry-approved legs only
-(default: ``topix_relative_1d`` · ``is_trading_day`` · ``volume_change_1d``).
-No mass_research import, READY mint, orders, or densify.
-Label: **小サンプル / 研究用・未宣言**.
+Approved-leg signal → multiday as_of → next_day_return → R2 ``batch_summary.json``.
+Implementation: :mod:`research.single_shot_job`. Candidate SoT:
+:mod:`research.daily_path_eval`. Multi-year/checklist re-exported from
+:mod:`research.eval_harness_multiyear`. COMPLETE 21 + approved legs only.
 """
 
 from __future__ import annotations
@@ -130,7 +122,7 @@ def require_approved_signal_legs(
     *,
     context: str = "eval harness signal legs",
 ) -> tuple[str, ...]:
-    """Ordered feature ids iff every leg is registry-approved. Empty/unknown/not-approved fail closed."""
+    """Ordered feature ids iff every leg is registry-approved."""
     if feature_ids is None:
         requested = tuple(APPROVED_SIGNAL_LEGS)
     elif isinstance(feature_ids, str):
@@ -179,7 +171,6 @@ def require_harness_datasets(
     """COMPLETE 21 only; permanent DEFER hard-reject. Default: DEFAULT_SIGNAL_DATASETS."""
     if datasets is None:
         datasets = DEFAULT_SIGNAL_DATASETS
-    # Permanent DEFER first (shared contract), then COMPLETE-21 allowlist.
     return require_complete_21_only(datasets, context=context)
 
 
@@ -250,11 +241,7 @@ def run_multiday_signal_eval(
     r2_get: Any | None = None,
     r2_bucket: str = "quant-structured",
 ) -> MultidaySignalEval:
-    """Multiday approved-leg signal batch → R2 ``batch_summary.json``.
-
-    COMPLETE-21 + approved legs before tip extract. history_source: ``d1_tip``
-    or ``r2``. Does not mint READY, arm Mass, execute orders, or densify.
-    """
+    """Multiday approved-leg signal batch → R2 ``batch_summary.json``."""
     assert_harness_closed()
     require_approved_signal_legs(context="multiday signal eval legs")
     require_harness_datasets(context="multiday signal eval datasets")

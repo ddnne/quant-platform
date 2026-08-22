@@ -29,6 +29,10 @@ CLASS_FLOW_DEMAND: str = "flow_demand"
 CLASS_SIMPLE_DAILY_SIGN: str = "simple_daily_sign"
 
 _SIMPLE_DAILY_SIGN_PRIORITY: int = 99
+_PASS_CLOSED: tuple[str, ...] = (
+    "multi_year_or_long_periods_required",
+    "pass_does_not_connect_ready_mass",
+)
 
 REQUIRED_CLASS_FIELDS: tuple[str, ...] = (
     "class_id",
@@ -162,8 +166,7 @@ HYPOTHESIS_CLASS_REGISTRY: dict[str, HypothesisClassSpec] = {
             "no_daily_flip_as_primary",
             "holding_metrics_required",
             "cost_amortization_over_hold",
-            "multi_year_or_long_periods_required",
-            "pass_does_not_connect_ready_mass",
+            *_PASS_CLOSED,
         ),
         generation_enabled_by_default=True,
         priority=10,
@@ -189,8 +192,7 @@ HYPOTHESIS_CLASS_REGISTRY: dict[str, HypothesisClassSpec] = {
             "event_window_must_be_defined",
             "no_lookahead_into_pre_event_features",
             "pit_available_at_for_disclosure",
-            "multi_year_or_long_periods_required",
-            "pass_does_not_connect_ready_mass",
+            *_PASS_CLOSED,
         ),
         generation_enabled_by_default=True,
         priority=20,
@@ -216,8 +218,7 @@ HYPOTHESIS_CLASS_REGISTRY: dict[str, HypothesisClassSpec] = {
             "rank_based_not_absolute_sign",
             "min_universe_size_required",
             "sector_or_market_neutral_disclosed",
-            "multi_year_or_long_periods_required",
-            "pass_does_not_connect_ready_mass",
+            *_PASS_CLOSED,
         ),
         generation_enabled_by_default=True,
         priority=30,
@@ -244,8 +245,7 @@ HYPOTHESIS_CLASS_REGISTRY: dict[str, HypothesisClassSpec] = {
             "explicit_regime_definition",
             "multi_regime_eval_required",
             "regime_shift_disclosure",
-            "multi_year_or_long_periods_required",
-            "pass_does_not_connect_ready_mass",
+            *_PASS_CLOSED,
         ),
         generation_enabled_by_default=True,
         priority=40,
@@ -272,8 +272,7 @@ HYPOTHESIS_CLASS_REGISTRY: dict[str, HypothesisClassSpec] = {
             "pit_available_at_for_fundamentals",
             "no_lookahead_fundamentals",
             "sparse_fins_disclosure_required",
-            "multi_year_or_long_periods_required",
-            "pass_does_not_connect_ready_mass",
+            *_PASS_CLOSED,
         ),
         generation_enabled_by_default=True,
         priority=50,
@@ -301,8 +300,7 @@ HYPOTHESIS_CLASS_REGISTRY: dict[str, HypothesisClassSpec] = {
             "not_simple_daily_sign_rehash",
             "margin_short_gap_disclosure_required",
             "multi_day_or_level_structure",
-            "multi_year_or_long_periods_required",
-            "pass_does_not_connect_ready_mass",
+            *_PASS_CLOSED,
         ),
         generation_enabled_by_default=True,
         priority=60,
@@ -374,7 +372,7 @@ def list_hypothesis_classes(
     """Return specs ordered by priority (ascending)."""
     specs = tuple(HYPOTHESIS_CLASS_REGISTRY[cid] for cid in ALL_CLASS_IDS)
     if generation_enabled_only:
-        return tuple(s for s in specs if s.generation_enabled_by_default)
+        specs = tuple(s for s in specs if s.generation_enabled_by_default)
     return specs
 
 
@@ -425,13 +423,11 @@ def select_generation_classes(
             if c and c not in candidates:
                 candidates.append(c)
 
-    selected: list[str] = []
-    for cid in candidates:
-        if not is_generation_enabled(cid, explicit_opt_in=opt_in_list):
-            continue
-        if cid not in selected:
-            selected.append(cid)
-
+    selected = [
+        cid
+        for cid in dict.fromkeys(candidates)
+        if is_generation_enabled(cid, explicit_opt_in=opt_in_list)
+    ]
     selected.sort(
         key=lambda c: (
             HYPOTHESIS_CLASS_REGISTRY[c].priority
@@ -539,30 +535,25 @@ def assert_registry_closed_to_ready_mass(
 ) -> None:
     """Fail closed if registry document ever arms READY/Mass."""
     body = dict(doc) if doc is not None else hypothesis_class_registry_document()
-    if body.get("ready_declared") is not False:
-        raise AssertionError("hypothesis registry must keep ready_declared=False")
-    if body.get("operational_go") is not False:
-        raise AssertionError("hypothesis registry must keep operational_go=False")
-    if body.get("connected_to_ready") is not False:
-        raise AssertionError("hypothesis registry must keep connected_to_ready=False")
-    if body.get("connected_to_mass") is not False:
-        raise AssertionError("hypothesis registry must keep connected_to_mass=False")
+    closed_false = (
+        ("ready_declared", "hypothesis registry must keep ready_declared=False"),
+        ("operational_go", "hypothesis registry must keep operational_go=False"),
+        ("connected_to_ready", "hypothesis registry must keep connected_to_ready=False"),
+        ("connected_to_mass", "hypothesis registry must keep connected_to_mass=False"),
+        ("mass_generate_signals", "hypothesis registry must not mass-generate signals"),
+        ("edge_claimed", "hypothesis registry must not claim edge"),
+        ("s1_s5_unreject", "hypothesis registry must not un-reject S1–S5"),
+        ("simple_daily_sign_default_enabled", "simple_daily_sign must remain default generation OFF"),
+    )
+    for key, msg in closed_false:
+        if body.get(key) is not False:
+            raise AssertionError(msg)
     if body.get("mass_research") != MASS_RESEARCH:
         raise AssertionError(
             f"hypothesis registry mass_research must be {MASS_RESEARCH}"
         )
     if body.get("phase7") != PHASE7:
         raise AssertionError(f"hypothesis registry phase7 must be {PHASE7}")
-    if body.get("mass_generate_signals") is not False:
-        raise AssertionError("hypothesis registry must not mass-generate signals")
-    if body.get("edge_claimed") is not False:
-        raise AssertionError("hypothesis registry must not claim edge")
-    if body.get("s1_s5_unreject") is not False:
-        raise AssertionError("hypothesis registry must not un-reject S1–S5")
-    if body.get("simple_daily_sign_default_enabled") is not False:
-        raise AssertionError(
-            "simple_daily_sign must remain default generation OFF"
-        )
 
 
 def assert_simple_daily_sign_not_default_enabled() -> None:

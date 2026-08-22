@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 from strategies.spec import STRATEGY_SPEC_VERSION, StrategySpec
 
@@ -141,28 +141,32 @@ def assert_unarmed(payload: Mapping[str, Any]) -> None:
         raise ValueError(f"paper receptacle status must not arm: {status!r}")
 
 
+def _first_float(block: Mapping[str, Any], keys: Sequence[str], *, scale: float = 1.0) -> float | None:
+    for key in keys:
+        if block.get(key) is not None:
+            return float(block[key]) * scale
+    return None
+
+
 def _one_way_cost_from_payload(payload: Mapping[str, Any]) -> float:
     cost_block = payload.get("cost_assumption") or payload.get("costs") or {}
     if isinstance(cost_block, Mapping):
         tx = cost_block.get("transaction")
         if isinstance(tx, Mapping):
-            for key in ("one_way_cost", "one_way", "cost"):
-                if tx.get(key) is not None:
-                    return float(tx[key])
-            if tx.get("one_way_cost_bp") is not None:
-                return float(tx["one_way_cost_bp"]) / 10_000.0
-            if tx.get("bp") is not None:
-                return float(tx["bp"]) / 10_000.0
-        for key in ("one_way_cost", "one_way"):
-            if cost_block.get(key) is not None:
-                return float(cost_block[key])
-        if cost_block.get("one_way_cost_bp") is not None:
-            return float(cost_block["one_way_cost_bp"]) / 10_000.0
-    if payload.get("one_way_cost") is not None:
-        return float(payload["one_way_cost"])
-    if payload.get("one_way_cost_bp") is not None:
-        return float(payload["one_way_cost_bp"]) / 10_000.0
-    return DEFAULT_ONE_WAY_COST
+            got = _first_float(tx, ("one_way_cost", "one_way", "cost"))
+            if got is None:
+                got = _first_float(tx, ("one_way_cost_bp", "bp"), scale=1 / 10_000.0)
+            if got is not None:
+                return got
+        got = _first_float(cost_block, ("one_way_cost", "one_way"))
+        if got is None:
+            got = _first_float(cost_block, ("one_way_cost_bp",), scale=1 / 10_000.0)
+        if got is not None:
+            return got
+    got = _first_float(payload, ("one_way_cost",))
+    if got is None:
+        got = _first_float(payload, ("one_way_cost_bp",), scale=1 / 10_000.0)
+    return DEFAULT_ONE_WAY_COST if got is None else got
 
 
 def _hold_days_from_payload(
@@ -203,17 +207,12 @@ def _signal_sign(payload: Mapping[str, Any]) -> int:
         return 1
 
 
-def _universe_from_payload(
-    payload: Mapping[str, Any],
-    *,
-    class_id: str,
-) -> list[str]:
-    if payload.get("universe") is not None:
-        u = payload["universe"]
-        if isinstance(u, (list, tuple)):
-            return [str(x) for x in u if str(x).strip()]
-        if isinstance(u, str) and u.strip():
-            return [u.strip()]
+def _universe_from_payload(payload: Mapping[str, Any], *, class_id: str) -> list[str]:
+    u = payload.get("universe")
+    if isinstance(u, (list, tuple)):
+        return [str(x) for x in u if str(x).strip()]
+    if isinstance(u, str) and u.strip():
+        return [u.strip()]
     codes = payload.get("codes")
     if isinstance(codes, (list, tuple)) and codes:
         return [str(c).strip() for c in codes if str(c).strip()]
@@ -224,37 +223,27 @@ def _universe_from_payload(
 
 
 def _source_candidate_block(payload: Mapping[str, Any]) -> dict[str, Any]:
-    cand = payload.get("candidate")
-    if not isinstance(cand, Mapping):
-        cand = {}
-    summary = payload.get("candidate_summary")
-    if not isinstance(summary, Mapping):
-        summary = {}
+    cand = payload.get("candidate") if isinstance(payload.get("candidate"), Mapping) else {}
+    summary = (
+        payload.get("candidate_summary")
+        if isinstance(payload.get("candidate_summary"), Mapping)
+        else {}
+    )
+    allowed = bool(cand.get("research_candidate_allowed", summary.get("research_candidate_allowed", False)))
     return {
         "research_candidate": False,
-        "research_candidate_allowed": bool(
-            cand.get("research_candidate_allowed", summary.get("research_candidate_allowed", False))
-        ),
+        "research_candidate_allowed": allowed,
         "candidate_yes_no": str(
             summary.get("candidate_yes_no")
             or cand.get("candidate_yes_no")
-            or ("no_discussion_only" if cand.get("research_candidate_allowed") else "no")
+            or ("no_discussion_only" if allowed else "no")
         ),
         "verdict": str(
-            cand.get("verdict")
-            or summary.get("verdict")
-            or "discussion_only_not_auto_promoted"
+            cand.get("verdict") or summary.get("verdict") or "discussion_only_not_auto_promoted"
         ),
         "gate_passed": bool(cand.get("gate_passed", summary.get("gate_passed", False))),
-        "economic_net_ok": bool(
-            cand.get("economic_net_ok", summary.get("economic_net_ok", False))
-        ),
-        "signal_id": str(
-            payload.get("signal_id")
-            or cand.get("signal_id")
-            or summary.get("signal_id")
-            or ""
-        ),
+        "economic_net_ok": bool(cand.get("economic_net_ok", summary.get("economic_net_ok", False))),
+        "signal_id": str(payload.get("signal_id") or cand.get("signal_id") or summary.get("signal_id") or ""),
     }
 
 
@@ -305,11 +294,7 @@ class PaperCandidateReceptacle:
                 "lifecycle": "Draft",
                 "execution_mode": "next_close",
                 "lookback_days": DEFAULT_LOOKBACK_DAYS,
-                **{
-                    k: v
-                    for k, v in dict(self.paper_run_hints).items()
-                    if k not in _HINT_CLOSED
-                },
+                **{k: v for k, v in dict(self.paper_run_hints).items() if k not in _HINT_CLOSED},
                 "scheduler_armed": False,
                 "run_now": False,
                 "continuous": False,
@@ -567,20 +552,21 @@ def adapt_class_hyp_candidate(
 
 
 def _apply_class_key_defaults(block: dict[str, Any], class_key: str) -> None:
+    hold10 = "hold_10" in class_key or class_key.endswith("_10") or "10" in class_key
     if class_key.startswith("multi_day_hold"):
         block.setdefault("hypothesis_class", CLASS_MULTI_DAY_HOLD)
-        if "10" in class_key:
+        if hold10:
             block.setdefault("variant", "hold_10")
             block.setdefault("hold_days", 10)
     elif class_key.startswith("cross_section"):
         block.setdefault("hypothesis_class", CLASS_CROSS_SECTION_RELATIVE)
-        if "hold_10" in class_key or class_key.endswith("_10"):
+        if hold10:
             block.setdefault("variant", "hold_10")
             block.setdefault("hold_days", 10)
             block.setdefault("momentum_n", DEFAULT_CS_MOMENTUM_N)
     elif class_key.startswith("fundamentals"):
         block.setdefault("hypothesis_class", CLASS_FUNDAMENTALS_PRICE)
-        if "hold_10" in class_key or class_key.endswith("_10"):
+        if hold10:
             block.setdefault("variant", "hold_10")
             block.setdefault("hold_days", 10)
             block.setdefault("momentum_n", DEFAULT_FUND_MOMENTUM_N)
@@ -595,26 +581,21 @@ def adapt_from_class_hyp_bundle(
     top_k: int = DEFAULT_TOP_K,
 ) -> PaperCandidateReceptacle:
     """Pull one class block (e.g. multi_day_hold_10, event_post) from a bundle."""
-    if class_key not in bundle:
-        summary = bundle.get("candidate_summary")
-        if isinstance(summary, Mapping) and class_key in summary:
-            row = dict(summary[class_key])
-            _apply_class_key_defaults(row, class_key)
-            if class_key == "event_post":
-                row.setdefault("post_hold_days", 5)
-            if bundle.get("one_way_cost") is not None:
-                row.setdefault("one_way_cost", bundle["one_way_cost"])
-            if bundle.get("codes") is not None:
-                row.setdefault("codes", bundle["codes"])
-            return adapt_class_hyp_candidate(row, top_k=top_k)
-        raise KeyError(f"class_key {class_key!r} not in bundle")
-
-    if not isinstance(bundle[class_key], Mapping):
-        raise TypeError(f"bundle[{class_key!r}] must be a mapping")
-    block = dict(bundle[class_key])
-    _apply_class_key_defaults(block, class_key)
     summary = bundle.get("candidate_summary")
-    if isinstance(summary, Mapping) and class_key in summary:
+    from_summary = False
+    if class_key in bundle:
+        if not isinstance(bundle[class_key], Mapping):
+            raise TypeError(f"bundle[{class_key!r}] must be a mapping")
+        block = dict(bundle[class_key])
+    elif isinstance(summary, Mapping) and class_key in summary:
+        block = dict(summary[class_key])
+        from_summary = True
+    else:
+        raise KeyError(f"class_key {class_key!r} not in bundle")
+    _apply_class_key_defaults(block, class_key)
+    if from_summary and class_key == "event_post":
+        block.setdefault("post_hold_days", 5)
+    if not from_summary and isinstance(summary, Mapping) and class_key in summary:
         block.setdefault("candidate_summary", summary[class_key])
     if bundle.get("one_way_cost") is not None:
         block.setdefault("one_way_cost", bundle["one_way_cost"])
@@ -624,21 +605,22 @@ def adapt_from_class_hyp_bundle(
 
 
 def _discussion_payload(signal_id: str) -> dict[str, Any]:
+    cand = {
+        "research_candidate": False,
+        "research_candidate_allowed": True,
+        "gate_passed": True,
+        "economic_net_ok": True,
+        "verdict": "discussion_only_not_auto_promoted",
+    }
     return {
         "signal_id": signal_id,
         "one_way_cost": DEFAULT_ONE_WAY_COST,
-        "candidate": {
-            "research_candidate": False,
-            "research_candidate_allowed": True,
-            "gate_passed": True,
-            "economic_net_ok": True,
-            "verdict": "discussion_only_not_auto_promoted",
-        },
+        "candidate": cand,
         "candidate_summary": {
             "candidate_yes_no": "no_discussion_only",
             "research_candidate": False,
             "research_candidate_allowed": True,
-            "verdict": "discussion_only_not_auto_promoted",
+            "verdict": cand["verdict"],
             "signal_id": signal_id,
         },
     }
@@ -672,32 +654,30 @@ def example_event_post_payload() -> dict[str, Any]:
     }
 
 
+def _write_json(path: Path, body: Mapping[str, Any]) -> None:
+    path.write_text(
+        json.dumps(body, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+
 def emit_example_paper_specs(out_dir: str | Path) -> dict[str, Path]:
     """Write multi_day_hold 10d + event_post paper specs (UNARMED)."""
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
-    mdh = adapt_class_hyp_candidate(example_multi_day_hold_10d_payload())
-    ep = adapt_class_hyp_candidate(example_event_post_payload())
     paths: dict[str, Path] = {}
     for name, rec in (
-        ("multi_day_hold_10d.json", mdh),
-        ("event_post.json", ep),
+        ("multi_day_hold_10d.json", adapt_class_hyp_candidate(example_multi_day_hold_10d_payload())),
+        ("event_post.json", adapt_class_hyp_candidate(example_event_post_payload())),
     ):
-        path = out / name
         body = rec.to_dict()
         assert_unarmed(body)
-        path.write_text(
-            json.dumps(body, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
-            encoding="utf-8",
-        )
+        path = out / name
+        _write_json(path, body)
         paths[name] = path
         bare = out / name.replace(".json", "_strategy_spec.json")
-        bare.write_text(
-            json.dumps(rec.strategy_spec_dict(), indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
-        )
+        _write_json(bare, rec.strategy_spec_dict())
         paths[bare.name] = bare
-
     index = {
         "version": PAPER_CANDIDATE_SPEC_VERSION,
         "adapter_version": PAPER_CANDIDATE_ADAPTER_VERSION,
@@ -709,8 +689,6 @@ def emit_example_paper_specs(out_dir: str | Path) -> dict[str, Path]:
     }
     assert_unarmed(index)
     index_path = out / "index.json"
-    index_path.write_text(
-        json.dumps(index, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
+    _write_json(index_path, index)
     paths["index.json"] = index_path
     return paths

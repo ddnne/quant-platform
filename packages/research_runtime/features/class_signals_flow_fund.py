@@ -42,21 +42,13 @@ from .class_signals_hold import (
 from .class_signals_macro import repo_regime_from_level
 
 
-# ---------------------------------------------------------------------------
-# optional third: cross_section_relative (rank within day)
-# ---------------------------------------------------------------------------
-
-
 def cross_section_rank_signs(
     values_by_code: Mapping[str, float | None],
     *,
     long_frac: float = 0.3,
     short_frac: float = 0.3,
 ) -> dict[str, float | None]:
-    """Rank codes by value; top long_frac → +1, bottom short_frac → −1.
-
-    Remaining middle / missing → 0 or None.
-    """
+    """Rank codes by value; top long_frac → +1, bottom short_frac → −1."""
     scored: list[tuple[str, float]] = []
     missing: list[str] = []
     for code, v in values_by_code.items():
@@ -153,10 +145,6 @@ def compute_cross_section_signal(
         "observations": obs,
         "n_codes": len(obs),
         "filter": filter_meta,
-        "formula": (
-            f"rank(momentum) within day; top {long_frac:.0%} +1 / "
-            f"bottom {short_frac:.0%} -1"
-        ),
         **_freeze_meta(),
     }
 
@@ -194,19 +182,7 @@ def compute_flow_demand_signal(
     as_of: str | None = None,
     extra_meta: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Multi-day flow/demand from margin interest change (not S4 1d flip).
-
-    Entry = sign(margin_change). Optional short_ratio_change confirmation:
-
-    * ``short_confirm_mode="off"`` (default) — margin only
-    * ``"hard"`` / ``require_short_confirm=True`` — same-sign required;
-      missing short → no entry
-    * ``"soft"`` (W85) — same-sign when short present; margin-only on short
-      gap (cheap occurrence improve; no look-ahead)
-
-    Hold via sticky multi-day structure at the eval layer — this returns the
-    **entry** sign.
-    """
+    """Multi-day flow/demand from margin interest change (not S4 1d flip)."""
     h = int(hold_days)
     if short_confirm_mode is None:
         mode_s = "hard" if require_short_confirm else "off"
@@ -247,11 +223,6 @@ def compute_flow_demand_signal(
         else:
             confirm_meta["reason"] = "confirmed_same_sign"
     elif mode_s == "soft":
-        # Soft (W85 cheap near-miss improve):
-        # * same-sign short when available → preferred entry
-        # * short gap → margin-only
-        # * sign conflict → keep margin entry (confirmation optional, not a hard gate)
-        # Distinct from hard confirm (conflict → no entry) and from S4 daily flip.
         if filtered is None:
             value = None
             confirmed = False
@@ -285,16 +256,8 @@ def compute_flow_demand_signal(
         "raw_entry_sign": raw,
         "filter": filter_meta,
         "confirm": confirm_meta,
-        "formula": (
-            f"entry=sign(margin_interest_change); sticky hold={h}d "
-            f"(not S4 daily); short_confirm_mode={mode_s}"
-        ),
         "not_simple_daily_sign": True,
         "not_s4_rehash": True,
-        "note": (
-            "Multi-day margin flow demand. Distinct from rejected S4 daily "
-            "margin_change_sign. Not READY. Not mass."
-        ),
     }
     meta.update(_freeze_meta())
     if code is not None:
@@ -332,17 +295,7 @@ def compute_fundamentals_price_signal(
     as_of: str | None = None,
     extra_meta: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Fundamentals × price: value vs benchmark conditioned on momentum.
-
-    Modes
-    -----
-    value_momentum_agree (default):
-        long only when value_score > benchmark AND momentum > 0;
-        short only when value_score < benchmark AND momentum < 0;
-        else None.
-    value_only:
-        entry = sign(value_score - benchmark)
-    """
+    """Fundamentals × price: value vs benchmark, optionally gated on momentum."""
     h = int(hold_days)
     m = str(mode or "value_momentum_agree").strip().lower()
     _, filter_meta = apply_trading_day_filter(1.0, is_trading_day)
@@ -395,14 +348,7 @@ def compute_fundamentals_price_signal(
         "mode": m,
         "rule": rule,
         "filter": filter_meta,
-        "formula": (
-            f"value_score (BPS/P or EPS/P) vs benchmark; mode={m}; "
-            f"sticky hold={h}d (PIT fins)"
-        ),
         "not_simple_daily_sign": True,
-        "note": (
-            "Fundamentals vs price with PIT fins_summary. Not READY. Not mass."
-        ),
     }
     meta.update(_freeze_meta())
     if code is not None:
@@ -426,11 +372,6 @@ def compute_fundamentals_price_signal(
         "metadata": meta,
     }
 
-# ---------------------------------------------------------------------------
-# W89 multi_factor — value×mom×rate · flow×price (thesis-required combinations)
-# ---------------------------------------------------------------------------
-
-
 def compute_mf_value_mom_rate_signal(
     *,
     value_score: float | None,
@@ -445,11 +386,7 @@ def compute_mf_value_mom_rate_signal(
     as_of: str | None = None,
     extra_meta: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Three-factor: value × price-mom agree, then funding-level alignment.
-
-    Thesis: cheap winners earn more under easy funding; expensive losers under
-    tight funding. Distinct from fund_value_mom_agree (no rate leg).
-    """
+    """Three-factor: value × price-mom agree, then funding-level alignment."""
     h = int(hold_days)
     fund = compute_fundamentals_price_signal(
         value_score=value_score,
@@ -467,7 +404,6 @@ def compute_mf_value_mom_rate_signal(
         high_threshold=high_threshold,
         low_threshold=low_threshold,
     )
-    # Funding alignment: longs only when not high; shorts only when not low
     value: float | None
     rule: str
     if base is None:
@@ -495,16 +431,7 @@ def compute_mf_value_mom_rate_signal(
         "regime": regime_meta,
         "rule": rule,
         "hold_days": h,
-        "formula": (
-            "value_mom_agree AND (long only if rate not high; "
-            "short only if rate not low)"
-        ),
         "not_simple_daily_sign": True,
-        "not_fund_value_mom_agree_only": True,
-        "note": (
-            "Multi-factor value×mom×rate. Distinct from fund_value_mom_agree. "
-            "Not READY. Not mass."
-        ),
     }
     meta.update(_freeze_meta())
     if code is not None:
@@ -541,12 +468,7 @@ def compute_mf_flow_price_signal(
     as_of: str | None = None,
     extra_meta: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Two-factor: margin flow confirmed by price momentum (not short-ratio).
-
-    Thesis: demand pressure earns only when price co-moves (flow×price).
-    Distinct from flow_margin_short_hard/soft (short confirm) and
-    flow_margin_pressure (flow only).
-    """
+    """Two-factor: margin flow confirmed by price momentum (not short-ratio)."""
     h = int(hold_days)
     _, filter_meta = apply_trading_day_filter(1.0, is_trading_day)
     flow_sign = sign_from_numeric(margin_change)
@@ -580,16 +502,8 @@ def compute_mf_flow_price_signal(
         "hold_days": h,
         "rule": rule,
         "filter": filter_meta,
-        "formula": (
-            f"entry only when sign(margin_change)==sign(mom); sticky hold={h}d"
-        ),
         "not_simple_daily_sign": True,
         "not_s4_rehash": True,
-        "not_short_confirm_variant": True,
-        "note": (
-            "Multi-factor flow×price confirm. Parallel near-group to "
-            "flow_margin_* (keep; do not merge). Not READY. Not mass."
-        ),
     }
     meta.update(_freeze_meta())
     if code is not None:
