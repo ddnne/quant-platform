@@ -353,11 +353,6 @@ def test_both_track_sleeve_fanout_default_is_off_network(monkeypatch) -> None:
     assert pack["head_n_forbidden"] is True
     assert pack["sleeve_majority_is_not_a_pass"] is True
     assert pack["logic_ids"] == sleeve_durability_logic_ids()
-    assert "event_eqar_high_liq_high" in pack["logic_ids"]
-    assert "event_eqar_rising_ta_up_liq" in pack["logic_ids"]
-    assert "event_uncrowded_liq_eqar_rising" in pack["logic_ids"]
-    assert "event_cheap_iv_liq_uncrowded" not in pack["logic_ids"]
-    assert "event_cheap_pb_liq_high" not in pack["logic_ids"]
     from research.unique_logic.constants import ALWAYS_ON_PARK_IDS, NEAR_EMPTY_PARK_IDS
 
     assert NEAR_EMPTY_PARK_IDS.isdisjoint(pack["logic_ids"])

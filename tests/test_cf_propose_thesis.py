@@ -374,6 +374,44 @@ def test_review_proposal_row_rejects_invent_and_weekday() -> None:
     assert "occupancy_label_only" not in ok_p10["reasons"]
     assert ok_p10["auto_inject"] is False
 
+    extra_funding = {
+        "thesis": "Tight funding regime when EPS is down AND NP is negative.",
+        "signal_definition": "AND(eps_down, np_negative) PIT",
+        "position_rule": "event-hold surprise sign",
+        "datasets": ["equities_bars_daily", "fins_summary"],
+        "gates": ["eps_down", "np_negative"],
+    }
+    bad_xf = review_proposal_row(extra_funding)
+    assert bad_xf["ok"] is False
+    assert "occupancy_label_only" in bad_xf["reasons"]
+    occ_xf = dict(extra_funding)
+    occ_xf["thesis"] = "PEAD when EPS contracted AND net profit is negative"
+    ok_xf = review_proposal_row(occ_xf)
+    assert ok_xf["ok"] is True or "gate_set_already_catalog" in ok_xf["reasons"]
+    assert "occupancy_label_only" not in ok_xf["reasons"]
+
+    occupancy_pb = {
+        "thesis": (
+            "Price contraction when earnings per share are down AND "
+            "price-to-book is rising."
+        ),
+        "signal_definition": "AND(eps_down, pb_rising) PIT",
+        "position_rule": "event-hold surprise sign",
+        "datasets": ["equities_bars_daily", "fins_summary"],
+        "gates": ["eps_down", "pb_rising"],
+    }
+    bad_pb = review_proposal_row(occupancy_pb)
+    assert bad_pb["ok"] is False
+    assert "occupancy_label_only" in bad_pb["reasons"]
+    occ_pb_ok = dict(occupancy_pb)
+    occ_pb_ok["thesis"] = (
+        "PEAD when EPS contracted AND PB is above its PIT median"
+    )
+    ok_pb = review_proposal_row(occ_pb_ok)
+    assert ok_pb["ok"] is True or "gate_set_already_catalog" in ok_pb["reasons"]
+    assert "occupancy_label_only" not in ok_pb["reasons"]
+    assert ok_pb["auto_inject"] is False
+
     occupancy_ta = {
         "thesis": (
             "Stocks are more likely to be bought when the margin is uncrowded "

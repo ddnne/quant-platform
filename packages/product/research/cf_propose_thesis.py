@@ -99,6 +99,7 @@ _GATE_OCCUPANCY_LABEL: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("ta_up", ("technical analysis", "technical signal", "ta signals")),
     ("ta_down", ("technical analysis", "technical signal", "ta signals")),
     ("overnight_p10", ("at 10%", "funding at 10", "10 percent", "10% predicts")),
+    ("pb_rising", ("is rising", "pb rose", "rising price-to-book", "price-to-book is rising")),
 )
 
 PROPOSE_MAX_AND_GATES: int = 3
@@ -263,8 +264,20 @@ def review_proposal_row(proposal: Mapping[str, Any]) -> dict[str, Any]:
                 for t in ("easiest", "percentile", "decile", "p10")
             ):
                 continue
+            if gate == "pb_rising" and any(
+                t in polar_blob for t in ("median", "pit median", "above median")
+            ):
+                continue
             reasons.append("occupancy_label_only")
             break
+        extra_title = (
+            ("tight funding", "tight_funding"),
+            ("easy funding", "easy_funding"),
+        )
+        for phrase, gate in extra_title:
+            if phrase in polar_blob and gate not in kept_set:
+                reasons.append("occupancy_label_only")
+                break
         for combo, _reason in SPARSE_GATE_COMBOS:
             if combo <= kept_set:
                 reasons.append("sparse_gate_combo")

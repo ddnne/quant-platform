@@ -346,6 +346,7 @@ function titleOccupancyBad(title: string, gates: string[]): boolean {
     ["ta_up", ["technical analysis", "technical signal", "ta signals"]],
     ["ta_down", ["technical analysis", "technical signal", "ta signals"]],
     ["overnight_p10", ["at 10%", "funding at 10", "10 percent", "10% predicts"]],
+    ["pb_rising", ["is rising", "pb rose", "rising price-to-book", "price-to-book is rising"]],
   ];
   for (const [gate, words] of labels) {
     if (!gset.has(gate)) continue;
@@ -365,6 +366,12 @@ function titleOccupancyBad(title: string, gates: string[]): boolean {
     ) {
       continue;
     }
+    if (
+      gate === "pb_rising" &&
+      ["median", "pit median", "above median"].some((t) => polar.includes(t))
+    ) {
+      continue;
+    }
     return true;
   }
   const sparse: string[][] = [
@@ -377,6 +384,13 @@ function titleOccupancyBad(title: string, gates: string[]): boolean {
     ["div_positive", "cheap_iv"],
   ];
   if (sparse.some((combo) => combo.every((g) => gset.has(g)))) return true;
+  const extraTitle: Array<[string, string]> = [
+    ["tight funding", "tight_funding"],
+    ["easy funding", "easy_funding"],
+  ];
+  if (extraTitle.some(([phrase, gate]) => polar.includes(phrase) && !gset.has(gate))) {
+    return true;
+  }
   return false;
 }
 
