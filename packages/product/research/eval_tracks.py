@@ -124,13 +124,6 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "go": False,
     },
     {
-        "id": "complete21_min_features_split",
-        "track": EVAL_TRACK_MID_N,
-        "why": "tests/test_complete21_min_features.py ~1470 still one module",
-        "not_a_pass": True,
-        "go": False,
-    },
-    {
         "id": "local_combo_fail_closed",
         "track": EVAL_TRACK_MID_N,
         "why": (
