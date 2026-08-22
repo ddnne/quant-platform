@@ -1,5 +1,6 @@
 logic_id: surprise_xs_rank_adaptive
 family_id: surprise_xs_rank
+family: adaptive
 axis: mixed
 headline: true
 generation_enabled: false

@@ -1,5 +1,6 @@
 logic_id: event_pre_mom_agree_hold
 family_id: event_mom_agree_combo
+family: event_filter
 axis: mixed
 headline: true
 generation_enabled: false

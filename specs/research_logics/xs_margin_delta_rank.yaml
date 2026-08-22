@@ -1,5 +1,6 @@
 logic_id: xs_margin_delta_rank
 family_id: xs_margin_delta
+family: cs
 axis: cross_section
 headline: true
 generation_enabled: false

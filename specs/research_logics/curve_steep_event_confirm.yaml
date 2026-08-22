@@ -1,5 +1,6 @@
 logic_id: curve_steep_event_confirm
 family_id: event_macro_curve_combo
+family: event
 axis: mixed
 headline: true
 generation_enabled: false

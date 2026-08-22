@@ -1,5 +1,6 @@
 logic_id: overnight_easy_cs_follow
 family_id: overnight_level_cs
+family: cs
 axis: funding
 headline: true
 generation_enabled: false

@@ -1,5 +1,6 @@
 logic_id: surprise_xs_rank_hold
 family_id: surprise_xs_rank
+family: event
 axis: mixed
 headline: false
 generation_enabled: false

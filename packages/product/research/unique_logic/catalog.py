@@ -275,6 +275,62 @@ def yaml_unique_rows(
     return list(by_id.values())
 
 
+_UNIQUE_FAMILY_KEYS: tuple[str, ...] = (
+    "event",
+    "event_filter",
+    "event_sides",
+    "adaptive",
+    "cs",
+)
+_EVALUATOR_MODULE_TO_FAMILY: dict[str, str] = {
+    "event": "event",
+    "event_filters": "event_filter",
+    "event_sides": "event_sides",
+    "adaptive": "adaptive",
+    "cross_section": "cs",
+    "cs_overlays": "cs",
+}
+
+
+def _unique_family_key(spec: Mapping[str, Any]) -> str:
+    """Family for a non-combo YAML: explicit ``family:`` else evaluator module."""
+    lid = str(spec.get("logic_id") or "")
+    explicit = spec.get("family")
+    if explicit not in (None, ""):
+        fam = str(explicit).strip()
+        if fam not in _UNIQUE_FAMILY_KEYS:
+            raise ValueError(f"{lid}: unknown family {fam!r}")
+        return fam
+    ev = str(spec.get("evaluator") or "")
+    parts = ev.split(".")
+    if (
+        len(parts) >= 4
+        and parts[0] == "research"
+        and parts[1] == "unique_logic"
+    ):
+        fam = _EVALUATOR_MODULE_TO_FAMILY.get(parts[2])
+        if fam:
+            return fam
+    raise ValueError(f"{lid}: unique YAML needs family: or module evaluator")
+
+
+def unique_family_ids_from_yaml(*, root: Path | None = None) -> dict[str, frozenset[str]]:
+    """Non-combo YAML stems grouped by ``family`` (or evaluator module).
+
+    Combo evaluator is excluded. Does not import combo runtime. Does not GO.
+    Used by constants.EVENT_* / CS_LOGIC_IDS.
+    """
+    buckets: dict[str, set[str]] = {k: set() for k in _UNIQUE_FAMILY_KEYS}
+    for spec in load_catalog_specs(root=root):
+        if str(spec.get("evaluator") or "") == _COMBO_EVALUATOR:
+            continue
+        lid = str(spec.get("logic_id") or "")
+        if not lid:
+            continue
+        buckets[_unique_family_key(spec)].add(lid)
+    return {k: frozenset(v) for k, v in buckets.items()}
+
+
 def combo_thesis_ids_by_kind(*, root: Path | None = None) -> dict[str, frozenset[str]]:
     """Combo YAML stems grouped by ``_yaml_combo_kind``. Does not import combo runtime."""
     event: set[str] = set()

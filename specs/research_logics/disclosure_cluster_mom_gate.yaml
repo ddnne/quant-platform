@@ -1,5 +1,6 @@
 logic_id: disclosure_cluster_mom_gate
 family_id: disclosure_cluster_gate
+family: event
 axis: mixed
 headline: false
 generation_enabled: false

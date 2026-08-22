@@ -1,5 +1,6 @@
 logic_id: xs_low_vol_mom
 family_id: xs_low_vol_mom
+family: cs
 axis: cross_section
 headline: true
 generation_enabled: false

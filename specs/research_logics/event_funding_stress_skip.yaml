@@ -1,5 +1,6 @@
 logic_id: event_funding_stress_skip
 family_id: event_funding_combo
+family: event
 axis: mixed
 headline: true
 generation_enabled: false

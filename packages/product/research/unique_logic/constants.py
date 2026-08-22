@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from typing import Sequence
 
-from research.unique_logic.catalog import combo_thesis_ids_by_kind, economic_theme_ids
+from research.unique_logic.catalog import (
+    combo_thesis_ids_by_kind,
+    economic_theme_ids,
+    unique_family_ids_from_yaml,
+)
 
 # Official JQuants fins/summary v2 payload keys. Do not invent aliases
 # (NCTA is a sparse non-consolidated field, not Total Assets).
@@ -111,48 +115,12 @@ LOGIC_CATALOG_HEADLINE_BAN: frozenset[str] = frozenset(
         "vol_risk_adjusted_mom",
     }
 )
-EVENT_LOGIC_IDS: frozenset[str] = frozenset(
-    {
-        "event_funding_stress_skip",
-        "curve_steep_event_confirm",
-        "disclosure_cluster_mom_gate",
-        "surprise_xs_rank_hold",
-    }
-)
-EVENT_FILTER_LOGIC_IDS: frozenset[str] = frozenset(
-    {
-        "large_surprise_event_hold",
-        "afterclose_only_event_hold",
-        "event_pre_mom_agree_hold",
-        "event_margin_crowding_skip",
-    }
-)
-EVENT_SIDES_LOGIC_IDS: frozenset[str] = frozenset(
-    {
-        "event_funding_easy_short",
-        "event_funding_stress_ls",
-        "surprise_xs_rank_flip",
-    }
-)
-ADAPTIVE_LOGIC_IDS: frozenset[str] = frozenset(
-    {
-        "event_funding_adaptive_side",
-        "surprise_xs_rank_adaptive",
-    }
-)
-CS_LOGIC_IDS: frozenset[str] = frozenset(
-    {
-        "funding_impulse_cs_tilt",
-        "curve_steepen_impulse_cs",
-        "xs_margin_delta_rank",
-        "idio_mom_macro_impulse",
-        "overnight_level_cs_tilt",
-        "overnight_easy_cs_follow",
-        "month_end_cs_fade",
-        "xs_low_vol_mom",
-        "repo_3m_level_cs",
-    }
-)
+_families = unique_family_ids_from_yaml()
+EVENT_LOGIC_IDS: frozenset[str] = _families["event"]
+EVENT_FILTER_LOGIC_IDS: frozenset[str] = _families["event_filter"]
+EVENT_SIDES_LOGIC_IDS: frozenset[str] = _families["event_sides"]
+ADAPTIVE_LOGIC_IDS: frozenset[str] = _families["adaptive"]
+CS_LOGIC_IDS: frozenset[str] = _families["cs"]
 _kinds = combo_thesis_ids_by_kind()
 _event = _kinds["event"] | _kinds["surprise_xs"]
 _cs = _kinds["cs"]

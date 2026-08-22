@@ -1,5 +1,6 @@
 logic_id: curve_steepen_impulse_cs
 family_id: curve_steepen_impulse_cs
+family: cs
 axis: macro
 headline: false
 generation_enabled: false

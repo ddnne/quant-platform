@@ -1,5 +1,6 @@
 logic_id: repo_3m_level_cs
 family_id: repo_3m_level_cs
+family: cs
 axis: macro
 headline: true
 generation_enabled: false

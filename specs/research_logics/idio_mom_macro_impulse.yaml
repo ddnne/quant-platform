@@ -1,5 +1,6 @@
 logic_id: idio_mom_macro_impulse
 family_id: idio_mom_macro
+family: cs
 axis: macro_xs
 headline: true
 generation_enabled: false

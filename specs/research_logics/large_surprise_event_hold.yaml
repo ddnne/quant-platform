@@ -1,5 +1,6 @@
 logic_id: large_surprise_event_hold
 family_id: large_surprise_filter
+family: event_filter
 axis: mixed
 headline: true
 generation_enabled: false

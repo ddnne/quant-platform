@@ -173,6 +173,96 @@ def test_cf_new_thesis_ids_match_yaml_combo_kind() -> None:
     const_src = inspect.getsource(constants_mod)
     assert "event_funding_tight_fade" not in const_src
     assert "overnight_tight_cs_fade" not in const_src
+    assert len(EVENT_LOGIC_IDS) == 4
+    assert len(EVENT_FILTER_LOGIC_IDS) == 4
+    assert len(EVENT_SIDES_LOGIC_IDS) == 3
+    assert len(ADAPTIVE_LOGIC_IDS) == 2
+    assert len(CS_LOGIC_IDS) == 9
+
+
+def test_original_22_ids_from_yaml() -> None:
+    import inspect
+    import re
+
+    from research.unique_logic import catalog as catalog_mod
+    from research.unique_logic import constants as constants_mod
+    from research.unique_logic.catalog import (
+        _COMBO_EVALUATOR,
+        load_catalog_specs,
+        unique_family_ids_from_yaml,
+    )
+    from research.unique_logic.constants import (
+        ADAPTIVE_LOGIC_IDS,
+        CF_NEW_THESIS_IDS,
+        CS_LOGIC_IDS,
+        EVENT_FILTER_LOGIC_IDS,
+        EVENT_LOGIC_IDS,
+        EVENT_SIDES_LOGIC_IDS,
+        RESEARCH_UNIQUE_LOGIC_IDS,
+    )
+
+    families = unique_family_ids_from_yaml()
+    assert set(families) == {
+        "event",
+        "event_filter",
+        "event_sides",
+        "adaptive",
+        "cs",
+    }
+    assert families["event"] == EVENT_LOGIC_IDS
+    assert families["event_filter"] == EVENT_FILTER_LOGIC_IDS
+    assert families["event_sides"] == EVENT_SIDES_LOGIC_IDS
+    assert families["adaptive"] == ADAPTIVE_LOGIC_IDS
+    assert families["cs"] == CS_LOGIC_IDS
+    assert len(EVENT_LOGIC_IDS) == 4
+    assert len(EVENT_FILTER_LOGIC_IDS) == 4
+    assert len(EVENT_SIDES_LOGIC_IDS) == 3
+    assert len(ADAPTIVE_LOGIC_IDS) == 2
+    assert len(CS_LOGIC_IDS) == 9
+    original = (
+        EVENT_LOGIC_IDS
+        | EVENT_FILTER_LOGIC_IDS
+        | EVENT_SIDES_LOGIC_IDS
+        | ADAPTIVE_LOGIC_IDS
+        | CS_LOGIC_IDS
+    )
+    assert len(original) == 22
+    yaml_ids: set[str] = set()
+    combo_ids: set[str] = set()
+    for spec in load_catalog_specs():
+        lid = str(spec.get("logic_id") or "")
+        yaml_ids.add(lid)
+        assert spec.get("go") is not True
+        assert spec.get("generation_enabled") is False
+        if str(spec.get("evaluator") or "") == _COMBO_EVALUATOR:
+            combo_ids.add(lid)
+            assert spec.get("family") in (None, "")
+            continue
+        assert spec.get("family") in set(families)
+    assert yaml_ids - combo_ids == set(original)
+    assert original.isdisjoint(CF_NEW_THESIS_IDS)
+    assert yaml_ids == set(RESEARCH_UNIQUE_LOGIC_IDS)
+    assert len(RESEARCH_UNIQUE_LOGIC_IDS) == 338
+    assert original | set(CF_NEW_THESIS_IDS) == set(RESEARCH_UNIQUE_LOGIC_IDS)
+
+    helper_src = inspect.getsource(catalog_mod.unique_family_ids_from_yaml)
+    helper_src += inspect.getsource(catalog_mod._unique_family_key)
+    assert "from research.unique_logic.event_combos" not in helper_src
+    assert "NEW_COMBO_LOGIC" not in helper_src
+    assert "_COMBO_EVALUATOR" in helper_src
+    assert "Does not GO" in inspect.getsource(catalog_mod.unique_family_ids_from_yaml)
+    const_src = inspect.getsource(constants_mod)
+    assert "unique_family_ids_from_yaml()" in const_src
+    for lid in original:
+        assert lid not in const_src
+    for yml in _YAML_DIR.glob("*.yaml"):
+        body = yml.read_text(encoding="utf-8")
+        assert re.search(r"(?m)^go:\s*true\s*$", body) is None
+        if yml.stem in original:
+            assert re.search(r"(?m)^family:\s+\S+", body)
+            assert re.search(r"(?m)^generation_enabled:\s*true\s*$", body) is None
+        else:
+            assert re.search(r"(?m)^family:", body) is None
 
 
 # Frozen keys/counts from the former constants.ECONOMIC_THEME_IDS block.

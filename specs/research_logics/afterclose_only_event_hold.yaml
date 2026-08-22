@@ -1,5 +1,6 @@
 logic_id: afterclose_only_event_hold
 family_id: afterclose_event_timing
+family: event_filter
 axis: mixed
 headline: false
 generation_enabled: false

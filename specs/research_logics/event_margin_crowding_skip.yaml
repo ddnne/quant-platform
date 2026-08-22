@@ -1,5 +1,6 @@
 logic_id: event_margin_crowding_skip
 family_id: event_margin_crowd_combo
+family: event_filter
 axis: mixed
 headline: true
 generation_enabled: false

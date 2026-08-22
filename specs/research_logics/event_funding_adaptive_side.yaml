@@ -1,5 +1,6 @@
 logic_id: event_funding_adaptive_side
 family_id: event_funding_combo
+family: adaptive
 axis: funding
 headline: true
 generation_enabled: false

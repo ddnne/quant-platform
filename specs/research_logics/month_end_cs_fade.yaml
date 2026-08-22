@@ -1,5 +1,6 @@
 logic_id: month_end_cs_fade
 family_id: month_end_cs
+family: cs
 axis: calendar
 headline: true
 generation_enabled: false

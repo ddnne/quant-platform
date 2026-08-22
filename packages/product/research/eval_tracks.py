@@ -113,13 +113,6 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "go": False,
     },
     {
-        "id": "derive_original_22_ids_from_yaml",
-        "track": EVAL_TRACK_MID_N,
-        "why": "EVENT/CS unique 22 frozensets still duplicate YAML stems; derive like CF_NEW",
-        "not_a_pass": True,
-        "go": False,
-    },
-    {
         "id": "eval_harness_standard_shrink",
         "track": EVAL_TRACK_MID_N,
         "why": "eval_harness_standard.py ~760 W56 runner after checklist split; not daily_path SoT",
