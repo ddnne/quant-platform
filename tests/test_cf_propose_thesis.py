@@ -305,6 +305,17 @@ def test_review_proposal_row_rejects_invent_and_weekday() -> None:
     assert "title_gate_polarity_mismatch" in bad_h["reasons"]
     assert bad_h["auto_inject"] is False
 
+    sparse_steep = {
+        "thesis": "PEAD when NKY vol-high skip is off AND the repo curve is steep.",
+        "signal_definition": "AND(nky_vol_high_skip, steep_curve) PIT",
+        "position_rule": "event-hold surprise sign",
+        "datasets": ["equities_bars_daily", "fins_summary", "jsda_tokyo_repo_rates"],
+        "gates": ["nky_vol_high_skip", "steep_curve"],
+    }
+    bad_st = review_proposal_row(sparse_steep)
+    assert bad_st["ok"] is False
+    assert "sparse_gate_combo" in bad_st["reasons"]
+
     invert_nky = {
         "thesis": "Prices drop when overnight funding is tightening AND margin is down AND volatility is high.",
         "signal_definition": "AND(overnight_tightening, margin_down, nky_vol_high_skip) PIT",

@@ -244,6 +244,8 @@ SPARSE_GATE_COMBOS: tuple[tuple[frozenset[str], str], ...] = (
     (frozenset({"cheap_iv", "cheap_pb"}), "cheap_iv_and_cheap_pb"),
     (frozenset({"overnight_p10_steep"}), "overnight_p10_plus_steep"),
     (frozenset({"div_positive", "cheap_iv"}), "div_payer_and_cheap_iv"),
+    # plus32q both-track occupancy ≤ 0.05 (parked). Do not re-emit.
+    (frozenset({"nky_vol_high_skip", "steep_curve"}), "nkyvol_plus_steep"),
 )
 NAME_LEVEL_FUND_CS_GATES: frozenset[str] = frozenset(
     {
