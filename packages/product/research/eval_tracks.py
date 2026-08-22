@@ -101,7 +101,7 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "id": "propose_clone_retry",
         "track": EVAL_TRACK_LIQ_LARGE,
         "why": (
-            "why_avoid leads with countable 3-gates then 2-gates; "
+            "why_avoid splits newest countable 3-gates and 2-gates; "
             "clone-only responses retry once with those sets prepended; "
             "still no auto-inject"
         ),

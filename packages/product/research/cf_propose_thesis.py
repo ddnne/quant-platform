@@ -233,16 +233,18 @@ def review_proposal_row(proposal: Mapping[str, Any]) -> dict[str, Any]:
 def catalog_gate_set_avoid(*, limit: int = PROPOSE_WHY_AVOID_LIMIT) -> list[str]:
     """Existing countable AND-sets for LLM why_avoid.
 
-    3-gates first (70B clones those; 2-gates used to fill the whole cap).
+    Newest YAML first. Reserve half the cap for 3-gates and half for
+    2-gates so a 3-gate-only fill cannot hide recent 2-AND clones.
     Calendar/weekday permutations are not clone seeds. Not a scorecard.
     """
-    from research.unique_logic.catalog import yaml_combo_rows
+    from research.unique_logic.catalog import catalog_dir, yaml_combo_rows
     from research.unique_logic.constants import PROPOSE_CALENDAR_GATES
     from research.unique_logic.worker_bodies import countable_thesis_ids
 
     countable = countable_thesis_ids()
-    twos: list[str] = []
-    threes: list[str] = []
+    cdir = catalog_dir()
+    twos: list[tuple[float, str]] = []
+    threes: list[tuple[float, str]] = []
     have: set[str] = set()
     for row in yaml_combo_rows():
         lid = str(row.get("logic_id") or "")
@@ -261,12 +263,21 @@ def catalog_gate_set_avoid(*, limit: int = PROPOSE_WHY_AVOID_LIMIT) -> list[str]
         if token in have:
             continue
         have.add(token)
+        yp = cdir / f"{lid}.yaml"
+        mtime = yp.stat().st_mtime if yp.is_file() else 0.0
         if len(gates) == 2:
-            twos.append(token)
+            twos.append((mtime, token))
         else:
-            threes.append(token)
-    # 3-AND clones were invisible when 24 two-gates filled the slot.
-    return (threes + twos)[: int(limit)]
+            threes.append((mtime, token))
+    twos.sort(reverse=True)
+    threes.sort(reverse=True)
+    lim = max(1, int(limit))
+    n3 = min(len(threes), max(1, lim // 2))
+    n2 = min(len(twos), lim - n3)
+    if n2 < min(len(twos), lim // 2):
+        n2 = min(len(twos), lim // 2)
+        n3 = min(len(threes), lim - n2)
+    return [t for _, t in threes[:n3]] + [t for _, t in twos[:n2]]
 
 
 def reject_window_tweak(proposal: Mapping[str, Any]) -> bool:

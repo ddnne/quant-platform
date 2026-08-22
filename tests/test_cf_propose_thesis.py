@@ -302,7 +302,10 @@ def test_catalog_gate_set_avoid_is_existing_crosses() -> None:
     assert len(full) == PROPOSE_WHY_AVOID_LIMIT
     assert PROPOSE_WHY_AVOID_LIMIT == 24
     assert any(t.count("+") == 2 for t in full)
-    assert full[0].count("+") == 2
+    assert any(t.count("+") == 1 for t in full)
+    n3 = sum(1 for t in full if t.count("+") == 2)
+    n2 = sum(1 for t in full if t.count("+") == 1)
+    assert n3 >= 8 and n2 >= 8
     assert all("+" in t for t in tokens)
     blob = " ".join(tokens)
     assert "skip_monday" not in blob
