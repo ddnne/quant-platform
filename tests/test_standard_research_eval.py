@@ -50,10 +50,12 @@ from research.risk_scenarios import (
 )
 from research.robustness_gate import evaluate_research_robustness_gate
 from tests.research_eval_util import (
+    EVAL_HARNESS_CHECKLIST_PATH,
     EVAL_HARNESS_EXTRA_HYP_PATH,
     EVAL_HARNESS_MULTIYEAR_PATH,
     EVAL_HARNESS_PATH,
     EVAL_HARNESS_S1_PATH,
+    EVAL_HARNESS_STANDARD_PATH,
     _assert_mass_ready_off,
     assert_ast_bans_mass_ready_orders,
 )
@@ -291,6 +293,8 @@ def test_standard_eval_ast_no_mass_import_no_new_signal_mint():
     paths = (
         EVAL_HARNESS_PATH,
         EVAL_HARNESS_MULTIYEAR_PATH,
+        EVAL_HARNESS_CHECKLIST_PATH,
+        EVAL_HARNESS_STANDARD_PATH,
         EVAL_HARNESS_S1_PATH,
         EVAL_HARNESS_EXTRA_HYP_PATH,
     )

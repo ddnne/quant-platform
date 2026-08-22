@@ -15,10 +15,12 @@ from data_contracts.permanent_defer import (
     PermanentDeferHistoryError,
 )
 from tests.research_eval_util import (
+    EVAL_HARNESS_CHECKLIST_PATH,
     EVAL_HARNESS_EXTRA_HYP_PATH,
     EVAL_HARNESS_MULTIYEAR_PATH,
     EVAL_HARNESS_PATH,
     EVAL_HARNESS_S1_PATH,
+    EVAL_HARNESS_STANDARD_PATH,
     SINGLE_SHOT_PATH,
     _assert_mass_ready_off,
     _capture_puts,
@@ -52,6 +54,8 @@ from selection.budget_ledger import MassResearchDisabledError
 HARNESS_AST_PATHS = (
     EVAL_HARNESS_PATH,
     EVAL_HARNESS_MULTIYEAR_PATH,
+    EVAL_HARNESS_CHECKLIST_PATH,
+    EVAL_HARNESS_STANDARD_PATH,
     EVAL_HARNESS_S1_PATH,
     EVAL_HARNESS_EXTRA_HYP_PATH,
     SINGLE_SHOT_PATH,
@@ -416,6 +420,8 @@ def test_multi_year_ast_and_mass_off_freezes():
         for p in (
             EVAL_HARNESS_PATH,
             EVAL_HARNESS_MULTIYEAR_PATH,
+            EVAL_HARNESS_CHECKLIST_PATH,
+            EVAL_HARNESS_STANDARD_PATH,
             EVAL_HARNESS_S1_PATH,
             EVAL_HARNESS_EXTRA_HYP_PATH,
         )
@@ -423,6 +429,8 @@ def test_multi_year_ast_and_mass_off_freezes():
     for path in (
         EVAL_HARNESS_PATH,
         EVAL_HARNESS_MULTIYEAR_PATH,
+        EVAL_HARNESS_CHECKLIST_PATH,
+        EVAL_HARNESS_STANDARD_PATH,
         EVAL_HARNESS_S1_PATH,
         EVAL_HARNESS_EXTRA_HYP_PATH,
     ):

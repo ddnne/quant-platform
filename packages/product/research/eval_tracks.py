@@ -106,13 +106,6 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "go": False,
     },
     {
-        "id": "eval_harness_multiyear_shrink",
-        "track": EVAL_TRACK_MID_N,
-        "why": "eval_harness_multiyear.py ~1212 W56 checklist after S1/extra-hyp split; not daily_path SoT",
-        "not_a_pass": True,
-        "go": False,
-    },
-    {
         "id": "options_225_vol_series_shrink",
         "track": EVAL_TRACK_MID_N,
         "why": "options_225_vol_series.py ~1140 live series math; shrink dumps only",
