@@ -14,7 +14,6 @@ from research.unique_logic import event, cross_section
 
 PACK_BIAS = "mixed"
 
-
 NEW_UNIQUE_LOGIC: tuple[dict[str, Any], ...] = tuple(
     yaml_unique_rows(
         logic_ids=(

@@ -241,12 +241,11 @@ def yaml_combo_rows(*, root: Path | None = None) -> list[dict[str, Any]]:
     return rows
 
 
-
 def unique_row_from_yaml(spec: Mapping[str, Any]) -> dict[str, Any]:
     """Map catalog YAML to an original-unique runtime row.
 
-    YAML is the declaration SoT. Does not GO. Evaluator function bodies stay
-    in the unique_logic modules; this only replaces the duplicate spec tables.
+    YAML is the declaration SoT. Does not GO. Evaluator bodies stay in the
+    unique_logic modules.
     """
     lid = str(spec.get("logic_id") or "")
     if not lid:
@@ -369,86 +368,3 @@ def economic_theme_ids(*, root: Path | None = None) -> dict[str, frozenset[str]]
     YAML is the SoT. Does not GO. Used by constants.ECONOMIC_THEME_IDS.
     """
     return dict(_economic_theme_ids_cached(str((root or repo_root()).resolve())))
-
-
-def combo_yaml_text(spec: Mapping[str, Any]) -> str:
-    """Constrained catalog YAML for a combo thesis (no generic YAML lib)."""
-    lid = str(spec["logic_id"])
-    thesis = " ".join(str(spec.get("thesis") or "").split())
-    main_pool = bool(spec.get("main_pool", True)) and not spec.get(
-        "data_requirement_unmet"
-    )
-    notes = "combo thesis; occupancy-gated; CF daily_path is SoT"
-    if spec.get("near_duplicate"):
-        notes = "combo thesis; parked near-duplicate / gate permutation; CF daily_path is SoT"
-    elif spec.get("always_on_cs_sticky"):
-        notes = "combo thesis; parked always_on CS sticky; CF daily_path is SoT"
-    elif spec.get("data_requirement_unmet") or not main_pool:
-        notes = "combo thesis; data_requirement_unmet on small shards; CF daily_path is SoT"
-    params = dict(spec.get("params") or {})
-    cs_gate = params.get("cs_gate")
-    cs_s = "None" if cs_gate in (None, "None", "") else str(cs_gate)
-    gates_raw = params.get("gates")
-    if gates_raw is None:
-        gates_raw = spec.get("gates") or ()
-    if isinstance(gates_raw, str):
-        gates_txt = gates_raw.strip()
-    else:
-        gates_txt = ",".join(str(x) for x in list(gates_raw) if str(x).strip())
-    datasets = list(spec.get("datasets") or (
-        "equities_bars_daily",
-        "fins_summary",
-        "jsda_tokyo_repo_rates",
-        "markets_calendar",
-    ))
-    ds = "\n".join(f"  - {d}" for d in datasets)
-    return (
-        f"logic_id: {lid}\n"
-        f"family_id: {spec.get('family_id') or 'event_calendar_gate'}\n"
-        "axis: mixed\n"
-        "headline: false\n"
-        "generation_enabled: false\n"
-        "promote_as_main: false\n"
-        "go: false\n"
-        f"main_pool: {'true' if main_pool else 'false'}\n"
-        f"thesis: >\n  {thesis}\n"
-        f"signal_definition: >\n  {thesis}\n"
-        f"datasets:\n{ds}\n"
-        "params:\n"
-        f"  post_hold_days: {int(params.get('post_hold_days') or 5)}\n"
-        f"  hold_days: {int(params.get('hold_days') or 10)}\n"
-        f"  momentum_n: {int(params.get('momentum_n') or 5)}\n"
-        f"  min_hist: {int(params.get('min_hist') or 20)}\n"
-        f"  mode: {lid}\n"
-        f"  side: {params.get('side') or spec.get('side') or 'orig'}\n"
-        f"  gates: {gates_txt}\n"
-        f"  cs_gate: {cs_s}\n"
-        f"  entry_shift: {int(params.get('entry_shift') or 0)}\n"
-        f"  hold_tail_days: {int(params.get('hold_tail_days') or 0)}\n"
-        "evaluator: research.unique_logic.event_combos.evaluate_combo_daily_mtm\n"
-        f"notes: {notes}\n"
-    )
-
-
-def write_missing_combo_yaml(*, root: Path | None = None) -> list[str]:
-    """Create catalog YAML for combo specs that have no file yet."""
-    from research.unique_logic.event_combos import NEW_COMBO_LOGIC
-
-    d = catalog_dir(root=root)
-    d.mkdir(parents=True, exist_ok=True)
-    written: list[str] = []
-    existing = {p.stem for p in d.glob("*.yaml")}
-    for spec in NEW_COMBO_LOGIC:
-        lid = str(spec["logic_id"])
-        path = d / f"{lid}.yaml"
-        if lid in existing and not (
-            spec.get("near_duplicate")
-            or spec.get("data_requirement_unmet")
-            or spec.get("always_on_cs_sticky")
-            or spec.get("worker_isolate_limit")
-            or "\n  gates:" not in path.read_text(encoding="utf-8")
-        ):
-            continue
-        path.write_text(combo_yaml_text(spec), encoding="utf-8")
-        written.append(lid)
-    return written

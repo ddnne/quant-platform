@@ -86,7 +86,7 @@ def python_only_gate_logic_ids() -> frozenset[str]:
     Lazy import: ``event_combos`` imports this module. Worker lid branches
     cover the returned set; do not copy remaining PYTHON_ONLY names onto
     Worker ``COMBO_EVENT_GATES`` until leftover occupancy equals
-    comboEventGateOk. Empty after pre_mom leftover rewrite (entryIdx-1).
+    comboEventGateOk.
     """
     from research.unique_logic.event_combos import NEW_COMBO_LOGIC
 
@@ -201,13 +201,12 @@ CF_EVENT_FIDELITY: dict[str, str] = {
 ALWAYS_ON_OCCUPANCY_WARN: float = 0.85
 NEAR_EMPTY_OCCUPANCY: float = 0.05
 # CF daily_path implements a unique rate-gated book (not fund_value_mom_agree).
-# Overnight-change confirm (eval-cf-dp-mf-chg-20260822a) brought occupancy
-# just under 0.85. Live candidate filter is occupancy, not this flag.
+# Live candidate filter is occupancy, not this flag.
 MF_VALUE_MOM_RATE_DELEGATES: bool = False
 MF_VALUE_MOM_RATE_PATH: str = "unique_rate_gated_value_mom"
 MF_VALUE_MOM_RATE_PARKED_ALWAYS_ON: bool = False
-# If a re-eval of mf_value_mom_rate has occupancy >= ALWAYS_ON_OCCUPANCY_WARN,
-# summarize parks it (always_on). Do not densify to stay under the line.
+# If occupancy >= ALWAYS_ON_OCCUPANCY_WARN, summarize parks it (always_on).
+# Do not densify to stay under the line.
 # Candidate-grade SoT. Period-net mass-eval is bar-native auxiliary only.
 CANDIDATE_EVAL_PROTOCOL: str = "daily_path_mtm_after_cost/v1"
 PERIOD_NET_ROLE: str = "bar_native_auxiliary_unique_unsupported"
@@ -219,9 +218,7 @@ TERM_STRUCTURE_REQUIRED: frozenset[str] = frozenset(
     }
 )
 # Linearized (no longer isolate-parked). Cluster hist was O(n²) per event;
-# Worker now uses a linear window series. Cluster three completed on
-# eval-cf-dp-liq100-cross-20260822a. CS name-level fund extras were 1102 at
-# N=100; unparked after v21 csFundSnaps hoist + eval-cf-dp-cs-hoist-20260822a.
+# Worker now uses a linear window series.
 WORKER_ISOLATE_LINEARIZED_OK: frozenset[str] = frozenset(
     {
         "event_eqar_high_cluster",
@@ -232,8 +229,8 @@ WORKER_ISOLATE_LINEARIZED_OK: frozenset[str] = frozenset(
         "cs_eqar_low_margin_up",
     }
 )
-# Empty after v21 csFundSnaps hoist + eval-cf-dp-cs-hoist-20260822a complete.
-# Keep the set as the park mechanism; do not restore a 1102 without a path.
+# Keep the set as the park mechanism; do not restore isolate-limited lids
+# without a Worker path.
 WORKER_ISOLATE_LIMIT_IDS: frozenset[str] = frozenset()
 WORKER_ISOLATE_LIMIT_REASONS: dict[str, str] = {}
 # Small-universe shards historically emptied these AND-gates. Parked until a

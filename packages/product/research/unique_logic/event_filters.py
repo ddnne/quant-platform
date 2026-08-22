@@ -185,7 +185,6 @@ def _base_extra(spec: Mapping[str, Any], collected: Mapping[str, Any]) -> dict[s
         "kind": spec.get("kind"),
         "new_unique_logic": True,
         "catalog": False,
-        "catalog_map": None,
         "post_hold_days": collected["hold_days"],
         "entry_mode": collected["entry_mode"],
         "n_events": collected["n_events"],

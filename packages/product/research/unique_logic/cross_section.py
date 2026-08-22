@@ -18,7 +18,6 @@ from research.unique_logic import event
 
 PACK_BIAS = "mixed"
 
-
 NEW_UNIQUE_LOGIC: tuple[dict[str, Any], ...] = tuple(
     yaml_unique_rows(
         logic_ids=(
@@ -100,7 +99,6 @@ def _base_cs_extra(
         "kind": spec.get("kind"),
         "new_unique_logic": True,
         "catalog": False,
-        "catalog_map": None,
         "momentum_n": n,
         "hold_days": h,
         "long_frac": lf,

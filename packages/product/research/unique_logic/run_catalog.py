@@ -27,7 +27,6 @@ from research.daily_path_eval import (
     dump_json,
     load_shard_bars,
     stitch_net,
-    summarize_path,
 )
 from research.eval_windows import HONEST_3Y_WINDOWS
 from research.stats_metrics import evaluate_daily_path_dd_gate
@@ -122,13 +121,9 @@ def eval_logic_windows(
         stitch_nets: list[float] = []
         n_gate_on = 0
         n_bar = 0
-        shard_summaries: list[dict[str, Any]] = []
         for shard in window["shards"]:
             loaded = load_shard_bars(shard, codes=codes, max_days=max_days)
             if loaded.get("status") != "ok":
-                shard_summaries.append(
-                    {"period_id": loaded.get("period_id"), "status": loaded.get("status")}
-                )
                 continue
             pack = _eval_shard(
                 spec=spec,
@@ -136,10 +131,6 @@ def eval_logic_windows(
                 extras=extras,
                 one_way_cost=one_way_cost,
             )
-            summary = summarize_path(pack)
-            summary["period_id"] = loaded.get("period_id")
-            summary["window_id"] = wid
-            shard_summaries.append(summary)
             n_gate_on += int(pack.get("n_gate_on_days") or 0)
             n_bar += int(pack.get("n_bar_dates") or len(pack.get("dates") or []) or 0)
             dlist = list(pack.get("dates") or [])

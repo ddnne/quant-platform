@@ -499,7 +499,6 @@ def evaluate_disclosure_cluster_mom_gate_daily_mtm(
     disc_dates.sort()
 
     # Per bar date: count DiscDate in the previous `lookback` bar dates (strict).
-    date_set_index = {d: i for i, d in enumerate(dates)}
     cluster_by: dict[str, float] = {}
     for i, d in enumerate(dates):
         lo = max(0, i - lookback)
@@ -545,7 +544,6 @@ def evaluate_disclosure_cluster_mom_gate_daily_mtm(
         "n_median_unformed_days": n_median_unformed,
         "n_disclosure_prints": n_disc,
         "n_bar_dates": len(dates),
-        "n_date_index": len(date_set_index),
     }
     pack = held_book_daily_mtm(
         held_by_code_date=held_by_code_date,
@@ -631,8 +629,7 @@ def evaluate_surprise_xs_rank_hold_daily_mtm(
             **extra,
         }
 
-    # Active surprise by date: names whose PIT entry is in [d-h+1, d] wait —
-    # position lives on [entry, entry+h). Rank those currently held-in-window.
+    # Rank names currently held-in-window: position lives on [entry, entry+h).
     date_to_idx = {d: i for i, d in enumerate(dates)}
     surprise_by_date: dict[str, dict[str, float]] = {d: {} for d in dates}
     for ev in collected["entries"]:

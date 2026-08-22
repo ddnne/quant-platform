@@ -591,7 +591,6 @@ def compare_basket_summaries(
         "not_a_pass": True,
         "notes": (
             "Single-universe majority is not a stability call. "
-            "theme_fund / theme_flow kept as preferred materials. "
             "not a pass / not GO."
         ),
     }
