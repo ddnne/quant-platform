@@ -223,6 +223,7 @@ THIN_SLEEVE_EXCLUDE_IDS: frozenset[str] = frozenset(
         "event_p10_eps_down_px_down",
         "event_overnight_p10_sales_down",
         "event_tight_funding_eps_px_down",
+        "event_invert_tight_sales_down",
     }
 )
 MF_VALUE_MOM_RATE_DELEGATES: bool = False

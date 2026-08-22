@@ -219,6 +219,7 @@ export const CF_NEW_EVENT_THESIS_IDS = [
   "event_invert_roe_low",
   "event_invert_sales_down_fade",
   "event_invert_ta_up",
+  "event_invert_tight_sales_down",
   "event_invert_uncrowded",
   "event_large_surprise_afterclose",
   "event_large_surprise_cluster",
