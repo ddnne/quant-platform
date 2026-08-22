@@ -103,7 +103,6 @@ def run_class_hyp_multi_year_eval(
     sqlite_path: str | Path = DEFAULT_SQLITE,
     include_cross_section: bool = True,
     include_cross_section_hold_10: bool = True,
-    # W85: promote explore xs hold=10 mom=3 after multi-window paper align.
     include_cross_section_hold_10_mom3: bool = True,
     include_event_post: bool = True,
     include_flow_demand: bool = True,
@@ -112,24 +111,20 @@ def run_class_hyp_multi_year_eval(
     include_multi_day_hold_10: bool = True,
     cross_section_hold_days: int = 5,
     cross_section_momentum_n: int | None = None,
-    # Sticky hold=10 uses short mom lookback (W82 pin). Content-matched
-    # mom=10 collapses residual (W83 explore) — do not "align" blindly.
+    # Sticky hold=10 uses short mom lookback; content-matched mom=10 collapses.
     cross_section_hold10_momentum_n: int = 5,
-    # W85 promoted: sticky hold=10 with mom=3 (research standout + multi-window paper).
     cross_section_hold10_mom3_momentum_n: int = 3,
     cross_section_long_frac: float = 0.3,
     cross_section_short_frac: float = 0.3,
     event_hold_days: int = DEFAULT_EVENT_POST_HOLD_DAYS,
     flow_hold_days: int = DEFAULT_FLOW_HOLD_DAYS,
     flow_require_short_confirm: bool = False,
-    flow_short_confirm_mode: str | None = None,  # off|hard|soft (W85)
-    # W85: apply short = f(repo[t]+spread) remeasure on L-S classes (default on).
+    flow_short_confirm_mode: str | None = None,  # off|hard|soft
     apply_short_cost_remeasure: bool = True,
     short_borrow_sensitivity: str = "mid",
     short_fraction_ls: float = 0.5,
     fund_hold_days: int = DEFAULT_FUND_HOLD_DAYS,
     fund_momentum_n: int = DEFAULT_FUND_MOMENTUM_N,
-    # W83 candidate: hold=10 mom=10 value×momentum agree (separate block).
     fund_hold10_momentum_n: int = 10,
     fund_mode: str = "value_momentum_agree",
     max_days: int | None = None,
@@ -151,19 +146,9 @@ def run_class_hyp_multi_year_eval(
     thicken_event_with_earnings_date: bool = True,
     checklist_complete: bool = True,
 ) -> dict[str, Any]:
-    """Multi-year offline eval for all enabled class hyps (W81–W83).
+    """Offline class-hyp window stitch. Candidate needs gate + floors + stats bar.
 
-    Uses local W63 Q4 + W64 full bar/margin mirrors and local SQLite
-    (jsda_repo_rates, fins_summary, fins_earnings_date, short_ratio).
-
-    Production ``research_candidate=True`` only when gate + economic net +
-    occurrence rate + multi-year skew + risk + **statistical bar**
-    (|t|, Sharpe, period win-rate) all pass (still not READY/Mass).
-    No mean-bp-only promotion. event_post uses W82 PIT entry only.
-
-    W83: default path always includes sticky cross_section hold=10 as a
-    separate block when ``include_cross_section_hold_10`` (parallel to
-    multi_day_hold_10). Primary ``cross_section_hold_days`` default remains 5.
+    Local bars/SQLite only. Not READY / Mass / GO. event_post is PIT entry.
     """
     period_list = [dict(p) for p in (periods or DEFAULT_PERIODS)]
     selected = (
@@ -178,7 +163,6 @@ def run_class_hyp_multi_year_eval(
         if h < 1:
             raise ValueError(f"hold_days must be >= 1, got {hold_days!r}")
 
-    # Load full repo series once (research offline; as_of_date keyed).
     repo_rows = load_repo_rows_from_sqlite(sqlite_path)
     repo_series = (
         load_repo_rate_series_from_rows(repo_rows) if repo_rows else None
@@ -293,6 +277,24 @@ def run_class_hyp_multi_year_eval(
     fund10_mom_n = int(fund_hold10_momentum_n)
     fund_mode_s = str(fund_mode or "value_momentum_agree")
     flow_short_confirm = bool(flow_require_short_confirm)
+    result_sinks: list[tuple[bool, list[dict[str, Any]]]] = [
+        (True, results_md),
+        (True, results_macro),
+        (include_cross_section, results_xs),
+        (include_cross_section_hold_10, results_xs10),
+        (include_cross_section_hold_10_mom3, results_xs10_mom3),
+        (include_event_post, results_event),
+        (include_flow_demand, results_flow),
+        (include_fundamentals_price, results_fund),
+        (include_fundamentals_hold_10, results_fund10),
+        (include_multi_day_hold_10, results_md10),
+    ]
+
+    def _push_status(row: Mapping[str, Any]) -> None:
+        payload = dict(row)
+        for include, dest in result_sinks:
+            if include:
+                dest.append(dict(payload))
 
     for raw in period_list:
         p = dict(raw)
@@ -304,30 +306,14 @@ def run_class_hyp_multi_year_eval(
             pid, mirror_dir=mirror_dir
         )
         if bars_path is None or not Path(bars_path).exists():
-            skip = {
-                "period_id": pid,
-                "year": year,
-                "status": "skipped",
-                "skip_reason": f"bars mirror missing for {pid}",
-            }
-            results_md.append(skip)
-            results_macro.append(dict(skip))
-            if include_cross_section:
-                results_xs.append(dict(skip))
-            if include_cross_section_hold_10:
-                results_xs10.append(dict(skip))
-            if include_cross_section_hold_10_mom3:
-                results_xs10_mom3.append(dict(skip))
-            if include_event_post:
-                results_event.append(dict(skip))
-            if include_flow_demand:
-                results_flow.append(dict(skip))
-            if include_fundamentals_price:
-                results_fund.append(dict(skip))
-            if include_fundamentals_hold_10:
-                results_fund10.append(dict(skip))
-            if include_multi_day_hold_10:
-                results_md10.append(dict(skip))
+            _push_status(
+                {
+                    "period_id": pid,
+                    "year": year,
+                    "status": "skipped",
+                    "skip_reason": f"bars mirror missing for {pid}",
+                }
+            )
             continue
 
         try:
@@ -351,7 +337,6 @@ def run_class_hyp_multi_year_eval(
             if not bars:
                 raise RuntimeError("no bars after code filter")
 
-            # Liquidity-linked one-way cost (prefer when ADV available)
             liq_rows = collect_liquidity_bar_rows(rich)
             liq_proxy = compute_liquidity_proxy_from_bars(
                 liq_rows, source_label=f"bars:{pid}"
@@ -365,12 +350,6 @@ def run_class_hyp_multi_year_eval(
                 if prefer_liquidity_linked
                 else 1.0
             )
-            if not prefer_liquidity_linked:
-                tx_mult = 1.0
-            # missing bucket → mult 1.0 unmodulated (no invent)
-            if liq_bucket.get("is_gap") or str(liq_bucket.get("bucket")) == "missing":
-                if prefer_liquidity_linked:
-                    tx_mult = float(liq_mults.get("tx_mult") or 1.0)
             one_way_eff = apply_liquidity_to_one_way_cost(
                 one_way_cost, tx_mult=tx_mult
             )
@@ -501,8 +480,6 @@ def run_class_hyp_multi_year_eval(
                 )
 
             if include_cross_section_hold_10 and int(cross_section_hold_days) != 10:
-                # W83 default path: sticky hold=10 with W82-pin mom lookback
-                # (mom=5). Content-matched mom=10 fails multi-year residual.
                 xs10 = evaluate_cross_section_on_bars(
                     bars,
                     momentum_n=xs10_mom_n,
@@ -531,9 +508,6 @@ def run_class_hyp_multi_year_eval(
             if include_cross_section_hold_10_mom3 and not (
                 include_cross_section_hold_10 and int(xs10_mom_n) == int(xs10_mom3_n)
             ):
-                # W85 promote_default: sticky hold=10 mom=3 (research standout
-                # t≈3.0 + multi-window paper majority positive). Parallel to
-                # mom=5 pin — does not replace W82 pin block.
                 xs10m3 = evaluate_cross_section_on_bars(
                     bars,
                     momentum_n=xs10_mom3_n,
@@ -603,7 +577,6 @@ def run_class_hyp_multi_year_eval(
                         end=p_end or (f"{year}-12-31" if year else None),
                     )
                     margin_src = "sqlite:markets_margin_interest"
-                # short slice for period
                 short_slice = [
                     (d, r)
                     for d, r in short_series_full
@@ -676,7 +649,6 @@ def run_class_hyp_multi_year_eval(
             if include_fundamentals_hold_10 and (
                 int(fund_hold_days) != 10 or int(fund_mom_n) != int(fund10_mom_n)
             ):
-                # W83: fund hold=10 mom=10 on default path (candidate in explore).
                 fund10 = evaluate_fundamentals_price_on_bars(
                     bars,
                     fins_events,
@@ -707,30 +679,14 @@ def run_class_hyp_multi_year_eval(
                     )
                 )
         except Exception as exc:  # noqa: BLE001 — year isolation
-            err = {
-                "period_id": pid,
-                "year": year,
-                "status": "error",
-                "error": f"{type(exc).__name__}: {exc}",
-            }
-            results_md.append(err)
-            results_macro.append(dict(err))
-            if include_cross_section:
-                results_xs.append(dict(err))
-            if include_cross_section_hold_10:
-                results_xs10.append(dict(err))
-            if include_cross_section_hold_10_mom3:
-                results_xs10_mom3.append(dict(err))
-            if include_event_post:
-                results_event.append(dict(err))
-            if include_flow_demand:
-                results_flow.append(dict(err))
-            if include_fundamentals_price:
-                results_fund.append(dict(err))
-            if include_fundamentals_hold_10:
-                results_fund10.append(dict(err))
-            if include_multi_day_hold_10:
-                results_md10.append(dict(err))
+            _push_status(
+                {
+                    "period_id": pid,
+                    "year": year,
+                    "status": "error",
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+            )
 
     return assemble_class_hyp_multi_year_report(
         period_list=period_list,
@@ -795,11 +751,9 @@ def run_class_hyp_multi_year_eval(
     )
 
 
-
 __all__ = [
     "CLASS_HYP_EVAL_VERSION",
     "CLASS_HYP_EVAL_WAVE",
-    "DEFAULT_SQLITE",
     "MAX_YEAR_POS_NET_SHARE",
     "MIN_ABS_T_STAT",
     "MIN_ACTIVATION_RATE_MULTIDAY",
@@ -810,6 +764,5 @@ __all__ = [
     "MIN_POSITIVE_PERIODS",
     "MIN_SHARPE_PERIOD",
     "MIN_YEARS_RESEARCH_CANDIDATE",
-    "load_repo_rows_from_sqlite",
     "run_class_hyp_multi_year_eval",
 ]
