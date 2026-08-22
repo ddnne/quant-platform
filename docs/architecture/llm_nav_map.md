@@ -265,7 +265,7 @@ Shared ROOT bootstrap: `scripts/_bootstrap.py` (`ensure_repo_root`) — **B1-e p
 | **B1-b** | Plane READMEs, public API notes, boundary tests | **DONE** |
 | **B1-c** | Dead code / empty dirs / collision docs | **partial** — inventory 2026-08-13: root `raw/` absent; `ingestion.jsda.adapters` unreferenced but **kept** as formal surface; no parity-mirror or fail-closed deletions; heuristic “zero-ref” scans **false-positive** on leaf imports (`from core import engine`) — do not mass-delete |
 | **B1-d** | Test tiers / matrix navigation | **partial** — `tests/README.md` G0/G1/G2 + named guard table (2026-08-13); heavy matrix split still open |
-| **B1-e** | Script bootstrap, `qp_paths` stragglers | **partial** — `_bootstrap` on ops/coverage + receipt CLIs; plane paths on `ensure_repo_root`; fingerprints no longer `parents[N]`; remaining scripts incremental (no dir moves) |
+| **B1-e** | Script bootstrap, `qp_paths` stragglers | **partial** — `_bootstrap` on ops/coverage/receipt/paper/ingestion CLIs and `scripts/ops/cf_premium_backfill.py` (do not `--execute` from residual). `jsda_otc_fetch_official.py` is path-only. No dir moves. |
 | B1-f | Optional archive move / script regroup | optional / last |
 | Z | `quant_platform.*` namespace | **DEFER** (out of B1) |
 | Docs SoT | residual live-sync + historical banners + this map | **DONE** (counts **only** in residual; this map / architecture hub / ADR = nav + pointers) |

@@ -347,6 +347,7 @@ export const CF_NEW_EVENT_THESIS_IDS = [
   "event_on_impulse_uncrowded",
   "event_overnight_p10_eps_down",
   "event_overnight_p10_eqar_low_fade",
+  "event_overnight_p10_invert_curve",
   "event_overnight_p10_np_negative",
   "event_overnight_p10_pead",
   "event_overnight_p10_sales_down",

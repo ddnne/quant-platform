@@ -664,6 +664,12 @@ def test_review_proposal_row_occupancy_and_polarity_table() -> None:
             "occupancy_label_only",
             "PEAD when overnight is in the easiest PIT decile AND net profit is negative. Skip missing PIT prints (no invent).",
         ),
+        (
+            "The curve is inverted when overnight is in the easiest PIT decile.",
+            ["overnight_p10", "invert_curve"],
+            "occupancy_label_only",
+            "PEAD when overnight is in the easiest PIT decile AND the repo curve inverted. Skip missing PIT prints (no invent).",
+        ),
     ]
     for bad_thesis, gates, reason, good_thesis in rows:
         payload = {

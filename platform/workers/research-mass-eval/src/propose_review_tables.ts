@@ -40,7 +40,7 @@ export const GATE_OCCUPANCY_LABEL: Array<[string, string[]]> = [
   ["pb_rising", ["is rising", "pb rose", "rising price to book", "price to book is rising", "price to book ratio increase", "price to book ratio increases", "pb ratio increase", "pb ratio increases", "pb increase", "increase in pb", "price to book ratio tends to rise", "price to book tends to rise", "pb tends to rise"]],
   ["pre_mom", ["positive price momentum", "positive momentum", "momentum is positive", "high price momentum"]],
   ["curve_flatten", ["yield curve", "is flattening", "flattening"]],
-  ["invert_curve", ["invert curve", "inverting"]],
+  ["invert_curve", ["invert curve", "inverting", "is inverted", "curve inverted", "yield curve"]],
   ["steep_curve", ["curve is steep", "is steep", "yield curve"]],
   ["np_negative", ["profitability is weak", "weak profitability", "weak profit"]],
   ["eps_down", ["earnings disappointment", "earnings disappoint", "earnings per share are falling", "eps are falling", "earnings per share tend to decrease", "eps down", "eps is down"]],
@@ -115,6 +115,7 @@ export const OCCUPANCY_EXTRA_TITLE: Array<[string, string[]]> = [
   ["10 percent", ["overnight_p10"]],
   ["10% predicts", ["overnight_p10"]],
   ["appetite for risk", ["eq_ar_falling", "eq_ar_high", "eq_ar_low", "eq_ar_rising"]],
+  ["curve inverted", ["invert_curve"]],
   ["curve is steep", ["steep_curve"]],
   ["earnings disappoint", ["eps_down"]],
   ["earnings disappointment", ["eps_down"]],
@@ -134,6 +135,7 @@ export const OCCUPANCY_EXTRA_TITLE: Array<[string, string[]]> = [
   ["invert curve", ["invert_curve"]],
   ["inverting", ["invert_curve"]],
   ["is flattening", ["curve_flatten"]],
+  ["is inverted", ["invert_curve"]],
   ["is steep", ["steep_curve"]],
   ["low repo", ["repo_3m_down"]],
   ["market is crowded", ["crowded_margin"]],
@@ -171,7 +173,7 @@ export const OCCUPANCY_EXTRA_TITLE: Array<[string, string[]]> = [
   ["under pressure", ["price_down"]],
   ["weak profit", ["np_negative"]],
   ["weak profitability", ["np_negative"]],
-  ["yield curve", ["curve_flatten", "steep_curve"]],
+  ["yield curve", ["curve_flatten", "invert_curve", "steep_curve"]],
 ];
 
 export const PROPOSE_CONTRADICTORY_GATE_PAIRS: string[][] = [
@@ -229,7 +231,7 @@ export const OCCUPANCY_LABEL_EXCEPTIONS: Array<[string, string[]]> = [
   ["np_negative", ["net profit", "np is negative", "np negative"]],
   ["crowded_margin", ["margin is crowded", "margin crowding"]],
   ["curve_flatten", ["repo curve", "flattened"]],
-  ["invert_curve", ["repo curve", "inverted"]],
+  ["invert_curve", ["repo curve"]],
   ["steep_curve", ["repo curve"]],
 ];
 
