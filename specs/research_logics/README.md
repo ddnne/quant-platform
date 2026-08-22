@@ -25,11 +25,8 @@ evaluator: research.unique_logic.funding.evaluate_overnight_level_cs_tilt_daily_
 ```
 
 YAML files here are the declaration path. Evaluators live in
-`packages/product/research/unique_logic/`. Run:
-
-```bash
-uv run python -m research.unique_logic --all
-uv run python scripts/record_research_eval.py --job-id eval-… --table data/ops/research_eval/catalog_table.json --put-r2 --apply-d1
-```
+`packages/product/research/unique_logic/`. Candidate SoT is
+`POST /v1/daily-path` (`research.cf_daily_path_job`). Local
+`python -m research.unique_logic --all` is HOLD, not candidate eval.
 
 Scores go to R2 + D1. Do not add `scripts/run_wNN_*.py`.

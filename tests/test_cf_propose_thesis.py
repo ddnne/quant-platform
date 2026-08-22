@@ -788,6 +788,12 @@ def test_review_proposal_row_occupancy_and_polarity_table() -> None:
             "occupancy_label_only",
             "PEAD when total assets rose versus the last prior print AND overnight funding eased AND price is down. Skip missing PIT prints (no invent).",
         ),
+        (
+            "Total assets increased when price is down AND EPS is up AND funding is easy.",
+            ["price_down", "eps_up", "easy_funding"],
+            "occupancy_label_only",
+            "PEAD when price is down AND EPS rose versus the last prior print AND overnight funding is easy. Skip missing PIT prints (no invent).",
+        ),
     ]
     for bad_thesis, gates, reason, good_thesis in rows:
         payload = {
