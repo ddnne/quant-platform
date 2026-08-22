@@ -191,19 +191,54 @@ def test_always_on_gate_is_never_candidate() -> None:
 
 
 def test_mechanical_baskets_are_four_valid_defs() -> None:
-    from research.combo_basket import mechanical_basket_defs, validate_basket_members
+    from research.combo_basket import (
+        RETIRED_BASKET_RULES,
+        mechanical_basket_defs,
+        validate_basket_members,
+    )
     from research.unique_logic.constants import CANDIDATE_POLICY
 
     defs = mechanical_basket_defs()
-    assert len(defs) >= 8
+    assert len(defs) >= 7
     ids = [d["basket_id"] for d in defs]
     assert len(ids) == len(set(ids))
+    rules = {d["rule"] for d in defs}
+    assert "low_occupancy_band" not in rules
+    assert "event_family_only" in rules
+    assert "family_spread" in rules
+    assert "known_candidate_head" in rules
+    assert RETIRED_BASKET_RULES == frozenset({"low_occupancy_band"})
     for d in defs:
         assert d["valid"] is True
+        assert d["deprecated"] is False
         assert d["go"] is False
         assert 2 <= len(d["members"]) <= 5
         assert validate_basket_members(d["members"]) == []
         assert CANDIDATE_POLICY["go"] is False
+    primaries = [d for d in defs if d["primary"]]
+    assert any(d["rule"] == "event_family_only" for d in primaries)
+    cs = [d for d in defs if d["rule"] == "cs_family_only"]
+    assert cs and cs[0]["primary"] is False
+
+
+def test_summarize_emits_candidate_family_counts() -> None:
+    from research.eval_registry import summarize_daily_path_cells
+
+    cells = [
+        {
+            "logic_id": "event_skip_monday",
+            "window_id": f"y{y}",
+            "occupancy": 0.18,
+            "total_ret_net": 0.01,
+            "eval_path": "eventHeld",
+            "daily_path_complete": True,
+        }
+        for y in (2015, 2017, 2019, 2021, 2023, 2025)
+    ]
+    summary = summarize_daily_path_cells(cells, job_id="eval-test-fam")
+    assert summary["n_candidate_logics"] == 1
+    assert summary["candidate_family_counts"]["event_new"] == 1
+    assert summary["go"] is False
 
 
 def test_combo_basket_blend_is_equal_weight() -> None:
@@ -270,10 +305,42 @@ def test_summarize_basket_trends_is_not_a_pass() -> None:
     assert summary["n_baskets"] == 1
     assert summary["go"] is False
     assert summary["not_a_pass"] is True
+    assert "low_occupancy_band" in summary["retired_rules"]
     row = summary["baskets"][0]
     assert row["candidate"] is True
     assert row["n_pos_windows"] == 6
     assert row["go"] is False
+
+
+def test_sparse_gate_combo_parks_at_generation() -> None:
+    from research.unique_logic.constants import sparse_15name_reason
+    from research.unique_logic.event_combos import NEW_COMBO_LOGIC
+
+    assert (
+        sparse_15name_reason(
+            gates=("fy_results", "overnight_easing"),
+        )
+        == "may_plus_easing"
+    )
+    assert (
+        sparse_15name_reason(cs_gate="friday_curve_steep") == "friday_plus_steep"
+    )
+    assert sparse_15name_reason(gates=("skip_tuesday",)) is None
+    fresh = [
+        s
+        for s in NEW_COMBO_LOGIC
+        if s["logic_id"]
+        in {
+            "event_skip_tuesday",
+            "cs_skip_tuesday",
+            "surprise_xs_skip_tuesday",
+        }
+    ]
+    assert len(fresh) == 3
+    for s in fresh:
+        assert s.get("data_requirement_unmet") is False
+        assert s.get("main_pool") is True
+        assert s.get("sparse_15name_reason") is None
 
 
 def test_sparse_15name_is_data_requirement_unmet() -> None:
@@ -286,6 +353,7 @@ def test_sparse_15name_is_data_requirement_unmet() -> None:
             "flow_disagree_tue_thu",
             "event_midmonth_steep",
             "cs_steep_friday",
+            "flow_disagree_skip_friday",
         }
     )
     for lid in sorted(SPARSE_ON_15NAME_SHARD):

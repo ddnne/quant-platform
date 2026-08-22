@@ -6,7 +6,7 @@ The schema is intentionally small (no general YAML dependency).
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from qp_paths import repo_root
 
@@ -122,3 +122,68 @@ def catalog_spec(logic_id: str, *, root: Path | None = None) -> dict[str, Any] |
         if str(spec.get("logic_id")) == lid:
             return spec
     return None
+
+
+def combo_yaml_text(spec: Mapping[str, Any]) -> str:
+    """Constrained catalog YAML for a combo thesis (no generic YAML lib)."""
+    lid = str(spec["logic_id"])
+    thesis = " ".join(str(spec.get("thesis") or "").split())
+    main_pool = bool(spec.get("main_pool", True)) and not spec.get(
+        "data_requirement_unmet"
+    )
+    notes = "combo thesis; occupancy-gated; CF daily_path is SoT"
+    if spec.get("data_requirement_unmet") or not main_pool:
+        notes = "combo thesis; data_requirement_unmet on 15-name shards; CF daily_path is SoT"
+    params = dict(spec.get("params") or {})
+    cs_gate = params.get("cs_gate")
+    cs_s = "None" if cs_gate in (None, "None", "") else str(cs_gate)
+    datasets = list(spec.get("datasets") or (
+        "equities_bars_daily",
+        "fins_summary",
+        "jsda_tokyo_repo_rates",
+        "markets_calendar",
+    ))
+    ds = "\n".join(f"  - {d}" for d in datasets)
+    return (
+        f"logic_id: {lid}\n"
+        f"family_id: {spec.get('family_id') or 'event_calendar_gate'}\n"
+        "axis: mixed\n"
+        "headline: false\n"
+        "generation_enabled: false\n"
+        "promote_as_main: false\n"
+        "go: false\n"
+        f"main_pool: {'true' if main_pool else 'false'}\n"
+        f"thesis: >\n  {thesis}\n"
+        f"signal_definition: >\n  {thesis}\n"
+        f"datasets:\n{ds}\n"
+        "params:\n"
+        f"  post_hold_days: {int(params.get('post_hold_days') or 5)}\n"
+        f"  hold_days: {int(params.get('hold_days') or 10)}\n"
+        f"  momentum_n: {int(params.get('momentum_n') or 5)}\n"
+        f"  min_hist: {int(params.get('min_hist') or 20)}\n"
+        f"  mode: {lid}\n"
+        f"  side: {params.get('side') or spec.get('side') or 'orig'}\n"
+        f"  cs_gate: {cs_s}\n"
+        f"  entry_shift: {int(params.get('entry_shift') or 0)}\n"
+        f"  hold_tail_days: {int(params.get('hold_tail_days') or 0)}\n"
+        "evaluator: research.unique_logic.event_combos.evaluate_combo_daily_mtm\n"
+        f"notes: {notes}\n"
+    )
+
+
+def write_missing_combo_yaml(*, root: Path | None = None) -> list[str]:
+    """Create catalog YAML for combo specs that have no file yet."""
+    from research.unique_logic.event_combos import NEW_COMBO_LOGIC
+
+    d = catalog_dir(root=root)
+    d.mkdir(parents=True, exist_ok=True)
+    written: list[str] = []
+    existing = {p.stem for p in d.glob("*.yaml")}
+    for spec in NEW_COMBO_LOGIC:
+        lid = str(spec["logic_id"])
+        if lid in existing:
+            continue
+        path = d / f"{lid}.yaml"
+        path.write_text(combo_yaml_text(spec), encoding="utf-8")
+        written.append(lid)
+    return written

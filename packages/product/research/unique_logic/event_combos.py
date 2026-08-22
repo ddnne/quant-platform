@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 from research.daily_path_eval import held_book_daily_mtm, panel_index
-from research.unique_logic.constants import CF_NEW_THESIS_IDS
+from research.unique_logic.constants import CF_NEW_THESIS_IDS, sparse_15name_reason
 from research.unique_logic import event, event_filters, event_sides
 
 COMBO_LOGIC_IDS: frozenset[str] = frozenset(CF_NEW_THESIS_IDS)
@@ -918,17 +918,230 @@ _SPECS: tuple[dict[str, Any], ...] = (
         "side": "orig",
         "kind": "surprise_xs",
     },
+    {
+        "logic_id": "event_skip_tuesday",
+        "family_id": "event_calendar_gate",
+        "thesis": "Skip Tuesday PEAD entries (post-Monday continuation dump).",
+        "gates": ("skip_tuesday",),
+        "side": "orig",
+        "kind": "event",
+    },
+    {
+        "logic_id": "event_skip_wednesday",
+        "family_id": "event_calendar_gate",
+        "thesis": "Skip Wednesday PEAD entries (mid-week liquidity hole).",
+        "gates": ("skip_wednesday",),
+        "side": "orig",
+        "kind": "event",
+    },
+    {
+        "logic_id": "event_not_last_week",
+        "family_id": "event_calendar_gate",
+        "thesis": "PEAD only before calendar day 24 (avoid month-end window dressing).",
+        "gates": ("not_last_week",),
+        "side": "orig",
+        "kind": "event",
+    },
+    {
+        "logic_id": "event_month_start7",
+        "family_id": "event_calendar_gate",
+        "thesis": "PEAD only in the first seven calendar days.",
+        "gates": ("month_start7",),
+        "side": "orig",
+        "kind": "event",
+    },
+    {
+        "logic_id": "event_not_first_week",
+        "family_id": "event_calendar_gate",
+        "thesis": "PEAD skipping the first seven calendar days (post month-start).",
+        "gates": ("not_first_week",),
+        "side": "orig",
+        "kind": "event",
+    },
+    {
+        "logic_id": "event_afterclose_skip_friday",
+        "family_id": "afterclose_event_timing",
+        "thesis": "After-close PEAD skipping Friday entries.",
+        "gates": ("afterclose", "friday_skip"),
+        "side": "orig",
+        "kind": "event",
+    },
+    {
+        "logic_id": "event_easing_skip_tuesday",
+        "family_id": "event_calendar_gate",
+        "thesis": "PEAD when overnight eased, skipping Tuesdays.",
+        "gates": ("overnight_easing", "skip_tuesday"),
+        "side": "orig",
+        "kind": "event",
+    },
+    {
+        "logic_id": "event_uncrowded_skip_friday",
+        "family_id": "event_margin_crowd_combo",
+        "thesis": "Uncrowded PEAD skipping Friday entries.",
+        "gates": ("uncrowded_margin", "friday_skip"),
+        "side": "orig",
+        "kind": "event",
+    },
+    {
+        "logic_id": "event_tight_skip_monday",
+        "family_id": "event_funding_combo",
+        "thesis": "PEAD when overnight is tight versus PIT median, skipping Mondays.",
+        "gates": ("tight_funding", "skip_monday"),
+        "side": "orig",
+        "kind": "event",
+    },
+    {
+        "logic_id": "event_cluster_skip_monday",
+        "family_id": "disclosure_cluster_gate",
+        "thesis": "Cluster-day PEAD skipping Monday entries.",
+        "gates": ("cluster", "skip_monday"),
+        "side": "orig",
+        "kind": "event",
+    },
+    {
+        "logic_id": "event_easy_skip_tuesday",
+        "family_id": "event_funding_combo",
+        "thesis": "Easy-overnight PEAD skipping Tuesdays.",
+        "gates": ("easy_funding", "skip_tuesday"),
+        "side": "orig",
+        "kind": "event",
+    },
+    {
+        "logic_id": "event_afterclose_not_last_week",
+        "family_id": "afterclose_event_timing",
+        "thesis": "After-close PEAD before calendar day 24.",
+        "gates": ("afterclose", "not_last_week"),
+        "side": "orig",
+        "kind": "event",
+    },
+    {
+        "logic_id": "surprise_xs_skip_tuesday",
+        "family_id": "surprise_xs_rank",
+        "thesis": "Surprise CS rank skipping Tuesday entries.",
+        "gates": ("skip_tuesday",),
+        "side": "orig",
+        "kind": "surprise_xs",
+    },
+    {
+        "logic_id": "surprise_xs_not_last_week",
+        "family_id": "surprise_xs_rank",
+        "thesis": "Surprise CS rank before calendar day 24.",
+        "gates": ("not_last_week",),
+        "side": "orig",
+        "kind": "surprise_xs",
+    },
+    {
+        "logic_id": "surprise_xs_month_start7",
+        "family_id": "surprise_xs_rank",
+        "thesis": "Surprise CS rank in the first seven calendar days.",
+        "gates": ("month_start7",),
+        "side": "orig",
+        "kind": "surprise_xs",
+    },
+    {
+        "logic_id": "surprise_xs_not_first_week",
+        "family_id": "surprise_xs_rank",
+        "thesis": "Surprise CS rank skipping the first seven calendar days.",
+        "gates": ("not_first_week",),
+        "side": "orig",
+        "kind": "surprise_xs",
+    },
+    {
+        "logic_id": "surprise_xs_easing_skip_friday",
+        "family_id": "surprise_xs_rank",
+        "thesis": "Surprise CS rank on overnight easing, skipping Fridays.",
+        "gates": ("overnight_easing", "friday_skip"),
+        "side": "orig",
+        "kind": "surprise_xs",
+    },
+    {
+        "logic_id": "surprise_xs_afterclose_skip_friday",
+        "family_id": "surprise_xs_rank",
+        "thesis": "After-close surprise CS rank skipping Fridays.",
+        "gates": ("afterclose", "friday_skip"),
+        "side": "orig",
+        "kind": "surprise_xs",
+    },
+    {
+        "logic_id": "cs_skip_tuesday",
+        "family_id": "event_calendar_gate",
+        "thesis": "CS mom skipping Tuesdays.",
+        "cs_gate": "skip_tuesday",
+        "kind": "cs",
+    },
+    {
+        "logic_id": "cs_skip_wednesday",
+        "family_id": "event_calendar_gate",
+        "thesis": "CS mom skipping Wednesdays.",
+        "cs_gate": "skip_wednesday",
+        "kind": "cs",
+    },
+    {
+        "logic_id": "cs_not_last_week",
+        "family_id": "event_calendar_gate",
+        "thesis": "CS mom before calendar day 24.",
+        "cs_gate": "not_last_week",
+        "kind": "cs",
+    },
+    {
+        "logic_id": "cs_month_start7",
+        "family_id": "event_calendar_gate",
+        "thesis": "CS mom in the first seven calendar days.",
+        "cs_gate": "month_start7",
+        "kind": "cs",
+    },
+    {
+        "logic_id": "cs_not_first_week",
+        "family_id": "event_calendar_gate",
+        "thesis": "CS mom skipping the first seven calendar days.",
+        "cs_gate": "not_first_week",
+        "kind": "cs",
+    },
+    {
+        "logic_id": "cs_easy_skip_friday",
+        "family_id": "overnight_level_cs",
+        "thesis": "CS mom when overnight is easy versus PIT median, skipping Fridays.",
+        "cs_gate": "overnight_easy_skip_friday",
+        "kind": "cs",
+    },
+    {
+        "logic_id": "flow_disagree_skip_friday",
+        "family_id": "xs_margin_delta",
+        "thesis": (
+            "Fade CS when margin crowded, skipping Fridays. "
+            "Crowd+weekday is empty on 15-name shards (data_requirement_unmet)."
+        ),
+        "cs_gate": "margin_crowd_skip_friday_invert",
+        "kind": "cs",
+        "main_pool": False,
+    },
+    {
+        "logic_id": "overnight_down_skip_tuesday_cs",
+        "family_id": "overnight_level_cs",
+        "thesis": "CS mom on overnight decline, skipping Tuesdays.",
+        "cs_gate": "overnight_down_skip_tuesday",
+        "kind": "cs",
+    },
 )
 
-NEW_COMBO_LOGIC: tuple[dict[str, Any], ...] = tuple(
-    {
-        **s,
+def _combo_row(s: Mapping[str, Any]) -> dict[str, Any]:
+    sparse = sparse_15name_reason(
+        logic_id=str(s.get("logic_id") or ""),
+        gates=[str(g) for g in (s.get("gates") or ())],
+        cs_gate=str(s.get("cs_gate") or ""),
+    )
+    main_pool = False if sparse else bool(s.get("main_pool", True))
+    return {
+        **dict(s),
         "new_unique_logic": True,
         "catalog": True,
         "headline": False,
         "promote_as_main": False,
         "go": False,
         "generation_enabled": False,
+        "main_pool": main_pool,
+        "data_requirement_unmet": bool(sparse),
+        "sparse_15name_reason": sparse,
         "params": {
             "post_hold_days": 5,
             "hold_days": 10,
@@ -953,8 +1166,9 @@ NEW_COMBO_LOGIC: tuple[dict[str, Any], ...] = tuple(
         "position_rule": "PIT gates; missing sidecar → skip (no ffill / no invent)",
         "evaluator": "research.unique_logic.event_combos.evaluate_combo_daily_mtm",
     }
-    for s in _SPECS
-)
+
+
+NEW_COMBO_LOGIC: tuple[dict[str, Any], ...] = tuple(_combo_row(s) for s in _SPECS)
 
 
 def spec_by_id(logic_id: str) -> dict[str, Any] | None:
@@ -1178,6 +1392,21 @@ def _eval_event_combo(
             elif g == "friday_only":
                 if _weekday(str(ev["entry_date"])) != 4:
                     ok = False
+            elif g == "skip_tuesday":
+                if _weekday(str(ev["entry_date"])) == 1:
+                    ok = False
+            elif g == "skip_wednesday":
+                if _weekday(str(ev["entry_date"])) == 2:
+                    ok = False
+            elif g == "not_last_week":
+                if str(ev["entry_date"])[8:10] >= "24":
+                    ok = False
+            elif g == "month_start7":
+                if str(ev["entry_date"])[8:10] > "07":
+                    ok = False
+            elif g == "not_first_week":
+                if str(ev["entry_date"])[8:10] <= "07":
+                    ok = False
             elif g == "midmonth":
                 dd = str(ev["entry_date"])[8:10]
                 if dd < "10" or dd > "20":
@@ -1336,6 +1565,34 @@ def _eval_cs_combo(
             )
         elif gate == "skip_monday":
             keep = _weekday(d) != 0
+        elif gate == "skip_tuesday":
+            keep = _weekday(d) != 1
+        elif gate == "skip_wednesday":
+            keep = _weekday(d) != 2
+        elif gate == "not_last_week":
+            keep = d[8:10] < "24"
+        elif gate == "month_start7":
+            keep = d[8:10] <= "07"
+        elif gate == "not_first_week":
+            keep = d[8:10] > "07"
+        elif gate == "overnight_easy_skip_friday":
+            med_on = event.pit_median_on_dates(overnight, [d], min_hist=20).get(d) if overnight else None
+            keep = (
+                _weekday(d) != 4
+                and on is not None
+                and med_on is not None
+                and float(on) < float(med_on)
+            )
+        elif gate == "margin_crowd_skip_friday_invert":
+            keep = _weekday(d) != 4 and _universe_margin_delta(margin_by_code, d) > 0
+            loc_invert = True
+        elif gate == "overnight_down_skip_tuesday":
+            keep = (
+                _weekday(d) != 1
+                and prev_on is not None
+                and on is not None
+                and float(on) < float(prev_on)
+            )
         elif gate == "tue_thu":
             keep = _weekday(d) in {1, 2, 3}
         elif gate == "overnight_down":

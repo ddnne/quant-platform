@@ -1,0 +1,29 @@
+logic_id: flow_disagree_skip_friday
+family_id: xs_margin_delta
+axis: mixed
+headline: false
+generation_enabled: false
+promote_as_main: false
+go: false
+main_pool: false
+thesis: >
+  Fade CS when margin crowded, skipping Fridays. Crowd+weekday is empty on 15-name shards (data_requirement_unmet).
+signal_definition: >
+  Fade CS when margin crowded, skipping Fridays. Crowd+weekday is empty on 15-name shards (data_requirement_unmet).
+datasets:
+  - equities_bars_daily
+  - fins_summary
+  - jsda_tokyo_repo_rates
+  - markets_calendar
+params:
+  post_hold_days: 5
+  hold_days: 10
+  momentum_n: 5
+  min_hist: 20
+  mode: flow_disagree_skip_friday
+  side: orig
+  cs_gate: margin_crowd_skip_friday_invert
+  entry_shift: 0
+  hold_tail_days: 0
+evaluator: research.unique_logic.event_combos.evaluate_combo_daily_mtm
+notes: combo thesis; data_requirement_unmet on 15-name shards; CF daily_path is SoT

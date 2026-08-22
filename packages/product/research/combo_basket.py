@@ -25,16 +25,24 @@ DEFAULT_CANDIDATE_BASKET: tuple[str, ...] = (
     "overnight_down_cs_follow",
 )
 
-# Mechanical 2–5 member baskets. No correlation optimization.
-MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
-    {
-        "basket_id": "basket_head4",
-        "rule": "known_candidate_head",
-        "members": DEFAULT_CANDIDATE_BASKET,
-    },
+# Lessons from eval-cf-dp-baskets8-20260822a/summary_baskets.json
+# (descriptive, never a pass):
+# - event_family_only: lowest union occupancy, 5/1 window signs (best of the 8)
+# - known_candidate_head: sleeve stays in candidate band; union can look always_on
+#   — candidate uses sleeve mean, do not switch to union
+# - family_spread: mixed signs but diversified
+# - low_occupancy_band: 1/5, systematically weak — retired
+# No correlation optimization. No promote / GO.
+RETIRED_BASKET_RULES: frozenset[str] = frozenset({"low_occupancy_band"})
+DEPRECATED_MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
     {
         "basket_id": "basket_sparse4",
         "rule": "low_occupancy_band",
+        "deprecated": True,
+        "deprecated_reason": (
+            "eval-cf-dp-baskets8-20260822a: 1 pos / 5 neg; "
+            "unconditional low-occupancy mix is systematically weak"
+        ),
         "members": (
             "flow_disagree_midmonth",
             "event_friday_easing",
@@ -42,29 +50,18 @@ MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
             "fy_end_event_fade",
         ),
     },
+)
+MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
     {
-        "basket_id": "basket_family4",
-        "rule": "family_spread",
-        "members": (
-            "event_tue_thu_easing",
-            "surprise_xs_easing_change",
-            "cs_easing_midmonth",
-            "overnight_down_skip_monday_cs",
-        ),
-    },
-    {
-        "basket_id": "basket_midocc4",
-        "rule": "mid_occupancy_band",
-        "members": (
-            "cs_tue_thu_down",
-            "rate_up_tue_thu_cs",
-            "surprise_xs_afterclose_easing",
-            "cs_skip_monday",
-        ),
+        "basket_id": "basket_head4",
+        "rule": "known_candidate_head",
+        "primary": True,
+        "members": DEFAULT_CANDIDATE_BASKET,
     },
     {
         "basket_id": "basket_event4",
         "rule": "event_family_only",
+        "primary": True,
         "members": (
             "event_easing_uncrowded",
             "event_friday_skip",
@@ -73,18 +70,51 @@ MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
         ),
     },
     {
-        "basket_id": "basket_cs4",
-        "rule": "cs_family_only",
+        "basket_id": "basket_family4",
+        "rule": "family_spread",
+        "primary": True,
         "members": (
-            "cs_skip_monday",
+            "event_tue_thu_easing",
+            "surprise_xs_easing_change",
             "cs_easing_midmonth",
-            "overnight_down_cs_follow",
+            "overnight_down_skip_monday_cs",
+        ),
+    },
+    {
+        "basket_id": "basket_event_cal4",
+        "rule": "event_calendar_only",
+        "primary": True,
+        "members": (
+            "event_skip_monday",
+            "event_friday_skip",
+            "event_tue_thu_only",
+            "event_first_half_month",
+        ),
+    },
+    {
+        "basket_id": "basket_midocc4",
+        "rule": "mid_occupancy_band",
+        "primary": False,
+        "members": (
             "cs_tue_thu_down",
+            "rate_up_tue_thu_cs",
+            "surprise_xs_afterclose_easing",
+            "cs_skip_monday",
+        ),
+    },
+    {
+        "basket_id": "basket_pair_easing",
+        "rule": "two_member_easing",
+        "primary": False,
+        "members": (
+            "event_easing_midmonth",
+            "cs_easing_midmonth",
         ),
     },
     {
         "basket_id": "basket_surprise3",
         "rule": "surprise_xs_only",
+        "primary": False,
         "members": (
             "surprise_xs_easing_change",
             "surprise_xs_afterclose_easing",
@@ -92,11 +122,14 @@ MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
         ),
     },
     {
-        "basket_id": "basket_pair_easing",
-        "rule": "two_member_easing",
+        "basket_id": "basket_cs4",
+        "rule": "cs_family_only",
+        "primary": False,
         "members": (
-            "event_easing_midmonth",
+            "cs_skip_monday",
             "cs_easing_midmonth",
+            "overnight_down_cs_follow",
+            "cs_tue_thu_down",
         ),
     },
 )
@@ -342,18 +375,28 @@ def occupancy_in_candidate_band(occ: float | None) -> bool:
     return _occupancy_ok(occ)
 
 
-def mechanical_basket_defs() -> list[dict[str, Any]]:
+def mechanical_basket_defs(*, include_deprecated: bool = False) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
-    for raw in MECHANICAL_BASKETS:
+    src: tuple[dict[str, object], ...] = MECHANICAL_BASKETS
+    if include_deprecated:
+        src = MECHANICAL_BASKETS + DEPRECATED_MECHANICAL_BASKETS
+    for raw in src:
+        rule = str(raw.get("rule") or "mechanical")
+        deprecated = bool(raw.get("deprecated")) or rule in RETIRED_BASKET_RULES
+        if deprecated and not include_deprecated:
+            continue
         members = tuple(str(x) for x in (raw.get("members") or ()))
         reasons = validate_basket_members(members)
         out.append(
             {
                 "basket_id": str(raw["basket_id"]),
-                "rule": str(raw.get("rule") or "mechanical"),
+                "rule": rule,
+                "primary": bool(raw.get("primary")) and not deprecated,
+                "deprecated": deprecated,
+                "deprecated_reason": raw.get("deprecated_reason"),
                 "members": list(members),
                 "weights": equal_weights(len(members)),
-                "valid": not reasons,
+                "valid": not reasons and not deprecated,
                 "reject": reasons,
                 "promote_as_main": False,
                 "go": False,
@@ -422,6 +465,7 @@ def summarize_basket_trends(
             {
                 "basket_id": bid,
                 "rule": spec.get("rule") or "mechanical",
+                "primary": bool(spec.get("primary")),
                 "members": list(spec.get("members") or group[0].get("members") or []),
                 "n_windows": len(group),
                 "mean_member_occupancy": m_occ,
@@ -452,9 +496,12 @@ def summarize_basket_trends(
         "go": False,
         "candidate_eval_sot": PROTOCOL_DAILY_PATH,
         "baskets": rows,
+        "retired_rules": sorted(RETIRED_BASKET_RULES),
         "notes": (
             "Mechanical equal-weight basket trends for later fund design. "
-            "t/Sharpe/DD are descriptive only and never a promote/GO."
+            "t/Sharpe/DD are descriptive only and never a promote/GO. "
+            "low_occupancy_band retired after baskets8 (systematically weak). "
+            "Candidate occupancy is sleeve mean, not union."
         ),
     }
 

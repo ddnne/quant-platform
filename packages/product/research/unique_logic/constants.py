@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Sequence
+
 KNOWN_WEAK_THESIS: frozenset[str] = frozenset(
     {
         "rate_abs_level_xs",
@@ -138,6 +140,24 @@ CF_NEW_EVENT_THESIS_IDS: frozenset[str] = frozenset(
         "surprise_xs_afterclose_skip_monday",
         "surprise_xs_steep_skip_monday",
         "surprise_xs_uncrowded_skip_monday",
+        "event_skip_tuesday",
+        "event_skip_wednesday",
+        "event_not_last_week",
+        "event_month_start7",
+        "event_not_first_week",
+        "event_afterclose_skip_friday",
+        "event_easing_skip_tuesday",
+        "event_uncrowded_skip_friday",
+        "event_tight_skip_monday",
+        "event_cluster_skip_monday",
+        "event_easy_skip_tuesday",
+        "event_afterclose_not_last_week",
+        "surprise_xs_skip_tuesday",
+        "surprise_xs_not_last_week",
+        "surprise_xs_month_start7",
+        "surprise_xs_not_first_week",
+        "surprise_xs_easing_skip_friday",
+        "surprise_xs_afterclose_skip_friday",
     }
 )
 CF_NEW_CS_THESIS_IDS: frozenset[str] = frozenset(
@@ -194,6 +214,14 @@ CF_NEW_CS_THESIS_IDS: frozenset[str] = frozenset(
         "cs_not_friday_down",
         "cs_midmonth_easy",
         "cs_steep_friday",
+        "cs_skip_tuesday",
+        "cs_skip_wednesday",
+        "cs_not_last_week",
+        "cs_month_start7",
+        "cs_not_first_week",
+        "cs_easy_skip_friday",
+        "flow_disagree_skip_friday",
+        "overnight_down_skip_tuesday_cs",
     }
 )
 CF_NEW_THESIS_IDS: frozenset[str] = CF_NEW_EVENT_THESIS_IDS | CF_NEW_CS_THESIS_IDS
@@ -264,8 +292,40 @@ SPARSE_ON_15NAME_SHARD: frozenset[str] = frozenset(
         "flow_disagree_tue_thu",
         "event_midmonth_steep",
         "cs_steep_friday",
+        "flow_disagree_skip_friday",
     }
 )
+# Gate combinations that empty a 15-name shard. New specs matching these
+# are parked at generation (do not wait for a near_empty eval).
+SPARSE_GATE_COMBOS: tuple[tuple[frozenset[str], str], ...] = (
+    (frozenset({"fy_results", "overnight_easing"}), "may_plus_easing"),
+    (frozenset({"tue_thu", "crowded_margin"}), "crowd_plus_weekday"),
+    (frozenset({"margin_crowd_tue_thu_invert"}), "crowd_plus_weekday"),
+    (frozenset({"midmonth", "steep_curve"}), "midmonth_plus_steep"),
+    (frozenset({"friday_only", "steep_curve"}), "friday_plus_steep"),
+    (frozenset({"friday_curve_steep"}), "friday_plus_steep"),
+    (frozenset({"margin_crowd_skip_friday_invert"}), "crowd_plus_skip_weekday"),
+)
+
+
+def sparse_15name_reason(
+    *,
+    logic_id: str = "",
+    gates: Sequence[str] | None = None,
+    cs_gate: str | None = None,
+) -> str | None:
+    """Why a spec is empty on 15-name shards, or None if not flagged."""
+    lid = str(logic_id or "")
+    if lid in SPARSE_ON_15NAME_SHARD:
+        return "listed_sparse_on_15name_shard"
+    names = {str(g) for g in (gates or ()) if g}
+    cg = str(cs_gate or "").strip()
+    if cg and cg not in {"None", "none"}:
+        names.add(cg)
+    for combo, reason in SPARSE_GATE_COMBOS:
+        if combo <= names:
+            return reason
+    return None
 # Candidate pool: path ok, not always-on, not empty. Simple gated theses stay
 # even with modest t/Sharpe — combination/funds may still use them.
 CANDIDATE_POLICY: dict[str, object] = {

@@ -520,6 +520,7 @@ def summarize_daily_path_cells(
         )
     tags = Counter(r["tag"] for r in logics)
     fams = Counter(r["family"] for r in logics)
+    cand_fams = Counter(r["family"] for r in logics if r.get("candidate"))
     return {
         "version": "eval-family-summary/v1",
         "job_id": job_id,
@@ -536,6 +537,7 @@ def summarize_daily_path_cells(
         "n_always_on": sum(1 for r in logics if "always_on" in r["flags"]),
         "n_complete_cells": sum(1 for c in cells if is_daily_path_complete_cell(c)),
         "n_candidate_logics": sum(1 for r in logics if r.get("candidate")),
+        "candidate_family_counts": dict(cand_fams),
         "n_near_empty": sum(1 for r in logics if "near_empty" in r["flags"]),
         "n_data_requirement_unmet": sum(
             1 for r in logics if "data_requirement_unmet" in r["flags"]

@@ -379,6 +379,14 @@ export const CF_UNIQUE_CS_LOGIC_IDS = [
   "cs_not_friday_down",
   "cs_midmonth_easy",
   "cs_steep_friday",
+  "cs_skip_tuesday",
+  "cs_skip_wednesday",
+  "cs_not_last_week",
+  "cs_month_start7",
+  "cs_not_first_week",
+  "cs_easy_skip_friday",
+  "flow_disagree_skip_friday",
+  "overnight_down_skip_tuesday_cs",
 ] as const;
 
 function usesCrossSection(logic: LogicSpec): boolean {
@@ -479,6 +487,24 @@ export const CF_NEW_EVENT_THESIS_IDS = [
   "surprise_xs_afterclose_skip_monday",
   "surprise_xs_steep_skip_monday",
   "surprise_xs_uncrowded_skip_monday",
+  "event_skip_tuesday",
+  "event_skip_wednesday",
+  "event_not_last_week",
+  "event_month_start7",
+  "event_not_first_week",
+  "event_afterclose_skip_friday",
+  "event_easing_skip_tuesday",
+  "event_uncrowded_skip_friday",
+  "event_tight_skip_monday",
+  "event_cluster_skip_monday",
+  "event_easy_skip_tuesday",
+  "event_afterclose_not_last_week",
+  "surprise_xs_skip_tuesday",
+  "surprise_xs_not_last_week",
+  "surprise_xs_month_start7",
+  "surprise_xs_not_first_week",
+  "surprise_xs_easing_skip_friday",
+  "surprise_xs_afterclose_skip_friday",
 ] as const;
 
 export const CF_NEW_CS_THESIS_IDS = [
@@ -534,6 +560,14 @@ export const CF_NEW_CS_THESIS_IDS = [
   "cs_not_friday_down",
   "cs_midmonth_easy",
   "cs_steep_friday",
+  "cs_skip_tuesday",
+  "cs_skip_wednesday",
+  "cs_not_last_week",
+  "cs_month_start7",
+  "cs_not_first_week",
+  "cs_easy_skip_friday",
+  "flow_disagree_skip_friday",
+  "overnight_down_skip_tuesday_cs",
 ] as const;
 
 export const CF_EVENT_LOGIC_IDS = [
@@ -575,6 +609,172 @@ function afterClose(discTime: string | null | undefined): boolean {
   if (t.length < 4) return false;
   const hh = Number(t.slice(0, 2));
   return Number.isFinite(hh) && hh >= 15;
+}
+
+const COMBO_EVENT_GATES = new Set([
+  "skip_monday",
+  "skip_tuesday",
+  "skip_wednesday",
+  "friday_skip",
+  "friday_only",
+  "tue_thu",
+  "not_last_week",
+  "month_start7",
+  "not_first_week",
+  "first_half_month",
+  "midmonth",
+  "afterclose",
+  "overnight_easing",
+  "easy_funding",
+  "tight_funding",
+  "steep_curve",
+  "uncrowded_margin",
+  "cluster",
+]);
+
+function comboGatesOf(params: Record<string, unknown>): string[] {
+  const g = params.gates;
+  if (Array.isArray(g)) return g.map((x) => String(x)).filter(Boolean);
+  return [];
+}
+
+function comboGatesImplemented(gates: string[]): boolean {
+  return gates.length > 0 && gates.every((g) => COMBO_EVENT_GATES.has(g));
+}
+
+function overnightEased(
+  overnight: Record<string, number>,
+  d: string,
+): boolean {
+  const prevs = Object.keys(overnight)
+    .filter((x) => x < d)
+    .sort();
+  const on = overnight[d];
+  if (!prevs.length || on === undefined) return false;
+  return on < overnight[prevs[prevs.length - 1]];
+}
+
+export function comboEventGateOk(
+  gate: string,
+  ev: {
+    code: string;
+    disc: string;
+    entryDate: string;
+    entryIdx: number;
+    sign: number;
+    abs: number;
+    after: boolean;
+  },
+  overnight: Record<string, number>,
+  spread: Record<string, number>,
+  minHist: number,
+  panel: PeriodPanel,
+): boolean {
+  const d = ev.entryDate;
+  const wd = weekdayMon0(d);
+  const dd = d.slice(8, 10);
+  if (gate === "skip_monday") return wd !== 0;
+  if (gate === "skip_tuesday") return wd !== 1;
+  if (gate === "skip_wednesday") return wd !== 2;
+  if (gate === "friday_skip") return wd !== 4;
+  if (gate === "friday_only") return wd === 4;
+  if (gate === "tue_thu") return [1, 2, 3].includes(wd);
+  if (gate === "not_last_week") return dd < "24";
+  if (gate === "month_start7") return dd <= "07";
+  if (gate === "not_first_week") return dd > "07";
+  if (gate === "first_half_month") return dd <= "15";
+  if (gate === "midmonth") return dd >= "10" && dd <= "20";
+  if (gate === "afterclose") return ev.after;
+  if (gate === "overnight_easing") return overnightEased(overnight, d);
+  if (gate === "easy_funding") {
+    const on = overnight[d];
+    const med = pitMedian(overnight, d, minHist);
+    return on !== undefined && med !== null && on < med;
+  }
+  if (gate === "tight_funding") {
+    const on = overnight[d];
+    const med = pitMedian(overnight, d, minHist);
+    return on !== undefined && med !== null && on >= med;
+  }
+  if (gate === "steep_curve") {
+    const sp = spread[d];
+    return sp !== undefined && sp > 0;
+  }
+  if (gate === "uncrowded_margin") {
+    const levels = panel.flow_regime?.margin_level_by_code?.[ev.code] || {};
+    const prior = Object.keys(levels)
+      .filter((x) => x < d)
+      .sort();
+    if (!prior.length) return false;
+    const lastD = prior[prior.length - 1];
+    const age =
+      (Date.parse(d + "T00:00:00Z") - Date.parse(lastD + "T00:00:00Z")) /
+      86400000;
+    const med = pitMedian(levels, d, minHist);
+    if (!Number.isFinite(age) || age > 14 || med === null) return false;
+    return (levels[lastD] as number) < med;
+  }
+  if (gate === "cluster") {
+    const events = panel.fund_regime?.events_by_code || {};
+    const discs: string[] = [];
+    for (const rows of Object.values(events)) {
+      for (const row of rows || []) {
+        const x = String(row.disc_date || "").slice(0, 10);
+        if (x) discs.push(x);
+      }
+    }
+    const nDisc = discs.filter(
+      (x) => x < ev.disc && x >= addDays(ev.disc, -5),
+    ).length;
+    const hist: Record<string, number> = {};
+    for (const dd0 of discs) {
+      if (dd0 >= ev.disc) continue;
+      hist[dd0] = discs.filter(
+        (x) => x < dd0 && x >= addDays(dd0, -5),
+      ).length;
+    }
+    const med = pitMedian(hist, ev.disc, 10);
+    return med !== null && nDisc >= med;
+  }
+  // Unknown gate fails closed (do not silently always-on).
+  return false;
+}
+
+export function comboCsGateOk(
+  gate: string,
+  d: string,
+  overnight: Record<string, number>,
+  spread: Record<string, number>,
+  prev: string | null,
+  medOn: number | null,
+  marginChg: number | null,
+): { keep: boolean; invert: boolean } {
+  const wd = weekdayMon0(d);
+  const dd = d.slice(8, 10);
+  const on = overnight[d];
+  let invert = gate.includes("invert");
+  let keep = false;
+  if (gate === "skip_tuesday") keep = wd !== 1;
+  else if (gate === "skip_wednesday") keep = wd !== 2;
+  else if (gate === "not_last_week") keep = dd < "24";
+  else if (gate === "month_start7") keep = dd <= "07";
+  else if (gate === "not_first_week") keep = dd > "07";
+  else if (gate === "overnight_easy_skip_friday") {
+    keep = wd !== 4 && on !== undefined && medOn !== null && on < medOn;
+  } else if (gate === "margin_crowd_skip_friday_invert") {
+    keep = wd !== 4 && marginChg !== null && marginChg > 0;
+    invert = true;
+  } else if (gate === "overnight_down_skip_tuesday") {
+    keep =
+      wd !== 1 &&
+      prev !== null &&
+      finite(overnight[prev]) &&
+      on !== undefined &&
+      on < overnight[prev];
+  } else {
+    return { keep: false, invert: false };
+  }
+  return { keep, invert };
 }
 
 /** Monday=0 … Sunday=6 (Python datetime.weekday). */
@@ -1091,6 +1291,13 @@ function eventHeld(
         if (dd < "10" || dd > "20") ok = false;
         else if (sp === undefined || sp <= 0) ok = false;
       }
+      const comboGates = comboGatesOf(params as Record<string, unknown>);
+      if (comboGatesImplemented(comboGates)) {
+        ok = comboGates.every((g) =>
+          comboEventGateOk(g, ev, overnight, spread, minHist, panel),
+        );
+        if (String(params.side || "orig") === "flip") sgn = -ev.sign;
+      }
       if (!ok) continue;
       let i0 = ev.entryIdx;
       if (lid === "event_skip_announce_day") i0 += 1;
@@ -1137,6 +1344,7 @@ function eventHeld(
   }
 
   if (
+    lid.startsWith("surprise_xs_") ||
     lid === "surprise_xs_rank_hold" ||
     lid === "surprise_xs_rank_flip" ||
     lid === "surprise_xs_rank_adaptive" ||
@@ -1159,10 +1367,18 @@ function eventHeld(
   ) {
     const invert = lid.includes("flip");
     const dates = unionDates(panel.bars);
+    const comboGates = comboGatesOf(params as Record<string, unknown>);
     const surpriseByDate: Record<string, Record<string, number>> = {};
     for (const pack of Object.values(perCode)) {
       for (const ev of pack.entries) {
-        if (
+        if (comboGatesImplemented(comboGates)) {
+          if (
+            !comboGates.every((g) =>
+              comboEventGateOk(g, ev, overnight, spread, minHist, panel),
+            )
+          )
+            continue;
+        } else if (
           lid === "surprise_xs_rank_easy_funding"
         ) {
           const on = overnight[ev.entryDate];
@@ -1272,6 +1488,7 @@ function eventHeld(
     }
     const xsHeld: Record<string, Record<string, number>> = {};
     const gatedSparse =
+      comboGatesImplemented(comboGates) ||
       lid === "surprise_xs_afterclose" ||
       lid === "surprise_xs_tue_thu" ||
       lid === "surprise_xs_month_start" ||
@@ -1387,6 +1604,7 @@ function gatedCsHeld(
   panel: PeriodPanel,
 ): Record<string, Record<string, number>> {
   const lid = String(logic.logic_id || "");
+  const params = logic.params || {};
   if (lid === "xs_margin_delta_rank") {
     return xsMarginDeltaHeld(panel);
   }
@@ -1412,7 +1630,8 @@ function gatedCsHeld(
     lid === "flow_disagree_midmonth" ||
     lid === "cs_midmonth_tight_fade" ||
     lid === "flow_disagree_tue_thu" ||
-    lid === "flow_disagree_skip_monday";
+    lid === "flow_disagree_skip_monday" ||
+    lid === "flow_disagree_skip_friday";
   const base = csHeld(panel.bars, 5, 10, 0.3, 0.3, invert);
   const overnight =
     panel.repo_rate_regime?.rates_by_date ||
@@ -1741,6 +1960,22 @@ function gatedCsHeld(
         const r3 = r3By[d];
         const med = pitMedian(r3By, d, 20);
         keep = finite(r3) && med !== null && r3 >= med;
+      } else {
+        const csGate = String(params.cs_gate || "");
+        if (csGate && csGate !== "None") {
+          const chg = panel.flow_regime?.margin_change_by_code?.[code]?.[d];
+          const g = comboCsGateOk(
+            csGate,
+            d,
+            overnight,
+            spread,
+            prev,
+            medOn,
+            finite(chg) ? (chg as number) : null,
+          );
+          keep = g.keep;
+          if (g.invert) signed = -v;
+        }
       }
       if (keep) out[code][d] = signed;
     }
