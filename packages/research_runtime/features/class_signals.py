@@ -81,15 +81,13 @@ OPT225_SKEW_FEATURE_ID: str = "opt225_skew_95put"
 OPT225_CM_TERM_FEATURE_ID: str = "opt225_cm_term_near_next"
 OPT225_BASEVOL_DELTA_FEATURE_ID: str = "opt225_basevol_delta"
 
-# Tokyo repo tenor pins for curve-shape proxy (no invent; only observed tenors).
-# Definition: spread = rate(long_tenor) − rate(short_tenor) on same as_of_date.
-# Available JSDA tenors include overnight T+0/T+1, 1W–3W, 1M/3M/6M/1Y.
+# Curve spread = observed long tenor − short tenor (no invent).
 REPO_CURVE_SHORT_TENOR: str = "overnight/翌日物/T+0"
 REPO_CURVE_LONG_TENOR: str = "3M/T+1"
 DEFAULT_CURVE_STEEP_THRESHOLD: float = 0.0
 DEFAULT_CURVE_INVERT_THRESHOLD: float = 0.0
 
-# Annualized sample stdev. No cash Nikkei in indices_bars_daily; NK225F front prefer, TOPIX fallback.
+# Annualized sample stdev. No cash Nikkei; NK225F front prefer, TOPIX fallback.
 DEFAULT_NKY_VOL_SHORT_N: int = 10
 DEFAULT_NKY_VOL_LONG_N: int = 60
 DEFAULT_NKY_VOL_HIGH_THRESHOLD: float = 0.20  # 20% ann. RV → high
@@ -106,42 +104,26 @@ DEFAULT_EVENT_POST_HOLD_DAYS: int = 5
 DEFAULT_FLOW_HOLD_DAYS: int = 5
 DEFAULT_FUND_HOLD_DAYS: int = 20
 DEFAULT_FUND_MOMENTUM_N: int = 20
-# PIT event_post entry: first session close that is knowable after disclosure.
-# "same_day_close_if_pre_close" = trade event-day close only when DiscTime is
-# present and strictly before that day's session close; otherwise next bar.
-# Never invent DiscTime; missing time → next trading session (conservative).
+# Same-day close only if DiscTime present and strictly before session close; else next bar. No invent.
 EVENT_POST_ENTRY_MODE: str = "same_day_close_if_pre_close"
-# TSE cash close moved 15:00 → 15:30 JST on 2024-11-05 (dataset / exchange SoT).
+# TSE cash close 15:00 → 15:30 JST on 2024-11-05.
 SESSION_CLOSE_CHANGE_DATE: str = "2024-11-05"
-# Candidate bar helper: residual after costs must clear this for "economic"
-# meaningfulness discussion (research only).
-DEFAULT_MIN_ECONOMIC_NET: float = 0.002  # 20bp per scored hold
+DEFAULT_MIN_ECONOMIC_NET: float = 0.002  # 20bp per scored hold (research only)
 
-# multi_day_hold: scored rebalances / code-days. fixed_horizon expect ~1/hold.
-# Floor at half expected for hold=10 → 0.05; use 0.04 research buffer.
+# ~1/hold expected; 0.04 is half of hold=10 with research buffer.
 DEFAULT_MIN_ACTIVATION_RATE_MULTIDAY: float = 0.04
-# event_post: annualized scored events per code (earnings ~4/yr typical).
-# 0.5 = at least half an event / code / year average across multi-year.
-DEFAULT_MIN_EVENTS_PER_CODE_YEAR: float = 0.5
-# event_post panel intensity: scored events / trading days (not code-days).
-DEFAULT_MIN_EVENTS_PER_TRADING_DAY: float = 0.05
-# multi-year: single-year share of sum(max(net,0)) must stay below this.
-DEFAULT_MAX_YEAR_POS_NET_SHARE: float = 0.75
-# research_candidate requires enough independent years (not count of events).
+DEFAULT_MIN_EVENTS_PER_CODE_YEAR: float = 0.5  # annualized scored events / code
+DEFAULT_MIN_EVENTS_PER_TRADING_DAY: float = 0.05  # scored events / trading days
+DEFAULT_MAX_YEAR_POS_NET_SHARE: float = 0.75  # max share of positive net mass
 DEFAULT_MIN_YEARS_RESEARCH_CANDIDATE: int = 4
 DEFAULT_TRADING_DAYS_PER_YEAR: int = 245
 
-# |t| of period mean nets vs 0 (sample std). Below ~1.0 is noise with n≈6.
 DEFAULT_MIN_ABS_T_STAT: float = 1.5
-# Period Sharpe = mean/std of period nets (periods_per_year=1).
 DEFAULT_MIN_SHARPE_PERIOD: float = 0.50
-# Share of periods with net > 0 (yearly sign stability).
 DEFAULT_MIN_PERIOD_WIN_RATE: float = 0.60
-# Absolute positive-net year count.
 DEFAULT_MIN_POSITIVE_PERIODS: int = 4
 
-# Macro regime defaults (research placeholders; disclose when overridden)
-# Repo rates in local JSDA are percent-like (e.g. 0.1 = 0.1%).
+# JSDA repo rates are percent-like (e.g. 0.1 = 0.1%).
 DEFAULT_REPO_HIGH_THRESHOLD: float = 0.05  # level above → high
 DEFAULT_REPO_LOW_THRESHOLD: float = 0.0  # level below → low
 DEFAULT_REPO_CHANGE_EPS: float = 1e-6

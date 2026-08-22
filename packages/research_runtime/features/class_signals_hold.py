@@ -76,26 +76,7 @@ def apply_sticky_hold(
     hold_days: int = DEFAULT_HOLD_DAYS,
     rebalance_mode: str = "fixed_horizon",
 ) -> list[float | None]:
-    """Convert daily entry signs into multi-day held positions.
-
-    Parameters
-    ----------
-    daily_entry_signs:
-        Chronological sequence of entry signs (+1/0/−1/None) — typically
-        ``sign(momentum_n)`` each day.
-    hold_days:
-        Hold horizon in sessions (5 / 10 / 20). Must be >= 1.
-    rebalance_mode:
-        * ``fixed_horizon`` — rebalance every ``hold_days`` sessions only
-          (position constant between rebalance days).
-        * ``min_hold`` — allow rebalance on sign change only after
-          ``hold_days`` sessions held (sticky min-hold).
-
-    Returns
-    -------
-    list of held position signs (same length). None days stay flat/missing
-    until a valid rebalance entry exists.
-    """
+    """Hold daily entry signs: ``fixed_horizon`` every N sessions, or ``min_hold`` after N."""
     h = int(hold_days)
     if h < 1:
         raise ValueError(f"hold_days must be >= 1, got {hold_days!r}")

@@ -69,14 +69,7 @@ def event_post_available_at_from_fields(
     disc_time: Any = None,
     event_time: str | None = None,
 ) -> tuple[str | None, dict[str, Any]]:
-    """Build disclosure availability instant from dataset fields only.
-
-    Source of truth priority (no invented timestamps):
-    1. Full ``event_time`` ISO when present (ingest usually stamps DiscDate+DiscTime)
-    2. ``DiscDate`` + ``DiscTime`` when both present
-    3. ``DiscDate`` alone → date known, **time unknown** (``available_at=None``;
-       caller must use conservative next-session entry — do not invent 00:00/09:00)
-    """
+    """Disclosure availability from dataset fields only. Missing DiscTime → no invent."""
     d = str(disc_date or "")[:10]
     et = str(event_time).strip() if event_time else ""
     if et and "T" in et:
@@ -122,23 +115,7 @@ def event_post_entry_bar_index(
     event_time: str | None = None,
     entry_mode: str = EVENT_POST_ENTRY_MODE,
 ) -> tuple[int | None, str | None, dict[str, Any]]:
-    """Resolve PIT-safe entry bar index for event_post (close-to-close hold).
-
-    Rules
-    -----
-    * Signal becomes available at DiscDate+DiscTime (dataset SoT). No invent.
-    * Position opens at the **first trading bar close** that does not look ahead
-      of availability:
-      - If DiscTime present and **strictly before** that day's session close,
-        entry = that day's bar if it exists, else next bar on/after disc_date.
-      - If DiscTime ≥ session close, missing, or unparseable → entry = **next**
-        trading bar **after** disc_date (conservative; matches after-hours).
-    * Hold horizon is applied from that entry index via
-      :func:`multi_day_forward_return` (close[t+hold]/close[t]-1).
-
-    Returns ``(entry_index, entry_date, meta)``. ``entry_index is None`` when
-    no eligible bar exists (gap → skip, no invent).
-    """
+    """PIT-safe event_post entry bar: pre-close same day, else next session. No invent."""
     d = str(disc_date)[:10]
     aa, aa_meta = event_post_available_at_from_fields(
         disc_date=d, disc_time=disc_time, event_time=event_time
@@ -222,14 +199,7 @@ def earnings_surprise_proxy(
     feps: float | None = None,
     prior_eps: float | None = None,
 ) -> tuple[float | None, dict[str, Any]]:
-    """Research surprise proxy from fins_summary fields (not audited PEAD).
-
-    Priority
-    --------
-    1. ``FEPS - EPS`` when both numeric (forward vs reported snapshot)
-    2. ``EPS - prior_eps`` when prior disclosure EPS present
-    3. else None (no invent)
-    """
+    """Surprise proxy: FEPS−EPS, else EPS−prior, else None (no invent)."""
     e = _as_float_or_none(eps)
     f = _as_float_or_none(feps)
     p = _as_float_or_none(prior_eps)
@@ -270,10 +240,7 @@ def compute_event_post_signal(
     disc_date: str | None = None,
     extra_meta: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Post-event entry: only on disclosure day; sign(surprise); hold multi-day.
-
-    Not continuous daily sign. Non-event days → value None (no trade).
-    """
+    """Post-event entry on disclosure day only: sign(surprise); non-event → None."""
     h = int(post_hold_days)
     if h < 1:
         raise ValueError(f"post_hold_days must be >= 1, got {post_hold_days!r}")

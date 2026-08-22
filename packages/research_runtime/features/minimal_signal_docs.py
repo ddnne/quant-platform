@@ -17,22 +17,16 @@ from features.research_freezes import (
     READY_DECLARED,
 )
 
-# ---------------------------------------------------------------------------
-# Identity (stable for R2 signal artifacts)
-# ---------------------------------------------------------------------------
-
 SIGNAL_ID: str = "c21_topix_relative_sign"
 SIGNAL_VERSION: str = "1.0.0"
 SIGNAL_STATUS: str = "candidate"  # not READY; not strategy-default
-# Primary + filter + gate are all registry-approved after W53 (still no READY).
-CANDIDATE_ONLY: bool = False
+CANDIDATE_ONLY: bool = False  # legs approved; signal status stays candidate
 
-# Feature ids this signal consumes (all approved after W53 primary promote).
-PRIMARY_FEATURE_ID: str = "topix_relative_1d"  # approved (W53)
-FILTER_FEATURE_ID: str = "is_trading_day"  # approved (W52 G1)
-GATE_FEATURE_ID: str = "volume_change_1d"  # approved (W52 G1)
+PRIMARY_FEATURE_ID: str = "topix_relative_1d"
+FILTER_FEATURE_ID: str = "is_trading_day"
+GATE_FEATURE_ID: str = "volume_change_1d"
 
-# Registry status pins at signal-definition time (documentation; not a gate).
+# Documentation pins; not a runtime gate.
 FEATURE_STATUS_PINS: dict[str, str] = {
     PRIMARY_FEATURE_ID: "approved",
     FILTER_FEATURE_ID: "approved",
@@ -45,7 +39,6 @@ DEFAULT_FEATURE_IDS: tuple[str, ...] = (
     GATE_FEATURE_ID,
 )
 
-# Datasets sufficient for the three features (COMPLETE 21 subset).
 DEFAULT_SIGNAL_DATASETS: tuple[str, ...] = (
     "equities_bars_daily",
     "markets_calendar",
@@ -54,11 +47,8 @@ DEFAULT_SIGNAL_DATASETS: tuple[str, ...] = (
 
 # Optional |volume_change_1d| gate. None = no volume gate (sign-only).
 DEFAULT_VOLUME_CHANGE_ABS_MIN: float | None = None
+DEFAULT_VOLUME_SIGN_ABS_MIN: float = 0.10  # S2 |volume_change_1d| floor
 
-# S2 defaults: |volume_change_1d| >= 10% to emit sign(volume_change).
-DEFAULT_VOLUME_SIGN_ABS_MIN: float = 0.10
-
-# S3 secondary filter feature (disclosure binary; margin is documented alt).
 DISCLOSURE_FEATURE_ID: str = "disclosure_flag_fins"
 MARGIN_CHANGE_FEATURE_ID: str = "margin_interest_change_1d"
 
@@ -78,8 +68,7 @@ MULTI_SIGNAL_DATASETS: tuple[str, ...] = (
     "markets_margin_interest",
 )
 
-# Research signal ids (candidate; not READY).
-SIGNAL_ID_TOPIX_REL: str = SIGNAL_ID  # c21_topix_relative_sign
+SIGNAL_ID_TOPIX_REL: str = SIGNAL_ID
 SIGNAL_ID_VOLUME_SIGN: str = "c21_volume_change_sign"
 SIGNAL_ID_TOPIX_DISC: str = "c21_topix_rel_disclosure_filter"
 

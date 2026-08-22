@@ -35,9 +35,8 @@ VolumeChange1d: FeatureDefinition = register(
             as_of_rule="session_close",
         ),
         description=(
-            "One-session volume change (COMPLETE 21: equities_bars_daily only). "
-            "Returns None when fewer than two volumes are visible at as_of. "
-            "Permanent DEFER datasets are rejected before PIT reads."
+            "One-session volume change from equities_bars_daily. "
+            "None with fewer than two PIT-visible volumes. Permanent DEFER rejected."
         ),
         compute=_volume_change_1d,
         tags=("volume", "daily", "complete21"),
@@ -58,8 +57,7 @@ TopixRelative1d: FeatureDefinition = register(
         ),
         description=(
             "Equity 1d return minus TOPIX 1d return "
-            "(COMPLETE 21: equities_bars_daily + indices_bars_daily_topix). "
-            "Permanent DEFER datasets are rejected before PIT reads."
+            "(equities_bars_daily + indices_bars_daily_topix). Permanent DEFER rejected."
         ),
         compute=_topix_relative_1d,
         tags=("return", "relative", "topix", "complete21"),
@@ -80,8 +78,7 @@ DisclosureFlagFins: FeatureDefinition = register(
         ),
         description=(
             "Binary disclosure flag: 1.0 if any PIT-visible fins_summary row "
-            "exists for code at as_of, else 0.0. COMPLETE 21 only "
-            "(fins_summary). Permanent DEFER residuals excluded from this feature."
+            "exists for code at as_of, else 0.0. Permanent DEFER rejected."
         ),
         compute=_disclosure_flag_fins,
         tags=("disclosure", "fins", "flag", "complete21"),
@@ -102,9 +99,8 @@ MarginInterestChange1d: FeatureDefinition = register(
         ),
         description=(
             "Session-over-session change in total margin interest "
-            "(LongVol + ShrtVol) for code. COMPLETE 21: markets_margin_interest. "
-            "Returns None with <2 PIT-visible observations. Permanent DEFER "
-            "datasets are rejected before PIT reads."
+            "(LongVol + ShrtVol). None with <2 PIT-visible observations. "
+            "Permanent DEFER rejected."
         ),
         compute=_margin_interest_change_1d,
         tags=("margin", "interest", "complete21"),
@@ -124,10 +120,8 @@ ShortRatioLevel: FeatureDefinition = register(
             as_of_rule="session_close",
         ),
         description=(
-            "Latest short-sale ratio level for a TSE 33-sector (S33): "
-            "(ShrtWithResVa + ShrtNoResVa) / SellExShortVa. COMPLETE 21: "
-            "markets_short_ratio. Permanent DEFER datasets rejected before "
-            "PIT reads."
+            "Latest TSE 33-sector short-sale ratio: "
+            "(ShrtWithResVa + ShrtNoResVa) / SellExShortVa. Permanent DEFER rejected."
         ),
         compute=_short_ratio_level,
         tags=("short", "ratio", "sector", "complete21"),
@@ -148,10 +142,9 @@ IsTradingDay: FeatureDefinition = register(
             as_of_rule="session_close",
         ),
         description=(
-            "Structural/utility flag: 1.0 if markets_calendar marks date as a "
-            "trading day (holiday_division=='1'), 0.0 if non-trading, None if "
-            "no calendar row is PIT-visible. Default date = as_of calendar day. "
-            "COMPLETE 21: markets_calendar. Permanent DEFER rejected."
+            "1.0 if markets_calendar holiday_division=='1', 0.0 if non-trading, "
+            "None if no PIT-visible row. Default date = as_of calendar day. "
+            "Permanent DEFER rejected."
         ),
         compute=_is_trading_day,
         tags=("calendar", "trading_day", "complete21"),
@@ -172,9 +165,8 @@ RepoRateLevel: FeatureDefinition = register(
             as_of_rule="session_close",
         ),
         description=(
-            "Latest Tokyo repo rate level visible at as_of (JSDA). COMPLETE 21: "
-            "jsda_tokyo_repo_rates. Optional tenor / rate_type filters. "
-            "Permanent DEFER datasets rejected before PIT reads."
+            "Latest Tokyo repo rate level at as_of (JSDA). Optional tenor / "
+            "rate_type filters. Permanent DEFER rejected."
         ),
         compute=_repo_rate_level,
         tags=("repo", "rate", "jsda", "macro", "complete21"),
@@ -196,8 +188,7 @@ RepoRateChange: FeatureDefinition = register(
         ),
         description=(
             "Change in Tokyo repo rate over lookback distinct as_of_date steps "
-            "(JSDA). COMPLETE dataset jsda_tokyo_repo_rates. Candidate until "
-            "feature E2E promotion. Permanent DEFER rejected."
+            "(JSDA). Candidate until feature E2E promotion. Permanent DEFER rejected."
         ),
         compute=_repo_rate_change,
         tags=("repo", "rate", "jsda", "macro", "change", "complete21"),
@@ -217,10 +208,8 @@ Return1dC21: FeatureDefinition = register(
             as_of_rule="session_close",
         ),
         description=(
-            "COMPLETE-21 path export of one-session simple return "
-            "(close-to-close) from equities_bars_daily. Calls "
-            "require_feature_datasets before PIT reads. Candidate twin of "
-            "approved v0 return_1d — does not replace it; no promotion this wave."
+            "COMPLETE-21 close-to-close simple return from equities_bars_daily. "
+            "Candidate twin of approved v0 return_1d; does not replace it."
         ),
         compute=_return_1d_c21,
         tags=("return", "daily", "complete21", "export"),
@@ -242,7 +231,7 @@ MarginAlertFlag: FeatureDefinition = register(
         description=(
             "Binary margin-alert flag: 1.0 if any PIT-visible "
             "markets_margin_alert row exists for code at as_of, else 0.0. "
-            "COMPLETE 21 only. Permanent DEFER datasets rejected before PIT reads."
+            "Permanent DEFER rejected."
         ),
         compute=_margin_alert_flag,
         tags=("margin", "alert", "flag", "complete21"),
@@ -263,10 +252,9 @@ FuturesActivityProxy: FeatureDefinition = register(
             as_of_rule="session_close",
         ),
         description=(
-            "Futures activity proxy: sum of Volume on the latest PIT-visible "
-            "date from derivatives_bars_daily_futures. Optional contract code "
-            "filter. Returns None when no volumes are visible. COMPLETE 21 only. "
-            "Permanent DEFER datasets rejected before PIT reads."
+            "Sum of Volume on the latest PIT-visible date from "
+            "derivatives_bars_daily_futures. Optional contract code filter. "
+            "None when no volumes are visible. Permanent DEFER rejected."
         ),
         compute=_futures_activity_proxy,
         tags=("futures", "derivatives", "activity", "complete21"),

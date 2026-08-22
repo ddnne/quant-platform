@@ -355,7 +355,6 @@ def _margin_interest_change_1d(ctx) -> FeatureOutput:
         **meta,
         "code": code,
         "datasets": list(_MARGIN_DATASETS),
-        "metric": "LongVol+ShrtVol",
     }
     return FeatureOutput(value=value, metadata=meta)
 
@@ -532,7 +531,6 @@ def _futures_activity_proxy(ctx) -> FeatureOutput:
         **meta,
         "code": code,
         "datasets": list(_FUTURES_DATASETS),
-        "metric": "volume_sum_latest_date",
     }
     return FeatureOutput(value=value, metadata=meta)
 

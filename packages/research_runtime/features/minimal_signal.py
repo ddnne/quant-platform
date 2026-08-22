@@ -1,36 +1,13 @@
-"""Minimal COMPLETE-21 tip signal (W52 / w0815as_g2 · T5; W53 primary promote).
+"""Minimal COMPLETE-21 tip signal.
 
-One research signal built from the strongest tip-ready COMPLETE-21 min
-features. Prefer approved legs when available:
-
-* primary: ``sign(topix_relative_1d)``  →  +1 / 0 / −1  (**approved** · W53)
-* filter:  ``is_trading_day == 1.0`` (non-trading → signal None) (**approved**)
-* optional gate: ``volume_change_1d`` absolute threshold (**approved**)
-
-``candidate_only=False`` after W53 primary promotion. Signal status remains
-``candidate`` (not READY / not strategy-default / Mass OFF).
-
-Hard constraints (T7):
-
-* does **not** import ``agents.mass_research`` / mass loop
-* does **not** mint READY / VerifiedResearchReadiness
-* does **not** emit order intents / call paper execution
-
-This module is pure compute over already-materialized feature values.
+Primary ``sign(topix_relative_1d)``, trading-day filter, optional volume gate.
+Approved legs; signal status stays candidate. No READY / Mass / GO.
 Identity, pins, and catalog dumps live in ``minimal_signal_docs``.
-CF tip extraction and R2 write live in ``research.single_shot_job``.
 """
 
 from __future__ import annotations
 
 from typing import Any, Mapping, Sequence
-
-from features.research_freezes import (
-    MASS_RESEARCH,
-    ORDER_EXECUTION,
-    PHASE7,
-    READY_DECLARED,
-)
 
 from .minimal_signal_docs import (
     CANDIDATE_ONLY,
@@ -58,6 +35,7 @@ from .minimal_signal_docs import (
     SIGNAL_ID_VOLUME_SIGN,
     SIGNAL_STATUS,
     SIGNAL_VERSION,
+    _freeze_meta,
     extra_hyp_definitions,
     multi_signal_definitions,
     signal_definition,
@@ -195,10 +173,7 @@ def compute_topix_relative_sign_signal(
         "raw_sign": raw_sign,
         "filter": filter_meta,
         "gate": gate_meta,
-        "mass_research": MASS_RESEARCH,
-        "phase7": PHASE7,
-        "ready_declared": READY_DECLARED,
-        "order_execution": ORDER_EXECUTION,
+        **_freeze_meta(),
     }
     if code is not None:
         meta["code"] = str(code)
@@ -257,23 +232,7 @@ def compute_signal_from_feature_observations(
         as_of=as_of_s,
         feature_ids=list(DEFAULT_FEATURE_IDS),
         volume_change_abs_min=volume_change_abs_min,
-        extra={
-            "sample_values": [
-                {
-                    "code": r.get("code"),
-                    "value": r.get("value"),
-                    "topix_relative": (r.get("metadata") or {}).get("topix_relative"),
-                }
-                for r in signal_obs[:10]
-            ],
-        },
     )
-
-
-# ---------------------------------------------------------------------------
-# Multi-signal research compute (W58 / w0815ay_g2 · T4)
-# Catalog dumps live in minimal_signal_docs. Status remains candidate.
-# ---------------------------------------------------------------------------
 
 
 def sign_from_numeric(x: float | None) -> float | None:
@@ -422,10 +381,7 @@ def _aggregate_signal_obs(
             }
             for r in list(signal_obs)[:10]
         ],
-        "mass_research": MASS_RESEARCH,
-        "phase7": PHASE7,
-        "ready_declared": READY_DECLARED,
-        "order_execution": ORDER_EXECUTION,
+        **_freeze_meta(),
         "local_sot": False,
     }
     if extra:
@@ -465,10 +421,7 @@ def compute_volume_change_sign_signal(
         "filter": filter_meta,
         "gate": gate_meta,
         "volume_change_abs_min": volume_change_abs_min,
-        "mass_research": MASS_RESEARCH,
-        "phase7": PHASE7,
-        "ready_declared": READY_DECLARED,
-        "order_execution": ORDER_EXECUTION,
+        **_freeze_meta(),
     }
     if code is not None:
         meta["code"] = str(code)
@@ -516,10 +469,7 @@ def compute_topix_rel_disclosure_signal(
         "raw_sign": raw_sign,
         "filter": filter_meta,
         "secondary_filter": disc_meta,
-        "mass_research": MASS_RESEARCH,
-        "phase7": PHASE7,
-        "ready_declared": READY_DECLARED,
-        "order_execution": ORDER_EXECUTION,
+        **_freeze_meta(),
     }
     if code is not None:
         meta["code"] = str(code)
@@ -610,14 +560,6 @@ def compute_topix_disc_from_feature_observations(
     )
 
 
-# ---------------------------------------------------------------------------
-# W62 extra research hypotheses (not S1 rehash)
-# S4: sign(margin_interest_change_1d)
-# S5: sign(Δ short_ratio_level) for a fixed section (broadcast to codes)
-# Catalog dumps live in minimal_signal_docs. Status remains candidate.
-# ---------------------------------------------------------------------------
-
-
 def compute_margin_change_sign_signal(
     *,
     margin_change: float | None,
@@ -642,10 +584,7 @@ def compute_margin_change_sign_signal(
         "margin_interest_change_1d": margin_change,
         "raw_sign": raw_sign,
         "filter": filter_meta,
-        "mass_research": MASS_RESEARCH,
-        "phase7": PHASE7,
-        "ready_declared": READY_DECLARED,
-        "order_execution": ORDER_EXECUTION,
+        **_freeze_meta(),
     }
     if code is not None:
         meta["code"] = str(code)
@@ -702,10 +641,7 @@ def compute_short_ratio_delta_sign_signal(
         "delta": delta,
         "raw_sign": raw_sign,
         "filter": filter_meta,
-        "mass_research": MASS_RESEARCH,
-        "phase7": PHASE7,
-        "ready_declared": READY_DECLARED,
-        "order_execution": ORDER_EXECUTION,
+        **_freeze_meta(),
     }
     if code is not None:
         meta["code"] = str(code)

@@ -88,11 +88,7 @@ def occurrence_rate_multiday(
     hold_days: int = DEFAULT_HOLD_DAYS,
     min_activation_rate: float = DEFAULT_MIN_ACTIVATION_RATE_MULTIDAY,
 ) -> dict[str, Any]:
-    """Occurrence / activation rate for multi_day_hold (rate, not count alone).
-
-    ``activation_rate = n_active / n_code_days`` when code-days known.
-    Absolute ``n_active`` alone is **not** used to reject.
-    """
+    """Activation rate for multi_day_hold: ``n_active / n_code_days`` (not count)."""
     n_a = int(n_active or 0)
     n_cd = int(n_code_days or 0)
     n_td = int(n_trading_days or 0)
@@ -107,7 +103,6 @@ def occurrence_rate_multiday(
         "n_trading_days": n_td if n_td > 0 else None,
         "n_codes": n_c if n_c > 0 else None,
         "activation_rate": rate,
-        "activation_rate_per_code_day": rate,
         "expected_activation_rate": expected,
         "min_activation_rate": float(min_activation_rate),
         "sufficient": sufficient,
@@ -120,10 +115,6 @@ def occurrence_rate_multiday(
                 if rate is not None
                 else "no_code_days_for_rate"
             )
-        ),
-        "note": (
-            "Sufficiency uses rate (events or rebalances / code-days), "
-            "not absolute n_active. Short window with OK rate → extend."
         ),
     }
 
@@ -139,15 +130,7 @@ def occurrence_rate_event_post(
     min_events_per_code_year: float = DEFAULT_MIN_EVENTS_PER_CODE_YEAR,
     min_events_per_trading_day: float = DEFAULT_MIN_EVENTS_PER_TRADING_DAY,
 ) -> dict[str, Any]:
-    """Occurrence rate for event_post — rate-based, multi-year friendly.
-
-    Primary metrics:
-    * events_per_trading_day = n_scored / n_trading_days
-    * events_per_code_year   = annualized n_scored / n_codes
-    * events_per_code_day    = n_scored / n_code_days
-
-    Absolute event count alone must **not** reject when rates are OK.
-    """
+    """Event_post occurrence rate (per trading day / annualized per code, not count)."""
     n_ev = int(n_events or 0)
     n_sc = int(n_scored if n_scored is not None else n_ev)
     n_td = int(n_trading_days or 0)
@@ -199,11 +182,6 @@ def occurrence_rate_event_post(
         "sufficient": sufficient,
         "reject_on_count_alone": False,
         "reason": reason,
-        "note": (
-            "Event sufficiency = occurrence rate (events/trading day or "
-            "annualized per code), multi-year coverage. Do not reject on "
-            "absolute n_events alone. Short window with OK rate → extend."
-        ),
     }
 
 
@@ -374,13 +352,5 @@ def production_candidate_bar(
         "operational_go": False,
         "connected_to_ready": False,
         "connected_to_mass": False,
-        "note": (
-            "W81 production research_candidate bar. All criteria required "
-            "including statistical bar (|t|, Sharpe, period win-rate). "
-            "research_candidate=True is research-only; never auto-connects "
-            "READY / Mass / operational GO / Phase7 / orders. "
-            "Occurrence uses rates not absolute counts. "
-            "Noisy low t/Sharpe / unstable yearly signs → demote."
-        ),
     }
 

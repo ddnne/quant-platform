@@ -259,7 +259,6 @@ def repo_curve_spread(
         "short_rate": s,
         "long_rate": lo,
         "spread": spread,
-        "definition": "long_tenor_rate - short_tenor_rate",
     }
 
 
