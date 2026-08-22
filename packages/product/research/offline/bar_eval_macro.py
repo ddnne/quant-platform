@@ -15,8 +15,6 @@ from features.class_signals import (
     DEFAULT_CURVE_STEEP_THRESHOLD,
     DEFAULT_REPO_HIGH_THRESHOLD,
     DEFAULT_REPO_LOW_THRESHOLD,
-    REPO_CURVE_LONG_TENOR,
-    REPO_CURVE_SHORT_TENOR,
     SIGNAL_ID_MACRO_CONDITIONED,
     SIGNAL_ID_RATE_CURVE_XS,
     SIGNAL_ID_RATE_LEVEL_XS,
@@ -145,7 +143,6 @@ def evaluate_macro_conditioned_on_bars(
         "n_code_days": n_code_days,
         "n_trading_days": n_trading_days,
         "occurrence": occ,
-        "non_null": n_active,
         "non_null_rate": (
             float(n_active) / float(n_code_days) if n_code_days else None
         ),
@@ -190,15 +187,12 @@ def evaluate_rate_level_xs_on_bars(
 
     dates = sorted(by_date.keys())
     daily_adj: dict[str, dict[str, float | None]] = {c: {} for c in bars_by_code}
-    n_regime_gap = 0
-    regime_counts: dict[str, int] = {}
     for d in dates:
         ranks = cross_section_rank_signs(
             by_date[d], long_frac=long_frac, short_frac=short_frac
         )
         hit = lookup_repo_rate(repo_series, d) if repo_series else {"is_gap": True}
         if hit.get("is_gap") or hit.get("rate_pct") is None:
-            n_regime_gap += 1
             for code in ranks:
                 daily_adj.setdefault(code, {})[d] = None
             continue
@@ -212,9 +206,6 @@ def evaluate_rate_level_xs_on_bars(
                 code=code,
                 date=d,
             )
-            reg = rec.get("regime")
-            if reg is not None:
-                regime_counts[str(reg)] = regime_counts.get(str(reg), 0) + 1
             daily_adj.setdefault(code, {})[d] = rec.get("value")
 
     signed_returns: list[float] = []
@@ -260,8 +251,6 @@ def evaluate_rate_level_xs_on_bars(
         "amortized_one_way_cost": am_cost,
         "one_way_cost": float(one_way_cost),
         "n_active_positions": n_active,
-        "n_regime_gap": n_regime_gap,
-        "regime_counts": regime_counts,
         "n_codes": len(bars_by_code),
         "n_code_days": n_code_days,
         "n_trading_days": n_trading_days,
@@ -269,7 +258,7 @@ def evaluate_rate_level_xs_on_bars(
         **_freeze(),
         "note": (
             "Absolute rate-level factor × CS risk-on/off book on "
-            "jsda_tokyo_repo_rates. Not macro mom-gate."
+            "jsda_tokyo_repo_rates."
         ),
     }
 
@@ -306,8 +295,6 @@ def evaluate_rate_curve_xs_on_bars(
 
     dates = sorted(by_date.keys())
     daily_adj: dict[str, dict[str, float | None]] = {c: {} for c in bars_by_code}
-    n_regime_gap = 0
-    regime_counts: dict[str, int] = {}
     for d in dates:
         ranks = cross_section_rank_signs(
             by_date[d], long_frac=long_frac, short_frac=short_frac
@@ -315,7 +302,6 @@ def evaluate_rate_curve_xs_on_bars(
         s_rate = short_by.get(str(d)[:10])
         l_rate = long_by.get(str(d)[:10])
         if s_rate is None or l_rate is None:
-            n_regime_gap += 1
             for code in ranks:
                 daily_adj.setdefault(code, {})[d] = None
             continue
@@ -329,9 +315,6 @@ def evaluate_rate_curve_xs_on_bars(
                 code=code,
                 date=d,
             )
-            reg = rec.get("regime")
-            if reg is not None:
-                regime_counts[str(reg)] = regime_counts.get(str(reg), 0) + 1
             daily_adj.setdefault(code, {})[d] = rec.get("value")
 
     signed_returns: list[float] = []
@@ -372,25 +355,15 @@ def evaluate_rate_curve_xs_on_bars(
         "mode": "rate_curve_shape_xs",
         "momentum_n": n,
         "hold_days": h,
-        "curve_short_tenor": (curve_series or {}).get("short_tenor")
-        or REPO_CURVE_SHORT_TENOR,
-        "curve_long_tenor": (curve_series or {}).get("long_tenor")
-        or REPO_CURVE_LONG_TENOR,
-        "curve_definition": (curve_series or {}).get("definition"),
         "gross_signed_mean_active": gross,
         "net_one_way_mean_active": net,
         "amortized_one_way_cost": am_cost,
         "one_way_cost": float(one_way_cost),
         "n_active_positions": n_active,
-        "n_regime_gap": n_regime_gap,
-        "regime_counts": regime_counts,
         "n_codes": len(bars_by_code),
         "n_code_days": n_code_days,
         "n_trading_days": n_trading_days,
         "occurrence": occ,
         **_freeze(),
-        "note": (
-            "Repo curve-shape factor (3M−overnight) × CS book. "
-            "JSDA tenors only; no invent."
-        ),
+        "note": "Repo curve-shape factor (3M−overnight) × CS book.",
     }

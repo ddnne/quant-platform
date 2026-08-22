@@ -127,7 +127,6 @@ def evaluate_multi_day_hold_on_bars(
         "occurrence": occ,
         "trade_stats": trade_stats,
         "holding_records": holding_records,
-        "non_null": n_active,
         "non_null_rate": (
             float(n_active) / float(n_code_days) if n_code_days else None
         ),
@@ -275,7 +274,6 @@ def evaluate_event_post_on_bars(
         "n_code_days": n_code_days,
         "occurrence": occ,
         "trade_stats": trade_stats,
-        "non_null": n_scored,
         "non_null_rate": (
             float(n_scored) / float(n_events) if n_events else None
         ),

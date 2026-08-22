@@ -82,7 +82,6 @@ def evaluate_mf_value_mom_rate_on_bars(
 
     signed_returns: list[float] = []
     n_active = 0
-    n_missing = 0
     n_code_days = 0
     trading_dates: set[str] = set()
     for code, pairs in sorted(bars_by_code.items()):
@@ -103,7 +102,6 @@ def evaluate_mf_value_mom_rate_on_bars(
             )
             rate = None if hit.get("is_gap") else hit.get("rate_pct")
             if vscore is None:
-                n_missing += 1
                 entries.append(None)
                 continue
             rec = compute_mf_value_mom_rate_signal(
@@ -154,16 +152,12 @@ def evaluate_mf_value_mom_rate_on_bars(
         "amortized_one_way_cost": am_cost,
         "one_way_cost": float(one_way_cost),
         "n_active_positions": n_active,
-        "n_missing_fins_or_rate": n_missing,
         "n_codes": len(bars_by_code),
         "n_code_days": n_code_days,
         "n_trading_days": n_trading_days,
         "occurrence": occ,
         **_freeze(),
-        "note": (
-            "Multi-factor value×mom×rate. Distinct from fund_value_mom_agree. "
-            "PIT fins + date-matched repo."
-        ),
+        "note": "Multi-factor value×mom×rate. PIT fins + date-matched repo.",
     }
 
 
@@ -181,7 +175,6 @@ def evaluate_mf_flow_price_on_bars(
     am_cost = amortized_one_way_cost(one_way_cost, h)
     signed_returns: list[float] = []
     n_active = 0
-    n_margin_obs = 0
     n_code_days = 0
     trading_dates: set[str] = set()
 
@@ -202,7 +195,6 @@ def evaluate_mf_flow_price_on_bars(
                 margin_chg_by_date[d] = None
             else:
                 margin_chg_by_date[d] = (float(m) - float(prev)) / float(prev)
-            n_margin_obs += 1
 
         moms = momentum_series(pairs_l, n=n)
         mom_by_date = {d: m for d, m in moms}
@@ -261,16 +253,12 @@ def evaluate_mf_flow_price_on_bars(
         "amortized_one_way_cost": am_cost,
         "one_way_cost": float(one_way_cost),
         "n_active_positions": n_active,
-        "n_margin_obs": n_margin_obs,
         "n_codes": len(bars_by_code),
         "n_code_days": n_code_days,
         "n_trading_days": n_trading_days,
         "occurrence": occ,
         **_freeze(),
-        "note": (
-            "Multi-factor flow×price confirm. Near-group parallel to "
-            "flow_margin_hard/soft (do not merge)."
-        ),
+        "note": "Multi-factor flow×price confirm (parallel to flow hard/soft).",
     }
 
 
@@ -520,11 +508,10 @@ def evaluate_flow_demand_on_bars(
         "n_codes_with_margin": sum(
             1 for c in bars_by_code if len(margin_by_code.get(c) or []) >= 2
         ),
-        "non_null": n_active,
         **_freeze(),
         "note": (
             f"Flow demand multi-day hold={h} from margin change "
-            f"(short_confirm_mode={mode_s}). Not S4 daily."
+            f"(short_confirm_mode={mode_s})."
         ),
     }
 
@@ -641,7 +628,6 @@ def evaluate_fundamentals_price_on_bars(
         "n_code_days": n_code_days,
         "n_trading_days": n_trading_days,
         "occurrence": occ,
-        "non_null": n_active,
         **_freeze(),
         "note": f"Fundamentals×price mode={mode} hold={h}d PIT fins.",
     }

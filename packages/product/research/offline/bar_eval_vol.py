@@ -20,7 +20,6 @@ from features.class_signals import (
     DEFAULT_OPT225_VOL_EXPAND_RATIO,
     DEFAULT_OPT225_VOL_HIGH_THRESHOLD,
     DEFAULT_OPT225_VOL_LOW_THRESHOLD,
-    OPT225_SPREAD_CONVENTION,
     SIGNAL_ID_NKY_VOL_ABS_LEVEL,
     SIGNAL_ID_NKY_VOL_TERM_LEVELS,
     SIGNAL_ID_NKY_VOL_TERM_RATIO,
@@ -92,8 +91,6 @@ def _evaluate_nky_vol_xs_core(
 
     dates = sorted(by_date.keys())
     daily_adj: dict[str, dict[str, float | None]] = {c: {} for c in bars_by_code}
-    n_regime_gap = 0
-    regime_counts: dict[str, int] = {}
     for d in dates:
         ranks = cross_section_rank_signs(
             by_date[d], long_frac=long_frac, short_frac=short_frac
@@ -129,11 +126,6 @@ def _evaluate_nky_vol_xs_core(
                     code=code,
                     date=d,
                 )
-            if rec.get("regime") is None and rec.get("value") is None:
-                n_regime_gap += 1
-            reg = rec.get("regime")
-            if reg is not None:
-                regime_counts[str(reg)] = regime_counts.get(str(reg), 0) + 1
             daily_adj.setdefault(code, {})[d] = rec.get("value")
 
     signed_returns: list[float] = []
@@ -179,26 +171,17 @@ def _evaluate_nky_vol_xs_core(
         "mode": m,
         "momentum_n": n,
         "hold_days": h,
-        "vol_source": (nky_vol_series or {}).get("source"),
-        "vol_dataset": (nky_vol_series or {}).get("dataset"),
-        "short_n": (nky_vol_series or {}).get("short_n"),
-        "long_n": (nky_vol_series or {}).get("long_n"),
         "gross_signed_mean_active": gross,
         "net_one_way_mean_active": net,
         "amortized_one_way_cost": am_cost,
         "one_way_cost": float(one_way_cost),
         "n_active_positions": n_active,
-        "n_regime_gap": n_regime_gap,
-        "regime_counts": regime_counts,
         "n_codes": len(bars_by_code),
         "n_code_days": n_code_days,
         "n_trading_days": n_trading_days,
         "occurrence": occ,
         **_freeze(),
-        "note": (
-            f"Index-level Nikkei/TOPIX vol regime mode={m} × CS book. "
-            "Not per-name vol_risk_adjusted."
-        ),
+        "note": f"Index-level Nikkei/TOPIX vol regime mode={m} × CS book.",
     }
 
 
@@ -369,8 +352,6 @@ def evaluate_opt225_vol_on_bars(
 
     dates = sorted(by_date.keys())
     daily_adj: dict[str, dict[str, float | None]] = {c: {} for c in dates_by_code}
-    n_regime_gap = 0
-    regime_counts: dict[str, int] = {}
     for d in dates:
         ranks = cross_section_rank_signs(
             by_date[d], long_frac=long_frac, short_frac=short_frac
@@ -393,11 +374,6 @@ def evaluate_opt225_vol_on_bars(
                 code=code,
                 date=d,
             )
-            if rec.get("regime") is None and rec.get("value") is None:
-                n_regime_gap += 1
-            reg = rec.get("regime")
-            if reg is not None:
-                regime_counts[str(reg)] = regime_counts.get(str(reg), 0) + 1
             daily_adj.setdefault(code, {})[d] = rec.get("value")
 
     signed_returns: list[float] = []
@@ -436,32 +412,19 @@ def evaluate_opt225_vol_on_bars(
         "signal_id": sid,
         "hypothesis_class": CLASS_OPTIONS_VOL_REGIME,
         "mode": m,
-        "series_kind": sk,
-        "transform": transform,
         "momentum_n": n,
         "hold_days": h,
-        "vol_source": series.get("source"),
-        "vol_dataset": series.get("dataset") or "derivatives_bars_daily_options_225",
-        "units": series.get("units") or "percent_vol_points",
-        "spread_convention": OPT225_SPREAD_CONVENTION,
-        "short_n": series.get("short_n"),
-        "long_n": series.get("long_n"),
         "gross_signed_mean_active": gross,
         "net_one_way_mean_active": net,
         "amortized_one_way_cost": am_cost,
         "one_way_cost": float(one_way_cost),
         "n_active_positions": n_active,
-        "n_regime_gap": n_regime_gap,
-        "regime_counts": regime_counts,
         "n_codes": len(dates_by_code),
         "n_code_days": n_code_days,
         "n_trading_days": n_trading_days,
         "occurrence": occ,
         **_freeze(),
-        "note": (
-            f"options_225 {sk} regime mode={m} × CS book. Canonical Nikkei vol SoT. "
-            "nky_vol_* remains proxy/compare only."
-        ),
+        "note": f"options_225 {sk} regime mode={m} × CS book.",
     }
 
 
