@@ -168,11 +168,7 @@ def put_local_fallback_artifacts(
     dry_run: bool = False,
     staging_dir: str | Path | None = None,
 ) -> list[dict[str, Any]]:
-    """Write job artifacts to R2 (or stage) from the driver side.
-
-    Used after a successful Worker response (mirror) or when the Worker
-    already wrote R2 (driver records the keys).
-    """
+    """Write job artifacts to R2 (or stage) from the driver side."""
     paths = design_mass_factory_paths(str(job_spec.get("job_id") or "unknown"))
     put_fn = r2_put or (
         lambda bucket, key, body: default_r2_put(
@@ -230,12 +226,7 @@ def run_cf_mass_eval_job(
     skip_invoke: bool = False,
     timeout: int = 300,
 ) -> dict[str, Any]:
-    """Build → stage real panels (r2_panels) → deploy → invoke CF job.
-
-    Default ``mode=r2_panels`` (real COMPLETE-backed multi-year panels).
-    Returns a pack with job_id, status, counts, artifact paths, and the
-    Worker response body.
-    """
+    """Build → stage real panels → deploy → invoke CF job."""
     t0 = time.perf_counter()
     mode_s = str(mode or DEFAULT_MASS_EVAL_MODE).strip()
     do_stage = (
@@ -472,19 +463,6 @@ def try_cf_mass_eval_status() -> dict[str, Any]:
         "candidate_eval_sot": "daily_path_mtm_after_cost/v1",
         "unique_unsupported_on_period_net": True,
         "n_survivors_are_not_a_pass": True,
-        "scale_note": (
-            "Real COMPLETE-backed multi-year panels staged to R2 "
-            "(mode=r2_panels). D1 tip-only via mode=d1_bars. "
-            "Period-net is bar-native auxiliary only. Unique event/CS "
-            "logics collapse to MDH on this path and must not be scored "
-            "as n_survivors. Candidate SoT is daily_path. "
-            "Heavy multi-year promising-only remains local offline eval."
-        ),
-        "synthetic_gap": (
-            "rate_abs_level_xs / rate_curve_shape_xs still local_only on "
-            "pure-TS CF (disclosed MDH fallback). flow/fund/mf/macro_repo "
-            "consume thicken sidecars when present. Synthetic = smoke only."
-        ),
         **_freeze(),
     }
 

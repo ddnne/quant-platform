@@ -109,7 +109,6 @@ export interface Opt225RegimeBundle {
   basevol_delta?: Opt225RegimeSeries | null;
 }
 
-/** jsda_tokyo_repo_rates compact regime (percent). */
 export interface RepoRateRegime {
   dataset?: string;
   status?: string;
@@ -124,7 +123,6 @@ export interface RepoRateRegime {
   role?: string;
 }
 
-/** markets_calendar HolDiv map. */
 export interface CalendarSideCar {
   dataset?: string;
   hol_div_by_date?: Record<string, string>;
@@ -133,7 +131,6 @@ export interface CalendarSideCar {
   dates?: string[];
 }
 
-/** Flow sidecar (margin + short_ratio). */
 export interface FlowRegime {
   dataset_margin?: string;
   dataset_short?: string;
@@ -148,7 +145,6 @@ export interface FlowRegime {
   role?: string;
 }
 
-/** fins_summary compact events. */
 export interface FundRegime {
   dataset?: string;
   status?: string;
@@ -192,15 +188,10 @@ export interface PeriodPanel {
   base_vol_series?: Record<string, number> | null;
   /** Daily ATM IV (percent vol points) — compare-only. */
   atm_iv_series?: Record<string, number> | null;
-  /** Daily (ATM IV − BaseVol) spread. */
   iv_base_spread?: Record<string, number> | null;
-  /** Daily 95% put skew. */
   skew_series?: Record<string, number> | null;
-  /** Daily near−next CM term. */
   cm_term_series?: Record<string, number> | null;
-  /** Daily BaseVol delta. */
   basevol_delta_series?: Record<string, number> | null;
-  /** jsda_tokyo_repo_rates regime. */
   repo_rate_regime?: RepoRateRegime | null;
   /** Flat alias of repo rates_by_date. */
   repo_rate_by_date?: Record<string, number> | null;

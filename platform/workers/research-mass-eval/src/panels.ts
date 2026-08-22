@@ -1,10 +1,5 @@
 /**
- * Period panels for CF multi-logic mass-eval.
- *
- * synthetic — deterministic PRNG (smoke)
- * r2_panels — staged COMPLETE-backed bars under {panels_prefix}/{period_id}.json
- *             (default research/mass_eval/panels; also job-scoped prefix)
- * d1_bars — D1 jquants_records tip extract (hot window only)
+ * Period panels: synthetic PRNG, r2_panels staged bars, d1_bars tip extract.
  */
 
 import type { BarsByCode, PeriodPanel, PeriodSpec } from "./types";

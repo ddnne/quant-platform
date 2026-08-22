@@ -290,14 +290,8 @@ async function runMassEval(
     ranking_top: ranking.slice(0, 20),
     freezes,
     note:
-      "CF multi-period mass-eval is a period-net screen only. " +
-      "n_survivors is not a daily_path_DD pass and does not promote. " +
-      "Does not arm Mass/READY/GO. continuous paper UNARMED. " +
-      "3 default-path representatives not retuned. " +
-      `mode=${mode}. ` +
-      "macro_repo_* / flow_margin_* / fund_* / mf_* consume thicken " +
-      "sidecars when present; missing → disclosed MDH fallback. " +
-      "d1_bars is tip-only; multi-year uses staged r2_panels.",
+      "Period-net screen only; n_survivors is not a daily_path_DD pass. " +
+      `mode=${mode}. Missing thicken sidecars → disclosed MDH fallback.`,
   };
 
   const manifest = {

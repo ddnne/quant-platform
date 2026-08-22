@@ -1,36 +1,7 @@
-"""Cloudflare multi-logic × multi-period mass eval job.
+"""CF multi-logic × multi-period mass-eval job spec / panel cache.
 
-Implements a real CF Worker path for evaluating **multiple economic logics**
-across **multiple period windows**, writing artifacts to R2
-``quant-structured`` under ``research/mass_eval/job={id}/…``.
-
-Architecture
-------------
-* **Worker:** ``platform/workers/research-mass-eval`` (TypeScript)
-  - ``mode=r2_panels`` — staged COMPLETE-backed real bars (preferred)
-  - ``mode=d1_bars`` — D1 ``jquants_records`` tip extract (hot window only)
-  - ``mode=synthetic`` — deterministic PRNG (smoke)
-  - ``mode=nets_only`` — pre-baked period nets
-  - Evaluates bar-native logics (mdh / xs / vol) across period shards
-  - Writes summary/results/ranking to R2
-* **Driver (this module):** builds job payload, stages real panels from
-  local COMPLETE-backed R2 mirrors, invokes Worker via HTTPS,
-  records job id / counts / artifact keys.
-* **Staging:** ``research.cf_mass_eval_stage`` (sidecar panels, not SoT).
-
-Multi-period policy
--------------------
-* ≥4–6 multi-year windows (full-prefer 2015/19/21/23 + Q4 2017/25)
-* max_codes default 100 (ADV-ranked, skip missing bars/TA/EqAR); max_days ≤ 200 per period (CF wall-clock)
-* Heavy multi-year deep eval remains local offline eval for promising
-  survivors only
-
-Does **not** arm Mass / READY / GO / continuous paper / live.
-Does **not** retune the three frozen default-path representatives.
-Period-net screen survivors are **not** a pass (``daily_path_DD`` required).
-Candidate-grade SoT is ``POST /v1/daily-path``. Unique event/CS logics are
-**unsupported** on period-net (MDH collapse is tagged ``path_collapsed``
-and cannot survive).
+Worker: ``platform/workers/research-mass-eval``. Staging: ``cf_mass_eval_stage``.
+Run/invoke: ``cf_mass_eval_run``. Period-net n_survivors is not a pass / not GO.
 """
 
 from __future__ import annotations
@@ -73,21 +44,14 @@ DEFAULT_WORKER_URL: str = (
 )
 DEFAULT_ONE_WAY: float = 0.001
 
-# Preferred default is real staged panels (not synthetic).
 DEFAULT_MASS_EVAL_MODE: str = "r2_panels"
 ALLOWED_MODES: frozenset[str] = frozenset(
     {"r2_panels", "d1_bars", "synthetic", "nets_only"}
 )
 
-# Bar-native logics the CF Worker can evaluate without extra panels.
-# Catalog: research.bar_native_specs (not offline.factory).
-# nky_vol_* need staged index closes (__NKY_PROXY__) in panels.
-# opt225_* need staged opt225_regime maps (BaseVol/ATM IV/spread).
-# macro_repo_rate_* consume staged repo_rate_regime when present.
-# flow/fund/mf consume flow_regime / fund_regime (missing sidecar → disclosed MDH).
+# Bar-native ids from bar_native_specs (not factory). Missing sidecars → MDH.
 CF_BAR_NATIVE_LOGIC_IDS: tuple[str, ...] = tuple(BAR_NATIVE_SPECS)
 
-# Lite multi-period shards (synthetic / tip smoke).
 DEFAULT_LITE_PERIODS: tuple[dict[str, str], ...] = (
     {"period_id": "p2024_q4", "start": "2024-10-01", "end": "2024-12-27"},
     {"period_id": "p2025_q1", "start": "2025-01-06", "end": "2025-03-28"},
@@ -189,12 +153,9 @@ def is_unique_period_net_unsupported(logic_id: str) -> bool:
 def default_logic_specs(
     logic_ids: Sequence[str] | None = None,
 ) -> list[dict[str, Any]]:
-    """Build CF-ready logic specs.
+    """CF-ready logic specs from catalog/YAML (YAML gates may be a comma string).
 
-    Unique/combo params (including ``gates``) come from Python catalog rows.
-    YAML is declaration; it currently stores gates as a comma string.
-    Bar-native ids come from ``bar_native_specs`` (not factory templates).
-    Leftover unknown ids get ``family_id=unknown``.
+    Bar-native ids from bar_native_specs. Leftover unknown ids get family_id=unknown.
     """
     ids = list(logic_ids) if logic_ids is not None else list(CF_BAR_NATIVE_LOGIC_IDS)
     out: list[dict[str, Any]] = []
@@ -326,12 +287,7 @@ def resolve_or_stage_panels(
     staging_dir: str | Path | None = None,
     track: str | None = None,
 ) -> dict[str, Any]:
-    """Reuse a content-keyed panel cache, or stage once and record meta on R2.
-
-    Cache key is track × period_ids × max_codes × max_days. Subsequent
-    fan-out jobs skip the serial stage. ``stage_sec`` is 0.0 on reuse.
-    Selection is ADV/fins on every track — never head-N.
-    """
+    """Reuse track×periods×codes×days panel cache, or stage once. Never head-N."""
     from research.eval_tracks import eval_track, infer_eval_track
     from research.eval_universe import select_eval_universe
 
@@ -475,12 +431,6 @@ def build_cf_mass_eval_job_spec(
                     if mode_s == "d1_bars"
                     else "lite_multi_period"
                 )
-            ),
-            "note": (
-                f"mode={mode_s}; ≤{max_codes} codes × ≤{max_days} days × "
-                f"{len(period_rows)} periods × {len(logics)} logics. "
-                "Heavy multi-year stays local for promising survivors. "
-                "Default is real staged panels (not synthetic)."
             ),
         },
         "freezes": _freeze(),

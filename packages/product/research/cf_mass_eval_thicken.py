@@ -34,12 +34,6 @@ THICKEN_PANEL_DATASETS: tuple[str, ...] = (
 )
 
 
-def _mass_eval_identity() -> tuple[str, str]:
-    from research.cf_mass_eval_job import CF_MASS_EVAL_VERSION, CF_MASS_EVAL_WAVE
-
-    return CF_MASS_EVAL_WAVE, CF_MASS_EVAL_VERSION
-
-
 def _load_markets_calendar_map(
     *,
     start: str | None,
@@ -70,7 +64,7 @@ def _load_markets_calendar_map(
             params.append(str(end)[:10] + "T23:59:59")
         sql += " ORDER BY event_time ASC"
         hol: dict[str, str] = {}
-        trading_dates: list[str] = []
+        n_trading = 0
         for event_time, payload in con.execute(sql, params):
             try:
                 pl = json.loads(payload) if isinstance(payload, str) else payload
@@ -86,15 +80,14 @@ def _load_markets_calendar_map(
                 hol_div = pl.get("HolidayDivision")
             hol[d] = str(hol_div) if hol_div is not None else ""
             if str(hol_div) in {"0", "1"}:
-                trading_dates.append(d)
+                n_trading += 1
         return {
             "dataset": "markets_calendar",
             "status": "ok" if hol else "empty",
             "source": "local_sqlite_jquants_records",
             "hol_div_by_date": hol,
-            "trading_dates": trading_dates,
             "n_dates": len(hol),
-            "n_trading_dates": len(trading_dates),
+            "n_trading_dates": n_trading,
         }
     finally:
         con.close()
@@ -109,7 +102,6 @@ def _build_thicken_sidecars(
     """Compact rate/flow/fund/calendar sidecars. Gaps disclosed; no invent/ffill."""
     from research.cost_models import load_repo_rate_series_from_rows
 
-    wave, ver = _mass_eval_identity()
     db = Path(sqlite_path) if sqlite_path else DEFAULT_SQLITE
     p_start = str(period.get("period_start") or period.get("start") or "")[:10]
     p_end = str(period.get("period_end") or period.get("end") or "")[:10]
@@ -122,16 +114,12 @@ def _build_thicken_sidecars(
         except ValueError:
             burn_start = p_start
 
-    out: dict[str, Any] = {
-        "thicken_wave": wave,
-        "thicken_version": ver,
-    }
+    out: dict[str, Any] = {}
 
     try:
         cal = _load_markets_calendar_map(
             start=burn_start or None, end=p_end or None, sqlite_path=db
         )
-        out["markets_calendar"] = cal
         out["calendar"] = {
             "dataset": "markets_calendar",
             "hol_div_by_date": cal.get("hol_div_by_date") or {},
@@ -139,7 +127,7 @@ def _build_thicken_sidecars(
             "n_trading_dates": cal.get("n_trading_dates") or 0,
         }
     except Exception as exc:  # pragma: no cover - best-effort
-        out["markets_calendar"] = {
+        out["calendar"] = {
             "dataset": "markets_calendar",
             "status": "error",
             "error": str(exc),
@@ -318,11 +306,6 @@ def _build_thicken_sidecars(
             "n_codes": len(compact),
             "n_events": sum(len(v) for v in compact.values()),
             "role": "fundamentals_sidecar",
-            "note": (
-                "Compact fins_summary disclosures for panel codes. "
-                "W94 CF fund_* / mf_value_mom_rate consume when present; "
-                "empty → disclosed MDH fallback."
-            ),
         }
     except Exception as exc:  # pragma: no cover
         out["fund_regime"] = {
@@ -330,35 +313,6 @@ def _build_thicken_sidecars(
             "status": "error",
             "error": str(exc),
         }
-
-    out["index_proxy"] = {
-        "dataset": "indices_bars_daily_topix",
-        "label": "TOPIX",
-        "role": "nky_vol_proxy_compare_only",
-        "note": (
-            "TOPIX closes staged as __NKY_PROXY__ for nky_vol_* only. "
-            "Canonical Nikkei vol SoT remains derivatives_bars_daily_options_225."
-        ),
-    }
-    out["thicken_counts"] = {
-        "calendar_n_dates": int(
-            (out.get("calendar") or {}).get("n_dates") or 0
-        ),
-        "repo_n_rates": int(
-            (out.get("repo_rate_regime") or {}).get("n_rates") or 0
-        ),
-        "repo_n_spread": int(
-            (out.get("repo_rate_regime") or {}).get("n_spread") or 0
-        ),
-        "flow_n_codes": int((out.get("flow_regime") or {}).get("n_codes") or 0),
-        "flow_n_short": int(
-            (out.get("flow_regime") or {}).get("n_short_obs") or 0
-        ),
-        "fund_n_codes": int((out.get("fund_regime") or {}).get("n_codes") or 0),
-        "fund_n_events": int(
-            (out.get("fund_regime") or {}).get("n_events") or 0
-        ),
-    }
 
     rates = dict((out.get("repo_rate_regime") or {}).get("rates_by_date") or {})
     out["repo_rate_by_date"] = rates
@@ -369,57 +323,35 @@ def _build_thicken_sidecars(
             "n_obs": len(rates),
             "units": "percent",
         }
-    cal = out.get("calendar") or {}
-    hol = dict(cal.get("hol_div_by_date") or {})
-    out["calendar_dates"] = sorted(hol.keys())
     fr = out.get("flow_regime") or {}
-    margin_compact: dict[str, list[list[Any]]] = {}
-    for code, dmap in dict(fr.get("margin_level_by_code") or {}).items():
-        margin_compact[str(code)] = [
-            [d, float(v)] for d, v in sorted(dict(dmap).items())
-        ]
-    out["margin_interest"] = margin_compact
-    out["margin_n_obs"] = int(fr.get("n_obs") or 0)
-    out["short_ratio_by_date"] = dict(fr.get("short_ratio_by_date") or {})
     fund = out.get("fund_regime") or {}
-    out["fins_summary_n_events"] = int(fund.get("n_events") or 0)
-    out["fins_summary_n_codes"] = int(fund.get("n_codes") or 0)
-    status: dict[str, str] = {
-        "equities_bars_daily": "DONE",
-        "derivatives_bars_daily_options_225": "DONE_via_opt225",
-        "indices_bars_daily_topix": "DONE_via_nky_proxy",
-        "markets_calendar": (
-            "DONE"
-            if int((out.get("calendar") or {}).get("n_dates") or 0) > 0
-            else "EMPTY"
+    out["thicken_counts"] = {
+        "calendar_n_dates": int(
+            (out.get("calendar") or {}).get("n_dates") or 0
         ),
-        "jsda_tokyo_repo_rates": "DONE" if rates else "EMPTY",
-        "markets_margin_interest": "DONE" if margin_compact else "EMPTY",
-        "markets_short_ratio": (
-            "DONE" if out.get("short_ratio_by_date") else "EMPTY"
+        "repo_n_rates": int(
+            (out.get("repo_rate_regime") or {}).get("n_rates") or 0
         ),
-        "fins_summary": (
-            "DONE"
-            if int(out.get("fins_summary_n_events") or 0) > 0
-            else "EMPTY"
+        "repo_n_spread": int(
+            (out.get("repo_rate_regime") or {}).get("n_spread") or 0
         ),
+        "flow_n_codes": int(fr.get("n_codes") or 0),
+        "flow_n_short": int(fr.get("n_short_obs") or 0),
+        "fund_n_codes": int(fund.get("n_codes") or 0),
+        "fund_n_events": int(fund.get("n_events") or 0),
     }
-    out["thicken_datasets_requested"] = list(THICKEN_PANEL_DATASETS)
-    out["thicken_status"] = status
-    out["thicken_done"] = sorted(
-        k for k, v in status.items() if str(v).startswith("DONE")
-    )
-    out["thicken_todo"] = [
-        "rate_abs_level_xs_and_rate_curve_shape_xs_on_cf_pure_ts",
-    ]
-    out["thicken_consumed_on_cf"] = [
-        "macro_repo_rate_*",
-        "flow_margin_*",
-        "fund_*",
-        "mf_value_mom_rate",
-        "mf_flow_price",
-    ]
-    out["panel_thicken"] = True
+    done: list[str] = []
+    if int((out.get("calendar") or {}).get("n_dates") or 0) > 0:
+        done.append("markets_calendar")
+    if rates:
+        done.append("jsda_tokyo_repo_rates")
+    if fr.get("n_codes"):
+        done.append("markets_margin_interest")
+    if fr.get("n_short_obs"):
+        done.append("markets_short_ratio")
+    if fund.get("n_events"):
+        done.append("fins_summary")
+    out["thicken_done"] = done
     return out
 
 
@@ -457,9 +389,6 @@ def attach_nky_proxy(
             if idx_pairs:
                 bars_json["__NKY_PROXY__"] = idx_pairs
                 nky_meta = {
-                    "nky_proxy": nky.get("source"),
-                    "nky_dataset": nky.get("dataset"),
-                    "nky_n_closes": len(idx_pairs),
                     "nky_vol_series": {
                         "source": nky.get("source"),
                         "dataset": nky.get("dataset"),
@@ -553,20 +482,7 @@ def attach_opt225_regime() -> dict[str, Any]:
                 "skew_series": skew_series,
                 "cm_term_series": cm_term_series,
                 "basevol_delta_series": basevol_delta_series,
-                "opt225_dataset": "derivatives_bars_daily_options_225",
-                "opt225_role": "canonical_nky_vol_sot",
-                "opt225_canonical_level": "basevol",
-                "opt225_atm_iv_role": "compare_only",
-                "opt225_spread_convention": compact.get("spread_convention")
-                or "atm_iv - base_vol",
-                "opt225_skew_convention": compact.get("skew_convention"),
-                "opt225_cm_term_convention": compact.get("cm_term_convention"),
                 "opt225_n_base_vol": len(base_vol_series),
-                "opt225_n_atm_iv": len(atm_iv_series),
-                "opt225_n_spread": len(iv_base_spread),
-                "opt225_n_skew": len(skew_series),
-                "opt225_n_cm_term": len(cm_term_series),
-                "opt225_n_basevol_delta": len(basevol_delta_series),
             }
     except Exception as exc:  # pragma: no cover - best-effort
         opt225_meta = {"opt225_error": str(exc)}

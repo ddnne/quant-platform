@@ -1299,19 +1299,7 @@ export function evalLogicOnPanel(
         family !== "multi_day_hold" &&
         !lid.includes("multi_day") &&
         !lid.startsWith("mdh_") &&
-        family !== "vol_risk_adjusted" &&
-        family !== "index_vol_regime" &&
-        family !== "options_vol_regime" &&
-        family !== "macro_conditioned" &&
-        family !== "flow_demand" &&
-        family !== "fundamentals_price" &&
-        family !== "multi_factor" &&
-        !lid.startsWith("opt225_") &&
-        !lid.startsWith("nky_vol_") &&
-        !lid.startsWith("macro_repo_rate_") &&
-        !lid.startsWith("flow_margin_") &&
-        !lid.startsWith("fund_") &&
-        !lid.startsWith("mf_")
+        family !== "vol_risk_adjusted"
       ) {
         out = {
           ...out,

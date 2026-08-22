@@ -1,8 +1,7 @@
 """COMPLETE-backed r2_panels staging for CF mass-eval.
 
 Period-net panels are bar-native auxiliary. Candidate SoT is daily_path.
-Loaders come from eval_loaders (bars/nky/opt/margin/repo). Universe pick is
-``select_eval_universe`` — never head-N.
+Universe pick is select_eval_universe — never head-N.
 """
 from __future__ import annotations
 
@@ -112,10 +111,6 @@ def inventory_complete22() -> dict[str, Any]:
         "permanent_defer_n": len(PERMANENT_DEFER_DATASETS),
         "permanent_defer": sorted(PERMANENT_DEFER_DATASETS),
         "permanent_defer_ids": dict(PERMANENT_DEFER_IDS),
-        "note": (
-            "COMPLETE 22 = COMPLETE 21 + fins_earnings_date (W68). "
-            "History research must exclude permanent DEFER."
-        ),
     }
 
 def build_real_period_panel(
@@ -126,12 +121,7 @@ def build_real_period_panel(
     max_days: int = DEFAULT_MAX_DAYS,
     mirror_dir: str | Path | None = None,
 ) -> dict[str, Any]:
-    """Load one real bars panel from COMPLETE-backed local R2 mirrors.
-
-    Returns worker-ready panel JSON:
-      {period_id, year, period_start, period_end, bars: {code: [[d, px], ...]},
-       dataset, source, status, n_codes, n_days}
-    """
+    """Load one real bars panel from COMPLETE-backed local R2 mirrors."""
     p = normalize_period_row(period)
     pid = str(p["period_id"])
     pool = (
@@ -237,11 +227,7 @@ def stage_real_panels_to_r2(
     r2_put: Callable[..., Mapping[str, Any]] | None = None,
     panels_prefix: str | None = None,
 ) -> dict[str, Any]:
-    """Build real multi-year panels and put under job-scoped R2 prefix.
-
-    Keys: research/mass_eval/job={id}/panels/{period_id}.json
-    ``panels_prefix`` overrides the default job-scoped prefix (cache reuse).
-    """
+    """Put real multi-year panels under job-scoped R2 prefix (or panels_prefix)."""
     wave, _ver = _mass_eval_identity()
     jid = str(job_id).strip() or "unknown"
     period_list = [
