@@ -72,6 +72,7 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
             "POST /v1/propose-thesis Workers AI; review_proposal_row requires "
             "2-3 economic gates, no catalog clone, no prompt-direction echo, "
             "no contradictory/sparse/4-AND; why_avoid includes catalog gate-sets; "
+            "title polarity must match gates; clone-retry on live path; "
             "no auto-inject"
         ),
         "not_a_pass": True,
@@ -83,6 +84,27 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "why": (
             "review_proposal_row is the adopt gate; occupancy-equal Worker "
             "body required before a thesis counts; never catalog inject"
+        ),
+        "not_a_pass": True,
+        "go": False,
+    },
+    {
+        "id": "propose_clone_retry",
+        "track": EVAL_TRACK_LIQ_LARGE,
+        "why": (
+            "when Workers AI returns only catalog clones, one retry with "
+            "those gate-sets on why_avoid; still no auto-inject"
+        ),
+        "not_a_pass": True,
+        "go": False,
+    },
+    {
+        "id": "llm_title_gate_polarity",
+        "track": EVAL_TRACK_LIQ_LARGE,
+        "why": (
+            "review_proposal_row title_gate_polarity_mismatch and "
+            "title_not_occupancy; YAML follows GATES not inverted or "
+            "A×B×C label titles"
         ),
         "not_a_pass": True,
         "go": False,
@@ -162,7 +184,8 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "tracks": BOTH_EVAL_TRACK_IDS,
         "entry": "research.cf_daily_path_job.run_both_track_sleeve_fanout",
         "why": (
-            "recorded eval-cf-dp-both-sleeves-20260822c mid+liq; "
+            "recorded eval-cf-dp-both-sleeves-20260822c and "
+            "eval-cf-dp-both-sleeves-20260822m mid+liq; "
             "not a pass; do not narrate majority as stable"
         ),
         "not_a_pass": True,

@@ -12,7 +12,7 @@ Phase 7 research control plane: readiness attestation, experiment plans.
 - **Tracks:** `research.eval_tracks` `mid_n_explore` / `liq_large` (ADV-ranked; **not** head-N).
 - **Thesis count:** `research.unique_logic.worker_bodies.countable_thesis_ids` (catalog + Worker body; YAML clones do not count).
 - **Catalog:** `specs/research_logics/*.yaml`
-- **Propose:** `POST /v1/propose-thesis` (`research.cf_propose_thesis`; stub, no auto-inject).
+- **Propose:** `POST /v1/propose-thesis` (`research.cf_propose_thesis`; Workers AI + stub fallback; review_proposal_row; no auto-inject).
 - **`eval_harness.py`:** smoke-code stub only (`DEFAULT_EVAL_CODES`). Not the eval entry.
 - **`cost_models.py` / `options_225_vol_series.py`:** live math. Do not fake-split.
 

@@ -47,6 +47,26 @@ _PROMPT_DIRECTION_ECHO: tuple[str, ...] = (
     "disclosure x funding",
 )
 
+# LLM English titles sometimes invert gate polarity (sales_down → "Rising Sales").
+# Review follows GATES, not the title; reject the row rather than adopt inverted copy.
+_GATE_TITLE_CONTRA: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("sales_down", ("rising sales", "sales up", "sales growth")),
+    ("np_negative", ("positive np", "positive profit", "rising profit", "profit up")),
+    ("price_down", ("price up", "rising price")),
+    ("ta_down", ("ta up", "rising ta")),
+    ("ta_up", ("ta down", "falling ta")),
+    ("eq_ar_falling", ("rising eqar", "eqar rising", "eq ar rising")),
+    ("eq_ar_rising", ("falling eqar", "eqar falling", "eq ar falling")),
+    ("eq_ar_low", ("high eqar", "eqar high", "eq ar high")),
+    ("eq_ar_high", ("low eqar", "eqar low", "eq ar low")),
+    ("tight_funding", ("easy funding", "funding easing", "eased funding")),
+    ("easy_funding", ("tight funding", "funding tight")),
+    ("eps_down", ("eps up", "rising eps")),
+    ("eps_up", ("eps down", "falling eps")),
+    ("margin_down", ("margin up", "rising margin")),
+    ("margin_up", ("margin down", "falling margin")),
+)
+
 PROPOSE_MAX_AND_GATES: int = 3
 
 PROPOSE_CONTRADICTORY_GATE_PAIRS: tuple[frozenset[str], ...] = (
@@ -170,6 +190,28 @@ def review_proposal_row(proposal: Mapping[str, Any]) -> dict[str, Any]:
         blob = thesis.lower().replace("×", "x")
         if any(echo.replace("×", "x") in blob for echo in _PROMPT_DIRECTION_ECHO):
             reasons.append("prompt_direction_echo")
+        if (" × " in thesis or " x " in blob) and not any(
+            w in blob
+            for w in (
+                "when ",
+                " while ",
+                "after ",
+                "pead",
+                "skip ",
+                " pit",
+                "hold ",
+                "fade",
+                " names",
+            )
+        ):
+            reasons.append("title_not_occupancy")
+        polar_blob = blob.replace("_", " ").replace("-", " ")
+        for gate, forbidden in _GATE_TITLE_CONTRA:
+            if gate not in kept_set:
+                continue
+            if any(w in polar_blob for w in forbidden):
+                reasons.append("title_gate_polarity_mismatch")
+                break
         for combo, _reason in SPARSE_GATE_COMBOS:
             if combo <= kept_set:
                 reasons.append("sparse_gate_combo")
@@ -336,6 +378,7 @@ def invoke_cf_propose_thesis(
     http_post: Callable[..., Any] | None = None,
     proposal: Mapping[str, Any] | None = None,
     proposals: Sequence[Mapping[str, Any]] | None = None,
+    retry_on_clone: bool = True,
 ) -> dict[str, Any]:
     """POST /v1/propose-thesis. Does not write catalog YAML or inject IDs."""
     if proposal is not None and reject_window_tweak(proposal):
@@ -357,15 +400,15 @@ def invoke_cf_propose_thesis(
             }
 
     url = worker_url.rstrip("/") + "/v1/propose-thesis"
-    tok = resolve_research_run_token() or ""
+    auth_tok = resolve_research_run_token() or ""
     avoid: list[str] = []
     seen_avoid: set[str] = set()
     for item in list(why_avoid or ()) + catalog_gate_set_avoid():
-        tok = str(item).strip()
-        if not tok or tok in seen_avoid:
+        token = str(item).strip()
+        if not token or token in seen_avoid:
             continue
-        seen_avoid.add(tok)
-        avoid.append(tok)
+        seen_avoid.add(token)
+        avoid.append(token)
         if len(avoid) >= 12:
             break
     body: dict[str, Any] = {
@@ -398,51 +441,87 @@ def invoke_cf_propose_thesis(
         "Content-Type": "application/json",
         "User-Agent": "quant-platform-cf-propose-thesis/1.0",
     }
-    if tok:
-        headers["Authorization"] = f"Bearer {tok}"
-        headers["X-Research-Run-Token"] = tok
-        headers["X-Mass-Eval-Token"] = tok
-        headers["X-Ingestion-Token"] = tok
+    if auth_tok:
+        headers["Authorization"] = f"Bearer {auth_tok}"
+        headers["X-Research-Run-Token"] = auth_tok
+        headers["X-Mass-Eval-Token"] = auth_tok
+        headers["X-Ingestion-Token"] = auth_tok
 
     if http_post is not None:
         raw_resp = http_post(url=url, body=payload, headers=headers)
         if isinstance(raw_resp, Mapping):
-            return _attach_reviews(dict(raw_resp))
-        text = raw_resp if isinstance(raw_resp, str) else raw_resp.decode("utf-8")
-        parsed = json.loads(text)
-        if not isinstance(parsed, dict):
-            raise CfMassEvalError("propose-thesis response not an object")
-        return _attach_reviews(parsed)
+            parsed: dict[str, Any] = dict(raw_resp)
+        else:
+            text = raw_resp if isinstance(raw_resp, str) else raw_resp.decode("utf-8")
+            loaded = json.loads(text)
+            if not isinstance(loaded, dict):
+                raise CfMassEvalError("propose-thesis response not an object")
+            parsed = loaded
+        reviewed = _attach_reviews(
+            parsed,
+            write_sidecar=False,
+            job_id=str(body.get("job_id") or "") or None,
+        )
+    else:
+        import urllib.error
+        import urllib.request
 
-    import urllib.error
-    import urllib.request
-
-    req = urllib.request.Request(url, data=payload, method="POST", headers=headers)
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            raw = resp.read().decode("utf-8")
-    except urllib.error.HTTPError as exc:
-        detail = ""
+        req = urllib.request.Request(url, data=payload, method="POST", headers=headers)
         try:
-            detail = exc.read().decode("utf-8")[:2000]
-        except Exception:
-            detail = str(exc)
-        raise CfMassEvalError(
-            f"propose-thesis HTTP {exc.code}: {detail}"
-        ) from exc
-    except urllib.error.URLError as exc:
-        raise CfMassEvalError(f"propose-thesis network error: {exc}") from exc
-    try:
-        out = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise CfMassEvalError(f"propose-thesis non-json: {raw[:500]}") from exc
-    if not isinstance(out, dict):
-        raise CfMassEvalError("propose-thesis response not an object")
-    return _attach_reviews(
-        out,
-        write_sidecar=bool(write_artifacts),
-        job_id=str(body.get("job_id") or "") or None,
-    )
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                raw = resp.read().decode("utf-8")
+        except urllib.error.HTTPError as exc:
+            detail = ""
+            try:
+                detail = exc.read().decode("utf-8")[:2000]
+            except Exception:
+                detail = str(exc)
+            raise CfMassEvalError(
+                f"propose-thesis HTTP {exc.code}: {detail}"
+            ) from exc
+        except urllib.error.URLError as exc:
+            raise CfMassEvalError(f"propose-thesis network error: {exc}") from exc
+        try:
+            out = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise CfMassEvalError(f"propose-thesis non-json: {raw[:500]}") from exc
+        if not isinstance(out, dict):
+            raise CfMassEvalError("propose-thesis response not an object")
+        reviewed = _attach_reviews(
+            out,
+            write_sidecar=bool(write_artifacts),
+            job_id=str(body.get("job_id") or "") or None,
+        )
+    if (
+        retry_on_clone
+        and reviewed.get("workers_ai_used")
+        and int(reviewed.get("n_adoptable") or 0) == 0
+    ):
+        extra = []
+        for prop, rev in zip(
+            reviewed.get("proposals") or [],
+            reviewed.get("reviews") or [],
+        ):
+            if not isinstance(prop, Mapping) or not isinstance(rev, Mapping):
+                continue
+            if "gate_set_already_catalog" not in (rev.get("reasons") or []):
+                continue
+            gates = [str(x) for x in (prop.get("gates") or []) if str(x).strip()]
+            if gates:
+                extra.append("+".join(sorted(gates)))
+        if extra:
+            jid = str(body.get("job_id") or "")
+            return invoke_cf_propose_thesis(
+                n=n,
+                why_avoid=extra + list(avoid),
+                write_artifacts=write_artifacts,
+                job_id=f"{jid}-retry" if jid else None,
+                worker_url=worker_url,
+                timeout=timeout,
+                http_post=http_post,
+                retry_on_clone=False,
+            )
+    return reviewed
 
 
 __all__ = [

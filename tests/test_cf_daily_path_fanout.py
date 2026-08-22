@@ -175,6 +175,8 @@ def test_eval_tracks_are_two_and_not_head_n() -> None:
     assert "Workers AI" in q0["why"]
     assert "no auto-inject" in q0["why"]
     assert "both_track_sleeve_durability" in qids
+    assert "propose_clone_retry" in qids
+    assert "llm_title_gate_polarity" in qids
     both = next(q for q in NEXT_RESEARCH_QUEUE if q["id"] == "both_track_sleeve_durability")
     assert both["tracks"] == BOTH_EVAL_TRACK_IDS
     assert both["entry"] == "research.cf_daily_path_job.run_both_track_sleeve_fanout"
@@ -425,6 +427,8 @@ def test_both_track_sleeve_fanout_records_via_daily_path() -> None:
     assert tracks[EVAL_TRACK_LIQ_LARGE]["max_codes"] == EVAL_TRACKS[EVAL_TRACK_LIQ_LARGE]["max_codes"]
     assert tracks[EVAL_TRACK_MID_N]["n_cells"] == 2
     assert tracks[EVAL_TRACK_LIQ_LARGE]["n_cells"] == 2
+    assert "n_logic_ok" in tracks[EVAL_TRACK_MID_N]
+    assert "n_logic_ok" in tracks[EVAL_TRACK_LIQ_LARGE]
     assert all(url.endswith("/v1/daily-path") for url, _n, _lid in posts)
     max_codes = {n for _url, n, _lid in posts}
     assert max_codes == {

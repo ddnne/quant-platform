@@ -135,6 +135,8 @@ def test_worker_index_contains_propose_thesis_route() -> None:
     assert "fins_summary" in src
     assert "PROPOSE_ALLOWED_GATES" in src
     assert "Do not invent datasets" in src or "do not invent datasets" in src.lower()
+    assert "Title polarity MUST match gates" in src or "title polarity" in src.lower()
+    assert "occupancy sentence" in src.lower()
     assert "weekday-only" in src or "No weekday" in src
     assert "2+" in src or "AND-cross" in src or "2 or 3" in src
     assert "Liquidity × Fundamentals" in src or "direction labels" in src
@@ -230,6 +232,22 @@ def test_review_proposal_row_rejects_invent_and_weekday() -> None:
     assert bad_w["ok"] is False
     assert "and_cross_too_wide" in bad_w["reasons"]
 
+    polar = dict(good)
+    polar["thesis"] = "Japanese Equities: Falling EqAR after impulse"
+    polar["gates"] = ["liq_high", "eq_ar_rising", "on_impulse"]
+    bad_p = review_proposal_row(polar)
+    assert bad_p["ok"] is False
+    assert "title_gate_polarity_mismatch" in bad_p["reasons"]
+    assert bad_p["auto_inject"] is False
+
+    mash = dict(good)
+    mash["thesis"] = "Liquidity × Price × Margin"
+    mash["gates"] = ["liq_high", "ta_down", "margin_down"]
+    bad_m = review_proposal_row(mash)
+    assert bad_m["ok"] is False
+    assert "title_not_occupancy" in bad_m["reasons"]
+    assert bad_m["auto_inject"] is False
+
 
 def test_catalog_gate_set_avoid_is_existing_crosses() -> None:
     from research.cf_propose_thesis import catalog_gate_set_avoid
@@ -249,6 +267,7 @@ def test_catalog_gate_set_avoid_is_existing_crosses() -> None:
 
     def _post(*, url: str, body: bytes, headers: dict[str, str]) -> dict:
         posted["body"] = body
+        posted["headers"] = headers
         from research.cf_propose_thesis import stub_propose_thesis_result
 
         return stub_propose_thesis_result(n=1)
@@ -257,3 +276,79 @@ def test_catalog_gate_set_avoid_is_existing_crosses() -> None:
     blob = posted["body"].decode("utf-8")
     assert "why_avoid" in blob
     assert "+" in blob
+    hdrs = posted["headers"]
+    assert "Authorization" not in hdrs or not str(hdrs.get("Authorization", "")).endswith(
+        "+"
+    )
+
+
+def test_clone_retry_reposts_catalog_gate_sets() -> None:
+    import json
+
+    calls: list[dict] = []
+
+    def _post(*, url: str, body: bytes, headers: dict[str, str]) -> dict:
+        calls.append(json.loads(body.decode("utf-8")))
+        if len(calls) == 1:
+            return {
+                "ok": True,
+                "workers_ai_used": True,
+                "proposals": [
+                    {
+                        "thesis": "clone of existing EqAR x liquidity",
+                        "signal_definition": "AND(eq_ar_high, liq_high) PIT",
+                        "position_rule": "event-hold surprise sign",
+                        "datasets": ["equities_bars_daily", "fins_summary"],
+                        "gates": ["eq_ar_high", "liq_high"],
+                        "status": "llm_not_catalog",
+                    }
+                ],
+            }
+        return {
+            "ok": True,
+            "workers_ai_used": True,
+            "proposals": [
+                {
+                    "thesis": "impulse EqAR rising with high ADV",
+                    "signal_definition": "AND(liq_high, eq_ar_rising, on_impulse) PIT",
+                    "position_rule": "event-hold surprise sign",
+                    "datasets": ["equities_bars_daily", "fins_summary"],
+                    "gates": ["liq_high", "eq_ar_rising", "on_impulse"],
+                    "status": "llm_not_catalog",
+                }
+            ],
+        }
+
+    out = invoke_cf_propose_thesis(n=1, job_id="test-clone-retry", http_post=_post)
+    assert len(calls) == 2
+    assert calls[1]["why_avoid"][0] == "eq_ar_high+liq_high"
+    assert calls[1]["job_id"] == "test-clone-retry-retry"
+    assert out["n_adoptable"] == 1
+    assert out["auto_inject"] is False
+    assert out["go"] is False
+
+    once: list[int] = []
+
+    def _once(*, url: str, body: bytes, headers: dict[str, str]) -> dict:
+        once.append(1)
+        return {
+            "ok": True,
+            "workers_ai_used": True,
+            "proposals": [
+                {
+                    "thesis": "clone of existing EqAR x liquidity",
+                    "signal_definition": "AND(eq_ar_high, liq_high) PIT",
+                    "position_rule": "event-hold surprise sign",
+                    "datasets": ["equities_bars_daily", "fins_summary"],
+                    "gates": ["eq_ar_high", "liq_high"],
+                    "status": "llm_not_catalog",
+                }
+            ],
+        }
+
+    stuck = invoke_cf_propose_thesis(
+        n=1, http_post=_once, retry_on_clone=False
+    )
+    assert len(once) == 1
+    assert stuck["n_adoptable"] == 0
+    assert "gate_set_already_catalog" in stuck["reviews"][0]["reasons"]

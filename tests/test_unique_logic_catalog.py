@@ -285,8 +285,8 @@ def test_yaml_dispatch_worker_event_ids_align() -> None:
     assert "event_skip_monday" in yaml_ids
     assert "cs_not_month_end" in yaml_ids
     assert "event_skip_monday" in CF_NEW_THESIS_IDS
-    assert len(CF_NEW_THESIS_IDS) == 408
     from research.unique_logic.event_combos import NEW_COMBO_LOGIC
+    assert len(CF_NEW_THESIS_IDS) == len(NEW_COMBO_LOGIC)
     from research.unique_logic.constants import is_ungated_name_level_cs
 
     fresh = [

@@ -210,6 +210,8 @@ def test_mechanical_baskets_are_four_valid_defs() -> None:
     assert "low_occupancy_band" in RETIRED_BASKET_RULES
     assert "surprise_xs_only" in RETIRED_BASKET_RULES
     assert "two_member_easing" in RETIRED_BASKET_RULES
+    assert "event_calendar_only" in RETIRED_BASKET_RULES
+    assert "event_calendar_only" not in rules
     for d in defs:
         assert d["valid"] is True
         assert d["deprecated"] is False

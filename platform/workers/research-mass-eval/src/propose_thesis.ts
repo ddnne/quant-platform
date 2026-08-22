@@ -240,6 +240,10 @@ async function llmProposals(
               "repo_3m_down, cheap_iv, rich_iv. No opposite pairs (easy+tight). " +
               "No weekday-only gates. Thesis title must NOT be the labels " +
               "'Liquidity × Fundamentals', 'Margin × Price', or 'Disclosure × Funding'. " +
+              "Title polarity MUST match gates: sales_down is not Rising Sales; " +
+              "eq_ar_rising is not falling EqAR; np_negative is not positive profit. " +
+              "Thesis MUST be an occupancy sentence (when/while/after/PEAD), " +
+              "not only 'A × B × C' labels. " +
               "Do not invent datasets, fields, or gates. " +
               "No logic_id. No hold_days/window/mom-only tweaks. No catalog inject. " +
               "Skip missing prints (no invent). Economic difference only.",

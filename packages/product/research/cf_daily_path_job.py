@@ -397,6 +397,7 @@ def run_both_track_sleeve_fanout(
             "skipped_live_cf": skipped_live_cf,
             "table_path": (fan_pack or {}).get("table_path"),
             "n_cells": (fan_pack or {}).get("n_cells"),
+            "n_logic_ok": (fan_pack or {}).get("n_logic_ok"),
             "n_daily_path_complete": (fan_pack or {}).get("n_daily_path_complete"),
             "baskets": (fan_pack or {}).get("baskets") or {"baskets": []},
             "not_a_pass": True,

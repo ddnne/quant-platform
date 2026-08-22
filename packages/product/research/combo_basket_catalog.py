@@ -13,7 +13,12 @@ DEFAULT_CANDIDATE_BASKET: tuple[str, ...] = (
 )
 
 RETIRED_BASKET_RULES: frozenset[str] = frozenset(
-    {"low_occupancy_band", "surprise_xs_only", "two_member_easing"}
+    {
+        "low_occupancy_band",
+        "surprise_xs_only",
+        "two_member_easing",
+        "event_calendar_only",
+    }
 )
 MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
     {
@@ -27,10 +32,10 @@ MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
         "rule": "event_family_only",
         "primary": False,
         "members": (
-            "event_easing_uncrowded",
-            "event_friday_skip",
-            "event_tue_thu_easing",
+            "event_eqar_high_liq_high",
+            "event_ta_up_liq_high",
             "event_afterclose_easing",
+            "event_eqar_rising_afterclose",
         ),
     },
     {
@@ -38,21 +43,10 @@ MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
         "rule": "family_spread",
         "primary": False,
         "members": (
-            "event_tue_thu_easing",
-            "surprise_xs_easing_change",
-            "cs_easing_midmonth",
-            "overnight_down_skip_monday_cs",
-        ),
-    },
-    {
-        "basket_id": "basket_event_cal4",
-        "rule": "event_calendar_only",
-        "primary": False,
-        "members": (
-            "event_skip_monday",
-            "event_friday_skip",
-            "event_tue_thu_only",
-            "event_first_half_month",
+            "event_eqar_high_liq_high",
+            "surprise_xs_eqar_high_liq_high",
+            "cs_margin_up_chase",
+            "event_repo3m_down_pead",
         ),
     },
     {
@@ -60,10 +54,10 @@ MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
         "rule": "mid_occupancy_band",
         "primary": False,
         "members": (
-            "cs_tue_thu_down",
-            "rate_up_tue_thu_cs",
-            "surprise_xs_afterclose_easing",
-            "cs_skip_monday",
+            "event_eqar_high_liq_high",
+            "event_margin_down_liq_high",
+            "cs_on_impulse",
+            "cs_margin_up_chase",
         ),
     },
     {
@@ -71,10 +65,10 @@ MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
         "rule": "cs_family_only",
         "primary": False,
         "members": (
-            "cs_skip_monday",
-            "cs_easing_midmonth",
-            "overnight_down_cs_follow",
-            "cs_tue_thu_down",
+            "cs_margin_up_chase",
+            "cs_margin_down_follow",
+            "cs_on_impulse",
+            "cs_repo3m_down",
         ),
     },
     {
