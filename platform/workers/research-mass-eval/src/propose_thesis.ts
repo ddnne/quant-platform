@@ -142,6 +142,7 @@ function normalizeProposalRow(
   ) {
     return null;
   }
+  if (titleOccupancyBad(title, gates)) return null;
   const why = Array.isArray(row.why_different_from)
     ? row.why_different_from.map((x) => String(x)).filter(Boolean)
     : [];
@@ -231,14 +232,19 @@ async function llmProposals(
   const system =
     "Return ONLY a JSON array. Each object: thesis, signal_definition, " +
     "position_rule, datasets, gates, why_different_from. " +
-    "gates: 2 or 3 from margin_up, margin_down, crowded_margin, uncrowded_margin, " +
-    "repo_3m_down, overnight_easing, overnight_tightening, steep_curve, " +
-    "invert_curve, eq_ar_rising, eq_ar_falling, ta_up, ta_down, cheap_iv, " +
-    "rich_iv, nky_vol_high_skip, large_surprise, on_impulse, pre_mom, " +
-    "liq_high, eps_up, eps_down, sales_down, np_negative, price_down, " +
-    "easy_funding, tight_funding, cluster. Prefer margin/repo/EqAR-TA/vol. " +
+    "gates: 2 or 3 from curve_flatten, overnight_p10, pb_rising, roe_low, " +
+    "eps_down, np_negative, sales_down, invert_curve, tight_funding, " +
+    "overnight_tightening, margin_up, margin_down, crowded_margin, " +
+    "uncrowded_margin, repo_3m_down, overnight_easing, steep_curve, " +
+    "eq_ar_rising, eq_ar_falling, ta_up, ta_down, cheap_iv, rich_iv, " +
+    "nky_vol_high_skip, large_surprise, on_impulse, pre_mom, liq_high, " +
+    "eps_up, price_down, easy_funding, cluster, afterclose, positive_eps. " +
+    "Prefer curve_flatten, overnight_p10, pb_rising, roe_low, eps_down, " +
+    "np_negative, sales_down, invert_curve, tight_funding. " +
+    "Do not pair nky_vol_high_skip with steep_curve. Do not pair cheap_iv with steep_curve. " +
     "Do not start with cheap_pb. No weekday. No opposite pairs. " +
-    "Thesis is an occupancy sentence matching gate polarity. No A×B×C labels. " +
+    "Thesis is an occupancy sentence matching gate polarity. EqAR is not risk appetite. " +
+    "ta_up is total assets, not technical analysis. No A×B×C labels. " +
     "Do not invent datasets, fields, or gates. No logic_id. No inject.";
   const user =
     `Propose exactly ${n} JSON theses. Avoid: ${avoid}.\n` +
@@ -282,6 +288,96 @@ async function llmProposals(
     notes.push(lastReason);
   }
   return { rows: null, reason: notes.join("|") || lastReason, model: lastModel };
+}
+
+/** Drop inverted / slang titles so they do not occupy an ok:true slot.
+ * Python review_proposal_row remains the adopt gate. Never injects.
+ */
+function titleOccupancyBad(title: string, gates: string[]): boolean {
+  const polar = title.replace(/_/g, " ").replace(/-/g, " ");
+  const gset = new Set(gates);
+  const contra: Array<[string, string[]]> = [
+    ["sales_down", ["rising sales", "sales up", "sales growth", "high sales", "sales increase"]],
+    ["np_negative", ["positive np", "positive profit", "rising profit", "profit up"]],
+    ["price_down", ["price up", "rising price", "increase in price", "price increase"]],
+    ["ta_down", ["ta up", "rising ta"]],
+    ["ta_up", ["ta down", "falling ta"]],
+    [
+      "eq_ar_falling",
+      [
+        "rising eqar",
+        "eqar rising",
+        "eq ar rising",
+        "high eqar",
+        "high equity",
+        "rising equity",
+        "equity risk premium is rising",
+        "rising equity risk",
+      ],
+    ],
+    ["eq_ar_rising", ["falling eqar", "eqar falling", "eq ar falling"]],
+    ["eq_ar_low", ["high eqar", "eqar high", "eq ar high"]],
+    ["eq_ar_high", ["low eqar", "eqar low", "eq ar low"]],
+    ["tight_funding", ["easy funding", "funding easing", "eased funding"]],
+    ["easy_funding", ["tight funding", "funding tight"]],
+    ["eps_down", ["eps up", "rising eps"]],
+    ["eps_up", ["eps down", "falling eps"]],
+    ["margin_down", ["margin up", "rising margin"]],
+    ["margin_up", ["margin down", "falling margin"]],
+    ["nky_vol_high_skip", ["volatility is high", "vol is high", "high volatility", "nky vol high"]],
+    ["crowded_margin", ["uncrowded"]],
+    ["uncrowded_margin", ["is crowded", "margin is crowded"]],
+    ["cheap_iv", ["rich iv", "iv is rich", "expensive iv"]],
+    ["rich_iv", ["cheap iv", "iv is cheap"]],
+    ["overnight_easing", ["tightening"]],
+    ["overnight_tightening", ["easing", "easy funding"]],
+    ["repo_3m_down", ["high repo", "repo rate is high", "rising repo", "repo up"]],
+  ];
+  for (const [gate, words] of contra) {
+    if (!gset.has(gate)) continue;
+    if (words.some((w) => polar.includes(w))) return true;
+  }
+  const labels: Array<[string, string[]]> = [
+    ["eq_ar_falling", ["risk appetite", "risk premia", "risk premium", "risk arbitrage"]],
+    ["eq_ar_rising", ["risk appetite", "risk premia", "risk premium", "risk arbitrage"]],
+    ["eq_ar_high", ["risk appetite", "risk premia", "risk premium", "risk arbitrage"]],
+    ["eq_ar_low", ["risk appetite", "risk premia", "risk premium", "risk arbitrage"]],
+    ["repo_3m_down", ["repo rates are low", "low repo", "repo is low"]],
+    ["ta_up", ["technical analysis", "technical signal", "ta signals"]],
+    ["ta_down", ["technical analysis", "technical signal", "ta signals"]],
+    ["overnight_p10", ["at 10%", "funding at 10", "10 percent", "10% predicts"]],
+  ];
+  for (const [gate, words] of labels) {
+    if (!gset.has(gate)) continue;
+    if (!words.some((w) => polar.includes(w))) continue;
+    if (
+      gate.startsWith("eq_ar") &&
+      (polar.includes("eqar") ||
+        polar.includes("eq ar") ||
+        polar.includes("equity to asset"))
+    ) {
+      continue;
+    }
+    if (gate.startsWith("ta_") && polar.includes("total assets")) continue;
+    if (
+      gate === "overnight_p10" &&
+      ["easiest", "percentile", "decile", "p10"].some((t) => polar.includes(t))
+    ) {
+      continue;
+    }
+    return true;
+  }
+  const sparse: string[][] = [
+    ["nky_vol_high_skip", "steep_curve"],
+    ["cheap_iv", "steep_curve"],
+    ["cheap_iv", "cheap_pb"],
+    ["cheap_iv", "margin_up", "repo_3m_down"],
+    ["margin_down", "eq_ar_rising", "steep_curve"],
+    ["rich_iv", "margin_up", "eq_ar_falling"],
+    ["div_positive", "cheap_iv"],
+  ];
+  if (sparse.some((combo) => combo.every((g) => gset.has(g)))) return true;
+  return false;
 }
 
 function isWindowTweakOnly(o: Record<string, unknown>): boolean {

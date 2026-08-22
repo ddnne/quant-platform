@@ -17,7 +17,8 @@
 | 8 | FoF・Risk |
 | 9 | 執行の厚み・追加データ |
 
-> **次は Phase 7（選抜・Knowledge・AI Gateway）。** Phase 6 では Premium core 23 の
+> **Phase 7 は NO-GO**（READY + Coverage V2 COMPLETE まで。研究の次は propose→occupancy
+> 閉ループであり Mass / GO ではない）。Phase 6 では Premium core 23 の
 > canonical data contract、revision/change-feed、validated snapshot manifest、SQLite WAL paper
 > index、stale valuation marks、RAW price basis、feature governance を hardening した。
 > さらに 8 役割の structured interface、declarative StrategySpec whitelist interpreter、

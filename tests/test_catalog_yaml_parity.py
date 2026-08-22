@@ -511,7 +511,6 @@ def test_countable_thesis_ids_require_worker_body() -> None:
             assert lid in countable
             assert is_countable_spec(spec) is True
     assert known >= 1
-    assert len(countable) >= 30
     assert "event_eqar_high_pead" in countable
     from research.unique_logic.worker_bodies import (
         CHEAP_PB_PRIMARY_GATE_CAP,

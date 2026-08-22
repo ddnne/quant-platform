@@ -98,6 +98,7 @@ _GATE_OCCUPANCY_LABEL: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("repo_3m_down", ("repo rates are low", "low repo", "repo is low")),
     ("ta_up", ("technical analysis", "technical signal", "ta signals")),
     ("ta_down", ("technical analysis", "technical signal", "ta signals")),
+    ("overnight_p10", ("at 10%", "funding at 10", "10 percent", "10% predicts")),
 )
 
 PROPOSE_MAX_AND_GATES: int = 3
@@ -257,6 +258,11 @@ def review_proposal_row(proposal: Mapping[str, Any]) -> dict[str, Any]:
                 continue
             if gate.startswith("ta_") and "total assets" in polar_blob:
                 continue
+            if gate == "overnight_p10" and any(
+                t in polar_blob
+                for t in ("easiest", "percentile", "decile", "p10")
+            ):
+                continue
             reasons.append("occupancy_label_only")
             break
         for combo, _reason in SPARSE_GATE_COMBOS:
@@ -324,6 +330,28 @@ def catalog_gate_set_avoid(*, limit: int = PROPOSE_WHY_AVOID_LIMIT) -> list[str]
         n2 = min(len(twos), lim // 2)
         n3 = min(len(threes), lim - n2)
     return [t for _, t in threes[:n3]] + [t for _, t in twos[:n2]]
+
+
+def sparse_gate_set_avoid() -> list[str]:
+    """Recorded empty AND-sets. Prepended to why_avoid. Does not GO."""
+    from research.unique_logic.constants import (
+        PROPOSE_CALENDAR_GATES,
+        SPARSE_GATE_COMBOS,
+    )
+
+    out: list[str] = []
+    have: set[str] = set()
+    for combo, _reason in SPARSE_GATE_COMBOS:
+        if len(combo) < 2:
+            continue
+        if combo & PROPOSE_CALENDAR_GATES:
+            continue
+        token = "+".join(sorted(combo))
+        if token in have:
+            continue
+        have.add(token)
+        out.append(token)
+    return out
 
 
 def reject_window_tweak(proposal: Mapping[str, Any]) -> bool:
@@ -472,7 +500,9 @@ def invoke_cf_propose_thesis(
     auth_tok = resolve_research_run_token() or ""
     avoid: list[str] = []
     seen_avoid: set[str] = set()
-    for item in list(why_avoid or ()) + catalog_gate_set_avoid():
+    for item in (
+        list(why_avoid or ()) + sparse_gate_set_avoid() + catalog_gate_set_avoid()
+    ):
         token = str(item).strip()
         if not token or token in seen_avoid:
             continue
@@ -620,6 +650,7 @@ __all__ = [
     "PROPOSE_WHY_AVOID_LIMIT",
     "STUB_PROPOSAL_TEMPLATES",
     "catalog_gate_set_avoid",
+    "sparse_gate_set_avoid",
     "invoke_cf_propose_thesis",
     "reject_window_tweak",
     "review_proposal_row",

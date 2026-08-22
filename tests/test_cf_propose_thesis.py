@@ -172,8 +172,11 @@ def test_worker_index_contains_propose_thesis_route() -> None:
     assert "occupancy sentence" in src.lower()
     assert "slice(0, 24)" in src or "slice(0,24)" in src
     assert "No weekday" in src
-    assert "2 or 3" in src
-    assert "Liquidity × Price × Margin" in src
+    assert "titleOccupancyBad" in src
+    assert "risk appetite" in src
+    assert "nky_vol_high_skip with steep_curve" in src
+    assert "technical analysis" in src
+    assert "Prefer curve_flatten" in src
     assert "auto_inject: false" in src
     assert "markets_margin_interest" in src
     assert '"margin_interest"' not in src
@@ -351,6 +354,26 @@ def test_review_proposal_row_rejects_invent_and_weekday() -> None:
     assert "title_gate_polarity_mismatch" in bad_n["reasons"]
     assert bad_n["auto_inject"] is False
 
+    occupancy_p10 = {
+        "thesis": "Overnight funding at 10% predicts EPS decline.",
+        "signal_definition": "AND(overnight_p10, eps_down) PIT",
+        "position_rule": "event-hold surprise sign",
+        "datasets": ["equities_bars_daily", "fins_summary", "jsda_tokyo_repo_rates"],
+        "gates": ["overnight_p10", "eps_down"],
+    }
+    bad_p10 = review_proposal_row(occupancy_p10)
+    assert bad_p10["ok"] is False
+    assert "occupancy_label_only" in bad_p10["reasons"]
+    assert bad_p10["auto_inject"] is False
+    occ_p10_ok = dict(occupancy_p10)
+    occ_p10_ok["thesis"] = (
+        "PEAD when overnight is in the easiest PIT decile AND EPS contracted"
+    )
+    ok_p10 = review_proposal_row(occ_p10_ok)
+    assert ok_p10["ok"] is True or "gate_set_already_catalog" in ok_p10["reasons"]
+    assert "occupancy_label_only" not in ok_p10["reasons"]
+    assert ok_p10["auto_inject"] is False
+
     occupancy_ta = {
         "thesis": (
             "Stocks are more likely to be bought when the margin is uncrowded "
@@ -432,23 +455,30 @@ def test_catalog_gate_set_avoid_is_existing_crosses() -> None:
     assert PROPOSE_CALENDAR_GATES.isdisjoint(
         {p for t in tokens for p in t.split("+")}
     )
+
+
+def test_sparse_gate_set_avoid_is_prepended_to_why_avoid() -> None:
+    import json
+
+    from research.cf_propose_thesis import sparse_gate_set_avoid
+
+    sparse = sparse_gate_set_avoid()
+    assert "nky_vol_high_skip+steep_curve" in sparse
+    assert "cheap_iv+steep_curve" in sparse
+    assert "cheap_iv+cheap_pb" in sparse
     posted: dict[str, object] = {}
 
     def _post(*, url: str, body: bytes, headers: dict[str, str]) -> dict:
-        posted["body"] = body
-        posted["headers"] = headers
-        from research.cf_propose_thesis import stub_propose_thesis_result
-
+        posted["body"] = json.loads(body.decode("utf-8"))
         return stub_propose_thesis_result(n=1)
 
-    invoke_cf_propose_thesis(n=1, http_post=_post)
-    blob = posted["body"].decode("utf-8")
-    assert "why_avoid" in blob
-    assert "+" in blob
-    hdrs = posted["headers"]
-    assert "Authorization" not in hdrs or not str(hdrs.get("Authorization", "")).endswith(
-        "+"
-    )
+    out = invoke_cf_propose_thesis(n=1, http_post=_post)
+    avoid = list((posted.get("body") or {}).get("why_avoid") or [])  # type: ignore[union-attr]
+    assert avoid
+    assert len(avoid) <= PROPOSE_WHY_AVOID_LIMIT
+    assert "nky_vol_high_skip+steep_curve" in avoid
+    assert out["auto_inject"] is False
+    assert out["go"] is False
 
 
 def test_clone_retry_reposts_catalog_gate_sets() -> None:

@@ -80,9 +80,9 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "id": "inventory_bias_recorded",
         "track": EVAL_TRACK_LIQ_LARGE,
         "why": (
-            "recorded research/eval/job=eval-inventory-bias-20260823v/ "
+            "recorded research/eval/job=eval-inventory-bias-20260823z/ "
             "inventory_bias.json; assert_new_batch_cheap_pb_cap refuses "
-            "new batches at 20%; 23t/23v occupancy audit mid-band; plus32vf "
+            "new batches at 20%; 23t/23v/23z occupancy audit; plus32vf "
             "4 + nkyvol×steep parked near_empty — not materials"
         ),
         "not_a_pass": True,
@@ -102,8 +102,8 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "id": "propose_clone_retry",
         "track": EVAL_TRACK_LIQ_LARGE,
         "why": (
-            "why_avoid splits newest countable 3-gates and 2-gates; "
-            "clone-only responses retry once with those sets prepended; "
+            "why_avoid prepends SPARSE economic ANDs then newest 3/2-gates; "
+            "zero-adopt retries once (clone/sparse extra; polarity keeps AND); "
             "still no auto-inject"
         ),
         "not_a_pass": True,
@@ -114,8 +114,8 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "track": EVAL_TRACK_LIQ_LARGE,
         "why": (
             "review_proposal_row title_gate_polarity_mismatch and "
-            "title_not_occupancy; YAML follows GATES not inverted or "
-            "A×B×C label titles"
+            "occupancy_label_only; Worker titleOccupancyBad drops inverted "
+            "slots; YAML follows GATES not inverted or A×B×C labels"
         ),
         "not_a_pass": True,
         "go": False,
@@ -233,8 +233,8 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "id": "adopt_occupancy_recorded",
         "track": EVAL_TRACK_LIQ_LARGE,
         "why": (
-            "eval-occupancy-audit-20260823t: 23t adopt mid-band both "
-            "tracks (occ 0.213); primary sleeves have 0 near_empty members; not a pass"
+            "eval-occupancy-audit-20260823z: 23t/23v/23z adopts mid-band both "
+            "tracks; primary sleeves have 0 near_empty members; not a pass"
         ),
         "not_a_pass": True,
         "go": False,

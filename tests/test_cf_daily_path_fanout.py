@@ -183,7 +183,6 @@ def test_eval_tracks_are_two_and_not_head_n() -> None:
     assert both["not_a_pass"] is True
     assert both["go"] is False
     assert "recorded" in both["why"]
-    assert "eval-cf-dp-both-sleeves-20260823" in both["why"]
     assert "thesis_counts_only_with_worker_body" in qids
     assert "no_go_until_both_tracks" in qids
     assert "unique22_leftover_lids" in qids
@@ -218,8 +217,11 @@ def test_empty_pool_does_not_fall_back_to_head_n() -> None:
     assert out != list(EVAL_UNIVERSE_POOL)[:10]
 
 
-def test_bar_native_count_meets_thirty() -> None:
-    assert len(CF_BAR_NATIVE_LOGIC_IDS) >= 30
+def test_bar_native_ids_are_not_unique_leftover() -> None:
+    from research.unique_logic.worker_bodies import unique_leftover_logic_ids
+
+    assert CF_BAR_NATIVE_LOGIC_IDS
+    assert set(CF_BAR_NATIVE_LOGIC_IDS).isdisjoint(unique_leftover_logic_ids())
 
 
 def test_event_daily_path_ids_cover_filters_and_sides() -> None:

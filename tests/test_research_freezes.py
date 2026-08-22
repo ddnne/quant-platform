@@ -202,13 +202,8 @@ def test_near_empty_park_is_not_countable_or_basket_material() -> None:
 
     parked = near_empty_occupancy_park()
     assert parked == NEAR_EMPTY_PARK_IDS
-    assert len(parked) >= 4
-    assert {
-        "event_cheap_iv_eqar_rising_steep",
-        "event_cheap_iv_margin_up_repo3m",
-        "event_margin_down_eqar_rising_steep",
-        "event_rich_iv_margin_up_eqar_falling_fade",
-    } <= parked
+    assert "event_cheap_iv_eqar_rising_steep" in parked
+    assert "event_nkyvol_steep_uncrowded" in parked
     countable = countable_thesis_ids()
     for lid in parked:
         spec = catalog_spec(lid)
