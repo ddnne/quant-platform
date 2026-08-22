@@ -199,6 +199,7 @@ export const CF_NEW_EVENT_THESIS_IDS = [
   "event_margin_delta_fade",
   "event_margin_down_easing",
   "event_margin_down_easing_liq",
+  "event_margin_down_easing_ta_up",
   "event_margin_down_easy",
   "event_margin_down_eqar_rising_steep",
   "event_margin_down_follow",

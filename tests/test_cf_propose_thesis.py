@@ -305,6 +305,17 @@ def test_review_proposal_row_rejects_invent_and_weekday() -> None:
     assert "title_gate_polarity_mismatch" in bad_h["reasons"]
     assert bad_h["auto_inject"] is False
 
+    invert_repo = {
+        "thesis": "Stocks with high repo rates and rising equity risk premia outperform when volatility is low.",
+        "signal_definition": "AND(repo_3m_down, eq_ar_rising, nky_vol_high_skip) PIT",
+        "position_rule": "event-hold surprise sign",
+        "datasets": ["equities_bars_daily", "fins_summary", "jsda_tokyo_repo_rates"],
+        "gates": ["repo_3m_down", "eq_ar_rising", "nky_vol_high_skip"],
+    }
+    bad_r = review_proposal_row(invert_repo)
+    assert bad_r["ok"] is False
+    assert "title_gate_polarity_mismatch" in bad_r["reasons"]
+
     sparse_steep = {
         "thesis": "PEAD when NKY vol-high skip is off AND the repo curve is steep.",
         "signal_definition": "AND(nky_vol_high_skip, steep_curve) PIT",

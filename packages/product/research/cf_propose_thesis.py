@@ -76,6 +76,7 @@ _GATE_TITLE_CONTRA: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("rich_iv", ("cheap iv", "iv is cheap")),
     ("overnight_easing", ("tightening",)),
     ("overnight_tightening", ("easing", "easy funding")),
+    ("repo_3m_down", ("high repo", "repo rate is high", "rising repo", "repo up")),
 )
 
 PROPOSE_MAX_AND_GATES: int = 3
