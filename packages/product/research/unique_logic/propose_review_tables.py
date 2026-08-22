@@ -250,6 +250,7 @@ GATE_OCCUPANCY_LABEL: tuple[tuple[str, tuple[str, ...]], ...] = (
         "earnings per share are falling",
         "eps are falling",
         "earnings per share tend to decrease",
+        "eps down",
     )),
     ("eps_up", (
         "earnings per share are rising",
