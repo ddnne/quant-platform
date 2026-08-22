@@ -253,11 +253,6 @@ DEFAULT_OPT225_BASEVOL_DELTA_LOW_THRESHOLD: float = -1.0
 DEFAULT_OPT225_VOL_EXPAND_RATIO: float = 1.20
 DEFAULT_OPT225_VOL_COMPRESS_RATIO: float = 0.80
 OPT225_SPREAD_CONVENTION: str = "atm_iv - base_vol"
-OPT225_SKEW_CONVENTION: str = "put_iv(~0.95*UnderPx) - atm_mid_iv"
-OPT225_CM_TERM_CONVENTION: str = "near_cm_atm_iv - next_cm_atm_iv"
-OPT225_BASEVOL_DELTA_CONVENTION: str = "BaseVol[t] - BaseVol[t-1]"
-# W94: BaseVol = canonical level; reconstructed ATM = compare-only.
-OPT225_CANONICAL_LEVEL: str = "basevol"
 
 
 def _freeze_meta() -> dict[str, Any]:
@@ -276,7 +271,6 @@ def _freeze_meta() -> dict[str, Any]:
 from .class_signals_hold import (
     amortized_one_way_cost,
     apply_sticky_hold,
-    apply_trading_day_filter,
     compute_multi_day_hold_signal,
     multi_day_forward_return,
     sign_from_numeric,
@@ -391,7 +385,6 @@ __all__ = [
     "OPTIONS_VOL_REGIME_DATASETS",
     "MACRO_CONDITIONED_DATASETS",
     "MARGIN_CHANGE_FEATURE_ID",
-    "MASS_RESEARCH",
     "MOMENTUM_FEATURE_ID",
     "MULTI_FACTOR_DATASETS",
     "NKY_VOL_ABS_FEATURE_ID",
@@ -406,10 +399,6 @@ __all__ = [
     "OPT225_CM_TERM_FEATURE_ID",
     "OPT225_BASEVOL_DELTA_FEATURE_ID",
     "OPT225_SPREAD_CONVENTION",
-    "OPT225_SKEW_CONVENTION",
-    "OPT225_CM_TERM_CONVENTION",
-    "OPT225_BASEVOL_DELTA_CONVENTION",
-    "OPT225_CANONICAL_LEVEL",
     "DEFAULT_OPT225_VOL_HIGH_THRESHOLD",
     "DEFAULT_OPT225_VOL_LOW_THRESHOLD",
     "DEFAULT_OPT225_SPREAD_HIGH_THRESHOLD",
@@ -422,10 +411,7 @@ __all__ = [
     "DEFAULT_OPT225_BASEVOL_DELTA_LOW_THRESHOLD",
     "DEFAULT_OPT225_VOL_EXPAND_RATIO",
     "DEFAULT_OPT225_VOL_COMPRESS_RATIO",
-    "ORDER_EXECUTION",
-    "PHASE7",
     "RATE_FACTOR_DATASETS",
-    "READY_DECLARED",
     "REPO_CURVE_FEATURE_ID",
     "REPO_CURVE_LONG_TENOR",
     "REPO_CURVE_SHORT_TENOR",
@@ -462,7 +448,6 @@ __all__ = [
     "TRADING_DAYS_ANN",
     "amortized_one_way_cost",
     "apply_sticky_hold",
-    "apply_trading_day_filter",
     "class_signal_definitions",
     "class_signals_document",
     "compute_cross_section_signal",

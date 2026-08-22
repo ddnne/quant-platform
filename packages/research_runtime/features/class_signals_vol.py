@@ -33,15 +33,10 @@ from .class_signals import (
     NKY_VOL_TERM_LEVELS_FEATURE_ID,
     NKY_VOL_TERM_RATIO_FEATURE_ID,
     OPT225_ATM_IV_FEATURE_ID,
-    OPT225_BASEVOL_DELTA_CONVENTION,
     OPT225_BASEVOL_DELTA_FEATURE_ID,
     OPT225_BASEVOL_FEATURE_ID,
-    OPT225_CANONICAL_LEVEL,
-    OPT225_CM_TERM_CONVENTION,
     OPT225_CM_TERM_FEATURE_ID,
-    OPT225_SKEW_CONVENTION,
     OPT225_SKEW_FEATURE_ID,
-    OPT225_SPREAD_CONVENTION,
     OPT225_SPREAD_FEATURE_ID,
     OPTIONS_VOL_REGIME_DATASETS,
     SIGNAL_ID_NKY_VOL_ABS_LEVEL,
@@ -473,8 +468,6 @@ def compute_opt225_vol_signal(
         "datasets_required": list(OPTIONS_VOL_REGIME_DATASETS),
         "series_kind": series_kind,
         "mode": m,
-        "units": "percent_vol_points",
-        "spread_convention": OPT225_SPREAD_CONVENTION,
         "cs_sign": cs_sign,
         "vol_level": vol_level,
         "short_vol": short_vol,
@@ -612,11 +605,6 @@ def compute_opt225_skew_abs_level_signal(**kwargs: Any) -> dict[str, Any]:
         low_threshold=kwargs.pop(
             "low_threshold", DEFAULT_OPT225_SKEW_LOW_THRESHOLD
         ),
-        extra_meta={
-            "skew_convention": OPT225_SKEW_CONVENTION,
-            "invent_strike": False,
-            **dict(kwargs.pop("extra_meta", None) or {}),
-        },
         **kwargs,
     )
 
@@ -634,11 +622,6 @@ def compute_opt225_cm_term_abs_level_signal(**kwargs: Any) -> dict[str, Any]:
         low_threshold=kwargs.pop(
             "low_threshold", DEFAULT_OPT225_CM_TERM_LOW_THRESHOLD
         ),
-        extra_meta={
-            "cm_term_convention": OPT225_CM_TERM_CONVENTION,
-            "invent_strike": False,
-            **dict(kwargs.pop("extra_meta", None) or {}),
-        },
         **kwargs,
     )
 
@@ -656,10 +639,5 @@ def compute_opt225_basevol_delta_abs_signal(**kwargs: Any) -> dict[str, Any]:
         low_threshold=kwargs.pop(
             "low_threshold", DEFAULT_OPT225_BASEVOL_DELTA_LOW_THRESHOLD
         ),
-        extra_meta={
-            "basevol_delta_convention": OPT225_BASEVOL_DELTA_CONVENTION,
-            "canonical_level": OPT225_CANONICAL_LEVEL,
-            **dict(kwargs.pop("extra_meta", None) or {}),
-        },
         **kwargs,
     )

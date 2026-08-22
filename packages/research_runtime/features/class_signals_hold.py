@@ -1,8 +1,6 @@
 """Hold-family class signals: sticky hold, multi_day_hold, trading-day filter.
 
-Re-exports event_index + metrics so ``from features.class_signals_hold import
-...`` stays stable. Not simple daily sign. Mass / READY / GO closed.
-No S1–S5 un-reject.
+Not simple daily sign. Mass / READY / GO closed. No S1–S5 un-reject.
 """
 
 from __future__ import annotations
@@ -204,14 +202,7 @@ def compute_multi_day_hold_signal(
     as_of: str | None = None,
     extra_meta: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Single-day **entry** observation for multi_day_hold class.
-
-    Formula (entry):
-        value = sign(momentum_n) if is_trading_day==1 else None
-
-    The **hold** is applied across a time series via :func:`apply_sticky_hold`.
-    This is **not** a 1-day flip primary; horizon is multi-day.
-    """
+    """Single-day entry observation for multi_day_hold (sticky hold is separate)."""
     h = int(hold_days)
     if h not in SUPPORTED_HOLD_DAYS and h < 1:
         raise ValueError(f"hold_days invalid: {hold_days!r}")
@@ -231,15 +222,7 @@ def compute_multi_day_hold_signal(
         "hold_days": h,
         "raw_entry_sign": raw,
         "filter": filter_meta,
-        "formula": (
-            f"entry = sign(momentum_n n={n_mom}); "
-            f"hold sticky fixed_horizon={h}d (not 1d flip)"
-        ),
         "not_simple_daily_sign": True,
-        "note": (
-            "Multi-day hold entry from momentum_n. Position held across "
-            f"{h} sessions via sticky hold. Not READY. Not mass. No orders."
-        ),
     }
     meta.update(_freeze_meta())
     if code is not None:
@@ -272,21 +255,3 @@ def _as_float_or_none(x: Any) -> float | None:
         return float(x)
     except (TypeError, ValueError):
         return None
-
-
-
-from .class_signals_event_index import (
-    compute_event_post_signal,
-    earnings_surprise_proxy,
-    event_post_available_at_from_fields,
-    event_post_entry_bar_index,
-    parse_disc_time_hhmmss,
-    session_close_hhmmss,
-)
-from .class_signals_metrics import (
-    economic_net_meaningful,
-    multi_year_skew_check,
-    occurrence_rate_event_post,
-    occurrence_rate_multiday,
-    production_candidate_bar,
-)

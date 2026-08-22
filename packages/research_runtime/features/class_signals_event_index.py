@@ -306,17 +306,8 @@ def compute_event_post_signal(
         "disc_date": disc_date,
         "filter": filter_meta,
         "event": event_meta,
-        "formula": (
-            f"on fins DiscDate(+DiscTime): available_at from dataset fields; "
-            f"entry=sign(surprise_proxy) at first non-look-ahead session close; "
-            f"sticky hold={h}d close-to-close; non-event → no trade"
-        ),
         "entry_mode": EVENT_POST_ENTRY_MODE,
         "not_simple_daily_sign": True,
-        "note": (
-            "Post-disclosure hold from fins_summary DiscDate/DiscTime SoT. "
-            "Missing DiscTime → next session (no invent). Not READY. Not mass."
-        ),
     }
     meta.update(_freeze_meta())
     if code is not None:

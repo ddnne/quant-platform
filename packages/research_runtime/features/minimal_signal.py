@@ -199,10 +199,6 @@ def compute_topix_relative_sign_signal(
         "phase7": PHASE7,
         "ready_declared": READY_DECLARED,
         "order_execution": ORDER_EXECUTION,
-        "note": (
-            "Minimal tip signal from COMPLETE-21 candidate features. "
-            "Not READY. Not mass research. No order execution."
-        ),
     }
     if code is not None:
         meta["code"] = str(code)
@@ -270,10 +266,6 @@ def compute_signal_from_feature_observations(
                 }
                 for r in signal_obs[:10]
             ],
-            "note": (
-                "COMPLETE-21 minimal tip signal (legs approved; signal status candidate). "
-                "Not READY. Not mass research. No order execution."
-            ),
         },
     )
 
@@ -435,10 +427,6 @@ def _aggregate_signal_obs(
         "ready_declared": READY_DECLARED,
         "order_execution": ORDER_EXECUTION,
         "local_sot": False,
-        "note": (
-            "COMPLETE-21 multi-signal research observation (legs approved; "
-            "signal status candidate). Not READY. Not mass research. No orders."
-        ),
     }
     if extra:
         body.update(dict(extra))
@@ -481,10 +469,6 @@ def compute_volume_change_sign_signal(
         "phase7": PHASE7,
         "ready_declared": READY_DECLARED,
         "order_execution": ORDER_EXECUTION,
-        "note": (
-            "Research signal: sign(volume_change_1d) with abs threshold. "
-            "Not READY. Not mass research. No order execution."
-        ),
     }
     if code is not None:
         meta["code"] = str(code)
@@ -536,10 +520,6 @@ def compute_topix_rel_disclosure_signal(
         "phase7": PHASE7,
         "ready_declared": READY_DECLARED,
         "order_execution": ORDER_EXECUTION,
-        "note": (
-            "Research signal: sign(topix_relative_1d) + disclosure_flag_fins==1. "
-            "Not READY. Not mass research. No order execution."
-        ),
     }
     if code is not None:
         meta["code"] = str(code)
@@ -592,12 +572,6 @@ def compute_volume_sign_from_feature_observations(
         as_of=as_of_s,
         feature_ids=(GATE_FEATURE_ID, FILTER_FEATURE_ID),
         volume_change_abs_min=volume_change_abs_min,
-        extra={
-            "formula": (
-                f"value = sign(volume_change_1d) if is_trading_day==1 "
-                f"and |volume_change_1d| >= {volume_change_abs_min}; else None"
-            ),
-        },
     )
 
 
@@ -633,12 +607,6 @@ def compute_topix_disc_from_feature_observations(
         signal_id=SIGNAL_ID_TOPIX_DISC,
         as_of=as_of_s,
         feature_ids=(PRIMARY_FEATURE_ID, FILTER_FEATURE_ID, DISCLOSURE_FEATURE_ID),
-        extra={
-            "formula": (
-                "value = sign(topix_relative_1d) if is_trading_day==1 "
-                "and disclosure_flag_fins==1; else None"
-            ),
-        },
     )
 
 
@@ -678,10 +646,6 @@ def compute_margin_change_sign_signal(
         "phase7": PHASE7,
         "ready_declared": READY_DECLARED,
         "order_execution": ORDER_EXECUTION,
-        "note": (
-            "Research signal: sign(margin_interest_change_1d). "
-            "Not READY. Not mass research. No order execution."
-        ),
     }
     if code is not None:
         meta["code"] = str(code)
@@ -742,10 +706,6 @@ def compute_short_ratio_delta_sign_signal(
         "phase7": PHASE7,
         "ready_declared": READY_DECLARED,
         "order_execution": ORDER_EXECUTION,
-        "note": (
-            "Research signal: sign(Δ short_ratio_level) for fixed section, "
-            "broadcast per code. Not READY. Not mass. No orders."
-        ),
     }
     if code is not None:
         meta["code"] = str(code)
@@ -797,12 +757,6 @@ def compute_margin_sign_from_feature_observations(
         signal_id=SIGNAL_ID_MARGIN_CHANGE,
         as_of=as_of_s,
         feature_ids=(MARGIN_CHANGE_FEATURE_ID, FILTER_FEATURE_ID),
-        extra={
-            "formula": (
-                "value = sign(margin_interest_change_1d) if is_trading_day==1; "
-                "else None"
-            ),
-        },
     )
 
 
@@ -856,10 +810,6 @@ def compute_short_delta_from_feature_observations(
         as_of=as_of_s,
         feature_ids=(SHORT_RATIO_FEATURE_ID, FILTER_FEATURE_ID),
         extra={
-            "formula": (
-                "value = sign(short_ratio_level - prev) if is_trading_day==1 "
-                f"and section={section!r}; else None (broadcast to codes)"
-            ),
             "section": section,
             "short_ratio_level": level,
             "prev_short_ratio_level": prev_short_ratio_level,
