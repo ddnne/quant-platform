@@ -45,7 +45,6 @@ from features.minimal_signal import (
     signal_definition,
 )
 
-# Repo root: packages/product/research/this_file.py → parents[3]
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _DEFAULT_WRANGLER = (
     _REPO_ROOT
@@ -64,20 +63,14 @@ DEFAULT_TIP_SAMPLE_LIMIT: int = 20
 DEFAULT_FEATURE_ROW_LIMIT: int = 400
 DEFAULT_FEATURE_CODE_LIMIT: int = 5
 
-# Default COMPLETE-21 tip features (registry-approved; name kept for path stability).
+# Registry-approved tip features (name kept for path stability).
 DEFAULT_CANDIDATE_FEATURES: tuple[str, ...] = (
     "volume_change_1d",
     "is_trading_day",
     "topix_relative_1d",
 )
+DEFAULT_FEATURE_DATASETS: tuple[str, ...] = DEFAULT_SIGNAL_DATASETS
 
-DEFAULT_FEATURE_DATASETS: tuple[str, ...] = (
-    "equities_bars_daily",
-    "markets_calendar",
-    "indices_bars_daily_topix",
-)
-
-# Feature id → COMPLETE-21 tip datasets required to compute it.
 _FEATURE_REQUIRED_DATASETS: dict[str, tuple[str, ...]] = {
     "volume_change_1d": ("equities_bars_daily",),
     "topix_relative_1d": ("equities_bars_daily", "indices_bars_daily_topix"),
@@ -90,10 +83,6 @@ _FEATURE_REQUIRED_DATASETS: dict[str, tuple[str, ...]] = {
     "short_ratio_level": ("markets_short_ratio",),
     "futures_activity_proxy": ("derivatives_bars_daily_futures",),
 }
-
-# ---------------------------------------------------------------------------
-# Freeze constants (tests assert these remain closed — do not arm)
-# ---------------------------------------------------------------------------
 
 from research.freezes import (
     MASS_RESEARCH as MASS_RESEARCH_STATUS,
@@ -188,11 +177,11 @@ class SingleShotJobSpec:
                 "signals_r2_key_template": self.signals_r2_key_template,
                 "local_sot": self.local_sot,
             },
-            "mass_research": self.mass_research,
-            "phase7": self.phase7,
-            "ready_declared": self.ready_declared,
-            "ready_publication": READY_PUBLICATION_STATUS,
-            "order_execution": False,
+            **_closed_flags(
+                mass_research=self.mass_research,
+                phase7=self.phase7,
+                ready_declared=self.ready_declared,
+            ),
         }
 
 
@@ -213,10 +202,6 @@ def design_artifact_paths(job_id: str) -> dict[str, Any]:
         "features_r2_key_template": f"{prefix}/features/{{content_hash}}.json",
         "signals_r2_key_template": f"{prefix}/signals/{{content_hash}}.json",
         "local_sot": False,
-        "history_input_patterns": {
-            "structured_jsonl": "structured/jsonl/{dataset}/dt=YYYY-MM-DD/{run_id}.jsonl",
-            "archive_ndjson": "archive/jquants_records/{dataset}/batch/{run_id}_after{rowid}.ndjson",
-        },
     }
 
 
@@ -295,49 +280,56 @@ def build_single_shot_job_spec(
     )
 
 
-def freeze_status() -> dict[str, Any]:
-    """Return Phase7 / Mass / READY freeze surface (never arms switches)."""
-    return {
+def _closed_flags(**extra: Any) -> dict[str, Any]:
+    out: dict[str, Any] = {
         "mass_research": MASS_RESEARCH_STATUS,
         "phase7": PHASE7_STATUS,
-        "ready_publication": READY_PUBLICATION_STATUS,
         "ready_declared": READY_DECLARED,
-        "phase7_env_arming_switches": sorted(PHASE7_ENV_ARMING_SWITCHES),
-        "mass_research_env_arming_switches": sorted(MASS_RESEARCH_ENV_ARMING_SWITCHES),
-        "complete_21_count": len(COMPLETE_21_DATASETS),
-        "permanent_defer_count": len(PERMANENT_DEFER_DATASETS),
-        "connected_to_mass_research_loop": False,
-        "sets_ready": False,
+        "ready_publication": READY_PUBLICATION_STATUS,
         "order_execution": False,
         "local_sot": False,
-        "artifact_bucket": RESEARCH_ARTIFACT_BUCKET,
-        "artifact_prefix": RESEARCH_ARTIFACT_PREFIX,
     }
+    out.update(extra)
+    return out
+
+
+def _pick(row: Mapping[str, Any], *keys: str) -> dict[str, Any]:
+    return {k: row.get(k) for k in keys}
+
+
+def freeze_status() -> dict[str, Any]:
+    """Return Phase7 / Mass / READY freeze surface (never arms switches)."""
+    return _closed_flags(
+        phase7_env_arming_switches=sorted(PHASE7_ENV_ARMING_SWITCHES),
+        mass_research_env_arming_switches=sorted(MASS_RESEARCH_ENV_ARMING_SWITCHES),
+        complete_21_count=len(COMPLETE_21_DATASETS),
+        permanent_defer_count=len(PERMANENT_DEFER_DATASETS),
+        connected_to_mass_research_loop=False,
+        sets_ready=False,
+        artifact_bucket=RESEARCH_ARTIFACT_BUCKET,
+        artifact_prefix=RESEARCH_ARTIFACT_PREFIX,
+    )
 
 
 def assert_mass_and_phase7_off() -> Mapping[str, Any]:
     """Hard-check freeze constants; raise if any switch is not closed."""
     status = freeze_status()
-    if status["mass_research"] != "NO-GO":
-        raise RuntimeError(f"mass_research must be NO-GO, got {status['mass_research']!r}")
-    if status["phase7"] != "OFF":
-        raise RuntimeError(f"phase7 must be OFF, got {status['phase7']!r}")
-    if status["ready_publication"] != "OFF":
-        raise RuntimeError(
-            f"ready_publication must be OFF, got {status['ready_publication']!r}"
-        )
-    if status["ready_declared"] is not False:
-        raise RuntimeError("ready_declared must be False")
+    expect = {
+        "mass_research": "NO-GO",
+        "phase7": "OFF",
+        "ready_publication": "OFF",
+        "ready_declared": False,
+        "connected_to_mass_research_loop": False,
+        "sets_ready": False,
+        "order_execution": False,
+    }
+    for key, want in expect.items():
+        if status[key] != want:
+            raise RuntimeError(f"{key} must be {want!r}, got {status[key]!r}")
     if status["phase7_env_arming_switches"]:
         raise RuntimeError("PHASE7 env arming switches must remain empty")
     if status["mass_research_env_arming_switches"]:
         raise RuntimeError("MASS_RESEARCH env arming switches must remain empty")
-    if status["connected_to_mass_research_loop"] is not False:
-        raise RuntimeError("single-shot skeleton must not connect to mass loop")
-    if status["sets_ready"] is not False:
-        raise RuntimeError("single-shot skeleton must not set READY")
-    if status.get("order_execution") is not False:
-        raise RuntimeError("single-shot skeleton must not execute orders")
     return status
 
 
@@ -388,12 +380,12 @@ class SingleShotExecution:
             "tip_extracts": dict(self.tip_extracts),
             "r2_puts": list(self.r2_puts),
             "spec": self.spec.to_dict(),
-            "mass_research": self.mass_research,
-            "phase7": self.phase7,
-            "ready_declared": self.ready_declared,
-            "ready_publication": READY_PUBLICATION_STATUS,
-            "order_execution": False,
-            "local_sot": self.local_sot,
+            **_closed_flags(
+                mass_research=self.mass_research,
+                phase7=self.phase7,
+                ready_declared=self.ready_declared,
+                local_sot=self.local_sot,
+            ),
         }
 
 
@@ -415,15 +407,6 @@ def content_hash_payload(payload: Mapping[str, Any]) -> str:
 
 # Module import (not from-import) so tip-first load does not circular-import.
 import research.single_shot_tip as _single_shot_tip
-
-_as_of_from_period_end = getattr(_single_shot_tip, "_as_of_from_period_end", None)
-compute_tip_candidate_features = getattr(
-    _single_shot_tip, "compute_tip_candidate_features", None
-)
-extract_d1_tip_feature_rows = getattr(
-    _single_shot_tip, "extract_d1_tip_feature_rows", None
-)
-extract_d1_tip_summaries = getattr(_single_shot_tip, "extract_d1_tip_summaries", None)
 
 
 def default_r2_put(
@@ -499,12 +482,6 @@ def default_r2_put(
             pass
 
 
-def _json_bytes(payload: Mapping[str, Any]) -> bytes:
-    return (
-        json.dumps(payload, ensure_ascii=True, indent=2, sort_keys=True) + "\n"
-    ).encode("utf-8")
-
-
 def _put_research_json(
     key: str,
     payload: Mapping[str, Any],
@@ -517,7 +494,9 @@ def _put_research_json(
     bucket: str = RESEARCH_ARTIFACT_BUCKET,
 ) -> dict[str, Any]:
     """Put one JSON artifact (injected callable or wrangler / dry-run)."""
-    body = _json_bytes(payload)
+    body = (
+        json.dumps(payload, ensure_ascii=True, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
     if r2_put is not None:
         meta = r2_put(bucket, key, body)
         if "status" not in meta:
@@ -583,7 +562,7 @@ def _load_history_feature_rows(
 
     hist_src = resolve_history_source(history_source)
     if hist_src == HISTORY_SOURCE_R2:
-        extract = extract_r2_history_feature_rows(
+        return hist_src, extract_r2_history_feature_rows(
             dataset_ids,
             period_start=period_start,
             period_end=period_end,
@@ -597,10 +576,9 @@ def _load_history_feature_rows(
             allow_empty_datasets=r2_allow_empty_datasets,
             context=context,
         )
-        return hist_src, extract
     if hist_src != HISTORY_SOURCE_D1_TIP:
         raise SingleShotJobError(f"unsupported history_source={hist_src!r}")
-    extract = extract_d1_tip_feature_rows(
+    return hist_src, _single_shot_tip.extract_d1_tip_feature_rows(
         dataset_ids,
         period_start=period_start,
         period_end=period_end,
@@ -609,7 +587,6 @@ def _load_history_feature_rows(
         d1_execute=d1_execute,
         context=context,
     )
-    return hist_src, extract
 
 
 def execute_single_shot_job(
@@ -645,7 +622,7 @@ def execute_single_shot_job(
         job_id=job_id,
     )
 
-    tip = extract_d1_tip_summaries(
+    tip = _single_shot_tip.extract_d1_tip_summaries(
         spec.dataset_ids,
         period_start=spec.period_start,
         period_end=spec.period_end,
@@ -665,22 +642,20 @@ def execute_single_shot_job(
         else:
             fids = DEFAULT_CANDIDATE_FEATURES
         if compute_signals:
-            for required_fid in DEFAULT_SIGNAL_FEATURE_IDS:
-                if required_fid not in fids:
-                    fids = fids + (required_fid,)
+            fids = fids + tuple(
+                fid for fid in DEFAULT_SIGNAL_FEATURE_IDS if fid not in fids
+            )
         needed: list[str] = list(spec.dataset_ids)
         for fid in fids:
-            for ds in _FEATURE_REQUIRED_DATASETS.get(fid, ()):
-                if ds not in needed:
-                    needed.append(ds)
-        if compute_signals:
-            for ds in DEFAULT_SIGNAL_DATASETS:
-                if ds not in needed:
-                    needed.append(ds)
+            needed.extend(
+                ds
+                for ds in _FEATURE_REQUIRED_DATASETS.get(fid, ())
+                if ds not in needed
+            )
         feature_datasets = require_complete_21_only(
             needed, context="single-shot feature datasets"
         )
-        tip_feature_extract = extract_d1_tip_feature_rows(
+        tip_feature_extract = _single_shot_tip.extract_d1_tip_feature_rows(
             feature_datasets,
             period_start=spec.period_start,
             period_end=spec.period_end,
@@ -689,38 +664,40 @@ def execute_single_shot_job(
             d1_execute=d1_execute,
             context="single-shot tip feature extract",
         )
-        as_of = feature_as_of or _as_of_from_period_end(spec.period_end)
-        feature_payload = compute_tip_candidate_features(
-            tip_feature_extract.get("rows_by_dataset") or {},
-            as_of=as_of,
-            feature_ids=fids,
-            codes=feature_codes or tip_feature_extract.get("selected_codes"),
-            sections=feature_sections,
+        as_of = feature_as_of or (
+            f"{str(spec.period_end).strip()[:10]}T15:30:00+09:00"
         )
+        codes = feature_codes or tip_feature_extract.get("selected_codes")
         feature_payload = {
-            **feature_payload,
+            **_single_shot_tip.compute_tip_candidate_features(
+                tip_feature_extract.get("rows_by_dataset") or {},
+                as_of=as_of,
+                feature_ids=fids,
+                codes=codes,
+                sections=feature_sections,
+            ),
             "job_id": spec.job_id,
             "dataset_ids": list(feature_datasets),
             "period_start": spec.period_start,
             "period_end": spec.period_end,
             "tip_feature_extract": {
-                "plane": tip_feature_extract.get("plane"),
-                "raw_tip_counts": tip_feature_extract.get("raw_tip_counts"),
-                "extracted_row_counts": tip_feature_extract.get(
-                    "extracted_row_counts"
-                ),
-                "selected_codes": tip_feature_extract.get("selected_codes"),
+                k: tip_feature_extract.get(k)
+                for k in (
+                    "plane",
+                    "raw_tip_counts",
+                    "extracted_row_counts",
+                    "selected_codes",
+                )
             },
         }
         if compute_signals:
-            signal_core = compute_signal_from_feature_observations(
-                feature_payload.get("observations") or [],
-                as_of=as_of,
-                volume_change_abs_min=volume_change_abs_min,
-                codes=feature_codes or tip_feature_extract.get("selected_codes"),
-            )
             signal_payload = {
-                **signal_core,
+                **compute_signal_from_feature_observations(
+                    feature_payload.get("observations") or [],
+                    as_of=as_of,
+                    volume_change_abs_min=volume_change_abs_min,
+                    codes=codes,
+                ),
                 "job_id": spec.job_id,
                 "definition": signal_definition(),
                 "dataset_ids": list(feature_datasets),
@@ -733,6 +710,7 @@ def execute_single_shot_job(
             }
 
     executed_at = _now_utc()
+    extracts = tip.get("extracts") or {}
     result_identity: dict[str, Any] = {
         "version": "single-shot-result/v1",
         "job_id": spec.job_id,
@@ -751,51 +729,42 @@ def execute_single_shot_job(
                     row.get("natural_key") for row in body.get("sample_rows") or []
                 ],
             }
-            for ds, body in (tip.get("extracts") or {}).items()
+            for ds, body in extracts.items()
         },
         "compute_features": bool(compute_features),
         "compute_signals": bool(compute_signals),
-        "mass_research": MASS_RESEARCH_STATUS,
-        "phase7": PHASE7_STATUS,
-        "ready_declared": READY_DECLARED,
-        "ready_publication": READY_PUBLICATION_STATUS,
-        "order_execution": False,
-        "local_sot": False,
+        **_closed_flags(),
     }
     if feature_payload is not None:
         result_identity["features_summary"] = [
-            {
-                "feature_id": f.get("feature_id"),
-                "version": f.get("version"),
-                "row_counts": f.get("row_counts"),
-                "null_counts": f.get("null_counts"),
-            }
+            _pick(f, "feature_id", "version", "row_counts", "null_counts")
             for f in (feature_payload.get("features") or [])
         ]
         result_identity["feature_as_of"] = feature_payload.get("as_of")
         result_identity["feature_ids"] = list(feature_payload.get("feature_ids") or [])
     if signal_payload is not None:
-        result_identity["signal_summary"] = {
-            "signal_id": signal_payload.get("signal_id"),
-            "signal_version": signal_payload.get("signal_version"),
-            "status": signal_payload.get("status"),
-            "candidate_only": signal_payload.get("candidate_only"),
-            "row_counts": signal_payload.get("row_counts"),
-            "null_counts": signal_payload.get("null_counts"),
-        }
+        result_identity["signal_summary"] = _pick(
+            signal_payload,
+            "signal_id",
+            "status",
+            "candidate_only",
+            "row_counts",
+            "null_counts",
+        ) | {"signal_version": signal_payload.get("signal_version")}
 
     ch = content_hash_payload(result_identity)
-    result_key = spec.result_r2_key_template.format(content_hash=ch.replace(":", "_"))
-    features_key: str | None = None
-    if feature_payload is not None and spec.features_r2_key_template:
-        features_key = spec.features_r2_key_template.format(
-            content_hash=ch.replace(":", "_")
-        )
-    signals_key: str | None = None
-    if signal_payload is not None and spec.signals_r2_key_template:
-        signals_key = spec.signals_r2_key_template.format(
-            content_hash=ch.replace(":", "_")
-        )
+    token = ch.replace(":", "_")
+    result_key = spec.result_r2_key_template.format(content_hash=token)
+    features_key = (
+        spec.features_r2_key_template.format(content_hash=token)
+        if feature_payload is not None and spec.features_r2_key_template
+        else None
+    )
+    signals_key = (
+        spec.signals_r2_key_template.format(content_hash=token)
+        if signal_payload is not None and spec.signals_r2_key_template
+        else None
+    )
 
     result_body: dict[str, Any] = {
         **result_identity,
@@ -810,8 +779,7 @@ def execute_single_shot_job(
             "signals_r2_key": signals_key,
         },
         "sample_rows": {
-            ds: body.get("sample_rows") or []
-            for ds, body in (tip.get("extracts") or {}).items()
+            ds: body.get("sample_rows") or [] for ds, body in extracts.items()
         },
     }
     if feature_payload is not None:
@@ -821,14 +789,14 @@ def execute_single_shot_job(
             "tip_input_row_counts"
         )
     if signal_payload is not None:
-        result_body["signal"] = {
-            "signal_id": signal_payload.get("signal_id"),
-            "version": signal_payload.get("signal_version"),
-            "status": signal_payload.get("status"),
-            "candidate_only": signal_payload.get("candidate_only"),
-            "row_counts": signal_payload.get("row_counts"),
-            "sample_values": signal_payload.get("sample_values"),
-        }
+        result_body["signal"] = _pick(
+            signal_payload,
+            "signal_id",
+            "status",
+            "candidate_only",
+            "row_counts",
+            "sample_values",
+        ) | {"version": signal_payload.get("signal_version")}
 
     input_plan = {
         "version": "single-shot-input-plan/v1",
@@ -847,10 +815,6 @@ def execute_single_shot_job(
         if feature_payload
         else [],
         "signal_id": signal_payload.get("signal_id") if signal_payload else None,
-        "history_sot_note": (
-            "Full history SoT is R2 quant-structured JSONL/archive; "
-            "this job only reads D1 hot tip for a bounded proof pass."
-        ),
         "mass_research": MASS_RESEARCH_STATUS,
         "phase7": PHASE7_STATUS,
         "ready_declared": READY_DECLARED,
@@ -875,29 +839,17 @@ def execute_single_shot_job(
         "period_end": spec.period_end,
         "tip_row_counts": {
             ds: int((body or {}).get("row_count") or 0)
-            for ds, body in (tip.get("extracts") or {}).items()
+            for ds, body in extracts.items()
         },
         "compute_features": bool(compute_features),
         "compute_signals": bool(compute_signals),
         "executed_at_utc": executed_at,
         "dry_run": bool(dry_run),
-        "mass_research": MASS_RESEARCH_STATUS,
-        "phase7": PHASE7_STATUS,
-        "ready_declared": READY_DECLARED,
-        "ready_publication": READY_PUBLICATION_STATUS,
-        "order_execution": False,
-        "local_sot": False,
-        "connected_to_mass_research_loop": False,
+        **_closed_flags(connected_to_mass_research_loop=False),
     }
     if feature_payload is not None:
         manifest["features"] = [
-            {
-                "feature_id": f.get("feature_id"),
-                "version": f.get("version"),
-                "status": f.get("status"),
-                "row_counts": f.get("row_counts"),
-                "null_counts": f.get("null_counts"),
-            }
+            _pick(f, "feature_id", "version", "status", "row_counts", "null_counts")
             for f in (feature_payload.get("features") or [])
         ]
         manifest["feature_as_of"] = feature_payload.get("as_of")
@@ -909,49 +861,52 @@ def execute_single_shot_job(
                 "raw_tip_counts"
             )
     if signal_payload is not None:
-        manifest["signal"] = {
-            "signal_id": signal_payload.get("signal_id"),
+        manifest["signal"] = _pick(
+            signal_payload,
+            "signal_id",
+            "status",
+            "candidate_only",
+            "row_counts",
+            "null_counts",
+            "feature_ids",
+            "as_of",
+        ) | {
             "version": signal_payload.get("signal_version"),
-            "status": signal_payload.get("status"),
-            "candidate_only": signal_payload.get("candidate_only"),
-            "row_counts": signal_payload.get("row_counts"),
-            "null_counts": signal_payload.get("null_counts"),
-            "feature_ids": signal_payload.get("feature_ids"),
-            "as_of": signal_payload.get("as_of"),
             "order_execution": False,
         }
 
-    features_body: dict[str, Any] | None = None
-    if feature_payload is not None and features_key is not None:
-        features_body = {
-            **feature_payload,
+    def _wrap(
+        payload: Mapping[str, Any], **artifact: Any
+    ) -> dict[str, Any]:
+        return {
+            **payload,
             "content_hash": ch,
             "executed_at_utc": executed_at,
-            "artifact": {
-                "bucket": spec.artifact_bucket,
-                "features_r2_key": features_key,
-                "result_r2_key": result_key,
-                "manifest_r2_key": spec.manifest_r2_key,
-                "signals_r2_key": signals_key,
-            },
+            "artifact": {"bucket": spec.artifact_bucket, **artifact},
         }
 
-    signals_body: dict[str, Any] | None = None
-    if signal_payload is not None and signals_key is not None:
-        signals_body = {
-            **signal_payload,
-            "content_hash": ch,
-            "executed_at_utc": executed_at,
-            "artifact": {
-                "bucket": spec.artifact_bucket,
-                "signals_r2_key": signals_key,
-                "features_r2_key": features_key,
-                "result_r2_key": result_key,
-                "manifest_r2_key": spec.manifest_r2_key,
-            },
-        }
-
-    puts: list[dict[str, Any]] = []
+    features_body = (
+        _wrap(
+            feature_payload,
+            features_r2_key=features_key,
+            result_r2_key=result_key,
+            manifest_r2_key=spec.manifest_r2_key,
+            signals_r2_key=signals_key,
+        )
+        if feature_payload is not None and features_key is not None
+        else None
+    )
+    signals_body = (
+        _wrap(
+            signal_payload,
+            signals_r2_key=signals_key,
+            features_r2_key=features_key,
+            result_r2_key=result_key,
+            manifest_r2_key=spec.manifest_r2_key,
+        )
+        if signal_payload is not None and signals_key is not None
+        else None
+    )
 
     def _put(key: str, payload: Mapping[str, Any]) -> dict[str, Any]:
         return _put_research_json(
@@ -965,8 +920,10 @@ def execute_single_shot_job(
             bucket=spec.artifact_bucket,
         )
 
-    puts.append(_put(spec.input_plan_r2_key, input_plan))
-    puts.append(_put(result_key, result_body))
+    puts: list[dict[str, Any]] = [
+        _put(spec.input_plan_r2_key, input_plan),
+        _put(result_key, result_body),
+    ]
     if features_body is not None and features_key is not None:
         puts.append(_put(features_key, features_body))
     if signals_body is not None and signals_key is not None:
@@ -995,80 +952,68 @@ def execute_single_shot_job(
 
 
 # Sibling re-exports. Lazy getattr so job-first and sibling-first loads bind.
-_TIP_EXPORTS: frozenset[str] = frozenset(
-    {
-        "build_tip_feature_context",
-        "compute_tip_candidate_features",
-        "default_d1_execute",
-        "discover_tip_trading_days",
-        "extract_d1_tip_feature_rows",
-        "extract_d1_tip_summaries",
-    }
-)
-_COMPARE_EXPORTS: frozenset[str] = frozenset(
-    {
-        "RESEARCH_COST_LABEL",
-        "RESEARCH_COST_NOTE",
-        "RESEARCH_ONE_WAY_COST",
-        "RESEARCH_ONE_WAY_COST_BP",
-        "RESEARCH_ROUND_TRIP_COST",
-        "attach_research_cost_fields",
-        "execute_multiday_multisignal_compare",
-        "signed_position_from_signal",
-        "summarize_research_cost",
-    }
-)
-_EXTRA_HYP_EXPORTS: frozenset[str] = frozenset(
-    {
-        "execute_extra_hyp_signals_compare",
-    }
-)
-_EVAL_EXPORTS: frozenset[str] = frozenset(
-    {
-        "MultidaySignalEval",
-        "NEXTDAY_LOOKAHEAD_POLICY",
-        "NEXTDAY_RESEARCH_LABEL",
-        "attach_next_day_returns",
-        "build_equity_close_index",
-        "execute_multiday_nextday_return_eval",
-        "execute_multiday_signal_eval",
-        "next_trading_day_map",
-        "session_close_as_of",
-        "summarize_nextday_by_sign",
-        "summarize_signal_day",
-    }
-)
+_LAZY_ATTRS: dict[str, str] = {
+    name: mod
+    for mod, names in (
+        (
+            "research.single_shot_tip",
+            (
+                "build_tip_feature_context",
+                "compute_tip_candidate_features",
+                "default_d1_execute",
+                "discover_tip_trading_days",
+                "extract_d1_tip_feature_rows",
+                "extract_d1_tip_summaries",
+            ),
+        ),
+        (
+            "research.single_shot_compare",
+            (
+                "RESEARCH_COST_LABEL",
+                "RESEARCH_COST_NOTE",
+                "RESEARCH_ONE_WAY_COST",
+                "RESEARCH_ONE_WAY_COST_BP",
+                "RESEARCH_ROUND_TRIP_COST",
+                "attach_research_cost_fields",
+                "execute_multiday_multisignal_compare",
+                "signed_position_from_signal",
+                "summarize_research_cost",
+            ),
+        ),
+        (
+            "research.single_shot_extra_hyp",
+            ("execute_extra_hyp_signals_compare",),
+        ),
+        (
+            "research.single_shot_eval",
+            (
+                "MultidaySignalEval",
+                "NEXTDAY_LOOKAHEAD_POLICY",
+                "NEXTDAY_RESEARCH_LABEL",
+                "attach_next_day_returns",
+                "build_equity_close_index",
+                "execute_multiday_nextday_return_eval",
+                "execute_multiday_signal_eval",
+                "next_trading_day_map",
+                "session_close_as_of",
+                "summarize_nextday_by_sign",
+                "summarize_signal_day",
+            ),
+        ),
+    )
+    for name in names
+}
 
 
 def __getattr__(name: str):
-    if name in _TIP_EXPORTS:
-        import research.single_shot_tip as _tip
-
-        return getattr(_tip, name)
-    if name in _COMPARE_EXPORTS:
-        import research.single_shot_compare as _single_shot_compare
-
-        return getattr(_single_shot_compare, name)
-    if name in _EXTRA_HYP_EXPORTS:
-        import research.single_shot_extra_hyp as _extra_hyp
-
-        return getattr(_extra_hyp, name)
-    if name in _EVAL_EXPORTS:
-        import research.single_shot_eval as _single_shot_eval
-
-        return getattr(_single_shot_eval, name)
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    modname = _LAZY_ATTRS.get(name)
+    if modname is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    return getattr(__import__(modname, fromlist=[name]), name)
 
 
 def __dir__() -> list[str]:
-    return sorted(
-        set(globals())
-        | _TIP_EXPORTS
-        | _COMPARE_EXPORTS
-        | _EXTRA_HYP_EXPORTS
-        | _EVAL_EXPORTS
-        | set(__all__)
-    )
+    return sorted(set(globals()) | _LAZY_ATTRS.keys() | set(__all__))
 
 
 __all__ = [
