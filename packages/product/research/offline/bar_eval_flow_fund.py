@@ -154,7 +154,6 @@ def evaluate_mf_value_mom_rate_on_bars(
         "amortized_one_way_cost": am_cost,
         "one_way_cost": float(one_way_cost),
         "n_active_positions": n_active,
-        "n_signed_returns": len(signed_returns),
         "n_missing_fins_or_rate": n_missing,
         "n_codes": len(bars_by_code),
         "n_code_days": n_code_days,
@@ -262,7 +261,6 @@ def evaluate_mf_flow_price_on_bars(
         "amortized_one_way_cost": am_cost,
         "one_way_cost": float(one_way_cost),
         "n_active_positions": n_active,
-        "n_signed_returns": len(signed_returns),
         "n_margin_obs": n_margin_obs,
         "n_codes": len(bars_by_code),
         "n_code_days": n_code_days,
@@ -375,7 +373,6 @@ def evaluate_cross_section_on_bars(
         "one_way_cost": float(one_way_cost),
         "amortized_one_way_cost": float(am_cost),
         "n_active_positions": n_active,
-        "n_signed_returns": len(signed_returns),
         "n_codes": n_codes,
         "n_trading_days": n_trading_days,
         "n_code_days": n_code_days,
@@ -432,7 +429,8 @@ def evaluate_flow_demand_on_bars(
     signed_returns: list[float] = []
     n_active = 0
     n_margin_obs = 0
-    holding_records: list[dict[str, Any]] = []
+    n_code_days = 0
+    trading_dates: set[str] = set()
 
     for code, pairs in sorted(bars_by_code.items()):
         pairs_l = list(pairs)
@@ -479,9 +477,8 @@ def evaluate_flow_demand_on_bars(
             entry_signs, hold_days=h, rebalance_mode="min_hold"
         )
         for i, pos in enumerate(held):
-            holding_records.append(
-                {"date": dates[i], "code": code, "sign": pos}
-            )
+            n_code_days += 1
+            trading_dates.add(dates[i])
             if pos is None or pos == 0.0:
                 continue
             if entry_signs[i] is None or entry_signs[i] == 0.0:
@@ -494,8 +491,7 @@ def evaluate_flow_demand_on_bars(
 
     gross = mean(signed_returns) if signed_returns else None
     net = (gross - am_cost) if gross is not None else None
-    n_code_days = len(holding_records)
-    n_trading_days = len({r["date"] for r in holding_records})
+    n_trading_days = len(trading_dates)
     n_codes = len(bars_by_code)
     occ = occurrence_rate_multiday(
         n_active=n_active,
@@ -516,7 +512,6 @@ def evaluate_flow_demand_on_bars(
         "amortized_one_way_cost": am_cost,
         "one_way_cost": float(one_way_cost),
         "n_active_positions": n_active,
-        "n_signed_returns": len(signed_returns),
         "n_margin_obs": n_margin_obs,
         "n_codes": n_codes,
         "n_code_days": n_code_days,
@@ -525,7 +520,6 @@ def evaluate_flow_demand_on_bars(
         "n_codes_with_margin": sum(
             1 for c in bars_by_code if len(margin_by_code.get(c) or []) >= 2
         ),
-        "holding_records": holding_records,
         "non_null": n_active,
         **_freeze(),
         "note": (
@@ -553,7 +547,8 @@ def evaluate_fundamentals_price_on_bars(
     signed_returns: list[float] = []
     n_active = 0
     n_missing_fins = 0
-    holding_records: list[dict[str, Any]] = []
+    n_code_days = 0
+    trading_dates: set[str] = set()
     value_scores_all: list[float] = []
 
     value_by_code_date: dict[str, dict[str, float | None]] = {}
@@ -605,9 +600,8 @@ def evaluate_fundamentals_price_on_bars(
             entries.append(rec.get("value"))
         held = apply_sticky_hold(entries, hold_days=h, rebalance_mode="fixed_horizon")
         for i, pos in enumerate(held):
-            holding_records.append(
-                {"date": dates[i], "code": code, "sign": pos}
-            )
+            n_code_days += 1
+            trading_dates.add(dates[i])
             if pos is None or pos == 0.0:
                 continue
             if i % h != 0:
@@ -620,8 +614,7 @@ def evaluate_fundamentals_price_on_bars(
 
     gross = mean(signed_returns) if signed_returns else None
     net = (gross - am_cost) if gross is not None else None
-    n_code_days = len(holding_records)
-    n_trading_days = len({r["date"] for r in holding_records})
+    n_trading_days = len(trading_dates)
     n_codes = len(bars_by_code)
     occ = occurrence_rate_multiday(
         n_active=n_active,
@@ -643,13 +636,11 @@ def evaluate_fundamentals_price_on_bars(
         "amortized_one_way_cost": am_cost,
         "one_way_cost": float(one_way_cost),
         "n_active_positions": n_active,
-        "n_signed_returns": len(signed_returns),
         "n_missing_fins_days": n_missing_fins,
         "n_codes": n_codes,
         "n_code_days": n_code_days,
         "n_trading_days": n_trading_days,
         "occurrence": occ,
-        "holding_records": holding_records,
         "non_null": n_active,
         **_freeze(),
         "note": f"Fundamentals×price mode={mode} hold={h}d PIT fins.",

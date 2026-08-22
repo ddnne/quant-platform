@@ -121,7 +121,6 @@ def evaluate_multi_day_hold_on_bars(
         "amortized_one_way_cost": am_cost,
         "one_way_cost": float(one_way_cost),
         "n_active_positions": n_active,
-        "n_signed_returns": len(signed_returns),
         "n_codes": n_codes,
         "n_code_days": n_code_days,
         "n_trading_days": n_trading_days,
@@ -164,7 +163,6 @@ def evaluate_event_post_on_bars(
     n_no_bar_match = 0
     n_same_day_entry = 0
     n_next_session_entry = 0
-    holding_records: list[dict[str, Any]] = []
 
     for code, pairs in sorted(bars_by_code.items()):
         pairs_l = list(pairs)
@@ -198,18 +196,6 @@ def evaluate_event_post_on_bars(
             )
             if idx is None or entry_date is None:
                 n_no_bar_match += 1
-                holding_records.append(
-                    {
-                        "date": None,
-                        "code": code,
-                        "sign": None,
-                        "disc_date": disc,
-                        "disc_time": disc_time,
-                        "surprise": surprise,
-                        "entry_meta": entry_meta,
-                        "skip": "no_eligible_entry_bar",
-                    }
-                )
                 continue
             if entry_date == disc:
                 n_same_day_entry += 1
@@ -230,18 +216,6 @@ def evaluate_event_post_on_bars(
                 },
             )
             val = rec.get("value")
-            holding_records.append(
-                {
-                    "date": entry_date,
-                    "code": code,
-                    "sign": val,
-                    "disc_date": disc,
-                    "disc_time": disc_time,
-                    "surprise": surprise,
-                    "entry_meta": entry_meta,
-                    "available_at": entry_meta.get("available_at"),
-                }
-            )
             if val is None or val == 0.0:
                 n_no_surprise += 1
                 continue
@@ -291,7 +265,6 @@ def evaluate_event_post_on_bars(
         "amortized_one_way_cost": am_cost,
         "one_way_cost": float(one_way_cost),
         "n_active_positions": n_scored,
-        "n_signed_returns": len(signed_returns),
         "n_events": n_events,
         "n_no_surprise": n_no_surprise,
         "n_no_bar_match": n_no_bar_match,
@@ -302,7 +275,6 @@ def evaluate_event_post_on_bars(
         "n_code_days": n_code_days,
         "occurrence": occ,
         "trade_stats": trade_stats,
-        "holding_records": holding_records,
         "non_null": n_scored,
         "non_null_rate": (
             float(n_scored) / float(n_events) if n_events else None

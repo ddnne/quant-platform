@@ -59,7 +59,8 @@ def evaluate_macro_conditioned_on_bars(
     n_active = 0
     n_regime_gap = 0
     regime_counts: dict[str, int] = {}
-    holding_records: list[dict[str, Any]] = []
+    n_code_days = 0
+    trading_dates: set[str] = set()
 
     rates_by_date = dict((repo_series or {}).get("rates_by_date") or {})
     repo_dates = sorted(rates_by_date.keys())
@@ -79,9 +80,8 @@ def evaluate_macro_conditioned_on_bars(
             hit = lookup_repo_rate(repo_series, d)
             if hit.get("is_gap"):
                 n_regime_gap += 1
-                holding_records.append(
-                    {"date": d, "code": code, "sign": None, "regime_gap": True}
-                )
+                n_code_days += 1
+                trading_dates.add(d)
                 continue
             rate = hit.get("rate_pct")
             prev_rate = prev_map.get(str(d)[:10])
@@ -105,15 +105,8 @@ def evaluate_macro_conditioned_on_bars(
             regime = rec.get("regime")
             if regime is not None:
                 regime_counts[str(regime)] = regime_counts.get(str(regime), 0) + 1
-            holding_records.append(
-                {
-                    "date": d,
-                    "code": code,
-                    "sign": val,
-                    "regime": regime,
-                    "repo_rate": rate,
-                }
-            )
+            n_code_days += 1
+            trading_dates.add(d)
             if val is None or val == 0.0:
                 continue
             c0 = closes[i]
@@ -126,8 +119,7 @@ def evaluate_macro_conditioned_on_bars(
 
     gross = mean(signed_returns) if signed_returns else None
     net = (gross - float(one_way_cost)) if gross is not None else None
-    n_code_days = len(holding_records)
-    n_trading_days = len({r["date"] for r in holding_records})
+    n_trading_days = len(trading_dates)
     occ = occurrence_rate_multiday(
         n_active=n_active,
         n_code_days=n_code_days,
@@ -147,14 +139,12 @@ def evaluate_macro_conditioned_on_bars(
         "net_one_way_mean_active": net,
         "one_way_cost": float(one_way_cost),
         "n_active_positions": n_active,
-        "n_signed_returns": len(signed_returns),
         "n_regime_gap": n_regime_gap,
         "regime_counts": regime_counts,
         "n_codes": len(bars_by_code),
         "n_code_days": n_code_days,
         "n_trading_days": n_trading_days,
         "occurrence": occ,
-        "holding_records": holding_records,
         "non_null": n_active,
         "non_null_rate": (
             float(n_active) / float(n_code_days) if n_code_days else None
@@ -270,7 +260,6 @@ def evaluate_rate_level_xs_on_bars(
         "amortized_one_way_cost": am_cost,
         "one_way_cost": float(one_way_cost),
         "n_active_positions": n_active,
-        "n_signed_returns": len(signed_returns),
         "n_regime_gap": n_regime_gap,
         "regime_counts": regime_counts,
         "n_codes": len(bars_by_code),
@@ -393,7 +382,6 @@ def evaluate_rate_curve_xs_on_bars(
         "amortized_one_way_cost": am_cost,
         "one_way_cost": float(one_way_cost),
         "n_active_positions": n_active,
-        "n_signed_returns": len(signed_returns),
         "n_regime_gap": n_regime_gap,
         "regime_counts": regime_counts,
         "n_codes": len(bars_by_code),

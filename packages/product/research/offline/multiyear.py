@@ -746,15 +746,5 @@ def run_class_hyp_multi_year_eval(
 __all__ = [
     "CLASS_HYP_EVAL_VERSION",
     "CLASS_HYP_EVAL_WAVE",
-    "MAX_YEAR_POS_NET_SHARE",
-    "MIN_ABS_T_STAT",
-    "MIN_ACTIVATION_RATE_MULTIDAY",
-    "MIN_ECONOMIC_NET",
-    "MIN_EVENTS_PER_CODE_YEAR",
-    "MIN_EVENTS_PER_TRADING_DAY",
-    "MIN_PERIOD_WIN_RATE",
-    "MIN_POSITIVE_PERIODS",
-    "MIN_SHARPE_PERIOD",
-    "MIN_YEARS_RESEARCH_CANDIDATE",
     "run_class_hyp_multi_year_eval",
 ]
