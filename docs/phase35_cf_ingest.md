@@ -177,7 +177,10 @@ print(r.metadata, len(r))
 | ``tests/test_phase35_natural_key.py`` | Cross-language natural-key consistency |
 | ``tests/test_phase35_availability.py`` | Available_at policy rules + cross-language constant agreement |
 | ``tests/test_phase35_sync_script.py`` | Sync script offline-safety + live smoke (QP_LIVE=1) |
-| ``tests/test_phase35_coverage_matrix.py`` | Validation matrix catalog + daily-tier coverage runner |
+| ``tests/test_phase35_coverage_matrix.py`` | Validation matrix catalog completeness + daily/weekly tier membership |
+| ``tests/test_phase35_coverage_daily.py`` | Daily-tier runner on bars / calendar / master (C12, X4, C8, B2, B4, K3) |
+| ``tests/test_phase35_coverage_weekly.py`` | Weekly span / universe checks (C6/C7, B1, X1, X2/X3/X5) |
+| ``tests/test_phase35_coverage_cli.py`` | CLI, B0 gates, ingestion_validation honesty, persist-report |
 
 ## Validation matrix
 
