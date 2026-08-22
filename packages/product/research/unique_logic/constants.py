@@ -218,6 +218,7 @@ NEAR_EMPTY_PARK_IDS: frozenset[str] = frozenset(
         "event_p10_pb_sales_down",
         "event_p10_pb_px_down",
         "event_p10_sales_invert",
+        "event_p10_sales_px_down",
     }
 )
 # Recorded mean occupancy ≥ ALWAYS_ON_OCCUPANCY_WARN. Not countable, not
@@ -324,6 +325,7 @@ SPARSE_GATE_COMBOS: tuple[tuple[frozenset[str], str], ...] = (
     (frozenset({"overnight_p10", "pb_rising", "sales_down"}), "p10_pb_sales_down"),
     (frozenset({"overnight_p10", "pb_rising", "price_down"}), "p10_pb_px_down"),
     (frozenset({"overnight_p10", "sales_down", "invert_curve"}), "p10_sales_invert"),
+    (frozenset({"overnight_p10", "sales_down", "price_down"}), "p10_sales_px_down"),
 )
 NAME_LEVEL_FUND_CS_GATES: frozenset[str] = frozenset(
     {
