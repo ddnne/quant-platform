@@ -5,6 +5,7 @@ Pipeline: approved-leg signal → multiday as_of → next_day_return → R2
 Candidate daily-path SoT: :mod:`research.daily_path_eval`.
 
 Multi-year / checklist helpers live in :mod:`research.eval_harness_multiyear`
+(S1: :mod:`research.eval_harness_s1`; extra-hyp: :mod:`research.eval_harness_extra_hyp`)
 and are re-exported here. This module is W56 next-day, not candidate SoT.
 
 COMPLETE 21 only; permanent DEFER hard-reject; registry-approved legs only
@@ -60,7 +61,6 @@ from research.single_shot_job import (
     require_complete_21_only,
 )
 
-# Freeze constants — tests assert these remain closed; do not arm.
 HARNESS_VERSION: str = "research-eval-harness/v1"
 PIPELINE: tuple[str, ...] = (
     "approved_leg_signal",
@@ -69,7 +69,6 @@ PIPELINE: tuple[str, ...] = (
     "r2_batch_summary",
 )
 
-# Smoke 3 names for harness tip batches. Not EVAL_UNIVERSE_POOL.
 HARNESS_SMOKE_CODES: tuple[str, ...] = ("13010", "72030", "67580")
 DEFAULT_EVAL_CODES: tuple[str, ...] = HARNESS_SMOKE_CODES
 
@@ -220,7 +219,6 @@ def assert_harness_closed() -> Mapping[str, Any]:
         raise RuntimeError("PHASE7 env arming switches must remain empty")
     if MASS_RESEARCH_ENV_ARMING_SWITCHES:
         raise RuntimeError("MASS_RESEARCH env arming switches must remain empty")
-    # Legs must still be approved at call time.
     require_approved_signal_legs(context="harness freeze approved legs")
     require_harness_datasets(context="harness freeze default datasets")
     return status
@@ -308,7 +306,6 @@ def run_nextday_return_eval(
 run_full_pipeline = run_nextday_return_eval
 
 
-# Walk-forward + multi-period compare (not READY / not Mass).
 WALK_FORWARD_VERSION: str = "research-walk-forward/v1"
 MULTI_PERIOD_VERSION: str = "research-multi-period-multisignal/v1"
 RESEARCH_WALK_FORWARD_LABEL: str = (
@@ -335,7 +332,6 @@ def split_asof_days_walk_forward(
         )
     n = len(days)
     n_train = max(int(min_train_days), int(round(n * frac)))
-    # Keep at least min_test_days on the right when possible.
     if n_train > n - int(min_test_days):
         n_train = max(int(min_train_days), n - int(min_test_days))
     train = days[:n_train]
@@ -586,7 +582,6 @@ def run_multi_period_multisignal_compare(
                 }
             )
 
-    # Cross-period compact table (one row per period × signal).
     cross: list[dict[str, Any]] = []
     for r in results:
         if r.get("status") != "ok":
@@ -619,38 +614,36 @@ def run_multi_period_multisignal_compare(
 
 
 # Multi-year / checklist live in research.eval_harness_multiyear (re-exported).
-# Lazy getattr so harness-first and multiyear-first loads both bind.
-_MULTIYEAR_EXPORTS: frozenset[str] = frozenset(
-    {
-        "CHECKLIST_VERSION",
-        "CHECKLIST_VERSION_V1",
-        "CHECKLIST_V2_INSUFFICIENT",
-        "CHECKLIST_V2_NEAR_REQUIRED",
-        "CHECKLIST_V2_REQUIRED",
-        "COST_MODEL_PREFER_LIQUIDITY_LINKED",
-        "COST_MODEL_PREFER_REPO_LINKED",
-        "COST_MODEL_REQUIRE_LIQUIDITY_LINKED",
-        "COST_MODEL_REQUIRE_REPO_LINKED",
-        "DEFAULT_MULTIYEAR_CODES",
-        "DEFAULT_MULTIYEAR_YEARS",
-        "MULTI_YEAR_LABEL",
-        "MULTI_YEAR_VERSION",
-        "STANDARD_EVAL_DAILY_PATH_DD_PROOF",
-        "STANDARD_EVAL_MODES",
-        "design_yearly_eval_windows",
-        "evaluate_checklist_v2_completeness",
-        "multi_year_availability_table",
-        "run_multi_year_extra_hyp_eval",
-        "run_multi_year_s1_eval",
-        "run_standard_research_eval",
-        "standard_research_eval_checklist_document",
-        "standard_research_eval_checklist_run",
-    }
+_MULTIYEAR_EXPORTS: tuple[str, ...] = (
+    "CHECKLIST_VERSION",
+    "CHECKLIST_VERSION_V1",
+    "CHECKLIST_V2_INSUFFICIENT",
+    "CHECKLIST_V2_NEAR_REQUIRED",
+    "CHECKLIST_V2_REQUIRED",
+    "COST_MODEL_PREFER_LIQUIDITY_LINKED",
+    "COST_MODEL_PREFER_REPO_LINKED",
+    "COST_MODEL_REQUIRE_LIQUIDITY_LINKED",
+    "COST_MODEL_REQUIRE_REPO_LINKED",
+    "DEFAULT_MULTIYEAR_CODES",
+    "DEFAULT_MULTIYEAR_YEARS",
+    "MULTI_YEAR_LABEL",
+    "MULTI_YEAR_VERSION",
+    "STANDARD_EVAL_DAILY_PATH_DD_PROOF",
+    "STANDARD_EVAL_MODES",
+    "design_yearly_eval_windows",
+    "evaluate_checklist_v2_completeness",
+    "multi_year_availability_table",
+    "run_multi_year_extra_hyp_eval",
+    "run_multi_year_s1_eval",
+    "run_standard_research_eval",
+    "standard_research_eval_checklist_document",
+    "standard_research_eval_checklist_run",
 )
+_MULTIYEAR_EXPORT_SET: frozenset[str] = frozenset(_MULTIYEAR_EXPORTS)
 
 
 def __getattr__(name: str):
-    if name in _MULTIYEAR_EXPORTS:
+    if name in _MULTIYEAR_EXPORT_SET:
         import research.eval_harness_multiyear as _eval_harness_multiyear
 
         return getattr(_eval_harness_multiyear, name)
@@ -658,56 +651,37 @@ def __getattr__(name: str):
 
 
 def __dir__() -> list[str]:
-    return sorted(set(globals()) | _MULTIYEAR_EXPORTS | set(__all__))
+    return sorted(set(globals()) | _MULTIYEAR_EXPORT_SET | set(__all__))
 
 
 __all__ = [
     "APPROVED_SIGNAL_LEGS",
     "COMPLETE_21_DATASET_SET",
-    "CHECKLIST_VERSION",
-    "CHECKLIST_VERSION_V1",
     "CONNECTED_TO_MASS_RESEARCH_LOOP",
-    "COST_MODEL_PREFER_LIQUIDITY_LINKED",
-    "COST_MODEL_PREFER_REPO_LINKED",
-    "COST_MODEL_REQUIRE_LIQUIDITY_LINKED",
-    "COST_MODEL_REQUIRE_REPO_LINKED",
     "DEFAULT_EVAL_CODES",
-    "DEFAULT_MULTIYEAR_CODES",
-    "DEFAULT_MULTIYEAR_YEARS",
     "DEFAULT_SIGNAL_DATASETS",
     "DEFAULT_SIGNAL_ID",
     "EvalHarnessError",
     "HARNESS_SMOKE_CODES",
     "HARNESS_VERSION",
     "MASS_RESEARCH",
-    "MULTI_YEAR_LABEL",
-    "MULTI_YEAR_VERSION",
     "NEXTDAY_RESEARCH_LABEL",
     "ORDER_EXECUTION",
     "PHASE7",
     "PIPELINE",
     "RESEARCH_WALK_FORWARD_LABEL",
     "SIGNAL_CANDIDATE_ONLY",
-    "STANDARD_EVAL_DAILY_PATH_DD_PROOF",
-    "STANDARD_EVAL_MODES",
     "SingleShotJobError",
     "WALK_FORWARD_VERSION",
     "assert_harness_closed",
-    "design_yearly_eval_windows",
-    "evaluate_checklist_v2_completeness",
     "harness_freeze_status",
-    "multi_year_availability_table",
     "require_approved_signal_legs",
     "require_harness_datasets",
     "run_full_pipeline",
     "run_multi_period_multisignal_compare",
-    "run_multi_year_extra_hyp_eval",
-    "run_multi_year_s1_eval",
     "run_multiday_signal_eval",
     "run_nextday_return_eval",
     "run_research_walk_forward_multisignal",
-    "run_standard_research_eval",
     "split_asof_days_walk_forward",
-    "standard_research_eval_checklist_document",
-    "standard_research_eval_checklist_run",
+    *_MULTIYEAR_EXPORTS,
 ]

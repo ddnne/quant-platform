@@ -61,6 +61,10 @@ EVAL_HARNESS_PATH = REPO / "packages" / "product" / "research" / "eval_harness.p
 EVAL_HARNESS_MULTIYEAR_PATH = (
     REPO / "packages" / "product" / "research" / "eval_harness_multiyear.py"
 )
+EVAL_HARNESS_S1_PATH = REPO / "packages" / "product" / "research" / "eval_harness_s1.py"
+EVAL_HARNESS_EXTRA_HYP_PATH = (
+    REPO / "packages" / "product" / "research" / "eval_harness_extra_hyp.py"
+)
 
 _W99_REF0 = W99_STICKY_DAILY_PATH_DD_REFERENCE[0]
 W99_DAILY_PATH_PACK = {
@@ -289,7 +293,12 @@ def test_invalid_mode_rejected():
 
 
 def test_standard_eval_ast_no_mass_import_no_new_signal_mint():
-    paths = (EVAL_HARNESS_PATH, EVAL_HARNESS_MULTIYEAR_PATH)
+    paths = (
+        EVAL_HARNESS_PATH,
+        EVAL_HARNESS_MULTIYEAR_PATH,
+        EVAL_HARNESS_S1_PATH,
+        EVAL_HARNESS_EXTRA_HYP_PATH,
+    )
     src = "\n".join(p.read_text(encoding="utf-8") for p in paths)
     for path in paths:
         assert_ast_bans_mass_ready_orders(path)

@@ -47,12 +47,20 @@ EVAL_HARNESS_PATH = (
 EVAL_HARNESS_MULTIYEAR_PATH = (
     REPO_ROOT / "packages" / "product" / "research" / "eval_harness_multiyear.py"
 )
+EVAL_HARNESS_S1_PATH = (
+    REPO_ROOT / "packages" / "product" / "research" / "eval_harness_s1.py"
+)
+EVAL_HARNESS_EXTRA_HYP_PATH = (
+    REPO_ROOT / "packages" / "product" / "research" / "eval_harness_extra_hyp.py"
+)
 SINGLE_SHOT_PATH = (
     REPO_ROOT / "packages" / "product" / "research" / "single_shot_job.py"
 )
 HARNESS_AST_PATHS = (
     EVAL_HARNESS_PATH,
     EVAL_HARNESS_MULTIYEAR_PATH,
+    EVAL_HARNESS_S1_PATH,
+    EVAL_HARNESS_EXTRA_HYP_PATH,
     SINGLE_SHOT_PATH,
 )
 
@@ -584,9 +592,19 @@ def test_multi_year_ast_and_mass_off_freezes():
     assert "未宣言" in MULTI_YEAR_LABEL
     src = "\n".join(
         p.read_text(encoding="utf-8")
-        for p in (EVAL_HARNESS_PATH, EVAL_HARNESS_MULTIYEAR_PATH)
+        for p in (
+            EVAL_HARNESS_PATH,
+            EVAL_HARNESS_MULTIYEAR_PATH,
+            EVAL_HARNESS_S1_PATH,
+            EVAL_HARNESS_EXTRA_HYP_PATH,
+        )
     )
-    for path in (EVAL_HARNESS_PATH, EVAL_HARNESS_MULTIYEAR_PATH):
+    for path in (
+        EVAL_HARNESS_PATH,
+        EVAL_HARNESS_MULTIYEAR_PATH,
+        EVAL_HARNESS_S1_PATH,
+        EVAL_HARNESS_EXTRA_HYP_PATH,
+    ):
         assert_ast_bans_mass_ready_orders(path)
     assert "CONNECTED_TO_READY" in src or "connected_to_ready" in src
     assert "fail_one_year_safe" in src

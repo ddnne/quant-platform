@@ -106,13 +106,6 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "go": False,
     },
     {
-        "id": "eval_harness_multiyear_shrink",
-        "track": EVAL_TRACK_MID_N,
-        "why": "eval_harness_multiyear.py ~1615 is W56 checklist/S1; candidate SoT is daily_path",
-        "not_a_pass": True,
-        "go": False,
-    },
-    {
         "id": "factory_eval_shrink",
         "track": EVAL_TRACK_MID_N,
         "why": "offline/factory_eval.py ~1292 batch eval leftover after generation split",
