@@ -59,11 +59,6 @@ def holding_metrics_document() -> dict[str, Any]:
     doc = {
         "version": HOLDING_METRICS_VERSION,
         "label": HOLDING_METRICS_LABEL,
-        "default_hold_days": list(DEFAULT_HOLD_DAYS),
-        "default_histogram_buckets": [
-            {"lo": lo, "hi": hi, "label": _bucket_label(lo, hi)}
-            for lo, hi in DEFAULT_HISTOGRAM_BUCKETS
-        ],
         "note": "Research helpers only. 仮定に依存・研究用・未宣言.",
     }
     doc.update(_freeze_fields())

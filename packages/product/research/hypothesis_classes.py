@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
 from features.research_freezes import (
-    COMPLETE_INVENT,
     CONNECTED_TO_MASS,
     CONNECTED_TO_READY,
     EDGE_CLAIMED,
@@ -16,7 +15,6 @@ from features.research_freezes import (
     PHASE7,
     READY_DECLARED,
     S1_S5_UNREJECT,
-    SIGNIFICANCE_CLAIMED,
 )
 
 REGISTRY_VERSION: str = "hypothesis-class-registry/v1"
@@ -555,16 +553,7 @@ def hypothesis_class_registry_document() -> dict[str, Any]:
     """Public document for the hypothesis class registry."""
     return {
         "version": REGISTRY_VERSION,
-        "wave": REGISTRY_WAVE,
-        "classes": {
-            cid: HYPOTHESIS_CLASS_REGISTRY[cid].to_dict() for cid in ALL_CLASS_IDS
-        },
-        "class_ids": list(ALL_CLASS_IDS),
-        "default_generation_class_ids": list(DEFAULT_GENERATION_CLASS_IDS),
-        "simple_daily_sign_class_id": CLASS_SIMPLE_DAILY_SIGN,
         "simple_daily_sign_default_enabled": False,
-        "simple_daily_sign_priority": _SIMPLE_DAILY_SIGN_PRIORITY,
-        "required_fields": list(REQUIRED_CLASS_FIELDS),
         "mass_research": MASS_RESEARCH,
         "phase7": PHASE7,
         "ready_declared": READY_DECLARED,
@@ -572,17 +561,8 @@ def hypothesis_class_registry_document() -> dict[str, Any]:
         "connected_to_ready": CONNECTED_TO_READY,
         "connected_to_mass": CONNECTED_TO_MASS,
         "edge_claimed": EDGE_CLAIMED,
-        "significance_claimed": SIGNIFICANCE_CLAIMED,
         "mass_generate_signals": MASS_GENERATE_SIGNALS,
         "s1_s5_unreject": S1_S5_UNREJECT,
-        "complete_invent": COMPLETE_INVENT,
-        "note": (
-            "simple_daily_sign is lowest priority and default generation OFF "
-            "(explicit opt-in only)."
-        ),
-        "proof": (
-            "docs/proof/w0816k_w77_hypothesis_space_redesign_20260816.md"
-        ),
     }
 
 

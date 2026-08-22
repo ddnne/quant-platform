@@ -55,12 +55,6 @@ COST_MODELS_PROOF: str = (
 COST_MODELS_PROOF_SHORT_COST_W85: str = (
     "docs/proof/w0816t_w85_short_cost_repo_spread_20260817.md"
 )
-COST_MODELS_PROOF_REPO_LINKED: str = (
-    "docs/proof/w0816m_w78_repo_linked_cost_model_20260816.md"
-)
-COST_MODELS_PROOF_LIQUIDITY_LINKED: str = (
-    "docs/proof/w0816n_w79_liquidity_linked_cost_20260816.md"
-)
 
 # Base transaction (matches robustness_gate / holding_metrics).
 DEFAULT_ONE_WAY_COST_BP: float = 10.0
@@ -1482,69 +1476,21 @@ def cost_models_document() -> dict[str, Any]:
     """Public document for research cost-model surface (checklist v2)."""
     doc: dict[str, Any] = {
         "version": COST_MODELS_VERSION,
-        "prior_version": COST_MODELS_VERSION_V1,
-        "wave": COST_MODELS_WAVE,
-        "label": COST_MODELS_LABEL,
-        "proof": COST_MODELS_PROOF,
-        "proof_repo_linked": COST_MODELS_PROOF_REPO_LINKED,
-        "proof_liquidity_linked": COST_MODELS_PROOF_LIQUIDITY_LINKED,
         "preferred_rate_source": RATE_SOURCE_REPO_SERIES,
-        "transaction": {
-            "one_way_cost_bp": DEFAULT_ONE_WAY_COST_BP,
-            "one_way_cost": DEFAULT_ONE_WAY_COST,
-            "round_trip_cost_bp": DEFAULT_ONE_WAY_COST_BP * 2.0,
-            "round_trip_cost": DEFAULT_ROUND_TRIP_COST,
-            "liquidity_tx_mult": dict(LIQUIDITY_TX_MULT),
-            "change_requires": "cost_change_reason",
-        },
+        "transaction": {"liquidity_tx_mult": dict(LIQUIDITY_TX_MULT)},
         "short_borrow": {
-            "preferred_model": RATE_SOURCE_REPO_PLUS_SPREAD,
             "spread_sensitivity_bp": dict(SHORT_BORROW_SPREAD_SENSITIVITY),
-            "default_spread_bp": DEFAULT_SHORT_BORROW_SPREAD_BP,
             "liquidity_short_spread_mult": dict(LIQUIDITY_SHORT_SPREAD_MULT),
-            "fallback_fixed_annual_bp": DEFAULT_SHORT_BORROW_ANNUAL_BP,
-            "fallback_model": RATE_SOURCE_FIXED_BP,
-            "default_annual_bp": DEFAULT_SHORT_BORROW_ANNUAL_BP,
-            "default_annual": DEFAULT_SHORT_BORROW_ANNUAL,
-            "trading_days_per_year": DEFAULT_TRADING_DAYS_PER_YEAR,
-            "remeasure_api": "remeasure_period_rows_with_short_cost",
-            "hold_cost_api": "short_borrow_hold_cost_from_repo",
         },
         "leverage_financing": {
-            "preferred_model": RATE_SOURCE_REPO_SERIES,
-            "fallback_fixed_annual_bp": DEFAULT_LEVERAGE_FINANCING_ANNUAL_BP,
-            "fallback_model": RATE_SOURCE_FIXED_BP,
-            "default_annual_bp": DEFAULT_LEVERAGE_FINANCING_ANNUAL_BP,
-            "default_annual": DEFAULT_LEVERAGE_FINANCING_ANNUAL,
-            "trading_days_per_year": DEFAULT_TRADING_DAYS_PER_YEAR,
-            "repo_dataset": REPO_DATASET_ID,
-            "repo_table": REPO_TABLE,
-            "default_tenor": DEFAULT_REPO_TENOR,
             "gap_policy": "disclose_only_no_ffill_no_invent",
         },
-        "liquidity": {
-            "dataset": LIQUIDITY_DATASET_ID,
-            "proxy_unit": LIQUIDITY_PROXY_UNIT,
-            "bucket_thresholds_jpy": {
-                "high": LIQUIDITY_ADV_HIGH_JPY,
-                "mid": LIQUIDITY_ADV_MID_JPY,
-            },
-            "tx_mult": dict(LIQUIDITY_TX_MULT),
-            "short_spread_mult": dict(LIQUIDITY_SHORT_SPREAD_MULT),
-            "topix_soft_upgrade": LIQUIDITY_TOPIX_SOFT_UPGRADE,
-            "gap_policy": "disclose_only_no_ffill_no_invent",
-            "prefer_liquidity_linked_default": True,
-            "require_liquidity_linked_default": False,
-        },
-        "known_position_styles": list(KNOWN_POSITION_STYLES),
-        "known_liquidity_buckets": list(KNOWN_LIQUIDITY_BUCKETS),
+        "liquidity": {"dataset": LIQUIDITY_DATASET_ID},
         "defaults_policy": {
             "prefer_repo_linked": True,
             "require_repo_linked": False,
             "prefer_liquidity_linked": True,
             "require_liquidity_linked": False,
-            "fixed_bp_fallback_when": "no repo_rate_series supplied",
-            "liquidity_unmodulated_when": "no liquidity proxy / bars / bucket",
         },
     }
     doc.update(_freeze_fields())
@@ -2258,8 +2204,6 @@ __all__ = [
     "COST_MODELS_LABEL",
     "COST_MODELS_PROOF",
     "COST_MODELS_PROOF_SHORT_COST_W85",
-    "COST_MODELS_PROOF_LIQUIDITY_LINKED",
-    "COST_MODELS_PROOF_REPO_LINKED",
     "COST_MODELS_VERSION",
     "COST_MODELS_VERSION_V1",
     "COST_MODELS_WAVE",

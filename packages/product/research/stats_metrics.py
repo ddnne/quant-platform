@@ -964,29 +964,12 @@ def stats_metrics_document() -> dict[str, Any]:
     doc = {
         "version": STATS_METRICS_VERSION,
         "wave": STATS_METRICS_WAVE,
-        "defaults": {
-            "min_abs_t_stat": DEFAULT_MIN_ABS_T_STAT,
-            "min_sharpe_period": DEFAULT_MIN_SHARPE_PERIOD,
-            "min_period_win_rate": DEFAULT_MIN_PERIOD_WIN_RATE,
-            "min_positive_periods": DEFAULT_MIN_POSITIVE_PERIODS,
-            "min_payoff": DEFAULT_MIN_PAYOFF,
-            "max_abs_drawdown": DEFAULT_MAX_ABS_DRAWDOWN,
-            "trading_days_per_year": DEFAULT_TRADING_DAYS_PER_YEAR,
-        },
         "daily_path_dd": {
             "version": DAILY_PATH_DD_VERSION,
-            "wave": DAILY_PATH_DD_WAVE,
             "required_fields": list(DAILY_PATH_DD_REQUIRED_FIELDS),
             "period_net_dd_only_pass_forbidden": True,
-            "period_net_dd_zero_daily_unmeasured": "incomplete",
-            "reference_example_proof": DAILY_PATH_DD_REFERENCE_PROOF,
-            "proof": DAILY_PATH_DD_PROOF,
         },
-        "note": (
-            "Raises research_candidate bar beyond mean bp. Requires "
-            "daily_path_DD / dd_duration / recovery / total_ret_net; "
-            "period_net_DD alone cannot pass."
-        ),
+        "note": "daily_path_DD required; period_net_DD alone cannot pass.",
     }
     doc.update(_freeze())
     return doc

@@ -108,13 +108,6 @@ def research_robustness_gate_document() -> dict[str, Any]:
     return {
         "version": GATE_VERSION,
         "label": GATE_LABEL,
-        "defaults": {
-            "min_periods": DEFAULT_MIN_PERIODS,
-            "min_active_per_period": DEFAULT_MIN_ACTIVE_PER_PERIOD,
-            "catastrophic_abs": DEFAULT_CATASTROPHIC_ABS,
-            "one_way_cost": DEFAULT_ONE_WAY_COST,
-            "require_net_sign_majority": True,
-        },
         **_freeze(),
         "note": "Research checklist only. Pass is not operational GO.",
     }

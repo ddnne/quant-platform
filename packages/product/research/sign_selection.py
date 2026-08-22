@@ -540,22 +540,8 @@ def sign_selection_document() -> dict[str, Any]:
         "version": SIGN_SELECTION_VERSION,
         "wave": SIGN_SELECTION_WAVE,
         "policy": {
-            "evaluate_both_sides_after_cost": True,
-            "prefer_positive_mean_with_nonzero_evidence": True,
             "t_is_guideline_not_hard": True,
-            "both_fail_near_zero_or_nonpositive": "reject_or_explore_demote",
-            "record_chosen_sign": True,
-            "paper_negative_fund_evaluate_flip_first": True,
             "not_simple_daily_sign": True,
-            "no_s1_s5_unreject": True,
-        },
-        "defaults": {
-            "near_zero_abs_net": DEFAULT_NEAR_ZERO_ABS_NET,
-            "t_guideline": DEFAULT_T_GUIDELINE,
-            "min_mean_net": DEFAULT_MIN_MEAN_NET,
-            "nonzero_abs_mean": DEFAULT_NONZERO_ABS_MEAN,
-            "sign_original": SIGN_ORIGINAL,
-            "sign_inverted": SIGN_INVERTED,
         },
         "note": "Research-only sign flip helper. Records chosen_sign.",
     }

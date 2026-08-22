@@ -63,21 +63,6 @@ def _freeze_fields() -> dict[str, Any]:
     }
 
 
-def risk_scenarios_document() -> dict[str, Any]:
-    """Public document for research risk-scenario surface (checklist v2)."""
-    doc: dict[str, Any] = {
-        "version": RISK_SCENARIOS_VERSION,
-        "label": RISK_SCENARIOS_LABEL,
-        "min_scenario_set": list(MIN_SCENARIO_SET),
-        "required_core": list(REQUIRED_CORE_SCENARIOS),
-        "data_dependent": list(OPTIONAL_DATA_DEPENDENT_SCENARIOS),
-        "stability_policy": {"prefer_fail_candidate": True},
-        "note": "Research scenario checklist only. Incomplete → not candidate.",
-    }
-    doc.update(_freeze_fields())
-    return doc
-
-
 def _as_float(x: Any) -> float | None:
     if x is None:
         return None
@@ -460,6 +445,5 @@ __all__ = [
     "SCENARIO_RATE_UP",
     "default_na_scenario_bundle",
     "evaluate_risk_scenarios",
-    "risk_scenarios_document",
     "scenario_row",
 ]
