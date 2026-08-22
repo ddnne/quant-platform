@@ -527,6 +527,18 @@ def test_review_proposal_row_occupancy_and_polarity_table() -> None:
             "occupancy_label_only",
             "PEAD when overnight funding is tight AND EPS contracted versus the last prior print",
         ),
+        (
+            "Negative earnings surprises when overnight funding is easy AND sales contracted.",
+            ["easy_funding", "sales_down"],
+            "occupancy_label_only",
+            "PEAD when overnight funding is easy AND sales contracted versus the last prior print",
+        ),
+        (
+            "Overnight funding is easy AND EPS contracted AND sales are declining.",
+            ["easy_funding", "eps_down"],
+            "occupancy_label_only",
+            "PEAD when overnight funding is easy AND EPS contracted versus the last prior print",
+        ),
     ]
     for bad_thesis, gates, reason, good_thesis in rows:
         payload = {

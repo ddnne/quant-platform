@@ -218,6 +218,7 @@ def run_cf_daily_path_fanout(
         primary_sleeve_and_meta_cells,
         summarize_basket_trends,
     )
+    from research.unique_logic.worker_bodies import mean_occupancy_by_logic
 
     basket_cells = primary_sleeve_and_meta_cells(cells)
     basket_summary = summarize_basket_trends(basket_cells, job_id=jid)
@@ -271,6 +272,7 @@ def run_cf_daily_path_fanout(
         "baskets": basket_summary,
         "n_basket_cells": len(basket_cells),
         "write_artifacts": bool(write_artifacts),
+        "occupancy_by_logic": mean_occupancy_by_logic(cells),
     }
     return pack
 

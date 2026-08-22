@@ -235,6 +235,8 @@ def test_near_empty_park_is_not_countable_or_basket_material() -> None:
 
     assert THIN_SLEEVE_EXCLUDE_IDS
     assert "event_p10_pb_rising" in THIN_SLEEVE_EXCLUDE_IDS
+    assert "event_invert_px_down_tight_funding" in THIN_SLEEVE_EXCLUDE_IDS
+    assert "event_easy_funding_eps_sales_down" not in THIN_SLEEVE_EXCLUDE_IDS
     assert THIN_SLEEVE_EXCLUDE_IDS.isdisjoint(sleeve_durability_logic_ids())
     thin_reasons = validate_basket_members(
         ["event_eqar_high_liq_high", "event_p10_pb_rising"]

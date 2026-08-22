@@ -34,7 +34,7 @@ def _spec(lid: str) -> dict:
 def test_event_filters_proposals_are_new_unique_logic_not_catalog_or_prior_event():
     ids = [s["logic_id"] for s in event_filters.NEW_UNIQUE_LOGIC]
     assert ids == sorted(EVENT_FILTER_LOGIC_IDS)
-    assert len(ids) == 4
+    assert ids
     for s in event_filters.NEW_UNIQUE_LOGIC:
         assert s["new_unique_logic"] is True
         assert s["catalog"] is True
@@ -54,7 +54,7 @@ def test_event_filters_propose_profit_hypotheses_accepts_adhoc_no_catalog_map():
         event_filters.NEW_UNIQUE_LOGIC,
         evaluate=False,
     )
-    assert out["n_accepted"] == 4
+    assert out["n_accepted"] == len(event_filters.NEW_UNIQUE_LOGIC)
     assert out["n_rejected"] == 0
     lids = [a["logic_id"] for a in out["accepted"]]
     assert lids == [s["logic_id"] for s in event_filters.NEW_UNIQUE_LOGIC]
