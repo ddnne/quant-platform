@@ -584,6 +584,12 @@ def test_review_proposal_row_occupancy_and_polarity_table() -> None:
             "occupancy_label_only",
             "PEAD when overnight is in the easiest PIT decile AND EPS contracted versus the last prior print AND price is down. Skip missing PIT prints (no invent).",
         ),
+        (
+            "The price of the stock went down when the curve flattened and funding became tight.",
+            ["curve_flatten", "eps_down"],
+            "occupancy_label_only",
+            "PEAD when the repo curve flattened AND EPS contracted versus the last prior print. Skip missing PIT prints (no invent).",
+        ),
     ]
     for bad_thesis, gates, reason, good_thesis in rows:
         payload = {

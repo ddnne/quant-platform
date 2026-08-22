@@ -257,6 +257,8 @@ EXTRA_TITLE_GATES: tuple[tuple[str, str], ...] = (
     ("tight funding", "tight_funding"),
     ("funding is tight", "tight_funding"),
     ("funding tight", "tight_funding"),
+    ("funding became tight", "tight_funding"),
+    ("became tight", "tight_funding"),
     ("easy funding", "easy_funding"),
     ("funding is easy", "easy_funding"),
     ("funding easy", "easy_funding"),
