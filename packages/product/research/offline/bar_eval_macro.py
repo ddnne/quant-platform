@@ -49,22 +49,18 @@ def evaluate_macro_conditioned_on_bars(
     high_threshold: float = DEFAULT_REPO_HIGH_THRESHOLD,
     low_threshold: float = DEFAULT_REPO_LOW_THRESHOLD,
 ) -> dict[str, Any]:
-    """Evaluate macro_conditioned signal using bars + repo rate series.
+    """Macro-conditioned momentum on bars + repo (level or change).
 
-    Uses daily momentum entry, conditions on repo regime (level or change),
-    scores next-session return (T→T+1) when conditioned signal is active.
-    Cost: full one-way per active day (conservative; daily condition check).
+    Daily entry; next-session return when active. Full one-way per active day.
     """
     n = int(momentum_n)
     h = int(hold_days)
     signed_returns: list[float] = []
     n_active = 0
     n_regime_gap = 0
-    n_conditioned_null = 0
     regime_counts: dict[str, int] = {}
     holding_records: list[dict[str, Any]] = []
 
-    # Build prev repo map by sorted dates
     rates_by_date = dict((repo_series or {}).get("rates_by_date") or {})
     repo_dates = sorted(rates_by_date.keys())
     prev_map: dict[str, float | None] = {}
@@ -80,7 +76,6 @@ def evaluate_macro_conditioned_on_bars(
         for i, (d, mom) in enumerate(moms):
             if i + 1 >= len(closes):
                 break
-            # Lookup repo for date; gap → honest null (no invent)
             hit = lookup_repo_rate(repo_series, d)
             if hit.get("is_gap"):
                 n_regime_gap += 1
@@ -89,10 +84,8 @@ def evaluate_macro_conditioned_on_bars(
                 )
                 continue
             rate = hit.get("rate_pct")
-            # prev: prior calendar repo date or prior bar date lookup
             prev_rate = prev_map.get(str(d)[:10])
             if prev_rate is None and repo_dates:
-                # find last repo date < d
                 earlier = [x for x in repo_dates if x < str(d)[:10]]
                 if earlier:
                     prev_rate = rates_by_date.get(earlier[-1])
@@ -122,9 +115,7 @@ def evaluate_macro_conditioned_on_bars(
                 }
             )
             if val is None or val == 0.0:
-                n_conditioned_null += 1
                 continue
-            # next-day return (conservative daily re-check of regime)
             c0 = closes[i]
             c1 = closes[i + 1]
             if c0 is None or c1 is None or c0 == 0:
@@ -142,7 +133,7 @@ def evaluate_macro_conditioned_on_bars(
         n_code_days=n_code_days,
         n_trading_days=n_trading_days,
         n_codes=len(bars_by_code),
-        hold_days=1,  # daily re-check path
+        hold_days=1,
         min_activation_rate=MIN_ACTIVATION_RATE_MULTIDAY,
     )
 
@@ -158,7 +149,6 @@ def evaluate_macro_conditioned_on_bars(
         "n_active_positions": n_active,
         "n_signed_returns": len(signed_returns),
         "n_regime_gap": n_regime_gap,
-        "n_conditioned_null": n_conditioned_null,
         "regime_counts": regime_counts,
         "n_codes": len(bars_by_code),
         "n_code_days": n_code_days,
@@ -173,7 +163,7 @@ def evaluate_macro_conditioned_on_bars(
         **_freeze(),
         "note": (
             f"Macro-conditioned momentum mode={mode} on jsda_tokyo_repo_rates. "
-            "Repo gaps → no trade (no invent). Not READY / not Mass."
+            "Repo gaps → no trade (no invent)."
         ),
     }
 
@@ -194,8 +184,6 @@ def evaluate_rate_level_xs_on_bars(
 
     Distinct from macro_conditioned rate_level (unidirectional mom gate).
     """
-    from research.cost_models import lookup_repo_rate
-
     n = int(momentum_n)
     h = int(hold_days)
     am_cost = amortized_one_way_cost(one_way_cost, h)
@@ -211,7 +199,6 @@ def evaluate_rate_level_xs_on_bars(
         closes_list[code] = [c for _, c in pairs_l]
 
     dates = sorted(by_date.keys())
-    # Daily CS rank signs, then rate-level risk-adjust
     daily_adj: dict[str, dict[str, float | None]] = {c: {} for c in bars_by_code}
     n_regime_gap = 0
     regime_counts: dict[str, int] = {}
@@ -292,7 +279,7 @@ def evaluate_rate_level_xs_on_bars(
         **_freeze(),
         "note": (
             "Absolute rate-level factor × CS risk-on/off book on "
-            "jsda_tokyo_repo_rates. Not macro mom-gate. Not READY / not Mass."
+            "jsda_tokyo_repo_rates. Not macro mom-gate."
         ),
     }
 
@@ -335,7 +322,6 @@ def evaluate_rate_curve_xs_on_bars(
         ranks = cross_section_rank_signs(
             by_date[d], long_frac=long_frac, short_frac=short_frac
         )
-        # exact date match; no invent/ffill
         s_rate = short_by.get(str(d)[:10])
         l_rate = long_by.get(str(d)[:10])
         if s_rate is None or l_rate is None:
@@ -415,6 +401,6 @@ def evaluate_rate_curve_xs_on_bars(
         **_freeze(),
         "note": (
             "Repo curve-shape factor (3M−overnight) × CS book. "
-            "JSDA tenors only; no invent. Not READY / not Mass."
+            "JSDA tenors only; no invent."
         ),
     }

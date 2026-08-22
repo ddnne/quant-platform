@@ -164,7 +164,7 @@ def evaluate_mf_value_mom_rate_on_bars(
         **_freeze(),
         "note": (
             "Multi-factor value×mom×rate. Distinct from fund_value_mom_agree. "
-            "PIT fins + date-matched repo. Not READY / not Mass."
+            "PIT fins + date-matched repo."
         ),
     }
 
@@ -271,7 +271,7 @@ def evaluate_mf_flow_price_on_bars(
         **_freeze(),
         "note": (
             "Multi-factor flow×price confirm. Near-group parallel to "
-            "flow_margin_hard/soft (do not merge). Not READY / not Mass."
+            "flow_margin_hard/soft (do not merge)."
         ),
     }
 
@@ -287,9 +287,7 @@ def evaluate_cross_section_on_bars(
 ) -> dict[str, Any]:
     """Cross-section relative rank L-S on momentum.
 
-    W79 improve: when ``hold_days`` > 1, apply sticky fixed_horizon hold per
-    code and score multi-day forward returns on rebalance boundaries
-    (amortized cost). hold_days=1 keeps prior daily L-S path.
+    hold_days=1 is daily L-S; hold_days>1 uses sticky fixed_horizon + amortized cost.
     """
     n = int(momentum_n)
     h = int(hold_days)
@@ -329,7 +327,6 @@ def evaluate_cross_section_on_bars(
                 signed_returns.append(float(sign) * r1)
         am_cost = float(one_way_cost)
     else:
-        # Per-code sticky hold of daily rank signs
         daily_rank: dict[str, dict[str, float | None]] = {
             c: {} for c in bars_by_code
         }
@@ -384,9 +381,7 @@ def evaluate_cross_section_on_bars(
         "n_code_days": n_code_days,
         "occurrence": occ,
         **_freeze(),
-        "note": (
-            f"Cross-section rank L-S hold_days={h}. Not READY / not Mass."
-        ),
+        "note": f"Cross-section rank L-S hold_days={h}.",
     }
 
 
@@ -400,20 +395,13 @@ def evaluate_flow_demand_on_bars(
     require_short_confirm: bool = False,
     short_confirm_mode: str | None = None,
 ) -> dict[str, Any]:
-    """Evaluate flow_demand: multi-day sticky hold of margin change sign.
+    """Flow demand: sticky hold of margin-change sign (not daily sign flip).
 
-    Distinct from rejected S4 (daily sign flip). Rebalance on margin
-    observation updates; hold sticky for ``hold_days`` sessions.
-
-    ``short_confirm_mode`` (W85):
-    * ``off`` — margin only (default when require_short_confirm=False)
-    * ``hard`` — same-sign short required; missing short → no entry
-    * ``soft`` — same-sign when short present; margin-only on short gap
-      (cheap near-miss improve for occurrence without look-ahead)
+    ``short_confirm_mode``: off (margin only) / hard (same-sign short required)
+    / soft (same-sign when short present; margin-only on short gap).
     """
     h = int(hold_days)
     am_cost = amortized_one_way_cost(one_way_cost, h)
-    # Resolve confirm mode (backward-compat with require_short_confirm bool).
     mode_raw = short_confirm_mode
     if mode_raw is None:
         mode_s = "hard" if require_short_confirm else "off"
@@ -428,7 +416,6 @@ def evaluate_flow_demand_on_bars(
                 f"short_confirm_mode must be off|hard|soft, got {mode_raw!r}"
             )
     require_hard = mode_s == "hard"
-    # short ratio change map by date
     short_chg: dict[str, float | None] = {}
     if short_series:
         s_pairs = list(short_series)
@@ -454,7 +441,6 @@ def evaluate_flow_demand_on_bars(
         margin_pairs = list(margin_by_code.get(code) or [])
         if len(margin_pairs) < 2:
             continue
-        # Build daily entry signs: only non-null on margin update days
         margin_chg_by_date: dict[str, float | None] = {}
         for i, (d, m) in enumerate(margin_pairs):
             if i == 0:
@@ -469,16 +455,11 @@ def evaluate_flow_demand_on_bars(
 
         dates = [d for d, _ in pairs_l]
         closes = [c for _, c in pairs_l]
-        # Forward-fill last margin change onto bar calendar for entry series
-        last_chg: float | None = None
         last_short: float | None = None
         entry_signs: list[float | None] = []
         for d in dates:
-            if d in margin_chg_by_date and margin_chg_by_date[d] is not None:
-                last_chg = margin_chg_by_date[d]
             if d in short_chg and short_chg[d] is not None:
                 last_short = short_chg[d]
-            # Only allow rebalance entry on margin observation days
             if d in margin_chg_by_date and margin_chg_by_date[d] is not None:
                 rec = compute_flow_demand_signal(
                     margin_change=margin_chg_by_date[d],
@@ -492,7 +473,6 @@ def evaluate_flow_demand_on_bars(
                 )
                 entry_signs.append(rec.get("value"))
             else:
-                # between margin prints: no new entry (sticky hold handles)
                 entry_signs.append(None)
 
         held = apply_sticky_hold(
@@ -504,7 +484,6 @@ def evaluate_flow_demand_on_bars(
             )
             if pos is None or pos == 0.0:
                 continue
-            # Score on days where we have a fresh margin entry (rebalance)
             if entry_signs[i] is None or entry_signs[i] == 0.0:
                 continue
             fwd = multi_day_forward_return(closes, hold_days=h, entry_index=i)
@@ -551,8 +530,7 @@ def evaluate_flow_demand_on_bars(
         **_freeze(),
         "note": (
             f"Flow demand multi-day hold={h} from margin change "
-            f"(short_confirm_mode={mode_s}). Not S4 daily. "
-            "Not READY / not Mass."
+            f"(short_confirm_mode={mode_s}). Not S4 daily."
         ),
     }
 
@@ -578,8 +556,6 @@ def evaluate_fundamentals_price_on_bars(
     holding_records: list[dict[str, Any]] = []
     value_scores_all: list[float] = []
 
-    # Cross-sectional benchmark: median value score per date when possible
-    # First pass: collect value scores
     value_by_code_date: dict[str, dict[str, float | None]] = {}
     for code, pairs in bars_by_code.items():
         series = asof_map.get(code) or []
@@ -653,7 +629,6 @@ def evaluate_fundamentals_price_on_bars(
         n_trading_days=n_trading_days,
         n_codes=n_codes,
         hold_days=h,
-        # value×momentum agree is sparse by design; floor lower than sticky mom
         min_activation_rate=min(MIN_ACTIVATION_RATE_MULTIDAY, 0.01),
     )
     return {
@@ -677,8 +652,5 @@ def evaluate_fundamentals_price_on_bars(
         "holding_records": holding_records,
         "non_null": n_active,
         **_freeze(),
-        "note": (
-            f"Fundamentals×price mode={mode} hold={h}d PIT fins. "
-            "Not READY / not Mass."
-        ),
+        "note": f"Fundamentals×price mode={mode} hold={h}d PIT fins.",
     }

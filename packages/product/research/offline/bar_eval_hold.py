@@ -45,11 +45,10 @@ def evaluate_multi_day_hold_on_bars(
     one_way_cost: float = DEFAULT_ONE_WAY_COST,
     rebalance_mode: str = "fixed_horizon",
 ) -> dict[str, Any]:
-    """Evaluate multi_day_hold signal on an in-memory bars panel.
+    """Multi-day hold on an in-memory bars panel.
 
     Entry = sign(momentum_n) with n=hold_days; sticky hold; gross = mean of
-    sign * hold-horizon forward return on rebalance days only.
-    Cost net uses amortized one-way over hold_days.
+    sign * hold-horizon forward return on rebalance days. Net amortizes one-way.
     """
     h = int(hold_days)
     if h < 1:
@@ -58,9 +57,7 @@ def evaluate_multi_day_hold_on_bars(
 
     signed_returns: list[float] = []
     holding_records: list[dict[str, Any]] = []
-    n_rebalance = 0
     n_active = 0
-    per_code_stats: list[dict[str, Any]] = []
 
     for code, pairs in sorted(bars_by_code.items()):
         pairs_l = list(pairs)
@@ -73,7 +70,6 @@ def evaluate_multi_day_hold_on_bars(
         )
         closes = [c for _, c in pairs_l]
         dates = [d for d, _ in pairs_l]
-        code_signed: list[float] = []
         for i, pos in enumerate(held):
             holding_records.append(
                 {
@@ -84,30 +80,16 @@ def evaluate_multi_day_hold_on_bars(
             )
             if pos is None or pos == 0.0:
                 continue
-            # Only score on rebalance boundaries for fixed_horizon.
             if rebalance_mode == "fixed_horizon" and i % h != 0:
                 continue
             fwd = multi_day_forward_return(closes, hold_days=h, entry_index=i)
             if fwd is None:
                 continue
-            n_rebalance += 1
             n_active += 1
-            sr = float(pos) * float(fwd)
-            signed_returns.append(sr)
-            code_signed.append(sr)
-        if code_signed:
-            per_code_stats.append(
-                {
-                    "code": code,
-                    "n": len(code_signed),
-                    "gross_mean": mean(code_signed),
-                }
-            )
+            signed_returns.append(float(pos) * float(fwd))
 
     gross = mean(signed_returns) if signed_returns else None
     net = (gross - am_cost) if gross is not None else None
-    # dailyized residual illustration (research only)
-    net_daily = (gross - one_way_cost) if gross is not None else None
     trade_stats = trade_stats_report(
         signed_returns,
         hold_days=h,
@@ -136,18 +118,15 @@ def evaluate_multi_day_hold_on_bars(
         "rebalance_mode": rebalance_mode,
         "gross_signed_mean_active": gross,
         "net_one_way_mean_active": net,
-        "net_daily_flip_cost_illustration": net_daily,
         "amortized_one_way_cost": am_cost,
         "one_way_cost": float(one_way_cost),
         "n_active_positions": n_active,
-        "n_rebalance_events": n_rebalance,
         "n_signed_returns": len(signed_returns),
         "n_codes": n_codes,
         "n_code_days": n_code_days,
         "n_trading_days": n_trading_days,
         "occurrence": occ,
         "trade_stats": trade_stats,
-        "per_code_sample": per_code_stats[:10],
         "holding_records": holding_records,
         "non_null": n_active,
         "non_null_rate": (
@@ -156,10 +135,7 @@ def evaluate_multi_day_hold_on_bars(
         **_freeze(),
         "note": (
             f"Multi-day hold n={h}: sticky fixed_horizon; "
-            "gross = mean(sign * R_hold); net = gross - one_way/hold_days. "
-            "Occurrence = activation rate (not count alone). "
-            "trade_stats = t/Sharpe/winrate on hold nets. "
-            "Not READY / not Mass."
+            "gross = mean(sign * R_hold); net = gross - one_way/hold_days."
         ),
     }
 
@@ -174,12 +150,10 @@ def evaluate_event_post_on_bars(
     period_end: str | None = None,
     entry_mode: str = EVENT_POST_ENTRY_MODE,
 ) -> dict[str, Any]:
-    """Evaluate event_post: post-disclosure multi-day hold on surprise sign.
+    """Event-post: PIT entry on surprise sign, then ``post_hold_days`` hold.
 
-    Scores only on disclosure events within period. Entry is **PIT-safe**:
-    DiscDate+DiscTime SoT → first session close that does not look ahead
-    (after-close / missing DiscTime → next trading bar). Hold is close-to-close
-    over ``post_hold_days`` sessions from that entry.
+    Scores disclosure events in period. Entry is the first session close that
+    does not look ahead of DiscDate+DiscTime (after-close / missing time → next bar).
     """
     h = int(post_hold_days)
     am_cost = amortized_one_way_cost(one_way_cost, h)
@@ -213,7 +187,6 @@ def evaluate_event_post_on_bars(
                 feps=ev.get("feps"),
                 prior_eps=ev.get("prior_eps"),
             )
-            # Prefer envelope available_at / event_time when present (dataset SoT)
             disc_time = ev.get("disc_time")
             event_time = ev.get("event_time") or ev.get("available_at")
             idx, entry_date, entry_meta = event_post_entry_bar_index(
@@ -337,10 +310,6 @@ def evaluate_event_post_on_bars(
         **_freeze(),
         "note": (
             f"Event-post hold={h}d PIT entry (mode={entry_mode}) on fins "
-            "DiscDate+DiscTime surprise proxy (+ fins_earnings_date thicken "
-            "when merged; no invent surprise). Entry = first session close "
-            "not looking ahead of availability. Occurrence = rate not count. "
-            "trade_stats = t/Sharpe/winrate on hold nets. Gaps → skip. "
-            "Not READY / not Mass."
+            "DiscDate+DiscTime surprise proxy. Gaps → skip."
         ),
     }

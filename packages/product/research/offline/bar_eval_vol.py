@@ -197,7 +197,7 @@ def _evaluate_nky_vol_xs_core(
         **_freeze(),
         "note": (
             f"Index-level Nikkei/TOPIX vol regime mode={m} × CS book. "
-            "Not per-name vol_risk_adjusted. Not READY / not Mass."
+            "Not per-name vol_risk_adjusted."
         ),
     }
 
@@ -327,7 +327,6 @@ def evaluate_opt225_vol_on_bars(
     m = str(mode or "opt225_basevol_abs_level")
     sk = str(series_kind or "basevol")
     series = opt225_series or {}
-    # Accept either a single regime map or a bundle keyed by series_kind.
     if "rv_abs_by_date" not in series and sk in series:
         series = dict(series.get(sk) or {})
     short_by = dict(series.get("rv_short_by_date") or {})
@@ -461,7 +460,7 @@ def evaluate_opt225_vol_on_bars(
         **_freeze(),
         "note": (
             f"options_225 {sk} regime mode={m} × CS book. Canonical Nikkei vol SoT. "
-            "nky_vol_* remains proxy/compare only. Not READY / not Mass."
+            "nky_vol_* remains proxy/compare only."
         ),
     }
 
@@ -501,7 +500,6 @@ def evaluate_vol_risk_adjusted_on_bars(
     am_cost = amortized_one_way_cost(one_way_cost, h)
     signed_returns: list[float] = []
     n_active = 0
-    n_filtered = 0
     holding_records: list[dict[str, Any]] = []
 
     for code, pairs in sorted(bars_by_code.items()):
@@ -519,25 +517,21 @@ def evaluate_vol_risk_adjusted_on_bars(
             vol = _realized_vol(closes, i, vn)
             if vol is None or vol <= 1e-12:
                 entry_signs.append(None)
-                n_filtered += 1
                 continue
             if mode == "vol_expand":
                 prior = _realized_vol(closes, i - vn, vn) if i >= 2 * vn else None
                 if prior is None or prior <= 1e-12:
                     entry_signs.append(None)
-                    n_filtered += 1
                     continue
                 expand = vol / prior
                 if expand < thr:
                     entry_signs.append(0.0)
-                    n_filtered += 1
                     continue
                 entry_signs.append(sign_from_numeric(mom))
             else:
                 score = abs(float(mom)) / vol
                 if score < thr:
                     entry_signs.append(0.0)
-                    n_filtered += 1
                     continue
                 entry_signs.append(sign_from_numeric(mom))
         held = apply_sticky_hold(
@@ -573,7 +567,6 @@ def evaluate_vol_risk_adjusted_on_bars(
         "amortized_one_way_cost": am_cost,
         "one_way_cost": float(one_way_cost),
         "n_active_positions": n_active,
-        "n_filtered": n_filtered,
         "n_signed_returns": len(signed_returns),
         "n_codes": len(bars_by_code),
         "n_code_days": n_code_days,
@@ -585,8 +578,5 @@ def evaluate_vol_risk_adjusted_on_bars(
             "n_active": n_active,
         },
         **_freeze(),
-        "note": (
-            f"Vol gate mode={mode} thr={thr} hold={h} vol_n={vn}. "
-            "Not READY / not Mass."
-        ),
+        "note": f"Vol gate mode={mode} thr={thr} hold={h} vol_n={vn}.",
     }
