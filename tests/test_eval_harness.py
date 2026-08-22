@@ -39,8 +39,16 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 EVAL_HARNESS_PATH = (
     REPO_ROOT / "packages" / "product" / "research" / "eval_harness.py"
 )
+EVAL_HARNESS_MULTIYEAR_PATH = (
+    REPO_ROOT / "packages" / "product" / "research" / "eval_harness_multiyear.py"
+)
 SINGLE_SHOT_PATH = (
     REPO_ROOT / "packages" / "product" / "research" / "single_shot_job.py"
+)
+HARNESS_AST_PATHS = (
+    EVAL_HARNESS_PATH,
+    EVAL_HARNESS_MULTIYEAR_PATH,
+    SINGLE_SHOT_PATH,
 )
 
 _CODES = ("13010", "72030", "67580")
@@ -454,7 +462,7 @@ def _ast_imports_and_calls(path: Path) -> tuple[set[str], set[str]]:
 
 def test_eval_harness_ast_bans_mass_ready_orders():
     """T7: harness module must not import/call mass, READY mint, or orders."""
-    for path in (EVAL_HARNESS_PATH, SINGLE_SHOT_PATH):
+    for path in HARNESS_AST_PATHS:
         imported, called = _ast_imports_and_calls(path)
         src = path.read_text(encoding="utf-8")
         assert "agents" not in imported, path.name
@@ -753,11 +761,15 @@ def test_multi_year_ast_and_mass_off_freezes():
     assert ORDER_EXECUTION is False
     assert CONNECTED_TO_MASS_RESEARCH_LOOP is False
     assert "未宣言" in MULTI_YEAR_LABEL
-    src = EVAL_HARNESS_PATH.read_text(encoding="utf-8")
-    tree = ast.parse(src)
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.module:
-            assert "mass_research" not in (node.module or "")
+    src = "\n".join(
+        p.read_text(encoding="utf-8")
+        for p in (EVAL_HARNESS_PATH, EVAL_HARNESS_MULTIYEAR_PATH)
+    )
+    for path in (EVAL_HARNESS_PATH, EVAL_HARNESS_MULTIYEAR_PATH):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module:
+                assert "mass_research" not in (node.module or "")
     assert "CONNECTED_TO_READY" in src or "connected_to_ready" in src
     assert "fail_one_year_safe" in src
     assert "design_yearly_eval_windows" in src

@@ -55,6 +55,9 @@ from research.robustness_gate import evaluate_research_robustness_gate
 
 REPO = Path(__file__).resolve().parents[1]
 EVAL_HARNESS_PATH = REPO / "packages" / "product" / "research" / "eval_harness.py"
+EVAL_HARNESS_MULTIYEAR_PATH = (
+    REPO / "packages" / "product" / "research" / "eval_harness_multiyear.py"
+)
 
 _W99_REF0 = W99_STICKY_DAILY_PATH_DD_REFERENCE[0]
 W99_DAILY_PATH_PACK = {
@@ -289,11 +292,13 @@ def test_invalid_mode_rejected():
 
 
 def test_standard_eval_ast_no_mass_import_no_new_signal_mint():
-    src = EVAL_HARNESS_PATH.read_text(encoding="utf-8")
-    tree = ast.parse(src)
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.module:
-            assert "mass_research" not in (node.module or "")
+    paths = (EVAL_HARNESS_PATH, EVAL_HARNESS_MULTIYEAR_PATH)
+    src = "\n".join(p.read_text(encoding="utf-8") for p in paths)
+    for path in paths:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module:
+                assert "mass_research" not in (node.module or "")
     assert "run_standard_research_eval" in src
     assert "CHECKLIST_VERSION" in src
     assert "research_candidate" in src
