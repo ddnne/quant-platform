@@ -159,10 +159,10 @@ def test_cf_new_thesis_ids_match_yaml_combo_kind() -> None:
     assert combo_ids == set(CF_NEW_THESIS_IDS)
     assert event | surprise_xs == set(CF_NEW_EVENT_THESIS_IDS)
     assert cs == set(CF_NEW_CS_THESIS_IDS)
-    assert len(CF_NEW_EVENT_THESIS_IDS) == 266
+    assert len(CF_NEW_EVENT_THESIS_IDS) == 269
     assert len(CF_NEW_CS_THESIS_IDS) == 104
-    assert len(CF_NEW_THESIS_IDS) == 370
-    assert len(RESEARCH_UNIQUE_LOGIC_IDS) == 392
+    assert len(CF_NEW_THESIS_IDS) == 373
+    assert len(RESEARCH_UNIQUE_LOGIC_IDS) == 395
     assert yaml_ids == set(RESEARCH_UNIQUE_LOGIC_IDS)
 
     helper_src = inspect.getsource(catalog_mod.combo_thesis_ids_by_kind)
@@ -241,7 +241,7 @@ def test_original_22_ids_from_yaml() -> None:
     assert yaml_ids - combo_ids == set(original)
     assert original.isdisjoint(CF_NEW_THESIS_IDS)
     assert yaml_ids == set(RESEARCH_UNIQUE_LOGIC_IDS)
-    assert len(RESEARCH_UNIQUE_LOGIC_IDS) == 392
+    assert len(RESEARCH_UNIQUE_LOGIC_IDS) == 395
     assert original | set(CF_NEW_THESIS_IDS) == set(RESEARCH_UNIQUE_LOGIC_IDS)
 
     helper_src = inspect.getsource(catalog_mod.unique_family_ids_from_yaml)

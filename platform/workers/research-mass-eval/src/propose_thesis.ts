@@ -131,7 +131,28 @@ function normalizeProposalRow(
   const gates = (Array.isArray(row.gates) ? row.gates : [])
     .map((x) => String(x))
     .filter((x) => gateAllow.has(x));
-  if (gates.length < 1) return null;
+  if (gates.length < 2) return null;
+  const gset = new Set(gates);
+  const contra: string[][] = [
+    ["easy_funding", "tight_funding"],
+    ["crowded_margin", "uncrowded_margin"],
+    ["eq_ar_high", "eq_ar_low"],
+    ["eq_ar_rising", "eq_ar_falling"],
+    ["cheap_iv", "rich_iv"],
+    ["ta_up", "ta_down"],
+    ["overnight_easing", "overnight_tightening"],
+    ["margin_up", "margin_down"],
+    ["eps_up", "eps_down"],
+  ];
+  if (contra.some((pair) => pair.every((g) => gset.has(g)))) return null;
+  const title = thesis.toLowerCase().replace(/×/g, "x");
+  if (
+    title.includes("liquidity x fundamentals") ||
+    title.includes("margin x price") ||
+    title.includes("disclosure x funding")
+  ) {
+    return null;
+  }
   const why = Array.isArray(row.why_different_from)
     ? row.why_different_from.map((x) => String(x)).filter(Boolean)
     : [];
@@ -204,14 +225,17 @@ async function llmProposals(
             "datasets (string array), gates (string array), why_different_from (string array). " +
             "datasets MUST be a subset of: equities_bars_daily, fins_summary, " +
             "markets_calendar, markets_margin_interest, markets_short_ratio, " +
-            "jsda_tokyo_repo_rates. gates MUST be a non-empty subset of existing " +
-            "economic gates (liq_high, cheap_pb, eq_ar_high, eq_ar_rising, ta_up, " +
-            "ta_down, margin_up, margin_down, crowded_margin, uncrowded_margin, " +
-            "easy_funding, tight_funding, afterclose, cluster, pre_mom, price_down, " +
-            "eps_up, eps_down, np_negative, pb_rising, roe_low, sales_down, " +
-            "steep_curve, overnight_easing, overnight_tightening, on_impulse, " +
-            "large_surprise, repo_3m_down, cheap_iv, rich_iv). " +
-            "No weekday-only gates. Do not invent datasets, fields, or gates. " +
+            "jsda_tokyo_repo_rates. gates MUST be 2+ distinct economic gates " +
+            "(AND-cross, not a single-gate PEAD filter) from: liq_high, cheap_pb, " +
+            "eq_ar_high, eq_ar_rising, ta_up, ta_down, margin_up, margin_down, " +
+            "crowded_margin, uncrowded_margin, easy_funding, tight_funding, " +
+            "afterclose, cluster, pre_mom, price_down, eps_up, eps_down, " +
+            "np_negative, pb_rising, roe_low, sales_down, steep_curve, " +
+            "overnight_easing, overnight_tightening, on_impulse, large_surprise, " +
+            "repo_3m_down, cheap_iv, rich_iv. No opposite pairs (easy+tight). " +
+            "No weekday-only gates. Thesis title must NOT be the labels " +
+            "'Liquidity × Fundamentals', 'Margin × Price', or 'Disclosure × Funding'. " +
+            "Do not invent datasets, fields, or gates. " +
             "No logic_id. No hold_days/window/mom-only tweaks. No catalog inject. " +
             "Skip missing prints (no invent). Economic difference only.",
         },
@@ -219,7 +243,7 @@ async function llmProposals(
           role: "user",
           content:
             `Propose exactly ${n} theses as a JSON array. Avoid resembling: ${avoid}. ` +
-            "Directions: liquidity×fundamentals, margin×price, disclosure×funding, EqAR/TA change×event.",
+            "Use AND-crosses of 2+ economic gates. Do not echo direction labels as titles.",
         },
       ],
       max_tokens: 900,

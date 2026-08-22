@@ -35,6 +35,15 @@ PROPOSE_ALLOWED_DATASETS: frozenset[str] = frozenset(
 if not PROPOSE_ALLOWED_DATASETS <= COMPLETE_21_DATASET_SET:
     raise RuntimeError("propose datasets must be a subset of COMPLETE 21")
 
+_PROMPT_DIRECTION_ECHO: tuple[str, ...] = (
+    "liquidity × fundamentals",
+    "liquidity x fundamentals",
+    "margin × price",
+    "margin x price",
+    "disclosure × funding",
+    "disclosure x funding",
+)
+
 PROPOSE_CONTRADICTORY_GATE_PAIRS: tuple[frozenset[str], ...] = (
     frozenset({"easy_funding", "tight_funding"}),
     frozenset({"crowded_margin", "uncrowded_margin"}),
@@ -149,6 +158,11 @@ def review_proposal_row(proposal: Mapping[str, Any]) -> dict[str, Any]:
         kept_set = frozenset(kept_g)
         if any(pair <= kept_set for pair in PROPOSE_CONTRADICTORY_GATE_PAIRS):
             reasons.append("contradictory_gates")
+        if len(kept_g) < 2:
+            reasons.append("gates_not_a_cross")
+        blob = thesis.lower().replace("×", "x")
+        if any(echo.replace("×", "x") in blob for echo in _PROMPT_DIRECTION_ECHO):
+            reasons.append("prompt_direction_echo")
     ok = not reasons
     return {
         "ok": ok,
@@ -215,6 +229,57 @@ def stub_propose_thesis_result(
         "catalog_written": False,
         "ids_injected": False,
     }
+
+
+def _attach_reviews(
+    out: dict[str, Any],
+    *,
+    write_sidecar: bool = False,
+    job_id: str | None = None,
+) -> dict[str, Any]:
+    """Stamp review_proposal_row onto a Worker payload. Never injects."""
+    rows = [p for p in (out.get("proposals") or []) if isinstance(p, Mapping)]
+    reviews: list[dict[str, Any]] = []
+    n_ok = 0
+    for p in rows:
+        rev = review_proposal_row(p)
+        reviews.append(rev)
+        stub = str(p.get("status") or "").startswith("stub") or str(
+            p.get("thesis") or ""
+        ).startswith("STUB")
+        if rev["ok"] and not stub:
+            n_ok += 1
+    out["reviews"] = reviews
+    out["n_adoptable"] = n_ok
+    out["auto_inject"] = False
+    out["catalog_written"] = False
+    out["ids_injected"] = False
+    out["go"] = False
+    out["not_a_pass"] = True
+    if write_sidecar and job_id:
+        from research.cf_mass_eval_stage import RESEARCH_ARTIFACT_BUCKET
+        from research.r2_io import default_r2_put
+
+        key = f"research/eval/job={job_id}/review.json"
+        default_r2_put(
+            RESEARCH_ARTIFACT_BUCKET,
+            key,
+            json.dumps(
+                {
+                    "job_id": job_id,
+                    "n_adoptable": n_ok,
+                    "adopted": [],
+                    "reviews": reviews,
+                    "auto_inject": False,
+                    "go": False,
+                    "catalog_written": False,
+                    "not_a_pass": True,
+                },
+                default=str,
+            ).encode("utf-8"),
+        )
+        out["review_r2_key"] = key
+    return out
 
 
 def invoke_cf_propose_thesis(
@@ -289,9 +354,12 @@ def invoke_cf_propose_thesis(
     if http_post is not None:
         raw_resp = http_post(url=url, body=payload, headers=headers)
         if isinstance(raw_resp, Mapping):
-            return dict(raw_resp)
+            return _attach_reviews(dict(raw_resp))
         text = raw_resp if isinstance(raw_resp, str) else raw_resp.decode("utf-8")
-        return json.loads(text)
+        parsed = json.loads(text)
+        if not isinstance(parsed, dict):
+            raise CfMassEvalError("propose-thesis response not an object")
+        return _attach_reviews(parsed)
 
     import urllib.error
     import urllib.request
@@ -317,7 +385,11 @@ def invoke_cf_propose_thesis(
         raise CfMassEvalError(f"propose-thesis non-json: {raw[:500]}") from exc
     if not isinstance(out, dict):
         raise CfMassEvalError("propose-thesis response not an object")
-    return out
+    return _attach_reviews(
+        out,
+        write_sidecar=bool(write_artifacts),
+        job_id=str(body.get("job_id") or "") or None,
+    )
 
 
 __all__ = [

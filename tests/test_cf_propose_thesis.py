@@ -103,6 +103,8 @@ def test_stub_output_not_injected() -> None:
     assert out["proposals"][0]["not_injected"] is True
     assert out["auto_inject"] is False
     assert out["go"] is False
+    assert out["n_adoptable"] == 0
+    assert "reviews" in out
 
 
 def test_worker_index_contains_propose_thesis_route() -> None:
@@ -131,6 +133,8 @@ def test_worker_index_contains_propose_thesis_route() -> None:
     assert "PROPOSE_ALLOWED_GATES" in src
     assert "Do not invent datasets" in src or "do not invent datasets" in src.lower()
     assert "weekday-only" in src or "No weekday" in src
+    assert "2+" in src or "AND-cross" in src
+    assert "Liquidity × Fundamentals" in src or "direction labels" in src
     assert "auto_inject: false" in src
     assert "markets_margin_interest" in src
     assert '"margin_interest"' not in src
@@ -204,3 +208,15 @@ def test_review_proposal_row_rejects_invent_and_weekday() -> None:
     bad_c = review_proposal_row(contra)
     assert bad_c["ok"] is False
     assert "contradictory_gates" in bad_c["reasons"]
+
+    one = dict(good)
+    one["gates"] = ["liq_high"]
+    bad_one = review_proposal_row(one)
+    assert bad_one["ok"] is False
+    assert "gates_not_a_cross" in bad_one["reasons"]
+
+    echo = dict(good)
+    echo["thesis"] = "Japanese Equities: Liquidity × Fundamentals"
+    bad_echo = review_proposal_row(echo)
+    assert bad_echo["ok"] is False
+    assert "prompt_direction_echo" in bad_echo["reasons"]
