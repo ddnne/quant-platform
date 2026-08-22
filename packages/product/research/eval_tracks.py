@@ -120,13 +120,6 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "go": False,
     },
     {
-        "id": "single_shot_compare_shrink",
-        "track": EVAL_TRACK_MID_N,
-        "why": "single_shot_compare.py ~1018 extra-hyp/multisignal; not daily_path SoT",
-        "not_a_pass": True,
-        "go": False,
-    },
-    {
         "id": "cost_models_modulation_hold",
         "track": EVAL_TRACK_MID_N,
         "why": "cost_models.py ~2255 is live ADV/liquidity/short math; do not fake-split",

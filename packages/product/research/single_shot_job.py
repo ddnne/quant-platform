@@ -4,7 +4,8 @@ COMPLETE 21 only; permanent DEFER hard-reject. Bounded CF D1 hot tip
 extract, optional COMPLETE-21 feature/signal compute, R2 write under
 ``research/single_shot/``. Multiday / nextday live in
 :mod:`research.single_shot_eval`; cost/compare in
-:mod:`research.single_shot_compare`. Both are re-exported here.
+:mod:`research.single_shot_compare`; extra-hyp in
+:mod:`research.single_shot_extra_hyp`. Public names are re-exported here.
 
 Does not connect to mass research, set READY, arm Phase7, densify, or
 emit orders. Local FS is not SoT.
@@ -1021,10 +1022,14 @@ _COMPARE_EXPORTS: frozenset[str] = frozenset(
         "RESEARCH_ONE_WAY_COST_BP",
         "RESEARCH_ROUND_TRIP_COST",
         "attach_research_cost_fields",
-        "execute_extra_hyp_signals_compare",
         "execute_multiday_multisignal_compare",
         "signed_position_from_signal",
         "summarize_research_cost",
+    }
+)
+_EXTRA_HYP_EXPORTS: frozenset[str] = frozenset(
+    {
+        "execute_extra_hyp_signals_compare",
     }
 )
 _EVAL_EXPORTS: frozenset[str] = frozenset(
@@ -1053,6 +1058,10 @@ def __getattr__(name: str):
         import research.single_shot_compare as _single_shot_compare
 
         return getattr(_single_shot_compare, name)
+    if name in _EXTRA_HYP_EXPORTS:
+        import research.single_shot_extra_hyp as _extra_hyp
+
+        return getattr(_extra_hyp, name)
     if name in _EVAL_EXPORTS:
         import research.single_shot_eval as _single_shot_eval
 
@@ -1065,6 +1074,7 @@ def __dir__() -> list[str]:
         set(globals())
         | _TIP_EXPORTS
         | _COMPARE_EXPORTS
+        | _EXTRA_HYP_EXPORTS
         | _EVAL_EXPORTS
         | set(__all__)
     )
