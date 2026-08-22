@@ -398,6 +398,8 @@ def test_both_track_sleeve_fanout_records_via_daily_path() -> None:
                     "daily_path_complete": True,
                     "survived": False,
                     "go": False,
+                    "occupancy": 0.21,
+                    "occupancy_frac": 0.21,
                 }
             ],
         }
@@ -430,6 +432,12 @@ def test_both_track_sleeve_fanout_records_via_daily_path() -> None:
     assert tracks[EVAL_TRACK_LIQ_LARGE]["n_cells"] == 2
     assert "n_logic_ok" in tracks[EVAL_TRACK_MID_N]
     assert "n_logic_ok" in tracks[EVAL_TRACK_LIQ_LARGE]
+    assert tracks[EVAL_TRACK_MID_N]["occupancy_by_logic"]
+    assert tracks[EVAL_TRACK_LIQ_LARGE]["occupancy_by_logic"]
+    assert all(
+        abs(float(v) - 0.21) < 1e-9
+        for v in tracks[EVAL_TRACK_MID_N]["occupancy_by_logic"].values()
+    )
     assert all(url.endswith("/v1/daily-path") for url, _n, _lid in posts)
     max_codes = {n for _url, n, _lid in posts}
     assert max_codes == {

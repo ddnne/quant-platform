@@ -240,6 +240,8 @@ def test_near_empty_park_is_not_countable_or_basket_material() -> None:
     assert "event_overnight_p10_sales_down" in THIN_SLEEVE_EXCLUDE_IDS
     assert "event_tight_funding_eps_px_down" in THIN_SLEEVE_EXCLUDE_IDS
     assert "event_invert_tight_sales_down" in THIN_SLEEVE_EXCLUDE_IDS
+    assert "event_steep_tight_px_down" in THIN_SLEEVE_EXCLUDE_IDS
+    assert "event_easing_eps_down_np_neg" in THIN_SLEEVE_EXCLUDE_IDS
     assert "event_easy_funding_eps_sales_down" not in THIN_SLEEVE_EXCLUDE_IDS
     assert THIN_SLEEVE_EXCLUDE_IDS.isdisjoint(sleeve_durability_logic_ids())
     thin_reasons = validate_basket_members(

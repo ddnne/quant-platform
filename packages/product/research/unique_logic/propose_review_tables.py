@@ -69,6 +69,8 @@ _GATE_OCCUPANCY_SENTENCE: dict[str, str] = {
     "invert_curve": "the repo curve inverted",
     "tight_funding": "overnight funding is tight",
     "price_down": "price is down",
+    "steep_curve": "the repo curve is steep",
+    "overnight_easing": "overnight funding eased",
 }
 _FUNDING_GATES: frozenset[str] = frozenset(
     {
@@ -160,6 +162,9 @@ GATE_TITLE_CONTRA: tuple[tuple[str, tuple[str, ...]], ...] = (
         "eps tend to rise",
         "earnings tend to rise",
         "earnings rise",
+        "positive earnings surprise",
+        "positive earnings",
+        "positive surprise",
     )),
     ("eps_up", ("eps down", "falling eps", "earnings down")),
     ("roe_low", ("high roe", "high return on equity", "rising roe")),
@@ -244,6 +249,7 @@ GATE_OCCUPANCY_LABEL: tuple[tuple[str, tuple[str, ...]], ...] = (
     # curve_flatten occupancy is the repo curve, not a generic yield curve.
     ("curve_flatten", ("yield curve", "is flattening", "flattening")),
     ("invert_curve", ("invert curve", "inverting")),
+    ("steep_curve", ("curve is steep", "is steep", "yield curve")),
     ("np_negative", ("profitability is weak", "weak profitability", "weak profit")),
     ("eps_down", (
         "earnings disappointment",
@@ -252,6 +258,7 @@ GATE_OCCUPANCY_LABEL: tuple[tuple[str, tuple[str, ...]], ...] = (
         "eps are falling",
         "earnings per share tend to decrease",
         "eps down",
+        "eps is down",
     )),
     ("eps_up", (
         "earnings per share are rising",
@@ -282,6 +289,8 @@ EXTRA_TITLE_GATES: tuple[tuple[str, str], ...] = (
     ("funding conditions are easy", "easy_funding"),
     ("overnight funding is easing", "overnight_easing"),
     ("funding is easing", "overnight_easing"),
+    ("positive earnings surprise", "eps_up"),
+    ("positive earnings", "eps_up"),
     ("eps surprises", "eps_down"),
     ("eps surprise", "eps_down"),
     ("earnings surprises", "eps_down"),
@@ -415,6 +424,7 @@ OCCUPANCY_LABEL_EXCEPTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("crowded_margin", ("margin is crowded", "margin crowding")),
     ("curve_flatten", ("repo curve", "flattened")),
     ("invert_curve", ("repo curve", "inverted")),
+    ("steep_curve", ("repo curve",)),
 )
 
 

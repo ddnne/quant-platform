@@ -638,6 +638,24 @@ def test_review_proposal_row_occupancy_and_polarity_table() -> None:
             "occupancy_label_only",
             "PEAD when overnight is in the easiest PIT decile AND EPS contracted versus the last prior print. Skip missing PIT prints (no invent).",
         ),
+        (
+            "Tight funding when curve is steep AND funding is tight AND price is down.",
+            ["steep_curve", "tight_funding", "price_down"],
+            "occupancy_label_only",
+            "PEAD when the repo curve is steep AND overnight funding is tight AND price is down. Skip missing PIT prints (no invent).",
+        ),
+        (
+            "Positive earnings surprise when eps is down AND overnight is easing AND np is negative.",
+            ["eps_down", "overnight_easing", "np_negative"],
+            "title_gate_polarity_mismatch",
+            "PEAD when EPS contracted versus the last prior print AND overnight funding eased AND net profit is negative. Skip missing PIT prints (no invent).",
+        ),
+        (
+            "Positive earnings surprise when overnight funding eased AND net profit is negative.",
+            ["overnight_easing", "np_negative"],
+            "occupancy_label_only",
+            "PEAD when overnight funding eased AND net profit is negative. Skip missing PIT prints (no invent).",
+        ),
     ]
     for bad_thesis, gates, reason, good_thesis in rows:
         payload = {

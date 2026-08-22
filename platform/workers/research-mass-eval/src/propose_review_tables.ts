@@ -12,7 +12,7 @@ export const GATE_TITLE_CONTRA: Array<[string, string[]]> = [
   ["eq_ar_high", ["low eqar", "eqar low", "eq ar low"]],
   ["tight_funding", ["easy funding", "funding easing", "eased funding"]],
   ["easy_funding", ["tight funding", "funding tight"]],
-  ["eps_down", ["eps up", "rising eps", "eps tend to rise", "earnings tend to rise", "earnings rise"]],
+  ["eps_down", ["eps up", "rising eps", "eps tend to rise", "earnings tend to rise", "earnings rise", "positive earnings surprise", "positive earnings", "positive surprise"]],
   ["eps_up", ["eps down", "falling eps", "earnings down"]],
   ["roe_low", ["high roe", "high return on equity", "rising roe"]],
   ["margin_down", ["margin up", "rising margin", "margins tend to rise", "margins rise"]],
@@ -41,8 +41,9 @@ export const GATE_OCCUPANCY_LABEL: Array<[string, string[]]> = [
   ["pre_mom", ["positive price momentum", "positive momentum", "momentum is positive", "high price momentum"]],
   ["curve_flatten", ["yield curve", "is flattening", "flattening"]],
   ["invert_curve", ["invert curve", "inverting"]],
+  ["steep_curve", ["curve is steep", "is steep", "yield curve"]],
   ["np_negative", ["profitability is weak", "weak profitability", "weak profit"]],
-  ["eps_down", ["earnings disappointment", "earnings disappoint", "earnings per share are falling", "eps are falling", "earnings per share tend to decrease", "eps down"]],
+  ["eps_down", ["earnings disappointment", "earnings disappoint", "earnings per share are falling", "eps are falling", "earnings per share tend to decrease", "eps down", "eps is down"]],
   ["eps_up", ["earnings per share are rising", "eps are rising", "eps is rising"]],
   ["price_down", ["under pressure", "price pressure"]],
   ["crowded_margin", ["market is crowded"]],
@@ -65,6 +66,8 @@ export const EXTRA_TITLE_GATES: Array<[string, string]> = [
   ["funding conditions are easy", "easy_funding"],
   ["overnight funding is easing", "overnight_easing"],
   ["funding is easing", "overnight_easing"],
+  ["positive earnings surprise", "eps_up"],
+  ["positive earnings", "eps_up"],
   ["eps surprises", "eps_down"],
   ["eps surprise", "eps_down"],
   ["earnings surprises", "eps_down"],
@@ -111,6 +114,7 @@ export const OCCUPANCY_EXTRA_TITLE: Array<[string, string[]]> = [
   ["10 percent", ["overnight_p10"]],
   ["10% predicts", ["overnight_p10"]],
   ["appetite for risk", ["eq_ar_falling", "eq_ar_high", "eq_ar_low", "eq_ar_rising"]],
+  ["curve is steep", ["steep_curve"]],
   ["earnings disappoint", ["eps_down"]],
   ["earnings disappointment", ["eps_down"]],
   ["earnings per share are falling", ["eps_down"]],
@@ -119,6 +123,7 @@ export const OCCUPANCY_EXTRA_TITLE: Array<[string, string[]]> = [
   ["eps are falling", ["eps_down"]],
   ["eps are rising", ["eps_up"]],
   ["eps down", ["eps_down"]],
+  ["eps is down", ["eps_down"]],
   ["eps is rising", ["eps_up"]],
   ["flattening", ["curve_flatten"]],
   ["funding at 10", ["overnight_p10"]],
@@ -128,6 +133,7 @@ export const OCCUPANCY_EXTRA_TITLE: Array<[string, string[]]> = [
   ["invert curve", ["invert_curve"]],
   ["inverting", ["invert_curve"]],
   ["is flattening", ["curve_flatten"]],
+  ["is steep", ["steep_curve"]],
   ["low repo", ["repo_3m_down"]],
   ["market is crowded", ["crowded_margin"]],
   ["momentum is positive", ["pre_mom"]],
@@ -159,7 +165,7 @@ export const OCCUPANCY_EXTRA_TITLE: Array<[string, string[]]> = [
   ["under pressure", ["price_down"]],
   ["weak profit", ["np_negative"]],
   ["weak profitability", ["np_negative"]],
-  ["yield curve", ["curve_flatten"]],
+  ["yield curve", ["curve_flatten", "steep_curve"]],
 ];
 
 export const PROPOSE_CONTRADICTORY_GATE_PAIRS: string[][] = [
@@ -215,6 +221,7 @@ export const OCCUPANCY_LABEL_EXCEPTIONS: Array<[string, string[]]> = [
   ["crowded_margin", ["margin is crowded", "margin crowding"]],
   ["curve_flatten", ["repo curve", "flattened"]],
   ["invert_curve", ["repo curve", "inverted"]],
+  ["steep_curve", ["repo curve"]],
 ];
 
 export const TITLE_OCCUPANCY_META = [

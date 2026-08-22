@@ -401,6 +401,8 @@ def run_both_track_sleeve_fanout(
             "n_cells": (fan_pack or {}).get("n_cells"),
             "n_logic_ok": (fan_pack or {}).get("n_logic_ok"),
             "n_daily_path_complete": (fan_pack or {}).get("n_daily_path_complete"),
+            "n_errors": (fan_pack or {}).get("n_errors"),
+            "occupancy_by_logic": (fan_pack or {}).get("occupancy_by_logic") or {},
             "baskets": (fan_pack or {}).get("baskets") or {"baskets": []},
             "not_a_pass": True,
             "go": False,
