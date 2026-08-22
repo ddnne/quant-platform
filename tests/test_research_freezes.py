@@ -33,10 +33,8 @@ def test_freeze_sot_reexports_match() -> None:
 
 
 def test_factory_templates_do_not_clone_combo_catalog() -> None:
-    from research.mass_strategy_factory import (
-        LOGIC_TEMPLATES,
-        RESEARCH_UNIQUE_LOGIC_IDS,
-    )
+    from research.offline.factory import LOGIC_TEMPLATES
+    from research.unique_logic.constants import RESEARCH_UNIQUE_LOGIC_IDS
     from research.unique_logic.event_combos import NEW_COMBO_LOGIC
 
     combo_ids = {s["logic_id"] for s in NEW_COMBO_LOGIC}

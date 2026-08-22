@@ -236,20 +236,33 @@ def test_cf_daily_path_job_does_not_import_factory() -> None:
         / "product"
         / "research"
     )
-    for name in (
-        "cf_daily_path_job.py",
-        "cf_mass_eval_job.py",
-        "bar_native_specs.py",
-        "eval_universe.py",
-    ):
+    # eval_universe still lazy-imports class_hyp_eval for margin/repo until
+    # those loaders move; skip the class_hyp AST fail while the token remains.
+    eu_src = (research_dir / "eval_universe.py").read_text(encoding="utf-8")
+    eu_class_hyp_clean = "class_hyp_eval" not in eu_src
+    files: dict[str, tuple[str, ...]] = {
+        "cf_daily_path_job.py": ("mass_strategy_factory", "class_hyp_eval"),
+        "cf_mass_eval_job.py": ("mass_strategy_factory", "class_hyp_eval"),
+        "bar_native_specs.py": ("mass_strategy_factory", "class_hyp_eval"),
+        "eval_universe.py": (
+            ("mass_strategy_factory", "class_hyp_eval")
+            if eu_class_hyp_clean
+            else ("mass_strategy_factory",)
+        ),
+        "eval_loaders.py": ("mass_strategy_factory", "class_hyp_eval"),
+        "unique_logic/event_combos.py": ("mass_strategy_factory", "class_hyp_eval"),
+    }
+    for name, banned in files.items():
         tree = ast.parse((research_dir / name).read_text(encoding="utf-8"))
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 for alias in node.names:
-                    assert "mass_strategy_factory" not in alias.name, name
+                    for token in banned:
+                        assert token not in alias.name, name
             elif isinstance(node, ast.ImportFrom) and node.module:
-                assert "mass_strategy_factory" not in node.module, name
-                assert node.module != "research.mass_strategy_factory", name
+                for token in banned:
+                    assert token not in node.module, name
+                    assert node.module != f"research.{token}", name
     assert not hasattr(eu, "DEFAULT_EVAL_CODES")
 
 

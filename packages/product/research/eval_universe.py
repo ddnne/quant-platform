@@ -1,11 +1,11 @@
 """ADV-ranked eval universe. Skip missing bars/TA/EqAR. Never head-N.
 
-CF staging imports this module instead of the 5500-line class_hyp_eval
+CF staging imports this module instead of class_hyp_eval
 loader for universe selection. Empty pool returns []. No invent.
 
 Bar / sidecar loaders used by CF staging are thin shims: bodies stay in
-eval_loaders (bars/nky/opt225) or class_hyp_eval (margin/repo) lazily
-inside the functions. class_hyp_eval already imports this module.
+eval_loaders (bars/nky/opt225/margin/repo). class_hyp_eval already imports
+this module.
 """
 from __future__ import annotations
 
@@ -480,7 +480,7 @@ def resolve_bars_path(*args, **kwargs):
 
 
 def resolve_margin_path(*args, **kwargs):
-    from research.class_hyp_eval import resolve_margin_path as _impl
+    from research.eval_loaders import resolve_margin_path as _impl
 
     return _impl(*args, **kwargs)
 
@@ -500,19 +500,19 @@ def load_opt225_regime_bundle_for_eval(**kwargs):
 
 
 def load_margin_from_sqlite(db_path: str | Path = DEFAULT_SQLITE, **kwargs):
-    from research.class_hyp_eval import load_margin_from_sqlite as _impl
+    from research.eval_loaders import load_margin_from_sqlite as _impl
 
     return _impl(db_path, **kwargs)
 
 
 def load_margin_ndjson(*args, **kwargs):
-    from research.class_hyp_eval import load_margin_ndjson as _impl
+    from research.eval_loaders import load_margin_ndjson as _impl
 
     return _impl(*args, **kwargs)
 
 
 def load_repo_rows_from_sqlite(db_path: str | Path = DEFAULT_SQLITE, **kwargs):
-    from research.class_hyp_eval import load_repo_rows_from_sqlite as _impl
+    from research.eval_loaders import load_repo_rows_from_sqlite as _impl
 
     return _impl(db_path, **kwargs)
 
@@ -520,7 +520,7 @@ def load_repo_rows_from_sqlite(db_path: str | Path = DEFAULT_SQLITE, **kwargs):
 def load_repo_rows_all_tenors_from_sqlite(
     db_path: str | Path = DEFAULT_SQLITE, **kwargs
 ):
-    from research.class_hyp_eval import load_repo_rows_all_tenors_from_sqlite as _impl
+    from research.eval_loaders import load_repo_rows_all_tenors_from_sqlite as _impl
 
     return _impl(db_path, **kwargs)
 
@@ -528,7 +528,7 @@ def load_repo_rows_all_tenors_from_sqlite(
 def load_short_ratio_series_from_sqlite(
     db_path: str | Path = DEFAULT_SQLITE, **kwargs
 ):
-    from research.class_hyp_eval import load_short_ratio_series_from_sqlite as _impl
+    from research.eval_loaders import load_short_ratio_series_from_sqlite as _impl
 
     return _impl(db_path, **kwargs)
 
@@ -542,19 +542,19 @@ def load_topix_close_series_from_sqlite(
 
 
 def build_repo_curve_series(*args, **kwargs):
-    from research.class_hyp_eval import build_repo_curve_series as _impl
+    from research.eval_loaders import build_repo_curve_series as _impl
 
     return _impl(*args, **kwargs)
 
 
 def repo_history_plane_status(db_path: str | Path = DEFAULT_SQLITE, **kwargs):
-    from research.class_hyp_eval import repo_history_plane_status as _impl
+    from research.eval_loaders import repo_history_plane_status as _impl
 
     return _impl(db_path, **kwargs)
 
 
 def momentum_series(*args, **kwargs):
-    from research.class_hyp_eval import momentum_series as _impl
+    from research.eval_loaders import momentum_series as _impl
 
     return _impl(*args, **kwargs)
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from research.mass_strategy_factory import propose_profit_hypotheses
+from research.offline.factory import propose_profit_hypotheses
 from research.unique_logic import event
 
 

@@ -466,15 +466,15 @@ def test_stats_metrics_period_and_bar():
 
 
 def test_class_hyp_eval_pure_on_synthetic_bars():
-    from research.class_hyp_eval import (
+    from research.class_hyp_eval import merge_event_calendars
+    from research.cost_models import load_repo_rate_series_from_mapping
+    from research.offline.bar_eval import (
         evaluate_event_post_on_bars,
         evaluate_flow_demand_on_bars,
         evaluate_fundamentals_price_on_bars,
         evaluate_macro_conditioned_on_bars,
         evaluate_multi_day_hold_on_bars,
-        merge_event_calendars,
     )
-    from research.cost_models import load_repo_rate_series_from_mapping
 
     # Rising then falling prices for two codes
     dates = [f"2020-01-{d:02d}" for d in range(2, 30) if d < 28]
@@ -546,7 +546,7 @@ def test_class_hyp_eval_pure_on_synthetic_bars():
     assert fund["signal_id"] == SIGNAL_ID_FUNDAMENTALS_PRICE
     assert fund["hypothesis_class"] == CLASS_FUNDAMENTALS_PRICE
 
-    from research.class_hyp_eval import evaluate_cross_section_on_bars
+    from research.offline.bar_eval import evaluate_cross_section_on_bars
 
     xs5 = evaluate_cross_section_on_bars(
         bars, momentum_n=5, hold_days=5, one_way_cost=0.001

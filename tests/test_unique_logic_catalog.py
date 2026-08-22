@@ -122,7 +122,7 @@ def test_repo_catalog_yaml_loads() -> None:
 
 
 def test_repo_history_plane_status_discloses_sqlite_not_d1() -> None:
-    from research.class_hyp_eval import repo_history_plane_status
+    from research.eval_universe import repo_history_plane_status
 
     note = repo_history_plane_status()
     assert note["invent_complete"] is False
@@ -296,7 +296,7 @@ def test_yaml_dispatch_worker_event_ids_align() -> None:
 
 
 def test_fins_events_keep_ta_eqar_from_payload() -> None:
-    from research.class_hyp_eval import load_fins_events_from_sqlite
+    from research.eval_universe import load_fins_events_from_sqlite
 
     events = load_fins_events_from_sqlite(
         codes=["33210"], start="2008-01-01", end="2008-12-31"

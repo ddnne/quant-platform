@@ -11,7 +11,7 @@ from research.hypothesis_classes import (
     CLASS_MULTI_DAY_HOLD,
     CLASS_SIMPLE_DAILY_SIGN,
 )
-from research.mass_strategy_factory import (
+from research.offline.factory import (
     DEFAULT_N,
     DEFAULT_NEAR_DUP_THRESHOLD,
     FAMILY_DEFINITIONS,
