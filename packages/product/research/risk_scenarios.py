@@ -34,7 +34,7 @@ RISK_SCENARIOS_LABEL: str = (
     "(crash/high_vol/rate/liquidity / READY未接続 / Mass NO-GO)"
 )
 
-from research.freezes import (
+from features.research_freezes import (
     CONNECTED_TO_MASS,
     CONNECTED_TO_READY,
     EDGE_CLAIMED,
@@ -69,10 +69,6 @@ MIN_SCENARIO_SET: tuple[str, ...] = (
     SCENARIO_LIQUIDITY_STRESS,
 )
 
-# Defaults for research regime labels (documentation; not live detectors).
-DEFAULT_CRASH_MARKET_RETURN_THRESHOLD: float = -0.05  # -5% market window
-DEFAULT_HIGH_VOL_ANN_THRESHOLD: float = 0.25  # 25% ann. vol research placeholder
-
 
 def _freeze_fields() -> dict[str, Any]:
     return {
@@ -96,42 +92,7 @@ def risk_scenarios_document() -> dict[str, Any]:
         "min_scenario_set": list(MIN_SCENARIO_SET),
         "required_core": list(REQUIRED_CORE_SCENARIOS),
         "data_dependent": list(OPTIONAL_DATA_DEPENDENT_SCENARIOS),
-        "scenario_defs": {
-            SCENARIO_CRASH: {
-                "id": SCENARIO_CRASH,
-                "rule": "large negative market-return regime (crash / drawdown)",
-                "required": True,
-                "default_market_return_threshold": DEFAULT_CRASH_MARKET_RETURN_THRESHOLD,
-            },
-            SCENARIO_HIGH_VOL: {
-                "id": SCENARIO_HIGH_VOL,
-                "rule": "elevated realized-vol regime",
-                "required": True,
-            },
-            SCENARIO_RATE_UP: {
-                "id": SCENARIO_RATE_UP,
-                "rule": "rate-up regime when rate data usable; else disclose N/A",
-                "required": "if_rate_data_usable",
-            },
-            SCENARIO_RATE_DOWN: {
-                "id": SCENARIO_RATE_DOWN,
-                "rule": "rate-down regime when rate data usable; else disclose N/A",
-                "required": "if_rate_data_usable",
-            },
-            SCENARIO_LIQUIDITY_STRESS: {
-                "id": SCENARIO_LIQUIDITY_STRESS,
-                "rule": "liquidity stress when data available; else disclose N/A",
-                "required": "if_liquidity_data_available",
-            },
-        },
-        "stability_policy": {
-            "rule": (
-                "If scenarios break sign/stability vs baseline majority, "
-                "hyp is NOT research_candidate unless scenario_weakness is "
-                "explicitly disclosed; prefer fail candidate."
-            ),
-            "prefer_fail_candidate": True,
-        },
+        "stability_policy": {"prefer_fail_candidate": True},
         "note": (
             "Research scenario checklist only. Completing scenarios does not "
             "mint READY, arm Mass, or claim edge. Incomplete → not candidate."
@@ -540,22 +501,12 @@ def evaluate_risk_scenarios(
         ),
     }
     out.update(_freeze_fields())
-    # Always force closed freezes even if caller tried to set them on rows.
-    out["ready_declared"] = False
-    out["operational_go"] = False
-    out["connected_to_ready"] = False
-    out["connected_to_mass"] = False
-    out["mass_research"] = MASS_RESEARCH
-    out["phase7"] = PHASE7
-    out["edge_claimed"] = False
-    out["significance_claimed"] = False
     return out
 
 
 __all__ = [
     "CONNECTED_TO_MASS",
     "CONNECTED_TO_READY",
-    "DEFAULT_CRASH_MARKET_RETURN_THRESHOLD",
     "EDGE_CLAIMED",
     "MASS_RESEARCH",
     "MIN_SCENARIO_SET",

@@ -31,10 +31,16 @@ import math
 from statistics import mean, pstdev, stdev
 from typing import Any, Mapping, Sequence
 
-STATS_METRICS_VERSION: str = "research-stats-metrics/v1.2"
-STATS_METRICS_WAVE: str = "W100 / w0819c"
-
-from research.freezes import (
+from features.class_signals import (
+    DEFAULT_MIN_ABS_T_STAT,
+    DEFAULT_MIN_PERIOD_WIN_RATE,
+    DEFAULT_MIN_POSITIVE_PERIODS,
+    DEFAULT_MIN_SHARPE_PERIOD,
+    DEFAULT_TRADING_DAYS_PER_YEAR,
+)
+from features.research_freezes import (
+    CONNECTED_TO_MASS,
+    CONNECTED_TO_READY,
     EDGE_CLAIMED,
     MASS_RESEARCH,
     OPERATIONAL_GO,
@@ -43,21 +49,12 @@ from research.freezes import (
     SIGNIFICANCE_CLAIMED,
 )
 
-DEFAULT_TRADING_DAYS_PER_YEAR: int = 245
+STATS_METRICS_VERSION: str = "research-stats-metrics/v1.2"
+STATS_METRICS_WAVE: str = "W100 / w0819c"
 
-# ---------------------------------------------------------------------------
-# W81 statistical production bar (raise beyond mean bp)
-# ---------------------------------------------------------------------------
-# Period-net t-stat: |t| floor. 1.5 is a research floor (not a p-value claim);
-# with n=6 periods, t=1.5 is modest — below 1.0 is clearly noise.
-DEFAULT_MIN_ABS_T_STAT: float = 1.5
-# Period Sharpe = mean/std of period nets (≈ annual if 1 window ~ 1y).
-DEFAULT_MIN_SHARPE_PERIOD: float = 0.50
-# Share of periods with net > 0 (sign stability).
-DEFAULT_MIN_PERIOD_WIN_RATE: float = 0.60
-# Absolute count of positive-net years (alongside win-rate share).
-DEFAULT_MIN_POSITIVE_PERIODS: int = 4
 # Optional soft floors (documented; fail only when set and violated).
+# t / Sharpe / win-rate / positive-year floors live on class_signals
+# (aliased by offline/multiyear). Do not retune here.
 DEFAULT_MIN_PAYOFF: float | None = None  # e.g. 1.0 if enforced
 DEFAULT_MAX_ABS_DRAWDOWN: float | None = None  # e.g. 0.03 if enforced
 
@@ -145,8 +142,8 @@ def _freeze() -> dict[str, Any]:
         "operational_go": OPERATIONAL_GO,
         "significance_claimed": SIGNIFICANCE_CLAIMED,
         "edge_claimed": EDGE_CLAIMED,
-        "connected_to_ready": False,
-        "connected_to_mass": False,
+        "connected_to_ready": CONNECTED_TO_READY,
+        "connected_to_mass": CONNECTED_TO_MASS,
     }
 
 
@@ -1077,20 +1074,6 @@ def stats_metrics_document() -> dict[str, Any]:
             "min_payoff": DEFAULT_MIN_PAYOFF,
             "max_abs_drawdown": DEFAULT_MAX_ABS_DRAWDOWN,
             "trading_days_per_year": DEFAULT_TRADING_DAYS_PER_YEAR,
-        },
-        "definitions": {
-            "t_stat": "mean / (s/sqrt(n)) on period nets vs 0, sample std",
-            "sharpe_period": "mean/std of period nets (periods_per_year=1)",
-            "sharpe_trade": "(mean/std)*sqrt(245/hold_days) on hold nets",
-            "win_rate": "share of obs with value > 0",
-            "payoff": "mean(wins)/|mean(losses)|",
-            "max_dd": "peak-to-trough of cumulative sum (period-net grain)",
-            "daily_path_DD": (
-                "peak-to-trough of daily after-cost equity level "
-                "(mandatory W100; period-net DD cannot substitute)"
-            ),
-            "calmar": "mean / |max_dd|",
-            "ir": "Sharpe of residual vs constant benchmark (default 0)",
         },
         "daily_path_dd": {
             "version": DAILY_PATH_DD_VERSION,

@@ -34,7 +34,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
-from research.freezes import (
+from features.research_freezes import (
     COMPLETE_INVENT,
     CONNECTED_TO_MASS,
     CONNECTED_TO_READY,

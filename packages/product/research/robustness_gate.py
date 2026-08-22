@@ -41,7 +41,7 @@ from typing import Any, Mapping, Sequence
 GATE_VERSION: str = "research-robustness-gate/v2"
 GATE_LABEL: str = "研究用頑健性ゲート・未宣言 (合格≠運用GO / READY未接続 / コスト込み)"
 
-from research.freezes import (
+from features.research_freezes import (
     CONNECTED_TO_MASS,
     CONNECTED_TO_READY,
     EDGE_CLAIMED,
@@ -55,7 +55,6 @@ from research.freezes import (
 DEFAULT_MIN_PERIODS: int = 2
 DEFAULT_MIN_ACTIVE_PER_PERIOD: int = 20
 DEFAULT_CATASTROPHIC_ABS: float = 0.05
-# Research cost assumption (matches single_shot RESEARCH_ONE_WAY_COST).
 DEFAULT_ONE_WAY_COST_BP: float = 10.0
 DEFAULT_ONE_WAY_COST: float = DEFAULT_ONE_WAY_COST_BP / 10_000.0  # 0.001
 DEFAULT_ROUND_TRIP_COST: float = DEFAULT_ONE_WAY_COST * 2.0  # 0.002
@@ -127,66 +126,8 @@ def _sign_of(x: float | None) -> int | None:
     return 0
 
 
-def research_robustness_gate_document() -> dict[str, Any]:
-    """Public document for the research robustness gate."""
+def _freeze() -> dict[str, Any]:
     return {
-        "version": GATE_VERSION,
-        "label": GATE_LABEL,
-        "criteria": {
-            "multi_period": {
-                "rule": f">= {DEFAULT_MIN_PERIODS} non-skipped periods with metrics",
-                "required": True,
-            },
-            "sign_majority": {
-                "rule": (
-                    "strict majority of eligible periods share the same "
-                    "gross_signed_mean sign (+ or −)"
-                ),
-                "required": True,
-                "note": "gross-only; insufficient alone when cost gate is on",
-            },
-            "not_catastrophic": {
-                "rule": (
-                    f"no majority-eligible period with "
-                    f"|gross_signed_mean| > {DEFAULT_CATASTROPHIC_ABS}"
-                ),
-                "required": True,
-            },
-            "net_sign_majority": {
-                "rule": (
-                    "strict majority share the same sign of "
-                    f"net_one_way = gross − {DEFAULT_ONE_WAY_COST_BP:.0f}bp "
-                    f"({DEFAULT_ONE_WAY_COST})"
-                ),
-                "required": True,
-                "default_on": True,
-                "disable_with": "require_net_sign_majority=False",
-            },
-            "wf_not_full_flip": {
-                "rule": (
-                    "optional: train/test gross_signed_mean must not fully "
-                    "reverse non-zero signs"
-                ),
-                "required": False,
-                "when": "walk_forward fold metrics supplied",
-            },
-        },
-        "cost_assumption": {
-            "one_way_cost_bp": DEFAULT_ONE_WAY_COST_BP,
-            "one_way_cost": DEFAULT_ONE_WAY_COST,
-            "round_trip_cost_bp": DEFAULT_ONE_WAY_COST_BP * 2.0,
-            "round_trip_cost": DEFAULT_ROUND_TRIP_COST,
-            "formula_one_way": "net = gross_signed_mean_active - one_way_cost",
-            "formula_round_trip": "net = gross_signed_mean_active - 2*one_way_cost",
-            "label": "仮定に依存・研究用・運用GOではない",
-        },
-        "defaults": {
-            "min_periods": DEFAULT_MIN_PERIODS,
-            "min_active_per_period": DEFAULT_MIN_ACTIVE_PER_PERIOD,
-            "catastrophic_abs": DEFAULT_CATASTROPHIC_ABS,
-            "one_way_cost": DEFAULT_ONE_WAY_COST,
-            "require_net_sign_majority": True,
-        },
         "mass_research": MASS_RESEARCH,
         "phase7": PHASE7,
         "ready_declared": READY_DECLARED,
@@ -195,6 +136,22 @@ def research_robustness_gate_document() -> dict[str, Any]:
         "connected_to_mass": CONNECTED_TO_MASS,
         "significance_claimed": SIGNIFICANCE_CLAIMED,
         "edge_claimed": EDGE_CLAIMED,
+    }
+
+
+def research_robustness_gate_document() -> dict[str, Any]:
+    """Public document for the research robustness gate."""
+    return {
+        "version": GATE_VERSION,
+        "label": GATE_LABEL,
+        "defaults": {
+            "min_periods": DEFAULT_MIN_PERIODS,
+            "min_active_per_period": DEFAULT_MIN_ACTIVE_PER_PERIOD,
+            "catastrophic_abs": DEFAULT_CATASTROPHIC_ABS,
+            "one_way_cost": DEFAULT_ONE_WAY_COST,
+            "require_net_sign_majority": True,
+        },
+        **_freeze(),
         "note": (
             "Research checklist only (v2 adds cost-after net sign majority). "
             "Pass does not mint READY, arm Mass, authorize orders, or claim "
@@ -491,14 +448,7 @@ def evaluate_research_robustness_gate(
         "annotated_period_rows": annotated,
         "n_period_rows_in": len(list(period_rows)),
         "n_eligible_periods": n_elig,
-        "mass_research": MASS_RESEARCH,
-        "phase7": PHASE7,
-        "ready_declared": READY_DECLARED,
-        "operational_go": OPERATIONAL_GO,
-        "connected_to_ready": CONNECTED_TO_READY,
-        "connected_to_mass": CONNECTED_TO_MASS,
-        "significance_claimed": SIGNIFICANCE_CLAIMED,
-        "edge_claimed": EDGE_CLAIMED,
+        **_freeze(),
         "note": (
             "Research robustness gate result only (v2 cost-aware). "
             "passed=True does NOT mean READY, Mass GO, or operational GO."

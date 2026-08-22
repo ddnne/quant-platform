@@ -36,7 +36,7 @@ from __future__ import annotations
 from statistics import mean, median
 from typing import Any, Mapping, Sequence
 
-from research.freezes import (
+from features.research_freezes import (
     CONNECTED_TO_MASS,
     CONNECTED_TO_READY,
     EDGE_CLAIMED,
@@ -57,7 +57,7 @@ HOLDING_METRICS_LABEL: str = (
     "(READY未接続 / Mass NO-GO / 運用GOではない)"
 )
 
-# Match robustness_gate / single_shot research cost convention.
+# Match robustness_gate / cost_models / multiyear research cost convention.
 DEFAULT_ONE_WAY_COST_BP: float = 10.0
 DEFAULT_ONE_WAY_COST: float = DEFAULT_ONE_WAY_COST_BP / 10_000.0  # 0.001
 DEFAULT_ROUND_TRIP_COST: float = DEFAULT_ONE_WAY_COST * 2.0  # 0.002
@@ -93,19 +93,6 @@ def holding_metrics_document() -> dict[str, Any]:
     doc = {
         "version": HOLDING_METRICS_VERSION,
         "label": HOLDING_METRICS_LABEL,
-        "run_length_rule": (
-            "consecutive same non-zero sign (+1 or -1); "
-            "0 and None break runs; sign flip starts a new run"
-        ),
-        "cost_amortization": {
-            "one_way_cost_bp": DEFAULT_ONE_WAY_COST_BP,
-            "one_way_cost": DEFAULT_ONE_WAY_COST,
-            "formula_one_way": "effective_daily_cost ≈ one_way_cost / hold_days_N",
-            "formula_round_trip": (
-                "effective_daily_cost_rt ≈ 2*one_way_cost / hold_days_N"
-            ),
-            "note": "研究用イラストのみ・仮定に依存・運用モデルではない",
-        },
         "default_hold_days": list(DEFAULT_HOLD_DAYS),
         "default_histogram_buckets": [
             {"lo": lo, "hi": hi, "label": _bucket_label(lo, hi)}

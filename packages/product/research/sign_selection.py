@@ -42,6 +42,19 @@ from __future__ import annotations
 import math
 from typing import Any, Mapping, Sequence
 
+from features.class_signals import DEFAULT_MIN_ECONOMIC_NET as DEFAULT_MIN_MEAN_NET
+from features.research_freezes import (
+    CONNECTED_TO_MASS,
+    CONNECTED_TO_READY,
+    EDGE_CLAIMED,
+    MASS_RESEARCH,
+    OPERATIONAL_GO,
+    PHASE7,
+    READY_DECLARED,
+    S1_S5_UNREJECT,
+    SIGNIFICANCE_CLAIMED,
+    SIMPLE_DAILY_SIGN,
+)
 from research.stats_metrics import (
     DEFAULT_MIN_ABS_T_STAT,
     period_stats_report,
@@ -52,15 +65,6 @@ from research.stats_metrics import (
 SIGN_SELECTION_VERSION: str = "research-sign-selection/v1"
 SIGN_SELECTION_WAVE: str = "W86 / w0816u"
 
-from research.freezes import (
-    EDGE_CLAIMED,
-    MASS_RESEARCH,
-    OPERATIONAL_GO,
-    PHASE7,
-    READY_DECLARED,
-    SIGNIFICANCE_CLAIMED,
-)
-
 SIGN_ORIGINAL: int = 1
 SIGN_INVERTED: int = -1
 
@@ -68,10 +72,8 @@ SIGN_INVERTED: int = -1
 DEFAULT_NEAR_ZERO_ABS_NET: float = 0.0005  # 5bp absolute mean
 # Soft t guideline (not a hard one-strike reject when mean clearly positive).
 DEFAULT_T_GUIDELINE: float = 1.0
-# Research economic mean floor (matches class_signals DEFAULT_MIN_ECONOMIC_NET).
-DEFAULT_MIN_MEAN_NET: float = 0.002  # 20bp
 # Absolute mean floor used as "non-zero evidence" when t is weak/missing.
-DEFAULT_NONZERO_ABS_MEAN: float = 0.0005  # 5bp
+DEFAULT_NONZERO_ABS_MEAN: float = DEFAULT_NEAR_ZERO_ABS_NET
 
 
 def _freeze() -> dict[str, Any]:
@@ -82,10 +84,10 @@ def _freeze() -> dict[str, Any]:
         "operational_go": OPERATIONAL_GO,
         "significance_claimed": SIGNIFICANCE_CLAIMED,
         "edge_claimed": EDGE_CLAIMED,
-        "connected_to_ready": False,
-        "connected_to_mass": False,
-        "simple_daily_sign": False,
-        "s1_s5_unreject": False,
+        "connected_to_ready": CONNECTED_TO_READY,
+        "connected_to_mass": CONNECTED_TO_MASS,
+        "simple_daily_sign": SIMPLE_DAILY_SIGN,
+        "s1_s5_unreject": S1_S5_UNREJECT,
     }
 
 
@@ -628,11 +630,6 @@ def sign_selection_document() -> dict[str, Any]:
             "nonzero_abs_mean": DEFAULT_NONZERO_ABS_MEAN,
             "sign_original": SIGN_ORIGINAL,
             "sign_inverted": SIGN_INVERTED,
-        },
-        "cost_model": {
-            "original": "net = gross - amortized_one_way_cost",
-            "inverted": "net = -gross - amortized_one_way_cost",
-            "note": "symmetric one-way cost assumption; short-borrow remeasure optional upstream",
         },
         "note": (
             "Research-only sign flip helper. chosen_sign recorded for "

@@ -14,13 +14,9 @@ from datetime import datetime, timezone
 from typing import Any, Mapping, Sequence
 
 EVAL_REGISTRY_VERSION: str = "research-eval-registry/v1"
-R2_BUCKET: str = "quant-structured"
 R2_PREFIX: str = "research/eval"
-PROTOCOL_CF_SCREEN: str = "cf_mass_eval_period_net"
 PROTOCOL_DAILY_PATH: str = "daily_path_mtm_after_cost/v1"
 # Candidate SoT is daily_path. Period-net is bar-native auxiliary only.
-CANDIDATE_EVAL_SOT: str = PROTOCOL_DAILY_PATH
-PERIOD_NET_NOT_CANDIDATE_GRADE: bool = True
 
 
 def is_path_collapsed_cell(cell: Mapping[str, Any]) -> bool:
@@ -352,30 +348,6 @@ def list_eval_jobs_from_d1(*, limit: int = 20) -> list[dict[str, Any]]:
             if isinstance(r, dict):
                 rows.append(r)
     return rows
-
-
-def family_counts(logic_ids: Sequence[str]) -> dict[str, int]:
-    """Bucket logic_ids for a job listing (no scores)."""
-    from research.unique_logic.constants import (
-        CF_EVENT_DAILY_PATH_IDS,
-        CF_NEW_CS_THESIS_IDS,
-        CF_NEW_EVENT_THESIS_IDS,
-        CS_LOGIC_IDS,
-    )
-
-    out = {"event": 0, "event_new": 0, "unique_cs": 0, "cs_new": 0, "other": 0}
-    for lid in logic_ids:
-        if lid in CF_NEW_EVENT_THESIS_IDS:
-            out["event_new"] += 1
-        elif lid in CF_EVENT_DAILY_PATH_IDS:
-            out["event"] += 1
-        elif lid in CF_NEW_CS_THESIS_IDS:
-            out["cs_new"] += 1
-        elif lid in CS_LOGIC_IDS:
-            out["unique_cs"] += 1
-        else:
-            out["other"] += 1
-    return out
 
 
 CANDIDATE_KEEP_SIMPLE: str = (
