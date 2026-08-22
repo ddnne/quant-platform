@@ -127,13 +127,6 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "go": False,
     },
     {
-        "id": "factory_generation_shrink",
-        "track": EVAL_TRACK_MID_N,
-        "why": "offline/factory.py ~1082 generation leftover; unique/combo stay generation_enabled=False",
-        "not_a_pass": True,
-        "go": False,
-    },
-    {
         "id": "cost_models_modulation_hold",
         "track": EVAL_TRACK_MID_N,
         "why": "cost_models.py ~2255 is live ADV/liquidity/short math; do not fake-split",

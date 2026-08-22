@@ -52,8 +52,6 @@ from research.offline.factory_templates import (
     LOGIC_TEMPLATES,
     LogicTemplate,
     NUMERIC_ONLY_KNOBS,
-    family_definitions_document,
-    logic_templates_document,
 )
 
 # Identity / freezes (must never arm operational Mass).
@@ -162,10 +160,9 @@ class MassFactoryConfig:
     near_zero_abs: float = DEFAULT_NEAR_ZERO_ABS
     min_activation: float = DEFAULT_MIN_ACTIVATION
     fail_one_continue: bool = True
-    # W88: allow limited numeric fill after unique logics (still near-duped)
+    # Limited numeric fill after unique logics (still near-duped).
     allow_numeric_variants: bool = True
     near_dup_threshold: float = DEFAULT_NEAR_DUP_THRESHOLD
-    # Eval only after dedup (distinct logics)
     eval_after_dedup: bool = True
 
     def normalized_ratios(self) -> dict[str, float]:
@@ -709,7 +706,6 @@ def generate_strategy_batch(
         "wave": MASS_FACTORY_WAVE,
         "config": cfg.to_dict(),
         "n_requested": int(cfg.n),
-        # W88 primary metrics
         "n_generated": n_generated,
         "n_generated_accepted": n_generated,  # back-compat alias
         "n_unique_logic": n_unique_logic,
@@ -720,7 +716,6 @@ def generate_strategy_batch(
         "logic_distribution": logic_dist,
         "unique_logic_count": n_unique_logic,
         "numeric_variant_count": n_numeric,
-        # capacity / legacy
         "n_ge_100": n_generated >= 100 or n_after_dedup >= len(LOGIC_TEMPLATES),
         "n_rejected_at_gen": len(gen_rejected),
         "family_distribution": family_dist,
@@ -743,20 +738,11 @@ def generate_strategy_batch(
         },
         "gen_rejected": [s.to_dict() for s in gen_rejected],
         "frozen_default_path": list(FROZEN_DEFAULT_PATH),
-        "note": (
-            "Diversity = unique economic logics after near-dup. "
-            "n_generated may exceed n_unique_logic when numeric fill is on; "
-            "eval should use strategies_after_dedup. "
-            "3 default-path reps frozen (not retuned)."
-        ),
         **_freeze(),
     }
 
-# ---------------------------------------------------------------------------
-# Batch evaluation context + per-strategy eval
-# ---------------------------------------------------------------------------
-# Panels: research.offline.factory_eval_data. Eval/screen: factory_eval.
-# Import after MassFactoryConfig.
+
+# Panels / eval after MassFactoryConfig (factory_eval_data / factory_eval).
 
 from research.offline.factory_eval_data import (  # noqa: E402
     BatchDataContext,
@@ -892,114 +878,17 @@ def run_mass_factory(
 
     return pack
 
+
 def write_factory_outputs(
     pack: Mapping[str, Any], out_dir: str | Path
 ) -> dict[str, str]:
-    """Write machine-readable factory outputs under out_dir."""
+    """Write factory_run.json under out_dir."""
     od = Path(out_dir)
     od.mkdir(parents=True, exist_ok=True)
-    paths: dict[str, str] = {}
+    p = od / "factory_run.json"
+    p.write_text(json.dumps(pack, indent=2, default=str) + "\n", encoding="utf-8")
+    return {"factory_run.json": str(p)}
 
-    def _w(name: str, obj: Any) -> None:
-        p = od / name
-        p.write_text(
-            json.dumps(obj, indent=2, default=str) + "\n", encoding="utf-8"
-        )
-        paths[name] = str(p)
-
-    _w("factory_run.json", pack)
-    _w(
-        "generation_summary.json",
-        {
-            "summary": pack.get("summary"),
-            "generation": pack.get("generation"),
-            "family_distribution": (pack.get("summary") or {}).get(
-                "family_distribution"
-            ),
-            "logic_distribution": (pack.get("summary") or {}).get(
-                "logic_distribution"
-            ),
-            "n_unique_logic": (pack.get("summary") or {}).get("n_unique_logic"),
-            "n_after_dedup": (pack.get("summary") or {}).get("n_after_dedup"),
-            "n_numeric_variant": (pack.get("summary") or {}).get(
-                "n_numeric_variant"
-            ),
-        },
-    )
-    _w("strategies.json", pack.get("generation_strategies") or [])
-    _w("strategies_after_dedup.json", pack.get("strategies_after_dedup") or [])
-    _w("near_dup_dropped.json", pack.get("near_dup_dropped") or [])
-    _w("ranking.json", pack.get("batch_ranking") or [])
-    _w(
-        "screens.json",
-        {
-            "screens": pack.get("batch_screens") or [],
-            "reject_reason_histogram": (pack.get("batch") or {}).get(
-                "reject_reason_histogram"
-            ),
-            "survivor_family_distribution": (pack.get("batch") or {}).get(
-                "survivor_family_distribution"
-            ),
-            "survivor_logic_distribution": (pack.get("batch") or {}).get(
-                "survivor_logic_distribution"
-            ),
-            "family_top_survivors": (pack.get("batch") or {}).get(
-                "family_top_survivors"
-            ),
-        },
-    )
-    compact_results = []
-    for r in pack.get("batch_results") or []:
-        compact_results.append(
-            {
-                k: r.get(k)
-                for k in (
-                    "strategy_id",
-                    "logic_id",
-                    "logic_fingerprint",
-                    "thesis",
-                    "family_id",
-                    "params",
-                    "n_periods_ok",
-                    "mean_gross",
-                    "mean_net",
-                    "t_stat",
-                    "sharpe_period",
-                    "win_rate",
-                    "mean_activation",
-                    "chosen_sign",
-                    "sign_selection",
-                    "screen",
-                    "status",
-                    "errors",
-                )
-            }
-        )
-    _w("results_compact.json", compact_results)
-    _w("families.json", pack.get("families") or family_definitions_document())
-    _w(
-        "logic_templates.json",
-        pack.get("logic_templates") or logic_templates_document(),
-    )
-    _w("frozen_defaults.json", list(FROZEN_DEFAULT_PATH))
-
-    sm = pack.get("summary") or {}
-    md_path = od / "SUMMARY.md"
-    md_path.write_text(
-        f"# Mass factory run — {MASS_FACTORY_WAVE}\n\n"
-        f"- version: `{MASS_FACTORY_VERSION}`\n"
-        f"- n_generated: **{sm.get('n_generated')}** "
-        f"unique={sm.get('n_unique_logic')} "
-        f"after_dedup={sm.get('n_after_dedup')}\n"
-        f"- n_survivors: **{sm.get('n_survivors')}** "
-        f"eval={sm.get('n_strategies_evaluated')} "
-        f"fail={sm.get('fail_rate')}\n"
-        f"- mass_research: **{MASS_RESEARCH}** · READY: **{READY_DECLARED}** · "
-        f"ops GO: **{OPERATIONAL_GO}**\n",
-        encoding="utf-8",
-    )
-    paths["SUMMARY.md"] = str(md_path)
-    return paths
 
 # CF mass-eval worker status (tests pin try_cf_minimal_mass_batch).
 
@@ -1063,8 +952,6 @@ __all__ = [
     "REJECT_SIMPLE_DAILY_SIGN",
     "REJECT_LOOKAHEAD",
     "REJECT_NEAR_DUPLICATE",
-    "family_definitions_document",
-    "logic_templates_document",
     "stable_strategy_id",
     "validate_strategy_at_gen",
     "generate_strategy_batch",
