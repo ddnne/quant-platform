@@ -53,8 +53,13 @@ function coerceGateList(raw: unknown): string[] {
   return out;
 }
 
+function gateAndToken(gates: string[]): string {
+  return [...gates].filter(Boolean).sort().join("+");
+}
+
 function normalizeProposalRow(
   row: Record<string, unknown>,
+  avoidTokens: Set<string>,
 ): Record<string, unknown> | null {
   const thesis = String(row.thesis ?? "").trim();
   const gates = coerceGateList(row.gates);
@@ -88,6 +93,7 @@ function normalizeProposalRow(
   if (PROPOSE_CONTRADICTORY_GATE_PAIRS.some((pair) => pair.every((g) => gset.has(g)))) {
     return null;
   }
+  if (avoidTokens.has(gateAndToken(gates))) return null;
   const title = thesis.toLowerCase().replace(/×/g, "x");
   if (PROMPT_DIRECTION_ECHO_X.some((echo) => title.includes(echo))) {
     return null;
@@ -124,7 +130,11 @@ function extractAiText(res: unknown): string {
   return JSON.stringify(res);
 }
 
-function parseProposalArray(raw: string, n: number): Array<Record<string, unknown>> {
+function parseProposalArray(
+  raw: string,
+  n: number,
+  avoidTokens: Set<string>,
+): Array<Record<string, unknown>> {
   let text = String(raw || "").replace(/```(?:json)?/gi, "").trim();
   const out: Array<Record<string, unknown>> = [];
   const tryParse = (blob: string): unknown => {
@@ -160,7 +170,7 @@ function parseProposalArray(raw: string, n: number): Array<Record<string, unknow
       : [];
   for (const row of rows) {
     if (!isObject(row)) continue;
-    const norm = normalizeProposalRow(row);
+    const norm = normalizeProposalRow(row, avoidTokens);
     if (!norm) continue;
     out.push(norm);
     if (out.length >= n) break;
@@ -178,7 +188,9 @@ async function llmProposals(
   model: string | null;
 }> {
   if (!env.AI) return { rows: null, reason: "ai_unbound", model: null };
-  const avoid = whyAvoid.filter(Boolean).slice(0, 48).join(", ") || "(none)";
+  const avoidList = whyAvoid.filter(Boolean).slice(0, 48);
+  const avoidTokens = new Set(avoidList.map((t) => t.trim()).filter(Boolean));
+  const avoid = avoidList.join(", ") || "(none)";
   const sparseBan = SPARSE_GATE_COMBOS_REVIEW.filter((c) => c.length === 2)
     .map((c) => `Do not pair ${c[0]} with ${c[1]}.`)
     .join(" ");
@@ -212,14 +224,14 @@ async function llmProposals(
           max_tokens: 1400,
         });
         if (Array.isArray(res)) {
-          const direct = parseProposalArray(JSON.stringify(res), n);
+          const direct = parseProposalArray(JSON.stringify(res), n, avoidTokens);
           if (direct.length) return { rows: direct, reason: null, model };
         }
         const text = extractAiText(res);
-        const rows = parseProposalArray(text, n);
+        const rows = parseProposalArray(text, n, avoidTokens);
         if (rows.length) return { rows, reason: null, model };
         const preview = text.replace(/\s+/g, " ").slice(0, 80);
-        lastReason = `parse_empty:${model}:raw_len=${text.length}:attempt=${attempt}:preview=${preview}`;
+        lastReason = `parse_empty:${model}:raw_len=${text.length}:attempt=${attempt}:preview=${preview}:avoid_filtered`;
       } catch (e) {
         lastReason = `ai_error:${model}:${e instanceof Error ? e.message : String(e)}`.slice(
           0,

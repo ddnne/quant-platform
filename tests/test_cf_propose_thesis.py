@@ -170,6 +170,8 @@ def test_worker_index_contains_propose_thesis_route() -> None:
     assert "stub_propose_thesis_result" not in live_propose
     assert "STUB_PROPOSAL_TEMPLATES" not in live_propose
     assert "titleOccupancyBad" in src
+    assert "gateAndToken" in src
+    assert "avoidTokens" in src
     propose_src = _WORKER_PROPOSE.read_text(encoding="utf-8")
     assert "const PROPOSE_ALLOWED_GATES = [" not in propose_src
     assert "const PROPOSE_ALLOWED_DATASETS = [" not in propose_src
