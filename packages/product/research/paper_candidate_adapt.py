@@ -16,12 +16,8 @@ from research.freezes import (
     CONNECTED_TO_MASS,
     CONNECTED_TO_READY,
     EDGE_CLAIMED,
-    LIVE_ORDER_PATH_ENABLED,
-    LIVE_ORDERS,
     MASS_RESEARCH,
     OPERATIONAL_GO,
-    PAPER_CONTINUOUS,
-    PAPER_SCHEDULER_ARMED,
     PHASE7,
     READY_DECLARED,
     S1_S5_UNREJECT,
@@ -322,11 +318,7 @@ class PaperCandidateReceptacle:
             "arm": arm,
             **arm,
             "note": self.note
-            or (
-                "UNARMED paper receptacle. Pseudo-ops between research and live. "
-                "Does not arm paper scheduler continuously. Does not enable live "
-                "orders. Mass NO-GO · Phase7 OFF · READY undeclared · GO closed."
-            ),
+            or "UNARMED paper receptacle. Mass NO-GO · Phase7 OFF · READY undeclared · GO closed.",
         }
         assert_unarmed(body)
         return body
@@ -433,15 +425,10 @@ def adapt_class_hyp_candidate(
         horizon = f"{h}d_hold"
         rebalance = f"fixed_horizon_{h}d"
         fidelity = "aligned_with_residuals"
-        residual_notes.append(
-            "entry is top_k momentum (research uses sign(momentum) L/S per name)"
-        )
+        residual_notes.append("entry is top_k momentum (research uses sign(momentum) L/S)")
         if not signal_id:
             signal_id = "c21_multi_day_momentum_hold"
-        note = (
-            f"multi_day_hold paper receptacle hold={h}d sticky fixed_horizon. "
-            f"StrategySpec v3 momentum_n(n={n_mom_i}) top_k. UNARMED."
-        )
+        note = f"multi_day_hold hold={h}d mom_n={n_mom_i} top_k. UNARMED."
     elif cid == CLASS_CROSS_SECTION_RELATIVE:
         h = _pin_hold_10(
             payload,
@@ -473,18 +460,13 @@ def adapt_class_hyp_candidate(
         rebalance = f"fixed_horizon_{h}d"
         fidelity = "aligned_with_residuals"
         residual_notes.extend(
-            [
-                "paper portfolio MTM (equal-weight long/short books) vs research "
-                "trade-level mean of signed multi-day returns",
-                "no margin/borrow model on short leg",
-            ]
+            ["paper MTM vs research trade-level mean", "no margin/borrow on short leg"]
         )
         if not signal_id:
             signal_id = "c21_cross_section_momentum_rank"
         note = (
-            f"cross_section sticky hold={h}d mom_n={n_mom_i} L-S "
-            f"frac={long_frac}/{short_frac}. StrategySpec v3 cross_section_rank "
-            f"+ fixed_horizon. UNARMED."
+            f"cross_section hold={h}d mom_n={n_mom_i} L-S "
+            f"{long_frac}/{short_frac}. UNARMED."
         )
     elif cid == CLASS_FUNDAMENTALS_PRICE:
         h = _pin_hold_10(
@@ -510,18 +492,14 @@ def adapt_class_hyp_candidate(
         fidelity = "aligned_with_residuals"
         residual_notes.extend(
             [
-                "value benchmark = same-bar CS median of visible scores "
-                "(research uses global-window median of value scores)",
-                "paper portfolio MTM vs research trade-level mean",
-                "no margin/borrow model on short leg",
+                "value benchmark = same-bar CS median (research uses global-window)",
+                "paper MTM vs research trade-level mean",
+                "no margin/borrow on short leg",
             ]
         )
         if not signal_id:
             signal_id = "c21_fundamentals_price_value"
-        note = (
-            f"fundamentals_price hold={h}d mom_n={n_mom_i} mode={mode}. "
-            "StrategySpec v3 value_momentum_agree + fixed_horizon. UNARMED."
-        )
+        note = f"fundamentals_price hold={h}d mom_n={n_mom_i} mode={mode}. UNARMED."
     elif cid == CLASS_EVENT_POST:
         if payload.get("post_hold_days") is not None:
             h = max(1, int(payload["post_hold_days"]))
@@ -531,16 +509,10 @@ def adapt_class_hyp_candidate(
         horizon = f"1d_to_{h}d_post_event"
         rebalance = f"event_entry_hold_{h}d_sticky"
         fidelity = "proxy"
-        residual_notes.append(
-            "signal is disclosure_flag threshold, not signed surprise on event day"
-        )
+        residual_notes.append("disclosure_flag threshold, not signed surprise")
         if not signal_id:
             signal_id = "c21_event_post_disclosure_hold"
-        note = (
-            f"event_post paper receptacle post_hold={h}d sticky (discussion_only). "
-            "StrategySpec proxy = disclosure_flag_fins threshold + fixed_horizon. "
-            "Full surprise not on whitelist. UNARMED."
-        )
+        note = f"event_post post_hold={h}d sticky discussion_only proxy. UNARMED."
     else:
         try:
             class_spec = get_hypothesis_class(cid)
@@ -553,25 +525,16 @@ def adapt_class_hyp_candidate(
             hold_days=h,
             top_k=top_k,
             strategy_id=strategy_id or f"paper_{cid}_proxy_momentum",
-            rationale=(
-                f"Generic paper receptacle proxy for class {cid!r} via momentum_n. "
-                "UNARMED discussion_only."
-            ),
+            rationale=f"Generic unarmed proxy for class {cid!r} via momentum_n.",
         )
         rebalance = f"fixed_horizon_{h}d"
         fidelity = "proxy"
         residual_notes.append("generic class falls back to momentum top_k sticky")
-        note = (
-            f"Generic unarmed paper receptacle for class={cid}. "
-            "Proxy StrategySpec (momentum_n sticky). Not live. Not armed."
-        )
+        note = f"Generic unarmed paper receptacle for class={cid}."
 
     residual_block = {
         "notes": residual_notes,
-        "policy": (
-            "Align paper/StrategySpec toward research; do not simplify research. "
-            "Residuals only when unavoidable."
-        ),
+        "policy": "Align paper toward research; residuals only when unavoidable.",
     }
     return PaperCandidateReceptacle(
         strategy_spec=spec,
@@ -636,13 +599,8 @@ def adapt_from_class_hyp_bundle(
         summary = bundle.get("candidate_summary")
         if isinstance(summary, Mapping) and class_key in summary:
             row = dict(summary[class_key])
-            if class_key.startswith("multi_day_hold"):
-                row.setdefault("hypothesis_class", CLASS_MULTI_DAY_HOLD)
-                if "10" in class_key:
-                    row.setdefault("variant", "hold_10")
-                    row.setdefault("hold_days", 10)
-            elif class_key == "event_post":
-                row.setdefault("hypothesis_class", CLASS_EVENT_POST)
+            _apply_class_key_defaults(row, class_key)
+            if class_key == "event_post":
                 row.setdefault("post_hold_days", 5)
             if bundle.get("one_way_cost") is not None:
                 row.setdefault("one_way_cost", bundle["one_way_cost"])
@@ -747,10 +705,7 @@ def emit_example_paper_specs(out_dir: str | Path) -> dict[str, Path]:
         "status": "paper_receptacle_unarmed",
         "files": sorted(paths.keys()),
         **_freeze_arm_flags(),
-        "note": (
-            "Example paper receptacles. UNARMED. "
-            "Not continuous paper scheduler. Not live orders."
-        ),
+        "note": "Example paper receptacles. UNARMED.",
     }
     assert_unarmed(index)
     index_path = out / "index.json"

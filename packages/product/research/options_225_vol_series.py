@@ -36,20 +36,10 @@ from research.freezes import (
     READY_DECLARED,
 )
 
-# J-Quants: theoretical / IV fields populated from this date inclusive.
 IV_FIELDS_AVAILABLE_FROM: str = "2016-07-19"
-
-# W93 / w0818c: require front-CM LTD DTE >= this many calendar days.
-# On the W92 cache, atm_iv - base_vol is nonzero exclusively for front-CM
-# DTE in {1,2,3} and exactly 0 for every DTE >= 5. Default 6 prefers the
-# next CM past the empirical exact-match boundary; fall back to near-expiry
-# front only if no eligible CM exists. Never drop BaseVol or ATM series.
+# Front-CM LTD DTE floor; fall back to near-expiry only if none eligible.
 DEFAULT_ATM_MIN_DTE_DAYS: int = 6
-
-# W94 skew: target put moneyness = SKEW_PUT_MONEYNESS * UnderPx (≈95% put).
 DEFAULT_SKEW_PUT_MONEYNESS: float = 0.95
-
-# Role pins (W94): BaseVol = canonical level; ATM reconstructed = compare-only.
 BASEVOL_ROLE: str = "canonical_level"
 ATM_IV_ROLE: str = "compare_only"
 
@@ -473,11 +463,7 @@ def build_daily_atm_iv_series(
     *,
     min_dte_days: int = DEFAULT_ATM_MIN_DTE_DAYS,
 ) -> list[dict[str, Any]]:
-    """Build ``[{date, atm_iv, strike, under_px, cm, pc_used, ...}]`` — no ffill.
-
-    Compare-only vs BaseVol. ``min_dte_days`` (default 6) rolls off SQ-week
-    fronts. Pass 0 for legacy earliest-LTD>Date. Never invents strikes.
-    """
+    """Compare-only ATM IV vs BaseVol. Missing day → omit. Never invent strikes."""
     by_date = _group_by_date(rows)
     out: list[dict[str, Any]] = []
     for date in sorted(by_date):
@@ -567,19 +553,7 @@ def build_daily_skew_series(
     min_dte_days: int = DEFAULT_ATM_MIN_DTE_DAYS,
     put_moneyness: float = DEFAULT_SKEW_PUT_MONEYNESS,
 ) -> list[dict[str, Any]]:
-    """Build daily put-skew series — no ffill, no invented strikes.
-
-    Exact rule (W94)::
-
-        skew = put_iv(strike*) − atm_mid_iv
-
-    * front CM via ``_pick_front_cm(min_dte_days)`` (default 6)
-    * ``atm_mid_iv`` = nearest-strike put/call mid within front CM
-    * ``target = put_moneyness * under_px`` (default 0.95)
-    * ``strike*`` = listed put strike minimizing ``|Strike − target|``
-      among puts with finite IV (ties → lower strike). Never interpolate.
-    * Gap / missing put or ATM → omit day.
-    """
+    """95% put IV minus ATM mid. Missing put/ATM → omit. Never invent strikes."""
     target_m = float(put_moneyness)
     if not math.isfinite(target_m) or target_m <= 0.0:
         raise ValueError(f"put_moneyness must be finite > 0, got {put_moneyness!r}")
@@ -650,18 +624,7 @@ def build_daily_term_series(
     *,
     min_dte_days: int = DEFAULT_ATM_MIN_DTE_DAYS,
 ) -> list[dict[str, Any]]:
-    """Build daily near−next CM ATM-ish term series — no ffill.
-
-    Exact rule (W94)::
-
-        cm_term = near_atm_iv − next_atm_iv
-
-    * ``near_cm`` = front CM with ``LTD`` DTE ``>= min_dte_days`` (default 6)
-    * ``next_cm`` = earliest CM > near_cm also meeting the min-DTE floor
-      (fallback: earliest later CM with LTD > Date)
-    * ATM-ish IV per CM = nearest listed strike to UnderPx, put/call mid
-    * Never invents strikes; omit day if either leg missing.
-    """
+    """Near CM ATM IV minus next CM. Missing leg → omit. Never invent strikes."""
     by_date = _group_by_date(rows)
     out: list[dict[str, Any]] = []
     for date in sorted(by_date):
@@ -713,18 +676,7 @@ def build_daily_basevol_delta_series(
     base: Sequence[Mapping[str, Any]] | None = None,
     rows: Sequence[Mapping[str, Any]] | Iterable[Mapping[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
-    """Build day-over-day BaseVol delta on observed dates — no ffill.
-
-    Exact rule (W94)::
-
-        delta = BaseVol[t] − BaseVol[t-1]   # arithmetic primary
-        log_delta = ln(BaseVol[t] / BaseVol[t-1])  # when both > 0
-
-    First observed BaseVol day is omitted (gap). Dates are consecutive in the
-    **observed** series (calendar holes between observations are not filled;
-    delta still spans the gap). Pass either pre-built ``base`` rows or raw
-    ``rows`` (which are reduced via :func:`build_daily_basevol_series`).
-    """
+    """Observed BaseVol[t] − BaseVol[t-1]. First day omitted. No ffill."""
     if base is None:
         if rows is None:
             raise ValueError("build_daily_basevol_delta_series requires base or rows")
@@ -848,43 +800,10 @@ def summarize_vol_series(
         "calendar_gaps_in_atm_span": atm_gaps,
         "n_calendar_gaps_base": len(base_gaps),
         "n_calendar_gaps_atm": len(atm_gaps),
-        "dates_base_only": sorted(set(base_dates) - set(atm_dates)),
-        "dates_atm_only": sorted(set(atm_dates) - set(base_dates)),
         "mass_research": MASS_RESEARCH,
         "phase7": PHASE7,
         "ready_declared": READY_DECLARED,
         "operational_go": OPERATIONAL_GO,
-    }
-
-
-def _series_rules_doc() -> dict[str, Any]:
-    return {
-        "base_vol": (
-            "Canonical level. Per-date median/unique finite BaseVol among "
-            "settlement-preferring rows; omit day if none (no ffill)."
-        ),
-        "atm_iv": (
-            "COMPARE-ONLY vs BaseVol. Front CM (min_dte>=6) nearest strike to "
-            "UnderPx; avg put/call IV when both finite else available side. "
-            "Never invent strikes."
-        ),
-        "spread": "atm_iv - base_vol on inner-joined dates (mostly ~0 post min_dte=6).",
-        "skew": (
-            f"{SKEW_CONVENTION}. Listed put strike nearest 0.95*UnderPx within "
-            "front CM (min_dte>=6); never interpolate/invent; omit if missing."
-        ),
-        "cm_term": (
-            f"{CM_TERM_CONVENTION}. Near+next CM ATM-ish IVs (min_dte>=6); "
-            "omit if either leg missing; never invent strikes."
-        ),
-        "basevol_delta": (
-            f"{BASEVOL_DELTA_CONVENTION} on consecutive observed BaseVol dates; "
-            "first day omitted; optional log_delta when both > 0."
-        ),
-        "gap_policy": GAP_POLICY,
-        "iv_fields_available_from": IV_FIELDS_AVAILABLE_FROM,
-        "canonical_level": "base_vol",
-        "compare_only": ["atm_iv"],
     }
 
 
@@ -919,7 +838,6 @@ def build_series_bundle_from_rows(
         "cm_term_series": term,
         "basevol_delta_series": delta,
         "stats": stats,
-        "rules": _series_rules_doc(),
         "version": OPTIONS_225_VOL_SERIES_VERSION,
         "wave": OPTIONS_225_VOL_SERIES_WAVE,
         "dataset": DATASET_ID,
@@ -1161,9 +1079,8 @@ def load_opt225_series_cache(
 ) -> dict[str, Any] | None:
     """Load pre-built series ndjson from W92/W94 log dirs.
 
-    Prefers explicit ``log_dir``. Otherwise tries W94 thick dir first, then
-    W92 cache (BaseVol/ATM/spread). Skew / CM-term / ΔBaseVol loaded when
-    present; ΔBaseVol can be derived from BaseVol if missing.
+    Prefers explicit ``log_dir``. Otherwise tries W94 then W92. Missing
+    skew / CM-term stay empty/None; ΔBaseVol derives from BaseVol when absent.
     """
     candidates: list[Path] = []
     if log_dir is not None:
@@ -1190,8 +1107,8 @@ def load_opt225_series_cache(
     skew_p = d / "skew_series.ndjson"
     term_p = d / "cm_term_series.ndjson"
     delta_p = d / "basevol_delta_series.ndjson"
-    skew = load_ndjson_series(skew_p) if skew_p.is_file() else []
-    term = load_ndjson_series(term_p) if term_p.is_file() else []
+    skew = load_ndjson_series(skew_p) if skew_p.is_file() else None
+    term = load_ndjson_series(term_p) if term_p.is_file() else None
     delta = (
         load_ndjson_series(delta_p)
         if delta_p.is_file()

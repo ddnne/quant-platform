@@ -1,27 +1,8 @@
-"""R2 structured history → FeatureContext research bridge (W59 / w0815az_g1).
+"""R2 structured history → FeatureContext research bridge.
 
-Research-only loader that reads COMPLETE-21 structured history from R2
-``quant-structured`` (live JSONL and/or cold archive NDJSON) and builds a
-:class:`features.runtime.FeatureContext` suitable for signal long eval
-(S1: bars + TOPIX + calendar).
-
-**SoT rules (held):**
-
-* History SoT = R2 ``quant-structured`` (not local SQLite, not D1 full history)
-* D1 = hot tip only (use ``history_source="d1_tip"`` on the eval harness)
-* Optional in-memory SQLite mirror is a **disposable** PIT convenience, never SoT
-* Permanent DEFER 5 hard-reject on load
-* PIT: ``available_at`` must be present and ``<= as_of`` (no look-ahead)
-* Mass OFF · READY not declared · no densify · no push
-
-Minimal viable datasets for S1 signal long eval:
-
-* ``equities_bars_daily``
-* ``indices_bars_daily_topix``
-* ``markets_calendar``
-
-All COMPLETE 21 ids are inventory-mapped and loadable when keys/rows are
-supplied; DEFER 5 are fail-closed.
+History SoT = R2 ``quant-structured``. D1 = hot tip only. Disposable SQLite
+mirror is never SoT. Permanent DEFER hard-reject. PIT: ``available_at``
+required and ``<= as_of``. Mass OFF · READY undeclared.
 """
 
 from __future__ import annotations
@@ -65,10 +46,6 @@ R2_HISTORY_PLANE: str = "R2_history"
 R2_HISTORY_SOURCE: str = "cloudflare_r2_structured"
 R2_TABLE_PREFIX: str = "r2"
 
-# JSONL / archive line schema metadata (worker write path).
-R2_LINE_SCHEMA: str = "jquants_records/v1"
-
-# Default row cap for research history extract (higher than tip sample).
 DEFAULT_R2_ROW_LIMIT_PER_DATASET: int = 50_000
 
 # S1 minimal set for topix-relative signal long eval.
@@ -104,9 +81,7 @@ AVAILABLE_AT_REPAIR_POLICY: dict[str, Any] = {
     "repairs": {
         "calendar_ingest_pollution": {
             "datasets": ["markets_calendar"],
-            "condition": "envelope.available_at day > event day",
             "action": "available_at = event_time",
-            "rationale": "Calendar ingest wall-clock; event_time is research visibility.",
             "look_ahead": False,
         },
         "archive_ingest_pollution": {
@@ -115,19 +90,12 @@ AVAILABLE_AT_REPAIR_POLICY: dict[str, Any] = {
                 "markets_short_ratio",
                 "markets_margin_alert",
             ],
-            "condition": (
-                "envelope.available_at day > event day AND "
-                "year(available_at) >= 2026 AND year(event) < 2026"
-            ),
             "action": "available_at = event_time",
-            "rationale": "2026 ingest stamp on historical event; not real lag.",
             "look_ahead": False,
         },
         "missing_available_at_drop": {
             "datasets": ["*"],
-            "condition": "available_at is null or empty",
             "action": "exclude row",
-            "rationale": "Never invent visibility from as_of or wall-clock.",
             "look_ahead": False,
         },
         "post_date_preserve": {
@@ -136,23 +104,11 @@ AVAILABLE_AT_REPAIR_POLICY: dict[str, Any] = {
                 "indices_bars_daily_topix",
                 "fins_summary",
             ],
-            "condition": (
-                "available_at is real post-event publish/disclosure time "
-                "(not archive_ingest_pollution pattern)"
-            ),
-            "action": "keep envelope available_at unchanged",
-            "rationale": "Honest post-event lag stays as-is.",
+            "action": "keep envelope available_at",
             "look_ahead": False,
         },
     },
 }
-
-R2_JSONL_KEY_PATTERN: str = (
-    "structured/jsonl/{dataset}/dt=YYYY-MM-DD/{run_id}.jsonl"
-)
-R2_ARCHIVE_KEY_PATTERN: str = (
-    "archive/jquants_records/{dataset}/batch/{run_id}_after{rowid}.ndjson"
-)
 
 _FAMILY_PREFIXES: tuple[tuple[str, str], ...] = (
     ("jsda_", "jsda"),
@@ -179,12 +135,6 @@ COMPLETE_21_R2_INVENTORY: dict[str, dict[str, Any]] = {
     }
     for ds in COMPLETE_21_DATASETS
 }
-
-# JSDA tip tables differ from jquants_records on D1; history still R2-sealed.
-COMPLETE_21_R2_INVENTORY["jsda_tokyo_repo_rates"]["d1_tip_table"] = "jsda_repo_rates"
-COMPLETE_21_R2_INVENTORY["jsda_corporate_bond_transactions"][
-    "d1_tip_table"
-] = "jsda_corporate_bond_transactions"
 
 PERMANENT_DEFER_R2_NOTE: dict[str, dict[str, Any]] = {
     ds: {"dataset": ds, "permanent_defer": True, "load_policy": "hard_reject"}
@@ -231,11 +181,8 @@ _CODE_KEYED_HISTORY_DATASETS: frozenset[str] = frozenset(
 
 R2GetFn = Callable[[str, str], bytes]  # (bucket, key) -> body bytes
 
-
 class R2FeatureContextError(SingleShotJobError):
     """Invalid R2 history bridge input or load failure."""
-
-
 
 def _maybe_json(value: Any) -> Any:
     if isinstance(value, (dict, list)):
@@ -246,7 +193,6 @@ def _maybe_json(value: Any) -> Any:
         except (TypeError, ValueError, json.JSONDecodeError):
             return value
     return value
-
 
 def parse_r2_structured_line(line: str | bytes | Mapping[str, Any]) -> dict[str, Any] | None:
     """Parse one R2 JSONL / archive NDJSON line into an envelope dict.
@@ -302,7 +248,6 @@ def parse_r2_structured_line(line: str | bytes | Mapping[str, Any]) -> dict[str,
         "rid": obj.get("rid"),
     }
 
-
 def parse_r2_structured_bytes(body: bytes | str) -> list[dict[str, Any]]:
     """Parse a full JSONL/NDJSON object body into envelope dicts."""
     text = body.decode("utf-8") if isinstance(body, (bytes, bytearray)) else str(body)
@@ -312,7 +257,6 @@ def parse_r2_structured_bytes(body: bytes | str) -> list[dict[str, Any]]:
         if row is not None:
             out.append(row)
     return out
-
 
 def normalize_r2_history_row(
     envelope: Mapping[str, Any],
@@ -367,7 +311,6 @@ def normalize_r2_history_row(
         row["ingested_at"] = envelope.get("ingested_at")
     return row
 
-
 def _row_event_day(row: Mapping[str, Any]) -> str | None:
     for key in ("date", "Date", "as_of_date"):
         v = row.get(key)
@@ -377,7 +320,6 @@ def _row_event_day(row: Mapping[str, Any]) -> str | None:
     if et is not None and str(et).strip():
         return str(et).strip()[:10]
     return None
-
 
 def _row_code(row: Mapping[str, Any]) -> str | None:
     for key in ("code", "Code"):
@@ -395,7 +337,6 @@ def _row_code(row: Mapping[str, Any]) -> str | None:
         if v is not None and str(v).strip():
             return str(v).strip()
     return None
-
 
 def filter_history_rows(
     rows: Sequence[Mapping[str, Any]],
@@ -431,7 +372,6 @@ def filter_history_rows(
         out.append(row)
     return out
 
-
 # Datasets that may carry 2026 ingest wall-clock as available_at on historical events.
 _ARCHIVE_INGEST_POLLUTION_DATASETS: frozenset[str] = frozenset(
     {
@@ -440,7 +380,6 @@ _ARCHIVE_INGEST_POLLUTION_DATASETS: frozenset[str] = frozenset(
         "markets_margin_alert",
     }
 )
-
 
 def repair_available_at_research(
     rows: Sequence[Mapping[str, Any]],
@@ -525,12 +464,9 @@ def repair_available_at_research(
         "document": AVAILABLE_AT_REPAIR_POLICY["version"],
     }
 
-
 def available_at_policy_document() -> dict[str, Any]:
     """Public document for available_at repair (W60 T7)."""
     return dict(AVAILABLE_AT_REPAIR_POLICY)
-
-
 
 def default_r2_get_object(
     bucket: str,
@@ -582,8 +518,6 @@ def default_r2_get_object(
         except OSError:
             pass
 
-
-
 def _load_envelopes_from_sources(
     *,
     dataset: str,
@@ -629,7 +563,6 @@ def _load_envelopes_from_sources(
                     envelopes.append(r)
 
     return envelopes
-
 
 def extract_r2_history_feature_rows(
     dataset_ids: Sequence[str],
@@ -776,14 +709,9 @@ def extract_r2_history_feature_rows(
         rows_by_dataset[ds] = filtered
 
     return {
-        "source": R2_HISTORY_SOURCE,
-        "bucket": bucket,
-        "plane": R2_HISTORY_PLANE,
         "history_source": HISTORY_SOURCE_R2,
-        "line_schema": R2_LINE_SCHEMA,
-        "period_start": start,
-        "period_end": end,
-        "dataset_ids": list(ids),
+        "plane": R2_HISTORY_PLANE,
+        "bucket": bucket,
         "selected_codes": list(selected_codes),
         "raw_envelope_counts": raw_counts,
         "extracted_row_counts": {
@@ -792,18 +720,9 @@ def extract_r2_history_feature_rows(
         "source_channels": source_channels,
         "rows_by_dataset": rows_by_dataset,
         "available_at_repairs": aa_repairs,
-        "available_at_policy_version": AVAILABLE_AT_REPAIR_POLICY["version"],
-        "bridge_expand_datasets": list(BRIDGE_EXPAND_DATASETS),
         "local_sot": False,
         "disposable_mirror": True,
-        "note": (
-            "R2 structured history extract for research FeatureContext. "
-            "Not READY. Not local SQLite SoT. Local paths/lines are disposable "
-            "mirrors only. Permanent DEFER excluded. available_at preserved for PIT "
-            "(calendar research repair only when documented)."
-        ),
     }
-
 
 def build_r2_feature_context(
     rows_by_dataset: Mapping[str, Sequence[Mapping[str, Any]]],
@@ -829,8 +748,6 @@ def build_r2_feature_context(
         source=R2_HISTORY_SOURCE,
         table_prefix=R2_TABLE_PREFIX,
     )
-
-
 
 def materialize_disposable_sqlite_mirror(
     rows_by_dataset: Mapping[str, Sequence[Mapping[str, Any]]],
@@ -1016,33 +933,16 @@ def materialize_disposable_sqlite_mirror(
         conn.close()
     return path
 
-
-
 def r2_inventory_document() -> dict[str, Any]:
     """Return the T1 R2 inventory document (COMPLETE 21 + DEFER exclude)."""
     return {
-        "wave": "W59 / w0815az_g1",
-        "task": "T1 R2 key pattern inventory for COMPLETE 21",
-        "bucket": R2_HISTORY_BUCKET,
-        "line_schema": R2_LINE_SCHEMA,
-        "shared_patterns": {
-            "jsonl": R2_JSONL_KEY_PATTERN,
-            "archive_ndjson": R2_ARCHIVE_KEY_PATTERN,
-        },
         "complete_21_count": len(COMPLETE_21_DATASETS),
         "complete_21": COMPLETE_21_R2_INVENTORY,
         "permanent_defer_count": len(PERMANENT_DEFER_DATASETS),
         "permanent_defer_excluded": PERMANENT_DEFER_R2_NOTE,
-        "s1_minimal_datasets": list(S1_SIGNAL_HISTORY_DATASETS),
-        "multi_signal_datasets": list(MULTI_SIGNAL_HISTORY_DATASETS),
         "bridge_expand_datasets": list(BRIDGE_EXPAND_DATASETS),
-        "available_at_repair_policy": AVAILABLE_AT_REPAIR_POLICY,
         "local_sot": False,
-        "mass_research": "NO-GO",
-        "ready_declared": False,
-        "note": "History SoT is R2 quant-structured. D1 is hot tip only.",
     }
-
 
 def write_r2_inventory_json(path: str | Path) -> Path:
     """Write T1 inventory JSON to ``path``."""
@@ -1055,14 +955,9 @@ def write_r2_inventory_json(path: str | Path) -> Path:
     )
     return out
 
-
 def schema_mapping_document() -> dict[str, Any]:
     """T2 schema mapping document: R2 envelope → FeatureContext fields."""
     return {
-        "wave": "W59 / w0815az_g1",
-        "task": "T2 schema mapping Code/Date/event_time/available_at",
-        "line_schema": R2_LINE_SCHEMA,
-        "feature_context_map": FEATURE_CONTEXT_SCHEMA_MAP,
         "pit_gate": {
             "rule": "available_at is required and available_at <= as_of",
             "null_available_at": "excluded (hard)",
@@ -1073,16 +968,10 @@ def schema_mapping_document() -> dict[str, Any]:
             "markets_calendar": {"Date": "row.date", "holiday_division": "HolDiv"},
         },
         "bridge_expand_column_map": {
-            ds: {
-                "Date": "payload date | event_time[:10]",
-                "available_at": "envelope.available_at (PIT; documented repair only)",
-            }
+            ds: {"Date": "row.date", "available_at": "envelope.available_at"}
             for ds in BRIDGE_EXPAND_DATASETS
         },
-        "available_at_repair_policy": AVAILABLE_AT_REPAIR_POLICY,
-        "local_sot": False,
     }
-
 
 def can_build_40d_asof(
     rows_by_dataset: Mapping[str, Sequence[Mapping[str, Any]]] | None = None,
@@ -1094,12 +983,7 @@ def can_build_40d_asof(
     When ``rows_by_dataset`` is None, returns code-path capability (bridge exists).
     """
     if rows_by_dataset is None:
-        return {
-            "can_build_40d_asof": True,
-            "code_path": True,
-            "requires": ["equities_bars_daily", "indices_bars_daily_topix"],
-            "note": "Bridge exists; live 40d eval needs R2 keys/fixtures.",
-        }
+        return {"can_build_40d_asof": True, "code_path": True}
     bar_days = sorted(
         {
             str(r.get("date") or "")[:10]
@@ -1120,12 +1004,7 @@ def can_build_40d_asof(
         "can_build_40d_asof": ok,
         "code_path": True,
         "equities_bars_trading_days": n,
-        "topix_days": len(topix_days),
-        "min_trading_days": int(min_trading_days),
-        "bar_day_span": [bar_days[0], bar_days[-1]] if bar_days else None,
-        "topix_day_span": [topix_days[0], topix_days[-1]] if topix_days else None,
     }
-
 
 def resolve_history_source(value: str | None) -> str:
     """Normalize history_source token; default d1_tip."""
@@ -1141,7 +1020,6 @@ def resolve_history_source(value: str | None) -> str:
         f"{sorted(HISTORY_SOURCES)}"
     )
 
-
 __all__ = [
     "COMPLETE_21_R2_INVENTORY",
     "DEFAULT_R2_ROW_LIMIT_PER_DATASET",
@@ -1152,12 +1030,9 @@ __all__ = [
     "PERMANENT_DEFER_R2_NOTE",
     "R2GetFn",
     "R2FeatureContextError",
-    "R2_ARCHIVE_KEY_PATTERN",
     "R2_HISTORY_BUCKET",
     "R2_HISTORY_PLANE",
     "R2_HISTORY_SOURCE",
-    "R2_JSONL_KEY_PATTERN",
-    "R2_LINE_SCHEMA",
     "R2_TABLE_PREFIX",
     "AVAILABLE_AT_REPAIR_POLICY",
     "BRIDGE_EXPAND_DATASETS",
