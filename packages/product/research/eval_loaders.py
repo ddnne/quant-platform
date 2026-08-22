@@ -1,6 +1,6 @@
 """Bar / index / options loaders for research eval. Skip missing. Never invent.
 
-CF staging imports these instead of the class_hyp_eval loader block.
+CF staging imports this module, not class_hyp_eval.
 No ffill. Empty / missing inputs return empty or None.
 """
 from __future__ import annotations

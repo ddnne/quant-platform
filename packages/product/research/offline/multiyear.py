@@ -121,7 +121,7 @@ from research.stats_metrics import (
     stats_metrics_document,
 )
 
-# Payload tags / floors match class_hyp_eval (SoT lives there; no import — cycle).
+# Floors SoT is this module (CLASS_HYP_EVAL_VERSION lives here, not class_hyp_eval).
 CLASS_HYP_EVAL_VERSION: str = "class-hyp-eval/v7"
 CLASS_HYP_EVAL_WAVE: str = "W86 / w0816u"
 MIN_ECONOMIC_NET: float = DEFAULT_MIN_ECONOMIC_NET
@@ -1929,7 +1929,19 @@ def run_class_hyp_multi_year_eval(
 
 
 __all__ = [
+    "CLASS_HYP_EVAL_VERSION",
+    "CLASS_HYP_EVAL_WAVE",
     "DEFAULT_SQLITE",
+    "MAX_YEAR_POS_NET_SHARE",
+    "MIN_ABS_T_STAT",
+    "MIN_ACTIVATION_RATE_MULTIDAY",
+    "MIN_ECONOMIC_NET",
+    "MIN_EVENTS_PER_CODE_YEAR",
+    "MIN_EVENTS_PER_TRADING_DAY",
+    "MIN_PERIOD_WIN_RATE",
+    "MIN_POSITIVE_PERIODS",
+    "MIN_SHARPE_PERIOD",
+    "MIN_YEARS_RESEARCH_CANDIDATE",
     "load_repo_rows_from_sqlite",
     "run_class_hyp_multi_year_eval",
 ]

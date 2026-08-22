@@ -1,8 +1,8 @@
-"""CF bar-native logic specs (subset of factory templates).
+"""CF bar-native logic specs.
 
-Copied from ``mass_strategy_factory.LOGIC_TEMPLATES`` for the ~30 ids the
-CF Worker can evaluate without unique_logic panels. ``cf_mass_eval_job`` /
-``cf_daily_path_job`` load this module instead of the 5400-line factory.
+Copied from factory templates historically for the ~30 ids the CF Worker
+can evaluate without unique_logic panels. Current SoT is this module.
+``cf_mass_eval_job`` / ``cf_daily_path_job`` load this instead of the factory.
 """
 
 from __future__ import annotations

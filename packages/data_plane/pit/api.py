@@ -633,7 +633,7 @@ def get_jsda_repo_rates(
     Fail-closed while production READY is undeclared (``SnapshotNotReady``).
     Coverage V2 COMPLETE for ``jsda_tokyo_repo_rates`` is receipt-owned
     (quant-mcp). D1 holds the hot tip only. Historical research eval must
-    use ``research.class_hyp_eval.load_repo_rows_all_tenors_from_sqlite``
+    use ``research.eval_loaders.load_repo_rows_all_tenors_from_sqlite``
     against local sqlite / R2 — do not invent COMPLETE, do not ffill.
     """
     as_of_iso = normalize_as_of(as_of)

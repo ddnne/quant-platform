@@ -1,11 +1,9 @@
 """ADV-ranked eval universe. Skip missing bars/TA/EqAR. Never head-N.
 
-CF staging imports this module instead of class_hyp_eval
-loader for universe selection. Empty pool returns []. No invent.
+Empty pool returns []. No invent.
 
-Bar / sidecar loaders used by CF staging are thin shims: bodies stay in
-eval_loaders (bars/nky/opt225/margin/repo). class_hyp_eval already imports
-this module.
+Bar / sidecar loaders live in eval_loaders (bars/nky/opt225/margin/repo);
+shims here re-export those bodies.
 """
 from __future__ import annotations
 

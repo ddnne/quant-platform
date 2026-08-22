@@ -250,7 +250,10 @@ def test_cf_daily_path_job_does_not_import_factory() -> None:
         "offline/bar_eval.py": banned_both,
     }
     for name, banned in files.items():
-        tree = ast.parse((research_dir / name).read_text(encoding="utf-8"))
+        path = research_dir / name
+        if not path.exists():
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 for alias in node.names:

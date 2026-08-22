@@ -67,20 +67,6 @@ def infer_eval_track(*, max_codes: int) -> str:
 # csFundSnaps hoist + eval-cf-dp-cs-hoist-20260822a. Dense work, not +N clones.
 NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
     {
-        "id": "offline_eval_shrink",
-        "track": EVAL_TRACK_MID_N,
-        "why": "class_hyp_eval is re-export barrel; delete after callers use offline.*",
-        "not_a_pass": True,
-        "go": False,
-    },
-    {
-        "id": "factory_offline_shrink",
-        "track": EVAL_TRACK_LIQ_LARGE,
-        "why": "factory no longer imports class_hyp; 3-line shim remains",
-        "not_a_pass": True,
-        "go": False,
-    },
-    {
         "id": "python_only_gates",
         "track": EVAL_TRACK_LIQ_LARGE,
         "why": "skip catalog exists; Worker bodies still missing",

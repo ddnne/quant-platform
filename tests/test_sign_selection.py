@@ -282,7 +282,7 @@ def test_paper_adapter_wires_chosen_sign():
 
 
 def test_class_hyp_eval_version_w86():
-    from research.class_hyp_eval import (
+    from research.offline.multiyear import (
         CLASS_HYP_EVAL_VERSION,
         CLASS_HYP_EVAL_WAVE,
     )

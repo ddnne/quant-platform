@@ -4114,7 +4114,7 @@ def write_factory_outputs(
             "Synthetic (tests / no mirrors):",
             "",
             "```bash",
-            "python -m research.mass_strategy_factory --synthetic --n 100",
+            "python -m research.offline.factory --synthetic --n 100",
             "```",
             "",
         ]
@@ -4444,9 +4444,9 @@ def llm_logic_entry_status() -> dict[str, Any]:
         "status": "connected",
         "wave": MASS_FACTORY_WAVE,
         "version": MASS_FACTORY_VERSION,
-        "entry_fn": "research.mass_strategy_factory.propose_profit_hypotheses",
+        "entry_fn": "research.offline.factory.propose_profit_hypotheses",
         "strong_model_entry": (
-            "research.mass_strategy_factory.propose_profit_hypotheses"
+            "research.offline.factory.propose_profit_hypotheses"
         ),
         "preferred_model": "grok-4.6 (xAI api.x.ai)",
         "fallback_model": "@cf/openai/gpt-oss-120b (Workers AI)",

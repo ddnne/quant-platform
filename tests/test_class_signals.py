@@ -568,11 +568,11 @@ def test_w83_wave_tags_and_default_path_params():
         CLASS_SIGNALS_WAVE,
         EVENT_POST_ENTRY_MODE,
     )
-    from research.class_hyp_eval import (
+    from research.offline.multiyear import (
         CLASS_HYP_EVAL_VERSION,
         CLASS_HYP_EVAL_WAVE,
+        run_class_hyp_multi_year_eval,
     )
-    from research.offline.multiyear import run_class_hyp_multi_year_eval
 
     # W95 / w0818e: class-signals/v10 held (+ skew/CM-term/ΔBaseVol deep-dive)
     assert CLASS_SIGNALS_VERSION in {

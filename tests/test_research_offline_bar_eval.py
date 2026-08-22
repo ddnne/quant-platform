@@ -8,10 +8,6 @@ import pytest
 
 import research.offline as offline
 import research.offline.bar_eval as be
-from research.class_hyp_eval import (
-    evaluate_multi_day_hold_on_bars as che_mdh,
-    run_class_hyp_multi_year_eval as che_run,
-)
 from research.offline import bar_eval, multiyear
 from research.offline.bar_eval import evaluate_multi_day_hold_on_bars as src_mdh
 
@@ -20,10 +16,10 @@ def test_offline_bar_eval_reexports_on_bars() -> None:
     assert callable(be.evaluate_multi_day_hold_on_bars)
     assert be.evaluate_multi_day_hold_on_bars is src_mdh
     assert offline.evaluate_multi_day_hold_on_bars is be.evaluate_multi_day_hold_on_bars
-    assert be.evaluate_multi_day_hold_on_bars is che_mdh
     for name in be.__all__:
         assert name.startswith("evaluate_") and name.endswith("_on_bars")
         assert callable(getattr(be, name))
+        assert inspect.getmodule(getattr(be, name)) is be
     doc = f"{be.__doc__ or ''} {__doc__ or ''}"
     assert "offline" in doc.lower()
     assert "not CF SoT" in doc
@@ -38,9 +34,7 @@ def test_offline_package_imports_bar_eval_and_multiyear() -> None:
 def test_multiyear_run_identity_after_body_move() -> None:
     fn = multiyear.run_class_hyp_multi_year_eval
     assert callable(fn)
-    if inspect.getmodule(fn) is not multiyear:
-        pytest.skip("body still in class_hyp_eval; identity after move")
-    assert che_run is fn
+    assert inspect.getmodule(fn) is multiyear
 
 
 def test_default_periods_are_eval_windows_and_cf_mass() -> None:

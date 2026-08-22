@@ -131,7 +131,7 @@ def connect_readonly(db_path: Any = None) -> sqlite3.Connection:
                 raise SnapshotNotReady(
                     "managed research snapshot is not READY; PIT access is denied. "
                     "Historical JSDA repo eval uses "
-                    "research.class_hyp_eval.load_repo_rows_all_tenors_from_sqlite "
+                    "research.eval_loaders.load_repo_rows_all_tenors_from_sqlite "
                     "(local sqlite / R2 history). D1 jsda_repo_rates is hot tip only. "
                     "Do not declare READY from this path."
                 )

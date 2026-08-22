@@ -117,7 +117,7 @@ cat /tmp/mass_eval_summary.json | jq .
 | `python -m research.unique_logic --backend local` | Serial local unique_logic fallback |
 | `research.single_shot_job` | Orthogonal tip signal jobs (not mass logic batch) |
 
-Python helper: `research.mass_strategy_factory.try_cf_minimal_mass_batch()` reports this worker.
+Python helper: `research.offline.factory.try_cf_minimal_mass_batch()` reports this worker.
 
 ## Not-yet-implemented (remaining gaps)
 
