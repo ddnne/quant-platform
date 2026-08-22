@@ -208,6 +208,12 @@ GATE_TITLE_CONTRA: tuple[tuple[str, tuple[str, ...]], ...] = (
             "tight overnight",
         ),
     ),
+    ("steep_curve", (
+        "not steep",
+        "is not steep",
+        "isn't steep",
+        "curve is not steep",
+    )),
 )
 
 # Occupancy is the gate predicate (EqAR change, repo-down). English slang

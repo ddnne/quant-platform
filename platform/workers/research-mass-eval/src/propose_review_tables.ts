@@ -26,6 +26,7 @@ export const GATE_TITLE_CONTRA: Array<[string, string[]]> = [
   ["overnight_tightening", ["easing", "easy funding"]],
   ["repo_3m_down", ["high repo", "repo rate is high", "rising repo", "repo up", "3m rate is high", "repo 3m rate is high", "rate is high"]],
   ["overnight_p10", ["rates are high", "high overnight", "overnight is high", "overnight rate is high", "overnight rates are high", "funding is tight", "tight overnight"]],
+  ["steep_curve", ["not steep", "is not steep", "isn't steep", "curve is not steep"]],
 ];
 
 export const GATE_OCCUPANCY_LABEL: Array<[string, string[]]> = [
@@ -264,6 +265,7 @@ export const SPARSE_GATE_COMBOS_REVIEW: string[][] = [
   ["eps_down", "overnight_p10", "pb_rising"],
   ["overnight_p10", "pb_rising", "sales_down"],
   ["overnight_p10", "pb_rising", "price_down"],
+  ["invert_curve", "overnight_p10", "sales_down"],
 ];
 
 export const OCCUPANCY_LABEL_EXCEPTIONS: Array<[string, string[]]> = [
