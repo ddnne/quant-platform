@@ -284,7 +284,6 @@ async function runMassEval(
     daily_path_complete: false,
     candidate_grade: false,
     wall_time_ms: Date.now() - t0,
-    period_ids: periodSpecs.map((p) => p.period_id),
     freezes,
     note:
       "Period-net screen only; n_survivors is not a daily_path_DD pass. " +
@@ -429,20 +428,11 @@ async function runDailyPath(
   }
 
   const cells: Array<Record<string, unknown>> = [];
-  const logicTimings: Array<Record<string, unknown>> = [];
   for (const logic of req.logics) {
-    const lt0 = Date.now();
     const packs = panels.map((p) =>
       evalLogicDailyPathOnPanel(logic, p, oneWay),
     );
-    const logicCells = cellsFromPeriodPacks(String(logic.logic_id), packs);
-    cells.push(...logicCells);
-    logicTimings.push({
-      logic_id: logic.logic_id,
-      wall_ms: Date.now() - lt0,
-      n_cells: logicCells.length,
-      n_complete: logicCells.filter((c) => c.daily_path_complete).length,
-    });
+    cells.push(...cellsFromPeriodPacks(String(logic.logic_id), packs));
   }
 
   const nComplete = cells.filter((c) => c.daily_path_complete).length;
@@ -454,14 +444,12 @@ async function runDailyPath(
     eval_kind: "daily_path",
     candidate_grade: true,
     parallel_model: "isolate_fanout_one_logic",
-    wall_clock_target: "batch ≈ longest isolate",
     mode,
     n_logics: req.logics.length,
     n_periods: periodSpecs.length,
     n_cells: cells.length,
     n_daily_path_complete: nComplete,
     cells,
-    logic_timings: logicTimings,
     panel_notes: panelNotes,
     panels_prefix: panelsPrefix,
     wall_time_ms: Date.now() - t0,
@@ -498,13 +486,6 @@ export default {
         token_required: Boolean(env.MASS_EVAL_TOKEN),
         modes: ["r2_panels", "d1_bars", "synthetic", "nets_only"],
         freezes: freezePayload(env),
-        endpoints: {
-          "GET /health": "liveness",
-          "POST /v1/mass-eval":
-            "period-net screen {seed, logics[], periods[], job_id, mode?}",
-          "POST /v1/daily-path":
-            "candidate-grade daily MTM; fan-out one logic per isolate",
-        },
       });
     }
 

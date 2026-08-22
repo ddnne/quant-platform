@@ -15,7 +15,6 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 from uuid import uuid4
 
-from data_contracts.permanent_defer import PERMANENT_DEFER_DATASETS
 from research.bar_native_specs import BAR_NATIVE_SPECS
 from research.cf_mass_eval_stage import (
     COMPLETE_22_DATASETS,
@@ -208,7 +207,6 @@ def default_logic_specs(
                 "signal_definition": row.get("signal_definition") or "",
                 "position_rule": row.get("position_rule") or "",
                 "datasets_used": list(row.get("datasets_used") or []),
-                "logic_fingerprint": row.get("logic_fingerprint") or "",
             }
         )
     return out
@@ -413,22 +411,6 @@ def build_cf_mass_eval_job_spec(
         "max_days": int(max_days),
         "one_way_cost": float(one_way_cost),
         "artifact": paths,
-        "datasets": {
-            "primary_bars": PRIMARY_BARS_DATASET,
-            "complete_22": list(COMPLETE_22_DATASETS),
-            "permanent_defer": sorted(PERMANENT_DEFER_DATASETS),
-        },
-        "shard_policy": {
-            "kind": (
-                "real_multiyear_r2_panels"
-                if mode_s == "r2_panels"
-                else (
-                    "d1_tip_bars"
-                    if mode_s == "d1_bars"
-                    else "lite_multi_period"
-                )
-            ),
-        },
         "freezes": _freeze(),
         "mass_research": MASS_RESEARCH,
         "ready_declared": False,

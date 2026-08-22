@@ -13,10 +13,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 from uuid import uuid4
 
-from data_contracts.permanent_defer import PERMANENT_DEFER_DATASETS
 from research.cf_mass_eval_job import (
-    ALLOWED_MODES,
-    CF_BAR_NATIVE_LOGIC_IDS,
     CF_MASS_EVAL_VERSION,
     CF_MASS_EVAL_WAVE,
     DEFAULT_LITE_PERIODS,
@@ -37,8 +34,6 @@ from research.cf_mass_eval_job import (
     resolve_research_run_token,
 )
 from research.cf_mass_eval_stage import (
-    COMPLETE_22_DATASETS,
-    PRIMARY_BARS_DATASET,
     RESEARCH_ARTIFACT_BUCKET,
     RESEARCH_ARTIFACT_PREFIX,
     normalize_period_row,
@@ -357,11 +352,7 @@ def run_cf_mass_eval_job(
         (worker_resp or {}).get("n_periods")
         or len(spec.get("periods") or [])
     )
-    n_evaluated = int(
-        (worker_resp or {}).get("n_eval_ok")
-        or (worker_resp or {}).get("n_evaluated")
-        or 0
-    )
+    n_evaluated = int((worker_resp or {}).get("n_eval_ok") or 0)
     n_survivors = int((worker_resp or {}).get("n_survivors") or 0)
     r2_keys = dict((worker_resp or {}).get("r2_keys") or {})
     if not r2_keys:
@@ -404,11 +395,6 @@ def run_cf_mass_eval_job(
         "r2_keys": r2_keys,
         "r2_puts": r2_puts,
         "panels_prefix": str(panels_prefix),
-        "datasets_used": {
-            "primary_bars": PRIMARY_BARS_DATASET,
-            "complete_22": list(COMPLETE_22_DATASETS),
-            "permanent_defer_excluded": sorted(PERMANENT_DEFER_DATASETS),
-        },
         "job_spec": {
             k: spec[k]
             for k in (
@@ -421,14 +407,11 @@ def run_cf_mass_eval_job(
                 "max_codes",
                 "max_days",
                 "one_way_cost",
-                "shard_policy",
-                "datasets",
             )
             if k in spec
         },
         "logic_ids": [L.get("logic_id") for L in (spec.get("logics") or [])],
         "period_ids": [P.get("period_id") for P in (spec.get("periods") or [])],
-        "periods": list(spec.get("periods") or []),
         "worker_response": worker_resp,
         "wall_time_sec": round(time.perf_counter() - t0, 3),
         **_freeze(),
@@ -443,17 +426,7 @@ def try_cf_mass_eval_status() -> dict[str, Any]:
         "wave": CF_MASS_EVAL_WAVE,
         "worker": DEFAULT_WORKER_NAME,
         "worker_url": DEFAULT_WORKER_URL,
-        "entry": "research.cf_mass_eval_job.run_cf_mass_eval_job",
-        "artifact_prefix": f"{RESEARCH_ARTIFACT_PREFIX}/job={{id}}/",
-        "bucket": RESEARCH_ARTIFACT_BUCKET,
         "default_mode": DEFAULT_MASS_EVAL_MODE,
-        "modes": sorted(ALLOWED_MODES),
-        "shard_policy": "real_multiyear_r2_panels",
-        "bar_native_logics": list(CF_BAR_NATIVE_LOGIC_IDS),
-        "complete_22": list(COMPLETE_22_DATASETS),
-        "real_multiyear_periods": [
-            p["period_id"] for p in DEFAULT_REAL_MULTIYEAR_PERIODS
-        ],
         "screen_kind": "period_net",
         "daily_path_complete": False,
         "candidate_grade": False,

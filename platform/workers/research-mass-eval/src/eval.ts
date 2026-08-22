@@ -1,7 +1,4 @@
-/**
- * Period-net screen. Missing sidecars → disclosed MDH
- * (`c21_lite_fallback_mdh:<family>`), never silent.
- */
+/** Period-net screen. Missing sidecars → disclosed MDH, never silent. */
 
 import {
   hasPairwiseLowVarianceArtifact,

@@ -38,9 +38,7 @@ export interface MassEvalRequest {
   logics: LogicSpec[];
   periods?: PeriodSpec[];
   job_id: string;
-  /** synthetic | r2_panels | d1_bars (tip) | nets_only */
   mode?: "synthetic" | "r2_panels" | "d1_bars" | "nets_only";
-  /** screen (period-net, not a pass) | daily_path */
   eval_kind?: "screen" | "daily_path";
   /** Fan-out shards skip R2 writes; the driver aggregates. */
   write_artifacts?: boolean;
@@ -217,7 +215,6 @@ export interface LogicEvalResult {
   mean_net_inverted: number | null;
   t_stat: number | null;
   t_stat_inverted: number | null;
-  /** ok | low_variance_artifact | n_lt_2 | … */
   t_stat_reason?: string;
   raw_t_stat?: number | null;
   low_variance_artifact?: boolean;

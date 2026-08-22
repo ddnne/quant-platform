@@ -5,10 +5,7 @@ import json
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
-from data_contracts.permanent_defer import (
-    PERMANENT_DEFER_DATASETS,
-    PERMANENT_DEFER_IDS,
-)
+from data_contracts.permanent_defer import PERMANENT_DEFER_DATASETS
 from research.cf_mass_eval_thicken import (
     THICKEN_PANEL_DATASETS,
     _build_thicken_sidecars,
@@ -104,7 +101,6 @@ def inventory_complete22() -> dict[str, Any]:
         "thicken_panel_datasets": list(THICKEN_PANEL_DATASETS),
         "permanent_defer_n": len(PERMANENT_DEFER_DATASETS),
         "permanent_defer": sorted(PERMANENT_DEFER_DATASETS),
-        "permanent_defer_ids": dict(PERMANENT_DEFER_IDS),
     }
 
 def build_real_period_panel(
@@ -263,15 +259,6 @@ def stage_real_panels_to_r2(
                 "source": panel.get("source"),
                 "dataset": panel.get("dataset"),
                 "r2_key": key,
-                "repo_n_rates": (panel.get("repo_rate_regime") or {}).get(
-                    "n_rates"
-                )
-                or (panel.get("repo_rate_regime") or {}).get("n_obs"),
-                "calendar_n_dates": (panel.get("calendar") or {}).get("n_dates"),
-                "flow_n_codes": (panel.get("flow_regime") or {}).get("n_codes"),
-                "fund_n_events": (panel.get("fund_regime") or {}).get(
-                    "n_events"
-                ),
             }
         )
     n_ok = sum(1 for p in panels if p.get("status") == "ok")

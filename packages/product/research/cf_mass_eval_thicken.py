@@ -165,10 +165,6 @@ def _build_thicken_sidecars(
             "short_tenor": curve.get("short_tenor"),
             "long_tenor": curve.get("long_tenor"),
             "n_rates": len(rates_by_date),
-            "n_spread": len(spread_by),
-            "ffill_applied": False,
-            "invent_fill": False,
-            "role": "funding_rate_sot",
         }
     except Exception as exc:  # pragma: no cover
         out["repo_rate_regime"] = {
@@ -225,7 +221,6 @@ def _build_thicken_sidecars(
             "margin_change_by_code": change_by_code,
             "n_codes": len(level_by_code),
             "n_obs": sum(len(v) for v in level_by_code.values()),
-            "role": "flow_demand_sidecar",
         }
     except Exception as exc:  # pragma: no cover
         out["flow_regime"] = {
@@ -301,7 +296,6 @@ def _build_thicken_sidecars(
             "events_by_code": compact,
             "n_codes": len(compact),
             "n_events": sum(len(v) for v in compact.values()),
-            "role": "fundamentals_sidecar",
         }
     except Exception as exc:  # pragma: no cover
         out["fund_regime"] = {

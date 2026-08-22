@@ -331,15 +331,7 @@ export async function loadR2Panels(
         adv_by_code: advByCode,
         source: raw.source || `r2:${keyUsed}`,
       });
-      const nRepo = repoByDate ? Object.keys(repoByDate).length : 0;
-      const nCal = calendar
-        ? calendar.n_dates ||
-          Object.keys(calendar.hol_div_by_date || {}).length ||
-          (calendar.dates || []).length
-        : 0;
-      notes.push(
-        `loaded:${keyUsed}:codes=${nCodes}:nky=${nky?.source || "none"}:opt225=${opt225?.dataset || (opt225 ? "staged" : "none")}:basevol=${baseVolSeries ? Object.keys(baseVolSeries).length : 0}:repo=${nRepo}:cal=${nCal}:flow=${flowRegime?.n_codes || 0}:fund=${fundRegime?.n_events || 0}`,
-      );
+      notes.push(`loaded:${keyUsed}:codes=${nCodes}`);
     } catch (e) {
       notes.push(`parse_error:${keyUsed}:${String(e)}`);
       panels.push({
