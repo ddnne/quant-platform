@@ -80,10 +80,10 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "id": "inventory_bias_recorded",
         "track": EVAL_TRACK_LIQ_LARGE,
         "why": (
-            "recorded research/eval/job=eval-inventory-bias-20260824e/ "
+            "recorded research/eval/job=eval-inventory-bias-20260824g/ "
             "inventory_bias.json; assert_new_batch_cheap_pb_cap refuses "
-            "new batches at 20%; thin sleeve exclude; 24e tight×px band; "
-            "24f clone 0-adopt; flatten+eps sleeve member"
+            "new batches at 20%; thin sleeve exclude; 24g tight×eps×sales "
+            "band (not sleeve); 24f clone 0-adopt"
         ),
         "not_a_pass": True,
         "go": False,
@@ -114,9 +114,8 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "track": EVAL_TRACK_LIQ_LARGE,
         "why": (
             "review_proposal_row title_gate_polarity_mismatch and "
-            "occupancy_label_only; Worker imports generated "
-            "propose_review_tables.ts and propose_allowed.ts; YAML follows "
-            "GATES not inverted labels"
+            "occupancy_label_only; Worker prompt joins generated "
+            "PROPOSE_ALLOWED_GATES / prefer; YAML follows GATES not inverted labels"
         ),
         "not_a_pass": True,
         "go": False,
@@ -235,9 +234,8 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "id": "adopt_occupancy_recorded",
         "track": EVAL_TRACK_LIQ_LARGE,
         "why": (
-            "eval-occupancy-audit-20260824e: 24e tight×px_down mid-band both "
-            "tracks; flatten×eps sleeve member; 0 near_empty sleeve members; "
-            "not a pass"
+            "eval-occupancy-audit-20260824g: 24g tight×eps×sales mid-band both "
+            "tracks; not a sleeve member; 0 near_empty sleeve members; not a pass"
         ),
         "not_a_pass": True,
         "go": False,

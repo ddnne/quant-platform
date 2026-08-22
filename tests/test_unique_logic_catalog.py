@@ -237,18 +237,13 @@ def test_yaml_dispatch_worker_event_ids_align() -> None:
     import inspect
 
     from research.cf_daily_path_job import CF_EVENT_DAILY_PATH_IDS
-    from research.unique_logic import all_unique_logic_specs
     from research.unique_logic.catalog import load_catalog_specs
     from research.unique_logic.constants import (
         CF_EVENT_DAILY_PATH_IDS as CONST_EVENT,
-        RESEARCH_UNIQUE_LOGIC_IDS,
     )
     from research.unique_logic.dispatch import evaluate_logic_daily_mtm
 
     yaml_ids = {s["logic_id"] for s in load_catalog_specs()}
-    py_ids = {s["logic_id"] for s in all_unique_logic_specs()}
-    assert yaml_ids == py_ids
-    assert yaml_ids == set(RESEARCH_UNIQUE_LOGIC_IDS)
     assert set(CF_EVENT_DAILY_PATH_IDS) == set(CONST_EVENT)
     assert set(CF_EVENT_DAILY_PATH_IDS) <= yaml_ids
     src = inspect.getsource(evaluate_logic_daily_mtm)
@@ -268,9 +263,8 @@ def test_yaml_dispatch_worker_event_ids_align() -> None:
     assert "event_skip_monday" in yaml_ids
     assert "cs_not_month_end" in yaml_ids
     assert "event_skip_monday" in CF_NEW_THESIS_IDS
-    from research.unique_logic.event_combos import NEW_COMBO_LOGIC
-    assert len(CF_NEW_THESIS_IDS) == len(NEW_COMBO_LOGIC)
     from research.unique_logic.constants import is_ungated_name_level_cs
+    from research.unique_logic.event_combos import NEW_COMBO_LOGIC
 
     fresh = [
         "event_eqar_high_liq_high",

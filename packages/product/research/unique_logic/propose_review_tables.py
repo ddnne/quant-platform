@@ -37,6 +37,27 @@ DEFAULT_PROPOSE_DATASETS: tuple[str, ...] = (
     "markets_calendar",
 )
 
+# Prompt prefer list. ⊆ PROPOSE_ALLOWED_GATES. roe_low omitted: recorded
+# empty 2/3-ANDs belong in SPARSE, not the prefer seed. cheap_pb is never
+# a primary seed (cap). Does not GO.
+PROPOSE_PROMPT_PREFER_GATES: tuple[str, ...] = (
+    "curve_flatten",
+    "overnight_p10",
+    "pb_rising",
+    "eps_down",
+    "np_negative",
+    "sales_down",
+    "invert_curve",
+    "tight_funding",
+    "price_down",
+)
+if not set(PROPOSE_PROMPT_PREFER_GATES) <= PROPOSE_ALLOWED_GATES:
+    raise RuntimeError("PROPOSE_PROMPT_PREFER_GATES must be propose-allowed")
+if "cheap_pb" in PROPOSE_PROMPT_PREFER_GATES:
+    raise RuntimeError("cheap_pb must not be a prefer seed")
+if "roe_low" in PROPOSE_PROMPT_PREFER_GATES:
+    raise RuntimeError("roe_low empty crosses stay SPARSE, not prefer")
+
 
 def prompt_direction_echo_x() -> tuple[str, ...]:
     """Unique lowercase x-normalized direction echoes for Worker drop."""
@@ -129,6 +150,8 @@ EXTRA_TITLE_GATES: tuple[tuple[str, str], ...] = (
     ("funding is easy", "easy_funding"),
     ("funding easy", "easy_funding"),
     ("eased funding", "easy_funding"),
+    ("eps surprises", "eps_down"),
+    ("eps surprise", "eps_down"),
     ("sales contraction", "sales_down"),
     ("sales contracted", "sales_down"),
     ("poor sales", "sales_down"),
@@ -203,6 +226,7 @@ def sparse_gate_combos_for_propose() -> tuple[tuple[str, ...], ...]:
 __all__ = [
     "DEFAULT_PROPOSE_DATASETS",
     "EXTRA_TITLE_GATES",
+    "PROPOSE_PROMPT_PREFER_GATES",
     "GATE_OCCUPANCY_LABEL",
     "GATE_TITLE_CONTRA",
     "OCCUPANCY_LABEL_EXCEPTIONS",

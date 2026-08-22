@@ -68,3 +68,15 @@ export const PROMPT_DIRECTION_ECHO_X = [
   "margin x price",
   "disclosure x funding",
 ] as const;
+
+export const PROPOSE_PROMPT_PREFER_GATES = [
+  "curve_flatten",
+  "overnight_p10",
+  "pb_rising",
+  "eps_down",
+  "np_negative",
+  "sales_down",
+  "invert_curve",
+  "tight_funding",
+  "price_down",
+] as const;

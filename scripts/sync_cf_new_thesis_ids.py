@@ -64,6 +64,7 @@ def _propose_allowed_source() -> str:
     from research.unique_logic.constants import PROPOSE_ALLOWED_GATES
     from research.unique_logic.propose_review_tables import (
         DEFAULT_PROPOSE_DATASETS,
+        PROPOSE_PROMPT_PREFER_GATES,
         PROPOSE_TWEAK_WORDS,
         prompt_direction_echo_x,
     )
@@ -84,6 +85,8 @@ def _propose_allowed_source() -> str:
         arr("PROPOSE_TWEAK_WORDS", list(PROPOSE_TWEAK_WORDS)),
         "",
         arr("PROMPT_DIRECTION_ECHO_X", list(prompt_direction_echo_x())),
+        "",
+        arr("PROPOSE_PROMPT_PREFER_GATES", list(PROPOSE_PROMPT_PREFER_GATES)),
         "",
     ]
     return "\n".join(parts)

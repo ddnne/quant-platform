@@ -48,6 +48,8 @@ export const EXTRA_TITLE_GATES: Array<[string, string]> = [
   ["funding is easy", "easy_funding"],
   ["funding easy", "easy_funding"],
   ["eased funding", "easy_funding"],
+  ["eps surprises", "eps_down"],
+  ["eps surprise", "eps_down"],
   ["sales contraction", "sales_down"],
   ["sales contracted", "sales_down"],
   ["poor sales", "sales_down"],

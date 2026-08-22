@@ -17,6 +17,27 @@ _YAML_DIR = Path(__file__).resolve().parents[1] / "specs" / "research_logics"
 
 
 def test_catalog_yaml_parity_with_python_specs() -> None:
+    """YAML stems == catalog == constants. One identity test; do not pin counts."""
+    import inspect
+    import re
+
+    from research.unique_logic import catalog as catalog_mod
+    from research.unique_logic import constants as constants_mod
+    from research.unique_logic.catalog import (
+        _COMBO_EVALUATOR,
+        _yaml_combo_kind,
+        unique_family_ids_from_yaml,
+    )
+    from research.unique_logic.constants import (
+        ADAPTIVE_LOGIC_IDS,
+        CF_NEW_CS_THESIS_IDS,
+        CF_NEW_EVENT_THESIS_IDS,
+        CS_LOGIC_IDS,
+        EVENT_FILTER_LOGIC_IDS,
+        EVENT_LOGIC_IDS,
+        EVENT_SIDES_LOGIC_IDS,
+        RESEARCH_UNIQUE_LOGIC_IDS,
+    )
     from research.unique_logic.event_combos import NEW_COMBO_LOGIC
 
     catalog = load_catalog_specs()
@@ -25,8 +46,7 @@ def test_catalog_yaml_parity_with_python_specs() -> None:
     yaml_ids = {p.stem for p in _YAML_DIR.glob("*.yaml")}
     combo_ids = {s["logic_id"] for s in NEW_COMBO_LOGIC}
 
-    assert catalog_ids == py_ids
-    assert yaml_ids == py_ids
+    assert catalog_ids == py_ids == yaml_ids == set(RESEARCH_UNIQUE_LOGIC_IDS)
     missing_combo_files = sorted(
         lid for lid in combo_ids if not (_YAML_DIR / f"{lid}.yaml").is_file()
     )
@@ -36,6 +56,9 @@ def test_catalog_yaml_parity_with_python_specs() -> None:
     assert set(CF_NEW_THESIS_IDS) <= catalog_ids
     assert WORKER_ISOLATE_LIMIT_IDS == frozenset()
 
+    event: set[str] = set()
+    cs: set[str] = set()
+    surprise_xs: set[str] = set()
     for spec in catalog:
         assert spec.get("go") is not True
         assert spec.get("promote_as_main") is not True
@@ -43,78 +66,9 @@ def test_catalog_yaml_parity_with_python_specs() -> None:
         path = Path(spec["catalog_path"])
         assert path.stem == spec["logic_id"]
         assert path.is_file()
-    for spec in all_unique_logic_specs():
-        assert spec.get("go") is not True
-        assert spec.get("promote_as_main") is not True
-        assert spec.get("generation_enabled") is False
-    for spec in NEW_COMBO_LOGIC:
-        assert spec.get("generation_enabled") is False
-        assert spec.get("go") is not True
-
-
-def test_combo_yaml_gates_cs_gate_side_match_specs() -> None:
-    from research.unique_logic.catalog import yaml_combo_rows
-    from research.unique_logic.event_combos import (
-        NEW_COMBO_LOGIC,
-        assert_yaml_matches_specs,
-        spec_by_id,
-    )
-
-    assert_yaml_matches_specs()
-    yaml_rows = yaml_combo_rows()
-    yaml_ids = {r["logic_id"] for r in yaml_rows}
-    py_ids = {s["logic_id"] for s in NEW_COMBO_LOGIC}
-    assert py_ids == yaml_ids
-    sample = NEW_COMBO_LOGIC[0]
-    rt = spec_by_id(sample["logic_id"])
-    assert rt is not None
-    assert rt["logic_id"] == sample["logic_id"]
-    assert rt.get("go") is not True
-    # Runtime dispatch walks YAML-derived NEW_COMBO_LOGIC.
-    assert rt is sample
-    import inspect
-
-    from research.unique_logic import catalog as catalog_mod
-
-    src = inspect.getsource(catalog_mod.yaml_combo_rows)
-    assert "import NEW_COMBO_LOGIC" not in src
-    assert "NEW_COMBO_LOGIC" not in src
-    assert "_COMBO_EVALUATOR" in src
-
-
-def test_cf_new_thesis_ids_match_yaml_combo_kind() -> None:
-    import inspect
-
-    from research.unique_logic import catalog as catalog_mod
-    from research.unique_logic import constants as constants_mod
-    from research.unique_logic.catalog import (
-        _COMBO_EVALUATOR,
-        _yaml_combo_kind,
-        load_catalog_specs,
-    )
-    from research.unique_logic.constants import (
-        ADAPTIVE_LOGIC_IDS,
-        CF_NEW_CS_THESIS_IDS,
-        CF_NEW_EVENT_THESIS_IDS,
-        CF_NEW_THESIS_IDS,
-        CS_LOGIC_IDS,
-        EVENT_FILTER_LOGIC_IDS,
-        EVENT_LOGIC_IDS,
-        EVENT_SIDES_LOGIC_IDS,
-        RESEARCH_UNIQUE_LOGIC_IDS,
-    )
-
-    event: set[str] = set()
-    cs: set[str] = set()
-    surprise_xs: set[str] = set()
-    yaml_ids: set[str] = set()
-    combo_ids: set[str] = set()
-    for spec in load_catalog_specs():
         lid = str(spec.get("logic_id") or "")
-        yaml_ids.add(lid)
         if str(spec.get("evaluator") or "") != _COMBO_EVALUATOR:
             continue
-        combo_ids.add(lid)
         params = spec.get("params")
         cs_raw = params.get("cs_gate") if isinstance(params, dict) else None
         cs_gate = None if cs_raw in (None, "", "None") else str(cs_raw)
@@ -125,65 +79,9 @@ def test_cf_new_thesis_ids_match_yaml_combo_kind() -> None:
             surprise_xs.add(lid)
         else:
             event.add(lid)
-
-    original = (
-        EVENT_LOGIC_IDS
-        | EVENT_FILTER_LOGIC_IDS
-        | EVENT_SIDES_LOGIC_IDS
-        | ADAPTIVE_LOGIC_IDS
-        | CS_LOGIC_IDS
-    )
-    assert yaml_ids - combo_ids == set(original)
-    assert combo_ids == set(CF_NEW_THESIS_IDS)
-    assert event | surprise_xs == set(CF_NEW_EVENT_THESIS_IDS)
-    assert cs == set(CF_NEW_CS_THESIS_IDS)
-    assert len(CF_NEW_EVENT_THESIS_IDS) == len(event) + len(surprise_xs)
-    assert len(CF_NEW_CS_THESIS_IDS) == len(cs)
-    assert len(CF_NEW_THESIS_IDS) == len(combo_ids)
-    assert len(RESEARCH_UNIQUE_LOGIC_IDS) == len(original) + len(CF_NEW_THESIS_IDS)
-    assert yaml_ids == set(RESEARCH_UNIQUE_LOGIC_IDS)
-
-    helper_src = inspect.getsource(catalog_mod.combo_thesis_ids_by_kind)
-    assert "from research.unique_logic.event_combos" not in helper_src
-    assert "_combo_row" not in helper_src
-    assert "NEW_COMBO_LOGIC" not in helper_src
-    const_src = inspect.getsource(constants_mod)
-    assert "event_funding_tight_fade" not in const_src
-    assert "overnight_tight_cs_fade" not in const_src
-    assert EVENT_LOGIC_IDS
-    assert EVENT_FILTER_LOGIC_IDS
-    assert EVENT_SIDES_LOGIC_IDS
-    assert ADAPTIVE_LOGIC_IDS
-    assert CS_LOGIC_IDS
-    assert (
-        EVENT_LOGIC_IDS
-        | EVENT_FILTER_LOGIC_IDS
-        | EVENT_SIDES_LOGIC_IDS
-        | ADAPTIVE_LOGIC_IDS
-        | CS_LOGIC_IDS
-    ) == original
-
-
-def test_original_22_ids_from_yaml() -> None:
-    import inspect
-    import re
-
-    from research.unique_logic import catalog as catalog_mod
-    from research.unique_logic import constants as constants_mod
-    from research.unique_logic.catalog import (
-        _COMBO_EVALUATOR,
-        load_catalog_specs,
-        unique_family_ids_from_yaml,
-    )
-    from research.unique_logic.constants import (
-        ADAPTIVE_LOGIC_IDS,
-        CF_NEW_THESIS_IDS,
-        CS_LOGIC_IDS,
-        EVENT_FILTER_LOGIC_IDS,
-        EVENT_LOGIC_IDS,
-        EVENT_SIDES_LOGIC_IDS,
-        RESEARCH_UNIQUE_LOGIC_IDS,
-    )
+    for spec in NEW_COMBO_LOGIC:
+        assert spec.get("generation_enabled") is False
+        assert spec.get("go") is not True
 
     families = unique_family_ids_from_yaml()
     assert set(families) == {
@@ -205,32 +103,23 @@ def test_original_22_ids_from_yaml() -> None:
         | ADAPTIVE_LOGIC_IDS
         | CS_LOGIC_IDS
     )
-    yaml_ids: set[str] = set()
-    combo_ids: set[str] = set()
-    for spec in load_catalog_specs():
-        lid = str(spec.get("logic_id") or "")
-        yaml_ids.add(lid)
-        assert spec.get("go") is not True
-        assert spec.get("generation_enabled") is False
-        if str(spec.get("evaluator") or "") == _COMBO_EVALUATOR:
-            combo_ids.add(lid)
-            assert spec.get("family") in (None, "")
-            continue
-        assert spec.get("family") in set(families)
     assert yaml_ids - combo_ids == set(original)
+    assert combo_ids == set(CF_NEW_THESIS_IDS)
+    assert event | surprise_xs == set(CF_NEW_EVENT_THESIS_IDS)
+    assert cs == set(CF_NEW_CS_THESIS_IDS)
     assert original.isdisjoint(CF_NEW_THESIS_IDS)
-    assert yaml_ids == set(RESEARCH_UNIQUE_LOGIC_IDS)
-    assert len(RESEARCH_UNIQUE_LOGIC_IDS) == len(original) + len(CF_NEW_THESIS_IDS)
     assert original | set(CF_NEW_THESIS_IDS) == set(RESEARCH_UNIQUE_LOGIC_IDS)
 
-    helper_src = inspect.getsource(catalog_mod.unique_family_ids_from_yaml)
+    helper_src = inspect.getsource(catalog_mod.combo_thesis_ids_by_kind)
+    helper_src += inspect.getsource(catalog_mod.unique_family_ids_from_yaml)
     helper_src += inspect.getsource(catalog_mod._unique_family_key)
     assert "from research.unique_logic.event_combos" not in helper_src
     assert "NEW_COMBO_LOGIC" not in helper_src
-    assert "_COMBO_EVALUATOR" in helper_src
-    assert "Does not GO" in inspect.getsource(catalog_mod.unique_family_ids_from_yaml)
+    assert "_combo_row" not in helper_src
     const_src = inspect.getsource(constants_mod)
     assert "unique_family_ids_from_yaml()" in const_src
+    assert "combo_thesis_ids_by_kind()" in const_src
+    assert "event_funding_tight_fade" not in const_src
     for lid in original:
         assert lid not in const_src
     from research.unique_logic import (
@@ -262,6 +151,36 @@ def test_original_22_ids_from_yaml() -> None:
             assert re.search(r"(?m)^generation_enabled:\s*true\s*$", body) is None
         else:
             assert re.search(r"(?m)^family:", body) is None
+
+
+def test_combo_yaml_gates_cs_gate_side_match_specs() -> None:
+    from research.unique_logic.catalog import yaml_combo_rows
+    from research.unique_logic.event_combos import (
+        NEW_COMBO_LOGIC,
+        assert_yaml_matches_specs,
+        spec_by_id,
+    )
+
+    assert_yaml_matches_specs()
+    yaml_rows = yaml_combo_rows()
+    yaml_ids = {r["logic_id"] for r in yaml_rows}
+    py_ids = {s["logic_id"] for s in NEW_COMBO_LOGIC}
+    assert py_ids == yaml_ids
+    sample = NEW_COMBO_LOGIC[0]
+    rt = spec_by_id(sample["logic_id"])
+    assert rt is not None
+    assert rt["logic_id"] == sample["logic_id"]
+    assert rt.get("go") is not True
+    # Runtime dispatch walks YAML-derived NEW_COMBO_LOGIC.
+    assert rt is sample
+    import inspect
+
+    from research.unique_logic import catalog as catalog_mod
+
+    src = inspect.getsource(catalog_mod.yaml_combo_rows)
+    assert "import NEW_COMBO_LOGIC" not in src
+    assert "NEW_COMBO_LOGIC" not in src
+    assert "_COMBO_EVALUATOR" in src
 
 
 # Frozen theme keys from the former constants.ECONOMIC_THEME_IDS block.

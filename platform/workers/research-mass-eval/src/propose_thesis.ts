@@ -7,6 +7,7 @@ import {
   PROMPT_DIRECTION_ECHO_X,
   PROPOSE_ALLOWED_DATASETS,
   PROPOSE_ALLOWED_GATES,
+  PROPOSE_PROMPT_PREFER_GATES,
   PROPOSE_TWEAK_WORDS,
 } from "./propose_allowed";
 import {
@@ -174,20 +175,16 @@ async function llmProposals(
 }> {
   if (!env.AI) return { rows: null, reason: "ai_unbound", model: null };
   const avoid = whyAvoid.filter(Boolean).slice(0, 24).join(", ") || "(none)";
+  const sparseBan = SPARSE_GATE_COMBOS_REVIEW.filter((c) => c.length === 2)
+    .map((c) => `Do not pair ${c[0]} with ${c[1]}.`)
+    .join(" ");
   const system =
     "Return ONLY a JSON array. Each object: thesis, signal_definition, " +
     "position_rule, datasets, gates, why_different_from. " +
-    "gates: 2 or 3 from curve_flatten, overnight_p10, pb_rising, roe_low, " +
-    "eps_down, np_negative, sales_down, invert_curve, tight_funding, " +
-    "overnight_tightening, margin_up, margin_down, crowded_margin, " +
-    "uncrowded_margin, repo_3m_down, overnight_easing, steep_curve, " +
-    "eq_ar_rising, eq_ar_falling, ta_up, ta_down, cheap_iv, rich_iv, " +
-    "nky_vol_high_skip, large_surprise, on_impulse, pre_mom, liq_high, " +
-    "eps_up, price_down, easy_funding, cluster, afterclose, positive_eps. " +
-    "Prefer curve_flatten, overnight_p10, pb_rising, roe_low, eps_down, " +
-    "np_negative, sales_down, invert_curve, tight_funding. " +
-    "Do not pair nky_vol_high_skip with steep_curve. Do not pair cheap_iv with steep_curve. " +
-    "Do not start with cheap_pb. No weekday. No opposite pairs. " +
+    `gates: 2 or 3 from ${PROPOSE_ALLOWED_GATES.join(", ")}. ` +
+    `Prefer ${PROPOSE_PROMPT_PREFER_GATES.join(", ")}. ` +
+    sparseBan +
+    " Do not start with cheap_pb. No weekday. No opposite pairs. " +
     "Thesis is an occupancy sentence matching gate polarity. EqAR is not risk appetite. " +
     "ta_up is total assets, not technical analysis. No A×B×C labels. " +
     "Do not invent datasets, fields, or gates. No logic_id. No inject.";

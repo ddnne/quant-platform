@@ -185,6 +185,14 @@ def test_worker_index_contains_propose_thesis_route() -> None:
     propose_src = _WORKER_PROPOSE.read_text(encoding="utf-8")
     assert "const PROPOSE_ALLOWED_GATES = [" not in propose_src
     assert "const PROPOSE_ALLOWED_DATASETS = [" not in propose_src
+    assert "PROPOSE_ALLOWED_GATES.join" in propose_src
+    assert "PROPOSE_PROMPT_PREFER_GATES.join" in propose_src
+    assert "Prefer curve_flatten, overnight_p10" not in propose_src
+    from research.unique_logic.propose_review_tables import PROPOSE_PROMPT_PREFER_GATES
+
+    assert "roe_low" not in PROPOSE_PROMPT_PREFER_GATES
+    assert "cheap_pb" not in PROPOSE_PROMPT_PREFER_GATES
+    assert set(PROPOSE_PROMPT_PREFER_GATES) <= set(PROPOSE_ALLOWED_GATES)
     assert "rising price-to-book" not in src
     assert "auto_inject: false" in src
     assert "markets_margin_interest" in src
@@ -439,6 +447,12 @@ def test_review_proposal_row_occupancy_and_polarity_table() -> None:
             ["curve_flatten", "eps_down"],
             "occupancy_label_only",
             None,
+        ),
+        (
+            "Inverted curve when EPS surprises are negative AND price momentum is down.",
+            ["invert_curve", "np_negative", "price_down"],
+            "occupancy_label_only",
+            "PEAD when the repo curve inverted AND net profit is negative AND price is down",
         ),
     ]
     for bad_thesis, gates, reason, good_thesis in rows:
