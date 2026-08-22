@@ -1,22 +1,10 @@
-"""Phase 3.5 — Validation matrix coverage runner (offline, SQLite-only).
+"""Phase 3.5 — validation matrix coverage runner (offline, SQLite-only).
 
-Pure functions that execute the catalog checks in
-:mod:`cf_platform.ingest_premium.matrix` against a **local** PIT SQLite DB
-(the kind Phase 3.5's sync script produces). No network, no D1, no Cloudflare
-calls. The CLI shim in ``scripts/run_phase35_validation.py`` is a thin
-wrapper around :func:`run_coverage`.
+Catalog checks from :mod:`cf_platform.ingest_premium.matrix` against a local
+PIT SQLite DB. No network/D1/CF. CLI: ``scripts/run_phase35_validation.py``.
 
-Two tiers (matches the doc):
-
-* ``daily`` — cheap per-run checks: C1–C5, C8, C12, B2, B4, K3, X4.
-  Every id below has runnable logic over the SQLite DB; nothing here is
-  stubbed.
-* ``weekly`` — broader checks. We implement as many as is practical from
-  fixture/seed DBs; the remainder return ``status="skip"`` with
-  ``detail="not_implemented"`` so the catalog is exhaustive without lying
-  about coverage.
-
-Output: ``list[CheckResult]``. The CLI converts that to JSON or human text.
+* ``daily`` — C1–C5, C8, C12, B2, B4, K3, X4 (all implemented).
+* ``weekly`` — broader; unimplemented ids skip with ``not_implemented``.
 """
 
 from __future__ import annotations
@@ -28,38 +16,19 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 from . import matrix
-from .matrix import CheckDef
 from .validate import PREMIUM_CORE_DATASETS
 
-# Order-of-magnitude live gates (shared with Phase 4). Offline fixtures use
-# scaled data; report metrics always. Enforce only when ``strict_live_gates``.
-LIVE_GATES: dict[str, float] = {
-    "master_min_issuers": 3000,
-    "bars_min_issuers": 3000,
-    "bars_min_rows_latest_day": 3000,
-    "trading_days_per_year_lo": 230,
-    "trading_days_per_year_hi": 255,
-}
-
-# Conservative assumed Premium-start dates per dataset, used by C6/C7.
-# Source: J-Quants data-spec (https://jpx-jquants.com/en/spec/data-spec).
-# Values are rounded toward the *nearest recent* month — i.e. deliberately
-# conservative (a later start ⇒ a shorter expected window ⇒ a more forgiving
-# fill-rate). Where the official start is disputed or plan-dependent, we
-# pick the latest plausible public start. **These are assumptions, not
-# contractual truths** — update as the spec evolves.
+# C6/C7 assumed Premium-start dates (conservative; not contractual).
 EXPECTED_START: dict[str, str] = {
     # W98 / w0819a: PRE_PLAN 2000-07..2006-07 de-scoped (subscription OOS).
-    # MISDATE 2006-08..2008-04 remains required-window PARTIAL (PD-D2-MASTER).
     "equities_master": "2006-08-13",
-    # Raised to proven observed floors (w0815ae/W38; docs/proof/observed_floor_catalog_20260815.md)
-    "equities_bars_daily": "2008-05-01",
-    "equities_bars_daily_am": "2024-01-04",   # AM is recent-only by spec
+    "equities_bars_daily": "2008-05-01",  # w0815ae/W38 observed floor
+    "equities_bars_daily_am": "2024-01-04",  # AM recent-only by spec
     "fins_summary": "2008-07-01",
     "fins_details": "2018-01-01",
     "fins_dividend": "2013-02-01",
     "fins_earnings_date": "2018-01-01",
-    "equities_earnings_calendar": "2010-01-04",  # tip-only vendor; not raised
+    "equities_earnings_calendar": "2010-01-04",  # tip-only vendor
     "markets_calendar": "2008-01-01",
     "equities_investor_types": "2013-01-04",
     "indices_bars_daily_topix": "2008-05-01",
@@ -77,46 +46,29 @@ EXPECTED_START: dict[str, str] = {
     "edinet_large_volume_shareholders": "2021-07-01",
 }
 
-# Fill-rate thresholds for C6/C7. Below ``WARN_RATE`` the row is at least a
-# warning; below ``FAIL_RATE`` it is a failure in strict mode (warns softly
-# offline). ``PASS_RATE`` is the floor for an unqualified pass.
 _C6_C7_PASS_RATE = 0.90
 _C6_C7_WARN_RATE = 0.50
 _C6_C7_FAIL_RATE = 0.20
 
-# Datasets with dedicated fact tables in addition to (or instead of) the
-# generic ``jquants_records`` table. The runner unions both so it works
-# against DBs produced by either the Phase-1 local ingestion or the
-# Phase-3.5 sync script.
 _SPECIALIZED: dict[str, str] = {
     "equities_master": "jquants_listed_info",
     "equities_bars_daily": "jquants_daily_bars",
     "markets_calendar": "jquants_market_calendar",
 }
 
-# Addon ids that must NEVER appear in the required schedule (C12).
 _ADDON_IDS: frozenset[str] = frozenset({
     "equities_bars_minute", "equities_trades",
     "td_list", "td_files", "td_bulk",
 })
 
-# Freshness window for C8 (calendar trading days). Conservative default —
-# weekends/holidays are excluded so a Friday run still passes on Monday.
 _DEFAULT_FRESHNESS_DAYS = 7
 
 Status = str  # "pass" | "fail" | "skip" | "warn"
 
 
-# ---------------------------------------------------------------------------
-# Output type
-# ---------------------------------------------------------------------------
 @dataclass(frozen=True)
 class CheckResult:
-    """One executed check row. ``dataset`` is None for cross-cutting checks.
-
-    ``metrics`` carries the numbers that drove the decision (row counts,
-    min/max dates, etc.) so the JSON view is self-explaining.
-    """
+    """One executed check row. ``dataset`` is None for cross-cutting checks."""
 
     check_id: str
     dataset: str | None
@@ -125,20 +77,11 @@ class CheckResult:
     metrics: dict[str, Any] = field(default_factory=dict)
 
     def as_log_dict(self) -> dict[str, Any]:
-        d = asdict(self)
-        return d
+        return asdict(self)
 
 
-# ---------------------------------------------------------------------------
-# Connection helpers
-# ---------------------------------------------------------------------------
 def _connect(db_path: str | Path) -> sqlite3.Connection:
-    """Open the SQLite DB read-only. ``-uri`` form lets us force ``mode=ro``.
-
-    PIT-style: never write. If the path doesn't exist, sqlite3.connect would
-    create it; using the URI form with ``mode=ro`` raises OperationalError
-    instead, which the caller surfaces as a skip.
-    """
+    """Open SQLite read-only (URI ``mode=ro`` so a missing path errors)."""
     p = Path(db_path)
     uri = f"file:{p.as_posix()}?mode=ro"
     conn = sqlite3.connect(uri, uri=True)
@@ -154,12 +97,7 @@ def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
 
 
 def _dataset_rowcount(conn: sqlite3.Connection, dataset: str) -> int:
-    """Count rows for a dataset across generic and specialized tables.
-
-    The CF sync lands everything in ``jquants_records``; the Phase-1 local
-    ingestion path uses dedicated tables. Union both so the runner works on
-    either layout.
-    """
+    """Count rows across generic ``jquants_records`` and dedicated fact tables."""
     total = 0
     if _table_exists(conn, "jquants_records"):
         cur = conn.execute(
@@ -168,11 +106,7 @@ def _dataset_rowcount(conn: sqlite3.Connection, dataset: str) -> int:
         total += int(cur.fetchone()[0] or 0)
     spec = _SPECIALIZED.get(dataset)
     if spec and _table_exists(conn, spec):
-        # Specialized tables don't have a ``dataset`` column — every row in
-        # them IS the dataset. ``equities_master`` has one row per
-        # (code, snapshot_date); the row count (not distinct-code count) is
-        # what we want, matching what ``rows_inserted`` measures on the
-        # CF Worker side.
+        # Specialized tables have no dataset column; count every row.
         cur = conn.execute("SELECT COUNT(*) FROM " + spec)
         total += int(cur.fetchone()[0] or 0)
     return total
@@ -269,22 +203,10 @@ def _codes_for_master(conn: sqlite3.Connection) -> set[str]:
     return codes
 
 
-# ---------------------------------------------------------------------------
-# Real run-log readers (P0-2): prefer ingestion_validation / ingestion_run_log
-# over "any rows exist" when the sync script mirrored them.
-# ---------------------------------------------------------------------------
 def _latest_validation_for_dataset(
     conn: sqlite3.Connection, dataset: str
 ) -> dict[str, Any] | None:
-    """Latest ``ingestion_validation`` row for ``dataset`` (or ``None``).
-
-    The CF Worker records one row per (run, dataset) on D1, and the local
-    sync script mirrors those into the same table on SQLite. We sort by
-    ``started_at`` descending so the most recent outcome wins — exactly what
-    C1/C2 are supposed to surface. Returns a plain ``dict`` so callers can
-    pick the fields they need (status, rows_inserted, detail, started_at,
-    available_at_min, ...).
-    """
+    """Latest ``ingestion_validation`` row for ``dataset`` (or ``None``)."""
     if not _table_exists(conn, "ingestion_validation"):
         return None
     try:
@@ -316,12 +238,7 @@ def _latest_validation_for_dataset(
 
 
 def _latest_run_log(conn: sqlite3.Connection) -> dict[str, Any] | None:
-    """Latest ``ingestion_run_log`` row across all sources.
-
-    Used by C1 as a fallback signal that *something* has run, even when the
-    per-dataset ``ingestion_validation`` table is absent (some Phase-1
-    ingestion paths only log here). Sorted by ``ran_at`` descending.
-    """
+    """Latest ``ingestion_run_log`` row (C1 fallback when validation is absent)."""
     if not _table_exists(conn, "ingestion_run_log"):
         return None
     try:
@@ -400,14 +317,7 @@ def _bar_dates(conn: sqlite3.Connection) -> set[str]:
 def _calendar_dates(
     conn: sqlite3.Connection, *, trading_only: bool = True
 ) -> set[str]:
-    """Dates from ``markets_calendar``. ``trading_only`` filters HolidayDivision.
-
-    HolidayDivision '1' is a trading day in the J-Quants schema. Anything
-    else (0 / empty) is a holiday/weekend. When the column is null on all
-    rows (raw JSON-only sync), we fall back to returning every calendar
-    date seen — the bar-gap check then degrades to a no-op rather than
-    spurious failures.
-    """
+    """Dates from ``markets_calendar``. ``trading_only`` keeps HolidayDivision=1."""
     dates: set[str] = set()
     if _table_exists(conn, "jquants_market_calendar"):
         if trading_only:
@@ -421,7 +331,6 @@ def _calendar_dates(
             )
         dates.update(r[0] for r in cur.fetchall() if r[0])
     if _table_exists(conn, "jquants_records"):
-        # Synced generic rows: holiday_division lives in the payload JSON.
         cur = conn.execute(
             "SELECT payload FROM jquants_records WHERE dataset='markets_calendar'"
         )
@@ -432,7 +341,6 @@ def _calendar_dates(
                 obj = json.loads(payload)
             except (TypeError, ValueError):
                 continue
-            # J-Quants API uses HolDiv; some local normalizers use HolidayDivision.
             div = obj.get("HolidayDivision", obj.get("HolDiv"))
             is_trading = str(div) == "1"
             d = obj.get("Date")
@@ -441,17 +349,8 @@ def _calendar_dates(
     return dates
 
 
-# ---------------------------------------------------------------------------
-# Individual check implementations
-# ---------------------------------------------------------------------------
 def _check_c1(conn: sqlite3.Connection, datasets: Iterable[str]) -> list[CheckResult]:
-    """C1 — Job exists: in required set + run record (any data) present.
-
-    P0-2 honesty: when the CF/D1 ``ingestion_validation`` table is synced
-    locally we prefer it as the source of truth (one row per (run, dataset)
-    with explicit ``status``). Otherwise we fall back to ``ingestion_run_log``
-    (run-level), and only as a last resort to "any fact row present".
-    """
+    """C1 — job exists: required set + validation/run log/facts."""
     out: list[CheckResult] = []
     required = set(PREMIUM_CORE_DATASETS)
     present = _datasets_present(conn)
@@ -463,7 +362,6 @@ def _check_c1(conn: sqlite3.Connection, datasets: Iterable[str]) -> list[CheckRe
         vrow = _latest_validation_for_dataset(conn, ds) if has_validation_tbl else None
         run = _latest_run_log(conn) if (has_run_log_tbl and vrow is None) else None
         if in_required and vrow is not None:
-            # Real validation row wins: status comes from the Worker.
             metrics: dict[str, Any] = {
                 "in_required": True,
                 "has_data": has_data,
@@ -472,7 +370,6 @@ def _check_c1(conn: sqlite3.Connection, datasets: Iterable[str]) -> list[CheckRe
                 "rows_inserted": vrow["rows_inserted"],
                 "source": "ingestion_validation",
             }
-            # Pass/fail mirrors the validation row — that's the whole point.
             out.append(CheckResult(
                 "C1", ds,
                 "pass" if str(vrow["status"]).lower() == "pass" else "fail",
@@ -481,9 +378,6 @@ def _check_c1(conn: sqlite3.Connection, datasets: Iterable[str]) -> list[CheckRe
                 metrics,
             ))
         elif in_required and run is not None and has_data:
-            # No per-dataset row, but a run log entry exists and the dataset
-            # is present in facts. Treat as warn: the job ran but the
-            # explicit outcome was not synced.
             out.append(CheckResult(
                 "C1", ds, "warn",
                 f"in required set + data present; run_log only "
@@ -503,7 +397,6 @@ def _check_c1(conn: sqlite3.Connection, datasets: Iterable[str]) -> list[CheckRe
                                    "in required set but no rows synced",
                                    {"in_required": True, "has_data": False}))
         else:
-            # Not in required set — shouldn't happen for PREMIUM_CORE iter.
             out.append(CheckResult("C1", ds, "warn",
                                    "dataset not in required set",
                                    {"in_required": False, "has_data": has_data}))
@@ -511,21 +404,13 @@ def _check_c1(conn: sqlite3.Connection, datasets: Iterable[str]) -> list[CheckRe
 
 
 def _check_c2(conn: sqlite3.Connection, datasets: Iterable[str]) -> list[CheckResult]:
-    """C2 — Last run outcome: prefer ``ingestion_validation``; fallback to facts.
-
-    P0-2 honesty: when ``ingestion_validation`` is present, C2 mirrors the
-    per-dataset ``status`` exactly. When only fact rows are available, C2
-    degrades to ``warn`` (not pass) with the explicit note that "no run log
-    was synced; data present only" — so a green offline report can never be
-    confused with a real per-job pass verdict.
-    """
+    """C2 — last run outcome from ``ingestion_validation``; facts-only is warn."""
     out: list[CheckResult] = []
     has_validation_tbl = _table_exists(conn, "ingestion_validation")
     for ds in datasets:
         n = _dataset_rowcount(conn, ds)
         vrow = _latest_validation_for_dataset(conn, ds) if has_validation_tbl else None
         if vrow is not None:
-            # Real validation row — mirror its status with row metadata.
             metrics: dict[str, Any] = {
                 "row_count": n,
                 "validation_status": vrow["status"],
@@ -544,7 +429,6 @@ def _check_c2(conn: sqlite3.Connection, datasets: Iterable[str]) -> list[CheckRe
                 detail, metrics,
             ))
         elif n > 0:
-            # No run log; data present only. P0-2 contract: warn, not pass.
             out.append(CheckResult(
                 "C2", ds, "warn",
                 f"{n} rows synced; no run log; data present only",
@@ -559,12 +443,7 @@ def _check_c2(conn: sqlite3.Connection, datasets: Iterable[str]) -> list[CheckRe
 
 
 def _empty_but_run_ok(conn: sqlite3.Connection, dataset: str) -> bool:
-    """True when the latest validation row says pass with zero inserts.
-
-    Some Premium endpoints legitimately return empty ``data`` for a given
-    market day (or require a ``code`` fan-out not yet enabled). Treating that
-    as a hard C3/C4/C8 fail drowns real failures in noise.
-    """
+    """True when latest validation is pass with zero inserts (empty market day)."""
     v = _latest_validation_for_dataset(conn, dataset)
     if v is None:
         return False
@@ -575,7 +454,7 @@ def _empty_but_run_ok(conn: sqlite3.Connection, dataset: str) -> bool:
 
 
 def _check_c3(conn: sqlite3.Connection, datasets: Iterable[str]) -> list[CheckResult]:
-    """C3 — Row count not zero (unless latest validation recorded empty-pass)."""
+    """C3 — row count not zero (unless latest validation recorded empty-pass)."""
     out: list[CheckResult] = []
     for ds in datasets:
         n = _dataset_rowcount(conn, ds)
@@ -638,12 +517,7 @@ def _check_c8(
     today: str | None = None,
     max_days: int = _DEFAULT_FRESHNESS_DAYS,
 ) -> list[CheckResult]:
-    """C8 — Freshness: latest event_time within N calendar days of ``today``.
-
-    ``today`` defaults to the latest ``ingested_at`` in the DB (so a stale
-    fixture DB still passes). We measure in calendar days; weekend math is
-    forgiving because ``max_days`` defaults to 7.
-    """
+    """C8 — latest event_time within N calendar days of ``today`` (or ingested_at)."""
     out: list[CheckResult] = []
     ref = today or _latest_ingested_at(conn)
     for ds in datasets:
@@ -716,9 +590,6 @@ def _check_b2(conn: sqlite3.Connection) -> list[CheckResult]:
                              "coverage": 0.0})]
     covered = master & bars
     cov = len(covered) / len(master) if master else 0.0
-    # Pass threshold: at least one issuer with a bar AND ≥50% of master.
-    # For tiny fixture DBs (a handful of issuers), we still want a pass when
-    # every master code has at least one bar.
     status: Status = "pass" if (cov >= 0.5 or len(master) <= 5 and cov > 0) else "fail"
     return [CheckResult(
         "B2", "equities_bars_daily", status,
@@ -729,13 +600,7 @@ def _check_b2(conn: sqlite3.Connection) -> list[CheckResult]:
 
 
 def _check_b4(conn: sqlite3.Connection) -> list[CheckResult]:
-    """B4 — Calendar gaps: market-wide missing trading days.
-
-    A trading day with **zero** bars (across every issuer) is a gap. We
-    restrict the comparison to the bar date range so pre-history holidays
-    don't poison the metric. If we have no calendar at all, degrade to
-    ``warn`` rather than fail spuriously.
-    """
+    """B4 — market-wide missing trading days inside the bar date window."""
     bar_dates = _bar_dates(conn)
     trading_days = _calendar_dates(conn, trading_only=True)
     if not bar_dates:
@@ -744,9 +609,6 @@ def _check_b4(conn: sqlite3.Connection) -> list[CheckResult]:
                             {"bar_dates": 0, "trading_days_in_window": 0,
                              "missing_days": []})]
     if not trading_days:
-        # No calendar at all — degrade to warn (we can't tell holidays from
-        # genuine gaps). Restrict to bar window so it doesn't complain about
-        # every calendar date since the beginning of time.
         return [CheckResult("B4", "equities_bars_daily", "warn",
                             "no markets_calendar rows — cannot assess gaps",
                             {"bar_dates": len(bar_dates),
@@ -756,18 +618,12 @@ def _check_b4(conn: sqlite3.Connection) -> list[CheckResult]:
     hi = max(bar_dates)
     window = {d for d in trading_days if lo <= d <= hi}
     missing = sorted(window - bar_dates)
-    # Full multi-year calendars against partial bar backfills produce huge
-    # "missing" sets that are ops-depth issues, not broken ingestion. Fail
-    # only when the gap rate is modest (holes inside a dense history);
-    # otherwise warn so daily completion stays honest on day-1 live DBs.
     gap_rate = (len(missing) / len(window)) if window else 0.0
     if not missing:
         status: Status = "pass"
     elif gap_rate <= 0.25 or len(missing) <= 5:
-        # Small holes inside an otherwise dense window → real gap.
         status = "fail"
     else:
-        # Sparse bar backfill against a long calendar → ops-depth, not code bug.
         status = "warn"
     return [CheckResult(
         "B4", "equities_bars_daily", status,
@@ -783,12 +639,7 @@ def _check_b4(conn: sqlite3.Connection) -> list[CheckResult]:
 
 
 def _check_k3(conn: sqlite3.Connection) -> list[CheckResult]:
-    """K3 — Bar gaps ⊆ non-trading days.
-
-    For each bar date that's NOT in ``trading_days``, fail (it implies the
-    calendar missed a trading day). Symmetric to B4: B4 finds missing bars,
-    K3 finds unexplained bar dates.
-    """
+    """K3 — bar dates explained by calendar (symmetric to B4)."""
     bar_dates = _bar_dates(conn)
     trading_days = _calendar_dates(conn, trading_only=True)
     non_trading = _calendar_dates(conn, trading_only=False) - trading_days
@@ -798,8 +649,6 @@ def _check_k3(conn: sqlite3.Connection) -> list[CheckResult]:
                             {"bar_dates": 0, "unexplained_bar_dates": []})]
     unexplained = sorted(d for d in bar_dates if d not in trading_days
                          and d not in non_trading)
-    # Bar dates that fall on a known non-trading day are also a problem
-    # (bars on a holiday?), but we tolerate them as a warn, not fail.
     on_holiday = sorted(d for d in bar_dates if d in non_trading)
     if not unexplained:
         return [CheckResult(
@@ -822,12 +671,7 @@ def _check_x4(
     conn: sqlite3.Connection,
     validation_sidecar: Mapping[str, int] | None = None,
 ) -> list[CheckResult]:
-    """X4 — SQLite row counts consistent with validation ``rows_inserted``.
-
-    Without a sidecar (the normal offline case), emit ``skip`` rather than
-    fail: there is simply nothing to compare against. The CLI accepts
-    ``--validation-json`` to supply the sidecar.
-    """
+    """X4 — SQLite row counts vs validation sidecar ``rows_inserted``."""
     if not validation_sidecar:
         return [CheckResult("X4", None, "skip",
                             "no validation sidecar supplied "
@@ -836,7 +680,6 @@ def _check_x4(
     mismatches: list[dict[str, Any]] = []
     for ds, expected_rows in validation_sidecar.items():
         if ds not in PREMIUM_CORE_DATASETS:
-            # Skip addon / unknown datasets silently.
             continue
         actual = _dataset_rowcount(conn, ds)
         if actual != int(expected_rows):
@@ -856,9 +699,6 @@ def _check_x4(
                          "mismatches": mismatches})]
 
 
-# ---------------------------------------------------------------------------
-# Weekly-tier checks (stubs unless we can do them from a local DB)
-# ---------------------------------------------------------------------------
 def _check_c6_c7_year_span(
     conn: sqlite3.Connection,
     datasets: Iterable[str],
@@ -866,17 +706,7 @@ def _check_c6_c7_year_span(
     strict: bool = False,
     today: str | None = None,
 ) -> list[CheckResult]:
-    """C6/C7 — Year span vs Premium expectation.
-
-    C6 lags: years between EXPECTED_START[ds] and the earliest observed
-    ``event_time`` (positive lag ⇒ observed starts AFTER expected ⇒ bad).
-    C7 fill rate: observed_years ÷ expected_years where
-    ``expected_years = (today − EXPECTED_START[ds])``.
-
-    Offline (``strict=False``) we never hard-fail — small fixtures have
-    only days of data, not years. We do emit ``fail`` when ``strict=True``
-    (QP_LIVE=1) and the fill rate is below ``_C6_C7_FAIL_RATE``.
-    """
+    """C6 lag vs EXPECTED_START; C7 fill rate. Strict mode may fail low fill."""
     out: list[CheckResult] = []
     ref = (today or _latest_ingested_at(conn) or "")[:10]
     for ds in datasets:
@@ -916,7 +746,6 @@ def _check_c6_c7_year_span(
         fill_rate = (
             observed_years / expected_years if expected_years > 0 else 0.0
         )
-        # Status decision shared by C6 and C7 (C6 looks at lag, C7 at fill).
         if fill_rate >= _C6_C7_PASS_RATE:
             base = "pass"
         elif fill_rate >= _C6_C7_WARN_RATE:
@@ -952,26 +781,10 @@ def _check_c6_c7_year_span(
 
 
 def _check_c9_c10_c11(conn: sqlite3.Connection) -> list[CheckResult]:
-    """C9–C11 — incremental continuity / idempotency / raw present.
-
-    P0-2 honesty:
-
-    * **C9** and **C10** are approximated when ``ingestion_validation`` is
-      available (multiple per-dataset rows over time ⇒ continuity;
-      ``rows_revisions``-only runs ⇒ idempotency). Without that table the
-      check degrades to ``skip`` because we genuinely cannot decide.
-    * **C11** always skips offline — R2 raw partitions are simply not
-      visible from a SQLite mirror. The reason is explicit so
-      ``--require-implemented`` fails loudly rather than silently excusing
-      the missing implementation.
-    """
+    """C9 continuity / C10 idempotency from validation log; C11 needs R2."""
     out: list[CheckResult] = []
 
-    # ----- C9: incremental continuity ---------------------------------------
     if _table_exists(conn, "ingestion_validation"):
-        # Look at the last 5 runs per dataset; continuity = at least one row
-        # newer than the prior one (rows_inserted > 0 or rows_revisions > 0
-        # in the latest run vs the previous).
         try:
             cur = conn.execute(
                 "SELECT dataset, started_at, rows_inserted, rows_revisions "
@@ -996,7 +809,6 @@ def _check_c9_c10_c11(conn: sqlite3.Connection) -> list[CheckResult]:
                     continue
                 total += 1
                 latest = runs[-1]
-                # New run advanced rows_inserted or accumulated revisions.
                 if latest[1] > 0 or latest[2] > 0:
                     progressed += 1
             if progressed >= total and total > 0:
@@ -1040,14 +852,7 @@ def _check_c9_c10_c11(conn: sqlite3.Connection) -> list[CheckResult]:
             {"reason_code": "not_implemented"},
         ))
 
-    # ----- C10: idempotency -------------------------------------------------
-    # ``jquants_*_revisions`` tables exist exactly because re-fetches of the
-    # same natural key are deduplicated into the primary table and prior
-    # values are archived. A non-empty revisions table ⇒ idempotency is
-    # working. An empty one (across all fact tables) is consistent with
-    # "no duplicate fetched yet" but not proof.
     if _table_exists(conn, "ingestion_validation"):
-        # Stronger signal: revisions == 0 with rows_seen > 0 in any run.
         try:
             cur = conn.execute(
                 "SELECT COUNT(*) AS n_runs, "
@@ -1063,9 +868,6 @@ def _check_c9_c10_c11(conn: sqlite3.Connection) -> list[CheckResult]:
             n_runs = int(row["n_runs"])
             n_rev = int(row["n_rev"] or 0)
             n_idem = int(row["n_idem"] or 0)
-            # Idempotent if at least one run inserted > 0 with zero revisions
-            # (the typical steady state) OR if revisions exist alongside
-            # inserts (also idempotent: dedup happened, archive retained).
             if n_idem > 0 or n_rev > 0:
                 out.append(CheckResult(
                     "C10", None, "pass",
@@ -1098,10 +900,6 @@ def _check_c9_c10_c11(conn: sqlite3.Connection) -> list[CheckResult]:
             {"reason_code": "not_implemented"},
         ))
 
-    # ----- C11: raw present (R2) --------------------------------------------
-    # R2 raw partitions are not visible from a SQLite mirror — the local DB
-    # only contains the structured/normalized view. Always skip; explicit
-    # reason so callers can distinguish "not implemented" from "deferred".
     out.append(CheckResult(
         "C11", None, "skip",
         "R2 raw presence not visible from SQLite; needs R2 listing",
@@ -1115,13 +913,7 @@ def _check_b1(
     *,
     strict: bool = False,
 ) -> list[CheckResult]:
-    """B1 — bars daily min/max date year span.
-
-    Surfaces the observed year span of ``equities_bars_daily``. A fixture
-    DB with only days of data is a ``warn`` offline; under strict (live)
-    mode, anything under one year is a hard failure (live Premium must
-    have multi-year history).
-    """
+    """B1 — ``equities_bars_daily`` year span (strict fails under 1 year)."""
     lo, hi = _dataset_event_window(conn, "equities_bars_daily")
     if not lo or not hi:
         return [CheckResult(
@@ -1211,7 +1003,6 @@ def _year_span_result(
     lo, hi = _dataset_event_bounds(conn, dataset)
     expected = EXPECTED_START.get(dataset)
     if recent_only:
-        # A1: AM / recent-only series — expect min date not deep history.
         if not lo:
             return CheckResult(
                 check_id, dataset, "warn",
@@ -1236,9 +1027,6 @@ def _year_span_result(
         "observed_years": years, "rows": n,
         "expected_start": expected,
     }
-    # Offline honest: we usually have days/weeks of live data, not multi-year.
-    # Pass if any span is present; warn if under 30 calendar days; never
-    # not_implemented when data exists.
     days = _calendar_days_between(lo, hi) or 0
     if days >= 30 or years >= 0.08:
         status: Status = "pass"
@@ -1256,17 +1044,9 @@ def _year_span_result(
 
 
 def _check_series_weekly(conn: sqlite3.Connection) -> list[CheckResult]:
-    """Offline approximations for series-specific weekly checks (M/B/A/K/…).
-
-    Replaces blanket ``not_implemented`` stubs. When the local DB has no
-    rows for a series we ``skip`` with ``reason_code=no_data`` (not
-    ``not_implemented``) so weekly completion mode does not fail on missing
-    history that ops have not synced yet. Checks that still need multi-run
-    sidecars keep an explicit deferral code other than ``not_implemented``.
-    """
+    """Series-specific weekly checks; missing data skips with ``no_data``."""
     out: list[CheckResult] = []
 
-    # --- Master (M1–M4) ---
     master_n = len(_codes_for_master(conn))
     if master_n == 0:
         for cid in ("M1", "M2", "M3", "M4"):
@@ -1274,7 +1054,6 @@ def _check_series_weekly(conn: sqlite3.Connection) -> list[CheckResult]:
                                    "no master issuers",
                                    {"reason_code": "no_data"}))
     else:
-        # M1 issuer count order-of-magnitude
         if master_n >= 3000:
             out.append(CheckResult("M1", "equities_master", "pass",
                                    f"master issuers={master_n} (≥3000)",
@@ -1287,7 +1066,6 @@ def _check_series_weekly(conn: sqlite3.Connection) -> list[CheckResult]:
             out.append(CheckResult("M1", "equities_master", "fail",
                                    f"master issuers={master_n} too small",
                                    {"master_count": master_n}))
-        # M2 multi-day snapshots: distinct Date in master payloads
         m_dates: set[str] = set()
         if _table_exists(conn, "jquants_records"):
             for (payload,) in conn.execute(
@@ -1305,10 +1083,8 @@ def _check_series_weekly(conn: sqlite3.Connection) -> list[CheckResult]:
             f"master snapshot dates={len(m_dates)}",
             {"snapshot_dates": sorted(m_dates)[:10]},
         ))
-        # M3 key codes (Toyota/Sony/SoftBank etc.)
         key_codes = {"7203", "6758", "9984", "8306", "6501"}
         present = key_codes & _codes_for_master(conn)
-        # J-Quants often uses 5-char codes with trailing 0
         present5 = {c for c in _codes_for_master(conn) if c[:4] in key_codes or c in key_codes}
         hit = present | present5
         out.append(CheckResult(
@@ -1323,14 +1099,12 @@ def _check_series_weekly(conn: sqlite3.Connection) -> list[CheckResult]:
             {"master_count": master_n, "reason_code": "soft_pass_nonempty"},
         ))
 
-    # --- Bars B3, B5–B7 (B1/B2/B4 handled elsewhere) ---
     bar_n = _dataset_row_count(conn, "equities_bars_daily")
     if bar_n == 0:
         for cid in ("B3", "B5", "B6", "B7"):
             out.append(CheckResult(cid, "equities_bars_daily", "skip",
                                    "no bars", {"reason_code": "no_data"}))
     else:
-        # B3 concentration: top issuer share of rows
         counts: dict[str, int] = {}
         if _table_exists(conn, "jquants_records"):
             for (payload,) in conn.execute(
@@ -1351,7 +1125,6 @@ def _check_series_weekly(conn: sqlite3.Connection) -> list[CheckResult]:
             f"top-10 issuer share={top_share:.3f} (rows={total})",
             {"top10_share": top_share, "rows": total, "issuers": len(counts)},
         ))
-        # B5 per-issuer missing rate vs calendar (coarse)
         trading = _calendar_dates(conn, trading_only=True)
         bar_dates = _bar_dates(conn)
         if trading and bar_dates:
@@ -1369,7 +1142,6 @@ def _check_series_weekly(conn: sqlite3.Connection) -> list[CheckResult]:
                 "insufficient calendar/bar dates for missing-rate",
                 {"trading_days": len(trading), "bar_dates": len(bar_dates)},
             ))
-        # B6 OHLC null/zero anomaly (sample)
         bad = 0
         seen = 0
         if _table_exists(conn, "jquants_records"):
@@ -1382,9 +1154,6 @@ def _check_series_weekly(conn: sqlite3.Connection) -> list[CheckResult]:
                 except (TypeError, ValueError):
                     continue
                 seen += 1
-                vals = [o.get("Open"), o.get("High"), o.get("Low"), o.get("Close"),
-                        o.get("O"), o.get("H"), o.get("L"), o.get("C")]
-                # Prefer AdjustmentClose/Close style fields
                 close = o.get("AdjustmentClose", o.get("Close", o.get("C")))
                 if close is None:
                     bad += 1
@@ -1401,7 +1170,6 @@ def _check_series_weekly(conn: sqlite3.Connection) -> list[CheckResult]:
             f"null/zero close rate={rate:.3f} on sample={seen}",
             {"anomaly_rate": rate, "sample": seen},
         ))
-        # B7 adjustment field presence
         adj = 0
         if _table_exists(conn, "jquants_records"):
             for (payload,) in conn.execute(
@@ -1421,7 +1189,6 @@ def _check_series_weekly(conn: sqlite3.Connection) -> list[CheckResult]:
             {"adj_rows": adj},
         ))
 
-    # --- AM A1–A3 ---
     out.append(_year_span_result("A1", "equities_bars_daily_am", conn, recent_only=True))
     am_codes: set[str] = set()
     full_codes = _codes_with_bars(conn)
@@ -1455,7 +1222,6 @@ def _check_series_weekly(conn: sqlite3.Connection) -> list[CheckResult]:
             {"am_issuers": len(am_codes)},
         ))
 
-    # --- Calendar K1–K2 ---
     out.append(_year_span_result("K1", "markets_calendar", conn))
     cal_n = _dataset_row_count(conn, "markets_calendar")
     if cal_n == 0:
@@ -1481,7 +1247,6 @@ def _check_series_weekly(conn: sqlite3.Connection) -> list[CheckResult]:
             {"flagged": with_flag, "rows": cal_n},
         ))
 
-    # --- Earnings / Fins / Indices / Deriv / Stats / Edinet year spans ---
     for cid, datasets, recent in (
         ("E1", ("equities_earnings_calendar", "fins_earnings_date"), False),
         ("E2", ("equities_earnings_calendar", "fins_earnings_date"), True),
@@ -1527,14 +1292,12 @@ def _check_series_weekly(conn: sqlite3.Connection) -> list[CheckResult]:
         ("N4", ("edinet_major_shareholders", "edinet_cross_shareholdings",
                 "edinet_large_volume_shareholders"), False),
     ):
-        # One result per check id: aggregate over first dataset with data.
         emitted = False
         for ds in datasets:
             n = _dataset_row_count(conn, ds)
             if n == 0:
                 continue
             if cid in ("E3", "F2", "F5", "I3", "D2", "S3", "N2"):
-                # Cardinality / coverage style
                 out.append(CheckResult(
                     cid, ds, "pass" if n >= 10 else "warn",
                     f"rows={n} for {ds}",
@@ -1579,14 +1342,7 @@ def _check_x1(
     *,
     strict: bool = False,
 ) -> list[CheckResult]:
-    """X1 — master issuer count vs issuers with ≥1 daily bar.
-
-    Coverage = |master ∩ bars| / |master|: how many of the master issuers
-    have at least one daily bar. Offline we warn when coverage < 0.5; in
-    strict mode (live) we fail when coverage < 0.8 AND the master is at
-    least 1,000 issuers (the strict bar is meaningless on fixture-scale
-    data — we only enforce it when the universe is real-sized).
-    """
+    """X1 — |master ∩ bars| / |master|; strict fails below 0.8 on live-scale."""
     master = _codes_for_master(conn)
     bars = _codes_with_bars(conn)
     if not master:
@@ -1639,14 +1395,7 @@ def _check_x2(conn: sqlite3.Connection) -> list[CheckResult]:
 
 
 def _check_x3(_conn: sqlite3.Connection) -> list[CheckResult]:
-    """X3 — PIT: fixed past as_of does not leak future rows.
-
-    Property-level invariant is enforced by the PIT API layer
-    (``pit.get_*``) and exercised by ``tests/test_pit_lookahead.py``.
-    Treating that suite as green means this check passes here. We don't
-    re-run the invariant from inside the matrix runner; we just emit a
-    pointer.
-    """
+    """X3 — PIT no-leak is enforced by ``pit.get_*`` (see test_pit_lookahead)."""
     return [CheckResult("X3", None, "pass",
                         "PIT no-leak invariant enforced by pit.get_* "
                         "(see tests/test_pit_lookahead.py)",
@@ -1654,19 +1403,12 @@ def _check_x3(_conn: sqlite3.Connection) -> list[CheckResult]:
 
 
 def _check_x5(_conn: sqlite3.Connection) -> list[CheckResult]:
-    """X5 — After backfill, min(event_time) moves toward expected start.
-
-    Needs a previous-min sidecar (the value before the last backfill). We
-    don't have one offline, so emit ``skip``.
-    """
+    """X5 — backfill min(event_time) vs prior sidecar; skip offline."""
     return [CheckResult("X5", None, "skip",
                         "needs prior-min event_time sidecar to compare",
                         {"reason_code": "needs_sidecar"})]
 
 
-# ---------------------------------------------------------------------------
-# Date helpers (small, dependency-free)
-# ---------------------------------------------------------------------------
 def _calendar_days_between(lo: str, hi: str) -> int | None:
     """Calendar-day difference ``hi - lo``. Returns None on parse failure."""
     import datetime as _dt
@@ -1700,24 +1442,8 @@ def _latest_ingested_at(conn: sqlite3.Connection) -> str | None:
     return max(candidates) if candidates else None
 
 
-# ---------------------------------------------------------------------------
-# Live (strict) gates — surfaced as B0 rows on the daily tier
-# ---------------------------------------------------------------------------
 def _apply_strict_live_gates(db_path: str | Path) -> list[CheckResult]:
-    """Re-measure B0 gates and emit one fail/pass row per gate.
-
-    Surfaces the Phase-4 order-of-magnitude gates (≥3k master, ≥3k bar
-    issuers, ≥3k rows on the latest trading day) as validation rows.
-    Used only when ``strict_live_gates=True`` (e.g. QP_LIVE=1). ``B0`` is
-    not part of the formal matrix catalog (which starts at B1); it is the
-    shared Phase-4 LIVE_GATES hook promoted into the runner so live
-    validation rows fail loudly when the universe is fixture-sized.
-
-    Delegates the measurement to :func:`cf_platform.live_gates.measure_b0`
-    so the gate values and tables are defined in exactly one place.
-    """
-    # Local import keeps the cf_platform package lazy when coverage is
-    # imported by tests that don't need live_gates.
+    """B0 live gates via ``cf_platform.live_gates.measure_b0`` (QP_LIVE)."""
     from cf_platform.live_gates import measure_b0
 
     out: list[CheckResult] = []
@@ -1731,9 +1457,6 @@ def _apply_strict_live_gates(db_path: str | Path) -> list[CheckResult]:
     return out
 
 
-# ---------------------------------------------------------------------------
-# Top-level runner
-# ---------------------------------------------------------------------------
 def run_coverage(
     db_path: str | Path,
     *,
@@ -1745,26 +1468,7 @@ def run_coverage(
     workers: int | None = None,
     strict_live_gates: bool = False,
 ) -> list[CheckResult]:
-    """Execute the matrix against ``db_path``.
-
-    Parameters
-    ----------
-    db_path
-        Local PIT SQLite DB (read-only).
-    tier
-        ``"daily"`` (default) or ``"weekly"``. Selects which check ids run.
-    today
-        Reference date for C8 freshness (ISO string). Defaults to the latest
-        ``ingested_at`` in the DB, which keeps a fixture DB green.
-    freshness_days
-        Max tolerable lag in days for C8.
-    validation_sidecar
-        Optional ``{dataset: rows_inserted}`` mapping for X4. Without it,
-        X4 emits ``skip`` (not fail).
-    datasets
-        Override the dataset iteration (default: PREMIUM_CORE_DATASETS).
-        Useful in tests to scope to one series.
-    """
+    """Execute daily or weekly matrix checks against a local PIT SQLite DB."""
     if tier not in ("daily", "weekly"):
         raise ValueError(f"tier must be 'daily' or 'weekly', got {tier!r}")
     iter_datasets = list(datasets) if datasets is not None else list(PREMIUM_CORE_DATASETS)
@@ -1773,8 +1477,6 @@ def run_coverage(
     try:
         conn = _connect(db_path)
     except sqlite3.OperationalError as exc:
-        # DB doesn't exist (or isn't readable). Emit one fail per daily id
-        # so the runner surfaces it loudly instead of crashing.
         for chk in matrix.list_checks(tier):
             results.append(CheckResult(
                 chk.id, None, "fail",
@@ -1795,8 +1497,7 @@ def run_coverage(
         n_workers = max(1, int(n_workers))
 
         if tier == "daily":
-            # Independent check families. Each parallel job opens its own
-            # SQLite connection (sqlite3 connections are not thread-safe).
+            # sqlite3 connections are not thread-safe; each job opens its own.
             def _job(name: str):
                 c = _connect(db_path)
                 try:
@@ -1862,14 +1563,7 @@ def has_failures(
     *,
     require_implemented: bool = False,
 ) -> bool:
-    """True if any result is ``status="fail"``. Skip/warn don't count.
-
-    P0-2 completion mode (``require_implemented=True``): a ``skip`` with
-    ``reason_code == "not_implemented"`` is also a failure. Used by the
-    weekly tier default so a green weekly report can never silently hide an
-    unfinished check stub. ``reason_code == "needs_r2"`` is exempt — it
-    represents an intentional offline deferral, not a missing implementation.
-    """
+    """True if any result is ``fail``. ``require_implemented`` also fails ``not_implemented`` skips."""
     for r in results:
         if r.status == "fail":
             return True
@@ -1881,11 +1575,7 @@ def has_failures(
 
 
 def not_implemented_skips(results: Iterable[CheckResult]) -> list[CheckResult]:
-    """Return the subset of ``skip`` rows whose ``reason_code`` is ``not_implemented``.
-
-    Surfaced to the CLI summary so an operator can see *which* weekly
-    checks are still stubbed, not just whether the run as a whole failed.
-    """
+    """Skip rows whose ``reason_code`` is ``not_implemented``."""
     return [
         r for r in results
         if r.status == "skip"
@@ -1909,21 +1599,12 @@ def persist_report(
     reports_dir: str | Path = "data/reports",
     when: str | None = None,
 ) -> Path:
-    """Persist ``results`` as a timestamped JSON report under ``reports_dir``.
-
-    P0-2 contract: every CLI validation run writes its full result set to
-    ``data/reports/validation_YYYYMMDD_HHMMSS.json`` so an operator can
-    audit what the runner saw, even after the DB has been re-synced. The
-    parent directory is created on demand; the data directory is gitignored.
-
-    Returns the resolved report path.
-    """
+    """Write ``results`` to ``reports_dir/validation_<timestamp>.json``."""
     import datetime as _dt
 
     out_dir = Path(reports_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     ts = when or _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
-    # Defensive: timestamps from callers may contain '/', ':' etc.
     safe_ts = "".join(c if c.isalnum() or c in ("_", "-") else "_"
                       for c in str(ts))
     path = out_dir / f"validation_{safe_ts}.json"
@@ -1935,9 +1616,7 @@ def persist_report(
         "summary": summarize(results),
         "not_implemented": [
             {"check_id": r.check_id, "dataset": r.dataset, "detail": r.detail}
-            for r in results
-            if r.status == "skip"
-            and str(r.metrics.get("reason_code", "")).lower() == "not_implemented"
+            for r in not_implemented_skips(results)
         ],
         "results": rows,
     }

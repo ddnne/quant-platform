@@ -439,8 +439,7 @@ def _jsda_validation_status(
     conn: sqlite3.Connection, dataset: str
 ) -> tuple[str, int, str | None, str | None]:
     """PIT-shape prerequisite; collection completeness stays receipt-owned."""
-    # Every jsda_* governed dataset MUST map here or validation stays UNKNOWN.
-    # Corporate bond transactions is NOT legacy jsda_bond_trades (different NK).
+    # jsda_* must map here (UNKNOWN otherwise). Not legacy jsda_bond_trades.
     fact_tables = {
         "jsda_otc_bond_reference_prices": "jsda_otc_bond_reference_prices",
         "jsda_tokyo_repo_rates": "jsda_repo_rates",
@@ -826,8 +825,7 @@ def refresh_coverage_ledger(
         for (
             required_segment, receipt, segment_status, segment_detail
         ) in segment_evaluations:
-            # Sticky COMPLETE: never demote while a COMPLETE-eligible SUCCESS receipt remains
-            # for the same segment_id (exact window may fail after day-roll replan).
+            # Sticky COMPLETE: never demote while a COMPLETE-eligible SUCCESS receipt remains.
             prior_inv = inventory_by_dataset[dataset].get(
                 required_segment.segment_id
             )

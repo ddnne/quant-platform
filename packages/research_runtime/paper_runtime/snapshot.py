@@ -480,7 +480,7 @@ def commit_snapshot_manifest(
 def _research_manifest_id(manifest: dict[str, Any]) -> str:
     identity = dict(manifest)
     identity.pop("snapshot_id", None)
-    identity.pop("artifact", None)  # derived from snapshot_id; avoid circular hash
+    identity.pop("artifact", None)
     identity.pop("committed_at", None)
     identity.pop("manifest_digest", None)
     return _canonical_digest(identity)
@@ -805,7 +805,6 @@ def _evaluate_publication_gate(
         raise SnapshotRejected(
             "READY publication requires the governed J-Quants foundation"
         )
-    # J-Quants run+R2 manifests; JSDA completeness is Coverage V2 receipts.
     run_id, run_detail, validations = _latest_complete_run(
         conn, jquants_required
     )
@@ -1173,7 +1172,6 @@ def publish_ready_snapshot(
                     mode=0o644,
                 )
             except OSError:
-                # Pointer is optional; discovery scans verified manifests.
                 pass
         except Exception:
             temp_db.unlink(missing_ok=True)
