@@ -223,3 +223,63 @@ def test_python_only_event_gates_skip_catalog() -> None:
     worker_gates = set(re.findall(r'"([^"]+)"', m.group(1)))
     assert worker_gates.isdisjoint(PYTHON_ONLY_EVENT_GATES)
     assert worker_gates == set(COMBO_EVENT_GATES)
+
+
+def test_event_cheap_pb_gate_in_combo_and_yaml() -> None:
+    """cheap_pb stays a COMBO event gate; YAML pead lists it. Not a CS reuse."""
+    import re
+    from pathlib import Path
+
+    from research.eval_tracks import NEXT_RESEARCH_QUEUE
+    from research.unique_logic.catalog import combo_row_from_yaml, parse_catalog_yaml
+    from research.unique_logic.constants import CHEAP_PB_EVENT_VS_CS, COMBO_EVENT_GATES
+
+    assert "cheap_pb" in COMBO_EVENT_GATES
+    assert CHEAP_PB_EVENT_VS_CS == "event_bars_x_fins_not_csfundsnaps"
+
+    yml = parse_catalog_yaml(
+        (_YAML_DIR / "event_cheap_pb_pead.yaml").read_text(encoding="utf-8")
+    )
+    params = yml.get("params") or {}
+    assert "gates" in params
+    gates_raw = params["gates"]
+    if isinstance(gates_raw, str):
+        yaml_gates = [x.strip() for x in gates_raw.split(",") if x.strip()]
+    else:
+        yaml_gates = [str(x).strip() for x in list(gates_raw or []) if str(x).strip()]
+    assert "cheap_pb" in yaml_gates
+    derived = combo_row_from_yaml(yml)
+    derived_gates = list(
+        (derived.get("params") or {}).get("gates") or derived.get("gates") or []
+    )
+    assert "cheap_pb" in derived_gates
+
+    src = (
+        Path(__file__).resolve().parents[1]
+        / "platform"
+        / "workers"
+        / "research-mass-eval"
+        / "src"
+        / "daily_path.ts"
+    ).read_text(encoding="utf-8")
+    m = re.search(
+        r"const COMBO_EVENT_GATES = new Set\(\[(.*?)]\);",
+        src,
+        flags=re.S,
+    )
+    assert m, "Worker COMBO_EVENT_GATES"
+    worker_gates = set(re.findall(r'"([^"]+)"', m.group(1)))
+    assert "cheap_pb" in worker_gates
+
+    event_block = re.search(
+        r'if \(gate === "cheap_pb"\) \{.*?return med !== null && pb < med;',
+        src,
+        flags=re.S,
+    )
+    assert event_block, "comboEventGateOk cheap_pb body"
+    body = event_block.group(0)
+    assert "bars" in body and "fins" in body
+    assert "ev.bps" in body
+    assert "reverse().find" in body
+    assert "extras?.cheapPb" not in body
+    assert any(q.get("id") == "cheap_pb_event_reuse" for q in NEXT_RESEARCH_QUEUE)

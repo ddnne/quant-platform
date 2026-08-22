@@ -457,6 +457,7 @@ def _eval_event_combo(
                 elif float(ev["ta"]) <= float(ev["prior_ta"]):
                     ok = False
             elif g == "cheap_pb":
+                # Event hist is bars×fins + ev.bps; CS csFundSnaps last-fin is not 1:1.
                 bps = ev.get("bps")
                 close = ((collected.get("close_by") or {}).get(ev["code"]) or {}).get(
                     ev["entry_date"]

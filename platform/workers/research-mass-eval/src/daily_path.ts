@@ -979,9 +979,9 @@ export function comboEventGateOk(
     return finite(chg) && (chg as number) > 0;
   }
   if (gate === "cheap_pb") {
-    // csFundSnaps.cheapPb uses last-fin + pitMedian(..., 20) on union dates;
-    // this gate uses ev.bps for current pb and bars×fins reverse-find at minHist.
-    // Not 1:1 — keep occupancy.
+    // WHY bars×fins, not csFundSnaps: last-fin union-date hist ≠ ev.bps current
+    // + bars×fins reverse-find at minHist (current bps, hist keys, missing-bar
+    // last-fin). Not occupancy-equal — keep event math; park reuse.
     const close = panel.bars?.[ev.code]?.find(([x]) => x === d)?.[1];
     if (!finite(close) || ev.bps == null || !finite(ev.bps) || ev.bps === 0)
       return false;

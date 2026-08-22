@@ -76,6 +76,11 @@ KNOWN_EVENT_GATES: frozenset[str] = COMBO_EVENT_GATES | PYTHON_ONLY_EVENT_GATES
 # names-only (no generic bodies) would empty occupancy. Python local eval
 # or lid-specific daily_path.ts branches cover the intersecting combos.
 WORKER_PYTHON_ONLY_GATE_POLICY: str = "python_local_or_lid_branch"
+# Event cheap_pb current PB = close/ev.bps; hist is bars×fins reverse-find at
+# minHist. CS cheap_pb is csFundSnaps last-fin + pitMedian(..., 20) on union
+# dates. Not occupancy-equal (current bps, hist keys, missing-bar last-fin).
+# Keep event math; park reuse until proven equal (eval_tracks cheap_pb_event_reuse).
+CHEAP_PB_EVENT_VS_CS: str = "event_bars_x_fins_not_csfundsnaps"
 
 
 def python_only_gate_logic_ids() -> frozenset[str]:
