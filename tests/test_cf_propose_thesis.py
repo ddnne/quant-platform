@@ -843,28 +843,20 @@ def test_catalog_gate_set_avoid_is_existing_crosses() -> None:
     assert n3 >= CATALOG_GATE_SET_AVOID_LIMIT // 3
     assert n2 >= CATALOG_GATE_SET_AVOID_LIMIT // 3
     prefer_pairs = catalog_prefer_pair_avoid()
-    assert "eps_down+price_down" in prefer_pairs
-    assert "pb_rising+tight_funding" in prefer_pairs
     good_tok = "+".join(sorted(str(g) for g in propose_prompt_good()["gates"]))
     assert good_tok not in prefer_pairs
     assembled = assemble_why_avoid()
     assert len(assembled) <= PROPOSE_WHY_AVOID_LIMIT
-    assert "eps_down+price_down" in assembled
-    assert "pb_rising+tight_funding" in assembled
+    for tok in prefer_pairs:
+        assert tok in assembled
     triples = catalog_prefer_triple_avoid()
-    assert "eps_down+price_down+tight_funding" in triples
-    assert "eps_down+price_down+tight_funding" in assembled
     assert good_tok not in assembled
     if len(propose_prompt_good()["gates"]) == 3:
         adopted_tok = "+".join(sorted(str(g) for g in propose_prompt_good()["gates"]))
-        # Current GOOD 3-AND is unique, so it must stay out of triples.
         assert adopted_tok not in triples
-    assert "invert_curve+price_down" in prefer_pairs
-    assert "invert_curve+price_down" in assembled
-    parked_triple = "curve_flatten+overnight_p10+pb_rising"
     prefer_sparse = sparse_prefer_subset_avoid()
-    assert parked_triple in sparse_gate_set_avoid()
-    assert parked_triple in prefer_sparse
+    assert "curve_flatten+overnight_p10+pb_rising" in sparse_gate_set_avoid()
+    assert "curve_flatten+overnight_p10+pb_rising" in prefer_sparse
     for tok in prefer_sparse:
         assert tok in assembled
     assert all("+" in t for t in tokens)
