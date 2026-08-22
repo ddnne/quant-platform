@@ -158,6 +158,18 @@ CF_NEW_EVENT_THESIS_IDS: frozenset[str] = frozenset(
         "surprise_xs_not_first_week",
         "surprise_xs_easing_skip_friday",
         "surprise_xs_afterclose_skip_friday",
+        "surprise_xs_tight_fade",
+        "surprise_xs_on_impulse",
+        "surprise_xs_invert_fade",
+        "event_on_impulse_pead",
+        "event_margin_delta_fade",
+        "event_cheap_iv_pead",
+        "event_rich_iv_fade",
+        "surprise_xs_cheap_iv",
+        "event_positive_eps_pead",
+        "event_cheap_pb_pead",
+        "surprise_xs_eps_up",
+        "event_div_payer_pead",
     }
 )
 CF_NEW_CS_THESIS_IDS: frozenset[str] = frozenset(
@@ -222,6 +234,20 @@ CF_NEW_CS_THESIS_IDS: frozenset[str] = frozenset(
         "cs_easy_skip_friday",
         "flow_disagree_skip_friday",
         "overnight_down_skip_tuesday_cs",
+        "cs_margin_up_chase",
+        "cs_margin_down_follow",
+        "cs_short_ratio_up_fade",
+        "cs_on_impulse",
+        "cs_overnight_p10",
+        "cs_repo3m_down",
+        "cs_curve_flatten",
+        "cs_nky_vol_high_fade",
+        "cs_cheap_pb",
+        "cs_expensive_pb_fade",
+        "cs_earnings_yield_high",
+        "cs_roe_high",
+        "cs_div_positive",
+        "cs_np_positive",
     }
 )
 CF_NEW_THESIS_IDS: frozenset[str] = CF_NEW_EVENT_THESIS_IDS | CF_NEW_CS_THESIS_IDS
@@ -244,28 +270,6 @@ CF_EVENT_FIDELITY: dict[str, str] = {
 }
 ALWAYS_ON_OCCUPANCY_WARN: float = 0.85
 NEAR_EMPTY_OCCUPANCY: float = 0.05
-# Occupancy snapshot from eval-cf-dp-pathfix-20260822c (catalog park, not
-# a score table). Live candidate filter is occupancy, not this set.
-# Re-eval may move mf_value_mom_rate off this list; summarize does not
-# read it.
-ALWAYS_ON_22C_IDS: frozenset[str] = frozenset(
-    {
-        "xs_rank_ls_sticky",
-        "mdh_mean_reversion",
-        "xs_rank_ls_daily",
-        "vol_risk_adjusted_mom",
-        "mdh_sticky_momentum",
-        "flow_margin_short_soft",
-        "flow_margin_pressure",
-        "macro_repo_rate_level",
-        "macro_repo_rate_change",
-        "mf_flow_price",
-        "fund_value_mom_agree",
-        "fund_value_only",
-        "mf_value_mom_rate",
-        "flow_margin_short_hard",
-    }
-)
 # CF daily_path implements a unique rate-gated book (not fund_value_mom_agree).
 # Overnight-change confirm (eval-cf-dp-mf-chg-20260822a) brought occupancy
 # just under 0.85. Live candidate filter is occupancy, not this flag.
@@ -284,8 +288,8 @@ TERM_STRUCTURE_REQUIRED: frozenset[str] = frozenset(
         "opt225_basevol_term_ratio",
     }
 )
-# 15-name shards cannot populate these AND-gates (May+easing, crowd+weekday,
-# midmonth+steep, Friday+steep). Parked: data_requirement_unmet / main_pool=false.
+# Small-universe shards historically emptied these AND-gates. Parked until a
+# larger-universe re-eval fills occupancy. data_requirement_unmet / main_pool=false.
 SPARSE_ON_15NAME_SHARD: frozenset[str] = frozenset(
     {
         "event_may_easing",
@@ -335,6 +339,7 @@ CANDIDATE_POLICY: dict[str, object] = {
         "near_empty",
         "data_requirement_unmet",
         "path_collapsed",
+        "near_duplicate",
     ),
     "always_on_occupancy": ALWAYS_ON_OCCUPANCY_WARN,
     "near_empty_occupancy": NEAR_EMPTY_OCCUPANCY,
@@ -344,4 +349,55 @@ CANDIDATE_POLICY: dict[str, object] = {
     "simple_strategies_kept_for_combinations": True,
     "promote_as_main": False,
     "go": False,
+}
+
+# Distinct economic themes added after the calendar-permutation audit.
+# Gate reorderings are not listed here.
+ECONOMIC_THEME_IDS: dict[str, frozenset[str]] = {
+    "surprise_funding": frozenset(
+        {
+            "surprise_xs_tight_fade",
+            "surprise_xs_on_impulse",
+            "surprise_xs_invert_fade",
+            "event_on_impulse_pead",
+        }
+    ),
+    "margin_price_disagree": frozenset(
+        {
+            "cs_margin_up_chase",
+            "cs_margin_down_follow",
+            "cs_short_ratio_up_fade",
+            "event_margin_delta_fade",
+        }
+    ),
+    "repo_cs": frozenset(
+        {
+            "cs_on_impulse",
+            "cs_overnight_p10",
+            "cs_repo3m_down",
+            "cs_curve_flatten",
+        }
+    ),
+    "vol_conditional": frozenset(
+        {
+            "event_cheap_iv_pead",
+            "event_rich_iv_fade",
+            "surprise_xs_cheap_iv",
+            "cs_nky_vol_high_fade",
+        }
+    ),
+    "fundamentals": frozenset(
+        {
+            "cs_cheap_pb",
+            "cs_expensive_pb_fade",
+            "cs_earnings_yield_high",
+            "cs_roe_high",
+            "cs_div_positive",
+            "event_positive_eps_pead",
+            "event_cheap_pb_pead",
+            "surprise_xs_eps_up",
+            "cs_np_positive",
+            "event_div_payer_pead",
+        }
+    ),
 }

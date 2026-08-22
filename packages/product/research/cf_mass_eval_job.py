@@ -20,7 +20,7 @@ Architecture
 Multi-period policy
 -------------------
 * ≥4–6 multi-year windows (full-prefer 2015/19/21/23 + Q4 2017/25)
-* max_codes ≤ 20, max_days ≤ 200 per period (CF wall-clock safe)
+* max_codes default 30 (was 15); max_days ≤ 200 per period (CF wall-clock)
 * Heavy multi-year deep eval remains local ``run_mass_factory`` /
   ``class_hyp_eval`` for promising survivors only
 
@@ -73,7 +73,8 @@ DEFAULT_WORKER_URL: str = (
     "https://quant-platform-research-mass-eval.taku-haga.workers.dev"
 )
 RESEARCH_ARTIFACT_PREFIX_LEGACY: str = "research/mass_factory"
-DEFAULT_MAX_CODES: int = 15
+# Expanded universe (was 15). 30 is the current default; not a 15-name shard.
+DEFAULT_MAX_CODES: int = 30
 DEFAULT_MAX_DAYS: int = 120
 DEFAULT_ONE_WAY: float = 0.001
 
@@ -972,6 +973,11 @@ def _build_thicken_sidecars(
                         "feps": ev.get("feps"),
                         "prior_eps": ev.get("prior_eps"),
                         "bps": ev.get("bps"),
+                        "roe": ev.get("roe"),
+                        "div_ann": ev.get("div_ann"),
+                        "np": ev.get("np"),
+                        "sales": ev.get("sales"),
+                        "eq": ev.get("eq"),
                     }
                 )
             if rows:
@@ -1476,7 +1482,7 @@ def panels_cache_id(
     max_days: int,
 ) -> str:
     ids = ",".join(str(p.get("period_id") or "") for p in periods)
-    raw = f"v4_margin_burn|{ids}|c{int(max_codes)}|d{int(max_days)}"
+    raw = f"v5_univ30_fund|{ids}|c{int(max_codes)}|d{int(max_days)}"
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
 

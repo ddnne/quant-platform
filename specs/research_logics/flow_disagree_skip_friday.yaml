@@ -26,4 +26,4 @@ params:
   entry_shift: 0
   hold_tail_days: 0
 evaluator: research.unique_logic.event_combos.evaluate_combo_daily_mtm
-notes: combo thesis; data_requirement_unmet on 15-name shards; CF daily_path is SoT
+notes: combo thesis; data_requirement_unmet on small shards; CF daily_path is SoT

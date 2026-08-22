@@ -10,6 +10,7 @@ from typing import Any, Mapping
 
 from research.daily_path_eval import held_book_daily_mtm, panel_index
 from research.unique_logic.constants import CF_NEW_THESIS_IDS, sparse_15name_reason
+from research.unique_logic.near_duplicate import is_near_duplicate
 from research.unique_logic import event, event_filters, event_sides
 
 COMBO_LOGIC_IDS: frozenset[str] = frozenset(CF_NEW_THESIS_IDS)
@@ -1122,6 +1123,226 @@ _SPECS: tuple[dict[str, Any], ...] = (
         "cs_gate": "overnight_down_skip_tuesday",
         "kind": "cs",
     },
+    {
+        "logic_id": "surprise_xs_tight_fade",
+        "family_id": "surprise_xs_rank",
+        "thesis": "Fade relative-surprise ranks when overnight is tight versus PIT median (funding squeeze).",
+        "gates": ("tight_funding",),
+        "side": "flip",
+        "kind": "surprise_xs",
+        "why_different_from": ["surprise_xs_rank_easy_funding", "surprise_xs_easing_change"],
+    },
+    {
+        "logic_id": "surprise_xs_on_impulse",
+        "family_id": "surprise_xs_rank",
+        "thesis": "Surprise CS rank only on a large one-day overnight impulse (|dON| above PIT median).",
+        "gates": ("on_impulse",),
+        "side": "orig",
+        "kind": "surprise_xs",
+        "why_different_from": ["surprise_xs_easing_change", "surprise_xs_rank_easy_funding"],
+    },
+    {
+        "logic_id": "surprise_xs_invert_fade",
+        "family_id": "surprise_xs_rank",
+        "thesis": "Fade surprise ranks when the repo curve is inverted or flat (term-funding stress).",
+        "gates": ("invert_curve",),
+        "side": "flip",
+        "kind": "surprise_xs",
+        "why_different_from": ["surprise_xs_rank_steep_curve", "event_curve_invert_fade"],
+    },
+    {
+        "logic_id": "event_on_impulse_pead",
+        "family_id": "event_funding_combo",
+        "thesis": "PEAD only when overnight jumped or dropped by more than its PIT median absolute change.",
+        "gates": ("on_impulse",),
+        "side": "orig",
+        "kind": "event",
+        "why_different_from": ["overnight_easing_event", "event_funding_stress_skip"],
+    },
+    {
+        "logic_id": "cs_margin_up_chase",
+        "family_id": "xs_margin_delta",
+        "thesis": "Follow CS mom when name-level margin interest rose (crowding chase, not a fade).",
+        "cs_gate": "margin_up",
+        "kind": "cs",
+        "why_different_from": ["flow_disagree_midmonth", "flow_price_disagree_fade"],
+    },
+    {
+        "logic_id": "cs_margin_down_follow",
+        "family_id": "xs_margin_delta",
+        "thesis": "Follow CS mom when name-level margin interest fell (decrowd continuation).",
+        "cs_gate": "margin_down",
+        "kind": "cs",
+        "why_different_from": ["cs_margin_up_chase", "flow_disagree_skip_monday"],
+    },
+    {
+        "logic_id": "cs_short_ratio_up_fade",
+        "family_id": "xs_margin_delta",
+        "thesis": "Fade CS mom when market short-ratio rose versus the prior print (shorting pressure).",
+        "cs_gate": "short_ratio_up_invert",
+        "kind": "cs",
+        "why_different_from": ["flow_margin_short_hard", "cs_margin_up_chase"],
+    },
+    {
+        "logic_id": "event_margin_delta_fade",
+        "family_id": "event_margin_crowd_combo",
+        "thesis": "Fade PEAD when the name's margin interest increased into the disclosure (crowded news).",
+        "gates": ("margin_up",),
+        "side": "flip",
+        "kind": "event",
+        "why_different_from": ["margin_crowd_fade_event", "event_margin_crowding_skip"],
+    },
+    {
+        "logic_id": "cs_on_impulse",
+        "family_id": "overnight_level_cs",
+        "thesis": "CS mom only on large overnight impulses (|dON| above PIT median of absolute changes).",
+        "cs_gate": "on_impulse",
+        "kind": "cs",
+        "why_different_from": ["rate_change_cs_confirm", "overnight_down_cs_follow"],
+    },
+    {
+        "logic_id": "cs_overnight_p10",
+        "family_id": "overnight_level_cs",
+        "thesis": "CS mom when overnight is in the easiest decile of its PIT history (very easy carry).",
+        "cs_gate": "overnight_p10",
+        "kind": "cs",
+        "why_different_from": ["cs_mom_easy_funding", "overnight_p90_cs_flip"],
+    },
+    {
+        "logic_id": "cs_repo3m_down",
+        "family_id": "repo_3m_level_cs",
+        "thesis": "CS mom when 3M Tokyo repo declined versus the prior print.",
+        "cs_gate": "repo_3m_down",
+        "kind": "cs",
+        "why_different_from": ["repo_3m_change_cs", "repo_3m_level_cs"],
+    },
+    {
+        "logic_id": "cs_curve_flatten",
+        "family_id": "event_macro_curve_combo",
+        "thesis": "CS mom when the 3M-ON repo spread flattened versus the prior print.",
+        "cs_gate": "curve_flatten",
+        "kind": "cs",
+        "why_different_from": ["curve_steep_cs_follow", "curve_steepen_impulse_cs"],
+    },
+    {
+        "logic_id": "event_cheap_iv_pead",
+        "family_id": "event_calendar_gate",
+        "thesis": "PEAD only when ATM IV sits below BaseVol (cheap insurance / low implied crash premium).",
+        "gates": ("cheap_iv",),
+        "side": "orig",
+        "kind": "event",
+        "why_different_from": ["iv_below_basevol_cs", "event_easing_uncrowded"],
+    },
+    {
+        "logic_id": "event_rich_iv_fade",
+        "family_id": "event_calendar_gate",
+        "thesis": "Fade PEAD when ATM IV sits above BaseVol (rich crash insurance).",
+        "gates": ("rich_iv",),
+        "side": "flip",
+        "kind": "event",
+        "why_different_from": ["event_cheap_iv_pead", "basevol_up_day_fade"],
+    },
+    {
+        "logic_id": "surprise_xs_cheap_iv",
+        "family_id": "surprise_xs_rank",
+        "thesis": "Surprise CS rank only when ATM IV is below BaseVol.",
+        "gates": ("cheap_iv",),
+        "side": "orig",
+        "kind": "surprise_xs",
+        "why_different_from": ["event_cheap_iv_pead", "surprise_xs_uncrowded"],
+    },
+    {
+        "logic_id": "cs_nky_vol_high_fade",
+        "family_id": "xs_low_vol_mom",
+        "thesis": "Fade CS mom when NKY realized-vol term is above its PIT median (risk-off vol regime).",
+        "cs_gate": "nky_vol_high_invert",
+        "kind": "cs",
+        "why_different_from": ["nky_vol_compress_cs", "nky_vol_term_cs_gate"],
+    },
+    {
+        "logic_id": "cs_cheap_pb",
+        "family_id": "xs_low_vol_mom",
+        "thesis": "CS mom when name P/B (close/BPS) is below its own PIT median (value tilt).",
+        "cs_gate": "cheap_pb",
+        "kind": "cs",
+        "why_different_from": ["fund_value_only", "fund_value_mom_agree"],
+    },
+    {
+        "logic_id": "cs_expensive_pb_fade",
+        "family_id": "xs_low_vol_mom",
+        "thesis": "Fade CS mom when name P/B is above its PIT median (expensive book).",
+        "cs_gate": "expensive_pb_invert",
+        "kind": "cs",
+        "why_different_from": ["cs_cheap_pb", "fund_value_only"],
+    },
+    {
+        "logic_id": "cs_earnings_yield_high",
+        "family_id": "xs_low_vol_mom",
+        "thesis": "CS mom when EPS/close is above the name's PIT median earnings yield.",
+        "cs_gate": "earnings_yield_high",
+        "kind": "cs",
+        "why_different_from": ["cs_cheap_pb", "fund_value_mom_agree"],
+    },
+    {
+        "logic_id": "cs_roe_high",
+        "family_id": "xs_low_vol_mom",
+        "thesis": "CS mom when reported ROE is above the name's PIT median (quality). Missing ROE skips.",
+        "cs_gate": "roe_high",
+        "kind": "cs",
+        "why_different_from": ["cs_earnings_yield_high", "fundamentals_hold_10"],
+    },
+    {
+        "logic_id": "cs_div_positive",
+        "family_id": "xs_low_vol_mom",
+        "thesis": "CS mom only when announced dividend (DivAnn) is strictly positive. Missing DivAnn skips.",
+        "cs_gate": "div_positive",
+        "kind": "cs",
+        "why_different_from": ["cs_roe_high", "fund_value_only"],
+    },
+    {
+        "logic_id": "event_positive_eps_pead",
+        "family_id": "event_calendar_gate",
+        "thesis": "PEAD only when latest EPS is strictly positive (skip loss-makers).",
+        "gates": ("positive_eps",),
+        "side": "orig",
+        "kind": "event",
+        "why_different_from": ["event_skip_monday", "large_surprise_event_hold"],
+    },
+    {
+        "logic_id": "event_cheap_pb_pead",
+        "family_id": "event_calendar_gate",
+        "thesis": "PEAD only when the name's P/B is below its PIT median.",
+        "gates": ("cheap_pb",),
+        "side": "orig",
+        "kind": "event",
+        "why_different_from": ["cs_cheap_pb", "event_positive_eps_pead"],
+    },
+    {
+        "logic_id": "surprise_xs_eps_up",
+        "family_id": "surprise_xs_rank",
+        "thesis": "Surprise CS rank only when EPS rose versus the prior print (earnings improvement).",
+        "gates": ("eps_up",),
+        "side": "orig",
+        "kind": "surprise_xs",
+        "why_different_from": ["surprise_xs_rank_hold", "event_positive_eps_pead"],
+    },
+    {
+        "logic_id": "cs_np_positive",
+        "family_id": "xs_low_vol_mom",
+        "thesis": "CS mom when net profit is strictly positive. Missing NP skips (no invent).",
+        "cs_gate": "np_positive",
+        "kind": "cs",
+        "why_different_from": ["cs_div_positive", "event_positive_eps_pead"],
+    },
+    {
+        "logic_id": "event_div_payer_pead",
+        "family_id": "event_calendar_gate",
+        "thesis": "PEAD only for names with strictly positive announced dividend. Missing DivAnn skips.",
+        "gates": ("div_positive",),
+        "side": "orig",
+        "kind": "event",
+        "why_different_from": ["cs_div_positive", "event_positive_eps_pead"],
+    },
 )
 
 def _combo_row(s: Mapping[str, Any]) -> dict[str, Any]:
@@ -1130,7 +1351,8 @@ def _combo_row(s: Mapping[str, Any]) -> dict[str, Any]:
         gates=[str(g) for g in (s.get("gates") or ())],
         cs_gate=str(s.get("cs_gate") or ""),
     )
-    main_pool = False if sparse else bool(s.get("main_pool", True))
+    dup = is_near_duplicate(str(s.get("logic_id") or ""))
+    main_pool = False if (sparse or dup) else bool(s.get("main_pool", True))
     return {
         **dict(s),
         "new_unique_logic": True,
@@ -1141,7 +1363,9 @@ def _combo_row(s: Mapping[str, Any]) -> dict[str, Any]:
         "generation_enabled": False,
         "main_pool": main_pool,
         "data_requirement_unmet": bool(sparse),
+        "near_duplicate": dup,
         "sparse_15name_reason": sparse,
+        "why_different_from": list(s.get("why_different_from") or []),
         "params": {
             "post_hold_days": 5,
             "hold_days": 10,
@@ -1407,6 +1631,31 @@ def _eval_event_combo(
             elif g == "not_first_week":
                 if str(ev["entry_date"])[8:10] <= "07":
                     ok = False
+            elif g == "on_impulse":
+                d = str(ev["entry_date"])[:10]
+                prevs = sorted(x for x in overnight if x < d)
+                if not prevs or overnight.get(d) is None:
+                    ok = False
+                else:
+                    abs_ch = abs(float(overnight[d]) - float(overnight[prevs[-1]]))
+                    hist = {}
+                    prev_list = list(prevs)
+                    for i, dd in enumerate(prev_list[1:], start=1):
+                        hist[dd] = abs(float(overnight[dd]) - float(overnight[prev_list[i - 1]]))
+                    med = event.pit_median_on_dates(hist, [d], min_hist=20).get(d)
+                    if med is None or abs_ch < float(med):
+                        ok = False
+            elif g == "invert_curve":
+                if float(spread.get(ev["entry_date"]) or 1) > 0:
+                    ok = False
+            elif g == "positive_eps":
+                if ev.get("eps") is None or float(ev.get("eps") or 0) <= 0:
+                    ok = False
+            elif g == "eps_up":
+                if ev.get("eps") is None or ev.get("prior_eps") is None:
+                    ok = False
+                elif float(ev["eps"]) <= float(ev["prior_eps"]):
+                    ok = False
             elif g == "midmonth":
                 dd = str(ev["entry_date"])[8:10]
                 if dd < "10" or dd > "20":
@@ -1593,6 +1842,45 @@ def _eval_cs_combo(
                 and on is not None
                 and float(on) < float(prev_on)
             )
+        elif gate == "margin_up":
+            keep = _universe_margin_delta(margin_by_code, d) > 0
+        elif gate == "margin_down":
+            keep = _universe_margin_delta(margin_by_code, d) < 0
+        elif gate == "on_impulse":
+            if prev_on is None or on is None:
+                keep = False
+            else:
+                abs_ch = abs(float(on) - float(prev_on))
+                hist = {}
+                for j in range(1, i):
+                    a = overnight.get(dates[j])
+                    b = overnight.get(dates[j - 1])
+                    if a is not None and b is not None:
+                        hist[dates[j]] = abs(float(a) - float(b))
+                med = event.pit_median_on_dates(hist, [d], min_hist=20).get(d) if hist else None
+                keep = med is not None and abs_ch >= float(med)
+        elif gate == "overnight_p10":
+            hist = [overnight[x] for x in overnight if x < d]
+            if len(hist) < 20 or on is None:
+                keep = False
+            else:
+                srt = sorted(hist)
+                p10 = srt[max(0, int(0.1 * (len(srt) - 1)))]
+                keep = float(on) <= float(p10)
+        elif gate == "repo_3m_down":
+            prev_sp = spread.get(dates[i - 1]) if i else None
+            sp = spread.get(d)
+            keep = (
+                prev_on is not None
+                and on is not None
+                and prev_sp is not None
+                and sp is not None
+                and (float(on) + float(sp)) < (float(prev_on) + float(prev_sp))
+            )
+        elif gate == "curve_flatten":
+            prev_sp = spread.get(dates[i - 1]) if i else None
+            sp = spread.get(d)
+            keep = prev_sp is not None and sp is not None and float(sp) < float(prev_sp)
         elif gate == "tue_thu":
             keep = _weekday(d) in {1, 2, 3}
         elif gate == "overnight_down":

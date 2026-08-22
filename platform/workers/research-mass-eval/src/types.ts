@@ -167,6 +167,11 @@ export interface FundRegime {
       feps?: number | null;
       prior_eps?: number | null;
       bps?: number | null;
+      roe?: number | null;
+      div_ann?: number | null;
+      np?: number | null;
+      sales?: number | null;
+      eq?: number | null;
     }>
   >;
   n_codes?: number;

@@ -387,6 +387,20 @@ export const CF_UNIQUE_CS_LOGIC_IDS = [
   "cs_easy_skip_friday",
   "flow_disagree_skip_friday",
   "overnight_down_skip_tuesday_cs",
+  "cs_margin_up_chase",
+  "cs_margin_down_follow",
+  "cs_short_ratio_up_fade",
+  "cs_on_impulse",
+  "cs_overnight_p10",
+  "cs_repo3m_down",
+  "cs_curve_flatten",
+  "cs_nky_vol_high_fade",
+  "cs_cheap_pb",
+  "cs_expensive_pb_fade",
+  "cs_earnings_yield_high",
+  "cs_roe_high",
+  "cs_div_positive",
+  "cs_np_positive",
 ] as const;
 
 function usesCrossSection(logic: LogicSpec): boolean {
@@ -505,6 +519,18 @@ export const CF_NEW_EVENT_THESIS_IDS = [
   "surprise_xs_not_first_week",
   "surprise_xs_easing_skip_friday",
   "surprise_xs_afterclose_skip_friday",
+  "surprise_xs_tight_fade",
+  "surprise_xs_on_impulse",
+  "surprise_xs_invert_fade",
+  "event_on_impulse_pead",
+  "event_margin_delta_fade",
+  "event_cheap_iv_pead",
+  "event_rich_iv_fade",
+  "surprise_xs_cheap_iv",
+  "event_positive_eps_pead",
+  "event_cheap_pb_pead",
+  "surprise_xs_eps_up",
+  "event_div_payer_pead",
 ] as const;
 
 export const CF_NEW_CS_THESIS_IDS = [
@@ -568,6 +594,20 @@ export const CF_NEW_CS_THESIS_IDS = [
   "cs_easy_skip_friday",
   "flow_disagree_skip_friday",
   "overnight_down_skip_tuesday_cs",
+  "cs_margin_up_chase",
+  "cs_margin_down_follow",
+  "cs_short_ratio_up_fade",
+  "cs_on_impulse",
+  "cs_overnight_p10",
+  "cs_repo3m_down",
+  "cs_curve_flatten",
+  "cs_nky_vol_high_fade",
+  "cs_cheap_pb",
+  "cs_expensive_pb_fade",
+  "cs_earnings_yield_high",
+  "cs_roe_high",
+  "cs_div_positive",
+  "cs_np_positive",
 ] as const;
 
 export const CF_EVENT_LOGIC_IDS = [
@@ -630,6 +670,15 @@ const COMBO_EVENT_GATES = new Set([
   "steep_curve",
   "uncrowded_margin",
   "cluster",
+  "invert_curve",
+  "on_impulse",
+  "cheap_iv",
+  "rich_iv",
+  "cheap_pb",
+  "positive_eps",
+  "eps_up",
+  "div_positive",
+  "margin_up",
 ]);
 
 function comboGatesOf(params: Record<string, unknown>): string[] {
@@ -664,6 +713,12 @@ export function comboEventGateOk(
     sign: number;
     abs: number;
     after: boolean;
+    eps?: number | null;
+    prior_eps?: number | null;
+    bps?: number | null;
+    div_ann?: number | null;
+    np?: number | null;
+    roe?: number | null;
   },
   overnight: Record<string, number>,
   spread: Record<string, number>,
@@ -736,6 +791,72 @@ export function comboEventGateOk(
     const med = pitMedian(hist, ev.disc, 10);
     return med !== null && nDisc >= med;
   }
+  if (gate === "invert_curve") {
+    const sp = spread[d];
+    return sp !== undefined && sp <= 0;
+  }
+  if (gate === "on_impulse") {
+    const prevs = Object.keys(overnight)
+      .filter((x) => x < d)
+      .sort();
+    const on = overnight[d];
+    if (!prevs.length || on === undefined) return false;
+    const absCh = Math.abs(on - overnight[prevs[prevs.length - 1]]);
+    const hist: Record<string, number> = {};
+    for (let i = 1; i < prevs.length; i++) {
+      hist[prevs[i]] = Math.abs(overnight[prevs[i]] - overnight[prevs[i - 1]]);
+    }
+    const med = pitMedian(hist, d, minHist);
+    return med !== null && absCh >= med;
+  }
+  if (gate === "cheap_iv") {
+    const iv = panel.atm_iv_series?.[d];
+    const bv = panel.base_vol_series?.[d];
+    return finite(iv) && finite(bv) && (iv as number) < (bv as number);
+  }
+  if (gate === "rich_iv") {
+    const iv = panel.atm_iv_series?.[d];
+    const bv = panel.base_vol_series?.[d];
+    return finite(iv) && finite(bv) && (iv as number) > (bv as number);
+  }
+  if (gate === "positive_eps") {
+    return ev.eps != null && finite(ev.eps) && (ev.eps as number) > 0;
+  }
+  if (gate === "eps_up") {
+    return (
+      ev.eps != null &&
+      ev.prior_eps != null &&
+      finite(ev.eps) &&
+      finite(ev.prior_eps) &&
+      (ev.eps as number) > (ev.prior_eps as number)
+    );
+  }
+  if (gate === "div_positive") {
+    return ev.div_ann != null && finite(ev.div_ann) && (ev.div_ann as number) > 0;
+  }
+  if (gate === "margin_up") {
+    const chg = panel.flow_regime?.margin_change_by_code?.[ev.code]?.[d];
+    return finite(chg) && (chg as number) > 0;
+  }
+  if (gate === "cheap_pb") {
+    const close = panel.bars?.[ev.code]?.find(([x]) => x === d)?.[1];
+    if (!finite(close) || ev.bps == null || !finite(ev.bps) || ev.bps === 0)
+      return false;
+    const pb = (close as number) / (ev.bps as number);
+    const hist: Record<string, number> = {};
+    const fins = panel.fund_regime?.events_by_code?.[ev.code] || [];
+    const pairs = panel.bars?.[ev.code] || [];
+    for (const [dd, px] of pairs) {
+      if (dd >= d) break;
+      const fin = [...fins].reverse().find((e) => String(e.disc_date || "") <= dd);
+      const bps = fin?.bps;
+      if (finite(px) && finite(bps) && (bps as number) !== 0) {
+        hist[dd] = (px as number) / (bps as number);
+      }
+    }
+    const med = pitMedian(hist, d, minHist);
+    return med !== null && pb < med;
+  }
   // Unknown gate fails closed (do not silently always-on).
   return false;
 }
@@ -748,6 +869,16 @@ export function comboCsGateOk(
   prev: string | null,
   medOn: number | null,
   marginChg: number | null,
+  extras?: {
+    shortUp?: boolean;
+    nkyHigh?: boolean;
+    cheapPb?: boolean;
+    expensivePb?: boolean;
+    eyHigh?: boolean;
+    roeHigh?: boolean;
+    divPositive?: boolean;
+    npPositive?: boolean;
+  },
 ): { keep: boolean; invert: boolean } {
   const wd = weekdayMon0(d);
   const dd = d.slice(8, 10);
@@ -771,6 +902,71 @@ export function comboCsGateOk(
       finite(overnight[prev]) &&
       on !== undefined &&
       on < overnight[prev];
+  } else if (gate === "margin_up") {
+    keep = marginChg !== null && marginChg > 0;
+  } else if (gate === "margin_down") {
+    keep = marginChg !== null && marginChg < 0;
+  } else if (gate === "on_impulse") {
+    if (prev === null || on === undefined || !finite(overnight[prev])) keep = false;
+    else {
+      const absCh = Math.abs(on - overnight[prev]);
+      const hist: Record<string, number> = {};
+      const keys = Object.keys(overnight).sort();
+      for (let i = 1; i < keys.length; i++) {
+        if (keys[i] >= d) break;
+        hist[keys[i]] = Math.abs(overnight[keys[i]] - overnight[keys[i - 1]]);
+      }
+      const med = pitMedian(hist, d, 20);
+      keep = med !== null && absCh >= med;
+    }
+  } else if (gate === "overnight_p10") {
+    const hist = Object.keys(overnight)
+      .filter((x) => x < d)
+      .map((x) => overnight[x])
+      .filter((v) => finite(v))
+      .sort((a, b) => a - b);
+    if (hist.length < 20 || on === undefined) keep = false;
+    else {
+      const p10 = hist[Math.max(0, Math.floor(0.1 * (hist.length - 1)))];
+      keep = on <= p10;
+    }
+  } else if (gate === "repo_3m_down") {
+    if (prev === null || on === undefined) keep = false;
+    else {
+      const sp = spread[d];
+      const psp = spread[prev];
+      keep =
+        finite(sp) &&
+        finite(psp) &&
+        finite(overnight[prev]) &&
+        on + (sp as number) < overnight[prev] + (psp as number);
+    }
+  } else if (gate === "curve_flatten") {
+    if (prev === null) keep = false;
+    else {
+      const sp = spread[d];
+      const psp = spread[prev];
+      keep = finite(sp) && finite(psp) && (sp as number) < (psp as number);
+    }
+  } else if (gate === "short_ratio_up_invert") {
+    keep = extras?.shortUp === true;
+    invert = true;
+  } else if (gate === "nky_vol_high_invert") {
+    keep = extras?.nkyHigh === true;
+    invert = true;
+  } else if (gate === "cheap_pb") {
+    keep = extras?.cheapPb === true;
+  } else if (gate === "expensive_pb_invert") {
+    keep = extras?.expensivePb === true;
+    invert = true;
+  } else if (gate === "earnings_yield_high") {
+    keep = extras?.eyHigh === true;
+  } else if (gate === "roe_high") {
+    keep = extras?.roeHigh === true;
+  } else if (gate === "div_positive") {
+    keep = extras?.divPositive === true;
+  } else if (gate === "np_positive") {
+    keep = extras?.npPositive === true;
   } else {
     return { keep: false, invert: false };
   }
@@ -839,6 +1035,12 @@ function eventHeld(
     abs: number;
     surprise: number;
     after: boolean;
+    eps?: number | null;
+    prior_eps?: number | null;
+    bps?: number | null;
+    div_ann?: number | null;
+    np?: number | null;
+    roe?: number | null;
   };
   const perCode: Record<string, { dlist: string[]; entries: Entry[] }> = {};
 
@@ -874,6 +1076,12 @@ function eventHeld(
         abs: Math.abs(sur),
         surprise: sur,
         after,
+        eps: ev.eps,
+        prior_eps: ev.prior_eps,
+        bps: ev.bps,
+        div_ann: ev.div_ann,
+        np: ev.np,
+        roe: ev.roe,
       });
       absSurprises.push({ d: disc, abs: Math.abs(sur) });
     }
@@ -1964,6 +2172,47 @@ function gatedCsHeld(
         const csGate = String(params.cs_gate || "");
         if (csGate && csGate !== "None") {
           const chg = panel.flow_regime?.margin_change_by_code?.[code]?.[d];
+          const fins = panel.fund_regime?.events_by_code?.[code] || [];
+          let fin: (typeof fins)[number] | null = null;
+          for (const ev of fins) {
+            const dd = String(ev.disc_date || "").slice(0, 10);
+            if (dd && dd <= d) fin = ev;
+          }
+          const pairs = panel.bars?.[code] || [];
+          const close = pairs.find(([x]) => x === d)?.[1];
+          const pbHist: Record<string, number> = {};
+          const eyHist: Record<string, number> = {};
+          const roeHist: Record<string, number> = {};
+          for (const [dd, px] of pairs) {
+            if (dd >= d) break;
+            let f2: (typeof fins)[number] | null = null;
+            for (const ev of fins) {
+              const x = String(ev.disc_date || "").slice(0, 10);
+              if (x && x <= dd) f2 = ev;
+            }
+            if (!f2) continue;
+            if (finite(px) && finite(f2.bps) && (f2.bps as number) !== 0) {
+              pbHist[dd] = (px as number) / (f2.bps as number);
+            }
+            if (finite(px) && finite(f2.eps) && (px as number) !== 0) {
+              eyHist[dd] = (f2.eps as number) / (px as number);
+            }
+            if (finite(f2.roe)) roeHist[dd] = f2.roe as number;
+          }
+          const pb =
+            finite(close) && fin && finite(fin.bps) && (fin.bps as number) !== 0
+              ? (close as number) / (fin.bps as number)
+              : null;
+          const ey =
+            finite(close) && fin && finite(fin.eps) && (close as number) !== 0
+              ? (fin.eps as number) / (close as number)
+              : null;
+          const pbMed = pitMedian(pbHist, d, 20);
+          const eyMed = pitMedian(eyHist, d, 20);
+          const roeMed = pitMedian(roeHist, d, 10);
+          const nky = panel.nky_vol_series?.rv_abs_by_date || {};
+          const nkyMed = pitMedian(nky, d, 20);
+          const sr = panel.flow_regime?.short_ratio_by_date || {};
           const g = comboCsGateOk(
             csGate,
             d,
@@ -1972,6 +2221,29 @@ function gatedCsHeld(
             prev,
             medOn,
             finite(chg) ? (chg as number) : null,
+            {
+              shortUp:
+                prev !== null &&
+                finite(sr[d]) &&
+                finite(sr[prev]) &&
+                sr[d] > sr[prev],
+              nkyHigh:
+                nkyMed !== null && finite(nky[d]) && nky[d] >= nkyMed,
+              cheapPb: pb !== null && pbMed !== null && pb < pbMed,
+              expensivePb: pb !== null && pbMed !== null && pb > pbMed,
+              eyHigh: ey !== null && eyMed !== null && ey > eyMed,
+              roeHigh:
+                fin != null &&
+                finite(fin.roe) &&
+                roeMed !== null &&
+                (fin.roe as number) >= roeMed,
+              divPositive:
+                fin != null &&
+                finite(fin.div_ann) &&
+                (fin.div_ann as number) > 0,
+              npPositive:
+                fin != null && finite(fin.np) && (fin.np as number) > 0,
+            },
           );
           keep = g.keep;
           if (g.invert) signed = -v;

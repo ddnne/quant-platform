@@ -132,6 +132,27 @@ MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
             "cs_tue_thu_down",
         ),
     },
+    {
+        "basket_id": "basket_theme_fund",
+        "rule": "fundamentals_sleeve",
+        "primary": False,
+        "members": (
+            "cs_cheap_pb",
+            "cs_roe_high",
+            "cs_div_positive",
+            "event_positive_eps_pead",
+        ),
+    },
+    {
+        "basket_id": "basket_theme_flow",
+        "rule": "margin_repo_sleeve",
+        "primary": False,
+        "members": (
+            "cs_margin_up_chase",
+            "cs_on_impulse",
+            "surprise_xs_tight_fade",
+        ),
+    },
 )
 
 
@@ -373,6 +394,26 @@ def run_combo_basket_job(
 
 def occupancy_in_candidate_band(occ: float | None) -> bool:
     return _occupancy_ok(occ)
+
+
+def primary_mechanical_basket_defs() -> list[dict[str, Any]]:
+    """Primary mechanical rules only. Secondary / retired stay out."""
+    return [d for d in mechanical_basket_defs() if d.get("primary") and d.get("valid")]
+
+
+def blend_primary_baskets(
+    cells: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for spec in primary_mechanical_basket_defs():
+        rows.extend(
+            blend_window_cells(
+                cells,
+                basket_id=spec["basket_id"],
+                logic_ids=spec["members"],
+            )
+        )
+    return rows
 
 
 def mechanical_basket_defs(*, include_deprecated: bool = False) -> list[dict[str, Any]]:

@@ -120,6 +120,14 @@ def test_daily_path_spec_keeps_unique_event() -> None:
     assert spec.get("dropped_unique_unsupported") in (None, [], ())
 
 
+def test_eval_universe_is_not_fifteen() -> None:
+    from research.cf_mass_eval_job import DEFAULT_MAX_CODES
+    from research.class_hyp_eval import DEFAULT_EVAL_CODES
+
+    assert DEFAULT_MAX_CODES > 15
+    assert len(DEFAULT_EVAL_CODES) >= DEFAULT_MAX_CODES
+
+
 def test_bar_native_count_meets_thirty() -> None:
     assert len(CF_BAR_NATIVE_LOGIC_IDS) >= 30
 

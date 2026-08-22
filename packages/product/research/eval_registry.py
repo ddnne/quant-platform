@@ -398,6 +398,7 @@ def summarize_daily_path_cells(
         TERM_STRUCTURE_REQUIRED,
         SPARSE_ON_15NAME_SHARD,
     )
+    from research.unique_logic.near_duplicate import is_near_duplicate
 
     def _fam(lid: str) -> str:
         if lid in CF_NEW_EVENT_THESIS_IDS:
@@ -467,6 +468,8 @@ def summarize_daily_path_cells(
             flags.append("data_requirement_unmet")
         if lid in SPARSE_ON_15NAME_SHARD:
             flags.append("data_requirement_unmet")
+        if is_near_duplicate(lid):
+            flags.append("near_duplicate")
         if m_net is not None and abs(m_net) < 1e-4:
             flags.append("near_zero_net")
         if n_pos >= 2 and n_neg >= 2:
@@ -558,7 +561,7 @@ def summarize_daily_path_cells(
         "logics": logics,
         "notes": (
             "candidate = not path_broken, not path_collapsed, not always_on, "
-            "not near_empty, not data_requirement_unmet. Simple gated theses stay for "
+            "not near_empty, not data_requirement_unmet, not near_duplicate. Simple gated theses stay for "
             "combination/funds even with modest t/Sharpe. strong is an "
             "interest flag with no t/Sharpe floor and is never a promote/GO."
         ),

@@ -5,7 +5,7 @@ headline: false
 generation_enabled: false
 promote_as_main: false
 go: false
-main_pool: true
+main_pool: false
 thesis: >
   CS mom in the first seven calendar days.
 signal_definition: >
@@ -26,4 +26,4 @@ params:
   entry_shift: 0
   hold_tail_days: 0
 evaluator: research.unique_logic.event_combos.evaluate_combo_daily_mtm
-notes: combo thesis; occupancy-gated; CF daily_path is SoT
+notes: combo thesis; parked near-duplicate / gate permutation; CF daily_path is SoT

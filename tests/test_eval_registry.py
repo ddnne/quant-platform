@@ -219,6 +219,13 @@ def test_mechanical_baskets_are_four_valid_defs() -> None:
     assert any(d["rule"] == "event_family_only" for d in primaries)
     cs = [d for d in defs if d["rule"] == "cs_family_only"]
     assert cs and cs[0]["primary"] is False
+    from research.combo_basket import primary_mechanical_basket_defs
+
+    prim = primary_mechanical_basket_defs()
+    assert prim
+    assert all(d["primary"] for d in prim)
+    assert all(d["rule"] != "cs_family_only" for d in prim)
+    assert all(d["rule"] != "low_occupancy_band" for d in prim)
 
 
 def test_summarize_emits_candidate_family_counts() -> None:
@@ -312,6 +319,46 @@ def test_summarize_basket_trends_is_not_a_pass() -> None:
     assert row["go"] is False
 
 
+def test_near_duplicate_is_not_candidate() -> None:
+    from research.eval_registry import summarize_daily_path_cells
+    from research.unique_logic.near_duplicate import NEAR_DUPLICATE_PARK
+
+    lid = sorted(NEAR_DUPLICATE_PARK)[0]
+    cells = [
+        {
+            "logic_id": lid,
+            "window_id": "y2015_full",
+            "occupancy": 0.20,
+            "total_ret_net": 0.01,
+            "eval_path": "eventHeld",
+            "daily_path_complete": True,
+        }
+    ]
+    summary = summarize_daily_path_cells(cells, job_id="eval-test-dup")
+    row = summary["logics"][0]
+    assert "near_duplicate" in row["flags"]
+    assert row["candidate"] is False
+    assert row["main_pool"] is False
+
+
+def test_economic_themes_exist_in_catalog() -> None:
+    from research.unique_logic.constants import ECONOMIC_THEME_IDS
+    from research.unique_logic.event_combos import NEW_COMBO_LOGIC
+
+    py = {s["logic_id"] for s in NEW_COMBO_LOGIC}
+    assert len(ECONOMIC_THEME_IDS["surprise_funding"]) >= 4
+    assert len(ECONOMIC_THEME_IDS["margin_price_disagree"]) >= 4
+    assert len(ECONOMIC_THEME_IDS["repo_cs"]) >= 4
+    assert len(ECONOMIC_THEME_IDS["vol_conditional"]) >= 4
+    assert len(ECONOMIC_THEME_IDS["fundamentals"]) >= 6
+    for theme, ids in ECONOMIC_THEME_IDS.items():
+        for lid in ids:
+            assert lid in py, f"{lid} missing from combo specs ({theme})"
+            spec = next(s for s in NEW_COMBO_LOGIC if s["logic_id"] == lid)
+            assert spec.get("why_different_from"), lid
+            assert spec.get("near_duplicate") is False
+
+
 def test_sparse_gate_combo_parks_at_generation() -> None:
     from research.unique_logic.constants import sparse_15name_reason
     from research.unique_logic.event_combos import NEW_COMBO_LOGIC
@@ -331,9 +378,9 @@ def test_sparse_gate_combo_parks_at_generation() -> None:
         for s in NEW_COMBO_LOGIC
         if s["logic_id"]
         in {
-            "event_skip_tuesday",
-            "cs_skip_tuesday",
-            "surprise_xs_skip_tuesday",
+            "cs_cheap_pb",
+            "surprise_xs_tight_fade",
+            "cs_on_impulse",
         }
     ]
     assert len(fresh) == 3
@@ -341,6 +388,7 @@ def test_sparse_gate_combo_parks_at_generation() -> None:
         assert s.get("data_requirement_unmet") is False
         assert s.get("main_pool") is True
         assert s.get("sparse_15name_reason") is None
+        assert s.get("near_duplicate") is False
 
 
 def test_sparse_15name_is_data_requirement_unmet() -> None:
