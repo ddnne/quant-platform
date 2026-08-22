@@ -36,7 +36,6 @@ from research.cost_models import (
     build_leverage_short_cost_assumption,
     compute_liquidity_proxy_from_adv,
     compute_liquidity_proxy_from_bars,
-    cost_models_document,
     liquidity_bucket_from_proxy,
     liquidity_cost_multipliers,
     load_repo_rate_series_from_mapping,
@@ -352,18 +351,23 @@ def test_explicit_bucket_override():
     ) < 1e-9
 
 
-def test_cost_models_document_liquidity_surface():
-    doc = cost_models_document()
-    assert doc["version"] == COST_MODELS_VERSION
-    assert "liquidity" in doc
-    assert doc["liquidity"]["dataset"] == "equities_bars_daily"
-    assert doc["defaults_policy"]["prefer_liquidity_linked"] is True
-    assert doc["defaults_policy"]["require_liquidity_linked"] is False
-    assert doc["transaction"]["liquidity_tx_mult"]["low"] == 2.5
-    assert doc["short_borrow"]["liquidity_short_spread_mult"]["low"] == 2.0
-    assert doc["short_borrow"]["spread_sensitivity_bp"]["mid"] == 50.0
-    assert doc["ready_declared"] is False
-    assert doc["mass_research"] == "NO-GO"
+def test_cost_models_liquidity_surface_constants():
+    from research.cost_models import (
+        LIQUIDITY_DATASET_ID,
+        LIQUIDITY_SHORT_SPREAD_MULT,
+        SHORT_BORROW_SPREAD_SENSITIVITY,
+    )
+
+    assert LIQUIDITY_DATASET_ID == "equities_bars_daily"
+    assert LIQUIDITY_TX_MULT["low"] == 2.5
+    assert LIQUIDITY_SHORT_SPREAD_MULT["low"] == 2.0
+    assert SHORT_BORROW_SPREAD_SENSITIVITY["mid"] == 50.0
+    ass = build_leverage_short_cost_assumption(prefer_liquidity_linked=True)
+    assert ass["version"] == COST_MODELS_VERSION
+    assert ass["prefer_liquidity_linked"] is True
+    assert ass["require_liquidity_linked"] is False
+    assert ass["ready_declared"] is False
+    assert ass["mass_research"] == "NO-GO"
 
 
 # ---------------------------------------------------------------------------

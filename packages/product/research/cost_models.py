@@ -1468,33 +1468,8 @@ def research_net_with_extended_costs(
 
 
 # ---------------------------------------------------------------------------
-# Public document + assumption builders
+# Assumption builders
 # ---------------------------------------------------------------------------
-
-
-def cost_models_document() -> dict[str, Any]:
-    """Public document for research cost-model surface (checklist v2)."""
-    doc: dict[str, Any] = {
-        "version": COST_MODELS_VERSION,
-        "preferred_rate_source": RATE_SOURCE_REPO_SERIES,
-        "transaction": {"liquidity_tx_mult": dict(LIQUIDITY_TX_MULT)},
-        "short_borrow": {
-            "spread_sensitivity_bp": dict(SHORT_BORROW_SPREAD_SENSITIVITY),
-            "liquidity_short_spread_mult": dict(LIQUIDITY_SHORT_SPREAD_MULT),
-        },
-        "leverage_financing": {
-            "gap_policy": "disclose_only_no_ffill_no_invent",
-        },
-        "liquidity": {"dataset": LIQUIDITY_DATASET_ID},
-        "defaults_policy": {
-            "prefer_repo_linked": True,
-            "require_repo_linked": False,
-            "prefer_liquidity_linked": True,
-            "require_liquidity_linked": False,
-        },
-    }
-    doc.update(_freeze_fields())
-    return doc
 
 
 def build_leverage_short_cost_assumption(
@@ -2252,7 +2227,6 @@ __all__ = [
     "build_leverage_short_cost_assumption",
     "compute_liquidity_proxy_from_adv",
     "compute_liquidity_proxy_from_bars",
-    "cost_models_document",
     "date_matched_leverage_financing_costs",
     "date_matched_short_borrow_costs",
     "default_long_only_unlevered_cost_assumption",

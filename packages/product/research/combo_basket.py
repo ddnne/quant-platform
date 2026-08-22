@@ -292,30 +292,6 @@ def _mean(xs: Sequence[Any]) -> float | None:
     return (sum(vs) / len(vs)) if vs else None
 
 
-# Equal-weight 2–3 sleeve blends. Not GO. No correlation weights.
-META_BASKETS: tuple[dict[str, object], ...] = (
-    {
-        "meta_id": "meta_fund_flow",
-        "sleeves": ("basket_theme_fund", "basket_theme_flow"),
-    },
-    {
-        "meta_id": "meta_fund_event",
-        "sleeves": ("basket_theme_fund", "basket_event_fund"),
-    },
-    {
-        "meta_id": "meta_fund_flow_event",
-        "sleeves": (
-            "basket_theme_fund",
-            "basket_theme_flow",
-            "basket_event_fund",
-        ),
-    },
-)
-RETIRED_META_IDS: frozenset[str] = frozenset(
-    {"meta_event4_flow", "meta_event4_fund", "meta_head_fund"}
-)
-
-
 def blend_meta_baskets(sleeve_cells: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     """Equal-weight blend of sleeve basket net_daily series. Not a pass."""
     rows: list[dict[str, Any]] = []
@@ -330,7 +306,6 @@ def blend_meta_baskets(sleeve_cells: Sequence[Mapping[str, Any]]) -> list[dict[s
             )
         )
     return rows
-
 
 
 __all__ = [

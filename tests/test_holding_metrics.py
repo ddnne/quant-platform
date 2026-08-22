@@ -10,11 +10,11 @@ import pytest
 from research.holding_metrics import (
     DEFAULT_ONE_WAY_COST,
     DEFAULT_ONE_WAY_COST_BP,
+    HOLDING_METRICS_LABEL,
     HOLDING_METRICS_VERSION,
     cost_amortization_report,
     cost_amortization_table,
     extract_sign_panel_from_batch_summary,
-    holding_metrics_document,
     holding_metrics_report,
     panel_run_length_stats,
     run_length_distribution,
@@ -32,11 +32,10 @@ MOD_PATH = REPO / "packages" / "product" / "research" / "holding_metrics.py"
 
 
 def test_document_freeze_mass_ready_off():
-    doc = holding_metrics_document()
-    assert doc["version"] == HOLDING_METRICS_VERSION
-    assert "仮定に依存" in doc["label"]
-    assert "研究用" in doc["label"]
-    assert "未宣言" in doc["label"]
+    assert HOLDING_METRICS_VERSION.startswith("research-holding-metrics/")
+    assert "仮定に依存" in HOLDING_METRICS_LABEL
+    assert "研究用" in HOLDING_METRICS_LABEL
+    assert "未宣言" in HOLDING_METRICS_LABEL
 
 
 def test_report_api_dicts_freeze_closed():

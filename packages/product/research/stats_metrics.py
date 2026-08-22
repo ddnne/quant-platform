@@ -963,13 +963,7 @@ def stats_metrics_document() -> dict[str, Any]:
     """Public document for statistical bar surface."""
     doc = {
         "version": STATS_METRICS_VERSION,
-        "wave": STATS_METRICS_WAVE,
-        "daily_path_dd": {
-            "version": DAILY_PATH_DD_VERSION,
-            "required_fields": list(DAILY_PATH_DD_REQUIRED_FIELDS),
-            "period_net_dd_only_pass_forbidden": True,
-        },
-        "note": "daily_path_DD required; period_net_DD alone cannot pass.",
+        "period_net_dd_only_pass_forbidden": True,
     }
     doc.update(_freeze())
     return doc

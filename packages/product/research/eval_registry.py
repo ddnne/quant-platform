@@ -19,7 +19,6 @@ from features.research_freezes import MASS_RESEARCH
 EVAL_REGISTRY_VERSION: str = "research-eval-registry/v1"
 R2_PREFIX: str = "research/eval"
 PROTOCOL_DAILY_PATH: str = "daily_path_mtm_after_cost/v1"
-# Candidate SoT is daily_path. Period-net is bar-native auxiliary only.
 
 
 def is_path_collapsed_cell(cell: Mapping[str, Any]) -> bool:

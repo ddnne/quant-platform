@@ -37,7 +37,6 @@ SIGN_INVERTED: int = -1
 
 DEFAULT_NEAR_ZERO_ABS_NET: float = 0.0005  # 5bp absolute mean
 DEFAULT_T_GUIDELINE: float = 1.0
-DEFAULT_NONZERO_ABS_MEAN: float = DEFAULT_NEAR_ZERO_ABS_NET
 
 
 def _freeze() -> dict[str, Any]:
@@ -538,12 +537,10 @@ def sign_selection_document() -> dict[str, Any]:
     """Public document for the sign-selection surface."""
     doc = {
         "version": SIGN_SELECTION_VERSION,
-        "wave": SIGN_SELECTION_WAVE,
         "policy": {
             "t_is_guideline_not_hard": True,
             "not_simple_daily_sign": True,
         },
-        "note": "Research-only sign flip helper. Records chosen_sign.",
     }
     doc.update(_freeze())
     return doc
@@ -552,7 +549,6 @@ def sign_selection_document() -> dict[str, Any]:
 __all__ = [
     "DEFAULT_MIN_MEAN_NET",
     "DEFAULT_NEAR_ZERO_ABS_NET",
-    "DEFAULT_NONZERO_ABS_MEAN",
     "DEFAULT_T_GUIDELINE",
     "SIGN_INVERTED",
     "SIGN_ORIGINAL",

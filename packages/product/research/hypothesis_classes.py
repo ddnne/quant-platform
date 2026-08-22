@@ -121,7 +121,7 @@ def _spec(
     generation_enabled_by_default: bool,
     priority: int,
     display_name: str,
-    description: str,
+    description: str = "",
     opt_in_required: bool = False,
     research_status_note: str = "",
 ) -> HypothesisClassSpec:
@@ -145,10 +145,6 @@ HYPOTHESIS_CLASS_REGISTRY: dict[str, HypothesisClassSpec] = {
     CLASS_MULTI_DAY_HOLD: _spec(
         CLASS_MULTI_DAY_HOLD,
         display_name="Multi-day hold",
-        description=(
-            "Hold positions over multi-day horizons (5d/10d/20d). "
-            "Not a 1-day flip; holding / turnover metrics required."
-        ),
         horizon="5d_to_20d_hold",
         universe=("tse_prime_liquid", "tse_topix500"),
         datasets_required=(
@@ -175,10 +171,6 @@ HYPOTHESIS_CLASS_REGISTRY: dict[str, HypothesisClassSpec] = {
     CLASS_EVENT_POST: _spec(
         CLASS_EVENT_POST,
         display_name="Post-event",
-        description=(
-            "Post-disclosure / post-earnings window hypotheses "
-            "(event-defined entry, not continuous daily sign)."
-        ),
         horizon="1d_to_5d_post_event",
         universe=("tse_prime_event_universe", "tse_disclosure_active"),
         datasets_required=(
@@ -206,10 +198,6 @@ HYPOTHESIS_CLASS_REGISTRY: dict[str, HypothesisClassSpec] = {
     CLASS_CROSS_SECTION_RELATIVE: _spec(
         CLASS_CROSS_SECTION_RELATIVE,
         display_name="Cross-section relative",
-        description=(
-            "Cross-sectional relative ranking / long-short style hypotheses "
-            "(rank within universe; not absolute single-name daily sign)."
-        ),
         horizon="5d_to_20d_cross_section",
         universe=("tse_prime_liquid", "tse_sector_neutral_panel"),
         datasets_required=(
@@ -237,10 +225,6 @@ HYPOTHESIS_CLASS_REGISTRY: dict[str, HypothesisClassSpec] = {
     CLASS_MACRO_CONDITIONED: _spec(
         CLASS_MACRO_CONDITIONED,
         display_name="Macro-conditioned",
-        description=(
-            "Signals conditioned on explicit macro / regime state "
-            "(rate, index regime) rather than unconditional daily sign."
-        ),
         horizon="20d_to_60d_regime_conditioned",
         universe=("tse_prime_liquid", "tse_beta_sorted"),
         datasets_required=(
@@ -269,10 +253,6 @@ HYPOTHESIS_CLASS_REGISTRY: dict[str, HypothesisClassSpec] = {
     CLASS_FUNDAMENTALS_PRICE: _spec(
         CLASS_FUNDAMENTALS_PRICE,
         display_name="Fundamentals vs price",
-        description=(
-            "Fundamental information vs price path (value / surprise / "
-            "dividend) with PIT constraints — not pure price sign."
-        ),
         horizon="20d_to_60d_fundamental",
         universe=("tse_prime_with_fins", "tse_dividend_payers"),
         datasets_required=(
@@ -301,10 +281,6 @@ HYPOTHESIS_CLASS_REGISTRY: dict[str, HypothesisClassSpec] = {
     CLASS_FLOW_DEMAND: _spec(
         CLASS_FLOW_DEMAND,
         display_name="Flow / demand",
-        description=(
-            "Margin, short, investor-type flow / demand pressure hypotheses "
-            "with multi-day or level-change structure (not S1–S5 rehash)."
-        ),
         horizon="5d_to_20d_flow",
         universe=("tse_prime_liquid", "tse_margin_active"),
         datasets_required=(
@@ -334,11 +310,6 @@ HYPOTHESIS_CLASS_REGISTRY: dict[str, HypothesisClassSpec] = {
     CLASS_SIMPLE_DAILY_SIGN: _spec(
         CLASS_SIMPLE_DAILY_SIGN,
         display_name="Simple daily sign",
-        description=(
-            "1-day nextday close-to-close discrete sign (+1/0/−1). "
-            "S1–S5 are research_baseline_rejected. Default generation OFF; "
-            "explicit opt-in only; never mass-default."
-        ),
         horizon="1d_nextday_close_to_close",
         universe=("tse_prime_liquid",),
         datasets_required=(
@@ -364,9 +335,6 @@ HYPOTHESIS_CLASS_REGISTRY: dict[str, HypothesisClassSpec] = {
         generation_enabled_by_default=False,
         priority=_SIMPLE_DAILY_SIGN_PRIORITY,
         opt_in_required=True,
-        research_status_note=(
-            "S1–S5 are research_baseline_rejected. Opt-in re-runs only."
-        ),
     ),
 }
 

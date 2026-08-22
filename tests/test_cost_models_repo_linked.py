@@ -32,7 +32,6 @@ from research.cost_models import (
     SHORT_BORROW_SPREAD_MID_BP,
     annotate_period_rows_with_extended_costs,
     build_leverage_short_cost_assumption,
-    cost_models_document,
     date_matched_leverage_financing_costs,
     date_matched_short_borrow_costs,
     default_long_only_unlevered_cost_assumption,
@@ -343,15 +342,13 @@ def test_annotate_period_rows_date_matched_with_gap():
     assert ann[1]["net_extended_mean_active"] is None  # gap → no invent net
 
 
-def test_cost_models_document_prefers_repo():
-    doc = cost_models_document()
-    assert doc["version"] == COST_MODELS_VERSION
-    assert doc["preferred_rate_source"] == RATE_SOURCE_REPO_SERIES
-    assert doc["defaults_policy"]["prefer_repo_linked"] is True
-    assert doc["defaults_policy"]["require_repo_linked"] is False
-    assert doc["leverage_financing"]["gap_policy"] == "disclose_only_no_ffill_no_invent"
-    assert doc["ready_declared"] is False
-    assert doc["mass_research"] == "NO-GO"
+def test_cost_models_prefers_repo():
+    ass = build_leverage_short_cost_assumption(prefer_repo_linked=True)
+    assert ass["version"] == COST_MODELS_VERSION
+    assert ass["prefer_repo_linked"] is True
+    assert ass["liquidity"]["gap_policy"] == "disclose_only_no_ffill_no_invent"
+    assert ass["ready_declared"] is False
+    assert ass["mass_research"] == "NO-GO"
 
 
 # ---------------------------------------------------------------------------

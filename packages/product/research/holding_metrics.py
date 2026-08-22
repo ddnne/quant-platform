@@ -54,17 +54,6 @@ def _freeze_fields() -> dict[str, Any]:
     }
 
 
-def holding_metrics_document() -> dict[str, Any]:
-    """Public document for the holding / turnover metrics surface."""
-    doc = {
-        "version": HOLDING_METRICS_VERSION,
-        "label": HOLDING_METRICS_LABEL,
-        "note": "Research helpers only. 仮定に依存・研究用・未宣言.",
-    }
-    doc.update(_freeze_fields())
-    return doc
-
-
 def sign_from_value(x: Any) -> int | None:
     """Map a raw signal to discrete ``+1 / 0 / −1``, or ``None``."""
     if x is None:
@@ -587,7 +576,6 @@ __all__ = [
     "cost_amortization_table",
     "extract_sign_panel_from_batch_summary",
     "histogram_run_lengths",
-    "holding_metrics_document",
     "holding_metrics_report",
     "majority_sign_from_distribution",
     "panel_run_length_stats",
