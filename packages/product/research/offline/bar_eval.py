@@ -6,6 +6,7 @@ not Mass / READY / Phase7 / operational GO.
 
 from __future__ import annotations
 
+import math
 from statistics import mean
 from typing import Any, Mapping, Sequence
 
@@ -1871,6 +1872,132 @@ def evaluate_fundamentals_price_on_bars(
     }
 
 
+def _realized_vol(closes: Sequence[float], end_i: int, vol_n: int) -> float | None:
+    if end_i < vol_n or vol_n < 2:
+        return None
+    rets: list[float] = []
+    for j in range(end_i - vol_n + 1, end_i + 1):
+        if j < 1:
+            return None
+        c0, c1 = closes[j - 1], closes[j]
+        if c0 is None or c1 is None or c0 == 0:
+            return None
+        rets.append((float(c1) / float(c0)) - 1.0)
+    if len(rets) < 2:
+        return None
+    m = mean(rets)
+    var = sum((r - m) ** 2 for r in rets) / (len(rets) - 1)
+    return math.sqrt(var) if var >= 0 else None
+
+
+def evaluate_vol_risk_adjusted_on_bars(
+    bars_by_code: Mapping[str, Sequence[tuple[str, float]]],
+    *,
+    hold_days: int = 5,
+    vol_n: int = 10,
+    vol_threshold: float = 1.0,
+    one_way_cost: float = DEFAULT_ONE_WAY_COST,
+    gate_mode: str = "mom_over_vol",
+) -> dict[str, Any]:
+    """Vol-gated multi-day mom (mom_over_vol or vol_expand)."""
+    h = int(hold_days)
+    vn = int(vol_n)
+    thr = float(vol_threshold)
+    mode = str(gate_mode or "mom_over_vol")
+    am_cost = amortized_one_way_cost(one_way_cost, h)
+    signed_returns: list[float] = []
+    n_active = 0
+    n_filtered = 0
+    holding_records: list[dict[str, Any]] = []
+
+    for code, pairs in sorted(bars_by_code.items()):
+        pairs_l = list(pairs)
+        if len(pairs_l) < max(h, vn) + 2:
+            continue
+        moms = momentum_series(pairs_l, n=h)
+        closes = [c for _, c in pairs_l]
+        dates = [d for d, _ in pairs_l]
+        entry_signs: list[float | None] = []
+        for i, (_d, mom) in enumerate(moms):
+            if mom is None:
+                entry_signs.append(None)
+                continue
+            vol = _realized_vol(closes, i, vn)
+            if vol is None or vol <= 1e-12:
+                entry_signs.append(None)
+                n_filtered += 1
+                continue
+            if mode == "vol_expand":
+                prior = _realized_vol(closes, i - vn, vn) if i >= 2 * vn else None
+                if prior is None or prior <= 1e-12:
+                    entry_signs.append(None)
+                    n_filtered += 1
+                    continue
+                expand = vol / prior
+                if expand < thr:
+                    entry_signs.append(0.0)
+                    n_filtered += 1
+                    continue
+                entry_signs.append(sign_from_numeric(mom))
+            else:
+                score = abs(float(mom)) / vol
+                if score < thr:
+                    entry_signs.append(0.0)
+                    n_filtered += 1
+                    continue
+                entry_signs.append(sign_from_numeric(mom))
+        held = apply_sticky_hold(
+            entry_signs, hold_days=h, rebalance_mode="fixed_horizon"
+        )
+        for i, pos in enumerate(held):
+            holding_records.append(
+                {"date": dates[i], "code": code, "sign": pos}
+            )
+            if pos is None or pos == 0.0:
+                continue
+            if i % h != 0:
+                continue
+            fwd = multi_day_forward_return(closes, hold_days=h, entry_index=i)
+            if fwd is None:
+                continue
+            n_active += 1
+            signed_returns.append(float(pos) * float(fwd))
+
+    gross = mean(signed_returns) if signed_returns else None
+    net = (gross - am_cost) if gross is not None else None
+    n_code_days = len(holding_records)
+    n_trading_days = len({r["date"] for r in holding_records})
+    return {
+        "signal_id": f"c21_vol_risk_{mode}",
+        "hypothesis_class": "vol_risk_adjusted",
+        "hold_days": h,
+        "vol_n": vn,
+        "vol_threshold": thr,
+        "gate_mode": mode,
+        "gross_signed_mean_active": gross,
+        "net_one_way_mean_active": net,
+        "amortized_one_way_cost": am_cost,
+        "one_way_cost": float(one_way_cost),
+        "n_active_positions": n_active,
+        "n_filtered": n_filtered,
+        "n_signed_returns": len(signed_returns),
+        "n_codes": len(bars_by_code),
+        "n_code_days": n_code_days,
+        "n_trading_days": n_trading_days,
+        "occurrence": {
+            "activation_rate": (
+                float(n_active) / float(n_code_days) if n_code_days else None
+            ),
+            "n_active": n_active,
+        },
+        **_freeze(),
+        "note": (
+            f"Vol gate mode={mode} thr={thr} hold={h} vol_n={vn}. "
+            "Not READY / not Mass."
+        ),
+    }
+
+
 __all__ = [
     "evaluate_cross_section_on_bars",
     "evaluate_event_post_on_bars",
@@ -1886,4 +2013,5 @@ __all__ = [
     "evaluate_opt225_vol_on_bars",
     "evaluate_rate_curve_xs_on_bars",
     "evaluate_rate_level_xs_on_bars",
+    "evaluate_vol_risk_adjusted_on_bars",
 ]

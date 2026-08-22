@@ -17,6 +17,7 @@ from research.offline.bar_eval import (
     evaluate_opt225_vol_on_bars,
     evaluate_rate_curve_xs_on_bars,
     evaluate_rate_level_xs_on_bars,
+    evaluate_vol_risk_adjusted_on_bars,
 )
 
 __all__ = [
@@ -34,4 +35,5 @@ __all__ = [
     "evaluate_opt225_vol_on_bars",
     "evaluate_rate_curve_xs_on_bars",
     "evaluate_rate_level_xs_on_bars",
+    "evaluate_vol_risk_adjusted_on_bars",
 ]

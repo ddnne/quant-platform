@@ -1,7 +1,7 @@
 """CF bar-native logic specs.
 
-Copied from factory templates historically for the ~30 ids the CF Worker
-can evaluate without unique_logic panels. Current SoT is this module.
+SoT for the 30 CF-evaluable bar-native logics. Factory templates consume
+this module for the overlapping ids (six factory-only ids stay offline).
 ``cf_mass_eval_job`` / ``cf_daily_path_job`` load this instead of the factory.
 """
 
@@ -74,6 +74,7 @@ def _spec(
     structural_keys: Sequence[str] = (),
 ) -> dict[str, Any]:
     p = dict(params)
+    sk = tuple(structural_keys)
     return {
         "logic_id": logic_id,
         "family_id": family_id,
@@ -82,6 +83,7 @@ def _spec(
         "signal_definition": signal_definition,
         "position_rule": position_rule,
         "datasets_used": list(datasets_used),
+        "structural_keys": list(sk),
         "logic_fingerprint": _fingerprint(
             logic_id=logic_id,
             family_id=family_id,
@@ -89,7 +91,7 @@ def _spec(
             position_rule=position_rule,
             datasets_used=datasets_used,
             params=p,
-            structural_keys=structural_keys,
+            structural_keys=sk,
         ),
     }
 
