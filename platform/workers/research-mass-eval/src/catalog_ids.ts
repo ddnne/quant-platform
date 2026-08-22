@@ -380,6 +380,7 @@ export const CF_NEW_EVENT_THESIS_IDS = [
   "event_p10_eps_down_px_down",
   "event_p10_eps_invert",
   "event_p10_eps_sales_down",
+  "event_p10_invert_px_down",
   "event_p10_pb_eps_down",
   "event_p10_pb_invert",
   "event_p10_pb_px_down",
