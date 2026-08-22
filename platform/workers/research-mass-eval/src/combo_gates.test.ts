@@ -30,6 +30,23 @@ describe("comboEventGateOk", () => {
       comboEventGateOk("not_a_real_gate", ev, {}, {}, 20, dummyPanel),
     ).toBe(false);
   });
+
+  it("eq_ar_high / ta_up skip when payload fields are missing", () => {
+    const missing = { ...ev, eq_ar: null, ta: null, prior_ta: null };
+    expect(
+      comboEventGateOk("eq_ar_high", missing, {}, {}, 8, dummyPanel),
+    ).toBe(false);
+    expect(
+      comboEventGateOk("ta_up", missing, {}, {}, 8, dummyPanel),
+    ).toBe(false);
+  });
+
+  it("ta_up keeps when TA rose versus prior_ta", () => {
+    const up = { ...ev, ta: 200, prior_ta: 150 };
+    const down = { ...ev, ta: 100, prior_ta: 150 };
+    expect(comboEventGateOk("ta_up", up, {}, {}, 8, dummyPanel)).toBe(true);
+    expect(comboEventGateOk("ta_up", down, {}, {}, 8, dummyPanel)).toBe(false);
+  });
 });
 
 describe("comboCsGateOk", () => {

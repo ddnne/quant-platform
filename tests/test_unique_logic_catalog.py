@@ -194,7 +194,42 @@ def test_yaml_dispatch_worker_event_ids_align() -> None:
     assert "event_skip_monday" in yaml_ids
     assert "cs_not_month_end" in yaml_ids
     assert "event_skip_monday" in CF_NEW_THESIS_IDS
-    assert len(CF_NEW_THESIS_IDS) >= 160
+    assert len(CF_NEW_THESIS_IDS) >= 193
+
+
+def test_fins_events_keep_ta_eqar_from_payload() -> None:
+    from research.class_hyp_eval import load_fins_events_from_sqlite
+
+    events = load_fins_events_from_sqlite(
+        codes=["33210"], start="2008-01-01", end="2008-12-31"
+    )
+    rows = events.get("33210") or []
+    assert rows, "33210 FY 2008 fins_summary should load"
+    tas = [r.get("ta") for r in rows]
+    eqars = [r.get("eq_ar") for r in rows]
+    assert any(v is not None and float(v) > 0 for v in tas)
+    assert any(v is not None and float(v) > 0 for v in eqars)
+    for r in rows:
+        if r.get("ta") is None:
+            assert "ta" in r
+        else:
+            assert r["ta"] != 0 or r["ta"] == 0  # real zero allowed; no invent of missing
+        # missing stays None, never a filled-in sentinel
+        assert r.get("ta") is None or isinstance(r.get("ta"), (int, float))
+        assert r.get("eq_ar") is None or isinstance(r.get("eq_ar"), (int, float))
+
+
+def test_fins_ta_eqar_stats_see_official_keys() -> None:
+    from research.class_hyp_eval import fins_summary_ta_eqar_stats
+
+    stats = fins_summary_ta_eqar_stats(limit=2000)
+    assert stats["invent"] is False
+    assert stats["official_keys"]["ta"] == "TA"
+    assert stats["official_keys"]["eq_ar"] == "EqAR"
+    assert stats["n_rows"] >= 100
+    assert stats["n_ta_nonnull"] > 0
+    assert stats["n_eqar_nonnull"] > 0
+    assert (stats["ncta_nonnull"] or 0) < (stats["n_ta_nonnull"] or 0)
 
 
 def test_worker_new_thesis_ids_match_python() -> None:
@@ -215,3 +250,56 @@ def test_worker_new_thesis_ids_match_python() -> None:
     ).read_text(encoding="utf-8")
     for lid in sorted(CF_NEW_EVENT_THESIS_IDS | CF_NEW_CS_THESIS_IDS):
         assert f'"{lid}"' in src, lid
+
+
+def test_fins_official_keys_are_single_source() -> None:
+    from research.unique_logic.constants import (
+        FINS_SUMMARY_EQAR_KEY,
+        FINS_SUMMARY_OFFICIAL_KEYS,
+        FINS_SUMMARY_TA_KEY,
+    )
+
+    assert FINS_SUMMARY_TA_KEY == "TA"
+    assert FINS_SUMMARY_EQAR_KEY == "EqAR"
+    assert FINS_SUMMARY_OFFICIAL_KEYS["ta"] == "TA"
+    assert "NCTA" not in FINS_SUMMARY_OFFICIAL_KEYS.values()
+
+
+def test_combo_event_skips_missing_ta_eqar() -> None:
+    from research.unique_logic.event_combos import evaluate_combo_daily_mtm
+
+    spec = {
+        "logic_id": "event_eqar_high_pead",
+        "kind": "event",
+        "gates": ("eq_ar_high",),
+        "side": "orig",
+        "params": {"gates": ["eq_ar_high"], "post_hold_days": 5},
+    }
+    bars = {"33210": [("2008-07-07", 100.0), ("2008-07-08", 101.0)]}
+    events = {
+        "33210": [
+            {
+                "disc_date": "2008-07-07",
+                "eps": 10.0,
+                "feps": 9.0,
+                "prior_eps": 8.0,
+                "eq_ar": None,
+                "ta": None,
+            }
+        ]
+    }
+    pack = evaluate_combo_daily_mtm(
+        spec,
+        bars=bars,
+        overnight={},
+        curve={},
+        events=events,
+        margin_by_code={},
+        topix_by_date={},
+        one_way_cost=0.001,
+        period_start="2008-07-01",
+        period_end="2008-07-31",
+    )
+    # Missing EqAR must skip (no invent / no always-on from empty gate).
+    assert pack.get("go") is not True
+    assert pack.get("promote_as_main") is False

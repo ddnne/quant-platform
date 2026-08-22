@@ -172,6 +172,9 @@ export interface FundRegime {
       np?: number | null;
       sales?: number | null;
       eq?: number | null;
+      ta?: number | null;
+      eq_ar?: number | null;
+      prior_ta?: number | null;
     }>
   >;
   n_codes?: number;

@@ -1,0 +1,29 @@
+logic_id: cs_short_ratio_down_follow
+family_id: xs_margin_delta
+axis: mixed
+headline: false
+generation_enabled: false
+promote_as_main: false
+go: false
+main_pool: true
+thesis: >
+  Follow CS mom when market short-ratio fell versus the prior print (short covering).
+signal_definition: >
+  Follow CS mom when market short-ratio fell versus the prior print (short covering).
+datasets:
+  - equities_bars_daily
+  - fins_summary
+  - jsda_tokyo_repo_rates
+  - markets_calendar
+params:
+  post_hold_days: 5
+  hold_days: 10
+  momentum_n: 5
+  min_hist: 20
+  mode: cs_short_ratio_down_follow
+  side: orig
+  cs_gate: short_ratio_down
+  entry_shift: 0
+  hold_tail_days: 0
+evaluator: research.unique_logic.event_combos.evaluate_combo_daily_mtm
+notes: combo thesis; occupancy-gated; CF daily_path is SoT

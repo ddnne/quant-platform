@@ -219,6 +219,14 @@ def test_mechanical_baskets_are_four_valid_defs() -> None:
     assert any(d["rule"] == "event_family_only" for d in primaries)
     cs = [d for d in defs if d["rule"] == "cs_family_only"]
     assert cs and cs[0]["primary"] is False
+    rules = {d["rule"] for d in defs}
+    assert "fundamentals_sleeve" in rules
+    assert "margin_flow_sleeve" in rules
+    assert "repo_rate_sleeve" in rules
+    fund = next(d for d in defs if d["rule"] == "fundamentals_sleeve")
+    assert "cs_eqar_high" not in fund["members"]
+    assert "event_eqar_high_pead" in fund["members"]
+    assert "event_ta_up_pead" in fund["members"]
     from research.combo_basket import primary_mechanical_basket_defs
 
     prim = primary_mechanical_basket_defs()
@@ -351,6 +359,10 @@ def test_economic_themes_exist_in_catalog() -> None:
     assert len(ECONOMIC_THEME_IDS["repo_cs"]) >= 4
     assert len(ECONOMIC_THEME_IDS["vol_conditional"]) >= 4
     assert len(ECONOMIC_THEME_IDS["fundamentals"]) >= 6
+    assert len(ECONOMIC_THEME_IDS["fund_leverage_cross"]) >= 5
+    assert len(ECONOMIC_THEME_IDS["margin_surprise"]) >= 5
+    assert len(ECONOMIC_THEME_IDS["repo_event"]) >= 4
+    assert len(ECONOMIC_THEME_IDS["vol_fund_cross"]) >= 4
     for theme, ids in ECONOMIC_THEME_IDS.items():
         for lid in ids:
             assert lid in py, f"{lid} missing from combo specs ({theme})"
@@ -389,6 +401,26 @@ def test_sparse_gate_combo_parks_at_generation() -> None:
         assert s.get("main_pool") is True
         assert s.get("sparse_15name_reason") is None
         assert s.get("near_duplicate") is False
+    for lid in (
+        "event_eqar_high_pead",
+        "event_crowd_on_impulse",
+        "surprise_xs_repo3m_down",
+        "cs_eqar_high_easy",
+    ):
+        row = next(s for s in NEW_COMBO_LOGIC if s["logic_id"] == lid)
+        assert row.get("near_duplicate") is False
+        assert row.get("data_requirement_unmet") is False
+        assert row.get("main_pool") is True
+        assert row.get("always_on_cs_sticky") is False
+    for lid in ("cs_eqar_high", "cs_eqar_low_fade", "cs_ta_up"):
+        row = next(s for s in NEW_COMBO_LOGIC if s["logic_id"] == lid)
+        assert row.get("main_pool") is False
+        assert row.get("always_on_cs_sticky") is True
+    cheap_and = next(
+        s for s in NEW_COMBO_LOGIC if s["logic_id"] == "event_cheap_iv_cheap_pb"
+    )
+    assert cheap_and.get("data_requirement_unmet") is True
+    assert cheap_and.get("main_pool") is False
 
 
 def test_sparse_15name_is_data_requirement_unmet() -> None:

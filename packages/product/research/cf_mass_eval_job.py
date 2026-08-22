@@ -73,8 +73,8 @@ DEFAULT_WORKER_URL: str = (
     "https://quant-platform-research-mass-eval.taku-haga.workers.dev"
 )
 RESEARCH_ARTIFACT_PREFIX_LEGACY: str = "research/mass_factory"
-# Expanded universe (was 15). 30 is the current default; not a 15-name shard.
-DEFAULT_MAX_CODES: int = 30
+# Expanded universe (was 15, then 30). Default 50; not a 15-name shard.
+DEFAULT_MAX_CODES: int = 50
 DEFAULT_MAX_DAYS: int = 120
 DEFAULT_ONE_WAY: float = 0.001
 
@@ -978,6 +978,9 @@ def _build_thicken_sidecars(
                         "np": ev.get("np"),
                         "sales": ev.get("sales"),
                         "eq": ev.get("eq"),
+                        "ta": ev.get("ta"),
+                        "eq_ar": ev.get("eq_ar"),
+                        "prior_ta": ev.get("prior_ta"),
                     }
                 )
             if rows:
@@ -1054,6 +1057,7 @@ def build_real_period_panel(
     from research.class_hyp_eval import (
         DEFAULT_EVAL_CODES,
         bars_rich_to_close_panel,
+        load_bars_from_sqlite_rich,
         load_bars_ndjson_rich,
         resolve_bars_path,
     )
@@ -1090,6 +1094,15 @@ def build_real_period_panel(
         period_start=p.get("period_start"),
         period_end=p.get("period_end"),
     )
+    missing = [c for c in selected if c not in rich]
+    if missing:
+        extra = load_bars_from_sqlite_rich(
+            codes=missing,
+            period_start=str(p.get("period_start") or ""),
+            period_end=str(p.get("period_end") or ""),
+            max_days=int(max_days),
+        )
+        rich.update(extra)
     close = bars_rich_to_close_panel(rich)
     bars_json: dict[str, list[list[Any]]] = {
         code: [[d, float(px)] for d, px in pairs]
@@ -1482,7 +1495,7 @@ def panels_cache_id(
     max_days: int,
 ) -> str:
     ids = ",".join(str(p.get("period_id") or "") for p in periods)
-    raw = f"v5_univ30_fund|{ids}|c{int(max_codes)}|d{int(max_days)}"
+    raw = f"v6_univ50_ta|{ids}|c{int(max_codes)}|d{int(max_days)}"
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
 
@@ -2134,93 +2147,6 @@ def try_cf_mass_eval_status() -> dict[str, Any]:
     }
 
 
-def run_local_wide_eval_pack(
-    *,
-    llm_accepted: Sequence[Mapping[str, Any]] | None = None,
-    seed: int = 870816,
-    synthetic: bool = False,
-    max_codes: int = 20,
-    max_days: int = 80,
-    progress: bool = False,
-) -> dict[str, Any]:
-    """Wide local eval: catalog after_dedup + LLM-accepted (exclude only impossible).
-
-    Used for the broad results table; CF lite is complementary evidence.
-    """
-    cfg = MassFactoryConfig(
-        seed=seed,
-        n=100,
-        max_codes=max_codes,
-        max_days_per_period=max_days,
-        use_q4_periods=True,
-    )
-    gen = generate_strategy_batch(cfg)
-    strategies = list(gen.get("strategies_after_dedup") or [])
-    # Merge LLM accepted (by logic_id) without collapsing near-groups
-    seen = {str(s.get("logic_id")) for s in strategies}
-    extra = 0
-    for raw in llm_accepted or []:
-        lid = str(raw.get("logic_id") or "")
-        if not lid or lid in seen:
-            # still include ad-hoc under unique key
-            if lid in seen and str(raw.get("source") or "").startswith("profit"):
-                continue
-            if lid in seen:
-                lid = f"{lid}__llm_{extra}"
-                raw = {**dict(raw), "logic_id": lid}
-        strategies.append(dict(raw))
-        seen.add(lid)
-        extra += 1
-
-    gen_for_eval = {
-        **gen,
-        "strategies_after_dedup": strategies,
-        "n_after_dedup": len(strategies),
-    }
-
-    def _cb(i: int, n: int, sid: str) -> None:
-        if progress:
-            print(f"[wide-eval] {i}/{n} {sid}", flush=True)
-
-    batch = run_batch_eval(
-        gen_for_eval,
-        config=cfg,
-        synthetic=synthetic,
-        progress_cb=_cb if progress else None,
-    )
-    return {
-        "version": CF_MASS_EVAL_VERSION,
-        "wave": CF_MASS_EVAL_WAVE,
-        "kind": "local_wide_eval",
-        "n_strategies": len(strategies),
-        "n_catalog_after_dedup": int(gen.get("n_after_dedup") or 0),
-        "n_llm_merged": extra,
-        "batch": {
-            k: batch[k]
-            for k in batch
-            if k not in {"results"}
-        },
-        "screens": batch.get("screens"),
-        "ranking": batch.get("ranking"),
-        "results_compact": [
-            {
-                "strategy_id": r.get("strategy_id"),
-                "logic_id": r.get("logic_id"),
-                "family_id": r.get("family_id"),
-                "survived": (r.get("screen") or {}).get("survived"),
-                "mean_net": r.get("mean_net"),
-                "t_stat": r.get("t_stat"),
-                "sharpe_period": r.get("sharpe_period"),
-                "chosen_sign": r.get("chosen_sign"),
-                "n_periods_ok": r.get("n_periods_ok"),
-                "reject_reasons": (r.get("screen") or {}).get("reject_reasons"),
-            }
-            for r in (batch.get("results") or [])
-        ],
-        **_freeze(),
-    }
-
-
 __all__ = [
     "CF_MASS_EVAL_VERSION",
     "CF_MASS_EVAL_WAVE",
@@ -2255,5 +2181,4 @@ __all__ = [
     "put_local_fallback_artifacts",
     "run_cf_mass_eval_job",
     "try_cf_mass_eval_status",
-    "run_local_wide_eval_pack",
 ]

@@ -134,6 +134,8 @@ def combo_yaml_text(spec: Mapping[str, Any]) -> str:
     notes = "combo thesis; occupancy-gated; CF daily_path is SoT"
     if spec.get("near_duplicate"):
         notes = "combo thesis; parked near-duplicate / gate permutation; CF daily_path is SoT"
+    elif spec.get("always_on_cs_sticky"):
+        notes = "combo thesis; parked always_on CS sticky; CF daily_path is SoT"
     elif spec.get("data_requirement_unmet") or not main_pool:
         notes = "combo thesis; data_requirement_unmet on small shards; CF daily_path is SoT"
     params = dict(spec.get("params") or {})
@@ -185,7 +187,9 @@ def write_missing_combo_yaml(*, root: Path | None = None) -> list[str]:
         lid = str(spec["logic_id"])
         path = d / f"{lid}.yaml"
         if lid in existing and not (
-            spec.get("near_duplicate") or spec.get("data_requirement_unmet")
+            spec.get("near_duplicate")
+            or spec.get("data_requirement_unmet")
+            or spec.get("always_on_cs_sticky")
         ):
             continue
         path.write_text(combo_yaml_text(spec), encoding="utf-8")

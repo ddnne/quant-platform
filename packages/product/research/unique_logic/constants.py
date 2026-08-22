@@ -4,6 +4,17 @@ from __future__ import annotations
 
 from typing import Sequence
 
+# Official JQuants fins/summary v2 payload keys. Do not invent aliases
+# (NCTA is a sparse non-consolidated field, not Total Assets).
+FINS_SUMMARY_TA_KEY: str = "TA"
+FINS_SUMMARY_EQAR_KEY: str = "EqAR"
+FINS_SUMMARY_EQ_KEY: str = "Eq"
+FINS_SUMMARY_OFFICIAL_KEYS: dict[str, str] = {
+    "ta": FINS_SUMMARY_TA_KEY,
+    "eq_ar": FINS_SUMMARY_EQAR_KEY,
+    "eq": FINS_SUMMARY_EQ_KEY,
+}
+
 KNOWN_WEAK_THESIS: frozenset[str] = frozenset(
     {
         "rate_abs_level_xs",
@@ -170,6 +181,24 @@ CF_NEW_EVENT_THESIS_IDS: frozenset[str] = frozenset(
         "event_cheap_pb_pead",
         "surprise_xs_eps_up",
         "event_div_payer_pead",
+        "event_eqar_high_pead",
+        "event_eqar_low_fade",
+        "event_ta_up_pead",
+        "surprise_xs_eqar_high",
+        "event_cheap_pb_easy_funding",
+        "surprise_xs_margin_up_fade",
+        "event_margin_down_follow",
+        "event_crowd_on_impulse",
+        "surprise_xs_margin_up",
+        "event_overnight_p10_pead",
+        "event_curve_flatten_pead",
+        "event_repo3m_down_pead",
+        "surprise_xs_repo3m_down",
+        "event_cheap_iv_cheap_pb",
+        "surprise_xs_rich_iv_fade",
+        "event_nky_high_skip",
+        "surprise_xs_div_payer",
+        "event_eqar_high_easy",
     }
 )
 CF_NEW_CS_THESIS_IDS: frozenset[str] = frozenset(
@@ -248,6 +277,13 @@ CF_NEW_CS_THESIS_IDS: frozenset[str] = frozenset(
         "cs_roe_high",
         "cs_div_positive",
         "cs_np_positive",
+        "cs_eqar_high",
+        "cs_eqar_low_fade",
+        "cs_ta_up",
+        "cs_eqar_high_easy",
+        "cs_eqar_high_cheap_iv",
+        "cs_margin_up_tight_fade",
+        "cs_short_ratio_down_follow",
     }
 )
 CF_NEW_THESIS_IDS: frozenset[str] = CF_NEW_EVENT_THESIS_IDS | CF_NEW_CS_THESIS_IDS
@@ -309,6 +345,16 @@ SPARSE_GATE_COMBOS: tuple[tuple[frozenset[str], str], ...] = (
     (frozenset({"friday_only", "steep_curve"}), "friday_plus_steep"),
     (frozenset({"friday_curve_steep"}), "friday_plus_steep"),
     (frozenset({"margin_crowd_skip_friday_invert"}), "crowd_plus_skip_weekday"),
+    (frozenset({"cheap_iv", "cheap_pb"}), "cheap_iv_and_cheap_pb"),
+)
+# Name-level CS + sticky hold=10 stays always_on even at 50 names. Parked
+# (main_pool=false). Crossed with overnight/IV (cs_eqar_high_easy etc.) stay.
+ALWAYS_ON_CS_STICKY: frozenset[str] = frozenset(
+    {
+        "cs_eqar_high",
+        "cs_eqar_low_fade",
+        "cs_ta_up",
+    }
 )
 
 
@@ -398,6 +444,47 @@ ECONOMIC_THEME_IDS: dict[str, frozenset[str]] = {
             "surprise_xs_eps_up",
             "cs_np_positive",
             "event_div_payer_pead",
+        }
+    ),
+    "fund_leverage_cross": frozenset(
+        {
+            "cs_eqar_high",
+            "cs_eqar_low_fade",
+            "cs_ta_up",
+            "event_eqar_high_pead",
+            "event_eqar_low_fade",
+            "surprise_xs_eqar_high",
+            "cs_eqar_high_easy",
+            "event_eqar_high_easy",
+            "event_ta_up_pead",
+            "event_cheap_pb_easy_funding",
+            "cs_eqar_high_cheap_iv",
+        }
+    ),
+    "margin_surprise": frozenset(
+        {
+            "surprise_xs_margin_up_fade",
+            "event_margin_down_follow",
+            "surprise_xs_margin_up",
+            "event_crowd_on_impulse",
+            "cs_margin_up_tight_fade",
+            "cs_short_ratio_down_follow",
+        }
+    ),
+    "repo_event": frozenset(
+        {
+            "event_overnight_p10_pead",
+            "event_curve_flatten_pead",
+            "event_repo3m_down_pead",
+            "surprise_xs_repo3m_down",
+        }
+    ),
+    "vol_fund_cross": frozenset(
+        {
+            "event_cheap_iv_cheap_pb",
+            "surprise_xs_rich_iv_fade",
+            "event_nky_high_skip",
+            "surprise_xs_div_payer",
         }
     ),
 }

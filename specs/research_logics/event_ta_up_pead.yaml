@@ -1,0 +1,29 @@
+logic_id: event_ta_up_pead
+family_id: event_calendar_gate
+axis: mixed
+headline: false
+generation_enabled: false
+promote_as_main: false
+go: false
+main_pool: true
+thesis: >
+  PEAD when total assets rose versus the prior print (balance-sheet expansion).
+signal_definition: >
+  PEAD when total assets rose versus the prior print (balance-sheet expansion).
+datasets:
+  - equities_bars_daily
+  - fins_summary
+  - jsda_tokyo_repo_rates
+  - markets_calendar
+params:
+  post_hold_days: 5
+  hold_days: 10
+  momentum_n: 5
+  min_hist: 20
+  mode: event_ta_up_pead
+  side: orig
+  cs_gate: None
+  entry_shift: 0
+  hold_tail_days: 0
+evaluator: research.unique_logic.event_combos.evaluate_combo_daily_mtm
+notes: combo thesis; occupancy-gated; CF daily_path is SoT

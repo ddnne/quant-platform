@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from qp_paths import repo_root
+from research.cf_mass_eval_job import DEFAULT_MAX_CODES
 from research.class_hyp_eval import (
     DEFAULT_EVAL_CODES,
     build_repo_curve_series,
@@ -229,7 +230,7 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Reuse staged R2 panels prefix (skip serial stage).",
     )
-    p.add_argument("--max-codes", type=int, default=15)
+    p.add_argument("--max-codes", type=int, default=DEFAULT_MAX_CODES)
     p.add_argument("--max-days", type=int, default=200)
     p.add_argument("--one-way-cost", type=float, default=0.001)
     p.add_argument(

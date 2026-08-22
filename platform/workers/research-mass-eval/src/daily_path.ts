@@ -408,6 +408,7 @@ function usesCrossSection(logic: LogicSpec): boolean {
   const fam = String(logic.family_id || "");
   return (
     (CF_UNIQUE_CS_LOGIC_IDS as readonly string[]).includes(lid) ||
+    (CF_NEW_CS_THESIS_IDS as readonly string[]).includes(lid) ||
     lid.startsWith("xs_") ||
     lid.includes("cross_section") ||
     fam.includes("cross_section") ||
@@ -531,6 +532,24 @@ export const CF_NEW_EVENT_THESIS_IDS = [
   "event_cheap_pb_pead",
   "surprise_xs_eps_up",
   "event_div_payer_pead",
+  "event_eqar_high_pead",
+  "event_eqar_low_fade",
+  "event_ta_up_pead",
+  "surprise_xs_eqar_high",
+  "event_cheap_pb_easy_funding",
+  "surprise_xs_margin_up_fade",
+  "event_margin_down_follow",
+  "event_crowd_on_impulse",
+  "surprise_xs_margin_up",
+  "event_overnight_p10_pead",
+  "event_curve_flatten_pead",
+  "event_repo3m_down_pead",
+  "surprise_xs_repo3m_down",
+  "event_cheap_iv_cheap_pb",
+  "surprise_xs_rich_iv_fade",
+  "event_nky_high_skip",
+  "surprise_xs_div_payer",
+  "event_eqar_high_easy",
 ] as const;
 
 export const CF_NEW_CS_THESIS_IDS = [
@@ -608,6 +627,13 @@ export const CF_NEW_CS_THESIS_IDS = [
   "cs_roe_high",
   "cs_div_positive",
   "cs_np_positive",
+  "cs_eqar_high",
+  "cs_eqar_low_fade",
+  "cs_ta_up",
+  "cs_eqar_high_easy",
+  "cs_eqar_high_cheap_iv",
+  "cs_margin_up_tight_fade",
+  "cs_short_ratio_down_follow",
 ] as const;
 
 export const CF_EVENT_LOGIC_IDS = [
@@ -679,6 +705,14 @@ const COMBO_EVENT_GATES = new Set([
   "eps_up",
   "div_positive",
   "margin_up",
+  "margin_down",
+  "eq_ar_high",
+  "eq_ar_low",
+  "ta_up",
+  "overnight_p10",
+  "curve_flatten",
+  "repo_3m_down",
+  "nky_vol_high_skip",
 ]);
 
 function comboGatesOf(params: Record<string, unknown>): string[] {
@@ -719,6 +753,9 @@ export function comboEventGateOk(
     div_ann?: number | null;
     np?: number | null;
     roe?: number | null;
+    ta?: number | null;
+    eq_ar?: number | null;
+    prior_ta?: number | null;
   },
   overnight: Record<string, number>,
   spread: Record<string, number>,
@@ -857,6 +894,73 @@ export function comboEventGateOk(
     const med = pitMedian(hist, d, minHist);
     return med !== null && pb < med;
   }
+  if (gate === "margin_down") {
+    const chg = panel.flow_regime?.margin_change_by_code?.[ev.code]?.[d];
+    return finite(chg) && (chg as number) < 0;
+  }
+  if (gate === "eq_ar_high" || gate === "eq_ar_low") {
+    if (ev.eq_ar == null || !finite(ev.eq_ar)) return false;
+    const hist: Record<string, number> = {};
+    for (const row of panel.fund_regime?.events_by_code?.[ev.code] || []) {
+      const dd = String(row.disc_date || "").slice(0, 10);
+      if (dd && dd < d && finite(row.eq_ar)) hist[dd] = row.eq_ar as number;
+    }
+    const med = pitMedian(hist, d, 8);
+    if (med === null) return false;
+    return gate === "eq_ar_high"
+      ? (ev.eq_ar as number) >= med
+      : (ev.eq_ar as number) < med;
+  }
+  if (gate === "ta_up") {
+    return (
+      ev.ta != null &&
+      ev.prior_ta != null &&
+      finite(ev.ta) &&
+      finite(ev.prior_ta) &&
+      (ev.ta as number) > (ev.prior_ta as number)
+    );
+  }
+  if (gate === "overnight_p10") {
+    const hist = Object.keys(overnight)
+      .filter((x) => x < d)
+      .map((x) => overnight[x])
+      .filter((v) => finite(v))
+      .sort((a, b) => a - b);
+    const on = overnight[d];
+    if (hist.length < 20 || on === undefined) return false;
+    const p10 = hist[Math.max(0, Math.floor(0.1 * (hist.length - 1)))];
+    return on <= p10;
+  }
+  if (gate === "curve_flatten") {
+    const prevs = Object.keys(spread)
+      .filter((x) => x < d)
+      .sort();
+    const sp = spread[d];
+    if (!prevs.length || !finite(sp)) return false;
+    const psp = spread[prevs[prevs.length - 1]];
+    return finite(psp) && (sp as number) < (psp as number);
+  }
+  if (gate === "repo_3m_down") {
+    const prevs = Object.keys(overnight)
+      .filter((x) => x < d)
+      .sort();
+    const on = overnight[d];
+    const sp = spread[d];
+    if (!prevs.length || on === undefined || !finite(sp)) return false;
+    const prev = prevs[prevs.length - 1];
+    const psp = spread[prev];
+    return (
+      finite(overnight[prev]) &&
+      finite(psp) &&
+      on + (sp as number) < overnight[prev] + (psp as number)
+    );
+  }
+  if (gate === "nky_vol_high_skip") {
+    const nky = panel.nky_vol_series?.rv_abs_by_date || {};
+    const med = pitMedian(nky, d, 20);
+    if (med === null || !finite(nky[d])) return false;
+    return nky[d] < med;
+  }
   // Unknown gate fails closed (do not silently always-on).
   return false;
 }
@@ -878,6 +982,12 @@ export function comboCsGateOk(
     roeHigh?: boolean;
     divPositive?: boolean;
     npPositive?: boolean;
+    eqArHigh?: boolean;
+    eqArLow?: boolean;
+    taUp?: boolean;
+    cheapIv?: boolean;
+    tightOn?: boolean;
+    shortDown?: boolean;
   },
 ): { keep: boolean; invert: boolean } {
   const wd = weekdayMon0(d);
@@ -967,6 +1077,26 @@ export function comboCsGateOk(
     keep = extras?.divPositive === true;
   } else if (gate === "np_positive") {
     keep = extras?.npPositive === true;
+  } else if (gate === "eq_ar_high") {
+    keep = extras?.eqArHigh === true;
+  } else if (gate === "eq_ar_low_invert") {
+    keep = extras?.eqArLow === true;
+    invert = true;
+  } else if (gate === "ta_up") {
+    keep = extras?.taUp === true;
+  } else if (gate === "eq_ar_high_easy") {
+    keep =
+      extras?.eqArHigh === true &&
+      on !== undefined &&
+      medOn !== null &&
+      on < medOn;
+  } else if (gate === "eq_ar_high_cheap_iv") {
+    keep = extras?.eqArHigh === true && extras?.cheapIv === true;
+  } else if (gate === "margin_up_tight_invert") {
+    keep = marginChg !== null && marginChg > 0 && extras?.tightOn === true;
+    invert = true;
+  } else if (gate === "short_ratio_down") {
+    keep = extras?.shortDown === true;
   } else {
     return { keep: false, invert: false };
   }
@@ -1041,6 +1171,9 @@ function eventHeld(
     div_ann?: number | null;
     np?: number | null;
     roe?: number | null;
+    ta?: number | null;
+    eq_ar?: number | null;
+    prior_ta?: number | null;
   };
   const perCode: Record<string, { dlist: string[]; entries: Entry[] }> = {};
 
@@ -1082,6 +1215,9 @@ function eventHeld(
         div_ann: ev.div_ann,
         np: ev.np,
         roe: ev.roe,
+        ta: ev.ta,
+        eq_ar: ev.eq_ar,
+        prior_ta: ev.prior_ta,
       });
       absSurprises.push({ d: disc, abs: Math.abs(sur) });
     }
@@ -2243,6 +2379,48 @@ function gatedCsHeld(
                 (fin.div_ann as number) > 0,
               npPositive:
                 fin != null && finite(fin.np) && (fin.np as number) > 0,
+              eqArHigh:
+                fin != null &&
+                finite(fin.eq_ar) &&
+                (() => {
+                  const h: Record<string, number> = {};
+                  for (const ev of fins) {
+                    const dd = String(ev.disc_date || "").slice(0, 10);
+                    if (dd && dd < d && finite(ev.eq_ar))
+                      h[dd] = ev.eq_ar as number;
+                  }
+                  const med = pitMedian(h, d, 8);
+                  return med !== null && (fin.eq_ar as number) >= med;
+                })(),
+              eqArLow:
+                fin != null &&
+                finite(fin.eq_ar) &&
+                (() => {
+                  const h: Record<string, number> = {};
+                  for (const ev of fins) {
+                    const dd = String(ev.disc_date || "").slice(0, 10);
+                    if (dd && dd < d && finite(ev.eq_ar))
+                      h[dd] = ev.eq_ar as number;
+                  }
+                  const med = pitMedian(h, d, 8);
+                  return med !== null && (fin.eq_ar as number) < med;
+                })(),
+              taUp:
+                fin != null &&
+                finite(fin.ta) &&
+                finite(fin.prior_ta) &&
+                (fin.ta as number) > (fin.prior_ta as number),
+              cheapIv:
+                finite(panel.atm_iv_series?.[d]) &&
+                finite(panel.base_vol_series?.[d]) &&
+                (panel.atm_iv_series as Record<string, number>)[d] <
+                  (panel.base_vol_series as Record<string, number>)[d],
+              tightOn: on !== undefined && medOn !== null && on >= medOn,
+              shortDown:
+                prev !== null &&
+                finite(sr[d]) &&
+                finite(sr[prev]) &&
+                sr[d] < sr[prev],
             },
           );
           keep = g.keep;
@@ -2445,7 +2623,10 @@ export function evalLogicDailyPathOnPanel(
   if (isEventLogic(lid)) {
     held = eventHeld(logic, panel) || {};
     evalPath = "event";
-  } else if ((CF_UNIQUE_CS_LOGIC_IDS as readonly string[]).includes(lid)) {
+  } else if (
+    (CF_UNIQUE_CS_LOGIC_IDS as readonly string[]).includes(lid) ||
+    (CF_NEW_CS_THESIS_IDS as readonly string[]).includes(lid)
+  ) {
     held = gatedCsHeld(logic, panel);
     evalPath = "gated_cs";
   } else {

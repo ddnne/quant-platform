@@ -124,7 +124,7 @@ def test_eval_universe_is_not_fifteen() -> None:
     from research.cf_mass_eval_job import DEFAULT_MAX_CODES
     from research.class_hyp_eval import DEFAULT_EVAL_CODES
 
-    assert DEFAULT_MAX_CODES > 15
+    assert DEFAULT_MAX_CODES > 30
     assert len(DEFAULT_EVAL_CODES) >= DEFAULT_MAX_CODES
 
 

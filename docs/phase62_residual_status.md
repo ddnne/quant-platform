@@ -62,5 +62,5 @@ prose. Update the table after a published projection.
 
 Completion of a research turn requires an R2 **daily_path** job, not local JSON.
 Do not paste cell scores into this file. Latest recorded job id belongs in D1.
-Candidate pool (code: `CANDIDATE_POLICY`) excludes path_broken / path_collapsed / always_on / near_empty / data_requirement_unmet.
-Latest empirical jobs (ids only): `eval-cf-dp-univ30-20260822a`, `eval-cf-dp-primary30-20260822a`. Eval universe default **30 names** (was 15).
+Candidate pool (code: `CANDIDATE_POLICY`) excludes path_broken / path_collapsed / always_on / near_empty / data_requirement_unmet / near_duplicate.
+Latest empirical jobs (ids only): `eval-cf-dp-univ50-20260822a`, `eval-cf-dp-baskets50-20260822a`. Eval universe default **50 names** (was 30). `fins_summary` TA/EqAR wired (`ta`/`eq_ar`; official keys TA/EqAR). Worker `research-mass-eval/v16-univ50-ta`. GO deferred.

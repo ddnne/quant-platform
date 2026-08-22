@@ -304,6 +304,16 @@ def _collect_event_entries(
                 "entry_date": str(entry_date)[:10],
                 "surprise": float(surprise),
                 "sign": float(sgn),
+                "eps": ev.get("eps"),
+                "prior_eps": ev.get("prior_eps"),
+                "bps": ev.get("bps"),
+                "roe": ev.get("roe"),
+                "div_ann": ev.get("div_ann"),
+                "np": ev.get("np"),
+                "eq": ev.get("eq"),
+                "ta": ev.get("ta"),
+                "eq_ar": ev.get("eq_ar"),
+                "prior_ta": ev.get("prior_ta"),
             }
             code_entries.append(rec)
             entries.append(rec)

@@ -137,20 +137,41 @@ MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
         "rule": "fundamentals_sleeve",
         "primary": False,
         "members": (
-            "cs_cheap_pb",
-            "cs_roe_high",
-            "cs_div_positive",
-            "event_positive_eps_pead",
+            "event_eqar_high_pead",
+            "event_eqar_low_fade",
+            "event_ta_up_pead",
+            "cs_eqar_high_easy",
         ),
     },
     {
         "basket_id": "basket_theme_flow",
-        "rule": "margin_repo_sleeve",
+        "rule": "margin_flow_sleeve",
         "primary": False,
         "members": (
             "cs_margin_up_chase",
+            "cs_short_ratio_up_fade",
+            "event_margin_delta_fade",
+        ),
+    },
+    {
+        "basket_id": "basket_theme_repo",
+        "rule": "repo_rate_sleeve",
+        "primary": False,
+        "members": (
             "cs_on_impulse",
-            "surprise_xs_tight_fade",
+            "cs_overnight_p10",
+            "cs_repo3m_down",
+            "event_on_impulse_pead",
+        ),
+    },
+    {
+        "basket_id": "basket_event_fund",
+        "rule": "event_fund_cross",
+        "primary": False,
+        "members": (
+            "event_eqar_high_pead",
+            "event_cheap_pb_pead",
+            "event_positive_eps_pead",
         ),
     },
 )

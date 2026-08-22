@@ -40,6 +40,12 @@ from pathlib import Path
 from statistics import mean
 from typing import Any, Mapping, Sequence
 
+from research.unique_logic.constants import (
+    FINS_SUMMARY_EQ_KEY,
+    FINS_SUMMARY_EQAR_KEY,
+    FINS_SUMMARY_OFFICIAL_KEYS,
+    FINS_SUMMARY_TA_KEY,
+)
 from features.class_signals import (
     CLASS_EVENT_POST,
     CLASS_FLOW_DEMAND,
@@ -243,6 +249,26 @@ DEFAULT_EVAL_CODES: tuple[str, ...] = (
     "54010",
     "57130",
     "65030",
+    "62730",
+    "63010",
+    "83060",
+    "72010",
+    "72690",
+    "67020",
+    "67520",
+    "69520",
+    "77310",
+    "84110",
+    "86010",
+    "90200",
+    "91010",
+    "25020",
+    "34020",
+    "45190",
+    "54060",
+    "64710",
+    "88020",
+    "95030",
 )
 
 # W80: prefer full-year windows when W64 full mirrors exist; else Q4.
@@ -422,6 +448,176 @@ def load_bars_ndjson_rich(
         if max_days is not None and len(pairs) > int(max_days):
             pairs = pairs[-int(max_days) :]
         out[code] = pairs
+    return out
+
+
+def load_bars_from_sqlite_rich(
+    *,
+    codes: Sequence[str],
+    period_start: str,
+    period_end: str,
+    db_path: str | Path = DEFAULT_SQLITE,
+    max_days: int | None = None,
+) -> dict[str, list[tuple[str, dict[str, Any]]]]:
+    """Load extra names from sqlite ``jquants_records`` via PK range per code.
+
+    Local ndjson mirrors are a 30-name shard. Missing requested codes are
+    filled from COMPLETE-backed sqlite (no invent). Empty code → omitted.
+    """
+    db = Path(db_path)
+    want = [str(c).strip() for c in codes if str(c).strip()]
+    if not db.exists() or not want:
+        return {}
+    p0 = str(period_start)[:10]
+    p1 = str(period_end)[:10]
+    out: dict[str, list[tuple[str, dict[str, Any]]]] = {}
+    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    try:
+        sql = (
+            "SELECT payload FROM jquants_records "
+            "WHERE source = 'jquants' AND dataset = 'equities_bars_daily' "
+            "AND natural_key >= ? AND natural_key <= ?"
+        )
+        for code in want:
+            lo = json.dumps({"Code": code, "Date": p0}, separators=(",", ":"))
+            hi = json.dumps({"Code": code, "Date": p1 + "~"}, separators=(",", ":"))
+            dmap: dict[str, dict[str, Any]] = {}
+            for (payload,) in con.execute(sql, (lo, hi)):
+                try:
+                    pl = json.loads(payload) if isinstance(payload, str) else payload
+                except (TypeError, json.JSONDecodeError):
+                    continue
+                if not isinstance(pl, Mapping):
+                    continue
+                date = str(pl.get("Date") or pl.get("date") or "")[:10]
+                if not date or date < p0 or date > p1:
+                    continue
+                close = pl.get("C")
+                if close is None:
+                    close = pl.get("Close") or pl.get("AdjC") or pl.get("AAdjC")
+                try:
+                    c = float(close)
+                except (TypeError, ValueError):
+                    continue
+                dmap[date] = {
+                    "close": c,
+                    "C": c,
+                    "Close": c,
+                    "Code": code,
+                    "Date": date,
+                    "date": date,
+                    "Va": pl.get("Va") or pl.get("AVa") or pl.get("MVa"),
+                    "Vo": pl.get("Vo") or pl.get("AVo") or pl.get("MVo"),
+                    "AdjC": pl.get("AdjC") or pl.get("AAdjC"),
+                    "AdjVo": pl.get("AdjVo") or pl.get("AAdjVo"),
+                }
+            if not dmap:
+                continue
+            pairs = sorted(dmap.items(), key=lambda x: x[0])
+            if max_days is not None and len(pairs) > int(max_days):
+                pairs = pairs[-int(max_days) :]
+            out[code] = pairs
+    finally:
+        con.close()
+    return out
+
+
+def fins_summary_ta_eqar_stats(
+    db_path: str | Path = DEFAULT_SQLITE,
+    *,
+    limit: int | None = None,
+) -> dict[str, Any]:
+    """Count TA / EqAR / Eq non-null rates in fins_summary payloads. No invent."""
+    db = Path(db_path)
+    out: dict[str, Any] = {
+        "dataset": "fins_summary",
+        "official_keys": dict(FINS_SUMMARY_OFFICIAL_KEYS),
+        "n_rows": 0,
+        "n_ta_nonnull": 0,
+        "n_eqar_nonnull": 0,
+        "n_eq_nonnull": 0,
+        "ncta_nonnull": 0,
+        "sample_ta": [],
+        "sample_eqar": [],
+        "invent": False,
+        "note": (
+            "NCTA is a non-consolidated alias and is sparse. Official v2 "
+            "summary uses TA (total assets) and EqAR (equity/assets)."
+        ),
+    }
+    if not db.exists():
+        out["error"] = "sqlite_missing"
+        return out
+    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    try:
+        sql = "SELECT payload FROM jquants_records WHERE dataset = 'fins_summary'"
+        if limit:
+            sql += f" LIMIT {int(limit)}"
+        n = n_ta = n_eqar = n_eq = n_ncta = 0
+        samples_ta: list[dict[str, Any]] = []
+        samples_eqar: list[dict[str, Any]] = []
+        for (payload,) in con.execute(sql):
+            try:
+                pl = json.loads(payload) if isinstance(payload, str) else payload
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if not isinstance(pl, Mapping):
+                continue
+            n += 1
+
+            def _ok(key: str) -> bool:
+                v = pl.get(key)
+                if v in (None, ""):
+                    return False
+                try:
+                    float(v)
+                    return True
+                except (TypeError, ValueError):
+                    return False
+
+            if _ok(FINS_SUMMARY_TA_KEY):
+                n_ta += 1
+                if len(samples_ta) < 3:
+                    samples_ta.append(
+                        {
+                            "code": pl.get("Code"),
+                            "disc": pl.get("DiscDate"),
+                            "ta": pl.get(FINS_SUMMARY_TA_KEY),
+                            "doctype": pl.get("DocType"),
+                        }
+                    )
+            if _ok(FINS_SUMMARY_EQAR_KEY):
+                n_eqar += 1
+                if len(samples_eqar) < 3:
+                    samples_eqar.append(
+                        {
+                            "code": pl.get("Code"),
+                            "disc": pl.get("DiscDate"),
+                            "eq_ar": pl.get(FINS_SUMMARY_EQAR_KEY),
+                            "doctype": pl.get("DocType"),
+                        }
+                    )
+            if _ok(FINS_SUMMARY_EQ_KEY):
+                n_eq += 1
+            if _ok("NCTA"):
+                n_ncta += 1
+        out.update(
+            {
+                "n_rows": n,
+                "n_ta_nonnull": n_ta,
+                "n_eqar_nonnull": n_eqar,
+                "n_eq_nonnull": n_eq,
+                "ncta_nonnull": n_ncta,
+                "ta_rate": (n_ta / n) if n else None,
+                "eqar_rate": (n_eqar / n) if n else None,
+                "eq_rate": (n_eq / n) if n else None,
+                "ncta_rate": (n_ncta / n) if n else None,
+                "sample_ta": samples_ta,
+                "sample_eqar": samples_eqar,
+            }
+        )
+    finally:
+        con.close()
     return out
 
 
@@ -1337,7 +1533,13 @@ def load_fins_events_from_sqlite(
                     "div_ann": _f("DivAnn"),
                     "np": _f("NP"),
                     "sales": _f("Sales"),
-                    "eq": _f("Eq") if _f("Eq") is not None else _f("ShEq"),
+                    "eq": (
+                        _f(FINS_SUMMARY_EQ_KEY)
+                        if _f(FINS_SUMMARY_EQ_KEY) is not None
+                        else _f("ShEq")
+                    ),
+                    "ta": _f(FINS_SUMMARY_TA_KEY),
+                    "eq_ar": _f(FINS_SUMMARY_EQAR_KEY),
                     "event_time": str(event_time) if event_time else None,
                     "available_at": str(row_aa) if row_aa else None,
                     "source": "fins_summary",
@@ -1347,10 +1549,14 @@ def load_fins_events_from_sqlite(
         for code, events in by_code.items():
             events.sort(key=lambda e: e["disc_date"])
             last_eps = None
+            last_ta = None
             for ev in events:
                 ev["prior_eps"] = last_eps
+                ev["prior_ta"] = last_ta
                 if ev.get("eps") is not None:
                     last_eps = ev["eps"]
+                if ev.get("ta") is not None:
+                    last_ta = ev["ta"]
         return by_code
     finally:
         con.close()
@@ -5126,6 +5332,8 @@ __all__ = [
     "MIN_YEARS_RESEARCH_CANDIDATE",
     "bars_rich_to_close_panel",
     "collect_liquidity_bar_rows",
+    "fins_summary_ta_eqar_stats",
+    "load_bars_from_sqlite_rich",
     "build_nky_vol_series",
     "build_repo_curve_series",
     "evaluate_cross_section_on_bars",
