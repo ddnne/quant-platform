@@ -205,7 +205,17 @@ GATE_OCCUPANCY_LABEL: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("repo_3m_down", ("repo rates are low", "low repo", "repo is low")),
     ("ta_up", ("technical analysis", "technical signal", "ta signals")),
     ("ta_down", ("technical analysis", "technical signal", "ta signals")),
-    ("overnight_p10", ("at 10%", "funding at 10", "10 percent", "10% predicts", "funding is loose", "loose")),
+    ("overnight_p10", (
+        "at 10%",
+        "funding at 10",
+        "10 percent",
+        "10% predicts",
+        "funding is loose",
+        "loose",
+        "repo rate is low",
+        "repo rates are low",
+        "the repo rate is low",
+    )),
     ("pb_rising", (
         "is rising",
         "pb rose",
@@ -231,6 +241,8 @@ GATE_OCCUPANCY_LABEL: tuple[tuple[str, tuple[str, ...]], ...] = (
     # curve_flatten occupancy is the repo curve, not a generic yield curve.
     ("curve_flatten", ("yield curve",)),
     ("np_negative", ("profitability is weak", "weak profitability", "weak profit")),
+    ("eps_down", ("earnings disappointment", "earnings disappoint")),
+    ("price_down", ("under pressure", "price pressure")),
     ("crowded_margin", ("market is crowded",)),
 )
 
@@ -254,6 +266,8 @@ EXTRA_TITLE_GATES: tuple[tuple[str, str], ...] = (
     ("eps surprise", "eps_down"),
     ("earnings surprises", "eps_down"),
     ("earnings surprise", "eps_down"),
+    ("earnings disappointment", "eps_down"),
+    ("earnings disappoint", "eps_down"),
     ("eps growth", "eps_up"),
     ("earnings growth", "eps_up"),
     ("high np", "np_negative"),
@@ -267,6 +281,8 @@ EXTRA_TITLE_GATES: tuple[tuple[str, str], ...] = (
     ("falling sales", "sales_down"),
     ("sales are down", "sales_down"),
     ("sales are declining", "sales_down"),
+    ("price declines", "price_down"),
+    ("price decline", "price_down"),
     ("weak sales", "sales_down"),
     ("roe decline", "roe_low"),
     ("roe is low", "roe_low"),
@@ -295,6 +311,9 @@ PROPOSE_CONTRADICTORY_GATE_PAIRS: tuple[frozenset[str], ...] = (
     frozenset({"curve_flatten", "steep_curve"}),
     frozenset({"invert_curve", "steep_curve"}),
     frozenset({"overnight_p10", "tight_funding"}),
+    frozenset({"overnight_p10", "overnight_tightening"}),
+    frozenset({"overnight_easing", "tight_funding"}),
+    frozenset({"easy_funding", "overnight_tightening"}),
 )
 
 

@@ -346,6 +346,7 @@ export const CF_NEW_EVENT_THESIS_IDS = [
   "event_overnight_tight_eqar_falling_steep_fade",
   "event_overnight_tight_nkyvol",
   "event_p10_crowded",
+  "event_p10_eps_down_px_down",
   "event_p10_pb_rising",
   "event_p10_px_down_np_neg",
   "event_pb_rising_afterclose_fade",

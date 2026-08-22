@@ -288,6 +288,20 @@ def test_review_proposal_row_rejects_invent_and_weekday() -> None:
     assert bad_fi["ok"] is False
     assert "contradictory_gates" in bad_fi["reasons"]
 
+    p10_tightening = dict(good)
+    p10_tightening["gates"] = ["overnight_p10", "overnight_tightening"]
+    p10_tightening["datasets"] = [
+        "equities_bars_daily",
+        "fins_summary",
+        "jsda_tokyo_repo_rates",
+    ]
+    p10_tightening["thesis"] = (
+        "PEAD when overnight is in the easiest PIT decile AND overnight tightening."
+    )
+    bad_p10t = review_proposal_row(p10_tightening)
+    assert bad_p10t["ok"] is False
+    assert "contradictory_gates" in bad_p10t["reasons"]
+
     one = dict(good)
     one["gates"] = ["liq_high"]
     bad_one = review_proposal_row(one)
@@ -563,6 +577,12 @@ def test_review_proposal_row_occupancy_and_polarity_table() -> None:
             ["invert_curve", "pb_rising"],
             "occupancy_label_only",
             "PEAD when the repo curve inverted AND PB is above its PIT median. Skip missing PIT prints (no invent).",
+        ),
+        (
+            "Earnings disappointment is more likely to be followed by price declines when the repo rate is low and the price is already under pressure.",
+            ["eps_down", "price_down", "overnight_p10"],
+            "occupancy_label_only",
+            "PEAD when overnight is in the easiest PIT decile AND EPS contracted versus the last prior print AND price is down. Skip missing PIT prints (no invent).",
         ),
     ]
     for bad_thesis, gates, reason, good_thesis in rows:
