@@ -81,7 +81,6 @@ def _freeze() -> dict[str, Any]:
 
 
 def resolve_research_run_token() -> str | None:
-    """Token that gates the mass-eval Worker (reuses ingestion run token)."""
     for env_name in (
         "RESEARCH_RUN_TOKEN",
         "INGESTION_RUN_TOKEN",
@@ -119,7 +118,6 @@ def design_mass_factory_paths(job_id: str) -> dict[str, Any]:
 
 
 def is_unique_period_net_unsupported(logic_id: str) -> bool:
-    """Unique event/CS theses are not evaluable on period-net mass-eval."""
     from research.unique_logic.constants import (
         CF_EVENT_DAILY_PATH_IDS,
         CF_NEW_CS_THESIS_IDS,
@@ -139,7 +137,6 @@ def is_unique_period_net_unsupported(logic_id: str) -> bool:
 def default_logic_specs(
     logic_ids: Sequence[str] | None = None,
 ) -> list[dict[str, Any]]:
-    """CF-ready specs from catalog/YAML. Leftover unknown ids get family_id=unknown."""
     ids = list(logic_ids) if logic_ids is not None else list(CF_BAR_NATIVE_LOGIC_IDS)
     out: list[dict[str, Any]] = []
     from research.unique_logic import all_unique_logic_specs
@@ -207,7 +204,6 @@ def panels_cache_id(
 
 
 def try_r2_get_json(key: str) -> dict[str, Any] | None:
-    """Best-effort remote R2 JSON get via wrangler (None if missing)."""
     wr = _DEFAULT_WRANGLER
     cfg = (
         _REPO_ROOT
@@ -338,7 +334,6 @@ def build_cf_mass_eval_job_spec(
     panels_prefix: str | None = None,
     drop_unique_unsupported: bool = True,
 ) -> dict[str, Any]:
-    """Declarative job payload for the CF mass-eval Worker."""
     mode_s = str(mode or DEFAULT_MASS_EVAL_MODE).strip()
     if mode_s not in ALLOWED_MODES:
         raise CfMassEvalError(
@@ -390,9 +385,7 @@ def build_cf_mass_eval_job_spec(
 
 
 from research.cf_mass_eval_run import (  # noqa: E402
-    deploy_cf_mass_eval_worker,
     invoke_cf_mass_eval_worker,
-    put_local_fallback_artifacts,
     run_cf_mass_eval_job,
     try_cf_mass_eval_status,
 )
@@ -407,8 +400,6 @@ __all__ = [
     "DEFAULT_MASS_EVAL_MODE",
     "ALLOWED_MODES",
     "DEFAULT_WORKER_URL",
-    "RESEARCH_ARTIFACT_BUCKET",
-    "RESEARCH_ARTIFACT_PREFIX",
     "CfMassEvalError",
     "resolve_research_run_token",
     "design_mass_factory_paths",
@@ -417,11 +408,8 @@ __all__ = [
     "panels_cache_id",
     "PANELS_CACHE_PREFIX",
     "normalize_period_row",
-    "stage_real_panels_to_r2",
     "build_cf_mass_eval_job_spec",
     "invoke_cf_mass_eval_worker",
-    "deploy_cf_mass_eval_worker",
-    "put_local_fallback_artifacts",
     "run_cf_mass_eval_job",
     "try_cf_mass_eval_status",
 ]

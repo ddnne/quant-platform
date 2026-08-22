@@ -44,7 +44,6 @@ from research.paper_candidate_specs import (
 
 PAPER_CANDIDATE_SPEC_VERSION: str = "paper-candidate-spec/v1"
 PAPER_CANDIDATE_ADAPTER_VERSION: str = "paper-candidate-adapter/v2"
-PAPER_CANDIDATE_WAVE: str = "W86 / w0816u"
 
 DEFAULT_ONE_WAY_COST: float = 0.001  # 10bp
 DEFAULT_LOOKBACK_DAYS: int = 30
@@ -259,7 +258,6 @@ class PaperCandidateReceptacle:
     note: str = ""
     version: str = PAPER_CANDIDATE_SPEC_VERSION
     adapter_version: str = PAPER_CANDIDATE_ADAPTER_VERSION
-    wave: str = PAPER_CANDIDATE_WAVE
     status: str = "paper_receptacle_unarmed"
 
     def to_dict(self) -> dict[str, Any]:
@@ -267,7 +265,6 @@ class PaperCandidateReceptacle:
         body: dict[str, Any] = {
             "version": self.version,
             "adapter_version": self.adapter_version,
-            "wave": self.wave,
             "status": self.status,
             "hypothesis_class": self.hypothesis_class,
             "signal_id": self.signal_id,

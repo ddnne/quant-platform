@@ -1,8 +1,6 @@
 """ADV-ranked eval universe. Skip missing bars/TA/EqAR. Never head-N.
 
 Empty pool returns []. No invent.
-
-Bar / sidecar loaders live in eval_loaders.
 """
 from __future__ import annotations
 
@@ -258,11 +256,7 @@ def select_eval_universe(
                 "n_eqar": sum(1 for e in evs if e.get("eq_ar") is not None),
             }
         )
-    ranked = rank_eval_codes(scored, max_codes=n)
-    if len(ranked) >= n:
-        return ranked
-    # Fill only from ranked-eligible remainder; never invent empty names.
-    return ranked
+    return rank_eval_codes(scored, max_codes=n)
 
 
 __all__ = [
@@ -271,7 +265,6 @@ __all__ = [
     "UNIVERSE_MIN_BAR_DAYS",
     "UNIVERSE_MIN_FINS_EQAR",
     "UNIVERSE_MIN_FINS_TA",
-    "UNIVERSE_SELECT_ADV",
     "UNIVERSE_SELECT_RULE",
     "rank_eval_codes",
     "select_eval_universe",

@@ -23,4 +23,3 @@ params:
   gate: overnight_present_pit_median
   side: original_easy_opposite_stress
 evaluator: research.unique_logic.dispatch.evaluate_logic_daily_mtm
-notes: catalog declaration; evaluate via unique_logic.dispatch

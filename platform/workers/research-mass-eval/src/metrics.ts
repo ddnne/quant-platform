@@ -1,8 +1,3 @@
-/**
- * Pure TS lite stats for multi-period nets (mirrors research.stats_metrics).
- * Research-only · no significance / edge claim.
- */
-
 export function finiteFloats(values: Array<number | null | undefined>): number[] {
   const out: number[] = [];
   for (const v of values) {
@@ -179,15 +174,5 @@ export function invertNets(
       return -gross - cost;
     }
     return -Number(v);
-  });
-}
-
-export function sha256HexSync(input: string): Promise<string> {
-  const enc = new TextEncoder();
-  return crypto.subtle.digest("SHA-256", enc.encode(input)).then((buf) => {
-    const bytes = new Uint8Array(buf);
-    return Array.from(bytes)
-      .map((b) => b.toString(16).padStart(2, "0"))
-      .join("");
   });
 }

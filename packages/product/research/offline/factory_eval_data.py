@@ -196,23 +196,12 @@ def _synthetic_batch_context(config: MassFactoryConfig) -> BatchDataContext:
             for i, d in enumerate(dates)
         }
         spread = {d: long_r[d] - short_r[d] for d in dates}
-        repo_series = {
-            "rates_by_date": rates,
-            "dataset": "jsda_tokyo_repo_rates",
-            "source": "synthetic",
-        }
+        repo_series = {"rates_by_date": rates}
         curve_series = {
-            "kind": "repo_curve_series",
-            "dataset": "jsda_tokyo_repo_rates",
-            "short_tenor": "overnight/翌日物/T+0",
-            "long_tenor": "3M/T+1",
-            "definition": "spread = long_tenor_rate - short_tenor_rate",
             "short_rates_by_date": short_r,
             "long_rates_by_date": long_r,
             "spread_by_date": spread,
             "rates_by_date": short_r,
-            "n_obs_spread": len(spread),
-            "source": "synthetic",
         }
         from research.eval_loaders import build_nky_vol_series
         from research.options_225_vol_series import build_opt225_regime_bundle
@@ -310,7 +299,6 @@ def _synthetic_batch_context(config: MassFactoryConfig) -> BatchDataContext:
         load_notes={
             "synthetic": True,
             "n_periods": len(panels),
-            "opt225_synthetic": True,
         },
     )
 

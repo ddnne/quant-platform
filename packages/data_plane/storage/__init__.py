@@ -31,8 +31,7 @@ from .coverage_ledger import (
 )
 from .trusted_receipt import SignedReceiptAuthority, TrustedReceiptIssuer
 
-# build_synthetic_complete_receipt is intentionally NOT re-exported from the
-# production storage package. mint_ingestion_issuer is removed (Phase 6.2.3).
+# build_synthetic_complete_receipt is intentionally NOT re-exported.
 
 __all__ = [
     "__version__",

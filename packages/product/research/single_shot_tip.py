@@ -263,12 +263,6 @@ def _pick_str(payload: Mapping[str, Any], *names: str) -> str | None:
     return None
 
 
-def _as_of_from_period_end(period_end: str) -> str:
-    """Session-close as_of at period_end (JST) for tip feature compute."""
-    d = str(period_end).strip()[:10]
-    return f"{d}T15:30:00+09:00"
-
-
 def _available_at_ok(row_available_at: Any, as_of: str) -> bool:
     """PIT gate: available_at must be present and <= as_of (lexicographic ISO)."""
     if row_available_at is None or row_available_at == "":

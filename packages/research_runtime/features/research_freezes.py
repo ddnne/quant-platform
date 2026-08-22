@@ -1,7 +1,6 @@
 """Operational freeze flags (single source).
 
-Mass / READY / Phase 7 / GO stay closed. Modules re-export these names;
-they must not re-bind the values. Pins live in ``research.freezes``.
+Mass / READY / Phase 7 / GO stay closed.
 """
 from __future__ import annotations
 

@@ -1,23 +1,8 @@
-"""Research-only simple daily sign baseline catalog (W65 / w0815bf).
+"""Rejected S1–S5 simple daily sign marker (W65). Not bar-native. Not GO.
 
-Not the CF bar-native catalog (``research.bar_native_specs``). This module
-is the rejected S1–S5 marker only (W56 approved legs after cost-after eval).
-
-Purpose
--------
-Document which COMPLETE-21 simple daily sign hypotheses are fixed as
-``research_baseline_rejected`` after multi-period / multi-year / cost-after
-evaluation. This is a **research marker only**.
-
-Hard constraints
-----------------
-* Does **not** mint READY / VerifiedResearchReadiness
-* Does **not** arm Mass / Phase7
-* Does **not** mass-generate signals or emit order intents
-* Does **not** auto-connect gate pass/fail to operational GO
-* Catalog is read-only documentation for research agents
-
-See: ``docs/proof/w0815bf_w65_simple_daily_sign_baselines_rejected_20260815.md``
+Does not mint READY, arm Mass, or mass-generate signals. Research
+documentation only. See
+``docs/proof/w0815bf_w65_simple_daily_sign_baselines_rejected_20260815.md``.
 """
 
 from __future__ import annotations
@@ -36,17 +21,12 @@ from research.freezes import (
     SIGNIFICANCE_CLAIMED,
 )
 
-# ---------------------------------------------------------------------------
-# Freeze surface (must never arm) — re-exported from research.freezes
-# ---------------------------------------------------------------------------
-
 CATALOG_VERSION: str = "research-baseline-catalog/v1"
 CATALOG_WAVE: str = "W65 / w0815bf"
 RESEARCH_STATUS_REJECTED: str = "research_baseline_rejected"
 HOLDING_PERIOD: str = "1d_nextday_close_to_close"
 COST_ASSUMPTION: str = "one_way_10bp (0.001); research-only; 仮定に依存・運用GOではない"
 
-# Signal ids (must match features.minimal_signal)
 SIGNAL_ID_S1: str = "c21_topix_relative_sign"
 SIGNAL_ID_S2: str = "c21_volume_change_sign"
 SIGNAL_ID_S3: str = "c21_topix_rel_disclosure_filter"
@@ -96,7 +76,6 @@ def _rejected_entry(
     }
 
 
-# Fixed rejected simple daily sign baselines (S1–S5). Numbers live in proof docs.
 REJECTED_SIMPLE_DAILY_SIGN_BASELINES: dict[str, dict[str, Any]] = {
     SIGNAL_ID_S1: _rejected_entry(
         hyp_id="S1",
@@ -310,16 +289,8 @@ def assert_catalog_closed_to_ready_mass(
 __all__ = [
     "CATALOG_VERSION",
     "CATALOG_WAVE",
-    "CONNECTED_TO_MASS",
-    "CONNECTED_TO_READY",
     "COST_ASSUMPTION",
-    "EDGE_CLAIMED",
     "HOLDING_PERIOD",
-    "MASS_GENERATE_SIGNALS",
-    "MASS_RESEARCH",
-    "OPERATIONAL_GO",
-    "PHASE7",
-    "READY_DECLARED",
     "REJECTED_SIMPLE_DAILY_SIGN_BASELINES",
     "RESEARCH_STATUS_REJECTED",
     "SIGNAL_ID_S1",
@@ -327,7 +298,6 @@ __all__ = [
     "SIGNAL_ID_S3",
     "SIGNAL_ID_S4",
     "SIGNAL_ID_S5",
-    "SIGNIFICANCE_CLAIMED",
     "assert_catalog_closed_to_ready_mass",
     "get_rejected_baseline",
     "is_research_baseline_rejected",

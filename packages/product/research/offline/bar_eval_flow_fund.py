@@ -258,7 +258,7 @@ def evaluate_mf_flow_price_on_bars(
         "n_trading_days": n_trading_days,
         "occurrence": occ,
         **_freeze(),
-        "note": "Multi-factor flow×price confirm (parallel to flow hard/soft).",
+        "note": "Multi-factor flow×price confirm.",
     }
 
 

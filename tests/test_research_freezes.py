@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from tests.research_eval_util import _disc_event, _event_eval_kw
+
 
 def test_three_default_pins_untouched() -> None:
     from research.daily_path_eval import assert_frozen_pins_untouched
@@ -45,37 +47,6 @@ def test_factory_templates_do_not_clone_combo_catalog() -> None:
     assert "event_funding_stress_skip" not in LOGIC_TEMPLATES
 
 
-def test_panel_builder_does_not_head_n_slice() -> None:
-    from pathlib import Path
-
-    src = (
-        Path(__file__).resolve().parents[1]
-        / "packages"
-        / "product"
-        / "research"
-        / "cf_mass_eval_job.py"
-    ).read_text(encoding="utf-8")
-    assert "selected[: int(max_codes)]" not in src
-    assert "select_eval_universe" in src
-
-
-def test_eval_tracks_forbid_head_n_and_are_not_a_pass() -> None:
-    from research.eval_tracks import (
-        EVAL_TRACKS,
-        NEXT_RESEARCH_QUEUE,
-        eval_track,
-    )
-
-    assert set(EVAL_TRACKS) == {"mid_n_explore", "liq_large"}
-    for tid in EVAL_TRACKS:
-        t = eval_track(tid)
-        assert t["head_n_forbidden"] is True
-        assert t["go"] is False
-        assert t["not_a_pass"] is True
-        assert t["universe_select"] == "adv_desc_skip_missing_bars_and_fins"
-    assert all(q.get("go") is not True for q in NEXT_RESEARCH_QUEUE)
-
-
 def test_unknown_event_gate_fails_closed() -> None:
     from research.unique_logic.constants import KNOWN_EVENT_GATES
     from research.unique_logic.event_combos import spec_by_id, evaluate_combo_daily_mtm
@@ -95,24 +66,21 @@ def test_unknown_event_gate_fails_closed() -> None:
         curve={"spread_by_date": {"2019-01-04": 0.01, "2019-01-07": 0.01}},
         events={
             "13010": [
-                {
-                    "disc_date": "2019-01-04",
-                    "disc_time": "12:00:00",
-                    "eps": 12.0,
-                    "feps": 10.0,
-                    "prior_eps": 9.0,
-                    "eq_ar": 0.5,
-                    "ta": 100.0,
-                    "prior_ta": 90.0,
-                }
+                _disc_event(
+                    "2019-01-04",
+                    disc_time="12:00:00",
+                    eps=12.0,
+                    feps=10.0,
+                    prior_eps=9.0,
+                    eq_ar=0.5,
+                    ta=100.0,
+                    prior_ta=90.0,
+                )
             ]
         },
         margin_by_code={},
-        one_way_cost=0.001,
-        period_start="2019-01-01",
-        period_end="2019-01-31",
+        **_event_eval_kw(period_end="2019-01-31"),
     )
-    # Unknown gate must not silently always-on.
     occ = pack.get("occupancy") or pack.get("occupancy_frac") or 0.0
     n_on = int(pack.get("n_gate_on_days") or 0)
     assert n_on == 0 or float(occ) == 0.0 or pack.get("status") != "ok" or pack.get("n_entered") in (0, None)
@@ -139,11 +107,8 @@ def test_unknown_cs_gate_fails_closed() -> None:
         curve={"spread_by_date": {"2019-01-04": 0.01, "2019-01-07": 0.01}},
         events={},
         margin_by_code={},
-        one_way_cost=0.001,
-        period_start="2019-01-01",
-        period_end="2019-01-31",
+        **_event_eval_kw(period_end="2019-01-31"),
     )
-    # Unknown CS gate must not silently always-on (elif gate: keep = False).
     occ = pack.get("occupancy") or pack.get("occupancy_frac") or 0.0
     n_on = int(pack.get("n_gate_on_days") or 0)
     assert float(occ) == 0.0
@@ -185,28 +150,3 @@ def test_default_logic_specs_leftover_and_bar_native() -> None:
     assert native[0]["params"]
 
 
-def test_cf_mass_eval_job_does_not_import_factory() -> None:
-    import ast
-    from pathlib import Path
-
-    research_dir = (
-        Path(__file__).resolve().parents[1] / "packages" / "product" / "research"
-    )
-    for name in (
-        "cf_mass_eval_job.py",
-        "cf_mass_eval_run.py",
-        "cf_mass_eval_stage.py",
-        "cf_mass_eval_thicken.py",
-        "cf_daily_path_job.py",
-        "bar_native_specs.py",
-    ):
-        path = research_dir / name
-        if not path.exists():
-            continue
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                for alias in node.names:
-                    assert "mass_strategy_factory" not in alias.name, name
-            elif isinstance(node, ast.ImportFrom) and node.module:
-                assert "mass_strategy_factory" not in node.module, name

@@ -318,7 +318,6 @@ def unique_family_ids_from_yaml(*, root: Path | None = None) -> dict[str, frozen
     """Non-combo YAML stems grouped by ``family`` (or evaluator module).
 
     Combo evaluator is excluded. Does not import combo runtime. Does not GO.
-    Used by constants.EVENT_* / CS_LOGIC_IDS.
     """
     buckets: dict[str, set[str]] = {k: set() for k in _UNIQUE_FAMILY_KEYS}
     for spec in load_catalog_specs(root=root):
@@ -387,6 +386,6 @@ def _economic_theme_ids_cached(root_key: str) -> dict[str, frozenset[str]]:
 def economic_theme_ids(*, root: Path | None = None) -> dict[str, frozenset[str]]:
     """theme_id → logic_ids from ``specs/research_themes.yaml``.
 
-    YAML is the SoT. Does not GO. Used by constants.ECONOMIC_THEME_IDS.
+    YAML is the SoT. Does not GO.
     """
     return dict(_economic_theme_ids_cached(str((root or repo_root()).resolve())))

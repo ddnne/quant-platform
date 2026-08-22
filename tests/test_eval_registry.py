@@ -191,8 +191,11 @@ def test_always_on_gate_is_never_candidate() -> None:
 
 
 def test_mechanical_baskets_are_four_valid_defs() -> None:
-    from research.combo_basket import RETIRED_BASKET_RULES, mechanical_basket_defs
-    from research.combo_basket_catalog import validate_basket_members
+    from research.combo_basket_catalog import (
+        RETIRED_BASKET_RULES,
+        mechanical_basket_defs,
+        validate_basket_members,
+    )
     from research.unique_logic.constants import CANDIDATE_POLICY
 
     defs = mechanical_basket_defs()

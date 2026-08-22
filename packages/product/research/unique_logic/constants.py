@@ -156,8 +156,6 @@ NEAR_EMPTY_OCCUPANCY: float = 0.05
 MF_VALUE_MOM_RATE_DELEGATES: bool = False
 MF_VALUE_MOM_RATE_PATH: str = "unique_rate_gated_value_mom"
 MF_VALUE_MOM_RATE_PARKED_ALWAYS_ON: bool = False
-CANDIDATE_EVAL_PROTOCOL: str = "daily_path_mtm_after_cost/v1"
-PERIOD_NET_ROLE: str = "bar_native_auxiliary_unique_unsupported"
 # Term-structure theses need distinct short/long vol maps. Occupancy 0 = unmet.
 TERM_STRUCTURE_REQUIRED: frozenset[str] = frozenset(
     {

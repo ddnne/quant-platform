@@ -1,9 +1,4 @@
-"""Signed receipt authority — COMPLETE only with verified Ed25519 signature.
-
-Phase 6.2.3: issuer_class/issuer_id strings alone are not authority.
-``mint_ingestion_issuer()`` is removed from the public trusted path.
-Signing requires :class:`ReceiptSigningKey` held only by ingestion runtime.
-"""
+"""Signed receipt authority — COMPLETE only with verified Ed25519 signature."""
 
 from __future__ import annotations
 
@@ -21,7 +16,6 @@ from storage.receipt_crypto import (
     ReceiptSigningKey,
     build_signed_digest_fields,
     load_signing_key,
-    verify_receipt_signature,
 )
 
 
@@ -140,23 +134,8 @@ def open_signed_receipt_authority(
 TrustedReceiptIssuer = SignedReceiptAuthority
 
 
-def is_signature_complete_eligible(receipt: CollectionReceipt) -> bool:
-    """COMPLETE eligibility: valid Ed25519 over canonical body."""
-    digests = receipt.digests
-    if digests.get("eligibility") != "TRUSTED_COLLECTION":
-        return False
-    if digests.get("synthetic") or digests.get("origin") in {
-        "offline-test-fixture",
-        "recovered-raw-only",
-        "parsed-staging-only",
-    }:
-        return False
-    return verify_receipt_signature(digests)
-
-
 __all__ = [
     "SignedReceiptAuthority",
     "TrustedReceiptIssuer",
-    "is_signature_complete_eligible",
     "open_signed_receipt_authority",
 ]

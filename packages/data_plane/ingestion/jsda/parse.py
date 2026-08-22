@@ -55,7 +55,6 @@ def _column_index(headers: List[str]) -> dict[str, int]:
     col: dict[str, int] = {}
     claimed: set[int] = set()
 
-    # Pass 1: exact (case/space-insensitive) match.
     for idx, h in enumerate(headers):
         for field, aliases in _HEADER_ALIASES.items():
             if field in col:
@@ -64,7 +63,6 @@ def _column_index(headers: List[str]) -> dict[str, int]:
                 col[field] = idx
                 claimed.add(idx)
                 break
-    # Pass 2: substring fallback for unclaimed columns.
     for idx, h in enumerate(headers):
         if idx in claimed:
             continue

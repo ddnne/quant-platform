@@ -167,10 +167,7 @@ def evaluate_rate_level_xs_on_bars(
     high_threshold: float = DEFAULT_REPO_HIGH_THRESHOLD,
     low_threshold: float = DEFAULT_REPO_LOW_THRESHOLD,
 ) -> dict[str, Any]:
-    """Absolute rate-level factor × CS book (risk-on/off), multi-day sticky.
-
-    Distinct from macro_conditioned rate_level (unidirectional mom gate).
-    """
+    """Absolute rate-level factor × CS book (risk-on/off), multi-day sticky."""
     n = int(momentum_n)
     h = int(hold_days)
     am_cost = amortized_one_way_cost(one_way_cost, h)

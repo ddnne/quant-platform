@@ -111,7 +111,6 @@ def run_class_hyp_multi_year_eval(
     include_multi_day_hold_10: bool = True,
     cross_section_hold_days: int = 5,
     cross_section_momentum_n: int | None = None,
-    # Sticky hold=10 uses short mom lookback; content-matched mom=10 collapses.
     cross_section_hold10_momentum_n: int = 5,
     cross_section_hold10_mom3_momentum_n: int = 3,
     cross_section_long_frac: float = 0.3,

@@ -20,4 +20,3 @@ params:
   mode: afterclose_only_event_hold
   gate: disctime_ge_session_close
 evaluator: research.unique_logic.dispatch.evaluate_logic_daily_mtm
-notes: catalog declaration; evaluate via unique_logic.dispatch

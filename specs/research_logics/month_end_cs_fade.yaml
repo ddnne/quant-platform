@@ -22,4 +22,3 @@ params:
   n_last: 3
   month_end_sessions: 3
 evaluator: research.unique_logic.cs_overlays.evaluate_month_end_cs_fade_daily_mtm
-notes: catalog declaration; evaluator in packages unique_logic.cs_overlays

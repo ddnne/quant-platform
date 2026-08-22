@@ -13,6 +13,7 @@ from data_contracts.permanent_defer import (
     PermanentDeferHistoryError,
 )
 from tests.research_eval_util import (
+    _aa_row,
     _assert_mass_ready_off,
     _history_bar,
     _history_topix,
@@ -285,8 +286,12 @@ def test_t4_null_available_at_excluded_on_load_and_context():
 
 def test_filter_history_rows_require_available_at():
     rows = [
-        {"date": "2026-06-02", "available_at": None, "code": "1"},
-        {"date": "2026-06-02", "available_at": "2026-06-02T15:30:00+09:00", "code": "1"},
+        _aa_row("2026-06-02", available_at=None, code="1"),
+        _aa_row(
+            "2026-06-02",
+            available_at="2026-06-02T15:30:00+09:00",
+            code="1",
+        ),
     ]
     assert len(filter_history_rows(rows, require_available_at=True)) == 1
 
@@ -448,17 +453,12 @@ def test_available_at_repair_calendar_only_no_lookahead():
     assert "archive_ingest_pollution" in pol["repairs"]
 
     cal_rows = [
-        {
-            "date": "2024-10-01",
-            "event_time": "2024-10-01T00:00:00+09:00",
-            "available_at": "2026-08-11T18:00:00+09:00",  # ingest pollution
-            "holiday_division": "1",
-        },
-        {
-            "date": "2024-10-02",
-            "event_time": "2024-10-02T00:00:00+09:00",
-            "available_at": None,  # drop
-        },
+        _aa_row(
+            "2024-10-01",
+            available_at="2026-08-11T18:00:00+09:00",
+            holiday_division="1",
+        ),
+        _aa_row("2024-10-02", available_at=None),
     ]
     repaired = repair_available_at_research(
         cal_rows, dataset="markets_calendar", policy="auto"
@@ -470,12 +470,12 @@ def test_available_at_repair_calendar_only_no_lookahead():
 
     # fins: short real lag preserved (not archive 2026 pattern)
     fins = [
-        {
-            "date": "2024-10-01",
-            "event_time": "2024-10-01T15:00:00+09:00",
-            "available_at": "2024-10-05T15:00:00+09:00",
-            "Code": "13010",
-        }
+        _aa_row(
+            "2024-10-01",
+            event_time="2024-10-01T15:00:00+09:00",
+            available_at="2024-10-05T15:00:00+09:00",
+            Code="13010",
+        )
     ]
     fr = repair_available_at_research(fins, dataset="fins_summary", policy="auto")
     assert fr["n_fixed"] == 0
@@ -483,12 +483,12 @@ def test_available_at_repair_calendar_only_no_lookahead():
 
     # margin: 2026 ingest stamp on 2022 event → research repair
     margin = [
-        {
-            "date": "2022-10-07",
-            "event_time": "2022-10-07T15:00:00+09:00",
-            "available_at": "2026-08-13T23:41:27+09:00",
-            "Code": "13010",
-        }
+        _aa_row(
+            "2022-10-07",
+            event_time="2022-10-07T15:00:00+09:00",
+            available_at="2026-08-13T23:41:27+09:00",
+            Code="13010",
+        )
     ]
     mr = repair_available_at_research(
         margin, dataset="markets_margin_interest", policy="auto"

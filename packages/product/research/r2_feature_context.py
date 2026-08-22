@@ -72,29 +72,15 @@ AVAILABLE_AT_REPAIR_POLICY: dict[str, Any] = {
     "research_only": True,
     "r2_sot_rewrite": False,
     "repairs": {
-        "calendar_ingest_pollution": {"datasets": ["markets_calendar"]},
-        "archive_ingest_pollution": {
-            "datasets": [
-                "markets_margin_interest",
-                "markets_short_ratio",
-                "markets_margin_alert",
-            ],
-        },
-        "missing_available_at_drop": {"datasets": ["*"]},
-        "post_date_preserve": {
-            "datasets": [
-                "equities_bars_daily",
-                "indices_bars_daily_topix",
-                "fins_summary",
-            ],
-        },
+        "calendar_ingest_pollution": {},
+        "archive_ingest_pollution": {},
+        "missing_available_at_drop": {},
+        "post_date_preserve": {},
     },
 }
 
 COMPLETE_21_R2_INVENTORY: dict[str, dict[str, Any]] = {
     ds: {
-        "dataset": ds,
-        "complete": True,
         "jsonl_prefix": f"structured/jsonl/{ds}/",
         "archive_prefix": f"archive/jquants_records/{ds}/",
     }
@@ -102,8 +88,7 @@ COMPLETE_21_R2_INVENTORY: dict[str, dict[str, Any]] = {
 }
 
 PERMANENT_DEFER_R2_NOTE: dict[str, dict[str, Any]] = {
-    ds: {"dataset": ds, "permanent_defer": True, "load_policy": "hard_reject"}
-    for ds in sorted(PERMANENT_DEFER_DATASETS)
+    ds: {"permanent_defer": True} for ds in sorted(PERMANENT_DEFER_DATASETS)
 }
 
 _CODE_KEYED_HISTORY_DATASETS: frozenset[str] = frozenset(
@@ -817,17 +802,14 @@ def schema_mapping_document() -> dict[str, Any]:
     """R2 envelope → FeatureContext field map."""
     return {
         "pit_gate": {
-            "rule": "available_at is required and available_at <= as_of",
             "null_available_at": "excluded (hard)",
         },
         "s1_column_map": {
-            "equities_bars_daily": {"Code": "row.code", "Date": "row.date"},
-            "indices_bars_daily_topix": {"Date": "row.date", "close": "row.close"},
-            "markets_calendar": {"Date": "row.date", "holiday_division": "HolDiv"},
+            "equities_bars_daily": {},
+            "indices_bars_daily_topix": {},
+            "markets_calendar": {},
         },
-        "bridge_expand_column_map": {
-            ds: {"Date": "row.date"} for ds in BRIDGE_EXPAND_DATASETS
-        },
+        "bridge_expand_column_map": {ds: {} for ds in BRIDGE_EXPAND_DATASETS},
     }
 
 def can_build_40d_asof(

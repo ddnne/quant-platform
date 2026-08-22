@@ -13,51 +13,22 @@ from research.unique_logic.constants import (
     KNOWN_WEAK_THESIS,
     LOGIC_CATALOG_HEADLINE_BAN,
 )
+from tests.research_eval_util import (
+    _disc_event,
+    _event_bars,
+    _event_eval_kw,
+    _logic_spec,
+    _two_name_events,
+    _with_min_hist,
+)
 
 
-def _bars(n: int = 40, start: str = "2019-01-") -> dict[str, list[tuple[str, float]]]:
-    dates = [f"{start}{d:02d}" for d in range(1, min(n, 28) + 1)]
-    out: dict[str, list[tuple[str, float]]] = {}
-    for ci, code in enumerate(("13010", "72030", "67580", "99840")):
-        px = 100.0 + 10 * ci
-        series = []
-        for i, d in enumerate(dates):
-            if code == "13010":
-                px = px * 1.004
-            elif code == "72030":
-                px = px * 0.996
-            else:
-                px = px * (1.0 + 0.002 * ((i + ci) % 3 - 1))
-            series.append((d, px))
-        out[code] = series
-    return out
-
-
-def _events() -> dict[str, list[dict]]:
-    return {
-        "13010": [
-            {
-                "disc_date": "2019-01-10",
-                "disc_time": "16:00:00",  # after close
-                "eps": 12.0,
-                "feps": 10.0,
-                "prior_eps": 9.0,
-            }
-        ],
-        "72030": [
-            {
-                "disc_date": "2019-01-12",
-                "disc_time": "12:00:00",  # pre-close
-                "eps": 4.0,
-                "feps": 6.0,
-                "prior_eps": 5.0,
-            }
-        ],
-    }
+def _bars():
+    return _event_bars(mode="filter")
 
 
 def _spec(lid: str) -> dict:
-    return dict(next(s for s in event_filters.NEW_UNIQUE_LOGIC if s["logic_id"] == lid))
+    return _logic_spec(event_filters.NEW_UNIQUE_LOGIC, lid)
 
 
 def test_event_filters_proposals_are_new_unique_logic_not_catalog_or_prior_event():
@@ -107,38 +78,29 @@ def test_pit_median_from_pairs_keeps_same_date_multiset():
 
 
 def test_large_surprise_skips_below_pit_median():
-    bars = _bars()
-    # Build enough prior |surprise| history so median forms, then a small one.
+    # Enough prior |surprise| history so median forms, then a small in-shard print.
     events: dict[str, list[dict]] = {"13010": [], "72030": []}
     for i in range(1, 22):
         events["13010"].append(
-            {
-                "disc_date": f"2018-12-{i:02d}" if i <= 20 else "2019-01-10",
-                "disc_time": "16:00:00",
-                "eps": 20.0,
-                "feps": 10.0,  # |surprise| = 10
-                "prior_eps": 9.0,
-            }
+            _disc_event(
+                f"2018-12-{i:02d}" if i <= 20 else "2019-01-10",
+                disc_time="16:00:00",
+                eps=20.0,
+                feps=10.0,
+                prior_eps=9.0,
+            )
         )
-    # Replace last with a tiny surprise on 2019-01-10 (in-shard).
-    events["13010"][-1] = {
-        "disc_date": "2019-01-10",
-        "disc_time": "16:00:00",
-        "eps": 10.1,
-        "feps": 10.0,  # |surprise| = 0.1 << 10
-        "prior_eps": 9.0,
-    }
-    spec = _spec("large_surprise_event_hold")
-    spec["params"] = dict(spec["params"])
-    spec["params"]["min_hist"] = 5
-    spec["min_hist"] = 5
+    events["13010"][-1] = _disc_event(
+        "2019-01-10",
+        disc_time="16:00:00",
+        eps=10.1,
+        feps=10.0,
+        prior_eps=9.0,
+    )
     pack = event_filters.evaluate_large_surprise_event_hold_daily_mtm(
-        bars,
+        _bars(),
         events,
-        spec=spec,
-        one_way_cost=0.001,
-        period_start="2019-01-01",
-        period_end="2019-01-28",
+        **_event_eval_kw(spec=_with_min_hist(_spec("large_surprise_event_hold"))),
     )
     assert pack.get("catalog") is False
     assert pack.get("promote_as_main") is False
@@ -148,16 +110,10 @@ def test_large_surprise_skips_below_pit_median():
 
 
 def test_afterclose_skips_preclose_and_missing_disctime():
-    bars = _bars()
-    events = _events()
-    events["13010"][0]["disc_time"] = None  # missing → skip
     pack = event_filters.evaluate_afterclose_only_event_hold_daily_mtm(
-        bars,
-        events,
-        spec=_spec("afterclose_only_event_hold"),
-        one_way_cost=0.001,
-        period_start="2019-01-01",
-        period_end="2019-01-28",
+        _bars(),
+        _two_name_events(t13010=None),
+        **_event_eval_kw(spec=_spec("afterclose_only_event_hold")),
     )
     assert pack.get("ffill_applied") is False
     assert pack.get("invent_fill") is False
@@ -168,25 +124,20 @@ def test_afterclose_skips_preclose_and_missing_disctime():
 
 
 def test_afterclose_accepts_post_session_close():
-    bars = _bars()
-    events = {
-        "13010": [
-            {
-                "disc_date": "2019-01-10",
-                "disc_time": "16:30:00",
-                "eps": 12.0,
-                "feps": 10.0,
-                "prior_eps": 9.0,
-            }
-        ]
-    }
     pack = event_filters.evaluate_afterclose_only_event_hold_daily_mtm(
-        bars,
-        events,
-        spec=_spec("afterclose_only_event_hold"),
-        one_way_cost=0.001,
-        period_start="2019-01-01",
-        period_end="2019-01-28",
+        _bars(),
+        {
+            "13010": [
+                _disc_event(
+                    "2019-01-10",
+                    disc_time="16:30:00",
+                    eps=12.0,
+                    feps=10.0,
+                    prior_eps=9.0,
+                )
+            ]
+        },
+        **_event_eval_kw(spec=_spec("afterclose_only_event_hold")),
     )
     assert pack.get("status") == "ok"
     assert pack.get("n_entered", 0) == 1
@@ -194,26 +145,21 @@ def test_afterclose_accepts_post_session_close():
 
 
 def test_event_pre_mom_agree_skips_disagreement():
-    bars = _bars()
-    # 72030 is built with downward drift; give it a POSITIVE surprise.
-    events = {
-        "72030": [
-            {
-                "disc_date": "2019-01-12",
-                "disc_time": "16:00:00",
-                "eps": 10.0,
-                "feps": 12.0,  # FEPS-EPS = +2 vs downward mom
-                "prior_eps": 9.0,
-            }
-        ]
-    }
+    # 72030 has downward drift; POSITIVE surprise (FEPS-EPS = +2) disagrees.
     pack = event_filters.evaluate_event_pre_mom_agree_hold_daily_mtm(
-        bars,
-        events,
-        spec=_spec("event_pre_mom_agree_hold"),
-        one_way_cost=0.001,
-        period_start="2019-01-01",
-        period_end="2019-01-28",
+        _bars(),
+        {
+            "72030": [
+                _disc_event(
+                    "2019-01-12",
+                    disc_time="16:00:00",
+                    eps=10.0,
+                    feps=12.0,
+                    prior_eps=9.0,
+                )
+            ]
+        },
+        **_event_eval_kw(spec=_spec("event_pre_mom_agree_hold")),
     )
     assert pack.get("status") == "ok"
     assert pack.get("n_skip_mom_disagree", 0) + pack.get("n_skip_mom_history", 0) >= 1
@@ -223,15 +169,12 @@ def test_event_pre_mom_agree_skips_disagreement():
 
 def test_event_margin_crowding_skips_missing_and_empty_is_incomplete():
     bars = _bars()
-    events = _events()
+    events = _two_name_events(t13010="16:00:00")
     empty = event_filters.evaluate_event_margin_crowding_skip_daily_mtm(
         bars,
         events,
         {},
-        spec=_spec("event_margin_crowding_skip"),
-        one_way_cost=0.001,
-        period_start="2019-01-01",
-        period_end="2019-01-28",
+        **_event_eval_kw(spec=_spec("event_margin_crowding_skip")),
     )
     assert empty.get("daily_path_complete") is False
     assert "Not approximated" in str(empty.get("incomplete_reason") or "")
@@ -241,18 +184,11 @@ def test_event_margin_crowding_skips_missing_and_empty_is_incomplete():
         "72030": {f"2019-01-{d:02d}": 100.0 for d in range(1, 12)},
     }
     margin["72030"]["2019-01-11"] = 500.0  # last print before 01-12 entry, crowded
-    spec = _spec("event_margin_crowding_skip")
-    spec["params"] = dict(spec["params"])
-    spec["params"]["min_hist"] = 5
-    spec["min_hist"] = 5
     pack = event_filters.evaluate_event_margin_crowding_skip_daily_mtm(
         bars,
         events,
         margin,
-        spec=spec,
-        one_way_cost=0.001,
-        period_start="2019-01-01",
-        period_end="2019-01-28",
+        **_event_eval_kw(spec=_with_min_hist(_spec("event_margin_crowding_skip"))),
     )
     assert pack.get("ffill_applied") is False
     assert pack.get("n_skip_missing_margin", 0) >= 1

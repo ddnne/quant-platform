@@ -20,10 +20,6 @@ from features.class_signals import (
     multi_day_forward_return,
     sign_from_numeric,
 )
-from research.freezes import (
-    CONTINUOUS_PAPER,
-    FROZEN_DEFAULT_PATH,
-)
 from research.hypothesis_classes import (
     CLASS_CROSS_SECTION_RELATIVE,
     CLASS_EVENT_POST,
@@ -447,7 +443,7 @@ def _evaluate_mdh_polarity_on_bars(
     am_cost = amortized_one_way_cost(one_way_cost, h)
     signed_returns: list[float] = []
     n_active = 0
-    holding_records: list[dict[str, Any]] = []
+    n_code_days = 0
     pol = -1.0 if int(polarity) < 0 else 1.0
 
     for code, pairs in sorted(bars_by_code.items()):
@@ -466,9 +462,8 @@ def _evaluate_mdh_polarity_on_bars(
             entry_signs, hold_days=h, rebalance_mode=rebalance_mode
         )
         closes = [c for _, c in pairs_l]
-        dates = [d for d, _ in pairs_l]
         for i, pos in enumerate(held):
-            holding_records.append({"date": dates[i], "code": code, "sign": pos})
+            n_code_days += 1
             if pos is None or pos == 0.0:
                 continue
             if rebalance_mode == "fixed_horizon" and i % h != 0:
@@ -481,26 +476,20 @@ def _evaluate_mdh_polarity_on_bars(
 
     gross = mean(signed_returns) if signed_returns else None
     net = (gross - am_cost) if gross is not None else None
-    n_code_days = len(holding_records)
     return {
         "signal_id": "c21_multi_day_hold_reversion",
-        "hypothesis_class": CLASS_MULTI_DAY_HOLD,
         "hold_days": h,
-        "signal_polarity": int(polarity),
         "gross_signed_mean_active": gross,
         "net_one_way_mean_active": net,
         "amortized_one_way_cost": am_cost,
         "one_way_cost": float(one_way_cost),
         "n_active_positions": n_active,
-        "n_signed_returns": len(signed_returns),
         "occurrence": {
             "activation_rate": (
                 float(n_active) / float(n_code_days) if n_code_days else None
             ),
             "n_active": n_active,
         },
-        **_freeze(),
-        "note": "Mean-reversion entry polarity=-1. Not eval sign flip. Not READY.",
     }
 
 
@@ -816,16 +805,14 @@ def run_batch_eval(
 
     survivors_ranked = sorted(survivors, key=_rank_key, reverse=True)
 
-    by_family: dict[str, list[dict[str, Any]]] = {}
-    by_logic: dict[str, list[dict[str, Any]]] = {}
+    survivor_family_dist: dict[str, int] = {}
+    survivor_logic_dist: dict[str, int] = {}
     for s in survivors_ranked:
-        by_family.setdefault(str(s.get("family_id")), []).append(dict(s))
-        by_logic.setdefault(str(s.get("logic_id") or ""), []).append(dict(s))
-    family_top: dict[str, list[dict[str, Any]]] = {
-        f: rows[:3] for f, rows in sorted(by_family.items())
-    }
-    survivor_family_dist = {f: len(v) for f, v in by_family.items()}
-    survivor_logic_dist = {k: len(v) for k, v in by_logic.items() if k}
+        fid = str(s.get("family_id"))
+        survivor_family_dist[fid] = survivor_family_dist.get(fid, 0) + 1
+        lid = str(s.get("logic_id") or "")
+        if lid:
+            survivor_logic_dist[lid] = survivor_logic_dist.get(lid, 0) + 1
 
     reason_hist: dict[str, int] = {}
     for s in rejected:
@@ -848,17 +835,6 @@ def run_batch_eval(
         for i, s in enumerate(survivors_ranked)
     ]
 
-    paper_note = {
-        "continuous_paper": CONTINUOUS_PAPER,
-        "paper_sample_k": int(cfg.paper_sample_k),
-        "paper_ran": False,
-        "note": "Sample subset only; paper runner UNARMED.",
-    }
-    if cfg.paper_sample_k > 0 and survivors_ranked:
-        paper_note["sample_ids"] = [
-            s.get("strategy_id") for s in survivors_ranked[: cfg.paper_sample_k]
-        ]
-
     return {
         "version": MASS_FACTORY_VERSION,
         "wave": MASS_FACTORY_WAVE,
@@ -872,26 +848,17 @@ def run_batch_eval(
         "n_survivors": len(survivors),
         "n_screen_rejected": len(rejected),
         "wall_time_sec": round(wall, 3),
-        "n_generated": generation.get("n_generated")
-        or generation.get("n_generated_accepted"),
+        "n_generated": generation.get("n_generated"),
         "n_unique_logic": generation.get("n_unique_logic"),
         "n_after_dedup": generation.get("n_after_dedup"),
         "n_numeric_variant": generation.get("n_numeric_variant"),
-        "n_ge_100_generated": bool(generation.get("n_ge_100")),
-        "n_generated_accepted": generation.get("n_generated_accepted"),
-        "generation_family_distribution": generation.get("family_distribution"),
-        "generation_logic_distribution": generation.get("logic_distribution"),
         "survivor_family_distribution": survivor_family_dist,
         "survivor_logic_distribution": survivor_logic_dist,
-        "family_top_survivors": family_top,
         "ranking": ranking,
         "reject_reason_histogram": reason_hist,
         "screens": screens,
         "results": results,
-        "paper": paper_note,
         "human_main_candidates_selected": False,
-        "frozen_default_path": list(FROZEN_DEFAULT_PATH),
-        "frozen_defaults_retuned": False,
         **_freeze(),
     }
 

@@ -191,7 +191,6 @@ def mechanical_basket_defs() -> list[dict[str, Any]]:
                 "primary_candidate": pc,
                 "deprecated": False,
                 "members": list(members),
-                "weights": equal_weights(len(members)),
                 "valid": not reasons,
                 "reject": reasons,
                 "promote_as_main": False,
@@ -228,7 +227,6 @@ def meta_basket_defs() -> list[dict[str, Any]]:
             {
                 "meta_id": mid,
                 "sleeves": list(sleeves),
-                "weights": equal_weights(len(sleeves)),
                 "valid": not reasons,
                 "reject": reasons,
                 "deprecated": False,

@@ -308,8 +308,6 @@ __all__ = [
     "class_hyp_cost_assumptions",
     "holding_from_period_rows",
     "normalize_short_sensitivity",
-    "remeasure_ls_rows",
     "risk_from_rows",
     "robustness_gate_from_rows",
-    "scenario_rows_from_period_rows",
 ]

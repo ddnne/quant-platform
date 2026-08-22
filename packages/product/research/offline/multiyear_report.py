@@ -757,7 +757,6 @@ def assemble_class_hyp_multi_year_report(
         "n_years_requested": len(period_list),
         "n_years_ok_multi_day_hold": n_ok_md,
         "n_years_ok_macro_conditioned": n_ok_macro,
-        "history_source": "local_r2_mirror_ndjson + local_sqlite",
         **_freeze(),
     }
 

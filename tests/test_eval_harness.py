@@ -18,12 +18,11 @@ from tests.research_eval_util import (
     HARNESS_AST_PATHS,
     HARNESS_MODULE_PATHS,
     _assert_mass_ready_off,
-    _capture_puts,
     _empty_s1_lines,
     _injected_multiday,
+    _injected_r2_eval,
     _margin_for_days,
     _put_json,
-    _r2_eval_kw,
     _r2_period,
     _r2_q4_period,
     _r2_q4_skip,
@@ -204,7 +203,7 @@ def test_multi_period_and_walk_forward_multisignal_r2_fixtures(tmp_path: Path):
 
     days_a, lines_a = _synth_q4(2022, with_fins=True)
     days_b, lines_b = _synth_q4(2023, with_fins=True)
-    puts, fake_put = _capture_puts()
+    r2_kw = _injected_r2_eval(tmp_path)
 
     empty_margin = ("markets_margin_interest",)
     mp = run_multi_period_multisignal_compare(
@@ -219,7 +218,7 @@ def test_multi_period_and_walk_forward_multisignal_r2_fixtures(tmp_path: Path):
             ),
         ],
         job_id_prefix="w0815bb-test-mp",
-        **_r2_eval_kw(tmp_path, fake_put),
+        **r2_kw,
     )
     assert mp["n_periods_ok"] == 2
     assert mp["n_periods_skipped"] == 1
@@ -239,7 +238,7 @@ def test_multi_period_and_walk_forward_multisignal_r2_fixtures(tmp_path: Path):
         min_test_days=5,
         r2_raw_lines_by_dataset=lines_a,
         r2_allow_empty_datasets=empty_margin,
-        **_r2_eval_kw(tmp_path, fake_put),
+        **r2_kw,
     )
     assert wf["threshold_tuning"] is False
     _assert_mass_ready_off(wf)
@@ -281,7 +280,7 @@ def test_design_yearly_eval_windows_and_multi_year_s1_isolation(tmp_path: Path):
     days_b, lines_b = _synth_q4_eval(2017)
     days_c, lines_c = _synth_q4_eval(2019, with_margin=True)
 
-    puts, fake_put = _capture_puts()
+    r2_kw = _injected_r2_eval(tmp_path)
 
     periods = [
         _r2_q4_period(2015, days_a, lines_a),
@@ -299,7 +298,7 @@ def test_design_yearly_eval_windows_and_multi_year_s1_isolation(tmp_path: Path):
     s1 = run_multi_year_s1_eval(
         periods,
         job_id_prefix="w0815bd-test-s1",
-        **_r2_eval_kw(tmp_path, fake_put),
+        **r2_kw,
         min_active_per_period=5,
     )
     assert s1["version"] == MULTI_YEAR_VERSION
@@ -332,7 +331,7 @@ def test_design_yearly_eval_windows_and_multi_year_s1_isolation(tmp_path: Path):
     s4 = run_multi_year_extra_hyp_eval(
         s4_periods,
         job_id_prefix="w0815bd-test-s4",
-        **_r2_eval_kw(tmp_path, fake_put),
+        **r2_kw,
         signal_ids=["c21_margin_change_sign"],
         min_active_per_period=5,
     )

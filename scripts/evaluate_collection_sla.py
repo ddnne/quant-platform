@@ -1,15 +1,5 @@
 #!/usr/bin/env python3
-"""Evaluate Collection Coverage SLA states for Availability and Monitoring.
-
-This script provides AM SLA state evaluation for collection coverage,
-helping operators understand compliance states and identify gaps.
-
-AM SLA States:
-- AVAILABLE: All governed datasets have COMPLETE coverage with valid receipts
-- DEGRADED: Some governed datasets have PARTIAL coverage but validation passes
-- UNAVAILABLE: Any governed dataset has FAILED or STALE coverage
-- UNKNOWN: Coverage state cannot be determined (e.g., missing data)
-"""
+"""Evaluate collection coverage SLA (AVAILABLE / DEGRADED / UNAVAILABLE / UNKNOWN)."""
 
 from __future__ import annotations
 
@@ -31,13 +21,11 @@ import json
 
 import sqlite3
 from typing import Any
-from urllib.parse import quote
 
-ROOT = ensure_repo_root()
+ensure_repo_root()
 
 from storage.coverage_ledger import (
     coverage_gaps,
-    coverage_summary,
     read_collection_receipts,
     read_coverage_segments,
     read_dataset_coverage,
@@ -47,27 +35,16 @@ from data_contracts.coverage import (
     COVERAGE_STATUSES,
 )
 
-SLA_STATES = frozenset({"AVAILABLE", "DEGRADED", "UNAVAILABLE", "UNKNOWN"})
-
 def evaluate_collection_sla(
     db_path: str | Path,
     *,
     dataset: str | None = None,
 ) -> dict[str, Any]:
-    """Evaluate collection coverage SLA state for a dataset or all governed datasets.
-
-    Args:
-        db_path: Path to the structured SQLite database
-        dataset: Optional specific dataset to evaluate (default: all governed)
-
-    Returns:
-        Dictionary containing SLA state evaluation results
-    """
+    """Evaluate collection coverage SLA for one dataset or all governed datasets."""
     db_path = Path(db_path).resolve()
     if not db_path.exists():
         raise FileNotFoundError(f"Database not found: {db_path}")
 
-    # Read coverage data
     if dataset is None:
         coverage_rows = read_dataset_coverage(db_path)
     else:
@@ -81,7 +58,6 @@ def evaluate_collection_sla(
             "governed_datasets": [],
         }
 
-    # Filter to governed datasets only
     governed_contracts = {
         c.dataset_id for c in all_coverage_contracts()
         if c.governance_tier == "governed"
@@ -99,14 +75,12 @@ def evaluate_collection_sla(
             "governed_datasets": [],
         }
 
-    # Count statuses
     status_counts: dict[str, int] = {status: 0 for status in COVERAGE_STATUSES}
     for row in governed_coverage:
         status = row["status"]
         if status in status_counts:
             status_counts[status] += 1
 
-    # Determine SLA state
     total_governed = len(governed_coverage)
     complete_count = status_counts["COMPLETE"]
     partial_count = status_counts["PARTIAL"]
@@ -127,7 +101,6 @@ def evaluate_collection_sla(
         sla_state = "UNKNOWN"
         reason = "Coverage state cannot be determined"
 
-    # Get gap details
     gaps = coverage_gaps(db_path)
     governed_gaps = [g for g in gaps if g["dataset"] in governed_contracts]
 
@@ -153,20 +126,11 @@ def evaluate_receipt_sla(
     *,
     dataset: str | None = None,
 ) -> dict[str, Any]:
-    """Evaluate receipt compliance for SLA monitoring.
-
-    Args:
-        db_path: Path to the structured SQLite database
-        dataset: Optional specific dataset to evaluate
-
-    Returns:
-        Dictionary containing receipt SLA evaluation results
-    """
+    """Evaluate receipt compliance for SLA monitoring."""
     db_path = Path(db_path).resolve()
     if not db_path.exists():
         raise FileNotFoundError(f"Database not found: {db_path}")
 
-    # Get COMPLETE segments
     complete_segments = read_coverage_segments(db_path, dataset=dataset, status="COMPLETE")
 
     if not complete_segments:
@@ -193,7 +157,6 @@ def evaluate_receipt_sla(
             })
             continue
 
-        # Check latest receipt
         latest_receipt = max(receipts, key=lambda r: (r["checked_at"], r["run_id"]))
 
         segment_issues = []
@@ -228,10 +191,7 @@ def evaluate_receipt_sla(
     }
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(
-        description=__doc__,
-        epilog="Phase 6.2 Residual: AM SLA state evaluation for collection coverage."
-    )
+    parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--db",
         required=True,
@@ -260,19 +220,16 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     try:
-        # Evaluate collection SLA
         collection_result = evaluate_collection_sla(db_path, dataset=args.dataset)
 
         result = {
             "collection_sla": collection_result,
         }
 
-        # Evaluate receipt SLA if requested
         if args.check_receipts:
             receipt_result = evaluate_receipt_sla(db_path, dataset=args.dataset)
             result["receipt_sla"] = receipt_result
 
-        # Output results
         if args.json:
             print(json.dumps(result, indent=2))
         else:
@@ -304,15 +261,13 @@ def main(argv: list[str] | None = None) -> int:
                     for issue in receipt_result['issues']:
                         print(f"  {issue['dataset']}/{issue['segment_id']}: {', '.join(issue.get('issues', ['unknown']))}")
 
-        # Return exit code based on SLA state
         if collection_result['sla_state'] == "AVAILABLE":
             if "receipt_sla" in result and result["receipt_sla"]["receipt_sla_state"] != "COMPLIANT":
-                return 1  # Available but receipt issues
-            return 0  # Fully available
-        elif collection_result['sla_state'] == "DEGRADED":
-            return 1  # Degraded but operational
-        else:  # UNAVAILABLE or UNKNOWN
-            return 2  # Critical state
+                return 1
+            return 0
+        if collection_result['sla_state'] == "DEGRADED":
+            return 1
+        return 2
 
     except sqlite3.Error as e:
         print(f"Database error: {e}", file=sys.stderr)

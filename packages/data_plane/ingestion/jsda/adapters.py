@@ -1,9 +1,4 @@
-"""Source-specific JSDA adapters (Phase 6.2.3 §3).
-
-Each governed JSDA series has its own locator, segment identity, date
-semantics, and final fact table target. This module is the formal adapter
-surface; staging parse alone never writes COMPLETE receipts.
-"""
+"""Formal JSDA adapter surface. Staging parse never writes COMPLETE receipts."""
 
 from __future__ import annotations
 
@@ -53,7 +48,6 @@ class OtcBondReferenceAdapter:
         day = str(meta.get("publication_label_date") or meta.get("segment_id") or "")
         if len(day) >= 10 and day[4] == "-":
             return day[:10]
-        # Derive from filename tokens when present (e.g. S260812.csv → 2026-08-12)
         return f"file_{artifact_name}"
 
     def available_at_policy(self) -> str:
@@ -74,7 +68,6 @@ class TokyoRepoAdapter:
     )
 
     def canonical_segment_id(self, *, artifact_name: str, meta: Mapping[str, Any]) -> str:
-        # Authoritative history is a single timeseries file identity.
         return f"timeseries_{artifact_name}"
 
     def available_at_policy(self) -> str:

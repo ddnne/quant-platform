@@ -64,10 +64,6 @@ def infer_eval_track(*, max_codes: int) -> str:
     return EVAL_TRACK_LIQ_LARGE
 
 
-# Next phase (not GO). Isolate park empty after v21 csFundSnaps hoist.
-# Dense parallel work. Do not +N theses until Worker bodies occupancy-equal.
-# Standing holds (not queue items): freeze SoT, pins untouched, no head-N,
-# no ungated CS sticky, no PARSE_ZERO invent, no correlation weights.
 NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
     {
         "id": "both_track_sleeve_durability",

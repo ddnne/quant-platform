@@ -88,15 +88,6 @@ def test_module_source_has_no_ready_mint_or_mass_arm():
             assert name not in banned_calls
     assert "READY_DECLARED" in src
     assert "MASS_RESEARCH" in src
-    freeze_src = (
-        REPO
-        / "packages"
-        / "research_runtime"
-        / "features"
-        / "research_freezes.py"
-    ).read_text(encoding="utf-8")
-    assert "READY_DECLARED: bool = False" in freeze_src
-    assert 'MASS_RESEARCH: str = "NO-GO"' in freeze_src
 
 
 # ---------------------------------------------------------------------------

@@ -1,8 +1,4 @@
-"""Experiment job index contract (R2 artifacts + small D1 rows).
-
-Git is not the eval warehouse. A run is recorded when a manifest is written
-under ``quant-structured/research/eval/job={id}/``. Mass / READY / GO closed.
-"""
+"""Experiment job index contract (R2 artifacts + small D1 rows). Mass / READY / GO closed."""
 from __future__ import annotations
 
 import json

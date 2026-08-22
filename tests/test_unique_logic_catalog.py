@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from research.unique_logic.catalog import load_catalog_specs, parse_catalog_yaml
+from tests.research_eval_util import _disc_event
 
 
 def test_event_sides_ls_variants_stay_registered() -> None:
@@ -450,14 +451,14 @@ def test_combo_event_skips_missing_ta_eqar() -> None:
     bars = {"33210": [("2008-07-07", 100.0), ("2008-07-08", 101.0)]}
     events = {
         "33210": [
-            {
-                "disc_date": "2008-07-07",
-                "eps": 10.0,
-                "feps": 9.0,
-                "prior_eps": 8.0,
-                "eq_ar": None,
-                "ta": None,
-            }
+            _disc_event(
+                "2008-07-07",
+                eps=10.0,
+                feps=9.0,
+                prior_eps=8.0,
+                eq_ar=None,
+                ta=None,
+            )
         ]
     }
     pack = evaluate_combo_daily_mtm(

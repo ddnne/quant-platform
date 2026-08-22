@@ -23,4 +23,3 @@ params:
   mode: idio_mom_macro_impulse
   gate: abs_topix_mom_ge_pit_median
 evaluator: research.unique_logic.dispatch.evaluate_logic_daily_mtm
-notes: catalog declaration; evaluate via unique_logic.dispatch

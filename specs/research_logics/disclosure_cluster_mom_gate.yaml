@@ -24,4 +24,3 @@ params:
   mode: disclosure_cluster_gate
   gate: n_recent_disclosures_ge_pit_median
 evaluator: research.unique_logic.dispatch.evaluate_logic_daily_mtm
-notes: catalog declaration; evaluate via unique_logic.dispatch

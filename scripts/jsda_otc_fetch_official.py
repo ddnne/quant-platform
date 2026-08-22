@@ -30,21 +30,19 @@ def main() -> int:
     items_path = args.items or (log / "otc_items.json")
     progress = log / "otc_download_progress.jsonl"
     items = json.loads(items_path.read_text())
-    global ITEMS, PROGRESS, RAW, LOG
-    ITEMS, PROGRESS, RAW, LOG = items, progress, raw, log
     done: set[str] = set()
-    if PROGRESS.exists():
-        for ln in PROGRESS.read_text().splitlines():
+    if progress.exists():
+        for ln in progress.read_text().splitlines():
             try:
                 r = json.loads(ln)
                 if r.get("status") == "OK":
                     done.add(r["day"])
             except Exception:
                 pass
-    todo = [x for x in ITEMS if x["day"] not in done]
-    print(f"total={len(ITEMS)} done={len(done)} todo={len(todo)}", flush=True)
+    todo = [x for x in items if x["day"] not in done]
+    print(f"total={len(items)} done={len(done)} todo={len(todo)}", flush=True)
     ok_n = 0
-    with PROGRESS.open("a") as fh:
+    with progress.open("a") as fh:
         for i, item in enumerate(todo, 1):
             day = item["day"]
             code = item["code"]
@@ -54,7 +52,7 @@ def main() -> int:
                 suffix = ".xls"
             elif url.lower().endswith(".xlsx"):
                 suffix = ".xlsx"
-            path = RAW / day / f"{code}{suffix}"
+            path = raw / day / f"{code}{suffix}"
             if path.is_file() and path.stat().st_size > FULL_OK_MIN:
                 row = {
                     "code": code,
@@ -131,8 +129,8 @@ def main() -> int:
                 fh.flush()
                 print(f"{i}/{len(todo)} {day} FAIL {row}", flush=True)
             time.sleep(0.8)
-    summary = {"ok_n": ok_n, "todo": len(todo), "total": len(ITEMS)}
-    (LOG / "otc_download_summary.json").write_text(json.dumps(summary, indent=2) + "\n")
+    summary = {"ok_n": ok_n, "todo": len(todo), "total": len(items)}
+    (log / "otc_download_summary.json").write_text(json.dumps(summary, indent=2) + "\n")
     print("SUMMARY", summary, flush=True)
     return 0 if ok_n == len(todo) else 2
 

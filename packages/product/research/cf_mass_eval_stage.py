@@ -44,14 +44,7 @@ if COMPLETE_22_DATASET_SET & PERMANENT_DEFER_DATASETS:
     )
 
 
-def _mass_eval_wave() -> str:
-    from research.cf_mass_eval_job import CF_MASS_EVAL_WAVE
-
-    return CF_MASS_EVAL_WAVE
-
-
 def normalize_period_row(raw: Mapping[str, Any]) -> dict[str, Any]:
-    """Normalize period dict to worker shape (period_start/end + year)."""
     p = dict(raw)
     pid = str(p.get("period_id") or p.get("id") or "period")
     start = p.get("period_start") or p.get("start") or ""
@@ -75,12 +68,8 @@ def normalize_period_row(raw: Mapping[str, Any]) -> dict[str, Any]:
         out["year"] = int(year)
     if start:
         out["period_start"] = str(start)[:10]
-        out["start"] = str(start)[:10]
     if end:
         out["period_end"] = str(end)[:10]
-        out["end"] = str(end)[:10]
-    if p.get("window_kind"):
-        out["window_kind"] = p["window_kind"]
     return out
 
 
@@ -92,7 +81,6 @@ def build_real_period_panel(
     max_days: int = DEFAULT_MAX_DAYS,
     mirror_dir: str | Path | None = None,
 ) -> dict[str, Any]:
-    """Load one real bars panel from COMPLETE-backed local R2 mirrors."""
     p = normalize_period_row(period)
     pid = str(p["period_id"])
     pool = (
@@ -195,8 +183,9 @@ def stage_real_panels_to_r2(
     r2_put: Callable[..., Mapping[str, Any]] | None = None,
     panels_prefix: str | None = None,
 ) -> dict[str, Any]:
-    """Put real multi-year panels under job-scoped R2 prefix (or panels_prefix)."""
-    wave = _mass_eval_wave()
+    from research.cf_mass_eval_job import CF_MASS_EVAL_WAVE
+
+    wave = CF_MASS_EVAL_WAVE
     jid = str(job_id).strip() or "unknown"
     period_list = [
         normalize_period_row(p)

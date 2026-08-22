@@ -77,7 +77,6 @@ def invert_period_net(
     if g is not None and c is not None:
         return float(-g - c)
     if g is not None and n is not None:
-        # c = g − n
         return float(-g - (g - n))
     if n is not None and c is not None:
         return float(-n - 2.0 * c)
@@ -177,7 +176,6 @@ def evaluate_sign_both_sides(
         }
         return out
 
-    # Normalize costs
     if isinstance(amortized_costs, (int, float)):
         costs: list[float | None] = [float(amortized_costs)] * n
     elif amortized_costs is None:

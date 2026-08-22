@@ -79,12 +79,6 @@ class ReceiptSigningKey:
         sig = self._private.sign(body)
         return "ed25519:" + base64.b64encode(sig).decode("ascii")
 
-    def public_raw(self) -> bytes:
-        return self._private.public_key().public_bytes(
-            encoding=serialization.Encoding.Raw,
-            format=serialization.PublicFormat.Raw,
-        )
-
 
 @dataclass(frozen=True)
 class ReceiptVerifyKey:

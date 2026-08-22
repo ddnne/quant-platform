@@ -35,7 +35,6 @@ from research.freezes import (
     MASS_RESEARCH as MASS_RESEARCH_STATUS,
     PHASE7 as PHASE7_STATUS,
     READY_DECLARED,
-    READY_PUBLICATION as READY_PUBLICATION_STATUS,
 )
 from research.single_shot_eval import (
     MultidaySignalEval,
@@ -56,6 +55,7 @@ from research.single_shot_job import (
     RESEARCH_ARTIFACT_BUCKET,
     R2PutFn,
     SingleShotJobError,
+    _closed_flags,
     _load_history_feature_rows,
     _now_utc,
     _put_research_json,
@@ -66,10 +66,6 @@ from research.single_shot_job import (
     require_complete_21_only,
 )
 from research.single_shot_tip import compute_tip_candidate_features
-
-# ---------------------------------------------------------------------------
-# Multi-signal compare + research-only cost (W58 / w0815ay_g2 · T4–T8)
-# ---------------------------------------------------------------------------
 
 # Research-only cost assumption (not operational GO).
 # One-way 10bp = 0.001; round-trip 20bp if both sides traded.
@@ -172,7 +168,6 @@ def summarize_research_cost(
             if r.get(field) is not None and r.get("position") is not None
             and float(r.get("position") or 0) != 0.0
         ]
-        # Include flat (0) positions too for "signed overall including flat"
         all_signed = [
             float(r[field])
             for r in costed_rows
@@ -205,13 +200,11 @@ def summarize_research_cost(
         "net_signed_return_one_way": _bucket("net_signed_return_one_way"),
         "net_signed_return_round_trip": _bucket("net_signed_return_round_trip"),
         "assumption_note": RESEARCH_COST_NOTE,
-        "ready_declared": False,
-        "mass_research": MASS_RESEARCH_STATUS,
-        "phase7": PHASE7_STATUS,
-        "order_execution": False,
-        "operational_go": False,
-        "significance_claimed": False,
-        "edge_claimed": False,
+        **_closed_flags(
+            operational_go=False,
+            significance_claimed=False,
+            edge_claimed=False,
+        ),
     }
 
 
@@ -260,13 +253,11 @@ def _summarize_one_signal_batch(
         "research_cost": cost_summary,
         "label": NEXTDAY_RESEARCH_LABEL,
         "cost_label": RESEARCH_COST_LABEL,
-        "significance_claimed": False,
-        "edge_claimed": False,
-        "ready_declared": False,
-        "mass_research": MASS_RESEARCH_STATUS,
-        "phase7": PHASE7_STATUS,
-        "order_execution": False,
-        "operational_go": False,
+        **_closed_flags(
+            significance_claimed=False,
+            edge_claimed=False,
+            operational_go=False,
+        ),
     }
 
 
@@ -405,7 +396,6 @@ def execute_multiday_multisignal_compare(
     batch_key = f"{prefix}/batch_summary.json"
     executed_at = _now_utc()
 
-    # Per-signal accumulation of aligned rows across days.
     signal_day_rows: dict[str, list[list[dict[str, Any]]]] = {
         SIGNAL_ID_TOPIX_REL: [],
         SIGNAL_ID_VOLUME_SIGN: [],
@@ -491,15 +481,10 @@ def execute_multiday_multisignal_compare(
                 "look_ahead_policy": dict(NEXTDAY_LOOKAHEAD_POLICY),
                 "label": NEXTDAY_RESEARCH_LABEL,
                 "cost_label": RESEARCH_COST_LABEL,
-                "local_sot": False,
-                "mass_research": MASS_RESEARCH_STATUS,
-                "phase7": PHASE7_STATUS,
-                "ready_declared": READY_DECLARED,
-                "order_execution": False,
+                **_closed_flags(),
             }
         )
 
-    # Per-signal batch summaries.
     by_signal: dict[str, Any] = {}
     for sid in (SIGNAL_ID_TOPIX_REL, SIGNAL_ID_VOLUME_SIGN, SIGNAL_ID_TOPIX_DISC):
         by_signal[sid] = _summarize_one_signal_batch(
@@ -602,27 +587,19 @@ def execute_multiday_multisignal_compare(
             "batch_summary_r2_key": batch_key,
             "per_day_key_template": f"{prefix}/days/date={{date}}/signals.json",
         },
-        "mass_research": MASS_RESEARCH_STATUS,
-        "phase7": PHASE7_STATUS,
-        "ready_declared": READY_DECLARED,
-        "ready_publication": READY_PUBLICATION_STATUS,
-        "order_execution": False,
-        "local_sot": False,
-        "connected_to_mass_research_loop": False,
-        "densify": False,
+        **_closed_flags(
+            connected_to_mass_research_loop=False,
+            densify=False,
+            significance_claimed=False,
+            edge_claimed=False,
+            operational_go=False,
+        ),
         "attach_nextday_returns": True,
         "label": NEXTDAY_RESEARCH_LABEL,
         "cost_label": RESEARCH_COST_LABEL,
-        "significance_claimed": False,
-        "edge_claimed": False,
-        "operational_go": False,
         "note": (
-            "Multi-signal compare via single_shot only "
-            f"(history_source={hist_src}). "
-            "Three approved-leg research signals on the same universe/period. "
-            "Next-day returns + optional research cost (10bp one-way). "
-            "小サンプル / 研究用・未宣言 · 仮定に依存・研究用・運用GOではない. "
-            "Not READY. Not mass research. No order execution. No densify."
+            f"Multi-signal compare via single_shot only (history_source={hist_src}). "
+            f"{NEXTDAY_RESEARCH_LABEL} · {RESEARCH_COST_LABEL}."
         ),
     }
 
@@ -645,17 +622,11 @@ def execute_multiday_multisignal_compare(
         for d in day_results:
             date_s = str(d.get("date") or "")[:10]
             day_key = f"{prefix}/days/date={date_s}/signals.json"
-            # Drop heavy observation lists from R2 day body size if needed —
-            # keep them for research transparency (same as prior waves).
             day_body = {
                 "version": "multiday-multisignal-nextday-day/v1",
                 "job_id": jid,
-                **{k: d[k] for k in d},
-                "mass_research": MASS_RESEARCH_STATUS,
-                "phase7": PHASE7_STATUS,
-                "ready_declared": READY_DECLARED,
-                "order_execution": False,
-                "local_sot": False,
+                **dict(d),
+                **_closed_flags(),
                 "label": NEXTDAY_RESEARCH_LABEL,
                 "cost_label": RESEARCH_COST_LABEL,
             }
@@ -689,17 +660,13 @@ def execute_multiday_multisignal_compare(
         "compare_table": compare_rows,
         "executed_at_utc": executed_at,
         "dry_run": bool(dry_run),
-        "mass_research": MASS_RESEARCH_STATUS,
-        "phase7": PHASE7_STATUS,
-        "ready_declared": READY_DECLARED,
-        "ready_publication": READY_PUBLICATION_STATUS,
-        "order_execution": False,
-        "local_sot": False,
-        "connected_to_mass_research_loop": False,
+        **_closed_flags(
+            connected_to_mass_research_loop=False,
+            operational_go=False,
+        ),
         "attach_nextday_returns": True,
         "label": NEXTDAY_RESEARCH_LABEL,
         "cost_label": RESEARCH_COST_LABEL,
-        "operational_go": False,
         "look_ahead_policy": dict(NEXTDAY_LOOKAHEAD_POLICY),
     }
     puts.append(_put(manifest_key, manifest))
@@ -724,8 +691,6 @@ def execute_multiday_multisignal_compare(
     )
 
 
-# Extra-hyp compare lives in research.single_shot_extra_hyp (re-exported).
-# Lazy getattr so compare-first and extra-hyp-first loads both bind.
 _EXTRA_HYP_EXPORTS: frozenset[str] = frozenset(
     {
         "execute_extra_hyp_signals_compare",

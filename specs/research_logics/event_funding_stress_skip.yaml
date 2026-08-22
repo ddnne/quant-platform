@@ -22,4 +22,3 @@ params:
   mode: funding_stress_skip
   gate: overnight_lt_pit_trailing_median
 evaluator: research.unique_logic.dispatch.evaluate_logic_daily_mtm
-notes: catalog declaration; evaluate via unique_logic.dispatch

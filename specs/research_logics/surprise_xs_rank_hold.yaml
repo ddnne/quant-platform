@@ -21,4 +21,3 @@ params:
   short_frac: 0.3
   mode: surprise_xs_rank
 evaluator: research.unique_logic.dispatch.evaluate_logic_daily_mtm
-notes: catalog declaration; evaluate via unique_logic.dispatch

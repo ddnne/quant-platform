@@ -11,7 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -42,7 +42,6 @@ from research.freezes import (
 )
 from research.unique_logic.constants import RESEARCH_UNIQUE_LOGIC_IDS
 from research.offline.factory_templates import (
-    DEFAULT_FAMILY_RATIOS,
     FACTORY_FAMILY_IDS,
     FAMILY_DEFINITIONS,
     FAMILY_INDEX_VOL_REGIME,
@@ -69,10 +68,9 @@ REJECT_UNKNOWN_LOGIC: str = "unknown_logic_template"
 REJECT_NEAR_DUPLICATE: str = "near_duplicate_grid_mutation"
 
 DEFAULT_SEED: int = 870816
-DEFAULT_N: int = 100  # capacity; uniqueness measured by unique_logic / after_dedup
+DEFAULT_N: int = 100
 DEFAULT_NEAR_ZERO_ABS: float = 0.0005  # 5bp
 DEFAULT_MIN_ACTIVATION: float = 0.01
-DEFAULT_MAX_FAMILY_SHARE: float = 0.35  # soft; logic diversity is primary anti-bias
 DEFAULT_ONE_WAY: float = DEFAULT_ONE_WAY_COST
 DEFAULT_NEAR_DUP_THRESHOLD: float = 0.85  # drop when similarity >= this
 
@@ -140,16 +138,11 @@ class MassFactoryConfig:
 
     seed: int = DEFAULT_SEED
     n: int = DEFAULT_N
-    family_ratios: Mapping[str, float] = field(
-        default_factory=lambda: dict(DEFAULT_FAMILY_RATIOS)
-    )
-    max_family_share: float = DEFAULT_MAX_FAMILY_SHARE
     one_way_cost: float = DEFAULT_ONE_WAY
     available_datasets: frozenset[str] = FACTORY_AVAILABLE_DATASETS
     max_days_per_period: int = 80
     max_codes: int = 20
     use_q4_periods: bool = True
-    paper_sample_k: int = 0
     near_zero_abs: float = DEFAULT_NEAR_ZERO_ABS
     min_activation: float = DEFAULT_MIN_ACTIVATION
     fail_one_continue: bool = True
@@ -157,32 +150,15 @@ class MassFactoryConfig:
     near_dup_threshold: float = DEFAULT_NEAR_DUP_THRESHOLD
     eval_after_dedup: bool = True
 
-    def normalized_ratios(self) -> dict[str, float]:
-        raw = {
-            str(k): float(v)
-            for k, v in dict(self.family_ratios).items()
-            if float(v) > 0 and str(k) in FAMILY_DEFINITIONS
-        }
-        if not raw:
-            raw = dict(DEFAULT_FAMILY_RATIOS)
-        raw.pop(CLASS_SIMPLE_DAILY_SIGN, None)
-        total = sum(raw.values())
-        if total <= 0:
-            raise ValueError("family_ratios must sum to > 0")
-        return {k: v / total for k, v in raw.items()}
-
     def to_dict(self) -> dict[str, Any]:
         return {
             "seed": int(self.seed),
             "n": int(self.n),
-            "family_ratios": self.normalized_ratios(),
-            "max_family_share": float(self.max_family_share),
             "one_way_cost": float(self.one_way_cost),
             "available_datasets": sorted(self.available_datasets),
             "max_days_per_period": int(self.max_days_per_period),
             "max_codes": int(self.max_codes),
             "use_q4_periods": bool(self.use_q4_periods),
-            "paper_sample_k": int(self.paper_sample_k),
             "near_zero_abs": float(self.near_zero_abs),
             "min_activation": float(self.min_activation),
             "fail_one_continue": bool(self.fail_one_continue),
@@ -190,7 +166,6 @@ class MassFactoryConfig:
             "near_dup_threshold": float(self.near_dup_threshold),
             "eval_after_dedup": bool(self.eval_after_dedup),
             "continuous_paper": CONTINUOUS_PAPER,
-            **_freeze(),
         }
 
 @dataclass(frozen=True)
@@ -234,7 +209,6 @@ class GeneratedStrategy:
             "reject_reason": self.reject_reason,
             "version": MASS_FACTORY_VERSION,
             "wave": MASS_FACTORY_WAVE,
-            **_freeze(),
         }
 
 def stable_strategy_id(
@@ -529,7 +503,6 @@ def generate_strategy_batch(
     *,
     seed: int | None = None,
     n: int | None = None,
-    family_ratios: Mapping[str, float] | None = None,
 ) -> dict[str, Any]:
     """Generate strategy individuals from distinct logic templates.
 
@@ -538,26 +511,11 @@ def generate_strategy_batch(
     n_numeric_variant, n_after_dedup.
     """
     cfg = config or MassFactoryConfig()
-    if seed is not None or n is not None or family_ratios is not None:
-        cfg = MassFactoryConfig(
+    if seed is not None or n is not None:
+        cfg = replace(
+            cfg,
             seed=int(seed if seed is not None else cfg.seed),
             n=int(n if n is not None else cfg.n),
-            family_ratios=dict(
-                family_ratios if family_ratios is not None else cfg.family_ratios
-            ),
-            max_family_share=cfg.max_family_share,
-            one_way_cost=cfg.one_way_cost,
-            available_datasets=cfg.available_datasets,
-            max_days_per_period=cfg.max_days_per_period,
-            max_codes=cfg.max_codes,
-            use_q4_periods=cfg.use_q4_periods,
-            paper_sample_k=cfg.paper_sample_k,
-            near_zero_abs=cfg.near_zero_abs,
-            min_activation=cfg.min_activation,
-            fail_one_continue=cfg.fail_one_continue,
-            allow_numeric_variants=cfg.allow_numeric_variants,
-            near_dup_threshold=cfg.near_dup_threshold,
-            eval_after_dedup=cfg.eval_after_dedup,
         )
     if cfg.n < 1:
         raise ValueError("n must be >= 1")
@@ -598,7 +556,6 @@ def generate_strategy_batch(
             generation_index=index,
             logic_id=tpl.logic_id,
         )
-        hyp = tpl.family_id
         row = GeneratedStrategy(
             strategy_id=sid,
             family_id=tpl.family_id,
@@ -615,7 +572,7 @@ def generate_strategy_batch(
             logic_fingerprint=tpl.logic_fingerprint(),
             is_numeric_variant=numeric,
             reject_reason=None if ok else reason,
-            hypothesis_class=hyp,
+            hypothesis_class=tpl.family_id,
         )
         index += 1
         if ok:
@@ -655,8 +612,7 @@ def generate_strategy_batch(
                 _try_emit(tpl, vp, numeric=True)
 
     n_generated = len(strategies)
-    unique_logic_ids = sorted({s.logic_id for s in strategies})
-    n_unique_logic = len(unique_logic_ids)
+    n_unique_logic = len({s.logic_id for s in strategies})
 
     dedup = dedup_strategies(
         [s.to_dict() for s in strategies],
@@ -664,12 +620,6 @@ def generate_strategy_batch(
     )
     after_dedup = list(dedup["kept"])
     n_after_dedup = int(dedup["n_after_dedup"])
-
-    shares = {
-        f: (family_dist.get(f, 0) / n_generated if n_generated else 0.0)
-        for f in sorted(set(list(FACTORY_FAMILY_IDS) + list(family_dist)))
-    }
-    max_share = max(shares.values()) if shares and n_generated else 0.0
 
     logic_diversity_ok = (
         n_unique_logic >= min(10, len(LOGIC_TEMPLATES))
@@ -683,26 +633,15 @@ def generate_strategy_batch(
         "config": cfg.to_dict(),
         "n_requested": int(cfg.n),
         "n_generated": n_generated,
-        "n_generated_accepted": n_generated,
         "n_unique_logic": n_unique_logic,
         "n_numeric_variant": n_numeric,
         "n_after_dedup": n_after_dedup,
         "n_dropped_near_dup": int(dedup["n_dropped"]),
-        "unique_logic_ids": unique_logic_ids,
         "logic_distribution": logic_dist,
         "unique_logic_count": n_unique_logic,
         "numeric_variant_count": n_numeric,
-        "n_ge_100": n_generated >= 100 or n_after_dedup >= len(LOGIC_TEMPLATES),
-        "n_rejected_at_gen": len(gen_rejected),
         "family_distribution": family_dist,
-        "family_shares": shares,
-        "max_family_share_observed": max_share,
-        "anti_bias_ok": (
-            max_share <= cfg.max_family_share + 1e-9 if n_generated else False
-        ),
         "logic_diversity_ok": logic_diversity_ok,
-        "n_families_used": sum(1 for v in family_dist.values() if v > 0),
-        "n_logic_templates_catalog": len(LOGIC_TEMPLATES),
         "strategies": [s.to_dict() for s in strategies],
         "strategies_after_dedup": after_dedup,
         "near_dup_dropped": dedup["dropped"],
@@ -713,7 +652,6 @@ def generate_strategy_batch(
             "n_dropped": dedup["n_dropped"],
         },
         "gen_rejected": [s.to_dict() for s in gen_rejected],
-        "frozen_default_path": list(FROZEN_DEFAULT_PATH),
         **_freeze(),
     }
 
@@ -737,39 +675,13 @@ def run_mass_factory(
     *,
     seed: int = DEFAULT_SEED,
     n: int = DEFAULT_N,
-    family_ratios: Mapping[str, float] | None = None,
     synthetic: bool = False,
     config: MassFactoryConfig | None = None,
     out_dir: str | Path | None = None,
     progress: bool = False,
 ) -> dict[str, Any]:
     """End-to-end: generate logics → near-dup → batch eval → screen."""
-    cfg = config or MassFactoryConfig(
-        seed=seed,
-        n=n,
-        family_ratios=dict(family_ratios or DEFAULT_FAMILY_RATIOS),
-    )
-    if config is None and (
-        seed != DEFAULT_SEED or n != DEFAULT_N or family_ratios is not None
-    ):
-        cfg = MassFactoryConfig(
-            seed=int(seed),
-            n=int(n),
-            family_ratios=dict(family_ratios or cfg.family_ratios),
-            max_family_share=cfg.max_family_share,
-            one_way_cost=cfg.one_way_cost,
-            available_datasets=cfg.available_datasets,
-            max_days_per_period=cfg.max_days_per_period,
-            max_codes=cfg.max_codes,
-            use_q4_periods=cfg.use_q4_periods,
-            paper_sample_k=cfg.paper_sample_k,
-            near_zero_abs=cfg.near_zero_abs,
-            min_activation=cfg.min_activation,
-            fail_one_continue=cfg.fail_one_continue,
-            allow_numeric_variants=cfg.allow_numeric_variants,
-            near_dup_threshold=cfg.near_dup_threshold,
-            eval_after_dedup=cfg.eval_after_dedup,
-        )
+    cfg = config or MassFactoryConfig(seed=seed, n=n)
 
     t0 = time.perf_counter()
     gen = generate_strategy_batch(cfg)
@@ -816,17 +728,12 @@ def run_mass_factory(
         "summary": {
             "n_requested": gen.get("n_requested"),
             "n_generated": gen.get("n_generated"),
-            "n_generated_accepted": gen.get("n_generated_accepted"),
             "n_unique_logic": gen.get("n_unique_logic"),
             "n_numeric_variant": gen.get("n_numeric_variant"),
             "n_after_dedup": gen.get("n_after_dedup"),
             "n_dropped_near_dup": gen.get("n_dropped_near_dup"),
-            "unique_logic_ids": gen.get("unique_logic_ids"),
             "logic_distribution": gen.get("logic_distribution"),
             "logic_diversity_ok": gen.get("logic_diversity_ok"),
-            "n_ge_100": gen.get("n_ge_100"),
-            "n_families_used": gen.get("n_families_used"),
-            "anti_bias_ok": gen.get("anti_bias_ok"),
             "family_distribution": gen.get("family_distribution"),
             "n_survivors": batch.get("n_survivors"),
             "n_strategies_evaluated": batch.get("n_strategies_evaluated"),
@@ -896,31 +803,17 @@ def try_cf_minimal_mass_batch() -> dict[str, Any]:
 
 
 __all__ = [
-    "MASS_FACTORY_VERSION",
-    "MASS_FACTORY_WAVE",
-    "MASS_RESEARCH",
-    "PHASE7",
-    "READY_DECLARED",
-    "OPERATIONAL_GO",
-    "CONTINUOUS_PAPER",
     "FAMILY_VOL_RISK_ADJUSTED",
     "FAMILY_INDEX_VOL_REGIME",
     "FAMILY_OPTIONS_VOL_REGIME",
     "RESEARCH_UNIQUE_LOGIC_IDS",
     "FAMILY_DEFINITIONS",
     "FACTORY_FAMILY_IDS",
-    "DEFAULT_FAMILY_RATIOS",
-    "DEFAULT_SEED",
     "DEFAULT_N",
     "DEFAULT_NEAR_DUP_THRESHOLD",
-    "DEFAULT_MAX_FAMILY_SHARE",
-    "FROZEN_DEFAULT_PATH",
     "LOGIC_TEMPLATES",
     "LOGIC_TEMPLATE_IDS",
-    "LogicTemplate",
     "MassFactoryConfig",
-    "GeneratedStrategy",
-    "BatchDataContext",
     "REJECT_SIMPLE_DAILY_SIGN",
     "REJECT_LOOKAHEAD",
     "REJECT_NEAR_DUPLICATE",
@@ -935,7 +828,6 @@ __all__ = [
     "run_batch_eval",
     "propose_profit_hypotheses",
     "run_mass_factory",
-    "write_factory_outputs",
     "try_cf_minimal_mass_batch",
     "llm_logic_entry_status",
 ]

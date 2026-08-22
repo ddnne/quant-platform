@@ -47,7 +47,6 @@ def invoke_cf_mass_eval_worker(
     timeout: int = 120,
     http_post: Callable[..., Any] | None = None,
 ) -> dict[str, Any]:
-    """POST job to CF Worker; return parsed JSON response."""
     url = worker_url.rstrip("/") + "/v1/mass-eval"
     tok = (token if token is not None else resolve_research_run_token()) or ""
     body = json.dumps(dict(job_spec), default=str).encode("utf-8")
@@ -114,7 +113,6 @@ def deploy_cf_mass_eval_worker(
     wrangler: str | Path | None = None,
     timeout: int = 300,
 ) -> dict[str, Any]:
-    """Deploy the mass-eval Worker via wrangler (best-effort)."""
     wr = Path(wrangler) if wrangler else _DEFAULT_WRANGLER
     if not wr.is_file():
         alt = _WORKER_DIR / "node_modules" / ".bin" / "wrangler"
@@ -158,7 +156,6 @@ def put_local_fallback_artifacts(
     dry_run: bool = False,
     staging_dir: str | Path | None = None,
 ) -> list[dict[str, Any]]:
-    """Write job artifacts to R2 (or stage) from the driver side."""
     paths = design_mass_factory_paths(str(job_spec.get("job_id") or "unknown"))
     put_fn = r2_put or (
         lambda bucket, key, body: default_r2_put(
@@ -216,7 +213,6 @@ def run_cf_mass_eval_job(
     skip_invoke: bool = False,
     timeout: int = 300,
 ) -> dict[str, Any]:
-    """Build → stage real panels → deploy → invoke CF job."""
     t0 = time.perf_counter()
     mode_s = str(mode or DEFAULT_MASS_EVAL_MODE).strip()
     do_stage = (
@@ -400,7 +396,6 @@ def run_cf_mass_eval_job(
 
 
 def try_cf_mass_eval_status() -> dict[str, Any]:
-    """Mass-eval implementation status for residual docs. Not a pass."""
     return {
         "status": "implemented",
         "version": CF_MASS_EVAL_VERSION,

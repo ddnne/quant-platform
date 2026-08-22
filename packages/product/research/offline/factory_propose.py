@@ -74,10 +74,6 @@ def propose_profit_hypotheses(
                     "index": i,
                     "proposal": prop,
                     "reject_reason": "window_tweak_only_forbidden",
-                    "note": (
-                        "Proposals must change economic thesis / signal / "
-                        "position / datasets — not hold/mom/frac windows only."
-                    ),
                 }
             )
             continue
@@ -200,14 +196,12 @@ def propose_profit_hypotheses(
     out: dict[str, Any] = {
         "version": MASS_FACTORY_VERSION,
         "wave": MASS_FACTORY_WAVE,
-        "entry": "propose_profit_hypotheses",
         "n_proposals": len(proposals),
         "n_accepted": len(accepted),
         "n_rejected": len(rejected),
         "accepted": accepted,
         "rejected": rejected,
         "always_through_evaluator": bool(evaluate),
-        "window_tweaks_forbidden": True,
         **_freeze(),
     }
     if evaluate and accepted:

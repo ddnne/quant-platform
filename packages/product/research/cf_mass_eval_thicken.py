@@ -27,7 +27,6 @@ def _load_markets_calendar_map(
     end: str | None,
     sqlite_path: str | Path | None = None,
 ) -> dict[str, Any]:
-    """Compact markets_calendar HolDiv map for one period window."""
     db = Path(sqlite_path) if sqlite_path else DEFAULT_SQLITE
     if not db.exists():
         return {"hol_div_by_date": {}}
@@ -73,7 +72,6 @@ def _build_thicken_sidecars(
     codes: Sequence[str],
     sqlite_path: str | Path | None = None,
 ) -> dict[str, Any]:
-    """Compact rate/flow/fund/calendar sidecars. Gaps disclosed; no invent/ffill."""
     from research.cost_models import load_repo_rate_series_from_rows
 
     db = Path(sqlite_path) if sqlite_path else DEFAULT_SQLITE
@@ -241,8 +239,6 @@ def _build_thicken_sidecars(
                         "roe": ev.get("roe"),
                         "div_ann": ev.get("div_ann"),
                         "np": ev.get("np"),
-                        "sales": ev.get("sales"),
-                        "eq": ev.get("eq"),
                         "ta": ev.get("ta"),
                         "eq_ar": ev.get("eq_ar"),
                         "prior_ta": ev.get("prior_ta"),
@@ -274,7 +270,6 @@ def attach_nky_proxy(
     bars_json: dict[str, list[list[Any]]],
     period: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Stage TOPIX closes as __NKY_PROXY__. Mutates bars_json. Best-effort."""
     p = period
     nky_meta: dict[str, Any] = {}
     try:
@@ -318,7 +313,6 @@ def attach_nky_proxy(
 
 
 def attach_opt225_regime() -> dict[str, Any]:
-    """Compact opt225 regime maps for the panel. Best-effort."""
     opt225_meta: dict[str, Any] = {}
     try:
         opt225 = load_opt225_regime_bundle_for_eval()

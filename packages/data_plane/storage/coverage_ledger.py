@@ -420,14 +420,11 @@ def _dataset_status(
     if freshness is not None and freshness.status == "fail":
         return "STALE", row_count, observed_start, observed_end
 
-    # Facts-only fallbacks stay UNKNOWN; COMPLETE needs a real C2 validation verdict.
     validation = checks.get("C2")
     if validation is None or validation.metrics.get("source") != "ingestion_validation":
         return "UNKNOWN", row_count, observed_start, observed_end
     if validation.metrics.get("validation_status") != "pass":
         return "FAILED", row_count, observed_start, observed_end
-
-    # Validation is a prerequisite only; required segments/receipts own COMPLETE.
     return "COMPLETE", row_count, observed_start, observed_end
 
 

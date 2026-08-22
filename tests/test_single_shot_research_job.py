@@ -23,13 +23,13 @@ from tests.research_eval_util import (
     _c21_d1_tables,
     _close_index,
     _close_px,
+    _dry_tip_d1_tables,
     _injected_multiday,
     _injected_single_shot,
     _put_json,
+    _short_ratio_tip,
     _single_shot_kw,
-    _tip_bar,
-    _tip_cal_row,
-    _tip_topix_row,
+    _tip_s1_rows,
     assert_ast_bans_mass_ready_orders,
 )
 from research.single_shot_job import (
@@ -166,44 +166,10 @@ def test_execute_rejects_permanent_defer_before_d1():
 
 def test_execute_dry_run_with_injected_d1(tmp_path: Path):
     """Minimal execute path: injected tip rows → dry-run R2 staging."""
-
-    def fake_d1(sql: str):
-        if "COUNT(*)" in sql:
-            if "equities_bars_daily" in sql:
-                return [
-                    {
-                        "n": 3,
-                        "min_event_time": "2026-08-01T15:00:00+09:00",
-                        "max_event_time": "2026-08-05T15:00:00+09:00",
-                    }
-                ]
-            return [
-                {
-                    "n": 2,
-                    "min_event_time": "2026-08-01",
-                    "max_event_time": "2026-08-04",
-                }
-            ]
-        if "equities_bars_daily" in sql:
-            return [
-                {
-                    "natural_key": '{"Code":"13010","Date":"2026-08-01"}',
-                    "event_time": "2026-08-01T15:00:00+09:00",
-                    "available_at": "2026-08-01T16:00:00+09:00",
-                }
-            ]
-        return [
-            {
-                "natural_key": '{"Date":"2026-08-01"}',
-                "event_time": "2026-08-01",
-                "available_at": "2026-08-01",
-            }
-        ]
-
     puts, kw = _injected_single_shot(
         tmp_path,
         job_id="w0815aq-unit-demo",
-        d1_execute=fake_d1,
+        tables=_dry_tip_d1_tables(),
         dataset_ids=["equities_bars_daily", "markets_calendar"],
     )
     ex = execute_single_shot_job(**kw)
@@ -242,34 +208,8 @@ def test_extract_d1_tip_feature_rows_rejects_defer():
 def test_tip_short_ratio_level_with_section():
     tip_rows = {
         "markets_short_ratio": [
-            {
-                "date": "2026-08-04",
-                "S33": "0050",
-                "section": "0050",
-                "available_at": "2026-08-04T15:30:00+09:00",
-                "event_time": "2026-08-04T09:00:00+09:00",
-                "payload": {
-                    "Date": "2026-08-04",
-                    "S33": "0050",
-                    "SellExShortVa": 200.0,
-                    "ShrtWithResVa": 40.0,
-                    "ShrtNoResVa": 10.0,
-                },
-            },
-            {
-                "date": "2026-08-04",
-                "S33": "1050",
-                "section": "1050",
-                "available_at": "2026-08-04T15:30:00+09:00",
-                "event_time": "2026-08-04T09:00:00+09:00",
-                "payload": {
-                    "Date": "2026-08-04",
-                    "S33": "1050",
-                    "SellExShortVa": 100.0,
-                    "ShrtWithResVa": 10.0,
-                    "ShrtNoResVa": 0.0,
-                },
-            },
+            _short_ratio_tip("2026-08-04", "0050", 200.0, 40.0, 10.0),
+            _short_ratio_tip("2026-08-04", "1050", 100.0, 10.0, 0.0),
         ],
     }
     as_of = "2026-08-04T15:30:00+09:00"
@@ -301,19 +241,7 @@ def test_tip_short_ratio_level_with_section():
 
 
 def test_tip_feature_context_and_candidate_compute():
-    tip_rows = {
-        "equities_bars_daily": [
-            _tip_bar("13010", "2026-08-03", 100.0, 100.0),
-            _tip_bar("13010", "2026-08-04", 110.0, 150.0),
-        ],
-        "markets_calendar": [
-            _tip_cal_row(d) for d in ("2026-08-03", "2026-08-04")
-        ],
-        "indices_bars_daily_topix": [
-            _tip_topix_row(d, c)
-            for d, c in (("2026-08-03", 3000.0), ("2026-08-04", 3030.0))
-        ],
-    }
+    tip_rows = _tip_s1_rows()
     as_of = "2026-08-04T15:30:00+09:00"
     ctx = build_tip_feature_context(
         tip_rows, as_of=as_of, inputs={"code": "13010"}

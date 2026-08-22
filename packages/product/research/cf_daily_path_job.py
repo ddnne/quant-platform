@@ -1,7 +1,4 @@
-"""CF isolate fan-out daily_path. Stage once, POST /v1/daily-path per logic.
-
-Not a pass / not GO. period-net n_survivors is not this protocol.
-"""
+"""CF isolate fan-out daily_path. Not a pass / not GO."""
 from __future__ import annotations
 
 import json
@@ -223,7 +220,6 @@ def run_cf_daily_path_fanout(
         "protocol": PROTOCOL_DAILY_PATH,
         "eval_kind": "daily_path",
         "parallel_model": "cf_isolate_fanout_one_logic",
-        "wall_clock_target": "batch ≈ longest isolate + staging",
         "mode": mode,
         "n_logics": len(ids),
         "logic_ids": ids,

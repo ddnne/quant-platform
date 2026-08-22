@@ -1,9 +1,4 @@
-"""SQLite writer for structured ingestion rows.
-
-Generic over tables defined in :mod:`storage.schema`. The hard PIT rule lives
-here: any row lacking ``available_at`` is rejected before it touches the DB,
-and ``available_at`` is canonicalized to a JST ISO string on write.
-"""
+"""SQLite writer for structured ingestion rows. ``available_at`` is mandatory."""
 
 from __future__ import annotations
 
@@ -34,17 +29,7 @@ class MissingAvailableAt(ValueError):
 def _payload_signature(
     row: Mapping[str, Any], cols: list[str], skip: set[str]
 ) -> str:
-    """Canonical, order-independent signature of a row's non-PIT payload.
-
-    Used to decide whether a conflicting row is an *unchanged re-fetch* (keep
-    the earliest ``available_at``) or an *amendment* (take the incoming
-    ``available_at``). ``skip`` holds the identity/audit columns to ignore —
-    the natural-key columns plus ``available_at`` and ``ingested_at``.
-
-    Prefers ``raw_payload`` — the verbatim source record — when present, since
-    it faithfully captures any amendment; otherwise falls back to the
-    remaining structured columns.
-    """
+    """Canonical payload signature. Prefers ``raw_payload`` when present."""
     raw = row.get("raw_payload")
     if raw not in (None, ""):
         try:
@@ -60,12 +45,7 @@ def _payload_signature(
 
 
 def _earlier_available(a: str, b: str) -> str:
-    """Return the chronologically earlier of two ``available_at`` ISO strings.
-
-    Compared as **aware datetimes** (canonicalized to JST), not as raw text —
-    so equivalent instants in different offsets compare equal and we never
-    backdate via a lexicographic fluke.
-    """
+    """Earlier of two ``available_at`` instants (aware datetimes, not text)."""
     da, db = parse_dt(a), parse_dt(b)
     return to_iso(da if da <= db else db)
 
@@ -90,34 +70,13 @@ class SqliteStore:
         self._conn.executescript(SCHEMA_SQL)
         self._conn.commit()
         apply_schema_migrations(self._conn)
-        # Marker table for the one-shot legacy natural-key migration on
-        # jquants_records (see storage.migrate_jquants_keys). Idempotent DDL.
         ensure_migration_table(self._conn)
         with self._conn:
             migrate_contract_keys_v2(self._conn, now_iso=now_iso())
 
-    # --- core write -------------------------------------------------------
-
     def upsert(self, table: str, rows: Iterable[Mapping[str, Any]]) -> int:
-        """Idempotent, PIT-safe upsert keyed on the table's natural key.
-
-        Validates + canonicalizes ``available_at`` on every row, then upserts.
-        On conflict (same natural key):
-
-        * **unchanged payload** (re-fetch of identical data): keep the
-          *earliest* ``available_at`` (compared as aware datetimes) and refresh
-          ``ingested_at``. A later re-fetch must never move the point-in-time
-          stamp backward.
-        * **amended payload** (the non-PIT data changed): first copy the
-          displaced row to the table's revision history, then take
-          the *incoming* ``available_at`` and field values in the primary
-          table. An amended close was **not** available at the original
-          publication time, and the original value remains queryable for PIT
-          instants before the amendment.
-
-        Payload identity prefers ``raw_payload`` (the verbatim source record)
-        when present. The whole batch runs in one transaction; any failure
-        rolls back so a partial batch is never committed.
+        """PIT-safe upsert on the natural key. Unchanged re-fetch keeps earliest
+        ``available_at``; amendments archive the displaced row first.
         """
         rows = [dict(r) for r in rows]
         if not rows:
@@ -129,11 +88,8 @@ class SqliteStore:
                 raise MissingAvailableAt(
                     f"{table}[{i}] missing available_at — PIT requires available_at"
                 )
-            # Canonicalize to a JST ISO string so equivalent offsets unify
-            # (e.g. 17:00+09:00 == 08:00+00:00) before any comparison/write.
             r["available_at"] = validate_available_at(av)
 
-        # Stable, de-duplicated column list across all rows.
         cols: list[str] = []
         seen: set[str] = set()
         for r in rows:
@@ -142,11 +98,6 @@ class SqliteStore:
                     seen.add(k)
                     cols.append(k)
 
-        # One-shot legacy natural-key migration: drop stale rows written with
-        # the old collapsed key schema so the new-key write below does not
-        # leave duplicates. No-op for tables/datasets that are unaffected or
-        # already migrated. Runs in this transaction; a later failure rolls it
-        # back. See storage.migrate_jquants_keys for the dataset list + why.
         if table == "jquants_records":
             migrate_before_write(
                 self._conn,
@@ -171,24 +122,16 @@ class SqliteStore:
                 if ex is not None and _payload_signature(
                     r, cols, skip
                 ) == _payload_signature(ex, cols, skip):
-                    # Unchanged re-fetch: retain its earliest PIT stamp.
                     r["available_at"] = _earlier_available(
                         ex["available_at"], r["available_at"]
                     )
                 elif ex is not None:
-                    # Amendment: retain the value that this write displaces.
-                    # A policy-derived observation timestamp is not evidence
-                    # that the amendment was public then. In the absence of a
-                    # later explicit stamp, the revision becomes available no
-                    # earlier than this ingestion.
+                    # Amendment: displaced row is not public at original stamp.
                     if r.get("ingested_at"):
                         r["available_at"] = _later_available(
                             r["available_at"], str(r["ingested_at"])
                         )
-                    # ``existing`` is updated below so multiple revisions of
-                    # the same key within one batch are preserved in order.
                     revisions.append(dict(ex))
-                # else: new row -> incoming available_at stays.
                 existing[key] = dict(r)
 
             if revisions:
@@ -200,7 +143,6 @@ class SqliteStore:
                 f"ON CONFLICT({','.join(key_cols)}) DO UPDATE SET {','.join(assigns)}"
             )
         else:
-            # Defensive fallback (should not happen for known tables).
             sql = (
                 f"INSERT OR REPLACE INTO {table} ({collist}) "
                 f"VALUES ({placeholders})"
@@ -213,22 +155,14 @@ class SqliteStore:
             cur = self._conn.executemany(sql, payload)
             self._conn.commit()
         except Exception:
-            # Never leave a partial batch committed then marked skipped.
             self._conn.rollback()
             raise
-        # executemany.rowcount is -1 on some drivers; fall back to len.
         return cur.rowcount if cur.rowcount and cur.rowcount > 0 else len(payload)
 
     def _archive_revisions(
         self, table: str, key_cols: list[str], rows: list[Mapping[str, Any]]
     ) -> None:
-        """Persist displaced fact rows in the table's revision history.
-
-        The caller owns the surrounding transaction. A retry of the same
-        amendment updates the identical business-key / ``available_at`` /
-        ``ingested_at`` version. Multiple amendments with an unchanged
-        publication stamp remain distinct because their ingestion times differ.
-        """
+        """Persist displaced fact rows. Caller owns the surrounding transaction."""
         revision_table = REVISION_TABLES.get(table)
         if revision_table is None or not rows:
             return
@@ -252,10 +186,7 @@ class SqliteStore:
     def _existing_by_key(
         self, table: str, key_cols: list[str], rows: list[Mapping[str, Any]]
     ) -> dict[tuple, dict]:
-        """Existing rows keyed by natural-key tuple (empty if none match).
-
-        Chunked to stay under SQLite's host-parameter limit on older builds.
-        """
+        """Existing rows keyed by natural-key tuple. Chunked for SQLite param limits."""
         out: dict[tuple, dict] = {}
         if not rows:
             return out
@@ -273,8 +204,6 @@ class SqliteStore:
                 d = dict(row)
                 out[tuple(d[k] for k in key_cols)] = d
         return out
-
-    # --- helpers ----------------------------------------------------------
 
     def count(self, table: str) -> int:
         return self._conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]

@@ -1,15 +1,7 @@
-"""Candidate-grade daily MTM path helpers.
-
-CF ``research-mass-eval`` returns period-net screens only (``n_survivors`` is
-not a pass). Daily equity-curve drawdown lives here. Record via
-``scripts/record_research_eval.py --put-r2``.
-
-Does not arm Mass / READY / GO. Does not retune frozen default pins.
-"""
+"""Candidate-grade daily MTM path helpers. Not a pass / not GO."""
 from __future__ import annotations
 
 import json
-import math
 import subprocess
 from pathlib import Path
 from contextvars import ContextVar
@@ -54,21 +46,6 @@ def git_sha(*, cwd: Path | None = None) -> str | None:
         return None
 
 
-def scalar_f(v: Any) -> float | None:
-    if v is None:
-        return None
-    try:
-        fv = float(v)
-    except (TypeError, ValueError):
-        return None
-    return fv if math.isfinite(fv) else None
-
-
-def fmt(v: Any, nd: int = 6) -> str:
-    x = scalar_f(v)
-    return f"{x:.{nd}f}" if x is not None else "—"
-
-
 def load_shard_bars(
     shard: Mapping[str, Any],
     *,
@@ -90,7 +67,6 @@ def load_shard_bars(
             "period_id": pid,
             "status": "missing_bars",
             "bars": {},
-            "bars_path": None,
             "period_start": p_start,
             "period_end": p_end,
             "year": shard.get("year"),
@@ -130,7 +106,6 @@ def load_shard_bars(
         "status": "ok" if bars else "empty_bars",
         "bars": bars,
         "adv_by_code": adv_by_code,
-        "bars_path": str(bars_path),
         "period_start": p_start,
         "period_end": p_end,
         "year": shard.get("year"),
@@ -151,8 +126,6 @@ def summarize_path(pack: Mapping[str, Any]) -> dict[str, Any]:
         "mean_net_daily": pack.get("mean_net_daily"),
         "total_return_gross": pack.get("total_return_gross"),
         "total_return_net": pack.get("total_return_net"),
-        "period_ref_net_mean_active": pack.get("period_ref_net_mean_active"),
-        "period_ref_gross_mean_active": pack.get("period_ref_gross_mean_active"),
         "daily_path_DD": dd.get("max_dd") if "daily_path_DD" not in pack else pack.get("daily_path_DD"),
         "max_dd": dd.get("max_dd"),
         "abs_max_dd": dd.get("abs_max_dd"),
@@ -165,7 +138,6 @@ def summarize_path(pack: Mapping[str, Any]) -> dict[str, Any]:
         "recovery_date": dd.get("recovery_date"),
         "daily_path_measured": gate.get("measured"),
         "daily_path_complete": gate.get("complete"),
-        "data_path": pack.get("data_path"),
         "n_gated_off_days": pack.get("n_gated_off_days"),
         "n_gate_on_days": pack.get("n_gate_on_days"),
     }
@@ -230,13 +202,7 @@ def held_book_daily_mtm(
     repo_by_date: Mapping[str, float] | None = None,
     adv_by_code: Mapping[str, float] | None = None,
 ) -> dict[str, Any]:
-    """Equal-weight daily MTM of a pre-built held book.
-
-    Cost stack: amortized one-way tx + optional short-repo drag.
-    When ``adv_by_code`` is present, both tx and repo drag are scaled by a
-    liquidity bucket (ADV≥1e9×1.0, ≥1e8×1.5, else ×2.5). Missing ADV is
-    disclosed as tx+repo only — never invented.
-    """
+    """Equal-weight daily MTM of a pre-built held book."""
     from features.class_signals import amortized_one_way_cost
 
     if adv_by_code is None and extra:
@@ -376,7 +342,6 @@ def held_book_daily_mtm(
         "hold_days": h,
         "one_way_cost": float(one_way_cost),
         "amortized_one_way_cost": am_cost,
-        "daily_cost_drag": daily_cost,
         "n_codes": len(held_by_code_date),
         "n_calendar_days": len(dates),
         "n_equity_points": len(equities),
@@ -397,18 +362,8 @@ def held_book_daily_mtm(
         "equities": equities,
         "gross_daily": gross_daily,
         "net_daily": net_daily,
-        "cost_convention": (
-            "python_local: daily_cost = (one_way/hold_days)/hold_days while active; "
-            "over H active days ≈ amortized once (matches period-net am_cost)."
-        ),
-        "data_path": "local_real_mirrors",
         "promote_as_main": False,
         "go": False,
-        "research_only": True,
-        "note": (
-            "Daily MTM after amortized cost drag. Research-only. "
-            "Not READY / not Mass / not GO."
-        ),
     }
     if extra:
         out.update(dict(extra))

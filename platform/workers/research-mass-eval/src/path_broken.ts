@@ -1,4 +1,3 @@
-/** Generic CS/MDH fallback is not a candidate-grade complete path. */
 export function isPathBroken(
   evalPath: unknown,
   fallback?: unknown,

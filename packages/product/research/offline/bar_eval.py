@@ -1,7 +1,6 @@
 """Offline W78–W86 bar-eval surface (not CF SoT; no GO).
 
-``evaluate_*_on_bars`` bodies. Local bar mirrors + SQLite only;
-not Mass / READY / Phase7 / operational GO.
+Local bar mirrors + SQLite only; not Mass / READY / Phase7 / operational GO.
 """
 
 from __future__ import annotations

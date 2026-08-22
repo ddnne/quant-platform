@@ -1,9 +1,4 @@
-"""Normalize parsed JSDA bond-trade records into PIT-annotated structured rows.
-
-Maps the clean records from :mod:`parse` to the ``jsda_bond_trades`` schema.
-This is the 引値-equivalent (corporate-bond quote/yield) series — column map
-in ``docs/data_sources.md``.
-"""
+"""Normalize parsed JSDA records into PIT-annotated structured rows."""
 
 from __future__ import annotations
 
@@ -63,13 +58,7 @@ def normalize_otc_reference_prices(
     correction_source_url: Optional[str] = None,
     correction_raw_digest: Optional[str] = None,
 ) -> List[dict]:
-    """Normalize governed OTC-reference rows with explicit PIT provenance.
-
-    The publication label is not the quote date and neither is evidence of an
-    exact publication timestamp. Callers must calendar-resolve the quote date;
-    when no authoritative publication timestamp is supplied, ``available_at``
-    conservatively remains the actual ``ingested_at``.
-    """
+    """Normalize OTC-reference rows. Publication label is not the quote date."""
     availability = available_at or ingested_at
     out: list[dict] = []
     for record in records:
@@ -134,25 +123,7 @@ def normalize_corporate_bond_transactions(
     correction_source_url: Optional[str] = None,
     correction_raw_digest: Optional[str] = None,
 ) -> List[dict]:
-    """Normalize governed 社債の取引情報 rows with explicit PIT provenance.
-
-    This is the governed storage adapter for ``jsda_corporate_bond_transactions``.
-    Each input record is one trade observation from an official publication
-    file. The dataset is ``event_driven``: a single bond may trade several
-    times on one trade date, and the same trade may be republished across
-    annual archives. The natural key is therefore
-    ``(source, publication_label_date, trade_date, security_code,
-    source_record_id)`` — publication + per-file record id disambiguate the
-    revisions that the legacy ``jsda_bond_trades`` table (keyed on
-    trade_date/isin/issuer_name) cannot represent.
-
-    ``publication_label_date`` is the date of the publication file, not the
-    trade date, and is not evidence of an exact publication timestamp. When no
-    authoritative publication timestamp is supplied, ``available_at``
-    conservatively remains the actual ``ingested_at``. ``source_record_id``
-    defaults to the row's source line number so the natural key stays unique
-    even when the parser does not assign one explicitly.
-    """
+    """Normalize 社債の取引情報 rows. NK is publication + source_record_id."""
     availability = available_at or ingested_at
     out: list[dict] = []
     for index, record in enumerate(records):
@@ -215,17 +186,7 @@ def normalize_repo_rates(
     available_at: Optional[str] = None,
     rate_type: str = "東京レポ・レート",
 ) -> List[dict]:
-    """Normalize parsed repo-rate records into PIT-annotated ``jsda_repo_rates``
-    rows.
-
-    Each input record is ``{as_of_date, tenor, rate}`` (from
-    :func:`ingestion.jsda.parse.parse_repo_csv`). ``event_time`` is the rate's
-    reference day at 15:00 JST (market close, matching the bond-trade
-    convention); ``available_at`` defaults to ``ingested_at`` and is therefore
-    **仮** until the real TRR publication lag is confirmed (the JSDA typically
-    publishes the next business day). ``rate_type`` names the series — the TRR
-    time-series file is the 東京レポ・レート; override for other series.
-    """
+    """Normalize ``{as_of_date, tenor, rate}`` into PIT ``jsda_repo_rates`` rows."""
     av = available_at or ingested_at
     out: List[dict] = []
     for rec in records:

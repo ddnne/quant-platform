@@ -1,17 +1,14 @@
-"""JSDA R2 mirror parse — staging only, never false COMPLETE receipts.
-
-Does not write Trusted COMPLETE from parse-count. Formal path is CF raw →
-R2 → adapter → fact table → independent re-read → signed receipt → Coverage.
-This module discovers raw, parses staging rows, and emits PARSED_STAGING_ONLY.
-"""
+"""JSDA R2 mirror parse — staging only, never false COMPLETE receipts."""
 
 from __future__ import annotations
 
+import calendar
 import csv
 import hashlib
 import io
 import sqlite3
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -82,7 +79,7 @@ def discover_local_jsda_raw(
 
 
 def parse_artifact_rows(artifact: JsdaRawArtifact) -> list[dict[str, Any]]:
-    """Parse raw bytes into row dicts. Parser errors raise (not counted as rows)."""
+    """Parse raw bytes into row dicts. Parser errors raise."""
     path = artifact.path
     data = path.read_bytes()
     suffix = path.suffix.lower()
@@ -142,7 +139,7 @@ def run_jsda_staging_parse(
     run_id: int,
     datasets: Sequence[str] | None = None,
 ) -> JsdaParseRunResult:
-    """Parse JSDA raw into staging evidence only (never signed COMPLETE)."""
+    """Parse JSDA raw into staging evidence only. Never signed COMPLETE."""
     artifacts = discover_local_jsda_raw(raw_root, datasets=datasets)
     rows_parsed = 0
     written = 0
@@ -190,9 +187,7 @@ def run_jsda_staging_parse(
                 run_id=int(run_id),
                 status="SUCCESS",
                 error=None,
-                checked_at=__import__("datetime").datetime.now(
-                    __import__("datetime").timezone.utc
-                ).isoformat(),
+                checked_at=datetime.now(timezone.utc).isoformat(),
             )
             record_collection_receipt(conn, receipt)
             written += 1
@@ -212,8 +207,6 @@ def _segment_dates(segment_id: str) -> tuple[str, str]:
     """Map segment_id to start/end; never invent 1970 for unknown."""
     if len(segment_id) == 7 and segment_id[4] == "-":
         y, m = segment_id.split("-")
-        import calendar
-
         last = calendar.monthrange(int(y), int(m))[1]
         return f"{y}-{m}-01", f"{y}-{m}-{last:02d}"
     if len(segment_id) == 10 and segment_id[4] == "-" and segment_id[7] == "-":

@@ -36,10 +36,6 @@ from research.freezes import (
     SIGNIFICANCE_CLAIMED,
 )
 
-# ---------------------------------------------------------------------------
-# Identity / freeze (must never arm)
-# ---------------------------------------------------------------------------
-
 COST_MODELS_VERSION: str = "research-cost-models/v2"
 COST_MODELS_VERSION_V1: str = "research-cost-models/v1"
 COST_MODELS_WAVE: str = "W86 / w0816u"
@@ -136,18 +132,6 @@ def _freeze_fields() -> dict[str, Any]:
         "connected_to_mass": CONNECTED_TO_MASS,
         "label": COST_MODELS_LABEL,
     }
-
-
-# Repo series construction lives in research.cost_repo (re-exported below).
-
-# ---------------------------------------------------------------------------
-# Liquidity proxy + cost modulation
-# ---------------------------------------------------------------------------
-# ADV = mean(turnover_value or close*volume or adj_close*adj_volume).
-# high if ADV>=1e9, mid if >=1e8, else low; missing → mult=1.0, no invent.
-# Optional TOPIX/large soft-upgrade one step only when ADV is observed.
-# one_way_eff = base * LIQUIDITY_TX_MULT; spread_eff = band * SHORT_SPREAD_MULT.
-# ---------------------------------------------------------------------------
 
 
 def _pick_num_field(row: Mapping[str, Any], *keys: str) -> float | None:
@@ -744,11 +728,6 @@ def apply_liquidity_to_short_spread_bp(
 ) -> float:
     """``spread_eff_bp = spread_base_bp * short_spread_mult``."""
     return float(spread_bp) * float(short_spread_mult)
-
-
-# ---------------------------------------------------------------------------
-# Daily cost pure helpers
-# ---------------------------------------------------------------------------
 
 
 def short_borrow_daily_cost(
@@ -1467,11 +1446,6 @@ def research_net_with_extended_costs(
     )
 
 
-# ---------------------------------------------------------------------------
-# Assumption builders
-# ---------------------------------------------------------------------------
-
-
 def build_leverage_short_cost_assumption(
     *,
     position_style: str = POSITION_STYLE_LONG_ONLY_UNLEVERED,
@@ -1487,14 +1461,12 @@ def build_leverage_short_cost_assumption(
     financing_change_reason: str | None = None,
     uses_short: bool | None = None,
     uses_leverage: bool | None = None,
-    # --- W78 repo-linked ---
     repo_rate_series: Mapping[str, Any] | None = None,
     prefer_repo_linked: bool = True,
     short_borrow_spread_bp: float | None = None,
     short_borrow_sensitivity: str | None = None,
     borrow_proxy_annual_bp: float | None = None,
     required_dates: Sequence[Any] | None = None,
-    # --- W79 liquidity-linked ---
     liquidity_proxy: Mapping[str, Any] | float | None = None,
     liquidity_bars: Sequence[Mapping[str, Any]] | None = None,
     liquidity_bucket: str | None = None,
@@ -1535,7 +1507,6 @@ def build_leverage_short_cost_assumption(
         tx_base = float(one_way_cost)
         tx_base_bp = tx_base * 10_000.0
 
-    # Infer uses_short / uses_leverage from style when not provided.
     if uses_short is None:
         uses_short = style in (
             POSITION_STYLE_LONG_SHORT,
@@ -1551,7 +1522,6 @@ def build_leverage_short_cost_assumption(
     else:
         uses_leverage = bool(uses_leverage)
 
-    # Resolve short spread sensitivity (base band before liquidity mult).
     spread_base_bp = (
         float(short_borrow_spread_bp)
         if short_borrow_spread_bp is not None
@@ -1574,7 +1544,6 @@ def build_leverage_short_cost_assumption(
                 sens_label = k
                 break
 
-    # ---- W79 liquidity modulation (tx + short spread) ----
     liq_req = (
         liquidity_required_dates
         if liquidity_required_dates is not None
@@ -1595,15 +1564,12 @@ def build_leverage_short_cost_assumption(
     liq_applied = bool(liq.get("applied"))
     liq_gap = bool(liq.get("is_gap"))
 
-    # Effective tx after liquidity mult.
     tx = apply_liquidity_to_one_way_cost(tx_base, tx_mult=tx_mult)
     tx_bp = tx * 10_000.0
-    # Effective short spread = sensitivity band * liquidity mult.
     spread_bp = apply_liquidity_to_short_spread_bp(
         spread_base_bp, short_spread_mult=short_spread_mult
     )
 
-    # Normalize / re-check series against required_dates if given.
     series_doc: dict[str, Any] | None = None
     repo_mean: dict[str, Any] | None = None
     repo_available = False
@@ -1620,14 +1586,6 @@ def build_leverage_short_cost_assumption(
 
     use_repo = bool(prefer_repo_linked and repo_available)
 
-    # ---- Short borrow rate resolution ----
-    # For repo+spread and fixed paths, spread already includes liquidity mult
-    # when modulated. For fixed annual / borrow_proxy overrides, also scale
-    # the annual borrow by short_spread_mult when liquidity is applied and
-    # no explicit short_borrow_annual_bp was forced without mult intent:
-    # policy: scale spread component only for repo+spread; for fixed default
-    # annual, scale the whole annual by short_spread_mult when modulated so
-    # low-liquidity shorts cost more even without repo series.
     short_rate_source = RATE_SOURCE_NOT_APPLICABLE
     if uses_short:
         if borrow_proxy_annual_bp is not None and not use_repo:
@@ -1655,7 +1613,6 @@ def build_leverage_short_cost_assumption(
             else DEFAULT_SHORT_BORROW_ANNUAL_BP
         )
 
-    # ---- Financing rate resolution ----
     fin_rate_source = RATE_SOURCE_NOT_APPLICABLE
     if uses_leverage:
         if use_repo and repo_mean is not None and repo_mean.get("mean_annual_bp") is not None:
@@ -1701,7 +1658,6 @@ def build_leverage_short_cost_assumption(
                 trading_days_per_year=trading_days_per_year,
             )
 
-    # Long-only unlevered: force N/A disclosure.
     if style == POSITION_STYLE_LONG_ONLY_UNLEVERED and not uses_short and not uses_leverage:
         short_not_applicable = True
         financing_not_applicable = True

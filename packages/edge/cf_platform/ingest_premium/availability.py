@@ -45,23 +45,6 @@ def next_business_open_jst(date_yyyy_mm_dd: str) -> str:
     return day.strftime("%Y-%m-%dT09:00:00+09:00")
 
 
-def pick_event_field_instant(row: Mapping[str, Any]) -> str | None:
-    """Deprecated field-inspection helper retained for Phase-3.5 callers.
-
-    It is not used to choose dataset availability. Contract-driven callers use
-    :func:`pick_available_at`, which never treats an observation Date as 09:00.
-    """
-    for field in EVENT_FIELD_CANDIDATES:
-        value = row.get(field)
-        if not isinstance(value, str) or not value:
-            continue
-        if len(value) == 10 and value[4] == "-" and value[7] == "-":
-            return next_business_open_jst(value)
-        if "T" in value or " " in value:
-            return value
-    return None
-
-
 def policy_for_dataset(dataset_id: str) -> str:
     try:
         return contract_for(dataset_id).available_at_policy
@@ -75,9 +58,6 @@ def pick_available_at(
     try:
         return available_at_for(row, dataset_id, ingested_at)
     except KeyError:
-        # Match the Worker compatibility wrapper: an uncontracted dataset has
-        # no evidenced publication rule, so ingestion time is the only safe
-        # availability instant.
         return ingested_at
 
 
@@ -90,7 +70,6 @@ __all__ = [
     "SESSION_CLOSE_DATASETS",
     "next_business_open_jst",
     "pick_available_at",
-    "pick_event_field_instant",
     "policy_for_dataset",
     "session_close_jst",
 ]

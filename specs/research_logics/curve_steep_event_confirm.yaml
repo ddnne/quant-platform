@@ -22,4 +22,3 @@ params:
   mode: curve_steep_event_confirm
   gate: repo_curve_spread_gt_0
 evaluator: research.unique_logic.dispatch.evaluate_logic_daily_mtm
-notes: catalog declaration; evaluate via unique_logic.dispatch

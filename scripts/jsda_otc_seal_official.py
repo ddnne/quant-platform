@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import sqlite3
 import sys
@@ -469,7 +470,7 @@ def main() -> int:
         print("restore snapshot triggers...", flush=True)
         restore_triggers(conn)
 
-    if __import__("os").environ.get("SKIP_REFRESH"):
+    if os.environ.get("SKIP_REFRESH"):
         print("SKIP_REFRESH set — defer ledger refresh", flush=True)
         Path(LOGDIR / "otc_seal_result_partial.json").write_text(
             json.dumps({"results": results, "sealed_n": sealed_n}, indent=2, default=str)
@@ -522,7 +523,6 @@ def main() -> int:
     sealed = [r for r in results if r.get("status") == "SEALED"]
     summary = {
         "wave": WAVE,
-        "W": WAVE,
         "as_of": datetime.now(timezone.utc).isoformat(),
         "pre_complete": pre,
         "post_complete": len(post_ids),

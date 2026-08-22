@@ -12,6 +12,8 @@ from pathlib import Path
 
 from storage.sqlite_store import SqliteStore
 
+from features import compute
+
 from tests._coreseed import CODES, close_iso, seed_db
 
 
@@ -22,7 +24,6 @@ def _seed_c21(tmp_path, days=None, *, prices=None, price=100.0):
     return days, seed_db(tmp_path, days=days, prices=prices)
 
 
-# W49–W50 held (7) + W51 expand (+3) = 10 complete21 min features.
 COMPLETE21_MIN_IDS = (
     "volume_change_1d",
     "topix_relative_1d",
@@ -36,7 +37,6 @@ COMPLETE21_MIN_IDS = (
     "futures_activity_proxy",
 )
 
-# W52 + W53 + W54 + W55 + W56 + W57 O2 promotions; version pin remains 1.0.0.
 COMPLETE21_MIN_APPROVED_IDS = (
     "is_trading_day",
     "volume_change_1d",
@@ -75,7 +75,6 @@ def _upsert_jquants_records(
     store = SqliteStore(db_path)
     rows = []
     for p in payloads:
-        # Prefer Date/Code natural keys when present; else compact payload key.
         nk_obj: dict = {}
         if "Code" in p or "code" in p:
             nk_obj["Code"] = str(p.get("Code") or p.get("code"))
@@ -110,3 +109,100 @@ def _upsert_repo_rates(
     store = SqliteStore(db_path)
     store.upsert("jsda_repo_rates", rows)
     store.close()
+
+
+def _feat(fid, db, day, **kw):
+    return compute(fid, as_of=close_iso(day), db_path=db, **kw)
+
+
+def _seed_payloads(
+    tmp_path,
+    payloads=None,
+    *,
+    days=None,
+    prices=None,
+    price=100.0,
+    repo=None,
+):
+    days, db = _seed_c21(tmp_path, days, prices=prices, price=price)
+    for ds, rows in (payloads or {}).items():
+        _upsert_jquants_records(db, dataset=ds, payloads=rows)
+    if repo is not None:
+        _upsert_repo_rates(db, repo)
+    return days, db
+
+
+def _seed_feat(
+    tmp_path,
+    fid,
+    *,
+    days=None,
+    prices=None,
+    price=100.0,
+    payloads=None,
+    repo=None,
+    as_of=None,
+    **kw,
+):
+    days, db = _seed_payloads(
+        tmp_path, payloads, days=days, prices=prices, price=price, repo=repo
+    )
+    return _feat(fid, db, as_of or days[-1], **kw), days, db
+
+
+def _ramp(days, start=100.0, step=1.0):
+    return {CODES[0]: {d: start + i * step for i, d in enumerate(days)}}
+
+
+def _const_px(days, price=100.0):
+    return {CODES[0]: {d: price for d in days}}
+
+
+def _margin_row(day, long_vol, shrt_vol=0.0, code=None):
+    return {
+        "Date": day,
+        "Code": code or CODES[0],
+        "LongVol": long_vol,
+        "ShrtVol": shrt_vol,
+    }
+
+
+def _short_ratio_payload(day, s33, sell, with_res, no_res):
+    return {
+        "Date": day,
+        "S33": s33,
+        "SellExShortVa": sell,
+        "ShrtWithResVa": with_res,
+        "ShrtNoResVa": no_res,
+    }
+
+
+def _alert_row(day, code=None):
+    c = code or CODES[0]
+    return {"Code": c, "PubDate": day, "AppDate": day, "Date": day}
+
+
+def _fut_row(day, code, volume, close):
+    return {"Date": day, "Code": code, "Volume": volume, "Close": close}
+
+
+def _topix_row(day, close):
+    return {"Date": day, "Close": close}
+
+
+def _fins_row(day, **extra):
+    return {"Code": CODES[0], "Date": day, **extra}
+
+
+def _repo_row(day, rate, tenor="overnight"):
+    iso = close_iso(day)
+    return {
+        "source": "jsda",
+        "as_of_date": day,
+        "tenor": tenor,
+        "rate_type": "東京レポ・レート",
+        "event_time": f"{day}T15:00:00+09:00",
+        "available_at": iso,
+        "ingested_at": iso,
+        "rate": rate,
+    }

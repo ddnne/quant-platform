@@ -25,7 +25,6 @@ from research.freezes import (
     MASS_RESEARCH as MASS_RESEARCH_STATUS,
     PHASE7 as PHASE7_STATUS,
     READY_DECLARED,
-    READY_PUBLICATION as READY_PUBLICATION_STATUS,
 )
 from research.single_shot_job import (
     D1_DATABASE_NAME,
@@ -34,6 +33,7 @@ from research.single_shot_job import (
     RESEARCH_ARTIFACT_BUCKET,
     R2PutFn,
     SingleShotJobError,
+    _closed_flags,
     _load_history_feature_rows,
     _now_utc,
     _put_research_json,
@@ -104,21 +104,21 @@ class MultidaySignalEval:
             "day_results": [dict(d) for d in self.day_results],
             "r2_puts": list(self.r2_puts),
             "dry_run": self.dry_run,
-            "mass_research": self.mass_research,
-            "phase7": self.phase7,
-            "ready_declared": self.ready_declared,
-            "ready_publication": READY_PUBLICATION_STATUS,
-            "order_execution": False,
-            "local_sot": self.local_sot,
-            "connected_to_mass_research_loop": False,
+            **_closed_flags(
+                mass_research=self.mass_research,
+                phase7=self.phase7,
+                ready_declared=self.ready_declared,
+                local_sot=self.local_sot,
+                connected_to_mass_research_loop=False,
+                significance_claimed=False,
+                edge_claimed=False,
+            ),
             "attach_nextday_returns": self.attach_nextday_returns,
             "label": (
                 NEXTDAY_RESEARCH_LABEL
                 if self.attach_nextday_returns
                 else "研究用・未宣言"
             ),
-            "significance_claimed": False,
-            "edge_claimed": False,
         }
 
 
@@ -163,9 +163,7 @@ def summarize_signal_day(
         "sample_values": sample,
         "signal_id": signal_payload.get("signal_id"),
         "candidate_only": signal_payload.get("candidate_only"),
-        "order_execution": False,
-        "ready_declared": False,
-        "mass_research": MASS_RESEARCH_STATUS,
+        **_closed_flags(),
     }
 
 
@@ -403,12 +401,7 @@ def summarize_nextday_by_sign(
         "signed_overall": signed_overall,
         "n_rows": len(aligned_rows),
         "look_ahead_policy": dict(NEXTDAY_LOOKAHEAD_POLICY),
-        "ready_declared": False,
-        "mass_research": MASS_RESEARCH_STATUS,
-        "phase7": PHASE7_STATUS,
-        "order_execution": False,
-        "significance_claimed": False,
-        "edge_claimed": False,
+        **_closed_flags(significance_claimed=False, edge_claimed=False),
     }
 
 
@@ -441,7 +434,7 @@ def execute_multiday_signal_eval(
     """Run single_shot-equivalent signal compute across multiple as_of days."""
     assert_mass_and_phase7_off()
     start, end, jid = _require_job_window(period_start, period_end, job_id)
-    _ = min_days  # accepted for API compat; short windows still run honestly
+    _ = min_days
 
     dataset_ids = require_complete_21_only(
         DEFAULT_SIGNAL_DATASETS, context="multiday signal eval datasets"
@@ -510,8 +503,6 @@ def execute_multiday_signal_eval(
         day_summary["feature_status"] = feature_payload.get("status")
         day_summary["definition"] = signal_definition()
         day_summary["observations"] = list(signal_core.get("observations") or [])
-        day_summary["local_sot"] = False
-        day_summary["phase7"] = PHASE7_STATUS
         day_summary["feature_as_of"] = as_of
         day_summary["label"] = (
             NEXTDAY_RESEARCH_LABEL if attach_nextday_returns else "研究用・未宣言"
@@ -648,20 +639,16 @@ def execute_multiday_signal_eval(
             "batch_summary_r2_key": batch_key,
             "per_day_key_template": f"{prefix}/days/date={{date}}/signals.json",
         },
-        "mass_research": MASS_RESEARCH_STATUS,
-        "phase7": PHASE7_STATUS,
-        "ready_declared": READY_DECLARED,
-        "ready_publication": READY_PUBLICATION_STATUS,
-        "order_execution": False,
-        "local_sot": False,
-        "connected_to_mass_research_loop": False,
-        "densify": False,
+        **_closed_flags(
+            connected_to_mass_research_loop=False,
+            densify=False,
+            significance_claimed=False,
+            edge_claimed=False,
+        ),
         "attach_nextday_returns": bool(attach_nextday_returns),
         "label": (
             NEXTDAY_RESEARCH_LABEL if attach_nextday_returns else "研究用・未宣言"
         ),
-        "significance_claimed": False,
-        "edge_claimed": False,
     }
 
     if attach_nextday_returns:
@@ -700,11 +687,7 @@ def execute_multiday_signal_eval(
                 "job_id": jid,
                 **{k: d[k] for k in d if k != "definition"},
                 "definition": d.get("definition") or signal_definition(),
-                "mass_research": MASS_RESEARCH_STATUS,
-                "phase7": PHASE7_STATUS,
-                "ready_declared": READY_DECLARED,
-                "order_execution": False,
-                "local_sot": False,
+                **_closed_flags(),
                 "label": "研究用・未宣言",
             }
             puts.append(_put(day_key, day_body))
@@ -741,13 +724,7 @@ def execute_multiday_signal_eval(
         "aggregate": batch_summary["aggregate"],
         "executed_at_utc": executed_at,
         "dry_run": bool(dry_run),
-        "mass_research": MASS_RESEARCH_STATUS,
-        "phase7": PHASE7_STATUS,
-        "ready_declared": READY_DECLARED,
-        "ready_publication": READY_PUBLICATION_STATUS,
-        "order_execution": False,
-        "local_sot": False,
-        "connected_to_mass_research_loop": False,
+        **_closed_flags(connected_to_mass_research_loop=False),
         "attach_nextday_returns": bool(attach_nextday_returns),
         "label": "研究用・未宣言",
         **(

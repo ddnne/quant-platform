@@ -239,10 +239,8 @@ def _mean(xs: Sequence[Any]) -> float | None:
 
 
 __all__ = [
-    "RETIRED_BASKET_RULES",
     "blend_net_daily",
     "blend_window_cells",
-    "mechanical_basket_defs",
     "occupancy_in_candidate_band",
     "summarize_basket_trends",
 ]

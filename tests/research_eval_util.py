@@ -907,3 +907,171 @@ def _fund_flow(fund: tuple[int, int], flow: tuple[int, int], *, job_id: str | No
     return _baskets(_theme_fund_row(*fund), _flow_row(*flow), job_id=job_id)
 
 
+def _injected_r2_eval(tmp_path: Path, **extra):
+    _puts, fake_put = _capture_puts()
+    return _r2_eval_kw(tmp_path, fake_put, **extra)
+
+
+def _tip_s1_rows(
+    *,
+    code: str = "13010",
+    d0: str = "2026-08-03",
+    d1: str = "2026-08-04",
+    c0: float = 100.0,
+    c1: float = 110.0,
+    v0: float = 100.0,
+    v1: float = 150.0,
+    t0: float = 3000.0,
+    t1: float = 3030.0,
+):
+    return {
+        "equities_bars_daily": [
+            _tip_bar(code, d0, c0, v0),
+            _tip_bar(code, d1, c1, v1),
+        ],
+        "markets_calendar": [_tip_cal_row(d0), _tip_cal_row(d1)],
+        "indices_bars_daily_topix": [
+            _tip_topix_row(d0, t0),
+            _tip_topix_row(d1, t1),
+        ],
+    }
+
+
+def _short_ratio_tip(
+    day: str,
+    s33: str,
+    sell: float,
+    with_res: float,
+    no_res: float,
+    **extra,
+):
+    return {
+        "date": day,
+        "S33": s33,
+        "section": extra.pop("section", s33),
+        "available_at": extra.pop("available_at", f"{day}T15:30:00+09:00"),
+        "event_time": extra.pop("event_time", f"{day}T09:00:00+09:00"),
+        "payload": {
+            "Date": day,
+            "S33": s33,
+            "SellExShortVa": sell,
+            "ShrtWithResVa": with_res,
+            "ShrtNoResVa": no_res,
+        },
+        **extra,
+    }
+
+
+def _dry_tip_d1_tables():
+    return {
+        "equities_bars_daily": [
+            _d1_row({"Code": "13010", "Date": d}, d, aa="T16:00:00+09:00")
+            | {"event_time": f"{d}T15:00:00+09:00"}
+            for d in ("2026-08-01", "2026-08-02", "2026-08-05")
+        ],
+        "markets_calendar": [
+            _d1_row({"Date": d}, d, aa="") | {"event_time": d, "available_at": d}
+            for d in ("2026-08-01", "2026-08-04")
+        ],
+    }
+
+
+def _aa_row(
+    day: str,
+    *,
+    event_time: str | None = None,
+    available_at=None,
+    **extra,
+):
+    return {
+        "date": day,
+        "event_time": (
+            event_time if event_time is not None else f"{day}T00:00:00+09:00"
+        ),
+        "available_at": available_at,
+        **extra,
+    }
+
+
+EVENT_BAR_CODES = ("13010", "72030", "67580", "99840")
+
+
+def _event_bars(
+    n: int = 40,
+    start: str = "2019-01-",
+    *,
+    mode: str = "cycle",
+):
+    dates = [f"{start}{d:02d}" for d in range(1, min(n, 28) + 1)]
+    out: dict[str, list[tuple[str, float]]] = {}
+    for ci, code in enumerate(EVENT_BAR_CODES):
+        px = 100.0 + 10 * ci
+        series = []
+        for i, d in enumerate(dates):
+            if mode == "filter":
+                if code == "13010":
+                    px *= 1.004
+                elif code == "72030":
+                    px *= 0.996
+                else:
+                    px *= 1.0 + 0.002 * ((i + ci) % 3 - 1)
+            else:
+                px *= 1.0 + 0.002 * ((i + ci) % 3 - 1)
+            series.append((d, px))
+        out[code] = series
+    return out
+
+
+def _disc_event(disc_date: str, **fields):
+    return {"disc_date": disc_date, **fields}
+
+
+def _two_name_events(
+    *,
+    t13010: str | None = "12:00:00",
+    t72030: str | None = "12:00:00",
+):
+    return {
+        "13010": [
+            _disc_event(
+                "2019-01-10",
+                disc_time=t13010,
+                eps=12.0,
+                feps=10.0,
+                prior_eps=9.0,
+            )
+        ],
+        "72030": [
+            _disc_event(
+                "2019-01-12",
+                disc_time=t72030,
+                eps=4.0,
+                feps=6.0,
+                prior_eps=5.0,
+            )
+        ],
+    }
+
+
+def _event_eval_kw(*, with_period: bool = True, **extra):
+    kw: dict[str, Any] = {"one_way_cost": 0.001}
+    if with_period:
+        kw["period_start"] = "2019-01-01"
+        kw["period_end"] = "2019-01-28"
+    kw.update(extra)
+    return kw
+
+
+def _logic_spec(rows, lid: str) -> dict:
+    return dict(next(s for s in rows if s["logic_id"] == lid))
+
+
+def _with_min_hist(spec: dict, min_hist: int = 5) -> dict:
+    out = dict(spec)
+    out["params"] = dict(spec.get("params") or {})
+    out["params"]["min_hist"] = min_hist
+    out["min_hist"] = min_hist
+    return out
+
+
+

@@ -23,4 +23,3 @@ params:
   trail_min: 5
   mode: surprise_xs_rank_adaptive
 evaluator: research.unique_logic.dispatch.evaluate_logic_daily_mtm
-notes: catalog declaration; evaluate via unique_logic.dispatch

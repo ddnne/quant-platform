@@ -319,8 +319,6 @@ def fins_summary_ta_eqar_stats(
         "n_eqar_nonnull": 0,
         "n_eq_nonnull": 0,
         "ncta_nonnull": 0,
-        "sample_ta": [],
-        "sample_eqar": [],
         "invent": False,
     }
     if not db.exists():
@@ -332,8 +330,6 @@ def fins_summary_ta_eqar_stats(
         if limit:
             sql += f" LIMIT {int(limit)}"
         n = n_ta = n_eqar = n_eq = n_ncta = 0
-        samples_ta: list[dict[str, Any]] = []
-        samples_eqar: list[dict[str, Any]] = []
         for (payload,) in con.execute(sql):
             pl = _payload_map(payload)
             if pl is None:
@@ -341,26 +337,8 @@ def fins_summary_ta_eqar_stats(
             n += 1
             if _fnum(pl.get(FINS_SUMMARY_TA_KEY)) is not None:
                 n_ta += 1
-                if len(samples_ta) < 3:
-                    samples_ta.append(
-                        {
-                            "code": pl.get("Code"),
-                            "disc": pl.get("DiscDate"),
-                            "ta": pl.get(FINS_SUMMARY_TA_KEY),
-                            "doctype": pl.get("DocType"),
-                        }
-                    )
             if _fnum(pl.get(FINS_SUMMARY_EQAR_KEY)) is not None:
                 n_eqar += 1
-                if len(samples_eqar) < 3:
-                    samples_eqar.append(
-                        {
-                            "code": pl.get("Code"),
-                            "disc": pl.get("DiscDate"),
-                            "eq_ar": pl.get(FINS_SUMMARY_EQAR_KEY),
-                            "doctype": pl.get("DocType"),
-                        }
-                    )
             if _fnum(pl.get(FINS_SUMMARY_EQ_KEY)) is not None:
                 n_eq += 1
             if _fnum(pl.get("NCTA")) is not None:
@@ -376,8 +354,6 @@ def fins_summary_ta_eqar_stats(
                 "eqar_rate": (n_eqar / n) if n else None,
                 "eq_rate": (n_eq / n) if n else None,
                 "ncta_rate": (n_ncta / n) if n else None,
-                "sample_ta": samples_ta,
-                "sample_eqar": samples_eqar,
             }
         )
     finally:

@@ -20,9 +20,8 @@ from .validate import PREMIUM_CORE_DATASETS
 
 # C6/C7 assumed Premium-start dates (conservative; not contractual).
 EXPECTED_START: dict[str, str] = {
-    # W98 / w0819a: PRE_PLAN 2000-07..2006-07 de-scoped (subscription OOS).
-    "equities_master": "2006-08-13",
-    "equities_bars_daily": "2008-05-01",  # w0815ae/W38 observed floor
+    "equities_master": "2006-08-13",  # PRE_PLAN 2000-07..2006-07 de-scoped
+    "equities_bars_daily": "2008-05-01",  # observed floor
     "equities_bars_daily_am": "2024-01-04",  # AM recent-only by spec
     "fins_summary": "2008-07-01",
     "fins_details": "2018-01-01",
@@ -1360,8 +1359,6 @@ def _check_x1(
     }
     if coverage >= 0.8:
         status: Status = "pass"
-    elif coverage >= 0.5:
-        status = "warn"
     else:
         status = "warn"
     if strict and coverage < 0.8 and len(master) > 1000:

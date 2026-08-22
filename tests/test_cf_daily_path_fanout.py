@@ -159,8 +159,10 @@ def test_eval_tracks_are_two_and_not_head_n() -> None:
     assert large["universe_select"] == "adv_desc_skip_missing_bars_and_fins"
     assert mid["head_n_forbidden"] is True
     assert large["head_n_forbidden"] is True
-    assert mid["not_a_pass"] is True
+    assert mid["go"] is False
     assert large["go"] is False
+    assert mid["not_a_pass"] is True
+    assert large["not_a_pass"] is True
     assert infer_eval_track(max_codes=80) == EVAL_TRACK_MID_N
     assert infer_eval_track(max_codes=100) == EVAL_TRACK_LIQ_LARGE
     from research.eval_tracks import NEXT_RESEARCH_QUEUE
@@ -425,15 +427,18 @@ def test_both_track_sleeve_fanout_uses_select_eval_universe() -> None:
     import ast
     from pathlib import Path
 
-    src = (
+    research_dir = (
         Path(__file__).resolve().parents[1]
         / "packages"
         / "product"
         / "research"
-        / "cf_daily_path_job.py"
-    ).read_text(encoding="utf-8")
+    )
+    src = (research_dir / "cf_daily_path_job.py").read_text(encoding="utf-8")
+    mass_src = (research_dir / "cf_mass_eval_job.py").read_text(encoding="utf-8")
     assert "select_eval_universe" in src
+    assert "select_eval_universe" in mass_src
     assert "selected[: int(max_codes)]" not in src
+    assert "selected[: int(max_codes)]" not in mass_src
     assert "run_both_track_sleeve_fanout" in src
     tree = ast.parse(src)
     names = [

@@ -1,18 +1,7 @@
-/**
- * Candidate-grade daily MTM path on staged panels (not period-net screen).
- *
- * One Worker isolate evaluates one (or few) logics. The Python driver
- * fans out concurrent POSTs so batch wall-clock ≈ longest isolate.
- * n_survivors from /v1/mass-eval is not a pass.
- */
 import { barNativeHeldBook } from "./eval";
 import { sharpePeriod, tStatVsZero } from "./metrics";
 import { isPathBroken } from "./path_broken";
 import type { BarsByCode, LogicSpec, PeriodPanel } from "./types";
-
-export { isPathBroken } from "./path_broken";
-
-const DEFAULT_ONE_WAY = 0.001;
 
 function finite(v: unknown): v is number {
   return typeof v === "number" && Number.isFinite(v);
@@ -108,31 +97,6 @@ function csRank(
     else out[code] = 0;
   }
   return out;
-}
-
-function mdhHeld(
-  bars: BarsByCode,
-  holdDays: number,
-  polarity: number,
-): Record<string, Record<string, number>> {
-  const h = Math.max(1, Math.floor(holdDays));
-  const pol = polarity < 0 ? -1 : 1;
-  const held: Record<string, Record<string, number>> = {};
-  for (const [code, pairs] of Object.entries(bars || {})) {
-    if (code.startsWith("__") || !pairs || pairs.length < h + 2) continue;
-    const entries = pairs.map((_, i) => {
-      const m = momentumAt(pairs, h, i);
-      const s = signNum(m);
-      return s === null ? null : s * pol;
-    });
-    const sticky = stickyHold(entries, h);
-    held[code] = {};
-    for (let i = 0; i < pairs.length; i++) {
-      const pos = sticky[i];
-      if (pos !== null) held[code][pairs[i][0]] = pos;
-    }
-  }
-  return held;
 }
 
 function csHeld(
@@ -352,8 +316,6 @@ function usesCrossSection(logic: LogicSpec): boolean {
   );
 }
 
-/** Filled vs intended-lite gaps vs Python unique_logic. Keep in sync with
- * research.unique_logic.constants.CF_EVENT_FIDELITY. */
 export const CF_EVENT_FIDELITY = {
   surprise: "aligned: feps-eps else eps-prior_eps (no invent)",
   adaptive_trail_k: "aligned: last K completed holds orig vs flip; min K",
@@ -784,7 +746,6 @@ function comboGatesImplemented(gates: string[]): boolean {
   return gates.length > 0 && gates.every((g) => COMBO_EVENT_GATES.has(g));
 }
 
-/** Linear 5-day disclosure density. Cached per panel (not O(n²) per event). */
 const clusterWindowCache = new WeakMap<object, Record<string, number>>();
 
 export function clusterWindowSeries(panel: PeriodPanel): Record<string, number> {
@@ -1374,7 +1335,6 @@ export function comboCsGateOk(
   return { keep, invert };
 }
 
-/** Monday=0 … Sunday=6 (Python datetime.weekday). */
 function weekdayMon0(iso: string): number {
   const t = Date.parse(String(iso).slice(0, 10) + "T00:00:00Z");
   if (!Number.isFinite(t)) return -1;
@@ -1692,7 +1652,6 @@ function eventHeld(
       }
     }
     if (lid !== "surprise_xs_rank_adaptive") return xsHeld;
-    // trail-K orig vs flip on completed daily orig nets
     const trailK = Math.max(5, Math.floor(finite(params.trail_k as number) ? (params.trail_k as number) : 10));
     const trailMin = Math.max(3, Math.floor(finite(params.trail_min as number) ? (params.trail_min as number) : 5));
     const origMtm = heldBookDailyMtm(xsHeld, closeMap, dates, holdDays, 0);

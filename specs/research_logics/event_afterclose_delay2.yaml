@@ -27,4 +27,3 @@ params:
   entry_shift: 2
   hold_tail_days: 0
 evaluator: research.unique_logic.event_combos.evaluate_combo_daily_mtm
-notes: combo thesis; occupancy-gated; CF daily_path is SoT

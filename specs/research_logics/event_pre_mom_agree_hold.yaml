@@ -21,4 +21,3 @@ params:
   mode: event_pre_mom_agree_hold
   gate: own_pre_entry_mom_sign_agrees
 evaluator: research.unique_logic.dispatch.evaluate_logic_daily_mtm
-notes: catalog declaration; evaluate via unique_logic.dispatch

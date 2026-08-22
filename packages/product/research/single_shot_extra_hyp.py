@@ -56,6 +56,7 @@ from research.single_shot_job import (
     RESEARCH_ARTIFACT_BUCKET,
     R2PutFn,
     SingleShotJobError,
+    _closed_flags,
     _load_history_feature_rows,
     _now_utc,
     _put_research_json,
@@ -184,7 +185,6 @@ def execute_extra_hyp_signals_compare(
             codes=selected_codes,
             section=section,
         )
-        # update prev short from observations
         for o in obs:
             if str(o.get("feature_id") or "") == "short_ratio_level" and o.get(
                 "value"
@@ -233,9 +233,7 @@ def execute_extra_hyp_signals_compare(
                 "signals": per_signal_day,
                 "codes": list(selected_codes),
                 "label": NEXTDAY_RESEARCH_LABEL,
-                "mass_research": MASS_RESEARCH_STATUS,
-                "phase7": PHASE7_STATUS,
-                "ready_declared": READY_DECLARED,
+                **_closed_flags(),
             }
         )
 
@@ -284,22 +282,16 @@ def execute_extra_hyp_signals_compare(
             "prefix": prefix,
             "batch_summary_r2_key": batch_key,
         },
-        "mass_research": MASS_RESEARCH_STATUS,
-        "phase7": PHASE7_STATUS,
-        "ready_declared": READY_DECLARED,
-        "order_execution": False,
-        "local_sot": False,
-        "densify": False,
+        **_closed_flags(
+            densify=False,
+            significance_claimed=False,
+            edge_claimed=False,
+            operational_go=False,
+            not_s1_rehash=True,
+        ),
         "label": NEXTDAY_RESEARCH_LABEL,
         "cost_label": RESEARCH_COST_LABEL,
-        "significance_claimed": False,
-        "edge_claimed": False,
-        "operational_go": False,
-        "not_s1_rehash": True,
-        "note": (
-            "S4/S5 research hypotheses (margin change / short ratio Δ). "
-            "小サンプル / 研究用・未宣言. Not READY. No Mass. No densify invent."
-        ),
+        "note": f"S4/S5 research hypotheses. {NEXTDAY_RESEARCH_LABEL}.",
     }
 
     puts: list[dict[str, Any]] = []

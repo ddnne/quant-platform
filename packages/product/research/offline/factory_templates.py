@@ -13,10 +13,6 @@ from dataclasses import dataclass
 from typing import Any, Mapping
 
 from research.bar_native_specs import BAR_NATIVE_LOGIC_IDS, BAR_NATIVE_SPECS
-from research.freezes import (
-    MASS_RESEARCH,
-    READY_DECLARED,
-)
 from research.hypothesis_classes import (
     CLASS_CROSS_SECTION_RELATIVE,
     CLASS_EVENT_POST,
@@ -86,7 +82,6 @@ RESEARCH_FAMILY_AUTO_RESEARCH_CANDIDATE: bool = False
 NEAR_LOGIC_GROUPS: tuple[dict[str, Any], ...] = (
     {
         "group_id": "flow_margin_confirm",
-        "label": "flow hard/soft/pressure (near-group parallel)",
         "logic_ids": (
             "flow_margin_pressure",
             "flow_margin_short_hard",
@@ -96,7 +91,6 @@ NEAR_LOGIC_GROUPS: tuple[dict[str, Any], ...] = (
     },
     {
         "group_id": "fund_value_mom",
-        "label": "fund value×mom (slow variant parallel)",
         "logic_ids": (
             "fund_value_mom_agree",
             "fund_value_mom_agree_slow",
@@ -105,7 +99,6 @@ NEAR_LOGIC_GROUPS: tuple[dict[str, Any], ...] = (
     },
     {
         "group_id": "rate_macro_family",
-        "label": "rate / macro family (level vs change vs CS factor)",
         "logic_ids": (
             "macro_repo_rate_change",
             "macro_repo_rate_level",
@@ -115,7 +108,6 @@ NEAR_LOGIC_GROUPS: tuple[dict[str, Any], ...] = (
     },
     {
         "group_id": "vol_family_name_vs_index",
-        "label": "vol family: per-name gate vs index-vol regime (parallel)",
         "logic_ids": (
             "vol_risk_adjusted_mom",
             "vol_breakout_expand",
@@ -126,7 +118,6 @@ NEAR_LOGIC_GROUPS: tuple[dict[str, Any], ...] = (
     },
     {
         "group_id": "index_vol_regime_family",
-        "label": "index vol regime (abs vs term levels vs ratio)",
         "logic_ids": (
             "nky_vol_abs_level",
             "nky_vol_term_levels",
@@ -135,7 +126,6 @@ NEAR_LOGIC_GROUPS: tuple[dict[str, Any], ...] = (
     },
     {
         "group_id": "options_vol_regime_family",
-        "label": "options_225 BaseVol / skew / CM-term / Δvol (+ ATM compare-only)",
         "logic_ids": (
             "opt225_basevol_abs_level",
             "opt225_basevol_term_levels",
@@ -152,7 +142,6 @@ NEAR_LOGIC_GROUPS: tuple[dict[str, Any], ...] = (
     },
     {
         "group_id": "nky_vol_proxy_vs_options_sot",
-        "label": "Nikkei vol: TOPIX/NK225F RV proxy vs options_225 SoT",
         "logic_ids": (
             "nky_vol_abs_level",
             "nky_vol_term_levels",
@@ -164,7 +153,6 @@ NEAR_LOGIC_GROUPS: tuple[dict[str, Any], ...] = (
     },
     {
         "group_id": "unique_logic_research_family",
-        "label": "unique_logic research family (recognition only)",
         "logic_ids": (
             "event_funding_stress_skip",
             "curve_steep_event_confirm",
@@ -192,7 +180,6 @@ NEAR_LOGIC_GROUPS: tuple[dict[str, Any], ...] = (
     },
     {
         "group_id": "unique_logic_ls_append",
-        "label": "unique_logic family append L/S (recognition only)",
         "logic_ids": (
             "funding_impulse_cs_tilt",
             "curve_steepen_impulse_cs",
@@ -205,7 +192,6 @@ NEAR_LOGIC_GROUPS: tuple[dict[str, Any], ...] = (
     },
     {
         "group_id": "unique_logic_overlay_append",
-        "label": "unique_logic family append overlay (recognition only)",
         "logic_ids": (
             "overnight_level_cs_tilt",
             "overnight_easy_cs_follow",
@@ -293,11 +279,7 @@ class LogicTemplate:
     family_id: str
     base_params: Mapping[str, Any]
     structural_keys: tuple[str, ...] = ()
-    display_name: str = ""
     generation_enabled: bool = True
-    notes: str = ""
-    main_pool: bool = True
-    data_requirement: str = ""
 
     def logic_fingerprint(self) -> str:
         """Stable fingerprint of the economic logic (no numeric knobs)."""
@@ -319,7 +301,6 @@ class LogicTemplate:
     def to_dict(self) -> dict[str, Any]:
         return {
             "logic_id": self.logic_id,
-            "display_name": self.display_name or self.logic_id,
             "thesis": self.thesis,
             "signal_definition": self.signal_definition,
             "position_rule": self.position_rule,
@@ -329,21 +310,10 @@ class LogicTemplate:
             "structural_keys": list(self.structural_keys),
             "logic_fingerprint": self.logic_fingerprint(),
             "generation_enabled": self.generation_enabled,
-            "notes": self.notes,
-            "main_pool": self.main_pool,
-            "data_requirement": self.data_requirement,
         }
 
 
-def logic_template_from_bar_native(
-    spec: Mapping[str, Any],
-    *,
-    display_name: str = "",
-    generation_enabled: bool = True,
-    notes: str = "",
-    main_pool: bool = True,
-    data_requirement: str = "",
-) -> LogicTemplate:
+def logic_template_from_bar_native(spec: Mapping[str, Any]) -> LogicTemplate:
     """Rebuild a factory LogicTemplate from a BAR_NATIVE_SPECS row."""
     return LogicTemplate(
         logic_id=str(spec["logic_id"]),
@@ -354,78 +324,7 @@ def logic_template_from_bar_native(
         family_id=str(spec["family_id"]),
         base_params=dict(spec["params"]),
         structural_keys=tuple(spec.get("structural_keys") or ()),
-        display_name=display_name,
-        generation_enabled=bool(generation_enabled),
-        notes=notes,
-        main_pool=bool(main_pool),
-        data_requirement=data_requirement,
     )
-
-
-def _ov(
-    display_name: str,
-    *,
-    generation_enabled: bool = True,
-    notes: str = "",
-    main_pool: bool = True,
-    data_requirement: str = "",
-) -> dict[str, Any]:
-    """Factory-only overlay on a bar-native spec (do not flip generation)."""
-    return {
-        "display_name": display_name,
-        "generation_enabled": generation_enabled,
-        "notes": notes,
-        "main_pool": main_pool,
-        "data_requirement": data_requirement,
-    }
-
-
-_BAR_NATIVE_TEMPLATE_OVERLAY: dict[str, dict[str, Any]] = {
-    "mdh_sticky_momentum": _ov("Sticky multi-day momentum"),
-    "mdh_mean_reversion": _ov("Sticky multi-day mean reversion"),
-    "xs_rank_ls_sticky": _ov("Cross-section rank L-S sticky"),
-    "xs_rank_ls_daily": _ov("Cross-section rank L-S daily rebalance"),
-    "macro_repo_rate_change": _ov("Macro-conditioned mom (repo rate change)"),
-    "macro_repo_rate_level": _ov("Macro-conditioned mom (repo rate level)"),
-    "fund_value_only": _ov("Fundamentals value-only"),
-    "fund_value_mom_agree": _ov("Fundamentals value × momentum agree"),
-    "flow_margin_pressure": _ov("Margin flow multi-day pressure"),
-    "flow_margin_short_hard": _ov("Margin flow + hard short confirm"),
-    "flow_margin_short_soft": _ov("Margin flow + soft short confirm"),
-    "vol_risk_adjusted_mom": _ov("Vol-risk gated momentum"),
-    "vol_breakout_expand": _ov("Vol-expansion breakout mom"),
-    "fund_value_mom_agree_slow": _ov("Value×mom agree (slow price confirm)"),
-    "mf_value_mom_rate": _ov("Value × mom × rate multi-factor"),
-    "mf_flow_price": _ov("Flow × price multi-factor"),
-    "nky_vol_abs_level": _ov("Nikkei abs vol-level × CS risk-on/off"),
-    "nky_vol_term_levels": _ov("Nikkei short+long vol levels × CS"),
-    "nky_vol_term_ratio": _ov("Nikkei short/long vol ratio × CS"),
-    "opt225_basevol_abs_level": _ov("options_225 BaseVol abs × CS risk-on/off"),
-    "opt225_basevol_term_levels": _ov("options_225 BaseVol short+long levels × CS"),
-    "opt225_basevol_term_ratio": _ov(
-        "options_225 BaseVol short/long ratio × CS",
-        main_pool=False,
-        data_requirement="distinct short/long BaseVol maps",
-    ),
-    "opt225_atm_iv_abs_level": _ov("options_225 ATM IV abs × CS (compare-only)"),
-    "opt225_atm_iv_term_levels": _ov(
-        "options_225 ATM IV short+long levels × CS (compare-only)"
-    ),
-    "opt225_atm_iv_term_ratio": _ov(
-        "options_225 ATM IV short/long ratio × CS (compare-only)",
-        main_pool=False,
-        data_requirement="distinct short/long ATM IV maps",
-    ),
-    "opt225_iv_base_spread_abs": _ov(
-        "options_225 (ATM IV − BaseVol) abs × CS (compare-only)"
-    ),
-    "opt225_iv_base_spread_change": _ov(
-        "options_225 (ATM−BaseVol) change × CS (compare-only)"
-    ),
-    "opt225_skew_abs_level": _ov("options_225 95% put skew abs × CS"),
-    "opt225_cm_term_abs_level": _ov("options_225 near−next CM ATM term abs × CS"),
-    "opt225_basevol_delta_abs": _ov("options_225 BaseVol Δ abs × CS"),
-}
 
 
 def _factory_only_templates() -> list[LogicTemplate]:
@@ -435,7 +334,6 @@ def _factory_only_templates() -> list[LogicTemplate]:
     return [
         LogicTemplate(
             logic_id="event_post_disclosure_hold",
-            display_name="Post-disclosure PIT hold",
             thesis="Post-earnings / disclosure drift after PIT-available close only",
             signal_definition="earnings surprise proxy; entry only when DiscTime pre-close",
             position_rule="fixed post_hold after first non-look-ahead session close",
@@ -449,7 +347,6 @@ def _factory_only_templates() -> list[LogicTemplate]:
         ),
         LogicTemplate(
             logic_id="xs_rank_mom_slow",
-            display_name="Cross-section slow-mom L-S sticky",
             thesis="Slower cross-section ranking horizon captures different relative book",
             signal_definition="rank on longer momentum window; sticky L/S",
             position_rule="sticky balanced L/S; structural mom horizon = slow",
@@ -466,7 +363,6 @@ def _factory_only_templates() -> list[LogicTemplate]:
         ),
         LogicTemplate(
             logic_id="mdh_short_horizon_mom",
-            display_name="Short-horizon sticky momentum",
             thesis="Very short multi-day continuation (5d structure) is a different hold economy",
             signal_definition="sign(mom) with 5d structural horizon",
             position_rule="fixed_horizon hold=5 (structure, not grid sample)",
@@ -483,7 +379,6 @@ def _factory_only_templates() -> list[LogicTemplate]:
         ),
         LogicTemplate(
             logic_id="event_post_long_horizon",
-            display_name="Post-disclosure long drift hold",
             thesis="Longer post-disclosure drift (20d) harvests slower earnings information",
             signal_definition="surprise proxy; longer post_hold structure",
             position_rule="post_hold_days=20 PIT entry",
@@ -498,7 +393,6 @@ def _factory_only_templates() -> list[LogicTemplate]:
         ),
         LogicTemplate(
             logic_id="rate_abs_level_xs",
-            display_name="Absolute rate-level × CS risk-on/off",
             thesis="Absolute Tokyo repo level as CS risk-on/off factor",
             signal_definition="CS rank(mom) L-S risk-adjusted by abs repo rate_level",
             position_rule="sticky fixed_horizon balanced L/S after rate-level book transform",
@@ -517,7 +411,6 @@ def _factory_only_templates() -> list[LogicTemplate]:
         ),
         LogicTemplate(
             logic_id="rate_curve_shape_xs",
-            display_name="Repo curve-shape × CS risk-on/off",
             thesis="Repo curve steepness as CS risk-on/off factor",
             signal_definition="CS rank mom L-S risk-adjusted by 3M−ON repo curve",
             position_rule="sticky fixed_horizon balanced L/S after curve-shape book transform",
@@ -541,16 +434,6 @@ def _factory_only_templates() -> list[LogicTemplate]:
 
 def _build_logic_templates() -> dict[str, LogicTemplate]:
     """Catalog of distinct economic logics (prefer many templates, few clones)."""
-    missing_overlay = set(BAR_NATIVE_SPECS) - set(_BAR_NATIVE_TEMPLATE_OVERLAY)
-    if missing_overlay:
-        raise RuntimeError(
-            f"BAR_NATIVE overlay missing for {sorted(missing_overlay)}"
-        )
-    extra_overlay = set(_BAR_NATIVE_TEMPLATE_OVERLAY) - set(BAR_NATIVE_SPECS)
-    if extra_overlay:
-        raise RuntimeError(
-            f"overlay ids not in BAR_NATIVE_SPECS: {sorted(extra_overlay)}"
-        )
     factory_only = {t.logic_id: t for t in _factory_only_templates()}
     missing_fo = set(FACTORY_ONLY_LOGIC_IDS) - set(factory_only)
     if missing_fo:
@@ -558,10 +441,7 @@ def _build_logic_templates() -> dict[str, LogicTemplate]:
     out: dict[str, LogicTemplate] = {}
     for lid in _LOGIC_TEMPLATE_ORDER:
         if lid in BAR_NATIVE_SPECS:
-            out[lid] = logic_template_from_bar_native(
-                BAR_NATIVE_SPECS[lid],
-                **_BAR_NATIVE_TEMPLATE_OVERLAY[lid],
-            )
+            out[lid] = logic_template_from_bar_native(BAR_NATIVE_SPECS[lid])
         elif lid in factory_only:
             out[lid] = factory_only[lid]
         else:
@@ -586,23 +466,8 @@ class FamilyDefinition:
     """Eval-dispatch family covering one or more logic templates."""
 
     family_id: str
-    display_name: str
-    description: str
     datasets_required: tuple[str, ...]
-    param_axes: tuple[str, ...]
     generation_enabled: bool = True
-    notes: str = ""
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "family_id": self.family_id,
-            "display_name": self.display_name,
-            "description": self.description,
-            "datasets_required": list(self.datasets_required),
-            "param_axes": list(self.param_axes),
-            "generation_enabled": self.generation_enabled,
-            "notes": self.notes,
-        }
 
 
 def _derive_family_definitions() -> dict[str, FamilyDefinition]:
@@ -616,38 +481,18 @@ def _derive_family_definitions() -> dict[str, FamilyDefinition]:
             for d in t.datasets_used:
                 if d not in ds:
                     ds.append(d)
-        axes = sorted(
-            {
-                k
-                for t in tpls
-                for k in (list(t.structural_keys) + list(t.base_params.keys()))
-                if k not in NUMERIC_ONLY_KNOBS or k in t.structural_keys
-            }
-        )
-        gen_on = any(bool(t.generation_enabled) for t in tpls)
         out[fid] = FamilyDefinition(
             family_id=fid,
-            display_name=fid,
-            description=(
-                f"Eval family covering logic_ids: "
-                f"{', '.join(t.logic_id for t in tpls)}."
-            ),
             datasets_required=tuple(ds),
-            param_axes=tuple(axes) if axes else ("logic_id",),
-            generation_enabled=gen_on,
+            generation_enabled=any(bool(t.generation_enabled) for t in tpls),
         )
-    research_notes = "Recognition only; generation_enabled=False; not a pass."
     for fid in RESEARCH_UNIQUE_FAMILY_IDS:
         if fid in out:
             continue
         out[fid] = FamilyDefinition(
             family_id=fid,
-            display_name=fid,
-            description="unique_logic recognition family (not factory-template diversity).",
             datasets_required=(),
-            param_axes=("logic_id",),
             generation_enabled=False,
-            notes=research_notes,
         )
     return out
 
@@ -655,33 +500,14 @@ def _derive_family_definitions() -> dict[str, FamilyDefinition]:
 FAMILY_DEFINITIONS: dict[str, FamilyDefinition] = _derive_family_definitions()
 FACTORY_FAMILY_IDS: tuple[str, ...] = tuple(FAMILY_DEFINITIONS.keys())
 
-DEFAULT_FAMILY_RATIOS: dict[str, float] = {
-    fid: 1.0 / max(1, len(FACTORY_FAMILY_IDS)) for fid in FACTORY_FAMILY_IDS
-}
-
-
-def _factory_doc_meta() -> tuple[str, str]:
-    from research.offline.factory import MASS_FACTORY_VERSION, MASS_FACTORY_WAVE
-
-    return MASS_FACTORY_VERSION, MASS_FACTORY_WAVE
-
 
 def near_logic_groups_document() -> dict[str, Any]:
     """Near-groups kept parallel for comparison (do not merge early)."""
-    version, wave = _factory_doc_meta()
-    return {
-        "version": version,
-        "wave": wave,
-        "policy": "Near-similar logics stay parallel; do not merge early.",
-        "groups": [dict(g) for g in NEAR_LOGIC_GROUPS],
-    }
+    return {"groups": [dict(g) for g in NEAR_LOGIC_GROUPS]}
 
 
 def _research_family_base() -> dict[str, Any]:
-    version, wave = _factory_doc_meta()
     return {
-        "wave": wave,
-        "version": version,
         "registration": "recognition",
         "registration_is_not_a_pass": RESEARCH_FAMILY_REGISTRATION_IS_NOT_A_PASS,
         "registration_is_not_promotion": True,
@@ -689,8 +515,6 @@ def _research_family_base() -> dict[str, Any]:
         "generation_enabled": False,
         "promote_as_main": False,
         "go": False,
-        "mass_research": MASS_RESEARCH,
-        "ready_declared": READY_DECLARED,
     }
 
 
@@ -719,14 +543,8 @@ def research_family_append_document() -> dict[str, Any]:
 
 def logic_templates_document() -> dict[str, Any]:
     """Document logic templates + diversity rules."""
-    from research.offline.factory import DEFAULT_NEAR_DUP_THRESHOLD
-
-    version, wave = _factory_doc_meta()
     return {
-        "version": version,
-        "wave": wave,
         "n_logic_templates": len(LOGIC_TEMPLATES),
-        "logic_ids": list(LOGIC_TEMPLATE_IDS),
         "unique_logic_ids": sorted(RESEARCH_UNIQUE_LOGIC_IDS),
         "unique_logic_append_logic_ids": sorted(RESEARCH_FAMILY_APPEND_LOGIC_IDS),
         "opt225_canonical_level": "basevol",
@@ -744,24 +562,13 @@ def logic_templates_document() -> dict[str, Any]:
                 "long_frac/short_frac only (e.g. 0.3→0.4)",
                 "sign flip as separate strategy (sign is eval aspect)",
             ],
-            "near_dup_threshold": DEFAULT_NEAR_DUP_THRESHOLD,
-            "numeric_only_knobs": sorted(NUMERIC_ONLY_KNOBS),
         },
     }
 
 
 def family_definitions_document() -> dict[str, Any]:
     """Back-compat family document; points primary diversity to logic templates."""
-    version, wave = _factory_doc_meta()
-    return {
-        "version": version,
-        "wave": wave,
-        "families": {
-            fid: FAMILY_DEFINITIONS[fid].to_dict() for fid in FACTORY_FAMILY_IDS
-        },
-        "family_ids": list(FACTORY_FAMILY_IDS),
-        "default_family_ratios": dict(DEFAULT_FAMILY_RATIOS),
-    }
+    return {"family_ids": list(FACTORY_FAMILY_IDS)}
 
 
 if set(BAR_NATIVE_LOGIC_IDS) - set(LOGIC_TEMPLATE_IDS):

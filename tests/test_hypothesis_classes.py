@@ -166,7 +166,7 @@ def test_build_research_idea_rejects_simple_daily_sign_without_opt_in():
     assert idea.lineage["hypothesis_class"] == CLASS_SIMPLE_DAILY_SIGN
 
 
-def test_default_generation_mix_excludes_simple_daily_sign():
+def test_default_generation_class_ids_excludes_simple_daily_sign():
     mix = default_generation_class_ids()
     assert CLASS_SIMPLE_DAILY_SIGN not in mix
     assert len(mix) >= 5

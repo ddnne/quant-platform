@@ -18,7 +18,6 @@ from features.research_freezes import (
 )
 
 REGISTRY_VERSION: str = "hypothesis-class-registry/v1"
-REGISTRY_WAVE: str = "W77 / w0816k"
 
 CLASS_MULTI_DAY_HOLD: str = "multi_day_hold"
 CLASS_EVENT_POST: str = "event_post"
@@ -105,7 +104,6 @@ class HypothesisClassSpec:
                 "priority": self.priority,
                 "opt_in_required": self.opt_in_required,
                 "registry_version": REGISTRY_VERSION,
-                "registry_wave": REGISTRY_WAVE,
             },
         }
 
@@ -588,7 +586,6 @@ __all__ = [
     "PHASE7",
     "READY_DECLARED",
     "REGISTRY_VERSION",
-    "REGISTRY_WAVE",
     "REQUIRED_CLASS_FIELDS",
     "assert_generation_mix_not_skewed",
     "assert_registry_closed_to_ready_mass",

@@ -23,4 +23,3 @@ params:
   gate: overnight_lt_pit_trailing_median
   side: short_surprise
 evaluator: research.unique_logic.dispatch.evaluate_logic_daily_mtm
-notes: catalog declaration; evaluate via unique_logic.dispatch

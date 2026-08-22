@@ -1,15 +1,13 @@
-"""Shared honest multi-year eval windows (not per-wave copies).
+"""Shared honest multi-year eval windows.
 
 These shards match the local COMPLETE-backed bar mirrors.
 Contiguous 3y files are absent; occupancy of a window is the stitch of shards.
 
-Do not fork a new window list in a wave script.
+Do not fork a new window list.
 """
 from __future__ import annotations
 
 from typing import Any
-
-from research.freezes import FROZEN_PIN_SNAPSHOT
 
 HONEST_3Y_WINDOWS: tuple[dict[str, Any], ...] = (
     {
@@ -117,9 +115,9 @@ DEFAULT_REAL_MULTIYEAR_PERIODS: tuple[dict[str, Any], ...] = (
     },
 )
 
-DEFAULT_PERIODS = DEFAULT_REAL_MULTIYEAR_PERIODS  # alias
+DEFAULT_PERIODS = DEFAULT_REAL_MULTIYEAR_PERIODS
 
-# Legacy Q4-only periods (W63/W79 baseline) for regression compare.
+# Legacy Q4-only periods for regression compare.
 DEFAULT_PERIODS_Q4: tuple[dict[str, Any], ...] = (
     {"period_id": "y2015_q4", "year": 2015, "period_start": "2015-09-01", "period_end": "2015-12-29"},
     {"period_id": "y2017_q4", "year": 2017, "period_start": "2017-09-01", "period_end": "2017-12-29"},
@@ -128,6 +126,4 @@ DEFAULT_PERIODS_Q4: tuple[dict[str, Any], ...] = (
     {"period_id": "y2023_q4", "year": 2023, "period_start": "2023-09-01", "period_end": "2023-12-29"},
     {"period_id": "y2025_q4", "year": 2025, "period_start": "2025-09-01", "period_end": "2025-12-29"},
 )
-
-# Re-export: pin tuples live in research.freezes.
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from tests.research_eval_util import _assert_mass_ready_off
+from tests.research_eval_util import _assert_mass_ready_off, _disc_event
 from features.class_signals import (
     CLASS_EVENT_POST,
     CLASS_FLOW_DEMAND,
@@ -478,26 +478,14 @@ def test_offline_bar_eval_pure_on_synthetic_bars():
 
     events = {
         "13010": [
-            {
-                "disc_date": dates[5],
-                "eps": 10.0,
-                "feps": 12.0,
-                "bps": 50.0,
-                "prior_eps": 9.0,
-            }
+            _disc_event(dates[5], eps=10.0, feps=12.0, bps=50.0, prior_eps=9.0)
         ],
         "72030": [
-            {
-                "disc_date": dates[8],
-                "eps": 5.0,
-                "feps": 4.0,
-                "bps": 20.0,
-                "prior_eps": 6.0,
-            }
+            _disc_event(dates[8], eps=5.0, feps=4.0, bps=20.0, prior_eps=6.0)
         ],
     }
     earn_only = {
-        "13010": [{"disc_date": dates[10], "source": "fins_earnings_date"}],
+        "13010": [_disc_event(dates[10], source="fins_earnings_date")],
     }
     merged = merge_event_calendars(events, earn_only)
     assert len(merged["13010"]) == 2  # summary + earnings-date thicken
@@ -554,19 +542,15 @@ def test_w83_wave_tags_and_default_path_params():
 
     assert CLASS_SIGNALS_VERSION == "class-signals/v10"
     assert "W95" in CLASS_SIGNALS_WAVE
-    # W86 / w0816u: offline.multiyear v7 adds sign-selection both-sides
     assert CLASS_HYP_EVAL_VERSION == "class-hyp-eval/v7"
     assert "W86" in CLASS_HYP_EVAL_WAVE
-    # PIT event entry held (no look-ahead revival)
     assert EVENT_POST_ENTRY_MODE == "same_day_close_if_pre_close"
 
     sig = inspect.signature(run_class_hyp_multi_year_eval)
     assert sig.parameters["include_cross_section_hold_10"].default is True
     assert sig.parameters["include_fundamentals_hold_10"].default is True
-    # W82 pin mom lookback for sticky hold=10 (content-matched mom=10 fails)
     assert sig.parameters["cross_section_hold10_momentum_n"].default == 5
     assert sig.parameters["fund_hold10_momentum_n"].default == 10
-    # W85 promote_default: sticky hold=10 mom=3 parallel to mom=5 pin
     assert sig.parameters["include_cross_section_hold_10_mom3"].default is True
     assert sig.parameters["cross_section_hold10_mom3_momentum_n"].default == 3
     doc = class_signals_document()
