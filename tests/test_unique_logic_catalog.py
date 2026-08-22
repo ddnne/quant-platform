@@ -185,16 +185,6 @@ def test_mf_value_mom_rate_is_unique_not_alias() -> None:
     from research.unique_logic.constants import MF_VALUE_MOM_RATE_PARKED_ALWAYS_ON
 
     assert MF_VALUE_MOM_RATE_PARKED_ALWAYS_ON is False
-    src = (
-        Path(__file__).resolve().parents[1]
-        / "packages"
-        / "product"
-        / "research"
-        / "offline"
-        / "factory_templates.py"
-    ).read_text(encoding="utf-8")
-    assert "Unique rate-gated value×mom" in src
-    assert "not an alias of fund_value_mom_agree" in src
 
 
 def test_mass_eval_spec_drops_unique_but_keeps_bar_native() -> None:

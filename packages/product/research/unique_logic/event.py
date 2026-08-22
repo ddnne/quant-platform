@@ -232,22 +232,32 @@ _NO_EVENTS_REASON = (
 )
 
 
-def _base_extra(spec: Mapping[str, Any], collected: Mapping[str, Any]) -> dict[str, Any]:
+def _policy_flags(spec: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "kind": spec.get("kind"),
         "new_unique_logic": True,
         "catalog": False,
-        "post_hold_days": collected["hold_days"],
-        "entry_mode": collected["entry_mode"],
-        "n_events": collected["n_events"],
-        "n_no_surprise": collected["n_no_surprise"],
-        "n_no_bar_match": collected["n_no_bar"],
         "ffill_applied": False,
         "invent_fill": False,
         "promote_as_main": False,
         "go": False,
         "research_only": True,
     }
+
+
+def _base_extra(
+    spec: Mapping[str, Any], collected: Mapping[str, Any], **more: Any
+) -> dict[str, Any]:
+    extra = {
+        **_policy_flags(spec),
+        "post_hold_days": collected["hold_days"],
+        "entry_mode": collected["entry_mode"],
+        "n_events": collected["n_events"],
+        "n_no_surprise": collected["n_no_surprise"],
+        "n_no_bar_match": collected["n_no_bar"],
+    }
+    extra.update(more)
+    return extra
 
 
 def _no_events_pack(
@@ -316,14 +326,15 @@ def evaluate_event_funding_stress_skip_daily_mtm(
         period_start=period_start,
         period_end=period_end,
     )
-    extra = {
-        **_base_extra(spec, collected),
-        "min_hist": min_hist,
-        "gate": "overnight_lt_pit_trailing_median",
-        "n_eligible_pre_gate": collected["n_eligible"],
-        "extra_dataset": "fins_summary+jsda_tokyo_repo_rates",
-        "data_path": "local_real_mirrors+local_sqlite_fins+repo",
-    }
+    extra = _base_extra(
+        spec,
+        collected,
+        min_hist=min_hist,
+        gate="overnight_lt_pit_trailing_median",
+        n_eligible_pre_gate=collected["n_eligible"],
+        extra_dataset="fins_summary+jsda_tokyo_repo_rates",
+        data_path="local_real_mirrors+local_sqlite_fins+repo",
+    )
     if not overnight_by_date:
         return {
             "status": "missing_overnight_series",
@@ -403,14 +414,15 @@ def evaluate_curve_steep_event_confirm_daily_mtm(
         period_end=period_end,
     )
     spread_by = dict((curve_series or {}).get("spread_by_date") or {})
-    extra = {
-        **_base_extra(spec, collected),
-        "steep_threshold": steep,
-        "gate": "repo_curve_spread_gt_steep_threshold",
-        "n_eligible_pre_gate": collected["n_eligible"],
-        "extra_dataset": "fins_summary+jsda_tokyo_repo_rates",
-        "data_path": "local_real_mirrors+local_sqlite_fins+repo",
-    }
+    extra = _base_extra(
+        spec,
+        collected,
+        steep_threshold=steep,
+        gate="repo_curve_spread_gt_steep_threshold",
+        n_eligible_pre_gate=collected["n_eligible"],
+        extra_dataset="fins_summary+jsda_tokyo_repo_rates",
+        data_path="local_real_mirrors+local_sqlite_fins+repo",
+    )
     if not spread_by:
         return {
             "status": "missing_curve_series",
@@ -477,9 +489,7 @@ def evaluate_disclosure_cluster_mom_gate_daily_mtm(
     min_hist = int(spec.get("min_hist") or params.get("min_hist") or 10)
 
     extra_base = {
-        "kind": spec.get("kind"),
-        "new_unique_logic": True,
-        "catalog": False,
+        **_policy_flags(spec),
         "momentum_n": n,
         "hold_days": h,
         "long_frac": lf,
@@ -489,11 +499,6 @@ def evaluate_disclosure_cluster_mom_gate_daily_mtm(
         "gate": "n_recent_disclosures_ge_pit_median",
         "extra_dataset": "fins_summary",
         "data_path": "local_real_mirrors+local_sqlite_fins_summary",
-        "ffill_applied": False,
-        "invent_fill": False,
-        "promote_as_main": False,
-        "go": False,
-        "research_only": True,
     }
     n_disc = sum(len(v) for v in (events_by_code or {}).values())
     if n_disc == 0:
@@ -615,15 +620,16 @@ def evaluate_surprise_xs_rank_hold_daily_mtm(
         collected["n_eligible"] = len(collected["entries"])
     h = int(collected["hold_days"])
     dates = list(collected["calendar"])
-    extra = {
-        **_base_extra(spec, collected),
-        "long_frac": lf,
-        "short_frac": sf,
-        "sign_flip": sign_flip,
-        "n_eligible": collected["n_eligible"],
-        "extra_dataset": "fins_summary",
-        "data_path": "local_real_mirrors+local_sqlite_fins_summary",
-    }
+    extra = _base_extra(
+        spec,
+        collected,
+        long_frac=lf,
+        short_frac=sf,
+        sign_flip=sign_flip,
+        n_eligible=collected["n_eligible"],
+        extra_dataset="fins_summary",
+        data_path="local_real_mirrors+local_sqlite_fins_summary",
+    )
     if collected["n_events"] == 0:
         return _no_events_pack(spec, extra, n_days=len(dates))
     if not dates:

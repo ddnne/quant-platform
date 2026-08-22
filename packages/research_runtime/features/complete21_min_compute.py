@@ -21,10 +21,6 @@ from .dataset_guard import require_feature_datasets
 from .types import FeatureOutput
 
 
-# ---------------------------------------------------------------------------
-# pure helpers (data-free unit tests)
-# ---------------------------------------------------------------------------
-
 def volume_change_from_pairs(
     pairs: list[tuple[str, float]],
 ) -> tuple[float | None, dict[str, Any]]:
@@ -287,10 +283,6 @@ def futures_activity_from_volume_pairs(
     }
 
 
-# ---------------------------------------------------------------------------
-# volume_change_1d
-# ---------------------------------------------------------------------------
-
 _VOLUME_DATASETS = ("equities_bars_daily",)
 
 
@@ -305,10 +297,6 @@ def _volume_change_1d(ctx) -> FeatureOutput:
     meta = {**meta, "code": code, "datasets": list(_VOLUME_DATASETS)}
     return FeatureOutput(value=value, metadata=meta)
 
-
-# ---------------------------------------------------------------------------
-# topix_relative_1d
-# ---------------------------------------------------------------------------
 
 _TOPIX_REL_DATASETS = ("equities_bars_daily", "indices_bars_daily_topix")
 
@@ -337,10 +325,6 @@ def _topix_relative_1d(ctx) -> FeatureOutput:
     return FeatureOutput(value=value, metadata=meta)
 
 
-# ---------------------------------------------------------------------------
-# disclosure_flag_fins
-# ---------------------------------------------------------------------------
-
 _DISC_DATASETS = ("fins_summary",)
 
 
@@ -355,10 +339,6 @@ def _disclosure_flag_fins(ctx) -> FeatureOutput:
     meta = {**meta, "code": code, "datasets": list(_DISC_DATASETS)}
     return FeatureOutput(value=value, metadata=meta)
 
-
-# ---------------------------------------------------------------------------
-# margin_interest_change_1d
-# ---------------------------------------------------------------------------
 
 _MARGIN_DATASETS = ("markets_margin_interest",)
 
@@ -379,10 +359,6 @@ def _margin_interest_change_1d(ctx) -> FeatureOutput:
     }
     return FeatureOutput(value=value, metadata=meta)
 
-
-# ---------------------------------------------------------------------------
-# short_ratio_level
-# ---------------------------------------------------------------------------
 
 _SHORT_RATIO_DATASETS = ("markets_short_ratio",)
 
@@ -418,10 +394,6 @@ def _short_ratio_level(ctx) -> FeatureOutput:
     return FeatureOutput(value=value, metadata=meta)
 
 
-# ---------------------------------------------------------------------------
-# is_trading_day
-# ---------------------------------------------------------------------------
-
 _CALENDAR_DATASETS = ("markets_calendar",)
 
 
@@ -455,10 +427,6 @@ def _is_trading_day(ctx) -> FeatureOutput:
     return FeatureOutput(value=value, metadata=meta)
 
 
-# ---------------------------------------------------------------------------
-# repo_rate_level
-# ---------------------------------------------------------------------------
-
 _REPO_DATASETS = ("jsda_tokyo_repo_rates",)
 
 
@@ -485,11 +453,6 @@ def _repo_rate_level(ctx) -> FeatureOutput:
     return FeatureOutput(value=value, metadata=meta)
 
 
-# ---------------------------------------------------------------------------
-# repo_rate_change (W78 / w0816m — macro_conditioned support)
-# ---------------------------------------------------------------------------
-
-
 def _repo_rate_change(ctx) -> FeatureOutput:
     require_feature_datasets(
         _REPO_DATASETS, context="feature repo_rate_change"
@@ -514,10 +477,6 @@ def _repo_rate_change(ctx) -> FeatureOutput:
     return FeatureOutput(value=value, metadata=meta)
 
 
-# ---------------------------------------------------------------------------
-# return_1d_c21 — complete21-path export of 1d simple return (candidate)
-# ---------------------------------------------------------------------------
-
 _RETURN_C21_DATASETS = ("equities_bars_daily",)
 
 
@@ -539,10 +498,6 @@ def _return_1d_c21(ctx) -> FeatureOutput:
     return FeatureOutput(value=value, metadata=meta)
 
 
-# ---------------------------------------------------------------------------
-# margin_alert_flag
-# ---------------------------------------------------------------------------
-
 _MARGIN_ALERT_DATASETS = ("markets_margin_alert",)
 
 
@@ -557,10 +512,6 @@ def _margin_alert_flag(ctx) -> FeatureOutput:
     meta = {**meta, "code": code, "datasets": list(_MARGIN_ALERT_DATASETS)}
     return FeatureOutput(value=value, metadata=meta)
 
-
-# ---------------------------------------------------------------------------
-# futures_activity_proxy
-# ---------------------------------------------------------------------------
 
 _FUTURES_DATASETS = ("derivatives_bars_daily_futures",)
 
@@ -585,10 +536,6 @@ def _futures_activity_proxy(ctx) -> FeatureOutput:
     }
     return FeatureOutput(value=value, metadata=meta)
 
-
-# ---------------------------------------------------------------------------
-# fundamental_value_score (W84 — fund value×mom paper alignment)
-# ---------------------------------------------------------------------------
 
 _FUND_VALUE_DATASETS = ("fins_summary", "equities_bars_daily")
 

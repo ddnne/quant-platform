@@ -1,4 +1,4 @@
-"""Minimal COMPLETE-21-only features (W49–W57 / w0815ax_g3).
+"""Minimal COMPLETE-21-only features.
 
 Dataset tuples are COMPLETE 21 only. Permanent DEFER is fail-closed in
 compute. ``return_1d_c21`` stays candidate (twin of v0 ``return_1d``).

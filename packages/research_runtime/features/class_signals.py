@@ -1,28 +1,7 @@
-"""Hypothesis-class research signals (W78–W80) — not simple daily sign.
+"""Hypothesis-class research signals — not simple daily sign.
 
-Implements real signal logic for:
-
-* ``multi_day_hold`` — N-day momentum entry with sticky multi-day hold
-  (rebalance every ``hold_days``; not 1d flip)
-* ``macro_conditioned`` — equity momentum conditioned on Tokyo repo rate
-  **level** or **change** from ``jsda_tokyo_repo_rates``
-* ``event_post`` — post-disclosure / post-earnings window (not continuous daily)
-* ``flow_demand`` — multi-day margin/short flow pressure (not S4 daily rehash)
-* ``fundamentals_price`` — PIT fundamentals × price (value / surprise)
-* ``cross_section_relative`` — same-day rank L-S (optional; multi-day sticky OK)
-
-Hard constraints
-----------------
-* Does **not** import ``agents.mass_research`` / mass loop
-* Does **not** mint READY / VerifiedResearchReadiness
-* Does **not** emit order intents / call paper execution
-* Does **not** un-reject S1–S5
-* ``simple_daily_sign`` is **not** used
-* Mass / READY / operational GO never auto-connect from pass
-
-Status remains ``candidate`` (research). W80 may set ``research_candidate=True``
-when production criteria (economic net + occurrence rate + multi-year + risk)
-are all met — still not READY / Mass / GO.
+Sticky multi-day, event-post, flow, fund, CS, macro/rate, vol regimes.
+Mass / READY / GO closed. Signal status stays candidate.
 """
 
 from __future__ import annotations
@@ -38,10 +17,6 @@ from features.research_freezes import (
     SIMPLE_DAILY_SIGN,
 )
 
-# ---------------------------------------------------------------------------
-# Identity / freeze
-# ---------------------------------------------------------------------------
-
 CLASS_SIGNALS_VERSION: str = "class-signals/v10"
 CLASS_SIGNALS_WAVE: str = "W95 / w0818e"
 
@@ -49,25 +24,20 @@ SIGNAL_STATUS: str = "candidate"
 SIGNAL_VERSION: str = "1.5.0"
 CANDIDATE_ONLY: bool = False  # legs may be approved; signal status stays candidate
 
-# ---------------------------------------------------------------------------
-# Class ids (align with research.hypothesis_classes)
-# ---------------------------------------------------------------------------
-
 CLASS_MULTI_DAY_HOLD: str = "multi_day_hold"
 CLASS_MACRO_CONDITIONED: str = "macro_conditioned"
 CLASS_CROSS_SECTION_RELATIVE: str = "cross_section_relative"
 CLASS_EVENT_POST: str = "event_post"
 CLASS_FLOW_DEMAND: str = "flow_demand"
 CLASS_FUNDAMENTALS_PRICE: str = "fundamentals_price"
-# W89 research families (factory/eval dispatch; not necessarily in registry)
+# Factory/eval families; not necessarily in hypothesis_classes registry.
 CLASS_RATE_FACTOR: str = "rate_factor"
 CLASS_MULTI_FACTOR: str = "multi_factor"
-# W91: index-level Nikkei/TOPIX vol regime (not per-name vol gate)
+# Index-level (not per-name vol gate).
 CLASS_INDEX_VOL_REGIME: str = "index_vol_regime"
-# W92: Nikkei 225 options BaseVol / ATM IV / spread regime (canonical vol SoT)
+# Canonical Nikkei vol SoT: options_225 BaseVol / ATM IV / spread.
 CLASS_OPTIONS_VOL_REGIME: str = "options_vol_regime"
 
-# Signal ids (stable R2 / catalog keys)
 SIGNAL_ID_MULTI_DAY_HOLD: str = "c21_multi_day_momentum_hold"
 SIGNAL_ID_MACRO_CONDITIONED: str = "c21_repo_conditioned_momentum"
 SIGNAL_ID_CROSS_SECTION: str = "c21_cross_section_momentum_rank"
@@ -89,12 +59,10 @@ SIGNAL_ID_OPT225_ATM_IV_TERM_LEVELS: str = "c21_opt225_atm_iv_term_levels_xs"
 SIGNAL_ID_OPT225_ATM_IV_TERM_RATIO: str = "c21_opt225_atm_iv_term_ratio_xs"
 SIGNAL_ID_OPT225_SPREAD_ABS: str = "c21_opt225_iv_base_spread_abs_xs"
 SIGNAL_ID_OPT225_SPREAD_CHANGE: str = "c21_opt225_iv_base_spread_change_xs"
-# W94 skew / CM-term / ΔBaseVol
 SIGNAL_ID_OPT225_SKEW_ABS: str = "c21_opt225_skew_abs_level_xs"
 SIGNAL_ID_OPT225_CM_TERM_ABS: str = "c21_opt225_cm_term_abs_level_xs"
 SIGNAL_ID_OPT225_BASEVOL_DELTA_ABS: str = "c21_opt225_basevol_delta_abs_xs"
 
-# Feature legs (prefer registry-approved)
 MOMENTUM_FEATURE_ID: str = "momentum_n"
 TRADING_DAY_FEATURE_ID: str = "is_trading_day"
 REPO_RATE_FEATURE_ID: str = "repo_rate_level"
@@ -121,8 +89,7 @@ REPO_CURVE_LONG_TENOR: str = "3M/T+1"
 DEFAULT_CURVE_STEEP_THRESHOLD: float = 0.0
 DEFAULT_CURVE_INVERT_THRESHOLD: float = 0.0
 
-# W91 Nikkei / index realized-vol regime defaults (annualized sample stdev).
-# No cash Nikkei code in indices_bars_daily; proxy = NK225F front (prefer) or TOPIX.
+# Annualized sample stdev. No cash Nikkei in indices_bars_daily; NK225F front prefer, TOPIX fallback.
 DEFAULT_NKY_VOL_SHORT_N: int = 10
 DEFAULT_NKY_VOL_LONG_N: int = 60
 DEFAULT_NKY_VOL_HIGH_THRESHOLD: float = 0.20  # 20% ann. RV → high
@@ -150,9 +117,6 @@ SESSION_CLOSE_CHANGE_DATE: str = "2024-11-05"
 # meaningfulness discussion (research only).
 DEFAULT_MIN_ECONOMIC_NET: float = 0.002  # 20bp per scored hold
 
-# ---------------------------------------------------------------------------
-# W80 occurrence-rate / production-candidate bar (rate-based, not count alone)
-# ---------------------------------------------------------------------------
 # multi_day_hold: scored rebalances / code-days. fixed_horizon expect ~1/hold.
 # Floor at half expected for hold=10 → 0.05; use 0.04 research buffer.
 DEFAULT_MIN_ACTIVATION_RATE_MULTIDAY: float = 0.04
@@ -167,9 +131,6 @@ DEFAULT_MAX_YEAR_POS_NET_SHARE: float = 0.75
 DEFAULT_MIN_YEARS_RESEARCH_CANDIDATE: int = 4
 DEFAULT_TRADING_DAYS_PER_YEAR: int = 245
 
-# ---------------------------------------------------------------------------
-# W81 statistical bar (raise beyond mean bp) — period-net metrics
-# ---------------------------------------------------------------------------
 # |t| of period mean nets vs 0 (sample std). Below ~1.0 is noise with n≈6.
 DEFAULT_MIN_ABS_T_STAT: float = 1.5
 # Period Sharpe = mean/std of period nets (periods_per_year=1).
@@ -206,7 +167,7 @@ MULTI_FACTOR_DATASETS: tuple[str, ...] = (
 )
 EVENT_POST_DATASETS: tuple[str, ...] = (
     "fins_summary",
-    "fins_earnings_date",  # W80 thicken event calendar when available
+    "fins_earnings_date",  # thicken event calendar when available
     "equities_bars_daily",
     "markets_calendar",
 )
@@ -221,8 +182,7 @@ FUNDAMENTALS_PRICE_DATASETS: tuple[str, ...] = (
     "equities_bars_daily",
     "markets_calendar",
 )
-# W91 index-vol regime: equity CS book + index/futures vol proxy.
-# Prefer NK225F continuous front realized vol; TOPIX fallback.
+# Equity CS book + index/futures vol proxy (NK225F front; TOPIX fallback).
 INDEX_VOL_REGIME_DATASETS: tuple[str, ...] = (
     "equities_bars_daily",
     "markets_calendar",
@@ -231,7 +191,6 @@ INDEX_VOL_REGIME_DATASETS: tuple[str, ...] = (
     "derivatives_bars_daily_futures",
 )
 
-# W92 options vol regime: equity CS book + Nikkei 225 options SoT (COMPLETE).
 # Canonical Nikkei vol = derivatives_bars_daily_options_225 (not TOPIX RV proxy).
 OPTIONS_VOL_REGIME_DATASETS: tuple[str, ...] = (
     "equities_bars_daily",

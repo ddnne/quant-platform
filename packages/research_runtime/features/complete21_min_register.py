@@ -42,7 +42,7 @@ VolumeChange1d: FeatureDefinition = register(
         compute=_volume_change_1d,
         tags=("volume", "daily", "complete21"),
         intended_role="signal",
-        status="approved",  # W52 promotion; version pin 1.0.0
+        status="approved",
         price_basis=None,
     )
 )
@@ -64,7 +64,7 @@ TopixRelative1d: FeatureDefinition = register(
         compute=_topix_relative_1d,
         tags=("return", "relative", "topix", "complete21"),
         intended_role="signal",
-        status="approved",  # W53 O2 promotion; version pin 1.0.0
+        status="approved",
         price_basis=RAW,
     )
 )
@@ -86,7 +86,7 @@ DisclosureFlagFins: FeatureDefinition = register(
         compute=_disclosure_flag_fins,
         tags=("disclosure", "fins", "flag", "complete21"),
         intended_role="signal",
-        status="approved",  # W53 O2 promotion; version pin 1.0.0
+        status="approved",
         price_basis=None,
     )
 )
@@ -109,7 +109,7 @@ MarginInterestChange1d: FeatureDefinition = register(
         compute=_margin_interest_change_1d,
         tags=("margin", "interest", "complete21"),
         intended_role="signal",
-        status="approved",  # W53 O2 promotion; version pin 1.0.0
+        status="approved",
         price_basis=None,
     )
 )
@@ -132,7 +132,7 @@ ShortRatioLevel: FeatureDefinition = register(
         compute=_short_ratio_level,
         tags=("short", "ratio", "sector", "complete21"),
         intended_role="signal",
-        status="approved",  # W55 O2 promotion; version pin 1.0.0
+        status="approved",
         price_basis=None,
     )
 )
@@ -156,9 +156,7 @@ IsTradingDay: FeatureDefinition = register(
         compute=_is_trading_day,
         tags=("calendar", "trading_day", "complete21"),
         intended_role="utility",
-        status="approved",  # W52 promotion; version pin 1.0.0
-        # Note: intended_role=utility → get_for_strategy requires allowed_roles
-        # override; not a default strategy signal.
+        status="approved",
         price_basis=None,
     )
 )
@@ -181,7 +179,7 @@ RepoRateLevel: FeatureDefinition = register(
         compute=_repo_rate_level,
         tags=("repo", "rate", "jsda", "macro", "complete21"),
         intended_role="state",
-        status="approved",  # W54 O2 promotion; version pin 1.0.0
+        status="approved",
         price_basis=None,
     )
 )
@@ -198,14 +196,13 @@ RepoRateChange: FeatureDefinition = register(
         ),
         description=(
             "Change in Tokyo repo rate over lookback distinct as_of_date steps "
-            "(JSDA). COMPLETE dataset jsda_tokyo_repo_rates. Supports "
-            "macro_conditioned hypothesis class (W78). Candidate until feature "
-            "E2E promotion; pure helper unit-tested. Permanent DEFER rejected."
+            "(JSDA). COMPLETE dataset jsda_tokyo_repo_rates. Candidate until "
+            "feature E2E promotion. Permanent DEFER rejected."
         ),
         compute=_repo_rate_change,
         tags=("repo", "rate", "jsda", "macro", "change", "complete21"),
         intended_role="state",
-        status="candidate",  # W78 land; promote only after tip/history E2E
+        status="candidate",
         price_basis=None,
     )
 )
@@ -250,7 +247,7 @@ MarginAlertFlag: FeatureDefinition = register(
         compute=_margin_alert_flag,
         tags=("margin", "alert", "flag", "complete21"),
         intended_role="signal",
-        status="approved",  # W57 O2 promotion; version pin 1.0.0
+        status="approved",
         price_basis=None,
     )
 )
@@ -290,13 +287,12 @@ FundamentalValueScore: FeatureDefinition = register(
         ),
         description=(
             "PIT fundamental value score: BPS/price preferred, else EPS/price, "
-            "from fins_summary + equities_bars_daily close at as_of. W84 paper "
-            "alignment for fundamentals_price value×momentum agree. Not READY."
+            "from fins_summary + equities_bars_daily close at as_of. Not READY."
         ),
         compute=_fundamental_value_score,
         tags=("fundamentals", "value", "fins", "complete21"),
         intended_role="signal",
-        status="approved",  # W84 paper realign; version pin 1.0.0
+        status="approved",
         price_basis=RAW,
     )
 )

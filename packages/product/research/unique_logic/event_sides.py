@@ -74,14 +74,15 @@ def classify_funding_entries(
 def _funding_base_extra(
     spec: Mapping[str, Any], collected: Mapping[str, Any], *, min_hist: int
 ) -> dict[str, Any]:
-    return {
-        **event._base_extra(spec, collected),
-        "min_hist": min_hist,
-        "n_eligible_pre_gate": collected["n_eligible"],
-        "extra_dataset": "fins_summary+jsda_tokyo_repo_rates",
-        "data_path": "local_real_mirrors+local_sqlite_fins+repo",
-        "sign_flip_is_not_a_kill": True,
-    }
+    return event._base_extra(
+        spec,
+        collected,
+        min_hist=min_hist,
+        n_eligible_pre_gate=collected["n_eligible"],
+        extra_dataset="fins_summary+jsda_tokyo_repo_rates",
+        data_path="local_real_mirrors+local_sqlite_fins+repo",
+        sign_flip_is_not_a_kill=True,
+    )
 
 
 def _blocked_overnight_or_events(

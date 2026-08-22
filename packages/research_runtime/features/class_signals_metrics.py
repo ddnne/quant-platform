@@ -262,22 +262,10 @@ def production_candidate_bar(
     stats_bar: Mapping[str, Any] | None = None,
     require_stats: bool = True,
 ) -> dict[str, Any]:
-    """W81 production research_candidate bar (still not READY / Mass / GO).
+    """Production research_candidate bar (still not READY / Mass / GO).
 
-    All must pass:
-    1. checklist v2 complete (caller-supplied)
-    2. robustness gate pass
-    3. risk scenarios not catastrophic
-    4. economic net meaningful (positive majority + mean ≥ min)
-    5. occurrence / activation rate sufficient (rate, not count alone)
-    6. multi-year coverage (≥ min_years ok periods) without extreme skew
-    7. **W81 statistical bar**: |t|, Sharpe, period win-rate / pos years
-       (when ``require_stats``; default True)
-
-    When all pass → ``research_candidate=True`` (research only).
-    Weak consistent-negative → not_candidate (via economic_net_ok=False).
-    Low t/Sharpe / unstable yearly signs → demote to discussion_only
-    (gate+econ ok) or not_candidate.
+    Checklist, gate, risk, economic net, occurrence rate, multi-year, and
+    stats (|t|, Sharpe, period win-rate) must all pass when required.
     """
     years_ok = bool(multi_year_ok and int(n_ok_periods) >= int(min_years))
     stats_required_ok = bool(stats_ok) if require_stats else True

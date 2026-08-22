@@ -517,22 +517,20 @@ def assert_registry_closed_to_ready_mass(
     """Fail closed if registry document ever arms READY/Mass."""
     body = dict(doc) if doc is not None else hypothesis_class_registry_document()
     closed_false = (
-        ("ready_declared", "hypothesis registry must keep ready_declared=False"),
-        ("operational_go", "hypothesis registry must keep operational_go=False"),
-        ("connected_to_ready", "hypothesis registry must keep connected_to_ready=False"),
-        ("connected_to_mass", "hypothesis registry must keep connected_to_mass=False"),
-        ("mass_generate_signals", "hypothesis registry must not mass-generate signals"),
-        ("edge_claimed", "hypothesis registry must not claim edge"),
-        ("s1_s5_unreject", "hypothesis registry must not un-reject S1–S5"),
-        ("simple_daily_sign_default_enabled", "simple_daily_sign must remain default generation OFF"),
+        "ready_declared",
+        "operational_go",
+        "connected_to_ready",
+        "connected_to_mass",
+        "mass_generate_signals",
+        "edge_claimed",
+        "s1_s5_unreject",
+        "simple_daily_sign_default_enabled",
     )
-    for key, msg in closed_false:
+    for key in closed_false:
         if body.get(key) is not False:
-            raise AssertionError(msg)
+            raise AssertionError(f"hypothesis registry must keep {key}=False")
     if body.get("mass_research") != MASS_RESEARCH:
-        raise AssertionError(
-            f"hypothesis registry mass_research must be {MASS_RESEARCH}"
-        )
+        raise AssertionError(f"hypothesis registry mass_research must be {MASS_RESEARCH}")
     if body.get("phase7") != PHASE7:
         raise AssertionError(f"hypothesis registry phase7 must be {PHASE7}")
 
