@@ -228,12 +228,6 @@ def t_stat_vs_zero(values: Sequence[float | None]) -> dict[str, Any]:
             "raw_t_stat": t,
             "cv": cv,
             "reason": LOW_VARIANCE_REASON,
-            "formula": "t = mean / (s / sqrt(n)), sample std ddof=1",
-            "gate": {
-                "min_rel_std": LOW_VARIANCE_MIN_REL_STD,
-                "max_abs_t": LOW_VARIANCE_MAX_ABS_T,
-                "small_n_max": LOW_VARIANCE_SMALL_N_MAX,
-            },
         }
     return {
         "n": n,
@@ -245,7 +239,6 @@ def t_stat_vs_zero(values: Sequence[float | None]) -> dict[str, Any]:
         "raw_t_stat": t,
         "cv": cv,
         "reason": "ok",
-        "formula": "t = mean / (s / sqrt(n)), sample std ddof=1",
     }
 
 
@@ -301,10 +294,6 @@ def sharpe_ratio(
         "periods_per_year": ppy,
         "risk_free": float(risk_free),
         "reason": "ok",
-        "formula": (
-            "sharpe = (mean - rf) / std * sqrt(periods_per_year); "
-            "period nets use periods_per_year=1"
-        ),
     }
 
 
@@ -396,7 +385,6 @@ def max_drawdown(values: Sequence[float | None]) -> dict[str, Any]:
         "trough_index": trough_i if trough_i >= 0 else None,
         "final_cumulative": cum,
         "reason": "ok",
-        "note": "DD on cumulative sum of series (period nets or trade nets)",
     }
 
 
@@ -694,8 +682,6 @@ def evaluate_daily_path_dd_gate(
         "fails": fails,
         "warnings": warnings,
         "scorecard": scorecard,
-        "computed": computed,
-        "required_fields": list(DAILY_PATH_DD_REQUIRED_FIELDS),
     }
     out.update(_freeze())
     return out
@@ -731,7 +717,6 @@ def information_ratio(
         "excess_mean": sh.get("excess_mean"),
         "periods_per_year": float(periods_per_year),
         "reason": sh.get("reason"),
-        "note": "IR vs constant benchmark; benchmark=0 matches period Sharpe",
     }
 
 
@@ -753,19 +738,13 @@ def period_stats_report(
     out: dict[str, Any] = {
         "version": STATS_METRICS_VERSION,
         "wave": STATS_METRICS_WAVE,
-        "kind": "period_nets",
         "period_ids": list(period_ids) if period_ids is not None else None,
-        "period_nets": list(vals),
         "n_periods": len(vals),
         "mean_net": tpack.get("mean"),
         "std_net": tpack.get("std"),
         "t_stat": tpack.get("t_stat"),
         "abs_t_stat": tpack.get("abs_t_stat"),
         "sharpe": sh.get("sharpe"),
-        "sharpe_definition": (
-            "mean(period_net)/std(period_net); periods_per_year=1 "
-            "(each period ~ independent year-window residual)"
-        ),
         "win_rate": wr.get("win_rate"),
         "n_pos": wr.get("n_pos"),
         "n_neg": wr.get("n_neg"),
@@ -775,12 +754,6 @@ def period_stats_report(
         "calmar": calmar,
         "information_ratio": ir.get("information_ratio"),
         "hold_days": int(hold_days) if hold_days is not None else None,
-        "t_detail": tpack,
-        "sharpe_detail": sh,
-        "win_rate_detail": wr,
-        "payoff_detail": pay,
-        "max_dd_detail": dd,
-        "ir_detail": ir,
     }
     out.update(_freeze())
     return out
@@ -813,7 +786,6 @@ def trade_stats_report(
     out: dict[str, Any] = {
         "version": STATS_METRICS_VERSION,
         "wave": STATS_METRICS_WAVE,
-        "kind": "trade_signed_returns",
         "hold_days": h,
         "one_way_cost": float(one_way_cost),
         "amortized_cost_applied": bool(amortize_cost),
@@ -824,9 +796,6 @@ def trade_stats_report(
         "t_stat": tpack.get("t_stat"),
         "abs_t_stat": tpack.get("abs_t_stat"),
         "sharpe_ann": sh.get("sharpe"),
-        "sharpe_definition": (
-            f"(mean/std)*sqrt({trading_days_per_year}/{h}) on hold-period nets"
-        ),
         "periods_per_year": ppy,
         "win_rate": wr.get("win_rate"),
         "n_pos": wr.get("n_pos"),

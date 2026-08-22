@@ -129,12 +129,10 @@ def default_na_scenario_bundle(
         scenario_row(
             SCENARIO_CRASH,
             status="pending_metrics",
-            notes="crash scenario surface only — supply metrics for completeness",
         ),
         scenario_row(
             SCENARIO_HIGH_VOL,
             status="pending_metrics",
-            notes="high_vol scenario surface only — supply metrics for completeness",
         ),
     ]
     if rate_data_usable:
@@ -142,14 +140,12 @@ def default_na_scenario_bundle(
             scenario_row(
                 SCENARIO_RATE_UP,
                 status="pending_metrics",
-                notes="rate data marked usable — supply rate_up metrics",
             )
         )
         rows.append(
             scenario_row(
                 SCENARIO_RATE_DOWN,
                 status="pending_metrics",
-                notes="rate data marked usable — supply rate_down metrics",
             )
         )
     else:
@@ -172,7 +168,6 @@ def default_na_scenario_bundle(
             scenario_row(
                 SCENARIO_LIQUIDITY_STRESS,
                 status="pending_metrics",
-                notes="liquidity data marked available — supply metrics",
             )
         )
     else:
@@ -273,7 +268,6 @@ def evaluate_risk_scenarios(
                 "status": st,
                 "passed": False,
                 "not_applicable": False,
-                "note": "metrics not supplied",
             }
         if not has_metric:
             missing_required.append(sid)
@@ -397,7 +391,6 @@ def evaluate_risk_scenarios(
 
     out: dict[str, Any] = {
         "version": RISK_SCENARIOS_VERSION,
-        "label": RISK_SCENARIOS_LABEL,
         "signal_id": signal_id,
         "passed": passed,
         "coverage_ok": bool(coverage_ok),
@@ -417,11 +410,6 @@ def evaluate_risk_scenarios(
         "scenario_rows": list(by_id.values()),
         "missing_required": sorted(set(missing_required)),
         "reasons": reasons,
-        "min_scenario_set": list(MIN_SCENARIO_SET),
-        "note": (
-            "Research risk-scenario result only. Incomplete or sign-break "
-            "(prefer fail) blocks research_candidate."
-        ),
     }
     out.update(_freeze_fields())
     return out

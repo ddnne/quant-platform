@@ -158,16 +158,12 @@ def histogram_run_lengths(
         if L <= 0:
             continue
         total += 1
-        placed = False
         for i, (lo, hi) in enumerate(bks):
             if L < lo:
                 continue
             if hi is None or L <= hi:
                 counts[i] += 1
-                placed = True
                 break
-        if not placed:
-            pass
     out: list[dict[str, Any]] = []
     for (lo, hi), c in zip(bks, counts):
         out.append(
@@ -488,7 +484,6 @@ def cost_amortization_report(
     bp = rows[0]["one_way_cost_bp"] if rows else float(c) * 10_000.0
     out: dict[str, Any] = {
         "version": HOLDING_METRICS_VERSION,
-        "table_kind": "cost_amortization_research_illustration",
         "one_way_cost": c,
         "one_way_cost_bp": bp,
         "round_trip_cost": 2.0 * c,

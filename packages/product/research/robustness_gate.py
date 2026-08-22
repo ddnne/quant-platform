@@ -66,7 +66,6 @@ def annotate_period_rows_with_cost(
         row["net_round_trip_mean_active"] = net_rt
         row["one_way_cost"] = float(one_way_cost)
         row["one_way_cost_bp"] = float(one_way_cost) * 10_000.0
-        row["cost_formula"] = "net_one_way = gross_signed_mean_active - one_way_cost"
         out.append(row)
     return out
 
@@ -157,9 +156,6 @@ def evaluate_research_robustness_gate(
                 "sign": _sign_of(gross),
                 "net_sign": _sign_of(net_ow),
                 "n_active_positions": n_act_i,
-                "mean_R_plus": _as_float(row.get("mean_R_plus")),
-                "mean_R_minus": _as_float(row.get("mean_R_minus")),
-                "non_null_rate": _as_float(row.get("non_null_rate")),
             }
         )
 
@@ -265,7 +261,6 @@ def evaluate_research_robustness_gate(
             "one_way_cost_bp": (
                 float(cost) * 10_000.0 if cost is not None else None
             ),
-            "formula": "net_one_way = gross_signed_mean - one_way_cost",
             "per_period": [
                 {
                     "period_id": e.get("period_id"),
@@ -276,14 +271,12 @@ def evaluate_research_robustness_gate(
                 }
                 for e in eligible
             ],
-            "label": "仮定に依存・研究用・運用GOではない",
         }
     else:
         details["net_sign_majority"] = {
             "passed": True,
             "required": False,
             "skipped": True,
-            "note": "require_net_sign_majority=False (gross-only mode)",
         }
 
     wf_ok = True
@@ -362,13 +355,9 @@ def evaluate_research_robustness_gate(
                 float(cost) * 10_000.0 if cost is not None else None
             ),
             "require_net_sign_majority": bool(require_net_sign_majority),
-            "label": "仮定に依存・研究用・運用GOではない",
         },
-        "annotated_period_rows": annotated,
-        "n_period_rows_in": len(list(period_rows)),
         "n_eligible_periods": n_elig,
         **_freeze(),
-        "note": "Research robustness gate only. passed=True is not operational GO.",
     }
 
 

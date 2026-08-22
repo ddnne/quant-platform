@@ -23,7 +23,6 @@ from features.research_freezes import (
     SIMPLE_DAILY_SIGN,
 )
 from research.stats_metrics import (
-    DEFAULT_MIN_ABS_T_STAT,
     period_stats_report,
     sample_mean,
     t_stat_vs_zero,
@@ -120,8 +119,6 @@ def _side_pack(
         "payoff": stats.get("payoff"),
         "max_dd": stats.get("max_dd"),
         "std_net": stats.get("std_net"),
-        "stats": stats,
-        "t_detail": tpack,
     }
 
 
@@ -153,10 +150,6 @@ def _nonzero_evidence(
         "mean_ok": mean_ok,
         "t_guideline_ok": t_ok,
         "near_zero": near_zero,
-        "near_zero_abs": float(near_zero_abs),
-        "t_guideline": float(t_guideline),
-        "mean_net": mean_net,
-        "t_stat": t,
     }
 
 
@@ -193,7 +186,6 @@ def evaluate_sign_both_sides(
             "evidence_inverted": _nonzero_evidence(
                 empty_i, near_zero_abs=near_zero_abs, t_guideline=t_guideline
             ),
-            "cost_model": "net_inv = -gross - amortized_cost",
             "reason": "no_periods",
             **_freeze(),
         }
@@ -255,7 +247,6 @@ def evaluate_sign_both_sides(
         "inverted": inverted,
         "evidence_original": ev_o,
         "evidence_inverted": ev_i,
-        "cost_model": "original: gross-c; inverted: -gross-c",
         "hold_days": int(hold_days) if hold_days is not None else None,
         **_freeze(),
     }
@@ -304,8 +295,6 @@ def choose_sign(
             "hard_t_ok": hard_t_ok,
             "mean_net": mean_net,
             "t_stat": t,
-            "sharpe": side.get("sharpe"),
-            "near_zero": bool(ev.get("near_zero")),
         }
 
     elig_o = _eligible(original, ev_o)
@@ -444,7 +433,6 @@ def choose_sign(
             "min_abs_t_hard": min_abs_t_hard,
             "paper_mean_negative": bool(paper_mean_negative),
             "t_is_guideline_not_hard": True,
-            "default_min_abs_t_stat_ref": DEFAULT_MIN_ABS_T_STAT,
         },
         **_freeze(),
     }
@@ -481,9 +469,7 @@ def evaluate_and_choose_sign(
         paper_mean_negative=paper_mean_negative,
         min_abs_t_hard=min_abs_t_hard,
     )
-    out = dict(choice)
-    out["both_sides"] = both
-    return out
+    return dict(choice)
 
 
 def sign_selection_from_period_rows(
