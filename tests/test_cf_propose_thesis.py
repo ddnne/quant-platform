@@ -181,6 +181,7 @@ def test_worker_index_contains_propose_thesis_route() -> None:
     assert "titleOccupancyBad" in src
     assert 'from "./propose_review_tables"' in src
     assert 'from "./propose_allowed"' in src
+    assert "OCCUPANCY_EXTRA_TITLE" in src
     assert "GATE_TITLE_CONTRA" in src
     propose_src = _WORKER_PROPOSE.read_text(encoding="utf-8")
     assert "const PROPOSE_ALLOWED_GATES = [" not in propose_src
@@ -473,6 +474,18 @@ def test_review_proposal_row_occupancy_and_polarity_table() -> None:
             ["curve_flatten", "price_down"],
             "occupancy_label_only",
             "PEAD when the repo curve flattened AND price is down",
+        ),
+        (
+            "Stocks with high EPS growth tend to outperform when overnight funding is easy AND the price is rising.",
+            ["easy_funding", "price_down"],
+            "title_gate_polarity_mismatch",
+            "PEAD when overnight funding is easy AND price is down",
+        ),
+        (
+            "Investors tend to prefer stocks with low PB ratios when the market is crowded AND there is a large surprise in earnings.",
+            ["crowded_margin", "large_surprise"],
+            "occupancy_label_only",
+            "PEAD when margin is crowded AND surprise is large versus the window",
         ),
     ]
     for bad_thesis, gates, reason, good_thesis in rows:

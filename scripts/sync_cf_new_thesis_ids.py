@@ -107,6 +107,7 @@ def _propose_review_tables_source() -> str:
         GATE_TITLE_CONTRA,
         OCCUPANCY_LABEL_EXCEPTIONS,
         PROPOSE_CONTRADICTORY_GATE_PAIRS,
+        occupancy_extra_families,
         sparse_gate_combos_for_propose,
     )
 
@@ -144,6 +145,10 @@ def _propose_review_tables_source() -> str:
             "",
             "export const EXTRA_TITLE_GATES: Array<[string, string]> = [",
             "\n".join(extra_lines),
+            "];",
+            "",
+            "export const OCCUPANCY_EXTRA_TITLE: Array<[string, string[]]> = [",
+            pair_rows(occupancy_extra_families()),
             "];",
             "",
             "export const PROPOSE_CONTRADICTORY_GATE_PAIRS: string[][] = [",

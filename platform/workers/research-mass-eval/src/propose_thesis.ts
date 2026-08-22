@@ -16,6 +16,7 @@ import {
   EXTRA_TITLE_GATES,
   GATE_OCCUPANCY_LABEL,
   GATE_TITLE_CONTRA,
+  OCCUPANCY_EXTRA_TITLE,
   OCCUPANCY_LABEL_EXCEPTIONS,
   PROPOSE_CONTRADICTORY_GATE_PAIRS,
   SPARSE_GATE_COMBOS_REVIEW,
@@ -255,6 +256,13 @@ function titleOccupancyBad(title: string, gates: string[]): boolean {
     return true;
   }
   if (SPARSE_GATE_COMBOS_REVIEW.some((combo) => combo.every((g) => gset.has(g)))) {
+    return true;
+  }
+  if (
+    OCCUPANCY_EXTRA_TITLE.some(
+      ([phrase, owners]) => polar.includes(phrase) && !owners.some((g) => gset.has(g)),
+    )
+  ) {
     return true;
   }
   if (EXTRA_TITLE_GATES.some(([phrase, gate]) => polar.includes(phrase) && !gset.has(gate))) {

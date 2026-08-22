@@ -129,6 +129,8 @@ GATE_TITLE_CONTRA: tuple[tuple[str, tuple[str, ...]], ...] = (
         "prices tend to rise",
         "prices rise",
         "price rise",
+        "price is rising",
+        "the price is rising",
     )),
     ("ta_down", ("ta up", "rising ta")),
     ("ta_up", ("ta down", "falling ta")),
@@ -203,15 +205,15 @@ GATE_OCCUPANCY_LABEL: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("overnight_p10", ("at 10%", "funding at 10", "10 percent", "10% predicts", "funding is loose", "loose")),
     ("pb_rising", ("is rising", "pb rose", "rising price to book", "price to book is rising")),
     ("np_negative", ("profitability is weak", "weak profitability", "weak profit")),
+    ("crowded_margin", ("market is crowded",)),
 )
 
 # Title claims a gate that is not in the AND-set.
+# EqAR risk-slang extra-title is derived from GATE_OCCUPANCY_LABEL
+# (occupancy_extra_families). Do not duplicate those phrases here.
 EXTRA_TITLE_GATES: tuple[tuple[str, str], ...] = (
-    ("risk appetite", "eq_ar_falling"),
-    ("appetite for risk", "eq_ar_falling"),
-    ("risk premia", "eq_ar_falling"),
-    ("risk premium", "eq_ar_falling"),
-    ("risk arbitrage", "eq_ar_falling"),
+    ("low pb", "cheap_pb"),
+    ("low price to book", "cheap_pb"),
     ("tight funding", "tight_funding"),
     ("funding is tight", "tight_funding"),
     ("funding tight", "tight_funding"),
@@ -263,7 +265,25 @@ OCCUPANCY_LABEL_EXCEPTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("overnight_p10", ("easiest", "percentile", "decile", "p10")),
     ("pb_rising", ("median", "pit median", "above median")),
     ("np_negative", ("net profit", "np is negative", "np negative")),
+    ("crowded_margin", ("margin is crowded", "margin crowding")),
 )
+
+
+# Occupancy slang that is too generic to extra-title when the gate is absent.
+_OCCUPANCY_EXTRA_SKIP: frozenset[str] = frozenset(
+    {"is rising", "loose", "pb rose", "at 10%"}
+)
+
+
+def occupancy_extra_families() -> tuple[tuple[str, tuple[str, ...]], ...]:
+    """Occupancy-label phrases → owner gates. Extra-title if none are in the AND."""
+    owners: dict[str, set[str]] = {}
+    for gate, phrases in GATE_OCCUPANCY_LABEL:
+        for phrase in phrases:
+            if phrase in _OCCUPANCY_EXTRA_SKIP or len(phrase) < 8:
+                continue
+            owners.setdefault(phrase, set()).add(gate)
+    return tuple(sorted((p, tuple(sorted(g))) for p, g in owners.items()))
 
 
 def occupancy_exception_tokens(gate: str) -> tuple[str, ...]:
@@ -305,6 +325,7 @@ __all__ = [
     "PROPOSE_CONTRADICTORY_GATE_PAIRS",
     "PROPOSE_TWEAK_WORDS",
     "occupancy_exception_tokens",
+    "occupancy_extra_families",
     "prompt_direction_echo_x",
     "sparse_gate_combos_for_propose",
 ]

@@ -3,7 +3,7 @@
 export const GATE_TITLE_CONTRA: Array<[string, string[]]> = [
   ["sales_down", ["rising sales", "sales up", "sales growth", "high sales", "sales increase", "sales tend to rise", "sales rise"]],
   ["np_negative", ["positive np", "positive profit", "rising profit", "profit up", "profits tend to rise", "profit tends to rise"]],
-  ["price_down", ["price up", "rising price", "increase in price", "price increase", "prices tend to rise", "prices rise", "price rise"]],
+  ["price_down", ["price up", "rising price", "increase in price", "price increase", "prices tend to rise", "prices rise", "price rise", "price is rising", "the price is rising"]],
   ["ta_down", ["ta up", "rising ta"]],
   ["ta_up", ["ta down", "falling ta"]],
   ["eq_ar_falling", ["rising eqar", "eqar rising", "eq ar rising", "high eqar", "high equity", "rising equity", "equity risk premium is rising", "rising equity risk"]],
@@ -38,14 +38,12 @@ export const GATE_OCCUPANCY_LABEL: Array<[string, string[]]> = [
   ["overnight_p10", ["at 10%", "funding at 10", "10 percent", "10% predicts", "funding is loose", "loose"]],
   ["pb_rising", ["is rising", "pb rose", "rising price to book", "price to book is rising"]],
   ["np_negative", ["profitability is weak", "weak profitability", "weak profit"]],
+  ["crowded_margin", ["market is crowded"]],
 ];
 
 export const EXTRA_TITLE_GATES: Array<[string, string]> = [
-  ["risk appetite", "eq_ar_falling"],
-  ["appetite for risk", "eq_ar_falling"],
-  ["risk premia", "eq_ar_falling"],
-  ["risk premium", "eq_ar_falling"],
-  ["risk arbitrage", "eq_ar_falling"],
+  ["low pb", "cheap_pb"],
+  ["low price to book", "cheap_pb"],
   ["tight funding", "tight_funding"],
   ["funding is tight", "tight_funding"],
   ["funding tight", "tight_funding"],
@@ -72,6 +70,30 @@ export const EXTRA_TITLE_GATES: Array<[string, string]> = [
   ["poor roe", "roe_low"],
   ["profitability is weak", "np_negative"],
   ["weak profitability", "np_negative"],
+];
+
+export const OCCUPANCY_EXTRA_TITLE: Array<[string, string[]]> = [
+  ["10 percent", ["overnight_p10"]],
+  ["10% predicts", ["overnight_p10"]],
+  ["appetite for risk", ["eq_ar_falling", "eq_ar_high", "eq_ar_low", "eq_ar_rising"]],
+  ["funding at 10", ["overnight_p10"]],
+  ["funding is loose", ["overnight_p10"]],
+  ["low repo", ["repo_3m_down"]],
+  ["market is crowded", ["crowded_margin"]],
+  ["price to book is rising", ["pb_rising"]],
+  ["profitability is weak", ["np_negative"]],
+  ["repo is low", ["repo_3m_down"]],
+  ["repo rates are low", ["repo_3m_down"]],
+  ["rising price to book", ["pb_rising"]],
+  ["risk appetite", ["eq_ar_falling", "eq_ar_high", "eq_ar_low", "eq_ar_rising"]],
+  ["risk arbitrage", ["eq_ar_falling", "eq_ar_high", "eq_ar_low", "eq_ar_rising"]],
+  ["risk premia", ["eq_ar_falling", "eq_ar_high", "eq_ar_low", "eq_ar_rising"]],
+  ["risk premium", ["eq_ar_falling", "eq_ar_high", "eq_ar_low", "eq_ar_rising"]],
+  ["ta signals", ["ta_down", "ta_up"]],
+  ["technical analysis", ["ta_down", "ta_up"]],
+  ["technical signal", ["ta_down", "ta_up"]],
+  ["weak profit", ["np_negative"]],
+  ["weak profitability", ["np_negative"]],
 ];
 
 export const PROPOSE_CONTRADICTORY_GATE_PAIRS: string[][] = [
@@ -113,4 +135,5 @@ export const OCCUPANCY_LABEL_EXCEPTIONS: Array<[string, string[]]> = [
   ["overnight_p10", ["easiest", "percentile", "decile", "p10"]],
   ["pb_rising", ["median", "pit median", "above median"]],
   ["np_negative", ["net profit", "np is negative", "np negative"]],
+  ["crowded_margin", ["margin is crowded", "margin crowding"]],
 ];

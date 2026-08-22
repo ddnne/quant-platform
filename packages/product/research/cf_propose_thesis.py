@@ -29,6 +29,7 @@ from research.unique_logic.propose_review_tables import (
     PROPOSE_CONTRADICTORY_GATE_PAIRS,
     PROPOSE_TWEAK_WORDS,
     occupancy_exception_tokens,
+    occupancy_extra_families,
 )
 
 PROPOSE_ALLOWED_DATASETS: frozenset[str] = frozenset(
@@ -187,10 +188,16 @@ def review_proposal_row(proposal: Mapping[str, Any]) -> dict[str, Any]:
                 continue
             reasons.append("occupancy_label_only")
             break
-        for phrase, gate in EXTRA_TITLE_GATES:
-            if phrase in polar_blob and gate not in kept_set:
-                reasons.append("occupancy_label_only")
-                break
+        if "occupancy_label_only" not in reasons:
+            for phrase, owners in occupancy_extra_families():
+                if phrase in polar_blob and kept_set.isdisjoint(owners):
+                    reasons.append("occupancy_label_only")
+                    break
+            else:
+                for phrase, gate in EXTRA_TITLE_GATES:
+                    if phrase in polar_blob and gate not in kept_set:
+                        reasons.append("occupancy_label_only")
+                        break
         for combo, _reason in SPARSE_GATE_COMBOS:
             if combo <= kept_set:
                 reasons.append("sparse_gate_combo")
