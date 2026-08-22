@@ -159,16 +159,6 @@ def _collect_event_entries(
                 "entry_date": str(entry_date)[:10],
                 "surprise": float(surprise),
                 "sign": float(sgn),
-                "eps": ev.get("eps"),
-                "prior_eps": ev.get("prior_eps"),
-                "bps": ev.get("bps"),
-                "roe": ev.get("roe"),
-                "div_ann": ev.get("div_ann"),
-                "np": ev.get("np"),
-                "eq": ev.get("eq"),
-                "ta": ev.get("ta"),
-                "eq_ar": ev.get("eq_ar"),
-                "prior_ta": ev.get("prior_ta"),
             }
             code_entries.append(rec)
             entries.append(rec)
@@ -194,11 +184,7 @@ def _held_from_event_entries(
     accept: Mapping[str, bool] | None = None,
     sign_mult_by_key: Mapping[str, float] | None = None,
 ) -> dict[str, dict[str, float | None]]:
-    """Build last-event-wins held book; accept[entry_key] gates entries.
-
-    sign_mult_by_key: optional per-entry sign multiplier (e.g. -1 short side).
-    Missing multiplier after accept is skip (no invent).
-    """
+    """Last-event-wins held book. Missing sign_mult after accept is skip."""
     h = int(collected["hold_days"])
     held_by_code_date: dict[str, dict[str, float | None]] = {}
     for code, pack in (collected.get("per_code") or {}).items():
@@ -241,7 +227,6 @@ def _policy_flags(spec: Mapping[str, Any]) -> dict[str, Any]:
         "invent_fill": False,
         "promote_as_main": False,
         "go": False,
-        "research_only": True,
     }
 
 
@@ -331,9 +316,6 @@ def evaluate_event_funding_stress_skip_daily_mtm(
         collected,
         min_hist=min_hist,
         gate="overnight_lt_pit_trailing_median",
-        n_eligible_pre_gate=collected["n_eligible"],
-        extra_dataset="fins_summary+jsda_tokyo_repo_rates",
-        data_path="local_real_mirrors+local_sqlite_fins+repo",
     )
     if not overnight_by_date:
         return {
@@ -419,9 +401,6 @@ def evaluate_curve_steep_event_confirm_daily_mtm(
         collected,
         steep_threshold=steep,
         gate="repo_curve_spread_gt_steep_threshold",
-        n_eligible_pre_gate=collected["n_eligible"],
-        extra_dataset="fins_summary+jsda_tokyo_repo_rates",
-        data_path="local_real_mirrors+local_sqlite_fins+repo",
     )
     if not spread_by:
         return {
@@ -497,8 +476,6 @@ def evaluate_disclosure_cluster_mom_gate_daily_mtm(
         "cluster_lookback": lookback,
         "min_hist": min_hist,
         "gate": "n_recent_disclosures_ge_pit_median",
-        "extra_dataset": "fins_summary",
-        "data_path": "local_real_mirrors+local_sqlite_fins_summary",
     }
     n_disc = sum(len(v) for v in (events_by_code or {}).values())
     if n_disc == 0:
@@ -576,7 +553,6 @@ def evaluate_disclosure_cluster_mom_gate_daily_mtm(
         "n_gated_off_days": n_gated_off,
         "n_gate_on_days": n_gate_on,
         "n_median_unformed_days": n_median_unformed,
-        "n_disclosure_prints": n_disc,
         "n_bar_dates": len(dates),
     }
     return held_book_daily_mtm(
@@ -627,8 +603,6 @@ def evaluate_surprise_xs_rank_hold_daily_mtm(
         short_frac=sf,
         sign_flip=sign_flip,
         n_eligible=collected["n_eligible"],
-        extra_dataset="fins_summary",
-        data_path="local_real_mirrors+local_sqlite_fins_summary",
     )
     if collected["n_events"] == 0:
         return _no_events_pack(spec, extra, n_days=len(dates))

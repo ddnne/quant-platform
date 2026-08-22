@@ -159,14 +159,6 @@ def _collect(
     return _attach_disc_time(collected, events_by_code)
 
 
-def _base_extra(
-    spec: Mapping[str, Any], collected: Mapping[str, Any], **more: Any
-) -> dict[str, Any]:
-    return event._base_extra(
-        spec, collected, n_eligible_pre_gate=collected["n_eligible"], **more
-    )
-
-
 def _empty_extra_or_events(
     *,
     spec: Mapping[str, Any],
@@ -211,13 +203,11 @@ def evaluate_large_surprise_event_hold_daily_mtm(
         period_start=period_start,
         period_end=period_end,
     )
-    extra = _base_extra(
+    extra = event._base_extra(
         spec,
         collected,
         min_hist=min_hist,
         gate="abs_surprise_ge_pit_trailing_median",
-        extra_dataset="fins_summary",
-        data_path="local_real_mirrors+local_sqlite_fins_summary",
     )
     blocked = _empty_extra_or_events(
         spec=spec,
@@ -252,7 +242,6 @@ def evaluate_large_surprise_event_hold_daily_mtm(
             "n_entered": n_entered,
             "n_skip_median_unformed": n_skip_unformed,
             "n_skip_small_surprise": n_skip_small,
-            "n_abs_surprise_history": len(pairs),
         }
     )
     return _finish_event_book(
@@ -283,12 +272,10 @@ def evaluate_afterclose_only_event_hold_daily_mtm(
         period_start=period_start,
         period_end=period_end,
     )
-    extra = _base_extra(
+    extra = event._base_extra(
         spec,
         collected,
         gate="disctime_ge_session_close",
-        extra_dataset="fins_summary",
-        data_path="local_real_mirrors+local_sqlite_fins_summary",
     )
     blocked = _empty_extra_or_events(
         spec=spec,
@@ -353,13 +340,11 @@ def evaluate_event_pre_mom_agree_hold_daily_mtm(
         period_start=period_start,
         period_end=period_end,
     )
-    extra = _base_extra(
+    extra = event._base_extra(
         spec,
         collected,
         momentum_n=mom_n,
         gate="own_pre_entry_mom_sign_agrees",
-        extra_dataset="fins_summary",
-        data_path="local_real_mirrors+local_sqlite_fins_summary",
     )
     blocked = _empty_extra_or_events(
         spec=spec,
@@ -438,14 +423,12 @@ def evaluate_event_margin_crowding_skip_daily_mtm(
         period_start=period_start,
         period_end=period_end,
     )
-    extra = _base_extra(
+    extra = event._base_extra(
         spec,
         collected,
         min_hist=min_hist,
         stale_calendar_days=stale_days,
         gate="name_margin_lt_pit_trailing_median",
-        extra_dataset="fins_summary+markets_margin_interest",
-        data_path="local_real_mirrors+local_sqlite_fins+margin",
     )
     margin_ok = bool(margin_by_code) and any(
         bool(v) for v in (margin_by_code or {}).values()

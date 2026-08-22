@@ -1,31 +1,17 @@
 /// <reference types="@cloudflare/workers-types" />
 /**
- * Phase 3.5 — J-Quants Premium **core** ingestion closed loop on Cloudflare.
+ * Phase 3.5 — J-Quants Premium core ingestion on Cloudflare.
  *
- * Closed-loop contract (Phase 3.5 handoff):
- *   1. Scheduled run on CF (Workers Cron → `scheduled`).
- *   2. Secrets only on CF. Independent `INGESTION_RUN_TOKEN` and
- *      `DATA_EXPORT_TOKEN` capabilities gate write and export paths.
- *   3. Persist R2 raw + D1 structured (R2 + D1 bindings).
- *   4. Incremental primary; backfill separable (date params on `/v1/run`).
- *   5. Auto validation with explicit pass/fail per dataset.
- *   6. Failures not treated as success — a dataset that errors is recorded
- *      with `status='fail'` and surfaces in `/health` + the run summary.
- *   7. Local-readable path — the paginated `/v1/export/d1` endpoint exposes
- *      D1 structured tables so `scripts/sync_d1_to_sqlite.py` can build a
- *      local PIT DB.
- *   8. Incremental local sync consumes `/v1/export/changes` by monotonic
- *      `change_seq`; it never rescans mutable fact tables for correctness.
- *   9. Required datasets: see `catalog.ts` (mirrors Python
- *      `PREMIUM_CORE_DATASETS`).
+ * Secrets on CF; INGESTION_RUN_TOKEN / DATA_EXPORT_TOKEN gate write/export.
+ * R2 raw + D1 structured. Incremental primary; date params on `/v1/run`.
+ * Per-dataset pass/fail (failures are not success). Local PIT via
+ * `/v1/export/d1` and `/v1/export/changes`. Required set: `catalog.ts`.
  *
  * Endpoints:
- *   GET  /health                        — readiness + last-run summary
- *   POST /v1/run[?dataset=..&from=..&to=..]  — manual trigger (auth gated)
- *   GET  /v1/export/d1?table=..&cursor=..&limit=.. — JSON page of a D1 table
- *                                                    (auth gated)
- *   GET  /v1/export/changes?after_seq=..&limit=.. — append-only row versions
- *                                                   (auth gated)
+ *   GET  /health
+ *   POST /v1/run[?dataset=..&from=..&to=..]
+ *   GET  /v1/export/d1?table=..&cursor=..&limit=..
+ *   GET  /v1/export/changes?after_seq=..&limit=..
  */
 
 import { PREMIUM_CORE_DATASETS, isPremiumCore, datasetById, type DatasetSpec } from "./catalog";
@@ -74,13 +60,9 @@ const RETRY_MAX_DELAY_MS = 8_000;
 const RETRY_429_BASE_DELAY_MS = 1_000;
 const RETRY_429_MAX_DELAY_MS = 3_000;
 
-// Persistent run-state keys (KV would be cleaner, but D1 is already here).
-const STATE_LAST_RUN = "last_run_summary";
 const COVERAGE_POLICY_VERSION = "collection-coverage/v2";
 
-// ---------------------------------------------------------------------------
 // time helpers (JST = UTC+9)
-// ---------------------------------------------------------------------------
 
 function toJstIso(d: Date): string {
   const ms = d.getTime() + JST_OFFSET_MS;
@@ -92,11 +74,7 @@ function todayJst(): string {
   return toJstIso(new Date()).slice(0, 10);
 }
 
-/** Prefer last completed JST calendar day for market-wide OHLC pulls.
- *  Using "today" before the session is finished often yields empty `data` which
- *  the validator treats as pass — hiding missing bars. Cron runs hourly; day-1
- *  is safer for equities/derivatives market-wide snapshots.
- */
+/** Last completed JST day — "today" before close often yields empty `data`. */
 function defaultMarketDayJst(): string {
   return daysAgoJst(1);
 }
@@ -147,17 +125,14 @@ function requestQueries(
     return [{ [dayKey]: opts.today || defaultMarketDayJst() }];
   }
 
-  // range: only for endpoints that accept bare from/to without code
-  // (calendar, earnings-calendar, topix, investor-types).
+  // range: calendar / earnings-calendar / topix / investor-types (bare from/to).
   const from = opts.from || (opts.to ? opts.to : daysAgoJst(5));
   const to = opts.to || todayJst();
   if (from > to) throw new Error("from must be on or before to");
   return [{ from, to }];
 }
 
-// ---------------------------------------------------------------------------
-// R2 raw path layout: raw/{dataset}/{run_id}/page-NNNNNN.json + manifest.json
-// ---------------------------------------------------------------------------
+// R2 raw: raw/{dataset}/{run_id}/page-NNNNNN.json + manifest.json
 
 function rawRunPrefix(dataset: string, runId: number | null, when: Date): string {
   const fallback = `uncommitted-${when.toISOString().replace(/[-:.TZ]/g, "")}`;
@@ -172,9 +147,6 @@ async function sha256(value: string): Promise<string> {
     .join("");
 }
 
-// ---------------------------------------------------------------------------
-// fetch one dataset (paginated)
-// ---------------------------------------------------------------------------
 
 interface FetchOutcome {
   rows: Record<string, unknown>[];
@@ -209,12 +181,7 @@ function sleep(ms: number): Promise<void> {
   return new Promise<void>((resolve) => setTimeout(resolve, ms));
 }
 
-/**
- * Retry a D1 prepare/batch call on transient transport failures
- * ("Network connection lost", 5xx-ish D1 errors). Same budget as HTTP
- * fetch retries so a single huge options upsert does not die on the first
- * blip mid-chunk loop.
- */
+/** Retry D1 prepare/batch on transient transport failures (same budget as HTTP). */
 async function d1WithRetry<T>(op: () => Promise<T>): Promise<T> {
   let attempt = 0;
   while (true) {
@@ -238,9 +205,6 @@ async function fetchOnePage(
   fetchImpl: typeof fetch,
   limiter: RateLimiter,
 ): Promise<{ resp: Response | null; error: string; status: number; retriesUsed: number }> {
-  // 3 retries per HTTP request, scoped to this single page fetch (matches
-  // the Python `with_retry(retries=3)` budget per call). Per-dataset
-  // isolation: a sibling dataset's failure never consumes this budget.
   let attempt = 0;
   while (true) {
     await limiter.acquire();
@@ -308,13 +272,6 @@ async function fetchDataset(
   opts: { from?: string; to?: string; today?: string },
   fetchImpl: typeof fetch,
   limiter: RateLimiter,
-  /**
-   * Optional streaming hook: called after each API page. When provided and
-   * the caller sets ``retainRows=false``, page rows are NOT buffered in
-   * ``out.rows`` (only ``rowsSeen`` is tracked via a synthetic counter on
-   * the outcome). Used for huge option chains so we can D1-upsert page by
-   * page without holding 40k+ rows in memory twice.
-   */
   onPage?: (
     pageRows: Record<string, unknown>[],
     page: { number: number; raw: string; httpStatus: number },
@@ -405,11 +362,6 @@ async function fetchDataset(
   return out;
 }
 
-// Latest source-side event_date observed in a batch, as a YYYY-MM-DD string.
-// Used by the watermark upsert so consumers can ask "how stale is dataset X?"
-// without scanning jquants_records. Returns null only when every row lacks a
-// recognisable Date-like field — we then leave the watermark's event_date
-// untouched rather than overwriting a known-good value with emptiness.
 function latestEventDate(rows: Record<string, unknown>[]): string | null {
   let best: string | null = null;
   const candidates = ["DateTime", "Date", "DisclosedDate", "AnnouncementDate", "DiscDate"];
@@ -426,19 +378,12 @@ function latestEventDate(rows: Record<string, unknown>[]): string | null {
   return best;
 }
 
-// Watermark upsert — one row per dataset, refreshed after every successful
-// ingest so `scripts/sync_d1_to_sqlite.py --incremental` can short-circuit
-// clean datasets. Failure to advance the watermark must never block the run,
-// so callers swallow D1 errors here and only log them in the dataset detail.
 async function upsertWatermark(
   env: Env,
   dataset: string,
   lastEventDate: string | null,
   lastIngestedAt: string,
 ): Promise<void> {
-  // last_export_cursor tracks the highest change_seq for this dataset so
-  // Ops MCP sync_status can compute lag vs MAX(ingestion_change_log.change_seq).
-  // NULL would leave every dataset stuck at EXPORT_CURSOR_NULL forever.
   await env.DB.prepare(
     `INSERT INTO ingestion_watermarks
        (dataset, last_event_date, last_ingested_at, last_export_cursor)
@@ -458,9 +403,6 @@ async function upsertWatermark(
   ).bind(dataset, lastEventDate, lastIngestedAt, dataset).run();
 }
 
-// ---------------------------------------------------------------------------
-// persistence: R2 raw + D1 structured
-// ---------------------------------------------------------------------------
 
 interface DatasetResult {
   dataset: string;
@@ -637,9 +579,6 @@ async function ingestOne(
 ): Promise<DatasetResult> {
   const startedAt = toJstIso(new Date());
   const when = new Date();
-  // Stream D1 upserts page-by-page for known huge endpoints (options chains).
-  // Holding the full response then upserting doubles memory and blows Worker
-  // limits (error 1101 / ~5min wall). Small datasets keep the classic path.
   const streamD1 = /options/i.test(spec.id);
   let insertedTotal = 0;
   let revisionsTotal = 0;
@@ -780,9 +719,6 @@ async function ingestOne(
     throw new Error(`successful collection has no segment for ${spec.id}`);
   }
   await writeCollectionReceipt(env, spec, runId, segment, {
-    // Events are counted as source items so a reconciled zero-event window is
-    // meaningful. Scheduled/calendar collections count successful source
-    // queries; raw/structured rows are reconciled independently below.
     observedItems: spec.coverage.expected_frequency === "event_driven"
       ? outcome.rowsSeen
       : outcome.queries.length,
@@ -798,9 +734,6 @@ async function ingestOne(
 
   const availableBounds = await selectAvailableBounds(env, spec.id);
 
-  // Advance the per-dataset watermark. A failure here is non-fatal — the
-  // structured rows are already durable in jquants_records — but we surface
-  // it in the run detail so ops can spot a degrading D1 binding.
   const ingestedAt = toJstIso(when);
   let watermarkDetail = "";
   try {
@@ -863,18 +796,11 @@ async function upsertRecords(
 ): Promise<UpsertSummary> {
   if (rows.length === 0) return { inserted: 0, revisions: 0 };
   const ingestedAt = toJstIso(when);
-  // De-duplicate a response by business key, retaining its last occurrence.
-  // `available_at` is trusted metadata selected only by the canonical dataset
-  // contract. A same-named upstream payload field remains in raw/payload for
-  // provenance, but it is never allowed to override the PIT policy.
   const byKey = new Map<string, StructuredRecord>();
   for (const row of rows) {
     const nk = await naturalKey(row, spec);
     const ev = pickEventTime(row, spec);
     const availableAt = pickAvailableAt(row, spec.id, ingestedAt);
-    // Stable key ordering makes payload comparison semantic rather than
-    // dependent on JSON object property order. The generated PIT timestamps
-    // are separate columns, so an hourly re-fetch does not look amended.
     const payload = stableJson(row);
     byKey.set(nk, {
       source: "jquants",
@@ -889,9 +815,7 @@ async function upsertRecords(
   }
   const records = [...byKey.values()];
 
-  // P0: high-volume structured → R2 only (do not grow D1 full-history).
   if (isR2Only(spec.id, env)) {
-    // equities_master: SCD2 event log (not full-universe daily dump).
     if (spec.id === "equities_master") {
       const scd2 = await writeMasterScd2(
         env,
@@ -981,16 +905,7 @@ async function upsertRecords(
     return { inserted: records.length, revisions: 0 };
   }
 
-  // D1 permits at most 100 bound parameters per statement. Each record has
-  // eight fields → floor(100/8)=12 rows per VALUES statement.
-  //
-  // Per-chunk round-trips die on large option chains (~40k rows): thousands of
-  // sequential D1 calls blow Worker CPU/time (error 1101). Archive, change-log,
-  // and upsert statements are therefore packed into D1 transactional batches.
-  // Revision semantics are identical at every batch size (F0-F).
-  const CHUNK = Math.floor(100 / 8);
-  // Prefer multi-statement batches whenever the page/batch is non-trivial —
-  // sequential 12-row round-trips thrash Worker time on options pagination.
+  const CHUNK = Math.floor(100 / 8); // D1 max 100 binds; 8 fields/row → 12 rows.
   const large = records.length > 200;
   const D1_BATCH_STMTS = large ? 48 : 3;
   let inserted = 0;
@@ -1061,9 +976,7 @@ async function upsertRecords(
         AND current.natural_key = incoming.natural_key
        WHERE current.payload IS NOT incoming.payload`;
 
-    // Append only genuinely new/amended row versions. This statement must run
-    // before the primary upsert in the same D1 batch so it compares against
-    // the displaced current value.
+    // Change feed before primary upsert so it sees the displaced current row.
     const changeSql =
       `WITH incoming
        (source, dataset, natural_key, event_time, available_at, ingested_at, payload, raw_payload)
@@ -1101,8 +1014,6 @@ async function upsertRecords(
       continue;
     }
 
-    // Small-batch path keeps an exact insert count; persistence semantics are
-    // the same archive → change feed → primary upsert sequence as large pages.
     const existing = await d1WithRetry(() =>
       env.DB.prepare(
         `SELECT natural_key FROM jquants_records
@@ -1123,8 +1034,7 @@ async function upsertRecords(
 
   await flush();
   if (large) {
-    // Upper bound — existence SELECT was skipped to keep RTT low.
-    inserted = records.length;
+    inserted = records.length; // existence SELECT skipped to keep RTT low
   }
 
   return { inserted, revisions };
@@ -1153,9 +1063,6 @@ async function writeValidation(env: Env, runId: number, res: DatasetResult): Pro
   ).run();
 }
 
-// ---------------------------------------------------------------------------
-// run summary persistence (last-run blob for /health)
-// ---------------------------------------------------------------------------
 
 export interface RunSummary {
   startedAt: string;
@@ -1174,18 +1081,6 @@ export interface RunSummary {
   failures: { dataset: string; detail: string }[];
 }
 
-async function persistSummary(env: Env, summary: RunSummary): Promise<void> {
-  // We persist by overwriting a fixed id so /health only sees the latest.
-  await env.DB.prepare(
-    `INSERT INTO ingestion_run_log (ran_at, source, runtime, status, detail)
-     VALUES (?, 'jquants', 'cloudflare', ?, ?)`,
-  ).bind(
-    summary.startedAt,
-    summary.status,
-    JSON.stringify(summary).slice(0, 8000),
-  ).run();
-}
-
 async function lastRunSummary(env: Env): Promise<RunSummary | null> {
   const r = await env.DB.prepare(
     `SELECT detail FROM ingestion_run_log
@@ -1200,9 +1095,6 @@ async function lastRunSummary(env: Env): Promise<RunSummary | null> {
   }
 }
 
-// ---------------------------------------------------------------------------
-// run all (or one) dataset
-// ---------------------------------------------------------------------------
 
 async function runIngestion(
   env: Env,
@@ -1212,11 +1104,8 @@ async function runIngestion(
 ): Promise<RunSummary> {
   const startedAt = toJstIso(new Date());
 
-  // Applying migration 0005 deliberately disables writers until the
-  // application-level canonical rebuild and audit reaches READY.
   await requireNaturalKeysV2Ready(env.DB);
 
-  // Start a run row so validation rows can FK to it.
   const ins = await env.DB.prepare(
     `INSERT INTO ingestion_run_log (ran_at, source, runtime, status, detail)
      VALUES (?, 'jquants', 'cloudflare', 'running', ?)`,
@@ -1258,12 +1147,9 @@ async function runIngestion(
     if (runId !== null) await writeValidation(env, runId, result);
   }
 
-  // P0-4: shared rate limiter (120 ms floor → 500/min theoretical) and
-  // bounded concurrency for parallel dataset ingestion.
   const limiter = new RateLimiter(RATE_LIMIT_INTERVAL_MS);
   const concurrency = clampConcurrency(env.INGEST_CONCURRENCY);
 
-  // Preserve input order in the results array for deterministic summaries.
   const orderedResults: DatasetResult[] = new Array(specs.length);
   await runWithConcurrency(specs, concurrency, async (spec, index) => {
     const datasetStartedAt = toJstIso(new Date());
@@ -1322,7 +1208,6 @@ async function runIngestion(
     failures,
   };
 
-  // Update the run row with the final status.
   if (runId !== null) {
     await env.DB.prepare(
       `UPDATE ingestion_run_log SET status = ?, detail = ? WHERE id = ?`,
@@ -1339,12 +1224,6 @@ function clampConcurrency(raw: string | undefined): number {
   return Math.min(MAX_CONCURRENCY, parsed);
 }
 
-/**
- * Run ``worker`` over ``items`` with at most ``concurrency`` parallel
- * invocations. Each ``worker`` call is fully isolated — a rejection from one
- * does not abort the others. Order is preserved by index even though
- * execution is concurrent.
- */
 async function runWithConcurrency<T>(
   items: readonly T[],
   concurrency: number,
@@ -1356,12 +1235,10 @@ async function runWithConcurrency<T>(
   async function runner(): Promise<void> {
     while (cursor < items.length) {
       const myIndex = cursor++;
-      // Per-item try/catch keeps one failure from aborting siblings.
       try {
         await worker(items[myIndex], myIndex);
       } catch {
-        // The worker is responsible for surfacing its own error in the
-        // result object; swallow here so siblings continue.
+        /* worker records its own failure */
       }
     }
   }
@@ -1370,9 +1247,6 @@ async function runWithConcurrency<T>(
   await Promise.all(runners);
 }
 
-// ---------------------------------------------------------------------------
-// HTTP entrypoints
-// ---------------------------------------------------------------------------
 
 function authorized(request: Request, expected: string | undefined): boolean {
   if (!expected) return false;
@@ -1444,7 +1318,6 @@ async function handleExportD1(
   await requireNaturalKeysV2Ready(env.DB);
   const url = new URL(request.url);
   const table = url.searchParams.get("table") || "jquants_records";
-  // Allow only our known tables (defence in depth against SQL injection).
   const allowed = new Set([
     "jquants_records", "jquants_listed_info", "jquants_daily_bars",
     "jquants_market_calendar",
@@ -1465,8 +1338,6 @@ async function handleExportD1(
     return json({ error: "cursor must be a non-negative integer" }, 400);
   }
 
-  // rowid is a stable, indexed cursor for every exportable D1 table. Fetch
-  // one extra row so has_more is exact without an unbounded COUNT(*).
   const r = await env.DB.prepare(
     `SELECT rowid AS __export_cursor, * FROM ${table}
      WHERE rowid > ? ORDER BY rowid LIMIT ?`,
@@ -1563,7 +1434,6 @@ export default {
   async scheduled(
     _event: ScheduledEvent, env: Env, ctx: ExecutionContext,
   ): Promise<void> {
-    // Cron-driven closed loop. Use the global `fetch` (Workers runtime).
     ctx.waitUntil(runIngestion(env, {}, "cron", fetch));
   },
 };

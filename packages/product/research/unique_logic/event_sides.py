@@ -78,10 +78,6 @@ def _funding_base_extra(
         spec,
         collected,
         min_hist=min_hist,
-        n_eligible_pre_gate=collected["n_eligible"],
-        extra_dataset="fins_summary+jsda_tokyo_repo_rates",
-        data_path="local_real_mirrors+local_sqlite_fins+repo",
-        sign_flip_is_not_a_kill=True,
     )
 
 
@@ -158,7 +154,6 @@ def evaluate_event_funding_easy_short_daily_mtm(
             "n_skip_missing_overnight": int(gate["n_skip_missing"]),
             "n_skip_median_unformed": int(gate["n_skip_no_median"]),
             "n_skip_funding_stress": int(gate["n_stress"]),
-            "occupancy_vs_parent": "same_as_skip",
         }
     )
     return _finish_signed_event_book(
@@ -215,7 +210,6 @@ def evaluate_event_funding_stress_ls_daily_mtm(
             "n_skip_missing_overnight": int(gate["n_skip_missing"]),
             "n_skip_median_unformed": int(gate["n_skip_no_median"]),
             "n_skip_funding_stress": 0,
-            "occupancy_vs_parent": "expanded_vs_skip",
         }
     )
     return _finish_signed_event_book(
@@ -252,7 +246,5 @@ def evaluate_surprise_xs_rank_flip_daily_mtm(
         period_end=period_end,
     )
     pack["logic_id"] = spec["logic_id"]
-    pack["occupancy_vs_parent"] = "same_as_rank_hold"
-    pack["sign_flip_is_not_a_kill"] = True
     return pack
 

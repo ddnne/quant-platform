@@ -80,7 +80,6 @@ def evaluate_event_funding_adaptive_side_daily_mtm(
         "side": "trail_k_orig_vs_flip",
         "trail_k": trail_k,
         "trail_min": trail_min,
-        "occupancy_vs_parent": "same_as_skip",
     }
     blocked = event_sides._blocked_overnight_or_events(
         spec=spec,
@@ -184,8 +183,6 @@ def evaluate_surprise_xs_rank_adaptive_daily_mtm(
         period_end=period_end,
     )
     orig["logic_id"] = spec["logic_id"]
-    orig["occupancy_vs_parent"] = "same_as_rank_hold"
-    orig["sign_flip_is_not_a_kill"] = True
     orig["adaptive_side"] = True
     orig["trail_k"] = trail_k
     orig["trail_min"] = trail_min
