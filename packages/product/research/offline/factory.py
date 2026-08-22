@@ -40,7 +40,7 @@ This is a **research factory**, not operational Mass / READY / live:
 Building blocks reused
 ----------------------
 * ``hypothesis_classes`` — family ids / datasets
-* ``class_signals`` / ``class_hyp_eval`` — pure bar evaluators
+* ``class_signals`` — pure bar evaluators
 * ``cost_models`` · ``sign_selection`` · ``stats_metrics``
 * ``cf_mass_eval_job`` · ``cf_daily_path_job``
 
@@ -2639,7 +2639,7 @@ def load_batch_data_context(
         resolve_margin_path,
         select_eval_universe,
     )
-    from research.class_hyp_eval import (
+    from research.eval_windows import (
         DEFAULT_PERIODS,
         DEFAULT_PERIODS_Q4,
     )

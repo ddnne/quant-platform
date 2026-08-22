@@ -70,4 +70,64 @@ HONEST_3Y_WINDOWS: tuple[dict[str, Any], ...] = (
     },
 )
 
+# Real multi-year windows (≥6). Full-prefer 2015/19/21/23 from COMPLETE-backed
+# mirrors; Q4 for 2017/2025.
+DEFAULT_REAL_MULTIYEAR_PERIODS: tuple[dict[str, Any], ...] = (
+    {
+        "period_id": "y2015_full",
+        "year": 2015,
+        "period_start": "2015-01-05",
+        "period_end": "2015-10-21",
+        "window_kind": "full_prefer",
+    },
+    {
+        "period_id": "y2017_q4",
+        "year": 2017,
+        "period_start": "2017-09-01",
+        "period_end": "2017-12-29",
+        "window_kind": "q4",
+    },
+    {
+        "period_id": "y2019_full",
+        "year": 2019,
+        "period_start": "2019-01-04",
+        "period_end": "2019-10-18",
+        "window_kind": "full_prefer",
+    },
+    {
+        "period_id": "y2021_full",
+        "year": 2021,
+        "period_start": "2021-01-04",
+        "period_end": "2021-10-15",
+        "window_kind": "full_prefer",
+    },
+    {
+        "period_id": "y2023_full",
+        "year": 2023,
+        "period_start": "2023-01-04",
+        "period_end": "2023-10-13",
+        "window_kind": "full_prefer",
+    },
+    {
+        "period_id": "y2025_q4",
+        "year": 2025,
+        "period_start": "2025-09-01",
+        "period_end": "2025-12-29",
+        "window_kind": "q4",
+    },
+)
+
+DEFAULT_PERIODS = DEFAULT_REAL_MULTIYEAR_PERIODS  # alias
+
+# Legacy Q4-only periods (W63/W79 baseline) for regression compare.
+DEFAULT_PERIODS_Q4: tuple[dict[str, Any], ...] = (
+    {"period_id": "y2015_q4", "year": 2015, "period_start": "2015-09-01", "period_end": "2015-12-29"},
+    {"period_id": "y2017_q4", "year": 2017, "period_start": "2017-09-01", "period_end": "2017-12-29"},
+    {"period_id": "y2019_q4", "year": 2019, "period_start": "2019-09-01", "period_end": "2019-12-29"},
+    {"period_id": "y2021_q4", "year": 2021, "period_start": "2021-09-01", "period_end": "2021-12-29"},
+    {"period_id": "y2023_q4", "year": 2023, "period_start": "2023-09-01", "period_end": "2023-12-29"},
+    {"period_id": "y2025_q4", "year": 2025, "period_start": "2025-09-01", "period_end": "2025-12-29"},
+)
+
 # Re-export: pin tuples live in research.freezes.
+

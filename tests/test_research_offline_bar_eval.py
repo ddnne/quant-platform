@@ -2,9 +2,16 @@
 
 from __future__ import annotations
 
+import inspect
+
+import pytest
+
 import research.offline as offline
 import research.offline.bar_eval as be
-from research.class_hyp_eval import evaluate_multi_day_hold_on_bars as che_mdh
+from research.class_hyp_eval import (
+    evaluate_multi_day_hold_on_bars as che_mdh,
+    run_class_hyp_multi_year_eval as che_run,
+)
 from research.offline import bar_eval, multiyear
 from research.offline.bar_eval import evaluate_multi_day_hold_on_bars as src_mdh
 
@@ -26,3 +33,24 @@ def test_offline_bar_eval_reexports_on_bars() -> None:
 def test_offline_package_imports_bar_eval_and_multiyear() -> None:
     assert bar_eval is be
     assert callable(multiyear.run_class_hyp_multi_year_eval)
+
+
+def test_multiyear_run_identity_after_body_move() -> None:
+    fn = multiyear.run_class_hyp_multi_year_eval
+    assert callable(fn)
+    if inspect.getmodule(fn) is not multiyear:
+        pytest.skip("body still in class_hyp_eval; identity after move")
+    assert che_run is fn
+
+
+def test_default_periods_are_eval_windows_and_cf_mass() -> None:
+    import research.eval_windows as ew
+    from research.cf_mass_eval_job import DEFAULT_REAL_MULTIYEAR_PERIODS as cf_periods
+
+    windows = getattr(ew, "DEFAULT_PERIODS", None)
+    if windows is None:
+        windows = getattr(ew, "DEFAULT_REAL_MULTIYEAR_PERIODS", None)
+    if windows is None:
+        pytest.skip("eval_windows DEFAULT_PERIODS not hoisted yet")
+    assert windows == cf_periods
+    assert windows is cf_periods

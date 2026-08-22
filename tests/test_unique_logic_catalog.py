@@ -318,7 +318,7 @@ def test_fins_events_keep_ta_eqar_from_payload() -> None:
 
 
 def test_fins_ta_eqar_stats_see_official_keys() -> None:
-    from research.class_hyp_eval import fins_summary_ta_eqar_stats
+    from research.eval_loaders import fins_summary_ta_eqar_stats
 
     stats = fins_summary_ta_eqar_stats(limit=2000)
     assert stats["invent"] is False

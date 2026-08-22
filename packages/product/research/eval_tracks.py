@@ -69,14 +69,14 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
     {
         "id": "offline_eval_shrink",
         "track": EVAL_TRACK_MID_N,
-        "why": "evaluate_* live in offline/bar_eval; run_class_hyp_multi_year_eval still in class_hyp_eval",
+        "why": "class_hyp_eval is re-export barrel; delete after callers use offline.*",
         "not_a_pass": True,
         "go": False,
     },
     {
         "id": "factory_offline_shrink",
         "track": EVAL_TRACK_LIQ_LARGE,
-        "why": "tests import offline.factory; 3-line shim remains for back-compat; CF must not import either",
+        "why": "factory no longer imports class_hyp; 3-line shim remains",
         "not_a_pass": True,
         "go": False,
     },

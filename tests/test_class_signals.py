@@ -466,7 +466,7 @@ def test_stats_metrics_period_and_bar():
 
 
 def test_class_hyp_eval_pure_on_synthetic_bars():
-    from research.class_hyp_eval import merge_event_calendars
+    from research.eval_loaders import merge_event_calendars
     from research.cost_models import load_repo_rate_series_from_mapping
     from research.offline.bar_eval import (
         evaluate_event_post_on_bars,
@@ -571,8 +571,8 @@ def test_w83_wave_tags_and_default_path_params():
     from research.class_hyp_eval import (
         CLASS_HYP_EVAL_VERSION,
         CLASS_HYP_EVAL_WAVE,
-        run_class_hyp_multi_year_eval,
     )
+    from research.offline.multiyear import run_class_hyp_multi_year_eval
 
     # W95 / w0818e: class-signals/v10 held (+ skew/CM-term/ΔBaseVol deep-dive)
     assert CLASS_SIGNALS_VERSION in {

@@ -236,21 +236,18 @@ def test_cf_daily_path_job_does_not_import_factory() -> None:
         / "product"
         / "research"
     )
-    # eval_universe still lazy-imports class_hyp_eval for margin/repo until
-    # those loaders move; skip the class_hyp AST fail while the token remains.
-    eu_src = (research_dir / "eval_universe.py").read_text(encoding="utf-8")
-    eu_class_hyp_clean = "class_hyp_eval" not in eu_src
+    # AST import walk only — comments that mention class_hyp_eval (eval_universe)
+    # are not imports.
+    banned_both = ("mass_strategy_factory", "class_hyp_eval")
     files: dict[str, tuple[str, ...]] = {
-        "cf_daily_path_job.py": ("mass_strategy_factory", "class_hyp_eval"),
-        "cf_mass_eval_job.py": ("mass_strategy_factory", "class_hyp_eval"),
-        "bar_native_specs.py": ("mass_strategy_factory", "class_hyp_eval"),
-        "eval_universe.py": (
-            ("mass_strategy_factory", "class_hyp_eval")
-            if eu_class_hyp_clean
-            else ("mass_strategy_factory",)
-        ),
-        "eval_loaders.py": ("mass_strategy_factory", "class_hyp_eval"),
-        "unique_logic/event_combos.py": ("mass_strategy_factory", "class_hyp_eval"),
+        "cf_daily_path_job.py": banned_both,
+        "cf_mass_eval_job.py": banned_both,
+        "bar_native_specs.py": banned_both,
+        "eval_universe.py": banned_both,
+        "eval_loaders.py": banned_both,
+        "unique_logic/event_combos.py": banned_both,
+        "eval_windows.py": banned_both,
+        "offline/bar_eval.py": banned_both,
     }
     for name, banned in files.items():
         tree = ast.parse((research_dir / name).read_text(encoding="utf-8"))
