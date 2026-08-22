@@ -7,6 +7,7 @@ import pytest
 from research.offline.factory import propose_profit_hypotheses
 from research.unique_logic import event
 from research.unique_logic.constants import (
+    EVENT_LOGIC_IDS,
     KNOWN_DEMOTED_OR_WEAK,
     KNOWN_WEAK_THESIS,
     LOGIC_CATALOG_HEADLINE_BAN,
@@ -49,14 +50,13 @@ def _events() -> dict[str, list[dict]]:
     }
 
 
+def _spec(lid: str) -> dict:
+    return dict(next(s for s in event.NEW_UNIQUE_LOGIC if s["logic_id"] == lid))
+
+
 def test_event_proposals_are_new_unique_logic_not_catalog_remaps():
     ids = [s["logic_id"] for s in event.NEW_UNIQUE_LOGIC]
-    assert ids == [
-        "event_funding_stress_skip",
-        "curve_steep_event_confirm",
-        "disclosure_cluster_mom_gate",
-        "surprise_xs_rank_hold",
-    ]
+    assert ids == sorted(EVENT_LOGIC_IDS)
     assert len(ids) == 4
     for s in event.NEW_UNIQUE_LOGIC:
         assert s["new_unique_logic"] is True
@@ -84,6 +84,9 @@ def test_event_new_unique_logic_is_yaml_backed():
     assert "NEW_UNIQUE_LOGIC" not in src
     assert "NEW_LS_VARIANTS" not in src
     assert "ADAPTIVE_VARIANTS" not in src
+    event_src = inspect.getsource(event)
+    assert "EVENT_LOGIC_IDS" in event_src
+    assert "event_funding_stress_skip" not in event_src.split("def ", 1)[0]
 
 
 def test_event_propose_profit_hypotheses_accepts_adhoc_no_catalog_map():
@@ -109,7 +112,7 @@ def test_pit_median_is_strictly_prior_dates():
 
 
 def _funding_spec(*, min_hist: int = 5) -> dict:
-    spec = dict(event.NEW_UNIQUE_LOGIC[0])
+    spec = _spec("event_funding_stress_skip")
     spec["params"] = dict(spec["params"])
     spec["params"]["min_hist"] = min_hist
     spec["min_hist"] = min_hist
@@ -172,7 +175,7 @@ def test_curve_steep_event_confirm_skips_non_steep_or_gap():
         bars,
         events,
         curve,
-        spec=event.NEW_UNIQUE_LOGIC[1],
+        spec=_spec("curve_steep_event_confirm"),
         one_way_cost=0.001,
         period_start="2019-01-01",
         period_end="2019-01-28",
@@ -189,7 +192,7 @@ def test_curve_steep_empty_series_is_incomplete_not_approximated():
         _bars(),
         _events(),
         {"spread_by_date": {}},
-        spec=event.NEW_UNIQUE_LOGIC[1],
+        spec=_spec("curve_steep_event_confirm"),
         one_way_cost=0.001,
     )
     assert pack.get("daily_path_complete") is False

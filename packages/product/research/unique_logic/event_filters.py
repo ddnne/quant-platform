@@ -9,17 +9,11 @@ from statistics import median
 from typing import Any, Mapping, Sequence
 
 from research.unique_logic.catalog import yaml_unique_rows
+from research.unique_logic.constants import EVENT_FILTER_LOGIC_IDS
 import research.unique_logic.event as event
 
 NEW_UNIQUE_LOGIC: tuple[dict[str, Any], ...] = tuple(
-    yaml_unique_rows(
-        logic_ids=(
-            "large_surprise_event_hold",
-            "afterclose_only_event_hold",
-            "event_pre_mom_agree_hold",
-            "event_margin_crowding_skip",
-        )
-    )
+    yaml_unique_rows(logic_ids=sorted(EVENT_FILTER_LOGIC_IDS))
 )
 
 

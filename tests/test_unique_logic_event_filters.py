@@ -7,6 +7,7 @@ import pytest
 from research.offline.factory import propose_profit_hypotheses
 from research.unique_logic import event_filters
 from research.unique_logic.constants import (
+    EVENT_FILTER_LOGIC_IDS,
     EVENT_LOGIC_IDS,
     KNOWN_DEMOTED_OR_WEAK,
     KNOWN_WEAK_THESIS,
@@ -55,14 +56,13 @@ def _events() -> dict[str, list[dict]]:
     }
 
 
+def _spec(lid: str) -> dict:
+    return dict(next(s for s in event_filters.NEW_UNIQUE_LOGIC if s["logic_id"] == lid))
+
+
 def test_event_filters_proposals_are_new_unique_logic_not_catalog_or_prior_event():
     ids = [s["logic_id"] for s in event_filters.NEW_UNIQUE_LOGIC]
-    assert ids == [
-        "large_surprise_event_hold",
-        "afterclose_only_event_hold",
-        "event_pre_mom_agree_hold",
-        "event_margin_crowding_skip",
-    ]
+    assert ids == sorted(EVENT_FILTER_LOGIC_IDS)
     assert len(ids) == 4
     for s in event_filters.NEW_UNIQUE_LOGIC:
         assert s["new_unique_logic"] is True
@@ -128,7 +128,7 @@ def test_large_surprise_skips_below_pit_median():
         "feps": 10.0,  # |surprise| = 0.1 << 10
         "prior_eps": 9.0,
     }
-    spec = dict(event_filters.NEW_UNIQUE_LOGIC[0])
+    spec = _spec("large_surprise_event_hold")
     spec["params"] = dict(spec["params"])
     spec["params"]["min_hist"] = 5
     spec["min_hist"] = 5
@@ -154,7 +154,7 @@ def test_afterclose_skips_preclose_and_missing_disctime():
     pack = event_filters.evaluate_afterclose_only_event_hold_daily_mtm(
         bars,
         events,
-        spec=event_filters.NEW_UNIQUE_LOGIC[1],
+        spec=_spec("afterclose_only_event_hold"),
         one_way_cost=0.001,
         period_start="2019-01-01",
         period_end="2019-01-28",
@@ -183,7 +183,7 @@ def test_afterclose_accepts_post_session_close():
     pack = event_filters.evaluate_afterclose_only_event_hold_daily_mtm(
         bars,
         events,
-        spec=event_filters.NEW_UNIQUE_LOGIC[1],
+        spec=_spec("afterclose_only_event_hold"),
         one_way_cost=0.001,
         period_start="2019-01-01",
         period_end="2019-01-28",
@@ -210,7 +210,7 @@ def test_event_pre_mom_agree_skips_disagreement():
     pack = event_filters.evaluate_event_pre_mom_agree_hold_daily_mtm(
         bars,
         events,
-        spec=event_filters.NEW_UNIQUE_LOGIC[2],
+        spec=_spec("event_pre_mom_agree_hold"),
         one_way_cost=0.001,
         period_start="2019-01-01",
         period_end="2019-01-28",
@@ -228,7 +228,7 @@ def test_event_margin_crowding_skips_missing_and_empty_is_incomplete():
         bars,
         events,
         {},
-        spec=event_filters.NEW_UNIQUE_LOGIC[3],
+        spec=_spec("event_margin_crowding_skip"),
         one_way_cost=0.001,
         period_start="2019-01-01",
         period_end="2019-01-28",
@@ -241,7 +241,7 @@ def test_event_margin_crowding_skips_missing_and_empty_is_incomplete():
         "72030": {f"2019-01-{d:02d}": 100.0 for d in range(1, 12)},
     }
     margin["72030"]["2019-01-11"] = 500.0  # last print before 01-12 entry, crowded
-    spec = dict(event_filters.NEW_UNIQUE_LOGIC[3])
+    spec = _spec("event_margin_crowding_skip")
     spec["params"] = dict(spec["params"])
     spec["params"]["min_hist"] = 5
     spec["min_hist"] = 5

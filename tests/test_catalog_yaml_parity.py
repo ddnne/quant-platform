@@ -255,6 +255,27 @@ def test_original_22_ids_from_yaml() -> None:
     assert "unique_family_ids_from_yaml()" in const_src
     for lid in original:
         assert lid not in const_src
+    from research.unique_logic import (
+        adaptive as adaptive_mod,
+        cross_section as cs_mod,
+        cs_overlays as overlays_mod,
+        event as event_mod,
+        event_filters as filters_mod,
+        event_sides as sides_mod,
+    )
+
+    for mod, flag in (
+        (event_mod, "EVENT_LOGIC_IDS"),
+        (filters_mod, "EVENT_FILTER_LOGIC_IDS"),
+        (sides_mod, "EVENT_SIDES_LOGIC_IDS"),
+        (adaptive_mod, "ADAPTIVE_LOGIC_IDS"),
+        (cs_mod, "CS_LOGIC_IDS"),
+        (overlays_mod, "CS_LOGIC_IDS"),
+    ):
+        header = inspect.getsource(mod).split("def ", 1)[0]
+        assert flag in header
+        for lid in original:
+            assert lid not in header
     for yml in _YAML_DIR.glob("*.yaml"):
         body = yml.read_text(encoding="utf-8")
         assert re.search(r"(?m)^go:\s*true\s*$", body) is None

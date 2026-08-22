@@ -14,16 +14,10 @@ from research.daily_path_eval import (
     panel_index,
 )
 from research.unique_logic.catalog import yaml_unique_rows
+from research.unique_logic.constants import EVENT_LOGIC_IDS
 
 NEW_UNIQUE_LOGIC: tuple[dict[str, Any], ...] = tuple(
-    yaml_unique_rows(
-        logic_ids=(
-            "event_funding_stress_skip",
-            "curve_steep_event_confirm",
-            "disclosure_cluster_mom_gate",
-            "surprise_xs_rank_hold",
-        )
-    )
+    yaml_unique_rows(logic_ids=sorted(EVENT_LOGIC_IDS))
 )
 
 

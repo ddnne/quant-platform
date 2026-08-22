@@ -7,16 +7,11 @@ from __future__ import annotations
 from typing import Any, Mapping, Sequence
 
 from research.unique_logic.catalog import yaml_unique_rows
+from research.unique_logic.constants import EVENT_SIDES_LOGIC_IDS
 from research.unique_logic import event
 
 NEW_LS_VARIANTS: tuple[dict[str, Any], ...] = tuple(
-    yaml_unique_rows(
-        logic_ids=(
-            "event_funding_easy_short",
-            "event_funding_stress_ls",
-            "surprise_xs_rank_flip",
-        )
-    )
+    yaml_unique_rows(logic_ids=sorted(EVENT_SIDES_LOGIC_IDS))
 )
 
 

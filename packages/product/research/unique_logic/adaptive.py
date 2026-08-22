@@ -8,18 +8,14 @@ from typing import Any, Mapping, Sequence
 
 from research.daily_path_eval import stitch_net
 from research.unique_logic.catalog import yaml_unique_rows
+from research.unique_logic.constants import ADAPTIVE_LOGIC_IDS
 from research.unique_logic import event, event_sides
 
 TRAIL_K = 10
 TRAIL_MIN = 5
 
 ADAPTIVE_VARIANTS: tuple[dict[str, Any], ...] = tuple(
-    yaml_unique_rows(
-        logic_ids=(
-            "event_funding_adaptive_side",
-            "surprise_xs_rank_adaptive",
-        )
-    )
+    yaml_unique_rows(logic_ids=sorted(ADAPTIVE_LOGIC_IDS))
 )
 
 

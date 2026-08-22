@@ -6,14 +6,13 @@ from research.unique_logic.catalog import load_catalog_specs, parse_catalog_yaml
 
 def test_event_sides_ls_variants_stay_registered() -> None:
     from research.unique_logic import event_sides
-    from research.unique_logic.constants import RESEARCH_UNIQUE_LOGIC_IDS
+    from research.unique_logic.constants import (
+        EVENT_SIDES_LOGIC_IDS,
+        RESEARCH_UNIQUE_LOGIC_IDS,
+    )
 
     ids = [s["logic_id"] for s in event_sides.NEW_LS_VARIANTS]
-    assert ids == [
-        "event_funding_easy_short",
-        "event_funding_stress_ls",
-        "surprise_xs_rank_flip",
-    ]
+    assert ids == sorted(EVENT_SIDES_LOGIC_IDS)
     assert set(ids) <= set(RESEARCH_UNIQUE_LOGIC_IDS)
 
 
