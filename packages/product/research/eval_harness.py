@@ -13,7 +13,6 @@ Label: **小サンプル / 研究用・未宣言**.
 from __future__ import annotations
 
 from pathlib import Path
-from types import MappingProxyType
 from typing import Any, Callable, Mapping, Sequence
 
 from features.minimal_signal import (
@@ -23,7 +22,6 @@ from features.minimal_signal import (
     DEFAULT_VOLUME_CHANGE_ABS_MIN,
     DEFAULT_VOLUME_SIGN_ABS_MIN,
     FEATURE_STATUS_PINS,
-    MULTI_SIGNAL_DATASETS,
     SIGNAL_ID as DEFAULT_SIGNAL_ID,
 )
 from features.registry import get as get_feature
@@ -50,7 +48,6 @@ from research.robustness_gate import (
     annotate_period_rows_with_cost,
     evaluate_research_robustness_gate,
     period_rows_from_cross_table,
-    research_robustness_gate_document,
 )
 from research.single_shot_job import (
     COMPLETE_21_DATASET_SET,
@@ -369,10 +366,6 @@ def split_asof_days_walk_forward(
         "threshold_tuning": False,
         "signal_definitions_fixed": True,
         **_closed_flags(),
-        "note": (
-            "Research chronological holdout only. Same fixed definitions on "
-            "both folds; thresholds are not fit on train."
-        ),
     }
 
 
@@ -381,66 +374,6 @@ def _compact_compare_rows(batch_summary: Mapping[str, Any]) -> list[dict[str, An
     if isinstance(rows, list):
         return [dict(r) for r in rows]
     return []
-
-
-def run_multisignal_compare(
-    *,
-    period_start: str,
-    period_end: str,
-    job_id: str = "eval-harness-multisignal",
-    codes: Sequence[str] | None = None,
-    as_of_days: Sequence[str] | None = None,
-    max_days: int = 20,
-    min_days: int = 5,
-    feature_row_limit: int = DEFAULT_FEATURE_ROW_LIMIT,
-    volume_sign_abs_min: float = DEFAULT_VOLUME_SIGN_ABS_MIN,
-    one_way_cost: float = RESEARCH_ONE_WAY_COST,
-    write_per_day_artifacts: bool = True,
-    dry_run: bool = False,
-    d1_execute: D1ExecuteFn | None = None,
-    r2_put: R2PutFn | None = None,
-    staging_dir: str | Path | None = None,
-    wrangler: str | Path | None = None,
-    wrangler_config: str | Path | None = None,
-    history_source: str = "d1_tip",
-    r2_object_keys_by_dataset: Mapping[str, Sequence[str]] | None = None,
-    r2_local_paths_by_dataset: Mapping[str, Sequence[str | Path]] | None = None,
-    r2_raw_lines_by_dataset: Mapping[str, Sequence[Any]] | None = None,
-    r2_get: Callable[[str, str], bytes] | None = None,
-    r2_bucket: str = "quant-structured",
-    r2_allow_empty_datasets: Sequence[str] | None = None,
-) -> MultidaySignalEval:
-    """S1/S2/S3 multi-signal compare via single_shot (research-only). Freeze closed."""
-    assert_harness_closed()
-    require_complete_21_only(
-        MULTI_SIGNAL_DATASETS, context="harness multisignal datasets"
-    )
-    return execute_multiday_multisignal_compare(
-        period_start=period_start,
-        period_end=period_end,
-        job_id=job_id,
-        codes=_selected_codes(codes),
-        as_of_days=as_of_days,
-        max_days=max_days,
-        min_days=min_days,
-        feature_row_limit=feature_row_limit,
-        volume_sign_abs_min=volume_sign_abs_min,
-        one_way_cost=one_way_cost,
-        write_per_day_artifacts=write_per_day_artifacts,
-        dry_run=dry_run,
-        d1_execute=d1_execute,
-        r2_put=r2_put,
-        staging_dir=staging_dir,
-        wrangler=wrangler,
-        wrangler_config=wrangler_config,
-        history_source=history_source,
-        r2_object_keys_by_dataset=r2_object_keys_by_dataset,
-        r2_local_paths_by_dataset=r2_local_paths_by_dataset,
-        r2_raw_lines_by_dataset=r2_raw_lines_by_dataset,
-        r2_get=r2_get,
-        r2_bucket=r2_bucket,
-        r2_allow_empty_datasets=r2_allow_empty_datasets,
-    )
 
 
 def _fold_summary(ex: MultidaySignalEval) -> dict[str, Any]:
@@ -552,10 +485,6 @@ def run_research_walk_forward_multisignal(
         "train": _fold_summary(train_ex),
         "test": _fold_summary(test_ex),
         **_closed_flags(),
-        "note": (
-            "Research walk-forward with fixed signal definitions on both folds. "
-            "No threshold search on train."
-        ),
     }
 
 
@@ -692,10 +621,6 @@ def run_multi_period_multisignal_compare(
         "periods": results,
         "cross_period_compare_table": cross,
         **_closed_flags(),
-        "note": (
-            "Multi-period fixed-definition multi-signal research compare. "
-            "Skips documented when data missing. No densify invent."
-        ),
     }
 
 
@@ -718,43 +643,8 @@ DEFAULT_MULTIYEAR_CODES: tuple[str, ...] = (
 
 DEFAULT_MULTIYEAR_YEARS: tuple[int, ...] = (2015, 2017, 2019, 2021, 2023, 2025)
 
-# Honest inventory (no densify). topix 2024–2025 → archive; calendar JSONL
-# 2026 tip only; margin 2024 empty_allowed.
-DATASET_YEAR_INVENTORY_NOTES: Mapping[str, Any] = MappingProxyType(
-    {
-        "equities_bars_daily": {
-            "jsonl_years": "2008-2026 continuous-ish",
-            "gap_years": [],
-            "fallback": None,
-        },
-        "indices_bars_daily_topix": {
-            "jsonl_years": "2008-2023 + 2026",
-            "gap_years": [2024, 2025],
-            "fallback": "archive full-history disposable mirror",
-        },
-        "markets_calendar": {
-            "jsonl_years": "2026 tip only",
-            "gap_years": list(range(2008, 2026)),
-            "fallback": "archive + research PIT repair (calendar_ingest_pollution)",
-        },
-        "markets_margin_interest": {
-            "jsonl_years": "2013-2023 + 2025-2026",
-            "gap_years": [2024],
-            "fallback": None,
-            "note": "empty_allowed for gap years; never invent",
-        },
-        "markets_short_ratio": {
-            "jsonl_years": "2013-2023 + 2026",
-            "gap_years": [2024, 2025],
-            "fallback": None,
-        },
-        "fins_summary": {
-            "jsonl_years": "2008-2026 monthly-ish sparse",
-            "gap_years": [],
-            "fallback": None,
-        },
-    }
-)
+# Margin JSONL gap years (empty_allowed; never invent). Inventory starts ~2013.
+_MARGIN_GAP_YEARS: frozenset[int] = frozenset({2024})
 
 
 def design_yearly_eval_windows(
@@ -766,7 +656,7 @@ def design_yearly_eval_windows(
     codes: Sequence[str] | None = None,
     inventory_notes: Mapping[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
-    """Yearly (or half-year) windows for multi-year eval. Gaps recorded; no invent.
+    """Yearly (or half-year) windows. Gaps recorded; no invent.
 
     ``window``: ``q4`` (default), ``h1``, ``h2``, ``full``.
     """
@@ -791,64 +681,25 @@ def design_yearly_eval_windows(
         )
     start_md, end_md = spans[w]
     selected = _selected_codes(codes, DEFAULT_MULTIYEAR_CODES)
-    inv = dict(inventory_notes or DATASET_YEAR_INVENTORY_NOTES)
+    margin_gaps = set(
+        (inventory_notes or {}).get("markets_margin_interest", {}).get("gap_years")
+        or _MARGIN_GAP_YEARS
+    )
     out: list[dict[str, Any]] = []
     for y in yrs:
         period_start = f"{int(y)}-{start_md}"
         period_end = f"{int(y)}-{end_md}"
-        # Honest per-year dataset availability from static inventory notes.
-        topix_gap = int(y) in set(inv.get("indices_bars_daily_topix", {}).get("gap_years") or [])
-        margin_gap = int(y) in set(
-            inv.get("markets_margin_interest", {}).get("gap_years") or []
-        )
-        margin_pre = int(y) < 2013  # margin inventory starts ~2013
-        cal_note = inv.get("markets_calendar", {}).get("fallback") or "archive"
-        topix_note = (
-            inv.get("indices_bars_daily_topix", {}).get("fallback")
-            or "archive"
-            if topix_gap
-            else "jsonl or archive"
-        )
+        margin_gap = int(y) in margin_gaps or int(y) < 2013
+        s4_ok = not margin_gap
         coverage = {
-            "year": int(y),
-            "window": w,
-            "period_start": period_start,
-            "period_end": period_end,
-            "bars": {
-                "dataset": "equities_bars_daily",
-                "inventory": inv.get("equities_bars_daily", {}).get("jsonl_years"),
-                "expected": "present (2008-2026 inventory)" if 2008 <= int(y) <= 2026 else "out_of_inventory",
-            },
-            "topix": {
-                "dataset": "indices_bars_daily_topix",
-                "jsonl_gap": topix_gap,
-                "source": topix_note,
-            },
-            "calendar": {
-                "dataset": "markets_calendar",
-                "source": cal_note,
-                "pit_repair": "calendar_ingest_pollution (research-only)",
-            },
             "margin_interest": {
-                "dataset": "markets_margin_interest",
-                "jsonl_gap": margin_gap or margin_pre,
-                "s4_eligible": not (margin_gap or margin_pre),
+                "jsonl_gap": margin_gap,
+                "s4_eligible": s4_ok,
                 "handling": (
-                    "empty_allowed / skip S4"
-                    if (margin_gap or margin_pre)
-                    else "jsonl when mirrored"
+                    "empty_allowed / skip S4" if margin_gap else "jsonl when mirrored"
                 ),
             },
-            "n_codes": len(selected),
-            "codes": list(selected),
-            "max_days": int(max_days),
-            "min_days": int(min_days),
-            "no_densify": True,
-            "no_invent": True,
         }
-        skip_reason = None
-        if int(y) < 2008 or int(y) > 2026:
-            skip_reason = f"year {y} outside equities_bars_daily inventory 2008-2026"
         item: dict[str, Any] = {
             "period_id": f"y{int(y)}_{w}",
             "year": int(y),
@@ -860,15 +711,15 @@ def design_yearly_eval_windows(
             "codes": list(selected),
             "history_source": "r2",
             "coverage_notes": coverage,
-            "s4_eligible": bool(coverage["margin_interest"]["s4_eligible"]),
+            "s4_eligible": s4_ok,
             "r2_allow_empty_datasets": (
-                ["markets_margin_interest"]
-                if not coverage["margin_interest"]["s4_eligible"]
-                else []
+                ["markets_margin_interest"] if not s4_ok else []
             ),
         }
-        if skip_reason:
-            item["skip_reason"] = skip_reason
+        if int(y) < 2008 or int(y) > 2026:
+            item["skip_reason"] = (
+                f"year {y} outside equities_bars_daily inventory 2008-2026"
+            )
             item["status_hint"] = "skipped"
         out.append(item)
     return out
@@ -890,6 +741,128 @@ def _year_period_error_row(
     }
 
 
+def _resolve_year_periods(
+    periods: Sequence[Mapping[str, Any]] | None,
+    years: Sequence[int] | None,
+    *,
+    max_days: int,
+    min_days: int,
+    codes: Sequence[str] | None,
+    empty_msg: str,
+) -> list[dict[str, Any]]:
+    if periods is None:
+        period_list = design_yearly_eval_windows(
+            years, max_days=max_days, min_days=min_days, codes=codes
+        )
+    else:
+        period_list = [dict(p) for p in periods]
+    if not period_list:
+        raise EvalHarnessError(empty_msg)
+    return period_list
+
+
+def _period_history(
+    p: Mapping[str, Any],
+    *,
+    history_source: str,
+    feature_row_limit: int,
+    write_per_day_artifacts: bool,
+    dry_run: bool,
+    d1_execute: D1ExecuteFn | None,
+    r2_put: R2PutFn | None,
+    staging_dir: str | Path | None,
+    wrangler: str | Path | None,
+    wrangler_config: str | Path | None,
+    r2_get: Callable[[str, str], bytes] | None,
+    r2_bucket: str,
+) -> dict[str, Any]:
+    return {
+        "as_of_days": p.get("as_of_days"),
+        "feature_row_limit": feature_row_limit,
+        "write_per_day_artifacts": write_per_day_artifacts,
+        "dry_run": dry_run,
+        "d1_execute": d1_execute,
+        "r2_put": r2_put,
+        "staging_dir": staging_dir,
+        "wrangler": wrangler,
+        "wrangler_config": wrangler_config,
+        "history_source": str(p.get("history_source") or history_source),
+        "r2_object_keys_by_dataset": p.get("r2_object_keys_by_dataset"),
+        "r2_local_paths_by_dataset": p.get("r2_local_paths_by_dataset"),
+        "r2_raw_lines_by_dataset": p.get("r2_raw_lines_by_dataset"),
+        "r2_get": r2_get,
+        "r2_bucket": r2_bucket,
+    }
+
+
+def _ok_year_row(
+    p: Mapping[str, Any],
+    *,
+    pid: str,
+    start: str,
+    end: str,
+    ex: MultidaySignalEval,
+    history_source: str | None = None,
+    **extra: Any,
+) -> dict[str, Any]:
+    bs = ex.batch_summary or {}
+    return {
+        "period_id": pid,
+        "year": p.get("year"),
+        "status": "ok",
+        "period_start": start,
+        "period_end": end,
+        "n_days": ex.n_days,
+        "n_codes": len(ex.codes),
+        "codes": list(ex.codes),
+        "as_of_days": list(ex.as_of_days),
+        "history_source": bs.get("history_source") or history_source,
+        "batch_summary_r2_key": ex.batch_summary_r2_key,
+        "coverage_notes": p.get("coverage_notes"),
+        "s4_eligible": p.get("s4_eligible"),
+        "label": NEXTDAY_RESEARCH_LABEL,
+        **extra,
+    }
+
+
+def _pack_multi_year(
+    *,
+    job_id_prefix: str,
+    period_list: Sequence[Mapping[str, Any]],
+    results: Sequence[Mapping[str, Any]],
+    one_way_cost: float,
+    require_net_sign_majority: bool,
+    history_source: str,
+    **extra: Any,
+) -> dict[str, Any]:
+    return {
+        "version": MULTI_YEAR_VERSION,
+        "job_id_prefix": job_id_prefix,
+        "label": MULTI_YEAR_LABEL,
+        "history_source_default": history_source,
+        "n_years_requested": len(period_list),
+        "n_years_ok": sum(1 for r in results if r.get("status") == "ok"),
+        "n_years_skipped": sum(1 for r in results if r.get("status") == "skipped"),
+        "n_years_error": sum(1 for r in results if r.get("status") == "error"),
+        "years": list(results),
+        "cost_assumption": {
+            "one_way_cost": float(one_way_cost),
+            "one_way_cost_bp": float(one_way_cost) * 10_000.0,
+            "require_net_sign_majority": bool(require_net_sign_majority),
+            "label": "仮定に依存・研究用・運用GOではない",
+        },
+        **extra,
+        **_closed_flags(year_split=True, fail_one_year_safe=True),
+    }
+
+
+def _int0(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _s1_metrics_from_batch_summary(
     batch_summary: Mapping[str, Any],
     *,
@@ -897,66 +870,36 @@ def _s1_metrics_from_batch_summary(
     n_days: int,
     n_codes: int,
 ) -> dict[str, Any]:
-    """Extract gate-ready S1 metrics from multiday nextday batch_summary.
-
-    Multisignal compare tables already carry ``gross_signed_mean_active``.
-    Single-signal nextday batches expose ``nextday_return.by_sign`` only —
-    derive gross signed mean as:
-
-        (n+ * mean_R+ − n− * mean_R−) / (n+ + n−)
-
-    over non-null return counts (research-only; no edge claim).
-    """
+    """Gate-ready S1 metrics from nextday batch_summary (research-only)."""
     bs = dict(batch_summary or {})
-    # Prefer compare_table S1 row when present.
     for row in _compact_compare_rows(bs):
         if str(row.get("signal_id") or "") == DEFAULT_SIGNAL_ID:
-            out = dict(row)
-            out["period_id"] = period_id
-            out["n_days"] = n_days
-            out["n_codes"] = n_codes
-            return out
+            return {**dict(row), "period_id": period_id, "n_days": n_days, "n_codes": n_codes}
 
     nd = bs.get("nextday_return") or bs.get("nextday_summary") or {}
     by_sign = nd.get("by_sign") if isinstance(nd, Mapping) else None
     mean_plus = mean_minus = None
     n_plus = n_minus = 0
     if isinstance(by_sign, Mapping):
-        p = by_sign.get("+1") or {}
-        m = by_sign.get("-1") or {}
-        mean_plus = p.get("mean_next_day_return")
-        mean_minus = m.get("mean_next_day_return")
-        try:
-            n_plus = int(p.get("non_null_return_count") or p.get("count") or 0)
-        except (TypeError, ValueError):
-            n_plus = 0
-        try:
-            n_minus = int(m.get("non_null_return_count") or m.get("count") or 0)
-        except (TypeError, ValueError):
-            n_minus = 0
-    gross = None
+        plus = by_sign.get("+1") or {}
+        minus = by_sign.get("-1") or {}
+        mean_plus = plus.get("mean_next_day_return")
+        mean_minus = minus.get("mean_next_day_return")
+        n_plus = _int0(plus.get("non_null_return_count") or plus.get("count"))
+        n_minus = _int0(minus.get("non_null_return_count") or minus.get("count"))
     n_active = n_plus + n_minus
-    if (
-        mean_plus is not None
-        and mean_minus is not None
-        and n_active > 0
-    ):
-        try:
-            gross = (
-                float(mean_plus) * n_plus - float(mean_minus) * n_minus
-            ) / float(n_active)
-        except (TypeError, ValueError, ZeroDivisionError):
-            gross = None
-    elif mean_plus is not None and n_minus == 0 and n_plus > 0:
-        try:
+    gross = None
+    try:
+        if mean_plus is not None and mean_minus is not None and n_active > 0:
+            gross = (float(mean_plus) * n_plus - float(mean_minus) * n_minus) / float(
+                n_active
+            )
+        elif mean_plus is not None and n_minus == 0 and n_plus > 0:
             gross = float(mean_plus)
-        except (TypeError, ValueError):
-            gross = None
-    elif mean_minus is not None and n_plus == 0 and n_minus > 0:
-        try:
+        elif mean_minus is not None and n_plus == 0 and n_minus > 0:
             gross = -float(mean_minus)
-        except (TypeError, ValueError):
-            gross = None
+    except (TypeError, ValueError, ZeroDivisionError):
+        gross = None
 
     agg = bs.get("aggregate") if isinstance(bs.get("aggregate"), Mapping) else {}
     non_null = agg.get("non_null")
@@ -970,7 +913,6 @@ def _s1_metrics_from_batch_summary(
                 if so.get("null_return_rate") is not None
                 else None
             )
-
     return {
         "signal_id": DEFAULT_SIGNAL_ID,
         "period_id": period_id,
@@ -1015,18 +957,28 @@ def run_multi_year_s1_eval(
     assert_harness_closed()
     require_approved_signal_legs(context="multi-year S1 legs")
     require_harness_datasets(context="multi-year S1 datasets")
-
-    if periods is None:
-        period_list = design_yearly_eval_windows(
-            years, max_days=max_days, min_days=min_days, codes=codes
-        )
-    else:
-        period_list = [dict(p) for p in periods]
-    if not period_list:
-        raise EvalHarnessError("multi-year S1 requires at least one period")
-
+    period_list = _resolve_year_periods(
+        periods,
+        years,
+        max_days=max_days,
+        min_days=min_days,
+        codes=codes,
+        empty_msg="multi-year S1 requires at least one period",
+    )
     selected_default = _selected_codes(codes, DEFAULT_MULTIYEAR_CODES)
-
+    hist = dict(
+        history_source=history_source,
+        feature_row_limit=feature_row_limit,
+        write_per_day_artifacts=write_per_day_artifacts,
+        dry_run=dry_run,
+        d1_execute=d1_execute,
+        r2_put=r2_put,
+        staging_dir=staging_dir,
+        wrangler=wrangler,
+        wrangler_config=wrangler_config,
+        r2_get=r2_get,
+        r2_bucket=r2_bucket,
+    )
     results: list[dict[str, Any]] = []
     for i, raw in enumerate(period_list):
         p = dict(raw)
@@ -1049,65 +1001,40 @@ def run_multi_year_s1_eval(
                 )
             )
             continue
-        year_codes = p.get("codes") or selected_default
         try:
             ex = execute_multiday_signal_eval(
                 period_start=start,
                 period_end=end,
                 job_id=f"{job_id_prefix}-{pid}",
-                codes=year_codes,
-                as_of_days=p.get("as_of_days"),
+                codes=p.get("codes") or selected_default,
                 max_days=int(p.get("max_days") or max_days),
                 min_days=int(p.get("min_days") or min_days),
-                feature_row_limit=feature_row_limit,
                 volume_change_abs_min=volume_change_abs_min,
                 attach_nextday_returns=True,
-                write_per_day_artifacts=write_per_day_artifacts,
-                dry_run=dry_run,
-                d1_execute=d1_execute,
-                r2_put=r2_put,
-                staging_dir=staging_dir,
-                wrangler=wrangler,
-                wrangler_config=wrangler_config,
-                history_source=str(p.get("history_source") or history_source),
-                r2_object_keys_by_dataset=p.get("r2_object_keys_by_dataset"),
-                r2_local_paths_by_dataset=p.get("r2_local_paths_by_dataset"),
-                r2_raw_lines_by_dataset=p.get("r2_raw_lines_by_dataset"),
-                r2_get=r2_get,
-                r2_bucket=r2_bucket,
+                **_period_history(p, **hist),
             )
-            # Compact S1 metrics from batch_summary (nextday path).
             bs = ex.batch_summary or {}
             s1_row = _s1_metrics_from_batch_summary(
                 bs, period_id=pid, n_days=ex.n_days, n_codes=len(ex.codes)
             )
             compare = _compact_compare_rows(bs)
-            if compare:
-                for row in compare:
-                    if str(row.get("signal_id") or "") == DEFAULT_SIGNAL_ID:
-                        s1_row = {**s1_row, **dict(row), "period_id": pid}
-                        break
+            for row in compare:
+                if str(row.get("signal_id") or "") == DEFAULT_SIGNAL_ID:
+                    s1_row = {**s1_row, **dict(row), "period_id": pid}
+                    break
             results.append(
-                {
-                    "period_id": pid,
-                    "year": p.get("year"),
-                    "status": "ok",
-                    "period_start": start,
-                    "period_end": end,
-                    "n_days": ex.n_days,
-                    "n_codes": len(ex.codes),
-                    "codes": list(ex.codes),
-                    "as_of_days": list(ex.as_of_days),
-                    "history_source": bs.get("history_source") or history_source,
-                    "tip_plane": bs.get("tip_plane"),
-                    "extracted_row_counts": bs.get("tip_extracted_row_counts"),
-                    "s1_row": s1_row,
-                    "compare_table": compare or [s1_row],
-                    "batch_summary_r2_key": ex.batch_summary_r2_key,
-                    "coverage_notes": p.get("coverage_notes"),
-                    "s4_eligible": p.get("s4_eligible"),
-                    "label": NEXTDAY_RESEARCH_LABEL,
-                }
+                _ok_year_row(
+                    p,
+                    pid=pid,
+                    start=start,
+                    end=end,
+                    ex=ex,
+                    history_source=history_source,
+                    tip_plane=bs.get("tip_plane"),
+                    extracted_row_counts=bs.get("tip_extracted_row_counts"),
+                    s1_row=s1_row,
+                    compare_table=compare or [s1_row],
+                )
             )
         except Exception as exc:  # noqa: BLE001 — year isolation
             results.append(
@@ -1140,62 +1067,43 @@ def run_multi_year_s1_eval(
                 "non_null_rate": s1.get("non_null_rate"),
             }
         )
-    # Annotate cost (research-only 10bp one-way by default).
     cross = annotate_period_rows_with_cost(cross, one_way_cost=one_way_cost)
-
     gate: dict[str, Any] | None = None
     if apply_robustness_gate:
-        period_rows = [
-            {
-                "period_id": row["period_id"],
-                "status": "ok",
-                "gross_signed_mean_active": row.get("gross_signed_mean_active"),
-                "net_one_way_mean_active": row.get("net_one_way_mean_active"),
-                "n_active_positions": row.get("n_active_positions")
-                or row.get("non_null"),
-                "non_null": row.get("non_null"),
-                "non_null_rate": row.get("non_null_rate"),
-                "mean_R_plus": row.get("mean_R_plus"),
-                "mean_R_minus": row.get("mean_R_minus"),
-            }
-            for row in cross
-            if row.get("gross_signed_mean_active") is not None
-        ]
         gate = evaluate_research_robustness_gate(
-            period_rows,
+            [
+                {
+                    "period_id": row["period_id"],
+                    "status": "ok",
+                    "gross_signed_mean_active": row.get("gross_signed_mean_active"),
+                    "net_one_way_mean_active": row.get("net_one_way_mean_active"),
+                    "n_active_positions": row.get("n_active_positions")
+                    or row.get("non_null"),
+                    "non_null": row.get("non_null"),
+                    "non_null_rate": row.get("non_null_rate"),
+                    "mean_R_plus": row.get("mean_R_plus"),
+                    "mean_R_minus": row.get("mean_R_minus"),
+                }
+                for row in cross
+                if row.get("gross_signed_mean_active") is not None
+            ],
             signal_id=DEFAULT_SIGNAL_ID,
             min_periods=min_periods_gate,
             min_active_per_period=min_active_per_period,
             one_way_cost=one_way_cost,
             require_net_sign_majority=require_net_sign_majority,
         )
-
-    return {
-        "version": MULTI_YEAR_VERSION,
-        "job_id_prefix": job_id_prefix,
-        "label": MULTI_YEAR_LABEL,
-        "signal_id": DEFAULT_SIGNAL_ID,
-        "history_source_default": history_source,
-        "n_years_requested": len(period_list),
-        "n_years_ok": sum(1 for r in results if r.get("status") == "ok"),
-        "n_years_skipped": sum(1 for r in results if r.get("status") == "skipped"),
-        "n_years_error": sum(1 for r in results if r.get("status") == "error"),
-        "years": results,
-        "cross_year_s1_table": cross,
-        "robustness_gate": gate,
-        "cost_assumption": {
-            "one_way_cost": float(one_way_cost),
-            "one_way_cost_bp": float(one_way_cost) * 10_000.0,
-            "require_net_sign_majority": bool(require_net_sign_majority),
-            "label": "仮定に依存・研究用・運用GOではない",
-        },
-        **_closed_flags(year_split=True, fail_one_year_safe=True),
-        "note": (
-            "Multi-year S1 research eval with independent per-year jobs. "
-            "Error/skip on one year does not kill the batch. "
-            "pass does NOT mint READY or arm Mass."
-        ),
-    }
+    return _pack_multi_year(
+        job_id_prefix=job_id_prefix,
+        period_list=period_list,
+        results=results,
+        one_way_cost=one_way_cost,
+        require_net_sign_majority=require_net_sign_majority,
+        history_source=history_source,
+        signal_id=DEFAULT_SIGNAL_ID,
+        cross_year_s1_table=cross,
+        robustness_gate=gate,
+    )
 
 
 def run_multi_year_extra_hyp_eval(
@@ -1226,35 +1134,42 @@ def run_multi_year_extra_hyp_eval(
 ) -> dict[str, Any]:
     """Year-split S4/S5 eval. Gap years skipped honestly — never invent margin."""
     assert_harness_closed()
-    if periods is None:
-        period_list = design_yearly_eval_windows(
-            years, max_days=max_days, min_days=min_days, codes=codes
-        )
-    else:
-        period_list = [dict(p) for p in periods]
-    if not period_list:
-        raise EvalHarnessError("multi-year extra-hyp requires at least one period")
-
+    period_list = _resolve_year_periods(
+        periods,
+        years,
+        max_days=max_days,
+        min_days=min_days,
+        codes=codes,
+        empty_msg="multi-year extra-hyp requires at least one period",
+    )
     selected_default = _selected_codes(codes, DEFAULT_MULTIYEAR_CODES)
     want_signals = (
         {str(s) for s in signal_ids}
         if signal_ids is not None
         else {"c21_margin_change_sign"}
     )
-
+    hist = dict(
+        history_source=history_source,
+        feature_row_limit=feature_row_limit,
+        write_per_day_artifacts=write_per_day_artifacts,
+        dry_run=dry_run,
+        d1_execute=d1_execute,
+        r2_put=r2_put,
+        staging_dir=staging_dir,
+        wrangler=wrangler,
+        wrangler_config=wrangler_config,
+        r2_get=r2_get,
+        r2_bucket=r2_bucket,
+    )
     results: list[dict[str, Any]] = []
     for i, raw in enumerate(period_list):
         p = dict(raw)
         pid = str(p.get("period_id") or f"y{i}").strip()
-        skip_reason = p.get("skip_reason")
         s4_ok = p.get("s4_eligible")
         if s4_ok is None:
-            # Infer from coverage notes / year.
             y = p.get("year")
-            if y is not None and (int(y) == 2024 or int(y) < 2013):
-                s4_ok = False
-            else:
-                s4_ok = True
+            s4_ok = not (y is not None and (int(y) == 2024 or int(y) < 2013))
+        skip_reason = p.get("skip_reason")
         if skip_reason:
             results.append(
                 _skip_year_row(
@@ -1267,10 +1182,7 @@ def run_multi_year_extra_hyp_eval(
                 _skip_year_row(
                     p,
                     pid=pid,
-                    skip_reason=(
-                        "margin data gap / not s4_eligible "
-                        "(inventory empty year; not invented)"
-                    ),
+                    skip_reason="margin data gap / not s4_eligible (not invented)",
                     s4_eligible=False,
                 )
             )
@@ -1284,66 +1196,39 @@ def run_multi_year_extra_hyp_eval(
                 )
             )
             continue
-        year_codes = p.get("codes") or selected_default
         allow_empty = list(p.get("r2_allow_empty_datasets") or [])
-        # short_ratio may be empty on some years; keep honest.
-        for ds in ("markets_short_ratio",):
-            if ds not in allow_empty:
-                allow_empty.append(ds)
+        if "markets_short_ratio" not in allow_empty:
+            allow_empty.append("markets_short_ratio")
         try:
             ex = execute_extra_hyp_signals_compare(
                 period_start=start,
                 period_end=end,
                 job_id=f"{job_id_prefix}-{pid}",
-                codes=year_codes,
-                as_of_days=p.get("as_of_days"),
+                codes=p.get("codes") or selected_default,
                 max_days=int(p.get("max_days") or max_days),
                 min_days=int(p.get("min_days") or min_days),
-                feature_row_limit=feature_row_limit,
                 one_way_cost=one_way_cost,
-                write_per_day_artifacts=write_per_day_artifacts,
-                dry_run=dry_run,
-                d1_execute=d1_execute,
-                r2_put=r2_put,
-                staging_dir=staging_dir,
-                wrangler=wrangler,
-                wrangler_config=wrangler_config,
-                history_source=str(p.get("history_source") or history_source),
-                r2_object_keys_by_dataset=p.get("r2_object_keys_by_dataset"),
-                r2_local_paths_by_dataset=p.get("r2_local_paths_by_dataset"),
-                r2_raw_lines_by_dataset=p.get("r2_raw_lines_by_dataset"),
-                r2_get=r2_get,
-                r2_bucket=r2_bucket,
                 r2_allow_empty_datasets=allow_empty,
+                **_period_history(p, **hist),
             )
-            compare = _compact_compare_rows(ex.batch_summary or {})
-            if want_signals:
-                compare = [
-                    dict(r)
-                    for r in compare
-                    if str(r.get("signal_id") or "") in want_signals
-                ]
+            compare = [
+                dict(r)
+                for r in _compact_compare_rows(ex.batch_summary or {})
+                if str(r.get("signal_id") or "") in want_signals
+            ]
             results.append(
-                {
-                    "period_id": pid,
-                    "year": p.get("year"),
-                    "status": "ok",
-                    "period_start": start,
-                    "period_end": end,
-                    "n_days": ex.n_days,
-                    "n_codes": len(ex.codes),
-                    "codes": list(ex.codes),
-                    "as_of_days": list(ex.as_of_days),
-                    "history_source": (ex.batch_summary or {}).get("history_source"),
-                    "extracted_row_counts": (ex.batch_summary or {}).get(
+                _ok_year_row(
+                    p,
+                    pid=pid,
+                    start=start,
+                    end=end,
+                    ex=ex,
+                    extracted_row_counts=(ex.batch_summary or {}).get(
                         "tip_extracted_row_counts"
                     ),
-                    "compare_table": compare,
-                    "batch_summary_r2_key": ex.batch_summary_r2_key,
-                    "coverage_notes": p.get("coverage_notes"),
-                    "s4_eligible": True,
-                    "label": NEXTDAY_RESEARCH_LABEL,
-                }
+                    compare_table=compare,
+                    s4_eligible=True,
+                )
             )
         except Exception as exc:  # noqa: BLE001 — year isolation
             results.append(
@@ -1370,45 +1255,28 @@ def run_multi_year_extra_hyp_eval(
                 }
             )
     cross = annotate_period_rows_with_cost(cross, one_way_cost=one_way_cost)
-
     gates: dict[str, Any] = {}
     if apply_robustness_gate:
         for sid in sorted(want_signals):
-            rows = period_rows_from_cross_table(cross, signal_id=sid)
             gates[sid] = evaluate_research_robustness_gate(
-                rows,
+                period_rows_from_cross_table(cross, signal_id=sid),
                 signal_id=sid,
                 min_periods=min_periods_gate,
                 min_active_per_period=min_active_per_period,
                 one_way_cost=one_way_cost,
                 require_net_sign_majority=require_net_sign_majority,
             )
-
-    return {
-        "version": MULTI_YEAR_VERSION,
-        "job_id_prefix": job_id_prefix,
-        "label": MULTI_YEAR_LABEL,
-        "signal_ids": sorted(want_signals),
-        "history_source_default": history_source,
-        "n_years_requested": len(period_list),
-        "n_years_ok": sum(1 for r in results if r.get("status") == "ok"),
-        "n_years_skipped": sum(1 for r in results if r.get("status") == "skipped"),
-        "n_years_error": sum(1 for r in results if r.get("status") == "error"),
-        "years": results,
-        "cross_year_compare_table": cross,
-        "robustness_gates": gates,
-        "cost_assumption": {
-            "one_way_cost": float(one_way_cost),
-            "one_way_cost_bp": float(one_way_cost) * 10_000.0,
-            "require_net_sign_majority": bool(require_net_sign_majority),
-            "label": "仮定に依存・研究用・運用GOではない",
-        },
-        **_closed_flags(year_split=True, fail_one_year_safe=True),
-        "note": (
-            "Multi-year S4/S5 research eval. Gap years skipped honestly. "
-            "Gate pass ≠ READY/Mass."
-        ),
-    }
+    return _pack_multi_year(
+        job_id_prefix=job_id_prefix,
+        period_list=period_list,
+        results=results,
+        one_way_cost=one_way_cost,
+        require_net_sign_majority=require_net_sign_majority,
+        history_source=history_source,
+        signal_ids=sorted(want_signals),
+        cross_year_compare_table=cross,
+        robustness_gates=gates,
+    )
 
 
 def multi_year_availability_table(
@@ -1419,7 +1287,6 @@ def multi_year_availability_table(
     for p in periods:
         cov = p.get("coverage_notes") if isinstance(p.get("coverage_notes"), Mapping) else {}
         margin = cov.get("margin_interest") if isinstance(cov, Mapping) else {}
-        topix = cov.get("topix") if isinstance(cov, Mapping) else {}
         rows.append(
             {
                 "period_id": p.get("period_id"),
@@ -1428,18 +1295,11 @@ def multi_year_availability_table(
                 "period_end": p.get("period_end"),
                 "status": p.get("status") or p.get("status_hint") or "designed",
                 "skip_reason": p.get("skip_reason"),
-                "error": p.get("error"),
-                "bars": (cov.get("bars") or {}).get("expected")
-                if isinstance(cov, Mapping)
-                else None,
-                "topix_jsonl_gap": (topix or {}).get("jsonl_gap"),
-                "topix_source": (topix or {}).get("source"),
-                "s4_eligible": p.get("s4_eligible")
-                if p.get("s4_eligible") is not None
-                else (margin or {}).get("s4_eligible"),
-                "margin_handling": (margin or {}).get("handling"),
-                "n_days": p.get("n_days"),
-                "n_codes": p.get("n_codes"),
+                "s4_eligible": (
+                    p.get("s4_eligible")
+                    if p.get("s4_eligible") is not None
+                    else (margin or {}).get("s4_eligible")
+                ),
             }
         )
     return rows
@@ -1451,35 +1311,13 @@ def multi_year_availability_table(
 
 CHECKLIST_VERSION: str = "standard-research-eval-checklist/v2"
 CHECKLIST_VERSION_V1: str = "standard-research-eval-checklist/v1"
-CHECKLIST_WAVE: str = "W77 / w0816k + W100 / w0819c"
-CHECKLIST_LABEL: str = (
-    "標準研究評価チェックリスト v2・未宣言 "
-    "(レバ/空売りコスト + リスクシナリオ + daily_path_DD必須 / "
-    "period_net_DD単独合格禁止 / 合格≠research_candidate / "
-    "READY未接続 / Mass NO-GO / 運用GOではない)"
-)
-STANDARD_EVAL_PROOF: str = (
-    "docs/proof/w0816k_w77_eval_checklist_v2_20260816.md"
-)
-STANDARD_EVAL_PROOF_V1: str = (
-    "docs/proof/w0815bg_w66_standard_research_eval_checklist_20260815.md"
-)
 STANDARD_EVAL_DAILY_PATH_DD_PROOF: str = (
     "docs/proof/w0819c_w100_daily_path_dd_gate_20260819.md"
 )
-# W78 additive: prefer date-matched jsda_tokyo_repo_rates for lev/short costs.
-# W79 additive: liquidity-linked tx / short-spread modulation (repo-linked kept).
-STANDARD_EVAL_COST_MODEL_PROOF: str = (
-    "docs/proof/w0816n_w79_liquidity_linked_cost_20260816.md"
-)
-# Defaults for cost-model rate path (prefer repo-linked; fixed bp fallback OK).
 COST_MODEL_PREFER_REPO_LINKED: bool = True
 COST_MODEL_REQUIRE_REPO_LINKED: bool = False
-# W79: prefer liquidity modulation when proxy available; never invent.
 COST_MODEL_PREFER_LIQUIDITY_LINKED: bool = True
 COST_MODEL_REQUIRE_LIQUIDITY_LINKED: bool = False
-# Modes that only re-run existing rejected baselines — never mint new signals.
-# class_hyp_offline runs W78–W79 class hyps (not S1–S5 / not simple_daily_sign).
 STANDARD_EVAL_MODES: tuple[str, ...] = (
     "wiring_only",
     "s1_rejected_baseline",
@@ -1520,12 +1358,7 @@ def standard_research_eval_checklist_document() -> dict[str, Any]:
     return {
         "version": CHECKLIST_VERSION,
         "prior_version": CHECKLIST_VERSION_V1,
-        "wave": CHECKLIST_WAVE,
-        "label": CHECKLIST_LABEL,
-        "proof": STANDARD_EVAL_PROOF,
-        "proof_v1": STANDARD_EVAL_PROOF_V1,
         "daily_path_dd_proof": STANDARD_EVAL_DAILY_PATH_DD_PROOF,
-        "cost_model_proof": STANDARD_EVAL_COST_MODEL_PROOF,
         "required": list(CHECKLIST_V2_REQUIRED),
         "near_required": list(CHECKLIST_V2_NEAR_REQUIRED),
         "recommended": [
@@ -1543,26 +1376,12 @@ def standard_research_eval_checklist_document() -> dict[str, Any]:
             "require_repo_linked": COST_MODEL_REQUIRE_REPO_LINKED,
             "prefer_liquidity_linked": COST_MODEL_PREFER_LIQUIDITY_LINKED,
             "require_liquidity_linked": COST_MODEL_REQUIRE_LIQUIDITY_LINKED,
-            "preferred_dataset": "jsda_tokyo_repo_rates",
-            "liquidity_dataset": "equities_bars_daily",
-            "fixed_bp_fallback_ok": True,
-            "liquidity_unmodulated_when_missing_ok": True,
-            "gap_policy": "disclose_only_no_ffill_no_invent",
         },
-        "daily_path_dd_surface": {
-            "period_net_dd_only_pass_forbidden": True,
-            "period_net_dd_zero_daily_unmeasured": "incomplete",
-        },
+        "daily_path_dd_surface": {"period_net_dd_only_pass_forbidden": True},
         "default_entry": "run_standard_research_eval",
-        "modes": list(STANDARD_EVAL_MODES),
         "research_candidate": False,
         "incomplete_checklist_blocks_research_candidate": True,
         **_closed_flags(),
-        "note": (
-            "Incomplete checklist v2 cannot become research_candidate. "
-            "Complete still does not auto-promote or connect READY/Mass. "
-            "daily_path_DD is required; period_net_DD alone cannot pass."
-        ),
     }
 
 
@@ -1584,128 +1403,61 @@ def evaluate_checklist_v2_completeness(
     period_net_dd_only: bool = False,
     period_net_dd_zero_daily_unmeasured: bool = False,
 ) -> dict[str, Any]:
-    """Evaluate whether checklist v2 items are complete for candidate discussion.
-
-    Incomplete → ``research_candidate_allowed=False`` (hard). Even when complete,
-    this helper never sets READY/Mass and never auto-promotes candidate status;
-    harness callers still keep ``research_candidate=False``.
-    """
-    items: dict[str, Any] = {
-        "multi_year_or_non_overlapping_long_periods": {
-            "required": True,
-            "present": bool(multi_year_present),
-            "passed": bool(multi_year_present),
-        },
-        "cost_assumption_default_10bp_one_way": {
-            "required": True,
-            "present": bool(cost_assumption_present),
-            "passed": bool(cost_assumption_present),
-        },
-        "leverage_short_cost_assumptions": {
-            "required": True,
-            "present": bool(leverage_short_complete),
-            "passed": bool(leverage_short_complete),
-        },
-        "robustness_gate_v2_with_cost": {
-            "required": True,
-            "present": bool(robustness_gate_present),
-            "passed": bool(robustness_gate_present),
-        },
-        "explicit_data_gap_disclosure": {
-            "required": True,
-            "present": bool(data_gap_disclosed),
-            "passed": bool(data_gap_disclosed),
-        },
-        "risk_scenario_evaluation": {
-            "required": True,
-            "present": bool(risk_scenarios_passed),
-            "passed": bool(risk_scenarios_passed)
-            and bool(risk_scenarios_candidate_allowed),
-            "scenario_passed": bool(risk_scenarios_passed),
-            "scenario_candidate_allowed": bool(risk_scenarios_candidate_allowed),
-        },
-        "daily_path_dd": {
-            "required": True,
-            "present": bool(daily_path_dd_complete),
-            "passed": bool(daily_path_dd_complete) and not bool(period_net_dd_only),
-            "period_net_dd_only_pass_forbidden": True,
-            "period_net_dd_only": bool(period_net_dd_only),
-            "period_net_dd_zero_daily_unmeasured": bool(
-                period_net_dd_zero_daily_unmeasured
-            ),
-            "note": (
-                "daily_path_DD / dd_duration / recovery / total_ret_net "
-                "required. period_net_DD alone cannot pass. "
-                "period_net_DD=0 AND daily unmeasured = incomplete."
-            ),
-        },
-        "pass_does_not_connect_ready_mass_go": {
-            "required": True,
-            "present": bool(freeze_closed),
-            "passed": bool(freeze_closed),
-        },
-        "holding_turnover_metrics": {
-            "required": bool(high_frequency_hyp and require_holding_for_hf),
-            "near_required": True,
-            "present": bool(holding_present),
-            "passed": (
-                bool(holding_present)
-                if (high_frequency_hyp and require_holding_for_hf)
-                else True
-            ),
-            "high_frequency_hyp": bool(high_frequency_hyp),
-        },
-    }
-    missing = [
-        k
-        for k, v in items.items()
-        if v.get("required") and not v.get("passed")
+    """Incomplete → not candidate. Complete still does not auto-promote."""
+    hf_req = bool(high_frequency_hyp and require_holding_for_hf)
+    flags: list[tuple[str, bool, bool]] = [
+        ("multi_year_or_non_overlapping_long_periods", bool(multi_year_present), bool(multi_year_present)),
+        ("cost_assumption_default_10bp_one_way", bool(cost_assumption_present), bool(cost_assumption_present)),
+        ("leverage_short_cost_assumptions", bool(leverage_short_complete), bool(leverage_short_complete)),
+        ("robustness_gate_v2_with_cost", bool(robustness_gate_present), bool(robustness_gate_present)),
+        ("explicit_data_gap_disclosure", bool(data_gap_disclosed), bool(data_gap_disclosed)),
+        (
+            "risk_scenario_evaluation",
+            bool(risk_scenarios_passed),
+            bool(risk_scenarios_passed) and bool(risk_scenarios_candidate_allowed),
+        ),
+        (
+            "daily_path_dd",
+            bool(daily_path_dd_complete),
+            bool(daily_path_dd_complete) and not bool(period_net_dd_only),
+        ),
+        ("pass_does_not_connect_ready_mass_go", bool(freeze_closed), bool(freeze_closed)),
     ]
-    complete = not missing and not checklist_skipped
-    research_candidate_allowed = bool(complete)
+    items: dict[str, Any] = {
+        k: {"required": True, "present": present, "passed": passed}
+        for k, present, passed in flags
+    }
+    items["risk_scenario_evaluation"].update(
+        scenario_passed=bool(risk_scenarios_passed),
+        scenario_candidate_allowed=bool(risk_scenarios_candidate_allowed),
+    )
+    items["daily_path_dd"].update(
+        period_net_dd_only_pass_forbidden=True,
+        period_net_dd_only=bool(period_net_dd_only),
+        period_net_dd_zero_daily_unmeasured=bool(period_net_dd_zero_daily_unmeasured),
+    )
+    items["holding_turnover_metrics"] = {
+        "required": hf_req,
+        "near_required": True,
+        "present": bool(holding_present),
+        "passed": bool(holding_present) if hf_req else True,
+        "high_frequency_hyp": bool(high_frequency_hyp),
+    }
+    missing = [k for k, v in items.items() if v.get("required") and not v.get("passed")]
     if checklist_skipped:
-        research_candidate_allowed = False
         missing = list(dict.fromkeys([*missing, "checklist_skipped"]))
-
-    reasons: list[str] = []
-    if checklist_skipped:
-        reasons.append("checklist_skipped → not research_candidate")
-    if missing:
-        reasons.append(
-            "incomplete_checklist_items: " + ", ".join(missing)
-            + " → not research_candidate"
-        )
-    if period_net_dd_only:
-        reasons.append(
-            "period_net_DD_only_pass_forbidden → not research_candidate"
-        )
-    if period_net_dd_zero_daily_unmeasured:
-        reasons.append(
-            "period_net_DD=0 AND daily unmeasured = incomplete evaluation"
-        )
-    if complete:
-        reasons.append(
-            "checklist_v2_complete (still not auto research_candidate; "
-            "READY/Mass remain closed)"
-        )
-
+    complete = not missing and not checklist_skipped
     return {
         "version": CHECKLIST_VERSION,
         "complete": bool(complete),
-        "research_candidate_allowed": bool(research_candidate_allowed),
+        "research_candidate_allowed": bool(complete),
         "missing_required": missing,
         "items": items,
-        "reasons": reasons,
-        **_closed_flags(),
-        "note": (
-            "Incomplete checklist v2 cannot become research_candidate. "
-            "Complete still does not auto-promote or connect READY/Mass. "
-            "daily_path_DD is required; period_net_DD alone cannot pass."
-        ),
         "period_net_dd_only": bool(period_net_dd_only),
         "period_net_dd_zero_daily_unmeasured": bool(
             period_net_dd_zero_daily_unmeasured
         ),
+        **_closed_flags(),
     }
 
 
@@ -1810,11 +1562,7 @@ def run_standard_research_eval(
         load_repo_rate_series,
         load_repo_rate_series_from_rows,
     )
-    from research.holding_metrics import (
-        cost_amortization_report,
-        holding_metrics_document,
-        holding_metrics_report,
-    )
+    from research.holding_metrics import holding_metrics_report
     from research.risk_scenarios import (
         default_na_scenario_bundle,
         evaluate_risk_scenarios,
@@ -1854,7 +1602,6 @@ def run_standard_research_eval(
             str(cost_change_reason).strip() if cost_change_reason else None
         ),
         "label": "仮定に依存・研究用・運用GOではない",
-        "formula": "net_one_way = gross_signed_mean_active - one_way_cost",
     }
     steps.append("cost_assumption")
 
@@ -2002,9 +1749,7 @@ def run_standard_research_eval(
     }
     cost_assumption["repo_rate"] = lev_short.get("repo_rate")
     cost_assumption["liquidity"] = lev_short.get("liquidity")
-    cost_assumption["cost_model_proof"] = STANDARD_EVAL_COST_MODEL_PROOF
 
-    # Multi-year / non-overlapping long window design.
     if periods is None:
         designed = design_yearly_eval_windows(
             years, max_days=max_days, min_days=min_days, codes=codes
@@ -2013,30 +1758,14 @@ def run_standard_research_eval(
         designed = [dict(p) for p in periods]
     steps.append("multi_year_or_long_period_design")
     availability = multi_year_availability_table(designed)
-
-    # Data-gap disclosure (required).
-    gap_notes: Any
-    if data_gap_notes is not None:
-        gap_notes = data_gap_notes
-    else:
-        gap_notes = {
-            "source": "design_yearly_eval_windows.coverage_notes + inventory",
-            "inventory": dict(DATASET_YEAR_INVENTORY_NOTES),
-            "per_period": [
-                {
-                    "period_id": p.get("period_id"),
-                    "year": p.get("year"),
-                    "skip_reason": p.get("skip_reason"),
-                    "s4_eligible": p.get("s4_eligible"),
-                    "coverage_notes": p.get("coverage_notes"),
-                }
-                for p in designed
-            ],
-            "note": (
-                "Gaps skipped / empty_allowed — never densify invent. "
-                "Caller may override data_gap_notes."
-            ),
+    gap_notes: Any = (
+        data_gap_notes
+        if data_gap_notes is not None
+        else {
+            "n_periods": len(designed),
+            "skipped": [p.get("period_id") for p in designed if p.get("skip_reason")],
         }
+    )
     steps.append("data_gap_disclosure")
 
     # Baseline catalog awareness (rejected demos only).
@@ -2047,9 +1776,6 @@ def run_standard_research_eval(
         "rejected_signal_ids": list(catalog.get("signal_ids") or []),
         "research_status_value": RESEARCH_STATUS_REJECTED,
         "new_signals_registered": False,
-        "note": (
-            "Does not invent signals. S1/S4 modes re-run rejected baselines only."
-        ),
     }
     steps.append("baseline_catalog_check")
 
@@ -2090,41 +1816,28 @@ def run_standard_research_eval(
         baseline_demo["signal_id"] = md_block.get("signal_id")
         baseline_demo["hypothesis_class"] = "multi_day_hold"
         baseline_demo["class_signals"] = True
-        baseline_demo["new_signals_registered"] = True  # class signals landed
+        baseline_demo["new_signals_registered"] = True
         baseline_demo["candidate_summary"] = class_hyp_bundle.get(
             "candidate_summary"
         )
-        baseline_demo["note"] = (
-            "W79 class_hyp_offline: multi_day_hold + event_post + "
-            "macro_conditioned + flow_demand + fundamentals_price "
-            "(+ cross_section). Not S1–S5. Not simple_daily_sign. "
-            "Candidate only if economic net meaningful."
-        )
-        # Prefer class hyp holding panel when present.
         if include_holding and md_block.get("holding") is not None:
-            holding_records = None  # use precomputed below
+            holding_records = None
         steps.append("class_hyp_offline_multi_year")
         if apply_robustness_gate:
             steps.append("robustness_gate_v2")
-        # Override scenario_rows from class hyp risk blocks when caller did not supply.
         if scenario_rows is None:
+            risk_from_md = md_block.get("risk_scenarios")
             risk_from_macro = (class_hyp_bundle.get("macro_conditioned") or {}).get(
                 "risk_scenarios"
             )
-            risk_from_md = md_block.get("risk_scenarios")
-            # Prefer multi_day_hold risk block for primary checklist surface.
-            if isinstance(risk_from_md, Mapping) and risk_from_md.get(
-                "scenario_rows"
-            ):
+            if isinstance(risk_from_md, Mapping) and risk_from_md.get("scenario_rows"):
                 scenario_rows = list(risk_from_md.get("scenario_rows") or [])
             elif isinstance(risk_from_macro, Mapping) and risk_from_macro.get(
                 "scenario_rows"
             ):
                 scenario_rows = list(risk_from_macro.get("scenario_rows") or [])
-        # Rate data is usable for macro_conditioned path (repo series).
         if not rate_data_usable:
             rate_data_usable = True
-        # Feed local repo series into cost model when not already supplied.
         if repo_series_norm is None and class_hyp_bundle.get("repo_load"):
             try:
                 _rows = load_repo_rows_from_sqlite(DEFAULT_SQLITE)
@@ -2163,9 +1876,8 @@ def run_standard_research_eval(
             )
             steps.append("robustness_gate_v2")
         elif apply_robustness_gate:
-            # Document-level gate surface (no period metrics → not passed).
             gate = {
-                **research_robustness_gate_document(),
+                **_closed_flags(),
                 "passed": False,
                 "reasons": ["wiring_only_no_period_metrics"],
                 "signal_id": gate_signal_id,
@@ -2174,22 +1886,6 @@ def run_standard_research_eval(
         multi_year_result = {
             "status": "wiring_only",
             "n_years_designed": len(designed),
-            "periods_designed": [
-                {
-                    "period_id": p.get("period_id"),
-                    "year": p.get("year"),
-                    "period_start": p.get("period_start"),
-                    "period_end": p.get("period_end"),
-                    "skip_reason": p.get("skip_reason"),
-                    "s4_eligible": p.get("s4_eligible"),
-                }
-                for p in designed
-            ],
-            "availability": availability,
-            "note": (
-                "No multi-year job executed (wiring_only or dry_run without "
-                "executable period fixtures). Short-window-only remains insufficient."
-            ),
         }
     elif mode_s == "s1_rejected_baseline":
         if not is_research_baseline_rejected(DEFAULT_SIGNAL_ID):
@@ -2317,18 +2013,8 @@ def run_standard_research_eval(
             steps.append("holding_turnover_metrics")
             holding_metrics_done = True
         else:
-            holding = {
-                "status": "annotation_only",
-                "document": holding_metrics_document(),
-                "cost_amortization": cost_amortization_report(one_way_cost=cost),
-                "note": (
-                    "Near-required holding metrics surface only — no sign panel "
-                    "supplied. Pass holding_records for full run-length report. "
-                    "High-frequency hyps should supply holding_records."
-                ),
-            }
+            holding = {"status": "annotation_only", **_closed_flags()}
             steps.append("holding_turnover_annotation")
-            # Annotation alone does not satisfy HF near-required.
             holding_metrics_done = False
 
     # Risk scenario evaluation (checklist v2 required).
@@ -2436,9 +2122,6 @@ def run_standard_research_eval(
         "checklist_version": CHECKLIST_VERSION,
         "version": CHECKLIST_VERSION,
         "prior_checklist_version": CHECKLIST_VERSION_V1,
-        "wave": CHECKLIST_WAVE,
-        "label": CHECKLIST_LABEL,
-        "proof": STANDARD_EVAL_PROOF,
         "daily_path_dd_proof": STANDARD_EVAL_DAILY_PATH_DD_PROOF,
         "mode": mode_s,
         "dry_run": bool(dry_run),
@@ -2457,7 +2140,6 @@ def run_standard_research_eval(
         "prefer_liquidity_linked": bool(prefer_liquidity_linked),
         "require_liquidity_linked": bool(require_liquidity_linked),
         "liquidity": lev_short.get("liquidity"),
-        "cost_model_proof": STANDARD_EVAL_COST_MODEL_PROOF,
         "risk_scenarios": risk_scen,
         "daily_path_dd": daily_path,
         "checklist_completeness": completeness,
@@ -2479,11 +2161,6 @@ def run_standard_research_eval(
         "short_window_only_sufficient": False,
         "high_frequency_hyp": bool(high_frequency_hyp),
         **_closed_flags(),
-        "note": (
-            "Standard research eval checklist v2. Incomplete cannot become "
-            "research_candidate. Gate pass ≠ READY/Mass/GO. "
-            "daily_path_DD required; period_net_DD alone cannot pass."
-        ),
     }
 
 
@@ -2534,7 +2211,6 @@ __all__ = [
     "run_multi_year_extra_hyp_eval",
     "run_multi_year_s1_eval",
     "run_multiday_signal_eval",
-    "run_multisignal_compare",
     "run_nextday_return_eval",
     "run_research_walk_forward_multisignal",
     "run_standard_research_eval",
