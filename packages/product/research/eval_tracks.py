@@ -69,8 +69,8 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "id": "cf_propose_llm_not_stub",
         "track": EVAL_TRACK_LIQ_LARGE,
         "why": (
-            "POST /v1/propose-thesis is stub_not_catalog; "
-            "wire Workers AI or equivalent without auto-inject"
+            "POST /v1/propose-thesis Workers AI bound; stub fallback; "
+            "still no auto-inject; review before YAML+Worker"
         ),
         "not_a_pass": True,
         "go": False,

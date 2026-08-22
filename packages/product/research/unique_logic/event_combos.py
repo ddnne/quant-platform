@@ -88,9 +88,6 @@ def spec_by_id(logic_id: str) -> dict[str, Any] | None:
     return None
 
 
-combo_runtime_spec = spec_by_id
-
-
 def assert_yaml_matches_specs(*, root: Any = None) -> None:
     """Fail if combo YAML is missing gates/cs_gate/side or sets go=True."""
     from research.unique_logic.catalog import (
@@ -157,7 +154,7 @@ def evaluate_combo_daily_mtm(
     """Python fallback for combo theses. CF Worker is the SoT path."""
     del curve, margin_by_code, topix_by_date, adv_by_code
     lid = str(spec.get("logic_id") or "")
-    declared = combo_runtime_spec(lid) or dict(spec)
+    declared = spec_by_id(lid) or dict(spec)
     kind = str(declared.get("kind") or "event")
     if kind in {"event", "surprise_xs"}:
         return _eval_event_combo(

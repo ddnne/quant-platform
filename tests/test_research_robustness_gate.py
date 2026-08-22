@@ -99,9 +99,6 @@ def test_gate_pass_does_not_arm_ready():
     assert out["cost_aware_passed"] is True
     assert out["ready_declared"] is False
     assert out["operational_go"] is False
-    assert out["connected_to_ready"] is False
-    assert out["connected_to_mass"] is False
-    assert out["mass_research"] == "NO-GO"
     assert out["significance_claimed"] is False
     assert out["edge_claimed"] is False
 

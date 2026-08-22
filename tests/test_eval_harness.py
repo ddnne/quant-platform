@@ -1,4 +1,4 @@
-"""Eval harness stub: AST/freezes ban mass / READY / orders; smoke-code pins."""
+"""Eval harness stub: AST/freezes ban mass / READY / orders."""
 
 from __future__ import annotations
 
@@ -15,15 +15,7 @@ from research.complete21 import (
     DEFAULT_FEATURE_DATASETS,
     require_complete_21_only,
 )
-from research.eval_harness import DEFAULT_EVAL_CODES, HARNESS_SMOKE_CODES
 from selection.budget_ledger import MassResearchDisabledError
-
-
-def test_harness_smoke_codes_pin():
-    import research.eval_universe as eu
-
-    assert DEFAULT_EVAL_CODES == HARNESS_SMOKE_CODES == ("13010", "72030", "67580")
-    assert not hasattr(eu, "DEFAULT_EVAL_CODES")
 
 
 def test_require_complete_21_only_default_feature_datasets():

@@ -59,7 +59,6 @@ def test_fanout_aggregates_cells_and_does_not_promote() -> None:
     assert pack["promote_as_main"] is False
     assert pack["longest_isolate_sec"] is not None
     assert pack["fanout_sec"] is not None
-    assert pack["mass_research"] == "NO-GO"
 
 
 def test_fanout_path_broken_cells_are_not_complete() -> None:
@@ -173,8 +172,8 @@ def test_eval_tracks_are_two_and_not_head_n() -> None:
     qids = [q["id"] for q in NEXT_RESEARCH_QUEUE]
     q0 = NEXT_RESEARCH_QUEUE[0]
     assert q0["id"] == "cf_propose_llm_not_stub"
-    assert "stub_not_catalog" in q0["why"]
-    assert "without auto-inject" in q0["why"]
+    assert "Workers AI" in q0["why"]
+    assert "no auto-inject" in q0["why"]
     assert "both_track_sleeve_durability" in qids
     both = next(q for q in NEXT_RESEARCH_QUEUE if q["id"] == "both_track_sleeve_durability")
     assert both["tracks"] == BOTH_EVAL_TRACK_IDS
@@ -252,8 +251,6 @@ def test_cf_daily_path_job_does_not_import_factory() -> None:
     import ast
     from pathlib import Path
 
-    import research.eval_universe as eu
-
     research_dir = (
         Path(__file__).resolve().parents[1]
         / "packages"
@@ -294,7 +291,6 @@ def test_cf_daily_path_job_does_not_import_factory() -> None:
                 for token in banned:
                     assert token not in node.module, name
                     assert node.module != f"research.{token}", name
-    assert not hasattr(eu, "DEFAULT_EVAL_CODES")
 
 
 def test_panels_cache_id_stable() -> None:

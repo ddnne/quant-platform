@@ -96,5 +96,9 @@ def test_worker_index_contains_propose_thesis_route() -> None:
     assert "margin × price" in src or "margin" in src
     assert "disclosure × funding" in src or "disclosure" in src
     wr = _WRANGLER.read_text(encoding="utf-8")
-    assert "binding = \"AI\"" not in wr
-    assert "[[ai]]" not in wr.lower()
+    assert 'binding = "AI"' in wr
+    assert "[ai]" in wr
+    assert "env.AI.run" in src
+    assert "llm_not_catalog" in src
+    assert "stubProposals" in src
+    assert "auto_inject: false" in src

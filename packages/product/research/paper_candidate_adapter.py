@@ -1,12 +1,4 @@
-"""UNARMED paper receptacle: class_hyp / research candidate → StrategySpec.
-
-Closed envelope. Does not arm the paper scheduler, call ``run_paper``, or
-touch the live order path. Mass NO-GO · Phase7 OFF · READY undeclared ·
-GO closed. ``research_candidate`` is never auto-promoted.
-
-Builders live in ``paper_candidate_specs``; adapt/envelope in
-``paper_candidate_adapt``.
-"""
+"""UNARMED paper receptacle. Implementation: ``paper_candidate_adapt``."""
 
 from __future__ import annotations
 

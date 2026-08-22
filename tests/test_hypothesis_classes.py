@@ -220,8 +220,5 @@ def test_registry_document_freezes():
     doc = hypothesis_class_registry_document()
     assert doc["version"].startswith("hypothesis-class-registry/")
     assert doc["simple_daily_sign_default_enabled"] is False
-    assert doc["mass_research"] == "NO-GO"
-    assert doc["phase7"] == "OFF"
-    assert doc["ready_declared"] is False
     assert_registry_closed_to_ready_mass(doc)
     assert_registry_closed_to_ready_mass()

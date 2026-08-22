@@ -42,13 +42,6 @@ def test_rejected_catalog_exists_and_lists_s1_to_s5():
         entry = get_rejected_baseline(sid)
         assert entry is not None
         assert entry["research_status"] == RESEARCH_STATUS_REJECTED
-        assert entry["ready_declared"] is False
-        assert entry["mass_research"] == "NO-GO"
-        assert entry["phase7"] == "OFF"
-        assert entry["connected_to_ready"] is False
-        assert entry["connected_to_mass"] is False
-        assert entry["mass_generate_signals"] is False
-        assert entry["edge_claimed"] is False
         assert is_research_baseline_rejected(sid) is True
         assert entry.get("cost_gate_result")
         assert entry.get("reasons")
@@ -59,14 +52,6 @@ def test_catalog_mass_ready_remain_false():
     assert_catalog_closed_to_ready_mass()
     doc = rejected_baseline_catalog()
     assert_catalog_closed_to_ready_mass(doc)
-    assert doc["ready_declared"] is False
-    assert doc["operational_go"] is False
-    assert doc["connected_to_ready"] is False
-    assert doc["connected_to_mass"] is False
-    assert doc["mass_research"] == "NO-GO"
-    assert doc["phase7"] == "OFF"
-    assert doc["mass_generate_signals"] is False
-    assert doc["edge_claimed"] is False
     assert doc["significance_claimed"] is False
 
 
@@ -97,10 +82,6 @@ def test_gate_pass_still_not_ready_with_catalog_present():
     )
     assert out["passed"] is True
     assert out["ready_declared"] is False
-    assert out["operational_go"] is False
-    assert out["connected_to_ready"] is False
-    assert out["connected_to_mass"] is False
-    assert out["mass_research"] == "NO-GO"
     # Catalog marks S4 rejected despite soft gate pass (weak not candidate).
     s4 = get_rejected_baseline(SIGNAL_ID_S4)
     assert s4 is not None

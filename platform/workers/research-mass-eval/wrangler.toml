@@ -36,6 +36,10 @@ binding = "DB"
 database_name = "quant-ingest"
 database_id = "be6fdcf8-40be-41fc-9535-7facd1fc2ffc"
 
+# Workers AI — propose-thesis only. Never auto-injects catalog.
+[ai]
+binding = "AI"
+
 [vars]
 MASS_EVAL_VERSION = "research-mass-eval/v22-thesis-gates"
 MASS_EVAL_WAVE = "research-mass-eval"

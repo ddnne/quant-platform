@@ -484,7 +484,92 @@ const PROPOSE_STUB_TEMPLATES: Array<{
 ];
 
 function hasWorkersAi(env: Env): boolean {
-  return Boolean((env as { AI?: unknown }).AI);
+  return Boolean(env.AI);
+}
+
+const PROPOSE_AI_MODEL = "@cf/meta/llama-3.1-8b-instruct-fp8";
+
+function parseProposalArray(raw: string, n: number): Array<Record<string, unknown>> {
+  const text = String(raw || "");
+  const start = text.indexOf("[");
+  const end = text.lastIndexOf("]");
+  if (start < 0 || end <= start) return [];
+  try {
+    const parsed = JSON.parse(text.slice(start, end + 1));
+    if (!Array.isArray(parsed)) return [];
+    const out: Array<Record<string, unknown>> = [];
+    for (const row of parsed) {
+      if (!isObject(row)) continue;
+      if (isWindowTweakOnly(row)) continue;
+      const thesis = String(row.thesis ?? "").trim();
+      const signal = String(row.signal_definition ?? row.signal ?? "").trim();
+      const position = String(row.position_rule ?? row.position ?? "").trim();
+      if (!thesis || !signal || !position) continue;
+      const datasets = Array.isArray(row.datasets)
+        ? row.datasets.map((x) => String(x)).filter(Boolean)
+        : [];
+      const why = Array.isArray(row.why_different_from)
+        ? row.why_different_from.map((x) => String(x)).filter(Boolean)
+        : [];
+      out.push({
+        thesis,
+        signal_definition: signal,
+        position_rule: position,
+        datasets,
+        why_different_from: why,
+        not_injected: true,
+        status: "llm_not_catalog",
+      });
+      if (out.length >= n) break;
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+async function llmProposals(
+  env: Env,
+  n: number,
+  whyAvoid: string[],
+): Promise<Array<Record<string, unknown>> | null> {
+  if (!env.AI) return null;
+  const avoid = whyAvoid.filter(Boolean).slice(0, 12).join(", ") || "(none)";
+  try {
+    const res = await env.AI.run(PROPOSE_AI_MODEL, {
+      messages: [
+        {
+          role: "system",
+          content:
+            "You propose Japanese-equity overnight/event/CS profit theses. " +
+            "Return ONLY a JSON array. Each object: thesis, signal_definition, " +
+            "position_rule, datasets (string array), why_different_from (string array). " +
+            "No logic_id. No hold_days/window/mom-only tweaks. No catalog inject. " +
+            "Economic difference only. Skip missing data (no invent).",
+        },
+        {
+          role: "user",
+          content:
+            `Propose ${n} theses. Avoid resembling: ${avoid}. ` +
+            "Directions: liquidity×fundamentals, margin×price, disclosure×funding, EqAR/TA change×event.",
+        },
+      ],
+    });
+    const text =
+      typeof res === "string"
+        ? res
+        : isObject(res)
+          ? String(
+              (res as { response?: unknown }).response ??
+                (res as { result?: unknown }).result ??
+                JSON.stringify(res),
+            )
+          : "";
+    const rows = parseProposalArray(text, n);
+    return rows.length ? rows : null;
+  } catch {
+    return null;
+  }
 }
 
 function isWindowTweakOnly(o: Record<string, unknown>): boolean {
@@ -567,7 +652,9 @@ async function runProposeThesis(
     ? body.why_avoid.map((x) => String(x))
     : [];
   const writeArtifacts = body.write_artifacts === true;
-  const proposals = stubProposals(n, whyAvoid);
+  const llm = await llmProposals(env, n, whyAvoid);
+  const usedLlm = Array.isArray(llm) && llm.length > 0;
+  const proposals = usedLlm ? llm : stubProposals(n, whyAvoid);
   const payload: Record<string, unknown> = {
     ok: true,
     proposals,
@@ -577,6 +664,8 @@ async function runProposeThesis(
     catalog_written: false,
     ids_injected: false,
     workers_ai_bound: hasWorkersAi(env),
+    workers_ai_used: usedLlm,
+    proposal_source: usedLlm ? "workers_ai" : "stub",
   };
   if (writeArtifacts) {
     const jobId = String(body.job_id ?? "").trim();

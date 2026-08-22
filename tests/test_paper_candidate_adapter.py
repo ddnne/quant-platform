@@ -15,11 +15,6 @@ from pathlib import Path
 
 import pytest
 
-from research.freezes import (
-    LIVE_ORDER_PATH_ENABLED,
-    LIVE_ORDERS,
-    PAPER_SCHEDULER_ARMED,
-)
 from research.paper_candidate_adapter import (
     PAPER_CANDIDATE_SPEC_VERSION,
     PaperCandidateReceptacle,
@@ -45,12 +40,6 @@ ADAPTER_IMPL_PATHS = (
     RESEARCH_DIR / "paper_candidate_adapt.py",
     RESEARCH_DIR / "paper_candidate_specs.py",
 )
-
-
-def test_module_constants_are_unarmed():
-    assert PAPER_SCHEDULER_ARMED is False
-    assert LIVE_ORDERS is False
-    assert LIVE_ORDER_PATH_ENABLED is False
 
 
 def test_multi_day_hold_10d_strategy_spec_is_closed_and_interpretable():

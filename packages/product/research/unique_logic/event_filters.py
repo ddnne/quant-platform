@@ -45,9 +45,6 @@ def pit_median_from_pairs(
     return out
 
 
-_event_key = event._event_key
-
-
 def _abs_surprise_pairs(
     events_by_code: Mapping[str, Sequence[Mapping[str, Any]]],
 ) -> list[tuple[str, float]]:
@@ -216,7 +213,7 @@ def evaluate_large_surprise_event_hold_daily_mtm(
     n_skip_small = 0
     n_entered = 0
     for ev in collected["entries"]:
-        key = _event_key(ev)
+        key = event._event_key(ev)
         med = med_by.get(ev["disc_date"])
         if med is None:
             accept[key] = False
@@ -281,7 +278,7 @@ def evaluate_afterclose_only_event_hold_daily_mtm(
     n_skip_preclose = 0
     n_entered = 0
     for ev in collected["entries"]:
-        key = _event_key(ev)
+        key = event._event_key(ev)
         dt = parse_disc_time_hhmmss(ev.get("disc_time"))
         if dt is None:
             accept[key] = False
@@ -350,7 +347,7 @@ def evaluate_event_pre_mom_agree_hold_daily_mtm(
     n_skip_disagree = 0
     n_entered = 0
     for ev in collected["entries"]:
-        key = _event_key(ev)
+        key = event._event_key(ev)
         code = ev["code"]
         pack = (collected.get("per_code") or {}).get(code) or {}
         dlist = list(pack.get("dlist") or [])
@@ -444,7 +441,7 @@ def evaluate_event_margin_crowding_skip_daily_mtm(
     n_skip_crowded = 0
     n_entered = 0
     for ev in collected["entries"]:
-        key = _event_key(ev)
+        key = event._event_key(ev)
         series = dict((margin_by_code or {}).get(ev["code"]) or {})
         last = event._last_print_before(series, ev["entry_date"])
         if last is None:

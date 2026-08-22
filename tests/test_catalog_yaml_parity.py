@@ -54,9 +54,9 @@ def test_catalog_yaml_parity_with_python_specs() -> None:
 
 def test_combo_yaml_params_include_gates() -> None:
     from research.unique_logic.catalog import combo_row_from_yaml, parse_catalog_yaml
-    from research.unique_logic.event_combos import combo_runtime_spec
+    from research.unique_logic.event_combos import spec_by_id
 
-    py = combo_runtime_spec("event_eqar_high_pead")
+    py = spec_by_id("event_eqar_high_pead")
     assert py is not None
     path = _YAML_DIR / "event_eqar_high_pead.yaml"
     yml = parse_catalog_yaml(path.read_text(encoding="utf-8"))
@@ -78,7 +78,7 @@ def test_combo_yaml_gates_cs_gate_side_match_specs() -> None:
     from research.unique_logic.event_combos import (
         NEW_COMBO_LOGIC,
         assert_yaml_matches_specs,
-        combo_runtime_spec,
+        spec_by_id,
     )
 
     assert_yaml_matches_specs()
@@ -87,7 +87,7 @@ def test_combo_yaml_gates_cs_gate_side_match_specs() -> None:
     py_ids = {s["logic_id"] for s in NEW_COMBO_LOGIC}
     assert py_ids == yaml_ids
     sample = NEW_COMBO_LOGIC[0]
-    rt = combo_runtime_spec(sample["logic_id"])
+    rt = spec_by_id(sample["logic_id"])
     assert rt is not None
     assert rt["logic_id"] == sample["logic_id"]
     assert rt.get("go") is not True

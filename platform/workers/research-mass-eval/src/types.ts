@@ -1,6 +1,7 @@
 export interface Env {
   STRUCTURED_BUCKET: R2Bucket;
   DB?: D1Database;
+  AI?: Ai;
   MASS_EVAL_TOKEN?: string;
   MASS_EVAL_VERSION?: string;
   MASS_EVAL_WAVE?: string;

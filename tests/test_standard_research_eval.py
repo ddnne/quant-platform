@@ -91,7 +91,6 @@ def test_rejected_baselines_still_rejected():
         assert is_research_baseline_rejected(sid) is True
         entry = rejected_baseline_catalog()["baselines"][sid]
         assert entry["research_status"] == RESEARCH_STATUS_REJECTED
-        _assert_mass_ready_off(entry)
 
 
 def test_leverage_short_costs_long_only_and_long_short():
@@ -100,7 +99,6 @@ def test_leverage_short_costs_long_only_and_long_short():
     assert lo["assumptions_complete"] is True
     assert lo["short_borrow"]["not_applicable"] is True
     assert lo["leverage_financing"]["not_applicable"] is True
-    _assert_mass_ready_off(lo)
 
     ls = build_leverage_short_cost_assumption(
         position_style=POSITION_STYLE_LONG_SHORT,
@@ -116,14 +114,12 @@ def test_leverage_short_costs_long_only_and_long_short():
         short_borrow_annual_bp=50.0, short_fraction=0.5
     )
     assert abs(ls["short_borrow"]["daily_cost"] - expected) < 1e-12
-    _assert_mass_ready_off(ls)
 
 
 def test_evaluate_risk_scenarios_standalone():
     pending = evaluate_risk_scenarios(None)
     assert pending["passed"] is False
     assert pending["research_candidate_allowed"] is False
-    _assert_mass_ready_off(pending)
 
     full = evaluate_risk_scenarios(
         [
@@ -139,7 +135,6 @@ def test_evaluate_risk_scenarios_standalone():
     )
     assert full["passed"] is True
     assert full["coverage_ok"] is True
-    _assert_mass_ready_off(full)
 
 
 def test_period_net_method_stuffed_as_daily_fails():

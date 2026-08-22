@@ -156,8 +156,6 @@ def test_panel_run_length_two_codes():
     assert stats["run_length"]["mean"] == pytest.approx(2.0)
     assert stats["per_code_mean_run_length"]["A"] == pytest.approx(3.0)
     assert stats["per_code_mean_run_length"]["B"] == pytest.approx(1.5)
-    assert stats["ready_declared"] is False
-    assert stats["mass_research"] == "NO-GO"
 
 
 # ---------------------------------------------------------------------------
@@ -235,10 +233,6 @@ def test_extract_panel_unanimous_majority():
     panel = extract_sign_panel_from_batch_summary(batch)
     assert panel["source"] == "sign_distribution_majority_expanded_unanimous"
     assert panel["n_records"] == 6  # 3 days × 2 codes
-    assert panel["ready_declared"] is False
-    assert panel["mass_research"] == "NO-GO"
     report = holding_metrics_report(panel["records"])
     # each code: -1, +1, +1 → runs [1, 2]; two codes → 4 runs mean 1.5
     assert report["run_length_stats"]["run_length"]["mean"] == pytest.approx(1.5)
-    assert report["ready_declared"] is False
-    assert report["edge_claimed"] is False

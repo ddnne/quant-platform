@@ -115,7 +115,7 @@ cat /tmp/mass_eval_summary.json | jq .
 |------|------|
 | **this worker** | CF minimal multi-logic batch + R2 artifacts |
 | `python -m research.unique_logic --backend local` | Serial local unique_logic fallback |
-| `research.single_shot_job` | Orthogonal tip signal jobs (not mass logic batch) |
+| `research.cf_daily_path_job` / POST /v1/daily-path / POST /v1/propose-thesis | Candidate SoT (no auto-inject) |
 
 Python helper: `research.offline.factory.try_cf_minimal_mass_batch()` reports this worker.
 

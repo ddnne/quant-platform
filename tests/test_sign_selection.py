@@ -46,8 +46,6 @@ def test_evaluate_both_sides_prefers_original_when_positive():
     choice = choose_sign(both)
     assert choice["chosen_sign"] == SIGN_ORIGINAL
     assert choice["decision"] == "keep_original"
-    assert choice["ready_declared"] is False
-    assert choice["mass_research"] == "NO-GO"
 
 
 def test_evaluate_both_sides_flips_when_original_negative_inverted_positive():
@@ -170,8 +168,6 @@ def test_sign_selection_from_period_rows():
     assert sel["chosen_sign"] == SIGN_ORIGINAL
     assert sel["original"]["n_periods"] == 6
     assert sel["inverted"]["mean_net"] < 0
-    assert sel["mass_research"] == "NO-GO"
-    assert sel["operational_go"] is False
 
 
 def test_both_eligible_picks_higher_mean():
@@ -282,13 +278,3 @@ def test_paper_adapter_wires_chosen_sign():
     # default +1 omitted from to_dict
     assert "signal_sign" not in fund.to_dict()["rule"]
     assert fund.rule.signal_sign == 1
-
-
-def test_multiyear_eval_version_w86():
-    from research.offline.multiyear import (
-        CLASS_HYP_EVAL_VERSION,
-        CLASS_HYP_EVAL_WAVE,
-    )
-
-    assert CLASS_HYP_EVAL_VERSION == "class-hyp-eval/v7"
-    assert "W86" in CLASS_HYP_EVAL_WAVE

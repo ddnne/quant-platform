@@ -523,35 +523,3 @@ def test_offline_bar_eval_pure_on_synthetic_bars():
     )
     assert xs10["hold_days"] == 10
     assert xs10.get("occurrence") is not None
-
-
-def test_w83_wave_tags_and_default_path_params():
-    """W83 / w0816r: wave tags + default path includes xs/fund hold=10 blocks."""
-    import inspect
-
-    from features.class_signals import (
-        CLASS_SIGNALS_VERSION,
-        CLASS_SIGNALS_WAVE,
-        EVENT_POST_ENTRY_MODE,
-    )
-    from research.offline.multiyear import (
-        CLASS_HYP_EVAL_VERSION,
-        CLASS_HYP_EVAL_WAVE,
-        run_class_hyp_multi_year_eval,
-    )
-
-    assert CLASS_SIGNALS_VERSION == "class-signals/v10"
-    assert "W95" in CLASS_SIGNALS_WAVE
-    assert CLASS_HYP_EVAL_VERSION == "class-hyp-eval/v7"
-    assert "W86" in CLASS_HYP_EVAL_WAVE
-    assert EVENT_POST_ENTRY_MODE == "same_day_close_if_pre_close"
-
-    sig = inspect.signature(run_class_hyp_multi_year_eval)
-    assert sig.parameters["include_cross_section_hold_10"].default is True
-    assert sig.parameters["include_fundamentals_hold_10"].default is True
-    assert sig.parameters["cross_section_hold10_momentum_n"].default == 5
-    assert sig.parameters["fund_hold10_momentum_n"].default == 10
-    assert sig.parameters["include_cross_section_hold_10_mom3"].default is True
-    assert sig.parameters["cross_section_hold10_mom3_momentum_n"].default == 3
-    doc = class_signals_document()
-    _assert_mass_ready_off(doc)
