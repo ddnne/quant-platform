@@ -44,7 +44,8 @@ export const GATE_OCCUPANCY_LABEL: Array<[string, string[]]> = [
   ["steep_curve", ["curve is steep", "is steep", "yield curve"]],
   ["np_negative", ["profitability is weak", "weak profitability", "weak profit"]],
   ["eps_down", ["earnings disappointment", "earnings disappoint", "earnings per share are falling", "eps are falling", "earnings per share tend to decrease", "eps down", "eps is down"]],
-  ["eps_up", ["earnings per share are rising", "eps are rising", "eps is rising"]],
+  ["eps_up", ["earnings per share are rising", "eps are rising", "eps is rising", "rising earnings per share", "rising eps"]],
+  ["sales_down", ["sales are down", "sales down"]],
   ["price_down", ["under pressure", "price pressure"]],
   ["crowded_margin", ["market is crowded"]],
 ];
@@ -153,11 +154,15 @@ export const OCCUPANCY_EXTRA_TITLE: Array<[string, string[]]> = [
   ["repo is low", ["repo_3m_down"]],
   ["repo rate is low", ["overnight_p10"]],
   ["repo rates are low", ["overnight_p10", "repo_3m_down"]],
+  ["rising earnings per share", ["eps_up"]],
+  ["rising eps", ["eps_up"]],
   ["rising price to book", ["pb_rising"]],
   ["risk appetite", ["eq_ar_falling", "eq_ar_high", "eq_ar_low", "eq_ar_rising"]],
   ["risk arbitrage", ["eq_ar_falling", "eq_ar_high", "eq_ar_low", "eq_ar_rising"]],
   ["risk premia", ["eq_ar_falling", "eq_ar_high", "eq_ar_low", "eq_ar_rising"]],
   ["risk premium", ["eq_ar_falling", "eq_ar_high", "eq_ar_low", "eq_ar_rising"]],
+  ["sales are down", ["sales_down"]],
+  ["sales down", ["sales_down"]],
   ["ta signals", ["ta_down", "ta_up"]],
   ["technical analysis", ["ta_down", "ta_up"]],
   ["technical signal", ["ta_down", "ta_up"]],
@@ -203,6 +208,7 @@ export const SPARSE_GATE_COMBOS_REVIEW: string[][] = [
   ["curve_flatten", "np_negative", "roe_low"],
   ["invert_curve", "roe_low"],
   ["np_negative", "overnight_p10", "price_down"],
+  ["eps_up", "overnight_p10", "sales_down"],
 ];
 
 export const OCCUPANCY_LABEL_EXCEPTIONS: Array<[string, string[]]> = [
@@ -217,6 +223,7 @@ export const OCCUPANCY_LABEL_EXCEPTIONS: Array<[string, string[]]> = [
   ["pre_mom", ["agrees", "pre-event", "pre entry", "surprise sign"]],
   ["eps_up", ["rose", "versus the last prior", "last prior print"]],
   ["eps_down", ["contracted", "versus the last prior", "last prior print"]],
+  ["sales_down", ["contracted", "versus the last prior", "last prior print"]],
   ["np_negative", ["net profit", "np is negative", "np negative"]],
   ["crowded_margin", ["margin is crowded", "margin crowding"]],
   ["curve_flatten", ["repo curve", "flattened"]],

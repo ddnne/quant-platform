@@ -1,5 +1,13 @@
 # Repo layout dependency inventory (P0 reorg)
 
+> **Historical (2026-08-12 snapshot).** Live layout SoT is
+> [`llm_nav_map.md`](./llm_nav_map.md) and
+> [`repo_layout_migration.md`](./repo_layout_migration.md). Packaging `where`
+> is `packages/{edge,data_plane,research_runtime,product}` in current
+> `pyproject.toml`. This file still lists pre-migration paths
+> (`jquants/fetch`, `where = ["."]`). Do not treat it as the current tree.
+> Do not launch Mass / READY / Phase 7 from this inventory.
+
 **Purpose:** read-only dependency map for structural reorganization.  
 **No mass moves in this doc.** Inventory only.  
 **Tip surveyed:** `b76996ddf0bc24107b5d9fce65ddf05dd86ae6fb`  

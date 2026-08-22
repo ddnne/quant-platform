@@ -656,6 +656,12 @@ def test_review_proposal_row_occupancy_and_polarity_table() -> None:
             "occupancy_label_only",
             "PEAD when overnight funding eased AND net profit is negative. Skip missing PIT prints (no invent).",
         ),
+        (
+            "Stocks with rising earnings per share tend to outperform when overnight funding is in the easiest decile and sales are down.",
+            ["overnight_p10", "sales_down", "eps_up"],
+            "occupancy_label_only",
+            "PEAD when overnight is in the easiest PIT decile AND sales contracted versus the last prior print AND EPS rose versus the last prior print. Skip missing PIT prints (no invent).",
+        ),
     ]
     for bad_thesis, gates, reason, good_thesis in rows:
         payload = {

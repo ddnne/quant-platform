@@ -39,8 +39,7 @@ def test_event_filters_proposals_are_new_unique_logic_not_catalog_or_prior_event
         assert s["new_unique_logic"] is True
         assert s["catalog"] is True
         assert s["catalog_map"] is None
-        assert s.get("generation_enabled") is False
-        assert s.get("go") is False
+        # generation_enabled/go: test_catalog_yaml_parity_with_python_specs
         assert s["logic_id"] not in LOGIC_CATALOG_HEADLINE_BAN
         assert s["logic_id"] not in EVENT_LOGIC_IDS
         assert s["logic_id"] not in KNOWN_WEAK_THESIS

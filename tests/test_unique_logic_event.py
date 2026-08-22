@@ -33,8 +33,7 @@ def test_event_proposals_are_new_unique_logic_not_catalog_remaps():
         assert s["new_unique_logic"] is True
         assert s["catalog"] is True
         assert s["catalog_map"] is None
-        assert s.get("generation_enabled") is False
-        assert s.get("go") is False
+        # generation_enabled/go: test_catalog_yaml_parity_with_python_specs
         assert s["logic_id"] not in LOGIC_CATALOG_HEADLINE_BAN
         assert s["logic_id"] not in KNOWN_WEAK_THESIS
         assert s["logic_id"] not in KNOWN_DEMOTED_OR_WEAK

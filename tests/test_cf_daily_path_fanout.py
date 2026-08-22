@@ -438,6 +438,8 @@ def test_both_track_sleeve_fanout_records_via_daily_path() -> None:
         abs(float(v) - 0.21) < 1e-9
         for v in tracks[EVAL_TRACK_MID_N]["occupancy_by_logic"].values()
     )
+    assert pack["occupancy_by_track"][EVAL_TRACK_MID_N] == tracks[EVAL_TRACK_MID_N]["occupancy_by_logic"]
+    assert pack["occupancy_by_track"][EVAL_TRACK_LIQ_LARGE] == tracks[EVAL_TRACK_LIQ_LARGE]["occupancy_by_logic"]
     assert all(url.endswith("/v1/daily-path") for url, _n, _lid in posts)
     max_codes = {n for _url, n, _lid in posts}
     assert max_codes == {

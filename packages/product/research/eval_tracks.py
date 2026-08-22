@@ -80,11 +80,10 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "id": "inventory_bias_recorded",
         "track": EVAL_TRACK_LIQ_LARGE,
         "why": (
-            "recorded research/eval/job=eval-inventory-bias-20260824z/ "
+            "recorded research/eval/job=eval-inventory-bias-20260824aa/ "
             "inventory_bias.json; assert_new_batch_cheap_pb_cap refuses "
-            "new batches at 20%; 24z adopt steep×tight×px and easing×eps×np "
-            "thin (not sleeve); TITLE_OCCUPANCY_META plus steep occupancy-label "
-            "and eps_down positive-earnings contra; GOOD stays p10×np"
+            "new batches at 20%; 24aa p10×sales×eps_up both-track near_empty "
+            "parked; rising-EPS occupancy-label; GOOD stays p10×np"
         ),
         "not_a_pass": True,
         "go": False,
@@ -235,9 +234,8 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "id": "adopt_occupancy_recorded",
         "track": EVAL_TRACK_LIQ_LARGE,
         "why": (
-            "eval-occupancy-audit-20260824z: 24z steep×tight×px and "
-            "easing×eps×np both-track thin; not sleeve members "
-            "(event_fund at 5); not a pass"
+            "eval-occupancy-audit-20260824aa: 24aa p10×sales×eps_up "
+            "both-track near_empty parked + SPARSE; not a pass"
         ),
         "not_a_pass": True,
         "go": False,
@@ -246,8 +244,8 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "id": "near_empty_parked_not_countable",
         "track": EVAL_TRACK_LIQ_LARGE,
         "why": (
-            "NEAR_EMPTY_PARK_IDS 14; is_countable_spec and "
-            "validate_basket_members exclude them; "
+            "NEAR_EMPTY_PARK_IDS includes 24aa p10×sales×eps_up; "
+            "is_countable_spec and validate_basket_members exclude them; "
             "assert_new_batch_occupancy_not_near_empty refuses empty batches"
         ),
         "not_a_pass": True,

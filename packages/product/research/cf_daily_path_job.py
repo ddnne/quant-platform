@@ -440,6 +440,10 @@ def run_both_track_sleeve_fanout(
         "n_logics": len(ids),
         "tracks": tracks_out,
         "n_tracks": len(tracks_out),
+        "occupancy_by_track": {
+            str(t.get("eval_track") or ""): dict(t.get("occupancy_by_logic") or {})
+            for t in tracks_out
+        },
         "head_n_forbidden": True,
         "universe_select": "adv_desc_skip_missing_bars_and_fins",
         "compare": compare,
