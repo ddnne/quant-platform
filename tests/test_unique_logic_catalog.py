@@ -7,14 +7,27 @@ from tests.research_eval_util import _disc_event
 
 def test_event_sides_ls_variants_stay_registered() -> None:
     from research.unique_logic import event_sides
+    from research.unique_logic.catalog import yaml_unique_rows
     from research.unique_logic.constants import (
+        ADAPTIVE_LOGIC_IDS,
+        CS_LOGIC_IDS,
         EVENT_SIDES_LOGIC_IDS,
         RESEARCH_UNIQUE_LOGIC_IDS,
     )
+    from tests.research_eval_util import assert_unique_family_specs
 
-    ids = [s["logic_id"] for s in event_sides.NEW_LS_VARIANTS]
-    assert ids == sorted(EVENT_SIDES_LOGIC_IDS)
-    assert set(ids) <= set(RESEARCH_UNIQUE_LOGIC_IDS)
+    assert_unique_family_specs(
+        list(event_sides.NEW_LS_VARIANTS), EVENT_SIDES_LOGIC_IDS
+    )
+    assert set(EVENT_SIDES_LOGIC_IDS) <= set(RESEARCH_UNIQUE_LOGIC_IDS)
+    assert_unique_family_specs(
+        yaml_unique_rows(logic_ids=sorted(ADAPTIVE_LOGIC_IDS)),
+        ADAPTIVE_LOGIC_IDS,
+    )
+    assert_unique_family_specs(
+        yaml_unique_rows(logic_ids=sorted(CS_LOGIC_IDS)),
+        CS_LOGIC_IDS,
+    )
 
 
 def test_parse_catalog_yaml_folded_and_params() -> None:

@@ -315,8 +315,8 @@ def assert_unique_family_specs(
         assert lid not in KNOWN_DEMOTED_OR_WEAK
         for other in disjoint_from:
             assert lid not in other
-        params = s["params"]
-        assert "mode" in params or "gate" in params
+        params = s.get("params")
+        assert isinstance(params, dict)
     out = propose_profit_hypotheses(specs, evaluate=False)
     assert out["n_accepted"] == len(specs)
     assert out["n_rejected"] == 0

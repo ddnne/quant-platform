@@ -47,7 +47,10 @@ if not PROPOSE_ALLOWED_DATASETS <= COMPLETE_21_DATASET_SET:
     raise RuntimeError("propose datasets must be a subset of COMPLETE 21")
 
 PROPOSE_MAX_AND_GATES: int = 3
-PROPOSE_WHY_AVOID_LIMIT: int = 24
+# Combined payload sent to the Worker. Sparse used to consume this cap
+# before catalog prefer 2-AND clones, so the LLM re-emitted eps×px / pb×tight.
+PROPOSE_WHY_AVOID_LIMIT: int = 48
+CATALOG_GATE_SET_AVOID_LIMIT: int = 24
 
 
 def review_proposal_row(proposal: Mapping[str, Any]) -> dict[str, Any]:
@@ -160,7 +163,67 @@ def review_proposal_row(proposal: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def catalog_gate_set_avoid(*, limit: int = PROPOSE_WHY_AVOID_LIMIT) -> list[str]:
+def catalog_prefer_pair_avoid() -> list[str]:
+    """Catalog 2-ANDs whose gates are both prefer seeds. Clone magnet.
+
+    These must reach why_avoid even when SPARSE is long. Unique prefer
+    pairs (GOOD) are not catalog, so they stay off this list. Not GO.
+    """
+    from research.unique_logic.catalog import yaml_combo_rows
+    from research.unique_logic.constants import PROPOSE_CALENDAR_GATES
+    from research.unique_logic.propose_review_tables import (
+        PROPOSE_PROMPT_PREFER_GATES,
+    )
+    from research.unique_logic.worker_bodies import countable_thesis_ids
+
+    prefer = set(PROPOSE_PROMPT_PREFER_GATES)
+    countable = countable_thesis_ids()
+    out: list[str] = []
+    have: set[str] = set()
+    for row in yaml_combo_rows():
+        lid = str(row.get("logic_id") or "")
+        if lid and lid not in countable:
+            continue
+        gates = sorted(
+            str(x)
+            for x in ((row.get("params") or {}).get("gates") or [])
+            if str(x).strip()
+        )
+        if len(gates) != 2:
+            continue
+        if PROPOSE_CALENDAR_GATES.intersection(gates):
+            continue
+        if not set(gates) <= prefer:
+            continue
+        token = "+".join(gates)
+        if token in have:
+            continue
+        have.add(token)
+        out.append(token)
+    return out
+
+
+def assemble_why_avoid(extra: Sequence[str] | None = None) -> list[str]:
+    """Prefer-catalog 2-ANDs, then sparse, then newest catalog 3/2-sets."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in (
+        list(extra or ())
+        + catalog_prefer_pair_avoid()
+        + sparse_gate_set_avoid()
+        + catalog_gate_set_avoid()
+    ):
+        token = str(item).strip()
+        if not token or token in seen:
+            continue
+        seen.add(token)
+        out.append(token)
+        if len(out) >= PROPOSE_WHY_AVOID_LIMIT:
+            break
+    return out
+
+
+def catalog_gate_set_avoid(*, limit: int = CATALOG_GATE_SET_AVOID_LIMIT) -> list[str]:
     """Existing countable AND-sets for LLM why_avoid.
 
     Newest YAML first. Reserve half the cap for 3-gates and half for
@@ -335,18 +398,7 @@ def invoke_cf_propose_thesis(
 
     url = worker_url.rstrip("/") + "/v1/propose-thesis"
     auth_tok = resolve_research_run_token() or ""
-    avoid: list[str] = []
-    seen_avoid: set[str] = set()
-    for item in (
-        list(why_avoid or ()) + sparse_gate_set_avoid() + catalog_gate_set_avoid()
-    ):
-        token = str(item).strip()
-        if not token or token in seen_avoid:
-            continue
-        seen_avoid.add(token)
-        avoid.append(token)
-        if len(avoid) >= PROPOSE_WHY_AVOID_LIMIT:
-            break
+    avoid = assemble_why_avoid(why_avoid)
     body: dict[str, Any] = {
         "n": max(1, min(3, int(n))),
         "why_avoid": avoid,
@@ -483,9 +535,12 @@ def invoke_cf_propose_thesis(
 
 
 __all__ = [
+    "CATALOG_GATE_SET_AVOID_LIMIT",
     "PROPOSE_ALLOWED_DATASETS",
     "PROPOSE_WHY_AVOID_LIMIT",
+    "assemble_why_avoid",
     "catalog_gate_set_avoid",
+    "catalog_prefer_pair_avoid",
     "sparse_gate_set_avoid",
     "invoke_cf_propose_thesis",
     "reject_window_tweak",

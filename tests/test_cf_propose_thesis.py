@@ -757,6 +757,12 @@ def test_review_proposal_row_occupancy_and_polarity_table() -> None:
             "occupancy_label_only",
             "PEAD when PB is above its PIT median AND overnight funding is tight. Skip missing PIT prints (no invent).",
         ),
+        (
+            "Market contraction when earnings and price momentum decline, and funding conditions tighten.",
+            ["eps_down", "price_down", "tight_funding"],
+            "occupancy_label_only",
+            "PEAD when EPS contracted versus the last prior print AND price is down AND overnight funding is tight. Skip missing PIT prints (no invent).",
+        ),
     ]
     for bad_thesis, gates, reason, good_thesis in rows:
         payload = {
@@ -787,14 +793,32 @@ def test_catalog_gate_set_avoid_is_existing_crosses() -> None:
 
     tokens = catalog_gate_set_avoid(limit=8)
     assert 1 <= len(tokens) <= 8
+    from research.cf_propose_thesis import (
+        CATALOG_GATE_SET_AVOID_LIMIT,
+        assemble_why_avoid,
+        catalog_prefer_pair_avoid,
+    )
+    from research.unique_logic.propose_review_tables import propose_prompt_good
+
     full = catalog_gate_set_avoid()
-    assert len(full) == PROPOSE_WHY_AVOID_LIMIT
-    assert PROPOSE_WHY_AVOID_LIMIT == 24
+    assert len(full) == CATALOG_GATE_SET_AVOID_LIMIT
+    assert CATALOG_GATE_SET_AVOID_LIMIT == 24
+    assert PROPOSE_WHY_AVOID_LIMIT == 48
     assert any(t.count("+") == 2 for t in full)
     assert any(t.count("+") == 1 for t in full)
     n3 = sum(1 for t in full if t.count("+") == 2)
     n2 = sum(1 for t in full if t.count("+") == 1)
     assert n3 >= 8 and n2 >= 8
+    prefer_pairs = catalog_prefer_pair_avoid()
+    assert "eps_down+price_down" in prefer_pairs
+    assert "pb_rising+tight_funding" in prefer_pairs
+    good_tok = "+".join(sorted(str(g) for g in propose_prompt_good()["gates"]))
+    assert good_tok not in prefer_pairs
+    assembled = assemble_why_avoid()
+    assert len(assembled) <= PROPOSE_WHY_AVOID_LIMIT
+    assert "eps_down+price_down" in assembled
+    assert "pb_rising+tight_funding" in assembled
+    assert good_tok not in assembled
     assert all("+" in t for t in tokens)
     blob = " ".join(tokens)
     assert "skip_monday" not in blob

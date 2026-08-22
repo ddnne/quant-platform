@@ -178,7 +178,7 @@ async function llmProposals(
   model: string | null;
 }> {
   if (!env.AI) return { rows: null, reason: "ai_unbound", model: null };
-  const avoid = whyAvoid.filter(Boolean).slice(0, 24).join(", ") || "(none)";
+  const avoid = whyAvoid.filter(Boolean).slice(0, 48).join(", ") || "(none)";
   const sparseBan = SPARSE_GATE_COMBOS_REVIEW.filter((c) => c.length === 2)
     .map((c) => `Do not pair ${c[0]} with ${c[1]}.`)
     .join(" ");
@@ -191,6 +191,7 @@ async function llmProposals(
     " Do not start with cheap_pb. No weekday. No opposite pairs. " +
     "Thesis is an occupancy sentence matching gate polarity. EqAR is not risk appetite. " +
     "ta_up is total assets, not technical analysis. No A×B×C labels. " +
+    "If GOOD gates are not in Avoid, copy that AND with occupancy sentences. " +
     "Do not invent datasets, fields, or gates. No logic_id. No inject.";
   const user =
     `Propose exactly ${n} JSON theses. Avoid: ${avoid}.\n` +
