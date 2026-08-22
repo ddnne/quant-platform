@@ -151,7 +151,6 @@ def _dispatch_body(lid, spec, kw, bars, overnight, curve, events, margin_by_code
             one_way_cost=one_way_cost,
             period_start=period_start,
             period_end=period_end,
-            adv_by_code=adv_by_code,
         )
     return {
         "status": "unknown_logic",

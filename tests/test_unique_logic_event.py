@@ -6,6 +6,11 @@ import pytest
 
 from research.offline.factory import propose_profit_hypotheses
 from research.unique_logic import event
+from research.unique_logic.constants import (
+    KNOWN_DEMOTED_OR_WEAK,
+    KNOWN_WEAK_THESIS,
+    LOGIC_CATALOG_HEADLINE_BAN,
+)
 
 
 def _bars(n: int = 40, start: str = "2019-01-") -> dict[str, list[tuple[str, float]]]:
@@ -59,9 +64,9 @@ def test_event_proposals_are_new_unique_logic_not_catalog_remaps():
         assert s["catalog_map"] is None
         assert s.get("generation_enabled") is False
         assert s.get("go") is False
-        assert s["logic_id"] not in event.LOGIC_CATALOG_HEADLINE_BAN
-        assert s["logic_id"] not in event.KNOWN_WEAK_THESIS
-        assert s["logic_id"] not in event.KNOWN_DEMOTED_OR_WEAK
+        assert s["logic_id"] not in LOGIC_CATALOG_HEADLINE_BAN
+        assert s["logic_id"] not in KNOWN_WEAK_THESIS
+        assert s["logic_id"] not in KNOWN_DEMOTED_OR_WEAK
         params = s["params"]
         assert "mode" in params or "gate" in params
 
@@ -83,7 +88,7 @@ def test_event_new_unique_logic_is_yaml_backed():
 
 def test_event_propose_profit_hypotheses_accepts_adhoc_no_catalog_map():
     out = propose_profit_hypotheses(
-        event.proposals_for_factory(),
+        event.NEW_UNIQUE_LOGIC,
         evaluate=False,
     )
     assert out["n_accepted"] == 4
@@ -91,7 +96,7 @@ def test_event_propose_profit_hypotheses_accepts_adhoc_no_catalog_map():
     lids = [a["logic_id"] for a in out["accepted"]]
     assert lids == [s["logic_id"] for s in event.NEW_UNIQUE_LOGIC]
     for a in out["accepted"]:
-        assert a["logic_id"] not in event.LOGIC_CATALOG_HEADLINE_BAN
+        assert a["logic_id"] not in LOGIC_CATALOG_HEADLINE_BAN
         assert a.get("eval_mapped_to_catalog") in (None, False)
 
 

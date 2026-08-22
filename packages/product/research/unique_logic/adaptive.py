@@ -4,32 +4,14 @@ Does not promote / GO / retune pins.
 """
 from __future__ import annotations
 
-import math
-from datetime import date
-from statistics import median
 from typing import Any, Mapping, Sequence
 
-from research.daily_path_eval import (
-    held_book_daily_mtm,
-    panel_index,
-    stitch_net,
-)
-from research.unique_logic.constants import (
-    ALWAYS_ON_OCCUPANCY_WARN,
-    KNOWN_DEMOTED_OR_WEAK,
-    KNOWN_WEAK_THESIS,
-    LOGIC_CATALOG_HEADLINE_BAN,
-    EVENT_LOGIC_IDS,
-    EVENT_FILTER_LOGIC_IDS,
-)
+from research.daily_path_eval import stitch_net
 from research.unique_logic.catalog import yaml_unique_rows
 from research.unique_logic import event, event_sides
 
 TRAIL_K = 10
-
-
 TRAIL_MIN = 5
-
 
 ADAPTIVE_VARIANTS: tuple[dict[str, Any], ...] = tuple(
     yaml_unique_rows(
@@ -39,59 +21,6 @@ ADAPTIVE_VARIANTS: tuple[dict[str, Any], ...] = tuple(
         )
     )
 )
-
-
-PARENT_SPECS: tuple[dict[str, Any], ...] = (
-    {
-        "logic_id": "event_funding_stress_skip",
-        "family_id": "event_funding_combo",
-        "kind": "event_funding_stress_skip",
-        "variant_kind": "parent_orig",
-        "parent_logic_id": None,
-        "params": {
-            "post_hold_days": 5,
-            "entry_mode": "same_day_close_if_pre_close",
-            "min_hist": 20,
-        },
-        "why_unique": "W104 parent orig (fixed table, not a kill).",
-    },
-    {
-        "logic_id": "surprise_xs_rank_hold",
-        "family_id": "surprise_xs_rank",
-        "kind": "surprise_xs_rank_hold",
-        "variant_kind": "parent_orig",
-        "parent_logic_id": None,
-        "params": {
-            "post_hold_days": 5,
-            "entry_mode": "same_day_close_if_pre_close",
-            "long_frac": 0.3,
-            "short_frac": 0.3,
-        },
-        "why_unique": "W104 parent orig (fixed table, not a kill).",
-    },
-)
-
-
-def proposals_for_factory() -> list[dict[str, Any]]:
-    out: list[dict[str, Any]] = []
-    for spec in ADAPTIVE_VARIANTS:
-        out.append(
-            {
-                "logic_id": spec["logic_id"],
-                "family_id": spec["family_id"],
-                "thesis": spec["thesis"],
-                "signal_definition": spec["signal_definition"],
-                "position_rule": spec["position_rule"],
-                "datasets": list(spec["datasets"]),
-                "datasets_used": list(spec["datasets"]),
-                "params": dict(spec["params"]),
-                "new_unique_logic": True,
-                "catalog": False,
-                "eval_mapped_to_catalog": False,
-                "weak_template_mapping": "OFF",
-            }
-        )
-    return out
 
 
 def _event_hold_end_and_raw(

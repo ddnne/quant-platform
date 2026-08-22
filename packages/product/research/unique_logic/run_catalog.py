@@ -208,7 +208,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument(
         "--all",
         action="store_true",
-        help="Evaluate every unique_logic spec (Python tuples + catalog YAML).",
+        help="Evaluate every unique_logic spec from catalog YAML.",
     )
     p.add_argument(
         "--backend",

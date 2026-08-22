@@ -5,22 +5,10 @@ Does not promote / GO / retune pins.
 from __future__ import annotations
 
 import math
-from datetime import date
 from statistics import median
 from typing import Any, Mapping, Sequence
 
-from research.daily_path_eval import (
-    held_book_daily_mtm,
-    panel_index,
-)
-from research.unique_logic.constants import (
-    ALWAYS_ON_OCCUPANCY_WARN,
-    KNOWN_DEMOTED_OR_WEAK,
-    KNOWN_WEAK_THESIS,
-    LOGIC_CATALOG_HEADLINE_BAN,
-    EVENT_LOGIC_IDS,
-    EVENT_FILTER_LOGIC_IDS,
-)
+from research.daily_path_eval import panel_index
 from research.unique_logic.catalog import yaml_unique_rows
 from research.unique_logic import event, cross_section
 
@@ -546,26 +534,4 @@ def evaluate_repo_3m_level_cs_daily_mtm(
         one_way_cost=one_way_cost,
         hold_days=h,
     )
-
-
-def proposals_for_factory() -> list[dict[str, Any]]:
-    out: list[dict[str, Any]] = []
-    for spec in NEW_UNIQUE_LOGIC:
-        out.append(
-            {
-                "logic_id": spec["logic_id"],
-                "family_id": spec["family_id"],
-                "thesis": spec["thesis"],
-                "signal_definition": spec["signal_definition"],
-                "position_rule": spec["position_rule"],
-                "datasets": list(spec["datasets"]),
-                "datasets_used": list(spec["datasets"]),
-                "params": dict(spec["params"]),
-                "new_unique_logic": True,
-                "catalog": False,
-                "eval_mapped_to_catalog": False,
-                "weak_template_mapping": "OFF",
-            }
-        )
-    return out
 

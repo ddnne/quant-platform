@@ -6,8 +6,6 @@ economic theses. Keep one representative per group; park the rest
 """
 from __future__ import annotations
 
-from typing import Any, Mapping, Sequence
-
 NEAR_DUPLICATE_GROUPS: tuple[dict[str, object], ...] = (
     {
         "group_id": "event_weekday_skip",
@@ -94,94 +92,6 @@ NEAR_DUPLICATE_PARK: frozenset[str] = frozenset(
     for lid in tuple(g.get("park") or ())  # type: ignore[union-attr]
 )
 
-NEAR_DUPLICATE_KEEP: frozenset[str] = frozenset(
-    str(g["keep"]) for g in NEAR_DUPLICATE_GROUPS
-)
-
-
-def thesis_fingerprint(spec: Mapping[str, Any]) -> str:
-    """Stable id of (kind, gates/cs_gate, side). Calendar skips collapse."""
-    kind = str(spec.get("kind") or "")
-    params = spec.get("params") if isinstance(spec.get("params"), Mapping) else {}
-    gates = tuple(
-        sorted(
-            str(g)
-            for g in (spec.get("gates") or params.get("gates") or ())  # type: ignore[union-attr]
-            if g
-        )
-    )
-    cs = str(spec.get("cs_gate") or params.get("cs_gate") or "")
-    if cs in {"None", "none"}:
-        cs = ""
-    side = str(spec.get("side") or params.get("side") or "orig")
-    weekday = {
-        "skip_monday",
-        "skip_tuesday",
-        "skip_wednesday",
-        "friday_skip",
-        "skip_friday",
-    }
-    window = {"not_last_week", "month_start7", "not_first_week", "first_half_month"}
-    gset = set(gates)
-    if kind in {"event", "surprise_xs"} and gset and gset <= weekday:
-        return f"{kind}|weekday_skip|{side}"
-    if kind in {"event", "surprise_xs"} and gset and gset <= window:
-        return f"{kind}|month_window|{side}"
-    if cs in {
-        "skip_tuesday",
-        "skip_wednesday",
-        "skip_monday",
-        "not_last_week",
-        "month_start7",
-        "not_first_week",
-    }:
-        return f"cs|weekday_or_window|{side}"
-    return f"{kind}|g:{','.join(gates)}|cs:{cs}|{side}"
-
 
 def is_near_duplicate(logic_id: str) -> bool:
     return str(logic_id) in NEAR_DUPLICATE_PARK
-
-
-def audit_combo_specs(specs: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
-    """Group combo specs by fingerprint. Scores stay off this payload."""
-    by_fp: dict[str, list[str]] = {}
-    rows: list[dict[str, Any]] = []
-    for spec in specs:
-        lid = str(spec.get("logic_id") or "")
-        if not lid:
-            continue
-        fp = thesis_fingerprint(spec)
-        by_fp.setdefault(fp, []).append(lid)
-        parked = is_near_duplicate(lid)
-        rows.append(
-            {
-                "logic_id": lid,
-                "fingerprint": fp,
-                "family_id": spec.get("family_id"),
-                "kind": spec.get("kind"),
-                "gates": list(spec.get("gates") or spec.get("params", {}).get("gates") or ()),
-                "cs_gate": spec.get("cs_gate") or spec.get("params", {}).get("cs_gate"),
-                "parked_near_duplicate": parked,
-                "keep": lid in NEAR_DUPLICATE_KEEP,
-                "main_pool": (not parked) and bool(spec.get("main_pool", True)),
-                "why_different_from": list(spec.get("why_different_from") or []),
-            }
-        )
-    soup = {fp: ids for fp, ids in by_fp.items() if len(ids) > 1}
-    return {
-        "version": "near-duplicate-audit/v1",
-        "n_specs": len(rows),
-        "n_parked": sum(1 for r in rows if r["parked_near_duplicate"]),
-        "n_keep_representatives": len(NEAR_DUPLICATE_KEEP),
-        "groups": [dict(g) for g in NEAR_DUPLICATE_GROUPS],
-        "soup_fingerprints": soup,
-        "promote_as_main": False,
-        "go": False,
-        "not_a_pass": True,
-        "logics": rows,
-        "notes": (
-            "Gate permutations are not distinct theses. Parked ids stay out of "
-            "the candidate pool. Audit is not a promote/GO."
-        ),
-    }
