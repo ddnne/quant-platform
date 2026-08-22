@@ -47,8 +47,9 @@ if not PROPOSE_ALLOWED_DATASETS <= COMPLETE_21_DATASET_SET:
     raise RuntimeError("propose datasets must be a subset of COMPLETE 21")
 
 PROPOSE_MAX_AND_GATES: int = 3
-# Combined payload sent to the Worker. Sparse used to consume this cap
-# before catalog prefer 2-AND clones, so the LLM re-emitted eps×px / pb×tight.
+# Combined payload sent to the Worker. Prefer-catalog 2-ANDs then 3-ANDs
+# then prefer-subset SPARSE (parked prefer ANDs) take the cap first so the
+# LLM does not re-emit those clones. Remaining SPARSE / newest catalog fill.
 PROPOSE_WHY_AVOID_LIMIT: int = 48
 CATALOG_GATE_SET_AVOID_LIMIT: int = 24
 
@@ -222,23 +223,37 @@ def catalog_prefer_triple_avoid(*, limit: int = 12) -> list[str]:
 
 
 def assemble_why_avoid(extra: Sequence[str] | None = None) -> list[str]:
-    """Prefer-catalog 2-ANDs, prefer 3-ANDs, sparse, then newest catalog 3/2."""
+    """Prefer 2-ANDs, prefer 3-ANDs, prefer-subset SPARSE, then remaining.
+
+    Prefer-subset SPARSE is reserved so parked prefer ANDs are not truncated
+    when catalog prefer pairs fill the cap. Does not GO.
+    """
+    extra_toks = [str(x).strip() for x in (extra or ()) if str(x).strip()]
+    pairs = catalog_prefer_pair_avoid()
+    triples = catalog_prefer_triple_avoid()
+    prefer_sparse = sparse_prefer_subset_avoid()
+    prefer_sparse_set = set(prefer_sparse)
+    rest_sparse = [t for t in sparse_gate_set_avoid() if t not in prefer_sparse_set]
+    rest_catalog = catalog_gate_set_avoid()
+
     out: list[str] = []
     seen: set[str] = set()
-    for item in (
-        list(extra or ())
-        + catalog_prefer_pair_avoid()
-        + catalog_prefer_triple_avoid()
-        + sparse_gate_set_avoid()
-        + catalog_gate_set_avoid()
-    ):
-        token = str(item).strip()
-        if not token or token in seen:
-            continue
-        seen.add(token)
-        out.append(token)
-        if len(out) >= PROPOSE_WHY_AVOID_LIMIT:
-            break
+
+    def _push(items: Sequence[str], *, cap: int) -> None:
+        for item in items:
+            token = str(item).strip()
+            if not token or token in seen:
+                continue
+            if len(out) >= cap:
+                return
+            seen.add(token)
+            out.append(token)
+
+    reserve_n = min(len(prefer_sparse), PROPOSE_WHY_AVOID_LIMIT)
+    prefix_cap = max(0, PROPOSE_WHY_AVOID_LIMIT - reserve_n)
+    _push(extra_toks + pairs + triples, cap=prefix_cap)
+    _push(prefer_sparse, cap=PROPOSE_WHY_AVOID_LIMIT)
+    _push(rest_sparse + rest_catalog, cap=PROPOSE_WHY_AVOID_LIMIT)
     return out
 
 
@@ -293,7 +308,7 @@ def catalog_gate_set_avoid(*, limit: int = CATALOG_GATE_SET_AVOID_LIMIT) -> list
 
 
 def sparse_gate_set_avoid() -> list[str]:
-    """Recorded empty AND-sets. Prepended to why_avoid. Does not GO."""
+    """Recorded empty AND-sets. Prefer-subset reserved in assemble. Does not GO."""
     from research.unique_logic.constants import (
         PROPOSE_CALENDAR_GATES,
         SPARSE_GATE_COMBOS,
@@ -307,6 +322,24 @@ def sparse_gate_set_avoid() -> list[str]:
         if combo & PROPOSE_CALENDAR_GATES:
             continue
         token = "+".join(sorted(combo))
+        if token in have:
+            continue
+        have.add(token)
+        out.append(token)
+    return out
+
+
+def sparse_prefer_subset_avoid() -> list[str]:
+    """SPARSE AND-sets whose gates ⊆ prefer seeds. Parked prefer clones first."""
+    from research.unique_logic.propose_review_tables import PROPOSE_PROMPT_PREFER_GATES
+
+    prefer = set(PROPOSE_PROMPT_PREFER_GATES)
+    out: list[str] = []
+    have: set[str] = set()
+    for token in sparse_gate_set_avoid():
+        gates = set(token.split("+"))
+        if not gates <= prefer:
+            continue
         if token in have:
             continue
         have.add(token)
@@ -563,6 +596,7 @@ __all__ = [
     "catalog_prefer_pair_avoid",
     "catalog_prefer_triple_avoid",
     "sparse_gate_set_avoid",
+    "sparse_prefer_subset_avoid",
     "invoke_cf_propose_thesis",
     "reject_window_tweak",
     "review_proposal_row",

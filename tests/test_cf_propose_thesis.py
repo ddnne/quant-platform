@@ -823,6 +823,8 @@ def test_catalog_gate_set_avoid_is_existing_crosses() -> None:
         assemble_why_avoid,
         catalog_prefer_pair_avoid,
         catalog_prefer_triple_avoid,
+        sparse_gate_set_avoid,
+        sparse_prefer_subset_avoid,
     )
     from research.unique_logic.propose_review_tables import propose_prompt_good
 
@@ -848,6 +850,18 @@ def test_catalog_gate_set_avoid_is_existing_crosses() -> None:
     assert "eps_down+price_down+tight_funding" in triples
     assert "eps_down+price_down+tight_funding" in assembled
     assert good_tok not in assembled
+    if len(propose_prompt_good()["gates"]) == 3:
+        adopted_tok = "+".join(sorted(str(g) for g in propose_prompt_good()["gates"]))
+        # Current GOOD 3-AND is unique, so it must stay out of triples.
+        assert adopted_tok not in triples
+    assert "invert_curve+price_down" in prefer_pairs
+    assert "invert_curve+price_down" in assembled
+    parked_triple = "curve_flatten+overnight_p10+pb_rising"
+    prefer_sparse = sparse_prefer_subset_avoid()
+    assert parked_triple in sparse_gate_set_avoid()
+    assert parked_triple in prefer_sparse
+    for tok in prefer_sparse:
+        assert tok in assembled
     assert all("+" in t for t in tokens)
     blob = " ".join(tokens)
     assert "skip_monday" not in blob
@@ -857,7 +871,7 @@ def test_catalog_gate_set_avoid_is_existing_crosses() -> None:
     )
 
 
-def test_sparse_gate_set_avoid_is_prepended_to_why_avoid() -> None:
+def test_sparse_gate_set_avoid_is_in_why_avoid() -> None:
     import json
 
     from research.cf_propose_thesis import sparse_gate_set_avoid

@@ -82,7 +82,7 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "why": (
             "recorded research/eval/job=eval-inventory-bias-20260824ai/ "
             "inventory_bias.json; assert_new_batch_cheap_pb_cap refuses "
-            "new batches at 20%; 24ax adopted invert×px (~0.27); GOOD is 3-AND"
+            "new batches at 20%; 24ay flatten×p10×pb near_empty park (~0.04)"
         ),
         "not_a_pass": True,
         "go": False,
@@ -101,9 +101,9 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "id": "propose_clone_retry",
         "track": EVAL_TRACK_LIQ_LARGE,
         "why": (
-            "why_avoid prepends SPARSE economic ANDs then newest 3/2-gates; "
-            "zero-adopt retries once (clone/sparse extra; polarity keeps AND); "
-            "still no auto-inject"
+            "why_avoid prefer 2-ANDs then prefer 3-ANDs then prefer-subset "
+            "SPARSE (reserved) then remaining SPARSE; zero-adopt retries "
+            "once (clone/sparse extra; polarity keeps AND); still no auto-inject"
         ),
         "not_a_pass": True,
         "go": False,
@@ -233,8 +233,8 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "id": "adopt_occupancy_recorded",
         "track": EVAL_TRACK_LIQ_LARGE,
         "why": (
-            "eval-occupancy-audit-20260824ax both tracks: invert×px ~0.272/0.276 "
-            "material not sleeve; flatten_eps band not exceeded; not a pass"
+            "eval-occupancy-audit-20260824ay both tracks: flatten×p10×pb "
+            "~0.042/0.048 near_empty parked; not a pass"
         ),
         "not_a_pass": True,
         "go": False,
