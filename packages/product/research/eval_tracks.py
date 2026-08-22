@@ -80,9 +80,9 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "id": "inventory_bias_recorded",
         "track": EVAL_TRACK_LIQ_LARGE,
         "why": (
-            "recorded research/eval/job=eval-inventory-bias-20260824k/ "
+            "recorded research/eval/job=eval-inventory-bias-20260824l/ "
             "inventory_bias.json; assert_new_batch_cheap_pb_cap refuses "
-            "new batches at 20%; 24k flatten×tight×eps band (not sleeve); "
+            "new batches at 20%; 24l flatten×price_down band (not sleeve); "
             "p10×px×np empty parked"
         ),
         "not_a_pass": True,
@@ -196,8 +196,8 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "entry": "research.cf_daily_path_job.run_both_track_sleeve_fanout",
         "why": (
             "recorded eval-cf-dp-both-sleeves-20260824e mid+liq 12 logics "
-            "including flatten×eps; descriptive summary not_a_pass; do not "
-            "narrate majority as stable"
+            "including flatten×eps; 24l flatten×px not added (5-member cap); "
+            "descriptive summary not_a_pass; do not narrate majority as stable"
         ),
         "not_a_pass": True,
         "go": False,
@@ -234,8 +234,8 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "id": "adopt_occupancy_recorded",
         "track": EVAL_TRACK_LIQ_LARGE,
         "why": (
-            "eval-occupancy-audit-20260824k: 24k flatten×tight×eps mid-band; "
-            "p10×px×np empty parked; 0 near_empty sleeve members; not a pass"
+            "eval-occupancy-audit-20260824l: 24l flatten×price_down mid-band; "
+            "not a sleeve member (event_fund at 5); not a pass"
         ),
         "not_a_pass": True,
         "go": False,
