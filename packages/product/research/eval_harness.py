@@ -1,36 +1,13 @@
 """Reusable single-shot research eval harness (Mass OFF / Phase7 OFF / READY OFF).
 
-Stable public pipeline (W56 / w0815aw_g2 · T5):
+Pipeline: approved-leg signal → multiday as_of → next_day_return → R2
+``batch_summary.json``. Implementation: :mod:`research.single_shot_job`.
+Candidate daily-path SoT: :mod:`research.daily_path_eval`.
 
-    signal (approved legs only)
-      → multiday as_of batch
-      → next_day_return eval
-      → R2 ``batch_summary.json``
-
-This module is the **preferred entry** for that pipeline. Implementation lives
-in :mod:`research.single_shot_job` (CF D1 tip extract, tip FeatureContext,
-signal compute, R2 put); this harness freezes the public surface, input
-guards, and freeze constants.
-
-Inputs (T6)
------------
-
-* residual **COMPLETE 21** dataset ids only
-* permanent DEFER ids hard-reject via ``data_contracts.permanent_defer``
-* signal feature legs must be registry-**approved**
-  (default: ``topix_relative_1d`` · ``is_trading_day`` · ``volume_change_1d``)
-
-Hard constraints (T7)
----------------------
-
-* does **not** import ``agents.mass_research`` / mass loop
-* does **not** mint READY / ``VerifiedResearchReadiness``
-* does **not** emit order intents / call paper execution
-* does **not** densify
-* Mass = NO-GO · Phase7 = OFF · READY not declared
-
-Label when next-day returns are attached:
-**小サンプル / 研究用・未宣言** (no significance / no edge claim).
+COMPLETE 21 only; permanent DEFER hard-reject; registry-approved legs only
+(default: ``topix_relative_1d`` · ``is_trading_day`` · ``volume_change_1d``).
+No mass_research import, READY mint, orders, or densify.
+Label: **小サンプル / 研究用・未宣言**.
 """
 
 from __future__ import annotations
@@ -39,10 +16,6 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Callable, Mapping, Sequence
 
-from data_contracts.permanent_defer import (
-    PERMANENT_DEFER_DATASETS,
-    PermanentDeferHistoryError,
-)
 from features.minimal_signal import (
     CANDIDATE_ONLY as SIGNAL_CANDIDATE_ONLY,
     DEFAULT_FEATURE_IDS as APPROVED_SIGNAL_LEGS,
@@ -52,8 +25,6 @@ from features.minimal_signal import (
     FEATURE_STATUS_PINS,
     MULTI_SIGNAL_DATASETS,
     SIGNAL_ID as DEFAULT_SIGNAL_ID,
-    SIGNAL_VERSION as DEFAULT_SIGNAL_VERSION,
-    signal_definition,
 )
 from features.registry import get as get_feature
 from research.freezes import (
@@ -63,7 +34,6 @@ from research.freezes import (
     MASS_RESEARCH,
     ORDER_EXECUTION,
     PHASE7,
-    READY_PUBLICATION,
 )
 from research.robustness_gate import (
     DEFAULT_ONE_WAY_COST,
@@ -71,48 +41,28 @@ from research.robustness_gate import (
     evaluate_research_robustness_gate,
     period_rows_from_cross_table,
     research_robustness_gate_document,
-    walk_forward_gross_from_compare,
 )
 from research.single_shot_job import (
-    COMPLETE_21_DATASETS,
     COMPLETE_21_DATASET_SET,
     DEFAULT_FEATURE_ROW_LIMIT,
     D1ExecuteFn,
     MASS_RESEARCH_ENV_ARMING_SWITCHES,
-    MASS_RESEARCH_STATUS,
     MultidaySignalEval,
-    NEXTDAY_LOOKAHEAD_POLICY,
     NEXTDAY_RESEARCH_LABEL,
     PHASE7_ENV_ARMING_SWITCHES,
-    PHASE7_STATUS,
     READY_DECLARED,
-    READY_PUBLICATION_STATUS,
-    RESEARCH_ARTIFACT_BUCKET,
-    RESEARCH_ARTIFACT_PREFIX,
     RESEARCH_ONE_WAY_COST,
     R2PutFn,
     SingleShotJobError,
     assert_mass_and_phase7_off,
-    attach_next_day_returns,
-    build_equity_close_index,
-    design_artifact_paths,
-    discover_tip_trading_days,
     execute_extra_hyp_signals_compare,
     execute_multiday_multisignal_compare,
-    execute_multiday_nextday_return_eval,
     execute_multiday_signal_eval,
     freeze_status,
-    next_trading_day_map,
     require_complete_21_only,
-    session_close_as_of,
-    summarize_nextday_by_sign,
-    summarize_signal_day,
 )
 
-# ---------------------------------------------------------------------------
-# Freeze constants (T7: tests assert these remain closed — do not arm)
-# ---------------------------------------------------------------------------
-
+# Freeze constants — tests assert these remain closed; do not arm.
 HARNESS_VERSION: str = "research-eval-harness/v1"
 PIPELINE: tuple[str, ...] = (
     "approved_leg_signal",
@@ -121,10 +71,8 @@ PIPELINE: tuple[str, ...] = (
     "r2_batch_summary",
 )
 
-# Smoke 3 names for harness tip batches. Not the research ADV universe
-# (that is research.eval_universe.EVAL_UNIVERSE_POOL / select_eval_universe).
+# Smoke 3 names for harness tip batches. Not EVAL_UNIVERSE_POOL.
 HARNESS_SMOKE_CODES: tuple[str, ...] = ("13010", "72030", "67580")
-# Back-compat alias of HARNESS_SMOKE_CODES (exactly 3 names). Not a 100-name pool.
 DEFAULT_EVAL_CODES: tuple[str, ...] = HARNESS_SMOKE_CODES
 
 
@@ -132,22 +80,36 @@ class EvalHarnessError(SingleShotJobError):
     """Invalid eval-harness input (datasets / feature legs / freeze)."""
 
 
+def _selected_codes(
+    codes: Sequence[str] | None,
+    default: Sequence[str] = DEFAULT_EVAL_CODES,
+) -> list[str]:
+    if codes is not None:
+        return [str(c).strip() for c in codes if str(c).strip()]
+    return list(default)
+
+
+def _closed_flags(**extra: Any) -> dict[str, Any]:
+    out: dict[str, Any] = {
+        "mass_research": MASS_RESEARCH,
+        "phase7": PHASE7,
+        "ready_declared": False,
+        "operational_go": False,
+        "connected_to_ready": False,
+        "connected_to_mass": False,
+        "significance_claimed": False,
+        "edge_claimed": False,
+    }
+    out.update(extra)
+    return out
+
+
 def require_approved_signal_legs(
     feature_ids: Sequence[str] | None = None,
     *,
     context: str = "eval harness signal legs",
 ) -> tuple[str, ...]:
-    """Return ordered feature ids only when every leg is registry-approved.
-
-    Fail-closed when:
-
-    * any id is unknown to the feature registry
-    * any id has registry status other than ``approved``
-    * the list is empty
-
-    Default legs are the three COMPLETE-21 signal legs used by
-    ``c21_topix_relative_sign`` (all approved after W53).
-    """
+    """Ordered feature ids iff every leg is registry-approved. Empty/unknown/not-approved fail closed."""
     if feature_ids is None:
         requested = tuple(APPROVED_SIGNAL_LEGS)
     elif isinstance(feature_ids, str):
@@ -193,10 +155,7 @@ def require_harness_datasets(
     *,
     context: str = "eval harness datasets",
 ) -> tuple[str, ...]:
-    """COMPLETE 21 only; permanent DEFER hard-reject.
-
-    Default = :data:`DEFAULT_SIGNAL_DATASETS` (bars + calendar + topix).
-    """
+    """COMPLETE 21 only; permanent DEFER hard-reject. Default: DEFAULT_SIGNAL_DATASETS."""
     if datasets is None:
         datasets = DEFAULT_SIGNAL_DATASETS
     # Permanent DEFER first (shared contract), then COMPLETE-21 allowlist.
@@ -279,26 +238,17 @@ def run_multiday_signal_eval(
 ) -> MultidaySignalEval:
     """Multiday approved-leg signal batch → R2 ``batch_summary.json``.
 
-    Guards COMPLETE-21 datasets + approved signal legs before any tip extract.
-    Does **not** mint READY, open mass research, execute orders, or densify.
-
-    ``history_source``:
-        * ``"d1_tip"`` (default) — CF D1 hot tip extract
-        * ``"r2"`` — R2 structured history bridge (keys/fixtures required)
+    COMPLETE-21 + approved legs before tip extract. history_source: ``d1_tip``
+    or ``r2``. Does not mint READY, arm Mass, execute orders, or densify.
     """
     assert_harness_closed()
     require_approved_signal_legs(context="multiday signal eval legs")
     require_harness_datasets(context="multiday signal eval datasets")
-    selected = (
-        [str(c).strip() for c in codes if str(c).strip()]
-        if codes is not None
-        else list(DEFAULT_EVAL_CODES)
-    )
     return execute_multiday_signal_eval(
         period_start=period_start,
         period_end=period_end,
         job_id=job_id,
-        codes=selected,
+        codes=_selected_codes(codes),
         as_of_days=as_of_days,
         max_days=max_days,
         min_days=min_days,
@@ -326,77 +276,23 @@ def run_nextday_return_eval(
     period_start: str,
     period_end: str,
     job_id: str = "eval-harness-nextday",
-    codes: Sequence[str] | None = None,
-    as_of_days: Sequence[str] | None = None,
-    max_days: int = 10,
-    min_days: int = 5,
-    feature_row_limit: int = DEFAULT_FEATURE_ROW_LIMIT,
-    volume_change_abs_min: float | None = DEFAULT_VOLUME_CHANGE_ABS_MIN,
-    write_per_day_artifacts: bool = True,
-    dry_run: bool = False,
-    d1_execute: D1ExecuteFn | None = None,
-    r2_put: R2PutFn | None = None,
-    staging_dir: str | Path | None = None,
-    wrangler: str | Path | None = None,
-    wrangler_config: str | Path | None = None,
-    history_source: str = "d1_tip",
-    r2_object_keys_by_dataset: Mapping[str, Sequence[str]] | None = None,
-    r2_local_paths_by_dataset: Mapping[str, Sequence[str | Path]] | None = None,
-    r2_raw_lines_by_dataset: Mapping[str, Sequence[Any]] | None = None,
-    r2_get: Any | None = None,
-    r2_bucket: str = "quant-structured",
+    **kwargs: Any,
 ) -> MultidaySignalEval:
-    """Full pipeline: approved-leg signal → multiday → next-day return → R2.
-
-    Research only (小サンプル / 研究用・未宣言). Feature as_of = T session
-    close; return evaluation_as_of = T+1 session close (see
-    :data:`NEXTDAY_LOOKAHEAD_POLICY`). No significance / no edge claim.
-
-    Optional ``history_source="r2"`` uses the R2 FeatureContext bridge
-    (see :mod:`research.r2_feature_context`). Default remains D1 tip.
-    """
-    assert_harness_closed()
-    require_approved_signal_legs(context="nextday return eval legs")
-    require_harness_datasets(context="nextday return eval datasets")
-    selected = (
-        [str(c).strip() for c in codes if str(c).strip()]
-        if codes is not None
-        else list(DEFAULT_EVAL_CODES)
-    )
-    return execute_multiday_nextday_return_eval(
+    """Approved-leg signal → multiday → next-day return → R2. Research only."""
+    kwargs.pop("attach_nextday_returns", None)
+    return run_multiday_signal_eval(
         period_start=period_start,
         period_end=period_end,
         job_id=job_id,
-        codes=selected,
-        as_of_days=as_of_days,
-        max_days=max_days,
-        min_days=min_days,
-        feature_row_limit=feature_row_limit,
-        volume_change_abs_min=volume_change_abs_min,
-        write_per_day_artifacts=write_per_day_artifacts,
-        dry_run=dry_run,
-        d1_execute=d1_execute,
-        r2_put=r2_put,
-        staging_dir=staging_dir,
-        wrangler=wrangler,
-        wrangler_config=wrangler_config,
-        history_source=history_source,
-        r2_object_keys_by_dataset=r2_object_keys_by_dataset,
-        r2_local_paths_by_dataset=r2_local_paths_by_dataset,
-        r2_raw_lines_by_dataset=r2_raw_lines_by_dataset,
-        r2_get=r2_get,
-        r2_bucket=r2_bucket,
+        attach_nextday_returns=True,
+        **kwargs,
     )
 
 
-# Preferred alias for the full stable pipeline name used in wave docs.
 run_full_pipeline = run_nextday_return_eval
 
 
-# ---------------------------------------------------------------------------
-# W61 research walk-forward + multi-period compare (not READY / not Mass)
-# ---------------------------------------------------------------------------
-
+# Walk-forward + multi-period compare (not READY / not Mass).
 WALK_FORWARD_VERSION: str = "research-walk-forward/v1"
 MULTI_PERIOD_VERSION: str = "research-multi-period-multisignal/v1"
 RESEARCH_WALK_FORWARD_LABEL: str = (
@@ -412,13 +308,7 @@ def split_asof_days_walk_forward(
     min_train_days: int = 5,
     min_test_days: int = 5,
 ) -> dict[str, Any]:
-    """Chronological train/test split of as_of days (research-only).
-
-    * No threshold retuning — callers evaluate the **same** fixed signal
-      definitions on train and test folds.
-    * Not an operational walk-forward; no READY / Mass connection.
-    * Fails closed if folds would be shorter than ``min_*_days``.
-    """
+    """Chronological train/test split. Same fixed defs both folds; no threshold fit."""
     days = sorted({str(d).strip()[:10] for d in as_of_days if str(d).strip()})
     if not days:
         raise EvalHarnessError("walk-forward split requires non-empty as_of_days")
@@ -453,16 +343,10 @@ def split_asof_days_walk_forward(
         "test_span": [test[0], test[-1]],
         "threshold_tuning": False,
         "signal_definitions_fixed": True,
-        "ready_declared": False,
-        "mass_research": MASS_RESEARCH,
-        "phase7": PHASE7,
-        "operational_go": False,
-        "significance_claimed": False,
-        "edge_claimed": False,
+        **_closed_flags(),
         "note": (
-            "Research chronological holdout only. Same fixed S1/S2/S3 (or S1) "
-            "definitions are evaluated on both folds; thresholds are not fit "
-            "on train. Not READY. Not mass research."
+            "Research chronological holdout only. Same fixed definitions on "
+            "both folds; thresholds are not fit on train."
         ),
     }
 
@@ -501,24 +385,16 @@ def run_multisignal_compare(
     r2_bucket: str = "quant-structured",
     r2_allow_empty_datasets: Sequence[str] | None = None,
 ) -> MultidaySignalEval:
-    """S1/S2/S3 multi-signal compare via single_shot (research-only).
-
-    Freeze closed. Optional ``history_source="r2"`` for long windows.
-    """
+    """S1/S2/S3 multi-signal compare via single_shot (research-only). Freeze closed."""
     assert_harness_closed()
     require_complete_21_only(
         MULTI_SIGNAL_DATASETS, context="harness multisignal datasets"
-    )
-    selected = (
-        [str(c).strip() for c in codes if str(c).strip()]
-        if codes is not None
-        else list(DEFAULT_EVAL_CODES)
     )
     return execute_multiday_multisignal_compare(
         period_start=period_start,
         period_end=period_end,
         job_id=job_id,
-        codes=selected,
+        codes=_selected_codes(codes),
         as_of_days=as_of_days,
         max_days=max_days,
         min_days=min_days,
@@ -540,6 +416,15 @@ def run_multisignal_compare(
         r2_bucket=r2_bucket,
         r2_allow_empty_datasets=r2_allow_empty_datasets,
     )
+
+
+def _fold_summary(ex: MultidaySignalEval) -> dict[str, Any]:
+    return {
+        "n_days": ex.n_days,
+        "as_of_days": list(ex.as_of_days),
+        "compare_table": _compact_compare_rows(ex.batch_summary),
+        "batch_summary_r2_key": ex.batch_summary_r2_key,
+    }
 
 
 def run_research_walk_forward_multisignal(
@@ -572,98 +457,59 @@ def run_research_walk_forward_multisignal(
     r2_bucket: str = "quant-structured",
     r2_allow_empty_datasets: Sequence[str] | None = None,
 ) -> dict[str, Any]:
-    """Research walk-forward: fixed S1/S2/S3 on chronological train then test.
-
-    Thresholds are **not** optimized on train (definition freeze). Both folds
-    use the same volume_sign_abs_min. Labels remain 研究用・未宣言.
-    """
+    """Fixed S1/S2/S3 on chronological train then test. No threshold fit on train."""
     assert_harness_closed()
     jid = str(job_id).strip()
-    # Full window once to discover as_of grid when caller omits it.
+    shared: dict[str, Any] = {
+        "period_start": period_start,
+        "period_end": period_end,
+        "feature_row_limit": feature_row_limit,
+        "volume_sign_abs_min": volume_sign_abs_min,
+        "one_way_cost": one_way_cost,
+        "write_per_day_artifacts": write_per_day_artifacts,
+        "dry_run": dry_run,
+        "d1_execute": d1_execute,
+        "r2_put": r2_put,
+        "staging_dir": staging_dir,
+        "wrangler": wrangler,
+        "wrangler_config": wrangler_config,
+        "history_source": history_source,
+        "r2_object_keys_by_dataset": r2_object_keys_by_dataset,
+        "r2_local_paths_by_dataset": r2_local_paths_by_dataset,
+        "r2_raw_lines_by_dataset": r2_raw_lines_by_dataset,
+        "r2_get": r2_get,
+        "r2_bucket": r2_bucket,
+        "r2_allow_empty_datasets": r2_allow_empty_datasets,
+    }
     full = execute_multiday_multisignal_compare(
-        period_start=period_start,
-        period_end=period_end,
         job_id=f"{jid}-full",
         codes=codes,
         as_of_days=as_of_days,
         max_days=max_days,
         min_days=min_days,
-        feature_row_limit=feature_row_limit,
-        volume_sign_abs_min=volume_sign_abs_min,
-        one_way_cost=one_way_cost,
-        write_per_day_artifacts=write_per_day_artifacts,
-        dry_run=dry_run,
-        d1_execute=d1_execute,
-        r2_put=r2_put,
-        staging_dir=staging_dir,
-        wrangler=wrangler,
-        wrangler_config=wrangler_config,
-        history_source=history_source,
-        r2_object_keys_by_dataset=r2_object_keys_by_dataset,
-        r2_local_paths_by_dataset=r2_local_paths_by_dataset,
-        r2_raw_lines_by_dataset=r2_raw_lines_by_dataset,
-        r2_get=r2_get,
-        r2_bucket=r2_bucket,
-        r2_allow_empty_datasets=r2_allow_empty_datasets,
+        **shared,
     )
-    day_list = list(full.as_of_days)
     split = split_asof_days_walk_forward(
-        day_list,
+        list(full.as_of_days),
         train_fraction=train_fraction,
         min_train_days=min_train_days,
         min_test_days=min_test_days,
     )
     train_ex = execute_multiday_multisignal_compare(
-        period_start=period_start,
-        period_end=period_end,
         job_id=f"{jid}-train",
         codes=list(full.codes),
         as_of_days=split["train_as_of_days"],
         max_days=len(split["train_as_of_days"]),
         min_days=min_train_days,
-        feature_row_limit=feature_row_limit,
-        volume_sign_abs_min=volume_sign_abs_min,
-        one_way_cost=one_way_cost,
-        write_per_day_artifacts=write_per_day_artifacts,
-        dry_run=dry_run,
-        d1_execute=d1_execute,
-        r2_put=r2_put,
-        staging_dir=staging_dir,
-        wrangler=wrangler,
-        wrangler_config=wrangler_config,
-        history_source=history_source,
-        r2_object_keys_by_dataset=r2_object_keys_by_dataset,
-        r2_local_paths_by_dataset=r2_local_paths_by_dataset,
-        r2_raw_lines_by_dataset=r2_raw_lines_by_dataset,
-        r2_get=r2_get,
-        r2_bucket=r2_bucket,
-        r2_allow_empty_datasets=r2_allow_empty_datasets,
+        **shared,
     )
     test_ex = execute_multiday_multisignal_compare(
-        period_start=period_start,
-        period_end=period_end,
         job_id=f"{jid}-test",
         codes=list(full.codes),
         as_of_days=split["test_as_of_days"],
         max_days=len(split["test_as_of_days"]),
         min_days=min_test_days,
-        feature_row_limit=feature_row_limit,
-        volume_sign_abs_min=volume_sign_abs_min,
-        one_way_cost=one_way_cost,
-        write_per_day_artifacts=write_per_day_artifacts,
-        dry_run=dry_run,
-        d1_execute=d1_execute,
-        r2_put=r2_put,
-        staging_dir=staging_dir,
-        wrangler=wrangler,
-        wrangler_config=wrangler_config,
-        history_source=history_source,
-        r2_object_keys_by_dataset=r2_object_keys_by_dataset,
-        r2_local_paths_by_dataset=r2_local_paths_by_dataset,
-        r2_raw_lines_by_dataset=r2_raw_lines_by_dataset,
-        r2_get=r2_get,
-        r2_bucket=r2_bucket,
-        r2_allow_empty_datasets=r2_allow_empty_datasets,
+        **shared,
     )
     return {
         "version": WALK_FORWARD_VERSION,
@@ -677,34 +523,13 @@ def run_research_walk_forward_multisignal(
         "split": split,
         "volume_sign_abs_min": float(volume_sign_abs_min),
         "threshold_tuning": False,
-        "full": {
-            "n_days": full.n_days,
-            "as_of_days": list(full.as_of_days),
-            "compare_table": _compact_compare_rows(full.batch_summary),
-            "batch_summary_r2_key": full.batch_summary_r2_key,
-        },
-        "train": {
-            "n_days": train_ex.n_days,
-            "as_of_days": list(train_ex.as_of_days),
-            "compare_table": _compact_compare_rows(train_ex.batch_summary),
-            "batch_summary_r2_key": train_ex.batch_summary_r2_key,
-        },
-        "test": {
-            "n_days": test_ex.n_days,
-            "as_of_days": list(test_ex.as_of_days),
-            "compare_table": _compact_compare_rows(test_ex.batch_summary),
-            "batch_summary_r2_key": test_ex.batch_summary_r2_key,
-        },
-        "mass_research": MASS_RESEARCH,
-        "phase7": PHASE7,
-        "ready_declared": False,
-        "operational_go": False,
-        "significance_claimed": False,
-        "edge_claimed": False,
-        "local_sot": False,
+        "full": _fold_summary(full),
+        "train": _fold_summary(train_ex),
+        "test": _fold_summary(test_ex),
+        **_closed_flags(local_sot=False),
         "note": (
             "Research walk-forward with fixed signal definitions on both folds. "
-            "No threshold search on train. Not READY. Not mass. No orders."
+            "No threshold search on train."
         ),
     }
 
@@ -730,15 +555,7 @@ def run_multi_period_multisignal_compare(
     r2_get: Callable[[str, str], bytes] | None = None,
     r2_bucket: str = "quant-structured",
 ) -> dict[str, Any]:
-    """Run fixed S1/S2/S3 on multiple non-overlapping research periods.
-
-    Each period mapping requires ``period_id``, ``period_start``, ``period_end``.
-    Optional per-period keys: ``as_of_days``, ``r2_local_paths_by_dataset``,
-    ``r2_object_keys_by_dataset``, ``r2_raw_lines_by_dataset``,
-    ``r2_allow_empty_datasets``, ``skip_reason`` (when set, period is skipped).
-
-    Gaps / skips are recorded honestly — never invent data.
-    """
+    """Fixed S1/S2/S3 on non-overlapping periods. Skips recorded; never invent."""
     assert_harness_closed()
     if not periods:
         raise EvalHarnessError("multi-period compare requires at least one period")
@@ -862,71 +679,35 @@ def run_multi_period_multisignal_compare(
         "n_periods_error": sum(1 for r in results if r.get("status") == "error"),
         "periods": results,
         "cross_period_compare_table": cross,
-        "mass_research": MASS_RESEARCH,
-        "phase7": PHASE7,
-        "ready_declared": False,
-        "operational_go": False,
-        "significance_claimed": False,
-        "edge_claimed": False,
-        "local_sot": False,
+        **_closed_flags(local_sot=False),
         "note": (
             "Multi-period fixed-definition multi-signal research compare. "
-            "Skips documented when data missing. Not READY. No densify invent."
+            "Skips documented when data missing. No densify invent."
         ),
     }
 
 
-# ---------------------------------------------------------------------------
-# W63 multi-year research evaluation (year-split · not READY / not Mass)
-# ---------------------------------------------------------------------------
-
+# Multi-year eval (year-split · not READY / not Mass).
 MULTI_YEAR_VERSION: str = "research-multi-year-eval/v1"
 MULTI_YEAR_LABEL: str = (
     "小サンプル / 研究用・複数年評価・未宣言 "
     "(年分割・fail-one-year-ok・pass≠READY/Mass)"
 )
 
-# Fixed liquid TSE probe universe (30 codes) shared with W60/W61 long evals.
-# Non-contiguous yearly windows re-use the same codes for fairness.
+# Fixed 30-code TSE probe. Not EVAL_UNIVERSE_POOL / not a head-N fill.
 DEFAULT_MULTIYEAR_CODES: tuple[str, ...] = (
-    "13010",
-    "72030",
-    "67580",
-    "99840",
-    "83060",
-    "68610",
-    "65010",
-    "40630",
-    "80350",
-    "94320",
-    "45020",
-    "63670",
-    "60980",
-    "79740",
-    "69810",
-    "45680",
-    "80010",
-    "80020",
-    "80580",
-    "94330",
-    "29140",
-    "33820",
-    "46610",
-    "49010",
-    "51080",
-    "54010",
-    "57130",
-    "62730",
-    "63010",
-    "65030",
+    "13010", "72030", "67580", "99840", "83060",
+    "68610", "65010", "40630", "80350", "94320",
+    "45020", "63670", "60980", "79740", "69810",
+    "45680", "80010", "80020", "80580", "94330",
+    "29140", "33820", "46610", "49010", "51080",
+    "54010", "57130", "62730", "63010", "65030",
 )
 
-# Preferred non-contiguous yearly sample (inventory 2008–2026; gaps OK).
 DEFAULT_MULTIYEAR_YEARS: tuple[int, ...] = (2015, 2017, 2019, 2021, 2023, 2025)
 
-# Honest inventory defaults (research plane; do not invent densify fills).
-# topix JSONL gap 2024–2025 → archive; calendar tip JSONL 2026 only → archive;
-# margin JSONL gap year 2024 empty_allowed.
+# Honest inventory (no densify). topix 2024–2025 → archive; calendar JSONL
+# 2026 tip only; margin 2024 empty_allowed.
 DATASET_YEAR_INVENTORY_NOTES: Mapping[str, Any] = MappingProxyType(
     {
         "equities_bars_daily": {
@@ -973,20 +754,9 @@ def design_yearly_eval_windows(
     codes: Sequence[str] | None = None,
     inventory_notes: Mapping[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
-    """Design non-contiguous yearly (or half-year) research eval windows.
+    """Yearly (or half-year) windows for multi-year eval. Gaps recorded; no invent.
 
-    Each returned period dict is ready for :func:`run_multi_year_s1_eval` /
-    :func:`run_multi_period_multisignal_compare` (``period_id``,
-    ``period_start``, ``period_end``, day bounds, codes, coverage notes).
-
-    ``window``:
-        * ``"q4"`` — Sep 1 … Dec 29 of each year (default; ~60–80 sessions)
-        * ``"h1"`` — Jan 6 … Jun 30
-        * ``"h2"`` — Jul 1 … Dec 29
-        * ``"full"`` — Jan 6 … Dec 29 (caller should lower max_days)
-
-    Does **not** invent data. Gaps are recorded under ``coverage_notes``;
-    callers may set ``skip_reason`` when a year has no usable bars.
+    ``window``: ``q4`` (default), ``h1``, ``h2``, ``full``.
     """
     assert_harness_closed()
     yrs = (
@@ -1008,11 +778,7 @@ def design_yearly_eval_windows(
             f"window must be one of {sorted(spans)}, got {window!r}"
         )
     start_md, end_md = spans[w]
-    selected = (
-        [str(c).strip() for c in codes if str(c).strip()]
-        if codes is not None
-        else list(DEFAULT_MULTIYEAR_CODES)
-    )
+    selected = _selected_codes(codes, DEFAULT_MULTIYEAR_CODES)
     inv = dict(inventory_notes or DATASET_YEAR_INVENTORY_NOTES)
     out: list[dict[str, Any]] = []
     for y in yrs:
@@ -1233,12 +999,7 @@ def run_multi_year_s1_eval(
     one_way_cost: float = DEFAULT_ONE_WAY_COST,
     require_net_sign_majority: bool = True,
 ) -> dict[str, Any]:
-    """Year-split S1 (topix_relative_sign) research eval; fail-one-year safe.
-
-    Each year is independent: an exception / skip on one year does **not**
-    abort the batch. Results table records ``ok`` / ``skipped`` / ``error``
-    per year. Optional robustness gate over ok years (pass ≠ READY/Mass).
-    """
+    """Year-split S1 eval; fail-one-year safe. Gate pass ≠ READY/Mass."""
     assert_harness_closed()
     require_approved_signal_legs(context="multi-year S1 legs")
     require_harness_datasets(context="multi-year S1 datasets")
@@ -1252,11 +1013,7 @@ def run_multi_year_s1_eval(
     if not period_list:
         raise EvalHarnessError("multi-year S1 requires at least one period")
 
-    selected_default = (
-        [str(c).strip() for c in codes if str(c).strip()]
-        if codes is not None
-        else list(DEFAULT_MULTIYEAR_CODES)
-    )
+    selected_default = _selected_codes(codes, DEFAULT_MULTIYEAR_CODES)
 
     results: list[dict[str, Any]] = []
     for i, raw in enumerate(period_list):
@@ -1295,7 +1052,7 @@ def run_multi_year_s1_eval(
             continue
         year_codes = p.get("codes") or selected_default
         try:
-            ex = execute_multiday_nextday_return_eval(
+            ex = execute_multiday_signal_eval(
                 period_start=start,
                 period_end=end,
                 job_id=f"{job_id_prefix}-{pid}",
@@ -1305,6 +1062,7 @@ def run_multi_year_s1_eval(
                 min_days=int(p.get("min_days") or min_days),
                 feature_row_limit=feature_row_limit,
                 volume_change_abs_min=volume_change_abs_min,
+                attach_nextday_returns=True,
                 write_per_day_artifacts=write_per_day_artifacts,
                 dry_run=dry_run,
                 d1_execute=d1_execute,
@@ -1432,21 +1190,14 @@ def run_multi_year_s1_eval(
             "require_net_sign_majority": bool(require_net_sign_majority),
             "label": "仮定に依存・研究用・運用GOではない",
         },
-        "mass_research": MASS_RESEARCH,
-        "phase7": PHASE7,
-        "ready_declared": False,
-        "operational_go": False,
-        "connected_to_ready": False,
-        "connected_to_mass": False,
-        "significance_claimed": False,
-        "edge_claimed": False,
-        "local_sot": False,
-        "year_split": True,
-        "fail_one_year_safe": True,
+        **_closed_flags(
+            local_sot=False,
+            year_split=True,
+            fail_one_year_safe=True,
+        ),
         "note": (
             "Multi-year S1 research eval with independent per-year jobs. "
             "Error/skip on one year does not kill the batch. "
-            "Cost-aware robustness_gate (default). "
             "pass does NOT mint READY or arm Mass."
         ),
     }
@@ -1478,11 +1229,7 @@ def run_multi_year_extra_hyp_eval(
     signal_ids: Sequence[str] | None = None,
     require_net_sign_majority: bool = True,
 ) -> dict[str, Any]:
-    """Year-split S4 (margin) / S5 research hyp eval; skip years without data.
-
-    Years with ``s4_eligible=False`` or ``skip_reason`` are recorded as
-    skipped (honest empty) — never invent margin rows for gap years (2024).
-    """
+    """Year-split S4/S5 eval. Gap years skipped honestly — never invent margin."""
     assert_harness_closed()
     if periods is None:
         period_list = design_yearly_eval_windows(
@@ -1493,11 +1240,7 @@ def run_multi_year_extra_hyp_eval(
     if not period_list:
         raise EvalHarnessError("multi-year extra-hyp requires at least one period")
 
-    selected_default = (
-        [str(c).strip() for c in codes if str(c).strip()]
-        if codes is not None
-        else list(DEFAULT_MULTIYEAR_CODES)
-    )
+    selected_default = _selected_codes(codes, DEFAULT_MULTIYEAR_CODES)
     want_signals = (
         {str(s) for s in signal_ids}
         if signal_ids is not None
@@ -1680,20 +1423,13 @@ def run_multi_year_extra_hyp_eval(
             "require_net_sign_majority": bool(require_net_sign_majority),
             "label": "仮定に依存・研究用・運用GOではない",
         },
-        "mass_research": MASS_RESEARCH,
-        "phase7": PHASE7,
-        "ready_declared": False,
-        "operational_go": False,
-        "connected_to_ready": False,
-        "connected_to_mass": False,
-        "significance_claimed": False,
-        "edge_claimed": False,
-        "local_sot": False,
-        "year_split": True,
-        "fail_one_year_safe": True,
+        **_closed_flags(
+            local_sot=False,
+            year_split=True,
+            fail_one_year_safe=True,
+        ),
         "note": (
-            "Multi-year S4/S5 research eval. Gap years skipped honestly "
-            "(no densify invent). Cost-aware gate (default). "
+            "Multi-year S4/S5 research eval. Gap years skipped honestly. "
             "Gate pass ≠ READY/Mass."
         ),
     }
@@ -2526,10 +2262,8 @@ def run_standard_research_eval(
             # Reload from the same SQLite path class_hyp used (disclosure only
             # when series already embedded in cost_assumption of class hyp).
             try:
-                from research.offline.multiyear import (
-                    DEFAULT_SQLITE,
-                    load_repo_rows_from_sqlite,
-                )
+                from research.eval_loaders import load_repo_rows_from_sqlite
+                from research.eval_universe import DEFAULT_SQLITE
                 from research.cost_models import load_repo_rate_series_from_rows
 
                 _rows = load_repo_rows_from_sqlite(DEFAULT_SQLITE)
@@ -2920,7 +2654,6 @@ standard_research_eval_checklist_run = run_standard_research_eval
 
 __all__ = [
     "APPROVED_SIGNAL_LEGS",
-    "COMPLETE_21_DATASETS",
     "COMPLETE_21_DATASET_SET",
     "CHECKLIST_LABEL",
     "CHECKLIST_V2_INSUFFICIENT",
@@ -2930,73 +2663,61 @@ __all__ = [
     "CHECKLIST_VERSION_V1",
     "CHECKLIST_WAVE",
     "CONNECTED_TO_MASS_RESEARCH_LOOP",
+    "COST_MODEL_PREFER_LIQUIDITY_LINKED",
+    "COST_MODEL_PREFER_REPO_LINKED",
+    "COST_MODEL_REQUIRE_LIQUIDITY_LINKED",
+    "COST_MODEL_REQUIRE_REPO_LINKED",
     "DATASET_YEAR_INVENTORY_NOTES",
-    "HARNESS_SMOKE_CODES",
     "DEFAULT_EVAL_CODES",
     "DEFAULT_MULTIYEAR_CODES",
     "DEFAULT_MULTIYEAR_YEARS",
     "DEFAULT_SIGNAL_DATASETS",
     "DEFAULT_SIGNAL_ID",
-    "DEFAULT_SIGNAL_VERSION",
     "DEFAULT_VOLUME_CHANGE_ABS_MIN",
     "DENSIFY",
+    "EvalHarnessError",
     "FEATURE_STATUS_PINS",
+    "HARNESS_SMOKE_CODES",
     "HARNESS_VERSION",
     "LOCAL_SOT",
     "MASS_RESEARCH",
     "MASS_RESEARCH_ENV_ARMING_SWITCHES",
-    "MASS_RESEARCH_STATUS",
     "MULTI_PERIOD_VERSION",
     "MULTI_SIGNAL_DATASETS",
     "MULTI_YEAR_LABEL",
     "MULTI_YEAR_VERSION",
     "MultidaySignalEval",
-    "NEXTDAY_LOOKAHEAD_POLICY",
     "NEXTDAY_RESEARCH_LABEL",
     "ORDER_EXECUTION",
-    "PERMANENT_DEFER_DATASETS",
     "PHASE7",
     "PHASE7_ENV_ARMING_SWITCHES",
-    "PHASE7_STATUS",
     "PIPELINE",
-    "PermanentDeferHistoryError",
     "READY_DECLARED",
-    "READY_PUBLICATION",
-    "READY_PUBLICATION_STATUS",
-    "RESEARCH_ARTIFACT_BUCKET",
-    "RESEARCH_ARTIFACT_PREFIX",
     "RESEARCH_WALK_FORWARD_LABEL",
     "SIGNAL_CANDIDATE_ONLY",
-    "COST_MODEL_PREFER_LIQUIDITY_LINKED",
-    "COST_MODEL_PREFER_REPO_LINKED",
-    "COST_MODEL_REQUIRE_LIQUIDITY_LINKED",
-    "COST_MODEL_REQUIRE_REPO_LINKED",
     "STANDARD_EVAL_COST_MODEL_PROOF",
     "STANDARD_EVAL_COST_MODEL_PROOF_REPO_LINKED",
     "STANDARD_EVAL_DAILY_PATH_DD_PROOF",
     "STANDARD_EVAL_MODES",
     "STANDARD_EVAL_PROOF",
     "STANDARD_EVAL_PROOF_V1",
-    "WALK_FORWARD_VERSION",
-    "EvalHarnessError",
     "SingleShotJobError",
+    "WALK_FORWARD_VERSION",
     "assert_harness_closed",
     "assert_mass_and_phase7_off",
-    "attach_next_day_returns",
-    "build_equity_close_index",
-    "design_artifact_paths",
     "design_yearly_eval_windows",
-    "discover_tip_trading_days",
     "evaluate_checklist_v2_completeness",
-    "execute_multiday_nextday_return_eval",
+    "evaluate_research_robustness_gate",
+    "execute_extra_hyp_signals_compare",
     "execute_multiday_signal_eval",
     "freeze_status",
     "harness_freeze_status",
     "multi_year_availability_table",
-    "next_trading_day_map",
+    "period_rows_from_cross_table",
     "require_approved_signal_legs",
     "require_complete_21_only",
     "require_harness_datasets",
+    "research_robustness_gate_document",
     "run_full_pipeline",
     "run_multi_period_multisignal_compare",
     "run_multi_year_extra_hyp_eval",
@@ -3006,17 +2727,7 @@ __all__ = [
     "run_nextday_return_eval",
     "run_research_walk_forward_multisignal",
     "run_standard_research_eval",
-    "session_close_as_of",
-    "signal_definition",
     "split_asof_days_walk_forward",
     "standard_research_eval_checklist_document",
     "standard_research_eval_checklist_run",
-    "summarize_nextday_by_sign",
-    "summarize_signal_day",
-    "evaluate_research_robustness_gate",
-    "period_rows_from_cross_table",
-    "research_robustness_gate_document",
-    "walk_forward_gross_from_compare",
-    "execute_extra_hyp_signals_compare",
 ]
-
