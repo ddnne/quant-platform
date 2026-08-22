@@ -247,7 +247,13 @@ GATE_OCCUPANCY_LABEL: tuple[tuple[str, tuple[str, ...]], ...] = (
         "high price momentum",
     )),
     # curve_flatten occupancy is the repo curve, not a generic yield curve.
-    ("curve_flatten", ("yield curve", "is flattening", "flattening")),
+    ("curve_flatten", (
+        "yield curve",
+        "is flattening",
+        "flattening",
+        "curve flattened",
+        "is flattened",
+    )),
     ("invert_curve", (
         "invert curve",
         "inverting",
@@ -438,7 +444,7 @@ OCCUPANCY_LABEL_EXCEPTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("sales_down", ("contracted", "versus the last prior", "last prior print")),
     ("np_negative", ("net profit", "np is negative", "np negative")),
     ("crowded_margin", ("margin is crowded", "margin crowding")),
-    ("curve_flatten", ("repo curve", "flattened")),
+    ("curve_flatten", ("repo curve",)),
     ("invert_curve", ("repo curve",)),
     ("steep_curve", ("repo curve",)),
 )
