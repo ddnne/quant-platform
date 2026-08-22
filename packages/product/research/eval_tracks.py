@@ -82,8 +82,8 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "why": (
             "recorded research/eval/job=eval-inventory-bias-20260824ai/ "
             "inventory_bias.json; assert_new_batch_cheap_pb_cap refuses "
-            "new batches at 20%; 24ce pb×invert×tight thin (~0.0495/0.0559); "
-            "24cf np×steep×easing near_empty park (~0.014/0.014)"
+            "new batches at 20%; 24cj eps×np×sales mixed thin (~0.120/0.126); "
+            "not thicker than flatten_eps ~0.28"
         ),
         "not_a_pass": True,
         "go": False,
@@ -234,9 +234,9 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "id": "adopt_occupancy_recorded",
         "track": EVAL_TRACK_LIQ_LARGE,
         "why": (
-            "eval-occupancy-audit-20260824ce both tracks: pb×invert×tight "
-            "~0.0495/0.0559 mixed thin-exclude; np×steep×easing ~0.014/0.014 "
-            "near_empty parked; not a pass"
+            "eval-occupancy-audit-20260824cj both tracks: eps×np×sales "
+            "~0.120/0.126 mixed thin-exclude (not > flatten_eps ~0.28); "
+            "not a pass"
         ),
         "not_a_pass": True,
         "go": False,

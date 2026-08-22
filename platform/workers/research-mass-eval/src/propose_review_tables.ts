@@ -274,6 +274,8 @@ export const SPARSE_GATE_COMBOS_REVIEW: string[][] = [
   ["pb_rising", "sales_down", "tight_funding"],
   ["pb_rising", "price_down", "sales_down"],
   ["np_negative", "overnight_easing", "steep_curve"],
+  ["np_negative", "steep_curve"],
+  ["pb_rising", "price_down", "tight_funding"],
 ];
 
 export const OCCUPANCY_LABEL_EXCEPTIONS: Array<[string, string[]]> = [
