@@ -1,7 +1,4 @@
-"""Sleeve/meta majority compares. Descriptive only. Not a pass / not GO.
-
-Head-N vs ADV helpers may stay for composition prints. They are not a pass.
-"""
+"""Sleeve/meta majority compares. Descriptive only. Not a pass / not GO."""
 from __future__ import annotations
 
 from typing import Any, Mapping, Sequence
@@ -23,7 +20,6 @@ def compare_basket_summaries(
     label_a: str,
     label_b: str,
 ) -> dict[str, Any]:
-    """Classify sleeves as stable / flipped / mixed. Scores stay off Git."""
     by_a = {
         str(r.get("basket_id")): r
         for r in (summary_a.get("baskets") or [])
@@ -78,10 +74,6 @@ def compare_basket_summaries(
         "promote_as_main": False,
         "go": False,
         "not_a_pass": True,
-        "notes": (
-            "Single-universe majority is not a stability call. "
-            "not a pass / not GO."
-        ),
     }
 
 
@@ -90,8 +82,6 @@ def classify_sleeves_three_n(
     summary_80: Mapping[str, Any],
     summary_100: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """stable_mid / dilutes_at_large / unstable. A 100-only print is not stable."""
-
     def _rows(summary: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
         return {
             str(r.get("basket_id")): r
@@ -102,12 +92,10 @@ def classify_sleeves_three_n(
     def _maj(row: Mapping[str, Any] | None) -> int:
         if not row:
             return 0
-        p, n = int(row.get("n_pos_windows") or 0), int(row.get("n_neg_windows") or 0)
-        if p > n:
-            return 1
-        if n > p:
-            return -1
-        return 0
+        return _majority_sign(
+            int(row.get("n_pos_windows") or 0),
+            int(row.get("n_neg_windows") or 0),
+        )
 
     a, b, c = _rows(summary_50), _rows(summary_80), _rows(summary_100)
     ids = sorted(set(a) | set(b) | set(c))
@@ -117,27 +105,20 @@ def classify_sleeves_three_n(
     unstable: list[str] = []
     for bid in ids:
         m50, m80, m100 = _maj(a.get(bid)), _maj(b.get(bid)), _maj(c.get(bid))
-        # Mid-N agreement with a positive majority, then 100 goes mixed/flip.
         mid_ok = m50 == m80 == 1
-        large_dilute = mid_ok and m100 != 1
-        flipped = (m50 != 0 and m80 != 0 and m50 != m80) or (
-            m50 == 1 and m80 == -1
-        )
-        if flipped or (m50 == 1 and m80 == 1 and m100 == -1):
+        flipped = m50 != 0 and m80 != 0 and m50 != m80
+        if flipped or (mid_ok and m100 == -1):
             kind = "unstable"
             unstable.append(bid)
-        elif large_dilute:
+        elif mid_ok and m100 != 1:
             kind = "dilutes_at_large"
             dilutes.append(bid)
-            if mid_ok:
-                stable_mid.append(bid)
-        elif mid_ok and m100 == 1:
+            stable_mid.append(bid)
+        elif mid_ok:
             kind = "stable_mid"
             stable_mid.append(bid)
         else:
-            kind = "unstable" if (m50 != 0 and m80 != 0 and m50 != m80) else "mixed"
-            if kind == "unstable":
-                unstable.append(bid)
+            kind = "mixed"
         sleeves.append(
             {
                 "basket_id": bid,
@@ -170,10 +151,6 @@ def classify_sleeves_three_n(
         "promote_as_main": False,
         "go": False,
         "not_a_pass": True,
-        "notes": (
-            "A 100-only print is never stable. univ100_is_not_stable. "
-            "not a pass / not GO."
-        ),
         "primary_candidate_is_not_a_pass": True,
     }
 
@@ -239,27 +216,33 @@ def _compare_composition_rows(
     return rows, b_majority_better
 
 
-def compare_headn_vs_liq(
-    summary_headn: Mapping[str, Any],
-    summary_liq: Mapping[str, Any],
+def _composition_compare(
+    summary_a: Mapping[str, Any],
+    summary_b: Mapping[str, Any],
     *,
-    ids: Sequence[str] | None = None,
+    version: str,
+    job_a: str,
+    job_b: str,
+    label_a: str,
+    label_b: str,
+    a_better_class: str,
+    b_better_class: str,
+    ids: Sequence[str] | None,
 ) -> dict[str, Any]:
-    """Same sleeves/metas across head-N 100 vs ADV liq100. Not a pass."""
     want = tuple(ids) if ids is not None else COMPARE_COMPOSITION_IDS
     rows, liq_majority_better = _compare_composition_rows(
-        summary_headn,
-        summary_liq,
+        summary_a,
+        summary_b,
         ids=want,
-        label_a="head_n",
-        label_b="liq",
-        a_better_class="headn_majority_better",
-        b_better_class="liq_majority_better",
+        label_a=label_a,
+        label_b=label_b,
+        a_better_class=a_better_class,
+        b_better_class=b_better_class,
     )
     return {
-        "version": "composition-compare/v1",
-        "head_n_job": summary_headn.get("job_id"),
-        "liq_job": summary_liq.get("job_id"),
+        "version": version,
+        job_a: summary_a.get("job_id"),
+        job_b: summary_b.get("job_id"),
         "ids": list(want),
         "liq_majority_better": liq_majority_better,
         "rows": rows,
@@ -267,11 +250,27 @@ def compare_headn_vs_liq(
         "not_a_pass": True,
         "go": False,
         "promote_as_main": False,
-        "notes": (
-            "ADV composition vs head-N on the same sleeve/meta set. "
-            "liq_print_is_not_stable. not a pass / not GO."
-        ),
     }
+
+
+def compare_headn_vs_liq(
+    summary_headn: Mapping[str, Any],
+    summary_liq: Mapping[str, Any],
+    *,
+    ids: Sequence[str] | None = None,
+) -> dict[str, Any]:
+    return _composition_compare(
+        summary_headn,
+        summary_liq,
+        version="composition-compare/v1",
+        job_a="head_n_job",
+        job_b="liq_job",
+        label_a="head_n",
+        label_b="liq",
+        a_better_class="headn_majority_better",
+        b_better_class="liq_majority_better",
+        ids=ids,
+    )
 
 
 def compare_mid_vs_liq(
@@ -280,30 +279,15 @@ def compare_mid_vs_liq(
     *,
     ids: Sequence[str] | None = None,
 ) -> dict[str, Any]:
-    """Same sleeves/metas across mid_n_explore vs ADV liq_large. Not a pass."""
-    want = tuple(ids) if ids is not None else COMPARE_COMPOSITION_IDS
-    rows, liq_majority_better = _compare_composition_rows(
+    return _composition_compare(
         summary_mid,
         summary_liq,
-        ids=want,
+        version="composition-compare/v2",
+        job_a="mid_n_job",
+        job_b="liq_job",
         label_a="mid_n",
         label_b="liq",
         a_better_class="mid_majority_better",
         b_better_class="liq_majority_better",
+        ids=ids,
     )
-    return {
-        "version": "composition-compare/v2",
-        "mid_n_job": summary_mid.get("job_id"),
-        "liq_job": summary_liq.get("job_id"),
-        "ids": list(want),
-        "liq_majority_better": liq_majority_better,
-        "rows": rows,
-        "liq_print_is_not_stable": True,
-        "not_a_pass": True,
-        "go": False,
-        "promote_as_main": False,
-        "notes": (
-            "ADV mid_n_explore vs liq_large on the same sleeve/meta set. "
-            "liq_print_is_not_stable. not a pass / not GO."
-        ),
-    }

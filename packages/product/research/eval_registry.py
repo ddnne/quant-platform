@@ -1,10 +1,7 @@
 """Experiment job index contract (R2 artifacts + small D1 rows).
 
-Git is not the eval warehouse. Local ``.glm-logs`` is scratch.
-A run is recorded only when a manifest is written under
-``quant-structured/research/eval/job={id}/`` (and, when wired, a D1 row).
-
-Mass / READY / GO remain closed. This module does not promote candidates.
+Git is not the eval warehouse. A run is recorded when a manifest is written
+under ``quant-structured/research/eval/job={id}/``. Mass / READY / GO closed.
 """
 from __future__ import annotations
 
@@ -22,7 +19,6 @@ PROTOCOL_DAILY_PATH: str = "daily_path_mtm_after_cost/v1"
 
 
 def is_path_collapsed_cell(cell: Mapping[str, Any]) -> bool:
-    """True when period-net MDH fallback ate a unique/event/CS logic."""
     extra = cell.get("extra") if isinstance(cell.get("extra"), Mapping) else {}
     if cell.get("path_collapsed") or extra.get("path_collapsed"):
         return True
@@ -34,7 +30,6 @@ def is_path_collapsed_cell(cell: Mapping[str, Any]) -> bool:
 
 
 def is_path_broken_cell(cell: Mapping[str, Any]) -> bool:
-    """True when the eval path is generic CS/MDH fallback or tagged broken."""
     if is_path_collapsed_cell(cell):
         return True
     extra = cell.get("extra") if isinstance(cell.get("extra"), Mapping) else {}
@@ -46,7 +41,6 @@ def is_path_broken_cell(cell: Mapping[str, Any]) -> bool:
 
 
 def is_daily_path_complete_cell(cell: Mapping[str, Any]) -> bool:
-    """Candidate-grade complete: DD measured and the path is not broken."""
     if is_path_broken_cell(cell):
         return False
     return bool(cell.get("daily_path_complete"))
@@ -116,10 +110,6 @@ class EvalJobManifest:
     cells: tuple[EvalCell, ...]
     created_at: str = field(default_factory=_now)
     factory_version: str | None = None
-    promote_as_main: bool = False
-    go: bool = False
-    mass: str = MASS_RESEARCH
-    research_candidate: bool = False
     notes: str = ""
 
     def to_dict(self) -> dict[str, Any]:
@@ -237,7 +227,6 @@ def dumps_manifest(manifest: EvalJobManifest) -> str:
 
 
 def write_manifest_local(manifest: EvalJobManifest, staging_dir: Path) -> Path:
-    """Scratch copy only — not SoT. R2/D1 is the record."""
     staging = Path(staging_dir)
     job_dir = staging / "research_eval" / f"job={manifest.job_id}"
     job_dir.mkdir(parents=True, exist_ok=True)
@@ -252,7 +241,6 @@ def write_manifest_local(manifest: EvalJobManifest, staging_dir: Path) -> Path:
 
 
 def d1_upsert_sql(manifest: EvalJobManifest) -> str:
-    """Small index rows for D1. No bars. MCP remains read-only."""
     job = manifest.to_dict()
     notes = (job.get("notes") or "").replace("'", "''")
     sha = job.get("git_sha") or ""
@@ -298,81 +286,3 @@ def d1_upsert_sql(manifest: EvalJobManifest) -> str:
             "daily_path_DD=excluded.daily_path_DD, total_ret_net=excluded.total_ret_net;"
         )
     return "\n".join(lines) + "\n"
-
-
-def list_eval_jobs_from_d1(*, limit: int = 20) -> list[dict[str, Any]]:
-    """Thin D1 job index (no scores copied into Git)."""
-    import subprocess
-    from qp_paths import repo_root
-
-    root = repo_root()
-    wr = (
-        root
-        / "platform"
-        / "workers"
-        / "ingestion-premium"
-        / "node_modules"
-        / ".bin"
-        / "wrangler"
-    )
-    wr_bin = str(wr) if wr.is_file() else "npx"
-    cmd = [wr_bin] if wr.is_file() else ["npx", "wrangler"]
-    sql = (
-        "SELECT job_id, protocol, n_logics, n_cells, status, r2_prefix, "
-        "created_at FROM research_eval_jobs "
-        f"ORDER BY created_at DESC LIMIT {int(limit)};"
-    )
-    cmd += [
-        "d1",
-        "execute",
-        "quant-ingest",
-        "--remote",
-        "--json",
-        f"--command={sql}",
-    ]
-    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-    if proc.returncode != 0:
-        return [{"error": (proc.stderr or proc.stdout or "d1 list failed")[:500]}]
-    try:
-        payload = json.loads(proc.stdout)
-    except json.JSONDecodeError:
-        return [{"error": "d1 json parse failed", "stdout": proc.stdout[:300]}]
-    rows: list[dict[str, Any]] = []
-    if isinstance(payload, list):
-        for block in payload:
-            for r in (block.get("results") or []) if isinstance(block, dict) else []:
-                if isinstance(r, dict):
-                    rows.append(r)
-    elif isinstance(payload, dict):
-        for r in payload.get("results") or []:
-            if isinstance(r, dict):
-                rows.append(r)
-    return rows
-
-
-def main(argv: list[str] | None = None) -> int:
-    import argparse
-
-    p = argparse.ArgumentParser(description="Eval registry index (D1/R2). No Git scores.")
-    p.add_argument("--list", action="store_true", help="List recent D1 research_eval_jobs")
-    p.add_argument("--limit", type=int, default=20)
-    p.add_argument("--summarize-table", type=Path, help="JSON cells array")
-    p.add_argument("--job-id", default="")
-    args = p.parse_args(argv)
-    if args.list:
-        rows = list_eval_jobs_from_d1(limit=int(args.limit))
-        print(json.dumps({"n": len(rows), "jobs": rows, "scores_in_git": False}, indent=2, default=str))
-        return 0
-    if args.summarize_table:
-        cells = json.loads(Path(args.summarize_table).read_text(encoding="utf-8"))
-        if not isinstance(cells, list):
-            raise SystemExit("summarize-table must be a JSON array")
-        from research.eval_summary import summarize_daily_path_cells
-        print(json.dumps(summarize_daily_path_cells(cells, job_id=str(args.job_id or "unknown")), indent=2, default=str))
-        return 0
-    p.print_help()
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

@@ -48,7 +48,6 @@ def invoke_cf_daily_path(
     timeout: int = 180,
     http_post: Callable[..., Any] | None = None,
 ) -> dict[str, Any]:
-    """POST /v1/daily-path (one isolate)."""
     spec = dict(job_spec)
     spec["eval_kind"] = "daily_path"
     spec["write_artifacts"] = False
@@ -102,7 +101,6 @@ def run_cf_daily_path_fanout(
     panels_prefix: str | None = None,
     track: str | None = None,
 ) -> dict[str, Any]:
-    """Stage once, fan-out one CF isolate per logic, aggregate cells."""
     from research.eval_tracks import infer_eval_track
 
     t0 = time.perf_counter()
@@ -263,17 +261,12 @@ def run_cf_daily_path_fanout(
         "survived": False,
         "candidate_grade": True,
         "period_net_dd_only_pass_forbidden": True,
-        "notes": (
-            "CF isolate fan-out daily_path_DD. Windows are Worker period_ids "
-            "(real multi-year shards), not local HONEST_3Y stitch. "
-            "Not a promotion."
-        ),
+        "notes": "CF isolate fan-out daily_path_DD. Not a promotion.",
     }
     return pack
 
 
 def sleeve_durability_logic_ids() -> list[str]:
-    """Unique fund/flow/event sleeve members. Not a pass."""
     from research.combo_basket import mechanical_basket_defs
 
     want = {"fundamentals_sleeve", "margin_flow_sleeve", "event_fund_cross"}
@@ -310,10 +303,6 @@ def run_both_track_sleeve_fanout(
     one_way_cost: float = DEFAULT_ONE_WAY,
     universe_pool: Sequence[str] | None = None,
 ) -> dict[str, Any]:
-    """Fan out fund/flow/event sleeves on mid_n_explore AND liq_large.
-
-    Default dry_run. select_eval_universe only (never head-N). Not a pass / not GO.
-    """
     from research.combo_basket import compare_mid_vs_liq
     from research.eval_tracks import (
         EVAL_TRACK_LIQ_LARGE,
@@ -449,11 +438,7 @@ def run_both_track_sleeve_fanout(
         "liq_print_is_not_stable": True,
         "sleeve_majority_is_not_a_pass": True,
         "wall_sec": round(time.perf_counter() - t0, 3),
-        "notes": (
-            "Both-track fund/flow/event sleeve daily_path fan-out. "
-            "select_eval_universe only (never head-N). "
-            "max_codes from EVAL_TRACKS. Sleeve majority prints are not a pass."
-        ),
+        "notes": "Both-track sleeve daily_path. Never head-N. Not a pass.",
     }
     table_path.write_text(
         json.dumps(pack, indent=2, default=str) + "\n", encoding="utf-8"

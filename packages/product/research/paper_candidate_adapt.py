@@ -84,7 +84,6 @@ _COST_STRIP: frozenset[str] = frozenset(
 
 
 def _freeze_arm_flags() -> dict[str, Any]:
-    """Canonical unarmed surface. Callers cannot override these open."""
     return {
         "paper_scheduler_armed": False,
         "paper_continuous": False,
@@ -114,20 +113,15 @@ def _assert_closed_flags(block: Mapping[str, Any], *, where: str) -> None:
             raise ValueError(
                 f"paper receptacle must stay unarmed: {prefix}{key}={val!r}"
             )
-    if "mass_research" in block and block["mass_research"] not in (
-        MASS_RESEARCH,
-        "NO-GO",
-        None,
-    ):
+    if "mass_research" in block and block["mass_research"] not in (MASS_RESEARCH, None):
         raise ValueError(
             f"mass_research must be NO-GO, got {block['mass_research']!r}"
         )
-    if "phase7" in block and block["phase7"] not in (PHASE7, "OFF", None):
+    if "phase7" in block and block["phase7"] not in (PHASE7, None):
         raise ValueError(f"phase7 must be OFF, got {block['phase7']!r}")
 
 
 def assert_unarmed(payload: Mapping[str, Any]) -> None:
-    """Fail closed if a paper receptacle claims arm / live / GO."""
     if not isinstance(payload, Mapping):
         raise TypeError("payload must be a mapping")
     arm = payload.get("arm")
@@ -249,7 +243,6 @@ def _source_candidate_block(payload: Mapping[str, Any]) -> dict[str, Any]:
 
 @dataclass(frozen=True)
 class PaperCandidateReceptacle:
-    """Paper-readable, unarmed receptacle for a research candidate."""
 
     strategy_spec: StrategySpec
     hypothesis_class: str
@@ -308,10 +301,6 @@ class PaperCandidateReceptacle:
         assert_unarmed(body)
         return body
 
-    def strategy_spec_dict(self) -> dict[str, Any]:
-        return self.strategy_spec.to_dict()
-
-
 def _costs_block(
     *,
     one_way_cost: float,
@@ -338,18 +327,15 @@ def _costs_block(
 
 
 def _cs_momentum_n(payload: Mapping[str, Any], hold_days: int) -> int:
-    variant_s = str(payload.get("variant") or "")
-    n_mom = payload.get("momentum_n")
-    if n_mom is None:
-        n_mom = payload.get("cross_section_hold10_momentum_n")
-    if n_mom is None and variant_s in {
+    n_mom = payload.get("momentum_n", payload.get("cross_section_hold10_momentum_n"))
+    if n_mom is None and str(payload.get("variant") or "") in {
         "hold_10_mom3",
         "cross_section_hold_10_mom3",
     }:
         n_mom = payload.get("cross_section_hold10_mom3_momentum_n", 3)
     if n_mom is not None:
         return int(n_mom)
-    return 5 if hold_days == 10 else hold_days
+    return DEFAULT_CS_MOMENTUM_N if hold_days == 10 else hold_days
 
 
 def adapt_class_hyp_candidate(
@@ -360,10 +346,6 @@ def adapt_class_hyp_candidate(
     top_k: int = DEFAULT_TOP_K,
     strategy_id: str | None = None,
 ) -> PaperCandidateReceptacle:
-    """Adapt a class_hyp / research candidate payload → unarmed paper receptacle.
-
-    Always returns UNARMED; never sets live/go/mass/ready.
-    """
     if not isinstance(payload, Mapping):
         raise TypeError("payload must be a mapping")
 
@@ -560,7 +542,6 @@ def adapt_from_class_hyp_bundle(
     *,
     top_k: int = DEFAULT_TOP_K,
 ) -> PaperCandidateReceptacle:
-    """Pull one class block (e.g. multi_day_hold_10, event_post) from a bundle."""
     summary = bundle.get("candidate_summary")
     from_summary = False
     if class_key in bundle:
@@ -607,7 +588,6 @@ def _discussion_payload(signal_id: str) -> dict[str, Any]:
 
 
 def example_multi_day_hold_10d_payload() -> dict[str, Any]:
-    """Synthetic discussion_only multi_day_hold 10d candidate payload."""
     return {
         "hypothesis_class": CLASS_MULTI_DAY_HOLD,
         "variant": "hold_10",
@@ -623,7 +603,6 @@ def example_multi_day_hold_10d_payload() -> dict[str, Any]:
 
 
 def example_event_post_payload() -> dict[str, Any]:
-    """Synthetic discussion_only event_post candidate payload."""
     return {
         "hypothesis_class": CLASS_EVENT_POST,
         "post_hold_days": 5,
@@ -642,7 +621,6 @@ def _write_json(path: Path, body: Mapping[str, Any]) -> None:
 
 
 def emit_example_paper_specs(out_dir: str | Path) -> dict[str, Path]:
-    """Write multi_day_hold 10d + event_post paper specs (UNARMED)."""
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     paths: dict[str, Path] = {}
@@ -656,16 +634,14 @@ def emit_example_paper_specs(out_dir: str | Path) -> dict[str, Path]:
         _write_json(path, body)
         paths[name] = path
         bare = out / name.replace(".json", "_strategy_spec.json")
-        _write_json(bare, rec.strategy_spec_dict())
+        _write_json(bare, rec.strategy_spec.to_dict())
         paths[bare.name] = bare
     index = {
         "version": PAPER_CANDIDATE_SPEC_VERSION,
         "adapter_version": PAPER_CANDIDATE_ADAPTER_VERSION,
-        "wave": PAPER_CANDIDATE_WAVE,
         "status": "paper_receptacle_unarmed",
         "files": sorted(paths.keys()),
         **_freeze_arm_flags(),
-        "note": "Example paper receptacles. UNARMED.",
     }
     assert_unarmed(index)
     index_path = out / "index.json"

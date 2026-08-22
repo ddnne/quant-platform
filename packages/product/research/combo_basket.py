@@ -27,23 +27,16 @@ from research.unique_logic.constants import (
     NEAR_EMPTY_OCCUPANCY,
 )
 
-def blend_net_daily(
-    series: Sequence[Sequence[float]],
-    *,
-    weights: Sequence[float] | None = None,
-) -> list[float]:
-    """Element-wise equal-weight (or supplied) average. Truncates to min length."""
+def blend_net_daily(series: Sequence[Sequence[float]]) -> list[float]:
+    """Element-wise equal-weight average. Truncates to min length."""
     members = [list(s) for s in series if s]
     if not members:
         return []
     n = min(len(s) for s in members)
-    ws = list(weights) if weights is not None else equal_weights(len(members))
-    if len(ws) != len(members):
-        ws = equal_weights(len(members))
-    out: list[float] = []
-    for i in range(n):
-        out.append(sum(float(members[j][i]) * float(ws[j]) for j in range(len(members))))
-    return out
+    w = 1.0 / float(len(members))
+    return [
+        sum(float(members[j][i]) for j in range(len(members))) * w for i in range(n)
+    ]
 
 
 def occupancy_in_candidate_band(occ: float | None) -> bool:
@@ -58,7 +51,6 @@ def blend_window_cells(
     basket_id: str,
     logic_ids: Sequence[str],
 ) -> list[dict[str, Any]]:
-    """Blend member cells that share a window_id. Requires net_daily on cells."""
     by_win: dict[str, list[Mapping[str, Any]]] = {}
     want = set(logic_ids)
     for c in cells:
@@ -180,7 +172,6 @@ def summarize_basket_trends(
     *,
     job_id: str,
 ) -> dict[str, Any]:
-    """Family/occupancy/sign structure for mechanical baskets. Not a pass."""
     from collections import defaultdict
 
     by: dict[str, list[Mapping[str, Any]]] = defaultdict(list)

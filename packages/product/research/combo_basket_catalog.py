@@ -1,7 +1,4 @@
-"""Mechanical sleeve catalog. Equal-weight only. Not a promote / GO.
-
-Primary sleeves stay fund / flow / event-fund. No correlation weights.
-"""
+"""Mechanical sleeve catalog. Equal-weight only. Not a promote / GO."""
 from __future__ import annotations
 
 from typing import Any, Sequence
@@ -15,7 +12,6 @@ DEFAULT_CANDIDATE_BASKET: tuple[str, ...] = (
     "overnight_down_cs_follow",
 )
 
-# Candidate occupancy is sleeve mean, not union. No correlation weights. No GO.
 RETIRED_BASKET_RULES: frozenset[str] = frozenset(
     {"low_occupancy_band", "surprise_xs_only", "two_member_easing"}
 )
@@ -133,7 +129,6 @@ MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
     },
 )
 
-# Equal-weight 2–3 sleeve blends. Not GO. No correlation weights.
 META_BASKETS: tuple[dict[str, object], ...] = (
     {
         "meta_id": "meta_fund_flow",
@@ -207,7 +202,6 @@ def mechanical_basket_defs() -> list[dict[str, Any]]:
 
 
 def primary_mechanical_basket_defs() -> list[dict[str, Any]]:
-    """Primary / primary_candidate mechanical rules. Retired stay out. Not GO."""
     return [
         d
         for d in mechanical_basket_defs()
