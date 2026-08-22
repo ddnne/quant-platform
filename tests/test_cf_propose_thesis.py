@@ -602,6 +602,18 @@ def test_review_proposal_row_occupancy_and_polarity_table() -> None:
             "occupancy_label_only",
             None,
         ),
+        (
+            "Earnings per share tend to decrease when the overnight funding is easing and the sales are falling, indicating a potential selling opportunity.",
+            ["overnight_p10", "sales_down"],
+            "occupancy_label_only",
+            "PEAD when overnight is in the easiest PIT decile AND sales contracted versus the last prior print. Skip missing PIT prints (no invent).",
+        ),
+        (
+            "The stock price tends to decrease when the earnings per share are falling and the price is already down, indicating a potential selling opportunity.",
+            ["eps_down", "price_down"],
+            "occupancy_label_only",
+            "PEAD when EPS contracted versus the last prior print AND price is down. Skip missing PIT prints (no invent).",
+        ),
     ]
     for bad_thesis, gates, reason, good_thesis in rows:
         payload = {
