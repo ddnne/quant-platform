@@ -521,6 +521,12 @@ def test_review_proposal_row_occupancy_and_polarity_table() -> None:
             "occupancy_label_only",
             "PEAD when the repo curve inverted AND overnight funding is tight",
         ),
+        (
+            "Tight funding conditions and sales declines can lead to underperformance.",
+            ["tight_funding", "eps_down"],
+            "occupancy_label_only",
+            "PEAD when overnight funding is tight AND EPS contracted versus the last prior print",
+        ),
     ]
     for bad_thesis, gates, reason, good_thesis in rows:
         payload = {

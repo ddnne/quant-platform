@@ -60,6 +60,7 @@ export const EXTRA_TITLE_GATES: Array<[string, string]> = [
   ["poor sales", "sales_down"],
   ["sales performance", "sales_down"],
   ["sales decline", "sales_down"],
+  ["sales declines", "sales_down"],
   ["declining sales", "sales_down"],
   ["falling sales", "sales_down"],
   ["sales are down", "sales_down"],
