@@ -50,9 +50,9 @@ _PROMPT_DIRECTION_ECHO: tuple[str, ...] = (
 # LLM English titles sometimes invert gate polarity (sales_down → "Rising Sales").
 # Review follows GATES, not the title; reject the row rather than adopt inverted copy.
 _GATE_TITLE_CONTRA: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("sales_down", ("rising sales", "sales up", "sales growth")),
+    ("sales_down", ("rising sales", "sales up", "sales growth", "high sales", "sales increase")),
     ("np_negative", ("positive np", "positive profit", "rising profit", "profit up")),
-    ("price_down", ("price up", "rising price")),
+    ("price_down", ("price up", "rising price", "increase in price", "price increase")),
     ("ta_down", ("ta up", "rising ta")),
     ("ta_up", ("ta down", "falling ta")),
     ("eq_ar_falling", ("rising eqar", "eqar rising", "eq ar rising")),
@@ -68,6 +68,7 @@ _GATE_TITLE_CONTRA: tuple[tuple[str, tuple[str, ...]], ...] = (
 )
 
 PROPOSE_MAX_AND_GATES: int = 3
+PROPOSE_WHY_AVOID_LIMIT: int = 24
 
 PROPOSE_CONTRADICTORY_GATE_PAIRS: tuple[frozenset[str], ...] = (
     frozenset({"easy_funding", "tight_funding"}),
@@ -229,7 +230,7 @@ def review_proposal_row(proposal: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def catalog_gate_set_avoid(*, limit: int = 12) -> list[str]:
+def catalog_gate_set_avoid(*, limit: int = PROPOSE_WHY_AVOID_LIMIT) -> list[str]:
     """Existing combo AND-sets for LLM why_avoid. Economic 2-gates first.
 
     Calendar/weekday permutations are not clone seeds. Not a scorecard.
@@ -409,7 +410,7 @@ def invoke_cf_propose_thesis(
             continue
         seen_avoid.add(token)
         avoid.append(token)
-        if len(avoid) >= 12:
+        if len(avoid) >= PROPOSE_WHY_AVOID_LIMIT:
             break
     body: dict[str, Any] = {
         "n": max(1, min(3, int(n))),
@@ -526,6 +527,7 @@ def invoke_cf_propose_thesis(
 
 __all__ = [
     "PROPOSE_ALLOWED_DATASETS",
+    "PROPOSE_WHY_AVOID_LIMIT",
     "STUB_PROPOSAL_TEMPLATES",
     "catalog_gate_set_avoid",
     "invoke_cf_propose_thesis",

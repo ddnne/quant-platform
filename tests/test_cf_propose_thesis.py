@@ -5,6 +5,7 @@ from pathlib import Path
 
 from research.cf_propose_thesis import (
     PROPOSE_ALLOWED_DATASETS,
+    PROPOSE_WHY_AVOID_LIMIT,
     invoke_cf_propose_thesis,
     reject_window_tweak,
     review_proposal_row,
@@ -137,6 +138,7 @@ def test_worker_index_contains_propose_thesis_route() -> None:
     assert "Do not invent datasets" in src or "do not invent datasets" in src.lower()
     assert "Title polarity MUST match gates" in src or "title polarity" in src.lower()
     assert "occupancy sentence" in src.lower()
+    assert "slice(0, 24)" in src or "slice(0,24)" in src
     assert "weekday-only" in src or "No weekday" in src
     assert "2+" in src or "AND-cross" in src or "2 or 3" in src
     assert "Liquidity × Fundamentals" in src or "direction labels" in src
@@ -248,6 +250,17 @@ def test_review_proposal_row_rejects_invent_and_weekday() -> None:
     assert "title_not_occupancy" in bad_m["reasons"]
     assert bad_m["auto_inject"] is False
 
+    invert_sales = {
+        "thesis": "After a steep curve and high sales, expect an increase in price",
+        "signal_definition": "AND(steep_curve, sales_down, price_down) PIT",
+        "position_rule": "event-hold surprise sign",
+        "datasets": ["equities_bars_daily", "fins_summary"],
+        "gates": ["steep_curve", "sales_down", "price_down"],
+    }
+    bad_s = review_proposal_row(invert_sales)
+    assert bad_s["ok"] is False
+    assert "title_gate_polarity_mismatch" in bad_s["reasons"]
+
 
 def test_catalog_gate_set_avoid_is_existing_crosses() -> None:
     from research.cf_propose_thesis import catalog_gate_set_avoid
@@ -255,6 +268,9 @@ def test_catalog_gate_set_avoid_is_existing_crosses() -> None:
 
     tokens = catalog_gate_set_avoid(limit=8)
     assert 1 <= len(tokens) <= 8
+    full = catalog_gate_set_avoid()
+    assert len(full) == PROPOSE_WHY_AVOID_LIMIT
+    assert PROPOSE_WHY_AVOID_LIMIT == 24
     assert all("+" in t for t in tokens)
     blob = " ".join(tokens)
     assert "skip_monday" not in blob

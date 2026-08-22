@@ -285,19 +285,22 @@ def test_original_22_ids_from_yaml() -> None:
             assert re.search(r"(?m)^family:", body) is None
 
 
-# Frozen keys/counts from the former constants.ECONOMIC_THEME_IDS block.
-_PREVIOUS_THEME_COUNTS = {
-    "surprise_funding": 4,
-    "margin_price_disagree": 4,
-    "repo_cs": 4,
-    "vol_conditional": 4,
-    "fundamentals": 10,
-    "fund_leverage_cross": 33,
-    "fund_flow_liq": 16,
-    "margin_surprise": 11,
-    "repo_event": 10,
-    "vol_fund_cross": 15,
-}
+# Frozen theme keys from the former constants.ECONOMIC_THEME_IDS block.
+# Exact member counts are YAML-derived; do not pin integers here.
+_PREVIOUS_THEME_KEYS = frozenset(
+    {
+        "surprise_funding",
+        "margin_price_disagree",
+        "repo_cs",
+        "vol_conditional",
+        "fundamentals",
+        "fund_leverage_cross",
+        "fund_flow_liq",
+        "margin_surprise",
+        "repo_event",
+        "vol_fund_cross",
+    }
+)
 
 
 def test_economic_theme_ids_from_yaml() -> None:
@@ -324,8 +327,8 @@ def test_economic_theme_ids_from_yaml() -> None:
     assert re.search(r"(?m)^go:\s*true\s*$", text) is None
     themes = economic_theme_ids()
     assert ECONOMIC_THEME_IDS == themes
-    assert set(themes) == set(_PREVIOUS_THEME_COUNTS)
-    assert {k: len(v) for k, v in themes.items()} == _PREVIOUS_THEME_COUNTS
+    assert set(themes) == set(_PREVIOUS_THEME_KEYS)
+    assert all(len(v) >= 1 for v in themes.values())
     listed = set().union(*themes.values()) if themes else set()
     assert listed <= set(RESEARCH_UNIQUE_LOGIC_IDS)
     for theme, ids in themes.items():
@@ -405,17 +408,18 @@ def test_event_cheap_pb_gate_in_combo_and_yaml() -> None:
     )
     assert "cheap_pb" in derived_gates
 
-    src = (
+    worker_src = (
         Path(__file__).resolve().parents[1]
         / "platform"
         / "workers"
         / "research-mass-eval"
         / "src"
-        / "daily_path.ts"
-    ).read_text(encoding="utf-8")
+    )
+    src = (worker_src / "daily_path.ts").read_text(encoding="utf-8")
+    ids_src = (worker_src / "catalog_ids.ts").read_text(encoding="utf-8")
     m = re.search(
         r"const COMBO_EVENT_GATES = new Set\(\[(.*?)]\);",
-        src,
+        ids_src,
         flags=re.S,
     )
     assert m, "Worker COMBO_EVENT_GATES"

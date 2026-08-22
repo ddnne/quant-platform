@@ -215,7 +215,7 @@ async function llmProposals(
   reason: string | null;
 }> {
   if (!env.AI) return { rows: null, reason: "ai_unbound" };
-  const avoid = whyAvoid.filter(Boolean).slice(0, 12).join(", ") || "(none)";
+  const avoid = whyAvoid.filter(Boolean).slice(0, 24).join(", ") || "(none)";
   let lastReason = "parse_empty";
   for (let attempt = 0; attempt < 2; attempt++) {
     try {

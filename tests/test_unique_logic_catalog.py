@@ -393,14 +393,18 @@ def test_worker_new_thesis_ids_match_python() -> None:
         PYTHON_ONLY_EVENT_GATES,
     )
 
-    src = (
+    worker_src = (
         Path(__file__).resolve().parents[1]
         / "platform"
         / "workers"
         / "research-mass-eval"
         / "src"
-        / "daily_path.ts"
-    ).read_text(encoding="utf-8")
+    )
+    daily = (worker_src / "daily_path.ts").read_text(encoding="utf-8")
+    ids_src = (worker_src / "catalog_ids.ts").read_text(encoding="utf-8")
+    src = ids_src + "\n" + daily
+    assert 'from "./catalog_ids"' in daily
+    assert "export const CF_NEW_EVENT_THESIS_IDS = [" not in daily
 
     def _ids(name: str) -> set[str]:
         m = re.search(

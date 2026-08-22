@@ -29,6 +29,7 @@ _WORKER_DAILY_PATH = (
     / "src"
     / "daily_path.ts"
 )
+_WORKER_CATALOG_IDS = _WORKER_DAILY_PATH.parent / "catalog_ids.ts"
 _EMPTY_CS = frozenset({"", "None", "none"})
 
 
@@ -71,7 +72,14 @@ def unique22_occupancy_park() -> frozenset[str]:
 
 @lru_cache(maxsize=1)
 def _daily_path_src() -> str:
-    return _WORKER_DAILY_PATH.read_text(encoding="utf-8")
+    """daily_path leftover + generated catalog_ids (IDs live in catalog_ids.ts)."""
+    body = _WORKER_DAILY_PATH.read_text(encoding="utf-8")
+    ids = (
+        _WORKER_CATALOG_IDS.read_text(encoding="utf-8")
+        if _WORKER_CATALOG_IDS.is_file()
+        else ""
+    )
+    return ids + "\n" + body
 
 
 def _ts_quoted_ids(src: str, name: str) -> set[str]:
