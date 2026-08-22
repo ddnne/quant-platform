@@ -241,7 +241,7 @@ def _candidate_verdict(
     min_period_win_rate: float,
     min_positive_periods: int,
 ) -> dict[str, Any]:
-    """W81 production bar: gate + risk + econ + occurrence + skew + stats."""
+    """Production bar: gate + risk + econ + occurrence + skew + stats."""
     gate_pass = bool(gate and gate.get("passed"))
     risk_ok = bool(risk and risk.get("research_candidate_allowed"))
     econ = _econ_from_rows(rows, min_economic_net=min_economic_net)
@@ -762,19 +762,9 @@ def assemble_class_hyp_multi_year_report(
         "n_years_requested": len(period_list),
         "n_years_ok_multi_day_hold": n_ok_md,
         "n_years_ok_macro_conditioned": n_ok_macro,
-        "history_source": (
-            "local_r2_mirror_ndjson (W63 q4 + W64 full) + local_sqlite "
-            "(jsda_repo_rates · fins_summary · fins_earnings_date · "
-            "margin · short_ratio)"
-        ),
-        "label": "研究用・複数年クラス仮説評価・W81統計バー再判定・未宣言",
+        "history_source": "local_r2_mirror_ndjson + local_sqlite",
+        "label": "研究用・複数年クラス仮説評価・未宣言",
         **_freeze(),
-        "note": (
-            "W85–W86 class hyp multi-year offline eval. research_candidate=True "
-            "only if checklist v2 + gate + risk + economic net + occurrence + "
-            "multi-year without extreme skew + stats bar. Sign-selection both "
-            "sides after cost. READY/Mass/operational GO never auto-connect."
-        ),
     }
 
     def _put(key: str, include: bool, **kw: Any) -> None:
@@ -832,10 +822,6 @@ def assemble_class_hyp_multi_year_report(
             "variant": "hold_10",
             "n_ok": _n_ok(results_xs10),
             **xs_frac,
-            "note": (
-                f"W83 sticky hold=10 momentum_n={xs10_mom_n} (W82 pin). "
-                "W86 sign-selection both sides after cost. Not Mass/READY."
-            ),
         },
     )
     _put(
@@ -854,12 +840,7 @@ def assemble_class_hyp_multi_year_report(
             "momentum_n": xs10_mom3_n,
             "variant": "hold_10_mom3",
             "n_ok": _n_ok(results_xs10_mom3),
-            "promoted_wave": "W85 / w0816t",
             **xs_frac,
-            "note": (
-                f"W85 sticky hold=10 momentum_n={xs10_mom3_n}; parallel to "
-                "mom=5 pin. W86 sign-selection both sides. Not Mass/READY."
-            ),
         },
     )
     _put(
@@ -877,7 +858,6 @@ def assemble_class_hyp_multi_year_report(
             "post_hold_days": int(event_hold_days),
             "n_ok": _n_ok(results_event),
             "entry_mode": EVENT_POST_ENTRY_MODE,
-            "pit_definition": "W82 DiscDate+DiscTime first non-look-ahead close",
         },
     )
     _put(
@@ -932,10 +912,6 @@ def assemble_class_hyp_multi_year_report(
             "mode": fund_mode_s,
             "variant": "hold_10_mom_matched",
             "n_ok": _n_ok(results_fund10),
-            "note": (
-                "W83 fund hold=10 mom-matched. W86 sign-selection both sides "
-                "after cost (paper-negative → flip-first). Not Mass/READY."
-            ),
         },
     )
 
@@ -959,11 +935,6 @@ def assemble_class_hyp_multi_year_report(
         "version": SIGN_SELECTION_VERSION,
         "wave": SIGN_SELECTION_WAVE,
         "blocks": sign_selection_blocks,
-        "note": (
-            "W86 evaluate both original and inverted after costs; "
-            "prefer positive mean net with non-zero evidence (t guideline). "
-            "Both fail → reject/explore demote. Not Mass/READY/live."
-        ),
     }
 
     survivors: list[dict[str, Any]] = []
@@ -995,10 +966,7 @@ def assemble_class_hyp_multi_year_report(
     fund_surv = [s for s in survivors if s["block_key"].startswith("fundamentals")]
     if len(xs_surv) >= 2:
         xs_default = list(xs_surv)
-        mom_compress_note = (
-            "both xs mom5 and mom3 survive sign selection → keep both "
-            "as parallel default representatives (no over-invest; not merge)"
-        )
+        mom_compress_note = "both xs mom5 and mom3 survive; keep parallel"
     elif len(xs_surv) == 1:
         xs_default = list(xs_surv)
         mom_compress_note = (
@@ -1015,12 +983,6 @@ def assemble_class_hyp_multi_year_report(
         "all_survivors": survivors,
         "mom3_vs_mom5": mom_compress_note,
         "n_default_wired_candidates": len(xs_default) + len(fund_surv),
-        "note": (
-            "Default representatives after W86 sign selection. "
-            "research_candidate on block still requires full production bar; "
-            "chosen_sign is recorded for StrategySpec signal_sign wiring. "
-            "Not Mass / READY / ops GO / live."
-        ),
     }
 
     summary: dict[str, Any] = {}

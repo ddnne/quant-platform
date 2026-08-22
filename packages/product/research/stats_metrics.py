@@ -515,11 +515,6 @@ def w99_sticky_daily_path_dd_reference() -> dict[str, Any]:
         "research_only": True,
         "proof": DAILY_PATH_DD_REFERENCE_PROOF,
         "windows": [dict(r) for r in W99_STICKY_DAILY_PATH_DD_REFERENCE],
-        "warning": (
-            "period_net_DD=0 is an aggregation artifact when all period nets "
-            "> 0 — NOT riskless. Use daily_path_DD / dd_duration / recovery / "
-            "total_ret_net."
-        ),
         **_freeze(),
     }
 
@@ -681,7 +676,6 @@ def evaluate_daily_path_dd_gate(
         "version": DAILY_PATH_DD_VERSION,
         "wave": DAILY_PATH_DD_WAVE,
         "proof": DAILY_PATH_DD_PROOF,
-        "reference_example_proof": DAILY_PATH_DD_REFERENCE_PROOF,
         "measured": bool(daily_measured),
         "complete": complete,
         "passed": complete,  # measurement gate, not a DD-size floor
@@ -702,11 +696,6 @@ def evaluate_daily_path_dd_gate(
         "scorecard": scorecard,
         "computed": computed,
         "required_fields": list(DAILY_PATH_DD_REQUIRED_FIELDS),
-        "reference_example": w99_sticky_daily_path_dd_reference(),
-        "note": (
-            "daily_path_DD is mandatory. period_net_DD alone cannot pass. "
-            "period_net_DD=0 + daily unmeasured = incomplete."
-        ),
     }
     out.update(_freeze())
     return out
@@ -951,10 +940,6 @@ def stats_bar_check(
             "max_dd": dd_ok,
         },
         "fails": fails,
-        "note": (
-            "Require signed t≥min, Sharpe≥min, period win-rate and "
-            "positive-year count. Not a significance claim."
-        ),
         **_freeze(),
     }
 

@@ -216,7 +216,6 @@ def design_artifact_paths(job_id: str) -> dict[str, Any]:
         "history_input_patterns": {
             "structured_jsonl": "structured/jsonl/{dataset}/dt=YYYY-MM-DD/{run_id}.jsonl",
             "archive_ndjson": "archive/jquants_records/{dataset}/batch/{run_id}_after{rowid}.ndjson",
-            "note": "History SoT is R2 quant-structured; D1 is hot tip only; local SQLite is mirror only.",
         },
     }
 
@@ -313,8 +312,6 @@ def freeze_status() -> dict[str, Any]:
         "local_sot": False,
         "artifact_bucket": RESEARCH_ARTIFACT_BUCKET,
         "artifact_prefix": RESEARCH_ARTIFACT_PREFIX,
-        "default_signal_id": DEFAULT_SIGNAL_ID,
-        "signal_candidate_only": SIGNAL_CANDIDATE_ONLY,
     }
 
 
@@ -416,8 +413,7 @@ def content_hash_payload(payload: Mapping[str, Any]) -> str:
     return "sha256:" + hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
-# D1 tip extract lives in research.single_shot_tip (re-exported). Module
-# import (not from-import) so tip-first load does not circular-import.
+# Module import (not from-import) so tip-first load does not circular-import.
 import research.single_shot_tip as _single_shot_tip
 
 _as_of_from_period_end = getattr(_single_shot_tip, "_as_of_from_period_end", None)
@@ -638,12 +634,7 @@ def execute_single_shot_job(
     wrangler: str | Path | None = None,
     wrangler_config: str | Path | None = None,
 ) -> SingleShotExecution:
-    """Run one CF-backed single-shot pass: D1 tip extract → R2 result+manifest.
-
-    ``dry_run`` stages R2 puts locally. ``compute_features`` writes COMPLETE-21
-    tip features; ``compute_signals`` also writes the approved-leg candidate
-    signal (implies features). Never mass / READY / Phase7 / orders.
-    """
+    """Run one CF-backed single-shot pass: D1 tip extract → R2 result+manifest."""
     assert_mass_and_phase7_off()
     if compute_signals:
         compute_features = True

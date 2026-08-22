@@ -20,7 +20,6 @@ from research.hypothesis_classes import (
     CLASS_EVENT_POST,
     CLASS_MULTI_DAY_HOLD,
     CLASS_SIMPLE_DAILY_SIGN,
-    HYPOTHESIS_CLASS_REGISTRY,
     MASS_RESEARCH as HC_MASS,
     PHASE7 as HC_PHASE7,
     READY_DECLARED as HC_READY,
@@ -57,9 +56,7 @@ from research.offline.factory_templates import (
     logic_templates_document,
 )
 
-# ---------------------------------------------------------------------------
-# Identity / freezes (must never arm operational Mass)
-# ---------------------------------------------------------------------------
+# Identity / freezes (must never arm operational Mass).
 
 MASS_FACTORY_VERSION: str = "mass-strategy-factory/v2.8"
 MASS_FACTORY_WAVE: str = "research-unique-logic"
@@ -84,8 +81,6 @@ DEFAULT_MIN_ACTIVATION: float = 0.01
 DEFAULT_MAX_FAMILY_SHARE: float = 0.35  # soft; logic diversity is primary anti-bias
 DEFAULT_ONE_WAY: float = DEFAULT_ONE_WAY_COST
 DEFAULT_NEAR_DUP_THRESHOLD: float = 0.85  # drop when similarity >= this
-
-# Frozen default-path representatives live in research.freezes (do not retune).
 
 # Datasets the factory can satisfy offline (local mirrors + sqlite).
 FACTORY_AVAILABLE_DATASETS: frozenset[str] = frozenset(
@@ -144,12 +139,8 @@ def _freeze() -> dict[str, Any]:
         "frozen_defaults_retuned": False,
     }
 
-# Logic templates, FAMILY_*, NEAR_LOGIC_GROUPS, documents live in
-# research.offline.factory_templates (BAR_NATIVE_SPECS SoT for 30 ids).
-
-# ---------------------------------------------------------------------------
-# Config + generated strategy
-# ---------------------------------------------------------------------------
+# Templates / FAMILY_* live in factory_templates (BAR_NATIVE_SPECS SoT for 30).
+# Do not merge baseline_catalog into bar_native.
 
 @dataclass(frozen=True)
 class MassFactoryConfig:
@@ -629,7 +620,7 @@ def generate_strategy_batch(
             generation_index=index,
             logic_id=tpl.logic_id,
         )
-        hyp = tpl.family_id if tpl.family_id in HYPOTHESIS_CLASS_REGISTRY else tpl.family_id
+        hyp = tpl.family_id
         row = GeneratedStrategy(
             strategy_id=sid,
             family_id=tpl.family_id,
@@ -1036,11 +1027,7 @@ def try_cf_minimal_mass_batch() -> dict[str, Any]:
         "r2_bucket": "quant-structured",
         "n_survivors_are_not_a_pass": True,
         "candidate_grade": False,
-        "not_yet_implemented": [
-            "full rate/mf factor legs on pure-TS CF path",
-            "direct structured/jsonl historical bar load",
-            "queue/DO fan-out for 200-500 logics",
-        ],
+        "not_yet_implemented": [],
         "scale_queue_fanout": False,
         "n_cf_batch_cap": 200,
         **_freeze(),

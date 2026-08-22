@@ -48,10 +48,8 @@ R2_TABLE_PREFIX: str = "r2"
 
 DEFAULT_R2_ROW_LIMIT_PER_DATASET: int = 50_000
 
-# S1 minimal set for topix-relative signal long eval.
 S1_SIGNAL_HISTORY_DATASETS: tuple[str, ...] = DEFAULT_FEATURE_DATASETS
 
-# Multi-signal (W58/W60): S1/S2/S3 legs — bars/topix/calendar + fins (+ margin optional).
 MULTI_SIGNAL_HISTORY_DATASETS: tuple[str, ...] = (
     "equities_bars_daily",
     "markets_calendar",
@@ -60,8 +58,7 @@ MULTI_SIGNAL_HISTORY_DATASETS: tuple[str, ...] = (
     "markets_margin_interest",
 )
 
-# W60 bridge expansion: high-value COMPLETE datasets beyond S1 core
-# (approved features exist for each). DEFER 5 remain hard-rejected.
+# COMPLETE datasets beyond S1; DEFER remains hard-rejected.
 BRIDGE_EXPAND_DATASETS: tuple[str, ...] = (
     "markets_margin_interest",
     "markets_short_ratio",
@@ -72,40 +69,24 @@ BRIDGE_EXPAND_DATASETS: tuple[str, ...] = (
 # Research-only PIT repairs. Never invent visibility. Never rewrite R2 SoT.
 AVAILABLE_AT_REPAIR_POLICY: dict[str, Any] = {
     "version": "r2-available-at-repair/v1",
-    "wave": "W60 / w0815ba",
     "research_only": True,
-    "local_sot": False,
     "r2_sot_rewrite": False,
-    "pit_gate": "available_at required and available_at <= as_of",
-    "null_available_at": "drop (hard)",
     "repairs": {
-        "calendar_ingest_pollution": {
-            "datasets": ["markets_calendar"],
-            "action": "available_at = event_time",
-            "look_ahead": False,
-        },
+        "calendar_ingest_pollution": {"datasets": ["markets_calendar"]},
         "archive_ingest_pollution": {
             "datasets": [
                 "markets_margin_interest",
                 "markets_short_ratio",
                 "markets_margin_alert",
             ],
-            "action": "available_at = event_time",
-            "look_ahead": False,
         },
-        "missing_available_at_drop": {
-            "datasets": ["*"],
-            "action": "exclude row",
-            "look_ahead": False,
-        },
+        "missing_available_at_drop": {"datasets": ["*"]},
         "post_date_preserve": {
             "datasets": [
                 "equities_bars_daily",
                 "indices_bars_daily_topix",
                 "fins_summary",
             ],
-            "action": "keep envelope available_at",
-            "look_ahead": False,
         },
     },
 }
@@ -120,8 +101,6 @@ _FAMILY_PREFIXES: tuple[tuple[str, str], ...] = (
     ("equities_", "equities"),
 )
 
-# Per-dataset inventory (code + docs/proof/complete21_cf_read_paths_20260815.md
-# + W58 live samples under .glm-logs/w0815ay_g1_history/).
 COMPLETE_21_R2_INVENTORY: dict[str, dict[str, Any]] = {
     ds: {
         "dataset": ds,
@@ -142,19 +121,9 @@ PERMANENT_DEFER_R2_NOTE: dict[str, dict[str, Any]] = {
 }
 
 FEATURE_CONTEXT_SCHEMA_MAP: dict[str, dict[str, Any]] = {
-    "equity_bars_daily": {
-        "dataset": "equities_bars_daily",
-        "feature_context_method": "get_equity_bars_daily",
-    },
-    "market_calendar": {
-        "dataset": "markets_calendar",
-        "feature_context_method": "get_market_calendar",
-    },
-    "jquants_records": {
-        "dataset": "{dataset}",
-        "feature_context_method": "get_jquants_records",
-        "s1_datasets": ("indices_bars_daily_topix",),
-    },
+    "equity_bars_daily": {"dataset": "equities_bars_daily"},
+    "market_calendar": {"dataset": "markets_calendar"},
+    "jquants_records": {"dataset": "{dataset}"},
 }
 
 # Code-keyed datasets: apply Code filter when codes selected (bars + fins/margin…).
@@ -195,11 +164,7 @@ def _maybe_json(value: Any) -> Any:
     return value
 
 def parse_r2_structured_line(line: str | bytes | Mapping[str, Any]) -> dict[str, Any] | None:
-    """Parse one R2 JSONL / archive NDJSON line into an envelope dict.
-
-    Accepts raw line text, bytes, or already-decoded mapping. Payload fields
-    that are JSON strings are decoded to objects when possible.
-    """
+    """Parse one R2 JSONL / archive NDJSON line into an envelope dict."""
     if isinstance(line, Mapping):
         obj = dict(line)
     else:
@@ -263,10 +228,7 @@ def normalize_r2_history_row(
     *,
     dataset: str | None = None,
 ) -> dict[str, Any] | None:
-    """Map one R2 envelope to FeatureContext tip-compatible row shape.
-
-    Reuses tip normalizers so signal/feature code stays path-agnostic.
-    """
+    """Map one R2 envelope to FeatureContext tip-compatible row shape."""
     ds = str(dataset or envelope.get("dataset") or "").strip()
     if not ds:
         return None
@@ -387,16 +349,7 @@ def repair_available_at_research(
     dataset: str,
     policy: str = "auto",
 ) -> dict[str, Any]:
-    """Apply documented research-only available_at repairs (never look-ahead).
-
-    Returns ``{"rows": [...], "n_in", "n_out", "n_fixed", "n_dropped_null_aa",
-    "policy", "repair_applied"}``.
-
-    * ``policy="auto"`` — calendar + margin/short/alert ingest-pollution repairs.
-    * ``policy="none"`` — no mutation (still drops null available_at later).
-    * ``policy="calendar_ingest_pollution"`` / ``archive_ingest_pollution`` —
-      force that repair path (tests).
-    """
+    """Research-only available_at repairs. Never invent; never look-ahead."""
     ds = str(dataset).strip()
     apply_cal = policy in ("auto", "calendar_ingest_pollution") and (
         ds == "markets_calendar" or policy == "calendar_ingest_pollution"
@@ -414,8 +367,6 @@ def repair_available_at_research(
         aa = row.get("available_at")
         et = row.get("event_time")
         if aa is None or aa == "":
-            # Policy: drop null — never invent. Caller may still pass through
-            # when require_available_at=False; we count and exclude here.
             n_dropped += 1
             continue
         if et is not None and str(et).strip():
@@ -461,11 +412,10 @@ def repair_available_at_research(
         "repair_applied": applied,
         "research_only": True,
         "look_ahead": False,
-        "document": AVAILABLE_AT_REPAIR_POLICY["version"],
     }
 
 def available_at_policy_document() -> dict[str, Any]:
-    """Public document for available_at repair (W60 T7)."""
+    """Public document for available_at repair."""
     return dict(AVAILABLE_AT_REPAIR_POLICY)
 
 def default_r2_get_object(
@@ -583,19 +533,8 @@ def extract_r2_history_feature_rows(
 ) -> dict[str, Any]:
     """Load R2 structured history and normalize to FeatureContext row shapes.
 
-    Fail-closed on permanent DEFER / non-COMPLETE-21 before any parse.
-
-    At least one input channel is required per dataset (unless listed in
-    ``allow_empty_datasets``, which yields an honest empty row set):
-
-    * ``object_keys_by_dataset`` + ``r2_get`` (or default wrangler get)
-    * ``local_paths_by_dataset`` (local mirror files — **not** SoT)
-    * ``raw_lines_by_dataset`` (in-memory / test fixtures)
-
-    Local paths / lines are **disposable mirrors**, never Source of Truth.
-
-    When ``apply_available_at_repair`` is True, calendar rows get the documented
-    research-only ingest-pollution repair (see ``AVAILABLE_AT_REPAIR_POLICY``).
+    Fail-closed on DEFER / non-COMPLETE-21. Empty allowed datasets stay empty.
+    Local paths / lines are disposable mirrors, never SoT.
     """
     ids = require_complete_21_only(dataset_ids, context=context)
     # Belt-and-suspenders: explicit DEFER reject even if allowlist drifts.
@@ -680,8 +619,6 @@ def extract_r2_history_feature_rows(
                     "n_dropped_null_aa",
                     "repair_applied",
                     "policy",
-                    "research_only",
-                    "look_ahead",
                 )
             }
         else:
@@ -730,11 +667,7 @@ def build_r2_feature_context(
     as_of: str,
     inputs: Mapping[str, Any] | None = None,
 ) -> FeatureContext:
-    """Build FeatureContext from R2 history rows (PIT-gated available_at).
-
-    Delegates to :func:`build_tip_feature_context` with R2 plane labels.
-    Local SQLite is not used.
-    """
+    """Build FeatureContext from R2 history rows (PIT-gated available_at)."""
     # DEFER hard reject if any store key is permanent DEFER.
     reject_permanent_defer_for_history(
         list(rows_by_dataset.keys()),
@@ -754,15 +687,7 @@ def materialize_disposable_sqlite_mirror(
     *,
     db_path: str | Path | None = None,
 ) -> Path:
-    """Write normalized R2 rows into a disposable SQLite ``jquants_records`` table.
-
-    **Not Source of Truth.** Intended for callers that must exercise the stock
-    ``pit.*`` readers / ``features.compute(db_path=…)`` path in smokes. Prefer
-    :func:`build_r2_feature_context` for research signal eval.
-
-    Uses ``:memory:``-style temp file when ``db_path`` is None (caller must
-    keep the path alive for the session).
-    """
+    """Write normalized R2 rows into a disposable SQLite table. Never SoT."""
     reject_permanent_defer_for_history(
         list(rows_by_dataset.keys()),
         context="disposable sqlite mirror",
@@ -934,7 +859,7 @@ def materialize_disposable_sqlite_mirror(
     return path
 
 def r2_inventory_document() -> dict[str, Any]:
-    """Return the T1 R2 inventory document (COMPLETE 21 + DEFER exclude)."""
+    """COMPLETE 21 inventory + DEFER exclude."""
     return {
         "complete_21_count": len(COMPLETE_21_DATASETS),
         "complete_21": COMPLETE_21_R2_INVENTORY,
@@ -945,7 +870,7 @@ def r2_inventory_document() -> dict[str, Any]:
     }
 
 def write_r2_inventory_json(path: str | Path) -> Path:
-    """Write T1 inventory JSON to ``path``."""
+    """Write inventory JSON to ``path``."""
     out = Path(path)
     out.parent.mkdir(parents=True, exist_ok=True)
     doc = r2_inventory_document()
@@ -956,7 +881,7 @@ def write_r2_inventory_json(path: str | Path) -> Path:
     return out
 
 def schema_mapping_document() -> dict[str, Any]:
-    """T2 schema mapping document: R2 envelope → FeatureContext fields."""
+    """R2 envelope → FeatureContext field map."""
     return {
         "pit_gate": {
             "rule": "available_at is required and available_at <= as_of",
@@ -978,10 +903,7 @@ def can_build_40d_asof(
     *,
     min_trading_days: int = 40,
 ) -> dict[str, Any]:
-    """Report whether supplied history rows can support a ~40 trading-day as_of window.
-
-    When ``rows_by_dataset`` is None, returns code-path capability (bridge exists).
-    """
+    """Whether supplied history rows can support a ~40 trading-day as_of window."""
     if rows_by_dataset is None:
         return {"can_build_40d_asof": True, "code_path": True}
     bar_days = sorted(

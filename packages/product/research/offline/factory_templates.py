@@ -90,7 +90,7 @@ RESEARCH_FAMILY_APPEND_ID: str = "unique_logic_family_append"
 RESEARCH_FAMILY_REGISTRATION_IS_NOT_A_PASS: bool = True
 RESEARCH_FAMILY_AUTO_RESEARCH_CANDIDATE: bool = False
 
-# Near-groups kept parallel for comparison (do not merge early).
+# Near-groups stay parallel (do not merge).
 NEAR_LOGIC_GROUPS: tuple[dict[str, Any], ...] = (
     {
         "group_id": "flow_margin_confirm",
@@ -99,12 +99,9 @@ NEAR_LOGIC_GROUPS: tuple[dict[str, Any], ...] = (
             "flow_margin_pressure",
             "flow_margin_short_hard",
             "flow_margin_short_soft",
-            "mf_flow_price",  # multi-factor cousin; price confirm vs short
+            "mf_flow_price",
         ),
-        "note": (
-            "Keep hard/soft/pressure parallel; mf_flow_price is multi-factor "
-            "price-confirm cousin (not a short-confirm variant merge)."
-        ),
+        "note": "Keep hard/soft/pressure + mf_flow_price parallel.",
     },
     {
         "group_id": "fund_value_mom",
@@ -112,14 +109,9 @@ NEAR_LOGIC_GROUPS: tuple[dict[str, Any], ...] = (
         "logic_ids": (
             "fund_value_mom_agree",
             "fund_value_mom_agree_slow",
-            "mf_value_mom_rate",  # multi-factor cousin; adds rate leg
+            "mf_value_mom_rate",
         ),
-        "note": (
-            "Keep slow variant parallel; mf_value_mom_rate is a unique "
-            "rate-gated book (not a fund_value_mom_agree alias). "
-            "W95: fund_value_mom_agree_slow demoted from window-headline / "
-            "promising set (w2017_2019 giant-t = n=2 low-variance artifact)."
-        ),
+        "note": "Slow variant + unique rate-gated book stay parallel.",
     },
     {
         "group_id": "rate_macro_family",
@@ -130,10 +122,7 @@ NEAR_LOGIC_GROUPS: tuple[dict[str, Any], ...] = (
             "rate_abs_level_xs",
             "rate_curve_shape_xs",
         ),
-        "note": (
-            "macro_* = mom gate; rate_* = CS risk-adj factor logics. "
-            "Keep distinct (not merge)."
-        ),
+        "note": "macro_* mom-gate vs rate_* CS factor; do not merge.",
     },
     {
         "group_id": "vol_family_name_vs_index",
@@ -145,11 +134,7 @@ NEAR_LOGIC_GROUPS: tuple[dict[str, Any], ...] = (
             "nky_vol_term_levels",
             "nky_vol_term_ratio",
         ),
-        "note": (
-            "vol_risk_adjusted_mom / vol_breakout_expand = per-name vol gate. "
-            "nky_vol_* = index-level Nikkei/TOPIX RV regime × CS book. "
-            "Keep parallel; do not merge name-level with index-level."
-        ),
+        "note": "Per-name vol gate vs index-level nky_vol_*; do not merge.",
     },
     {
         "group_id": "index_vol_regime_family",
@@ -159,10 +144,7 @@ NEAR_LOGIC_GROUPS: tuple[dict[str, Any], ...] = (
             "nky_vol_term_levels",
             "nky_vol_term_ratio",
         ),
-        "note": (
-            "Three transforms of the same Nikkei/TOPIX RV series (proxy/compare). "
-            "Keep abs / dual-levels / ratio parallel for comparison."
-        ),
+        "note": "Abs / dual-levels / ratio stay parallel.",
     },
     {
         "group_id": "options_vol_regime_family",
@@ -180,13 +162,7 @@ NEAR_LOGIC_GROUPS: tuple[dict[str, Any], ...] = (
             "opt225_iv_base_spread_abs",
             "opt225_iv_base_spread_change",
         ),
-        "note": (
-            "Canonical Nikkei vol SoT = derivatives_bars_daily_options_225. "
-            "W94: BaseVol = canonical level; ATM IV + spread = compare-only; "
-            "skew / CM-term / ΔBaseVol are primary new features. "
-            "Near-dup of nky_vol_* proxy — label proxy vs options SoT; "
-            "do not merge."
-        ),
+        "note": "BaseVol canonical; ATM/spread compare-only; keep vs nky_vol_*.",
     },
     {
         "group_id": "nky_vol_proxy_vs_options_sot",
@@ -199,15 +175,11 @@ NEAR_LOGIC_GROUPS: tuple[dict[str, Any], ...] = (
             "opt225_skew_abs_level",
             "opt225_atm_iv_abs_level",
         ),
-        "note": (
-            "nky_vol_* = TOPIX/NK225F realized proxy/compare only. "
-            "opt225_* = options_225 BaseVol canonical SoT "
-            "(ATM compare-only). Keep parallel for comparison."
-        ),
+        "note": "nky_vol_* proxy vs opt225 BaseVol SoT; keep parallel.",
     },
     {
         "group_id": "unique_logic_research_family",
-        "label": "W104/W105 unique_logic research family (recognition only)",
+        "label": "unique_logic research family (recognition only)",
         "logic_ids": (
             "event_funding_stress_skip",
             "curve_steep_event_confirm",
@@ -232,19 +204,11 @@ NEAR_LOGIC_GROUPS: tuple[dict[str, Any], ...] = (
             "event_funding_adaptive_side",
             "surprise_xs_rank_adaptive",
         ),
-        "note": (
-            "W105 research-family registration = recognition, not pass / "
-            "not promotion. W106/W107 append this-wave newly min-implemented "
-            "mixed unique_logic + funding/surprise L/S / adaptive variants "
-            "(not a promotion). generation_enabled=False. Not remapped onto "
-            "sticky / event_post_disclosure_hold / vol_risk_adjusted_mom. "
-            "Not auto research_candidate / Mass / READY / GO / main. "
-            "Sign-flip is not a kill of funding/surprise."
-        ),
+        "note": "Recognition only; generation_enabled=False; not a pass.",
     },
     {
         "group_id": "unique_logic_ls_append",
-        "label": "W106 this-wave unique_logic family append (recognition only)",
+        "label": "unique_logic family append L/S (recognition only)",
         "logic_ids": (
             "funding_impulse_cs_tilt",
             "curve_steepen_impulse_cs",
@@ -254,16 +218,11 @@ NEAR_LOGIC_GROUPS: tuple[dict[str, Any], ...] = (
             "event_funding_stress_ls",
             "surprise_xs_rank_flip",
         ),
-        "note": (
-            "W106 family append of this-wave newly min-implemented logics "
-            "only (B mixed unique_logic + C funding/surprise L/S). "
-            "recognition, not pass / not promotion. generation_enabled=False. "
-            "Did not kill funding/surprise for window sign-flip."
-        ),
+        "note": "Recognition-only L/S append; not a pass.",
     },
     {
         "group_id": "unique_logic_overlay_append",
-        "label": "W107 this-wave unique_logic family append (recognition only)",
+        "label": "unique_logic family append overlay (recognition only)",
         "logic_ids": (
             "overnight_level_cs_tilt",
             "overnight_easy_cs_follow",
@@ -273,12 +232,7 @@ NEAR_LOGIC_GROUPS: tuple[dict[str, Any], ...] = (
             "event_funding_adaptive_side",
             "surprise_xs_rank_adaptive",
         ),
-        "note": (
-            "W107 family append of this-wave newly min-implemented logics "
-            "only (B mixed unique_logic + C funding/surprise adaptive). "
-            "recognition, not pass / not promotion. generation_enabled=False. "
-            "Did not kill funding/surprise for window sign-flip."
-        ),
+        "note": "Recognition-only overlay append; not a pass.",
     },
 )
 
@@ -464,14 +418,11 @@ _BAR_NATIVE_TEMPLATE_OVERLAY: dict[str, dict[str, Any]] = {
     ),
     "xs_rank_ls_sticky": _ov(
         "Cross-section rank L-S sticky",
-        notes=(
-            "Canonical structure matches frozen cross_section_hold_10 (mom5) "
-            "shape; not a retune."
-        ),
+        notes="Canonical frozen cross_section_hold_10 (mom5) shape; not a retune.",
     ),
     "xs_rank_ls_daily": _ov(
         "Cross-section rank L-S daily rebalance",
-        notes="Position construction differs from sticky (daily vs multi-day).",
+        notes="Daily vs sticky position construction.",
     ),
     "macro_repo_rate_change": _ov("Macro-conditioned mom (repo rate change)"),
     "macro_repo_rate_level": _ov("Macro-conditioned mom (repo rate level)"),
@@ -489,63 +440,38 @@ _BAR_NATIVE_TEMPLATE_OVERLAY: dict[str, dict[str, Any]] = {
     ),
     "vol_breakout_expand": _ov(
         "Vol-expansion breakout mom",
-        notes="Different gate structure vs mom_over_vol (info used differently).",
+        notes="Different gate vs mom_over_vol.",
     ),
     "fund_value_mom_agree_slow": _ov(
         "Value×mom agree (slow price confirm)",
-        notes=(
-            "Distinct mom_structure tag; not a free mom grid over fund_value_mom_agree. "
-            "W95: window giant-t on w2017_2019 (t≈153) is an n=2 near-equal-nets "
-            "low-variance artifact (var≈5.8e-9); demoted from window-headline / "
-            "promising set. Keep parallel near-group; do not promote on giant-t alone."
-        ),
+        notes="Distinct mom_structure; not a mom grid. Keep parallel.",
     ),
     "mf_value_mom_rate": _ov(
         "Value × mom × rate multi-factor",
         notes=(
             "Unique rate-gated value×mom (not an alias of fund_value_mom_agree). "
-            "Long only on overnight decline in easy regime; short only on "
-            "overnight rise in tight regime; mid skipped. "
-            "eval-cf-dp-mf-chg occupancy sits just under always_on; "
-            "live candidate filter is occupancy. No densify."
+            "Occupancy is the live candidate filter. No densify."
         ),
     ),
     "mf_flow_price": _ov(
         "Flow × price multi-factor",
-        notes=(
-            "Distinct from flow_margin_short_hard/soft (short confirm). "
-            "Keep parallel in flow near-group; do not merge."
-        ),
+        notes="Keep parallel in flow near-group; do not merge.",
     ),
     "nky_vol_abs_level": _ov(
         "Nikkei abs vol-level × CS risk-on/off",
-        notes=(
-            "Index-level vol regime. Distinct from vol_risk_adjusted_mom "
-            "(per-name mom/vol gate). Proxy: NK225F front RV → TOPIX fallback. "
-            "NKVIF exists but abs path uses realized for term consistency."
-        ),
+        notes="Index-level vol; distinct from per-name vol_risk_adjusted_mom.",
     ),
     "nky_vol_term_levels": _ov(
         "Nikkei short+long vol levels × CS",
-        notes=(
-            "Dual absolute levels (not ratio). Distinct from nky_vol_abs_level "
-            "and from per-name vol_breakout_expand."
-        ),
+        notes="Dual absolute levels; keep parallel to abs and ratio.",
     ),
     "nky_vol_term_ratio": _ov(
         "Nikkei short/long vol ratio × CS",
-        notes=(
-            "Index-level term ratio. Name-level cousin is vol_breakout_expand "
-            "(per-name recent/prior vol); keep parallel in vol near-group. "
-            "PROXY/COMPARE ONLY vs options_225 SoT (W92)."
-        ),
+        notes="Index-level term ratio; proxy/compare vs options_225 SoT.",
     ),
     "opt225_basevol_abs_level": _ov(
         "options_225 BaseVol abs × CS risk-on/off",
-        notes=(
-            "Canonical Nikkei vol SoT. Distinct from nky_vol_* TOPIX/NK225F "
-            "RV proxy (keep parallel). Units=percent_vol_points."
-        ),
+        notes="Canonical Nikkei vol SoT; keep parallel to nky_vol_* proxy.",
     ),
     "opt225_basevol_term_levels": _ov(
         "options_225 BaseVol short+long levels × CS",
@@ -553,20 +479,13 @@ _BAR_NATIVE_TEMPLATE_OVERLAY: dict[str, dict[str, Any]] = {
     ),
     "opt225_basevol_term_ratio": _ov(
         "options_225 BaseVol short/long ratio × CS",
-        notes=(
-            "BaseVol-only term ratio. Parallel to ATM IV term ratio. "
-            "Requires distinct short/long vol maps; occupancy 0 = "
-            "data_requirement_unmet (excluded from candidate)."
-        ),
+        notes="Requires distinct short/long BaseVol maps.",
         main_pool=False,
         data_requirement="distinct short/long BaseVol maps",
     ),
     "opt225_atm_iv_abs_level": _ov(
         "options_225 ATM IV abs × CS (compare-only)",
-        notes=(
-            "COMPARE-ONLY (W94). Prefer BaseVol as canonical level "
-            "(post-W93 corr≈0.99994). Keep parallel for comparison."
-        ),
+        notes="COMPARE-ONLY. Prefer BaseVol as canonical level.",
     ),
     "opt225_atm_iv_term_levels": _ov(
         "options_225 ATM IV short+long levels × CS (compare-only)",
@@ -574,20 +493,13 @@ _BAR_NATIVE_TEMPLATE_OVERLAY: dict[str, dict[str, Any]] = {
     ),
     "opt225_atm_iv_term_ratio": _ov(
         "options_225 ATM IV short/long ratio × CS (compare-only)",
-        notes=(
-            "COMPARE-ONLY ATM term ratio. Prefer BaseVol term ratio. "
-            "Requires distinct short/long ATM IV maps; occupancy 0 = "
-            "data_requirement_unmet (excluded from candidate)."
-        ),
+        notes="COMPARE-ONLY. Requires distinct short/long ATM IV maps.",
         main_pool=False,
         data_requirement="distinct short/long ATM IV maps",
     ),
     "opt225_iv_base_spread_abs": _ov(
         "options_225 (ATM IV − BaseVol) abs × CS (compare-only)",
-        notes=(
-            "COMPARE-ONLY. Spread convention: atm_iv - base_vol. "
-            "Post-W93 exact-zero ≈99.76%."
-        ),
+        notes="COMPARE-ONLY. Spread = atm_iv - base_vol.",
     ),
     "opt225_iv_base_spread_change": _ov(
         "options_225 (ATM−BaseVol) change × CS (compare-only)",
@@ -595,24 +507,15 @@ _BAR_NATIVE_TEMPLATE_OVERLAY: dict[str, dict[str, Any]] = {
     ),
     "opt225_skew_abs_level": _ov(
         "options_225 95% put skew abs × CS",
-        notes=(
-            "W94 primary smile feature. Convention: put_iv(~0.95*S)−atm_mid. "
-            "No invent of smile points beyond available strikes."
-        ),
+        notes="put_iv(~0.95*S)−atm_mid. Never invent strikes.",
     ),
     "opt225_cm_term_abs_level": _ov(
         "options_225 near−next CM ATM term abs × CS",
-        notes=(
-            "W94 CM term feature (distinct from short/long rolling 'term' "
-            "transforms on a single level series)."
-        ),
+        notes="Near−next CM term; distinct from rolling short/long term.",
     ),
     "opt225_basevol_delta_abs": _ov(
         "options_225 BaseVol Δ abs × CS",
-        notes=(
-            "W94 canonical-level change. Arithmetic delta primary; log_delta "
-            "recorded on series but not required by this logic."
-        ),
+        notes="Canonical-level arithmetic delta.",
     ),
 }
 
@@ -653,10 +556,7 @@ def _factory_only_templates() -> list[LogicTemplate]:
                 "book_mode": "balanced_ls_slow_mom",
             },
             structural_keys=("book_mode",),
-            notes=(
-                "book_mode encodes slow-rank construction (mom=20 pin of the logic). "
-                "Not a free mom grid: one template, one structural horizon."
-            ),
+            notes="Slow-rank construction (mom=20 pin); not a free mom grid.",
         ),
         LogicTemplate(
             logic_id="mdh_short_horizon_mom",
@@ -674,10 +574,7 @@ def _factory_only_templates() -> list[LogicTemplate]:
                 "horizon_structure": "short_5d",
             },
             structural_keys=("rebalance_mode", "signal_polarity", "horizon_structure"),
-            notes=(
-                "horizon_structure is part of thesis (cost amortization / turnover regime), "
-                "not a hold_days grid clone of mdh_sticky_momentum."
-            ),
+            notes="5d horizon structure; not a hold_days clone of mdh_sticky_momentum.",
         ),
         LogicTemplate(
             logic_id="event_post_long_horizon",
@@ -844,14 +741,13 @@ def _derive_family_definitions() -> dict[str, FamilyDefinition]:
             }
         )
         gen_on = any(bool(t.generation_enabled) for t in tpls)
-        notes = "W88: family is eval dispatch only; logic templates define diversity."
+        notes = "Family is eval dispatch; logic templates define diversity."
         out[fid] = FamilyDefinition(
             family_id=fid,
             display_name=fid,
             description=(
                 f"Eval family covering logic_ids: "
-                f"{', '.join(t.logic_id for t in tpls)}. "
-                "Diversity is logic-template based (W88), not param grids."
+                f"{', '.join(t.logic_id for t in tpls)}."
             ),
             datasets_required=tuple(ds),
             param_axes=tuple(axes) if axes else ("logic_id",),
@@ -859,24 +755,14 @@ def _derive_family_definitions() -> dict[str, FamilyDefinition]:
             notes=notes,
         )
     # Unique families stay as recognition-only eval dispatch (no factory templates).
-    research_notes = (
-        "W105 research-family recognition / W106–W107 family append — "
-        "not pass / not promotion. generation_enabled=False. Not auto "
-        "research_candidate / Mass / READY / GO / main. Factory "
-        "period-net is recognition eval, not a pass. Sign-flip of "
-        "funding/surprise is not a kill."
-    )
+    research_notes = "Recognition only; generation_enabled=False; not a pass."
     for fid in RESEARCH_UNIQUE_FAMILY_IDS:
         if fid in out:
             continue
         out[fid] = FamilyDefinition(
             family_id=fid,
             display_name=fid,
-            description=(
-                "Eval family for unique_logic recognition (catalog / daily_path). "
-                "Diversity is not factory-template based. "
-                "RESEARCH FAMILY: recognition, not promotion."
-            ),
+            description="unique_logic recognition family (not factory-template diversity).",
             datasets_required=(),
             param_axes=("logic_id",),
             generation_enabled=False,
@@ -894,29 +780,25 @@ DEFAULT_FAMILY_RATIOS: dict[str, float] = {
 }
 
 
-def _factory_doc_meta() -> tuple[str, str, dict[str, Any]]:
-    from research.offline.factory import (
-        MASS_FACTORY_VERSION,
-        MASS_FACTORY_WAVE,
-        _freeze,
-    )
+def _factory_doc_meta() -> tuple[str, str]:
+    from research.offline.factory import MASS_FACTORY_VERSION, MASS_FACTORY_WAVE
 
-    return MASS_FACTORY_VERSION, MASS_FACTORY_WAVE, _freeze()
+    return MASS_FACTORY_VERSION, MASS_FACTORY_WAVE
 
 
 def near_logic_groups_document() -> dict[str, Any]:
     """Near-groups kept parallel for comparison (do not merge early)."""
-    version, wave, _unused = _factory_doc_meta()
+    version, wave = _factory_doc_meta()
     return {
         "version": version,
         "wave": wave,
-        "policy": "Near-similar logics stay parallel; label; do not merge early.",
+        "policy": "Near-similar logics stay parallel; do not merge early.",
         "groups": [dict(g) for g in NEAR_LOGIC_GROUPS],
     }
 
 
 def _research_family_base() -> dict[str, Any]:
-    version, wave, freeze = _factory_doc_meta()
+    version, wave = _factory_doc_meta()
     return {
         "wave": wave,
         "version": version,
@@ -932,7 +814,6 @@ def _research_family_base() -> dict[str, Any]:
         "connected_to_mass": CONNECTED_TO_MASS,
         "connected_to_ready": CONNECTED_TO_READY,
         "family_group": FAMILY_RESEARCH_UNIQUE_LOGIC,
-        **freeze,
     }
 
 
@@ -944,7 +825,6 @@ def research_family_register_document() -> dict[str, Any]:
         "kind": "research_family",
         "family_ids": sorted(RESEARCH_UNIQUE_FAMILY_IDS),
         "logic_ids": sorted(RESEARCH_UNIQUE_LOGIC_IDS),
-        "note": "registration = recognition, not pass / not promotion.",
     }
 
 
@@ -958,7 +838,6 @@ def research_family_append_document() -> dict[str, Any]:
         "this_wave_only": True,
         "appended_logic_ids": sorted(RESEARCH_FAMILY_APPEND_LOGIC_IDS),
         "did_not_kill_funding_surprise": True,
-        "note": "family append = recognition of this-wave logics, not promotion.",
     }
 
 
@@ -966,7 +845,7 @@ def logic_templates_document() -> dict[str, Any]:
     """Document logic templates + diversity rules."""
     from research.offline.factory import DEFAULT_NEAR_DUP_THRESHOLD
 
-    version, wave, freeze = _factory_doc_meta()
+    version, wave = _factory_doc_meta()
     nky_vol_ids = [
         lid
         for lid, t in LOGIC_TEMPLATES.items()
@@ -996,7 +875,6 @@ def logic_templates_document() -> dict[str, Any]:
         ],
         "unique_logic_ids": sorted(RESEARCH_UNIQUE_LOGIC_IDS),
         "unique_logic_append_logic_ids": sorted(RESEARCH_FAMILY_APPEND_LOGIC_IDS),
-        "research_family_registration": research_family_register_document(),
         "opt225_canonical_level": "basevol",
         "opt225_atm_iv_role": "compare_only",
         "diversity_rules": {
@@ -1015,13 +893,12 @@ def logic_templates_document() -> dict[str, Any]:
             "near_dup_threshold": DEFAULT_NEAR_DUP_THRESHOLD,
             "numeric_only_knobs": sorted(NUMERIC_ONLY_KNOBS),
         },
-        **freeze,
     }
 
 
 def family_definitions_document() -> dict[str, Any]:
     """Back-compat family document; points primary diversity to logic templates."""
-    version, wave, freeze = _factory_doc_meta()
+    version, wave = _factory_doc_meta()
     return {
         "version": version,
         "wave": wave,
@@ -1030,7 +907,6 @@ def family_definitions_document() -> dict[str, Any]:
         },
         "family_ids": list(FACTORY_FAMILY_IDS),
         "default_family_ratios": dict(DEFAULT_FAMILY_RATIOS),
-        **freeze,
     }
 
 

@@ -1,15 +1,8 @@
 """D1 hot-tip extract + tip FeatureContext (Mass OFF / READY not declared).
 
-Bounded CF D1 ``quant-ingest`` tip reads and COMPLETE-21 min-feature compute
-on an in-memory :class:`features.runtime.FeatureContext`. History SoT remains
-R2 ``quant-structured``; local SQLite is not used.
-
-Execute / multiday jobs stay in :mod:`research.single_shot_job`. This module
-is the shared tip-row / PIT reader surface used by the R2 history bridge
-(:mod:`research.r2_feature_context`).
-
-Fail-closed: COMPLETE 21 only, permanent DEFER 5 hard-reject, Mass OFF,
-READY not declared. No densify, no orders.
+Bounded CF D1 ``quant-ingest`` tip reads. History SoT remains R2
+``quant-structured``; local SQLite is not used. Fail-closed on DEFER /
+non-COMPLETE-21. No densify, no orders.
 """
 
 from __future__ import annotations
@@ -515,7 +508,6 @@ def extract_d1_tip_feature_rows(
     for ds in ids:
         jsda_table = _JSDA_TIP_TABLE_BY_DATASET.get(ds)
         if jsda_table is not None:
-            # Dedicated JSDA fact table (hot tip on D1; not jquants_records).
             count_sql = (
                 f"SELECT COUNT(*) AS n FROM {jsda_table} WHERE "
                 f"as_of_date >= {_sql_str(start)} "
@@ -554,9 +546,6 @@ def extract_d1_tip_feature_rows(
 
         where_extra = ""
         if selected_codes and ds in _CODE_KEYED_TIP_DATASETS:
-            # Precompute LIKE patterns (no backslash inside f-string expr on 3.11).
-            # Code-filter bars + code-keyed catalog tips (fins / margin / short / …)
-            # so LIMIT does not sample other issuers and miss the probe codes.
             like_parts = []
             for c in selected_codes:
                 nk_pat = '%"Code":"' + c + '"%'
@@ -618,7 +607,6 @@ def extract_d1_tip_feature_rows(
         },
         "rows_by_dataset": rows_by_dataset,
         "local_sot": False,
-        "note": "Bounded tip payload extract. Not READY. History remains on R2.",
     }
 
 
@@ -964,10 +952,7 @@ def compute_tip_candidate_features(
             empty_reason = ""
         elif fid == "short_ratio_level":
             extra_key, targets = "section", section_list
-            empty_reason = (
-                "short_ratio_level requires section; no tip S33 "
-                "sections discovered and none provided"
-            )
+            empty_reason = "short_ratio_level requires section; none discovered"
         else:
             extra_key, targets, empty_reason = None, [None], ""
 
@@ -1038,7 +1023,6 @@ def compute_tip_candidate_features(
         "ready_publication": READY_PUBLICATION_STATUS,
         "local_sot": False,
         "status": path_status,
-        "note": "COMPLETE-21 min features on tip FeatureContext. Not READY.",
     }
 
 

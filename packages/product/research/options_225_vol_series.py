@@ -1,15 +1,8 @@
 """Daily BaseVol + ATM IV + skew / CM-term / ΔBaseVol from options_225.
 
 Research-only. Missing days → omit (no ffill / no invent). BaseVol is the
-canonical level; reconstructed ATM IV is compare-only.
-
-Dataset: J-Quants Nikkei 225 option daily bars
-(``derivatives_bars_daily_options_225``). IV / UnderPx / LTD / SQD blank
-before ``2016-07-19`` are gaps. Prefer settlement rows
-(``EmMrgnTrgDiv==002``); emergency-only days use those rows.
-
-Eval/CF consume cached ndjson via :func:`load_opt225_series_cache` →
-:func:`build_opt225_regime_bundle`. Never invent missing series.
+canonical level; reconstructed ATM IV is compare-only. Missing series stay
+empty/None.
 """
 
 from __future__ import annotations
@@ -84,7 +77,6 @@ def _as_pc(value: Any) -> str | None:
     s = str(value).strip()
     if s in {PC_PUT, PC_CALL}:
         return s
-    # tolerate int 1/2
     if s.endswith(".0") and s[:-2] in {PC_PUT, PC_CALL}:
         return s[:-2]
     try:
@@ -110,7 +102,7 @@ def _row_get(row: Mapping[str, Any], *keys: str) -> Any:
 
 
 def normalize_options_225_row(row: Mapping[str, Any]) -> dict[str, Any] | None:
-    """Extract the fields needed for BaseVol / ATM IV series builders."""
+    """Fields needed for BaseVol / ATM IV series builders."""
     if not isinstance(row, Mapping):
         return None
     # unwrap nested payload if present (structured mirrors / D1 dumps)
@@ -175,11 +167,9 @@ def _prefer_settlement(day_rows: Sequence[Mapping[str, Any]]) -> list[Mapping[st
     settle = [r for r in day_rows if r.get("em_mrgn_trg_div") == EM_SETTLE]
     if settle:
         return list(settle)
-    # blank EmMrgnTrgDiv (pre-field era) — keep all
     blank = [r for r in day_rows if not r.get("em_mrgn_trg_div")]
     if blank:
         return list(blank)
-    # emergency-only day
     return list(day_rows)
 
 
@@ -241,7 +231,7 @@ def _pick_front_cm(
     *,
     min_dte_days: int = DEFAULT_ATM_MIN_DTE_DAYS,
 ) -> tuple[str | None, dict[str, Any]]:
-    """Pick front CM with optional near-expiry roll (W93)."""
+    """Pick front CM with optional near-expiry roll."""
     min_dte = max(0, int(min_dte_days))
     meta: dict[str, Any] = {
         "min_dte_days": min_dte,
@@ -284,11 +274,7 @@ def _nearest_strike(
     pc_div: str | None = None,
     require_finite_iv: bool = False,
 ) -> float | None:
-    """Pick listed strike nearest to ``target`` within ``cm`` (ties → lower).
-
-    Never invents strikes. When ``pc_div`` is set, only that put/call side is
-    considered. When ``require_finite_iv``, rows without finite IV are skipped.
-    """
+    """Listed strike nearest to ``target`` within ``cm`` (ties → lower)."""
     best_dist: float | None = None
     best_strike: float | None = None
     for r in day_rows:
@@ -314,11 +300,7 @@ def _atm_iv_at_cm(
     cm: str,
     under_px: float,
 ) -> dict[str, Any] | None:
-    """ATM-ish put/call mid IV within a fixed CM. None if no finite IV.
-
-    Strike = listed strike minimizing |Strike − under_px| (ties → lower).
-    Never invents strikes beyond the available chain.
-    """
+    """ATM-ish put/call mid IV within a fixed CM. None if no finite IV."""
     best_strike = _nearest_strike(day_rows, cm=cm, target=under_px)
     if best_strike is None:
         return None
@@ -409,7 +391,7 @@ def _pick_next_cm(
 def build_daily_basevol_series(
     rows: Sequence[Mapping[str, Any]] | Iterable[Mapping[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Build ``[{date, base_vol, n_contracts, ...}]`` — no ffill."""
+    """Daily BaseVol. Missing day → omit. No ffill."""
     by_date = _group_by_date(rows)
     out: list[dict[str, Any]] = []
     for date in sorted(by_date):
@@ -884,11 +866,7 @@ def level_series_to_regime_maps(
     units: str = "percent_vol_points",
     series_kind: str = "level",
 ) -> dict[str, Any]:
-    """Convert a daily level series into abs / short / long / ratio maps.
-
-    Missing days are omitted (no invent / no ffill). Rolling windows only use
-    observed points in chronological order (not calendar-day pads).
-    """
+    """Abs / short / long / ratio maps. Missing days omitted. No ffill."""
     sn = max(2, int(short_n))
     ln = max(sn + 1, int(long_n))
     dates = sorted(str(d)[:10] for d in level_by_date.keys())
@@ -916,7 +894,6 @@ def level_series_to_regime_maps(
         "short_n": sn,
         "long_n": ln,
         "level_by_date": dict(sorted((d, float(level_by_date[d])) for d in dates)),
-        # Align key names with nky_vol_series / CF worker (reuse eval path).
         "rv_abs_by_date": dict(sorted(abs_by.items())),
         "rv_short_by_date": dict(sorted(short_by.items())),
         "rv_long_by_date": dict(sorted(long_by.items())),
@@ -957,10 +934,7 @@ def build_opt225_regime_bundle(
     short_n: int = DEFAULT_OPT225_SHORT_N,
     long_n: int = DEFAULT_OPT225_LONG_N,
 ) -> dict[str, Any]:
-    """Build BaseVol / ATM / spread / skew / CM-term / ΔBaseVol regime maps.
-
-    BaseVol = canonical level. ATM IV maps are included as **compare-only**.
-    """
+    """BaseVol / ATM / spread / skew / CM-term / ΔBaseVol regime maps."""
     if spread_rows is None:
         spread_rows = build_spread_series(base_rows, atm_rows)
     if basevol_delta_rows is None:
@@ -975,7 +949,6 @@ def build_opt225_regime_bundle(
         series_rows_to_level_map(term_rows, "cm_term") if term_rows is not None else {}
     )
     delta_lvl = series_rows_to_level_map(basevol_delta_rows, "basevol_delta")
-    # day-over-day change of spread (skip first obs / gaps → no invent)
     spread_chg: dict[str, float] = {}
     sp_dates = sorted(spread_lvl)
     for i in range(1, len(sp_dates)):
@@ -1023,7 +996,6 @@ def build_opt225_regime_bundle(
         "ffill_applied": False,
         "invent_fill": False,
     }
-    # Mark ATM series compare-only on the regime map itself.
     bundle["atm_iv"]["compare_only"] = True
     bundle["atm_iv"]["role"] = ATM_IV_ROLE
     bundle["basevol"]["role"] = BASEVOL_ROLE
@@ -1077,11 +1049,7 @@ def load_ndjson_series(path: str | Path) -> list[dict[str, Any]]:
 def load_opt225_series_cache(
     log_dir: str | Path | None = None,
 ) -> dict[str, Any] | None:
-    """Load pre-built series ndjson from W92/W94 log dirs.
-
-    Prefers explicit ``log_dir``. Otherwise tries W94 then W92. Missing
-    skew / CM-term stay empty/None; ΔBaseVol derives from BaseVol when absent.
-    """
+    """Load cached series ndjson. Missing skew / CM-term stay empty/None."""
     candidates: list[Path] = []
     if log_dir is not None:
         candidates.append(Path(log_dir))

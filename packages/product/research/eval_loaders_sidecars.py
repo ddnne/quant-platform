@@ -172,13 +172,8 @@ def build_nky_vol_series(
         "kind": "nky_vol_series",
         "dataset": dataset,
         "source": source,
-        "proxy_note": (
-            "Cash Nikkei not in indices_bars_daily. Prefer NK225F front "
-            "realized; TOPIX fallback. NKVIF is implied-vol futures (optional)."
-        ),
         "short_n": sn,
         "long_n": ln,
-        "annualization": f"sample_stdev * sqrt({TRADING_DAYS_ANN})",
         "closes_by_date": dict(sorted(by_d.items())),
         "rv_short_by_date": dict(sorted(short_by.items())),
         "rv_long_by_date": dict(sorted(long_by.items())),
@@ -334,10 +329,6 @@ def fins_summary_ta_eqar_stats(
         "sample_ta": [],
         "sample_eqar": [],
         "invent": False,
-        "note": (
-            "NCTA is a non-consolidated alias and is sparse. Official v2 "
-            "summary uses TA (total assets) and EqAR (equity/assets)."
-        ),
     }
     if not db.exists():
         out["error"] = "sqlite_missing"
@@ -438,11 +429,6 @@ def repo_history_plane_status(
         "research_loader": "load_repo_rows_all_tenors_from_sqlite",
         "invent_complete": False,
         "ffill_applied": False,
-        "note": (
-            "D1 jsda_repo_rates is hot tip (~days). Historical eval reads "
-            "this sqlite / R2. PIT get_jsda_repo_rates stays fail-closed "
-            "while production READY is undeclared."
-        ),
     }
 
 
@@ -453,10 +439,7 @@ def load_repo_rows_from_sqlite(
     end: str | None = None,
     tenor_contains: str | None = "overnight",
 ) -> list[dict[str, Any]]:
-    """Load jsda_repo_rates rows from local SQLite (research offline path).
-
-    Not the PIT path. PIT ``get_jsda_repo_rates`` is fail-closed until READY.
-    """
+    """Load jsda_repo_rates rows from local SQLite (not PIT)."""
     db = Path(db_path)
     if not db.exists():
         return []
@@ -849,10 +832,7 @@ def merge_event_calendars(
     fins_summary: Mapping[str, Sequence[Mapping[str, Any]]],
     earnings_date: Mapping[str, Sequence[Mapping[str, Any]]] | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
-    """Thicken event calendar: fins_summary primary; earnings_date fills gaps.
-
-    Same (code, disc_date) prefers fins_summary (has EPS/FEPS). No invent of surprise.
-    """
+    """Thicken event calendar: fins_summary primary; earnings_date fills gaps."""
     out: dict[str, list[dict[str, Any]]] = {}
     codes = set(fins_summary.keys()) | set((earnings_date or {}).keys())
     for code in codes:
