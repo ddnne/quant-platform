@@ -15,6 +15,62 @@ FINS_SUMMARY_OFFICIAL_KEYS: dict[str, str] = {
     "eq": FINS_SUMMARY_EQ_KEY,
 }
 
+# Must match Worker COMBO_EVENT_GATES plus Python-only gates. Unknown → skip.
+COMBO_EVENT_GATES: frozenset[str] = frozenset(
+    {
+        "skip_monday",
+        "skip_tuesday",
+        "skip_wednesday",
+        "friday_skip",
+        "friday_only",
+        "tue_thu",
+        "not_last_week",
+        "month_start7",
+        "not_first_week",
+        "first_half_month",
+        "midmonth",
+        "afterclose",
+        "overnight_easing",
+        "easy_funding",
+        "tight_funding",
+        "steep_curve",
+        "uncrowded_margin",
+        "cluster",
+        "invert_curve",
+        "on_impulse",
+        "cheap_iv",
+        "rich_iv",
+        "cheap_pb",
+        "positive_eps",
+        "eps_up",
+        "div_positive",
+        "margin_up",
+        "margin_down",
+        "eq_ar_high",
+        "eq_ar_low",
+        "ta_up",
+        "overnight_p10",
+        "curve_flatten",
+        "repo_3m_down",
+        "nky_vol_high_skip",
+        "large_surprise",
+        "liq_high",
+        "price_down",
+    }
+)
+PYTHON_ONLY_EVENT_GATES: frozenset[str] = frozenset(
+    {
+        "crowded_margin",
+        "pre_mom",
+        "month_end_skip",
+        "fy_end",
+        "fy_results",
+        "fy_start",
+        "overnight_tightening",
+    }
+)
+KNOWN_EVENT_GATES: frozenset[str] = COMBO_EVENT_GATES | PYTHON_ONLY_EVENT_GATES
+
 KNOWN_WEAK_THESIS: frozenset[str] = frozenset(
     {
         "rate_abs_level_xs",

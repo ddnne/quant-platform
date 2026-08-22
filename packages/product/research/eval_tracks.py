@@ -74,7 +74,7 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
     {
         "id": "sleeve_members_refresh",
         "track": EVAL_TRACK_MID_N,
-        "why": "theme_fund/flow members were chosen on head-N 50; re-pick on ADV tracks",
+        "why": "members refreshed on ADV tracks (eval-cf-dp-*-sleeves-20260822a); still not a pass",
         "not_a_pass": True,
     },
     {

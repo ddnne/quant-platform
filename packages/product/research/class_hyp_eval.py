@@ -3803,7 +3803,7 @@ def run_class_hyp_multi_year_eval(
     selected = (
         [str(c).strip() for c in codes if str(c).strip()]
         if codes is not None
-        else list(DEFAULT_EVAL_CODES)
+        else select_eval_universe(max_codes=len(DEFAULT_EVAL_CODES))
     )
     h = int(hold_days)
     if h not in SUPPORTED_HOLD_DAYS:

@@ -532,6 +532,8 @@ def test_default_n_capacity_and_cf_llm_residuals():
     assert cfg.n >= 100
     cf = try_cf_minimal_mass_batch()
     assert cf["status"] == "available"
+    assert cf["version"] != "research-mass-eval/v6"
+    assert cf["version"].startswith("research-mass-eval/")
     assert cf["worker"] == "quant-platform-research-mass-eval"
     assert "POST /v1/mass-eval" in str(cf.get("endpoint") or "")
     assert cf.get("r2_prefix", "").startswith("research/mass_eval/")

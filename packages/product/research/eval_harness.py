@@ -121,8 +121,10 @@ CONNECTED_TO_MASS_RESEARCH_LOOP: bool = False
 DENSIFY: bool = False
 LOCAL_SOT: bool = False
 
-# Default codes for tip multiday / nextday batches (liquid TSE probes).
-DEFAULT_EVAL_CODES: tuple[str, ...] = ("13010", "72030", "67580")
+# Smoke 3 names for harness tip batches. Not the research ADV universe
+# (that is class_hyp_eval.EVAL_UNIVERSE_POOL / select_eval_universe).
+HARNESS_SMOKE_CODES: tuple[str, ...] = ("13010", "72030", "67580")
+DEFAULT_EVAL_CODES: tuple[str, ...] = HARNESS_SMOKE_CODES
 
 
 class EvalHarnessError(SingleShotJobError):
@@ -2928,6 +2930,7 @@ __all__ = [
     "CHECKLIST_WAVE",
     "CONNECTED_TO_MASS_RESEARCH_LOOP",
     "DATASET_YEAR_INVENTORY_NOTES",
+    "HARNESS_SMOKE_CODES",
     "DEFAULT_EVAL_CODES",
     "DEFAULT_MULTIYEAR_CODES",
     "DEFAULT_MULTIYEAR_YEARS",

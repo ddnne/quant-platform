@@ -11,6 +11,7 @@ from typing import Any, Mapping
 from research.daily_path_eval import held_book_daily_mtm, panel_index
 from research.unique_logic.constants import (
     CF_NEW_THESIS_IDS,
+    KNOWN_EVENT_GATES,
     WORKER_ISOLATE_LIMIT_IDS,
     is_ungated_name_level_cs,
     sparse_15name_reason,
@@ -2814,6 +2815,9 @@ def _eval_event_combo(
         key = event_sides._event_key(ev)
         ok = True
         for g in gates:
+            if g not in KNOWN_EVENT_GATES:
+                ok = False
+                continue
             if g == "easy_funding" and not fund["easy"].get(key):
                 ok = False
             elif g == "tight_funding":
@@ -3582,6 +3586,8 @@ def _eval_cs_combo(
             # Name-level fund/flow extras are Worker SoT. Local skip, no invent.
             keep = False
             extra_cf_only.append(gate)
+        elif gate:
+            keep = False
         scores = scores_by_date.get(d) or {}
         if not keep or len(scores) < 2:
             continue

@@ -154,10 +154,10 @@ MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
         "primary": True,
         "primary_candidate": True,
         "members": (
+            "event_eqar_high_liq_high",
             "event_eqar_high_pead",
-            "event_eqar_low_fade",
-            "event_ta_up_pead",
-            "cs_eqar_high_easy",
+            "event_ta_up_liq_high",
+            "cs_eqar_high_margin_down",
         ),
     },
     {
@@ -167,7 +167,7 @@ MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
         "primary_candidate": True,
         "members": (
             "cs_margin_up_chase",
-            "cs_short_ratio_up_fade",
+            "event_margin_down_liq_high",
             "event_margin_delta_fade",
         ),
     },
@@ -189,9 +189,9 @@ MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
         "primary": True,
         "primary_candidate": True,
         "members": (
-            "event_eqar_high_pead",
-            "event_cheap_pb_pead",
-            "event_positive_eps_pead",
+            "event_eqar_high_liq_high",
+            "event_positive_eps_liq_high",
+            "event_cheap_pb_liq_high",
         ),
     },
 )

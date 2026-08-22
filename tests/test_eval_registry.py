@@ -233,8 +233,9 @@ def test_mechanical_baskets_are_four_valid_defs() -> None:
     assert "repo_rate_sleeve" in rules
     fund = next(d for d in defs if d["rule"] == "fundamentals_sleeve")
     assert "cs_eqar_high" not in fund["members"]
+    assert "event_eqar_high_liq_high" in fund["members"]
     assert "event_eqar_high_pead" in fund["members"]
-    assert "event_ta_up_pead" in fund["members"]
+    assert "cs_eqar_high_margin_down" in fund["members"]
     assert fund["primary_candidate"] is True
     assert fund["go"] is False
     flow = next(d for d in defs if d["rule"] == "margin_flow_sleeve")

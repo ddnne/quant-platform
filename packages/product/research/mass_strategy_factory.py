@@ -3431,11 +3431,11 @@ def load_batch_data_context(
 ) -> BatchDataContext:
     """Load period panels once for the batch (lite multi-year by default)."""
     from research.class_hyp_eval import (
-        DEFAULT_EVAL_CODES,
         DEFAULT_PERIODS,
         DEFAULT_PERIODS_Q4,
         DEFAULT_BARS_MIRROR_DIR,
         DEFAULT_SQLITE,
+        select_eval_universe,
         bars_rich_to_close_panel,
         build_repo_curve_series,
         load_bars_ndjson_rich,
@@ -3468,7 +3468,7 @@ def load_batch_data_context(
     selected = (
         [str(c).strip() for c in codes if str(c).strip()]
         if codes is not None
-        else list(DEFAULT_EVAL_CODES)[: int(config.max_codes)]
+        else select_eval_universe(max_codes=int(config.max_codes))
     )
     mdir = Path(mirror_dir) if mirror_dir else DEFAULT_BARS_MIRROR_DIR
     db = Path(sqlite_path) if sqlite_path else DEFAULT_SQLITE
@@ -4936,6 +4936,20 @@ def write_factory_outputs(
 # ---------------------------------------------------------------------------
 
 
+def _research_mass_eval_version() -> str:
+    from qp_paths import repo_root
+
+    p = repo_root() / "platform" / "workers" / "research-mass-eval" / "wrangler.toml"
+    try:
+        for line in p.read_text(encoding="utf-8").splitlines():
+            s = line.strip()
+            if s.startswith("MASS_EVAL_VERSION"):
+                return s.split("=", 1)[1].strip().strip('"').strip("'")
+    except OSError:
+        pass
+    return "research-mass-eval/unknown"
+
+
 def try_cf_minimal_mass_batch() -> dict[str, Any]:
     """Prefer a stable minimal CF job returning one small batch result.
 
@@ -4954,7 +4968,7 @@ def try_cf_minimal_mass_batch() -> dict[str, Any]:
     return {
         "status": "available",
         "wave": MASS_FACTORY_WAVE,
-        "version": "research-mass-eval/v6",
+        "version": _research_mass_eval_version(),
         "factory_wave": MASS_FACTORY_WAVE,
         "factory_version": MASS_FACTORY_VERSION,
         "worker": "quant-platform-research-mass-eval",

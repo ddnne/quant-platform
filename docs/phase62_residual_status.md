@@ -64,6 +64,6 @@ Completion of a research turn requires an R2 **daily_path** job, not local JSON.
 Do not paste cell scores into this file. Latest recorded job id belongs in D1.
 Candidate pool (code: `CANDIDATE_POLICY`) excludes path_broken / path_collapsed / always_on / near_empty / data_requirement_unmet / near_duplicate / always_on_cs_sticky / worker_isolate_limit.
 Latest empirical jobs (ids only). Two eval tracks — do not narrate from one print:
-- **mid_n_explore** (ADV 80): `eval-cf-dp-mid80-20260822a`, `eval-cf-dp-baskets-mid80-20260822a`
-- **liq_large** (ADV 100): `eval-cf-dp-liq100-20260822b`, `eval-cf-dp-liq100-cross-20260822a`, `eval-cf-dp-baskets-liq100-cross-20260822a` (head-N contrast `eval-cf-dp-univ100-20260822a` / `eval-cf-dp-baskets100-20260822a`)
+- **mid_n_explore** (ADV 80): `eval-cf-dp-mid80-20260822a`, `eval-cf-dp-mid80-sleeves-20260822a`, `eval-cf-dp-baskets-mid80-sleeves-20260822a`
+- **liq_large** (ADV 100): `eval-cf-dp-liq100-20260822b`, `eval-cf-dp-liq100-cross-20260822a`, `eval-cf-dp-liq100-sleeves-20260822a`, `eval-cf-dp-baskets-liq100-sleeves-20260822a` (head-N contrast `eval-cf-dp-univ100-20260822a` / `eval-cf-dp-baskets100-20260822a`)
 Composition compare `research/eval/sleeve_stability/headn100_vs_liq100b.json`. Triad `research/eval/sleeve_stability/univ50_vs_univ80_vs_univ100.json`. Universe rule `adv_desc_skip_missing_bars_and_fins` (head-N forbidden on both tracks). Isolate park set is empty after `csFundSnaps` hoist + `eval-cf-dp-cs-hoist-20260822a` (N=100 complete). Linearized: cluster three + those three CS. Worker `research-mass-eval/v21-cs-hoist`. Head-N list slice forbidden on both tracks. GO deferred.

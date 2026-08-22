@@ -1,6 +1,8 @@
 """Load unique_logic declarations from ``specs/research_logics/*.yaml``.
 
-Git catalog is the declaration. Scores live in R2/D1, not markdown.
+Git catalog is the human declaration. ``event_combos._SPECS`` generates
+missing YAML; runtime dispatch still uses Python rows so gates stay typed.
+Scores live in R2/D1, not markdown.
 The schema is intentionally small (no general YAML dependency).
 """
 from __future__ import annotations
