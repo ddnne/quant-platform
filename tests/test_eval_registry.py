@@ -169,6 +169,81 @@ def test_always_on_is_not_strong() -> None:
     assert summary["always_on_excluded_from_main"] is True
 
 
+def test_near_empty_and_term_ratio_are_not_candidates() -> None:
+    from research.eval_registry import summarize_daily_path_cells
+
+    cells = [
+        {
+            "logic_id": "opt225_atm_iv_term_ratio",
+            "window_id": f"y{y}",
+            "occupancy": 0.0,
+            "total_ret_net": 0.0,
+            "eval_path": "opt225:term_ratio",
+            "daily_path_complete": True,
+        }
+        for y in (2015, 2017, 2019, 2021, 2023, 2025)
+    ]
+    summary = summarize_daily_path_cells(cells, job_id="eval-test-empty")
+    row = summary["logics"][0]
+    assert "near_empty" in row["flags"]
+    assert "data_requirement_unmet" in row["flags"]
+    assert row["candidate"] is False
+    assert row["main_pool"] is False
+    assert summary["n_candidate_logics"] == 0
+    assert summary["near_empty_excluded_from_candidate"] is True
+    assert summary["strong_t_floor"] is None
+    assert summary["simple_strategies_kept_for_combinations"] is True
+
+
+def test_modest_t_gated_thesis_stays_candidate() -> None:
+    from research.eval_registry import summarize_daily_path_cells
+
+    cells = [
+        {
+            "logic_id": "event_skip_monday",
+            "window_id": f"y{y}",
+            "occupancy": 0.18,
+            "total_ret_net": 0.01,
+            "t_stat": 0.4,
+            "sharpe_daily": 0.05,
+            "eval_path": "eventHeld",
+            "daily_path_complete": True,
+        }
+        for y in (2015, 2017, 2019, 2021, 2023, 2025)
+    ]
+    summary = summarize_daily_path_cells(cells, job_id="eval-test-modest")
+    row = summary["logics"][0]
+    assert row["candidate"] is True
+    assert row["main_pool"] is True
+    assert row["go"] is False
+    assert row["promote_as_main"] is False
+    assert summary["n_candidate_logics"] == 1
+    assert summary["strong_t_floor"] is None
+    assert "path_broken" not in row["flags"]
+    assert "always_on" not in row["flags"]
+
+
+def test_path_broken_is_not_candidate() -> None:
+    from research.eval_registry import summarize_daily_path_cells
+
+    cells = [
+        {
+            "logic_id": "unwired_overlay",
+            "window_id": "y2015_full",
+            "occupancy": 0.40,
+            "total_ret_net": 0.02,
+            "eval_path": "cs_generic",
+            "path_fallback": "path_broken",
+            "t_stat": 2.0,
+            "daily_path_complete": True,
+        }
+    ]
+    summary = summarize_daily_path_cells(cells, job_id="eval-test-broken-cand")
+    row = summary["logics"][0]
+    assert row["candidate"] is False
+    assert row["tag"] == "path_broken"
+
+
 def test_proposal_schema_reads_summary_weakness_flags() -> None:
     from research.unique_logic.proposal_schema import (
         proposal_blocked_by_summary,
@@ -192,6 +267,11 @@ def test_proposal_schema_reads_summary_weakness_flags() -> None:
     flags = weakness_flags_from_summary(summary)
     assert "always_on" in flags["xs_rank_ls_sticky"]
     assert "path_broken" in flags["unwired_overlay"]
+    from research.unique_logic.proposal_schema import CANDIDATE_KEEP_SIMPLE
+
+    assert "path_broken" in CANDIDATE_KEEP_SIMPLE
+    assert "always_on" in CANDIDATE_KEEP_SIMPLE
+    assert "near_empty" in CANDIDATE_KEEP_SIMPLE
     blocked = proposal_blocked_by_summary(
         {
             "logic_id": "clone",

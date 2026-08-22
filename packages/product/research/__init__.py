@@ -1,4 +1,9 @@
-"""Phase 7 research control plane (readiness attestation, experiment plans)."""
+"""Phase 7 research control plane (readiness attestation, experiment plans).
+
+Heavy modules (eval_harness, unique_logic, factory, paper adapter) are imported
+from their own packages — this barrel only re-exports the fail-closed control
+plane. Mass / READY / GO remain closed.
+"""
 
 from research.readiness import (
     MassResearchDisabledError,
@@ -25,67 +30,8 @@ from research.scheduler import (
     select_schedule_hypothesis_classes,
 )
 from research.evaluation import EvaluationHarness, EvaluationProtocol, EvaluationReport
-from research.single_shot_job import (
-    COMPLETE_21_DATASETS,
-    MASS_RESEARCH_STATUS,
-    PHASE7_STATUS,
-    READY_DECLARED,
-    SingleShotExecution,
-    SingleShotJobSpec,
-    assert_mass_and_phase7_off,
-    build_single_shot_job_spec,
-    execute_single_shot_job,
-)
-from research.eval_harness import (
-    APPROVED_SIGNAL_LEGS,
-    MultidaySignalEval,
-    assert_harness_closed,
-    run_full_pipeline,
-    run_multiday_signal_eval,
-    run_nextday_return_eval,
-)
-from research.hypothesis_classes import (
-    ALL_CLASS_IDS,
-    CLASS_SIMPLE_DAILY_SIGN,
-    DEFAULT_GENERATION_CLASS_IDS,
-    HYPOTHESIS_CLASS_REGISTRY,
-    HypothesisClassSpec,
-    assert_simple_daily_sign_not_default_enabled,
-    default_generation_class_ids,
-    get_hypothesis_class,
-    hypothesis_class_registry_document,
-    select_generation_classes,
-)
-from research.idea_generator import (
-    GeneratedIdeaBatch,
-    default_generation_policy,
-    generate_idea_payloads,
-)
-from research.mass_strategy_factory import (
-    FROZEN_DEFAULT_PATH,
-    MASS_FACTORY_VERSION,
-    MASS_FACTORY_WAVE,
-    MassFactoryConfig,
-    generate_strategy_batch,
-    mass_factory_document,
-    run_mass_factory,
-)
-from research.paper_candidate_adapter import (
-    PAPER_CANDIDATE_ADAPTER_VERSION,
-    PAPER_CANDIDATE_SPEC_VERSION,
-    PaperCandidateReceptacle,
-    adapt_class_hyp_candidate,
-    adapt_from_class_hyp_bundle,
-    assert_unarmed,
-    emit_example_paper_specs,
-)
 
 __all__ = [
-    "ALL_CLASS_IDS",
-    "APPROVED_SIGNAL_LEGS",
-    "CLASS_SIMPLE_DAILY_SIGN",
-    "COMPLETE_21_DATASETS",
-    "DEFAULT_GENERATION_CLASS_IDS",
     "EvaluationHarness",
     "EvaluationProtocol",
     "EvaluationReport",
@@ -94,55 +40,17 @@ __all__ = [
     "ExperimentScheduler",
     "FailureMode",
     "FeatureEvidence",
-    "GeneratedIdeaBatch",
-    "HYPOTHESIS_CLASS_REGISTRY",
-    "FROZEN_DEFAULT_PATH",
-    "MASS_FACTORY_VERSION",
-    "MASS_FACTORY_WAVE",
-    "MassFactoryConfig",
     "HypothesisClassScheduleSelection",
-    "HypothesisClassSpec",
-    "MASS_RESEARCH_STATUS",
     "MassResearchDisabledError",
-    "MultidaySignalEval",
     "OperatorOverrideCapability",
     "OperatorOverrideService",
-    "PAPER_CANDIDATE_ADAPTER_VERSION",
-    "PAPER_CANDIDATE_SPEC_VERSION",
-    "PHASE7_STATUS",
-    "PaperCandidateReceptacle",
-    "READY_DECLARED",
     "RegimeObservation",
     "RejectionReason",
     "ResearchIdea",
     "ResearchReadinessService",
     "ScheduledExperiment",
-    "SingleShotExecution",
-    "SingleShotJobSpec",
     "StrategyEvidence",
     "VerifiedResearchReadiness",
-    "adapt_class_hyp_candidate",
-    "adapt_from_class_hyp_bundle",
-    "assert_harness_closed",
-    "assert_mass_and_phase7_off",
-    "assert_simple_daily_sign_not_default_enabled",
-    "assert_unarmed",
-    "build_single_shot_job_spec",
-    "default_generation_class_ids",
-    "default_generation_policy",
-    "emit_example_paper_specs",
-    "execute_single_shot_job",
-    "generate_idea_payloads",
-    "generate_strategy_batch",
-    "get_hypothesis_class",
-    "hypothesis_class_registry_document",
-    "mass_factory_document",
     "require_mass_research_start",
-    "run_full_pipeline",
-    "run_mass_factory",
-    "run_multiday_signal_eval",
-    "run_nextday_return_eval",
-    "select_generation_classes",
     "select_schedule_hypothesis_classes",
 ]
-

@@ -383,6 +383,127 @@ _SPECS: tuple[dict[str, Any], ...] = (
         "kind": "event",
         "entry_shift": 2,
     },
+    {
+        "logic_id": "event_skip_monday",
+        "family_id": "event_calendar_gate",
+        "thesis": "Skip Monday PEAD entries (weekend information dump / gap).",
+        "gates": ("skip_monday",),
+        "side": "orig",
+        "kind": "event",
+    },
+    {
+        "logic_id": "event_tue_thu_only",
+        "family_id": "event_calendar_gate",
+        "thesis": "PEAD only Tuesday–Thursday when the calendar is less seasonal.",
+        "gates": ("tue_thu",),
+        "side": "orig",
+        "kind": "event",
+    },
+    {
+        "logic_id": "event_friday_skip",
+        "family_id": "event_calendar_gate",
+        "thesis": "Skip Friday PEAD (weekend hold / reduced Monday liquidity).",
+        "gates": ("friday_skip",),
+        "side": "orig",
+        "kind": "event",
+    },
+    {
+        "logic_id": "fy_end_event_fade",
+        "family_id": "event_calendar_gate",
+        "thesis": "Fade surprise in late March FY-end positioning (not a skip).",
+        "gates": ("fy_end",),
+        "side": "flip",
+        "kind": "event",
+    },
+    {
+        "logic_id": "fy_start_event_follow",
+        "family_id": "event_calendar_gate",
+        "thesis": "Follow PEAD in April FY-start re-risk, opposite of FY-end fade.",
+        "gates": ("fy_start",),
+        "side": "orig",
+        "kind": "event",
+    },
+    {
+        "logic_id": "event_midmonth_only",
+        "family_id": "event_calendar_gate",
+        "thesis": "PEAD only on calendar days 10–20 (away from month-turn rebalance).",
+        "gates": ("midmonth",),
+        "side": "orig",
+        "kind": "event",
+    },
+    {
+        "logic_id": "surprise_xs_afterclose",
+        "family_id": "surprise_xs_rank",
+        "thesis": "Relative-surprise CS rank only after-close disclosures.",
+        "gates": ("afterclose",),
+        "side": "orig",
+        "kind": "surprise_xs",
+    },
+    {
+        "logic_id": "event_easing_uncrowded",
+        "family_id": "event_margin_crowd_combo",
+        "thesis": "PEAD only when overnight eased AND the name is uncrowded in margin.",
+        "gates": ("overnight_easing", "uncrowded_margin"),
+        "side": "orig",
+        "kind": "event",
+    },
+    {
+        "logic_id": "cs_skip_monday",
+        "family_id": "event_calendar_gate",
+        "thesis": "CS mom occupancy skips Mondays (weekend gap).",
+        "cs_gate": "skip_monday",
+        "kind": "cs",
+    },
+    {
+        "logic_id": "cs_tue_thu_follow",
+        "family_id": "event_calendar_gate",
+        "thesis": "CS mom only Tuesday–Thursday.",
+        "cs_gate": "tue_thu",
+        "kind": "cs",
+    },
+    {
+        "logic_id": "overnight_down_cs_follow",
+        "family_id": "overnight_level_cs",
+        "thesis": "CS mom only when overnight fell versus the prior print.",
+        "cs_gate": "overnight_down",
+        "kind": "cs",
+    },
+    {
+        "logic_id": "overnight_up_cs_fade",
+        "family_id": "overnight_level_cs",
+        "thesis": "Fade CS mom when overnight rose versus the prior print.",
+        "cs_gate": "overnight_up_invert",
+        "kind": "cs",
+    },
+    {
+        "logic_id": "cs_midmonth_follow",
+        "family_id": "event_calendar_gate",
+        "thesis": "CS mom only on calendar days 10–20.",
+        "cs_gate": "midmonth",
+        "kind": "cs",
+    },
+    {
+        "logic_id": "cs_friday_fade",
+        "family_id": "event_calendar_gate",
+        "thesis": "Fade CS momentum on Fridays (weekend unwind).",
+        "cs_gate": "friday_invert",
+        "kind": "cs",
+    },
+    {
+        "logic_id": "cs_not_month_end",
+        "family_id": "month_end_cs",
+        "thesis": "CS mom occupancy skips the last three calendar days of the month.",
+        "cs_gate": "not_month_end",
+        "kind": "cs",
+    },
+    {
+        "logic_id": "surprise_xs_tue_thu",
+        "family_id": "surprise_xs_rank",
+        "thesis": "Relative-surprise CS rank Tuesday–Thursday only.",
+        "gates": ("tue_thu",),
+        "side": "orig",
+        "kind": "surprise_xs",
+    },
 )
 
 NEW_COMBO_LOGIC: tuple[dict[str, Any], ...] = tuple(
@@ -628,6 +749,19 @@ def _eval_event_combo(
                     ok = False
                 elif float(overnight[d]) <= float(overnight[prevs[-1]]):
                     ok = False
+            elif g == "skip_monday":
+                if _weekday(str(ev["entry_date"])) == 0:
+                    ok = False
+            elif g == "tue_thu":
+                if _weekday(str(ev["entry_date"])) not in {1, 2, 3}:
+                    ok = False
+            elif g == "friday_skip":
+                if _weekday(str(ev["entry_date"])) == 4:
+                    ok = False
+            elif g == "midmonth":
+                dd = str(ev["entry_date"])[8:10]
+                if dd < "10" or dd > "20":
+                    ok = False
         accept[key] = ok
         sign_mult[key] = -1.0 if side == "flip" else 1.0
     shift = int(params.get("entry_shift") or spec.get("entry_shift") or 0)
@@ -769,6 +903,30 @@ def _eval_cs_combo(
                 and sp is not None
                 and (float(on) + float(sp)) > (float(prev_on) + float(prev_sp))
             )
+        elif gate == "skip_monday":
+            keep = _weekday(d) != 0
+        elif gate == "tue_thu":
+            keep = _weekday(d) in {1, 2, 3}
+        elif gate == "overnight_down":
+            keep = (
+                prev_on is not None
+                and on is not None
+                and float(on) < float(prev_on)
+            )
+        elif gate == "overnight_up_invert":
+            keep = (
+                prev_on is not None
+                and on is not None
+                and float(on) > float(prev_on)
+            )
+            loc_invert = True
+        elif gate == "midmonth":
+            keep = d[8:10] >= "10" and d[8:10] <= "20"
+        elif gate == "friday_invert":
+            keep = _weekday(d) == 4
+            loc_invert = True
+        elif gate == "not_month_end":
+            keep = d[8:10] < "28"
         elif gate in {
             "opt225_skew_high",
             "nky_term_high",
@@ -838,6 +996,16 @@ def _add_days(iso: str, n: int) -> str:
         return (date(y, m, d) + timedelta(days=n)).isoformat()
     except (TypeError, ValueError):
         return iso
+
+
+def _weekday(iso: str) -> int:
+    """Monday=0 … Sunday=6. Invalid date → -1 (gate fail-closed)."""
+    from datetime import date
+
+    try:
+        return date(int(iso[:4]), int(iso[5:7]), int(iso[8:10])).weekday()
+    except (TypeError, ValueError):
+        return -1
 
 
 _VOL_CACHE: dict[str, dict[str, float]] | None = None

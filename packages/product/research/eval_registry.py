@@ -372,10 +372,13 @@ def summarize_daily_path_cells(
     from research.cf_mass_eval_job import CF_BAR_NATIVE_LOGIC_IDS
     from research.unique_logic.constants import (
         ALWAYS_ON_OCCUPANCY_WARN,
+        CANDIDATE_POLICY,
         CF_EVENT_DAILY_PATH_IDS,
         CF_NEW_CS_THESIS_IDS,
         CF_NEW_EVENT_THESIS_IDS,
         CS_LOGIC_IDS,
+        NEAR_EMPTY_OCCUPANCY,
+        TERM_STRUCTURE_REQUIRED,
     )
 
     def _fam(lid: str) -> str:
@@ -434,8 +437,12 @@ def summarize_daily_path_cells(
             flags.append("path_broken")
         if m_occ is not None and m_occ >= ALWAYS_ON_OCCUPANCY_WARN:
             flags.append("always_on")
-        if m_occ is not None and m_occ <= 0.05:
+        if m_occ is not None and m_occ <= float(NEAR_EMPTY_OCCUPANCY):
             flags.append("near_empty")
+        if lid in TERM_STRUCTURE_REQUIRED and (
+            m_occ is None or m_occ <= float(NEAR_EMPTY_OCCUPANCY)
+        ):
+            flags.append("data_requirement_unmet")
         if m_net is not None and abs(m_net) < 1e-4:
             flags.append("near_zero_net")
         if n_pos >= 2 and n_neg >= 2:
@@ -459,6 +466,8 @@ def summarize_daily_path_cells(
         t_stats = [c.get("t_stat") for c in cs]
         sharpes = [c.get("sharpe_daily") for c in cs]
         dds = [c.get("daily_path_DD") for c in cs]
+        exclude = set(CANDIDATE_POLICY["exclude"])  # type: ignore[arg-type]
+        candidate = not bool(exclude.intersection(flags))
         logics.append(
             {
                 "logic_id": lid,
@@ -475,6 +484,9 @@ def summarize_daily_path_cells(
                 "path_fallbacks": fallbacks,
                 "flags": flags,
                 "tag": tag,
+                "explore_flagged": tag == "strong",
+                "candidate": candidate,
+                "main_pool": candidate,
                 "explore_only": True,
                 "promote_as_main": False,
                 "go": False,
@@ -496,22 +508,28 @@ def summarize_daily_path_cells(
         "n_path_broken": int(tags.get("path_broken") or 0),
         "n_always_on": sum(1 for r in logics if "always_on" in r["flags"]),
         "n_complete_cells": sum(1 for c in cells if is_daily_path_complete_cell(c)),
-        "n_candidate_logics": sum(
-            1
-            for r in logics
-            if r["tag"] not in {"path_broken"} and "always_on" not in r["flags"]
+        "n_candidate_logics": sum(1 for r in logics if r.get("candidate")),
+        "n_near_empty": sum(1 for r in logics if "near_empty" in r["flags"]),
+        "n_data_requirement_unmet": sum(
+            1 for r in logics if "data_requirement_unmet" in r["flags"]
         ),
         "always_on_excluded_from_main": True,
+        "near_empty_excluded_from_candidate": True,
         "path_broken_excluded_from_complete": True,
+        "strong_t_floor": None,
+        "strong_sharpe_floor": None,
+        "simple_strategies_kept_for_combinations": True,
+        "candidate_policy": dict(CANDIDATE_POLICY),
         "always_on_warn": ALWAYS_ON_OCCUPANCY_WARN,
         "n_survivors_are_not_a_pass": True,
         "promote_as_main": False,
         "go": False,
         "logics": logics,
         "notes": (
-            "path_broken is excluded from complete and from strong. "
-            "always_on is excluded from main candidate compare. "
-            "Scores live here / D1, not Git."
+            "candidate = not path_broken, not always_on, not near_empty, "
+            "not data_requirement_unmet. Simple gated theses stay for "
+            "combination/funds even with modest t/Sharpe. strong is an "
+            "interest flag with no t/Sharpe floor and is never a promote/GO."
         ),
     }
 

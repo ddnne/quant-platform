@@ -1765,8 +1765,66 @@ export function barNativeHeldBook(
       const inner = barNativeHeldBook({ ...logic, logic_id: "flow_margin_pressure", family_id: "flow_demand" }, panel);
       return inner ? { held: inner.held, path: "mf_flow_price" } : { held: {}, path: "mf_flow_price", fallback: "empty" };
     }
-    const inner = barNativeHeldBook({ ...logic, logic_id: "fund_value_mom_agree", family_id: "fundamentals_price" }, panel);
-    return inner ? { held: inner.held, path: "mf_value_mom_rate" } : { held: {}, path: "mf_value_mom_rate", fallback: "empty" };
+    // Unique rate-gated value×mom (not an alias of fund_value_mom_agree).
+    const events = panel.fund_regime?.events_by_code || null;
+    const rates = repoRatesFromPanel(panel);
+    if (!events || !Object.keys(events).length) {
+      return {
+        held: {},
+        path: "mf_value_mom_rate",
+        fallback: "path_broken_missing_sidecar",
+      };
+    }
+    const highThr = numParam(params, "high_threshold", 0.05);
+    const lowThr = numParam(params, "low_threshold", 0.0);
+    const rateDates = Object.keys(rates).sort();
+    const allScores: number[] = [];
+    const valueBy: Record<string, Record<string, number | null>> = {};
+    for (const [code, pairs] of Object.entries(bars)) {
+      if (code.startsWith("__") || !pairs) continue;
+      valueBy[code] = {};
+      for (const [d, close] of pairs) {
+        const fin = finsAsof(events[code] || [], d);
+        const score = fin ? fundamentalValueScore(close, fin.eps, fin.bps) : null;
+        valueBy[code][d] = score;
+        if (score !== null) allScores.push(score);
+      }
+    }
+    const median = allScores.length
+      ? [...allScores].sort((a, b) => a - b)[Math.floor(allScores.length / 2)]
+      : null;
+    const entriesByCode: Record<string, Array<number | null>> = {};
+    for (const [code, pairs] of Object.entries(bars)) {
+      if (code.startsWith("__") || !pairs) continue;
+      const moms = momentumSeries(pairs, momN);
+      const momBy: Record<string, number | null> = {};
+      for (const [d, m] of moms) momBy[d] = m;
+      entriesByCode[code] = pairs.map(([d]) => {
+        const base = fundEntrySign(
+          valueBy[code]?.[d] ?? null,
+          momBy[d] ?? null,
+          median,
+          "value_momentum_agree",
+        );
+        let rate: number | null = null;
+        if (rates[d] !== undefined) rate = rates[d];
+        else {
+          const earlier = rateDates.filter((x) => x <= d);
+          if (earlier.length) rate = rates[earlier[earlier.length - 1]];
+        }
+        const regime = repoLevelRegime(rate, highThr, lowThr);
+        if (base === null) return null;
+        if (base === 0) return 0;
+        if (regime === null) return null;
+        if (base > 0 && (regime === "low" || regime === "mid")) return base;
+        if (base < 0 && (regime === "high" || regime === "mid")) return base;
+        return null;
+      });
+    }
+    return {
+      held: stickyToHeld(bars, entriesByCode, holdDays, "fixed_horizon"),
+      path: "mf_value_mom_rate",
+    };
   }
 
   if (lid === "vol_risk_adjusted_mom" || lid === "vol_breakout_expand" || fam === "vol_risk_adjusted") {

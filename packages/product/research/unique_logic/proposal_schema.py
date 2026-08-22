@@ -11,6 +11,14 @@ from typing import Any, Mapping
 
 PROPOSAL_SCHEMA_VERSION: str = "research-hyp-proposal/v1"
 
+# Combination/funds may use simple gated theses. Do not cull the pool with
+# a t/Sharpe floor. Exclude only path_broken, always_on, and near_empty.
+CANDIDATE_KEEP_SIMPLE: str = (
+    "Simple occupancy-gated theses stay in the candidate pool for later "
+    "combination/funds even when single-name t/Sharpe is modest. "
+    "path_broken, always_on, and near_empty are excluded."
+)
+
 PROPOSAL_REQUIRED_KEYS: tuple[str, ...] = (
     "logic_id",
     "thesis",

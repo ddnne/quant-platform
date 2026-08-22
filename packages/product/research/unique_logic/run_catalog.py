@@ -102,6 +102,7 @@ def _eval_shard(
         one_way_cost=one_way_cost,
         period_start=loaded.get("period_start"),
         period_end=loaded.get("period_end"),
+        adv_by_code=loaded.get("adv_by_code") or extras.get("adv_by_code"),
     )
 
 
@@ -223,6 +224,11 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Optional eval-registry job id for --backend cf.",
     )
+    p.add_argument(
+        "--panels-prefix",
+        default=None,
+        help="Reuse staged R2 panels prefix (skip serial stage).",
+    )
     p.add_argument("--max-codes", type=int, default=15)
     p.add_argument("--max-days", type=int, default=200)
     p.add_argument("--one-way-cost", type=float, default=0.001)
@@ -262,6 +268,7 @@ def main(argv: list[str] | None = None) -> int:
             max_codes=int(args.max_codes),
             max_days=int(args.max_days),
             one_way_cost=float(args.one_way_cost),
+            panels_prefix=args.panels_prefix,
         )
         args.out.parent.mkdir(parents=True, exist_ok=True)
         dump_json(args.out, pack)

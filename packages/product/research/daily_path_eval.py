@@ -12,13 +12,27 @@ import json
 import math
 import subprocess
 from pathlib import Path
+from contextvars import ContextVar
 from typing import Any, Mapping, Sequence
+
+_ADV_CTX: ContextVar[Mapping[str, float] | None] = ContextVar(
+    "held_book_adv_by_code", default=None
+)
 
 from research.eval_windows import FROZEN_PIN_SNAPSHOT, HONEST_3Y_WINDOWS
 from research.stats_metrics import (
     equity_path_drawdown,
     evaluate_daily_path_dd_gate,
 )
+
+def set_held_book_adv(adv_by_code: Mapping[str, float] | None):
+    """Bind ADV for unique_logic callers that do not thread the arg."""
+    return _ADV_CTX.set(adv_by_code)
+
+
+def reset_held_book_adv(token) -> None:
+    _ADV_CTX.reset(token)
+
 
 EVAL_PROTOCOL: str = "daily_path_mtm_after_cost/v1"
 R2_EVAL_PREFIX: str = "research/eval"
@@ -146,10 +160,33 @@ def load_shard_bars(
         period_end=p_end,
     )
     bars = bars_rich_to_close_panel(rich)
+    adv_by_code: dict[str, float] = {}
+    for code, pairs in (rich or {}).items():
+        vals: list[float] = []
+        for _d, rec in pairs:
+            if not isinstance(rec, dict):
+                continue
+            va = rec.get("Va")
+            try:
+                if va is not None:
+                    vals.append(float(va))
+                    continue
+            except (TypeError, ValueError):
+                pass
+            try:
+                vo = rec.get("Vo")
+                px = rec.get("close")
+                if vo is not None and px is not None:
+                    vals.append(float(vo) * float(px))
+            except (TypeError, ValueError):
+                continue
+        if vals:
+            adv_by_code[str(code)] = sum(vals) / len(vals)
     return {
         "period_id": pid,
         "status": "ok" if bars else "empty_bars",
         "bars": bars,
+        "adv_by_code": adv_by_code,
         "bars_path": str(bars_path),
         "period_start": p_start,
         "period_end": p_end,
@@ -259,6 +296,14 @@ def held_book_daily_mtm(
     """
     from features.class_signals import amortized_one_way_cost
 
+    if adv_by_code is None and extra:
+        raw_adv = extra.get("adv_by_code")
+        if isinstance(raw_adv, Mapping):
+            adv_by_code = raw_adv
+    if adv_by_code is None:
+        ctx_adv = _ADV_CTX.get()
+        if isinstance(ctx_adv, Mapping):
+            adv_by_code = ctx_adv
     h = int(hold_days)
     am_cost = float(amortized_one_way_cost(float(one_way_cost), h))
     daily_cost = float(am_cost) / float(h) if h > 0 else float(am_cost)

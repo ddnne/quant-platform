@@ -25,10 +25,32 @@ def evaluate_logic_daily_mtm(
     one_way_cost: float,
     period_start: str | None = None,
     period_end: str | None = None,
+    adv_by_code: Mapping[str, float] | None = None,
 ) -> dict[str, Any]:
     """Call the candidate-grade daily MTM evaluator for ``spec['logic_id']``."""
     lid = str(spec.get("logic_id") or "")
+    spec_l = dict(spec)
+    if adv_by_code:
+        extra = dict(spec_l.get("extra") or {})
+        extra["adv_by_code"] = dict(adv_by_code)
+        spec_l["extra"] = extra
+    spec = spec_l
     kw = {"spec": spec, "one_way_cost": one_way_cost}
+    adv_token = None
+    if adv_by_code:
+        from research.daily_path_eval import set_held_book_adv
+
+        adv_token = set_held_book_adv(adv_by_code)
+    try:
+        return _dispatch_body(lid, spec, kw, bars, overnight, curve, events, margin_by_code, topix_by_date, period_start, period_end)
+    finally:
+        if adv_token is not None:
+            from research.daily_path_eval import reset_held_book_adv
+
+            reset_held_book_adv(adv_token)
+
+
+def _dispatch_body(lid, spec, kw, bars, overnight, curve, events, margin_by_code, topix_by_date, period_start, period_end):
 
     if lid == "event_funding_stress_skip":
         return event.evaluate_event_funding_stress_skip_daily_mtm(

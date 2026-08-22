@@ -75,6 +75,28 @@ def test_repo_history_plane_status_discloses_sqlite_not_d1() -> None:
     assert note["sqlite_rows"] >= 0
 
 
+def test_mf_value_mom_rate_is_unique_not_alias() -> None:
+    from pathlib import Path
+
+    from research.unique_logic.constants import (
+        MF_VALUE_MOM_RATE_DELEGATES,
+        MF_VALUE_MOM_RATE_PATH,
+    )
+
+    assert MF_VALUE_MOM_RATE_DELEGATES is False
+    assert MF_VALUE_MOM_RATE_PATH == "unique_rate_gated_value_mom"
+    src = (
+        Path(__file__).resolve().parents[1]
+        / "platform"
+        / "workers"
+        / "research-mass-eval"
+        / "src"
+        / "eval.ts"
+    ).read_text(encoding="utf-8")
+    assert "Unique rate-gated value×mom" in src
+    assert "not an alias of fund_value_mom_agree" in src
+
+
 def test_mass_eval_screen_is_not_candidate_grade() -> None:
     from research.cf_mass_eval_job import try_cf_mass_eval_status
 
@@ -115,8 +137,10 @@ def test_yaml_dispatch_worker_event_ids_align() -> None:
     assert set(CF_EVENT_DAILY_PATH_IDS) == set(CONST_EVENT)
     assert set(CF_EVENT_DAILY_PATH_IDS) <= yaml_ids
     src = inspect.getsource(evaluate_logic_daily_mtm)
+    from research.unique_logic import dispatch as dispatch_mod
     from research.unique_logic.event_combos import COMBO_LOGIC_IDS
 
+    src += inspect.getsource(dispatch_mod._dispatch_body)
     missing = [
         lid
         for lid in sorted(yaml_ids)
@@ -124,3 +148,29 @@ def test_yaml_dispatch_worker_event_ids_align() -> None:
     ]
     assert missing == []
     assert "COMBO_LOGIC_IDS" in src
+    from research.unique_logic.constants import CF_NEW_THESIS_IDS
+
+    assert "event_skip_monday" in yaml_ids
+    assert "cs_not_month_end" in yaml_ids
+    assert "event_skip_monday" in CF_NEW_THESIS_IDS
+    assert len(CF_NEW_THESIS_IDS) >= 64
+
+
+def test_worker_new_thesis_ids_match_python() -> None:
+    from pathlib import Path
+
+    from research.unique_logic.constants import (
+        CF_NEW_CS_THESIS_IDS,
+        CF_NEW_EVENT_THESIS_IDS,
+    )
+
+    src = (
+        Path(__file__).resolve().parents[1]
+        / "platform"
+        / "workers"
+        / "research-mass-eval"
+        / "src"
+        / "daily_path.ts"
+    ).read_text(encoding="utf-8")
+    for lid in sorted(CF_NEW_EVENT_THESIS_IDS | CF_NEW_CS_THESIS_IDS):
+        assert f'"{lid}"' in src, lid

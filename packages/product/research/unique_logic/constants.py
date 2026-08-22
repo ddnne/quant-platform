@@ -101,6 +101,15 @@ CF_NEW_EVENT_THESIS_IDS: frozenset[str] = frozenset(
         "surprise_xs_month_start",
         "surprise_xs_fy_end",
         "event_afterclose_delay2",
+        "event_skip_monday",
+        "event_tue_thu_only",
+        "event_friday_skip",
+        "fy_end_event_fade",
+        "fy_start_event_follow",
+        "event_midmonth_only",
+        "surprise_xs_afterclose",
+        "event_easing_uncrowded",
+        "surprise_xs_tue_thu",
     }
 )
 CF_NEW_CS_THESIS_IDS: frozenset[str] = frozenset(
@@ -126,6 +135,13 @@ CF_NEW_CS_THESIS_IDS: frozenset[str] = frozenset(
         "opt225_skew_and_term_cs",
         "basevol_up_day_fade",
         "iv_below_basevol_cs",
+        "cs_skip_monday",
+        "cs_tue_thu_follow",
+        "overnight_down_cs_follow",
+        "overnight_up_cs_fade",
+        "cs_midmonth_follow",
+        "cs_friday_fade",
+        "cs_not_month_end",
     }
 )
 CF_NEW_THESIS_IDS: frozenset[str] = CF_NEW_EVENT_THESIS_IDS | CF_NEW_CS_THESIS_IDS
@@ -147,3 +163,47 @@ CF_EVENT_FIDELITY: dict[str, str] = {
     "intended_lite_entry": "disc_time hour>=15 vs full event_post_entry_bar_index",
 }
 ALWAYS_ON_OCCUPANCY_WARN: float = 0.85
+NEAR_EMPTY_OCCUPANCY: float = 0.05
+# Occupancy snapshot from eval-cf-dp-pathfix-20260822c (catalog park, not
+# a score table). Live candidate filter is occupancy, not this set.
+ALWAYS_ON_22C_IDS: frozenset[str] = frozenset(
+    {
+        "xs_rank_ls_sticky",
+        "mdh_mean_reversion",
+        "xs_rank_ls_daily",
+        "vol_risk_adjusted_mom",
+        "mdh_sticky_momentum",
+        "flow_margin_short_soft",
+        "flow_margin_pressure",
+        "macro_repo_rate_level",
+        "macro_repo_rate_change",
+        "mf_flow_price",
+        "fund_value_mom_agree",
+        "fund_value_only",
+        "mf_value_mom_rate",
+        "flow_margin_short_hard",
+    }
+)
+# CF daily_path implements a unique rate-gated book (not fund_value_mom_agree).
+MF_VALUE_MOM_RATE_DELEGATES: bool = False
+MF_VALUE_MOM_RATE_PATH: str = "unique_rate_gated_value_mom"
+# Term-structure theses need distinct short/long vol maps. Occupancy 0 = unmet.
+TERM_STRUCTURE_REQUIRED: frozenset[str] = frozenset(
+    {
+        "opt225_atm_iv_term_ratio",
+        "opt225_basevol_term_ratio",
+    }
+)
+# Candidate pool: path ok, not always-on, not empty. Simple gated theses stay
+# even with modest t/Sharpe — combination/funds may still use them.
+CANDIDATE_POLICY: dict[str, object] = {
+    "exclude": ("path_broken", "always_on", "near_empty", "data_requirement_unmet"),
+    "always_on_occupancy": ALWAYS_ON_OCCUPANCY_WARN,
+    "near_empty_occupancy": NEAR_EMPTY_OCCUPANCY,
+    "strong_is_interest_flag": True,
+    "strong_t_floor": None,
+    "strong_sharpe_floor": None,
+    "simple_strategies_kept_for_combinations": True,
+    "promote_as_main": False,
+    "go": False,
+}

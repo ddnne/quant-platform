@@ -141,6 +141,7 @@ FAMILY_OVERNIGHT_LEVEL_CS: str = "overnight_level_cs"
 FAMILY_MONTH_END_CS: str = "month_end_cs"
 FAMILY_XS_LOW_VOL_MOM: str = "xs_low_vol_mom"
 FAMILY_REPO_3M_LEVEL_CS: str = "repo_3m_level_cs"
+FAMILY_EVENT_CALENDAR_GATE: str = "event_calendar_gate"
 FAMILY_RESEARCH_UNIQUE_LOGIC: str = "research_unique_logic"
 RESEARCH_UNIQUE_FAMILY_IDS: frozenset[str] = frozenset(
     {
@@ -160,6 +161,7 @@ RESEARCH_UNIQUE_FAMILY_IDS: frozenset[str] = frozenset(
         FAMILY_MONTH_END_CS,
         FAMILY_XS_LOW_VOL_MOM,
         FAMILY_REPO_3M_LEVEL_CS,
+        FAMILY_EVENT_CALENDAR_GATE,
     }
 )
 RESEARCH_UNIQUE_LOGIC_IDS: frozenset[str] = frozenset(
@@ -234,8 +236,8 @@ NEAR_LOGIC_GROUPS: tuple[dict[str, Any], ...] = (
             "mf_value_mom_rate",  # multi-factor cousin; adds rate leg
         ),
         "note": (
-            "Keep slow variant parallel; mf_value_mom_rate adds rate factor "
-            "(not a near-dup of fund_value_mom_agree). "
+            "Keep slow variant parallel; mf_value_mom_rate is a unique "
+            "rate-gated book (not a fund_value_mom_agree alias). "
             "W95: fund_value_mom_agree_slow demoted from window-headline / "
             "promising set (w2017_2019 giant-t = n=2 low-variance artifact)."
         ),
@@ -572,6 +574,9 @@ class LogicTemplate:
     display_name: str = ""
     generation_enabled: bool = True
     notes: str = ""
+    # Occupancy filter is the live candidate rule. Catalog hint only.
+    main_pool: bool = True
+    data_requirement: str = ""
 
     def logic_fingerprint(self) -> str:
         """Stable fingerprint of the economic logic (no numeric knobs)."""
@@ -604,6 +609,8 @@ class LogicTemplate:
             "logic_fingerprint": self.logic_fingerprint(),
             "generation_enabled": self.generation_enabled,
             "notes": self.notes,
+            "main_pool": self.main_pool,
+            "data_requirement": self.data_requirement,
         }
 
 
@@ -1015,8 +1022,10 @@ def _build_logic_templates() -> dict[str, LogicTemplate]:
             },
             structural_keys=("mode",),
             notes=(
-                "Not a near-dup of fund_value_mom_agree: adds rate leg as third factor. "
-                "Near-group cousin under fund_value_mom for comparison only."
+                "Unique rate-gated value×mom (not an alias of fund_value_mom_agree). "
+                "CF daily_path path=mf_value_mom_rate implements the rate leg. "
+                "Near-group cousin under fund_value_mom for comparison only. "
+                "Occupancy>=0.85 still parks it from the candidate/main pool."
             ),
         ),
         LogicTemplate(
@@ -1231,7 +1240,13 @@ def _build_logic_templates() -> dict[str, LogicTemplate]:
                 "compress_ratio": 0.80,
             },
             structural_keys=("mode", "series_kind", "vol_short_n", "vol_long_n"),
-            notes="BaseVol-only term ratio. Parallel to ATM IV term ratio.",
+            notes=(
+                "BaseVol-only term ratio. Parallel to ATM IV term ratio. "
+                "Requires distinct short/long vol maps; occupancy 0 = "
+                "data_requirement_unmet (excluded from candidate)."
+            ),
+            main_pool=False,
+            data_requirement="distinct short/long BaseVol maps",
         ),
         LogicTemplate(
             logic_id="opt225_atm_iv_abs_level",
@@ -1319,7 +1334,13 @@ def _build_logic_templates() -> dict[str, LogicTemplate]:
                 "compare_only": True,
             },
             structural_keys=("mode", "series_kind", "vol_short_n", "vol_long_n"),
-            notes="COMPARE-ONLY ATM term ratio. Prefer BaseVol term ratio.",
+            notes=(
+                "COMPARE-ONLY ATM term ratio. Prefer BaseVol term ratio. "
+                "Requires distinct short/long ATM IV maps; occupancy 0 = "
+                "data_requirement_unmet (excluded from candidate)."
+            ),
+            main_pool=False,
+            data_requirement="distinct short/long ATM IV maps",
         ),
         LogicTemplate(
             logic_id="opt225_iv_base_spread_abs",
@@ -2631,6 +2652,7 @@ def family_definitions_document() -> dict[str, Any]:
                 FAMILY_CURVE_STEEPEN_IMPULSE_CS,
                 FAMILY_XS_MARGIN_DELTA,
                 FAMILY_IDIO_MOM_MACRO,
+                FAMILY_EVENT_CALENDAR_GATE,
             ],
             "excluded": [CLASS_SIMPLE_DAILY_SIGN],
         },
