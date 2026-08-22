@@ -273,6 +273,8 @@ def review_proposal_row(proposal: Mapping[str, Any]) -> dict[str, Any]:
         extra_title = (
             ("tight funding", "tight_funding"),
             ("easy funding", "easy_funding"),
+            ("sales contraction", "sales_down"),
+            ("sales contracted", "sales_down"),
         )
         for phrase, gate in extra_title:
             if phrase in polar_blob and gate not in kept_set:

@@ -387,6 +387,8 @@ function titleOccupancyBad(title: string, gates: string[]): boolean {
   const extraTitle: Array<[string, string]> = [
     ["tight funding", "tight_funding"],
     ["easy funding", "easy_funding"],
+    ["sales contraction", "sales_down"],
+    ["sales contracted", "sales_down"],
   ];
   if (extraTitle.some(([phrase, gate]) => polar.includes(phrase) && !gset.has(gate))) {
     return true;

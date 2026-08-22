@@ -198,6 +198,10 @@ NEAR_EMPTY_PARK_IDS: frozenset[str] = frozenset(
         "event_rich_iv_margin_up_eqar_falling_fade",
         "event_nkyvol_steep_uncrowded",
         "event_nkyvol_steep_pre_mom",
+        "event_roe_low_tight_on",
+        "surprise_xs_pre_mom_roe_low",
+        "surprise_xs_repo3m_cheap_iv",
+        "surprise_xs_roe_low_uncrowded",
     }
 )
 # Recorded mean occupancy ≥ ALWAYS_ON_OCCUPANCY_WARN. Not countable, not
@@ -251,6 +255,11 @@ SPARSE_GATE_COMBOS: tuple[tuple[frozenset[str], str], ...] = (
     (frozenset({"cheap_iv", "margin_up", "repo_3m_down"}), "cheap_iv_margin_up_repo3m"),
     (frozenset({"margin_down", "eq_ar_rising", "steep_curve"}), "margin_down_eqar_rising_steep"),
     (frozenset({"rich_iv", "margin_up", "eq_ar_falling"}), "rich_iv_margin_up_eqar_falling"),
+    # plus60 both-track occupancy ≤ 0.05 (parked). Do not re-emit.
+    (frozenset({"roe_low", "overnight_tightening"}), "roe_low_plus_tight_on"),
+    (frozenset({"pre_mom", "roe_low"}), "pre_mom_plus_roe_low"),
+    (frozenset({"repo_3m_down", "cheap_iv"}), "repo3m_plus_cheap_iv"),
+    (frozenset({"roe_low", "uncrowded_margin"}), "roe_low_plus_uncrowded"),
 )
 NAME_LEVEL_FUND_CS_GATES: frozenset[str] = frozenset(
     {

@@ -12,8 +12,8 @@ from research.unique_logic.constants import (
 DEFAULT_CANDIDATE_BASKET: tuple[str, ...] = (
     "event_eqar_high_liq_high",
     "event_ta_up_liq_high",
-    "event_eqar_rising_ta_up_liq",
-    "event_uncrowded_liq_eqar_rising",
+    "event_eps_up_uncrowded",
+    "surprise_xs_uncrowded_afterclose",
 )
 
 RETIRED_BASKET_RULES: frozenset[str] = frozenset(
@@ -38,8 +38,8 @@ MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
         "members": (
             "event_eqar_high_liq_high",
             "event_ta_up_liq_high",
-            "event_positive_eps_liq_high",
             "event_eqar_rising_ta_up_liq",
+            "event_eps_up_uncrowded",
         ),
     },
     {
@@ -48,9 +48,9 @@ MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
         "primary": False,
         "members": (
             "event_eqar_high_liq_high",
-            "surprise_xs_eqar_high_liq_high",
+            "surprise_xs_uncrowded_afterclose",
             "cs_margin_up_chase",
-            "event_repo3m_down_pead",
+            "surprise_xs_invert_eqar_high",
         ),
     },
     {
@@ -82,8 +82,8 @@ MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
         "members": (
             "event_eqar_high_liq_high",
             "event_ta_up_liq_high",
-            "event_positive_eps_liq_high",
             "event_eqar_rising_ta_up_liq",
+            "event_eps_up_uncrowded",
         ),
     },
     {
@@ -92,9 +92,9 @@ MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
         "primary": True,
         "members": (
             "event_crowded_liq_ta_up_fade",
-            "event_crowded_liq_eqar_rising_fade",
             "event_uncrowded_liq_eqar_rising",
-            "event_uncrowded_ta_up_easing",
+            "surprise_xs_uncrowded_afterclose",
+            "event_uncrowded_eqar_falling",
         ),
     },
     {
@@ -115,8 +115,8 @@ MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
         "members": (
             "event_eqar_high_liq_high",
             "event_pre_mom_liq_high",
-            "event_eqar_rising_ta_up_uncrowded",
-            "event_uncrowded_cluster_eqar_rising",
+            "event_afterclose_crowded",
+            "surprise_xs_afterclose_flatten",
         ),
     },
 )

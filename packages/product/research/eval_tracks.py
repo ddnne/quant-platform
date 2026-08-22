@@ -80,10 +80,10 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "id": "inventory_bias_recorded",
         "track": EVAL_TRACK_LIQ_LARGE,
         "why": (
-            "recorded research/eval/job=eval-inventory-bias-20260824b/ "
+            "recorded research/eval/job=eval-inventory-bias-20260823q/ "
             "inventory_bias.json; assert_new_batch_cheap_pb_cap refuses "
-            "new batches at 20%; 24a/24b occupancy audit; plus32vf "
-            "4 + nkyvol×steep parked near_empty — not materials"
+            "new batches at 20%; plus60 occupancy audit 20260823q "
+            "56 material-band / 4 near_empty parked — not materials"
         ),
         "not_a_pass": True,
         "go": False,
@@ -195,7 +195,7 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "tracks": BOTH_EVAL_TRACK_IDS,
         "entry": "research.cf_daily_path_job.run_both_track_sleeve_fanout",
         "why": (
-            "recorded eval-cf-dp-both-sleeves-20260823e/n mid+liq; "
+            "recorded eval-cf-dp-both-sleeves-20260823q mid+liq; "
             "descriptive summary not_a_pass; do not narrate majority as stable"
         ),
         "not_a_pass": True,
@@ -243,10 +243,9 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "id": "near_empty_parked_not_countable",
         "track": EVAL_TRACK_LIQ_LARGE,
         "why": (
-            "NEAR_EMPTY_PARK_IDS plus32vf 4; is_countable_spec and "
-            "validate_basket_members exclude them; "
-            "assert_new_batch_occupancy_not_near_empty refuses empty batches; "
-            "plus28q audit 20260823l near_empty 0"
+            "NEAR_EMPTY_PARK_IDS 10 (plus32vf/q + plus60 roe_low/cheap_iv); "
+            "is_countable_spec and validate_basket_members exclude them; "
+            "assert_new_batch_occupancy_not_near_empty refuses empty batches"
         ),
         "not_a_pass": True,
         "go": False,
