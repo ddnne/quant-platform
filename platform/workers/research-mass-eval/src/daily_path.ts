@@ -760,6 +760,7 @@ const COMBO_EVENT_GATES = new Set([
   "overnight_p10",
   "overnight_tightening",
   "positive_eps",
+  "pre_mom",
   "price_down",
   "repo_3m_down",
   "rich_iv",
@@ -1103,8 +1104,6 @@ export function comboEventGateOk(
     return (c1 as number) / (c0 as number) - 1 < 0;
   }
   // Python _pre_entry_mom: last close strictly before entry (entryIdx-1).
-  // Leftover lid uses momentumAt(entryIdx) (includes entry close) so occupancy
-  // differs — pre_mom stays PYTHON_ONLY until leftover is rewritten.
   if (gate === "pre_mom") {
     const pairs = panel.bars?.[ev.code] || [];
     const j = ev.entryIdx - 1;
@@ -1513,8 +1512,9 @@ function eventHeld(
         );
         if (String(params.side || "orig") === "flip") sgn = -ev.sign;
       }
-      // Leftover lid bodies + python-only gates (pre_mom: leftover includes
-      // entry close; comboEventGateOk uses Python entryIdx-1).
+      // Leftover lid bodies (unique-22 + combo lids not fully on
+      // COMBO_EVENT_GATES). pre_mom leftover occupancy equals comboEventGateOk
+      // (entryIdx-1 / last close strictly before entry). Sign via params.side.
       if (!comboImpl) {
       if (lid === "afterclose_only_event_hold" && !ev.after) ok = false;
       if (lid === "event_funding_stress_skip" || lid === "event_funding_adaptive_side") {
@@ -1619,15 +1619,12 @@ function eventHeld(
         }
       }
       if (lid === "event_pre_mom_easy_funding") {
-        if (!easyOn()) ok = false;
-        const pairs = bars[code];
-        const i = ev.entryIdx;
-        if (!pairs || i < 5) ok = false;
-        else {
-          const m = momentumAt(pairs, 5, i);
-          const ms = signNum(m);
-          if (ms === null || ms === 0 || ms !== ev.sign) ok = false;
-        }
+        if (
+          !easyOn() ||
+          !comboEventGateOk("pre_mom", ev, overnight, spread, minHist, panel)
+        )
+          ok = false;
+        if (String(params.side || "orig") === "flip") sgn = -ev.sign;
       }
       if (lid === "event_margin_or_funding_skip") {
         if (!marginGate(false) || !easyOn()) ok = false;
@@ -1658,15 +1655,12 @@ function eventHeld(
         if (nDisc === undefined || medC === null || nDisc < medC) ok = false;
       }
       if (lid === "event_pre_mom_steep_curve") {
-        if (!steepOn()) ok = false;
-        const pairs = bars[code];
-        const i = ev.entryIdx;
-        if (!pairs || i < 5) ok = false;
-        else {
-          const m = momentumAt(pairs, 5, i);
-          const ms = signNum(m);
-          if (ms === null || ms === 0 || ms !== ev.sign) ok = false;
-        }
+        if (
+          !steepOn() ||
+          !comboEventGateOk("pre_mom", ev, overnight, spread, minHist, panel)
+        )
+          ok = false;
+        if (String(params.side || "orig") === "flip") sgn = -ev.sign;
       }
       if (lid === "event_large_surprise_afterclose") {
         if (!ev.after) ok = false;

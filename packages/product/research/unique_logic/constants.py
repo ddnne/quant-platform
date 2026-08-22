@@ -63,14 +63,11 @@ COMBO_EVENT_GATES: frozenset[str] = frozenset(
         "nky_vol_high_skip",
         "large_surprise",
         "liq_high",
+        "pre_mom",
         "price_down",
     }
 )
-PYTHON_ONLY_EVENT_GATES: frozenset[str] = frozenset(
-    {
-        "pre_mom",
-    }
-)
+PYTHON_ONLY_EVENT_GATES: frozenset[str] = frozenset()
 KNOWN_EVENT_GATES: frozenset[str] = COMBO_EVENT_GATES | PYTHON_ONLY_EVENT_GATES
 # Worker COMBO_EVENT_GATES stays disjoint of PYTHON_ONLY_EVENT_GATES:
 # names-only (no generic bodies) would empty occupancy. Python local eval
@@ -88,8 +85,8 @@ def python_only_gate_logic_ids() -> frozenset[str]:
 
     Lazy import: ``event_combos`` imports this module. Worker lid branches
     cover the returned set; do not copy remaining PYTHON_ONLY names onto
-    Worker ``COMBO_EVENT_GATES`` until comboEventGateOk occupancy equals
-    the leftover lid body.
+    Worker ``COMBO_EVENT_GATES`` until leftover occupancy equals
+    comboEventGateOk. Empty after pre_mom leftover rewrite (entryIdx-1).
     """
     from research.unique_logic.event_combos import NEW_COMBO_LOGIC
 

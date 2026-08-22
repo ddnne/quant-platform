@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { clusterWindowSeries, comboCsGateOk, comboEventGateOk } from "./daily_path";
 import type { PeriodPanel } from "./types";
@@ -196,6 +199,30 @@ describe("comboEventGateOk", () => {
     );
     expect(comboEventGateOk("pre_mom", agree, {}, {}, 20, dummyPanel)).toBe(
       false,
+    );
+  });
+
+  it("leftover pre_mom lids reuse comboEventGateOk occupancy (entryIdx-1)", () => {
+    const src = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), "daily_path.ts"),
+      "utf8",
+    );
+    const easy = src.slice(
+      src.indexOf('if (lid === "event_pre_mom_easy_funding")'),
+      src.indexOf('if (lid === "event_margin_or_funding_skip")'),
+    );
+    const steep = src.slice(
+      src.indexOf('if (lid === "event_pre_mom_steep_curve")'),
+      src.indexOf('if (lid === "event_large_surprise_afterclose")'),
+    );
+    expect(easy).toContain('comboEventGateOk("pre_mom"');
+    expect(easy).toContain("params.side");
+    expect(easy).not.toContain("momentumAt");
+    expect(steep).toContain('comboEventGateOk("pre_mom"');
+    expect(steep).toContain("params.side");
+    expect(steep).not.toContain("momentumAt");
+    expect(src).toContain(
+      'lid === "surprise_xs_month_start" && ev.entryDate.slice(8, 10) > "05"',
     );
   });
 });

@@ -259,12 +259,7 @@ def test_python_only_event_gates_skip_catalog() -> None:
         )
     )
     assert catalog == intersecting
-    assert catalog == frozenset(
-        {
-            "event_pre_mom_easy_funding",
-            "event_pre_mom_steep_curve",
-        }
-    )
+    assert catalog == frozenset()
 
     src = (
         Path(__file__).resolve().parents[1]
@@ -283,6 +278,27 @@ def test_python_only_event_gates_skip_catalog() -> None:
     worker_gates = set(re.findall(r'"([^"]+)"', m.group(1)))
     assert worker_gates.isdisjoint(PYTHON_ONLY_EVENT_GATES)
     assert worker_gates == set(COMBO_EVENT_GATES)
+    assert "pre_mom" in worker_gates
+    easy_m = re.search(
+        r'if \(lid === "event_pre_mom_easy_funding"\) \{.*?\}',
+        src,
+        flags=re.S,
+    )
+    steep_m = re.search(
+        r'if \(lid === "event_pre_mom_steep_curve"\) \{.*?\}',
+        src,
+        flags=re.S,
+    )
+    assert easy_m and steep_m
+    assert 'comboEventGateOk("pre_mom"' in easy_m.group(0)
+    assert 'comboEventGateOk("pre_mom"' in steep_m.group(0)
+    assert "momentumAt" not in easy_m.group(0)
+    assert "momentumAt" not in steep_m.group(0)
+    assert "params.side" in easy_m.group(0)
+    assert "params.side" in steep_m.group(0)
+    assert 'lid === "surprise_xs_month_start" && ev.entryDate.slice(8, 10) > "05"' in src
+    assert 'lid === "surprise_xs_fy_end"' in src
+
 
 def test_event_cheap_pb_gate_in_combo_and_yaml() -> None:
     """cheap_pb stays a COMBO event gate; YAML pead lists it. Not a CS reuse."""
