@@ -285,7 +285,7 @@ def test_yaml_dispatch_worker_event_ids_align() -> None:
     assert "event_skip_monday" in yaml_ids
     assert "cs_not_month_end" in yaml_ids
     assert "event_skip_monday" in CF_NEW_THESIS_IDS
-    assert len(CF_NEW_THESIS_IDS) == 316
+    assert len(CF_NEW_THESIS_IDS) == 338
     from research.unique_logic.event_combos import NEW_COMBO_LOGIC
     from research.unique_logic.constants import is_ungated_name_level_cs
 
@@ -423,6 +423,87 @@ def test_worker_new_thesis_ids_match_python() -> None:
     )
     assert "(CF_UNIQUE_CS_LOGIC_IDS as readonly string[]).includes(lid)" in src
     assert "(CF_NEW_CS_THESIS_IDS as readonly string[]).includes(lid)" in src
+
+
+_NEW_COMBO_22 = (
+    "event_ta_down_pead",
+    "event_eqar_rising_pead",
+    "event_eqar_falling_fade",
+    "event_eps_down_fade",
+    "event_pb_rising_fade",
+    "event_np_negative_fade",
+    "event_sales_down_fade",
+    "event_roe_low_fade",
+    "event_ta_down_liq_high",
+    "event_eqar_rising_liq_high",
+    "event_eqar_rising_cheap_pb",
+    "event_ta_down_uncrowded",
+    "event_eps_down_crowded_fade",
+    "event_pb_rising_margin_up_fade",
+    "event_sales_down_eqar_falling_fade",
+    "event_np_negative_ta_down_fade",
+    "cs_ta_down",
+    "cs_eqar_rising",
+    "cs_eqar_falling",
+    "cs_pb_rising",
+    "cs_roe_low",
+    "cs_sales_down",
+)
+
+
+def test_new_combo_22_yaml_ids_are_declared_not_candidates() -> None:
+    from pathlib import Path
+
+    from research.combo_basket_catalog import DEFAULT_CANDIDATE_BASKET
+    from research.unique_logic.catalog import load_catalog_specs
+    from research.unique_logic.constants import (
+        ALWAYS_ON_CS_STICKY,
+        CF_NEW_CS_THESIS_IDS,
+        CF_NEW_EVENT_THESIS_IDS,
+        CF_NEW_THESIS_IDS,
+        COMBO_EVENT_GATES,
+    )
+    from research.unique_logic.event_combos import NEW_COMBO_LOGIC
+
+    yaml_dir = Path(__file__).resolve().parents[1] / "specs" / "research_logics"
+    yaml_ids = {s["logic_id"] for s in load_catalog_specs()}
+    combo_ids = {s["logic_id"] for s in NEW_COMBO_LOGIC}
+    by = {s["logic_id"]: s for s in NEW_COMBO_LOGIC}
+    for lid in _NEW_COMBO_22:
+        assert (yaml_dir / f"{lid}.yaml").is_file()
+        assert lid in yaml_ids
+        assert lid in combo_ids
+        assert lid in CF_NEW_THESIS_IDS
+        assert lid not in DEFAULT_CANDIDATE_BASKET
+        spec = by[lid]
+        assert spec.get("go") is not True
+        assert spec.get("generation_enabled") is False
+        assert spec.get("promote_as_main") is False
+        assert spec.get("evaluator") == (
+            "research.unique_logic.event_combos.evaluate_combo_daily_mtm"
+        )
+    event_lids = [lid for lid in _NEW_COMBO_22 if lid.startswith("event_")]
+    cs_lids = [lid for lid in _NEW_COMBO_22 if lid.startswith("cs_")]
+    assert len(event_lids) == 16
+    assert len(cs_lids) == 6
+    assert set(event_lids) <= set(CF_NEW_EVENT_THESIS_IDS)
+    assert set(cs_lids) <= set(CF_NEW_CS_THESIS_IDS)
+    for lid in cs_lids:
+        assert lid in ALWAYS_ON_CS_STICKY
+        assert by[lid].get("always_on_cs_sticky") is True
+        assert by[lid].get("main_pool") is False
+    for g in (
+        "ta_down",
+        "eq_ar_rising",
+        "eq_ar_falling",
+        "eps_down",
+        "pb_rising",
+        "np_negative",
+        "sales_down",
+        "roe_low",
+    ):
+        assert g in COMBO_EVENT_GATES
+    assert "event_ta_down_pead" not in DEFAULT_CANDIDATE_BASKET
 
 
 def test_fins_official_keys_are_single_source() -> None:

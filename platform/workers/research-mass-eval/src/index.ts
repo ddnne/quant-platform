@@ -190,7 +190,7 @@ async function runMassEval(
   req: MassEvalRequest,
 ): Promise<MassEvalJobResult> {
   const t0 = Date.now();
-  const version = env.MASS_EVAL_VERSION || "research-mass-eval/v21-cs-hoist";
+  const version = env.MASS_EVAL_VERSION || "research-mass-eval/v22-thesis-gates";
   const wave = env.MASS_EVAL_WAVE || "research-mass-eval";
   const mode = req.mode || "synthetic";
   const oneWay = req.one_way_cost ?? 0.001;
@@ -362,7 +362,7 @@ async function runDailyPath(
   req: MassEvalRequest,
 ): Promise<Record<string, unknown>> {
   const t0 = Date.now();
-  const version = env.MASS_EVAL_VERSION || "research-mass-eval/v21-cs-hoist";
+  const version = env.MASS_EVAL_VERSION || "research-mass-eval/v22-thesis-gates";
   const mode = req.mode || "r2_panels";
   const oneWay = req.one_way_cost ?? 0.001;
   const maxCodes = Math.max(2, Math.min(40, req.max_codes ?? 8));
@@ -435,6 +435,177 @@ async function runDailyPath(
   return payload;
 }
 
+const PROPOSE_STUB_TEMPLATES: Array<{
+  thesis: string;
+  signal_definition: string;
+  position_rule: string;
+  datasets: string[];
+  why_different_from: string[];
+}> = [
+  {
+    thesis:
+      "STUB (not catalog): liquidity × fundamentals — high-ADV names with conservative EqAR/TA change after disclosure.",
+    signal_definition:
+      "AND(liq_high, EqAR-or-TA-change) on the event window; skip missing ADV/EqAR/TA (no invent).",
+    position_rule:
+      "Event-hold original surprise sign when both gates are PIT-true; otherwise flat.",
+    datasets: ["equities_bars_daily", "fins_summary", "markets_calendar"],
+    why_different_from: ["ungated PEAD", "always-on CS EqAR sticky"],
+  },
+  {
+    thesis:
+      "STUB (not catalog): margin × price disagreement — fade names where margin is crowded while price still rises.",
+    signal_definition:
+      "AND(crowded_margin, price_up) occupancy; skip missing margin PIT prints (no ffill).",
+    position_rule:
+      "CS fade (invert mom) while both gates hold; otherwise flat.",
+    datasets: [
+      "equities_bars_daily",
+      "margin_interest",
+      "markets_calendar",
+    ],
+    why_different_from: ["ungated CS mom", "margin-only crowd fade"],
+  },
+  {
+    thesis:
+      "STUB (not catalog): disclosure × funding — PEAD only when overnight repo eased into the print cluster.",
+    signal_definition:
+      "AND(afterclose-or-cluster, overnight_easing) on disclosure; skip missing repo (no invent).",
+    position_rule:
+      "Event-hold original surprise sign when funding eased; otherwise flat.",
+    datasets: [
+      "equities_bars_daily",
+      "fins_summary",
+      "jsda_tokyo_repo_rates",
+      "markets_calendar",
+    ],
+    why_different_from: ["ungated PEAD", "overnight-level CS sticky"],
+  },
+];
+
+function hasWorkersAi(env: Env): boolean {
+  return Boolean((env as { AI?: unknown }).AI);
+}
+
+function isWindowTweakOnly(o: Record<string, unknown>): boolean {
+  const keys = [
+    "thesis",
+    "signal_definition",
+    "signal",
+    "position_rule",
+    "position",
+  ];
+  const hasProposalFields = keys.some((k) =>
+    Object.prototype.hasOwnProperty.call(o, k),
+  );
+  if (!hasProposalFields) return false;
+  const thesis = String(o.thesis ?? "").trim();
+  const signal = String(o.signal_definition ?? o.signal ?? "").trim();
+  const position = String(o.position_rule ?? o.position ?? "").trim();
+  if (!thesis || !signal || !position) return true;
+  const blob = `${thesis} ${signal}`.toLowerCase();
+  const tweakWords = ["window", "hold_days only", "mom only", "frac only"];
+  if (tweakWords.some((w) => blob.includes(w)) && !blob.includes("factor")) {
+    const ds = o.datasets ?? o.datasets_used;
+    if (!Array.isArray(ds) || ds.length === 0) return true;
+  }
+  return false;
+}
+
+function stubProposals(
+  n: number,
+  whyAvoid: string[],
+): Array<Record<string, unknown>> {
+  const avoid = new Set(whyAvoid.map((x) => String(x)));
+  const out: Array<Record<string, unknown>> = [];
+  for (const t of PROPOSE_STUB_TEMPLATES) {
+    if (out.length >= n) break;
+    out.push({
+      thesis: t.thesis,
+      signal_definition: t.signal_definition,
+      position_rule: t.position_rule,
+      datasets: t.datasets,
+      why_different_from: t.why_different_from.filter((x) => !avoid.has(x)),
+      not_injected: true,
+      status: "stub_not_catalog",
+    });
+  }
+  return out;
+}
+
+async function runProposeThesis(
+  env: Env,
+  body: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  if (isWindowTweakOnly(body)) {
+    return {
+      ok: false,
+      error: "window_tweak_only_forbidden",
+      auto_inject: false,
+      go: false,
+      not_a_pass: true,
+    };
+  }
+  if (Array.isArray(body.proposals)) {
+    for (const raw of body.proposals) {
+      if (isObject(raw) && isWindowTweakOnly(raw)) {
+        return {
+          ok: false,
+          error: "window_tweak_only_forbidden",
+          auto_inject: false,
+          go: false,
+          not_a_pass: true,
+        };
+      }
+    }
+  }
+  const nRaw = body.n != null ? Number(body.n) : 3;
+  const n = Number.isFinite(nRaw)
+    ? Math.max(1, Math.min(3, Math.floor(nRaw)))
+    : 3;
+  const whyAvoid = Array.isArray(body.why_avoid)
+    ? body.why_avoid.map((x) => String(x))
+    : [];
+  const writeArtifacts = body.write_artifacts === true;
+  // wrangler.toml has no Workers AI binding; never auto-inject catalog IDs.
+  const proposals = stubProposals(n, whyAvoid);
+  const payload: Record<string, unknown> = {
+    ok: true,
+    proposals,
+    auto_inject: false,
+    go: false,
+    not_a_pass: true,
+    catalog_written: false,
+    ids_injected: false,
+    workers_ai_bound: hasWorkersAi(env),
+  };
+  if (writeArtifacts) {
+    const jobId = String(body.job_id ?? "").trim();
+    if (!jobId || /[\\/]|\.\./.test(jobId)) {
+      return {
+        ok: false,
+        error: "job_id required for write_artifacts",
+        auto_inject: false,
+        go: false,
+        not_a_pass: true,
+      };
+    }
+    if (!env.STRUCTURED_BUCKET) {
+      return {
+        ok: false,
+        error: "STRUCTURED_BUCKET not bound",
+        auto_inject: false,
+        go: false,
+        not_a_pass: true,
+      };
+    }
+    const key = `research/eval/job=${jobId}/propose_thesis.json`;
+    await putJson(env.STRUCTURED_BUCKET, key, payload);
+    payload.r2_keys = { propose_thesis: key };
+  }
+  return payload;
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
@@ -446,7 +617,7 @@ export default {
       return json({
         ok: true,
         service: "quant-platform-research-mass-eval",
-        version: env.MASS_EVAL_VERSION || "research-mass-eval/v21-cs-hoist",
+        version: env.MASS_EVAL_VERSION || "research-mass-eval/v22-thesis-gates",
         wave: env.MASS_EVAL_WAVE || "research-mass-eval",
         has_structured_bucket: Boolean(env.STRUCTURED_BUCKET),
         has_d1: Boolean(env.DB),
@@ -532,6 +703,47 @@ export default {
             ok: false,
             error: "daily_path_failed",
             detail: msg,
+            freezes: freezePayload(env),
+          },
+          500,
+        );
+      }
+    }
+
+    if (url.pathname === "/v1/propose-thesis") {
+      if (request.method !== "POST") {
+        return json({ error: "POST required" }, 405);
+      }
+      if (!(await authorized(request, env.MASS_EVAL_TOKEN))) {
+        return json({ error: "unauthorized" }, 401);
+      }
+      let body: unknown = {};
+      const text = await request.text();
+      if (text.trim()) {
+        try {
+          body = JSON.parse(text);
+        } catch {
+          return json({ error: "invalid JSON body" }, 400);
+        }
+      }
+      if (text.trim() && !isObject(body)) {
+        return json({ error: "body must be JSON object" }, 400);
+      }
+      const obj = isObject(body) ? body : {};
+      try {
+        const result = await runProposeThesis(env, obj);
+        const status = result.ok === false ? 400 : 200;
+        return json(result, status);
+      } catch (e) {
+        const msg = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+        return json(
+          {
+            ok: false,
+            error: "propose_thesis_failed",
+            detail: msg,
+            auto_inject: false,
+            go: false,
+            not_a_pass: true,
             freezes: freezePayload(env),
           },
           500,

@@ -19,6 +19,12 @@ from features import (
     require_feature_datasets,
 )
 from features.runtime import FeatureContext
+from research.complete21 import (
+    COMPLETE_21_DATASETS as RESEARCH_COMPLETE_21_DATASETS,
+    COMPLETE_21_DATASET_SET,
+    Complete21Error,
+    require_complete_21_only,
+)
 
 
 def test_complete_21_count_and_no_overlap_with_defer():
@@ -179,4 +185,38 @@ def test_margin_short_calendar_repo_reject_defer_poison(monkeypatch):
     ):
         with pytest.raises(PermanentDeferHistoryError):
             require_feature_datasets(poisoned, context="feature test")
+
+
+def test_research_complete21_matches_features_allowlist():
+    assert len(RESEARCH_COMPLETE_21_DATASETS) == 21
+    assert len(COMPLETE_21_DATASET_SET) == 21
+    assert COMPLETE_21_DATASET_SET == COMPLETE_21_DATASETS
+    assert COMPLETE_21_DATASET_SET.isdisjoint(PERMANENT_DEFER_DATASETS)
+    assert "markets_breakdown" in COMPLETE_21_DATASET_SET
+    assert "equities_bars_daily" in COMPLETE_21_DATASET_SET
+    for defer in PERMANENT_DEFER_DATASETS:
+        assert defer not in COMPLETE_21_DATASET_SET
+
+
+def test_require_complete_21_only_accepts_subset():
+    ids = require_complete_21_only(
+        ["equities_bars_daily", "markets_calendar", "equities_bars_daily"]
+    )
+    assert ids == ("equities_bars_daily", "markets_calendar")
+
+
+def test_require_complete_21_only_rejects_all_permanent_defer():
+    assert len(PERMANENT_DEFER_DATASETS) == 4
+    for defer_id in sorted(PERMANENT_DEFER_DATASETS):
+        with pytest.raises(PermanentDeferHistoryError, match="permanent DEFER"):
+            require_complete_21_only([defer_id])
+    with pytest.raises(PermanentDeferHistoryError, match="permanent DEFER|PD-D2-MASTER"):
+        require_complete_21_only(["equities_bars_daily", "equities_master"])
+    with pytest.raises(PermanentDeferHistoryError):
+        require_complete_21_only(sorted(PERMANENT_DEFER_DATASETS))
+
+
+def test_require_complete_21_only_rejects_unknown():
+    with pytest.raises(Complete21Error, match="not in COMPLETE 21"):
+        require_complete_21_only(["equities_bars_daily", "not_a_real_dataset"])
 

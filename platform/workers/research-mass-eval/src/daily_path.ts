@@ -229,13 +229,21 @@ function heldBookDailyMtm(
   net_daily: number[];
   occupancy: number | null;
   n_gate_on: number;
+  cost_adv_incomplete: boolean;
 } {
   const h = Math.max(1, Math.floor(holdDays));
   const dailyCost = amortizedOneWayCost(oneWay, h) / h;
   const netDaily: number[] = [];
   let nOn = 0;
+  let costAdvIncomplete = false;
   if (dates.length < 2) {
-    return { dates: [], net_daily: [], occupancy: null, n_gate_on: 0 };
+    return {
+      dates: [],
+      net_daily: [],
+      occupancy: null,
+      n_gate_on: 0,
+      cost_adv_incomplete: false,
+    };
   }
   netDaily.push(0);
   for (let i = 1; i < dates.length; i++) {
@@ -247,25 +255,25 @@ function heldBookDailyMtm(
     for (const [code, cmap] of Object.entries(held)) {
       const pos = cmap[prev];
       if (!pos) continue;
+      const adv = advByCode?.[code];
+      if (!finite(adv)) {
+        costAdvIncomplete = true;
+        continue;
+      }
       const c0 = closeBy[code]?.[prev];
       const c1 = closeBy[code]?.[d];
       if (!finite(c0) || !finite(c1) || c0 === 0) continue;
       contribs.push(pos * (c1 / c0 - 1));
       if (pos < 0) nShort += 1;
-      const adv = advByCode?.[code];
-      if (finite(adv)) {
-        if (adv >= 1e9) liqMults.push(1.0);
-        else if (adv >= 1e8) liqMults.push(1.5);
-        else liqMults.push(2.5);
-      }
+      // Match cost_models LIQUIDITY_TX_MULT high/mid/low (1.0/1.5/2.5); local, no import.
+      if (adv >= 1e9) liqMults.push(1.0);
+      else if (adv >= 1e8) liqMults.push(1.5);
+      else liqMults.push(2.5);
     }
     let net = 0;
     if (contribs.length) {
       const g = contribs.reduce((a, b) => a + b, 0) / contribs.length;
-      const liq =
-        liqMults.length > 0
-          ? liqMults.reduce((a, b) => a + b, 0) / liqMults.length
-          : 1.0;
+      const liq = liqMults.reduce((a, b) => a + b, 0) / liqMults.length;
       let shortDrag = 0;
       const repo = repoByDate?.[prev];
       if (nShort && finite(repo)) {
@@ -278,7 +286,13 @@ function heldBookDailyMtm(
     netDaily.push(net);
   }
   const occ = dates.length > 1 ? nOn / (dates.length - 1) : null;
-  return { dates, net_daily: netDaily, occupancy: occ, n_gate_on: nOn };
+  return {
+    dates,
+    net_daily: netDaily,
+    occupancy: occ,
+    n_gate_on: nOn,
+    cost_adv_incomplete: costAdvIncomplete,
+  };
 }
 
 export const CF_UNIQUE_CS_LOGIC_IDS = [
@@ -370,8 +384,11 @@ export const CF_NEW_EVENT_THESIS_IDS = [
   "event_easing_uncrowded",
   "event_easy_funding_curve_steep",
   "event_easy_skip_tuesday",
+  "event_eps_down_crowded_fade",
+  "event_eps_down_fade",
   "event_eps_up_easy",
   "event_eps_up_liq_high",
+  "event_eqar_falling_fade",
   "event_eqar_high_afterclose",
   "event_eqar_high_cheap_iv",
   "event_eqar_high_cluster",
@@ -399,6 +416,9 @@ export const CF_NEW_EVENT_THESIS_IDS = [
   "event_eqar_low_price_down_fade",
   "event_eqar_low_repo3m_down_fade",
   "event_eqar_low_tight_fade",
+  "event_eqar_rising_cheap_pb",
+  "event_eqar_rising_liq_high",
+  "event_eqar_rising_pead",
   "event_first_half_easing",
   "event_first_half_month",
   "event_first_half_uncrowded",
@@ -431,10 +451,14 @@ export const CF_NEW_EVENT_THESIS_IDS = [
   "event_nky_high_skip",
   "event_not_first_week",
   "event_not_last_week",
+  "event_np_negative_fade",
+  "event_np_negative_ta_down_fade",
   "event_on_impulse_pead",
   "event_on_impulse_uncrowded",
   "event_overnight_p10_eqar_low_fade",
   "event_overnight_p10_pead",
+  "event_pb_rising_fade",
+  "event_pb_rising_margin_up_fade",
   "event_positive_eps_easy",
   "event_positive_eps_liq_high",
   "event_positive_eps_margin_down",
@@ -449,12 +473,18 @@ export const CF_NEW_EVENT_THESIS_IDS = [
   "event_repo3m_down_uncrowded",
   "event_rich_iv_eqar_low_fade",
   "event_rich_iv_fade",
+  "event_roe_low_fade",
+  "event_sales_down_eqar_falling_fade",
+  "event_sales_down_fade",
   "event_skip_announce_day",
   "event_skip_monday",
   "event_skip_monday_easing",
   "event_skip_monday_uncrowded",
   "event_skip_tuesday",
   "event_skip_wednesday",
+  "event_ta_down_liq_high",
+  "event_ta_down_pead",
+  "event_ta_down_uncrowded",
   "event_ta_up_afterclose",
   "event_ta_up_cheap_iv",
   "event_ta_up_cluster",
@@ -560,6 +590,7 @@ export const CF_NEW_CS_THESIS_IDS = [
   "cs_easy_skip_friday",
   "cs_easy_skip_monday",
   "cs_easy_tue_thu",
+  "cs_eqar_falling",
   "cs_eqar_high",
   "cs_eqar_high_cheap_iv",
   "cs_eqar_high_easy",
@@ -571,6 +602,7 @@ export const CF_NEW_CS_THESIS_IDS = [
   "cs_eqar_low_fade",
   "cs_eqar_low_margin_up",
   "cs_eqar_low_tight",
+  "cs_eqar_rising",
   "cs_expensive_pb_fade",
   "cs_friday_down",
   "cs_friday_fade",
@@ -595,9 +627,12 @@ export const CF_NEW_CS_THESIS_IDS = [
   "cs_on_impulse",
   "cs_overnight_p10",
   "cs_overnight_p10_steep",
+  "cs_pb_rising",
   "cs_repo3m_down",
   "cs_repo3m_down_easy",
   "cs_roe_high",
+  "cs_roe_low",
+  "cs_sales_down",
   "cs_short_ratio_down_follow",
   "cs_short_ratio_up_fade",
   "cs_skip_monday",
@@ -605,6 +640,7 @@ export const CF_NEW_CS_THESIS_IDS = [
   "cs_skip_wednesday",
   "cs_steep_friday",
   "cs_steep_skip_monday",
+  "cs_ta_down",
   "cs_ta_up",
   "cs_ta_up_easy",
   "cs_ta_up_margin_down",
@@ -697,9 +733,12 @@ const COMBO_EVENT_GATES = new Set([
   "curve_flatten",
   "div_positive",
   "easy_funding",
+  "eps_down",
   "eps_up",
+  "eq_ar_falling",
   "eq_ar_high",
   "eq_ar_low",
+  "eq_ar_rising",
   "first_half_month",
   "friday_only",
   "friday_skip",
@@ -717,19 +756,24 @@ const COMBO_EVENT_GATES = new Set([
   "nky_vol_high_skip",
   "not_first_week",
   "not_last_week",
+  "np_negative",
   "on_impulse",
   "overnight_easing",
   "overnight_p10",
   "overnight_tightening",
+  "pb_rising",
   "positive_eps",
   "pre_mom",
   "price_down",
   "repo_3m_down",
   "rich_iv",
+  "roe_low",
+  "sales_down",
   "skip_monday",
   "skip_tuesday",
   "skip_wednesday",
   "steep_curve",
+  "ta_down",
   "ta_up",
   "tight_funding",
   "tue_thu",
@@ -822,6 +866,45 @@ function overnightTightened(
   return on > overnight[prevs[prevs.length - 1]];
 }
 
+type FundPrintField = "eq_ar" | "sales" | "ta" | "eps" | "roe" | "np";
+
+function lastPriorFundNum(
+  panel: PeriodPanel,
+  code: string,
+  field: FundPrintField,
+  before: string,
+): number | null {
+  if (!before) return null;
+  let bestD = "";
+  let best: number | null = null;
+  for (const row of panel.fund_regime?.events_by_code?.[code] || []) {
+    const dd = String(row.disc_date || "").slice(0, 10);
+    if (!dd || dd >= before) continue;
+    const v = row[field];
+    if (!finite(v)) continue;
+    if (!bestD || dd >= bestD) {
+      bestD = dd;
+      best = v as number;
+    }
+  }
+  return best;
+}
+
+function matchingFundNum(
+  panel: PeriodPanel,
+  code: string,
+  disc: string,
+  field: FundPrintField | "prior_ta" | "prior_eps" | "bps",
+): number | null {
+  if (!disc) return null;
+  for (const row of panel.fund_regime?.events_by_code?.[code] || []) {
+    if (String(row.disc_date || "").slice(0, 10) !== disc) continue;
+    const v = (row as Record<string, unknown>)[field];
+    if (finite(v)) return v as number;
+  }
+  return null;
+}
+
 export function comboEventGateOk(
   gate: string,
   ev: {
@@ -841,6 +924,7 @@ export function comboEventGateOk(
     ta?: number | null;
     eq_ar?: number | null;
     prior_ta?: number | null;
+    sales?: number | null;
   },
   overnight: Record<string, number>,
   spread: Record<string, number>,
@@ -1064,6 +1148,79 @@ export function comboEventGateOk(
     if (!finite(c0) || !finite(c1) || (c0 as number) === 0) return false;
     return (c1 as number) / (c0 as number) - 1 < 0;
   }
+  if (gate === "ta_down") {
+    return (
+      ev.ta != null &&
+      ev.prior_ta != null &&
+      finite(ev.ta) &&
+      finite(ev.prior_ta) &&
+      (ev.ta as number) < (ev.prior_ta as number)
+    );
+  }
+  if (gate === "eps_down") {
+    return (
+      ev.eps != null &&
+      ev.prior_eps != null &&
+      finite(ev.eps) &&
+      finite(ev.prior_eps) &&
+      (ev.eps as number) < (ev.prior_eps as number)
+    );
+  }
+  if (gate === "eq_ar_rising" || gate === "eq_ar_falling") {
+    const cur = finite(ev.eq_ar)
+      ? (ev.eq_ar as number)
+      : matchingFundNum(panel, ev.code, ev.disc, "eq_ar");
+    const prior = lastPriorFundNum(panel, ev.code, "eq_ar", ev.disc);
+    if (cur === null || prior === null) return false;
+    return gate === "eq_ar_rising" ? cur > prior : cur < prior;
+  }
+  if (gate === "pb_rising") {
+    // Same bars×fins reverse-find as cheap_pb; occupancy is > med not < med.
+    const close = panel.bars?.[ev.code]?.find(([x]) => x === d)?.[1];
+    if (!finite(close) || ev.bps == null || !finite(ev.bps) || ev.bps === 0)
+      return false;
+    const pb = (close as number) / (ev.bps as number);
+    const hist: Record<string, number> = {};
+    const fins = panel.fund_regime?.events_by_code?.[ev.code] || [];
+    const pairs = panel.bars?.[ev.code] || [];
+    for (const [dd, px] of pairs) {
+      if (dd >= d) break;
+      const fin = [...fins].reverse().find((e) => String(e.disc_date || "") <= dd);
+      const bps = fin?.bps;
+      if (finite(px) && finite(bps) && (bps as number) !== 0) {
+        hist[dd] = (px as number) / (bps as number);
+      }
+    }
+    const med = pitMedian(hist, d, minHist);
+    return med !== null && pb > med;
+  }
+  if (gate === "np_negative") {
+    const np = finite(ev.np)
+      ? (ev.np as number)
+      : matchingFundNum(panel, ev.code, ev.disc, "np");
+    return np !== null && np < 0;
+  }
+  if (gate === "sales_down") {
+    const cur = finite(ev.sales)
+      ? (ev.sales as number)
+      : matchingFundNum(panel, ev.code, ev.disc, "sales");
+    const prior = lastPriorFundNum(panel, ev.code, "sales", ev.disc);
+    if (cur === null || prior === null) return false;
+    return cur < prior;
+  }
+  if (gate === "roe_low") {
+    const roe = finite(ev.roe)
+      ? (ev.roe as number)
+      : matchingFundNum(panel, ev.code, ev.disc, "roe");
+    if (roe === null) return false;
+    const hist: Record<string, number> = {};
+    for (const row of panel.fund_regime?.events_by_code?.[ev.code] || []) {
+      const dd = String(row.disc_date || "").slice(0, 10);
+      if (dd && dd < ev.disc && finite(row.roe)) hist[dd] = row.roe as number;
+    }
+    const med = pitMedian(hist, d, 8);
+    return med !== null && roe < med;
+  }
   // Python _pre_entry_mom: last close strictly before entry (entryIdx-1).
   if (gate === "pre_mom") {
     const pairs = panel.bars?.[ev.code] || [];
@@ -1101,7 +1258,14 @@ export function comboCsGateOk(
     npPositive?: boolean;
     eqArHigh?: boolean;
     eqArLow?: boolean;
+    eqArRising?: boolean;
+    eqArFalling?: boolean;
     taUp?: boolean;
+    taDown?: boolean;
+    pbRising?: boolean;
+    roeLow?: boolean;
+    salesDown?: boolean;
+    npNegative?: boolean;
     cheapIv?: boolean;
     tightOn?: boolean;
     shortDown?: boolean;
@@ -1329,6 +1493,20 @@ export function comboCsGateOk(
       marginChg !== null &&
       marginChg > 0;
     invert = true;
+  } else if (gate === "ta_down") {
+    keep = extras?.taDown === true;
+  } else if (gate === "eq_ar_rising") {
+    keep = extras?.eqArRising === true;
+  } else if (gate === "eq_ar_falling") {
+    keep = extras?.eqArFalling === true;
+  } else if (gate === "pb_rising") {
+    keep = extras?.pbRising === true;
+  } else if (gate === "roe_low") {
+    keep = extras?.roeLow === true;
+  } else if (gate === "sales_down") {
+    keep = extras?.salesDown === true;
+  } else if (gate === "np_negative") {
+    keep = extras?.npNegative === true;
   } else {
     return { keep: false, invert: false };
   }
@@ -1405,6 +1583,7 @@ function eventHeld(
     ta?: number | null;
     eq_ar?: number | null;
     prior_ta?: number | null;
+    sales?: number | null;
   };
   const perCode: Record<string, { dlist: string[]; entries: Entry[] }> = {};
 
@@ -1444,11 +1623,18 @@ function eventHeld(
         prior_eps: ev.prior_eps,
         bps: ev.bps,
         div_ann: ev.div_ann,
-        np: ev.np,
-        roe: ev.roe,
-        ta: ev.ta,
-        eq_ar: ev.eq_ar,
-        prior_ta: ev.prior_ta,
+        np: finite(ev.np) ? ev.np : matchingFundNum(panel, code, disc, "np"),
+        roe: finite(ev.roe) ? ev.roe : matchingFundNum(panel, code, disc, "roe"),
+        ta: finite(ev.ta) ? ev.ta : matchingFundNum(panel, code, disc, "ta"),
+        eq_ar: finite(ev.eq_ar)
+          ? ev.eq_ar
+          : matchingFundNum(panel, code, disc, "eq_ar"),
+        prior_ta: finite(ev.prior_ta)
+          ? ev.prior_ta
+          : lastPriorFundNum(panel, code, "ta", disc),
+        sales: finite(ev.sales)
+          ? ev.sales
+          : matchingFundNum(panel, code, disc, "sales"),
       });
       absSurprises.push({ d: disc, abs: Math.abs(sur) });
     }
@@ -1654,7 +1840,15 @@ function eventHeld(
     if (lid !== "surprise_xs_rank_adaptive") return xsHeld;
     const trailK = Math.max(5, Math.floor(finite(params.trail_k as number) ? (params.trail_k as number) : 10));
     const trailMin = Math.max(3, Math.floor(finite(params.trail_min as number) ? (params.trail_min as number) : 5));
-    const origMtm = heldBookDailyMtm(xsHeld, closeMap, dates, holdDays, 0);
+    const origMtm = heldBookDailyMtm(
+      xsHeld,
+      closeMap,
+      dates,
+      holdDays,
+      0,
+      undefined,
+      panel.adv_by_code || undefined,
+    );
     const hist: number[] = [];
     const tilted: Record<string, Record<string, number>> = {};
     for (const code of Object.keys(xsHeld)) tilted[code] = {};
@@ -1735,11 +1929,18 @@ type CsFundSnap = {
   expensivePb: boolean;
   eyHigh: boolean;
   roeHigh: boolean;
+  roeLow: boolean;
   divPositive: boolean;
   npPositive: boolean;
+  npNegative: boolean;
   eqArHigh: boolean;
   eqArLow: boolean;
+  eqArRising: boolean;
+  eqArFalling: boolean;
   taUp: boolean;
+  taDown: boolean;
+  pbRising: boolean;
+  salesDown: boolean;
 };
 
 /** One linear pass per code (last-fin pointer). Not bars×fins per date. */
@@ -1765,6 +1966,8 @@ function csFundSnaps(
   }
   let fi = 0;
   let last: (typeof fins)[number] | null = null;
+  let prevEqAr: number | null = null;
+  let prevSales: number | null = null;
   const pbBy: Record<string, number> = {};
   const eyBy: Record<string, number> = {};
   const out: Record<string, CsFundSnap> = {};
@@ -1772,6 +1975,10 @@ function csFundSnaps(
     while (fi < fins.length) {
       const dd = String(fins[fi].disc_date || "").slice(0, 10);
       if (!dd || dd > d) break;
+      if (last != null) {
+        if (finite(last.eq_ar)) prevEqAr = last.eq_ar as number;
+        if (finite(last.sales)) prevSales = last.sales as number;
+      }
       last = fins[fi];
       fi += 1;
     }
@@ -1799,25 +2006,47 @@ function csFundSnaps(
     out[d] = {
       cheapPb: pb !== null && pbMed !== null && pb < pbMed,
       expensivePb: pb !== null && pbMed !== null && pb > pbMed,
+      pbRising: pb !== null && pbMed !== null && pb > pbMed,
       eyHigh: ey !== null && eyMed !== null && ey > eyMed,
       roeHigh:
         last != null &&
         finite(last.roe) &&
         roeMed !== null &&
         (last.roe as number) >= roeMed,
+      roeLow:
+        last != null &&
+        finite(last.roe) &&
+        roeMed !== null &&
+        (last.roe as number) < roeMed,
       divPositive:
         last != null &&
         finite(last.div_ann) &&
         (last.div_ann as number) > 0,
       npPositive:
         last != null && finite(last.np) && (last.np as number) > 0,
+      npNegative:
+        last != null && finite(last.np) && (last.np as number) < 0,
       eqArHigh: eqAr !== null && eqMed !== null && eqAr >= eqMed,
       eqArLow: eqAr !== null && eqMed !== null && eqAr < eqMed,
+      eqArRising:
+        eqAr !== null && prevEqAr !== null && eqAr > prevEqAr,
+      eqArFalling:
+        eqAr !== null && prevEqAr !== null && eqAr < prevEqAr,
       taUp:
         last != null &&
         finite(last.ta) &&
         finite(last.prior_ta) &&
         (last.ta as number) > (last.prior_ta as number),
+      taDown:
+        last != null &&
+        finite(last.ta) &&
+        finite(last.prior_ta) &&
+        (last.ta as number) < (last.prior_ta as number),
+      salesDown:
+        last != null &&
+        finite(last.sales) &&
+        prevSales !== null &&
+        (last.sales as number) < prevSales,
     };
   }
   return out;
@@ -2222,7 +2451,14 @@ function gatedCsHeld(
               npPositive: snap?.npPositive === true,
               eqArHigh: snap?.eqArHigh === true,
               eqArLow: snap?.eqArLow === true,
+              eqArRising: snap?.eqArRising === true,
+              eqArFalling: snap?.eqArFalling === true,
               taUp: snap?.taUp === true,
+              taDown: snap?.taDown === true,
+              pbRising: snap?.pbRising === true,
+              roeLow: snap?.roeLow === true,
+              salesDown: snap?.salesDown === true,
+              npNegative: snap?.npNegative === true,
               cheapIv:
                 finite(panel.atm_iv_series?.[d]) &&
                 finite(panel.base_vol_series?.[d]) &&
@@ -2511,6 +2747,7 @@ export function evalLogicDailyPathOnPanel(
     occupancy_frac: pack.occupancy,
     occupancy: pack.occupancy,
     n_gate_on_days: pack.n_gate_on,
+    cost_adv_incomplete: pack.cost_adv_incomplete,
     n_days: pack.dates.length,
     daily_path_DD: dd.max_dd,
     total_ret_net: dd.total_return,

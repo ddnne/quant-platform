@@ -1,0 +1,29 @@
+logic_id: event_sales_down_eqar_falling_fade
+family_id: event_fund_cross
+axis: mixed
+headline: false
+generation_enabled: false
+promote_as_main: false
+go: false
+main_pool: true
+thesis: >
+  Fade PEAD when sales shrank AND EqAR fell versus the last prior prints.
+signal_definition: >
+  Fade PEAD when sales shrank AND EqAR fell versus the last prior prints.
+datasets:
+  - equities_bars_daily
+  - fins_summary
+  - jsda_tokyo_repo_rates
+  - markets_calendar
+params:
+  post_hold_days: 5
+  hold_days: 10
+  momentum_n: 5
+  min_hist: 20
+  mode: event_sales_down_eqar_falling_fade
+  side: flip
+  gates: sales_down,eq_ar_falling
+  cs_gate: None
+  entry_shift: 0
+  hold_tail_days: 0
+evaluator: research.unique_logic.event_combos.evaluate_combo_daily_mtm

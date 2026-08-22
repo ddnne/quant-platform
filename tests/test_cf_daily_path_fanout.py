@@ -257,6 +257,7 @@ def test_cf_daily_path_job_does_not_import_factory() -> None:
         "cf_mass_eval_stage.py": banned_cf,
         "cf_mass_eval_run.py": banned_cf,
         "cf_mass_eval_thicken.py": banned_cf,
+        "cf_propose_thesis.py": banned_cf + ("factory",),
         "bar_native_specs.py": banned_cf,
         "eval_universe.py": banned_cf,
         "unique_logic/event_combos.py": banned_cf,

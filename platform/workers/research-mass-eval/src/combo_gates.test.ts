@@ -51,6 +51,117 @@ describe("comboEventGateOk", () => {
     expect(comboEventGateOk("ta_up", down, {}, {}, 8, dummyPanel)).toBe(false);
   });
 
+  it("ta_down is the invert of ta_up and fails closed when missing", () => {
+    const up = { ...ev, ta: 200, prior_ta: 150 };
+    const down = { ...ev, ta: 100, prior_ta: 150 };
+    const missing = { ...ev, ta: null, prior_ta: null };
+    expect(comboEventGateOk("ta_down", down, {}, {}, 8, dummyPanel)).toBe(true);
+    expect(comboEventGateOk("ta_down", up, {}, {}, 8, dummyPanel)).toBe(false);
+    expect(comboEventGateOk("ta_down", missing, {}, {}, 8, dummyPanel)).toBe(
+      false,
+    );
+    expect(comboEventGateOk("ta_up", down, {}, {}, 8, dummyPanel)).toBe(false);
+  });
+
+  it("eq_ar_rising needs a prior print and fails closed without one", () => {
+    const panel = {
+      fund_regime: {
+        events_by_code: {
+          "13010": [
+            { disc_date: "2018-12-01", eq_ar: 0.4 },
+            { disc_date: "2019-01-08", eq_ar: 0.6 },
+          ],
+        },
+      },
+    } as PeriodPanel;
+    const rising = { ...ev, eq_ar: 0.6 };
+    const falling = { ...ev, eq_ar: 0.3 };
+    const missing = { ...ev, eq_ar: null };
+    expect(comboEventGateOk("eq_ar_rising", rising, {}, {}, 8, panel)).toBe(
+      true,
+    );
+    expect(comboEventGateOk("eq_ar_rising", falling, {}, {}, 8, panel)).toBe(
+      false,
+    );
+    expect(comboEventGateOk("eq_ar_falling", falling, {}, {}, 8, panel)).toBe(
+      true,
+    );
+    expect(comboEventGateOk("eq_ar_falling", rising, {}, {}, 8, panel)).toBe(
+      false,
+    );
+    expect(comboEventGateOk("eq_ar_rising", missing, {}, {}, 8, dummyPanel)).toBe(
+      false,
+    );
+    const noFieldRow = {
+      fund_regime: {
+        events_by_code: {
+          "13010": [
+            { disc_date: "2018-12-01", eq_ar: 0.4 },
+            { disc_date: "2019-01-08" },
+          ],
+        },
+      },
+    } as PeriodPanel;
+    expect(comboEventGateOk("eq_ar_rising", missing, {}, {}, 8, noFieldRow)).toBe(
+      false,
+    );
+    const firstPrint = { ...ev, disc: "2018-12-01", eq_ar: 0.4 };
+    expect(
+      comboEventGateOk("eq_ar_rising", firstPrint, {}, {}, 8, panel),
+    ).toBe(false);
+    expect(
+      comboEventGateOk("eq_ar_rising", rising, {}, {}, 8, dummyPanel),
+    ).toBe(false);
+  });
+
+  it("pb_rising occupancy is the opposite of cheap_pb; missing fails closed", () => {
+    const dates: string[] = [];
+    for (let i = 1; i <= 12; i++) {
+      dates.push(`2018-12-${String(i).padStart(2, "0")}`);
+    }
+    dates.push("2019-01-08");
+    const richPairs = dates.map((d, i) => [
+      d,
+      i === dates.length - 1 ? 200 : 100,
+    ]) as Array<[string, number]>;
+    const cheapPairs = dates.map((d, i) => [
+      d,
+      i === dates.length - 1 ? 50 : 100,
+    ]) as Array<[string, number]>;
+    const fins = [{ disc_date: "2018-11-01", bps: 100 }];
+    const richPanel = {
+      bars: { "13010": richPairs },
+      fund_regime: { events_by_code: { "13010": fins } },
+    } as PeriodPanel;
+    const cheapPanel = {
+      bars: { "13010": cheapPairs },
+      fund_regime: { events_by_code: { "13010": fins } },
+    } as PeriodPanel;
+    const priced = { ...ev, bps: 100 };
+    expect(comboEventGateOk("pb_rising", priced, {}, {}, 8, richPanel)).toBe(
+      true,
+    );
+    expect(comboEventGateOk("cheap_pb", priced, {}, {}, 8, richPanel)).toBe(
+      false,
+    );
+    expect(comboEventGateOk("pb_rising", priced, {}, {}, 8, cheapPanel)).toBe(
+      false,
+    );
+    expect(comboEventGateOk("cheap_pb", priced, {}, {}, 8, cheapPanel)).toBe(
+      true,
+    );
+    const noBps = { ...ev, bps: null };
+    expect(comboEventGateOk("pb_rising", noBps, {}, {}, 8, richPanel)).toBe(
+      false,
+    );
+    expect(comboEventGateOk("cheap_pb", noBps, {}, {}, 8, richPanel)).toBe(
+      false,
+    );
+    expect(comboEventGateOk("pb_rising", priced, {}, {}, 8, dummyPanel)).toBe(
+      false,
+    );
+  });
+
   it("cluster uses a linear window series and skips missing dates", () => {
     const dates = [
       "2019-01-04",
@@ -299,5 +410,42 @@ describe("comboCsGateOk", () => {
     );
     expect(miss.keep).toBe(false);
     expect(miss.invert).toBe(false);
+  });
+
+  it("new CS fund gates fail closed without extras", () => {
+    for (const gate of [
+      "ta_down",
+      "eq_ar_rising",
+      "eq_ar_falling",
+      "pb_rising",
+      "roe_low",
+      "sales_down",
+    ]) {
+      const miss = comboCsGateOk(gate, "2019-01-08", {}, {}, null, null, null);
+      expect(miss.keep).toBe(false);
+    }
+    const rising = comboCsGateOk(
+      "eq_ar_rising",
+      "2019-01-08",
+      {},
+      {},
+      null,
+      null,
+      null,
+      { eqArRising: true },
+    );
+    expect(rising.keep).toBe(true);
+    const falling = comboCsGateOk(
+      "eq_ar_falling",
+      "2019-01-08",
+      {},
+      {},
+      null,
+      null,
+      null,
+      { eqArFalling: true },
+    );
+    expect(falling.keep).toBe(true);
+    expect(falling.invert).toBe(false);
   });
 });

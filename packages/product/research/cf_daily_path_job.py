@@ -47,7 +47,7 @@ def invoke_cf_daily_path(
 ) -> dict[str, Any]:
     spec = dict(job_spec)
     spec["eval_kind"] = "daily_path"
-    spec["write_artifacts"] = False
+    spec["write_artifacts"] = bool(spec.get("write_artifacts"))
     patched_url = worker_url.rstrip("/") + "/v1/daily-path"
 
     def _post(*, url: str, body: bytes, headers: dict[str, str]) -> Any:
@@ -97,6 +97,7 @@ def run_cf_daily_path_fanout(
     staging_dir: str | Path | None = None,
     panels_prefix: str | None = None,
     track: str | None = None,
+    write_artifacts: bool = False,
 ) -> dict[str, Any]:
     from research.eval_tracks import infer_eval_track
 
@@ -163,7 +164,7 @@ def run_cf_daily_path_fanout(
             drop_unique_unsupported=False,
         )
         spec["eval_kind"] = "daily_path"
-        spec["write_artifacts"] = False
+        spec["write_artifacts"] = bool(write_artifacts)
         resp = invoke_cf_daily_path(
             spec, worker_url=worker_url, timeout=timeout, http_post=http_post
         )
@@ -213,6 +214,15 @@ def run_cf_daily_path_fanout(
     table_path.write_text(
         json.dumps(cells, indent=2, default=str) + "\n", encoding="utf-8"
     )
+    from research.combo_basket import (
+        primary_sleeve_and_meta_cells,
+        summarize_basket_trends,
+    )
+
+    basket_cells = primary_sleeve_and_meta_cells(cells)
+    basket_summary = summarize_basket_trends(basket_cells, job_id=jid)
+    basket_summary["not_a_pass"] = True
+    basket_summary["go"] = False
     pack = {
         "version": FANOUT_VERSION,
         "wave": CF_MASS_EVAL_WAVE,
@@ -258,6 +268,9 @@ def run_cf_daily_path_fanout(
         "candidate_grade": True,
         "period_net_dd_only_pass_forbidden": True,
         "notes": "CF isolate fan-out daily_path_DD. Not a promotion.",
+        "baskets": basket_summary,
+        "n_basket_cells": len(basket_cells),
+        "write_artifacts": bool(write_artifacts),
     }
     return pack
 
@@ -363,6 +376,7 @@ def run_both_track_sleeve_fanout(
                     staging_dir=staging_dir,
                     panels_prefix=panels_prefix,
                     track=tid,
+                    write_artifacts=not bool(dry_run),
                 )
             )
             fan_pack["not_a_pass"] = True
@@ -384,6 +398,7 @@ def run_both_track_sleeve_fanout(
             "table_path": (fan_pack or {}).get("table_path"),
             "n_cells": (fan_pack or {}).get("n_cells"),
             "n_daily_path_complete": (fan_pack or {}).get("n_daily_path_complete"),
+            "baskets": (fan_pack or {}).get("baskets") or {"baskets": []},
             "not_a_pass": True,
             "go": False,
             "promote_as_main": False,
@@ -394,8 +409,10 @@ def run_both_track_sleeve_fanout(
         by_tid[tid] = row
 
     compare = compare_mid_vs_liq(
-        {"job_id": by_tid[EVAL_TRACK_MID_N]["job_id"], "baskets": []},
-        {"job_id": by_tid[EVAL_TRACK_LIQ_LARGE]["job_id"], "baskets": []},
+        by_tid[EVAL_TRACK_MID_N].get("baskets")
+        or {"job_id": by_tid[EVAL_TRACK_MID_N]["job_id"], "baskets": []},
+        by_tid[EVAL_TRACK_LIQ_LARGE].get("baskets")
+        or {"job_id": by_tid[EVAL_TRACK_LIQ_LARGE]["job_id"], "baskets": []},
     )
     compare["not_a_pass"] = True
     compare["go"] = False

@@ -12,7 +12,8 @@ from research.eval_registry import is_daily_path_complete_cell, is_path_broken_c
 CANDIDATE_KEEP_SIMPLE: str = (
     "Simple occupancy-gated theses stay in the candidate pool for later "
     "combination/funds even when single-name t/Sharpe is modest. "
-    "path_broken, path_collapsed, always_on, and near_empty are excluded."
+    "path_broken, path_collapsed, always_on, near_empty, and "
+    "worker_body_missing are excluded."
 )
 
 
@@ -69,11 +70,15 @@ def summarize_daily_path_cells(
         CF_NEW_EVENT_THESIS_IDS,
         CS_LOGIC_IDS,
         NEAR_EMPTY_OCCUPANCY,
+        RESEARCH_UNIQUE_LOGIC_IDS,
         TERM_STRUCTURE_REQUIRED,
         SPARSE_ON_15NAME_SHARD,
         WORKER_ISOLATE_LIMIT_IDS,
+        countable_thesis_ids,
     )
     from research.unique_logic.near_duplicate import is_near_duplicate
+
+    _countable = countable_thesis_ids()
 
     def _fam(lid: str) -> str:
         if lid in CF_NEW_EVENT_THESIS_IDS:
@@ -149,6 +154,8 @@ def summarize_daily_path_cells(
             flags.append("always_on_cs_sticky")
         if lid in WORKER_ISOLATE_LIMIT_IDS:
             flags.append("worker_isolate_limit")
+        if lid in RESEARCH_UNIQUE_LOGIC_IDS and lid not in _countable:
+            flags.append("worker_body_missing")
         if m_net is not None and abs(m_net) < 1e-4:
             flags.append("near_zero_net")
         if n_pos >= 2 and n_neg >= 2:
@@ -240,7 +247,8 @@ def summarize_daily_path_cells(
         "logics": logics,
         "notes": (
             "candidate = not path_broken/collapsed/always_on/near_empty/"
-            "data_requirement_unmet/near_duplicate. Simple gated theses stay "
-            "for combinations. strong is an interest flag, never a promote."
+            "data_requirement_unmet/near_duplicate/worker_body_missing. "
+            "Simple gated theses stay for combinations. strong is an "
+            "interest flag, never a promote."
         ),
     }

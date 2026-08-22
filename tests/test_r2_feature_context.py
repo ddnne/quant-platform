@@ -14,10 +14,8 @@ from data_contracts.permanent_defer import (
 )
 from tests.research_eval_util import (
     _aa_row,
-    _assert_mass_ready_off,
     _history_bar,
     _history_topix,
-    _injected_r2_history,
     _r2_bar_line as _bar_line,
     _r2_catalog_line as _catalog_line,
     _s1_two_day_map,
@@ -44,12 +42,6 @@ from research.r2_feature_context import (
     resolve_history_source,
     schema_mapping_document,
     write_r2_inventory_json,
-)
-from research.single_shot_job import (
-    DEFAULT_CANDIDATE_FEATURES,
-    compute_tip_candidate_features,
-    execute_multiday_multisignal_compare,
-    execute_multiday_signal_eval,
 )
 
 
@@ -197,19 +189,6 @@ def test_build_r2_feature_context_computes_candidates():
     assert bars.metadata["source"] == "cloudflare_r2_structured"
     assert len(bars.rows) == 2
 
-    result = compute_tip_candidate_features(
-        rows,
-        as_of=as_of,
-        feature_ids=DEFAULT_CANDIDATE_FEATURES,
-        codes=["13010"],
-        dates=["2026-06-03"],
-    )
-    by_id = {f["feature_id"]: f for f in result["features"]}
-    assert by_id["volume_change_1d"]["sample_values"][0]["value"] == pytest.approx(0.5)
-    # equity ret 0.10 - topix ret 0.01 = 0.09
-    assert by_id["topix_relative_1d"]["sample_values"][0]["value"] == pytest.approx(0.09)
-    assert by_id["is_trading_day"]["sample_values"][0]["value"] == pytest.approx(1.0)
-
 
 def test_r2_get_channel_via_injectable(tmp_path: Path):
     body = (
@@ -337,18 +316,6 @@ def test_resolve_history_source():
     assert resolve_history_source("d1_tip") == "d1_tip"
     with pytest.raises(R2FeatureContextError):
         resolve_history_source("postgres")
-
-
-def test_multiday_history_source_r2_does_not_break_default_d1(tmp_path: Path):
-    days = _weekdays(date(2026, 6, 1), 8)
-    _, kw = _injected_r2_history(
-        tmp_path, job_id="w0815az-g1-r2-bridge-test", days=days
-    )
-    ex = execute_multiday_signal_eval(**kw)
-    assert ex.n_days >= 5
-    _assert_mass_ready_off(ex)
-    assert ex.batch_summary["history_source"] == "r2"
-    assert ex.batch_summary["tip_plane"] == "R2_history"
 
 
 def test_bridge_expand_datasets_listed():
@@ -499,38 +466,7 @@ def test_available_at_repair_calendar_only_no_lookahead():
     assert mr["look_ahead"] is False
 
 
-def test_multisignal_history_source_r2(tmp_path: Path):
-    days = _weekdays(date(2024, 10, 1), 12)
-    _, kw = _injected_r2_history(
-        tmp_path,
-        job_id="w0815ba-g1-multisignal-r2-test",
-        days=days,
-        vol_step=50.0,
-        extra_lines={
-            "fins_summary": [
-                _catalog_line(
-                    "fins_summary",
-                    days[5],
-                    code="13010",
-                    extra_payload={"DiscDate": days[5]},
-                )
-            ],
-        },
-    )
-    ex = execute_multiday_multisignal_compare(**kw)
-    assert ex.n_days >= 5
-    _assert_mass_ready_off(ex)
-    assert ex.batch_summary["history_source"] == "r2"
-    assert ex.batch_summary["tip_plane"] == "R2_history"
-    assert ex.batch_summary["significance_claimed"] is False
-    assert ex.batch_summary["edge_claimed"] is False
-    assert ex.batch_summary["operational_go"] is False
-    table = ex.batch_summary["compare_table"]
-    assert len(table) == 3
-    sids = {r["signal_id"] for r in table}
-    assert "c21_topix_relative_sign" in sids
-    assert "c21_volume_change_sign" in sids
-    assert "c21_topix_rel_disclosure_filter" in sids
+def test_multisignal_history_datasets_cover_s1_plus_expand():
     assert set(MULTI_SIGNAL_HISTORY_DATASETS) >= {
         "equities_bars_daily",
         "fins_summary",

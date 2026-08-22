@@ -1,4 +1,4 @@
-"""ADV liquidity multiplier on held_book_daily_mtm (tx+repo when ADV missing)."""
+"""ADV liquidity multiplier on held_book_daily_mtm (fail-closed missing ADV)."""
 
 from __future__ import annotations
 
@@ -11,8 +11,8 @@ CLOSE = {"7203": {"2024-01-02": 100.0, "2024-01-03": 101.0, "2024-01-04": 102.0}
 REPO = {"2024-01-02": 1.0, "2024-01-03": 1.0}
 
 
-def _net(adv):
-    pack = held_book_daily_mtm(
+def _pack(adv):
+    return held_book_daily_mtm(
         held_by_code_date=HELD,
         close_by=CLOSE,
         dates=DATES,
@@ -22,25 +22,31 @@ def _net(adv):
         repo_by_date=REPO,
         adv_by_code=adv,
     )
-    return pack["net_daily"][1]
+
+
+def _net(adv):
+    return _pack(adv)["net_daily"][1]
 
 
 def test_liq_mult_scales_with_adv_bucket() -> None:
-    missing = _net(None)
+    missing = _pack(None)
     high = _net({"7203": 2e9})
     mid = _net({"7203": 2e8})
     low = _net({"7203": 1e7})
-    # Missing ADV → tx+repo only (liq=1), same as high bucket.
-    assert abs(missing - high) < 1e-12
-    # Lower ADV → higher cost drag → lower (more negative) net.
+    assert missing["cost_adv_incomplete"] is True
+    assert missing["n_active_days"] == 0
+    assert abs(missing["net_daily"][1]) < 1e-15
     assert mid < high
     assert low < mid
 
 
 def test_missing_code_adv_does_not_invent() -> None:
-    other_only = _net({"9999": 1e7})
-    none = _net(None)
-    assert abs(other_only - none) < 1e-12
+    other_only = _pack({"9999": 1e7})
+    none = _pack(None)
+    assert other_only["cost_adv_incomplete"] is True
+    assert none["cost_adv_incomplete"] is True
+    assert abs(other_only["net_daily"][1]) < 1e-15
+    assert abs(none["net_daily"][1]) < 1e-15
 
 
 def test_dispatch_contextvar_passes_adv_to_held_book() -> None:

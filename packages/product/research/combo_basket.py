@@ -155,6 +155,35 @@ def _sharpe(net_daily: Sequence[float]) -> float | None:
     return None if got is None else got[0] / got[1] * (252 ** 0.5)
 
 
+def primary_sleeve_and_meta_cells(
+    cells: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Equal-weight primary sleeves + active metas. Not a pass."""
+    from research.combo_basket_catalog import META_BASKETS
+
+    sleeve_cells: list[dict[str, Any]] = []
+    for d in mechanical_basket_defs():
+        if not d.get("primary"):
+            continue
+        sleeve_cells.extend(
+            blend_window_cells(
+                cells,
+                basket_id=str(d["basket_id"]),
+                logic_ids=list(d.get("members") or ()),
+            )
+        )
+    meta_cells: list[dict[str, Any]] = []
+    for m in META_BASKETS:
+        meta_cells.extend(
+            blend_window_cells(
+                sleeve_cells,
+                basket_id=str(m["meta_id"]),
+                logic_ids=list(m.get("sleeves") or ()),
+            )
+        )
+    return sleeve_cells + meta_cells
+
+
 def summarize_basket_trends(
     cells: Sequence[Mapping[str, Any]],
     *,
@@ -242,5 +271,6 @@ __all__ = [
     "blend_net_daily",
     "blend_window_cells",
     "occupancy_in_candidate_band",
+    "primary_sleeve_and_meta_cells",
     "summarize_basket_trends",
 ]

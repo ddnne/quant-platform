@@ -12,6 +12,7 @@ import sqlite3
 import subprocess
 import tempfile
 from pathlib import Path
+from types import MappingProxyType, SimpleNamespace
 from typing import Any, Callable, Mapping, Sequence
 
 from data_contracts.permanent_defer import (
@@ -19,23 +20,12 @@ from data_contracts.permanent_defer import (
     reject_permanent_defer_for_history,
 )
 from features.runtime import FeatureContext
-from research.single_shot_job import (
+from research.complete21 import (
     COMPLETE_21_DATASETS,
     DEFAULT_FEATURE_DATASETS,
-    SingleShotJobError,
-    _DEFAULT_WRANGLER,
-    _DEFAULT_WRANGLER_CONFIG,
-    _REPO_ROOT,
     require_complete_21_only,
 )
-from research.single_shot_tip import (
-    _decode_json_obj,
-    _normalize_tip_bar_row,
-    _normalize_tip_calendar_row,
-    _normalize_tip_catalog_row,
-    _pick_str,
-    build_tip_feature_context,
-)
+from research.r2_io import DEFAULT_WRANGLER, DEFAULT_WRANGLER_CONFIG, REPO_ROOT
 
 HISTORY_SOURCE_R2: str = "r2"
 HISTORY_SOURCE_D1_TIP: str = "d1_tip"
@@ -114,8 +104,139 @@ _CODE_KEYED_HISTORY_DATASETS: frozenset[str] = frozenset(
 
 R2GetFn = Callable[[str, str], bytes]  # (bucket, key) -> body bytes
 
-class R2FeatureContextError(SingleShotJobError):
+class R2FeatureContextError(ValueError):
     """Invalid R2 history bridge input or load failure."""
+
+
+def _decode_json_obj(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str) and value:
+        try:
+            loaded = json.loads(value)
+            if isinstance(loaded, dict):
+                return loaded
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return {}
+    return {}
+
+
+def _pick_num(payload: Mapping[str, Any], *names: str) -> float | None:
+    for name in names:
+        if name not in payload or payload[name] is None or payload[name] == "":
+            continue
+        try:
+            return float(payload[name])
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _pick_str(payload: Mapping[str, Any], *names: str) -> str | None:
+    for name in names:
+        v = payload.get(name)
+        if v is None or v == "":
+            continue
+        return str(v)
+    return None
+
+
+def _available_at_ok(row_available_at: Any, as_of: str) -> bool:
+    """PIT gate: available_at must be present and <= as_of (lexicographic ISO)."""
+    if row_available_at is None or row_available_at == "":
+        return False
+    return str(row_available_at) <= str(as_of)
+
+
+def _normalize_tip_bar_row(
+    *,
+    payload: Mapping[str, Any],
+    event_time: Any,
+    available_at: Any,
+    natural_key: Any,
+) -> dict[str, Any] | None:
+    """Map a bar payload to curated equity-bar fields (no ingestion import)."""
+    code = _pick_str(payload, "Code", "code")
+    date = _pick_str(payload, "Date", "date")
+    if date is None and event_time is not None:
+        date = str(event_time)[:10]
+    if code is None and natural_key is not None:
+        nk = _decode_json_obj(natural_key)
+        code = _pick_str(nk, "Code", "code")
+        if date is None:
+            date = _pick_str(nk, "Date", "date")
+    if not code or not date:
+        return None
+    return {
+        "source": "jquants",
+        "code": str(code),
+        "date": str(date)[:10],
+        "event_time": event_time,
+        "available_at": available_at,
+        "volume": _pick_num(payload, "Volume", "Vo", "AdjVo", "AVo"),
+        "close": _pick_num(payload, "Close", "C", "AdjC", "AC"),
+        "open": _pick_num(payload, "Open", "O", "AdjO", "AO"),
+        "high": _pick_num(payload, "High", "H", "AdjH", "AH"),
+        "low": _pick_num(payload, "Low", "L", "AdjL", "AL"),
+        "payload": dict(payload),
+        "raw_payload": dict(payload),
+    }
+
+
+def _normalize_tip_calendar_row(
+    *,
+    payload: Mapping[str, Any],
+    event_time: Any,
+    available_at: Any,
+    natural_key: Any,
+) -> dict[str, Any] | None:
+    date = _pick_str(payload, "Date", "date")
+    if date is None and event_time is not None:
+        date = str(event_time)[:10]
+    if date is None and natural_key is not None:
+        nk = _decode_json_obj(natural_key)
+        date = _pick_str(nk, "Date", "date")
+    if not date:
+        return None
+    hol = _pick_str(payload, "HolidayDivision", "HolDiv", "holiday_division")
+    return {
+        "source": "jquants",
+        "date": str(date)[:10],
+        "event_time": event_time,
+        "available_at": available_at,
+        "holiday_division": hol,
+        "payload": dict(payload),
+        "raw_payload": dict(payload),
+    }
+
+
+def _normalize_tip_catalog_row(
+    *,
+    dataset: str,
+    payload: Mapping[str, Any],
+    event_time: Any,
+    available_at: Any,
+    natural_key: Any,
+) -> dict[str, Any]:
+    """Generic catalog row shape for get_jquants_records (topix etc.)."""
+    return {
+        "source": "jquants",
+        "dataset": dataset,
+        "natural_key": natural_key,
+        "event_time": event_time,
+        "available_at": available_at,
+        "payload": dict(payload),
+        "raw_payload": dict(payload),
+        "date": _pick_str(payload, "Date", "date", "DiscDate", "PublishedDate")
+        or (str(event_time)[:10] if event_time else None),
+        "close": _pick_num(payload, "Close", "C", "AdjC", "AC"),
+        "volume": _pick_num(payload, "Volume", "Vo", "AdjVo", "AVo"),
+        "Code": _pick_str(payload, "Code", "code"),
+        "Date": _pick_str(payload, "Date", "date", "DiscDate", "PublishedDate"),
+        "S33": _pick_str(payload, "S33", "section"),
+        "section": _pick_str(payload, "S33", "section"),
+    }
+
 
 def _maybe_json(value: Any) -> Any:
     if isinstance(value, (dict, list)):
@@ -384,8 +505,8 @@ def default_r2_get_object(
     timeout: int = 300,
 ) -> bytes:
     """Fetch one R2 object body via ``wrangler r2 object get`` (remote)."""
-    wr = Path(wrangler) if wrangler else _DEFAULT_WRANGLER
-    cfg = Path(config) if config else _DEFAULT_WRANGLER_CONFIG
+    wr = Path(wrangler) if wrangler else DEFAULT_WRANGLER
+    cfg = Path(config) if config else DEFAULT_WRANGLER_CONFIG
     if not wr.is_file():
         raise R2FeatureContextError(
             f"wrangler binary not found for R2 get: {wr}. "
@@ -410,7 +531,7 @@ def default_r2_get_object(
             capture_output=True,
             text=True,
             timeout=timeout,
-            cwd=str(_REPO_ROOT),
+            cwd=str(REPO_ROOT),
         )
         if proc.returncode != 0:
             combined = (proc.stderr or "") + (proc.stdout or "")
@@ -605,6 +726,154 @@ def extract_r2_history_feature_rows(
         "local_sot": False,
         "disposable_mirror": True,
     }
+
+
+def build_tip_feature_context(
+    tip_rows_by_dataset: Mapping[str, Sequence[Mapping[str, Any]]],
+    *,
+    as_of: str,
+    inputs: Mapping[str, Any] | None = None,
+    plane: str = "D1_hot_tip",
+    source: str = "cloudflare_d1_tip",
+    table_prefix: str = "tip",
+) -> FeatureContext:
+    """Build a FeatureContext whose PIT reads come from in-memory rows."""
+    as_of_s = str(as_of).strip()
+    if not as_of_s:
+        raise R2FeatureContextError("as_of is required for tip FeatureContext")
+    plane_s = str(plane).strip() or "D1_hot_tip"
+    source_s = str(source).strip() or "cloudflare_d1_tip"
+    prefix = str(table_prefix).strip() or "tip"
+
+    store: dict[str, list[dict[str, Any]]] = {
+        str(ds): [dict(r) for r in (rows or [])]
+        for ds, rows in tip_rows_by_dataset.items()
+    }
+
+    def _pit_reader(resource: str, kwargs: Mapping[str, Any]) -> SimpleNamespace:
+        kw = dict(kwargs)
+        if resource == "equity_bars_daily":
+            rows = list(store.get("equities_bars_daily") or [])
+            code = kw.get("code")
+            codes = kw.get("codes")
+            from_event = kw.get("from_event")
+            to_event = kw.get("to_event")
+            out: list[dict[str, Any]] = []
+            for row in rows:
+                if not _available_at_ok(row.get("available_at"), as_of_s):
+                    continue
+                if code is not None and str(row.get("code")) != str(code):
+                    continue
+                if codes is not None and str(row.get("code")) not in {
+                    str(c) for c in codes
+                }:
+                    continue
+                d = str(row.get("date") or "")[:10]
+                if from_event is not None and d < str(from_event)[:10]:
+                    continue
+                if to_event is not None and d > str(to_event)[:10]:
+                    continue
+                out.append(row)
+            out.sort(key=lambda r: (str(r.get("code") or ""), str(r.get("date") or "")))
+            return SimpleNamespace(
+                rows=out,
+                metadata={
+                    "as_of": as_of_s,
+                    "table": f"{prefix}_equities_bars_daily",
+                    "count": len(out),
+                    "source": source_s,
+                    "plane": plane_s,
+                },
+            )
+
+        if resource == "market_calendar":
+            rows = list(store.get("markets_calendar") or [])
+            from_date = kw.get("from_date")
+            to_date = kw.get("to_date")
+            out = []
+            for row in rows:
+                if not _available_at_ok(row.get("available_at"), as_of_s):
+                    continue
+                d = str(row.get("date") or "")[:10]
+                if from_date is not None and d < str(from_date)[:10]:
+                    continue
+                if to_date is not None and d > str(to_date)[:10]:
+                    continue
+                out.append(row)
+            out.sort(key=lambda r: str(r.get("date") or ""))
+            return SimpleNamespace(
+                rows=out,
+                metadata={
+                    "as_of": as_of_s,
+                    "table": f"{prefix}_markets_calendar",
+                    "count": len(out),
+                    "source": source_s,
+                    "plane": plane_s,
+                },
+            )
+
+        if resource == "jquants_records":
+            dataset = str(kw.get("dataset") or "")
+            rows = list(store.get(dataset) or [])
+            code = kw.get("code")
+            out = []
+            for row in rows:
+                if not _available_at_ok(row.get("available_at"), as_of_s):
+                    continue
+                if code is not None:
+                    payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+                    row_code = (
+                        row.get("Code")
+                        or row.get("code")
+                        or (payload.get("Code") if isinstance(payload, dict) else None)
+                        or (payload.get("code") if isinstance(payload, dict) else None)
+                    )
+                    if row_code is None or str(row_code) != str(code):
+                        continue
+                out.append(row)
+            out.sort(
+                key=lambda r: (
+                    str(r.get("event_time") or ""),
+                    str(r.get("natural_key") or ""),
+                )
+            )
+            return SimpleNamespace(
+                rows=out,
+                metadata={
+                    "as_of": as_of_s,
+                    "table": f"{prefix}_jquants_records",
+                    "dataset": dataset,
+                    "count": len(out),
+                    "source": source_s,
+                    "plane": plane_s,
+                },
+            )
+
+        if resource == "equity_master":
+            return SimpleNamespace(rows=[], metadata={"as_of": as_of_s, "count": 0})
+
+        if resource == "jsda_repo_rates":
+            rows = list(store.get("jsda_tokyo_repo_rates") or [])
+            out = [r for r in rows if _available_at_ok(r.get("available_at"), as_of_s)]
+            return SimpleNamespace(
+                rows=out,
+                metadata={
+                    "as_of": as_of_s,
+                    "table": f"{prefix}_jsda_tokyo_repo_rates",
+                    "count": len(out),
+                    "source": source_s,
+                    "plane": plane_s,
+                },
+            )
+
+        raise RuntimeError(f"unknown tip FeatureContext resource: {resource!r}")
+
+    return FeatureContext(
+        as_of=as_of_s,
+        _input_values=MappingProxyType(dict(inputs or {})),
+        _pit_reader=_pit_reader,
+    )
+
 
 def build_r2_feature_context(
     rows_by_dataset: Mapping[str, Sequence[Mapping[str, Any]]],

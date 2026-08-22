@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import math
 import subprocess
 from pathlib import Path
 from contextvars import ContextVar
@@ -24,6 +25,16 @@ def set_held_book_adv(adv_by_code: Mapping[str, float] | None):
 
 def reset_held_book_adv(token) -> None:
     _ADV_CTX.reset(token)
+
+
+def _finite_num(v: object) -> bool:
+    if v is None:
+        return False
+    try:
+        f = float(v)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return False
+    return math.isfinite(f)
 
 
 def dump_json(path: Path, obj: object) -> None:
@@ -226,6 +237,7 @@ def held_book_daily_mtm(
             "equities": [],
             "gross_daily": [],
             "net_daily": [],
+            "cost_adv_incomplete": False,
         }
 
     daily_rows: list[dict[str, Any]] = []
@@ -250,14 +262,20 @@ def held_book_daily_mtm(
         }
     )
 
+    cost_adv_incomplete = False
     for i in range(1, len(dates)):
         d_prev = dates[i - 1]
         d = dates[i]
         contribs: list[float] = []
         n_short = 0
+        liq_mults: list[float] = []
         for code, cmap in held_by_code_date.items():
             pos = cmap.get(d_prev)
             if pos is None or pos == 0.0:
+                continue
+            adv = None if adv_by_code is None else adv_by_code.get(code)
+            if not _finite_num(adv):
+                cost_adv_incomplete = True
                 continue
             c0 = close_by.get(code, {}).get(d_prev)
             c1 = close_by.get(code, {}).get(d)
@@ -267,6 +285,14 @@ def held_book_daily_mtm(
             contribs.append(float(pos) * r1)
             if float(pos) < 0:
                 n_short += 1
+            # Match cost_models LIQUIDITY_TX_MULT high/mid/low (1.0/1.5/2.5); local, no import.
+            adv_f = float(adv)
+            if adv_f >= 1e9:
+                liq_mults.append(1.0)
+            elif adv_f >= 1e8:
+                liq_mults.append(1.5)
+            else:
+                liq_mults.append(2.5)
         n_active = len(contribs)
         if n_active == 0:
             g = 0.0
@@ -274,24 +300,7 @@ def held_book_daily_mtm(
             net = 0.0
         else:
             g = float(sum(contribs) / n_active)
-            liq = 1.0
-            if adv_by_code:
-                mults: list[float] = []
-                for code, cmap in held_by_code_date.items():
-                    pos = cmap.get(d_prev)
-                    if not pos:
-                        continue
-                    adv = adv_by_code.get(code)
-                    if adv is None:
-                        continue
-                    if float(adv) >= 1e9:
-                        mults.append(1.0)
-                    elif float(adv) >= 1e8:
-                        mults.append(1.5)
-                    else:
-                        mults.append(2.5)
-                if mults:
-                    liq = sum(mults) / len(mults)
+            liq = float(sum(liq_mults) / len(liq_mults))
             short_drag = 0.0
             if n_short and repo_by_date is not None:
                 repo = repo_by_date.get(d_prev)
@@ -367,6 +376,7 @@ def held_book_daily_mtm(
     }
     if extra:
         out.update(dict(extra))
+    out["cost_adv_incomplete"] = bool(cost_adv_incomplete)
     return out
 
 

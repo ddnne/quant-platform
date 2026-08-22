@@ -58,8 +58,16 @@ COMBO_EVENT_GATES: frozenset[str] = frozenset(
         "div_positive",
         "margin_up",
         "margin_down",
+        "eq_ar_falling",
         "eq_ar_high",
         "eq_ar_low",
+        "eq_ar_rising",
+        "eps_down",
+        "np_negative",
+        "pb_rising",
+        "roe_low",
+        "sales_down",
+        "ta_down",
         "ta_up",
         "overnight_p10",
         "curve_flatten",
@@ -202,26 +210,38 @@ SPARSE_GATE_COMBOS: tuple[tuple[frozenset[str], str], ...] = (
 # Name-level CS + sticky hold=10 is structurally always_on. Crossed gates stay.
 NAME_LEVEL_FUND_CS_GATES: frozenset[str] = frozenset(
     {
+        "eq_ar_falling",
         "eq_ar_high",
         "eq_ar_low_invert",
+        "eq_ar_rising",
+        "ta_down",
         "ta_up",
         "cheap_pb",
         "expensive_pb_invert",
         "earnings_yield_high",
+        "pb_rising",
         "roe_high",
+        "roe_low",
+        "sales_down",
         "div_positive",
         "np_positive",
     }
 )
 ALWAYS_ON_CS_STICKY: frozenset[str] = frozenset(
     {
+        "cs_eqar_falling",
         "cs_eqar_high",
         "cs_eqar_low_fade",
+        "cs_eqar_rising",
+        "cs_ta_down",
         "cs_ta_up",
         "cs_cheap_pb",
         "cs_expensive_pb_fade",
         "cs_earnings_yield_high",
+        "cs_pb_rising",
         "cs_roe_high",
+        "cs_roe_low",
+        "cs_sales_down",
         "cs_div_positive",
         "cs_np_positive",
     }
@@ -274,6 +294,7 @@ CANDIDATE_POLICY: dict[str, object] = {
         "near_duplicate",
         "always_on_cs_sticky",
         "worker_isolate_limit",
+        "worker_body_missing",
     ),
     "always_on_occupancy": ALWAYS_ON_OCCUPANCY_WARN,
     "near_empty_occupancy": NEAR_EMPTY_OCCUPANCY,
@@ -286,3 +307,19 @@ CANDIDATE_POLICY: dict[str, object] = {
 }
 
 ECONOMIC_THEME_IDS: dict[str, frozenset[str]] = economic_theme_ids()
+
+
+def worker_implemented_logic_ids() -> frozenset[str]:
+    """IDs that have Worker bodies. YAML-only clones do not count."""
+    from research.unique_logic.worker_bodies import (
+        worker_implemented_logic_ids as _impl,
+    )
+
+    return _impl()
+
+
+def countable_thesis_ids() -> frozenset[str]:
+    """Catalog + Worker body + implemented gates; YAML clones do not count."""
+    from research.unique_logic.worker_bodies import countable_thesis_ids as _impl
+
+    return _impl()

@@ -2,6 +2,10 @@
 
 Generation stays in ``research.offline.factory``. Unique/combo templates
 are not enabled here.
+
+CF Worker POST /v1/propose-thesis is the SoT for remote proposals.
+Local ``propose_profit_hypotheses`` stays offline-only (no catalog YAML
+write, no auto-inject).
 """
 
 from __future__ import annotations

@@ -36,7 +36,7 @@ from research.cf_mass_eval_stage import (
     stage_real_panels_to_r2,
 )
 from research.eval_windows import DEFAULT_REAL_MULTIYEAR_PERIODS
-from research.single_shot_job import default_r2_put
+from research.r2_io import default_r2_put
 
 
 def invoke_cf_mass_eval_worker(

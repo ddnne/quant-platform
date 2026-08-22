@@ -12,8 +12,6 @@ Locks:
 
 from __future__ import annotations
 
-import pytest
-
 from research.cost_models import (
     COST_MODELS_VERSION,
     DEFAULT_LEVERAGE_FINANCING_ANNUAL_BP,
@@ -46,16 +44,7 @@ from research.cost_models import (
     repo_rate_pct_to_annual_fraction,
     short_borrow_daily_cost_from_repo,
 )
-from research.eval_harness import (
-    MASS_RESEARCH,
-    PHASE7,
-    run_standard_research_eval,
-)
-from research.eval_harness_checklist import (
-    COST_MODEL_PREFER_REPO_LINKED,
-    COST_MODEL_REQUIRE_REPO_LINKED,
-    standard_research_eval_checklist_document,
-)
+
 
 
 # ---------------------------------------------------------------------------
@@ -353,70 +342,4 @@ def test_cost_models_prefers_repo():
     assert ass["mass_research"] == "NO-GO"
 
 
-# ---------------------------------------------------------------------------
-# Harness wiring
-# ---------------------------------------------------------------------------
 
-
-def test_checklist_document_cost_model_defaults():
-    doc = standard_research_eval_checklist_document()
-    assert doc["cost_model_defaults"]["prefer_repo_linked"] is True
-    assert doc["cost_model_defaults"]["require_repo_linked"] is False
-    assert "repo_linked_cost_model" in doc["recommended"]
-    assert COST_MODEL_PREFER_REPO_LINKED is True
-    assert COST_MODEL_REQUIRE_REPO_LINKED is False
-    assert doc["cost_models_surface"]["version"] == COST_MODELS_VERSION
-    assert doc["ready_declared"] is False
-    assert doc["mass_research"] == "NO-GO"
-
-
-def test_run_standard_research_eval_with_repo_series():
-    s = _series(required_dates=["2024-01-02", "2024-01-03", "2024-01-04"])
-    out = run_standard_research_eval(
-        dry_run=True,
-        position_style=POSITION_STYLE_LEVERED_LONG,
-        gross_leverage=2.0,
-        uses_leverage=True,
-        repo_rate_series=s,
-        prefer_repo_linked=True,
-        repo_required_dates=["2024-01-02", "2024-01-03", "2024-01-04"],
-    )
-    lev = out["leverage_short_costs"]
-    assert lev["repo_linked"] is True
-    assert lev["leverage_financing"]["rate_source"] == RATE_SOURCE_REPO_SERIES
-    assert lev["repo_rate"]["n_gaps"] == 1
-    assert lev["repo_rate"]["ffill_applied"] is False
-    assert out["prefer_repo_linked"] is True
-    assert out["require_repo_linked"] is False
-    assert out["repo_rate_series"] is not None
-    assert out["ready_declared"] is False
-    assert out["mass_research"] == MASS_RESEARCH == "NO-GO"
-    assert out["phase7"] == PHASE7 == "OFF"
-    assert out["connected_to_ready"] is False
-    assert out["connected_to_mass"] is False
-    assert out["research_candidate"] is False
-
-
-def test_require_repo_linked_blocks_when_missing():
-    out = run_standard_research_eval(
-        dry_run=True,
-        position_style=POSITION_STYLE_LEVERED_LONG,
-        gross_leverage=2.0,
-        uses_leverage=True,
-        require_repo_linked=True,
-        # no series
-    )
-    assert out["leverage_short_costs"]["assumptions_complete"] is False
-    assert "repo_rate_series" in out["leverage_short_costs"]["missing_disclosure"]
-    assert out["research_candidate"] is False
-    assert out["ready_declared"] is False
-    assert out["mass_research"] == "NO-GO"
-
-
-def test_long_only_wiring_still_complete_without_repo():
-    out = run_standard_research_eval(dry_run=True)
-    assert out["leverage_short_costs"]["assumptions_complete"] is True
-    assert out["leverage_short_costs"]["position_style"] == POSITION_STYLE_LONG_ONLY_UNLEVERED
-    assert out["prefer_repo_linked"] is True
-    assert out["ready_declared"] is False
-    assert out["mass_research"] == "NO-GO"

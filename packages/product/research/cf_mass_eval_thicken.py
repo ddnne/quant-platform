@@ -239,6 +239,7 @@ def _build_thicken_sidecars(
                         "roe": ev.get("roe"),
                         "div_ann": ev.get("div_ann"),
                         "np": ev.get("np"),
+                        "sales": ev.get("sales"),
                         "ta": ev.get("ta"),
                         "eq_ar": ev.get("eq_ar"),
                         "prior_ta": ev.get("prior_ta"),

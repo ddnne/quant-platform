@@ -160,10 +160,10 @@ def test_cf_new_thesis_ids_match_yaml_combo_kind() -> None:
     assert combo_ids == set(CF_NEW_THESIS_IDS)
     assert event | surprise_xs == set(CF_NEW_EVENT_THESIS_IDS)
     assert cs == set(CF_NEW_CS_THESIS_IDS)
-    assert len(CF_NEW_EVENT_THESIS_IDS) == 218
-    assert len(CF_NEW_CS_THESIS_IDS) == 98
-    assert len(CF_NEW_THESIS_IDS) == 316
-    assert len(RESEARCH_UNIQUE_LOGIC_IDS) == 338
+    assert len(CF_NEW_EVENT_THESIS_IDS) == 234
+    assert len(CF_NEW_CS_THESIS_IDS) == 104
+    assert len(CF_NEW_THESIS_IDS) == 338
+    assert len(RESEARCH_UNIQUE_LOGIC_IDS) == 360
     assert yaml_ids == set(RESEARCH_UNIQUE_LOGIC_IDS)
 
     helper_src = inspect.getsource(catalog_mod.combo_thesis_ids_by_kind)
@@ -242,7 +242,7 @@ def test_original_22_ids_from_yaml() -> None:
     assert yaml_ids - combo_ids == set(original)
     assert original.isdisjoint(CF_NEW_THESIS_IDS)
     assert yaml_ids == set(RESEARCH_UNIQUE_LOGIC_IDS)
-    assert len(RESEARCH_UNIQUE_LOGIC_IDS) == 338
+    assert len(RESEARCH_UNIQUE_LOGIC_IDS) == 360
     assert original | set(CF_NEW_THESIS_IDS) == set(RESEARCH_UNIQUE_LOGIC_IDS)
 
     helper_src = inspect.getsource(catalog_mod.unique_family_ids_from_yaml)
@@ -483,3 +483,80 @@ def test_otc_parse_zero_2002_not_invented_complete() -> None:
     assert "2002-08-05" in residual
     assert "PARSE_ZERO" in residual
     assert any(q.get("id") == "otc_parse_zero" for q in NEXT_RESEARCH_QUEUE)
+
+
+def test_countable_thesis_ids_require_worker_body() -> None:
+    from research.eval_summary import summarize_daily_path_cells
+    from research.eval_tracks import NEXT_RESEARCH_QUEUE
+    from research.unique_logic.catalog import catalog_spec, load_catalog_specs
+    from research.unique_logic.constants import (
+        CANDIDATE_POLICY,
+        CF_NEW_THESIS_IDS,
+        COMBO_EVENT_GATES,
+        RESEARCH_UNIQUE_LOGIC_IDS,
+        countable_thesis_ids,
+        worker_implemented_logic_ids,
+    )
+    from research.unique_logic.near_duplicate import is_near_duplicate
+    from research.unique_logic.worker_bodies import (
+        combo_worker_gates_ok,
+        is_countable_spec,
+    )
+    from tests.research_eval_util import _eval_complete_cell
+
+    countable = countable_thesis_ids()
+    implemented = worker_implemented_logic_ids()
+    assert countable <= RESEARCH_UNIQUE_LOGIC_IDS
+    assert implemented <= RESEARCH_UNIQUE_LOGIC_IDS
+    assert countable <= implemented
+
+    forged = {
+        "logic_id": "event_forged_clone_not_a_real_gate",
+        "params": {
+            "gates": ["not_a_real_gate"],
+            "cs_gate": None,
+            "side": "orig",
+        },
+    }
+    assert "not_a_real_gate" not in COMBO_EVENT_GATES
+    assert is_countable_spec(forged) is False
+
+    real = catalog_spec("event_eqar_high_pead")
+    assert real is not None
+    overlay = dict(real)
+    overlay["params"] = dict(real.get("params") or {})
+    overlay["params"]["gates"] = ["not_a_real_gate"]
+    assert is_countable_spec(overlay) is False
+    assert combo_worker_gates_ok(overlay) is False
+
+    known = 0
+    for spec in load_catalog_specs():
+        lid = str(spec.get("logic_id") or "")
+        if lid not in CF_NEW_THESIS_IDS:
+            continue
+        if is_near_duplicate(lid):
+            assert lid not in countable
+            continue
+        if combo_worker_gates_ok(spec):
+            known += 1
+            assert lid in countable
+            assert is_countable_spec(spec) is True
+    assert known >= 1
+    assert "event_eqar_high_pead" in countable
+
+    assert "worker_body_missing" in CANDIDATE_POLICY["exclude"]
+    cells = [
+        _eval_complete_cell(
+            "xs_high_vol_fade", occupancy=0.20, eval_path="gated_cs"
+        )
+    ]
+    row = summarize_daily_path_cells(cells, job_id="eval-test-worker-body")[
+        "logics"
+    ][0]
+    assert "worker_body_missing" in row["flags"]
+    assert row["candidate"] is False
+
+    qids = [q.get("id") for q in NEXT_RESEARCH_QUEUE]
+    assert qids[0] == "both_track_sleeve_durability"
+    assert "thesis_counts_only_with_worker_body" in qids
+    assert "no_new_theses_until_worker_bodies" not in qids

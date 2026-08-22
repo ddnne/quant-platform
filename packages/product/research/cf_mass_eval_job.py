@@ -22,7 +22,7 @@ from research.cf_mass_eval_stage import (
 )
 from research.eval_windows import DEFAULT_REAL_MULTIYEAR_PERIODS
 from research.freezes import CONTINUOUS_PAPER, MASS_RESEARCH, PHASE7
-from research.single_shot_job import default_r2_put
+from research.r2_io import default_r2_put
 
 CF_MASS_EVAL_VERSION: str = "cf-mass-eval-job/v6"
 CF_MASS_EVAL_WAVE: str = "research-mass-eval"

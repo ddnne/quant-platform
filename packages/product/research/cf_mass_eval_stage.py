@@ -19,7 +19,8 @@ from research.eval_loaders import (
 )
 from research.eval_universe import select_eval_universe
 from research.eval_windows import DEFAULT_REAL_MULTIYEAR_PERIODS
-from research.single_shot_job import COMPLETE_21_DATASETS, default_r2_put
+from research.complete21 import COMPLETE_21_DATASETS
+from research.r2_io import default_r2_put
 
 RESEARCH_ARTIFACT_BUCKET: str = "quant-structured"
 RESEARCH_ARTIFACT_PREFIX: str = "research/mass_eval"

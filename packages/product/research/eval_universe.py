@@ -12,6 +12,9 @@ from research.eval_tracks import UNIVERSE_SELECT_ADV
 
 DEFAULT_SQLITE: Path = repo_root() / "data" / "structured" / "ingestion.sqlite"
 
+# Smoke three. Production panels use select_eval_universe (skip missing, no invent).
+HARNESS_SMOKE_CODES: tuple[str, ...] = ("13010", "72030", "67580")
+
 # Ranked pool for ADV/fins selection. Not a head-N list. Production
 # panels use select_eval_universe (skip missing, no invent).
 EVAL_UNIVERSE_POOL: tuple[str, ...] = (
@@ -262,6 +265,7 @@ def select_eval_universe(
 __all__ = [
     "DEFAULT_SQLITE",
     "EVAL_UNIVERSE_POOL",
+    "HARNESS_SMOKE_CODES",
     "UNIVERSE_MIN_BAR_DAYS",
     "UNIVERSE_MIN_FINS_EQAR",
     "UNIVERSE_MIN_FINS_TA",

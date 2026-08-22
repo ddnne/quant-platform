@@ -71,8 +71,8 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "tracks": BOTH_EVAL_TRACK_IDS,
         "entry": "research.cf_daily_path_job.run_both_track_sleeve_fanout",
         "why": (
-            "live run_both_track_sleeve_fanout(dry_run=False) to R2; "
-            "do not narrate from dry-run empty-basket compare; still not a pass"
+            "recorded eval-cf-dp-both-sleeves-20260822c mid+liq; "
+            "not a pass; do not narrate majority as stable"
         ),
         "not_a_pass": True,
         "go": False,
@@ -111,7 +111,7 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
     {
         "id": "cost_models_modulation_hold",
         "track": EVAL_TRACK_MID_N,
-        "why": "cost_models.py ~2255 is live ADV/liquidity/short math; do not fake-split",
+        "why": "live math stays in cost_models; daily_path uses ADV 3-bucket + repo short-drag fail-closed missing ADV",
         "not_a_pass": True,
         "go": False,
     },
@@ -143,9 +143,9 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "go": False,
     },
     {
-        "id": "no_new_theses_until_worker_bodies",
+        "id": "thesis_counts_only_with_worker_body",
         "track": EVAL_TRACK_LIQ_LARGE,
-        "why": "+N YAML clones without occupancy-equal Worker bodies is waste",
+        "why": "catalog+Worker body+gates implemented; YAML-only clones do not count",
         "not_a_pass": True,
         "go": False,
     },

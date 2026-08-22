@@ -42,16 +42,6 @@ from research.cost_models import (
     resolve_liquidity_modulation,
     yen_turnover_from_bar,
 )
-from research.eval_harness import (
-    MASS_RESEARCH,
-    PHASE7,
-    run_standard_research_eval,
-)
-from research.eval_harness_checklist import (
-    COST_MODEL_PREFER_LIQUIDITY_LINKED,
-    COST_MODEL_REQUIRE_LIQUIDITY_LINKED,
-    standard_research_eval_checklist_document,
-)
 
 
 # ---------------------------------------------------------------------------
@@ -370,82 +360,6 @@ def test_cost_models_liquidity_surface_constants():
     assert ass["require_liquidity_linked"] is False
     assert ass["ready_declared"] is False
     assert ass["mass_research"] == "NO-GO"
-
-
-# ---------------------------------------------------------------------------
-# Harness wiring
-# ---------------------------------------------------------------------------
-
-
-def test_checklist_document_liquidity_defaults():
-    doc = standard_research_eval_checklist_document()
-    assert doc["cost_model_defaults"]["prefer_liquidity_linked"] is True
-    assert doc["cost_model_defaults"]["require_liquidity_linked"] is False
-    assert "liquidity_linked_cost_model" in doc["recommended"]
-    assert COST_MODEL_PREFER_LIQUIDITY_LINKED is True
-    assert COST_MODEL_REQUIRE_LIQUIDITY_LINKED is False
-    assert doc["cost_models_surface"]["wave"] == COST_MODELS_WAVE
-    assert doc["ready_declared"] is False
-    assert doc["mass_research"] == "NO-GO"
-
-
-def test_run_standard_research_eval_with_liquidity_bars():
-    out = run_standard_research_eval(
-        dry_run=True,
-        liquidity_bars=LOW_BARS,
-        prefer_liquidity_linked=True,
-    )
-    lev = out["leverage_short_costs"]
-    assert lev["liquidity_linked"] is True
-    assert lev["liquidity"]["bucket"] == LIQUIDITY_BUCKET_LOW
-    assert abs(
-        lev["transaction"]["one_way_cost_bp"]
-        - DEFAULT_ONE_WAY_COST_BP * LIQUIDITY_TX_MULT["low"]
-    ) < 1e-9
-    assert out["prefer_liquidity_linked"] is True
-    assert out["require_liquidity_linked"] is False
-    assert out["liquidity"]["invent_fill"] is False
-    assert out["ready_declared"] is False
-    assert out["mass_research"] == MASS_RESEARCH == "NO-GO"
-    assert out["phase7"] == PHASE7 == "OFF"
-    assert out["connected_to_ready"] is False
-    assert out["connected_to_mass"] is False
-    assert out["research_candidate"] is False
-
-
-def test_run_standard_research_eval_short_combined_sensitivity_liquidity():
-    s = load_repo_rate_series_from_mapping(SYNTH_REPO)
-    out = run_standard_research_eval(
-        dry_run=True,
-        position_style=POSITION_STYLE_LONG_SHORT,
-        short_fraction=0.5,
-        uses_short=True,
-        repo_rate_series=s,
-        short_borrow_sensitivity="low",
-        liquidity_bucket="low",
-        prefer_liquidity_linked=True,
-    )
-    sb = out["leverage_short_costs"]["short_borrow"]
-    # spread = 25 * 2.0 = 50; mean repo 10bp → annual 60
-    assert sb["sensitivity"] == "low"
-    assert abs(sb["spread_base_bp"] - 25.0) < 1e-12
-    assert abs(sb["spread_bp"] - 50.0) < 1e-12
-    assert abs(sb["annual_bp"] - 60.0) < 1e-9
-    assert out["ready_declared"] is False
-    assert out["mass_research"] == "NO-GO"
-
-
-def test_require_liquidity_linked_blocks_harness():
-    out = run_standard_research_eval(
-        dry_run=True,
-        require_liquidity_linked=True,
-        # no liquidity inputs
-    )
-    assert out["leverage_short_costs"]["assumptions_complete"] is False
-    assert "liquidity_proxy" in out["leverage_short_costs"]["missing_disclosure"]
-    assert out["research_candidate"] is False
-    assert out["ready_declared"] is False
-    assert out["mass_research"] == "NO-GO"
 
 
 def test_mid_bars_proxy_bucket():

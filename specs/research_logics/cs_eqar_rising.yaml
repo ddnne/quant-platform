@@ -1,0 +1,30 @@
+logic_id: cs_eqar_rising
+family_id: xs_low_vol_mom
+axis: mixed
+headline: false
+generation_enabled: false
+promote_as_main: false
+go: false
+main_pool: false
+thesis: >
+  CS mom when EqAR rose versus the last prior print. Missing EqAR skips.
+signal_definition: >
+  CS mom when EqAR rose versus the last prior print. Missing EqAR skips.
+datasets:
+  - equities_bars_daily
+  - fins_summary
+  - jsda_tokyo_repo_rates
+  - markets_calendar
+params:
+  post_hold_days: 5
+  hold_days: 10
+  momentum_n: 5
+  min_hist: 20
+  mode: cs_eqar_rising
+  side: orig
+  gates: 
+  cs_gate: eq_ar_rising
+  entry_shift: 0
+  hold_tail_days: 0
+evaluator: research.unique_logic.event_combos.evaluate_combo_daily_mtm
+notes: combo thesis; parked always_on CS sticky; CF daily_path is SoT
