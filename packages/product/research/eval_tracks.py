@@ -155,13 +155,6 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "go": False,
     },
     {
-        "id": "bar_eval_family_split",
-        "track": EVAL_TRACK_MID_N,
-        "why": "offline/bar_eval.py ~2017 evaluate_*_on_bars; split by family not by wave",
-        "not_a_pass": True,
-        "go": False,
-    },
-    {
         "id": "multiyear_runner_split",
         "track": EVAL_TRACK_MID_N,
         "why": "offline/multiyear.py ~1947 window stitch vs reporting",

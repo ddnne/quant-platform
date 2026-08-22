@@ -237,18 +237,21 @@ def test_cf_daily_path_job_does_not_import_factory() -> None:
         / "research"
     )
     # AST import walk only — comments are not imports.
-    banned_both = ("mass_strategy_factory", "class_hyp_eval")
+    banned_factory = ("mass_strategy_factory", "class_hyp_eval")
+    # CF path must not import offline bar_eval (or family modules).
+    banned_cf = banned_factory + ("bar_eval",)
     files: dict[str, tuple[str, ...]] = {
-        "cf_daily_path_job.py": banned_both,
-        "cf_mass_eval_job.py": banned_both,
-        "cf_mass_eval_stage.py": banned_both,
-        "bar_native_specs.py": banned_both,
-        "eval_universe.py": banned_both,
-        "eval_loaders.py": banned_both,
-        "unique_logic/event_combos.py": banned_both,
-        "eval_windows.py": banned_both,
-        "offline/bar_eval.py": banned_both,
+        "cf_daily_path_job.py": banned_cf,
+        "cf_mass_eval_job.py": banned_cf,
+        "cf_mass_eval_stage.py": banned_cf,
+        "bar_native_specs.py": banned_cf,
+        "eval_universe.py": banned_cf,
+        "eval_loaders.py": banned_cf,
+        "unique_logic/event_combos.py": banned_cf,
+        "eval_windows.py": banned_cf,
     }
+    for path in sorted((research_dir / "offline").glob("bar_eval*.py")):
+        files[str(path.relative_to(research_dir))] = banned_factory
     for name, banned in files.items():
         path = research_dir / name
         if not path.exists():
