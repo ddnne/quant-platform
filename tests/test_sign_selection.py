@@ -281,7 +281,7 @@ def test_paper_adapter_wires_chosen_sign():
     assert fund.rule.signal_sign == 1
 
 
-def test_class_hyp_eval_version_w86():
+def test_multiyear_eval_version_w86():
     from research.offline.multiyear import (
         CLASS_HYP_EVAL_VERSION,
         CLASS_HYP_EVAL_WAVE,

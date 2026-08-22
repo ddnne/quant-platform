@@ -465,7 +465,7 @@ def test_stats_metrics_period_and_bar():
     assert trades["win_rate"] is not None
 
 
-def test_class_hyp_eval_pure_on_synthetic_bars():
+def test_offline_bar_eval_pure_on_synthetic_bars():
     from research.eval_loaders import merge_event_calendars
     from research.cost_models import load_repo_rate_series_from_mapping
     from research.offline.bar_eval import (
@@ -590,7 +590,7 @@ def test_w83_wave_tags_and_default_path_params():
         or "W94" in CLASS_SIGNALS_WAVE
         or "W95" in CLASS_SIGNALS_WAVE
     )
-    # W86 / w0816u: class_hyp_eval v7 adds sign-selection both-sides
+    # W86 / w0816u: offline.multiyear v7 adds sign-selection both-sides
     assert CLASS_HYP_EVAL_VERSION == "class-hyp-eval/v7"
     assert "W86" in CLASS_HYP_EVAL_WAVE
     # PIT event entry held (no look-ahead revival)

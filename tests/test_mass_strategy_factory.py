@@ -1,4 +1,4 @@
-"""W89 / w0816x — logic-diversity mass factory: rate + multi-factor + freezes."""
+"""research.offline.factory — logic-diversity mass factory: rate + multi-factor + freezes."""
 
 from __future__ import annotations
 
