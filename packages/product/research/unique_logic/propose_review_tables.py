@@ -329,6 +329,8 @@ GATE_OCCUPANCY_LABEL: tuple[tuple[str, tuple[str, ...]], ...] = (
         "prices declining",
         "has been falling",
         "been falling",
+        "going down",
+        "price is going down",
     )),
     ("crowded_margin", ("market is crowded",)),
 )
@@ -514,6 +516,9 @@ TITLE_OCCUPANCY_META: tuple[str, ...] = (
     "occupancy when",
     "equities occupancy",
     "tends to be occupied",
+    "market is occupied",
+    "is occupied",
+    "occupied",
     "occupy lower",
     "occupy",
 )

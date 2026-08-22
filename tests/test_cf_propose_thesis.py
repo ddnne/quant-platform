@@ -777,6 +777,12 @@ def test_review_proposal_row_occupancy_and_polarity_table() -> None:
             "title_gate_polarity_mismatch",
             "PEAD when price is down AND 3m repo rate is down. Skip missing PIT prints (no invent).",
         ),
+        (
+            "The market is occupied with stocks having high total assets when overnight funding is easing AND the price is going down.",
+            ["ta_up", "overnight_easing", "price_down"],
+            "occupancy_label_only",
+            "PEAD when total assets rose versus the last prior print AND overnight funding eased AND price is down. Skip missing PIT prints (no invent).",
+        ),
     ]
     for bad_thesis, gates, reason, good_thesis in rows:
         payload = {

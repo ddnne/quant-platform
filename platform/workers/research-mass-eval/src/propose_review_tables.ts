@@ -47,7 +47,7 @@ export const GATE_OCCUPANCY_LABEL: Array<[string, string[]]> = [
   ["eps_up", ["earnings per share are rising", "eps are rising", "eps is rising", "rising earnings per share", "rising eps"]],
   ["sales_down", ["sales are down", "sales down", "falling sales"]],
   ["tight_funding", ["funding conditions are tight", "funding conditions tighten", "conditions tighten", "funding tightness"]],
-  ["price_down", ["under pressure", "price pressure", "price is low", "price is falling", "price falling", "falling price", "prices drop", "price drops", "price contracted", "prices are declining", "prices declining", "has been falling", "been falling"]],
+  ["price_down", ["under pressure", "price pressure", "price is low", "price is falling", "price falling", "falling price", "prices drop", "price drops", "price contracted", "prices are declining", "prices declining", "has been falling", "been falling", "going down", "price is going down"]],
   ["crowded_margin", ["market is crowded"]],
 ];
 
@@ -149,6 +149,7 @@ export const OCCUPANCY_EXTRA_TITLE: Array<[string, string[]]> = [
   ["funding conditions tighten", ["tight_funding"]],
   ["funding is loose", ["overnight_p10"]],
   ["funding tightness", ["tight_funding"]],
+  ["going down", ["price_down"]],
   ["has been falling", ["price_down"]],
   ["high price momentum", ["pre_mom"]],
   ["increase in pb", ["pb_rising"]],
@@ -176,6 +177,7 @@ export const OCCUPANCY_EXTRA_TITLE: Array<[string, string[]]> = [
   ["price drops", ["price_down"]],
   ["price falling", ["price_down"]],
   ["price is falling", ["price_down"]],
+  ["price is going down", ["price_down"]],
   ["price is low", ["price_down"]],
   ["price pressure", ["price_down"]],
   ["price to book is rising", ["pb_rising"]],
@@ -283,6 +285,9 @@ export const TITLE_OCCUPANCY_META = [
   "occupancy when",
   "equities occupancy",
   "tends to be occupied",
+  "market is occupied",
+  "is occupied",
+  "occupied",
   "occupy lower",
   "occupy"
 ] as const;
