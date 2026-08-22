@@ -234,7 +234,7 @@ def test_near_empty_park_is_not_countable_or_basket_material() -> None:
     from research.cf_daily_path_job import sleeve_durability_logic_ids
 
     assert THIN_SLEEVE_EXCLUDE_IDS
-    assert "event_flatten_sales_px_down" in THIN_SLEEVE_EXCLUDE_IDS
+    assert "event_p10_pb_invert" in THIN_SLEEVE_EXCLUDE_IDS
     assert THIN_SLEEVE_EXCLUDE_IDS.isdisjoint(NEAR_EMPTY_PARK_IDS)
     assert THIN_SLEEVE_EXCLUDE_IDS.isdisjoint(sleeve_durability_logic_ids())
     thin_reasons = validate_basket_members(
