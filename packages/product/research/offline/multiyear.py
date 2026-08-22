@@ -177,9 +177,7 @@ def run_class_hyp_multi_year_eval(
             else 0
         ),
         "pit_disclosure": (
-            "Local jsda_repo_rates rows carry bulk-ingest available_at "
-            "(2026). Offline multi-year research keys regime by as_of_date "
-            "(event date), not bulk available_at. Disclosed; no invent fill."
+            "Regime keyed by as_of_date, not bulk available_at. No invent fill."
         ),
         "dataset": REPO_DATASET_ID,
     }
@@ -227,13 +225,8 @@ def run_class_hyp_multi_year_eval(
         ),
         "event_source": event_source,
         "pit_disclosure": (
-            "fins_summary SoT: DiscDate + DiscTime (aliases DisclosedDate/"
-            "DisclosedTime); envelope event_time/available_at when present. "
-            "W82 entry = first session close not looking ahead of availability "
-            "(after-close or missing DiscTime → next trading bar; no invent "
-            "timestamps). fins_earnings_date thickens calendar via PubDate|"
-            "SchDate when available; surprise still requires fins_summary "
-            "EPS/FEPS (no invent). Disclosed."
+            "fins_summary DiscDate+DiscTime PIT entry; earnings_date thickens "
+            "calendar only. Surprise needs fins_summary EPS/FEPS. No invent."
         ),
         "entry_mode": EVENT_POST_ENTRY_MODE,
         "dataset": event_source,
@@ -529,7 +522,6 @@ def run_class_hyp_multi_year_eval(
                             "amortized_one_way_cost": xs10m3.get(
                                 "amortized_one_way_cost"
                             ),
-                            "promoted_wave": "W85 / w0816t",
                         },
                     )
                 )

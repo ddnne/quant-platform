@@ -229,13 +229,15 @@ def evaluate_rate_level_xs_on_bars(
 
     signed_returns: list[float] = []
     n_active = 0
-    holding_records: list[dict[str, Any]] = []
+    n_code_days = 0
+    trading_dates: set[str] = set()
     for code, dlist in dates_by_code.items():
         entries = [daily_adj.get(code, {}).get(d) for d in dlist]
         held = apply_sticky_hold(entries, hold_days=h, rebalance_mode="fixed_horizon")
         closes = closes_list[code]
         for i, pos in enumerate(held):
-            holding_records.append({"date": dlist[i], "code": code, "sign": pos})
+            n_code_days += 1
+            trading_dates.add(dlist[i])
             if pos is None or pos == 0.0:
                 continue
             if i % h != 0:
@@ -248,8 +250,7 @@ def evaluate_rate_level_xs_on_bars(
 
     gross = mean(signed_returns) if signed_returns else None
     net = (gross - am_cost) if gross is not None else None
-    n_code_days = len(holding_records)
-    n_trading_days = len({r["date"] for r in holding_records})
+    n_trading_days = len(trading_dates)
     occ = occurrence_rate_multiday(
         n_active=n_active,
         n_code_days=n_code_days,
@@ -346,13 +347,15 @@ def evaluate_rate_curve_xs_on_bars(
 
     signed_returns: list[float] = []
     n_active = 0
-    holding_records: list[dict[str, Any]] = []
+    n_code_days = 0
+    trading_dates: set[str] = set()
     for code, dlist in dates_by_code.items():
         entries = [daily_adj.get(code, {}).get(d) for d in dlist]
         held = apply_sticky_hold(entries, hold_days=h, rebalance_mode="fixed_horizon")
         closes = closes_list[code]
         for i, pos in enumerate(held):
-            holding_records.append({"date": dlist[i], "code": code, "sign": pos})
+            n_code_days += 1
+            trading_dates.add(dlist[i])
             if pos is None or pos == 0.0:
                 continue
             if i % h != 0:
@@ -365,8 +368,7 @@ def evaluate_rate_curve_xs_on_bars(
 
     gross = mean(signed_returns) if signed_returns else None
     net = (gross - am_cost) if gross is not None else None
-    n_code_days = len(holding_records)
-    n_trading_days = len({r["date"] for r in holding_records})
+    n_trading_days = len(trading_dates)
     occ = occurrence_rate_multiday(
         n_active=n_active,
         n_code_days=n_code_days,

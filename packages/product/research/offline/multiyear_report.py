@@ -49,7 +49,7 @@ from research.sign_selection import (
 )
 from research.stats_metrics import period_stats_report, stats_bar_check
 
-# key, paper_mean_negative, hold_days. Paper-neg flags from W85 multi-window.
+# key, paper_mean_negative, hold_days.
 _SIGN_FLIP_TARGETS: tuple[tuple[str, bool, int], ...] = (
     ("cross_section_hold_10", True, 10),
     ("cross_section_hold_10_mom3", False, 10),
@@ -379,7 +379,7 @@ def _side_pack(side: Mapping[str, Any], sign: int) -> dict[str, Any]:
 def _apply_sign_selection_to_block(
     block: dict[str, Any], sel: Mapping[str, Any]
 ) -> dict[str, Any]:
-    """Attach W86 sign-selection onto a class block; return compact summary."""
+    """Attach sign-selection onto a class block; return compact summary."""
     block["sign_selection"] = sel
     block["chosen_sign"] = sel.get("chosen_sign")
     block["chosen_sign_label"] = sel.get("chosen_label")
@@ -407,8 +407,7 @@ def _apply_sign_selection_to_block(
         cand_b["candidate_yes_no"] = "no"
         cand_b["verdict"] = "not_candidate_sign_both_sides_fail"
         cand_b["note_sign"] = (
-            "W86 both sides fail non-zero / non-positive after cost "
-            "→ demote (not Mass/READY path)."
+            "both sides fail non-zero / non-positive after cost → demote"
         )
     elif isinstance(cand_b, dict):
         cand_b["chosen_sign"] = chosen
@@ -1002,10 +1001,4 @@ def assemble_class_hyp_multi_year_report(
 
 __all__ = [
     "assemble_class_hyp_multi_year_report",
-    "apply_ls_short_cost_remeasure",
-    "class_hyp_cost_assumptions",
-    "holding_from_period_rows",
-    "normalize_short_sensitivity",
-    "risk_from_rows",
-    "robustness_gate_from_rows",
 ]
