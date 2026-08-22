@@ -27,13 +27,23 @@ from features.minimal_signal import (
     SIGNAL_ID as DEFAULT_SIGNAL_ID,
 )
 from features.registry import get as get_feature
+from research.eval_loaders import load_repo_rows_from_sqlite
+from research.eval_universe import DEFAULT_SQLITE
 from research.freezes import (
+    CONNECTED_TO_MASS,
     CONNECTED_TO_MASS_RESEARCH_LOOP,
+    CONNECTED_TO_READY,
     DENSIFY,
+    EDGE_CLAIMED,
     LOCAL_SOT,
     MASS_RESEARCH,
+    MASS_RESEARCH_ENV_ARMING_SWITCHES,
+    OPERATIONAL_GO,
     ORDER_EXECUTION,
     PHASE7,
+    PHASE7_ENV_ARMING_SWITCHES,
+    READY_DECLARED,
+    SIGNIFICANCE_CLAIMED,
 )
 from research.robustness_gate import (
     DEFAULT_ONE_WAY_COST,
@@ -46,11 +56,8 @@ from research.single_shot_job import (
     COMPLETE_21_DATASET_SET,
     DEFAULT_FEATURE_ROW_LIMIT,
     D1ExecuteFn,
-    MASS_RESEARCH_ENV_ARMING_SWITCHES,
     MultidaySignalEval,
     NEXTDAY_RESEARCH_LABEL,
-    PHASE7_ENV_ARMING_SWITCHES,
-    READY_DECLARED,
     RESEARCH_ONE_WAY_COST,
     R2PutFn,
     SingleShotJobError,
@@ -93,15 +100,39 @@ def _closed_flags(**extra: Any) -> dict[str, Any]:
     out: dict[str, Any] = {
         "mass_research": MASS_RESEARCH,
         "phase7": PHASE7,
-        "ready_declared": False,
-        "operational_go": False,
-        "connected_to_ready": False,
-        "connected_to_mass": False,
-        "significance_claimed": False,
-        "edge_claimed": False,
+        "ready_declared": READY_DECLARED,
+        "operational_go": OPERATIONAL_GO,
+        "connected_to_ready": CONNECTED_TO_READY,
+        "connected_to_mass": CONNECTED_TO_MASS,
+        "significance_claimed": SIGNIFICANCE_CLAIMED,
+        "edge_claimed": EDGE_CLAIMED,
+        "densify": DENSIFY,
+        "local_sot": LOCAL_SOT,
+        "order_execution": ORDER_EXECUTION,
     }
     out.update(extra)
     return out
+
+
+def _skip_year_row(
+    p: Mapping[str, Any],
+    *,
+    pid: str,
+    skip_reason: str,
+    **extra: Any,
+) -> dict[str, Any]:
+    return {
+        "period_id": pid,
+        "year": p.get("year"),
+        "status": "skipped",
+        "skip_reason": skip_reason,
+        "period_start": p.get("period_start"),
+        "period_end": p.get("period_end"),
+        "compare_table": None,
+        "coverage_notes": p.get("coverage_notes"),
+        "s4_eligible": p.get("s4_eligible"),
+        **extra,
+    }
 
 
 def require_approved_signal_legs(
@@ -164,25 +195,19 @@ def require_harness_datasets(
 
 def harness_freeze_status() -> dict[str, Any]:
     """Return harness + single-shot freeze surface (never arms switches)."""
-    base = dict(freeze_status())
-    base.update(
-        {
-            "harness_version": HARNESS_VERSION,
-            "pipeline": list(PIPELINE),
-            "approved_signal_legs": list(APPROVED_SIGNAL_LEGS),
-            "feature_status_pins": dict(FEATURE_STATUS_PINS),
-            "default_signal_datasets": list(DEFAULT_SIGNAL_DATASETS),
-            "default_eval_codes": list(DEFAULT_EVAL_CODES),
-            "order_execution": ORDER_EXECUTION,
-            "connected_to_mass_research_loop": CONNECTED_TO_MASS_RESEARCH_LOOP,
-            "densify": DENSIFY,
-            "local_sot": LOCAL_SOT,
-            "label": NEXTDAY_RESEARCH_LABEL,
-            "significance_claimed": False,
-            "edge_claimed": False,
-        }
-    )
-    return base
+    return {
+        **dict(freeze_status()),
+        **_closed_flags(
+            harness_version=HARNESS_VERSION,
+            pipeline=list(PIPELINE),
+            approved_signal_legs=list(APPROVED_SIGNAL_LEGS),
+            feature_status_pins=dict(FEATURE_STATUS_PINS),
+            default_signal_datasets=list(DEFAULT_SIGNAL_DATASETS),
+            default_eval_codes=list(DEFAULT_EVAL_CODES),
+            connected_to_mass_research_loop=CONNECTED_TO_MASS_RESEARCH_LOOP,
+            label=NEXTDAY_RESEARCH_LABEL,
+        ),
+    }
 
 
 def assert_harness_closed() -> Mapping[str, Any]:
@@ -526,7 +551,7 @@ def run_research_walk_forward_multisignal(
         "full": _fold_summary(full),
         "train": _fold_summary(train_ex),
         "test": _fold_summary(test_ex),
-        **_closed_flags(local_sot=False),
+        **_closed_flags(),
         "note": (
             "Research walk-forward with fixed signal definitions on both folds. "
             "No threshold search on train."
@@ -566,28 +591,15 @@ def run_multi_period_multisignal_compare(
         pid = str(p.get("period_id") or f"p{i}").strip()
         skip_reason = p.get("skip_reason")
         if skip_reason:
-            results.append(
-                {
-                    "period_id": pid,
-                    "status": "skipped",
-                    "skip_reason": str(skip_reason),
-                    "period_start": p.get("period_start"),
-                    "period_end": p.get("period_end"),
-                    "compare_table": None,
-                    "coverage_notes": p.get("coverage_notes"),
-                }
-            )
+            results.append(_skip_year_row(p, pid=pid, skip_reason=str(skip_reason)))
             continue
         start = str(p.get("period_start") or "").strip()[:10]
         end = str(p.get("period_end") or "").strip()[:10]
         if not start or not end:
             results.append(
-                {
-                    "period_id": pid,
-                    "status": "skipped",
-                    "skip_reason": "missing period_start/period_end",
-                    "compare_table": None,
-                }
+                _skip_year_row(
+                    p, pid=pid, skip_reason="missing period_start/period_end"
+                )
             )
             continue
         try:
@@ -679,7 +691,7 @@ def run_multi_period_multisignal_compare(
         "n_periods_error": sum(1 for r in results if r.get("status") == "error"),
         "periods": results,
         "cross_period_compare_table": cross,
-        **_closed_flags(local_sot=False),
+        **_closed_flags(),
         "note": (
             "Multi-period fixed-definition multi-signal research compare. "
             "Skips documented when data missing. No densify invent."
@@ -1022,32 +1034,19 @@ def run_multi_year_s1_eval(
         skip_reason = p.get("skip_reason")
         if skip_reason:
             results.append(
-                {
-                    "period_id": pid,
-                    "year": p.get("year"),
-                    "status": "skipped",
-                    "skip_reason": str(skip_reason),
-                    "period_start": p.get("period_start"),
-                    "period_end": p.get("period_end"),
-                    "compare_table": None,
-                    "s1_row": None,
-                    "coverage_notes": p.get("coverage_notes"),
-                    "s4_eligible": p.get("s4_eligible"),
-                }
+                _skip_year_row(p, pid=pid, skip_reason=str(skip_reason), s1_row=None)
             )
             continue
         start = str(p.get("period_start") or "").strip()[:10]
         end = str(p.get("period_end") or "").strip()[:10]
         if not start or not end:
             results.append(
-                {
-                    "period_id": pid,
-                    "year": p.get("year"),
-                    "status": "skipped",
-                    "skip_reason": "missing period_start/period_end",
-                    "compare_table": None,
-                    "s1_row": None,
-                }
+                _skip_year_row(
+                    p,
+                    pid=pid,
+                    skip_reason="missing period_start/period_end",
+                    s1_row=None,
+                )
             )
             continue
         year_codes = p.get("codes") or selected_default
@@ -1190,11 +1189,7 @@ def run_multi_year_s1_eval(
             "require_net_sign_majority": bool(require_net_sign_majority),
             "label": "仮定に依存・研究用・運用GOではない",
         },
-        **_closed_flags(
-            local_sot=False,
-            year_split=True,
-            fail_one_year_safe=True,
-        ),
+        **_closed_flags(year_split=True, fail_one_year_safe=True),
         "note": (
             "Multi-year S1 research eval with independent per-year jobs. "
             "Error/skip on one year does not kill the batch. "
@@ -1262,46 +1257,31 @@ def run_multi_year_extra_hyp_eval(
                 s4_ok = True
         if skip_reason:
             results.append(
-                {
-                    "period_id": pid,
-                    "year": p.get("year"),
-                    "status": "skipped",
-                    "skip_reason": str(skip_reason),
-                    "compare_table": None,
-                    "coverage_notes": p.get("coverage_notes"),
-                    "s4_eligible": s4_ok,
-                }
+                _skip_year_row(
+                    p, pid=pid, skip_reason=str(skip_reason), s4_eligible=s4_ok
+                )
             )
             continue
         if not s4_ok:
             results.append(
-                {
-                    "period_id": pid,
-                    "year": p.get("year"),
-                    "status": "skipped",
-                    "skip_reason": (
+                _skip_year_row(
+                    p,
+                    pid=pid,
+                    skip_reason=(
                         "margin data gap / not s4_eligible "
                         "(inventory empty year; not invented)"
                     ),
-                    "period_start": p.get("period_start"),
-                    "period_end": p.get("period_end"),
-                    "compare_table": None,
-                    "coverage_notes": p.get("coverage_notes"),
-                    "s4_eligible": False,
-                }
+                    s4_eligible=False,
+                )
             )
             continue
         start = str(p.get("period_start") or "").strip()[:10]
         end = str(p.get("period_end") or "").strip()[:10]
         if not start or not end:
             results.append(
-                {
-                    "period_id": pid,
-                    "year": p.get("year"),
-                    "status": "skipped",
-                    "skip_reason": "missing period_start/period_end",
-                    "compare_table": None,
-                }
+                _skip_year_row(
+                    p, pid=pid, skip_reason="missing period_start/period_end"
+                )
             )
             continue
         year_codes = p.get("codes") or selected_default
@@ -1423,11 +1403,7 @@ def run_multi_year_extra_hyp_eval(
             "require_net_sign_majority": bool(require_net_sign_majority),
             "label": "仮定に依存・研究用・運用GOではない",
         },
-        **_closed_flags(
-            local_sot=False,
-            year_split=True,
-            fail_one_year_safe=True,
-        ),
+        **_closed_flags(year_split=True, fail_one_year_safe=True),
         "note": (
             "Multi-year S4/S5 research eval. Gap years skipped honestly. "
             "Gate pass ≠ READY/Mass."
@@ -1496,9 +1472,6 @@ STANDARD_EVAL_DAILY_PATH_DD_PROOF: str = (
 STANDARD_EVAL_COST_MODEL_PROOF: str = (
     "docs/proof/w0816n_w79_liquidity_linked_cost_20260816.md"
 )
-STANDARD_EVAL_COST_MODEL_PROOF_REPO_LINKED: str = (
-    "docs/proof/w0816m_w78_repo_linked_cost_model_20260816.md"
-)
 # Defaults for cost-model rate path (prefer repo-linked; fixed bp fallback OK).
 COST_MODEL_PREFER_REPO_LINKED: bool = True
 COST_MODEL_REQUIRE_REPO_LINKED: bool = False
@@ -1542,21 +1515,8 @@ CHECKLIST_V2_INSUFFICIENT: tuple[str, ...] = (
 
 def standard_research_eval_checklist_document() -> dict[str, Any]:
     """Public document for the standard research evaluation checklist (v2)."""
-    from research.baseline_catalog import (
-        RESEARCH_STATUS_REJECTED,
-        rejected_baseline_catalog,
-    )
-    from research.cost_models import cost_models_document
-    from research.holding_metrics import holding_metrics_document
-    from research.risk_scenarios import risk_scenarios_document
-    from research.robustness_gate import research_robustness_gate_document
-    from research.stats_metrics import (
-        DAILY_PATH_DD_REQUIRED_FIELDS,
-        stats_metrics_document,
-        w99_sticky_daily_path_dd_reference,
-    )
+    from research.cost_models import COST_MODELS_VERSION, COST_MODELS_WAVE
 
-    cat = rejected_baseline_catalog()
     return {
         "version": CHECKLIST_VERSION,
         "prior_version": CHECKLIST_VERSION_V1,
@@ -1568,18 +1528,16 @@ def standard_research_eval_checklist_document() -> dict[str, Any]:
         "cost_model_proof": STANDARD_EVAL_COST_MODEL_PROOF,
         "required": list(CHECKLIST_V2_REQUIRED),
         "near_required": list(CHECKLIST_V2_NEAR_REQUIRED),
-        "near_required_note": (
-            "holding/turnover is near-required for high-frequency / daily-sign "
-            "hyps (prefer hard-require when hyp re-trades frequently)"
-        ),
         "recommended": [
-            "holding_turnover_metrics",  # kept for v1 compat wording
-            "repo_linked_cost_model",  # W78: prefer jsda_tokyo_repo_rates
-            "liquidity_linked_cost_model",  # W79: scale tx/short by ADV bucket
+            "holding_turnover_metrics",
+            "repo_linked_cost_model",
+            "liquidity_linked_cost_model",
         ],
         "insufficient": list(CHECKLIST_V2_INSUFFICIENT),
-        "gate": research_robustness_gate_document(),
-        "cost_models_surface": cost_models_document(),
+        "cost_models_surface": {
+            "version": COST_MODELS_VERSION,
+            "wave": COST_MODELS_WAVE,
+        },
         "cost_model_defaults": {
             "prefer_repo_linked": COST_MODEL_PREFER_REPO_LINKED,
             "require_repo_linked": COST_MODEL_REQUIRE_REPO_LINKED,
@@ -1590,69 +1548,20 @@ def standard_research_eval_checklist_document() -> dict[str, Any]:
             "fixed_bp_fallback_ok": True,
             "liquidity_unmodulated_when_missing_ok": True,
             "gap_policy": "disclose_only_no_ffill_no_invent",
-            "note": (
-                "W78 / w0816m: leverage financing + short borrow prefer "
-                "date-matched Tokyo repo rates. Fixed bp remains a disclosed "
-                "fallback when no series is supplied. Gaps never invent-filled. "
-                "Not hard-required (require_repo_linked=False). "
-                "W79 / w0816n: liquidity (ADV from equities_bars) modulates "
-                "one-way tx cost and short spread (combined with low/mid/high "
-                "sensitivity). Missing liquidity → mult=1.0 + gap disclose; "
-                "never invent. Not hard-required "
-                "(require_liquidity_linked=False)."
-            ),
         },
-        "risk_scenarios_surface": risk_scenarios_document(),
-        "holding_surface": holding_metrics_document(),
         "daily_path_dd_surface": {
-            "required_fields": list(DAILY_PATH_DD_REQUIRED_FIELDS),
             "period_net_dd_only_pass_forbidden": True,
             "period_net_dd_zero_daily_unmeasured": "incomplete",
-            "reference_example": w99_sticky_daily_path_dd_reference(),
-            "stats_metrics": stats_metrics_document(),
-            "note": (
-                "W100 / w0819c: daily_path_DD, dd_duration, recovery "
-                "(recovered + days), and total_ret_net (after cost) are "
-                "mandatory. Passing on period_net_DD alone is forbidden. "
-                "period_net_DD=0 AND daily unmeasured = incomplete. "
-                "W99 sticky table is the reference example "
-                "(STABLE_RESEARCH_ONLY; promote_as_main/GO=false)."
-            ),
-        },
-        "rejected_baseline_examples": {
-            "research_status": RESEARCH_STATUS_REJECTED,
-            "signal_ids": list(cat.get("signal_ids") or []),
-            "hyp_ids": list(cat.get("hyp_ids") or []),
-            "note": (
-                "S1–S5 failed this bar (or never completed multi-year cost-aware "
-                "eval) and remain research_baseline_rejected — not un-rejected."
-            ),
         },
         "default_entry": "run_standard_research_eval",
         "modes": list(STANDARD_EVAL_MODES),
-        "mass_research": MASS_RESEARCH,
-        "phase7": PHASE7,
-        "ready_declared": False,
-        "operational_go": False,
-        "connected_to_ready": False,
-        "connected_to_mass": False,
         "research_candidate": False,
         "incomplete_checklist_blocks_research_candidate": True,
-        "edge_claimed": False,
-        "significance_claimed": False,
-        "densify": DENSIFY,
+        **_closed_flags(),
         "note": (
-            "Any new hypothesis must pass this checklist (v2) before "
-            "research_candidate. Incomplete checklist CANNOT become "
-            "research_candidate. Gate pass still does not mint READY, arm Mass, "
-            "or claim edge. Short-window-only is insufficient. "
-            "Leverage/short costs prefer date-matched jsda_tokyo_repo_rates "
-            "(W78); fixed bp is disclosed fallback. "
-            "Liquidity modulates tx + short spread when ADV proxy available "
-            "(W79); missing liquidity disclosed, never invented. "
-            "W100: daily_path_DD / dd_duration / recovery / total_ret_net "
-            "are required; period_net_DD alone cannot pass. "
-            "This entry does not invent new signals. S1–S5 stay rejected."
+            "Incomplete checklist v2 cannot become research_candidate. "
+            "Complete still does not auto-promote or connect READY/Mass. "
+            "daily_path_DD is required; period_net_DD alone cannot pass."
         ),
     }
 
@@ -1787,12 +1696,7 @@ def evaluate_checklist_v2_completeness(
         "missing_required": missing,
         "items": items,
         "reasons": reasons,
-        "ready_declared": False,
-        "operational_go": False,
-        "connected_to_ready": False,
-        "connected_to_mass": False,
-        "mass_research": MASS_RESEARCH,
-        "phase7": PHASE7,
+        **_closed_flags(),
         "note": (
             "Incomplete checklist v2 cannot become research_candidate. "
             "Complete still does not auto-promote or connect READY/Mass. "
@@ -1890,41 +1794,10 @@ def run_standard_research_eval(
     r2_get: Callable[[str, str], bytes] | None = None,
     r2_bucket: str = "quant-structured",
 ) -> dict[str, Any]:
-    """Standard research evaluation checklist entry (v2 · W77 / w0816k).
+    """Standard research eval checklist v2. Incomplete → not candidate. Freeze closed.
 
-    Bundles multi-year window design, base 10bp transaction cost, **explicit
-    leverage/short cost assumptions**, cost-aware robustness gate v2, **risk
-    scenario evaluation**, **daily_path_DD** (max DD / duration / recovery /
-    after-cost total return), optional/near-required holding annotation, and
-    mandatory freeze / data-gap disclosure.
-
-    This is the **default entry for future hypotheses**. Short-window-only is
-    insufficient for ``research_candidate``. **Incomplete checklist cannot
-    become ``research_candidate``.**
-
-    Hard constraints
-    ----------------
-    * Does **not** invent or register new signals
-    * May re-run S1 / S4 paths only as **rejected baseline** dry demos
-    * ``research_candidate`` is always **False** here (no auto-promotion)
-    * Incomplete checklist → ``research_candidate_allowed=False``
-    * Gate pass still leaves READY/Mass/Phase7 closed
-    * ``dry_run=True`` (default) validates wiring without heavy R2 when
-      ``mode="wiring_only"`` or when no executable periods are supplied
-
-    Modes
-    -----
-    * ``wiring_only`` — design windows + costs + scenarios surface + freezes
-    * ``s1_rejected_baseline`` — call :func:`run_multi_year_s1_eval` (S1 rejected)
-    * ``s4_rejected_baseline`` — call :func:`run_multi_year_extra_hyp_eval` (S4)
-    * ``class_hyp_offline`` — W78 multi_day_hold + macro_conditioned offline
-      multi-year (local bar mirrors + jsda_repo_rates); not S1–S5; never
-      auto-promotes research_candidate
-
-    Returns a dict with ``checklist_version``, ``steps_completed``,
-    ``robustness_gate``, ``cost_assumption``, ``leverage_short_costs``,
-    ``risk_scenarios``, ``checklist_completeness``, ``data_gap_notes``,
-    optional ``holding``, and freeze flags always closed.
+    Modes: ``wiring_only``, ``s1_rejected_baseline``, ``s4_rejected_baseline``,
+    ``class_hyp_offline``. Does not invent signals or auto-promote.
     """
     from research.baseline_catalog import (
         RESEARCH_STATUS_REJECTED,
@@ -1935,6 +1808,7 @@ def run_standard_research_eval(
         build_leverage_short_cost_assumption,
         default_long_only_unlevered_cost_assumption,
         load_repo_rate_series,
+        load_repo_rate_series_from_rows,
     )
     from research.holding_metrics import (
         cost_amortization_report,
@@ -1995,14 +1869,7 @@ def run_standard_research_eval(
     # Leverage / short related costs (checklist v2 required).
     # W78: prefer date-matched jsda_tokyo_repo_rates when series supplied.
     if leverage_short_cost_assumption is not None:
-        lev_short = dict(leverage_short_cost_assumption)
-        # Ensure freeze fields closed even if caller omitted them.
-        lev_short.setdefault("ready_declared", False)
-        lev_short.setdefault("operational_go", False)
-        lev_short.setdefault("connected_to_ready", False)
-        lev_short.setdefault("connected_to_mass", False)
-        lev_short.setdefault("mass_research", MASS_RESEARCH)
-        lev_short.setdefault("phase7", PHASE7)
+        lev_short = {**dict(leverage_short_cost_assumption), **_closed_flags()}
         if "assumptions_complete" not in lev_short:
             lev_short["assumptions_complete"] = bool(
                 lev_short.get("assumptions_disclosed", False)
@@ -2259,13 +2126,7 @@ def run_standard_research_eval(
             rate_data_usable = True
         # Feed local repo series into cost model when not already supplied.
         if repo_series_norm is None and class_hyp_bundle.get("repo_load"):
-            # Reload from the same SQLite path class_hyp used (disclosure only
-            # when series already embedded in cost_assumption of class hyp).
             try:
-                from research.eval_loaders import load_repo_rows_from_sqlite
-                from research.eval_universe import DEFAULT_SQLITE
-                from research.cost_models import load_repo_rate_series_from_rows
-
                 _rows = load_repo_rows_from_sqlite(DEFAULT_SQLITE)
                 if _rows:
                     repo_series_norm = load_repo_rate_series_from_rows(_rows)
@@ -2308,12 +2169,6 @@ def run_standard_research_eval(
                 "passed": False,
                 "reasons": ["wiring_only_no_period_metrics"],
                 "signal_id": gate_signal_id,
-                "ready_declared": False,
-                "operational_go": False,
-                "connected_to_ready": False,
-                "connected_to_mass": False,
-                "mass_research": MASS_RESEARCH,
-                "phase7": PHASE7,
             }
             steps.append("robustness_gate_v2_surface")
         multi_year_result = {
@@ -2623,27 +2478,11 @@ def run_standard_research_eval(
         "gate_pass_implies_research_candidate": False,
         "short_window_only_sufficient": False,
         "high_frequency_hyp": bool(high_frequency_hyp),
-        "mass_research": MASS_RESEARCH,
-        "phase7": PHASE7,
-        "ready_declared": False,
-        "operational_go": False,
-        "connected_to_ready": False,
-        "connected_to_mass": False,
-        "significance_claimed": False,
-        "edge_claimed": False,
-        "densify": DENSIFY,
-        "local_sot": LOCAL_SOT,
-        "order_execution": ORDER_EXECUTION,
+        **_closed_flags(),
         "note": (
-            "Standard research eval checklist v2 (W77 + W100 daily_path_DD). "
-            "Default entry for future hyps. Requires leverage/short cost "
-            "assumptions + risk scenarios + daily_path_DD / dd_duration / "
-            "recovery / total_ret_net. period_net_DD alone cannot pass. "
-            "period_net_DD=0 AND daily unmeasured = incomplete. "
-            "Incomplete checklist cannot become research_candidate. "
-            "Short-window-only is insufficient. Does not invent signals. "
-            "Gate pass ≠ research_candidate ≠ READY/Mass/GO. "
-            "S1–S5 remain research_baseline_rejected when used as demos."
+            "Standard research eval checklist v2. Incomplete cannot become "
+            "research_candidate. Gate pass ≠ READY/Mass/GO. "
+            "daily_path_DD required; period_net_DD alone cannot pass."
         ),
     }
 
@@ -2655,69 +2494,41 @@ standard_research_eval_checklist_run = run_standard_research_eval
 __all__ = [
     "APPROVED_SIGNAL_LEGS",
     "COMPLETE_21_DATASET_SET",
-    "CHECKLIST_LABEL",
-    "CHECKLIST_V2_INSUFFICIENT",
-    "CHECKLIST_V2_NEAR_REQUIRED",
-    "CHECKLIST_V2_REQUIRED",
     "CHECKLIST_VERSION",
     "CHECKLIST_VERSION_V1",
-    "CHECKLIST_WAVE",
     "CONNECTED_TO_MASS_RESEARCH_LOOP",
     "COST_MODEL_PREFER_LIQUIDITY_LINKED",
     "COST_MODEL_PREFER_REPO_LINKED",
     "COST_MODEL_REQUIRE_LIQUIDITY_LINKED",
     "COST_MODEL_REQUIRE_REPO_LINKED",
-    "DATASET_YEAR_INVENTORY_NOTES",
     "DEFAULT_EVAL_CODES",
     "DEFAULT_MULTIYEAR_CODES",
     "DEFAULT_MULTIYEAR_YEARS",
     "DEFAULT_SIGNAL_DATASETS",
     "DEFAULT_SIGNAL_ID",
-    "DEFAULT_VOLUME_CHANGE_ABS_MIN",
-    "DENSIFY",
     "EvalHarnessError",
-    "FEATURE_STATUS_PINS",
     "HARNESS_SMOKE_CODES",
     "HARNESS_VERSION",
-    "LOCAL_SOT",
     "MASS_RESEARCH",
-    "MASS_RESEARCH_ENV_ARMING_SWITCHES",
-    "MULTI_PERIOD_VERSION",
-    "MULTI_SIGNAL_DATASETS",
     "MULTI_YEAR_LABEL",
     "MULTI_YEAR_VERSION",
-    "MultidaySignalEval",
     "NEXTDAY_RESEARCH_LABEL",
     "ORDER_EXECUTION",
     "PHASE7",
-    "PHASE7_ENV_ARMING_SWITCHES",
     "PIPELINE",
-    "READY_DECLARED",
     "RESEARCH_WALK_FORWARD_LABEL",
     "SIGNAL_CANDIDATE_ONLY",
-    "STANDARD_EVAL_COST_MODEL_PROOF",
-    "STANDARD_EVAL_COST_MODEL_PROOF_REPO_LINKED",
     "STANDARD_EVAL_DAILY_PATH_DD_PROOF",
     "STANDARD_EVAL_MODES",
-    "STANDARD_EVAL_PROOF",
-    "STANDARD_EVAL_PROOF_V1",
     "SingleShotJobError",
     "WALK_FORWARD_VERSION",
     "assert_harness_closed",
-    "assert_mass_and_phase7_off",
     "design_yearly_eval_windows",
     "evaluate_checklist_v2_completeness",
-    "evaluate_research_robustness_gate",
-    "execute_extra_hyp_signals_compare",
-    "execute_multiday_signal_eval",
-    "freeze_status",
     "harness_freeze_status",
     "multi_year_availability_table",
-    "period_rows_from_cross_table",
     "require_approved_signal_legs",
-    "require_complete_21_only",
     "require_harness_datasets",
-    "research_robustness_gate_document",
     "run_full_pipeline",
     "run_multi_period_multisignal_compare",
     "run_multi_year_extra_hyp_eval",

@@ -126,7 +126,7 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
     {
         "id": "eval_harness_vs_daily_path",
         "track": EVAL_TRACK_MID_N,
-        "why": "eval_harness.py ~2733 is W56 next-day; candidate SoT is daily_path",
+        "why": "eval_harness.py ~2544 is W56 next-day; candidate SoT is daily_path",
         "not_a_pass": True,
         "go": False,
     },
