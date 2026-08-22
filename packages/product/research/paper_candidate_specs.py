@@ -1,8 +1,4 @@
-"""Closed StrategySpec builders for the unarmed paper receptacle.
-
-Does not arm the paper scheduler, call ``run_paper``, or touch the live
-order path. Equal-weight HOLD via StrategySpec rules. Not GO.
-"""
+"""Closed StrategySpec builders. Equal-weight HOLD. Not GO."""
 from __future__ import annotations
 
 from strategies.spec import (
@@ -54,11 +50,7 @@ def build_multi_day_hold_strategy_spec(
             min_score=float(min_score),
         ),
         rationale=rationale
-        or (
-            f"Paper receptacle for multi_day_hold {h}d: entry ≈ top_k of "
-            f"momentum_n(n={n_mom}). Sticky fixed_horizon hold={h}d (v3). "
-            "UNARMED — no continuous paper scheduler."
-        ),
+        or f"Paper MDH hold={h}d mom_n={n_mom} top_k sticky. UNARMED.",
         rebalance=REBALANCE_FIXED_HORIZON if sticky and h > 1 else "daily",
         hold_days=h if sticky and h > 1 else None,
     )
@@ -99,10 +91,8 @@ def build_cross_section_hold_strategy_spec(
         ),
         rationale=rationale
         or (
-            f"Paper for cross_section sticky hold={h}d mom_n={n_mom}: "
-            f"rank L-S long_frac={long_frac} short_frac={short_frac} "
-            f"allow_short={allow_short} signal_sign={s_sign}; "
-            f"fixed_horizon rebalance. UNARMED limited trial only."
+            f"Paper XS hold={h}d mom_n={n_mom} L-S "
+            f"{long_frac}/{short_frac} sign={s_sign}. UNARMED."
         ),
         rebalance=REBALANCE_FIXED_HORIZON if h > 1 else "daily",
         hold_days=h if h > 1 else None,
@@ -148,9 +138,8 @@ def build_fundamentals_hold_strategy_spec(
         ),
         rationale=rationale
         or (
-            f"Paper for fundamentals_price hold={h}d mom_n={n_mom} mode={mode} "
-            f"signal_sign={s_sign}: value score (BPS/P|EPS/P PIT) × momentum "
-            "agree; fixed_horizon. UNARMED limited trial only."
+            f"Paper fund hold={h}d mom_n={n_mom} mode={mode} "
+            f"sign={s_sign}. UNARMED."
         ),
         rebalance=REBALANCE_FIXED_HORIZON if h > 1 else "daily",
         hold_days=h if h > 1 else None,
@@ -181,11 +170,7 @@ def build_event_post_strategy_spec(
             threshold=float(threshold),
         ),
         rationale=rationale
-        or (
-            f"Paper receptacle for event_post {h}d (discussion_only proxy): "
-            "threshold on disclosure_flag_fins + sticky hold. Full signed "
-            "surprise not on feature whitelist. UNARMED receptacle only."
-        ),
+        or f"Paper event_post hold={h}d disclosure_flag proxy. UNARMED.",
         rebalance=REBALANCE_FIXED_HORIZON if sticky and h > 1 else "daily",
         hold_days=h if sticky and h > 1 else None,
     )

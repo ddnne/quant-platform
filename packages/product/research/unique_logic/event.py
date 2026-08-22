@@ -288,11 +288,7 @@ def evaluate_event_funding_stress_skip_daily_mtm(
     period_start: str | None = None,
     period_end: str | None = None,
 ) -> dict[str, Any]:
-    """Event surprise hold skipped under PIT overnight funding stress.
-
-    Gate (PIT): overnight[entry_date] < trailing median of overnight prints
-    with date < entry_date. Missing same-date overnight → skip (no ffill).
-    """
+    """Event surprise hold skipped under PIT overnight funding stress."""
     params = dict(spec.get("params") or {})
     min_hist = int(spec.get("min_hist") or params.get("min_hist") or 20)
     collected = _collect_event_entries(

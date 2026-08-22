@@ -1,8 +1,4 @@
-"""Run catalog YAML logics through candidate-grade daily_path.
-
-``--backend cf`` (default) is isolate fan-out; ``local`` is serial HONEST_3Y.
-Does not promote. Scores go to eval_registry.
-"""
+"""Run catalog YAML through daily_path. CF isolate default; local HONEST_3Y."""
 from __future__ import annotations
 
 import argparse

@@ -1,8 +1,4 @@
-"""Unique-logic evaluators (candidate-grade daily MTM).
-
-YAML in ``specs/research_logics`` is the declaration SoT. Add
-``evaluate_*_daily_mtm`` only when the economics are new. Does not GO.
-"""
+"""Unique-logic evaluators (candidate-grade daily MTM). Does not GO."""
 from __future__ import annotations
 
 from importlib import import_module

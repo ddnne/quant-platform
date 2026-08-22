@@ -394,11 +394,7 @@ def evaluate_event_margin_crowding_skip_daily_mtm(
     period_start: str | None = None,
     period_end: str | None = None,
 ) -> dict[str, Any]:
-    """Event surprise hold skipped when name-level margin is PIT-crowded.
-
-    Last margin print must have date < entry_date and age ≤ stale_calendar_days.
-    No ffill across longer gaps. Missing series → incomplete (not approximated).
-    """
+    """Event surprise hold skipped when name-level margin is PIT-crowded."""
     params = dict(spec.get("params") or {})
     min_hist = int(spec.get("min_hist") or params.get("min_hist") or 20)
     stale_days = int(

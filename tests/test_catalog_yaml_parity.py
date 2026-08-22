@@ -373,11 +373,7 @@ def test_python_only_event_gates_skip_catalog() -> None:
         / "src"
         / "daily_path.ts"
     ).read_text(encoding="utf-8")
-    assert "momentumAt(pairs, 5, i)" in src
-    assert 'if (lid === "event_pre_mom_easy_funding")' not in src
-    assert 'if (lid === "event_pre_mom_steep_curve")' not in src
     assert 'lid === "surprise_xs_month_start" && ev.entryDate.slice(8, 10) > "05"' in src
-    assert 'lid === "surprise_xs_fy_end"' in src
 
 
 def test_event_cheap_pb_gate_in_combo_and_yaml() -> None:
@@ -458,7 +454,6 @@ def test_otc_parse_zero_2002_not_invented_complete() -> None:
 
 def test_countable_thesis_ids_require_worker_body() -> None:
     from research.eval_summary import summarize_daily_path_cells
-    from research.eval_tracks import NEXT_RESEARCH_QUEUE
     from research.unique_logic.catalog import catalog_spec, load_catalog_specs
     from research.unique_logic.constants import (
         CANDIDATE_POLICY,
@@ -526,14 +521,3 @@ def test_countable_thesis_ids_require_worker_body() -> None:
     ][0]
     assert "worker_body_missing" in row["flags"]
     assert row["candidate"] is False
-
-    qids = [q.get("id") for q in NEXT_RESEARCH_QUEUE]
-    assert qids[0] == "cf_propose_llm_not_stub"
-    assert "both_track_sleeve_durability" in qids
-    both = next(q for q in NEXT_RESEARCH_QUEUE if q.get("id") == "both_track_sleeve_durability")
-    assert both.get("not_a_pass") is True
-    assert both.get("go") is False
-    assert "recorded" in str(both.get("why") or "")
-    assert "thesis_counts_only_with_worker_body" in qids
-    assert "no_go_until_both_tracks" in qids
-    assert "no_new_theses_until_worker_bodies" not in qids

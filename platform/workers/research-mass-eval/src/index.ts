@@ -190,7 +190,7 @@ async function runMassEval(
   req: MassEvalRequest,
 ): Promise<MassEvalJobResult> {
   const t0 = Date.now();
-  const version = env.MASS_EVAL_VERSION || "research-mass-eval/v22-thesis-gates";
+  const version = env.MASS_EVAL_VERSION || "research-mass-eval/v23-propose-gates";
   const wave = env.MASS_EVAL_WAVE || "research-mass-eval";
   const mode = req.mode || "synthetic";
   const oneWay = req.one_way_cost ?? 0.001;
@@ -362,7 +362,7 @@ async function runDailyPath(
   req: MassEvalRequest,
 ): Promise<Record<string, unknown>> {
   const t0 = Date.now();
-  const version = env.MASS_EVAL_VERSION || "research-mass-eval/v22-thesis-gates";
+  const version = env.MASS_EVAL_VERSION || "research-mass-eval/v23-propose-gates";
   const mode = req.mode || "r2_panels";
   const oneWay = req.one_way_cost ?? 0.001;
   const maxCodes = Math.max(2, Math.min(40, req.max_codes ?? 8));
@@ -440,6 +440,7 @@ const PROPOSE_STUB_TEMPLATES: Array<{
   signal_definition: string;
   position_rule: string;
   datasets: string[];
+  gates: string[];
   why_different_from: string[];
 }> = [
   {
@@ -450,6 +451,7 @@ const PROPOSE_STUB_TEMPLATES: Array<{
     position_rule:
       "Event-hold original surprise sign when both gates are PIT-true; otherwise flat.",
     datasets: ["equities_bars_daily", "fins_summary", "markets_calendar"],
+    gates: ["liq_high", "eq_ar_high"],
     why_different_from: ["ungated PEAD", "always-on CS EqAR sticky"],
   },
   {
@@ -461,9 +463,10 @@ const PROPOSE_STUB_TEMPLATES: Array<{
       "CS fade (invert mom) while both gates hold; otherwise flat.",
     datasets: [
       "equities_bars_daily",
-      "margin_interest",
+      "markets_margin_interest",
       "markets_calendar",
     ],
+    gates: ["crowded_margin"],
     why_different_from: ["ungated CS mom", "margin-only crowd fade"],
   },
   {
@@ -479,6 +482,7 @@ const PROPOSE_STUB_TEMPLATES: Array<{
       "jsda_tokyo_repo_rates",
       "markets_calendar",
     ],
+    gates: ["afterclose", "overnight_easing"],
     why_different_from: ["ungated PEAD", "overnight-level CS sticky"],
   },
 ];
@@ -498,6 +502,48 @@ const PROPOSE_ALLOWED_DATASETS = [
   "jsda_tokyo_repo_rates",
 ] as const;
 
+/** Economic gates only. Weekday/calendar permutations are not a new thesis. */
+const PROPOSE_ALLOWED_GATES = [
+  "afterclose",
+  "overnight_easing",
+  "overnight_tightening",
+  "easy_funding",
+  "tight_funding",
+  "steep_curve",
+  "uncrowded_margin",
+  "crowded_margin",
+  "cluster",
+  "invert_curve",
+  "on_impulse",
+  "cheap_iv",
+  "rich_iv",
+  "cheap_pb",
+  "positive_eps",
+  "eps_up",
+  "div_positive",
+  "margin_up",
+  "margin_down",
+  "eq_ar_falling",
+  "eq_ar_high",
+  "eq_ar_low",
+  "eq_ar_rising",
+  "eps_down",
+  "np_negative",
+  "pb_rising",
+  "roe_low",
+  "sales_down",
+  "ta_down",
+  "ta_up",
+  "overnight_p10",
+  "curve_flatten",
+  "repo_3m_down",
+  "nky_vol_high_skip",
+  "large_surprise",
+  "liq_high",
+  "pre_mom",
+  "price_down",
+] as const;
+
 function normalizeProposalRow(
   row: Record<string, unknown>,
 ): Record<string, unknown> | null {
@@ -513,6 +559,11 @@ function normalizeProposalRow(
     .map((x) => String(x))
     .filter((x) => allow.has(x));
   if (datasets.length < 1) return null;
+  const gateAllow = new Set<string>(PROPOSE_ALLOWED_GATES);
+  const gates = (Array.isArray(row.gates) ? row.gates : [])
+    .map((x) => String(x))
+    .filter((x) => gateAllow.has(x));
+  if (gates.length < 1) return null;
   const why = Array.isArray(row.why_different_from)
     ? row.why_different_from.map((x) => String(x)).filter(Boolean)
     : [];
@@ -521,6 +572,7 @@ function normalizeProposalRow(
     signal_definition: signal,
     position_rule: position,
     datasets,
+    gates,
     why_different_from: why,
     not_injected: true,
     status: "llm_not_catalog",
@@ -581,10 +633,17 @@ async function llmProposals(
             "You propose Japanese-equity overnight/event/CS profit theses. " +
             "Return ONLY a JSON array of exactly the requested length. " +
             "Each object: thesis, signal_definition, position_rule, " +
-            "datasets (string array), why_different_from (string array). " +
+            "datasets (string array), gates (string array), why_different_from (string array). " +
             "datasets MUST be a subset of: equities_bars_daily, fins_summary, " +
             "markets_calendar, markets_margin_interest, markets_short_ratio, " +
-            "jsda_tokyo_repo_rates. Do not invent datasets or fields. " +
+            "jsda_tokyo_repo_rates. gates MUST be a non-empty subset of existing " +
+            "economic gates (liq_high, cheap_pb, eq_ar_high, eq_ar_rising, ta_up, " +
+            "ta_down, margin_up, margin_down, crowded_margin, uncrowded_margin, " +
+            "easy_funding, tight_funding, afterclose, cluster, pre_mom, price_down, " +
+            "eps_up, eps_down, np_negative, pb_rising, roe_low, sales_down, " +
+            "steep_curve, overnight_easing, overnight_tightening, on_impulse, " +
+            "large_surprise, repo_3m_down, cheap_iv, rich_iv). " +
+            "No weekday-only gates. Do not invent datasets, fields, or gates. " +
             "No logic_id. No hold_days/window/mom-only tweaks. No catalog inject. " +
             "Skip missing prints (no invent). Economic difference only.",
         },
@@ -652,6 +711,7 @@ function stubProposals(
       signal_definition: t.signal_definition,
       position_rule: t.position_rule,
       datasets: t.datasets,
+      gates: t.gates,
       why_different_from: t.why_different_from.filter((x) => !avoid.has(x)),
       not_injected: true,
       status: "stub_not_catalog",
@@ -747,7 +807,7 @@ export default {
       return json({
         ok: true,
         service: "quant-platform-research-mass-eval",
-        version: env.MASS_EVAL_VERSION || "research-mass-eval/v22-thesis-gates",
+        version: env.MASS_EVAL_VERSION || "research-mass-eval/v23-propose-gates",
         wave: env.MASS_EVAL_WAVE || "research-mass-eval",
         has_structured_bucket: Boolean(env.STRUCTURED_BUCKET),
         has_d1: Boolean(env.DB),

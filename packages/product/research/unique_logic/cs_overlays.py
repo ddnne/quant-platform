@@ -67,8 +67,7 @@ def evaluate_overnight_level_cs_tilt_daily_mtm(
 ) -> dict[str, Any]:
     """CS mom faded when overnight LEVEL is tight vs PIT median.
 
-    ``params.tilt=follow_easy`` inverts occupancy: follow CS when overnight
-    is *below* the PIT median (overnight_easy_cs_follow).
+    ``params.tilt=follow_easy`` follows CS when overnight is below the PIT median.
     """
     from features.class_signals import cross_section_rank_signs
 

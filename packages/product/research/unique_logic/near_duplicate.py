@@ -1,9 +1,4 @@
-"""Near-duplicate / gate-soup audit (not an eval warehouse).
-
-Calendar weekday permutations of the same occupancy rule are not distinct
-economic theses. Keep one representative per group; park the rest
-(main_pool=false). Never a promote / GO.
-"""
+"""Near-duplicate / gate-soup audit. Park permutations. Not GO."""
 from __future__ import annotations
 
 NEAR_DUPLICATE_GROUPS: tuple[dict[str, object], ...] = (

@@ -83,6 +83,32 @@ PYTHON_ONLY_EVENT_GATES: frozenset[str] = frozenset()
 KNOWN_EVENT_GATES: frozenset[str] = COMBO_EVENT_GATES | PYTHON_ONLY_EVENT_GATES
 WORKER_PYTHON_ONLY_GATE_POLICY: str = "python_local_or_lid_branch"
 CHEAP_PB_EVENT_VS_CS: str = "event_bars_x_fins_not_csfundsnaps"
+# Calendar/weekday permutations stay in COMBO_EVENT_GATES (existing occupancy).
+# Propose-LLM must not emit them as a new thesis.
+PROPOSE_CALENDAR_GATES: frozenset[str] = frozenset(
+    {
+        "skip_monday",
+        "skip_tuesday",
+        "skip_wednesday",
+        "friday_skip",
+        "friday_only",
+        "tue_thu",
+        "not_last_week",
+        "month_start7",
+        "not_first_week",
+        "first_half_month",
+        "month_end_skip",
+        "fy_end",
+        "fy_results",
+        "fy_start",
+        "midmonth",
+    }
+)
+PROPOSE_ALLOWED_GATES: frozenset[str] = COMBO_EVENT_GATES - PROPOSE_CALENDAR_GATES
+if not PROPOSE_CALENDAR_GATES <= COMBO_EVENT_GATES:
+    raise RuntimeError("PROPOSE_CALENDAR_GATES must be a subset of COMBO_EVENT_GATES")
+if not PROPOSE_ALLOWED_GATES:
+    raise RuntimeError("PROPOSE_ALLOWED_GATES must be non-empty")
 
 
 def python_only_gate_logic_ids() -> frozenset[str]:
@@ -149,7 +175,6 @@ CF_EVENT_DAILY_PATH_IDS: frozenset[str] = (
     | ADAPTIVE_LOGIC_IDS
     | CF_NEW_EVENT_THESIS_IDS
 )
-# Worker CF_EVENT_FIDELITY must match these intended-lite vs filled gaps.
 CF_EVENT_FIDELITY: dict[str, str] = {
     "surprise": "aligned: feps-eps else eps-prior_eps (no invent)",
     "adaptive_trail_k": "aligned: last K completed holds orig vs flip; min K",
@@ -160,11 +185,9 @@ CF_EVENT_FIDELITY: dict[str, str] = {
 }
 ALWAYS_ON_OCCUPANCY_WARN: float = 0.85
 NEAR_EMPTY_OCCUPANCY: float = 0.05
-# Unique rate-gated book (not fund_value_mom_agree). Occupancy is the live filter.
 MF_VALUE_MOM_RATE_DELEGATES: bool = False
 MF_VALUE_MOM_RATE_PATH: str = "unique_rate_gated_value_mom"
 MF_VALUE_MOM_RATE_PARKED_ALWAYS_ON: bool = False
-# Term-structure theses need distinct short/long vol maps. Occupancy 0 = unmet.
 TERM_STRUCTURE_REQUIRED: frozenset[str] = frozenset(
     {
         "opt225_atm_iv_term_ratio",
@@ -181,10 +204,8 @@ WORKER_ISOLATE_LINEARIZED_OK: frozenset[str] = frozenset(
         "cs_eqar_low_margin_up",
     }
 )
-# Park mechanism; do not restore isolate-limited lids without a Worker path.
 WORKER_ISOLATE_LIMIT_IDS: frozenset[str] = frozenset()
 WORKER_ISOLATE_LIMIT_REASONS: dict[str, str] = {}
-# AND-gates that emptied 15-name shards. Parked (data_requirement_unmet).
 SPARSE_ON_15NAME_SHARD: frozenset[str] = frozenset(
     {
         "event_may_easing",
@@ -194,7 +215,6 @@ SPARSE_ON_15NAME_SHARD: frozenset[str] = frozenset(
         "flow_disagree_skip_friday",
     }
 )
-# New specs matching these combos park at generation (do not wait for eval).
 SPARSE_GATE_COMBOS: tuple[tuple[frozenset[str], str], ...] = (
     (frozenset({"fy_results", "overnight_easing"}), "may_plus_easing"),
     (frozenset({"tue_thu", "crowded_margin"}), "crowd_plus_weekday"),
@@ -207,7 +227,6 @@ SPARSE_GATE_COMBOS: tuple[tuple[frozenset[str], str], ...] = (
     (frozenset({"overnight_p10_steep"}), "overnight_p10_plus_steep"),
     (frozenset({"div_positive", "cheap_iv"}), "div_payer_and_cheap_iv"),
 )
-# Name-level CS + sticky hold=10 is structurally always_on. Crossed gates stay.
 NAME_LEVEL_FUND_CS_GATES: frozenset[str] = frozenset(
     {
         "eq_ar_falling",

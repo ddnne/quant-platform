@@ -16,9 +16,24 @@ from research.cf_mass_eval_job import (
     CfMassEvalError,
     resolve_research_run_token,
 )
+from research.complete21 import COMPLETE_21_DATASET_SET
+from research.unique_logic.constants import PROPOSE_ALLOWED_GATES
 
 # Copied from factory_propose._is_window_tweak_only (do not import factory).
 _TWEAK_WORDS = ("window", "hold_days only", "mom only", "frac only")
+
+PROPOSE_ALLOWED_DATASETS: frozenset[str] = frozenset(
+    {
+        "equities_bars_daily",
+        "fins_summary",
+        "markets_calendar",
+        "markets_margin_interest",
+        "markets_short_ratio",
+        "jsda_tokyo_repo_rates",
+    }
+)
+if not PROPOSE_ALLOWED_DATASETS <= COMPLETE_21_DATASET_SET:
+    raise RuntimeError("propose datasets must be a subset of COMPLETE 21")
 
 STUB_PROPOSAL_TEMPLATES: tuple[dict[str, Any], ...] = (
     {
@@ -35,6 +50,7 @@ STUB_PROPOSAL_TEMPLATES: tuple[dict[str, Any], ...] = (
             "otherwise flat."
         ),
         "datasets": ["equities_bars_daily", "fins_summary", "markets_calendar"],
+        "gates": ["liq_high", "eq_ar_high"],
         "why_different_from": ["ungated PEAD", "always-on CS EqAR sticky"],
     },
     {
@@ -47,7 +63,12 @@ STUB_PROPOSAL_TEMPLATES: tuple[dict[str, Any], ...] = (
             "PIT prints (no ffill)."
         ),
         "position_rule": "CS fade (invert mom) while both gates hold; otherwise flat.",
-        "datasets": ["equities_bars_daily", "margin_interest", "markets_calendar"],
+        "datasets": [
+            "equities_bars_daily",
+            "markets_margin_interest",
+            "markets_calendar",
+        ],
+        "gates": ["crowded_margin"],
         "why_different_from": ["ungated CS mom", "margin-only crowd fade"],
     },
     {
@@ -68,9 +89,62 @@ STUB_PROPOSAL_TEMPLATES: tuple[dict[str, Any], ...] = (
             "jsda_tokyo_repo_rates",
             "markets_calendar",
         ],
+        "gates": ["afterclose", "overnight_easing"],
         "why_different_from": ["ungated PEAD", "overnight-level CS sticky"],
     },
 )
+
+
+def review_proposal_row(proposal: Mapping[str, Any]) -> dict[str, Any]:
+    """Local review of an LLM row. Never injects. Never GO."""
+    reasons: list[str] = []
+    if "logic_id" in proposal:
+        reasons.append("logic_id_forbidden")
+    if reject_window_tweak(proposal):
+        reasons.append("window_tweak_only_forbidden")
+    datasets = [
+        str(x)
+        for x in (proposal.get("datasets") or proposal.get("datasets_used") or [])
+        if str(x).strip()
+    ]
+    kept_ds = [d for d in datasets if d in PROPOSE_ALLOWED_DATASETS]
+    if not kept_ds:
+        reasons.append("datasets_not_complete21_sidecars")
+    invented_ds = [d for d in datasets if d not in PROPOSE_ALLOWED_DATASETS]
+    if invented_ds:
+        reasons.append("invented_datasets")
+    gates = [str(x) for x in (proposal.get("gates") or []) if str(x).strip()]
+    kept_g = [g for g in gates if g in PROPOSE_ALLOWED_GATES]
+    if not kept_g:
+        reasons.append("gates_empty_or_not_economic")
+    invented_g = [g for g in gates if g not in PROPOSE_ALLOWED_GATES]
+    if invented_g:
+        reasons.append("invented_or_calendar_gates")
+    thesis = str(proposal.get("thesis") or "")
+    if kept_g and not thesis.startswith("STUB"):
+        from research.unique_logic.catalog import yaml_combo_rows
+
+        catalog_sets = {
+            frozenset(
+                str(x)
+                for x in ((row.get("params") or {}).get("gates") or [])
+                if str(x).strip()
+            )
+            for row in yaml_combo_rows()
+        }
+        if frozenset(kept_g) in catalog_sets:
+            reasons.append("gate_set_already_catalog")
+    ok = not reasons
+    return {
+        "ok": ok,
+        "reasons": reasons,
+        "datasets": kept_ds,
+        "gates": kept_g,
+        "auto_inject": False,
+        "go": False,
+        "not_injected": True,
+        "not_a_pass": True,
+    }
 
 
 def reject_window_tweak(proposal: Mapping[str, Any]) -> bool:
@@ -109,6 +183,7 @@ def stub_propose_thesis_result(
                 "signal_definition": tpl["signal_definition"],
                 "position_rule": tpl["position_rule"],
                 "datasets": list(tpl["datasets"]),
+                "gates": list(tpl["gates"]),
                 "why_different_from": [
                     x for x in tpl["why_different_from"] if x not in avoid
                 ],
@@ -231,8 +306,10 @@ def invoke_cf_propose_thesis(
 
 
 __all__ = [
+    "PROPOSE_ALLOWED_DATASETS",
     "STUB_PROPOSAL_TEMPLATES",
     "invoke_cf_propose_thesis",
     "reject_window_tweak",
+    "review_proposal_row",
     "stub_propose_thesis_result",
 ]

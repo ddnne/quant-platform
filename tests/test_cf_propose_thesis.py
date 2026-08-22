@@ -4,9 +4,16 @@ from __future__ import annotations
 from pathlib import Path
 
 from research.cf_propose_thesis import (
+    PROPOSE_ALLOWED_DATASETS,
     invoke_cf_propose_thesis,
     reject_window_tweak,
+    review_proposal_row,
     stub_propose_thesis_result,
+)
+from research.unique_logic.constants import (
+    COMBO_EVENT_GATES,
+    PROPOSE_ALLOWED_GATES,
+    PROPOSE_CALENDAR_GATES,
 )
 
 _REPO = Path(__file__).resolve().parents[1]
@@ -68,6 +75,12 @@ def test_stub_output_not_injected() -> None:
         assert p["status"] == "stub_not_catalog"
         assert "logic_id" not in p
         assert "STUB" in p["thesis"]
+        assert p["gates"]
+        assert set(p["gates"]) <= PROPOSE_ALLOWED_GATES
+        assert set(p["datasets"]) <= PROPOSE_ALLOWED_DATASETS
+        reviewed = review_proposal_row(p)
+        assert reviewed["ok"] is True
+        assert reviewed["auto_inject"] is False
 
     posted: dict[str, object] = {}
 
@@ -103,5 +116,73 @@ def test_worker_index_contains_propose_thesis_route() -> None:
     assert "stubProposals" in src
     assert "equities_bars_daily" in src
     assert "fins_summary" in src
+    assert "PROPOSE_ALLOWED_GATES" in src
     assert "Do not invent datasets" in src or "do not invent datasets" in src.lower()
+    assert "weekday-only" in src or "No weekday" in src
     assert "auto_inject: false" in src
+    assert "markets_margin_interest" in src
+    assert '"margin_interest"' not in src
+
+    import re
+
+    def _ids(name: str) -> set[str]:
+        m = re.search(
+            rf"(?:export )?const {name} = (?:new Set\()?\[(.*?)](?: as const)?",
+            src,
+            flags=re.S,
+        )
+        assert m, name
+        return set(re.findall(r'"([^"]+)"', m.group(1)))
+
+    assert _ids("PROPOSE_ALLOWED_GATES") == set(PROPOSE_ALLOWED_GATES)
+    assert _ids("PROPOSE_ALLOWED_DATASETS") == set(PROPOSE_ALLOWED_DATASETS)
+    assert PROPOSE_CALENDAR_GATES <= COMBO_EVENT_GATES
+    assert PROPOSE_CALENDAR_GATES.isdisjoint(PROPOSE_ALLOWED_GATES)
+    assert "skip_monday" not in PROPOSE_ALLOWED_GATES
+    assert "friday_only" not in PROPOSE_ALLOWED_GATES
+
+
+def test_review_proposal_row_rejects_invent_and_weekday() -> None:
+    good = {
+        "thesis": "liquidity-conditioned EqAR rising after impulse",
+        "signal_definition": "AND(liq_high, eq_ar_rising, on_impulse) PIT",
+        "position_rule": "event-hold surprise sign",
+        "datasets": ["equities_bars_daily", "fins_summary"],
+        "gates": ["liq_high", "eq_ar_rising", "on_impulse"],
+    }
+    ok = review_proposal_row(good)
+    assert ok["ok"] is True
+    assert ok["auto_inject"] is False
+    assert ok["go"] is False
+
+    weekday = dict(good)
+    weekday["gates"] = ["skip_monday", "friday_only"]
+    bad_wd = review_proposal_row(weekday)
+    assert bad_wd["ok"] is False
+    assert "invented_or_calendar_gates" in bad_wd["reasons"]
+    assert "gates_empty_or_not_economic" in bad_wd["reasons"]
+
+    invent = dict(good)
+    invent["datasets"] = ["institutional_ownership"]
+    bad_ds = review_proposal_row(invent)
+    assert bad_ds["ok"] is False
+    assert "invented_datasets" in bad_ds["reasons"]
+
+    no_gates = dict(good)
+    no_gates["gates"] = []
+    bad_g = review_proposal_row(no_gates)
+    assert bad_g["ok"] is False
+    assert "gates_empty_or_not_economic" in bad_g["reasons"]
+
+    with_id = dict(good)
+    with_id["logic_id"] = "event_eqar_high_pead"
+    bad_id = review_proposal_row(with_id)
+    assert bad_id["ok"] is False
+    assert "logic_id_forbidden" in bad_id["reasons"]
+
+    clone = dict(good)
+    clone["gates"] = ["eq_ar_high", "liq_high"]
+    bad_clone = review_proposal_row(clone)
+    assert bad_clone["ok"] is False
+    assert "gate_set_already_catalog" in bad_clone["reasons"]
+    assert bad_clone["auto_inject"] is False

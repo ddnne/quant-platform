@@ -128,6 +128,34 @@ def test_cf_combo_specs_carry_gates() -> None:
     assert "liq_high" in by["event_eqar_high_liq_high"]["params"]["gates"]
 
 
+def test_unique22_leftover_occupancy_not_unified() -> None:
+    from pathlib import Path
+
+    src = (
+        Path(__file__).resolve().parents[1]
+        / "platform"
+        / "workers"
+        / "research-mass-eval"
+        / "src"
+        / "daily_path.ts"
+    ).read_text(encoding="utf-8")
+    assert "momentumAt(entryIdx)" in src
+    assert "entryIdx - 1" in src or "entryIdx-1" in src
+
+
+def test_propose_calendar_gates_excluded_from_llm() -> None:
+    from research.unique_logic.constants import (
+        COMBO_EVENT_GATES,
+        PROPOSE_ALLOWED_GATES,
+        PROPOSE_CALENDAR_GATES,
+    )
+
+    assert PROPOSE_CALENDAR_GATES <= COMBO_EVENT_GATES
+    assert PROPOSE_ALLOWED_GATES == COMBO_EVENT_GATES - PROPOSE_CALENDAR_GATES
+    assert "skip_monday" in PROPOSE_CALENDAR_GATES
+    assert "liq_high" in PROPOSE_ALLOWED_GATES
+
+
 def test_default_logic_specs_leftover_and_bar_native() -> None:
     from research.cf_mass_eval_job import default_logic_specs
 

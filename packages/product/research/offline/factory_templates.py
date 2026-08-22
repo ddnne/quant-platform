@@ -1,9 +1,4 @@
-"""Factory logic-template catalog.
-
-Overlapping 30 ids consume ``research.bar_native_specs.BAR_NATIVE_SPECS``
-as SoT. Six factory-only ids stay explicit (offline-only; CF bar-native
-set stays 30).
-"""
+"""Factory logic-template catalog. BAR_NATIVE_SPECS SoT for 30; six factory-only."""
 
 from __future__ import annotations
 
@@ -311,7 +306,7 @@ class LogicTemplate:
 
 
 def logic_template_from_bar_native(spec: Mapping[str, Any]) -> LogicTemplate:
-    """Rebuild a factory LogicTemplate from a BAR_NATIVE_SPECS row."""
+    """LogicTemplate from a BAR_NATIVE_SPECS row."""
     return LogicTemplate(
         logic_id=str(spec["logic_id"]),
         thesis=str(spec["thesis"]),
@@ -331,7 +326,7 @@ def _factory_only_templates() -> list[LogicTemplate]:
     return [
         LogicTemplate(
             logic_id="event_post_disclosure_hold",
-            thesis="Post-earnings / disclosure drift after PIT-available close only",
+            thesis="Post-disclosure PIT close drift",
             signal_definition="earnings surprise proxy; entry only when DiscTime pre-close",
             position_rule="fixed post_hold after first non-look-ahead session close",
             datasets_used=("fins_summary",) + bars,
@@ -344,7 +339,7 @@ def _factory_only_templates() -> list[LogicTemplate]:
         ),
         LogicTemplate(
             logic_id="xs_rank_mom_slow",
-            thesis="Slower cross-section ranking horizon captures different relative book",
+            thesis="Slow CS rank mom sticky L/S",
             signal_definition="rank on longer momentum window; sticky L/S",
             position_rule="sticky balanced L/S; structural mom horizon = slow",
             datasets_used=bars_idx,
@@ -360,7 +355,7 @@ def _factory_only_templates() -> list[LogicTemplate]:
         ),
         LogicTemplate(
             logic_id="mdh_short_horizon_mom",
-            thesis="Very short multi-day continuation (5d structure) is a different hold economy",
+            thesis="Short 5d multi-day continuation",
             signal_definition="sign(mom) with 5d structural horizon",
             position_rule="fixed_horizon hold=5 (structure, not grid sample)",
             datasets_used=bars_idx,
@@ -376,7 +371,7 @@ def _factory_only_templates() -> list[LogicTemplate]:
         ),
         LogicTemplate(
             logic_id="event_post_long_horizon",
-            thesis="Longer post-disclosure drift (20d) harvests slower earnings information",
+            thesis="Long 20d post-disclosure drift",
             signal_definition="surprise proxy; longer post_hold structure",
             position_rule="post_hold_days=20 PIT entry",
             datasets_used=("fins_summary",) + bars,
@@ -390,7 +385,7 @@ def _factory_only_templates() -> list[LogicTemplate]:
         ),
         LogicTemplate(
             logic_id="rate_abs_level_xs",
-            thesis="Absolute Tokyo repo level as CS risk-on/off factor",
+            thesis="Abs Tokyo repo as CS risk factor",
             signal_definition="CS rank(mom) L-S risk-adjusted by abs repo rate_level",
             position_rule="sticky fixed_horizon balanced L/S after rate-level book transform",
             datasets_used=bars_idx + ("jsda_tokyo_repo_rates",),
@@ -408,7 +403,7 @@ def _factory_only_templates() -> list[LogicTemplate]:
         ),
         LogicTemplate(
             logic_id="rate_curve_shape_xs",
-            thesis="Repo curve steepness as CS risk-on/off factor",
+            thesis="Repo curve steepness as CS factor",
             signal_definition="CS rank mom L-S risk-adjusted by 3M−ON repo curve",
             position_rule="sticky fixed_horizon balanced L/S after curve-shape book transform",
             datasets_used=bars_idx + ("jsda_tokyo_repo_rates",),
@@ -430,7 +425,7 @@ def _factory_only_templates() -> list[LogicTemplate]:
 
 
 def _build_logic_templates() -> dict[str, LogicTemplate]:
-    """Catalog of distinct economic logics (prefer many templates, few clones)."""
+    """Catalog of distinct economic logics."""
     factory_only = {t.logic_id: t for t in _factory_only_templates()}
     missing_fo = set(FACTORY_ONLY_LOGIC_IDS) - set(factory_only)
     if missing_fo:

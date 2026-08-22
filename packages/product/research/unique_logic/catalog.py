@@ -1,8 +1,4 @@
-"""Load unique_logic declarations from ``specs/research_logics/*.yaml``.
-
-YAML is declaration and runtime (gates, cs_gate, side). Themes from
-``specs/research_themes.yaml``. Constrained schema (no generic YAML lib).
-"""
+"""Load unique_logic YAML from ``specs/research_logics``. Constrained schema."""
 from __future__ import annotations
 
 from functools import lru_cache
@@ -315,10 +311,7 @@ def _unique_family_key(spec: Mapping[str, Any]) -> str:
 
 
 def unique_family_ids_from_yaml(*, root: Path | None = None) -> dict[str, frozenset[str]]:
-    """Non-combo YAML stems grouped by ``family`` (or evaluator module).
-
-    Combo evaluator is excluded. Does not import combo runtime. Does not GO.
-    """
+    """Non-combo YAML stems grouped by family (or evaluator module). Does not GO."""
     buckets: dict[str, set[str]] = {k: set() for k in _UNIQUE_FAMILY_KEYS}
     for spec in load_catalog_specs(root=root):
         if str(spec.get("evaluator") or "") == _COMBO_EVALUATOR:
@@ -384,8 +377,5 @@ def _economic_theme_ids_cached(root_key: str) -> dict[str, frozenset[str]]:
 
 
 def economic_theme_ids(*, root: Path | None = None) -> dict[str, frozenset[str]]:
-    """theme_id → logic_ids from ``specs/research_themes.yaml``.
-
-    YAML is the SoT. Does not GO.
-    """
+    """theme_id → logic_ids from ``specs/research_themes.yaml``. Does not GO."""
     return dict(_economic_theme_ids_cached(str((root or repo_root()).resolve())))

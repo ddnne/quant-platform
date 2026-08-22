@@ -1,8 +1,4 @@
-"""Adapt class_hyp / research candidate payloads into an unarmed receptacle.
-
-Does not arm the paper scheduler, call ``run_paper``, or touch the live
-order path. Mass NO-GO · Phase7 OFF · READY undeclared · GO closed.
-"""
+"""UNARMED paper receptacle adapt/envelope. Does not GO."""
 from __future__ import annotations
 
 import json
@@ -289,8 +285,7 @@ class PaperCandidateReceptacle:
             },
             "arm": arm,
             **arm,
-            "note": self.note
-            or "UNARMED paper receptacle. Mass NO-GO · Phase7 OFF · READY undeclared · GO closed.",
+            "note": self.note or "UNARMED paper receptacle. Not GO.",
         }
         assert_unarmed(body)
         return body

@@ -1,9 +1,7 @@
 """Mass strategy logic-diversity factory (generation; not GO / READY).
 
-Distinct economic-logic individuals, then near-dup, then batch eval.
-Profit-hypothesis LLM entry: ``research.offline.factory_propose``.
-Eval: ``research.offline.factory_eval``. Panels: ``factory_eval_data``.
-Unique/combo stay ungenerated (generation_enabled=False).
+Generate → near-dup → batch eval. Unique/combo stay ungenerated
+(generation_enabled=False).
 """
 
 from __future__ import annotations
@@ -99,8 +97,6 @@ def _freeze() -> dict[str, Any]:
         "continuous_paper": CONTINUOUS_PAPER,
     }
 
-# Templates / FAMILY_* live in factory_templates (BAR_NATIVE_SPECS SoT for 30).
-# Do not merge baseline_catalog into bar_native.
 
 @dataclass(frozen=True)
 class MassFactoryConfig:
@@ -234,7 +230,7 @@ def _coarse_bucket(key: str, value: Any) -> Any:
             v = float(value)
         except (TypeError, ValueError):
             return str(value)
-        return round(v, 1)  # 0.3 and 0.4 → different only at 0.1; still high sim
+        return round(v, 1)
     return value
 
 def individual_similarity_features(ind: Mapping[str, Any]) -> dict[str, Any]:
@@ -262,12 +258,7 @@ def individual_similarity_features(ind: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 def similarity_score(a: Mapping[str, Any], b: Mapping[str, Any]) -> float:
-    """Score near-duplicate similarity in [0, 1].
-
-    High score when only grid knobs differ (hold/mom/frac) under same
-    signal family + position rule + datasets. Low when thesis / entry /
-    position / datasets differ.
-    """
+    """Near-duplicate similarity in [0, 1]."""
     fa = individual_similarity_features(a)
     fb = individual_similarity_features(b)
 
@@ -448,11 +439,7 @@ def validate_strategy_at_gen(
     return True, None
 
 def _minimal_numeric_variants(tpl: LogicTemplate) -> list[dict[str, Any]]:
-    """At most a couple coarse numeric variants (will near-dup collapse).
-
-    Not a hold/mom/frac mass grid. Used only when allow_numeric_variants and
-    capacity remains after unique logics are placed.
-    """
+    """At most one coarse numeric variant (near-dup collapse)."""
     base = dict(tpl.base_params)
     variants: list[dict[str, Any]] = []
     if "hold_days" in base and int(base["hold_days"]) not in (1,):
@@ -474,12 +461,7 @@ def generate_strategy_batch(
     seed: int | None = None,
     n: int | None = None,
 ) -> dict[str, Any]:
-    """Generate strategy individuals from distinct logic templates.
-
-    Primary unit = logic template. Numeric knob clones are secondary and
-    near-dup scored. Returns metrics: n_generated, n_unique_logic,
-    n_numeric_variant, n_after_dedup.
-    """
+    """Generate strategy individuals from distinct logic templates."""
     cfg = config or MassFactoryConfig()
     if seed is not None or n is not None:
         cfg = replace(
