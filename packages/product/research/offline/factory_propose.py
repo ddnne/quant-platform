@@ -19,6 +19,7 @@ from research.offline.factory_templates import (
     NUMERIC_ONLY_KNOBS,
 )
 from research.unique_logic.constants import RESEARCH_UNIQUE_LOGIC_IDS
+from research.unique_logic.propose_review_tables import PROPOSE_TWEAK_WORDS
 
 
 def _is_window_tweak_only(proposal: Mapping[str, Any]) -> bool:
@@ -45,9 +46,8 @@ def _is_window_tweak_only(proposal: Mapping[str, Any]) -> bool:
     )
     if only_numeric and str(proposal.get("logic_id") or "") in LOGIC_TEMPLATES:
         return True
-    tweak_words = ("window", "hold_days only", "mom only", "frac only")
     blob = f"{thesis} {signal}".lower()
-    if any(w in blob for w in tweak_words) and "factor" not in blob:
+    if any(w in blob for w in PROPOSE_TWEAK_WORDS) and "factor" not in blob:
         if not proposal.get("datasets") and not proposal.get("datasets_used"):
             return True
     return False

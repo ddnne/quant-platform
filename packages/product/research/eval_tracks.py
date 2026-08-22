@@ -82,8 +82,8 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "why": (
             "recorded research/eval/job=eval-inventory-bias-20260824e/ "
             "inventory_bias.json; assert_new_batch_cheap_pb_cap refuses "
-            "new batches at 20%; thin sleeve exclude; 24e polarity SoT; "
-            "flatten+eps sleeve candidate; 24d invert+roe empty parked"
+            "new batches at 20%; thin sleeve exclude; 24e tight×px band; "
+            "24f clone 0-adopt; flatten+eps sleeve member"
         ),
         "not_a_pass": True,
         "go": False,
@@ -114,8 +114,9 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "track": EVAL_TRACK_LIQ_LARGE,
         "why": (
             "review_proposal_row title_gate_polarity_mismatch and "
-            "occupancy_label_only; Worker titleOccupancyBad imports generated "
-            "propose_review_tables.ts; YAML follows GATES not inverted labels"
+            "occupancy_label_only; Worker imports generated "
+            "propose_review_tables.ts and propose_allowed.ts; YAML follows "
+            "GATES not inverted labels"
         ),
         "not_a_pass": True,
         "go": False,

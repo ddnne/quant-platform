@@ -52,27 +52,6 @@ def test_catalog_yaml_parity_with_python_specs() -> None:
         assert spec.get("go") is not True
 
 
-def test_combo_yaml_params_include_gates() -> None:
-    from research.unique_logic.catalog import combo_row_from_yaml, parse_catalog_yaml
-    from research.unique_logic.event_combos import spec_by_id
-
-    py = spec_by_id("event_eqar_high_pead")
-    assert py is not None
-    path = _YAML_DIR / "event_eqar_high_pead.yaml"
-    yml = parse_catalog_yaml(path.read_text(encoding="utf-8"))
-    assert "gates" in (yml.get("params") or {})
-    assert "cs_gate" in (yml.get("params") or {})
-    assert "side" in (yml.get("params") or {})
-    derived = combo_row_from_yaml(yml)
-    py_p = py.get("params") or {}
-    y_p = derived.get("params") or {}
-    assert list(y_p.get("gates") or []) == list(py_p.get("gates") or [])
-    assert y_p.get("cs_gate") == py_p.get("cs_gate")
-    assert y_p.get("side") == py_p.get("side")
-    assert derived.get("go") is False
-    assert derived.get("generation_enabled") is False
-
-
 def test_combo_yaml_gates_cs_gate_side_match_specs() -> None:
     from research.unique_logic.catalog import yaml_combo_rows
     from research.unique_logic.event_combos import (
@@ -416,15 +395,7 @@ def test_event_cheap_pb_gate_in_combo_and_yaml() -> None:
         / "src"
     )
     src = (worker_src / "daily_path.ts").read_text(encoding="utf-8")
-    ids_src = (worker_src / "catalog_ids.ts").read_text(encoding="utf-8")
-    m = re.search(
-        r"const COMBO_EVENT_GATES = new Set\(\[(.*?)]\);",
-        ids_src,
-        flags=re.S,
-    )
-    assert m, "Worker COMBO_EVENT_GATES"
-    worker_gates = set(re.findall(r'"([^"]+)"', m.group(1)))
-    assert "cheap_pb" in worker_gates
+    # catalog_ids.ts COMBO_EVENT_GATES is generated; sync --check is the set SoT.
 
     event_block = re.search(
         r'if \(gate === "cheap_pb"\) \{.*?return med !== null && pb < med;',

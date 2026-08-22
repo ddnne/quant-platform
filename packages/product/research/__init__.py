@@ -1,4 +1,4 @@
-"""Phase 7 research control plane (readiness attestation, experiment plans).
+"""Research control plane (Phase 7 stays OFF): readiness attestation, experiment plans.
 
 This barrel re-exports the fail-closed control plane only. Candidate eval is
 ``research.cf_daily_path_job`` (POST /v1/daily-path). Smoke codes live in

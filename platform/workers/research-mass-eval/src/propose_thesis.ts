@@ -3,6 +3,13 @@
 import type { Env } from "./types";
 import { isObject, putJson } from "./http";
 import {
+  DEFAULT_PROPOSE_DATASETS,
+  PROMPT_DIRECTION_ECHO_X,
+  PROPOSE_ALLOWED_DATASETS,
+  PROPOSE_ALLOWED_GATES,
+  PROPOSE_TWEAK_WORDS,
+} from "./propose_allowed";
+import {
   EXTRA_TITLE_GATES,
   GATE_OCCUPANCY_LABEL,
   GATE_TITLE_CONTRA,
@@ -20,63 +27,6 @@ const PROPOSE_AI_MODELS = [
   "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
   "@cf/zai-org/glm-4.7-flash",
   "@cf/meta/llama-3.1-8b-instruct-fp8",
-] as const;
-
-const DEFAULT_PROPOSE_DATASETS = [
-  "equities_bars_daily",
-  "fins_summary",
-  "markets_calendar",
-] as const;
-
-const PROPOSE_ALLOWED_DATASETS = [
-  "equities_bars_daily",
-  "fins_summary",
-  "jsda_tokyo_repo_rates",
-  "markets_calendar",
-  "markets_margin_interest",
-  "markets_short_ratio",
-] as const;
-
-/** Economic gates only. Weekday/calendar permutations are not a new thesis. */
-const PROPOSE_ALLOWED_GATES = [
-  "afterclose",
-  "cheap_iv",
-  "cheap_pb",
-  "cluster",
-  "crowded_margin",
-  "curve_flatten",
-  "div_positive",
-  "easy_funding",
-  "eps_down",
-  "eps_up",
-  "eq_ar_falling",
-  "eq_ar_high",
-  "eq_ar_low",
-  "eq_ar_rising",
-  "invert_curve",
-  "large_surprise",
-  "liq_high",
-  "margin_down",
-  "margin_up",
-  "nky_vol_high_skip",
-  "np_negative",
-  "on_impulse",
-  "overnight_easing",
-  "overnight_p10",
-  "overnight_tightening",
-  "pb_rising",
-  "positive_eps",
-  "pre_mom",
-  "price_down",
-  "repo_3m_down",
-  "rich_iv",
-  "roe_low",
-  "sales_down",
-  "steep_curve",
-  "ta_down",
-  "ta_up",
-  "tight_funding",
-  "uncrowded_margin",
 ] as const;
 
 function coerceGateList(raw: unknown): string[] {
@@ -134,11 +84,7 @@ function normalizeProposalRow(
     return null;
   }
   const title = thesis.toLowerCase().replace(/×/g, "x");
-  if (
-    title.includes("liquidity x fundamentals") ||
-    title.includes("margin x price") ||
-    title.includes("disclosure x funding")
-  ) {
+  if (PROMPT_DIRECTION_ECHO_X.some((echo) => title.includes(echo))) {
     return null;
   }
   if (titleOccupancyBad(title, gates)) return null;
@@ -340,8 +286,7 @@ function isWindowTweakOnly(o: Record<string, unknown>): boolean {
   const position = String(o.position_rule ?? o.position ?? "").trim();
   if (!thesis || !signal || !position) return true;
   const blob = `${thesis} ${signal}`.toLowerCase();
-  const tweakWords = ["window", "hold_days only", "mom only", "frac only"];
-  if (tweakWords.some((w) => blob.includes(w)) && !blob.includes("factor")) {
+  if (PROPOSE_TWEAK_WORDS.some((w) => blob.includes(w)) && !blob.includes("factor")) {
     const ds = o.datasets ?? o.datasets_used;
     if (!Array.isArray(ds) || ds.length === 0) return true;
   }

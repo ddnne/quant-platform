@@ -25,12 +25,11 @@ from research.unique_logic.propose_review_tables import (
     EXTRA_TITLE_GATES,
     GATE_OCCUPANCY_LABEL,
     GATE_TITLE_CONTRA,
+    PROMPT_DIRECTION_ECHO,
     PROPOSE_CONTRADICTORY_GATE_PAIRS,
+    PROPOSE_TWEAK_WORDS,
     occupancy_exception_tokens,
 )
-
-# Copied from factory_propose._is_window_tweak_only (do not import factory).
-_TWEAK_WORDS = ("window", "hold_days only", "mom only", "frac only")
 
 PROPOSE_ALLOWED_DATASETS: frozenset[str] = frozenset(
     {
@@ -44,15 +43,6 @@ PROPOSE_ALLOWED_DATASETS: frozenset[str] = frozenset(
 )
 if not PROPOSE_ALLOWED_DATASETS <= COMPLETE_21_DATASET_SET:
     raise RuntimeError("propose datasets must be a subset of COMPLETE 21")
-
-_PROMPT_DIRECTION_ECHO: tuple[str, ...] = (
-    "liquidity × fundamentals",
-    "liquidity x fundamentals",
-    "margin × price",
-    "margin x price",
-    "disclosure × funding",
-    "disclosure x funding",
-)
 
 PROPOSE_MAX_AND_GATES: int = 3
 PROPOSE_WHY_AVOID_LIMIT: int = 24
@@ -164,7 +154,7 @@ def review_proposal_row(proposal: Mapping[str, Any]) -> dict[str, Any]:
         if len(kept_g) > PROPOSE_MAX_AND_GATES:
             reasons.append("and_cross_too_wide")
         blob = thesis.lower().replace("×", "x")
-        if any(echo.replace("×", "x") in blob for echo in _PROMPT_DIRECTION_ECHO):
+        if any(echo.replace("×", "x") in blob for echo in PROMPT_DIRECTION_ECHO):
             reasons.append("prompt_direction_echo")
         if (" × " in thesis or " x " in blob) and not any(
             w in blob
@@ -302,7 +292,7 @@ def reject_window_tweak(proposal: Mapping[str, Any]) -> bool:
     if not thesis or not signal or not position:
         return True
     blob = f"{thesis} {signal}".lower()
-    if any(w in blob for w in _TWEAK_WORDS) and "factor" not in blob:
+    if any(w in blob for w in PROPOSE_TWEAK_WORDS) and "factor" not in blob:
         if not proposal.get("datasets") and not proposal.get("datasets_used"):
             return True
     return False

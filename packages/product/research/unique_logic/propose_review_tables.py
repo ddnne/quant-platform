@@ -13,6 +13,43 @@ from research.unique_logic.constants import (
     SPARSE_GATE_COMBOS,
 )
 
+# Window-only LLM rows. Copied into Worker isWindowTweakOnly. Do not import factory.
+PROPOSE_TWEAK_WORDS: tuple[str, ...] = (
+    "window",
+    "hold_days only",
+    "mom only",
+    "frac only",
+)
+
+# Prompt direction echo. Worker matches after × → x and lowercasing.
+PROMPT_DIRECTION_ECHO: tuple[str, ...] = (
+    "liquidity × fundamentals",
+    "liquidity x fundamentals",
+    "margin × price",
+    "margin x price",
+    "disclosure × funding",
+    "disclosure x funding",
+)
+
+DEFAULT_PROPOSE_DATASETS: tuple[str, ...] = (
+    "equities_bars_daily",
+    "fins_summary",
+    "markets_calendar",
+)
+
+
+def prompt_direction_echo_x() -> tuple[str, ...]:
+    """Unique lowercase x-normalized direction echoes for Worker drop."""
+    seen: list[str] = []
+    have: set[str] = set()
+    for echo in PROMPT_DIRECTION_ECHO:
+        token = echo.lower().replace("×", "x")
+        if token in have:
+            continue
+        have.add(token)
+        seen.append(token)
+    return tuple(seen)
+
 # LLM English titles sometimes invert gate polarity (sales_down → "Rising Sales").
 # Review follows GATES, not the title; reject the row rather than adopt inverted copy.
 GATE_TITLE_CONTRA: tuple[tuple[str, tuple[str, ...]], ...] = (
@@ -164,11 +201,15 @@ def sparse_gate_combos_for_propose() -> tuple[tuple[str, ...], ...]:
 
 
 __all__ = [
+    "DEFAULT_PROPOSE_DATASETS",
     "EXTRA_TITLE_GATES",
     "GATE_OCCUPANCY_LABEL",
     "GATE_TITLE_CONTRA",
     "OCCUPANCY_LABEL_EXCEPTIONS",
+    "PROMPT_DIRECTION_ECHO",
     "PROPOSE_CONTRADICTORY_GATE_PAIRS",
+    "PROPOSE_TWEAK_WORDS",
     "occupancy_exception_tokens",
+    "prompt_direction_echo_x",
     "sparse_gate_combos_for_propose",
 ]

@@ -144,22 +144,6 @@ def test_dispatch_unknown_logic_is_incomplete() -> None:
     assert pack["status"] == "unknown_logic"
 
 
-def test_repo_catalog_yaml_loads() -> None:
-    from research.unique_logic import all_unique_logic_specs
-
-    specs = load_catalog_specs()
-    ids = {s["logic_id"] for s in specs}
-    py_ids = {s["logic_id"] for s in all_unique_logic_specs()}
-    assert "overnight_level_cs_tilt" in ids
-    assert "overnight_easy_cs_follow" in ids
-    assert "xs_low_vol_mom" in ids
-    assert "month_end_cs_fade" in ids
-    assert ids == py_ids
-    for spec in specs:
-        assert spec.get("go") is not True
-        assert spec.get("promote_as_main") is not True
-
-
 def test_repo_history_plane_status_discloses_sqlite_not_d1() -> None:
     from research.eval_loaders import repo_history_plane_status
 

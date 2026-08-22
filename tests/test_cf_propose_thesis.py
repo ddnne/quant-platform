@@ -34,6 +34,14 @@ _WORKER_PROPOSE = (
     / "src"
     / "propose_thesis.ts"
 )
+_WORKER_ALLOWED = (
+    _REPO
+    / "platform"
+    / "workers"
+    / "research-mass-eval"
+    / "src"
+    / "propose_allowed.ts"
+)
 _WRANGLER = (
     _REPO / "platform" / "workers" / "research-mass-eval" / "wrangler.toml"
 )
@@ -137,6 +145,8 @@ def test_worker_index_contains_propose_thesis_route() -> None:
         _WORKER_INDEX.read_text(encoding="utf-8")
         + "\n"
         + _WORKER_PROPOSE.read_text(encoding="utf-8")
+        + "\n"
+        + _WORKER_ALLOWED.read_text(encoding="utf-8")
     )
     assert "/v1/propose-thesis" in src
     assert "llm_failed" in src
@@ -170,7 +180,11 @@ def test_worker_index_contains_propose_thesis_route() -> None:
     assert "slice(0, 24)" in src or "slice(0,24)" in src
     assert "titleOccupancyBad" in src
     assert 'from "./propose_review_tables"' in src
+    assert 'from "./propose_allowed"' in src
     assert "GATE_TITLE_CONTRA" in src
+    propose_src = _WORKER_PROPOSE.read_text(encoding="utf-8")
+    assert "const PROPOSE_ALLOWED_GATES = [" not in propose_src
+    assert "const PROPOSE_ALLOWED_DATASETS = [" not in propose_src
     assert "rising price-to-book" not in src
     assert "auto_inject: false" in src
     assert "markets_margin_interest" in src
@@ -349,225 +363,105 @@ def test_review_proposal_row_rejects_invent_and_weekday() -> None:
     assert "title_gate_polarity_mismatch" in bad_n["reasons"]
     assert bad_n["auto_inject"] is False
 
-    occupancy_p10 = {
-        "thesis": "Overnight funding at 10% predicts EPS decline.",
-        "signal_definition": "AND(overnight_p10, eps_down) PIT",
-        "position_rule": "event-hold surprise sign",
-        "datasets": ["equities_bars_daily", "fins_summary", "jsda_tokyo_repo_rates"],
-        "gates": ["overnight_p10", "eps_down"],
-    }
-    bad_p10 = review_proposal_row(occupancy_p10)
-    assert bad_p10["ok"] is False
-    assert "occupancy_label_only" in bad_p10["reasons"]
-    assert bad_p10["auto_inject"] is False
-    occ_p10_ok = dict(occupancy_p10)
-    occ_p10_ok["thesis"] = (
-        "PEAD when overnight is in the easiest PIT decile AND EPS contracted"
-    )
-    ok_p10 = review_proposal_row(occ_p10_ok)
-    assert ok_p10["ok"] is True or "gate_set_already_catalog" in ok_p10["reasons"]
-    assert "occupancy_label_only" not in ok_p10["reasons"]
-    assert ok_p10["auto_inject"] is False
 
-    extra_sales = {
-        "thesis": "Curve flattening indicates poor sales performance when EPS is down.",
-        "signal_definition": "AND(curve_flatten, eps_down) PIT",
-        "position_rule": "event-hold surprise sign",
-        "datasets": ["equities_bars_daily", "fins_summary", "jsda_tokyo_repo_rates"],
-        "gates": ["curve_flatten", "eps_down"],
-    }
-    bad_sales = review_proposal_row(extra_sales)
-    assert bad_sales["ok"] is False
-    assert "occupancy_label_only" in bad_sales["reasons"]
-    occ_sales = dict(extra_sales)
-    occ_sales["thesis"] = (
-        "PEAD when the repo curve flattened AND EPS contracted versus "
-        "the last prior print"
-    )
-    ok_sales = review_proposal_row(occ_sales)
-    assert ok_sales["ok"] is True or "gate_set_already_catalog" in ok_sales["reasons"]
-    assert "occupancy_label_only" not in ok_sales["reasons"]
-
-    extra_roe = {
-        "thesis": (
-            "ROE decline when price-to-book is high AND overnight funding "
-            "is loose."
+def test_review_proposal_row_occupancy_and_polarity_table() -> None:
+    """SoT phrase cases. Reason classes stay; rows are data not new tests."""
+    ds = ["equities_bars_daily", "fins_summary", "jsda_tokyo_repo_rates"]
+    rows: list[tuple[str, list[str], str, str | None]] = [
+        (
+            "Overnight funding at 10% predicts EPS decline.",
+            ["overnight_p10", "eps_down"],
+            "occupancy_label_only",
+            "PEAD when overnight is in the easiest PIT decile AND EPS contracted",
         ),
-        "signal_definition": "AND(pb_rising, overnight_p10) PIT",
-        "position_rule": "event-hold surprise sign",
-        "datasets": ["equities_bars_daily", "fins_summary", "jsda_tokyo_repo_rates"],
-        "gates": ["pb_rising", "overnight_p10"],
-    }
-    bad_roe = review_proposal_row(extra_roe)
-    assert bad_roe["ok"] is False
-    assert "occupancy_label_only" in bad_roe["reasons"]
-    occ_roe = dict(extra_roe)
-    occ_roe["thesis"] = (
-        "PEAD when PB is above its PIT median AND overnight is in the "
-        "easiest PIT decile"
-    )
-    ok_roe = review_proposal_row(occ_roe)
-    assert ok_roe["ok"] is True or "gate_set_already_catalog" in ok_roe["reasons"]
-    assert "occupancy_label_only" not in ok_roe["reasons"]
-
-    extra_funding = {
-        "thesis": "Tight funding regime when EPS is down AND NP is negative.",
-        "signal_definition": "AND(eps_down, np_negative) PIT",
-        "position_rule": "event-hold surprise sign",
-        "datasets": ["equities_bars_daily", "fins_summary"],
-        "gates": ["eps_down", "np_negative"],
-    }
-    bad_xf = review_proposal_row(extra_funding)
-    assert bad_xf["ok"] is False
-    assert "occupancy_label_only" in bad_xf["reasons"]
-    occ_xf = dict(extra_funding)
-    occ_xf["thesis"] = "PEAD when EPS contracted AND net profit is negative"
-    ok_xf = review_proposal_row(occ_xf)
-    assert ok_xf["ok"] is True or "gate_set_already_catalog" in ok_xf["reasons"]
-    assert "occupancy_label_only" not in ok_xf["reasons"]
-
-    occupancy_pb = {
-        "thesis": (
-            "Price contraction when earnings per share are down AND "
-            "price-to-book is rising."
+        (
+            "Curve flattening indicates poor sales performance when EPS is down.",
+            ["curve_flatten", "eps_down"],
+            "occupancy_label_only",
+            "PEAD when the repo curve flattened AND EPS contracted versus the last prior print",
         ),
-        "signal_definition": "AND(eps_down, pb_rising) PIT",
-        "position_rule": "event-hold surprise sign",
-        "datasets": ["equities_bars_daily", "fins_summary"],
-        "gates": ["eps_down", "pb_rising"],
-    }
-    bad_pb = review_proposal_row(occupancy_pb)
-    assert bad_pb["ok"] is False
-    assert "occupancy_label_only" in bad_pb["reasons"]
-    occ_pb_ok = dict(occupancy_pb)
-    occ_pb_ok["thesis"] = (
-        "PEAD when EPS contracted AND PB is above its PIT median"
-    )
-    ok_pb = review_proposal_row(occ_pb_ok)
-    assert ok_pb["ok"] is True or "gate_set_already_catalog" in ok_pb["reasons"]
-    assert "occupancy_label_only" not in ok_pb["reasons"]
-    assert ok_pb["auto_inject"] is False
-
-    occupancy_ta = {
-        "thesis": (
-            "Stocks are more likely to be bought when the margin is uncrowded "
-            "AND overnight funding is tightening AND technical analysis "
-            "signals are up."
+        (
+            "ROE decline when price-to-book is high AND overnight funding is loose.",
+            ["pb_rising", "overnight_p10"],
+            "occupancy_label_only",
+            "PEAD when PB is above its PIT median AND overnight is in the easiest PIT decile",
         ),
-        "signal_definition": "AND(uncrowded_margin, overnight_tightening, ta_up) PIT",
-        "position_rule": "event-hold surprise sign",
-        "datasets": ["equities_bars_daily", "fins_summary", "jsda_tokyo_repo_rates"],
-        "gates": ["uncrowded_margin", "overnight_tightening", "ta_up"],
-    }
-    bad_ta = review_proposal_row(occupancy_ta)
-    assert bad_ta["ok"] is False
-    assert "occupancy_label_only" in bad_ta["reasons"]
-    assert bad_ta["auto_inject"] is False
-
-    occupancy_arb = {
-        "thesis": (
-            "Equity risk arbitrage opportunities arise when TA signals are "
-            "down and funding is easy."
+        (
+            "Tight funding regime when EPS is down AND NP is negative.",
+            ["eps_down", "np_negative"],
+            "occupancy_label_only",
+            "PEAD when EPS contracted AND net profit is negative",
         ),
-        "signal_definition": "AND(eq_ar_falling, ta_down, easy_funding) PIT",
-        "position_rule": "event-hold surprise sign",
-        "datasets": ["equities_bars_daily", "fins_summary", "jsda_tokyo_repo_rates"],
-        "gates": ["eq_ar_falling", "ta_down", "easy_funding"],
-    }
-    bad_arb = review_proposal_row(occupancy_arb)
-    assert bad_arb["ok"] is False
-    assert "occupancy_label_only" in bad_arb["reasons"]
-    assert bad_arb["auto_inject"] is False
-
-    occupancy_label = {
-        "thesis": (
-            "Market rallies when repo rates are low AND equity risk appetite "
-            "is falling"
+        (
+            "Price contraction when earnings per share are down AND price-to-book is rising.",
+            ["eps_down", "pb_rising"],
+            "occupancy_label_only",
+            "PEAD when EPS contracted AND PB is above its PIT median",
         ),
-        "signal_definition": "AND(repo_3m_down, eq_ar_falling) PIT",
-        "position_rule": "event-hold surprise sign",
-        "datasets": ["equities_bars_daily", "fins_summary", "jsda_tokyo_repo_rates"],
-        "gates": ["repo_3m_down", "eq_ar_falling"],
-    }
-    bad_ol = review_proposal_row(occupancy_label)
-    assert bad_ol["ok"] is False
-    assert "occupancy_label_only" in bad_ol["reasons"]
-    assert bad_ol["auto_inject"] is False
-
-    occ_ok = dict(occupancy_label)
-    occ_ok["thesis"] = (
-        "PEAD when 3m repo rate is down AND EqAR fell versus the last prior print"
-    )
-    # Same 2-AND is already catalog after 23t YAML; clone still fail-closes.
-    occ_review = review_proposal_row(occ_ok)
-    assert occ_review["auto_inject"] is False
-    assert occ_review["go"] is False
-    if occ_review["ok"]:
-        assert "occupancy_label_only" not in occ_review["reasons"]
-    else:
-        assert "gate_set_already_catalog" in occ_review["reasons"]
-
-    invert_p10_high = {
-        "thesis": (
-            "PEAD when the curve flattened AND EPS contracted AND "
-            "overnight rates are high."
+        (
+            "Stocks are more likely to be bought when the margin is uncrowded AND overnight funding is tightening AND technical analysis signals are up.",
+            ["uncrowded_margin", "overnight_tightening", "ta_up"],
+            "occupancy_label_only",
+            None,
         ),
-        "signal_definition": "AND(curve_flatten, eps_down, overnight_p10) PIT",
-        "position_rule": "event-hold surprise sign",
-        "datasets": ["equities_bars_daily", "fins_summary", "jsda_tokyo_repo_rates"],
-        "gates": ["curve_flatten", "eps_down", "overnight_p10"],
-    }
-    bad_p10h = review_proposal_row(invert_p10_high)
-    assert bad_p10h["ok"] is False
-    assert "title_gate_polarity_mismatch" in bad_p10h["reasons"]
-    assert bad_p10h["auto_inject"] is False
-
-    occ_pb_hyphen = {
-        "thesis": (
-            "Mean reversion when rising price-to-book ratios AND TA is up "
-            "AND overnight funding is easy."
+        (
+            "Equity risk arbitrage opportunities arise when TA signals are down and funding is easy.",
+            ["eq_ar_falling", "ta_down", "easy_funding"],
+            "occupancy_label_only",
+            None,
         ),
-        "signal_definition": "AND(pb_rising, ta_up, easy_funding) PIT",
-        "position_rule": "event-hold surprise sign",
-        "datasets": ["equities_bars_daily", "fins_summary", "jsda_tokyo_repo_rates"],
-        "gates": ["pb_rising", "ta_up", "easy_funding"],
-    }
-    bad_pbh = review_proposal_row(occ_pb_hyphen)
-    assert bad_pbh["ok"] is False
-    assert "occupancy_label_only" in bad_pbh["reasons"]
-    assert bad_pbh["auto_inject"] is False
-
-    occ_np_weak = {
-        "thesis": (
-            "Overnight funding is tight AND profitability is weak"
+        (
+            "Market rallies when repo rates are low AND equity risk appetite is falling",
+            ["repo_3m_down", "eq_ar_falling"],
+            "occupancy_label_only",
+            "PEAD when 3m repo rate is down AND EqAR fell versus the last prior print",
         ),
-        "signal_definition": "AND(tight_funding, np_negative) PIT",
-        "position_rule": "event-hold surprise sign",
-        "datasets": ["equities_bars_daily", "fins_summary", "jsda_tokyo_repo_rates"],
-        "gates": ["tight_funding", "np_negative"],
-    }
-    bad_npw = review_proposal_row(occ_np_weak)
-    assert bad_npw["ok"] is False
-    assert "occupancy_label_only" in bad_npw["reasons"]
-    occ_np_ok = dict(occ_np_weak)
-    occ_np_ok["thesis"] = (
-        "PEAD when overnight funding is tight AND net profit is negative"
-    )
-    ok_np = review_proposal_row(occ_np_ok)
-    assert ok_np["ok"] is True or "gate_set_already_catalog" in ok_np["reasons"]
-    assert "occupancy_label_only" not in ok_np["reasons"]
-    assert "title_gate_polarity_mismatch" not in ok_np["reasons"]
-
-    extra_sales_decline = {
-        "thesis": "Curve flattening indicates declining sales when EPS is down.",
-        "signal_definition": "AND(curve_flatten, eps_down) PIT",
-        "position_rule": "event-hold surprise sign",
-        "datasets": ["equities_bars_daily", "fins_summary", "jsda_tokyo_repo_rates"],
-        "gates": ["curve_flatten", "eps_down"],
-    }
-    bad_sd = review_proposal_row(extra_sales_decline)
-    assert bad_sd["ok"] is False
-    assert "occupancy_label_only" in bad_sd["reasons"]
+        (
+            "PEAD when the curve flattened AND EPS contracted AND overnight rates are high.",
+            ["curve_flatten", "eps_down", "overnight_p10"],
+            "title_gate_polarity_mismatch",
+            None,
+        ),
+        (
+            "Mean reversion when rising price-to-book ratios AND TA is up AND overnight funding is easy.",
+            ["pb_rising", "ta_up", "easy_funding"],
+            "occupancy_label_only",
+            None,
+        ),
+        (
+            "Overnight funding is tight AND profitability is weak",
+            ["tight_funding", "np_negative"],
+            "occupancy_label_only",
+            "PEAD when overnight funding is tight AND net profit is negative",
+        ),
+        (
+            "Curve flattening indicates declining sales when EPS is down.",
+            ["curve_flatten", "eps_down"],
+            "occupancy_label_only",
+            None,
+        ),
+    ]
+    for bad_thesis, gates, reason, good_thesis in rows:
+        payload = {
+            "thesis": bad_thesis,
+            "signal_definition": f"AND({', '.join(gates)}) PIT",
+            "position_rule": "event-hold surprise sign",
+            "datasets": ds,
+            "gates": gates,
+        }
+        bad = review_proposal_row(payload)
+        assert bad["ok"] is False, (gates, bad["reasons"])
+        assert reason in bad["reasons"], (gates, reason, bad["reasons"])
+        assert bad["auto_inject"] is False
+        if good_thesis is None:
+            continue
+        good = review_proposal_row(dict(payload, thesis=good_thesis))
+        assert good["auto_inject"] is False
+        assert good["go"] is False
+        if good["ok"]:
+            assert reason not in good["reasons"]
+        else:
+            assert "gate_set_already_catalog" in good["reasons"]
 
 
 def test_catalog_gate_set_avoid_is_existing_crosses() -> None:
