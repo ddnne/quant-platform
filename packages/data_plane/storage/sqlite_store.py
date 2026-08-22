@@ -126,7 +126,6 @@ class SqliteStore:
                         ex["available_at"], r["available_at"]
                     )
                 elif ex is not None:
-                    # Amendment: displaced row is not public at original stamp.
                     if r.get("ingested_at"):
                         r["available_at"] = _later_available(
                             r["available_at"], str(r["ingested_at"])

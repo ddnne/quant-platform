@@ -157,7 +157,7 @@ def classify_sleeves_three_n(
 
 def _index_composition(summary: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
     out: dict[str, dict[str, Any]] = {}
-    for r in list(summary.get("baskets") or []) + list(summary.get("metas") or []):
+    for r in list(summary.get("baskets") or []):
         if not isinstance(r, Mapping):
             continue
         bid = str(r.get("basket_id") or r.get("meta_id") or "")

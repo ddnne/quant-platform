@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
-"""Publish JSDA hot-window facts from local research DB → remote D1.
-
-Full history SoT is local SQLite + R2. D1 holds the hot tip only. Dataset
-COMPLETE stays receipt-owned. Copies existing local facts with as_of_date /
-publication date >= hot cutoff; does not invent rows.
-"""
+"""Publish JSDA hot-window facts from local research DB → remote D1. Does not invent rows."""
 
 from __future__ import annotations
 

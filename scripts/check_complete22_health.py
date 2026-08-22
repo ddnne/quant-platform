@@ -52,8 +52,6 @@ from typing import Any, Mapping, Sequence
 
 ROOT = ensure_repo_root()
 
-# --- baseline constants (maintain floor, not growth) ----------------------
-
 WAVE = "W73 / w0816g"
 EXPECTED_DATASET_COMPLETE = 22
 EXPECTED_PARTIAL_DATASETS: frozenset[str] = frozenset(
@@ -89,9 +87,6 @@ REMOTE_DB = "quant-ingest"
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
-
-
-# --- pure evaluation (fixture-friendly) -----------------------------------
 
 
 def evaluate_complete22_health(
@@ -139,8 +134,6 @@ def evaluate_complete22_health(
     missing_partial = sorted(EXPECTED_PARTIAL_DATASETS - partial_set)
     extra_note = sorted(partial_set - EXPECTED_PARTIAL_DATASETS)
     partial_includes_ok = not missing_partial
-    # Prefer exact PARTIAL n=4 when list is present; still pass if only
-    # membership is checked and n is unknown (None).
     if partial_n is not None:
         partial_n_ok = int(partial_n) == len(EXPECTED_PARTIAL_DATASETS)
     else:
@@ -215,9 +208,6 @@ def evaluate_complete22_health(
         "ready": "not_declared",
         "phase7": "OFF",
     }
-
-
-# --- collectors -----------------------------------------------------------
 
 
 def collect_local_sqlite(db_path: Path | str) -> dict[str, Any]:
@@ -452,9 +442,6 @@ def good_fixture_snapshot() -> dict[str, Any]:
     }
 
 
-# --- CLI ------------------------------------------------------------------
-
-
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=__doc__,
@@ -490,7 +477,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(list(argv) if argv is not None else None)
 
     if args.db is None and not args.remote:
-        # default: local default path if present
         default_db = ROOT / "data" / "structured" / "ingestion.sqlite"
         if default_db.is_file():
             args.db = default_db

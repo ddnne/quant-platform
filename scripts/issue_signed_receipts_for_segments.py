@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
-"""Issue Ed25519-signed receipts for planned segments with real structured rows.
-
-Does not invent COMPLETE. Counts structured rows, loads matching raw, issues
-signed receipts, refreshes the ledger, then surgically re-aggs dataset_coverage.
-RECOVERED rebuilds stay unsigned without raw + structure.
-"""
+"""Issue Ed25519-signed receipts for planned segments. Does not invent COMPLETE."""
 
 from __future__ import annotations
 
@@ -95,7 +90,6 @@ def _find_raw_bytes(
         if p.name.startswith(prefix) or f"/{dataset}_" in str(p).replace("\\", "/")
     ]
     if not candidates:
-        # Fallback: filename contains dataset token as a whole path segment-ish
         candidates = [p for p in base.rglob("*.json") if dataset in p.name]
 
     month = segment_id if len(segment_id) == 7 else segment_id[:7]

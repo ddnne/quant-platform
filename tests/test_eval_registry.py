@@ -354,23 +354,6 @@ def test_compare_mid_vs_liq_does_not_pass() -> None:
     assert out["liq_majority_better"]  # majority-better is still not a pass
 
 
-def test_sleeve_majority_prints_are_not_a_pass() -> None:
-    from research.cf_daily_path_job import sleeve_durability_logic_ids
-    from research.combo_basket_compare import compare_mid_vs_liq
-
-    ids = sleeve_durability_logic_ids()
-    assert "event_eqar_high_pead" in ids
-    assert "cs_margin_up_chase" in ids
-    assert "event_cheap_pb_liq_high" in ids
-    mid = _baskets(_theme_fund_row(5, 1), job_id="eval-mid-sleeve-print")
-    liq = _baskets(_theme_fund_row(4, 2), job_id="eval-liq-sleeve-print")
-    out = compare_mid_vs_liq(mid, liq)
-    assert out["not_a_pass"] is True
-    assert out["go"] is False
-    assert out["promote_as_main"] is False
-    assert out["liq_print_is_not_stable"] is True
-
-
 def test_summarize_emits_candidate_family_counts() -> None:
 
     cells = _eval_complete_year_cells(

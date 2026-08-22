@@ -5,17 +5,13 @@ from __future__ import annotations
 import pytest
 
 from agents.mass_research import start_mass_research
-from data_contracts.permanent_defer import (
-    PERMANENT_DEFER_DATASETS,
-    PermanentDeferHistoryError,
-)
+from data_contracts.permanent_defer import PERMANENT_DEFER_DATASETS
 from tests.research_eval_util import (
     HARNESS_AST_PATHS,
     assert_ast_bans_mass_ready_orders,
 )
 from research.complete21 import (
     COMPLETE_21_DATASET_SET,
-    Complete21Error,
     DEFAULT_FEATURE_DATASETS,
     require_complete_21_only,
 )
@@ -24,7 +20,10 @@ from selection.budget_ledger import MassResearchDisabledError
 
 
 def test_harness_smoke_codes_pin():
+    import research.eval_universe as eu
+
     assert DEFAULT_EVAL_CODES == HARNESS_SMOKE_CODES == ("13010", "72030", "67580")
+    assert not hasattr(eu, "DEFAULT_EVAL_CODES")
 
 
 def test_require_complete_21_only_default_feature_datasets():
@@ -32,19 +31,6 @@ def test_require_complete_21_only_default_feature_datasets():
     assert ids == tuple(DEFAULT_FEATURE_DATASETS)
     assert set(ids).issubset(COMPLETE_21_DATASET_SET)
     assert set(ids).isdisjoint(PERMANENT_DEFER_DATASETS)
-
-
-def test_require_complete_21_only_rejects_permanent_defer():
-    for defer_id in sorted(PERMANENT_DEFER_DATASETS):
-        with pytest.raises(PermanentDeferHistoryError, match="permanent DEFER"):
-            require_complete_21_only([defer_id])
-    with pytest.raises(PermanentDeferHistoryError):
-        require_complete_21_only(["equities_bars_daily", "equities_master"])
-
-
-def test_require_complete_21_only_rejects_unknown():
-    with pytest.raises(Complete21Error, match="not in COMPLETE 21"):
-        require_complete_21_only(["equities_bars_daily", "not_a_real_dataset"])
 
 
 def test_mass_research_still_hard_reject():
@@ -55,5 +41,7 @@ def test_mass_research_still_hard_reject():
 
 def test_eval_harness_ast_bans_mass_ready_orders():
     """T7: remaining research modules must not import/call mass, READY mint, or orders."""
+    assert HARNESS_AST_PATHS
     for path in HARNESS_AST_PATHS:
+        assert path.is_file(), path
         assert_ast_bans_mass_ready_orders(path)

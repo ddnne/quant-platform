@@ -12,7 +12,6 @@ from urllib.parse import urljoin, urlsplit
 
 INDEX = "https://www.jsda.or.jp/shiryoshitsu/toukei/saiken_torihiki/"
 
-# 公社債店頭売買参考統計値 (CSV archive from 2002); distinct from INDEX.
 OTC_REFERENCE_INDEX = (
     "https://market.jsda.or.jp/shijyo/saiken/baibai/baisanchi/index.html"
 )
@@ -21,7 +20,6 @@ OTC_REFERENCE_CORRECTIONS_INDEX = (
 )
 OTC_REFERENCE_DATASET = "jsda_otc_bond_reference_prices"
 
-# 東京レポ・レート (TRR) from 2012-10-29; history is legacy .xls.
 REPO_INDEX = "https://www.jsda.or.jp/shiryoshitsu/toukei/trr/"
 TOKYO_REPO_DATASET = "jsda_tokyo_repo_rates"
 TOKYO_REPO_JSDA_START = "2012-10-29"
@@ -47,8 +45,6 @@ _REPO_LATEST_RE = re.compile(
 
 @dataclass(frozen=True)
 class JsdaArchiveIndex:
-    """Official annual archive page."""
-
     year: int
     url: str
 
@@ -72,8 +68,6 @@ class JsdaArchiveSegment:
 
 @dataclass(frozen=True)
 class JsdaRepoTimeseries:
-    """Authoritative JSDA-era Tokyo Repo Rate source segment."""
-
     dataset_id: str
     segment_id: str
     segment_start: str
@@ -87,8 +81,6 @@ class JsdaRepoTimeseries:
 
 @dataclass(frozen=True)
 class JsdaCorrectionArtifact:
-    """Section-1 replacement correction (not a comparison-table notice)."""
-
     dataset_id: str
     correction_id: str
     affected_start: str

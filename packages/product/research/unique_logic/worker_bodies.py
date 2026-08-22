@@ -33,7 +33,7 @@ _EMPTY_CS = frozenset({"", "None", "none"})
 
 
 def unique_leftover_logic_ids() -> frozenset[str]:
-    """Original unique-22 leftover IDs (Worker CF_EVENT_LOGIC_IDS prefix + unique CS)."""
+    """Original unique-22 leftover IDs."""
     return (
         EVENT_LOGIC_IDS
         | EVENT_FILTER_LOGIC_IDS

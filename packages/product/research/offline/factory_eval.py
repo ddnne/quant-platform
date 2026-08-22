@@ -121,11 +121,8 @@ def _eval_research_unique_on_panel(
             "skip_reason": f"unregistered_research_unique:{logic_id}",
             "gross_signed_mean_active": None,
             "net_one_way_mean_active": None,
-            "research_family_recognition": True,
-            "registration_is_not_a_pass": True,
             "promote_as_main": False,
             "go": False,
-            "research_candidate": False,
         }
 
     if pack.get("status") != "ok":
@@ -136,11 +133,8 @@ def _eval_research_unique_on_panel(
             ),
             "gross_signed_mean_active": None,
             "net_one_way_mean_active": None,
-            "research_family_recognition": True,
-            "registration_is_not_a_pass": True,
             "promote_as_main": False,
             "go": False,
-            "research_candidate": False,
             "n_entered": pack.get("n_entered"),
             "n_events": pack.get("n_events"),
         }
@@ -165,9 +159,6 @@ def _eval_research_unique_on_panel(
         },
         "signal_id": logic_id,
         "hold_days": int(h) if h is not None else None,
-        "research_family_recognition": True,
-        "registration_is_not_a_pass": True,
-        "research_candidate": False,
         "promote_as_main": False,
         "go": False,
     }
@@ -597,7 +588,6 @@ def evaluate_one_strategy(
         "strategy_id": sid,
         "logic_id": logic_id,
         "logic_fingerprint": strategy.get("logic_fingerprint"),
-        "thesis": strategy.get("thesis"),
         "family_id": family,
         "params": params,
         "n_periods_ok": len(ok_rows),

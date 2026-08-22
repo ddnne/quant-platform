@@ -18,7 +18,6 @@ from research.hypothesis_classes import (
     CLASS_EVENT_POST,
     CLASS_MULTI_DAY_HOLD,
 )
-from research.unique_logic.constants import RESEARCH_UNIQUE_LOGIC_IDS
 
 FAMILY_VOL_RISK_ADJUSTED: str = "vol_risk_adjusted"
 FAMILY_RATE_FACTOR: str = "rate_factor"
@@ -74,8 +73,6 @@ RESEARCH_FAMILY_APPEND_LOGIC_IDS: frozenset[str] = frozenset(
         "surprise_xs_rank_adaptive",
     }
 )
-RESEARCH_FAMILY_REGISTER_ID: str = "unique_logic_research_family"
-RESEARCH_FAMILY_APPEND_ID: str = "unique_logic_family_append"
 RESEARCH_FAMILY_REGISTRATION_IS_NOT_A_PASS: bool = True
 RESEARCH_FAMILY_AUTO_RESEARCH_CANDIDATE: bool = False
 
@@ -499,76 +496,6 @@ def _derive_family_definitions() -> dict[str, FamilyDefinition]:
 
 FAMILY_DEFINITIONS: dict[str, FamilyDefinition] = _derive_family_definitions()
 FACTORY_FAMILY_IDS: tuple[str, ...] = tuple(FAMILY_DEFINITIONS.keys())
-
-
-def near_logic_groups_document() -> dict[str, Any]:
-    """Near-groups kept parallel for comparison (do not merge early)."""
-    return {"groups": [dict(g) for g in NEAR_LOGIC_GROUPS]}
-
-
-def _research_family_base() -> dict[str, Any]:
-    return {
-        "registration": "recognition",
-        "registration_is_not_a_pass": RESEARCH_FAMILY_REGISTRATION_IS_NOT_A_PASS,
-        "registration_is_not_promotion": True,
-        "auto_research_candidate": RESEARCH_FAMILY_AUTO_RESEARCH_CANDIDATE,
-        "generation_enabled": False,
-        "promote_as_main": False,
-        "go": False,
-    }
-
-
-def research_family_register_document() -> dict[str, Any]:
-    """Research-family registration (recognition, not promotion)."""
-    return {
-        **_research_family_base(),
-        "register_id": RESEARCH_FAMILY_REGISTER_ID,
-        "kind": "research_family",
-        "family_ids": sorted(RESEARCH_UNIQUE_FAMILY_IDS),
-        "logic_ids": sorted(RESEARCH_UNIQUE_LOGIC_IDS),
-    }
-
-
-def research_family_append_document() -> dict[str, Any]:
-    """Family append of this-wave newly min-implemented logics only."""
-    return {
-        **_research_family_base(),
-        "append_id": RESEARCH_FAMILY_APPEND_ID,
-        "register_id": RESEARCH_FAMILY_REGISTER_ID,
-        "kind": "research_family_append",
-        "this_wave_only": True,
-        "appended_logic_ids": sorted(RESEARCH_FAMILY_APPEND_LOGIC_IDS),
-    }
-
-
-def logic_templates_document() -> dict[str, Any]:
-    """Document logic templates + diversity rules."""
-    return {
-        "n_logic_templates": len(LOGIC_TEMPLATES),
-        "unique_logic_ids": sorted(RESEARCH_UNIQUE_LOGIC_IDS),
-        "unique_logic_append_logic_ids": sorted(RESEARCH_FAMILY_APPEND_LOGIC_IDS),
-        "opt225_canonical_level": "basevol",
-        "opt225_atm_iv_role": "compare_only",
-        "diversity_rules": {
-            "counts_as_different": [
-                "info source / datasets",
-                "entry / signal logic",
-                "position construction",
-                "economic thesis",
-            ],
-            "does_not_count": [
-                "hold_days only",
-                "momentum_window only",
-                "long_frac/short_frac only (e.g. 0.3→0.4)",
-                "sign flip as separate strategy (sign is eval aspect)",
-            ],
-        },
-    }
-
-
-def family_definitions_document() -> dict[str, Any]:
-    """Back-compat family document; points primary diversity to logic templates."""
-    return {"family_ids": list(FACTORY_FAMILY_IDS)}
 
 
 if set(BAR_NATIVE_LOGIC_IDS) - set(LOGIC_TEMPLATE_IDS):

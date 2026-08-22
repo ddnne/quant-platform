@@ -1,9 +1,4 @@
-"""JSDA fetcher — local runtime only.
-
-Scrapes the index for data-file links, then GETs the chosen file. Conservative
-rate limit + User-Agent. Transient 429/5xx/transport errors retry via
-:func:`with_retry`.
-"""
+"""JSDA fetcher — local runtime only."""
 
 from __future__ import annotations
 

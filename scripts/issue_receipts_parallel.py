@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
-"""Parallel signed-receipt issuance for segments with raw + structured evidence.
-
-ThreadPool prepares candidates; DB writes stay serial. Never invent COMPLETE
-without raw. No backfill / Mass. Local sqlite is a research mirror, not CF SoT.
-"""
+"""Parallel signed-receipt issuance. Never invent COMPLETE without raw."""
 
 from __future__ import annotations
 

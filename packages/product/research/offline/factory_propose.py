@@ -133,12 +133,8 @@ def propose_profit_hypotheses(
             }
             if logic_id in RESEARCH_UNIQUE_LOGIC_IDS:
                 ind["eval_mapped_to_catalog"] = False
-                ind["research_family_recognition"] = True
-                ind["research_candidate"] = False
                 ind["promote_as_main"] = False
                 ind["go"] = False
-                ind["registration"] = "recognition"
-                ind["registration_is_not_a_pass"] = True
             accepted.append(ind)
         else:
             family = str(
@@ -199,7 +195,6 @@ def propose_profit_hypotheses(
 
     out: dict[str, Any] = {
         "version": MASS_FACTORY_VERSION,
-        "wave": MASS_FACTORY_WAVE,
         "n_proposals": len(proposals),
         "n_accepted": len(accepted),
         "n_rejected": len(rejected),
@@ -244,18 +239,14 @@ def llm_logic_entry_status() -> dict[str, Any]:
     """LLM / agent entry for different profit hypotheses (not window tweaks)."""
     return {
         "status": "connected",
-        "wave": MASS_FACTORY_WAVE,
-        "version": MASS_FACTORY_VERSION,
         "entry_fn": "research.offline.factory.propose_profit_hypotheses",
         "always_through_evaluator": True,
-        **_freeze(),
     }
 
 
 from research.offline.factory import (  # noqa: E402
     DEFAULT_SEED,
     MASS_FACTORY_VERSION,
-    MASS_FACTORY_WAVE,
     BatchDataContext,
     MassFactoryConfig,
     _freeze,

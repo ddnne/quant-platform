@@ -176,10 +176,6 @@ def build_nky_vol_series(
         "rv_long_by_date": dict(sorted(long_by.items())),
         "rv_ratio_by_date": dict(sorted(ratio_by.items())),
         "rv_abs_by_date": dict(sorted(short_by.items())),
-        "n_close_obs": len(by_d),
-        "n_obs_short": len(short_by),
-        "n_obs_long": len(long_by),
-        "n_obs_ratio": len(ratio_by),
         "ffill_applied": False,
         "invent_fill": False,
     }
@@ -309,7 +305,7 @@ def fins_summary_ta_eqar_stats(
     *,
     limit: int | None = None,
 ) -> dict[str, Any]:
-    """Count TA / EqAR / Eq non-null rates in fins_summary payloads. No invent."""
+    """Count TA / EqAR / Eq non-null rates in fins_summary payloads."""
     db = Path(db_path)
     out: dict[str, Any] = {
         "dataset": "fins_summary",
@@ -364,7 +360,7 @@ def fins_summary_ta_eqar_stats(
 def repo_history_plane_status(
     db_path: str | Path = DEFAULT_SQLITE,
 ) -> dict[str, Any]:
-    """Disclose sqlite history vs D1 hot tip vs PIT fail-closed. No invent."""
+    """Disclose sqlite history vs D1 hot tip vs PIT fail-closed."""
     db = Path(db_path)
     n = 0
     mn = mx = None
@@ -453,7 +449,7 @@ def load_repo_rows_all_tenors_from_sqlite(
     start: str | None = None,
     end: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Load all JSDA Tokyo repo tenors (for curve-shape proxy; no invent)."""
+    """Load all JSDA Tokyo repo tenors (for curve-shape proxy)."""
     return load_repo_rows_from_sqlite(
         db_path, start=start, end=end, tenor_contains=None
     )
@@ -480,7 +476,6 @@ def build_repo_curve_series(
     short_by: dict[str, float] = {}
     long_by: dict[str, float] = {}
     spread_by: dict[str, float] = {}
-    gap_dates: list[str] = []
     for d, tenors in sorted(by_date_tenor.items()):
         s = tenors.get(short_tenor)
         lo = tenors.get(long_tenor)
@@ -490,8 +485,6 @@ def build_repo_curve_series(
             long_by[d] = lo
         if s is not None and lo is not None:
             spread_by[d] = lo - s
-        else:
-            gap_dates.append(d)
 
     return {
         "kind": "repo_curve_series",
@@ -502,10 +495,6 @@ def build_repo_curve_series(
         "long_rates_by_date": dict(sorted(long_by.items())),
         "spread_by_date": dict(sorted(spread_by.items())),
         "rates_by_date": dict(sorted(short_by.items())),
-        "n_obs_short": len(short_by),
-        "n_obs_long": len(long_by),
-        "n_obs_spread": len(spread_by),
-        "n_gap_either_leg": len(gap_dates),
         "ffill_applied": False,
         "invent_fill": False,
     }
@@ -732,7 +721,7 @@ def load_fins_earnings_date_from_sqlite(
     start: str | None = None,
     end: str | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
-    """Load fins_earnings_date calendar. Missing PubDate uses SchDate; no invent."""
+    """Load fins_earnings_date calendar. Missing PubDate uses SchDate."""
     con = _open_ro(db_path)
     if con is None:
         return {}

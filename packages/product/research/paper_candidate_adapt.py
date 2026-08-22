@@ -43,7 +43,6 @@ from research.paper_candidate_specs import (
 )
 
 PAPER_CANDIDATE_SPEC_VERSION: str = "paper-candidate-spec/v1"
-PAPER_CANDIDATE_ADAPTER_VERSION: str = "paper-candidate-adapter/v2"
 
 DEFAULT_ONE_WAY_COST: float = 0.001  # 10bp
 DEFAULT_LOOKBACK_DAYS: int = 30
@@ -257,14 +256,12 @@ class PaperCandidateReceptacle:
     paper_run_hints: Mapping[str, Any] = field(default_factory=dict)
     note: str = ""
     version: str = PAPER_CANDIDATE_SPEC_VERSION
-    adapter_version: str = PAPER_CANDIDATE_ADAPTER_VERSION
     status: str = "paper_receptacle_unarmed"
 
     def to_dict(self) -> dict[str, Any]:
         arm = _freeze_arm_flags()
         body: dict[str, Any] = {
             "version": self.version,
-            "adapter_version": self.adapter_version,
             "status": self.status,
             "hypothesis_class": self.hypothesis_class,
             "signal_id": self.signal_id,
@@ -635,7 +632,6 @@ def emit_example_paper_specs(out_dir: str | Path) -> dict[str, Path]:
         paths[bare.name] = bare
     index = {
         "version": PAPER_CANDIDATE_SPEC_VERSION,
-        "adapter_version": PAPER_CANDIDATE_ADAPTER_VERSION,
         "status": "paper_receptacle_unarmed",
         "files": sorted(paths.keys()),
         **_freeze_arm_flags(),

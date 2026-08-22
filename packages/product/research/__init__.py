@@ -1,8 +1,8 @@
 """Phase 7 research control plane (readiness attestation, experiment plans).
 
-Heavy modules (eval_harness, unique_logic, factory, paper adapter) are imported
-from their own packages — this barrel only re-exports the fail-closed control
-plane. Mass / READY / GO remain closed.
+This barrel re-exports the fail-closed control plane only. Candidate eval is
+``research.cf_daily_path_job`` (POST /v1/daily-path). ``eval_harness`` is a
+smoke-code stub (DEFAULT_EVAL_CODES), not the eval entry. Mass is NO-GO.
 """
 
 from research.readiness import (

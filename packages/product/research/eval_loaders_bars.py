@@ -53,7 +53,7 @@ def load_bars_ndjson_rich(
     period_start: str | None = None,
     period_end: str | None = None,
 ) -> dict[str, list[tuple[str, dict[str, Any]]]]:
-    """Load bars with close + liquidity fields. Skip missing. Never invent."""
+    """Load bars with close + liquidity fields."""
     code_filter = {str(c).strip() for c in codes} if codes else None
     p_start = str(period_start)[:10] if period_start else None
     p_end = str(period_end)[:10] if period_end else None

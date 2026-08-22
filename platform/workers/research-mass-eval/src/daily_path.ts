@@ -389,6 +389,7 @@ export const CF_NEW_EVENT_THESIS_IDS = [
   "event_eps_up_easy",
   "event_eps_up_liq_high",
   "event_eqar_falling_fade",
+  "event_eqar_falling_liq_high_fade",
   "event_eqar_high_afterclose",
   "event_eqar_high_cheap_iv",
   "event_eqar_high_cluster",
@@ -452,6 +453,7 @@ export const CF_NEW_EVENT_THESIS_IDS = [
   "event_not_first_week",
   "event_not_last_week",
   "event_np_negative_fade",
+  "event_np_negative_liq_high_fade",
   "event_np_negative_ta_down_fade",
   "event_on_impulse_pead",
   "event_on_impulse_uncrowded",
@@ -474,6 +476,7 @@ export const CF_NEW_EVENT_THESIS_IDS = [
   "event_rich_iv_eqar_low_fade",
   "event_rich_iv_fade",
   "event_roe_low_fade",
+  "event_roe_low_liq_high_fade",
   "event_sales_down_eqar_falling_fade",
   "event_sales_down_fade",
   "event_skip_announce_day",
@@ -482,6 +485,7 @@ export const CF_NEW_EVENT_THESIS_IDS = [
   "event_skip_monday_uncrowded",
   "event_skip_tuesday",
   "event_skip_wednesday",
+  "event_ta_down_cheap_pb",
   "event_ta_down_liq_high",
   "event_ta_down_pead",
   "event_ta_down_uncrowded",
@@ -1025,9 +1029,6 @@ export function comboEventGateOk(
     return finite(chg) && (chg as number) > 0;
   }
   if (gate === "cheap_pb") {
-    // WHY bars×fins, not csFundSnaps: last-fin union-date hist ≠ ev.bps current
-    // + bars×fins reverse-find at minHist (current bps, hist keys, missing-bar
-    // last-fin). Not occupancy-equal — keep event math; park reuse.
     const close = panel.bars?.[ev.code]?.find(([x]) => x === d)?.[1];
     if (!finite(close) || ev.bps == null || !finite(ev.bps) || ev.bps === 0)
       return false;
@@ -1175,7 +1176,6 @@ export function comboEventGateOk(
     return gate === "eq_ar_rising" ? cur > prior : cur < prior;
   }
   if (gate === "pb_rising") {
-    // Same bars×fins reverse-find as cheap_pb; occupancy is > med not < med.
     const close = panel.bars?.[ev.code]?.find(([x]) => x === d)?.[1];
     if (!finite(close) || ev.bps == null || !finite(ev.bps) || ev.bps === 0)
       return false;
@@ -1221,7 +1221,6 @@ export function comboEventGateOk(
     const med = pitMedian(hist, d, 8);
     return med !== null && roe < med;
   }
-  // Python _pre_entry_mom: last close strictly before entry (entryIdx-1).
   if (gate === "pre_mom") {
     const pairs = panel.bars?.[ev.code] || [];
     const j = ev.entryIdx - 1;
@@ -1943,7 +1942,6 @@ type CsFundSnap = {
   salesDown: boolean;
 };
 
-/** One linear pass per code (last-fin pointer). Not bars×fins per date. */
 function csFundSnaps(
   panel: PeriodPanel,
   code: string,
@@ -2685,7 +2683,6 @@ export function evalLogicDailyPathOnPanel(
       evalPath = bn.path;
       pathFallback = bn.fallback;
     } else if (usesCrossSection(logic)) {
-      // Unwired CS overlay — do not silently share the generic CS book.
       held = {};
       evalPath = "cs_generic";
       pathFallback = "path_broken";

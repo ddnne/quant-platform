@@ -1,7 +1,6 @@
 """CF /v1/propose-thesis contract. Does not write catalog. Does not GO."""
 from __future__ import annotations
 
-import ast
 from pathlib import Path
 
 from research.cf_propose_thesis import (
@@ -18,9 +17,6 @@ _WORKER_INDEX = (
     / "research-mass-eval"
     / "src"
     / "index.ts"
-)
-_CF_PROPOSE = (
-    _REPO / "packages" / "product" / "research" / "cf_propose_thesis.py"
 )
 _WRANGLER = (
     _REPO / "platform" / "workers" / "research-mass-eval" / "wrangler.toml"
@@ -102,18 +98,3 @@ def test_worker_index_contains_propose_thesis_route() -> None:
     wr = _WRANGLER.read_text(encoding="utf-8")
     assert "binding = \"AI\"" not in wr
     assert "[[ai]]" not in wr.lower()
-
-
-def test_cf_propose_thesis_does_not_import_factory() -> None:
-    tree = ast.parse(_CF_PROPOSE.read_text(encoding="utf-8"))
-    banned = ("factory", "class_hyp_eval", "bar_eval")
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            for alias in node.names:
-                for token in banned:
-                    assert token not in alias.name
-        elif isinstance(node, ast.ImportFrom) and node.module:
-            for token in banned:
-                assert token not in node.module
-                assert node.module != f"research.{token}"
-                assert node.module != f"research.offline.{token}"

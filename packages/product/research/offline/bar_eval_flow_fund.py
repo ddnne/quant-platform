@@ -169,7 +169,7 @@ def evaluate_mf_flow_price_on_bars(
     momentum_n: int = 10,
     one_way_cost: float = DEFAULT_ONE_WAY_COST,
 ) -> dict[str, Any]:
-    """Multi-factor flow × price-mom confirm (parallel to flow hard/soft)."""
+    """Multi-factor flow × price-mom confirm."""
     h = int(hold_days)
     n = int(momentum_n)
     am_cost = amortized_one_way_cost(one_way_cost, h)

@@ -59,28 +59,23 @@ def _am_diagnostic(db_path: str | Path) -> dict:
         "observed_end": observed_end,
     }
 
-    # AM dataset historical start per canonical contract
     am_expected_start = "2024-01-04"
 
-    # Case 1: No data at all - expected before AM era
     if row_count == 0 and observed_end is None:
         diagnostic["diagnostic"] = "NO_DATA"
         diagnostic["note"] = f"AM data not yet ingested; expected from {am_expected_start}"
         return diagnostic
 
-    # Case 2: Data exists but null observed_end - suspicious!
     if row_count > 0 and observed_end is None:
         diagnostic["diagnostic"] = "SUSPICIOUS"
         diagnostic["warning"] = f"AM has {row_count} rows but null observed_end"
         diagnostic["recommendation"] = "Check data quality and event_time values"
         return diagnostic
 
-    # Case 3: Normal state - data with proper dates
     if row_count > 0 and observed_end is not None:
         diagnostic["diagnostic"] = "HEALTHY"
         return diagnostic
 
-    # Case 4: Edge case - null dates but somehow no rows
     diagnostic["diagnostic"] = "UNKNOWN"
     diagnostic["note"] = "AM dataset in unexpected state"
     return diagnostic

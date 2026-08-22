@@ -77,11 +77,6 @@ class VerifiedResearchReadiness:
             "issuer": self.issuer,
         }
 
-    def to_dict(self) -> dict[str, Any]:
-        body = self.to_canonical_body()
-        body["signature"] = self.signature
-        return body
-
     def is_expired(self, *, now: datetime | None = None) -> bool:
         clock = now or _now()
         expires = datetime.fromisoformat(self.expires_at.replace("Z", "+00:00"))
@@ -166,23 +161,6 @@ class OperatorOverrideCapability:
                 f"operator override scope {self.scope!r} not allowed; "
                 f"cannot bypass safety gates"
             )
-
-    def is_live(self, *, now: datetime | None = None) -> bool:
-        clock = now or _now()
-        issued = datetime.fromisoformat(self.issued_at.replace("Z", "+00:00"))
-        expires = datetime.fromisoformat(self.expires_at.replace("Z", "+00:00"))
-        return issued <= clock <= expires
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "override_id": self.override_id,
-            "reason": self.reason,
-            "operator_identity": self.operator_identity,
-            "issued_at": self.issued_at,
-            "expires_at": self.expires_at,
-            "audit_artifact_digest": self.audit_artifact_digest,
-            "scope": self.scope,
-        }
 
 
 class OperatorOverrideService:

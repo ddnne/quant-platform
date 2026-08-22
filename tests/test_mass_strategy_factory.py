@@ -58,17 +58,10 @@ from research.offline.factory_templates import (
     FAMILY_RATE_FACTOR,
     FAMILY_SURPRISE_XS_RANK,
     FAMILY_XS_MARGIN_DELTA,
-    family_definitions_document,
-    logic_templates_document,
     NEAR_LOGIC_GROUPS,
-    RESEARCH_FAMILY_APPEND_ID,
     RESEARCH_FAMILY_APPEND_LOGIC_IDS,
     RESEARCH_FAMILY_AUTO_RESEARCH_CANDIDATE,
-    RESEARCH_FAMILY_REGISTER_ID,
     RESEARCH_FAMILY_REGISTRATION_IS_NOT_A_PASS,
-    near_logic_groups_document,
-    research_family_append_document,
-    research_family_register_document,
 )
 
 _NKY_VOL_IDS = ("nky_vol_abs_level", "nky_vol_term_levels", "nky_vol_term_ratio")
@@ -188,14 +181,14 @@ def _eval_template(lid: str, family_id: str, ctx) -> None:
 
 
 def test_logic_templates_distinct_economic_logic():
-    doc = logic_templates_document()
-    assert doc["n_logic_templates"] >= 20
+    assert len(LOGIC_TEMPLATE_IDS) >= 20
     assert len(LOGIC_TEMPLATE_IDS) == len(set(LOGIC_TEMPLATE_IDS))
     fps = {tpl.to_dict()["logic_fingerprint"] for lid, tpl in LOGIC_TEMPLATES.items()}
     for lid, tpl in LOGIC_TEMPLATES.items():
         d = tpl.to_dict()
         assert d["thesis"] and d["signal_definition"] and d["position_rule"]
         assert d["datasets_used"] and d["logic_id"] == lid and d["logic_fingerprint"]
+        assert d["generation_enabled"] is True
     assert len(fps) == len(LOGIC_TEMPLATES)
     assert all(
         CLASS_SIMPLE_DAILY_SIGN not in (t.family_id, t.logic_id)
@@ -209,21 +202,11 @@ def test_logic_templates_distinct_economic_logic():
         assert LOGIC_TEMPLATES[lid].family_id == FAMILY_INDEX_VOL_REGIME
     for lid in _OPT225_IDS:
         assert LOGIC_TEMPLATES[lid].family_id == FAMILY_OPTIONS_VOL_REGIME
-    assert doc.get("opt225_canonical_level") == "basevol"
-    assert doc.get("opt225_atm_iv_role") == "compare_only"
     assert LOGIC_TEMPLATES["opt225_atm_iv_abs_level"].base_params.get("compare_only") is True
     for lid in _UNIQUE_NOT_GENERATED:
         assert lid in RESEARCH_UNIQUE_LOGIC_IDS
         assert lid not in LOGIC_TEMPLATES
-    assert "event_funding_stress_skip" in doc.get("unique_logic_ids", [])
-    assert "overnight_level_cs_tilt" in doc.get("unique_logic_append_logic_ids", [])
-    rules = doc["diversity_rules"]
-    assert "hold_days only" in str(rules["does_not_count"])
-    assert "info source" in str(rules["counts_as_different"]).lower() or any(
-        "info" in x.lower() for x in rules["counts_as_different"]
-    )
-    ng = near_logic_groups_document()
-    assert len(ng["groups"]) >= 5
+    assert "overnight_level_cs_tilt" in RESEARCH_FAMILY_APPEND_LOGIC_IDS
     assert len(NEAR_LOGIC_GROUPS) >= 5
     group_ids = {g["group_id"] for g in NEAR_LOGIC_GROUPS}
     assert {
@@ -235,8 +218,7 @@ def test_logic_templates_distinct_economic_logic():
 
 
 def test_families_still_documented_for_eval_dispatch():
-    fams = family_definitions_document()
-    assert len(fams["family_ids"]) >= 5
+    assert len(FACTORY_FAMILY_IDS) >= 5
     for cid in (
         CLASS_MULTI_DAY_HOLD,
         CLASS_EVENT_POST,
@@ -258,23 +240,9 @@ def test_families_still_documented_for_eval_dispatch():
         assert fid in FAMILY_DEFINITIONS
         assert FAMILY_DEFINITIONS[fid].generation_enabled is False
     assert CLASS_SIMPLE_DAILY_SIGN not in FAMILY_DEFINITIONS
-    reg = research_family_register_document()
-    assert reg["register_id"] == RESEARCH_FAMILY_REGISTER_ID
-    assert reg["registration"] == "recognition"
-    assert reg["registration_is_not_a_pass"] is True
     assert RESEARCH_FAMILY_REGISTRATION_IS_NOT_A_PASS is True
     assert RESEARCH_FAMILY_AUTO_RESEARCH_CANDIDATE is False
-    assert reg["auto_research_candidate"] is False
-    assert reg["promote_as_main"] is False
-    assert reg["go"] is False
-    append = research_family_append_document()
-    assert append["append_id"] == RESEARCH_FAMILY_APPEND_ID
-    assert append["registration"] == "recognition"
-    assert append["registration_is_not_a_pass"] is True
-    assert append["registration_is_not_promotion"] is True
-    assert append["generation_enabled"] is False
-    assert append["this_wave_only"] is True
-    assert set(append["appended_logic_ids"]) == set(RESEARCH_FAMILY_APPEND_LOGIC_IDS)
+    assert set(RESEARCH_FAMILY_APPEND_LOGIC_IDS) <= set(RESEARCH_UNIQUE_LOGIC_IDS)
 
 
 def test_generation_logic_diversity_metrics():
@@ -296,9 +264,6 @@ def test_generation_logic_diversity_metrics():
         assert s.get("datasets_used") or s.get("datasets_required")
     # not simple_daily_sign
     assert all(s["family_id"] != CLASS_SIMPLE_DAILY_SIGN for s in gen["strategies"])
-    # metrics aliases
-    assert gen["unique_logic_count"] == gen["n_unique_logic"]
-    assert gen["numeric_variant_count"] == gen["n_numeric_variant"]
 
 
 def test_not_hold_mom_frac_grid_as_100_unique():

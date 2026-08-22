@@ -332,11 +332,7 @@ def run_otc_reference_backfill(
     checked_at: Optional[str] = None,
     force: bool = False,
 ) -> OtcArchiveBackfillReport:
-    """Discover and ingest official OTC-reference files one day at a time.
-
-    Exact-scope receipts resume. Raw is saved before parse. Every expected
-    segment gets SUCCESS or FAILED, including missing archive links.
-    """
+    """Discover and ingest official OTC-reference files one day at a time."""
     checked_at = checked_at or now_iso()
     to_year = to_year or date.today().year
     if from_year < 2002 or to_year < from_year:

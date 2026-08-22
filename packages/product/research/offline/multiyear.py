@@ -1,10 +1,8 @@
 """Offline W78–W86 multi-year window stitch (not CF SoT; no GO).
 
-``run_class_hyp_multi_year_eval`` is the public entry. Period loop loads
-local bar mirrors + SQLite and evaluates class hyps per shard.
-Reporting (gates / stats / sign-selection / summary) lives in
-``research.offline.multiyear_report``. Periods SoT is
-``research.eval_windows``. Not Mass / READY / Phase7 / operational GO.
+``run_class_hyp_multi_year_eval`` is the public entry.
+Reporting lives in ``research.offline.multiyear_report``.
+Periods SoT is ``research.eval_windows``.
 """
 
 from __future__ import annotations
@@ -375,8 +373,7 @@ def run_class_hyp_multi_year_eval(
                         "net_one_way_mean_active"
                     ),
                     "n_active_positions": eval_out.get("n_active_positions"),
-                    "non_null": eval_out.get("non_null")
-                    or eval_out.get("n_active_positions"),
+                    "non_null": eval_out.get("n_active_positions"),
                     "non_null_rate": eval_out.get("non_null_rate"),
                     "n_trading_days": eval_out.get("n_trading_days"),
                     "n_code_days": eval_out.get("n_code_days"),

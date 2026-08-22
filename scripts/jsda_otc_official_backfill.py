@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
-"""Plan + fetch official JSDA OTC archive PARTIAL days (not a wave runner).
-
-Picks remaining official month_csv days that are still PARTIAL, newer-first,
-n=50..100. Does not invent COMPLETE. Tip-wait stays unpublished.
-"""
+"""Plan + fetch official JSDA OTC archive PARTIAL days. Does not invent COMPLETE."""
 from __future__ import annotations
 
 import argparse

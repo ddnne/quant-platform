@@ -20,25 +20,13 @@ from research.hypothesis_classes import (
     CLASS_EVENT_POST,
     CLASS_MULTI_DAY_HOLD,
     CLASS_SIMPLE_DAILY_SIGN,
-    MASS_RESEARCH as HC_MASS,
-    PHASE7 as HC_PHASE7,
-    READY_DECLARED as HC_READY,
 )
 from research.cost_models import DEFAULT_ONE_WAY_COST
 from research.freezes import (
-    CONNECTED_TO_MASS,
-    CONNECTED_TO_READY,
     CONTINUOUS_PAPER,
-    EDGE_CLAIMED,
-    FROZEN_DEFAULT_PATH,
-    LIVE_ORDERS,
     MASS_RESEARCH,
-    OPERATIONAL_GO,
     PHASE7,
     READY_DECLARED,
-    S1_S5_UNREJECT,
-    SIGNIFICANCE_CLAIMED,
-    SIMPLE_DAILY_SIGN_AS_DIVERSITY,
 )
 from research.unique_logic.constants import RESEARCH_UNIQUE_LOGIC_IDS
 from research.offline.factory_templates import (
@@ -55,8 +43,6 @@ from research.offline.factory_templates import (
 
 MASS_FACTORY_VERSION: str = "mass-strategy-factory/v2.8"
 MASS_FACTORY_WAVE: str = "research-unique-logic"
-
-FACTORY_MASS_LOOP: str = "research_batch_only"
 
 REJECT_SIMPLE_DAILY_SIGN: str = "simple_daily_sign_forbidden"
 REJECT_LOOKAHEAD: str = "pit_lookahead_forbidden"
@@ -110,23 +96,7 @@ def _freeze() -> dict[str, Any]:
         "mass_research": MASS_RESEARCH,
         "phase7": PHASE7,
         "ready_declared": READY_DECLARED,
-        "operational_go": OPERATIONAL_GO,
-        "connected_to_ready": CONNECTED_TO_READY,
-        "connected_to_mass": CONNECTED_TO_MASS,
-        "edge_claimed": EDGE_CLAIMED,
-        "significance_claimed": SIGNIFICANCE_CLAIMED,
-        "s1_s5_unreject": S1_S5_UNREJECT,
-        "simple_daily_sign_as_diversity": SIMPLE_DAILY_SIGN_AS_DIVERSITY,
         "continuous_paper": CONTINUOUS_PAPER,
-        "live_orders": LIVE_ORDERS,
-        "factory_mass_loop": FACTORY_MASS_LOOP,
-        "hypothesis_classes_mass": HC_MASS,
-        "hypothesis_classes_phase7": HC_PHASE7,
-        "hypothesis_classes_ready": HC_READY,
-        "frozen_default_path": [
-            r["representative_id"] for r in FROZEN_DEFAULT_PATH
-        ],
-        "frozen_defaults_retuned": False,
     }
 
 # Templates / FAMILY_* live in factory_templates (BAR_NATIVE_SPECS SoT for 30).
@@ -638,8 +608,6 @@ def generate_strategy_batch(
         "n_after_dedup": n_after_dedup,
         "n_dropped_near_dup": int(dedup["n_dropped"]),
         "logic_distribution": logic_dist,
-        "unique_logic_count": n_unique_logic,
-        "numeric_variant_count": n_numeric,
         "family_distribution": family_dist,
         "logic_diversity_ok": logic_diversity_ok,
         "strategies": [s.to_dict() for s in strategies],
@@ -798,7 +766,6 @@ def try_cf_minimal_mass_batch() -> dict[str, Any]:
         "not_yet_implemented": [],
         "scale_queue_fanout": False,
         "n_cf_batch_cap": 200,
-        **_freeze(),
     }
 
 

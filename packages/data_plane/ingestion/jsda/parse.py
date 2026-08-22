@@ -43,7 +43,6 @@ def _find_header(rows: List[List[str]]) -> tuple[int, List[str]]:
         normed = [_norm_header(c) for c in row]
         if any(any(mk in cell for mk in _DATE_HEADER_MARKERS) for cell in normed):
             return i, normed
-    # fall back to first non-empty row
     for i, row in enumerate(rows):
         if any(c.strip() for c in row):
             return i, [_norm_header(c) for c in row]
@@ -168,8 +167,6 @@ def parse_xlsx(data: bytes) -> List[dict]:  # pragma: no cover - optional dep
         writer.writerow([("" if v is None else str(v)) for v in r])
     return parse_csv(buf.getvalue())
 
-
-# OTC bond reference prices (公社債店頭売買参考統計値)
 
 _OTC_REFERENCE_ALIASES: dict[str, list[str]] = {
     "publication_label_date": ["発表日付", "発表日", "publicationdate"],
@@ -345,8 +342,6 @@ def parse_otc_reference_xlsx(
     )
 
 
-# Repo rate (TRR): wide (column per tenor) or long (期間 + rate) → {as_of_date, tenor, rate}.
-
 _REPO_DATE_ALIASES: list[str] = [
     "年月日", "取引日", "営業日", "公表日", "基準日", "日付", "date"
 ]
@@ -375,7 +370,6 @@ def _find_repo_header(rows: List[List[str]]) -> tuple[int, List[str]]:
         )
         if has_term_hdr and has_overnight:
             return i, list(row)
-    # Date-column headers (long/CSV layouts).
     for i, row in enumerate(rows):
         first = (row[0] if row else "") or ""
         if first.strip().startswith("※"):
@@ -383,7 +377,6 @@ def _find_repo_header(rows: List[List[str]]) -> tuple[int, List[str]]:
         normed = [_norm_header(c) for c in row]
         if any(any(mk in cell for mk in _REPO_DATE_MARKERS) for cell in normed):
             return i, list(row)
-    # First non-empty non-footnote row.
     for i, row in enumerate(rows):
         first = (row[0] if row else "") or ""
         if first.strip().startswith("※"):

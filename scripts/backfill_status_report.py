@@ -51,16 +51,13 @@ def backfill_status(db_path: str | Path) -> dict:
     contracts = {c.dataset_id: c for c in all_coverage_contracts()}
     canonical = {c.dataset_id: c for c in all_canonical_datasets()}
 
-    # Build summary by governance tier
     governed_contracts = [c for c in all_coverage_contracts()
                          if c.governance_tier == "governed"]
     experimental_contracts = [c for c in all_coverage_contracts()
                              if c.governance_tier == "experimental"]
 
-    # Analyze gaps
     gaps = coverage_gaps(db_path)
 
-    # Categorize gaps by reason
     missing_data = []
     missing_receipts = []
     stale = []
@@ -77,7 +74,6 @@ def backfill_status(db_path: str | Path) -> dict:
         else:
             missing_receipts.append(gap)
 
-    # Build detailed status per governed dataset
     governed_status = []
     for contract in governed_contracts:
         dataset_id = contract.dataset_id
@@ -99,7 +95,6 @@ def backfill_status(db_path: str | Path) -> dict:
             "coverage_mode": contract.coverage_mode,
         }
 
-        # Add gap analysis
         if coverage_row and coverage_row["status"] != "COMPLETE":
             detail_json = coverage_row.get("detail_json")
             if detail_json:
@@ -111,7 +106,6 @@ def backfill_status(db_path: str | Path) -> dict:
 
         governed_status.append(status_detail)
 
-    # Special handling for AM dataset
     am_status = next((s for s in governed_status if s["dataset_id"] == "equities_bars_daily_am"), None)
     if am_status:
         if am_status["observed_end"] is None and am_status["row_count"] == 0:

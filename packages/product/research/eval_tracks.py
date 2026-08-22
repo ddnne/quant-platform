@@ -66,13 +66,11 @@ def infer_eval_track(*, max_codes: int) -> str:
 
 NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
     {
-        "id": "both_track_sleeve_durability",
+        "id": "cf_propose_llm_not_stub",
         "track": EVAL_TRACK_LIQ_LARGE,
-        "tracks": BOTH_EVAL_TRACK_IDS,
-        "entry": "research.cf_daily_path_job.run_both_track_sleeve_fanout",
         "why": (
-            "recorded eval-cf-dp-both-sleeves-20260822c mid+liq; "
-            "not a pass; do not narrate majority as stable"
+            "POST /v1/propose-thesis is stub_not_catalog; "
+            "wire Workers AI or equivalent without auto-inject"
         ),
         "not_a_pass": True,
         "go": False,
@@ -138,6 +136,18 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "why": (
             "surprise_xs_month_start leftover dd>05 vs catalog first_half_month "
             "dd<=15; do not drop leftover without catalog retune + re-eval"
+        ),
+        "not_a_pass": True,
+        "go": False,
+    },
+    {
+        "id": "both_track_sleeve_durability",
+        "track": EVAL_TRACK_LIQ_LARGE,
+        "tracks": BOTH_EVAL_TRACK_IDS,
+        "entry": "research.cf_daily_path_job.run_both_track_sleeve_fanout",
+        "why": (
+            "recorded eval-cf-dp-both-sleeves-20260822c mid+liq; "
+            "not a pass; do not narrate majority as stable"
         ),
         "not_a_pass": True,
         "go": False,

@@ -1,8 +1,6 @@
 """Shared honest multi-year eval windows.
 
-These shards match the local COMPLETE-backed bar mirrors.
-Contiguous 3y files are absent; occupancy of a window is the stitch of shards.
-
+Shards match COMPLETE-backed bar mirrors. Occupancy is the stitch of shards.
 Do not fork a new window list.
 """
 from __future__ import annotations
@@ -68,8 +66,7 @@ HONEST_3Y_WINDOWS: tuple[dict[str, Any], ...] = (
     },
 )
 
-# Real multi-year windows (≥6). Full-prefer 2015/19/21/23 from COMPLETE-backed
-# mirrors; Q4 for 2017/2025.
+# Full-prefer 2015/19/21/23; Q4 2017/2025.
 DEFAULT_REAL_MULTIYEAR_PERIODS: tuple[dict[str, Any], ...] = (
     {
         "period_id": "y2015_full",

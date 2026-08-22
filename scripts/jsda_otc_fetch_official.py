@@ -1,8 +1,5 @@
 #!/usr/bin/env python3
-"""Fetch official JSDA OTC archive CSVs via CF worker (not a wave runner).
-
-Historical FULL_OK floor: size > 100_000 (exclude HTML ~46KB).
-"""
+"""Fetch official JSDA OTC archive CSVs via CF worker."""
 from __future__ import annotations
 
 import argparse

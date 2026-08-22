@@ -1,10 +1,7 @@
 """Bar / index / options loaders for research eval. Skip missing. Never invent.
 
-CF staging imports this module. Offline bar eval is ``research.offline.bar_eval``.
-No ffill. Empty / missing inputs return empty or None.
-
 Shared sqlite/ndjson helpers live here. Bars vs nky/opt/margin/repo/fins
-live in eval_loaders_bars / eval_loaders_sidecars.
+live in eval_loaders_bars / eval_loaders_sidecars. No ffill.
 """
 from __future__ import annotations
 

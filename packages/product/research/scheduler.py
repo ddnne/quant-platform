@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Sequence
+from typing import Sequence
 
 from research.artifacts import ExperimentPlan
 from research.hypothesis_classes import (
     CLASS_SIMPLE_DAILY_SIGN,
-    DEFAULT_GENERATION_CLASS_IDS,
     assert_generation_mix_not_skewed,
     default_generation_class_ids,
     is_generation_enabled,
@@ -33,15 +32,6 @@ class ScheduledExperiment:
     budget_id: str
     snapshot_id: str
 
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "plan_id": self.plan.plan_id,
-            "lease_id": self.lease.lease_id,
-            "readiness_attestation_id": self.readiness_attestation_id,
-            "budget_id": self.budget_id,
-            "ready_snapshot_id": self.snapshot_id,
-        }
-
 
 @dataclass(frozen=True)
 class HypothesisClassScheduleSelection:
@@ -50,14 +40,6 @@ class HypothesisClassScheduleSelection:
     class_ids: tuple[str, ...]
     simple_daily_sign_included: bool
     simple_daily_sign_default_off: bool = True
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "class_ids": list(self.class_ids),
-            "simple_daily_sign_included": self.simple_daily_sign_included,
-            "simple_daily_sign_default_off": self.simple_daily_sign_default_off,
-            "default_generation_class_ids": list(DEFAULT_GENERATION_CLASS_IDS),
-        }
 
 
 def select_schedule_hypothesis_classes(

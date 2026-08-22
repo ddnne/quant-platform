@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
-"""Seal official JSDA OTC archive days (not a wave runner).
-
-Historical gate: HTTP200 + size>100KB + non-HTML + parse rows>0.
-No invent / empty COMPLETE / fake densify.
-"""
+"""Seal official JSDA OTC archive days. No invent COMPLETE."""
 from __future__ import annotations
 
 import hashlib

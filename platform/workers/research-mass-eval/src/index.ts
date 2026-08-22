@@ -567,7 +567,6 @@ async function runProposeThesis(
     ? body.why_avoid.map((x) => String(x))
     : [];
   const writeArtifacts = body.write_artifacts === true;
-  // wrangler.toml has no Workers AI binding; never auto-inject catalog IDs.
   const proposals = stubProposals(n, whyAvoid);
   const payload: Record<string, unknown> = {
     ok: true,

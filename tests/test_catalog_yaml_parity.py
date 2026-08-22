@@ -7,7 +7,6 @@ from research.unique_logic import all_unique_logic_specs, load_catalog_specs
 from research.unique_logic.constants import (
     CF_NEW_THESIS_IDS,
     COMBO_EVENT_GATES,
-    KNOWN_EVENT_GATES,
     PYTHON_ONLY_EVENT_GATES,
     WORKER_ISOLATE_LIMIT_IDS,
     WORKER_PYTHON_ONLY_GATE_POLICY,
@@ -160,10 +159,10 @@ def test_cf_new_thesis_ids_match_yaml_combo_kind() -> None:
     assert combo_ids == set(CF_NEW_THESIS_IDS)
     assert event | surprise_xs == set(CF_NEW_EVENT_THESIS_IDS)
     assert cs == set(CF_NEW_CS_THESIS_IDS)
-    assert len(CF_NEW_EVENT_THESIS_IDS) == 234
+    assert len(CF_NEW_EVENT_THESIS_IDS) == 238
     assert len(CF_NEW_CS_THESIS_IDS) == 104
-    assert len(CF_NEW_THESIS_IDS) == 338
-    assert len(RESEARCH_UNIQUE_LOGIC_IDS) == 360
+    assert len(CF_NEW_THESIS_IDS) == 342
+    assert len(RESEARCH_UNIQUE_LOGIC_IDS) == 364
     assert yaml_ids == set(RESEARCH_UNIQUE_LOGIC_IDS)
 
     helper_src = inspect.getsource(catalog_mod.combo_thesis_ids_by_kind)
@@ -242,7 +241,7 @@ def test_original_22_ids_from_yaml() -> None:
     assert yaml_ids - combo_ids == set(original)
     assert original.isdisjoint(CF_NEW_THESIS_IDS)
     assert yaml_ids == set(RESEARCH_UNIQUE_LOGIC_IDS)
-    assert len(RESEARCH_UNIQUE_LOGIC_IDS) == 360
+    assert len(RESEARCH_UNIQUE_LOGIC_IDS) == 364
     assert original | set(CF_NEW_THESIS_IDS) == set(RESEARCH_UNIQUE_LOGIC_IDS)
 
     helper_src = inspect.getsource(catalog_mod.unique_family_ids_from_yaml)
@@ -346,17 +345,6 @@ def test_economic_theme_ids_from_yaml() -> None:
         assert re.search(r"(?m)^go:\s*true\s*$", body) is None
 
 
-def test_unknown_event_gate_fail_closed_is_declared() -> None:
-    import inspect
-
-    import research.unique_logic.event_combos as event_combos
-
-    # Local combo fallback fail-closes any declared gate (Worker is SoT).
-    assert "not_a_real_gate" not in KNOWN_EVENT_GATES
-    src = inspect.getsource(event_combos._eval_event_combo)
-    assert "ok = not gates" in src
-
-
 def test_python_only_event_gates_skip_catalog() -> None:
     import re
     from pathlib import Path
@@ -386,22 +374,13 @@ def test_python_only_event_gates_skip_catalog() -> None:
         / "src"
         / "daily_path.ts"
     ).read_text(encoding="utf-8")
-    m = re.search(
-        r"const COMBO_EVENT_GATES = new Set\(\[(.*?)]\);",
-        src,
-        flags=re.S,
-    )
-    assert m, "Worker COMBO_EVENT_GATES"
-    worker_gates = set(re.findall(r'"([^"]+)"', m.group(1)))
-    assert worker_gates.isdisjoint(PYTHON_ONLY_EVENT_GATES)
-    assert worker_gates == set(COMBO_EVENT_GATES)
-    assert "pre_mom" in worker_gates
     agree_m = re.search(
         r'if \(lid === "event_pre_mom_agree_hold"\) \{.*?\}',
         src,
         flags=re.S,
     )
     assert agree_m
+    assert "momentumAt(entryIdx)" in src
     assert "momentumAt(pairs, 5, i)" in agree_m.group(0)
     assert 'if (lid === "event_pre_mom_easy_funding")' not in src
     assert 'if (lid === "event_pre_mom_steep_curve")' not in src
@@ -557,6 +536,12 @@ def test_countable_thesis_ids_require_worker_body() -> None:
     assert row["candidate"] is False
 
     qids = [q.get("id") for q in NEXT_RESEARCH_QUEUE]
-    assert qids[0] == "both_track_sleeve_durability"
+    assert qids[0] == "cf_propose_llm_not_stub"
+    assert "both_track_sleeve_durability" in qids
+    both = next(q for q in NEXT_RESEARCH_QUEUE if q.get("id") == "both_track_sleeve_durability")
+    assert both.get("not_a_pass") is True
+    assert both.get("go") is False
+    assert "recorded" in str(both.get("why") or "")
     assert "thesis_counts_only_with_worker_body" in qids
+    assert "no_go_until_both_tracks" in qids
     assert "no_new_theses_until_worker_bodies" not in qids

@@ -1,9 +1,11 @@
 """Equal-weight mini-combination of candidate-grade daily paths. Not a promote / GO."""
 from __future__ import annotations
 
+from collections import defaultdict
 from typing import Any, Mapping, Sequence
 
 from research.combo_basket_catalog import (
+    META_BASKETS,
     RETIRED_BASKET_RULES,
     equal_weights,
     mechanical_basket_defs,
@@ -14,6 +16,7 @@ from research.unique_logic.constants import (
     ALWAYS_ON_OCCUPANCY_WARN,
     NEAR_EMPTY_OCCUPANCY,
 )
+
 
 def blend_net_daily(series: Sequence[Sequence[float]]) -> list[float]:
     """Element-wise equal-weight average. Truncates to min length."""
@@ -111,7 +114,6 @@ def blend_window_cells(
                 "occupancy": mean_occ,
                 "occupancy_frac": mean_occ,
                 "union_occupancy": union_occ,
-                "mean_member_occupancy": mean_occ,
                 "daily_path_DD": dd.get("max_dd"),
                 "total_ret_net": dd.get("total_return"),
                 "dd_duration": dd.get("dd_duration_days"),
@@ -159,8 +161,6 @@ def primary_sleeve_and_meta_cells(
     cells: Sequence[Mapping[str, Any]],
 ) -> list[dict[str, Any]]:
     """Equal-weight primary sleeves + active metas. Not a pass."""
-    from research.combo_basket_catalog import META_BASKETS
-
     sleeve_cells: list[dict[str, Any]] = []
     for d in mechanical_basket_defs():
         if not d.get("primary"):
@@ -189,8 +189,6 @@ def summarize_basket_trends(
     *,
     job_id: str,
 ) -> dict[str, Any]:
-    from collections import defaultdict
-
     by: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
     for c in cells:
         lid = str(c.get("logic_id") or "")

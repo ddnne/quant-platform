@@ -20,14 +20,12 @@ MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
         "basket_id": "basket_head4",
         "rule": "known_candidate_head",
         "primary": False,
-        "primary_candidate": False,
         "members": DEFAULT_CANDIDATE_BASKET,
     },
     {
         "basket_id": "basket_event4",
         "rule": "event_family_only",
         "primary": False,
-        "primary_candidate": False,
         "members": (
             "event_easing_uncrowded",
             "event_friday_skip",
@@ -39,7 +37,6 @@ MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
         "basket_id": "basket_family4",
         "rule": "family_spread",
         "primary": False,
-        "primary_candidate": False,
         "members": (
             "event_tue_thu_easing",
             "surprise_xs_easing_change",
@@ -51,7 +48,6 @@ MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
         "basket_id": "basket_event_cal4",
         "rule": "event_calendar_only",
         "primary": False,
-        "primary_candidate": False,
         "members": (
             "event_skip_monday",
             "event_friday_skip",
@@ -85,7 +81,6 @@ MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
         "basket_id": "basket_theme_fund",
         "rule": "fundamentals_sleeve",
         "primary": True,
-        "primary_candidate": True,
         "members": (
             "event_eqar_high_liq_high",
             "event_eqar_high_pead",
@@ -97,7 +92,6 @@ MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
         "basket_id": "basket_theme_flow",
         "rule": "margin_flow_sleeve",
         "primary": True,
-        "primary_candidate": True,
         "members": (
             "cs_margin_up_chase",
             "event_margin_down_liq_high",
@@ -108,7 +102,6 @@ MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
         "basket_id": "basket_theme_repo",
         "rule": "repo_rate_sleeve",
         "primary": False,
-        "primary_candidate": False,
         "members": (
             "event_repo3m_down_pead",
             "event_overnight_p10_pead",
@@ -120,7 +113,6 @@ MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
         "basket_id": "basket_event_fund",
         "rule": "event_fund_cross",
         "primary": True,
-        "primary_candidate": True,
         "members": (
             "event_eqar_high_liq_high",
             "event_positive_eps_liq_high",

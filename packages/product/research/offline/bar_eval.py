@@ -1,7 +1,4 @@
-"""Offline W78–W86 bar-eval surface (not CF SoT; no GO).
-
-Local bar mirrors + SQLite only; not Mass / READY / Phase7 / operational GO.
-"""
+"""Offline W78–W86 bar-eval surface (not CF SoT; no GO). Local mirrors + SQLite."""
 
 from __future__ import annotations
 

@@ -170,10 +170,23 @@ def test_eval_tracks_are_two_and_not_head_n() -> None:
     assert len(NEXT_RESEARCH_QUEUE) >= 5
     assert all(q.get("not_a_pass") is True for q in NEXT_RESEARCH_QUEUE)
     assert all(q.get("go") is not True for q in NEXT_RESEARCH_QUEUE)
+    qids = [q["id"] for q in NEXT_RESEARCH_QUEUE]
     q0 = NEXT_RESEARCH_QUEUE[0]
-    assert q0["id"] == "both_track_sleeve_durability"
-    assert q0["tracks"] == BOTH_EVAL_TRACK_IDS
-    assert q0["entry"] == "research.cf_daily_path_job.run_both_track_sleeve_fanout"
+    assert q0["id"] == "cf_propose_llm_not_stub"
+    assert "stub_not_catalog" in q0["why"]
+    assert "without auto-inject" in q0["why"]
+    assert "both_track_sleeve_durability" in qids
+    both = next(q for q in NEXT_RESEARCH_QUEUE if q["id"] == "both_track_sleeve_durability")
+    assert both["tracks"] == BOTH_EVAL_TRACK_IDS
+    assert both["entry"] == "research.cf_daily_path_job.run_both_track_sleeve_fanout"
+    assert both["not_a_pass"] is True
+    assert both["go"] is False
+    assert "recorded" in both["why"]
+    assert "eval-cf-dp-both-sleeves-20260822c" in both["why"]
+    assert "thesis_counts_only_with_worker_body" in qids
+    assert "no_go_until_both_tracks" in qids
+    assert "unique22_leftover_lids" in qids
+    assert "month_start_leftover_hold" in qids
 
 
 def test_rank_eval_codes_is_not_head_n_and_skips_missing() -> None:
