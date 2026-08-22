@@ -26,19 +26,15 @@ DEFAULT_CANDIDATE_BASKET: tuple[str, ...] = (
     "overnight_down_cs_follow",
 )
 
-# Lessons from eval-cf-dp-baskets8-20260822a and
-# eval-cf-dp-baskets50-20260822a/summary_baskets.json (descriptive, never a pass):
-# - event_family_only: 5 pos / 1 neg at univ50; keep
-# - known_candidate_head: 5/1; sleeve occupancy in band; union can look always_on
-#   — candidate uses sleeve mean, do not switch to union
-# - family_spread: 4/2 mixed but diversified; keep
-# - fundamentals_sleeve / repo_rate_sleeve / event_fund_cross / margin_flow_sleeve:
-#   4/2 at univ50 after dropping always_on CS members — primary_candidate (not GO)
-# - event_calendar_only: 3/3 calendar mix; demoted from primary
-# - surprise_xs_only: 2/4 systematically weak — retired
-# - two_member_easing: 3/3, thinnest occupancy — retired
-# - low_occupancy_band: 1/5 — retired
-# No correlation optimization. No promote / GO.
+# Lessons (descriptive, never a pass):
+# univ50 vs univ80 cross-sleeve (same members, not a single-job call):
+# - fundamentals_sleeve / margin_flow_sleeve: 4/2 at both — keep primary_candidate
+# - event_fund_cross: 4/2 then 3/3 — keep, mixed not a 2/4 flip
+# - known_candidate_head / event_family_only / family_spread: 5/1 or 4/2 at 50,
+#   2/4 at 80 — universe-unstable, drop primary_candidate
+# - repo_rate_sleeve: 4/2 then 2/4 — redesigned members; demote if still weak
+# - surprise_xs_only / two_member_easing / low_occupancy_band — retired
+# Candidate occupancy is sleeve mean, not union. No correlation optimization. No GO.
 RETIRED_BASKET_RULES: frozenset[str] = frozenset(
     {"low_occupancy_band", "surprise_xs_only", "two_member_easing"}
 )
@@ -90,15 +86,15 @@ MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
     {
         "basket_id": "basket_head4",
         "rule": "known_candidate_head",
-        "primary": True,
-        "primary_candidate": True,
+        "primary": False,
+        "primary_candidate": False,
         "members": DEFAULT_CANDIDATE_BASKET,
     },
     {
         "basket_id": "basket_event4",
         "rule": "event_family_only",
-        "primary": True,
-        "primary_candidate": True,
+        "primary": False,
+        "primary_candidate": False,
         "members": (
             "event_easing_uncrowded",
             "event_friday_skip",
@@ -109,8 +105,8 @@ MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
     {
         "basket_id": "basket_family4",
         "rule": "family_spread",
-        "primary": True,
-        "primary_candidate": True,
+        "primary": False,
+        "primary_candidate": False,
         "members": (
             "event_tue_thu_easing",
             "surprise_xs_easing_change",
@@ -178,13 +174,13 @@ MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
     {
         "basket_id": "basket_theme_repo",
         "rule": "repo_rate_sleeve",
-        "primary": True,
-        "primary_candidate": True,
+        "primary": False,
+        "primary_candidate": False,
         "members": (
-            "cs_on_impulse",
-            "cs_overnight_p10",
-            "cs_repo3m_down",
-            "event_on_impulse_pead",
+            "event_repo3m_down_pead",
+            "event_overnight_p10_pead",
+            "cs_repo3m_down_easy",
+            "event_eqar_high_repo3m_down",
         ),
     },
     {
@@ -605,3 +601,153 @@ def summarize_basket_trends(
 def _mean(xs: Sequence[Any]) -> float | None:
     vs = [float(x) for x in xs if x is not None]
     return (sum(vs) / len(vs)) if vs else None
+
+
+# Equal-weight blends of mechanical sleeves. Not GO. No correlation weights.
+META_BASKETS: tuple[dict[str, object], ...] = (
+    {
+        "meta_id": "meta_fund_flow",
+        "sleeves": ("basket_theme_fund", "basket_theme_flow"),
+    },
+    {
+        "meta_id": "meta_fund_event",
+        "sleeves": ("basket_theme_fund", "basket_event_fund"),
+    },
+    {
+        "meta_id": "meta_flow_event",
+        "sleeves": ("basket_theme_flow", "basket_event_fund"),
+    },
+    {
+        "meta_id": "meta_fund_flow_event",
+        "sleeves": (
+            "basket_theme_fund",
+            "basket_theme_flow",
+            "basket_event_fund",
+        ),
+    },
+    {
+        "meta_id": "meta_event4_fund",
+        "sleeves": ("basket_event4", "basket_theme_fund"),
+    },
+    {
+        "meta_id": "meta_event4_flow",
+        "sleeves": ("basket_event4", "basket_theme_flow"),
+    },
+    {
+        "meta_id": "meta_head_fund",
+        "sleeves": ("basket_head4", "basket_theme_fund"),
+    },
+)
+
+
+def meta_basket_defs() -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    known = {d["basket_id"] for d in mechanical_basket_defs()}
+    for raw in META_BASKETS:
+        sleeves = tuple(str(x) for x in (raw.get("sleeves") or ()))
+        reasons = []
+        if not (2 <= len(sleeves) <= 3):
+            reasons.append("need_2_or_3_sleeves")
+        if len(set(sleeves)) != len(sleeves):
+            reasons.append("duplicate_sleeves")
+        missing = [s for s in sleeves if s not in known]
+        if missing:
+            reasons.append("unknown_sleeve")
+        out.append(
+            {
+                "meta_id": str(raw["meta_id"]),
+                "sleeves": list(sleeves),
+                "weights": equal_weights(len(sleeves)),
+                "valid": not reasons,
+                "reject": reasons,
+                "promote_as_main": False,
+                "go": False,
+                "not_a_pass": True,
+            }
+        )
+    return out
+
+
+def blend_meta_baskets(sleeve_cells: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """Equal-weight blend of sleeve basket net_daily series. Not a pass."""
+    rows: list[dict[str, Any]] = []
+    for spec in meta_basket_defs():
+        if not spec["valid"]:
+            continue
+        rows.extend(
+            blend_window_cells(
+                sleeve_cells,
+                basket_id=spec["meta_id"],
+                logic_ids=spec["sleeves"],
+            )
+        )
+    return rows
+
+
+def compare_basket_summaries(
+    summary_a: Mapping[str, Any],
+    summary_b: Mapping[str, Any],
+    *,
+    label_a: str,
+    label_b: str,
+) -> dict[str, Any]:
+    """Classify sleeves as stable / flipped / mixed. Scores stay off Git."""
+    by_a = {
+        str(r.get("basket_id")): r
+        for r in (summary_a.get("baskets") or [])
+        if r.get("basket_id")
+    }
+    by_b = {
+        str(r.get("basket_id")): r
+        for r in (summary_b.get("baskets") or [])
+        if r.get("basket_id")
+    }
+    rows: list[dict[str, Any]] = []
+    for bid in sorted(set(by_a) | set(by_b)):
+        a = by_a.get(bid) or {}
+        b = by_b.get(bid) or {}
+        pa, na = int(a.get("n_pos_windows") or 0), int(a.get("n_neg_windows") or 0)
+        pb, nb = int(b.get("n_pos_windows") or 0), int(b.get("n_neg_windows") or 0)
+        maj_a = 1 if pa > na else (-1 if na > pa else 0)
+        maj_b = 1 if pb > nb else (-1 if nb > pb else 0)
+        if maj_a == 0 or maj_b == 0:
+            kind = "mixed"
+        elif maj_a != maj_b:
+            kind = "flipped"
+        else:
+            kind = "stable_majority"
+        rows.append(
+            {
+                "basket_id": bid,
+                "rule": a.get("rule") or b.get("rule"),
+                "class": kind,
+                label_a: {"n_pos": pa, "n_neg": na},
+                label_b: {"n_pos": pb, "n_neg": nb},
+                "primary_candidate_now": bool(
+                    (b.get("primary_candidate") if b else a.get("primary_candidate"))
+                ),
+            }
+        )
+    stable = [r["basket_id"] for r in rows if r["class"] == "stable_majority"]
+    flipped = [r["basket_id"] for r in rows if r["class"] == "flipped"]
+    mixed = [r["basket_id"] for r in rows if r["class"] == "mixed"]
+    return {
+        "version": "sleeve-universe-stability/v1",
+        "label_a": label_a,
+        "label_b": label_b,
+        "stable_majority": stable,
+        "flipped": flipped,
+        "mixed": mixed,
+        "preferred_materials": [
+            "basket_theme_fund",
+            "basket_theme_flow",
+        ],
+        "sleeves": rows,
+        "promote_as_main": False,
+        "go": False,
+        "not_a_pass": True,
+        "notes": (
+            "Single-universe 4/2 is not a stability call. "
+            "theme_fund / theme_flow kept 4/2 on both univ50 and univ80."
+        ),
+    }

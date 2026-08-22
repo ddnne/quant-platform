@@ -576,6 +576,33 @@ export const CF_NEW_EVENT_THESIS_IDS = [
   "event_positive_eps_easy",
   "event_cheap_pb_on_impulse",
   "event_ta_up_on_impulse",
+  "event_eqar_high_uncrowded",
+  "event_ta_up_uncrowded",
+  "surprise_xs_ta_up_easy",
+  "event_eqar_low_repo3m_down_fade",
+  "event_eqar_high_steep",
+  "surprise_xs_eqar_high_repo3m_down",
+  "event_ta_up_overnight_p10",
+  "event_eqar_high_afterclose",
+  "event_margin_down_on_impulse",
+  "event_margin_up_easy",
+  "surprise_xs_eqar_high_on_impulse",
+  "event_eqar_low_cheap_iv_fade",
+  "surprise_xs_div_payer_easy",
+  "event_div_payer_cheap_iv",
+  "event_positive_eps_on_impulse",
+  "event_cheap_pb_repo3m_down",
+  "event_overnight_p10_eqar_low_fade",
+  "surprise_xs_curve_flatten",
+  "event_ta_up_afterclose",
+  "event_eps_up_easy",
+  "surprise_xs_ta_up_on_impulse",
+  "event_eqar_high_margin_down",
+  "event_ta_up_margin_down",
+  "event_cheap_pb_uncrowded",
+  "surprise_xs_positive_eps_easy",
+  "event_repo3m_down_afterclose",
+  "surprise_xs_margin_down_on_impulse",
 ] as const;
 
 export const CF_NEW_CS_THESIS_IDS = [
@@ -666,6 +693,11 @@ export const CF_NEW_CS_THESIS_IDS = [
   "cs_repo3m_down_easy",
   "cs_cheap_pb_cheap_iv",
   "cs_eqar_high_flatten",
+  "cs_eqar_high_overnight_p10",
+  "cs_ta_up_easy",
+  "cs_margin_up_easy",
+  "cs_curve_flatten_easy",
+  "cs_eqar_low_tight",
 ] as const;
 
 export const CF_EVENT_LOGIC_IDS = [
@@ -1183,6 +1215,43 @@ export function comboCsGateOk(
       repoDown && on !== undefined && medOn !== null && on < medOn;
   } else if (gate === "cheap_pb_cheap_iv") {
     keep = extras?.cheapPb === true && extras?.cheapIv === true;
+  } else if (gate === "eq_ar_high_overnight_p10") {
+    const hist = Object.keys(overnight)
+      .filter((x) => x < d)
+      .map((x) => overnight[x])
+      .filter((v) => finite(v))
+      .sort((a, b) => a - b);
+    let p10ok = false;
+    if (hist.length >= 20 && on !== undefined) {
+      const p10 = hist[Math.max(0, Math.floor(0.1 * (hist.length - 1)))];
+      p10ok = on <= p10;
+    }
+    keep = extras?.eqArHigh === true && p10ok;
+  } else if (gate === "ta_up_easy") {
+    keep =
+      extras?.taUp === true &&
+      on !== undefined &&
+      medOn !== null &&
+      on < medOn;
+  } else if (gate === "margin_up_easy") {
+    keep =
+      marginChg !== null &&
+      marginChg > 0 &&
+      on !== undefined &&
+      medOn !== null &&
+      on < medOn;
+  } else if (gate === "curve_flatten_easy") {
+    let flat = false;
+    if (prev !== null) {
+      const sp = spread[d];
+      const psp = spread[prev];
+      flat = finite(sp) && finite(psp) && (sp as number) < (psp as number);
+    }
+    keep = flat && on !== undefined && medOn !== null && on < medOn;
+  } else if (gate === "eq_ar_low_tight_invert") {
+    keep =
+      extras?.eqArLow === true && extras?.tightOn === true;
+    invert = true;
   } else {
     return { keep: false, invert: false };
   }

@@ -73,8 +73,8 @@ DEFAULT_WORKER_URL: str = (
     "https://quant-platform-research-mass-eval.taku-haga.workers.dev"
 )
 RESEARCH_ARTIFACT_PREFIX_LEGACY: str = "research/mass_factory"
-# Expanded universe (was 15, then 30, then 50). Default 80.
-DEFAULT_MAX_CODES: int = 80
+# Expanded universe (was 15 … 80). Default 100.
+DEFAULT_MAX_CODES: int = 100
 DEFAULT_MAX_DAYS: int = 120
 DEFAULT_ONE_WAY: float = 0.001
 
@@ -1495,7 +1495,7 @@ def panels_cache_id(
     max_days: int,
 ) -> str:
     ids = ",".join(str(p.get("period_id") or "") for p in periods)
-    raw = f"v7_univ80_ta|{ids}|c{int(max_codes)}|d{int(max_days)}"
+    raw = f"v8_univ100_ta|{ids}|c{int(max_codes)}|d{int(max_days)}"
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
 

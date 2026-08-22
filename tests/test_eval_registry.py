@@ -217,8 +217,14 @@ def test_mechanical_baskets_are_four_valid_defs() -> None:
         assert 2 <= len(d["members"]) <= 5
         assert validate_basket_members(d["members"]) == []
         assert CANDIDATE_POLICY["go"] is False
-    primaries = [d for d in defs if d["primary"]]
-    assert any(d["rule"] == "event_family_only" for d in primaries)
+    primaries = [d for d in defs if d["primary"] or d.get("primary_candidate")]
+    assert any(d["rule"] == "fundamentals_sleeve" for d in primaries)
+    event4 = next(d for d in defs if d["rule"] == "event_family_only")
+    head4 = next(d for d in defs if d["rule"] == "known_candidate_head")
+    fam4 = next(d for d in defs if d["rule"] == "family_spread")
+    assert event4["primary_candidate"] is False
+    assert head4["primary_candidate"] is False
+    assert fam4["primary_candidate"] is False
     cs = [d for d in defs if d["rule"] == "cs_family_only"]
     assert cs and cs[0]["primary"] is False
     rules = {d["rule"] for d in defs}
@@ -235,8 +241,11 @@ def test_mechanical_baskets_are_four_valid_defs() -> None:
     repo = next(d for d in defs if d["rule"] == "repo_rate_sleeve")
     evf = next(d for d in defs if d["rule"] == "event_fund_cross")
     assert flow["primary_candidate"] is True
-    assert repo["primary_candidate"] is True
     assert evf["primary_candidate"] is True
+    assert "cs_on_impulse" not in repo["members"]
+    assert "event_repo3m_down_pead" in repo["members"]
+    assert repo["primary_candidate"] is False
+    assert repo["primary"] is False
     from research.combo_basket import primary_mechanical_basket_defs
 
     prim = primary_mechanical_basket_defs()
@@ -248,10 +257,70 @@ def test_mechanical_baskets_are_four_valid_defs() -> None:
     assert {d["rule"] for d in prim} >= {
         "fundamentals_sleeve",
         "margin_flow_sleeve",
-        "repo_rate_sleeve",
         "event_fund_cross",
-        "event_family_only",
     }
+    assert "event_family_only" not in {d["rule"] for d in prim}
+    assert "known_candidate_head" not in {d["rule"] for d in prim}
+
+
+def test_meta_baskets_are_six_and_not_a_pass() -> None:
+    from research.combo_basket import META_BASKETS, meta_basket_defs
+
+    defs = meta_basket_defs()
+    assert len(defs) >= 6
+    assert len(META_BASKETS) >= 6
+    for d in defs:
+        assert d["valid"] is True
+        assert d["go"] is False
+        assert d["not_a_pass"] is True
+        assert 2 <= len(d["sleeves"]) <= 3
+
+
+def test_compare_basket_summaries_classifies_flip() -> None:
+    from research.combo_basket import compare_basket_summaries
+
+    a = {
+        "baskets": [
+            {
+                "basket_id": "basket_theme_fund",
+                "rule": "fundamentals_sleeve",
+                "n_pos_windows": 4,
+                "n_neg_windows": 2,
+                "primary_candidate": True,
+            },
+            {
+                "basket_id": "basket_head4",
+                "rule": "known_candidate_head",
+                "n_pos_windows": 5,
+                "n_neg_windows": 1,
+                "primary_candidate": False,
+            },
+        ]
+    }
+    b = {
+        "baskets": [
+            {
+                "basket_id": "basket_theme_fund",
+                "rule": "fundamentals_sleeve",
+                "n_pos_windows": 4,
+                "n_neg_windows": 2,
+                "primary_candidate": True,
+            },
+            {
+                "basket_id": "basket_head4",
+                "rule": "known_candidate_head",
+                "n_pos_windows": 2,
+                "n_neg_windows": 4,
+                "primary_candidate": False,
+            },
+        ]
+    }
+    out = compare_basket_summaries(a, b, label_a="univ50", label_b="univ80")
+    assert out["go"] is False
+    assert out["not_a_pass"] is True
+    assert "basket_theme_fund" in out["stable_majority"]
+    assert "basket_head4" in out["flipped"]
+    assert "basket_theme_fund" in out["preferred_materials"]
 
 
 def test_summarize_emits_candidate_family_counts() -> None:

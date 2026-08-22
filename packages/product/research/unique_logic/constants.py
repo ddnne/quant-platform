@@ -225,6 +225,33 @@ CF_NEW_EVENT_THESIS_IDS: frozenset[str] = frozenset(
         "event_positive_eps_easy",
         "event_cheap_pb_on_impulse",
         "event_ta_up_on_impulse",
+        "event_eqar_high_uncrowded",
+        "event_ta_up_uncrowded",
+        "surprise_xs_ta_up_easy",
+        "event_eqar_low_repo3m_down_fade",
+        "event_eqar_high_steep",
+        "surprise_xs_eqar_high_repo3m_down",
+        "event_ta_up_overnight_p10",
+        "event_eqar_high_afterclose",
+        "event_margin_down_on_impulse",
+        "event_margin_up_easy",
+        "surprise_xs_eqar_high_on_impulse",
+        "event_eqar_low_cheap_iv_fade",
+        "surprise_xs_div_payer_easy",
+        "event_div_payer_cheap_iv",
+        "event_positive_eps_on_impulse",
+        "event_cheap_pb_repo3m_down",
+        "event_overnight_p10_eqar_low_fade",
+        "surprise_xs_curve_flatten",
+        "event_ta_up_afterclose",
+        "event_eps_up_easy",
+        "surprise_xs_ta_up_on_impulse",
+        "event_eqar_high_margin_down",
+        "event_ta_up_margin_down",
+        "event_cheap_pb_uncrowded",
+        "surprise_xs_positive_eps_easy",
+        "event_repo3m_down_afterclose",
+        "surprise_xs_margin_down_on_impulse",
     }
 )
 CF_NEW_CS_THESIS_IDS: frozenset[str] = frozenset(
@@ -316,6 +343,11 @@ CF_NEW_CS_THESIS_IDS: frozenset[str] = frozenset(
         "cs_repo3m_down_easy",
         "cs_cheap_pb_cheap_iv",
         "cs_eqar_high_flatten",
+        "cs_eqar_high_overnight_p10",
+        "cs_ta_up_easy",
+        "cs_margin_up_easy",
+        "cs_curve_flatten_easy",
+        "cs_eqar_low_tight",
     }
 )
 CF_NEW_THESIS_IDS: frozenset[str] = CF_NEW_EVENT_THESIS_IDS | CF_NEW_CS_THESIS_IDS
@@ -379,6 +411,7 @@ SPARSE_GATE_COMBOS: tuple[tuple[frozenset[str], str], ...] = (
     (frozenset({"margin_crowd_skip_friday_invert"}), "crowd_plus_skip_weekday"),
     (frozenset({"cheap_iv", "cheap_pb"}), "cheap_iv_and_cheap_pb"),
     (frozenset({"overnight_p10_steep"}), "overnight_p10_plus_steep"),
+    (frozenset({"div_positive", "cheap_iv"}), "div_payer_and_cheap_iv"),
 )
 # Name-level CS + sticky hold=10 is structurally always_on. Parked
 # (main_pool=false). Crossed with overnight/IV/repo (cs_eqar_high_easy etc.) stay.
@@ -588,6 +621,9 @@ ECONOMIC_THEME_IDS: dict[str, frozenset[str]] = {
             "event_div_payer_easy",
             "event_positive_eps_easy",
             "event_cheap_pb_on_impulse",
+            "event_eqar_low_cheap_iv_fade",
+            "event_div_payer_cheap_iv",
+            "cs_eqar_high_overnight_p10",
         }
     ),
 }
