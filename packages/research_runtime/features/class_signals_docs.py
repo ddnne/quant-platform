@@ -104,7 +104,6 @@ def class_signal_definitions(
             SIGNAL_ID_CROSS_SECTION,
             CLASS_CROSS_SECTION_RELATIVE,
             role="cross_section_relative",
-            optional=True,
         ),
         _entry(
             SIGNAL_ID_FLOW_DEMAND,
@@ -157,67 +156,56 @@ def class_signal_definitions(
             SIGNAL_ID_OPT225_BASEVOL_ABS,
             CLASS_OPTIONS_VOL_REGIME,
             role="opt225_basevol_abs_level",
-            canonical_nky_vol=True,
         ),
         _entry(
             SIGNAL_ID_OPT225_BASEVOL_TERM_LEVELS,
             CLASS_OPTIONS_VOL_REGIME,
             role="opt225_basevol_term_levels",
-            canonical_nky_vol=True,
         ),
         _entry(
             SIGNAL_ID_OPT225_BASEVOL_TERM_RATIO,
             CLASS_OPTIONS_VOL_REGIME,
             role="opt225_basevol_term_ratio",
-            canonical_nky_vol=True,
         ),
         _entry(
             SIGNAL_ID_OPT225_ATM_IV_ABS,
             CLASS_OPTIONS_VOL_REGIME,
             role="opt225_atm_iv_abs_level",
-            compare_only=True,
         ),
         _entry(
             SIGNAL_ID_OPT225_ATM_IV_TERM_LEVELS,
             CLASS_OPTIONS_VOL_REGIME,
             role="opt225_atm_iv_term_levels",
-            compare_only=True,
         ),
         _entry(
             SIGNAL_ID_OPT225_ATM_IV_TERM_RATIO,
             CLASS_OPTIONS_VOL_REGIME,
             role="opt225_atm_iv_term_ratio",
-            compare_only=True,
         ),
         _entry(
             SIGNAL_ID_OPT225_SPREAD_ABS,
             CLASS_OPTIONS_VOL_REGIME,
             role="opt225_iv_base_spread_abs",
-            compare_only=True,
         ),
         _entry(
             SIGNAL_ID_OPT225_SPREAD_CHANGE,
             CLASS_OPTIONS_VOL_REGIME,
             role="opt225_iv_base_spread_change",
-            compare_only=True,
         ),
         _entry(
             SIGNAL_ID_OPT225_SKEW_ABS,
             CLASS_OPTIONS_VOL_REGIME,
             role="opt225_skew_abs_level",
-            invent_strike=False,
         ),
         _entry(
             SIGNAL_ID_OPT225_CM_TERM_ABS,
             CLASS_OPTIONS_VOL_REGIME,
             role="opt225_cm_term_abs_level",
-            invent_strike=False,
         ),
         _entry(
             SIGNAL_ID_OPT225_BASEVOL_DELTA_ABS,
             CLASS_OPTIONS_VOL_REGIME,
             role="opt225_basevol_delta_abs",
-            canonical_nky_vol=True,
         ),
     ]
 

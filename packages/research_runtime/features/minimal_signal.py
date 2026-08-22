@@ -239,38 +239,9 @@ def compute_signal_from_feature_observations(
     output: ``{feature_id, value, metadata: {code?, date?, ...}}``.
     """
     as_of_s = str(as_of).strip()
-    code_filter = {str(c).strip() for c in codes} if codes else None
-
-    # Index feature values by (feature_id, code) and calendar by date.
-    by_code_feature: dict[str, dict[str, Any]] = {}
-    trading_by_date: dict[str, Any] = {}
-    trading_as_of: Any = None
-
-    for obs in observations:
-        fid = str(obs.get("feature_id") or "")
-        md = obs.get("metadata") if isinstance(obs.get("metadata"), Mapping) else {}
-        value = obs.get("value")
-        if fid == FILTER_FEATURE_ID:
-            d = md.get("date") or (str(as_of_s)[:10])
-            trading_by_date[str(d)[:10]] = value
-            if str(d)[:10] == str(as_of_s)[:10]:
-                trading_as_of = value
-            continue
-        code = md.get("code")
-        if code is None:
-            continue
-        code_s = str(code)
-        if code_filter is not None and code_s not in code_filter:
-            continue
-        by_code_feature.setdefault(code_s, {})[fid] = value
-
-    # Prefer as_of calendar day; fall back to any known trading-day flag.
-    default_td = trading_as_of
-    if default_td is None and trading_by_date:
-        # Prefer the latest date's flag.
-        last_d = sorted(trading_by_date.keys())[-1]
-        default_td = trading_by_date[last_d]
-
+    by_code_feature, default_td = _index_feature_observations(
+        observations, as_of=as_of_s, codes=codes
+    )
     signal_obs: list[dict[str, Any]] = []
     for code in sorted(by_code_feature.keys()):
         feats = by_code_feature[code]
@@ -284,52 +255,27 @@ def compute_signal_from_feature_observations(
             as_of=as_of_s,
         )
         signal_obs.append(rec)
-
-    values = [r.get("value") for r in signal_obs]
-    non_null = sum(1 for v in values if v is not None)
-    null_n = sum(1 for v in values if v is None)
-    long_n = sum(1 for v in values if v == 1.0)
-    short_n = sum(1 for v in values if v == -1.0)
-    flat_n = sum(1 for v in values if v == 0.0)
-
-    return {
-        "version": "minimal-signal/v1",
-        "signal_id": SIGNAL_ID,
-        "signal_version": SIGNAL_VERSION,
-        "status": SIGNAL_STATUS,
-        "candidate_only": CANDIDATE_ONLY,
-        "as_of": as_of_s,
-        "feature_ids": list(DEFAULT_FEATURE_IDS),
-        "volume_change_abs_min": volume_change_abs_min,
-        "codes": sorted(by_code_feature.keys()),
-        "row_counts": {
-            "computed": len(values),
-            "non_null": non_null,
-            "null": null_n,
-            "long": long_n,
-            "short": short_n,
-            "flat": flat_n,
+    return _aggregate_signal_obs(
+        signal_obs,
+        signal_id=SIGNAL_ID,
+        as_of=as_of_s,
+        feature_ids=list(DEFAULT_FEATURE_IDS),
+        volume_change_abs_min=volume_change_abs_min,
+        extra={
+            "sample_values": [
+                {
+                    "code": r.get("code"),
+                    "value": r.get("value"),
+                    "topix_relative": (r.get("metadata") or {}).get("topix_relative"),
+                }
+                for r in signal_obs[:10]
+            ],
+            "note": (
+                "COMPLETE-21 minimal tip signal (legs approved; signal status candidate). "
+                "Not READY. Not mass research. No order execution."
+            ),
         },
-        "null_counts": null_n,
-        "observations": signal_obs,
-        "sample_values": [
-            {
-                "code": r.get("code"),
-                "value": r.get("value"),
-                "topix_relative": (r.get("metadata") or {}).get("topix_relative"),
-            }
-            for r in signal_obs[:10]
-        ],
-        "mass_research": MASS_RESEARCH,
-        "phase7": PHASE7,
-        "ready_declared": READY_DECLARED,
-        "order_execution": ORDER_EXECUTION,
-        "local_sot": False,
-        "note": (
-            "COMPLETE-21 minimal tip signal (legs approved; signal status candidate). "
-            "Not READY. Not mass research. No order execution."
-        ),
-    }
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -928,21 +874,11 @@ __all__ = [
     "DEFAULT_SIGNAL_DATASETS",
     "DEFAULT_VOLUME_CHANGE_ABS_MIN",
     "DEFAULT_VOLUME_SIGN_ABS_MIN",
-    "DISCLOSURE_FEATURE_ID",
     "EXTRA_HYP_DATASETS",
     "EXTRA_HYP_FEATURE_IDS",
     "FEATURE_STATUS_PINS",
-    "FILTER_FEATURE_ID",
-    "GATE_FEATURE_ID",
-    "MARGIN_CHANGE_FEATURE_ID",
-    "MASS_RESEARCH",
     "MULTI_SIGNAL_DATASETS",
     "MULTI_SIGNAL_FEATURE_IDS",
-    "ORDER_EXECUTION",
-    "PHASE7",
-    "PRIMARY_FEATURE_ID",
-    "READY_DECLARED",
-    "SHORT_RATIO_FEATURE_ID",
     "SIGNAL_ID",
     "SIGNAL_ID_MARGIN_CHANGE",
     "SIGNAL_ID_SHORT_RATIO_DELTA",
@@ -951,22 +887,14 @@ __all__ = [
     "SIGNAL_ID_VOLUME_SIGN",
     "SIGNAL_STATUS",
     "SIGNAL_VERSION",
-    "apply_disclosure_filter",
-    "apply_trading_day_filter",
-    "apply_volume_change_gate",
-    "compute_margin_change_sign_signal",
     "compute_margin_sign_from_feature_observations",
     "compute_short_delta_from_feature_observations",
-    "compute_short_ratio_delta_sign_signal",
     "compute_signal_from_feature_observations",
     "compute_topix_disc_from_feature_observations",
-    "compute_topix_rel_disclosure_signal",
     "compute_topix_relative_sign_signal",
-    "compute_volume_change_sign_signal",
     "compute_volume_sign_from_feature_observations",
     "extra_hyp_definitions",
     "multi_signal_definitions",
-    "sign_from_numeric",
     "sign_from_topix_relative",
     "signal_definition",
 ]

@@ -620,17 +620,9 @@ def _fundamental_value_score(ctx) -> FeatureOutput:
     )
     code = ctx.get_input("code")
     bar_res = ctx.get_equity_bars_daily(code=code)
-    closes: list[tuple[str, float]] = []
-    for r in (bar_res.rows if bar_res is not None else []) or []:
-        c = r.get("close")
-        d = r.get("date")
-        if c is None or d is None:
-            continue
-        try:
-            closes.append((str(d), float(c)))
-        except (TypeError, ValueError):
-            continue
-    closes.sort(key=lambda x: x[0])
+    closes = _parse_close_rows(
+        list(bar_res.rows) if bar_res is not None and bar_res.rows else []
+    )
     if not closes:
         return FeatureOutput(
             value=None,

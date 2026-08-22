@@ -97,9 +97,7 @@ SIGNAL_ID_OPT225_BASEVOL_DELTA_ABS: str = "c21_opt225_basevol_delta_abs_xs"
 # Feature legs (prefer registry-approved)
 MOMENTUM_FEATURE_ID: str = "momentum_n"
 TRADING_DAY_FEATURE_ID: str = "is_trading_day"
-TOPIX_REL_FEATURE_ID: str = "topix_relative_1d"
 REPO_RATE_FEATURE_ID: str = "repo_rate_level"
-REPO_CHANGE_FEATURE_ID: str = "repo_rate_change"
 REPO_CURVE_FEATURE_ID: str = "repo_curve_spread"
 DISCLOSURE_FEATURE_ID: str = "disclosure_flag_fins"
 MARGIN_CHANGE_FEATURE_ID: str = "margin_interest_change_1d"
@@ -133,12 +131,10 @@ DEFAULT_NKY_VOL_EXPAND_RATIO: float = 1.20  # short/long ≥ → expanding
 DEFAULT_NKY_VOL_COMPRESS_RATIO: float = 0.80  # short/long ≤ → compressing
 NKY_VOL_PROXY_NK225F: str = "nk225f_front_realized"
 NKY_VOL_PROXY_TOPIX: str = "topix_realized"
-NKY_VOL_PROXY_NKVIF: str = "nkvif_front_implied"  # optional abs-level only
 TRADING_DAYS_ANN: int = 252
 
 DEFAULT_HOLD_DAYS: int = 5
 SUPPORTED_HOLD_DAYS: tuple[int, ...] = (5, 10, 20)
-DEFAULT_MOMENTUM_N: int = 5  # match hold horizon default
 DEFAULT_EVENT_POST_HOLD_DAYS: int = 5
 DEFAULT_FLOW_HOLD_DAYS: int = 5
 DEFAULT_FUND_HOLD_DAYS: int = 20
@@ -189,11 +185,6 @@ DEFAULT_REPO_HIGH_THRESHOLD: float = 0.05  # level above → high
 DEFAULT_REPO_LOW_THRESHOLD: float = 0.0  # level below → low
 DEFAULT_REPO_CHANGE_EPS: float = 1e-6
 
-MULTI_DAY_HOLD_DATASETS: tuple[str, ...] = (
-    "equities_bars_daily",
-    "markets_calendar",
-    "indices_bars_daily_topix",
-)
 MACRO_CONDITIONED_DATASETS: tuple[str, ...] = (
     "equities_bars_daily",
     "markets_calendar",
@@ -213,11 +204,6 @@ MULTI_FACTOR_DATASETS: tuple[str, ...] = (
     "jsda_tokyo_repo_rates",
     "markets_margin_interest",
 )
-CROSS_SECTION_DATASETS: tuple[str, ...] = (
-    "equities_bars_daily",
-    "markets_calendar",
-    "indices_bars_daily_topix",
-)
 EVENT_POST_DATASETS: tuple[str, ...] = (
     "fins_summary",
     "fins_earnings_date",  # W80 thicken event calendar when available
@@ -236,7 +222,7 @@ FUNDAMENTALS_PRICE_DATASETS: tuple[str, ...] = (
     "markets_calendar",
 )
 # W91 index-vol regime: equity CS book + index/futures vol proxy.
-# Prefer NK225F continuous front realized vol; TOPIX fallback; NKVIF optional.
+# Prefer NK225F continuous front realized vol; TOPIX fallback.
 INDEX_VOL_REGIME_DATASETS: tuple[str, ...] = (
     "equities_bars_daily",
     "markets_calendar",
@@ -272,7 +258,6 @@ OPT225_CM_TERM_CONVENTION: str = "near_cm_atm_iv - next_cm_atm_iv"
 OPT225_BASEVOL_DELTA_CONVENTION: str = "BaseVol[t] - BaseVol[t-1]"
 # W94: BaseVol = canonical level; reconstructed ATM = compare-only.
 OPT225_CANONICAL_LEVEL: str = "basevol"
-OPT225_ATM_IV_ROLE: str = "compare_only"
 
 
 def _freeze_meta() -> dict[str, Any]:
@@ -316,11 +301,7 @@ from .class_signals_macro import (
     compute_rate_curve_xs_signal,
     compute_rate_level_xs_signal,
     condition_signal_on_regime,
-    rate_curve_risk_adjust_sign,
-    rate_level_risk_adjust_sign,
-    repo_curve_spread,
     repo_regime_from_change,
-    repo_regime_from_curve,
     repo_regime_from_level,
 )
 from .class_signals_vol import (
@@ -342,7 +323,6 @@ from .class_signals_vol import (
     nky_vol_regime_from_abs_level,
     nky_vol_regime_from_term_levels,
     nky_vol_regime_from_term_ratio,
-    nky_vol_risk_adjust_sign,
 )
 from .class_signals_flow_fund import (
     compute_cross_section_signal,
@@ -373,7 +353,6 @@ __all__ = [
     "CLASS_RATE_FACTOR",
     "CLASS_SIGNALS_VERSION",
     "CLASS_SIGNALS_WAVE",
-    "CROSS_SECTION_DATASETS",
     "DEFAULT_EVENT_POST_HOLD_DAYS",
     "DEFAULT_FLOW_HOLD_DAYS",
     "EVENT_POST_ENTRY_MODE",
@@ -391,7 +370,6 @@ __all__ = [
     "DEFAULT_MIN_POSITIVE_PERIODS",
     "DEFAULT_MIN_SHARPE_PERIOD",
     "DEFAULT_MIN_YEARS_RESEARCH_CANDIDATE",
-    "DEFAULT_MOMENTUM_N",
     "DEFAULT_CURVE_INVERT_THRESHOLD",
     "DEFAULT_CURVE_STEEP_THRESHOLD",
     "DEFAULT_NKY_VOL_COMPRESS_RATIO",
@@ -415,11 +393,9 @@ __all__ = [
     "MARGIN_CHANGE_FEATURE_ID",
     "MASS_RESEARCH",
     "MOMENTUM_FEATURE_ID",
-    "MULTI_DAY_HOLD_DATASETS",
     "MULTI_FACTOR_DATASETS",
     "NKY_VOL_ABS_FEATURE_ID",
     "NKY_VOL_PROXY_NK225F",
-    "NKY_VOL_PROXY_NKVIF",
     "NKY_VOL_PROXY_TOPIX",
     "NKY_VOL_TERM_LEVELS_FEATURE_ID",
     "NKY_VOL_TERM_RATIO_FEATURE_ID",
@@ -434,7 +410,6 @@ __all__ = [
     "OPT225_CM_TERM_CONVENTION",
     "OPT225_BASEVOL_DELTA_CONVENTION",
     "OPT225_CANONICAL_LEVEL",
-    "OPT225_ATM_IV_ROLE",
     "DEFAULT_OPT225_VOL_HIGH_THRESHOLD",
     "DEFAULT_OPT225_VOL_LOW_THRESHOLD",
     "DEFAULT_OPT225_SPREAD_HIGH_THRESHOLD",
@@ -451,7 +426,6 @@ __all__ = [
     "PHASE7",
     "RATE_FACTOR_DATASETS",
     "READY_DECLARED",
-    "REPO_CHANGE_FEATURE_ID",
     "REPO_CURVE_FEATURE_ID",
     "REPO_CURVE_LONG_TENOR",
     "REPO_CURVE_SHORT_TENOR",
@@ -484,7 +458,6 @@ __all__ = [
     "SIGNAL_STATUS",
     "SIGNAL_VERSION",
     "SUPPORTED_HOLD_DAYS",
-    "TOPIX_REL_FEATURE_ID",
     "TRADING_DAY_FEATURE_ID",
     "TRADING_DAYS_ANN",
     "amortized_one_way_cost",
@@ -525,7 +498,6 @@ __all__ = [
     "nky_vol_regime_from_abs_level",
     "nky_vol_regime_from_term_levels",
     "nky_vol_regime_from_term_ratio",
-    "nky_vol_risk_adjust_sign",
     "event_post_entry_bar_index",
     "fundamental_value_score",
     "multi_day_forward_return",
@@ -534,11 +506,7 @@ __all__ = [
     "occurrence_rate_multiday",
     "parse_disc_time_hhmmss",
     "production_candidate_bar",
-    "rate_curve_risk_adjust_sign",
-    "rate_level_risk_adjust_sign",
-    "repo_curve_spread",
     "repo_regime_from_change",
-    "repo_regime_from_curve",
     "repo_regime_from_level",
     "session_close_hhmmss",
     "sign_from_numeric",

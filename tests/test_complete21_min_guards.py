@@ -118,6 +118,7 @@ def test_new_feature_dataset_constants_are_complete_only():
         mod._RETURN_C21_DATASETS,
         mod._MARGIN_ALERT_DATASETS,
         mod._FUTURES_DATASETS,
+        mod._FUND_VALUE_DATASETS,
     )
     for group in constants:
         for ds in group:
@@ -140,6 +141,7 @@ def test_complete21_min_declared_datasets_reject_each_permanent_defer():
         mod._RETURN_C21_DATASETS,
         mod._MARGIN_ALERT_DATASETS,
         mod._FUTURES_DATASETS,
+        mod._FUND_VALUE_DATASETS,
     )
     for group in groups:
         for defer_ds in sorted(PERMANENT_DEFER_DATASETS):
