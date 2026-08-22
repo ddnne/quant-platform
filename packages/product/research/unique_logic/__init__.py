@@ -1,11 +1,7 @@
 """Unique-logic evaluators (candidate-grade daily MTM).
 
-Declare a new hypothesis in ``specs/research_logics/*.yaml``. Add an
-``evaluate_*_daily_mtm`` function in this package **only when the economics
-are new**. ``python -m research.unique_logic --all`` defaults to CF isolate
-fan-out (``--backend local`` is the serial fallback). Record with
-``scripts/record_research_eval.py`` (R2 + D1). Do not add
-``scripts/run_wNN_*.py``.
+YAML in ``specs/research_logics`` is the declaration SoT. Add
+``evaluate_*_daily_mtm`` only when the economics are new. Does not GO.
 """
 from __future__ import annotations
 
@@ -28,7 +24,7 @@ __all__ = [
 
 
 def all_unique_logic_specs() -> list[dict[str, Any]]:
-    """YAML catalog is the runtime declaration SoT (all 338 logics)."""
+    """YAML catalog is the runtime declaration SoT."""
     return load_catalog_specs()
 
 

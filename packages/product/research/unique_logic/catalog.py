@@ -161,11 +161,7 @@ def _yaml_combo_kind(spec: Mapping[str, Any], *, cs_gate: str | None) -> str:
 
 
 def combo_row_from_yaml(spec: Mapping[str, Any]) -> dict[str, Any]:
-    """Map catalog YAML to the same keys as ``event_combos._combo_row``.
-
-    YAML is the declaration SoT. Missing ``params.gates`` / ``cs_gate`` /
-    ``side`` fail closed. Does not GO.
-    """
+    """Map catalog YAML to ``event_combos._combo_row`` keys. Missing gates/cs_gate/side fail closed."""
     from research.unique_logic.event_combos import _combo_row
 
     lid = str(spec.get("logic_id") or "")
@@ -213,16 +209,11 @@ def combo_row_from_yaml(spec: Mapping[str, Any]) -> dict[str, Any]:
         raw["hold_tail_days"] = hold_tail_days
     if spec.get("main_pool") is False:
         raw["main_pool"] = False
-    row = _combo_row(raw)
-    row["go"] = False
-    row["generation_enabled"] = False
-    row["promote_as_main"] = False
-    row["headline"] = False
-    return row
+    return _combo_row(raw)
 
 
 def yaml_combo_rows(*, root: Path | None = None) -> list[dict[str, Any]]:
-    """Combo runtime rows from catalog YAML (declaration and dispatch SoT).
+    """Combo runtime rows from catalog YAML.
 
     Filter only by evaluator. Do not import the combo runtime tuple here
     (that tuple is built from this helper).
@@ -236,10 +227,7 @@ def yaml_combo_rows(*, root: Path | None = None) -> list[dict[str, Any]]:
 
 
 def unique_row_from_yaml(spec: Mapping[str, Any]) -> dict[str, Any]:
-    """Map catalog YAML to an original-unique runtime row.
-
-    YAML is the declaration SoT. Does not GO.
-    """
+    """Map catalog YAML to an original-unique runtime row. Does not GO."""
     lid = str(spec.get("logic_id") or "")
     if not lid:
         raise ValueError("YAML unique row missing logic_id")
@@ -298,12 +286,7 @@ def yaml_unique_rows(
 
 
 def combo_thesis_ids_by_kind(*, root: Path | None = None) -> dict[str, frozenset[str]]:
-    """Combo YAML stems grouped by ``_yaml_combo_kind``.
-
-    Does not import combo runtime. Filter only by evaluator. ``cs`` from
-    params.cs_gate; ``surprise_xs`` and ``event`` otherwise. Used by
-    constants.CF_NEW_*.
-    """
+    """Combo YAML stems grouped by ``_yaml_combo_kind``. Does not import combo runtime."""
     event: set[str] = set()
     cs: set[str] = set()
     surprise_xs: set[str] = set()

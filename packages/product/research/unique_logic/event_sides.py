@@ -145,27 +145,18 @@ def _finish_signed_event_book(
     sign_mult_by_key: Mapping[str, float] | None = None,
     repo_by_date: Mapping[str, float] | None = None,
 ) -> dict[str, Any]:
-    dates = list(collected["calendar"])
-    held = event._held_from_event_entries(
-        collected, accept=accept, sign_mult_by_key=sign_mult_by_key
-    )
-    pack = held_book_daily_mtm(
-        held_by_code_date=held,
+    return held_book_daily_mtm(
+        held_by_code_date=event._held_from_event_entries(
+            collected, accept=accept, sign_mult_by_key=sign_mult_by_key
+        ),
         close_by=collected["close_by"],
-        dates=dates,
+        dates=list(collected["calendar"]),
         hold_days=int(collected["hold_days"]),
         one_way_cost=one_way_cost,
         logic_id=str(spec["logic_id"]),
         extra=extra,
         repo_by_date=repo_by_date,
     )
-    pack["data_path"] = extra.get("data_path")
-    pack["new_unique_logic"] = True
-    pack["catalog"] = False
-    pack["promote_as_main"] = False
-    pack["go"] = False
-    pack["sign_flip_is_not_a_kill"] = True
-    return pack
 
 
 def evaluate_event_funding_easy_short_daily_mtm(

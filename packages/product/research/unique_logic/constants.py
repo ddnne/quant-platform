@@ -194,7 +194,6 @@ MF_VALUE_MOM_RATE_DELEGATES: bool = False
 MF_VALUE_MOM_RATE_PATH: str = "unique_rate_gated_value_mom"
 MF_VALUE_MOM_RATE_PARKED_ALWAYS_ON: bool = False
 # Occupancy >= ALWAYS_ON_OCCUPANCY_WARN parks always_on. Do not densify.
-# Candidate-grade SoT. Period-net mass-eval is bar-native auxiliary only.
 CANDIDATE_EVAL_PROTOCOL: str = "daily_path_mtm_after_cost/v1"
 PERIOD_NET_ROLE: str = "bar_native_auxiliary_unique_unsupported"
 # Term-structure theses need distinct short/long vol maps. Occupancy 0 = unmet.
@@ -327,5 +326,4 @@ CANDIDATE_POLICY: dict[str, object] = {
     "go": False,
 }
 
-# YAML is the SoT (gate reorderings are not themes).
 ECONOMIC_THEME_IDS: dict[str, frozenset[str]] = economic_theme_ids()

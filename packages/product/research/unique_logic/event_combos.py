@@ -1,10 +1,4 @@
-"""New unique theses as combo gates (not numeric variants).
-
-CF Worker eventHeld / gatedCsHeld is the candidate-grade path.
-Catalog YAML under ``specs/research_logics`` is the declaration SoT
-(gates / cs_gate / side) and the combo runtime dispatch table.
-Does not promote / GO.
-"""
+"""Combo theses: YAML dispatch, CF Worker occupancy path. Does not GO."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -18,7 +12,7 @@ from research.unique_logic.constants import (
     sparse_15name_reason,
 )
 from research.unique_logic.near_duplicate import is_near_duplicate
-from research.unique_logic import event, event_filters, event_sides
+from research.unique_logic import event, event_sides
 
 COMBO_LOGIC_IDS: frozenset[str] = frozenset(CF_NEW_THESIS_IDS)
 
@@ -79,7 +73,7 @@ def _combo_row(s: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _yaml_combo_runtime_rows() -> tuple[dict[str, Any], ...]:
-    """Lazy-import catalog rows so ``yaml_combo_rows`` can call ``_combo_row``."""
+    """Lazy-import: ``yaml_combo_rows`` calls ``_combo_row``."""
     from research.unique_logic.catalog import yaml_combo_rows
 
     return tuple(yaml_combo_rows())
@@ -96,23 +90,12 @@ def spec_by_id(logic_id: str) -> dict[str, Any] | None:
 
 
 def combo_runtime_spec(logic_id: str) -> dict[str, Any] | None:
-    """YAML-derived runtime row for a combo thesis.
-
-    Catalog YAML under ``specs/research_logics`` is declaration and combo
-    dispatch SoT. ``NEW_COMBO_LOGIC`` is built from ``yaml_combo_rows``.
-    Does not GO.
-    """
+    """YAML-derived combo runtime row."""
     return spec_by_id(logic_id)
 
 
 def assert_yaml_matches_specs(*, root: Any = None) -> None:
-    """Fail if combo catalog YAML is missing required params or go=True.
-
-    Every combo YAML (evaluator = evaluate_combo_daily_mtm) must declare
-    ``params.gates`` (list, may be empty), ``params.cs_gate``, and
-    ``params.side``. ``yaml_combo_rows()`` ids must equal those YAML stems.
-    No spec may have ``go=True``. Does not GO.
-    """
+    """Fail if combo YAML is missing gates/cs_gate/side or sets go=True."""
     from research.unique_logic.catalog import (
         _COMBO_EVALUATOR,
         load_catalog_specs,
@@ -175,31 +158,24 @@ def evaluate_combo_daily_mtm(
     adv_by_code: Mapping[str, float] | None = None,
 ) -> dict[str, Any]:
     """Python fallback for combo theses. CF Worker is the SoT path."""
+    del curve, margin_by_code, topix_by_date, adv_by_code
     lid = str(spec.get("logic_id") or "")
     declared = combo_runtime_spec(lid) or dict(spec)
     kind = str(declared.get("kind") or "event")
-    extra_adv = adv_by_code or dict(
-        ((declared.get("extra") or spec.get("extra") or {}).get("adv_by_code") or {})
-    )
     if kind in {"event", "surprise_xs"}:
         return _eval_event_combo(
             declared,
             bars=bars,
             overnight=overnight,
-            curve=curve,
             events=events,
-            margin_by_code=margin_by_code,
             one_way_cost=one_way_cost,
             period_start=period_start,
             period_end=period_end,
-            adv_by_code=extra_adv,
         )
     return _eval_cs_combo(
         declared,
         bars=bars,
         overnight=overnight,
-        curve=curve,
-        margin_by_code=margin_by_code,
         one_way_cost=one_way_cost,
     )
 
@@ -209,22 +185,17 @@ def _eval_event_combo(
     *,
     bars: Mapping[str, Any],
     overnight: Mapping[str, float],
-    curve: Mapping[str, Any],
     events: Mapping[str, Any],
-    margin_by_code: Mapping[str, Mapping[str, float]],
     one_way_cost: float,
     period_start: str | None,
     period_end: str | None,
-    adv_by_code: Mapping[str, float] | None = None,
 ) -> dict[str, Any]:
-    del curve, margin_by_code, adv_by_code
     params = dict(spec.get("params") or {})
     gates = tuple(params.get("gates") or spec.get("gates") or ())
     side = str(params.get("side") or spec.get("side") or "orig")
     collected = event._collect_event_entries(
         bars, events, spec=spec, period_start=period_start, period_end=period_end
     )
-    collected = event_filters._attach_disc_time(collected, events)
     extra: dict[str, Any] = {
         "combo_gates": list(gates),
         "side": side,
@@ -244,8 +215,7 @@ def _eval_event_combo(
     sign_mult: dict[str, float] = {}
     for ev in collected["entries"]:
         key = event_sides._event_key(ev)
-        # CF daily_path comboEventGateOk is SoT. Local fallback only runs
-        # ungated events — do not dual-def Worker predicates (would drift).
+        # Worker comboEventGateOk is SoT; local fallback is ungated only.
         ok = not gates
         accept[key] = ok
         sign_mult[key] = -1.0 if side == "flip" else 1.0
@@ -271,12 +241,6 @@ def _eval_event_combo(
         collected = dict(collected)
         collected["entries"] = new_entries
     if str(spec.get("kind")) == "surprise_xs":
-        collected = dict(collected)
-        collected["entries"] = [
-            ev
-            for ev in collected["entries"]
-            if accept.get(event_sides._event_key(ev), False)
-        ]
         pack = event.evaluate_surprise_xs_rank_hold_daily_mtm(
             bars,
             events,
@@ -290,10 +254,7 @@ def _eval_event_combo(
                 if accept.get(event_sides._event_key(ev), False)
             ],
         )
-        pack["logic_id"] = spec["logic_id"]
         pack["combo_gates"] = list(gates)
-        pack["promote_as_main"] = False
-        pack["go"] = False
         return pack
     return event_sides._finish_signed_event_book(
         spec=spec,
@@ -311,12 +272,9 @@ def _eval_cs_combo(
     *,
     bars: Mapping[str, Any],
     overnight: Mapping[str, float],
-    curve: Mapping[str, Any],
-    margin_by_code: Mapping[str, Mapping[str, float]],
     one_way_cost: float,
 ) -> dict[str, Any]:
     """CS mom occupancy with a date gate (matches Worker gatedCsHeld)."""
-    del curve, margin_by_code
     from features.class_signals import cross_section_rank_signs
 
     params = dict(spec.get("params") or {})
@@ -350,7 +308,7 @@ def _eval_cs_combo(
         keep = True
         loc_invert = invert
         if gate:
-            # Worker comboCsGateOk / leftover gatedCsHeld is SoT.
+            # Worker comboCsGateOk is SoT.
             extra_cf_only.append(gate)
             keep = False
         scores = scores_by_date.get(d) or {}
