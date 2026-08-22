@@ -446,44 +446,6 @@ def apply_disclosure_filter(
     }
 
 
-def apply_margin_change_filter(
-    signal_value: float | None,
-    margin_change: float | None,
-    *,
-    require_non_null: bool = True,
-) -> tuple[float | None, dict[str, Any]]:
-    """Optional filter: require non-null margin_interest_change_1d (research alt)."""
-    if not require_non_null:
-        return signal_value, {
-            "filter": MARGIN_CHANGE_FEATURE_ID,
-            "enabled": False,
-            "passed": True,
-        }
-    if margin_change is None:
-        return None, {
-            "filter": MARGIN_CHANGE_FEATURE_ID,
-            "enabled": True,
-            "passed": False,
-            "reason": "margin_interest_change missing",
-        }
-    try:
-        mc = float(margin_change)
-    except (TypeError, ValueError):
-        return None, {
-            "filter": MARGIN_CHANGE_FEATURE_ID,
-            "enabled": True,
-            "passed": False,
-            "reason": "margin_interest_change not numeric",
-            "raw": margin_change,
-        }
-    return signal_value, {
-        "filter": MARGIN_CHANGE_FEATURE_ID,
-        "enabled": True,
-        "passed": True,
-        "margin_interest_change_1d": mc,
-    }
-
-
 def _index_feature_observations(
     observations: Sequence[Mapping[str, Any]],
     *,
@@ -1200,7 +1162,6 @@ __all__ = [
     "SIGNAL_STATUS",
     "SIGNAL_VERSION",
     "apply_disclosure_filter",
-    "apply_margin_change_filter",
     "apply_trading_day_filter",
     "apply_volume_change_gate",
     "compute_margin_change_sign_signal",
