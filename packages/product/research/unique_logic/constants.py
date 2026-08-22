@@ -119,6 +119,14 @@ CF_NEW_EVENT_THESIS_IDS: frozenset[str] = frozenset(
         "surprise_xs_midmonth",
         "surprise_xs_easing_change",
         "surprise_xs_afterclose_easing",
+        "event_tue_thu_uncrowded",
+        "event_afterclose_easing",
+        "event_may_easing",
+        "event_skip_monday_uncrowded",
+        "event_first_half_easing",
+        "surprise_xs_skip_monday",
+        "surprise_xs_friday_skip",
+        "surprise_xs_uncrowded",
     }
 )
 CF_NEW_CS_THESIS_IDS: frozenset[str] = frozenset(
@@ -158,6 +166,14 @@ CF_NEW_CS_THESIS_IDS: frozenset[str] = frozenset(
         "flow_disagree_midmonth",
         "curve_steep_midmonth_cs",
         "rate_up_tue_thu_cs",
+        "cs_steep_skip_monday",
+        "cs_midmonth_tight_fade",
+        "flow_disagree_tue_thu",
+        "iv_below_midmonth_cs",
+        "overnight_down_first_half_cs",
+        "rate_up_midmonth_cs",
+        "cs_month_start_easing",
+        "nky_vol_compress_midmonth_cs",
     }
 )
 CF_NEW_THESIS_IDS: frozenset[str] = CF_NEW_EVENT_THESIS_IDS | CF_NEW_CS_THESIS_IDS
@@ -203,8 +219,14 @@ ALWAYS_ON_22C_IDS: frozenset[str] = frozenset(
     }
 )
 # CF daily_path implements a unique rate-gated book (not fund_value_mom_agree).
+# Overnight-change confirm (eval-cf-dp-mf-chg-20260822a) brought occupancy
+# just under 0.85. Live candidate filter is occupancy, not this flag.
 MF_VALUE_MOM_RATE_DELEGATES: bool = False
 MF_VALUE_MOM_RATE_PATH: str = "unique_rate_gated_value_mom"
+MF_VALUE_MOM_RATE_PARKED_ALWAYS_ON: bool = False
+# Candidate-grade SoT. Period-net mass-eval is bar-native auxiliary only.
+CANDIDATE_EVAL_PROTOCOL: str = "daily_path_mtm_after_cost/v1"
+PERIOD_NET_ROLE: str = "bar_native_auxiliary_unique_unsupported"
 # Term-structure theses need distinct short/long vol maps. Occupancy 0 = unmet.
 TERM_STRUCTURE_REQUIRED: frozenset[str] = frozenset(
     {

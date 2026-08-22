@@ -631,6 +631,126 @@ _SPECS: tuple[dict[str, Any], ...] = (
         "cs_gate": "tue_thu_overnight_up",
         "kind": "cs",
     },
+    {
+        "logic_id": "event_tue_thu_uncrowded",
+        "family_id": "event_margin_crowd_combo",
+        "thesis": "PEAD Tuesday–Thursday only when the name is uncrowded in margin.",
+        "gates": ("tue_thu", "uncrowded_margin"),
+        "side": "orig",
+        "kind": "event",
+    },
+    {
+        "logic_id": "event_afterclose_easing",
+        "family_id": "afterclose_event_timing",
+        "thesis": "After-close PEAD only on a one-day overnight decline.",
+        "gates": ("afterclose", "overnight_easing"),
+        "side": "orig",
+        "kind": "event",
+    },
+    {
+        "logic_id": "event_may_easing",
+        "family_id": "event_calendar_gate",
+        "thesis": "PEAD in May FY-results only when overnight eased.",
+        "gates": ("fy_results", "overnight_easing"),
+        "side": "orig",
+        "kind": "event",
+    },
+    {
+        "logic_id": "event_skip_monday_uncrowded",
+        "family_id": "event_margin_crowd_combo",
+        "thesis": "Skip Monday PEAD; remaining days only when uncrowded.",
+        "gates": ("skip_monday", "uncrowded_margin"),
+        "side": "orig",
+        "kind": "event",
+    },
+    {
+        "logic_id": "event_first_half_easing",
+        "family_id": "event_calendar_gate",
+        "thesis": "PEAD in the first half of the month only when overnight eased.",
+        "gates": ("first_half_month", "overnight_easing"),
+        "side": "orig",
+        "kind": "event",
+    },
+    {
+        "logic_id": "surprise_xs_skip_monday",
+        "family_id": "surprise_xs_rank",
+        "thesis": "Surprise CS rank skips Monday entries (weekend gap).",
+        "gates": ("skip_monday",),
+        "side": "orig",
+        "kind": "surprise_xs",
+    },
+    {
+        "logic_id": "surprise_xs_friday_skip",
+        "family_id": "surprise_xs_rank",
+        "thesis": "Surprise CS rank skips Friday entries (weekend hold).",
+        "gates": ("friday_skip",),
+        "side": "orig",
+        "kind": "surprise_xs",
+    },
+    {
+        "logic_id": "surprise_xs_uncrowded",
+        "family_id": "surprise_xs_rank",
+        "thesis": "Surprise CS rank only when the name is uncrowded in margin.",
+        "gates": ("uncrowded_margin",),
+        "side": "orig",
+        "kind": "surprise_xs",
+    },
+    {
+        "logic_id": "cs_steep_skip_monday",
+        "family_id": "event_macro_curve_combo",
+        "thesis": "CS mom when the repo curve is steep, skipping Mondays.",
+        "cs_gate": "curve_steep_skip_monday",
+        "kind": "cs",
+    },
+    {
+        "logic_id": "cs_midmonth_tight_fade",
+        "family_id": "event_calendar_gate",
+        "thesis": "Fade CS mid-month when overnight rose.",
+        "cs_gate": "midmonth_overnight_up_invert",
+        "kind": "cs",
+    },
+    {
+        "logic_id": "flow_disagree_tue_thu",
+        "family_id": "xs_margin_delta",
+        "thesis": "Fade CS when margin crowded, Tuesday–Thursday only.",
+        "cs_gate": "margin_crowd_tue_thu_invert",
+        "kind": "cs",
+    },
+    {
+        "logic_id": "iv_below_midmonth_cs",
+        "family_id": "xs_low_vol_mom",
+        "thesis": "CS mom mid-month only when ATM IV sits below BaseVol.",
+        "cs_gate": "iv_below_midmonth",
+        "kind": "cs",
+    },
+    {
+        "logic_id": "overnight_down_first_half_cs",
+        "family_id": "overnight_level_cs",
+        "thesis": "CS mom on overnight decline in the first half of the month.",
+        "cs_gate": "first_half_overnight_down",
+        "kind": "cs",
+    },
+    {
+        "logic_id": "rate_up_midmonth_cs",
+        "family_id": "overnight_level_cs",
+        "thesis": "CS mom mid-month only when overnight rose.",
+        "cs_gate": "midmonth_overnight_up",
+        "kind": "cs",
+    },
+    {
+        "logic_id": "cs_month_start_easing",
+        "family_id": "event_calendar_gate",
+        "thesis": "CS mom in the first five calendar days only when overnight declined.",
+        "cs_gate": "month_start_overnight_down",
+        "kind": "cs",
+    },
+    {
+        "logic_id": "nky_vol_compress_midmonth_cs",
+        "family_id": "xs_low_vol_mom",
+        "thesis": "CS mom mid-month only when NKY vol term compressed versus the prior print.",
+        "cs_gate": "nky_compress_midmonth",
+        "kind": "cs",
+    },
 )
 
 NEW_COMBO_LOGIC: tuple[dict[str, Any], ...] = tuple(
@@ -1117,6 +1237,63 @@ def _eval_cs_combo(
                 and on is not None
                 and float(on) > float(prev_on)
             )
+        elif gate == "curve_steep_skip_monday":
+            keep = _weekday(d) != 0 and float(spread.get(d) or 0) > 0
+        elif gate == "midmonth_overnight_up_invert":
+            keep = (
+                d[8:10] >= "10"
+                and d[8:10] <= "20"
+                and prev_on is not None
+                and on is not None
+                and float(on) > float(prev_on)
+            )
+            loc_invert = True
+        elif gate == "margin_crowd_tue_thu_invert":
+            keep = (
+                _weekday(d) in {1, 2, 3}
+                and _universe_margin_delta(margin_by_code, d) > 0
+            )
+            loc_invert = True
+        elif gate == "first_half_overnight_down":
+            keep = (
+                d[8:10] <= "15"
+                and prev_on is not None
+                and on is not None
+                and float(on) < float(prev_on)
+            )
+        elif gate == "midmonth_overnight_up":
+            keep = (
+                d[8:10] >= "10"
+                and d[8:10] <= "20"
+                and prev_on is not None
+                and on is not None
+                and float(on) > float(prev_on)
+            )
+        elif gate == "month_start_overnight_down":
+            keep = (
+                d[8:10] <= "05"
+                and prev_on is not None
+                and on is not None
+                and float(on) < float(prev_on)
+            )
+        elif gate == "nky_compress_midmonth":
+            vol = _vol_sidecar()
+            keep = (
+                d[8:10] >= "10"
+                and d[8:10] <= "20"
+                and _apply_vol_gate("nky_term_compress", d, dates[i - 1] if i else None, vol)
+            )
+            if not vol:
+                extra_cf_only.append(gate)
+        elif gate == "iv_below_midmonth":
+            vol = _vol_sidecar()
+            keep = (
+                d[8:10] >= "10"
+                and d[8:10] <= "20"
+                and _apply_vol_gate("iv_below_basevol", d, dates[i - 1] if i else None, vol)
+            )
+            if not vol:
+                extra_cf_only.append(gate)
         elif gate in {
             "opt225_skew_high",
             "nky_term_high",

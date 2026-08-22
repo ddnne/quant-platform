@@ -27,6 +27,9 @@ Multi-period policy
 Does **not** arm Mass / READY / GO / continuous paper / live.
 Does **not** retune the three frozen default-path representatives.
 Period-net screen survivors are **not** a pass (``daily_path_DD`` required).
+Candidate-grade SoT is ``POST /v1/daily-path``. Unique event/CS logics are
+**unsupported** on period-net (MDH collapse is tagged ``path_collapsed``
+and cannot survive).
 """
 
 from __future__ import annotations
@@ -277,6 +280,24 @@ def design_mass_factory_paths(job_id: str) -> dict[str, Any]:
         "screens_r2_key": f"{prefix}/screens.json",
         "ranking_r2_key": f"{prefix}/ranking.json",
     }
+
+
+def is_unique_period_net_unsupported(logic_id: str) -> bool:
+    """Unique event/CS theses are not evaluable on period-net mass-eval."""
+    from research.unique_logic.constants import (
+        CF_EVENT_DAILY_PATH_IDS,
+        CF_NEW_CS_THESIS_IDS,
+        CS_LOGIC_IDS,
+    )
+
+    lid = str(logic_id or "")
+    if lid in CF_EVENT_DAILY_PATH_IDS or lid in CF_NEW_CS_THESIS_IDS or lid in CS_LOGIC_IDS:
+        return True
+    return (
+        lid.startswith("event_")
+        or lid.startswith("surprise_xs")
+        or lid.startswith("cs_")
+    )
 
 
 def default_logic_specs(
@@ -1580,6 +1601,7 @@ def build_cf_mass_eval_job_spec(
     extra_logics: Sequence[Mapping[str, Any]] | None = None,
     mode: str = DEFAULT_MASS_EVAL_MODE,
     panels_prefix: str | None = None,
+    drop_unique_unsupported: bool = True,
 ) -> dict[str, Any]:
     """Declarative job payload for the CF mass-eval Worker."""
     mode_s = str(mode or DEFAULT_MASS_EVAL_MODE).strip()
@@ -1593,6 +1615,18 @@ def build_cf_mass_eval_job_spec(
     if extra_logics:
         for raw in extra_logics:
             logics.append(dict(raw))
+    dropped_unique: list[str] = []
+    if drop_unique_unsupported:
+        dropped_unique = [
+            str(L.get("logic_id") or "")
+            for L in logics
+            if is_unique_period_net_unsupported(str(L.get("logic_id") or ""))
+        ]
+        logics = [
+            L
+            for L in logics
+            if not is_unique_period_net_unsupported(str(L.get("logic_id") or ""))
+        ]
     default_periods: Sequence[Mapping[str, Any]] = (
         DEFAULT_REAL_MULTIYEAR_PERIODS
         if mode_s in {"r2_panels", "d1_bars"}
@@ -1610,6 +1644,9 @@ def build_cf_mass_eval_job_spec(
         "mode": mode_s,
         "panels_prefix": pfx,
         "logics": logics,
+        "dropped_unique_unsupported": dropped_unique,
+        "unique_unsupported_on_period_net": True,
+        "candidate_eval_sot": "daily_path_mtm_after_cost/v1",
         "periods": period_rows,
         "max_codes": int(max_codes),
         "max_days": int(max_days),
@@ -1897,6 +1934,8 @@ def run_cf_mass_eval_job(
         panels_prefix=str(panels_prefix),
     )
     jid = str(spec["job_id"])
+    if not spec.get("logics"):
+        skip_invoke = True
     paths = design_mass_factory_paths(jid)
     deploy_meta: dict[str, Any] | None = None
     invoke_error: str | None = None
@@ -2069,11 +2108,15 @@ def try_cf_mass_eval_status() -> dict[str, Any]:
         "screen_kind": "period_net",
         "daily_path_complete": False,
         "candidate_grade": False,
+        "candidate_eval_sot": "daily_path_mtm_after_cost/v1",
+        "unique_unsupported_on_period_net": True,
         "n_survivors_are_not_a_pass": True,
         "scale_note": (
             "Real COMPLETE-backed multi-year panels staged to R2 "
             "(mode=r2_panels). D1 tip-only via mode=d1_bars. "
-            "Period-net n_survivors is a screen, not a daily_path_DD pass. "
+            "Period-net is bar-native auxiliary only. Unique event/CS "
+            "logics collapse to MDH on this path and must not be scored "
+            "as n_survivors. Candidate SoT is daily_path. "
             "Heavy multi-year promising-only remains local class_hyp_eval."
         ),
         "synthetic_gap": (

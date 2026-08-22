@@ -55,12 +55,12 @@ prose. Update the table after a published projection.
 
 | Plane | Path |
 |-------|------|
-| candidate-grade | `research.daily_path_eval` (`daily_path_mtm_after_cost/v1`) → R2 `research/eval/job={id}/` |
-| CF screen | `research.cf_mass_eval_job` period-net only; `n_survivors` is **not** a pass |
+| **candidate SoT** | `POST /v1/daily-path` (`daily_path_mtm_after_cost/v1`) → R2 `research/eval/job={id}/` |
+| CF period-net | bar-native **auxiliary** only; unique event/CS → `path_collapsed`; `n_survivors` is **not** a pass |
 | index | `research.eval_registry` → R2 + D1 |
 | catalog | `specs/research_logics/` |
 
-Completion of a research turn requires an R2 eval job, not local JSON.
+Completion of a research turn requires an R2 **daily_path** job, not local JSON.
 Do not paste cell scores into this file. Latest recorded job id belongs in D1.
 Candidate pool (code: `CANDIDATE_POLICY`) excludes path_broken / always_on / near_empty.
-Latest empirical jobs (ids only): `eval-cf-dp-gatedfix-20260822a`, `eval-cf-dp-mf-unique-20260822a`, `eval-cf-dp-basket-20260822a`, `eval-cf-mass-screen-20260822b`.
+Latest empirical jobs (ids only): `eval-cf-dp-gated16d-20260822a`, `eval-cf-dp-baskets-20260822a`, `eval-cf-dp-mf-chg-20260822a`.

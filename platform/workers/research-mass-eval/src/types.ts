@@ -224,6 +224,7 @@ export interface PeriodEvalRow {
   hold_days?: number | null;
   signal_id?: string;
   skip_reason?: string;
+  path_collapsed?: boolean;
   error?: string;
 }
 

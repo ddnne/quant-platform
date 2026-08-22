@@ -25,6 +25,45 @@ DEFAULT_CANDIDATE_BASKET: tuple[str, ...] = (
     "overnight_down_cs_follow",
 )
 
+# Mechanical 2–5 member baskets. No correlation optimization.
+MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
+    {
+        "basket_id": "basket_head4",
+        "rule": "known_candidate_head",
+        "members": DEFAULT_CANDIDATE_BASKET,
+    },
+    {
+        "basket_id": "basket_sparse4",
+        "rule": "low_occupancy_band",
+        "members": (
+            "flow_disagree_midmonth",
+            "event_friday_easing",
+            "curve_steep_midmonth_cs",
+            "fy_end_event_fade",
+        ),
+    },
+    {
+        "basket_id": "basket_family4",
+        "rule": "family_spread",
+        "members": (
+            "event_tue_thu_easing",
+            "surprise_xs_easing_change",
+            "cs_easing_midmonth",
+            "overnight_down_skip_monday_cs",
+        ),
+    },
+    {
+        "basket_id": "basket_midocc4",
+        "rule": "mid_occupancy_band",
+        "members": (
+            "cs_tue_thu_down",
+            "rate_up_tue_thu_cs",
+            "surprise_xs_afterclose_easing",
+            "cs_skip_monday",
+        ),
+    },
+)
+
 
 def validate_basket_members(logic_ids: Sequence[str]) -> list[str]:
     ids = [str(x).strip() for x in logic_ids if str(x).strip()]
@@ -240,3 +279,41 @@ def run_combo_basket_job(
 
 def occupancy_in_candidate_band(occ: float | None) -> bool:
     return _occupancy_ok(occ)
+
+
+def mechanical_basket_defs() -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for raw in MECHANICAL_BASKETS:
+        members = tuple(str(x) for x in (raw.get("members") or ()))
+        reasons = validate_basket_members(members)
+        out.append(
+            {
+                "basket_id": str(raw["basket_id"]),
+                "rule": str(raw.get("rule") or "mechanical"),
+                "members": list(members),
+                "weights": equal_weights(len(members)),
+                "valid": not reasons,
+                "reject": reasons,
+                "promote_as_main": False,
+                "go": False,
+            }
+        )
+    return out
+
+
+def blend_mechanical_baskets(
+    cells: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Blend every mechanical basket from a shared member-cell pool."""
+    rows: list[dict[str, Any]] = []
+    for spec in mechanical_basket_defs():
+        if not spec["valid"]:
+            continue
+        rows.extend(
+            blend_window_cells(
+                cells,
+                basket_id=spec["basket_id"],
+                logic_ids=spec["members"],
+            )
+        )
+    return rows

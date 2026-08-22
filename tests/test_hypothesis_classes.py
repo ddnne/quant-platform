@@ -32,10 +32,7 @@ from research.hypothesis_classes import (
     select_generation_classes,
     validate_all_classes_have_required_fields,
 )
-from research.idea_generator import (
-    default_generation_policy,
-    generate_idea_payloads,
-)
+
 from research.scheduler import (
     ExperimentScheduler,
     select_schedule_hypothesis_classes,
@@ -172,17 +169,10 @@ def test_build_research_idea_rejects_simple_daily_sign_without_opt_in():
     assert idea.lineage["hypothesis_class"] == CLASS_SIMPLE_DAILY_SIGN
 
 
-def test_idea_generator_default_batch_no_simple_daily_sign():
-    batch = generate_idea_payloads(author="human", batch_id="w77-test")
-    assert batch.simple_daily_sign_included is False
-    assert CLASS_SIMPLE_DAILY_SIGN not in batch.class_ids
-    assert len(batch.ideas) == 6
-    for idea in batch.ideas:
-        assert idea.lineage["hypothesis_class"] != CLASS_SIMPLE_DAILY_SIGN
-        assert idea.author == "human"
-    policy = default_generation_policy()
-    assert policy["simple_daily_sign_default"] is False
-    assert CLASS_SIMPLE_DAILY_SIGN not in policy["default_class_ids"]
+def test_default_generation_mix_excludes_simple_daily_sign():
+    mix = default_generation_class_ids()
+    assert CLASS_SIMPLE_DAILY_SIGN not in mix
+    assert len(mix) >= 5
 
 
 def test_scheduler_default_mix_excludes_simple_daily_sign(tmp_path):

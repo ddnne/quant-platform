@@ -18,6 +18,7 @@ import {
   tStatVsZero,
   tStatVsZeroDetail,
 } from "./metrics";
+import { isMdhCollapseSignal } from "./mdh_collapse";
 import type {
   BarSeries,
   BarsByCode,
@@ -1404,17 +1405,20 @@ export function evalLogicOnPanel(
       }
     }
 
+    const collapsed = isMdhCollapseSignal(out.signalId);
     return {
       period_id: pid,
       year: panel.year,
-      status: "ok",
-      gross_signed_mean_active: out.gross,
-      net_one_way_mean_active: out.net,
+      status: collapsed ? "path_collapsed" : "ok",
+      gross_signed_mean_active: collapsed ? null : out.gross,
+      net_one_way_mean_active: collapsed ? null : out.net,
       amortized_one_way_cost: out.amCost,
       n_active_positions: out.nActive,
-      activation_rate: out.activation,
+      activation_rate: collapsed ? null : out.activation,
       hold_days: holdDays,
       signal_id: out.signalId,
+      path_collapsed: collapsed,
+      skip_reason: collapsed ? "unique_unsupported_on_period_net" : undefined,
     };
   } catch (e) {
     return {
@@ -1815,10 +1819,14 @@ export function barNativeHeldBook(
         const regime = repoLevelRegime(rate, highThr, lowThr);
         if (base === null) return null;
         if (base === 0) return 0;
-        if (regime === null) return null;
-        // Skip mid: otherwise occupancy matches fund_value_mom_agree (always_on).
-        if (base > 0 && regime === "low") return base;
-        if (base < 0 && regime === "high") return base;
+        if (regime === null || rate === null) return null;
+        let prevRate: number | null = null;
+        const earlier = rateDates.filter((x) => x < d);
+        if (earlier.length) prevRate = rates[earlier[earlier.length - 1]];
+        if (prevRate === null) return null;
+        // Skip mid AND require overnight change: otherwise occupancy stays always_on.
+        if (base > 0 && regime === "low" && rate < prevRate) return base;
+        if (base < 0 && regime === "high" && rate > prevRate) return base;
         return null;
       });
     }
@@ -2060,6 +2068,13 @@ export function evaluateLogicAcrossPeriods(
   // W95: demote/exclude when full-window or any 2-period subset is an
   // inflated-t low-variance artifact (fund_value_mom_agree_slow 2017 case).
   if (lowVarArtifact) rejectReasons.push("inflated_t_low_variance");
+  if (
+    periodRows.some(
+      (r) => r.path_collapsed || r.status === "path_collapsed",
+    )
+  ) {
+    rejectReasons.push("path_collapsed_unique_on_period_net");
+  }
 
   const survived = rejectReasons.length === 0;
   const freezes = freezeFields();

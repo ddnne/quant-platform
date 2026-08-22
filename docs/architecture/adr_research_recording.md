@@ -45,15 +45,18 @@ Markdown that restates numbers already in R2/D1 is not a record.
 
 ## Two eval planes
 
-1. **CF screen** — `POST /v1/mass-eval` period-net ranking (`n_survivors`).
-   Filter only. Incomplete vs checklist. **Not** a pass.
-2. **Candidate-grade** — `POST /v1/daily-path` via `research.cf_daily_path_job`
-   isolate fan-out (batch wall-clock ≈ longest isolate) + `daily_path_DD`
-   recorded to R2 `research/eval/job={id}/`. Still never auto-promotes.
+1. **Candidate-grade SoT** — `POST /v1/daily-path` via
+   `research.cf_daily_path_job` isolate fan-out + `daily_path_DD` recorded to
+   R2 `research/eval/job={id}/`. This is the **only** plane that scores unique
+   event/CS theses. Still never auto-promotes.
+2. **CF period-net auxiliary** — `POST /v1/mass-eval` for **bar-native**
+   logics only. Unique event/CS on this path collapse to MDH
+   (`path_collapsed` / `c21_lite_fallback_mdh:*`) and **must not** enter
+   `n_survivors`. `n_survivors` is never a pass.
 
-A turn is not complete until a candidate-grade job exists on R2. Worker
-`n_survivors` without `daily_path_complete` must not be treated as a survivor
-for promotion.
+A turn is not complete until a candidate-grade daily_path job exists on R2.
+Worker `n_survivors` without `daily_path_complete` must not be treated as a
+survivor for promotion.
 
 ## Consequences
 

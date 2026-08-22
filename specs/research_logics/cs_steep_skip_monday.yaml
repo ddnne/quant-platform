@@ -1,0 +1,28 @@
+logic_id: cs_steep_skip_monday
+family_id: event_macro_curve_combo
+axis: mixed
+headline: false
+generation_enabled: false
+promote_as_main: false
+go: false
+thesis: >
+  CS mom when the repo curve is steep, skipping Mondays.
+signal_definition: >
+  CS mom when the repo curve is steep, skipping Mondays.
+datasets:
+  - equities_bars_daily
+  - fins_summary
+  - jsda_tokyo_repo_rates
+  - markets_calendar
+params:
+  post_hold_days: 5
+  hold_days: 10
+  momentum_n: 5
+  min_hist: 20
+  mode: cs_steep_skip_monday
+  side: orig
+  cs_gate: curve_steep_skip_monday
+  entry_shift: 0
+  hold_tail_days: 0
+evaluator: research.unique_logic.event_combos.evaluate_combo_daily_mtm
+notes: combo thesis; occupancy-gated (target 0.05-0.85); CF daily_path is SoT

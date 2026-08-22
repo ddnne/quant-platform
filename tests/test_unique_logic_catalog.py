@@ -85,6 +85,9 @@ def test_mf_value_mom_rate_is_unique_not_alias() -> None:
 
     assert MF_VALUE_MOM_RATE_DELEGATES is False
     assert MF_VALUE_MOM_RATE_PATH == "unique_rate_gated_value_mom"
+    from research.unique_logic.constants import MF_VALUE_MOM_RATE_PARKED_ALWAYS_ON
+
+    assert MF_VALUE_MOM_RATE_PARKED_ALWAYS_ON is False
     src = (
         Path(__file__).resolve().parents[1]
         / "platform"
@@ -97,6 +100,21 @@ def test_mf_value_mom_rate_is_unique_not_alias() -> None:
     assert "not an alias of fund_value_mom_agree" in src
 
 
+def test_mass_eval_spec_drops_unique_but_keeps_bar_native() -> None:
+    from research.cf_mass_eval_job import build_cf_mass_eval_job_spec
+
+    spec = build_cf_mass_eval_job_spec(
+        job_id="eval-test-drop-unique",
+        logic_ids=["event_skip_monday", "nky_vol_abs_level"],
+        mode="synthetic",
+    )
+    lids = [str(L.get("logic_id")) for L in spec["logics"]]
+    assert "event_skip_monday" not in lids
+    assert "nky_vol_abs_level" in lids
+    assert "event_skip_monday" in spec["dropped_unique_unsupported"]
+    assert spec["candidate_eval_sot"] == "daily_path_mtm_after_cost/v1"
+
+
 def test_mass_eval_screen_is_not_candidate_grade() -> None:
     from research.cf_mass_eval_job import try_cf_mass_eval_status
 
@@ -107,6 +125,29 @@ def test_mass_eval_screen_is_not_candidate_grade() -> None:
     assert st["candidate_grade"] is False
     assert st["n_survivors_are_not_a_pass"] is True
     assert st["daily_path_complete"] is False
+    assert st["candidate_grade"] is False
+    assert st.get("unique_unsupported_on_period_net") is True
+    assert st.get("candidate_eval_sot") == "daily_path_mtm_after_cost/v1"
+
+
+def test_unique_mdh_collapse_is_not_candidate_complete() -> None:
+    from research.cf_mass_eval_job import is_unique_period_net_unsupported
+    from research.eval_registry import (
+        is_daily_path_complete_cell,
+        is_path_collapsed_cell,
+    )
+
+    assert is_unique_period_net_unsupported("event_skip_monday") is True
+    assert is_unique_period_net_unsupported("nky_vol_abs_level") is False
+    collapsed = {
+        "logic_id": "event_skip_monday",
+        "window": "y2015_full",
+        "daily_path_complete": True,
+        "signal_id": "c21_lite_fallback_mdh:event_calendar_gate",
+        "skip_reason": "unique_unsupported_on_period_net",
+    }
+    assert is_path_collapsed_cell(collapsed) is True
+    assert is_daily_path_complete_cell(collapsed) is False
 
 
 def test_factory_unique_eval_uses_package_dispatch() -> None:
@@ -153,7 +194,7 @@ def test_yaml_dispatch_worker_event_ids_align() -> None:
     assert "event_skip_monday" in yaml_ids
     assert "cs_not_month_end" in yaml_ids
     assert "event_skip_monday" in CF_NEW_THESIS_IDS
-    assert len(CF_NEW_THESIS_IDS) >= 80
+    assert len(CF_NEW_THESIS_IDS) >= 96
 
 
 def test_worker_new_thesis_ids_match_python() -> None:

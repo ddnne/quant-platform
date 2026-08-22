@@ -190,6 +190,22 @@ def test_always_on_gate_is_never_candidate() -> None:
     assert row["main_pool"] is False
 
 
+def test_mechanical_baskets_are_four_valid_defs() -> None:
+    from research.combo_basket import mechanical_basket_defs, validate_basket_members
+    from research.unique_logic.constants import CANDIDATE_POLICY
+
+    defs = mechanical_basket_defs()
+    assert len(defs) >= 4
+    ids = [d["basket_id"] for d in defs]
+    assert len(ids) == len(set(ids))
+    for d in defs:
+        assert d["valid"] is True
+        assert d["go"] is False
+        assert 2 <= len(d["members"]) <= 5
+        assert validate_basket_members(d["members"]) == []
+        assert CANDIDATE_POLICY["go"] is False
+
+
 def test_combo_basket_blend_is_equal_weight() -> None:
     from research.combo_basket import (
         DEFAULT_CANDIDATE_BASKET,

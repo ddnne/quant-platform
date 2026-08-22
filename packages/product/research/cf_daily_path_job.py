@@ -178,6 +178,7 @@ def run_cf_daily_path_fanout(
             seed=seed,
             mode=mode,
             panels_prefix=panels_prefix,
+            drop_unique_unsupported=False,
         )
         spec["eval_kind"] = "daily_path"
         spec["write_artifacts"] = False

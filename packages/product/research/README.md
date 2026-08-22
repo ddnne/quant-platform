@@ -178,7 +178,6 @@ from research.hypothesis_classes import (
     select_generation_classes,
     assert_simple_daily_sign_not_default_enabled,
 )
-from research.idea_generator import generate_idea_payloads
 from research.scheduler import select_schedule_hypothesis_classes
 
 assert_simple_daily_sign_not_default_enabled()
@@ -189,9 +188,6 @@ assert CLASS_SIMPLE_DAILY_SIGN not in default_generation_class_ids()
 mix = select_generation_classes()
 assert CLASS_SIMPLE_DAILY_SIGN not in mix
 
-# simple_daily_sign only via explicit opt-in (and never alone as mass-default)
-batch = generate_idea_payloads(author="human", batch_id="demo")
-assert batch.simple_daily_sign_included is False
 sched_mix = select_schedule_hypothesis_classes()
 assert sched_mix.simple_daily_sign_default_off is True
 ```
@@ -206,7 +202,7 @@ assert sched_mix.simple_daily_sign_default_off is True
 | `flow_demand` | ON | … |
 | `simple_daily_sign` | **OFF** (opt-in) | **lowest** |
 
-Module: [`hypothesis_classes.py`](hypothesis_classes.py) · generator: [`idea_generator.py`](idea_generator.py).  
+Module: [`hypothesis_classes.py`](hypothesis_classes.py).  
 Proof: `docs/proof/w0816k_w77_hypothesis_space_redesign_20260816.md`.  
 Tests: `tests/test_hypothesis_classes.py`.
 

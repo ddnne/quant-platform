@@ -18,10 +18,27 @@ R2_BUCKET: str = "quant-structured"
 R2_PREFIX: str = "research/eval"
 PROTOCOL_CF_SCREEN: str = "cf_mass_eval_period_net"
 PROTOCOL_DAILY_PATH: str = "daily_path_mtm_after_cost/v1"
+# Candidate SoT is daily_path. Period-net is bar-native auxiliary only.
+CANDIDATE_EVAL_SOT: str = PROTOCOL_DAILY_PATH
+PERIOD_NET_NOT_CANDIDATE_GRADE: bool = True
+
+
+def is_path_collapsed_cell(cell: Mapping[str, Any]) -> bool:
+    """True when period-net MDH fallback ate a unique/event/CS logic."""
+    extra = cell.get("extra") if isinstance(cell.get("extra"), Mapping) else {}
+    if cell.get("path_collapsed") or extra.get("path_collapsed"):
+        return True
+    sig = str(cell.get("signal_id") or extra.get("signal_id") or "")
+    if sig.startswith("c21_lite_fallback_mdh"):
+        return True
+    reason = str(cell.get("skip_reason") or extra.get("skip_reason") or "")
+    return reason.startswith("unique_unsupported") or reason.startswith("path_collapsed")
 
 
 def is_path_broken_cell(cell: Mapping[str, Any]) -> bool:
     """True when the eval path is generic CS/MDH fallback or tagged broken."""
+    if is_path_collapsed_cell(cell):
+        return True
     extra = cell.get("extra") if isinstance(cell.get("extra"), Mapping) else {}
     path = str(cell.get("eval_path") or extra.get("eval_path") or "")
     fallback = str(cell.get("path_fallback") or extra.get("path_fallback") or "")

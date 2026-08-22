@@ -1023,8 +1023,10 @@ def _build_logic_templates() -> dict[str, LogicTemplate]:
             structural_keys=("mode",),
             notes=(
                 "Unique rate-gated value×mom (not an alias of fund_value_mom_agree). "
-                "Long only in easy overnight, short only in tight overnight; mid skipped. "
-                "Occupancy>=0.85 still parks it from the candidate/main pool."
+                "Long only on overnight decline in easy regime; short only on "
+                "overnight rise in tight regime; mid skipped. "
+                "eval-cf-dp-mf-chg occupancy sits just under always_on; "
+                "live candidate filter is occupancy. No densify."
             ),
         ),
         LogicTemplate(
@@ -5254,7 +5256,7 @@ def llm_logic_entry_status() -> dict[str, Any]:
         ),
         "preferred_model": "grok-4.6 (xAI api.x.ai)",
         "fallback_model": "@cf/openai/gpt-oss-120b (Workers AI)",
-        "declaration_helper": "research.idea_generator.generate_idea_payloads",
+        "declaration_helper": "research.hypothesis_classes.build_research_idea_payload",
         "rules": {
             "require": [
                 "thesis (what earns)",
@@ -5280,7 +5282,7 @@ def llm_logic_entry_status() -> dict[str, Any]:
         "near_logic_groups": near_logic_groups_document(),
         "note": (
             "Hypothesis entry is propose_profit_hypotheses "
-            "(always through evaluator). idea_generator remains ResearchIdea helper."
+            "(always through evaluator)."
         ),
         "always_through_evaluator": True,
         **_freeze(),

@@ -1,0 +1,28 @@
+logic_id: nky_vol_compress_midmonth_cs
+family_id: xs_low_vol_mom
+axis: mixed
+headline: false
+generation_enabled: false
+promote_as_main: false
+go: false
+thesis: >
+  CS mom mid-month only when NKY vol term compressed versus the prior print.
+signal_definition: >
+  CS mom mid-month only when NKY vol term compressed versus the prior print.
+datasets:
+  - equities_bars_daily
+  - fins_summary
+  - jsda_tokyo_repo_rates
+  - markets_calendar
+params:
+  post_hold_days: 5
+  hold_days: 10
+  momentum_n: 5
+  min_hist: 20
+  mode: nky_vol_compress_midmonth_cs
+  side: orig
+  cs_gate: nky_compress_midmonth
+  entry_shift: 0
+  hold_tail_days: 0
+evaluator: research.unique_logic.event_combos.evaluate_combo_daily_mtm
+notes: combo thesis; occupancy-gated (target 0.05-0.85); CF daily_path is SoT

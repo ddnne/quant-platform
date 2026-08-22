@@ -362,6 +362,14 @@ export const CF_UNIQUE_CS_LOGIC_IDS = [
   "flow_disagree_midmonth",
   "curve_steep_midmonth_cs",
   "rate_up_tue_thu_cs",
+  "cs_steep_skip_monday",
+  "cs_midmonth_tight_fade",
+  "flow_disagree_tue_thu",
+  "iv_below_midmonth_cs",
+  "overnight_down_first_half_cs",
+  "rate_up_midmonth_cs",
+  "cs_month_start_easing",
+  "nky_vol_compress_midmonth_cs",
 ] as const;
 
 function usesCrossSection(logic: LogicSpec): boolean {
@@ -443,6 +451,14 @@ export const CF_NEW_EVENT_THESIS_IDS = [
   "surprise_xs_midmonth",
   "surprise_xs_easing_change",
   "surprise_xs_afterclose_easing",
+  "event_tue_thu_uncrowded",
+  "event_afterclose_easing",
+  "event_may_easing",
+  "event_skip_monday_uncrowded",
+  "event_first_half_easing",
+  "surprise_xs_skip_monday",
+  "surprise_xs_friday_skip",
+  "surprise_xs_uncrowded",
 ] as const;
 
 export const CF_NEW_CS_THESIS_IDS = [
@@ -481,6 +497,14 @@ export const CF_NEW_CS_THESIS_IDS = [
   "flow_disagree_midmonth",
   "curve_steep_midmonth_cs",
   "rate_up_tue_thu_cs",
+  "cs_steep_skip_monday",
+  "cs_midmonth_tight_fade",
+  "flow_disagree_tue_thu",
+  "iv_below_midmonth_cs",
+  "overnight_down_first_half_cs",
+  "rate_up_midmonth_cs",
+  "cs_month_start_easing",
+  "nky_vol_compress_midmonth_cs",
 ] as const;
 
 export const CF_EVENT_LOGIC_IDS = [
@@ -943,6 +967,53 @@ function eventHeld(
         )
           ok = false;
       }
+      if (lid === "event_tue_thu_uncrowded") {
+        if (![1, 2, 3].includes(weekdayMon0(ev.entryDate))) ok = false;
+        else if (!marginGate(false)) ok = false;
+      }
+      if (lid === "event_afterclose_easing") {
+        const prevs = Object.keys(overnight)
+          .filter((x) => x < ev.entryDate)
+          .sort();
+        const on = overnight[ev.entryDate];
+        if (!ev.after) ok = false;
+        else if (
+          !prevs.length ||
+          on === undefined ||
+          on >= overnight[prevs[prevs.length - 1]]
+        )
+          ok = false;
+      }
+      if (lid === "event_may_easing") {
+        const prevs = Object.keys(overnight)
+          .filter((x) => x < ev.entryDate)
+          .sort();
+        const on = overnight[ev.entryDate];
+        if (ev.entryDate.slice(5, 7) !== "05") ok = false;
+        else if (
+          !prevs.length ||
+          on === undefined ||
+          on >= overnight[prevs[prevs.length - 1]]
+        )
+          ok = false;
+      }
+      if (lid === "event_skip_monday_uncrowded") {
+        if (weekdayMon0(ev.entryDate) === 0) ok = false;
+        else if (!marginGate(false)) ok = false;
+      }
+      if (lid === "event_first_half_easing") {
+        const prevs = Object.keys(overnight)
+          .filter((x) => x < ev.entryDate)
+          .sort();
+        const on = overnight[ev.entryDate];
+        if (ev.entryDate.slice(8, 10) > "15") ok = false;
+        else if (
+          !prevs.length ||
+          on === undefined ||
+          on >= overnight[prevs[prevs.length - 1]]
+        )
+          ok = false;
+      }
       if (!ok) continue;
       let i0 = ev.entryIdx;
       if (lid === "event_skip_announce_day") i0 += 1;
@@ -1000,7 +1071,10 @@ function eventHeld(
     lid === "surprise_xs_tue_thu" ||
     lid === "surprise_xs_midmonth" ||
     lid === "surprise_xs_easing_change" ||
-    lid === "surprise_xs_afterclose_easing"
+    lid === "surprise_xs_afterclose_easing" ||
+    lid === "surprise_xs_skip_monday" ||
+    lid === "surprise_xs_friday_skip" ||
+    lid === "surprise_xs_uncrowded"
   ) {
     const invert = lid.includes("flip");
     const dates = unionDates(panel.bars);
@@ -1063,6 +1137,20 @@ function eventHeld(
           )
             continue;
         }
+        if (lid === "surprise_xs_skip_monday" && weekdayMon0(ev.entryDate) === 0)
+          continue;
+        if (lid === "surprise_xs_friday_skip" && weekdayMon0(ev.entryDate) === 4)
+          continue;
+        if (lid === "surprise_xs_uncrowded") {
+          const levels = panel.flow_regime?.margin_level_by_code?.[ev.code] || {};
+          const prior = Object.keys(levels)
+            .filter((d) => d < ev.entryDate)
+            .sort();
+          if (!prior.length) continue;
+          const lastD = prior[prior.length - 1];
+          const med = pitMedian(levels, ev.entryDate, minHist);
+          if (med === null || (levels[lastD] as number) >= med) continue;
+        }
         for (let j = ev.entryIdx; j < Math.min(ev.entryIdx + holdDays, pack.dlist.length); j++) {
           const d = pack.dlist[j];
           if (!surpriseByDate[d]) surpriseByDate[d] = {};
@@ -1086,7 +1174,10 @@ function eventHeld(
       lid === "surprise_xs_fy_end" ||
       lid === "surprise_xs_midmonth" ||
       lid === "surprise_xs_easing_change" ||
-      lid === "surprise_xs_afterclose_easing";
+      lid === "surprise_xs_afterclose_easing" ||
+      lid === "surprise_xs_skip_monday" ||
+      lid === "surprise_xs_friday_skip" ||
+      lid === "surprise_xs_uncrowded";
     for (const [code, pack] of Object.entries(perCode)) {
       xsHeld[code] = {};
       if (gatedSparse) {
@@ -1210,7 +1301,9 @@ function gatedCsHeld(
     lid === "overnight_up_cs_fade" ||
     lid === "cs_friday_fade" ||
     lid === "cs_friday_tight_fade" ||
-    lid === "flow_disagree_midmonth";
+    lid === "flow_disagree_midmonth" ||
+    lid === "cs_midmonth_tight_fade" ||
+    lid === "flow_disagree_tue_thu";
   const base = csHeld(panel.bars, 5, 10, 0.3, 0.3, invert);
   const overnight =
     panel.repo_rate_regime?.rates_by_date ||
@@ -1410,6 +1503,55 @@ function gatedCsHeld(
           finite(overnight[prev]) &&
           on !== undefined &&
           on > overnight[prev];
+      } else if (lid === "cs_steep_skip_monday") {
+        keep = weekdayMon0(d) !== 0 && spread[d] !== undefined && spread[d] > 0;
+      } else if (lid === "cs_midmonth_tight_fade") {
+        const dd = d.slice(8, 10);
+        keep =
+          dd >= "10" &&
+          dd <= "20" &&
+          prev !== null &&
+          finite(overnight[prev]) &&
+          on !== undefined &&
+          on > overnight[prev];
+      } else if (lid === "flow_disagree_tue_thu") {
+        const chg = panel.flow_regime?.margin_change_by_code?.[code]?.[d];
+        keep = [1, 2, 3].includes(weekdayMon0(d)) && finite(chg) && chg > 0;
+      } else if (lid === "iv_below_midmonth_cs") {
+        const dd = d.slice(8, 10);
+        keep = dd >= "10" && dd <= "20" && finite(ivSpread[d]) && ivSpread[d] < 0;
+      } else if (lid === "overnight_down_first_half_cs") {
+        keep =
+          d.slice(8, 10) <= "15" &&
+          prev !== null &&
+          finite(overnight[prev]) &&
+          on !== undefined &&
+          on < overnight[prev];
+      } else if (lid === "rate_up_midmonth_cs") {
+        const dd = d.slice(8, 10);
+        keep =
+          dd >= "10" &&
+          dd <= "20" &&
+          prev !== null &&
+          finite(overnight[prev]) &&
+          on !== undefined &&
+          on > overnight[prev];
+      } else if (lid === "cs_month_start_easing") {
+        keep =
+          d.slice(8, 10) <= "05" &&
+          prev !== null &&
+          finite(overnight[prev]) &&
+          on !== undefined &&
+          on < overnight[prev];
+      } else if (lid === "nky_vol_compress_midmonth_cs") {
+        const dd = d.slice(8, 10);
+        keep =
+          dd >= "10" &&
+          dd <= "20" &&
+          prev !== null &&
+          finite(nkyTerm[d]) &&
+          finite(nkyTerm[prev]) &&
+          nkyTerm[d] < nkyTerm[prev];
       } else if (lid === "overnight_level_cs_tilt") {
         keep = on !== undefined && medOn !== null && on >= medOn;
       } else if (lid === "overnight_easy_cs_follow") {
