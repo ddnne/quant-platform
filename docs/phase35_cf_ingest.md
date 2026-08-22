@@ -1,5 +1,9 @@
 # Phase 3.5 — CF J-Quants Premium Ingestion Closed Loop
 
+> **Live residual / GO SoT:** [`phase62_residual_status.md`](phase62_residual_status.md)
+> (Mass NO-GO · Phase 7 OFF). This file is domain/runbook history (2026-08-11),
+> not live COMPLETE counts.
+
 The Cloudflare Worker `quant-platform-ingestion-premium` implements the
 J-Quants **Premium core** ingestion loop end-to-end on CF. Once its resources,
 migration, existing secret values, Worker, and Cron Trigger are deployed, it

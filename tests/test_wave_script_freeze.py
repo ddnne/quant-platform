@@ -63,3 +63,6 @@ def test_residual_is_live_flags_only() -> None:
     assert "daily_path_eval" in text
     assert "eval_registry" in text
     assert "NO-GO" in text
+    assert "PARSE_ZERO" in text
+    assert "2002-08-02" in text
+    assert "2002-08-05" in text

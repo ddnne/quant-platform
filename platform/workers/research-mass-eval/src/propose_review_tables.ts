@@ -47,7 +47,7 @@ export const GATE_OCCUPANCY_LABEL: Array<[string, string[]]> = [
   ["eps_up", ["earnings per share are rising", "eps are rising", "eps is rising", "rising earnings per share", "rising eps"]],
   ["sales_down", ["sales are down", "sales down", "falling sales"]],
   ["tight_funding", ["funding conditions are tight"]],
-  ["price_down", ["under pressure", "price pressure", "price is low", "price is falling", "price falling", "prices drop", "price drops"]],
+  ["price_down", ["under pressure", "price pressure", "price is low", "price is falling", "price falling", "falling price", "prices drop", "price drops"]],
   ["crowded_margin", ["market is crowded"]],
 ];
 
@@ -88,6 +88,7 @@ export const EXTRA_TITLE_GATES: Array<[string, string]> = [
   ["high net profits", "np_negative"],
   ["sales contraction", "sales_down"],
   ["sales contracted", "sales_down"],
+  ["sales will contract", "sales_down"],
   ["poor sales", "sales_down"],
   ["sales performance", "sales_down"],
   ["sales decline", "sales_down"],
@@ -136,6 +137,7 @@ export const OCCUPANCY_EXTRA_TITLE: Array<[string, string[]]> = [
   ["eps down", ["eps_down"]],
   ["eps is down", ["eps_down"]],
   ["eps is rising", ["eps_up"]],
+  ["falling price", ["price_down"]],
   ["falling sales", ["sales_down"]],
   ["flattening", ["curve_flatten"]],
   ["funding at 10", ["overnight_p10"]],

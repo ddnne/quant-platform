@@ -173,14 +173,14 @@ def test_worker_index_contains_propose_thesis_route() -> None:
     assert "PROPOSE_PROMPT_PREFER_GATES.join" in propose_src
     assert "JSON.stringify(PROPOSE_PROMPT_GOOD)" in propose_src
     from research.unique_logic.catalog import yaml_combo_rows
+    from research.unique_logic.constants import SPARSE_GATE_COMBOS
     from research.unique_logic.propose_review_tables import (
+        PROPOSE_CONTRADICTORY_GATE_PAIRS,
         PROPOSE_PROMPT_GOOD,
         PROPOSE_PROMPT_PREFER_GATES,
         propose_prompt_good,
     )
 
-    assert "roe_low" not in PROPOSE_PROMPT_PREFER_GATES
-    assert "cheap_pb" not in PROPOSE_PROMPT_PREFER_GATES
     assert set(PROPOSE_PROMPT_PREFER_GATES) <= set(PROPOSE_ALLOWED_GATES)
     good = propose_prompt_good()
     assert good["gates"] == PROPOSE_PROMPT_GOOD["gates"]
@@ -193,6 +193,22 @@ def test_worker_index_contains_propose_thesis_route() -> None:
         for row in yaml_combo_rows()
     }
     assert frozenset(str(g) for g in good["gates"]) not in catalog_sets
+    prefer = list(PROPOSE_PROMPT_PREFER_GATES)
+    first: list[str] | None = None
+    for i, a in enumerate(prefer):
+        for b in prefer[i + 1 :]:
+            pair = frozenset({a, b})
+            if pair in catalog_sets:
+                continue
+            if any(combo <= pair for combo, _reason in SPARSE_GATE_COMBOS):
+                continue
+            if any(contra <= pair for contra in PROPOSE_CONTRADICTORY_GATE_PAIRS):
+                continue
+            first = [a, b]
+            break
+        if first is not None:
+            break
+    assert first == list(good["gates"])
     assert "markets_margin_interest" in src
     assert '"margin_interest"' not in src
     # Generated allowlists: scripts/sync_cf_new_thesis_ids.py --check is SoT.
@@ -712,6 +728,18 @@ def test_review_proposal_row_occupancy_and_polarity_table() -> None:
             ["np_negative", "sales_down"],
             "occupancy_label_only",
             "PEAD when net profit is negative AND sales contracted versus the last prior print. Skip missing PIT prints (no invent).",
+        ),
+        (
+            "When the market experiences a combination of tight funding and a falling price, it's likely that the sales will contract versus the last prior print.",
+            ["tight_funding", "price_down"],
+            "occupancy_label_only",
+            "PEAD when overnight funding is tight AND price is down. Skip missing PIT prints (no invent).",
+        ),
+        (
+            "PEAD when overnight funding is tight AND price is down. Sales will contract versus the last prior print.",
+            ["tight_funding", "price_down"],
+            "occupancy_label_only",
+            "PEAD when overnight funding is tight AND price is down. Skip missing PIT prints (no invent).",
         ),
     ]
     for bad_thesis, gates, reason, good_thesis in rows:

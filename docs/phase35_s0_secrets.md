@@ -1,5 +1,8 @@
 # Phase 3.5 S0 — CF Secrets バインド確認
 
+> **Live residual / GO SoT:** [`phase62_residual_status.md`](phase62_residual_status.md)
+> (Mass NO-GO · Phase 7 OFF). Historical bind check (2026-08-11), not live GO.
+
 **確認日:** 2026-08-11  
 **結果:** **CF に設定済み**
 

@@ -1,5 +1,8 @@
 # Phase 3.5 — Validation Matrix (coverage catalog)
 
+> **Live residual / GO SoT:** [`phase62_residual_status.md`](phase62_residual_status.md)
+> (Mass NO-GO · Phase 7 OFF). Check catalog, not live B0/READY.
+
 This is the **canonical catalog** of Premium-core (23 datasets) data-quality
 checks. Job-level pass/fail (`cf_platform.ingest_premium.validate`) remains
 necessary but **not sufficient**.

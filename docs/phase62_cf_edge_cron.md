@@ -1,5 +1,8 @@
 # Phase 6.2 ops-projection scheduling — CF edge cron decision
 
+> **Live residual / GO SoT:** [`phase62_residual_status.md`](phase62_residual_status.md)
+> (Mass NO-GO · Phase 7 OFF). This scheduling decision is not operational GO.
+
 **Status**: PARTIAL — host-cron production path exists; CF edge cron **intentionally not used** for projection.
 **Date**: 2026-08-11
 **Scope**: how the Ops MCP projection (coverage / B0 / READY metadata served by

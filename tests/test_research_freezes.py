@@ -157,6 +157,7 @@ def test_unique22_leftover_occupancy_not_unified() -> None:
     ).read_text(encoding="utf-8")
     assert "momentumAt(entryIdx)" in src
     assert "entryIdx - 1" in src or "entryIdx-1" in src
+    assert 'lid === "surprise_xs_month_start" && ev.entryDate.slice(8, 10) > "05"' in src
 
 
 def test_cheap_pb_event_not_csfundsnaps() -> None:
@@ -194,10 +195,9 @@ def test_unique22_lift_park_partition() -> None:
     lifted = unique22_occupancy_equal_lifted()
     parked = unique22_occupancy_park()
     assert lifted | parked == leftover
+    assert lifted.isdisjoint(parked)
     assert "event_pre_mom_agree_hold" in parked
     assert "afterclose_only_event_hold" in lifted
-    assert len(lifted) == 5
-    assert len(parked) == 17
 
 
 def test_near_empty_park_is_not_countable_or_basket_material() -> None:

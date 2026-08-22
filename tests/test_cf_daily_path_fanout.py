@@ -187,6 +187,8 @@ def test_eval_tracks_are_two_and_not_head_n() -> None:
     assert "no_go_until_both_tracks" in qids
     assert "unique22_leftover_lids" in qids
     assert "month_start_leftover_hold" in qids
+    assert "otc_parse_zero" in qids
+    assert "cheap_pb_event_reuse" in qids
 
 
 def test_rank_eval_codes_is_not_head_n_and_skips_missing() -> None:

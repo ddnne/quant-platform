@@ -1,5 +1,8 @@
 # Phase 3.5 P0-3 — Storage scale path (R2 bulk timeseries + D1 control plane)
 
+> **Live residual / GO SoT:** [`phase62_residual_status.md`](phase62_residual_status.md)
+> (Mass NO-GO · Phase 7 OFF). Storage-split design, not live COMPLETE/READY.
+
 The Phase 3.5 closed loop currently writes **every** Premium core row into D1
 (`jquants_records` + `*_revisions`). That is fine for the 23 core datasets at
 hourly cadence — low millions of rows per year — but it is **not** the right

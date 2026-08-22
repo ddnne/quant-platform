@@ -3,6 +3,10 @@
 **Status:** live policy (2026-08-21)  
 **ADR:** [`adr_research_recording.md`](./adr_research_recording.md)
 
+Existing `docs/proof/` files are **historical evidence**, not live scores and
+not operational GO. Query R2 + D1 for eval. Do not add new wave scorecards;
+do not treat the warehouse as residual SoT.
+
 **Do not add new** `scripts/run_w*.py` or `docs/proof/w08*_wNN_*.md` scorecards.
 Evaluators live in `packages/product/research/unique_logic/` under **functional
 names** (not wave numbers). New research: `research.daily_path_eval` /

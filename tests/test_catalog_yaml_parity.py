@@ -247,8 +247,6 @@ def test_economic_theme_ids_from_yaml() -> None:
 
 
 def test_python_only_event_gates_skip_catalog() -> None:
-    from pathlib import Path
-
     from research.unique_logic.event_combos import NEW_COMBO_LOGIC
 
     assert WORKER_PYTHON_ONLY_GATE_POLICY == "python_local_or_lid_branch"
@@ -266,23 +264,12 @@ def test_python_only_event_gates_skip_catalog() -> None:
     assert catalog == intersecting
     assert catalog == frozenset()
 
-    src = (
-        Path(__file__).resolve().parents[1]
-        / "platform"
-        / "workers"
-        / "research-mass-eval"
-        / "src"
-        / "daily_path.ts"
-    ).read_text(encoding="utf-8")
-    assert 'lid === "surprise_xs_month_start" && ev.entryDate.slice(8, 10) > "05"' in src
-
 
 def test_event_cheap_pb_gate_in_combo_and_yaml() -> None:
     """cheap_pb stays a COMBO event gate; YAML pead lists it. Not a CS reuse."""
     import re
     from pathlib import Path
 
-    from research.eval_tracks import NEXT_RESEARCH_QUEUE
     from research.unique_logic.catalog import combo_row_from_yaml, parse_catalog_yaml
     from research.unique_logic.constants import CHEAP_PB_EVENT_VS_CS, COMBO_EVENT_GATES
 
@@ -327,23 +314,6 @@ def test_event_cheap_pb_gate_in_combo_and_yaml() -> None:
     assert "ev.bps" in body
     assert "reverse().find" in body
     assert "extras?.cheapPb" not in body
-    assert any(q.get("id") == "cheap_pb_event_reuse" for q in NEXT_RESEARCH_QUEUE)
-
-
-def test_otc_parse_zero_2002_not_invented_complete() -> None:
-    from pathlib import Path
-
-    from research.eval_tracks import NEXT_RESEARCH_QUEUE
-
-    residual = (
-        Path(__file__).resolve().parents[1]
-        / "docs"
-        / "phase62_residual_status.md"
-    ).read_text(encoding="utf-8")
-    assert "2002-08-02" in residual
-    assert "2002-08-05" in residual
-    assert "PARSE_ZERO" in residual
-    assert any(q.get("id") == "otc_parse_zero" for q in NEXT_RESEARCH_QUEUE)
 
 
 def test_countable_thesis_ids_require_worker_body() -> None:
