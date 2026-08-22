@@ -50,7 +50,6 @@ def _freeze_fields() -> dict[str, Any]:
         "edge_claimed": EDGE_CLAIMED,
         "connected_to_ready": CONNECTED_TO_READY,
         "connected_to_mass": CONNECTED_TO_MASS,
-        "label": HOLDING_METRICS_LABEL,
     }
 
 
@@ -146,10 +145,9 @@ def histogram_run_lengths(
     *,
     buckets: Sequence[tuple[int, int | None]] | None = None,
 ) -> list[dict[str, Any]]:
-    """Bucket run lengths into histogram rows ``{label, lo, hi, count, share}``."""
+    """Bucket run lengths into histogram rows ``{label, lo, hi, count}``."""
     bks = list(buckets) if buckets is not None else list(DEFAULT_HISTOGRAM_BUCKETS)
     counts = [0 for _ in bks]
-    total = 0
     for raw in run_lengths:
         try:
             L = int(raw)
@@ -157,7 +155,6 @@ def histogram_run_lengths(
             continue
         if L <= 0:
             continue
-        total += 1
         for i, (lo, hi) in enumerate(bks):
             if L < lo:
                 continue
@@ -172,7 +169,6 @@ def histogram_run_lengths(
                 "lo": lo,
                 "hi": hi,
                 "count": int(c),
-                "share": (float(c) / float(total)) if total else None,
             }
         )
     return out
@@ -289,8 +285,6 @@ def panel_run_length_stats(
     dist = run_length_distribution(all_runs, histogram_buckets=histogram_buckets)
     n_codes = len(by_code)
     n_records = len(records)
-    mean_hold = dist.get("mean")
-    turnover_proxy = (1.0 / mean_hold) if mean_hold and mean_hold > 0 else None
 
     out: dict[str, Any] = {
         "version": HOLDING_METRICS_VERSION,
@@ -298,7 +292,6 @@ def panel_run_length_stats(
         "n_records": n_records,
         "n_runs_total": dist["n_runs"],
         "run_length": dist,
-        "turnover_proxy_per_day": turnover_proxy,
         "per_code_mean_run_length": per_code_mean,
         "non_zero_only": bool(non_zero_only),
     }
@@ -346,7 +339,6 @@ def extract_sign_panel_from_batch_summary(
     per_day = list(batch_summary.get("per_day") or [])
     records: list[dict[str, Any]] = []
     source = "empty"
-    dates: list[str] = []
 
     sample_records: list[dict[str, Any]] = []
     if prefer_sample_values:
@@ -371,7 +363,6 @@ def extract_sign_panel_from_batch_summary(
                 )
 
     # Detect whether majority expansion is faithful (all mass on one sign).
-    unanimous_days = 0
     mixed_days = 0
     majority_records: list[dict[str, Any]] = []
     if expand_majority_to_codes and codes:
@@ -379,16 +370,13 @@ def extract_sign_panel_from_batch_summary(
             date_s = str(day.get("date") or day.get("as_of") or "")[:10]
             if not date_s:
                 continue
-            dates.append(date_s)
             sd = day.get("sign_distribution") or {}
             maj = majority_sign_from_distribution(sd)
             p1 = int(sd.get("+1") or 0)
             m1 = int(sd.get("-1") or 0)
             z = int(sd.get("0") or 0)
             active = p1 + m1 + z
-            if active > 0 and max(p1, m1, z) == active:
-                unanimous_days += 1
-            elif active > 0:
+            if active > 0 and max(p1, m1, z) != active:
                 mixed_days += 1
             for code in codes:
                 majority_records.append(
@@ -406,7 +394,6 @@ def extract_sign_panel_from_batch_summary(
     elif sample_records:
         records = sample_records
         source = "sample_values_partial"
-        dates = sorted({r["date"] for r in records})
     elif majority_records:
         records = majority_records
         source = "sign_distribution_majority_expanded_mixed"
@@ -414,19 +401,10 @@ def extract_sign_panel_from_batch_summary(
         records = []
         source = "empty"
 
-    if not dates:
-        dates = sorted({r["date"] for r in records})
-
     out: dict[str, Any] = {
         "version": HOLDING_METRICS_VERSION,
         "source": source,
-        "signal_id": batch_summary.get("signal_id"),
-        "job_id": batch_summary.get("job_id"),
-        "codes": codes,
-        "dates": dates,
         "n_records": len(records),
-        "unanimous_days": unanimous_days,
-        "mixed_days": mixed_days,
         "records": records,
     }
     out.update(_freeze_fields())
@@ -486,8 +464,6 @@ def cost_amortization_report(
         "version": HOLDING_METRICS_VERSION,
         "one_way_cost": c,
         "one_way_cost_bp": bp,
-        "round_trip_cost": 2.0 * c,
-        "round_trip_cost_bp": 2.0 * bp,
         "rows": rows,
     }
     out.update(_freeze_fields())
@@ -521,17 +497,6 @@ def holding_metrics_report(
             one_way_cost=one_way_cost,
             hold_days=hold_days,
         )
-        mean_hold = (stats.get("run_length") or {}).get("mean")
-        c = float(one_way_cost)
-        if mean_hold and mean_hold > 0:
-            out["implied_at_mean_hold"] = {
-                "mean_hold_days": mean_hold,
-                "one_way_cost": c,
-                "effective_daily_cost": c / float(mean_hold),
-                "effective_daily_cost_bp": (c / float(mean_hold)) * 10_000.0,
-            }
-        else:
-            out["implied_at_mean_hold"] = None
     if meta:
         out["meta"] = dict(meta)
     out.update(_freeze_fields())

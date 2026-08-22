@@ -30,7 +30,6 @@ from features.research_freezes import (
 )
 
 STATS_METRICS_VERSION: str = "research-stats-metrics/v1.2"
-STATS_METRICS_WAVE: str = "W100 / w0819c"
 
 DEFAULT_MIN_PAYOFF: float | None = None
 DEFAULT_MAX_ABS_DRAWDOWN: float | None = None
@@ -41,11 +40,6 @@ LOW_VARIANCE_MAX_ABS_T: float = 12.0
 LOW_VARIANCE_REASON: str = "low_variance_artifact"
 
 DAILY_PATH_DD_VERSION: str = "research-daily-path-dd/v1"
-DAILY_PATH_DD_WAVE: str = "W100 / w0819c"
-DAILY_PATH_DD_PROOF: str = "docs/proof/w0819c_w100_daily_path_dd_gate_20260819.md"
-DAILY_PATH_DD_REFERENCE_PROOF: str = (
-    "docs/proof/w0819b_w99_sticky_daily_dd_20260819.md"
-)
 DAILY_PATH_DD_REQUIRED_FIELDS: tuple[str, ...] = (
     "daily_path_DD",
     "dd_duration",
@@ -64,38 +58,32 @@ W99_STICKY_DAILY_PATH_DD_REFERENCE: tuple[dict[str, Any], ...] = (
     {
         "window": "w2017_2019",
         "logic_id": "xs_rank_ls_sticky",
-        "n_days": 272,
         "daily_path_DD": -0.143741,
         "dd_duration": 85,
         "recovery_days": None,
         "recovered": False,
         "total_ret_net": 0.034975,
         "period_net_DD_w98_cf_artifact": 0.0,
-        "period_net_DD_local_proxy": -0.0023,
     },
     {
         "window": "w2020_2022",
         "logic_id": "xs_rank_ls_sticky",
-        "n_days": 193,
         "daily_path_DD": -0.037971,
         "dd_duration": 14,
         "recovery_days": 1,
         "recovered": True,
         "total_ret_net": 0.201923,
         "period_net_DD_w98_cf_artifact": 0.0,
-        "period_net_DD_local_proxy": 0.0,
     },
     {
         "window": "w2023_2025",
         "logic_id": "xs_rank_ls_sticky",
-        "n_days": 273,
         "daily_path_DD": -0.108415,
         "dd_duration": 17,
         "recovery_days": 52,
         "recovered": True,
         "total_ret_net": 0.081073,
         "period_net_DD_w98_cf_artifact": 0.0,
-        "period_net_DD_local_proxy": 0.0,
     },
 )
 
@@ -181,7 +169,6 @@ def t_stat_vs_zero(values: Sequence[float | None]) -> dict[str, Any]:
             "n": 0,
             "mean": None,
             "std": None,
-            "se": None,
             "t_stat": None,
             "abs_t_stat": None,
             "reason": "no_values",
@@ -192,7 +179,6 @@ def t_stat_vs_zero(values: Sequence[float | None]) -> dict[str, Any]:
             "n": 1,
             "mean": m,
             "std": 0.0,
-            "se": None,
             "t_stat": None,
             "abs_t_stat": None,
             "reason": "n_lt_2",
@@ -203,37 +189,30 @@ def t_stat_vs_zero(values: Sequence[float | None]) -> dict[str, Any]:
             "n": n,
             "mean": m,
             "std": 0.0,
-            "se": 0.0,
             "t_stat": None,
             "abs_t_stat": None,
             "raw_t_stat": None if m == 0.0 else (math.inf if m > 0 else -math.inf),
             "reason": LOW_VARIANCE_REASON if m != 0.0 else "zero_std",
-            "cv": 0.0,
         }
     se = s / math.sqrt(float(n))
     t = m / se
-    cv = s / abs(m) if m != 0.0 else None
     if is_low_variance_t_artifact(n=n, mean_net=m, std_net=s, t_stat=t):
         return {
             "n": n,
             "mean": m,
             "std": s,
-            "se": se,
             "t_stat": None,
             "abs_t_stat": None,
             "raw_t_stat": t,
-            "cv": cv,
             "reason": LOW_VARIANCE_REASON,
         }
     return {
         "n": n,
         "mean": m,
         "std": s,
-        "se": se,
         "t_stat": t,
         "abs_t_stat": abs(t),
         "raw_t_stat": t,
-        "cv": cv,
         "reason": "ok",
     }
 
@@ -283,12 +262,9 @@ def sharpe_ratio(
     return {
         "n": n,
         "mean": m + float(risk_free),
-        "excess_mean": m,
         "std": s,
-        "sharpe_raw": raw,
         "sharpe": ann,
         "periods_per_year": ppy,
-        "risk_free": float(risk_free),
         "reason": "ok",
     }
 
@@ -302,18 +278,15 @@ def win_rate(values: Sequence[float | None]) -> dict[str, Any]:
             "n": 0,
             "n_pos": 0,
             "n_neg": 0,
-            "n_zero": 0,
             "win_rate": None,
             "reason": "no_values",
         }
     n_pos = sum(1 for v in vals if v > 0)
     n_neg = sum(1 for v in vals if v < 0)
-    n_zero = n - n_pos - n_neg
     return {
         "n": n,
         "n_pos": n_pos,
         "n_neg": n_neg,
-        "n_zero": n_zero,
         "win_rate": float(n_pos) / float(n),
         "reason": "ok",
     }
@@ -353,33 +326,22 @@ def max_drawdown(values: Sequence[float | None]) -> dict[str, Any]:
         return {
             "n": 0,
             "max_dd": None,
-            "peak_index": None,
-            "trough_index": None,
             "reason": "no_values",
         }
     cum = 0.0
     peak = 0.0
-    peak_i = -1
     max_dd = 0.0
-    trough_i = -1
-    peak_at_dd = -1
-    for i, v in enumerate(vals):
+    for v in vals:
         cum += v
         if cum > peak:
             peak = cum
-            peak_i = i
         dd = cum - peak
         if dd < max_dd:
             max_dd = dd
-            trough_i = i
-            peak_at_dd = peak_i
     return {
         "n": len(vals),
         "max_dd": float(max_dd),
         "abs_max_dd": abs(float(max_dd)),
-        "peak_index": peak_at_dd if trough_i >= 0 else None,
-        "trough_index": trough_i if trough_i >= 0 else None,
-        "final_cumulative": cum,
         "reason": "ok",
     }
 
@@ -407,12 +369,9 @@ def equity_path_drawdown(
             "dd_duration_days": None,
             "recovery_days": None,
             "recovered": None,
-            "peak_index": None,
-            "trough_index": None,
             "peak_date": None,
             "trough_date": None,
             "recovery_date": None,
-            "final_equity": None,
             "total_return": None,
             "method": "daily_equity_level_peak_to_trough",
             "reason": "empty",
@@ -461,12 +420,9 @@ def equity_path_drawdown(
         "dd_duration_days": dd_duration,
         "recovery_days": recovery_days,
         "recovered": recovered,
-        "peak_index": peak_at_dd if max_dd < 0 else None,
-        "trough_index": trough_i if max_dd < 0 else None,
         "peak_date": _d(peak_at_dd) if max_dd < 0 else None,
         "trough_date": _d(trough_i) if max_dd < 0 else None,
         "recovery_date": _d(recovery_i),
-        "final_equity": eq[-1],
         "total_return": total_ret,
         "method": "daily_equity_level_peak_to_trough",
         "reason": "ok",
@@ -496,10 +452,7 @@ def w99_sticky_daily_path_dd_reference() -> dict[str, Any]:
         "stance": "STABLE_RESEARCH_ONLY",
         "promote_as_main": False,
         "go": False,
-        "research_only": True,
-        "proof": DAILY_PATH_DD_REFERENCE_PROOF,
         "windows": [dict(r) for r in W99_STICKY_DAILY_PATH_DD_REFERENCE],
-        **_freeze(),
     }
 
 
@@ -649,8 +602,6 @@ def evaluate_daily_path_dd_gate(
     }
     out: dict[str, Any] = {
         "version": DAILY_PATH_DD_VERSION,
-        "wave": DAILY_PATH_DD_WAVE,
-        "proof": DAILY_PATH_DD_PROOF,
         "measured": bool(daily_measured),
         "complete": complete,
         "passed": complete,
@@ -720,12 +671,9 @@ def period_stats_report(
     wr = win_rate(vals)
     pay = payoff_ratio(vals)
     dd = max_drawdown(vals)
-    ir = information_ratio(vals, benchmark=0.0, periods_per_year=1.0)
     calmar = calmar_ratio(tpack.get("mean"), dd.get("max_dd"))
     out: dict[str, Any] = {
         "version": STATS_METRICS_VERSION,
-        "wave": STATS_METRICS_WAVE,
-        "period_ids": list(period_ids) if period_ids is not None else None,
         "n_periods": len(vals),
         "mean_net": tpack.get("mean"),
         "std_net": tpack.get("std"),
@@ -739,8 +687,6 @@ def period_stats_report(
         "max_dd": dd.get("max_dd"),
         "abs_max_dd": dd.get("abs_max_dd"),
         "calmar": calmar,
-        "information_ratio": ir.get("information_ratio"),
-        "hold_days": int(hold_days) if hold_days is not None else None,
     }
     out.update(_freeze())
     return out
@@ -769,27 +715,16 @@ def trade_stats_report(
     wr = win_rate(nets)
     pay = payoff_ratio(nets)
     dd = max_drawdown(nets)
-    calmar = calmar_ratio(tpack.get("mean"), dd.get("max_dd"))
     out: dict[str, Any] = {
         "version": STATS_METRICS_VERSION,
-        "wave": STATS_METRICS_WAVE,
         "hold_days": h,
-        "one_way_cost": float(one_way_cost),
-        "amortized_cost_applied": bool(amortize_cost),
-        "amortized_one_way_cost": am if amortize_cost else None,
         "n_trades": len(nets),
         "mean_net": tpack.get("mean"),
-        "std_net": tpack.get("std"),
         "t_stat": tpack.get("t_stat"),
-        "abs_t_stat": tpack.get("abs_t_stat"),
         "sharpe_ann": sh.get("sharpe"),
-        "periods_per_year": ppy,
         "win_rate": wr.get("win_rate"),
-        "n_pos": wr.get("n_pos"),
-        "n_neg": wr.get("n_neg"),
         "payoff": pay.get("payoff"),
         "max_dd": dd.get("max_dd"),
-        "calmar": calmar,
     }
     out.update(_freeze())
     return out
@@ -885,7 +820,6 @@ def stats_bar_check(
             "abs_max_dd": abs_dd,
             "mean_net": stats.get("mean_net"),
             "calmar": stats.get("calmar"),
-            "information_ratio": stats.get("information_ratio"),
         },
         "component_ok": {
             "t_stat": t_ok,
@@ -901,11 +835,8 @@ def stats_bar_check(
 
 
 __all__ = [
-    "DAILY_PATH_DD_PROOF",
-    "DAILY_PATH_DD_REFERENCE_PROOF",
     "DAILY_PATH_DD_REQUIRED_FIELDS",
     "DAILY_PATH_DD_VERSION",
-    "DAILY_PATH_DD_WAVE",
     "DEFAULT_MAX_ABS_DRAWDOWN",
     "DEFAULT_MIN_ABS_T_STAT",
     "DEFAULT_MIN_PAYOFF",
@@ -915,7 +846,6 @@ __all__ = [
     "DEFAULT_TRADING_DAYS_PER_YEAR",
     "PERIOD_NET_ONLY_METHODS",
     "STATS_METRICS_VERSION",
-    "STATS_METRICS_WAVE",
     "W99_STICKY_DAILY_PATH_DD_REFERENCE",
     "calmar_ratio",
     "equity_path_drawdown",

@@ -88,16 +88,13 @@ def invert_period_net(
 def _side_pack(
     nets: Sequence[float | None],
     *,
-    period_ids: Sequence[str] | None,
     hold_days: int | None,
     sign: int,
     label: str,
 ) -> dict[str, Any]:
     vals = [_finite(v) for v in nets]
     clean = [v for v in vals if v is not None]
-    stats = period_stats_report(
-        clean, period_ids=period_ids, hold_days=hold_days
-    )
+    stats = period_stats_report(clean, hold_days=hold_days)
     tpack = t_stat_vs_zero(clean)
     mean_net = sample_mean(clean)
     n_pos = sum(1 for v in clean if v is not None and v > 0)
@@ -105,20 +102,14 @@ def _side_pack(
     return {
         "sign": int(sign),
         "label": label,
-        "period_nets": list(clean),
-        "period_ids": list(period_ids) if period_ids is not None else None,
         "n_periods": len(clean),
         "mean_net": mean_net,
         "mean_net_bp": None if mean_net is None else float(mean_net) * 10_000.0,
         "t_stat": tpack.get("t_stat"),
-        "abs_t_stat": tpack.get("abs_t_stat"),
         "sharpe": stats.get("sharpe"),
         "win_rate": stats.get("win_rate"),
         "n_pos": n_pos,
         "n_neg": n_neg,
-        "payoff": stats.get("payoff"),
-        "max_dd": stats.get("max_dd"),
-        "std_net": stats.get("std_net"),
     }
 
 
@@ -147,8 +138,6 @@ def _nonzero_evidence(
     )
     return {
         "has_nonzero_evidence": has_evidence,
-        "mean_ok": mean_ok,
-        "t_guideline_ok": t_ok,
         "near_zero": near_zero,
     }
 
@@ -173,11 +162,10 @@ def evaluate_sign_both_sides(
     elif nets_in is not None:
         n = len(nets_in)
     if n == 0:
-        empty = _side_pack([], period_ids=period_ids, hold_days=hold_days, sign=1, label="original")
-        empty_i = _side_pack([], period_ids=period_ids, hold_days=hold_days, sign=-1, label="inverted")
+        empty = _side_pack([], hold_days=hold_days, sign=1, label="original")
+        empty_i = _side_pack([], hold_days=hold_days, sign=-1, label="inverted")
         out = {
             "version": SIGN_SELECTION_VERSION,
-            "wave": SIGN_SELECTION_WAVE,
             "original": empty,
             "inverted": empty_i,
             "evidence_original": _nonzero_evidence(
@@ -203,7 +191,6 @@ def evaluate_sign_both_sides(
 
     orig_nets: list[float | None] = []
     inv_nets: list[float | None] = []
-    derived_costs: list[float | None] = []
 
     for i in range(n):
         g = _finite(grosses[i]) if grosses is not None else None
@@ -215,21 +202,16 @@ def evaluate_sign_both_sides(
             n_i = g - c
         if g is None and n_i is not None and c is not None:
             g = n_i + c
-        derived_costs.append(c)
         orig_nets.append(n_i)
         inv_nets.append(
             invert_period_net(gross=g, net=n_i, amortized_cost=c)
         )
 
-    pids = list(period_ids) if period_ids is not None else None
-    if pids is not None and len(pids) != n:
-        pids = None
-
     original = _side_pack(
-        orig_nets, period_ids=pids, hold_days=hold_days, sign=SIGN_ORIGINAL, label="original"
+        orig_nets, hold_days=hold_days, sign=SIGN_ORIGINAL, label="original"
     )
     inverted = _side_pack(
-        inv_nets, period_ids=pids, hold_days=hold_days, sign=SIGN_INVERTED, label="inverted"
+        inv_nets, hold_days=hold_days, sign=SIGN_INVERTED, label="inverted"
     )
     ev_o = _nonzero_evidence(
         original, near_zero_abs=near_zero_abs, t_guideline=t_guideline
@@ -239,15 +221,10 @@ def evaluate_sign_both_sides(
     )
     return {
         "version": SIGN_SELECTION_VERSION,
-        "wave": SIGN_SELECTION_WAVE,
-        "n_periods": n,
-        "period_ids": pids,
-        "amortized_costs": derived_costs,
         "original": original,
         "inverted": inverted,
         "evidence_original": ev_o,
         "evidence_inverted": ev_i,
-        "hold_days": int(hold_days) if hold_days is not None else None,
         **_freeze(),
     }
 
@@ -370,24 +347,14 @@ def choose_sign(
                 )
             out = {
                 "version": SIGN_SELECTION_VERSION,
-                "wave": SIGN_SELECTION_WAVE,
                 "chosen_sign": None,
                 "chosen_label": None,
                 "decision": decision,
                 "verdict": "reject_or_explore_demote",
-                "eligible_original": elig_o,
-                "eligible_inverted": elig_i,
-                "evidence_original": ev_o,
-                "evidence_inverted": ev_i,
                 "original": original,
                 "inverted": inverted,
                 "reasons": reasons,
                 "policy": {
-                    "min_mean_net": float(min_mean_net),
-                    "near_zero_abs": float(near_zero_abs),
-                    "t_guideline": float(t_guideline),
-                    "min_abs_t_hard": min_abs_t_hard,
-                    "paper_mean_negative": bool(paper_mean_negative),
                     "t_is_guideline_not_hard": True,
                 },
                 **_freeze(),
@@ -409,29 +376,17 @@ def choose_sign(
 
     return {
         "version": SIGN_SELECTION_VERSION,
-        "wave": SIGN_SELECTION_WAVE,
         "chosen_sign": int(chosen),
         "chosen_label": label,
         "decision": decision,
         "verdict": verdict,
-        "chosen_mean_net": chosen_side.get("mean_net"),
         "chosen_mean_net_bp": chosen_side.get("mean_net_bp"),
         "chosen_t_stat": chosen_side.get("t_stat"),
         "chosen_sharpe": chosen_side.get("sharpe"),
-        "chosen_win_rate": chosen_side.get("win_rate"),
-        "eligible_original": elig_o,
-        "eligible_inverted": elig_i,
-        "evidence_original": ev_o,
-        "evidence_inverted": ev_i,
         "original": original,
         "inverted": inverted,
         "reasons": reasons,
         "policy": {
-            "min_mean_net": float(min_mean_net),
-            "near_zero_abs": float(near_zero_abs),
-            "t_guideline": float(t_guideline),
-            "min_abs_t_hard": min_abs_t_hard,
-            "paper_mean_negative": bool(paper_mean_negative),
             "t_is_guideline_not_hard": True,
         },
         **_freeze(),

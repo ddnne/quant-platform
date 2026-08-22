@@ -54,7 +54,6 @@ def _freeze_fields() -> dict[str, Any]:
         "edge_claimed": EDGE_CLAIMED,
         "connected_to_ready": CONNECTED_TO_READY,
         "connected_to_mass": CONNECTED_TO_MASS,
-        "label": RISK_SCENARIOS_LABEL,
     }
 
 
@@ -83,13 +82,9 @@ def scenario_row(
     status: str = "ok",
     gross_signed_mean: float | None = None,
     net_one_way_mean: float | None = None,
-    n_active: int | None = None,
-    market_return: float | None = None,
-    realized_vol: float | None = None,
     not_applicable: bool = False,
     na_reason: str | None = None,
     notes: str | None = None,
-    extra: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build one scenario metric row for :func:`evaluate_risk_scenarios`."""
     sid = str(scenario_id).strip()
@@ -103,17 +98,10 @@ def scenario_row(
         "net_one_way_mean": _as_float(net_one_way_mean),
         "gross_sign": _sign_of(_as_float(gross_signed_mean)),
         "net_sign": _sign_of(_as_float(net_one_way_mean)),
-        "n_active": int(n_active) if n_active is not None else None,
-        "market_return": _as_float(market_return),
-        "realized_vol": _as_float(realized_vol),
         "not_applicable": bool(not_applicable or st == "not_applicable"),
         "na_reason": str(na_reason).strip() if na_reason else None,
         "notes": notes,
     }
-    if extra:
-        for k, v in extra.items():
-            if k not in row:
-                row[k] = v
     return row
 
 
@@ -397,17 +385,7 @@ def evaluate_risk_scenarios(
         "stability_broken": bool(stability_broken),
         "sign_breaks": sign_breaks,
         "research_candidate_allowed": bool(research_candidate_allowed),
-        "prefer_fail_on_sign_break": bool(prefer_fail_on_sign_break),
-        "scenario_weakness_disclosed": bool(scenario_weakness_disclosed),
-        "scenario_weakness_notes": (
-            str(scenario_weakness_notes).strip() if scenario_weakness_notes else None
-        ),
-        "rate_data_usable": bool(rate_data_usable),
-        "liquidity_data_available": bool(liquidity_data_available),
-        "baseline_majority_sign": baseline_majority_sign,
-        "baseline_net_majority_sign": baseline_net_majority_sign,
         "scenarios": details,
-        "scenario_rows": list(by_id.values()),
         "missing_required": sorted(set(missing_required)),
         "reasons": reasons,
     }

@@ -165,7 +165,6 @@ def evaluate_research_robustness_gate(
         "passed": multi_ok,
         "n_eligible": n_elig,
         "min_periods": int(min_periods),
-        "eligible_period_ids": [e.get("period_id") for e in eligible],
     }
     if not multi_ok:
         reasons.append(
@@ -199,11 +198,6 @@ def evaluate_research_robustness_gate(
     details["sign_majority"] = {
         "passed": sign_ok,
         "majority_sign": majority_sign,
-        "per_period": [
-            {"period_id": e.get("period_id"), "sign": e.get("sign"),
-             "gross": e.get("gross_signed_mean")}
-            for e in eligible
-        ],
     }
 
     cat_hits = [
@@ -215,10 +209,6 @@ def evaluate_research_robustness_gate(
     details["not_catastrophic"] = {
         "passed": cat_ok,
         "threshold": float(catastrophic_abs),
-        "hits": [
-            {"period_id": e.get("period_id"), "gross": e.get("gross_signed_mean")}
-            for e in cat_hits
-        ],
     }
     if not cat_ok:
         reasons.append(
@@ -258,19 +248,6 @@ def evaluate_research_robustness_gate(
             "required": True,
             "majority_net_sign": net_majority,
             "one_way_cost": cost,
-            "one_way_cost_bp": (
-                float(cost) * 10_000.0 if cost is not None else None
-            ),
-            "per_period": [
-                {
-                    "period_id": e.get("period_id"),
-                    "gross": e.get("gross_signed_mean"),
-                    "net_one_way": e.get("net_one_way_mean"),
-                    "gross_sign": e.get("sign"),
-                    "net_sign": e.get("net_sign"),
-                }
-                for e in eligible
-            ],
         }
     else:
         details["net_sign_majority"] = {
@@ -304,10 +281,6 @@ def evaluate_research_robustness_gate(
         wf_detail = {
             "applied": True,
             "passed": wf_ok,
-            "train_gross": train_g,
-            "test_gross": test_g,
-            "train_sign": ts,
-            "test_sign": xs,
             "full_flip": flipped,
         }
         if require_wf_check and not wf_ok:
@@ -340,7 +313,6 @@ def evaluate_research_robustness_gate(
         )
     return {
         "version": GATE_VERSION,
-        "label": GATE_LABEL,
         "signal_id": signal_id,
         "passed": passed,
         "gross_only_passed": bool(gross_only_ok),
@@ -349,13 +321,6 @@ def evaluate_research_robustness_gate(
         ),
         "reasons": reasons,
         "criteria": details,
-        "cost_assumption": {
-            "one_way_cost": cost,
-            "one_way_cost_bp": (
-                float(cost) * 10_000.0 if cost is not None else None
-            ),
-            "require_net_sign_majority": bool(require_net_sign_majority),
-        },
         "n_eligible_periods": n_elig,
         **_freeze(),
     }
@@ -377,14 +342,8 @@ def period_rows_from_cross_table(
                 "status": "ok",
                 "gross_signed_mean_active": raw.get("gross_signed_mean_active"),
                 "net_one_way_mean_active": raw.get("net_one_way_mean_active"),
-                "net_round_trip_mean_active": raw.get(
-                    "net_round_trip_mean_active"
-                ),
                 "n_active_positions": raw.get("n_active_positions"),
                 "non_null": raw.get("non_null"),
-                "non_null_rate": raw.get("non_null_rate"),
-                "mean_R_plus": raw.get("mean_R_plus"),
-                "mean_R_minus": raw.get("mean_R_minus"),
             }
         )
     return out
