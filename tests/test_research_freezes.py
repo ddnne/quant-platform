@@ -219,7 +219,7 @@ def test_near_empty_park_is_not_countable_or_basket_material() -> None:
     parked = near_empty_occupancy_park()
     assert parked == NEAR_EMPTY_PARK_IDS
     assert parked
-    assert "event_flatten_p10_px_down" in parked
+    assert "event_flatten_np_tight" in parked
     countable = countable_thesis_ids()
     for lid in parked:
         spec = catalog_spec(lid)
