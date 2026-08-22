@@ -301,6 +301,8 @@ def test_catalog_gate_set_avoid_is_existing_crosses() -> None:
     full = catalog_gate_set_avoid()
     assert len(full) == PROPOSE_WHY_AVOID_LIMIT
     assert PROPOSE_WHY_AVOID_LIMIT == 24
+    assert any(t.count("+") == 2 for t in full)
+    assert full[0].count("+") == 2
     assert all("+" in t for t in tokens)
     blob = " ".join(tokens)
     assert "skip_monday" not in blob
@@ -308,7 +310,6 @@ def test_catalog_gate_set_avoid_is_existing_crosses() -> None:
     assert PROPOSE_CALENDAR_GATES.isdisjoint(
         {p for t in tokens for p in t.split("+")}
     )
-    assert all(len(t.split("+")) == 2 for t in tokens) or tokens[0].count("+") == 1
     posted: dict[str, object] = {}
 
     def _post(*, url: str, body: bytes, headers: dict[str, str]) -> dict:

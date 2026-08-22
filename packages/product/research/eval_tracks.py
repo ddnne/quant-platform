@@ -101,8 +101,9 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "id": "propose_clone_retry",
         "track": EVAL_TRACK_LIQ_LARGE,
         "why": (
-            "when Workers AI returns only catalog clones, one retry with "
-            "those gate-sets on why_avoid; still no auto-inject"
+            "why_avoid leads with countable 3-gates then 2-gates; "
+            "clone-only responses retry once with those sets prepended; "
+            "still no auto-inject"
         ),
         "not_a_pass": True,
         "go": False,

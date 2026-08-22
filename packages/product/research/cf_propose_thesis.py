@@ -231,8 +231,9 @@ def review_proposal_row(proposal: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def catalog_gate_set_avoid(*, limit: int = PROPOSE_WHY_AVOID_LIMIT) -> list[str]:
-    """Existing combo AND-sets for LLM why_avoid. Economic 2-gates first.
+    """Existing countable AND-sets for LLM why_avoid.
 
+    3-gates first (70B clones those; 2-gates used to fill the whole cap).
     Calendar/weekday permutations are not clone seeds. Not a scorecard.
     """
     from research.unique_logic.catalog import yaml_combo_rows
@@ -264,7 +265,8 @@ def catalog_gate_set_avoid(*, limit: int = PROPOSE_WHY_AVOID_LIMIT) -> list[str]
             twos.append(token)
         else:
             threes.append(token)
-    return (twos + threes)[: int(limit)]
+    # 3-AND clones were invisible when 24 two-gates filled the slot.
+    return (threes + twos)[: int(limit)]
 
 
 def reject_window_tweak(proposal: Mapping[str, Any]) -> bool:
