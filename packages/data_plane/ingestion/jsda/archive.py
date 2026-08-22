@@ -217,7 +217,6 @@ def _record(
     digests: Mapping[str, Any],
 ) -> None:
     stamped = dict(digests)
-    # Phase 6.2.3: COMPLETE requires Ed25519 signature from runtime key.
     if (
         status == "SUCCESS"
         and error is None
@@ -336,9 +335,8 @@ def run_otc_reference_backfill(
 ) -> OtcArchiveBackfillReport:
     """Discover and ingest official OTC-reference files one day at a time.
 
-    Successful exact-scope receipts are resumable checkpoints. Raw source
-    bytes are persisted before parsing; every expected segment receives a
-    SUCCESS or explicit FAILED receipt, including missing archive links.
+    Exact-scope receipts resume. Raw is saved before parse; every expected
+    segment gets SUCCESS or FAILED (including missing archive links).
     """
     checked_at = checked_at or now_iso()
     to_year = to_year or date.today().year
@@ -365,8 +363,7 @@ def run_otc_reference_backfill(
         )
         by_year = {item.year: item for item in year_indexes}
 
-        # Fetch one preceding archive page as calendar lookback when available;
-        # it is not part of this run's required receipt inventory.
+        # Preceding archive page is calendar lookback, not this run's inventory.
         discovery_years = list(range(from_year, to_year + 1))
         if from_year - 1 in by_year:
             discovery_years.insert(0, from_year - 1)
@@ -459,7 +456,6 @@ def run_otc_reference_backfill(
                 filename = Path(urlsplit(segment.source_url).path).name or (
                     f"otc_reference_{segment.segment_id}.{segment.source_format}"
                 )
-                # Retain verbatim bytes before parser or normalizer execution.
                 raw_path = save_raw(
                     data_base,
                     "jsda",

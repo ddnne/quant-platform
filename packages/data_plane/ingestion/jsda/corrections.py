@@ -96,7 +96,7 @@ def _fetch_day(timestamp: str) -> str:
 
 
 def _available_at(ingested_at: str, official_at: Optional[str]) -> str:
-    """Never expose a correction before either evidence boundary."""
+    """Later of ingested_at and official_at; never before either boundary."""
     if official_at is None:
         return ingested_at
     official = parse_dt(official_at)
@@ -511,9 +511,7 @@ def run_otc_reference_corrections(
                         "raw_path": str(daily_path),
                         "url": segment.source_url,
                     })
-                # Apply the entire affected range in one store transaction.
-                # If any official daily file or baseline reconciliation above
-                # fails, no partial correction becomes visible.
+                # Whole affected range in one transaction — no partial correction.
                 structured_count = registrar.register(
                     "jsda_otc_bond_reference_prices", normalized_rows
                 )

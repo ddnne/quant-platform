@@ -40,7 +40,6 @@ from storage.trusted_receipt import open_signed_receipt_authority  # noqa: E402
 RAW_ROOT = ROOT / "data" / "raw" / "jsda" / "jsda_otc_bond_reference_prices"
 DB = ROOT / "data" / "structured" / "ingestion.sqlite"
 FULL_OK_MIN = 100_000
-TIP_FULL_OK_MIN = 1_500_000
 WAVE = "jsda_otc_official_backfill"
 W_LABEL = "OTC"
 ITEMS: list = []

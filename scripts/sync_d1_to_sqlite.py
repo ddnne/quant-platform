@@ -147,12 +147,6 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Rows requested per D1 export page (1-1000, default: 500).",
     )
     p.add_argument(
-        "--no-proxy-config",
-        dest="no_proxy_config",
-        action="store_true",
-        help="Ignore ~/.config/quant-platform/ proxy config.",
-    )
-    p.add_argument(
         "--incremental",
         action="store_true",
         help=(
@@ -687,12 +681,11 @@ def main(argv=None) -> int:
     if args.since and not args.incremental:
         print("[sync] --since requires --incremental", file=sys.stderr)
         return 2
-    # Export URL+token only; never reuse J-Quants proxy credentials.
     url, token = args.url, args.token
     if not url:
         print(
-            "[sync] no worker URL (pass --url, set INGESTION_PREMIUM_URL, "
-            "or have a proxy config). Nothing synced.",
+            "[sync] no worker URL (pass --url or set INGESTION_PREMIUM_URL). "
+            "Nothing synced.",
             file=sys.stderr,
         )
         return 2

@@ -1,20 +1,13 @@
-"""Parse JSDA bond-trade CSV (and optionally XLSX) into clean records.
+"""Parse JSDA bond-trade / OTC-reference / Tokyo-repo CSV (and XLSX/XLS).
 
-JSDA files typically ship as Shift-JIS (cp932) with title rows above the
-header. The parser:
-
-1. Auto-detects encoding (utf-8-sig -> cp932 -> shift_jis -> latin-1).
-2. Finds the header row by looking for a date-ish marker.
-3. Maps header cells to known fields by alias (order-independent).
-4. Coerces numbers (stripping ``%``, ``,``, spaces) and dates.
-
-Produces records with stable field names consumed by :mod:`normalize`.
-Column map is documented in ``docs/data_sources.md``.
+Auto-detects encoding, finds the header, maps aliases, coerces numbers/dates.
+Records feed :mod:`normalize`. Column map: ``docs/data_sources.md``.
 """
 
 from __future__ import annotations
 
 import csv
+import datetime as _dt
 import io
 import re
 from typing import Any, List, Optional
@@ -63,12 +56,7 @@ def _find_header(rows: List[List[str]]) -> tuple[int, List[str]]:
 
 
 def _column_index(headers: List[str]) -> dict[str, int]:
-    """Map header cells to known fields.
-
-    Two passes so that ``年月日`` (trade date) is not swallowed by
-    ``償還年月日`` (maturity): exact matches first, then substring fallback
-    for remaining columns/fields.
-    """
+    """Map headers to fields: exact first so 年月日 is not swallowed by 償還年月日."""
     col: dict[str, int] = {}
     claimed: set[int] = set()
 
@@ -115,8 +103,6 @@ def _date(cell: str) -> Optional[str]:
         return None
     for fmt in ("%Y/%m/%d", "%Y-%m-%d", "%Y%m%d", "%Y年%m月%d日"):
         try:
-            import datetime as _dt
-
             return _dt.datetime.strptime(s, fmt).strftime("%Y-%m-%d")
         except ValueError:
             continue
@@ -133,10 +119,7 @@ def _cell(row: List[str], idx: Optional[int]) -> str:
 
 
 def parse_csv(data, *, encoding: Optional[str] = None) -> List[dict]:
-    """Parse JSDA CSV bytes/text into clean records.
-
-    ``encoding`` overrides auto-detection when known.
-    """
+    """Parse JSDA CSV bytes/text into clean records. ``encoding`` overrides auto-detect."""
     text = data.decode(encoding, errors="replace") if (
         encoding and isinstance(data, (bytes, bytearray))
     ) else _decode(data)
@@ -219,11 +202,8 @@ _OTC_REFERENCE_ALIASES: dict[str, list[str]] = {
 }
 _OTC_HEADER_MARKERS = ("銘柄コード", "証券コード", "銘柄名", "債券名")
 
-# The official CSV deliberately ships without a header row; JSDA publishes a
-# separate ``csvheaderbaisan.xlsx`` for people opening the file in Excel.  The
-# positional layout below follows JSDA's ``baisan_csv.pdf`` data-format sheet.
-# The 2015 change increased numeric precision and the 2022 change assigned a
-# meaning to 銘柄属性・情報2, but neither moved these columns.
+# Official CSV is headerless (baisan_csv.pdf). 2015/2022 precision changes
+# did not move these columns.
 _OTC_POSITIONAL_COLUMNS: dict[str, int] = {
     "publication_label_date": 0,
     "security_code": 2,
@@ -296,12 +276,7 @@ def parse_otc_reference_csv(
     publication_label_date: Optional[str] = None,
     quote_effective_date: Optional[str] = None,
 ) -> List[dict]:
-    """Parse one official OTC-reference CSV without conflating transactions.
-
-    Archive metadata may supply the publication label and calendar-resolved
-    quote date when those fields are not repeated inside each source row.
-    Neither date is converted into ``available_at`` here.
-    """
+    """Parse one official OTC-reference CSV. Dates stay labels, not available_at."""
     text = data.decode(encoding, errors="replace") if (
         encoding and isinstance(data, (bytes, bytearray))
     ) else _decode(data)
@@ -386,17 +361,8 @@ def parse_otc_reference_xlsx(
 # ---------------------------------------------------------------------------
 # Repo rate (東京レポ・レート / TRR)
 # ---------------------------------------------------------------------------
-#
-# The JSDA publishes the Tokyo Repo Rate per business day across tenors. The
-# file is either:
-#   * **wide** — one date column and one numeric column per tenor
-#     (隔日物 / 1週間物 / 1ヶ月物 / … / 12ヶ月物); or
-#   * **long** — a date column, a tenor (期間) column and a rate column.
-#
-# Both shapes normalize to the same record: ``{as_of_date, tenor, rate}``. The
-# tenor is captured verbatim from the source (header text in wide form, cell in
-# long form) so no tenor vocabulary is invented here. Rate values are coerced
-# via the shared ``_num`` (strips ``%``/``,``, treats ``-`` as missing).
+# Wide (one column per tenor) or long (期間 + rate) → {as_of_date, tenor, rate}.
+# Tenor text is kept verbatim. _num strips %/, and treats "-" as missing.
 
 _REPO_DATE_ALIASES: list[str] = [
     "年月日", "取引日", "営業日", "公表日", "基準日", "日付", "date"
@@ -407,14 +373,11 @@ _REPO_DATE_MARKERS = ("年月日", "取引日", "営業日", "公表日", "基�
 
 
 def _find_repo_header(rows: List[List[str]]) -> tuple[int, List[str]]:
-    """Locate the repo-rate header row and return its original (un-normalized)
-    cells, so wide-format tenor headers keep their source text.
+    """Return the header row with original cells (wide tenor labels stay intact).
 
-    Official ``trrts.xls`` uses a matrix header like
-    ``term/ターム | overnight/翌日物 | 1W | ...`` (no explicit date column
-    name). Prefer that over the workbook title / footnote rows.
+    Official ``trrts.xls`` matrix headers (term/overnight/1W) beat title/footnote rows.
     """
-    # 1) Official TRR matrix header (must beat footnotes that mention ターム物/1W).
+    # Official TRR matrix header beats footnotes that mention ターム物/1W.
     for i, row in enumerate(rows):
         first = (row[0] if row else "") or ""
         if first.strip().startswith("※"):
@@ -472,12 +435,7 @@ def _first_numeric_col(
 
 
 def parse_repo_csv(data, *, encoding: Optional[str] = None) -> List[dict]:
-    """Parse JSDA repo-rate (TRR) CSV bytes/text into clean records.
-
-    Each record is ``{"as_of_date", "tenor", "rate"}``. Handles wide (one
-    column per tenor) and long (a 期間 column + a rate column) layouts.
-    ``encoding`` overrides auto-detection when known.
-    """
+    """Parse TRR CSV into ``{as_of_date, tenor, rate}`` (wide or long)."""
     text = data.decode(encoding, errors="replace") if (
         encoding and isinstance(data, (bytes, bytearray))
     ) else _decode(data)
@@ -497,8 +455,6 @@ def parse_repo_csv(data, *, encoding: Optional[str] = None) -> List[dict]:
     tenor_col = _col_first(norm_headers, _REPO_TENOR_ALIASES)
     rate_col = _col_first(norm_headers, _REPO_RATE_ALIASES)
 
-    # Official wide TRR matrix: col0 header is "term/ターム" but cells are dates;
-    # other columns are tenors (overnight, 1W, …). Force wide layout.
     wide_matrix = False
     if tenor_col == 0:
         other = [
@@ -520,12 +476,10 @@ def parse_repo_csv(data, *, encoding: Optional[str] = None) -> List[dict]:
                 wide_matrix = True
                 break
 
-    # Dual header row (official trrts.xls): parent tenors + settlement (T+0/T+1).
     tenor_labels = list(raw_headers)
     data_start = header_idx + 1
     if wide_matrix and header_idx + 1 < len(rows):
         sub = rows[header_idx + 1]
-        # If next row looks like settlement labels (T+0/T+1) not data dates.
         sub_joined = " ".join((c or "") for c in sub).upper()
         if "T+0" in sub_joined or "T+1" in sub_joined:
             parent = ""
@@ -557,7 +511,6 @@ def parse_repo_csv(data, *, encoding: Optional[str] = None) -> List[dict]:
         t = (label or "").strip()
         if not t or t in {"(%)", "%", "-", "—", "－"}:
             return ""
-        # Drop pure rate/unit junk headers.
         if re.fullmatch(r"[\(%）%\s]+", t):
             return ""
         return t
@@ -571,7 +524,6 @@ def parse_repo_csv(data, *, encoding: Optional[str] = None) -> List[dict]:
             continue  # skip title/total spillover rows
 
         if tenor_col is not None:
-            # Long layout: one record per row (tenor in a cell).
             tenor = _cell(row, tenor_col).strip()
             rc = rate_col
             if rc is None:
@@ -581,19 +533,18 @@ def parse_repo_csv(data, *, encoding: Optional[str] = None) -> List[dict]:
                 continue
             out.append({"as_of_date": d, "tenor": tenor, "rate": rate})
         else:
-            # Wide layout: one record per numeric column (header = tenor).
             width = max(len(row), len(tenor_labels))
             for idx in range(width):
                 if date_col is not None and idx == date_col:
                     continue
                 val = _num(_cell(row, idx))
                 if val is None:
-                    continue  # blank tenor for this day -> not published
+                    continue
                 tenor = _clean_tenor(
                     tenor_labels[idx] if idx < len(tenor_labels) else ""
                 )
                 if not tenor:
-                    continue  # never emit empty tenor (causes duplicate keys)
+                    continue
                 out.append({"as_of_date": d, "tenor": tenor, "rate": val})
     return out
 
@@ -618,14 +569,7 @@ def parse_repo_xlsx(data: bytes) -> List[dict]:  # pragma: no cover - optional d
 
 
 def parse_repo_xls(data: bytes) -> List[dict]:
-    """Parse the authoritative legacy ``trrts.xls`` time-series workbook.
-
-    JSDA intentionally publishes the complete Tokyo Repo Rate history as an
-    OLE2 ``.xls`` workbook.  ``xlrd`` is therefore a governed dependency, not
-    a format that callers may silently skip.  Every sheet is considered and
-    the sheet yielding the most canonical observations is selected; Excel
-    serial dates are converted using the workbook's own date mode.
-    """
+    """Parse official ``trrts.xls`` (xlrd required; pick the richest sheet)."""
     try:
         import xlrd
     except ImportError as exc:  # pragma: no cover - dependency contract

@@ -1,27 +1,11 @@
 #!/usr/bin/env python3
 """Parallel signed-receipt issuance for segments with raw + structured evidence.
 
-Track A3: seal Coverage V2 segments that already hold **both** local raw bytes
-and structured rows. ThreadPool prepares candidates; DB writes stay serial.
+ThreadPool prepares candidates; DB writes stay serial. Never invent COMPLETE
+without raw. No backfill / Mass. Local sqlite is a research mirror, not CF SoT.
 
-Hard rules
-----------
-* Skip segments with no raw (never invent COMPLETE without raw).
-* Does **not** launch backfill / Mass / dual recovery rebuilds.
-* Worker pass ≠ Coverage COMPLETE — only SignedReceiptAuthority + ledger refresh.
-* Local sqlite is a research mirror, not CF SoT.
-
-Usage examples
---------------
-  # Dry scan (no issue)
   .venv/bin/python scripts/issue_receipts_parallel.py \\
     --datasets markets_short_ratio,markets_breakdown --limit 8 --dry-run
-
-  # Issue + refresh ledger
-  .venv/bin/python scripts/issue_receipts_parallel.py \\
-    --datasets markets_short_ratio,markets_breakdown --limit 8 --workers 4
-
-  # Sparse history: only months that already have structured rows
   .venv/bin/python scripts/issue_receipts_parallel.py \\
     --datasets fins_details --struct-hint --limit 20 --workers 4
 """
@@ -45,7 +29,6 @@ import argparse
 import json
 import re
 import sqlite3
-import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import Any, Sequence
@@ -136,12 +119,7 @@ def build_raw_index(data_dir: Path, datasets: Sequence[str]) -> dict[str, list[R
 
 
 def _is_usable_raw(raw: bytes) -> bool:
-    """Reject empty/stub payloads (e.g. ``[]`` / ``{}``) — not honest evidence.
-
-    Empty-raw ban is fail-closed: short bodies, JSON null/empty containers,
-    whitespace-only payloads, and J-Quants-shaped ``{"data": []}`` never qualify
-    as collection evidence.
-    """
+    """Reject empty/stub payloads (``[]`` / ``{}`` / ``{"data": []}``)."""
     if not raw or len(raw) >= 25_000_000:
         return False
     stripped = raw.strip()
@@ -282,14 +260,7 @@ def load_candidate_segments(
     order: str,
     struct_hint: bool = False,
 ) -> list[SegmentJob]:
-    """Load coverage segments to scan.
-
-    When ``struct_hint`` is True, only segments that already have at least one
-    ``jquants_records`` row in their window are returned. This keeps ``--limit``
-    from being consumed by empty recent months (common for sparse backfills
-    such as ``fins_details`` 2024-01/02 sitting behind many empty 2025–2026
-    months).
-    """
+    """Load coverage segments. ``struct_hint`` skips months with zero structured rows."""
     jobs: list[SegmentJob] = []
     order_sql = "ASC" if order == "asc" else "DESC"
     for dataset in datasets:
@@ -366,7 +337,6 @@ def prepare_one(
         segment_end=job.segment_end,
     )
     if raw is None:
-        # Explicit ban: never COMPLETE without raw.
         return PrepareResult(job=job, skip_reason="no_raw")
 
     scope = job.expected_scope
@@ -436,38 +406,35 @@ def issue_prepared(
     *,
     authority: Any,
     start_run_id: int,
-    write_lock: threading.Lock | None = None,
 ) -> list[dict[str, Any]]:
     """Serial issue + DB record. Returns issued summary rows."""
     issued_rows: list[dict[str, Any]] = []
     next_run = start_run_id
-    lock = write_lock or threading.Lock()
-    with lock:
-        for prep in prepared_list:
-            receipt = authority.issue(
-                required=prep.required,
-                run_id=next_run,
-                raw=prep.raw,
-                observed_items=prep.observed,
-                structured_row_count=prep.structured,
-                raw_row_count=prep.raw_rows,
-                pagination_exhausted=True,
-                structured_generation=prep.structured,
-                raw_manifest_digest=None,
-                source_request_digest=None,
-            )
-            next_run += 1
-            record_required_segments(conn, [prep.required])
-            record_collection_receipt(conn, receipt)
-            issued_rows.append(
-                {
-                    "dataset": prep.required.dataset,
-                    "segment_id": prep.required.segment_id,
-                    "run_id": receipt.run_id,
-                    "structured": prep.structured,
-                    "raw_bytes": len(prep.raw),
-                }
-            )
+    for prep in prepared_list:
+        receipt = authority.issue(
+            required=prep.required,
+            run_id=next_run,
+            raw=prep.raw,
+            observed_items=prep.observed,
+            structured_row_count=prep.structured,
+            raw_row_count=prep.raw_rows,
+            pagination_exhausted=True,
+            structured_generation=prep.structured,
+            raw_manifest_digest=None,
+            source_request_digest=None,
+        )
+        next_run += 1
+        record_required_segments(conn, [prep.required])
+        record_collection_receipt(conn, receipt)
+        issued_rows.append(
+            {
+                "dataset": prep.required.dataset,
+                "segment_id": prep.required.segment_id,
+                "run_id": receipt.run_id,
+                "structured": prep.structured,
+                "raw_bytes": len(prep.raw),
+            }
+        )
     return issued_rows
 
 

@@ -1,13 +1,4 @@
-"""JSDA URL resolution (isolated so it can change in one place).
-
-The index page lists downloadable CSV/XLSX files; the exact filenames change
-each period. We scrape the index for ``<a href>`` links ending in a data
-extension and absolutize them. ``pick_latest`` applies a simple heuristic
-(largest year/date token in the filename).
-
-Default runtime for JSDA is **local** — scraping from the edge is discouraged
-(bot/DC risk).
-"""
+"""JSDA URL resolution (index scrape + pick_latest year heuristic). Local-only."""
 
 from __future__ import annotations
 
@@ -20,11 +11,8 @@ from typing import Any, List, Mapping, Optional
 from urllib.parse import urljoin, urlsplit
 
 INDEX = "https://www.jsda.or.jp/shiryoshitsu/toukei/saiken_torihiki/"
-BASE = "https://www.jsda.or.jp"
 
-# 公社債店頭売買参考統計値.  This is a different official product from
-# ``INDEX`` (社債の取引情報).  Its root links one page per publication year,
-# including a CSV-only archive beginning in 2002.
+# 公社債店頭売買参考統計値 — distinct from INDEX (社債の取引情報). CSV archive from 2002.
 OTC_REFERENCE_INDEX = (
     "https://market.jsda.or.jp/shijyo/saiken/baibai/baisanchi/index.html"
 )
@@ -33,11 +21,7 @@ OTC_REFERENCE_CORRECTIONS_INDEX = (
 )
 OTC_REFERENCE_DATASET = "jsda_otc_bond_reference_prices"
 
-# 東京レポ・レート (Tokyo Repo Rate, "TRR") index. The JSDA took over
-# publication from the Bank of Japan on 2012-10-29. The index publishes the
-# latest day's rates plus a historical time-series listing. Files are legacy
-# ``.xls`` (see :func:`pick_repo_file`); the authoritative history is parsed
-# directly with xlrd and is never silently skipped.
+# 東京レポ・レート (TRR) from 2012-10-29; official history is legacy .xls via xlrd.
 REPO_INDEX = "https://www.jsda.or.jp/shiryoshitsu/toukei/trr/"
 TOKYO_REPO_DATASET = "jsda_tokyo_repo_rates"
 TOKYO_REPO_JSDA_START = "2012-10-29"
@@ -121,8 +105,6 @@ class JsdaCorrectionArtifact:
     source_format: str
     label: str
 
-# Filenames that are *not* rate data (reference-institution appointment
-# attachments ``別紙`` / procedure docs live alongside the rate files).
 _REPO_NON_DATA = ("reference", "bessi", "kijun", "koubo", "youkou")
 
 
@@ -164,11 +146,7 @@ def _publication_date(fragment: str) -> Optional[str]:
 def discover_otc_reference_year_indexes(
     html: str, *, base: str = OTC_REFERENCE_INDEX
 ) -> List[JsdaArchiveIndex]:
-    """Discover the official yearly OTC-reference archive pages.
-
-    No year is synthesized: only explicit ``archiveYYYY.html`` links on the
-    official root become expected collection scope.
-    """
+    """Official ``archiveYYYY.html`` links only — no synthesized years."""
     discovered: dict[int, JsdaArchiveIndex] = {}
     for href, _label in _ANCHOR_RE.findall(html or ""):
         absolute = urljoin(base, html_lib.unescape(href).strip())
@@ -185,13 +163,7 @@ def discover_otc_reference_segments(
     year: int,
     index_url: Optional[str] = None,
 ) -> List[JsdaArchiveSegment]:
-    """Discover publication-day files from one official annual archive.
-
-    CSV is canonical and preferred whenever the row offers it, which covers
-    the source's pre-2008 CSV-only history. XLSX/XLS are accepted only when a
-    CSV is absent. Decorative download-icon URLs are ignored because their
-    extension is not a data format.
-    """
+    """One official annual archive: CSV preferred; XLSX/XLS only if no CSV."""
     archive_url = index_url or urljoin(
         OTC_REFERENCE_INDEX, f"archive{int(year):04d}.html"
     )
@@ -208,8 +180,6 @@ def discover_otc_reference_segments(
             if fmt not in {"csv", "xlsx", "xls"}:
                 continue
             visible = _visible_text(label).lower()
-            # A row may include both the reference values and the separate
-            # rating-matrix product. Exclude links whose label names the latter.
             if "格付" in visible or "matrix" in visible:
                 continue
             priority = {"csv": 0, "xlsx": 1, "xls": 2}[fmt]
@@ -282,11 +252,7 @@ def pick_latest(links: List[str]) -> Optional[str]:
 
 
 def resolve_repo_links(html: str, *, base: str = REPO_INDEX) -> List[str]:
-    """Extract absolute data-file URLs from the TRR index HTML.
-
-    Same link extraction as :func:`resolve_download_links`, but rooted at the
-    repo-rate index so relative links absolutize correctly.
-    """
+    """Absolute data-file URLs from the TRR index."""
     return resolve_download_links(html, base=base)
 
 
@@ -297,19 +263,7 @@ def _is_repo_rate_file(url: str) -> bool:
 
 
 def pick_repo_file(links: List[str]) -> Optional[str]:
-    """Choose the best TRR rate file from resolved links.
-
-    Preference order:
-
-    1. The historical time-series listing (filename contains ``trr`` *and*
-       ``ts`` / ``list`` / ``ichiran``) — the richest single fetch.
-    2. Any other ``trr`` rate file (e.g. the latest-day file).
-    3. Fall back to the largest-year data link (bond-style heuristic) among
-       non-doc files.
-
-    Reference-institution attachments (``別紙`` / ``reference``) are excluded —
-    they list panel institutions, not rates. Returns ``None`` if nothing fits.
-    """
+    """Prefer trr+ts/list/ichiran, then any trr file, else pick_latest. Skip 別紙."""
     rate_links = [u for u in (links or []) if _is_repo_rate_file(u)]
     if not rate_links:
         return None
@@ -333,12 +287,7 @@ def pick_repo_file(links: List[str]) -> Optional[str]:
 def discover_repo_timeseries(
     html: str, *, base: str = REPO_INDEX
 ) -> JsdaRepoTimeseries:
-    """Discover JSDA's authoritative ``東京レポ・レート（一覧）`` file.
-
-    The index also links the latest one-day workbook and many unrelated XLS
-    attachments.  An anchor labelled ``一覧`` is authoritative; the existing
-    filename heuristic is only a fallback for older equivalent markup.
-    """
+    """Authoritative ``一覧`` workbook; filename heuristic is the fallback."""
     candidates: list[str] = []
     labelled: list[str] = []
     for href, label in _ANCHOR_RE.findall(html or ""):
@@ -399,12 +348,7 @@ def _correction_dates(fragment: str) -> list[str]:
 def discover_otc_reference_corrections(
     html: str, *, base: str = OTC_REFERENCE_CORRECTIONS_INDEX
 ) -> List[JsdaCorrectionArtifact]:
-    """Discover replacement corrections, excluding comparison-only notices.
-
-    JSDA section 1 says the historical values were corrected. Section 2 says
-    the opposite (comparison tables only), so its artifacts must never mutate
-    the governed fact table.
-    """
+    """Section-1 replacement corrections only (section 2 is comparison tables)."""
     document = html_lib.unescape(html or "")
     start = document.find("（1）システム障害")
     end = document.find("（2）発表後", start + 1)

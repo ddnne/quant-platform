@@ -35,7 +35,6 @@ def test_sync_exits_2_when_no_url(tmp_path, sync_module, monkeypatch):
 
     rc = sync_module.main([
         "--db", str(db),
-        "--no-proxy-config",
         "--url", "",
     ])
     assert rc == 2
