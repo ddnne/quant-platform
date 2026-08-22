@@ -19,6 +19,8 @@ datasets:
   - markets_calendar
 params:
   post_hold_days: 5
+  entry_mode: same_day_close_if_pre_close
+  min_hist: 20
   trail_k: 10
   trail_min: 5
 evaluator: research.unique_logic.adaptive.evaluate_event_funding_adaptive_side_daily_mtm

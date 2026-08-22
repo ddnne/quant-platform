@@ -21,6 +21,7 @@ from research.unique_logic.constants import (
     EVENT_LOGIC_IDS,
     EVENT_FILTER_LOGIC_IDS,
 )
+from research.unique_logic.catalog import yaml_unique_rows
 from research.unique_logic.event import (
     _collect_event_entries,
     _held_from_event_entries,
@@ -28,171 +29,15 @@ from research.unique_logic.event import (
 )
 import research.unique_logic.event as event
 
-NEW_UNIQUE_LOGIC: tuple[dict[str, Any], ...] = (
-    {
-        "logic_id": "large_surprise_event_hold",
-        "family_id": "large_surprise_filter",
-        "kind": "large_surprise_event_hold",
-        "new_unique_logic": True,
-        "catalog": False,
-        "catalog_map": None,
-        "headline": True,
-        "why_unique": (
-            "NEW SIGNAL FILTER: take PIT surprise-sign hold only when "
-            "|surprise| ≥ PIT trailing median of |surprise| among prior "
-            "universe events (disc_date strictly before). Not event_post "
-            "(all signed surprises) and not surprise_xs_rank (CS rank)."
-        ),
-        "thesis": (
-            "Small earnings surprises are noise. Hold the surprise sign only "
-            "when |surprise| is at/above its PIT trailing median across prior "
-            "universe disclosures — large-surprise PEAD, not all-event PEAD."
-        ),
-        "signal_definition": (
-            "earnings surprise proxy; enter iff abs(surprise) >= PIT median "
-            "of abs(surprise) on events with disc_date < this disc_date "
-            "(min_hist=20); median unformed → skip"
-        ),
-        "position_rule": (
-            "PIT post_hold after first non-look-ahead close; skip entire "
-            "event when |surprise| is below the PIT median or median unformed"
-        ),
-        "datasets": [
-            "fins_summary",
-            "equities_bars_daily",
-            "markets_calendar",
-        ],
-        "params": {
-            "post_hold_days": 5,
-            "entry_mode": "same_day_close_if_pre_close",
-            "min_hist": 20,
-            "mode": "large_surprise_event_hold",
-            "gate": "abs_surprise_ge_pit_trailing_median",
-        },
-    },
-    {
-        "logic_id": "afterclose_only_event_hold",
-        "family_id": "afterclose_event_timing",
-        "kind": "afterclose_only_event_hold",
-        "new_unique_logic": True,
-        "catalog": False,
-        "catalog_map": None,
-        "headline": False,
-        "why_unique": (
-            "NEW ENTRY TIMING: surprise hold only when DiscTime is at/after "
-            "that day's TSE session close. Missing DiscTime → skip (no invent). "
-            "Pre-close disclosures skipped. Not event_post_disclosure_hold "
-            "(which takes both pre-close same-day and after-close next-day)."
-        ),
-        "thesis": (
-            "After-hours disclosures avoid same-session leakage. Take the PIT "
-            "surprise-sign hold only for DiscTime ≥ session close; skip "
-            "intraday prints and time-unknown rows."
-        ),
-        "signal_definition": (
-            "surprise-sign AND parseable DiscTime >= session_close_hhmmss"
-            "(disc_date); missing/unparseable DiscTime → skip (no invent)"
-        ),
-        "position_rule": (
-            "PIT post_hold after first non-look-ahead close; flatten/skip "
-            "when DiscTime is pre-close or unknown"
-        ),
-        "datasets": [
-            "fins_summary",
-            "equities_bars_daily",
-            "markets_calendar",
-        ],
-        "params": {
-            "post_hold_days": 5,
-            "entry_mode": "same_day_close_if_pre_close",
-            "mode": "afterclose_only_event_hold",
-            "gate": "disctime_ge_session_close",
-        },
-    },
-    {
-        "logic_id": "event_pre_mom_agree_hold",
-        "family_id": "event_mom_agree_combo",
-        "kind": "event_pre_mom_agree_hold",
-        "new_unique_logic": True,
-        "catalog": False,
-        "catalog_map": None,
-        "headline": True,
-        "why_unique": (
-            "NEW COMBO: event surprise hold only when own-name N-day momentum "
-            "ending at the last close strictly before entry agrees in sign "
-            "with surprise. Not a sticky CS-mom book and not own-sign PEAD "
-            "without confirmation."
-        ),
-        "thesis": (
-            "PEAD is more informative when the name was already drifting in "
-            "the surprise direction. Confirm surprise-sign hold with own-name "
-            "pre-entry momentum; skip disagreement and missing history."
-        ),
-        "signal_definition": (
-            "surprise-sign AND sign(close[entry-1]/close[entry-1-n]-1) == "
-            "surprise-sign; n=5; insufficient bars or zero mom → skip"
-        ),
-        "position_rule": (
-            "PIT post_hold after first non-look-ahead close; skip when "
-            "pre-entry mom disagrees, is flat, or history is short"
-        ),
-        "datasets": [
-            "fins_summary",
-            "equities_bars_daily",
-            "markets_calendar",
-        ],
-        "params": {
-            "post_hold_days": 5,
-            "entry_mode": "same_day_close_if_pre_close",
-            "momentum_n": 5,
-            "mode": "event_pre_mom_agree_hold",
-            "gate": "own_pre_entry_mom_sign_agrees",
-        },
-    },
-    {
-        "logic_id": "event_margin_crowding_skip",
-        "family_id": "event_margin_crowd_combo",
-        "kind": "event_margin_crowding_skip",
-        "new_unique_logic": True,
-        "catalog": False,
-        "catalog_map": None,
-        "headline": True,
-        "why_unique": (
-            "NEW DATASET COMBO: skip post-disclosure surprise entry when the "
-            "name's last PIT margin-interest print (strictly before entry, "
-            "max 14 calendar days stale) is at/above that name's PIT trailing "
-            "median. Not flow_margin_pressure (not a continuous flow book) "
-            "and not a sticky-approx gate."
-        ),
-        "thesis": (
-            "PEAD is weaker when the name is already crowded in margin. Skip "
-            "the event when last-known name-level LongVol+ShrtVol is at/above "
-            "its PIT trailing median; missing/stale margin → skip (no ffill)."
-        ),
-        "signal_definition": (
-            "surprise-sign; enter only if last margin print with date < "
-            "entry_date and age<=14d is strictly below PIT trailing median "
-            "of that name's prior prints (min_hist=20); missing/stale → skip"
-        ),
-        "position_rule": (
-            "PIT post_hold after first non-look-ahead close; skip entire "
-            "event when margin is crowded, unformed, missing, or stale"
-        ),
-        "datasets": [
-            "fins_summary",
-            "markets_margin_interest",
-            "equities_bars_daily",
-            "markets_calendar",
-        ],
-        "params": {
-            "post_hold_days": 5,
-            "entry_mode": "same_day_close_if_pre_close",
-            "min_hist": 20,
-            "stale_calendar_days": 14,
-            "mode": "event_margin_crowding_skip",
-            "gate": "name_margin_lt_pit_trailing_median",
-        },
-    },
+NEW_UNIQUE_LOGIC: tuple[dict[str, Any], ...] = tuple(
+    yaml_unique_rows(
+        logic_ids=(
+            "large_surprise_event_hold",
+            "afterclose_only_event_hold",
+            "event_pre_mom_agree_hold",
+            "event_margin_crowding_skip",
+        )
+    )
 )
 
 

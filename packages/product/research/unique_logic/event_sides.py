@@ -21,6 +21,7 @@ from research.unique_logic.constants import (
     EVENT_LOGIC_IDS,
     EVENT_FILTER_LOGIC_IDS,
 )
+from research.unique_logic.catalog import yaml_unique_rows
 from research.unique_logic import event
 
 PARENT_LOGIC_IDS: tuple[str, ...] = (
@@ -29,136 +30,14 @@ PARENT_LOGIC_IDS: tuple[str, ...] = (
 )
 
 
-NEW_LS_VARIANTS: tuple[dict[str, Any], ...] = (
-    {
-        "logic_id": "event_funding_easy_short",
-        "family_id": "event_funding_combo",
-        "kind": "event_funding_easy_short",
-        "parent_logic_id": "event_funding_stress_skip",
-        "variant_kind": "sign_flip_short_side",
-        "new_unique_logic": True,
-        "catalog": False,
-        "catalog_map": None,
-        "headline": True,
-        "why_unique": (
-            "SIGN-FLIP / SHORT SIDE of event_funding_stress_skip: same easy-"
-            "funding occupancy, take −surprise-sign hold (not a kill of the "
-            "parent; window sign-flip is a side table, not a discard)."
-        ),
-        "thesis": (
-            "If post-earnings surprise drift under easy Tokyo overnight repo "
-            "is window-unstable in sign, the short side of the same skip book "
-            "is the other side of that table — not evidence to kill funding."
-        ),
-        "signal_definition": (
-            "same PIT overnight-lt-median gate as event_funding_stress_skip; "
-            "hold −surprise sign; missing overnight → skip (no ffill)"
-        ),
-        "position_rule": (
-            "PIT post_hold after first non-look-ahead close; enter only when "
-            "funding is easy; position is opposite of surprise sign"
-        ),
-        "datasets": [
-            "fins_summary",
-            "jsda_tokyo_repo_rates",
-            "equities_bars_daily",
-            "markets_calendar",
-        ],
-        "params": {
-            "post_hold_days": 5,
-            "entry_mode": "same_day_close_if_pre_close",
-            "min_hist": 20,
-            "mode": "funding_easy_short",
-            "gate": "overnight_lt_pit_trailing_median",
-            "side": "short_surprise",
-        },
-    },
-    {
-        "logic_id": "event_funding_stress_ls",
-        "family_id": "event_funding_combo",
-        "kind": "event_funding_stress_ls",
-        "parent_logic_id": "event_funding_stress_skip",
-        "variant_kind": "conditional_ls",
-        "new_unique_logic": True,
-        "catalog": False,
-        "catalog_map": None,
-        "headline": True,
-        "why_unique": (
-            "CONDITIONAL L/S: keep surprise-sign when overnight is easy; take "
-            "opposite only under funding stress. Occupancy expands vs skip "
-            "(does not collapse). Missing overnight still skip (no ffill)."
-        ),
-        "thesis": (
-            "Funding-stress is a side switch, not a skip-to-empty. Stay in "
-            "the event book under both easy and stress overnight regimes; "
-            "flip only the surprise sign under stress."
-        ),
-        "signal_definition": (
-            "overnight present and PIT median formed; +surprise if overnight "
-            "< median, −surprise if overnight >= median; missing → skip"
-        ),
-        "position_rule": (
-            "PIT post_hold after first non-look-ahead close; original sign "
-            "when easy, opposite only under stress; occupancy = classified "
-            "events (easy + stress)"
-        ),
-        "datasets": [
-            "fins_summary",
-            "jsda_tokyo_repo_rates",
-            "equities_bars_daily",
-            "markets_calendar",
-        ],
-        "params": {
-            "post_hold_days": 5,
-            "entry_mode": "same_day_close_if_pre_close",
-            "min_hist": 20,
-            "mode": "funding_stress_ls",
-            "gate": "overnight_present_pit_median",
-            "side": "original_easy_opposite_stress",
-        },
-    },
-    {
-        "logic_id": "surprise_xs_rank_flip",
-        "family_id": "surprise_xs_rank",
-        "kind": "surprise_xs_rank_flip",
-        "parent_logic_id": "surprise_xs_rank_hold",
-        "variant_kind": "sign_flip_short_side",
-        "new_unique_logic": True,
-        "catalog": False,
-        "catalog_map": None,
-        "headline": True,
-        "why_unique": (
-            "SIGN-FLIP / SHORT SIDE of surprise_xs_rank_hold: same ranked-day "
-            "occupancy; long low-surprise / short high-surprise. Not a kill of "
-            "the parent; window sign-flip is a side table."
-        ),
-        "thesis": (
-            "Relative-surprise rank is window-unstable in sign. The flipped "
-            "CS book is the other side of that table, with occupancy held."
-        ),
-        "signal_definition": (
-            "CS rank of surprise among names whose PIT event entry is inside "
-            "the last post_hold_days sessions; flip rank signs; <2 names → "
-            "flat (no invent)"
-        ),
-        "position_rule": (
-            "balanced L/S on flipped surprise ranks for currently-in-window "
-            "names; names with no recent PIT disclosure stay flat"
-        ),
-        "datasets": [
-            "fins_summary",
-            "equities_bars_daily",
-            "markets_calendar",
-        ],
-        "params": {
-            "post_hold_days": 5,
-            "entry_mode": "same_day_close_if_pre_close",
-            "long_frac": 0.3,
-            "short_frac": 0.3,
-            "mode": "surprise_xs_rank_flip",
-            "sign_flip": True,
-        },
-    },
+NEW_LS_VARIANTS: tuple[dict[str, Any], ...] = tuple(
+    yaml_unique_rows(
+        logic_ids=(
+            "event_funding_easy_short",
+            "event_funding_stress_ls",
+            "surprise_xs_rank_flip",
+        )
+    )
 )
 
 

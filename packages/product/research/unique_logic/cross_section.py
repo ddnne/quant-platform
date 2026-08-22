@@ -21,198 +21,21 @@ from research.unique_logic.constants import (
     EVENT_LOGIC_IDS,
     EVENT_FILTER_LOGIC_IDS,
 )
+from research.unique_logic.catalog import yaml_unique_rows
 from research.unique_logic import event
 
 PACK_BIAS = "mixed"
 
 
-NEW_UNIQUE_LOGIC: tuple[dict[str, Any], ...] = (
-    {
-        "logic_id": "funding_impulse_cs_tilt",
-        "family_id": "funding_impulse_cs",
-        "kind": "funding_impulse_cs_tilt",
-        "new_unique_logic": True,
-        "catalog": False,
-        "catalog_map": None,
-        "headline": True,
-        "axis": "funding",
-        "why_unique": (
-            "NEW FUNDING SIGNAL: CS mom L-S sign-tilted by overnight Tokyo "
-            "repo CHANGE (not level). Trade only when |Δovernight| ≥ PIT "
-            "trailing median of |Δ|; tightening (Δ>0) fades CS mom, easing "
-            "(Δ<0) follows. Missing same-date overnight → flatten (no ffill). "
-            "Not event_funding_stress_skip (event-book level skip) and not "
-            "sticky."
-        ),
-        "thesis": (
-            "Large overnight funding impulses reprice relative-strength. "
-            "When Tokyo repo tightens vs the prior print by at least the PIT "
-            "median |Δ|, fade CS momentum; when it eases by that much, follow. "
-            "Small noise moves and missing prints stay flat."
-        ),
-        "signal_definition": (
-            "Δovernight = overnight[d] − prior overnight print (date < d); "
-            "enter iff abs(Δ) >= PIT median of abs(Δ) with delta-date < d "
-            "(min_hist=20); tilt = −sign(Δ); missing/unformed/zero → flatten"
-        ),
-        "position_rule": (
-            "sticky fixed_horizon CS rank mom L-S × funding-impulse tilt; "
-            "flat when |Δ| is below PIT median, median unformed, or overnight "
-            "missing same-date (no ffill)"
-        ),
-        "datasets": [
-            "jsda_tokyo_repo_rates",
-            "equities_bars_daily",
-            "markets_calendar",
-        ],
-        "params": {
-            "hold_days": 10,
-            "momentum_n": 5,
-            "long_frac": 0.3,
-            "short_frac": 0.3,
-            "min_hist": 20,
-            "mode": "funding_impulse_cs_tilt",
-            "gate": "abs_overnight_delta_ge_pit_median",
-        },
-    },
-    {
-        "logic_id": "curve_steepen_impulse_cs",
-        "family_id": "curve_steepen_impulse_cs",
-        "kind": "curve_steepen_impulse_cs",
-        "new_unique_logic": True,
-        "catalog": False,
-        "catalog_map": None,
-        "headline": False,
-        "axis": "macro",
-        "why_unique": (
-            "NEW MACRO IMPULSE: CS mom L-S only when the same-date 3M−ON "
-            "repo spread STEEPENS vs the prior print AND |Δspread| ≥ PIT "
-            "trailing median of |Δspread|. Flatten on flattening, inversion "
-            "moves, gaps, or unformed median. Not rate_curve_shape_xs "
-            "(level steep/invert transform) and not curve_steep_event_confirm "
-            "(event book)."
-        ),
-        "thesis": (
-            "A carry-friendly funding curve is informative when it is actively "
-            "steepening, not merely steep. Take CS relative-strength only on "
-            "large same-date 3M−ON steepening impulses; otherwise flat."
-        ),
-        "signal_definition": (
-            "Δspread = (3M−ON)[d] − prior same-tenor spread; enter iff "
-            "Δspread > 0 AND abs(Δspread) >= PIT median of abs(Δspread) "
-            "with date < d (min_hist=20); missing either tenor → flatten "
-            "(no ffill)"
-        ),
-        "position_rule": (
-            "sticky fixed_horizon CS rank mom L-S on steepening-impulse days; "
-            "flat otherwise"
-        ),
-        "datasets": [
-            "jsda_tokyo_repo_rates",
-            "equities_bars_daily",
-            "markets_calendar",
-        ],
-        "params": {
-            "hold_days": 10,
-            "momentum_n": 5,
-            "long_frac": 0.3,
-            "short_frac": 0.3,
-            "min_hist": 20,
-            "mode": "curve_steepen_impulse_cs",
-            "gate": "spread_delta_gt_0_and_abs_ge_pit_median",
-        },
-    },
-    {
-        "logic_id": "xs_margin_delta_rank",
-        "family_id": "xs_margin_delta",
-        "kind": "xs_margin_delta_rank",
-        "new_unique_logic": True,
-        "catalog": False,
-        "catalog_map": None,
-        "headline": True,
-        "axis": "cross_section",
-        "why_unique": (
-            "NEW CROSS-SECTION SIGNAL: rank names by PIT %change in "
-            "name-level margin interest (last two prints with date < today, "
-            "last print age ≤ 14 calendar days). Long de-crowding / short "
-            "crowding. Not price-mom sticky, not flow_margin_pressure "
-            "(own-name flow book), not event_margin_crowding_skip."
-        ),
-        "thesis": (
-            "Expanding margin is crowding; shrinking margin is de-crowding. "
-            "Among names with two recent PIT margin prints, long the "
-            "de-crowding tail and short the crowding tail — a flow CS book, "
-            "not a price CS book."
-        ),
-        "signal_definition": (
-            "score = −(last−prev)/|prev| from two prints with last_date < "
-            "today and age<=14d; CS rank L-S of scores; <2 names or "
-            "missing/stale → flatten that name / day (no ffill, no invent)"
-        ),
-        "position_rule": (
-            "sticky fixed_horizon balanced L/S on margin-delta ranks; names "
-            "without two fresh PIT prints stay flat"
-        ),
-        "datasets": [
-            "markets_margin_interest",
-            "equities_bars_daily",
-            "markets_calendar",
-        ],
-        "params": {
-            "hold_days": 10,
-            "long_frac": 0.3,
-            "short_frac": 0.3,
-            "stale_calendar_days": 14,
-            "mode": "xs_margin_delta_rank",
-            "gate": "name_margin_delta_cs_rank",
-        },
-    },
-    {
-        "logic_id": "idio_mom_macro_impulse",
-        "family_id": "idio_mom_macro",
-        "kind": "idio_mom_macro_impulse",
-        "new_unique_logic": True,
-        "catalog": False,
-        "catalog_map": None,
-        "headline": True,
-        "axis": "macro_xs",
-        "why_unique": (
-            "NEW MACRO×XS: CS rank of idiosyncratic momentum "
-            "(name_mom_n − TOPIX_mom_n) only on days when |TOPIX_mom_n| ≥ "
-            "PIT trailing median of |TOPIX_mom_n|. Missing same-date TOPIX "
-            "→ flatten (no ffill). Not sticky (raw mom CS always-on) and "
-            "not vol_risk_adjusted_mom."
-        ),
-        "thesis": (
-            "Idiosyncratic relative strength is more informative on large "
-            "index-move days. Rank residual momentum vs TOPIX only when the "
-            "index itself has moved by at least its PIT median |mom|; stay "
-            "flat on quiet macro days."
-        ),
-        "signal_definition": (
-            "residual = mom_n(name) − mom_n(TOPIX) on the bar calendar; "
-            "enter iff abs(TOPIX_mom) >= PIT median of abs(TOPIX_mom) "
-            "with date < d (min_hist=20); missing TOPIX print → flatten"
-        ),
-        "position_rule": (
-            "sticky fixed_horizon CS rank of residual mom on macro-impulse "
-            "days; flat when |TOPIX mom| is below PIT median or TOPIX missing"
-        ),
-        "datasets": [
-            "indices_bars_daily_topix",
-            "equities_bars_daily",
-            "markets_calendar",
-        ],
-        "params": {
-            "hold_days": 10,
-            "momentum_n": 5,
-            "long_frac": 0.3,
-            "short_frac": 0.3,
-            "min_hist": 20,
-            "mode": "idio_mom_macro_impulse",
-            "gate": "abs_topix_mom_ge_pit_median",
-        },
-    },
+NEW_UNIQUE_LOGIC: tuple[dict[str, Any], ...] = tuple(
+    yaml_unique_rows(
+        logic_ids=(
+            "funding_impulse_cs_tilt",
+            "curve_steepen_impulse_cs",
+            "xs_margin_delta_rank",
+            "idio_mom_macro_impulse",
+        )
+    )
 )
 
 

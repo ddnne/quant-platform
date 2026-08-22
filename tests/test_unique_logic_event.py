@@ -55,13 +55,30 @@ def test_event_proposals_are_new_unique_logic_not_catalog_remaps():
     assert len(ids) == 4
     for s in event.NEW_UNIQUE_LOGIC:
         assert s["new_unique_logic"] is True
-        assert s["catalog"] is False
+        assert s["catalog"] is True
         assert s["catalog_map"] is None
+        assert s.get("generation_enabled") is False
+        assert s.get("go") is False
         assert s["logic_id"] not in event.LOGIC_CATALOG_HEADLINE_BAN
         assert s["logic_id"] not in event.KNOWN_WEAK_THESIS
         assert s["logic_id"] not in event.KNOWN_DEMOTED_OR_WEAK
         params = s["params"]
         assert "mode" in params or "gate" in params
+
+
+def test_event_new_unique_logic_is_yaml_backed():
+    import inspect
+
+    from research.unique_logic import catalog as catalog_mod
+    from research.unique_logic.catalog import yaml_unique_rows
+
+    ids = [s["logic_id"] for s in event.NEW_UNIQUE_LOGIC]
+    rows = yaml_unique_rows(logic_ids=ids)
+    assert [r["logic_id"] for r in rows] == ids
+    src = inspect.getsource(catalog_mod.yaml_unique_rows)
+    assert "NEW_UNIQUE_LOGIC" not in src
+    assert "NEW_LS_VARIANTS" not in src
+    assert "ADAPTIVE_VARIANTS" not in src
 
 
 def test_event_propose_profit_hypotheses_accepts_adhoc_no_catalog_map():

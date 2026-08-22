@@ -22,6 +22,7 @@ from research.unique_logic.constants import (
     EVENT_LOGIC_IDS,
     EVENT_FILTER_LOGIC_IDS,
 )
+from research.unique_logic.catalog import yaml_unique_rows
 from research.unique_logic import event, event_sides
 
 TRAIL_K = 10
@@ -30,97 +31,13 @@ TRAIL_K = 10
 TRAIL_MIN = 5
 
 
-ADAPTIVE_VARIANTS: tuple[dict[str, Any], ...] = (
-    {
-        "logic_id": "event_funding_adaptive_side",
-        "family_id": "event_funding_combo",
-        "kind": "event_funding_adaptive_side",
-        "parent_logic_id": "event_funding_stress_skip",
-        "variant_kind": "trail_k_adaptive_side",
-        "new_unique_logic": True,
-        "catalog": False,
-        "catalog_map": None,
-        "headline": True,
-        "why_unique": (
-            "ADAPTIVE SIDE of event_funding_stress_skip: same easy-funding "
-            "occupancy; at each PIT entry pick orig vs flip from last K "
-            "completed holds with hold_end < entry_date. Not a kill of the "
-            "fixed L/S table."
-        ),
-        "thesis": (
-            "Window sign-flip of easy-funding surprise is a side table. "
-            "A PIT trail-K overlay can pick the recently-working side without "
-            "discarding either parent."
-        ),
-        "signal_definition": (
-            "same PIT overnight-lt-median gate as skip; sign = orig if mean "
-            f"orig hold of last {TRAIL_K} completed (min {TRAIL_MIN}) >= mean "
-            "flip, else flip; insufficient history → orig (no invent)"
-        ),
-        "position_rule": (
-            "PIT post_hold after first non-look-ahead close; enter only when "
-            "funding is easy; side chosen from completed holds only"
-        ),
-        "datasets": [
-            "fins_summary",
-            "jsda_tokyo_repo_rates",
-            "equities_bars_daily",
-            "markets_calendar",
-        ],
-        "params": {
-            "post_hold_days": 5,
-            "entry_mode": "same_day_close_if_pre_close",
-            "min_hist": 20,
-            "trail_k": TRAIL_K,
-            "trail_min": TRAIL_MIN,
-            "mode": "funding_easy_adaptive_side",
-            "gate": "overnight_lt_pit_trailing_median",
-            "side": "trail_k_orig_vs_flip",
-        },
-    },
-    {
-        "logic_id": "surprise_xs_rank_adaptive",
-        "family_id": "surprise_xs_rank",
-        "kind": "surprise_xs_rank_adaptive",
-        "parent_logic_id": "surprise_xs_rank_hold",
-        "variant_kind": "trail_k_adaptive_side",
-        "new_unique_logic": True,
-        "catalog": False,
-        "catalog_map": None,
-        "headline": True,
-        "why_unique": (
-            "ADAPTIVE SIDE of surprise_xs_rank_hold: same ranked occupancy; "
-            "each day pick orig vs flip from last K completed ranked-day orig "
-            "nets with date < d. Not a kill of the parent or the flip."
-        ),
-        "thesis": (
-            "Relative-surprise rank is window-unstable in sign. A PIT trail-K "
-            "overlay sits beside orig and flip rather than killing either."
-        ),
-        "signal_definition": (
-            "same CS surprise rank occupancy as parent; tilt = +1 if mean of "
-            f"last {TRAIL_K} completed orig daily nets (min {TRAIL_MIN}) >= 0 "
-            "else −1; insufficient history → orig"
-        ),
-        "position_rule": (
-            "balanced L/S on (possibly flipped) surprise ranks for currently-"
-            "in-window names; occupancy held vs parent"
-        ),
-        "datasets": [
-            "fins_summary",
-            "equities_bars_daily",
-            "markets_calendar",
-        ],
-        "params": {
-            "post_hold_days": 5,
-            "entry_mode": "same_day_close_if_pre_close",
-            "long_frac": 0.3,
-            "short_frac": 0.3,
-            "trail_k": TRAIL_K,
-            "trail_min": TRAIL_MIN,
-            "mode": "surprise_xs_rank_adaptive",
-        },
-    },
+ADAPTIVE_VARIANTS: tuple[dict[str, Any], ...] = tuple(
+    yaml_unique_rows(
+        logic_ids=(
+            "event_funding_adaptive_side",
+            "surprise_xs_rank_adaptive",
+        )
+    )
 )
 
 

@@ -13,6 +13,7 @@ from research.daily_path_eval import (
     held_book_daily_mtm,
     panel_index,
 )
+from research.unique_logic.catalog import yaml_unique_rows
 from research.unique_logic.constants import (
     ALWAYS_ON_OCCUPANCY_WARN,
     KNOWN_DEMOTED_OR_WEAK,
@@ -22,172 +23,15 @@ from research.unique_logic.constants import (
     EVENT_FILTER_LOGIC_IDS,
 )
 
-NEW_UNIQUE_LOGIC: tuple[dict[str, Any], ...] = (
-    {
-        "logic_id": "event_funding_stress_skip",
-        "family_id": "event_funding_combo",
-        "kind": "event_funding_stress_skip",
-        "new_unique_logic": True,
-        "catalog": False,
-        "catalog_map": None,
-        "headline": True,
-        "why_unique": (
-            "NEW PIT GATE + funding×disclosure: skip post-disclosure surprise "
-            "entry when overnight Tokyo repo is at/above its PIT trailing "
-            "median (funding stress). Not event_post_disclosure_hold remap."
-        ),
-        "thesis": (
-            "Post-earnings surprise drift is financing-sensitive. When overnight "
-            "Tokyo repo is at/above its PIT trailing median, skip the event "
-            "entry; take surprise-sign hold only when funding is easy."
-        ),
-        "signal_definition": (
-            "earnings surprise proxy; enter only if overnight repo on entry "
-            "date is strictly below PIT trailing median of prior overnight "
-            "prints; missing same-date overnight → skip (no ffill)"
-        ),
-        "position_rule": (
-            "PIT post_hold after first non-look-ahead close; skip entire "
-            "event when funding-stress gate is on or overnight is missing"
-        ),
-        "datasets": [
-            "fins_summary",
-            "jsda_tokyo_repo_rates",
-            "equities_bars_daily",
-            "markets_calendar",
-        ],
-        "params": {
-            "post_hold_days": 5,
-            "entry_mode": "same_day_close_if_pre_close",
-            "min_hist": 20,
-            "mode": "funding_stress_skip",
-            "gate": "overnight_lt_pit_trailing_median",
-        },
-    },
-    {
-        "logic_id": "curve_steep_event_confirm",
-        "family_id": "event_macro_curve_combo",
-        "kind": "curve_steep_event_confirm",
-        "new_unique_logic": True,
-        "catalog": False,
-        "catalog_map": None,
-        "headline": True,
-        "why_unique": (
-            "NEW combo funding×disclosure×macro: event surprise hold only "
-            "when 3M−ON repo curve is steep (spread>0, both tenors same date, "
-            "no ffill). Distinct from overnight-level gate and from "
-            "rate_curve_shape_xs (not a CS-mom book)."
-        ),
-        "thesis": (
-            "Event surprise drift is confirmed only in a carry-friendly term-"
-            "funding regime: take PIT surprise-sign hold iff the JSDA Tokyo "
-            "repo curve (3M−overnight) is steep on the entry date."
-        ),
-        "signal_definition": (
-            "surprise-sign AND same-date repo spread (3M/T+1 − overnight/T+0) "
-            "> 0; missing either tenor → skip (no ffill / no invent)"
-        ),
-        "position_rule": (
-            "PIT post_hold after first non-look-ahead close; flatten/skip "
-            "when curve is flat, inverted, or gapped"
-        ),
-        "datasets": [
-            "fins_summary",
-            "jsda_tokyo_repo_rates",
-            "equities_bars_daily",
-            "markets_calendar",
-        ],
-        "params": {
-            "post_hold_days": 5,
-            "entry_mode": "same_day_close_if_pre_close",
-            "steep_threshold": 0.0,
-            "mode": "curve_steep_event_confirm",
-            "gate": "repo_curve_spread_gt_0",
-        },
-    },
-    {
-        "logic_id": "disclosure_cluster_mom_gate",
-        "family_id": "disclosure_cluster_gate",
-        "kind": "disclosure_cluster_mom_gate",
-        "new_unique_logic": True,
-        "catalog": False,
-        "catalog_map": None,
-        "headline": False,
-        "why_unique": (
-            "NEW PIT GATE: CS mom L-S sticky only when PIT count of recent "
-            "universe disclosures ≥ trailing median. Distinct from "
-            "xs_cs_dispersion_gate (disclosure count, not mom std) and not a "
-            "sticky remap."
-        ),
-        "thesis": (
-            "Relative-strength L-S is more informative during earnings-season "
-            "information flow. Gate the CS mom book ON only when the PIT "
-            "count of disclosures in the last N sessions is at/above its "
-            "trailing median."
-        ),
-        "signal_definition": (
-            "CS rank mom L-S × PIT disclosure-cluster count vs trailing "
-            "median (strict: DiscDate < today; no same-day look-ahead)"
-        ),
-        "position_rule": (
-            "sticky fixed_horizon hold of gated rank signs; flat when "
-            "disclosure cluster is below PIT trailing median"
-        ),
-        "datasets": [
-            "fins_summary",
-            "equities_bars_daily",
-            "markets_calendar",
-        ],
-        "params": {
-            "hold_days": 10,
-            "momentum_n": 5,
-            "long_frac": 0.3,
-            "short_frac": 0.3,
-            "cluster_lookback": 5,
-            "min_hist": 10,
-            "mode": "disclosure_cluster_gate",
-            "gate": "n_recent_disclosures_ge_pit_median",
-        },
-    },
-    {
-        "logic_id": "surprise_xs_rank_hold",
-        "family_id": "surprise_xs_rank",
-        "kind": "surprise_xs_rank_hold",
-        "new_unique_logic": True,
-        "catalog": False,
-        "catalog_map": None,
-        "headline": False,
-        "why_unique": (
-            "NEW SIGNAL: cross-section rank of earnings surprise among names "
-            "currently in a PIT event window — relative surprise, not "
-            "own-sign time-series event_post hold."
-        ),
-        "thesis": (
-            "Among names that have a PIT-available disclosure in the last H "
-            "sessions, long high-surprise / short low-surprise. Relative "
-            "surprise, not own-sign PEAD hold."
-        ),
-        "signal_definition": (
-            "CS rank of surprise among names whose PIT event entry is inside "
-            "the last post_hold_days sessions; <2 names → flat (no invent)"
-        ),
-        "position_rule": (
-            "balanced L/S on surprise ranks for currently-in-window names; "
-            "names with no recent PIT disclosure stay flat"
-        ),
-        "datasets": [
-            "fins_summary",
-            "equities_bars_daily",
-            "markets_calendar",
-        ],
-        "params": {
-            "post_hold_days": 5,
-            "entry_mode": "same_day_close_if_pre_close",
-            "long_frac": 0.3,
-            "short_frac": 0.3,
-            "mode": "surprise_xs_rank",
-        },
-    },
+NEW_UNIQUE_LOGIC: tuple[dict[str, Any], ...] = tuple(
+    yaml_unique_rows(
+        logic_ids=(
+            "event_funding_stress_skip",
+            "curve_steep_event_confirm",
+            "disclosure_cluster_mom_gate",
+            "surprise_xs_rank_hold",
+        )
+    )
 )
 
 

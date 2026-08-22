@@ -60,8 +60,10 @@ def test_event_filters_proposals_are_new_unique_logic_not_catalog_or_prior_event
     assert len(ids) == 4
     for s in event_filters.NEW_UNIQUE_LOGIC:
         assert s["new_unique_logic"] is True
-        assert s["catalog"] is False
+        assert s["catalog"] is True
         assert s["catalog_map"] is None
+        assert s.get("generation_enabled") is False
+        assert s.get("go") is False
         assert s["logic_id"] not in event_filters.LOGIC_CATALOG_HEADLINE_BAN
         assert s["logic_id"] not in event_filters.EVENT_LOGIC_IDS
         assert s["logic_id"] not in event_filters.KNOWN_WEAK_THESIS
