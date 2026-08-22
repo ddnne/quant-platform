@@ -26,7 +26,6 @@ from research.r2_feature_context import (
     AVAILABLE_AT_REPAIR_POLICY,
     BRIDGE_EXPAND_DATASETS,
     COMPLETE_21_R2_INVENTORY,
-    FEATURE_CONTEXT_SCHEMA_MAP,
     HISTORY_SOURCE_R2,
     MULTI_SIGNAL_HISTORY_DATASETS,
     R2FeatureContextError,
@@ -79,9 +78,6 @@ def test_t2_schema_mapping_has_s1_datasets():
     assert "equities_bars_daily" in doc["s1_column_map"]
     assert "indices_bars_daily_topix" in doc["s1_column_map"]
     assert "markets_calendar" in doc["s1_column_map"]
-    assert FEATURE_CONTEXT_SCHEMA_MAP["equity_bars_daily"]["dataset"] == (
-        "equities_bars_daily"
-    )
     assert doc["pit_gate"]["null_available_at"] == "excluded (hard)"
 
 

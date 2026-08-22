@@ -207,11 +207,8 @@ def test_logic_templates_distinct_economic_logic():
         assert LOGIC_TEMPLATES[lid].family_id == FAMILY_MULTI_FACTOR
     for lid in _NKY_VOL_IDS:
         assert LOGIC_TEMPLATES[lid].family_id == FAMILY_INDEX_VOL_REGIME
-    assert "nky_vol_abs_level" in doc.get("w91_index_vol_logic_ids", [])
     for lid in _OPT225_IDS:
         assert LOGIC_TEMPLATES[lid].family_id == FAMILY_OPTIONS_VOL_REGIME
-    assert "opt225_basevol_abs_level" in doc.get("w92_options_vol_logic_ids", [])
-    assert "opt225_skew_abs_level" in doc.get("w94_options_vol_logic_ids", [])
     assert doc.get("opt225_canonical_level") == "basevol"
     assert doc.get("opt225_atm_iv_role") == "compare_only"
     assert LOGIC_TEMPLATES["opt225_atm_iv_abs_level"].base_params.get("compare_only") is True
@@ -220,10 +217,6 @@ def test_logic_templates_distinct_economic_logic():
         assert lid not in LOGIC_TEMPLATES
     assert "event_funding_stress_skip" in doc.get("unique_logic_ids", [])
     assert "overnight_level_cs_tilt" in doc.get("unique_logic_append_logic_ids", [])
-    assert "w105_research_unique_logic_ids" not in doc
-    assert "w104_w105" not in str(
-        doc.get("research_family_registration", {}).get("register_id", "")
-    )
     rules = doc["diversity_rules"]
     assert "hold_days only" in str(rules["does_not_count"])
     assert "info source" in str(rules["counts_as_different"]).lower() or any(
@@ -281,7 +274,6 @@ def test_families_still_documented_for_eval_dispatch():
     assert append["registration_is_not_promotion"] is True
     assert append["generation_enabled"] is False
     assert append["this_wave_only"] is True
-    assert append["did_not_kill_funding_surprise"] is True
     assert set(append["appended_logic_ids"]) == set(RESEARCH_FAMILY_APPEND_LOGIC_IDS)
 
 

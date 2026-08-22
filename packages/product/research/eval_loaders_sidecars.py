@@ -419,7 +419,6 @@ def repo_history_plane_status(
         "sqlite_tenors": int(tenors or 0),
         "d1_role": "hot_tip_only",
         "pit_path": "fail_closed_until_READY",
-        "research_loader": "load_repo_rows_all_tenors_from_sqlite",
         "invent_complete": False,
         "ffill_applied": False,
     }
@@ -531,12 +530,8 @@ def build_repo_curve_series(
         "n_obs_long": len(long_by),
         "n_obs_spread": len(spread_by),
         "n_gap_either_leg": len(gap_dates),
-        "gap_dates_sample": gap_dates[:20],
         "ffill_applied": False,
         "invent_fill": False,
-        "tenors_observed": sorted(
-            {t for m in by_date_tenor.values() for t in m.keys()}
-        ),
     }
 
 

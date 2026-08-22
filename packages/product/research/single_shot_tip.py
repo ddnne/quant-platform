@@ -1039,27 +1039,6 @@ def discover_tip_trading_days(
     return sorted(bar_days)
 
 
-def _reexport_on_job() -> None:
-    import sys
-
-    job = sys.modules.get("research.single_shot_job")
-    if job is None:
-        return
-    for name in (
-        "_as_of_from_period_end",
-        "build_tip_feature_context",
-        "compute_tip_candidate_features",
-        "default_d1_execute",
-        "discover_tip_trading_days",
-        "extract_d1_tip_feature_rows",
-        "extract_d1_tip_summaries",
-    ):
-        setattr(job, name, globals()[name])
-
-
-_reexport_on_job()
-
-
 __all__ = [
     "build_tip_feature_context",
     "compute_tip_candidate_features",

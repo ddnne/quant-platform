@@ -54,15 +54,11 @@ from research.offline.factory_templates import (
     NUMERIC_ONLY_KNOBS,
 )
 
-# Identity / freezes (must never arm operational Mass).
-
 MASS_FACTORY_VERSION: str = "mass-strategy-factory/v2.8"
 MASS_FACTORY_WAVE: str = "research-unique-logic"
 
-# Factory "mass" here means bulk research generation — never operational Mass.
 FACTORY_MASS_LOOP: str = "research_batch_only"
 
-# Gen-time reject reason codes
 REJECT_SIMPLE_DAILY_SIGN: str = "simple_daily_sign_forbidden"
 REJECT_LOOKAHEAD: str = "pit_lookahead_forbidden"
 REJECT_MISSING_DATASETS: str = "required_datasets_unavailable"
@@ -80,7 +76,6 @@ DEFAULT_MAX_FAMILY_SHARE: float = 0.35  # soft; logic diversity is primary anti-
 DEFAULT_ONE_WAY: float = DEFAULT_ONE_WAY_COST
 DEFAULT_NEAR_DUP_THRESHOLD: float = 0.85  # drop when similarity >= this
 
-# Datasets the factory can satisfy offline (local mirrors + sqlite).
 FACTORY_AVAILABLE_DATASETS: frozenset[str] = frozenset(
     {
         "equities_bars_daily",
@@ -102,7 +97,6 @@ FACTORY_AVAILABLE_DATASETS: frozenset[str] = frozenset(
     }
 )
 
-# Event entry modes
 _EVENT_ENTRY_SAFE: tuple[str, ...] = ("same_day_close_if_pre_close",)
 _EVENT_ENTRY_FORBIDDEN: frozenset[str] = frozenset(
     {
@@ -152,7 +146,6 @@ class MassFactoryConfig:
     max_family_share: float = DEFAULT_MAX_FAMILY_SHARE
     one_way_cost: float = DEFAULT_ONE_WAY
     available_datasets: frozenset[str] = FACTORY_AVAILABLE_DATASETS
-    # Eval lite knobs
     max_days_per_period: int = 80
     max_codes: int = 20
     use_q4_periods: bool = True
@@ -160,7 +153,6 @@ class MassFactoryConfig:
     near_zero_abs: float = DEFAULT_NEAR_ZERO_ABS
     min_activation: float = DEFAULT_MIN_ACTIVATION
     fail_one_continue: bool = True
-    # Limited numeric fill after unique logics (still near-duped).
     allow_numeric_variants: bool = True
     near_dup_threshold: float = DEFAULT_NEAR_DUP_THRESHOLD
     eval_after_dedup: bool = True
@@ -288,7 +280,6 @@ def _coarse_bucket(key: str, value: Any) -> Any:
             v = int(value)
         except (TypeError, ValueError):
             return str(value)
-        # buckets: short / mid / long
         if v <= 5:
             return "short"
         if v <= 12:
@@ -336,19 +327,15 @@ def similarity_score(a: Mapping[str, Any], b: Mapping[str, Any]) -> float:
     fa = individual_similarity_features(a)
     fb = individual_similarity_features(b)
 
-    # Exact same logic fingerprint → pure clone / numeric twin
     if fa["logic_fingerprint"] and fa["logic_fingerprint"] == fb["logic_fingerprint"]:
         if fa["coarse_knobs"] == fb["coarse_knobs"]:
             return 1.0
-        # same logic, different coarse knobs → still near-dup (grid mutation)
         return 0.95
 
-    # Same logic_id different fingerprint (shouldn't happen often)
     if fa["logic_id"] and fa["logic_id"] == fb["logic_id"]:
         return 0.92
 
     score = 0.0
-    # Family / signal / position / datasets (core of logic diversity)
     if fa["family_id"] == fb["family_id"] and fa["family_id"]:
         score += 0.25
     if fa["signal_definition"] == fb["signal_definition"] and fa["signal_definition"]:
@@ -358,7 +345,6 @@ def similarity_score(a: Mapping[str, Any], b: Mapping[str, Any]) -> float:
     if fa["datasets"] == fb["datasets"] and fa["datasets"]:
         score += 0.15
 
-    # Structural keys agreement
     sa, sb = fa["structural"], fb["structural"]
     if sa or sb:
         keys = set(sa) | set(sb)
@@ -366,7 +352,6 @@ def similarity_score(a: Mapping[str, Any], b: Mapping[str, Any]) -> float:
             agree = sum(1 for k in keys if sa.get(k) == sb.get(k))
             score += 0.10 * (agree / len(keys))
 
-    # Coarse knob agreement alone cannot push past threshold without logic match
     ca, cb = fa["coarse_knobs"], fb["coarse_knobs"]
     if ca and cb and ca == cb and score >= 0.7:
         score = min(1.0, score + 0.05)
@@ -429,11 +414,9 @@ def validate_strategy_at_gen(
     if logic_id is not None and str(logic_id) not in LOGIC_TEMPLATES:
         return False, REJECT_UNKNOWN_LOGIC
     if fid not in FAMILY_DEFINITIONS and fid != FAMILY_VOL_RISK_ADJUSTED:
-        # FAMILY_VOL_RISK is in FAMILY_DEFINITIONS when templates include it
         if fid not in {t.family_id for t in LOGIC_TEMPLATES.values()}:
             return False, REJECT_UNKNOWN_FAMILY
 
-    # Datasets from template if available
     if logic_id and logic_id in LOGIC_TEMPLATES:
         req = LOGIC_TEMPLATES[logic_id].datasets_used
     elif fid in FAMILY_DEFINITIONS:
@@ -528,7 +511,6 @@ def _minimal_numeric_variants(tpl: LogicTemplate) -> list[dict[str, Any]]:
     """
     base = dict(tpl.base_params)
     variants: list[dict[str, Any]] = []
-    # One mild hold shift if hold-like key exists (explicitly a numeric variant)
     if "hold_days" in base and int(base["hold_days"]) not in (1,):
         v = dict(base)
         h = int(base["hold_days"])
@@ -587,7 +569,6 @@ def generate_strategy_batch(
         rng_state = (1664525 * rng_state + 1013904223) & 0xFFFFFFFF
         return rng_state
 
-    # Deterministic order of logic templates
     logic_ids = list(LOGIC_TEMPLATE_IDS)
     for i in range(len(logic_ids) - 1, 0, -1):
         j = _next_rand() % (i + 1)
@@ -647,7 +628,6 @@ def generate_strategy_batch(
         gen_rejected.append(row)
         return False
 
-    # Pass 1: one primary individual per distinct logic template
     for lid in logic_ids:
         if len(strategies) >= cfg.n:
             break
@@ -658,7 +638,6 @@ def generate_strategy_batch(
             continue
         _try_emit(tpl, dict(tpl.base_params), numeric=False)
 
-    # Pass 2: optional limited numeric variants (capacity fill; near-dup later)
     if cfg.allow_numeric_variants and len(strategies) < cfg.n:
         for lid in logic_ids:
             if len(strategies) >= cfg.n:
@@ -671,7 +650,6 @@ def generate_strategy_batch(
             for vp in _minimal_numeric_variants(tpl):
                 if len(strategies) >= cfg.n:
                     break
-                # skip if identical to base
                 if _canonical_params(vp) == _canonical_params(tpl.base_params):
                     continue
                 _try_emit(tpl, vp, numeric=True)
@@ -680,7 +658,6 @@ def generate_strategy_batch(
     unique_logic_ids = sorted({s.logic_id for s in strategies})
     n_unique_logic = len(unique_logic_ids)
 
-    # Near-duplicate collapse (grid mutations out)
     dedup = dedup_strategies(
         [s.to_dict() for s in strategies],
         threshold=cfg.near_dup_threshold,
@@ -694,10 +671,9 @@ def generate_strategy_batch(
     }
     max_share = max(shares.values()) if shares and n_generated else 0.0
 
-    # Logic diversity ok: after_dedup close to unique_logic; not flooded by clones
     logic_diversity_ok = (
         n_unique_logic >= min(10, len(LOGIC_TEMPLATES))
-        and n_after_dedup >= n_unique_logic  # kept at least one per unique
+        and n_after_dedup >= n_unique_logic
         and (n_numeric == 0 or n_after_dedup <= n_unique_logic + 2)
     )
 
@@ -707,7 +683,7 @@ def generate_strategy_batch(
         "config": cfg.to_dict(),
         "n_requested": int(cfg.n),
         "n_generated": n_generated,
-        "n_generated_accepted": n_generated,  # back-compat alias
+        "n_generated_accepted": n_generated,
         "n_unique_logic": n_unique_logic,
         "n_numeric_variant": n_numeric,
         "n_after_dedup": n_after_dedup,
@@ -741,8 +717,6 @@ def generate_strategy_batch(
         **_freeze(),
     }
 
-
-# Panels / eval after MassFactoryConfig (factory_eval_data / factory_eval).
 
 from research.offline.factory_eval_data import (  # noqa: E402
     BatchDataContext,
@@ -889,8 +863,6 @@ def write_factory_outputs(
     p.write_text(json.dumps(pack, indent=2, default=str) + "\n", encoding="utf-8")
     return {"factory_run.json": str(p)}
 
-
-# CF mass-eval worker status (tests pin try_cf_minimal_mass_batch).
 
 def _research_mass_eval_version() -> str:
     from qp_paths import repo_root

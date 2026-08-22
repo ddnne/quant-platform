@@ -63,7 +63,6 @@ DEFAULT_TIP_SAMPLE_LIMIT: int = 20
 DEFAULT_FEATURE_ROW_LIMIT: int = 400
 DEFAULT_FEATURE_CODE_LIMIT: int = 5
 
-# Registry-approved tip features (name kept for path stability).
 DEFAULT_CANDIDATE_FEATURES: tuple[str, ...] = (
     "volume_change_1d",
     "is_trading_day",

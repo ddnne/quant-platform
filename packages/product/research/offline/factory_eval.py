@@ -53,7 +53,6 @@ from research.stats_metrics import (
 )
 from research.unique_logic.constants import RESEARCH_UNIQUE_LOGIC_IDS
 
-# Function-default bindings; must match research.offline.factory.
 DEFAULT_NEAR_ZERO_ABS: float = 0.0005
 DEFAULT_MIN_ACTIVATION: float = 0.01
 SCREEN_NEAR_ZERO: str = "near_zero_after_cost"
@@ -227,7 +226,6 @@ def _eval_on_panel(
                 rebalance_mode=str(p.get("rebalance_mode") or "fixed_horizon"),
             )
         else:
-            # Mean-reversion entry: invert momentum sign at signal time
             out = _evaluate_mdh_polarity_on_bars(
                 bars,
                 hold_days=int(p.get("hold_days") or DEFAULT_HOLD_DAYS),
@@ -692,7 +690,6 @@ def screen_strategy_result(
         except (TypeError, ValueError):
             pass
 
-    # W95 low-variance / inflated-t demotion (window or pairwise subset).
     t_reason = str(result.get("t_stat_reason") or "")
     if t_reason == "low_variance_artifact" or result.get("low_variance_artifact"):
         reasons.append(SCREEN_INFLATED_T_LOW_VARIANCE)
@@ -895,10 +892,6 @@ def run_batch_eval(
         "human_main_candidates_selected": False,
         "frozen_default_path": list(FROZEN_DEFAULT_PATH),
         "frozen_defaults_retuned": False,
-        "note": (
-            "Auto screen on distinct logics. Survivors are not human main "
-            "or research_candidate defaults. Frozen defaults untouched."
-        ),
         **_freeze(),
     }
 

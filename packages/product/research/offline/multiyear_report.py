@@ -44,7 +44,6 @@ from research.sign_selection import (
     SIGN_INVERTED,
     SIGN_ORIGINAL,
     SIGN_SELECTION_VERSION,
-    SIGN_SELECTION_WAVE,
     sign_selection_from_period_rows,
 )
 from research.stats_metrics import period_stats_report, stats_bar_check
@@ -929,7 +928,6 @@ def assemble_class_hyp_multi_year_report(
 
     out["sign_selection"] = {
         "version": SIGN_SELECTION_VERSION,
-        "wave": SIGN_SELECTION_WAVE,
         "blocks": sign_selection_blocks,
     }
 
@@ -973,7 +971,6 @@ def assemble_class_hyp_multi_year_report(
         mom_compress_note = "no xs survivor after sign selection → demote both"
 
     out["default_path_representatives"] = {
-        "wave": SIGN_SELECTION_WAVE,
         "xs_representatives": xs_default,
         "fund_representatives": fund_surv,
         "all_survivors": survivors,

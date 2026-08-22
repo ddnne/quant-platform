@@ -14,8 +14,6 @@ from typing import Any, Mapping
 
 from research.bar_native_specs import BAR_NATIVE_LOGIC_IDS, BAR_NATIVE_SPECS
 from research.freezes import (
-    CONNECTED_TO_MASS,
-    CONNECTED_TO_READY,
     MASS_RESEARCH,
     READY_DECLARED,
 )
@@ -26,7 +24,6 @@ from research.hypothesis_classes import (
 )
 from research.unique_logic.constants import RESEARCH_UNIQUE_LOGIC_IDS
 
-# Optional families not in hypothesis_classes registry.
 FAMILY_VOL_RISK_ADJUSTED: str = "vol_risk_adjusted"
 FAMILY_RATE_FACTOR: str = "rate_factor"
 FAMILY_MULTI_FACTOR: str = "multi_factor"
@@ -49,7 +46,6 @@ FAMILY_MONTH_END_CS: str = "month_end_cs"
 FAMILY_XS_LOW_VOL_MOM: str = "xs_low_vol_mom"
 FAMILY_REPO_3M_LEVEL_CS: str = "repo_3m_level_cs"
 FAMILY_EVENT_CALENDAR_GATE: str = "event_calendar_gate"
-FAMILY_RESEARCH_UNIQUE_LOGIC: str = "research_unique_logic"
 RESEARCH_UNIQUE_FAMILY_IDS: frozenset[str] = frozenset(
     {
         FAMILY_EVENT_FUNDING_COMBO,
@@ -87,7 +83,6 @@ RESEARCH_FAMILY_APPEND_ID: str = "unique_logic_family_append"
 RESEARCH_FAMILY_REGISTRATION_IS_NOT_A_PASS: bool = True
 RESEARCH_FAMILY_AUTO_RESEARCH_CANDIDATE: bool = False
 
-# Near-groups stay parallel (do not merge).
 NEAR_LOGIC_GROUPS: tuple[dict[str, Any], ...] = (
     {
         "group_id": "flow_margin_confirm",
@@ -400,10 +395,7 @@ _BAR_NATIVE_TEMPLATE_OVERLAY: dict[str, dict[str, Any]] = {
     "vol_risk_adjusted_mom": _ov("Vol-risk gated momentum"),
     "vol_breakout_expand": _ov("Vol-expansion breakout mom"),
     "fund_value_mom_agree_slow": _ov("Value×mom agree (slow price confirm)"),
-    "mf_value_mom_rate": _ov(
-        "Value × mom × rate multi-factor",
-        notes="Unique rate-gated value×mom (not an alias of fund_value_mom_agree).",
-    ),
+    "mf_value_mom_rate": _ov("Value × mom × rate multi-factor"),
     "mf_flow_price": _ov("Flow × price multi-factor"),
     "nky_vol_abs_level": _ov("Nikkei abs vol-level × CS risk-on/off"),
     "nky_vol_term_levels": _ov("Nikkei short+long vol levels × CS"),
@@ -591,7 +583,7 @@ LOGIC_TEMPLATE_IDS: tuple[str, ...] = tuple(LOGIC_TEMPLATES.keys())
 
 @dataclass(frozen=True)
 class FamilyDefinition:
-    """Legacy family document (W87 API); diversity now lives on LogicTemplate."""
+    """Eval-dispatch family covering one or more logic templates."""
 
     family_id: str
     display_name: str
@@ -699,9 +691,6 @@ def _research_family_base() -> dict[str, Any]:
         "go": False,
         "mass_research": MASS_RESEARCH,
         "ready_declared": READY_DECLARED,
-        "connected_to_mass": CONNECTED_TO_MASS,
-        "connected_to_ready": CONNECTED_TO_READY,
-        "family_group": FAMILY_RESEARCH_UNIQUE_LOGIC,
     }
 
 
@@ -725,7 +714,6 @@ def research_family_append_document() -> dict[str, Any]:
         "kind": "research_family_append",
         "this_wave_only": True,
         "appended_logic_ids": sorted(RESEARCH_FAMILY_APPEND_LOGIC_IDS),
-        "did_not_kill_funding_surprise": True,
     }
 
 
@@ -734,33 +722,11 @@ def logic_templates_document() -> dict[str, Any]:
     from research.offline.factory import DEFAULT_NEAR_DUP_THRESHOLD
 
     version, wave = _factory_doc_meta()
-    nky_vol_ids = [
-        lid
-        for lid, t in LOGIC_TEMPLATES.items()
-        if t.family_id == FAMILY_INDEX_VOL_REGIME
-    ]
-    opt225_ids = [
-        lid
-        for lid, t in LOGIC_TEMPLATES.items()
-        if t.family_id == FAMILY_OPTIONS_VOL_REGIME
-    ]
     return {
         "version": version,
         "wave": wave,
         "n_logic_templates": len(LOGIC_TEMPLATES),
         "logic_ids": list(LOGIC_TEMPLATE_IDS),
-        "w91_index_vol_logic_ids": nky_vol_ids,
-        "w92_options_vol_logic_ids": opt225_ids,
-        "w94_options_vol_logic_ids": [
-            lid
-            for lid in opt225_ids
-            if lid
-            in {
-                "opt225_skew_abs_level",
-                "opt225_cm_term_abs_level",
-                "opt225_basevol_delta_abs",
-            }
-        ],
         "unique_logic_ids": sorted(RESEARCH_UNIQUE_LOGIC_IDS),
         "unique_logic_append_logic_ids": sorted(RESEARCH_FAMILY_APPEND_LOGIC_IDS),
         "opt225_canonical_level": "basevol",

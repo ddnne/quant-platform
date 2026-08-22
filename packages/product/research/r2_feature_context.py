@@ -91,23 +91,12 @@ AVAILABLE_AT_REPAIR_POLICY: dict[str, Any] = {
     },
 }
 
-_FAMILY_PREFIXES: tuple[tuple[str, str], ...] = (
-    ("jsda_", "jsda"),
-    ("edinet_", "edinet"),
-    ("derivatives_", "derivatives"),
-    ("fins_", "fins"),
-    ("indices_", "indices"),
-    ("markets_", "markets"),
-    ("equities_", "equities"),
-)
-
 COMPLETE_21_R2_INVENTORY: dict[str, dict[str, Any]] = {
     ds: {
         "dataset": ds,
         "complete": True,
         "jsonl_prefix": f"structured/jsonl/{ds}/",
         "archive_prefix": f"archive/jquants_records/{ds}/",
-        "family": next((fam for pre, fam in _FAMILY_PREFIXES if ds.startswith(pre)), "other"),
     }
     for ds in COMPLETE_21_DATASETS
 }
@@ -115,12 +104,6 @@ COMPLETE_21_R2_INVENTORY: dict[str, dict[str, Any]] = {
 PERMANENT_DEFER_R2_NOTE: dict[str, dict[str, Any]] = {
     ds: {"dataset": ds, "permanent_defer": True, "load_policy": "hard_reject"}
     for ds in sorted(PERMANENT_DEFER_DATASETS)
-}
-
-FEATURE_CONTEXT_SCHEMA_MAP: dict[str, dict[str, Any]] = {
-    "equity_bars_daily": {"dataset": "equities_bars_daily"},
-    "market_calendar": {"dataset": "markets_calendar"},
-    "jquants_records": {"dataset": "{dataset}"},
 }
 
 _CODE_KEYED_HISTORY_DATASETS: frozenset[str] = frozenset(
@@ -894,7 +877,6 @@ def resolve_history_source(value: str | None) -> str:
 __all__ = [
     "COMPLETE_21_R2_INVENTORY",
     "DEFAULT_R2_ROW_LIMIT_PER_DATASET",
-    "FEATURE_CONTEXT_SCHEMA_MAP",
     "HISTORY_SOURCE_D1_TIP",
     "HISTORY_SOURCE_R2",
     "HISTORY_SOURCES",
