@@ -1,50 +1,8 @@
-"""Mass strategy logic-diversity factory + batch auto-experiment.
+"""Mass strategy logic-diversity factory (generation; not GO / READY).
 
-Purpose
--------
-Research factory that generates strategy **individuals** around **distinct
-economic logic templates** (thesis + signal structure + position rule +
-datasets), not hold_days / momentum_window / long_frac param grids.
-
-Includes:
-* Nikkei/index realized-vol regime logics (abs level · term levels · ratio)
-* CF real multi-year panels (mode=r2_panels; synthetic not a pass)
-* interest-rate factor logics (absolute level + curve-shape × CS)
-* multi-factor logics (value×mom×rate, flow×price) with required theses
-* programmatic profit-hypothesis entry (always through evaluator)
-
-CF ``n_survivors`` is a period-net screen only. Candidate-grade eval is
-``research.daily_path_eval`` recorded to R2 ``research/eval/job={id}/``.
-
-W87 risk addressed
-------------------
-N=100 "diversity" that was mostly family × multi-axis param slots
-(hold / mom / frac) is rejected. Diversity now requires difference in:
-
-* information source
-* entry / signal logic
-* position construction
-* economic thesis
-
-Does **not** count as distinct: hold_days-only, momentum window-only,
-frac 0.3→0.4-only, or sign flip as a separate strategy (sign is eval aspect).
-
-This is a **research factory**, not operational Mass / READY / live:
-
-* Does **not** call ``agents.mass_research`` / arm Mass loop
-* Does **not** mint READY / VerifiedResearchReadiness / operational GO
-* Does **not** un-reject S1–S5 or use ``simple_daily_sign`` as diversity
-* Does **not** retune the three frozen default-path representatives
-* continuous paper remains **UNARMED**
-
-Building blocks reused
-----------------------
-* ``hypothesis_classes`` — family ids / datasets
-* ``class_signals`` — pure bar evaluators
-* ``cost_models`` · ``sign_selection`` · ``stats_metrics``
-* ``cf_mass_eval_job`` · ``cf_daily_path_job``
-
-See: ``docs/architecture/adr_research_recording.md``
+Distinct economic-logic individuals, then near-dup, then batch eval.
+Profit-hypothesis LLM entry: ``research.offline.factory_propose``.
+Eval: ``research.offline.factory_eval``. Unique/combo stay ungenerated.
 """
 
 from __future__ import annotations
@@ -83,7 +41,6 @@ from research.freezes import (
     SIMPLE_DAILY_SIGN_AS_DIVERSITY,
 )
 from research.unique_logic.constants import RESEARCH_UNIQUE_LOGIC_IDS
-from research.offline.bar_eval import evaluate_vol_risk_adjusted_on_bars
 from research.offline.factory_templates import (
     DEFAULT_FAMILY_RATIOS,
     FACTORY_FAMILY_IDS,
@@ -91,7 +48,6 @@ from research.offline.factory_templates import (
     FAMILY_CURVE_STEEPEN_IMPULSE_CS,
     FAMILY_DEFINITIONS,
     FAMILY_DISCLOSURE_CLUSTER_GATE,
-    FAMILY_EVENT_CALENDAR_GATE,
     FAMILY_EVENT_FUNDING_COMBO,
     FAMILY_EVENT_MACRO_CURVE_COMBO,
     FAMILY_EVENT_MARGIN_CROWD_COMBO,
@@ -207,7 +163,6 @@ _EVENT_ENTRY_FORBIDDEN: frozenset[str] = frozenset(
 
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 
-
 def _freeze() -> dict[str, Any]:
     return {
         "mass_research": MASS_RESEARCH,
@@ -232,14 +187,12 @@ def _freeze() -> dict[str, Any]:
         "frozen_defaults_retuned": False,
     }
 
-
 # Logic templates, FAMILY_*, NEAR_LOGIC_GROUPS, documents live in
 # research.offline.factory_templates (BAR_NATIVE_SPECS SoT for 30 ids).
 
 # ---------------------------------------------------------------------------
 # Config + generated strategy
 # ---------------------------------------------------------------------------
-
 
 @dataclass(frozen=True)
 class MassFactoryConfig:
@@ -303,7 +256,6 @@ class MassFactoryConfig:
             **_freeze(),
         }
 
-
 @dataclass(frozen=True)
 class GeneratedStrategy:
     """One generated strategy individual (logic-centric)."""
@@ -348,7 +300,6 @@ class GeneratedStrategy:
             **_freeze(),
         }
 
-
 def stable_strategy_id(
     *,
     seed: int,
@@ -371,7 +322,6 @@ def stable_strategy_id(
     tag = str(logic_id or family_id).replace("_", "")[:8]
     return f"msf_{int(seed):08x}_{int(generation_index):04d}_{tag}_{digest}"
 
-
 def _canonical_params(params: Mapping[str, Any]) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for k in sorted(params.keys()):
@@ -383,7 +333,6 @@ def _canonical_params(params: Mapping[str, Any]) -> dict[str, Any]:
         else:
             out[k] = str(v)
     return out
-
 
 def _coarse_bucket(key: str, value: Any) -> Any:
     """Coarse bucket for near-dup scoring (collapses micro grids)."""
@@ -408,7 +357,6 @@ def _coarse_bucket(key: str, value: Any) -> Any:
         return round(v, 1)  # 0.3 and 0.4 → different only at 0.1; still high sim
     return value
 
-
 def individual_similarity_features(ind: Mapping[str, Any]) -> dict[str, Any]:
     """Features used for near-duplicate scoring."""
     params = dict(ind.get("params") or {})
@@ -432,7 +380,6 @@ def individual_similarity_features(ind: Mapping[str, Any]) -> dict[str, Any]:
         "structural": structural,
         "coarse_knobs": coarse_knobs,
     }
-
 
 def similarity_score(a: Mapping[str, Any], b: Mapping[str, Any]) -> float:
     """Score near-duplicate similarity in [0, 1].
@@ -481,7 +428,6 @@ def similarity_score(a: Mapping[str, Any], b: Mapping[str, Any]) -> float:
 
     return min(1.0, score)
 
-
 def dedup_strategies(
     strategies: Sequence[Mapping[str, Any]],
     *,
@@ -521,7 +467,6 @@ def dedup_strategies(
         "kept": kept,
         "dropped": dropped,
     }
-
 
 def validate_strategy_at_gen(
     family_id: str,
@@ -630,7 +575,6 @@ def validate_strategy_at_gen(
             return False, REJECT_INVALID_PARAMS
     return True, None
 
-
 def _minimal_numeric_variants(tpl: LogicTemplate) -> list[dict[str, Any]]:
     """At most a couple coarse numeric variants (will near-dup collapse).
 
@@ -652,7 +596,6 @@ def _minimal_numeric_variants(tpl: LogicTemplate) -> list[dict[str, Any]]:
         v["post_hold_days"] = 10 if int(base["post_hold_days"]) != 10 else 3
         variants.append(v)
     return variants[:1]  # at most one numeric variant per logic
-
 
 def generate_strategy_batch(
     config: MassFactoryConfig | None = None,
@@ -863,7 +806,6 @@ def generate_strategy_batch(
         **_freeze(),
     }
 
-
 # ---------------------------------------------------------------------------
 # Batch evaluation context + per-strategy eval
 # ---------------------------------------------------------------------------
@@ -875,6 +817,10 @@ from research.offline.factory_eval import (  # noqa: E402
     load_batch_data_context,
     run_batch_eval,
     screen_strategy_result,
+)
+from research.offline.factory_propose import (  # noqa: E402
+    llm_logic_entry_status,
+    propose_profit_hypotheses,
 )
 
 
@@ -1001,7 +947,6 @@ def run_mass_factory(
 
     return pack
 
-
 def write_factory_outputs(
     pack: Mapping[str, Any], out_dir: str | Path
 ) -> dict[str, str]:
@@ -1094,93 +1039,24 @@ def write_factory_outputs(
     _w("frozen_defaults.json", list(FROZEN_DEFAULT_PATH))
 
     sm = pack.get("summary") or {}
-    lines = [
-        f"# Mass strategy logic-diversity factory run — {MASS_FACTORY_WAVE}",
-        "",
-        f"- version: `{MASS_FACTORY_VERSION}`",
-        f"- n_requested: **{sm.get('n_requested')}**",
-        f"- n_generated: **{sm.get('n_generated')}**",
-        f"- n_unique_logic: **{sm.get('n_unique_logic')}**",
-        f"- n_numeric_variant: **{sm.get('n_numeric_variant')}**",
-        f"- n_after_dedup: **{sm.get('n_after_dedup')}**",
-        f"- n_dropped_near_dup: **{sm.get('n_dropped_near_dup')}**",
-        f"- logic_diversity_ok: **{sm.get('logic_diversity_ok')}**",
-        f"- n_families_used: **{sm.get('n_families_used')}**",
-        f"- n_strategies_evaluated: **{sm.get('n_strategies_evaluated')}** "
-        f"(eval_set={sm.get('eval_set')})",
-        f"- n_survivors: **{sm.get('n_survivors')}**",
-        f"- fail_rate: **{sm.get('fail_rate')}**",
-        f"- wall_time_sec: **{sm.get('wall_time_sec')}**",
-        f"- continuous_paper: **{sm.get('continuous_paper')}**",
-        f"- frozen_defaults_retuned: **{sm.get('frozen_defaults_retuned')}**",
-        f"- human_main_candidates_selected: **{sm.get('human_main_candidates_selected')}**",
-        f"- mass_research: **{MASS_RESEARCH}** · READY: **{READY_DECLARED}** · "
-        f"ops GO: **{OPERATIONAL_GO}**",
-        "",
-        "## Logic distribution (generated)",
-        "",
-        "```json",
-        json.dumps(sm.get("logic_distribution") or {}, indent=2),
-        "```",
-        "",
-        "## Family distribution (generated)",
-        "",
-        "```json",
-        json.dumps(sm.get("family_distribution") or {}, indent=2),
-        "```",
-        "",
-        "## Survivor logic distribution",
-        "",
-        "```json",
-        json.dumps(sm.get("survivor_logic_distribution") or {}, indent=2),
-        "```",
-        "",
-        "## Top 5 (research ranking only — not human main candidates)",
-        "",
-    ]
-    for row in sm.get("top5") or []:
-        lines.append(
-            f"- rank {row.get('rank')}: `{row.get('strategy_id')}` "
-            f"logic={row.get('logic_id')} family={row.get('family_id')} "
-            f"mean_net={row.get('mean_net')} t={row.get('t_stat')} "
-            f"sign={row.get('chosen_sign')}"
-        )
-    lines.extend(
-        [
-            "",
-            "## Frozen defaults (not retuned)",
-            "",
-            "```json",
-            json.dumps(
-                [r["representative_id"] for r in FROZEN_DEFAULT_PATH], indent=2
-            ),
-            "```",
-            "",
-            "## Re-run recipe",
-            "",
-            "```bash",
-            "python -m research.cf_daily_path_job  # CF isolate fan-out",
-            "python -m research.unique_logic --all --backend local  # serial fallback",
-            "```",
-            "",
-            "Synthetic (tests / no mirrors):",
-            "",
-            "```bash",
-            "python -m research.offline.factory --synthetic --n 100",
-            "```",
-            "",
-        ]
-    )
     md_path = od / "SUMMARY.md"
-    md_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    md_path.write_text(
+        f"# Mass factory run — {MASS_FACTORY_WAVE}\n\n"
+        f"- version: `{MASS_FACTORY_VERSION}`\n"
+        f"- n_generated: **{sm.get('n_generated')}** "
+        f"unique={sm.get('n_unique_logic')} "
+        f"after_dedup={sm.get('n_after_dedup')}\n"
+        f"- n_survivors: **{sm.get('n_survivors')}** "
+        f"eval={sm.get('n_strategies_evaluated')} "
+        f"fail={sm.get('fail_rate')}\n"
+        f"- mass_research: **{MASS_RESEARCH}** · READY: **{READY_DECLARED}** · "
+        f"ops GO: **{OPERATIONAL_GO}**\n",
+        encoding="utf-8",
+    )
     paths["SUMMARY.md"] = str(md_path)
     return paths
 
-
-# ---------------------------------------------------------------------------
-# CF minimal path (honest blocker if no mass-factory CF job)
-# ---------------------------------------------------------------------------
-
+# CF mass-eval worker status (tests pin try_cf_minimal_mass_batch).
 
 def _research_mass_eval_version() -> str:
     from qp_paths import repo_root
@@ -1195,57 +1071,17 @@ def _research_mass_eval_version() -> str:
         pass
     return "research-mass-eval/unknown"
 
-
 def try_cf_minimal_mass_batch() -> dict[str, Any]:
-    """Prefer a stable minimal CF job returning one small batch result.
-
-    Status
-    ------
-    CF worker ``quant-platform-research-mass-eval`` exists under
-    ``platform/workers/research-mass-eval/`` with
-    ``POST /v1/mass-eval`` → R2 ``research/mass_eval/job={id}/``.
-
-    Pure-TS lite multi-period path (synthetic / r2_panels / nets_only).
-    Period-net ``n_survivors`` is a screen, not a ``daily_path_DD`` pass.
-    Full rate/mf factor legs on CF remain **not-yet-implemented** (fallback
-    multi_day_hold or nets_only). Local ``run_mass_factory`` remains the
-    full-factory path. Scaling to 200/500 queue fan-out is not-yet-implemented.
-    """
+    """CF mass-eval worker status (period-net screen, not a pass)."""
     return {
         "status": "available",
-        "wave": MASS_FACTORY_WAVE,
         "version": _research_mass_eval_version(),
-        "factory_wave": MASS_FACTORY_WAVE,
-        "factory_version": MASS_FACTORY_VERSION,
         "worker": "quant-platform-research-mass-eval",
-        "worker_path": "platform/workers/research-mass-eval/",
         "endpoint": "POST /v1/mass-eval",
-        "request_shape": {
-            "seed": "int",
-            "logics": "list[{logic_id, family_id?, params?, thesis?}]",
-            "periods": "list[{period_id, year?}]",
-            "job_id": "str",
-            "mode": "synthetic | r2_panels | nets_only | d1_bars",
-        },
         "r2_prefix": "research/mass_eval/job={id}/",
         "r2_bucket": "quant-structured",
-        "screen_kind": "period_net",
         "n_survivors_are_not_a_pass": True,
         "candidate_grade": False,
-        "existing_cf_paths": [
-            "platform/workers/research-mass-eval (POST /v1/mass-eval → research/mass_eval/)",
-            "research.single_shot_job.execute_single_shot_job",
-            "research.single_shot_job.execute_multiday_signal_eval",
-            "packages/edge/cf_platform (ingestion / ops)",
-        ],
-        "supported_path_cf": (
-            "wrangler deploy platform/workers/research-mass-eval && "
-            "POST /v1/mass-eval"
-        ),
-        "supported_path_local": (
-            "local run_mass_factory / python -m research.unique_logic --backend local"
-        ),
-        "python_driver": "research.cf_mass_eval_job",
         "not_yet_implemented": [
             "full rate/mf factor legs on pure-TS CF path",
             "direct structured/jsonl historical bar load",
@@ -1254,370 +1090,6 @@ def try_cf_minimal_mass_batch() -> dict[str, Any]:
         "scale_queue_fanout": False,
         "n_cf_batch_cap": 200,
         **_freeze(),
-    }
-
-
-def _is_window_tweak_only(proposal: Mapping[str, Any]) -> bool:
-    """True when proposal only mutates hold/mom/frac without new thesis/signal."""
-    thesis = str(proposal.get("thesis") or "").strip()
-    signal = str(
-        proposal.get("signal_definition") or proposal.get("signal") or ""
-    ).strip()
-    position = str(
-        proposal.get("position_rule") or proposal.get("position") or ""
-    ).strip()
-    if not thesis or not signal or not position:
-        return True
-    # Explicit window-tweak: same catalog logic_id + only numeric knobs
-    # (hold/mom/frac) without structural mode / new signal.
-    structural = (
-        proposal.get("structural_keys")
-        or proposal.get("mode")
-        or (proposal.get("params") or {}).get("mode")
-    )
-    params = dict(proposal.get("params") or {})
-    only_numeric = (
-        bool(params)
-        and set(params.keys()) <= NUMERIC_ONLY_KNOBS
-        and not structural
-    )
-    if only_numeric and str(proposal.get("logic_id") or "") in LOGIC_TEMPLATES:
-        # same logic_id + only numeric overrides → window tweak
-        return True
-    tweak_words = ("window", "hold_days only", "mom only", "frac only")
-    blob = f"{thesis} {signal}".lower()
-    if any(w in blob for w in tweak_words) and "factor" not in blob:
-        if not proposal.get("datasets") and not proposal.get("datasets_used"):
-            return True
-    return False
-
-
-def propose_profit_hypotheses(
-    proposals: Sequence[Mapping[str, Any]],
-    *,
-    evaluate: bool = True,
-    synthetic: bool = False,
-    config: MassFactoryConfig | None = None,
-    ctx: BatchDataContext | None = None,
-) -> dict[str, Any]:
-    """Entry for **different profit hypotheses** (not window tweaks).
-
-    Programmatic / LLM-agent hook: each proposal must carry thesis, signal
-    definition, position rule, and datasets. Window-tweak-only proposals are
-    rejected at entry. Accepted proposals map to catalog logic templates when
-    ``logic_id`` matches, else ad-hoc individuals. When ``evaluate=True``,
-    **always** routes through the factory evaluator (PIT + cost).
-
-    Does not arm Mass / READY / GO / continuous paper.
-    """
-    cfg = config or MassFactoryConfig(seed=DEFAULT_SEED, n=max(20, len(proposals) + 5))
-    accepted: list[dict[str, Any]] = []
-    rejected: list[dict[str, Any]] = []
-
-    for i, raw in enumerate(proposals):
-        prop = dict(raw or {})
-        if _is_window_tweak_only(prop):
-            rejected.append(
-                {
-                    "index": i,
-                    "proposal": prop,
-                    "reject_reason": "window_tweak_only_forbidden",
-                    "note": (
-                        "Proposals must change economic thesis / signal / "
-                        "position / datasets — not hold/mom/frac windows only."
-                    ),
-                }
-            )
-            continue
-        logic_id = str(prop.get("logic_id") or "").strip()
-        if logic_id and logic_id in LOGIC_TEMPLATES:
-            tpl = LOGIC_TEMPLATES[logic_id]
-            params = dict(tpl.base_params)
-            params.update(dict(prop.get("params") or {}))
-            ok, reason = validate_strategy_at_gen(
-                tpl.family_id,
-                params,
-                available_datasets=cfg.available_datasets,
-                logic_id=logic_id,
-            )
-            if not ok:
-                rejected.append(
-                    {
-                        "index": i,
-                        "proposal": prop,
-                        "reject_reason": reason,
-                    }
-                )
-                continue
-            ind = {
-                "strategy_id": stable_strategy_id(
-                    seed=cfg.seed,
-                    family_id=tpl.family_id,
-                    params=params,
-                    generation_index=i,
-                    logic_id=logic_id,
-                ),
-                "logic_id": logic_id,
-                "logic_fingerprint": tpl.logic_fingerprint(),
-                "thesis": str(prop.get("thesis") or tpl.thesis),
-                "signal_definition": str(
-                    prop.get("signal_definition") or tpl.signal_definition
-                ),
-                "position_rule": str(
-                    prop.get("position_rule") or tpl.position_rule
-                ),
-                "datasets_used": list(
-                    prop.get("datasets_used")
-                    or prop.get("datasets")
-                    or tpl.datasets_used
-                ),
-                "datasets_required": list(tpl.datasets_used),
-                "family_id": tpl.family_id,
-                "params": params,
-                "status": "accepted",
-                "source": "profit_hypothesis_entry",
-                "generation_index": i,
-                "seed": cfg.seed,
-            }
-            if logic_id in RESEARCH_UNIQUE_LOGIC_IDS:
-                # Recognition, not a catalog remap / not a promotion.
-                ind["eval_mapped_to_catalog"] = False
-                ind["research_family_recognition"] = True
-                ind["research_candidate"] = False
-                ind["promote_as_main"] = False
-                ind["go"] = False
-                ind["registration"] = "recognition"
-                ind["registration_is_not_a_pass"] = True
-            accepted.append(ind)
-        else:
-            # Ad-hoc: require family_id + full thesis fields
-            family = str(
-                prop.get("family_id") or prop.get("family") or ""
-            ).strip()
-            if not family:
-                rejected.append(
-                    {
-                        "index": i,
-                        "proposal": prop,
-                        "reject_reason": "missing_logic_id_or_family",
-                    }
-                )
-                continue
-            params = dict(prop.get("params") or {})
-            ind = {
-                "strategy_id": stable_strategy_id(
-                    seed=cfg.seed,
-                    family_id=family,
-                    params=params,
-                    generation_index=i,
-                    logic_id=logic_id or f"adhoc_{i}",
-                ),
-                "logic_id": logic_id or f"adhoc_{i}",
-                "logic_fingerprint": hashlib.sha256(
-                    json.dumps(
-                        {
-                            "thesis": prop.get("thesis"),
-                            "signal": prop.get("signal_definition"),
-                            "position": prop.get("position_rule"),
-                            "family": family,
-                        },
-                        sort_keys=True,
-                        default=str,
-                    ).encode("utf-8")
-                ).hexdigest()[:16],
-                "thesis": str(prop.get("thesis") or ""),
-                "signal_definition": str(
-                    prop.get("signal_definition") or prop.get("signal") or ""
-                ),
-                "position_rule": str(
-                    prop.get("position_rule") or prop.get("position") or ""
-                ),
-                "datasets_used": list(
-                    prop.get("datasets_used") or prop.get("datasets") or []
-                ),
-                "datasets_required": list(
-                    prop.get("datasets_used") or prop.get("datasets") or []
-                ),
-                "family_id": family,
-                "params": params,
-                "status": "accepted",
-                "source": "profit_hypothesis_entry_adhoc",
-                "generation_index": i,
-                "seed": cfg.seed,
-            }
-            accepted.append(ind)
-
-    out: dict[str, Any] = {
-        "version": MASS_FACTORY_VERSION,
-        "wave": MASS_FACTORY_WAVE,
-        "entry": "propose_profit_hypotheses",
-        "n_proposals": len(proposals),
-        "n_accepted": len(accepted),
-        "n_rejected": len(rejected),
-        "accepted": accepted,
-        "rejected": rejected,
-        "always_through_evaluator": bool(evaluate),
-        "window_tweaks_forbidden": True,
-        **_freeze(),
-    }
-    if evaluate and accepted:
-        gen = {
-            "strategies_after_dedup": accepted,
-            "strategies": accepted,
-            "n_generated": len(accepted),
-            "n_unique_logic": len({a["logic_id"] for a in accepted}),
-            "n_after_dedup": len(accepted),
-            "n_numeric_variant": 0,
-            "n_requested": len(accepted),
-            "config": cfg.to_dict(),
-        }
-        batch = run_batch_eval(
-            gen, config=cfg, ctx=ctx, synthetic=synthetic
-        )
-        out["eval"] = {
-            k: batch[k]
-            for k in batch
-            if k not in {"results", "screens"}
-        }
-        out["eval_screens"] = batch.get("screens")
-        out["eval_ranking"] = batch.get("ranking")
-        out["eval_results"] = batch.get("results")
-    elif evaluate and not accepted:
-        out["eval"] = {
-            "n_strategies_evaluated": 0,
-            "note": "no accepted proposals to evaluate",
-        }
-    return out
-
-
-def llm_logic_entry_status() -> dict[str, Any]:
-    """LLM / agent entry for different profit hypotheses (not window tweaks)."""
-    return {
-        "status": "connected",
-        "wave": MASS_FACTORY_WAVE,
-        "version": MASS_FACTORY_VERSION,
-        "entry_fn": "research.offline.factory.propose_profit_hypotheses",
-        "strong_model_entry": (
-            "research.offline.factory.propose_profit_hypotheses"
-        ),
-        "preferred_model": "grok-4.6 (xAI api.x.ai)",
-        "fallback_model": "@cf/openai/gpt-oss-120b (Workers AI)",
-        "declaration_helper": "research.hypothesis_classes.build_research_idea_payload",
-        "rules": {
-            "require": [
-                "thesis (what earns)",
-                "signal_definition (entry structure)",
-                "position_rule (book / hold construction)",
-                "datasets (info source)",
-            ],
-            "forbid": [
-                "hold/mom/frac window tweaks only",
-                "sign flip as separate strategy",
-                "simple_daily_sign mass",
-            ],
-            "always_through_evaluator": True,
-            "prompt_guidance": (
-                "Propose different economic profit hypotheses "
-                "(info source / entry / position / thesis). "
-                "Never propose window-only mutations. "
-                "Every proposal is screened by the factory evaluator "
-                "(PIT + cost + both signs)."
-            ),
-        },
-        "catalog_logic_ids": list(LOGIC_TEMPLATE_IDS),
-        "near_logic_groups": near_logic_groups_document(),
-        "note": (
-            "Hypothesis entry is propose_profit_hypotheses "
-            "(always through evaluator)."
-        ),
-        "always_through_evaluator": True,
-        **_freeze(),
-    }
-
-
-def mass_factory_document() -> dict[str, Any]:
-    """Public document for the logic-diversity mass strategy factory."""
-    return {
-        "version": MASS_FACTORY_VERSION,
-        "wave": MASS_FACTORY_WAVE,
-        "purpose": (
-            "Generate distinct economic logic templates and batch-evaluate "
-            "after near-dup (research factory). W90 adds strong-model hyp "
-            "generation + CF multi-logic multi-period eval. W89 rate + "
-            "multi-factor logics held. Not hold/mom/frac grid mass."
-        ),
-        "primary_metrics": [
-            "n_generated",
-            "n_unique_logic",
-            "n_numeric_variant",
-            "n_after_dedup",
-        ],
-        "logic_templates": logic_templates_document(),
-        "near_logic_groups": near_logic_groups_document(),
-        "families": family_definitions_document(),
-        "default_config": MassFactoryConfig().to_dict(),
-        "frozen_default_path": list(FROZEN_DEFAULT_PATH),
-        "cf_minimal": try_cf_minimal_mass_batch(),
-        "llm_entry": llm_logic_entry_status(),
-        "profit_hypothesis_entry": "propose_profit_hypotheses",
-        "not_goals": [
-            "hold/mom/frac grid as 100 strategies",
-            "retune 3 frozen defaults (mom5/mom3/fund)",
-            "operational GO / Mass / READY / live",
-            "simple_daily_sign mass as diversity",
-            "S1–S5 un-reject",
-            "human main candidate selection this wave",
-            "CF 200/500 full multi-year scale",
-            "merge near-groups early",
-            "treat research-family registration as pass / promotion",
-            "auto research_candidate from unique_logic register",
-        ],
-        "research_family_registration": research_family_register_document(),
-        "eval_tradeoffs": (
-            "CF lite multi-period (bounded codes/days) via mass-eval Worker. "
-            "Local wide eval after near-dup. Heavy multi-year only for "
-            "promising survivors. Survivors need deeper class_hyp re-eval "
-            "before promotion."
-        ),
-        "continuous_paper": CONTINUOUS_PAPER,
-        **_freeze(),
-        "proof": "docs/architecture/adr_research_recording.md",
-        "w91_index_vol": {
-            "family": FAMILY_INDEX_VOL_REGIME,
-            "logic_ids": [
-                "nky_vol_abs_level",
-                "nky_vol_term_levels",
-                "nky_vol_term_ratio",
-            ],
-            "proxy": "NK225F front realized → TOPIX fallback; NKVIF available",
-            "role": "proxy_compare_only",
-            "distinct_from": [
-                "vol_risk_adjusted_mom",
-                "vol_breakout_expand",
-            ],
-        },
-        "w92_options_vol": {
-            "family": FAMILY_OPTIONS_VOL_REGIME,
-            "logic_ids": [
-                "opt225_basevol_abs_level",
-                "opt225_basevol_term_levels",
-                "opt225_basevol_term_ratio",
-                "opt225_atm_iv_abs_level",
-                "opt225_atm_iv_term_levels",
-                "opt225_atm_iv_term_ratio",
-                "opt225_iv_base_spread_abs",
-                "opt225_iv_base_spread_change",
-            ],
-            "dataset": "derivatives_bars_daily_options_225",
-            "role": "canonical_nky_vol_sot",
-            "spread_convention": "atm_iv - base_vol",
-            "units": "percent_vol_points",
-            "distinct_from_proxy": [
-                "nky_vol_abs_level",
-                "nky_vol_term_levels",
-                "nky_vol_term_ratio",
-            ],
-        },
     }
 
 
@@ -1681,13 +1153,11 @@ __all__ = [
     "logic_templates_document",
     "near_logic_groups_document",
     "research_family_register_document",
-    "mass_factory_document",
     "stable_strategy_id",
     "validate_strategy_at_gen",
     "generate_strategy_batch",
     "similarity_score",
     "dedup_strategies",
-    "evaluate_vol_risk_adjusted_on_bars",
     "load_batch_data_context",
     "evaluate_one_strategy",
     "screen_strategy_result",

@@ -117,13 +117,6 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "go": False,
     },
     {
-        "id": "factory_generation_shrink",
-        "track": EVAL_TRACK_MID_N,
-        "why": "offline/factory.py ~1700 generation leftover after factory_eval extract",
-        "not_a_pass": True,
-        "go": False,
-    },
-    {
         "id": "local_combo_fail_closed",
         "track": EVAL_TRACK_MID_N,
         "why": (
