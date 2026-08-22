@@ -340,6 +340,7 @@ export const CF_NEW_EVENT_THESIS_IDS = [
   "event_np_negative_cluster_fade",
   "event_np_negative_crowded_fade",
   "event_np_negative_fade",
+  "event_np_negative_invert_curve",
   "event_np_negative_liq_high_fade",
   "event_np_negative_price_down_liq_fade",
   "event_np_negative_sales_down",
