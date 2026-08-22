@@ -880,7 +880,10 @@ def test_catalog_gate_set_avoid_is_existing_crosses() -> None:
 def test_sparse_gate_set_avoid_is_in_why_avoid() -> None:
     import json
 
-    from research.cf_propose_thesis import sparse_gate_set_avoid
+    from research.cf_propose_thesis import (
+        sparse_gate_set_avoid,
+        sparse_prefer_subset_avoid,
+    )
 
     sparse = sparse_gate_set_avoid()
     assert "nky_vol_high_skip+steep_curve" in sparse
@@ -896,7 +899,9 @@ def test_sparse_gate_set_avoid_is_in_why_avoid() -> None:
     avoid = list((posted.get("body") or {}).get("why_avoid") or [])  # type: ignore[union-attr]
     assert avoid
     assert len(avoid) <= PROPOSE_WHY_AVOID_LIMIT
-    assert "nky_vol_high_skip+steep_curve" in avoid
+    # Cap 48: remaining SPARSE may truncate; prefer-subset SPARSE is reserved.
+    for tok in sparse_prefer_subset_avoid():
+        assert tok in avoid
     assert out["auto_inject"] is False
     assert out["go"] is False
 
