@@ -1,40 +1,13 @@
 """Single-shot research job (Mass OFF / Phase7 OFF / READY not declared).
 
-W49 skeleton (declare + path design) + W50 minimal CF-backed execute +
-W51 COMPLETE-21 feature compute on tip FeatureContext +
-W52–W53 minimal signal write + W54 multi-day as_of batch (Mass OFF):
+COMPLETE 21 only; permanent DEFER hard-reject. Bounded CF D1 hot tip
+extract, optional COMPLETE-21 feature/signal compute, R2 write under
+``research/single_shot/``. Multiday / nextday live in
+:mod:`research.single_shot_eval`; cost/compare in
+:mod:`research.single_shot_compare`. Both are re-exported here.
 
-* **Inputs:** COMPLETE 21 dataset ids only (permanent DEFER excluded via
-  ``data_contracts.permanent_defer``).
-* **Read:** CF D1 ``quant-ingest`` hot tip extract (bounded; not full-history SoT).
-* **Features:** tip-backed :class:`features.runtime.FeatureContext` (not local
-  SQLite SoT) computing COMPLETE-21 min features (approved preferred).
-* **Signal (W52–W53):** ``c21_topix_relative_sign`` =
-  ``sign(topix_relative_1d)`` + ``is_trading_day`` filter + optional volume
-  gate. All three legs are registry-**approved** after W53; signal status
-  remains ``candidate`` with ``candidate_only=False``. Written under
-  ``…/signals/``.
-* **Multi-day (W54):** :func:`execute_multiday_signal_eval` reuses one tip
-  extract across 5–10 trading-day as_of values; aggregates sign stats and
-  writes ``batch_summary.json`` (still Mass OFF / no READY / no orders).
-* **Next-day return (W55):** optional attach of ``R_{T→T+1}`` close-to-close
-  returns per code/day + mean-by-sign summary (研究用・未宣言). Feature
-  ``as_of`` remains T session close; evaluation uses T+1 close availability
-  only (no look-ahead into features). See :data:`NEXTDAY_LOOKAHEAD_POLICY`.
-* **Expand window (W56):** multiday + nextday eval may use up to ~20 trading
-  days from the available CF D1 tip (or max available; honest if tip is
-  shorter). Sign-wise mean **and median** next-day return; outputs always
-  labeled **小サンプル / 研究用・未宣言** (no significance / no edge claim).
-* **Write:** R2 ``quant-structured`` under ``research/single_shot/job={id}/…``.
-  Local FS is **not** Source of Truth (optional dry-run stages payloads only).
-* **Eval extract:** :func:`execute_multiday_signal_eval` / nextday live in
-  :mod:`research.single_shot_eval`; cost/compare in
-  :mod:`research.single_shot_compare`. Both are re-exported here.
-* **Not** connected to ``agents.mass_research`` / mass research loop.
-* Does **not** set READY / mint readiness / arm Phase7.
-* Does **not** emit orders or call paper execution.
-
-This module does not open market HTTP, densify, or publish READY snapshots.
+Does not connect to mass research, set READY, arm Phase7, densify, or
+emit orders. Local FS is not SoT.
 """
 
 from __future__ import annotations
@@ -90,29 +63,35 @@ DEFAULT_TIP_SAMPLE_LIMIT: int = 20
 DEFAULT_FEATURE_ROW_LIMIT: int = 400
 DEFAULT_FEATURE_CODE_LIMIT: int = 5
 
-# COMPLETE-21 min features used by the tip feature path (W51 default set).
-# W52–W53: volume_change_1d / is_trading_day / topix_relative_1d are
-# registry-approved (v1.0.0 pin). Name kept for path stability; statuses
-# mirror the registry. No READY / Mass / Phase7 claim.
+# Default COMPLETE-21 tip features (registry-approved; name kept for path stability).
 DEFAULT_CANDIDATE_FEATURES: tuple[str, ...] = (
     "volume_change_1d",
     "is_trading_day",
     "topix_relative_1d",
 )
 
-# Datasets sufficient for the default 2–3 candidate features.
 DEFAULT_FEATURE_DATASETS: tuple[str, ...] = (
     "equities_bars_daily",
     "markets_calendar",
     "indices_bars_daily_topix",
 )
 
-# W52–W53 minimal signal: primary topix_relative_1d approved (W53); filter/gate
-# is_trading_day + volume_change_1d approved (W52). candidate_only=False.
-# Signal id is fixed in features.minimal_signal; no order execution path.
+# Feature id → COMPLETE-21 tip datasets required to compute it.
+_FEATURE_REQUIRED_DATASETS: dict[str, tuple[str, ...]] = {
+    "volume_change_1d": ("equities_bars_daily",),
+    "topix_relative_1d": ("equities_bars_daily", "indices_bars_daily_topix"),
+    "is_trading_day": ("markets_calendar",),
+    "margin_interest_change_1d": ("markets_margin_interest",),
+    "disclosure_flag_fins": ("fins_summary",),
+    "margin_alert_flag": ("markets_margin_alert",),
+    "return_1d_c21": ("equities_bars_daily",),
+    "repo_rate_level": ("jsda_tokyo_repo_rates",),
+    "short_ratio_level": ("markets_short_ratio",),
+    "futures_activity_proxy": ("derivatives_bars_daily_futures",),
+}
 
 # ---------------------------------------------------------------------------
-# Freeze constants (T9: tests assert these remain closed — do not arm)
+# Freeze constants (tests assert these remain closed — do not arm)
 # ---------------------------------------------------------------------------
 
 from research.freezes import (
@@ -124,11 +103,7 @@ from research.freezes import (
     READY_PUBLICATION as READY_PUBLICATION_STATUS,
 )
 
-# ---------------------------------------------------------------------------
-# COMPLETE 21 dataset ids (residual SoT held; do not invent 22)
-# Source list: docs/proof/coverage_baseline_21_usage_notes_20260815.md
-# Relation: governed 26 − permanent DEFER 5 == these 21.
-# ---------------------------------------------------------------------------
+# COMPLETE 21 dataset ids (residual SoT; do not invent 22).
 
 COMPLETE_21_DATASETS: tuple[str, ...] = (
     "derivatives_bars_daily_futures",
@@ -166,16 +141,8 @@ if COMPLETE_21_DATASET_SET & PERMANENT_DEFER_DATASETS:
         f"{sorted(COMPLETE_21_DATASET_SET & PERMANENT_DEFER_DATASETS)}"
     )
 
-# ---------------------------------------------------------------------------
-# R2 / CF artifact path design (local is not SoT)
-# ---------------------------------------------------------------------------
-
 RESEARCH_ARTIFACT_BUCKET: str = "quant-structured"
 RESEARCH_ARTIFACT_PREFIX: str = "research/single_shot"
-# History inputs remain on the CF history plane (not local SQLite SoT):
-#   structured/jsonl/{dataset}/dt=YYYY-MM-DD/{run_id}.jsonl
-#   archive/jquants_records/{dataset}/batch/...
-# Job outputs land under RESEARCH_ARTIFACT_PREFIX (same bucket).
 
 
 class SingleShotJobError(ValueError):
@@ -229,11 +196,7 @@ class SingleShotJobSpec:
 
 
 def design_artifact_paths(job_id: str) -> dict[str, Any]:
-    """Return R2 key layout for a single-shot job.
-
-    Local filesystem paths are intentionally **not** returned as SoT.
-    Operators may stage drafts locally, but the designed authority keys are R2.
-    """
+    """Return R2 key layout for a single-shot job (local FS is not SoT)."""
     jid = str(job_id).strip()
     if not jid:
         raise SingleShotJobError("job_id must be non-empty")
@@ -262,20 +225,12 @@ def require_complete_21_only(
     *,
     context: str = "single-shot research job",
 ) -> tuple[str, ...]:
-    """Return ordered unique dataset ids if all are COMPLETE-21 eligible.
-
-    Fail-closed when:
-
-    * any permanent DEFER id is present (imports permanent_defer guards)
-    * any id is outside the residual COMPLETE 21 set
-    * the list is empty
-    """
+    """Return ordered unique COMPLETE-21 ids. Fail-closed on DEFER / unknown / empty."""
     if isinstance(datasets, str):
         requested = (datasets,)
     else:
         requested = tuple(datasets)
 
-    # Permanent DEFER hard reject first (shared contract with history loaders).
     reject_permanent_defer_for_history(requested, context=context)
 
     out: list[str] = []
@@ -311,15 +266,7 @@ def build_single_shot_job_spec(
     period_end: str,
     job_id: str | None = None,
 ) -> SingleShotJobSpec:
-    """Build a single-shot job declaration.
-
-    Does **not**:
-
-    * call ``start_mass_research`` / mass research loop
-    * set READY / mint ``VerifiedResearchReadiness``
-    * arm Phase7 env switches
-    * write local SoT artifacts as authority
-    """
+    """Build a single-shot job declaration (no mass / READY / Phase7 / local SoT)."""
     start = str(period_start).strip()
     end = str(period_end).strip()
     if not start or not end:
@@ -371,10 +318,7 @@ def freeze_status() -> dict[str, Any]:
 
 
 def assert_mass_and_phase7_off() -> Mapping[str, Any]:
-    """Hard-check freeze constants; raise if any switch is not closed.
-
-    Tests and operators may call this as a guard. It never enables anything.
-    """
+    """Hard-check freeze constants; raise if any switch is not closed."""
     status = freeze_status()
     if status["mass_research"] != "NO-GO":
         raise RuntimeError(f"mass_research must be NO-GO, got {status['mass_research']!r}")
@@ -398,10 +342,6 @@ def assert_mass_and_phase7_off() -> Mapping[str, Any]:
         raise RuntimeError("single-shot skeleton must not execute orders")
     return status
 
-
-# ---------------------------------------------------------------------------
-# W50 — minimal CF-backed execute (D1 tip read + R2 artifact put)
-# ---------------------------------------------------------------------------
 
 D1ExecuteFn = Callable[[str], list[dict[str, Any]]]
 R2PutFn = Callable[[str, str, bytes], dict[str, Any]]
@@ -475,30 +415,14 @@ def content_hash_payload(payload: Mapping[str, Any]) -> str:
     return "sha256:" + hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
-# D1 tip extract + FeatureContext live in research.single_shot_tip (re-exported).
-# Module import (not from-import) so tip-first load does not circular-import.
+# D1 tip extract lives in research.single_shot_tip (re-exported). Module
+# import (not from-import) so tip-first load does not circular-import.
 import research.single_shot_tip as _single_shot_tip
 
 _as_of_from_period_end = getattr(_single_shot_tip, "_as_of_from_period_end", None)
-_available_at_ok = getattr(_single_shot_tip, "_available_at_ok", None)
-_decode_json_obj = getattr(_single_shot_tip, "_decode_json_obj", None)
-_normalize_tip_bar_row = getattr(_single_shot_tip, "_normalize_tip_bar_row", None)
-_normalize_tip_calendar_row = getattr(
-    _single_shot_tip, "_normalize_tip_calendar_row", None
-)
-_normalize_tip_catalog_row = getattr(_single_shot_tip, "_normalize_tip_catalog_row", None)
-_normalize_tip_jsda_repo_row = getattr(
-    _single_shot_tip, "_normalize_tip_jsda_repo_row", None
-)
-_pick_num = getattr(_single_shot_tip, "_pick_num", None)
-_pick_str = getattr(_single_shot_tip, "_pick_str", None)
-_sql_str = getattr(_single_shot_tip, "_sql_str", None)
-build_tip_feature_context = getattr(_single_shot_tip, "build_tip_feature_context", None)
 compute_tip_candidate_features = getattr(
     _single_shot_tip, "compute_tip_candidate_features", None
 )
-default_d1_execute = getattr(_single_shot_tip, "default_d1_execute", None)
-discover_tip_trading_days = getattr(_single_shot_tip, "discover_tip_trading_days", None)
 extract_d1_tip_feature_rows = getattr(
     _single_shot_tip, "extract_d1_tip_feature_rows", None
 )
@@ -715,31 +639,11 @@ def execute_single_shot_job(
 ) -> SingleShotExecution:
     """Run one CF-backed single-shot pass: D1 tip extract → R2 result+manifest.
 
-    Parameters
-    ----------
-    dry_run:
-        When True, design + D1 read still run; R2 puts are staged locally only
-        (or recorded without remote write). Prefer real R2 put when credentials
-        work.
-    compute_features:
-        When True, also extract tip payloads, build a tip FeatureContext
-        (not local SQLite), compute COMPLETE-21 **candidate** features, and
-        write a features artifact + feature stats on the manifest.
-    compute_signals:
-        When True, also compute the W52/W53 minimal tip signal from approved
-        feature observations and write a signals artifact under
-        ``research/single_shot/job={id}/signals/``. Implies feature compute
-        for the signal's required feature ids. ``candidate_only=False``
-        (legs approved; signal status remains candidate).
-        Does **not** mint READY or emit orders.
-    d1_execute / r2_put:
-        Injectable callables for unit tests. Defaults use wrangler remote.
-
-    Never connects to mass research, never sets READY, never arms Phase7,
-    never executes orders.
+    ``dry_run`` stages R2 puts locally. ``compute_features`` writes COMPLETE-21
+    tip features; ``compute_signals`` also writes the approved-leg candidate
+    signal (implies features). Never mass / READY / Phase7 / orders.
     """
     assert_mass_and_phase7_off()
-    # Signal path always needs features; never opens order/mass paths.
     if compute_signals:
         compute_features = True
     spec = build_single_shot_job_spec(
@@ -762,50 +666,25 @@ def execute_single_shot_job(
     tip_feature_extract: dict[str, Any] | None = None
     signal_payload: dict[str, Any] | None = None
     if compute_features:
-        # Ensure feature-required datasets are present when caller only passed
-        # a summary subset; still COMPLETE-21 only / DEFER fail-closed.
         if feature_ids is not None:
             fids = tuple(feature_ids)
         elif compute_signals:
             fids = DEFAULT_SIGNAL_FEATURE_IDS
         else:
             fids = DEFAULT_CANDIDATE_FEATURES
-        # Signal always needs its three feature legs.
         if compute_signals:
             for required_fid in DEFAULT_SIGNAL_FEATURE_IDS:
                 if required_fid not in fids:
                     fids = fids + (required_fid,)
         needed: list[str] = list(spec.dataset_ids)
-        # Map feature → required tip datasets (min surface for default 3).
-        if "volume_change_1d" in fids or "topix_relative_1d" in fids:
-            if "equities_bars_daily" not in needed:
-                needed.append("equities_bars_daily")
-        if "is_trading_day" in fids and "markets_calendar" not in needed:
-            needed.append("markets_calendar")
-        if "topix_relative_1d" in fids and "indices_bars_daily_topix" not in needed:
-            needed.append("indices_bars_daily_topix")
-        if "margin_interest_change_1d" in fids and "markets_margin_interest" not in needed:
-            needed.append("markets_margin_interest")
-        if "disclosure_flag_fins" in fids and "fins_summary" not in needed:
-            needed.append("fins_summary")
-        if "margin_alert_flag" in fids and "markets_margin_alert" not in needed:
-            needed.append("markets_margin_alert")
-        if "return_1d_c21" in fids and "equities_bars_daily" not in needed:
-            needed.append("equities_bars_daily")
-        if "repo_rate_level" in fids and "jsda_tokyo_repo_rates" not in needed:
-            needed.append("jsda_tokyo_repo_rates")
-        if "short_ratio_level" in fids and "markets_short_ratio" not in needed:
-            needed.append("markets_short_ratio")
-        if (
-            "futures_activity_proxy" in fids
-            and "derivatives_bars_daily_futures" not in needed
-        ):
-            needed.append("derivatives_bars_daily_futures")
+        for fid in fids:
+            for ds in _FEATURE_REQUIRED_DATASETS.get(fid, ()):
+                if ds not in needed:
+                    needed.append(ds)
         if compute_signals:
             for ds in DEFAULT_SIGNAL_DATASETS:
                 if ds not in needed:
                     needed.append(ds)
-        # Re-validate expanded set (DEFER still fail-closed).
         feature_datasets = require_complete_21_only(
             needed, context="single-shot feature datasets"
         )
@@ -842,7 +721,6 @@ def execute_single_shot_job(
             },
         }
         if compute_signals:
-            # Pure join over tip feature observations — no mass, no READY, no orders.
             signal_core = compute_signal_from_feature_observations(
                 feature_payload.get("observations") or [],
                 as_of=as_of,
@@ -863,8 +741,6 @@ def execute_single_shot_job(
             }
 
     executed_at = _now_utc()
-    # Hash identity excludes wall-clock so re-runs with same tip facts are stable
-    # when counts match; executed_at lives only in outer envelopes.
     result_identity: dict[str, Any] = {
         "version": "single-shot-result/v1",
         "job_id": spec.job_id,
@@ -895,7 +771,6 @@ def execute_single_shot_job(
         "local_sot": False,
     }
     if feature_payload is not None:
-        # Stable feature identity for content hash (exclude sample dumps of floats only via features summary).
         result_identity["features_summary"] = [
             {
                 "feature_id": f.get("feature_id"),
@@ -1023,7 +898,6 @@ def execute_single_shot_job(
         "connected_to_mass_research_loop": False,
     }
     if feature_payload is not None:
-        # T3: manifest carries feature_id, version, row_counts (+ null_counts).
         manifest["features"] = [
             {
                 "feature_id": f.get("feature_id"),
@@ -1128,9 +1002,17 @@ def execute_single_shot_job(
     )
 
 
-# Multiday / nextday eval lives in research.single_shot_eval; cost/compare
-# in research.single_shot_compare (both re-exported). Lazy getattr so
-# job-first and eval/compare-first loads all bind.
+# Sibling re-exports. Lazy getattr so job-first and sibling-first loads bind.
+_TIP_EXPORTS: frozenset[str] = frozenset(
+    {
+        "build_tip_feature_context",
+        "compute_tip_candidate_features",
+        "default_d1_execute",
+        "discover_tip_trading_days",
+        "extract_d1_tip_feature_rows",
+        "extract_d1_tip_summaries",
+    }
+)
 _COMPARE_EXPORTS: frozenset[str] = frozenset(
     {
         "RESEARCH_COST_LABEL",
@@ -1163,6 +1045,10 @@ _EVAL_EXPORTS: frozenset[str] = frozenset(
 
 
 def __getattr__(name: str):
+    if name in _TIP_EXPORTS:
+        import research.single_shot_tip as _tip
+
+        return getattr(_tip, name)
     if name in _COMPARE_EXPORTS:
         import research.single_shot_compare as _single_shot_compare
 
@@ -1176,7 +1062,11 @@ def __getattr__(name: str):
 
 def __dir__() -> list[str]:
     return sorted(
-        set(globals()) | _COMPARE_EXPORTS | _EVAL_EXPORTS | set(__all__)
+        set(globals())
+        | _TIP_EXPORTS
+        | _COMPARE_EXPORTS
+        | _EVAL_EXPORTS
+        | set(__all__)
     )
 
 

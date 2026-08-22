@@ -45,8 +45,7 @@ from research.single_shot_job import (
     require_complete_21_only,
 )
 
-# Code-keyed tip extracts: apply natural_key Code filter when codes selected.
-# (Index / calendar / section / JSDA macro datasets are intentionally excluded.)
+# Code-keyed tip extracts (index / calendar / JSDA macro datasets excluded).
 _CODE_KEYED_TIP_DATASETS: frozenset[str] = frozenset(
     {
         "equities_bars_daily",
@@ -131,12 +130,7 @@ def extract_d1_tip_summaries(
     d1_execute: D1ExecuteFn | None = None,
     context: str = "single-shot tip extract",
 ) -> dict[str, Any]:
-    """Bounded tip extract from remote D1 ``jquants_records`` (not full history).
-
-    Fail-closed on permanent DEFER / non-COMPLETE-21 ids before any query.
-    Returns per-dataset count + min/max event_time + sample natural_keys only
-    (payload bodies are not exported — tip proof, not a READY dump).
-    """
+    """Bounded D1 tip extract: count + min/max event_time + sample keys. Fail-closed."""
     ids = require_complete_21_only(dataset_ids, context=context)
     start = str(period_start).strip()
     end = str(period_end).strip()
@@ -392,8 +386,7 @@ def _normalize_tip_catalog_row(
     }
 
 
-# COMPLETE-21 JSDA datasets live on dedicated D1 fact tables (not
-# jquants_records). Tip feature extract / summary must hit these tables.
+# COMPLETE-21 JSDA datasets live on dedicated D1 fact tables (not jquants_records).
 _JSDA_TIP_TABLE_BY_DATASET: dict[str, str] = {
     "jsda_tokyo_repo_rates": "jsda_repo_rates",
 }
@@ -497,11 +490,7 @@ def extract_d1_tip_feature_rows(
     d1_execute: D1ExecuteFn | None = None,
     context: str = "single-shot tip feature extract",
 ) -> dict[str, Any]:
-    """Bounded tip **payload** extract for FeatureContext (not full history).
-
-    Fail-closed on permanent DEFER / non-COMPLETE-21 before any query.
-    Returns normalized tip rows suitable for :func:`build_tip_feature_context`.
-    """
+    """Bounded tip payload extract for FeatureContext. Fail-closed on DEFER / non-21."""
     ids = require_complete_21_only(dataset_ids, context=context)
     start = str(period_start).strip()
     end = str(period_end).strip()
@@ -629,10 +618,7 @@ def extract_d1_tip_feature_rows(
         },
         "rows_by_dataset": rows_by_dataset,
         "local_sot": False,
-        "note": (
-            "Bounded tip payload extract for candidate feature compute. "
-            "Not READY. Not local SQLite SoT. History remains on R2."
-        ),
+        "note": "Bounded tip payload extract. Not READY. History remains on R2.",
     }
 
 
@@ -827,16 +813,71 @@ def _augment_feature_output(
     }
 
 
+_CODE_FEATURE_IDS: frozenset[str] = frozenset(
+    {
+        "volume_change_1d",
+        "topix_relative_1d",
+        "disclosure_flag_fins",
+        "margin_interest_change_1d",
+        "margin_alert_flag",
+        "return_1d_c21",
+    }
+)
+
+
+def _empty_feature_block(
+    fid: str, version: str, status: str, reason: str
+) -> dict[str, Any]:
+    return {
+        "feature_id": fid,
+        "version": version,
+        "status": status,
+        "row_counts": {"computed": 0, "non_null": 0, "null": 0},
+        "null_counts": 0,
+        "reason": reason,
+    }
+
+
+def _run_feature_targets(
+    *,
+    fid: str,
+    feat: Any,
+    version: str,
+    as_of_s: str,
+    tip_rows_by_dataset: Mapping[str, Sequence[Mapping[str, Any]]],
+    targets: Sequence[Any],
+    extra_key: str | None,
+    observations: list[dict[str, Any]],
+) -> tuple[list[Any], list[dict[str, Any]]]:
+    values: list[Any] = []
+    feature_obs: list[dict[str, Any]] = []
+    for target in targets:
+        inputs = {extra_key: target} if extra_key else {}
+        ctx = build_tip_feature_context(
+            tip_rows_by_dataset, as_of=as_of_s, inputs=inputs
+        )
+        out = feat.compute(ctx)
+        if not isinstance(out, FeatureOutput):
+            raise TypeError(
+                f"feature {fid!r} returned {type(out).__name__}; "
+                "expected FeatureOutput"
+            )
+        extra = {extra_key: target} if extra_key else None
+        rec = _augment_feature_output(
+            fid, version, as_of_s, out, status=feat.status, extra_meta=extra
+        )
+        values.append(rec["value"])
+        feature_obs.append(rec)
+        observations.append(rec)
+    return values, feature_obs
+
+
 def _discover_tip_sections(
     tip_rows_by_dataset: Mapping[str, Sequence[Mapping[str, Any]]],
     *,
     section_limit: int = DEFAULT_FEATURE_CODE_LIMIT,
 ) -> list[str]:
-    """Discover S33 section codes from tip ``markets_short_ratio`` rows.
-
-    Prefers well-known probe sections (``0050`` …) when present, then fills
-    from remaining tip S33 values (stable sort). Empty when tip has no S33.
-    """
+    """Discover S33 codes from tip ``markets_short_ratio`` (probe sections first)."""
     short_rows = list(tip_rows_by_dataset.get("markets_short_ratio") or [])
     seen: set[str] = set()
     for row in short_rows:
@@ -852,7 +893,6 @@ def _discover_tip_sections(
         seen.add(str(s33).strip())
     if not seen:
         return []
-    # Prefer catalog/test probe sections when present in tip.
     preferred = ("0050", "1050", "2050", "3050", "3100", "3150", "3200", "3250", "3300")
     ordered: list[str] = [s for s in preferred if s in seen]
     for s in sorted(seen):
@@ -870,19 +910,10 @@ def compute_tip_candidate_features(
     dates: Sequence[str] | None = None,
     sections: Sequence[str] | None = None,
 ) -> dict[str, Any]:
-    """Compute COMPLETE-21 min features on a tip FeatureContext.
-
-    Does not use local SQLite. Returns per-feature values + row/null counts
-    for the research artifact / manifest. Per-feature ``status`` mirrors the
-    registry (approved or candidate); overall path is still not READY.
-
-    ``sections`` supplies S33 codes for ``short_ratio_level``; when omitted,
-    sections are discovered from tip ``markets_short_ratio`` rows.
-    """
+    """Compute COMPLETE-21 min features on a tip FeatureContext (not local SQLite)."""
     fids = tuple(feature_ids) if feature_ids else DEFAULT_CANDIDATE_FEATURES
     as_of_s = str(as_of).strip()
 
-    # Discover codes from tip bars when not provided.
     bar_rows = list(tip_rows_by_dataset.get("equities_bars_daily") or [])
     if codes:
         code_list = [str(c).strip() for c in codes if str(c).strip()]
@@ -899,7 +930,6 @@ def compute_tip_candidate_features(
         )
         code_list = [c for c, _ in ranked[:DEFAULT_FEATURE_CODE_LIMIT]]
 
-    # Dates for is_trading_day: explicit, else calendar tip dates, else as_of day.
     cal_rows = list(tip_rows_by_dataset.get("markets_calendar") or [])
     if dates:
         date_list = [str(d)[:10] for d in dates]
@@ -908,7 +938,6 @@ def compute_tip_candidate_features(
     else:
         date_list = [as_of_s[:10]]
 
-    # S33 sections for short_ratio_level (explicit or tip-discovered).
     if sections:
         section_list = [str(s).strip() for s in sections if str(s).strip()]
     else:
@@ -925,133 +954,38 @@ def compute_tip_candidate_features(
         feat = get_feature(fid)
         version = str(feat.version)
         reg_status = feat.status
-        values: list[Any] = []
-        feature_obs: list[dict[str, Any]] = []
-
-        if fid in ("volume_change_1d", "topix_relative_1d", "disclosure_flag_fins",
-                   "margin_interest_change_1d", "margin_alert_flag", "return_1d_c21"):
-            targets = code_list
-            if not targets:
-                feature_blocks.append(
-                    {
-                        "feature_id": fid,
-                        "version": version,
-                        "status": reg_status,
-                        "row_counts": {
-                            "computed": 0,
-                            "non_null": 0,
-                            "null": 0,
-                        },
-                        "null_counts": 0,
-                        "reason": "no tip codes with multi-day history",
-                    }
-                )
-                continue
-            for code in targets:
-                ctx = build_tip_feature_context(
-                    tip_rows_by_dataset,
-                    as_of=as_of_s,
-                    inputs={"code": code},
-                )
-                out = feat.compute(ctx)
-                if not isinstance(out, FeatureOutput):
-                    raise TypeError(
-                        f"feature {fid!r} returned {type(out).__name__}; "
-                        "expected FeatureOutput"
-                    )
-                rec = _augment_feature_output(
-                    fid,
-                    version,
-                    as_of_s,
-                    out,
-                    status=reg_status,
-                    extra_meta={"code": code},
-                )
-                values.append(rec["value"])
-                feature_obs.append(rec)
-                observations.append(rec)
+        extra_key: str | None
+        targets: Sequence[Any]
+        if fid in _CODE_FEATURE_IDS:
+            extra_key, targets = "code", code_list
+            empty_reason = "no tip codes with multi-day history"
         elif fid == "is_trading_day":
-            for d in date_list:
-                ctx = build_tip_feature_context(
-                    tip_rows_by_dataset,
-                    as_of=as_of_s,
-                    inputs={"date": d},
-                )
-                out = feat.compute(ctx)
-                if not isinstance(out, FeatureOutput):
-                    raise TypeError(
-                        f"feature {fid!r} returned {type(out).__name__}; "
-                        "expected FeatureOutput"
-                    )
-                rec = _augment_feature_output(
-                    fid,
-                    version,
-                    as_of_s,
-                    out,
-                    status=reg_status,
-                    extra_meta={"date": d},
-                )
-                values.append(rec["value"])
-                feature_obs.append(rec)
-                observations.append(rec)
+            extra_key, targets = "date", date_list
+            empty_reason = ""
         elif fid == "short_ratio_level":
-            targets = section_list
-            if not targets:
-                feature_blocks.append(
-                    {
-                        "feature_id": fid,
-                        "version": version,
-                        "status": reg_status,
-                        "row_counts": {"computed": 0, "non_null": 0, "null": 0},
-                        "null_counts": 0,
-                        "reason": (
-                            "short_ratio_level requires section; no tip S33 "
-                            "sections discovered and none provided"
-                        ),
-                    }
-                )
-                continue
-            for section in targets:
-                ctx = build_tip_feature_context(
-                    tip_rows_by_dataset,
-                    as_of=as_of_s,
-                    inputs={"section": section},
-                )
-                out = feat.compute(ctx)
-                if not isinstance(out, FeatureOutput):
-                    raise TypeError(
-                        f"feature {fid!r} returned {type(out).__name__}; "
-                        "expected FeatureOutput"
-                    )
-                rec = _augment_feature_output(
-                    fid,
-                    version,
-                    as_of_s,
-                    out,
-                    status=reg_status,
-                    extra_meta={"section": section},
-                )
-                values.append(rec["value"])
-                feature_obs.append(rec)
-                observations.append(rec)
+            extra_key, targets = "section", section_list
+            empty_reason = (
+                "short_ratio_level requires section; no tip S33 "
+                "sections discovered and none provided"
+            )
         else:
-            # Features with no required kwargs (e.g. repo_rate_level,
-            # futures_activity_proxy).
-            ctx = build_tip_feature_context(
-                tip_rows_by_dataset, as_of=as_of_s, inputs={}
+            extra_key, targets, empty_reason = None, [None], ""
+
+        if extra_key is not None and not targets:
+            feature_blocks.append(
+                _empty_feature_block(fid, version, reg_status, empty_reason)
             )
-            out = feat.compute(ctx)
-            if not isinstance(out, FeatureOutput):
-                raise TypeError(
-                    f"feature {fid!r} returned {type(out).__name__}; "
-                    "expected FeatureOutput"
-                )
-            rec = _augment_feature_output(
-                fid, version, as_of_s, out, status=reg_status
-            )
-            values.append(rec["value"])
-            feature_obs.append(rec)
-            observations.append(rec)
+            continue
+        values, feature_obs = _run_feature_targets(
+            fid=fid,
+            feat=feat,
+            version=version,
+            as_of_s=as_of_s,
+            tip_rows_by_dataset=tip_rows_by_dataset,
+            targets=targets,
+            extra_key=extra_key,
+            observations=observations,
+        )
 
         non_null = sum(1 for v in values if v is not None)
         null_n = sum(1 for v in values if v is None)
@@ -1104,10 +1038,7 @@ def compute_tip_candidate_features(
         "ready_publication": READY_PUBLICATION_STATUS,
         "local_sot": False,
         "status": path_status,
-        "note": (
-            "COMPLETE-21 min features on tip FeatureContext (D1 hot tip). "
-            "Per-feature status from registry. Not READY. Not mass research."
-        ),
+        "note": "COMPLETE-21 min features on tip FeatureContext. Not READY.",
     }
 
 
@@ -1117,10 +1048,7 @@ def discover_tip_trading_days(
     period_start: str | None = None,
     period_end: str | None = None,
 ) -> list[str]:
-    """Return sorted trading-day dates from tip calendar rows (HolidayDivision==1).
-
-    Falls back to bar event dates when calendar rows are missing (still not READY).
-    """
+    """Sorted trading-day dates from tip calendar (HolidayDivision==1), else bar dates."""
     start = str(period_start).strip()[:10] if period_start else None
     end = str(period_end).strip()[:10] if period_end else None
     cal_rows = list(tip_rows_by_dataset.get("markets_calendar") or [])
@@ -1143,7 +1071,6 @@ def discover_tip_trading_days(
     if days:
         return sorted(set(days))
 
-    # Fallback: unique bar dates in tip (assume listed session days).
     bar_days: set[str] = set()
     for row in tip_rows_by_dataset.get("equities_bars_daily") or []:
         d = str(row.get("date") or "")[:10]
@@ -1158,11 +1085,7 @@ def discover_tip_trading_days(
 
 
 def _reexport_on_job() -> None:
-    """Copy this module's tip surface onto ``single_shot_job`` after load.
-
-    Completes re-exports when this module is imported first (job binds
-    ``getattr(..., None)`` placeholders while this file is still loading).
-    """
+    """Copy this module's public tip surface onto ``single_shot_job`` after load."""
     import sys
 
     job = sys.modules.get("research.single_shot_job")
@@ -1170,15 +1093,6 @@ def _reexport_on_job() -> None:
         return
     for name in (
         "_as_of_from_period_end",
-        "_available_at_ok",
-        "_decode_json_obj",
-        "_normalize_tip_bar_row",
-        "_normalize_tip_calendar_row",
-        "_normalize_tip_catalog_row",
-        "_normalize_tip_jsda_repo_row",
-        "_pick_num",
-        "_pick_str",
-        "_sql_str",
         "build_tip_feature_context",
         "compute_tip_candidate_features",
         "default_d1_execute",
