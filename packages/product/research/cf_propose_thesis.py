@@ -188,10 +188,15 @@ def review_proposal_row(proposal: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def catalog_gate_set_avoid(*, limit: int = 12) -> list[str]:
-    """Existing combo AND-sets for LLM why_avoid. Not a scorecard."""
-    from research.unique_logic.catalog import yaml_combo_rows
+    """Existing combo AND-sets for LLM why_avoid. Economic 2-gates first.
 
-    seen: list[str] = []
+    Calendar/weekday permutations are not clone seeds. Not a scorecard.
+    """
+    from research.unique_logic.catalog import yaml_combo_rows
+    from research.unique_logic.constants import PROPOSE_CALENDAR_GATES
+
+    twos: list[str] = []
+    threes: list[str] = []
     have: set[str] = set()
     for row in yaml_combo_rows():
         gates = sorted(
@@ -201,14 +206,17 @@ def catalog_gate_set_avoid(*, limit: int = 12) -> list[str]:
         )
         if not (2 <= len(gates) <= PROPOSE_MAX_AND_GATES):
             continue
+        if PROPOSE_CALENDAR_GATES.intersection(gates):
+            continue
         token = "+".join(gates)
         if token in have:
             continue
         have.add(token)
-        seen.append(token)
-        if len(seen) >= int(limit):
-            break
-    return seen
+        if len(gates) == 2:
+            twos.append(token)
+        else:
+            threes.append(token)
+    return (twos + threes)[: int(limit)]
 
 
 def reject_window_tweak(proposal: Mapping[str, Any]) -> bool:

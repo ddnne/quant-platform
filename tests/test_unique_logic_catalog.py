@@ -360,6 +360,22 @@ def test_fins_ta_eqar_stats_see_official_keys() -> None:
     assert (stats["ncta_nonnull"] or 0) < (stats["n_ta_nonnull"] or 0)
 
 
+def test_sync_cf_new_thesis_ids_check() -> None:
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    repo = Path(__file__).resolve().parents[1]
+    r = subprocess.run(
+        [sys.executable, str(repo / "scripts" / "sync_cf_new_thesis_ids.py"), "--check"],
+        cwd=str(repo),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
 def test_worker_new_thesis_ids_match_python() -> None:
     import re
     from pathlib import Path

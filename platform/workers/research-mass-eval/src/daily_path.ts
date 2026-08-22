@@ -2091,6 +2091,9 @@ function gatedCsHeld(
   logic: LogicSpec,
   panel: PeriodPanel,
 ): Record<string, Record<string, number>> {
+  // Unique-22 leftover CS books (xs_margin_delta / xs_low_vol / idio) and
+  // lid invert list are occupancy, not comboCsGateOk. Do not drop without
+  // occupancy-equal re-eval. Parked leftover stay non-candidate.
   const lid = String(logic.logic_id || "");
   const params = logic.params || {};
   if (lid === "xs_margin_delta_rank") {

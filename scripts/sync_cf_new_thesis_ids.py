@@ -41,7 +41,8 @@ def _quoted_ids(block: str) -> set[str]:
     return set(re.findall(r'"([^"]+)"', block))
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    check = "--check" in list(argv if argv is not None else sys.argv[1:])
     root = ensure_repo_root()
     sys.path.insert(0, str(root / "packages" / "product"))
     from research.unique_logic.constants import (
@@ -158,6 +159,8 @@ def main() -> int:
     if "...CF_NEW_EVENT_THESIS_IDS" not in src2:
         raise SystemExit("CF_EVENT_LOGIC_IDS must spread CF_NEW_EVENT_THESIS_IDS")
     if src2 != src:
+        if check:
+            raise SystemExit(f"out of sync: {path}")
         path.write_text(src2, encoding="utf-8")
         print("rewrote", path)
     else:
@@ -192,6 +195,8 @@ def main() -> int:
     if pn1 != 1 or pn2 != 1:
         raise SystemExit(f"propose rewrite failed n_ds={pn1} n_gates={pn2}")
     if p2 != psrc:
+        if check:
+            raise SystemExit(f"out of sync: {propose_path}")
         propose_path.write_text(p2, encoding="utf-8")
         print("rewrote", propose_path)
     else:

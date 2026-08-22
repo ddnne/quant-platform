@@ -230,10 +230,18 @@ def test_review_proposal_row_rejects_invent_and_weekday() -> None:
 
 def test_catalog_gate_set_avoid_is_existing_crosses() -> None:
     from research.cf_propose_thesis import catalog_gate_set_avoid
+    from research.unique_logic.constants import PROPOSE_CALENDAR_GATES
 
     tokens = catalog_gate_set_avoid(limit=8)
     assert 1 <= len(tokens) <= 8
     assert all("+" in t for t in tokens)
+    blob = " ".join(tokens)
+    assert "skip_monday" not in blob
+    assert "friday_skip" not in blob
+    assert PROPOSE_CALENDAR_GATES.isdisjoint(
+        {p for t in tokens for p in t.split("+")}
+    )
+    assert all(len(t.split("+")) == 2 for t in tokens) or tokens[0].count("+") == 1
     posted: dict[str, object] = {}
 
     def _post(*, url: str, body: bytes, headers: dict[str, str]) -> dict:
