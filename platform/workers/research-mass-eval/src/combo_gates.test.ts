@@ -202,28 +202,23 @@ describe("comboEventGateOk", () => {
     );
   });
 
-  it("leftover pre_mom lids reuse comboEventGateOk occupancy (entryIdx-1)", () => {
+  it("unique-22 leftover keeps pre_mom occupancy and month_start dd>05", () => {
     const src = readFileSync(
       join(dirname(fileURLToPath(import.meta.url)), "daily_path.ts"),
       "utf8",
     );
-    const easy = src.slice(
-      src.indexOf('if (lid === "event_pre_mom_easy_funding")'),
-      src.indexOf('if (lid === "event_margin_or_funding_skip")'),
+    const agree = src.slice(
+      src.indexOf('if (lid === "event_pre_mom_agree_hold")'),
+      src.indexOf('if (lid === "event_margin_crowding_skip")'),
     );
-    const steep = src.slice(
-      src.indexOf('if (lid === "event_pre_mom_steep_curve")'),
-      src.indexOf('if (lid === "event_large_surprise_afterclose")'),
-    );
-    expect(easy).toContain('comboEventGateOk("pre_mom"');
-    expect(easy).toContain("params.side");
-    expect(easy).not.toContain("momentumAt");
-    expect(steep).toContain('comboEventGateOk("pre_mom"');
-    expect(steep).toContain("params.side");
-    expect(steep).not.toContain("momentumAt");
+    expect(agree).toContain("momentumAt(pairs, 5, i)");
+    expect(agree).not.toContain("momentumAt(pairs, 5, i - 1)");
+    expect(src).not.toContain('if (lid === "event_pre_mom_easy_funding")');
+    expect(src).not.toContain('if (lid === "event_pre_mom_steep_curve")');
     expect(src).toContain(
       'lid === "surprise_xs_month_start" && ev.entryDate.slice(8, 10) > "05"',
     );
+    expect(src).toContain('lid === "surprise_xs_fy_end"');
   });
 });
 

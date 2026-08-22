@@ -279,23 +279,15 @@ def test_python_only_event_gates_skip_catalog() -> None:
     assert worker_gates.isdisjoint(PYTHON_ONLY_EVENT_GATES)
     assert worker_gates == set(COMBO_EVENT_GATES)
     assert "pre_mom" in worker_gates
-    easy_m = re.search(
-        r'if \(lid === "event_pre_mom_easy_funding"\) \{.*?\}',
+    agree_m = re.search(
+        r'if \(lid === "event_pre_mom_agree_hold"\) \{.*?\}',
         src,
         flags=re.S,
     )
-    steep_m = re.search(
-        r'if \(lid === "event_pre_mom_steep_curve"\) \{.*?\}',
-        src,
-        flags=re.S,
-    )
-    assert easy_m and steep_m
-    assert 'comboEventGateOk("pre_mom"' in easy_m.group(0)
-    assert 'comboEventGateOk("pre_mom"' in steep_m.group(0)
-    assert "momentumAt" not in easy_m.group(0)
-    assert "momentumAt" not in steep_m.group(0)
-    assert "params.side" in easy_m.group(0)
-    assert "params.side" in steep_m.group(0)
+    assert agree_m
+    assert "momentumAt(pairs, 5, i)" in agree_m.group(0)
+    assert 'if (lid === "event_pre_mom_easy_funding")' not in src
+    assert 'if (lid === "event_pre_mom_steep_curve")' not in src
     assert 'lid === "surprise_xs_month_start" && ev.entryDate.slice(8, 10) > "05"' in src
     assert 'lid === "surprise_xs_fy_end"' in src
 

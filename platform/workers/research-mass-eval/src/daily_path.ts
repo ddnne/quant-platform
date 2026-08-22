@@ -1512,9 +1512,7 @@ function eventHeld(
         );
         if (String(params.side || "orig") === "flip") sgn = -ev.sign;
       }
-      // Leftover lid bodies (unique-22 + combo lids not fully on
-      // COMBO_EVENT_GATES). pre_mom leftover occupancy equals comboEventGateOk
-      // (entryIdx-1 / last close strictly before entry). Sign via params.side.
+      // Unique-22 leftover (no params.gates). Combo YAML gates use comboEventGateOk.
       if (!comboImpl) {
       if (lid === "afterclose_only_event_hold" && !ev.after) ok = false;
       if (lid === "event_funding_stress_skip" || lid === "event_funding_adaptive_side") {
@@ -1551,6 +1549,7 @@ function eventHeld(
       if (lid === "event_pre_mom_agree_hold") {
         const pairs = bars[code];
         const i = ev.entryIdx;
+        // Occupancy vs Python unique: momentumAt(entryIdx), not entryIdx-1.
         if (!pairs || i < 5) ok = false;
         else {
           const m = momentumAt(pairs, 5, i);
@@ -1558,337 +1557,23 @@ function eventHeld(
           if (ms === null || ms === 0 || ms !== ev.sign) ok = false;
         }
       }
-      const marginGate = (wantCrowded: boolean): boolean => {
+      if (lid === "event_margin_crowding_skip") {
         const levels =
           panel.flow_regime?.margin_level_by_code?.[code] || {};
         const prior = Object.keys(levels)
           .filter((d) => d < ev.entryDate)
           .sort();
-        if (!prior.length) return false;
-        const lastD = prior[prior.length - 1];
-        const ageDays =
-          (Date.parse(ev.entryDate + "T00:00:00Z") -
-            Date.parse(lastD + "T00:00:00Z")) /
-          86400000;
-        const med = pitMedian(levels, ev.entryDate, minHist);
-        if (!Number.isFinite(ageDays) || ageDays > 14 || med === null) return false;
-        const crowded = (levels[lastD] as number) >= med;
-        return wantCrowded ? crowded : !crowded;
-      };
-      const easyOn = (): boolean => {
-        const on = overnight[ev.entryDate];
-        const med = pitMedian(overnight, ev.entryDate, minHist);
-        return on !== undefined && med !== null && on < med;
-      };
-      const tightOn = (): boolean => {
-        const on = overnight[ev.entryDate];
-        const med = pitMedian(overnight, ev.entryDate, minHist);
-        return on !== undefined && med !== null && on >= med;
-      };
-      const steepOn = (): boolean => {
-        const sp = spread[ev.entryDate];
-        return sp !== undefined && sp > 0;
-      };
-      const invertOn = (): boolean => {
-        const sp = spread[ev.entryDate];
-        return sp !== undefined && sp <= 0;
-      };
-      if (lid === "event_margin_crowding_skip") {
-        if (!marginGate(false)) ok = false;
-      }
-      if (lid === "event_funding_tight_fade") {
-        if (!tightOn()) ok = false;
-        else sgn = -ev.sign;
-      }
-      if (lid === "event_curve_invert_fade") {
-        if (!invertOn()) ok = false;
-        else sgn = -ev.sign;
-      }
-      if (lid === "event_afterclose_easy_funding") {
-        if (!ev.after || !easyOn()) ok = false;
-      }
-      if (lid === "event_large_surprise_easy_funding") {
-        if (!easyOn()) ok = false;
-        const prior = absSurprises.filter((x) => x.d < ev.disc).map((x) => x.abs);
-        if (prior.length < minHist) ok = false;
+        if (!prior.length) ok = false;
         else {
-          const s = prior.slice().sort((a, b) => a - b);
-          const mid = Math.floor(s.length / 2);
-          const med = s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
-          if (ev.abs < med) ok = false;
+          const lastD = prior[prior.length - 1];
+          const ageDays =
+            (Date.parse(ev.entryDate + "T00:00:00Z") -
+              Date.parse(lastD + "T00:00:00Z")) /
+            86400000;
+          const med = pitMedian(levels, ev.entryDate, minHist);
+          if (!Number.isFinite(ageDays) || ageDays > 14 || med === null) ok = false;
+          else if ((levels[lastD] as number) >= med) ok = false;
         }
-      }
-      if (lid === "event_pre_mom_easy_funding") {
-        if (
-          !easyOn() ||
-          !comboEventGateOk("pre_mom", ev, overnight, spread, minHist, panel)
-        )
-          ok = false;
-        if (String(params.side || "orig") === "flip") sgn = -ev.sign;
-      }
-      if (lid === "event_margin_or_funding_skip") {
-        if (!marginGate(false) || !easyOn()) ok = false;
-      }
-      if (lid === "event_large_surprise_steep_curve") {
-        if (!steepOn()) ok = false;
-        const prior = absSurprises.filter((x) => x.d < ev.disc).map((x) => x.abs);
-        if (prior.length < minHist) ok = false;
-        else {
-          const s = prior.slice().sort((a, b) => a - b);
-          const mid = Math.floor(s.length / 2);
-          const med = s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
-          if (ev.abs < med) ok = false;
-        }
-      }
-      if (lid === "event_afterclose_steep_curve") {
-        if (!ev.after || !steepOn()) ok = false;
-      }
-      if (lid === "event_tight_and_crowded_fade") {
-        if (!tightOn() || !marginGate(true)) ok = false;
-        else sgn = -ev.sign;
-      }
-      if (lid === "event_cluster_easy_pead") {
-        if (!easyOn()) ok = false;
-        const series = clusterWindowSeries(panel);
-        const nDisc = series[ev.disc];
-        const medC = pitMedian(series, ev.disc, 10);
-        if (nDisc === undefined || medC === null || nDisc < medC) ok = false;
-      }
-      if (lid === "event_pre_mom_steep_curve") {
-        if (
-          !steepOn() ||
-          !comboEventGateOk("pre_mom", ev, overnight, spread, minHist, panel)
-        )
-          ok = false;
-        if (String(params.side || "orig") === "flip") sgn = -ev.sign;
-      }
-      if (lid === "event_large_surprise_afterclose") {
-        if (!ev.after) ok = false;
-        const prior = absSurprises.filter((x) => x.d < ev.disc).map((x) => x.abs);
-        if (prior.length < minHist) ok = false;
-        else {
-          const s = prior.slice().sort((a, b) => a - b);
-          const mid = Math.floor(s.length / 2);
-          const med = s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
-          if (ev.abs < med) ok = false;
-        }
-      }
-      if (lid === "event_margin_uncrowded_steep") {
-        if (!marginGate(false) || !steepOn()) ok = false;
-      }
-      if (lid === "event_easy_funding_curve_steep") {
-        if (!easyOn() || !steepOn()) ok = false;
-      }
-      if (lid === "month_end_event_skip") {
-        if (ev.entryDate.slice(8, 10) >= "28") ok = false;
-      }
-      if (lid === "event_first_half_month") {
-        if (ev.entryDate.slice(8, 10) > "15") ok = false;
-      }
-      if (lid === "overnight_easing_event") {
-        const prevs = Object.keys(overnight)
-          .filter((x) => x < ev.entryDate)
-          .sort();
-        const on = overnight[ev.entryDate];
-        if (!prevs.length || on === undefined || on >= overnight[prevs[prevs.length - 1]])
-          ok = false;
-      }
-      if (lid === "overnight_tightening_fade_event") {
-        const prevs = Object.keys(overnight)
-          .filter((x) => x < ev.entryDate)
-          .sort();
-        const on = overnight[ev.entryDate];
-        if (!prevs.length || on === undefined || on <= overnight[prevs[prevs.length - 1]])
-          ok = false;
-        else sgn = -ev.sign;
-      }
-      if (lid === "event_cluster_fade") {
-        const series = clusterWindowSeries(panel);
-        const nDisc = series[ev.disc];
-        const medC = pitMedian(series, ev.disc, 10);
-        if (nDisc === undefined || medC === null || nDisc < medC) ok = false;
-        else sgn = -ev.sign;
-      }
-      if (lid === "margin_crowd_fade_event") {
-        if (!marginGate(true)) ok = false;
-        else sgn = -ev.sign;
-      }
-      if (lid === "event_afterclose_delay2" && !ev.after) ok = false;
-      if (lid === "event_skip_monday" && weekdayMon0(ev.entryDate) === 0) ok = false;
-      if (
-        lid === "event_tue_thu_only" &&
-        ![1, 2, 3].includes(weekdayMon0(ev.entryDate))
-      )
-        ok = false;
-      if (lid === "event_friday_skip" && weekdayMon0(ev.entryDate) === 4) ok = false;
-      if (lid === "fy_end_event_fade") {
-        if (ev.entryDate.slice(5, 7) !== "05") ok = false;
-        else sgn = -ev.sign;
-      }
-      if (lid === "event_may_results_follow" && ev.entryDate.slice(5, 7) !== "05")
-        ok = false;
-      if (lid === "fy_start_event_follow" && ev.entryDate.slice(5, 7) !== "04")
-        ok = false;
-      if (lid === "event_midmonth_only") {
-        const dd = ev.entryDate.slice(8, 10);
-        if (dd < "10" || dd > "20") ok = false;
-      }
-      if (lid === "event_easing_uncrowded") {
-        const prevs = Object.keys(overnight)
-          .filter((x) => x < ev.entryDate)
-          .sort();
-        const on = overnight[ev.entryDate];
-        if (
-          !prevs.length ||
-          on === undefined ||
-          on >= overnight[prevs[prevs.length - 1]]
-        )
-          ok = false;
-        else if (!marginGate(false)) ok = false;
-      }
-      if (lid === "event_afterclose_midmonth") {
-        const dd = ev.entryDate.slice(8, 10);
-        if (!ev.after || dd < "10" || dd > "20") ok = false;
-      }
-      if (lid === "event_easing_midmonth") {
-        const dd = ev.entryDate.slice(8, 10);
-        const prevs = Object.keys(overnight)
-          .filter((x) => x < ev.entryDate)
-          .sort();
-        const on = overnight[ev.entryDate];
-        if (dd < "10" || dd > "20") ok = false;
-        else if (
-          !prevs.length ||
-          on === undefined ||
-          on >= overnight[prevs[prevs.length - 1]]
-        )
-          ok = false;
-      }
-      if (lid === "event_friday_easing") {
-        const prevs = Object.keys(overnight)
-          .filter((x) => x < ev.entryDate)
-          .sort();
-        const on = overnight[ev.entryDate];
-        if (weekdayMon0(ev.entryDate) !== 4) ok = false;
-        else if (
-          !prevs.length ||
-          on === undefined ||
-          on >= overnight[prevs[prevs.length - 1]]
-        )
-          ok = false;
-      }
-      if (lid === "event_uncrowded_midmonth") {
-        const dd = ev.entryDate.slice(8, 10);
-        if (dd < "10" || dd > "20") ok = false;
-        else if (!marginGate(false)) ok = false;
-      }
-      if (lid === "event_tue_thu_easing") {
-        const prevs = Object.keys(overnight)
-          .filter((x) => x < ev.entryDate)
-          .sort();
-        const on = overnight[ev.entryDate];
-        if (![1, 2, 3].includes(weekdayMon0(ev.entryDate))) ok = false;
-        else if (
-          !prevs.length ||
-          on === undefined ||
-          on >= overnight[prevs[prevs.length - 1]]
-        )
-          ok = false;
-      }
-      if (lid === "event_tue_thu_uncrowded") {
-        if (![1, 2, 3].includes(weekdayMon0(ev.entryDate))) ok = false;
-        else if (!marginGate(false)) ok = false;
-      }
-      if (lid === "event_afterclose_easing") {
-        const prevs = Object.keys(overnight)
-          .filter((x) => x < ev.entryDate)
-          .sort();
-        const on = overnight[ev.entryDate];
-        if (!ev.after) ok = false;
-        else if (
-          !prevs.length ||
-          on === undefined ||
-          on >= overnight[prevs[prevs.length - 1]]
-        )
-          ok = false;
-      }
-      if (lid === "event_may_easing") {
-        const prevs = Object.keys(overnight)
-          .filter((x) => x < ev.entryDate)
-          .sort();
-        const on = overnight[ev.entryDate];
-        if (ev.entryDate.slice(5, 7) !== "05") ok = false;
-        else if (
-          !prevs.length ||
-          on === undefined ||
-          on >= overnight[prevs[prevs.length - 1]]
-        )
-          ok = false;
-      }
-      if (lid === "event_skip_monday_uncrowded") {
-        if (weekdayMon0(ev.entryDate) === 0) ok = false;
-        else if (!marginGate(false)) ok = false;
-      }
-      if (lid === "event_first_half_easing") {
-        const prevs = Object.keys(overnight)
-          .filter((x) => x < ev.entryDate)
-          .sort();
-        const on = overnight[ev.entryDate];
-        if (ev.entryDate.slice(8, 10) > "15") ok = false;
-        else if (
-          !prevs.length ||
-          on === undefined ||
-          on >= overnight[prevs[prevs.length - 1]]
-        )
-          ok = false;
-      }
-      if (lid === "event_friday_uncrowded") {
-        if (weekdayMon0(ev.entryDate) !== 4) ok = false;
-        else if (!marginGate(false)) ok = false;
-      }
-      if (lid === "event_skip_monday_easing") {
-        const prevs = Object.keys(overnight)
-          .filter((x) => x < ev.entryDate)
-          .sort();
-        const on = overnight[ev.entryDate];
-        if (weekdayMon0(ev.entryDate) === 0) ok = false;
-        else if (
-          !prevs.length ||
-          on === undefined ||
-          on >= overnight[prevs[prevs.length - 1]]
-        )
-          ok = false;
-      }
-      if (lid === "event_afterclose_skip_monday") {
-        if (!ev.after || weekdayMon0(ev.entryDate) === 0) ok = false;
-      }
-      if (lid === "event_easing_skip_friday") {
-        const prevs = Object.keys(overnight)
-          .filter((x) => x < ev.entryDate)
-          .sort();
-        const on = overnight[ev.entryDate];
-        if (weekdayMon0(ev.entryDate) === 4) ok = false;
-        else if (
-          !prevs.length ||
-          on === undefined ||
-          on >= overnight[prevs[prevs.length - 1]]
-        )
-          ok = false;
-      }
-      if (lid === "event_first_half_uncrowded") {
-        if (ev.entryDate.slice(8, 10) > "15") ok = false;
-        else if (!marginGate(false)) ok = false;
-      }
-      if (lid === "event_tue_thu_steep") {
-        const sp = spread[ev.entryDate];
-        if (![1, 2, 3].includes(weekdayMon0(ev.entryDate))) ok = false;
-        else if (sp === undefined || sp <= 0) ok = false;
-      }
-      if (lid === "event_midmonth_steep") {
-        const dd = ev.entryDate.slice(8, 10);
-        const sp = spread[ev.entryDate];
-        if (dd < "10" || dd > "20") ok = false;
-        else if (sp === undefined || sp <= 0) ok = false;
       }
       }
       if (lid === "event_afterclose_delay2" && !ev.after) ok = false;
@@ -1959,90 +1644,6 @@ function eventHeld(
             )
           )
             continue;
-        } else if (lid === "surprise_xs_rank_easy_funding") {
-          const on = overnight[ev.entryDate];
-          const med = pitMedian(overnight, ev.entryDate, minHist);
-          if (on === undefined || med === null || on >= med) continue;
-        } else {
-        if (lid === "surprise_xs_rank_steep_curve") {
-          const sp = spread[ev.entryDate];
-          if (sp === undefined || sp <= 0) continue;
-        }
-        if (lid === "surprise_xs_afterclose") {
-          const dd = ev.entryDate.slice(8, 10);
-          if (!ev.after || dd < "10" || dd > "20") continue;
-        }
-        if (
-          lid === "surprise_xs_tue_thu" &&
-          ![1, 2, 3].includes(weekdayMon0(ev.entryDate))
-        )
-          continue;
-        if (lid === "surprise_xs_midmonth") {
-          const dd = ev.entryDate.slice(8, 10);
-          if (dd < "10" || dd > "20") continue;
-        }
-        if (lid === "surprise_xs_easing_change") {
-          const prevs = Object.keys(overnight)
-            .filter((x) => x < ev.entryDate)
-            .sort();
-          const on = overnight[ev.entryDate];
-          if (
-            !prevs.length ||
-            on === undefined ||
-            on >= overnight[prevs[prevs.length - 1]]
-          )
-            continue;
-        }
-        if (lid === "surprise_xs_afterclose_easing") {
-          const prevs = Object.keys(overnight)
-            .filter((x) => x < ev.entryDate)
-            .sort();
-          const on = overnight[ev.entryDate];
-          if (!ev.after) continue;
-          if (
-            !prevs.length ||
-            on === undefined ||
-            on >= overnight[prevs[prevs.length - 1]]
-          )
-            continue;
-        }
-        if (lid === "surprise_xs_skip_monday" && weekdayMon0(ev.entryDate) === 0)
-          continue;
-        if (lid === "surprise_xs_friday_skip" && weekdayMon0(ev.entryDate) === 4)
-          continue;
-        if (lid === "surprise_xs_uncrowded") {
-          const levels = panel.flow_regime?.margin_level_by_code?.[ev.code] || {};
-          const prior = Object.keys(levels)
-            .filter((d) => d < ev.entryDate)
-            .sort();
-          if (!prior.length) continue;
-          const lastD = prior[prior.length - 1];
-          const med = pitMedian(levels, ev.entryDate, minHist);
-          if (med === null || (levels[lastD] as number) >= med) continue;
-        }
-        if (lid === "surprise_xs_first_half" && ev.entryDate.slice(8, 10) > "15")
-          continue;
-        if (
-          lid === "surprise_xs_afterclose_skip_monday" &&
-          (!ev.after || weekdayMon0(ev.entryDate) === 0)
-        )
-          continue;
-        if (lid === "surprise_xs_steep_skip_monday") {
-          const sp = spread[ev.entryDate];
-          if (weekdayMon0(ev.entryDate) === 0 || sp === undefined || sp <= 0)
-            continue;
-        }
-        if (lid === "surprise_xs_uncrowded_skip_monday") {
-          if (weekdayMon0(ev.entryDate) === 0) continue;
-          const levels = panel.flow_regime?.margin_level_by_code?.[ev.code] || {};
-          const prior = Object.keys(levels)
-            .filter((d) => d < ev.entryDate)
-            .sort();
-          if (!prior.length) continue;
-          const lastD = prior[prior.length - 1];
-          const med = pitMedian(levels, ev.entryDate, minHist);
-          if (med === null || (levels[lastD] as number) >= med) continue;
-        }
         }
         // Catalog gate is first_half_month (dd<=15); leftover is dd>"05".
         if (lid === "surprise_xs_month_start" && ev.entryDate.slice(8, 10) > "05")
