@@ -7,12 +7,11 @@
  * d1_bars — D1 jquants_records tip extract (hot window only)
  */
 
-import type { BarsByCode, Env, PeriodPanel, PeriodSpec } from "./types";
+import type { BarsByCode, PeriodPanel, PeriodSpec } from "./types";
 
 const DEFAULT_YEARS = [2015, 2017, 2019, 2021, 2023, 2025];
 const DEFAULT_CODES = ["13010", "72030", "67580", "99840", "83060", "65010", "68610", "80350"];
 
-/** Mulberry32 PRNG — deterministic from seed. */
 function mulberry32(seed: number): () => number {
   let t = seed >>> 0;
   return () => {
@@ -91,7 +90,6 @@ export function defaultPeriodsFromRequest(
   }));
 }
 
-/** Index RV from __NKY_PROXY__ / __TOPIX__ / __NK225F__, else EW equity. */
 function buildNkyVolFromBars(
   bars: BarsByCode,
   shortN = 10,
@@ -196,7 +194,6 @@ export function buildSyntheticPanels(
   });
 }
 
-/** Load staged panels. Prefer {panelsPrefix}/{id}.json, else shared prefix. */
 export async function loadR2Panels(
   bucket: R2Bucket,
   periods: PeriodSpec[],
@@ -364,7 +361,6 @@ export async function loadR2Panels(
   return { panels, notes };
 }
 
-/** Accept [[date, close]] or {date, close}[] panel bar shapes. */
 function normalizeBars(raw: unknown): BarsByCode {
   if (!raw || typeof raw !== "object") return {};
   const out: BarsByCode = {};
@@ -389,7 +385,6 @@ function normalizeBars(raw: unknown): BarsByCode {
   return out;
 }
 
-/** D1 jquants_records tip bars. Hot-window only; multi-year uses r2_panels. */
 export async function loadD1BarsPanels(
   db: D1Database,
   periods: PeriodSpec[],

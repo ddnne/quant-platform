@@ -126,7 +126,6 @@ function parseRequest(body: unknown): { ok: true; value: MassEvalRequest } | { o
     }
     periods = body.periods.map((p, i) => {
       const o = isObject(p) ? p : {};
-      // period_start/end, or driver aliases start/end.
       const pStart =
         o.period_start != null
           ? String(o.period_start)
@@ -400,7 +399,6 @@ async function runMassEval(
   };
 }
 
-/** Candidate-grade daily MTM; driver fans out one POST per logic. */
 async function runDailyPath(
   env: Env,
   req: MassEvalRequest,

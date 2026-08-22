@@ -167,7 +167,6 @@ function mdhFallback(
   return { ...fb, signalId: `c21_lite_fallback_mdh:${familyTag}` };
 }
 
-/** PIT latest fins event with disc_date ≤ asOf. */
 function finsAsof(
   events: Array<{
     disc_date?: string;
@@ -198,7 +197,6 @@ function finsAsof(
   return best;
 }
 
-/** Prefer BPS/price else EPS/price (matches class_signals.fundamental_value_score). */
 function fundamentalValueScore(
   close: number,
   eps: number | null,
@@ -280,7 +278,6 @@ function repoLevelRegime(
   return "mid";
 }
 
-/** flow_margin_* from staged flow_regime; empty margin map → disclosed MDH. */
 function evalFlowDemand(
   bars: BarsByCode,
   flow: PeriodPanel["flow_regime"],
@@ -370,7 +367,6 @@ function evalFlowDemand(
   };
 }
 
-/** fund_value_* from staged fund_regime; empty events → disclosed MDH. */
 function evalFundPrice(
   bars: BarsByCode,
   fund: PeriodPanel["fund_regime"],
@@ -455,7 +451,6 @@ function evalFundPrice(
   };
 }
 
-/** mf_value_mom_rate: value×mom agree + funding-level alignment. */
 function evalMfValueMomRate(
   bars: BarsByCode,
   fund: PeriodPanel["fund_regime"],
@@ -564,7 +559,6 @@ function evalMfValueMomRate(
   };
 }
 
-/** mf_flow_price: margin flow × price mom agree. */
 function evalMfFlowPrice(
   bars: BarsByCode,
   flow: PeriodPanel["flow_regime"],
@@ -690,7 +684,6 @@ function conditionMomOnRepoRegime(
   return null;
 }
 
-/** macro_repo_rate_* from staged repo map; empty map → disclosed MDH. */
 function evalMacroRepoConditioned(
   bars: BarsByCode,
   ratesByDate: Record<string, number>,
@@ -929,7 +922,6 @@ function strParam(params: Record<string, unknown>, key: string, fallback: string
   return fallback;
 }
 
-/** Index-level Nikkei/TOPIX vol regime × CS book (not per-name vol_*). */
 function evalNkyVolRegime(
   bars: BarsByCode,
   nky: NkyVolSeries | null,
@@ -1395,7 +1387,6 @@ function realizedVol(pairs: BarSeries, endI: number, n: number): number | null {
   return Number.isFinite(s) && s > 0 ? s : null;
 }
 
-/** Daily positions for bar-native logics; null → eventHeld / gatedCsHeld. */
 export function barNativeHeldBook(
   logic: LogicSpec,
   panel: PeriodPanel,
@@ -1688,7 +1679,6 @@ export function barNativeHeldBook(
       const inner = barNativeHeldBook({ ...logic, logic_id: "flow_margin_pressure", family_id: "flow_demand" }, panel);
       return inner ? { held: inner.held, path: "mf_flow_price" } : { held: {}, path: "mf_flow_price", fallback: "empty" };
     }
-    // Rate-gated value×mom — not an alias of fund_value_mom_agree.
     const events = panel.fund_regime?.events_by_code || null;
     const rates = repoRatesFromPanel(panel);
     if (!events || !Object.keys(events).length) {
@@ -1743,7 +1733,6 @@ export function barNativeHeldBook(
         const earlier = rateDates.filter((x) => x < d);
         if (earlier.length) prevRate = rates[earlier[earlier.length - 1]];
         if (prevRate === null) return null;
-        // Skip mid; require overnight change or occupancy is always_on.
         if (base > 0 && regime === "low" && rate < prevRate) return base;
         if (base < 0 && regime === "high" && rate > prevRate) return base;
         return null;

@@ -5,8 +5,8 @@ Pulls the structured fact tables from the ingestion-premium Worker
 (`/v1/export/d1`) and upserts them into a local SQLite DB shaped exactly like
 `storage/schema.py` (so `pit.get_*` reads work without code changes).
 
-Offline-safety: with no `--url` and no proxy config, the script exits with
-code 2 (nothing fetched) and never touches the network.
+Offline-safety: with no `--url` / ``INGESTION_PREMIUM_URL``, the script
+exits with code 2 (nothing fetched) and never touches the network.
 
 Incremental mode
 ----------------
@@ -18,7 +18,7 @@ pre-Phase-6 mocked responses and is not the production correctness mechanism.
 
 Examples
 --------
-  # All tables, default proxy config (~/.config/quant-platform/* or env):
+  # All tables:
   python3 scripts/sync_d1_to_sqlite.py \\
       --db data/structured/ingestion.sqlite
 
@@ -26,7 +26,7 @@ Examples
   python3 scripts/sync_d1_to_sqlite.py --table jquants_records \\
       --db data/structured/ingestion.sqlite
 
-  # Incremental pull (skips rows already in the local DB by ingested_at):
+  # Incremental pull (change_seq watermark):
   python3 scripts/sync_d1_to_sqlite.py --incremental \\
       --db data/structured/ingestion.sqlite
 
@@ -47,20 +47,18 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlencode
 
-# Resolve repo root; support packages/* layout without editable install.
-_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_PATH_CANDIDATES = (
-    _REPO_ROOT,
-    os.path.join(_REPO_ROOT, "packages", "data_plane"),
-    os.path.join(_REPO_ROOT, "packages", "research_runtime"),
-    os.path.join(_REPO_ROOT, "packages", "edge"),
-    os.path.join(_REPO_ROOT, "packages", "product"),
-)
-for _p in reversed(_PATH_CANDIDATES):
-    if os.path.isdir(_p) and _p not in sys.path:
-        sys.path.insert(0, _p)
+_here = Path(__file__).resolve().parent
+for _d in (_here, _here.parent):
+    if (_d / "_bootstrap.py").is_file():
+        if str(_d) not in sys.path:
+            sys.path.insert(0, str(_d))
+        break
+else:
+    raise RuntimeError("scripts/_bootstrap.py not found")
+from _bootstrap import ensure_repo_root  # noqa: E402
 
-from ingestion.common.secrets import resolve_proxy_config  # noqa: E402
+ensure_repo_root()
+
 from data_contracts import all_coverage_contracts  # noqa: E402
 from paper_runtime import (  # noqa: E402
     begin_snapshot_sync,
@@ -69,9 +67,6 @@ from paper_runtime import (  # noqa: E402
 )
 from storage.sqlite_store import SqliteStore  # noqa: E402
 
-# Tables we sync (mirror schema.py). Order matters for FK-friendly ingestion
-# but SQLite defers FK checks per-row only when configured; we use plain
-# upserts keyed on natural keys so order is informational.
 DEFAULT_TABLES: tuple[str, ...] = (
     "jquants_market_calendar",
     "jquants_listed_info",
@@ -191,16 +186,6 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     return p
-
-
-def _resolve_endpoint(args: argparse.Namespace) -> tuple[str | None, str | None]:
-    """Pick the data-export URL and its independently scoped token.
-
-    J-Quants proxy credentials are intentionally never reused here.
-    """
-    if args.url:
-        return args.url, args.token
-    return None, None
 
 
 def _new_http_client():
@@ -334,7 +319,6 @@ def _local_table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
         return set()
     names: set[str] = set()
     for row in rows:
-        # PRAGMA table_info: (cid, name, type, notnull, dflt_value, pk)
         name = row[1] if not isinstance(row, sqlite3.Row) else row["name"]
         names.add(str(name))
     return names
@@ -381,7 +365,6 @@ def _sync_control_plane(
     cols = list(cleaned[0].keys())
     placeholders = ", ".join("?" for _ in cols)
     col_list = ", ".join(cols)
-    # Prefer INSERT OR REPLACE on natural identity when possible.
     if table == "ingestion_watermarks" and "dataset" in cols:
         sql = (
             f"INSERT INTO {table} ({col_list}) VALUES ({placeholders}) "
@@ -445,8 +428,6 @@ def _sync_one(
         return 0, 0
     if table in _NO_AVAILABLE_AT_TABLES:
         return _sync_control_plane(store, table, rows)
-    # Re-key JSON-stringified payload columns if present (the D1 export
-    # round-trips them as strings; the writer expects strings too).
     cleaned = []
     for r in rows:
         row = {k: v for k, v in r.items() if v is not None}
@@ -706,7 +687,8 @@ def main(argv=None) -> int:
     if args.since and not args.incremental:
         print("[sync] --since requires --incremental", file=sys.stderr)
         return 2
-    url, token = _resolve_endpoint(args)
+    # Export URL+token only; never reuse J-Quants proxy credentials.
+    url, token = args.url, args.token
     if not url:
         print(
             "[sync] no worker URL (pass --url, set INGESTION_PREMIUM_URL, "

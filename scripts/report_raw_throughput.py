@@ -141,7 +141,6 @@ def collect_metrics(db_path: Path, *, label: str = "snapshot") -> dict[str, Any]
 
     conn = _connect_ro(db_path)
     try:
-        # raw_retention_manifests
         if _table_exists(conn, "raw_retention_manifests"):
             out["raw_retention_manifests"]["total"] = _safe_count(
                 conn, "SELECT COUNT(*) FROM raw_retention_manifests"
@@ -186,7 +185,6 @@ def collect_metrics(db_path: Path, *, label: str = "snapshot") -> dict[str, Any]
         else:
             out["errors"].append("table raw_retention_manifests missing")
 
-        # jquants_records
         if _table_exists(conn, "jquants_records"):
             out["jquants_records"]["total"] = _safe_count(
                 conn, "SELECT COUNT(*) FROM jquants_records"
@@ -215,7 +213,6 @@ def collect_metrics(db_path: Path, *, label: str = "snapshot") -> dict[str, Any]
         else:
             out["errors"].append("table jquants_records missing")
 
-        # coverage_segments
         if _table_exists(conn, "coverage_segments"):
             out["coverage_segments"]["total"] = _safe_count(
                 conn, "SELECT COUNT(*) FROM coverage_segments"
@@ -231,7 +228,6 @@ def collect_metrics(db_path: Path, *, label: str = "snapshot") -> dict[str, Any]
         else:
             out["errors"].append("table coverage_segments missing")
 
-        # dataset_coverage
         if _table_exists(conn, "dataset_coverage"):
             out["dataset_coverage"]["total"] = _safe_count(
                 conn, "SELECT COUNT(*) FROM dataset_coverage"
@@ -257,7 +253,6 @@ def collect_metrics(db_path: Path, *, label: str = "snapshot") -> dict[str, Any]
         else:
             out["errors"].append("table dataset_coverage missing")
 
-        # Track A focus
         rec_index = {
             r["dataset"]: r for r in out["jquants_records"].get("by_dataset", [])
         }
@@ -298,7 +293,6 @@ def collect_metrics(db_path: Path, *, label: str = "snapshot") -> dict[str, Any]
     finally:
         conn.close()
 
-    # projection meta (optional file)
     proj_path = ROOT / "data" / "ops" / "projection_meta.json"
     if proj_path.is_file():
         try:
@@ -316,7 +310,7 @@ def collect_metrics(db_path: Path, *, label: str = "snapshot") -> dict[str, Any]
     return out
 
 
-def delta_metrics(pre: MappingLike, post: MappingLike) -> dict[str, Any]:
+def delta_metrics(pre: dict[str, Any], post: dict[str, Any]) -> dict[str, Any]:
     """Compute numeric deltas for key counters."""
 
     def g(d: Any, *path: str, default: int = 0) -> int:
@@ -345,10 +339,6 @@ def delta_metrics(pre: MappingLike, post: MappingLike) -> dict[str, Any]:
         - g(pre, "dataset_coverage", "stale"),
         "note": "Positive delta = growth. COMPLETE never auto-claimed by this report.",
     }
-
-
-# typing alias without importing Mapping only for runtime simplicity
-MappingLike = dict[str, Any]
 
 
 def load_state_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -605,7 +595,6 @@ def main(argv: list[str] | None = None) -> int:
         elif args.format == "markdown":
             print(md)
 
-    # Always print one-line summary
     segs = report.get("coverage_segments") or {}
     ds = report.get("dataset_coverage") or {}
     raw = report.get("raw_retention_manifests") or {}

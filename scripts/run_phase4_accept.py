@@ -36,38 +36,31 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-# Bootstrap repo root onto sys.path before importing qp_paths (plain script runs).
-for _parent in Path(__file__).resolve().parents:
-    if (_parent / "qp_paths.py").is_file() and (_parent / "pyproject.toml").is_file():
-        if str(_parent) not in sys.path:
-            sys.path.insert(0, str(_parent))
+_here = Path(__file__).resolve().parent
+for _d in (_here, _here.parent):
+    if (_d / "_bootstrap.py").is_file():
+        if str(_d) not in sys.path:
+            sys.path.insert(0, str(_d))
         break
 else:
-    raise RuntimeError("quant-platform repo root not found from script")
+    raise RuntimeError("scripts/_bootstrap.py not found")
+from _bootstrap import ensure_repo_root  # noqa: E402
 
-from qp_paths import repo_root
 import argparse
 import json
 import os
 from datetime import date, timedelta
-
 from typing import Any
 
-_REPO_ROOT = str(repo_root())
-if _REPO_ROOT not in sys.path:
-    sys.path.insert(0, _REPO_ROOT)
+ROOT = ensure_repo_root()
 
 import features  # noqa: E402
-import pit  # noqa: E402
 from core import run_backtest, standard_cost  # noqa: E402
 from core.strategy_protocol import BarContext, OrderIntent  # noqa: E402
 
 FEATURE_IDS = ("return_1d", "momentum_n", "volatility_n")
 
-# ---------------------------------------------------------------------------
-# Offline fixture builder — mirrors tests/_coreseed.py but is self-contained
-# so the script works without the test harness on sys.path.
-# ---------------------------------------------------------------------------
+
 def _weekdays(start: date, n: int) -> list[str]:
     """First ``n`` weekday dates from ``start`` (YYYY-MM-DD strings)."""
     out: list[str] = []
@@ -135,9 +128,7 @@ def _build_offline_db(path: Path) -> tuple[Path, list[str], list[str]]:
     store.close()
     return path, days, codes
 
-# ---------------------------------------------------------------------------
-# Feature-driven strategy for the accept backtest
-# ---------------------------------------------------------------------------
+
 class MomentumTopPickStrategy:
     """At each decision bar, pick the universe code with the highest ``return_1d``.
 
@@ -177,9 +168,7 @@ class MomentumTopPickStrategy:
             return []
         return [OrderIntent(code=best_code, target_weight=1.0)]
 
-# ---------------------------------------------------------------------------
-# Accept checks
-# ---------------------------------------------------------------------------
+
 def _registry_integrity_section() -> dict[str, Any]:
     """F1 — every built-in feature carries required P0-5 metadata."""
     feats = features.list_features()
@@ -297,6 +286,7 @@ def _backtest_section(
         "max_drawdown": metrics.get("max_drawdown"),
     }
 
+
 def _b0_section(db_path: Path) -> dict[str, Any]:
     """F4 — B0 strict gates. Only emitted when QP_LIVE=1."""
     from cf_platform.live_gates import b0_pass
@@ -307,14 +297,13 @@ def _b0_section(db_path: Path) -> dict[str, Any]:
         "gates": [r.as_dict() for r in results],
     }
 
-# ---------------------------------------------------------------------------
-# Live helpers
-# ---------------------------------------------------------------------------
+
 def _table_exists(conn: "sqlite3.Connection", name: str) -> bool:
     row = conn.execute(
         "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)
     ).fetchone()
     return row is not None
+
 
 def _bar_dates_from_records(conn: "sqlite3.Connection", *, limit: int = 100) -> list[str]:
     """Distinct equities_bars_daily dates from generic ``jquants_records``."""
@@ -427,9 +416,7 @@ def _live_trading_days(db_path: Path) -> list[str]:
         dates = []
     return dates
 
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
+
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Phase 4 feature accept report runner")
     p.add_argument(
@@ -445,7 +432,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--reports-dir",
-        default=str(Path(_REPO_ROOT) / "data" / "reports"),
+        default=str(ROOT / "data" / "reports"),
         help="Directory for the JSON report when --out is omitted.",
     )
     p.add_argument(
@@ -480,7 +467,6 @@ def main(argv: list[str] | None = None) -> int:
         "sections": {},
     }
 
-    # F1 — registry integrity (no DB needed).
     f1 = _registry_integrity_section()
     report["sections"]["registry_integrity"] = f1
 
@@ -515,7 +501,6 @@ def main(argv: list[str] | None = None) -> int:
                                               "codes": codes,
                                               "as_ofs": as_ofs}
     else:
-        # Offline fixture.
         import tempfile
         fdir = Path(args.fixture_dir) if args.fixture_dir else Path(tempfile.mkdtemp(
             prefix="qp-phase4-"))
@@ -532,7 +517,6 @@ def main(argv: list[str] | None = None) -> int:
             db_path, codes, days, min_trading_days=min_days, live=False,
         )
 
-    # Overall ok = F1 + F2 (every feature has at least one non-None) + F3.
     f1_ok = bool(f1.get("ok"))
     fhr = report["sections"].get("feature_hit_rates", {})
     f2_ok = all(

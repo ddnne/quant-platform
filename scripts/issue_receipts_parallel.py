@@ -48,7 +48,7 @@ import sqlite3
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from typing import Any, Iterable, Sequence
+from typing import Any, Sequence
 
 ROOT = ensure_repo_root()
 
@@ -149,10 +149,8 @@ def _is_usable_raw(raw: bytes) -> bool:
         return False
     if stripped in {b"[]", b"{}", b"null", b'""', b"''"}:
         return False
-    # Pretty-printed empty containers (still no rows).
     if stripped in {b"[\n]", b"[\r\n]", b"{\n}", b"{\r\n}"}:
         return False
-    # J-Quants page envelope with zero rows (common cron empty window).
     if stripped in {
         b'{"data":[]}',
         b'{"data": []}',
@@ -174,7 +172,6 @@ def _is_usable_raw(raw: bytes) -> bool:
         data = payload.get("data")
         if isinstance(data, list) and len(data) == 0:
             return False
-        # Some envelopes use "rows" instead of "data".
         rows = payload.get("rows")
         if isinstance(rows, list) and len(rows) == 0 and "data" not in payload:
             return False
@@ -223,11 +220,9 @@ def find_raw_bytes_indexed(
             size = entry.path.stat().st_size
         except OSError:
             continue
-        # Empty [] stubs are 2 bytes — never prefer them.
         if size < 8:
             continue
         ranked.append((score, size, entry.path))
-    # Prefer window match score, then larger payload (real rows over stubs).
     ranked.sort(key=lambda item: (item[0], item[1]), reverse=True)
     for _score, _size, path in ranked[:120]:
         try:
@@ -310,8 +305,6 @@ def load_candidate_segments(
         if not include_complete:
             q += " AND status <> 'COMPLETE'"
         if struct_hint:
-            # Prefer segments that already hold structured rows so --limit is
-            # spent on sealable candidates, not empty calendar months.
             q += (
                 " AND EXISTS ("
                 "  SELECT 1 FROM jquants_records j"
@@ -393,7 +386,6 @@ def prepare_one(
     observed = 1 if unit == "source_query" else structured
     if required.expected_items is not None and unit == "source_query":
         observed = int(required.expected_items)
-    # structured_reconciliation_required: raw_row_count must equal structured.
     prepared = PreparedIssue(
         job=job,
         required=required,
@@ -484,7 +476,6 @@ def _parse_datasets(raw: str | None, multi: Sequence[str]) -> list[str]:
     if raw:
         out.extend(part.strip() for part in raw.split(",") if part.strip())
     out.extend(d.strip() for d in multi if d.strip())
-    # de-dupe preserve order
     seen: set[str] = set()
     ordered: list[str] = []
     for d in out:
@@ -665,8 +656,6 @@ def main(argv: list[str] | None = None) -> int:
                     (ds,),
                 ).fetchone()[0]
                 print(f"local coverage {ds}: COMPLETE={complete}/{total}")
-            # W72 tip auto-collect path: surgical re-agg after issue+refresh
-            # (parity with restore + issue_signed_receipts_for_segments).
             reagg = sync_dataset_coverage_from_segments(
                 conn,
                 datasets=touched,
@@ -710,7 +699,7 @@ def main(argv: list[str] | None = None) -> int:
         "note": (
             "COMPLETE only after ledger refresh with raw+structured+signed "
             "SUCCESS; never without raw. No backfill/Mass launched. "
-            "Post-seal surgical sync_dataset_coverage_from_segments (W72)."
+            "Post-seal surgical sync_dataset_coverage_from_segments."
         ),
     }
     if args.json_summary:
