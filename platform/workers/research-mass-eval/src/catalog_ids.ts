@@ -369,6 +369,7 @@ export const CF_NEW_EVENT_THESIS_IDS = [
   "event_pre_mom_overnight_tight",
   "event_pre_mom_sales_down",
   "event_pre_mom_steep_curve",
+  "event_pre_mom_tight_funding",
   "event_pre_mom_uncrowded",
   "event_price_down_nkyvol_repo3m_fade",
   "event_price_down_overnight_easing",

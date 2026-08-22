@@ -539,6 +539,18 @@ def test_review_proposal_row_occupancy_and_polarity_table() -> None:
             "occupancy_label_only",
             "PEAD when overnight funding is easy AND EPS contracted versus the last prior print",
         ),
+        (
+            "The price-to-book ratio increases when there is a positive price momentum AND the overnight funding becomes tighter.",
+            ["pre_mom", "tight_funding"],
+            "occupancy_label_only",
+            "PEAD when pre-event momentum agrees AND overnight funding is tight. Skip missing PIT prints (no invent).",
+        ),
+        (
+            "Earnings growth slows down when overnight funding is easy AND the repo curve inverted.",
+            ["easy_funding", "invert_curve"],
+            "occupancy_label_only",
+            "PEAD when overnight funding is easy AND the repo curve inverted. Skip missing PIT prints (no invent).",
+        ),
     ]
     for bad_thesis, gates, reason, good_thesis in rows:
         payload = {
