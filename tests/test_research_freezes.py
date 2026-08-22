@@ -226,6 +226,27 @@ def test_near_empty_park_is_not_countable_or_basket_material() -> None:
     except NearEmptyBatchError:
         pass
 
+    from pathlib import Path
+    import json
+    from research.unique_logic.worker_bodies import (
+        assert_near_empty_park_covers,
+        mean_occupancy_by_logic,
+    )
+
+    cells_path = (
+        Path(__file__).resolve().parents[1]
+        / "data"
+        / "ops"
+        / "research_eval"
+        / "eval-cf-dp-liq100-plus32vf-20260823h_cells.json"
+    )
+    if cells_path.is_file():
+        occ_map = mean_occupancy_by_logic(json.loads(cells_path.read_text(encoding="utf-8")))
+        cover = assert_near_empty_park_covers(occ_map)
+        assert cover["ok"] is True
+        assert parked <= set(occ_map)
+        assert cover["n_recorded"] == len(parked)
+
 
 def test_propose_calendar_gates_excluded_from_llm() -> None:
     from research.unique_logic.constants import (

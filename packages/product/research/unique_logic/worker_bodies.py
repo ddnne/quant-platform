@@ -306,6 +306,49 @@ def assert_new_batch_occupancy_not_near_empty(
     return out
 
 
+def recorded_near_empty_ids(
+    occupancy_by_logic: Mapping[str, float],
+    *,
+    threshold: float = NEAR_EMPTY_OCCUPANCY,
+) -> frozenset[str]:
+    """IDs whose recorded mean occupancy is ≤ threshold. Does not GO."""
+    out: set[str] = set()
+    for lid, occ in occupancy_by_logic.items():
+        name = str(lid).strip()
+        if name and float(occ) <= float(threshold):
+            out.add(name)
+    return frozenset(out)
+
+
+def assert_near_empty_park_covers(
+    occupancy_by_logic: Mapping[str, float],
+    *,
+    threshold: float = NEAR_EMPTY_OCCUPANCY,
+) -> dict[str, Any]:
+    """Park set must include every recorded near_empty id. Does not GO."""
+    recorded = recorded_near_empty_ids(
+        occupancy_by_logic, threshold=threshold
+    )
+    parked = near_empty_occupancy_park()
+    missing = sorted(recorded - parked)
+    extra_in_park = sorted(parked - recorded)
+    out = {
+        "n_recorded": len(recorded),
+        "n_parked": len(parked),
+        "missing_from_park": missing,
+        "parked_without_this_map": extra_in_park,
+        "ok": not missing,
+        "go": False,
+        "not_a_pass": True,
+    }
+    if missing:
+        raise NearEmptyBatchError(
+            "NEAR_EMPTY_PARK_IDS missing recorded near_empty: "
+            + ",".join(missing[:12])
+        )
+    return out
+
+
 def countable_inventory_bias() -> dict[str, Any]:
     """Family / primary-gate / dataset occupancy of countable theses. Not a pass."""
     from collections import Counter
@@ -372,6 +415,8 @@ __all__ = [
     "NearEmptyBatchError",
     "assert_new_batch_cheap_pb_cap",
     "assert_new_batch_occupancy_not_near_empty",
+    "assert_near_empty_park_covers",
+    "recorded_near_empty_ids",
     "countable_inventory_bias",
     "countable_thesis_ids",
     "mean_occupancy_by_logic",

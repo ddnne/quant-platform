@@ -85,6 +85,7 @@ export const CF_NEW_EVENT_THESIS_IDS = [
   "event_div_payer_uncrowded",
   "event_easing_eps_up",
   "event_easing_eqar_falling",
+  "event_easing_margin_up_ta_up",
   "event_easing_midmonth",
   "event_easing_skip_friday",
   "event_easing_skip_tuesday",
