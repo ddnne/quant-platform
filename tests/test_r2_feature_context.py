@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import date, timedelta
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -11,6 +11,16 @@ import pytest
 from data_contracts.permanent_defer import (
     PERMANENT_DEFER_DATASETS,
     PermanentDeferHistoryError,
+)
+from tests.research_eval_util import (
+    _assert_mass_ready_off,
+    _injected_r2_history,
+    _r2_bar_line as _bar_line,
+    _r2_cal_line as _cal_line,
+    _r2_catalog_line as _catalog_line,
+    _r2_topix_line as _topix_line,
+    _s1_window_lines,
+    _weekdays,
 )
 from research.r2_feature_context import (
     AVAILABLE_AT_REPAIR_POLICY,
@@ -41,114 +51,6 @@ from research.single_shot_job import (
     execute_multiday_multisignal_compare,
     execute_multiday_signal_eval,
 )
-
-
-def _r2_line(
-    dataset: str,
-    day: str,
-    payload: dict,
-    *,
-    code: str | None = None,
-    available_at: str | None = None,
-    event_time: str | None = None,
-    ingested_at: str = "2026-08-12T00:00:00+09:00",
-) -> str:
-    aa = available_at if available_at is not None else f"{day}T15:30:00+09:00"
-    et = event_time if event_time is not None else f"{day}T15:30:00+09:00"
-    nk: dict = {"Date": day}
-    if code is not None:
-        nk["Code"] = code
-    if "S33" in payload:
-        nk = {"Date": day, "S33": payload["S33"]}
-    return json.dumps(
-        {
-            "source": "jquants",
-            "dataset": dataset,
-            "natural_key": json.dumps(nk, sort_keys=True),
-            "event_time": et,
-            "available_at": aa,
-            "ingested_at": ingested_at,
-            "payload": payload,
-            "raw_payload": payload,
-        },
-        ensure_ascii=True,
-    )
-
-
-def _bar_line(
-    code: str,
-    day: str,
-    *,
-    close: float = 100.0,
-    volume: float = 1000.0,
-    available_at: str | None = None,
-    event_time: str | None = None,
-) -> str:
-    return _r2_line(
-        "equities_bars_daily",
-        day,
-        {"Code": code, "Date": day, "O": close, "H": close, "L": close, "C": close, "Vo": volume},
-        code=code,
-        available_at=available_at,
-        event_time=event_time,
-    )
-
-
-def _topix_line(
-    day: str,
-    *,
-    close: float = 3000.0,
-    available_at: str | None = None,
-) -> str:
-    return _r2_line(
-        "indices_bars_daily_topix",
-        day,
-        {"Date": day, "C": close, "O": close, "H": close, "L": close},
-        available_at=available_at,
-    )
-
-
-def _cal_line(
-    day: str,
-    *,
-    hol: str = "1",
-    available_at: str | None = None,
-) -> str:
-    aa = available_at if available_at is not None else f"{day}T09:00:00+09:00"
-    return _r2_line(
-        "markets_calendar",
-        day,
-        {"Date": day, "HolDiv": hol},
-        available_at=aa,
-        event_time=f"{day}T00:00:00+09:00",
-        ingested_at=aa,
-    )
-
-
-def _weekdays(start: date, n: int) -> list[str]:
-    days: list[str] = []
-    d = start
-    while len(days) < n:
-        if d.weekday() < 5:
-            days.append(d.isoformat())
-        d += timedelta(days=1)
-    return days
-
-
-_R2_CODES = ("13010", "72030", "67580")
-
-
-def _s1_window_lines(days: list[str], *, codes=_R2_CODES, vol_step: float = 10.0):
-    bar_lines, topix_lines, cal_lines = [], [], []
-    for i, day in enumerate(days):
-        for code in codes:
-            bar_lines.append(
-                _bar_line(code, day, close=100.0 + i, volume=1000.0 + i * vol_step)
-            )
-        topix_lines.append(_topix_line(day, close=3000.0 + i))
-        cal_lines.append(_cal_line(day))
-    return bar_lines, topix_lines, cal_lines
-
 
 
 def test_t1_inventory_covers_complete_21_and_excludes_defer():
@@ -501,50 +403,21 @@ def test_resolve_history_source():
 def test_multiday_history_source_r2_does_not_break_default_d1(tmp_path: Path):
     days = _weekdays(date(2026, 6, 1), 8)
     bar_lines, topix_lines, cal_lines = _s1_window_lines(days)
-
-    puts: list[tuple[str, str]] = []
-
-    def fake_put(bucket: str, key: str, body: bytes, **kwargs):
-        puts.append((bucket, key))
-        return {"bucket": bucket, "key": key, "status": "dry_run", "bytes": len(body)}
-
-    ex = execute_multiday_signal_eval(
-        period_start=days[0],
-        period_end=days[-1],
+    _, kw = _injected_r2_history(
+        tmp_path,
         job_id="w0815az-g1-r2-bridge-test",
-        codes=["13010", "72030", "67580"],
-        max_days=10,
-        min_days=5,
-        dry_run=True,
-        write_per_day_artifacts=False,
-        r2_put=fake_put,
-        staging_dir=tmp_path,
-        history_source="r2",
-        r2_raw_lines_by_dataset={
+        days=days,
+        lines={
             "equities_bars_daily": bar_lines,
             "indices_bars_daily_topix": topix_lines,
             "markets_calendar": cal_lines,
         },
     )
+    ex = execute_multiday_signal_eval(**kw)
     assert ex.n_days >= 5
-    assert ex.ready_declared is False
-    assert ex.mass_research == "NO-GO"
+    _assert_mass_ready_off(ex)
     assert ex.batch_summary["history_source"] == "r2"
     assert ex.batch_summary["tip_plane"] == "R2_history"
-
-
-def _catalog_line(
-    dataset: str,
-    day: str,
-    *,
-    code: str | None = "13010",
-    available_at: str | None = None,
-    extra_payload: dict | None = None,
-) -> str:
-    payload = {"Date": day, **(extra_payload or {})}
-    if code is not None:
-        payload["Code"] = code
-    return _r2_line(dataset, day, payload, code=code, available_at=available_at)
 
 
 def test_bridge_expand_datasets_listed():
@@ -703,45 +576,28 @@ def test_available_at_repair_calendar_only_no_lookahead():
 def test_multisignal_history_source_r2(tmp_path: Path):
     days = _weekdays(date(2024, 10, 1), 12)
     bar_lines, topix_lines, cal_lines = _s1_window_lines(days, vol_step=50.0)
-    fins_lines = [
-        _catalog_line(
-            "fins_summary",
-            days[5],
-            code="13010",
-            extra_payload={"DiscDate": days[5]},
-        )
-    ]
-
-    puts: list[tuple[str, str]] = []
-
-    def fake_put(bucket: str, key: str, body: bytes, **kwargs):
-        puts.append((bucket, key))
-        return {"bucket": bucket, "key": key, "status": "dry_run", "bytes": len(body)}
-
-    ex = execute_multiday_multisignal_compare(
-        period_start=days[0],
-        period_end=days[-1],
+    _, kw = _injected_r2_history(
+        tmp_path,
         job_id="w0815ba-g1-multisignal-r2-test",
-        codes=["13010", "72030", "67580"],
-        max_days=10,
-        min_days=5,
-        dry_run=True,
-        write_per_day_artifacts=False,
-        r2_put=fake_put,
-        staging_dir=tmp_path,
-        history_source="r2",
-        r2_raw_lines_by_dataset={
+        days=days,
+        lines={
             "equities_bars_daily": bar_lines,
             "indices_bars_daily_topix": topix_lines,
             "markets_calendar": cal_lines,
-            "fins_summary": fins_lines,
+            "fins_summary": [
+                _catalog_line(
+                    "fins_summary",
+                    days[5],
+                    code="13010",
+                    extra_payload={"DiscDate": days[5]},
+                )
+            ],
             # margin empty-allowed path: omit channel → allow_empty default
         },
     )
+    ex = execute_multiday_multisignal_compare(**kw)
     assert ex.n_days >= 5
-    assert ex.ready_declared is False
-    assert ex.mass_research == "NO-GO"
-    assert ex.phase7 == "OFF"
+    _assert_mass_ready_off(ex)
     assert ex.batch_summary["history_source"] == "r2"
     assert ex.batch_summary["tip_plane"] == "R2_history"
     assert ex.batch_summary["significance_claimed"] is False

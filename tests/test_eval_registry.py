@@ -1,6 +1,7 @@
 """Eval registry contract — recording SoT is R2/D1, not wave markdown."""
 from __future__ import annotations
 
+from tests.research_eval_util import _basket_row, _baskets, _eval_cell, _eval_year_cells
 from research.eval_registry import (
     EVAL_REGISTRY_VERSION,
     EvalJobManifest,
@@ -24,17 +25,17 @@ def test_honest_windows_are_the_shared_catalog() -> None:
 
 def test_manifest_from_rows_is_queryable_shape() -> None:
     rows = [
-        {
-            "logic_id": "overnight_level_cs_tilt",
-            "window": "w2020_2022",
-            "daily_path_DD": -0.211,
-            "total_ret_net": -0.198,
-            "occupancy_frac": 0.715,
-            "dd_duration": 165,
-            "recovered": False,
-            "n_days": 193,
-            "daily_path_complete": True,
-        }
+        _eval_cell(
+            "overnight_level_cs_tilt",
+            window="w2020_2022",
+            daily_path_DD=-0.211,
+            total_ret_net=-0.198,
+            occupancy_frac=0.715,
+            dd_duration=165,
+            recovered=False,
+            n_days=193,
+            daily_path_complete=True,
+        )
     ]
     man = manifest_from_window_rows(
         job_id="eval-test-1",
@@ -79,17 +80,17 @@ def test_summarize_path_passes_gate_fields() -> None:
 def test_summarize_marks_path_broken_not_suspicious() -> None:
 
     cells = [
-        {
-            "logic_id": "unwired_overlay",
-            "window_id": "y2015_full",
-            "occupancy": 0.87,
-            "total_ret_net": 0.04,
-            "eval_path": "cs_generic",
-            "path_fallback": "path_broken",
-            "t_stat": 1.2,
-            "sharpe_daily": 0.3,
-            "daily_path_DD": -0.1,
-        }
+        _eval_cell(
+            "unwired_overlay",
+            window_id="y2015_full",
+            occupancy=0.87,
+            total_ret_net=0.04,
+            eval_path="cs_generic",
+            path_fallback="path_broken",
+            t_stat=1.2,
+            sharpe_daily=0.3,
+            daily_path_DD=-0.1,
+        )
     ]
     summary = summarize_daily_path_cells(cells, job_id="eval-test-path")
     row = summary["logics"][0]
@@ -109,33 +110,33 @@ def test_path_broken_cell_is_not_complete() -> None:
         manifest_from_window_rows,
     )
 
-    broken = {
-        "logic_id": "unwired_overlay",
-        "window": "y2015_full",
-        "daily_path_complete": True,
-        "eval_path": "cs_generic",
-        "path_fallback": "path_broken",
-        "daily_path_DD": -0.1,
-        "total_ret_net": 0.04,
-        "occupancy_frac": 0.87,
-        "n_days": 40,
-        "recovered": False,
-    }
+    broken = _eval_cell(
+        "unwired_overlay",
+        window="y2015_full",
+        daily_path_complete=True,
+        eval_path="cs_generic",
+        path_fallback="path_broken",
+        daily_path_DD=-0.1,
+        total_ret_net=0.04,
+        occupancy_frac=0.87,
+        n_days=40,
+        recovered=False,
+    )
     assert is_path_broken_cell(broken) is True
     assert is_daily_path_complete_cell(broken) is False
     mdh = {**broken, "eval_path": "mdh_generic", "path_fallback": "mdh_empty_sidecar"}
     assert is_daily_path_complete_cell(mdh) is False
-    ok = {
-        "logic_id": "nky_vol_abs_level",
-        "window": "y2015_full",
-        "daily_path_complete": True,
-        "eval_path": "nky_vol:nky_vol_abs_level",
-        "daily_path_DD": -0.1,
-        "total_ret_net": 0.01,
-        "occupancy_frac": 0.5,
-        "n_days": 40,
-        "recovered": True,
-    }
+    ok = _eval_cell(
+        "nky_vol_abs_level",
+        window="y2015_full",
+        daily_path_complete=True,
+        eval_path="nky_vol:nky_vol_abs_level",
+        daily_path_DD=-0.1,
+        total_ret_net=0.01,
+        occupancy_frac=0.5,
+        n_days=40,
+        recovered=True,
+    )
     assert is_path_broken_cell(ok) is False
     assert is_daily_path_complete_cell(ok) is True
     man = manifest_from_window_rows(
@@ -152,17 +153,13 @@ def test_path_broken_cell_is_not_complete() -> None:
 
 def test_always_on_is_not_strong() -> None:
 
-    cells = [
-        {
-            "logic_id": "xs_rank_ls_sticky",
-            "window_id": f"y{y}",
-            "occupancy": 0.90,
-            "total_ret_net": 0.04,
-            "eval_path": "xs_rank_sticky",
-            "daily_path_complete": True,
-        }
-        for y in (2015, 2017, 2019, 2021, 2023, 2025)
-    ]
+    cells = _eval_year_cells(
+        "xs_rank_ls_sticky",
+        occupancy=0.90,
+        total_ret_net=0.04,
+        eval_path="xs_rank_sticky",
+        daily_path_complete=True,
+    )
     summary = summarize_daily_path_cells(cells, job_id="eval-test-always")
     row = summary["logics"][0]
     assert "always_on" in row["flags"]
@@ -173,17 +170,14 @@ def test_always_on_is_not_strong() -> None:
 
 def test_always_on_gate_is_never_candidate() -> None:
 
-    cells = [
-        {
-            "logic_id": "surprise_xs_afterclose",
-            "window_id": f"y{y}",
-            "occupancy": 1.0,
-            "total_ret_net": 0.01,
-            "eval_path": "eventHeld",
-            "daily_path_complete": True,
-        }
-        for y in (2015, 2017, 2019)
-    ]
+    cells = _eval_year_cells(
+        "surprise_xs_afterclose",
+        years=(2015, 2017, 2019),
+        occupancy=1.0,
+        total_ret_net=0.01,
+        eval_path="eventHeld",
+        daily_path_complete=True,
+    )
     summary = summarize_daily_path_cells(cells, job_id="eval-test-ao-gate")
     row = summary["logics"][0]
     assert "always_on" in row["flags"]
@@ -294,42 +288,38 @@ def test_meta_baskets_are_fund_line_and_not_a_pass() -> None:
 def test_compare_basket_summaries_classifies_flip() -> None:
     from research.combo_basket import compare_basket_summaries
 
-    a = {
-        "baskets": [
-            {
-                "basket_id": "basket_theme_fund",
-                "rule": "fundamentals_sleeve",
-                "n_pos_windows": 4,
-                "n_neg_windows": 2,
-                "primary_candidate": True,
-            },
-            {
-                "basket_id": "basket_head4",
-                "rule": "known_candidate_head",
-                "n_pos_windows": 5,
-                "n_neg_windows": 1,
-                "primary_candidate": False,
-            },
-        ]
-    }
-    b = {
-        "baskets": [
-            {
-                "basket_id": "basket_theme_fund",
-                "rule": "fundamentals_sleeve",
-                "n_pos_windows": 4,
-                "n_neg_windows": 2,
-                "primary_candidate": True,
-            },
-            {
-                "basket_id": "basket_head4",
-                "rule": "known_candidate_head",
-                "n_pos_windows": 2,
-                "n_neg_windows": 4,
-                "primary_candidate": False,
-            },
-        ]
-    }
+    a = _baskets(
+        _basket_row(
+            "basket_theme_fund",
+            4,
+            2,
+            rule="fundamentals_sleeve",
+            primary_candidate=True,
+        ),
+        _basket_row(
+            "basket_head4",
+            5,
+            1,
+            rule="known_candidate_head",
+            primary_candidate=False,
+        ),
+    )
+    b = _baskets(
+        _basket_row(
+            "basket_theme_fund",
+            4,
+            2,
+            rule="fundamentals_sleeve",
+            primary_candidate=True,
+        ),
+        _basket_row(
+            "basket_head4",
+            2,
+            4,
+            rule="known_candidate_head",
+            primary_candidate=False,
+        ),
+    )
     out = compare_basket_summaries(a, b, label_a="univ50", label_b="univ80")
     assert out["go"] is False
     assert out["not_a_pass"] is True
@@ -341,48 +331,18 @@ def test_compare_basket_summaries_classifies_flip() -> None:
 def test_classify_sleeves_three_n_dilutes_at_100() -> None:
     from research.combo_basket import classify_sleeves_three_n
 
-    s50 = {
-        "baskets": [
-            {
-                "basket_id": "basket_theme_fund",
-                "n_pos_windows": 4,
-                "n_neg_windows": 2,
-            },
-            {
-                "basket_id": "basket_head4",
-                "n_pos_windows": 5,
-                "n_neg_windows": 1,
-            },
-        ]
-    }
-    s80 = {
-        "baskets": [
-            {
-                "basket_id": "basket_theme_fund",
-                "n_pos_windows": 4,
-                "n_neg_windows": 2,
-            },
-            {
-                "basket_id": "basket_head4",
-                "n_pos_windows": 2,
-                "n_neg_windows": 4,
-            },
-        ]
-    }
-    s100 = {
-        "baskets": [
-            {
-                "basket_id": "basket_theme_fund",
-                "n_pos_windows": 3,
-                "n_neg_windows": 3,
-            },
-            {
-                "basket_id": "basket_head4",
-                "n_pos_windows": 3,
-                "n_neg_windows": 3,
-            },
-        ]
-    }
+    s50 = _baskets(
+        _basket_row("basket_theme_fund", 4, 2),
+        _basket_row("basket_head4", 5, 1),
+    )
+    s80 = _baskets(
+        _basket_row("basket_theme_fund", 4, 2),
+        _basket_row("basket_head4", 2, 4),
+    )
+    s100 = _baskets(
+        _basket_row("basket_theme_fund", 3, 3),
+        _basket_row("basket_head4", 3, 3),
+    )
     out = classify_sleeves_three_n(s50, s80, s100)
     assert out["version"] == "sleeve-universe-stability/v2"
     assert out["univ100_is_not_stable"] is True
@@ -398,36 +358,16 @@ def test_classify_sleeves_three_n_dilutes_at_100() -> None:
 def test_compare_headn_vs_liq_does_not_pass() -> None:
     from research.combo_basket import compare_headn_vs_liq
 
-    head = {
-        "job_id": "eval-cf-dp-baskets100-20260822a",
-        "baskets": [
-            {
-                "basket_id": "basket_theme_fund",
-                "n_pos_windows": 3,
-                "n_neg_windows": 3,
-            },
-            {
-                "basket_id": "basket_theme_flow",
-                "n_pos_windows": 3,
-                "n_neg_windows": 3,
-            },
-        ],
-    }
-    liq = {
-        "job_id": "eval-cf-dp-baskets-liq100-20260822b",
-        "baskets": [
-            {
-                "basket_id": "basket_theme_fund",
-                "n_pos_windows": 4,
-                "n_neg_windows": 2,
-            },
-            {
-                "basket_id": "basket_theme_flow",
-                "n_pos_windows": 4,
-                "n_neg_windows": 2,
-            },
-        ],
-    }
+    head = _baskets(
+        _basket_row("basket_theme_fund", 3, 3),
+        _basket_row("basket_theme_flow", 3, 3),
+        job_id="eval-cf-dp-baskets100-20260822a",
+    )
+    liq = _baskets(
+        _basket_row("basket_theme_fund", 4, 2),
+        _basket_row("basket_theme_flow", 4, 2),
+        job_id="eval-cf-dp-baskets-liq100-20260822b",
+    )
     out = compare_headn_vs_liq(head, liq)
     assert out["version"] == "composition-compare/v1"
     assert out["not_a_pass"] is True
@@ -439,36 +379,16 @@ def test_compare_headn_vs_liq_does_not_pass() -> None:
 def test_compare_mid_vs_liq_does_not_pass() -> None:
     from research.combo_basket import compare_mid_vs_liq
 
-    mid = {
-        "job_id": "eval-cf-dp-baskets80-sleeves-20260822a",
-        "baskets": [
-            {
-                "basket_id": "basket_theme_fund",
-                "n_pos_windows": 3,
-                "n_neg_windows": 3,
-            },
-            {
-                "basket_id": "basket_theme_flow",
-                "n_pos_windows": 3,
-                "n_neg_windows": 3,
-            },
-        ],
-    }
-    liq = {
-        "job_id": "eval-cf-dp-baskets-liq100-sleeves-20260822a",
-        "baskets": [
-            {
-                "basket_id": "basket_theme_fund",
-                "n_pos_windows": 5,
-                "n_neg_windows": 1,
-            },
-            {
-                "basket_id": "basket_theme_flow",
-                "n_pos_windows": 5,
-                "n_neg_windows": 1,
-            },
-        ],
-    }
+    mid = _baskets(
+        _basket_row("basket_theme_fund", 3, 3),
+        _basket_row("basket_theme_flow", 3, 3),
+        job_id="eval-cf-dp-baskets80-sleeves-20260822a",
+    )
+    liq = _baskets(
+        _basket_row("basket_theme_fund", 5, 1),
+        _basket_row("basket_theme_flow", 5, 1),
+        job_id="eval-cf-dp-baskets-liq100-sleeves-20260822a",
+    )
     out = compare_mid_vs_liq(mid, liq)
     assert out["version"] == "composition-compare/v2"
     assert out["not_a_pass"] is True
@@ -486,26 +406,14 @@ def test_sleeve_majority_prints_are_not_a_pass() -> None:
     assert "event_eqar_high_pead" in ids
     assert "cs_margin_up_chase" in ids
     assert "event_cheap_pb_liq_high" in ids
-    mid = {
-        "job_id": "eval-mid-sleeve-print",
-        "baskets": [
-            {
-                "basket_id": "basket_theme_fund",
-                "n_pos_windows": 5,
-                "n_neg_windows": 1,
-            }
-        ],
-    }
-    liq = {
-        "job_id": "eval-liq-sleeve-print",
-        "baskets": [
-            {
-                "basket_id": "basket_theme_fund",
-                "n_pos_windows": 4,
-                "n_neg_windows": 2,
-            }
-        ],
-    }
+    mid = _baskets(
+        _basket_row("basket_theme_fund", 5, 1),
+        job_id="eval-mid-sleeve-print",
+    )
+    liq = _baskets(
+        _basket_row("basket_theme_fund", 4, 2),
+        job_id="eval-liq-sleeve-print",
+    )
     out = compare_mid_vs_liq(mid, liq)
     assert out["not_a_pass"] is True
     assert out["go"] is False
@@ -515,17 +423,13 @@ def test_sleeve_majority_prints_are_not_a_pass() -> None:
 
 def test_summarize_emits_candidate_family_counts() -> None:
 
-    cells = [
-        {
-            "logic_id": "event_skip_monday",
-            "window_id": f"y{y}",
-            "occupancy": 0.18,
-            "total_ret_net": 0.01,
-            "eval_path": "eventHeld",
-            "daily_path_complete": True,
-        }
-        for y in (2015, 2017, 2019, 2021, 2023, 2025)
-    ]
+    cells = _eval_year_cells(
+        "event_skip_monday",
+        occupancy=0.18,
+        total_ret_net=0.01,
+        eval_path="eventHeld",
+        daily_path_complete=True,
+    )
     summary = summarize_daily_path_cells(cells, job_id="eval-test-fam")
     assert summary["n_candidate_logics"] == 1
     assert summary["candidate_family_counts"]["event_new"] == 1
@@ -551,22 +455,22 @@ def test_combo_basket_blend_is_equal_weight() -> None:
     assert occupancy_in_candidate_band(0.9) is False
     assert occupancy_in_candidate_band(0.01) is False
     cells = [
-        {
-            "logic_id": "a",
-            "window_id": "y2015_full",
-            "dates": ["d0", "d1", "d2"],
-            "net_daily": [0.0, 0.02, 0.0],
-            "occupancy": 0.2,
-            "daily_path_complete": True,
-        },
-        {
-            "logic_id": "b",
-            "window_id": "y2015_full",
-            "dates": ["d0", "d1", "d2"],
-            "net_daily": [0.0, 0.0, 0.02],
-            "occupancy": 0.3,
-            "daily_path_complete": True,
-        },
+        _eval_cell(
+            "a",
+            window_id="y2015_full",
+            dates=["d0", "d1", "d2"],
+            net_daily=[0.0, 0.02, 0.0],
+            occupancy=0.2,
+            daily_path_complete=True,
+        ),
+        _eval_cell(
+            "b",
+            window_id="y2015_full",
+            dates=["d0", "d1", "d2"],
+            net_daily=[0.0, 0.0, 0.02],
+            occupancy=0.3,
+            daily_path_complete=True,
+        ),
     ]
     rows = blend_window_cells(cells, basket_id="basket_a_b", logic_ids=["a", "b"])
     assert len(rows) == 1
@@ -578,20 +482,16 @@ def test_combo_basket_blend_is_equal_weight() -> None:
 def test_summarize_basket_trends_is_not_a_pass() -> None:
     from research.combo_basket import summarize_basket_trends
 
-    cells = [
-        {
-            "logic_id": "basket_head4",
-            "window_id": f"y{y}",
-            "occupancy": 0.3,
-            "union_occupancy": 0.7,
-            "total_ret_net": 0.01,
-            "t_stat": 0.4,
-            "sharpe_daily": 0.2,
-            "daily_path_DD": -0.05,
-            "members": ["a", "b"],
-        }
-        for y in (2015, 2017, 2019, 2021, 2023, 2025)
-    ]
+    cells = _eval_year_cells(
+        "basket_head4",
+        occupancy=0.3,
+        union_occupancy=0.7,
+        total_ret_net=0.01,
+        t_stat=0.4,
+        sharpe_daily=0.2,
+        daily_path_DD=-0.05,
+        members=["a", "b"],
+    )
     summary = summarize_basket_trends(cells, job_id="eval-test-baskets")
     assert summary["n_baskets"] == 1
     assert summary["go"] is False
@@ -608,14 +508,14 @@ def test_near_duplicate_is_not_candidate() -> None:
 
     lid = sorted(NEAR_DUPLICATE_PARK)[0]
     cells = [
-        {
-            "logic_id": lid,
-            "window_id": "y2015_full",
-            "occupancy": 0.20,
-            "total_ret_net": 0.01,
-            "eval_path": "eventHeld",
-            "daily_path_complete": True,
-        }
+        _eval_cell(
+            lid,
+            window_id="y2015_full",
+            occupancy=0.20,
+            total_ret_net=0.01,
+            eval_path="eventHeld",
+            daily_path_complete=True,
+        )
     ]
     summary = summarize_daily_path_cells(cells, job_id="eval-test-dup")
     row = summary["logics"][0]
@@ -710,14 +610,14 @@ def test_sparse_gate_combo_parks_at_generation() -> None:
     assert by["cs_eqar_high_margin_down"]["always_on_cs_sticky"] is False
     assert by["cs_eqar_high_margin_down"]["main_pool"] is True
     cells = [
-        {
-            "logic_id": "cs_eqar_high",
-            "window_id": "y2015_full",
-            "occupancy": 0.20,
-            "total_ret_net": 0.01,
-            "eval_path": "gated_cs",
-            "daily_path_complete": True,
-        }
+        _eval_cell(
+            "cs_eqar_high",
+            window_id="y2015_full",
+            occupancy=0.20,
+            total_ret_net=0.01,
+            eval_path="gated_cs",
+            daily_path_complete=True,
+        )
     ]
     summary = summarize_daily_path_cells(cells, job_id="eval-test-cs-sticky")
     assert "always_on_cs_sticky" in summary["logics"][0]["flags"]
@@ -733,14 +633,14 @@ def test_isolate_limit_logic_is_not_candidate() -> None:
 
     assert WORKER_ISOLATE_LIMIT_IDS == frozenset()
     cells = [
-        {
-            "logic_id": "cs_eqar_high_on_impulse",
-            "window_id": "y2015_full",
-            "occupancy": 0.20,
-            "total_ret_net": 0.01,
-            "eval_path": "gated_cs",
-            "daily_path_complete": True,
-        }
+        _eval_cell(
+            "cs_eqar_high_on_impulse",
+            window_id="y2015_full",
+            occupancy=0.20,
+            total_ret_net=0.01,
+            eval_path="gated_cs",
+            daily_path_complete=True,
+        )
     ]
     summary = summarize_daily_path_cells(cells, job_id="eval-test-isolate")
     row = summary["logics"][0]
@@ -761,14 +661,14 @@ def test_sparse_15name_is_data_requirement_unmet() -> None:
     )
     for lid in sorted(SPARSE_ON_15NAME_SHARD):
         cells = [
-            {
-                "logic_id": lid,
-                "window_id": "y2015_full",
-                "occupancy": 0.03,
-                "total_ret_net": 0.0,
-                "eval_path": "eventHeld",
-                "daily_path_complete": True,
-            }
+            _eval_cell(
+                lid,
+                window_id="y2015_full",
+                occupancy=0.03,
+                total_ret_net=0.0,
+                eval_path="eventHeld",
+                daily_path_complete=True,
+            )
         ]
         summary = summarize_daily_path_cells(cells, job_id="eval-test-sparse")
         row = summary["logics"][0]
@@ -780,17 +680,13 @@ def test_sparse_15name_is_data_requirement_unmet() -> None:
 
 def test_near_empty_and_term_ratio_are_not_candidates() -> None:
 
-    cells = [
-        {
-            "logic_id": "opt225_atm_iv_term_ratio",
-            "window_id": f"y{y}",
-            "occupancy": 0.0,
-            "total_ret_net": 0.0,
-            "eval_path": "opt225:term_ratio",
-            "daily_path_complete": True,
-        }
-        for y in (2015, 2017, 2019, 2021, 2023, 2025)
-    ]
+    cells = _eval_year_cells(
+        "opt225_atm_iv_term_ratio",
+        occupancy=0.0,
+        total_ret_net=0.0,
+        eval_path="opt225:term_ratio",
+        daily_path_complete=True,
+    )
     summary = summarize_daily_path_cells(cells, job_id="eval-test-empty")
     row = summary["logics"][0]
     assert "near_empty" in row["flags"]
@@ -805,19 +701,15 @@ def test_near_empty_and_term_ratio_are_not_candidates() -> None:
 
 def test_modest_t_gated_thesis_stays_candidate() -> None:
 
-    cells = [
-        {
-            "logic_id": "event_skip_monday",
-            "window_id": f"y{y}",
-            "occupancy": 0.18,
-            "total_ret_net": 0.01,
-            "t_stat": 0.4,
-            "sharpe_daily": 0.05,
-            "eval_path": "eventHeld",
-            "daily_path_complete": True,
-        }
-        for y in (2015, 2017, 2019, 2021, 2023, 2025)
-    ]
+    cells = _eval_year_cells(
+        "event_skip_monday",
+        occupancy=0.18,
+        total_ret_net=0.01,
+        t_stat=0.4,
+        sharpe_daily=0.05,
+        eval_path="eventHeld",
+        daily_path_complete=True,
+    )
     summary = summarize_daily_path_cells(cells, job_id="eval-test-modest")
     row = summary["logics"][0]
     assert row["candidate"] is True
@@ -836,21 +728,17 @@ def test_path_collapsed_is_not_candidate() -> None:
         is_path_collapsed_cell,
     )
 
-    cells = [
-        {
-            "logic_id": "event_skip_monday",
-            "window_id": f"y{y}",
-            "occupancy": 0.20,
-            "total_ret_net": 0.02,
-            "eval_path": "mdh_generic",
-            "signal_id": "c21_lite_fallback_mdh:event_calendar_gate",
-            "skip_reason": "unique_unsupported_on_period_net",
-            "path_collapsed": True,
-            "t_stat": 2.0,
-            "daily_path_complete": True,
-        }
-        for y in (2015, 2017, 2019, 2021, 2023, 2025)
-    ]
+    cells = _eval_year_cells(
+        "event_skip_monday",
+        occupancy=0.20,
+        total_ret_net=0.02,
+        eval_path="mdh_generic",
+        signal_id="c21_lite_fallback_mdh:event_calendar_gate",
+        skip_reason="unique_unsupported_on_period_net",
+        path_collapsed=True,
+        t_stat=2.0,
+        daily_path_complete=True,
+    )
     assert is_path_collapsed_cell(cells[0]) is True
     assert is_daily_path_complete_cell(cells[0]) is False
     summary = summarize_daily_path_cells(cells, job_id="eval-test-collapsed")
@@ -867,17 +755,13 @@ def test_path_collapsed_is_not_candidate() -> None:
 def test_mf_value_at_always_on_threshold_is_parked() -> None:
     from research.unique_logic.constants import ALWAYS_ON_OCCUPANCY_WARN
 
-    cells = [
-        {
-            "logic_id": "mf_value_mom_rate",
-            "window_id": f"y{y}",
-            "occupancy": ALWAYS_ON_OCCUPANCY_WARN,
-            "total_ret_net": 0.01,
-            "eval_path": "mf_unique",
-            "daily_path_complete": True,
-        }
-        for y in (2015, 2017, 2019, 2021, 2023, 2025)
-    ]
+    cells = _eval_year_cells(
+        "mf_value_mom_rate",
+        occupancy=ALWAYS_ON_OCCUPANCY_WARN,
+        total_ret_net=0.01,
+        eval_path="mf_unique",
+        daily_path_complete=True,
+    )
     summary = summarize_daily_path_cells(cells, job_id="eval-test-mf-park")
     row = summary["logics"][0]
     assert "always_on" in row["flags"]
@@ -888,16 +772,16 @@ def test_mf_value_at_always_on_threshold_is_parked() -> None:
 def test_path_broken_is_not_candidate() -> None:
 
     cells = [
-        {
-            "logic_id": "unwired_overlay",
-            "window_id": "y2015_full",
-            "occupancy": 0.40,
-            "total_ret_net": 0.02,
-            "eval_path": "cs_generic",
-            "path_fallback": "path_broken",
-            "t_stat": 2.0,
-            "daily_path_complete": True,
-        }
+        _eval_cell(
+            "unwired_overlay",
+            window_id="y2015_full",
+            occupancy=0.40,
+            total_ret_net=0.02,
+            eval_path="cs_generic",
+            path_fallback="path_broken",
+            t_stat=2.0,
+            daily_path_complete=True,
+        )
     ]
     summary = summarize_daily_path_cells(cells, job_id="eval-test-broken-cand")
     row = summary["logics"][0]

@@ -50,12 +50,7 @@ from research.risk_scenarios import (
 )
 from research.robustness_gate import evaluate_research_robustness_gate
 from tests.research_eval_util import (
-    EVAL_HARNESS_CHECKLIST_PATH,
-    EVAL_HARNESS_EXTRA_HYP_PATH,
-    EVAL_HARNESS_MULTIYEAR_PATH,
-    EVAL_HARNESS_PATH,
-    EVAL_HARNESS_S1_PATH,
-    EVAL_HARNESS_STANDARD_PATH,
+    HARNESS_MODULE_PATHS,
     _assert_mass_ready_off,
     assert_ast_bans_mass_ready_orders,
 )
@@ -131,8 +126,6 @@ def test_dry_run_wiring_completes_mass_ready_phase7_closed():
     assert out["mode"] == "wiring_only"
     assert out["dry_run"] is True
     _assert_mass_ready_off(out)
-    assert out["edge_claimed"] is False
-    assert out["significance_claimed"] is False
     assert out["checklist_skipped"] is False
     assert out["new_signals_registered"] is False
     assert out["short_window_only_sufficient"] is False
@@ -290,16 +283,8 @@ def test_invalid_mode_rejected():
 
 
 def test_standard_eval_ast_no_mass_import_no_new_signal_mint():
-    paths = (
-        EVAL_HARNESS_PATH,
-        EVAL_HARNESS_MULTIYEAR_PATH,
-        EVAL_HARNESS_CHECKLIST_PATH,
-        EVAL_HARNESS_STANDARD_PATH,
-        EVAL_HARNESS_S1_PATH,
-        EVAL_HARNESS_EXTRA_HYP_PATH,
-    )
-    src = "\n".join(p.read_text(encoding="utf-8") for p in paths)
-    for path in paths:
+    src = "\n".join(p.read_text(encoding="utf-8") for p in HARNESS_MODULE_PATHS)
+    for path in HARNESS_MODULE_PATHS:
         assert_ast_bans_mass_ready_orders(path)
     assert "run_standard_research_eval" in src
     assert "CHECKLIST_VERSION" in src

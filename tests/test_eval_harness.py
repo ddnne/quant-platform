@@ -15,22 +15,18 @@ from data_contracts.permanent_defer import (
     PermanentDeferHistoryError,
 )
 from tests.research_eval_util import (
-    EVAL_HARNESS_CHECKLIST_PATH,
-    EVAL_HARNESS_EXTRA_HYP_PATH,
-    EVAL_HARNESS_MULTIYEAR_PATH,
-    EVAL_HARNESS_PATH,
-    EVAL_HARNESS_S1_PATH,
-    EVAL_HARNESS_STANDARD_PATH,
-    SINGLE_SHOT_PATH,
+    HARNESS_AST_PATHS,
+    HARNESS_MODULE_PATHS,
     _assert_mass_ready_off,
     _capture_puts,
     _injected_multiday,
+    _margin_jsonl,
     _put_json,
     _r2_eval_kw,
-    _r2_jsonl,
     _r2_period,
     _r2_skip_period,
     _synth_q4,
+    _synth_q4_close,
     assert_ast_bans_mass_ready_orders,
 )
 from research.eval_harness import (
@@ -50,16 +46,6 @@ from research.eval_harness import (
     run_nextday_return_eval,
 )
 from selection.budget_ledger import MassResearchDisabledError
-
-HARNESS_AST_PATHS = (
-    EVAL_HARNESS_PATH,
-    EVAL_HARNESS_MULTIYEAR_PATH,
-    EVAL_HARNESS_CHECKLIST_PATH,
-    EVAL_HARNESS_STANDARD_PATH,
-    EVAL_HARNESS_S1_PATH,
-    EVAL_HARNESS_EXTRA_HYP_PATH,
-    SINGLE_SHOT_PATH,
-)
 
 
 def test_pipeline_constant_and_harness_version():
@@ -286,41 +272,35 @@ def test_design_yearly_eval_windows_and_multi_year_s1_isolation(tmp_path: Path):
     assert len(avail) == len(wins)
     assert all("period_id" in r for r in avail)
 
-    def _close(i, j, code):
-        return 100.0 + i + j * 0.3 + (0.5 if code == "13010" and i % 2 == 0 else 0)
-
     vol = lambda i: 1000 + i * 15
-    days_a, lines_a = _synth_q4(2015, close_fn=_close, vol_fn=vol)
-    days_b, lines_b = _synth_q4(2017, close_fn=_close, vol_fn=vol)
-    days_c, lines_c = _synth_q4(2019, with_margin=True, close_fn=_close, vol_fn=vol)
+    days_a, lines_a = _synth_q4(2015, close_fn=_synth_q4_close, vol_fn=vol)
+    days_b, lines_b = _synth_q4(2017, close_fn=_synth_q4_close, vol_fn=vol)
+    days_c, lines_c = _synth_q4(2019, with_margin=True, close_fn=_synth_q4_close, vol_fn=vol)
 
     puts, fake_put = _capture_puts()
 
     periods = [
         _r2_period("y2015_q4", days_a, lines_a, year=2015, s4_eligible=True),
         _r2_period("y2017_q4", days_b, lines_b, year=2017, s4_eligible=True),
-        {
-            "period_id": "y2024_q4",
-            "year": 2024,
-            "period_start": "2024-09-01",
-            "period_end": "2024-12-29",
-            "skip_reason": "documented margin/bars fixture gap",
-            "s4_eligible": False,
-        },
-        {
-            "period_id": "y_error",
-            "year": 2025,
-            "period_start": "2025-09-01",
-            "period_end": "2025-12-29",
-            "max_days": 20,
-            "min_days": 10,
-            "s4_eligible": True,
-            "r2_raw_lines_by_dataset": {
+        _r2_skip_period(
+            "y2024_q4",
+            "2024-09-01",
+            "2024-12-29",
+            year=2024,
+            s4_eligible=False,
+            skip_reason="documented margin/bars fixture gap",
+        ),
+        _r2_period(
+            "y_error",
+            ["2025-09-01", "2025-12-29"],
+            {
                 "equities_bars_daily": [],
                 "indices_bars_daily_topix": [],
                 "markets_calendar": [],
             },
-        },
+            year=2025,
+            s4_eligible=True,
+        ),
     ]
 
     s1 = run_multi_year_s1_eval(
@@ -341,19 +321,6 @@ def test_design_yearly_eval_windows_and_multi_year_s1_isolation(tmp_path: Path):
     _assert_mass_ready_off(gate)
     assert gate["passed"] is True or gate["n_eligible_periods"] >= 2
 
-    def _margin_line(code: str, day: str, long_i: float, short_i: float) -> str:
-        return _r2_jsonl(
-            "markets_margin_interest",
-            day,
-            {
-                "Code": code,
-                "Date": day,
-                "ShortMarginTradeVolume": short_i,
-                "LongMarginTradeVolume": long_i,
-            },
-            code=code,
-        )
-
     s4_periods = [
         _r2_period(
             "y2019_q4",
@@ -369,7 +336,7 @@ def test_design_yearly_eval_windows_and_multi_year_s1_isolation(tmp_path: Path):
             {
                 **lines_b,
                 "markets_margin_interest": [
-                    _margin_line(code, d, base + i, base // 2 + i)
+                    _margin_jsonl(code, d, base + i, base // 2 + i)
                     for code, base in (("13010", 1000), ("72030", 1100), ("67580", 1200))
                     for i, d in enumerate(days_b)
                 ],
@@ -379,13 +346,13 @@ def test_design_yearly_eval_windows_and_multi_year_s1_isolation(tmp_path: Path):
             s4_eligible=True,
             allow_empty=["markets_short_ratio"],
         ),
-        {
-            "period_id": "y2024_q4",
-            "year": 2024,
-            "period_start": "2024-09-01",
-            "period_end": "2024-12-29",
-            "s4_eligible": False,
-        },
+        _r2_skip_period(
+            "y2024_q4",
+            "2024-09-01",
+            "2024-12-29",
+            year=2024,
+            s4_eligible=False,
+        ),
     ]
     s4 = run_multi_year_extra_hyp_eval(
         s4_periods,
@@ -415,25 +382,8 @@ def test_multi_year_ast_and_mass_off_freezes():
     assert ORDER_EXECUTION is False
     assert CONNECTED_TO_MASS_RESEARCH_LOOP is False
     assert "未宣言" in MULTI_YEAR_LABEL
-    src = "\n".join(
-        p.read_text(encoding="utf-8")
-        for p in (
-            EVAL_HARNESS_PATH,
-            EVAL_HARNESS_MULTIYEAR_PATH,
-            EVAL_HARNESS_CHECKLIST_PATH,
-            EVAL_HARNESS_STANDARD_PATH,
-            EVAL_HARNESS_S1_PATH,
-            EVAL_HARNESS_EXTRA_HYP_PATH,
-        )
-    )
-    for path in (
-        EVAL_HARNESS_PATH,
-        EVAL_HARNESS_MULTIYEAR_PATH,
-        EVAL_HARNESS_CHECKLIST_PATH,
-        EVAL_HARNESS_STANDARD_PATH,
-        EVAL_HARNESS_S1_PATH,
-        EVAL_HARNESS_EXTRA_HYP_PATH,
-    ):
+    src = "\n".join(p.read_text(encoding="utf-8") for p in HARNESS_MODULE_PATHS)
+    for path in HARNESS_MODULE_PATHS:
         assert_ast_bans_mass_ready_orders(path)
     assert "CONNECTED_TO_READY" in src or "connected_to_ready" in src
     assert "fail_one_year_safe" in src

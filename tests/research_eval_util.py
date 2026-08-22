@@ -80,6 +80,16 @@ EVAL_HARNESS_STANDARD_PATH = _RESEARCH_PKG / "eval_harness_standard.py"
 EVAL_HARNESS_S1_PATH = _RESEARCH_PKG / "eval_harness_s1.py"
 EVAL_HARNESS_EXTRA_HYP_PATH = _RESEARCH_PKG / "eval_harness_extra_hyp.py"
 SINGLE_SHOT_PATH = _RESEARCH_PKG / "single_shot_job.py"
+HARNESS_MODULE_PATHS = (
+    EVAL_HARNESS_PATH,
+    EVAL_HARNESS_MULTIYEAR_PATH,
+    EVAL_HARNESS_CHECKLIST_PATH,
+    EVAL_HARNESS_STANDARD_PATH,
+    EVAL_HARNESS_S1_PATH,
+    EVAL_HARNESS_EXTRA_HYP_PATH,
+)
+HARNESS_AST_PATHS = HARNESS_MODULE_PATHS + (SINGLE_SHOT_PATH,)
+_DEFAULT_INGESTED_AT = "2026-08-12T00:00:00+09:00"
 MINIMAL_SIGNAL_PATH = (
     REPO_ROOT / "packages" / "research_runtime" / "features" / "minimal_signal.py"
 )
@@ -103,6 +113,8 @@ _FREEZE_FALSE = (
     "edge_claimed",
     "human_main_candidates_selected",
     "frozen_defaults_retuned",
+    "go",
+    "promote_as_main",
 )
 
 
@@ -407,22 +419,132 @@ def _r2_jsonl(
     *,
     code: str | None = None,
     aa_time: str = "15:30:00",
+    available_at: str | None = None,
+    event_time: str | None = None,
+    ingested_at: str | None = None,
 ) -> str:
     nk: dict = {"Date": day}
     if code is not None:
         nk["Code"] = code
-    aa = f"{day}T{aa_time}+09:00"
-    return json.dumps(
+    if "S33" in payload:
+        nk = {"Date": day, "S33": payload["S33"]}
+    aa = available_at if available_at is not None else f"{day}T{aa_time}+09:00"
+    et = event_time if event_time is not None else f"{day}T{aa_time}+09:00"
+    row = {
+        "source": "jquants",
+        "dataset": dataset,
+        "natural_key": json.dumps(nk, sort_keys=True),
+        "event_time": et,
+        "available_at": aa,
+        "payload": payload,
+        "raw_payload": payload,
+    }
+    if ingested_at is not None:
+        row["ingested_at"] = ingested_at
+    return json.dumps(row, ensure_ascii=True)
+
+
+def _r2_bar_line(
+    code: str,
+    day: str,
+    *,
+    close: float = 100.0,
+    volume: float = 1000.0,
+    available_at: str | None = None,
+    event_time: str | None = None,
+) -> str:
+    return _r2_jsonl(
+        "equities_bars_daily",
+        day,
         {
-            "source": "jquants",
-            "dataset": dataset,
-            "natural_key": json.dumps(nk, sort_keys=True),
-            "event_time": aa,
-            "available_at": aa,
-            "payload": payload,
-            "raw_payload": payload,
+            "Code": code,
+            "Date": day,
+            "O": close,
+            "H": close,
+            "L": close,
+            "C": close,
+            "Vo": volume,
         },
-        ensure_ascii=True,
+        code=code,
+        available_at=available_at,
+        event_time=event_time,
+        ingested_at=_DEFAULT_INGESTED_AT,
+    )
+
+
+def _r2_topix_line(
+    day: str,
+    *,
+    close: float = 3000.0,
+    available_at: str | None = None,
+) -> str:
+    return _r2_jsonl(
+        "indices_bars_daily_topix",
+        day,
+        {"Date": day, "C": close, "O": close, "H": close, "L": close},
+        available_at=available_at,
+        ingested_at=_DEFAULT_INGESTED_AT,
+    )
+
+
+def _r2_cal_line(
+    day: str,
+    *,
+    hol: str = "1",
+    available_at: str | None = None,
+) -> str:
+    aa = available_at if available_at is not None else f"{day}T09:00:00+09:00"
+    return _r2_jsonl(
+        "markets_calendar",
+        day,
+        {"Date": day, "HolDiv": hol},
+        available_at=aa,
+        event_time=f"{day}T00:00:00+09:00",
+        ingested_at=aa,
+    )
+
+
+def _r2_catalog_line(
+    dataset: str,
+    day: str,
+    *,
+    code: str | None = "13010",
+    available_at: str | None = None,
+    extra_payload: dict | None = None,
+) -> str:
+    payload = {"Date": day, **(extra_payload or {})}
+    if code is not None:
+        payload["Code"] = code
+    return _r2_jsonl(dataset, day, payload, code=code, available_at=available_at)
+
+
+def _s1_window_lines(days: list[str], *, codes=SYNTH_CODES, vol_step: float = 10.0):
+    bars, topix, cal = [], [], []
+    for i, day in enumerate(days):
+        for code in codes:
+            bars.append(
+                _r2_bar_line(code, day, close=100.0 + i, volume=1000.0 + i * vol_step)
+            )
+        topix.append(_r2_topix_line(day, close=3000.0 + i))
+        cal.append(_r2_cal_line(day))
+    return bars, topix, cal
+
+
+def _synth_q4_close(i, j, code):
+    return 100.0 + i + j * 0.3 + (0.5 if code == "13010" and i % 2 == 0 else 0)
+
+
+def _margin_jsonl(code: str, day: str, long_i: float, short_i: float) -> str:
+    return _r2_jsonl(
+        "markets_margin_interest",
+        day,
+        {
+            "Code": code,
+            "Date": day,
+            "ShortMarginTradeVolume": short_i,
+            "LongMarginTradeVolume": long_i,
+        },
+        code=code,
     )
 
 
@@ -571,4 +693,49 @@ def _r2_skip_period(period_id: str, start: str, end: str, **extra):
     row = {"period_id": period_id, "period_start": start, "period_end": end}
     row.update(extra)
     return row
+
+
+def _injected_r2_history(
+    tmp_path: Path, *, job_id: str, days: list[str], lines: dict, **overrides
+):
+    puts, fake_put = _capture_puts()
+    kw = _r2_eval_kw(
+        tmp_path,
+        fake_put,
+        period_start=days[0],
+        period_end=days[-1],
+        job_id=job_id,
+        max_days=10,
+        min_days=5,
+        r2_raw_lines_by_dataset=lines,
+    )
+    kw.update(overrides)
+    return puts, kw
+
+
+def _eval_cell(logic_id: str, **fields):
+    return {"logic_id": logic_id, **fields}
+
+
+def _eval_year_cells(
+    logic_id: str, years=(2015, 2017, 2019, 2021, 2023, 2025), **fields
+):
+    return [_eval_cell(logic_id, window_id=f"y{y}", **fields) for y in years]
+
+
+def _basket_row(basket_id: str, n_pos: int, n_neg: int, **extra):
+    return {
+        "basket_id": basket_id,
+        "n_pos_windows": n_pos,
+        "n_neg_windows": n_neg,
+        **extra,
+    }
+
+
+def _baskets(*rows, job_id: str | None = None):
+    out: dict[str, Any] = {"baskets": list(rows)}
+    if job_id is not None:
+        out["job_id"] = job_id
+    return out
+
 

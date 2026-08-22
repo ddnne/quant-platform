@@ -129,10 +129,7 @@ def test_build_single_shot_job_spec_skeleton():
     assert body["dataset_ids"] == ["equities_bars_daily", "fins_summary"]
     assert body["artifact"]["bucket"] == RESEARCH_ARTIFACT_BUCKET
     assert body["artifact"]["prefix"].startswith(RESEARCH_ARTIFACT_PREFIX)
-    assert body["artifact"]["local_sot"] is False
-    assert body["mass_research"] == "NO-GO"
-    assert body["phase7"] == "OFF"
-    assert body["ready_declared"] is False
+    _assert_mass_ready_off(body)
     assert body["ready_publication"] == "OFF"
 
 
@@ -217,9 +214,7 @@ def test_execute_dry_run_with_injected_d1(tmp_path: Path):
     assert {ex.manifest_r2_key, ex.input_plan_r2_key, ex.result_r2_key} <= set(puts)
     assert ex.tip_extracts["extracts"]["equities_bars_daily"]["row_count"] == 3
     assert ex.tip_extracts["extracts"]["markets_calendar"]["row_count"] == 2
-    body = ex.to_dict()
-    assert body["ready_declared"] is False
-    assert body["local_sot"] is False
+    _assert_mass_ready_off(ex.to_dict())
 
 
 def test_extract_d1_tip_summaries_rejects_defer():
@@ -390,7 +385,7 @@ def test_execute_with_features_writes_manifest_feature_stats(tmp_path: Path):
     feat_body = _put_json(puts, ex.features_r2_key)
     assert feat_body["status"] in ("mixed", "approved", "candidate")
     assert feat_body["ready_declared"] is False
-    assert feat_body["local_sot"] is False
+    assert feat_body.get("local_sot") is False
     by_fid = {b["feature_id"]: b for b in feat_body["features"]}
     assert by_fid["volume_change_1d"]["status"] == "approved"
     assert by_fid["is_trading_day"]["status"] == "approved"
@@ -428,8 +423,7 @@ def test_minimal_signal_pure_helpers():
     assert long["value"] == 1.0
     assert long["signal_id"] == DEFAULT_SIGNAL_ID
     assert long["candidate_only"] is False
-    assert long["metadata"]["order_execution"] is False
-    assert long["metadata"]["ready_declared"] is False
+    _assert_mass_ready_off(long["metadata"])
 
     non_td = compute_topix_relative_sign_signal(
         topix_relative=0.005, is_trading_day=0.0, code="13010"
@@ -470,8 +464,7 @@ def test_execute_compute_signals_writes_signals_artifact(tmp_path: Path):
     assert ex.signal_result["signal_id"] == DEFAULT_SIGNAL_ID
     assert ex.signal_result["candidate_only"] is False
     assert SIGNAL_CANDIDATE_ONLY is False
-    assert ex.signal_result["order_execution"] is False
-    assert ex.signal_result["ready_declared"] is False
+    _assert_mass_ready_off(ex.signal_result)
     # 5 puts: input_plan, result, features, signals, manifest
     assert len(puts) == 5
     assert ex.signals_r2_key in puts
@@ -495,7 +488,7 @@ def test_freeze_status_matches_constants():
     assert status["complete_21_count"] == 21
     assert status["permanent_defer_count"] == 4
     assert status["artifact_bucket"] == "quant-structured"
-    assert status["local_sot"] is False
+    _assert_mass_ready_off(status)
 
 
 def test_mass_research_still_hard_reject_without_readiness(tmp_path: Path):
@@ -518,14 +511,11 @@ def test_t7_signal_and_single_shot_no_mass_ready_or_orders():
 
 
 def test_no_phase7_or_mass_env_arming_switches_in_skeleton_source():
-    src = SINGLE_SHOT_PATH.read_text(encoding="utf-8")
-    assert "MASS_RESEARCH_ENABLE" not in src
+    src = assert_ast_bans_mass_ready_orders(
+        SINGLE_SHOT_PATH, extra_banned_imports=("execution",)
+    )
     assert "os.environ" not in src
-    assert "PHASE7_ENABLE" not in src
-    assert 'PHASE7_STATUS: str = "ON"' not in src
-    assert 'MASS_RESEARCH_STATUS: str = "GO"' not in src
     assert "order_execution" in src
-    assert "ORDER_EXECUTION" not in src or "ORDER_EXECUTION: bool = True" not in src
 
 
 def test_discover_tip_trading_days_filters_non_trading():
@@ -613,8 +603,6 @@ def test_nextday_lookahead_policy_documented():
     assert "close(T+1)/close(T)" in p["return_definition"]
     _assert_mass_ready_off(p)
     assert p["label"] == "小サンプル / 研究用・未宣言"
-    assert p.get("significance_claimed") is False
-    assert p.get("edge_claimed") is False
     assert session_close_as_of("2026-08-07") == "2026-08-07T15:30:00+09:00"
 
 
@@ -725,8 +713,6 @@ def test_summarize_nextday_by_sign_means_and_null_rates():
     s = summarize_nextday_by_sign(rows)
     assert s["label"] == "小サンプル / 研究用・未宣言"
     _assert_mass_ready_off(s)
-    assert s["significance_claimed"] is False
-    assert s["edge_claimed"] is False
     assert s["by_sign"]["+1"]["count"] == 3
     assert s["by_sign"]["+1"]["mean_next_day_return"] == pytest.approx(0.04)
     assert s["by_sign"]["+1"]["median_next_day_return"] == pytest.approx(0.04)
