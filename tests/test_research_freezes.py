@@ -253,6 +253,17 @@ def test_near_empty_park_is_not_countable_or_basket_material() -> None:
         assert cover["n_recorded"] >= 4
         assert cover["missing_from_park"] == []
 
+    from research.unique_logic.constants import SPARSE_GATE_COMBOS
+
+    sparse = [combo for combo, _ in SPARSE_GATE_COMBOS]
+    for lid in parked:
+        spec = catalog_spec(lid)
+        params = spec.get("params") if isinstance(spec.get("params"), dict) else {}
+        gates = frozenset(str(g) for g in (params.get("gates") or []) if str(g).strip())
+        assert any(combo <= gates for combo in sparse), (
+            f"{lid} parked empty but no SPARSE_GATE_COMBOS subset covers {sorted(gates)}"
+        )
+
 
 def test_always_on_batch_guard_and_empty_park() -> None:
     from research.combo_basket_catalog import validate_basket_members
