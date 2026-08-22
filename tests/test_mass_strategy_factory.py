@@ -1,6 +1,8 @@
-"""research.offline.factory — logic-diversity mass factory: rate + multi-factor + freezes."""
+"""research.offline.factory — logic-diversity mass factory + freezes."""
 
 from __future__ import annotations
+
+from collections import Counter
 
 from research.hypothesis_classes import (
     CLASS_CROSS_SECTION_RELATIVE,
@@ -66,110 +68,129 @@ from research.offline.factory import (
     validate_strategy_at_gen,
 )
 
+_NKY_VOL_IDS = ("nky_vol_abs_level", "nky_vol_term_levels", "nky_vol_term_ratio")
+_OPT225_IDS = (
+    "opt225_basevol_abs_level",
+    "opt225_basevol_term_levels",
+    "opt225_basevol_term_ratio",
+    "opt225_atm_iv_abs_level",
+    "opt225_atm_iv_term_levels",
+    "opt225_atm_iv_term_ratio",
+    "opt225_iv_base_spread_abs",
+    "opt225_iv_base_spread_change",
+    "opt225_skew_abs_level",
+    "opt225_cm_term_abs_level",
+    "opt225_basevol_delta_abs",
+)
+_UNIQUE_NOT_GENERATED = (
+    "event_funding_stress_skip",
+    "curve_steep_event_confirm",
+    "disclosure_cluster_mom_gate",
+    "surprise_xs_rank_hold",
+    "large_surprise_event_hold",
+    "afterclose_only_event_hold",
+    "event_pre_mom_agree_hold",
+    "event_margin_crowding_skip",
+    "event_funding_easy_short",
+    "event_funding_stress_ls",
+    "surprise_xs_rank_flip",
+    "funding_impulse_cs_tilt",
+    "curve_steepen_impulse_cs",
+    "xs_margin_delta_rank",
+    "idio_mom_macro_impulse",
+)
+_RESEARCH_FAMILY_IDS = (
+    FAMILY_EVENT_FUNDING_COMBO,
+    FAMILY_EVENT_MACRO_CURVE_COMBO,
+    FAMILY_DISCLOSURE_CLUSTER_GATE,
+    FAMILY_SURPRISE_XS_RANK,
+    FAMILY_LARGE_SURPRISE_FILTER,
+    FAMILY_AFTERCLOSE_EVENT_TIMING,
+    FAMILY_EVENT_MOM_AGREE_COMBO,
+    FAMILY_EVENT_MARGIN_CROWD_COMBO,
+    FAMILY_FUNDING_IMPULSE_CS,
+    FAMILY_CURVE_STEEPEN_IMPULSE_CS,
+    FAMILY_XS_MARGIN_DELTA,
+    FAMILY_IDIO_MOM_MACRO,
+)
+
+
+def _eval_template(lid: str, family_id: str, ctx) -> None:
+    tpl = LOGIC_TEMPLATES[lid]
+    assert tpl.family_id == family_id
+    ok, reason = validate_strategy_at_gen(family_id, dict(tpl.base_params), logic_id=lid)
+    assert ok is True, reason
+    res = evaluate_one_strategy(
+        {
+            "strategy_id": f"test_{lid}",
+            "logic_id": lid,
+            "family_id": family_id,
+            "params": dict(tpl.base_params),
+            "thesis": tpl.thesis,
+            "signal_definition": tpl.signal_definition,
+            "position_rule": tpl.position_rule,
+            "datasets_used": list(tpl.datasets_used),
+        },
+        ctx,
+    )
+    assert res["status"] == "evaluated"
+    assert res["n_periods_total"] >= 1
+    assert res.get("logic_id") == lid
+    assert res["mass_research"] == "NO-GO"
+
 
 def test_logic_templates_distinct_economic_logic():
     doc = logic_templates_document()
-    assert doc["n_logic_templates"] >= 20  # W89: +rate + multi-factor
+    assert doc["n_logic_templates"] >= 20
     assert len(LOGIC_TEMPLATE_IDS) == len(set(LOGIC_TEMPLATE_IDS))
-    # each template has required fields
-    fps = set()
+    fps = {tpl.to_dict()["logic_fingerprint"] for lid, tpl in LOGIC_TEMPLATES.items()}
     for lid, tpl in LOGIC_TEMPLATES.items():
         d = tpl.to_dict()
-        assert d["thesis"]
-        assert d["signal_definition"]
-        assert d["position_rule"]
-        assert d["datasets_used"]
-        assert d["logic_id"] == lid
-        assert d["logic_fingerprint"]
-        fps.add(d["logic_fingerprint"])
-    # fingerprints unique
+        assert d["thesis"] and d["signal_definition"] and d["position_rule"]
+        assert d["datasets_used"] and d["logic_id"] == lid and d["logic_fingerprint"]
     assert len(fps) == len(LOGIC_TEMPLATES)
-    # simple_daily_sign not a template
     assert all(
         CLASS_SIMPLE_DAILY_SIGN not in (t.family_id, t.logic_id)
         for t in LOGIC_TEMPLATES.values()
     )
-    # W89 rate + multi-factor present
-    assert "rate_abs_level_xs" in LOGIC_TEMPLATES
-    assert "rate_curve_shape_xs" in LOGIC_TEMPLATES
-    assert "mf_value_mom_rate" in LOGIC_TEMPLATES
-    assert "mf_flow_price" in LOGIC_TEMPLATES
-    assert LOGIC_TEMPLATES["rate_abs_level_xs"].family_id == FAMILY_RATE_FACTOR
-    assert LOGIC_TEMPLATES["mf_value_mom_rate"].family_id == FAMILY_MULTI_FACTOR
-    # W91 Nikkei / index vol regime (proxy/compare)
-    assert "nky_vol_abs_level" in LOGIC_TEMPLATES
-    assert "nky_vol_term_levels" in LOGIC_TEMPLATES
-    assert "nky_vol_term_ratio" in LOGIC_TEMPLATES
-    assert LOGIC_TEMPLATES["nky_vol_abs_level"].family_id == FAMILY_INDEX_VOL_REGIME
-    assert LOGIC_TEMPLATES["nky_vol_term_levels"].family_id == FAMILY_INDEX_VOL_REGIME
-    assert LOGIC_TEMPLATES["nky_vol_term_ratio"].family_id == FAMILY_INDEX_VOL_REGIME
+    for lid in ("rate_abs_level_xs", "rate_curve_shape_xs"):
+        assert LOGIC_TEMPLATES[lid].family_id == FAMILY_RATE_FACTOR
+    for lid in ("mf_value_mom_rate", "mf_flow_price"):
+        assert LOGIC_TEMPLATES[lid].family_id == FAMILY_MULTI_FACTOR
+    for lid in _NKY_VOL_IDS:
+        assert LOGIC_TEMPLATES[lid].family_id == FAMILY_INDEX_VOL_REGIME
     assert "nky_vol_abs_level" in doc.get("w91_index_vol_logic_ids", [])
-    # W92/W94 options_225 BaseVol / skew / CM-term / Δvol (+ ATM compare-only)
-    for lid in (
-        "opt225_basevol_abs_level",
-        "opt225_basevol_term_levels",
-        "opt225_basevol_term_ratio",
-        "opt225_atm_iv_abs_level",
-        "opt225_atm_iv_term_levels",
-        "opt225_atm_iv_term_ratio",
-        "opt225_iv_base_spread_abs",
-        "opt225_iv_base_spread_change",
-        "opt225_skew_abs_level",
-        "opt225_cm_term_abs_level",
-        "opt225_basevol_delta_abs",
-    ):
-        assert lid in LOGIC_TEMPLATES
+    for lid in _OPT225_IDS:
         assert LOGIC_TEMPLATES[lid].family_id == FAMILY_OPTIONS_VOL_REGIME
     assert "opt225_basevol_abs_level" in doc.get("w92_options_vol_logic_ids", [])
     assert "opt225_skew_abs_level" in doc.get("w94_options_vol_logic_ids", [])
     assert doc.get("opt225_canonical_level") == "basevol"
     assert doc.get("opt225_atm_iv_role") == "compare_only"
-    assert LOGIC_TEMPLATES["opt225_atm_iv_abs_level"].base_params.get(
-        "compare_only"
-    ) is True
-    # research-family unique_logic: recognized, not generated, not remapped.
-    # Catalog / daily_path owns these ids; they are not factory templates.
-    for lid in (
-        "event_funding_stress_skip",
-        "curve_steep_event_confirm",
-        "disclosure_cluster_mom_gate",
-        "surprise_xs_rank_hold",
-        "large_surprise_event_hold",
-        "afterclose_only_event_hold",
-        "event_pre_mom_agree_hold",
-        "event_margin_crowding_skip",
-        "event_funding_easy_short",
-        "event_funding_stress_ls",
-        "surprise_xs_rank_flip",
-        "funding_impulse_cs_tilt",
-        "curve_steepen_impulse_cs",
-        "xs_margin_delta_rank",
-        "idio_mom_macro_impulse",
-    ):
+    assert LOGIC_TEMPLATES["opt225_atm_iv_abs_level"].base_params.get("compare_only") is True
+    for lid in _UNIQUE_NOT_GENERATED:
         assert lid in RESEARCH_UNIQUE_LOGIC_IDS
         assert lid not in LOGIC_TEMPLATES
     assert "event_funding_stress_skip" in doc.get("unique_logic_ids", [])
-    assert "event_funding_easy_short" in RESEARCH_UNIQUE_LOGIC_IDS
-    assert "overnight_level_cs_tilt" in doc.get(
-        "unique_logic_append_logic_ids", []
-    )
+    assert "overnight_level_cs_tilt" in doc.get("unique_logic_append_logic_ids", [])
     assert "w105_research_unique_logic_ids" not in doc
-    assert "w104_w105" not in str(doc.get("research_family_registration", {}).get("register_id", ""))
-    # diversity rules documented
+    assert "w104_w105" not in str(
+        doc.get("research_family_registration", {}).get("register_id", "")
+    )
     rules = doc["diversity_rules"]
     assert "hold_days only" in str(rules["does_not_count"])
     assert "info source" in str(rules["counts_as_different"]).lower() or any(
         "info" in x.lower() for x in rules["counts_as_different"]
     )
-    # near-groups parallel (includes vol name-vs-index + index_vol + options)
     ng = near_logic_groups_document()
     assert len(ng["groups"]) >= 5
     assert len(NEAR_LOGIC_GROUPS) >= 5
     group_ids = {g["group_id"] for g in NEAR_LOGIC_GROUPS}
-    assert "vol_family_name_vs_index" in group_ids
-    assert "index_vol_regime_family" in group_ids
-    assert "options_vol_regime_family" in group_ids
-    assert "nky_vol_proxy_vs_options_sot" in group_ids
+    assert {
+        "vol_family_name_vs_index",
+        "index_vol_regime_family",
+        "options_vol_regime_family",
+        "nky_vol_proxy_vs_options_sot",
+    } <= group_ids
 
 
 def test_families_still_documented_for_eval_dispatch():
@@ -184,25 +205,15 @@ def test_families_still_documented_for_eval_dispatch():
         CLASS_FLOW_DEMAND,
     ):
         assert cid in FAMILY_DEFINITIONS or cid in FACTORY_FAMILY_IDS
-    assert FAMILY_VOL_RISK_ADJUSTED in FAMILY_DEFINITIONS
-    assert FAMILY_RATE_FACTOR in FAMILY_DEFINITIONS
-    assert FAMILY_MULTI_FACTOR in FAMILY_DEFINITIONS
-    assert FAMILY_INDEX_VOL_REGIME in FAMILY_DEFINITIONS
-    assert FAMILY_OPTIONS_VOL_REGIME in FAMILY_DEFINITIONS
     for fid in (
-        FAMILY_EVENT_FUNDING_COMBO,
-        FAMILY_EVENT_MACRO_CURVE_COMBO,
-        FAMILY_DISCLOSURE_CLUSTER_GATE,
-        FAMILY_SURPRISE_XS_RANK,
-        FAMILY_LARGE_SURPRISE_FILTER,
-        FAMILY_AFTERCLOSE_EVENT_TIMING,
-        FAMILY_EVENT_MOM_AGREE_COMBO,
-        FAMILY_EVENT_MARGIN_CROWD_COMBO,
-        FAMILY_FUNDING_IMPULSE_CS,
-        FAMILY_CURVE_STEEPEN_IMPULSE_CS,
-        FAMILY_XS_MARGIN_DELTA,
-        FAMILY_IDIO_MOM_MACRO,
+        FAMILY_VOL_RISK_ADJUSTED,
+        FAMILY_RATE_FACTOR,
+        FAMILY_MULTI_FACTOR,
+        FAMILY_INDEX_VOL_REGIME,
+        FAMILY_OPTIONS_VOL_REGIME,
     ):
+        assert fid in FAMILY_DEFINITIONS
+    for fid in _RESEARCH_FAMILY_IDS:
         assert fid in FAMILY_DEFINITIONS
         assert FAMILY_DEFINITIONS[fid].generation_enabled is False
     assert CLASS_SIMPLE_DAILY_SIGN not in FAMILY_DEFINITIONS
@@ -253,12 +264,8 @@ def test_generation_logic_diversity_metrics():
 def test_not_hold_mom_frac_grid_as_100_unique():
     """Grid-only mutations must not inflate unique_logic / after_dedup."""
     gen = generate_strategy_batch(seed=870816, n=100)
-    # unique_logic << 100 even if capacity is 100
     assert gen["n_unique_logic"] < 40
     assert gen["n_after_dedup"] < 40
-    # each logic appears at most a few times after dedup
-    from collections import Counter
-
     logic_counts = Counter(s["logic_id"] for s in gen["strategies_after_dedup"])
     assert max(logic_counts.values()) <= 2
 
@@ -550,67 +557,20 @@ def test_propose_profit_hypotheses_rejects_window_tweaks_and_evals():
 
 
 def test_nky_vol_logics_templates_and_eval_synthetic():
-    """W91: nky_vol abs/term_levels/term_ratio are distinct index-vol logics."""
-    for lid in (
-        "nky_vol_abs_level",
-        "nky_vol_term_levels",
-        "nky_vol_term_ratio",
-    ):
-        tpl = LOGIC_TEMPLATES[lid]
-        assert tpl.family_id == FAMILY_INDEX_VOL_REGIME
-        assert tpl.thesis
-        assert "CS" in tpl.signal_definition or "rank" in tpl.signal_definition
-        assert "derivatives_bars_daily_futures" in tpl.datasets_used
-        assert "indices_bars_daily" in tpl.datasets_used or (
-            "indices_bars_daily_topix" in tpl.datasets_used
-        )
-        ok, reason = validate_strategy_at_gen(
-            FAMILY_INDEX_VOL_REGIME,
-            dict(tpl.base_params),
-            logic_id=lid,
-        )
-        assert ok is True, reason
-        assert reason is None
-
-    # Distinct fingerprints vs name-level vol gates
     name_fps = {
         LOGIC_TEMPLATES["vol_risk_adjusted_mom"].logic_fingerprint(),
         LOGIC_TEMPLATES["vol_breakout_expand"].logic_fingerprint(),
     }
-    for lid in (
-        "nky_vol_abs_level",
-        "nky_vol_term_levels",
-        "nky_vol_term_ratio",
-    ):
+    for lid in _NKY_VOL_IDS:
+        tpl = LOGIC_TEMPLATES[lid]
+        assert "CS" in tpl.signal_definition or "rank" in tpl.signal_definition
+        assert "derivatives_bars_daily_futures" in tpl.datasets_used
         assert LOGIC_TEMPLATES[lid].logic_fingerprint() not in name_fps
-
-    # Synthetic eval of all three
     cfg = MassFactoryConfig(seed=91, n=5, max_codes=4)
     ctx = load_batch_data_context(cfg, synthetic=True)
     assert all(p.get("nky_vol_series") for p in ctx.panels)
-    for lid in (
-        "nky_vol_abs_level",
-        "nky_vol_term_levels",
-        "nky_vol_term_ratio",
-    ):
-        tpl = LOGIC_TEMPLATES[lid]
-        strat = {
-            "strategy_id": f"test_{lid}",
-            "logic_id": lid,
-            "family_id": FAMILY_INDEX_VOL_REGIME,
-            "params": dict(tpl.base_params),
-            "thesis": tpl.thesis,
-            "signal_definition": tpl.signal_definition,
-            "position_rule": tpl.position_rule,
-            "datasets_used": list(tpl.datasets_used),
-        }
-        res = evaluate_one_strategy(strat, ctx)
-        assert res["status"] == "evaluated"
-        assert res["n_periods_total"] >= 1
-        assert res.get("logic_id") == lid
-        assert res["mass_research"] == "NO-GO"
-
-    # Gen-time reject bad mode
+    for lid in _NKY_VOL_IDS:
+        _eval_template(lid, FAMILY_INDEX_VOL_REGIME, ctx)
     ok_bad, reason_bad = validate_strategy_at_gen(
         FAMILY_INDEX_VOL_REGIME,
         {
@@ -627,52 +587,13 @@ def test_nky_vol_logics_templates_and_eval_synthetic():
 
 
 def test_opt225_vol_logics_templates_and_eval_synthetic():
-    """W92: options_225 BaseVol / ATM IV / spread logics (canonical SoT)."""
-    lids = (
-        "opt225_basevol_abs_level",
-        "opt225_basevol_term_levels",
-        "opt225_basevol_term_ratio",
-        "opt225_atm_iv_abs_level",
-        "opt225_atm_iv_term_levels",
-        "opt225_atm_iv_term_ratio",
-        "opt225_iv_base_spread_abs",
-        "opt225_iv_base_spread_change",
-        "opt225_skew_abs_level",
-        "opt225_cm_term_abs_level",
-        "opt225_basevol_delta_abs",
-    )
-    for lid in lids:
-        tpl = LOGIC_TEMPLATES[lid]
-        assert tpl.family_id == FAMILY_OPTIONS_VOL_REGIME
-        assert "derivatives_bars_daily_options_225" in tpl.datasets_used
-        ok, reason = validate_strategy_at_gen(
-            FAMILY_OPTIONS_VOL_REGIME,
-            dict(tpl.base_params),
-            logic_id=lid,
-        )
-        assert ok is True, reason
-
+    for lid in _OPT225_IDS:
+        assert "derivatives_bars_daily_options_225" in LOGIC_TEMPLATES[lid].datasets_used
     cfg = MassFactoryConfig(seed=92, n=5, max_codes=4)
     ctx = load_batch_data_context(cfg, synthetic=True)
     assert all(p.get("opt225_regime") for p in ctx.panels)
-    for lid in lids:
-        tpl = LOGIC_TEMPLATES[lid]
-        strat = {
-            "strategy_id": f"test_{lid}",
-            "logic_id": lid,
-            "family_id": FAMILY_OPTIONS_VOL_REGIME,
-            "params": dict(tpl.base_params),
-            "thesis": tpl.thesis,
-            "signal_definition": tpl.signal_definition,
-            "position_rule": tpl.position_rule,
-            "datasets_used": list(tpl.datasets_used),
-        }
-        res = evaluate_one_strategy(strat, ctx)
-        assert res["status"] == "evaluated", res
-        assert res["n_periods_total"] >= 1
-        assert res.get("logic_id") == lid
-        assert res["mass_research"] == "NO-GO"
-
+    for lid in _OPT225_IDS:
+        _eval_template(lid, FAMILY_OPTIONS_VOL_REGIME, ctx)
     ok_bad, reason_bad = validate_strategy_at_gen(
         FAMILY_OPTIONS_VOL_REGIME,
         {
@@ -755,7 +676,6 @@ def test_opt225_signal_helpers_pure():
     )
     assert ratio["regime"] == "expanding"
     assert ratio["value"] == -1.0
-    # W94 skew / CM-term / ΔBaseVol
     skew_hi = compute_opt225_skew_abs_level_signal(cs_sign=1.0, vol_level=4.0)
     assert skew_hi["value"] == -1.0
     skew_lo = compute_opt225_skew_abs_level_signal(cs_sign=1.0, vol_level=0.2)

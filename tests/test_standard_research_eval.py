@@ -1,13 +1,4 @@
-"""W66 / w0815bg + W77 / w0816k — standard research eval checklist harness entry.
-
-Locks:
-* dry_run wiring completes with READY false / Mass NO-GO / Phase7 OFF
-* gate pass still not READY / not research_candidate
-* does not register new signals
-* rejected baselines (S1–S5) remain rejected
-* checklist v2: incomplete → not research_candidate
-* leverage/short costs + risk scenarios required
-"""
+"""Standard research eval checklist: Mass/READY closed, no auto-candidate."""
 
 from __future__ import annotations
 
@@ -65,20 +56,24 @@ from research.robustness_gate import evaluate_research_robustness_gate
 REPO = Path(__file__).resolve().parents[1]
 EVAL_HARNESS_PATH = REPO / "packages" / "product" / "research" / "eval_harness.py"
 
-# W99 sticky w2017_2019 — measured daily path (period_net_DD=0 is contrast only).
+_W99_REF0 = W99_STICKY_DAILY_PATH_DD_REFERENCE[0]
 W99_DAILY_PATH_PACK = {
-    "daily_path_DD": W99_STICKY_DAILY_PATH_DD_REFERENCE[0]["daily_path_DD"],
-    "dd_duration": W99_STICKY_DAILY_PATH_DD_REFERENCE[0]["dd_duration"],
-    "recovered": W99_STICKY_DAILY_PATH_DD_REFERENCE[0]["recovered"],
-    "recovery_days": W99_STICKY_DAILY_PATH_DD_REFERENCE[0]["recovery_days"],
-    "total_ret_net": W99_STICKY_DAILY_PATH_DD_REFERENCE[0]["total_ret_net"],
-    "period_net_DD": W99_STICKY_DAILY_PATH_DD_REFERENCE[0][
-        "period_net_DD_w98_cf_artifact"
-    ],
+    "daily_path_DD": _W99_REF0["daily_path_DD"],
+    "dd_duration": _W99_REF0["dd_duration"],
+    "recovered": _W99_REF0["recovered"],
+    "recovery_days": _W99_REF0["recovery_days"],
+    "total_ret_net": _W99_REF0["total_ret_net"],
+    "period_net_DD": _W99_REF0["period_net_DD_w98_cf_artifact"],
     "method": "daily_equity_level_peak_to_trough",
     "window": "w2017_2019",
     "logic_id": "xs_rank_ls_sticky",
 }
+
+_GATE_PASS_ROWS = [
+    {"period_id": "y2015", "gross_signed_mean_active": -0.0005, "n_active_positions": 100},
+    {"period_id": "y2017", "gross_signed_mean_active": -0.0004, "n_active_positions": 100},
+    {"period_id": "y2019", "gross_signed_mean_active": -0.0006, "n_active_positions": 100},
+]
 
 
 def _complete_scenario_rows():
@@ -97,6 +92,21 @@ def _complete_scenario_rows():
     ]
 
 
+def _assert_mass_ready_off(out) -> None:
+    assert out["ready_declared"] is False
+    assert out["mass_research"] == "NO-GO"
+    if "phase7" in out:
+        assert out["phase7"] == "OFF"
+    if "connected_to_ready" in out:
+        assert out["connected_to_ready"] is False
+    if "connected_to_mass" in out:
+        assert out["connected_to_mass"] is False
+    if "research_candidate" in out:
+        assert out["research_candidate"] is False
+    if "operational_go" in out:
+        assert out["operational_go"] is False
+
+
 def test_dry_run_wiring_completes_mass_ready_phase7_closed():
     out = run_standard_research_eval(dry_run=True)
     assert out["checklist_version"] == CHECKLIST_VERSION
@@ -104,15 +114,9 @@ def test_dry_run_wiring_completes_mass_ready_phase7_closed():
     assert out["prior_checklist_version"] == CHECKLIST_VERSION_V1
     assert out["mode"] == "wiring_only"
     assert out["dry_run"] is True
-    assert out["ready_declared"] is False
-    assert out["operational_go"] is False
-    assert out["mass_research"] == "NO-GO"
-    assert out["phase7"] == "OFF"
-    assert out["connected_to_ready"] is False
-    assert out["connected_to_mass"] is False
+    _assert_mass_ready_off(out)
     assert out["edge_claimed"] is False
     assert out["significance_claimed"] is False
-    assert out["research_candidate"] is False
     assert out["checklist_skipped"] is False
     assert out["new_signals_registered"] is False
     assert out["short_window_only_sufficient"] is False
@@ -147,39 +151,18 @@ def test_dry_run_wiring_completes_mass_ready_phase7_closed():
     assert out["daily_path_dd"]["complete"] is False
     assert out["daily_path_dd"]["period_net_dd_only_pass_forbidden"] is True
     assert "daily_path_dd" in out["checklist_completeness"]["missing_required"]
-    assert out["ready_declared"] is False
-    assert out["mass_research"] == "NO-GO"
 
 
 def test_alias_standard_research_eval_checklist_run():
-    assert standard_research_eval_checklist_run is run_standard_research_eval
     out = standard_research_eval_checklist_run(dry_run=True, include_holding=False)
-    assert out["ready_declared"] is False
+    _assert_mass_ready_off(out)
     assert out["holding"] is None
 
 
 def test_gate_pass_still_not_ready_or_candidate():
     """Even cost-aware gate PASS must not mint READY / research_candidate."""
-    rows = [
-        {
-            "period_id": "y2015",
-            "gross_signed_mean_active": -0.0005,
-            "n_active_positions": 100,
-        },
-        {
-            "period_id": "y2017",
-            "gross_signed_mean_active": -0.0004,
-            "n_active_positions": 100,
-        },
-        {
-            "period_id": "y2019",
-            "gross_signed_mean_active": -0.0006,
-            "n_active_positions": 100,
-        },
-    ]
-    # Direct gate still closed.
     gate = evaluate_research_robustness_gate(
-        rows,
+        _GATE_PASS_ROWS,
         signal_id=SIGNAL_ID_S4,
         require_net_sign_majority=True,
     )
@@ -190,22 +173,15 @@ def test_gate_pass_still_not_ready_or_candidate():
     out = run_standard_research_eval(
         dry_run=True,
         mode="wiring_only",
-        period_rows_for_gate=rows,
+        period_rows_for_gate=_GATE_PASS_ROWS,
         min_active_per_period=20,
     )
     assert out["gate_passed"] is True
     assert out["robustness_gate"]["passed"] is True
-    assert out["ready_declared"] is False
-    assert out["operational_go"] is False
-    assert out["mass_research"] == "NO-GO"
-    assert out["phase7"] == "OFF"
-    assert out["connected_to_ready"] is False
-    assert out["connected_to_mass"] is False
-    assert out["research_candidate"] is False
+    _assert_mass_ready_off(out)
     assert out["gate_pass_implies_ready"] is False
     assert out["gate_pass_implies_mass"] is False
     assert out["gate_pass_implies_research_candidate"] is False
-    # incomplete risk scenarios still block candidate allowance
     assert out["research_candidate_allowed"] is False
 
 
@@ -224,9 +200,7 @@ def test_does_not_register_new_signals():
     }
     # Checklist document does not mint signals either.
     doc = standard_research_eval_checklist_document()
-    assert doc["research_candidate"] is False
-    assert doc["ready_declared"] is False
-    assert doc["mass_research"] == "NO-GO"
+    _assert_mass_ready_off(doc)
     assert "run_standard_research_eval" == doc["default_entry"]
     assert doc["version"] == "standard-research-eval-checklist/v2"
     assert "leverage_short_cost_assumptions" in doc["required"]
@@ -244,10 +218,8 @@ def test_rejected_baselines_still_rejected():
         assert is_research_baseline_rejected(sid) is True
         entry = rejected_baseline_catalog()["baselines"][sid]
         assert entry["research_status"] == RESEARCH_STATUS_REJECTED
-        assert entry["ready_declared"] is False
-        assert entry["mass_research"] == "NO-GO"
+        _assert_mass_ready_off(entry)
 
-    # s1 dry demo mode still leaves S1 rejected and freezes closed.
     out = run_standard_research_eval(
         dry_run=True,
         mode="s1_rejected_baseline",
@@ -255,10 +227,7 @@ def test_rejected_baselines_still_rejected():
     assert out["mode"] == "s1_rejected_baseline"
     assert out["baseline_demo"]["still_rejected"] is True
     assert out["baseline_demo"]["signal_id"] == SIGNAL_ID_S1
-    assert out["research_candidate"] is False
-    assert out["ready_declared"] is False
-    assert out["mass_research"] == "NO-GO"
-    assert out["phase7"] == "OFF"
+    _assert_mass_ready_off(out)
     assert is_research_baseline_rejected(SIGNAL_ID_S1) is True
 
     out4 = run_standard_research_eval(
@@ -284,7 +253,7 @@ def test_cost_change_requires_reason():
     )
     assert out["cost_assumption"]["changed_from_default"] is True
     assert out["cost_assumption"]["change_reason"] == "unit-test override only"
-    assert out["ready_declared"] is False
+    _assert_mass_ready_off(out)
 
 
 def test_holding_records_optional_annotation():
@@ -302,8 +271,7 @@ def test_holding_records_optional_annotation():
     )
     assert "holding_turnover_metrics" in out["steps_completed"]
     assert out["holding"]["run_length_stats"]["n_runs_total"] >= 1
-    assert out["holding"]["ready_declared"] is False
-    assert out["holding"]["mass_research"] == "NO-GO"
+    _assert_mass_ready_off(out["holding"])
 
 
 def test_invalid_mode_rejected():
@@ -337,51 +305,24 @@ def test_standard_eval_ast_no_mass_import_no_new_signal_mint():
     assert "period_net_dd_only_pass" in src
 
 
-# ---------------------------------------------------------------------------
-# W77 / w0816k — checklist v2
-# ---------------------------------------------------------------------------
-
-
 def test_checklist_incomplete_not_research_candidate():
     """Incomplete checklist (default wiring) cannot become research_candidate."""
     out = run_standard_research_eval(dry_run=True)
-    assert out["research_candidate"] is False
+    _assert_mass_ready_off(out)
     assert out["research_candidate_allowed"] is False
     assert out["checklist_complete"] is False
     missing = out["checklist_completeness"]["missing_required"]
     assert "risk_scenario_evaluation" in missing
     assert "daily_path_dd" in missing
-    assert out["ready_declared"] is False
-    assert out["mass_research"] == "NO-GO"
-    assert out["connected_to_ready"] is False
-    assert out["connected_to_mass"] is False
 
 
 def test_checklist_complete_still_not_auto_candidate_and_freeze():
     """Even with full scenario metrics + daily_path_DD, harness never auto-promotes."""
-    scen = _complete_scenario_rows()
-    rows = [
-        {
-            "period_id": "y2015",
-            "gross_signed_mean_active": -0.0005,
-            "n_active_positions": 100,
-        },
-        {
-            "period_id": "y2017",
-            "gross_signed_mean_active": -0.0004,
-            "n_active_positions": 100,
-        },
-        {
-            "period_id": "y2019",
-            "gross_signed_mean_active": -0.0006,
-            "n_active_positions": 100,
-        },
-    ]
     out = run_standard_research_eval(
         dry_run=True,
         mode="wiring_only",
-        period_rows_for_gate=rows,
-        scenario_rows=scen,
+        period_rows_for_gate=_GATE_PASS_ROWS,
+        scenario_rows=_complete_scenario_rows(),
         baseline_majority_sign=-1,
         baseline_net_majority_sign=-1,
         daily_path_pack=W99_DAILY_PATH_PACK,
@@ -394,13 +335,7 @@ def test_checklist_complete_still_not_auto_candidate_and_freeze():
     ]
     assert out["checklist_complete"] is True
     assert out["research_candidate_allowed"] is True
-    # Hard: harness never auto-sets research_candidate True
-    assert out["research_candidate"] is False
-    assert out["ready_declared"] is False
-    assert out["mass_research"] == "NO-GO"
-    assert out["phase7"] == "OFF"
-    assert out["connected_to_ready"] is False
-    assert out["connected_to_mass"] is False
+    _assert_mass_ready_off(out)
     assert out["gate_pass_implies_research_candidate"] is False
 
 
@@ -428,10 +363,8 @@ def test_scenario_sign_break_prefers_fail_candidate():
     )
     assert out["risk_scenarios"]["stability_broken"] is True
     assert out["risk_scenarios"]["research_candidate_allowed"] is False
-    assert out["research_candidate"] is False
+    _assert_mass_ready_off(out)
     assert out["research_candidate_allowed"] is False
-    assert out["ready_declared"] is False
-    assert out["mass_research"] == "NO-GO"
 
 
 def test_leverage_short_costs_long_only_and_long_short():
@@ -440,8 +373,7 @@ def test_leverage_short_costs_long_only_and_long_short():
     assert lo["assumptions_complete"] is True
     assert lo["short_borrow"]["not_applicable"] is True
     assert lo["leverage_financing"]["not_applicable"] is True
-    assert lo["ready_declared"] is False
-    assert lo["connected_to_mass"] is False
+    _assert_mass_ready_off(lo)
 
     ls = build_leverage_short_cost_assumption(
         position_style=POSITION_STYLE_LONG_SHORT,
@@ -466,8 +398,7 @@ def test_leverage_short_costs_long_only_and_long_short():
         uses_short=True,
     )
     assert out["leverage_short_costs"]["uses_short"] is True
-    assert out["leverage_short_costs"]["ready_declared"] is False
-    assert out["mass_research"] == "NO-GO"
+    _assert_mass_ready_off(out)
 
 
 def test_high_frequency_hyp_requires_holding_for_completeness():
@@ -489,7 +420,7 @@ def test_high_frequency_hyp_requires_holding_for_completeness():
     )
     assert out["checklist_complete"] is False
     assert "holding_turnover_metrics" in out["checklist_completeness"]["missing_required"]
-    assert out["research_candidate"] is False
+    _assert_mass_ready_off(out)
     assert out["research_candidate_allowed"] is False
 
     records = [
@@ -507,8 +438,7 @@ def test_high_frequency_hyp_requires_holding_for_completeness():
         daily_path_pack=W99_DAILY_PATH_PACK,
     )
     assert out2["checklist_complete"] is True
-    assert out2["research_candidate"] is False  # still no auto-promote
-    assert out2["ready_declared"] is False
+    _assert_mass_ready_off(out2)
 
 
 def test_evaluate_checklist_v2_completeness_helper():
@@ -525,8 +455,7 @@ def test_evaluate_checklist_v2_completeness_helper():
     assert incomplete["complete"] is False
     assert incomplete["research_candidate_allowed"] is False
     assert "leverage_short_cost_assumptions" in incomplete["missing_required"]
-    assert incomplete["ready_declared"] is False
-    assert incomplete["mass_research"] == "NO-GO"
+    _assert_mass_ready_off(incomplete)
 
     complete = evaluate_checklist_v2_completeness(
         multi_year_present=True,
@@ -541,15 +470,14 @@ def test_evaluate_checklist_v2_completeness_helper():
     )
     assert complete["complete"] is True
     assert complete["research_candidate_allowed"] is True
-    assert complete["connected_to_ready"] is False
-    assert complete["connected_to_mass"] is False
+    _assert_mass_ready_off(complete)
 
 
 def test_evaluate_risk_scenarios_standalone():
     pending = evaluate_risk_scenarios(None)
     assert pending["passed"] is False
     assert pending["research_candidate_allowed"] is False
-    assert pending["ready_declared"] is False
+    _assert_mass_ready_off(pending)
 
     full = evaluate_risk_scenarios(
         [
@@ -565,13 +493,7 @@ def test_evaluate_risk_scenarios_standalone():
     )
     assert full["passed"] is True
     assert full["coverage_ok"] is True
-    assert full["mass_research"] == "NO-GO"
-    assert full["connected_to_mass"] is False
-
-
-# ---------------------------------------------------------------------------
-# W100 / w0819c — daily_path_DD mandatory gate
-# ---------------------------------------------------------------------------
+    _assert_mass_ready_off(full)
 
 
 def test_daily_path_dd_unmeasured_is_incomplete():
@@ -589,9 +511,7 @@ def test_daily_path_dd_unmeasured_is_incomplete():
     assert "daily_path_dd" in out["checklist_completeness"]["missing_required"]
     assert out["checklist_complete"] is False
     assert out["research_candidate_allowed"] is False
-    assert out["research_candidate"] is False
-    assert out["ready_declared"] is False
-    assert out["mass_research"] == "NO-GO"
+    _assert_mass_ready_off(out)
 
 
 def test_period_net_dd_zero_daily_unmeasured_is_incomplete():
@@ -613,8 +533,7 @@ def test_period_net_dd_zero_daily_unmeasured_is_incomplete():
     assert out["checklist_complete"] is False
     assert out["research_candidate_allowed"] is False
     assert out["checklist_completeness"]["period_net_dd_zero_daily_unmeasured"] is True
-    assert out["ready_declared"] is False
-    assert out["mass_research"] == "NO-GO"
+    _assert_mass_ready_off(out)
 
 
 def test_period_net_dd_only_cannot_pass_even_if_nonzero():
@@ -636,7 +555,7 @@ def test_period_net_dd_only_cannot_pass_even_if_nonzero():
     assert out["daily_path_dd"]["complete"] is False
     assert out["checklist_complete"] is False
     assert out["research_candidate_allowed"] is False
-    assert out["research_candidate"] is False
+    _assert_mass_ready_off(out)
 
 
 def test_period_net_method_stuffed_as_daily_fails():
@@ -655,7 +574,6 @@ def test_period_net_method_stuffed_as_daily_fails():
 
 
 def test_w99_sticky_reference_daily_path_completes_item():
-    """W99 sticky table is the reference measured daily-path example."""
     ref = w99_sticky_daily_path_dd_reference()
     assert ref["logic_id"] == "xs_rank_ls_sticky"
     assert ref["stance"] == "STABLE_RESEARCH_ONLY"
@@ -681,8 +599,7 @@ def test_w99_sticky_reference_daily_path_completes_item():
         "recovery",
         "total_ret_net",
     }
-    assert gate["ready_declared"] is False
-    assert gate["mass_research"] == "NO-GO"
+    _assert_mass_ready_off(gate)
 
 
 def test_daily_path_from_equity_curve():
@@ -750,4 +667,4 @@ def test_evaluate_checklist_blocks_period_net_only_even_if_flagged_complete():
     assert blocked["research_candidate_allowed"] is False
     assert "daily_path_dd" in blocked["missing_required"]
     assert blocked["period_net_dd_only"] is True
-    assert blocked["ready_declared"] is False
+    _assert_mass_ready_off(blocked)

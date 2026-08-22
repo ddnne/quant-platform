@@ -1,11 +1,9 @@
-"""W59 / w0815az_g1 — R2 structured history → FeatureContext bridge tests.
-
-Covers: T2 schema mapping, T3 loader, T4 PIT available_at, T5 DEFER hard reject.
-"""
+"""R2 structured history → FeatureContext: schema, PIT, DEFER hard reject."""
 
 from __future__ import annotations
 
 import json
+from datetime import date, timedelta
 from pathlib import Path
 
 import pytest
@@ -45,6 +43,38 @@ from research.single_shot_job import (
 )
 
 
+def _r2_line(
+    dataset: str,
+    day: str,
+    payload: dict,
+    *,
+    code: str | None = None,
+    available_at: str | None = None,
+    event_time: str | None = None,
+    ingested_at: str = "2026-08-12T00:00:00+09:00",
+) -> str:
+    aa = available_at if available_at is not None else f"{day}T15:30:00+09:00"
+    et = event_time if event_time is not None else f"{day}T15:30:00+09:00"
+    nk: dict = {"Date": day}
+    if code is not None:
+        nk["Code"] = code
+    if "S33" in payload:
+        nk = {"Date": day, "S33": payload["S33"]}
+    return json.dumps(
+        {
+            "source": "jquants",
+            "dataset": dataset,
+            "natural_key": json.dumps(nk, sort_keys=True),
+            "event_time": et,
+            "available_at": aa,
+            "ingested_at": ingested_at,
+            "payload": payload,
+            "raw_payload": payload,
+        },
+        ensure_ascii=True,
+    )
+
+
 def _bar_line(
     code: str,
     day: str,
@@ -54,29 +84,13 @@ def _bar_line(
     available_at: str | None = None,
     event_time: str | None = None,
 ) -> str:
-    aa = available_at if available_at is not None else f"{day}T15:30:00+09:00"
-    et = event_time if event_time is not None else f"{day}T15:30:00+09:00"
-    payload = {
-        "Code": code,
-        "Date": day,
-        "O": close,
-        "H": close,
-        "L": close,
-        "C": close,
-        "Vo": volume,
-    }
-    return json.dumps(
-        {
-            "source": "jquants",
-            "dataset": "equities_bars_daily",
-            "natural_key": json.dumps({"Code": code, "Date": day}, sort_keys=True),
-            "event_time": et,
-            "available_at": aa,
-            "ingested_at": "2026-08-12T00:00:00+09:00",
-            "payload": payload,
-            "raw_payload": payload,
-        },
-        ensure_ascii=True,
+    return _r2_line(
+        "equities_bars_daily",
+        day,
+        {"Code": code, "Date": day, "O": close, "H": close, "L": close, "C": close, "Vo": volume},
+        code=code,
+        available_at=available_at,
+        event_time=event_time,
     )
 
 
@@ -86,20 +100,11 @@ def _topix_line(
     close: float = 3000.0,
     available_at: str | None = None,
 ) -> str:
-    aa = available_at if available_at is not None else f"{day}T15:30:00+09:00"
-    payload = {"Date": day, "C": close, "O": close, "H": close, "L": close}
-    return json.dumps(
-        {
-            "source": "jquants",
-            "dataset": "indices_bars_daily_topix",
-            "natural_key": json.dumps({"Date": day}, sort_keys=True),
-            "event_time": f"{day}T15:30:00+09:00",
-            "available_at": aa,
-            "ingested_at": "2026-08-12T00:00:00+09:00",
-            "payload": payload,
-            "raw_payload": payload,
-        },
-        ensure_ascii=True,
+    return _r2_line(
+        "indices_bars_daily_topix",
+        day,
+        {"Date": day, "C": close, "O": close, "H": close, "L": close},
+        available_at=available_at,
     )
 
 
@@ -110,32 +115,47 @@ def _cal_line(
     available_at: str | None = None,
 ) -> str:
     aa = available_at if available_at is not None else f"{day}T09:00:00+09:00"
-    payload = {"Date": day, "HolDiv": hol}
-    return json.dumps(
-        {
-            "source": "jquants",
-            "dataset": "markets_calendar",
-            "natural_key": json.dumps({"Date": day}, sort_keys=True),
-            "event_time": f"{day}T00:00:00+09:00",
-            "available_at": aa,
-            "ingested_at": aa,
-            "payload": payload,
-            "raw_payload": payload,
-        },
-        ensure_ascii=True,
+    return _r2_line(
+        "markets_calendar",
+        day,
+        {"Date": day, "HolDiv": hol},
+        available_at=aa,
+        event_time=f"{day}T00:00:00+09:00",
+        ingested_at=aa,
     )
 
 
-# ---------------------------------------------------------------------------
-# T1 inventory
-# ---------------------------------------------------------------------------
+def _weekdays(start: date, n: int) -> list[str]:
+    days: list[str] = []
+    d = start
+    while len(days) < n:
+        if d.weekday() < 5:
+            days.append(d.isoformat())
+        d += timedelta(days=1)
+    return days
+
+
+_R2_CODES = ("13010", "72030", "67580")
+
+
+def _s1_window_lines(days: list[str], *, codes=_R2_CODES, vol_step: float = 10.0):
+    bar_lines, topix_lines, cal_lines = [], [], []
+    for i, day in enumerate(days):
+        for code in codes:
+            bar_lines.append(
+                _bar_line(code, day, close=100.0 + i, volume=1000.0 + i * vol_step)
+            )
+        topix_lines.append(_topix_line(day, close=3000.0 + i))
+        cal_lines.append(_cal_line(day))
+    return bar_lines, topix_lines, cal_lines
+
 
 
 def test_t1_inventory_covers_complete_21_and_excludes_defer():
     doc = r2_inventory_document()
     assert doc["complete_21_count"] == 21
     assert len(doc["complete_21"]) == 21
-    assert doc["permanent_defer_count"] == 4  # W68: PD-MX-EARN-TIP superseded
+    assert doc["permanent_defer_count"] == 4
     assert set(doc["permanent_defer_excluded"]) == PERMANENT_DEFER_DATASETS
     for ds in S1_SIGNAL_HISTORY_DATASETS:
         inv = COMPLETE_21_R2_INVENTORY[ds]
@@ -150,11 +170,6 @@ def test_t1_write_inventory_json(tmp_path: Path):
     loaded = json.loads(out.read_text(encoding="utf-8"))
     assert loaded["complete_21_count"] == 21
     assert loaded["local_sot"] is False
-
-
-# ---------------------------------------------------------------------------
-# T2 schema
-# ---------------------------------------------------------------------------
 
 
 def test_t2_schema_mapping_has_s1_datasets():
@@ -185,7 +200,6 @@ def test_parse_and_normalize_bar_preserves_available_at_code_date():
 
 
 def test_parse_payload_as_json_string():
-    """Live R2 sometimes stores payload as a JSON string (see W58 samples)."""
     line = json.dumps(
         {
             "source": "jquants",
@@ -209,11 +223,6 @@ def test_parse_payload_as_json_string():
     assert row["close"] == pytest.approx(176.0)
 
 
-# ---------------------------------------------------------------------------
-# T5 DEFER hard reject
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.parametrize("defer_ds", sorted(PERMANENT_DEFER_DATASETS))
 def test_t5_defer_hard_reject_on_extract(defer_ds: str):
     with pytest.raises(PermanentDeferHistoryError, match="permanent DEFER"):
@@ -234,17 +243,11 @@ def test_t5_defer_hard_reject_on_build_context():
 
 
 def test_t5_defer_hard_reject_on_sqlite_mirror(tmp_path: Path):
-    # W68: fins_earnings_date no longer permanent DEFER; use remaining PD id.
     with pytest.raises(PermanentDeferHistoryError):
         materialize_disposable_sqlite_mirror(
             {"equities_bars_daily_am": [{"available_at": "x"}]},
             db_path=tmp_path / "x.sqlite",
         )
-
-
-# ---------------------------------------------------------------------------
-# T3 extract + FeatureContext + features
-# ---------------------------------------------------------------------------
 
 
 def test_extract_r2_history_filters_window_and_codes():
@@ -356,31 +359,22 @@ def test_r2_get_channel_via_injectable(tmp_path: Path):
     assert out["extracted_row_counts"]["equities_bars_daily"] == 2
 
 
-# ---------------------------------------------------------------------------
-# T4 PIT — no look-ahead
-# ---------------------------------------------------------------------------
-
-
 def test_t4_pit_excludes_future_available_at():
+    def _bar_row(day: str, close: float, volume: float) -> dict:
+        aa = f"{day}T15:30:00+09:00"
+        return {
+            "code": "13010",
+            "date": day,
+            "close": close,
+            "volume": volume,
+            "available_at": aa,
+            "event_time": aa,
+        }
+
     rows = {
         "equities_bars_daily": [
-            {
-                "code": "13010",
-                "date": "2026-06-02",
-                "close": 100.0,
-                "volume": 100.0,
-                "available_at": "2026-06-02T15:30:00+09:00",
-                "event_time": "2026-06-02T15:30:00+09:00",
-            },
-            {
-                "code": "13010",
-                "date": "2026-06-03",
-                "close": 110.0,
-                "volume": 150.0,
-                # T+1 bar not yet available at T close
-                "available_at": "2026-06-03T15:30:00+09:00",
-                "event_time": "2026-06-03T15:30:00+09:00",
-            },
+            _bar_row("2026-06-02", 100.0, 100.0),
+            _bar_row("2026-06-03", 110.0, 150.0),
         ]
     }
     as_of_t = "2026-06-02T15:30:00+09:00"
@@ -439,11 +433,6 @@ def test_filter_history_rows_require_available_at():
     assert len(filter_history_rows(rows, require_available_at=True)) == 1
 
 
-# ---------------------------------------------------------------------------
-# Disposable mirror (not SoT) + 40d capability
-# ---------------------------------------------------------------------------
-
-
 def test_disposable_sqlite_mirror_not_sot(tmp_path: Path):
     extract = extract_r2_history_feature_rows(
         ["equities_bars_daily", "markets_calendar"],
@@ -474,15 +463,7 @@ def test_can_build_40d_asof_code_path_yes():
 
 
 def test_can_build_40d_asof_with_rows():
-    # 45 trading-ish days synthetic
-    days = [f"2026-04-{(i % 28) + 1:02d}" for i in range(45)]
-    # make unique sequential-ish by month rollover hack — use iso via ordinal
-    from datetime import date, timedelta
-
-    start = date(2026, 4, 1)
-    days = [(start + timedelta(days=i)).isoformat() for i in range(60)]
-    # keep weekdays only
-    days = [d for d in days if date.fromisoformat(d).weekday() < 5][:45]
+    days = _weekdays(date(2026, 4, 1), 45)
     bars = [
         {
             "code": "13010",
@@ -518,33 +499,8 @@ def test_resolve_history_source():
 
 
 def test_multiday_history_source_r2_does_not_break_default_d1(tmp_path: Path):
-    """history_source=r2 with fixtures works; default remains d1_tip path."""
-    # Build 8 weekdays of synthetic R2 history for multiday min_days=5
-    from datetime import date, timedelta
-
-    start = date(2026, 6, 1)
-    days = []
-    d = start
-    while len(days) < 8:
-        if d.weekday() < 5:
-            days.append(d.isoformat())
-        d += timedelta(days=1)
-
-    bar_lines = []
-    topix_lines = []
-    cal_lines = []
-    for i, day in enumerate(days):
-        for code in ("13010", "72030", "67580"):
-            bar_lines.append(
-                _bar_line(
-                    code,
-                    day,
-                    close=100.0 + i,
-                    volume=1000.0 + i * 10,
-                )
-            )
-        topix_lines.append(_topix_line(day, close=3000.0 + i))
-        cal_lines.append(_cal_line(day))
+    days = _weekdays(date(2026, 6, 1), 8)
+    bar_lines, topix_lines, cal_lines = _s1_window_lines(days)
 
     puts: list[tuple[str, str]] = []
 
@@ -577,11 +533,6 @@ def test_multiday_history_source_r2_does_not_break_default_d1(tmp_path: Path):
     assert ex.batch_summary["tip_plane"] == "R2_history"
 
 
-# ---------------------------------------------------------------------------
-# W60 — bridge expand (margin/short/fins/alert) + multi-signal R2 + aa policy
-# ---------------------------------------------------------------------------
-
-
 def _catalog_line(
     dataset: str,
     day: str,
@@ -590,28 +541,10 @@ def _catalog_line(
     available_at: str | None = None,
     extra_payload: dict | None = None,
 ) -> str:
-    aa = available_at if available_at is not None else f"{day}T15:30:00+09:00"
     payload = {"Date": day, **(extra_payload or {})}
     if code is not None:
         payload["Code"] = code
-    nk: dict = {"Date": day}
-    if code is not None:
-        nk["Code"] = code
-    if "S33" in payload:
-        nk = {"Date": day, "S33": payload["S33"]}
-    return json.dumps(
-        {
-            "source": "jquants",
-            "dataset": dataset,
-            "natural_key": json.dumps(nk, sort_keys=True),
-            "event_time": f"{day}T15:30:00+09:00",
-            "available_at": aa,
-            "ingested_at": "2026-08-12T00:00:00+09:00",
-            "payload": payload,
-            "raw_payload": payload,
-        },
-        ensure_ascii=True,
-    )
+    return _r2_line(dataset, day, payload, code=code, available_at=available_at)
 
 
 def test_bridge_expand_datasets_listed():
@@ -768,38 +701,16 @@ def test_available_at_repair_calendar_only_no_lookahead():
 
 
 def test_multisignal_history_source_r2(tmp_path: Path):
-    """Long-window multi-signal path accepts history_source=r2 fixtures."""
-    from datetime import date, timedelta
-
-    start = date(2024, 10, 1)
-    days: list[str] = []
-    d = start
-    while len(days) < 12:
-        if d.weekday() < 5:
-            days.append(d.isoformat())
-        d += timedelta(days=1)
-
-    bar_lines = []
-    topix_lines = []
-    cal_lines = []
-    fins_lines = []
-    for i, day in enumerate(days):
-        for code in ("13010", "72030", "67580"):
-            bar_lines.append(
-                _bar_line(code, day, close=100.0 + i, volume=1000.0 + i * 50)
-            )
-        topix_lines.append(_topix_line(day, close=3000.0 + i))
-        cal_lines.append(_cal_line(day))
-        # sparse disclosure on day 5 for one code
-        if i == 5:
-            fins_lines.append(
-                _catalog_line(
-                    "fins_summary",
-                    day,
-                    code="13010",
-                    extra_payload={"DiscDate": day},
-                )
-            )
+    days = _weekdays(date(2024, 10, 1), 12)
+    bar_lines, topix_lines, cal_lines = _s1_window_lines(days, vol_step=50.0)
+    fins_lines = [
+        _catalog_line(
+            "fins_summary",
+            days[5],
+            code="13010",
+            extra_payload={"DiscDate": days[5]},
+        )
+    ]
 
     puts: list[tuple[str, str]] = []
 
