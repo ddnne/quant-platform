@@ -763,6 +763,12 @@ def test_review_proposal_row_occupancy_and_polarity_table() -> None:
             "occupancy_label_only",
             "PEAD when EPS contracted versus the last prior print AND price is down AND overnight funding is tight. Skip missing PIT prints (no invent).",
         ),
+        (
+            "The market is in a situation where there is high funding tightness and prices are declining.",
+            ["tight_funding", "price_down"],
+            "occupancy_label_only",
+            "PEAD when overnight funding is tight AND price is down. Skip missing PIT prints (no invent).",
+        ),
     ]
     for bad_thesis, gates, reason, good_thesis in rows:
         payload = {
@@ -797,6 +803,7 @@ def test_catalog_gate_set_avoid_is_existing_crosses() -> None:
         CATALOG_GATE_SET_AVOID_LIMIT,
         assemble_why_avoid,
         catalog_prefer_pair_avoid,
+        catalog_prefer_triple_avoid,
     )
     from research.unique_logic.propose_review_tables import propose_prompt_good
 
@@ -818,6 +825,9 @@ def test_catalog_gate_set_avoid_is_existing_crosses() -> None:
     assert len(assembled) <= PROPOSE_WHY_AVOID_LIMIT
     assert "eps_down+price_down" in assembled
     assert "pb_rising+tight_funding" in assembled
+    triples = catalog_prefer_triple_avoid()
+    assert "eps_down+price_down+tight_funding" in triples
+    assert "eps_down+price_down+tight_funding" in assembled
     assert good_tok not in assembled
     assert all("+" in t for t in tokens)
     blob = " ".join(tokens)

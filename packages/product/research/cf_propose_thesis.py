@@ -163,22 +163,25 @@ def review_proposal_row(proposal: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def catalog_prefer_pair_avoid() -> list[str]:
-    """Catalog 2-ANDs whose gates are both prefer seeds. Clone magnet.
+def catalog_prefer_and_avoid(*, n_gates: int, limit: int | None = None) -> list[str]:
+    """Catalog ANDs whose gates are all prefer seeds. Clone magnet.
 
-    These must reach why_avoid even when SPARSE is long. Unique prefer
-    pairs (GOOD) are not catalog, so they stay off this list. Not GO.
+    Unique prefer pairs (GOOD) are not catalog, so they stay off this list.
+    3-ANDs are newest-first and capped so 2-ANDs still fit. Not GO.
     """
-    from research.unique_logic.catalog import yaml_combo_rows
+    from research.unique_logic.catalog import catalog_dir, yaml_combo_rows
     from research.unique_logic.constants import PROPOSE_CALENDAR_GATES
     from research.unique_logic.propose_review_tables import (
         PROPOSE_PROMPT_PREFER_GATES,
     )
     from research.unique_logic.worker_bodies import countable_thesis_ids
 
+    if n_gates not in (2, 3):
+        raise ValueError("n_gates must be 2 or 3")
     prefer = set(PROPOSE_PROMPT_PREFER_GATES)
     countable = countable_thesis_ids()
-    out: list[str] = []
+    cdir = catalog_dir()
+    rows: list[tuple[float, str]] = []
     have: set[str] = set()
     for row in yaml_combo_rows():
         lid = str(row.get("logic_id") or "")
@@ -189,7 +192,7 @@ def catalog_prefer_pair_avoid() -> list[str]:
             for x in ((row.get("params") or {}).get("gates") or [])
             if str(x).strip()
         )
-        if len(gates) != 2:
+        if len(gates) != n_gates:
             continue
         if PROPOSE_CALENDAR_GATES.intersection(gates):
             continue
@@ -199,17 +202,33 @@ def catalog_prefer_pair_avoid() -> list[str]:
         if token in have:
             continue
         have.add(token)
-        out.append(token)
-    return out
+        yp = cdir / f"{lid}.yaml"
+        mtime = yp.stat().st_mtime if yp.is_file() else 0.0
+        rows.append((mtime, token))
+    rows.sort(reverse=True)
+    tokens = [t for _, t in rows]
+    if limit is not None:
+        tokens = tokens[: max(0, int(limit))]
+    return tokens
+
+
+def catalog_prefer_pair_avoid() -> list[str]:
+    return catalog_prefer_and_avoid(n_gates=2)
+
+
+def catalog_prefer_triple_avoid(*, limit: int = 12) -> list[str]:
+    """Newest catalog prefer 3-ANDs. 24ao cloned eps×px×tight after 2-AND fill."""
+    return catalog_prefer_and_avoid(n_gates=3, limit=limit)
 
 
 def assemble_why_avoid(extra: Sequence[str] | None = None) -> list[str]:
-    """Prefer-catalog 2-ANDs, then sparse, then newest catalog 3/2-sets."""
+    """Prefer-catalog 2-ANDs, prefer 3-ANDs, sparse, then newest catalog 3/2."""
     out: list[str] = []
     seen: set[str] = set()
     for item in (
         list(extra or ())
         + catalog_prefer_pair_avoid()
+        + catalog_prefer_triple_avoid()
         + sparse_gate_set_avoid()
         + catalog_gate_set_avoid()
     ):
@@ -540,7 +559,9 @@ __all__ = [
     "PROPOSE_WHY_AVOID_LIMIT",
     "assemble_why_avoid",
     "catalog_gate_set_avoid",
+    "catalog_prefer_and_avoid",
     "catalog_prefer_pair_avoid",
+    "catalog_prefer_triple_avoid",
     "sparse_gate_set_avoid",
     "invoke_cf_propose_thesis",
     "reject_window_tweak",
