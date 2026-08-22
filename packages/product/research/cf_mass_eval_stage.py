@@ -7,7 +7,6 @@ from typing import Any, Callable, Mapping, Sequence
 
 from data_contracts.permanent_defer import PERMANENT_DEFER_DATASETS
 from research.cf_mass_eval_thicken import (
-    THICKEN_PANEL_DATASETS,
     _build_thicken_sidecars,
     attach_nky_proxy,
     attach_opt225_regime,
@@ -34,10 +33,6 @@ COMPLETE_22_DATASETS: tuple[str, ...] = tuple(
 )
 COMPLETE_22_DATASET_SET: frozenset[str] = frozenset(COMPLETE_22_DATASETS)
 PRIMARY_BARS_DATASET: str = "equities_bars_daily"
-PRIMARY_INDEX_DATASETS: tuple[str, ...] = (
-    "indices_bars_daily_topix",
-    "indices_bars_daily",
-)
 if len(COMPLETE_22_DATASETS) != 22:
     raise RuntimeError(
         f"COMPLETE_22_DATASETS must have 22 ids, got {len(COMPLETE_22_DATASETS)}"
@@ -88,20 +83,6 @@ def normalize_period_row(raw: Mapping[str, Any]) -> dict[str, Any]:
         out["window_kind"] = p["window_kind"]
     return out
 
-
-def inventory_complete22() -> dict[str, Any]:
-    """Machine inventory of COMPLETE 22 + permanent DEFER residual."""
-    wave, _ver = _mass_eval_identity()
-    return {
-        "wave": wave,
-        "dataset_complete_n": len(COMPLETE_22_DATASETS),
-        "complete_22": list(COMPLETE_22_DATASETS),
-        "primary_bars_dataset": PRIMARY_BARS_DATASET,
-        "primary_index_datasets": list(PRIMARY_INDEX_DATASETS),
-        "thicken_panel_datasets": list(THICKEN_PANEL_DATASETS),
-        "permanent_defer_n": len(PERMANENT_DEFER_DATASETS),
-        "permanent_defer": sorted(PERMANENT_DEFER_DATASETS),
-    }
 
 def build_real_period_panel(
     period: Mapping[str, Any],
@@ -272,7 +253,6 @@ def stage_real_panels_to_r2(
         "panels": panels,
         "puts": puts,
         "dataset": PRIMARY_BARS_DATASET,
-        "complete22": inventory_complete22(),
         "wave": wave,
         "dry_run": bool(dry_run),
     }
@@ -284,12 +264,9 @@ __all__ = [
     "DEFAULT_MAX_CODES",
     "DEFAULT_MAX_DAYS",
     "PRIMARY_BARS_DATASET",
-    "PRIMARY_INDEX_DATASETS",
     "RESEARCH_ARTIFACT_BUCKET",
     "RESEARCH_ARTIFACT_PREFIX",
-    "THICKEN_PANEL_DATASETS",
     "build_real_period_panel",
-    "inventory_complete22",
     "normalize_period_row",
     "stage_real_panels_to_r2",
 ]

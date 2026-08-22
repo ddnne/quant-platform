@@ -1,7 +1,3 @@
-/**
- * Period panels: synthetic PRNG, r2_panels staged bars, d1_bars tip extract.
- */
-
 import type { BarsByCode, PeriodPanel, PeriodSpec } from "./types";
 
 const DEFAULT_YEARS = [2015, 2017, 2019, 2021, 2023, 2025];
@@ -478,9 +474,7 @@ export async function loadD1BarsPanels(
         });
         continue;
       }
-      notes.push(
-        `d1_loaded:${p.period_id}:codes=${nCodes}:days=${keep.size}:window=${start}..${end}`,
-      );
+      notes.push(`d1_loaded:${p.period_id}:codes=${nCodes}`);
       panels.push({
         period_id: String(p.period_id),
         year: Number(p.year ?? start.slice(0, 4)),

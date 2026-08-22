@@ -1,8 +1,4 @@
 /// <reference types="@cloudflare/workers-types" />
-/**
- * POST /v1/mass-eval — period-net screen (n_survivors is not a pass).
- * POST /v1/daily-path — candidate-grade daily MTM; one isolate per logic.
- */
 
 import { evaluateLogicAcrossPeriods, rankSurvivors } from "./eval";
 import {
@@ -44,7 +40,6 @@ async function tokenMatches(provided: string, expected: string): Promise<boolean
 }
 
 async function authorized(request: Request, expected?: string): Promise<boolean> {
-  // Unset token → allow.
   if (!expected) return true;
   const got =
     request.headers.get("X-Mass-Eval-Token") ||
@@ -98,13 +93,6 @@ function parseRequest(body: unknown): { ok: true; value: MassEvalRequest } | { o
       family_id: raw.family_id != null ? String(raw.family_id) : undefined,
       strategy_id: raw.strategy_id != null ? String(raw.strategy_id) : undefined,
       params: isObject(raw.params) ? (raw.params as Record<string, unknown>) : {},
-      thesis: raw.thesis != null ? String(raw.thesis) : undefined,
-      signal_definition:
-        raw.signal_definition != null ? String(raw.signal_definition) : undefined,
-      position_rule: raw.position_rule != null ? String(raw.position_rule) : undefined,
-      datasets: Array.isArray(raw.datasets)
-        ? raw.datasets.map((d) => String(d))
-        : undefined,
       period_nets: Array.isArray(raw.period_nets)
         ? (raw.period_nets as Array<number | null>)
         : undefined,
@@ -285,9 +273,7 @@ async function runMassEval(
     candidate_grade: false,
     wall_time_ms: Date.now() - t0,
     freezes,
-    note:
-      "Period-net screen only; n_survivors is not a daily_path_DD pass. " +
-      `mode=${mode}. Missing thicken sidecars → disclosed MDH fallback.`,
+    note: "Period-net screen only; n_survivors is not a pass.",
   };
 
   const manifest = {
@@ -347,23 +333,7 @@ async function runMassEval(
     putJson(env.STRUCTURED_BUCKET, manifest.keys.panels_meta, panelsMeta),
   ]);
 
-  const logicKeys: Record<string, string> = {};
-  if (results.length <= 50) {
-    await Promise.all(
-      results.map(async (r) => {
-        const key = `${prefix}/logic=${encodeURIComponent(r.logic_id)}/result.json`;
-        await putJson(env.STRUCTURED_BUCKET, key, r);
-        logicKeys[r.logic_id] = key;
-      }),
-    );
-  }
-
-  const r2Keys: Record<string, string> = {
-    ...manifest.keys,
-    ...Object.fromEntries(
-      Object.entries(logicKeys).map(([k, v]) => [`logic:${k}`, v]),
-    ),
-  };
+  const r2Keys: Record<string, string> = { ...manifest.keys };
 
   return {
     version,
@@ -457,8 +427,7 @@ async function runDailyPath(
     promote_as_main: false,
     go: false,
     freezes,
-    note:
-      "Candidate-grade daily MTM. Fan-out one POST per logic. Not a promotion.",
+    note: "Candidate-grade daily MTM. Not a promotion.",
   };
   if (req.write_artifacts === true) {
     const prefix = `research/eval/job=${req.job_id}`;
@@ -484,7 +453,6 @@ export default {
         has_structured_bucket: Boolean(env.STRUCTURED_BUCKET),
         has_d1: Boolean(env.DB),
         token_required: Boolean(env.MASS_EVAL_TOKEN),
-        modes: ["r2_panels", "d1_bars", "synthetic", "nets_only"],
         freezes: freezePayload(env),
       });
     }

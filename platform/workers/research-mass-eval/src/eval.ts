@@ -1,5 +1,3 @@
-/** Period-net screen. Missing sidecars → disclosed MDH, never silent. */
-
 import {
   hasPairwiseLowVarianceArtifact,
   invertNets,
@@ -1967,7 +1965,6 @@ export function evaluateLogicAcrossPeriods(
     logic_id: logicId,
     family_id: family,
     params: logic.params || {},
-    thesis: logic.thesis,
     status: errors.length && okRows.length === 0 ? "eval_error" : "ok",
     n_periods_ok: okRows.length,
     n_periods_total: periodRows.length,

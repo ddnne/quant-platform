@@ -1,7 +1,4 @@
-"""CF mass-eval Worker invoke / deploy / run. Not a pass / not GO.
-
-Job spec stays in ``research.cf_mass_eval_job``. Period-net n_survivors is not candidate-grade.
-"""
+"""CF mass-eval Worker invoke / deploy / run. Not a pass / not GO."""
 from __future__ import annotations
 
 import json
@@ -21,7 +18,6 @@ from research.cf_mass_eval_job import (
     DEFAULT_MAX_CODES,
     DEFAULT_MAX_DAYS,
     DEFAULT_ONE_WAY,
-    DEFAULT_WORKER_NAME,
     DEFAULT_WORKER_URL,
     CfMassEvalError,
     _freeze,
@@ -424,8 +420,6 @@ def try_cf_mass_eval_status() -> dict[str, Any]:
         "status": "implemented",
         "version": CF_MASS_EVAL_VERSION,
         "wave": CF_MASS_EVAL_WAVE,
-        "worker": DEFAULT_WORKER_NAME,
-        "worker_url": DEFAULT_WORKER_URL,
         "default_mode": DEFAULT_MASS_EVAL_MODE,
         "screen_kind": "period_net",
         "daily_path_complete": False,

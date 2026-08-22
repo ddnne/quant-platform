@@ -1,8 +1,4 @@
-"""CF multi-logic × multi-period mass-eval job spec / panel cache.
-
-Worker: ``platform/workers/research-mass-eval``. Staging: ``cf_mass_eval_stage``.
-Run/invoke: ``cf_mass_eval_run``. Period-net n_survivors is not a pass / not GO.
-"""
+"""CF multi-logic × multi-period mass-eval job spec / panel cache. Not a pass / not GO."""
 
 from __future__ import annotations
 
@@ -17,17 +13,10 @@ from uuid import uuid4
 
 from research.bar_native_specs import BAR_NATIVE_SPECS
 from research.cf_mass_eval_stage import (
-    COMPLETE_22_DATASETS,
-    COMPLETE_22_DATASET_SET,
     DEFAULT_MAX_CODES,
     DEFAULT_MAX_DAYS,
-    PRIMARY_BARS_DATASET,
-    PRIMARY_INDEX_DATASETS,
     RESEARCH_ARTIFACT_BUCKET,
     RESEARCH_ARTIFACT_PREFIX,
-    THICKEN_PANEL_DATASETS,
-    build_real_period_panel,
-    inventory_complete22,
     normalize_period_row,
     stage_real_panels_to_r2,
 )
@@ -37,7 +26,6 @@ from research.single_shot_job import default_r2_put
 
 CF_MASS_EVAL_VERSION: str = "cf-mass-eval-job/v6"
 CF_MASS_EVAL_WAVE: str = "research-mass-eval"
-DEFAULT_WORKER_NAME: str = "quant-platform-research-mass-eval"
 DEFAULT_WORKER_URL: str = (
     "https://quant-platform-research-mass-eval.taku-haga.workers.dev"
 )
@@ -177,10 +165,6 @@ def default_logic_specs(
                     "logic_id": str(spec.get("logic_id") or lid),
                     "family_id": str(spec.get("family_id") or "unique_logic"),
                     "params": params,
-                    "thesis": spec.get("thesis") or "",
-                    "signal_definition": spec.get("signal_definition") or "",
-                    "position_rule": spec.get("position_rule") or "",
-                    "datasets_used": list(spec.get("datasets") or []),
                 }
             )
             continue
@@ -191,10 +175,6 @@ def default_logic_specs(
                     "logic_id": lid,
                     "family_id": "unknown",
                     "params": {},
-                    "thesis": "",
-                    "signal_definition": "",
-                    "position_rule": "",
-                    "datasets_used": [],
                 }
             )
             continue
@@ -203,10 +183,6 @@ def default_logic_specs(
                 "logic_id": row["logic_id"],
                 "family_id": row["family_id"],
                 "params": dict(row.get("params") or {}),
-                "thesis": row.get("thesis") or "",
-                "signal_definition": row.get("signal_definition") or "",
-                "position_rule": row.get("position_rule") or "",
-                "datasets_used": list(row.get("datasets_used") or []),
             }
         )
     return out
@@ -369,7 +345,6 @@ def build_cf_mass_eval_job_spec(
             f"mode must be one of {sorted(ALLOWED_MODES)}, got {mode_s!r}"
         )
     jid = str(job_id or f"mass-eval-{uuid4().hex[:12]}")
-    paths = design_mass_factory_paths(jid)
     logics = default_logic_specs(logic_ids)
     if extra_logics:
         for raw in extra_logics:
@@ -410,12 +385,7 @@ def build_cf_mass_eval_job_spec(
         "max_codes": int(max_codes),
         "max_days": int(max_days),
         "one_way_cost": float(one_way_cost),
-        "artifact": paths,
         "freezes": _freeze(),
-        "mass_research": MASS_RESEARCH,
-        "ready_declared": False,
-        "operational_go": False,
-        "continuous_paper": CONTINUOUS_PAPER,
     }
 
 
@@ -432,11 +402,6 @@ __all__ = [
     "CF_MASS_EVAL_VERSION",
     "CF_MASS_EVAL_WAVE",
     "CF_BAR_NATIVE_LOGIC_IDS",
-    "COMPLETE_22_DATASETS",
-    "COMPLETE_22_DATASET_SET",
-    "PRIMARY_BARS_DATASET",
-    "PRIMARY_INDEX_DATASETS",
-    "THICKEN_PANEL_DATASETS",
     "DEFAULT_LITE_PERIODS",
     "DEFAULT_REAL_MULTIYEAR_PERIODS",
     "DEFAULT_MASS_EVAL_MODE",
@@ -452,8 +417,6 @@ __all__ = [
     "panels_cache_id",
     "PANELS_CACHE_PREFIX",
     "normalize_period_row",
-    "inventory_complete22",
-    "build_real_period_panel",
     "stage_real_panels_to_r2",
     "build_cf_mass_eval_job_spec",
     "invoke_cf_mass_eval_worker",

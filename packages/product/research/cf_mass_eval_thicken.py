@@ -20,15 +20,6 @@ from research.eval_loaders import (
 )
 from research.eval_universe import DEFAULT_SQLITE
 
-THICKEN_PANEL_DATASETS: tuple[str, ...] = (
-    "markets_calendar",
-    "jsda_tokyo_repo_rates",
-    "markets_margin_interest",
-    "markets_short_ratio",
-    "fins_summary",
-    "indices_bars_daily_topix",
-)
-
 
 def _load_markets_calendar_map(
     *,
@@ -374,7 +365,6 @@ def attach_opt225_regime() -> dict[str, Any]:
         opt225 = load_opt225_regime_bundle_for_eval()
         if opt225:
             compact: dict[str, Any] = {
-                "spread_convention": opt225.get("spread_convention"),
                 "units": opt225.get("units"),
                 "dataset": opt225.get("dataset"),
                 "version": opt225.get("version"),
@@ -391,7 +381,7 @@ def attach_opt225_regime() -> dict[str, Any]:
                 ser = dict(opt225.get(kind) or {})
                 if not ser:
                     continue
-                entry = {
+                compact[kind] = {
                     "source": ser.get("source"),
                     "dataset": ser.get("dataset"),
                     "series_kind": ser.get("series_kind"),
@@ -403,19 +393,6 @@ def attach_opt225_regime() -> dict[str, Any]:
                     "rv_long_by_date": ser.get("rv_long_by_date") or {},
                     "rv_ratio_by_date": ser.get("rv_ratio_by_date") or {},
                 }
-                if kind == "atm_iv":
-                    entry["compare_only"] = True
-                    entry["role"] = "compare_only"
-                if kind == "basevol":
-                    entry["role"] = "canonical_level"
-                compact[kind] = entry
-            compact["canonical_level"] = opt225.get("canonical_level") or "basevol"
-            compact["atm_iv_role"] = opt225.get("atm_iv_role") or "compare_only"
-            compact["skew_convention"] = opt225.get("skew_convention")
-            compact["cm_term_convention"] = opt225.get("cm_term_convention")
-            compact["basevol_delta_convention"] = opt225.get(
-                "basevol_delta_convention"
-            )
             base_vol_series = dict(
                 (compact.get("basevol") or {}).get("rv_abs_by_date") or {}
             )

@@ -1,6 +1,5 @@
 export interface Env {
   STRUCTURED_BUCKET: R2Bucket;
-  /** D1 bind for mode=d1_bars (hot window only). */
   DB?: D1Database;
   MASS_EVAL_TOKEN?: string;
   MASS_EVAL_VERSION?: string;
@@ -17,10 +16,6 @@ export interface LogicSpec {
   family_id?: string;
   strategy_id?: string;
   params?: Record<string, unknown>;
-  thesis?: string;
-  signal_definition?: string;
-  position_rule?: string;
-  datasets?: string[];
   /** Pre-baked period nets skip the bar path when present. */
   period_nets?: Array<number | null>;
   period_grosses?: Array<number | null>;
@@ -67,8 +62,6 @@ export interface Opt225RegimeSeries extends NkyVolSeries {
   series_kind?: string;
   units?: string;
   dataset?: string;
-  role?: string;
-  compare_only?: boolean;
 }
 
 export interface Opt225RegimeBundle {
@@ -79,17 +72,12 @@ export interface Opt225RegimeBundle {
   units?: string;
   dataset?: string;
   version?: string;
-  canonical_level?: string;
-  atm_iv_role?: string;
   basevol?: Opt225RegimeSeries | null;
   atm_iv?: Opt225RegimeSeries | null;
   spread?: Opt225RegimeSeries | null;
   spread_change?: Opt225RegimeSeries | null;
-  /** put_iv(~0.95*UnderPx) − atm_mid_iv */
   skew?: Opt225RegimeSeries | null;
-  /** near_cm_atm_iv − next_cm_atm_iv */
   cm_term?: Opt225RegimeSeries | null;
-  /** BaseVol[t] − BaseVol[t-1] */
   basevol_delta?: Opt225RegimeSeries | null;
 }
 
@@ -104,7 +92,6 @@ export interface RepoRateRegime {
   n_obs?: number;
   short_tenor?: string;
   long_tenor?: string;
-  role?: string;
 }
 
 export interface CalendarSideCar {
@@ -126,7 +113,6 @@ export interface FlowRegime {
   n_codes?: number;
   n_obs?: number;
   n_short_obs?: number;
-  role?: string;
 }
 
 export interface FundRegime {
@@ -153,7 +139,6 @@ export interface FundRegime {
   >;
   n_codes?: number;
   n_events?: number;
-  role?: string;
 }
 
 export interface PeriodPanel {
@@ -166,21 +151,18 @@ export interface PeriodPanel {
   source: string;
   nky_vol_series?: NkyVolSeries | null;
   opt225_regime?: Opt225RegimeBundle | null;
-  /** Canonical BaseVol level (percent vol points). */
   base_vol_series?: Record<string, number> | null;
-  /** ATM IV — compare-only. */
   atm_iv_series?: Record<string, number> | null;
   iv_base_spread?: Record<string, number> | null;
   skew_series?: Record<string, number> | null;
   cm_term_series?: Record<string, number> | null;
   basevol_delta_series?: Record<string, number> | null;
   repo_rate_regime?: RepoRateRegime | null;
-  /** Flat alias of repo rates_by_date. */
   repo_rate_by_date?: Record<string, number> | null;
   calendar?: CalendarSideCar | null;
   flow_regime?: FlowRegime | null;
   fund_regime?: FundRegime | null;
-  /** Average daily yen turnover by code. Missing → tx+repo only. */
+  /** Missing ADV → tx+repo only. */
   adv_by_code?: Record<string, number> | null;
 }
 
@@ -205,7 +187,6 @@ export interface LogicEvalResult {
   logic_id: string;
   family_id: string;
   params: Record<string, unknown>;
-  thesis?: string;
   status: string;
   n_periods_ok: number;
   n_periods_total: number;
