@@ -15,7 +15,6 @@ from features.minimal_signal import (
     DEFAULT_FEATURE_IDS as APPROVED_SIGNAL_LEGS,
     DEFAULT_SIGNAL_DATASETS,
     DEFAULT_VOLUME_SIGN_ABS_MIN,
-    FEATURE_STATUS_PINS,
     SIGNAL_ID as DEFAULT_SIGNAL_ID,
 )
 from features.registry import get as get_feature
@@ -174,11 +173,6 @@ def harness_freeze_status() -> dict[str, Any]:
         **dict(freeze_status()),
         **_closed_flags(
             harness_version=HARNESS_VERSION,
-            pipeline=list(PIPELINE),
-            approved_signal_legs=list(APPROVED_SIGNAL_LEGS),
-            feature_status_pins=dict(FEATURE_STATUS_PINS),
-            default_signal_datasets=list(DEFAULT_SIGNAL_DATASETS),
-            default_eval_codes=list(DEFAULT_EVAL_CODES),
             connected_to_mass_research_loop=CONNECTED_TO_MASS_RESEARCH_LOOP,
             label=NEXTDAY_RESEARCH_LABEL,
         ),
@@ -451,10 +445,6 @@ def run_multi_period_multisignal_compare(
                     "codes": list(ex.codes),
                     "as_of_days": list(ex.as_of_days),
                     "history_source": ex.batch_summary.get("history_source"),
-                    "tip_plane": ex.batch_summary.get("tip_plane"),
-                    "extracted_row_counts": ex.batch_summary.get(
-                        "tip_extracted_row_counts"
-                    ),
                     "compare_table": _compact_compare_rows(ex.batch_summary),
                     "batch_summary_r2_key": ex.batch_summary_r2_key,
                     "coverage_notes": p.get("coverage_notes"),
@@ -505,45 +495,21 @@ def run_multi_period_multisignal_compare(
     }
 
 
-# Multi-year / checklist live in research.eval_harness_multiyear (re-exported).
-_MULTIYEAR_EXPORTS: tuple[str, ...] = (
-    "CHECKLIST_VERSION",
-    "CHECKLIST_VERSION_V1",
-    "CHECKLIST_V2_INSUFFICIENT",
-    "CHECKLIST_V2_NEAR_REQUIRED",
-    "CHECKLIST_V2_REQUIRED",
-    "COST_MODEL_PREFER_LIQUIDITY_LINKED",
-    "COST_MODEL_PREFER_REPO_LINKED",
-    "COST_MODEL_REQUIRE_LIQUIDITY_LINKED",
-    "COST_MODEL_REQUIRE_REPO_LINKED",
-    "DEFAULT_MULTIYEAR_CODES",
-    "DEFAULT_MULTIYEAR_YEARS",
-    "MULTI_YEAR_LABEL",
-    "MULTI_YEAR_VERSION",
-    "STANDARD_EVAL_DAILY_PATH_DD_PROOF",
-    "STANDARD_EVAL_MODES",
-    "design_yearly_eval_windows",
-    "evaluate_checklist_v2_completeness",
-    "multi_year_availability_table",
-    "run_multi_year_extra_hyp_eval",
-    "run_multi_year_s1_eval",
-    "run_standard_research_eval",
-    "standard_research_eval_checklist_document",
-    "standard_research_eval_checklist_run",
-)
-_MULTIYEAR_EXPORT_SET: frozenset[str] = frozenset(_MULTIYEAR_EXPORTS)
+# Multi-year / checklist names stay on this module via lazy re-export.
 
 
 def __getattr__(name: str):
-    if name in _MULTIYEAR_EXPORT_SET:
-        import research.eval_harness_multiyear as _eval_harness_multiyear
+    import research.eval_harness_multiyear as _my
 
-        return getattr(_eval_harness_multiyear, name)
+    if name in _my.__all__:
+        return getattr(_my, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def __dir__() -> list[str]:
-    return sorted(set(globals()) | _MULTIYEAR_EXPORT_SET | set(__all__))
+    import research.eval_harness_multiyear as _my
+
+    return sorted(set(globals()) | set(_my.__all__))
 
 
 __all__ = [
@@ -575,5 +541,4 @@ __all__ = [
     "run_nextday_return_eval",
     "run_research_walk_forward_multisignal",
     "split_asof_days_walk_forward",
-    *_MULTIYEAR_EXPORTS,
 ]
