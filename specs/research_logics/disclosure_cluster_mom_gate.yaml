@@ -1,3 +1,4 @@
+# unique22 occupancy-mismatch park: leftover Worker occupancy is not comboEventGateOk-equal. Not a candidate. Do not drop leftover body.
 logic_id: disclosure_cluster_mom_gate
 family_id: disclosure_cluster_gate
 family: event

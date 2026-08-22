@@ -64,52 +64,52 @@ const PROPOSE_AI_MODEL = "@cf/meta/llama-3.1-8b-instruct-fp8";
 const PROPOSE_ALLOWED_DATASETS = [
   "equities_bars_daily",
   "fins_summary",
+  "jsda_tokyo_repo_rates",
   "markets_calendar",
   "markets_margin_interest",
   "markets_short_ratio",
-  "jsda_tokyo_repo_rates",
 ] as const;
 
 /** Economic gates only. Weekday/calendar permutations are not a new thesis. */
 const PROPOSE_ALLOWED_GATES = [
   "afterclose",
-  "overnight_easing",
-  "overnight_tightening",
-  "easy_funding",
-  "tight_funding",
-  "steep_curve",
-  "uncrowded_margin",
-  "crowded_margin",
-  "cluster",
-  "invert_curve",
-  "on_impulse",
   "cheap_iv",
-  "rich_iv",
   "cheap_pb",
-  "positive_eps",
-  "eps_up",
+  "cluster",
+  "crowded_margin",
+  "curve_flatten",
   "div_positive",
-  "margin_up",
-  "margin_down",
+  "easy_funding",
+  "eps_down",
+  "eps_up",
   "eq_ar_falling",
   "eq_ar_high",
   "eq_ar_low",
   "eq_ar_rising",
-  "eps_down",
-  "np_negative",
-  "pb_rising",
-  "roe_low",
-  "sales_down",
-  "ta_down",
-  "ta_up",
-  "overnight_p10",
-  "curve_flatten",
-  "repo_3m_down",
-  "nky_vol_high_skip",
+  "invert_curve",
   "large_surprise",
   "liq_high",
+  "margin_down",
+  "margin_up",
+  "nky_vol_high_skip",
+  "np_negative",
+  "on_impulse",
+  "overnight_easing",
+  "overnight_p10",
+  "overnight_tightening",
+  "pb_rising",
+  "positive_eps",
   "pre_mom",
   "price_down",
+  "repo_3m_down",
+  "rich_iv",
+  "roe_low",
+  "sales_down",
+  "steep_curve",
+  "ta_down",
+  "ta_up",
+  "tight_funding",
+  "uncrowded_margin",
 ] as const;
 
 function normalizeProposalRow(
@@ -131,7 +131,7 @@ function normalizeProposalRow(
   const gates = (Array.isArray(row.gates) ? row.gates : [])
     .map((x) => String(x))
     .filter((x) => gateAllow.has(x));
-  if (gates.length < 2) return null;
+  if (gates.length < 2 || gates.length > 3) return null;
   const gset = new Set(gates);
   const contra: string[][] = [
     ["easy_funding", "tight_funding"],
@@ -225,8 +225,8 @@ async function llmProposals(
             "datasets (string array), gates (string array), why_different_from (string array). " +
             "datasets MUST be a subset of: equities_bars_daily, fins_summary, " +
             "markets_calendar, markets_margin_interest, markets_short_ratio, " +
-            "jsda_tokyo_repo_rates. gates MUST be 2+ distinct economic gates " +
-            "(AND-cross, not a single-gate PEAD filter) from: liq_high, cheap_pb, " +
+            "jsda_tokyo_repo_rates. gates MUST be 2 or 3 distinct economic gates " +
+            "(AND-cross, not a single-gate PEAD filter, not 4+ sparse AND) from: liq_high, cheap_pb, " +
             "eq_ar_high, eq_ar_rising, ta_up, ta_down, margin_up, margin_down, " +
             "crowded_margin, uncrowded_margin, easy_funding, tight_funding, " +
             "afterclose, cluster, pre_mom, price_down, eps_up, eps_down, " +

@@ -17,7 +17,10 @@ from research.cf_mass_eval_job import (
     resolve_research_run_token,
 )
 from research.complete21 import COMPLETE_21_DATASET_SET
-from research.unique_logic.constants import PROPOSE_ALLOWED_GATES
+from research.unique_logic.constants import (
+    PROPOSE_ALLOWED_GATES,
+    SPARSE_GATE_COMBOS,
+)
 
 # Copied from factory_propose._is_window_tweak_only (do not import factory).
 _TWEAK_WORDS = ("window", "hold_days only", "mom only", "frac only")
@@ -43,6 +46,8 @@ _PROMPT_DIRECTION_ECHO: tuple[str, ...] = (
     "disclosure × funding",
     "disclosure x funding",
 )
+
+PROPOSE_MAX_AND_GATES: int = 3
 
 PROPOSE_CONTRADICTORY_GATE_PAIRS: tuple[frozenset[str], ...] = (
     frozenset({"easy_funding", "tight_funding"}),
@@ -160,9 +165,15 @@ def review_proposal_row(proposal: Mapping[str, Any]) -> dict[str, Any]:
             reasons.append("contradictory_gates")
         if len(kept_g) < 2:
             reasons.append("gates_not_a_cross")
+        if len(kept_g) > PROPOSE_MAX_AND_GATES:
+            reasons.append("and_cross_too_wide")
         blob = thesis.lower().replace("×", "x")
         if any(echo.replace("×", "x") in blob for echo in _PROMPT_DIRECTION_ECHO):
             reasons.append("prompt_direction_echo")
+        for combo, _reason in SPARSE_GATE_COMBOS:
+            if combo <= kept_set:
+                reasons.append("sparse_gate_combo")
+                break
     ok = not reasons
     return {
         "ok": ok,
@@ -174,6 +185,30 @@ def review_proposal_row(proposal: Mapping[str, Any]) -> dict[str, Any]:
         "not_injected": True,
         "not_a_pass": True,
     }
+
+
+def catalog_gate_set_avoid(*, limit: int = 12) -> list[str]:
+    """Existing combo AND-sets for LLM why_avoid. Not a scorecard."""
+    from research.unique_logic.catalog import yaml_combo_rows
+
+    seen: list[str] = []
+    have: set[str] = set()
+    for row in yaml_combo_rows():
+        gates = sorted(
+            str(x)
+            for x in ((row.get("params") or {}).get("gates") or [])
+            if str(x).strip()
+        )
+        if not (2 <= len(gates) <= PROPOSE_MAX_AND_GATES):
+            continue
+        token = "+".join(gates)
+        if token in have:
+            continue
+        have.add(token)
+        seen.append(token)
+        if len(seen) >= int(limit):
+            break
+    return seen
 
 
 def reject_window_tweak(proposal: Mapping[str, Any]) -> bool:
@@ -315,9 +350,19 @@ def invoke_cf_propose_thesis(
 
     url = worker_url.rstrip("/") + "/v1/propose-thesis"
     tok = resolve_research_run_token() or ""
+    avoid: list[str] = []
+    seen_avoid: set[str] = set()
+    for item in list(why_avoid or ()) + catalog_gate_set_avoid():
+        tok = str(item).strip()
+        if not tok or tok in seen_avoid:
+            continue
+        seen_avoid.add(tok)
+        avoid.append(tok)
+        if len(avoid) >= 12:
+            break
     body: dict[str, Any] = {
         "n": max(1, min(3, int(n))),
-        "why_avoid": [str(x) for x in (why_avoid or ())],
+        "why_avoid": avoid,
         "write_artifacts": bool(write_artifacts),
         "auto_inject": False,
         "go": False,
@@ -395,6 +440,7 @@ def invoke_cf_propose_thesis(
 __all__ = [
     "PROPOSE_ALLOWED_DATASETS",
     "STUB_PROPOSAL_TEMPLATES",
+    "catalog_gate_set_avoid",
     "invoke_cf_propose_thesis",
     "reject_window_tweak",
     "review_proposal_row",

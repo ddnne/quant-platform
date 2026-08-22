@@ -133,7 +133,7 @@ def test_worker_index_contains_propose_thesis_route() -> None:
     assert "PROPOSE_ALLOWED_GATES" in src
     assert "Do not invent datasets" in src or "do not invent datasets" in src.lower()
     assert "weekday-only" in src or "No weekday" in src
-    assert "2+" in src or "AND-cross" in src
+    assert "2+" in src or "AND-cross" in src or "2 or 3" in src
     assert "Liquidity × Fundamentals" in src or "direction labels" in src
     assert "auto_inject: false" in src
     assert "markets_margin_interest" in src
@@ -220,3 +220,29 @@ def test_review_proposal_row_rejects_invent_and_weekday() -> None:
     bad_echo = review_proposal_row(echo)
     assert bad_echo["ok"] is False
     assert "prompt_direction_echo" in bad_echo["reasons"]
+
+    wide = dict(good)
+    wide["gates"] = ["ta_down", "margin_up", "repo_3m_down", "afterclose"]
+    bad_w = review_proposal_row(wide)
+    assert bad_w["ok"] is False
+    assert "and_cross_too_wide" in bad_w["reasons"]
+
+
+def test_catalog_gate_set_avoid_is_existing_crosses() -> None:
+    from research.cf_propose_thesis import catalog_gate_set_avoid
+
+    tokens = catalog_gate_set_avoid(limit=8)
+    assert 1 <= len(tokens) <= 8
+    assert all("+" in t for t in tokens)
+    posted: dict[str, object] = {}
+
+    def _post(*, url: str, body: bytes, headers: dict[str, str]) -> dict:
+        posted["body"] = body
+        from research.cf_propose_thesis import stub_propose_thesis_result
+
+        return stub_propose_thesis_result(n=1)
+
+    invoke_cf_propose_thesis(n=1, http_post=_post)
+    blob = posted["body"].decode("utf-8")
+    assert "why_avoid" in blob
+    assert "+" in blob

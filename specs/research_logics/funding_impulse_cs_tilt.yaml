@@ -1,3 +1,4 @@
+# unique22 occupancy-mismatch park: leftover Worker occupancy is not comboEventGateOk-equal. Not a candidate. Do not drop leftover body.
 logic_id: funding_impulse_cs_tilt
 family_id: funding_impulse_cs
 family: cs

@@ -53,8 +53,10 @@ def main() -> int:
         EVENT_FILTER_LOGIC_IDS,
         EVENT_LOGIC_IDS,
         EVENT_SIDES_LOGIC_IDS,
+        PROPOSE_ALLOWED_GATES,
         PYTHON_ONLY_EVENT_GATES,
     )
+    from research.cf_propose_thesis import PROPOSE_ALLOWED_DATASETS
 
     py_only = set(PYTHON_ONLY_EVENT_GATES) & set(COMBO_EVENT_GATES)
     if py_only:
@@ -160,6 +162,41 @@ def main() -> int:
         print("rewrote", path)
     else:
         print("already in sync", path)
+    propose_path = (
+        root
+        / "platform"
+        / "workers"
+        / "research-mass-eval"
+        / "src"
+        / "propose_thesis.ts"
+    )
+    psrc = propose_path.read_text(encoding="utf-8")
+    p2, pn1 = re.subn(
+        r"const PROPOSE_ALLOWED_DATASETS = \[.*?\] as const;",
+        _ts_array("PROPOSE_ALLOWED_DATASETS", sorted(PROPOSE_ALLOWED_DATASETS)).replace(
+            "export const ", "const "
+        ),
+        psrc,
+        count=1,
+        flags=re.S,
+    )
+    p2, pn2 = re.subn(
+        r"const PROPOSE_ALLOWED_GATES = \[.*?\] as const;",
+        _ts_array("PROPOSE_ALLOWED_GATES", sorted(PROPOSE_ALLOWED_GATES)).replace(
+            "export const ", "const "
+        ),
+        p2,
+        count=1,
+        flags=re.S,
+    )
+    if pn1 != 1 or pn2 != 1:
+        raise SystemExit(f"propose rewrite failed n_ds={pn1} n_gates={pn2}")
+    if p2 != psrc:
+        propose_path.write_text(p2, encoding="utf-8")
+        print("rewrote", propose_path)
+    else:
+        print("already in sync", propose_path)
+
     print(
         "n_event",
         len(event_ids),
@@ -171,6 +208,8 @@ def main() -> int:
         len(unique_cs_ids),
         "n_gates",
         len(gate_ids),
+        "n_propose_gates",
+        len(PROPOSE_ALLOWED_GATES),
     )
     return 0
 

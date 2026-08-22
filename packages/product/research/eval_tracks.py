@@ -70,8 +70,9 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "track": EVAL_TRACK_LIQ_LARGE,
         "why": (
             "POST /v1/propose-thesis Workers AI; review_proposal_row requires "
-            "2+ economic gates, no catalog clone, no prompt-direction echo, "
-            "no contradictory pairs; no auto-inject"
+            "2-3 economic gates, no catalog clone, no prompt-direction echo, "
+            "no contradictory/sparse/4-AND; why_avoid includes catalog gate-sets; "
+            "no auto-inject"
         ),
         "not_a_pass": True,
         "go": False,
