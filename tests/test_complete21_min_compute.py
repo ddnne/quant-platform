@@ -7,8 +7,6 @@ Shared builders: ``tests/complete21_min_util.py``.
 
 from __future__ import annotations
 
-import json
-
 import pytest
 
 from features import compute, get
@@ -16,110 +14,31 @@ from storage.sqlite_store import SqliteStore
 
 from tests.complete21_min_util import (
     CODES,
+    _seed_c21,
     _upsert_jquants_records,
     _upsert_repo_rates,
     close_iso,
-    seed_db,
 )
 
 
 def test_pit_gate_hides_future_available_at_margin_and_disclosure(tmp_path):
     """PIT: rows with available_at > as_of must not affect feature values."""
-    days = ["2025-04-01", "2025-04-02"]
-    db = seed_db(
-        tmp_path,
-        days=days,
-        prices={CODES[0]: {d: 100.0 for d in days}},
-    )
-    store = SqliteStore(db)
+    _days, db = _seed_c21(tmp_path)
     # D1 margin obs: published at D1 close (visible at as_of=D1).
     # D2 margin obs: published at D2 close only (hidden at as_of=D1).
-    store.upsert(
-        "jquants_records",
-        [
-            {
-                "source": "jquants",
-                "dataset": "markets_margin_interest",
-                "natural_key": json.dumps(
-                    {"Code": CODES[0], "Date": "2025-04-01"},
-                    sort_keys=True,
-                    separators=(",", ":"),
-                ),
-                "event_time": "2025-04-01T00:00:00+09:00",
-                "available_at": close_iso("2025-04-01"),
-                "ingested_at": close_iso("2025-04-01"),
-                "payload": json.dumps(
-                    {
-                        "Date": "2025-04-01",
-                        "Code": CODES[0],
-                        "LongVol": 100.0,
-                        "ShrtVol": 0.0,
-                    },
-                    ensure_ascii=False,
-                ),
-                "raw_payload": json.dumps(
-                    {
-                        "Date": "2025-04-01",
-                        "Code": CODES[0],
-                        "LongVol": 100.0,
-                        "ShrtVol": 0.0,
-                    },
-                    ensure_ascii=False,
-                ),
-            },
-            {
-                "source": "jquants",
-                "dataset": "markets_margin_interest",
-                "natural_key": json.dumps(
-                    {"Code": CODES[0], "Date": "2025-04-02"},
-                    sort_keys=True,
-                    separators=(",", ":"),
-                ),
-                "event_time": "2025-04-02T00:00:00+09:00",
-                "available_at": close_iso("2025-04-02"),
-                "ingested_at": close_iso("2025-04-02"),
-                "payload": json.dumps(
-                    {
-                        "Date": "2025-04-02",
-                        "Code": CODES[0],
-                        "LongVol": 200.0,
-                        "ShrtVol": 0.0,
-                    },
-                    ensure_ascii=False,
-                ),
-                "raw_payload": json.dumps(
-                    {
-                        "Date": "2025-04-02",
-                        "Code": CODES[0],
-                        "LongVol": 200.0,
-                        "ShrtVol": 0.0,
-                    },
-                    ensure_ascii=False,
-                ),
-            },
-            {
-                "source": "jquants",
-                "dataset": "fins_summary",
-                "natural_key": json.dumps(
-                    {"Code": CODES[0], "Date": "2025-04-02"},
-                    sort_keys=True,
-                    separators=(",", ":"),
-                ),
-                "event_time": "2025-04-02T00:00:00+09:00",
-                "available_at": close_iso("2025-04-02"),
-                "ingested_at": close_iso("2025-04-02"),
-                "payload": json.dumps(
-                    {"Code": CODES[0], "Date": "2025-04-02", "NetSales": 1},
-                    ensure_ascii=False,
-                ),
-                "raw_payload": json.dumps(
-                    {"Code": CODES[0], "Date": "2025-04-02", "NetSales": 1},
-                    ensure_ascii=False,
-                ),
-            },
+    _upsert_jquants_records(
+        db,
+        dataset="markets_margin_interest",
+        payloads=[
+            {"Date": "2025-04-01", "Code": CODES[0], "LongVol": 100.0, "ShrtVol": 0.0},
+            {"Date": "2025-04-02", "Code": CODES[0], "LongVol": 200.0, "ShrtVol": 0.0},
         ],
     )
-    store.close()
+    _upsert_jquants_records(
+        db,
+        dataset="fins_summary",
+        payloads=[{"Code": CODES[0], "Date": "2025-04-02", "NetSales": 1}],
+    )
 
     # At D1 close: only one margin obs → insufficient; disclosure flag 0.
     margin_early = compute(
@@ -158,84 +77,33 @@ def test_pit_gate_hides_future_available_at_margin_and_disclosure(tmp_path):
 
 
 def test_pit_gate_hides_future_short_ratio_and_margin_alert(tmp_path):
-    days = ["2025-04-01", "2025-04-02"]
-    db = seed_db(
-        tmp_path,
-        days=days,
-        prices={CODES[0]: {d: 100.0 for d in days}},
-    )
-    store = SqliteStore(db)
+    _days, db = _seed_c21(tmp_path)
     # Short ratio published only at D2 close.
-    store.upsert(
-        "jquants_records",
-        [
+    _upsert_jquants_records(
+        db,
+        dataset="markets_short_ratio",
+        payloads=[
             {
-                "source": "jquants",
-                "dataset": "markets_short_ratio",
-                "natural_key": json.dumps(
-                    {"Date": "2025-04-02", "S33": "0050"},
-                    sort_keys=True,
-                    separators=(",", ":"),
-                ),
-                "event_time": "2025-04-02T00:00:00+09:00",
-                "available_at": close_iso("2025-04-02"),
-                "ingested_at": close_iso("2025-04-02"),
-                "payload": json.dumps(
-                    {
-                        "Date": "2025-04-02",
-                        "S33": "0050",
-                        "SellExShortVa": 200.0,
-                        "ShrtWithResVa": 40.0,
-                        "ShrtNoResVa": 10.0,
-                    },
-                    ensure_ascii=False,
-                ),
-                "raw_payload": json.dumps(
-                    {
-                        "Date": "2025-04-02",
-                        "S33": "0050",
-                        "SellExShortVa": 200.0,
-                        "ShrtWithResVa": 40.0,
-                        "ShrtNoResVa": 10.0,
-                    },
-                    ensure_ascii=False,
-                ),
-            },
-            {
-                "source": "jquants",
-                "dataset": "markets_margin_alert",
-                "natural_key": json.dumps(
-                    {
-                        "Code": CODES[0],
-                        "PubDate": "2025-04-02",
-                        "AppDate": "2025-04-02",
-                    },
-                    sort_keys=True,
-                    separators=(",", ":"),
-                ),
-                "event_time": "2025-04-02T00:00:00+09:00",
-                "available_at": close_iso("2025-04-02"),
-                "ingested_at": close_iso("2025-04-02"),
-                "payload": json.dumps(
-                    {
-                        "Code": CODES[0],
-                        "PubDate": "2025-04-02",
-                        "AppDate": "2025-04-02",
-                    },
-                    ensure_ascii=False,
-                ),
-                "raw_payload": json.dumps(
-                    {
-                        "Code": CODES[0],
-                        "PubDate": "2025-04-02",
-                        "AppDate": "2025-04-02",
-                    },
-                    ensure_ascii=False,
-                ),
+                "Date": "2025-04-02",
+                "S33": "0050",
+                "SellExShortVa": 200.0,
+                "ShrtWithResVa": 40.0,
+                "ShrtNoResVa": 10.0,
             },
         ],
     )
-    store.close()
+    _upsert_jquants_records(
+        db,
+        dataset="markets_margin_alert",
+        payloads=[
+            {
+                "Code": CODES[0],
+                "PubDate": "2025-04-02",
+                "AppDate": "2025-04-02",
+                "Date": "2025-04-02",
+            },
+        ],
+    )
 
     short_early = compute(
         "short_ratio_level",
@@ -271,49 +139,19 @@ def test_pit_gate_hides_future_short_ratio_and_margin_alert(tmp_path):
 
 
 def test_pit_gate_hides_future_futures_activity(tmp_path):
-    days = ["2025-04-01", "2025-04-02"]
-    db = seed_db(
-        tmp_path,
-        days=days,
-        prices={CODES[0]: {d: 100.0 for d in days}},
-    )
-    store = SqliteStore(db)
-    store.upsert(
-        "jquants_records",
-        [
+    _days, db = _seed_c21(tmp_path)
+    _upsert_jquants_records(
+        db,
+        dataset="derivatives_bars_daily_futures",
+        payloads=[
             {
-                "source": "jquants",
-                "dataset": "derivatives_bars_daily_futures",
-                "natural_key": json.dumps(
-                    {"Date": "2025-04-02", "Code": "160060019"},
-                    sort_keys=True,
-                    separators=(",", ":"),
-                ),
-                "event_time": "2025-04-02T00:00:00+09:00",
-                "available_at": close_iso("2025-04-02"),
-                "ingested_at": close_iso("2025-04-02"),
-                "payload": json.dumps(
-                    {
-                        "Date": "2025-04-02",
-                        "Code": "160060019",
-                        "Volume": 500.0,
-                        "Close": 28000.0,
-                    },
-                    ensure_ascii=False,
-                ),
-                "raw_payload": json.dumps(
-                    {
-                        "Date": "2025-04-02",
-                        "Code": "160060019",
-                        "Volume": 500.0,
-                        "Close": 28000.0,
-                    },
-                    ensure_ascii=False,
-                ),
+                "Date": "2025-04-02",
+                "Code": "160060019",
+                "Volume": 500.0,
+                "Close": 28000.0,
             }
         ],
     )
-    store.close()
 
     early = compute(
         "futures_activity_proxy",
@@ -334,7 +172,7 @@ def test_volume_change_1d_on_seeded_bars(tmp_path):
     """Seed volumes are constant 1000 → change 0.0 with >=2 sessions."""
     days = ["2025-04-01", "2025-04-02", "2025-04-03"]
     prices = {CODES[0]: {d: 100.0 + i for i, d in enumerate(days)}}
-    db = seed_db(tmp_path, days=days, prices=prices)
+    days, db = _seed_c21(tmp_path, days, prices=prices)
     out = compute(
         "volume_change_1d",
         as_of=close_iso(days[-1]),
@@ -349,11 +187,7 @@ def test_volume_change_1d_on_seeded_bars(tmp_path):
 
 def test_volume_change_1d_insufficient_history(tmp_path):
     day = "2025-04-01"
-    db = seed_db(
-        tmp_path,
-        days=[day],
-        prices={CODES[0]: {day: 100.0}},
-    )
+    _, db = _seed_c21(tmp_path, [day])
     out = compute(
         "volume_change_1d",
         as_of=close_iso(day),
@@ -369,7 +203,7 @@ def test_topix_relative_1d_seeded_dual_leg(tmp_path):
     days = ["2025-04-01", "2025-04-02"]
     # Equity: 100 → 110 = +10%; TOPIX: 3000 → 3030 = +1% → relative +9%.
     prices = {CODES[0]: {"2025-04-01": 100.0, "2025-04-02": 110.0}}
-    db = seed_db(tmp_path, days=days, prices=prices)
+    days, db = _seed_c21(tmp_path, days, prices=prices)
     _upsert_jquants_records(
         db,
         dataset="indices_bars_daily_topix",
@@ -398,7 +232,7 @@ def test_topix_relative_1d_insufficient_missing_topix_leg(tmp_path):
     """Missing TOPIX leg → None (not raise)."""
     days = ["2025-04-01", "2025-04-02"]
     prices = {CODES[0]: {d: 100.0 + i for i, d in enumerate(days)}}
-    db = seed_db(tmp_path, days=days, prices=prices)
+    days, db = _seed_c21(tmp_path, days, prices=prices)
     out = compute(
         "topix_relative_1d",
         as_of=close_iso(days[-1]),
@@ -412,7 +246,7 @@ def test_topix_relative_1d_insufficient_missing_topix_leg(tmp_path):
 def test_disclosure_flag_fins_empty_db_is_zero(tmp_path):
     days = ["2025-04-01", "2025-04-02"]
     prices = {CODES[0]: {d: 100.0 for d in days}}
-    db = seed_db(tmp_path, days=days, prices=prices)
+    days, db = _seed_c21(tmp_path, days, prices=prices)
     out = compute(
         "disclosure_flag_fins",
         as_of=close_iso(days[-1]),
@@ -429,7 +263,7 @@ def test_disclosure_flag_fins_seeded_positive(tmp_path):
     """W53: positive path — any PIT-visible fins_summary row → 1.0."""
     days = ["2025-04-01", "2025-04-02"]
     prices = {CODES[0]: {d: 100.0 for d in days}}
-    db = seed_db(tmp_path, days=days, prices=prices)
+    days, db = _seed_c21(tmp_path, days, prices=prices)
     _upsert_jquants_records(
         db,
         dataset="fins_summary",
@@ -452,7 +286,7 @@ def test_v0_return_1d_still_works_with_guard(tmp_path):
     """Pipeline DEFER guard must not break existing COMPLETE bars features."""
     days = ["2025-04-01", "2025-04-02", "2025-04-03"]
     prices = {CODES[0]: {d: 100.0 + i for i, d in enumerate(days)}}
-    db = seed_db(tmp_path, days=days, prices=prices)
+    days, db = _seed_c21(tmp_path, days, prices=prices)
     out = compute(
         "return_1d",
         as_of=close_iso(days[-1]),
@@ -463,12 +297,7 @@ def test_v0_return_1d_still_works_with_guard(tmp_path):
 
 
 def test_margin_interest_change_1d_on_seeded_records(tmp_path):
-    days = ["2025-04-01", "2025-04-02"]
-    db = seed_db(
-        tmp_path,
-        days=days,
-        prices={CODES[0]: {d: 100.0 for d in days}},
-    )
+    days, db = _seed_c21(tmp_path)
     _upsert_jquants_records(
         db,
         dataset="markets_margin_interest",
@@ -502,11 +331,7 @@ def test_margin_interest_change_1d_on_seeded_records(tmp_path):
 
 def test_margin_interest_change_1d_insufficient(tmp_path):
     days = ["2025-04-01"]
-    db = seed_db(
-        tmp_path,
-        days=days,
-        prices={CODES[0]: {days[0]: 100.0}},
-    )
+    days, db = _seed_c21(tmp_path, days)
     _upsert_jquants_records(
         db,
         dataset="markets_margin_interest",
@@ -530,12 +355,7 @@ def test_margin_interest_change_1d_insufficient(tmp_path):
 
 
 def test_short_ratio_level_on_seeded_records(tmp_path):
-    days = ["2025-04-01", "2025-04-02"]
-    db = seed_db(
-        tmp_path,
-        days=days,
-        prices={CODES[0]: {d: 100.0 for d in days}},
-    )
+    days, db = _seed_c21(tmp_path)
     _upsert_jquants_records(
         db,
         dataset="markets_short_ratio",
@@ -578,11 +398,7 @@ def test_short_ratio_level_on_seeded_records(tmp_path):
 
 def test_short_ratio_level_missing_section(tmp_path):
     days = ["2025-04-01"]
-    db = seed_db(
-        tmp_path,
-        days=days,
-        prices={CODES[0]: {days[0]: 100.0}},
-    )
+    days, db = _seed_c21(tmp_path, days)
     out = compute(
         "short_ratio_level",
         as_of=close_iso(days[0]),
@@ -594,12 +410,7 @@ def test_short_ratio_level_missing_section(tmp_path):
 
 
 def test_is_trading_day_on_seeded_calendar(tmp_path):
-    days = ["2025-04-01", "2025-04-02"]
-    db = seed_db(
-        tmp_path,
-        days=days,
-        prices={CODES[0]: {d: 100.0 for d in days}},
-    )
+    days, db = _seed_c21(tmp_path)
     # coreseed marks seeded days as holiday_division == "1"
     out = compute(
         "is_trading_day",
@@ -623,11 +434,7 @@ def test_is_trading_day_on_seeded_calendar(tmp_path):
 
 def test_is_trading_day_non_trading_division(tmp_path):
     days = ["2025-04-01"]
-    db = seed_db(
-        tmp_path,
-        days=days,
-        prices={CODES[0]: {days[0]: 100.0}},
-    )
+    days, db = _seed_c21(tmp_path, days)
     # Override calendar row to non-trading.
     store = SqliteStore(db)
     store.upsert(
@@ -654,12 +461,7 @@ def test_is_trading_day_non_trading_division(tmp_path):
 
 
 def test_repo_rate_level_on_seeded_rates(tmp_path):
-    days = ["2025-04-01", "2025-04-02"]
-    db = seed_db(
-        tmp_path,
-        days=days,
-        prices={CODES[0]: {d: 100.0 for d in days}},
-    )
+    days, db = _seed_c21(tmp_path)
     _upsert_repo_rates(
         db,
         [
@@ -707,11 +509,7 @@ def test_repo_rate_level_on_seeded_rates(tmp_path):
 
 def test_repo_rate_level_empty_is_none(tmp_path):
     days = ["2025-04-01"]
-    db = seed_db(
-        tmp_path,
-        days=days,
-        prices={CODES[0]: {days[0]: 100.0}},
-    )
+    days, db = _seed_c21(tmp_path, days)
     out = compute(
         "repo_rate_level",
         as_of=close_iso(days[0]),
@@ -724,7 +522,7 @@ def test_repo_rate_level_empty_is_none(tmp_path):
 def test_return_1d_c21_matches_simple_return_on_seeded_bars(tmp_path):
     days = ["2025-04-01", "2025-04-02", "2025-04-03"]
     prices = {CODES[0]: {d: 100.0 + i for i, d in enumerate(days)}}
-    db = seed_db(tmp_path, days=days, prices=prices)
+    days, db = _seed_c21(tmp_path, days, prices=prices)
     out = compute(
         "return_1d_c21",
         as_of=close_iso(days[-1]),
@@ -750,11 +548,7 @@ def test_return_1d_c21_matches_simple_return_on_seeded_bars(tmp_path):
 
 def test_return_1d_c21_insufficient_history(tmp_path):
     day = "2025-04-01"
-    db = seed_db(
-        tmp_path,
-        days=[day],
-        prices={CODES[0]: {day: 100.0}},
-    )
+    _, db = _seed_c21(tmp_path, [day])
     out = compute(
         "return_1d_c21",
         as_of=close_iso(day),
@@ -766,12 +560,7 @@ def test_return_1d_c21_insufficient_history(tmp_path):
 
 
 def test_margin_alert_flag_on_seeded_records(tmp_path):
-    days = ["2025-04-01", "2025-04-02"]
-    db = seed_db(
-        tmp_path,
-        days=days,
-        prices={CODES[0]: {d: 100.0 for d in days}},
-    )
+    days, db = _seed_c21(tmp_path)
     _upsert_jquants_records(
         db,
         dataset="markets_margin_alert",
@@ -798,11 +587,7 @@ def test_margin_alert_flag_on_seeded_records(tmp_path):
 
 def test_margin_alert_flag_empty_is_zero(tmp_path):
     days = ["2025-04-01"]
-    db = seed_db(
-        tmp_path,
-        days=days,
-        prices={CODES[0]: {days[0]: 100.0}},
-    )
+    days, db = _seed_c21(tmp_path, days)
     out = compute(
         "margin_alert_flag",
         as_of=close_iso(days[0]),
@@ -814,12 +599,7 @@ def test_margin_alert_flag_empty_is_zero(tmp_path):
 
 
 def test_futures_activity_proxy_on_seeded_records(tmp_path):
-    days = ["2025-04-01", "2025-04-02"]
-    db = seed_db(
-        tmp_path,
-        days=days,
-        prices={CODES[0]: {d: 100.0 for d in days}},
-    )
+    days, db = _seed_c21(tmp_path)
     _upsert_jquants_records(
         db,
         dataset="derivatives_bars_daily_futures",
@@ -867,11 +647,7 @@ def test_futures_activity_proxy_on_seeded_records(tmp_path):
 
 def test_futures_activity_proxy_empty_is_none(tmp_path):
     days = ["2025-04-01"]
-    db = seed_db(
-        tmp_path,
-        days=days,
-        prices={CODES[0]: {days[0]: 100.0}},
-    )
+    days, db = _seed_c21(tmp_path, days)
     out = compute(
         "futures_activity_proxy",
         as_of=close_iso(days[0]),

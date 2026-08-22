@@ -534,6 +534,122 @@ def _s1_window_lines(days: list[str], *, codes=SYNTH_CODES, vol_step: float = 10
     return bars, topix, cal
 
 
+def _s1_dataset_map(days: list[str], **kw):
+    bars, topix, cal = _s1_window_lines(days, **kw)
+    return {
+        "equities_bars_daily": bars,
+        "indices_bars_daily_topix": topix,
+        "markets_calendar": cal,
+    }
+
+
+def _empty_s1_lines():
+    return {
+        "equities_bars_daily": [],
+        "indices_bars_daily_topix": [],
+        "markets_calendar": [],
+    }
+
+
+def _s1_two_day_map(
+    *,
+    code: str = "13010",
+    d0: str = "2026-06-02",
+    d1: str = "2026-06-03",
+    close0: float = 100.0,
+    close1: float = 100.0,
+    vol0: float = 1000.0,
+    vol1: float = 1000.0,
+    extra_bars=(),
+    include_topix: bool = True,
+    include_cal: bool = True,
+):
+    lines: dict[str, list[str]] = {
+        "equities_bars_daily": [
+            _r2_bar_line(code, d0, close=close0, volume=vol0),
+            _r2_bar_line(code, d1, close=close1, volume=vol1),
+            *extra_bars,
+        ]
+    }
+    if include_topix:
+        lines["indices_bars_daily_topix"] = [
+            _r2_topix_line(d0, close=3000.0),
+            _r2_topix_line(d1, close=3030.0),
+        ]
+    if include_cal:
+        lines["markets_calendar"] = [_r2_cal_line(d0), _r2_cal_line(d1)]
+    return lines
+
+
+def _history_bar(code: str, day: str, close: float, volume: float | None = None, **extra):
+    aa = extra.pop("available_at", f"{day}T15:30:00+09:00")
+    row = {"code": code, "date": day, "close": close, "available_at": aa, **extra}
+    if volume is not None:
+        row["volume"] = volume
+    if "event_time" not in row:
+        row["event_time"] = aa
+    return row
+
+
+def _history_topix(day: str, close: float = 3000.0, **extra):
+    aa = extra.pop("available_at", f"{day}T15:30:00+09:00")
+    return {
+        "date": day,
+        "close": close,
+        "available_at": aa,
+        "event_time": extra.pop("event_time", aa),
+        **extra,
+    }
+
+
+def _close_px(day: str, close: float, *, available_at: str | None = None):
+    return {
+        "close": close,
+        "available_at": available_at or f"{day}T15:30:00+09:00",
+    }
+
+
+def _close_index(*rows: tuple):
+    out: dict[tuple[str, str], dict] = {}
+    for row in rows:
+        code, day, close, *rest = row
+        out[(code, day)] = _close_px(
+            day, close, available_at=rest[0] if rest else None
+        )
+    return out
+
+
+def _q4_vol(i: int) -> float:
+    return 1000 + i * 15
+
+
+def _synth_q4_eval(year: int, **kw):
+    return _synth_q4(year, close_fn=_synth_q4_close, vol_fn=_q4_vol, **kw)
+
+
+def _r2_q4_period(year: int, days: list[str], lines: dict, **extra):
+    extra.setdefault("s4_eligible", True)
+    extra.setdefault("year", year)
+    return _r2_period(f"y{year}_q4", days, lines, **extra)
+
+
+def _r2_q4_skip(year: int = 2024, **extra):
+    extra.setdefault("year", year)
+    extra.setdefault("s4_eligible", False)
+    return _r2_skip_period(f"y{year}_q4", f"{year}-09-01", f"{year}-12-29", **extra)
+
+
+def _margin_for_days(
+    days: list[str],
+    bases=(("13010", 1000), ("72030", 1100), ("67580", 1200)),
+):
+    return [
+        _margin_jsonl(code, d, base + i, base // 2 + i)
+        for code, base in bases
+        for i, d in enumerate(days)
+    ]
+
+
 def _synth_q4_close(i, j, code):
     return 100.0 + i + j * 0.3 + (0.5 if code == "13010" and i % 2 == 0 else 0)
 
@@ -700,9 +816,20 @@ def _r2_skip_period(period_id: str, start: str, end: str, **extra):
 
 
 def _injected_r2_history(
-    tmp_path: Path, *, job_id: str, days: list[str], lines: dict, **overrides
+    tmp_path: Path,
+    *,
+    job_id: str,
+    days: list[str],
+    lines: dict | None = None,
+    extra_lines: dict | None = None,
+    vol_step: float = 10.0,
+    **overrides,
 ):
     puts, fake_put = _capture_puts()
+    if lines is None:
+        lines = _s1_dataset_map(days, vol_step=vol_step)
+    if extra_lines:
+        lines = {**lines, **extra_lines}
     kw = _r2_eval_kw(
         tmp_path,
         fake_put,
@@ -727,6 +854,23 @@ def _eval_year_cells(
     return [_eval_cell(logic_id, window_id=f"y{y}", **fields) for y in years]
 
 
+def _eval_complete_cell(logic_id: str, *, occupancy, **fields):
+    row = {
+        "window_id": "y2015_full",
+        "occupancy": occupancy,
+        "total_ret_net": 0.01,
+        "daily_path_complete": True,
+    }
+    row.update(fields)
+    return _eval_cell(logic_id, **row)
+
+
+def _eval_complete_year_cells(logic_id: str, *, occupancy, **fields):
+    fields.setdefault("total_ret_net", 0.01)
+    fields.setdefault("daily_path_complete", True)
+    return _eval_year_cells(logic_id, occupancy=occupancy, **fields)
+
+
 def _basket_row(basket_id: str, n_pos: int, n_neg: int, **extra):
     return {
         "basket_id": basket_id,
@@ -736,10 +880,30 @@ def _basket_row(basket_id: str, n_pos: int, n_neg: int, **extra):
     }
 
 
+def _theme_fund_row(n_pos: int, n_neg: int, **extra):
+    return _basket_row("basket_theme_fund", n_pos, n_neg, **extra)
+
+
+def _head4_row(n_pos: int, n_neg: int, **extra):
+    return _basket_row("basket_head4", n_pos, n_neg, **extra)
+
+
+def _flow_row(n_pos: int, n_neg: int, **extra):
+    return _basket_row("basket_theme_flow", n_pos, n_neg, **extra)
+
+
 def _baskets(*rows, job_id: str | None = None):
     out: dict[str, Any] = {"baskets": list(rows)}
     if job_id is not None:
         out["job_id"] = job_id
     return out
+
+
+def _fund_head(fund: tuple[int, int], head: tuple[int, int], *, job_id: str | None = None):
+    return _baskets(_theme_fund_row(*fund), _head4_row(*head), job_id=job_id)
+
+
+def _fund_flow(fund: tuple[int, int], flow: tuple[int, int], *, job_id: str | None = None):
+    return _baskets(_theme_fund_row(*fund), _flow_row(*flow), job_id=job_id)
 
 

@@ -21,6 +21,8 @@ from tests.research_eval_util import (
     _assert_mass_ready_off,
     _boom_d1,
     _c21_d1_tables,
+    _close_index,
+    _close_px,
     _injected_multiday,
     _injected_single_shot,
     _put_json,
@@ -609,18 +611,8 @@ def test_nextday_lookahead_policy_documented():
 def test_build_equity_close_index_and_next_trading_day_map():
     tip = {
         "equities_bars_daily": [
-            {
-                "code": "13010",
-                "date": "2026-08-06",
-                "close": 100.0,
-                "available_at": "2026-08-06T15:30:00+09:00",
-            },
-            {
-                "code": "13010",
-                "date": "2026-08-07",
-                "close": 110.0,
-                "available_at": "2026-08-07T15:30:00+09:00",
-            },
+            {"code": "13010", "date": "2026-08-06", **_close_px("2026-08-06", 100.0)},
+            {"code": "13010", "date": "2026-08-07", **_close_px("2026-08-07", 110.0)},
         ]
     }
     idx = build_equity_close_index(tip)
@@ -633,21 +625,12 @@ def test_build_equity_close_index_and_next_trading_day_map():
 
 
 def test_attach_next_day_returns_pit_and_formula():
-    close_index = {
-        ("13010", "2026-08-06"): {
-            "close": 100.0,
-            "available_at": "2026-08-06T15:30:00+09:00",
-        },
-        ("13010", "2026-08-07"): {
-            "close": 105.0,
-            "available_at": "2026-08-07T15:30:00+09:00",
-        },
-        ("72030", "2026-08-06"): {
-            "close": 200.0,
-            "available_at": "2026-08-06T15:30:00+09:00",
-        },
+    close_index = _close_index(
+        ("13010", "2026-08-06", 100.0),
+        ("13010", "2026-08-07", 105.0),
+        ("72030", "2026-08-06", 200.0),
         # 72030 missing T+1 → null return
-    }
+    )
     obs = [
         {"code": "13010", "value": 1.0},
         {"code": "72030", "value": -1.0},
@@ -669,16 +652,10 @@ def test_attach_next_day_returns_pit_and_formula():
     assert aligned[1]["next_day_return_null_reason"] == "missing_close_T1"
 
     # PIT fail: T+1 bar available_at after evaluation_as_of → null (no look-ahead)
-    late = {
-        ("13010", "2026-08-06"): {
-            "close": 100.0,
-            "available_at": "2026-08-06T15:30:00+09:00",
-        },
-        ("13010", "2026-08-07"): {
-            "close": 105.0,
-            "available_at": "2026-08-08T00:00:00+09:00",  # after eval as_of
-        },
-    }
+    late = _close_index(
+        ("13010", "2026-08-06", 100.0),
+        ("13010", "2026-08-07", 105.0, "2026-08-08T00:00:00+09:00"),
+    )
     pit_fail = attach_next_day_returns(
         [{"code": "13010", "value": 1.0}],
         signal_date="2026-08-06",

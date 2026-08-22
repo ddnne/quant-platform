@@ -14,12 +14,12 @@ from data_contracts.permanent_defer import (
 )
 from tests.research_eval_util import (
     _assert_mass_ready_off,
+    _history_bar,
+    _history_topix,
     _injected_r2_history,
     _r2_bar_line as _bar_line,
-    _r2_cal_line as _cal_line,
     _r2_catalog_line as _catalog_line,
-    _r2_topix_line as _topix_line,
-    _s1_window_lines,
+    _s1_two_day_map,
     _weekdays,
 )
 from research.r2_feature_context import (
@@ -149,31 +149,23 @@ def test_t5_defer_hard_reject_on_sqlite_mirror(tmp_path: Path):
 
 
 def test_extract_r2_history_filters_window_and_codes():
-    lines = [
-        _bar_line("13010", "2026-05-30", close=90.0),  # before window
-        _bar_line("13010", "2026-06-02", close=100.0, volume=100.0),
-        _bar_line("13010", "2026-06-03", close=110.0, volume=150.0),
-        _bar_line("72030", "2026-06-02", close=2000.0),  # other code
-        _bar_line("13010", "2026-06-20", close=120.0),  # after window
-    ]
-    topix = [
-        _topix_line("2026-06-02", close=3000.0),
-        _topix_line("2026-06-03", close=3030.0),
-    ]
-    cal = [
-        _cal_line("2026-06-02"),
-        _cal_line("2026-06-03"),
-    ]
+    raw = _s1_two_day_map(
+        close0=100.0,
+        close1=110.0,
+        vol0=100.0,
+        vol1=150.0,
+        extra_bars=(
+            _bar_line("13010", "2026-05-30", close=90.0),
+            _bar_line("72030", "2026-06-02", close=2000.0),
+            _bar_line("13010", "2026-06-20", close=120.0),
+        ),
+    )
     out = extract_r2_history_feature_rows(
         list(S1_SIGNAL_HISTORY_DATASETS),
         period_start="2026-06-01",
         period_end="2026-06-10",
         codes=["13010"],
-        raw_lines_by_dataset={
-            "equities_bars_daily": lines,
-            "indices_bars_daily_topix": topix,
-            "markets_calendar": cal,
-        },
+        raw_lines_by_dataset=raw,
     )
     assert out["history_source"] == HISTORY_SOURCE_R2
     assert out["local_sot"] is False
@@ -192,20 +184,9 @@ def test_build_r2_feature_context_computes_candidates():
         period_start="2026-06-01",
         period_end="2026-06-10",
         codes=["13010"],
-        raw_lines_by_dataset={
-            "equities_bars_daily": [
-                _bar_line("13010", "2026-06-02", close=100.0, volume=100.0),
-                _bar_line("13010", "2026-06-03", close=110.0, volume=150.0),
-            ],
-            "indices_bars_daily_topix": [
-                _topix_line("2026-06-02", close=3000.0),
-                _topix_line("2026-06-03", close=3030.0),
-            ],
-            "markets_calendar": [
-                _cal_line("2026-06-02"),
-                _cal_line("2026-06-03"),
-            ],
-        },
+        raw_lines_by_dataset=_s1_two_day_map(
+            close0=100.0, close1=110.0, vol0=100.0, vol1=150.0
+        ),
     )
     rows = extract["rows_by_dataset"]
     as_of = "2026-06-03T15:30:00+09:00"
@@ -258,21 +239,10 @@ def test_r2_get_channel_via_injectable(tmp_path: Path):
 
 
 def test_t4_pit_excludes_future_available_at():
-    def _bar_row(day: str, close: float, volume: float) -> dict:
-        aa = f"{day}T15:30:00+09:00"
-        return {
-            "code": "13010",
-            "date": day,
-            "close": close,
-            "volume": volume,
-            "available_at": aa,
-            "event_time": aa,
-        }
-
     rows = {
         "equities_bars_daily": [
-            _bar_row("2026-06-02", 100.0, 100.0),
-            _bar_row("2026-06-03", 110.0, 150.0),
+            _history_bar("13010", "2026-06-02", 100.0, 100.0),
+            _history_bar("13010", "2026-06-03", 110.0, 150.0),
         ]
     }
     as_of_t = "2026-06-02T15:30:00+09:00"
@@ -303,18 +273,8 @@ def test_t4_null_available_at_excluded_on_load_and_context():
     # even if smuggled into store, PIT reader drops them
     smuggled = {
         "equities_bars_daily": [
-            {
-                "code": "13010",
-                "date": "2026-06-02",
-                "close": 1.0,
-                "available_at": None,
-            },
-            {
-                "code": "13010",
-                "date": "2026-06-03",
-                "close": 2.0,
-                "available_at": "2026-06-03T15:30:00+09:00",
-            },
+            _history_bar("13010", "2026-06-02", 1.0, available_at=None),
+            _history_bar("13010", "2026-06-03", 2.0),
         ]
     }
     ctx = build_r2_feature_context(
@@ -337,13 +297,7 @@ def test_disposable_sqlite_mirror_not_sot(tmp_path: Path):
         period_start="2026-06-01",
         period_end="2026-06-10",
         codes=["13010"],
-        raw_lines_by_dataset={
-            "equities_bars_daily": [
-                _bar_line("13010", "2026-06-02"),
-                _bar_line("13010", "2026-06-03"),
-            ],
-            "markets_calendar": [_cal_line("2026-06-02"), _cal_line("2026-06-03")],
-        },
+        raw_lines_by_dataset=_s1_two_day_map(include_topix=False),
     )
     path = materialize_disposable_sqlite_mirror(
         extract["rows_by_dataset"], db_path=tmp_path / "mirror.sqlite"
@@ -362,24 +316,8 @@ def test_can_build_40d_asof_code_path_yes():
 
 def test_can_build_40d_asof_with_rows():
     days = _weekdays(date(2026, 4, 1), 45)
-    bars = [
-        {
-            "code": "13010",
-            "date": d,
-            "close": 100.0 + i,
-            "available_at": f"{d}T15:30:00+09:00",
-        }
-        for i, d in enumerate(days)
-    ]
-    topix = [
-        {
-            "date": d,
-            "close": 3000.0,
-            "available_at": f"{d}T15:30:00+09:00",
-            "event_time": f"{d}T15:30:00+09:00",
-        }
-        for d in days
-    ]
+    bars = [_history_bar("13010", d, 100.0 + i) for i, d in enumerate(days)]
+    topix = [_history_topix(d) for d in days]
     cap = can_build_40d_asof(
         {"equities_bars_daily": bars, "indices_bars_daily_topix": topix},
         min_trading_days=40,
@@ -398,16 +336,8 @@ def test_resolve_history_source():
 
 def test_multiday_history_source_r2_does_not_break_default_d1(tmp_path: Path):
     days = _weekdays(date(2026, 6, 1), 8)
-    bar_lines, topix_lines, cal_lines = _s1_window_lines(days)
     _, kw = _injected_r2_history(
-        tmp_path,
-        job_id="w0815az-g1-r2-bridge-test",
-        days=days,
-        lines={
-            "equities_bars_daily": bar_lines,
-            "indices_bars_daily_topix": topix_lines,
-            "markets_calendar": cal_lines,
-        },
+        tmp_path, job_id="w0815az-g1-r2-bridge-test", days=days
     )
     ex = execute_multiday_signal_eval(**kw)
     assert ex.n_days >= 5
@@ -571,15 +501,12 @@ def test_available_at_repair_calendar_only_no_lookahead():
 
 def test_multisignal_history_source_r2(tmp_path: Path):
     days = _weekdays(date(2024, 10, 1), 12)
-    bar_lines, topix_lines, cal_lines = _s1_window_lines(days, vol_step=50.0)
     _, kw = _injected_r2_history(
         tmp_path,
         job_id="w0815ba-g1-multisignal-r2-test",
         days=days,
-        lines={
-            "equities_bars_daily": bar_lines,
-            "indices_bars_daily_topix": topix_lines,
-            "markets_calendar": cal_lines,
+        vol_step=50.0,
+        extra_lines={
             "fins_summary": [
                 _catalog_line(
                     "fins_summary",
@@ -588,7 +515,6 @@ def test_multisignal_history_source_r2(tmp_path: Path):
                     extra_payload={"DiscDate": days[5]},
                 )
             ],
-            # margin empty-allowed path: omit channel → allow_empty default
         },
     )
     ex = execute_multiday_multisignal_compare(**kw)

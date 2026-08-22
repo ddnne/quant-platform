@@ -14,6 +14,14 @@ from storage.sqlite_store import SqliteStore
 
 from tests._coreseed import CODES, close_iso, seed_db
 
+
+def _seed_c21(tmp_path, days=None, *, prices=None, price=100.0):
+    days = list(days or ("2025-04-01", "2025-04-02"))
+    if prices is None:
+        prices = {CODES[0]: {d: price for d in days}}
+    return days, seed_db(tmp_path, days=days, prices=prices)
+
+
 # W49–W50 held (7) + W51 expand (+3) = 10 complete21 min features.
 COMPLETE21_MIN_IDS = (
     "volume_change_1d",

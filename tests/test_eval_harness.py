@@ -19,14 +19,17 @@ from tests.research_eval_util import (
     HARNESS_MODULE_PATHS,
     _assert_mass_ready_off,
     _capture_puts,
+    _empty_s1_lines,
     _injected_multiday,
-    _margin_jsonl,
+    _margin_for_days,
     _put_json,
     _r2_eval_kw,
     _r2_period,
+    _r2_q4_period,
+    _r2_q4_skip,
     _r2_skip_period,
     _synth_q4,
-    _synth_q4_close,
+    _synth_q4_eval,
     assert_ast_bans_mass_ready_orders,
 )
 from research.eval_harness import (
@@ -272,32 +275,20 @@ def test_design_yearly_eval_windows_and_multi_year_s1_isolation(tmp_path: Path):
     assert len(avail) == len(wins)
     assert all("period_id" in r for r in avail)
 
-    vol = lambda i: 1000 + i * 15
-    days_a, lines_a = _synth_q4(2015, close_fn=_synth_q4_close, vol_fn=vol)
-    days_b, lines_b = _synth_q4(2017, close_fn=_synth_q4_close, vol_fn=vol)
-    days_c, lines_c = _synth_q4(2019, with_margin=True, close_fn=_synth_q4_close, vol_fn=vol)
+    days_a, lines_a = _synth_q4_eval(2015)
+    days_b, lines_b = _synth_q4_eval(2017)
+    days_c, lines_c = _synth_q4_eval(2019, with_margin=True)
 
     puts, fake_put = _capture_puts()
 
     periods = [
-        _r2_period("y2015_q4", days_a, lines_a, year=2015, s4_eligible=True),
-        _r2_period("y2017_q4", days_b, lines_b, year=2017, s4_eligible=True),
-        _r2_skip_period(
-            "y2024_q4",
-            "2024-09-01",
-            "2024-12-29",
-            year=2024,
-            s4_eligible=False,
-            skip_reason="documented margin/bars fixture gap",
-        ),
+        _r2_q4_period(2015, days_a, lines_a),
+        _r2_q4_period(2017, days_b, lines_b),
+        _r2_q4_skip(skip_reason="documented margin/bars fixture gap"),
         _r2_period(
             "y_error",
             ["2025-09-01", "2025-12-29"],
-            {
-                "equities_bars_daily": [],
-                "indices_bars_daily_topix": [],
-                "markets_calendar": [],
-            },
+            _empty_s1_lines(),
             year=2025,
             s4_eligible=True,
         ),
@@ -321,38 +312,20 @@ def test_design_yearly_eval_windows_and_multi_year_s1_isolation(tmp_path: Path):
     _assert_mass_ready_off(gate)
     assert gate["passed"] is True or gate["n_eligible_periods"] >= 2
 
+    s4_empty = ["markets_short_ratio"]
     s4_periods = [
-        _r2_period(
-            "y2019_q4",
-            days_c,
-            lines_c,
-            year=2019,
-            s4_eligible=True,
-            allow_empty=["markets_short_ratio"],
-        ),
-        _r2_period(
-            "y2017_q4",
+        _r2_q4_period(2019, days_c, lines_c, allow_empty=s4_empty),
+        _r2_q4_period(
+            2017,
             days_b,
             {
                 **lines_b,
-                "markets_margin_interest": [
-                    _margin_jsonl(code, d, base + i, base // 2 + i)
-                    for code, base in (("13010", 1000), ("72030", 1100), ("67580", 1200))
-                    for i, d in enumerate(days_b)
-                ],
+                "markets_margin_interest": _margin_for_days(days_b),
                 "markets_short_ratio": [],
             },
-            year=2017,
-            s4_eligible=True,
-            allow_empty=["markets_short_ratio"],
+            allow_empty=s4_empty,
         ),
-        _r2_skip_period(
-            "y2024_q4",
-            "2024-09-01",
-            "2024-12-29",
-            year=2024,
-            s4_eligible=False,
-        ),
+        _r2_q4_skip(),
     ]
     s4 = run_multi_year_extra_hyp_eval(
         s4_periods,
