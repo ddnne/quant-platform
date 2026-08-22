@@ -65,6 +65,11 @@ _GATE_TITLE_CONTRA: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("eps_up", ("eps down", "falling eps")),
     ("margin_down", ("margin up", "rising margin")),
     ("margin_up", ("margin down", "falling margin")),
+    # nky_vol_high_skip occupancy is skip-when-high OFF, not "vol is high".
+    (
+        "nky_vol_high_skip",
+        ("volatility is high", "vol is high", "high volatility", "nky vol high"),
+    ),
 )
 
 PROPOSE_MAX_AND_GATES: int = 3

@@ -291,6 +291,18 @@ def test_review_proposal_row_rejects_invent_and_weekday() -> None:
     assert bad_s["ok"] is False
     assert "title_gate_polarity_mismatch" in bad_s["reasons"]
 
+    invert_nky = {
+        "thesis": "Prices drop when overnight funding is tightening AND margin is down AND volatility is high.",
+        "signal_definition": "AND(overnight_tightening, margin_down, nky_vol_high_skip) PIT",
+        "position_rule": "event-hold surprise sign",
+        "datasets": ["equities_bars_daily", "fins_summary", "jsda_tokyo_repo_rates"],
+        "gates": ["overnight_tightening", "margin_down", "nky_vol_high_skip"],
+    }
+    bad_n = review_proposal_row(invert_nky)
+    assert bad_n["ok"] is False
+    assert "title_gate_polarity_mismatch" in bad_n["reasons"]
+    assert bad_n["auto_inject"] is False
+
 
 def test_catalog_gate_set_avoid_is_existing_crosses() -> None:
     from research.cf_propose_thesis import catalog_gate_set_avoid

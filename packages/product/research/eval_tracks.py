@@ -80,9 +80,10 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "id": "inventory_bias_recorded",
         "track": EVAL_TRACK_LIQ_LARGE,
         "why": (
-            "recorded research/eval/job=eval-inventory-bias-20260823a/e/h/"
+            "recorded research/eval/job=eval-inventory-bias-20260823j/ "
             "inventory_bias.json; assert_new_batch_cheap_pb_cap refuses "
-            "new batches at 20%"
+            "new batches at 20%; plus32vf occupancy audit 20260823i "
+            "shows 4 near_empty — not materials"
         ),
         "not_a_pass": True,
         "go": False,
@@ -205,6 +206,27 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "id": "thesis_counts_only_with_worker_body",
         "track": EVAL_TRACK_LIQ_LARGE,
         "why": "catalog+Worker body+gates implemented; YAML-only clones do not count",
+        "not_a_pass": True,
+        "go": False,
+    },
+    {
+        "id": "plus32vf_near_empty_not_materials",
+        "track": EVAL_TRACK_LIQ_LARGE,
+        "why": (
+            "eval-occupancy-audit-20260823i: 4/32 plus32vf near_empty on "
+            "both tracks including occupancy 0; CANDIDATE_POLICY excludes; "
+            "prefer propose-adopt over hand-enumerated soup"
+        ),
+        "not_a_pass": True,
+        "go": False,
+    },
+    {
+        "id": "unique22_park_map_recorded",
+        "track": EVAL_TRACK_LIQ_LARGE,
+        "why": (
+            "eval-unique22-park-20260823i/park.json file-level reasons; "
+            "17 park; do not silent unpark leftover occupancy"
+        ),
         "not_a_pass": True,
         "go": False,
     },
