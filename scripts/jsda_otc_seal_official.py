@@ -264,11 +264,7 @@ def restore_triggers(conn: sqlite3.Connection) -> None:
 
 
 def bulk_insert_day(conn: sqlite3.Connection, day: str, rows: list[dict]) -> int:
-    """Replace any partial day facts, then bulk INSERT. Triggers must be off.
-
-    Always filter with source='jsda' so the composite PRIMARY KEY prefix is used.
-    Date-only predicates force a full-table scan on ~187GB facts.
-    """
+    """Replace the day's jsda facts, then bulk INSERT. Triggers must be off."""
     exists = conn.execute(
         "SELECT 1 FROM jsda_otc_bond_reference_prices "
         "WHERE source='jsda' AND publication_label_date=? LIMIT 1",

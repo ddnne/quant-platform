@@ -1,40 +1,17 @@
 #!/usr/bin/env python3
 """Phase 3.5 S6 — sync Cloudflare D1 → local SQLite for `pit.get_*`.
 
-Pulls the structured fact tables from the ingestion-premium Worker
-(`/v1/export/d1`) and upserts them into a local SQLite DB shaped exactly like
-`storage/schema.py` (so `pit.get_*` reads work without code changes).
+Pulls structured fact tables from the ingestion-premium Worker (`/v1/export/d1`)
+and upserts them into local SQLite matching `storage/schema.py`.
 
-Offline-safety: with no `--url` / ``INGESTION_PREMIUM_URL``, the script
-exits with code 2 (nothing fetched) and never touches the network.
+No `--url` / ``INGESTION_PREMIUM_URL`` → exit 2, no network.
 
-Incremental mode
-----------------
-``--incremental`` consumes the append-only Worker change feed with
-``change_seq > last_applied_change_seq``. The sequence watermark advances
-only after a whole page has been durably applied. Full table export remains
-the bootstrap path; client-side timestamp filtering is compatibility-only for
-pre-Phase-6 mocked responses and is not the production correctness mechanism.
+``--incremental`` applies ``change_seq > last_applied_change_seq``. The
+watermark advances only after a whole page is durable. Full table export is
+bootstrap; client-side timestamp filtering is compatibility-only.
 
-Examples
---------
-  # All tables:
-  python3 scripts/sync_d1_to_sqlite.py \\
-      --db data/structured/ingestion.sqlite
-
-  # One table:
-  python3 scripts/sync_d1_to_sqlite.py --table jquants_records \\
-      --db data/structured/ingestion.sqlite
-
-  # Incremental pull (change_seq watermark):
-  python3 scripts/sync_d1_to_sqlite.py --incremental \\
-      --db data/structured/ingestion.sqlite
-
-  # Explicit URL+token (do not commit these):
-  python3 scripts/sync_d1_to_sqlite.py \\
-      --url https://quant-platform-ingestion-premium.<acct>.workers.dev \\
-      --token "$DATA_EXPORT_TOKEN" \\
-      --db data/structured/ingestion.sqlite
+  python3 scripts/sync_d1_to_sqlite.py --db data/structured/ingestion.sqlite
+  python3 scripts/sync_d1_to_sqlite.py --incremental --db data/structured/ingestion.sqlite
 """
 
 from __future__ import annotations
@@ -89,9 +66,7 @@ _CHANGE_FEED_TABLES = frozenset({
     "jquants_records",
     "jquants_records_revisions",
 })
-# Observability / non-local materialization markers that appear in
-# ingestion_change_log. Sequence must still advance past them; local SQLite
-# has no target table for these rows.
+# Change-feed markers with no local table; sequence still advances past them.
 _CHANGE_FEED_SKIP_TABLES = frozenset({
     "jquants_records_r2",
     "equities_master_scd2",
@@ -135,10 +110,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--snapshot-dir",
         default=None,
-        help=(
-            "READY artifact directory (default: <db-parent>/snapshots). "
-            "Staging DB is never research-readable."
-        ),
+        help="READY artifact directory (default: <db-parent>/snapshots).",
     )
     p.add_argument(
         "--page-limit",
@@ -149,35 +121,22 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--incremental",
         action="store_true",
-        help=(
-            "Apply only sequenced Worker changes after the locally committed "
-            "change_seq watermark."
-        ),
+        help="Apply sequenced Worker changes after the local change_seq watermark.",
     )
     p.add_argument(
         "--since",
         default=None,
-        help=(
-            "Legacy ISO filter for compatibility with a pre-change-feed "
-            "response. Production incremental sync uses change_seq."
-        ),
+        help="Legacy ISO filter; production incremental sync uses change_seq.",
     )
     p.add_argument(
         "--publish-ops",
         action="store_true",
-        help=(
-            "After a successful sync (exit 0 path), run "
-            "scripts/publish_ops_projection.py for the local DB. "
-            "Default OFF for safety."
-        ),
+        help="After a successful sync, run scripts/publish_ops_projection.py (default off).",
     )
     p.add_argument(
         "--apply-remote-ops",
         action="store_true",
-        help=(
-            "With --publish-ops, also apply the projection SQL to remote D1 "
-            "via wrangler (requires CF auth)."
-        ),
+        help="With --publish-ops, also apply projection SQL to remote D1.",
     )
     return p
 
@@ -192,11 +151,7 @@ def _new_http_client():
 
 
 def _http_get_json(client, url: str, token: str) -> dict:
-    """Fetch JSON from the worker using a shared client.
-
-    Tests monkeypatch this top-level symbol to stub the network; the real
-    transport uses ``client.get`` so connection pooling covers every page.
-    """
+    """GET JSON; tests monkeypatch this symbol."""
     headers = {"X-Ingestion-Token": token} if token else {}
     resp = client.get(url, headers=headers)
     resp.raise_for_status()
@@ -321,12 +276,7 @@ def _local_table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
 def _sync_control_plane(
     store: SqliteStore, table: str, rows: list[dict]
 ) -> tuple[int, int]:
-    """Insert/replace control-plane rows without PIT available_at gate.
-
-    Remote-only columns (e.g. ops projection metadata not yet in local
-    research SQLite schema) are dropped so thin control exports can close
-    D1→local lag without a packages schema rewrite.
-    """
+    """Insert/replace control-plane rows; drop remote-only columns."""
     if not rows:
         return 0, 0
     conn = store._conn  # noqa: SLF001
@@ -335,8 +285,7 @@ def _sync_control_plane(
     cleaned = []
     dropped_cols: set[str] = set()
     for r in rows:
-        # Preserve nullable evidence fields such as receipt error/expected_items;
-        # dropping them could make later rows inherit the first row's shape.
+        # Keep nullable evidence keys so later rows don't inherit the first row's shape.
         row = {}
         for k, v in r.items():
             if k == "__export_cursor":
@@ -436,11 +385,7 @@ def _sync_one(
 
 
 def _derive_since(store: SqliteStore, table: str) -> str | None:
-    """Local freshness watermark = MAX(ingested_at) for ``table``.
-
-    Returns None when the table is empty or missing so callers can treat the
-    first incremental run as a full pull without special-casing.
-    """
+    """MAX(ingested_at) watermark, or None when the table is empty/missing."""
     try:
         row = store._conn.execute(  # noqa: SLF001 — read-only helper
             f"SELECT MAX(ingested_at) AS mx FROM {table}"
@@ -453,13 +398,7 @@ def _derive_since(store: SqliteStore, table: str) -> str | None:
 
 
 def _filter_since(rows: list[dict], since: str) -> tuple[list[dict], int]:
-    """Apply the client-side ``ingested_at > since`` filter.
-
-    Returns (kept_rows, skipped_count). ``since`` is compared as text — every
-    ingested_at in our schema is already a JST ISO string, so lexicographic
-    comparison matches chronological order for a fixed offset and the
-    canonical form produced by ``validate_available_at``.
-    """
+    """Keep rows with ingested_at > since (ISO text compare). Returns (kept, skipped)."""
     if not since:
         return rows, 0
     kept: list[dict] = []
@@ -484,12 +423,7 @@ def _sync_table(
     since: str | None,
     max_pages: int = DEFAULT_MAX_PAGES,
 ) -> tuple[int, int, int, int, str | None]:
-    """Pull one table end-to-end.
-
-    Returns ``(pages, seen, registered, skipped, effective_since)``. The
-    ``effective_since`` echoed back so callers can log the derived watermark
-    alongside the explicit one.
-    """
+    """Pull one table. Returns (pages, seen, registered, skipped, effective_since)."""
     cursor: str | int | None = None
     pages = seen = registered = skipped = 0
     seen_cursors: set[str] = set()
@@ -554,13 +488,7 @@ def _record_change_seq(store: SqliteStore, value: int) -> None:
 
 
 def _apply_change_rows(store: SqliteStore, rows: list[dict]) -> tuple[int, int]:
-    """Apply one sequenced page while preserving target-table order.
-
-    Returns ``(registered, skipped)``. Rows whose ``table_name`` is in
-    ``_CHANGE_FEED_SKIP_TABLES`` (R2/SCD2 markers) are counted as skipped so
-    the monotonic ``change_seq`` watermark can still advance. Unknown tables
-    still raise — silent drops of new local targets would hide bugs.
-    """
+    """Apply one sequenced page. Returns (registered, skipped)."""
     registered = 0
     skipped = 0
     current_table: str | None = None
@@ -601,12 +529,7 @@ def _sync_changes(
     max_pages: int = DEFAULT_MAX_PAGES,
     legacy_since: str | None = None,
 ) -> tuple[int, int, int, int]:
-    """Consume the server-side monotonic change feed.
-
-    Returns ``(pages, seen, registered, last_applied_change_seq)``.
-    ``change_seq`` is checked for strict monotonicity on every page and is
-    persisted only after all rows in that page are durable.
-    """
+    """Consume the monotonic change feed. Returns (pages, seen, registered, last_seq)."""
     after_seq = _last_change_seq(store)
     pages = seen = registered = skipped = 0
     visited = {after_seq}
@@ -616,8 +539,7 @@ def _sync_changes(
         query = {
             "after_seq": after_seq,
             "limit": page_limit,
-            # Harmless on the real endpoint; keeps old offline fixtures able
-            # to return a compatibility page while they migrate.
+            # Harmless on the real endpoint; keeps old fixtures paginating.
             "table": "jquants_records",
         }
         endpoint = f"{base}/v1/export/changes?{urlencode(query)}"
@@ -628,9 +550,7 @@ def _sync_changes(
         pages += 1
 
         if payload.get("format") != "jquants-change-feed/v1":
-            # Unit-fixture/backward compatibility only. A deployed old Worker
-            # returns 404 before reaching this branch, so production never
-            # silently falls back from sequence correctness to a full scan.
+            # Fixture/compat only. A live old Worker 404s before this branch.
             filtered, _ = _filter_since(rows, legacy_since or "")
             seen += len(filtered)
             registered += _sync_one(store, "jquants_records", filtered)[1]
@@ -730,8 +650,7 @@ def main(argv=None) -> int:
                 change_feed_done = True
                 continue
             if args.incremental:
-                # Control/specialized tables are bounded bootstrap exports;
-                # mutable generic facts above use the sequenced feed.
+                # Control tables are bootstrap exports; facts use the sequenced feed.
                 since = None if t in _NO_AVAILABLE_AT_TABLES else (
                     args.since or _derive_since(store, t)
                 )

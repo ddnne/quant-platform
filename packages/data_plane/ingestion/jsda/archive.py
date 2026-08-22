@@ -292,8 +292,7 @@ def _quote_effective_dates(
         if label == _FIRST_PUBLICATION_LABEL:
             effective[label] = _FIRST_QUOTE_EFFECTIVE_DATE
         elif index > 0:
-            # JSDA publication labels are the following business day's labels;
-            # the preceding official archive label is therefore the quote day.
+            # Publication label is the next business day; previous label is the quote day.
             effective[label] = labels[index - 1]
     return effective
 
@@ -375,7 +374,7 @@ def run_otc_reference_backfill(
                     requirements.append(_missing_year_required(year, root_url))
                 continue
             year_raw = fetcher.fetch_file(archive_index.url)
-            year_path = _save_index_raw(
+            _save_index_raw(
                 data_base, f"otc_reference_archive_{year}.html", year_raw, checked_at
             )
             index_digests[str(year)] = _sha256(year_raw)

@@ -1,7 +1,6 @@
 """Parse JSDA bond-trade / OTC-reference / Tokyo-repo CSV (and XLSX/XLS).
 
-Auto-detects encoding, finds the header, maps aliases, coerces numbers/dates.
-Records feed :mod:`normalize`. Column map: ``docs/data_sources.md``.
+Encoding auto-detect, header aliases, number/date coerce. Feeds :mod:`normalize`.
 """
 
 from __future__ import annotations
@@ -12,7 +11,6 @@ import io
 import re
 from typing import Any, List, Optional
 
-# field -> accepted header substrings (lower-cased, whitespace-collapsed)
 _HEADER_ALIASES: dict[str, list[str]] = {
     "trade_date": ["年月日", "取引日", "営業日", "日付", "取引年月日", "date"],
     "issuer_name": ["銘柄名", "発行体", "発行会社", "発行企業", "企業名", "issuer", "name"],
@@ -141,7 +139,7 @@ def parse_csv(data, *, encoding: Optional[str] = None) -> List[dict]:
             continue
         td = _date(_cell(row, col.get("trade_date")))
         if not td:
-            continue  # skip totals/title spillover rows
+            continue
         rec = {
             "trade_date": td,
             "issuer_name": _cell(row, col.get("issuer_name")) or None,
@@ -169,7 +167,6 @@ def parse_xlsx(data: bytes) -> List[dict]:  # pragma: no cover - optional dep
     wb = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
     ws = wb.active
     rows = [[(c.value if c.value is not None else "") for c in row] for row in ws.iter_rows()]
-    # Render to CSV text and reuse the CSV parser for consistent column mapping.
     buf = io.StringIO()
     writer = csv.writer(buf)
     for r in rows:
@@ -177,9 +174,7 @@ def parse_xlsx(data: bytes) -> List[dict]:  # pragma: no cover - optional dep
     return parse_csv(buf.getvalue())
 
 
-# ---------------------------------------------------------------------------
 # OTC bond reference prices (公社債店頭売買参考統計値)
-# ---------------------------------------------------------------------------
 
 _OTC_REFERENCE_ALIASES: dict[str, list[str]] = {
     "publication_label_date": ["発表日付", "発表日", "publicationdate"],
@@ -224,8 +219,6 @@ _OTC_POSITIONAL_MIN_COLUMNS = 29
 
 
 def _otc_header_text(cell: Any) -> str:
-    # Source workbooks use parentheses and line breaks to split e.g.
-    # ``平均値（単価）``. Removing punctuation makes aliases layout-neutral.
     return re.sub(r"[\s()（）［］\[\]・_%％]", "", str(cell)).lower()
 
 
@@ -337,7 +330,7 @@ def parse_otc_reference_xlsx(
     publication_label_date: Optional[str] = None,
     quote_effective_date: Optional[str] = None,
 ) -> List[dict]:  # pragma: no cover - optional dependency exercised in dev
-    """Parse an OTC-reference XLSX using the same column contract as CSV."""
+    """Parse an OTC-reference XLSX with the same column contract as CSV."""
     try:
         from openpyxl import load_workbook
     except ImportError as exc:  # pragma: no cover
@@ -358,11 +351,7 @@ def parse_otc_reference_xlsx(
     )
 
 
-# ---------------------------------------------------------------------------
-# Repo rate (東京レポ・レート / TRR)
-# ---------------------------------------------------------------------------
-# Wide (one column per tenor) or long (期間 + rate) → {as_of_date, tenor, rate}.
-# Tenor text is kept verbatim. _num strips %/, and treats "-" as missing.
+# Repo rate (TRR): wide (column per tenor) or long (期間 + rate) → {as_of_date, tenor, rate}.
 
 _REPO_DATE_ALIASES: list[str] = [
     "年月日", "取引日", "営業日", "公表日", "基準日", "日付", "date"
@@ -373,11 +362,7 @@ _REPO_DATE_MARKERS = ("年月日", "取引日", "営業日", "公表日", "基�
 
 
 def _find_repo_header(rows: List[List[str]]) -> tuple[int, List[str]]:
-    """Return the header row with original cells (wide tenor labels stay intact).
-
-    Official ``trrts.xls`` matrix headers (term/overnight/1W) beat title/footnote rows.
-    """
-    # Official TRR matrix header beats footnotes that mention ターム物/1W.
+    """Header row with original cells so wide tenor labels stay intact."""
     for i, row in enumerate(rows):
         first = (row[0] if row else "") or ""
         if first.strip().startswith("※"):
@@ -521,7 +506,7 @@ def parse_repo_csv(data, *, encoding: Optional[str] = None) -> List[dict]:
             continue
         d = _date(_cell(row, date_col))
         if not d:
-            continue  # skip title/total spillover rows
+            continue
 
         if tenor_col is not None:
             tenor = _cell(row, tenor_col).strip()
@@ -597,9 +582,7 @@ def parse_repo_xls(data: bytes) -> List[dict]:
                     elif cell.ctype == xlrd.XL_CELL_NUMBER and isinstance(
                         value, (int, float)
                     ):
-                        # Official trrts.xls stores as_of dates as unformatted
-                        # Excel serial numbers (e.g. 41211) while rates stay in
-                        # [0, 10]. Convert serial-range numbers to YYYY-MM-DD.
+                        # Unformatted Excel serial dates (≈41211); rates stay in [0, 10].
                         num = float(value)
                         if 20000.0 <= num <= 60000.0:
                             try:

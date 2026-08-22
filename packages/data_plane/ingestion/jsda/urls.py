@@ -12,7 +12,7 @@ from urllib.parse import urljoin, urlsplit
 
 INDEX = "https://www.jsda.or.jp/shiryoshitsu/toukei/saiken_torihiki/"
 
-# 公社債店頭売買参考統計値 — distinct from INDEX (社債の取引情報). CSV archive from 2002.
+# 公社債店頭売買参考統計値 (CSV archive from 2002); distinct from INDEX.
 OTC_REFERENCE_INDEX = (
     "https://market.jsda.or.jp/shijyo/saiken/baibai/baisanchi/index.html"
 )
@@ -21,7 +21,7 @@ OTC_REFERENCE_CORRECTIONS_INDEX = (
 )
 OTC_REFERENCE_DATASET = "jsda_otc_bond_reference_prices"
 
-# 東京レポ・レート (TRR) from 2012-10-29; official history is legacy .xls via xlrd.
+# 東京レポ・レート (TRR) from 2012-10-29; history is legacy .xls.
 REPO_INDEX = "https://www.jsda.or.jp/shiryoshitsu/toukei/trr/"
 TOKYO_REPO_DATASET = "jsda_tokyo_repo_rates"
 TOKYO_REPO_JSDA_START = "2012-10-29"
@@ -47,7 +47,7 @@ _REPO_LATEST_RE = re.compile(
 
 @dataclass(frozen=True)
 class JsdaArchiveIndex:
-    """One official JSDA annual archive page discovered from its root."""
+    """Official annual archive page."""
 
     year: int
     url: str
@@ -55,13 +55,7 @@ class JsdaArchiveIndex:
 
 @dataclass(frozen=True)
 class JsdaArchiveSegment:
-    """One resumable source segment and its official collection scope.
-
-    ``publication_label_date`` is deliberately not called an event date.  For
-    OTC reference values JSDA labels the file for the following business day,
-    while the quote itself is based on the preceding 15:00 session.  The
-    calendar-backed effective date is supplied later by normalization.
-    """
+    """Resumable official segment; publication_label_date is a file label, not quote date."""
 
     dataset_id: str
     segment_id: str
@@ -78,7 +72,7 @@ class JsdaArchiveSegment:
 
 @dataclass(frozen=True)
 class JsdaRepoTimeseries:
-    """The authoritative JSDA-era Tokyo Repo Rate source segment."""
+    """Authoritative JSDA-era Tokyo Repo Rate source segment."""
 
     dataset_id: str
     segment_id: str
@@ -93,7 +87,7 @@ class JsdaRepoTimeseries:
 
 @dataclass(frozen=True)
 class JsdaCorrectionArtifact:
-    """One replacement correction from section 1 of JSDA's history page."""
+    """Section-1 replacement correction (not a comparison-table notice)."""
 
     dataset_id: str
     correction_id: str
@@ -148,7 +142,7 @@ def discover_otc_reference_year_indexes(
 ) -> List[JsdaArchiveIndex]:
     """Official ``archiveYYYY.html`` links only — no synthesized years."""
     discovered: dict[int, JsdaArchiveIndex] = {}
-    for href, _label in _ANCHOR_RE.findall(html or ""):
+    for href, _ in _ANCHOR_RE.findall(html or ""):
         absolute = urljoin(base, html_lib.unescape(href).strip())
         match = _ARCHIVE_YEAR_RE.search(urlsplit(absolute).path)
         if match:
@@ -188,7 +182,7 @@ def discover_otc_reference_segments(
             continue
         seen.add(label_date)
         if choices:
-            _priority, source_url, fmt = min(choices, key=lambda item: item[0])
+            _, source_url, fmt = min(choices, key=lambda item: item[0])
             discovery_status = "DISCOVERED"
         else:
             source_url, fmt = None, None
@@ -219,7 +213,7 @@ def discover_otc_reference_segments(
 
 
 def resolve_download_links(html: str, *, base: str = INDEX) -> List[str]:
-    """Extract absolute data-file URLs from the JSDA index HTML."""
+    """Absolute data-file URLs from the JSDA index HTML."""
     out: List[str] = []
     seen = set()
     for href in _LINK_RE.findall(html or ""):
@@ -257,7 +251,7 @@ def resolve_repo_links(html: str, *, base: str = REPO_INDEX) -> List[str]:
 
 
 def _is_repo_rate_file(url: str) -> bool:
-    """True if the filename looks like a rate-data file (not a ``別紙`` doc)."""
+    """True if the filename looks like a rate-data file (not a 別紙 doc)."""
     name = url.rsplit("/", 1)[-1].lower()
     return not any(tok in name for tok in _REPO_NON_DATA)
 

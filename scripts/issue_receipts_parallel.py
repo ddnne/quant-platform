@@ -140,7 +140,7 @@ def _is_usable_raw(raw: bytes) -> bool:
     try:
         payload = json.loads(stripped)
     except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
-        # Non-JSON raw is still admissible if large enough (already size-gated).
+        # Non-JSON raw is admissible (already size-gated).
         return True
     if isinstance(payload, list) and len(payload) == 0:
         return False
@@ -479,7 +479,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument(
         "--include-complete",
         action="store_true",
-        help="Also re-issue for segments already COMPLETE (default: skip).",
+        help="Also re-issue for segments already COMPLETE.",
     )
     ap.add_argument(
         "--order",
@@ -490,11 +490,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument(
         "--struct-hint",
         action="store_true",
-        help=(
-            "Only scan non-COMPLETE segments that already have structured rows "
-            "in-window (EXISTS jquants_records). Prevents --limit from being "
-            "consumed by empty recent months."
-        ),
+        help="Only scan non-COMPLETE segments that already have in-window structured rows.",
     )
     ap.add_argument(
         "--dry-run",
@@ -663,11 +659,7 @@ def main(argv: list[str] | None = None) -> int:
         "local_complete_segments": int(complete_after),
         "dry_run": bool(args.dry_run),
         "workers": int(args.workers),
-        "note": (
-            "COMPLETE only after ledger refresh with raw+structured+signed "
-            "SUCCESS; never without raw. No backfill/Mass launched. "
-            "Post-seal surgical sync_dataset_coverage_from_segments."
-        ),
+        "note": "COMPLETE only after signed SUCCESS + ledger refresh; never without raw.",
     }
     if args.json_summary:
         print(json.dumps(summary, ensure_ascii=False))
