@@ -423,10 +423,12 @@ def select_eval_universe(
     period_end: str = "2019-10-21",
 ) -> list[str]:
     """Liquidity-first universe. Missing bars/fins → skip. Never invent."""
-    want = [str(c).strip() for c in (pool or EVAL_UNIVERSE_POOL) if str(c).strip()]
+    src = EVAL_UNIVERSE_POOL if pool is None else pool
+    want = [str(c).strip() for c in src if str(c).strip()]
     n = max(1, int(max_codes))
     if not want:
-        return list(DEFAULT_EVAL_CODES)[:n]
+        # Head-N list slice is forbidden on both eval tracks.
+        return []
     rich = load_bars_from_sqlite_rich(
         codes=want,
         period_start=period_start,

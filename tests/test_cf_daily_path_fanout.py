@@ -160,6 +160,11 @@ def test_eval_tracks_are_two_and_not_head_n() -> None:
     assert large["go"] is False
     assert infer_eval_track(max_codes=80) == EVAL_TRACK_MID_N
     assert infer_eval_track(max_codes=100) == EVAL_TRACK_LIQ_LARGE
+    from research.eval_tracks import NEXT_RESEARCH_QUEUE
+
+    assert len(NEXT_RESEARCH_QUEUE) >= 5
+    assert all(q.get("not_a_pass") is True for q in NEXT_RESEARCH_QUEUE)
+    assert all(q.get("go") is not True for q in NEXT_RESEARCH_QUEUE)
 
 
 def test_rank_eval_codes_is_not_head_n_and_skips_missing() -> None:
@@ -180,6 +185,14 @@ def test_rank_eval_codes_is_not_head_n_and_skips_missing() -> None:
     assert "DDDDD" not in ranked
     assert "EEEEE" not in ranked
     assert "AAAAA" in ranked
+
+
+def test_empty_pool_does_not_fall_back_to_head_n() -> None:
+    from research.class_hyp_eval import DEFAULT_EVAL_CODES, select_eval_universe
+
+    out = select_eval_universe(max_codes=10, pool=())
+    assert out == []
+    assert out != list(DEFAULT_EVAL_CODES)[:10]
 
 
 def test_bar_native_count_meets_thirty() -> None:

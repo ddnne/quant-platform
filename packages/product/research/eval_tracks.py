@@ -63,6 +63,48 @@ def infer_eval_track(*, max_codes: int) -> str:
     return EVAL_TRACK_LIQ_LARGE
 
 
+# Next research queue (not GO). Dense work, not +N calendar clones.
+NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
+    {
+        "id": "cs_fund_scan_linear",
+        "track": EVAL_TRACK_LIQ_LARGE,
+        "why": "csFundSnaps hoist shipped in v21; confirm N=100 isolate re-eval",
+        "not_a_pass": True,
+    },
+    {
+        "id": "sleeve_members_refresh",
+        "track": EVAL_TRACK_MID_N,
+        "why": "theme_fund/flow members were chosen on head-N 50; re-pick on ADV tracks",
+        "not_a_pass": True,
+    },
+    {
+        "id": "meta_not_a_pass_hold",
+        "track": EVAL_TRACK_LIQ_LARGE,
+        "why": "active metas stay descriptive blends; no correlation weights yet",
+        "not_a_pass": True,
+    },
+    {
+        "id": "catalog_yaml_as_sot",
+        "track": EVAL_TRACK_LIQ_LARGE,
+        "why": "event_combos._SPECS duplicates specs/research_logics YAML",
+        "not_a_pass": True,
+    },
+    {
+        "id": "offline_eval_shrink",
+        "track": EVAL_TRACK_MID_N,
+        "why": "class_hyp_eval/factory/single_shot are W78-W86 offline; CF daily_path is SoT",
+        "not_a_pass": True,
+    },
+    {
+        "id": "no_go_until_both_tracks",
+        "track": EVAL_TRACK_LIQ_LARGE,
+        "why": "GO needs mid_n_explore AND liq_large agreement plus human main; neither exists",
+        "not_a_pass": True,
+        "go": False,
+    },
+)
+
+
 def track_is_not_a_pass(track: Mapping[str, Any] | str) -> bool:
     if isinstance(track, str):
         track = eval_track(track)

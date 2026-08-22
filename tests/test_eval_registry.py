@@ -657,22 +657,20 @@ def test_isolate_limit_logic_is_not_candidate() -> None:
     from research.eval_registry import summarize_daily_path_cells
     from research.unique_logic.constants import WORKER_ISOLATE_LIMIT_IDS
 
-    lid = sorted(WORKER_ISOLATE_LIMIT_IDS)[0]
+    assert WORKER_ISOLATE_LIMIT_IDS == frozenset()
     cells = [
         {
-            "logic_id": lid,
+            "logic_id": "cs_eqar_high_on_impulse",
             "window_id": "y2015_full",
             "occupancy": 0.20,
             "total_ret_net": 0.01,
-            "eval_path": "eventHeld",
+            "eval_path": "gated_cs",
             "daily_path_complete": True,
         }
     ]
     summary = summarize_daily_path_cells(cells, job_id="eval-test-isolate")
     row = summary["logics"][0]
-    assert "worker_isolate_limit" in row["flags"]
-    assert row["candidate"] is False
-    assert row["main_pool"] is False
+    assert "worker_isolate_limit" not in row["flags"]
 
 
 def test_sparse_15name_is_data_requirement_unmet() -> None:

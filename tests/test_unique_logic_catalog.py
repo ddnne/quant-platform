@@ -227,9 +227,7 @@ def test_yaml_dispatch_worker_event_ids_align() -> None:
     from research.unique_logic.constants import WORKER_ISOLATE_LIMIT_IDS
 
     parked = [s for s in NEW_COMBO_LOGIC if s["logic_id"] in WORKER_ISOLATE_LIMIT_IDS]
-    assert len(parked) == 3
-    assert all(s.get("main_pool") is False for s in parked)
-    assert all(s.get("worker_isolate_limit") is True for s in parked)
+    assert parked == []
     from research.unique_logic.constants import (
         WORKER_ISOLATE_LIMIT_REASONS,
         WORKER_ISOLATE_LINEARIZED_OK,
@@ -237,6 +235,7 @@ def test_yaml_dispatch_worker_event_ids_align() -> None:
 
     assert set(WORKER_ISOLATE_LIMIT_REASONS) == set(WORKER_ISOLATE_LIMIT_IDS)
     assert WORKER_ISOLATE_LIMIT_IDS.isdisjoint(WORKER_ISOLATE_LINEARIZED_OK)
+    assert len(WORKER_ISOLATE_LINEARIZED_OK) >= 6
     for lid in WORKER_ISOLATE_LINEARIZED_OK:
         row = next(s for s in NEW_COMBO_LOGIC if s["logic_id"] == lid)
         assert row.get("worker_isolate_limit") is False
@@ -286,6 +285,7 @@ def test_fins_ta_eqar_stats_see_official_keys() -> None:
 
 
 def test_worker_new_thesis_ids_match_python() -> None:
+    import re
     from pathlib import Path
 
     from research.unique_logic.constants import (
@@ -301,8 +301,18 @@ def test_worker_new_thesis_ids_match_python() -> None:
         / "src"
         / "daily_path.ts"
     ).read_text(encoding="utf-8")
-    for lid in sorted(CF_NEW_EVENT_THESIS_IDS | CF_NEW_CS_THESIS_IDS):
-        assert f'"{lid}"' in src, lid
+
+    def _ids(name: str) -> set[str]:
+        m = re.search(
+            rf"export const {name} = \[(.*?)] as const",
+            src,
+            flags=re.S,
+        )
+        assert m, name
+        return set(re.findall(r'"([^"]+)"', m.group(1)))
+
+    assert _ids("CF_NEW_EVENT_THESIS_IDS") == set(CF_NEW_EVENT_THESIS_IDS)
+    assert _ids("CF_NEW_CS_THESIS_IDS") == set(CF_NEW_CS_THESIS_IDS)
 
 
 def test_fins_official_keys_are_single_source() -> None:

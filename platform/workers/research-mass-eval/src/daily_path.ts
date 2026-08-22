@@ -2241,6 +2241,99 @@ function addDays(iso: string, n: number): string {
   return d.toISOString().slice(0, 10);
 }
 
+type CsFundSnap = {
+  cheapPb: boolean;
+  expensivePb: boolean;
+  eyHigh: boolean;
+  roeHigh: boolean;
+  divPositive: boolean;
+  npPositive: boolean;
+  eqArHigh: boolean;
+  eqArLow: boolean;
+  taUp: boolean;
+};
+
+/** One linear pass per code (last-fin pointer). Not bars×fins per date. */
+function csFundSnaps(
+  panel: PeriodPanel,
+  code: string,
+  dates: string[],
+): Record<string, CsFundSnap> {
+  const fins = [...(panel.fund_regime?.events_by_code?.[code] || [])].sort(
+    (a, b) =>
+      String(a.disc_date || "").localeCompare(String(b.disc_date || "")),
+  );
+  const closeBy: Record<string, number> = {};
+  for (const [dd, px] of panel.bars?.[code] || []) {
+    if (finite(px)) closeBy[String(dd).slice(0, 10)] = px as number;
+  }
+  const eqArPrints: Record<string, number> = {};
+  const roePrints: Record<string, number> = {};
+  for (const ev of fins) {
+    const dd = String(ev.disc_date || "").slice(0, 10);
+    if (dd && finite(ev.eq_ar)) eqArPrints[dd] = ev.eq_ar as number;
+    if (dd && finite(ev.roe)) roePrints[dd] = ev.roe as number;
+  }
+  let fi = 0;
+  let last: (typeof fins)[number] | null = null;
+  const pbBy: Record<string, number> = {};
+  const eyBy: Record<string, number> = {};
+  const out: Record<string, CsFundSnap> = {};
+  for (const d of dates) {
+    while (fi < fins.length) {
+      const dd = String(fins[fi].disc_date || "").slice(0, 10);
+      if (!dd || dd > d) break;
+      last = fins[fi];
+      fi += 1;
+    }
+    const close = closeBy[d];
+    const bps =
+      last && finite(last.bps) && (last.bps as number) !== 0
+        ? (last.bps as number)
+        : null;
+    const pb = finite(close) && bps !== null ? (close as number) / bps : null;
+    if (pb !== null) pbBy[d] = pb;
+    const eps = last && finite(last.eps) ? (last.eps as number) : null;
+    const ey =
+      finite(close) &&
+      eps !== null &&
+      (close as number) !== 0
+        ? eps / (close as number)
+        : null;
+    if (ey !== null) eyBy[d] = ey;
+    const pbMed = pitMedian(pbBy, d, 20);
+    const eyMed = pitMedian(eyBy, d, 20);
+    const eqMed = pitMedian(eqArPrints, d, 8);
+    const roeMed = pitMedian(roePrints, d, 10);
+    const eqAr =
+      last && finite(last.eq_ar) ? (last.eq_ar as number) : null;
+    out[d] = {
+      cheapPb: pb !== null && pbMed !== null && pb < pbMed,
+      expensivePb: pb !== null && pbMed !== null && pb > pbMed,
+      eyHigh: ey !== null && eyMed !== null && ey > eyMed,
+      roeHigh:
+        last != null &&
+        finite(last.roe) &&
+        roeMed !== null &&
+        (last.roe as number) >= roeMed,
+      divPositive:
+        last != null &&
+        finite(last.div_ann) &&
+        (last.div_ann as number) > 0,
+      npPositive:
+        last != null && finite(last.np) && (last.np as number) > 0,
+      eqArHigh: eqAr !== null && eqMed !== null && eqAr >= eqMed,
+      eqArLow: eqAr !== null && eqMed !== null && eqAr < eqMed,
+      taUp:
+        last != null &&
+        finite(last.ta) &&
+        finite(last.prior_ta) &&
+        (last.ta as number) > (last.prior_ta as number),
+    };
+  }
+  return out;
+}
+
 function gatedCsHeld(
   logic: LogicSpec,
   panel: PeriodPanel,
@@ -2295,6 +2388,12 @@ function gatedCsHeld(
     return on + sp;
   };
   const dates = unionDates(panel.bars);
+  const medOnByDate: Record<string, number | null> = {};
+  for (const d of dates) medOnByDate[d] = pitMedian(overnight, d, 20);
+  const fundSnaps: Record<string, Record<string, CsFundSnap>> = {};
+  for (const code of Object.keys(base)) {
+    fundSnaps[code] = csFundSnaps(panel, code, dates);
+  }
   const onDates = Object.keys(overnight).sort();
   const onDelta: Record<string, number> = {};
   for (let i = 1; i < onDates.length; i++) {
@@ -2321,7 +2420,7 @@ function gatedCsHeld(
       let keep = true;
       let signed = v;
       const on = overnight[d];
-      const medOn = pitMedian(overnight, d, 20);
+      const medOn = medOnByDate[d] ?? null;
       const i = dates.indexOf(d);
       const prev = i > 0 ? dates[i - 1] : null;
       if (lid === "cs_mom_easy_funding") {
@@ -2606,44 +2705,7 @@ function gatedCsHeld(
         const csGate = String(params.cs_gate || "");
         if (csGate && csGate !== "None") {
           const chg = panel.flow_regime?.margin_change_by_code?.[code]?.[d];
-          const fins = panel.fund_regime?.events_by_code?.[code] || [];
-          let fin: (typeof fins)[number] | null = null;
-          for (const ev of fins) {
-            const dd = String(ev.disc_date || "").slice(0, 10);
-            if (dd && dd <= d) fin = ev;
-          }
-          const pairs = panel.bars?.[code] || [];
-          const close = pairs.find(([x]) => x === d)?.[1];
-          const pbHist: Record<string, number> = {};
-          const eyHist: Record<string, number> = {};
-          const roeHist: Record<string, number> = {};
-          for (const [dd, px] of pairs) {
-            if (dd >= d) break;
-            let f2: (typeof fins)[number] | null = null;
-            for (const ev of fins) {
-              const x = String(ev.disc_date || "").slice(0, 10);
-              if (x && x <= dd) f2 = ev;
-            }
-            if (!f2) continue;
-            if (finite(px) && finite(f2.bps) && (f2.bps as number) !== 0) {
-              pbHist[dd] = (px as number) / (f2.bps as number);
-            }
-            if (finite(px) && finite(f2.eps) && (px as number) !== 0) {
-              eyHist[dd] = (f2.eps as number) / (px as number);
-            }
-            if (finite(f2.roe)) roeHist[dd] = f2.roe as number;
-          }
-          const pb =
-            finite(close) && fin && finite(fin.bps) && (fin.bps as number) !== 0
-              ? (close as number) / (fin.bps as number)
-              : null;
-          const ey =
-            finite(close) && fin && finite(fin.eps) && (close as number) !== 0
-              ? (fin.eps as number) / (close as number)
-              : null;
-          const pbMed = pitMedian(pbHist, d, 20);
-          const eyMed = pitMedian(eyHist, d, 20);
-          const roeMed = pitMedian(roeHist, d, 10);
+          const snap = fundSnaps[code]?.[d];
           const nky = panel.nky_vol_series?.rv_abs_by_date || {};
           const nkyMed = pitMedian(nky, d, 20);
           const sr = panel.flow_regime?.short_ratio_by_date || {};
@@ -2663,51 +2725,15 @@ function gatedCsHeld(
                 sr[d] > sr[prev],
               nkyHigh:
                 nkyMed !== null && finite(nky[d]) && nky[d] >= nkyMed,
-              cheapPb: pb !== null && pbMed !== null && pb < pbMed,
-              expensivePb: pb !== null && pbMed !== null && pb > pbMed,
-              eyHigh: ey !== null && eyMed !== null && ey > eyMed,
-              roeHigh:
-                fin != null &&
-                finite(fin.roe) &&
-                roeMed !== null &&
-                (fin.roe as number) >= roeMed,
-              divPositive:
-                fin != null &&
-                finite(fin.div_ann) &&
-                (fin.div_ann as number) > 0,
-              npPositive:
-                fin != null && finite(fin.np) && (fin.np as number) > 0,
-              eqArHigh:
-                fin != null &&
-                finite(fin.eq_ar) &&
-                (() => {
-                  const h: Record<string, number> = {};
-                  for (const ev of fins) {
-                    const dd = String(ev.disc_date || "").slice(0, 10);
-                    if (dd && dd < d && finite(ev.eq_ar))
-                      h[dd] = ev.eq_ar as number;
-                  }
-                  const med = pitMedian(h, d, 8);
-                  return med !== null && (fin.eq_ar as number) >= med;
-                })(),
-              eqArLow:
-                fin != null &&
-                finite(fin.eq_ar) &&
-                (() => {
-                  const h: Record<string, number> = {};
-                  for (const ev of fins) {
-                    const dd = String(ev.disc_date || "").slice(0, 10);
-                    if (dd && dd < d && finite(ev.eq_ar))
-                      h[dd] = ev.eq_ar as number;
-                  }
-                  const med = pitMedian(h, d, 8);
-                  return med !== null && (fin.eq_ar as number) < med;
-                })(),
-              taUp:
-                fin != null &&
-                finite(fin.ta) &&
-                finite(fin.prior_ta) &&
-                (fin.ta as number) > (fin.prior_ta as number),
+              cheapPb: snap?.cheapPb === true,
+              expensivePb: snap?.expensivePb === true,
+              eyHigh: snap?.eyHigh === true,
+              roeHigh: snap?.roeHigh === true,
+              divPositive: snap?.divPositive === true,
+              npPositive: snap?.npPositive === true,
+              eqArHigh: snap?.eqArHigh === true,
+              eqArLow: snap?.eqArLow === true,
+              taUp: snap?.taUp === true,
               cheapIv:
                 finite(panel.atm_iv_series?.[d]) &&
                 finite(panel.base_vol_series?.[d]) &&

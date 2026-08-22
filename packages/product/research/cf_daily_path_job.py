@@ -121,8 +121,11 @@ def run_cf_daily_path_fanout(
 
     Wall-clock target: staging + max(isolate), not sum(logics).
     """
+    from research.eval_tracks import infer_eval_track
+
     t0 = time.perf_counter()
     jid = str(job_id or f"eval-cf-dp-{uuid4().hex[:10]}")
+    track = track or infer_eval_track(max_codes=max_codes)
     ids = list(logic_ids) if logic_ids is not None else list(CF_BAR_NATIVE_LOGIC_IDS)
     if len(ids) < 1:
         raise CfMassEvalError("logic_ids required")
@@ -264,6 +267,7 @@ def run_cf_daily_path_fanout(
         ),
         "stage_reused": bool((stage_meta or {}).get("reused")),
         "stage_cache_id": (stage_meta or {}).get("cache_id"),
+        "eval_track": track or (stage_meta or {}).get("eval_track"),
         "fanout_sec": round(fan_sec, 3),
         "longest_isolate_sec": round(longest, 3) if longest is not None else None,
         "wall_sec": round(time.perf_counter() - t0, 3),

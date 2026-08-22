@@ -458,20 +458,15 @@ WORKER_ISOLATE_LINEARIZED_OK: frozenset[str] = frozenset(
         "event_eqar_high_cluster",
         "event_ta_up_cluster",
         "event_cheap_pb_cluster",
-    }
-)
-WORKER_ISOLATE_LIMIT_IDS: frozenset[str] = frozenset(
-    {
         "cs_eqar_high_on_impulse",
         "cs_cheap_pb_margin_down",
         "cs_eqar_low_margin_up",
     }
 )
-WORKER_ISOLATE_LIMIT_REASONS: dict[str, str] = {
-    "cs_eqar_high_on_impulse": "cs_fund_scan_x_dates; 1102 at liq100 after impulse cache",
-    "cs_cheap_pb_margin_down": "cs_fund_scan_x_dates; 1102 at liq100",
-    "cs_eqar_low_margin_up": "cs_fund_scan_x_dates; 1102 at liq100",
-}
+# Empty after v21 csFundSnaps hoist + eval-cf-dp-cs-hoist-20260822a complete.
+# Keep the set as the park mechanism; do not restore a 1102 without a path.
+WORKER_ISOLATE_LIMIT_IDS: frozenset[str] = frozenset()
+WORKER_ISOLATE_LIMIT_REASONS: dict[str, str] = {}
 SPARSE_ON_15NAME_SHARD: frozenset[str] = frozenset(
     {
         "event_may_easing",

@@ -1056,7 +1056,6 @@ def build_real_period_panel(
        dataset, source, status, n_codes, n_days}
     """
     from research.class_hyp_eval import (
-        DEFAULT_EVAL_CODES,
         bars_rich_to_close_panel,
         load_bars_from_sqlite_rich,
         load_bars_ndjson_rich,
@@ -1065,11 +1064,12 @@ def build_real_period_panel(
 
     p = normalize_period_row(period)
     pid = str(p["period_id"])
-    selected = (
-        [str(c).strip() for c in codes if str(c).strip()]
-        if codes is not None
-        else list(DEFAULT_EVAL_CODES)[: int(max_codes)]
-    )
+    if codes is None:
+        from research.class_hyp_eval import select_eval_universe
+
+        selected = select_eval_universe(max_codes=int(max_codes))
+    else:
+        selected = [str(c).strip() for c in codes if str(c).strip()]
     selected = selected[: int(max_codes)]
     if mirror_dir is not None:
         bars_path = resolve_bars_path(
