@@ -40,12 +40,17 @@ def test_catalog_yaml_parity_with_python_specs() -> None:
     for spec in catalog:
         assert spec.get("go") is not True
         assert spec.get("promote_as_main") is not True
+        assert spec.get("generation_enabled") is False
         path = Path(spec["catalog_path"])
         assert path.stem == spec["logic_id"]
         assert path.is_file()
     for spec in all_unique_logic_specs():
         assert spec.get("go") is not True
         assert spec.get("promote_as_main") is not True
+        assert spec.get("generation_enabled") is False
+    for spec in NEW_COMBO_LOGIC:
+        assert spec.get("generation_enabled") is False
+        assert spec.get("go") is not True
 
 
 def test_combo_yaml_params_include_gates() -> None:
@@ -248,6 +253,7 @@ def test_python_only_event_gates_skip_catalog() -> None:
     from research.unique_logic.event_combos import NEW_COMBO_LOGIC
 
     assert WORKER_PYTHON_ONLY_GATE_POLICY == "python_local_or_lid_branch"
+    assert PYTHON_ONLY_EVENT_GATES == frozenset()
     assert PYTHON_ONLY_EVENT_GATES.isdisjoint(COMBO_EVENT_GATES)
 
     catalog = python_only_gate_logic_ids()
