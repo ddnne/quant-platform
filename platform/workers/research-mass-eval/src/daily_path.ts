@@ -686,19 +686,19 @@ export const CF_NEW_CS_THESIS_IDS = [
 ] as const;
 
 export const CF_EVENT_LOGIC_IDS = [
-  "event_funding_stress_skip",
+  "afterclose_only_event_hold",
   "curve_steep_event_confirm",
   "disclosure_cluster_mom_gate",
-  "surprise_xs_rank_hold",
-  "large_surprise_event_hold",
-  "afterclose_only_event_hold",
-  "event_pre_mom_agree_hold",
-  "event_margin_crowding_skip",
+  "event_funding_adaptive_side",
   "event_funding_easy_short",
   "event_funding_stress_ls",
-  "surprise_xs_rank_flip",
-  "event_funding_adaptive_side",
+  "event_funding_stress_skip",
+  "event_margin_crowding_skip",
+  "event_pre_mom_agree_hold",
+  "large_surprise_event_hold",
   "surprise_xs_rank_adaptive",
+  "surprise_xs_rank_flip",
+  "surprise_xs_rank_hold",
   ...CF_NEW_EVENT_THESIS_IDS,
 ] as const;
 

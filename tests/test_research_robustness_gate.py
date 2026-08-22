@@ -8,13 +8,7 @@ from pathlib import Path
 import pytest
 
 from research.robustness_gate import (
-    CONNECTED_TO_MASS,
-    CONNECTED_TO_READY,
     GATE_VERSION,
-    MASS_RESEARCH,
-    OPERATIONAL_GO,
-    PHASE7,
-    READY_DECLARED,
     evaluate_research_robustness_gate,
     period_rows_from_cross_table,
     research_robustness_gate_document,
@@ -34,12 +28,6 @@ def test_gate_document_closed_to_ready_mass():
     assert doc["connected_to_mass"] is False
     assert doc["mass_research"] == "NO-GO"
     assert doc["phase7"] == "OFF"
-    assert READY_DECLARED is False
-    assert OPERATIONAL_GO is False
-    assert CONNECTED_TO_READY is False
-    assert CONNECTED_TO_MASS is False
-    assert MASS_RESEARCH == "NO-GO"
-    assert PHASE7 == "OFF"
 
 
 def test_gate_fails_single_period_tip_like_win():

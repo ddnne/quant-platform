@@ -39,7 +39,6 @@ from research.mass_strategy_factory import (
     RESEARCH_FAMILY_REGISTER_ID,
     RESEARCH_FAMILY_REGISTRATION_IS_NOT_A_PASS,
     research_family_append_document,
-    RESEARCH_UNIQUE_FAMILY_IDS,
     RESEARCH_UNIQUE_LOGIC_IDS,
     LOGIC_TEMPLATE_IDS,
     LOGIC_TEMPLATES,
@@ -129,6 +128,7 @@ def test_logic_templates_distinct_economic_logic():
         "compare_only"
     ) is True
     # research-family unique_logic: recognized, not generated, not remapped.
+    # Catalog / daily_path owns these ids; they are not factory templates.
     for lid in (
         "event_funding_stress_skip",
         "curve_steep_event_confirm",
@@ -146,10 +146,8 @@ def test_logic_templates_distinct_economic_logic():
         "xs_margin_delta_rank",
         "idio_mom_macro_impulse",
     ):
-        assert lid in LOGIC_TEMPLATES
         assert lid in RESEARCH_UNIQUE_LOGIC_IDS
-        assert LOGIC_TEMPLATES[lid].generation_enabled is False
-        assert LOGIC_TEMPLATES[lid].family_id in RESEARCH_UNIQUE_FAMILY_IDS
+        assert lid not in LOGIC_TEMPLATES
     assert "event_funding_stress_skip" in doc.get("unique_logic_ids", [])
     assert "event_funding_easy_short" in RESEARCH_UNIQUE_LOGIC_IDS
     assert "overnight_level_cs_tilt" in doc.get(

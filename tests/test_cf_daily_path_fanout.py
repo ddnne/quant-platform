@@ -228,21 +228,29 @@ def test_cf_daily_path_job_does_not_import_factory() -> None:
     import ast
     from pathlib import Path
 
-    src = (
+    import research.eval_universe as eu
+
+    research_dir = (
         Path(__file__).resolve().parents[1]
         / "packages"
         / "product"
         / "research"
-        / "cf_daily_path_job.py"
     )
-    tree = ast.parse(src.read_text(encoding="utf-8"))
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            for alias in node.names:
-                assert "mass_strategy_factory" not in alias.name
-        elif isinstance(node, ast.ImportFrom) and node.module:
-            assert "mass_strategy_factory" not in node.module
-            assert node.module != "research.mass_strategy_factory"
+    for name in (
+        "cf_daily_path_job.py",
+        "cf_mass_eval_job.py",
+        "bar_native_specs.py",
+        "eval_universe.py",
+    ):
+        tree = ast.parse((research_dir / name).read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    assert "mass_strategy_factory" not in alias.name, name
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                assert "mass_strategy_factory" not in node.module, name
+                assert node.module != "research.mass_strategy_factory", name
+    assert not hasattr(eu, "DEFAULT_EVAL_CODES")
 
 
 def test_panels_cache_id_stable() -> None:

@@ -2,7 +2,8 @@
 
 CF Worker eventHeld / gatedCsHeld is the candidate-grade path.
 Catalog YAML under ``specs/research_logics`` is the declaration SoT
-(gates / cs_gate / side). ``_SPECS`` remains the typed runtime table.
+(gates / cs_gate / side) and the combo runtime dispatch table.
+``_SPECS`` is a parity shadow only; do not delete it this turn.
 Does not promote / GO.
 """
 from __future__ import annotations
@@ -2715,7 +2716,14 @@ def _combo_row(s: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-NEW_COMBO_LOGIC: tuple[dict[str, Any], ...] = tuple(_combo_row(s) for s in _SPECS)
+def _yaml_combo_runtime_rows() -> tuple[dict[str, Any], ...]:
+    """Lazy-import catalog rows so ``yaml_combo_rows`` can call ``_combo_row``."""
+    from research.unique_logic.catalog import yaml_combo_rows
+
+    return tuple(yaml_combo_rows())
+
+
+NEW_COMBO_LOGIC: tuple[dict[str, Any], ...] = _yaml_combo_runtime_rows()
 
 
 def spec_by_id(logic_id: str) -> dict[str, Any] | None:
@@ -2726,12 +2734,11 @@ def spec_by_id(logic_id: str) -> dict[str, Any] | None:
 
 
 def combo_runtime_spec(logic_id: str) -> dict[str, Any] | None:
-    """Typed runtime row for a combo thesis.
+    """YAML-derived runtime row for a combo thesis.
 
-    Catalog YAML under ``specs/research_logics`` is the declaration source of
-    truth for gates, cs_gate, and side. Dispatch still reads the Python
-    ``_SPECS`` / ``NEW_COMBO_LOGIC`` rows so gate names stay typed. Do not
-    switch ``NEW_COMBO_LOGIC`` to YAML rows yet. Does not GO.
+    Catalog YAML under ``specs/research_logics`` is declaration and combo
+    dispatch SoT. ``NEW_COMBO_LOGIC`` is built from ``yaml_combo_rows``.
+    ``_SPECS`` is a parity shadow only. Does not GO.
     """
     return spec_by_id(logic_id)
 
@@ -2739,16 +2746,18 @@ def combo_runtime_spec(logic_id: str) -> dict[str, Any] | None:
 def assert_yaml_matches_specs(*, root: Any = None) -> None:
     """Fail if catalog YAML gates / cs_gate / side diverge from ``_SPECS``.
 
-    YAML is the declaration SoT. Runtime still uses ``combo_runtime_spec``.
-    A missing YAML field fails (gates were rewritten into the catalog).
+    YAML is the combo runtime SoT. Compare YAML-derived rows against
+    ``tuple(_combo_row(s) for s in _SPECS)``, not ``NEW_COMBO_LOGIC``
+    (tautological after the YAML switch). A missing YAML field fails.
     Does not GO.
     """
     from research.unique_logic.catalog import combo_row_from_yaml, load_catalog_specs
 
+    shadow = tuple(_combo_row(s) for s in _SPECS)
     raw_by_id = {str(s["logic_id"]): s for s in load_catalog_specs(root=root)}
     missing: list[str] = []
     mismatches: list[str] = []
-    for py in NEW_COMBO_LOGIC:
+    for py in shadow:
         lid = str(py["logic_id"])
         yml = raw_by_id.get(lid)
         if yml is None:

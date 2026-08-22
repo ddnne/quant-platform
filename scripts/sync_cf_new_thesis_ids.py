@@ -27,6 +27,11 @@ def _ts_array(name: str, ids: list[str]) -> str:
     return f"export const {name} = [\n{inner},\n] as const;"
 
 
+def _ts_array_spread(name: str, ids: list[str], spread: str) -> str:
+    inner = ",\n".join(f'  "{lid}"' for lid in ids)
+    return f"export const {name} = [\n{inner},\n  ...{spread},\n] as const;"
+
+
 def _ts_set(name: str, ids: list[str]) -> str:
     inner = ",\n".join(f'  "{lid}"' for lid in ids)
     return f"const {name} = new Set([\n{inner},\n]);"
@@ -40,10 +45,14 @@ def main() -> int:
     root = ensure_repo_root()
     sys.path.insert(0, str(root / "packages" / "product"))
     from research.unique_logic.constants import (
+        ADAPTIVE_LOGIC_IDS,
         CF_NEW_CS_THESIS_IDS,
         CF_NEW_EVENT_THESIS_IDS,
         COMBO_EVENT_GATES,
         CS_LOGIC_IDS,
+        EVENT_FILTER_LOGIC_IDS,
+        EVENT_LOGIC_IDS,
+        EVENT_SIDES_LOGIC_IDS,
         PYTHON_ONLY_EVENT_GATES,
     )
 
@@ -57,6 +66,18 @@ def main() -> int:
     if overlap:
         raise SystemExit(
             f"CS_LOGIC_IDS must stay off CF_NEW_CS_THESIS_IDS: {sorted(overlap)}"
+        )
+    event_prefix = (
+        EVENT_LOGIC_IDS
+        | EVENT_FILTER_LOGIC_IDS
+        | EVENT_SIDES_LOGIC_IDS
+        | ADAPTIVE_LOGIC_IDS
+    )
+    event_overlap = event_prefix & set(CF_NEW_EVENT_THESIS_IDS)
+    if event_overlap:
+        raise SystemExit(
+            "event-family prefix must stay off CF_NEW_EVENT_THESIS_IDS: "
+            f"{sorted(event_overlap)}"
         )
 
     path = (
@@ -84,6 +105,7 @@ def main() -> int:
         )
 
     event_ids = sorted(CF_NEW_EVENT_THESIS_IDS)
+    event_prefix_ids = sorted(event_prefix)
     cs_ids = sorted(CF_NEW_CS_THESIS_IDS)
     unique_cs_ids = sorted(CS_LOGIC_IDS)
     gate_ids = sorted(COMBO_EVENT_GATES)
@@ -115,12 +137,24 @@ def main() -> int:
         count=1,
         flags=re.S,
     )
-    if n1 != 1 or n2 != 1 or n3 != 1 or n4 != 1:
+    src2, n5 = re.subn(
+        r"export const CF_EVENT_LOGIC_IDS = \[.*?\] as const;",
+        _ts_array_spread(
+            "CF_EVENT_LOGIC_IDS", event_prefix_ids, "CF_NEW_EVENT_THESIS_IDS"
+        ),
+        src2,
+        count=1,
+        flags=re.S,
+    )
+    if n1 != 1 or n2 != 1 or n3 != 1 or n4 != 1 or n5 != 1:
         raise SystemExit(
-            f"rewrite failed n_event={n1} n_cs={n2} n_unique_cs={n3} n_gates={n4}"
+            f"rewrite failed n_event={n1} n_cs={n2} n_unique_cs={n3} "
+            f"n_gates={n4} n_event_logic={n5}"
         )
     if "(CF_NEW_CS_THESIS_IDS as readonly string[]).includes(lid)" not in src2:
         raise SystemExit("dispatch/usesCrossSection must still OR CF_NEW_CS_THESIS_IDS")
+    if "...CF_NEW_EVENT_THESIS_IDS" not in src2:
+        raise SystemExit("CF_EVENT_LOGIC_IDS must spread CF_NEW_EVENT_THESIS_IDS")
     if src2 != src:
         path.write_text(src2, encoding="utf-8")
         print("rewrote", path)
@@ -129,6 +163,8 @@ def main() -> int:
     print(
         "n_event",
         len(event_ids),
+        "n_event_prefix",
+        len(event_prefix_ids),
         "n_cs",
         len(cs_ids),
         "n_unique_cs",

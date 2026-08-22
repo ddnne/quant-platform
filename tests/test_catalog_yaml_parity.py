@@ -6,8 +6,12 @@ from pathlib import Path
 from research.unique_logic import all_unique_logic_specs, load_catalog_specs
 from research.unique_logic.constants import (
     CF_NEW_THESIS_IDS,
+    COMBO_EVENT_GATES,
     KNOWN_EVENT_GATES,
+    PYTHON_ONLY_EVENT_GATES,
     WORKER_ISOLATE_LIMIT_IDS,
+    WORKER_PYTHON_ONLY_GATE_POLICY,
+    python_only_gate_logic_ids,
 )
 
 _YAML_DIR = Path(__file__).resolve().parents[1] / "specs" / "research_logics"
@@ -74,16 +78,25 @@ def test_combo_yaml_gates_cs_gate_side_match_specs() -> None:
     )
 
     assert_yaml_matches_specs()
-    yaml_ids = {r["logic_id"] for r in yaml_combo_rows()}
+    yaml_rows = yaml_combo_rows()
+    yaml_ids = {r["logic_id"] for r in yaml_rows}
     py_ids = {s["logic_id"] for s in NEW_COMBO_LOGIC}
-    assert py_ids <= yaml_ids
+    assert py_ids == yaml_ids
     sample = NEW_COMBO_LOGIC[0]
     rt = combo_runtime_spec(sample["logic_id"])
     assert rt is not None
     assert rt["logic_id"] == sample["logic_id"]
     assert rt.get("go") is not True
-    # Runtime still uses typed _SPECS rows, not YAML-derived dicts.
+    # Runtime dispatch walks YAML-derived NEW_COMBO_LOGIC (not the _SPECS shadow).
     assert rt is sample
+    import inspect
+
+    from research.unique_logic import catalog as catalog_mod
+
+    src = inspect.getsource(catalog_mod.yaml_combo_rows)
+    assert "import NEW_COMBO_LOGIC" not in src
+    assert "NEW_COMBO_LOGIC" not in src
+    assert "_COMBO_EVALUATOR" in src
 
 
 def test_unknown_event_gate_fail_closed_is_declared() -> None:
@@ -95,3 +108,56 @@ def test_unknown_event_gate_fail_closed_is_declared() -> None:
     assert "not_a_real_gate" not in KNOWN_EVENT_GATES
     src = inspect.getsource(event_combos)
     assert "if g not in KNOWN_EVENT_GATES" in src
+
+
+def test_python_only_event_gates_skip_catalog() -> None:
+    import re
+    from pathlib import Path
+
+    from research.unique_logic.event_combos import NEW_COMBO_LOGIC
+
+    assert WORKER_PYTHON_ONLY_GATE_POLICY == "python_local_or_lid_branch"
+    assert PYTHON_ONLY_EVENT_GATES.isdisjoint(COMBO_EVENT_GATES)
+
+    catalog = python_only_gate_logic_ids()
+    intersecting = frozenset(
+        str(s["logic_id"])
+        for s in NEW_COMBO_LOGIC
+        if PYTHON_ONLY_EVENT_GATES.intersection(
+            (s.get("params") or {}).get("gates") or ()
+        )
+    )
+    assert catalog == intersecting
+    assert catalog == frozenset(
+        {
+            "event_pre_mom_easy_funding",
+            "event_pre_mom_steep_curve",
+            "event_tight_and_crowded_fade",
+            "margin_crowd_fade_event",
+            "month_end_event_skip",
+            "overnight_tightening_fade_event",
+            "surprise_xs_fy_end",
+            "fy_end_event_fade",
+            "event_may_results_follow",
+            "event_may_easing",
+            "fy_start_event_follow",
+        }
+    )
+
+    src = (
+        Path(__file__).resolve().parents[1]
+        / "platform"
+        / "workers"
+        / "research-mass-eval"
+        / "src"
+        / "daily_path.ts"
+    ).read_text(encoding="utf-8")
+    m = re.search(
+        r"const COMBO_EVENT_GATES = new Set\(\[(.*?)]\);",
+        src,
+        flags=re.S,
+    )
+    assert m, "Worker COMBO_EVENT_GATES"
+    worker_gates = set(re.findall(r'"([^"]+)"', m.group(1)))
+    assert worker_gates.isdisjoint(PYTHON_ONLY_EVENT_GATES)
+    assert worker_gates == set(COMBO_EVENT_GATES)

@@ -18,12 +18,8 @@ import pytest
 from research.paper_candidate_adapter import (
     LIVE_ORDER_PATH_ENABLED,
     LIVE_ORDERS,
-    MASS_RESEARCH,
-    OPERATIONAL_GO,
     PAPER_CANDIDATE_SPEC_VERSION,
     PAPER_SCHEDULER_ARMED,
-    PHASE7,
-    READY_DECLARED,
     PaperCandidateReceptacle,
     adapt_class_hyp_candidate,
     adapt_from_class_hyp_bundle,
@@ -47,10 +43,6 @@ def test_module_constants_are_unarmed():
     assert PAPER_SCHEDULER_ARMED is False
     assert LIVE_ORDERS is False
     assert LIVE_ORDER_PATH_ENABLED is False
-    assert READY_DECLARED is False
-    assert OPERATIONAL_GO is False
-    assert MASS_RESEARCH == "NO-GO"
-    assert PHASE7 == "OFF"
 
 
 def test_multi_day_hold_10d_strategy_spec_is_closed_and_interpretable():

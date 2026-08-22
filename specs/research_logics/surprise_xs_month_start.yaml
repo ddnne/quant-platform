@@ -27,4 +27,7 @@ params:
   entry_shift: 0
   hold_tail_days: 0
 evaluator: research.unique_logic.event_combos.evaluate_combo_daily_mtm
-notes: combo thesis; occupancy-gated; CF daily_path is SoT
+notes: >
+  combo thesis; occupancy-gated; CF daily_path is SoT. Worker leftover still
+  applies dd>"05" (first 5 days) even though catalog gate is first_half_month
+  (dd<=15). Dropping the leftover would WIDEN occupancy. Not a pass. Not GO.

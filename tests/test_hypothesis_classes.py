@@ -16,9 +16,6 @@ from research.hypothesis_classes import (
     CLASS_SIMPLE_DAILY_SIGN,
     DEFAULT_GENERATION_CLASS_IDS,
     HYPOTHESIS_CLASS_REGISTRY,
-    MASS_RESEARCH,
-    PHASE7,
-    READY_DECLARED,
     REQUIRED_CLASS_FIELDS,
     assert_generation_mix_not_skewed,
     assert_registry_closed_to_ready_mass,
@@ -226,8 +223,5 @@ def test_registry_document_freezes():
     assert doc["mass_research"] == "NO-GO"
     assert doc["phase7"] == "OFF"
     assert doc["ready_declared"] is False
-    assert READY_DECLARED is False
-    assert MASS_RESEARCH == "NO-GO"
-    assert PHASE7 == "OFF"
     assert_registry_closed_to_ready_mass(doc)
     assert_registry_closed_to_ready_mass()

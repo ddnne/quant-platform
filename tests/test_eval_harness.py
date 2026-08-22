@@ -22,19 +22,13 @@ from data_contracts.permanent_defer import (
 from research.eval_harness import (
     APPROVED_SIGNAL_LEGS,
     COMPLETE_21_DATASET_SET,
-    CONNECTED_TO_MASS_RESEARCH_LOOP,
     DEFAULT_SIGNAL_DATASETS,
     DEFAULT_SIGNAL_ID,
     HARNESS_VERSION,
-    MASS_RESEARCH,
     NEXTDAY_RESEARCH_LABEL,
-    ORDER_EXECUTION,
-    PHASE7,
     PIPELINE,
-    READY_DECLARED,
     SIGNAL_CANDIDATE_ONLY,
     EvalHarnessError,
-    harness_freeze_status,
     require_approved_signal_legs,
     require_harness_datasets,
     run_full_pipeline,
@@ -905,19 +899,13 @@ def test_multi_year_ast_and_mass_off_freezes():
     """W63 freezes: no mass arm, no READY connect in multi-year API surface."""
     from research.eval_harness import (
         CONNECTED_TO_MASS_RESEARCH_LOOP,
-        MASS_RESEARCH,
         MULTI_YEAR_LABEL,
         ORDER_EXECUTION,
-        PHASE7,
-        READY_DECLARED,
         harness_freeze_status,
     )
 
     st = harness_freeze_status()
     assert st["mass_research"] == "NO-GO"
-    assert MASS_RESEARCH == "NO-GO"
-    assert PHASE7 == "OFF"
-    assert READY_DECLARED is False
     assert ORDER_EXECUTION is False
     assert CONNECTED_TO_MASS_RESEARCH_LOOP is False
     assert "未宣言" in MULTI_YEAR_LABEL

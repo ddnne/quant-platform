@@ -6,14 +6,7 @@ import ast
 from pathlib import Path
 
 from research.baseline_catalog import (
-    CONNECTED_TO_MASS,
-    CONNECTED_TO_READY,
     CATALOG_VERSION,
-    MASS_GENERATE_SIGNALS,
-    MASS_RESEARCH,
-    OPERATIONAL_GO,
-    PHASE7,
-    READY_DECLARED,
     REJECTED_SIMPLE_DAILY_SIGN_BASELINES,
     RESEARCH_STATUS_REJECTED,
     SIGNAL_ID_S1,
@@ -26,15 +19,7 @@ from research.baseline_catalog import (
     is_research_baseline_rejected,
     rejected_baseline_catalog,
 )
-from research.robustness_gate import (
-    CONNECTED_TO_MASS as GATE_CONNECTED_TO_MASS,
-    CONNECTED_TO_READY as GATE_CONNECTED_TO_READY,
-    MASS_RESEARCH as GATE_MASS,
-    OPERATIONAL_GO as GATE_OPERATIONAL_GO,
-    PHASE7 as GATE_PHASE7,
-    READY_DECLARED as GATE_READY,
-    evaluate_research_robustness_gate,
-)
+from research.robustness_gate import evaluate_research_robustness_gate
 
 REPO = Path(__file__).resolve().parents[1]
 CATALOG_PATH = REPO / "packages" / "product" / "research" / "baseline_catalog.py"
@@ -71,13 +56,6 @@ def test_rejected_catalog_exists_and_lists_s1_to_s5():
 
 
 def test_catalog_mass_ready_remain_false():
-    assert READY_DECLARED is False
-    assert OPERATIONAL_GO is False
-    assert CONNECTED_TO_READY is False
-    assert CONNECTED_TO_MASS is False
-    assert MASS_RESEARCH == "NO-GO"
-    assert PHASE7 == "OFF"
-    assert MASS_GENERATE_SIGNALS is False
     assert_catalog_closed_to_ready_mass()
     doc = rejected_baseline_catalog()
     assert_catalog_closed_to_ready_mass(doc)
@@ -94,14 +72,6 @@ def test_catalog_mass_ready_remain_false():
 
 def test_gate_pass_still_not_ready_with_catalog_present():
     """Keep gate pass ≠ READY even when rejected catalog exists."""
-    # Gate freezes remain closed.
-    assert GATE_READY is False
-    assert GATE_OPERATIONAL_GO is False
-    assert GATE_CONNECTED_TO_READY is False
-    assert GATE_CONNECTED_TO_MASS is False
-    assert GATE_MASS == "NO-GO"
-    assert GATE_PHASE7 == "OFF"
-
     # Soft cost-aware pass (e.g. S4-like all − after cost) still not READY.
     rows = [
         {

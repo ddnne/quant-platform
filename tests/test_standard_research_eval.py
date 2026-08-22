@@ -35,8 +35,6 @@ from research.cost_models import (
 from research.eval_harness import (
     CHECKLIST_VERSION,
     CHECKLIST_VERSION_V1,
-    MASS_RESEARCH,
-    PHASE7,
     STANDARD_EVAL_DAILY_PATH_DD_PROOF,
     STANDARD_EVAL_MODES,
     EvalHarnessError,
@@ -109,9 +107,7 @@ def test_dry_run_wiring_completes_mass_ready_phase7_closed():
     assert out["ready_declared"] is False
     assert out["operational_go"] is False
     assert out["mass_research"] == "NO-GO"
-    assert MASS_RESEARCH == "NO-GO"
     assert out["phase7"] == "OFF"
-    assert PHASE7 == "OFF"
     assert out["connected_to_ready"] is False
     assert out["connected_to_mass"] is False
     assert out["edge_claimed"] is False

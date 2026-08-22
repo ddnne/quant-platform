@@ -11,12 +11,8 @@ from research.options_225_vol_series import (
     DATASET_ID,
     GAP_POLICY,
     IV_FIELDS_AVAILABLE_FROM,
-    MASS_RESEARCH,
-    OPERATIONAL_GO,
     OPTIONS_225_VOL_SERIES_VERSION,
     OPTIONS_225_VOL_SERIES_WAVE,
-    PHASE7,
-    READY_DECLARED,
     SKEW_CONVENTION,
     build_daily_atm_iv_series,
     build_daily_basevol_delta_series,
@@ -162,10 +158,6 @@ def test_wave_pins_and_freezes():
     assert DATASET_ID == "derivatives_bars_daily_options_225"
     assert GAP_POLICY == "disclose_only_no_ffill_no_invent"
     assert IV_FIELDS_AVAILABLE_FROM == "2016-07-19"
-    assert MASS_RESEARCH == "NO-GO"
-    assert PHASE7 == "OFF"
-    assert READY_DECLARED is False
-    assert OPERATIONAL_GO is False
     assert BASEVOL_ROLE == "canonical_level"
     assert ATM_IV_ROLE == "compare_only"
 

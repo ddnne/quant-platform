@@ -70,6 +70,27 @@ PYTHON_ONLY_EVENT_GATES: frozenset[str] = frozenset(
     }
 )
 KNOWN_EVENT_GATES: frozenset[str] = COMBO_EVENT_GATES | PYTHON_ONLY_EVENT_GATES
+# Worker COMBO_EVENT_GATES stays disjoint of PYTHON_ONLY_EVENT_GATES:
+# names-only (no generic bodies) would empty occupancy. Python local eval
+# or lid-specific daily_path.ts branches cover the intersecting combos.
+WORKER_PYTHON_ONLY_GATE_POLICY: str = "python_local_or_lid_branch"
+
+
+def python_only_gate_logic_ids() -> frozenset[str]:
+    """Combo lids whose params.gates intersect PYTHON_ONLY_EVENT_GATES.
+
+    Lazy import: ``event_combos`` imports this module. Worker lid branches
+    cover the returned set; do not copy the 7 names onto Worker
+    ``COMBO_EVENT_GATES``.
+    """
+    from research.unique_logic.event_combos import NEW_COMBO_LOGIC
+
+    lids: set[str] = set()
+    for spec in NEW_COMBO_LOGIC:
+        gates = (spec.get("params") or {}).get("gates") or spec.get("gates") or ()
+        if PYTHON_ONLY_EVENT_GATES.intersection(str(g) for g in gates):
+            lids.add(str(spec["logic_id"]))
+    return frozenset(lids)
 
 KNOWN_WEAK_THESIS: frozenset[str] = frozenset(
     {
@@ -466,6 +487,15 @@ CF_NEW_CS_THESIS_IDS: frozenset[str] = frozenset(
     }
 )
 CF_NEW_THESIS_IDS: frozenset[str] = CF_NEW_EVENT_THESIS_IDS | CF_NEW_CS_THESIS_IDS
+# Unique-logic recognition set (catalog + factory). Not generation / not GO.
+RESEARCH_UNIQUE_LOGIC_IDS: frozenset[str] = (
+    EVENT_LOGIC_IDS
+    | EVENT_FILTER_LOGIC_IDS
+    | EVENT_SIDES_LOGIC_IDS
+    | ADAPTIVE_LOGIC_IDS
+    | CS_LOGIC_IDS
+    | CF_NEW_THESIS_IDS
+)
 # CF daily_path eventHeld set (Python unique_logic event family on Worker).
 CF_EVENT_DAILY_PATH_IDS: frozenset[str] = (
     EVENT_LOGIC_IDS

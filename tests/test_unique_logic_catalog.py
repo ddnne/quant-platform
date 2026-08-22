@@ -331,10 +331,15 @@ def test_worker_new_thesis_ids_match_python() -> None:
     from pathlib import Path
 
     from research.unique_logic.constants import (
+        ADAPTIVE_LOGIC_IDS,
+        CF_EVENT_DAILY_PATH_IDS,
         CF_NEW_CS_THESIS_IDS,
         CF_NEW_EVENT_THESIS_IDS,
         COMBO_EVENT_GATES,
         CS_LOGIC_IDS,
+        EVENT_FILTER_LOGIC_IDS,
+        EVENT_LOGIC_IDS,
+        EVENT_SIDES_LOGIC_IDS,
         PYTHON_ONLY_EVENT_GATES,
     )
 
@@ -362,6 +367,26 @@ def test_worker_new_thesis_ids_match_python() -> None:
     assert _ids("COMBO_EVENT_GATES").isdisjoint(PYTHON_ONLY_EVENT_GATES)
     assert _ids("CF_UNIQUE_CS_LOGIC_IDS") == set(CS_LOGIC_IDS)
     assert set(CS_LOGIC_IDS).isdisjoint(CF_NEW_CS_THESIS_IDS)
+    event_prefix = (
+        EVENT_LOGIC_IDS
+        | EVENT_FILTER_LOGIC_IDS
+        | EVENT_SIDES_LOGIC_IDS
+        | ADAPTIVE_LOGIC_IDS
+    )
+    assert len(event_prefix) == 13
+    event_block = re.search(
+        r"export const CF_EVENT_LOGIC_IDS = \[(.*?)] as const;",
+        src,
+        flags=re.S,
+    )
+    assert event_block, "CF_EVENT_LOGIC_IDS"
+    assert "...CF_NEW_EVENT_THESIS_IDS" in event_block.group(1)
+    prefix_quoted = re.findall(r'"([^"]+)"', event_block.group(1))
+    assert prefix_quoted == sorted(event_prefix)
+    assert _ids("CF_EVENT_LOGIC_IDS") == set(event_prefix)
+    assert _ids("CF_EVENT_LOGIC_IDS") | _ids("CF_NEW_EVENT_THESIS_IDS") == set(
+        CF_EVENT_DAILY_PATH_IDS
+    )
     assert "(CF_UNIQUE_CS_LOGIC_IDS as readonly string[]).includes(lid)" in src
     assert "(CF_NEW_CS_THESIS_IDS as readonly string[]).includes(lid)" in src
 

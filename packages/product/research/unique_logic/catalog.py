@@ -1,8 +1,9 @@
 """Load unique_logic declarations from ``specs/research_logics/*.yaml``.
 
-YAML catalog is the declaration source of truth (gates, cs_gate, side).
-``event_combos._SPECS`` remains the typed runtime table; do not delete it.
-Runtime dispatch still uses Python rows so gates stay typed.
+YAML catalog is the declaration source of truth (gates, cs_gate, side)
+and the combo runtime dispatch table (``yaml_combo_rows`` →
+``event_combos.NEW_COMBO_LOGIC``). ``event_combos._SPECS`` is a parity
+shadow only; do not delete it this turn.
 Scores live in R2/D1, not markdown.
 The schema is intentionally small (no general YAML dependency).
 """
@@ -216,15 +217,14 @@ def combo_row_from_yaml(spec: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def yaml_combo_rows(*, root: Path | None = None) -> list[dict[str, Any]]:
-    """Combo rows from catalog YAML (declaration SoT; not runtime dispatch)."""
-    from research.unique_logic.event_combos import NEW_COMBO_LOGIC
+    """Combo runtime rows from catalog YAML (declaration and dispatch SoT).
 
-    combo_ids = {str(s["logic_id"]) for s in NEW_COMBO_LOGIC}
+    Filter only by evaluator. Do not import the combo runtime tuple here
+    (that tuple is built from this helper).
+    """
     rows: list[dict[str, Any]] = []
     for spec in load_catalog_specs(root=root):
-        evaluator = str(spec.get("evaluator") or "")
-        lid = str(spec.get("logic_id") or "")
-        if evaluator != _COMBO_EVALUATOR and lid not in combo_ids:
+        if str(spec.get("evaluator") or "") != _COMBO_EVALUATOR:
             continue
         rows.append(combo_row_from_yaml(spec))
     return rows

@@ -36,14 +36,18 @@ def test_freeze_sot_reexports_match() -> None:
 
 
 def test_factory_templates_do_not_clone_combo_catalog() -> None:
-    from research.mass_strategy_factory import LOGIC_TEMPLATES
+    from research.mass_strategy_factory import (
+        LOGIC_TEMPLATES,
+        RESEARCH_UNIQUE_LOGIC_IDS,
+    )
     from research.unique_logic.event_combos import NEW_COMBO_LOGIC
 
     combo_ids = {s["logic_id"] for s in NEW_COMBO_LOGIC}
     cloned = sorted(combo_ids & set(LOGIC_TEMPLATES))
     assert cloned == []
     assert "event_eqar_high_pead" not in LOGIC_TEMPLATES
-    assert "event_funding_stress_skip" in LOGIC_TEMPLATES
+    assert "event_funding_stress_skip" in RESEARCH_UNIQUE_LOGIC_IDS
+    assert "event_funding_stress_skip" not in LOGIC_TEMPLATES
 
 
 def test_panel_builder_does_not_head_n_slice() -> None:
