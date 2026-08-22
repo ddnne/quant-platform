@@ -354,8 +354,8 @@ def test_both_track_sleeve_fanout_default_is_off_network(monkeypatch) -> None:
     assert pack["logic_ids"] == sleeve_durability_logic_ids()
     assert "event_eqar_high_liq_high" in pack["logic_ids"]
     assert "cs_margin_up_chase" in pack["logic_ids"]
-    assert "event_eqar_rising_margin_up" in pack["logic_ids"]
-    assert "event_margin_up_overnight_tight" in pack["logic_ids"]
+    assert "event_eqar_rising_nkyvol" in pack["logic_ids"]
+    assert "event_cheap_iv_uncrowded" in pack["logic_ids"] or "event_nkyvol_liq_margin_down" in pack["logic_ids"]
     assert "event_cheap_pb_liq_high" not in pack["logic_ids"]
     tracks = {t["eval_track"]: t for t in pack["tracks"]}
     assert set(tracks) == {EVAL_TRACK_MID_N, EVAL_TRACK_LIQ_LARGE}

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from functools import lru_cache
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 from qp_paths import repo_root
 from research.unique_logic.catalog import catalog_dir, load_catalog_specs
@@ -195,6 +195,51 @@ def countable_thesis_ids() -> frozenset[str]:
     return frozenset(out)
 
 
+CHEAP_PB_PRIMARY_GATE_CAP: float = 0.20
+
+
+class CheapPbPrimaryCapError(ValueError):
+    """New batch exceeds cheap_pb-as-primary-gate cap. Not a pass."""
+
+
+def primary_gate_of(spec: Mapping[str, Any]) -> str | None:
+    gates = _gates_of(spec)
+    return gates[0] if gates else None
+
+
+def assert_new_batch_cheap_pb_cap(
+    specs: Sequence[Mapping[str, Any]],
+    *,
+    cap: float = CHEAP_PB_PRIMARY_GATE_CAP,
+) -> dict[str, Any]:
+    """Refuse a new batch whose cheap_pb primary share is not strictly below cap.
+
+    Existing catalog is not rewritten. Does not GO.
+    """
+    rows = [s for s in specs if isinstance(s, Mapping)]
+    n = len(rows)
+    n_pb = 0
+    for spec in rows:
+        if primary_gate_of(spec) == "cheap_pb":
+            n_pb += 1
+    share = (n_pb / n) if n else 0.0
+    out = {
+        "n": n,
+        "cheap_pb_primary": n_pb,
+        "cheap_pb_primary_share": round(share, 4),
+        "cap": float(cap),
+        "ok": bool(n == 0 or share < float(cap)),
+        "go": False,
+        "not_a_pass": True,
+    }
+    if n and share >= float(cap):
+        raise CheapPbPrimaryCapError(
+            "cheap_pb primary share "
+            f"{share:.4f} >= cap {float(cap):.4f} (n={n} n_pb={n_pb})"
+        )
+    return out
+
+
 def countable_inventory_bias() -> dict[str, Any]:
     """Family / primary-gate / dataset occupancy of countable theses. Not a pass."""
     from collections import Counter
@@ -231,6 +276,7 @@ def countable_inventory_bias() -> dict[str, Any]:
         "cheap_pb_in_gates": n_pb,
         "cheap_pb_primary": n_pb_primary,
         "cheap_pb_primary_share": round(n_pb_primary / n, 4) if n else 0.0,
+        "cheap_pb_primary_cap": CHEAP_PB_PRIMARY_GATE_CAP,
         "afterclose_in_gates": n_ac,
         "afterclose_primary": n_ac_primary,
         "afterclose_primary_share": round(n_ac_primary / n, 4) if n else 0.0,
@@ -252,8 +298,12 @@ def worker_body_missing(logic_id: str) -> bool:
 __all__ = [
     "combo_cs_gates_implemented",
     "combo_worker_gates_ok",
+    "CHEAP_PB_PRIMARY_GATE_CAP",
+    "CheapPbPrimaryCapError",
+    "assert_new_batch_cheap_pb_cap",
     "countable_inventory_bias",
     "countable_thesis_ids",
+    "primary_gate_of",
     "is_countable_spec",
     "unique_leftover_logic_ids",
     "worker_body_missing",

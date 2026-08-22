@@ -514,12 +514,39 @@ def test_countable_thesis_ids_require_worker_body() -> None:
     assert known >= 1
     assert len(countable) >= 30
     assert "event_eqar_high_pead" in countable
-    from research.unique_logic.worker_bodies import countable_inventory_bias
+    from research.unique_logic.worker_bodies import (
+        CHEAP_PB_PRIMARY_GATE_CAP,
+        CheapPbPrimaryCapError,
+        assert_new_batch_cheap_pb_cap,
+        countable_inventory_bias,
+    )
 
     bias = countable_inventory_bias()
     assert bias["n_countable"] == len(countable)
     assert bias["go"] is False
-    assert 0 <= float(bias["cheap_pb_primary_share"]) < 0.2
+    assert 0 <= float(bias["cheap_pb_primary_share"]) < CHEAP_PB_PRIMARY_GATE_CAP
+    assert bias["cheap_pb_primary_cap"] == CHEAP_PB_PRIMARY_GATE_CAP
+    ok_batch = [
+        {"logic_id": "a", "params": {"gates": ["margin_up", "repo_3m_down"]}},
+        {"logic_id": "b", "params": {"gates": ["ta_up", "overnight_easing"]}},
+        {"logic_id": "c", "params": {"gates": ["cheap_iv", "uncrowded_margin"]}},
+        {"logic_id": "d", "params": {"gates": ["eq_ar_rising", "steep_curve"]}},
+        {"logic_id": "e", "params": {"gates": ["nky_vol_high_skip", "ta_up"]}},
+        {"logic_id": "f", "params": {"gates": ["cheap_pb", "liq_high"]}},
+    ]
+    cap = assert_new_batch_cheap_pb_cap(ok_batch)
+    assert cap["ok"] is True
+    assert cap["cheap_pb_primary"] == 1
+    over = ok_batch[:2] + [
+        {"logic_id": "p1", "params": {"gates": ["cheap_pb", "ta_up"]}},
+        {"logic_id": "p2", "params": {"gates": ["cheap_pb", "margin_up"]}},
+        {"logic_id": "p3", "params": {"gates": ["cheap_pb", "repo_3m_down"]}},
+    ]
+    try:
+        assert_new_batch_cheap_pb_cap(over)
+        raise AssertionError("cap must reject")
+    except CheapPbPrimaryCapError:
+        pass
 
     assert "worker_body_missing" in CANDIDATE_POLICY["exclude"]
     cells = [

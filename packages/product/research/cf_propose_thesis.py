@@ -237,11 +237,16 @@ def catalog_gate_set_avoid(*, limit: int = PROPOSE_WHY_AVOID_LIMIT) -> list[str]
     """
     from research.unique_logic.catalog import yaml_combo_rows
     from research.unique_logic.constants import PROPOSE_CALENDAR_GATES
+    from research.unique_logic.worker_bodies import countable_thesis_ids
 
+    countable = countable_thesis_ids()
     twos: list[str] = []
     threes: list[str] = []
     have: set[str] = set()
     for row in yaml_combo_rows():
+        lid = str(row.get("logic_id") or "")
+        if lid and lid not in countable:
+            continue
         gates = sorted(
             str(x)
             for x in ((row.get("params") or {}).get("gates") or [])
