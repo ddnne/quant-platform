@@ -27,8 +27,9 @@ W52–W53 minimal signal write + W54 multi-day as_of batch (Mass OFF):
   labeled **小サンプル / 研究用・未宣言** (no significance / no edge claim).
 * **Write:** R2 ``quant-structured`` under ``research/single_shot/job={id}/…``.
   Local FS is **not** Source of Truth (optional dry-run stages payloads only).
-* **Eval extract:** :func:`execute_multiday_signal_eval` / nextday / extra-hyp
-  compare live in :mod:`research.single_shot_eval` and are re-exported here.
+* **Eval extract:** :func:`execute_multiday_signal_eval` / nextday live in
+  :mod:`research.single_shot_eval`; cost/compare in
+  :mod:`research.single_shot_compare`. Both are re-exported here.
 * **Not** connected to ``agents.mass_research`` / mass research loop.
 * Does **not** set READY / mint readiness / arm Phase7.
 * Does **not** emit orders or call paper execution.
@@ -1127,36 +1128,45 @@ def execute_single_shot_job(
     )
 
 
-# Multiday / nextday / extra-hyp eval lives in research.single_shot_eval
-# (re-exported). Lazy getattr so job-first and eval-first loads both bind.
-_EVAL_EXPORTS: frozenset[str] = frozenset(
+# Multiday / nextday eval lives in research.single_shot_eval; cost/compare
+# in research.single_shot_compare (both re-exported). Lazy getattr so
+# job-first and eval/compare-first loads all bind.
+_COMPARE_EXPORTS: frozenset[str] = frozenset(
     {
-        "MultidaySignalEval",
-        "NEXTDAY_LOOKAHEAD_POLICY",
-        "NEXTDAY_RESEARCH_LABEL",
         "RESEARCH_COST_LABEL",
         "RESEARCH_COST_NOTE",
         "RESEARCH_ONE_WAY_COST",
         "RESEARCH_ONE_WAY_COST_BP",
         "RESEARCH_ROUND_TRIP_COST",
-        "attach_next_day_returns",
         "attach_research_cost_fields",
-        "build_equity_close_index",
         "execute_extra_hyp_signals_compare",
         "execute_multiday_multisignal_compare",
+        "signed_position_from_signal",
+        "summarize_research_cost",
+    }
+)
+_EVAL_EXPORTS: frozenset[str] = frozenset(
+    {
+        "MultidaySignalEval",
+        "NEXTDAY_LOOKAHEAD_POLICY",
+        "NEXTDAY_RESEARCH_LABEL",
+        "attach_next_day_returns",
+        "build_equity_close_index",
         "execute_multiday_nextday_return_eval",
         "execute_multiday_signal_eval",
         "next_trading_day_map",
         "session_close_as_of",
-        "signed_position_from_signal",
         "summarize_nextday_by_sign",
-        "summarize_research_cost",
         "summarize_signal_day",
     }
 )
 
 
 def __getattr__(name: str):
+    if name in _COMPARE_EXPORTS:
+        import research.single_shot_compare as _single_shot_compare
+
+        return getattr(_single_shot_compare, name)
     if name in _EVAL_EXPORTS:
         import research.single_shot_eval as _single_shot_eval
 
@@ -1165,7 +1175,9 @@ def __getattr__(name: str):
 
 
 def __dir__() -> list[str]:
-    return sorted(set(globals()) | _EVAL_EXPORTS | set(__all__))
+    return sorted(
+        set(globals()) | _COMPARE_EXPORTS | _EVAL_EXPORTS | set(__all__)
+    )
 
 
 __all__ = [
