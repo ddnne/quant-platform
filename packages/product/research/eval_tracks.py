@@ -231,6 +231,26 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "go": False,
     },
     {
+        "id": "adopt_occupancy_recorded",
+        "track": EVAL_TRACK_LIQ_LARGE,
+        "why": (
+            "eval-occupancy-audit-20260823k: 23i/23j adopts mid-band both "
+            "tracks; primary sleeves have 0 near_empty members; not a pass"
+        ),
+        "not_a_pass": True,
+        "go": False,
+    },
+    {
+        "id": "factory_template_default_off",
+        "track": EVAL_TRACK_MID_N,
+        "why": (
+            "LogicTemplate.generation_enabled defaults False; bar-native "
+            "and factory-only set True explicitly; unique/combo stay off"
+        ),
+        "not_a_pass": True,
+        "go": False,
+    },
+    {
         "id": "no_go_until_both_tracks",
         "track": EVAL_TRACK_LIQ_LARGE,
         "why": "GO needs mid_n_explore AND liq_large agreement plus human main",

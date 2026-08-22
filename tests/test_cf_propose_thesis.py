@@ -162,6 +162,8 @@ def test_worker_index_contains_propose_thesis_route() -> None:
     assert "parse_empty" in src
     assert "ai_unbound" in src
     assert "stubProposals" not in src
+    assert "stub_propose_thesis_result" not in src
+    assert "STUB_PROPOSAL_TEMPLATES" not in src
     assert "equities_bars_daily" in src
     assert "fins_summary" in src
     assert "PROPOSE_ALLOWED_GATES" in src
@@ -290,6 +292,18 @@ def test_review_proposal_row_rejects_invent_and_weekday() -> None:
     bad_s = review_proposal_row(invert_sales)
     assert bad_s["ok"] is False
     assert "title_gate_polarity_mismatch" in bad_s["reasons"]
+
+    invert_high_eqar = {
+        "thesis": "Stocks with high equity risk arbitrage tend to outperform when the TA is down AND overnight funding is easing.",
+        "signal_definition": "AND(eq_ar_falling, ta_down, overnight_easing) PIT",
+        "position_rule": "event-hold surprise sign",
+        "datasets": ["equities_bars_daily", "fins_summary", "jsda_tokyo_repo_rates"],
+        "gates": ["eq_ar_falling", "ta_down", "overnight_easing"],
+    }
+    bad_h = review_proposal_row(invert_high_eqar)
+    assert bad_h["ok"] is False
+    assert "title_gate_polarity_mismatch" in bad_h["reasons"]
+    assert bad_h["auto_inject"] is False
 
     invert_nky = {
         "thesis": "Prices drop when overnight funding is tightening AND margin is down AND volatility is high.",

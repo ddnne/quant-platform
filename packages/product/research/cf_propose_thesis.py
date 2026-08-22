@@ -55,7 +55,7 @@ _GATE_TITLE_CONTRA: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("price_down", ("price up", "rising price", "increase in price", "price increase")),
     ("ta_down", ("ta up", "rising ta")),
     ("ta_up", ("ta down", "falling ta")),
-    ("eq_ar_falling", ("rising eqar", "eqar rising", "eq ar rising")),
+    ("eq_ar_falling", ("rising eqar", "eqar rising", "eq ar rising", "high eqar", "high equity")),
     ("eq_ar_rising", ("falling eqar", "eqar falling", "eq ar falling")),
     ("eq_ar_low", ("high eqar", "eqar high", "eq ar high")),
     ("eq_ar_high", ("low eqar", "eqar low", "eq ar low")),
@@ -70,6 +70,12 @@ _GATE_TITLE_CONTRA: tuple[tuple[str, tuple[str, ...]], ...] = (
         "nky_vol_high_skip",
         ("volatility is high", "vol is high", "high volatility", "nky vol high"),
     ),
+    ("crowded_margin", ("uncrowded",)),
+    ("uncrowded_margin", ("is crowded", "margin is crowded")),
+    ("cheap_iv", ("rich iv", "iv is rich", "expensive iv")),
+    ("rich_iv", ("cheap iv", "iv is cheap")),
+    ("overnight_easing", ("tightening",)),
+    ("overnight_tightening", ("easing", "easy funding")),
 )
 
 PROPOSE_MAX_AND_GATES: int = 3
@@ -308,7 +314,11 @@ def stub_propose_thesis_result(
     n: int = 3,
     why_avoid: Sequence[str] | None = None,
 ) -> dict[str, Any]:
-    """Expected Worker stub payload when Workers AI is unbound. Not catalog."""
+    """Test fixture for the historical unbound-AI payload shape. Not live.
+
+    Live Worker ``/v1/propose-thesis`` returns ``ok:false`` ``llm_failed``.
+    ``invoke_cf_propose_thesis`` never calls this helper.
+    """
     want = max(1, min(3, int(n)))
     avoid = {str(x) for x in (why_avoid or ())}
     proposals: list[dict[str, Any]] = []

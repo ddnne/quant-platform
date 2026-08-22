@@ -44,6 +44,7 @@ from research.offline.factory import (
     validate_strategy_at_gen,
 )
 from research.offline.factory_templates import (
+    LogicTemplate,
     FAMILY_AFTERCLOSE_EVENT_TIMING,
     FAMILY_CURVE_STEEPEN_IMPULSE_CS,
     FAMILY_DISCLOSURE_CLUSTER_GATE,
@@ -178,6 +179,22 @@ def _eval_template(lid: str, family_id: str, ctx) -> None:
     assert res["n_periods_total"] >= 1
     assert res.get("logic_id") == lid
     _assert_mass_ready_off(res)
+
+
+def test_logic_template_generation_enabled_defaults_false() -> None:
+    """Omitted flag is fail-closed. Bar-native templates still opt in True."""
+    t = LogicTemplate(
+        logic_id="not_a_generated_id",
+        thesis="t",
+        signal_definition="s",
+        position_rule="p",
+        datasets_used=("equities_bars_daily",),
+        family_id="unused_family",
+        base_params={},
+    )
+    assert t.generation_enabled is False
+    for lid, tpl in LOGIC_TEMPLATES.items():
+        assert tpl.generation_enabled is True, lid
 
 
 def test_logic_templates_distinct_economic_logic():

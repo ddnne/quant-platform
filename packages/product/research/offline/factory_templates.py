@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Mapping
 
 from research.bar_native_specs import BAR_NATIVE_LOGIC_IDS, BAR_NATIVE_SPECS
@@ -271,7 +271,9 @@ class LogicTemplate:
     family_id: str
     base_params: Mapping[str, Any]
     structural_keys: tuple[str, ...] = ()
-    generation_enabled: bool = True
+    # Fail-closed. Bar-native / factory-only templates set True explicitly.
+    # Unique/combo YAML stays generation_enabled False and is not in LOGIC_TEMPLATES.
+    generation_enabled: bool = False
 
     def logic_fingerprint(self) -> str:
         """Stable fingerprint of the economic logic (no numeric knobs)."""
@@ -316,6 +318,7 @@ def logic_template_from_bar_native(spec: Mapping[str, Any]) -> LogicTemplate:
         family_id=str(spec["family_id"]),
         base_params=dict(spec["params"]),
         structural_keys=tuple(spec.get("structural_keys") or ()),
+        generation_enabled=True,
     )
 
 
@@ -323,7 +326,7 @@ def _factory_only_templates() -> list[LogicTemplate]:
     """Offline-only templates (not in the CF bar-native set of 30)."""
     bars = ("equities_bars_daily", "markets_calendar")
     bars_idx = bars + ("indices_bars_daily_topix",)
-    return [
+    rows = [
         LogicTemplate(
             logic_id="event_post_disclosure_hold",
             thesis="Post-disclosure PIT close drift",
@@ -422,6 +425,7 @@ def _factory_only_templates() -> list[LogicTemplate]:
             structural_keys=("mode", "curve_short_tenor", "curve_long_tenor"),
         ),
     ]
+    return [replace(t, generation_enabled=True) for t in rows]
 
 
 def _build_logic_templates() -> dict[str, LogicTemplate]:
@@ -459,7 +463,7 @@ class FamilyDefinition:
 
     family_id: str
     datasets_required: tuple[str, ...]
-    generation_enabled: bool = True
+    generation_enabled: bool = False
 
 
 def _derive_family_definitions() -> dict[str, FamilyDefinition]:
