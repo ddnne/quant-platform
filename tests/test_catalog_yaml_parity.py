@@ -26,6 +26,7 @@ def test_catalog_yaml_parity_with_python_specs() -> None:
     from research.unique_logic.catalog import (
         _COMBO_EVALUATOR,
         _yaml_combo_kind,
+        compiled_migration_ids,
         unique_family_ids_from_yaml,
     )
     from research.unique_logic.constants import (
@@ -46,7 +47,9 @@ def test_catalog_yaml_parity_with_python_specs() -> None:
     yaml_ids = {p.stem for p in _YAML_DIR.glob("*.yaml")}
     combo_ids = {s["logic_id"] for s in NEW_COMBO_LOGIC}
 
-    assert catalog_ids == py_ids == yaml_ids == set(RESEARCH_UNIQUE_LOGIC_IDS)
+    assert catalog_ids == py_ids == yaml_ids == set(RESEARCH_UNIQUE_LOGIC_IDS) == set(
+        compiled_migration_ids()
+    )
     missing_combo_files = sorted(
         lid for lid in combo_ids if not (_YAML_DIR / f"{lid}.yaml").is_file()
     )

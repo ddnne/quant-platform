@@ -154,12 +154,15 @@ def catalog_index(*, root: Path | None = None) -> dict[str, Any]:
     for rec in records:
         kind = str(rec.get("kind") or "")
         kinds[kind] = kinds.get(kind, 0) + 1
+    compiled = compiled_migration_ids(root=root)
     return {
         "by_id": by_id,
         "n": len(by_id),
         "n_combo": len(records),
         "combo_ids": tuple(str(r["logic_id"]) for r in records),
         "combo_kind_counts": kinds,
+        "n_compiled": len(compiled),
+        "compiled_ids_match": compiled == set(by_id),
         "go": False,
         "not_a_pass": True,
     }
