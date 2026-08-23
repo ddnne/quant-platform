@@ -1,7 +1,8 @@
 export interface Env {
   STRUCTURED_BUCKET: R2Bucket;
   DB?: D1Database;
-  AI?: Ai;
+  /** Service binding to research-ai-gateway. Direct Workers AI is forbidden. */
+  AI_GATEWAY?: Fetcher;
   MASS_EVAL_TOKEN?: string;
   MASS_EVAL_VERSION?: string;
   MASS_EVAL_WAVE?: string;

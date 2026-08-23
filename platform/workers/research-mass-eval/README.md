@@ -36,6 +36,13 @@ research/mass_eval/job={id}/logic={logic_id}/result.json   # when n_logics ≤ 5
 
 | flag | value |
 |------|-------|
+Auth is **fail-closed**: unbound `MASS_EVAL_TOKEN` denies every eval/propose
+route. Health is the only unauthenticated endpoint and returns `{ok,service,version}`.
+
+Mass / daily-path / propose require typed capabilities (`src/capabilities.ts`).
+Env flags can only deny. Worker does **not** bind Workers AI; propose uses
+service binding `AI_GATEWAY`. R2 writes are create-if-absent (duplicate job_id → 409).
+
 | Mass (operational) | **NO-GO** |
 | READY | **false / 未宣言** |
 | operational GO | **false** |
@@ -124,4 +131,5 @@ Python helper: `research.offline.factory.try_cf_minimal_mass_batch()` reports th
 - Full CF rate-factor / multi-factor legs (repo curve, fins, margin) without fallback
 - Direct historical bar load from `structured/jsonl/…` partitions (use `r2_panels` staging)
 - Queue / durable object fan-out for 200–500 logics (sync POST caps at 200)
-- Auth-required by default (set `MASS_EVAL_TOKEN` in production)
+- Auth fail-closed: missing `MASS_EVAL_TOKEN` binding denies `/v1/*` (health stays public and limited).
+- Mass/daily-path/propose also require typed capabilities; `MASS_RESEARCH=NO-GO` is an execution gate, not metadata.

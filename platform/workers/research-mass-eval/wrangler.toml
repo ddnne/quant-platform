@@ -14,7 +14,7 @@
 #   * R2 bucket quant-structured — research/mass_eval/job={id}/…
 #   * D1 quant-ingest (optional) — tip extract for mode=d1_bars
 #
-# Secrets (optional):
+# Secrets (required for eval/propose; unbound token fail-closes authorized()):
 #   npx wrangler secret put MASS_EVAL_TOKEN -c platform/workers/research-mass-eval/wrangler.toml
 #
 # Deploy:
@@ -36,12 +36,13 @@ binding = "DB"
 database_name = "quant-ingest"
 database_id = "be6fdcf8-40be-41fc-9535-7facd1fc2ffc"
 
-# Workers AI — propose-thesis only. Never auto-injects catalog.
-[ai]
-binding = "AI"
+# Propose-thesis goes through AI Gateway. This worker must not bind Workers AI.
+[[services]]
+binding = "AI_GATEWAY"
+service = "quant-platform-research-ai-gateway"
 
 [vars]
-MASS_EVAL_VERSION = "research-mass-eval/v141-24ev-flow50"
+MASS_EVAL_VERSION = "research-mass-eval/v142-63-failclosed"
 MASS_EVAL_WAVE = "research-mass-eval"
 # Freezes — do not flip operational gates from this worker.
 MASS_RESEARCH = "NO-GO"

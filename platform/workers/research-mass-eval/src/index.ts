@@ -12,7 +12,17 @@ import {
   loadR2Panels,
 } from "./panels";
 import type { Env, LogicSpec, MassEvalJobResult, MassEvalRequest } from "./types";
-import { authorized, freezePayload, isObject, json, putJson } from "./http";
+import {
+  authorized,
+  freezePayload,
+  isObject,
+  json,
+  putImmutableJson,
+  putJsonCreateOnly,
+} from "./http";
+import { researchCapabilities, requireCapability } from "./capabilities";
+import { jobCandidateGrade } from "./candidate";
+import { isPathBroken } from "./path_broken";
 import { runProposeThesis } from "./propose_thesis";
 
 const RESEARCH_PREFIX = "research/mass_eval";
@@ -247,29 +257,43 @@ async function runMassEval(
     })),
   };
 
+  const resultsArt = await putImmutableJson(
+    env.STRUCTURED_BUCKET,
+    "research/mass_eval/artifacts",
+    { kind: "results", job_id: req.job_id, results, freezes },
+  );
+  const alias = await putJsonCreateOnly(env.STRUCTURED_BUCKET, manifest.keys.manifest, {
+    ...manifest,
+    schema_version: "research_artifact/v1",
+    artifact_digest: resultsArt.digest,
+    artifact_key: resultsArt.key,
+  });
+  if (!alias.created) {
+    throw Object.assign(new Error("artifact_conflict"), { code: "artifact_conflict" });
+  }
   await Promise.all([
-    putJson(env.STRUCTURED_BUCKET, manifest.keys.manifest, manifest),
-    putJson(env.STRUCTURED_BUCKET, manifest.keys.request, {
+    putJsonCreateOnly(env.STRUCTURED_BUCKET, manifest.keys.request, {
       ...req,
       freezes,
       received_at: new Date().toISOString(),
     }),
-    putJson(env.STRUCTURED_BUCKET, manifest.keys.summary, summary),
-    putJson(env.STRUCTURED_BUCKET, manifest.keys.results, {
+    putJsonCreateOnly(env.STRUCTURED_BUCKET, manifest.keys.summary, summary),
+    putJsonCreateOnly(env.STRUCTURED_BUCKET, manifest.keys.results, {
       version,
       wave,
       job_id: req.job_id,
       results,
       freezes,
+      artifact_digest: resultsArt.digest,
     }),
-    putJson(env.STRUCTURED_BUCKET, manifest.keys.ranking, {
+    putJsonCreateOnly(env.STRUCTURED_BUCKET, manifest.keys.ranking, {
       version,
       wave,
       job_id: req.job_id,
       ranking,
       freezes,
     }),
-    putJson(env.STRUCTURED_BUCKET, manifest.keys.panels_meta, panelsMeta),
+    putJsonCreateOnly(env.STRUCTURED_BUCKET, manifest.keys.panels_meta, panelsMeta),
   ]);
 
   return {
@@ -343,13 +367,28 @@ async function runDailyPath(
   }
 
   const nComplete = cells.filter((c) => c.daily_path_complete).length;
+  const nBroken = cells.filter((c) =>
+    isPathBroken(c.eval_path, c.path_fallback),
+  ).length;
+  const nCollapsed = cells.filter((c) => {
+    const fb = String(c.path_fallback || "");
+    const skip = String(c.skip_reason || c.incomplete_reason || "");
+    return fb.includes("path_collapsed") || skip.startsWith("unique_unsupported");
+  }).length;
+  const nExpected = req.logics.length * periodSpecs.length;
   const freezes = freezePayload(env);
   const payload: Record<string, unknown> = {
     version,
     wave: env.MASS_EVAL_WAVE || "research-mass-eval",
     job_id: req.job_id,
     eval_kind: "daily_path",
-    candidate_grade: true,
+    candidate_grade: jobCandidateGrade({
+      n_expected: nExpected,
+      n_cells: cells.length,
+      n_complete: nComplete,
+      n_collapsed: nCollapsed,
+      n_broken: nBroken,
+    }),
     parallel_model: "isolate_fanout_one_logic",
     mode,
     n_logics: req.logics.length,
@@ -368,8 +407,27 @@ async function runDailyPath(
   };
   if (req.write_artifacts === true) {
     const prefix = `research/eval/job=${req.job_id}`;
-    await putJson(env.STRUCTURED_BUCKET, `${prefix}/daily_path.json`, payload);
-    payload.r2_keys = { daily_path: `${prefix}/daily_path.json` };
+    const artifact = await putImmutableJson(
+      env.STRUCTURED_BUCKET,
+      "research/eval/artifacts",
+      payload,
+    );
+    payload.artifact_digest = artifact.digest;
+    payload.artifact_key = artifact.key;
+    const alias = await putJsonCreateOnly(
+      env.STRUCTURED_BUCKET,
+      `${prefix}/daily_path.json`,
+      payload,
+    );
+    payload.r2_keys = {
+      daily_path: `${prefix}/daily_path.json`,
+      artifact: artifact.key,
+      digest: artifact.digest,
+    };
+    payload.artifact_created = alias.created;
+    if (!alias.created) {
+      payload.artifact_conflict = true;
+    }
   }
   return payload;
 }
@@ -385,12 +443,7 @@ export default {
       return json({
         ok: true,
         service: "quant-platform-research-mass-eval",
-        version: env.MASS_EVAL_VERSION || "research-mass-eval/v139-24em-plus56",
-        wave: env.MASS_EVAL_WAVE || "research-mass-eval",
-        has_structured_bucket: Boolean(env.STRUCTURED_BUCKET),
-        has_d1: Boolean(env.DB),
-        token_required: Boolean(env.MASS_EVAL_TOKEN),
-        freezes: freezePayload(env),
+        version: env.MASS_EVAL_VERSION || "research-mass-eval/v142-63-failclosed",
       });
     }
 
@@ -400,6 +453,21 @@ export default {
       }
       if (!(await authorized(request, env.MASS_EVAL_TOKEN))) {
         return json({ error: "unauthorized" }, 401);
+      }
+      const massCaps = researchCapabilities(env);
+      const massGate = requireCapability("mass_screen", massCaps);
+      if (!massGate.allowed) {
+        return json(
+          {
+            ok: false,
+            error: "capability_missing",
+            capability: "mass_screen",
+            reasons: massGate.reasons,
+            go: false,
+            not_a_pass: true,
+          },
+          403,
+        );
       }
       if (!env.STRUCTURED_BUCKET) {
         return json({ error: "STRUCTURED_BUCKET not bound" }, 500);
@@ -424,6 +492,19 @@ export default {
           ...result,
         });
       } catch (e) {
+        const code = (e as { code?: string }).code;
+        if (code === "artifact_conflict") {
+          return json(
+            {
+              ok: false,
+              error: "artifact_conflict",
+              job_id: parsed.value.job_id,
+              go: false,
+              not_a_pass: true,
+            },
+            409,
+          );
+        }
         const msg = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
         return json(
           {
@@ -444,6 +525,21 @@ export default {
       if (!(await authorized(request, env.MASS_EVAL_TOKEN))) {
         return json({ error: "unauthorized" }, 401);
       }
+      const pathCaps = researchCapabilities(env);
+      const pathGate = requireCapability("mass_screen", pathCaps);
+      if (!pathGate.allowed) {
+        return json(
+          {
+            ok: false,
+            error: "capability_missing",
+            capability: "mass_screen",
+            reasons: pathGate.reasons,
+            go: false,
+            not_a_pass: true,
+          },
+          403,
+        );
+      }
       if (!env.STRUCTURED_BUCKET) {
         return json({ error: "STRUCTURED_BUCKET not bound" }, 500);
       }
@@ -463,6 +559,19 @@ export default {
       }
       try {
         const result = await runDailyPath(env, parsed.value);
+        if (result.artifact_conflict === true) {
+          return json(
+            {
+              ok: false,
+              error: "artifact_conflict",
+              job_id: parsed.value.job_id,
+              r2_keys: result.r2_keys,
+              go: false,
+              not_a_pass: true,
+            },
+            409,
+          );
+        }
         return json({ ok: true, ...result });
       } catch (e) {
         const msg = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
@@ -484,6 +593,21 @@ export default {
       }
       if (!(await authorized(request, env.MASS_EVAL_TOKEN))) {
         return json({ error: "unauthorized" }, 401);
+      }
+      const genCaps = researchCapabilities(env);
+      const genGate = requireCapability("generation", genCaps);
+      if (!genGate.allowed) {
+        return json(
+          {
+            ok: false,
+            error: "capability_missing",
+            capability: "generation",
+            reasons: genGate.reasons,
+            go: false,
+            not_a_pass: true,
+          },
+          403,
+        );
       }
       let body: unknown = {};
       const text = await request.text();

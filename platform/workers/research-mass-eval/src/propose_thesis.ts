@@ -2,6 +2,7 @@
 
 import type { Env } from "./types";
 import { isObject, putJson } from "./http";
+import { completeViaGateway, hasAiGateway } from "./ai_gateway_client";
 import {
   DEFAULT_PROPOSE_DATASETS,
   PROMPT_DIRECTION_ECHO_X,
@@ -25,7 +26,7 @@ import {
 } from "./propose_review_tables";
 
 function hasWorkersAi(env: Env): boolean {
-  return Boolean(env.AI);
+  return hasAiGateway(env);
 }
 
 /** CF-internal only. 70B first; GLM flash then 8B. Never leave CF. */
@@ -188,7 +189,7 @@ async function llmProposals(
   reason: string | null;
   model: string | null;
 }> {
-  if (!env.AI) return { rows: null, reason: "ai_unbound", model: null };
+  if (!env.AI_GATEWAY) return { rows: null, reason: "ai_gateway_unbound", model: null };
   const avoidList = whyAvoid.filter(Boolean).slice(0, PROPOSE_WHY_AVOID_LIMIT);
   const avoidTokens = new Set(avoidList.map((t) => t.trim()).filter(Boolean));
   const avoid = avoidList.join(", ") || "(none)";
@@ -217,18 +218,19 @@ async function llmProposals(
     lastModel = model;
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
-        const res = await env.AI.run(model, {
+        const gw = await completeViaGateway(env, {
+          model,
           messages: [
             { role: "system", content: system },
             { role: "user", content: user },
           ],
           max_tokens: 1400,
         });
-        if (Array.isArray(res)) {
-          const direct = parseProposalArray(JSON.stringify(res), n, avoidTokens);
-          if (direct.length) return { rows: direct, reason: null, model };
+        if (!gw.ok) {
+          lastReason = `gateway:${gw.reason || "failed"}:${model}:attempt=${attempt}`;
+          continue;
         }
-        const text = extractAiText(res);
+        const text = String(gw.text || "");
         const rows = parseProposalArray(text, n, avoidTokens);
         if (rows.length) return { rows, reason: null, model };
         const preview = text.replace(/\s+/g, " ").slice(0, 80);

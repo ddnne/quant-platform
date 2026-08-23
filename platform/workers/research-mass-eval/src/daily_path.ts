@@ -2353,7 +2353,7 @@ export function evalLogicDailyPathOnPanel(
     survived: false,
     promote_as_main: false,
     go: false,
-    candidate_grade: true,
+    candidate_grade: false,
     period_net_dd_only_pass_forbidden: true,
   };
 }
@@ -2402,7 +2402,7 @@ export function cellsFromPeriodPacks(
       survived: false,
       promote_as_main: false,
       go: false,
-      candidate_grade: true,
+      candidate_grade: false,
       period_net_dd_only_pass_forbidden: true,
       method: p.method,
     });
