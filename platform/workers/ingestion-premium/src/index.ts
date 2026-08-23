@@ -514,6 +514,8 @@ async function ingestOne(
 
   const rawKey = `${rawPrefix}/manifest.json`;
   const complete = !outcome.error && outcome.paginationErrors === 0;
+  // Raw fetch only — never Coverage COMPLETE.
+  const rawAcquisition = complete ? "ACQUIRED" : "FAILED";
   const dataDigest = await sha256(rawPages.map((page) => page.digest).join("\n"));
   const rawManifest = {
     format: "jquants-raw-manifest/v1",
@@ -526,13 +528,17 @@ async function ingestOne(
     row_count: outcome.rowsSeen,
     raw_bytes: rawPages.reduce((total, page) => total + page.bytes, 0),
     data_digest: dataDigest,
-    completeness: complete ? "COMPLETE" : "FAILED",
+    raw_acquisition: rawAcquisition,
     complete,
     error: outcome.error || null,
     pages: rawPages,
   };
   await env.RAW_BUCKET.put(rawKey, JSON.stringify(rawManifest), {
-    customMetadata: { dataset: spec.id, run_id: String(runId ?? ""), completeness: String(complete) },
+    customMetadata: {
+      dataset: spec.id,
+      run_id: String(runId ?? ""),
+      raw_acquisition: rawAcquisition,
+    },
   });
   if (runId === null) {
     throw new Error("raw retention manifest requires a durable ingestion run id");
@@ -552,7 +558,7 @@ async function ingestOne(
        created_at=excluded.created_at`,
   ).bind(
     spec.id, runId, rawKey, rawManifest.page_count, rawManifest.row_count,
-    rawManifest.raw_bytes, rawManifest.data_digest, rawManifest.completeness,
+    rawManifest.raw_bytes, rawManifest.data_digest, rawManifest.raw_acquisition,
     rawManifest.fetched_at,
   ).run();
 
