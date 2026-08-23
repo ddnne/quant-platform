@@ -8,6 +8,7 @@ import json
 import pytest
 
 from data_contracts import COVERAGE_POLICY_VERSION, coverage_contract_for
+from data_contracts.source_capability import source_capability_contract_or_none
 from research.research_data_profile import (
     CORE_PROFILE_ID,
     CORE_REQUIRED_DATASETS,
@@ -171,7 +172,12 @@ def test_profile_ready_true_only_when_every_required_is_complete_official() -> N
         dataset: {"status": "COMPLETE", "coverage_mode": official_mode(dataset)}
         for dataset in profile.required_datasets
     }
-    assert profile_ready(profile, evidence) is True
+    missing_v3 = any(
+        source_capability_contract_or_none(dataset) is None
+        for dataset in profile.required_datasets
+    )
+    # Missing SourceCapability V3 is not official-complete.
+    assert profile_ready(profile, evidence) is (not missing_v3)
     wrong_mode = dict(evidence)
     wrong_mode["markets_calendar"] = {
         "status": "COMPLETE",

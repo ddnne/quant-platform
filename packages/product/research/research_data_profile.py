@@ -28,6 +28,7 @@ from data_contracts import (
     REGISTRY_VERSION,
     canonical_dataset_for,
     coverage_contract_for,
+    source_capability_contract_or_none,
 )
 from qp_paths import repo_root
 from research.evaluation_ir import EVALUATION_IR_VERSION
@@ -185,9 +186,10 @@ def profile_ready(
 ) -> bool:
     """True iff every required dataset is COMPLETE under official_mode(d).
 
-    Missing evidence, PARTIAL, a string COMPLETE label, a coverage_mode
-    other than official_mode, projection_status STALE, or applied_cursor
-    null is false. Does not publish a READY snapshot.
+    Missing SourceCapability V3, missing evidence, PARTIAL, a string
+    COMPLETE label, a coverage_mode other than official_mode,
+    projection_status STALE, or applied_cursor null is false. Missing V3
+    is not official-complete. Does not publish a READY snapshot.
     """
     if not profile.required_datasets:
         return False
@@ -385,8 +387,11 @@ def _complete_under_official(
 ) -> bool:
     """True iff mapping evidence is COMPLETE under official_mode(dataset_id).
 
-    A string COMPLETE label is not official-mode proof.
+    A string COMPLETE label is not official-mode proof. Missing V3 is not
+    official-complete.
     """
+    if source_capability_contract_or_none(dataset_id) is None:
+        return False
     if dataset_id not in evidence_by_dataset:
         return False
     evidence = evidence_by_dataset[dataset_id]

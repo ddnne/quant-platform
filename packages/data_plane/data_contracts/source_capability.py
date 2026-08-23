@@ -11,7 +11,7 @@ COMPLETE.
 
 JSON documents (optional) live at ``specs/source_capability/*.json``. An
 empty or missing directory is valid: the type and fail-closed loader still
-export. Missing dataset rows are not invented.
+export. Missing dataset rows are not invented; they load as ``None``.
 
 Nested evidence maps remain open; dataset-level keys are closed.
 """
@@ -538,13 +538,21 @@ def all_source_capability_contracts() -> tuple[SourceCapabilityContract, ...]:
     return tuple(_CONTRACTS.values())
 
 
+def source_capability_contract_or_none(
+    dataset_id: str,
+) -> SourceCapabilityContract | None:
+    """Return the V3 contract, or None when no JSON row exists.
+
+    Missing dataset rows are not invented. An empty specs directory is valid.
+    """
+    return _CONTRACTS.get(dataset_id)
+
+
 def source_capability_contract_for(dataset_id: str) -> SourceCapabilityContract:
-    try:
-        return _CONTRACTS[dataset_id]
-    except KeyError as exc:
-        raise KeyError(
-            f"unknown SourceCapabilityContract: {dataset_id!r}"
-        ) from exc
+    contract = source_capability_contract_or_none(dataset_id)
+    if contract is None:
+        raise KeyError(f"unknown SourceCapabilityContract: {dataset_id!r}")
+    return contract
 
 
 def _earliest_official_availability(
@@ -601,5 +609,6 @@ __all__ = [
     "parse_source_capability_document",
     "required_domain_subset_official",
     "source_capability_contract_for",
+    "source_capability_contract_or_none",
     "specs_dir",
 ]

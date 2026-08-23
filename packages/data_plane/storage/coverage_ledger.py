@@ -24,7 +24,7 @@ from data_contracts.source_capability import (
     OfficialRequiredDomainSubset,
     SourceCapabilityContract,
     required_domain_subset_official,
-    source_capability_contract_for,
+    source_capability_contract_or_none,
 )
 from ingestion.jsda.official_index import (
     OFFICIAL_ARCHIVE_INDEX_DATASETS as _OFFICIAL_ARCHIVE_INDEX_DATASETS,
@@ -113,10 +113,7 @@ _OFFICIAL_ARCHIVE_INDEX_MODES = frozenset({
 def _source_capability_for(
     dataset_id: str,
 ) -> SourceCapabilityContract | None:
-    try:
-        return source_capability_contract_for(dataset_id)
-    except KeyError:
-        return None
+    return source_capability_contract_or_none(dataset_id)
 
 
 def _official_domain_for(
