@@ -1,11 +1,12 @@
-"""Trusted paper execution boundary (Phase 7).
+"""Paper-runtime exec helper — ADR §8.2 name-collision twin.
 
-Sole production path for paper runs:
-  PortfolioManager → Trader → AuthorizedPaperExecutionRequest
-  → PaperExecutionService → run_paper
+This is **not** the authorized paper choke point. The live path is
+``execution.paper_service.PaperExecutionService``. ``paper_runtime`` does
+not re-export this module.
 
-Orchestrators should not call strategies.paper.run_paper directly once
-migrated; this service is the authorized choke point.
+Importing this module does not arm continuous paper, declare READY, or
+Mass GO. Keep all three ``execution`` modules (core fill timing / this
+helper / authorized paper service). See ADR §8.2.
 """
 from __future__ import annotations
 
