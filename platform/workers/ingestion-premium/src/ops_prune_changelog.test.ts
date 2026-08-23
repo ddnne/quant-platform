@@ -66,3 +66,24 @@ describe("premium changelog prune auth", () => {
     expect(sql).toEqual([]);
   });
 });
+
+describe("premium changelog prune method", () => {
+  it("rejects GET with matching X-Ingestion-Token as 405 and does not touch D1", async () => {
+    const { db, sql } = touchingD1();
+    const res = await handlePruneChangelog(
+      new Request(PRUNE_URL, {
+        method: "GET",
+        headers: { "X-Ingestion-Token": RUN_TOKEN },
+      }),
+      pruneEnv(RUN_TOKEN, db),
+    );
+    const body = await res.text();
+    expect(res.status).toBe(405);
+    expect(JSON.parse(body)).toEqual({ error: "POST required" });
+    expect(body).not.toContain(RUN_TOKEN);
+    expect(body).not.toMatch(/INGESTION_RUN_TOKEN/i);
+    expect(body).not.toContain("COMPLETE");
+    expect(body).not.toContain("READY");
+    expect(sql).toEqual([]);
+  });
+});

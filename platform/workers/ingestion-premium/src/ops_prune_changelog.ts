@@ -20,11 +20,11 @@ export async function handlePruneChangelog(
   request: Request,
   env: PruneEnv,
 ): Promise<Response> {
+  if (request.method !== "POST") {
+    return Response.json({ error: "POST required" }, { status: 405 });
+  }
   if (!authorized(request, env.INGESTION_RUN_TOKEN)) {
     return Response.json({ error: "unauthorized" }, { status: 401 });
-  }
-  if (request.method !== "POST" && request.method !== "GET") {
-    return Response.json({ error: "method not allowed" }, { status: 405 });
   }
 
   const url = new URL(request.url);
