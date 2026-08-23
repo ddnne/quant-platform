@@ -12,7 +12,7 @@ from datetime import date, timedelta
 import json
 from pathlib import Path
 
-from data_contracts.coverage import coverage_contract_for
+from data_contracts.coverage import SEGMENT_GRANULARITIES, coverage_contract_for
 from data_contracts.permanent_defer import PERMANENT_DEFER_DATASETS, PERMANENT_DEFER_IDS
 from data_contracts.source_capability import (
     SourceCapabilityContract,
@@ -234,6 +234,8 @@ def test_plan_required_segments_fail_closed_without_index_text() -> None:
 
 def test_plan_required_segments_uses_official_index_not_calendar() -> None:
     policy = coverage_contract_for(DATASET)
+    assert policy.segment_granularity == "official_archive_index_day"
+    assert "official_archive_index_day" in SEGMENT_GRANULARITIES
     html = _FIXTURE.read_text(encoding="utf-8")
     planned = plan_required_segments(
         policy, "2002-08-06", source="jsda", index_text=html,
@@ -246,6 +248,10 @@ def test_plan_required_segments_uses_official_index_not_calendar() -> None:
     assert len(ids) != V2_REQUIRED
     for day in PARSE_ZERO_DAYS:
         assert day in ids
+    for seg in planned:
+        assert seg.expected_scope["segment_granularity"] == (
+            "official_archive_index_day"
+        )
 
 
 def test_plan_required_segments_clips_index_days_to_window() -> None:
@@ -373,7 +379,8 @@ def test_v2_coverage_floor_not_rewritten_here() -> None:
     v2 = coverage_contract_for(DATASET)
     assert v2.history_target_start == OFFICIAL_START
     assert v2.coverage_mode == "official_archive_index_reconciled"
-    assert v2.segment_granularity == "official_archive_day"
+    assert v2.segment_granularity == "official_archive_index_day"
+    assert v2.segment_granularity in SEGMENT_GRANULARITIES
     cap = _load(_CAPABILITY)
     assert cap["earliest_official_availability"] == OFFICIAL_START
     assert cap["official_evidence_url"] == OFFICIAL_EVIDENCE_URL

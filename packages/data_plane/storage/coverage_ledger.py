@@ -283,8 +283,12 @@ def plan_required_segments(
         # Current collection window only. Do not expand monthly history.
         _append(end.isoformat(), end, end)
         return tuple(segments)
-    if _uses_official_archive_index(policy, domain):
-        # Listed index days only. Missing index_text → empty, not weekends.
+    if (
+        _uses_official_archive_index(policy, domain)
+        or granularity == "official_archive_index_day"
+    ):
+        # Listed index days only. Grain is an alias, not a calendar walk.
+        # Missing index_text → empty, not weekends.
         for day_s in official_index_days(policy.dataset_id, index_text):
             day = date.fromisoformat(day_s)
             if start <= day <= end:
@@ -339,6 +343,8 @@ def _empty_observed_forbids_complete(policy: CollectionCoverageContract) -> bool
     if grain in SNAPSHOT_SEGMENT_GRANULARITIES:
         return True
     if grain.startswith(("collection_cutoff", "same_trading_day")):
+        return True
+    if grain == "official_archive_index_day":
         return True
     return "official_archive_index" in mode
 

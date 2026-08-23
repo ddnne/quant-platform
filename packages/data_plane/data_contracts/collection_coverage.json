@@ -169,7 +169,7 @@
       "coverage_mode": "official_archive_index_reconciled",
       "expected_frequency": "trading_day",
       "universe_rule": "all_bonds_in_official_publication_file",
-      "segment_granularity": "official_archive_day"
+      "segment_granularity": "official_archive_index_day"
     },
     "jsda_tokyo_repo_rates": {
       "collection_scope": "jsda_authoritative_tokyo_repo_timeseries",

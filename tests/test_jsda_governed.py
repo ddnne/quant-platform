@@ -44,7 +44,7 @@ def test_governed_contract_keeps_otc_reference_distinct_and_starts_2002():
     assert otc.governance_tier == "governed"
     coverage = coverage_contract_for("jsda_otc_bond_reference_prices")
     assert coverage.history_target_start == "2002-08-02"
-    assert coverage.segment_granularity == "official_archive_day"
+    assert coverage.segment_granularity == "official_archive_index_day"
 
 
 def test_jsda_cli_keeps_legacy_default_and_supports_explicit_otc_range():

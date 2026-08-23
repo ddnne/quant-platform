@@ -34,6 +34,7 @@ SNAPSHOT_SEGMENT_GRANULARITIES = frozenset({
 SEGMENT_GRANULARITIES = frozenset({
     "calendar_month",
     "official_archive_day",
+    "official_archive_index_day",
     "official_archive_year",
     "source_time_series_file",
 }) | SNAPSHOT_SEGMENT_GRANULARITIES
