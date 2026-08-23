@@ -27,6 +27,7 @@ export interface LaneReceipt {
 }
 
 export interface AggregateEnv {
+  CI_LANE_TOKEN?: string;
   GITHUB_STATUS_TOKEN?: string;
   GITHUB_REPOSITORY?: string;
   GITHUB_STATUS_CONTEXT?: string;
@@ -202,11 +203,44 @@ function statusContext(env: AggregateEnv): string {
   return ctx || DEFAULT_STATUS_CONTEXT;
 }
 
-function tokenBound(env: AggregateEnv): string | undefined {
-  const t = env.GITHUB_STATUS_TOKEN;
-  if (typeof t !== "string") return undefined;
-  const trimmed = t.trim();
+function secretBound(value?: string): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function tokenBound(env: AggregateEnv): string | undefined {
+  return secretBound(env.GITHUB_STATUS_TOKEN);
+}
+
+function timingSafeEqualBytes(a: ArrayBuffer, b: ArrayBuffer): boolean {
+  const x = new Uint8Array(a);
+  const y = new Uint8Array(b);
+  if (x.length !== y.length) return false;
+  let diff = 0;
+  for (let i = 0; i < x.length; i++) diff |= x[i] ^ y[i];
+  return diff === 0;
+}
+
+async function tokenMatches(provided: string, expected: string): Promise<boolean> {
+  const enc = new TextEncoder();
+  const [a, b] = await Promise.all([
+    crypto.subtle.digest("SHA-256", enc.encode(provided)),
+    crypto.subtle.digest("SHA-256", enc.encode(expected)),
+  ]);
+  return timingSafeEqualBytes(a, b);
+}
+
+/** CI_LANE_TOKEN vs X-CI-Lane-Token only. GitHub PR comments are not a substitute. */
+export async function authorized(
+  request: Request,
+  env: AggregateEnv,
+): Promise<boolean> {
+  const expected = secretBound(env.CI_LANE_TOKEN);
+  if (!expected) return false;
+  const got = request.headers.get("X-CI-Lane-Token") || "";
+  if (!got) return false;
+  return tokenMatches(got, expected);
 }
 
 export function githubStatusUrl(repo: string, sha: string): string {
@@ -354,6 +388,12 @@ export async function handleRequest(
     return json({ error: "not found" }, 404);
   }
   if (request.method !== "POST") return json({ error: "POST required" }, 405);
+  if (!secretBound(env.CI_LANE_TOKEN)) {
+    return json({ ok: false, reason: "unbound_ci_lane_token" }, 503);
+  }
+  if (!(await authorized(request, env))) {
+    return json({ ok: false, reason: "unauthorized" }, 401);
+  }
   return handleReceipts(request, env, fetchImpl);
 }
 

@@ -101,6 +101,7 @@ Each lane POSTs `{worker, sha, result, command}`. The gate accepts a batch:
 ```http
 POST /v1/receipts
 Content-Type: application/json
+X-CI-Lane-Token: <CI_LANE_TOKEN>
 
 {
   "receipts": [
@@ -121,6 +122,16 @@ A wrapper at the end of CI (or a seventh Builds job) POSTs the **six**
 receipts together. Posting a PR comment, a Cloudflare check-run id, or a
 preview URL does **not** count.
 
+### Receipt auth
+
+`POST /v1/receipts` is fail-closed on inbound auth. Header `X-CI-Lane-Token`
+must match bound secret `CI_LANE_TOKEN` (`wrangler secret put CI_LANE_TOKEN`).
+Unbound or blank `CI_LANE_TOKEN` → HTTP **503** (same as unbound
+`GITHUB_STATUS_TOKEN`; nothing posted). Wrong or missing header → HTTP **401**.
+Do not accept a GitHub PR comment as a success signal.
+
+GET `/health` and `/` stay unauthenticated.
+
 ### Fail-closed rules
 
 | Condition | Gate | GitHub `ci-aggregate` status |
@@ -129,6 +140,8 @@ preview URL does **not** count.
 | Any lane `fail` | not ok (`lane_failed`) | `failure` (never `success`) |
 | Receipt SHAs differ | not ok (`sha_mismatch`) | `failure` (never `success`) |
 | Missing worker receipt | not ok (`missing_receipt`) | `failure` (never `success`) |
+| `CI_LANE_TOKEN` unbound | HTTP **503** | nothing posted |
+| Wrong / missing `X-CI-Lane-Token` | HTTP **401** | nothing posted |
 | `GITHUB_STATUS_TOKEN` unbound | HTTP **503** | nothing posted |
 
 The token is a GitHub PAT / fine-grained token with `repo:status` (or
@@ -149,6 +162,7 @@ After `npm test` in `platform/workers/ingestion-jsda`:
 # result=pass only if npm test exited 0. SHA from Workers Builds, not from a comment.
 printf '%s' "$RECEIPT_JSON" | curl -sS -X POST "$CI_AGGREGATE_URL/v1/receipts" \
   -H 'content-type: application/json' \
+  -H "X-CI-Lane-Token: $CI_LANE_TOKEN" \
   --data-binary @-
 ```
 
@@ -162,7 +176,8 @@ on `missing_receipt`.
 - Does not `wrangler deploy` to production as a side effect of a green check.
 - Does not arm Mass / READY / GO.
 - Does not read GitHub PR comments, issue comments, or check-run conclusions
-  as inputs. Only POSTed receipts plus the bound status token.
+  as inputs. Only POSTed receipts that present a matching `X-CI-Lane-Token`,
+  plus the bound GitHub status token.
 
 ## Public surfaces (preview vs production)
 
