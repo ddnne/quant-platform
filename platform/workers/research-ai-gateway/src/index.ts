@@ -1,5 +1,6 @@
 /// <reference types="@cloudflare/workers-types" />
 
+import { authorized } from "./authorized";
 import { BudgetLedger } from "./budget_do";
 import { json } from "./http_json";
 import {
@@ -10,6 +11,7 @@ import {
   type GatewayOk,
 } from "./schema";
 
+export { authorized } from "./authorized";
 export { BudgetLedger };
 
 export interface GatewayEnv {
@@ -18,33 +20,6 @@ export interface GatewayEnv {
   /** Separate mass-eval secret. Never a GATEWAY_TOKEN substitute. */
   MASS_EVAL_TOKEN?: string;
   BUDGET_LEDGER?: DurableObjectNamespace;
-}
-
-function timingSafeEqualBytes(a: ArrayBuffer, b: ArrayBuffer): boolean {
-  const x = new Uint8Array(a);
-  const y = new Uint8Array(b);
-  if (x.length !== y.length) return false;
-  let diff = 0;
-  for (let i = 0; i < x.length; i++) diff |= x[i] ^ y[i];
-  return diff === 0;
-}
-
-async function tokenMatches(provided: string, expected: string): Promise<boolean> {
-  const enc = new TextEncoder();
-  const [a, b] = await Promise.all([
-    crypto.subtle.digest("SHA-256", enc.encode(provided)),
-    crypto.subtle.digest("SHA-256", enc.encode(expected)),
-  ]);
-  return timingSafeEqualBytes(a, b);
-}
-
-/** GATEWAY_TOKEN vs X-Gateway-Token only. MASS_EVAL_TOKEN is a different check. */
-export async function authorized(request: Request, env: GatewayEnv): Promise<boolean> {
-  const expected = env.GATEWAY_TOKEN;
-  if (!expected) return false;
-  const got = request.headers.get("X-Gateway-Token") || "";
-  if (!got) return false;
-  return tokenMatches(got, expected);
 }
 
 async function sha256Hex(text: string): Promise<string> {
