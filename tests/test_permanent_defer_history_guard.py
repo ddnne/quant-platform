@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from data_contracts import (
+    MASTER_COVERAGE_POLICY,
     MASTER_JQ_SCOPE,
     PERMANENT_DEFER_DATASETS,
     SUPERSEDED_PERMANENT_DEFER_IDS,
@@ -141,15 +142,18 @@ def test_w72_tip_only_policy_bars_am_and_otc():
 
 
 def test_w98_master_jq_scope_pre_plan_descope():
-    """W98: PRE_PLAN is coverage OUT_OF_SCOPE; MISDATE stays required PARTIAL."""
+    """W98: PRE_PLAN is coverage OUT_OF_SCOPE; MISDATE is official-unavailable."""
     assert coverage_contract_for("equities_master").history_target_start == "2008-05-07"
-    assert MASTER_JQ_SCOPE["history_target_start"] == "2006-08-13"
+    assert MASTER_COVERAGE_POLICY is MASTER_JQ_SCOPE
+    assert MASTER_COVERAGE_POLICY["history_target_start"] == "2008-05-07"
+    assert MASTER_COVERAGE_POLICY["not_historical_required_start"] == "2006-08-13"
     bands = MASTER_JQ_SCOPE["bands"]
     assert isinstance(bands, dict)
     assert bands["PRE_PLAN"]["coverage"] == "OUT_OF_SCOPE"
     assert bands["PRE_PLAN"]["de_scope"] is True
-    assert bands["MISDATE"]["coverage"] == "REQUIRED_PARTIAL"
-    assert bands["MISDATE"]["seal"] == "only_if_window_ok_Date"
+    assert bands["MISDATE"]["coverage"] == "excluded_official_unavailable"
+    assert bands["MISDATE"]["densify"] == "FORBIDDEN"
+    assert bands["MISDATE"]["seal"] == "FORBIDDEN"
     assert MASTER_JQ_SCOPE["invent_complete_via_floor_to_2008_05"] == "FORBIDDEN"
 
     assert master_band_for_segment("2006-07") == "PRE_PLAN"

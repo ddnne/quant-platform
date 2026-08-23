@@ -159,7 +159,8 @@ def test_v3_planner_required_start_is_official_not_entitlement_floor():
         assert month not in ids
 
     # Entitlement floor remains recorded; it is not historical required start.
-    assert MASTER_JQ_SCOPE["history_target_start"] == NOT_REQUIRED_START
+    assert MASTER_JQ_SCOPE["history_target_start"] == OFFICIAL_START
+    assert MASTER_JQ_SCOPE["not_historical_required_start"] == NOT_REQUIRED_START
     assert MASTER_JQ_SCOPE["vendor_data_provision_start"] == OFFICIAL_START
     assert MASTER_JQ_SCOPE["invent_complete_via_floor_to_2008_05"] == "FORBIDDEN"
     assert MASTER_JQ_SCOPE["dataset_complete_invent"] == "FORBIDDEN"
@@ -206,12 +207,17 @@ def test_pd_d2_master_defer_retained_reason_records_official_start():
     assert PERMANENT_DEFER_IDS["equities_master"] == "PD-D2-MASTER"
     bands = MASTER_JQ_SCOPE["bands"]
     assert isinstance(bands, dict)
-    assert bands["MISDATE"]["coverage"] == "REQUIRED_PARTIAL"  # V2 inventory until wire
+    assert bands["MISDATE"]["coverage"] == EXCLUDED_STATUS
+    assert bands["MISDATE"]["densify"] == "FORBIDDEN"
+    assert bands["MISDATE"]["seal"] == "FORBIDDEN"
     reason = str(bands["MISDATE"]["reason"])
     assert OFFICIAL_START in reason
     assert EXCLUDED_STATUS in reason
+    assert "not REQUIRED_PARTIAL" in reason
     assert "not COMPLETE" in reason
     assert "Do not invent Dataset COMPLETE" in reason
+    assert NOT_REQUIRED_START in reason
+    assert MASTER_JQ_SCOPE["not_historical_required_start"] == NOT_REQUIRED_START
     assert MASTER_JQ_SCOPE["dataset_complete_invent"] == "FORBIDDEN"
 
 
