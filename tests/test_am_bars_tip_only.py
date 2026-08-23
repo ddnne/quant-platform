@@ -11,7 +11,7 @@ from pathlib import Path
 
 from data_contracts.coverage import coverage_contract_for
 from data_contracts.permanent_defer import TIP_ONLY_POLICY
-from storage.coverage_ledger import plan_required_segments
+from storage.coverage_ledger import evaluate_segment, plan_required_segments
 
 _REPO = Path(__file__).resolve().parents[1]
 _CAPABILITY = _REPO / "specs" / "source_capability" / "equities_bars_daily_am.json"
@@ -214,3 +214,20 @@ def test_planner_required_count_is_not_32_months():
     assert mig["behavior_change"]["collection_coverage_json"] == "wired_v3_planner"
     assert "For historical data" in mig["official_evidence"]["quote"]
     assert mig["official_evidence"]["history_endpoint"] == "/v2/equities/bars/daily"
+
+
+def test_empty_receipt_is_partial_not_event_zero_complete():
+    """recent_snapshot AM never COMPLETEs from a trusted empty SUCCESS receipt."""
+    from tests.test_phase61_coverage_v2 import _receipt
+
+    policy = coverage_contract_for(DATASET)
+    assert policy.history_mode == "recent_snapshot"
+    assert policy.coverage_mode == "recent_snapshot"
+    required = plan_required_segments(policy, "2026-08-14")[0]
+    status, detail = evaluate_segment(
+        policy, required, _receipt(required, observed=0)
+    )
+    assert status == "PARTIAL"
+    assert status != "COMPLETE"
+    assert detail.get("event_zero") is not True
+    assert "empty" in detail["reason"]

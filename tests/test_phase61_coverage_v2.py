@@ -124,13 +124,23 @@ def test_missing_middle_segment_is_partial_even_with_early_and_late_receipts():
 
 
 def test_event_zero_successful_exhausted_raw_receipt_is_complete():
-    policy = _short_event_policy()
-    required = plan_required_segments(policy, "2025-01-31")[0]
-
-    status, detail = evaluate_segment(policy, required, _receipt(required, observed=0))
-
-    assert status == "COMPLETE"
-    assert detail["event_zero"] is True
+    """Genuine event_driven fins windows COMPLETE on empty exhausted receipts."""
+    for dataset_id in (
+        "fins_summary",
+        "fins_details",
+        "fins_dividend",
+        "fins_earnings_date",
+    ):
+        policy = replace(
+            coverage_contract_for(dataset_id),
+            history_target_start="2025-01-01",
+        )
+        required = plan_required_segments(policy, "2025-01-31")[0]
+        status, detail = evaluate_segment(
+            policy, required, _receipt(required, observed=0)
+        )
+        assert status == "COMPLETE", dataset_id
+        assert detail["event_zero"] is True
 
 
 def test_tip_snapshot_empty_receipt_is_partial_not_complete():
@@ -140,8 +150,23 @@ def test_tip_snapshot_empty_receipt_is_partial_not_complete():
     (fins_*). collection_cutoff / same_trading_day snapshots must not mint
     COMPLETE from a trusted empty SUCCESS receipt.
     """
-    for dataset_id in ("equities_earnings_calendar", "equities_bars_daily_am"):
+    cases = (
+        (
+            "equities_earnings_calendar",
+            "next_business_day_snapshot",
+            "collection_cutoff_snapshot",
+        ),
+        (
+            "equities_bars_daily_am",
+            "recent_snapshot",
+            "same_trading_day_am_snapshot",
+        ),
+    )
+    for dataset_id, snapshot_mode, grain in cases:
         policy = coverage_contract_for(dataset_id)
+        assert policy.history_mode == snapshot_mode, dataset_id
+        assert policy.coverage_mode == snapshot_mode, dataset_id
+        assert policy.segment_granularity == grain, dataset_id
         required = plan_required_segments(policy, "2026-08-14")[0]
         status, detail = evaluate_segment(
             policy, required, _receipt(required, observed=0)
@@ -150,6 +175,80 @@ def test_tip_snapshot_empty_receipt_is_partial_not_complete():
         assert status != "COMPLETE"
         assert detail.get("event_zero") is not True
         assert "empty" in detail["reason"]
+
+
+def test_earnings_event_driven_empty_is_not_event_zero_complete():
+    """Earnings is event_driven but tip-snapshot; empty SUCCESS stays PARTIAL."""
+    policy = coverage_contract_for("equities_earnings_calendar")
+    assert policy.expected_frequency == "event_driven"
+    assert policy.history_mode == "next_business_day_snapshot"
+    required = plan_required_segments(policy, "2026-08-14")[0]
+    assert required.expected_items is None
+    status, detail = evaluate_segment(
+        policy, required, _receipt(required, observed=0)
+    )
+    assert status == "PARTIAL"
+    assert status != "COMPLETE"
+    assert detail.get("event_zero") is not True
+    assert "empty" in detail["reason"]
+
+
+def test_tip_snapshot_empty_stays_partial_even_if_event_driven():
+    """recent_snapshot AM stays PARTIAL on empty even if labeled event_driven."""
+    policy = replace(
+        coverage_contract_for("equities_bars_daily_am"),
+        expected_frequency="event_driven",
+    )
+    required = plan_required_segments(policy, "2026-08-14")[0]
+    assert required.expected_items is None
+    status, detail = evaluate_segment(
+        policy, required, _receipt(required, observed=0)
+    )
+    assert status == "PARTIAL"
+    assert status != "COMPLETE"
+    assert detail.get("event_zero") is not True
+    assert "empty" in detail["reason"]
+
+
+def test_official_archive_index_empty_receipt_is_partial_not_complete():
+    policy = coverage_contract_for("jsda_otc_bond_reference_prices")
+    assert policy.coverage_mode == "official_archive_index_reconciled"
+    assert policy.segment_granularity == "official_archive_index_day"
+    html = (
+        _REPO / "tests/fixtures/jsda_otc_official_index_tiny.html"
+    ).read_text(encoding="utf-8")
+    required = plan_required_segments(
+        policy, "2002-08-06", source="jsda", index_text=html,
+    )[0]
+    status, detail = evaluate_segment(
+        policy, required, _receipt(required, observed=0)
+    )
+    assert status == "PARTIAL"
+    assert status != "COMPLETE"
+    assert detail.get("event_zero") is not True
+    assert "empty" in detail["reason"]
+
+
+def test_archive_index_empty_stays_partial_even_if_event_driven():
+    """official_archive_index never event-zero COMPLETEs, even if event_driven."""
+    policy = replace(
+        coverage_contract_for("jsda_otc_bond_reference_prices"),
+        expected_frequency="event_driven",
+    )
+    html = (
+        _REPO / "tests/fixtures/jsda_otc_official_index_tiny.html"
+    ).read_text(encoding="utf-8")
+    required = plan_required_segments(
+        policy, "2002-08-06", source="jsda", index_text=html,
+    )[0]
+    assert required.expected_items is None
+    status, detail = evaluate_segment(
+        policy, required, _receipt(required, observed=0)
+    )
+    assert status == "PARTIAL"
+    assert status != "COMPLETE"
+    assert detail.get("event_zero") is not True
+    assert "empty" in detail["reason"]
 
 
 def test_pagination_incomplete_is_not_complete():
