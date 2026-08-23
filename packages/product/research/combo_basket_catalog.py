@@ -315,17 +315,26 @@ def reconstitution_options(
     children = {str(p.get("child")) for p in nested_list}
     keep_children = [i for i in ids if i not in parents]
     keep_parents = [i for i in ids if i not in children]
+
+    def _nested_among(keep: Sequence[str]) -> int:
+        s = set(keep)
+        return sum(
+            1
+            for p in nested_list
+            if str(p.get("parent")) in s and str(p.get("child")) in s
+        )
+
     return {
         "nested_parents": nested_list,
         "apply_reject": False,
         "drop_parents_keep_children": {
             "members": keep_children,
-            "nested_parent_count": len(nested_parent_pairs(keep_children)),
+            "nested_parent_count": _nested_among(keep_children),
             "dropped": sorted(parents),
         },
         "drop_children_keep_parents": {
             "members": keep_parents,
-            "nested_parent_count": len(nested_parent_pairs(keep_parents)),
+            "nested_parent_count": _nested_among(keep_parents),
             "dropped": sorted(children),
         },
         "go": False,
@@ -417,7 +426,9 @@ def primary_mechanical_basket_defs() -> list[dict[str, Any]]:
     return [
         d
         for d in mechanical_basket_defs()
-        if d.get("valid") and (d.get("primary") or d.get("primary_candidate"))
+        if d.get("valid")
+        and not d.get("historical")
+        and (d.get("primary") or d.get("primary_candidate"))
     ]
 
 

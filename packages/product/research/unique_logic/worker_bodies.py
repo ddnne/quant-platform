@@ -274,6 +274,18 @@ class NearEmptyBatchError(ValueError):
     """New batch has occupancy ≤ near_empty threshold. Not a pass."""
 
 
+def cell_occupancy(cell: Mapping[str, Any] | None) -> float | None:
+    """Prefer occupancy, then occupancy_frac. Missing → None. Not a pass."""
+    if not isinstance(cell, Mapping):
+        return None
+    raw = cell.get("occupancy")
+    if raw is None:
+        raw = cell.get("occupancy_frac")
+    if raw is None:
+        return None
+    return float(raw)
+
+
 def mean_occupancy_by_logic(
     cells: Sequence[Mapping[str, Any]],
 ) -> dict[str, float]:
@@ -287,12 +299,10 @@ def mean_occupancy_by_logic(
         lid = str(cell.get("logic_id") or "").strip()
         if not lid:
             continue
-        raw = cell.get("occupancy_frac")
-        if raw is None:
-            raw = cell.get("occupancy")
+        raw = cell_occupancy(cell)
         if raw is None:
             continue
-        by[lid].append(float(raw))
+        by[lid].append(raw)
     return {lid: (sum(xs) / len(xs)) for lid, xs in by.items() if xs}
 
 
@@ -689,6 +699,7 @@ __all__ = [
     "usable_family_of",
     "classify_occupancy_pair",
     "countable_thesis_ids",
+    "cell_occupancy",
     "mean_occupancy_by_logic",
     "near_empty_occupancy_park",
     "always_on_occupancy_park",

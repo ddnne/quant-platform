@@ -18,6 +18,7 @@ from research.unique_logic.constants import (
     NEAR_EMPTY_OCCUPANCY,
     USABLE_OCCUPANCY_MIN,
 )
+from research.unique_logic.worker_bodies import cell_occupancy
 
 
 def blend_net_daily(series: Sequence[Sequence[float]]) -> list[float]:
@@ -70,11 +71,9 @@ def blend_window_cells(
             nets.append([float(x) for x in nd])
             if dates is None:
                 dates = list(cell.get("dates") or [])
-            occ = cell.get("occupancy")
-            if occ is None:
-                occ = cell.get("occupancy_frac")
+            occ = cell_occupancy(cell)
             if occ is not None:
-                occs.append(float(occ))
+                occs.append(occ)
         blended = blend_net_daily(nets)
         if len(blended) < 2:
             rows.append(
@@ -201,10 +200,7 @@ def summarize_basket_trends(
     rows: list[dict[str, Any]] = []
     for bid, group in sorted(by.items()):
         spec = defs.get(bid) or {}
-        occs = [
-            c.get("occupancy") if c.get("occupancy") is not None else c.get("occupancy_frac")
-            for c in group
-        ]
+        occs = [cell_occupancy(c) for c in group]
         unions = [c.get("union_occupancy") for c in group]
         nets = [c.get("total_ret_net") for c in group]
         tstats = [c.get("t_stat") for c in group]
@@ -221,7 +217,10 @@ def summarize_basket_trends(
             flags.append("always_on")
         if m_occ is not None and m_occ <= NEAR_EMPTY_OCCUPANCY:
             flags.append("near_empty")
-        candidate = not bool(set(flags) & {"always_on", "near_empty"})
+        hist = bool(spec.get("historical") or spec.get("deprecated"))
+        candidate = (not hist) and not bool(set(flags) & {"always_on", "near_empty"})
+        if hist:
+            flags.append("historical")
         rows.append(
             {
                 "basket_id": bid,
@@ -334,9 +333,7 @@ def stitch_cells_honest_windows(
                     dd = [str(i) for i in range(len(nd))]
                 nets.extend(nd)
                 dates.extend(dd)
-                occ = cell.get("occupancy")
-                if occ is None:
-                    occ = cell.get("occupancy_frac")
+                occ = cell_occupancy(cell)
                 n_days = max(1, len(nd) - 1)
                 if occ is not None:
                     occ_w += float(occ) * n_days

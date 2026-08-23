@@ -701,7 +701,8 @@ def test_summarize_basket_trends_is_not_a_pass() -> None:
     assert summary["not_a_pass"] is True
     assert "low_occupancy_band" in summary["retired_rules"]
     row = summary["baskets"][0]
-    assert row["candidate"] is True
+    assert row["candidate"] is False
+    assert "historical" in row["flags"]
     assert row["n_pos_windows"] == 6
     assert row["go"] is False
     assert row["historical"] is True

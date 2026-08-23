@@ -55,6 +55,22 @@ def test_usable_inventory_read_has_n_ands_and_pri_series() -> None:
     assert "n_ands" in empty and "pri_series" in empty
 
 
+def test_cell_occupancy_prefers_occupancy_over_frac() -> None:
+    from research.unique_logic.worker_bodies import cell_occupancy, mean_occupancy_by_logic
+
+    assert cell_occupancy(None) is None
+    assert cell_occupancy({}) is None
+    assert cell_occupancy({"occupancy": 0.4, "occupancy_frac": 0.1}) == 0.4
+    assert cell_occupancy({"occupancy_frac": 0.2}) == 0.2
+    means = mean_occupancy_by_logic(
+        [
+            {"logic_id": "a", "occupancy": 0.3, "occupancy_frac": 0.9},
+            {"logic_id": "a", "occupancy_frac": 0.5},
+        ]
+    )
+    assert means["a"] == 0.4
+
+
 def test_spec_by_id_survives_catalog_cache_clear() -> None:
     from research.unique_logic.catalog import clear_catalog_caches, combo_thesis_records
     from research.unique_logic.event_combos import spec_by_id

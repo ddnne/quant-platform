@@ -8,6 +8,7 @@ from collections import Counter, defaultdict
 from typing import Any, Mapping, Sequence
 
 from research.eval_registry import is_daily_path_complete_cell, is_path_broken_cell, is_path_collapsed_cell
+from research.unique_logic.worker_bodies import cell_occupancy
 
 CANDIDATE_KEEP_SIMPLE: str = (
     "Simple occupancy-gated theses stay in the candidate pool for later "
@@ -108,7 +109,7 @@ def summarize_daily_path_cells(
     for lid, cs in by.items():
         if not lid:
             continue
-        occs = [c.get("occupancy") if c.get("occupancy") is not None else c.get("occupancy_frac") for c in cs]
+        occs = [cell_occupancy(c) for c in cs]
         nets = [c.get("total_ret_net") for c in cs]
         signs = [
             1 if (n or 0) > 1e-6 else (-1 if (n or 0) < -1e-6 else 0) for n in nets
