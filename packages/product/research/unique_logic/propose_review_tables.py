@@ -550,11 +550,53 @@ def _unique_prefer_and(*, n: int) -> dict[str, object] | None:
     return None
 
 
+def _unique_sentence_and(*, n: int) -> dict[str, object] | None:
+    """Unique 2/3-AND from occupancy-sentence gates when prefer seeds are exhausted."""
+    catalog = _catalog_gate_sets()
+    pool = [
+        g
+        for g in sorted(_GATE_OCCUPANCY_SENTENCE)
+        if g in PROPOSE_ALLOWED_GATES and g != "cheap_pb"
+    ]
+    if n == 2:
+        candidates = (
+            [a, b]
+            for i, a in enumerate(pool)
+            for b in pool[i + 1 :]
+        )
+    elif n == 3:
+        candidates = (
+            [a, b, c]
+            for i, a in enumerate(pool)
+            for j, b in enumerate(pool[i + 1 :], i + 1)
+            for c in pool[j + 1 :]
+        )
+    else:
+        raise ValueError("n must be 2 or 3")
+    for gates in candidates:
+        gset = frozenset(gates)
+        if gset in catalog:
+            continue
+        if any(combo <= gset for combo, _reason in SPARSE_GATE_COMBOS):
+            continue
+        if any(contra <= gset for contra in PROPOSE_CONTRADICTORY_GATE_PAIRS):
+            continue
+        row = _good_row(gates)
+        if row is not None:
+            return row
+    return None
+
+
 def propose_prompt_good() -> dict[str, object]:
     """Occupancy-correct unique prefer 2-AND, else unique 3-AND. Format only."""
-    row = _unique_prefer_and(n=2) or _unique_prefer_and(n=3)
+    row = (
+        _unique_prefer_and(n=2)
+        or _unique_prefer_and(n=3)
+        or _unique_sentence_and(n=2)
+        or _unique_sentence_and(n=3)
+    )
     if row is None:
-        raise RuntimeError("no unique prefer 2-AND or 3-AND for PROPOSE_PROMPT_GOOD")
+        raise RuntimeError("no unique occupancy-correct 2-AND or 3-AND for PROPOSE_PROMPT_GOOD")
     return row
 
 

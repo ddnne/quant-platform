@@ -320,6 +320,7 @@ def test_countable_thesis_ids_require_worker_body() -> None:
     from research.eval_summary import summarize_daily_path_cells
     from research.unique_logic.catalog import catalog_spec, load_catalog_specs
     from research.unique_logic.constants import (
+        ALWAYS_ON_PARK_IDS,
         CANDIDATE_POLICY,
         CF_NEW_THESIS_IDS,
         COMBO_EVENT_GATES,
@@ -369,6 +370,9 @@ def test_countable_thesis_ids_require_worker_body() -> None:
             assert lid not in countable
             continue
         if lid in NEAR_EMPTY_PARK_IDS:
+            assert lid not in countable
+            continue
+        if lid in ALWAYS_ON_PARK_IDS:
             assert lid not in countable
             continue
         if combo_worker_gates_ok(spec):

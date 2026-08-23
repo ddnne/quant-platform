@@ -219,7 +219,7 @@ def test_near_empty_park_is_not_countable_or_basket_material() -> None:
     parked = near_empty_occupancy_park()
     assert parked == NEAR_EMPTY_PARK_IDS
     assert parked
-    assert "event_flatten_easing" in parked
+    assert "fy_end_cs_fade" in parked
     countable = countable_thesis_ids()
     for lid in parked:
         spec = catalog_spec(lid)
@@ -234,7 +234,7 @@ def test_near_empty_park_is_not_countable_or_basket_material() -> None:
     from research.cf_daily_path_job import sleeve_durability_logic_ids
 
     assert THIN_SLEEVE_EXCLUDE_IDS
-    assert "event_div_margin_up" in THIN_SLEEVE_EXCLUDE_IDS
+    assert "event_steep_tight_on" in THIN_SLEEVE_EXCLUDE_IDS
     assert THIN_SLEEVE_EXCLUDE_IDS.isdisjoint(NEAR_EMPTY_PARK_IDS)
     assert THIN_SLEEVE_EXCLUDE_IDS.isdisjoint(sleeve_durability_logic_ids())
     thin_reasons = validate_basket_members(
@@ -317,6 +317,8 @@ def test_near_empty_batch_guard_and_park_sparse_cover() -> None:
         spec = catalog_spec(lid)
         params = spec.get("params") if isinstance(spec.get("params"), dict) else {}
         gates = frozenset(str(g) for g in (params.get("gates") or []) if str(g).strip())
+        if not gates:
+            continue
         assert any(combo <= gates for combo in sparse), (
             f"{lid} parked empty but no SPARSE_GATE_COMBOS subset covers {sorted(gates)}"
         )

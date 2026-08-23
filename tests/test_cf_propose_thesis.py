@@ -218,7 +218,7 @@ def test_worker_index_contains_propose_thesis_route() -> None:
         assert list(good["gates"]) == first2
         assert len(good["gates"]) == 2
     else:
-        assert len(good["gates"]) == 3
+        assert len(good["gates"]) in (2, 3)
         assert frozenset(str(g) for g in good["gates"]) not in catalog_sets
     assert "markets_margin_interest" in src
     assert '"margin_interest"' not in src

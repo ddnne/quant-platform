@@ -5,11 +5,11 @@
 CLIs (`issue_receipts_parallel`, `publish_ops_projection`, `export_ops_projection`,
 `refresh_coverage_ledger`, `sync_dataset_coverage_from_segments`, `ops_status`,
 `ops_reeval_*`, `write_collection_receipts`, `issue_signed_receipts_for_segments`,
-`restore_local_complete_from_receipt`, `evaluate_collection_sla`,
+`restore_local_complete_from_receipt`,
 `record_research_eval`, `rebuild_paper_index`,
 `parse_jsda_from_r2_mirror`, `backfill_status_report`,
 `generate_governed_js`, `verify_governed_js_drift`,
-`report_raw_throughput`, `rebuild_receipts_from_raw`) use it.
+`report_raw_throughput`) use it.
 CLIs under `scripts/` and `scripts/ops/` use the same `_bootstrap` finder.
 Candidate eval is `POST /v1/daily-path`, not `python -m research.unique_logic --all`
 (that CLI is HOLD). Live counts / GO gates: [docs/phase62_residual_status.md](../docs/phase62_residual_status.md)

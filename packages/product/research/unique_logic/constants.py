@@ -229,11 +229,23 @@ NEAR_EMPTY_PARK_IDS: frozenset[str] = frozenset(
         "event_pb_tight_px_down",
         "event_flatten_easing",
         "surprise_xs_flatten_easing",
+        "event_cheap_iv_cheap_pb",
+        "event_cheap_iv_margin_down",
+        "event_cheap_iv_steep",
+        "event_cheap_pb_margin_down",
+        "event_cheap_pb_margin_down_easing_cluster",
+        "flow_disagree_skip_friday",
+        "fy_end_cs_fade",
     }
 )
 # Recorded mean occupancy ≥ ALWAYS_ON_OCCUPANCY_WARN. Not countable, not
-# basket material. Empty until a batch records always-on occupancy.
-ALWAYS_ON_PARK_IDS: frozenset[str] = frozenset()
+# basket material.
+ALWAYS_ON_PARK_IDS: frozenset[str] = frozenset(
+    {
+        "cs_eqar_falling",
+        "cs_eqar_high",
+    }
+)
 # Countable but too thin for mechanical sleeves (recorded both-track
 # occupancy in (NEAR_EMPTY, ~0.12]). Do not use as basket material.
 THIN_SLEEVE_EXCLUDE_IDS: frozenset[str] = frozenset(
@@ -278,6 +290,32 @@ THIN_SLEEVE_EXCLUDE_IDS: frozenset[str] = frozenset(
         "event_eps_steep",
         "event_div_margin_up",
         "surprise_xs_div_margin_up",
+        "cs_cheap_pb_cheap_iv",
+        "event_cheap_iv_cluster_uncrowded",
+        "event_cheap_iv_eps_down",
+        "event_cheap_iv_eqar_falling_fade",
+        "event_cheap_iv_liq_eqar_high",
+        "event_cheap_iv_liq_uncrowded",
+        "event_cheap_iv_on_impulse",
+        "event_cheap_iv_overnight_easing",
+        "event_cheap_iv_ta_up_easy",
+        "event_cheap_iv_uncrowded",
+        "event_cheap_pb_easy_funding",
+        "event_cheap_pb_eps_up",
+        "event_cheap_pb_margin_up_fade",
+        "event_cheap_pb_on_impulse",
+        "event_cheap_pb_repo3m_down",
+        "event_cheap_pb_cluster",
+        "event_cheap_pb_price_down_liq",
+        "fy_end_event_fade",
+        "surprise_xs_afterclose_cheap_iv",
+        "surprise_xs_cheap_iv_liq",
+        "surprise_xs_eqar_high_cheap_iv",
+        "event_np_invert_px",
+        "event_np_sales_px",
+        "event_sales_tight_px",
+        "event_np_sales_invert",
+        "event_steep_tight_on",
     }
 )
 MF_VALUE_MOM_RATE_DELEGATES: bool = False
