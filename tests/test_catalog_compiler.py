@@ -1,4 +1,4 @@
-"""Catalog compiler is closed-DSL data only. Does not delete YAML. Not GO."""
+"""Catalog compiler is closed-DSL data only. Does not add YAML. Not GO."""
 from __future__ import annotations
 
 import ast
@@ -96,7 +96,7 @@ def test_persisted_artifacts_match_live_digest() -> None:
 
 
 def test_yaml_stems_lock_to_compiled_migration_ids() -> None:
-    """compiled migration.jsonl == YAML == RESEARCH_UNIQUE_LOGIC_IDS. One identity pass."""
+    """compiled migration.jsonl == RESEARCH_UNIQUE_LOGIC_IDS. YAML optional; one identity pass."""
     sets = assert_compiled_logic_id_sets()
     assert sets["migration"] == sets["constants"] == set(RESEARCH_UNIQUE_LOGIC_IDS)
     if sets["yaml"]:

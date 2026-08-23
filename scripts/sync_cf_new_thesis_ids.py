@@ -2,9 +2,9 @@
 """Rewrite Worker unique-logic ID/gate arrays from Python frozensets.
 
 ``catalog_ids.ts`` emit is owned by ``research.catalog_compiler``. Python
-``research.unique_logic.constants`` remain policy SoT for Worker ID arrays
-until YAML deletion. Compiler digest must match n=2254; fails if YAML
-count drifts while CATALOG_AND_PLUS_N_STOPPED. Generated Worker files:
+``research.unique_logic.constants`` remain policy SoT for Worker ID arrays.
+Compiler digest must match n=2254; yaml n=0 uses compiled n while
+``CATALOG_AND_PLUS_N_STOPPED``. Generated Worker files:
 ``catalog_ids.ts``, ``propose_review_tables.ts``, ``propose_allowed.ts``.
 Leftover occupancy stays in daily_path.ts. Does not evaluate, promote, or
 GO. Does not copy PYTHON_ONLY_EVENT_GATES onto the Worker. Run from repo root:

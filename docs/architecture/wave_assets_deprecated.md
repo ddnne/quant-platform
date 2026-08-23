@@ -10,8 +10,8 @@ do not treat the warehouse as residual SoT.
 **Do not add new** `scripts/run_w*.py` or `docs/proof/w08*_wNN_*.md` scorecards.
 Evaluators live in `packages/product/research/unique_logic/` under **functional
 names** (not wave numbers). New research: `research.daily_path_eval` /
-`research.cf_mass_eval_job` / `research.eval_registry` and
-`specs/research_logics/`.
+`research.cf_mass_eval_job` / `research.eval_registry` and the compiled
+catalog at `specs/research_catalog/` (`specs/research_logics/` YAML is empty).
 
 ## unique_logic module names
 

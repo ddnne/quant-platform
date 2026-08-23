@@ -202,7 +202,7 @@ def combo_worker_gates_ok(spec: Mapping[str, Any]) -> bool:
 
 
 def is_countable_spec(spec: Mapping[str, Any]) -> bool:
-    """YAML-like spec counts only with catalog row + Worker body + known gates."""
+    """Catalog row (compiled or YAML) + Worker body + known gates. File on disk is not required."""
     lid = str(spec.get("logic_id") or "").strip()
     if not lid:
         return False
@@ -227,7 +227,7 @@ def is_countable_spec(spec: Mapping[str, Any]) -> bool:
 
 @lru_cache(maxsize=1)
 def countable_thesis_ids() -> frozenset[str]:
-    """Catalog + Worker body + implemented gates; YAML clones / near_dup park excluded."""
+    """Catalog + Worker body + implemented gates; clones / near_dup / occupancy parks excluded."""
     out: set[str] = set()
     for spec in load_catalog_specs():
         if is_countable_spec(spec):

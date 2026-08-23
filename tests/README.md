@@ -12,8 +12,9 @@ of the guard packs below.
 .venv/bin/python -m pytest tests/ -q \
   -k "plane_import or mass_research or gateway_fail or publish_guard or sticky or issue_receipts or data_boundary or strategies_static"
 
-# Smoke
-.venv/bin/python -m unittest tests.test_smoke -v
+# Smoke = G0 architecture guards (no tests.test_smoke module)
+.venv/bin/python -m pytest tests/ -q \
+  -k "plane_import or mass_research or gateway_fail or publish_guard"
 ```
 
 Live residual COMPLETE / Mass status is **not** decided by tests — see

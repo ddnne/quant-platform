@@ -32,7 +32,7 @@ Wave eval runners (`run_w*.py`) are **gone**. Do **not** add new
 
 New research:
 
-- catalog: `specs/research_logics/`
+- catalog: `specs/research_catalog/` (compiled map; `specs/research_logics/` YAML is empty — do not add YAML)
 - candidate SoT: `POST /v1/daily-path` (`research.cf_daily_path_job`)
 - local unique CLI (`python -m research.unique_logic`): retired fail-closed stub, not candidate SoT
 - CF screen (auxiliary): `research.cf_mass_eval_job.run_cf_mass_eval_job`

@@ -202,14 +202,12 @@ Historical phase status / final_report / checklist / acceptance-plan / dated liv
 
 ```bash
 python -m pytest \
-  tests/test_smoke.py \
   tests/test_mass_research_gate.py \
   tests/test_gateway_fail_closed.py \
   tests/test_core_data_boundary.py \
   tests/test_features_data_boundary.py \
   tests/test_strategies_static_boundaries.py \
   tests/test_plane_import_boundaries.py \
-  tests/test_phase7_gateway.py \
   tests/test_ops_projection_publish_guard.py \
   -q
 ```
@@ -219,7 +217,6 @@ python -m pytest \
 ```bash
 pip install -e ".[dev]"   # after packaging/layout changes
 python -m pytest tests/ -q
-python -m unittest tests.test_smoke -v
 ```
 
 Live (`QP_LIVE=1`) is **operator-only**, never a B1 merge gate.

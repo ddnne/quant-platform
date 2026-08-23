@@ -1,4 +1,4 @@
-"""Load unique_logic YAML from ``specs/research_logics``. Constrained schema."""
+"""Load unique_logic catalog (YAML if present, else compiled migration.jsonl)."""
 from __future__ import annotations
 
 import json
@@ -148,7 +148,7 @@ def _catalog_by_id_cached(root_key: str) -> dict[str, dict[str, Any]]:
 
 
 def catalog_index(*, root: Path | None = None) -> dict[str, Any]:
-    """One-pass catalog lookup. YAML remains combo declaration SoT."""
+    """One-pass catalog lookup. Compiled map is load SoT when YAML is absent."""
     root_key = str((root or repo_root()).resolve())
     by_id = _catalog_by_id_cached(root_key)
     records = combo_thesis_records(root=root)
@@ -175,7 +175,7 @@ def catalog_spec(logic_id: str, *, root: Path | None = None) -> dict[str, Any] |
 
 
 def load_compiled_specs(*, root: Path | None = None) -> list[dict[str, Any]]:
-    """Closed-DSL rows from the compiler map. YAML remains load SoT while present."""
+    """Closed-DSL rows from the compiler map. Load SoT when YAML is absent."""
     path = (root or repo_root()) / "specs" / "research_catalog" / "migration.jsonl"
     specs: list[dict[str, Any]] = []
     for line in path.read_text(encoding="utf-8").splitlines():
@@ -207,7 +207,7 @@ def load_compiled_specs(*, root: Path | None = None) -> list[dict[str, Any]]:
 
 
 def compiled_migration_ids(*, root: Path | None = None) -> frozenset[str]:
-    """IDs from the compiler migration map. YAML remains load SoT until deletion."""
+    """IDs from the compiler migration map. Identity set vs constants."""
     return frozenset(
         str(s.get("logic_id") or "")
         for s in load_compiled_specs(root=root)
@@ -296,7 +296,7 @@ def combo_row_from_yaml(spec: Mapping[str, Any]) -> dict[str, Any]:
 
 @lru_cache(maxsize=8)
 def _yaml_combo_rows_cached(root_key: str) -> tuple[dict[str, Any], ...]:
-    """Runtime combo rows. YAML remains declaration SoT."""
+    """Runtime combo rows from catalog specs (compiled when YAML is absent)."""
     return tuple(
         combo_row_from_yaml(spec)
         for spec in _load_catalog_specs_cached(root_key)
@@ -305,13 +305,13 @@ def _yaml_combo_rows_cached(root_key: str) -> tuple[dict[str, Any], ...]:
 
 
 def yaml_combo_rows(*, root: Path | None = None) -> list[dict[str, Any]]:
-    """Combo runtime rows from catalog YAML. Filter by evaluator; do not import combo runtime."""
+    """Combo runtime rows from catalog specs. Filter by evaluator; do not import combo runtime."""
     return list(_yaml_combo_rows_cached(str((root or repo_root()).resolve())))
 
 
 @lru_cache(maxsize=8)
 def _combo_thesis_records_cached(root_key: str) -> tuple[dict[str, Any], ...]:
-    """Compact combo table. YAML stays declaration SoT. Invalidate via cache_clear."""
+    """Compact combo table from catalog specs. Invalidate via cache_clear."""
     out: list[dict[str, Any]] = []
     for spec in _load_catalog_specs_cached(root_key):
         if str(spec.get("evaluator") or "") != _COMBO_EVALUATOR:
@@ -335,7 +335,7 @@ def _combo_thesis_records_cached(root_key: str) -> tuple[dict[str, Any], ...]:
 
 
 def combo_thesis_records(*, root: Path | None = None) -> list[dict[str, Any]]:
-    """Compact combo table rows. YAML stays declaration SoT until a jsonl cutover."""
+    """Compact combo table rows from catalog specs (compiled when YAML is absent)."""
     return list(
         _combo_thesis_records_cached(str((root or repo_root()).resolve()))
     )
@@ -366,7 +366,7 @@ def write_combo_thesis_jsonl(
     *,
     root: Path | None = None,
 ) -> dict[str, Any]:
-    """Dump compact combo rows. YAML remains declaration SoT. Not a second SoT."""
+    """Dump compact combo rows. Not a second SoT."""
     import json
 
     rows = combo_thesis_records(root=root)
@@ -477,7 +477,7 @@ def _unique_family_key(spec: Mapping[str, Any]) -> str:
 
 
 def unique_family_ids_from_yaml(*, root: Path | None = None) -> dict[str, frozenset[str]]:
-    """Non-combo YAML stems grouped by family (or evaluator module). Does not GO."""
+    """Non-combo catalog rows grouped by family (or evaluator module). Does not GO."""
     buckets: dict[str, set[str]] = {k: set() for k in _UNIQUE_FAMILY_KEYS}
     for spec in load_catalog_specs(root=root):
         if str(spec.get("evaluator") or "") == _COMBO_EVALUATOR:
@@ -490,7 +490,7 @@ def unique_family_ids_from_yaml(*, root: Path | None = None) -> dict[str, frozen
 
 
 def combo_thesis_ids_by_kind(*, root: Path | None = None) -> dict[str, frozenset[str]]:
-    """Combo YAML stems grouped by kind. Uses compact records, not runtime rows."""
+    """Combo catalog rows grouped by kind. Uses compact records, not runtime rows."""
     event: set[str] = set()
     cs: set[str] = set()
     surprise_xs: set[str] = set()

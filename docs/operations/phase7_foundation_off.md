@@ -50,11 +50,7 @@ Operator overrides (`OperatorOverrideService`) are limited to non-safety scopes
 pytest -q \
   tests/test_mass_research_gate.py \
   tests/test_research_budget_ledger.py \
-  tests/test_phase622_remainder.py \
-  tests/test_phase7_gateway.py \
   tests/test_phase7_selection.py \
-  tests/test_phase7_knowledge.py \
-  tests/test_phase7_pipeline_budget.py \
   tests/test_gateway_fail_closed.py
 ```
 

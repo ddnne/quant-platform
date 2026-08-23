@@ -73,11 +73,11 @@ def _manifest_yaml_still_present() -> bool:
 
 
 def assert_catalog_and_plus_n_stopped() -> dict[str, Any]:
-    """Refuse yaml growth while CATALOG_AND_PLUS_N_STOPPED. Does not GO.
+    """Refuse catalog growth while CATALOG_AND_PLUS_N_STOPPED. Does not GO.
 
     yaml n>0 must equal CATALOG_YAML_COUNT_AT_STOP. yaml n==0 requires
-    compiled migration n to equal the freeze; yaml_still_present may be
-    false later. Does not delete YAML.
+    compiled migration n to equal the freeze (yaml_still_present false).
+    Do not add YAML without a dated brief that flips the freeze.
     """
     n = len(list(catalog_dir().glob("*.yaml")))
     freeze = int(CATALOG_YAML_COUNT_AT_STOP)

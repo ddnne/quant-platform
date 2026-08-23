@@ -27,7 +27,8 @@ params:
 evaluator: research.unique_logic.funding.evaluate_overnight_level_cs_tilt_daily_mtm
 ```
 
-YAML files here are the declaration path. Evaluators live in
+This directory is **empty**. Do not add YAML here. The schema above is the
+historical declaration shape; live rows are the compiled map. Evaluators live in
 `packages/product/research/unique_logic/`. Candidate SoT is
 `POST /v1/daily-path` (`research.cf_daily_path_job`). Local
 `python -m research.unique_logic` is a retired fail-closed stub, not candidate eval.

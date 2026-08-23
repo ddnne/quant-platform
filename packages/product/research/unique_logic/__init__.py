@@ -19,7 +19,7 @@ __all__ = [
 
 
 def all_unique_logic_specs() -> list[dict[str, Any]]:
-    """YAML catalog is the runtime declaration SoT."""
+    """Catalog specs (compiled map when YAML is absent). Not GO."""
     return load_catalog_specs()
 
 

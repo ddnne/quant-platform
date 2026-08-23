@@ -6,7 +6,8 @@ Single SoT for stop/apply/wave. ``eval_tracks`` and
 
 EVENT_THREE_AND_PLUS_N_STOPPED: bool = True
 CATALOG_AND_PLUS_N_STOPPED: bool = True
-# Freeze n. yaml n>0 must equal this; yaml n==0 later ok if compiled migration n matches (yaml_still_present may then be false). Does not delete YAML.
+# Freeze n. yaml n>0 must equal this; yaml n==0 requires compiled migration n to match.
+# YAML files are gone; compiled map is load SoT. Do not add YAML without flipping the freeze.
 CATALOG_YAML_COUNT_AT_STOP: int = 2254
 RECONSTITUTION_APPLY: bool = False
 CURRENT_EVAL_WAVE: str = "20260824ev"

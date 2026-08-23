@@ -254,7 +254,7 @@ def usable_eval_snapshot(
 ) -> dict[str, Any]:
     """Inventory v1 + usable-read v3 + cost-risk + drift. Not a pass.
 
-    Does not fan out occupancy. Does not GO. YAML remains catalog SoT.
+    Does not fan out occupancy. Does not GO. Catalog SoT is the compiled map.
     """
     from research.holding_metrics import DEFAULT_ONE_WAY_COST
     from research.unique_logic.worker_bodies import (

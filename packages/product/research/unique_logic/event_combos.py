@@ -73,7 +73,7 @@ def _combo_row(s: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def combo_runtime_rows() -> tuple[dict[str, Any], ...]:
-    """Combo runtime table. YAML remains declaration SoT.
+    """Combo runtime table from catalog specs (compiled when YAML is absent).
 
     Rows come from ``yaml_combo_rows`` (already cached). Do not keep a second
     copy of the ~2k-row table here.

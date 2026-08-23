@@ -11,8 +11,9 @@ It does **not** choose an option, restitch a blend, mutate YAML, flip
 apply, or GO.
 
 Live residual flags remain [`phase62_residual_status.md`](phase62_residual_status.md).
-Catalog SoT remains `specs/research_logics/*.yaml`. Occupancy numbers live
-on R2/D1, not here.
+Catalog SoT is the compiled map (`specs/research_catalog/migration.jsonl`).
+Occupancy numbers live on R2/D1, not here. Do not add YAML. Do not
+auto-choose `drop_parents` vs `drop_children`.
 
 ---
 

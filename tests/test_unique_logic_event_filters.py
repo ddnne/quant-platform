@@ -194,26 +194,3 @@ def test_event_filter_yaml_leftover_vs_lifted_gates() -> None:
         params = by_id[lid].get("params") or {}
         assert params.get("gates"), f"{lid} occupancy-equal lift needs params.gates"
 
-    worker_src = (
-        Path(__file__).resolve().parents[1]
-        / "platform"
-        / "workers"
-        / "research-mass-eval"
-        / "src"
-    )
-    src = (worker_src / "daily_path.ts").read_text(encoding="utf-8")
-    leftover_block = src.split("if (!comboImpl)", 1)[1].split(
-        'if (lid === "event_afterclose_delay2")', 1
-    )[0]
-    assert 'if (lid === "event_pre_mom_agree_hold")' in leftover_block
-    agree = leftover_block.split('if (lid === "event_pre_mom_agree_hold")', 1)[1]
-    assert "const i = ev.entryIdx;" in agree
-    assert "ev.entryIdx - 1" not in agree
-    assert "momentumAt(entryIdx)" in agree
-    assert "momentumAt(pairs, 5, i)" in agree
-    gate_src = (worker_src / "combo_gates.ts").read_text(encoding="utf-8")
-    pre = gate_src.split('if (gate === "pre_mom")', 1)[1].split(
-        "Unknown gate fails closed", 1
-    )[0]
-    assert "ev.entryIdx - 1" in pre
-

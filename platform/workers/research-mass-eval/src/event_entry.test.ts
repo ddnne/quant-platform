@@ -15,4 +15,11 @@ describe("PIT event entry", () => {
     expect(pitEventEntryShift("15:00:00")).toBe(1);
     expect(afterClose("15:00:00")).toBe(true);
   });
+
+  it("invented midnight clock is not same-day", () => {
+    expect(discTimeKnown("00:00:00")).toBe(false);
+    expect(discTimeKnown("00:00")).toBe(false);
+    expect(pitEventEntryShift("00:00:00")).toBe(1);
+    expect(afterClose("00:00:00")).toBe(false);
+  });
 });

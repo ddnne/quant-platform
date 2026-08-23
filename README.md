@@ -195,7 +195,8 @@ pip install -e ".[dev]"
 
 # テスト（API 鍵不要・オフラインで green）
 python -m pytest tests/ -q
-python -m unittest tests.test_smoke -v
+# G0 smoke (no tests.test_smoke module)
+python -m pytest tests/ -q -k "plane_import or mass_research or gateway_fail or publish_guard"
 ```
 
 ## Phase 1 の取得（ローカル）

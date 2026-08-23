@@ -18,4 +18,4 @@ from gateway import AIGateway, GatewayBudget, GatewayResult, GatewaySchemaReject
 - Market HTTP (`ingestion`)
 - Arming Mass research or Phase 7 GO
 
-Guard tests: `tests/test_gateway_fail_closed.py`, `tests/test_phase7_gateway.py`.
+Guard tests: `tests/test_gateway_fail_closed.py`.

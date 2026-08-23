@@ -1,8 +1,10 @@
 # Phase 6.3 — refactor plan (authority split, not a rewrite)
 
-**Lane:** refactor PLAN only (no code split in this commit)  
-**Tip:** `41003a5` (`origin/main`)  
-**Worktree:** `p63/lane-refactor-plan`  
+**Lane:** refactor PLAN (authority split, not a rewrite)  
+**Tip at authoring:** `41003a5`  
+**Status at `5c9b962`:** YAML file-count waste **closed** (compiled map is SoT;
+`yaml_still_present: false`; tracked files ~631). Combo-gate and PIT-entry
+extracts landed. Leftover occupancy **HOLD** in `daily_path.ts`.  
 **Mass / READY / Phase 7:** unchanged (NO-GO / not declared / OFF)
 
 This is a **refactor plan**, not a rewrite mandate. Later lanes extract
@@ -47,12 +49,10 @@ because 800-line files are virtuous.
 
 ## 2. What is actually large (this tip)
 
-`git ls-files` at `41003a5`: **2873** tracked paths.  
-`specs/research_logics/*.yaml`: **2254** (**78.5%** of the tree).  
-Non-YAML: **619**. The YAML catalog is the real file-count waste.
-Compiler already exists (`research.catalog_compiler`); **deletion is a
-later mechanical commit after digest lock** — not this lane, not a
-hand-curated prune.
+`git ls-files` at `41003a5`: **2873** tracked paths, of which YAML was
+**2254** (**78.5%**). At `5c9b962` YAML is gone; tracked files **~631**.
+Compiler map `specs/research_catalog/` is catalog SoT. Do not add YAML.
+Do not hand-edit `catalog_ids.ts`.
 
 | Path | LOC | Split? |
 |------|----:|--------|
@@ -126,11 +126,11 @@ slice `gatedCsHeld` by thesis id.
 | Artifact | Role now | Later |
 |----------|----------|-------|
 | `specs/research_logics/*.yaml` (2254) | Catalog SoT on disk (**78.5%** of tracked files) | Delete only after digest lock |
-| `research.catalog_compiler` | Closed-DSL rows + `digest` + `semantic_hash`. `yaml_still_present: true`. Does not exec Python, does not delete YAML | Becomes SoT; compiler emits Worker IDs |
+| `research.catalog_compiler` | Closed-DSL rows + `digest` + `semantic_hash`. `yaml_still_present: false`. Does not exec Python, does not add YAML | **SoT**; compiler emits Worker IDs |
 | `research.unique_logic.catalog` | Constrained YAML parse | Parse remains until YAML gone; then load compiler artifact |
 | `unique_logic/constants.py` | Policy: gates, parks, propose allow-list; loads family IDs from YAML | Policy stays; ID unions come from compiler rows |
 | `catalog_ids.ts` | **GENERATED** by `scripts/sync_cf_new_thesis_ids.py` from Python frozensets. Do not hand-edit | Compiler should own the emit. Same script or `catalog_compiler` — one owner |
-| `eval_flags.CATALOG_YAML_COUNT_AT_STOP` (2254) | Freeze file-count | After lock: digest equality replaces `n == 2254` |
+| `eval_flags.CATALOG_YAML_COUNT_AT_STOP` (2254) | Freeze identity n | yaml n=0 requires compiled n=2254; digest pin `sha256:6ad5ba57dfa41…` |
 
 ### Digest lock (later lane, still not YAML deletion)
 
@@ -141,7 +141,7 @@ slice `gatedCsHeld` by thesis id.
    regex walks (`test_catalog_yaml_parity.py` freeze; see test audit).
 4. Worker load still generated TS. Hand-edits to `catalog_ids.ts` stay
    forbidden.
-5. `yaml_still_present` remains **true** until the deletion commit.
+5. `yaml_still_present` is **false** after the deletion commit (`5c9b962`).
 
 ### YAML deletion (later mechanical commit, after lock)
 
@@ -268,22 +268,23 @@ fail-closed, empty-raw receipt ban) over a matrix.
 
 ---
 
-## 7. Sequencing (later lanes; not this commit)
+## 7. Sequencing
 
 Each row is one revert unit. No mixed “rename + behavior change”.
 No Mass/READY/Phase 7 arming.
 
-| Order | Lane | Authority moved | Stay behind |
-|------:|------|-----------------|-------------|
-| 1 | `combo_gates.ts` from `daily_path.ts` | combo-gate **policy** | leftover occupancy; PIT entry; MTM math |
-| 2 | PIT entry module from `daily_path.ts` | PIT **entry** | leftover occupancy lid branches |
-| 3 | ingestion-premium persist vs HTTP vs receipt | one of persist / presentation / evidence | fetch retry math; catalog/identity |
-| 4 | `r2_feature_context` parse vs normalize vs `available_at` policy | one authority | the other three |
-| 5 | `coverage_ledger` persist/read vs `evaluate_segment` | persistence I/O | COMPLETE predicates |
-| 6 | `snapshot.py` publication gate vs artifact write vs proof | one of policy / persist / evidence | the other two |
-| 7 | Compiler owns `catalog_ids.ts` emit | generated **presentation** of policy IDs | leftover occupancy still not in this file |
-| 8 | Digest lock (pin `compile_catalog()` digest) | — | YAML still on disk |
-| 9 | Mechanical YAML delete | files only | only after (8); one commit |
+| Order | Lane | Authority moved | Status at `5c9b962` |
+|------:|------|-----------------|---------------------|
+| 1 | `combo_gates.ts` from `daily_path.ts` | combo-gate **policy** | **DONE** (`combo_gates.ts`; leftover occupancy stayed) |
+| 2 | PIT entry module from `daily_path.ts` | PIT **entry** | **DONE** (`event_entry.ts`) |
+| 3 | leftover occupancy as **policy** | unique-22 lid branches | **HOLD** in `daily_path.ts` (occupancy-equal re-eval required; do not unify with `comboEventGateOk`) |
+| 4 | `r2_feature_context` parse vs normalize vs `available_at` policy | one authority | **remaining** |
+| 5 | `coverage_ledger` persist/read vs `evaluate_segment` | persistence I/O | **remaining** (COMPLETE predicates stay) |
+| 6 | `snapshot.py` publication gate vs artifact write vs proof | one of policy / persist / evidence | **remaining** |
+| 7 | Compiler owns `catalog_ids.ts` emit | generated **presentation** of policy IDs | **DONE** |
+| 8 | Digest lock (pin `compile_catalog()` digest) | — | **DONE** `sha256:6ad5ba57dfa41…` |
+| 9 | Mechanical YAML delete | files only | **DONE** (`yaml_still_present: false`) |
+| 10 | ingestion-premium persist vs HTTP vs receipt | one of persist / presentation / evidence | **optional**; worker path frozen — in-place only |
 
 `eval.ts` orchestration extract and `coverage.py` C-check *navigation*
 (comments / table of check ids) are optional and never a prerequisite.
@@ -298,7 +299,7 @@ No Mass/READY/Phase 7 arming.
 ✗ Hand-edit catalog_ids.ts / propose_allowed.ts / propose_review_tables.ts
 ✗ Unify unique-22 leftover occupancy with comboEventGateOk
 ✗ Split live math to hit a line budget
-✗ Delete YAML before compiler digest lock
+✗ Re-add YAML / delete the compiled map / hand-edit `catalog_ids.ts`
 ✗ Walk 2254 YAML files as a new test, twice
 ✗ Move platform/workers/** paths or data/**
 ✗ Claim or enable Mass ON, production READY, Phase 7 GO

@@ -281,9 +281,7 @@ def test_python_only_event_gates_skip_catalog() -> None:
 
 
 def test_event_cheap_pb_gate_in_combo_and_yaml() -> None:
-    """cheap_pb stays a COMBO event gate; YAML pead lists it. Not a CS reuse."""
-    import re
-
+    """cheap_pb stays a COMBO event gate; catalog pead lists it. Not a CS reuse."""
     from research.unique_logic.catalog import catalog_spec, combo_row_from_yaml
     from research.unique_logic.constants import CHEAP_PB_EVENT_VS_CS, COMBO_EVENT_GATES
 
@@ -305,26 +303,6 @@ def test_event_cheap_pb_gate_in_combo_and_yaml() -> None:
         (derived.get("params") or {}).get("gates") or derived.get("gates") or []
     )
     assert "cheap_pb" in derived_gates
-
-    worker_src = (
-        Path(__file__).resolve().parents[1]
-        / "platform"
-        / "workers"
-        / "research-mass-eval"
-        / "src"
-    )
-    src = (worker_src / "combo_gates.ts").read_text(encoding="utf-8")
-    event_block = re.search(
-        r'if \(gate === "cheap_pb"\) \{.*?return med !== null && pb < med;',
-        src,
-        flags=re.S,
-    )
-    assert event_block, "comboEventGateOk cheap_pb body"
-    body = event_block.group(0)
-    assert "bars" in body and "fins" in body
-    assert "ev.bps" in body
-    assert "reverse().find" in body
-    assert "extras?.cheapPb" not in body
 
 
 def test_countable_thesis_ids_require_worker_body() -> None:
