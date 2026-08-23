@@ -7,6 +7,7 @@ from dataclasses import asdict, dataclass
 from datetime import date, datetime, timezone
 import json
 from pathlib import Path
+import re
 import sqlite3
 from typing import Any, Iterable, Mapping, Sequence
 
@@ -100,6 +101,16 @@ _TIP_COVERAGE_MODES = frozenset({
     "same_day_am_snapshot",
     "tip_snapshot",
 })
+_OFFICIAL_ARCHIVE_INDEX_MODES = frozenset({
+    "official_archive_index",
+    "official_archive_index_reconciled",
+})
+_OFFICIAL_ARCHIVE_INDEX_DATASETS = frozenset({
+    "jsda_otc_bond_reference_prices",
+})
+_INDEX_PUBLICATION_DATE_RE = re.compile(
+    r"(?<!\d)(20\d{2})[./年]\s*(\d{1,2})[./月]\s*(\d{1,2})(?:日)?(?!\d)"
+)
 
 
 def _source_capability_for(
@@ -172,18 +183,74 @@ def _snapshot_extra_scope(
     return extra
 
 
+def _uses_official_archive_index(
+    policy: CollectionCoverageContract,
+    domain: OfficialRequiredDomainSubset | None,
+) -> bool:
+    if policy.dataset_id in _OFFICIAL_ARCHIVE_INDEX_DATASETS:
+        return True
+    if policy.coverage_mode in _OFFICIAL_ARCHIVE_INDEX_MODES:
+        return True
+    if policy.history_mode == "official_archive_index":
+        return True
+    if domain is None:
+        return False
+    return (
+        domain.history_mode == "official_archive_index"
+        or domain.publication_days_only
+    )
+
+
+def official_index_days(
+    dataset: str,
+    index_text: str | None,
+) -> tuple[str, ...]:
+    """Official year-index listed publication days for ``dataset``.
+
+    Missing ``index_text`` is fail-closed: empty set, never a calendar walk.
+    """
+    if dataset not in _OFFICIAL_ARCHIVE_INDEX_DATASETS:
+        return ()
+    if index_text is None or not str(index_text).strip():
+        return ()
+    from ingestion.jsda.urls import discover_otc_reference_segments
+
+    text = str(index_text)
+    years = {
+        int(match.group(1))
+        for match in _INDEX_PUBLICATION_DATE_RE.finditer(text)
+    }
+    if not years:
+        return ()
+    seen: set[str] = set()
+    days: list[str] = []
+    for year in sorted(years):
+        for item in discover_otc_reference_segments(text, year=year):
+            if item.segment_id in seen:
+                continue
+            seen.add(item.segment_id)
+            days.append(item.segment_id)
+    days.sort()
+    return tuple(days)
+
+
 def plan_required_segments(
     policy: CollectionCoverageContract,
     target_end: str,
     *,
     source: str = "jquants",
     expected_items_by_segment: Mapping[str, int] | None = None,
+    index_text: str | None = None,
 ) -> tuple[RequiredCoverageSegment, ...]:
     """Create the required inventory independently of observed rows/receipts.
 
     SourceCapabilityContract V3 is SoT when present: official availability
     clips bounded history, and tip/snapshot history modes yield a current
     snapshot segment instead of invented monthly shells.
+
+    Official-archive-index datasets take listed publication days from
+    ``index_text``. Missing index text yields an empty required set
+    (UNKNOWN / fail-closed), not a calendar-day walk.
     """
     capability = _source_capability_for(policy.dataset_id)
     domain = _official_domain_for(capability)
@@ -255,6 +322,13 @@ def plan_required_segments(
         # Current collection window only. Do not expand monthly history.
         _append(end.isoformat(), end, end)
         return tuple(segments)
+    if _uses_official_archive_index(policy, domain):
+        # Listed index days only. Missing index_text → empty, not weekends.
+        for day_s in official_index_days(policy.dataset_id, index_text):
+            day = date.fromisoformat(day_s)
+            if start <= day <= end:
+                _append(day_s, day, day)
+        return tuple(segments)
     if granularity == "calendar_month":
         cursor = start
         while cursor <= end:
@@ -267,11 +341,7 @@ def plan_required_segments(
             segment_end = min(end, date(year, 12, 31))
             _append(str(year), segment_start, segment_end)
     elif granularity == "official_archive_day":
-        # Walks every calendar day. JSDA OTC coverage_mode is
-        # official_archive_index_reconciled — required publication days come
-        # from the official year index, not weekends/holidays. Calendar-day
-        # inventory is why jsda_otc PARTIAL (~2898) >> PARSE_ZERO (2).
-        # Do not COMPLETE empty non-index days from this expansion.
+        # Non-index official_archive_day only. Index datasets returned above.
         cursor = start
         while cursor <= end:
             _append(cursor.isoformat(), cursor, cursor)
@@ -1364,6 +1434,7 @@ __all__ = [
     "evaluate_segment",
     "evaluate_required_segments",
     "is_synthetic_receipt",
+    "official_index_days",
     "plan_required_segments",
     "read_collection_receipts",
     "read_coverage_segments",
