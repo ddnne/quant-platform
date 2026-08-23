@@ -29,6 +29,10 @@ from paper_runtime.snapshot_coverage_proof import (
 from paper_runtime.snapshot_persist import (
     _atomic_json,
     _copy_sqlite,
+    _persist_building_publication,
+    _persist_synced_policy,
+    _persist_synced_publication,
+    begin_snapshot_sync,
 )
 from paper_runtime.snapshot_publish_policy import (
     _evaluate_publication_gate,
@@ -301,31 +305,6 @@ def _canonical_digest(value: Any) -> str:
     return "sha256:" + hashlib.sha256(encoded).hexdigest()
 
 
-def begin_snapshot_sync(conn: sqlite3.Connection, *, started_at: str) -> str:
-    """Invalidate research access and enter BUILDING before any write."""
-    build_id = "build-" + uuid4().hex
-    conn.execute(
-        """
-        INSERT INTO local_snapshot_policy
-            (singleton, require_manifest, snapshot_ready, sync_started_at,
-             last_error, publication_state, active_build_id,
-             active_snapshot_id)
-        VALUES (1, 1, 0, ?, NULL, 'BUILDING', ?, NULL)
-        ON CONFLICT(singleton) DO UPDATE SET
-            require_manifest = 1,
-            snapshot_ready = 0,
-            sync_started_at = excluded.sync_started_at,
-            last_error = NULL,
-            publication_state = 'BUILDING',
-            active_build_id = excluded.active_build_id,
-            active_snapshot_id = NULL
-        """,
-        (started_at, build_id),
-    )
-    conn.commit()
-    return build_id
-
-
 def fail_snapshot_sync(conn: sqlite3.Connection, error: str) -> None:
     """Keep a partial local DB unavailable to paper research."""
     conn.execute(
@@ -414,10 +393,7 @@ def commit_snapshot_manifest(
     required = tuple(sorted(set(str(item) for item in required_datasets)))
     if not required:
         raise ValueError("required_datasets must not be empty")
-    conn.execute(
-        "UPDATE local_snapshot_policy SET publication_state='SYNCED' "
-        "WHERE singleton=1"
-    )
+    _persist_synced_policy(conn)
     conn.execute(
         "UPDATE local_snapshot_policy SET publication_state='VALIDATING' "
         "WHERE singleton=1"
@@ -587,39 +563,17 @@ def publish_ready_snapshot(
     quality_policy_version = QUALITY_POLICY_VERSION
     published_ready: ReadySnapshot | None = None
     try:
-        conn.execute(
-            """
-            INSERT INTO local_snapshot_policy
-                (singleton, require_manifest, snapshot_ready, sync_started_at,
-                 last_error, publication_state, active_build_id,
-                 active_snapshot_id)
-            VALUES (1, 1, 0, ?, NULL, 'BUILDING', ?, NULL)
-            ON CONFLICT(singleton) DO UPDATE SET
-                require_manifest=1, snapshot_ready=0, last_error=NULL,
-                publication_state='BUILDING', active_build_id=excluded.active_build_id,
-                active_snapshot_id=NULL
-            """,
-            (created_at, build_id),
+        _persist_building_publication(
+            conn,
+            build_id=build_id,
+            created_at=created_at,
+            staging_path=str(staging_path),
+            contract_version=contract,
+            coverage_policy_version=coverage_policy_version,
+            quality_policy_version=quality_policy_version,
         )
-        conn.execute(
-            """
-            INSERT INTO snapshot_publications
-                (build_id, state, staging_path, contract_version,
-                 coverage_policy_version, quality_policy_version, created_at)
-            VALUES (?, 'BUILDING', ?, ?, ?, ?, ?)
-            """,
-            (
-                build_id, str(staging_path), contract,
-                coverage_policy_version, quality_policy_version, created_at,
-            ),
-        )
-        conn.commit()
         _transition_policy(conn, "SYNCED")
-        conn.execute(
-            "UPDATE snapshot_publications SET state='SYNCED' WHERE build_id=?",
-            (build_id,),
-        )
-        conn.commit()
+        _persist_synced_publication(conn, build_id)
         _transition_policy(conn, "VALIDATING")
         conn.execute(
             "UPDATE snapshot_publications SET state='VALIDATING' WHERE build_id=?",
