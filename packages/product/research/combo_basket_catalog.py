@@ -357,6 +357,11 @@ def reconstitution_plan() -> list[dict[str, Any]]:
     return out
 
 
+def active_reconstitution_plan() -> list[dict[str, Any]]:
+    """Non-historical sleeves only. Historical stay in reconstitution_plan()."""
+    return [p for p in reconstitution_plan() if not p.get("historical")]
+
+
 def equal_weights(n: int) -> list[float]:
     if n <= 0:
         return []
