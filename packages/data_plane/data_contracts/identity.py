@@ -15,6 +15,10 @@ import re
 from typing import Any, Mapping, Sequence
 
 from .loader import DatasetContract, contract_for
+from .source_capability import (
+    SourceCapabilityContract,
+    source_capability_contract_for,
+)
 
 JST = timezone(timedelta(hours=9))
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -239,12 +243,69 @@ def _known_lag_available_at(
     return dt.isoformat(timespec="seconds")
 
 
+def _source_capability_for(dataset_id: str) -> SourceCapabilityContract | None:
+    try:
+        return source_capability_contract_for(dataset_id)
+    except KeyError:
+        return None
+
+
+def _event_or_session_date(
+    row: Mapping[str, Any], contract: DatasetContract
+) -> str | None:
+    field = None
+    if contract.event_time_fields:
+        field = contract.event_time_fields[0]
+    elif contract.availability_field:
+        field = contract.availability_field.split("+")[0]
+    if not field:
+        return None
+    value = _pick(row, contract, field)
+    if not isinstance(value, str) or not _DATE_RE.fullmatch(value):
+        return None
+    try:
+        _parse_date(value)
+    except ValueError:
+        return None
+    return value
+
+
+def _before_official_availability(
+    row: Mapping[str, Any], dataset_id: str, contract: DatasetContract
+) -> bool:
+    capability = _source_capability_for(dataset_id)
+    if capability is None:
+        return False
+    day = _event_or_session_date(row, contract)
+    if day is None:
+        return False
+    return day < capability.earliest_official_availability
+
+
 def available_at_for(
     row: Mapping[str, Any], dataset_id: str, ingested_at: str
 ) -> str:
-    """Compute contract-selected availability, always failing safe to ingest."""
+    """Compute contract-selected availability, always failing safe to ingest.
+
+    ingest_time_conservative keeps ingested_at when the historical publication
+    instant is unknown (master Date is observation day, not publication).
+    SourceCapabilityContract is consulted so a pre-official event/session date
+    is not rewritten into a Date-derived available_at that would make those
+    rows look PIT-eligible. Fail-safe remains ingested_at. PIT query clamp
+    (not this function) is the membership gate for as_of before official start.
+    """
     contract = contract_for(dataset_id)
     policy = contract.available_at_policy
+    # Consult official start even when the timestamp stays ingest-time.
+    pre_official = _before_official_availability(row, dataset_id, contract)
+    if pre_official and policy in (
+        "ingest_time_conservative",
+        "calendar_prepublished",
+    ):
+        # Do not mint Date-derived PIT eligibility for pre-official rows.
+        # Tip-only AM session_close is left to its policy so this function
+        # does not invent historical AM/earnings eligibility.
+        return ingested_at
     if policy == "session_close":
         value = _pick(row, contract, contract.availability_field or "Date")
         if isinstance(value, str) and _DATE_RE.fullmatch(value):
