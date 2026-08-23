@@ -7,7 +7,6 @@ from dataclasses import asdict, dataclass
 from datetime import date, datetime, timezone
 import json
 from pathlib import Path
-import re
 import sqlite3
 from typing import Any, Iterable, Mapping, Sequence
 
@@ -26,6 +25,10 @@ from data_contracts.source_capability import (
     SourceCapabilityContract,
     required_domain_subset_official,
     source_capability_contract_for,
+)
+from ingestion.jsda.official_index import (
+    OFFICIAL_ARCHIVE_INDEX_DATASETS as _OFFICIAL_ARCHIVE_INDEX_DATASETS,
+    official_index_days,
 )
 from storage.coverage_ledger_io import (
     persist_refreshed_coverage,
@@ -105,12 +108,6 @@ _OFFICIAL_ARCHIVE_INDEX_MODES = frozenset({
     "official_archive_index",
     "official_archive_index_reconciled",
 })
-_OFFICIAL_ARCHIVE_INDEX_DATASETS = frozenset({
-    "jsda_otc_bond_reference_prices",
-})
-_INDEX_PUBLICATION_DATE_RE = re.compile(
-    r"(?<!\d)(20\d{2})[./年]\s*(\d{1,2})[./月]\s*(\d{1,2})(?:日)?(?!\d)"
-)
 
 
 def _source_capability_for(
@@ -199,39 +196,6 @@ def _uses_official_archive_index(
         domain.history_mode == "official_archive_index"
         or domain.publication_days_only
     )
-
-
-def official_index_days(
-    dataset: str,
-    index_text: str | None,
-) -> tuple[str, ...]:
-    """Official year-index listed publication days for ``dataset``.
-
-    Missing ``index_text`` is fail-closed: empty set, never a calendar walk.
-    """
-    if dataset not in _OFFICIAL_ARCHIVE_INDEX_DATASETS:
-        return ()
-    if index_text is None or not str(index_text).strip():
-        return ()
-    from ingestion.jsda.urls import discover_otc_reference_segments
-
-    text = str(index_text)
-    years = {
-        int(match.group(1))
-        for match in _INDEX_PUBLICATION_DATE_RE.finditer(text)
-    }
-    if not years:
-        return ()
-    seen: set[str] = set()
-    days: list[str] = []
-    for year in sorted(years):
-        for item in discover_otc_reference_segments(text, year=year):
-            if item.segment_id in seen:
-                continue
-            seen.add(item.segment_id)
-            days.append(item.segment_id)
-    days.sort()
-    return tuple(days)
 
 
 def plan_required_segments(

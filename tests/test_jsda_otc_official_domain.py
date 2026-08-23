@@ -1,6 +1,6 @@
 """JSDA OTC required set is official index listed days, not calendar 8784.
 
-plan_required_segments takes listed publication days from index HTML.
+Listed days parse in ingestion.jsda.official_index; ledger re-exports.
 Missing index text is fail-closed empty (UNKNOWN), not a calendar walk.
 Does not COMPLETE weekends or PARSE_ZERO days. Does not fetch live HTML.
 """
@@ -17,6 +17,10 @@ from data_contracts.source_capability import (
     SourceCapabilityContract,
     required_domain_subset_official,
     source_capability_contract_for,
+)
+from ingestion.jsda.official_index import (
+    official_index_days as sot_official_index_days,
+    parse_official_index_publication_days,
 )
 from ingestion.jsda.urls import discover_otc_reference_segments
 from qp_paths import repo_root
@@ -179,6 +183,24 @@ def test_official_index_days_fail_closed_without_index_text() -> None:
     assert official_index_days(DATASET, "   ") == ()
     html = _FIXTURE.read_text(encoding="utf-8")
     assert official_index_days("equities_master", html) == ()
+
+
+def test_official_index_html_parser_is_one_sot() -> None:
+    assert official_index_days is sot_official_index_days
+    html = _FIXTURE.read_text(encoding="utf-8")
+    assert "https://" not in html
+    listed = parse_official_index_publication_days(html)
+    assert listed == LISTED_TINY_DAYS
+    assert listed == official_index_days(DATASET, html)
+    assert WEEKEND_IN_TINY_SPAN not in listed
+    assert parse_official_index_publication_days(None) == ()
+    assert parse_official_index_publication_days("") == ()
+    assert parse_official_index_publication_days("   ") == ()
+    assert parse_official_index_publication_days("no publication dates") == ()
+    calendar = _calendar_days("2002-08-02", "2002-08-06")
+    assert len(calendar) == 5
+    assert len(listed) == 3
+    assert len(listed) != V2_REQUIRED
 
 
 def test_official_index_days_tiny_fixture_lists_publication_days_only() -> None:
