@@ -116,6 +116,53 @@ def save_raw(
     return p
 
 
+def _uses_official_archive_index(policy) -> bool:
+    from .jsda.official_index import OFFICIAL_ARCHIVE_INDEX_DATASETS
+
+    if getattr(policy, "dataset_id", None) in OFFICIAL_ARCHIVE_INDEX_DATASETS:
+        return True
+    mode = getattr(policy, "coverage_mode", "") or ""
+    if "official_archive_index" in mode:
+        return True
+    if getattr(policy, "history_mode", None) == "official_archive_index":
+        return True
+    return getattr(policy, "segment_granularity", None) == "official_archive_index_day"
+
+
+def _index_text_for_plan(policy, index_text: str | None = None) -> str | None:
+    """Reuse already-held year-index HTML for OTC/official-archive-index.
+
+    Missing or blank text is None (fail-closed empty plan, not a calendar
+    walk). Does not fetch live HTML.
+    """
+    if not _uses_official_archive_index(policy):
+        return None
+    if index_text is None or not str(index_text).strip():
+        return None
+    return str(index_text)
+
+
+def _plan_required_segments(
+    policy,
+    target_end: str,
+    *,
+    source: str,
+    index_text: str | None = None,
+    expected_items_by_segment=None,
+):
+    from storage.coverage_ledger import plan_required_segments
+
+    return list(
+        plan_required_segments(
+            policy,
+            target_end,
+            source=source,
+            index_text=_index_text_for_plan(policy, index_text),
+            expected_items_by_segment=expected_items_by_segment,
+        )
+    )
+
+
 def _cannot_fetch(source: str, runtime: str) -> List[RunReport]:
     return [
         RunReport(
@@ -363,7 +410,6 @@ def _run_jquants_catalog(
                 try:
                     from data_contracts import coverage_contract_for
                     from storage.coverage_ledger import (
-                        plan_required_segments,
                         record_required_segments,
                     )
                     from .jquants.receipts import (
@@ -399,11 +445,15 @@ def _run_jquants_catalog(
                         params.get("from") or params.get("date") or target_end
                     )[:10]
                     job_end = target_end
+                    # Official-archive-index reuses already-held year-index HTML.
+                    # Persist has none here → index_text None (empty, not calendar).
+                    index_text = _index_text_for_plan(policy)
                     # First plan without expected counts to discover segment ids.
-                    segs = list(
-                        plan_required_segments(
-                            policy, target_end, source="jquants"
-                        )
+                    segs = _plan_required_segments(
+                        policy,
+                        target_end,
+                        source="jquants",
+                        index_text=index_text,
                     )
                     req0 = None
                     for s in segs:
@@ -422,13 +472,12 @@ def _run_jquants_catalog(
                             and unit == "source_query"
                         ):
                             exp_map = {req0.segment_id: 1}
-                            segs = list(
-                                plan_required_segments(
-                                    policy,
-                                    target_end,
-                                    source="jquants",
-                                    expected_items_by_segment=exp_map,
-                                )
+                            segs = _plan_required_segments(
+                                policy,
+                                target_end,
+                                source="jquants",
+                                index_text=index_text,
+                                expected_items_by_segment=exp_map,
                             )
                             req = next(
                                 s for s in segs if s.segment_id == req0.segment_id
