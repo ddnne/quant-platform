@@ -181,7 +181,11 @@ def default_r2_get_object(
     config: str | Path | None = None,
     timeout: int = 300,
 ) -> bytes:
-    """Fetch one R2 object body via ``wrangler r2 object get`` (remote)."""
+    """Re-export of ``r2_io.default_r2_get_object`` as a research read helper.
+
+    Not artifact authority, not Coverage COMPLETE, not FRESH. Worker
+    children-then-manifest is authority. CLI get is a research read helper.
+    """
     try:
         return _default_r2_get_object(
             bucket,
