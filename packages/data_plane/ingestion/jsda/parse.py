@@ -190,6 +190,10 @@ _OTC_REFERENCE_ALIASES: dict[str, list[str]] = {
 _OTC_HEADER_MARKERS = ("銘柄コード", "証券コード", "銘柄名", "債券名")
 
 # Official CSV is headerless (baisan_csv.pdf); 2015/2022 did not move columns.
+# Earliest archive days 2002-08-02 and 2002-08-05 are ~23 columns and fail
+# this 29-col gate → PARSE_ZERO in jsda_otc_seal_official (raw exists, ~4200
+# cp932 rows). Do not invent COMPLETE from those files until a layout
+# adapter yields nz parse with raw==structured.
 _OTC_POSITIONAL_COLUMNS: dict[str, int] = {
     "publication_label_date": 0,
     "security_code": 2,

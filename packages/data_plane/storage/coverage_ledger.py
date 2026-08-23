@@ -133,6 +133,11 @@ def plan_required_segments(
             segment_end = min(end, date(year, 12, 31))
             _append(str(year), segment_start, segment_end)
     elif granularity == "official_archive_day":
+        # Walks every calendar day. JSDA OTC coverage_mode is
+        # official_archive_index_reconciled — required publication days come
+        # from the official year index, not weekends/holidays. Calendar-day
+        # inventory is why jsda_otc PARTIAL (~2898) >> PARSE_ZERO (2).
+        # Do not COMPLETE empty non-index days from this expansion.
         cursor = start
         while cursor <= end:
             _append(cursor.isoformat(), cursor, cursor)

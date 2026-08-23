@@ -12,6 +12,8 @@
   "datasets": {
     "equities_master": {
       "history_target_start": "2006-08-13",
+      "vendor_data_provision_start": "2008-05-07",
+      "vendor_data_provision_citation": "https://jpx-jquants.com/en/spec/eq-master",
       "coverage_mode": "scd2_event_sourcing",
       "expected_frequency": "trading_day",
       "universe_rule": "all_listed_equities_at_event_date"
@@ -24,6 +26,8 @@
     },
     "equities_bars_daily_am": {
       "history_target_start": "2024-01-04",
+      "vendor_history_policy": "recent_data_only",
+      "vendor_history_policy_citation": "https://jpx-jquants.com/en/spec/eq-bars-daily-am",
       "coverage_mode": "trading_calendar",
       "expected_frequency": "trading_day",
       "universe_rule": "all_listed_equities_at_event_date"
@@ -54,6 +58,8 @@
     },
     "equities_earnings_calendar": {
       "history_target_start": "2010-01-04",
+      "vendor_history_policy": "recent_data_only_next_business_day",
+      "vendor_history_policy_citation": "https://jpx-jquants.com/en/spec/eq-earnings-cal",
       "coverage_mode": "event_reconciled",
       "expected_frequency": "event_driven",
       "universe_rule": "all_calendar_entries_in_collection_window"

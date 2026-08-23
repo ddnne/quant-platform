@@ -120,6 +120,12 @@ MASTER_JQ_SCOPE: dict[str, object] = {
         },
     },
     "subscription_floor_live": "2006-08-19",
+    # Official listed-info /equities/master provision start (not the Premium
+    # HTTP 400 floor). Earlier dates still return Date=2008-05-07.
+    # https://jpx-jquants.com/en/spec/eq-master
+    # Do not copy this into history_target_start to invent Dataset COMPLETE.
+    "vendor_data_provision_start": "2008-05-07",
+    "vendor_data_provision_citation": "https://jpx-jquants.com/en/spec/eq-master",
     "invent_complete_via_floor_to_2008_05": "FORBIDDEN",
     "dataset_complete_invent": "FORBIDDEN",
     "empty_raw_complete": "FORBIDDEN",

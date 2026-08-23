@@ -290,6 +290,8 @@ def seal_day(conn, day, path, source_url, issuer):
     if head.startswith(b"<!doctype") or head.startswith(b"<html"):
         return {"segment_id": day, "status": "HTML_BODY", "size": len(raw)}
     if not parsed:
+        # Raw may still be a real official file (2002-08-02/05 are ~560KB /
+        # ~4200 rows). Zero parse ≠ empty source and must not become COMPLETE.
         return {"segment_id": day, "status": "PARSE_ZERO", "path": str(path), "fmt": fmt}
     digest = sha256_file(path)
     now = datetime.now(timezone.utc).isoformat()

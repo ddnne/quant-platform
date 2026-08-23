@@ -3,6 +3,16 @@
 The policy deliberately distinguishes calendar/periodic series from irregular
 event feeds.  Event feeds are reconciled against the source collection window;
 they never acquire invented daily row-count expectations.
+
+Event-driven + default ``calendar_month`` still *plans* one required segment
+per month (see ``storage.coverage_ledger.plan_required_segments``).
+``evaluate_segment`` will COMPLETE an event window with a trusted receipt
+even when ``observed_items==0``; it will PARTIAL a month with *no* receipt
+(``missing collection receipt``). That is why ``equities_earnings_calendar``
+shows 1/200 COMPLETE while the vendor API is next-business-day / recent-only
+(https://jpx-jquants.com/en/spec/eq-earnings-cal). Do not fabricate monthly
+COMPLETE shells. A later contract grain (snapshot / source_event_window)
+needs a product ADR — not a ``history_target_start`` bump to invent COMPLETE.
 """
 
 from __future__ import annotations
@@ -73,6 +83,8 @@ class CollectionCoverageContract:
         for name, value in strings.items():
             if not isinstance(value, str) or not value:
                 raise ValueError(f"{dataset_id}.{name} must be non-empty string")
+        # Annotation-only keys (vendor_data_provision_start, vendor_history_policy,
+        # citations) are ignored here; they must not move history_target_start.
         tier = str(raw["governance_tier"])
         if tier not in GOVERNANCE_TIERS:
             raise ValueError(
