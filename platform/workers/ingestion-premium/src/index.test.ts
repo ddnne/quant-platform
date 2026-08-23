@@ -444,3 +444,61 @@ describe("ingestion-premium coverage-segment plan", () => {
     expect(receipts[0]!.args[5]).toBe(1);
   });
 });
+
+describe("ingestion-premium POST-only mutating routes", () => {
+  const originalFetch = globalThis.fetch;
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  function guardedEnv() {
+    const inner = stubD1();
+    let prepareCalls = 0;
+    const db = {
+      prepare(sql: string) {
+        prepareCalls += 1;
+        return inner.prepare(sql);
+      },
+    } as unknown as D1Database;
+    return { env: testEnv({ DB: db }), prepareCalls: () => prepareCalls };
+  }
+
+  it("rejects GET /v1/run with matching token as 405 and does not ingest", async () => {
+    let vendorCalls = 0;
+    globalThis.fetch = (async () => {
+      vendorCalls += 1;
+      return new Response(JSON.stringify({ data: [] }), { status: 200 });
+    }) as typeof fetch;
+    const { env, prepareCalls } = guardedEnv();
+    const res = await worker.fetch(
+      new Request("https://ingestion-premium.test/v1/run", {
+        method: "GET",
+        headers: { "X-Ingestion-Token": env.INGESTION_RUN_TOKEN! },
+      }),
+      env,
+    );
+    expect(res.status).toBe(405);
+    const body = await res.text();
+    expect(JSON.parse(body)).toEqual({ error: "POST required" });
+    expect(body).not.toContain("COMPLETE");
+    expect(prepareCalls()).toBe(0);
+    expect(vendorCalls).toBe(0);
+  });
+
+  it("rejects GET /v1/admin/rebuild-natural-keys-v2 with matching token as 405 and does not rebuild", async () => {
+    const { env, prepareCalls } = guardedEnv();
+    const res = await worker.fetch(
+      new Request("https://ingestion-premium.test/v1/admin/rebuild-natural-keys-v2", {
+        method: "GET",
+        headers: { "X-Ingestion-Token": env.INGESTION_RUN_TOKEN! },
+      }),
+      env,
+    );
+    expect(res.status).toBe(405);
+    const body = await res.text();
+    expect(JSON.parse(body)).toEqual({ error: "POST required" });
+    expect(body).not.toContain("COMPLETE");
+    expect(prepareCalls()).toBe(0);
+  });
+});

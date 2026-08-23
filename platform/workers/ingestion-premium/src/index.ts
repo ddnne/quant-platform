@@ -616,6 +616,9 @@ async function handleHealth(env: Env): Promise<Response> {
 }
 
 async function handleNaturalKeyRebuild(env: Env, request: Request): Promise<Response> {
+  if (request.method !== "POST") {
+    return json({ error: "POST required" }, 405);
+  }
   if (!authorized(request, env.INGESTION_RUN_TOKEN)) {
     return json({ error: "unauthorized" }, 401);
   }
@@ -631,6 +634,9 @@ async function handleNaturalKeyRebuild(env: Env, request: Request): Promise<Resp
 async function handleRun(
   env: Env, request: Request, fetchImpl: typeof fetch,
 ): Promise<Response> {
+  if (request.method !== "POST") {
+    return json({ error: "POST required" }, 405);
+  }
   if (!authorized(request, env.INGESTION_RUN_TOKEN)) {
     return json({ error: "unauthorized" }, 401);
   }
