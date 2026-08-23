@@ -63,6 +63,14 @@ test("coverage tool descriptions report stored policy_version not frozen Coverag
   }
 });
 
+test("tool descriptions do not freeze Coverage V2 aggregate", () => {
+  // Live catalog still uses that phrase; echo stored policy_version. Not V3.
+  for (const tool of OPS_TOOLS) {
+    assert.doesNotMatch(tool.description, /Coverage V2 aggregate/);
+    assert.doesNotMatch(tool.description, /Coverage V2/);
+  }
+});
+
 test("absent Coverage projection is UNKNOWN with all JQ and JSDA gaps", async () => {
   const db = new DatabaseSync(":memory:");
   const result = await callOpsTool(d1(db), "coverage_gaps", {});
