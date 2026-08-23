@@ -10,7 +10,7 @@ extracts landed. Leftover occupancy **HOLD** in `daily_path.ts`.
 `coverage_receipts`, `snapshot_publish_policy`, `snapshot_coverage_proof`,
 `snapshot_persist`, `snapshot_read`, `eval_orchestrate`,
 `ingestion-premium/collection_receipts.ts` — **DONE** in §7.  
-**Live strategy at `7fb6924b`:** §10 — remaining extracts vs HOLD. YAML
+**Live strategy at `cb9916e0`:** §10 — remaining extracts vs HOLD. YAML
 file-count waste is closed. Size is not waste. Do not extract leftover
 occupancy. Do not add YAML. Do not declare Phase 7 GO.  
 **Mass / READY / Phase 7:** unchanged (NO-GO / not declared / OFF)
@@ -364,7 +364,7 @@ and COMPLETE predicates unchanged, generated files still generated.
 
 ---
 
-## 10. Current remaining extracts vs HOLD (HEAD 7fb6924b)
+## 10. Current remaining extracts vs HOLD (HEAD cb9916e0)
 
 This is the **live** refactor strategy for “the code is full of waste.”
 §§1–9 remain the plan at `41003a5` / status at `5c9b962`. Follow this
@@ -540,12 +540,25 @@ hex (`b8696205`) — **LANDED**. After `b8696205`: JSDA SHA-256 hex
 `70d7c8bd`: mass-eval freezePayload (`7fa38828`); extracted json/token/sha256
 glob (`31f9a99b`) — **LANDED**. After `31f9a99b`: freezePayload glob
 (`cafc3fc0`); secrets proxy invalid JSON fail-closed (`bad3ab77`); residual
-last_run 14324 (`7fb6924b`) — **LANDED**. Remaining mixed HOLD: leftover
-occupancy, unique22, GATEWAY_TOKEN P632B-03, persist live upsert, compact
-catalog, `verify_all` vs `verify_ci`. putJson persist stays in http.ts (do not
-fake-split). Do not schedule leftover occupancy. Do not YAML +N. Do not
-declare Phase 7 GO. Do not claim ci-aggregate Worker exists live. Do
-not treat CF-Worker as auth.
+last_run 14324 (`7fb6924b`) — **LANDED**. After `7fb6924b`: validate addon
+default from catalog (`94dac1fa`); matrix premium-core ids from catalog
+(`773bab04`); propose review policy (`810d23e9`; `cf_propose_policy.py`);
+occupancy-track run (`08b121b0`; `occupancy_audit_run.py`); pipeline receipt
+evidence (`830a215b`; `pipeline_receipts.py`); catalog YAML overlay parse
+(`f0e3c570`; `catalog_yaml_parse.py`); factory eval screen (`ae06f9fa`;
+`factory_eval_screen.py`); daily-path DD gate (`5e6d36a7`;
+`stats_metrics_gates.py`); ops-mcp 415/406/protocol/callback pins
+(`3c73ca74`; `800ced41`; `a8daa996`; `3eb7bf04`); children[] required
+(`3712b8c7`); secrets-proxy / jquants-catalog / budget-amount paraphrase
+shrinks (`fb6bb56a`; `d348c93f`; `f008a4f3`); mass-eval parseRequest
+(`70bfbefe`; `parse_request.ts`); ci-aggregate receipts gate (`aa503996`;
+`receipts_gate.ts`); ops-mcp domain policy (`2cde56ac`; `domain_policy.js`);
+budget HTTP dispatcher (`cb9916e0`; `budget_http.ts`) — **LANDED**. Remaining
+mixed HOLD: leftover occupancy, unique22, GATEWAY_TOKEN P632B-03, persist
+live upsert, compact catalog, `verify_all` vs `verify_ci`. putJson persist
+stays in http.ts (do not fake-split). Do not schedule leftover occupancy.
+Do not YAML +N. Do not declare Phase 7 GO. Do not claim ci-aggregate
+Worker exists live. Do not treat CF-Worker as auth.
 
 | Later | Mixed surface | Authority to pick | Must not |
 |------:|---------------|-------------------|----------|
