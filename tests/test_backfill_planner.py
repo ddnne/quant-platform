@@ -417,3 +417,120 @@ def test_planner_missing_v3_invented_official_domain_is_fail_closed(monkeypatch)
     assert all(j.state == "fail" for j in plan.jobs)
     assert all(j.state != "COMPLETE" for j in plan.jobs)
     assert all("invented official domain" in j.detail for j in plan.jobs)
+
+
+def test_planner_passes_index_text_into_required_segments(monkeypatch):
+    """plan() forwards index_text into plan_required_segments; default is None.
+
+    JQ month jobs stay honest with or without HTML. Omitted is not a
+    weekend COMPLETE invent. JSDA remains skipped at plan().
+    """
+    import inspect
+    from datetime import date
+    from pathlib import Path
+
+    from ops import backfill_planner as planner_mod
+
+    sig = inspect.signature(BackfillPlanner.plan)
+    assert sig.parameters["index_text"].default is None
+    jobs_sig = inspect.signature(BackfillPlanner._jobs_from_required_segments)
+    assert jobs_sig.parameters["index_text"].default is None
+
+    captured: list[dict] = []
+    real = planner_mod.plan_required_segments
+
+    def _spy(policy, target_end, **kwargs):
+        captured.append(
+            {
+                "dataset": policy.dataset_id,
+                "kwargs": dict(kwargs),
+                "index_text": kwargs.get("index_text", "MISSING_KEY"),
+            }
+        )
+        return real(policy, target_end, **kwargs)
+
+    monkeypatch.setattr(planner_mod, "plan_required_segments", _spy)
+
+    cutoff = date(2008, 7, 31)
+    omitted = BackfillPlanner(cutoff=cutoff).plan(datasets=["fins_summary"])
+    assert captured
+    assert all("index_text" in row["kwargs"] for row in captured)
+    assert all(row["index_text"] is None for row in captured)
+    assert [job.segment_id for job in omitted.jobs] == ["2008-07"]
+    assert all(job.state == "pending" for job in omitted.jobs)
+    assert all(job.state != "COMPLETE" for job in omitted.jobs)
+
+    html = (
+        Path(__file__).resolve().parent
+        / "fixtures"
+        / "jsda_otc_official_index_tiny.html"
+    ).read_text(encoding="utf-8")
+    assert "https://" not in html
+    captured.clear()
+    supplied = BackfillPlanner(cutoff=cutoff).plan(
+        datasets=["fins_summary"],
+        index_text=html,
+    )
+    assert captured
+    assert all(row["index_text"] is html for row in captured)
+    assert [job.segment_id for job in supplied.jobs] == [
+        job.segment_id for job in omitted.jobs
+    ]
+    assert all(job.state == "pending" for job in supplied.jobs)
+    assert all(job.state != "COMPLETE" for job in supplied.jobs)
+
+
+def test_planner_omitted_index_text_is_not_weekend_complete():
+    """Omitted index_text is not a calendar-weekend COMPLETE.
+
+    JQ-without-index_text stays month jobs. Asking about OTC still skips
+    JSDA (no dated ops brief to un-skip); the required-segments path with
+    None is empty, not 8784 weekends.
+    """
+    from datetime import date
+
+    from data_contracts.coverage import coverage_contract_for
+    from ops.backfill_planner import EndpointCapability
+
+    weekend = "2002-08-03"
+    v2_required = 8784
+    otc = "jsda_otc_bond_reference_prices"
+
+    jq = BackfillPlanner(cutoff=date(2008, 7, 31)).plan(datasets=["fins_summary"])
+    assert jq.jobs
+    assert all(job.state == "pending" for job in jq.jobs)
+    assert all(job.state != "COMPLETE" for job in jq.jobs)
+    assert all(job.segment_id != weekend for job in jq.jobs)
+    assert len(jq.jobs) != v2_required
+
+    skipped = BackfillPlanner(cutoff=date(2002, 8, 6)).plan(datasets=[otc])
+    assert skipped.jobs == []
+    assert all(job.dataset != otc for job in skipped.jobs)
+    assert all(job.segment_id != weekend for job in skipped.jobs)
+    assert len(skipped.jobs) != v2_required
+    assert all(job.state != "COMPLETE" for job in skipped.jobs)
+
+    policy = coverage_contract_for(otc)
+    dummy = EndpointCapability(
+        dataset_id=policy.dataset_id,
+        path="/unused",
+        date_mode="today",
+        params=(),
+        source="jsda",
+    )
+    planner = BackfillPlanner(cutoff=date(2002, 8, 6))
+    for missing in (None, "", "   "):
+        jobs = planner._jobs_from_required_segments(
+            policy,
+            dummy,
+            contract_digest="sha256:test",
+            complete=set(),
+            filter_from=None,
+            filter_to=None,
+            index_text=missing,
+        )
+        ids = [job.segment_id for job in jobs]
+        assert jobs == []
+        assert weekend not in ids
+        assert len(ids) != v2_required
+        assert all(job.state != "COMPLETE" for job in jobs)
