@@ -10,6 +10,7 @@
 
 import { authorized } from "./authorized";
 import { json } from "./http_json";
+import { sha256Hex } from "./sha256";
 
 export interface Env {
   RAW_BUCKET: R2Bucket;
@@ -98,11 +99,6 @@ function extractLinks(html: string, base: string): string[] {
     if (abs) out.push(abs);
   }
   return [...new Set(out)];
-}
-
-async function sha256Hex(buf: BufferSource): Promise<string> {
-  const dig = await crypto.subtle.digest("SHA-256", buf);
-  return [...new Uint8Array(dig)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 async function fetchAllowed(
