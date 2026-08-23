@@ -672,6 +672,8 @@ def test_worker_index_contains_propose_thesis_route() -> None:
     src = (
         (worker_src / "index.ts").read_text(encoding="utf-8")
         + "\n"
+        + (worker_src / "http_routes.ts").read_text(encoding="utf-8")
+        + "\n"
         + (worker_src / "propose_thesis.ts").read_text(encoding="utf-8")
         + "\n"
         + (worker_src / "propose_allowed.ts").read_text(encoding="utf-8")

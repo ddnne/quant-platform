@@ -47,6 +47,14 @@ def _store(tmp_path):
     return SqliteStore(tmp_path / "t.sqlite")
 
 
+def _inject_tmp_receipt_authority(monkeypatch, receipt_ed25519_keys):
+    """Governed persist needs a signer; pytest never loads host PEM."""
+    monkeypatch.setattr(
+        "storage.trusted_receipt.load_signing_key",
+        lambda **kwargs: receipt_ed25519_keys.signing_key,
+    )
+
+
 def _monotonic_now(monkeypatch, start: datetime, step: timedelta):
     """Patch ``pipeline.now_iso`` to advance ``step`` on every call.
 
@@ -67,8 +75,11 @@ def _monotonic_now(monkeypatch, start: datetime, step: timedelta):
     return produced
 
 
-def test_catalog_jobs_get_distinct_per_job_timestamps(tmp_path, monkeypatch):
+def test_catalog_jobs_get_distinct_per_job_timestamps(
+    tmp_path, monkeypatch, receipt_ed25519_keys
+):
     """Two catalog jobs -> two distinct ingested_at stamps in jquants_records."""
+    _inject_tmp_receipt_authority(monkeypatch, receipt_ed25519_keys)
     produced = _monotonic_now(
         monkeypatch, datetime(2025, 4, 2, 9, 0, 0, tzinfo=JST), timedelta(minutes=1)
     )
@@ -106,8 +117,11 @@ def test_catalog_jobs_get_distinct_per_job_timestamps(tmp_path, monkeypatch):
     store.close()
 
 
-def test_catalog_timestamps_are_not_a_single_shared_pool_value(tmp_path, monkeypatch):
+def test_catalog_timestamps_are_not_a_single_shared_pool_value(
+    tmp_path, monkeypatch, receipt_ed25519_keys
+):
     """Explicit regression: with N>1 jobs, >1 distinct ingested_at values land."""
+    _inject_tmp_receipt_authority(monkeypatch, receipt_ed25519_keys)
     _monotonic_now(
         monkeypatch, datetime(2025, 4, 2, 9, 0, 0, tzinfo=JST), timedelta(seconds=1)
     )
@@ -131,8 +145,11 @@ def test_catalog_timestamps_are_not_a_single_shared_pool_value(tmp_path, monkeyp
     store.close()
 
 
-def test_single_catalog_job_still_carries_completion_stamp(tmp_path, monkeypatch):
+def test_single_catalog_job_still_carries_completion_stamp(
+    tmp_path, monkeypatch, receipt_ed25519_keys
+):
     """One job is the degenerate case: it still gets its own completion stamp."""
+    _inject_tmp_receipt_authority(monkeypatch, receipt_ed25519_keys)
     produced = _monotonic_now(
         monkeypatch, datetime(2025, 4, 2, 9, 0, 0, tzinfo=JST), timedelta(minutes=1)
     )
