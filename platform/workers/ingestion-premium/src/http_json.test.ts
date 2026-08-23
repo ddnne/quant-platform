@@ -36,6 +36,11 @@ describe("premium json helper", () => {
       expect(src, name).toContain('from "./http_json"');
       expect(src, name).not.toContain("function json(");
     }
+    const exportSrc = readFileSync(join(here, "http_export.ts"), "utf8");
+    expect(exportSrc).not.toContain("Response.json");
+    expect(readFileSync(join(here, "http_json.ts"), "utf8")).toContain(
+      "Response.json",
+    );
   });
 
   it("http_json uses Response.json without gateway cache/charset headers", () => {
