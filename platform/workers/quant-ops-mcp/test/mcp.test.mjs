@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { OPS_TOOLS, callOpsTool } from "../src/domain.js";
-import { handleJsonRpc, MCP_PROTOCOL_VERSION } from "../src/mcp.js";
+import { handleJsonRpc, handleMcpHttp, MCP_PROTOCOL_VERSION } from "../src/mcp.js";
 
 /** Minimal mock that returns empty projection (UNKNOWN paths). */
 function mockDb() {
@@ -39,6 +39,17 @@ test("remote surface is Ops read-only", () => {
   ]) {
     assert.ok(!names.includes(banned));
   }
+});
+
+test("GET /mcp is 405 POST-only", async () => {
+  const res = await handleMcpHttp(
+    new Request("https://ops.test/mcp", { method: "GET" }),
+    mockDb(),
+  );
+  assert.equal(res.status, 405);
+  assert.equal(res.headers.get("Allow"), "POST");
+  const body = await res.json();
+  assert.equal(body.error, "GET event stream is not offered; use Streamable HTTP POST");
 });
 
 test("initialize and tools/list implement MCP 2025-06-18", async () => {
