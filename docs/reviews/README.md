@@ -19,7 +19,13 @@ IR `golden.jsonl` (`7f2dc12`).
 - [`A11_waste.md`](A11_waste.md) — combo +N HOLD identity; `yaml_remains_sot`; unused `cells_candidate_counts`
 - [`A13_docs_claims.md`](A13_docs_claims.md) — COMPLETE-under-STALE; unique22 park YAML wording; AI Gateway deployed ≠ Phase 7
 - [`A14_git_ci.md`](A14_git_ci.md) — no GHA by policy; `verify_all.sh` exists; `workers_dev`; check-runs 0
+- [`P631_brief_leaks.md`](P631_brief_leaks.md) — 6.3.1 A–X vs tree at `e927b97`; 6.3.1/6.4 NOT COMPLETE; Phase 7 NO-GO
+- [`P631_refactor_now.md`](P631_refactor_now.md) — mixed-authority snapshot after 6.3 extracts; leftover occupancy HOLD
+- [`D_dead_functions.md`](D_dead_functions.md) — unused-helper deletions vs HOLD false-positives
+- [`original_plan_gap.md`](original_plan_gap.md) — 08-20/21 recording reset held; 08-22 funds held; AND-as-product invalid and already stopped
 - unique22 park is leftover occupancy (`UNIQUE22_PARK_REASONS` / `daily_path.ts`), not YAML; COMPLETE 22 is last-known STALE projection, not FRESH
+
+Later on this branch (after the A01/A07 freeze): occupancy `yaml_remains_sot` removed; unused `cells_candidate_counts` deleted; compiled `catalog_path` is `migration.jsonl`; JSDA/JQ tests inject tmp Ed25519. Host PEM isolation and fresh-venv pytest remain OPEN.
 
 Phase 7 Controlled Pilot and Mass Research remain **NO-GO** until §19 gates.
 Do not invent Coverage COMPLETE, Projection FRESH, B0 PASS, or READY.
