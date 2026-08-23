@@ -44,13 +44,22 @@ type DatasetId =
   | "jsda_tokyo_repo_rates"
   | "jsda_corporate_bond_transactions";
 
+function timingSafeEqualBytes(a: ArrayBuffer, b: ArrayBuffer): boolean {
+  const x = new Uint8Array(a);
+  const y = new Uint8Array(b);
+  if (x.length !== y.length) return false;
+  let diff = 0;
+  for (let i = 0; i < x.length; i++) diff |= x[i] ^ y[i];
+  return diff === 0;
+}
+
 async function tokenMatches(provided: string, expected: string): Promise<boolean> {
   const enc = new TextEncoder();
   const [a, b] = await Promise.all([
     crypto.subtle.digest("SHA-256", enc.encode(provided)),
     crypto.subtle.digest("SHA-256", enc.encode(expected)),
   ]);
-  return crypto.subtle.timingSafeEqual(a, b);
+  return timingSafeEqualBytes(a, b);
 }
 
 async function authorized(request: Request, expected?: string): Promise<boolean> {
@@ -112,7 +121,7 @@ function extractLinks(html: string, base: string): string[] {
   return [...new Set(out)];
 }
 
-async function sha256Hex(buf: ArrayBuffer): Promise<string> {
+async function sha256Hex(buf: BufferSource): Promise<string> {
   const dig = await crypto.subtle.digest("SHA-256", buf);
   return [...new Uint8Array(dig)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
@@ -216,7 +225,7 @@ async function putManifest(
 ): Promise<string> {
   const text = JSON.stringify(manifest, null, 2);
   const bytes = new TextEncoder().encode(text);
-  const digest = await sha256Hex(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
+  const digest = await sha256Hex(bytes);
   const key = `raw/jsda/${dataset}/${segmentId}/manifest-${digest.slice(0, 16)}.json`;
   await env.RAW_BUCKET.put(key, text, {
     httpMetadata: { contentType: "application/json" },
