@@ -37,7 +37,7 @@ describe("retry jitter", () => {
   });
 
   it("source of retry jitter does not contain Math.random", () => {
-    for (const name of ["retry_jitter.ts", "index.ts", "persist_records.ts"]) {
+    for (const name of ["retry_jitter.ts", "fetch_jq.ts", "persist_records.ts", "index.ts"]) {
       const src = readFileSync(join(here, name), "utf8");
       const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
       expect(code, name).not.toMatch(/Math\.random/);
