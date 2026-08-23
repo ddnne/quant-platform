@@ -445,7 +445,7 @@ def test_near_duplicate_is_not_candidate() -> None:
 
 def test_economic_themes_exist_in_catalog() -> None:
     from research.unique_logic.constants import ECONOMIC_THEME_IDS
-    from research.unique_logic.event_combos import NEW_COMBO_LOGIC
+    from research.unique_logic.event_combos import NEW_COMBO_LOGIC, spec_by_id
 
     py = {s["logic_id"] for s in NEW_COMBO_LOGIC}
     assert set(ECONOMIC_THEME_IDS)
@@ -453,13 +453,14 @@ def test_economic_themes_exist_in_catalog() -> None:
     for theme, ids in ECONOMIC_THEME_IDS.items():
         for lid in ids:
             assert lid in py, f"{lid} missing from combo specs ({theme})"
-            spec = next(s for s in NEW_COMBO_LOGIC if s["logic_id"] == lid)
+            spec = spec_by_id(lid)
+            assert spec is not None
             assert spec.get("near_duplicate") is False
 
 
 def test_sparse_gate_combo_parks_at_generation() -> None:
     from research.unique_logic.constants import sparse_15name_reason
-    from research.unique_logic.event_combos import NEW_COMBO_LOGIC
+    from research.unique_logic.event_combos import NEW_COMBO_LOGIC, spec_by_id
 
     assert (
         sparse_15name_reason(
@@ -493,7 +494,7 @@ def test_sparse_gate_combo_parks_at_generation() -> None:
         "surprise_xs_repo3m_down",
         "cs_eqar_high_easy",
     ):
-        row = next(s for s in NEW_COMBO_LOGIC if s["logic_id"] == lid)
+        row = spec_by_id(lid)
         assert row.get("near_duplicate") is False
         assert row.get("data_requirement_unmet") is False
         assert row.get("main_pool") is True
@@ -505,7 +506,7 @@ def test_sparse_gate_combo_parks_at_generation() -> None:
         "cs_cheap_pb",
         "cs_np_positive",
     ):
-        row = next(s for s in NEW_COMBO_LOGIC if s["logic_id"] == lid)
+        row = spec_by_id(lid)
         assert row.get("main_pool") is False
         assert row.get("always_on_cs_sticky") is True
     from research.unique_logic.constants import is_ungated_name_level_cs

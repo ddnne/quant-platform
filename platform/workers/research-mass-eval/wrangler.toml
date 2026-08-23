@@ -41,7 +41,7 @@ database_id = "be6fdcf8-40be-41fc-9535-7facd1fc2ffc"
 binding = "AI"
 
 [vars]
-MASS_EVAL_VERSION = "research-mass-eval/v133-24dj-plus64"
+MASS_EVAL_VERSION = "research-mass-eval/v134-24dk-plus56"
 MASS_EVAL_WAVE = "research-mass-eval"
 # Freezes — do not flip operational gates from this worker.
 MASS_RESEARCH = "NO-GO"

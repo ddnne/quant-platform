@@ -322,7 +322,7 @@ def test_yaml_dispatch_worker_event_ids_align() -> None:
         WORKER_ISOLATE_LINEARIZED_OK,
         is_ungated_name_level_cs,
     )
-    from research.unique_logic.event_combos import NEW_COMBO_LOGIC
+    from research.unique_logic.event_combos import NEW_COMBO_LOGIC, spec_by_id
 
     ids = {s["logic_id"] for s in NEW_COMBO_LOGIC}
     assert "event_skip_monday" in ids
@@ -332,7 +332,7 @@ def test_yaml_dispatch_worker_event_ids_align() -> None:
     assert WORKER_ISOLATE_LIMIT_IDS.isdisjoint(WORKER_ISOLATE_LINEARIZED_OK)
     assert WORKER_ISOLATE_LINEARIZED_OK
     for lid in WORKER_ISOLATE_LINEARIZED_OK:
-        row = next(s for s in NEW_COMBO_LOGIC if s["logic_id"] == lid)
+        row = spec_by_id(lid)
         assert row.get("worker_isolate_limit") is False
     for spec in NEW_COMBO_LOGIC:
         if str(spec.get("kind") or "") == "cs":
