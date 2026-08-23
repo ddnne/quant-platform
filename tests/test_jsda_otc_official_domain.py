@@ -1,7 +1,8 @@
 """JSDA OTC required set is official index listed days, not calendar 8784.
 
 Listed days parse in ingestion.jsda.official_index; ledger re-exports.
-Missing index text is fail-closed empty (UNKNOWN), not a calendar walk.
+Planner and refresh take that set. Missing index text is fail-closed empty
+(UNKNOWN/PARTIAL), not a calendar walk or inventory replay.
 Does not COMPLETE weekends or PARSE_ZERO days. Does not fetch live HTML.
 """
 
@@ -25,10 +26,15 @@ from ingestion.jsda.official_index import (
 from ingestion.jsda.urls import discover_otc_reference_segments
 from qp_paths import repo_root
 from storage.coverage_ledger import (
+    RequiredCoverageSegment,
     evaluate_segment,
     official_index_days,
     plan_required_segments,
+    read_coverage_segments,
+    record_required_segments,
+    refresh_coverage_ledger,
 )
+from storage.sqlite_store import SqliteStore
 
 _REPO = repo_root()
 _CAPABILITY = _REPO / "specs" / "source_capability" / "jsda_otc_bond_reference_prices.json"
@@ -264,6 +270,103 @@ def test_weekend_and_parse_zero_are_not_invented_complete() -> None:
         status, _detail = evaluate_segment(policy, required, None)
         assert status == "PARTIAL"
         assert status != "COMPLETE"
+
+
+def _calendar_inventory_segments(days: tuple[str, ...] | list[str]) -> list[RequiredCoverageSegment]:
+    policy = coverage_contract_for(DATASET)
+    segments: list[RequiredCoverageSegment] = []
+    for day_s in days:
+        day = date.fromisoformat(day_s)
+        segments.append(RequiredCoverageSegment(
+            source="jsda",
+            dataset=DATASET,
+            segment_id=day_s,
+            segment_start=day_s,
+            segment_end=day_s,
+            expected_scope={
+                "coverage_mode": policy.coverage_mode,
+                "expected_frequency": policy.expected_frequency,
+                "expected_item_unit": "source_query",
+                "segment_end": day.isoformat(),
+                "segment_start": day.isoformat(),
+                "universe_rule": policy.universe_rule,
+                "segment_granularity": policy.segment_granularity,
+            },
+            expected_items=1,
+        ))
+    return segments
+
+
+def test_refresh_does_not_rerequire_weekend_absent_from_official_index(
+    tmp_path: Path,
+) -> None:
+    html = _FIXTURE.read_text(encoding="utf-8")
+    calendar = _calendar_days("2002-08-02", "2002-08-06")
+    assert WEEKEND_IN_TINY_SPAN in calendar
+    assert len(calendar) != V2_REQUIRED
+    db = tmp_path / "otc-refresh-index.sqlite"
+    store = SqliteStore(db)
+    record_required_segments(store._conn, _calendar_inventory_segments(calendar))
+    store._conn.execute(
+        "UPDATE coverage_segments SET status='COMPLETE' "
+        "WHERE dataset=? AND segment_id=?",
+        (DATASET, WEEKEND_IN_TINY_SPAN),
+    )
+    store._conn.commit()
+    before = {
+        row["segment_id"] for row in read_coverage_segments(db, dataset=DATASET)
+    }
+    assert WEEKEND_IN_TINY_SPAN in before
+    rows = refresh_coverage_ledger(
+        store._conn,
+        db,
+        datasets=(DATASET,),
+        today=V2_TARGET_END,
+        index_text=html,
+    )
+    after = read_coverage_segments(db, dataset=DATASET)
+    ids = [row["segment_id"] for row in after]
+    assert ids == list(LISTED_TINY_DAYS)
+    assert WEEKEND_IN_TINY_SPAN not in ids
+    assert len(ids) != V2_REQUIRED
+    assert len(ids) != len(calendar)
+    for day in PARSE_ZERO_DAYS:
+        row = next(item for item in after if item["segment_id"] == day)
+        assert row["status"] == "PARTIAL"
+        assert row["status"] != "COMPLETE"
+    assert all(row["status"] != "COMPLETE" for row in after)
+    assert rows[0]["status"] != "COMPLETE"
+    store.close()
+
+
+def test_refresh_without_index_text_is_fail_closed_empty_not_calendar(
+    tmp_path: Path,
+) -> None:
+    calendar = _calendar_days("2002-08-02", "2002-08-06")
+    db = tmp_path / "otc-refresh-empty.sqlite"
+    store = SqliteStore(db)
+    record_required_segments(store._conn, _calendar_inventory_segments(calendar))
+    store._conn.commit()
+    for blank in (None, "", "   "):
+        rows = refresh_coverage_ledger(
+            store._conn,
+            db,
+            datasets=(DATASET,),
+            today=V2_TARGET_END,
+            index_text=blank,
+        )
+        ids = [
+            row["segment_id"]
+            for row in read_coverage_segments(db, dataset=DATASET)
+        ]
+        assert ids == []
+        assert WEEKEND_IN_TINY_SPAN not in ids
+        assert len(ids) != V2_REQUIRED
+        assert rows[0]["status"] != "COMPLETE"
+        detail = json.loads(rows[0]["detail_json"])
+        assert detail["coverage_v2"]["required_segments"] == 0
+        assert detail["coverage_v2"]["required_segments"] != V2_REQUIRED
+    store.close()
 
 
 def test_v2_coverage_floor_not_rewritten_here() -> None:

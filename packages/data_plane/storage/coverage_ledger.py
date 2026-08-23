@@ -792,8 +792,14 @@ def refresh_coverage_ledger(
     datasets: Iterable[str] | None = None,
     today: str | None = None,
     freshness_days: int = 7,
+    index_text: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Evaluate Coverage V2 segments and atomically refresh aggregate rows."""
+    """Evaluate Coverage V2 segments and atomically refresh aggregate rows.
+
+    Official-archive-index datasets take required days from
+    ``plan_required_segments`` / ``index_text``. Missing index text is
+    fail-closed empty, not a replay of calendar-day inventory.
+    """
     selected = tuple(datasets) if datasets is not None else tuple(
         policy.dataset_id for policy in all_coverage_contracts()
     )
@@ -891,9 +897,13 @@ def refresh_coverage_ledger(
             observed_start, observed_end = _merge_observed_window(
                 observed_start, observed_end, receipt_start, receipt_end,
             )
-        if policy.segment_granularity in {
-            "official_archive_day", "source_time_series_file"
-        }:
+        domain = _official_domain_for(_source_capability_for(dataset))
+        if (
+            policy.segment_granularity in {
+                "official_archive_day", "source_time_series_file"
+            }
+            and not _uses_official_archive_index(policy, domain)
+        ):
             # Keep inventory through target_end, plus already-COMPLETE days past UTC (JST can lead).
             required_segments = tuple(sorted(
                 (
@@ -908,7 +918,9 @@ def refresh_coverage_ledger(
                 key=lambda item: (item.segment_start, item.segment_id),
             ))
         else:
-            base_segments = plan_required_segments(policy, target_end, source=source)
+            base_segments = plan_required_segments(
+                policy, target_end, source=source, index_text=index_text,
+            )
             expected_items_by_segment: dict[str, int] = {}
             for segment in base_segments:
                 inventory = inventory_by_dataset[dataset].get(segment.segment_id)
@@ -929,6 +941,7 @@ def refresh_coverage_ledger(
                 target_end,
                 source=source,
                 expected_items_by_segment=expected_items_by_segment,
+                index_text=index_text,
             )
         segment_aggregate, segment_evaluations = evaluate_required_segments(
             policy, required_segments, receipts_by_dataset[dataset]
