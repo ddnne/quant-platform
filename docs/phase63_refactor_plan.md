@@ -278,9 +278,9 @@ No Mass/READY/Phase 7 arming.
 | 1 | `combo_gates.ts` from `daily_path.ts` | combo-gate **policy** | **DONE** (`combo_gates.ts`; leftover occupancy stayed) |
 | 2 | PIT entry module from `daily_path.ts` | PIT **entry** | **DONE** (`event_entry.ts`) |
 | 3 | leftover occupancy as **policy** | unique-22 lid branches | **HOLD** in `daily_path.ts` (occupancy-equal re-eval required; do not unify with `comboEventGateOk`) |
-| 4 | `r2_feature_context` parse vs normalize vs `available_at` policy | one authority | **remaining** |
-| 5 | `coverage_ledger` persist/read vs `evaluate_segment` | persistence I/O | **remaining** (COMPLETE predicates stay) |
-| 6 | `snapshot.py` publication gate vs artifact write vs proof | one of policy / persist / evidence | **remaining** |
+| 4 | `r2_feature_context` parse vs normalize vs `available_at` policy | parse authority | **DONE** (`r2_feature_parse.py`; normalize / `available_at` / orchestration stay) |
+| 5 | `coverage_ledger` persist/read vs `evaluate_segment` | persistence I/O | **DONE** (`coverage_ledger_io.py`; COMPLETE predicates stay) |
+| 6 | `snapshot.py` publication gate vs artifact write vs proof | publication **policy** | **DONE** (`snapshot_publish_policy.py`; proof / persist stay) |
 | 7 | Compiler owns `catalog_ids.ts` emit | generated **presentation** of policy IDs | **DONE** |
 | 8 | Digest lock (pin `compile_catalog()` digest) | — | **DONE** `sha256:6ad5ba57dfa41…` |
 | 9 | Mechanical YAML delete | files only | **DONE** (`yaml_still_present: false`) |
