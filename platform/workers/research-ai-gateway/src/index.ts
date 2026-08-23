@@ -129,7 +129,9 @@ export default {
         ready_snapshot_id: req.ready_snapshot_id ?? null,
         experiment_id: req.experiment_id ?? null,
       };
-      return json(payload);
+      // budget_id is echoed as null here; Python AIGateway charges ResearchBudgetCapability.
+      // Do not grant generation. Unknown request fields remain rejected.
+      return json({ ...payload, budget_id: null });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       return json({ ok: false, error: "ai_run_failed", detail: msg.slice(0, 180) }, 502);

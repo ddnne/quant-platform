@@ -5,6 +5,7 @@ from gateway.ai import (
     GatewayBudget,
     GatewayResult,
     GatewaySchemaRejected,
+    GatewayUsage,
     OfflineStubProvider,
 )
 
@@ -13,5 +14,6 @@ __all__ = [
     "GatewayBudget",
     "GatewayResult",
     "GatewaySchemaRejected",
+    "GatewayUsage",
     "OfflineStubProvider",
 ]

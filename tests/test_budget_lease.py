@@ -52,3 +52,18 @@ def test_token_charge(tmp_path: Path):
     assert snap["input_tokens"] == 40
     with pytest.raises(BudgetExhaustedError):
         cap.charge_provider_usage(input_tokens=70, model_calls=1)
+
+
+def test_token_charge_atomic_across_counters(tmp_path: Path):
+    """Gateway uses one charge_provider_usage; any cap trip rolls back all counters."""
+    cap = ResearchBudgetCapability(
+        "t2",
+        tmp_path / "t2.sqlite",
+        ExperimentBudget(max_input_tokens=100, max_output_tokens=10),
+    )
+    with pytest.raises(BudgetExhaustedError):
+        cap.charge_provider_usage(input_tokens=40, output_tokens=20, model_calls=1)
+    snap = cap.snapshot()
+    assert snap.get("input_tokens", 0) == 0
+    assert snap.get("output_tokens", 0) == 0
+    assert snap.get("model_calls", 0) == 0

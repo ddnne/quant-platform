@@ -14,6 +14,11 @@ from datetime import datetime, timezone
 from typing import Any, Generic, Mapping, Protocol, TypeVar
 from uuid import uuid4
 
+from selection.budget_ledger import (
+    MassResearchDisabledError,
+    ResearchBudgetCapability,
+)
+
 T = TypeVar("T")
 
 ALLOWED_OUTPUT_SCHEMAS = frozenset(
@@ -40,6 +45,9 @@ _BANNED_KEYS = frozenset(
 )
 
 INSIGHT_SCHEMA_VERSION = "insight/v1"
+_INSIGHT_ALLOWED_KEYS = frozenset(
+    {"role", "task", "summary", "prompt_chars", "schema_version"}
+)
 
 
 class GatewaySchemaRejected(RuntimeError):
@@ -183,6 +191,7 @@ class GatewayResult(Generic[T]):
     schema_version: str
     prompt_digest: str
     created_at: str
+    budget_id: str
 
     def to_public_dict(self) -> dict[str, Any]:
         """Serialize for logs/tests; never re-introduces decode bypass."""
@@ -204,6 +213,7 @@ class GatewayResult(Generic[T]):
             "schema_version": self.schema_version,
             "prompt_digest": self.prompt_digest,
             "created_at": self.created_at,
+            "budget_id": self.budget_id,
         }
         return body
 
@@ -233,6 +243,8 @@ def _find_banned_keys(obj: Any, *, path: str = "") -> list[str]:
 
 def _decode_typed(schema: str, payload: Mapping[str, Any]) -> Any:
     body = {k: v for k, v in payload.items() if k not in {"schema", "gateway"}}
+    if "operator_override" in body:
+        raise GatewaySchemaRejected("operator_override rejected")
     banned = _find_banned_keys(body)
     if banned:
         raise GatewaySchemaRejected(f"banned executable field(s): {banned}")
@@ -257,6 +269,9 @@ def _decode_typed(schema: str, payload: Mapping[str, Any]) -> Any:
             # Strict versioned insight: plain data only, banned keys already checked.
             if not isinstance(body, Mapping):
                 raise GatewaySchemaRejected("Insight must be an object")
+            unknown = sorted(set(body) - _INSIGHT_ALLOWED_KEYS)
+            if unknown:
+                raise GatewaySchemaRejected(f"Insight unknown field(s): {unknown}")
             version = str(body.get("schema_version") or INSIGHT_SCHEMA_VERSION)
             out = dict(body)
             out["schema_version"] = version
@@ -264,6 +279,48 @@ def _decode_typed(schema: str, payload: Mapping[str, Any]) -> Any:
     except (ValueError, TypeError, RuntimeError) as exc:
         raise GatewaySchemaRejected(f"{schema} decode failed: {exc}") from exc
     raise GatewaySchemaRejected(f"no decoder for schema {schema!r}")
+
+
+def _extract_usage(raw: dict[str, Any], *, estimate: int) -> GatewayUsage:
+    """Split provider usage into input/output tokens; fall back to prompt estimate."""
+    usage_block = raw.pop("usage", None)
+    usage_tokens = int(raw.pop("usage_tokens", 0) or 0)
+    input_tokens = 0
+    output_tokens = 0
+    if isinstance(usage_block, Mapping):
+        input_tokens = max(
+            0,
+            int(
+                usage_block.get("input_tokens")
+                or usage_block.get("prompt_tokens")
+                or 0
+            ),
+        )
+        output_tokens = max(
+            0,
+            int(
+                usage_block.get("output_tokens")
+                or usage_block.get("completion_tokens")
+                or 0
+            ),
+        )
+        total = int(usage_block.get("total_tokens") or 0)
+        if usage_tokens <= 0:
+            usage_tokens = total or (input_tokens + output_tokens)
+    if input_tokens <= 0 and output_tokens <= 0:
+        charge = usage_tokens if usage_tokens > 0 else max(1, int(estimate))
+        input_tokens = charge
+        output_tokens = 0
+    total_tokens = input_tokens + output_tokens
+    if total_tokens <= 0:
+        total_tokens = max(1, int(estimate))
+        input_tokens = total_tokens
+    return GatewayUsage(
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        total_tokens=total_tokens,
+        calls=1,
+    )
 
 
 def _prompt_digest(prompt: str) -> str:
@@ -274,6 +331,7 @@ def _prompt_digest(prompt: str) -> str:
 class AIGateway:
     provider: LLMProvider = field(default_factory=OfflineStubProvider)
     budget: GatewayBudget = field(default_factory=GatewayBudget)
+    research_budget: ResearchBudgetCapability | None = None
     provider_name: str = "offline_stub"
     model_name: str = "offline-stub/v0"
 
@@ -284,12 +342,33 @@ class AIGateway:
         task: str,
         prompt: str,
         expected_schema: str,
+        research_budget: ResearchBudgetCapability | None = None,
+        operator_override: object | None = None,
     ) -> GatewayResult[Any]:
-        """Production API — always strict decode. No decode=False."""
+        """Production API — always strict decode. No decode=False.
+
+        After a successful closed-schema decode, input/output tokens are charged
+        on ResearchBudgetCapability via a single charge_provider_usage call
+        (one BEGIN IMMEDIATE consume). Missing or exhausted budget fail-closes.
+        operator_override cannot substitute for a budget capability.
+        """
+        if operator_override is not None:
+            raise MassResearchDisabledError(
+                "operator_override cannot substitute for ResearchBudgetCapability"
+            )
         if expected_schema not in ALLOWED_OUTPUT_SCHEMAS:
             raise ValueError(
                 f"unsupported output schema {expected_schema!r}; "
                 f"allowed={sorted(ALLOWED_OUTPUT_SCHEMAS)}"
+            )
+        cap = (
+            research_budget
+            if research_budget is not None
+            else self.research_budget
+        )
+        if not isinstance(cap, ResearchBudgetCapability):
+            raise MassResearchDisabledError(
+                "ResearchBudgetCapability is required; AI gateway complete is fail-closed"
             )
         # Pre-call reserve using prompt estimate; reconcile with provider usage.
         estimate = max(1, len(prompt) // 4)
@@ -302,21 +381,9 @@ class AIGateway:
                 expected_schema=expected_schema,
             )
         )
-        # Separate usage envelope from content when provider supplies it.
-        usage_block = raw.pop("usage", None)
-        usage_tokens = int(raw.pop("usage_tokens", 0) or 0)
-        if isinstance(usage_block, Mapping):
-            usage_tokens = int(
-                usage_block.get("total_tokens")
-                or (
-                    int(usage_block.get("input_tokens") or 0)
-                    + int(usage_block.get("output_tokens") or 0)
-                )
-                or usage_tokens
-            )
-        charge = usage_tokens if usage_tokens > 0 else estimate
+        usage = _extract_usage(raw, estimate=estimate)
         try:
-            self.budget.reconcile(calls=1, tokens=charge)
+            self.budget.reconcile(calls=1, tokens=usage.total_tokens)
         except RuntimeError:
             # Release reservation on over-budget actuals.
             self.budget.reserved_calls = max(0, self.budget.reserved_calls - 1)
@@ -340,18 +407,20 @@ class AIGateway:
         except Exception as exc:  # pragma: no cover — defensive
             raise GatewaySchemaRejected(str(exc)) from exc
 
+        # Charge only after successful strict decode. Single consume is atomic
+        # across input_tokens/output_tokens/model_calls (ROLLBACK if any cap trips).
+        cap.charge_provider_usage(
+            input_tokens=usage.input_tokens,
+            output_tokens=usage.output_tokens,
+            model_calls=usage.calls,
+        )
+
         schema_version = schema
         if schema == "Insight" and isinstance(typed, Mapping):
             schema_version = str(typed.get("schema_version") or INSIGHT_SCHEMA_VERSION)
         elif schema == "StrategySpec" and hasattr(typed, "version"):
             schema_version = str(typed.version)
 
-        usage = GatewayUsage(
-            input_tokens=charge,
-            output_tokens=0,
-            total_tokens=charge,
-            calls=1,
-        )
         return GatewayResult(
             payload=typed,
             schema_name=schema,
@@ -363,6 +432,7 @@ class AIGateway:
             schema_version=schema_version,
             prompt_digest=_prompt_digest(prompt),
             created_at=datetime.now(timezone.utc).isoformat(),
+            budget_id=cap.budget_id,
         )
 
     def _run_raw_for_tests(
