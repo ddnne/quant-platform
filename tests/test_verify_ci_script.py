@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -72,6 +73,16 @@ def test_verify_ci_script_exists_executable_and_covers_required_steps() -> None:
         assert name in src, f"{SCRIPT} must cover worker {name}"
     for flag in SKIP_FLAGS:
         assert flag not in src, f"{SCRIPT} must not define skip flag {flag}"
+
+
+def test_all_workers_package_json_has_types_script() -> None:
+    for name in WORKERS:
+        pkg = ROOT / "platform" / "workers" / name / "package.json"
+        assert pkg.is_file(), pkg
+        data = json.loads(pkg.read_text(encoding="utf-8"))
+        types = str((data.get("scripts") or {}).get("types") or "")
+        assert types, f"{pkg} must define scripts.types (verify_ci runs wrangler types --check)"
+        assert "wrangler types" in types, f"{pkg} scripts.types must invoke wrangler types"
 
 
 def test_verify_ci_bans_legacy_peer_deps_skips_and_live_deploy() -> None:
