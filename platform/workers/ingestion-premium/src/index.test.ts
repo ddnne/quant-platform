@@ -168,6 +168,37 @@ describe("ingestion-premium health", () => {
     expect(json.datasets).toBeGreaterThan(0);
     expect(json.ok).toBe(false);
   });
+
+  it("rejects POST /health with 405 and does not leak secrets or COMPLETE", async () => {
+    const env = testEnv();
+    const res = await worker.fetch(
+      new Request("https://ingestion-premium.test/health", { method: "POST" }),
+      env,
+    );
+    expect(res.status).toBe(405);
+    const body = await res.text();
+    expect(JSON.parse(body)).toEqual({ error: "GET required" });
+    expect(body).not.toContain(EXPORT_TOKEN);
+    expect(body).not.toContain(API_KEY);
+    expect(body).not.toContain(env.INGESTION_RUN_TOKEN);
+    expect(body).not.toContain("COMPLETE");
+    expect(body).not.toMatch(/Coverage COMPLETE/);
+  });
+});
+
+describe("ingestion-premium unknown path", () => {
+  it("returns 404 not found for GET /nope", async () => {
+    const env = testEnv();
+    const res = await worker.fetch(
+      new Request("https://ingestion-premium.test/nope"),
+      env,
+    );
+    expect(res.status).toBe(404);
+    const body = await res.text();
+    expect(JSON.parse(body)).toEqual({ error: "not found" });
+    expect(body).not.toContain(EXPORT_TOKEN);
+    expect(body).not.toContain(API_KEY);
+  });
 });
 
 const READY_MIGRATION = {

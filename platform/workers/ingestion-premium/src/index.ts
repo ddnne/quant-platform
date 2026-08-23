@@ -654,7 +654,10 @@ async function handleRun(
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
-    if (url.pathname === "/health") return handleHealth(env);
+    if (url.pathname === "/health") {
+      if (request.method !== "GET") return json({ error: "GET required" }, 405);
+      return handleHealth(env);
+    }
     if (url.pathname === "/v1/admin/rebuild-natural-keys-v2") {
       return handleNaturalKeyRebuild(env, request);
     }
