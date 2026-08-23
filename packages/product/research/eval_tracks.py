@@ -170,7 +170,7 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
     {
         "id": "options_225_vol_series_hold",
         "track": EVAL_TRACK_MID_N,
-        "why": "options_225_vol_series.py ~1140 is live ATM/skew/term math; do not fake-split",
+        "why": "options_225_vol_series.py is live ATM/skew/term math; do not fake-split",
         "not_a_pass": True,
         "go": False,
     },
@@ -214,9 +214,8 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "tracks": BOTH_EVAL_TRACK_IDS,
         "entry": "research.cf_daily_path_job.run_both_track_sleeve_fanout",
         "why": (
-            "recorded eval-cf-dp-both-sleeves-20260824df mid+liq 11 logics "
-            "from usable inventory reconstitution; descriptive summary "
-            "not_a_pass; do not narrate majority as stable"
+            "recorded KEEP eval-cf-dp-both-sleeves-20260824df; descriptive; "
+            "majority is not stable"
         ),
         "not_a_pass": True,
         "go": False,
@@ -254,8 +253,7 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "id": "near_empty_parked_not_countable",
         "track": EVAL_TRACK_LIQ_LARGE,
         "why": (
-            "NEAR_EMPTY_PARK_IDS includes 24aa p10×sales×eps_up; "
-            "is_countable_spec and validate_basket_members exclude them; "
+            "NEAR_EMPTY_PARK_IDS excluded from countable / basket members; "
             "assert_new_batch_occupancy_not_near_empty refuses empty batches"
         ),
         "not_a_pass": True,
