@@ -18,6 +18,9 @@ from ingestion.pipeline import (
 
 REPO = Path(__file__).resolve().parents[1]
 PIPELINE = REPO / "packages" / "data_plane" / "ingestion" / "pipeline.py"
+RECEIPTS = (
+    REPO / "packages" / "data_plane" / "ingestion" / "pipeline_receipts.py"
+)
 FIXTURE = REPO / "tests" / "fixtures" / "jsda_otc_official_index_tiny.html"
 
 DATASET = "jsda_otc_bond_reference_prices"
@@ -71,10 +74,15 @@ def test_pipeline_otc_plan_with_fixture_html_lists_publication_days_not_weekend(
 
 
 def test_pipeline_persist_passes_index_text_into_plan() -> None:
-    src = PIPELINE.read_text(encoding="utf-8")
+    src = RECEIPTS.read_text(encoding="utf-8")
     assert "index_text = _index_text_for_plan(policy, None)" in src
     assert src.count("index_text=index_text") >= 2
     assert src.count("_plan_required_segments(") >= 3
-    persist = src.split("def _persist(", 1)[1]
-    assert "index_text=index_text" in persist
+    emit = src.split("def emit_catalog_job_receipt(", 1)[1]
+    assert "index_text=index_text" in emit
     assert "Does not fetch live HTML" in src
+    assert "Collection SUCCESS is not Coverage COMPLETE" in src
+    pipeline_src = PIPELINE.read_text(encoding="utf-8")
+    persist = pipeline_src.split("def _persist(", 1)[1]
+    assert "emit_catalog_job_receipt(" in persist
+    assert "save_raw(" in persist
