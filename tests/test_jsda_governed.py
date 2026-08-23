@@ -22,6 +22,7 @@ from storage.sqlite_store import SqliteStore
 from storage import (
     evaluate_required_segments,
     read_collection_receipts,
+    read_coverage_segments,
     read_dataset_coverage,
 )
 from scripts.run_ingestion_once import _build_parser
@@ -82,6 +83,8 @@ def test_official_archive_discovery_emits_stable_daily_segments_and_missing_link
     assert [item.segment_id for item in segments] == [
         "2002-08-02", "2002-08-05", "2002-08-06"
     ]
+    # Discovery ids are official index publication days, not calendar weekends.
+    assert "2002-08-03" not in [item.segment_id for item in segments]
     assert segments[0].period_id == "2002-08"
     assert segments[0].source_url.endswith("20020802_reference.csv")
     assert segments[0].source_format == "csv"
@@ -323,6 +326,55 @@ def test_otc_archive_backfill_receipts_raw_resume_and_missing_partial(
         store.path, dataset="jsda_otc_bond_reference_prices"
     )
     assert len(second_receipts) == 4  # two success + one missing per run
+    store.close()
+
+
+def test_otc_archive_refresh_reuses_fetched_index_html_not_weekends(
+    tmp_path, monkeypatch, receipt_ed25519_keys
+):
+    """Year-index HTML already fetched is passed as index_text; weekends stay out."""
+    from ingestion.jsda import archive as archive_mod
+    from ingestion.jsda.official_index import parse_official_index_publication_days
+
+    _inject_tmp_receipt_authority(monkeypatch, receipt_ed25519_keys)
+    captured: dict[str, object] = {}
+    real_refresh = archive_mod.refresh_coverage_ledger
+
+    def _capture_refresh(*args, **kwargs):
+        captured["index_text"] = kwargs.get("index_text")
+        return real_refresh(*args, **kwargs)
+
+    monkeypatch.setattr(archive_mod, "refresh_coverage_ledger", _capture_refresh)
+    store = SqliteStore(tmp_path / "index-text.sqlite")
+    client = _ArchiveClient()
+    report = run_otc_reference_backfill(
+        http=client,
+        store=store,
+        data_base=tmp_path,
+        from_year=2002,
+        to_year=2002,
+        checked_at="2025-04-02T10:00:00+09:00",
+    )
+    listed = ["2002-08-02", "2002-08-05", "2002-08-06"]
+    weekend = "2002-08-03"
+    assert [seg.segment_id for seg in report.required_segments] == listed
+    assert weekend not in {seg.segment_id for seg in report.required_segments}
+    html = captured.get("index_text")
+    assert isinstance(html, str) and html.strip()
+    assert parse_official_index_publication_days(html) == tuple(listed)
+    assert weekend not in parse_official_index_publication_days(html)
+    after = read_coverage_segments(
+        store.path, dataset="jsda_otc_bond_reference_prices"
+    )
+    ids = [row["segment_id"] for row in after]
+    assert ids == listed
+    assert weekend not in ids
+    missing = next(row for row in after if row["segment_id"] == "2002-08-06")
+    assert missing["status"] != "COMPLETE"
+    coverage = read_dataset_coverage(
+        store.path, dataset="jsda_otc_bond_reference_prices"
+    )
+    assert coverage and coverage[0]["status"] != "COMPLETE"
     store.close()
 
 

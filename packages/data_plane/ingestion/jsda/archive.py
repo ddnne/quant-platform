@@ -327,6 +327,8 @@ def run_otc_reference_backfill(
         if from_year - 1 in by_year:
             discovery_years.insert(0, from_year - 1)
         all_discovered: list[JsdaArchiveSegment] = []
+        # Discovery ids are official year-index publication days, not calendar weekends.
+        index_texts: list[str] = []
         for year in discovery_years:
             archive_index = by_year.get(year)
             if archive_index is None:
@@ -338,8 +340,10 @@ def run_otc_reference_backfill(
                 data_base, f"otc_reference_archive_{year}.html", year_raw, checked_at
             )
             index_digests[str(year)] = _sha256(year_raw)
+            year_html = _decode_html(year_raw)
+            index_texts.append(year_html)
             segments = discover_otc_reference_segments(
-                _decode_html(year_raw), year=year, index_url=archive_index.url
+                year_html, year=year, index_url=archive_index.url
             )
             all_discovered.extend(segments)
             if year >= from_year:
@@ -521,11 +525,13 @@ def run_otc_reference_backfill(
             failed=failed,
             required_segments=tuple(requirements),
         )
+        # Reuse fetched year-index HTML. Missing text is fail-closed empty, not weekends.
         refresh_coverage_ledger(
             store._conn,  # noqa: SLF001
             store.path,
             datasets=[OTC_REFERENCE_DATASET],
             today=_fetch_day(checked_at),
+            index_text="\n".join(index_texts) if index_texts else None,
         )
         _finish_run(store, run_id, report)
         return report
