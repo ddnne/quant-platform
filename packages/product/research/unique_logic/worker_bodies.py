@@ -20,6 +20,9 @@ from research.unique_logic.constants import (
     ALWAYS_ON_PARK_IDS,
     NEAR_EMPTY_OCCUPANCY,
     NEAR_EMPTY_PARK_IDS,
+    PRI_FLOW_GATES,
+    PRI_RATE_GATES,
+    PRI_VOL_GATES,
     PYTHON_ONLY_EVENT_GATES,
     RESEARCH_UNIQUE_LOGIC_IDS,
     THIN_SLEEVE_EXCLUDE_IDS,
@@ -566,25 +569,6 @@ def usable_inventory_read(
     n_ands: Counter[str] = Counter()
     pri_series: Counter[str] = Counter()
     n_pb = n_pb_primary = n_ac = n_ac_primary = 0
-    vol = {"rich_iv", "nky_vol_high_skip", "on_impulse", "cheap_iv"}
-    flow = {
-        "crowded_margin",
-        "uncrowded_margin",
-        "liq_high",
-        "margin_up",
-        "margin_down",
-    }
-    rate = {
-        "invert_curve",
-        "steep_curve",
-        "curve_flatten",
-        "overnight_easing",
-        "overnight_tightening",
-        "tight_funding",
-        "easy_funding",
-        "repo_3m_down",
-        "overnight_p10",
-    }
     for rec in combo_thesis_records():
         lid = str(rec.get("logic_id") or "")
         if lid not in usable:
@@ -595,11 +579,11 @@ def usable_inventory_read(
         fam_primary[f"{fam}|{pg}"] += 1
         n_ands[str(len(gates))] += 1
         gs = set(gates)
-        if gs & vol:
+        if gs & PRI_VOL_GATES:
             pri_series["vol"] += 1
-        elif gs & flow:
+        elif gs & PRI_FLOW_GATES:
             pri_series["flow"] += 1
-        elif gs & rate:
+        elif gs & PRI_RATE_GATES:
             pri_series["rate"] += 1
         else:
             pri_series["other"] += 1

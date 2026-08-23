@@ -30,6 +30,22 @@ def test_event_sides_ls_variants_stay_registered() -> None:
     )
 
 
+def test_pri_gate_sets_are_combo_event_gates() -> None:
+    from research.unique_logic.constants import (
+        COMBO_EVENT_GATES,
+        PRI_FLOW_GATES,
+        PRI_RATE_GATES,
+        PRI_VOL_GATES,
+    )
+
+    assert PRI_VOL_GATES <= COMBO_EVENT_GATES
+    assert PRI_FLOW_GATES <= COMBO_EVENT_GATES
+    assert PRI_RATE_GATES <= COMBO_EVENT_GATES
+    assert not (PRI_VOL_GATES & PRI_FLOW_GATES)
+    assert not (PRI_VOL_GATES & PRI_RATE_GATES)
+    assert not (PRI_FLOW_GATES & PRI_RATE_GATES)
+
+
 def test_usable_inventory_read_has_n_ands_and_pri_series() -> None:
     from research.unique_logic.worker_bodies import usable_inventory_read
 

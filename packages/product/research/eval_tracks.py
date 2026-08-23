@@ -83,7 +83,7 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
             "recorded research/eval/job=eval-inventory-bias-20260824ai/ "
             "inventory_bias.json; assert_new_batch_cheap_pb_cap refuses "
             "new batches at 20%; usable inventory 1724 (3-AND +N stopped); "
-            "eval-usable-inventory-20260824dq not_a_pass"
+            "eval-usable-inventory-20260824dr not_a_pass"
         ),
         "not_a_pass": True,
         "go": False,

@@ -81,6 +81,31 @@ COMBO_EVENT_GATES: frozenset[str] = frozenset(
 )
 PYTHON_ONLY_EVENT_GATES: frozenset[str] = frozenset()
 KNOWN_EVENT_GATES: frozenset[str] = COMBO_EVENT_GATES | PYTHON_ONLY_EVENT_GATES
+PRI_VOL_GATES: frozenset[str] = frozenset(
+    {"rich_iv", "nky_vol_high_skip", "on_impulse", "cheap_iv"}
+)
+PRI_FLOW_GATES: frozenset[str] = frozenset(
+    {
+        "crowded_margin",
+        "uncrowded_margin",
+        "liq_high",
+        "margin_up",
+        "margin_down",
+    }
+)
+PRI_RATE_GATES: frozenset[str] = frozenset(
+    {
+        "invert_curve",
+        "steep_curve",
+        "curve_flatten",
+        "overnight_easing",
+        "overnight_tightening",
+        "tight_funding",
+        "easy_funding",
+        "repo_3m_down",
+        "overnight_p10",
+    }
+)
 WORKER_PYTHON_ONLY_GATE_POLICY: str = "python_local_or_lid_branch"
 CHEAP_PB_EVENT_VS_CS: str = "event_bars_x_fins_not_csfundsnaps"
 CHEAP_PB_EVENT_SOURCE: str = "bars_x_fins_bps_over_close"
