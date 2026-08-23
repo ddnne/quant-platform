@@ -473,6 +473,7 @@ def test_research_job_callers_use_worker_put_not_cli() -> None:
         "occupancy_audit.py",
         "cf_propose_thesis.py",
         "cf_cost_verify.py",
+        "cf_daily_path_job.py",
     )
     for name in remote_callers:
         src = (root / name).read_text(encoding="utf-8")
