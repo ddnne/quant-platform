@@ -32,6 +32,15 @@ from .canonical import (
     datasets_by_source,
     validate_downstream_consistency,
 )
+from .source_capability import (
+    HISTORY_MODES,
+    POLICY_VERSION as SOURCE_CAPABILITY_POLICY_VERSION,
+    OfficialRequiredDomainSubset,
+    SourceCapabilityContract,
+    all_source_capability_contracts,
+    required_domain_subset_official,
+    source_capability_contract_for,
+)
 from .permanent_defer import (
     MASTER_COVERAGE_POLICY,
     MASTER_JQ_SCOPE,
@@ -96,4 +105,11 @@ __all__ = [
     "reject_permanent_defer_for_history",
     "require_history_eligible",
     "tip_only_policy_for",
+    "HISTORY_MODES",
+    "SOURCE_CAPABILITY_POLICY_VERSION",
+    "OfficialRequiredDomainSubset",
+    "SourceCapabilityContract",
+    "all_source_capability_contracts",
+    "required_domain_subset_official",
+    "source_capability_contract_for",
 ]

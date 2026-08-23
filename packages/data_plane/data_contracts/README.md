@@ -22,3 +22,17 @@ tip4 is **superseded by W68 live seal** (tip months COMPLETE; no longer fail-clo
 Remaining: master, earn_cal, bars_am, OTC. See
 `docs/proof/complete21_cf_read_paths_20260815.md` §T2 and
 `docs/proof/w0816b_w68_complete_delta_close_20260816.md`.
+
+## SourceCapabilityContract v3
+
+`source_capability.py` is the official-availability SoT
+(`policy_version = source-capability/v3`). Coverage required inventory,
+backfill planning, Ops MCP, and READY profiles must derive from this
+contract and must not independently define a history start or coverage
+mode that exceeds official provision.
+
+JSON documents are optional at `specs/source_capability/*.json`; an empty
+directory is valid. The loader rejects unknown fields and unknown
+`history_mode` values. `required_domain_subset_official(contract)` is the
+helper later lanes call. This package does not rewrite
+`plan_required_segments` and does not invent COMPLETE.
