@@ -11,6 +11,8 @@ export interface Env {
   READY_DECLARED?: string;
   OPERATIONAL_GO?: string;
   CONTINUOUS_PAPER?: string;
+  /** nets_only is deny-by-default; only the exact value "allow" opts in. */
+  NETS_ONLY?: string;
 }
 
 export interface LogicSpec {

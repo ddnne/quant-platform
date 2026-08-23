@@ -50,6 +50,8 @@ PHASE7 = "OFF"
 READY_DECLARED = "false"
 OPERATIONAL_GO = "false"
 CONTINUOUS_PAPER = "UNARMED"
+# nets_only remains deny unless explicitly "allow" (and mass_screen).
+NETS_ONLY = "deny"
 
 [observability]
 enabled = true

@@ -20,7 +20,11 @@ import {
   putImmutableJson,
   putJsonCreateOnly,
 } from "./http";
-import { researchCapabilities, requireCapability } from "./capabilities";
+import {
+  netsOnlyGate,
+  researchCapabilities,
+  requireCapability,
+} from "./capabilities";
 import { jobCandidateGrade } from "./candidate";
 import { isPathBroken } from "./path_broken";
 import { runProposeThesis } from "./propose_thesis";
@@ -484,6 +488,20 @@ export default {
       if (!parsed.ok) {
         return json({ error: parsed.error }, 400);
       }
+      const netsGate = netsOnlyGate(parsed.value.mode, env, massGate.allowed);
+      if (!netsGate.allowed) {
+        return json(
+          {
+            ok: false,
+            error: "nets_only_denied",
+            capability: "mass_screen",
+            reasons: netsGate.reasons,
+            go: false,
+            not_a_pass: true,
+          },
+          403,
+        );
+      }
 
       try {
         const result = await runMassEval(env, parsed.value);
@@ -552,6 +570,20 @@ export default {
       const parsed = parseRequest(body);
       if (!parsed.ok) {
         return json({ error: parsed.error }, 400);
+      }
+      const netsGate = netsOnlyGate(parsed.value.mode, env, pathGate.allowed);
+      if (!netsGate.allowed) {
+        return json(
+          {
+            ok: false,
+            error: "nets_only_denied",
+            capability: "mass_screen",
+            reasons: netsGate.reasons,
+            go: false,
+            not_a_pass: true,
+          },
+          403,
+        );
       }
       parsed.value.eval_kind = "daily_path";
       if ((body as { write_artifacts?: boolean }).write_artifacts !== true) {

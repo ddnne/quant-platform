@@ -59,3 +59,20 @@ export function requireCapability(
     reasons: caps.reasons,
   };
 }
+
+/** nets_only needs env.NETS_ONLY=allow AND mass_screen. Default deny. */
+export function netsOnlyGate(
+  mode: string | undefined,
+  env: { NETS_ONLY?: string },
+  massScreenAllowed: boolean,
+): { allowed: boolean; reasons: string[] } {
+  if (mode !== "nets_only") return { allowed: true, reasons: [] };
+  const reasons: string[] = [];
+  if (String(env.NETS_ONLY ?? "deny") !== "allow") {
+    reasons.push("nets_only_env_deny");
+  }
+  if (!massScreenAllowed) {
+    reasons.push("mass_screen_capability_missing");
+  }
+  return { allowed: reasons.length === 0, reasons };
+}
