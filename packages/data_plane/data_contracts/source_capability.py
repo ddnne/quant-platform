@@ -1,15 +1,19 @@
 """SourceCapabilityContract v3 — official-availability source of truth.
 
-Coverage required inventory, backfill planning, Ops MCP, and READY profiles
-must derive from this contract. They must not independently define a history
-start or coverage mode that exceeds official provision.
+This module is the official-availability SoT. Coverage required inventory,
+backfill planning, Ops MCP, and READY profiles must derive from this
+contract. They must not independently define a history start or coverage
+mode that exceeds official provision.
+
+``storage.coverage_ledger.plan_required_segments`` MUST subset official
+domain via ``required_domain_subset_official``. That clip does not invent
+COMPLETE.
 
 JSON documents (optional) live at ``specs/source_capability/*.json``. An
 empty or missing directory is valid: the type and fail-closed loader still
-export. Dataset rows are not invented here.
+export. Missing dataset rows are not invented.
 
-This module does not rewrite ``plan_required_segments``. Other lanes call
-``required_domain_subset_official``.
+Nested evidence maps remain open; dataset-level keys are closed.
 """
 
 from __future__ import annotations
@@ -416,8 +420,8 @@ class SourceCapabilityContract:
 class OfficialRequiredDomainSubset:
     """Official availability domain. Required coverage inventory must be a subset.
 
-    Does not invent COMPLETE and does not plan segments. Later lanes clip
-    ``plan_required_segments`` to this domain.
+    Does not invent COMPLETE. ``coverage_ledger.plan_required_segments`` MUST
+    subset official domain via ``required_domain_subset_official``.
     """
 
     dataset_id: str

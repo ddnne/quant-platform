@@ -180,6 +180,22 @@ def test_required_domain_subset_official() -> None:
     assert index_domain.admit_historical_required_segments is True
 
 
+def test_module_docstring_states_planner_authority() -> None:
+    from data_contracts import source_capability as mod
+
+    src = Path(mod.__file__).read_text(encoding="utf-8")
+    header = src.split('"""', 2)[1]
+    assert "does not rewrite" not in header
+    assert "official-availability" in header
+    assert "plan_required_segments" in header
+    assert "required_domain_subset_official" in header
+    assert "MUST subset official" in header
+    assert "specs/source_capability" in header
+    assert "not invented" in header
+    assert "Nested evidence maps remain open" in header
+    assert "dataset-level keys are closed" in header
+
+
 def test_bundle_unknown_field_and_wrong_policy_rejected() -> None:
     with pytest.raises(ValueError, match="unknown field"):
         parse_source_capability_document(
