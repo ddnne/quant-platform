@@ -12,6 +12,8 @@ from datetime import date, timedelta
 import json
 from pathlib import Path
 
+import pytest
+
 from data_contracts.coverage import SEGMENT_GRANULARITIES, coverage_contract_for
 from data_contracts.permanent_defer import PERMANENT_DEFER_DATASETS, PERMANENT_DEFER_IDS
 from data_contracts.source_capability import (
@@ -22,6 +24,7 @@ from data_contracts.source_capability import (
 from ingestion.jsda.official_index import (
     official_index_days as sot_official_index_days,
     parse_official_index_publication_days,
+    read_local_index_text,
 )
 from ingestion.jsda.urls import discover_otc_reference_segments
 from qp_paths import repo_root
@@ -181,6 +184,30 @@ def test_5886_complete_days_map_into_required_set_not_recomplete() -> None:
     assert mig["behavior_change"]["mapped_complete_not_recomplete"] is True
     assert mig["invent_complete"] is False
     assert mig["dataset_complete_claim"] is False
+
+
+def test_read_local_index_text_fail_closed_empty(tmp_path: Path) -> None:
+    assert read_local_index_text(None) is None
+    assert read_local_index_text("") is None
+    assert read_local_index_text("   ") is None
+    blank = tmp_path / "blank.html"
+    blank.write_text("   \n", encoding="utf-8")
+    assert read_local_index_text(blank) is None
+    missing = tmp_path / "no_such_official_index.html"
+    assert not missing.exists()
+    with pytest.raises(FileNotFoundError):
+        read_local_index_text(missing)
+    assert read_local_index_text(missing, missing_ok=True) is None
+    html = read_local_index_text(_FIXTURE)
+    assert html is not None
+    assert html.strip() != ""
+    assert "https://" not in html
+    assert "2002.8.2" in html
+    listed = parse_official_index_publication_days(html)
+    assert listed == LISTED_TINY_DAYS
+    assert WEEKEND_IN_TINY_SPAN not in listed
+    assert len(listed) != V2_REQUIRED
+    assert "COMPLETE" not in listed
 
 
 def test_official_index_days_fail_closed_without_index_text() -> None:

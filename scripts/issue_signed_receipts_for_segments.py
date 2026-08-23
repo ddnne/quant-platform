@@ -23,6 +23,9 @@ import sqlite3
 
 ROOT = ensure_repo_root()
 
+from ingestion.jsda.official_index import (  # noqa: E402
+    read_local_index_text as _read_index_text,
+)
 from storage.coverage_ledger import (  # noqa: E402
     RequiredCoverageSegment,
     refresh_coverage_ledger,
@@ -110,26 +113,6 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     return ap
-
-
-def _read_index_text(path: str | Path | None) -> str | None:
-    """Load local official-index HTML.
-
-    Omitted/blank → None (fail-closed empty). Missing PATH raises.
-    Never downloads the index. Never walks a calendar.
-    """
-    if path is None:
-        return None
-    raw = str(path).strip()
-    if not raw:
-        return None
-    file_path = Path(raw)
-    if not file_path.is_file():
-        raise FileNotFoundError(f"index HTML not found: {file_path}")
-    text = file_path.read_text(encoding="utf-8")
-    if not text.strip():
-        return None
-    return text
 
 
 def _refresh_issued_coverage(
