@@ -210,6 +210,17 @@ describe("Evaluation IR golden vectors", () => {
     ).toBe(true);
   });
 
+  it("schema.json exists next to golden and locks additionalProperties and version", () => {
+    const schemaPath = join(dirname(GOLDEN_PATH), "schema.json");
+    expect(existsSync(schemaPath)).toBe(true);
+    const schema = JSON.parse(readFileSync(schemaPath, "utf8")) as {
+      additionalProperties?: unknown;
+      properties?: { version?: { const?: unknown } };
+    };
+    expect(schema.additionalProperties).toBe(false);
+    expect(schema.properties?.version?.const).toBe("evaluation-ir/v1");
+  });
+
   it.each(GOLDEN_ROWS)("golden $id ($op) encode/decode match", (row) => {
     if (row.op === "decode") {
       expect(row.expect_error, row.id).toBeTruthy();
