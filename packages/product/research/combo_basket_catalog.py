@@ -13,7 +13,7 @@ from research.unique_logic.constants import (
     THIN_SLEEVE_EXCLUDE_IDS,
 )
 
-DEFAULT_CANDIDATE_BASKET: tuple[str, ...] = (
+HISTORICAL_HEAD4_MEMBERS: tuple[str, ...] = (
     "event_afterclose_positive_eps",
     "event_ta_up_positive_eps",
     "surprise_xs_uncrowded_afterclose",
@@ -42,7 +42,7 @@ MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
         "basket_id": "basket_head4",
         "rule": "known_candidate_head",
         "primary": False,
-        "members": DEFAULT_CANDIDATE_BASKET,
+        "members": HISTORICAL_HEAD4_MEMBERS,
     },
     {
         "basket_id": "basket_event4",

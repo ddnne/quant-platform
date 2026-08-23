@@ -253,26 +253,6 @@ def _composition_compare(
     }
 
 
-def compare_headn_vs_liq(
-    summary_headn: Mapping[str, Any],
-    summary_liq: Mapping[str, Any],
-    *,
-    ids: Sequence[str] | None = None,
-) -> dict[str, Any]:
-    return _composition_compare(
-        summary_headn,
-        summary_liq,
-        version="composition-compare/v1",
-        job_a="head_n_job",
-        job_b="liq_job",
-        label_a="head_n",
-        label_b="liq",
-        a_better_class="headn_majority_better",
-        b_better_class="liq_majority_better",
-        ids=ids,
-    )
-
-
 def compare_mid_vs_liq(
     summary_mid: Mapping[str, Any],
     summary_liq: Mapping[str, Any],

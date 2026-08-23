@@ -54,38 +54,7 @@ PERIOD_NET_ONLY_METHODS: frozenset[str] = frozenset(
         "period_net",
     }
 )
-W99_STICKY_DAILY_PATH_DD_REFERENCE: tuple[dict[str, Any], ...] = (
-    {
-        "window": "w2017_2019",
-        "logic_id": "xs_rank_ls_sticky",
-        "daily_path_DD": -0.143741,
-        "dd_duration": 85,
-        "recovery_days": None,
-        "recovered": False,
-        "total_ret_net": 0.034975,
-        "period_net_DD_w98_cf_artifact": 0.0,
-    },
-    {
-        "window": "w2020_2022",
-        "logic_id": "xs_rank_ls_sticky",
-        "daily_path_DD": -0.037971,
-        "dd_duration": 14,
-        "recovery_days": 1,
-        "recovered": True,
-        "total_ret_net": 0.201923,
-        "period_net_DD_w98_cf_artifact": 0.0,
-    },
-    {
-        "window": "w2023_2025",
-        "logic_id": "xs_rank_ls_sticky",
-        "daily_path_DD": -0.108415,
-        "dd_duration": 17,
-        "recovery_days": 52,
-        "recovered": True,
-        "total_ret_net": 0.081073,
-        "period_net_DD_w98_cf_artifact": 0.0,
-    },
-)
+
 
 
 def _freeze() -> dict[str, Any]:
@@ -443,17 +412,6 @@ def _as_int(v: Any) -> int | None:
         return int(v)
     except (TypeError, ValueError):
         return None
-
-
-def w99_sticky_daily_path_dd_reference() -> dict[str, Any]:
-    """Sticky daily DD table — reference example, not a pass/promote."""
-    return {
-        "logic_id": "xs_rank_ls_sticky",
-        "stance": "STABLE_RESEARCH_ONLY",
-        "promote_as_main": False,
-        "go": False,
-        "windows": [dict(r) for r in W99_STICKY_DAILY_PATH_DD_REFERENCE],
-    }
 
 
 def evaluate_daily_path_dd_gate(
@@ -816,7 +774,6 @@ __all__ = [
     "DEFAULT_TRADING_DAYS_PER_YEAR",
     "PERIOD_NET_ONLY_METHODS",
     "STATS_METRICS_VERSION",
-    "W99_STICKY_DAILY_PATH_DD_REFERENCE",
     "calmar_ratio",
     "equity_path_drawdown",
     "evaluate_daily_path_dd_gate",
@@ -834,6 +791,5 @@ __all__ = [
     "LOW_VARIANCE_MAX_ABS_T",
     "LOW_VARIANCE_SMALL_N_MAX",
     "trade_stats_report",
-    "w99_sticky_daily_path_dd_reference",
     "win_rate",
 ]

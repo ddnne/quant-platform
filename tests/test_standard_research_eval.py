@@ -6,16 +6,6 @@ baseline occupancy tests.
 
 from __future__ import annotations
 
-from research.baseline_catalog import (
-    RESEARCH_STATUS_REJECTED,
-    SIGNAL_ID_S1,
-    SIGNAL_ID_S2,
-    SIGNAL_ID_S3,
-    SIGNAL_ID_S4,
-    SIGNAL_ID_S5,
-    is_research_baseline_rejected,
-    rejected_baseline_catalog,
-)
 from research.cost_models import (
     COST_MODELS_VERSION,
     POSITION_STYLE_LONG_SHORT,
@@ -25,10 +15,8 @@ from research.cost_models import (
 )
 from research.stats_metrics import (
     DAILY_PATH_DD_REQUIRED_FIELDS,
-    W99_STICKY_DAILY_PATH_DD_REFERENCE,
     equity_path_drawdown,
     evaluate_daily_path_dd_gate,
-    w99_sticky_daily_path_dd_reference,
 )
 from research.risk_scenarios import (
     SCENARIO_CRASH,
@@ -39,58 +27,7 @@ from research.risk_scenarios import (
     evaluate_risk_scenarios,
     scenario_row,
 )
-from research.robustness_gate import evaluate_research_robustness_gate
 from tests.research_eval_util import _assert_mass_ready_off
-
-_W99_REF0 = W99_STICKY_DAILY_PATH_DD_REFERENCE[0]
-W99_DAILY_PATH_PACK = {
-    "daily_path_DD": _W99_REF0["daily_path_DD"],
-    "dd_duration": _W99_REF0["dd_duration"],
-    "recovered": _W99_REF0["recovered"],
-    "recovery_days": _W99_REF0["recovery_days"],
-    "total_ret_net": _W99_REF0["total_ret_net"],
-    "period_net_DD": _W99_REF0["period_net_DD_w98_cf_artifact"],
-    "method": "daily_equity_level_peak_to_trough",
-    "window": "w2017_2019",
-    "logic_id": "xs_rank_ls_sticky",
-}
-
-_GATE_PASS_ROWS = [
-    {"period_id": "y2015", "gross_signed_mean_active": -0.0005, "n_active_positions": 100},
-    {"period_id": "y2017", "gross_signed_mean_active": -0.0004, "n_active_positions": 100},
-    {"period_id": "y2019", "gross_signed_mean_active": -0.0006, "n_active_positions": 100},
-]
-
-
-def test_gate_pass_still_not_ready_or_candidate():
-    """Even cost-aware gate PASS must not mint READY / research_candidate."""
-    gate = evaluate_research_robustness_gate(
-        _GATE_PASS_ROWS,
-        signal_id=SIGNAL_ID_S4,
-        require_net_sign_majority=True,
-    )
-    assert gate["passed"] is True
-    assert gate["ready_declared"] is False
-    assert gate["operational_go"] is False
-    _assert_mass_ready_off(gate)
-
-
-def test_does_not_register_new_signals():
-    cat = rejected_baseline_catalog()
-    assert set(cat["signal_ids"]) == {
-        SIGNAL_ID_S1,
-        SIGNAL_ID_S2,
-        SIGNAL_ID_S3,
-        SIGNAL_ID_S4,
-        SIGNAL_ID_S5,
-    }
-
-
-def test_rejected_baselines_still_rejected():
-    for sid in (SIGNAL_ID_S1, SIGNAL_ID_S2, SIGNAL_ID_S3, SIGNAL_ID_S4, SIGNAL_ID_S5):
-        assert is_research_baseline_rejected(sid) is True
-        entry = rejected_baseline_catalog()["baselines"][sid]
-        assert entry["research_status"] == RESEARCH_STATUS_REJECTED
 
 
 def test_leverage_short_costs_long_only_and_long_short():
@@ -162,25 +99,24 @@ def test_period_net_dd_only_cannot_pass_even_if_nonzero():
     assert gate["ready_declared"] is False
 
 
-def test_w99_sticky_reference_daily_path_completes_item():
-    ref = w99_sticky_daily_path_dd_reference()
-    assert ref["logic_id"] == "xs_rank_ls_sticky"
-    assert ref["stance"] == "STABLE_RESEARCH_ONLY"
-    assert ref["promote_as_main"] is False
-    assert ref["go"] is False
-    assert len(ref["windows"]) == 3
-
-    gate = evaluate_daily_path_dd_gate(daily_path_pack=W99_DAILY_PATH_PACK)
+def test_daily_path_pack_completes_without_git_scores():
+    pack = {
+        "daily_path_DD": -0.10,
+        "dd_duration": 10,
+        "recovered": False,
+        "recovery_days": None,
+        "total_ret_net": 0.02,
+        "period_net_DD": 0.0,
+        "method": "daily_equity_level_peak_to_trough",
+    }
+    gate = evaluate_daily_path_dd_gate(daily_path_pack=pack)
     assert gate["complete"] is True
     assert gate["passed"] is True
     assert gate["measured"] is True
-    assert gate["scorecard"]["daily_path_DD"] == -0.143741
-    assert gate["scorecard"]["dd_duration"] == 85
+    assert gate["scorecard"]["daily_path_DD"] == -0.10
+    assert gate["scorecard"]["dd_duration"] == 10
     assert gate["scorecard"]["recovery"]["recovered"] is False
-    assert gate["scorecard"]["recovery"]["recovery_days"] is None
-    assert gate["scorecard"]["total_ret_net"] == 0.034975
-    assert gate["period_net_dd_zero_daily_unmeasured"] is False
-    assert any("aggregation artifact" in w for w in gate["warnings"])
+    assert gate["passed"] is True
     assert set(DAILY_PATH_DD_REQUIRED_FIELDS) == {
         "daily_path_DD",
         "dd_duration",

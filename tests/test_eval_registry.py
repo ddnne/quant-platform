@@ -197,7 +197,7 @@ def test_always_on_occupancy_is_not_candidate(
     assert summary["n_candidate_logics"] == 0
 
 
-def test_mechanical_baskets_are_four_valid_defs() -> None:
+def test_mechanical_baskets_are_valid_defs() -> None:
     from research.combo_basket_catalog import (
         HISTORICAL_BASKET_RULES,
         RETIRED_BASKET_RULES,
@@ -598,19 +598,6 @@ def test_classify_sleeves_three_n_dilutes_at_100() -> None:
     assert by["basket_theme_fund"]["class"] != "stable"
 
 
-def test_compare_headn_vs_liq_does_not_pass() -> None:
-    from research.combo_basket_compare import compare_headn_vs_liq
-
-    head = _fund_flow((3, 3), (3, 3), job_id="eval-cf-dp-baskets100-20260822a")
-    liq = _fund_flow((4, 2), (4, 2), job_id="eval-cf-dp-baskets-liq100-20260822b")
-    out = compare_headn_vs_liq(head, liq)
-    assert out["version"] == "composition-compare/v1"
-    assert out["not_a_pass"] is True
-    assert out["go"] is False
-    assert out["liq_print_is_not_stable"] is True
-    assert "basket_theme_fund" in out["liq_majority_better"]
-
-
 def test_compare_mid_vs_liq_does_not_pass() -> None:
     from research.combo_basket_compare import compare_mid_vs_liq
 
@@ -643,12 +630,11 @@ def test_combo_basket_blend_is_equal_weight() -> None:
         occupancy_in_candidate_band,
     )
     from research.combo_basket_catalog import (
-        DEFAULT_CANDIDATE_BASKET,
+        HISTORICAL_HEAD4_MEMBERS,
         validate_basket_members,
     )
 
-    assert len(DEFAULT_CANDIDATE_BASKET) >= 2
-    assert len(DEFAULT_CANDIDATE_BASKET) <= 5
+    assert 2 <= len(HISTORICAL_HEAD4_MEMBERS) <= 5
     assert validate_basket_members(["a"]) == ["need_at_least_2_members"]
     cal = validate_basket_members(
         ["event_skip_monday_uncrowded", "event_ta_up_uncrowded"]
