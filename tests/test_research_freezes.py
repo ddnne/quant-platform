@@ -314,6 +314,18 @@ def test_classify_occupancy_pair_bands() -> None:
     assert pack["by_band"]["material"] == ["b"]
     assert pack["by_band"]["thin_sleeve_exclude"] == ["c"]
     assert pack["by_band"]["unclassified"] == ["d"]
+    from research.occupancy_audit import occupancy_recorded_drift
+
+    drift = occupancy_recorded_drift(
+        {
+            "mid_n_explore": {"a": 0.00, "b": 0.30},
+            "liq_large": {"a": 0.01, "b": 0.31},
+        },
+        ["a", "b"],
+    )
+    assert drift["go"] is False
+    assert drift["do_not_silent_unpark"] is True
+    assert "a" in drift["empty_not_recorded"]
 
 
 def test_near_empty_batch_guard_and_park_sparse_cover() -> None:

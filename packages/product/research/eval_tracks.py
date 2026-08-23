@@ -82,8 +82,8 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "why": (
             "recorded research/eval/job=eval-inventory-bias-20260824ai/ "
             "inventory_bias.json; assert_new_batch_cheap_pb_cap refuses "
-            "new batches at 20%; usable inventory 1029→1149; "
-            "eval-usable-inventory-20260824de not_a_pass"
+            "new batches at 20%; usable inventory 1149→1210; "
+            "eval-usable-inventory-20260824df not_a_pass"
         ),
         "not_a_pass": True,
         "go": False,
@@ -195,7 +195,7 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "tracks": BOTH_EVAL_TRACK_IDS,
         "entry": "research.cf_daily_path_job.run_both_track_sleeve_fanout",
         "why": (
-            "recorded eval-cf-dp-both-sleeves-20260824dd mid+liq 11 logics "
+            "recorded eval-cf-dp-both-sleeves-20260824df mid+liq 11 logics "
             "from usable inventory reconstitution; descriptive summary "
             "not_a_pass; do not narrate majority as stable"
         ),
@@ -234,8 +234,8 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "id": "adopt_occupancy_recorded",
         "track": EVAL_TRACK_LIQ_LARGE,
         "why": (
-            "eval-occupancy-audit-20260824de 120 new 3-ANDs both "
-            "tracks; 120 material 0 thin; propose-adopt event_ac_flat_pxd; not a pass"
+            "eval-occupancy-audit-20260824df 61 new 3-ANDs both "
+            "tracks; 61 material 0 thin; non-event 98%; not a pass"
         ),
         "not_a_pass": True,
         "go": False,

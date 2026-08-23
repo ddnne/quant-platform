@@ -129,7 +129,7 @@ async function runMassEval(
   req: MassEvalRequest,
 ): Promise<MassEvalJobResult> {
   const t0 = Date.now();
-  const version = env.MASS_EVAL_VERSION || "research-mass-eval/v128-24de-plus120";
+  const version = env.MASS_EVAL_VERSION || "research-mass-eval/v129-24df-plus61";
   const wave = env.MASS_EVAL_WAVE || "research-mass-eval";
   const mode = req.mode || "synthetic";
   const oneWay = req.one_way_cost ?? 0.001;
@@ -301,7 +301,7 @@ async function runDailyPath(
   req: MassEvalRequest,
 ): Promise<Record<string, unknown>> {
   const t0 = Date.now();
-  const version = env.MASS_EVAL_VERSION || "research-mass-eval/v128-24de-plus120";
+  const version = env.MASS_EVAL_VERSION || "research-mass-eval/v129-24df-plus61";
   const mode = req.mode || "r2_panels";
   const oneWay = req.one_way_cost ?? 0.001;
   const maxCodes = Math.max(2, Math.min(40, req.max_codes ?? 8));
@@ -385,7 +385,7 @@ export default {
       return json({
         ok: true,
         service: "quant-platform-research-mass-eval",
-        version: env.MASS_EVAL_VERSION || "research-mass-eval/v128-24de-plus120",
+        version: env.MASS_EVAL_VERSION || "research-mass-eval/v129-24df-plus61",
         wave: env.MASS_EVAL_WAVE || "research-mass-eval",
         has_structured_bucket: Boolean(env.STRUCTURED_BUCKET),
         has_d1: Boolean(env.DB),

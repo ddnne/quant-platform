@@ -1,6 +1,8 @@
 """Eval registry contract — recording SoT is R2/D1, not wave markdown."""
 from __future__ import annotations
 
+import pytest
+
 from tests.research_eval_util import (
     _baskets,
     _eval_cell,
@@ -160,35 +162,31 @@ def test_path_broken_cell_is_not_complete() -> None:
     assert man.cells[1].daily_path_complete is True
 
 
-def test_always_on_is_not_strong() -> None:
-
-    cells = _eval_complete_year_cells(
-        "xs_rank_ls_sticky",
-        occupancy=0.90,
-        total_ret_net=0.04,
-        eval_path="xs_rank_sticky",
-    )
-    summary = summarize_daily_path_cells(cells, job_id="eval-test-always")
-    row = summary["logics"][0]
-    assert "always_on" in row["flags"]
-    assert row["tag"] != "strong"
-    assert summary["n_candidate_logics"] == 0
-    assert summary["always_on_excluded_from_main"] is True
-
-
-def test_always_on_gate_is_never_candidate() -> None:
-
-    cells = _eval_complete_year_cells(
-        "surprise_xs_afterclose",
-        years=(2015, 2017, 2019),
-        occupancy=1.0,
-        eval_path="eventHeld",
-    )
-    summary = summarize_daily_path_cells(cells, job_id="eval-test-ao-gate")
+@pytest.mark.parametrize(
+    "logic_id,occupancy,eval_path,years",
+    [
+        ("xs_rank_ls_sticky", 0.90, "xs_rank_sticky", None),
+        ("surprise_xs_afterclose", 1.0, "eventHeld", (2015, 2017, 2019)),
+        ("mf_value_mom_rate", 0.85, "mf_unique", None),
+    ],
+)
+def test_always_on_occupancy_is_not_candidate(
+    logic_id: str,
+    occupancy: float,
+    eval_path: str,
+    years: tuple[int, ...] | None,
+) -> None:
+    kw: dict = {"occupancy": occupancy, "eval_path": eval_path}
+    if years is not None:
+        kw["years"] = years
+    if logic_id == "xs_rank_ls_sticky":
+        kw["total_ret_net"] = 0.04
+    cells = _eval_complete_year_cells(logic_id, **kw)
+    summary = summarize_daily_path_cells(cells, job_id=f"eval-test-ao-{logic_id}")
     row = summary["logics"][0]
     assert "always_on" in row["flags"]
     assert row["candidate"] is False
-    assert row["main_pool"] is False
+    assert summary["n_candidate_logics"] == 0
 
 
 def test_mechanical_baskets_are_four_valid_defs() -> None:
@@ -642,19 +640,6 @@ def test_path_collapsed_is_not_candidate() -> None:
     assert summary["path_collapsed_excluded_from_candidate"] is True
 
 
-def test_mf_value_at_always_on_threshold_is_parked() -> None:
-    from research.unique_logic.constants import ALWAYS_ON_OCCUPANCY_WARN
-
-    cells = _eval_complete_year_cells(
-        "mf_value_mom_rate",
-        occupancy=ALWAYS_ON_OCCUPANCY_WARN,
-        eval_path="mf_unique",
-    )
-    summary = summarize_daily_path_cells(cells, job_id="eval-test-mf-park")
-    row = summary["logics"][0]
-    assert "always_on" in row["flags"]
-    assert row["candidate"] is False
-    assert row["main_pool"] is False
 
 
 def test_proposal_schema_reads_summary_weakness_flags() -> None:

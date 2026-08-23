@@ -94,8 +94,8 @@ MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
         "primary": True,
         "members": (
             "event_positive_eps_uncrowded",
+            "surprise_xs_ac_peps_taup",
             "surprise_xs_uncrowded_afterclose",
-            "surprise_xs_peps_uncr",
             "event_ta_up_uncrowded",
         ),
     },
