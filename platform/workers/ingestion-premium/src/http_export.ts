@@ -3,17 +3,12 @@
  * DATA_EXPORT_TOKEN via X-Ingestion-Token; not ingest.
  */
 
+import { ingestionTokenMatches } from "./ingestion_token";
 import { requireNaturalKeysV2Ready } from "./natural_key_migration";
 
 export interface ExportEnv {
   DB: D1Database;
   DATA_EXPORT_TOKEN?: string;
-}
-
-function authorized(request: Request, expected: string | undefined): boolean {
-  if (!expected) return false;
-  const got = request.headers.get("X-Ingestion-Token") || "";
-  return got === expected;
 }
 
 function json(body: unknown, status = 200): Response {
@@ -26,7 +21,7 @@ export async function handleExportD1(
   if (request.method !== "GET") {
     return json({ error: "GET required" }, 405);
   }
-  if (!authorized(request, env.DATA_EXPORT_TOKEN)) {
+  if (!(await ingestionTokenMatches(request, env.DATA_EXPORT_TOKEN))) {
     return json({ error: "unauthorized" }, 401);
   }
   const url = new URL(request.url);
@@ -83,7 +78,7 @@ export async function handleExportChanges(
   if (request.method !== "GET") {
     return json({ error: "GET required" }, 405);
   }
-  if (!authorized(request, env.DATA_EXPORT_TOKEN)) {
+  if (!(await ingestionTokenMatches(request, env.DATA_EXPORT_TOKEN))) {
     return json({ error: "unauthorized" }, 401);
   }
   const url = new URL(request.url);

@@ -7,6 +7,7 @@
  * Source: GLM_ARCHIVE_FIX_OK (import adjusted to named export).
  */
 
+import { ingestionTokenMatches } from "./ingestion_token";
 import { sha256HexFromBytes } from "./sha256";
 import { r2DatasetSegment } from "./write_path_config";
 
@@ -26,8 +27,7 @@ export async function handleArchiveCold(
 
   const url = new URL(request.url);
 
-  const token = request.headers.get("X-Ingestion-Token");
-  if (!env.INGESTION_RUN_TOKEN || !token || token !== env.INGESTION_RUN_TOKEN) {
+  if (!(await ingestionTokenMatches(request, env.INGESTION_RUN_TOKEN))) {
     return Response.json({ error: "unauthorized" }, { status: 401 });
   }
 

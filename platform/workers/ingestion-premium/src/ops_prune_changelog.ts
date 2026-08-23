@@ -3,15 +3,11 @@
  * Does not touch receipts / coverage / raw retention.
  */
 
+import { ingestionTokenMatches } from "./ingestion_token";
+
 export interface PruneEnv {
   DB: D1Database;
   INGESTION_RUN_TOKEN?: string;
-}
-
-function authorized(request: Request, expected: string | undefined): boolean {
-  if (!expected) return false;
-  const header = request.headers.get("X-Ingestion-Token") || "";
-  return header === expected;
 }
 
 export async function handlePruneChangelog(
@@ -21,7 +17,7 @@ export async function handlePruneChangelog(
   if (request.method !== "POST") {
     return Response.json({ error: "POST required" }, { status: 405 });
   }
-  if (!authorized(request, env.INGESTION_RUN_TOKEN)) {
+  if (!(await ingestionTokenMatches(request, env.INGESTION_RUN_TOKEN))) {
     return Response.json({ error: "unauthorized" }, { status: 401 });
   }
 

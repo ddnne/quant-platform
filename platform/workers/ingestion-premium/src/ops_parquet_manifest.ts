@@ -4,17 +4,12 @@
  * machine-readable manifest that a later converter/Artifacts job can consume.
  */
 
+import { ingestionTokenMatches } from "./ingestion_token";
 import { sha256HexFromString } from "./sha256";
 
 export interface ParquetManifestEnv {
   STRUCTURED_BUCKET: R2Bucket;
   INGESTION_RUN_TOKEN?: string;
-}
-
-function authorized(request: Request, expected: string | undefined): boolean {
-  if (!expected) return false;
-  const header = request.headers.get("X-Ingestion-Token") || "";
-  return header === expected;
 }
 
 export async function handleParquetManifest(
@@ -24,7 +19,7 @@ export async function handleParquetManifest(
   if (request.method !== "POST") {
     return Response.json({ error: "POST required" }, { status: 405 });
   }
-  if (!authorized(request, env.INGESTION_RUN_TOKEN)) {
+  if (!(await ingestionTokenMatches(request, env.INGESTION_RUN_TOKEN))) {
     return Response.json({ error: "unauthorized" }, { status: 401 });
   }
   const url = new URL(request.url);
