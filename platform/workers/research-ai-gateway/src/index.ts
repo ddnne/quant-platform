@@ -1,6 +1,7 @@
 /// <reference types="@cloudflare/workers-types" />
 
 import { BudgetLedger } from "./budget_do";
+import { json } from "./http_json";
 import {
   decodeGatewayRequest,
   decodeTypedArtifact,
@@ -44,16 +45,6 @@ export async function authorized(request: Request, env: GatewayEnv): Promise<boo
   const got = request.headers.get("X-Gateway-Token") || "";
   if (!got) return false;
   return tokenMatches(got, expected);
-}
-
-function json(data: unknown, status = 200): Response {
-  return new Response(JSON.stringify(data), {
-    status,
-    headers: {
-      "content-type": "application/json; charset=utf-8",
-      "cache-control": "no-store",
-    },
-  });
 }
 
 async function sha256Hex(text: string): Promise<string> {
