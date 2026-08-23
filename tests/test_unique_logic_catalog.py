@@ -1,4 +1,4 @@
-"""Catalog YAML is the unique_logic declaration path (not run_w copies)."""
+"""Catalog compiled map is the unique_logic declaration path (not run_w copies)."""
 from __future__ import annotations
 
 from research.unique_logic.catalog import load_catalog_specs, parse_catalog_yaml
@@ -159,24 +159,36 @@ def test_combo_thesis_records_are_compact_table_rows() -> None:
     path = Path("/tmp/combo_thesis_records_test.jsonl")
     dump = write_combo_thesis_jsonl(path)
     assert dump["n"] == len(rows)
-    assert dump["yaml_remains_sot"] is True
+    assert "yaml_remains_sot" not in dump
     assert dump["go"] is False
     first = json.loads(path.read_text(encoding="utf-8").splitlines()[0])
     assert first["logic_id"] and first["go"] is False
 
 
 def test_catalog_index_is_one_pass_lookup() -> None:
+    from pathlib import Path
+
+    from research.eval_flags import CATALOG_YAML_COUNT_AT_STOP
     from research.unique_logic.catalog import catalog_index, catalog_spec
 
     idx = catalog_index()
-    assert idx["n"] >= 1
+    freeze = int(CATALOG_YAML_COUNT_AT_STOP)
+    assert idx["n"] == idx["n_compiled"] == freeze == 2254
+    assert idx["compiled_ids_match"] is True
+    assert idx["yaml_still_present"] is False
     assert idx["n_combo"] >= 1
     assert idx["go"] is False
     assert idx["combo_kind_counts"].get("event", 0) >= 1
     assert idx["combo_kind_counts"].get("surprise_xs", 0) >= 1
     lid = idx["combo_ids"][0]
-    assert catalog_spec(lid) is not None
-    assert catalog_spec(lid)["logic_id"] == lid
+    spec = catalog_spec(lid)
+    assert spec is not None
+    assert spec["logic_id"] == lid
+    assert spec.get("compiled") is True
+    assert spec.get("catalog_present") is False
+    path = Path(str(spec.get("catalog_path") or ""))
+    assert path.stem == lid
+    assert path.is_file() is False
     assert catalog_spec("not_a_real_logic_id_zzz") is None
 
 

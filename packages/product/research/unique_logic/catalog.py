@@ -1,4 +1,4 @@
-"""Load unique_logic catalog (YAML if present, else compiled migration.jsonl)."""
+"""Load unique_logic catalog. Compiled map is load SoT; YAML overlay if present."""
 from __future__ import annotations
 
 import json
@@ -127,6 +127,7 @@ def _load_catalog_specs_cached(root_key: str) -> tuple[dict[str, Any], ...]:
         spec = parse_catalog_yaml(path.read_text(encoding="utf-8"))
         spec["catalog_path"] = str(path)
         spec["catalog"] = True
+        spec["catalog_present"] = True
         if spec.get("logic_id"):
             specs.append(spec)
     if specs:
@@ -148,7 +149,7 @@ def _catalog_by_id_cached(root_key: str) -> dict[str, dict[str, Any]]:
 
 
 def catalog_index(*, root: Path | None = None) -> dict[str, Any]:
-    """One-pass catalog lookup. Compiled map is load SoT when YAML is absent."""
+    """One-pass catalog lookup. Compiled map is load SoT."""
     root_key = str((root or repo_root()).resolve())
     by_id = _catalog_by_id_cached(root_key)
     records = combo_thesis_records(root=root)
@@ -157,14 +158,16 @@ def catalog_index(*, root: Path | None = None) -> dict[str, Any]:
         kind = str(rec.get("kind") or "")
         kinds[kind] = kinds.get(kind, 0) + 1
     compiled = compiled_migration_ids(root=root)
+    yaml_still_present = any(catalog_dir(root=root).glob("*.yaml"))
     return {
         "by_id": by_id,
-        "n": len(by_id),
+        "n": len(by_id) if yaml_still_present else len(compiled),
         "n_combo": len(records),
         "combo_ids": tuple(str(r["logic_id"]) for r in records),
         "combo_kind_counts": kinds,
         "n_compiled": len(compiled),
         "compiled_ids_match": compiled == set(by_id),
+        "yaml_still_present": yaml_still_present,
         "go": False,
         "not_a_pass": True,
     }
@@ -175,7 +178,7 @@ def catalog_spec(logic_id: str, *, root: Path | None = None) -> dict[str, Any] |
 
 
 def load_compiled_specs(*, root: Path | None = None) -> list[dict[str, Any]]:
-    """Closed-DSL rows from the compiler map. Load SoT when YAML is absent."""
+    """Closed-DSL rows from the compiler map. Load SoT."""
     path = (root or repo_root()) / "specs" / "research_catalog" / "migration.jsonl"
     specs: list[dict[str, Any]] = []
     for line in path.read_text(encoding="utf-8").splitlines():
@@ -186,6 +189,7 @@ def load_compiled_specs(*, root: Path | None = None) -> list[dict[str, Any]]:
         if not lid:
             continue
         params = row.get("params") if isinstance(row.get("params"), Mapping) else {}
+        catalog_path = catalog_dir(root=root) / f"{lid}.yaml"
         specs.append(
             {
                 "logic_id": lid,
@@ -200,7 +204,8 @@ def load_compiled_specs(*, root: Path | None = None) -> list[dict[str, Any]]:
                 "datasets": row.get("datasets"),
                 "catalog": True,
                 "compiled": True,
-                "catalog_path": str(catalog_dir(root=root) / f"{lid}.yaml"),
+                "catalog_present": False,
+                "catalog_path": str(catalog_path),
             }
         )
     return specs
@@ -257,7 +262,7 @@ def spec_gates(spec: Mapping[str, Any] | None) -> list[str]:
 
 
 def combo_row_from_yaml(spec: Mapping[str, Any]) -> dict[str, Any]:
-    """Map catalog YAML to ``event_combos._combo_row`` keys. Missing gates/cs_gate/side fail closed."""
+    """Map a catalog spec to ``event_combos._combo_row`` keys. Missing gates/cs_gate/side fail closed."""
     from research.unique_logic.event_combos import _combo_row
 
     lid = str(spec.get("logic_id") or "")
@@ -299,7 +304,7 @@ combo_row_from_spec = combo_row_from_yaml
 
 @lru_cache(maxsize=8)
 def _yaml_combo_rows_cached(root_key: str) -> tuple[dict[str, Any], ...]:
-    """Runtime combo rows from catalog specs (compiled when YAML is absent)."""
+    """Runtime combo rows from catalog specs (compiled load SoT)."""
     return tuple(
         combo_row_from_yaml(spec)
         for spec in _load_catalog_specs_cached(root_key)
@@ -341,7 +346,7 @@ def _combo_thesis_records_cached(root_key: str) -> tuple[dict[str, Any], ...]:
 
 
 def combo_thesis_records(*, root: Path | None = None) -> list[dict[str, Any]]:
-    """Compact combo table rows from catalog specs (compiled when YAML is absent)."""
+    """Compact combo table rows from catalog specs (compiled load SoT)."""
     return list(
         _combo_thesis_records_cached(str((root or repo_root()).resolve()))
     )
@@ -386,12 +391,11 @@ def write_combo_thesis_jsonl(
         "n": len(rows),
         "go": False,
         "not_a_pass": True,
-        "yaml_remains_sot": True,
     }
 
 
 def unique_row_from_yaml(spec: Mapping[str, Any]) -> dict[str, Any]:
-    """Map catalog YAML to an original-unique runtime row. Does not GO."""
+    """Map a catalog spec to an original-unique runtime row. Does not GO."""
     lid = str(spec.get("logic_id") or "")
     if not lid:
         raise ValueError("YAML unique row missing logic_id")
@@ -418,7 +422,7 @@ def yaml_unique_rows(
     logic_ids: Sequence[str] | None = None,
     root: Path | None = None,
 ) -> list[dict[str, Any]]:
-    """Original unique runtime rows from catalog YAML. Filter by evaluator/logic_ids; combo excluded unless requested."""
+    """Original unique runtime rows from catalog specs. Filter by evaluator/logic_ids; combo excluded unless requested."""
     want = list(logic_ids) if logic_ids is not None else None
     want_set = set(want) if want is not None else None
     by_id: dict[str, dict[str, Any]] = {}
@@ -461,7 +465,7 @@ _EVALUATOR_MODULE_TO_FAMILY: dict[str, str] = {
 
 
 def _unique_family_key(spec: Mapping[str, Any]) -> str:
-    """Family for a non-combo YAML: explicit ``family:`` else evaluator module."""
+    """Family for a non-combo catalog row: explicit ``family:`` else evaluator module."""
     lid = str(spec.get("logic_id") or "")
     explicit = spec.get("family")
     if explicit not in (None, ""):

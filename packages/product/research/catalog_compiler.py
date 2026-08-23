@@ -2,7 +2,7 @@
 
 Owns ``catalog_ids.ts`` emit. Python ``unique_logic.constants`` remain
 policy SoT for Worker ID arrays. Does not generate or exec Python.
-Does not add YAML. Compiled map is load SoT when yaml n=0.
+Does not add YAML. Compiled map is load SoT.
 """
 from __future__ import annotations
 
@@ -260,7 +260,7 @@ def assert_compiled_logic_id_sets(*, root: Path | None = None) -> dict[str, set[
 
 
 def assert_catalog_ids_emit_frozen(*, root: Path | None = None) -> dict[str, Any]:
-    """Compiler digest n must match freeze. YAML must not drift while stopped."""
+    """Compiler digest n must match freeze. n_logic_ids is compiled n, not yaml glob."""
     from research.eval_flags import CATALOG_AND_PLUS_N_STOPPED, CATALOG_YAML_COUNT_AT_STOP
     from research.occupancy_guards import CatalogAndPlusNStoppedError
 
@@ -289,7 +289,7 @@ def assert_catalog_ids_emit_frozen(*, root: Path | None = None) -> dict[str, Any
             "compiler digest must match n=2254 while CATALOG_AND_PLUS_N_STOPPED"
         )
     sets = assert_compiled_logic_id_sets(root=root)
-    out["n_logic_ids"] = len(sets["yaml"])
+    out["n_logic_ids"] = len(sets["migration"])
     return out
 
 

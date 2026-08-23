@@ -122,9 +122,11 @@ def test_catalog_ids_emit_owned_by_compiler() -> None:
     assert freeze["ok"] is True
     assert freeze["go"] is False
     assert CATALOG_AND_PLUS_N_STOPPED is True
-    assert freeze["n_digest"] == freeze["freeze"] == 2254
+    assert freeze["n_digest"] == freeze["freeze"] == freeze["n_logic_ids"] == 2254
     if freeze["n_yaml"] > 0:
         assert freeze["n_yaml"] == 2254
+    else:
+        assert freeze["n_yaml"] == 0
     path = catalog_ids_ts_path()
     generated = catalog_ids_ts_source()
     assert path.read_text(encoding="utf-8") == generated
