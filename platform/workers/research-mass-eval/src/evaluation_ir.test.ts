@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -6,21 +6,30 @@ import { jobCandidateGrade } from "./candidate";
 import {
   CANONICAL_FIELDS,
   EVALUATION_IR_VERSION,
+  GOLDEN_REL,
   decodeEvaluationIR,
   encodeEvaluationIR,
   jobCandidateGrade as irGrade,
   type EvaluationIREncodeArgs,
 } from "./evaluation_ir";
 
-const REPO_ROOT = join(
-  dirname(fileURLToPath(import.meta.url)),
-  "../../../..",
-);
-const GOLDEN_PATH = join(REPO_ROOT, "specs/evaluation_ir/golden.jsonl");
+/** Walk up from src/ until repo specs/evaluation_ir/golden.jsonl. */
+function goldenPathFromSrc(srcDir: string): string {
+  let dir = srcDir;
+  for (let i = 0; i < 8; i++) {
+    const candidate = join(dir, GOLDEN_REL);
+    if (existsSync(candidate)) return candidate;
+    dir = join(dir, "..");
+  }
+  throw new Error(`evaluation-ir golden not found walking up from ${srcDir}`);
+}
+
+const SRC_DIR = dirname(fileURLToPath(import.meta.url));
+const GOLDEN_PATH = goldenPathFromSrc(SRC_DIR);
 
 type GoldenRow = {
   id: string;
-  op: "roundtrip" | "decode";
+  op: string;
   args?: EvaluationIREncodeArgs;
   payload?: Record<string, unknown>;
   expect?: { candidate: boolean; failure_reason: string | null };
@@ -33,6 +42,24 @@ function loadGolden(): GoldenRow[] {
     .map((line) => line.trim())
     .filter((line) => line.length > 0)
     .map((line) => JSON.parse(line) as GoldenRow);
+}
+
+const GOLDEN_ROWS = loadGolden();
+
+function countsGrade(payload: {
+  n_expected: number;
+  n_cells: number;
+  n_complete: number;
+  n_collapsed?: number;
+  n_broken?: number;
+}): boolean {
+  return jobCandidateGrade({
+    n_expected: payload.n_expected,
+    n_cells: payload.n_cells,
+    n_complete: payload.n_complete,
+    n_collapsed: payload.n_collapsed,
+    n_broken: payload.n_broken,
+  });
 }
 
 describe("Evaluation IR golden vectors", () => {
@@ -172,64 +199,55 @@ describe("Evaluation IR golden vectors", () => {
     expect(src).toMatch(/screen_kind: "period_net"[\s\S]*candidate_grade: false/);
   });
 
-  it("shared golden vectors match jobCandidateGrade and round-trip", () => {
-    const rows = loadGolden();
-    expect(rows.length).toBeGreaterThanOrEqual(8);
-    const ids = new Set(rows.map((row) => row.id));
-    for (const required of [
-      "n_expected_zero",
-      "n_cells_mismatch",
-      "collapsed",
-      "broken",
-      "smuggled_candidate_partial",
-    ]) {
-      expect(ids.has(required), required).toBe(true);
+  it("loads every encoder-owned golden.jsonl row from src/", () => {
+    expect(GOLDEN_PATH.endsWith(GOLDEN_REL)).toBe(true);
+    expect(GOLDEN_ROWS.length).toBeGreaterThan(0);
+    const ids = GOLDEN_ROWS.map((row) => row.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(ids).toContain("smuggled_candidate_partial");
+    expect(
+      GOLDEN_ROWS.every((row) => row.op === "roundtrip" || row.op === "decode"),
+    ).toBe(true);
+  });
+
+  it.each(GOLDEN_ROWS)("golden $id ($op) encode/decode match", (row) => {
+    if (row.op === "decode") {
+      expect(row.expect_error, row.id).toBeTruthy();
+      expect(() => decodeEvaluationIR(row.payload)).toThrow(
+        new RegExp(row.expect_error as string),
+      );
+      const payload = row.payload as {
+        candidate?: boolean;
+        n_expected: number;
+        n_cells: number;
+        n_complete: number;
+        n_collapsed?: number;
+        n_broken?: number;
+      };
+      if (
+        payload.candidate === true &&
+        countsGrade(payload) === false
+      ) {
+        expect(row.expect_error).toBe("job_candidate_grade");
+      }
+      return;
     }
-    for (const row of rows) {
-      if (row.op === "decode") {
-        expect(row.expect_error, row.id).toBeTruthy();
-        expect(() => decodeEvaluationIR(row.payload)).toThrow(
-          new RegExp(row.expect_error as string),
-        );
-        const payload = row.payload as {
-          candidate?: boolean;
-          n_expected: number;
-          n_cells: number;
-          n_complete: number;
-          n_collapsed?: number;
-          n_broken?: number;
-        };
-        const grade = jobCandidateGrade({
-          n_expected: payload.n_expected,
-          n_cells: payload.n_cells,
-          n_complete: payload.n_complete,
-          n_collapsed: payload.n_collapsed,
-          n_broken: payload.n_broken,
-        });
-        if (payload.candidate === true && grade === false) {
-          expect(row.expect_error).toBe("job_candidate_grade");
-        }
-        continue;
-      }
-      const encoded = encodeEvaluationIR(row.args as EvaluationIREncodeArgs);
-      const grade = jobCandidateGrade({
-        n_expected: encoded.n_expected,
-        n_cells: encoded.n_cells,
-        n_complete: encoded.n_complete,
-        n_collapsed: encoded.n_collapsed,
-        n_broken: encoded.n_broken,
-      });
-      expect(encoded.candidate, row.id).toBe(grade);
-      expect(encoded.candidate, row.id).toBe(row.expect?.candidate);
-      expect(encoded.failure_reason, row.id).toBe(row.expect?.failure_reason);
-      const decoded = decodeEvaluationIR(encoded);
-      expect(decoded.candidate, row.id).toBe(grade);
-      expect(decoded.failure_reason, row.id).toBe(row.expect?.failure_reason);
-      if (grade === false) {
-        expect(() =>
-          decodeEvaluationIR({ ...encoded, candidate: true }),
-        ).toThrow(/job_candidate_grade/);
-      }
+    if (row.op !== "roundtrip") {
+      throw new Error(`unknown golden op ${String(row.op)} (${row.id})`);
+    }
+    const encoded = encodeEvaluationIR(row.args as EvaluationIREncodeArgs);
+    const grade = countsGrade(encoded);
+    expect(encoded.candidate, row.id).toBe(grade);
+    expect(encoded.candidate, row.id).toBe(row.expect?.candidate);
+    expect(encoded.failure_reason, row.id).toBe(row.expect?.failure_reason);
+    const decoded = decodeEvaluationIR(encoded);
+    expect(decoded.candidate, row.id).toBe(grade);
+    expect(decoded.failure_reason, row.id).toBe(row.expect?.failure_reason);
+    expect(decoded.toDict().candidate, row.id).toBe(grade);
+    if (grade === false) {
+      expect(() =>
+        decodeEvaluationIR({ ...encoded, candidate: true }),
+      ).toThrow(/job_candidate_grade/);
     }
   });
 });

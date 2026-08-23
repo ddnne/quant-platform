@@ -4,7 +4,9 @@ Candidate is not a free boolean and is not a second Python/TS policy copy.
 Encode always calls jobCandidateGrade. Decode rejects unknown fields
 and re-grades; a smuggled candidate:true cannot pass a partial job.
 
-Shared golden: specs/evaluation_ir/golden.jsonl (Python and Worker).
+Shared golden: specs/evaluation_ir/golden.jsonl is emitted by Python
+emit_evaluation_ir_golden / emit_golden_vector (encoder-owned).
+Worker tests consume that file; jobCandidateGrade is the only TS grade.
 */
 
 import { jobCandidateGrade } from "./candidate";
@@ -12,6 +14,9 @@ import { jobCandidateGrade } from "./candidate";
 export { jobCandidateGrade };
 
 export const EVALUATION_IR_VERSION = "evaluation-ir/v1";
+
+/** Repo-relative path. Emitted by Python emit_evaluation_ir_golden. */
+export const GOLDEN_REL = "specs/evaluation_ir/golden.jsonl";
 
 export const CANONICAL_FIELDS = [
   "return",
