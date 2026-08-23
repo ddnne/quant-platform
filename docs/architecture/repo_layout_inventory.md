@@ -198,7 +198,6 @@ Counts = number of `from X …` / `import X` statements under `tests/**/*.py` (s
 |--------|-----------|---------------------------|
 | `backfill_status_report.py` | A | `data_contracts`, `storage`; default `data/structured` |
 
-| `evaluate_collection_sla.py` | A | `storage`, `data_contracts` |
 | `export_ops_projection.py` | A | `paper_runtime`; publisher string |
 | `generate_governed_js.py` | A | writes `platform/workers/quant-ops-mcp/src/governed.js` |
 | `issue_signed_receipts_for_segments.py` | A | `storage` |
@@ -208,7 +207,6 @@ Counts = number of `from X …` / `import X` statements under `tests/**/*.py` (s
 | `parse_jsda_from_r2_mirror.py` | A | `ingestion.jsda`; default `data/raw`, `data/structured` |
 | `publish_ops_projection.py` | A | **`from scripts.export_ops_projection`**; wrangler cwd `quant-ops-mcp` or ROOT; config points at premium `wrangler.toml` |
 | `rebuild_paper_index.py` | A | `strategies.paper`; default `data/paper` |
-| `rebuild_receipts_from_raw.py` | A | `data_contracts`, `storage`; `data/raw` |
 | `refresh_coverage_ledger.py` | A | `cf_platform.ingest_premium.coverage` |
 | `report_d1_local_sync_lag.py` | E | docs/default DB strings only |
 | `restore_local_complete_from_receipt.py` | A | storage/receipts |

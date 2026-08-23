@@ -220,6 +220,8 @@ def test_near_empty_park_is_not_countable_or_basket_material() -> None:
     assert parked == NEAR_EMPTY_PARK_IDS
     assert parked
     assert "surprise_xs_fy_end" in parked
+    assert "event_roe_low_fade" in parked
+    assert "cs_roe_low" in parked
     countable = countable_thesis_ids()
     for lid in parked:
         spec = catalog_spec(lid)
@@ -235,6 +237,8 @@ def test_near_empty_park_is_not_countable_or_basket_material() -> None:
 
     assert THIN_SLEEVE_EXCLUDE_IDS
     assert "surprise_xs_pb_rising_crowded" in THIN_SLEEVE_EXCLUDE_IDS
+    assert "event_margin_up_steep_curve" in THIN_SLEEVE_EXCLUDE_IDS
+    assert "event_liq_high_steep_curve" in THIN_SLEEVE_EXCLUDE_IDS
     assert THIN_SLEEVE_EXCLUDE_IDS.isdisjoint(NEAR_EMPTY_PARK_IDS)
     assert THIN_SLEEVE_EXCLUDE_IDS.isdisjoint(sleeve_durability_logic_ids())
     thin_reasons = validate_basket_members(
@@ -274,6 +278,33 @@ def test_usable_inventory_excludes_thin_park_and_unclassified() -> None:
     assert park not in pack["usable_ids"]
     assert pack["n_usable"] >= 1
     assert "event" in pack["family"]
+
+
+def test_classify_occupancy_pair_bands() -> None:
+    from research.occupancy_audit import classify_occupancy_maps
+    from research.unique_logic.worker_bodies import classify_occupancy_pair
+
+    assert classify_occupancy_pair(0.00, 0.02) == "near_empty_park"
+    assert classify_occupancy_pair(0.0496, 0.0670) == "thin_sleeve_exclude"
+    assert classify_occupancy_pair(0.08, 0.11) == "thin_sleeve_exclude"
+    assert classify_occupancy_pair(0.1164, 0.1206) == "thin_sleeve_exclude"
+    assert classify_occupancy_pair(0.30, 0.31) == "material"
+    assert classify_occupancy_pair(0.90, 0.91) == "always_on_park"
+    assert classify_occupancy_pair(0.40, 0.90) == "mixed_always"
+    assert classify_occupancy_pair(0.30, None) == "unclassified"
+    assert classify_occupancy_pair(None, 0.30) == "unclassified"
+    pack = classify_occupancy_maps(
+        {
+            "mid_n_explore": {"a": 0.00, "b": 0.30, "c": 0.10},
+            "liq_large": {"a": 0.01, "b": 0.31, "c": 0.11},
+        },
+        ["a", "b", "c", "d"],
+    )
+    assert pack["go"] is False
+    assert pack["by_band"]["near_empty_park"] == ["a"]
+    assert pack["by_band"]["material"] == ["b"]
+    assert pack["by_band"]["thin_sleeve_exclude"] == ["c"]
+    assert pack["by_band"]["unclassified"] == ["d"]
 
 
 def test_near_empty_batch_guard_and_park_sparse_cover() -> None:
@@ -368,6 +399,9 @@ def test_always_on_batch_guard_and_empty_park() -> None:
     )
 
     assert always_on_occupancy_park() == ALWAYS_ON_PARK_IDS
+    assert "cs_ta_up" in ALWAYS_ON_PARK_IDS
+    assert "cs_ta_down" in ALWAYS_ON_PARK_IDS
+    assert "cs_np_positive" in ALWAYS_ON_PARK_IDS
     assert "always_on_parked" in CANDIDATE_POLICY["exclude"]
     assert ALWAYS_ON_PARK_IDS.isdisjoint(countable_thesis_ids())
     ok = assert_new_batch_occupancy_not_always_on(

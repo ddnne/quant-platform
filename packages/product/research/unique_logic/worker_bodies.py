@@ -434,6 +434,36 @@ def assert_new_batch_occupancy_in_material_band(
     }
 
 
+def classify_occupancy_pair(
+    mid: float | None,
+    liq: float | None,
+    *,
+    near_empty: float = NEAR_EMPTY_OCCUPANCY,
+    usable_min: float = USABLE_OCCUPANCY_MIN,
+    always_on: float = ALWAYS_ON_OCCUPANCY_WARN,
+) -> str:
+    """Both-track occupancy band. Does not GO.
+
+    empty+empty → near_empty_park; always+always → always_on_park;
+    material+material → material; mixed always → mixed_always;
+    mixed empty/thin (max>near_empty), both-thin, mixed thin/material,
+    mixed empty/material → thin_sleeve_exclude; missing track → unclassified.
+    """
+    if mid is None or liq is None:
+        return "unclassified"
+    lo = min(float(mid), float(liq))
+    hi = max(float(mid), float(liq))
+    if hi <= float(near_empty):
+        return "near_empty_park"
+    if lo >= float(always_on):
+        return "always_on_park"
+    if lo > float(usable_min) and hi < float(always_on):
+        return "material"
+    if hi >= float(always_on):
+        return "mixed_always"
+    return "thin_sleeve_exclude"
+
+
 def usable_family_of(logic_id: str) -> str:
     """Family tag for usable inventory. Not a pass."""
     lid = str(logic_id or "")
@@ -581,6 +611,7 @@ __all__ = [
     "countable_inventory_bias",
     "usable_inventory",
     "usable_family_of",
+    "classify_occupancy_pair",
     "countable_thesis_ids",
     "mean_occupancy_by_logic",
     "near_empty_occupancy_park",

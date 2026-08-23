@@ -238,6 +238,19 @@ NEAR_EMPTY_PARK_IDS: frozenset[str] = frozenset(
         "fy_end_cs_fade",
         "fy_start_cs_follow",
         "surprise_xs_fy_end",
+        "cs_overnight_p10_steep",
+        "cs_roe_high",
+        "cs_roe_low",
+        "event_margin_down_steep",
+        "event_margin_down_tight_steep_curve",
+        "event_rich_iv_margin_down",
+        "event_roe_low_afterclose_fade",
+        "event_roe_low_crowded_fade",
+        "event_roe_low_fade",
+        "event_roe_low_liq_high_fade",
+        "event_roe_low_tight_fade",
+        "event_steep_margin_up_liq",
+        "event_ta_down_margin_up_repo_afterclose",
     }
 )
 # Recorded mean occupancy ≥ ALWAYS_ON_OCCUPANCY_WARN. Not countable, not
@@ -248,6 +261,9 @@ ALWAYS_ON_PARK_IDS: frozenset[str] = frozenset(
         "cs_eqar_high",
         "cs_eqar_low_fade",
         "cs_eqar_rising",
+        "cs_ta_down",
+        "cs_ta_up",
+        "cs_np_positive",
     }
 )
 # Countable but too thin for mechanical sleeves (recorded both-track
@@ -344,6 +360,68 @@ THIN_SLEEVE_EXCLUDE_IDS: frozenset[str] = frozenset(
         "surprise_xs_nkyvol_np_neg",
         "surprise_xs_eqar_high_np_neg",
         "surprise_xs_pb_rising_crowded",
+        "event_eqar_rising_steep_curve",
+        "event_large_surprise_steep_curve",
+        "event_margin_down_easing",
+        "event_margin_down_easing_liq",
+        "event_margin_down_easing_ta_up",
+        "event_margin_down_on_impulse",
+        "event_margin_down_overnight_tight",
+        "event_margin_down_price_down",
+        "event_margin_uncrowded_steep",
+        "event_margin_up_eqar_low_nkyvol_fade",
+        "event_margin_up_overnight_tight",
+        "event_margin_up_repo3m_down",
+        "event_margin_up_repo3m_eqar_rising",
+        "event_margin_up_steep_curve",
+        "event_margin_up_ta_down_overnight_tight_fade",
+        "event_may_easing",
+        "event_may_results_follow",
+        "event_midmonth_steep",
+        "event_nkyvol_invert_margin_down",
+        "event_nkyvol_liq_div",
+        "event_nkyvol_liq_margin_down",
+        "event_nkyvol_margin_down",
+        "event_nkyvol_margin_up_ta_down",
+        "event_nkyvol_repo3m_eqar_high",
+        "event_nkyvol_tight_ta_down",
+        "event_nkyvol_uncrowded_div",
+        "event_np_negative_price_down_liq_fade",
+        "event_overnight_p10_uncrowded",
+        "event_overnight_tight_eqar_falling_steep_fade",
+        "event_pb_rising_margin_up_fade",
+        "event_pb_rising_tight_fade",
+        "event_repo3m_div",
+        "event_repo3m_down_np_neg",
+        "event_repo3m_margin_down",
+        "event_repo3m_margin_up_eqar_high",
+        "event_rich_iv_crowded_repo3m_fade",
+        "event_rich_iv_eqar_low_overnight_tight_fade",
+        "event_rich_iv_invert_sales_down_fade",
+        "event_rich_iv_tight_funding_fade",
+        "event_rich_iv_tight_ta_down_fade",
+        "event_steep_eqar_falling",
+        "event_ta_down_cheap_pb",
+        "surprise_xs_rich_iv_tight_on",
+        "event_liq_high_overnight_tight_margin_up",
+        "event_liq_high_steep_curve",
+        "event_ta_down_steep_curve",
+        "event_ta_down_tight_liq_fade",
+        "event_ta_up_cheap_iv",
+        "event_ta_up_margin_up_tight_premom",
+        "event_ta_up_np_neg_price_down_fade",
+        "event_tight_on_np_neg",
+        "event_tue_thu_steep",
+        "event_uncrowded_easing_div",
+        "event_uncrowded_eqar_rising_steep",
+        "event_uncrowded_overnight_p10",
+        "cs_margin_up_tight_fade",
+        "event_eqar_rising_cheap_pb_liq",
+        "event_flatten_tight_px_down",
+        "event_nkyvol_easing_div",
+        "event_pre_mom_steep_curve",
+        "event_price_down_nkyvol_repo3m_fade",
+        "event_px_down_p10",
     }
 )
 MF_VALUE_MOM_RATE_DELEGATES: bool = False
@@ -427,7 +505,7 @@ SPARSE_GATE_COMBOS: tuple[tuple[frozenset[str], str], ...] = (
 
 
 def _occupancy_parent_two_ands() -> tuple[tuple[frozenset[str], str], ...]:
-    """2-AND gate sets of thin/park YAML. Nested 3-ANDs cannot be sleeve material."""
+    """1-AND park and 2-AND thin/park YAML. Nested ANDs cannot be sleeve material."""
     from research.unique_logic.catalog import load_catalog_specs
 
     wanted = NEAR_EMPTY_PARK_IDS | THIN_SLEEVE_EXCLUDE_IDS
@@ -443,7 +521,10 @@ def _occupancy_parent_two_ands() -> tuple[tuple[frozenset[str], str], ...]:
             gset = frozenset(x.strip() for x in raw.split(",") if x.strip())
         else:
             gset = frozenset(str(x) for x in raw if str(x).strip())
-        if len(gset) != 2 or gset in seen:
+        n = len(gset)
+        if n == 1 and lid not in NEAR_EMPTY_PARK_IDS:
+            continue
+        if n not in (1, 2) or gset in seen:
             continue
         seen.add(gset)
         out.append((gset, f"occupancy_parent_{lid}"))

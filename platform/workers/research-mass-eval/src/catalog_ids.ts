@@ -258,6 +258,7 @@ export const CF_NEW_EVENT_THESIS_IDS = [
   "event_friday_uncrowded",
   "event_funding_tight_fade",
   "event_impulse_eps_down",
+  "event_invert_overnight_easing",
   "event_invert_pb_rising",
   "event_invert_px_down",
   "event_invert_px_down_roe_low",
