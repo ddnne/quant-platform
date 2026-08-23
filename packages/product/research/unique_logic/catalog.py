@@ -1,12 +1,26 @@
-"""Load unique_logic catalog. Compiled map is load SoT; YAML overlay if present."""
+"""Load unique_logic catalog. Compiled map is load SoT.
+
+YAML overlay replaces the compiled map only when QP_ALLOW_YAML_OVERLAY=1.
+"""
 from __future__ import annotations
 
 import json
+import os
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from qp_paths import repo_root
+
+YAML_OVERLAY_ENV = "QP_ALLOW_YAML_OVERLAY"
+
+
+class CatalogYamlOverlayError(ValueError):
+    """YAML present without QP_ALLOW_YAML_OVERLAY=1. Does not replace compiled map."""
+
+
+def yaml_overlay_allowed() -> bool:
+    return os.environ.get(YAML_OVERLAY_ENV, "").strip() == "1"
 
 
 def catalog_dir(*, root: Path | None = None) -> Path:
@@ -121,29 +135,45 @@ def parse_catalog_yaml(text: str) -> dict[str, Any]:
 
 
 @lru_cache(maxsize=8)
-def _load_catalog_specs_cached(root_key: str) -> tuple[dict[str, Any], ...]:
-    specs: list[dict[str, Any]] = []
-    for path in sorted(catalog_dir(root=Path(root_key)).glob("*.yaml")):
-        spec = parse_catalog_yaml(path.read_text(encoding="utf-8"))
-        spec["catalog_path"] = str(path)
-        spec["catalog"] = True
-        spec["catalog_present"] = True
-        if spec.get("logic_id"):
-            specs.append(spec)
-    if specs:
-        return tuple(specs)
-    return tuple(load_compiled_specs(root=Path(root_key)))
+def _load_catalog_specs_cached(
+    root_key: str, allow_overlay: bool
+) -> tuple[dict[str, Any], ...]:
+    root = Path(root_key)
+    yaml_paths = sorted(catalog_dir(root=root).glob("*.yaml"))
+    if yaml_paths and not allow_overlay:
+        raise CatalogYamlOverlayError(
+            f"catalog YAML overlay n={len(yaml_paths)} without {YAML_OVERLAY_ENV}=1; "
+            "refusing to replace compiled map"
+        )
+    if yaml_paths:
+        specs: list[dict[str, Any]] = []
+        for path in yaml_paths:
+            spec = parse_catalog_yaml(path.read_text(encoding="utf-8"))
+            spec["catalog_path"] = str(path)
+            spec["catalog"] = True
+            spec["catalog_present"] = True
+            if spec.get("logic_id"):
+                specs.append(spec)
+        if specs:
+            return tuple(specs)
+    return tuple(load_compiled_specs(root=root))
 
 
 def load_catalog_specs(*, root: Path | None = None) -> list[dict[str, Any]]:
-    return list(_load_catalog_specs_cached(str((root or repo_root()).resolve())))
+    return list(
+        _load_catalog_specs_cached(
+            str((root or repo_root()).resolve()), yaml_overlay_allowed()
+        )
+    )
 
 
 @lru_cache(maxsize=8)
-def _catalog_by_id_cached(root_key: str) -> dict[str, dict[str, Any]]:
+def _catalog_by_id_cached(
+    root_key: str, allow_overlay: bool
+) -> dict[str, dict[str, Any]]:
     return {
         str(spec["logic_id"]): spec
-        for spec in _load_catalog_specs_cached(root_key)
+        for spec in _load_catalog_specs_cached(root_key, allow_overlay)
         if spec.get("logic_id")
     }
 
@@ -151,7 +181,7 @@ def _catalog_by_id_cached(root_key: str) -> dict[str, dict[str, Any]]:
 def catalog_index(*, root: Path | None = None) -> dict[str, Any]:
     """One-pass catalog lookup. Compiled map is load SoT."""
     root_key = str((root or repo_root()).resolve())
-    by_id = _catalog_by_id_cached(root_key)
+    by_id = _catalog_by_id_cached(root_key, yaml_overlay_allowed())
     records = combo_thesis_records(root=root)
     kinds: dict[str, int] = {}
     for rec in records:
@@ -174,7 +204,9 @@ def catalog_index(*, root: Path | None = None) -> dict[str, Any]:
 
 
 def catalog_spec(logic_id: str, *, root: Path | None = None) -> dict[str, Any] | None:
-    return _catalog_by_id_cached(str((root or repo_root()).resolve())).get(str(logic_id))
+    return _catalog_by_id_cached(
+        str((root or repo_root()).resolve()), yaml_overlay_allowed()
+    ).get(str(logic_id))
 
 
 def load_compiled_specs(*, root: Path | None = None) -> list[dict[str, Any]]:
@@ -302,28 +334,36 @@ combo_row_from_spec = combo_row_from_yaml
 
 
 @lru_cache(maxsize=8)
-def _yaml_combo_rows_cached(root_key: str) -> tuple[dict[str, Any], ...]:
+def _yaml_combo_rows_cached(
+    root_key: str, allow_overlay: bool
+) -> tuple[dict[str, Any], ...]:
     """Runtime combo rows from catalog specs (compiled load SoT)."""
     return tuple(
         combo_row_from_yaml(spec)
-        for spec in _load_catalog_specs_cached(root_key)
+        for spec in _load_catalog_specs_cached(root_key, allow_overlay)
         if str(spec.get("evaluator") or "") == _COMBO_EVALUATOR
     )
 
 
 def yaml_combo_rows(*, root: Path | None = None) -> list[dict[str, Any]]:
     """Combo runtime rows from catalog specs. Filter by evaluator; do not import combo runtime."""
-    return list(_yaml_combo_rows_cached(str((root or repo_root()).resolve())))
+    return list(
+        _yaml_combo_rows_cached(
+            str((root or repo_root()).resolve()), yaml_overlay_allowed()
+        )
+    )
 
 
 combo_rows_from_catalog = yaml_combo_rows
 
 
 @lru_cache(maxsize=8)
-def _combo_thesis_records_cached(root_key: str) -> tuple[dict[str, Any], ...]:
+def _combo_thesis_records_cached(
+    root_key: str, allow_overlay: bool
+) -> tuple[dict[str, Any], ...]:
     """Compact combo table from catalog specs. Invalidate via cache_clear."""
     out: list[dict[str, Any]] = []
-    for spec in _load_catalog_specs_cached(root_key):
+    for spec in _load_catalog_specs_cached(root_key, allow_overlay):
         if str(spec.get("evaluator") or "") != _COMBO_EVALUATOR:
             continue
         params = spec.get("params") if isinstance(spec.get("params"), Mapping) else {}
@@ -347,7 +387,9 @@ def _combo_thesis_records_cached(root_key: str) -> tuple[dict[str, Any], ...]:
 def combo_thesis_records(*, root: Path | None = None) -> list[dict[str, Any]]:
     """Compact combo table rows from catalog specs (compiled load SoT)."""
     return list(
-        _combo_thesis_records_cached(str((root or repo_root()).resolve()))
+        _combo_thesis_records_cached(
+            str((root or repo_root()).resolve()), yaml_overlay_allowed()
+        )
     )
 
 

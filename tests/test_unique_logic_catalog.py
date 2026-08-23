@@ -192,6 +192,84 @@ def test_catalog_index_is_one_pass_lookup() -> None:
     assert catalog_spec("not_a_real_logic_id_zzz") is None
 
 
+def test_yaml_overlay_fail_closed_without_env(monkeypatch, tmp_path) -> None:
+    from research.unique_logic.catalog import (
+        YAML_OVERLAY_ENV,
+        CatalogYamlOverlayError,
+        clear_catalog_caches,
+        load_catalog_specs,
+        yaml_overlay_allowed,
+    )
+
+    logics = tmp_path / "specs" / "research_logics"
+    logics.mkdir(parents=True)
+    (logics / "stray_overlay.yaml").write_text(
+        "logic_id: stray_overlay\ngo: false\n",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv(YAML_OVERLAY_ENV, raising=False)
+    clear_catalog_caches()
+    assert yaml_overlay_allowed() is False
+    try:
+        load_catalog_specs(root=tmp_path)
+        raise AssertionError("stray YAML must fail closed without overlay env")
+    except CatalogYamlOverlayError as exc:
+        msg = str(exc)
+        assert YAML_OVERLAY_ENV in msg
+        assert "compiled" in msg
+    monkeypatch.setenv(YAML_OVERLAY_ENV, "true")
+    clear_catalog_caches()
+    try:
+        load_catalog_specs(root=tmp_path)
+        raise AssertionError("QP_ALLOW_YAML_OVERLAY must be 1")
+    except CatalogYamlOverlayError:
+        pass
+    finally:
+        clear_catalog_caches()
+
+
+def test_yaml_overlay_opt_in_replaces_compiled(monkeypatch, tmp_path) -> None:
+    from research.unique_logic.catalog import (
+        YAML_OVERLAY_ENV,
+        clear_catalog_caches,
+        combo_row_from_spec,
+        combo_row_from_yaml,
+        combo_rows_from_catalog,
+        load_catalog_specs,
+        parse_catalog_yaml,
+        unique_family_ids_from_catalog,
+        unique_family_ids_from_yaml,
+        yaml_combo_rows,
+    )
+
+    logics = tmp_path / "specs" / "research_logics"
+    logics.mkdir(parents=True)
+    (logics / "stray_overlay.yaml").write_text(
+        "logic_id: stray_overlay\n"
+        "family: event\n"
+        "go: false\n"
+        "evaluator: research.unique_logic.event.evaluate_event_daily_mtm\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv(YAML_OVERLAY_ENV, "1")
+    clear_catalog_caches()
+    try:
+        specs = load_catalog_specs(root=tmp_path)
+        assert [s["logic_id"] for s in specs] == ["stray_overlay"]
+        assert specs[0].get("catalog_present") is True
+        assert specs[0].get("compiled") is not True
+        parsed = parse_catalog_yaml(
+            "logic_id: from_text\ngo: false\nparams:\n  hold_days: 3\n"
+        )
+        assert parsed["logic_id"] == "from_text"
+        assert parsed["params"]["hold_days"] == 3
+        assert combo_rows_from_catalog is yaml_combo_rows
+        assert unique_family_ids_from_catalog is unique_family_ids_from_yaml
+        assert combo_row_from_spec is combo_row_from_yaml
+    finally:
+        clear_catalog_caches()
+
+
 def test_parse_catalog_yaml_folded_and_params() -> None:
     spec = parse_catalog_yaml(
         """
