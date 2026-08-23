@@ -10,7 +10,7 @@ extracts landed. Leftover occupancy **HOLD** in `daily_path.ts`.
 `coverage_receipts`, `snapshot_publish_policy`, `snapshot_coverage_proof`,
 `snapshot_persist`, `snapshot_read`, `eval_orchestrate`,
 `ingestion-premium/collection_receipts.ts` — **DONE** in §7.  
-**Live strategy at `0a8ced34`:** §10 — remaining extracts vs HOLD. YAML
+**Live strategy at `c9764ff4`:** §10 — remaining extracts vs HOLD. YAML
 file-count waste is closed. Size is not waste. Do not extract leftover
 occupancy. Do not add YAML. Do not declare Phase 7 GO.  
 **Mass / READY / Phase 7:** unchanged (NO-GO / not declared / OFF)
@@ -440,18 +440,20 @@ index_text CLIs, OTC grain, Worker R2 stub, Worker POST
 CLI-put fence (`0b81eedb`), and job-artifact Worker put (`d6567268`;
 `017a43c6` `cf_daily_path_job`; `0a8ced34` `cf_mass_eval_run`) are
 **DONE**. MCP presentation echo and JSDA refresh inventory replay stay
-**DONE**. Remaining mixed: Python Evaluation IR encode/decode still
-hand-written (no generated Python codec); `reconstitution_evidence`
-still `default_r2_put` (dry_run only); leftover occupancy **HOLD** —
-do not schedule leftover occupancy extract. Compact catalog is optional
-HOLD, not a required extract. `verify_all` vs `verify_ci` stay **HOLD**
-split. Do not YAML +N. Do not declare Phase 7 GO.
+**DONE**. Remaining mixed: `reconstitution_evidence` still `default_r2_put`
+(dry_run only); leftover occupancy **HOLD** — do not schedule leftover
+occupancy extract. Compact catalog is optional HOLD, not a required
+extract. `verify_all` vs `verify_ci` stay **HOLD** split. Do not YAML
++N. Do not declare Phase 7 GO. Python Evaluation IR codec emit
+**DONE** (`c9764ff4`; `evaluation_ir_codec.generated.py`). Premium
+fetch/retry extract **DONE** (`a20d14d4`; `fetch_jq.ts`). BackfillPlanner
+`index_text` **DONE** (`2cbd894d`).
 
 | Later | Mixed surface | Authority to pick | Must not |
 |------:|---------------|-------------------|----------|
 | 1 | `BackfillPlanner` (`ops/backfill_planner.py`, 666) vs `plan_required_segments` (`coverage_ledger.py`) | **ops product** inventory planner. Tip-snapshot wire **DONE** (`792ae2b`): AM bars / earnings calendar call `plan_required_segments` (no month-chunk). JSDA refresh inventory replay **DONE** (`40d1aa90`). OTC JSON grain **DONE** (`26a6ca5e`): `segment_granularity=official_archive_index_day`. index_text CLIs **DONE**: `refresh_coverage_ledger --index-text` (`34dc85df`); `write_collection_receipts --index-text` (`db569fc7`); ops projection `--otc-index-html` (`9524dab7`); ingest passes fetched year-index HTML (`ddc40ae9`). Bounded-history JQ month chunks **DONE** (`bcd52f47`): all JQ jobs come from `plan_required_segments` (bars/fins stay calendar_month jobs; missing V3 does not invent official domain or COMPLETE). | Invent COMPLETE; calendar-walk OTC; delete one planner without a dated ops brief |
 | 2 | Python `r2_io.py` (431) vs Worker children-then-manifest (`http.ts` `putChildrenThenManifest`; digest mismatch **409**) | Worker is immutable authority. Python stays **non-authority** (`python_cli_put_is_not_immutable_authority`; `authoritative=True` refused). Remote `default_r2_put` never CLI-puts (`0b81eedb`; `QP_ALLOW_PYTHON_R2_PUT=1` does not resurrect TOCTOU). Worker POST **DONE** (`5103b26b`). `put_research_artifact` **DONE** (`d6567268`). After `3b64bdfc`: `cf_daily_path_job` **DONE** (`017a43c6`); `cf_mass_eval_run` **DONE** (`0a8ced34`). Remaining `default_r2_put` caller: `reconstitution_evidence` dry_run only. | Treat “TOCTOU recorded in tests” as done; make Python CLI the SoT |
-| 3 | `evaluation_ir.ts` (39) façade vs generated `evaluation_ir_codec.generated.ts` (239) vs `specs/evaluation_ir/schema.json` (67) vs hand-written Python `evaluation_ir.py` (1076) | Schema is codec SoT. `ALLOWED_FIELDS` generated **DONE** (`d882119`). Encode/decode TS body generated **DONE** (`4661fb14`). `evaluation_ir.ts` is the façade. Python encode/decode still **hand-written**; no generated Python codec on this HEAD. Grade predicate is already shared (`job_candidate_grade` / `jobCandidateGrade`). | Second grade policy; delete schema; dual-edit field lists forever |
+| 3 | `evaluation_ir.ts` (39) façade vs generated `evaluation_ir_codec.generated.ts` (239) vs `evaluation_ir_codec.generated.py` vs `specs/evaluation_ir/schema.json` (67) | Schema is codec SoT. `ALLOWED_FIELDS` generated **DONE** (`d882119`). Encode/decode TS body generated **DONE** (`4661fb14`). Python codec body generated **DONE** (`c9764ff4`). Façades remain. Grade predicate is already shared (`job_candidate_grade` / `jobCandidateGrade`). TypedDict generation not done. | Second grade policy; delete schema; dual-edit field lists forever |
 | 4 | MCP `OPS_TOOLS` strings vs stored `policy_version` (`dataset_coverage.policy_version`; live `collection-coverage/v2`) | Presentation echo **DONE** (Worker `27ff7e62`, Python `3d3e68ab`): both echo stored `policy_version`, not frozen “Coverage V2”. Remaining mixed: live projection is still `collection-coverage/v2` STALE — not unpublished V3 completeness. Do not schedule a second string rewrite. | Unify strings to mint FRESH / COMPLETE 23 |
 | 5 | `scripts/verify_all.sh` skippable helper vs `scripts/verify_ci.sh` authority | **Keep both. Do not merge.** Helper: 3 research workers, `VERIFY_*` skips. Authority: pytest + catalog freeze + IR schema + 7 workers (`ci-aggregate` included), no skips. Merge gate is `verify_ci` plus authenticated `ci-aggregate`. | Fold `verify_ci` into `verify_all`; add GitHub Actions |
 
@@ -463,10 +465,11 @@ Not code extracts (environment / docs / optional freeze):
 | Historical `docs/reviews/*.md` as live SoT | Freeze files stay historical (`HEAD at remaining-audit: 03cd1b1`; P632 re-diffs at named SHAs). | **Banners, not deletion.** Live flags: `phase62_residual_status.md` + MCP projection + this §10. |
 | Compact catalog family+template+parameter matrix | **NOT done.** `migration.jsonl` is still 2254 expanded rows. | Optional. Freeze n=2254 **HOLD**. Do not report 2254 as a product win. Do not YAML +N. |
 
-`ingestion-premium/src/index.ts` (950) still mixes fetch / upsert / HTTP
-after receipts **DONE**. Same-worker sibling extracts remain allowed
-(package path frozen). That is leftover mixed authority from §7 lane 10
-remainder, not a new product.
+`ingestion-premium/src/index.ts` (~678 after `a20d14d4`) is the ingest
+façade. Fetch/retry lives in `fetch_jq.ts`; persist in `persist_records.ts`;
+export HTTP in `http_export.ts`; receipts in `collection_receipts.ts`.
+Retry jitter is `retry_jitter.ts` (`crypto.getRandomValues`). Do not
+family-slice remaining façade handlers.
 
 ### 10.4 Do not
 
