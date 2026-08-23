@@ -30,16 +30,6 @@ def _allow_generation_capability(monkeypatch) -> None:
     )
 
 
-_WORKER_PROPOSE = (
-    Path(__file__).resolve().parents[1]
-    / "platform"
-    / "workers"
-    / "research-mass-eval"
-    / "src"
-    / "propose_thesis.ts"
-)
-
-
 def _fresh_ok_proposal() -> dict:
     """3-AND not in catalog that review_proposal_row accepts. Avoids clone stale pins."""
     from itertools import combinations
@@ -223,7 +213,6 @@ def test_stub_output_not_injected() -> None:
     assert fail_out["n_adoptable"] == 0
     assert fail_out["auto_inject"] is False
     assert fail_out["go"] is False
-    assert "llm_failed" in (_WORKER_PROPOSE.read_text(encoding="utf-8"))
 
 
 def test_review_proposal_row_rejects_invent_and_weekday() -> None:
@@ -679,7 +668,6 @@ def test_worker_index_contains_propose_thesis_route() -> None:
         + (worker_src / "propose_allowed.ts").read_text(encoding="utf-8")
     )
     assert "/v1/propose-thesis" in src
-    assert "llm_failed" in src
     assert "llama-3.3-70b-instruct-fp8-fast" in src
     assert "glm-4.7-flash" in src
     assert "signal_definition" in src

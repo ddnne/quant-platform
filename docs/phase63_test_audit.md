@@ -326,3 +326,22 @@ Post-Lane-17 tree already absorbed `test_ops_projection_meta.py` (dead-code lane
 | **Deleted** | 3 husk files; tautology lane-E cmd-string tests; Worker leftover grep body |
 | **Added** | **0** modules |
 | **Structural replacements** | 1 (`combo_gates` event cheap_pb does not read `extras?.cheapPb`) |
+
+---
+
+## 6.3.2 follow-up
+
+**Tip:** this commit (`test/drop-remaining-policy-echo-husks`).  
+**Mass / READY / Phase 7:** unchanged. **Added modules: 0.**  
+Does **not** delete PIT / `available_at` / receipts / false-COMPLETE / READY / fail-closed / `test_baseline_catalog.py` / Worker `combo_gates` / identity set-equality. Route scan still concatenates `index.ts` + `http_routes.ts` + `propose_thesis.ts` + `propose_allowed.ts`.
+
+| Deleted | Where | Why |
+|---------|-------|-----|
+| Worker `propose_thesis.ts` `llm_failed` grep | `test_cf_propose_thesis.py::test_stub_output_not_injected` | Dual-runtime husk. Route scan already reads `propose_thesis.ts` + `http_routes.ts`. Python invoke already asserts `proposal_source == "llm_failed"`. |
+| `_WORKER_PROPOSE` path constant | `test_cf_propose_thesis.py` | Unused after the grep drop. |
+| Bare `"llm_failed" in src` | `test_worker_index_contains_propose_thesis_route` | Duplicate paraphrase of `proposal_source: "llm_failed"` (bare token also matches an `http_routes.ts` comment). |
+| *(none)* | `test_research_freezes.py` | No remaining unused imports. No remaining Worker-source greps (Lane 17 already dropped leftover occupancy + cheap_pb comment greps). Calendar identity `PROPOSE_ALLOWED_GATES == COMBO_EVENT_GATES - PROPOSE_CALENDAR_GATES` kept. |
+
+**Retained:** `/v1/propose-thesis` route scan including `http_routes.ts`; AI Gateway binding; no `env.AI.run`; allowlist imported not duplicated; phrase reason-class set; pin/Mass/READY/GO freezes.
+
+**Did not** add YAML. **Did not** edit `coverage_ledger.py` / `collection_coverage.json`. **Did not** flip GO.
