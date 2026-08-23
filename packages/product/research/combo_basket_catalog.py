@@ -9,9 +9,20 @@ from research.unique_logic.constants import (
     ALWAYS_ON_CS_STICKY,
     ALWAYS_ON_PARK_IDS,
     NEAR_EMPTY_PARK_IDS,
+    PRI_FLOW_GATES,
+    PRI_FUND_GATES,
+    PRI_RATE_GATES,
     PROPOSE_CALENDAR_GATES,
     THIN_SLEEVE_EXCLUDE_IDS,
 )
+
+SLEEVE_THEME_GATES: dict[str, frozenset[str]] = {
+    "basket_theme_fund": PRI_FUND_GATES,
+    "basket_theme_flow": PRI_FLOW_GATES,
+    "basket_event_fund": PRI_FUND_GATES,
+    "basket_theme_repo": PRI_RATE_GATES,
+    "basket_theme_invert": frozenset({"invert_curve"}),
+}
 
 HISTORICAL_HEAD4_MEMBERS: tuple[str, ...] = (
     "event_afterclose_positive_eps",
@@ -361,6 +372,7 @@ def reconstitution_plan() -> list[dict[str, Any]]:
                 "valid": bool(d.get("valid")),
                 "needs_reconstitution": bool(primary and nested_n),
                 **opts,
+                "nested_parent_count": nested_n,
             }
         )
     return out
@@ -369,6 +381,110 @@ def reconstitution_plan() -> list[dict[str, Any]]:
 def active_reconstitution_plan() -> list[dict[str, Any]]:
     """Non-historical sleeves only. Historical stay in reconstitution_plan()."""
     return [p for p in reconstitution_plan() if not p.get("historical")]
+
+
+def _min_lo(
+    lid: str,
+    mid: Mapping[str, float],
+    liq: Mapping[str, float],
+) -> float | None:
+    if lid not in mid or lid not in liq:
+        return None
+    return min(float(mid[lid]), float(liq[lid]))
+
+
+def usable_sleeve_coverage(
+    occupancy_by_track: Mapping[str, Mapping[str, float]] | None = None,
+    *,
+    candidate_cap: int = 12,
+) -> dict[str, Any]:
+    """Usable inventory vs KEEP sleeves. Detect-only. Does not apply. Not GO.
+
+    Replacement candidates are on-theme n_ands>=2, non-nested, not already
+    primary, and (for 5-member sleeves) thicker than the current weakest
+    member. Invert is recorded primary=False and is not a replacement target.
+    """
+    from research.unique_logic.worker_bodies import (
+        usable_inventory,
+        usable_series_breakdown,
+    )
+
+    occ = occupancy_by_track or {}
+    mid = dict(occ.get("mid_n_explore") or {})
+    liq = dict(occ.get("liq_large") or {})
+    inv = usable_inventory({"mid_n_explore": mid, "liq_large": liq})
+    series = usable_series_breakdown({"mid_n_explore": mid, "liq_large": liq})
+    usable = set(inv.get("usable_ids") or ())
+    already = primary_sleeve_member_ids()
+    sleeves: list[dict[str, Any]] = []
+    candidates: list[dict[str, Any]] = []
+    for d in mechanical_basket_defs():
+        if d.get("historical"):
+            continue
+        bid = str(d["basket_id"])
+        members = [str(x) for x in (d.get("members") or ())]
+        nested_n = int(d.get("nested_parent_count") or 0)
+        primary = bool(d.get("primary"))
+        member_lo = [_min_lo(m, mid, liq) for m in members]
+        known_lo = [x for x in member_lo if x is not None]
+        weakest = min(known_lo) if len(known_lo) >= 5 else None
+        row = {
+            "basket_id": bid,
+            "rule": d.get("rule"),
+            "primary": primary,
+            "members": members,
+            "n_members": len(members),
+            "n_usable_members": sum(1 for m in members if m in usable),
+            "nested_parent_count": nested_n,
+            "needs_reconstitution": bool(primary and nested_n),
+            "theme_gates": sorted(SLEEVE_THEME_GATES.get(bid, ())),
+            "weakest_lo": weakest,
+        }
+        sleeves.append(row)
+        if not primary:
+            continue
+        theme = SLEEVE_THEME_GATES.get(bid)
+        scored: list[tuple[float, str, list[str]]] = []
+        for lid in usable:
+            if lid in already:
+                continue
+            reasons = replacement_reject_reasons(
+                lid, members, theme_gates=theme
+            )
+            lo = _min_lo(lid, mid, liq)
+            if lo is None:
+                reasons = list(reasons) + ["occupancy_unclassified"]
+            elif weakest is not None and lo <= weakest:
+                reasons = list(reasons) + ["not_thicker_than_5th"]
+            if reasons:
+                continue
+            scored.append((float(lo), lid, []))
+        scored.sort(reverse=True)
+        for lo, lid, _ in scored[: max(0, int(candidate_cap))]:
+            candidates.append(
+                {
+                    "basket_id": bid,
+                    "logic_id": lid,
+                    "lo": round(lo, 4),
+                    "apply": False,
+                }
+            )
+    return {
+        "version": "series-sleeve/v1",
+        "n_usable": inv.get("n_usable"),
+        "family": inv.get("family"),
+        "tag_counts": series.get("tag_counts"),
+        "tag_combo": series.get("tag_combo"),
+        "n_ands": series.get("n_ands"),
+        "n_event_or_surprise_xs_3and": series.get("n_event_or_surprise_xs_3and"),
+        "sleeves": sleeves,
+        "replacement_candidates": candidates,
+        "n_replacement_ok": len(candidates),
+        "apply": False,
+        "invert_primary": False,
+        "go": False,
+        "not_a_pass": True,
+    }
 
 
 def equal_weights(n: int) -> list[float]:

@@ -10,6 +10,7 @@ from research.combo_basket_catalog import (
     active_reconstitution_plan,
     equal_weights,
     mechanical_basket_defs,
+    usable_sleeve_coverage,
 )
 from research.eval_registry import PROTOCOL_DAILY_PATH
 from research.stats_metrics import equity_path_drawdown, evaluate_daily_path_dd_gate
@@ -405,6 +406,7 @@ __all__ = [
     "stitch_cells_honest_windows",
     "occupancy_in_candidate_band",
     "active_reconstitution_plan",
+    "usable_sleeve_coverage",
     "primary_sleeve_and_meta_cells",
     "summarize_basket_trends",
 ]

@@ -380,6 +380,10 @@ def test_reconstitution_options_drop_nested_without_reject() -> None:
     assert plan["basket_theme_fund"]["needs_reconstitution"] is True
     assert plan["basket_event_fund"]["needs_reconstitution"] is True
     assert plan["basket_theme_flow"]["needs_reconstitution"] is False
+    assert isinstance(plan["basket_theme_fund"]["nested_parent_count"], int)
+    assert plan["basket_theme_fund"]["nested_parent_count"] >= 1
+    assert isinstance(plan["basket_event_fund"]["nested_parent_count"], int)
+    assert plan["basket_event_fund"]["nested_parent_count"] >= 1
     assert plan["basket_theme_fund"]["apply_reject"] is False
     assert plan["basket_head4"]["historical"] is True
     assert plan["basket_head4"]["needs_reconstitution"] is False
@@ -530,6 +534,8 @@ def test_write_usable_eval_snapshot_local_only(tmp_path) -> None:
 
 
 def test_write_eval_wave_pack_local_only(tmp_path) -> None:
+    import json
+
     from research.occupancy_audit import write_eval_wave_pack
 
     out = write_eval_wave_pack(
@@ -542,10 +548,30 @@ def test_write_eval_wave_pack_local_only(tmp_path) -> None:
     assert out["not_a_pass"] is True
     assert out["n_unique22_parked"] >= 1
     assert out["occupancy_maps_job"] == "eval-occupancy-maps-test24ep"
+    assert out["series_sleeve_job"] == "eval-series-sleeve-test24ep"
     assert (tmp_path / "eval-occupancy-maps-test24ep.json").is_file()
     assert (tmp_path / "eval-occupancy-drift-test24ep.json").is_file()
     assert (tmp_path / "eval-unique22-park-test24ep.json").is_file()
     assert (tmp_path / "eval-reconstitution-plan-test24ep.json").is_file()
+    assert (tmp_path / "eval-series-sleeve-test24ep.json").is_file()
+    recon = json.loads(
+        (tmp_path / "eval-reconstitution-plan-test24ep.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    fund = next(
+        s for s in recon["sleeves"] if s["basket_id"] == "basket_theme_fund"
+    )
+    assert recon["apply"] is False
+    assert isinstance(fund["nested_parent_count"], int)
+    assert fund["nested_parent_count"] >= 1
+    assert fund["nested_pairs"]
+    sleeve = json.loads(
+        (tmp_path / "eval-series-sleeve-test24ep.json").read_text(encoding="utf-8")
+    )
+    assert sleeve["apply"] is False
+    assert sleeve["invert_primary"] is False
+    assert sleeve["go"] is False
 
 
 def test_merge_occupancy_cell_dumps_later_mtime_wins(tmp_path) -> None:
@@ -590,6 +616,33 @@ def test_load_ops_occupancy_prefers_maps_over_cells(tmp_path) -> None:
     occ = load_ops_occupancy(tmp_path)
     assert occ["mid_n_explore"]["new"] == 0.3
     assert "old" not in occ["mid_n_explore"]
+
+
+def test_usable_sleeve_coverage_does_not_apply() -> None:
+    from research.combo_basket_catalog import usable_sleeve_coverage
+
+    out = usable_sleeve_coverage({"mid_n_explore": {}, "liq_large": {}})
+    assert out["apply"] is False
+    assert out["go"] is False
+    assert out["invert_primary"] is False
+    by_id = {s["basket_id"]: s for s in out["sleeves"]}
+    assert by_id["basket_theme_fund"]["needs_reconstitution"] is True
+    assert by_id["basket_theme_fund"]["nested_parent_count"] >= 1
+    assert by_id["basket_theme_invert"]["primary"] is False
+    assert by_id["basket_theme_flow"]["needs_reconstitution"] is False
+    assert out["replacement_candidates"] == []
+
+
+def test_cost_defaults_are_shared() -> None:
+    from research.cost_defaults import DEFAULT_ONE_WAY_COST, DEFAULT_ONE_WAY_COST_BP
+    from research.cost_models import DEFAULT_ONE_WAY_COST as cost_cost
+    from research.holding_metrics import DEFAULT_ONE_WAY_COST as hold_cost
+    from research.paper_candidate_adapt import DEFAULT_ONE_WAY_COST as paper_cost
+    from research.robustness_gate import DEFAULT_ONE_WAY_COST as gate_cost
+
+    assert DEFAULT_ONE_WAY_COST_BP == 10.0
+    assert DEFAULT_ONE_WAY_COST == 0.001
+    assert cost_cost == hold_cost == paper_cost == gate_cost == DEFAULT_ONE_WAY_COST
 
 
 def test_run_eval_wave_local_stub_never_writes(tmp_path) -> None:

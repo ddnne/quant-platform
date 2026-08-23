@@ -38,9 +38,9 @@ from research.paper_candidate_specs import (
     build_multi_day_hold_strategy_spec,
 )
 
-PAPER_CANDIDATE_SPEC_VERSION: str = "paper-candidate-spec/v1"
+from research.cost_defaults import DEFAULT_ONE_WAY_COST
 
-DEFAULT_ONE_WAY_COST: float = 0.001  # 10bp
+PAPER_CANDIDATE_SPEC_VERSION: str = "paper-candidate-spec/v1"
 DEFAULT_LOOKBACK_DAYS: int = 30
 
 _ARM_BOOL_FALSE_KEYS: tuple[str, ...] = (

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping, Sequence
 
+from research.cost_defaults import DEFAULT_ONE_WAY_COST, DEFAULT_ONE_WAY_COST_BP
 from research.cost_repo import (
     DEFAULT_REPO_RATE_TYPE,
     DEFAULT_REPO_TENOR,
@@ -52,9 +53,7 @@ COST_MODELS_PROOF_SHORT_COST_W85: str = (
     "docs/proof/w0816t_w85_short_cost_repo_spread_20260817.md"
 )
 
-# Base transaction (matches robustness_gate / holding_metrics).
-DEFAULT_ONE_WAY_COST_BP: float = 10.0
-DEFAULT_ONE_WAY_COST: float = DEFAULT_ONE_WAY_COST_BP / 10_000.0  # 0.001
+# Base transaction (shared literal; live math stays in this module).
 DEFAULT_ROUND_TRIP_COST: float = DEFAULT_ONE_WAY_COST * 2.0
 
 # Fixed-bp placeholders when no repo series is supplied (仮定に依存).

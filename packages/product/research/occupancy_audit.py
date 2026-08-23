@@ -367,7 +367,10 @@ def write_eval_wave_pack(
 
     Does not fan out occupancy. Does not apply reconstitution. Does not inject.
     """
-    from research.combo_basket_catalog import active_reconstitution_plan
+    from research.combo_basket_catalog import (
+        active_reconstitution_plan,
+        usable_sleeve_coverage,
+    )
     from research.unique_logic.worker_bodies import (
         UNIQUE22_PARK_REASONS,
         countable_thesis_ids,
@@ -387,9 +390,34 @@ def write_eval_wave_pack(
     lifted = unique22_occupancy_equal_lifted()
     u22_job = f"eval-unique22-park-{wave}"
     recon_job = f"eval-reconstitution-plan-{wave}"
+    sleeve_job = f"eval-series-sleeve-{wave}"
     maps_job = f"eval-occupancy-maps-{wave}"
     mid = _float_occ_map(occupancy_by_track.get("mid_n_explore"))
     liq = _float_occ_map(occupancy_by_track.get("liq_large"))
+    recon_sleeves: list[dict[str, Any]] = []
+    for p in active_reconstitution_plan():
+        nested = p.get("nested_parents") or []
+        n_nested = p.get("nested_parent_count")
+        if n_nested is None:
+            n_nested = len(nested)
+        drop_p = p.get("drop_parents_keep_children") or {}
+        drop_c = p.get("drop_children_keep_parents") or {}
+        recon_sleeves.append(
+            {
+                "basket_id": p["basket_id"],
+                "primary": p.get("primary"),
+                "needs_reconstitution": p.get("needs_reconstitution"),
+                "nested_parent_count": int(n_nested),
+                "nested_pairs": [
+                    {"parent": x.get("parent"), "child": x.get("child")}
+                    for x in nested
+                    if isinstance(x, Mapping)
+                ],
+                "drop_parents_n": len(drop_p.get("members") or []),
+                "drop_children_n": len(drop_c.get("members") or []),
+                "apply_reject": False,
+            }
+        )
     extras = {
         maps_job: {
             "job_id": maps_job,
@@ -419,15 +447,14 @@ def write_eval_wave_pack(
         recon_job: {
             "job_id": recon_job,
             "apply": False,
-            "sleeves": [
-                {
-                    "basket_id": p["basket_id"],
-                    "needs_reconstitution": p.get("needs_reconstitution"),
-                    "nested_parent_count": p.get("nested_parent_count"),
-                    "apply_reject": p.get("apply_reject"),
-                }
-                for p in active_reconstitution_plan()
-            ],
+            "sleeves": recon_sleeves,
+            "go": False,
+            "not_a_pass": True,
+        },
+        sleeve_job: {
+            "job_id": sleeve_job,
+            **usable_sleeve_coverage(occupancy_by_track),
+            "apply": False,
             "go": False,
             "not_a_pass": True,
         },
@@ -437,6 +464,7 @@ def write_eval_wave_pack(
         drift_job: "drift.json",
         u22_job: "park.json",
         recon_job: "reconstitution_plan.json",
+        sleeve_job: "series_sleeve.json",
     }
     puts = list(snap.get("puts") or [])
     for job, body in extras.items():
@@ -457,6 +485,7 @@ def write_eval_wave_pack(
         "drift_job": drift_job,
         "unique22_job": u22_job,
         "reconstitution_job": recon_job,
+        "series_sleeve_job": sleeve_job,
         "n_unique22_parked": len(park),
         "n_unique22_lifted": len(lifted),
         "n_mid": len(mid),

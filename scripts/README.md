@@ -11,8 +11,8 @@ CLIs (`issue_receipts_parallel`, `publish_ops_projection`, `export_ops_projectio
 `generate_governed_js`, `verify_governed_js_drift`,
 `report_raw_throughput`) use it.
 CLIs under `scripts/` and `scripts/ops/` use the same `_bootstrap` finder.
-Candidate eval is `POST /v1/daily-path`, not `python -m research.unique_logic --all`
-(that CLI is HOLD). Live counts / GO gates: [docs/phase62_residual_status.md](../docs/phase62_residual_status.md)
+Candidate eval is `POST /v1/daily-path`, not `python -m research.unique_logic`
+(that CLI is a retired fail-closed stub). Live counts / GO gates: [docs/phase62_residual_status.md](../docs/phase62_residual_status.md)
 only. Do not launch Mass / READY / Phase7 / `cf_premium_backfill` from residual prose alone.
 
 Phase 6 hardening utilities:
@@ -35,7 +35,7 @@ New research:
 
 - catalog: `specs/research_logics/`
 - candidate SoT: `POST /v1/daily-path` (`research.cf_daily_path_job`)
-- local unique CLI (`python -m research.unique_logic --all`): HOLD helper, not candidate SoT
+- local unique CLI (`python -m research.unique_logic`): retired fail-closed stub, not candidate SoT
 - CF screen (auxiliary): `research.cf_mass_eval_job.run_cf_mass_eval_job`
 - record: `uv run python scripts/record_research_eval.py --job-id … --table … --put-r2 --apply-d1`
 

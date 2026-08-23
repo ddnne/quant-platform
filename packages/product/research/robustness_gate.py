@@ -22,11 +22,11 @@ from features.research_freezes import (
     SIGNIFICANCE_CLAIMED,
 )
 
+from research.cost_defaults import DEFAULT_ONE_WAY_COST, DEFAULT_ONE_WAY_COST_BP
+
 DEFAULT_MIN_PERIODS: int = 2
 DEFAULT_MIN_ACTIVE_PER_PERIOD: int = 20
 DEFAULT_CATASTROPHIC_ABS: float = 0.05
-DEFAULT_ONE_WAY_COST_BP: float = 10.0
-DEFAULT_ONE_WAY_COST: float = DEFAULT_ONE_WAY_COST_BP / 10_000.0  # 0.001
 
 
 def research_net_one_way(

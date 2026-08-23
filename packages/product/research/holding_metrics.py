@@ -20,14 +20,13 @@ from features.research_freezes import (
     SIGNIFICANCE_CLAIMED,
 )
 
+from research.cost_defaults import DEFAULT_ONE_WAY_COST, DEFAULT_ONE_WAY_COST_BP
+
 HOLDING_METRICS_VERSION: str = "research-holding-metrics/v1"
 HOLDING_METRICS_LABEL: str = (
     "仮定に依存・研究用保有・回転メトリクス・未宣言 "
     "(READY未接続 / Mass closed / 運用GOではない)"
 )
-
-DEFAULT_ONE_WAY_COST_BP: float = 10.0
-DEFAULT_ONE_WAY_COST: float = DEFAULT_ONE_WAY_COST_BP / 10_000.0  # 0.001
 
 DEFAULT_HOLD_DAYS: tuple[int, ...] = (1, 2, 3, 5, 10, 20)
 DEFAULT_HISTOGRAM_BUCKETS: tuple[tuple[int, int | None], ...] = (
