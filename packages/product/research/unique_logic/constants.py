@@ -1,4 +1,9 @@
-"""Shared unique_logic constants (not eval scores)."""
+"""Shared unique_logic constants (not eval scores).
+
+Policy (gates, parks, propose allow-list). Family ID unions come from the
+compiled catalog via unique_family_ids_from_yaml (name kept; alias
+unique_family_ids_from_catalog). YAML files are gone; compiled map is SoT.
+"""
 
 from __future__ import annotations
 
@@ -210,6 +215,7 @@ LOGIC_CATALOG_HEADLINE_BAN: frozenset[str] = frozenset(
         "vol_risk_adjusted_mom",
     }
 )
+# Compiled catalog (yaml n=0). Function name kept; alias unique_family_ids_from_catalog.
 _families = unique_family_ids_from_yaml()
 EVENT_LOGIC_IDS: frozenset[str] = _families["event"]
 EVENT_FILTER_LOGIC_IDS: frozenset[str] = _families["event_filter"]

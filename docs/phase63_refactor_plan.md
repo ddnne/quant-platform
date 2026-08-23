@@ -124,36 +124,57 @@ slice `gatedCsHeld` by thesis id.
 
 ---
 
-## 4. Generated catalog and the 2254 YAML
+## 4. Generated catalog (compiled map is SoT)
 
-| Artifact | Role now | Later |
-|----------|----------|-------|
-| `specs/research_logics/*.yaml` (2254) | Catalog SoT on disk (**78.5%** of tracked files) | Delete only after digest lock |
-| `research.catalog_compiler` | Closed-DSL rows + `digest` + `semantic_hash`. `yaml_still_present: false`. Does not exec Python, does not add YAML | **SoT**; compiler emits Worker IDs |
-| `research.unique_logic.catalog` | Constrained YAML parse | Parse remains until YAML gone; then load compiler artifact |
-| `unique_logic/constants.py` | Policy: gates, parks, propose allow-list; loads family IDs from YAML | Policy stays; ID unions come from compiler rows |
-| `catalog_ids.ts` | **GENERATED** by `scripts/sync_cf_new_thesis_ids.py` from Python frozensets. Do not hand-edit | Compiler should own the emit. Same script or `catalog_compiler` — one owner |
-| `eval_flags.CATALOG_YAML_COUNT_AT_STOP` (2254) | Freeze identity n | yaml n=0 requires compiled n=2254; digest pin `sha256:6ad5ba57dfa41…` |
+**Current (after `5c9b962`):** YAML files **0**; compiled n=**2254**;
+`yaml_still_present: false`; digest `sha256:6ad5ba57dfa41…`.
+`specs/research_catalog/` is catalog SoT. Do **not** add YAML. Do **not**
+re-run digest lock. Do **not** hand-edit `catalog_ids.ts`.
 
-### Digest lock (later lane, still not YAML deletion)
+| Artifact | Role now |
+|----------|----------|
+| `specs/research_logics/*.yaml` | **0 files.** Empty dir. Do not add YAML |
+| `research.catalog_compiler` | Closed-DSL rows + `digest` + `semantic_hash`. **SoT**. Emits Worker `catalog_ids.ts` (**DONE**). Does not exec Python, does not add YAML |
+| `research.unique_logic.catalog` | Loads YAML if present, else `migration.jsonl` |
+| `unique_logic/constants.py` | Policy stays (gates, parks, propose allow-list). Family ID unions come from the compiled catalog (`unique_family_ids_from_yaml` is still the function name; alias `unique_family_ids_from_catalog` exists) |
+| `catalog_ids.ts` | **GENERATED.** `catalog_compiler` owns the emit (**DONE**). Do not hand-edit |
+| `eval_flags.CATALOG_YAML_COUNT_AT_STOP` (2254) | Freeze identity n: yaml n=0 requires compiled n=2254; digest pin `sha256:6ad5ba57dfa41…` |
+
+### At authoring `41003a5` (historical — not a to-do)
+
+YAML was **2254** files (**78.5%** of tracked). The plan then said:
+constrained YAML parse remains until YAML is gone; digest lock is a later
+lane; YAML deletion is a later mechanical commit after lock. Those lanes
+landed at `5c9b962`. Agents must **not** re-add YAML or re-run digest lock.
+
+| Artifact | Role at `41003a5` | Later (now **DONE**) |
+|----------|-------------------|----------------------|
+| `specs/research_logics/*.yaml` (2254) | Catalog SoT on disk (**78.5%** of tracked files) | Delete only after digest lock → **DONE** (`5c9b962`; n=0) |
+| `research.unique_logic.catalog` | Constrained YAML parse | Parse remains until YAML gone; then load compiler artifact → YAML if present else `migration.jsonl` |
+| `unique_logic/constants.py` | Policy; loads family IDs from YAML | Policy stays; ID unions from compiled catalog |
+| `catalog_ids.ts` | **GENERATED** by `scripts/sync_cf_new_thesis_ids.py` from Python frozensets | Compiler owns the emit → **DONE** (`catalog_compiler`) |
+
+### Digest lock — **DONE** (do not re-run)
+
+Pin is `sha256:6ad5ba57dfa41…` next to `COMPILER_VERSION`
+(`research_catalog_compiler/v1`). Landed steps (not a new lane):
 
 1. `compile_catalog()` digest is the pin (already `sha256:`).
-2. Record the pin next to `COMPILER_VERSION` (`research_catalog_compiler/v1`).
+2. Record the pin next to `COMPILER_VERSION`.
 3. Tests: compiler `digest` + identity set `logic_id` vs Worker
    `catalog_ids.ts` vs Python constants — **one** pass, not two 2254-file
    regex walks (`test_catalog_yaml_parity.py` freeze; see test audit).
 4. Worker load still generated TS. Hand-edits to `catalog_ids.ts` stay
    forbidden.
-5. `yaml_still_present` is **false** after the deletion commit (`5c9b962`).
+5. `yaml_still_present` is **false** (`5c9b962`).
 
-### YAML deletion (later mechanical commit, after lock)
+### YAML deletion — **DONE** (`5c9b962`; do not re-add YAML)
 
-- Single commit, no behavior change: load compiler artifact only.
-- Flip `yaml_still_present` to false in that commit.
-- Do not hand-curate which YAML to keep. Countable theses are
-  `worker_bodies.countable_thesis_ids` (catalog + Worker body); YAML
-  clones never counted.
-- Do not treat file-count drop as a quality win without the digest pin.
+Mechanical commit, no behavior change: load compiler artifact only.
+`yaml_still_present` flipped false in that commit. Do not hand-curate YAML
+to keep. Countable theses are `worker_bodies.countable_thesis_ids`
+(catalog + Worker body); YAML clones never counted. File-count drop is
+not a quality win without the digest pin (already pinned).
 
 ---
 
@@ -240,9 +261,10 @@ frozen). No first-party `*.test.ts` here today; Python↔TS identity is
 **Policy** (gates, propose allow-list, occupancy parks, candidate exclude
 reasons). It is not eval scores. Do not generate per-YAML constant files.
 `SPARSE_GATE_COMBOS` / `NEAR_EMPTY_PARK_IDS` stay lists of **reason
-classes**, not a 2254-row freeze. ID unions that today walk YAML
-(`unique_family_ids_from_yaml`) should eventually read the compiler
-artifact — that is catalog ownership, not a constants split.
+classes**, not a 2254-row freeze. Family ID unions come from the compiled
+catalog (`unique_family_ids_from_yaml` is still the function name; alias
+`unique_family_ids_from_catalog`). That is catalog ownership, not a
+constants split.
 
 ---
 
