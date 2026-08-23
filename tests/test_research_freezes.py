@@ -288,6 +288,34 @@ def test_near_empty_park_is_not_countable_or_basket_material() -> None:
         )
 
 
+def test_thin_or_parked_two_and_is_sparse_parent() -> None:
+    from research.cf_propose_thesis import review_proposal_row
+    from research.unique_logic.constants import SPARSE_GATE_COMBOS
+
+    parent = frozenset({"eps_down", "steep_curve"})
+    assert any(combo == parent for combo, _ in SPARSE_GATE_COMBOS)
+    nested = {
+        "thesis": (
+            "PEAD when EPS contracted versus the last prior print AND "
+            "the repo curve is steep AND overnight funding is tight. "
+            "Skip missing PIT prints (no invent)."
+        ),
+        "signal_definition": "AND(eps_down, steep_curve, tight_funding) PIT",
+        "position_rule": "event-hold surprise sign",
+        "datasets": [
+            "equities_bars_daily",
+            "fins_summary",
+            "markets_calendar",
+            "jsda_tokyo_repo_rates",
+        ],
+        "gates": ["eps_down", "steep_curve", "tight_funding"],
+    }
+    rev = review_proposal_row(nested)
+    assert rev["ok"] is False
+    assert "sparse_gate_combo" in rev["reasons"]
+    assert rev["auto_inject"] is False
+
+
 def test_always_on_batch_guard_and_empty_park() -> None:
     from research.combo_basket_catalog import validate_basket_members
     from research.unique_logic.constants import (

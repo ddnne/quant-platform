@@ -818,6 +818,12 @@ def test_review_proposal_row_occupancy_and_polarity_table() -> None:
             "occupancy_label_only",
             "PEAD when price is down AND the repo curve inverted AND net profit is negative. Skip missing PIT prints (no invent).",
         ),
+        (
+            "PEAD when EPS contracted versus the last prior print AND the repo curve is steep AND overnight funding is tight. Skip missing PIT prints (no invent).",
+            ["eps_down", "steep_curve", "tight_funding"],
+            "sparse_gate_combo",
+            None,
+        ),
     ]
     for bad_thesis, gates, reason, good_thesis in rows:
         payload = {

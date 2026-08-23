@@ -351,6 +351,33 @@ SPARSE_GATE_COMBOS: tuple[tuple[frozenset[str], str], ...] = (
     (frozenset({"np_negative", "steep_curve"}), "np_steep"),
     (frozenset({"pb_rising", "tight_funding", "price_down"}), "pb_tight_px_down"),
 )
+
+
+def _occupancy_parent_two_ands() -> tuple[tuple[frozenset[str], str], ...]:
+    """2-AND gate sets of thin/park YAML. Nested 3-ANDs cannot be sleeve material."""
+    from research.unique_logic.catalog import load_catalog_specs
+
+    wanted = NEAR_EMPTY_PARK_IDS | THIN_SLEEVE_EXCLUDE_IDS
+    seen = {combo for combo, _reason in SPARSE_GATE_COMBOS}
+    out: list[tuple[frozenset[str], str]] = []
+    for spec in load_catalog_specs():
+        lid = str(spec.get("logic_id") or "")
+        if lid not in wanted:
+            continue
+        params = spec.get("params") if isinstance(spec.get("params"), dict) else {}
+        raw = params.get("gates") or spec.get("gates") or ""
+        if isinstance(raw, str):
+            gset = frozenset(x.strip() for x in raw.split(",") if x.strip())
+        else:
+            gset = frozenset(str(x) for x in raw if str(x).strip())
+        if len(gset) != 2 or gset in seen:
+            continue
+        seen.add(gset)
+        out.append((gset, f"occupancy_parent_{lid}"))
+    return tuple(out)
+
+
+SPARSE_GATE_COMBOS = SPARSE_GATE_COMBOS + _occupancy_parent_two_ands()
 NAME_LEVEL_FUND_CS_GATES: frozenset[str] = frozenset(
     {
         "eq_ar_falling",
