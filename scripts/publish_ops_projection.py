@@ -226,6 +226,7 @@ def main(argv: list[str] | None = None) -> int:
             refresh_status = "failed"
             refresh_error = str(exc)[:2000]
             print(f"coverage ledger refresh FAILED: {exc}", file=sys.stderr)
+            # Do not apply-remote a FRESH-looking projection after a failed refresh.
         finally:
             store.close()
 
@@ -257,7 +258,14 @@ def main(argv: list[str] | None = None) -> int:
             f"force={bool(args.force_apply_remote)}"
         )
 
-    sql = render_projection_sql(args.db, snapshot_dir=args.snapshot_dir)
+    sql = render_projection_sql(
+        args.db,
+        snapshot_dir=args.snapshot_dir,
+        refresh_status=refresh_status,
+        refresh_error=refresh_error,
+        last_refresh_attempt_at=last_refresh_attempt_at,
+        last_success_at=last_success_at,
+    )
     from ops.projection_meta import build_projection_metadata
 
     meta = build_projection_metadata(
@@ -288,6 +296,13 @@ def main(argv: list[str] | None = None) -> int:
     print(f"wrote {args.meta_output}")
 
     if args.apply_remote:
+        if refresh_status == "failed":
+            print(
+                "ERROR: refusing --apply-remote after coverage refresh failed "
+                "(fail-closed; projection FRESH requires refresh_success).",
+                file=sys.stderr,
+            )
+            return 4
         # D1 remote execute rejects explicit SQL BEGIN/COMMIT and fails the
         # whole import on duplicate-column ALTER (schema is migration-owned).
         def _keep_remote_line(line: str) -> bool:
@@ -321,13 +336,16 @@ def main(argv: list[str] | None = None) -> int:
             print("ERROR: remote apply failed", file=sys.stderr)
             return proc.returncode
         meta["applied_at"] = _now()
-        meta["status"] = meta.get("status", "FRESH")
+        if meta.get("status") == "FRESH" and refresh_status != "success":
+            meta["status"] = "STALE"
         meta["projection_status"] = meta["status"]
         args.meta_output.write_text(
             json.dumps(meta, indent=2) + "\n", encoding="utf-8"
         )
         print("remote projection applied")
 
+    if refresh_status == "failed":
+        return 4
     return 0
 
 if __name__ == "__main__":

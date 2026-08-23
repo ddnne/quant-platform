@@ -6,6 +6,7 @@ import test from "node:test";
 import {
   callOpsTool,
   classifyRawAcquisition,
+  honestProjectionStatus,
   JSDA_UPSTREAM_LOCATORS,
   syncDatasetState,
 } from "../src/domain.js";
@@ -358,4 +359,96 @@ test("raw zero-row complete is empty-with-evidence not coverage complete", () =>
     JSDA_UPSTREAM_LOCATORS.jsda_otc_bond_reference_prices.includes("market.jsda.or.jp"),
     true,
   );
+});
+
+test("honestProjectionStatus: FRESH requires refresh_status success", () => {
+  const now = Date.parse("2026-08-21T13:00:00Z");
+  const recent = "2026-08-21T12:30:49.152421+00:00";
+  const skipped = honestProjectionStatus({
+    generated_at: recent,
+    status: "FRESH",
+    detail_json: '{"refresh_status":null}',
+  }, now);
+  assert.equal(skipped.status, "STALE");
+  assert.equal(skipped.refreshAttempt, false);
+  assert.equal(skipped.refreshOk, false);
+
+  const failed = honestProjectionStatus({
+    generated_at: recent,
+    status: "FRESH",
+    detail_json: '{"refresh_status":"failed"}',
+  }, now);
+  assert.equal(failed.status, "DEGRADED_REFRESH_FAILED");
+  assert.equal(failed.refreshAttempt, true);
+  assert.equal(failed.refreshOk, false);
+
+  const ok = honestProjectionStatus({
+    generated_at: recent,
+    status: "FRESH",
+    detail_json: '{"refresh_status":"success"}',
+  }, now);
+  assert.equal(ok.status, "FRESH");
+  assert.equal(ok.refreshOk, true);
+
+  const aged = honestProjectionStatus({
+    generated_at: "2026-08-21T12:30:49.152421+00:00",
+    status: "FRESH",
+    detail_json: '{"refresh_status":"success"}',
+  }, Date.parse("2026-08-23T14:00:00Z"));
+  assert.equal(aged.status, "STALE");
+  assert.equal(aged.refreshOk, true);
+});
+
+async function seedProjectionMeta(db, { generatedAt, status, detail, gen }) {
+  db.exec(projectionMigration);
+  db.exec(inventoryMigration);
+  db.exec(generationMigration);
+  db.prepare(`INSERT INTO ops_projection_metadata
+    (generated_at, source_generation, age_seconds, status, projection_version,
+     detail_json, projection_generation_id)
+    VALUES (?,?,?,?,?,?,?)`).run(
+    generatedAt, generatedAt, 0, status, "ops_projection/v3", detail, gen,
+  );
+  db.prepare(`INSERT INTO ops_projection_generation
+    (generation_id, status, generated_at, detail_json) VALUES (?,?,?,?)`).run(
+    gen, "ACTIVE", generatedAt, "{}",
+  );
+  db.prepare(`INSERT INTO ops_projection_active
+    (singleton, generation_id, activated_at) VALUES (?,?,?)`).run(
+    1, gen, generatedAt,
+  );
+}
+
+test("projection_status does not report FRESH when refresh_success is false", async () => {
+  const db = new DatabaseSync(":memory:");
+  const generatedAt = new Date().toISOString();
+  await seedProjectionMeta(db, {
+    generatedAt,
+    status: "FRESH",
+    detail: JSON.stringify({ refresh_status: null }),
+    gen: "projgen-ef18b4f86ee946048161d25e2a30a2a8",
+  });
+  const result = await callOpsTool(d1(db), "projection_status", {});
+  assert.equal(result.projection_status, "STALE");
+  assert.equal(result.stale, true);
+  assert.equal(result.stages.refresh_attempt, false);
+  assert.equal(result.stages.refresh_success, false);
+  db.close();
+});
+
+test("projection_status FRESH only when refresh_status is success and age is fresh", async () => {
+  const db = new DatabaseSync(":memory:");
+  const generatedAt = new Date().toISOString();
+  await seedProjectionMeta(db, {
+    generatedAt,
+    status: "FRESH",
+    detail: JSON.stringify({ refresh_status: "success" }),
+    gen: "projgen-success",
+  });
+  const result = await callOpsTool(d1(db), "projection_status", {});
+  assert.equal(result.projection_status, "FRESH");
+  assert.equal(result.stale, false);
+  assert.equal(result.stages.refresh_attempt, true);
+  assert.equal(result.stages.refresh_success, true);
+  db.close();
 });

@@ -51,6 +51,46 @@ export const OPS_TOOLS = Object.freeze([
  * @param {Record<string, unknown>} properties
  * @param {string[]} required
  */
+/** @param {unknown} raw */
+function parseDetailJson(raw) {
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) return { ...raw };
+  if (typeof raw !== "string" || !raw.trim()) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Honest projection status. Stored FRESH is not FRESH unless coverage refresh
+ * succeeded (detail_json.refresh_status === "success") and age ≤ 86400s.
+ * @param {{generated_at?: unknown, age_seconds?: unknown, status?: unknown, detail_json?: unknown}} metadata
+ * @param {number} [now]
+ */
+export function honestProjectionStatus(metadata, now = Date.now()) {
+  let age = null;
+  const genAt = Date.parse(String(metadata?.generated_at ?? ""));
+  if (!Number.isNaN(genAt)) age = Math.max(0, Math.floor((now - genAt) / 1000));
+  else if (metadata?.age_seconds != null && metadata.age_seconds !== "") {
+    const stored = Number(metadata.age_seconds);
+    age = Number.isFinite(stored) ? Math.max(0, stored) : null;
+  }
+  let status = String(metadata?.status || "UNKNOWN");
+  const refreshStatus = parseDetailJson(metadata?.detail_json).refresh_status ?? null;
+  const refreshAttempt =
+    refreshStatus != null && refreshStatus !== "" && refreshStatus !== "skipped";
+  const refreshOk = refreshStatus === "success";
+  if (age == null && String(metadata?.generated_at || "")) status = "UNKNOWN";
+  if (status === "FRESH" && age != null && age > 86400) status = "STALE";
+  if (status === "FRESH" && age == null) status = "UNKNOWN";
+  if (status === "FRESH" && !refreshOk) {
+    status = refreshStatus === "failed" ? "DEGRADED_REFRESH_FAILED" : "STALE";
+  }
+  return { status, age, refreshStatus, refreshAttempt, refreshOk };
+}
+
 function parseSla(raw) {
   if (raw && typeof raw === "object" && !Array.isArray(raw)) return { ...raw };
   if (typeof raw !== "string" || !raw.trim()) return {};
@@ -605,24 +645,20 @@ export async function callOpsTool(db, name, rawArguments) {
       };
     }
     // Recompute age from request time (never trust stored age=0 forever).
-    let age = null;
-    try {
-      const genAt = Date.parse(String(metadata.generated_at));
-      if (!Number.isNaN(genAt)) age = Math.max(0, Math.floor((Date.now() - genAt) / 1000));
-    } catch {
-      age = Number(metadata.age_seconds ?? 0);
-    }
-    let status = metadata.status || "UNKNOWN";
-    if (age == null && String(metadata.generated_at || "")) status = "UNKNOWN";
-    if (status === "FRESH" && age != null && age > 86400) status = "STALE";
-    if (status === "FRESH" && age == null) status = "UNKNOWN";
+    // FRESH requires refresh_success (detail_json.refresh_status === "success").
+    const honest = honestProjectionStatus(metadata);
+    let status = honest.status;
+    const age = honest.age;
     // Mixed generation detection across coverage table
     const gens = await all(db,
       `SELECT DISTINCT projection_generation_id AS g FROM dataset_coverage
         WHERE projection_generation_id IS NOT NULL LIMIT 20`);
     if (gens.length > 1) status = "DEGRADED_MIXED_GENERATION";
-    const stale = status === "STALE" || status === "DEGRADED_MIXED_GENERATION";
-    const refreshSuccess = status === "FRESH" && !stale;
+    const stale =
+      status === "STALE"
+      || status === "DEGRADED_MIXED_GENERATION"
+      || status === "DEGRADED_REFRESH_FAILED";
+    const refreshSuccess = status === "FRESH" && honest.refreshOk && !stale;
     return {
       plane: "ops_current", mutable: true,
       projection_status: status,
@@ -640,7 +676,7 @@ export async function callOpsTool(db, name, rawArguments) {
         not_fresh: true,
       } : null,
       stages: {
-        refresh_attempt: true,
+        refresh_attempt: honest.refreshAttempt,
         refresh_success: refreshSuccess,
         projection_generated: Boolean(metadata.generated_at),
         d1_applied: Boolean(active?.generation_id),
@@ -651,13 +687,11 @@ export async function callOpsTool(db, name, rawArguments) {
 
   if (name === "collection_sla_status") {
     const projMeta = await first(db,
-      `SELECT generated_at, status FROM ops_projection_metadata ORDER BY generated_at DESC LIMIT 1`);
+      `SELECT generated_at, status, detail_json FROM ops_projection_metadata ORDER BY generated_at DESC LIMIT 1`);
     let projectionStale = true;
     if (projMeta?.generated_at) {
-      const genAt = Date.parse(String(projMeta.generated_at));
-      const age = Number.isNaN(genAt) ? null : Math.max(0, Math.floor((Date.now() - genAt) / 1000));
-      const st = String(projMeta.status || "");
-      projectionStale = st !== "FRESH" || (age != null && age > 86400);
+      const honest = honestProjectionStatus(projMeta);
+      projectionStale = honest.status !== "FRESH" || !honest.refreshOk;
     }
     const projectFromInventory = async (datasetFilter) => {
       const binds = [];

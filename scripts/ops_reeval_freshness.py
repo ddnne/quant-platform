@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Phase 6.3 — targeted remote freshness (no full publish, no segment rewrite).
 
-Advances dataset_coverage.evaluated_at and rotates ops projection FRESH clock
-on remote D1. Never touches coverage_segments / COMPLETE evidence.
+Advances dataset_coverage.evaluated_at on remote D1. Never touches
+coverage_segments / COMPLETE evidence. Does not claim projection FRESH:
+FRESH requires coverage refresh_success (scripts/publish_ops_projection.py
+--refresh-coverage).
 
 Design intent: GLM Phase 6.3 Worker2. Live D1 schema alignment applied so
 wrangler SQL matches quant-ingest (generation_id, not id).
@@ -105,7 +107,7 @@ def build_sql(now: str, gen: str, commit: str) -> str:
     lines.append(
         "UPDATE ops_projection_metadata SET "
         f"generated_at='{_sql_escape(now)}', source_generation='{_sql_escape(now)}', "
-        f"age_seconds=0, status='FRESH', projection_generation_id='{_sql_escape(gen)}', "
+        f"age_seconds=0, status='STALE', projection_generation_id='{_sql_escape(gen)}', "
         f"detail_json='{meta_detail}' "
         "WHERE id=(SELECT id FROM ops_projection_metadata ORDER BY id DESC LIMIT 1);"
     )
@@ -157,8 +159,8 @@ def main(argv: list[str] | None = None) -> int:
     meta_path.write_text(
         json.dumps(
             {
-                "status": "FRESH",
-                "projection_status": "FRESH",
+                "status": "STALE",
+                "projection_status": "STALE",
                 "generated_at": now,
                 "applied_at": now,
                 "active_generation": gen,
