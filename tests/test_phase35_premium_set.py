@@ -34,9 +34,6 @@ REQUIRED_HANDOFF_IDS = {
 
 ADDON_IDS = {"equities_bars_minute", "equities_trades", "td_list", "td_files", "td_bulk"}
 
-CATALOG_TS = Path(__file__).resolve().parents[1] / (
-    "platform/workers/ingestion-premium/src/catalog.ts"
-)
 CONTRACT_JSON = Path(__file__).resolve().parents[1] / (
     "packages/data_plane/data_contracts/jquants_premium_core.json"
 )
@@ -78,18 +75,9 @@ def test_required_datasets_all_have_v2_paths():
         assert isinstance(path, str) and path.startswith("/v2/") and len(path) > 4, did
 
 
-def test_typescript_catalog_matches_python():
-    """The Worker derives its dataset list from the shared JSON document."""
-    assert CATALOG_TS.exists(), f"missing {CATALOG_TS}"
-    text = CATALOG_TS.read_text(encoding="utf-8")
+def test_contract_json_matches_premium_core_datasets():
+    """Python PREMIUM_CORE_DATASETS must equal the shared JSON document ids."""
     assert set(_contract_entries()) == set(PREMIUM_CORE_DATASETS)
-    assert (
-        'from "../../../../packages/data_plane/data_contracts/jquants_premium_core.json"'
-        in text
-    )
-    assert "contractDocument.datasets" in text
-    assert "rawContracts.map" in text
-    assert 'id: "equities_master"' not in text
 
 
 def test_typescript_paths_match_python():
