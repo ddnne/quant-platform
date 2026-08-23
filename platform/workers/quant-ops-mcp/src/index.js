@@ -5,6 +5,7 @@
 import OAuthProvider from "@cloudflare/workers-oauth-provider";
 import { QuantOpsMcpAgent } from "./agent.js";
 import { githubHandler } from "./github-handler.js";
+import { handleHealthRequest } from "./health.js";
 
 export { QuantOpsMcpAgent };
 
@@ -20,24 +21,6 @@ const oauthProvider = new OAuthProvider({
   clientRegistrationEndpoint: "/register",
 });
 
-/** Unauthenticated liveness for monitoring. */
-async function handleHealthz(request) {
-  if (request.method !== "GET" && request.method !== "HEAD") {
-    return new Response(null, { status: 405, headers: { Allow: "GET, HEAD" } });
-  }
-  const body = {
-    ok: true,
-    service: "quant-ops-read-mcp",
-    auth: "github-oauth",
-  };
-  const headers = {
-    "Content-Type": "application/json; charset=utf-8",
-    "Cache-Control": "no-store",
-  };
-  if (request.method === "HEAD") return new Response(null, { status: 200, headers });
-  return new Response(JSON.stringify(body), { status: 200, headers });
-}
-
 export default {
   /**
    * @param {Request} request
@@ -46,9 +29,8 @@ export default {
    */
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
-    if (url.pathname === "/healthz" || url.pathname === "/health") {
-      return handleHealthz(request);
-    }
+    const health = handleHealthRequest(request);
+    if (health) return health;
     // Protected-resource metadata: authorization server is this Worker.
     if (url.pathname === "/.well-known/oauth-protected-resource" ||
         url.pathname === "/.well-known/oauth-protected-resource/mcp") {
