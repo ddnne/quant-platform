@@ -19,6 +19,10 @@ export async function handleArchiveCold(
   request: Request,
   env: ArchiveEnv,
 ): Promise<Response> {
+  if (request.method !== "POST") {
+    return Response.json({ error: "POST required" }, { status: 405 });
+  }
+
   const url = new URL(request.url);
 
   const token =
