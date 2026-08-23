@@ -5,7 +5,10 @@ default path. Live API paths (if any) are opt-in via env flags and are not part
 of the guard packs below.
 
 ```bash
-# Pre-push (G2 pytest + catalog freeze + worker npm tests; no wrangler deploy)
+# Mandatory CI (fail-closed: pytest + catalog + IR + all workers npm ci/test/typecheck/dry-run)
+scripts/verify_ci.sh
+
+# Fast local helper (optional VERIFY_* skips; may skip missing node_modules)
 scripts/verify_all.sh
 
 # Full offline suite (G2)
@@ -22,7 +25,7 @@ scripts/verify_all.sh
 
 Live residual COMPLETE / Mass status is **not** decided by tests — see
 [`docs/phase62_residual_status.md`](../docs/phase62_residual_status.md).
-Pre-push entry (G0/G2 wrap): [`scripts/verify_all.sh`](../scripts/verify_all.sh).
+Mandatory CI: [`scripts/verify_ci.sh`](../scripts/verify_ci.sh). Fast local helper: [`scripts/verify_all.sh`](../scripts/verify_all.sh).
 
 ---
 

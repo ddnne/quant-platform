@@ -17,6 +17,7 @@ WORKERS=(
   platform/workers/quant-ops-mcp
   platform/workers/research-ai-gateway
   platform/workers/research-mass-eval
+  platform/workers/ci-aggregate
 )
 
 # Print package.json scripts.<name> body, or empty if missing.
