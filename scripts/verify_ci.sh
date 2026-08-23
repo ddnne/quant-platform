@@ -60,7 +60,7 @@ echo "==> python pytest"
 echo "==> catalog compile + catalog_ids freeze"
 "$py" -c "from research.catalog_compiler import compile_catalog, assert_catalog_ids_emit_frozen; compile_catalog(); assert_catalog_ids_emit_frozen()"
 
-echo "==> Evaluation IR golden/schema presence"
+echo "==> Evaluation IR schema + golden (jsonschema + codec roundtrip)"
 golden="$ROOT/specs/evaluation_ir/golden.jsonl"
 schema="$ROOT/specs/evaluation_ir/schema.json"
 schema_py="$ROOT/packages/product/research/evaluation_ir.py"
@@ -75,6 +75,81 @@ if [[ ! -s "$golden" ]]; then
   echo "Evaluation IR golden is empty: $golden" >&2
   exit 1
 fi
+# Independent jsonschema + Python encode/decode. evaluation_ir.ts stays a
+# presence check (hand-written; not treated as generated in this gate).
+"$py" -c 'import json
+from pathlib import Path
+import jsonschema
+from jsonschema import Draft7Validator
+from research.evaluation_ir import (
+    decode_evaluation_ir,
+    encode_evaluation_ir,
+    load_evaluation_ir_schema,
+)
+
+schema_path = Path("specs/evaluation_ir/schema.json")
+golden_path = Path("specs/evaluation_ir/golden.jsonl")
+if not schema_path.is_file():
+    raise SystemExit(f"Evaluation IR schema missing: {schema_path}")
+if not golden_path.is_file():
+    raise SystemExit(f"Evaluation IR golden missing: {golden_path}")
+schema = json.loads(schema_path.read_text(encoding="utf-8"))
+if not isinstance(schema, dict) or not schema:
+    raise SystemExit("Evaluation IR schema is empty")
+if load_evaluation_ir_schema() != schema:
+    raise SystemExit("Evaluation IR schema.json drifted from research.evaluation_ir")
+raw = golden_path.read_text(encoding="utf-8")
+if not raw.strip():
+    raise SystemExit(f"Evaluation IR golden is empty: {golden_path}")
+n = 0
+for lineno, line in enumerate(raw.splitlines(), start=1):
+    if not line.strip():
+        continue
+    n += 1
+    try:
+        row = json.loads(line)
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"Evaluation IR golden line {lineno}: invalid JSON: {exc}") from exc
+    if not isinstance(row, dict):
+        raise SystemExit(f"Evaluation IR golden line {lineno}: row must be an object")
+    label = row.get("id", lineno)
+    op = row.get("op")
+    if op == "roundtrip":
+        encoded = encode_evaluation_ir(**row["args"])
+        jsonschema.validate(instance=encoded, schema=schema, cls=Draft7Validator)
+        decoded = decode_evaluation_ir(encoded)
+        if decoded.to_dict() != encoded:
+            raise SystemExit(f"Evaluation IR golden {label}: encode/decode roundtrip drift")
+        expect = row["expect"]
+        if (
+            encoded["candidate"] is not expect["candidate"]
+            or encoded["failure_reason"] != expect["failure_reason"]
+        ):
+            raise SystemExit(f"Evaluation IR golden {label}: expect drift")
+        continue
+    if op == "decode":
+        payload = row["payload"]
+        schema_ok = True
+        try:
+            jsonschema.validate(instance=payload, schema=schema, cls=Draft7Validator)
+        except jsonschema.ValidationError:
+            schema_ok = False
+        try:
+            decode_evaluation_ir(payload)
+        except (ValueError, TypeError) as exc:
+            needle = str(row.get("expect_error") or "")
+            if needle and needle not in str(exc):
+                raise SystemExit(
+                    f"Evaluation IR golden {label}: unexpected decode error: {exc}"
+                ) from exc
+            continue
+        if not schema_ok:
+            raise SystemExit(f"Evaluation IR golden {label}: decode ignored schema.json")
+        raise SystemExit(f"Evaluation IR golden {label}: expected decode to fail")
+    raise SystemExit(f"Evaluation IR golden {label}: unknown op {op!r}")
+if n == 0:
+    raise SystemExit(f"Evaluation IR golden is empty: {golden_path}")
+'
 
 if ! command -v npm >/dev/null 2>&1; then
   echo "npm not found" >&2

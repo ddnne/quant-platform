@@ -57,6 +57,13 @@ def test_verify_ci_script_exists_executable_and_covers_required_steps() -> None:
     assert "specs/evaluation_ir/schema.json" in src
     assert "evaluation_ir.py" in src
     assert "evaluation_ir.ts" in src
+    assert "jsonschema" in src
+    assert "jsonschema.validate" in src
+    assert "decode_evaluation_ir" in src
+    assert "encode_evaluation_ir" in src
+    assert "load_evaluation_ir_schema" in src
+    pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    assert "jsonschema" in pyproject
     assert len(WORKERS) == 7
     assert "package-lock.json" in src
     assert "npm ci" in src
@@ -111,3 +118,19 @@ def test_verify_ci_bans_legacy_peer_deps_skips_and_live_deploy() -> None:
                 assert "command -v" not in code or "npm" in code, (
                     f"{SCRIPT}:{i} must not silently use system python"
                 )
+
+
+def test_verify_ci_evaluation_ir_invokes_schema_and_codec_not_only_presence() -> None:
+    src = _src()
+    start = src.index("Evaluation IR")
+    end = src.index("npm not found")
+    block = src[start:end]
+    assert "$py" in block
+    assert "jsonschema.validate" in block
+    assert "Draft7Validator" in block
+    assert "decode_evaluation_ir" in block
+    assert "encode_evaluation_ir" in block
+    assert "load_evaluation_ir_schema" in block
+    assert "specs/evaluation_ir/schema.json" in block
+    assert "specs/evaluation_ir/golden.jsonl" in block
+    assert "evaluation_ir.ts" in block
