@@ -10,7 +10,7 @@ extracts landed. Leftover occupancy **HOLD** in `daily_path.ts`.
 `coverage_receipts`, `snapshot_publish_policy`, `snapshot_coverage_proof`,
 `snapshot_persist`, `snapshot_read`, `eval_orchestrate`,
 `ingestion-premium/collection_receipts.ts` — **DONE** in §7.  
-**Live strategy at `03409ccd`:** §10 — remaining extracts vs HOLD. YAML
+**Live strategy at `d1028961`:** §10 — remaining extracts vs HOLD. YAML
 file-count waste is closed. Size is not waste. Do not extract leftover
 occupancy. Do not add YAML. Do not declare Phase 7 GO.  
 **Mass / READY / Phase 7:** unchanged (NO-GO / not declared / OFF)
@@ -364,7 +364,7 @@ and COMPLETE predicates unchanged, generated files still generated.
 
 ---
 
-## 10. Current remaining extracts vs HOLD (HEAD 03409ccd)
+## 10. Current remaining extracts vs HOLD (HEAD d1028961)
 
 This is the **live** refactor strategy for “the code is full of waste.”
 §§1–9 remain the plan at `41003a5` / status at `5c9b962`. Follow this
@@ -492,13 +492,21 @@ fetch 404/405 (`1b20fe1f`); complete unbound 503 (`a4aaa9db`) —
 parquet-manifest / artifacts-plan header-only tokens (`af85daf3`;
 `17025eb7`; `4c732e8b`; `2a98ef12`); budget HTTP dispatcher
 (`72c30726`); ops-mcp GET `/mcp` 405 (`83941c19`) —
-**LANDED**. Remaining mixed at this SHA (agent-capable before sibling
-commits): premium export POST still dumps D1;
-`deploy_cf_mass_eval_worker` live wrangler deploy without opt-in env.
-Remaining HOLD: leftover occupancy, unique22, GATEWAY_TOKEN P632B-03,
-persist live upsert, compact catalog, `verify_all` vs `verify_ci`
-split. Do not schedule leftover occupancy extract. Do not YAML +N. Do
-not declare Phase 7 GO.
+**LANDED**. After `03409ccd`: premium D1 export GET-only POST 405
+(`db217acf`); mass-eval wrangler deploy opt-in fail-closed
+(`d93ee610`); r2 get non-authority pins (`9e265280`; `3c212f7d`;
+`8a61a03d`; `e0a6fa44`; `06f5c640`); budget HTTP missing-field
+units (`539f95f4`; `7f4c0a6a`; `24f0e8d2`; `395e4676`;
+`e4517282`); query-token header-only (already before); ci-aggregate
+GET receipts (`bf0c0953`); JSDA/secrets/ops-mcp remaining HTTP
+(`4f9a7db4`; `94765c86`; `a5dd3765`); ops-mcp health extract
+(`d1028961`) — **LANDED**. Remaining mixed at this SHA: leftover
+occupancy, unique22, GATEWAY_TOKEN P632B-03, persist live upsert,
+compact catalog, `verify_all` vs `verify_ci` split (**HOLD**).
+Agent-capable fail-closed HTTP holes named at `03409ccd` are
+**LANDED**. Do not schedule leftover occupancy extract. Do not YAML +N.
+Do not declare Phase 7 GO. Do not claim ci-aggregate Worker exists
+live.
 
 | Later | Mixed surface | Authority to pick | Must not |
 |------:|---------------|-------------------|----------|
@@ -541,6 +549,8 @@ family-slice remaining façade handlers.
 ✗ Claim mutating premium ops archive-cold / prune-changelog / parquet-manifest are POST-only at 81fecac8
 ✗ Claim query-string token on premium ops is closed / header-only token is operator contract at 1b20fe1f
 ✗ Claim premium export POST does not dump D1 / deploy_cf_mass_eval_worker has opt-in env at 03409ccd
+✗ Claim leftover occupancy / unique22 / GATEWAY_TOKEN P632B-03 / persist live upsert / compact catalog / verify_all vs verify_ci closed at d1028961
+✗ Claim ci-aggregate Worker exists live
 ```
 
 Success for a later extract commit: one authority moved, G0 green,
