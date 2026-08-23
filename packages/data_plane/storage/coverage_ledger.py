@@ -362,6 +362,26 @@ def plan_required_segments(
     return tuple(segments)
 
 
+def _empty_observed_forbids_complete(policy: CollectionCoverageContract) -> bool:
+    """Tip snapshots and official-archive-index never COMPLETE on empty receipts.
+
+    Event-zero COMPLETE stays only for genuine event_driven historical windows
+    (fins disclosures). coverage_mode containing snapshot, snapshot grains
+    (collection_cutoff / same_trading_day), or official_archive_index stay
+    PARTIAL even when expected_frequency is still event_driven.
+    """
+    mode = policy.coverage_mode
+    grain = policy.segment_granularity
+    history_mode = policy.history_mode or ""
+    if "snapshot" in mode or "snapshot" in history_mode:
+        return True
+    if grain in SNAPSHOT_SEGMENT_GRANULARITIES:
+        return True
+    if grain.startswith(("collection_cutoff", "same_trading_day")):
+        return True
+    return "official_archive_index" in mode
+
+
 def evaluate_segment(
     policy: CollectionCoverageContract,
     required: RequiredCoverageSegment,
@@ -402,6 +422,10 @@ def evaluate_segment(
         return "FAILED", {"reason": receipt.error or "collection failed"}
     if not receipt.pagination_exhausted:
         return "PARTIAL", {"reason": "pagination not exhausted"}
+    if receipt.observed_items == 0 and _empty_observed_forbids_complete(policy):
+        return "PARTIAL", {
+            "reason": "empty tip-snapshot or archive-index receipt is not complete"
+        }
     if (
         policy.expected_frequency != "event_driven"
         and required.expected_items is None
