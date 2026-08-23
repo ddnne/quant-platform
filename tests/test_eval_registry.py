@@ -191,6 +191,7 @@ def test_always_on_occupancy_is_not_candidate(
 
 def test_mechanical_baskets_are_four_valid_defs() -> None:
     from research.combo_basket_catalog import (
+        HISTORICAL_BASKET_RULES,
         RETIRED_BASKET_RULES,
         mechanical_basket_defs,
         validate_basket_members,
@@ -213,8 +214,13 @@ def test_mechanical_baskets_are_four_valid_defs() -> None:
     assert "event_calendar_only" not in rules
     for d in defs:
         assert d["valid"] is True
-        assert d["deprecated"] is False
         assert d["go"] is False
+        hist = d["rule"] in HISTORICAL_BASKET_RULES
+        assert d["historical"] is hist
+        assert d["deprecated"] is hist
+        if hist:
+            assert d["primary"] is False
+            assert d["primary_candidate"] is False
         assert 2 <= len(d["members"]) <= 5
         assert validate_basket_members(d["members"]) == []
         assert CANDIDATE_POLICY["go"] is False
@@ -298,6 +304,90 @@ def test_mechanical_baskets_report_nested_parents_without_reject() -> None:
     assert validate_basket_members(evf["members"]) == []
     assert nested_parent_pairs(["event_ta_up_positive_eps"]) == []
     assert nested_parent_pairs([]) == []
+
+
+def test_historical_baskets_are_deprecated_not_invalid() -> None:
+    from research.combo_basket_catalog import (
+        HISTORICAL_BASKET_RULES,
+        mechanical_basket_defs,
+        primary_mechanical_basket_defs,
+    )
+
+    defs = mechanical_basket_defs()
+    hist = [d for d in defs if d["historical"]]
+    live = [d for d in defs if not d["historical"]]
+    assert {d["rule"] for d in hist} == set(HISTORICAL_BASKET_RULES)
+    assert hist and all(d["deprecated"] is True for d in hist)
+    assert all(d["valid"] is True for d in hist)
+    assert all(d["primary"] is False for d in hist)
+    assert all(d["deprecated"] is False for d in live)
+    prim_rules = {d["rule"] for d in primary_mechanical_basket_defs()}
+    assert prim_rules.isdisjoint(HISTORICAL_BASKET_RULES)
+
+
+def test_reconstitution_options_drop_nested_without_reject() -> None:
+    from research.combo_basket_catalog import (
+        reconstitution_options,
+        reconstitution_plan,
+        would_nest_in_sleeve,
+    )
+
+    fund = [
+        "event_ta_up_positive_eps",
+        "event_large_surprise_positive_eps",
+        "event_ac_peps_taup",
+        "event_eqar_high_positive_eps",
+        "event_positive_eps_liq_high",
+    ]
+    opts = reconstitution_options(fund)
+    assert opts["apply_reject"] is False
+    assert opts["go"] is False
+    drop_p = opts["drop_parents_keep_children"]
+    drop_c = opts["drop_children_keep_parents"]
+    assert "event_ta_up_positive_eps" not in drop_p["members"]
+    assert "event_ac_peps_taup" in drop_p["members"]
+    assert "event_ac_peps_taup" not in drop_c["members"]
+    assert "event_ta_up_positive_eps" in drop_c["members"]
+    assert drop_p["nested_parent_count"] == 0
+    assert drop_c["nested_parent_count"] == 0
+    assert would_nest_in_sleeve("event_ta_up_positive_eps", ["event_ac_peps_taup"])
+    assert not would_nest_in_sleeve(
+        "event_eqar_high_positive_eps",
+        ["event_large_surprise_positive_eps"],
+    )
+    plan = {p["basket_id"]: p for p in reconstitution_plan()}
+    assert plan["basket_theme_fund"]["needs_reconstitution"] is True
+    assert plan["basket_event_fund"]["needs_reconstitution"] is True
+    assert plan["basket_theme_flow"]["needs_reconstitution"] is False
+    assert plan["basket_theme_fund"]["apply_reject"] is False
+    assert plan["basket_head4"]["historical"] is True
+    assert plan["basket_head4"]["needs_reconstitution"] is False
+
+
+def test_replacement_reject_reasons_block_soup_and_primary() -> None:
+    from research.combo_basket_catalog import replacement_reject_reasons
+    from research.unique_logic.constants import PRI_FLOW_GATES
+
+    flow = [
+        "event_positive_eps_uncrowded",
+        "surprise_xs_ac_peps_taup",
+        "surprise_xs_uncrowded_afterclose",
+        "event_ta_up_uncrowded",
+    ]
+    rest = flow[:-1]
+    assert "one_and_soup" in replacement_reject_reasons(
+        "event_skip_announce_day", rest, theme_gates=PRI_FLOW_GATES
+    )
+    assert "one_and_soup" in replacement_reject_reasons(
+        "event_curve_invert_fade", rest, theme_gates=PRI_FLOW_GATES
+    )
+    assert "already_primary_member" in replacement_reject_reasons(
+        "event_large_surprise_positive_eps", rest, theme_gates=PRI_FLOW_GATES
+    )
+    assert "theme_gate_mismatch" in replacement_reject_reasons(
+        "event_epsu_peps", rest, theme_gates=PRI_FLOW_GATES
+    )
+    assert replacement_reject_reasons("event_positive_eps_uncrowded", rest) == []
 
 
 def test_meta_baskets_are_fund_line_and_not_a_pass() -> None:

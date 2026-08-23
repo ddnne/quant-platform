@@ -26,6 +26,15 @@ RETIRED_BASKET_RULES: frozenset[str] = frozenset(
         "event_calendar_only",
     }
 )
+HISTORICAL_BASKET_RULES: frozenset[str] = frozenset(
+    {
+        "known_candidate_head",
+        "event_family_only",
+        "family_spread",
+        "mid_occupancy_band",
+        "cs_family_only",
+    }
+)
 MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
     {
         "basket_id": "basket_head4",
@@ -225,6 +234,109 @@ def nested_parent_pairs(logic_ids: Sequence[str]) -> list[dict[str, Any]]:
     return out
 
 
+def would_nest_in_sleeve(candidate: str, members: Sequence[str]) -> bool:
+    """True when adding candidate creates a nested parent pair. Detect only."""
+    lid = str(candidate or "").strip()
+    if not lid:
+        return False
+    rest = [str(x).strip() for x in members if str(x).strip() and str(x).strip() != lid]
+    return bool(nested_parent_pairs([lid, *rest]))
+
+
+def primary_sleeve_member_ids() -> frozenset[str]:
+    """Members of current primary sleeves. Historical deprecated sleeves excluded."""
+    out: set[str] = set()
+    for d in mechanical_basket_defs():
+        if d.get("historical"):
+            continue
+        if not (d.get("primary") or d.get("primary_candidate")):
+            continue
+        out.update(str(x) for x in (d.get("members") or ()))
+    return frozenset(out)
+
+
+def replacement_reject_reasons(
+    candidate: str,
+    members: Sequence[str],
+    *,
+    theme_gates: Sequence[str] | None = None,
+) -> list[str]:
+    """Why a sleeve replacement is not adoptable. Does not mutate. Not a pass.
+
+    1-AND soup, nested parents, calendar, and already-primary members are
+    rejected. Optional theme_gates (e.g. PRI_FLOW_GATES) keep the sleeve on
+    theme. Empty leftover occupancy is not a pass.
+    """
+    lid = str(candidate or "").strip()
+    reasons: list[str] = []
+    if not lid:
+        reasons.append("empty_candidate")
+        return reasons
+    gates = _spec_gates(lid)
+    if len(gates) < 2:
+        reasons.append("one_and_soup")
+    if would_nest_in_sleeve(lid, members):
+        reasons.append("nested_parent")
+    if _member_has_calendar(lid):
+        reasons.append("calendar_member")
+    if lid in primary_sleeve_member_ids() and lid not in {str(x) for x in members}:
+        reasons.append("already_primary_member")
+    if theme_gates is not None and not gates.intersection(str(g) for g in theme_gates):
+        reasons.append("theme_gate_mismatch")
+    return reasons
+
+
+def reconstitution_options(logic_ids: Sequence[str]) -> dict[str, Any]:
+    """Drop nested parents or nested children. Does not mutate sleeves. Not a pass.
+
+    apply_reject stays False until a human reconstitution replaces primary
+    members. Empty leftover sleeves are recorded, not auto-filled.
+    """
+    ids = [str(x).strip() for x in logic_ids if str(x).strip()]
+    nested = nested_parent_pairs(ids)
+    parents = {p["parent"] for p in nested}
+    children = {p["child"] for p in nested}
+    keep_children = [i for i in ids if i not in parents]
+    keep_parents = [i for i in ids if i not in children]
+    return {
+        "nested_parents": nested,
+        "apply_reject": False,
+        "drop_parents_keep_children": {
+            "members": keep_children,
+            "nested_parent_count": len(nested_parent_pairs(keep_children)),
+            "dropped": sorted(parents),
+        },
+        "drop_children_keep_parents": {
+            "members": keep_parents,
+            "nested_parent_count": len(nested_parent_pairs(keep_parents)),
+            "dropped": sorted(children),
+        },
+        "go": False,
+        "not_a_pass": True,
+    }
+
+
+def reconstitution_plan() -> list[dict[str, Any]]:
+    """Per-sleeve reconstitution options. Does not change members. Not a pass."""
+    out: list[dict[str, Any]] = []
+    for d in mechanical_basket_defs():
+        opts = reconstitution_options(list(d.get("members") or ()))
+        nested_n = int(d.get("nested_parent_count") or 0)
+        primary = bool(d.get("primary") or d.get("primary_candidate"))
+        out.append(
+            {
+                "basket_id": d["basket_id"],
+                "rule": d["rule"],
+                "primary": bool(d.get("primary")),
+                "historical": bool(d.get("historical")),
+                "valid": bool(d.get("valid")),
+                "needs_reconstitution": bool(primary and nested_n),
+                **opts,
+            }
+        )
+    return out
+
+
 def equal_weights(n: int) -> list[float]:
     if n <= 0:
         return []
@@ -243,13 +355,15 @@ def mechanical_basket_defs() -> list[dict[str, Any]]:
         nested = nested_parent_pairs(members)
         prim = bool(raw.get("primary"))
         pc = bool(raw.get("primary_candidate")) or prim
+        hist = rule in HISTORICAL_BASKET_RULES
         out.append(
             {
                 "basket_id": str(raw["basket_id"]),
                 "rule": rule,
                 "primary": prim,
                 "primary_candidate": pc,
-                "deprecated": False,
+                "historical": hist,
+                "deprecated": hist,
                 "members": list(members),
                 "valid": not reasons,
                 "reject": reasons,
