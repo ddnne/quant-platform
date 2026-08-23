@@ -3,6 +3,10 @@
 The Premium-core JSON document is the policy authority for both Python and
 the Cloudflare Worker. Compatibility constants are derived views, not a
 second hand-maintained catalog.
+
+Worker wrapper policy (unknown dataset / missing contract field →
+ingest_time_conservative) is executed in
+``platform/workers/ingestion-premium/src/availability.test.ts``.
 """
 
 from __future__ import annotations
@@ -30,7 +34,6 @@ from data_contracts.loader import (
 
 
 ROOT = Path(__file__).resolve().parents[1]
-AVAILABILITY_TS = ROOT / "platform/workers/ingestion-premium/src/availability.ts"
 IDENTITY_TS = ROOT / "platform/workers/ingestion-premium/src/identity.ts"
 
 
@@ -157,10 +160,7 @@ def test_compatibility_field_union_is_derived_not_a_priority_policy():
 
 
 def test_worker_wrappers_delegate_contract_policy_and_identity_constants():
-    availability = AVAILABILITY_TS.read_text(encoding="utf-8")
     identity = IDENTITY_TS.read_text(encoding="utf-8")
-    assert '?? "ingest_time_conservative"' in availability
-    assert "pickFromContract(row, spec, ingestedAt)" in availability
     assert "2024-11-05" in identity
     assert "15:30:00" in identity
     assert "15:00:00" in identity
