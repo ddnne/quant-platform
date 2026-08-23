@@ -9,13 +9,14 @@ emit_evaluation_ir_golden / emit_golden_vector (encoder-owned).
 Worker tests consume that file; jobCandidateGrade is the only TS grade.
 Codec field SoT: specs/evaluation_ir/schema.json (Python encode/decode validates).
 Worker decode does not load a JSON Schema engine; unknown keys fail against
-ALLOWED_FIELDS (schema additionalProperties: false) and version must be
-evaluation-ir/v1.
+ALLOWED_FIELDS generated from schema properties (additionalProperties: false)
+and version must be evaluation-ir/v1.
 */
 
 import { jobCandidateGrade } from "./candidate";
+import { ALLOWED_FIELDS } from "./evaluation_ir_allowed_fields.generated";
 
-export { jobCandidateGrade };
+export { jobCandidateGrade, ALLOWED_FIELDS };
 
 export const EVALUATION_IR_VERSION = "evaluation-ir/v1";
 
@@ -34,20 +35,6 @@ export const CANONICAL_FIELDS = [
   "candidate",
   "failure_reason",
 ] as const;
-
-const GRADE_FIELDS = [
-  "n_expected",
-  "n_cells",
-  "n_complete",
-  "n_collapsed",
-  "n_broken",
-] as const;
-
-export const ALLOWED_FIELDS: ReadonlySet<string> = new Set([
-  "version",
-  ...CANONICAL_FIELDS,
-  ...GRADE_FIELDS,
-]);
 
 export type EvaluationIRPayload = {
   version: string;

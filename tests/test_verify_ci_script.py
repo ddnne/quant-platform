@@ -57,6 +57,8 @@ def test_verify_ci_script_exists_executable_and_covers_required_steps() -> None:
     assert "specs/evaluation_ir/schema.json" in src
     assert "evaluation_ir.py" in src
     assert "evaluation_ir.ts" in src
+    assert "evaluation_ir_allowed_fields.generated.ts" in src
+    assert "assert_evaluation_ir_allowed_fields_ts_frozen" in src
     assert "jsonschema" in src
     assert "jsonschema.validate" in src
     assert "decode_evaluation_ir" in src
@@ -134,3 +136,5 @@ def test_verify_ci_evaluation_ir_invokes_schema_and_codec_not_only_presence() ->
     assert "specs/evaluation_ir/schema.json" in block
     assert "specs/evaluation_ir/golden.jsonl" in block
     assert "evaluation_ir.ts" in block
+    assert "evaluation_ir_allowed_fields.generated.ts" in block
+    assert "assert_evaluation_ir_allowed_fields_ts_frozen" in block

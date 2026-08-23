@@ -14,11 +14,14 @@ from research.evaluation_ir import (
     CANONICAL_FIELDS,
     EVALUATION_IR_VERSION,
     SCHEMA_REL,
+    assert_evaluation_ir_allowed_fields_ts_frozen,
     candidate_from_job_artifact,
     decode_evaluation_ir,
     dumps_evaluation_ir_golden,
     emit_evaluation_ir_golden,
     encode_evaluation_ir,
+    evaluation_ir_allowed_fields_ts_path,
+    evaluation_ir_allowed_fields_ts_source,
     job_candidate_grade as ir_grade,
     load_evaluation_ir_schema,
     validate_evaluation_ir_schema,
@@ -75,6 +78,24 @@ def test_schema_is_codec_sot() -> None:
     assert schema["properties"]["version"]["const"] == "evaluation-ir/v1"
     assert EVALUATION_IR_VERSION == schema["properties"]["version"]["const"]
     assert ALLOWED_FIELDS == frozenset(schema["properties"])
+    generated = evaluation_ir_allowed_fields_ts_source()
+    path = evaluation_ir_allowed_fields_ts_path()
+    assert path.is_file()
+    assert path.read_text(encoding="utf-8") == generated
+    header = generated.split("export const", 1)[0]
+    assert "Do not edit by hand" in header
+    assert "schema.json" in header
+    assert_evaluation_ir_allowed_fields_ts_frozen()
+    worker = (
+        Path(__file__).resolve().parents[1]
+        / "platform"
+        / "workers"
+        / "research-mass-eval"
+        / "src"
+        / "evaluation_ir.ts"
+    )
+    worker_src = worker.read_text(encoding="utf-8")
+    assert 'from "./evaluation_ir_allowed_fields.generated"' in worker_src
     assert "const" not in schema["properties"]["candidate"]
     assert "if" not in schema
     assert "then" not in schema

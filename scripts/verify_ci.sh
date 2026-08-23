@@ -65,7 +65,8 @@ golden="$ROOT/specs/evaluation_ir/golden.jsonl"
 schema="$ROOT/specs/evaluation_ir/schema.json"
 schema_py="$ROOT/packages/product/research/evaluation_ir.py"
 schema_ts="$ROOT/platform/workers/research-mass-eval/src/evaluation_ir.ts"
-for p in "$golden" "$schema" "$schema_py" "$schema_ts"; do
+allowed_ts="$ROOT/platform/workers/research-mass-eval/src/evaluation_ir_allowed_fields.generated.ts"
+for p in "$golden" "$schema" "$schema_py" "$schema_ts" "$allowed_ts"; do
   if [[ ! -f "$p" ]]; then
     echo "Evaluation IR missing golden/schema: $p" >&2
     exit 1
@@ -76,7 +77,8 @@ if [[ ! -s "$golden" ]]; then
   exit 1
 fi
 # Independent jsonschema + Python encode/decode. evaluation_ir.ts stays a
-# presence check (hand-written; not treated as generated in this gate).
+# presence check (hand-written codec). ALLOWED_FIELDS is generated from schema.json.
+"$py" -c 'from research.evaluation_ir import assert_evaluation_ir_allowed_fields_ts_frozen; assert_evaluation_ir_allowed_fields_ts_frozen()'
 "$py" -c 'import json
 from pathlib import Path
 import jsonschema
