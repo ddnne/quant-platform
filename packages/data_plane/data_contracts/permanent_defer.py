@@ -41,7 +41,10 @@ via this module. Other PD ids (bars_am, OTC, master, earn_cal) remain.
 * This defer record stays. Do not invent Dataset COMPLETE by floor bump.
   Remaining genuine gaps on or after 2008-05-07 stay PARTIAL.
 * Honest island remains ``2008-05→latest`` (tip continuous). PIT history
-  from 2008-05-07.
+  from 2008-05-07. ``FeatureContext.get_equity_master`` reads that island
+  through PIT with ``as_of`` required; pre-official rows are empty /
+  fail-closed. Remaining genuine gaps stay PARTIAL (PD-D2-MASTER). Do not
+  invent Dataset COMPLETE.
 
 Ops / tip / SCD2 CURRENT reads are out of scope for this module — only
 history-grade research loaders should call the guards below. Tip continuous

@@ -22,6 +22,7 @@ from data_contracts.permanent_defer import (
     reject_permanent_defer_for_history,
     require_history_eligible,
 )
+from data_contracts.source_capability import source_capability_contract_for
 
 # Dataset COMPLETE 21 (held). Must stay aligned with residual SoT /
 # docs/proof/coverage_baseline_21_usage_notes_20260815.md.
@@ -54,10 +55,19 @@ COMPLETE_21_DATASETS: frozenset[str] = frozenset(
 # Curated PIT shortcuts that map to a single dataset id.
 _SHORTCUT_DATASET: dict[str, str] = {
     "equity_bars_daily": "equities_bars_daily",
-    "equity_master": "equities_master",  # permanent DEFER — blocked for history
+    # PD-D2-MASTER residual (PARTIAL after official start). FeatureContext
+    # get_equity_master uses PIT from 2008-05-07; generic history still DEFERs.
+    "equity_master": "equities_master",
     "market_calendar": "markets_calendar",
     "jsda_repo_rates": "jsda_tokyo_repo_rates",
 }
+
+
+def master_pit_history_start() -> str:
+    """Official listed-info start for PIT master reads. Not Dataset COMPLETE."""
+    return source_capability_contract_for(
+        "equities_master"
+    ).earliest_official_availability
 
 
 def require_feature_dataset(
@@ -106,6 +116,7 @@ __all__ = [
     "filter_feature_datasets",
     "filter_permanent_defer",
     "is_permanent_defer",
+    "master_pit_history_start",
     "reject_permanent_defer_for_history",
     "require_feature_dataset",
     "require_feature_datasets",

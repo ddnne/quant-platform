@@ -24,7 +24,7 @@ import pit
 from pit.query import resolve_db_path
 
 from . import registry as _registry
-from .dataset_guard import require_feature_dataset
+from .dataset_guard import master_pit_history_start, require_feature_dataset
 from .types import FeatureDefinition, FeatureOutput
 
 FEATURES_RUNTIME_VERSION = "0.6.0"
@@ -84,14 +84,28 @@ class FeatureContext:
         return self._read("equity_bars_daily", kwargs)
 
     def get_equity_master(self, **kwargs: Any):
-        """PIT equity master — **blocked** for feature history (permanent DEFER).
+        """PIT equity master from official listed-info start 2008-05-07.
 
-        ``equities_master`` is PD-D2-MASTER (not Dataset COMPLETE). Features must
-        not use master history loads; raise :class:`PermanentDeferHistoryError`.
+        ``equities_master`` remains PD-D2-MASTER (not Dataset COMPLETE) for
+        remaining PARTIAL gaps after the official start. Features read the
+        official island through PIT with this context's ``as_of``. as_of or
+        snapshots before 2008-05-07 are empty / fail-closed. Tip-only AM,
+        earnings calendar, and JSDA OTC stay permanent DEFER.
         """
-        require_feature_dataset(
-            "equities_master", context="FeatureContext.get_equity_master"
-        )
+        official_start = master_pit_history_start()
+        if str(self.as_of)[:10] < official_start:
+            return pit.PitResult(
+                rows=[],
+                metadata={
+                    "as_of": self.as_of,
+                    "table": "jquants_listed_info",
+                    "count": 0,
+                    "pit_api_version": pit.PIT_API_VERSION,
+                    "source": "jquants",
+                    "official_start": official_start,
+                    "pd_id": "PD-D2-MASTER",
+                },
+            )
         return self._read("equity_master", kwargs)
 
     def get_market_calendar(self, **kwargs: Any):
