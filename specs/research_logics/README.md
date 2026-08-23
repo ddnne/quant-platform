@@ -1,10 +1,13 @@
 # research_logics
 
-Catalog of unique_logic specs. **This is where a new hypothesis is declared.**
+Expanded YAML was removed in a mechanical catalog migration.
 
-Do not copy `scripts/run_wNN_new_hyps_daily_dd.py`. Add a YAML here and, if the
-economics are new, one `evaluate_*` function under
-`packages/product/research/unique_logic/`. Then run the existing runners.
+**Source of truth:** `specs/research_catalog/migration.jsonl` +
+`specs/research_catalog/manifest.json` (`research.catalog_compiler`).
+`CATALOG_AND_PLUS_N_STOPPED` remains on. Do not add YAML here without a dated
+brief that flips the freeze.
+
+Candidate SoT is still `POST /v1/daily-path`. Scores go to R2 + D1.
 
 Schema (v1, fields required):
 

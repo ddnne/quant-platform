@@ -47,15 +47,18 @@ def test_catalog_yaml_parity_with_python_specs() -> None:
     yaml_ids = {p.stem for p in _YAML_DIR.glob("*.yaml")}
     combo_ids = {s["logic_id"] for s in NEW_COMBO_LOGIC}
 
-    assert catalog_ids == py_ids == yaml_ids == set(RESEARCH_UNIQUE_LOGIC_IDS) == set(
+    assert catalog_ids == py_ids == set(RESEARCH_UNIQUE_LOGIC_IDS) == set(
         compiled_migration_ids()
     )
-    missing_combo_files = sorted(
-        lid for lid in combo_ids if not (_YAML_DIR / f"{lid}.yaml").is_file()
-    )
-    assert missing_combo_files == []
-    extra_yaml = sorted(yaml_ids - py_ids)
-    assert extra_yaml == []
+    if yaml_ids:
+        assert yaml_ids == catalog_ids
+        extra_yaml = sorted(yaml_ids - py_ids)
+        assert extra_yaml == []
+        missing_combo_files = sorted(
+            lid for lid in combo_ids if not (_YAML_DIR / f"{lid}.yaml").is_file()
+        )
+        assert missing_combo_files == []
+    assert combo_ids <= catalog_ids
     assert set(CF_NEW_THESIS_IDS) <= catalog_ids
     assert WORKER_ISOLATE_LIMIT_IDS == frozenset()
 
@@ -66,9 +69,10 @@ def test_catalog_yaml_parity_with_python_specs() -> None:
         assert spec.get("go") is not True
         assert spec.get("promote_as_main") is not True
         assert spec.get("generation_enabled") is False
-        path = Path(spec["catalog_path"])
+        path = Path(str(spec.get("catalog_path") or ""))
         assert path.stem == spec["logic_id"]
-        assert path.is_file()
+        if path.is_file():
+            assert path.name == f"{spec['logic_id']}.yaml"
         lid = str(spec.get("logic_id") or "")
         if str(spec.get("evaluator") or "") != _COMBO_EVALUATOR:
             continue
@@ -106,7 +110,10 @@ def test_catalog_yaml_parity_with_python_specs() -> None:
         | ADAPTIVE_LOGIC_IDS
         | CS_LOGIC_IDS
     )
-    assert yaml_ids - combo_ids == set(original)
+    if yaml_ids:
+        assert yaml_ids - combo_ids == set(original)
+    else:
+        assert original <= catalog_ids
     assert combo_ids == set(CF_NEW_THESIS_IDS)
     assert event | surprise_xs == set(CF_NEW_EVENT_THESIS_IDS)
     assert cs == set(CF_NEW_CS_THESIS_IDS)
@@ -146,15 +153,21 @@ def test_catalog_yaml_parity_with_python_specs() -> None:
         assert flag in header
         quoted = {f'"{lid}"' for lid in original} | {f"'{lid}'" for lid in original}
         assert not any(q in header for q in quoted)
-    for yml in _YAML_DIR.glob("*.yaml"):
-        body = yml.read_text(encoding="utf-8")
-        assert re.search(r"(?m)^go:\s*true\s*$", body) is None
-        if yml.stem in original:
-            assert re.search(r"(?m)^family:\s+\S+", body)
-            assert re.search(r"(?m)^generation_enabled:\s*true\s*$", body) is None
-        else:
-            assert re.search(r"(?m)^family:", body) is None
-        assert re.search(r"(?m)^theme:", body) is None
+    yaml_files = list(_YAML_DIR.glob("*.yaml"))
+    if yaml_files:
+        for yml in yaml_files:
+            body = yml.read_text(encoding="utf-8")
+            assert re.search(r"(?m)^go:\s*true\s*$", body) is None
+            if yml.stem in original:
+                assert re.search(r"(?m)^family:\s+\S+", body)
+                assert re.search(r"(?m)^generation_enabled:\s*true\s*$", body) is None
+            else:
+                assert re.search(r"(?m)^family:", body) is None
+            assert re.search(r"(?m)^theme:", body) is None
+    else:
+        for s in catalog:
+            assert s.get("go") is not True
+            assert s.get("generation_enabled") is not True
 
 
 def test_combo_yaml_gates_cs_gate_side_match_specs() -> None:
@@ -271,15 +284,14 @@ def test_event_cheap_pb_gate_in_combo_and_yaml() -> None:
     """cheap_pb stays a COMBO event gate; YAML pead lists it. Not a CS reuse."""
     import re
 
-    from research.unique_logic.catalog import combo_row_from_yaml, parse_catalog_yaml
+    from research.unique_logic.catalog import catalog_spec, combo_row_from_yaml
     from research.unique_logic.constants import CHEAP_PB_EVENT_VS_CS, COMBO_EVENT_GATES
 
     assert "cheap_pb" in COMBO_EVENT_GATES
     assert CHEAP_PB_EVENT_VS_CS == "event_bars_x_fins_not_csfundsnaps"
 
-    yml = parse_catalog_yaml(
-        (_YAML_DIR / "event_cheap_pb_pead.yaml").read_text(encoding="utf-8")
-    )
+    yml = catalog_spec("event_cheap_pb_pead")
+    assert yml is not None
     params = yml.get("params") or {}
     assert "gates" in params
     gates_raw = params["gates"]

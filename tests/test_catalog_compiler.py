@@ -24,12 +24,9 @@ from research.unique_logic.constants import RESEARCH_UNIQUE_LOGIC_IDS
 
 
 def test_compiler_row_count_matches_yaml_freeze() -> None:
-    n_yaml = len(list(catalog_dir().glob("*.yaml")))
     pack = compile_catalog()
-    assert n_yaml == int(CATALOG_YAML_COUNT_AT_STOP)
-    assert pack["n"] == n_yaml
+    assert pack["n"] == int(CATALOG_YAML_COUNT_AT_STOP) == 2254
     assert pack["digest"].startswith("sha256:")
-    assert pack["yaml_still_present"] is True
     assert pack["go"] is False
     ids = [r["logic_id"] for r in pack["rows"]]
     assert len(ids) == len(set(ids))
@@ -59,31 +56,32 @@ def test_persisted_artifacts_match_live_digest() -> None:
     pack = compile_catalog()
     dest = catalog_artifact_dir()
     manifest = json.loads((dest / MANIFEST_NAME).read_text(encoding="utf-8"))
-    n_yaml = len(list(catalog_dir().glob("*.yaml")))
-    assert n_yaml == int(CATALOG_YAML_COUNT_AT_STOP) == 2254
-    assert pack["n"] == n_yaml
+    assert pack["n"] == int(CATALOG_YAML_COUNT_AT_STOP) == 2254
     assert manifest["n"] == pack["n"]
     assert manifest["digest"] == pack["digest"]
     assert manifest["version"] == pack["version"] == COMPILER_VERSION
-    assert manifest["yaml_still_present"] is True
-    assert pack["yaml_still_present"] is True
+    assert pack["yaml_still_present"] is manifest["yaml_still_present"]
     assert manifest["go"] is False
     assert pack["go"] is False
-    assert (repo_root() / "specs" / "research_logics").is_dir()
-    assert n_yaml > 0
+    assert (repo_root() / "specs" / "research_catalog").is_dir()
 
     raw = (dest / MIGRATION_NAME).read_text(encoding="utf-8")
     migrated = [json.loads(line) for line in raw.splitlines() if line.strip()]
     assert len(migrated) == pack["n"]
     keys = {
         "evaluator",
+        "family",
         "family_id",
         "gates",
         "generation_enabled",
         "logic_id",
         "params",
+        "position_rule",
         "semantic_hash",
+        "signal_definition",
         "template_id",
+        "thesis",
+        "datasets",
     }
     assert [r["logic_id"] for r in migrated] == [r["logic_id"] for r in pack["rows"]]
     for persisted, live in zip(migrated, pack["rows"], strict=True):
@@ -100,12 +98,11 @@ def test_persisted_artifacts_match_live_digest() -> None:
 def test_yaml_stems_lock_to_compiled_migration_ids() -> None:
     """compiled migration.jsonl == YAML == RESEARCH_UNIQUE_LOGIC_IDS. One identity pass."""
     sets = assert_compiled_logic_id_sets()
-    assert sets["migration"] == sets["yaml"] == sets["constants"] == set(
-        RESEARCH_UNIQUE_LOGIC_IDS
-    )
-    assert len(sets["yaml"]) == int(CATALOG_YAML_COUNT_AT_STOP) == 2254
+    assert sets["migration"] == sets["constants"] == set(RESEARCH_UNIQUE_LOGIC_IDS)
+    if sets["yaml"]:
+        assert sets["yaml"] == sets["migration"]
+    assert len(sets["migration"]) == int(CATALOG_YAML_COUNT_AT_STOP) == 2254
     assert catalog_dir().is_dir()
-    assert any(catalog_dir().glob("*.yaml"))
 
 
 def test_compiler_source_does_not_exec_or_eval() -> None:
@@ -125,7 +122,9 @@ def test_catalog_ids_emit_owned_by_compiler() -> None:
     assert freeze["ok"] is True
     assert freeze["go"] is False
     assert CATALOG_AND_PLUS_N_STOPPED is True
-    assert freeze["n_yaml"] == freeze["n_digest"] == freeze["freeze"] == 2254
+    assert freeze["n_digest"] == freeze["freeze"] == 2254
+    if freeze["n_yaml"] > 0:
+        assert freeze["n_yaml"] == 2254
     path = catalog_ids_ts_path()
     generated = catalog_ids_ts_source()
     assert path.read_text(encoding="utf-8") == generated
@@ -149,9 +148,10 @@ def test_catalog_ids_emit_fails_if_yaml_count_drifts(monkeypatch) -> None:
     monkeypatch.setattr(flags, "CATALOG_YAML_COUNT_AT_STOP", 0)
     try:
         assert_catalog_ids_emit_frozen()
-        raise AssertionError("yaml count drift must fail while stopped")
+        raise AssertionError("yaml/digest count drift must fail while stopped")
     except CatalogAndPlusNStoppedError as exc:
-        assert "YAML count must not drift" in str(exc)
+        msg = str(exc)
+        assert "must not drift" in msg or "compiler digest n=" in msg
 
 
 def test_catalog_ids_emit_fails_if_digest_n_drifts(tmp_path, monkeypatch) -> None:

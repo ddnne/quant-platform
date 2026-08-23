@@ -206,7 +206,7 @@ def is_countable_spec(spec: Mapping[str, Any]) -> bool:
     lid = str(spec.get("logic_id") or "").strip()
     if not lid:
         return False
-    if not (catalog_dir() / f"{lid}.yaml").is_file():
+    if spec.get("catalog") is not True and not (catalog_dir() / f"{lid}.yaml").is_file():
         return False
     if lid not in worker_implemented_logic_ids():
         return False

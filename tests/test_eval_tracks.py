@@ -161,9 +161,12 @@ def test_catalog_and_plus_n_stopped_and_known_thin() -> None:
     assert RECONSTITUTION_APPLY is False
     freeze = assert_catalog_and_plus_n_stopped()
     assert freeze["ok"] is True
-    assert freeze["n"] == CATALOG_YAML_COUNT_AT_STOP
-    assert freeze["n"] > 0
-    assert freeze["yaml_still_present"] is True
+    assert freeze["freeze"] == CATALOG_YAML_COUNT_AT_STOP
+    if freeze["n"] > 0:
+        assert freeze["n"] == CATALOG_YAML_COUNT_AT_STOP
+        assert freeze["yaml_still_present"] is True
+    else:
+        assert freeze["n_compiled"] == CATALOG_YAML_COUNT_AT_STOP
     assert freeze["go"] is False
     thin = assert_known_thin_unused_absent()
     assert thin["ok"] is True

@@ -52,11 +52,16 @@ def compile_row(spec: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "logic_id": lid,
         "template_id": template_id,
+        "family": spec.get("family"),
         "family_id": family,
         "evaluator": evaluator,
         "gates": gates,
         "params": dict(params) if isinstance(params, Mapping) else {},
         "generation_enabled": bool(spec.get("generation_enabled")),
+        "thesis": spec.get("thesis"),
+        "signal_definition": spec.get("signal_definition"),
+        "position_rule": spec.get("position_rule"),
+        "datasets": list(spec.get("datasets") or []) if isinstance(spec.get("datasets"), list) else spec.get("datasets"),
         "semantic_hash": semantic_hash(spec),
     }
 
@@ -69,13 +74,19 @@ def catalog_artifact_dir(*, root: Path | None = None) -> Path:
     return (root or repo_root()) / ARTIFACT_REL
 
 
-def manifest_payload(pack: Mapping[str, Any]) -> dict[str, Any]:
+def yaml_files_present(*, root: Path | None = None) -> bool:
+    return any(catalog_dir(root=root).glob("*.yaml"))
+
+
+def manifest_payload(pack: Mapping[str, Any], *, root: Path | None = None) -> dict[str, Any]:
     return {
         "digest": str(pack.get("digest") or ""),
         "go": False,
         "n": int(pack.get("n") or 0),
         "version": str(pack.get("version") or COMPILER_VERSION),
-        "yaml_still_present": True,
+        "yaml_still_present": bool(
+            pack.get("yaml_still_present", yaml_files_present(root=root))
+        ),
     }
 
 
@@ -84,13 +95,18 @@ def migration_row(row: Mapping[str, Any]) -> dict[str, Any]:
     params = row.get("params") if isinstance(row.get("params"), Mapping) else {}
     return {
         "evaluator": str(row.get("evaluator") or ""),
+        "family": row.get("family"),
         "family_id": str(row.get("family_id") or ""),
         "gates": list(gates) if isinstance(gates, Sequence) and not isinstance(gates, (str, bytes)) else [],
         "generation_enabled": bool(row.get("generation_enabled")),
         "logic_id": str(row.get("logic_id") or ""),
         "params": dict(params),
+        "position_rule": row.get("position_rule"),
         "semantic_hash": str(row.get("semantic_hash") or ""),
+        "signal_definition": row.get("signal_definition"),
         "template_id": str(row.get("template_id") or ""),
+        "thesis": row.get("thesis"),
+        "datasets": row.get("datasets"),
     }
 
 
@@ -103,7 +119,9 @@ def persist_catalog_artifacts(
     compiled = dict(pack) if pack is not None else compile_catalog()
     dest = catalog_artifact_dir(root=root)
     dest.mkdir(parents=True, exist_ok=True)
-    (dest / MANIFEST_NAME).write_text(_dumps(manifest_payload(compiled)) + "\n", encoding="utf-8")
+    (dest / MANIFEST_NAME).write_text(
+        _dumps(manifest_payload(compiled, root=root)) + "\n", encoding="utf-8"
+    )
     lines = [_dumps(migration_row(r)) for r in compiled.get("rows") or []]
     body = "\n".join(lines)
     (dest / MIGRATION_NAME).write_text(body + ("\n" if body else ""), encoding="utf-8")
@@ -211,7 +229,7 @@ def catalog_ids_ts_source(
 
 
 def compiled_logic_id_sets(*, root: Path | None = None) -> dict[str, set[str]]:
-    """migration.jsonl stems, YAML stems, RESEARCH_UNIQUE_LOGIC_IDS."""
+    """migration.jsonl stems, YAML stems (maybe empty), RESEARCH_UNIQUE_LOGIC_IDS."""
     from research.unique_logic.constants import RESEARCH_UNIQUE_LOGIC_IDS
 
     yaml_ids = {p.stem for p in catalog_dir(root=root).glob("*.yaml")}
@@ -224,14 +242,16 @@ def compiled_logic_id_sets(*, root: Path | None = None) -> dict[str, set[str]]:
 
 
 def assert_compiled_logic_id_sets(*, root: Path | None = None) -> dict[str, set[str]]:
-    """compiled migration.jsonl == YAML == RESEARCH_UNIQUE_LOGIC_IDS."""
+    """compiled migration.jsonl == RESEARCH_UNIQUE_LOGIC_IDS. YAML if present must match."""
     sets = compiled_logic_id_sets(root=root)
-    if not (sets["migration"] == sets["yaml"] == sets["constants"]):
+    core_ok = sets["migration"] == sets["constants"]
+    yaml_ok = not sets["yaml"] or sets["yaml"] == sets["migration"]
+    if not (core_ok and yaml_ok):
         only_m = sorted(sets["migration"] - sets["yaml"] - sets["constants"])
         only_y = sorted(sets["yaml"] - sets["migration"] - sets["constants"])
         only_c = sorted(sets["constants"] - sets["migration"] - sets["yaml"])
         raise ValueError(
-            "compiled migration.jsonl logic_id set != YAML != RESEARCH_UNIQUE_LOGIC_IDS: "
+            "compiled migration.jsonl logic_id set != RESEARCH_UNIQUE_LOGIC_IDS: "
             f"n_migration={len(sets['migration'])} n_yaml={len(sets['yaml'])} "
             f"n_constants={len(sets['constants'])} "
             f"only_migration={only_m[:8]} only_yaml={only_y[:8]} only_constants={only_c[:8]}"
@@ -258,7 +278,7 @@ def assert_catalog_ids_emit_frozen(*, root: Path | None = None) -> dict[str, Any
         "go": False,
         "not_a_pass": True,
     }
-    if CATALOG_AND_PLUS_N_STOPPED and n_yaml != freeze_n:
+    if CATALOG_AND_PLUS_N_STOPPED and n_yaml > 0 and n_yaml != freeze_n:
         raise CatalogAndPlusNStoppedError(
             f"catalog yaml n={n_yaml} != freeze {freeze_n}; "
             "YAML count must not drift while CATALOG_AND_PLUS_N_STOPPED"
@@ -290,7 +310,7 @@ def compile_catalog(
         "rows": rows,
         "go": False,
         "not_a_pass": True,
-        "yaml_still_present": True,
+        "yaml_still_present": yaml_files_present(root=root),
     }
     if persist:
         persist_catalog_artifacts(root=root, pack=pack)

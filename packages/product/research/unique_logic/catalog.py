@@ -189,12 +189,18 @@ def load_compiled_specs(*, root: Path | None = None) -> list[dict[str, Any]]:
         specs.append(
             {
                 "logic_id": lid,
+                "family": row.get("family"),
                 "family_id": row.get("family_id"),
                 "evaluator": row.get("evaluator"),
                 "params": dict(params),
                 "generation_enabled": bool(row.get("generation_enabled")),
+                "thesis": row.get("thesis"),
+                "signal_definition": row.get("signal_definition"),
+                "position_rule": row.get("position_rule"),
+                "datasets": row.get("datasets"),
                 "catalog": True,
                 "compiled": True,
+                "catalog_path": str(catalog_dir(root=root) / f"{lid}.yaml"),
             }
         )
     return specs

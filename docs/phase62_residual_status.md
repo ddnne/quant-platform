@@ -58,7 +58,7 @@ prose. Update the table after a published projection.
 | **candidate SoT** | `POST /v1/daily-path` (`daily_path_mtm_after_cost/v1`) → R2 `research/eval/job={id}/` |
 | CF period-net | bar-native **auxiliary** only; unique event/CS → `path_collapsed`; `n_survivors` is **not** a pass |
 | index | `research.eval_registry` → R2 + D1 |
-| catalog | `specs/research_logics/` |
+| catalog | `specs/research_catalog/` (compiled); `specs/research_logics/` YAML removed |
 
 Completion of a research turn requires an R2 **daily_path** job, not local JSON.
 Do not paste cell scores into this file. Latest recorded job id belongs in D1.
