@@ -252,6 +252,7 @@ def would_nest_in_sleeve(candidate: str, members: Sequence[str]) -> bool:
     return bool(nested_parent_pairs([lid, *rest]))
 
 
+@lru_cache(maxsize=1)
 def primary_sleeve_member_ids() -> frozenset[str]:
     """Members of current primary sleeves. Historical deprecated sleeves excluded."""
     out: set[str] = set()
@@ -357,6 +358,7 @@ def clear_basket_caches() -> None:
     """Drop sleeve caches after catalog writes. Not a second SoT."""
     _nested_parent_pairs_cached.cache_clear()
     _mechanical_basket_defs_cached.cache_clear()
+    primary_sleeve_member_ids.cache_clear()
 
 
 def mechanical_basket_defs() -> list[dict[str, Any]]:

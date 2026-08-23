@@ -346,6 +346,13 @@ def test_mechanical_basket_defs_cache_returns_copies() -> None:
     fund = next(d for d in c if d["rule"] == "fundamentals_sleeve")
     assert fund["valid"] is True
     assert fund["nested_parent_count"] >= 1
+    from research.combo_basket_catalog import primary_sleeve_member_ids
+
+    ids = primary_sleeve_member_ids()
+    assert "event_ta_up_positive_eps" in ids
+    assert "cs_on_impulse" not in ids
+    clear_catalog_caches()
+    assert "event_ta_up_positive_eps" in primary_sleeve_member_ids()
 
 
 def test_reconstitution_options_drop_nested_without_reject() -> None:
