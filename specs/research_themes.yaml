@@ -85,7 +85,6 @@ fund_flow_liq:
   - surprise_xs_ta_up_liq_high
   - cs_cheap_pb_margin_down
 margin_surprise:
-  - surprise_xs_margin_up_fade
   - event_margin_down_follow
   - surprise_xs_margin_up
   - event_crowd_on_impulse

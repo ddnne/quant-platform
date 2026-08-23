@@ -238,6 +238,9 @@ NEAR_EMPTY_PARK_IDS: frozenset[str] = frozenset(
         "fy_end_cs_fade",
         "fy_start_cs_follow",
         "surprise_xs_fy_end",
+        "event_np_peps",
+        "surprise_xs_np_peps",
+        "surprise_xs_sdown_steep",
         "cs_overnight_p10_steep",
         "cs_roe_high",
         "cs_roe_low",
@@ -424,6 +427,16 @@ THIN_SLEEVE_EXCLUDE_IDS: frozenset[str] = frozenset(
         "event_px_down_p10",
         "event_np_easing",
         "surprise_xs_np_easing",
+        "event_imp_p10",
+        "event_imp_pbr",
+        "event_imp_steep",
+        "event_ease_p10",
+        "event_ease_steep",
+        "event_p10_prem",
+        "event_p10_r3m",
+        "event_p10_steep",
+        "surprise_xs_ease_p10",
+        "surprise_xs_steep_tight",
     }
 )
 MF_VALUE_MOM_RATE_DELEGATES: bool = False

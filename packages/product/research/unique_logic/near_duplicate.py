@@ -79,6 +79,36 @@ NEAR_DUPLICATE_GROUPS: tuple[dict[str, object], ...] = (
         "park": ("overnight_down_skip_tuesday_cs",),
         "reason": "overnight-down × weekday permutation",
     },
+    {
+        "group_id": "event_easing_eps_up_clone",
+        "keep": "event_easing_eps_up",
+        "park": ("event_eps_up_overnight_easing",),
+        "reason": "identical 2-AND gates easing×eps_up",
+    },
+    {
+        "group_id": "event_eqar_rising_nkyvol_clone",
+        "keep": "event_eqar_rising_nkyvol",
+        "park": ("event_nkyvol_eqar_rising",),
+        "reason": "identical 2-AND gates eqar_rising×nkyvol",
+    },
+    {
+        "group_id": "event_easy_funding_clone",
+        "keep": "event_funding_easy_short",
+        "park": ("event_funding_stress_skip",),
+        "reason": "identical 1-AND easy_funding",
+    },
+    {
+        "group_id": "event_p10_uncrowded_clone",
+        "keep": "event_overnight_p10_uncrowded",
+        "park": ("event_uncrowded_overnight_p10",),
+        "reason": "identical 2-AND overnight_p10×uncrowded",
+    },
+    {
+        "group_id": "surprise_margin_up_clone",
+        "keep": "surprise_xs_margin_up",
+        "park": ("surprise_xs_margin_up_fade",),
+        "reason": "identical 1-AND margin_up",
+    },
 )
 
 NEAR_DUPLICATE_PARK: frozenset[str] = frozenset(
