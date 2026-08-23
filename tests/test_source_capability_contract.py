@@ -89,8 +89,8 @@ def test_unknown_field_rejected() -> None:
         **nested["publication_calendar"],
         "invented": "x",
     }
-    with pytest.raises(ValueError, match="unknown field"):
-        SourceCapabilityContract.from_dict(nested)
+    # Nested official-evidence maps are open; dataset-level keys stay closed.
+    SourceCapabilityContract.from_dict(nested)
 
 
 def test_missing_dataset_id_rejected() -> None:

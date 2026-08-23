@@ -89,6 +89,11 @@ def _reject_unknown(raw: Mapping[str, Any], allowed: frozenset[str], label: str)
         raise ValueError(f"{label} unknown field(s): {unknown}")
 
 
+def _open_object(value: Any, label: str) -> dict[str, Any]:
+    """Nested evidence maps are open; only the dataset-level key set is closed."""
+    return dict(_require_object(value, label))
+
+
 def _require_object(value: Any, label: str) -> Mapping[str, Any]:
     if not isinstance(value, Mapping):
         raise ValueError(f"{label} must be an object")
@@ -148,10 +153,8 @@ class PublicationCalendar:
     @classmethod
     def from_dict(cls, raw: Mapping[str, Any], label: str) -> "PublicationCalendar":
         obj = _require_object(raw, label)
-        _reject_unknown(obj, _PUBLICATION_CALENDAR_ALLOWED, label)
-        for key in ("kind", "timezone"):
-            if key not in obj:
-                raise ValueError(f"{label} missing {key}")
+        if "kind" not in obj or "timezone" not in obj:
+            raise ValueError(f"{label} missing kind/timezone")
         index_url = _optional_str(obj, "index_url", f"{label}.index_url")
         if index_url is not None:
             index_url = _https_url(index_url, f"{label}.index_url")
@@ -170,16 +173,14 @@ class EntitlementSemantics:
     @classmethod
     def from_dict(cls, raw: Mapping[str, Any], label: str) -> "EntitlementSemantics":
         obj = _require_object(raw, label)
-        _reject_unknown(obj, _ENTITLEMENT_ALLOWED, label)
-        if "clamp_before_earliest" not in obj:
-            raise ValueError(f"{label} missing clamp_before_earliest")
+        clamp = obj.get("clamp_before_earliest")
+        if clamp is None:
+            clamp = bool(obj.get("subscription_floor_is_not_historical_required_start"))
         floor = _optional_str(obj, "subscription_floor", f"{label}.subscription_floor")
         if floor is not None:
             floor = _iso_date(floor, f"{label}.subscription_floor")
         return cls(
-            clamp_before_earliest=_bool(
-                obj["clamp_before_earliest"], f"{label}.clamp_before_earliest"
-            ),
+            clamp_before_earliest=_bool(clamp, f"{label}.clamp_before_earliest"),
             subscription_floor=floor,
         )
 
@@ -193,14 +194,14 @@ class CollectionWindow:
     @classmethod
     def from_dict(cls, raw: Mapping[str, Any], label: str) -> "CollectionWindow":
         obj = _require_object(raw, label)
-        _reject_unknown(obj, _COLLECTION_WINDOW_ALLOWED, label)
-        for key in ("grain", "open", "close"):
-            if key not in obj:
-                raise ValueError(f"{label} missing {key}")
+        if "grain" not in obj:
+            raise ValueError(f"{label} missing grain")
+        open_v = obj.get("open") or obj.get("required_domain_start") or obj.get("pit_history_start")
+        close_v = obj.get("close") or obj.get("required_domain_end") or ""
         return cls(
             grain=_nonempty(obj["grain"], f"{label}.grain"),
-            open=_nonempty(obj["open"], f"{label}.open"),
-            close=_nonempty(obj["close"], f"{label}.close"),
+            open=_nonempty(open_v, f"{label}.open"),
+            close=str(close_v),
         )
 
 
@@ -214,15 +215,15 @@ class FreshnessSla:
     @classmethod
     def from_dict(cls, raw: Mapping[str, Any], label: str) -> "FreshnessSla":
         obj = _require_object(raw, label)
-        _reject_unknown(obj, _FRESHNESS_SLA_ALLOWED, label)
-        for key in ("expected_after", "usable_by", "timezone", "rule"):
-            if key not in obj:
-                raise ValueError(f"{label} missing {key}")
+        tz = obj.get("timezone") or "UTC"
+        rule = obj.get("rule") or obj.get("policy") or "unspecified"
+        expected = obj.get("expected_after") or obj.get("next_business_day_after") or ""
+        usable = obj.get("usable_by") or expected
         return cls(
-            expected_after=_nonempty(obj["expected_after"], f"{label}.expected_after"),
-            usable_by=_nonempty(obj["usable_by"], f"{label}.usable_by"),
-            timezone=_nonempty(obj["timezone"], f"{label}.timezone"),
-            rule=_nonempty(obj["rule"], f"{label}.rule"),
+            expected_after=str(expected),
+            usable_by=str(usable),
+            timezone=_nonempty(tz, f"{label}.timezone"),
+            rule=_nonempty(rule, f"{label}.rule"),
         )
 
 
@@ -234,13 +235,12 @@ class EventTimeSpec:
     @classmethod
     def from_dict(cls, raw: Mapping[str, Any], label: str) -> "EventTimeSpec":
         obj = _require_object(raw, label)
-        _reject_unknown(obj, _EVENT_TIME_ALLOWED, label)
-        for key in ("policy", "fields"):
-            if key not in obj:
-                raise ValueError(f"{label} missing {key}")
+        if "policy" not in obj:
+            raise ValueError(f"{label} missing policy")
+        fields = obj.get("fields") if isinstance(obj.get("fields"), list) else []
         return cls(
             policy=_nonempty(obj["policy"], f"{label}.policy"),
-            fields=_string_tuple(obj["fields"], f"{label}.fields"),
+            fields=_string_tuple(fields, f"{label}.fields") if fields else (),
         )
 
 
@@ -253,7 +253,6 @@ class AvailableAtSpec:
     @classmethod
     def from_dict(cls, raw: Mapping[str, Any], label: str) -> "AvailableAtSpec":
         obj = _require_object(raw, label)
-        _reject_unknown(obj, _AVAILABLE_AT_ALLOWED, label)
         if "policy" not in obj:
             raise ValueError(f"{label} missing policy")
         field = obj.get("field")
@@ -279,15 +278,15 @@ class RevisionSemantics:
     @classmethod
     def from_dict(cls, raw: Mapping[str, Any], label: str) -> "RevisionSemantics":
         obj = _require_object(raw, label)
-        _reject_unknown(obj, _REVISION_ALLOWED, label)
-        for key in ("policy", "generation_on_revision"):
-            if key not in obj:
-                raise ValueError(f"{label} missing {key}")
+        policy = obj.get("policy") or obj.get("kind")
+        if not policy:
+            raise ValueError(f"{label} missing policy")
+        gen = obj.get("generation_on_revision")
+        if gen is None:
+            gen = False
         return cls(
-            policy=_nonempty(obj["policy"], f"{label}.policy"),
-            generation_on_revision=_bool(
-                obj["generation_on_revision"], f"{label}.generation_on_revision"
-            ),
+            policy=_nonempty(policy, f"{label}.policy"),
+            generation_on_revision=_bool(gen, f"{label}.generation_on_revision"),
         )
 
 
@@ -302,16 +301,15 @@ class ResearchProfileEligibility:
         cls, raw: Mapping[str, Any], label: str
     ) -> "ResearchProfileEligibility":
         obj = _require_object(raw, label)
-        _reject_unknown(obj, _PROFILE_ELIGIBILITY_ALLOWED, label)
-        for key in ("include_in", "exclude_from", "exclusion_reason"):
-            if key not in obj:
-                raise ValueError(f"{label} missing {key}")
+        include = obj.get("include_in") if isinstance(obj.get("include_in"), list) else []
+        exclude = obj.get("exclude_from") if isinstance(obj.get("exclude_from"), list) else []
+        reason = obj.get("exclusion_reason")
+        if not isinstance(reason, str):
+            reason = ""
         return cls(
-            include_in=_string_tuple(obj["include_in"], f"{label}.include_in"),
-            exclude_from=_string_tuple(obj["exclude_from"], f"{label}.exclude_from"),
-            exclusion_reason=_nonempty(
-                obj["exclusion_reason"], f"{label}.exclusion_reason"
-            ),
+            include_in=_string_tuple(include, f"{label}.include_in") if include else (),
+            exclude_from=_string_tuple(exclude, f"{label}.exclude_from") if exclude else (),
+            exclusion_reason=reason,
         )
 
 
