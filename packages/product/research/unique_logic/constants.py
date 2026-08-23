@@ -126,6 +126,23 @@ CHEAP_PB_EVENT_VS_CS: str = "event_bars_x_fins_not_csfundsnaps"
 CHEAP_PB_EVENT_SOURCE: str = "bars_x_fins_bps_over_close"
 CHEAP_PB_CS_SOURCE: str = "cs_fund_snaps"
 CHEAP_PB_UNIFIED: bool = False
+# Unused 2-ANDs occupancy-thin/empty after vol then flow fills. Do not rewrite.
+KNOWN_THIN_UNUSED_GATE_SETS: frozenset[frozenset[str]] = frozenset(
+    {
+        frozenset({"margin_down", "np_negative"}),
+        frozenset({"margin_down", "pb_rising"}),
+        frozenset({"margin_down", "sales_down"}),
+        frozenset({"margin_down", "curve_flatten"}),
+        frozenset({"margin_down", "eq_ar_low"}),
+        frozenset({"margin_down", "tight_funding"}),
+        frozenset({"margin_up", "np_negative"}),
+        frozenset({"margin_up", "overnight_p10"}),
+        frozenset({"cheap_iv", "margin_up"}),
+        frozenset({"rich_iv", "margin_up"}),
+        frozenset({"nky_vol_high_skip", "rich_iv"}),
+        frozenset({"on_impulse", "rich_iv"}),
+    }
+)
 # Calendar/weekday permutations stay in COMBO_EVENT_GATES (existing occupancy).
 # Propose-LLM must not emit them as a new thesis.
 PROPOSE_CALENDAR_GATES: frozenset[str] = frozenset(

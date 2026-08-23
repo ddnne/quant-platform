@@ -13,6 +13,7 @@ from research.unique_logic.constants import (
     COMBO_EVENT_GATES,
     ALWAYS_ON_OCCUPANCY_WARN,
     ALWAYS_ON_PARK_IDS,
+    KNOWN_THIN_UNUSED_GATE_SETS,
     NEAR_EMPTY_OCCUPANCY,
     NEAR_EMPTY_PARK_IDS,
     PRI_FLOW_GATES,
@@ -216,6 +217,101 @@ CHEAP_PB_PRIMARY_GATE_CAP: float = 0.20
 
 class CheapPbPrimaryCapError(ValueError):
     """New batch exceeds cheap_pb-as-primary-gate cap. Not a pass."""
+
+
+class CatalogAndPlusNStoppedError(ValueError):
+    """Catalog AND +N is frozen. Flip only with a dated brief. Not a pass."""
+
+
+class KnownThinRewriteError(ValueError):
+    """Known-thin unused gate-set was rewritten into the catalog. Not a pass."""
+
+
+class EventThreeAndBatchError(ValueError):
+    """New batch uses 3-AND while EVENT_THREE_AND_PLUS_N_STOPPED. Not a pass."""
+
+
+def assert_catalog_and_plus_n_stopped() -> dict[str, Any]:
+    """Refuse yaml growth while CATALOG_AND_PLUS_N_STOPPED. Does not GO."""
+    from research.eval_tracks import (
+        CATALOG_AND_PLUS_N_STOPPED,
+        CATALOG_YAML_COUNT_AT_STOP,
+    )
+
+    n = len(list(catalog_dir().glob("*.yaml")))
+    out = {
+        "stopped": bool(CATALOG_AND_PLUS_N_STOPPED),
+        "n": n,
+        "freeze": int(CATALOG_YAML_COUNT_AT_STOP),
+        "ok": True,
+        "go": False,
+        "not_a_pass": True,
+    }
+    if not CATALOG_AND_PLUS_N_STOPPED:
+        return out
+    if n != int(CATALOG_YAML_COUNT_AT_STOP):
+        raise CatalogAndPlusNStoppedError(
+            f"catalog yaml n={n} != freeze {int(CATALOG_YAML_COUNT_AT_STOP)}; "
+            "dated brief must flip CATALOG_AND_PLUS_N_STOPPED to add AND YAML"
+        )
+    return out
+
+
+def assert_known_thin_unused_absent(
+    specs: Sequence[Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Refuse catalog rows whose gates match known-thin unused 2-ANDs."""
+    rows = list(specs) if specs is not None else list(load_catalog_specs())
+    hits: list[str] = []
+    for spec in rows:
+        if not isinstance(spec, Mapping):
+            continue
+        gates = frozenset(_gates_of(spec))
+        if gates in KNOWN_THIN_UNUSED_GATE_SETS:
+            lid = str(spec.get("logic_id") or "").strip()
+            if lid:
+                hits.append(lid)
+    out = {
+        "n": len(rows),
+        "hits": hits,
+        "ok": not hits,
+        "go": False,
+        "not_a_pass": True,
+    }
+    if hits:
+        raise KnownThinRewriteError(
+            "known-thin unused gate-sets present in catalog: " + ",".join(hits)
+        )
+    return out
+
+
+def assert_new_batch_not_event_three_and(
+    specs: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Refuse a new batch of 3-AND event/surprise while stopped. Does not GO."""
+    from research.eval_tracks import EVENT_THREE_AND_PLUS_N_STOPPED
+
+    rows = [s for s in specs if isinstance(s, Mapping)]
+    hits = [
+        str(s.get("logic_id") or "")
+        for s in rows
+        if len(_gates_of(s)) >= 3
+    ]
+    hits = [h for h in hits if h]
+    out = {
+        "stopped": bool(EVENT_THREE_AND_PLUS_N_STOPPED),
+        "n": len(rows),
+        "n_three_and": len(hits),
+        "ok": True,
+        "go": False,
+        "not_a_pass": True,
+    }
+    if EVENT_THREE_AND_PLUS_N_STOPPED and hits:
+        raise EventThreeAndBatchError(
+            "3-AND new batch while EVENT_THREE_AND_PLUS_N_STOPPED: "
+            + ",".join(hits[:8])
+        )
+    return out
 
 
 def primary_gate_of(spec: Mapping[str, Any]) -> str | None:
@@ -724,8 +820,14 @@ __all__ = [
     "combo_worker_gates_ok",
     "CHEAP_PB_PRIMARY_GATE_CAP",
     "CheapPbPrimaryCapError",
+    "CatalogAndPlusNStoppedError",
+    "KnownThinRewriteError",
+    "EventThreeAndBatchError",
     "NearEmptyBatchError",
     "AlwaysOnBatchError",
+    "assert_catalog_and_plus_n_stopped",
+    "assert_known_thin_unused_absent",
+    "assert_new_batch_not_event_three_and",
     "assert_new_batch_cheap_pb_cap",
     "assert_new_batch_occupancy_not_near_empty",
     "assert_new_batch_occupancy_not_always_on",

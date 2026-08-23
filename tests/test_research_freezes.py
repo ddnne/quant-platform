@@ -466,6 +466,62 @@ def test_propose_calendar_gates_excluded_from_llm() -> None:
     assert "liq_high" in PROPOSE_ALLOWED_GATES
 
 
+def test_catalog_and_plus_n_stopped_and_known_thin() -> None:
+    from research.eval_tracks import (
+        CATALOG_AND_PLUS_N_STOPPED,
+        CATALOG_YAML_COUNT_AT_STOP,
+        EVENT_THREE_AND_PLUS_N_STOPPED,
+        RECONSTITUTION_APPLY,
+    )
+    from research.unique_logic.worker_bodies import (
+        CatalogAndPlusNStoppedError,
+        EventThreeAndBatchError,
+        KnownThinRewriteError,
+        assert_catalog_and_plus_n_stopped,
+        assert_known_thin_unused_absent,
+        assert_new_batch_not_event_three_and,
+    )
+
+    assert CATALOG_AND_PLUS_N_STOPPED is True
+    assert EVENT_THREE_AND_PLUS_N_STOPPED is True
+    assert RECONSTITUTION_APPLY is False
+    freeze = assert_catalog_and_plus_n_stopped()
+    assert freeze["ok"] is True
+    assert freeze["n"] == CATALOG_YAML_COUNT_AT_STOP
+    thin = assert_known_thin_unused_absent()
+    assert thin["ok"] is True
+    assert thin["hits"] == []
+    ok3 = assert_new_batch_not_event_three_and(
+        [{"logic_id": "a", "params": {"gates": ["margin_up", "liq_high"]}}]
+    )
+    assert ok3["ok"] is True
+    try:
+        assert_new_batch_not_event_three_and(
+            [
+                {
+                    "logic_id": "bad3",
+                    "params": {"gates": ["margin_up", "liq_high", "eps_up"]},
+                }
+            ]
+        )
+        raise AssertionError("3-AND batch must reject")
+    except EventThreeAndBatchError:
+        pass
+    try:
+        assert_known_thin_unused_absent(
+            [
+                {
+                    "logic_id": "event_mdn_np",
+                    "params": {"gates": ["margin_down", "np_negative"]},
+                }
+            ]
+        )
+        raise AssertionError("known-thin rewrite must reject")
+    except KnownThinRewriteError:
+        pass
+    assert CatalogAndPlusNStoppedError is not EventThreeAndBatchError
+
+
 def test_default_logic_specs_leftover_and_bar_native() -> None:
     from research.cf_mass_eval_job import default_logic_specs
 

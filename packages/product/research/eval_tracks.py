@@ -16,6 +16,8 @@ from typing import Any, Mapping
 
 UNIVERSE_SELECT_ADV: str = "adv_desc_skip_missing_bars_and_fins"
 EVENT_THREE_AND_PLUS_N_STOPPED: bool = True
+CATALOG_AND_PLUS_N_STOPPED: bool = True
+CATALOG_YAML_COUNT_AT_STOP: int = 2254
 RECONSTITUTION_APPLY: bool = False
 CURRENT_EVAL_WAVE: str = "20260824ev"
 
@@ -86,8 +88,8 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
             "recorded research/eval/job=eval-inventory-bias-20260824ai/ "
             "inventory_bias.json; assert_new_batch_cheap_pb_cap refuses "
             "new batches at 20%; usable inventory 1724 (3-AND +N stopped); "
-            "eval-usable-inventory-20260824ev usable 1880; vol-thin +50 landed; "
-            "flow-thin +50 landed; 3-AND +N stopped not_a_pass"
+            "eval-usable-inventory-20260824ev; vol then flow bounded fills "
+            "landed; CATALOG_AND_PLUS_N_STOPPED; 3-AND +N stopped not_a_pass"
         ),
         "not_a_pass": True,
         "go": False,
@@ -226,12 +228,23 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "go": False,
     },
     {
-        "id": "plus32vf_near_empty_not_materials",
+        "id": "catalog_and_plus_n_stopped",
         "track": EVAL_TRACK_LIQ_LARGE,
         "why": (
-            "eval-occupancy-audit-20260823i: 4/32 plus32vf near_empty on "
-            "both tracks including occupancy 0; CANDIDATE_POLICY excludes; "
-            "prefer propose-adopt over hand-enumerated soup"
+            "vol then flow bounded fills landed; do not enumerate more "
+            "2-AND/3-AND YAML unless a dated brief flips "
+            "CATALOG_AND_PLUS_N_STOPPED; thin-series rate count is not a "
+            "fill mandate"
+        ),
+        "not_a_pass": True,
+        "go": False,
+    },
+    {
+        "id": "known_thin_do_not_rewrite",
+        "track": EVAL_TRACK_LIQ_LARGE,
+        "why": (
+            "KNOWN_THIN_UNUSED_GATE_SETS occupancy-empty or thin; "
+            "do not rewrite those unused 2-ANDs"
         ),
         "not_a_pass": True,
         "go": False,
@@ -242,16 +255,6 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "why": (
             "eval-unique22-park-20260823i/park.json file-level reasons; "
             "17 park; do not silent unpark leftover occupancy"
-        ),
-        "not_a_pass": True,
-        "go": False,
-    },
-    {
-        "id": "adopt_occupancy_recorded",
-        "track": EVAL_TRACK_LIQ_LARGE,
-        "why": (
-            "eval-occupancy-audit-20260824dg 80 new surprise 3-ANDs both "
-            "tracks; 80 material 0 thin; non-event 100%; not a pass"
         ),
         "not_a_pass": True,
         "go": False,

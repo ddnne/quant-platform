@@ -494,7 +494,7 @@ def reconstitution_occupancy_preview(
                     "dropped": list(drop_c.get("dropped") or []),
                     "nested_parent_count": drop_c.get("nested_parent_count"),
                 },
-                "apply": False,
+                "apply": bool(RECONSTITUTION_APPLY),
             }
         )
     pending = [
@@ -506,8 +506,8 @@ def reconstitution_occupancy_preview(
         "flow_fifth_blend_thinner_job": FLOW_FIFTH_BLEND_THINNER_JOB,
         "do_not_restitch_blend": True,
         "human_choice_required": True,
-        "human_pending": pending,
-        "apply": False,
+        "human_pending": list(HUMAN_RECONSTITUTION_PENDING),
+        "apply": bool(RECONSTITUTION_APPLY),
         "sleeves": sleeves,
         "go": False,
         "not_a_pass": True,
@@ -620,7 +620,7 @@ def usable_sleeve_coverage(
         "blend_thinner_excluded": thinner_excluded,
         "keep_sleeves_job": KEEP_BOTH_SLEEVES_JOB,
         "human_pending": list(HUMAN_RECONSTITUTION_PENDING),
-        "apply": False,
+        "apply": bool(RECONSTITUTION_APPLY),
         "invert_primary": False,
         "go": False,
         "not_a_pass": True,

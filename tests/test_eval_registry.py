@@ -546,6 +546,8 @@ def test_write_eval_wave_pack_local_only(tmp_path) -> None:
     )
     assert out["go"] is False
     assert out["not_a_pass"] is True
+    assert out["catalog_and_plus_n_stopped"] is True
+    assert out["reconstitution_apply"] is False
     assert out["n_unique22_parked"] >= 1
     assert out["occupancy_maps_job"] == "eval-occupancy-maps-test24ep"
     assert out["series_sleeve_job"] == "eval-series-sleeve-test24ep"

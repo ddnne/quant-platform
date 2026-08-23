@@ -191,13 +191,19 @@ def test_eval_tracks_are_two_and_not_head_n() -> None:
     assert infer_eval_track(max_codes=100) == EVAL_TRACK_LIQ_LARGE
     from research.eval_tracks import (
         CURRENT_EVAL_WAVE,
+        CATALOG_AND_PLUS_N_STOPPED,
         EVENT_THREE_AND_PLUS_N_STOPPED,
         NEXT_RESEARCH_QUEUE,
         RECONSTITUTION_APPLY,
     )
+    from research.combo_basket_catalog import (
+        RECONSTITUTION_APPLY as BASKET_RECONSTITUTION_APPLY,
+    )
 
     assert EVENT_THREE_AND_PLUS_N_STOPPED is True
+    assert CATALOG_AND_PLUS_N_STOPPED is True
     assert RECONSTITUTION_APPLY is False
+    assert BASKET_RECONSTITUTION_APPLY is False
     assert CURRENT_EVAL_WAVE
     assert "go" not in CURRENT_EVAL_WAVE.lower()
     assert len(NEXT_RESEARCH_QUEUE) >= 5
@@ -224,6 +230,8 @@ def test_eval_tracks_are_two_and_not_head_n() -> None:
     assert "month_start_leftover_hold" in qids
     assert "otc_parse_zero" in qids
     assert "cheap_pb_event_reuse" in qids
+    assert "catalog_and_plus_n_stopped" in qids
+    assert "known_thin_do_not_rewrite" in qids
 
 
 def test_offline_default_periods_match_cf_mass() -> None:

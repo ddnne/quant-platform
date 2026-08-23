@@ -391,10 +391,12 @@ def write_eval_wave_pack(
     Does not fan out occupancy. Does not apply reconstitution. Does not inject.
     """
     from research.combo_basket_catalog import (
+        RECONSTITUTION_APPLY,
         active_reconstitution_plan,
         reconstitution_occupancy_preview,
         usable_sleeve_coverage,
     )
+    from research.eval_tracks import CATALOG_AND_PLUS_N_STOPPED
     from research.unique_logic.worker_bodies import (
         UNIQUE22_PARK_REASONS,
         countable_thesis_ids,
@@ -470,7 +472,7 @@ def write_eval_wave_pack(
         },
         recon_job: {
             "job_id": recon_job,
-            "apply": False,
+            "apply": bool(RECONSTITUTION_APPLY),
             "sleeves": recon_sleeves,
             "occupancy_preview": reconstitution_occupancy_preview(
                 occupancy_by_track
@@ -481,7 +483,7 @@ def write_eval_wave_pack(
         sleeve_job: {
             "job_id": sleeve_job,
             **usable_sleeve_coverage(occupancy_by_track),
-            "apply": False,
+            "apply": bool(RECONSTITUTION_APPLY),
             "go": False,
             "not_a_pass": True,
         },
@@ -518,6 +520,8 @@ def write_eval_wave_pack(
         "n_mid": len(mid),
         "n_liq": len(liq),
         "puts": puts,
+        "catalog_and_plus_n_stopped": bool(CATALOG_AND_PLUS_N_STOPPED),
+        "reconstitution_apply": bool(RECONSTITUTION_APPLY),
         "go": False,
         "not_a_pass": True,
     }

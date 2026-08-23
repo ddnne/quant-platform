@@ -187,7 +187,7 @@ Counts = number of `from X …` / `import X` statements under `tests/**/*.py` (s
 | Pattern | Meaning | Scripts |
 |---------|---------|---------|
 | **A.** `ROOT = Path(__file__).resolve().parents[1]` + `sys.path.insert(0, ROOT)` | Script lives in `scripts/`; parent = repo root | majority |
-| **B.** `_REPO_ROOT = dirname(dirname(abspath(__file__)))` + `sys.path.insert` | Same depth, `os.path` style | `run_paper_once`, `run_agents_paper_once`, `run_ingestion_once`, `run_phase35_validation`, `run_phase4_accept`, `sync_d1_to_sqlite` |
+| **B.** `_REPO_ROOT = dirname(dirname(abspath(__file__)))` + `sys.path.insert` | Same depth, `os.path` style | `run_ingestion_once`, `run_phase35_validation`, `run_phase4_accept`, `sync_d1_to_sqlite` |
 | **C.** `ROOT = Path(__file__).resolve().parents[2]` | Script under `scripts/ops/` | `ops/cf_premium_backfill.py` |
 | **D.** `ROOT = parents[1]` **without** `sys.path` | Path for subprocess/data only | `ops_reeval_freshness.py`, `run_historical_backfill.py` |
 | **E.** No ROOT bootstrap | standalone | `report_d1_local_sync_lag.py` |
@@ -205,14 +205,11 @@ Counts = number of `from X …` / `import X` statements under `tests/**/*.py` (s
 | `ops_reeval_freshness.py` | D | wrangler bin under `ingestion-premium/node_modules/.bin`; `--config=…/ingestion-premium/wrangler.toml`; `cwd=ROOT` |
 | `ops_status.py` | A | `paper_runtime`, `storage` |
 | `publish_ops_projection.py` | A | **`from scripts.export_ops_projection`**; wrangler cwd `quant-ops-mcp` or ROOT; config points at premium `wrangler.toml` |
-| `rebuild_paper_index.py` | A | `strategies.paper`; default `data/paper` |
 | `refresh_coverage_ledger.py` | A | `cf_platform.ingest_premium.coverage` |
 | `report_d1_local_sync_lag.py` | E | docs/default DB strings only |
 | `restore_local_complete_from_receipt.py` | A | storage/receipts |
-| `run_agents_paper_once.py` | B | agents/paper |
 | `run_historical_backfill.py` | D | ROOT for logs/DB defaults |
 | `run_ingestion_once.py` | B | ingestion CLI |
-| `run_paper_once.py` | B | paper once |
 | `run_phase35_validation.py` | B | `cf_platform`; default `data/reports` |
 | `run_phase4_accept.py` | B | `cf_platform.live_gates`; reports dir |
 | `sync_d1_to_sqlite.py` | B | invokes sibling `publish_ops_projection.py` by path |
