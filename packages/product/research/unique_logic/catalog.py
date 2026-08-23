@@ -129,7 +129,9 @@ def _load_catalog_specs_cached(root_key: str) -> tuple[dict[str, Any], ...]:
         spec["catalog"] = True
         if spec.get("logic_id"):
             specs.append(spec)
-    return tuple(specs)
+    if specs:
+        return tuple(specs)
+    return tuple(load_compiled_specs(root=Path(root_key)))
 
 
 def load_catalog_specs(*, root: Path | None = None) -> list[dict[str, Any]]:
@@ -172,18 +174,39 @@ def catalog_spec(logic_id: str, *, root: Path | None = None) -> dict[str, Any] |
     return _catalog_by_id_cached(str((root or repo_root()).resolve())).get(str(logic_id))
 
 
-def compiled_migration_ids(*, root: Path | None = None) -> frozenset[str]:
-    """IDs from the compiler migration map. YAML remains load SoT until deletion."""
+def load_compiled_specs(*, root: Path | None = None) -> list[dict[str, Any]]:
+    """Closed-DSL rows from the compiler map. YAML remains load SoT while present."""
     path = (root or repo_root()) / "specs" / "research_catalog" / "migration.jsonl"
-    ids: set[str] = set()
+    specs: list[dict[str, Any]] = []
     for line in path.read_text(encoding="utf-8").splitlines():
         if not line.strip():
             continue
         row = json.loads(line)
         lid = str(row.get("logic_id") or "").strip()
-        if lid:
-            ids.add(lid)
-    return frozenset(ids)
+        if not lid:
+            continue
+        params = row.get("params") if isinstance(row.get("params"), Mapping) else {}
+        specs.append(
+            {
+                "logic_id": lid,
+                "family_id": row.get("family_id"),
+                "evaluator": row.get("evaluator"),
+                "params": dict(params),
+                "generation_enabled": bool(row.get("generation_enabled")),
+                "catalog": True,
+                "compiled": True,
+            }
+        )
+    return specs
+
+
+def compiled_migration_ids(*, root: Path | None = None) -> frozenset[str]:
+    """IDs from the compiler migration map. YAML remains load SoT until deletion."""
+    return frozenset(
+        str(s.get("logic_id") or "")
+        for s in load_compiled_specs(root=root)
+        if s.get("logic_id")
+    )
 
 
 _COMBO_EVALUATOR = "research.unique_logic.event_combos.evaluate_combo_daily_mtm"

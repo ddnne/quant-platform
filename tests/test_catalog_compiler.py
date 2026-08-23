@@ -75,7 +75,16 @@ def test_persisted_artifacts_match_live_digest() -> None:
     raw = (dest / MIGRATION_NAME).read_text(encoding="utf-8")
     migrated = [json.loads(line) for line in raw.splitlines() if line.strip()]
     assert len(migrated) == pack["n"]
-    keys = {"evaluator", "family_id", "gates", "logic_id", "semantic_hash", "template_id"}
+    keys = {
+        "evaluator",
+        "family_id",
+        "gates",
+        "generation_enabled",
+        "logic_id",
+        "params",
+        "semantic_hash",
+        "template_id",
+    }
     assert [r["logic_id"] for r in migrated] == [r["logic_id"] for r in pack["rows"]]
     for persisted, live in zip(migrated, pack["rows"], strict=True):
         assert set(persisted) == keys
@@ -84,6 +93,8 @@ def test_persisted_artifacts_match_live_digest() -> None:
         assert persisted["evaluator"] == live["evaluator"]
         assert persisted["gates"] == live["gates"]
         assert persisted["semantic_hash"] == live["semantic_hash"]
+        assert persisted["params"] == live["params"]
+        assert persisted["generation_enabled"] == live["generation_enabled"]
 
 
 def test_yaml_stems_lock_to_compiled_migration_ids() -> None:

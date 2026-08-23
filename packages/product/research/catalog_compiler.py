@@ -81,11 +81,14 @@ def manifest_payload(pack: Mapping[str, Any]) -> dict[str, Any]:
 
 def migration_row(row: Mapping[str, Any]) -> dict[str, Any]:
     gates = row.get("gates")
+    params = row.get("params") if isinstance(row.get("params"), Mapping) else {}
     return {
         "evaluator": str(row.get("evaluator") or ""),
         "family_id": str(row.get("family_id") or ""),
         "gates": list(gates) if isinstance(gates, Sequence) and not isinstance(gates, (str, bytes)) else [],
+        "generation_enabled": bool(row.get("generation_enabled")),
         "logic_id": str(row.get("logic_id") or ""),
+        "params": dict(params),
         "semantic_hash": str(row.get("semantic_hash") or ""),
         "template_id": str(row.get("template_id") or ""),
     }
