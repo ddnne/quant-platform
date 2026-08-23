@@ -116,60 +116,13 @@ function normalizeProposalRow(
   };
 }
 
-function extractAiText(res: unknown): string {
-  if (typeof res === "string") return res;
-  if (Array.isArray(res)) return JSON.stringify(res);
-  if (!isObject(res)) return "";
-  const nested =
-    res.response ?? res.result ?? res.output_text ?? res.text ?? res.content;
-  if (typeof nested === "string") return nested;
-  if (Array.isArray(nested)) return JSON.stringify(nested);
-  if (isObject(nested)) {
-    if (typeof nested.response === "string") return nested.response;
-    if (Array.isArray(nested.response)) return JSON.stringify(nested.response);
-    return JSON.stringify(nested);
-  }
-  return JSON.stringify(res);
-}
-
-function parseProposalArray(
-  raw: string,
+function decodeProposalArtifact(
+  artifact: Record<string, unknown>,
   n: number,
   avoidTokens: Set<string>,
 ): Array<Record<string, unknown>> {
-  let text = String(raw || "").replace(/```(?:json)?/gi, "").trim();
+  const rows = Array.isArray(artifact.proposals) ? artifact.proposals : [];
   const out: Array<Record<string, unknown>> = [];
-  const tryParse = (blob: string): unknown => {
-    try {
-      return JSON.parse(blob);
-    } catch {
-      try {
-        return JSON.parse(blob.replace(/,\s*([}\]])/g, "$1"));
-      } catch {
-        return null;
-      }
-    }
-  };
-  const arrStart = text.indexOf("[");
-  const arrEnd = text.lastIndexOf("]");
-  let parsed: unknown = null;
-  if (arrStart >= 0 && arrEnd > arrStart) {
-    parsed = tryParse(text.slice(arrStart, arrEnd + 1));
-  }
-  if (parsed == null) {
-    const oStart = text.indexOf("{");
-    const oEnd = text.lastIndexOf("}");
-    if (oStart >= 0 && oEnd > oStart) {
-      parsed = tryParse(text.slice(oStart, oEnd + 1));
-    }
-  }
-  const rows = Array.isArray(parsed)
-    ? parsed
-    : isObject(parsed)
-      ? Array.isArray((parsed as { proposals?: unknown }).proposals)
-        ? ((parsed as { proposals: unknown[] }).proposals)
-        : [parsed]
-      : [];
   for (const row of rows) {
     if (!isObject(row)) continue;
     const norm = normalizeProposalRow(row, avoidTokens);
@@ -184,12 +137,14 @@ async function llmProposals(
   env: Env,
   n: number,
   whyAvoid: string[],
+  budgetId: string,
 ): Promise<{
   rows: Array<Record<string, unknown>> | null;
   reason: string | null;
   model: string | null;
 }> {
   if (!env.AI_GATEWAY) return { rows: null, reason: "ai_gateway_unbound", model: null };
+  if (!budgetId) return { rows: null, reason: "budget_id required", model: null };
   const avoidList = whyAvoid.filter(Boolean).slice(0, PROPOSE_WHY_AVOID_LIMIT);
   const avoidTokens = new Set(avoidList.map((t) => t.trim()).filter(Boolean));
   const avoid = avoidList.join(", ") || "(none)";
@@ -225,16 +180,16 @@ async function llmProposals(
             { role: "user", content: user },
           ],
           max_tokens: 1400,
+          expected_schema: "ThesisProposalList",
+          budget_id: budgetId,
         });
         if (!gw.ok) {
           lastReason = `gateway:${gw.reason || "failed"}:${model}:attempt=${attempt}`;
           continue;
         }
-        const text = String(gw.text || "");
-        const rows = parseProposalArray(text, n, avoidTokens);
+        const rows = decodeProposalArtifact(gw.artifact, n, avoidTokens);
         if (rows.length) return { rows, reason: null, model };
-        const preview = text.replace(/\s+/g, " ").slice(0, 80);
-        lastReason = `parse_empty:${model}:raw_len=${text.length}:attempt=${attempt}:preview=${preview}:avoid_filtered`;
+        lastReason = `parse_empty:${model}:attempt=${attempt}:avoid_filtered`;
       } catch (e) {
         lastReason = `ai_error:${model}:${e instanceof Error ? e.message : String(e)}`.slice(
           0,
@@ -347,7 +302,11 @@ export async function runProposeThesis(
     ? body.why_avoid.map((x) => String(x))
     : [];
   const writeArtifacts = body.write_artifacts === true;
-  const llm = await llmProposals(env, n, whyAvoid);
+  const budgetId =
+    typeof body.budget_id === "string" && body.budget_id.trim()
+      ? body.budget_id.trim()
+      : "";
+  const llm = await llmProposals(env, n, whyAvoid, budgetId);
   const usedLlm = Array.isArray(llm.rows) && llm.rows.length > 0;
   const payload: Record<string, unknown> = usedLlm
     ? {

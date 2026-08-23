@@ -1,16 +1,29 @@
 import type { Env } from "./types";
 
-export type GatewayComplete = {
-  ok: boolean;
-  text?: string;
-  model?: string;
-  reason?: string;
-  input_tokens?: number;
-  output_tokens?: number;
-  monetary_cost_usd?: number;
-  prompt_digest?: string;
-  output_digest?: string;
-};
+export type GatewayComplete =
+  | {
+      ok: true;
+      artifact: Record<string, unknown>;
+      schema_name: string;
+      schema_version: string;
+      model: string;
+      input_tokens: number;
+      output_tokens: number;
+      monetary_cost_usd: number;
+      prompt_digest?: string;
+      output_digest?: string;
+      budget_id: string;
+    }
+  | { ok: false; reason: string };
+
+function isObj(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+function gatewayToken(env: Env): string | undefined {
+  const rec = env as Env & { GATEWAY_TOKEN?: string };
+  return rec.GATEWAY_TOKEN;
+}
 
 /** Research Worker talks only to AI Gateway. Direct env.AI is not available. */
 export async function completeViaGateway(
@@ -19,15 +32,24 @@ export async function completeViaGateway(
     model: string;
     messages: Array<{ role: string; content: string }>;
     max_tokens: number;
+    expected_schema?: string;
+    budget_id?: string;
+    experiment_id?: string;
+    ready_snapshot_id?: string;
+    prompt_digest?: string;
   },
 ): Promise<GatewayComplete> {
   if (!env.AI_GATEWAY) {
     return { ok: false, reason: "ai_gateway_unbound" };
   }
+  const token = gatewayToken(env);
+  if (!token) {
+    return { ok: false, reason: "gateway_token_unbound" };
+  }
   const headers: Record<string, string> = {
     "content-type": "application/json",
+    "X-Gateway-Token": token,
   };
-  if (env.MASS_EVAL_TOKEN) headers["X-Mass-Eval-Token"] = env.MASS_EVAL_TOKEN;
   const res = await env.AI_GATEWAY.fetch(
     new Request("https://ai-gateway/v1/complete", {
       method: "POST",
@@ -41,25 +63,39 @@ export async function completeViaGateway(
   } catch {
     return { ok: false, reason: `gateway_http_${res.status}` };
   }
-  if (!parsed || typeof parsed !== "object") {
+  if (!isObj(parsed)) {
     return { ok: false, reason: "gateway_invalid_json" };
   }
-  const rec = parsed as Record<string, unknown>;
-  if (!res.ok || rec.ok !== true) {
+  if (!res.ok || parsed.ok !== true) {
     return {
       ok: false,
-      reason: String(rec.error || rec.reason || `gateway_http_${res.status}`),
+      reason: String(parsed.error || parsed.reason || `gateway_http_${res.status}`),
     };
+  }
+  if (Object.prototype.hasOwnProperty.call(parsed, "text")) {
+    return { ok: false, reason: "gateway_raw_text_rejected" };
+  }
+  if (!isObj(parsed.artifact)) {
+    return { ok: false, reason: "gateway_artifact_missing" };
+  }
+  if (typeof parsed.schema !== "string" || typeof parsed.schema_version !== "string") {
+    return { ok: false, reason: "gateway_schema_missing" };
+  }
+  if (typeof parsed.budget_id !== "string" || !parsed.budget_id) {
+    return { ok: false, reason: "gateway_budget_id_missing" };
   }
   return {
     ok: true,
-    text: typeof rec.text === "string" ? rec.text : "",
-    model: typeof rec.model === "string" ? rec.model : body.model,
-    input_tokens: Number(rec.input_tokens || 0),
-    output_tokens: Number(rec.output_tokens || 0),
-    monetary_cost_usd: Number(rec.monetary_cost_usd || 0),
-    prompt_digest: typeof rec.prompt_digest === "string" ? rec.prompt_digest : undefined,
-    output_digest: typeof rec.output_digest === "string" ? rec.output_digest : undefined,
+    artifact: parsed.artifact,
+    schema_name: parsed.schema,
+    schema_version: parsed.schema_version,
+    model: typeof parsed.model === "string" ? parsed.model : body.model,
+    input_tokens: Number(parsed.input_tokens || 0),
+    output_tokens: Number(parsed.output_tokens || 0),
+    monetary_cost_usd: Number(parsed.monetary_cost_usd || 0),
+    prompt_digest: typeof parsed.prompt_digest === "string" ? parsed.prompt_digest : undefined,
+    output_digest: typeof parsed.output_digest === "string" ? parsed.output_digest : undefined,
+    budget_id: parsed.budget_id,
   };
 }
 

@@ -2,13 +2,17 @@
 
 import {
   decodeGatewayRequest,
+  decodeTypedArtifact,
   estimateCostUsd,
+  parseModelJson,
   type GatewayOk,
 } from "./schema";
 
 export interface GatewayEnv {
   AI?: Ai;
   GATEWAY_TOKEN?: string;
+  /** Separate mass-eval secret. Never a GATEWAY_TOKEN substitute. */
+  MASS_EVAL_TOKEN?: string;
 }
 
 function timingSafeEqualBytes(a: ArrayBuffer, b: ArrayBuffer): boolean {
@@ -29,12 +33,11 @@ async function tokenMatches(provided: string, expected: string): Promise<boolean
   return timingSafeEqualBytes(a, b);
 }
 
-async function authorized(request: Request, expected?: string): Promise<boolean> {
+/** GATEWAY_TOKEN vs X-Gateway-Token only. MASS_EVAL_TOKEN is a different check. */
+export async function authorized(request: Request, env: GatewayEnv): Promise<boolean> {
+  const expected = env.GATEWAY_TOKEN;
   if (!expected) return false;
-  const got =
-    request.headers.get("X-Mass-Eval-Token") ||
-    request.headers.get("X-Gateway-Token") ||
-    "";
+  const got = request.headers.get("X-Gateway-Token") || "";
   if (!got) return false;
   return tokenMatches(got, expected);
 }
@@ -54,23 +57,45 @@ async function sha256Hex(text: string): Promise<string> {
   return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-function extractText(res: unknown): string {
-  if (typeof res === "string") return res;
-  if (res && typeof res === "object") {
-    const rec = res as Record<string, unknown>;
-    if (typeof rec.response === "string") return rec.response;
-    if (typeof rec.text === "string") return rec.text;
+function extractModelValue(
+  res: unknown,
+): { ok: true; value: unknown; rawForTokens: string } | { ok: false; error: string } {
+  if (typeof res === "string") {
+    const parsed = parseModelJson(res);
+    if (!parsed.ok) return parsed;
+    return { ok: true, value: parsed.value, rawForTokens: res };
   }
-  if (Array.isArray(res)) return JSON.stringify(res);
-  return "";
+  if (res && typeof res === "object" && !Array.isArray(res)) {
+    const rec = res as Record<string, unknown>;
+    if (typeof rec.response === "string") {
+      const parsed = parseModelJson(rec.response);
+      if (!parsed.ok) return parsed;
+      return { ok: true, value: parsed.value, rawForTokens: rec.response };
+    }
+    if (rec.response && typeof rec.response === "object") {
+      return {
+        ok: true,
+        value: rec.response,
+        rawForTokens: JSON.stringify(rec.response),
+      };
+    }
+    if (typeof rec.text === "string") {
+      const parsed = parseModelJson(rec.text);
+      if (!parsed.ok) return parsed;
+      return { ok: true, value: parsed.value, rawForTokens: rec.text };
+    }
+  }
+  return { ok: false, error: "model output is not JSON" };
 }
 
-function tokenCount(res: unknown, fallbackText: string, prompt: string): {
-  input: number;
-  output: number;
-} {
+function tokenCount(
+  res: unknown,
+  fallbackText: string,
+  prompt: string,
+): { input: number; output: number } {
   const rec = res && typeof res === "object" ? (res as Record<string, unknown>) : {};
-  const usage = rec.usage && typeof rec.usage === "object" ? (rec.usage as Record<string, unknown>) : {};
+  const usage =
+    rec.usage && typeof rec.usage === "object" ? (rec.usage as Record<string, unknown>) : {};
   const input = Number(usage.prompt_tokens ?? usage.input_tokens ?? 0);
   const output = Number(usage.completion_tokens ?? usage.output_tokens ?? 0);
   return {
@@ -90,11 +115,8 @@ export default {
       return json({ error: "not found" }, 404);
     }
     if (request.method !== "POST") return json({ error: "POST required" }, 405);
-    if (!(await authorized(request, env.GATEWAY_TOKEN || undefined))) {
+    if (!(await authorized(request, env))) {
       return json({ error: "unauthorized" }, 401);
-    }
-    if (!env.AI) {
-      return json({ ok: false, error: "ai_binding_unbound" }, 503);
     }
     let body: unknown;
     try {
@@ -107,6 +129,9 @@ export default {
       return json({ ok: false, error: parsed.error }, 400);
     }
     const req = parsed.value;
+    if (!env.AI) {
+      return json({ ok: false, error: "ai_binding_unbound" }, 503);
+    }
     const prompt = req.messages.map((m) => `${m.role}:${m.content}`).join("\n");
     const promptDigest = req.prompt_digest || `sha256:${await sha256Hex(prompt)}`;
     try {
@@ -114,12 +139,22 @@ export default {
         messages: req.messages,
         max_tokens: req.max_tokens,
       });
-      const text = extractText(res);
-      const tokens = tokenCount(res, text, prompt);
-      const outputDigest = `sha256:${await sha256Hex(text)}`;
+      const extracted = extractModelValue(res);
+      if (!extracted.ok) {
+        return json({ ok: false, error: extracted.error }, 400);
+      }
+      const decoded = decodeTypedArtifact(extracted.value, req.expected_schema);
+      if (!decoded.ok) {
+        return json({ ok: false, error: decoded.error }, 400);
+      }
+      const tokens = tokenCount(res, extracted.rawForTokens, prompt);
+      const canonical = JSON.stringify(decoded.value.artifact);
+      const outputDigest = `sha256:${await sha256Hex(canonical)}`;
       const payload: GatewayOk = {
         ok: true,
-        text,
+        schema: decoded.value.schema_name,
+        schema_version: decoded.value.schema_version,
+        artifact: decoded.value.artifact,
         model: req.model,
         input_tokens: tokens.input,
         output_tokens: tokens.output,
@@ -128,10 +163,11 @@ export default {
         output_digest: outputDigest,
         ready_snapshot_id: req.ready_snapshot_id ?? null,
         experiment_id: req.experiment_id ?? null,
+        budget_id: req.budget_id,
       };
-      // budget_id is echoed as null here; Python AIGateway charges ResearchBudgetCapability.
-      // Do not grant generation. Unknown request fields remain rejected.
-      return json({ ...payload, budget_id: null });
+      // Do not grant generation. READY is not required live. Unknown fields rejected.
+      // budget_id is required above; Edge ledger is not yet transactional (no DO charge).
+      return json(payload);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       return json({ ok: false, error: "ai_run_failed", detail: msg.slice(0, 180) }, 502);
