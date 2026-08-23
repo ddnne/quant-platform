@@ -10,7 +10,7 @@ extracts landed. Leftover occupancy **HOLD** in `daily_path.ts`.
 `coverage_receipts`, `snapshot_publish_policy`, `snapshot_coverage_proof`,
 `snapshot_persist`, `snapshot_read`, `eval_orchestrate`,
 `ingestion-premium/collection_receipts.ts` — **DONE** in §7.  
-**Live strategy at `1b20fe1f`:** §10 — remaining extracts vs HOLD. YAML
+**Live strategy at `03409ccd`:** §10 — remaining extracts vs HOLD. YAML
 file-count waste is closed. Size is not waste. Do not extract leftover
 occupancy. Do not add YAML. Do not declare Phase 7 GO.  
 **Mass / READY / Phase 7:** unchanged (NO-GO / not declared / OFF)
@@ -364,7 +364,7 @@ and COMPLETE predicates unchanged, generated files still generated.
 
 ---
 
-## 10. Current remaining extracts vs HOLD (HEAD 1b20fe1f)
+## 10. Current remaining extracts vs HOLD (HEAD 03409ccd)
 
 This is the **live** refactor strategy for “the code is full of waste.”
 §§1–9 remain the plan at `41003a5` / status at `5c9b962`. Follow this
@@ -488,13 +488,17 @@ write-path r2 segments (`0f00ea16`); ci-aggregate health 405/404
 parquet-manifest POST-only GET 405 (`e1d71a18`; `bff7e2e1`;
 `bb9e0c91`); artifacts-plan GET no mutate (`7d5dafd8`); ai-gateway
 fetch 404/405 (`1b20fe1f`); complete unbound 503 (`a4aaa9db`) —
+**LANDED**. After `1b20fe1f`: premium archive-cold / prune-changelog /
+parquet-manifest / artifacts-plan header-only tokens (`af85daf3`;
+`17025eb7`; `4c732e8b`; `2a98ef12`); budget HTTP dispatcher
+(`72c30726`); ops-mcp GET `/mcp` 405 (`83941c19`) —
 **LANDED**. Remaining mixed at this SHA (agent-capable before sibling
-commits): query-string token on premium ops (log leak). Header-only
-token is agent-capable fail-closed (not documented as operator
-contract). Remaining HOLD: leftover occupancy, unique22,
-GATEWAY_TOKEN P632B-03, persist live upsert, compact catalog,
-`verify_all` vs `verify_ci` split. Do not schedule leftover occupancy
-extract. Do not YAML +N. Do not declare Phase 7 GO.
+commits): premium export POST still dumps D1;
+`deploy_cf_mass_eval_worker` live wrangler deploy without opt-in env.
+Remaining HOLD: leftover occupancy, unique22, GATEWAY_TOKEN P632B-03,
+persist live upsert, compact catalog, `verify_all` vs `verify_ci`
+split. Do not schedule leftover occupancy extract. Do not YAML +N. Do
+not declare Phase 7 GO.
 
 | Later | Mixed surface | Authority to pick | Must not |
 |------:|---------------|-------------------|----------|
@@ -536,6 +540,7 @@ family-slice remaining façade handlers.
 ✗ Claim mass-eval eval_orchestrate/metrics/ai_gateway_client/panels/propose-thesis HTTP tests or persist_records empty-row unit landed at b1605c36
 ✗ Claim mutating premium ops archive-cold / prune-changelog / parquet-manifest are POST-only at 81fecac8
 ✗ Claim query-string token on premium ops is closed / header-only token is operator contract at 1b20fe1f
+✗ Claim premium export POST does not dump D1 / deploy_cf_mass_eval_worker has opt-in env at 03409ccd
 ```
 
 Success for a later extract commit: one authority moved, G0 green,
