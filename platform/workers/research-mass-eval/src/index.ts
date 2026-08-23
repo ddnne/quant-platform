@@ -25,7 +25,7 @@ import {
   researchCapabilities,
   requireCapability,
 } from "./capabilities";
-import { jobCandidateGrade } from "./candidate";
+import { encodeEvaluationIR } from "./evaluation_ir";
 import { isPathBroken } from "./path_broken";
 import { runProposeThesis } from "./propose_thesis";
 
@@ -381,18 +381,21 @@ async function runDailyPath(
   }).length;
   const nExpected = req.logics.length * periodSpecs.length;
   const freezes = freezePayload(env);
+  const evaluation_ir = encodeEvaluationIR({
+    n_expected: nExpected,
+    n_cells: cells.length,
+    n_complete: nComplete,
+    n_collapsed: nCollapsed,
+    n_broken: nBroken,
+  });
   const payload: Record<string, unknown> = {
     version,
     wave: env.MASS_EVAL_WAVE || "research-mass-eval",
     job_id: req.job_id,
     eval_kind: "daily_path",
-    candidate_grade: jobCandidateGrade({
-      n_expected: nExpected,
-      n_cells: cells.length,
-      n_complete: nComplete,
-      n_collapsed: nCollapsed,
-      n_broken: nBroken,
-    }),
+    // Grade authority is jobCandidateGrade via encode; do not grade twice.
+    candidate_grade: evaluation_ir.candidate,
+    evaluation_ir,
     parallel_model: "isolate_fanout_one_logic",
     mode,
     n_logics: req.logics.length,

@@ -114,3 +114,17 @@ def test_smuggled_candidate_true_on_partial_rejected() -> None:
     forged["candidate"] = True
     with pytest.raises(ValueError, match="job_candidate_grade"):
         decode_evaluation_ir(forged)
+
+
+def test_encode_candidate_is_job_candidate_grade() -> None:
+    """cf_daily_path_job assigns candidate_grade from encode_evaluation_ir."""
+    complete = dict(
+        n_expected=4, n_cells=4, n_complete=4, n_collapsed=0, n_broken=0
+    )
+    partial = dict(n_expected=4, n_cells=4, n_complete=3)
+    assert encode_evaluation_ir(**complete)["candidate"] is job_candidate_grade(
+        **complete
+    )
+    assert encode_evaluation_ir(**partial)["candidate"] is job_candidate_grade(
+        **partial
+    )

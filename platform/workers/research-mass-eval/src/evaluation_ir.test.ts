@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { jobCandidateGrade } from "./candidate";
 import {
@@ -116,5 +119,32 @@ describe("Evaluation IR golden vectors", () => {
     });
     const forged = { ...partial, candidate: true };
     expect(() => decodeEvaluationIR(forged)).toThrow(/job_candidate_grade/);
+  });
+
+  it("encode candidate is jobCandidateGrade; daily-path payload uses IR candidate", () => {
+    const complete = {
+      n_expected: 4,
+      n_cells: 4,
+      n_complete: 4,
+      n_collapsed: 0,
+      n_broken: 0,
+    };
+    const partial = { n_expected: 4, n_cells: 4, n_complete: 3 };
+    expect(encodeEvaluationIR(complete).candidate).toBe(
+      jobCandidateGrade(complete),
+    );
+    expect(encodeEvaluationIR(partial).candidate).toBe(
+      jobCandidateGrade(partial),
+    );
+    // index.ts runDailyPath: candidate_grade = encodeEvaluationIR(...).candidate
+    const src = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), "index.ts"),
+      "utf8",
+    );
+    const daily = src.slice(src.indexOf("async function runDailyPath"));
+    expect(daily).toContain("encodeEvaluationIR");
+    expect(daily).toContain("candidate_grade: evaluation_ir.candidate");
+    expect(daily).not.toMatch(/candidate_grade:\s*jobCandidateGrade/);
+    expect(src).toMatch(/screen_kind: "period_net"[\s\S]*candidate_grade: false/);
   });
 });

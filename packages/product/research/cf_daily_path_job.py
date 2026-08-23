@@ -27,8 +27,8 @@ from research.cf_mass_eval_job import (
     refuse_missing_capability,
     resolve_or_stage_panels,
 )
-from research.candidate_policy import job_candidate_grade
 from research.daily_path_eval import git_sha
+from research.evaluation_ir import encode_evaluation_ir
 from research.eval_registry import PROTOCOL_DAILY_PATH, is_daily_path_complete_cell
 from research.freezes import MASS_RESEARCH
 from research.unique_logic.constants import CF_EVENT_DAILY_PATH_IDS as _CF_EVENT_SET
@@ -248,6 +248,23 @@ def run_cf_daily_path_fanout(
     basket_summary = summarize_basket_trends(basket_cells, job_id=jid)
     basket_summary["not_a_pass"] = True
     basket_summary["go"] = False
+    evaluation_ir = encode_evaluation_ir(
+        n_expected=len(ids) * len(period_rows),
+        n_cells=len(cells),
+        n_complete=sum(1 for c in cells if is_daily_path_complete_cell(c)),
+        n_collapsed=sum(
+            1
+            for c in cells
+            if "path_collapsed" in str(c.get("path_fallback") or "")
+            or str(c.get("skip_reason") or "").startswith("unique_unsupported")
+        ),
+        n_broken=sum(
+            1
+            for c in cells
+            if c.get("path_fallback") == "path_broken"
+            or c.get("eval_path") == "path_broken"
+        ),
+    )
     pack = {
         "version": FANOUT_VERSION,
         "wave": CF_MASS_EVAL_WAVE,
@@ -290,23 +307,9 @@ def run_cf_daily_path_fanout(
         "not_a_pass": True,
         "mass_research": MASS_RESEARCH,
         "survived": False,
-        "candidate_grade": job_candidate_grade(
-            n_expected=len(ids) * len(period_rows),
-            n_cells=len(cells),
-            n_complete=sum(1 for c in cells if is_daily_path_complete_cell(c)),
-            n_collapsed=sum(
-                1
-                for c in cells
-                if "path_collapsed" in str(c.get("path_fallback") or "")
-                or str(c.get("skip_reason") or "").startswith("unique_unsupported")
-            ),
-            n_broken=sum(
-                1
-                for c in cells
-                if c.get("path_fallback") == "path_broken"
-                or c.get("eval_path") == "path_broken"
-            ),
-        ),
+        # Grade authority is job_candidate_grade via encode; do not grade twice.
+        "candidate_grade": evaluation_ir["candidate"],
+        "evaluation_ir": evaluation_ir,
         "period_net_dd_only_pass_forbidden": True,
         "notes": "CF isolate fan-out daily_path_DD. Not a promotion.",
         "baskets": basket_summary,

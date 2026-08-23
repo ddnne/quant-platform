@@ -73,6 +73,14 @@ def test_fanout_aggregates_cells_and_does_not_promote() -> None:
     assert pack["go"] is False
     assert pack["not_a_pass"] is True
     assert pack["promote_as_main"] is False
+    assert pack["survived"] is False
+    ir = pack["evaluation_ir"]
+    assert ir["version"] == "evaluation-ir/v1"
+    assert pack["candidate_grade"] is ir["candidate"]
+    assert ir["n_expected"] == 3
+    assert ir["n_cells"] == 3
+    assert ir["n_complete"] == 3
+    assert ir["candidate"] is True
     assert pack["longest_isolate_sec"] is not None
     assert pack["fanout_sec"] is not None
 
@@ -121,6 +129,12 @@ def test_fanout_path_broken_cells_are_not_complete() -> None:
     assert pack["n_daily_path_complete"] == 0
     assert pack["n_logic_ok"] == 0
     assert pack["go"] is False
+    assert pack["survived"] is False
+    assert pack["promote_as_main"] is False
+    ir = pack["evaluation_ir"]
+    assert pack["candidate_grade"] is ir["candidate"]
+    assert ir["candidate"] is False
+    assert ir["n_broken"] == 1
 
 
 def test_fanout_rejects_job_scoped_panels_prefix_on_r2() -> None:
