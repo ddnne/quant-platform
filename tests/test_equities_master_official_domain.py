@@ -9,12 +9,15 @@ import json
 from datetime import date
 from pathlib import Path
 
+from cf_platform.ingest_premium.coverage import EXPECTED_START
+from data_contracts.canonical import canonical_dataset_for
 from data_contracts.coverage import coverage_contract_for
 from data_contracts.permanent_defer import (
     MASTER_JQ_SCOPE,
     PERMANENT_DEFER_DATASETS,
     PERMANENT_DEFER_IDS,
 )
+from ops.range_batch_scheduler import TRACK_A_FOCUS_RANGES
 from storage.coverage_ledger import plan_required_segments
 
 _REPO = Path(__file__).resolve().parents[1]
@@ -164,6 +167,34 @@ def test_v3_planner_required_start_is_official_not_entitlement_floor():
     mig = _load(_MIGRATION)
     mapping = mig["old_new_required_segment_mapping"]["excluded_official_unavailable"]
     excluded_ids = [row["segment_id"] for row in mapping]
+    assert excluded_ids == OLD_MISDATE_MONTHS
+    for row in mapping:
+        assert row["v3_status"] == EXCLUDED_STATUS
+        assert row["v3_status"] != "COMPLETE"
+
+
+def test_parallel_sot_master_historical_start_is_official_domain():
+    """canonical + scheduler + EXPECTED_START align to 2008-05-07.
+
+    2006-08-13 remains the entitlement floor / excluded_official_unavailable
+    marker, not historical required start. Not a Dataset COMPLETE claim.
+    """
+    assert canonical_dataset_for("equities_master").historical_start == OFFICIAL_START
+    assert TRACK_A_FOCUS_RANGES["equities_master"][0] == OFFICIAL_START
+    assert EXPECTED_START["equities_master"] == OFFICIAL_START
+    assert EXPECTED_START["equities_master"] != NOT_REQUIRED_START
+    assert TRACK_A_FOCUS_RANGES["equities_master"][0] != NOT_REQUIRED_START
+
+    # V3 tip modes are not EXPECTED_START history floors; dates stay vendor
+    # provision starts, not TODAY, and must not densify phantom months.
+    assert EXPECTED_START["equities_bars_daily_am"] == "2024-01-04"
+    assert EXPECTED_START["equities_earnings_calendar"] == "2010-01-04"
+
+    mapping = _load(_MIGRATION)["old_new_required_segment_mapping"][
+        "excluded_official_unavailable"
+    ]
+    excluded_ids = [row["segment_id"] for row in mapping]
+    assert "2006-08" in excluded_ids
     assert excluded_ids == OLD_MISDATE_MONTHS
     for row in mapping:
         assert row["v3_status"] == EXCLUDED_STATUS

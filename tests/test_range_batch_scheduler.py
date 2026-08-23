@@ -16,6 +16,7 @@ from ops.range_batch_scheduler import (
     RATE_POOL_GENERAL,
     SCHEDULER_CONFIG,
     TRACK_A_DATASETS,
+    TRACK_A_FOCUS_RANGES,
     RangeBatchScheduler,
     SchedulerConfig,
     build_queue,
@@ -53,6 +54,14 @@ def test_rpm_and_config_near_ceiling():
     assert "fins_summary" in TRACK_A_DATASETS
     assert SCHEDULER_CONFIG["rate_pools"]["general"]["rpm"] == DEFAULT_GENERAL_RPM
     assert SCHEDULER_CONFIG["rate_pools"]["general"]["workers"] == DEFAULT_GENERAL_WORKERS
+
+
+def test_track_a_equities_master_focus_is_official_domain():
+    """Track A master window starts at listed-info provision, not entitlement."""
+    start, end = TRACK_A_FOCUS_RANGES["equities_master"]
+    assert start == "2008-05-07"
+    assert start != "2006-08-13"
+    assert end == "2099-12-31"
 
 
 def test_filter_track_a_and_focus_range():
