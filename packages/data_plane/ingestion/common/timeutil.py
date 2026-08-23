@@ -7,7 +7,7 @@ offset is the canonical string form (e.g. ``2025-04-01T15:00:00+09:00``).
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
-from typing import Optional, Union
+from typing import Union
 from zoneinfo import ZoneInfo
 
 JST = ZoneInfo("Asia/Tokyo")
@@ -83,7 +83,3 @@ def date_at(value: DateLike, hour: int = 0, minute: int = 0) -> datetime:
     else:
         d = datetime.strptime(str(value).strip()[:10], "%Y-%m-%d").date()
     return datetime(d.year, d.month, d.day, hour, minute, tzinfo=JST)
-
-
-def today_str(now: Optional[datetime] = None) -> str:
-    return (now or now_jst()).strftime("%Y-%m-%d")

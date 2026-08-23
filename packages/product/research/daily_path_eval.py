@@ -1,7 +1,6 @@
 """Candidate-grade daily MTM path helpers. Not a pass / not GO."""
 from __future__ import annotations
 
-import json
 import math
 import subprocess
 from pathlib import Path
@@ -37,14 +36,6 @@ def _finite_num(v: object) -> bool:
     return math.isfinite(f)
 
 
-def dump_json(path: Path, obj: object) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(obj, indent=2, ensure_ascii=False, default=str) + "\n",
-        encoding="utf-8",
-    )
-
-
 def git_sha(*, cwd: Path | None = None) -> str | None:
     try:
         out = subprocess.check_output(
@@ -55,74 +46,6 @@ def git_sha(*, cwd: Path | None = None) -> str | None:
         return out.strip() or None
     except (OSError, subprocess.CalledProcessError):
         return None
-
-
-def load_shard_bars(
-    shard: Mapping[str, Any],
-    *,
-    codes: Sequence[str],
-    max_days: int,
-) -> dict[str, Any]:
-    from research.eval_loaders import (
-        bars_rich_to_close_panel,
-        load_bars_ndjson_rich,
-        resolve_bars_path,
-    )
-
-    pid = str(shard.get("period_id"))
-    p_start = str(shard.get("period_start") or "")[:10] or None
-    p_end = str(shard.get("period_end") or "")[:10] or None
-    bars_path = resolve_bars_path(pid)
-    if bars_path is None or not Path(bars_path).exists():
-        return {
-            "period_id": pid,
-            "status": "missing_bars",
-            "bars": {},
-            "period_start": p_start,
-            "period_end": p_end,
-            "year": shard.get("year"),
-        }
-    rich = load_bars_ndjson_rich(
-        bars_path,
-        codes=list(codes),
-        max_days=int(max_days),
-        period_start=p_start,
-        period_end=p_end,
-    )
-    bars = bars_rich_to_close_panel(rich)
-    adv_by_code: dict[str, float] = {}
-    for code, pairs in (rich or {}).items():
-        vals: list[float] = []
-        for _d, rec in pairs:
-            if not isinstance(rec, dict):
-                continue
-            va = rec.get("Va")
-            try:
-                if va is not None:
-                    vals.append(float(va))
-                    continue
-            except (TypeError, ValueError):
-                pass
-            try:
-                vo = rec.get("Vo")
-                px = rec.get("close")
-                if vo is not None and px is not None:
-                    vals.append(float(vo) * float(px))
-            except (TypeError, ValueError):
-                continue
-        if vals:
-            adv_by_code[str(code)] = sum(vals) / len(vals)
-    return {
-        "period_id": pid,
-        "status": "ok" if bars else "empty_bars",
-        "bars": bars,
-        "adv_by_code": adv_by_code,
-        "period_start": p_start,
-        "period_end": p_end,
-        "year": shard.get("year"),
-        "n_codes": len(bars),
-        "n_days_max": max((len(v) for v in bars.values()), default=0),
-    }
 
 
 def summarize_path(pack: Mapping[str, Any]) -> dict[str, Any]:

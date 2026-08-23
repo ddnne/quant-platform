@@ -4,7 +4,6 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from features.research_freezes import MASS_RESEARCH
@@ -220,20 +219,6 @@ def manifest_from_window_rows(
 
 def dumps_manifest(manifest: EvalJobManifest) -> str:
     return json.dumps(manifest.to_dict(), indent=2, ensure_ascii=False, default=str) + "\n"
-
-
-def write_manifest_local(manifest: EvalJobManifest, staging_dir: Path) -> Path:
-    staging = Path(staging_dir)
-    job_dir = staging / "research_eval" / f"job={manifest.job_id}"
-    job_dir.mkdir(parents=True, exist_ok=True)
-    path = job_dir / "manifest.json"
-    path.write_text(dumps_manifest(manifest), encoding="utf-8")
-    cells_path = job_dir / "cells.json"
-    cells_path.write_text(
-        json.dumps([c.to_dict() for c in manifest.cells], indent=2, default=str) + "\n",
-        encoding="utf-8",
-    )
-    return path
 
 
 def d1_upsert_sql(manifest: EvalJobManifest) -> str:
