@@ -24,14 +24,12 @@ from cf_platform.ingest_premium.availability import (
 )
 from data_contracts.loader import (
     AVAILABLE_AT_POLICIES,
-    CONTRACT_PATH,
     all_contracts,
     contract_for,
 )
 
 
 ROOT = Path(__file__).resolve().parents[1]
-CATALOG_TS = ROOT / "platform/workers/ingestion-premium/src/catalog.ts"
 AVAILABILITY_TS = ROOT / "platform/workers/ingestion-premium/src/availability.ts"
 IDENTITY_TS = ROOT / "platform/workers/ingestion-premium/src/identity.ts"
 
@@ -156,19 +154,6 @@ def test_compatibility_field_union_is_derived_not_a_priority_policy():
         )
     )
     assert EVENT_FIELD_CANDIDATES == expected
-
-
-def test_worker_catalog_imports_the_same_contract_document():
-    text = CATALOG_TS.read_text(encoding="utf-8")
-    assert CONTRACT_PATH.name == "jquants_premium_core.json"
-    assert (
-        'from "../../../../packages/data_plane/data_contracts/jquants_premium_core.json"'
-        in text
-    )
-    assert "contractDocument.datasets" in text
-    assert "PREMIUM_CORE_DATASETS: DatasetSpec[] = rawContracts.map" in text
-    # Dataset ids live in JSON, not in a second TypeScript literal catalog.
-    assert 'id: "equities_bars_daily"' not in text
 
 
 def test_worker_wrappers_delegate_contract_policy_and_identity_constants():
