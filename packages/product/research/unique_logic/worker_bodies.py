@@ -233,7 +233,7 @@ class EventThreeAndBatchError(ValueError):
 
 def assert_catalog_and_plus_n_stopped() -> dict[str, Any]:
     """Refuse yaml growth while CATALOG_AND_PLUS_N_STOPPED. Does not GO."""
-    from research.eval_tracks import (
+    from research.eval_flags import (
         CATALOG_AND_PLUS_N_STOPPED,
         CATALOG_YAML_COUNT_AT_STOP,
     )
@@ -289,7 +289,7 @@ def assert_new_batch_not_event_three_and(
     specs: Sequence[Mapping[str, Any]],
 ) -> dict[str, Any]:
     """Refuse a new batch of 3-AND event/surprise while stopped. Does not GO."""
-    from research.eval_tracks import EVENT_THREE_AND_PLUS_N_STOPPED
+    from research.eval_flags import EVENT_THREE_AND_PLUS_N_STOPPED
 
     rows = [s for s in specs if isinstance(s, Mapping)]
     hits = [

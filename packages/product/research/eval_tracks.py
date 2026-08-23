@@ -14,12 +14,15 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
+from research.eval_flags import (
+    CATALOG_AND_PLUS_N_STOPPED,
+    CATALOG_YAML_COUNT_AT_STOP,
+    CURRENT_EVAL_WAVE,
+    EVENT_THREE_AND_PLUS_N_STOPPED,
+    RECONSTITUTION_APPLY,
+)
+
 UNIVERSE_SELECT_ADV: str = "adv_desc_skip_missing_bars_and_fins"
-EVENT_THREE_AND_PLUS_N_STOPPED: bool = True
-CATALOG_AND_PLUS_N_STOPPED: bool = True
-CATALOG_YAML_COUNT_AT_STOP: int = 2254
-RECONSTITUTION_APPLY: bool = False
-CURRENT_EVAL_WAVE: str = "20260824ev"
 
 EVAL_TRACK_MID_N: str = "mid_n_explore"
 EVAL_TRACK_LIQ_LARGE: str = "liq_large"
@@ -85,11 +88,9 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "id": "inventory_bias_recorded",
         "track": EVAL_TRACK_LIQ_LARGE,
         "why": (
-            "recorded research/eval/job=eval-inventory-bias-20260824ai/ "
-            "inventory_bias.json; assert_new_batch_cheap_pb_cap refuses "
-            "new batches at 20%; usable inventory 1724 (3-AND +N stopped); "
-            "eval-usable-inventory-20260824ev; vol then flow bounded fills "
-            "landed; CATALOG_AND_PLUS_N_STOPPED; 3-AND +N stopped not_a_pass"
+            "recorded research/eval/job=eval-inventory-bias-20260824ai/; "
+            "assert_new_batch_cheap_pb_cap refuses new batches at 20%; "
+            "CATALOG_AND_PLUS_N_STOPPED; 3-AND +N stopped not_a_pass"
         ),
         "not_a_pass": True,
         "go": False,
@@ -245,16 +246,6 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "why": (
             "KNOWN_THIN_UNUSED_GATE_SETS occupancy-empty or thin; "
             "do not rewrite those unused 2-ANDs"
-        ),
-        "not_a_pass": True,
-        "go": False,
-    },
-    {
-        "id": "unique22_park_map_recorded",
-        "track": EVAL_TRACK_LIQ_LARGE,
-        "why": (
-            "eval-unique22-park-20260823i/park.json file-level reasons; "
-            "17 park; do not silent unpark leftover occupancy"
         ),
         "not_a_pass": True,
         "go": False,

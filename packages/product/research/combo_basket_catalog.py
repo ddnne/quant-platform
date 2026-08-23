@@ -5,6 +5,7 @@ from copy import deepcopy
 from functools import lru_cache
 from typing import Any, Mapping, Sequence
 
+from research.eval_flags import RECONSTITUTION_APPLY
 from research.unique_logic.constants import (
     ALWAYS_ON_CS_STICKY,
     ALWAYS_ON_PARK_IDS,
@@ -31,7 +32,6 @@ BLEND_THINNER_KEEP_IDS: frozenset[str] = frozenset(
         "surprise_xs_peps_uncr",
     }
 )
-RECONSTITUTION_APPLY: bool = False
 HUMAN_RECONSTITUTION_PENDING: tuple[str, ...] = (
     "basket_theme_fund",
     "basket_event_fund",

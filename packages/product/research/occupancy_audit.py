@@ -396,7 +396,7 @@ def write_eval_wave_pack(
         reconstitution_occupancy_preview,
         usable_sleeve_coverage,
     )
-    from research.eval_tracks import CATALOG_AND_PLUS_N_STOPPED
+    from research.eval_flags import CATALOG_AND_PLUS_N_STOPPED
     from research.unique_logic.worker_bodies import (
         UNIQUE22_PARK_REASONS,
         countable_thesis_ids,
@@ -542,7 +542,7 @@ def run_eval_wave(
     Does not fan out occupancy. Does not apply reconstitution. Does not GO.
     """
     from research.cf_mass_eval_job import CfMassEvalError
-    from research.eval_tracks import CURRENT_EVAL_WAVE
+    from research.eval_flags import CURRENT_EVAL_WAVE
 
     wave_id = str(wave or CURRENT_EVAL_WAVE).strip()
     if occupancy_by_track is None:

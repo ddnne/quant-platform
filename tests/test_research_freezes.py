@@ -466,8 +466,33 @@ def test_propose_calendar_gates_excluded_from_llm() -> None:
     assert "liq_high" in PROPOSE_ALLOWED_GATES
 
 
+def test_eval_flags_are_single_sot() -> None:
+    import research.combo_basket_catalog as baskets
+    import research.eval_flags as flags
+    import research.eval_tracks as tracks
+
+    assert flags.RECONSTITUTION_APPLY is False
+    assert tracks.RECONSTITUTION_APPLY is flags.RECONSTITUTION_APPLY
+    assert baskets.RECONSTITUTION_APPLY is flags.RECONSTITUTION_APPLY
+    assert tracks.CATALOG_AND_PLUS_N_STOPPED is flags.CATALOG_AND_PLUS_N_STOPPED
+    assert tracks.CURRENT_EVAL_WAVE == flags.CURRENT_EVAL_WAVE
+    assert flags.CATALOG_YAML_COUNT_AT_STOP == 2254
+
+
+def test_cost_defaults_are_shared() -> None:
+    from research.cost_defaults import DEFAULT_ONE_WAY_COST, DEFAULT_ONE_WAY_COST_BP
+    from research.cost_models import DEFAULT_ONE_WAY_COST as cost_cost
+    from research.holding_metrics import DEFAULT_ONE_WAY_COST as hold_cost
+    from research.paper_candidate_adapt import DEFAULT_ONE_WAY_COST as paper_cost
+    from research.robustness_gate import DEFAULT_ONE_WAY_COST as gate_cost
+
+    assert DEFAULT_ONE_WAY_COST_BP == 10.0
+    assert DEFAULT_ONE_WAY_COST == 0.001
+    assert cost_cost == hold_cost == paper_cost == gate_cost == DEFAULT_ONE_WAY_COST
+
+
 def test_catalog_and_plus_n_stopped_and_known_thin() -> None:
-    from research.eval_tracks import (
+    from research.eval_flags import (
         CATALOG_AND_PLUS_N_STOPPED,
         CATALOG_YAML_COUNT_AT_STOP,
         EVENT_THREE_AND_PLUS_N_STOPPED,
