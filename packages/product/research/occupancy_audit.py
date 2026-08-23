@@ -375,7 +375,7 @@ def write_usable_eval_snapshot(
         "puts": puts,
         "go": False,
         "not_a_pass": True,
-        "yaml_remains_sot": True,
+        "yaml_still_present": False,
     }
 
 

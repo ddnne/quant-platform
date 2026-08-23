@@ -27,7 +27,8 @@ def test_write_usable_eval_snapshot_local_only(tmp_path) -> None:
         put_r2=False,
     )
     assert out["go"] is False
-    assert out["yaml_remains_sot"] is True
+    assert out["yaml_still_present"] is False
+    assert "yaml_remains_sot" not in out
     assert out["puts"] == []
     assert (tmp_path / "eval-usable-inventory-test24em.json").is_file()
     assert (tmp_path / "eval-combo-jsonl-test24em.jsonl").is_file()
