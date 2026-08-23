@@ -1,4 +1,4 @@
-"""R2 object put via wrangler. Local FS is not SoT."""
+"""R2 object put and get via wrangler. Local FS is not SoT."""
 
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ _DEFAULT_WRANGLER_CONFIG = DEFAULT_WRANGLER_CONFIG
 
 
 class R2IOError(ValueError):
-    """Invalid R2 wrangler I/O input or put failure."""
+    """Invalid R2 wrangler I/O input or put/get failure."""
 
 
 def default_r2_put(
@@ -137,10 +137,62 @@ def default_r2_put(
             pass
 
 
+def default_r2_get_object(
+    bucket: str,
+    key: str,
+    *,
+    wrangler: str | Path | None = None,
+    config: str | Path | None = None,
+    timeout: int = 300,
+) -> bytes:
+    """Fetch one R2 object body via ``wrangler r2 object get`` (remote)."""
+    wr = Path(wrangler) if wrangler else DEFAULT_WRANGLER
+    cfg = Path(config) if config else DEFAULT_WRANGLER_CONFIG
+    if not wr.is_file():
+        raise R2IOError(
+            f"wrangler binary not found for R2 get: {wr}. "
+            "Inject r2_get= or supply local_paths / pre-parsed rows."
+        )
+    with tempfile.NamedTemporaryFile(
+        prefix="r2fc_get_", suffix=".bin", delete=False
+    ) as tmp:
+        tmp_path = Path(tmp.name)
+    try:
+        proc = subprocess.run(
+            [
+                str(wr),
+                "r2",
+                "object",
+                "get",
+                f"{bucket}/{key}",
+                f"--file={tmp_path}",
+                "--remote",
+                f"--config={cfg}",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            cwd=str(REPO_ROOT),
+        )
+        if proc.returncode != 0:
+            combined = (proc.stderr or "") + (proc.stdout or "")
+            raise R2IOError(
+                f"r2 get failed for {bucket}/{key} rc={proc.returncode}: "
+                f"{combined[-1200:]}"
+            )
+        return tmp_path.read_bytes()
+    finally:
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
 __all__ = [
     "DEFAULT_WRANGLER",
     "DEFAULT_WRANGLER_CONFIG",
     "REPO_ROOT",
     "R2IOError",
+    "default_r2_get_object",
     "default_r2_put",
 ]

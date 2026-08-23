@@ -38,6 +38,7 @@ HARNESS_AST_PATHS = (
     _RESEARCH_PKG / "r2_feature_context.py",
     _RESEARCH_PKG / "r2_feature_parse.py",
     _RESEARCH_PKG / "r2_feature_normalize.py",
+    _RESEARCH_PKG / "r2_feature_mirror.py",
     _RESEARCH_PKG / "r2_available_at.py",
     _RESEARCH_PKG / "daily_path_eval.py",
 )
