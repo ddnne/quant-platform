@@ -3,6 +3,7 @@
  * Diffs against CURRENT.json; writes only change events + updated snapshot.
  */
 
+import { newRunId } from "../identity";
 import {
   MASTER_EVENT_TYPES,
   computeVersionHash,
@@ -156,7 +157,7 @@ export async function writeMasterScd2(
   records: MasterScd2InputRecord[],
   when: Date,
 ): Promise<{ inserted: number; revisions: number; events_key: string | null }> {
-  const runId = `scd2-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const runId = newRunId("scd2");
   const asOf = jstDate(when);
   const prev = await loadCurrent(env.STRUCTURED_BUCKET);
   const nextByCode: Record<string, CurrentEntry> = {};
