@@ -581,3 +581,24 @@ def test_put_local_fallback_artifacts_default_remote_uses_worker_put(
     assert injected
     assert all(bucket == "quant-structured" for bucket, _key in injected)
     assert all(p.get("status") == "put_ok" for p in got)
+
+
+def test_try_r2_get_json_is_non_authority_get_miss_not_complete(monkeypatch) -> None:
+    import research.cf_mass_eval_job as job
+    from research.cf_mass_eval_job import try_r2_get_json
+
+    src = inspect.getsource(try_r2_get_json)
+    assert "r2" in src
+    assert "object" in src
+    assert "get" in src
+    assert "--remote" in src
+    assert "wrangler deploy" not in src
+    assert "r2 object put" not in src
+    assert "COMPLETE" not in src
+
+    def boom(*_a, **_k):
+        raise OSError("no wrangler")
+
+    monkeypatch.setattr(job.subprocess, "run", boom)
+    got = try_r2_get_json("research/mass_eval/panels_cache/x/meta.json")
+    assert got is None
