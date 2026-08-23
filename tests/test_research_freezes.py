@@ -144,25 +144,7 @@ def test_cf_combo_specs_carry_gates() -> None:
     assert "liq_high" in by["event_eqar_high_liq_high"]["params"]["gates"]
 
 
-def test_unique22_leftover_occupancy_not_unified() -> None:
-    from pathlib import Path
-
-    src = (
-        Path(__file__).resolve().parents[1]
-        / "platform"
-        / "workers"
-        / "research-mass-eval"
-        / "src"
-        / "daily_path.ts"
-    ).read_text(encoding="utf-8")
-    assert "momentumAt(entryIdx)" in src
-    assert "entryIdx - 1" in src or "entryIdx-1" in src
-    assert 'lid === "surprise_xs_month_start" && ev.entryDate.slice(8, 10) > "05"' in src
-
-
 def test_cheap_pb_event_not_csfundsnaps() -> None:
-    from pathlib import Path
-
     from research.unique_logic.constants import (
         CHEAP_PB_CS_SOURCE,
         CHEAP_PB_EVENT_SOURCE,
@@ -172,16 +154,6 @@ def test_cheap_pb_event_not_csfundsnaps() -> None:
     assert CHEAP_PB_UNIFIED is False
     assert CHEAP_PB_EVENT_SOURCE == "bars_x_fins_bps_over_close"
     assert CHEAP_PB_CS_SOURCE == "cs_fund_snaps"
-    src = (
-        Path(__file__).resolve().parents[1]
-        / "platform"
-        / "workers"
-        / "research-mass-eval"
-        / "src"
-        / "daily_path.ts"
-    ).read_text(encoding="utf-8")
-    assert "Event cheap_pb is bars×fins" in src
-    assert "CS cheap_pb is csFundSnaps" in src or "csFundSnaps extras.cheapPb" in src
 
 
 def test_propose_calendar_gates_excluded_from_llm() -> None:

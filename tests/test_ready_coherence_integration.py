@@ -6,8 +6,28 @@ from pathlib import Path
 import pytest
 
 from paper_runtime.coherence import check_ready_coherence
+from paper_runtime.ready_policy import (
+    ReadyEvidenceBundle,
+    ReadyEvidenceItem,
+    ReadyPublicationPolicy,
+)
 from paper_runtime.snapshot import SnapshotRejected, publish_ready_snapshot
 from storage.sqlite_store import SqliteStore
+
+
+def test_bundle_pass_fail():
+    b = ReadyEvidenceBundle(
+        items=[
+            ReadyEvidenceItem("a", True),
+            ReadyEvidenceItem("b", False, reason="x"),
+        ]
+    )
+    assert not b.passed
+    assert len(b.failures()) == 1
+
+
+def test_policy_constructs():
+    assert ReadyPublicationPolicy() is not None
 
 
 def test_check_ready_coherence_fails_empty_db(tmp_path: Path):

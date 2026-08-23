@@ -391,7 +391,13 @@ def test_review_proposal_row_occupancy_and_polarity_table() -> None:
     from tests.cf_propose_phrase_cases import REVIEW_PHRASE_CASES
 
     ds = ["equities_bars_daily", "fins_summary", "jsda_tokyo_repo_rates"]
-    assert len(REVIEW_PHRASE_CASES) >= 40
+    reasons = {row[2] for row in REVIEW_PHRASE_CASES}
+    assert reasons == {
+        "occupancy_label_only",
+        "title_gate_polarity_mismatch",
+        "sparse_gate_combo",
+    }
+    assert any(row[3] is None for row in REVIEW_PHRASE_CASES)
     for bad_thesis, gates, reason, good_thesis in REVIEW_PHRASE_CASES:
         payload = {
             "thesis": bad_thesis,
@@ -628,3 +634,100 @@ def test_clone_retry_reposts_catalog_gate_sets() -> None:
     assert polar_out["n_adoptable"] == 1
     assert polar_out["auto_inject"] is False
     assert polar_out["go"] is False
+
+
+def test_worker_index_contains_propose_thesis_route() -> None:
+    """Worker route + allowlist wiring. Python review is the stronger contract."""
+    from research.unique_logic.constants import (
+        COMBO_EVENT_GATES,
+        PROPOSE_CALENDAR_GATES,
+        SPARSE_GATE_COMBOS,
+    )
+    from research.unique_logic.propose_review_tables import (
+        PROPOSE_CONTRADICTORY_GATE_PAIRS,
+        PROPOSE_PROMPT_GOOD,
+        PROPOSE_PROMPT_PREFER_GATES,
+        propose_prompt_good,
+    )
+
+    repo = Path(__file__).resolve().parents[1]
+    worker_src = repo / "platform" / "workers" / "research-mass-eval" / "src"
+    src = (
+        (worker_src / "index.ts").read_text(encoding="utf-8")
+        + "\n"
+        + (worker_src / "propose_thesis.ts").read_text(encoding="utf-8")
+        + "\n"
+        + (worker_src / "propose_allowed.ts").read_text(encoding="utf-8")
+    )
+    assert "/v1/propose-thesis" in src
+    assert "llm_failed" in src
+    assert "llama-3.3-70b-instruct-fp8-fast" in src
+    assert "glm-4.7-flash" in src
+    assert "signal_definition" in src
+    assert (
+        'proposal_source: "llm_failed"' in src
+        or "proposal_source: 'llm_failed'" in src
+    )
+    assert "auto_inject: false" in src
+    assert "go: false" in src
+    assert "not_a_pass: true" in src
+    wr = (
+        repo / "platform" / "workers" / "research-mass-eval" / "wrangler.toml"
+    ).read_text(encoding="utf-8")
+    assert 'binding = "AI"' in wr
+    assert "[ai]" in wr
+    assert "env.AI.run" in src
+    assert "llm_not_catalog" in src
+    assert "stubProposals" not in src
+    assert "stub_propose_thesis_result" not in src
+    live_propose = (
+        repo / "packages" / "product" / "research" / "cf_propose_thesis.py"
+    ).read_text(encoding="utf-8")
+    assert "stub_propose_thesis_result" not in live_propose
+    assert "STUB_PROPOSAL_TEMPLATES" not in live_propose
+    assert "titleOccupancyBad" in src
+    assert "gateAndToken" in src
+    assert "avoidTokens" in src
+    propose_src = (worker_src / "propose_thesis.ts").read_text(encoding="utf-8")
+    assert "const PROPOSE_ALLOWED_GATES = [" not in propose_src
+    assert "const PROPOSE_ALLOWED_DATASETS = [" not in propose_src
+    assert "PROPOSE_ALLOWED_GATES.join" in propose_src
+    assert "PROPOSE_PROMPT_PREFER_GATES.join" in propose_src
+    assert "JSON.stringify(PROPOSE_PROMPT_GOOD)" in propose_src
+    from research.unique_logic.catalog import combo_thesis_records
+
+    assert set(PROPOSE_PROMPT_PREFER_GATES) <= set(PROPOSE_ALLOWED_GATES)
+    good = propose_prompt_good()
+    assert good["gates"] == PROPOSE_PROMPT_GOOD["gates"]
+    catalog_sets = {
+        frozenset(str(x) for x in (row.get("gates") or []) if str(x).strip())
+        for row in combo_thesis_records()
+    }
+    assert frozenset(str(g) for g in good["gates"]) not in catalog_sets
+    prefer = list(PROPOSE_PROMPT_PREFER_GATES)
+    first2: list[str] | None = None
+    for i, a in enumerate(prefer):
+        for b in prefer[i + 1 :]:
+            pair = frozenset({a, b})
+            if pair in catalog_sets:
+                continue
+            if any(combo <= pair for combo, _reason in SPARSE_GATE_COMBOS):
+                continue
+            if any(contra <= pair for contra in PROPOSE_CONTRADICTORY_GATE_PAIRS):
+                continue
+            first2 = [a, b]
+            break
+        if first2 is not None:
+            break
+    if first2 is not None:
+        assert list(good["gates"]) == first2
+        assert len(good["gates"]) == 2
+    else:
+        assert len(good["gates"]) in (2, 3)
+        assert frozenset(str(g) for g in good["gates"]) not in catalog_sets
+    assert "markets_margin_interest" in src
+    assert '"margin_interest"' not in src
+    assert PROPOSE_CALENDAR_GATES <= COMBO_EVENT_GATES
+    assert PROPOSE_CALENDAR_GATES.isdisjoint(PROPOSE_ALLOWED_GATES)
+    assert "skip_monday" not in PROPOSE_ALLOWED_GATES
+    assert "friday_only" not in PROPOSE_ALLOWED_GATES

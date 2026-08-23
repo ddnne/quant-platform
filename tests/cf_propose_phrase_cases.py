@@ -1,37 +1,17 @@
-"""Phrase cases for review_proposal_row. Data, not new tests. Does not GO."""
+"""Phrase cases for review_proposal_row. Data, not new tests. Does not GO.
+
+Representative rows only: one occupancy class is not a 50-row catalog.
+Reason classes stay; extra occupancy_label_only paraphrases were combinatorial.
+"""
 from __future__ import annotations
 
 REVIEW_PHRASE_CASES: tuple[tuple[str, list[str], str, str | None], ...] = tuple(
-[
+    [
         (
             "Overnight funding at 10% predicts EPS decline.",
             ["overnight_p10", "eps_down"],
             "occupancy_label_only",
             "PEAD when overnight is in the easiest PIT decile AND EPS contracted",
-        ),
-        (
-            "Curve flattening indicates poor sales performance when EPS is down.",
-            ["curve_flatten", "eps_down"],
-            "occupancy_label_only",
-            "PEAD when the repo curve flattened AND EPS contracted versus the last prior print",
-        ),
-        (
-            "ROE decline when price-to-book is high AND overnight funding is loose.",
-            ["pb_rising", "overnight_p10"],
-            "occupancy_label_only",
-            "PEAD when PB is above its PIT median AND overnight is in the easiest PIT decile",
-        ),
-        (
-            "Tight funding regime when EPS is down AND NP is negative.",
-            ["eps_down", "np_negative"],
-            "occupancy_label_only",
-            "PEAD when EPS contracted AND net profit is negative",
-        ),
-        (
-            "Price contraction when earnings per share are down AND price-to-book is rising.",
-            ["eps_down", "pb_rising"],
-            "occupancy_label_only",
-            "PEAD when EPS contracted AND PB is above its PIT median",
         ),
         (
             "Stocks are more likely to be bought when the margin is uncrowded AND overnight funding is tightening AND technical analysis signals are up.",
@@ -46,34 +26,46 @@ REVIEW_PHRASE_CASES: tuple[tuple[str, list[str], str, str | None], ...] = tuple(
             None,
         ),
         (
-            "Market rallies when repo rates are low AND equity risk appetite is falling",
-            ["repo_3m_down", "eq_ar_falling"],
+            "Inverted curve when EPS surprises are negative AND price momentum is down.",
+            ["invert_curve", "np_negative", "price_down"],
             "occupancy_label_only",
-            "PEAD when 3m repo rate is down AND EqAR fell versus the last prior print",
+            "PEAD when the repo curve inverted AND net profit is negative AND price is down",
+        ),
+        (
+            "Investors tend to prefer stocks with low PB ratios when the market is crowded AND there is a large surprise in earnings.",
+            ["crowded_margin", "large_surprise"],
+            "occupancy_label_only",
+            "PEAD when margin is crowded AND surprise is large versus the window",
+        ),
+        (
+            "The price-to-book ratio increases when there is a positive price momentum AND the overnight funding becomes tighter.",
+            ["pre_mom", "tight_funding"],
+            "occupancy_label_only",
+            "PEAD when pre-event momentum agrees AND overnight funding is tight. Skip missing PIT prints (no invent).",
+        ),
+        (
+            "Stocks with high price momentum tend to outperform when the yield curve flattens AND funding conditions are easy, but not overly crowded.",
+            ["curve_flatten", "easy_funding", "uncrowded_margin"],
+            "occupancy_label_only",
+            "PEAD when the repo curve flattened AND overnight funding is easy AND margin is uncrowded. Skip missing PIT prints (no invent).",
+        ),
+        (
+            "The market is occupied with stocks having high total assets when overnight funding is easing AND the price is going down.",
+            ["ta_up", "overnight_easing", "price_down"],
+            "occupancy_label_only",
+            "PEAD when total assets rose versus the last prior print AND overnight funding eased AND price is down. Skip missing PIT prints (no invent).",
+        ),
+        (
+            "Investors become risk-averse when overnight funding is tight AND the repo curve inverted.",
+            ["invert_curve", "tight_funding"],
+            "occupancy_label_only",
+            None,
         ),
         (
             "PEAD when the curve flattened AND EPS contracted AND overnight rates are high.",
             ["curve_flatten", "eps_down", "overnight_p10"],
             "title_gate_polarity_mismatch",
             None,
-        ),
-        (
-            "Mean reversion when rising price-to-book ratios AND TA is up AND overnight funding is easy.",
-            ["pb_rising", "ta_up", "easy_funding"],
-            "occupancy_label_only",
-            None,
-        ),
-        (
-            "Overnight funding is tight AND profitability is weak",
-            ["tight_funding", "np_negative"],
-            "occupancy_label_only",
-            "PEAD when overnight funding is tight AND net profit is negative",
-        ),
-        (
-            "Inverted curve when EPS surprises are negative AND price momentum is down.",
-            ["invert_curve", "np_negative", "price_down"],
-            "occupancy_label_only",
-            "PEAD when the repo curve inverted AND net profit is negative AND price is down",
         ),
         (
             "Equity prices tend to rise when the yield curve is flattening AND price momentum is downward.",
@@ -88,94 +80,10 @@ REVIEW_PHRASE_CASES: tuple[tuple[str, list[str], str, str | None], ...] = tuple(
             "PEAD when overnight funding is tight AND sales contracted AND EPS contracted",
         ),
         (
-            "When the yield curve is flattening and price is down, we expect a positive return due to decreased investor appetite for risk.",
-            ["curve_flatten", "price_down"],
-            "occupancy_label_only",
-            "PEAD when the repo curve flattened AND price is down",
-        ),
-        (
             "Stocks with high EPS growth tend to outperform when overnight funding is easy AND the price is rising.",
             ["easy_funding", "price_down"],
             "title_gate_polarity_mismatch",
             "PEAD when overnight funding is easy AND price is down",
-        ),
-        (
-            "Investors tend to prefer stocks with low PB ratios when the market is crowded AND there is a large surprise in earnings.",
-            ["crowded_margin", "large_surprise"],
-            "occupancy_label_only",
-            "PEAD when margin is crowded AND surprise is large versus the window",
-        ),
-        (
-            "Invert curve regime tends to coincide with sales downturn and PB ratio increase.",
-            ["invert_curve", "sales_down", "pb_rising"],
-            "occupancy_label_only",
-            "PEAD when the repo curve inverted AND sales contracted AND PB is above its PIT median",
-        ),
-        (
-            "EPS growth momentum when price is down AND sales are falling.",
-            ["price_down", "sales_down"],
-            "occupancy_label_only",
-            "PEAD when price is down AND sales contracted versus the last prior print",
-        ),
-        (
-            "Stocks with high NP margins outperform when the curve is inverting AND funding is tight.",
-            ["invert_curve", "tight_funding"],
-            "occupancy_label_only",
-            "PEAD when the repo curve inverted AND overnight funding is tight",
-        ),
-        (
-            "Tight funding conditions and sales declines can lead to underperformance.",
-            ["tight_funding", "eps_down"],
-            "occupancy_label_only",
-            "PEAD when overnight funding is tight AND EPS contracted versus the last prior print",
-        ),
-        (
-            "Negative earnings surprises when overnight funding is easy AND sales contracted.",
-            ["easy_funding", "sales_down"],
-            "occupancy_label_only",
-            "PEAD when overnight funding is easy AND sales contracted versus the last prior print",
-        ),
-        (
-            "Overnight funding is easy AND EPS contracted AND sales are declining.",
-            ["easy_funding", "eps_down"],
-            "occupancy_label_only",
-            "PEAD when overnight funding is easy AND EPS contracted versus the last prior print",
-        ),
-        (
-            "The price-to-book ratio increases when there is a positive price momentum AND the overnight funding becomes tighter.",
-            ["pre_mom", "tight_funding"],
-            "occupancy_label_only",
-            "PEAD when pre-event momentum agrees AND overnight funding is tight. Skip missing PIT prints (no invent).",
-        ),
-        (
-            "Earnings growth slows down when overnight funding is easy AND the repo curve inverted.",
-            ["easy_funding", "invert_curve"],
-            "occupancy_label_only",
-            "PEAD when overnight funding is easy AND the repo curve inverted. Skip missing PIT prints (no invent).",
-        ),
-        (
-            "Stocks with high price momentum tend to outperform when the yield curve flattens AND funding conditions are easy, but not overly crowded.",
-            ["curve_flatten", "easy_funding", "uncrowded_margin"],
-            "occupancy_label_only",
-            "PEAD when the repo curve flattened AND overnight funding is easy AND margin is uncrowded. Skip missing PIT prints (no invent).",
-        ),
-        (
-            "The price-to-book ratio tends to rise when the curve inverts AND the company has a high return on equity, signaling a potential undervaluation opportunity.",
-            ["invert_curve", "pb_rising"],
-            "occupancy_label_only",
-            "PEAD when the repo curve inverted AND PB is above its PIT median. Skip missing PIT prints (no invent).",
-        ),
-        (
-            "Earnings disappointment is more likely to be followed by price declines when the repo rate is low and the price is already under pressure.",
-            ["eps_down", "price_down", "overnight_p10"],
-            "occupancy_label_only",
-            "PEAD when overnight is in the easiest PIT decile AND EPS contracted versus the last prior print AND price is down. Skip missing PIT prints (no invent).",
-        ),
-        (
-            "The price of the stock went down when the curve flattened and funding became tight.",
-            ["curve_flatten", "eps_down"],
-            "occupancy_label_only",
-            "PEAD when the repo curve flattened AND EPS contracted versus the last prior print. Skip missing PIT prints (no invent).",
         ),
         (
             "Equity market rallies when the price is down AND the earnings per share are rising, indicating a potential buying opportunity.",
@@ -184,184 +92,10 @@ REVIEW_PHRASE_CASES: tuple[tuple[str, list[str], str, str | None], ...] = tuple(
             "PEAD when EPS rose versus the last prior print AND price is down. Skip missing PIT prints (no invent).",
         ),
         (
-            "Investors become risk-averse when overnight funding is tight AND the repo curve inverted.",
-            ["invert_curve", "tight_funding"],
-            "occupancy_label_only",
-            None,
-        ),
-        (
-            "Earnings per share tend to decrease when the overnight funding is easing and the sales are falling, indicating a potential selling opportunity.",
-            ["overnight_p10", "sales_down"],
-            "occupancy_label_only",
-            "PEAD when overnight is in the easiest PIT decile AND sales contracted versus the last prior print. Skip missing PIT prints (no invent).",
-        ),
-        (
-            "The stock price tends to decrease when the earnings per share are falling and the price is already down, indicating a potential selling opportunity.",
-            ["eps_down", "price_down"],
-            "occupancy_label_only",
-            "PEAD when EPS contracted versus the last prior print AND price is down. Skip missing PIT prints (no invent).",
-        ),
-        (
-            "EPS down when price is down AND overnight funding is tight.",
-            ["price_down", "tight_funding", "eps_down"],
-            "occupancy_label_only",
-            "PEAD when overnight funding is tight AND EPS contracted versus the last prior print AND price is down. Skip missing PIT prints (no invent).",
-        ),
-        (
-            "Invert curve when sales are falling AND funding is tight. High net profit is not required.",
-            ["invert_curve", "sales_down", "tight_funding"],
-            "occupancy_label_only",
-            "PEAD when the repo curve inverted AND overnight funding is tight AND sales contracted versus the last prior print. Skip missing PIT prints (no invent).",
-        ),
-        (
-            "PEAD when curve is flattening AND price is falling. High net profit is not required.",
-            ["curve_flatten", "sales_down"],
-            "occupancy_label_only",
-            "PEAD when the repo curve flattened AND sales contracted versus the last prior print. Skip missing PIT prints (no invent).",
-        ),
-        (
-            "Occupancy increases when overnight is in the easiest PIT decile AND sales contracted versus the last prior print.",
-            ["overnight_p10", "eps_down"],
-            "occupancy_label_only",
-            "PEAD when overnight is in the easiest PIT decile AND EPS contracted versus the last prior print. Skip missing PIT prints (no invent).",
-        ),
-        (
-            "Tight funding when curve is steep AND funding is tight AND price is down.",
-            ["steep_curve", "tight_funding", "price_down"],
-            "occupancy_label_only",
-            "PEAD when the repo curve is steep AND overnight funding is tight AND price is down. Skip missing PIT prints (no invent).",
-        ),
-        (
             "Positive earnings surprise when eps is down AND overnight is easing AND np is negative.",
             ["eps_down", "overnight_easing", "np_negative"],
             "title_gate_polarity_mismatch",
             "PEAD when EPS contracted versus the last prior print AND overnight funding eased AND net profit is negative. Skip missing PIT prints (no invent).",
-        ),
-        (
-            "Positive earnings surprise when overnight funding eased AND net profit is negative.",
-            ["overnight_easing", "np_negative"],
-            "occupancy_label_only",
-            "PEAD when overnight funding eased AND net profit is negative. Skip missing PIT prints (no invent).",
-        ),
-        (
-            "Stocks with rising earnings per share tend to outperform when overnight funding is in the easiest decile and sales are down.",
-            ["overnight_p10", "sales_down", "eps_up"],
-            "occupancy_label_only",
-            "PEAD when overnight is in the easiest PIT decile AND sales contracted versus the last prior print AND EPS rose versus the last prior print. Skip missing PIT prints (no invent).",
-        ),
-        (
-            "Price is low when overnight is in the easiest PIT decile AND net profit is negative.",
-            ["overnight_p10", "np_negative"],
-            "occupancy_label_only",
-            "PEAD when overnight is in the easiest PIT decile AND net profit is negative. Skip missing PIT prints (no invent).",
-        ),
-        (
-            "The curve is inverted when overnight is in the easiest PIT decile.",
-            ["overnight_p10", "invert_curve"],
-            "occupancy_label_only",
-            "PEAD when overnight is in the easiest PIT decile AND the repo curve inverted. Skip missing PIT prints (no invent).",
-        ),
-        (
-            "Firms with falling sales and negative net profit tend to be avoided when funding conditions are tight.",
-            ["sales_down", "np_negative", "tight_funding"],
-            "occupancy_label_only",
-            "PEAD when overnight funding is tight AND sales contracted versus the last prior print AND net profit is negative. Skip missing PIT prints (no invent).",
-        ),
-        (
-            "The curve flattened AND price is down.",
-            ["curve_flatten", "price_down"],
-            "occupancy_label_only",
-            "PEAD when the repo curve flattened AND price is down. Skip missing PIT prints (no invent).",
-        ),
-        (
-            "Investors tend to occupy lower positions when the price is down and earnings per share are negative.",
-            ["price_down", "np_negative"],
-            "occupancy_label_only",
-            "PEAD when price is down AND net profit is negative. Skip missing PIT prints (no invent).",
-        ),
-        (
-            "The market tends to be occupied when PB is above its PIT median AND price is down.",
-            ["pb_rising", "price_down"],
-            "occupancy_label_only",
-            "PEAD when PB is above its PIT median AND price is down. Skip missing PIT prints (no invent).",
-        ),
-        (
-            "The market tends to be occupied when earnings per share are down and price is also down.",
-            ["eps_down", "price_down"],
-            "occupancy_label_only",
-            "PEAD when EPS contracted versus the last prior print AND price is down. Skip missing PIT prints (no invent).",
-        ),
-        (
-            "Curve inversion when price is falling AND funding is tight.",
-            ["price_down", "tight_funding"],
-            "occupancy_label_only",
-            "PEAD when overnight funding is tight AND price is down. Skip missing PIT prints (no invent).",
-        ),
-        (
-            "Curve inversion when EPS contracted versus the last prior print AND sales contracted versus the last prior print.",
-            ["eps_down", "sales_down"],
-            "occupancy_label_only",
-            "PEAD when EPS contracted versus the last prior print AND sales contracted versus the last prior print. Skip missing PIT prints (no invent).",
-        ),
-        (
-            "Tight funding and a rising price-book ratio are more likely to occur when EPS is contracting versus the last prior print. Skip missing PIT prints (no invent).",
-            ["tight_funding", "pb_rising", "eps_down"],
-            "occupancy_label_only",
-            "PEAD when overnight funding is tight AND PB is above its PIT median AND EPS contracted versus the last prior print. Skip missing PIT prints (no invent).",
-        ),
-        (
-            "PEAD when the inverted curve AND price is down.",
-            ["invert_curve", "price_down"],
-            "occupancy_label_only",
-            "PEAD when the repo curve inverted AND price is down. Skip missing PIT prints (no invent).",
-        ),
-        (
-            "PEAD when names are unprofitable AND sales contracted versus the last prior print.",
-            ["np_negative", "sales_down"],
-            "occupancy_label_only",
-            "PEAD when net profit is negative AND sales contracted versus the last prior print. Skip missing PIT prints (no invent).",
-        ),
-        (
-            "When the market experiences a combination of tight funding and a falling price, it's likely that the sales will contract versus the last prior print.",
-            ["tight_funding", "price_down"],
-            "occupancy_label_only",
-            "PEAD when overnight funding is tight AND price is down. Skip missing PIT prints (no invent).",
-        ),
-        (
-            "PEAD when overnight funding is tight AND price is down. Sales will contract versus the last prior print.",
-            ["tight_funding", "price_down"],
-            "occupancy_label_only",
-            "PEAD when overnight funding is tight AND price is down. Skip missing PIT prints (no invent).",
-        ),
-        (
-            "Equities occupancy when price contracted versus the last prior print AND EPS contracted versus the last prior print.",
-            ["price_down", "eps_down"],
-            "occupancy_label_only",
-            "PEAD when EPS contracted versus the last prior print AND price is down. Skip missing PIT prints (no invent).",
-        ),
-        (
-            "Equities occupancy when PB ratio rising AND tight funding.",
-            ["pb_rising", "tight_funding"],
-            "occupancy_label_only",
-            "PEAD when PB is above its PIT median AND overnight funding is tight. Skip missing PIT prints (no invent).",
-        ),
-        (
-            "Market contraction when earnings and price momentum decline, and funding conditions tighten.",
-            ["eps_down", "price_down", "tight_funding"],
-            "occupancy_label_only",
-            "PEAD when EPS contracted versus the last prior print AND price is down AND overnight funding is tight. Skip missing PIT prints (no invent).",
-        ),
-        (
-            "The market is in a situation where there is high funding tightness and prices are declining.",
-            ["tight_funding", "price_down"],
-            "occupancy_label_only",
-            "PEAD when overnight funding is tight AND price is down. Skip missing PIT prints (no invent).",
-        ),
-        (
-            "When the price is down and the funding is tight, it is likely that the market is experiencing a margin squeeze.",
-            ["price_down", "tight_funding"],
-            "occupancy_label_only",
-            "PEAD when overnight funding is tight AND price is down. Skip missing PIT prints (no invent).",
         ),
         (
             "Earnings per share is expected to fall when the price of the stock has been falling and the repo 3M rate is high.",
@@ -370,40 +104,16 @@ REVIEW_PHRASE_CASES: tuple[tuple[str, list[str], str, str | None], ...] = tuple(
             "PEAD when price is down AND 3m repo rate is down. Skip missing PIT prints (no invent).",
         ),
         (
-            "The market is occupied with stocks having high total assets when overnight funding is easing AND the price is going down.",
-            ["ta_up", "overnight_easing", "price_down"],
-            "occupancy_label_only",
-            "PEAD when total assets rose versus the last prior print AND overnight funding eased AND price is down. Skip missing PIT prints (no invent).",
-        ),
-        (
-            "Total assets increased when price is down AND EPS is up AND funding is easy.",
-            ["price_down", "eps_up", "easy_funding"],
-            "occupancy_label_only",
-            "PEAD when price is down AND EPS rose versus the last prior print AND overnight funding is easy. Skip missing PIT prints (no invent).",
-        ),
-        (
             "PEAD when earnings are down AND price is down AND the curve is not steep.",
             ["eps_down", "price_down", "steep_curve"],
             "title_gate_polarity_mismatch",
             "PEAD when EPS contracted versus the last prior print AND price is down AND the repo curve is steep. Skip missing PIT prints (no invent).",
         ),
         (
-            "PEAD when EPS is below its PIT median AND the repo curve is flat AND overnight funding is easing. Skip missing PIT prints (no invent).",
-            ["eps_down", "curve_flatten", "overnight_easing"],
-            "occupancy_label_only",
-            None,
-        ),
-        (
             "The bond market is experiencing a liquidity squeeze when the repo curve steepens AND the market is experiencing a liquidity squeeze AND the overnight policy rate is tight.",
             ["curve_flatten", "liq_high", "overnight_tightening"],
             "title_gate_polarity_mismatch",
             "PEAD when the repo curve flattened AND liquidity is high AND overnight tightened. Skip missing PIT prints (no invent).",
-        ),
-        (
-            "Price is down AND repo curve is inverted AND net profit is negative is a BAD signal.",
-            ["price_down", "invert_curve", "np_negative"],
-            "occupancy_label_only",
-            "PEAD when price is down AND the repo curve inverted AND net profit is negative. Skip missing PIT prints (no invent).",
         ),
         (
             "PEAD when EPS contracted versus the last prior print AND the repo curve is steep AND overnight funding is tight. Skip missing PIT prints (no invent).",
