@@ -81,6 +81,15 @@ def test_persisted_artifacts_match_live_digest() -> None:
         assert persisted["semantic_hash"] == live["semantic_hash"]
 
 
+def test_yaml_stems_lock_to_compiled_migration_ids() -> None:
+    from research.unique_logic.catalog import compiled_migration_ids
+
+    yaml_ids = {p.stem for p in catalog_dir().glob("*.yaml")}
+    compiled = compiled_migration_ids()
+    assert yaml_ids == compiled
+    assert len(yaml_ids) == int(CATALOG_YAML_COUNT_AT_STOP)
+
+
 def test_compiler_source_does_not_exec_or_eval() -> None:
     import research.catalog_compiler as mod
 

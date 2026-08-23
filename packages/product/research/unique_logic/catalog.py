@@ -1,6 +1,7 @@
 """Load unique_logic YAML from ``specs/research_logics``. Constrained schema."""
 from __future__ import annotations
 
+import json
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -166,6 +167,20 @@ def catalog_index(*, root: Path | None = None) -> dict[str, Any]:
 
 def catalog_spec(logic_id: str, *, root: Path | None = None) -> dict[str, Any] | None:
     return _catalog_by_id_cached(str((root or repo_root()).resolve())).get(str(logic_id))
+
+
+def compiled_migration_ids(*, root: Path | None = None) -> frozenset[str]:
+    """IDs from the compiler migration map. YAML remains load SoT until deletion."""
+    path = (root or repo_root()) / "specs" / "research_catalog" / "migration.jsonl"
+    ids: set[str] = set()
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        row = json.loads(line)
+        lid = str(row.get("logic_id") or "").strip()
+        if lid:
+            ids.add(lid)
+    return frozenset(ids)
 
 
 _COMBO_EVALUATOR = "research.unique_logic.event_combos.evaluate_combo_daily_mtm"
