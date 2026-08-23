@@ -96,6 +96,29 @@ def _fresh_ok_proposal() -> dict:
     raise AssertionError("no fresh review-ok 3-AND remains")
 
 
+def test_local_catalog_write_block_reasons_do_not_inject() -> None:
+    from research.cf_propose_thesis import local_catalog_write_block_reasons
+
+    empty = {"mid_n_explore": {}, "liq_large": {}}
+    assert local_catalog_write_block_reasons(
+        {"gates": ["rich_iv", "uncrowded_margin", "easing"]},
+        {"ok": False},
+        occupancy_by_track=empty,
+    ) == ["review_not_ok"]
+    n_pri = local_catalog_write_block_reasons(
+        {"gates": ["afterclose", "large_surprise"]},
+        {"ok": True},
+        occupancy_by_track=empty,
+    )
+    assert "n_pri<2" in n_pri
+    missing = local_catalog_write_block_reasons(
+        {"gates": ["rich_iv", "uncrowded_margin", "easing"]},
+        {"ok": True},
+        occupancy_by_track=empty,
+    )
+    assert "missing_2and_parents" in missing or "parent_lo<=0.22" in missing
+
+
 def test_window_tweak_rejected() -> None:
     assert reject_window_tweak(
         {

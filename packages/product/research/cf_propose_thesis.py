@@ -162,6 +162,66 @@ def review_proposal_row(proposal: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+PROPOSE_PARENT_LO_MIN: float = 0.22
+
+
+def local_catalog_write_block_reasons(
+    proposal: Mapping[str, Any],
+    review: Mapping[str, Any] | None,
+    *,
+    occupancy_by_track: Mapping[str, Mapping[str, float]],
+) -> list[str]:
+    """Why a reviewed proposal is not written to YAML. Never injects. Not GO.
+
+    n_pri is |gates ∩ (VOL∪FLOW∪RATE)|. 3-ANDs need all pairwise 2-AND
+    parents present with both-track min occupancy > 0.22.
+    """
+    from research.unique_logic.catalog import combo_thesis_records
+    from research.unique_logic.constants import (
+        PRI_FLOW_GATES,
+        PRI_RATE_GATES,
+        PRI_VOL_GATES,
+    )
+
+    if not (review and review.get("ok")):
+        return ["review_not_ok"]
+    gates = [str(x) for x in (proposal.get("gates") or []) if str(x).strip()]
+    pri = PRI_VOL_GATES | PRI_FLOW_GATES | PRI_RATE_GATES
+    reasons: list[str] = []
+    if len(set(gates) & pri) < 2:
+        reasons.append("n_pri<2")
+    if len(gates) != 3:
+        return reasons
+    by: dict[tuple[str, ...], list[str]] = {}
+    for rec in combo_thesis_records():
+        g = tuple(sorted(str(x) for x in (rec.get("gates") or []) if str(x).strip()))
+        lid = str(rec.get("logic_id") or "")
+        if g and lid:
+            by.setdefault(g, []).append(lid)
+    mid = dict(occupancy_by_track.get("mid_n_explore") or {})
+    liq = dict(occupancy_by_track.get("liq_large") or {})
+    missing = False
+    lo_fail = False
+    a, b, c = gates
+    for pair in ((a, b), (a, c), (b, c)):
+        lids = by.get(tuple(sorted(pair)), [])
+        if not lids:
+            missing = True
+            continue
+        los = [
+            min(float(mid[lid]), float(liq[lid]))
+            for lid in lids
+            if lid in mid and lid in liq
+        ]
+        if not los or min(los) <= float(PROPOSE_PARENT_LO_MIN):
+            lo_fail = True
+    if missing:
+        reasons.append("missing_2and_parents")
+    if lo_fail:
+        reasons.append("parent_lo<=0.22")
+    return reasons
+
+
 def catalog_prefer_and_avoid(*, n_gates: int, limit: int | None = None) -> list[str]:
     """Catalog ANDs whose gates are all prefer seeds. Clone magnet.
 
@@ -592,6 +652,8 @@ __all__ = [
     "sparse_gate_set_avoid",
     "sparse_prefer_subset_avoid",
     "invoke_cf_propose_thesis",
+    "local_catalog_write_block_reasons",
+    "PROPOSE_PARENT_LO_MIN",
     "reject_window_tweak",
     "review_proposal_row",
 ]
