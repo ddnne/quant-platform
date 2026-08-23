@@ -3,7 +3,6 @@
 import inspect
 import json
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
@@ -108,10 +107,11 @@ def test_remote_r2_put_fail_closed_without_env(tmp_path: Path, monkeypatch) -> N
     cfg.write_text("")
 
     def boom(*_a, **_k):
-        raise AssertionError("remote put must not run without env")
+        raise AssertionError("remote put must not CLI-put")
 
     monkeypatch.setattr(r2_io.subprocess, "run", boom)
-    with pytest.raises(R2IOError, match=rf"{PYTHON_R2_PUT_ENV}=1"):
+    monkeypatch.setattr(r2_io.urllib.request, "urlopen", boom)
+    with pytest.raises(R2IOError, match="use Worker children-then-manifest"):
         default_r2_put(
             "quant-structured",
             "research/eval/job=x/daily_path.json",
@@ -120,7 +120,7 @@ def test_remote_r2_put_fail_closed_without_env(tmp_path: Path, monkeypatch) -> N
             config=cfg,
         )
     monkeypatch.setenv(PYTHON_R2_PUT_ENV, "true")
-    with pytest.raises(R2IOError, match="not artifact authority"):
+    with pytest.raises(R2IOError, match="use Worker children-then-manifest"):
         default_r2_put(
             "quant-structured",
             "research/eval/job=x/daily_path.json",
@@ -130,59 +130,38 @@ def test_remote_r2_put_fail_closed_without_env(tmp_path: Path, monkeypatch) -> N
         )
 
 
-def test_create_only_head_success_skips_put(tmp_path: Path, monkeypatch) -> None:
+def test_remote_r2_put_does_not_cli_put_with_overlay(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.setenv(PYTHON_R2_PUT_ENV, "1")
     wr = tmp_path / "wrangler"
     wr.write_text("")
     cfg = tmp_path / "wrangler.toml"
     cfg.write_text("")
-    seen: list[list[str]] = []
 
-    def fake_run(cmd, **_k):
-        seen.append(list(cmd))
-        return SimpleNamespace(returncode=0, stdout="", stderr="")
+    def boom(*_a, **_k):
+        raise AssertionError("overlay must not resurrect CLI TOCTOU put")
 
-    monkeypatch.setattr(r2_io.subprocess, "run", fake_run)
-    got = default_r2_put(
-        "quant-structured",
-        "research/eval/job=x/daily_path.json",
-        b"{}",
-        wrangler=wr,
-        config=cfg,
-    )
-    assert got["status"] == "exists"
-    assert got["created"] is False
-    assert len(seen) == 1
-    assert "head" in seen[0]
-    assert "put" not in seen[0]
+    monkeypatch.setattr(r2_io.subprocess, "run", boom)
+    monkeypatch.setattr(r2_io.urllib.request, "urlopen", boom)
+    with pytest.raises(R2IOError, match="use Worker children-then-manifest"):
+        default_r2_put(
+            "quant-structured",
+            "research/eval/job=x/daily_path.json",
+            b"{}",
+            wrangler=wr,
+            config=cfg,
+        )
 
 
-def test_create_only_head_miss_calls_put(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv(PYTHON_R2_PUT_ENV, "1")
-    wr = tmp_path / "wrangler"
-    wr.write_text("")
-    cfg = tmp_path / "wrangler.toml"
-    cfg.write_text("")
-    seen: list[list[str]] = []
-
-    def fake_run(cmd, **_k):
-        seen.append(list(cmd))
-        if "head" in cmd:
-            return SimpleNamespace(returncode=1, stdout="", stderr="not found")
-        return SimpleNamespace(returncode=0, stdout="", stderr="")
-
-    monkeypatch.setattr(r2_io.subprocess, "run", fake_run)
-    got = default_r2_put(
-        "quant-structured",
-        "research/eval/job=x/daily_path.json",
-        b"{}",
-        wrangler=wr,
-        config=cfg,
-    )
-    assert got["status"] == "put_ok"
-    assert got["created"] is True
-    assert any("head" in c for c in seen)
-    assert any("put" in c for c in seen)
+def test_default_r2_put_source_is_not_cli_put() -> None:
+    src = inspect.getsource(default_r2_put)
+    assert "subprocess" not in src
+    assert "put_children_then_manifest_via_worker" in src
+    assert PYTHON_R2_PUT_ENV in src
+    assert "does not resurrect TOCTOU" in src
+    assert "WORKER_CHILDREN_THEN_MANIFEST_ERROR" in src
+    assert "never runs that CLI sequence" in src
 
 
 def _children_then_manifest_payload() -> tuple[list[dict], dict]:
