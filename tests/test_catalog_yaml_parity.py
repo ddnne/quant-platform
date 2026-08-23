@@ -69,10 +69,18 @@ def test_catalog_yaml_parity_with_python_specs() -> None:
         assert spec.get("go") is not True
         assert spec.get("promote_as_main") is not True
         assert spec.get("generation_enabled") is False
-        path = Path(str(spec.get("catalog_path") or ""))
-        assert path.stem == spec["logic_id"]
-        if path.is_file():
+        if spec.get("catalog_present"):
+            path = Path(str(spec.get("catalog_path") or ""))
+            assert path.stem == spec["logic_id"]
+            assert path.is_file()
             assert path.name == f"{spec['logic_id']}.yaml"
+        else:
+            assert spec.get("compiled") is True
+            assert spec.get("catalog_present") is False
+            path_raw = spec.get("catalog_path")
+            if path_raw:
+                path = Path(str(path_raw))
+                assert path.name == "migration.jsonl"
         lid = str(spec.get("logic_id") or "")
         if str(spec.get("evaluator") or "") != _COMBO_EVALUATOR:
             continue

@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from functools import lru_cache
-from pathlib import Path
 from typing import Any, Mapping
 
 from research.daily_path_eval import held_book_daily_mtm, panel_index
@@ -135,33 +134,31 @@ def assert_yaml_matches_specs(*, root: Any = None) -> None:
         if str(s.get("evaluator") or "") == _COMBO_EVALUATOR
     ]
     problems: list[str] = []
-    stems: set[str] = set()
+    spec_ids: set[str] = set()
     for spec in combo_yaml:
         lid = str(spec.get("logic_id") or "")
-        path = spec.get("catalog_path")
-        stem = Path(str(path)).stem if path else lid
-        stems.add(stem)
+        spec_ids.add(lid)
         if spec.get("go") is True:
             problems.append(f"{lid}: go=True")
         params = spec.get("params")
         if not isinstance(params, Mapping):
-            problems.append(f"{lid}: YAML params missing")
+            problems.append(f"{lid}: catalog params missing")
             continue
         if "gates" not in params:
-            problems.append(f"{lid}: YAML params missing gates")
+            problems.append(f"{lid}: catalog params missing gates")
         elif not isinstance(params.get("gates"), list):
-            problems.append(f"{lid}: YAML params.gates not a list")
+            problems.append(f"{lid}: catalog params.gates not a list")
         if "cs_gate" not in params:
-            problems.append(f"{lid}: YAML params missing cs_gate")
+            problems.append(f"{lid}: catalog params missing cs_gate")
         if "side" not in params:
-            problems.append(f"{lid}: YAML params missing side")
+            problems.append(f"{lid}: catalog params missing side")
     if problems:
         raise AssertionError("combo YAML self-check: " + " | ".join(problems[:40]))
 
     row_ids = {str(r["logic_id"]) for r in combo_thesis_records(root=root)}
-    if row_ids != stems:
-        missing = sorted(stems - row_ids)
-        extra = sorted(row_ids - stems)
+    if row_ids != spec_ids:
+        missing = sorted(spec_ids - row_ids)
+        extra = sorted(row_ids - spec_ids)
         parts: list[str] = []
         if missing:
             parts.append("combo_thesis_records missing ids: " + ", ".join(missing[:40]))

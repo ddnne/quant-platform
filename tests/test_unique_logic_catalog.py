@@ -186,9 +186,11 @@ def test_catalog_index_is_one_pass_lookup() -> None:
     assert spec["logic_id"] == lid
     assert spec.get("compiled") is True
     assert spec.get("catalog_present") is False
-    path = Path(str(spec.get("catalog_path") or ""))
-    assert path.stem == lid
-    assert path.is_file() is False
+    path_raw = spec.get("catalog_path")
+    if path_raw:
+        path = Path(str(path_raw))
+        assert path.name == "migration.jsonl"
+        assert path.is_file()
     assert catalog_spec("not_a_real_logic_id_zzz") is None
 
 

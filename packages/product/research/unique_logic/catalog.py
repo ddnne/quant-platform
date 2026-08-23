@@ -189,7 +189,6 @@ def load_compiled_specs(*, root: Path | None = None) -> list[dict[str, Any]]:
         if not lid:
             continue
         params = row.get("params") if isinstance(row.get("params"), Mapping) else {}
-        catalog_path = catalog_dir(root=root) / f"{lid}.yaml"
         specs.append(
             {
                 "logic_id": lid,
@@ -205,7 +204,7 @@ def load_compiled_specs(*, root: Path | None = None) -> list[dict[str, Any]]:
                 "catalog": True,
                 "compiled": True,
                 "catalog_present": False,
-                "catalog_path": str(catalog_path),
+                "catalog_path": str(path),
             }
         )
     return specs
@@ -268,10 +267,10 @@ def combo_row_from_yaml(spec: Mapping[str, Any]) -> dict[str, Any]:
     lid = str(spec.get("logic_id") or "")
     params = spec.get("params")
     if not isinstance(params, Mapping):
-        raise ValueError(f"{lid}: YAML params missing")
+        raise ValueError(f"{lid}: catalog params missing")
     missing = [k for k in ("gates", "cs_gate", "side") if k not in params]
     if missing:
-        raise ValueError(f"{lid}: YAML params missing {', '.join(missing)}")
+        raise ValueError(f"{lid}: catalog params missing {', '.join(missing)}")
 
     gates = normalize_gates(params["gates"])
 
