@@ -109,13 +109,23 @@ function overlayInventoryRow(row) {
   return { ...row, sla };
 }
 
+/**
+ * Raw-plane captured labels. ACQUIRED is the live write; COMPLETE is a
+ * historical raw-captured label. Neither is dataset Coverage COMPLETE.
+ */
+const RAW_CAPTURED_SQL = "completeness IN ('ACQUIRED', 'COMPLETE')";
+
+function isRawCaptured(completeness) {
+  return completeness === "ACQUIRED" || completeness === "COMPLETE";
+}
+
 /** Raw acquisition ≠ dataset Coverage COMPLETE. */
 export function classifyRawAcquisition(row) {
   const completeness = String(row?.completeness || "");
   const rows = Number(row?.row_count ?? 0);
   const bytes = Number(row?.raw_bytes ?? 0);
   if (completeness === "FAILED") return "DOWNLOAD_FAILED";
-  if (completeness !== "COMPLETE") return "UNVERIFIED";
+  if (!isRawCaptured(completeness)) return "UNVERIFIED";
   if (rows > 0) return "EXPECTED_AND_CAPTURED";
   if (bytes > 0) return "EXPECTED_EMPTY_WITH_EVIDENCE";
   return "SOURCE_NOT_PUBLISHED";
@@ -576,12 +586,12 @@ export async function callOpsTool(db, name, rawArguments) {
     }
     const totals = await first(db,
       `SELECT COUNT(*) AS total,
-              SUM(CASE WHEN completeness = 'COMPLETE' THEN 1 ELSE 0 END) AS complete,
-              SUM(CASE WHEN completeness IS NULL OR completeness != 'COMPLETE' THEN 1 ELSE 0 END) AS incomplete,
+              SUM(CASE WHEN ${RAW_CAPTURED_SQL} THEN 1 ELSE 0 END) AS acquired,
+              SUM(CASE WHEN completeness IS NULL OR NOT (${RAW_CAPTURED_SQL}) THEN 1 ELSE 0 END) AS incomplete,
               SUM(CASE WHEN IFNULL(row_count, 0) = 0 OR IFNULL(raw_bytes, 0) = 0 THEN 1 ELSE 0 END) AS zero_byte_or_zero_row,
               SUM(CASE WHEN completeness = 'FAILED' THEN 1 ELSE 0 END) AS failed
          FROM raw_retention_manifests${where}`, binds);
-    const unresolvedPred = "completeness IS NULL OR completeness != 'COMPLETE'";
+    const unresolvedPred = `completeness IS NULL OR NOT (${RAW_CAPTURED_SQL})`;
     const oldestWhere = where ? `${where} AND (${unresolvedPred})` : ` WHERE ${unresolvedPred}`;
     const oldest = await first(db,
       `SELECT dataset, run_id, created_at, completeness, row_count, raw_bytes
@@ -597,7 +607,7 @@ export async function callOpsTool(db, name, rawArguments) {
       mutable: true,
       totals: {
         total: Number(totals?.total || 0),
-        complete: Number(totals?.complete || 0),
+        acquired: Number(totals?.acquired || 0),
         incomplete: Number(totals?.incomplete || 0),
         zero_byte_or_zero_row: Number(totals?.zero_byte_or_zero_row || 0),
         failed: Number(totals?.failed || 0),
@@ -607,7 +617,7 @@ export async function callOpsTool(db, name, rawArguments) {
         ...row,
         acquisition_state: classifyRawAcquisition(row),
       })),
-      note: "raw acquisition COMPLETE is not dataset Coverage COMPLETE",
+      note: "raw ACQUIRED and legacy completeness=COMPLETE are raw-captured, not dataset Coverage COMPLETE",
     };
   }
 
@@ -1051,14 +1061,14 @@ export async function callOpsTool(db, name, rawArguments) {
   const [lastRun, coverage, raw] = await Promise.all([
     first(db, "SELECT id, ran_at, source, runtime, status FROM ingestion_run_log ORDER BY id DESC LIMIT 1"),
     all(db, "SELECT status, COUNT(*) AS count FROM dataset_coverage GROUP BY status ORDER BY status"),
-    first(db, "SELECT COUNT(*) AS manifests, SUM(CASE WHEN completeness = 'COMPLETE' THEN 1 ELSE 0 END) AS complete FROM raw_retention_manifests"),
+    first(db, `SELECT COUNT(*) AS manifests, SUM(CASE WHEN ${RAW_CAPTURED_SQL} THEN 1 ELSE 0 END) AS acquired FROM raw_retention_manifests`),
   ]);
   return {
     plane: "ops_current", mutable: true, last_run: lastRun,
     coverage_status: coverage.length ? "AVAILABLE" : "UNKNOWN",
     coverage_status_counts: coverage,
     governed_dataset_count: GOVERNED_DATASETS.length,
-    raw_retention: raw || { manifests: 0, complete: 0 },
+    raw_retention: raw || { manifests: 0, acquired: 0 },
     research_note: "Current Ops status is not evidence that a research READY snapshot contains the same state.",
   };
 }

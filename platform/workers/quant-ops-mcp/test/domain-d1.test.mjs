@@ -202,7 +202,15 @@ test("Ops queries run against the complete ingestion D1 migration sequence", asy
   assert.equal(sync.watermarks.length, 1);
   assert.equal(sync.latest_change_seq, null);
   assert.equal(raw.totals.total, 1);
+  assert.equal(raw.totals.acquired, 1);
+  assert.equal(raw.totals.complete, undefined);
   assert.equal(raw.attestations[0].acquisition_state, "EXPECTED_AND_CAPTURED");
+  assert.equal(raw.attestations[0].completeness, "COMPLETE");
+  assert.match(raw.note, /not dataset Coverage COMPLETE/);
+  const ops = await callOpsTool(d1(db), "ops_status", {});
+  assert.equal(ops.raw_retention.manifests, 1);
+  assert.equal(ops.raw_retention.acquired, 1);
+  assert.equal(ops.raw_retention.complete, undefined);
   db.close();
 });
 
@@ -396,9 +404,87 @@ test("raw zero-row complete is empty-with-evidence not coverage complete", () =>
     "EXPECTED_EMPTY_WITH_EVIDENCE",
   );
   assert.equal(
+    classifyRawAcquisition({ completeness: "ACQUIRED", row_count: 0, raw_bytes: 12 }),
+    "EXPECTED_EMPTY_WITH_EVIDENCE",
+  );
+  assert.equal(
     JSDA_UPSTREAM_LOCATORS.jsda_otc_bond_reference_prices.includes("market.jsda.or.jp"),
     true,
   );
+});
+
+test("raw ACQUIRED is captured like legacy COMPLETE and is not Coverage COMPLETE", async () => {
+  assert.equal(
+    classifyRawAcquisition({ completeness: "ACQUIRED", row_count: 4, raw_bytes: 40 }),
+    "EXPECTED_AND_CAPTURED",
+  );
+  assert.equal(
+    classifyRawAcquisition({ completeness: "ACQUIRED", row_count: 0, raw_bytes: 0 }),
+    "SOURCE_NOT_PUBLISHED",
+  );
+  assert.equal(
+    classifyRawAcquisition({ completeness: "COMPLETE", row_count: 2, raw_bytes: 8 }),
+    "EXPECTED_AND_CAPTURED",
+  );
+  assert.equal(
+    classifyRawAcquisition({ completeness: "FAILED", row_count: 0, raw_bytes: 0 }),
+    "DOWNLOAD_FAILED",
+  );
+  assert.equal(
+    classifyRawAcquisition({ completeness: "PENDING", row_count: 1, raw_bytes: 8 }),
+    "UNVERIFIED",
+  );
+
+  const db = new DatabaseSync(":memory:");
+  for (const migration of ingestionMigrations) db.exec(migration);
+  db.prepare(`INSERT INTO ingestion_run_log
+    (ran_at,source,runtime,status,detail) VALUES (?,?,?,?,?)`).run(
+      "2026-08-23T00:00:00Z", "jquants", "worker", "pass", "{}",
+    );
+  const insert = db.prepare(`INSERT INTO raw_retention_manifests
+    (dataset,run_id,manifest_key,page_count,row_count,raw_bytes,data_digest,
+     completeness,created_at) VALUES (?,?,?,?,?,?,?,?,?)`);
+  insert.run(
+    "equities_bars_daily", 1, "raw/a.json", 1, 4, 20,
+    "sha256:a", "ACQUIRED", "2026-08-23T00:00:00Z",
+  );
+  insert.run(
+    "equities_bars_daily", 2, "raw/b.json", 1, 0, 12,
+    "sha256:b", "COMPLETE", "2026-08-21T00:00:00Z",
+  );
+  insert.run(
+    "equities_bars_daily", 3, "raw/c.json", 1, 0, 0,
+    "sha256:c", "FAILED", "2026-08-20T00:00:00Z",
+  );
+
+  const raw = await callOpsTool(d1(db), "raw_retention_status", {
+    dataset: "equities_bars_daily",
+  });
+  assert.equal(raw.totals.total, 3);
+  assert.equal(raw.totals.acquired, 2);
+  assert.equal(raw.totals.failed, 1);
+  assert.equal(raw.totals.incomplete, 1);
+  assert.equal(raw.totals.complete, undefined);
+  assert.doesNotMatch(JSON.stringify(raw.totals), /Coverage COMPLETE/);
+  assert.match(raw.note, /not dataset Coverage COMPLETE/);
+  assert.doesNotMatch(raw.note, /Coverage COMPLETE is/);
+  const byRun = Object.fromEntries(
+    raw.attestations.map((row) => [Number(row.run_id), row]),
+  );
+  assert.equal(byRun[1].acquisition_state, "EXPECTED_AND_CAPTURED");
+  assert.equal(byRun[1].completeness, "ACQUIRED");
+  assert.equal(byRun[2].acquisition_state, "EXPECTED_EMPTY_WITH_EVIDENCE");
+  assert.equal(byRun[2].completeness, "COMPLETE");
+  assert.equal(byRun[3].acquisition_state, "DOWNLOAD_FAILED");
+  assert.equal(Number(raw.oldest_unresolved.run_id), 3);
+  assert.equal(raw.oldest_unresolved.completeness, "FAILED");
+
+  const ops = await callOpsTool(d1(db), "ops_status", {});
+  assert.equal(ops.raw_retention.manifests, 3);
+  assert.equal(ops.raw_retention.acquired, 2);
+  assert.equal(ops.raw_retention.complete, undefined);
+  assert.doesNotMatch(JSON.stringify(ops.raw_retention), /Coverage COMPLETE/);
+  db.close();
 });
 
 test("honestProjectionStatus: FRESH requires refresh_status success", () => {
