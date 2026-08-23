@@ -77,8 +77,9 @@ if [[ ! -s "$golden" ]]; then
   exit 1
 fi
 # Independent jsonschema + Python encode/decode. evaluation_ir.ts stays a
-# presence check (hand-written codec). ALLOWED_FIELDS is generated from schema.json.
-"$py" -c 'from research.evaluation_ir import assert_evaluation_ir_allowed_fields_ts_frozen; assert_evaluation_ir_allowed_fields_ts_frozen()'
+# hand-written codec; encode keys must match schema.json properties.
+# ALLOWED_FIELDS is generated from schema.json.
+"$py" -c 'from research.evaluation_ir import assert_evaluation_ir_allowed_fields_ts_frozen, assert_evaluation_ir_encode_keys_match_schema; assert_evaluation_ir_allowed_fields_ts_frozen(); assert_evaluation_ir_encode_keys_match_schema()'
 "$py" -c 'import json
 from pathlib import Path
 import jsonschema

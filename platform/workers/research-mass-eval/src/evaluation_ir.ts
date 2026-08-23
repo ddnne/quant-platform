@@ -10,7 +10,8 @@ Worker tests consume that file; jobCandidateGrade is the only TS grade.
 Codec field SoT: specs/evaluation_ir/schema.json (Python encode/decode validates).
 Worker decode does not load a JSON Schema engine; unknown keys fail against
 ALLOWED_FIELDS generated from schema properties (additionalProperties: false)
-and version must be evaluation-ir/v1.
+and version must be evaluation-ir/v1. Encode keys must equal ALLOWED_FIELDS
+(schema properties). There is no second field list.
 */
 
 import { jobCandidateGrade } from "./candidate";
@@ -25,16 +26,6 @@ export const GOLDEN_REL = "specs/evaluation_ir/golden.jsonl";
 
 /** Repo-relative codec SoT. Python encode/decode validate this file. */
 export const SCHEMA_REL = "specs/evaluation_ir/schema.json";
-
-export const CANONICAL_FIELDS = [
-  "return",
-  "cost",
-  "turnover",
-  "coverage",
-  "collapsed",
-  "candidate",
-  "failure_reason",
-] as const;
 
 export type EvaluationIRPayload = {
   version: string;
@@ -113,7 +104,20 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/** Encode canonical fields. candidate is jobCandidateGrade only. */
+function assertEncodeKeys(encoded: EvaluationIRPayload): EvaluationIRPayload {
+  const keys = Object.keys(encoded);
+  if (
+    keys.length !== ALLOWED_FIELDS.size ||
+    keys.some((key) => !ALLOWED_FIELDS.has(key))
+  ) {
+    throw new Error(
+      `encode keys drifted from schema.json: ${keys.join(", ")}`,
+    );
+  }
+  return encoded;
+}
+
+/** Encode schema properties. candidate is jobCandidateGrade only. */
 export function encodeEvaluationIR(
   args: EvaluationIREncodeArgs,
 ): EvaluationIRPayload {
@@ -144,7 +148,7 @@ export function encodeEvaluationIR(
   } else {
     reason = gradedReason;
   }
-  return {
+  return assertEncodeKeys({
     version: EVALUATION_IR_VERSION,
     return: args.return_value ?? null,
     cost: args.cost ?? null,
@@ -158,7 +162,7 @@ export function encodeEvaluationIR(
     n_complete,
     n_collapsed,
     n_broken,
-  };
+  });
 }
 
 /** Closed-schema decode. Unknown fields fail. Candidate is re-graded. */

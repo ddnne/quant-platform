@@ -18,26 +18,19 @@ Shared golden: ``specs/evaluation_ir/golden.jsonl`` is emitted by
 
 Worker ``ALLOWED_FIELDS`` is emitted from this schema into
 ``evaluation_ir_allowed_fields.generated.ts``. Do not hand-edit that file.
+Encode keys (Python and Worker) must equal schema properties; CI freeze-checks
+that lock. There is no second field list.
 """
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
 from qp_paths import repo_root
 from research.candidate_policy import job_candidate_grade
-
-CANONICAL_FIELDS: tuple[str, ...] = (
-    "return",
-    "cost",
-    "turnover",
-    "coverage",
-    "collapsed",
-    "candidate",
-    "failure_reason",
-)
 
 _GRADE_FIELDS: tuple[str, ...] = (
     "n_expected",
@@ -55,6 +48,12 @@ ALLOWED_FIELDS_TS_REL = (
     / "research-mass-eval"
     / "src"
     / "evaluation_ir_allowed_fields.generated.ts"
+)
+EVALUATION_IR_TS_REL = (
+    Path("platform") / "workers" / "research-mass-eval" / "src" / "evaluation_ir.ts"
+)
+_TS_OBJECT_KEY_RE = re.compile(
+    r"""^(?:(?P<quoted>["'])(?P<quoted_key>[A-Za-z_][\w]*)(?P=quoted)|(?P<key>[A-Za-z_][\w]*))\s*(?::|,|$)?"""
 )
 
 _SUPPORTED_SCHEMA_DIALECTS = frozenset(
@@ -118,9 +117,6 @@ def _check_schema_document(schema: Mapping[str, Any]) -> None:
     required = schema.get("required")
     if not isinstance(required, list) or any(not isinstance(x, str) for x in required):
         raise ValueError("Evaluation IR schema required must be a list of strings")
-    missing_canon = [name for name in CANONICAL_FIELDS if name not in properties]
-    if missing_canon:
-        raise ValueError(f"Evaluation IR schema missing canonical field(s): {missing_canon}")
     missing_grade = [name for name in _GRADE_FIELDS if name not in properties]
     if missing_grade:
         raise ValueError(f"Evaluation IR schema missing grade field(s): {missing_grade}")
@@ -283,7 +279,7 @@ def encode_evaluation_ir(
     n_broken: int = 0,
     failure_reason: str | None = None,
 ) -> dict[str, Any]:
-    """Encode canonical fields. ``candidate`` is ``job_candidate_grade`` only."""
+    """Encode schema properties. ``candidate`` is ``job_candidate_grade`` only."""
     n_expected_i = _as_int(n_expected, "n_expected")
     n_cells_i = _as_int(n_cells, "n_cells")
     n_complete_i = _as_int(n_complete, "n_complete")
@@ -594,16 +590,128 @@ def assert_evaluation_ir_allowed_fields_ts_frozen(*, root: Path | None = None) -
         )
 
 
+def evaluation_ir_ts_path(*, root: Path | None = None) -> Path:
+    return _eval_ir_root(root=root) / EVALUATION_IR_TS_REL
+
+
+def _ts_brace_block(src: str, open_index: int) -> str:
+    if open_index < 0 or open_index >= len(src) or src[open_index] != "{":
+        raise ValueError("Evaluation IR TS: expected '{'")
+    depth = 0
+    in_str: str | None = None
+    escape = False
+    i = open_index
+    n = len(src)
+    while i < n:
+        ch = src[i]
+        if in_str is not None:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == in_str:
+                in_str = None
+        elif ch in ('"', "'", "`"):
+            in_str = ch
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return src[open_index : i + 1]
+        i += 1
+    raise ValueError("Evaluation IR TS: unbalanced braces")
+
+
+def _ts_object_literal_keys(literal: str) -> tuple[str, ...]:
+    text = literal.strip()
+    if not (text.startswith("{") and text.endswith("}")):
+        raise ValueError("Evaluation IR TS encode return is not an object literal")
+    keys: list[str] = []
+    for raw in text[1:-1].splitlines():
+        line = raw.strip()
+        if not line or line.startswith("//"):
+            continue
+        if "//" in line:
+            line = line.split("//", 1)[0].strip()
+        line = line.rstrip(",").strip()
+        if not line:
+            continue
+        if line.startswith("..."):
+            raise ValueError("Evaluation IR TS encode return must not use spread")
+        match = _TS_OBJECT_KEY_RE.match(line)
+        if match is None:
+            raise ValueError(f"Evaluation IR TS cannot parse encode key from {raw!r}")
+        name = match.group("quoted_key") or match.group("key")
+        if not name:
+            raise ValueError(f"Evaluation IR TS cannot parse encode key from {raw!r}")
+        keys.append(name)
+    if not keys:
+        raise ValueError("Evaluation IR TS encode return has no keys")
+    return tuple(keys)
+
+
+def evaluation_ir_ts_encode_keys(
+    *, root: Path | None = None, src: str | None = None
+) -> tuple[str, ...]:
+    """Ordered keys from Worker encodeEvaluationIR. Not a grade policy."""
+    text = src
+    if text is None:
+        path = evaluation_ir_ts_path(root=root)
+        if not path.is_file():
+            raise ValueError(f"Evaluation IR worker codec missing: {path}")
+        text = path.read_text(encoding="utf-8")
+    marker = "export function encodeEvaluationIR"
+    start = text.find(marker)
+    if start < 0:
+        raise ValueError("encodeEvaluationIR not found in evaluation_ir.ts")
+    body_open = text.find("{", start)
+    body = _ts_brace_block(text, body_open)
+    if "jobCandidateGrade(" not in body:
+        raise ValueError("encodeEvaluationIR must call jobCandidateGrade")
+    ret = body.find("return")
+    if ret < 0:
+        raise ValueError("encodeEvaluationIR has no return")
+    obj_open = body.find("{", ret)
+    return _ts_object_literal_keys(_ts_brace_block(body, obj_open))
+
+
+def evaluation_ir_encode_keys() -> tuple[str, ...]:
+    """Ordered keys from Python encode_evaluation_ir. Must equal schema properties."""
+    return tuple(encode_evaluation_ir(n_expected=1, n_cells=1, n_complete=1))
+
+
+def assert_evaluation_ir_encode_keys_match_schema(
+    *, root: Path | None = None, ts_src: str | None = None
+) -> None:
+    """Fail CI if Python or Worker encode keys drift from schema.json properties."""
+    schema = load_evaluation_ir_schema(root=root)
+    schema_keys = tuple(str(name) for name in schema["properties"])
+    py_keys = evaluation_ir_encode_keys()
+    ts_keys = evaluation_ir_ts_encode_keys(root=root, src=ts_src)
+    if py_keys != schema_keys:
+        raise ValueError(
+            "Python encode keys drifted from schema.json properties: "
+            f"{list(py_keys)} != {list(schema_keys)}"
+        )
+    if ts_keys != schema_keys:
+        raise ValueError(
+            "evaluation_ir.ts encode keys drifted from schema.json properties: "
+            f"{list(ts_keys)} != {list(schema_keys)}"
+        )
+
+
 __all__ = [
     "ALLOWED_FIELDS",
     "ALLOWED_FIELDS_TS_REL",
-    "CANONICAL_FIELDS",
     "EVALUATION_IR_SCHEMA",
+    "EVALUATION_IR_TS_REL",
     "EVALUATION_IR_VERSION",
     "EvaluationIR",
     "GOLDEN_REL",
     "SCHEMA_REL",
     "assert_evaluation_ir_allowed_fields_ts_frozen",
+    "assert_evaluation_ir_encode_keys_match_schema",
     "candidate_from_job_artifact",
     "decode_evaluation_ir",
     "dumps_evaluation_ir_golden",
@@ -612,6 +720,9 @@ __all__ = [
     "encode_evaluation_ir",
     "evaluation_ir_allowed_fields_ts_path",
     "evaluation_ir_allowed_fields_ts_source",
+    "evaluation_ir_encode_keys",
+    "evaluation_ir_ts_encode_keys",
+    "evaluation_ir_ts_path",
     "job_candidate_grade",
     "load_evaluation_ir_schema",
     "validate_evaluation_ir_schema",
