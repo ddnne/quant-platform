@@ -17,8 +17,8 @@ import {
   freezePayload,
   isObject,
   json,
+  putChildrenThenManifest,
   putImmutableJson,
-  putJsonCreateOnly,
 } from "./http";
 import {
   netsOnlyGate,
@@ -266,39 +266,55 @@ async function runMassEval(
     "research/mass_eval/artifacts",
     { kind: "results", job_id: req.job_id, results, freezes },
   );
-  const alias = await putJsonCreateOnly(env.STRUCTURED_BUCKET, manifest.keys.manifest, {
-    ...manifest,
-    schema_version: "research_artifact/v1",
-    artifact_digest: resultsArt.digest,
-    artifact_key: resultsArt.key,
-  });
-  if (!alias.created) {
+  const commit = await putChildrenThenManifest(
+    env.STRUCTURED_BUCKET,
+    [
+      {
+        key: manifest.keys.request,
+        data: {
+          ...req,
+          freezes,
+          received_at: new Date().toISOString(),
+        },
+      },
+      { key: manifest.keys.summary, data: summary },
+      {
+        key: manifest.keys.results,
+        data: {
+          version,
+          wave,
+          job_id: req.job_id,
+          results,
+          freezes,
+          artifact_digest: resultsArt.digest,
+        },
+      },
+      {
+        key: manifest.keys.ranking,
+        data: {
+          version,
+          wave,
+          job_id: req.job_id,
+          ranking,
+          freezes,
+        },
+      },
+      { key: manifest.keys.panels_meta, data: panelsMeta },
+    ],
+    {
+      key: manifest.keys.manifest,
+      data: {
+        ...manifest,
+        schema_version: "research_artifact/v1",
+        artifact_digest: resultsArt.digest,
+        artifact_key: resultsArt.key,
+      },
+    },
+    resultsArt.digest,
+  );
+  if (!commit.ok) {
     throw Object.assign(new Error("artifact_conflict"), { code: "artifact_conflict" });
   }
-  await Promise.all([
-    putJsonCreateOnly(env.STRUCTURED_BUCKET, manifest.keys.request, {
-      ...req,
-      freezes,
-      received_at: new Date().toISOString(),
-    }),
-    putJsonCreateOnly(env.STRUCTURED_BUCKET, manifest.keys.summary, summary),
-    putJsonCreateOnly(env.STRUCTURED_BUCKET, manifest.keys.results, {
-      version,
-      wave,
-      job_id: req.job_id,
-      results,
-      freezes,
-      artifact_digest: resultsArt.digest,
-    }),
-    putJsonCreateOnly(env.STRUCTURED_BUCKET, manifest.keys.ranking, {
-      version,
-      wave,
-      job_id: req.job_id,
-      ranking,
-      freezes,
-    }),
-    putJsonCreateOnly(env.STRUCTURED_BUCKET, manifest.keys.panels_meta, panelsMeta),
-  ]);
 
   return {
     version,
@@ -421,18 +437,19 @@ async function runDailyPath(
     );
     payload.artifact_digest = artifact.digest;
     payload.artifact_key = artifact.key;
-    const alias = await putJsonCreateOnly(
+    const commit = await putChildrenThenManifest(
       env.STRUCTURED_BUCKET,
-      `${prefix}/daily_path.json`,
-      payload,
+      [],
+      { key: `${prefix}/daily_path.json`, data: payload },
+      artifact.digest,
     );
     payload.r2_keys = {
       daily_path: `${prefix}/daily_path.json`,
       artifact: artifact.key,
       digest: artifact.digest,
     };
-    payload.artifact_created = alias.created;
-    if (!alias.created) {
+    payload.artifact_created = commit.manifest.created;
+    if (!commit.ok) {
       payload.artifact_conflict = true;
     }
   }

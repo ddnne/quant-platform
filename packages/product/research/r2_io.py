@@ -54,6 +54,7 @@ def default_r2_put(
     therefore head-then-put. That sequence is TOCTOU: a concurrent writer
     can create the key after a miss and this put will overwrite. If head
     succeeds, skip put and return status ``exists``.
+    Python CLI put is not the immutable authority; Worker onlyIf is.
     """
     meta = {
         "bucket": bucket,

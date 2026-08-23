@@ -73,11 +73,18 @@ export async function putJson(
   return putJsonCreateOnly(bucket, key, data);
 }
 
+export type CreateOnlyPutResult = {
+  key: string;
+  bytes: number;
+  created: boolean;
+  digest: string;
+};
+
 export async function putJsonCreateOnly(
   bucket: R2Bucket,
   key: string,
   data: unknown,
-): Promise<{ key: string; bytes: number; created: boolean; digest: string }> {
+): Promise<CreateOnlyPutResult> {
   const body = JSON.stringify(data, null, 2);
   const bytes = new TextEncoder().encode(body);
   const digest = `sha256:${await sha256Hex(bytes)}`;
@@ -105,7 +112,7 @@ export async function putImmutableJson(
   bucket: R2Bucket,
   plane: string,
   data: unknown,
-): Promise<{ key: string; bytes: number; created: boolean; digest: string }> {
+): Promise<CreateOnlyPutResult> {
   const body = JSON.stringify(data);
   const bytes = new TextEncoder().encode(body);
   const hex = await sha256Hex(bytes);
@@ -128,4 +135,75 @@ export async function putImmutableJson(
     return { key, bytes: 0, created: false, digest };
   }
   return { key, bytes: bytes.byteLength, created: true, digest };
+}
+
+/**
+ * Manifest 409 is not ok unless the existing object names `expectedDigest`
+ * and that child object is present. Incomplete aliases are not success.
+ */
+export async function verifyManifestChildDigest(
+  bucket: R2Bucket,
+  manifestKey: string,
+  expectedDigest: string,
+): Promise<boolean> {
+  if (!expectedDigest) return false;
+  const obj = await bucket.get(manifestKey);
+  if (!obj) return false;
+  let parsed: unknown;
+  try {
+    parsed = await obj.json();
+  } catch {
+    return false;
+  }
+  if (!isObject(parsed)) return false;
+  const got = String(parsed.artifact_digest ?? "");
+  if (got !== expectedDigest) return false;
+  const childKey =
+    typeof parsed.artifact_key === "string" ? parsed.artifact_key : "";
+  if (!childKey) return false;
+  const child = await bucket.head(childKey);
+  return child != null;
+}
+
+export type ChildrenThenManifestResult = {
+  children: CreateOnlyPutResult[];
+  manifest: CreateOnlyPutResult;
+  ok: boolean;
+  conflict: boolean;
+  verified: boolean;
+};
+
+/** Two-phase: content children first, then create-only job manifest. */
+export async function putChildrenThenManifest(
+  bucket: R2Bucket,
+  children: Array<{ key: string; data: unknown }>,
+  manifest: { key: string; data: unknown },
+  expectedChildDigest?: string,
+): Promise<ChildrenThenManifestResult> {
+  const childPuts = await Promise.all(
+    children.map((child) => putJsonCreateOnly(bucket, child.key, child.data)),
+  );
+  const manifestPut = await putJsonCreateOnly(bucket, manifest.key, manifest.data);
+  if (manifestPut.created) {
+    return {
+      children: childPuts,
+      manifest: manifestPut,
+      ok: true,
+      conflict: false,
+      verified: true,
+    };
+  }
+  const digest =
+    expectedChildDigest ||
+    (isObject(manifest.data)
+      ? String(manifest.data.artifact_digest ?? "")
+      : "");
+  const verified = await verifyManifestChildDigest(bucket, manifest.key, digest);
+  return {
+    children: childPuts,
+    manifest: manifestPut,
+    ok: verified,
+    conflict: true,
+    verified,
+  };
 }

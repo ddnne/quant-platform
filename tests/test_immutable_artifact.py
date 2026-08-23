@@ -56,6 +56,8 @@ def test_default_r2_put_documents_toctou_not_atomic() -> None:
     assert sig.parameters["create_only"].default is True
     text = f"{default_r2_put.__doc__ or ''}\n{inspect.getsource(default_r2_put)}"
     assert "TOCTOU" in text
+    assert "not the immutable authority" in text
+    assert "Worker onlyIf" in text
 
 
 def test_create_only_head_success_skips_put(tmp_path: Path, monkeypatch) -> None:
