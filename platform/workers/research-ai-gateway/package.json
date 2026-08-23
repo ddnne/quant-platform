@@ -6,10 +6,11 @@
   "scripts": {
     "deploy": "wrangler deploy",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "build": "wrangler deploy --dry-run --outdir .wrangler-dry-run"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20250101.0",
+    "@cloudflare/workers-types": "^5.20260820.1",
     "typescript": "^5.5.0",
     "vitest": "^3.2.4",
     "wrangler": "^4.120.1"
