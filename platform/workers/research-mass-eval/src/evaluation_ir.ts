@@ -7,6 +7,7 @@ and re-grades; a smuggled candidate:true cannot pass a partial job.
 Shared golden: specs/evaluation_ir/golden.jsonl is emitted by Python
 emit_evaluation_ir_golden / emit_golden_vector (encoder-owned).
 Worker tests consume that file; jobCandidateGrade is the only TS grade.
+Codec field SoT: specs/evaluation_ir/schema.json (Python encode/decode validates).
 */
 
 import { jobCandidateGrade } from "./candidate";

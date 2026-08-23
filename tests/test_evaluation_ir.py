@@ -10,19 +10,24 @@ import pytest
 
 from research.candidate_policy import job_candidate_grade
 from research.evaluation_ir import (
+    ALLOWED_FIELDS,
     CANONICAL_FIELDS,
     EVALUATION_IR_VERSION,
+    SCHEMA_REL,
     candidate_from_job_artifact,
     decode_evaluation_ir,
     dumps_evaluation_ir_golden,
     emit_evaluation_ir_golden,
     encode_evaluation_ir,
     job_candidate_grade as ir_grade,
+    load_evaluation_ir_schema,
+    validate_evaluation_ir_schema,
 )
 
 GOLDEN_PATH = (
     Path(__file__).resolve().parents[1] / "specs" / "evaluation_ir" / "golden.jsonl"
 )
+SCHEMA_PATH = Path(__file__).resolve().parents[1] / SCHEMA_REL
 _GRADE_KEYS = ("n_expected", "n_cells", "n_complete", "n_collapsed", "n_broken")
 
 
@@ -56,6 +61,24 @@ def test_canonical_fields_and_version() -> None:
         "failure_reason",
     )
     assert ir_grade is job_candidate_grade
+
+
+def test_schema_is_codec_sot() -> None:
+    schema = load_evaluation_ir_schema()
+    assert SCHEMA_PATH.is_file()
+    assert schema["$schema"] in {
+        "http://json-schema.org/draft-07/schema#",
+        "https://json-schema.org/draft-07/schema#",
+        "https://json-schema.org/draft/2020-12/schema",
+    }
+    assert schema["additionalProperties"] is False
+    assert schema["properties"]["version"]["const"] == "evaluation-ir/v1"
+    assert EVALUATION_IR_VERSION == schema["properties"]["version"]["const"]
+    assert ALLOWED_FIELDS == frozenset(schema["properties"])
+    assert "const" not in schema["properties"]["candidate"]
+    assert "if" not in schema
+    assert "then" not in schema
+    assert "allOf" not in schema
 
 
 def test_partial_job_candidate_false() -> None:
@@ -251,3 +274,38 @@ def test_shared_golden_vectors(row: dict[str, Any]) -> None:
         forged["candidate"] = True
         with pytest.raises(ValueError, match="job_candidate_grade"):
             decode_evaluation_ir(forged)
+
+
+def test_encode_output_schema_validates() -> None:
+    payload = encode_evaluation_ir(
+        return_value=0.08,
+        cost=0.02,
+        turnover=0.15,
+        coverage=1.0,
+        collapsed=0,
+        n_expected=4,
+        n_cells=4,
+        n_complete=4,
+        n_collapsed=0,
+        n_broken=0,
+    )
+    validate_evaluation_ir_schema(payload)
+    with pytest.raises(ValueError, match="unknown field"):
+        validate_evaluation_ir_schema({**payload, "go": True})
+    with pytest.raises(ValueError, match="unsupported Evaluation IR version"):
+        validate_evaluation_ir_schema({**payload, "version": "evaluation-ir/v0"})
+
+
+@pytest.mark.parametrize("row", _load_golden(), ids=lambda row: row["id"])
+def test_golden_rows_schema_validate(row: dict[str, Any]) -> None:
+    if row["op"] == "decode":
+        payload = row["payload"]
+        extra = set(payload) - ALLOWED_FIELDS
+        if extra:
+            with pytest.raises(ValueError, match="unknown field"):
+                validate_evaluation_ir_schema(payload)
+            return
+        validate_evaluation_ir_schema(payload)
+        return
+    encoded = encode_evaluation_ir(**row["args"])
+    validate_evaluation_ir_schema(encoded)
