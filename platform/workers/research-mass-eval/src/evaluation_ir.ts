@@ -8,6 +8,9 @@ Shared golden: specs/evaluation_ir/golden.jsonl is emitted by Python
 emit_evaluation_ir_golden / emit_golden_vector (encoder-owned).
 Worker tests consume that file; jobCandidateGrade is the only TS grade.
 Codec field SoT: specs/evaluation_ir/schema.json (Python encode/decode validates).
+Worker decode does not load a JSON Schema engine; unknown keys fail against
+ALLOWED_FIELDS (schema additionalProperties: false) and version must be
+evaluation-ir/v1.
 */
 
 import { jobCandidateGrade } from "./candidate";
@@ -18,6 +21,9 @@ export const EVALUATION_IR_VERSION = "evaluation-ir/v1";
 
 /** Repo-relative path. Emitted by Python emit_evaluation_ir_golden. */
 export const GOLDEN_REL = "specs/evaluation_ir/golden.jsonl";
+
+/** Repo-relative codec SoT. Python encode/decode validate this file. */
+export const SCHEMA_REL = "specs/evaluation_ir/schema.json";
 
 export const CANONICAL_FIELDS = [
   "return",
@@ -179,13 +185,10 @@ export function decodeEvaluationIR(payload: unknown): EvaluationIR {
   if (unknown.length > 0) {
     throw new Error(`EvaluationIR unknown field(s): ${unknown.join(", ")}`);
   }
-  const rawVersion = payload.version;
-  const version =
-    rawVersion == null || rawVersion === ""
-      ? EVALUATION_IR_VERSION
-      : String(rawVersion);
-  if (version !== EVALUATION_IR_VERSION) {
-    throw new Error(`unsupported Evaluation IR version: ${JSON.stringify(version)}`);
+  if (payload.version !== EVALUATION_IR_VERSION) {
+    throw new Error(
+      `unsupported Evaluation IR version: ${JSON.stringify(payload.version)}`,
+    );
   }
   const missing = ["n_expected", "n_cells", "n_complete"].filter(
     (name) => !(name in payload),
