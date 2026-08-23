@@ -79,4 +79,49 @@ describe("handleBudgetRequest HTTP dispatcher", () => {
     expect(res.status).toBe(404);
     expect(await res.json()).toEqual({ ok: false, error: "not found" });
   });
+
+  it("POST /reserve JSON {} is 400 idempotency_key required and does not create occupancy", async () => {
+    const storage = new MemoryBudgetStorage();
+    const res = await dispatch(storage, "POST", "/reserve", {
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    });
+    expect(res.status).not.toBe(200);
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ ok: false, error: "idempotency_key required" });
+
+    const snap = await dispatch(storage, "GET", "/snapshot");
+    expect(snap.status).toBe(200);
+    const payload = (await snap.json()) as {
+      ok?: boolean;
+      auto_promotion?: boolean;
+      used?: Record<string, number>;
+      reserved?: Record<string, number>;
+      active_leases?: number;
+    };
+    expect(payload.ok).toBe(true);
+    expect(payload.auto_promotion).toBe(false);
+    expect(payload.used).toEqual(zeroCounters());
+    expect(payload.reserved).toEqual(zeroCounters());
+    expect(payload.active_leases).toBe(0);
+  });
+
+  it("POST /recover is 200 ok without claiming Edge occupancy", async () => {
+    const storage = new MemoryBudgetStorage();
+    const res = await dispatch(storage, "POST", "/recover");
+    expect(res.status).toBe(200);
+    const payload = (await res.json()) as { ok?: boolean };
+    expect(payload.ok).toBe(true);
+
+    const snap = await dispatch(storage, "GET", "/snapshot");
+    expect(snap.status).toBe(200);
+    const after = (await snap.json()) as {
+      reserved?: Record<string, number>;
+      used?: Record<string, number>;
+      auto_promotion?: boolean;
+    };
+    expect(after.auto_promotion).toBe(false);
+    expect(after.used).toEqual(zeroCounters());
+    expect(after.reserved).toEqual(zeroCounters());
+  });
 });
