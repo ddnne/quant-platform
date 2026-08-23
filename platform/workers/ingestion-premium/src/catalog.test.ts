@@ -14,3 +14,18 @@ describe("premium catalog identity", () => {
     expect(PREMIUM_CORE_DATASETS.map((spec) => spec.dataset_id)).toEqual(contractIds);
   });
 });
+
+describe("premium catalog dateMode", () => {
+  it("maps every JSON date_mode onto Worker spec.dateMode, and day_param onto dayParam when present", () => {
+    expect(PREMIUM_CORE_DATASETS).toHaveLength(contractDocument.datasets.length);
+
+    for (const json of contractDocument.datasets) {
+      const spec = PREMIUM_CORE_DATASETS.find((row) => row.id === json.dataset_id);
+      expect(spec).toBeDefined();
+      expect(spec!.dateMode).toBe(json.date_mode);
+      if (json.day_param !== undefined) {
+        expect(spec!.dayParam).toBe(json.day_param);
+      }
+    }
+  });
+});
