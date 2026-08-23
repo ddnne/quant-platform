@@ -10,6 +10,7 @@ import {
   parseModelJson,
   type GatewayOk,
 } from "./schema";
+import { sha256Hex } from "./sha256";
 
 export { authorized } from "./authorized";
 export { BudgetLedger };
@@ -20,11 +21,6 @@ export interface GatewayEnv {
   /** Separate mass-eval secret. Never a GATEWAY_TOKEN substitute. */
   MASS_EVAL_TOKEN?: string;
   BUDGET_LEDGER?: DurableObjectNamespace;
-}
-
-async function sha256Hex(text: string): Promise<string> {
-  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
-  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 function extractModelValue(
