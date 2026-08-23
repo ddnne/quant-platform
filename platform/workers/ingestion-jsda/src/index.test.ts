@@ -103,15 +103,44 @@ describe("ingestion-jsda handlers", () => {
     expect(healthJson.ok).toBe(true);
     expect(healthJson.worker).toBe("ingestion-jsda");
 
-    const run = await worker.fetch(
-      new Request("https://ingestion-jsda.test/v1/run"),
-      env,
-    );
+    const run = await worker.fetch(postRun(), env);
     expect(run.status).toBe(401);
     const runBody = await run.text();
     expect(runBody).not.toContain(RUN_TOKEN);
     expect(runBody).not.toMatch(/INGESTION_RUN_TOKEN/i);
     expect(runBody).not.toContain("COMPLETE");
+  });
+
+  it("GET /v1/run with matching or missing token is 405 and does not fetch or persist", async () => {
+    rejectLiveFetch();
+
+    const matching = touchingEnv();
+    const matchingRes = await worker.fetch(
+      new Request("https://ingestion-jsda.test/v1/run", {
+        method: "GET",
+        headers: { "X-Ingestion-Token": RUN_TOKEN },
+      }),
+      matching.env,
+    );
+    expect(matchingRes.status).toBe(405);
+    const matchingBody = await matchingRes.text();
+    expect(JSON.parse(matchingBody)).toEqual({ error: "POST required" });
+    assertNoLeakOrCoverage(matchingBody);
+    expect(matching.sql).toEqual([]);
+    expect(matching.r2Ops).toEqual([]);
+
+    const missing = touchingEnv();
+    const missingRes = await worker.fetch(
+      new Request("https://ingestion-jsda.test/v1/run", { method: "GET" }),
+      missing.env,
+    );
+    expect(missingRes.status).toBe(405);
+    const missingBody = await missingRes.text();
+    expect(JSON.parse(missingBody)).toEqual({ error: "POST required" });
+    assertNoLeakOrCoverage(missingBody);
+    expect(missing.sql).toEqual([]);
+    expect(missing.r2Ops).toEqual([]);
+    expect(fetchCalls).toBe(0);
   });
 
   it("POST /v1/run missing or wrong token is 401 and does not fetch or persist", async () => {

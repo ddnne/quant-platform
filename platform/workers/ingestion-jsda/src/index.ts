@@ -607,6 +607,9 @@ export default {
       });
     }
     if (url.pathname === "/v1/run") {
+      if (request.method !== "POST") {
+        return Response.json({ error: "POST required" }, { status: 405 });
+      }
       if (!(await authorized(request, env.INGESTION_RUN_TOKEN))) {
         return Response.json({ error: "unauthorized" }, { status: 401 });
       }
