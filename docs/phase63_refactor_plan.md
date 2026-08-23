@@ -10,7 +10,7 @@ extracts landed. Leftover occupancy **HOLD** in `daily_path.ts`.
 `coverage_receipts`, `snapshot_publish_policy`, `snapshot_coverage_proof`,
 `snapshot_persist`, `snapshot_read`, `eval_orchestrate`,
 `ingestion-premium/collection_receipts.ts` — **DONE** in §7.  
-**Live strategy at `ec960406`:** §10 — remaining extracts vs HOLD. YAML
+**Live strategy at `98545741`:** §10 — remaining extracts vs HOLD. YAML
 file-count waste is closed. Size is not waste. Do not extract leftover
 occupancy. Do not add YAML. Do not declare Phase 7 GO.  
 **Mass / READY / Phase 7:** unchanged (NO-GO / not declared / OFF)
@@ -364,7 +364,7 @@ and COMPLETE predicates unchanged, generated files still generated.
 
 ---
 
-## 10. Current remaining extracts vs HOLD (HEAD ec960406)
+## 10. Current remaining extracts vs HOLD (HEAD 98545741)
 
 This is the **live** refactor strategy for “the code is full of waste.”
 §§1–9 remain the plan at `41003a5` / status at `5c9b962`. Follow this
@@ -506,13 +506,18 @@ invalid JSON / unknown field / missing `budget_id` / CF-Worker 401
 (`2bd8a91c`; `d7462d4f`; `39b140a2`; `ff3e5601`); GET/POST health
 liveness not Coverage COMPLETE (`ae9be278`; `208bfedb`; `28c91d69`);
 retry backoff delay helpers live in `retry_jitter` (`ec960406`) —
-**LANDED**. Remaining mixed at this SHA: leftover occupancy, unique22,
-GATEWAY_TOKEN P632B-03, persist live upsert, compact catalog,
-`verify_all` vs `verify_ci` split (**HOLD**). Agent-capable fail-closed
-HTTP holes named at `03409ccd` remain **LANDED**. Retry backoff
-duplicate is **LANDED**. Do not schedule leftover occupancy extract. Do
-not YAML +N. Do not declare Phase 7 GO. Do not claim ci-aggregate
-Worker exists live.
+**LANDED**. After `ec960406`: premium retry sleep helper lives in
+`retry_jitter` (`d3bfb5e8`); canonical registry pins JSON id sets not
+magic 31/26 (`035e9306`); premium SHA-256 hex helper is one module
+(`98545741`) — **LANDED**. Remaining mixed at this SHA: leftover
+occupancy, unique22, GATEWAY_TOKEN P632B-03, persist live upsert,
+compact catalog, `verify_all` vs `verify_ci` split (**HOLD**).
+Agent-capable fail-closed HTTP holes named at `03409ccd` remain
+**LANDED**. Agent-capable: JST now-clock still copied in `index` /
+`persist` / `fetch_jq` / `collection_receipts` (not landed). Sleep and
+sha256 hex duplicates are **LANDED**. Do not schedule leftover occupancy
+extract. Do not YAML +N. Do not declare Phase 7 GO. Do not claim
+ci-aggregate Worker exists live.
 
 | Later | Mixed surface | Authority to pick | Must not |
 |------:|---------------|-------------------|----------|
@@ -535,8 +540,9 @@ Not code extracts (environment / docs / optional freeze):
 façade. Fetch/retry lives in `fetch_jq.ts`; persist in `persist_records.ts`;
 export HTTP in `http_export.ts`; receipts in `collection_receipts.ts`.
 Retry jitter is `retry_jitter.ts` (`crypto.getRandomValues`). Backoff
-delay helpers live there (`ec960406`). Do not family-slice remaining
-façade handlers.
+delay helpers live there (`ec960406`). Sleep helper lives there
+(`d3bfb5e8`). SHA-256 hex is `sha256.ts` (`98545741`). Do not
+family-slice remaining façade handlers.
 
 ### 10.4 Do not
 
@@ -558,6 +564,7 @@ façade handlers.
 ✗ Claim premium export POST does not dump D1 / deploy_cf_mass_eval_worker has opt-in env at 03409ccd
 ✗ Claim leftover occupancy / unique22 / GATEWAY_TOKEN P632B-03 / persist live upsert / compact catalog / verify_all vs verify_ci closed at d1028961
 ✗ Claim leftover occupancy / unique22 / GATEWAY_TOKEN P632B-03 / persist live upsert / compact catalog / verify_all vs verify_ci closed at ec960406
+✗ Claim leftover occupancy / unique22 / GATEWAY_TOKEN P632B-03 / persist live upsert / compact catalog / verify_all vs verify_ci closed at 98545741
 ✗ Claim ci-aggregate Worker exists live
 ```
 
