@@ -83,15 +83,11 @@ def review_proposal_row(proposal: Mapping[str, Any]) -> dict[str, Any]:
         reasons.append("invented_or_calendar_gates")
     thesis = str(proposal.get("thesis") or "")
     if kept_g and not thesis.startswith("STUB"):
-        from research.unique_logic.catalog import yaml_combo_rows
+        from research.unique_logic.catalog import combo_thesis_records
 
         catalog_sets = {
-            frozenset(
-                str(x)
-                for x in ((row.get("params") or {}).get("gates") or [])
-                if str(x).strip()
-            )
-            for row in yaml_combo_rows()
+            frozenset(str(x) for x in (row.get("gates") or []) if str(x).strip())
+            for row in combo_thesis_records()
         }
         if frozenset(kept_g) in catalog_sets:
             reasons.append("gate_set_already_catalog")
@@ -172,7 +168,7 @@ def catalog_prefer_and_avoid(*, n_gates: int, limit: int | None = None) -> list[
     Unique prefer pairs (GOOD) are not catalog, so they stay off this list.
     3-ANDs are newest-first and capped so 2-ANDs still fit. Not GO.
     """
-    from research.unique_logic.catalog import catalog_dir, yaml_combo_rows
+    from research.unique_logic.catalog import catalog_dir, combo_thesis_records
     from research.unique_logic.constants import PROPOSE_CALENDAR_GATES
     from research.unique_logic.propose_review_tables import (
         PROPOSE_PROMPT_PREFER_GATES,
@@ -186,14 +182,12 @@ def catalog_prefer_and_avoid(*, n_gates: int, limit: int | None = None) -> list[
     cdir = catalog_dir()
     rows: list[tuple[float, str]] = []
     have: set[str] = set()
-    for row in yaml_combo_rows():
+    for row in combo_thesis_records():
         lid = str(row.get("logic_id") or "")
         if lid and lid not in countable:
             continue
         gates = sorted(
-            str(x)
-            for x in ((row.get("params") or {}).get("gates") or [])
-            if str(x).strip()
+            str(x) for x in (row.get("gates") or []) if str(x).strip()
         )
         if len(gates) != n_gates:
             continue
@@ -266,7 +260,7 @@ def catalog_gate_set_avoid(*, limit: int = CATALOG_GATE_SET_AVOID_LIMIT) -> list
     2-gates so a 3-gate-only fill cannot hide recent 2-AND clones.
     Calendar/weekday permutations are not clone seeds. Not a scorecard.
     """
-    from research.unique_logic.catalog import catalog_dir, yaml_combo_rows
+    from research.unique_logic.catalog import catalog_dir, combo_thesis_records
     from research.unique_logic.constants import PROPOSE_CALENDAR_GATES
     from research.unique_logic.worker_bodies import countable_thesis_ids
 
@@ -275,14 +269,12 @@ def catalog_gate_set_avoid(*, limit: int = CATALOG_GATE_SET_AVOID_LIMIT) -> list
     twos: list[tuple[float, str]] = []
     threes: list[tuple[float, str]] = []
     have: set[str] = set()
-    for row in yaml_combo_rows():
+    for row in combo_thesis_records():
         lid = str(row.get("logic_id") or "")
         if lid and lid not in countable:
             continue
         gates = sorted(
-            str(x)
-            for x in ((row.get("params") or {}).get("gates") or [])
-            if str(x).strip()
+            str(x) for x in (row.get("gates") or []) if str(x).strip()
         )
         if not (2 <= len(gates) <= PROPOSE_MAX_AND_GATES):
             continue

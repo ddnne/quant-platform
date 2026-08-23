@@ -1,0 +1,26 @@
+logic_id: surprise_xs_eqh_lsur_liq
+headline: false
+generation_enabled: false
+promote_as_main: false
+go: false
+main_pool: true
+thesis: >
+  PEAD when EqAR is high versus its PIT median AND the earnings surprise is large AND ADV is in the high PIT bucket. Skip missing PIT prints (no invent).
+signal_definition: >
+  PEAD when EqAR is high versus its PIT median AND the earnings surprise is large AND ADV is in the high PIT bucket. Skip missing PIT prints (no invent).
+datasets:
+  - equities_bars_daily
+  - fins_summary
+  - markets_calendar
+params:
+  post_hold_days: 5
+  hold_days: 10
+  momentum_n: 5
+  min_hist: 20
+  mode: surprise_xs_eqh_lsur_liq
+  side: orig
+  gates: eq_ar_high,large_surprise,liq_high
+  cs_gate: None
+  entry_shift: 0
+  hold_tail_days: 0
+evaluator: research.unique_logic.event_combos.evaluate_combo_daily_mtm

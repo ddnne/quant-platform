@@ -148,16 +148,17 @@ def catalog_index(*, root: Path | None = None) -> dict[str, Any]:
     """One-pass catalog lookup. YAML remains combo declaration SoT."""
     root_key = str((root or repo_root()).resolve())
     by_id = _catalog_by_id_cached(root_key)
-    combo = [
-        spec
-        for spec in by_id.values()
-        if str(spec.get("evaluator") or "") == _COMBO_EVALUATOR
-    ]
+    records = combo_thesis_records(root=root)
+    kinds: dict[str, int] = {}
+    for rec in records:
+        kind = str(rec.get("kind") or "")
+        kinds[kind] = kinds.get(kind, 0) + 1
     return {
         "by_id": by_id,
         "n": len(by_id),
-        "n_combo": len(combo),
-        "combo_ids": tuple(str(s["logic_id"]) for s in combo),
+        "n_combo": len(records),
+        "combo_ids": tuple(str(r["logic_id"]) for r in records),
+        "combo_kind_counts": kinds,
         "go": False,
         "not_a_pass": True,
     }
@@ -374,20 +375,15 @@ def unique_family_ids_from_yaml(*, root: Path | None = None) -> dict[str, frozen
 
 
 def combo_thesis_ids_by_kind(*, root: Path | None = None) -> dict[str, frozenset[str]]:
-    """Combo YAML stems grouped by ``_yaml_combo_kind``. Does not import combo runtime."""
+    """Combo YAML stems grouped by kind. Uses compact records, not runtime rows."""
     event: set[str] = set()
     cs: set[str] = set()
     surprise_xs: set[str] = set()
-    for spec in load_catalog_specs(root=root):
-        if str(spec.get("evaluator") or "") != _COMBO_EVALUATOR:
-            continue
-        lid = str(spec.get("logic_id") or "")
+    for rec in combo_thesis_records(root=root):
+        kind = str(rec.get("kind") or "")
+        lid = str(rec.get("logic_id") or "")
         if not lid:
             continue
-        params = spec.get("params")
-        cs_raw = params.get("cs_gate") if isinstance(params, Mapping) else None
-        cs_gate = None if cs_raw in (None, "", "None") else str(cs_raw)
-        kind = _yaml_combo_kind(spec, cs_gate=cs_gate)
         if kind == "cs":
             cs.add(lid)
         elif kind == "surprise_xs":

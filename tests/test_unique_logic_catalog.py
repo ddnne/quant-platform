@@ -48,6 +48,8 @@ def test_catalog_index_is_one_pass_lookup() -> None:
     assert idx["n"] >= 1
     assert idx["n_combo"] >= 1
     assert idx["go"] is False
+    assert idx["combo_kind_counts"].get("event", 0) >= 1
+    assert idx["combo_kind_counts"].get("surprise_xs", 0) >= 1
     lid = idx["combo_ids"][0]
     assert catalog_spec(lid) is not None
     assert catalog_spec(lid)["logic_id"] == lid
