@@ -454,13 +454,18 @@ def plan_and_queue(
     max_jobs: int = 0,
     chunk_days_for_today_mode: int = 7,
 ) -> tuple[BackfillPlan, list[ScheduledJob]]:
-    """Convenience: build contract plan + filtered range queue (dry planning)."""
+    """Convenience: build contract plan + filtered range queue (dry planning).
+
+    Always calls ``planner.plan(index_text=None)``. JSDA is skipped inside
+    ``BackfillPlanner.plan`` already. If OTC were ever included, omitted
+    text is a fail-closed empty official-index set, not a calendar walk.
+    """
     planner = BackfillPlanner(
         cutoff=cutoff,
         db_path=db_path,
         chunk_days_for_today_mode=chunk_days_for_today_mode,
     )
-    plan = planner.plan()
+    plan = planner.plan(index_text=None)
     jobs = filter_plan_jobs(
         plan,
         datasets=datasets,
