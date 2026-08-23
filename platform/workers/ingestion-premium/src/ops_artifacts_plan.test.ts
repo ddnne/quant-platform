@@ -131,6 +131,28 @@ describe("artifacts-join-plan token fail-closed", () => {
     await assertClosedError(res, 401, "unauthorized");
   });
 
+  it("GET with only matching query token and no header is 401", async () => {
+    const res = await handleArtifactsJoinPlan(
+      new Request(
+        `https://ingestion-premium.test/v1/ops/artifacts-join-plan?datasets=markets_calendar&token=${encodeURIComponent(RUN_TOKEN)}`,
+        { method: "GET" },
+      ),
+      planEnv(),
+    );
+    await assertClosedError(res, 401, "unauthorized");
+  });
+
+  it("POST with only matching query token and no header is 401", async () => {
+    const res = await handleArtifactsJoinPlan(
+      new Request(
+        `https://ingestion-premium.test/v1/ops/artifacts-join-plan?datasets=markets_calendar&token=${encodeURIComponent(RUN_TOKEN)}`,
+        { method: "POST" },
+      ),
+      planEnv(),
+    );
+    await assertClosedError(res, 401, "unauthorized");
+  });
+
   it("rejects a wrong token with 401", async () => {
     const res = await handleArtifactsJoinPlan(
       planRequest("/v1/ops/artifacts-join-plan?datasets=markets_calendar", {
