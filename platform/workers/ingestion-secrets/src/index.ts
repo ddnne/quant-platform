@@ -8,6 +8,7 @@
  */
 import premiumContract from "../../../../packages/data_plane/data_contracts/jquants_premium_core.json";
 import addonProxyContract from "../../../../packages/data_plane/data_contracts/jquants_proxy_addons.json";
+import { authorized } from "./authorized";
 import { json } from "./http_json";
 
 export interface Env {
@@ -45,15 +46,6 @@ function parseProxyBody(value: unknown): ProxyBody | null {
   return { path: value.path, method: "GET", query };
 }
 
-async function tokenMatches(provided: string, expected: string): Promise<boolean> {
-  const encoder = new TextEncoder();
-  const [providedHash, expectedHash] = await Promise.all([
-    crypto.subtle.digest("SHA-256", encoder.encode(provided)),
-    crypto.subtle.digest("SHA-256", encoder.encode(expected)),
-  ]);
-  return crypto.subtle.timingSafeEqual(providedHash, expectedHash);
-}
-
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
@@ -69,11 +61,7 @@ export default {
     }
 
     if (url.pathname === "/v1/proxy/jquants") {
-      const token = request.headers.get("X-Ingestion-Token") || "";
-      if (
-        !env.JQUANTS_PROXY_TOKEN ||
-        !(await tokenMatches(token, env.JQUANTS_PROXY_TOKEN))
-      ) {
+      if (!(await authorized(request, env.JQUANTS_PROXY_TOKEN))) {
         return json({ error: "unauthorized" }, 401);
       }
       if (!env.JQUANTS_API_KEY) {
