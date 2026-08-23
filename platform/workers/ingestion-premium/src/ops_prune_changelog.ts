@@ -3,6 +3,7 @@
  * Does not touch receipts / coverage / raw retention.
  */
 
+import { json } from "./http_json";
 import { ingestionTokenMatches } from "./ingestion_token";
 
 export interface PruneEnv {
@@ -15,10 +16,10 @@ export async function handlePruneChangelog(
   env: PruneEnv,
 ): Promise<Response> {
   if (request.method !== "POST") {
-    return Response.json({ error: "POST required" }, { status: 405 });
+    return json({ error: "POST required" }, 405);
   }
   if (!(await ingestionTokenMatches(request, env.INGESTION_RUN_TOKEN))) {
-    return Response.json({ error: "unauthorized" }, { status: 401 });
+    return json({ error: "unauthorized" }, 401);
   }
 
   const url = new URL(request.url);
@@ -90,5 +91,5 @@ export async function handlePruneChangelog(
     });
   }
 
-  return Response.json({ keep, max_delete: maxDelete, datasets: report });
+  return json({ keep, max_delete: maxDelete, datasets: report });
 }
