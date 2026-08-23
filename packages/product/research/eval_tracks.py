@@ -88,9 +88,8 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "id": "inventory_bias_recorded",
         "track": EVAL_TRACK_LIQ_LARGE,
         "why": (
-            "recorded research/eval/job=eval-inventory-bias-20260824ai/; "
             "assert_new_batch_cheap_pb_cap refuses new batches at 20%; "
-            "CATALOG_AND_PLUS_N_STOPPED; 3-AND +N stopped not_a_pass"
+            "CATALOG_AND_PLUS_N_STOPPED; 3-AND +N stopped"
         ),
         "not_a_pass": True,
         "go": False,
@@ -120,11 +119,7 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
     {
         "id": "propose_clone_retry",
         "track": EVAL_TRACK_LIQ_LARGE,
-        "why": (
-            "why_avoid prefer 2-ANDs then prefer 3-ANDs then prefer-subset "
-            "SPARSE (reserved) then remaining SPARSE; zero-adopt retries "
-            "once (clone/sparse extra; polarity keeps AND); still no auto-inject"
-        ),
+        "why": "why_avoid prefer then SPARSE; zero-adopt retries once; no auto-inject",
         "not_a_pass": True,
         "go": False,
     },
@@ -132,9 +127,8 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "id": "llm_title_gate_polarity",
         "track": EVAL_TRACK_LIQ_LARGE,
         "why": (
-            "review_proposal_row title_gate_polarity_mismatch and "
-            "occupancy_label_only; Worker prompt joins generated "
-            "PROPOSE_ALLOWED_GATES / prefer / GOOD example; YAML follows GATES"
+            "title_gate_polarity_mismatch / occupancy_label_only; "
+            "YAML follows GATES; no auto-inject"
         ),
         "not_a_pass": True,
         "go": False,
