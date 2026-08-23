@@ -116,13 +116,15 @@ if not PROPOSE_ALLOWED_GATES:
 
 def python_only_gate_logic_ids() -> frozenset[str]:
     """Combo lids whose params.gates intersect PYTHON_ONLY_EVENT_GATES."""
-    from research.unique_logic.event_combos import NEW_COMBO_LOGIC
+    if not PYTHON_ONLY_EVENT_GATES:
+        return frozenset()
+    from research.unique_logic.catalog import combo_thesis_records
 
     lids: set[str] = set()
-    for spec in NEW_COMBO_LOGIC:
-        gates = (spec.get("params") or {}).get("gates") or spec.get("gates") or ()
+    for rec in combo_thesis_records():
+        gates = rec.get("gates") or ()
         if PYTHON_ONLY_EVENT_GATES.intersection(str(g) for g in gates):
-            lids.add(str(spec["logic_id"]))
+            lids.add(str(rec["logic_id"]))
     return frozenset(lids)
 
 KNOWN_WEAK_THESIS: frozenset[str] = frozenset(
