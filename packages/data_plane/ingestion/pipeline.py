@@ -358,18 +358,34 @@ def _run_jquants_catalog(
                     raw_bytes,
                     when,
                 )
-                norm = JN.normalize_generic(
-                    rows, dataset=job.dataset_id, ingested_at=when
-                )
-                n = reg.register("jquants_records", norm)
                 # Coverage V2 receipt for this job window. Never fakes COMPLETE.
+                # Verify signing authority before structured mutation; upsert commits.
                 try:
                     from data_contracts import coverage_contract_for
                     from storage.coverage_ledger import (
                         plan_required_segments,
                         record_required_segments,
                     )
-                    from .jquants.receipts import emit_segment_receipt
+                    from .jquants.receipts import (
+                        emit_segment_receipt,
+                        require_signed_receipt_authority,
+                    )
+
+                    authority = require_signed_receipt_authority()
+                except Exception as rec_exc:  # noqa: BLE001
+                    return RunReport(
+                        "jquants",
+                        kind,
+                        fetched=len(rows),
+                        registered=0,
+                        error=f"receipt emit failed (governed): {rec_exc}",
+                        raw_path=str(rp),
+                    )
+                norm = JN.normalize_generic(
+                    rows, dataset=job.dataset_id, ingested_at=when
+                )
+                n = reg.register("jquants_records", norm)
+                try:
 
                     params = dict(getattr(job, "params", None) or {})
                     policy = coverage_contract_for(job.dataset_id)
@@ -428,11 +444,6 @@ def _run_jquants_catalog(
                             obs = 1 if len(rows) > 0 else 0
                         else:
                             obs = len(rows)
-                        from ingestion.runtime_authority import (
-                            open_ingestion_signing_authority,
-                        )
-
-                        authority = open_ingestion_signing_authority()
                         emit_segment_receipt(
                             store._conn,
                             required=req,

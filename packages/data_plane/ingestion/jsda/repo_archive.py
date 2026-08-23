@@ -15,7 +15,6 @@ from storage.coverage_ledger import (
     RequiredCoverageSegment,
     evaluate_segment,
     read_collection_receipts,
-    record_collection_receipt,
     record_required_segments,
     refresh_coverage_ledger,
 )
@@ -25,6 +24,7 @@ from ..pipeline import Registrar, RunReport, _stamped, save_raw
 from .fetch import JsdaFetcher
 from .normalize import normalize_repo_rates
 from .parse import parse_repo_csv, parse_repo_xls, parse_repo_xlsx
+from .receipts import record_governed_receipt, require_jsda_receipt_authority
 from .urls import (
     TOKYO_REPO_DATASET,
     TOKYO_REPO_JSDA_START,
@@ -201,67 +201,25 @@ def _record(
     structured_row_count: int,
     pagination_exhausted: bool,
     digests: Mapping[str, Any],
+    authority=None,
+    raw: bytes = b"",
 ) -> None:
-    stamped = dict(digests)
-    if (
-        status == "SUCCESS"
-        and error is None
-        and not (
-            isinstance(stamped.get("signature"), str)
-            and str(stamped.get("signature")).startswith("ed25519:")
-        )
-    ):
-        try:
-            from storage.receipt_crypto import build_signed_digest_fields, load_signing_key
-
-            sk = load_signing_key()
-            if sk is not None:
-                raw_d = str(stamped.get("raw") or "")
-                signed = build_signed_digest_fields(
-                    signing_key=sk,
-                    dataset=required.dataset,
-                    segment_id=required.segment_id,
-                    source=required.source,
-                    run_id=run_id,
-                    raw_digest=raw_d,
-                    raw_count=int(raw_row_count),
-                    structured_count=int(structured_row_count),
-                    structured_digest=None,
-                    pagination_exhausted=bool(pagination_exhausted),
-                    source_request_digest=stamped.get("source_request_digest"),
-                    raw_manifest_digest=raw_d or None,
-                    structured_generation=run_id,
-                )
-                stamped.update(signed)
-                stamped["raw"] = raw_d
-            else:
-                stamped["eligibility"] = "RECOVERED_RAW_ONLY"
-                stamped.setdefault(
-                    "trust_note", "unsigned JSDA receipt — signing key missing"
-                )
-        except Exception as exc:  # noqa: BLE001
-            stamped["eligibility"] = "RECOVERED_RAW_ONLY"
-            stamped["trust_note"] = f"sign failed: {exc}"
-    record_collection_receipt(store._conn, CollectionReceipt(  # noqa: SLF001
-        source=required.source,
-        dataset=required.dataset,
-        segment_id=required.segment_id,
-        segment_start=required.segment_start,
-        segment_end=required.segment_end,
-        expected_scope=required.expected_scope,
-        expected_items=required.expected_items,
+    record_governed_receipt(
+        store,
+        required=required,
+        run_id=run_id,
+        checked_at=checked_at,
+        status=status,
+        error=error,
         observed_items=observed_items,
         raw_page_count=raw_page_count,
         raw_row_count=raw_row_count,
         structured_row_count=structured_row_count,
         pagination_exhausted=pagination_exhausted,
-        digests=stamped,
-        run_id=run_id,
-        status=status,
-        error=error,
-        checked_at=checked_at,
-    ))
-    store._conn.commit()  # noqa: SLF001
+        digests=digests,
+        authority=authority,
+        raw=raw,
+    )
 
 
 def _parse(data: bytes, source_format: Optional[str]) -> list[dict]:
@@ -323,8 +281,14 @@ def run_tokyo_repo_backfill(
     fetcher = JsdaFetcher(http)
     registrar = Registrar(store)
     run_id = _start_run(store, checked_at)
+    authority = None
+    authority_error: Optional[str] = None
 
     try:
+        try:
+            authority = require_jsda_receipt_authority()
+        except RuntimeError as exc:
+            authority_error = str(exc)
         index_url = repo_index_url()
         index_raw = fetcher.fetch_file(index_url)
         index_path = save_raw(
@@ -382,11 +346,13 @@ def run_tokyo_repo_backfill(
         else:
             raw_path: Optional[Path] = None
             raw_digest: Optional[str] = None
+            raw_bytes = b""
             parsed_rows = source_parsed_rows = structured_rows = 0
             try:
                 assert discovery.source_url is not None
                 assert discovery.latest_publication_date is not None
                 data = fetcher.fetch_file(discovery.source_url)
+                raw_bytes = data
                 filename = Path(urlsplit(discovery.source_url).path).name or "trrts.xls"
                 raw_path = save_raw(
                     data_base,
@@ -408,6 +374,11 @@ def run_tokyo_repo_backfill(
                     all_records, discovery.latest_publication_date
                 )
                 parsed_rows = len(governed)
+                if authority is None:
+                    raise RuntimeError(
+                        authority_error
+                        or "receipt signing key not configured"
+                    )
                 rows = normalize_repo_rates(governed, ingested_at=checked_at)
                 structured_rows = registrar.register("jsda_repo_rates", rows)
                 _record(
@@ -429,6 +400,8 @@ def run_tokyo_repo_backfill(
                         "fetched_at": checked_at,
                         "source_parsed_rows": source_parsed_rows,
                     },
+                    authority=authority,
+                    raw=raw_bytes,
                 )
                 report = TokyoRepoBackfillReport(
                     run_id, 1, 0, 0, 0, parsed_rows, structured_rows, required
@@ -457,6 +430,7 @@ def run_tokyo_repo_backfill(
                             "DEFERRED_SOURCE_GAP" if deferred else "COLLECTION_FAILURE"
                         ),
                     },
+                    raw=raw_bytes,
                 )
                 report = TokyoRepoBackfillReport(
                     run_id, 0, 0, int(deferred), int(not deferred),

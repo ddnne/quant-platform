@@ -191,6 +191,68 @@ def test_otc_correction_revision_no_lookahead_provenance_and_idempotency(
     store.close()
 
 
+def test_otc_correction_without_authority_does_not_apply(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "storage.trusted_receipt.load_signing_key",
+        lambda **kwargs: None,
+    )
+    store = SqliteStore(tmp_path / "corrections-unsigned.sqlite")
+    _seed_original(store)
+    client = _CorrectionClient()
+    correction_id = "2022-08-29:dif20220615.xls"
+    report = run_otc_reference_corrections(
+        http=client,
+        store=store,
+        data_base=tmp_path,
+        checked_at="2022-08-30T10:00:00+09:00",
+        correction_ids=[correction_id],
+    )
+    assert report.applied == 0
+    assert report.failed == 1
+    current = store.fetch_all("jsda_otc_bond_reference_prices")
+    assert len(current) == 1
+    assert current[0]["average_price"] == 99.8
+    assert store.count("jsda_otc_bond_reference_prices_revisions") == 0
+    receipts = read_collection_receipts(
+        store.path, dataset="jsda_otc_bond_reference_prices",
+        segment_id=f"correction:{correction_id}",
+    )
+    assert receipts and receipts[0]["status"] == "FAILED"
+    store.close()
+
+
+def test_otc_correction_rerun_does_not_double_apply_when_not_complete(
+    tmp_path, monkeypatch,
+):
+    store = SqliteStore(tmp_path / "corrections-resume.sqlite")
+    _seed_original(store)
+    client = _CorrectionClient()
+    correction_id = "2022-08-29:dif20220615.xls"
+    report = run_otc_reference_corrections(
+        http=client,
+        store=store,
+        data_base=tmp_path,
+        checked_at="2022-08-30T10:00:00+09:00",
+        correction_ids=[correction_id],
+    )
+    assert (report.applied, report.revision_rows) == (1, 1)
+    monkeypatch.setattr(
+        "ingestion.jsda.corrections.evaluate_segment",
+        lambda *args, **kwargs: ("PARTIAL", {"reason": "forced"}),
+    )
+    rerun = run_otc_reference_corrections(
+        http=client,
+        store=store,
+        data_base=tmp_path,
+        checked_at="2022-08-30T10:01:00+09:00",
+        correction_ids=[correction_id],
+    )
+    assert (rerun.applied, rerun.resumed, rerun.revision_rows) == (0, 1, 0)
+    assert store.count("jsda_otc_bond_reference_prices_revisions") == 1
+    assert client.calls.count(client.artifact_url) == 1
+    store.close()
+
+
 def test_tokyo_repo_reingest_is_revision_safe_without_official_correction_time(
     tmp_path,
 ):

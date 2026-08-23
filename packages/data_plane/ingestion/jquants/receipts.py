@@ -19,6 +19,29 @@ from storage.coverage_ledger import (
 from storage.trusted_receipt import SignedReceiptAuthority
 
 
+def require_signed_receipt_authority(
+    authority: SignedReceiptAuthority | None = None,
+    *,
+    open_if_missing: bool = True,
+) -> SignedReceiptAuthority:
+    """Verify issuer before governed structured mutation.
+
+    Call this *before* ``Registrar.register`` / fact upsert. ``emit_segment_receipt``
+    still requires an explicit authority (no auto-mint).
+    """
+    if authority is None:
+        if not open_if_missing:
+            raise TypeError(
+                "SignedReceiptAuthority is required; automatic issuer mint is removed"
+            )
+        from ingestion.runtime_authority import open_ingestion_signing_authority
+
+        return open_ingestion_signing_authority()
+    if not isinstance(authority, SignedReceiptAuthority):
+        raise TypeError("authority must be SignedReceiptAuthority")
+    return authority
+
+
 def emit_segment_receipt(
     conn: sqlite3.Connection,
     *,
@@ -45,12 +68,11 @@ def emit_segment_receipt(
     ``authority`` is required (no None auto-mint). Default ``commit=False`` so
     the ingestion transaction commits structured rows + receipt together.
     """
-    if authority is None:
-        raise TypeError(
-            "SignedReceiptAuthority is required; automatic issuer mint is removed"
-        )
-    if not isinstance(authority, SignedReceiptAuthority):
-        raise TypeError("authority must be SignedReceiptAuthority")
+    authority = require_signed_receipt_authority(
+        authority, open_if_missing=False
+    )
+    if status == "SUCCESS" and error is None and not raw:
+        raise ValueError("empty-raw SUCCESS is forbidden")
     receipt = authority.issue(
         required=required,
         run_id=run_id,
@@ -74,4 +96,4 @@ def emit_segment_receipt(
     return receipt
 
 
-__all__ = ["emit_segment_receipt"]
+__all__ = ["emit_segment_receipt", "require_signed_receipt_authority"]

@@ -139,7 +139,11 @@ def run_jsda_staging_parse(
     run_id: int,
     datasets: Sequence[str] | None = None,
 ) -> JsdaParseRunResult:
-    """Parse JSDA raw into staging evidence only. Never signed COMPLETE."""
+    """Parse JSDA raw into staging evidence only. Never signed COMPLETE.
+
+    Raw recovery cannot auto-COMPLETE: this path does not open
+    SignedReceiptAuthority and must not write fact-table rows.
+    """
     artifacts = discover_local_jsda_raw(raw_root, datasets=datasets)
     rows_parsed = 0
     written = 0

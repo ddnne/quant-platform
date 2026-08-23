@@ -16,7 +16,6 @@ from storage.coverage_ledger import (
     RequiredCoverageSegment,
     evaluate_segment,
     read_collection_receipts,
-    record_collection_receipt,
     record_required_segments,
     refresh_coverage_ledger,
 )
@@ -26,6 +25,7 @@ from ..pipeline import Registrar, RunReport, _stamped, save_raw
 from .fetch import JsdaFetcher
 from .normalize import normalize_otc_reference_prices
 from .parse import parse_otc_reference_csv, parse_otc_reference_xlsx
+from .receipts import record_governed_receipt, require_jsda_receipt_authority
 from .urls import (
     OTC_REFERENCE_DATASET,
     JsdaArchiveSegment,
@@ -215,67 +215,25 @@ def _record(
     structured_row_count: int,
     pagination_exhausted: bool,
     digests: Mapping[str, Any],
+    authority=None,
+    raw: bytes = b"",
 ) -> None:
-    stamped = dict(digests)
-    if (
-        status == "SUCCESS"
-        and error is None
-        and not (
-            isinstance(stamped.get("signature"), str)
-            and str(stamped.get("signature")).startswith("ed25519:")
-        )
-    ):
-        try:
-            from storage.receipt_crypto import build_signed_digest_fields, load_signing_key
-
-            sk = load_signing_key()
-            if sk is not None:
-                raw_d = str(stamped.get("raw") or "")
-                signed = build_signed_digest_fields(
-                    signing_key=sk,
-                    dataset=required.dataset,
-                    segment_id=required.segment_id,
-                    source=required.source,
-                    run_id=run_id,
-                    raw_digest=raw_d,
-                    raw_count=int(raw_row_count),
-                    structured_count=int(structured_row_count),
-                    structured_digest=None,
-                    pagination_exhausted=bool(pagination_exhausted),
-                    source_request_digest=stamped.get("source_request_digest"),
-                    raw_manifest_digest=raw_d or None,
-                    structured_generation=run_id,
-                )
-                stamped.update(signed)
-                stamped["raw"] = raw_d
-            else:
-                stamped["eligibility"] = "RECOVERED_RAW_ONLY"
-                stamped.setdefault(
-                    "trust_note", "unsigned JSDA receipt — signing key missing"
-                )
-        except Exception as exc:  # noqa: BLE001
-            stamped["eligibility"] = "RECOVERED_RAW_ONLY"
-            stamped["trust_note"] = f"sign failed: {exc}"
-    record_collection_receipt(store._conn, CollectionReceipt(  # noqa: SLF001
-        source=required.source,
-        dataset=required.dataset,
-        segment_id=required.segment_id,
-        segment_start=required.segment_start,
-        segment_end=required.segment_end,
-        expected_scope=required.expected_scope,
-        expected_items=required.expected_items,
+    record_governed_receipt(
+        store,
+        required=required,
+        run_id=run_id,
+        checked_at=checked_at,
+        status=status,
+        error=error,
         observed_items=observed_items,
         raw_page_count=raw_page_count,
         raw_row_count=raw_row_count,
         structured_row_count=structured_row_count,
         pagination_exhausted=pagination_exhausted,
-        digests=stamped,
-        run_id=run_id,
-        status=status,
-        error=error,
-        checked_at=checked_at,
-    ))
-    store._conn.commit()  # noqa: SLF001
+        digests=digests,
+        authority=authority,
+        raw=raw,
+    )
 
 
 def _quote_effective_dates(
@@ -346,8 +304,14 @@ def run_otc_reference_backfill(
     requirements: list[RequiredCoverageSegment] = []
     selected_segments: list[JsdaArchiveSegment] = []
     index_digests: dict[str, str] = {}
+    authority = None
+    authority_error: Optional[str] = None
 
     try:
+        try:
+            authority = require_jsda_receipt_authority()
+        except RuntimeError as exc:
+            authority_error = str(exc)
         root_raw = fetcher.fetch_file(root_url)
         root_path = _save_index_raw(
             data_base, "otc_reference_archive_index.html", root_raw, checked_at
@@ -445,9 +409,11 @@ def run_otc_reference_backfill(
 
             raw_path: Optional[Path] = None
             raw_digest: Optional[str] = None
+            raw_bytes = b""
             raw_rows = structured_rows = 0
             try:
                 data = fetcher.fetch_file(segment.source_url)
+                raw_bytes = data
                 filename = Path(urlsplit(segment.source_url).path).name or (
                     f"otc_reference_{segment.segment_id}.{segment.source_format}"
                 )
@@ -483,6 +449,11 @@ def run_otc_reference_backfill(
                 raw_rows = len(records)
                 if raw_rows == 0:
                     raise ValueError("official OTC archive file parsed zero rows")
+                if authority is None:
+                    raise RuntimeError(
+                        authority_error
+                        or "receipt signing key not configured"
+                    )
                 rows = normalize_otc_reference_prices(
                     records,
                     ingested_at=checked_at,
@@ -515,6 +486,8 @@ def run_otc_reference_backfill(
                             segment.publication_label_date[:4]
                         ),
                     },
+                    authority=authority,
+                    raw=raw_bytes,
                 )
                 completed += 1
             except Exception as exc:  # noqa: BLE001
@@ -536,6 +509,7 @@ def run_otc_reference_backfill(
                         "fetched_at": checked_at,
                         "raw_path": None if raw_path is None else str(raw_path),
                     },
+                    raw=raw_bytes,
                 )
                 failed += 1
 

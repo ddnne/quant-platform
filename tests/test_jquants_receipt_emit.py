@@ -75,3 +75,70 @@ def test_record_receipt_into_db(tmp_path: Path):
     n = store._conn.execute("select count(*) from collection_receipts").fetchone()[0]
     assert n == 1
     store.close()
+
+
+def _unsigned_authority():
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    from cryptography.hazmat.primitives.serialization import load_pem_private_key
+
+    from storage.receipt_crypto import ReceiptSigningKey, generate_keypair
+    from storage.trusted_receipt import SignedReceiptAuthority
+
+    priv_pem, _pub, kid = generate_keypair(key_id="emit-test")
+    priv = load_pem_private_key(priv_pem, password=None)
+    assert isinstance(priv, Ed25519PrivateKey)
+    return SignedReceiptAuthority(
+        signing_key=ReceiptSigningKey(key_id=kid, _private=priv)
+    )
+
+
+def test_emit_segment_receipt_requires_authority(tmp_path: Path):
+    from ingestion.jquants.receipts import emit_segment_receipt
+
+    store = SqliteStore(tmp_path / "t.sqlite")
+    policy = coverage_contract_for("markets_calendar")
+    req = list(plan_required_segments(policy, "2026-08-11", source="jquants"))[0]
+    with pytest.raises(TypeError, match="SignedReceiptAuthority is required"):
+        emit_segment_receipt(
+            store._conn,
+            required=req,
+            run_id=1,
+            raw=b'{"data":[1]}',
+            observed_items=1,
+            structured_row_count=1,
+            authority=None,  # type: ignore[arg-type]
+        )
+    store.close()
+
+
+def test_require_signed_receipt_authority_fails_closed_without_key(monkeypatch):
+    from ingestion.jquants.receipts import require_signed_receipt_authority
+
+    monkeypatch.setattr(
+        "storage.trusted_receipt.load_signing_key",
+        lambda **kwargs: None,
+    )
+    with pytest.raises(RuntimeError, match="signing key not configured"):
+        require_signed_receipt_authority()
+
+
+def test_emit_segment_receipt_rejects_empty_raw_success(tmp_path: Path):
+    from ingestion.jquants.receipts import emit_segment_receipt
+
+    store = SqliteStore(tmp_path / "t.sqlite")
+    policy = coverage_contract_for("markets_calendar")
+    req = list(plan_required_segments(policy, "2026-08-11", source="jquants"))[0]
+    auth = _unsigned_authority()
+    with pytest.raises(ValueError, match="empty-raw SUCCESS is forbidden"):
+        emit_segment_receipt(
+            store._conn,
+            required=req,
+            run_id=1,
+            raw=b"",
+            observed_items=1,
+            structured_row_count=1,
+            authority=auth,
+        )
+    n = store._conn.execute("select count(*) from collection_receipts").fetchone()[0]
+    assert n == 0
+    store.close()
