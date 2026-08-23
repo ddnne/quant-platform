@@ -37,9 +37,59 @@ from paper_runtime import latest_ready_snapshot  # noqa: E402
 
 PROJECTION_VERSION = "ops_projection/v1"
 DEFAULT_MAX_AGE_SECONDS = 86400  # 24 hours
+CANONICAL_APPLY_FEED = "jquants_records"
+APPLIED_PIN_COLUMNS = (
+    "feed",
+    "last_applied_change_seq",
+    "updated_at",
+    "projected_at",
+    "projection_generation_id",
+)
+APPLIED_PIN_DDL = """CREATE TABLE IF NOT EXISTS ops_applied_pins (
+            feed TEXT PRIMARY KEY,
+            last_applied_change_seq INTEGER,
+            updated_at TEXT,
+            projected_at TEXT NOT NULL,
+            projection_generation_id TEXT
+        );"""
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def coerce_applied_seq(value: Any) -> int | None:
+    """Unpinned (None/empty) stays None. 0 is a real pin, never a missing default."""
+    if value is None or value == "":
+        return None
+    return int(value)
+
+
+def sync_dataset_state(
+    *,
+    exported: int | None,
+    applied: int | None,
+    lag: int | None,
+    change_log_rows: int = 0,
+) -> str:
+    """Mirror quant-ops-mcp ``syncDatasetState``. CURRENT needs a non-null pin.
+
+    Export lag 0 with ``applied is None`` is EXPORT_CURRENT_APPLY_UNPINNED,
+    never CURRENT. Do not coerce a missing pin to 0: ``0 == exported 0``
+    would otherwise classify as CURRENT.
+    """
+    if exported is None:
+        return "CHANGE_LOG_EMPTY" if change_log_rows == 0 else "EXPORT_CURSOR_NULL"
+    if applied is None:
+        if lag == 0:
+            return "EXPORT_CURRENT_APPLY_UNPINNED"
+        if lag is not None and lag > 0:
+            return "LAGGING_APPLY_UNPINNED"
+        return "APPLY_UNPINNED"
+    if lag == 0 and int(applied) == int(exported):
+        return "CURRENT"
+    if lag is not None and lag > 0:
+        return "LAGGING"
+    return "UNKNOWN"
 
 def _projection_metadata(
     db_path: str | Path,
@@ -187,6 +237,41 @@ def _read_latest_b0(conn: sqlite3.Connection) -> dict[str, Any] | None:
         "source_build_id": row["build_id"],
     }
 
+
+def _read_applied_pins(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    """Local ``sync_change_state`` pins. Missing canonical feed → NULL seq."""
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            "SELECT feed, last_applied_change_seq, updated_at "
+            "FROM sync_change_state ORDER BY feed"
+        ).fetchall()
+    except sqlite3.OperationalError as exc:
+        if "no such table" in str(exc).lower():
+            rows = []
+        else:
+            raise
+    pins: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in rows:
+        feed = str(row["feed"])
+        pins.append({
+            "feed": feed,
+            "last_applied_change_seq": coerce_applied_seq(
+                row["last_applied_change_seq"]
+            ),
+            "updated_at": row["updated_at"],
+        })
+        seen.add(feed)
+    if CANONICAL_APPLY_FEED not in seen:
+        # Explicit unpinned row so MCP SELECT is NULL, not a missing table.
+        pins.append({
+            "feed": CANONICAL_APPLY_FEED,
+            "last_applied_change_seq": None,
+            "updated_at": None,
+        })
+    return pins
+
 def render_projection_sql(
     db_path: str | Path,
     *,
@@ -226,6 +311,7 @@ def render_projection_sql(
         b0_status = _read_latest_b0(conn)
         metadata = _projection_metadata(db_path, max_age_seconds=max_age_seconds)
         inventory = _source_inventory(db_path)
+        applied_pins = _read_applied_pins(conn)
     finally:
         conn.close()
 
@@ -249,6 +335,13 @@ def render_projection_sql(
                 "coverage": len(coverage),
                 "segments": len(segments),
                 "inventory": len(inventory),
+                "applied_pins": [
+                    {
+                        "feed": pin["feed"],
+                        "seq": pin["last_applied_change_seq"],
+                    }
+                    for pin in applied_pins
+                ],
                 "gen": gen_id,
             },
             sort_keys=True,
@@ -262,6 +355,18 @@ def render_projection_sql(
         detail = {}
     detail["active_generation"] = gen_id
     detail["source_db_digest"] = source_digest
+    canonical_pin = next(
+        (pin for pin in applied_pins if pin["feed"] == CANONICAL_APPLY_FEED),
+        None,
+    )
+    canonical_seq = (
+        None if canonical_pin is None else canonical_pin["last_applied_change_seq"]
+    )
+    detail["applied_pin"] = {
+        "feed": CANONICAL_APPLY_FEED,
+        "last_applied_change_seq": canonical_seq,
+        "unpinned": canonical_seq is None,
+    }
     metadata["detail_json"] = json.dumps(detail, sort_keys=True, separators=(",", ":"))
 
     ENDPOINT_INVENTORY_COLUMNS = (
@@ -297,6 +402,7 @@ def render_projection_sql(
             generation_id TEXT NOT NULL,
             activated_at TEXT NOT NULL
         );""",
+        APPLIED_PIN_DDL,
     ]
     # Schema patches live in migrations (0004_projection_generation.sql).
     # Do NOT emit ALTER TABLE ADD COLUMN here: wrangler d1 execute fails the
@@ -319,6 +425,7 @@ def render_projection_sql(
         "DELETE FROM ops_b0_status;",
         "DELETE FROM ops_projection_metadata;",
         "DELETE FROM endpoint_inventory;",
+        "DELETE FROM ops_applied_pins;",
     ]
     # Insert projection metadata first
     statements.extend(_insert_sql(
@@ -328,6 +435,17 @@ def render_projection_sql(
     # Insert endpoint inventory
     statements.extend(_insert_sql(
         "endpoint_inventory", ENDPOINT_INVENTORY_COLUMNS, inventory
+    ))
+
+    pin_rows = []
+    for pin in applied_pins:
+        row = dict(pin)
+        row["projected_at"] = generated_at
+        row["projection_generation_id"] = gen_id
+        # Pin table stores seq or NULL only. Do not emit a CURRENT state.
+        pin_rows.append(row)
+    statements.extend(_insert_sql(
+        "ops_applied_pins", APPLIED_PIN_COLUMNS, pin_rows
     ))
 
     statements.extend(_insert_sql(

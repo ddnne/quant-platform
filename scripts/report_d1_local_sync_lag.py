@@ -64,6 +64,29 @@ def _open_ro(path: Path) -> sqlite3.Connection:
     return con
 
 
+def sync_dataset_state(
+    *,
+    exported: int | None,
+    applied: int | None,
+    lag: int | None,
+    change_log_rows: int = 0,
+) -> str:
+    """Mirror quant-ops-mcp ``syncDatasetState``. CURRENT needs a non-null pin."""
+    if exported is None:
+        return "CHANGE_LOG_EMPTY" if change_log_rows == 0 else "EXPORT_CURSOR_NULL"
+    if applied is None:
+        if lag == 0:
+            return "EXPORT_CURRENT_APPLY_UNPINNED"
+        if lag is not None and lag > 0:
+            return "LAGGING_APPLY_UNPINNED"
+        return "APPLY_UNPINNED"
+    if lag == 0 and int(applied) == int(exported):
+        return "CURRENT"
+    if lag is not None and lag > 0:
+        return "LAGGING"
+    return "UNKNOWN"
+
+
 def collect(
     db: Path,
     *,
@@ -81,17 +104,22 @@ def collect(
             )
         ]
         null_export = sum(1 for w in watermarks if w["last_export_cursor"] is None)
-        applied_rows = [
-            dict(r)
-            for r in con.execute(
-                "SELECT feed, last_applied_change_seq, updated_at "
-                "FROM sync_change_state ORDER BY feed"
-            )
-        ]
+        try:
+            applied_rows = [
+                dict(r)
+                for r in con.execute(
+                    "SELECT feed, last_applied_change_seq, updated_at "
+                    "FROM sync_change_state ORDER BY feed"
+                )
+            ]
+        except sqlite3.Error:
+            applied_rows = []
         applied = None
         for row in applied_rows:
             if row["feed"] == "jquants_records":
-                applied = int(row["last_applied_change_seq"])
+                seq = row["last_applied_change_seq"]
+                # Missing/empty is unpinned. Do not coerce to 0.
+                applied = None if seq is None or seq == "" else int(seq)
                 break
 
         # Thin control-plane counts (visibility only; not READY claims).
@@ -133,6 +161,16 @@ def collect(
                 entry["export_lag"] = remote_max_seq - int(export_cur)
             elif export_cur is None:
                 entry["export_lag"] = None
+            exported = int(export_cur) if export_cur is not None else None
+            if exported is not None or remote_change_log_n is not None:
+                entry["sync_state"] = sync_dataset_state(
+                    exported=exported,
+                    applied=applied,
+                    lag=entry.get("export_lag"),
+                    change_log_rows=(
+                        0 if remote_change_log_n is None else remote_change_log_n
+                    ),
+                )
             # Optional local fact counts when jquants_records exists.
             try:
                 row = con.execute(
@@ -165,6 +203,7 @@ def collect(
                 "null_export": null_export,
                 "sync_change_state": applied_rows,
                 "last_applied_change_seq": applied,
+                "applied_pin_present": applied is not None,
                 "control": control,
             },
             "remote_inputs": {
@@ -181,6 +220,8 @@ def collect(
                 "control counts are local-only visibility for thin tables "
                 "(coverage_segments / collection_receipts); not READY.",
                 "Does not assert COMPLETE/materialization of fact tables.",
+                "CURRENT requires a non-null applied pin; export lag 0 with "
+                "applied null is EXPORT_CURRENT_APPLY_UNPINNED, never CURRENT.",
                 "Legacy table jquants_market_calendar may be empty when remote "
                 "stores calendar rows in jquants_records / R2 only.",
             ],
@@ -205,6 +246,7 @@ def _print_text(report: dict) -> None:
     print(
         f"local applied: last_applied_change_seq="
         f"{local['last_applied_change_seq']} "
+        f"applied_pin_present={local.get('applied_pin_present')} "
         f"applied_lag={local.get('applied_lag')}"
     )
     ctrl = local.get("control") or {}
@@ -233,6 +275,8 @@ def _print_text(report: dict) -> None:
             f"export_lag={entry.get('export_lag')}",
             f"last_event_date={entry['local_last_event_date']}",
         ]
+        if "sync_state" in entry:
+            bits.append(f"sync_state={entry['sync_state']}")
         if "local_jquants_records_n" in entry:
             bits.append(f"records_n={entry['local_jquants_records_n']}")
             bits.append(f"max_event={entry['local_max_event_time']}")
