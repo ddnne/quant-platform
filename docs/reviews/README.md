@@ -33,7 +33,7 @@ IR `golden.jsonl` (`7f2dc12`).
 
 - [`P632_wave0_live.md`](P632_wave0_live.md) — fetch remeasure
 - [`P632_brief_leaks.md`](P632_brief_leaks.md) — A–S vs feature branch
-- [`P632_ind_A_pit_complete.md`](P632_ind_A_pit_complete.md) / [`P632_ind_A_revisit.md`](P632_ind_A_revisit.md) / [`P632_ind_B_ci_authority.md`](P632_ind_B_ci_authority.md) / [`P632_ind_C_catalog_pilot.md`](P632_ind_C_catalog_pilot.md)
+- [`P632_ind_A_pit_complete.md`](P632_ind_A_pit_complete.md) / [`P632_ind_A_revisit.md`](P632_ind_A_revisit.md) / [`P632_ind_A_revisit_f224e7e.md`](P632_ind_A_revisit_f224e7e.md) / [`P632_ind_B_ci_authority.md`](P632_ind_B_ci_authority.md) / [`P632_ind_C_catalog_pilot.md`](P632_ind_C_catalog_pilot.md)
 - [`P632_projection_stale.md`](P632_projection_stale.md) — `refresh_success=false` root cause
 - [`P632_test_inventory.md`](P632_test_inventory.md)
 
