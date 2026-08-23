@@ -221,6 +221,12 @@ def panels_cache_id(
 
 
 def try_r2_get_json(key: str) -> dict[str, Any] | None:
+    """Best-effort wrangler r2 object get --remote for panel cache reuse.
+
+    CLI get is not artifact authority, not Coverage COMPLETE, not Projection
+    FRESH, and not Worker children-then-manifest. None on CLI miss is a
+    cache miss, not COMPLETE. Does not PUT.
+    """
     wr = _DEFAULT_WRANGLER
     cfg = (
         _REPO_ROOT
@@ -241,6 +247,7 @@ def try_r2_get_json(key: str) -> dict[str, Any] | None:
         "--remote",
     ]
     try:
+        # CLI get --remote is panel cache reuse, not artifact authority / not COMPLETE.
         proc = subprocess.run(
             cmd,
             cwd=str(cfg.parent),
