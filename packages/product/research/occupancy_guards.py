@@ -69,6 +69,7 @@ def _manifest_yaml_still_present() -> bool:
         return True
     if not isinstance(raw, Mapping):
         return True
+    # Default True is fail-closed: missing manifest ≠ yaml gone.
     return bool(raw.get("yaml_still_present", True))
 
 

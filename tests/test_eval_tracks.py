@@ -162,9 +162,9 @@ def test_catalog_and_plus_n_stopped_and_known_thin() -> None:
     freeze = assert_catalog_and_plus_n_stopped()
     assert freeze["ok"] is True
     assert freeze["freeze"] == CATALOG_YAML_COUNT_AT_STOP
+    assert freeze["yaml_still_present"] is False
     if freeze["n"] > 0:
         assert freeze["n"] == CATALOG_YAML_COUNT_AT_STOP
-        assert freeze["yaml_still_present"] is True
     else:
         assert freeze["n_compiled"] == CATALOG_YAML_COUNT_AT_STOP
     assert freeze["go"] is False
@@ -246,3 +246,20 @@ def test_catalog_and_plus_n_stopped_yaml_n0_uses_compiled_n(monkeypatch, tmp_pat
     except CatalogAndPlusNStoppedError as exc:
         assert "n=1" in str(exc)
         assert "freeze" in str(exc)
+
+
+def test_manifest_yaml_still_present_defaults_fail_closed(
+    monkeypatch, tmp_path
+) -> None:
+    import research.occupancy_guards as guards
+
+    monkeypatch.setattr(guards, "repo_root", lambda: tmp_path)
+    assert guards._manifest_yaml_still_present() is True
+    man = tmp_path / "specs" / "research_catalog"
+    man.mkdir(parents=True)
+    (man / "manifest.json").write_text('{"n":0,"go":false}\n', encoding="utf-8")
+    assert guards._manifest_yaml_still_present() is True
+    (man / "manifest.json").write_text(
+        '{"n":0,"go":false,"yaml_still_present":false}\n', encoding="utf-8"
+    )
+    assert guards._manifest_yaml_still_present() is False
