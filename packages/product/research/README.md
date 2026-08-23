@@ -18,7 +18,7 @@ Research control plane (Phase 7 stays OFF): readiness attestation, experiment pl
 - **Catalog:** `specs/research_logics/*.yaml`. Worker ID arrays: generated `platform/workers/research-mass-eval/src/catalog_ids.ts` (leftover occupancy stays in `daily_path.ts`).
 - **Propose:** `POST /v1/propose-thesis` (`research.cf_propose_thesis`; **AI Gateway only**, never `env.AI.run`; 403 `generation` without verified readiness; LLM failure is `ok:false`/`llm_failed`, not stub-as-success; review_proposal_row; no auto-inject).
 - **Family reclass:** `research.catalog_family` — flow **gate** ≠ flow **family**.
-- **Catalog compiler:** `research.catalog_compiler` closed-DSL data artifact + semantic hash. YAML still present (not deleted this wave).
+- **Catalog compiler:** `research.catalog_compiler` closed-DSL data artifact + semantic hash. YAML still present (not deleted this wave). Persisted `specs/research_catalog/` manifest + migration map; not GO.
 - **Evaluation IR:** `research.evaluation_ir` calls `job_candidate_grade`; unknown fields rejected.
 - **Phase 7 pilot:** `research.phase7_pilot.MassResearchScheduler` cannot construct without readiness+budget+plan+eval service+immutable store. Not enabled.
 - **Eval wave one-call:** `research.occupancy_audit.run_eval_wave` writes inventory / usable-read / series / cost-risk / jsonl / occupancy maps / drift / unique22 / reconstitution detect + occupancy preview / series-sleeve coverage + propose write-gate. Never injects. Does not fan out occupancy. Does not apply reconstitution. YAML remains catalog SoT. KEEP sleeves `eval-cf-dp-both-sleeves-20260824df`. Do not restitch 24ek thinner alts.
