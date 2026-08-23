@@ -1,6 +1,11 @@
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { handleExportPaths, type ExportEnv } from "./http_export";
 import worker, { type Env } from "./index";
+
+const here = dirname(fileURLToPath(import.meta.url));
 
 const EXPORT_TOKEN = "premium-test-export-token-do-not-leak";
 const API_KEY = "premium-test-jquants-key-do-not-leak";
@@ -207,5 +212,53 @@ describe("ingestion-premium raw acquisition status", () => {
     const retention = retentionBind(d1);
     expect(retention?.args[7]).toBe("FAILED");
     expect(retention?.args).not.toContain("COMPLETE");
+  });
+
+  it("retains every vendor page as page-NNNNNN.json plus rawPrefix/manifest.json", async () => {
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      if (calls === 1) {
+        return new Response(
+          JSON.stringify({ data: [], pagination_key: "page-2" }),
+          { status: 200 },
+        );
+      }
+      return new Response(JSON.stringify({ data: [] }), { status: 200 });
+    }) as typeof fetch;
+    const { env, raw } = runEnv();
+    const res = await worker.fetch(
+      new Request(
+        "https://ingestion-premium.test/v1/run?dataset=markets_calendar&from=2024-06-03&to=2024-06-03",
+        {
+          method: "POST",
+          headers: { "X-Ingestion-Token": env.INGESTION_RUN_TOKEN! },
+        },
+      ),
+      env,
+    );
+    expect(res.status).toBe(200);
+    const pagePuts = raw.puts.filter((put) => /\/page-\d{6}\.json$/.test(put.key));
+    expect(pagePuts.map((put) => put.key.slice(put.key.lastIndexOf("/") + 1))).toEqual([
+      "page-000001.json",
+      "page-000002.json",
+    ]);
+    const prefix = pagePuts[0]!.key.slice(0, pagePuts[0]!.key.lastIndexOf("/"));
+    expect(raw.puts.some((put) => put.key === `${prefix}/manifest.json`)).toBe(true);
+    for (const put of raw.puts) {
+      expect(put.body).not.toContain("data_truncated");
+    }
+  });
+});
+
+describe("ingestion-premium raw-page retain source pin", () => {
+  it("keeps every raw page, a rawPrefix manifest, and ingest/export tokens only", () => {
+    const src = readFileSync(join(here, "index.ts"), "utf8");
+    expect(src).toContain('page-${String(page.number).padStart(6, "0")}.json');
+    expect(src).toContain("`${rawPrefix}/manifest.json`");
+    expect(src).not.toContain("data_truncated");
+    expect(src).toContain("INGESTION_RUN_TOKEN");
+    expect(src).toContain("DATA_EXPORT_TOKEN");
+    expect(src).not.toContain("INGESTION_PROXY_TOKEN");
   });
 });
