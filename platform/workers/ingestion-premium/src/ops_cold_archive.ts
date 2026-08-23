@@ -25,8 +25,7 @@ export async function handleArchiveCold(
 
   const url = new URL(request.url);
 
-  const token =
-    request.headers.get("X-Ingestion-Token") || url.searchParams.get("token");
+  const token = request.headers.get("X-Ingestion-Token");
   if (!env.INGESTION_RUN_TOKEN || !token || token !== env.INGESTION_RUN_TOKEN) {
     return Response.json({ error: "unauthorized" }, { status: 401 });
   }
