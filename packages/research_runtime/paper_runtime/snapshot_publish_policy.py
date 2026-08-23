@@ -13,6 +13,7 @@ from typing import Any
 
 from cf_platform.ingest_premium.coverage import run_coverage, summarize
 from data_contracts.loader import all_contracts
+from paper_runtime.snapshot_coverage_proof import _coverage_v2_proof
 from storage.coverage_ledger import refresh_coverage_ledger
 
 
@@ -90,7 +91,6 @@ def _evaluate_publication_gate(
     from paper_runtime.snapshot import (
         QUALITY_POLICY_VERSION,
         SnapshotRejected,
-        _coverage_v2_proof,
         _latest_complete_run,
     )
 
