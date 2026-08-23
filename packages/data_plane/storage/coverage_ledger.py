@@ -19,11 +19,13 @@ from data_contracts.coverage import (
     coverage_contract_for,
 )
 from storage.coverage_ledger_io import (
+    persist_refreshed_coverage,
     read_collection_receipts,
     read_coverage_segments,
     read_dataset_coverage,
     record_collection_receipt,
     record_required_segments,
+    update_dataset_coverage_row,
 )
 from storage.coverage_receipts import (
     SYNTHETIC_RECEIPT_MARKER,
@@ -875,58 +877,15 @@ def refresh_coverage_ledger(
             "detail_json": _canonical_json(detail),
         })
 
-    columns = (
-        "dataset", "status", "policy_version", "collection_scope",
-        "history_target_start", "history_target_end_rule", "coverage_mode",
-        "expected_frequency", "universe_rule", "raw_retention_required",
-        "structured_reconciliation_required", "governance_tier",
-        "observed_start", "observed_end", "row_count", "source_run_id",
-        "evaluated_at", "detail_json",
+    persist_refreshed_coverage(
+        conn,
+        delete_keys=[
+            (_coverage_source(dataset), dataset, POLICY_VERSION)
+            for dataset in selected
+        ],
+        segment_rows=segment_rows,
+        coverage_rows=rows,
     )
-    sql = (
-        "INSERT INTO dataset_coverage (" + ",".join(columns) + ") VALUES ("
-        + ",".join("?" for _ in columns) + ") ON CONFLICT(dataset) DO UPDATE SET "
-        + ",".join(f"{column}=excluded.{column}" for column in columns if column != "dataset")
-    )
-    segment_columns = (
-        "source", "dataset", "segment_id", "policy_version",
-        "segment_start", "segment_end", "expected_scope", "expected_items",
-        "status", "receipt_run_id", "evaluated_at", "detail_json",
-    )
-    segment_sql = (
-        "INSERT INTO coverage_segments (" + ",".join(segment_columns)
-        + ") VALUES (" + ",".join("?" for _ in segment_columns) + ")"
-    )
-    try:
-        conn.execute("BEGIN IMMEDIATE")
-        conn.executemany(
-            "DELETE FROM coverage_segments "
-            "WHERE source=? AND dataset=? AND policy_version=?",
-            [(_coverage_source(dataset), dataset, POLICY_VERSION) for dataset in selected],
-        )
-        conn.executemany(
-            segment_sql,
-            [tuple(row[column] for column in segment_columns) for row in segment_rows],
-        )
-        conn.executemany(
-            sql,
-            [
-                tuple(
-                    int(row[column])
-                    if column in {
-                        "raw_retention_required",
-                        "structured_reconciliation_required",
-                    }
-                    else row[column]
-                    for column in columns
-                )
-                for row in rows
-            ],
-        )
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
     return rows
 
 
@@ -1198,13 +1157,12 @@ def sync_dataset_coverage_from_segments(
         detail_json = _canonical_json(new_detail)
 
         if not dry_run:
-            conn.execute(
-                """
-                UPDATE dataset_coverage
-                SET status=?, detail_json=?, evaluated_at=?
-                WHERE dataset=?
-                """,
-                (new_status, detail_json, evaluated_at, dataset),
+            update_dataset_coverage_row(
+                conn,
+                dataset=dataset,
+                status=new_status,
+                detail_json=detail_json,
+                evaluated_at=evaluated_at,
             )
 
         results.append(

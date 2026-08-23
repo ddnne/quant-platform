@@ -1,4 +1,4 @@
-"""Coverage ledger persistence I/O: receipts, required inventory, and reads.
+"""Coverage ledger persistence I/O: receipts, required inventory, and writes.
 
 Evaluate / COMPLETE policy stays in ``coverage_ledger``.
 """
@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 import json
 from pathlib import Path
 import sqlite3
-from typing import TYPE_CHECKING, Any, Sequence
+from typing import TYPE_CHECKING, Any, Mapping, Sequence
 from urllib.parse import quote
 
 from data_contracts.coverage import COVERAGE_STATUSES, POLICY_VERSION
@@ -190,10 +190,106 @@ def read_coverage_segments(
         conn.close()
 
 
+_DATASET_COVERAGE_COLUMNS = (
+    "dataset", "status", "policy_version", "collection_scope",
+    "history_target_start", "history_target_end_rule", "coverage_mode",
+    "expected_frequency", "universe_rule", "raw_retention_required",
+    "structured_reconciliation_required", "governance_tier",
+    "observed_start", "observed_end", "row_count", "source_run_id",
+    "evaluated_at", "detail_json",
+)
+_BOOL_COVERAGE_COLUMNS = {
+    "raw_retention_required",
+    "structured_reconciliation_required",
+}
+_SEGMENT_WRITE_COLUMNS = (
+    "source", "dataset", "segment_id", "policy_version",
+    "segment_start", "segment_end", "expected_scope", "expected_items",
+    "status", "receipt_run_id", "evaluated_at", "detail_json",
+)
+
+
+def persist_refreshed_coverage(
+    conn: sqlite3.Connection,
+    *,
+    delete_keys: Sequence[tuple[str, str, str]],
+    segment_rows: Sequence[Mapping[str, Any]],
+    coverage_rows: Sequence[Mapping[str, Any]],
+) -> None:
+    """Atomically replace evaluated segments and upsert dataset_coverage.
+
+    Caller owns COMPLETE evaluation. This writes only.
+    """
+    segment_sql = (
+        "INSERT INTO coverage_segments (" + ",".join(_SEGMENT_WRITE_COLUMNS)
+        + ") VALUES (" + ",".join("?" for _ in _SEGMENT_WRITE_COLUMNS) + ")"
+    )
+    coverage_sql = (
+        "INSERT INTO dataset_coverage (" + ",".join(_DATASET_COVERAGE_COLUMNS)
+        + ") VALUES (" + ",".join("?" for _ in _DATASET_COVERAGE_COLUMNS)
+        + ") ON CONFLICT(dataset) DO UPDATE SET "
+        + ",".join(
+            f"{column}=excluded.{column}"
+            for column in _DATASET_COVERAGE_COLUMNS
+            if column != "dataset"
+        )
+    )
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.executemany(
+            "DELETE FROM coverage_segments "
+            "WHERE source=? AND dataset=? AND policy_version=?",
+            list(delete_keys),
+        )
+        conn.executemany(
+            segment_sql,
+            [
+                tuple(row[column] for column in _SEGMENT_WRITE_COLUMNS)
+                for row in segment_rows
+            ],
+        )
+        conn.executemany(
+            coverage_sql,
+            [
+                tuple(
+                    int(row[column]) if column in _BOOL_COVERAGE_COLUMNS
+                    else row[column]
+                    for column in _DATASET_COVERAGE_COLUMNS
+                )
+                for row in coverage_rows
+            ],
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
+
+def update_dataset_coverage_row(
+    conn: sqlite3.Connection,
+    *,
+    dataset: str,
+    status: str,
+    detail_json: str,
+    evaluated_at: str,
+) -> None:
+    """Update one dataset_coverage aggregate. Caller owns COMPLETE policy."""
+    conn.execute(
+        """
+        UPDATE dataset_coverage
+        SET status=?, detail_json=?, evaluated_at=?
+        WHERE dataset=?
+        """,
+        (status, detail_json, evaluated_at, dataset),
+    )
+
+
 __all__ = [
+    "persist_refreshed_coverage",
     "read_collection_receipts",
     "read_coverage_segments",
     "read_dataset_coverage",
     "record_collection_receipt",
     "record_required_segments",
+    "update_dataset_coverage_row",
 ]
