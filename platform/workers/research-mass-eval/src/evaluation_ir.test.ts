@@ -242,9 +242,21 @@ describe("Evaluation IR golden vectors", () => {
     );
     expect(generated).toMatch(/Do not edit by hand/);
     expect(generated).toContain("schema.json");
+    const generatedCodec = readFileSync(
+      join(SRC_DIR, "evaluation_ir_codec.generated.ts"),
+      "utf8",
+    );
+    expect(generatedCodec).toMatch(/Do not edit by hand/);
+    expect(generatedCodec).toContain("schema.json");
+    expect(generatedCodec).toContain("jobCandidateGrade(");
+    expect(generatedCodec).toContain("export function encodeEvaluationIR");
+    expect(generatedCodec).toContain("export function decodeEvaluationIR");
     const codec = readFileSync(join(SRC_DIR, "evaluation_ir.ts"), "utf8");
     expect(codec).not.toMatch(/CANONICAL_FIELDS/);
     expect(codec).toContain("jobCandidateGrade");
+    expect(codec).toContain("evaluation_ir_codec.generated");
+    expect(codec).not.toContain("export function encodeEvaluationIR");
+    expect(codec).not.toContain("export function decodeEvaluationIR");
   });
 
   it.each(GOLDEN_ROWS)("golden $id ($op) encode/decode match", (row) => {

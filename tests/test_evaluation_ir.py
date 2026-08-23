@@ -15,6 +15,7 @@ from research.evaluation_ir import (
     EVALUATION_IR_VERSION,
     SCHEMA_REL,
     assert_evaluation_ir_allowed_fields_ts_frozen,
+    assert_evaluation_ir_codec_ts_frozen,
     assert_evaluation_ir_encode_keys_match_schema,
     candidate_from_job_artifact,
     decode_evaluation_ir,
@@ -23,6 +24,8 @@ from research.evaluation_ir import (
     encode_evaluation_ir,
     evaluation_ir_allowed_fields_ts_path,
     evaluation_ir_allowed_fields_ts_source,
+    evaluation_ir_codec_ts_path,
+    evaluation_ir_codec_ts_source,
     evaluation_ir_encode_keys,
     evaluation_ir_ts_encode_keys,
     evaluation_ir_ts_path,
@@ -68,9 +71,13 @@ def test_encode_keys_match_schema_properties() -> None:
     assert set(evaluation_ir_encode_keys()) == ALLOWED_FIELDS
     assert_evaluation_ir_encode_keys_match_schema()
     worker_src = evaluation_ir_ts_path().read_text(encoding="utf-8")
+    codec_src = evaluation_ir_codec_ts_path().read_text(encoding="utf-8")
     assert "CANONICAL_FIELDS" not in worker_src
+    assert "CANONICAL_FIELDS" not in codec_src
     assert not hasattr(ir_module, "CANONICAL_FIELDS")
-    drifted = worker_src.replace(
+    assert "export function encodeEvaluationIR" not in worker_src
+    assert "export function decodeEvaluationIR" not in worker_src
+    drifted = codec_src.replace(
         "failure_reason: reason,",
         "failure_reason: reason,\n    extra_encode_key: true,",
         1,
@@ -99,6 +106,17 @@ def test_schema_is_codec_sot() -> None:
     assert "Do not edit by hand" in header
     assert "schema.json" in header
     assert_evaluation_ir_allowed_fields_ts_frozen()
+    codec_generated = evaluation_ir_codec_ts_source()
+    codec_path = evaluation_ir_codec_ts_path()
+    assert codec_path.is_file()
+    assert codec_path.read_text(encoding="utf-8") == codec_generated
+    codec_header = codec_generated.split("export const", 1)[0]
+    assert "Do not edit by hand" in codec_header
+    assert "schema.json" in codec_header
+    assert "jobCandidateGrade" in codec_generated
+    assert "export function encodeEvaluationIR" in codec_generated
+    assert "export function decodeEvaluationIR" in codec_generated
+    assert_evaluation_ir_codec_ts_frozen()
     worker = (
         Path(__file__).resolve().parents[1]
         / "platform"
@@ -109,8 +127,11 @@ def test_schema_is_codec_sot() -> None:
     )
     worker_src = worker.read_text(encoding="utf-8")
     assert 'from "./evaluation_ir_allowed_fields.generated"' in worker_src
+    assert 'from "./evaluation_ir_codec.generated"' in worker_src
     assert "CANONICAL_FIELDS" not in worker_src
-    assert "jobCandidateGrade(" in worker_src
+    assert "export function encodeEvaluationIR" not in worker_src
+    assert "export function decodeEvaluationIR" not in worker_src
+    assert "jobCandidateGrade(" in codec_generated
     assert evaluation_ir_ts_path() == worker
     assert_evaluation_ir_encode_keys_match_schema()
     assert "const" not in schema["properties"]["candidate"]
