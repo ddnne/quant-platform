@@ -5,7 +5,10 @@
 
 import type { DatasetSpec } from "./catalog";
 import type { RateLimiter } from "./rate_limit";
-import { fullJitterMs, halfToFullJitterMs } from "./retry_jitter";
+import {
+  exponentialBackoffFullJitterMs,
+  exponentialBackoffHalfToFullJitterMs,
+} from "./retry_jitter";
 
 export interface FetchEnv {
   JQUANTS_API_KEY: string;
@@ -104,25 +107,6 @@ export interface FetchOutcome {
   retriesUsed: number;
 }
 
-/** Exponential backoff + full jitter for retry-after-transient (5xx / transport). */
-function backoffDelayMs(attempt: number): number {
-  const base = Math.min(
-    RETRY_MAX_DELAY_MS,
-    RETRY_BASE_DELAY_MS * 2 ** (attempt - 1),
-  );
-  return fullJitterMs(base);
-}
-
-/** Short 429-only backoff — recover to near-ceiling quickly (P0 rate accel). */
-function backoff429DelayMs(attempt: number): number {
-  const base = Math.min(
-    RETRY_429_MAX_DELAY_MS,
-    RETRY_429_BASE_DELAY_MS * 2 ** (attempt - 1),
-  );
-  // Half-to-full jitter so concurrent workers do not re-stampede together.
-  return halfToFullJitterMs(base);
-}
-
 function sleep(ms: number): Promise<void> {
   return new Promise<void>((resolve) => setTimeout(resolve, ms));
 }
@@ -152,7 +136,13 @@ export async function fetchOnePage(
           retriesUsed: attempt,
         };
       }
-      await sleep(backoffDelayMs(attempt));
+      await sleep(
+        exponentialBackoffFullJitterMs(
+          attempt,
+          RETRY_BASE_DELAY_MS,
+          RETRY_MAX_DELAY_MS,
+        ),
+      );
       continue;
     }
     if (resp.status === 429) {
@@ -168,7 +158,13 @@ export async function fetchOnePage(
         };
       }
       try { await resp.text(); } catch { /* ignore */ }
-      await sleep(backoff429DelayMs(attempt));
+      await sleep(
+        exponentialBackoffHalfToFullJitterMs(
+          attempt,
+          RETRY_429_BASE_DELAY_MS,
+          RETRY_429_MAX_DELAY_MS,
+        ),
+      );
       continue;
     }
     if (resp.status >= 500 && resp.status < 600) {
@@ -183,7 +179,13 @@ export async function fetchOnePage(
       }
       // Drain so the connection can be reused before sleeping.
       try { await resp.text(); } catch { /* ignore */ }
-      await sleep(backoffDelayMs(attempt));
+      await sleep(
+        exponentialBackoffFullJitterMs(
+          attempt,
+          RETRY_BASE_DELAY_MS,
+          RETRY_MAX_DELAY_MS,
+        ),
+      );
       continue;
     }
     // Success path: decay any 429 penalty back toward the 120 ms floor.
