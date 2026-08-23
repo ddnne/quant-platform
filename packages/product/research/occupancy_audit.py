@@ -168,6 +168,7 @@ def usable_eval_snapshot(
         countable_thesis_ids,
         usable_inventory,
         usable_inventory_read,
+        usable_series_breakdown,
     )
 
     inv = usable_inventory(occupancy_by_track)
@@ -215,9 +216,76 @@ def usable_eval_snapshot(
     return {
         "inventory": inv,
         "usable_read": read_pack,
+        "series": usable_series_breakdown(occupancy_by_track),
         "cost_risk": cost,
         "go": False,
         "not_a_pass": True,
+    }
+
+
+def write_usable_eval_snapshot(
+    occupancy_by_track: Mapping[str, Mapping[str, float]],
+    *,
+    wave: str,
+    root: Path | None = None,
+    put_r2: bool = False,
+) -> dict[str, Any]:
+    """Write inventory / usable-read / cost-risk / jsonl. Optional R2. Not GO."""
+    from qp_paths import repo_root
+    from research.unique_logic.catalog import write_combo_thesis_jsonl
+
+    snap = usable_eval_snapshot(occupancy_by_track)
+    ops = Path(root) if root is not None else repo_root() / "data" / "ops" / "research_eval"
+    ops.mkdir(parents=True, exist_ok=True)
+    inv_job = f"eval-usable-inventory-{wave}"
+    read_job = f"eval-usable-inventory-read-{wave}"
+    series_job = f"eval-usable-series-{wave}"
+    cost_job = f"eval-usable-cost-risk-{wave}"
+    jsonl_job = f"eval-combo-jsonl-{wave}"
+    read = dict(snap["usable_read"])
+    read["job_id"] = read_job
+    series = dict(snap["series"])
+    series["job_id"] = series_job
+    files = {
+        inv_job: (ops / f"{inv_job}.json", json.dumps(snap["inventory"], ensure_ascii=True)),
+        read_job: (ops / f"{read_job}.json", json.dumps(read, ensure_ascii=True, default=str)),
+        series_job: (ops / f"{series_job}.json", json.dumps(series, ensure_ascii=True, default=str)),
+        cost_job: (ops / f"{cost_job}.json", json.dumps(snap["cost_risk"], ensure_ascii=True)),
+    }
+    for path, body in files.values():
+        path.write_text(body, encoding="utf-8")
+    jsonl = write_combo_thesis_jsonl(ops / f"{jsonl_job}.jsonl")
+    puts: list[dict[str, Any]] = []
+    if put_r2:
+        from research.cf_mass_eval_stage import RESEARCH_ARTIFACT_BUCKET
+        from research.r2_io import default_r2_put
+
+        mapping = (
+            (inv_job, f"{inv_job}.json", "inventory.json"),
+            (read_job, f"{read_job}.json", "usable_read.json"),
+            (series_job, f"{series_job}.json", "series.json"),
+            (cost_job, f"{cost_job}.json", "cost_risk.json"),
+            (jsonl_job, f"{jsonl_job}.jsonl", "combo_thesis.jsonl"),
+        )
+        for job, fname, r2name in mapping:
+            put = default_r2_put(
+                RESEARCH_ARTIFACT_BUCKET,
+                f"research/eval/job={job}/{r2name}",
+                (ops / fname).read_bytes(),
+            )
+            puts.append({"job": job, "status": put.get("status"), "bytes": put.get("bytes")})
+    return {
+        "wave": wave,
+        "n_usable": snap["inventory"]["n_usable"],
+        "inventory_job": inv_job,
+        "usable_read_job": read_job,
+        "series_job": series_job,
+        "cost_risk_job": cost_job,
+        "jsonl": jsonl,
+        "puts": puts,
+        "go": False,
+        "not_a_pass": True,
+        "yaml_remains_sot": True,
     }
 
 
@@ -292,4 +360,5 @@ __all__ = [
     "occupancy_recorded_drift",
     "run_occupancy_track",
     "usable_eval_snapshot",
+    "write_usable_eval_snapshot",
 ]

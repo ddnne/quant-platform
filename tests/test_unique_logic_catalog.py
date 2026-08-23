@@ -34,6 +34,7 @@ def test_pri_gate_sets_are_combo_event_gates() -> None:
     from research.unique_logic.constants import (
         COMBO_EVENT_GATES,
         PRI_FLOW_GATES,
+        PRI_FUND_GATES,
         PRI_RATE_GATES,
         PRI_VOL_GATES,
     )
@@ -41,9 +42,12 @@ def test_pri_gate_sets_are_combo_event_gates() -> None:
     assert PRI_VOL_GATES <= COMBO_EVENT_GATES
     assert PRI_FLOW_GATES <= COMBO_EVENT_GATES
     assert PRI_RATE_GATES <= COMBO_EVENT_GATES
+    assert PRI_FUND_GATES <= COMBO_EVENT_GATES
     assert not (PRI_VOL_GATES & PRI_FLOW_GATES)
     assert not (PRI_VOL_GATES & PRI_RATE_GATES)
     assert not (PRI_FLOW_GATES & PRI_RATE_GATES)
+    assert "cheap_pb" not in PRI_FUND_GATES
+    assert "roe_low" not in PRI_FUND_GATES
 
 
 def test_unique_leftover_matches_yaml_unique_families() -> None:
@@ -54,6 +58,15 @@ def test_unique_leftover_matches_yaml_unique_families() -> None:
     leftover = unique_leftover_logic_ids()
     assert leftover == union
     assert leftover
+
+
+def test_usable_series_breakdown_has_tags() -> None:
+    from research.unique_logic.worker_bodies import usable_series_breakdown
+
+    empty = usable_series_breakdown({"mid_n_explore": {}, "liq_large": {}})
+    assert empty["version"] == "usable-series/v1"
+    assert empty["go"] is False
+    assert "tag_counts" in empty and "family" in empty
 
 
 def test_usable_inventory_read_has_n_ands_and_pri_series() -> None:

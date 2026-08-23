@@ -88,6 +88,13 @@ _GATE_OCCUPANCY_SENTENCE: dict[str, str] = {
     "div_positive": "the name pays a dividend",
     "on_impulse": "overnight is on an impulse",
     "repo_3m_down": "the 3m repo rate declined",
+    "cheap_iv": "IV is cheap versus its PIT median",
+    "rich_iv": "IV is rich versus its PIT median",
+    "nky_vol_high_skip": "NKY vol is high",
+    "overnight_tightening": "overnight funding tightened",
+    "ta_down": "total assets contracted versus the last prior print",
+    "margin_up": "margin interest rose versus its PIT median",
+    "margin_down": "margin interest fell versus its PIT median",
 }
 _FUNDING_GATES: frozenset[str] = frozenset(
     {

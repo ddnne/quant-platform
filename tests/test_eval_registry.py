@@ -509,6 +509,24 @@ def test_usable_eval_snapshot_is_not_a_pass() -> None:
     assert snap["usable_read"]["do_not_silent_unpark"] is True
     assert snap["cost_risk"]["fake_split"] is False
     assert snap["cost_risk"]["not_a_pass"] is True
+    assert snap["series"]["version"] == "usable-series/v1"
+    assert snap["series"]["go"] is False
+
+
+def test_write_usable_eval_snapshot_local_only(tmp_path) -> None:
+    from research.occupancy_audit import write_usable_eval_snapshot
+
+    out = write_usable_eval_snapshot(
+        {"mid_n_explore": {}, "liq_large": {}},
+        wave="test24em",
+        root=tmp_path,
+        put_r2=False,
+    )
+    assert out["go"] is False
+    assert out["yaml_remains_sot"] is True
+    assert out["puts"] == []
+    assert (tmp_path / "eval-usable-inventory-test24em.json").is_file()
+    assert (tmp_path / "eval-combo-jsonl-test24em.jsonl").is_file()
 
 
 def test_merge_daily_path_cells_for_ids_later_file_wins(tmp_path) -> None:

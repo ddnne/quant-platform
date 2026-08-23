@@ -16,6 +16,7 @@ from research.unique_logic.constants import (
     NEAR_EMPTY_OCCUPANCY,
     NEAR_EMPTY_PARK_IDS,
     PRI_FLOW_GATES,
+    PRI_FUND_GATES,
     PRI_RATE_GATES,
     PRI_VOL_GATES,
     PYTHON_ONLY_EVENT_GATES,
@@ -603,6 +604,60 @@ def usable_inventory_read(
     }
 
 
+def usable_series_breakdown(
+    occupancy_by_track: Mapping[str, Mapping[str, float]],
+) -> dict[str, Any]:
+    """Family / vol / flow / rate / fund tags of usable inventory. Not a pass."""
+    from collections import Counter
+
+    from research.unique_logic.catalog import combo_thesis_records
+
+    inv = usable_inventory(occupancy_by_track)
+    usable = set(inv["usable_ids"])
+    tags: Counter[str] = Counter()
+    combo: Counter[str] = Counter()
+    n_ands: Counter[str] = Counter()
+    n_event_xs_3 = 0
+    for rec in combo_thesis_records():
+        lid = str(rec.get("logic_id") or "")
+        if lid not in usable:
+            continue
+        gates = [str(x) for x in (rec.get("gates") or []) if str(x).strip()]
+        gs = set(gates)
+        hit: list[str] = []
+        if gs & PRI_VOL_GATES:
+            hit.append("vol")
+        if gs & PRI_FLOW_GATES:
+            hit.append("flow")
+        if gs & PRI_RATE_GATES:
+            hit.append("rate")
+        if gs & PRI_FUND_GATES:
+            hit.append("fund")
+        if not hit:
+            hit.append("other")
+        for t in hit:
+            tags[t] += 1
+        combo["+".join(hit)] += 1
+        n_ands[str(len(gates))] += 1
+        fam = usable_family_of(lid)
+        if len(gates) == 3 and fam in {"event", "surprise_xs"}:
+            n_event_xs_3 += 1
+    n = int(inv["n_usable"])
+    return {
+        "version": "usable-series/v1",
+        "n_usable": n,
+        "family": inv["family"],
+        "family_share": inv["family_share"],
+        "tag_counts": dict(tags),
+        "tag_combo": dict(combo),
+        "n_ands": dict(n_ands),
+        "n_event_or_surprise_xs_3and": n_event_xs_3,
+        "pri_series_exclusive": usable_inventory_read(occupancy_by_track)["pri_series"],
+        "go": False,
+        "not_a_pass": True,
+    }
+
+
 def countable_inventory_bias() -> dict[str, Any]:
     """Family / primary-gate / dataset occupancy of countable theses. Not a pass."""
     from collections import Counter
@@ -681,6 +736,7 @@ __all__ = [
     "countable_inventory_bias",
     "usable_inventory",
     "usable_inventory_read",
+    "usable_series_breakdown",
     "usable_family_of",
     "classify_occupancy_pair",
     "countable_thesis_ids",

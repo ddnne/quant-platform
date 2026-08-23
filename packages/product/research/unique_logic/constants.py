@@ -106,6 +106,21 @@ PRI_RATE_GATES: frozenset[str] = frozenset(
         "overnight_p10",
     }
 )
+# Fund-change gates (not cheap_pb/roe_low prefer). Used for series maps.
+PRI_FUND_GATES: frozenset[str] = frozenset(
+    {
+        "positive_eps",
+        "eps_up",
+        "eps_down",
+        "ta_up",
+        "ta_down",
+        "eq_ar_rising",
+        "eq_ar_high",
+        "eq_ar_falling",
+        "eq_ar_low",
+        "div_positive",
+    }
+)
 WORKER_PYTHON_ONLY_GATE_POLICY: str = "python_local_or_lid_branch"
 CHEAP_PB_EVENT_VS_CS: str = "event_bars_x_fins_not_csfundsnaps"
 CHEAP_PB_EVENT_SOURCE: str = "bars_x_fins_bps_over_close"

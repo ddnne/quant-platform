@@ -17,6 +17,15 @@ from storage.receipt_crypto import ReceiptSigningKey, generate_keypair
 from storage.trusted_receipt import SignedReceiptAuthority
 
 
+def test_storage_package_hides_synthetic() -> None:
+    import storage
+
+    assert not hasattr(storage, "build_synthetic_complete_receipt")
+    assert hasattr(storage, "SignedReceiptAuthority") or hasattr(
+        storage, "TrustedReceiptIssuer"
+    )
+
+
 def test_forged_signature_rejected(tmp_path: Path):
     import storage.receipt_crypto as rc
 

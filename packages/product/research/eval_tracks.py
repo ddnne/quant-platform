@@ -15,6 +15,7 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 UNIVERSE_SELECT_ADV: str = "adv_desc_skip_missing_bars_and_fins"
+EVENT_THREE_AND_PLUS_N_STOPPED: bool = True
 
 EVAL_TRACK_MID_N: str = "mid_n_explore"
 EVAL_TRACK_LIQ_LARGE: str = "liq_large"
@@ -83,7 +84,7 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
             "recorded research/eval/job=eval-inventory-bias-20260824ai/ "
             "inventory_bias.json; assert_new_batch_cheap_pb_cap refuses "
             "new batches at 20%; usable inventory 1724 (3-AND +N stopped); "
-            "eval-usable-inventory-20260824el not_a_pass"
+            "eval-usable-inventory-20260824em plus40 2-AND vol/flow/rate/fund not_a_pass"
         ),
         "not_a_pass": True,
         "go": False,

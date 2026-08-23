@@ -222,6 +222,42 @@ def local_catalog_write_block_reasons(
     return reasons
 
 
+def propose_eval_pack(
+    invoke_out: Mapping[str, Any],
+    *,
+    occupancy_by_track: Mapping[str, Mapping[str, float]],
+    job_id: str,
+) -> dict[str, Any]:
+    """Local write-gate pack. Never injects YAML. Not GO."""
+    reasons: list[str] = []
+    for i, p in enumerate(invoke_out.get("proposals") or []):
+        rev = (invoke_out.get("reviews") or [None])[i] if i < len(invoke_out.get("reviews") or []) else None
+        block = local_catalog_write_block_reasons(
+            p, rev, occupancy_by_track=occupancy_by_track
+        )
+        if block:
+            reasons.extend(block)
+            continue
+        reasons.append("would_write_but_no_auto_inject")
+    return {
+        "job_id": str(job_id),
+        "ok": invoke_out.get("ok"),
+        "error": invoke_out.get("error"),
+        "n_adoptable": invoke_out.get("n_adoptable"),
+        "n_proposals": len(invoke_out.get("proposals") or []),
+        "proposals": invoke_out.get("proposals"),
+        "reviews": invoke_out.get("reviews"),
+        "auto_inject": False,
+        "catalog_written": False,
+        "ids_injected": False,
+        "written": False,
+        "reasons_not_written": reasons,
+        "llm_failed_not_soup": invoke_out.get("error") == "llm_failed",
+        "go": False,
+        "not_a_pass": True,
+    }
+
+
 def catalog_prefer_and_avoid(*, n_gates: int, limit: int | None = None) -> list[str]:
     """Catalog ANDs whose gates are all prefer seeds. Clone magnet.
 
@@ -653,6 +689,7 @@ __all__ = [
     "sparse_prefer_subset_avoid",
     "invoke_cf_propose_thesis",
     "local_catalog_write_block_reasons",
+    "propose_eval_pack",
     "PROPOSE_PARENT_LO_MIN",
     "reject_window_tweak",
     "review_proposal_row",

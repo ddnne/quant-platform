@@ -96,6 +96,27 @@ def _fresh_ok_proposal() -> dict:
     raise AssertionError("no fresh review-ok 3-AND remains")
 
 
+def test_propose_eval_pack_never_writes_catalog() -> None:
+    from research.cf_propose_thesis import propose_eval_pack
+
+    pack = propose_eval_pack(
+        {
+            "ok": False,
+            "error": "llm_failed",
+            "n_adoptable": 0,
+            "proposals": [],
+            "reviews": [],
+        },
+        occupancy_by_track={"mid_n_explore": {}, "liq_large": {}},
+        job_id="eval-cf-propose-test24em",
+    )
+    assert pack["written"] is False
+    assert pack["catalog_written"] is False
+    assert pack["auto_inject"] is False
+    assert pack["llm_failed_not_soup"] is True
+    assert pack["go"] is False
+
+
 def test_local_catalog_write_block_reasons_do_not_inject() -> None:
     from research.cf_propose_thesis import local_catalog_write_block_reasons
 
