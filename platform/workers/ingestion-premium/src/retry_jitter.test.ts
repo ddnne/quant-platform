@@ -7,6 +7,7 @@ import {
   exponentialBackoffHalfToFullJitterMs,
   fullJitterMs,
   halfToFullJitterMs,
+  sleepMs,
 } from "./retry_jitter";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -79,5 +80,9 @@ describe("retry jitter", () => {
     }
     const jitter = readFileSync(join(here, "retry_jitter.ts"), "utf8");
     expect(jitter).toContain("crypto.getRandomValues");
+  });
+
+  it("sleepMs resolves", async () => {
+    await expect(sleepMs(0)).resolves.toBeUndefined();
   });
 });

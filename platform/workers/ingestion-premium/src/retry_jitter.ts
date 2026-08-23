@@ -37,3 +37,8 @@ export function exponentialBackoffHalfToFullJitterMs(
 ): number {
   return halfToFullJitterMs(exponentialCapMs(attempt, baseMs, maxMs));
 }
+
+/** Promise + setTimeout delay. Shared retry wait. */
+export function sleepMs(ms: number): Promise<void> {
+  return new Promise<void>((resolve) => setTimeout(resolve, ms));
+}

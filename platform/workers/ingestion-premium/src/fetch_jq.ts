@@ -8,6 +8,7 @@ import type { RateLimiter } from "./rate_limit";
 import {
   exponentialBackoffFullJitterMs,
   exponentialBackoffHalfToFullJitterMs,
+  sleepMs,
 } from "./retry_jitter";
 
 export interface FetchEnv {
@@ -107,10 +108,6 @@ export interface FetchOutcome {
   retriesUsed: number;
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise<void>((resolve) => setTimeout(resolve, ms));
-}
-
 export async function fetchOnePage(
   env: FetchEnv,
   url: string,
@@ -136,7 +133,7 @@ export async function fetchOnePage(
           retriesUsed: attempt,
         };
       }
-      await sleep(
+      await sleepMs(
         exponentialBackoffFullJitterMs(
           attempt,
           RETRY_BASE_DELAY_MS,
@@ -158,7 +155,7 @@ export async function fetchOnePage(
         };
       }
       try { await resp.text(); } catch { /* ignore */ }
-      await sleep(
+      await sleepMs(
         exponentialBackoffHalfToFullJitterMs(
           attempt,
           RETRY_429_BASE_DELAY_MS,
@@ -179,7 +176,7 @@ export async function fetchOnePage(
       }
       // Drain so the connection can be reused before sleeping.
       try { await resp.text(); } catch { /* ignore */ }
-      await sleep(
+      await sleepMs(
         exponentialBackoffFullJitterMs(
           attempt,
           RETRY_BASE_DELAY_MS,
