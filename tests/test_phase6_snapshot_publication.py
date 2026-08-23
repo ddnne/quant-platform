@@ -12,6 +12,7 @@ import pit
 import paper_runtime.snapshot as snapshot_module
 
 from data_contracts import all_contracts, all_coverage_contracts
+from data_contracts.coverage import SNAPSHOT_SEGMENT_GRANULARITIES
 from paper_runtime import (
     SnapshotRejected,
     data_snapshot_id,
@@ -145,10 +146,19 @@ def _seed_publishable_db(path) -> tuple[str, ...]:
         ],
     )
     for policy in policies:
-        observed = 0 if policy.expected_frequency == "event_driven" else 1
+        # Tip snapshots stay PARTIAL on empty receipts; event-zero COMPLETE
+        # is only for genuine event_driven historical windows.
+        tip_snapshot = (
+            policy.segment_granularity in SNAPSHOT_SEGMENT_GRANULARITIES
+            or "snapshot" in (policy.coverage_mode or "")
+            or "snapshot" in (policy.history_mode or "")
+        )
+        observed = 0 if (
+            policy.expected_frequency == "event_driven" and not tip_snapshot
+        ) else 1
         planned = tuple(
             segment
-            if policy.expected_frequency == "event_driven"
+            if policy.expected_frequency == "event_driven" and not tip_snapshot
             else replace(segment, expected_items=observed)
             for segment in plan_required_segments(policy, today)
         )
