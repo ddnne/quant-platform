@@ -7,6 +7,7 @@ from research.candidate_policy import job_candidate_grade
 from research.evaluation_ir import (
     CANONICAL_FIELDS,
     EVALUATION_IR_VERSION,
+    candidate_from_job_artifact,
     decode_evaluation_ir,
     encode_evaluation_ir,
     job_candidate_grade as ir_grade,
@@ -128,3 +129,53 @@ def test_encode_candidate_is_job_candidate_grade() -> None:
     assert encode_evaluation_ir(**partial)["candidate"] is job_candidate_grade(
         **partial
     )
+
+
+def test_job_artifact_forged_candidate_true_with_partial_ir_rejected() -> None:
+    """Stored candidate_grade true cannot pass; partial IR candidate is re-graded."""
+    partial = encode_evaluation_ir(n_expected=4, n_cells=4, n_complete=3)
+    forged_ir = dict(partial)
+    forged_ir["candidate"] = True
+    with pytest.raises(ValueError, match="job_candidate_grade"):
+        candidate_from_job_artifact(
+            {"candidate_grade": True, "evaluation_ir": forged_ir}
+        )
+    honest_partial = {
+        "candidate_grade": True,
+        "evaluation_ir": partial,
+        "go": False,
+        "survived": False,
+        "promote_as_main": False,
+    }
+    assert candidate_from_job_artifact(honest_partial) is False
+
+
+def test_job_artifact_missing_ir_falls_back_to_counts() -> None:
+    complete_counts = dict(
+        n_expected=4, n_cells=4, n_complete=4, n_collapsed=0, n_broken=0
+    )
+    partial_counts = dict(n_expected=4, n_cells=4, n_complete=3)
+    assert (
+        candidate_from_job_artifact(
+            {**complete_counts, "candidate_grade": False}
+        )
+        is job_candidate_grade(**complete_counts)
+        is True
+    )
+    assert (
+        candidate_from_job_artifact(
+            {**partial_counts, "candidate_grade": True}
+        )
+        is job_candidate_grade(**partial_counts)
+        is False
+    )
+
+
+def test_job_artifact_unknown_ir_field_rejected() -> None:
+    good = encode_evaluation_ir(
+        n_expected=2, n_cells=2, n_complete=2
+    )
+    with pytest.raises(ValueError, match="unknown field"):
+        candidate_from_job_artifact(
+            {"candidate_grade": True, "evaluation_ir": {**good, "go": True}}
+        )

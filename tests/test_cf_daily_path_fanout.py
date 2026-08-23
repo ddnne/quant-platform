@@ -11,6 +11,7 @@ from research.cf_daily_path_job import (
     sleeve_durability_logic_ids,
 )
 from research.cf_mass_eval_job import CF_BAR_NATIVE_LOGIC_IDS, panels_cache_id
+from research.evaluation_ir import candidate_from_job_artifact
 
 
 @pytest.fixture(autouse=True)
@@ -77,6 +78,7 @@ def test_fanout_aggregates_cells_and_does_not_promote() -> None:
     ir = pack["evaluation_ir"]
     assert ir["version"] == "evaluation-ir/v1"
     assert pack["candidate_grade"] is ir["candidate"]
+    assert candidate_from_job_artifact(pack) is True
     assert ir["n_expected"] == 3
     assert ir["n_cells"] == 3
     assert ir["n_complete"] == 3
@@ -133,6 +135,7 @@ def test_fanout_path_broken_cells_are_not_complete() -> None:
     assert pack["promote_as_main"] is False
     ir = pack["evaluation_ir"]
     assert pack["candidate_grade"] is ir["candidate"]
+    assert candidate_from_job_artifact(pack) is False
     assert ir["candidate"] is False
     assert ir["n_broken"] == 1
 

@@ -3,6 +3,10 @@
 Candidate is not a free boolean and is not a second Python/TS policy copy.
 Encode always calls ``job_candidate_grade``. Decode rejects unknown fields
 and re-grades; a smuggled ``candidate: true`` cannot pass a partial job.
+
+Readers of daily-path job dicts must not trust a stored ``candidate_grade``
+boolean. Use ``candidate_from_job_artifact``: decode/re-grade ``evaluation_ir``
+when present, else ``job_candidate_grade`` on counts.
 """
 from __future__ import annotations
 
@@ -217,11 +221,30 @@ def decode_evaluation_ir(payload: Mapping[str, Any]) -> EvaluationIR:
     )
 
 
+def candidate_from_job_artifact(job: Mapping[str, Any]) -> bool:
+    """Re-grade a daily-path job dict. Never trust stored ``candidate_grade``."""
+    if not isinstance(job, Mapping):
+        raise ValueError("job artifact must be an object")
+    if "evaluation_ir" in job:
+        decoded = decode_evaluation_ir(job["evaluation_ir"])
+        if isinstance(decoded, Mapping):
+            return bool(decoded["candidate"])
+        return bool(decoded.candidate)
+    return job_candidate_grade(
+        n_expected=_as_int(job.get("n_expected", 0), "n_expected"),
+        n_cells=_as_int(job.get("n_cells", 0), "n_cells"),
+        n_complete=_as_int(job.get("n_complete", 0), "n_complete"),
+        n_collapsed=_as_int(job.get("n_collapsed", 0), "n_collapsed"),
+        n_broken=_as_int(job.get("n_broken", 0), "n_broken"),
+    )
+
+
 __all__ = [
     "ALLOWED_FIELDS",
     "CANONICAL_FIELDS",
     "EVALUATION_IR_VERSION",
     "EvaluationIR",
+    "candidate_from_job_artifact",
     "decode_evaluation_ir",
     "encode_evaluation_ir",
     "job_candidate_grade",
