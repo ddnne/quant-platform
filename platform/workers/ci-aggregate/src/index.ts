@@ -1,5 +1,7 @@
 /// <reference types="@cloudflare/workers-types" />
 
+import { json } from "./http_json";
+
 /** Six Workers Builds lanes that must all pass the same HEAD SHA. */
 export const REQUIRED_WORKERS = [
   "ingestion-jsda",
@@ -181,16 +183,6 @@ export function evaluateReceipts(rawReceipts: unknown[]): GateVerdict {
   }
 
   return { ok: true, sha, receipts: parsed };
-}
-
-function json(data: unknown, status = 200): Response {
-  return new Response(JSON.stringify(data), {
-    status,
-    headers: {
-      "content-type": "application/json; charset=utf-8",
-      "cache-control": "no-store",
-    },
-  });
 }
 
 function githubRepo(env: AggregateEnv): string | undefined {
