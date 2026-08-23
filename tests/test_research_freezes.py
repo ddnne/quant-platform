@@ -194,10 +194,14 @@ def test_unique22_lift_park_partition() -> None:
     leftover = unique_leftover_logic_ids()
     lifted = unique22_occupancy_equal_lifted()
     parked = unique22_occupancy_park()
+    from research.unique_logic.worker_bodies import UNIQUE22_PARK_REASONS
+
     assert lifted | parked == leftover
     assert lifted.isdisjoint(parked)
     assert "event_pre_mom_agree_hold" in parked
     assert "afterclose_only_event_hold" in lifted
+    assert set(UNIQUE22_PARK_REASONS) == set(parked)
+    assert "momentumAt(entryIdx)" in UNIQUE22_PARK_REASONS["event_pre_mom_agree_hold"]
 
 
 def test_near_empty_park_is_not_countable_or_basket_material() -> None:

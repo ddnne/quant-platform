@@ -77,6 +77,34 @@ def classify_occupancy_maps(
     }
 
 
+def occupancy_recorded_drift(
+    occupancy_by_track: Mapping[str, Mapping[str, float]],
+    logic_ids: Sequence[str],
+) -> dict[str, Any]:
+    """Compare classify bands to recorded park/thin sets. Does not unpark."""
+    from research.unique_logic.constants import (
+        ALWAYS_ON_PARK_IDS,
+        NEAR_EMPTY_PARK_IDS,
+        THIN_SLEEVE_EXCLUDE_IDS,
+    )
+
+    cls = classify_occupancy_maps(occupancy_by_track, logic_ids)
+    classified_empty = set(cls["by_band"].get("near_empty_park") or [])
+    classified_thin = set(cls["by_band"].get("thin_sleeve_exclude") or [])
+    classified_always = set(cls["by_band"].get("always_on_park") or [])
+    return {
+        "empty_not_recorded": sorted(classified_empty - set(NEAR_EMPTY_PARK_IDS)),
+        "thin_not_recorded": sorted(classified_thin - set(THIN_SLEEVE_EXCLUDE_IDS)),
+        "always_not_recorded": sorted(classified_always - set(ALWAYS_ON_PARK_IDS)),
+        "recorded_empty_not_classified": sorted(
+            set(NEAR_EMPTY_PARK_IDS) & set(logic_ids) - classified_empty
+        ),
+        "go": False,
+        "not_a_pass": True,
+        "do_not_silent_unpark": True,
+    }
+
+
 def run_occupancy_track(
     *,
     job_id: str,
@@ -144,5 +172,6 @@ __all__ = [
     "classify_occupancy_pair",
     "merge_occupancy_cell_dumps",
     "occupancy_from_cells_file",
+    "occupancy_recorded_drift",
     "run_occupancy_track",
 ]

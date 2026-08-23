@@ -76,6 +76,27 @@ def unique22_occupancy_park() -> frozenset[str]:
     return unique_leftover_logic_ids() - unique22_occupancy_equal_lifted()
 
 
+UNIQUE22_PARK_REASONS: dict[str, str] = {
+    "event_pre_mom_agree_hold": "leftover momentumAt(entryIdx) vs combo pre_mom entryIdx-1",
+    "surprise_xs_rank_hold": "dedicated surprise-xs rank book",
+    "surprise_xs_rank_flip": "side-switch table, not combo gates",
+    "surprise_xs_rank_adaptive": "trail-K adaptive, not combo gates",
+    "event_funding_adaptive_side": "trail-K adaptive funding side",
+    "event_funding_stress_ls": "fixed L/S table, not combo gates",
+    "curve_steepen_impulse_cs": "dedicated CS overlay",
+    "funding_impulse_cs_tilt": "dedicated CS overlay",
+    "idio_mom_macro_impulse": "dedicated CS overlay",
+    "disclosure_cluster_mom_gate": "dedicated event filter book",
+    "large_surprise_event_hold": "dedicated event book",
+    "month_end_cs_fade": "dedicated CS overlay",
+    "overnight_easy_cs_follow": "dedicated CS overlay",
+    "overnight_level_cs_tilt": "dedicated CS overlay",
+    "repo_3m_level_cs": "dedicated CS overlay",
+    "xs_low_vol_mom": "dedicated CS overlay",
+    "xs_margin_delta_rank": "dedicated CS overlay",
+}
+
+
 def near_empty_occupancy_park() -> frozenset[str]:
     """Recorded near_empty IDs. Not countable, not basket material. Not a pass."""
     return NEAR_EMPTY_PARK_IDS
@@ -615,6 +636,7 @@ __all__ = [
     "primary_gate_of",
     "is_countable_spec",
     "unique_leftover_logic_ids",
+    "UNIQUE22_PARK_REASONS",
     "worker_body_missing",
     "unique22_occupancy_equal_lifted",
     "unique22_occupancy_park",

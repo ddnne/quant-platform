@@ -242,6 +242,32 @@ def yaml_combo_rows(*, root: Path | None = None) -> list[dict[str, Any]]:
     return rows
 
 
+def combo_thesis_records(*, root: Path | None = None) -> list[dict[str, Any]]:
+    """Compact combo table rows. YAML stays declaration SoT until a jsonl cutover."""
+    out: list[dict[str, Any]] = []
+    for spec in load_catalog_specs(root=root):
+        if str(spec.get("evaluator") or "") != _COMBO_EVALUATOR:
+            continue
+        params = spec.get("params") if isinstance(spec.get("params"), Mapping) else {}
+        gates = params.get("gates") if isinstance(params, Mapping) else []
+        if isinstance(gates, str):
+            gates = [x.strip() for x in gates.split(",") if x.strip()]
+        cs_raw = params.get("cs_gate") if isinstance(params, Mapping) else None
+        cs_gate = None if cs_raw in (None, "", "None") else str(cs_raw)
+        lid = str(spec.get("logic_id") or "")
+        out.append(
+            {
+                "logic_id": lid,
+                "kind": _yaml_combo_kind(spec, cs_gate=cs_gate),
+                "gates": list(gates or []),
+                "cs_gate": cs_gate,
+                "side": str(params.get("side") or "orig"),
+                "go": False,
+            }
+        )
+    return out
+
+
 def unique_row_from_yaml(spec: Mapping[str, Any]) -> dict[str, Any]:
     """Map catalog YAML to an original-unique runtime row. Does not GO."""
     lid = str(spec.get("logic_id") or "")

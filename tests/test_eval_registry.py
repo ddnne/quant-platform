@@ -109,6 +109,7 @@ def test_summarize_marks_path_broken_not_suspicious() -> None:
     assert summary["n_path_broken"] == 1
     assert summary["path_broken_excluded_from_complete"] is True
     assert summary["n_complete_cells"] == 0
+    assert row["candidate"] is False
 
 
 def test_path_broken_cell_is_not_complete() -> None:
@@ -654,24 +655,6 @@ def test_mf_value_at_always_on_threshold_is_parked() -> None:
     assert "always_on" in row["flags"]
     assert row["candidate"] is False
     assert row["main_pool"] is False
-
-
-def test_path_broken_is_not_candidate() -> None:
-
-    cells = [
-        _eval_complete_cell(
-            "unwired_overlay",
-            occupancy=0.40,
-            total_ret_net=0.02,
-            eval_path="cs_generic",
-            path_fallback="path_broken",
-            t_stat=2.0,
-        )
-    ]
-    summary = summarize_daily_path_cells(cells, job_id="eval-test-broken-cand")
-    row = summary["logics"][0]
-    assert row["candidate"] is False
-    assert row["tag"] == "path_broken"
 
 
 def test_proposal_schema_reads_summary_weakness_flags() -> None:

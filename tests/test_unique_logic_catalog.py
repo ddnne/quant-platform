@@ -30,6 +30,17 @@ def test_event_sides_ls_variants_stay_registered() -> None:
     )
 
 
+def test_combo_thesis_records_are_compact_table_rows() -> None:
+    from research.unique_logic.catalog import combo_thesis_records
+
+    rows = combo_thesis_records()
+    assert rows
+    rec = rows[0]
+    assert rec["go"] is False
+    assert "logic_id" in rec and "gates" in rec and "kind" in rec
+    assert rec["kind"] in {"event", "surprise_xs", "cs"}
+
+
 def test_catalog_index_is_one_pass_lookup() -> None:
     from research.unique_logic.catalog import catalog_index, catalog_spec
 
