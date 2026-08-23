@@ -162,19 +162,35 @@ describe("ingestion-jsda handlers", () => {
     expect(fetchCalls).toBe(0);
   });
 
-  it("GET /nope is 404 and does not fetch JSDA or claim COMPLETE", async () => {
+  it("GET and POST /nope are 404 and do not fetch JSDA or persist", async () => {
     rejectLiveFetch();
-    const { env, sql, r2Ops } = touchingEnv();
-    const res = await worker.fetch(
+
+    const getCase = touchingEnv();
+    const getRes = await worker.fetch(
       new Request("https://ingestion-jsda.test/nope", { method: "GET" }),
-      env,
+      getCase.env,
     );
-    expect(res.status).toBe(404);
-    const body = await res.text();
-    expect(JSON.parse(body)).toEqual({ error: "not found" });
-    assertNoLeakOrCoverage(body);
-    expect(sql).toEqual([]);
-    expect(r2Ops).toEqual([]);
+    expect(getRes.status).toBe(404);
+    const getBody = await getRes.text();
+    expect(JSON.parse(getBody)).toEqual({ error: "not found" });
+    assertNoLeakOrCoverage(getBody);
+    expect(getCase.sql).toEqual([]);
+    expect(getCase.r2Ops).toEqual([]);
+
+    const postCase = touchingEnv();
+    const postRes = await worker.fetch(
+      new Request("https://ingestion-jsda.test/nope", {
+        method: "POST",
+        headers: { "X-Ingestion-Token": RUN_TOKEN },
+      }),
+      postCase.env,
+    );
+    expect(postRes.status).toBe(404);
+    const postBody = await postRes.text();
+    expect(JSON.parse(postBody)).toEqual({ error: "not found" });
+    assertNoLeakOrCoverage(postBody);
+    expect(postCase.sql).toEqual([]);
+    expect(postCase.r2Ops).toEqual([]);
     expect(fetchCalls).toBe(0);
   });
 
