@@ -172,23 +172,64 @@ describe("Evaluation IR golden vectors", () => {
     expect(src).toMatch(/screen_kind: "period_net"[\s\S]*candidate_grade: false/);
   });
 
-  it("shared golden vectors match candidate and failure_reason", () => {
+  it("shared golden vectors match jobCandidateGrade and round-trip", () => {
     const rows = loadGolden();
     expect(rows.length).toBeGreaterThanOrEqual(8);
+    const ids = new Set(rows.map((row) => row.id));
+    for (const required of [
+      "n_expected_zero",
+      "n_cells_mismatch",
+      "collapsed",
+      "broken",
+      "smuggled_candidate_partial",
+    ]) {
+      expect(ids.has(required), required).toBe(true);
+    }
     for (const row of rows) {
       if (row.op === "decode") {
         expect(row.expect_error, row.id).toBeTruthy();
         expect(() => decodeEvaluationIR(row.payload)).toThrow(
           new RegExp(row.expect_error as string),
         );
+        const payload = row.payload as {
+          candidate?: boolean;
+          n_expected: number;
+          n_cells: number;
+          n_complete: number;
+          n_collapsed?: number;
+          n_broken?: number;
+        };
+        const grade = jobCandidateGrade({
+          n_expected: payload.n_expected,
+          n_cells: payload.n_cells,
+          n_complete: payload.n_complete,
+          n_collapsed: payload.n_collapsed,
+          n_broken: payload.n_broken,
+        });
+        if (payload.candidate === true && grade === false) {
+          expect(row.expect_error).toBe("job_candidate_grade");
+        }
         continue;
       }
       const encoded = encodeEvaluationIR(row.args as EvaluationIREncodeArgs);
+      const grade = jobCandidateGrade({
+        n_expected: encoded.n_expected,
+        n_cells: encoded.n_cells,
+        n_complete: encoded.n_complete,
+        n_collapsed: encoded.n_collapsed,
+        n_broken: encoded.n_broken,
+      });
+      expect(encoded.candidate, row.id).toBe(grade);
       expect(encoded.candidate, row.id).toBe(row.expect?.candidate);
       expect(encoded.failure_reason, row.id).toBe(row.expect?.failure_reason);
       const decoded = decodeEvaluationIR(encoded);
-      expect(decoded.candidate, row.id).toBe(row.expect?.candidate);
+      expect(decoded.candidate, row.id).toBe(grade);
       expect(decoded.failure_reason, row.id).toBe(row.expect?.failure_reason);
+      if (grade === false) {
+        expect(() =>
+          decodeEvaluationIR({ ...encoded, candidate: true }),
+        ).toThrow(/job_candidate_grade/);
+      }
     }
   });
 });

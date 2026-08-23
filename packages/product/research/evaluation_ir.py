@@ -8,13 +8,17 @@ Readers of daily-path job dicts must not trust a stored ``candidate_grade``
 boolean. Use ``candidate_from_job_artifact``: decode/re-grade ``evaluation_ir``
 when present, else ``job_candidate_grade`` on counts.
 
-Shared golden: ``specs/evaluation_ir/golden.jsonl`` (Python and Worker).
+Shared golden: ``specs/evaluation_ir/golden.jsonl`` is emitted by
+``emit_evaluation_ir_golden`` (encoder-owned; not a second candidate policy).
 """
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Mapping
 
+from qp_paths import repo_root
 from research.candidate_policy import job_candidate_grade
 
 EVALUATION_IR_VERSION: str = "evaluation-ir/v1"
@@ -40,6 +44,8 @@ _GRADE_FIELDS: tuple[str, ...] = (
 ALLOWED_FIELDS: frozenset[str] = frozenset(
     ("version",) + CANONICAL_FIELDS + _GRADE_FIELDS
 )
+
+GOLDEN_REL = Path("specs") / "evaluation_ir" / "golden.jsonl"
 
 
 def _grade_failure_reason(
@@ -241,13 +247,172 @@ def candidate_from_job_artifact(job: Mapping[str, Any]) -> bool:
     )
 
 
+def emit_golden_vector(
+    *,
+    vector_id: str,
+    op: str = "roundtrip",
+    forge: Mapping[str, Any] | None = None,
+    expect_error: str | None = None,
+    **args: Any,
+) -> dict[str, Any]:
+    """One golden row. ``candidate`` comes from encode, not a hand boolean."""
+    encoded = encode_evaluation_ir(**args)
+    if op == "decode":
+        payload = dict(encoded)
+        if forge:
+            payload.update(dict(forge))
+        if not expect_error:
+            raise ValueError("decode golden rows require expect_error")
+        return {
+            "id": vector_id,
+            "op": "decode",
+            "payload": payload,
+            "expect_error": str(expect_error),
+        }
+    if forge:
+        raise ValueError("forge is only valid for decode golden rows")
+    return {
+        "id": vector_id,
+        "op": "roundtrip",
+        "args": dict(args),
+        "expect": {
+            "candidate": encoded["candidate"],
+            "failure_reason": encoded["failure_reason"],
+        },
+    }
+
+
+def emit_evaluation_ir_golden() -> list[dict[str, Any]]:
+    """Encoder-owned golden corpus. Not a second candidate policy."""
+    return [
+        emit_golden_vector(
+            vector_id="complete_pass",
+            return_value=0.08,
+            cost=0.02,
+            turnover=0.15,
+            coverage=1.0,
+            collapsed=0,
+            n_expected=4,
+            n_cells=4,
+            n_complete=4,
+            n_collapsed=0,
+            n_broken=0,
+        ),
+        emit_golden_vector(
+            vector_id="partial_cells",
+            return_value=0.12,
+            cost=0.01,
+            turnover=0.4,
+            coverage=0.75,
+            collapsed=0,
+            n_expected=4,
+            n_cells=4,
+            n_complete=3,
+        ),
+        emit_golden_vector(
+            vector_id="n_expected_zero",
+            n_expected=0,
+            n_cells=0,
+            n_complete=0,
+        ),
+        emit_golden_vector(
+            vector_id="collapsed",
+            n_expected=4,
+            n_cells=4,
+            n_complete=4,
+            n_collapsed=1,
+        ),
+        emit_golden_vector(
+            vector_id="broken",
+            n_expected=4,
+            n_cells=4,
+            n_complete=4,
+            n_broken=1,
+        ),
+        emit_golden_vector(
+            vector_id="n_cells_mismatch",
+            n_expected=4,
+            n_cells=3,
+            n_complete=3,
+        ),
+        emit_golden_vector(
+            vector_id="custom_failure_reason",
+            n_expected=4,
+            n_cells=4,
+            n_complete=3,
+            failure_reason="operator_halt",
+        ),
+        emit_golden_vector(
+            vector_id="complete_clears_supplied_reason",
+            n_expected=2,
+            n_cells=2,
+            n_complete=2,
+            n_collapsed=0,
+            n_broken=0,
+            failure_reason="should_not_stick",
+        ),
+        emit_golden_vector(
+            vector_id="unknown_field_reject",
+            op="decode",
+            expect_error="unknown field",
+            forge={"go": True},
+            return_value=0.0,
+            cost=0.0,
+            turnover=0.0,
+            coverage=1.0,
+            collapsed=0,
+            n_expected=2,
+            n_cells=2,
+            n_complete=2,
+        ),
+        emit_golden_vector(
+            vector_id="smuggled_candidate_partial",
+            op="decode",
+            expect_error="job_candidate_grade",
+            forge={"candidate": True},
+            n_expected=4,
+            n_cells=4,
+            n_complete=3,
+        ),
+    ]
+
+
+def dumps_evaluation_ir_golden() -> str:
+    return "".join(
+        json.dumps(row, ensure_ascii=True, separators=(",", ":")) + "\n"
+        for row in emit_evaluation_ir_golden()
+    )
+
+
+def write_evaluation_ir_golden(*, root: Path | None = None) -> Path:
+    if root is None:
+        cwd = Path.cwd().resolve()
+        if (cwd / "pyproject.toml").is_file() and (cwd / "tests").is_dir():
+            root = cwd
+        else:
+            root = repo_root()
+    path = root / GOLDEN_REL
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(dumps_evaluation_ir_golden(), encoding="utf-8")
+    return path
+
+
 __all__ = [
     "ALLOWED_FIELDS",
     "CANONICAL_FIELDS",
     "EVALUATION_IR_VERSION",
     "EvaluationIR",
+    "GOLDEN_REL",
     "candidate_from_job_artifact",
     "decode_evaluation_ir",
+    "dumps_evaluation_ir_golden",
+    "emit_evaluation_ir_golden",
+    "emit_golden_vector",
     "encode_evaluation_ir",
     "job_candidate_grade",
+    "write_evaluation_ir_golden",
 ]
+
+
+if __name__ == "__main__":
+    print(write_evaluation_ir_golden())

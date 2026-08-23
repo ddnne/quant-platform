@@ -14,6 +14,8 @@ from research.evaluation_ir import (
     EVALUATION_IR_VERSION,
     candidate_from_job_artifact,
     decode_evaluation_ir,
+    dumps_evaluation_ir_golden,
+    emit_evaluation_ir_golden,
     encode_evaluation_ir,
     job_candidate_grade as ir_grade,
 )
@@ -21,6 +23,7 @@ from research.evaluation_ir import (
 GOLDEN_PATH = (
     Path(__file__).resolve().parents[1] / "specs" / "evaluation_ir" / "golden.jsonl"
 )
+_GRADE_KEYS = ("n_expected", "n_cells", "n_complete", "n_collapsed", "n_broken")
 
 
 def _load_golden() -> list[dict[str, Any]]:
@@ -35,6 +38,10 @@ def _load_golden() -> list[dict[str, Any]]:
 def _canonical_digest(payload: Mapping[str, Any]) -> str:
     blob = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+
+def _counts(payload: Mapping[str, Any]) -> dict[str, int]:
+    return {key: int(payload[key]) for key in _GRADE_KEYS}
 
 
 def test_canonical_fields_and_version() -> None:
@@ -204,17 +211,43 @@ def test_job_artifact_unknown_ir_field_rejected() -> None:
         )
 
 
+def test_golden_is_encoder_owned() -> None:
+    emitted = emit_evaluation_ir_golden()
+    assert _load_golden() == emitted
+    assert GOLDEN_PATH.read_text(encoding="utf-8") == dumps_evaluation_ir_golden()
+    ids = {row["id"] for row in emitted}
+    assert {
+        "n_expected_zero",
+        "n_cells_mismatch",
+        "collapsed",
+        "broken",
+        "smuggled_candidate_partial",
+    } <= ids
+
+
 @pytest.mark.parametrize("row", _load_golden(), ids=lambda row: row["id"])
 def test_shared_golden_vectors(row: dict[str, Any]) -> None:
     if row["op"] == "decode":
+        payload = row["payload"]
         with pytest.raises(ValueError, match=row["expect_error"]):
-            decode_evaluation_ir(row["payload"])
+            decode_evaluation_ir(payload)
+        grade = job_candidate_grade(**_counts(payload))
+        if payload.get("candidate") is True and grade is False:
+            assert row["expect_error"] == "job_candidate_grade"
         return
     encoded = encode_evaluation_ir(**row["args"])
     expect = row["expect"]
+    grade = job_candidate_grade(**_counts(encoded))
+    assert encoded["candidate"] is grade
     assert encoded["candidate"] is expect["candidate"]
     assert encoded["failure_reason"] == expect["failure_reason"]
     decoded = decode_evaluation_ir(encoded)
-    assert decoded.candidate is expect["candidate"]
+    assert decoded.candidate is grade
     assert decoded.failure_reason == expect["failure_reason"]
+    assert decoded.to_dict() == encoded
     assert _canonical_digest(encoded) == _canonical_digest(decoded.to_dict())
+    if grade is False:
+        forged = dict(encoded)
+        forged["candidate"] = True
+        with pytest.raises(ValueError, match="job_candidate_grade"):
+            decode_evaluation_ir(forged)
