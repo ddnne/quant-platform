@@ -128,7 +128,9 @@ def _collect_event_entries(
                 prior_eps=ev.get("prior_eps"),
             )
             disc_time = ev.get("disc_time")
-            event_time = ev.get("event_time") or ev.get("available_at")
+            event_time = ev.get("event_time")
+            if not disc_time:
+                event_time = None
             idx, entry_date, _meta = event_post_entry_bar_index(
                 date_to_idx,
                 disc_date=disc,

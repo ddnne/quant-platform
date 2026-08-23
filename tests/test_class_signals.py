@@ -244,6 +244,16 @@ def test_event_post_pit_entry_no_lookahead():
     assert m4["time_known"] is False
     assert m4["look_ahead"] is False
 
+    # Invented date-start event_time is not a known clock
+    idx_mid, ed_mid, m_mid = event_post_entry_bar_index(
+        date_to_idx,
+        disc_date="2023-08-31",
+        disc_time=None,
+        event_time="2023-08-31T00:00:00+09:00",
+    )
+    assert ed_mid == "2023-09-01"
+    assert m_mid["time_known"] is False
+
     # Non-trading disc_date → first trading bar after calendar day
     weekend = {
         "2023-09-01": 0,

@@ -73,13 +73,20 @@ def event_post_available_at_from_fields(
     d = str(disc_date or "")[:10]
     et = str(event_time).strip() if event_time else ""
     if et and "T" in et:
-        # Prefer explicit full timestamp already on the row
-        return et, {
-            "mode": "event_time",
-            "disc_date": d or et[:10],
-            "available_at": et,
-            "time_known": True,
-        }
+        t_part = et.split("T", 1)[1][:8]
+        if len(t_part) == 5:
+            t_part = t_part + ":00"
+        hhmmss = parse_disc_time_hhmmss(disc_time)
+        # Date-start invent (T00:00:00) is not a known print clock.
+        if t_part == "00:00:00" and not hhmmss:
+            et = ""
+        else:
+            return et, {
+                "mode": "event_time",
+                "disc_date": d or et[:10],
+                "available_at": et,
+                "time_known": True,
+            }
     hhmmss = parse_disc_time_hhmmss(disc_time)
     if d and hhmmss:
         aa = f"{d}T{hhmmss}+09:00"
