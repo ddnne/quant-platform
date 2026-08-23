@@ -58,6 +58,8 @@ def test_default_r2_put_documents_toctou_not_atomic() -> None:
     assert "TOCTOU" in text
     assert "not the immutable authority" in text
     assert "Worker onlyIf" in text
+    assert "TOCTOU" in (r2_io.__doc__ or "")
+    assert r2_io.python_cli_put_is_not_immutable_authority is True
 
 
 def test_create_only_head_success_skips_put(tmp_path: Path, monkeypatch) -> None:

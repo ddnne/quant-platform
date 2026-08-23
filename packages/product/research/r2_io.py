@@ -1,4 +1,8 @@
-"""R2 object put and get via wrangler. Local FS is not SoT."""
+"""R2 object put and get via wrangler. Local FS is not SoT.
+
+Python default_r2_put(create_only=True) is head-then-put TOCTOU, not
+immutable create-if-absent. Worker onlyIf is the immutable authority.
+"""
 
 from __future__ import annotations
 
@@ -27,6 +31,9 @@ DEFAULT_WRANGLER_CONFIG = (
 _REPO_ROOT = REPO_ROOT
 _DEFAULT_WRANGLER = DEFAULT_WRANGLER
 _DEFAULT_WRANGLER_CONFIG = DEFAULT_WRANGLER_CONFIG
+
+# Comment-level invariant: CLI put is head-then-put TOCTOU, not create-if-absent.
+python_cli_put_is_not_immutable_authority: bool = True
 
 
 class R2IOError(ValueError):
@@ -196,4 +203,5 @@ __all__ = [
     "R2IOError",
     "default_r2_get_object",
     "default_r2_put",
+    "python_cli_put_is_not_immutable_authority",
 ]
