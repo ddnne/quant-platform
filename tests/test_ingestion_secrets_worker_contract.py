@@ -1,8 +1,9 @@
-"""Static security contract for the Cloudflare J-Quants secret proxy.
+"""JSON/catalog identity for the J-Quants secret-proxy allowlists.
 
-The Worker is TypeScript and deploys separately, so these offline tests pin
-the cross-runtime authority boundary without duplicating the allowed paths:
-the checked-in Premium JSON contract is the sole whitelist source.
+Worker request/auth/upstream behavior is executed in
+``platform/workers/ingestion-secrets/src/index.test.ts``. These tests pin
+the checked-in JSON contracts to the Python catalog sets — contract identity,
+not Worker source greps.
 """
 
 from __future__ import annotations
@@ -20,9 +21,6 @@ CONTRACT_PATH = (
 ADDON_CONTRACT_PATH = (
     ROOT / "packages" / "data_plane" / "data_contracts" / "jquants_proxy_addons.json"
 )
-WORKER_PATH = (
-    ROOT / "platform" / "workers" / "ingestion-secrets" / "src" / "index.ts"
-)
 
 
 def _contract_paths() -> set[str]:
@@ -39,22 +37,13 @@ def _addon_contract_paths() -> set[str]:
 
 
 def test_secret_proxy_whitelist_source_is_exact_premium_contract():
-    source = WORKER_PATH.read_text(encoding="utf-8")
     expected = {DATASETS[dataset_id]["path"] for dataset_id in PREMIUM_CORE_DATASETS}
 
     assert _contract_paths() == expected
     assert len(expected) == 23
-    assert (
-        'import premiumContract from '
-        '"../../../../packages/data_plane/data_contracts/jquants_premium_core.json"'
-    ) in source
-    assert "...premiumContract.datasets, ...addonProxyContract.datasets" in source
-    assert "JQUANTS_PROXY_PATHS.has(body.path)" in source
-    assert 'path.startsWith("/v2/")' not in source
 
 
 def test_secret_proxy_preserves_exact_catalogued_addons_via_shared_contract():
-    source = WORKER_PATH.read_text(encoding="utf-8")
     addon_paths = {
         str(spec["path"])
         for spec in DATASETS.values()
@@ -63,29 +52,3 @@ def test_secret_proxy_preserves_exact_catalogued_addons_via_shared_contract():
     assert addon_paths
     assert _addon_contract_paths() == addon_paths
     assert _contract_paths().isdisjoint(addon_paths)
-    assert (
-        'import addonProxyContract from '
-        '"../../../../packages/data_plane/data_contracts/jquants_proxy_addons.json"'
-    ) in source
-
-
-def test_secret_proxy_upstream_is_fixed_get_and_response_is_streamed():
-    source = WORKER_PATH.read_text(encoding="utf-8")
-
-    assert 'value.method !== undefined && value.method !== "GET"' in source
-    assert 'method: "GET"' in source
-    assert "method: body.method" not in source
-    assert "body.method ||" not in source
-    assert 'redirect: "manual"' in source
-    assert "new Response(upstream.body" in source
-    assert "await upstream.text()" not in source
-
-
-def test_secret_proxy_auth_is_required_before_forwarding():
-    source = WORKER_PATH.read_text(encoding="utf-8")
-    auth_check = source.index("await tokenMatches")
-    whitelist_check = source.index("JQUANTS_PROXY_PATHS.has(body.path)")
-    upstream_fetch = source.index("await fetch(target.toString()")
-
-    assert auth_check < whitelist_check < upstream_fetch
-    assert "crypto.subtle.timingSafeEqual" in source
