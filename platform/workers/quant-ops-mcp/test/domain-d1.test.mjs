@@ -3,7 +3,12 @@ import { readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 
-import { callOpsTool } from "../src/domain.js";
+import {
+  callOpsTool,
+  classifyRawAcquisition,
+  JSDA_UPSTREAM_LOCATORS,
+  syncDatasetState,
+} from "../src/domain.js";
 import { GOVERNED_DATASETS } from "../src/governed.js";
 import { DurableDailyQuota, QuotaExceeded } from "../src/quota.js";
 
@@ -151,5 +156,29 @@ test("Ops queries run against the complete ingestion D1 migration sequence", asy
   const sync = await callOpsTool(d1(db), "sync_status", {});
   assert.equal(sync.watermarks.length, 1);
   assert.equal(sync.latest_change_seq, null);
+  assert.equal(raw.totals.total, 1);
+  assert.equal(raw.attestations[0].acquisition_state, "EXPECTED_AND_CAPTURED");
   db.close();
+});
+
+test("applied_cursor null is never CURRENT even when export lag is 0", () => {
+  assert.equal(
+    syncDatasetState({ exported: 10, applied: null, lag: 0, changeLogRows: 1 }),
+    "EXPORT_CURRENT_APPLY_UNPINNED",
+  );
+  assert.equal(
+    syncDatasetState({ exported: 10, applied: 10, lag: 0, changeLogRows: 1 }),
+    "CURRENT",
+  );
+});
+
+test("raw zero-row complete is empty-with-evidence not coverage complete", () => {
+  assert.equal(
+    classifyRawAcquisition({ completeness: "COMPLETE", row_count: 0, raw_bytes: 12 }),
+    "EXPECTED_EMPTY_WITH_EVIDENCE",
+  );
+  assert.equal(
+    JSDA_UPSTREAM_LOCATORS.jsda_otc_bond_reference_prices.includes("market.jsda.or.jp"),
+    true,
+  );
 });

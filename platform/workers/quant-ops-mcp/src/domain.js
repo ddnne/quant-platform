@@ -2,6 +2,15 @@
 
 import { GOVERNED_DATASETS, GOVERNED_DATASET_SET } from "./governed.js";
 
+/** Official JSDA product/index locators. Overlay when inventory SLA omits them. */
+export const JSDA_UPSTREAM_LOCATORS = Object.freeze({
+  jsda_otc_bond_reference_prices:
+    "https://market.jsda.or.jp/shijyo/saiken/baibai/baisanchi/index.html",
+  jsda_tokyo_repo_rates: "https://www.jsda.or.jp/shiryoshitsu/toukei/trr/index.html",
+  jsda_corporate_bond_transactions:
+    "https://www.jsda.or.jp/shiryoshitsu/toukei/saiken_torihiki/",
+});
+
 const STRING = { type: "string" };
 const OPTIONAL_DATASET = {
   dataset: { ...STRING, minLength: 1, maxLength: 160 },
@@ -42,6 +51,54 @@ export const OPS_TOOLS = Object.freeze([
  * @param {Record<string, unknown>} properties
  * @param {string[]} required
  */
+function parseSla(raw) {
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) return { ...raw };
+  if (typeof raw !== "string" || !raw.trim()) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function overlayInventoryRow(row) {
+  const sla = parseSla(row.sla);
+  const loc = JSDA_UPSTREAM_LOCATORS[row.dataset_id];
+  if (loc && !sla.upstream_locator) sla.upstream_locator = loc;
+  return { ...row, sla };
+}
+
+/** Raw acquisition ≠ dataset Coverage COMPLETE. */
+export function classifyRawAcquisition(row) {
+  const completeness = String(row?.completeness || "");
+  const rows = Number(row?.row_count ?? 0);
+  const bytes = Number(row?.raw_bytes ?? 0);
+  if (completeness === "FAILED") return "DOWNLOAD_FAILED";
+  if (completeness !== "COMPLETE") return "UNVERIFIED";
+  if (rows > 0) return "EXPECTED_AND_CAPTURED";
+  if (bytes > 0) return "EXPECTED_EMPTY_WITH_EVIDENCE";
+  return "SOURCE_NOT_PUBLISHED";
+}
+
+/**
+ * CURRENT requires a local applied cursor. Export lag 0 with applied_cursor null
+ * is EXPORT_CURRENT_APPLY_UNPINNED, never CURRENT.
+ */
+export function syncDatasetState({ exported, applied, lag, changeLogRows }) {
+  if (exported == null) {
+    return changeLogRows === 0 ? "CHANGE_LOG_EMPTY" : "EXPORT_CURSOR_NULL";
+  }
+  if (applied == null) {
+    if (lag === 0) return "EXPORT_CURRENT_APPLY_UNPINNED";
+    if (lag != null && lag > 0) return "LAGGING_APPLY_UNPINNED";
+    return "APPLY_UNPINNED";
+  }
+  if (lag === 0 && Number(applied) === Number(exported)) return "CURRENT";
+  if (lag != null && lag > 0) return "LAGGING";
+  return "UNKNOWN";
+}
+
 function tool(name, description, properties = {}, required = []) {
   /** @type {Record<string, unknown>} */
   const inputSchema = {
@@ -404,12 +461,41 @@ export async function callOpsTool(db, name, rawArguments) {
       where = " WHERE dataset = ?";
       binds.push(datasetArg(args.dataset));
     }
+    const totals = await first(db,
+      `SELECT COUNT(*) AS total,
+              SUM(CASE WHEN completeness = 'COMPLETE' THEN 1 ELSE 0 END) AS complete,
+              SUM(CASE WHEN completeness IS NULL OR completeness != 'COMPLETE' THEN 1 ELSE 0 END) AS incomplete,
+              SUM(CASE WHEN IFNULL(row_count, 0) = 0 OR IFNULL(raw_bytes, 0) = 0 THEN 1 ELSE 0 END) AS zero_byte_or_zero_row,
+              SUM(CASE WHEN completeness = 'FAILED' THEN 1 ELSE 0 END) AS failed
+         FROM raw_retention_manifests${where}`, binds);
+    const unresolvedPred = "completeness IS NULL OR completeness != 'COMPLETE'";
+    const oldestWhere = where ? `${where} AND (${unresolvedPred})` : ` WHERE ${unresolvedPred}`;
+    const oldest = await first(db,
+      `SELECT dataset, run_id, created_at, completeness, row_count, raw_bytes
+         FROM raw_retention_manifests${oldestWhere}
+        ORDER BY created_at ASC LIMIT 1`, binds);
     const rows = await all(db,
       `SELECT dataset, run_id, manifest_key, page_count, row_count, raw_bytes,
               data_digest, completeness, created_at
          FROM raw_retention_manifests${where}
         ORDER BY run_id DESC, dataset LIMIT 500`, binds);
-    return { plane: "ops_current", mutable: true, attestations: rows };
+    return {
+      plane: "ops_current",
+      mutable: true,
+      totals: {
+        total: Number(totals?.total || 0),
+        complete: Number(totals?.complete || 0),
+        incomplete: Number(totals?.incomplete || 0),
+        zero_byte_or_zero_row: Number(totals?.zero_byte_or_zero_row || 0),
+        failed: Number(totals?.failed || 0),
+      },
+      oldest_unresolved: oldest || null,
+      attestations: (rows || []).map((row) => ({
+        ...row,
+        acquisition_state: classifyRawAcquisition(row),
+      })),
+      note: "raw acquisition COMPLETE is not dataset Coverage COMPLETE",
+    };
   }
 
   if (name === "source_inventory") {
@@ -418,12 +504,13 @@ export async function callOpsTool(db, name, rawArguments) {
               collection_window, expected_frequency, coverage_segment_granularity,
               research_eligible, enabled, sla
          FROM endpoint_inventory ORDER BY source, governance_tier, dataset_id LIMIT 500`);
+    const overlaid = (inventory || []).map(overlayInventoryRow);
     return {
       plane: "ops_current", mutable: true,
-      inventory_count: inventory.length,
-      governed_count: inventory.filter((e) => e.governance_tier === "governed").length,
-      experimental_count: inventory.filter((e) => e.governance_tier === "experimental").length,
-      inventory,
+      inventory_count: overlaid.length,
+      governed_count: overlaid.filter((e) => e.governance_tier === "governed").length,
+      experimental_count: overlaid.filter((e) => e.governance_tier === "experimental").length,
+      inventory: overlaid,
     };
   }
 
@@ -474,6 +561,7 @@ export async function callOpsTool(db, name, rawArguments) {
         WHERE projection_generation_id IS NOT NULL LIMIT 20`);
     if (gens.length > 1) status = "DEGRADED_MIXED_GENERATION";
     const stale = status === "STALE" || status === "DEGRADED_MIXED_GENERATION";
+    const refreshSuccess = status === "FRESH" && !stale;
     return {
       plane: "ops_current", mutable: true,
       projection_status: status,
@@ -485,30 +573,104 @@ export async function callOpsTool(db, name, rawArguments) {
       distinct_projection_generations: gens.map((r) => r.g),
       stale,
       projection_version: metadata.projection_version,
+      last_known_good: stale ? {
+        generated_at: metadata.generated_at,
+        source_generation: metadata.source_generation,
+        not_fresh: true,
+      } : null,
+      stages: {
+        refresh_attempt: true,
+        refresh_success: refreshSuccess,
+        projection_generated: Boolean(metadata.generated_at),
+        d1_applied: Boolean(active?.generation_id),
+        mcp_visible: true,
+      },
     };
   }
 
   if (name === "collection_sla_status") {
+    const projMeta = await first(db,
+      `SELECT generated_at, status FROM ops_projection_metadata ORDER BY generated_at DESC LIMIT 1`);
+    let projectionStale = true;
+    if (projMeta?.generated_at) {
+      const genAt = Date.parse(String(projMeta.generated_at));
+      const age = Number.isNaN(genAt) ? null : Math.max(0, Math.floor((Date.now() - genAt) / 1000));
+      const st = String(projMeta.status || "");
+      projectionStale = st !== "FRESH" || (age != null && age > 86400);
+    }
+    const projectFromInventory = async (datasetFilter) => {
+      const binds = [];
+      let where = "";
+      if (datasetFilter) {
+        where = " WHERE dataset_id = ?";
+        binds.push(datasetFilter);
+      }
+      const inv = await all(db,
+        `SELECT dataset_id, sla FROM endpoint_inventory${where} ORDER BY dataset_id LIMIT 500`,
+        binds);
+      const marks = await all(db,
+        "SELECT dataset, last_event_date FROM ingestion_watermarks LIMIT 500");
+      const markMap = new Map((marks || []).map((m) => [String(m.dataset), m.last_event_date ?? null]));
+      return (inv || []).map((row) => {
+        const sla = parseSla(row.sla);
+        const loc = JSDA_UPSTREAM_LOCATORS[row.dataset_id];
+        if (loc && !sla.upstream_locator) sla.upstream_locator = loc;
+        let current_state = "UNKNOWN";
+        let state_reason = "sla_table_empty_projected_from_inventory";
+        if (projectionStale) {
+          current_state = "PROJECTION_STALE";
+          state_reason = "ops_projection_stale";
+        } else if (row.dataset_id === "equities_bars_daily_am") {
+          current_state = "NOT_PUBLISHED";
+          state_reason = "am_publication_not_proven_for_session";
+        }
+        return {
+          dataset_id: row.dataset_id,
+          expected_after: sla.expected_after ?? null,
+          usable_by: sla.usable_by ?? null,
+          freshness_policy: sla.freshness_policy ?? null,
+          timezone: sla.timezone || "Asia/Tokyo",
+          upstream_locator: sla.upstream_locator ?? null,
+          current_state,
+          state_reason,
+          last_event_date: markMap.get(row.dataset_id) ?? null,
+          last_checked_at: new Date().toISOString(),
+        };
+      });
+    };
     if (args.dataset !== undefined) {
       const dataset = datasetArg(args.dataset, { governedOnly: false });
       const sla = await first(db,
         `SELECT dataset_id, expected_after, usable_by, freshness_policy, timezone,
                 current_state, state_reason, state_since, last_event_date, last_checked_at
            FROM collection_sla_status WHERE dataset_id = ? LIMIT 1`, [dataset]);
+      if (sla) {
+        return { plane: "ops_current", mutable: true, dataset, sla };
+      }
+      const projected = await projectFromInventory(dataset);
       return {
         plane: "ops_current", mutable: true, dataset,
-        sla: sla || { dataset, current_state: "UNKNOWN", reason: "SLA status not projected" },
+        sla: projected[0] || { dataset, current_state: "UNKNOWN", reason: "SLA status not projected" },
+        source: "inventory_projection",
       };
     }
     const rows = await all(db,
       `SELECT dataset_id, expected_after, usable_by, freshness_policy, timezone,
               current_state, state_reason, state_since, last_event_date, last_checked_at
          FROM collection_sla_status ORDER BY dataset_id LIMIT 500`);
+    if (rows.length) {
+      return {
+        plane: "ops_current", mutable: true,
+        status: "AVAILABLE",
+        datasets: rows,
+      };
+    }
+    const projected = await projectFromInventory();
     return {
       plane: "ops_current", mutable: true,
-      status: rows.length ? "AVAILABLE" : "UNKNOWN",
-      datasets: rows,
-      ...(rows.length ? {} : { reason: "collection_sla_status projection empty" }),
+      status: projected.length ? "PROJECTED_FROM_INVENTORY" : "UNKNOWN",
+      datasets: projected,
+      ...(projected.length ? {} : { reason: "collection_sla_status projection empty" }),
     };
   }
 
@@ -529,17 +691,21 @@ export async function callOpsTool(db, name, rawArguments) {
         latest == null || exported == null || Number.isNaN(exported)
           ? null
           : Math.max(0, latest - exported);
-      let state = "UNKNOWN";
-      if (exported == null) {
-        state = changeLogRows === 0 ? "CHANGE_LOG_EMPTY" : "EXPORT_CURSOR_NULL";
-      } else if (lag === 0) state = "CURRENT";
-      else if (lag != null && lag > 0) state = "LAGGING";
+      const applied = null;
+      const state = syncDatasetState({
+        exported: Number.isNaN(exported) ? null : exported,
+        applied,
+        lag,
+        changeLogRows,
+      });
       return {
         dataset: row.dataset,
         last_event_date: row.last_event_date ?? null,
         last_ingested_at: row.last_ingested_at ?? null,
+        source_cursor: latest,
         exported_cursor: Number.isNaN(exported) ? null : exported,
-        applied_cursor: null,
+        applied_cursor: applied,
+        ready_pinned_cursor: null,
         lag,
         state,
       };
