@@ -10,7 +10,7 @@ extracts landed. Leftover occupancy **HOLD** in `daily_path.ts`.
 `coverage_receipts`, `snapshot_publish_policy`, `snapshot_coverage_proof`,
 `snapshot_persist`, `snapshot_read`, `eval_orchestrate`,
 `ingestion-premium/collection_receipts.ts` — **DONE** in §7.  
-**Live strategy at `a7d1e93d`:** §10 — remaining extracts vs HOLD. YAML
+**Live strategy at `f34b9dcc`:** §10 — remaining extracts vs HOLD. YAML
 file-count waste is closed. Size is not waste. Do not extract leftover
 occupancy. Do not add YAML. Do not declare Phase 7 GO.  
 **Mass / READY / Phase 7:** unchanged (NO-GO / not declared / OFF)
@@ -364,7 +364,7 @@ and COMPLETE predicates unchanged, generated files still generated.
 
 ---
 
-## 10. Current remaining extracts vs HOLD (HEAD a7d1e93d)
+## 10. Current remaining extracts vs HOLD (HEAD f34b9dcc)
 
 This is the **live** refactor strategy for “the code is full of waste.”
 §§1–9 remain the plan at `41003a5` / status at `5c9b962`. Follow this
@@ -519,18 +519,23 @@ json response helper is one module (`a1428a21`; `http_json.ts` is
 `Response.json` only, no Cache-Control; not gateway charset+no-store);
 premium export / JSDA / secrets / mass-eval / ai-gateway query-token
 pins (`809e45af`; `6be287db`; `7f97497d`; `6138b6ae`; `a7d1e93d`) —
-**LANDED**. Remaining mixed at this SHA: leftover occupancy, unique22,
+**LANDED**. After `a7d1e93d`: reconstitution evidence dry-run uses
+`put_research_artifact` (`cb613667`; last production `default_r2_put(`
+caller outside `r2_io.py` closed; still never live-puts); premium
+export success uses json helper (`c0b07935`); R2 writer digest pin
+uses sha256 helper (`accbb9d9`); ops unpublished policy_version echo
+pin (`159d8975`); ops-mcp OAuth bearer header-only (`f34b9dcc`) —
+**LANDED**. Remaining mixed HOLD unchanged: leftover occupancy, unique22,
 GATEWAY_TOKEN P632B-03, persist live upsert, compact catalog,
-`verify_all` vs `verify_ci` split (**HOLD**). Agent-capable fail-closed
-HTTP holes named at `03409ccd` remain **LANDED**. Ingest `authorized()`
-plaintext `===` is **LANDED** (closed). Premium `json()` two copies are
-**LANDED**. Do not schedule leftover occupancy extract. Do not YAML +N.
-Do not declare Phase 7 GO. Do not claim ci-aggregate Worker exists live.
+`verify_all` vs `verify_ci`. Agent-capable remaining `default_r2_put`
+reconstitution caller is **LANDED**. Do not schedule leftover occupancy.
+Do not YAML +N. Do not declare Phase 7 GO. Do not claim ci-aggregate
+Worker exists live.
 
 | Later | Mixed surface | Authority to pick | Must not |
 |------:|---------------|-------------------|----------|
 | 1 | `BackfillPlanner` (`ops/backfill_planner.py`, 666) vs `plan_required_segments` (`coverage_ledger.py`) | **ops product** inventory planner. Tip-snapshot wire **DONE** (`792ae2b`): AM bars / earnings calendar call `plan_required_segments` (no month-chunk). JSDA refresh inventory replay **DONE** (`40d1aa90`). OTC JSON grain **DONE** (`26a6ca5e`): `segment_granularity=official_archive_index_day`. index_text CLIs **DONE**: `refresh_coverage_ledger --index-text` (`34dc85df`); `write_collection_receipts --index-text` (`db569fc7`); ops projection `--otc-index-html` (`9524dab7`); ingest passes fetched year-index HTML (`ddc40ae9`). Bounded-history JQ month chunks **DONE** (`bcd52f47`): all JQ jobs come from `plan_required_segments` (bars/fins stay calendar_month jobs; missing V3 does not invent official domain or COMPLETE). BackfillPlanner `index_text` **DONE** (`2cbd894d`). Shared official-index local HTML reader **DONE** (`2323f6a5`; `cf_premium_backfill` uses it at `2b82ec7d`). | Invent COMPLETE; calendar-walk OTC; delete one planner without a dated ops brief |
-| 2 | Python `r2_io.py` (431) vs Worker children-then-manifest (`http.ts` `putChildrenThenManifest`; digest mismatch **409**) | Worker is immutable authority. Python stays **non-authority** (`python_cli_put_is_not_immutable_authority`; `authoritative=True` refused). Remote `default_r2_put` never CLI-puts (`0b81eedb`; `QP_ALLOW_PYTHON_R2_PUT=1` does not resurrect TOCTOU). Worker POST **DONE** (`5103b26b`). `put_research_artifact` **DONE** (`d6567268`). After `3b64bdfc`: `cf_daily_path_job` **DONE** (`017a43c6`); `cf_mass_eval_run` **DONE** (`0a8ced34`). Remaining `default_r2_put` caller: `reconstitution_evidence` dry_run only. | Treat “TOCTOU recorded in tests” as done; make Python CLI the SoT |
+| 2 | Python `r2_io.py` (431) vs Worker children-then-manifest (`http.ts` `putChildrenThenManifest`; digest mismatch **409**) | Worker is immutable authority. Python stays **non-authority** (`python_cli_put_is_not_immutable_authority`; `authoritative=True` refused). Remote `default_r2_put` never CLI-puts (`0b81eedb`; `QP_ALLOW_PYTHON_R2_PUT=1` does not resurrect TOCTOU). Worker POST **DONE** (`5103b26b`). `put_research_artifact` **DONE** (`d6567268`). After `3b64bdfc`: `cf_daily_path_job` **DONE** (`017a43c6`); `cf_mass_eval_run` **DONE** (`0a8ced34`). Remaining `default_r2_put` caller reconstitution_evidence dry_run **DONE** via `put_research_artifact` dry_run (`cb613667`). Still never live-put. Python still non-authority. | Treat “TOCTOU recorded in tests” as done; make Python CLI the SoT |
 | 3 | `evaluation_ir.ts` (39) façade vs generated `evaluation_ir_codec.generated.ts` (239) vs `evaluation_ir_codec.generated.py` vs `specs/evaluation_ir/schema.json` (67) | Schema is codec SoT. `ALLOWED_FIELDS` generated **DONE** (`d882119`). Encode/decode TS body generated **DONE** (`4661fb14`). Python codec body generated **DONE** (`c9764ff4`). TypedDict generation **DONE** (`e20be4d9`; `evaluation_ir_types.generated.py`). Emit extract **DONE** (`54c1f472`; `evaluation_ir_emit.py`). Façades remain. Grade predicate is already shared (`job_candidate_grade` / `jobCandidateGrade`). | Second grade policy; delete schema; dual-edit field lists forever |
 | 4 | MCP `OPS_TOOLS` strings vs stored `policy_version` (`dataset_coverage.policy_version`; live `collection-coverage/v2`) | Presentation echo **DONE** (Worker `27ff7e62`, Python `3d3e68ab`): both echo stored `policy_version`, not frozen “Coverage V2”. Remaining mixed: live projection is still `collection-coverage/v2` STALE — not unpublished V3 completeness. Do not schedule a second string rewrite. | Unify strings to mint FRESH / COMPLETE 23 |
 | 5 | `scripts/verify_all.sh` skippable helper vs `scripts/verify_ci.sh` authority | **Keep both. Do not merge.** Helper: 3 research workers, `VERIFY_*` skips. Authority: pytest + catalog freeze + IR schema + 7 workers (`ci-aggregate` included), no skips. Merge gate is `verify_ci` plus authenticated `ci-aggregate`. | Fold `verify_ci` into `verify_all`; add GitHub Actions |
@@ -578,6 +583,8 @@ handlers.
 ✗ Claim leftover occupancy / unique22 / GATEWAY_TOKEN P632B-03 / persist live upsert / compact catalog / verify_all vs verify_ci closed at 7a0801a6
 ✗ Claim leftover occupancy / unique22 / GATEWAY_TOKEN P632B-03 / persist live upsert / compact catalog / verify_all vs verify_ci closed at a7d1e93d
 ✗ Claim ingest authorized still plaintext === / premium json() still two copies at a7d1e93d
+✗ Claim leftover occupancy / unique22 / GATEWAY_TOKEN P632B-03 / persist live upsert / compact catalog / verify_all vs verify_ci closed at f34b9dcc
+✗ Claim reconstitution_evidence still calls default_r2_put at f34b9dcc
 ✗ Claim ci-aggregate Worker exists live
 ```
 
