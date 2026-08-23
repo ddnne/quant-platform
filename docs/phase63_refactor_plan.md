@@ -10,7 +10,7 @@ extracts landed. Leftover occupancy **HOLD** in `daily_path.ts`.
 `coverage_receipts`, `snapshot_publish_policy`, `snapshot_coverage_proof`,
 `snapshot_persist`, `snapshot_read`, `eval_orchestrate`,
 `ingestion-premium/collection_receipts.ts` — **DONE** in §7.  
-**Live strategy at `ad49ed96`:** §10 — remaining extracts vs HOLD. YAML
+**Live strategy at `81fecac8`:** §10 — remaining extracts vs HOLD. YAML
 file-count waste is closed. Size is not waste. Do not extract leftover
 occupancy. Do not add YAML. Do not declare Phase 7 GO.  
 **Mass / READY / Phase 7:** unchanged (NO-GO / not declared / OFF)
@@ -364,7 +364,7 @@ and COMPLETE predicates unchanged, generated files still generated.
 
 ---
 
-## 10. Current remaining extracts vs HOLD (HEAD ad49ed96)
+## 10. Current remaining extracts vs HOLD (HEAD 81fecac8)
 
 This is the **live** refactor strategy for “the code is full of waste.”
 §§1–9 remain the plan at `41003a5` / status at `5c9b962`. Follow this
@@ -477,10 +477,20 @@ metrics, eval_orchestrate, panels defaultPeriods + missing R2/D1,
 propose-thesis HTTP 403 + window_tweak, ai_gateway unbound, parseRequest
 export, GET 405 / freezePayload /health / nets_only HTTP, json no-store,
 export D1/changes arg 400s, projection shared OTC reader, snapshot
-`index_text=None` — **LANDED**. Remaining HOLD: leftover occupancy,
-unique22, GATEWAY_TOKEN P632B-03, persist live upsert, compact catalog,
-`verify_all` vs `verify_ci` split. Do not schedule leftover occupancy
-extract. Do not YAML +N. Do not declare Phase 7 GO.
+`index_text=None` — **LANDED**. After `ad49ed96`: JSDA/premium `/v1/run`
+POST-only (`121c4557`; `41878b82`); JSDA/premium `/health` GET-only
+(`8e8b8c56`; `81fecac8`); `index_text=None` explicit on pipeline /
+range_batch / tokyo-repo (`556cbecc`; `c95cec45`; `3a567e8e`);
+collection receipt SUCCESS is not Coverage COMPLETE (`0e67f719`);
+write-path r2 segments (`0f00ea16`); ci-aggregate health 405/404
+(`3500c1cc`); `jobCandidateGrade` true is not Mass GO (`7335c184`) —
+**LANDED**. Remaining mixed at this SHA (agent-capable before sibling
+commits): mutating premium ops GET (`archive-cold` / prune-changelog
+GET-allowed / parquet-manifest) still have no POST-only. Remaining
+HOLD: leftover occupancy, unique22, GATEWAY_TOKEN P632B-03, persist
+live upsert, compact catalog, `verify_all` vs `verify_ci` split. Do
+not schedule leftover occupancy extract. Do not YAML +N. Do not
+declare Phase 7 GO.
 
 | Later | Mixed surface | Authority to pick | Must not |
 |------:|---------------|-------------------|----------|
@@ -520,6 +530,7 @@ family-slice remaining façade handlers.
 ✗ Treat compiled n=2254 expanded rows as a compact-catalog substitute
 ✗ Fake-split persist_records live upsert
 ✗ Claim mass-eval eval_orchestrate/metrics/ai_gateway_client/panels/propose-thesis HTTP tests or persist_records empty-row unit landed at b1605c36
+✗ Claim mutating premium ops archive-cold / prune-changelog / parquet-manifest are POST-only at 81fecac8
 ```
 
 Success for a later extract commit: one authority moved, G0 green,
