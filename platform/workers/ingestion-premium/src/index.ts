@@ -33,6 +33,7 @@ import {
 } from "./collection_receipts";
 import { upsertRecords, upsertWatermark } from "./persist_records";
 import { fetchDataset } from "./fetch_jq";
+import { sha256HexFromString } from "./sha256";
 
 export interface Env {
   JQUANTS_API_KEY: string;
@@ -75,11 +76,7 @@ function rawRunPrefix(dataset: string, runId: number | null, when: Date): string
 }
 
 async function sha256(value: string): Promise<string> {
-  const bytes = new TextEncoder().encode(value);
-  const digest = await crypto.subtle.digest("SHA-256", bytes);
-  return "sha256:" + [...new Uint8Array(digest)]
-    .map((item) => item.toString(16).padStart(2, "0"))
-    .join("");
+  return `sha256:${await sha256HexFromString(value)}`;
 }
 
 function latestEventDate(rows: Record<string, unknown>[]): string | null {

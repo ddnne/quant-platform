@@ -4,6 +4,8 @@
  * machine-readable manifest that a later converter/Artifacts job can consume.
  */
 
+import { sha256HexFromString } from "./sha256";
+
 export interface ParquetManifestEnv {
   STRUCTURED_BUCKET: R2Bucket;
   INGESTION_RUN_TOKEN?: string;
@@ -13,14 +15,6 @@ function authorized(request: Request, expected: string | undefined): boolean {
   if (!expected) return false;
   const header = request.headers.get("X-Ingestion-Token") || "";
   return header === expected;
-}
-
-async function sha256Hex(text: string): Promise<string> {
-  const buf = new TextEncoder().encode(text);
-  const dig = await crypto.subtle.digest("SHA-256", buf);
-  return Array.from(new Uint8Array(dig))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
 }
 
 export async function handleParquetManifest(
@@ -56,7 +50,7 @@ export async function handleParquetManifest(
     });
   }
 
-  const prefixHash = (await sha256Hex(prefix)).slice(0, 16);
+  const prefixHash = (await sha256HexFromString(prefix)).slice(0, 16);
   const truncated = Boolean(
     (listed as { truncated?: boolean }).truncated,
   );

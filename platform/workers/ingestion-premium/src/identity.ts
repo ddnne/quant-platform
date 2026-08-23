@@ -1,6 +1,7 @@
 /** Contract-driven natural key, event_time, available_at, and persist run identity. */
 
 import type { DatasetSpec } from "./catalog";
+import { sha256HexFromString } from "./sha256";
 
 /** Persist/SCD2 run identity. crypto.randomUUID, not Math.random. */
 export function newRunId(prefix: string): string {
@@ -51,12 +52,6 @@ function pick(row: Record<string, unknown>, spec: DatasetSpec, field: string): u
   return null;
 }
 
-async function sha256(value: string): Promise<string> {
-  const bytes = new TextEncoder().encode(value);
-  const digest = await crypto.subtle.digest("SHA-256", bytes);
-  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-
 export async function naturalKey(
   row: Record<string, unknown>,
   spec: DatasetSpec,
@@ -65,7 +60,7 @@ export async function naturalKey(
   for (const field of spec.natural_key_fields) {
     const value = pick(row, spec, field);
     if (value === null || value === "") {
-      return `hash:sha256:${await sha256(stableJson(row))}`;
+      return `hash:sha256:${await sha256HexFromString(stableJson(row))}`;
     }
     picked[field] = value;
   }

@@ -7,6 +7,7 @@
  * Source: GLM_ARCHIVE_FIX_OK (import adjusted to named export).
  */
 
+import { sha256HexFromBytes } from "./sha256";
 import { r2DatasetSegment } from "./write_path_config";
 
 export interface ArchiveEnv {
@@ -148,12 +149,7 @@ export async function handleArchiveCold(
       )
       .join("\n") + "\n";
   const ndjsonBytes = new TextEncoder().encode(ndjson);
-
-  const digestBuf = await crypto.subtle.digest("SHA-256", ndjsonBytes);
-  const digestBytes = new Uint8Array(digestBuf);
-  const sha256 = Array.from(digestBytes)
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
+  const sha256 = await sha256HexFromBytes(ndjsonBytes);
 
   await env.STRUCTURED_BUCKET.put(r2Key, ndjsonBytes, {
     httpMetadata: { contentType: "application/x-ndjson" },
