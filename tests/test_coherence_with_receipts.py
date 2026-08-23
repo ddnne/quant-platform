@@ -26,6 +26,15 @@ from storage.sqlite_store import SqliteStore
 from tests.test_phase61_coverage_v2 import _signed_digests
 
 
+def _plan_jq_required(dataset: str, target_end: str):
+    """JQ-only plan_required_segments without index_text. OTC would be empty, not weekend COMPLETE."""
+    policy = coverage_contract_for(dataset)
+    assert policy.segment_granularity != "official_archive_index_day"
+    assert "official_archive_index" not in (policy.coverage_mode or "")
+    assert policy.history_mode != "official_archive_index"
+    return plan_required_segments(policy, target_end)
+
+
 @pytest.fixture
 def fixture_db_with_schema():
     """Create a fixture database with all required tables but no data."""
@@ -101,9 +110,7 @@ def fixture_db_with_coverage_without_receipts(fixture_db_with_schema):
     store = SqliteStore(fixture_db_with_schema)
     conn = store._conn
 
-    # Plan and record required segments for a governed dataset
-    policy = coverage_contract_for("fins_summary")
-    required_segments = plan_required_segments(policy, "2025-03-31")
+    required_segments = _plan_jq_required("fins_summary", "2025-03-31")
 
     record_required_segments(conn, required_segments)
     conn.commit()
@@ -118,9 +125,7 @@ def fixture_db_with_complete_coverage_and_receipts(fixture_db_with_schema):
     store = SqliteStore(fixture_db_with_schema)
     conn = store._conn
 
-    # Plan and record required segments for a governed dataset
-    policy = coverage_contract_for("fins_summary")
-    required_segments = plan_required_segments(policy, "2025-03-31")
+    required_segments = _plan_jq_required("fins_summary", "2025-03-31")
 
     record_required_segments(conn, required_segments)
 
@@ -308,9 +313,8 @@ def test_receipts_gate_checks_all_requirements(fixture_db_with_schema):
     store = SqliteStore(fixture_db_with_schema)
     conn = store._conn
 
-    # Create a segment and make it COMPLETE manually
-    policy = coverage_contract_for("fins_summary")
-    required_segments = plan_required_segments(policy, "2025-01-31")
+    # Create a segment and make it COMPLETE manually (JQ fins_summary only).
+    required_segments = _plan_jq_required("fins_summary", "2025-01-31")
     segment = required_segments[0]
 
     # Record as COMPLETE (manually override the evaluation)
@@ -379,8 +383,7 @@ def test_synthetic_receipts_must_match_required_scope(fixture_db_with_schema):
     store = SqliteStore(fixture_db_with_schema)
     conn = store._conn
 
-    policy = coverage_contract_for("fins_summary")
-    required_segments = plan_required_segments(policy, "2025-01-31")
+    required_segments = _plan_jq_required("fins_summary", "2025-01-31")
     segment = required_segments[0]
 
     record_required_segments(conn, [segment])
