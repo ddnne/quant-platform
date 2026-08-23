@@ -1,8 +1,8 @@
 """R2 structured history row normalization authority.
 
 Public import remains ``research.r2_feature_context``. Envelope → tip-compatible
-row shapes only; parse stays in r2_feature_parse; available_at policy stays in
-r2_feature_context.
+row shapes only; parse stays in r2_feature_parse; available_at policy lives in
+r2_available_at.
 """
 
 from __future__ import annotations

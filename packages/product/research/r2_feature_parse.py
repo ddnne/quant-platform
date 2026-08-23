@@ -1,8 +1,8 @@
 """R2 structured JSONL/NDJSON parse authority.
 
 Public import remains ``research.r2_feature_context``. Envelope dicts only;
-normalization lives in r2_feature_normalize; available_at policy stays in
-r2_feature_context.
+normalization lives in r2_feature_normalize; available_at policy lives in
+r2_available_at.
 """
 
 from __future__ import annotations
