@@ -10,12 +10,17 @@ from research.catalog_compiler import (
     COMPILER_VERSION,
     MANIFEST_NAME,
     MIGRATION_NAME,
+    assert_catalog_ids_emit_frozen,
+    assert_compiled_logic_id_sets,
     catalog_artifact_dir,
+    catalog_ids_ts_path,
+    catalog_ids_ts_source,
     compile_catalog,
     compile_row,
 )
-from research.eval_flags import CATALOG_YAML_COUNT_AT_STOP
+from research.eval_flags import CATALOG_AND_PLUS_N_STOPPED, CATALOG_YAML_COUNT_AT_STOP
 from research.unique_logic.catalog import catalog_dir
+from research.unique_logic.constants import RESEARCH_UNIQUE_LOGIC_IDS
 
 
 def test_compiler_row_count_matches_yaml_freeze() -> None:
@@ -82,12 +87,14 @@ def test_persisted_artifacts_match_live_digest() -> None:
 
 
 def test_yaml_stems_lock_to_compiled_migration_ids() -> None:
-    from research.unique_logic.catalog import compiled_migration_ids
-
-    yaml_ids = {p.stem for p in catalog_dir().glob("*.yaml")}
-    compiled = compiled_migration_ids()
-    assert yaml_ids == compiled
-    assert len(yaml_ids) == int(CATALOG_YAML_COUNT_AT_STOP)
+    """compiled migration.jsonl == YAML == RESEARCH_UNIQUE_LOGIC_IDS. One identity pass."""
+    sets = assert_compiled_logic_id_sets()
+    assert sets["migration"] == sets["yaml"] == sets["constants"] == set(
+        RESEARCH_UNIQUE_LOGIC_IDS
+    )
+    assert len(sets["yaml"]) == int(CATALOG_YAML_COUNT_AT_STOP) == 2254
+    assert catalog_dir().is_dir()
+    assert any(catalog_dir().glob("*.yaml"))
 
 
 def test_compiler_source_does_not_exec_or_eval() -> None:
@@ -100,3 +107,55 @@ def test_compiler_source_does_not_exec_or_eval() -> None:
             assert node.func.id not in {"exec", "eval"}
     assert "exec(" not in src
     assert "eval(" not in src
+
+
+def test_catalog_ids_emit_owned_by_compiler() -> None:
+    freeze = assert_catalog_ids_emit_frozen()
+    assert freeze["ok"] is True
+    assert freeze["go"] is False
+    assert CATALOG_AND_PLUS_N_STOPPED is True
+    assert freeze["n_yaml"] == freeze["n_digest"] == freeze["freeze"] == 2254
+    path = catalog_ids_ts_path()
+    generated = catalog_ids_ts_source()
+    assert path.read_text(encoding="utf-8") == generated
+    header = generated.split("export const", 1)[0]
+    assert "research.catalog_compiler" in header
+    assert "n=2254" in header
+    assert "CATALOG_AND_PLUS_N_STOPPED" in header
+    assert "Do not edit by hand" in header
+    script = Path(__file__).resolve().parents[1] / "scripts" / "sync_cf_new_thesis_ids.py"
+    script_src = script.read_text(encoding="utf-8")
+    assert "from research.catalog_compiler import" in script_src
+    assert "catalog_ids_ts_source" in script_src
+    assert "assert_catalog_ids_emit_frozen" in script_src
+    assert "def _catalog_ids_source" not in script_src
+
+
+def test_catalog_ids_emit_fails_if_yaml_count_drifts(monkeypatch) -> None:
+    import research.eval_flags as flags
+    from research.occupancy_guards import CatalogAndPlusNStoppedError
+
+    monkeypatch.setattr(flags, "CATALOG_YAML_COUNT_AT_STOP", 0)
+    try:
+        assert_catalog_ids_emit_frozen()
+        raise AssertionError("yaml count drift must fail while stopped")
+    except CatalogAndPlusNStoppedError as exc:
+        assert "YAML count must not drift" in str(exc)
+
+
+def test_catalog_ids_emit_fails_if_digest_n_drifts(tmp_path, monkeypatch) -> None:
+    import research.catalog_compiler as mod
+    from research.occupancy_guards import CatalogAndPlusNStoppedError
+
+    dest = tmp_path / "research_catalog"
+    dest.mkdir()
+    (dest / MANIFEST_NAME).write_text(
+        '{"digest":"sha256:x","go":false,"n":1,"version":"research_catalog_compiler/v1","yaml_still_present":true}\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "catalog_artifact_dir", lambda root=None: dest)
+    try:
+        assert_catalog_ids_emit_frozen()
+        raise AssertionError("compiler digest n drift must fail while stopped")
+    except CatalogAndPlusNStoppedError as exc:
+        assert "compiler digest n=1" in str(exc)
