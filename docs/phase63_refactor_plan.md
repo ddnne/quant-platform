@@ -10,7 +10,7 @@ extracts landed. Leftover occupancy **HOLD** in `daily_path.ts`.
 `coverage_receipts`, `snapshot_publish_policy`, `snapshot_coverage_proof`,
 `snapshot_persist`, `snapshot_read`, `eval_orchestrate`,
 `ingestion-premium/collection_receipts.ts` — **DONE** in §7.  
-**Live strategy at `f34b9dcc`:** §10 — remaining extracts vs HOLD. YAML
+**Live strategy at `8299ad84`:** §10 — remaining extracts vs HOLD. YAML
 file-count waste is closed. Size is not waste. Do not extract leftover
 occupancy. Do not add YAML. Do not declare Phase 7 GO.  
 **Mass / READY / Phase 7:** unchanged (NO-GO / not declared / OFF)
@@ -364,7 +364,7 @@ and COMPLETE predicates unchanged, generated files still generated.
 
 ---
 
-## 10. Current remaining extracts vs HOLD (HEAD f34b9dcc)
+## 10. Current remaining extracts vs HOLD (HEAD 8299ad84)
 
 This is the **live** refactor strategy for “the code is full of waste.”
 §§1–9 remain the plan at `41003a5` / status at `5c9b962`. Follow this
@@ -405,7 +405,7 @@ numbers). `daily_path.ts` is **1682** (was 1677 in §2).
 | Worker R2 stub | **DONE** (`61c14a0d`): `put_children_then_manifest_via_worker` requires Worker URL+token; no CLI put fallback. Remote CLI put later fenced (`0b81eedb`). |
 | Worker children-then-manifest POST | **DONE** (`5103b26b`): `put_children_then_manifest_via_worker` POSTs `/v1/children-then-manifest` with `X-Mass-Eval-Token`. No CLI put fallback. Unbound URL/token fail closed. |
 | Remote Python CLI-put fence | **DONE** (`0b81eedb`): remote `default_r2_put` never CLI-puts; `QP_ALLOW_PYTHON_R2_PUT=1` does not resurrect TOCTOU. dry_run stays local. |
-| Python job-artifact Worker put | **DONE** after `3b64bdfc`: `put_research_artifact` (`d6567268`); `cf_daily_path_job` (`017a43c6`); `cf_mass_eval_run` (`0a8ced34`). Named remaining callers after wave-7 are gone. `reconstitution_evidence` still `default_r2_put` (dry_run only). |
+| Python job-artifact Worker put | **DONE** after `3b64bdfc`: `put_research_artifact` (`d6567268`); `cf_daily_path_job` (`017a43c6`); `cf_mass_eval_run` (`0a8ced34`). Named remaining callers after wave-7 are gone. `reconstitution_evidence` dry-run uses `put_research_artifact` (`cb613667`). Direct `default_r2_put(` callers outside `r2_io.py` are gone (glob pin `8299ad84`). |
 | Evaluation IR encode/decode | **DONE** (`4661fb14`): `evaluation_ir_codec.generated.ts` emitted from `schema.json`. `evaluation_ir.ts` is façade. `ALLOWED_FIELDS` generated (`d882119`). Python codec body generated **DONE** (`c9764ff4`; `evaluation_ir_codec.generated.py`). Python TypedDicts generated **DONE** (`e20be4d9`; `evaluation_ir_types.generated.py`). Codec emitters extract **DONE** (`54c1f472`; `evaluation_ir_emit.py`). |
 | DO `budget_id` pin | **DONE** (`89415105`): create is not a reserve; string `budget_id` is not occupancy authority. In-memory algebra; live Edge occupancy unproven. |
 | BackfillPlanner JQ required segments | **DONE** (`bcd52f47`): all JQ jobs come from `plan_required_segments`. Bars/fins stay calendar_month jobs. Missing V3 does not invent official domain or COMPLETE. |
@@ -525,12 +525,14 @@ caller outside `r2_io.py` closed; still never live-puts); premium
 export success uses json helper (`c0b07935`); R2 writer digest pin
 uses sha256 helper (`accbb9d9`); ops unpublished policy_version echo
 pin (`159d8975`); ops-mcp OAuth bearer header-only (`f34b9dcc`) —
-**LANDED**. Remaining mixed HOLD unchanged: leftover occupancy, unique22,
-GATEWAY_TOKEN P632B-03, persist live upsert, compact catalog,
-`verify_all` vs `verify_ci`. Agent-capable remaining `default_r2_put`
-reconstitution caller is **LANDED**. Do not schedule leftover occupancy.
-Do not YAML +N. Do not declare Phase 7 GO. Do not claim ci-aggregate
-Worker exists live.
+**LANDED**. After `f34b9dcc`: ci-aggregate json helper is one module
+(`7dfed713`; charset + no-store, not premium); premium ops JSON
+responses use json helper (`77505a8f`); research `default_r2_put(`
+callers glob stays in `r2_io.py` (`8299ad84`) — **LANDED**. Remaining
+mixed HOLD unchanged: leftover occupancy, unique22, GATEWAY_TOKEN
+P632B-03, persist live upsert, compact catalog, `verify_all` vs
+`verify_ci`. Do not schedule leftover occupancy. Do not YAML +N. Do
+not declare Phase 7 GO. Do not claim ci-aggregate Worker exists live.
 
 | Later | Mixed surface | Authority to pick | Must not |
 |------:|---------------|-------------------|----------|
@@ -556,8 +558,9 @@ Retry jitter is `retry_jitter.ts` (`crypto.getRandomValues`). Backoff
 delay helpers live there (`ec960406`). Sleep helper lives there
 (`d3bfb5e8`). SHA-256 hex is `sha256.ts` (`98545741`). JST now-clock
 helpers live in `identity.ts` (`ca00ff6d`). Premium json helper lives in
-`http_json.ts` (`a1428a21`). Do not family-slice remaining façade
-handlers.
+`http_json.ts` (`a1428a21`). Premium ops also import `http_json.ts`
+(`77505a8f`). ci-aggregate json lives in its own `http_json.ts`
+(`7dfed713`). Do not family-slice remaining façade handlers.
 
 ### 10.4 Do not
 
@@ -585,6 +588,8 @@ handlers.
 ✗ Claim ingest authorized still plaintext === / premium json() still two copies at a7d1e93d
 ✗ Claim leftover occupancy / unique22 / GATEWAY_TOKEN P632B-03 / persist live upsert / compact catalog / verify_all vs verify_ci closed at f34b9dcc
 ✗ Claim reconstitution_evidence still calls default_r2_put at f34b9dcc
+✗ Claim leftover occupancy / unique22 / GATEWAY_TOKEN P632B-03 / persist live upsert / compact catalog / verify_all vs verify_ci closed at 8299ad84
+✗ Claim ci-aggregate Worker exists live at 8299ad84
 ✗ Claim ci-aggregate Worker exists live
 ```
 
