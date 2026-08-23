@@ -450,8 +450,7 @@ index_text CLIs, OTC grain, Worker R2 stub, Worker POST
 CLI-put fence (`0b81eedb`), and job-artifact Worker put (`d6567268`;
 `017a43c6` `cf_daily_path_job`; `0a8ced34` `cf_mass_eval_run`) are
 **DONE**. MCP presentation echo and JSDA refresh inventory replay stay
-**DONE**. Remaining mixed: `reconstitution_evidence` still `default_r2_put`
-(dry_run only); leftover occupancy **HOLD** — do not schedule leftover
+**DONE**. Remaining mixed: leftover occupancy **HOLD** — do not schedule leftover
 occupancy extract. `UNIQUE22_PARK_REASONS`, `cost_models.py` live math,
 and factory `generation_enabled=False` stay **HOLD**. `persist_records.ts`
 live upsert is **HOLD** (do not fake-split). Compact catalog is optional
