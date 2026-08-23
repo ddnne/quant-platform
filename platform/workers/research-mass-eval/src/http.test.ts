@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   authorized,
+  freezePayload,
   putChildrenThenManifest,
   putImmutableJson,
   putJsonCreateOnly,
@@ -465,6 +466,16 @@ describe("POST /v1/mass-eval capability gate", () => {
     expect(payload.not_a_pass).toBe(true);
     expect(mem.putOrder).toEqual([]);
   });
+
+  it("rejects GET with 405", async () => {
+    const mem = new MemR2();
+    const res = await dispatchMassEvalFetch(
+      new Request("https://example.test/v1/mass-eval", { method: "GET" }),
+      denyByDefaultEnv(mem.asBucket()),
+      noopHandlers,
+    );
+    expect(res.status).toBe(405);
+  });
 });
 
 describe("POST /v1/daily-path capability gate", () => {
@@ -491,6 +502,16 @@ describe("POST /v1/daily-path capability gate", () => {
     expect(payload.not_a_pass).toBe(true);
     expect(mem.putOrder).toEqual([]);
   });
+
+  it("rejects GET with 405", async () => {
+    const mem = new MemR2();
+    const res = await dispatchMassEvalFetch(
+      new Request("https://example.test/v1/daily-path", { method: "GET" }),
+      denyByDefaultEnv(mem.asBucket()),
+      noopHandlers,
+    );
+    expect(res.status).toBe(405);
+  });
 });
 
 describe("POST /v1/children-then-manifest", () => {
@@ -514,6 +535,18 @@ describe("POST /v1/children-then-manifest", () => {
     );
     expect(res.status).toBe(401);
     expect(mem.putOrder).toEqual([]);
+  });
+
+  it("rejects GET with 405", async () => {
+    const mem = new MemR2();
+    const res = await dispatchMassEvalFetch(
+      new Request("https://example.test/v1/children-then-manifest", {
+        method: "GET",
+      }),
+      denyByDefaultEnv(mem.asBucket()),
+      noopHandlers,
+    );
+    expect(res.status).toBe(405);
   });
 
   it("denies when token unbound", async () => {
@@ -576,5 +609,27 @@ describe("POST /v1/children-then-manifest", () => {
     expect(payload.go).toBe(false);
     expect(payload.manifest.created).toBe(true);
     expect(mem.putOrder).toEqual(["job/child.json", "job/manifest.json"]);
+  });
+});
+
+describe("freezePayload deny-by-default", () => {
+  const expected = {
+    mass_research: "NO-GO",
+    phase7: "OFF",
+    ready_declared: false,
+    operational_go: false,
+    continuous_paper: "UNARMED",
+    frozen_defaults_retuned: false,
+    connected_to_ready: false,
+    connected_to_mass: false,
+  };
+
+  it("returns frozen defaults for an empty env", () => {
+    expect(freezePayload({} as Env)).toEqual(expected);
+  });
+
+  it("returns frozen defaults for deny-by-default env", () => {
+    const mem = new MemR2();
+    expect(freezePayload(denyByDefaultEnv(mem.asBucket()))).toEqual(expected);
   });
 });
