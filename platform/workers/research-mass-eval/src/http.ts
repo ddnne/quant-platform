@@ -5,6 +5,7 @@ import { sha256Hex } from "./sha256";
 
 export { json } from "./http_json";
 export { sha256Hex } from "./sha256";
+export { authorized } from "./authorized";
 
 export function freezePayload(env: Env) {
   return {
@@ -17,37 +18,6 @@ export function freezePayload(env: Env) {
     connected_to_ready: false,
     connected_to_mass: false,
   };
-}
-
-function timingSafeEqualBytes(a: ArrayBuffer, b: ArrayBuffer): boolean {
-  const x = new Uint8Array(a);
-  const y = new Uint8Array(b);
-  if (x.length !== y.length) return false;
-  let diff = 0;
-  for (let i = 0; i < x.length; i++) diff |= x[i] ^ y[i];
-  return diff === 0;
-}
-
-async function tokenMatches(provided: string, expected: string): Promise<boolean> {
-  const enc = new TextEncoder();
-  const [a, b] = await Promise.all([
-    crypto.subtle.digest("SHA-256", enc.encode(provided)),
-    crypto.subtle.digest("SHA-256", enc.encode(expected)),
-  ]);
-  return timingSafeEqualBytes(a, b);
-}
-
-export async function authorized(
-  request: Request,
-  expected?: string,
-): Promise<boolean> {
-  if (!expected) return false;
-  const got =
-    request.headers.get("X-Mass-Eval-Token") ||
-    request.headers.get("X-Ingestion-Token") ||
-    "";
-  if (!got) return false;
-  return tokenMatches(got, expected);
 }
 
 export function isObject(v: unknown): v is Record<string, unknown> {
