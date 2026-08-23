@@ -9,6 +9,7 @@ import { naturalKey, newRunId, pickEventTime, stableJson } from "./identity";
 import { isR2Only, wantsSummaryChangeLog } from "./write_path_config";
 import { writeJsonlToR2 } from "./r2_structured_writer";
 import { writeMasterScd2 } from "./master_scd2/write";
+import { fullJitterMs } from "./retry_jitter";
 
 export interface PersistEnv {
   DB: D1Database;
@@ -33,7 +34,7 @@ function backoffDelayMs(attempt: number): number {
     RETRY_MAX_DELAY_MS,
     RETRY_BASE_DELAY_MS * 2 ** (attempt - 1),
   );
-  return Math.floor(Math.random() * base);
+  return fullJitterMs(base);
 }
 
 function sleep(ms: number): Promise<void> {

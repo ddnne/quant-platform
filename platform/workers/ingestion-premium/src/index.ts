@@ -32,6 +32,7 @@ import {
   type CollectionSegment,
 } from "./collection_receipts";
 import { upsertRecords, upsertWatermark } from "./persist_records";
+import { fullJitterMs, halfToFullJitterMs } from "./retry_jitter";
 
 export interface Env {
   JQUANTS_API_KEY: string;
@@ -168,7 +169,7 @@ function backoffDelayMs(attempt: number): number {
     RETRY_MAX_DELAY_MS,
     RETRY_BASE_DELAY_MS * 2 ** (attempt - 1),
   );
-  return Math.floor(Math.random() * base);
+  return fullJitterMs(base);
 }
 
 /** Short 429-only backoff — recover to near-ceiling quickly (P0 rate accel). */
@@ -178,7 +179,7 @@ function backoff429DelayMs(attempt: number): number {
     RETRY_429_BASE_DELAY_MS * 2 ** (attempt - 1),
   );
   // Half-to-full jitter so concurrent workers do not re-stampede together.
-  return Math.floor(base / 2 + Math.random() * (base / 2));
+  return halfToFullJitterMs(base);
 }
 
 function sleep(ms: number): Promise<void> {
