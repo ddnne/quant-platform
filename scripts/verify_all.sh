@@ -9,12 +9,24 @@ cd "$ROOT"
 # Ban: do not pass --legacy-peer-deps (peer graph must resolve from lockfiles).
 # Optional VERIFY_NPM_CI=1 runs `npm ci` (not `npm ci --legacy-peer-deps`) when
 # a worker is missing node_modules. Default is skip with a reason (npm ci is slow).
+# Optional VERIFY_NPM_TYPECHECK=1 / VERIFY_NPM_BUILD=1 (default off): if
+# node_modules exists, run `npm run typecheck` / `npm run build` when the
+# script is present (skip with reason otherwise). Build must be dry-run;
+# never wrangler deploy.
 
 WORKERS=(
   platform/workers/quant-ops-mcp
   platform/workers/research-ai-gateway
   platform/workers/research-mass-eval
 )
+
+# Print package.json scripts.<name> body, or empty if missing.
+npm_script_body() {
+  python3 -c 'import json, sys
+p = json.load(open(sys.argv[1], encoding="utf-8"))
+sys.stdout.write(str((p.get("scripts") or {}).get(sys.argv[2]) or ""))
+' "$1" "$2"
+}
 
 missing_venv=0
 py=""
@@ -64,23 +76,45 @@ for dir in "${WORKERS[@]}"; do
     echo "worker $name: missing package.json ($dir)" >&2
     exit 1
   fi
-  if [[ -d "$dir/node_modules" ]]; then
-    echo "==> npm test ($name)"
-    if ! command -v npm >/dev/null 2>&1; then
-      echo "worker $name: npm not found" >&2
-      exit 1
+  if [[ ! -d "$dir/node_modules" ]]; then
+    if [[ "${VERIFY_NPM_CI:-0}" == "1" ]]; then
+      echo "==> npm ci ($name) (VERIFY_NPM_CI=1)"
+      if ! command -v npm >/dev/null 2>&1; then
+        echo "worker $name: npm not found" >&2
+        exit 1
+      fi
+      # Do not use npm ci --legacy-peer-deps
+      (cd "$dir" && npm ci)
+    else
+      echo "worker $name: skip — node_modules missing (install in $dir, or VERIFY_NPM_CI=1)"
+      continue
     fi
-    (cd "$dir" && npm test)
-  elif [[ "${VERIFY_NPM_CI:-0}" == "1" ]]; then
-    echo "==> npm ci + npm test ($name) (VERIFY_NPM_CI=1)"
-    if ! command -v npm >/dev/null 2>&1; then
-      echo "worker $name: npm not found" >&2
-      exit 1
+  fi
+  if ! command -v npm >/dev/null 2>&1; then
+    echo "worker $name: npm not found" >&2
+    exit 1
+  fi
+  echo "==> npm test ($name)"
+  (cd "$dir" && npm test)
+  if [[ "${VERIFY_NPM_TYPECHECK:-0}" == "1" ]]; then
+    if [[ -n "$(npm_script_body "$dir/package.json" typecheck)" ]]; then
+      echo "==> npm run typecheck ($name) (VERIFY_NPM_TYPECHECK=1)"
+      (cd "$dir" && npm run typecheck)
+    else
+      echo "worker $name: skip typecheck — no typecheck script in package.json"
     fi
-    # Do not use npm ci --legacy-peer-deps
-    (cd "$dir" && npm ci && npm test)
-  else
-    echo "worker $name: skip — node_modules missing (install in $dir, or VERIFY_NPM_CI=1)"
+  fi
+  if [[ "${VERIFY_NPM_BUILD:-0}" == "1" ]]; then
+    build_cmd="$(npm_script_body "$dir/package.json" build)"
+    if [[ -z "$build_cmd" ]]; then
+      echo "worker $name: skip build — no build script in package.json"
+    elif [[ "$build_cmd" == *"wrangler deploy"* && "$build_cmd" != *"--dry-run"* ]]; then
+      echo "worker $name: refuse build — not dry-run (never wrangler deploy): $build_cmd" >&2
+      exit 1
+    else
+      echo "==> npm run build ($name) (VERIFY_NPM_BUILD=1, dry-run/no deploy)"
+      (cd "$dir" && npm run build)
+    fi
   fi
 done
 

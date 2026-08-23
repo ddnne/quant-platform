@@ -14,6 +14,9 @@ def test_verify_all_script_exists_executable_and_bans_legacy_peer_deps() -> None
     assert os.access(SCRIPT, os.X_OK), f"{SCRIPT} must be executable"
     src = SCRIPT.read_text(encoding="utf-8")
     assert "legacy-peer-deps" in src
+    assert "VERIFY_NPM_CI" in src
+    assert "VERIFY_NPM_TYPECHECK" in src
+    assert "VERIFY_NPM_BUILD" in src
     for i, line in enumerate(src.splitlines(), start=1):
         code = line.split("#", 1)[0]
         assert "--legacy-peer-deps" not in code, (
