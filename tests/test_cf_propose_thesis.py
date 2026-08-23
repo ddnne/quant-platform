@@ -178,7 +178,7 @@ def test_worker_index_contains_propose_thesis_route() -> None:
     assert "PROPOSE_ALLOWED_GATES.join" in propose_src
     assert "PROPOSE_PROMPT_PREFER_GATES.join" in propose_src
     assert "JSON.stringify(PROPOSE_PROMPT_GOOD)" in propose_src
-    from research.unique_logic.catalog import yaml_combo_rows
+    from research.unique_logic.catalog import combo_thesis_records
     from research.unique_logic.constants import SPARSE_GATE_COMBOS
     from research.unique_logic.propose_review_tables import (
         PROPOSE_CONTRADICTORY_GATE_PAIRS,
@@ -191,12 +191,8 @@ def test_worker_index_contains_propose_thesis_route() -> None:
     good = propose_prompt_good()
     assert good["gates"] == PROPOSE_PROMPT_GOOD["gates"]
     catalog_sets = {
-        frozenset(
-            str(x)
-            for x in ((row.get("params") or {}).get("gates") or [])
-            if str(x).strip()
-        )
-        for row in yaml_combo_rows()
+        frozenset(str(x) for x in (row.get("gates") or []) if str(x).strip())
+        for row in combo_thesis_records()
     }
     assert frozenset(str(g) for g in good["gates"]) not in catalog_sets
     prefer = list(PROPOSE_PROMPT_PREFER_GATES)

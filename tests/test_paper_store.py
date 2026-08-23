@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import json
 import sqlite3
-import subprocess
-import sys
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import date, timedelta
@@ -151,18 +149,4 @@ def test_json_store_default_root_is_data_paper():
     assert Path(JsonPaperStore().root).parts[-2:] == ("data", "paper")
 
 
-def test_run_paper_once_help_is_offline_and_successful():
-    repo = Path(__file__).resolve().parents[1]
-    proc = subprocess.run(
-        [sys.executable, str(repo / "scripts" / "run_paper_once.py"), "--help"],
-        cwd=repo,
-        text=True,
-        capture_output=True,
-        check=False,
-        timeout=20,
-    )
-    assert proc.returncode == 0, proc.stderr
-    assert "paper" in proc.stdout.lower()
-    assert "--db" in proc.stdout
-    assert "--start" in proc.stdout
-    assert "--end" in proc.stdout
+

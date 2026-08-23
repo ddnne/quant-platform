@@ -79,21 +79,21 @@ def _yaml_combo_runtime_rows() -> tuple[dict[str, Any], ...]:
 
 
 NEW_COMBO_LOGIC: tuple[dict[str, Any], ...] = _yaml_combo_runtime_rows()
+_COMBO_BY_ID: dict[str, dict[str, Any]] = {
+    str(s["logic_id"]): s for s in NEW_COMBO_LOGIC if s.get("logic_id")
+}
 
 
 def spec_by_id(logic_id: str) -> dict[str, Any] | None:
-    for s in NEW_COMBO_LOGIC:
-        if s["logic_id"] == logic_id:
-            return s
-    return None
+    return _COMBO_BY_ID.get(str(logic_id))
 
 
 def assert_yaml_matches_specs(*, root: Any = None) -> None:
     """Fail if combo YAML is missing gates/cs_gate/side or sets go=True."""
     from research.unique_logic.catalog import (
         _COMBO_EVALUATOR,
+        combo_thesis_records,
         load_catalog_specs,
-        yaml_combo_rows,
     )
 
     combo_yaml = [
@@ -125,15 +125,15 @@ def assert_yaml_matches_specs(*, root: Any = None) -> None:
     if problems:
         raise AssertionError("combo YAML self-check: " + " | ".join(problems[:40]))
 
-    row_ids = {str(r["logic_id"]) for r in yaml_combo_rows(root=root)}
+    row_ids = {str(r["logic_id"]) for r in combo_thesis_records(root=root)}
     if row_ids != stems:
         missing = sorted(stems - row_ids)
         extra = sorted(row_ids - stems)
         parts: list[str] = []
         if missing:
-            parts.append("yaml_combo_rows missing ids: " + ", ".join(missing[:40]))
+            parts.append("combo_thesis_records missing ids: " + ", ".join(missing[:40]))
         if extra:
-            parts.append("yaml_combo_rows extra ids: " + ", ".join(extra[:40]))
+            parts.append("combo_thesis_records extra ids: " + ", ".join(extra[:40]))
         raise AssertionError("combo YAML self-check: " + " | ".join(parts))
 
 

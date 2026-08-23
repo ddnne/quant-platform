@@ -582,12 +582,22 @@ def usable_inventory_read(
         if gates[0] == "afterclose":
             n_ac_primary += 1
     n = int(inv["n_usable"])
+    fam_primary: Counter[str] = Counter()
+    for rec in combo_thesis_records():
+        lid = str(rec.get("logic_id") or "")
+        if lid not in usable:
+            continue
+        gates = [str(x) for x in (rec.get("gates") or []) if str(x).strip()]
+        fam = usable_family_of(lid)
+        pg = gates[0] if gates else ""
+        fam_primary[f"{fam}|{pg}"] += 1
     return {
-        "version": "usable-read/v1",
+        "version": "usable-read/v2",
         "n_usable": n,
         "family": inv["family"],
         "family_share": inv["family_share"],
         "primary_gate": dict(primary),
+        "family_primary_gate": dict(fam_primary),
         "all_gates": dict(all_gates),
         "cheap_pb_in_gates": n_pb,
         "cheap_pb_primary": n_pb_primary,
