@@ -10,7 +10,7 @@ extracts landed. Leftover occupancy **HOLD** in `daily_path.ts`.
 `coverage_receipts`, `snapshot_publish_policy`, `snapshot_coverage_proof`,
 `snapshot_persist`, `snapshot_read`, `eval_orchestrate`,
 `ingestion-premium/collection_receipts.ts` — **DONE** in §7.  
-**Live strategy at `b1605c36`:** §10 — remaining extracts vs HOLD. YAML
+**Live strategy at `ad49ed96`:** §10 — remaining extracts vs HOLD. YAML
 file-count waste is closed. Size is not waste. Do not extract leftover
 occupancy. Do not add YAML. Do not declare Phase 7 GO.  
 **Mass / READY / Phase 7:** unchanged (NO-GO / not declared / OFF)
@@ -364,7 +364,7 @@ and COMPLETE predicates unchanged, generated files still generated.
 
 ---
 
-## 10. Current remaining extracts vs HOLD (HEAD b1605c36)
+## 10. Current remaining extracts vs HOLD (HEAD ad49ed96)
 
 This is the **live** refactor strategy for “the code is full of waste.”
 §§1–9 remain the plan at `41003a5` / status at `5c9b962`. Follow this
@@ -472,10 +472,15 @@ Python greps **DONE** (`23a5cbb9`; `8fc13e24`; `5ac9cce1`; `0383311f`;
 catalog **DONE** (`de8f87bf`). Premium ops cold-archive / prune_changelog /
 parquet_manifest / artifacts_plan fail-closed Worker units **DONE**
 (`9956ab51`; `9b0582d4`; `359b2566`; `329f3959`). Master SCD2 write mock
-R2 unit **DONE** (`ee167188`). Still untested at this SHA (agent-capable,
-not HOLD; sibling test commits are **not** in this tree at `b1605c36`):
-mass-eval `eval_orchestrate` / `metrics` / `ai_gateway_client` / `panels` /
-propose-thesis HTTP execution; `persist_records` empty-row unit.
+R2 unit **DONE** (`ee167188`). After `63afd000`: persist empty-row,
+metrics, eval_orchestrate, panels defaultPeriods + missing R2/D1,
+propose-thesis HTTP 403 + window_tweak, ai_gateway unbound, parseRequest
+export, GET 405 / freezePayload /health / nets_only HTTP, json no-store,
+export D1/changes arg 400s, projection shared OTC reader, snapshot
+`index_text=None` — **LANDED**. Remaining HOLD: leftover occupancy,
+unique22, GATEWAY_TOKEN P632B-03, persist live upsert, compact catalog,
+`verify_all` vs `verify_ci` split. Do not schedule leftover occupancy
+extract. Do not YAML +N. Do not declare Phase 7 GO.
 
 | Later | Mixed surface | Authority to pick | Must not |
 |------:|---------------|-------------------|----------|
