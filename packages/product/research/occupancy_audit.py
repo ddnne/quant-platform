@@ -289,6 +289,104 @@ def write_usable_eval_snapshot(
     }
 
 
+def write_eval_wave_pack(
+    occupancy_by_track: Mapping[str, Mapping[str, float]],
+    *,
+    wave: str,
+    root: Path | None = None,
+    put_r2: bool = False,
+) -> dict[str, Any]:
+    """Snapshot plus drift / unique22 park / reconstitution detect. Not GO.
+
+    Does not fan out occupancy. Does not apply reconstitution. Does not inject.
+    """
+    from qp_paths import repo_root
+    from research.combo_basket_catalog import active_reconstitution_plan
+    from research.unique_logic.worker_bodies import (
+        UNIQUE22_PARK_REASONS,
+        countable_thesis_ids,
+        unique22_occupancy_equal_lifted,
+        unique22_occupancy_park,
+    )
+
+    snap = write_usable_eval_snapshot(
+        occupancy_by_track, wave=wave, root=root, put_r2=put_r2
+    )
+    ops = Path(root) if root is not None else repo_root() / "data" / "ops" / "research_eval"
+    drift = occupancy_recorded_drift(
+        occupancy_by_track, sorted(countable_thesis_ids())
+    )
+    drift_job = f"eval-occupancy-drift-{wave}"
+    park = unique22_occupancy_park()
+    lifted = unique22_occupancy_equal_lifted()
+    u22_job = f"eval-unique22-park-{wave}"
+    recon_job = f"eval-reconstitution-plan-{wave}"
+    extras = {
+        drift_job: {
+            **dict(drift),
+            "job_id": drift_job,
+            "do_not_silent_unpark": True,
+        },
+        u22_job: {
+            "job_id": u22_job,
+            "n_parked": len(park),
+            "n_lifted": len(lifted),
+            "parked": sorted(park),
+            "lifted": sorted(lifted),
+            "reasons": dict(UNIQUE22_PARK_REASONS),
+            "do_not_silent_unpark": True,
+            "go": False,
+            "not_a_pass": True,
+        },
+        recon_job: {
+            "job_id": recon_job,
+            "apply": False,
+            "sleeves": [
+                {
+                    "basket_id": p["basket_id"],
+                    "needs_reconstitution": p.get("needs_reconstitution"),
+                    "nested_parent_count": p.get("nested_parent_count"),
+                    "apply_reject": p.get("apply_reject"),
+                }
+                for p in active_reconstitution_plan()
+            ],
+            "go": False,
+            "not_a_pass": True,
+        },
+    }
+    r2_names = {
+        drift_job: "drift.json",
+        u22_job: "park.json",
+        recon_job: "reconstitution_plan.json",
+    }
+    puts = list(snap.get("puts") or [])
+    for job, body in extras.items():
+        path = ops / f"{job}.json"
+        raw = json.dumps(body, ensure_ascii=True, default=str)
+        path.write_text(raw, encoding="utf-8")
+        if put_r2:
+            from research.cf_mass_eval_stage import RESEARCH_ARTIFACT_BUCKET
+            from research.r2_io import default_r2_put
+
+            put = default_r2_put(
+                RESEARCH_ARTIFACT_BUCKET,
+                f"research/eval/job={job}/{r2_names[job]}",
+                raw.encode("utf-8"),
+            )
+            puts.append({"job": job, "status": put.get("status"), "bytes": put.get("bytes")})
+    return {
+        **snap,
+        "drift_job": drift_job,
+        "unique22_job": u22_job,
+        "reconstitution_job": recon_job,
+        "n_unique22_parked": len(park),
+        "n_unique22_lifted": len(lifted),
+        "puts": puts,
+        "go": False,
+        "not_a_pass": True,
+    }
+
+
 def run_occupancy_track(
     *,
     job_id: str,
@@ -361,4 +459,5 @@ __all__ = [
     "run_occupancy_track",
     "usable_eval_snapshot",
     "write_usable_eval_snapshot",
+    "write_eval_wave_pack",
 ]

@@ -529,6 +529,23 @@ def test_write_usable_eval_snapshot_local_only(tmp_path) -> None:
     assert (tmp_path / "eval-combo-jsonl-test24em.jsonl").is_file()
 
 
+def test_write_eval_wave_pack_local_only(tmp_path) -> None:
+    from research.occupancy_audit import write_eval_wave_pack
+
+    out = write_eval_wave_pack(
+        {"mid_n_explore": {}, "liq_large": {}},
+        wave="test24ep",
+        root=tmp_path,
+        put_r2=False,
+    )
+    assert out["go"] is False
+    assert out["not_a_pass"] is True
+    assert out["n_unique22_parked"] >= 1
+    assert (tmp_path / "eval-occupancy-drift-test24ep.json").is_file()
+    assert (tmp_path / "eval-unique22-park-test24ep.json").is_file()
+    assert (tmp_path / "eval-reconstitution-plan-test24ep.json").is_file()
+
+
 def test_merge_daily_path_cells_for_ids_later_file_wins(tmp_path) -> None:
     import json
 
