@@ -86,6 +86,7 @@ def test_tip_only_not_in_core() -> None:
     assert TIP_ONLY_EARNINGS_CALENDAR_DATASET not in profile.required_datasets
     for dataset in CORE_REQUIRED_DATASETS:
         assert dataset in profile.required_datasets
+    assert "equities_master" in profile.required_datasets
     assert "equities_bars_daily" in profile.required_datasets
     assert "fins_summary" in profile.required_datasets
     assert "fins_details" in profile.required_datasets
@@ -118,6 +119,9 @@ def test_digest_stable() -> None:
     assert first == second
     assert first == compute_digest(shuffled)
     assert first == profile.profile_digest
+    assert first == (
+        "sha256:23508636bbdf8db439b1ecab968a62a4d5ce97970c82048345ab3ea63a9f9bd1"
+    )
     assert first.startswith("sha256:")
     assert len(first) == len("sha256:") + 64
     reloaded = ResearchDataProfile.from_dict(profile.to_dict())
