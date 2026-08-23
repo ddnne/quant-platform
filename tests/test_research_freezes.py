@@ -219,7 +219,7 @@ def test_near_empty_park_is_not_countable_or_basket_material() -> None:
     parked = near_empty_occupancy_park()
     assert parked == NEAR_EMPTY_PARK_IDS
     assert parked
-    assert "fy_end_cs_fade" in parked
+    assert "surprise_xs_fy_end" in parked
     countable = countable_thesis_ids()
     for lid in parked:
         spec = catalog_spec(lid)
@@ -234,7 +234,7 @@ def test_near_empty_park_is_not_countable_or_basket_material() -> None:
     from research.cf_daily_path_job import sleeve_durability_logic_ids
 
     assert THIN_SLEEVE_EXCLUDE_IDS
-    assert "event_steep_tight_on" in THIN_SLEEVE_EXCLUDE_IDS
+    assert "surprise_xs_pb_rising_crowded" in THIN_SLEEVE_EXCLUDE_IDS
     assert THIN_SLEEVE_EXCLUDE_IDS.isdisjoint(NEAR_EMPTY_PARK_IDS)
     assert THIN_SLEEVE_EXCLUDE_IDS.isdisjoint(sleeve_durability_logic_ids())
     thin_reasons = validate_basket_members(

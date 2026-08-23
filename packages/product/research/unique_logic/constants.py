@@ -236,6 +236,8 @@ NEAR_EMPTY_PARK_IDS: frozenset[str] = frozenset(
         "event_cheap_pb_margin_down_easing_cluster",
         "flow_disagree_skip_friday",
         "fy_end_cs_fade",
+        "fy_start_cs_follow",
+        "surprise_xs_fy_end",
     }
 )
 # Recorded mean occupancy ≥ ALWAYS_ON_OCCUPANCY_WARN. Not countable, not
@@ -244,6 +246,8 @@ ALWAYS_ON_PARK_IDS: frozenset[str] = frozenset(
     {
         "cs_eqar_falling",
         "cs_eqar_high",
+        "cs_eqar_low_fade",
+        "cs_eqar_rising",
     }
 )
 # Countable but too thin for mechanical sleeves (recorded both-track
@@ -316,6 +320,30 @@ THIN_SLEEVE_EXCLUDE_IDS: frozenset[str] = frozenset(
         "event_sales_tight_px",
         "event_np_sales_invert",
         "event_steep_tight_on",
+        "cs_eqar_high_cheap_iv",
+        "cs_margin_down_easy",
+        "cs_margin_up_easy",
+        "event_cluster_steep_curve",
+        "event_crowded_cheap_iv",
+        "event_div_payer_margin_down",
+        "event_div_payer_price_down",
+        "event_div_payer_cheap_iv",
+        "event_easing_pb_rising",
+        "event_easy_funding_curve_steep",
+        "event_eps_up_margin_up_easing",
+        "event_eqar_high_cheap_iv",
+        "event_eqar_high_overnight_p10",
+        "event_eqar_high_steep",
+        "event_eqar_low_cheap_iv_fade",
+        "event_eqar_rising_cheap_iv",
+        "fy_start_event_follow",
+        "surprise_xs_impulse_np_neg",
+        "surprise_xs_margin_down_on_impulse",
+        "surprise_xs_margin_down_p10",
+        "surprise_xs_nkyvol_cheap_iv",
+        "surprise_xs_nkyvol_np_neg",
+        "surprise_xs_eqar_high_np_neg",
+        "surprise_xs_pb_rising_crowded",
     }
 )
 MF_VALUE_MOM_RATE_DELEGATES: bool = False
@@ -394,6 +422,7 @@ SPARSE_GATE_COMBOS: tuple[tuple[frozenset[str], str], ...] = (
     (frozenset({"np_negative", "steep_curve", "overnight_easing"}), "np_steep_easing"),
     (frozenset({"np_negative", "steep_curve"}), "np_steep"),
     (frozenset({"pb_rising", "tight_funding", "price_down"}), "pb_tight_px_down"),
+    (frozenset({"fy_end"}), "fy_end_empty"),
 )
 
 

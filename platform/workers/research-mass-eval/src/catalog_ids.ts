@@ -466,6 +466,7 @@ export const CF_NEW_EVENT_THESIS_IDS = [
   "event_price_down_overnight_easing",
   "event_px_down_np_negative",
   "event_px_down_p10",
+  "event_px_easy",
   "event_repo3m_cluster",
   "event_repo3m_div",
   "event_repo3m_down_afterclose",
