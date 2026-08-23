@@ -10,6 +10,7 @@ import xlrd
 
 from data_contracts import coverage_contract_for, jsda_contract_for
 from ingestion.common.http import HttpResponse
+from ingestion.jsda import repo_archive as repo_mod
 from ingestion.jsda.parse import parse_repo_xls
 from ingestion.jsda.repo_archive import run_tokyo_repo_backfill
 from ingestion.jsda.urls import (
@@ -165,6 +166,14 @@ def test_tokyo_repo_runner_raw_receipt_coverage_and_resume(
 ):
     _inject_tmp_receipt_authority(monkeypatch, receipt_ed25519_keys)
     _install_workbook(monkeypatch)
+    captured: list[dict] = []
+    real_refresh = repo_mod.refresh_coverage_ledger
+
+    def _capture_refresh(*args, **kwargs):
+        captured.append(kwargs)
+        return real_refresh(*args, **kwargs)
+
+    monkeypatch.setattr(repo_mod, "refresh_coverage_ledger", _capture_refresh)
     client = _RepoArchiveClient()
     store = SqliteStore(tmp_path / "repo.sqlite")
     report = run_tokyo_repo_backfill(
@@ -208,6 +217,9 @@ def test_tokyo_repo_runner_raw_receipt_coverage_and_resume(
     assert len(read_collection_receipts(
         store.path, dataset=TOKYO_REPO_DATASET
     )) == 1
+    assert len(captured) == 2
+    assert all("index_text" in call for call in captured)
+    assert all(call["index_text"] is None for call in captured)
     store.close()
 
 
