@@ -1,6 +1,6 @@
 # Phase 6.2 / 6.3 residual status
 
-> **Live residual SoT.** Feature HEAD `ec960406` vs `origin/main` `b5c326a`. Live MCP: Projection **STALE** (`refresh_success=false`), READY **null**, B0 **UNKNOWN**, `applied_cursor` **null**. Mass **NO-GO**. Phase 7 **OFF**. `RECONSTITUTION_APPLY` **False**. Coverage last-known **22/4 PARTIAL** V2 under STALE (not FRESH, not COMPLETE 23). last_run id **14321** (cron, not READY). `ci-aggregate` Worker **absent**. PR #1 check-runs **0**. Do not treat 22 COMPLETE as live V3.
+> **Live residual SoT.** Feature HEAD `98545741` vs `origin/main` `b5c326a`. Live MCP: Projection **STALE** (`refresh_success=false`), READY **null**, B0 **UNKNOWN**, `applied_cursor` **null**. Mass **NO-GO**. Phase 7 **OFF**. `RECONSTITUTION_APPLY` **False**. Coverage last-known **22/4 PARTIAL** V2 under STALE (not FRESH, not COMPLETE 23). last_run id **14322** (cron, 2026-08-24T04:15:01+09:00 — not READY). `ci-aggregate` Worker **absent**. PR #1 check-runs **0**. Do not treat 22 COMPLETE as live V3.
 
 **Live residual SoT** (agents: prefer this file over any `phase62*_status` / final_report).
 
