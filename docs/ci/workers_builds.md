@@ -81,9 +81,13 @@ later. Disconnecting Git does not replace this policy — the deploy command is
 the switch
 ([disable automatic deployments](https://developers.cloudflare.com/workers/ci-cd/builds/#disconnecting-builds)).
 
-Local pre-push remains [`scripts/verify_all.sh`](../../scripts/verify_all.sh)
-(pytest + catalog freeze + worker `npm test`; no live deploy). That script is
-not a GitHub check and does not promote.
+Local **mandatory** CI is [`scripts/verify_ci.sh`](../../scripts/verify_ci.sh)
+(fresh `.venv`, pytest, catalog freeze, Evaluation IR schema, all seven
+Workers `npm ci` / test / typecheck / dry-run; no `VERIFY_*` skips; no live
+deploy). [`scripts/verify_all.sh`](../../scripts/verify_all.sh) is a fast local
+helper only. Six-lane `npm test` receipts alone skip Python/catalog and are
+**not** `verify_ci`. Merge requires GitHub context `ci-aggregate` after
+authenticated receipts **and** `verify_ci`.
 
 ## Aggregate required check
 
