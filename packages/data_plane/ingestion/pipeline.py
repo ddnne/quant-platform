@@ -447,7 +447,7 @@ def _run_jquants_catalog(
                     job_end = target_end
                     # Official-archive-index reuses already-held year-index HTML.
                     # Persist has none here → index_text None (empty, not calendar).
-                    index_text = _index_text_for_plan(policy)
+                    index_text = _index_text_for_plan(policy, None)
                     # First plan without expected counts to discover segment ids.
                     segs = _plan_required_segments(
                         policy,
