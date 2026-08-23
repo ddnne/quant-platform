@@ -4,10 +4,14 @@ READY(P) = AND Complete(d, official_mode(d)) for d in Deps(P).
 Deps(P) = transitive StrategySpec + FeatureRef + Universe + Evaluation
 protocol + Risk inputs.
 
-A FeatureRef/StrategySpec that lists a dataset must include that dataset in
-required_datasets or construction fails. Core does not unconditionally include
-tip-only AM bars or earnings calendar. This module does not publish READY,
-arm Mass, or start Phase 7.
+official_mode(d) is coverage_contract_for(d).coverage_mode (per-dataset), not
+contract_versions.coverage_policy. That key is the collection_coverage.json
+document root (collection-coverage/v2). Master / AM / earnings JSON rows may
+set policy_version collection-coverage/v3. Do not bump the profile key to v3
+while live MCP projection is STALE V2. A FeatureRef/StrategySpec that lists a
+dataset must include that dataset in required_datasets or construction fails.
+Core does not unconditionally include tip-only AM bars or earnings calendar.
+This module does not publish READY, arm Mass, or start Phase 7.
 """
 
 from __future__ import annotations
@@ -60,6 +64,19 @@ CORE_REQUIRED_DATASETS: tuple[str, ...] = (
     "markets_calendar",
 )
 
+# Document-root policy. Per-dataset rows for master/AM/earnings override to v3.
+# core_v1.json contract_versions.coverage_policy stays v2; live MCP is STALE V2
+# with applied_cursor null and is not a READY publish.
+COVERAGE_POLICY_DOCUMENT_ROOT: str = "collection-coverage/v2"
+COVERAGE_POLICY_V3: str = "collection-coverage/v3"
+COVERAGE_V3_DATASETS: frozenset[str] = frozenset(
+    {
+        "equities_master",
+        TIP_ONLY_AM_DATASET,
+        TIP_ONLY_EARNINGS_CALENDAR_DATASET,
+    }
+)
+
 _PROFILE_FIELDS: frozenset[str] = frozenset(
     {
         "profile_id",
@@ -108,7 +125,11 @@ class ResearchDataProfileError(ValueError):
 
 
 def official_mode(dataset_id: str) -> str:
-    """Coverage-contract mode that READY(P) requires for ``dataset_id``."""
+    """Per-dataset coverage_mode from ``coverage_contract_for``.
+
+    READY(P) requires this mode. It is not SourceCapabilityContract and not
+    ``contract_versions.coverage_policy`` (document-root collection-coverage/v2).
+    """
     return coverage_contract_for(dataset_id).coverage_mode
 
 
@@ -164,8 +185,9 @@ def profile_ready(
 ) -> bool:
     """True iff every required dataset is COMPLETE under official_mode(d).
 
-    Missing evidence, PARTIAL, a string COMPLETE label, or a coverage_mode
-    other than official_mode is false. Does not publish a READY snapshot.
+    Missing evidence, PARTIAL, a string COMPLETE label, a coverage_mode
+    other than official_mode, projection_status STALE, or applied_cursor
+    null is false. Does not publish a READY snapshot.
     """
     if not profile.required_datasets:
         return False
@@ -325,7 +347,12 @@ def load_core_profile(*, path: Path | None = None) -> ResearchDataProfile:
 
 
 def default_contract_versions() -> dict[str, str]:
-    """Pinned live contract versions for a ResearchDataProfile."""
+    """Pinned contract versions for a ResearchDataProfile.
+
+    coverage_policy is the collection_coverage.json document root, not a claim
+    that every dataset row is that version. Per-dataset policy_version is v3
+    for master/AM/earnings when those JSON rows say so.
+    """
     return {
         "canonical_registry": REGISTRY_VERSION,
         "coverage_policy": COVERAGE_POLICY_VERSION,
@@ -364,6 +391,10 @@ def _complete_under_official(
         return False
     evidence = evidence_by_dataset[dataset_id]
     if not isinstance(evidence, Mapping):
+        return False
+    if evidence.get("projection_status") == "STALE":
+        return False
+    if "applied_cursor" in evidence and evidence.get("applied_cursor") in (None, ""):
         return False
     if evidence.get("status") != "COMPLETE":
         return False
@@ -569,6 +600,9 @@ __all__ = [
     "CORE_PROFILE_REL",
     "CORE_REQUIRED_DATASETS",
     "CORE_TIP_ONLY_EXCLUSIONS",
+    "COVERAGE_POLICY_DOCUMENT_ROOT",
+    "COVERAGE_POLICY_V3",
+    "COVERAGE_V3_DATASETS",
     "PROFILE_VERSION",
     "REQUIRED_COVERAGE_MODE_OFFICIAL",
     "ResearchDataProfile",
