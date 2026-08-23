@@ -83,6 +83,54 @@ describe("ingestion-secrets boundary", () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
+  it("returns 404 for an unknown path without calling upstream", async () => {
+    const fetchImpl = stubUpstream();
+    const res = await worker.fetch(
+      new Request("https://ingestion-secrets.test/nope", {
+        headers: AUTH_HEADERS,
+      }),
+      env,
+    );
+    expect(res.status).toBe(404);
+    const body = await res.text();
+    expect(JSON.parse(body)).toEqual({ error: "not found" });
+    expect(body).not.toContain(API_KEY);
+    expect(body).not.toContain(PROXY_TOKEN);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("rejects GET on the proxy path as 405 without calling upstream", async () => {
+    const fetchImpl = stubUpstream();
+    const res = await worker.fetch(
+      new Request("https://ingestion-secrets.test/v1/proxy/jquants", {
+        method: "GET",
+        headers: AUTH_HEADERS,
+      }),
+      env,
+    );
+    expect(res.status).toBe(405);
+    const body = await res.text();
+    expect(JSON.parse(body)).toEqual({ error: "POST required" });
+    expect(body).not.toContain(API_KEY);
+    expect(body).not.toContain(PROXY_TOKEN);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("denies proxy when JQUANTS_PROXY_TOKEN is unbound even if a header is sent", async () => {
+    const fetchImpl = stubUpstream();
+    const unbound: Env = { JQUANTS_API_KEY: API_KEY };
+    const res = await worker.fetch(
+      proxyRequest(AUTH_HEADERS, { path: PREMIUM_PATH, query: {} }),
+      unbound,
+    );
+    expect(res.status).toBe(401);
+    const body = await res.text();
+    expect(JSON.parse(body)).toEqual({ error: "unauthorized" });
+    expect(body).not.toContain(API_KEY);
+    expect(body).not.toContain(PROXY_TOKEN);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it("denies an authenticated path that is not on the contract whitelist", async () => {
     const fetchImpl = stubUpstream();
     const res = await worker.fetch(
