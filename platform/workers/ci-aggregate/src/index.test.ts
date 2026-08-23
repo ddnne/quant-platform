@@ -227,6 +227,11 @@ describe("POST /v1/receipts", () => {
 });
 
 describe("GET /health", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
   it("stays unauthenticated", async () => {
     const res = await handleRequest(
       new Request("https://ci-aggregate.test/health", { method: "GET" }),
@@ -236,5 +241,53 @@ describe("GET /health", () => {
     expect(res.status).toBe(200);
     expect(body.ok).toBe(true);
     expect(body.service).toBe("quant-platform-ci-aggregate");
+  });
+
+  it("rejects POST with 405 GET required and does not post GitHub", async () => {
+    const { posted, fetchImpl } = mockGithub();
+    const res = await handleRequest(
+      new Request("https://ci-aggregate.test/health", { method: "POST" }),
+      BOUND_ENV,
+      fetchImpl,
+    );
+    const body = (await res.json()) as { error: string };
+    expect(res.status).toBe(405);
+    expect(body.error).toBe("GET required");
+    expect(posted).toHaveLength(0);
+  });
+
+  it("returns 404 not found for GET /nope", async () => {
+    const { posted, fetchImpl } = mockGithub();
+    const res = await handleRequest(
+      new Request("https://ci-aggregate.test/nope", { method: "GET" }),
+      BOUND_ENV,
+      fetchImpl,
+    );
+    const body = (await res.json()) as { error: string };
+    expect(res.status).toBe(404);
+    expect(body.error).toBe("not found");
+    expect(posted).toHaveLength(0);
+  });
+
+  it("JSON is not a research API or merge-gate green", async () => {
+    const { posted, fetchImpl } = mockGithub();
+    const res = await handleRequest(
+      new Request("https://ci-aggregate.test/health", { method: "GET" }),
+      BOUND_ENV,
+      fetchImpl,
+    );
+    const body = (await res.json()) as {
+      ok: boolean;
+      service: string;
+      research_api: boolean;
+      required_workers: string[];
+      state?: string;
+    };
+    expect(res.status).toBe(200);
+    expect(body.research_api).toBe(false);
+    expect(body.required_workers).toHaveLength(REQUIRED_WORKERS.length);
+    expect(body.required_workers).toEqual([...REQUIRED_WORKERS]);
+    expect(body.state).not.toBe("success");
+    expect(posted).toHaveLength(0);
   });
 });
