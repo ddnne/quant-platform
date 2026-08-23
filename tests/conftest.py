@@ -181,10 +181,23 @@ def synced_cf_d1_db(
 
 
 @pytest.fixture(autouse=True)
-def _disable_host_receipt_pem(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Never load operator ~/.config receipt PEM during pytest."""
+def _disable_host_receipt_pem(
+    monkeypatch: pytest.MonkeyPatch, receipt_ed25519_keys: SimpleNamespace
+) -> None:
+    """Never load operator ~/.config receipt PEM during pytest.
+
+    Bind the tmp Ed25519 helper used by snapshot/coherence tests that import
+    ``tests.test_phase61_coverage_v2._signed_digests`` without that module's
+    autouse fixture.
+    """
     monkeypatch.setenv("QUANT_RECEIPT_DISABLE_HOST_PEM", "1")
     monkeypatch.setenv("QUANT_READINESS_DISABLE_HOST_PEM", "1")
+    import tests.test_phase61_coverage_v2 as phase61
+
+    previous = phase61._SIGNED_KEY
+    phase61._SIGNED_KEY = receipt_ed25519_keys.signing_key
+    yield
+    phase61._SIGNED_KEY = previous
 
 
 @pytest.fixture
