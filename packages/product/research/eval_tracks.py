@@ -160,9 +160,8 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "id": "unique22_leftover_lids",
         "track": EVAL_TRACK_LIQ_LARGE,
         "why": (
-            "5 leftover occupancy-equal lifts send params.gates (comboImpl); "
-            "17 parked unique22_occupancy_mismatch; pre_mom leftover stays "
-            "momentumAt(entryIdx)"
+            "5 occupancy-equal lifts; 17 parked unique22_occupancy_mismatch; "
+            "do not silent unpark leftover occupancy"
         ),
         "not_a_pass": True,
         "go": False,
@@ -231,10 +230,8 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "id": "catalog_and_plus_n_stopped",
         "track": EVAL_TRACK_LIQ_LARGE,
         "why": (
-            "vol then flow bounded fills landed; do not enumerate more "
-            "2-AND/3-AND YAML unless a dated brief flips "
-            "CATALOG_AND_PLUS_N_STOPPED; thin-series rate count is not a "
-            "fill mandate"
+            "do not enumerate more 2-AND/3-AND YAML unless a dated brief "
+            "flips CATALOG_AND_PLUS_N_STOPPED; rate count is not a fill"
         ),
         "not_a_pass": True,
         "go": False,
