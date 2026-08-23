@@ -43,8 +43,12 @@ def default_r2_put(
     content_type: str = "application/json",
     dry_run: bool = False,
     staging_dir: str | Path | None = None,
+    create_only: bool = True,
 ) -> dict[str, Any]:
-    """Put one object to R2 via wrangler (remote). dry_run stages only."""
+    """Put one object to R2 via wrangler (remote). dry_run stages only.
+
+    create_only (default True): if the key already exists, do not overwrite.
+    """
     meta = {
         "bucket": bucket,
         "key": key,
@@ -68,6 +72,25 @@ def default_r2_put(
             f"wrangler binary not found for R2 put: {wr}. "
             "Use dry_run=True to stage payloads without remote write."
         )
+
+    if create_only:
+        head = subprocess.run(
+            [
+                str(wr),
+                "r2",
+                "object",
+                "head",
+                f"{bucket}/{key}",
+                "--remote",
+                f"--config={cfg}",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            cwd=str(REPO_ROOT),
+        )
+        if head.returncode == 0:
+            return {**meta, "status": "exists", "created": False, "wrangler_rc": 0}
 
     with tempfile.NamedTemporaryFile(
         prefix="r2put_", suffix=".json", delete=False
@@ -98,7 +121,7 @@ def default_r2_put(
                 f"r2 put failed for {bucket}/{key} rc={proc.returncode}: "
                 f"{combined[-1200:]}"
             )
-        return {**meta, "status": "put_ok", "wrangler_rc": 0}
+        return {**meta, "status": "put_ok", "created": True, "wrangler_rc": 0}
     finally:
         try:
             tmp_path.unlink(missing_ok=True)
