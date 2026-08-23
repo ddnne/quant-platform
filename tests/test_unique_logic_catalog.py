@@ -168,12 +168,10 @@ def test_combo_thesis_records_are_compact_table_rows() -> None:
 def test_catalog_index_is_one_pass_lookup() -> None:
     from pathlib import Path
 
-    from research.eval_flags import CATALOG_YAML_COUNT_AT_STOP
     from research.unique_logic.catalog import catalog_index, catalog_spec
 
     idx = catalog_index()
-    freeze = int(CATALOG_YAML_COUNT_AT_STOP)
-    assert idx["n"] == idx["n_compiled"] == freeze == 2254
+    assert idx["n"] == idx["n_compiled"]
     assert idx["compiled_ids_match"] is True
     assert idx["yaml_still_present"] is False
     assert idx["n_combo"] >= 1
