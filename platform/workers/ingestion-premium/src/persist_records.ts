@@ -5,7 +5,7 @@
 
 import type { DatasetSpec } from "./catalog";
 import { pickAvailableAt } from "./availability";
-import { naturalKey, newRunId, pickEventTime, stableJson } from "./identity";
+import { naturalKey, newRunId, pickEventTime, stableJson, toJstIso } from "./identity";
 import { isR2Only, wantsSummaryChangeLog } from "./write_path_config";
 import { writeJsonlToR2 } from "./r2_structured_writer";
 import { writeMasterScd2 } from "./master_scd2/write";
@@ -18,16 +18,9 @@ export interface PersistEnv {
   ALLOW_D1_STRUCTURED_DATASETS?: string;
 }
 
-const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
 const RETRY_COUNT = 3;
 const RETRY_BASE_DELAY_MS = 500;
 const RETRY_MAX_DELAY_MS = 8_000;
-
-function toJstIso(d: Date): string {
-  const ms = d.getTime() + JST_OFFSET_MS;
-  const jst = new Date(ms);
-  return jst.toISOString().replace(/\.(\d+)Z$/, "+09:00");
-}
 
 /** Retry D1 prepare/batch on transient transport failures (same budget as HTTP). */
 async function d1WithRetry<T>(op: () => Promise<T>): Promise<T> {

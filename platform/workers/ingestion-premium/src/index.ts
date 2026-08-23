@@ -33,6 +33,7 @@ import {
 } from "./collection_receipts";
 import { upsertRecords, upsertWatermark } from "./persist_records";
 import { fetchDataset } from "./fetch_jq";
+import { todayJst, toJstIso } from "./identity";
 import { sha256HexFromString } from "./sha256";
 
 export interface Env {
@@ -48,25 +49,11 @@ export interface Env {
   DB: D1Database;
 }
 
-const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
-
 // P0-4 parallel ingest knobs — drive near Premium ~500/min ceiling.
 const DEFAULT_CONCURRENCY = 6;
 const MAX_CONCURRENCY = 8;
 // Premium budget ~500 req/min → 120 ms floor = exactly 500/min theoretical max.
 const RATE_LIMIT_INTERVAL_MS = 120;
-
-// time helpers (JST = UTC+9)
-
-function toJstIso(d: Date): string {
-  const ms = d.getTime() + JST_OFFSET_MS;
-  const jst = new Date(ms);
-  return jst.toISOString().replace(/\.(\d+)Z$/, "+09:00");
-}
-
-function todayJst(): string {
-  return toJstIso(new Date()).slice(0, 10);
-}
 
 // R2 raw: raw/{dataset}/{run_id}/page-NNNNNN.json + manifest.json
 

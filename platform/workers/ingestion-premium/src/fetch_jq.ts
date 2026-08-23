@@ -4,6 +4,7 @@
  */
 
 import type { DatasetSpec } from "./catalog";
+import { daysAgoJst, isYyyyMmDd, todayJst } from "./identity";
 import type { RateLimiter } from "./rate_limit";
 import {
   exponentialBackoffFullJitterMs,
@@ -16,7 +17,6 @@ export interface FetchEnv {
 }
 
 const JQ_BASE = "https://api.jquants.com";
-const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
 
 // Per-HTTP-request retries on 429/5xx (matches Python ingestion/common/retry).
 const RETRY_COUNT = 3;
@@ -26,29 +26,13 @@ const RETRY_MAX_DELAY_MS = 8_000;
 const RETRY_429_BASE_DELAY_MS = 1_000;
 const RETRY_429_MAX_DELAY_MS = 3_000;
 
-function toJstIso(d: Date): string {
-  const ms = d.getTime() + JST_OFFSET_MS;
-  const jst = new Date(ms);
-  return jst.toISOString().replace(/\.(\d+)Z$/, "+09:00");
-}
-
-function todayJst(): string {
-  return toJstIso(new Date()).slice(0, 10);
-}
-
 /** Last completed JST day — "today" before close often yields empty `data`. */
 function defaultMarketDayJst(): string {
   return daysAgoJst(1);
 }
 
-function daysAgoJst(n: number): string {
-  const t = new Date(Date.now() - n * 24 * 60 * 60 * 1000);
-  return toJstIso(t).slice(0, 10);
-}
-
 function inclusiveDates(from: string, to: string): string[] {
-  const datePattern = /^\d{4}-\d{2}-\d{2}$/;
-  if (!datePattern.test(from) || !datePattern.test(to)) {
+  if (!isYyyyMmDd(from) || !isYyyyMmDd(to)) {
     throw new Error("from/to must be YYYY-MM-DD");
   }
   const start = new Date(`${from}T00:00:00Z`);
