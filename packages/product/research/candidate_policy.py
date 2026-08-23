@@ -8,8 +8,6 @@ copy the boolean into a third definition.
 """
 from __future__ import annotations
 
-from typing import Any, Mapping, Sequence
-
 
 def job_candidate_grade(
     *,
@@ -29,31 +27,3 @@ def job_candidate_grade(
         return False
     return True
 
-
-def cells_candidate_counts(cells: Sequence[Mapping[str, Any]]) -> dict[str, int]:
-    n_complete = 0
-    n_collapsed = 0
-    n_broken = 0
-    for cell in cells:
-        if not isinstance(cell, Mapping):
-            continue
-        broken = (
-            cell.get("path_fallback") == "path_broken"
-            or cell.get("eval_path") == "path_broken"
-        )
-        fallback = str(cell.get("path_fallback") or "")
-        collapsed = "path_collapsed" in fallback or str(
-            cell.get("skip_reason") or ""
-        ).startswith("unique_unsupported")
-        if broken:
-            n_broken += 1
-        if collapsed:
-            n_collapsed += 1
-        if cell.get("daily_path_complete") is True and not broken and not collapsed:
-            n_complete += 1
-    return {
-        "n_cells": len(list(cells)),
-        "n_complete": n_complete,
-        "n_collapsed": n_collapsed,
-        "n_broken": n_broken,
-    }
