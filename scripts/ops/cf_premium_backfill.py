@@ -54,19 +54,9 @@ from ops.range_batch_scheduler import (  # noqa: E402
     estimate_dispatch_envelope,
     measure_dispatch_rpm,
 )
-
-
-def _read_index_text(path: str | None) -> str | None:
-    """Load local index HTML. Missing/blank path is None (fail-closed empty)."""
-    if path is None:
-        return None
-    raw = str(path).strip()
-    if not raw:
-        return None
-    index_path = Path(raw)
-    if not index_path.is_file():
-        raise FileNotFoundError(f"index HTML not found: {index_path}")
-    return index_path.read_text(encoding="utf-8")
+from ingestion.jsda.official_index import (  # noqa: E402
+    read_local_index_text as _read_index_text,
+)
 
 
 def _token() -> str:
