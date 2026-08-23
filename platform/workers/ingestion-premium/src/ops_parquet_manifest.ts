@@ -29,6 +29,9 @@ export async function handleParquetManifest(
   request: Request,
   env: ParquetManifestEnv,
 ): Promise<Response> {
+  if (request.method !== "POST") {
+    return Response.json({ error: "POST required" }, { status: 405 });
+  }
   if (!authorized(request, env.INGESTION_RUN_TOKEN)) {
     return Response.json({ error: "unauthorized" }, { status: 401 });
   }
