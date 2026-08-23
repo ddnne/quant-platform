@@ -50,6 +50,7 @@ const ingestionMigrations = [
   "0001_init.sql", "0002_watermarks.sql", "0003_change_feed.sql",
   "0004_revision_identity_v2.sql", "0005_natural_keys_v2.sql",
   "0006_raw_retention_manifests.sql", "0007_collection_coverage_v2.sql",
+  "0010_raw_acquisition_status.sql",
 ].map((name) => readFileSync(
   new URL(`../../ingestion-premium/migrations/${name}`, import.meta.url), "utf8",
 ));

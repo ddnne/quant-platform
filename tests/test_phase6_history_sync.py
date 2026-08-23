@@ -75,14 +75,66 @@ def test_local_schema_migrations_are_formal_and_idempotent(tmp_path):
         (6, "phase61_jsda_otc_bond_reference_archive"),
         (7, "phase61_jsda_correction_provenance"),
         (8, "phase62_jsda_corporate_bond_transactions"),
+        (9, "phase632_raw_acquisition_status"),
     ]
     first.close()
 
     second = SqliteStore(path)
     assert second._conn.execute(  # noqa: SLF001
         "SELECT COUNT(*) FROM schema_migrations"
-    ).fetchone()[0] == 8
+    ).fetchone()[0] == 9
     second.close()
+
+
+def test_raw_retention_completeness_accepts_acquired_not_as_coverage(
+    tmp_path,
+):
+    """Raw-plane ACQUIRED is allowed; COMPLETE remains a historical label only."""
+    store = SqliteStore(tmp_path / "raw-acq.sqlite")
+    conn = store._conn  # noqa: SLF001
+    conn.execute(
+        """
+        INSERT INTO raw_retention_manifests (
+            dataset, run_id, manifest_key, page_count, row_count, raw_bytes,
+            data_digest, completeness, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "equities_bars_daily",
+            1,
+            "raw/equities_bars_daily/1/manifest.json",
+            1,
+            0,
+            0,
+            "sha256:" + "a" * 64,
+            "ACQUIRED",
+            "2026-08-23T00:00:00+00:00",
+        ),
+    )
+    conn.execute(
+        """
+        INSERT INTO raw_retention_manifests (
+            dataset, run_id, manifest_key, page_count, row_count, raw_bytes,
+            data_digest, completeness, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "equities_bars_daily",
+            2,
+            "raw/equities_bars_daily/2/manifest.json",
+            1,
+            0,
+            0,
+            "sha256:" + "b" * 64,
+            "COMPLETE",
+            "2026-08-21T00:00:00+00:00",
+        ),
+    )
+    rows = conn.execute(
+        "SELECT run_id, completeness FROM raw_retention_manifests ORDER BY run_id"
+    ).fetchall()
+    assert [tuple(r) for r in rows] == [(1, "ACQUIRED"), (2, "COMPLETE")]
+    store.close()
 
 
 def test_change_feed_resumes_by_server_side_sequence(
