@@ -10,7 +10,7 @@ extracts landed. Leftover occupancy **HOLD** in `daily_path.ts`.
 `coverage_receipts`, `snapshot_publish_policy`, `snapshot_coverage_proof`,
 `snapshot_persist`, `snapshot_read`, `eval_orchestrate`,
 `ingestion-premium/collection_receipts.ts` — **DONE** in §7.  
-**Live strategy at `07b4435`:** §10 — remaining extracts vs HOLD. YAML
+**Live strategy at `f224e7e`:** §10 — remaining extracts vs HOLD. YAML
 file-count waste is closed. Size is not waste. Do not extract leftover
 occupancy. Do not add YAML. Do not declare Phase 7 GO.  
 **Mass / READY / Phase 7:** unchanged (NO-GO / not declared / OFF)
@@ -364,13 +364,13 @@ and COMPLETE predicates unchanged, generated files still generated.
 
 ---
 
-## 10. Current remaining extracts vs HOLD (HEAD 07b4435)
+## 10. Current remaining extracts vs HOLD (HEAD f224e7e)
 
 This is the **live** refactor strategy for “the code is full of waste.”
 §§1–9 remain the plan at `41003a5` / status at `5c9b962`. Follow this
 section now. Size is not a split key. Live math is not waste.
 
-Measured at `07b4435`: tracked paths **725**; catalog YAML
+Measured at `f224e7e`: tracked paths **741**; catalog YAML
 (`specs/research_logics/*.yaml`) **0**; remaining tracked YAML **1**
 (`specs/research_themes.yaml` — themes, not catalog logics); compiled
 n=**2254** (`migration.jsonl` 2254 lines);
@@ -382,8 +382,8 @@ Mass / READY / Phase 7: **NO-GO / not declared / OFF**.
 
 LOC via `wc -l` on named files at this HEAD (do not copy stale §2
 numbers). `daily_path.ts` is **1682** (was 1677 in §2).
-`ingestion-premium/src/index.ts` is **928** after
-`collection_receipts.ts`. `coverage_ledger.py` is **1445**.
+`ingestion-premium/src/index.ts` is **949** after
+`collection_receipts.ts`. `coverage_ledger.py` is **1430**.
 `snapshot.py` is **912**.
 
 ### 10.1 Waste already closed (do not re-open)
@@ -430,7 +430,7 @@ optional HOLD, not a required extract.
 
 | Later | Mixed surface | Authority to pick | Must not |
 |------:|---------------|-------------------|----------|
-| 1 | `BackfillPlanner` (`ops/backfill_planner.py`, 604) vs `plan_required_segments` (`coverage_ledger.py`) | **ops product** inventory planner. Planner walks coverage contracts + month chunks and **does not call** `plan_required_segments` (official domain / tip snapshot / index days). | Invent COMPLETE; calendar-walk OTC; delete one planner without a dated ops brief |
+| 1 | `BackfillPlanner` (`ops/backfill_planner.py`, 709) vs `plan_required_segments` (`coverage_ledger.py`) | **ops product** inventory planner. Tip-snapshot wire **DONE** (`792ae2b`): AM bars / earnings calendar call `plan_required_segments` (no month-chunk). Remaining mixed authority: other bounded-history month chunks (do not invent COMPLETE). | Invent COMPLETE; calendar-walk OTC; delete one planner without a dated ops brief |
 | 2 | Python `r2_io.py` (211) head-then-put **TOCTOU** vs Worker children-then-manifest (`http.ts` `putChildrenThenManifest`; digest mismatch **409**) | Worker is immutable authority. Python stays **non-authority** (`python_cli_put_is_not_immutable_authority`; `authoritative=True` refused). | Treat “TOCTOU recorded in tests” as done; make Python CLI the SoT |
 | 3 | Hand-written `evaluation_ir.ts` (265) vs `specs/evaluation_ir/schema.json` (67) | Schema is codec SoT. Generated TS codec still **OPEN**. Grade predicate is already shared (`job_candidate_grade` / `jobCandidateGrade`). | Second grade policy; delete schema; dual-edit field lists forever |
 | 4 | MCP `OPS_TOOLS` strings (“Coverage V2”) vs stored `policy_version` (`dataset_coverage.policy_version`; live `collection-coverage/v2`, V3 overlay on some contracts) | Presentation tools must **echo stored** `policy_version`, not invent V3 completeness. Same split in `packages/edge/mcp_servers/quant_data/server.py`. | Unify strings to mint FRESH / COMPLETE 23 |
@@ -444,7 +444,7 @@ Not code extracts (environment / docs / optional freeze):
 | Historical `docs/reviews/*.md` as live SoT | Freeze files stay historical (`HEAD at remaining-audit: 03cd1b1`; P632 re-diffs at named SHAs). | **Banners, not deletion.** Live flags: `phase62_residual_status.md` + MCP projection + this §10. |
 | Compact catalog family+template+parameter matrix | **NOT done.** `migration.jsonl` is still 2254 expanded rows. | Optional. Freeze n=2254 **HOLD**. Do not report 2254 as a product win. Do not YAML +N. |
 
-`ingestion-premium/src/index.ts` (928) still mixes fetch / upsert / HTTP
+`ingestion-premium/src/index.ts` (949) still mixes fetch / upsert / HTTP
 after receipts **DONE**. Same-worker sibling extracts remain allowed
 (package path frozen). That is leftover mixed authority from §7 lane 10
 remainder, not a new product.
