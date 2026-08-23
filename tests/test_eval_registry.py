@@ -392,9 +392,11 @@ def test_reconstitution_options_drop_nested_without_reject() -> None:
     assert plan["basket_theme_fund"]["apply_reject"] is False
     assert plan["basket_head4"]["historical"] is True
     assert plan["basket_head4"]["needs_reconstitution"] is False
+    from research.combo_basket import active_reconstitution_plan as reexport
     from research.combo_basket_catalog import active_reconstitution_plan
 
     active = {p["basket_id"] for p in active_reconstitution_plan()}
+    assert {p["basket_id"] for p in reexport()} == active
     assert "basket_head4" not in active
     assert "basket_theme_fund" in active
     assert "basket_theme_flow" in active

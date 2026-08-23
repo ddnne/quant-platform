@@ -7,6 +7,7 @@ from typing import Any, Mapping, Sequence
 from research.combo_basket_catalog import (
     META_BASKETS,
     RETIRED_BASKET_RULES,
+    active_reconstitution_plan,
     equal_weights,
     mechanical_basket_defs,
 )
@@ -165,7 +166,7 @@ def primary_sleeve_and_meta_cells(
     """Equal-weight primary sleeves + active metas. Not a pass."""
     sleeve_cells: list[dict[str, Any]] = []
     for d in mechanical_basket_defs():
-        if not d.get("primary"):
+        if d.get("historical") or not d.get("primary"):
             continue
         sleeve_cells.extend(
             blend_window_cells(
@@ -404,6 +405,7 @@ __all__ = [
     "filter_cells_honest_windows",
     "stitch_cells_honest_windows",
     "occupancy_in_candidate_band",
+    "active_reconstitution_plan",
     "primary_sleeve_and_meta_cells",
     "summarize_basket_trends",
 ]
