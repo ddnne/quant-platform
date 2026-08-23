@@ -2,6 +2,7 @@
 
 import inspect
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -594,7 +595,10 @@ def test_try_r2_get_json_is_non_authority_get_miss_not_complete(monkeypatch) -> 
     assert "--remote" in src
     assert "wrangler deploy" not in src
     assert "r2 object put" not in src
-    assert "COMPLETE" not in src
+    # Honesty docs may say "not COMPLETE". Do not mint COMPLETE.
+    for match in re.finditer(r"COMPLETE", src):
+        window = src[max(0, match.start() - 24) : match.start()].lower()
+        assert "not" in window, src[max(0, match.start() - 24) : match.end() + 12]
 
     def boom(*_a, **_k):
         raise OSError("no wrangler")
