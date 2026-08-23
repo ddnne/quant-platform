@@ -163,3 +163,30 @@ on `missing_receipt`.
 - Does not arm Mass / READY / GO.
 - Does not read GitHub PR comments, issue comments, or check-run conclusions
   as inputs. Only POSTed receipts plus the bound status token.
+
+## Public surfaces (preview vs production)
+
+Do not publish every Worker on a stable `*.workers.dev` hostname.
+Top-level config matches production (same Wrangler `name`; no `-production`
+suffix). Production deploys use `--env production` (or `CLOUDFLARE_ENV=production`).
+Default `wrangler deploy` without `--env` still targets the top-level Worker;
+wrangler 4.x warns to pass `--env=""` or `--env production` when named envs exist.
+
+Preview is **version Preview URLs** (`preview_urls = true`), not a second
+product hostname. Those URLs are not a public research API, not public
+research execution, and not an ingest API.
+
+| Worker | Wrangler `name` | Preview | Production `workers_dev` | Public surface |
+|---|---|---|---|---|
+| quant-ops-mcp | `quant-platform-ops-read-mcp` | `workers_dev=true` (OAuth callback host) | `true` | remote public, OAuth required, read-only |
+| research-ai-gateway | `quant-platform-research-ai-gateway` | `preview_urls` only | `false` | service binding only; not a public research API |
+| research-mass-eval | `quant-platform-research-mass-eval` | `preview_urls` only | `false` | internal/admin; no public research execution |
+| ingestion-premium | `quant-platform-ingestion-premium` | `preview_urls` only | `false` | cron/internal |
+| ingestion-jsda | `quant-platform-ingestion-jsda` | `preview_urls` only | `false` | cron/internal |
+| ingestion-secrets | `quant-platform-ingestion-secrets` | `workers_dev=true` (token-gated proxy host) | `true` | narrow authenticated proxy |
+
+`research-ai-gateway` keeps `[ai]`; `research-mass-eval` keeps service binding
+`AI_GATEWAY` and must not bind `env.AI`. wrangler 4.125.0 still dry-runs the
+gateway with `workers_dev=false` (no custom route). Ops MCP does not gain
+arbitrary SQL, URL fetch, ingest triggers, delete, READY publication, feature
+approve, broker/order, shell, or secret-read tools.

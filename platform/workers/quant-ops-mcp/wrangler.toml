@@ -1,5 +1,9 @@
 # Quant Ops Read MCP — same remote MCP pattern as news-mcp:
 # GitHub OAuth (@cloudflare/workers-oauth-provider) + Agents McpAgent + /mcp.
+#
+# Public surface: remote public, OAuth required, read-only.
+# workers_dev stays true so the GitHub OAuth callback host
+# (OAUTH_AUTHORIZATION_SERVER) remains this workers.dev URL.
 name = "quant-platform-ops-read-mcp"
 main = "src/index.js"
 compatibility_date = "2026-08-01"
@@ -37,3 +41,26 @@ OAUTH_AUTHORIZATION_SERVER = "https://quant-platform-ops-read-mcp.taku-haga.work
 
 [observability]
 enabled = true
+
+# Production uses the same Worker name (no -production suffix) so existing
+# OAuth clients keep the workers.dev callback host.
+[env.production]
+name = "quant-platform-ops-read-mcp"
+workers_dev = true
+
+[[env.production.kv_namespaces]]
+binding = "OAUTH_KV"
+id = "cbbfc9439c3e4a789fa103777d38f39e" # title: quant-ops-mcp-oauth
+
+[[env.production.d1_databases]]
+binding = "OPS_DB"
+database_name = "quant-ingest"
+database_id = "be6fdcf8-40be-41fc-9535-7facd1fc2ffc"
+
+[env.production.durable_objects]
+bindings = [{ name = "MCP_OBJECT", class_name = "QuantOpsMcpAgent" }]
+
+[env.production.vars]
+ALLOWED_LOGIN = "ddnne"
+DAILY_ROW_QUOTA = "25000"
+OAUTH_AUTHORIZATION_SERVER = "https://quant-platform-ops-read-mcp.taku-haga.workers.dev"

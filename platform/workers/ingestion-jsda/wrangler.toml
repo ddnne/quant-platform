@@ -1,10 +1,14 @@
 # JSDA governed sources — public HTTP, no API key.
 # Raw artifacts land in R2; structured parse remains Python (xlrd/openpyxl)
 # until a Workers-native structured path is added.
+#
+# Public surface: cron/internal. Production has no workers.dev hostname.
+# preview_urls are version-only, not a public ingest API.
 name = "quant-platform-ingestion-jsda"
 main = "src/index.ts"
 compatibility_date = "2026-08-01"
-workers_dev = true
+workers_dev = false
+preview_urls = true
 
 [[r2_buckets]]
 binding = "RAW_BUCKET"
@@ -30,3 +34,22 @@ crons = ["30 1 * * *"]
 
 [observability]
 enabled = true
+
+[env.production]
+name = "quant-platform-ingestion-jsda"
+workers_dev = false
+preview_urls = true
+
+[[env.production.r2_buckets]]
+binding = "RAW_BUCKET"
+bucket_name = "quant-raw"
+
+[[env.production.d1_databases]]
+binding = "DB"
+database_name = "quant-ingest"
+database_id = "be6fdcf8-40be-41fc-9535-7facd1fc2ffc"
+
+[env.production.vars]
+USER_AGENT = "quant-platform-ingest/0.1 (+personal-research; JSDA bond stats)"
+MAX_DATA_FILES = "3"
+MAX_YEAR_PAGES = "1"
