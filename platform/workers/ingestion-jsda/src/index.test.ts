@@ -143,6 +143,41 @@ describe("ingestion-jsda handlers", () => {
     expect(fetchCalls).toBe(0);
   });
 
+  it("POST /health is 405 GET required and does not leak the token or fetch JSDA", async () => {
+    rejectLiveFetch();
+    const { env, sql, r2Ops } = touchingEnv();
+    const res = await worker.fetch(
+      new Request("https://ingestion-jsda.test/health", {
+        method: "POST",
+        headers: { "X-Ingestion-Token": RUN_TOKEN },
+      }),
+      env,
+    );
+    expect(res.status).toBe(405);
+    const body = await res.text();
+    expect(JSON.parse(body)).toEqual({ error: "GET required" });
+    assertNoLeakOrCoverage(body);
+    expect(sql).toEqual([]);
+    expect(r2Ops).toEqual([]);
+    expect(fetchCalls).toBe(0);
+  });
+
+  it("GET /nope is 404 and does not fetch JSDA or claim COMPLETE", async () => {
+    rejectLiveFetch();
+    const { env, sql, r2Ops } = touchingEnv();
+    const res = await worker.fetch(
+      new Request("https://ingestion-jsda.test/nope", { method: "GET" }),
+      env,
+    );
+    expect(res.status).toBe(404);
+    const body = await res.text();
+    expect(JSON.parse(body)).toEqual({ error: "not found" });
+    assertNoLeakOrCoverage(body);
+    expect(sql).toEqual([]);
+    expect(r2Ops).toEqual([]);
+    expect(fetchCalls).toBe(0);
+  });
+
   it("POST /v1/run missing or wrong token is 401 and does not fetch or persist", async () => {
     rejectLiveFetch();
 

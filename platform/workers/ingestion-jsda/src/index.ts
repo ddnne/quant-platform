@@ -597,6 +597,9 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     if (url.pathname === "/health") {
+      if (request.method !== "GET") {
+        return Response.json({ error: "GET required" }, { status: 405 });
+      }
       return Response.json({
         ok: true,
         worker: "ingestion-jsda",
