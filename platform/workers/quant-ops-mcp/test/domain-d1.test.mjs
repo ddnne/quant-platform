@@ -559,6 +559,24 @@ test("projection_status does not report FRESH when refresh_success is false", as
   assert.equal(result.stale, true);
   assert.equal(result.stages.refresh_attempt, false);
   assert.equal(result.stages.refresh_success, false);
+  assert.equal(result.last_known_good.not_fresh, true);
+  db.close();
+});
+
+test("live stored FRESH + null refresh_status + age>86400 never CURRENT/FRESH", async () => {
+  const db = new DatabaseSync(":memory:");
+  await seedProjectionMeta(db, {
+    generatedAt: "2026-08-21T12:30:49.152421+00:00",
+    status: "FRESH",
+    detail: JSON.stringify({ refresh_status: null }),
+    gen: "projgen-ef18b4f86ee946048161d25e2a30a2a8",
+  });
+  const result = await callOpsTool(d1(db), "projection_status", {});
+  assert.equal(result.projection_status, "STALE");
+  assert.notEqual(result.projection_status, "FRESH");
+  assert.equal(result.stale, true);
+  assert.equal(result.stages.refresh_success, false);
+  assert.equal(result.last_known_good.not_fresh, true);
   db.close();
 });
 

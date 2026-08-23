@@ -35,6 +35,7 @@ IR `golden.jsonl` (`7f2dc12`).
 - [`P632_brief_leaks.md`](P632_brief_leaks.md) — A–S vs feature branch
 - [`P632_ind_A_pit_complete.md`](P632_ind_A_pit_complete.md) / [`P632_ind_A_revisit.md`](P632_ind_A_revisit.md) / [`P632_ind_A_revisit_f224e7e.md`](P632_ind_A_revisit_f224e7e.md) / [`P632_ind_B_ci_authority.md`](P632_ind_B_ci_authority.md) / [`P632_ind_C_catalog_pilot.md`](P632_ind_C_catalog_pilot.md)
 - [`P632_projection_stale.md`](P632_projection_stale.md) — `refresh_success=false` root cause
+- [`P632_projection_refresh_false.md`](P632_projection_refresh_false.md) — live write of `refresh_success=false` (`refresh_attempt=true`, `not_fresh=true`)
 - [`P632_test_inventory.md`](P632_test_inventory.md)
 
 Later on this branch (after the A01/A07 freeze): occupancy `yaml_remains_sot` removed; unused `cells_candidate_counts` deleted; compiled `catalog_path` is `migration.jsonl`; JSDA/JQ tests inject tmp Ed25519. Host PEM isolation and fresh-venv pytest remain OPEN.
