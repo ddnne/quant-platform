@@ -52,8 +52,11 @@ def test_verify_ci_script_exists_executable_and_covers_required_steps() -> None:
     assert "assert_catalog_ids_emit_frozen" in src
     assert "catalog_ids" in src
     assert "specs/evaluation_ir/golden.jsonl" in src
+    assert "specs/evaluation_ir/schema.json" in src
     assert "evaluation_ir.py" in src
     assert "evaluation_ir.ts" in src
+    assert "ci-aggregate" not in src
+    assert len(WORKERS) == 6
     assert "package-lock.json" in src
     assert "npm ci" in src
     assert "npm test" in src

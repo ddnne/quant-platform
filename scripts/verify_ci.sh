@@ -61,9 +61,10 @@ echo "==> catalog compile + catalog_ids freeze"
 
 echo "==> Evaluation IR golden/schema presence"
 golden="$ROOT/specs/evaluation_ir/golden.jsonl"
+schema="$ROOT/specs/evaluation_ir/schema.json"
 schema_py="$ROOT/packages/product/research/evaluation_ir.py"
 schema_ts="$ROOT/platform/workers/research-mass-eval/src/evaluation_ir.ts"
-for p in "$golden" "$schema_py" "$schema_ts"; do
+for p in "$golden" "$schema" "$schema_py" "$schema_ts"; do
   if [[ ! -f "$p" ]]; then
     echo "Evaluation IR missing golden/schema: $p" >&2
     exit 1
