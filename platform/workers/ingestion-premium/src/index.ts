@@ -26,6 +26,7 @@ import { handlePruneChangelog } from "./ops_prune_changelog";
 import { handleParquetManifest } from "./ops_parquet_manifest";
 import { handleArtifactsJoinPlan } from "./ops_artifacts_plan";
 import { handleExportPaths } from "./http_export";
+import { ingestionTokenMatches } from "./ingestion_token";
 import {
   writeCollectionReceipt,
   writeRequiredCoverageSegment,
@@ -568,12 +569,6 @@ async function runWithConcurrency<T>(
 }
 
 
-function authorized(request: Request, expected: string | undefined): boolean {
-  if (!expected) return false;
-  const got = request.headers.get("X-Ingestion-Token") || "";
-  return got === expected;
-}
-
 function json(body: unknown, status = 200): Response {
   return Response.json(body, { status });
 }
@@ -603,7 +598,7 @@ async function handleNaturalKeyRebuild(env: Env, request: Request): Promise<Resp
   if (request.method !== "POST") {
     return json({ error: "POST required" }, 405);
   }
-  if (!authorized(request, env.INGESTION_RUN_TOKEN)) {
+  if (!(await ingestionTokenMatches(request, env.INGESTION_RUN_TOKEN))) {
     return json({ error: "unauthorized" }, 401);
   }
   try {
@@ -621,7 +616,7 @@ async function handleRun(
   if (request.method !== "POST") {
     return json({ error: "POST required" }, 405);
   }
-  if (!authorized(request, env.INGESTION_RUN_TOKEN)) {
+  if (!(await ingestionTokenMatches(request, env.INGESTION_RUN_TOKEN))) {
     return json({ error: "unauthorized" }, 401);
   }
   const url = new URL(request.url);
