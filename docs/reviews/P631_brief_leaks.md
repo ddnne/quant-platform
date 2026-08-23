@@ -2,12 +2,27 @@
 
 **Brief:** Phase 6.3.1 Reproducibility & Authority Closure → 6.4 Live Evidence Closure → Phase 7 Controlled Pilot prep.  
 **Named review SHA in brief:** `96264f0` — **not** the freeze (brief forbids pinning it).  
-**`origin/main` at this audit:** `03cd1b1` (`docs: record coverage-gap audit; four PARTIAL stay uninvented`).  
-**Local HEAD audited:** `e927b97` (six commits ahead of `origin/main`; not pushed).  
-**Wave-1 freeze docs:** `docs/reviews/` remaining-audit files are dated at `03cd1b1`; several items below moved after that freeze. **This file is the re-diff vs current tree.**
+**Previous register:** `e927b97` (file still described that HEAD; later landings were not re-diffed).  
+**This re-diff HEAD:** `c5cdb57` (`docs: index 6.3.1 leak, plan-gap, refactor, dead-function reviews`).  
+**`origin/main` at this audit:** `c5cdb57` (matches this isolation HEAD).  
+**Wave-1 freeze docs:** `docs/reviews/` remaining-audit files are dated at `03cd1b1`; do not re-open those freeze files. **This file is the re-diff vs `c5cdb57`.**
 
 Status vocabulary: **OPEN / FIXED / DEFERRED / HOLD / HUMAN**.  
 Do not invent Coverage COMPLETE, Projection FRESH, B0 PASS, READY, Phase 6.3.1 COMPLETE, or Phase 7 GO.
+
+Landings after `e927b97` confirmed in code at `c5cdb57` (do not re-open):
+
+| SHA | Item | Status now |
+|-----|------|------------|
+| `1fb8fa9` | M `catalog_path` is compiled `migration.jsonl`, not a missing YAML | **FIXED** |
+| `6381960` | N occupancy `yaml_remains_sot` → `yaml_still_present: False` | **FIXED** (pre-`e927b97`; still true) |
+| `948a92c` | N occupancy `yaml_still_present` default fail-closed | **FIXED** |
+| `f82f371` | O `cells_candidate_counts` deleted | **FIXED** (pre-`e927b97`; still true) |
+| `359b766` / `8e71619` | P unique22 park leftover occupancy, not YAML | **FIXED** |
+| `5a168c7` / `4a6293a` | A JSDA / JQ tests inject tmp Ed25519 | **FIXED** |
+| `368f2c7` | H IR golden is encoder-owned | **FIXED** (dual codecs still **OPEN**) |
+
+Still **OPEN / DEFERRED / HOLD / HUMAN** as listed under A–X. Factorize n=2254 expanded remains **OPEN**.
 
 ---
 
@@ -20,7 +35,7 @@ Do not invent Coverage COMPLETE, Projection FRESH, B0 PASS, READY, Phase 6.3.1 C
 | Phase 7 Controlled Pilot GO? | **NO-GO** |
 | Phase 7 Mass Research GO? | **NO-GO** |
 
-6.3.1 §19 still fails: Edge hard budget is a stub (`DEFERRED`); catalog is still 2254 expanded rows (`OPEN`); fabricated `catalog_path` remains (`OPEN`); Python R2 put is TOCTOU (`OPEN`); independent P0 unresolved ≠ 0; clean-venv pytest / Worker typecheck+build not proven at this HEAD; `origin/main` SHA does not match local HEAD.
+6.3.1 §19 still fails: Edge hard budget is a stub (`DEFERRED`); catalog is still 2254 expanded rows (`OPEN` factorize); Python R2 put is TOCTOU (`OPEN`); host PEM isolation **OPEN**; fresh-venv pytest **OPEN**; independent P0 unresolved ≠ 0; Worker typecheck+build not proven at this HEAD.
 
 6.4 §19 fails on live evidence: 22 COMPLETE held / **4 PARTIAL**; Projection **STALE**; B0 **UNKNOWN**; READY **null**; applied pin **unpinned**.
 
@@ -28,7 +43,7 @@ Phase 7 foundation types exist and stay **OFF**. That is not GO.
 
 ---
 
-## A–X vs current tree
+## A–X vs `c5cdb57`
 
 ### A. Clean Python tests (tmp sqlite, tmp Ed25519, no production keys)
 
@@ -36,13 +51,14 @@ Phase 7 foundation types exist and stay **OFF**. That is not GO.
 
 | Sub-item | Status | Evidence |
 |----------|--------|----------|
-| `test_eval_loaders` tmp sqlite | **FIXED** | `tests/test_eval_loaders.py:9-11` writes `tmp_path / "ingestion.sqlite"`. Commit `4cc0a47`. |
-| Receipt tests tmp Ed25519 | **FIXED** | `tests/conftest.py:183-221` `receipt_ed25519_keys` + `QUANT_RECEIPT_VERIFY_KEYS`; never the repo registry. `3e46c97`. |
+| `test_eval_loaders` tmp sqlite | **FIXED** | `tests/test_eval_loaders.py:11` writes `tmp_path / "ingestion.sqlite"`. Commit `4cc0a47`. |
+| Receipt tests tmp Ed25519 | **FIXED** | `tests/conftest.py:184-222` `receipt_ed25519_keys` + `QUANT_RECEIPT_VERIFY_KEYS`; never the repo registry. `3e46c97`. |
 | phase61 coverage tmp keys | **FIXED** | `tests/test_phase61_coverage_v2.py:68-75` autouse tmp registry. `3b933ec`. |
 | JSDA COMPLETE injects tmp signer | **FIXED** | `tests/test_jsda_governed.py:245-256`, `test_jsda_repo_governed.py:155-166`, `test_jsda_corrections.py:121-132`. Fail-closed unsigned paths stay (`test_jsda_governed.py:329`). `5a168c7`. |
+| JQ receipts inject tmp signer | **FIXED** | `tests/test_jquants_pipeline_catalog.py:19-24,69-71`; `tests/test_jquants_receipt_emit.py:80-84`. `4a6293a`. |
 | Ambient proxy isolated | **FIXED** | `packages/data_plane/ingestion/common/http.py:24-28` `_http_trust_env()` default False. `331f3c4`. |
-| Host PEM never read in pytest | **OPEN** | `packages/data_plane/storage/receipt_crypto.py:27-28,148-149` still loads `~/.config/quant-platform/receipt_signing_key.pem`. Readiness HMAC falls back to that PEM (`packages/product/research/readiness.py:112-124`). Tests that omit the fixture can still sign with operator material. A01 freeze (`docs/reviews/A01_python_clean_tests.md`) still describes this. |
-| Fresh venv `pip install -e ".[dev]" && pytest -q` | **OPEN** | Brief §4 completion condition. Not executed at `e927b97`. `scripts/verify_all.sh` requires an existing `.venv` (`19-31`, `87-89`) and does not create one. |
+| Host PEM never read in pytest | **OPEN** | `packages/data_plane/storage/receipt_crypto.py:26-28,148-149` still loads `~/.config/quant-platform/receipt_signing_key.pem`. Readiness HMAC falls back to that PEM (`packages/product/research/readiness.py:112-124`). Tests that omit the fixture can still sign with operator material. A01 freeze (`docs/reviews/A01_python_clean_tests.md`) still describes this. |
+| Fresh venv `pip install -e ".[dev]" && pytest -q` | **OPEN** | Brief §4 completion condition. Not executed at `c5cdb57`. `scripts/verify_all.sh` requires an existing `.venv` (`19-31`, `87-89`) and does not create one. |
 
 Wave-1 P0-A1/A2 must not be re-opened. Residual is host private-key sandbox + unproven clean clone.
 
@@ -64,8 +80,8 @@ Wave-1 P0-A1/A2 must not be re-opened. Residual is host private-key sandbox + un
 
 **status: FIXED**
 
-- JSDA: `require_jsda_receipt_authority()` at run start (`packages/data_plane/ingestion/jsda/archive.py:312`); structured `registrar.register` only after `authority is None` raises (`archive.py:452-466`). Same pattern: `jsda/corrections.py:320`, `jsda/repo_archive.py:289`. SUCCESS path requires authority (`jsda/receipts.py:20-28,50-56`). `5f95b8f`.
-- JQ: `packages/data_plane/ingestion/pipeline.py:361-387` verifies `require_signed_receipt_authority()` **before** `reg.register`; missing authority returns `registered=0`.
+- JSDA: `require_jsda_receipt_authority()` at run start (`packages/data_plane/ingestion/jsda/archive.py:312`); structured `registrar.register` only after authority (`archive.py:465`). Same pattern: `jsda/corrections.py:320`, `jsda/repo_archive.py:289`. SUCCESS path requires authority (`jsda/receipts.py:20-28,50-56`). `5f95b8f`.
+- JQ: `packages/data_plane/ingestion/pipeline.py:371-387` verifies `require_signed_receipt_authority()` **before** `reg.register`; missing authority returns `registered=0`.
 - Raw-only recovery is a separate path; empty-raw SUCCESS is forbidden (`jsda/receipts.py:51-52`; JQ `jquants/receipts.py:74-75`).
 
 ---
@@ -74,7 +90,7 @@ Wave-1 P0-A1/A2 must not be re-opened. Residual is host private-key sandbox + un
 
 **status: FIXED** (construct) — live B0/READY remain 6.4 **OPEN**
 
-- `packages/product/research/phase7_pilot.py:75-84` type-checks `VerifiedResearchReadiness` then `require_valid(expected_snapshot_id=…)`. Duck `SimpleNamespace(bound=True)` is rejected (`tests/test_phase7_pilot_construct.py:136-146`). `AuthorizedEvaluationService` only from `bind_authorized_evaluation_service` (`phase7_pilot.py:33-47`). `24d7902`.
+- `packages/product/research/phase7_pilot.py:79-84` type-checks `VerifiedResearchReadiness` then `require_valid(expected_snapshot_id=…)`. Duck `SimpleNamespace(bound=True)` is rejected (`tests/test_phase7_pilot_construct.py:136-146`). `AuthorizedEvaluationService` only from `bind_authorized_evaluation_service` (`phase7_pilot.py:33-47`). `24d7902`.
 - Construct still requires `ResearchBudgetCapability`, `ExperimentPlan.ready_snapshot_id`, `ImmutableArtifactStore.create_if_absent` (`phase7_pilot.py:122-136`). `operator_override` cannot substitute (`117-120`).
 - Live B0 PASS / READY digest on Cloudflare is **not** this lane. Residual: B0 **UNKNOWN**, READY **null**.
 
@@ -85,7 +101,7 @@ Wave-1 P0-A1/A2 must not be re-opened. Residual is host private-key sandbox + un
 **status: FIXED** (typed decode) / **DEFERRED** (Edge DO ledger)
 
 - Strict decode, no raw text fallback: `platform/workers/research-ai-gateway/src/index.ts:127-149` `decodeGatewayRequest` then `decodeTypedArtifact`; decode failure returns 400. `ccf486a`. Schemas: `schema.ts:11-18` (ResearchMemo / FeatureProposal / StrategySpec / SelectionDecision / Insight).
-- `budget_id` required: `schema.ts:146-150,186-187` — “Fail-closed budget stub. A persistent Durable Object ledger is not in this commit.” Presence of `budget_id` is **not** reserve/reconcile.
+- `budget_id` required: `schema.ts:146-150,185-187` — “Fail-closed budget stub. A persistent Durable Object ledger is not in this commit.” Presence of `budget_id` is **not** reserve/reconcile.
 - Mass-eval still sends `GATEWAY_TOKEN` (`research-mass-eval/src/ai_gateway_client.ts:23-47`) even with service binding `AI_GATEWAY` (`wrangler.toml:39-42`). Brief wanted internal caller capability, not shared bearer. Residual coupling **OPEN**; bind itself is **HUMAN** (item S).
 
 6.3.1 §19 “Edge hard budget reserve/reconcile” is **not** met.
@@ -96,8 +112,8 @@ Wave-1 P0-A1/A2 must not be re-opened. Residual is host private-key sandbox + un
 
 **status: FIXED** (Worker) / **OPEN** (Python CLI TOCTOU)
 
-- Worker: `putChildrenThenManifest` (`platform/workers/research-mass-eval/src/http.ts:176-209`) writes children then create-only manifest. Used from `index.ts:20,269,440`. Tests: `http.test.ts:114`. `4d0180f`.
-- Python: `packages/product/research/r2_io.py:50-57,84-85` documents head-then-put **TOCTOU**; “Python CLI put is not the immutable authority.” Tests pin that (`tests/test_immutable_artifact.py:56-63`). Brief §9: do **not** treat “TOCTOU recorded in tests” as done.
+- Worker: `putChildrenThenManifest` (`platform/workers/research-mass-eval/src/http.ts:177-209`) writes children then create-only manifest. Used from `index.ts:20,269,440`. Tests: `http.test.ts:114`. `4d0180f`.
+- Python: `packages/product/research/r2_io.py:50-57,84-85` documents head-then-put **TOCTOU**; “Python CLI put is not the immutable authority.” Tests pin that (`tests/test_immutable_artifact.py:54-60`). Brief §9: do **not** treat “TOCTOU recorded in tests” as done.
 
 ---
 
@@ -114,9 +130,9 @@ Wave-1 P0-A1/A2 must not be re-opened. Residual is host private-key sandbox + un
 
 ### H. Evaluation IR single authority + `golden.jsonl`
 
-**status: OPEN** (single generated authority) / golden **FIXED**
+**status: OPEN** (single generated authority / dual codecs) / encoder-owned golden **FIXED**
 
-- Shared golden: `specs/evaluation_ir/golden.jsonl` (10 vectors). Python `packages/product/research/evaluation_ir.py:11-20`; Worker `platform/workers/research-mass-eval/src/evaluation_ir.ts:7-14`. Both call `job_candidate_grade` / `jobCandidateGrade`. `7f2dc12`.
+- Shared golden: `specs/evaluation_ir/golden.jsonl`. Python `packages/product/research/evaluation_ir.py:11-12,250-259` — golden rows are emitted by `encode_evaluation_ir` (`emit_golden_vector` / `emit_evaluation_ir_golden`). Tests: `tests/test_evaluation_ir.py:214-225` `test_golden_is_encoder_owned`. Worker still dual-codec: `platform/workers/research-mass-eval/src/evaluation_ir.ts:1-8`. Both call `job_candidate_grade` / `jobCandidateGrade`. `7f2dc12` (file) + `368f2c7` (encoder-owned).
 - Dual codecs remain (Python + TypeScript). Brief §11 recommended JSON Schema → generated types. Grade predicate is shared; encode/decode are still two implementations. Not “one unbypassable generated authority.”
 
 ---
@@ -125,8 +141,8 @@ Wave-1 P0-A1/A2 must not be re-opened. Residual is host private-key sandbox + un
 
 **status: FIXED** (semantics) / live pin **OPEN** (6.4)
 
-- `platform/workers/quant-ops-mcp/src/domain.js:84-97` `applied == null` → `EXPORT_CURRENT_APPLY_UNPINNED` / `LAGGING_APPLY_UNPINNED` / `APPLY_UNPINNED`, **never CURRENT**. `domain.js:755-756,799`.
-- No active generation → coverage **UNKNOWN**, last-known-good is not current COMPLETE (`domain.js:286-312,326`). Test: `test/domain-d1.test.mjs:296`.
+- `platform/workers/quant-ops-mcp/src/domain.js:84-97` `applied == null` → `EXPORT_CURRENT_APPLY_UNPINNED` / `LAGGING_APPLY_UNPINNED` / `APPLY_UNPINNED`, **never CURRENT**. `domain.js:756,799`.
+- No active generation → coverage **UNKNOWN**, last-known-good is not current COMPLETE (`domain.js:286-312`). Test: `test/domain-d1.test.mjs:296`.
 - Live residual (`docs/phase62_residual_status.md:26-30,69`): Projection **STALE**; sync `applied_cursor=null`. Honesty of the code path is FIXED; the pin is not remote (item R).
 
 ---
@@ -161,8 +177,8 @@ Live: 22 COMPLETE held / **4 PARTIAL** (`docs/phase62_residual_status.md:27-29`;
 
 **status: FIXED** (OFF)
 
-- `packages/product/research/pilot_loop.py:1-8,49-57,110-148` — all execution routes raise `MassResearchDisabledError`; `go` never true. `61c88a0`.
-- Worker: `platform/workers/research-mass-eval/wrangler.toml:48-51` `MASS_RESEARCH = "NO-GO"`, `PHASE7 = "OFF"`, `READY_DECLARED = "false"`.
+- `packages/product/research/pilot_loop.py:1-8,49-57,110-141` — all execution routes raise `MassResearchDisabledError`; `go` never true. `61c88a0`.
+- Worker: `platform/workers/research-mass-eval/wrangler.toml:48-50` `MASS_RESEARCH = "NO-GO"`, `PHASE7 = "OFF"`, `READY_DECLARED = "false"`.
 - Python deny-by-default: `packages/product/research/research_capabilities.py:13-51` (`granted = False`, `go: False`).
 - Foundation types are not a GO switch. Brief §17: “Foundation実装済みでもPilotはNO-GO.”
 
@@ -170,13 +186,13 @@ Live: 22 COMPLETE held / **4 PARTIAL** (`docs/phase62_residual_status.md:27-29`;
 
 ### M. `catalog_path` fabricated to missing YAML
 
-**status: OPEN**
+**status: FIXED** (path) — residual yaml_* **names** are leftover, not a missing-file path
 
-- `packages/product/research/unique_logic/catalog.py:191-208` sets `catalog_path` to `catalog_dir / f"{lid}.yaml"` with `catalog_present: False`. File does not exist.
-- Tests pin the lie: `tests/test_unique_logic_catalog.py:188-191` `path.stem == lid` and `path.is_file() is False`.
-- Combo self-check still names compiled params “YAML”: `unique_logic/event_combos.py:125,148-151`.
+- `packages/product/research/unique_logic/catalog.py:180-208` compiled load SoT; `catalog_path` is `specs/research_catalog/migration.jsonl` (`catalog_present: False`, `compiled: True`). `1fb8fa9`.
+- Tests: `tests/test_unique_logic_catalog.py:187-193` `path.name == "migration.jsonl"` and `path.is_file()`; `tests/test_catalog_yaml_parity.py:77-83` same for compiled rows.
+- Residual naming: `unique_logic/event_combos.py:123-156` `assert_yaml_matches_specs` / `combo YAML self-check` / `combo_yaml` still say YAML while they load compiled specs. That is not the fabricated `{lid}.yaml` path. Do not treat leftover names as a new YAML SoT.
 
-`e8bdf17` kept stem identity on purpose. Brief §10 lists this as a known semantic bug to fix.
+`e8bdf17` kept stem identity; `1fb8fa9` stopped pointing `catalog_path` at a missing file.
 
 ---
 
@@ -184,10 +200,11 @@ Live: 22 COMPLETE held / **4 PARTIAL** (`docs/phase62_residual_status.md:27-29`;
 
 **status: FIXED**
 
-- `packages/product/research/occupancy_audit.py:367-378` emits `yaml_still_present: False`; no `yaml_remains_sot`.
+- `packages/product/research/occupancy_audit.py:367-378` emits `yaml_still_present: False`; no `yaml_remains_sot`. Commit `6381960`.
 - `tests/test_occupancy_audit.py:30-31` asserts `yaml_still_present is False` and `"yaml_remains_sot" not in out`.
 - Combo dump: `tests/test_unique_logic_catalog.py:162`.
-- Commit `6381960`. Freeze docs `A07_catalog.md` / `A11_waste.md` still describe the `03cd1b1` OPEN; do not re-open the code.
+- Fail-closed default: `packages/product/research/occupancy_guards.py:62-73` missing/invalid manifest → `True` (“missing manifest ≠ yaml gone”). Test: `tests/test_eval_tracks.py:251-265`. `948a92c`.
+- Freeze docs `A07_catalog.md` / `A11_waste.md` still describe the `03cd1b1` OPEN; do not re-open the code.
 
 ---
 
@@ -196,7 +213,7 @@ Live: 22 COMPLETE held / **4 PARTIAL** (`docs/phase62_residual_status.md:27-29`;
 **status: FIXED**
 
 - Helper removed from `packages/product/research/candidate_policy.py` (file now only `job_candidate_grade`, lines 12-28). `f82f371`.
-- Repo grep: only leftover mentions in freeze `docs/reviews/A11_waste.md` / `README.md`. Live grade path is counts → `job_candidate_grade`.
+- Repo grep: only leftover mentions in freeze `docs/reviews/A11_waste.md` / `README.md` / `D_dead_functions.md`. Live grade path is counts → `job_candidate_grade`.
 
 ---
 
@@ -205,6 +222,8 @@ Live: 22 COMPLETE held / **4 PARTIAL** (`docs/phase62_residual_status.md:27-29`;
 **status: FIXED** (residual) / freeze A13 still stale
 
 - Current residual HOLD line: `docs/phase62_residual_status.md:69` — “unique22 park leftover occupancy (`UNIQUE22_PARK_REASONS` / `daily_path.ts`; YAML gone, `yaml_still_present: false`)”. `359b766`.
+- Code: `packages/product/research/unique_logic/constants.py:640-643` — “catalog, not YAML SoT”; park reasons in `UNIQUE22_PARK_REASONS`; leftover occupancy in `daily_path.ts`. `8e71619`.
+- Worker comments: `daily_path.ts:522-525,917-920` leftover occupancy is Worker policy, not YAML SoT. `fd27c90`.
 - `docs/reviews/A13_docs_claims.md` A13-UNIQUE22-PARK-YAML still records the `03cd1b1` wording. Residual SoT is `phase62_residual_status.md`, not that freeze file.
 
 ---
@@ -214,8 +233,8 @@ Live: 22 COMPLETE held / **4 PARTIAL** (`docs/phase62_residual_status.md:27-29`;
 **status: HOLD** (no GHA by policy) / check-runs **observed 0**
 
 - `.github/` does not exist (audit `ls`). Policy: `docs/architecture.md:28` “GitHub Actions には載せない”; ADR non-goal `docs/architecture/adr_llm_friendly_refactor.md:107`.
-- GitHub `ddnne/quant-platform` commit `03cd1b1`: check-runs **total 0**.
-- Empty GHA is not a missing pipeline to add. Operators run `scripts/verify_all.sh`. Cloudflare deploy is not a GitHub check.
+- GitHub `ddnne/quant-platform` at the freeze commit had check-runs **total 0**. Empty GHA is not a missing pipeline to add.
+- Operators run `scripts/verify_all.sh`. Cloudflare deploy is not a GitHub check.
 
 ---
 
@@ -253,8 +272,8 @@ Live: 22 COMPLETE held / **4 PARTIAL** (`docs/phase62_residual_status.md:27-29`;
 
 **status: HOLD**
 
-- Unique-22 leftover (no `params.gates`): `platform/workers/research-mass-eval/src/daily_path.ts:522`.
-- Leftover CS books occupancy, not `comboCsGateOk`: `daily_path.ts:913-915` — “Do not drop without occupancy-equal re-eval. Parked leftover stay non-candidate.”
+- Unique-22 leftover (no `params.gates`): `platform/workers/research-mass-eval/src/daily_path.ts:522-526`.
+- Leftover CS books occupancy, not `comboCsGateOk`: `daily_path.ts:917-920` — “Do not drop without occupancy-equal re-eval. Parked leftover stay non-candidate.” Comments after `fd27c90` say compiled catalog is SoT; `yaml_still_present` false. That does **not** unpark.
 - Residual HOLD: cost_models / options_225 / daily_path leftover occupancy (`phase62_residual_status.md:69`). Do not unify leftover occupancy with `comboEventGateOk`.
 
 ---
@@ -292,7 +311,7 @@ Brief E allowed disabling AI Gateway `workers_dev` if unneeded. Standing constra
 **status: OPEN** (this file; P0 unresolved ≠ 0)
 
 - Brief §1 / §22: independent Grok, not the implementer context. Wave-1 findings + remaining-audit lanes exist under `docs/reviews/` (`P631_wave1_findings.md`, `A01`, `A07`, `A10`, `A11`, `A13`, `A14`). Those freeze at `069913c` / `03cd1b1`.
-- This register is the §22 re-diff vs `e927b97`. Unresolved P0-class vs 6.3.1 completion: Edge DO budget; catalog factorization; fabricated `catalog_path`; Python R2 TOCTOU; host PEM in pytest; unproven clean-venv / Worker typecheck+build; unpushed main (`origin/main` ≠ local HEAD).
+- Prior register (`8a45dcf`) was vs `e927b97`. This file is the §22 re-diff vs `c5cdb57`. Unresolved P0-class vs 6.3.1 completion: Edge DO budget; catalog factorization (n=2254 expanded); Python R2 TOCTOU; host PEM in pytest; unproven clean-venv / Worker typecheck+build.
 - Independent P0 unresolved = 0 is a 6.3.1 GO condition. **Not met.**
 
 ---
@@ -308,7 +327,7 @@ None of the remaining leaks is a new thesis YAML. Do not add YAML. `CATALOG_AND_
 | LLM spend | Gateway typed decode + future Edge DO reserve | not a strategy |
 | Artifact immutability | Worker create-only children-then-manifest; Python CLI is not authority | not a family |
 | Catalog identity | compiled `migration.jsonl` + freeze n=2254 | factorize templates; **do not expand n** |
-| Candidate grade | `job_candidate_grade` (Python + Worker) + IR golden | not a new evaluator |
+| Candidate grade | `job_candidate_grade` (Python + Worker) + encoder-owned IR golden | not a new evaluator |
 | Sync CURRENT | applied pin required; null → never CURRENT | not coverage COMPLETE |
 | 4 PARTIAL | keep `history_target_start`; grain ADR later | not COMPLETE 23 |
 | unique22 leftover | occupancy park in `daily_path.ts` / `UNIQUE22_PARK_REASONS` | not YAML unpark |
@@ -332,7 +351,7 @@ Gates and capabilities close authority. New thesis YAML would be a product expan
 | AI output strict typed | **FIXED** |
 | Edge hard budget reserve/reconcile | **DEFERRED** |
 | artifact manifest-last commit | Worker **FIXED**; Python TOCTOU **OPEN** |
-| catalog wrong YAML semantics gone | compiled-n / `yaml_remains_sot` **FIXED**; `catalog_path` / yaml_* names **OPEN**; factorize **OPEN** |
+| catalog wrong YAML semantics gone | compiled-n / `yaml_remains_sot` / `catalog_path` **FIXED**; occupancy yaml default fail-closed **FIXED**; factorize n=2254 **OPEN** |
 | independent Grok P0 unresolved = 0 | **OPEN** |
 
 ## 6.4 §19 (live; not invented)
@@ -352,13 +371,13 @@ Gates and capabilities close authority. New thesis YAML would be a product expan
 1. Bind `GATEWAY_TOKEN` / `MASS_EVAL_TOKEN` / `QUANT_READINESS_HMAC_SECRET` on the intended env (S).
 2. Dated reconstitution brief for `basket_theme_fund` / `basket_event_fund` only (T). Do not flip `RECONSTITUTION_APPLY` from an agent.
 3. Apply `0007_ops_applied_pins` to remote D1 when the operator is ready to pin (R). Until then CURRENT stays impossible — that is correct.
-4. Push: local `e927b97` is **ahead of** `origin/main` `03cd1b1`. This isolation worktree does **not** push.
+4. Isolation worktree does **not** push. This register is vs `c5cdb57`.
 
 ---
 
-## Commits already on local main (parent of this register)
+## Commits this re-diff accounts for
 
-Not pushed. Listed so the leak status is not re-litigated against `03cd1b1` freeze docs.
+Not a GO claim. Listed so leak status is not re-litigated against `03cd1b1` freeze docs or the `e927b97` register.
 
 | SHA | Purpose |
 |-----|---------|
@@ -368,3 +387,10 @@ Not pushed. Listed so the leak status is not re-litigated against `03cd1b1` free
 | `5a168c7` | JSDA tests inject tmp signer (A) |
 | `359b766` | unique22 park leftover occupancy wording (P) |
 | `e927b97` | persist remaining-audit findings (freeze docs) |
+| `1fb8fa9` | compiled `catalog_path` is `migration.jsonl` (M) |
+| `8e71619` | unique22 park is leftover occupancy, not YAML (P) |
+| `948a92c` | occupancy `yaml_still_present` default fail-closed (N) |
+| `368f2c7` | evaluation-ir golden encoder-owned (H) |
+| `4a6293a` | JQ receipts use tmp Ed25519 (A) |
+| `fd27c90` | leftover occupancy comments are not YAML SoT (U still HOLD) |
+| `c5cdb57` | index 6.3.1 leak / plan-gap / refactor / dead-function reviews |
