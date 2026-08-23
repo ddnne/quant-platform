@@ -1,11 +1,14 @@
 """R2 object put and get via wrangler. Local FS is not SoT.
 
 Python default_r2_put(create_only=True) is head-then-put TOCTOU, not
-immutable create-if-absent. Worker onlyIf is the immutable authority.
+immutable create-if-absent. Worker onlyIf children-then-manifest is the
+immutable authority. Python CLI put is not artifact authority.
+Remote put is fail-closed unless QP_ALLOW_PYTHON_R2_PUT=1.
 """
 
 from __future__ import annotations
 
+import os
 import subprocess
 import tempfile
 from pathlib import Path
@@ -32,12 +35,20 @@ _REPO_ROOT = REPO_ROOT
 _DEFAULT_WRANGLER = DEFAULT_WRANGLER
 _DEFAULT_WRANGLER_CONFIG = DEFAULT_WRANGLER_CONFIG
 
+PYTHON_R2_PUT_ENV = "QP_ALLOW_PYTHON_R2_PUT"
+
 # Comment-level invariant: CLI put is head-then-put TOCTOU, not create-if-absent.
+# Python CLI put is not artifact authority.
 python_cli_put_is_not_immutable_authority: bool = True
 
 
 class R2IOError(ValueError):
     """Invalid R2 wrangler I/O input or put/get failure."""
+
+
+def python_r2_put_allowed() -> bool:
+    """True only when QP_ALLOW_PYTHON_R2_PUT=1. Not artifact authority."""
+    return os.environ.get(PYTHON_R2_PUT_ENV, "").strip() == "1"
 
 
 def default_r2_put(
@@ -62,8 +73,10 @@ def default_r2_put(
     therefore head-then-put. That sequence is TOCTOU: a concurrent writer
     can create the key after a miss and this put will overwrite. If head
     succeeds, skip put and return status ``exists``.
-    Python CLI put is not the immutable authority; Worker onlyIf is.
+    Python CLI put is not artifact authority and is not the immutable authority;
+    Worker onlyIf children-then-manifest is.
     ``authoritative=True`` is refused.
+    Remote (non dry_run) put is fail-closed unless QP_ALLOW_PYTHON_R2_PUT=1.
     """
     if authoritative:
         raise R2IOError("python CLI put is not artifact authority")
@@ -83,6 +96,12 @@ def default_r2_put(
             out.write_bytes(body)
             staged = str(out)
         return {**meta, "status": "dry_run", "staged_path": staged}
+
+    if not python_r2_put_allowed():
+        raise R2IOError(
+            f"remote python R2 put without {PYTHON_R2_PUT_ENV}=1; "
+            "Python CLI put is not artifact authority"
+        )
 
     wr = Path(wrangler) if wrangler else DEFAULT_WRANGLER
     cfg = Path(config) if config else DEFAULT_WRANGLER_CONFIG
@@ -203,9 +222,11 @@ def default_r2_get_object(
 __all__ = [
     "DEFAULT_WRANGLER",
     "DEFAULT_WRANGLER_CONFIG",
+    "PYTHON_R2_PUT_ENV",
     "REPO_ROOT",
     "R2IOError",
     "default_r2_get_object",
     "default_r2_put",
     "python_cli_put_is_not_immutable_authority",
+    "python_r2_put_allowed",
 ]

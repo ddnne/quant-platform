@@ -7,7 +7,12 @@ from types import SimpleNamespace
 import pytest
 
 import research.r2_io as r2_io
-from research.r2_io import R2IOError, default_r2_put
+from research.r2_io import (
+    PYTHON_R2_PUT_ENV,
+    R2IOError,
+    default_r2_put,
+    python_r2_put_allowed,
+)
 from storage.immutable_artifact import ImmutableArtifactStore, content_digest
 
 
@@ -61,11 +66,15 @@ def test_default_r2_put_documents_toctou_not_atomic() -> None:
     assert "TOCTOU" in text
     assert "not the immutable authority" in text
     assert "Worker onlyIf" in text
+    assert "not artifact authority" in text
+    assert PYTHON_R2_PUT_ENV in text
     assert "TOCTOU" in (r2_io.__doc__ or "")
+    assert "not artifact authority" in (r2_io.__doc__ or "")
     assert r2_io.python_cli_put_is_not_immutable_authority is True
 
 
-def test_default_r2_put_authoritative_is_refused() -> None:
+def test_default_r2_put_authoritative_is_refused(monkeypatch) -> None:
+    monkeypatch.setenv(PYTHON_R2_PUT_ENV, "1")
     with pytest.raises(R2IOError, match="python CLI put is not artifact authority"):
         default_r2_put(
             "quant-structured",
@@ -76,7 +85,47 @@ def test_default_r2_put_authoritative_is_refused() -> None:
         )
 
 
+def test_python_r2_put_allowed_is_exactly_one(monkeypatch) -> None:
+    monkeypatch.delenv(PYTHON_R2_PUT_ENV, raising=False)
+    assert python_r2_put_allowed() is False
+    monkeypatch.setenv(PYTHON_R2_PUT_ENV, "true")
+    assert python_r2_put_allowed() is False
+    monkeypatch.setenv(PYTHON_R2_PUT_ENV, "1")
+    assert python_r2_put_allowed() is True
+
+
+def test_remote_r2_put_fail_closed_without_env(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv(PYTHON_R2_PUT_ENV, raising=False)
+    wr = tmp_path / "wrangler"
+    wr.write_text("")
+    cfg = tmp_path / "wrangler.toml"
+    cfg.write_text("")
+
+    def boom(*_a, **_k):
+        raise AssertionError("remote put must not run without env")
+
+    monkeypatch.setattr(r2_io.subprocess, "run", boom)
+    with pytest.raises(R2IOError, match=rf"{PYTHON_R2_PUT_ENV}=1"):
+        default_r2_put(
+            "quant-structured",
+            "research/eval/job=x/daily_path.json",
+            b"{}",
+            wrangler=wr,
+            config=cfg,
+        )
+    monkeypatch.setenv(PYTHON_R2_PUT_ENV, "true")
+    with pytest.raises(R2IOError, match="not artifact authority"):
+        default_r2_put(
+            "quant-structured",
+            "research/eval/job=x/daily_path.json",
+            b"{}",
+            wrangler=wr,
+            config=cfg,
+        )
+
+
 def test_create_only_head_success_skips_put(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv(PYTHON_R2_PUT_ENV, "1")
     wr = tmp_path / "wrangler"
     wr.write_text("")
     cfg = tmp_path / "wrangler.toml"
@@ -103,6 +152,7 @@ def test_create_only_head_success_skips_put(tmp_path: Path, monkeypatch) -> None
 
 
 def test_create_only_head_miss_calls_put(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv(PYTHON_R2_PUT_ENV, "1")
     wr = tmp_path / "wrangler"
     wr.write_text("")
     cfg = tmp_path / "wrangler.toml"
