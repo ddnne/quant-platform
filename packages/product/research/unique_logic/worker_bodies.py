@@ -44,6 +44,9 @@ from research.occupancy_guards import (
     primary_gate_of,
     recorded_always_on_ids,
     recorded_near_empty_ids,
+    cell_occupancy,
+    classify_occupancy_pair,
+    mean_occupancy_by_logic,
 )
 
 _WORKER_DAILY_PATH = (
@@ -230,68 +233,6 @@ def countable_thesis_ids() -> frozenset[str]:
             out.add(str(spec["logic_id"]))
     return frozenset(out)
 
-
-def cell_occupancy(cell: Mapping[str, Any] | None) -> float | None:
-    """Prefer occupancy, then occupancy_frac. Missing → None. Not a pass."""
-    if not isinstance(cell, Mapping):
-        return None
-    raw = cell.get("occupancy")
-    if raw is None:
-        raw = cell.get("occupancy_frac")
-    if raw is None:
-        return None
-    return float(raw)
-
-
-def mean_occupancy_by_logic(
-    cells: Sequence[Mapping[str, Any]],
-) -> dict[str, float]:
-    """Mean occupancy per logic_id from daily_path cells. Missing occupancy skipped."""
-    from collections import defaultdict
-
-    by: dict[str, list[float]] = defaultdict(list)
-    for cell in cells:
-        if not isinstance(cell, Mapping):
-            continue
-        lid = str(cell.get("logic_id") or "").strip()
-        if not lid:
-            continue
-        raw = cell_occupancy(cell)
-        if raw is None:
-            continue
-        by[lid].append(raw)
-    return {lid: (sum(xs) / len(xs)) for lid, xs in by.items() if xs}
-
-
-
-def classify_occupancy_pair(
-    mid: float | None,
-    liq: float | None,
-    *,
-    near_empty: float = NEAR_EMPTY_OCCUPANCY,
-    usable_min: float = USABLE_OCCUPANCY_MIN,
-    always_on: float = ALWAYS_ON_OCCUPANCY_WARN,
-) -> str:
-    """Both-track occupancy band. Does not GO.
-
-    empty+empty → near_empty_park; always+always → always_on_park;
-    material+material → material; mixed always → mixed_always;
-    mixed empty/thin (max>near_empty), both-thin, mixed thin/material,
-    mixed empty/material → thin_sleeve_exclude; missing track → unclassified.
-    """
-    if mid is None or liq is None:
-        return "unclassified"
-    lo = min(float(mid), float(liq))
-    hi = max(float(mid), float(liq))
-    if hi <= float(near_empty):
-        return "near_empty_park"
-    if lo >= float(always_on):
-        return "always_on_park"
-    if lo > float(usable_min) and hi < float(always_on):
-        return "material"
-    if hi >= float(always_on):
-        return "mixed_always"
-    return "thin_sleeve_exclude"
 
 
 def usable_family_of(logic_id: str) -> str:

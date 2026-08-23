@@ -321,7 +321,7 @@ def test_usable_inventory_excludes_thin_park_and_unclassified() -> None:
 
 def test_classify_occupancy_pair_bands() -> None:
     from research.occupancy_audit import classify_occupancy_maps
-    from research.unique_logic.worker_bodies import classify_occupancy_pair
+    from research.occupancy_guards import classify_occupancy_pair
 
     assert classify_occupancy_pair(0.00, 0.02) == "near_empty_park"
     assert classify_occupancy_pair(0.0496, 0.0670) == "thin_sleeve_exclude"

@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
-from research.unique_logic.worker_bodies import (
+from research.occupancy_guards import (
     classify_occupancy_pair,
     mean_occupancy_by_logic,
 )

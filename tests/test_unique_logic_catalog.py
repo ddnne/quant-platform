@@ -78,7 +78,7 @@ def test_usable_inventory_read_has_n_ands_and_pri_series() -> None:
 
 
 def test_cell_occupancy_prefers_occupancy_over_frac() -> None:
-    from research.unique_logic.worker_bodies import cell_occupancy, mean_occupancy_by_logic
+    from research.occupancy_guards import cell_occupancy, mean_occupancy_by_logic
 
     assert cell_occupancy(None) is None
     assert cell_occupancy({}) is None
