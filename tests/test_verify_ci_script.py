@@ -74,6 +74,7 @@ def test_verify_ci_script_exists_executable_and_covers_required_steps() -> None:
     assert "wrangler deploy --dry-run" in src
     assert "wrangler types --check" in src
     assert "wrangler types" in src
+    assert "npm run types" in src
     assert "git ls-files" in src
     assert ".env" in src
     assert ".pem" in src
@@ -92,6 +93,10 @@ def test_all_workers_package_json_has_types_script() -> None:
         types = str((data.get("scripts") or {}).get("types") or "")
         assert types, f"{pkg} must define scripts.types (verify_ci runs wrangler types --check)"
         assert "wrangler types" in types, f"{pkg} scripts.types must invoke wrangler types"
+        assert "--include-runtime" in types, (
+            f"{pkg} scripts.types must pin --include-runtime "
+            "(verify_ci runs npm run types -- --check)"
+        )
 
 
 def test_verify_ci_bans_legacy_peer_deps_skips_and_live_deploy() -> None:
