@@ -1,6 +1,8 @@
 """CF isolate fan-out daily_path driver (not a period-net pass)."""
 from __future__ import annotations
 
+import pytest
+
 from research.cf_daily_path_job import (
     CF_EVENT_DAILY_PATH_IDS,
     FANOUT_VERSION,
@@ -9,6 +11,20 @@ from research.cf_daily_path_job import (
     sleeve_durability_logic_ids,
 )
 from research.cf_mass_eval_job import CF_BAR_NATIVE_LOGIC_IDS, panels_cache_id
+
+
+@pytest.fixture(autouse=True)
+def _allow_mass_screen_capability(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "research.cf_mass_eval_job.require_capability",
+        lambda name, caps=None: {
+            "capability": name,
+            "allowed": True,
+            "reasons": [],
+            "go": False,
+            "not_a_pass": True,
+        },
+    )
 
 
 def test_fanout_aggregates_cells_and_does_not_promote() -> None:

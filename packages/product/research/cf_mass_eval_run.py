@@ -26,6 +26,7 @@ from research.cf_mass_eval_job import (
     _WORKER_DIR,
     build_cf_mass_eval_job_spec,
     design_mass_factory_paths,
+    refuse_missing_capability,
     resolve_or_stage_panels,
     resolve_research_run_token,
 )
@@ -47,6 +48,9 @@ def invoke_cf_mass_eval_worker(
     timeout: int = 120,
     http_post: Callable[..., Any] | None = None,
 ) -> dict[str, Any]:
+    refused = refuse_missing_capability("mass_screen")
+    if refused is not None:
+        return refused
     url = worker_url.rstrip("/") + "/v1/mass-eval"
     tok = (token if token is not None else resolve_research_run_token()) or ""
     body = json.dumps(dict(job_spec), default=str).encode("utf-8")
@@ -213,6 +217,9 @@ def run_cf_mass_eval_job(
     skip_invoke: bool = False,
     timeout: int = 300,
 ) -> dict[str, Any]:
+    refused = refuse_missing_capability("mass_screen")
+    if refused is not None:
+        return refused
     t0 = time.perf_counter()
     mode_s = str(mode or DEFAULT_MASS_EVAL_MODE).strip()
     do_stage = (

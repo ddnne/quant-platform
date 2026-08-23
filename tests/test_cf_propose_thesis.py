@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from research.cf_propose_thesis import (
     PROPOSE_ALLOWED_DATASETS,
     PROPOSE_WHY_AVOID_LIMIT,
@@ -12,6 +14,21 @@ from research.cf_propose_thesis import (
 )
 from tests.cf_propose_stub import stub_propose_thesis_result
 from research.unique_logic.constants import PROPOSE_ALLOWED_GATES
+
+
+@pytest.fixture(autouse=True)
+def _allow_generation_capability(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "research.cf_mass_eval_job.require_capability",
+        lambda name, caps=None: {
+            "capability": name,
+            "allowed": True,
+            "reasons": [],
+            "go": False,
+            "not_a_pass": True,
+        },
+    )
+
 
 _WORKER_PROPOSE = (
     Path(__file__).resolve().parents[1]

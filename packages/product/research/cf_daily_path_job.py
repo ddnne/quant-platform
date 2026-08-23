@@ -24,6 +24,7 @@ from research.cf_mass_eval_job import (
     invoke_cf_mass_eval_worker,
     normalize_period_row,
     panels_cache_id,
+    refuse_missing_capability,
     resolve_or_stage_panels,
 )
 from research.candidate_policy import job_candidate_grade
@@ -48,6 +49,9 @@ def invoke_cf_daily_path(
     timeout: int = 180,
     http_post: Callable[..., Any] | None = None,
 ) -> dict[str, Any]:
+    refused = refuse_missing_capability("mass_screen")
+    if refused is not None:
+        return refused
     spec = dict(job_spec)
     spec["eval_kind"] = "daily_path"
     spec["write_artifacts"] = bool(spec.get("write_artifacts"))
@@ -128,6 +132,9 @@ def run_cf_daily_path_fanout(
                 "panels_prefix must match track×periods×codes cache "
                 f"expected={expected} got={got}"
             )
+    refused = refuse_missing_capability("mass_screen")
+    if refused is not None:
+        return refused
     stage_meta: dict[str, Any] | None = None
     if panels_prefix:
         stage_meta = {

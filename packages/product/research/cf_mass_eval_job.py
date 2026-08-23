@@ -24,6 +24,7 @@ from research.cf_mass_eval_stage import (
 from research.eval_windows import DEFAULT_REAL_MULTIYEAR_PERIODS
 from research.freezes import CONTINUOUS_PAPER, MASS_RESEARCH, PHASE7
 from research.r2_io import default_r2_put
+from research.research_capabilities import require_capability
 
 CF_MASS_EVAL_VERSION: str = "cf-mass-eval-job/v6"
 CF_MASS_EVAL_WAVE: str = "research-mass-eval"
@@ -64,6 +65,21 @@ _WORKER_CONFIG = _WORKER_DIR / "wrangler.toml"
 
 class CfMassEvalError(RuntimeError):
     pass
+
+
+def refuse_missing_capability(name: str) -> dict[str, Any] | None:
+    """None if allowed. Else refuse pack. Env flags cannot grant. Not GO."""
+    gate = require_capability(name)
+    if gate.get("allowed"):
+        return None
+    return {
+        "ok": False,
+        "error": "capability_missing",
+        "capability": str(gate.get("capability") or name),
+        "reasons": list(gate.get("reasons") or []),
+        "go": False,
+        "not_a_pass": True,
+    }
 
 
 def _freeze() -> dict[str, Any]:
@@ -402,6 +418,7 @@ __all__ = [
     "ALLOWED_MODES",
     "DEFAULT_WORKER_URL",
     "CfMassEvalError",
+    "refuse_missing_capability",
     "resolve_research_run_token",
     "design_mass_factory_paths",
     "default_logic_specs",

@@ -14,6 +14,7 @@ from uuid import uuid4
 from research.cf_mass_eval_job import (
     DEFAULT_WORKER_URL,
     CfMassEvalError,
+    refuse_missing_capability,
     resolve_research_run_token,
 )
 from research.complete21 import COMPLETE_21_DATASET_SET
@@ -545,6 +546,10 @@ def invoke_cf_propose_thesis(
                 "go": False,
                 "not_a_pass": True,
             }
+
+    refused = refuse_missing_capability("generation")
+    if refused is not None:
+        return refused
 
     url = worker_url.rstrip("/") + "/v1/propose-thesis"
     auth_tok = resolve_research_run_token() or ""
