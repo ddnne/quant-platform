@@ -1,5 +1,7 @@
 # Audit A07 — Catalog remaining (after compiled-n SoT)
 
+> **Pointer (not a rewrite).** At HEAD `07b4435`, occupancy `yaml_remains_sot` is **FIXED** (`yaml_still_present: False`). The body below is a freeze at `03cd1b1` and still speaks as if that item is OPEN.
+
 **Lane:** A07 (catalog SoT)  
 **HEAD at remaining-audit:** `03cd1b1`  
 **Mass / READY / Phase 7:** NO-GO. Catalog compile is not GO.

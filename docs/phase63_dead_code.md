@@ -1,5 +1,7 @@
 # Phase 6.3 — unused-module audit (real vs false-positive)
 
+> **Pointer (not a rewrite).** Production modules deleted this audit = **0**. HOLD leftovers (unique22, leftover occupancy, `cost_models`, `options_225`) are **not D-dead**. YAML file-count waste already closed (`n=0`). Do not treat this audit as a live deletion list.
+
 **Lane:** dead-code / D-dead (B1-c follow-up)  
 **HEAD base:** `41003a5` (`origin/main`)  
 **Worktree:** `p63/lane-dead-code`  

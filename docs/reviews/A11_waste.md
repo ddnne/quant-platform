@@ -1,5 +1,7 @@
 # Audit A11 — Waste / leftover identity (remaining)
 
+> **Pointer (not a rewrite).** At HEAD `07b4435`, `yaml_remains_sot` is **FIXED** (occupancy `yaml_still_present: False`); `cells_candidate_counts` is **DELETED**; combo +N remains **HOLD**. The body below is a freeze at `03cd1b1`.
+
 **Lane:** A11 (waste vs HOLD identity)  
 **HEAD at remaining-audit:** `03cd1b1`  
 **Mass / READY / Phase 7:** NO-GO. Do not unfreeze catalog to “use” leftover helpers.

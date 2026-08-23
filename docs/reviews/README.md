@@ -1,5 +1,7 @@
 # Phase 6.3.1 review findings
 
+> **Current vs freeze.** HEAD `07b4435`: occupancy `yaml_remains_sot` FIXED (`yaml_still_present: False`); `cells_candidate_counts` DELETED; combo +N HOLD. Remaining-audit files are a freeze at `03cd1b1`, not live OPEN.
+
 Starting remote HEAD at first wave: `069913c`. Remaining-audit freeze: **`03cd1b1`** (`origin/main`).
 Review SHA named in the original brief (`96264f0`) is **not** the freeze.
 
