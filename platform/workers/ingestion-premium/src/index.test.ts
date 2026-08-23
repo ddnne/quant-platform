@@ -262,3 +262,101 @@ describe("ingestion-premium raw-page retain source pin", () => {
     expect(src).not.toContain("INGESTION_PROXY_TOKEN");
   });
 });
+
+describe("ingestion-premium coverage-segment plan", () => {
+  const originalFetch = globalThis.fetch;
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  function runEnv() {
+    const d1 = ingestD1();
+    const raw = capturingBucket();
+    const structured = capturingBucket();
+    return {
+      env: testEnv({
+        DB: d1.db,
+        RAW_BUCKET: raw.bucket,
+        STRUCTURED_BUCKET: structured.bucket,
+      }),
+      d1,
+    };
+  }
+
+  async function runDataset(dataset: string, from: string, to: string) {
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ data: [] }), { status: 200 })) as typeof fetch;
+    const { env, d1 } = runEnv();
+    const res = await worker.fetch(
+      new Request(
+        `https://ingestion-premium.test/v1/run?dataset=${dataset}&from=${from}&to=${to}`,
+        {
+          method: "POST",
+          headers: { "X-Ingestion-Token": env.INGESTION_RUN_TOKEN! },
+        },
+      ),
+      env,
+    );
+    expect(res.status).toBe(200);
+    return d1;
+  }
+
+  function coverageInserts(d1: { binds: { sql: string; args: unknown[] }[] }) {
+    return d1.binds.filter((row) => row.sql.includes("INSERT INTO coverage_segments"));
+  }
+
+  function receiptInserts(d1: { binds: { sql: string; args: unknown[] }[] }) {
+    return d1.binds.filter((row) => row.sql.includes("INSERT INTO collection_receipts"));
+  }
+
+  it("keeps event vs query-unit planning in the ingest façade", () => {
+    const src = readFileSync(join(here, "index.ts"), "utf8");
+    expect(src).toContain('expected_frequency === "event_driven"');
+    expect(src).toContain(": queries.length");
+    expect(src).toContain("if (segment.canonicalMonth)");
+    expect(src).toContain("await writeRequiredCoverageSegment");
+  });
+
+  it("plans non-event expected_items as queries.length and writes canonical months", async () => {
+    const d1 = await runDataset("markets_calendar", "2024-06-01", "2024-06-30");
+    const segments = coverageInserts(d1);
+    expect(segments).toHaveLength(1);
+    expect(segments[0]!.sql).toContain("INSERT INTO coverage_segments");
+    expect(segments[0]!.sql).toContain("'UNKNOWN'");
+    expect(segments[0]!.sql).not.toContain("COMPLETE");
+    expect(segments[0]!.args[6]).toBe(1);
+    const detail = JSON.parse(String(segments[0]!.args[8])) as {
+      expected_item_unit: string;
+      query_units: number | null;
+    };
+    expect(detail.expected_item_unit).toBe("source_query");
+    expect(detail.query_units).toBe(1);
+    const receipts = receiptInserts(d1);
+    expect(receipts).toHaveLength(1);
+    expect(receipts[0]!.args[5]).toBe(1);
+    expect(JSON.stringify(segments)).not.toContain("COMPLETE");
+  });
+
+  it("plans event_driven expected_items as null before collection", async () => {
+    const d1 = await runDataset("fins_summary", "2024-07-15", "2024-07-15");
+    expect(coverageInserts(d1)).toHaveLength(0);
+    const receipts = receiptInserts(d1);
+    expect(receipts).toHaveLength(1);
+    expect(receipts[0]!.args[5]).toBeNull();
+    const scope = JSON.parse(String(receipts[0]!.args[4])) as {
+      expected_item_unit: string;
+      expected_frequency: string;
+    };
+    expect(scope.expected_frequency).toBe("event_driven");
+    expect(scope.expected_item_unit).toBe("source_event");
+  });
+
+  it("does not write required coverage_segments for a non-canonical window", async () => {
+    const d1 = await runDataset("markets_calendar", "2024-06-03", "2024-06-03");
+    expect(coverageInserts(d1)).toHaveLength(0);
+    const receipts = receiptInserts(d1);
+    expect(receipts).toHaveLength(1);
+    expect(receipts[0]!.args[5]).toBe(1);
+  });
+});

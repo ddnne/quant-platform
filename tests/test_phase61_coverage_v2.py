@@ -369,20 +369,6 @@ def test_worker_d1_receipt_migration_has_reconciliation_evidence():
     conn.close()
 
 
-def test_worker_plans_non_event_query_units_before_collection():
-    source = (
-        _REPO / "platform/workers/ingestion-premium/src/index.ts"
-    ).read_text(encoding="utf-8")
-    receipts = (
-        _REPO / "platform/workers/ingestion-premium/src/collection_receipts.ts"
-    ).read_text(encoding="utf-8")
-    assert "INSERT INTO coverage_segments" in receipts
-    assert 'expected_frequency === "event_driven"' in source
-    assert ": queries.length" in source
-    assert "if (segment.canonicalMonth)" in source
-    assert "await writeRequiredCoverageSegment" in source
-
-
 def test_receipt_observed_window_ignores_empty_success_shells():
     """R2-only history: empty SUCCESS shells must not move observed_start."""
     from storage.coverage_ledger import (
