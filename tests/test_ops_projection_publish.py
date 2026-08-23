@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 import sqlite3
 
+from ops.projection_meta import build_projection_metadata
 from storage.sqlite_store import SqliteStore
 
 _ROOT = Path(__file__).resolve().parents[1]
@@ -389,3 +390,18 @@ def test_export_metadata_age_calculation(tmp_path):
 
     # Status should be valid
     assert status in ("FRESH", "STALE", "FAILED", "UNKNOWN")
+
+
+def test_missing_db_is_missing(tmp_path: Path):
+    meta = build_projection_metadata(tmp_path / "nope.sqlite")
+    assert meta["status"] == "MISSING"
+
+
+def test_failed_refresh_never_fresh(tmp_path: Path):
+    db = tmp_path / "empty.sqlite"
+    sqlite3.connect(db).close()
+    meta = build_projection_metadata(
+        db, refresh_status="failed", refresh_error="boom"
+    )
+    assert meta["status"] == "DEGRADED_REFRESH_FAILED"
+    assert meta["last_refresh_error"] == "boom"
