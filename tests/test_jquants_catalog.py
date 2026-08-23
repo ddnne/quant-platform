@@ -66,17 +66,17 @@ def test_catalog_unknown_dataset_raises():
 
 # --------------------------------------------------------------------------- routing
 
-@pytest.mark.parametrize("did", catalog.list_datasets())
-def test_fetch_dataset_routes_to_catalog_path(did):
+def test_fetch_dataset_routes_to_catalog_path():
     """Every catalog dataset is fetchable and hits its declared /v2/ path."""
-    http = _RecordingHttp()
-    c = JQuantsClient(http, "k", retries=0, rate_limiter=_NO_RL)
-    rows = c.fetch_dataset(did, code="1", from_date="2025-04-01", to_date="2025-04-02")
-    assert len(http.calls) == 1
-    expected = "https://api.jquants.com" + catalog.path_of(did)
-    assert http.calls[0]["url"] == expected
-    # records came back through the data envelope
-    assert isinstance(rows, list) and _records({"data": rows})
+    for did in catalog.list_datasets():
+        http = _RecordingHttp()
+        c = JQuantsClient(http, "k", retries=0, rate_limiter=_NO_RL)
+        rows = c.fetch_dataset(did, code="1", from_date="2025-04-01", to_date="2025-04-02")
+        assert len(http.calls) == 1
+        expected = "https://api.jquants.com" + catalog.path_of(did)
+        assert http.calls[0]["url"] == expected
+        # records came back through the data envelope
+        assert isinstance(rows, list) and _records({"data": rows})
 
 
 def test_fetch_dataset_aliases_from_date_to_from():
