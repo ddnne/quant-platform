@@ -148,6 +148,17 @@ def test_profile_ready_false_when_required_dataset_is_partial() -> None:
     assert profile_ready(profile, missing) is False
 
 
+def test_profile_ready_rejects_string_complete_labels() -> None:
+    profile = load_core_profile()
+    assert profile_ready(profile, {"equities_bars_daily": "COMPLETE"}) is False
+    evidence = {
+        dataset: {"status": "COMPLETE", "coverage_mode": official_mode(dataset)}
+        for dataset in profile.required_datasets
+    }
+    evidence["equities_bars_daily"] = "COMPLETE"
+    assert profile_ready(profile, evidence) is False
+
+
 def test_profile_ready_true_only_when_every_required_is_complete_official() -> None:
     profile = load_core_profile()
     evidence = {

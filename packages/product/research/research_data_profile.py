@@ -164,8 +164,8 @@ def profile_ready(
 ) -> bool:
     """True iff every required dataset is COMPLETE under official_mode(d).
 
-    Missing evidence, PARTIAL, or a coverage_mode other than official_mode is
-    false. Does not publish a READY snapshot.
+    Missing evidence, PARTIAL, a string COMPLETE label, or a coverage_mode
+    other than official_mode is false. Does not publish a READY snapshot.
     """
     if not profile.required_datasets:
         return False
@@ -356,21 +356,21 @@ def _assert_core_exclusions(profile: ResearchDataProfile) -> None:
 def _complete_under_official(
     dataset_id: str, evidence_by_dataset: Mapping[str, Any]
 ) -> bool:
+    """True iff mapping evidence is COMPLETE under official_mode(dataset_id).
+
+    A string COMPLETE label is not official-mode proof.
+    """
     if dataset_id not in evidence_by_dataset:
         return False
     evidence = evidence_by_dataset[dataset_id]
-    required_mode = official_mode(dataset_id)
-    if isinstance(evidence, str):
-        return evidence == "COMPLETE"
     if not isinstance(evidence, Mapping):
         return False
-    status = evidence.get("status")
-    if status != "COMPLETE":
+    if evidence.get("status") != "COMPLETE":
         return False
-    mode = evidence.get("coverage_mode")
-    if mode is not None and mode != required_mode:
-        return False
-    return True
+    required_mode = official_mode(dataset_id)
+    if "coverage_mode" in evidence:
+        return evidence.get("coverage_mode") == required_mode
+    return evidence.get("official") is True
 
 
 def _evaluation_protocol(raw: Any) -> str:
