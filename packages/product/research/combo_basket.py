@@ -13,6 +13,7 @@ from research.combo_basket_catalog import (
     reconstitution_occupancy_preview,
     usable_sleeve_coverage,
 )
+from research.candidate_policy import job_candidate_grade
 from research.eval_registry import PROTOCOL_DAILY_PATH
 from research.stats_metrics import equity_path_drawdown, evaluate_daily_path_dd_gate
 from research.unique_logic.constants import (
@@ -89,6 +90,7 @@ def blend_window_cells(
                     "survived": False,
                     "promote_as_main": False,
                     "go": False,
+                    "candidate_grade": False,
                 }
             )
             continue
@@ -131,7 +133,14 @@ def blend_window_cells(
                 "survived": False,
                 "promote_as_main": False,
                 "go": False,
-                "candidate_grade": True,
+                "candidate_grade": job_candidate_grade(
+                    n_expected=1,
+                    n_cells=1,
+                    n_complete=1 if bool(gate.get("complete")) and not missing else 0,
+                    n_collapsed=0,
+                    n_broken=0,
+                )
+                and not missing,
                 "period_net_dd_only_pass_forbidden": True,
                 "t_stat": _t_stat(blended),
                 "sharpe_daily": _sharpe(blended),

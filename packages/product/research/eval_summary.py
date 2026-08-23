@@ -7,8 +7,9 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from typing import Any, Mapping, Sequence
 
+from research.candidate_policy import job_candidate_grade
 from research.eval_registry import is_daily_path_complete_cell, is_path_broken_cell, is_path_collapsed_cell
-from research.unique_logic.worker_bodies import cell_occupancy
+from research.occupancy_guards import cell_occupancy
 
 CANDIDATE_KEEP_SIMPLE: str = (
     "Simple occupancy-gated theses stay in the candidate pool for later "
@@ -194,7 +195,18 @@ def summarize_daily_path_cells(
         sharpes = [c.get("sharpe_daily") for c in cs]
         dds = [c.get("daily_path_DD") for c in cs]
         exclude = set(CANDIDATE_POLICY["exclude"])  # type: ignore[arg-type]
-        candidate = not bool(exclude.intersection(flags))
+        n_expected = len(cs)
+        n_complete = sum(1 for c in cs if is_daily_path_complete_cell(c))
+        n_collapsed = sum(1 for c in cs if is_path_collapsed_cell(c))
+        n_broken = sum(1 for c in cs if is_path_broken_cell(c))
+        grade = job_candidate_grade(
+            n_expected=n_expected,
+            n_cells=n_expected,
+            n_complete=n_complete,
+            n_collapsed=n_collapsed,
+            n_broken=n_broken,
+        )
+        candidate = bool(grade) and not bool(exclude.intersection(flags))
         logics.append(
             {
                 "logic_id": lid,
@@ -258,7 +270,8 @@ def summarize_daily_path_cells(
         "go": False,
         "logics": logics,
         "notes": (
-            "candidate = not path_broken/collapsed/always_on/near_empty/"
+            "candidate = job_candidate_grade (all windows complete) AND not "
+            "path_broken/collapsed/always_on/near_empty/"
             "data_requirement_unmet/near_duplicate/worker_body_missing. "
             "Simple gated theses stay for combinations. strong is an "
             "interest flag, never a promote."

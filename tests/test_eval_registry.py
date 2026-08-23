@@ -374,6 +374,24 @@ def test_modest_t_gated_thesis_stays_candidate() -> None:
     assert "always_on" not in row["flags"]
 
 
+def test_partial_windows_are_not_candidate() -> None:
+    complete = _eval_complete_cell(
+        "event_skip_monday",
+        occupancy=0.20,
+        total_ret_net=0.02,
+        eval_path="eventHeld",
+        t_stat=0.4,
+        sharpe_daily=0.05,
+    )
+    incomplete = dict(complete)
+    incomplete["window"] = "y2016_full"
+    incomplete["daily_path_complete"] = False
+    summary = summarize_daily_path_cells(
+        [complete, incomplete], job_id="eval-test-partial-windows"
+    )
+    assert summary["logics"][0]["candidate"] is False
+
+
 def test_path_collapsed_is_not_candidate() -> None:
     from research.eval_registry import (
         is_daily_path_complete_cell,
