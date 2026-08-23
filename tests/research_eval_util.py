@@ -36,6 +36,7 @@ HARNESS_AST_PATHS = (
     _RESEARCH_PKG / "r2_io.py",
     _RESEARCH_PKG / "complete21.py",
     _RESEARCH_PKG / "r2_feature_context.py",
+    _RESEARCH_PKG / "r2_feature_parse.py",
     _RESEARCH_PKG / "daily_path_eval.py",
 )
 _DEFAULT_INGESTED_AT = "2026-08-12T00:00:00+09:00"
