@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { buildSyntheticPanels, defaultPeriodsFromRequest } from "./panels";
+import {
+  buildSyntheticPanels,
+  defaultPeriodsFromRequest,
+  loadD1BarsPanels,
+  loadR2Panels,
+} from "./panels";
 
 const DEFAULT_YEARS = [2015, 2017, 2019, 2021, 2023, 2025];
 
@@ -98,5 +103,84 @@ describe("buildSyntheticPanels", () => {
       expect(Object.keys(panel.bars).length).toBeGreaterThan(0);
       expect(JSON.stringify(panel)).not.toMatch(/COMPLETE/);
     }
+  });
+});
+
+class MemR2 {
+  private readonly objects = new Map<string, string>();
+
+  putJson(key: string, value: unknown): void {
+    this.objects.set(key, JSON.stringify(value));
+  }
+
+  async get(key: string) {
+    const raw = this.objects.get(key);
+    if (raw === undefined) return null;
+    return { json: async () => JSON.parse(raw) };
+  }
+
+  asBucket(): R2Bucket {
+    return this as unknown as R2Bucket;
+  }
+}
+
+class EmptyD1 {
+  prepare(_sql: string) {
+    return {
+      bind: (..._args: unknown[]) => ({
+        all: async () => ({ results: [] as unknown[] }),
+      }),
+    };
+  }
+
+  asDb(): D1Database {
+    return this as unknown as D1Database;
+  }
+}
+
+const TINY_PERIODS = [
+  { period_id: "p0", year: 2017, period_start: "2017-10-01", period_end: "2017-12-15" },
+  { period_id: "p1", year: 2019, period_start: "2019-10-01", period_end: "2019-12-13" },
+];
+
+describe("loadR2Panels missing data", () => {
+  it("marks every period data_missing when the bucket get is null", async () => {
+    const mem = new MemR2();
+    const { panels, notes } = await loadR2Panels(mem.asBucket(), TINY_PERIODS);
+    expect(panels).toHaveLength(TINY_PERIODS.length);
+    for (const panel of panels) {
+      expect(panel.status).toBe("data_missing");
+      expect(panel.source).toBe("r2_panels_missing");
+      expect(panel.bars).toEqual({});
+    }
+    expect(notes.some((n) => n.includes("missing:"))).toBe(true);
+    expect(JSON.stringify({ panels, notes })).not.toMatch(/COMPLETE/);
+  });
+
+  it("marks data_missing with empty_bars when json is {bars:{}}", async () => {
+    const mem = new MemR2();
+    mem.putJson("research/mass_eval/panels/p0.json", { bars: {} });
+    const { panels, notes } = await loadR2Panels(mem.asBucket(), [TINY_PERIODS[0]]);
+    expect(panels).toHaveLength(1);
+    expect(panels[0].status).toBe("data_missing");
+    expect(panels[0].bars).toEqual({});
+    expect(notes.some((n) => n.includes("empty_bars"))).toBe(true);
+    expect(JSON.stringify({ panels, notes })).not.toMatch(/COMPLETE/);
+  });
+});
+
+describe("loadD1BarsPanels missing data", () => {
+  it("marks data_missing with d1_empty_codes when D1 returns no rows", async () => {
+    const { panels, notes } = await loadD1BarsPanels(
+      new EmptyD1().asDb(),
+      [TINY_PERIODS[0]],
+      2,
+      10,
+    );
+    expect(panels).toHaveLength(1);
+    expect(panels[0].status).toBe("data_missing");
+    expect(panels[0].bars).toEqual({});
+    expect(notes.some((n) => n.includes("d1_empty_codes"))).toBe(true);
+    expect(JSON.stringify({ panels, notes })).not.toMatch(/COMPLETE/);
   });
 });
