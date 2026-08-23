@@ -30,6 +30,15 @@ def test_event_sides_ls_variants_stay_registered() -> None:
     )
 
 
+def test_usable_inventory_read_has_n_ands_and_pri_series() -> None:
+    from research.unique_logic.worker_bodies import usable_inventory_read
+
+    empty = usable_inventory_read({"mid_n_explore": {}, "liq_large": {}})
+    assert empty["version"] == "usable-read/v3"
+    assert empty["go"] is False
+    assert "n_ands" in empty and "pri_series" in empty
+
+
 def test_spec_by_id_survives_catalog_cache_clear() -> None:
     from research.unique_logic.catalog import clear_catalog_caches, combo_thesis_records
     from research.unique_logic.event_combos import spec_by_id

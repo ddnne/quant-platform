@@ -563,7 +563,28 @@ def usable_inventory_read(
     primary: Counter[str] = Counter()
     all_gates: Counter[str] = Counter()
     fam_primary: Counter[str] = Counter()
+    n_ands: Counter[str] = Counter()
+    pri_series: Counter[str] = Counter()
     n_pb = n_pb_primary = n_ac = n_ac_primary = 0
+    vol = {"rich_iv", "nky_vol_high_skip", "on_impulse", "cheap_iv"}
+    flow = {
+        "crowded_margin",
+        "uncrowded_margin",
+        "liq_high",
+        "margin_up",
+        "margin_down",
+    }
+    rate = {
+        "invert_curve",
+        "steep_curve",
+        "curve_flatten",
+        "overnight_easing",
+        "overnight_tightening",
+        "tight_funding",
+        "easy_funding",
+        "repo_3m_down",
+        "overnight_p10",
+    }
     for rec in combo_thesis_records():
         lid = str(rec.get("logic_id") or "")
         if lid not in usable:
@@ -572,6 +593,16 @@ def usable_inventory_read(
         fam = usable_family_of(lid)
         pg = gates[0] if gates else ""
         fam_primary[f"{fam}|{pg}"] += 1
+        n_ands[str(len(gates))] += 1
+        gs = set(gates)
+        if gs & vol:
+            pri_series["vol"] += 1
+        elif gs & flow:
+            pri_series["flow"] += 1
+        elif gs & rate:
+            pri_series["rate"] += 1
+        else:
+            pri_series["other"] += 1
         if not gates:
             continue
         primary[pg] += 1
@@ -587,13 +618,15 @@ def usable_inventory_read(
             n_ac_primary += 1
     n = int(inv["n_usable"])
     return {
-        "version": "usable-read/v2",
+        "version": "usable-read/v3",
         "n_usable": n,
         "family": inv["family"],
         "family_share": inv["family_share"],
         "primary_gate": dict(primary),
         "family_primary_gate": dict(fam_primary),
         "all_gates": dict(all_gates),
+        "n_ands": dict(n_ands),
+        "pri_series": dict(pri_series),
         "cheap_pb_in_gates": n_pb,
         "cheap_pb_primary": n_pb_primary,
         "cheap_pb_primary_share": round(n_pb_primary / n, 4) if n else 0.0,
