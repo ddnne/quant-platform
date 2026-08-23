@@ -26,8 +26,10 @@ from core.costs import (
     short_financing,
 )
 from core.engine import CORE_ENGINE_VERSION, run_backtest
+from core.execution import close_as_of
 from core.repo_rates import load_repo_rates_by_date_for_paper
 from core.strategies.buy_hold import BuyHold
+from core.universe import membership_at
 from strategies.paper import PaperRunConfig, run_paper
 from strategies.paper.runner import PAPER_RUNNER_VERSION
 
@@ -249,7 +251,7 @@ def test_engine_short_financing_with_repo_series(tmp_path):
         TRADING_DAYS[-1],
         db_path=db,
         short_financing=sf,
-        universe=tuple(CODES),
+        universe=membership_at(close_as_of(TRADING_DAYS[0]), db_path=db, codes=CODES),
         starting_capital=1_000_000.0,
         cost_model=__import__("core", fromlist=["standard_cost"]).standard_cost(0.0),
     )
@@ -272,7 +274,7 @@ def test_engine_leverage_financing_with_repo(tmp_path):
         TRADING_DAYS[-1],
         db_path=db,
         leverage_financing=lev,
-        universe=tuple(CODES),
+        universe=membership_at(close_as_of(TRADING_DAYS[0]), db_path=db, codes=CODES),
         starting_capital=1_000_000.0,
         cost_model=__import__("core", fromlist=["standard_cost"]).standard_cost(0.0),
     )
@@ -290,7 +292,7 @@ def test_paper_auto_load_repo_mid_default(tmp_path):
         start=TRADING_DAYS[0],
         end=TRADING_DAYS[-1],
         db_path=db,
-        universe=tuple(CODES),
+        universe=None,
         cost_bps=0.0,
         short_financing_enabled=True,  # mid default
         short_financing_auto_load_repo=True,
@@ -319,7 +321,7 @@ def test_paper_financing_off_preserves_legacy(tmp_path):
         start=TRADING_DAYS[0],
         end=TRADING_DAYS[-1],
         db_path=db,
-        universe=tuple(CODES),
+        universe=None,
         cost_bps=5.0,
         # default short_financing_enabled=False
     )
@@ -339,7 +341,7 @@ def test_paper_gap_day_no_invent(tmp_path):
         start=TRADING_DAYS[0],
         end=TRADING_DAYS[-1],
         db_path=db,
-        universe=tuple(CODES),
+        universe=None,
         cost_bps=0.0,
         short_financing_enabled=True,
         short_financing_auto_load_repo=True,
@@ -362,7 +364,7 @@ def test_explicit_repo_rates_bypass_auto_load(tmp_path):
         start=TRADING_DAYS[0],
         end=TRADING_DAYS[-1],
         db_path=db,
-        universe=tuple(CODES),
+        universe=None,
         cost_bps=0.0,
         short_financing_enabled=True,
         short_financing_repo_rates=explicit,

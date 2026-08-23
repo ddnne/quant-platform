@@ -28,11 +28,22 @@ from core import (
 from core.execution import close_as_of, open_as_of
 from core.strategies.buy_hold import BuyHold
 from core.strategy_protocol import BarContext, OrderIntent
+from core.universe import (
+    FIXED_UNIVERSE_ENV,
+    RawFixedUniverseError,
+    load_master,
+    membership_at,
+)
 from storage.sqlite_store import SqliteStore
 
 from _coreseed import CODES, TRADING_DAYS, close_iso, seed_db
 
 START, END = TRADING_DAYS[0], TRADING_DAYS[-1]
+
+
+def _uni(db, codes=None):
+    """PIT-proven membership at the first session close (not a raw code list)."""
+    return membership_at(close_as_of(START), db_path=db, codes=codes)
 
 
 # ---------------------------------------------------------------------------
@@ -62,7 +73,7 @@ class Recorder:
 def test_buy_hold_completes_backtest_next_close(tmp_path):
     db = seed_db(tmp_path)
     res = run_backtest(
-        BuyHold(), START, END, db_path=db, universe=tuple(CODES)
+        BuyHold(), START, END, db_path=db, universe=_uni(db)
     )
     assert isinstance(res, BacktestResult)
     # One equity-curve point per trading day.
@@ -93,7 +104,7 @@ def test_next_close_fills_strictly_next_session(tmp_path):
     """A signal on day D must fill on a strictly later session."""
     db = seed_db(tmp_path)
     res = run_backtest(
-        BuyHold(), START, END, db_path=db, universe=tuple(CODES)
+        BuyHold(), START, END, db_path=db, universe=_uni(db)
     )
     assert res.trades, "expected at least one fill"
     for t in res.trades:
@@ -112,11 +123,11 @@ def test_costs_change_post_cost_not_pre_cost(tmp_path):
     db = seed_db(tmp_path)
     std = run_backtest(
         BuyHold(), START, END, db_path=db,
-        universe=tuple(CODES), cost_model=standard_cost(),
+        universe=_uni(db), cost_model=standard_cost(),
     )
     stress = run_backtest(
         BuyHold(), START, END, db_path=db,
-        universe=tuple(CODES), cost_model=stress_cost(multiple=5.0),
+        universe=_uni(db), cost_model=stress_cost(multiple=5.0),
     )
     # Stress pays more cost and earns less post-cost return.
     assert stress.metrics["cost_drag"] > std.metrics["cost_drag"]
@@ -131,7 +142,7 @@ def test_zero_cost_equals_pre_cost(tmp_path):
     db = seed_db(tmp_path)
     zero = run_backtest(
         BuyHold(), START, END, db_path=db,
-        universe=tuple(CODES), cost_model=standard_cost(bps=0.0),
+        universe=_uni(db), cost_model=standard_cost(bps=0.0),
     )
     assert zero.metrics["total_return_pre_cost"] == pytest.approx(
         zero.metrics["total_return_post_cost"]
@@ -146,8 +157,8 @@ def test_zero_cost_equals_pre_cost(tmp_path):
 
 def test_reproducibility_same_config_same_result(tmp_path):
     db = seed_db(tmp_path)
-    r1 = run_backtest(BuyHold(), START, END, db_path=db, universe=tuple(CODES))
-    r2 = run_backtest(BuyHold(), START, END, db_path=db, universe=tuple(CODES))
+    r1 = run_backtest(BuyHold(), START, END, db_path=db, universe=_uni(db))
+    r2 = run_backtest(BuyHold(), START, END, db_path=db, universe=_uni(db))
     assert r1.metadata == r2.metadata
     assert r1.equity_curve == r2.equity_curve
     assert r1.trades == r2.trades
@@ -158,10 +169,10 @@ def test_reproducibility_same_config_same_result(tmp_path):
 
 def test_metadata_reflects_different_inputs(tmp_path):
     db = seed_db(tmp_path)
-    a = run_backtest(BuyHold(), START, END, db_path=db, universe=tuple(CODES))
+    a = run_backtest(BuyHold(), START, END, db_path=db, universe=_uni(db))
     b = run_backtest(
         BuyHold(), START, END, db_path=db,
-        universe=tuple(CODES), cost_model=stress_cost(),
+        universe=_uni(db), cost_model=stress_cost(),
     )
     assert a.metadata["execution_mode"] == b.metadata["execution_mode"]
     assert a.metadata["cost_model"] != b.metadata["cost_model"]
@@ -190,7 +201,7 @@ def test_engine_never_uses_future_as_of_for_bars(tmp_path, monkeypatch):
 
     monkeypatch.setattr(pit, "get_equity_bars_daily", wrapped)
 
-    run_backtest(BuyHold(), START, END, db_path=db, universe=tuple(CODES))
+    run_backtest(BuyHold(), START, END, db_path=db, universe=_uni(db))
     assert seen, "engine should read bars through pit"
     end_close = close_as_of(END)
     for as_of, _from, to_event, codes in seen:
@@ -219,7 +230,7 @@ def test_no_future_bar_visible_at_decision(tmp_path):
     rec = Recorder()
     # Only look at code 1332 on the second-to-last day's decision.
     run_backtest(
-        rec, START, _DAYS[-2], db_path=db, universe=("1332",),
+        rec, START, _DAYS[-2], db_path=db, universe=_uni(db, codes=("1332",)),
         calendar_as_of=close_iso(END),
     )
     # On 04-03's decision (as_of 04-03 15:30), the 04-04 bar (avail 12-31) is
@@ -239,7 +250,7 @@ def test_same_day_close_fills_same_session_and_excludes_same_day_close(tmp_path)
     """same_day_close decides at the open and fills at that session's close."""
     db = seed_db(tmp_path)
     res = run_backtest(
-        BuyHold(), START, END, db_path=db, universe=tuple(CODES),
+        BuyHold(), START, END, db_path=db, universe=_uni(db),
         execution_mode="same_day_close",
     )
     assert res.metadata["execution_mode"] == "same_day_close"
@@ -256,7 +267,7 @@ def test_same_day_close_debits_cash_and_marks_after_fill(tmp_path):
     """A same-day buy updates cash and that session's close equity point."""
     db = seed_db(tmp_path, codes=["1332"])
     res = run_backtest(
-        BuyHold(), START, END, db_path=db, universe=("1332",),
+        BuyHold(), START, END, db_path=db, universe=_uni(db, codes=("1332",)),
         execution_mode="same_day_close",
     )
     assert len(res.trades) == 1
@@ -293,7 +304,7 @@ def test_same_day_decision_equity_uses_prior_close(tmp_path):
 
     strategy = EnterThenRecord()
     res = run_backtest(
-        strategy, START, END, db_path=db, universe=("1332",),
+        strategy, START, END, db_path=db, universe=_uni(db, codes=("1332",)),
         execution_mode="same_day_close", cost_model=standard_cost(bps=0.0),
     )
     day3_ctx = next(ctx for ctx in strategy.ctxs if ctx.date == TRADING_DAYS[2])
@@ -316,7 +327,7 @@ def test_next_close_missing_fill_bar_carries_order(tmp_path):
     }
     db = seed_db(tmp_path, codes=["1332"], prices=prices)
     res = run_backtest(
-        BuyHold(), START, END, db_path=db, universe=("1332",),
+        BuyHold(), START, END, db_path=db, universe=_uni(db, codes=("1332",)),
         cost_model=standard_cost(bps=0.0),
     )
     assert len(res.trades) == 1
@@ -336,7 +347,7 @@ def test_stale_mark_survives_beyond_signal_lookback(tmp_path):
     }
     db = seed_db(tmp_path, codes=["1332"], prices=prices)
     res = run_backtest(
-        BuyHold(), START, END, db_path=db, universe=("1332",),
+        BuyHold(), START, END, db_path=db, universe=_uni(db, codes=("1332",)),
         lookback_days=1, cost_model=standard_cost(bps=0.0),
     )
     assert len(res.trades) == 1
@@ -364,7 +375,7 @@ def test_raw_basis_ignores_unproven_vendor_adjusted_history(tmp_path):
         tmp_path, codes=["1332"], prices=raw, adjustment_prices=adjusted
     )
     res = run_backtest(
-        BuyHold(), START, END, db_path=db, universe=("1332",),
+        BuyHold(), START, END, db_path=db, universe=_uni(db, codes=("1332",)),
         cost_model=standard_cost(bps=0.0),
     )
     assert res.metadata["price_basis"] == RAW
@@ -378,7 +389,7 @@ def test_pit_adjusted_basis_fails_closed_without_evidence(tmp_path):
     db = seed_db(tmp_path, codes=["1332"])
     with pytest.raises(UnsupportedPriceBasis, match="not enabled"):
         run_backtest(
-            BuyHold(), START, END, db_path=db, universe=("1332",),
+            BuyHold(), START, END, db_path=db, universe=_uni(db, codes=("1332",)),
             price_basis=PIT_ADJUSTED,
         )
 
@@ -396,6 +407,53 @@ def test_universe_built_from_pit_master_when_not_fixed(tmp_path):
     assert first.universe == ("1332", "7203", "8697")
     assert set(first.master.keys()) == {"1332", "7203", "8697"}
     assert first.master["7203"].company_name == "Co-7203"
+    master = load_master(close_as_of(START), db_path=db)
+    assert master.pit_as_of == close_as_of(START)
+    assert master.membership_proof == f"pit_equity_master:{close_as_of(START)}"
+
+
+def test_raw_code_list_without_as_of_is_rejected(tmp_path):
+    db = seed_db(tmp_path)
+    with pytest.raises(RawFixedUniverseError, match="pit_as_of"):
+        run_backtest(BuyHold(), START, END, db_path=db, universe=tuple(CODES))
+    with pytest.raises(RawFixedUniverseError, match=FIXED_UNIVERSE_ENV):
+        run_backtest(BuyHold(), START, END, db_path=db, universe=list(CODES))
+
+
+def test_raw_code_list_requires_research_env(tmp_path, monkeypatch):
+    db = seed_db(tmp_path)
+    monkeypatch.delenv(FIXED_UNIVERSE_ENV, raising=False)
+    with pytest.raises(RawFixedUniverseError):
+        run_backtest(BuyHold(), START, END, db_path=db, universe=tuple(CODES))
+    monkeypatch.setenv(FIXED_UNIVERSE_ENV, "true")
+    with pytest.raises(RawFixedUniverseError, match=FIXED_UNIVERSE_ENV):
+        run_backtest(BuyHold(), START, END, db_path=db, universe=tuple(CODES))
+    monkeypatch.setenv(FIXED_UNIVERSE_ENV, "1")
+    res = run_backtest(BuyHold(), START, END, db_path=db, universe=tuple(CODES))
+    assert res.metadata["universe_rule"].startswith("fixed:")
+
+
+def test_load_master_mapping_injects_fixed_universe(tmp_path):
+    db = seed_db(tmp_path, codes=["1332", "8697", "7203"])
+    rec = Recorder()
+    master = load_master(close_as_of(START), db_path=db)
+    run_backtest(rec, START, END, db_path=db, universe=master)
+    assert rec.ctxs[0].universe == ("1332", "7203", "8697")
+    subset = membership_at(close_as_of(START), db_path=db, codes=("1332",))
+    rec2 = Recorder()
+    run_backtest(rec2, START, END, db_path=db, universe=subset)
+    assert rec2.ctxs[0].universe == ("1332",)
+    with pytest.raises(ValueError, match="not in PIT equity master"):
+        membership_at(close_as_of(START), db_path=db, codes=("9999",))
+    rec3 = Recorder()
+    run_backtest(
+        rec3,
+        START,
+        END,
+        db_path=db,
+        universe={"codes": ("1332",), "pit_as_of": close_as_of(START)},
+    )
+    assert rec3.ctxs[0].universe == ("1332",)
 
 
 def test_universe_uses_latest_complete_master_snapshot(tmp_path):

@@ -24,8 +24,9 @@ import pytest
 
 import pit
 import features
-from core import run_backtest, standard_cost
+from core import close_as_of, run_backtest, standard_cost
 from core.strategy_protocol import BarContext, OrderIntent
+from core.universe import membership_at
 
 
 TRADING_DAYS = ("2025-04-01", "2025-04-02", "2025-04-03", "2025-04-04")
@@ -150,7 +151,7 @@ def test_backtest_with_features_on_real_db_path(synced_cf_d1_db):
         strat,
         TRADING_DAYS[0], TRADING_DAYS[-1],
         db_path=db,
-        universe=CODES,
+        universe=membership_at(close_as_of(TRADING_DAYS[0]), db_path=db, codes=CODES),
         cost_model=standard_cost(),
     )
     # Engine ran to completion.
@@ -313,7 +314,11 @@ def test_backtest_on_phase35_synced_db():
         end,
         db_path=db,
         cost_model=standard_cost(),
-        universe=tuple(codes[:20]) if codes else None,
+        universe=(
+            membership_at(close_as_of(start), db_path=db, codes=codes[:20])
+            if codes
+            else None
+        ),
     )
     trading_days = int(
         res.metrics.get("num_trading_days")

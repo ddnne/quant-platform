@@ -55,7 +55,8 @@ from typing import Any
 ROOT = ensure_repo_root()
 
 import features  # noqa: E402
-from core import run_backtest, standard_cost  # noqa: E402
+from core import close_as_of, run_backtest, standard_cost  # noqa: E402
+from core.universe import membership_at  # noqa: E402
 from core.strategy_protocol import BarContext, OrderIntent  # noqa: E402
 
 FEATURE_IDS = ("return_1d", "momentum_n", "volatility_n")
@@ -262,7 +263,7 @@ def _backtest_section(
         strat,
         start, end,
         db_path=db_path,
-        universe=tuple(codes),
+        universe=membership_at(close_as_of(start), db_path=db_path, codes=codes),
         cost_model=standard_cost(),
     )
     metrics = dict(res.metrics) if res.metrics else {}

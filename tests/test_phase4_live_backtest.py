@@ -6,9 +6,10 @@ from pathlib import Path
 
 import pytest
 
-from core import run_backtest
+from core import close_as_of, run_backtest
 from core.costs import standard_cost
 from core.strategies.buy_hold import BuyHold
+from core.universe import membership_at
 
 
 def _days(n: int = 40) -> list[str]:
@@ -41,7 +42,7 @@ def test_backtest_short_window_offline(tmp_path):
         days[0],
         days[-1],
         db_path=db,
-        universe=tuple(codes),
+        universe=membership_at(close_as_of(days[0]), db_path=db, codes=codes),
         cost_model=standard_cost(),
     )
     assert res.metrics is not None
@@ -69,7 +70,7 @@ def test_live_backtest_3m():
         start,
         end,
         db_path=db,
-        universe=uni,
+        universe=membership_at(close_as_of(start), db_path=db, codes=uni),
         cost_model=standard_cost(),
     )
     # ~3m calendar window should contain at least 50 trading days for live

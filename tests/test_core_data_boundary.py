@@ -19,7 +19,9 @@ import pytest
 import core
 import pit
 from core import run_backtest, standard_cost
+from core.execution import close_as_of
 from core.strategies.buy_hold import BuyHold
+from core.universe import membership_at
 
 from _coreseed import CODES, TRADING_DAYS, seed_db
 
@@ -99,7 +101,7 @@ def test_core_reads_facts_through_pit(tmp_path, monkeypatch):
         TRADING_DAYS[0],
         TRADING_DAYS[-1],
         db_path=db,
-        universe=tuple(CODES),
+        universe=membership_at(close_as_of(TRADING_DAYS[0]), db_path=db, codes=CODES),
         cost_model=standard_cost(),
     )
     assert calls["calendar"] >= 1
@@ -127,7 +129,7 @@ def test_strategy_context_carries_no_db_handle(tmp_path):
         TRADING_DAYS[0],
         TRADING_DAYS[-1],
         db_path=db,
-        universe=tuple(CODES),
+        universe=membership_at(close_as_of(TRADING_DAYS[0]), db_path=db, codes=CODES),
     )
     # No field on the context is a pit/db/sqlite handle.
     assert seen["attrs"] == {
@@ -161,7 +163,7 @@ def test_context_feature_accessor_injects_as_of_and_runtime_db(tmp_path):
         TRADING_DAYS[0],
         TRADING_DAYS[-1],
         db_path=db,
-        universe=tuple(CODES),
+        universe=membership_at(close_as_of(TRADING_DAYS[0]), db_path=db, codes=CODES),
     )
 
     assert len(seen) == len(TRADING_DAYS)

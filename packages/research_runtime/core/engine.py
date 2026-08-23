@@ -28,7 +28,7 @@ from .execution import close_as_of, get_mode
 from .metrics import compute_metrics
 from .result import BacktestResult
 from .strategy_protocol import Bar, BarContext, OrderIntent, Position
-from .universe import load_master
+from .universe import load_master, resolve_injected_universe
 
 # Result metadata. 0.6.2: W86 daily repo + leverage (repo only).
 CORE_ENGINE_VERSION = "0.6.2"
@@ -432,7 +432,7 @@ def run_backtest(
     cost_model: CostModel | None = None,
     short_financing: ShortFinancingModel | None = None,
     leverage_financing: LeverageFinancingModel | None = None,
-    universe: tuple[str, ...] | list[str] | None = None,
+    universe: Any = None,
     starting_capital: float = 1_000_000.0,
     lookback_days: int = 30,
     calendar_as_of: str | None = None,
@@ -444,13 +444,19 @@ def run_backtest(
     ``strategy.on_bar(ctx)``, fill per execution mode. Valuation marks are
     independent of ``lookback_days``. ``price_basis`` is RAW; ``PIT_ADJUSTED``
     fails closed.
+
+    ``universe`` is None (PIT master per decision day) or an
+    :class:`~core.universe.EquityMasterMap` from :func:`core.universe.load_master`
+    / :func:`core.universe.membership_at` carrying ``pit_as_of``. A raw code
+    list is rejected unless ``QP_ALLOW_FIXED_UNIVERSE=1`` (research-only; not
+    GO).
     """
     mode = get_mode(execution_mode)
     resolved_price_basis = require_supported_price_basis(price_basis)
     resolved_db_path = resolve_db_path(db_path)
     cost_model = cost_model or standard_cost()
-    fixed_universe = (
-        tuple(sorted(universe)) if universe is not None else None
+    fixed_universe = resolve_injected_universe(
+        universe, db_path=resolved_db_path
     )
 
     days = _trading_days(
