@@ -44,6 +44,20 @@ from scripts.export_ops_projection import render_projection_sql  # noqa: E402
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
+
+def load_otc_index_text(path: Path | None) -> str | None:
+    """Read official OTC index HTML. Missing path or file is None, not calendar."""
+    if path is None:
+        return None
+    try:
+        text = Path(path).read_text(encoding="utf-8")
+    except OSError:
+        return None
+    if not str(text).strip():
+        return None
+    return text
+
+
 def count_local_complete(db_path: Path) -> int:
     """Count COMPLETE coverage_segments in a local SQLite ops/research DB.
 
@@ -183,6 +197,15 @@ def main(argv: list[str] | None = None) -> int:
         help="Run coverage ledger refresh before export (requires evidence/receipts).",
     )
     parser.add_argument(
+        "--otc-index-html",
+        type=Path,
+        default=None,
+        help=(
+            "Optional JSDA OTC official-index HTML for coverage refresh. "
+            "Missing file is fail-closed empty (index_text=None), not calendar inventory."
+        ),
+    )
+    parser.add_argument(
         "--apply-remote",
         action="store_true",
         help="Apply exported SQL to remote D1 via wrangler (requires CF auth).",
@@ -216,8 +239,13 @@ def main(argv: list[str] | None = None) -> int:
 
         last_refresh_attempt_at = _now()
         store = SqliteStore(args.db)
+        index_text = load_otc_index_text(args.otc_index_html)
         try:
-            refresh_coverage_ledger(store._conn, args.db)  # noqa: SLF001
+            refresh_coverage_ledger(
+                store._conn,  # noqa: SLF001
+                args.db,
+                index_text=index_text,
+            )
             store._conn.commit()  # noqa: SLF001
             refresh_status = "success"
             last_success_at = _now()

@@ -446,3 +446,87 @@ def test_publish_failed_refresh_refuses_apply_remote(tmp_path, monkeypatch):
     )[1].split(";", 1)[0]
     assert ",'FRESH'," not in insert
     assert ",'FAILED'," in insert
+
+
+def test_publish_refresh_passes_index_text_when_html_path_provided(
+    tmp_path, monkeypatch,
+):
+    db_path = _setup_test_db(tmp_path)
+    html = "<html>listed publication days only</html>\n"
+    index_path = tmp_path / "otc_official_index.html"
+    index_path.write_text(html, encoding="utf-8")
+    captured: dict = {}
+
+    def _capture(*_a, **kwargs):
+        captured["kwargs"] = kwargs
+        return []
+
+    monkeypatch.setattr(
+        "storage.coverage_ledger.refresh_coverage_ledger", _capture
+    )
+    rc = _MODULE.main([
+        f"--db={db_path}",
+        f"--output={tmp_path / 'ops' / 'projection.sql'}",
+        f"--meta-output={tmp_path / 'ops' / 'projection_meta.json'}",
+        "--refresh-coverage",
+        f"--otc-index-html={index_path}",
+        "--dry-run",
+    ])
+    assert rc == 0
+    assert "index_text" in captured["kwargs"]
+    assert captured["kwargs"]["index_text"] == html
+
+
+def test_publish_refresh_index_text_none_when_html_path_omitted(
+    tmp_path, monkeypatch,
+):
+    db_path = _setup_test_db(tmp_path)
+    captured: dict = {}
+
+    def _capture(*_a, **kwargs):
+        captured["kwargs"] = kwargs
+        return []
+
+    monkeypatch.setattr(
+        "storage.coverage_ledger.refresh_coverage_ledger", _capture
+    )
+    rc = _MODULE.main([
+        f"--db={db_path}",
+        f"--output={tmp_path / 'ops' / 'projection.sql'}",
+        f"--meta-output={tmp_path / 'ops' / 'projection_meta.json'}",
+        "--refresh-coverage",
+        "--dry-run",
+    ])
+    assert rc == 0
+    assert "index_text" in captured["kwargs"]
+    assert captured["kwargs"]["index_text"] is None
+
+
+def test_publish_refresh_missing_html_is_fail_closed_empty_not_calendar(
+    tmp_path, monkeypatch,
+):
+    db_path = _setup_test_db(tmp_path)
+    missing = tmp_path / "no_such_otc_index.html"
+    assert not missing.exists()
+    captured: dict = {}
+
+    def _capture(*_a, **kwargs):
+        captured["kwargs"] = kwargs
+        return []
+
+    monkeypatch.setattr(
+        "storage.coverage_ledger.refresh_coverage_ledger", _capture
+    )
+    rc = _MODULE.main([
+        f"--db={db_path}",
+        f"--output={tmp_path / 'ops' / 'projection.sql'}",
+        f"--meta-output={tmp_path / 'ops' / 'projection_meta.json'}",
+        "--refresh-coverage",
+        f"--otc-index-html={missing}",
+        "--dry-run",
+    ])
+    assert rc == 0
+    assert "index_text" in captured["kwargs"]
+    assert captured["kwargs"]["index_text"] is None
+    assert _MODULE.load_otc_index_text(None) is None
+    assert _MODULE.load_otc_index_text(missing) is None
