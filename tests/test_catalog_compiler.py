@@ -159,3 +159,22 @@ def test_catalog_ids_emit_fails_if_digest_n_drifts(tmp_path, monkeypatch) -> Non
         raise AssertionError("compiler digest n drift must fail while stopped")
     except CatalogAndPlusNStoppedError as exc:
         assert "compiler digest n=1" in str(exc)
+
+
+def test_surprise_with_flow_gate_is_not_flow_family() -> None:
+    from research.catalog_family import catalog_family_report, classify_catalog_row
+
+    row = classify_catalog_row(
+        {
+            "logic_id": "surprise_xs_crowded_margin",
+            "evaluator": "research.unique_logic.event_combos.evaluate_combo_daily_mtm",
+            "params": {"gates": ["crowded_margin", "liq_high"]},
+        }
+    )
+    assert row["primary_hypothesis"] == "surprise_xs"
+    assert row["flow_family"] is False
+    assert "flow_gate" in row["gate_tags"]
+    assert row["go"] is False
+    rep = catalog_family_report()
+    assert rep["go"] is False
+    assert rep["not_a_pass"] is True

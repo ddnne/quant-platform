@@ -167,10 +167,8 @@ def test_event_margin_crowding_skips_missing_and_empty_is_incomplete():
     assert pack.get("go") is False
 
 
-def test_worker_leftover_pre_mom_uses_entryidx_not_combo_pre_mom() -> None:
-    """Unique-22 leftover is still needed; do not unify with combo pre_mom."""
-    from pathlib import Path
-
+def test_event_filter_yaml_leftover_vs_lifted_gates() -> None:
+    """Unique-22 leftover still needed; occupancy-equal lifts keep params.gates."""
     from research.unique_logic.catalog import load_catalog_specs
 
     leftover = (

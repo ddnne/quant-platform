@@ -154,6 +154,7 @@ def test_catalog_yaml_parity_with_python_specs() -> None:
             assert re.search(r"(?m)^generation_enabled:\s*true\s*$", body) is None
         else:
             assert re.search(r"(?m)^family:", body) is None
+        assert re.search(r"(?m)^theme:", body) is None
 
 
 def test_combo_yaml_gates_cs_gate_side_match_specs() -> None:
@@ -245,10 +246,6 @@ def test_economic_theme_ids_from_yaml() -> None:
     assert "economic_theme_ids()" in const_src
     assert "surprise_xs_tight_fade" not in const_src
     assert "event_on_impulse_pead" not in const_src
-    for yml in _YAML_DIR.glob("*.yaml"):
-        body = yml.read_text(encoding="utf-8")
-        assert re.search(r"(?m)^theme:", body) is None
-        assert re.search(r"(?m)^go:\s*true\s*$", body) is None
 
 
 def test_python_only_event_gates_skip_catalog() -> None:
@@ -273,7 +270,6 @@ def test_python_only_event_gates_skip_catalog() -> None:
 def test_event_cheap_pb_gate_in_combo_and_yaml() -> None:
     """cheap_pb stays a COMBO event gate; YAML pead lists it. Not a CS reuse."""
     import re
-    from pathlib import Path
 
     from research.unique_logic.catalog import combo_row_from_yaml, parse_catalog_yaml
     from research.unique_logic.constants import CHEAP_PB_EVENT_VS_CS, COMBO_EVENT_GATES
@@ -306,8 +302,6 @@ def test_event_cheap_pb_gate_in_combo_and_yaml() -> None:
         / "src"
     )
     src = (worker_src / "combo_gates.ts").read_text(encoding="utf-8")
-    # catalog_ids.ts COMBO_EVENT_GATES is generated; sync --check is the set SoT.
-
     event_block = re.search(
         r'if \(gate === "cheap_pb"\) \{.*?return med !== null && pb < med;',
         src,

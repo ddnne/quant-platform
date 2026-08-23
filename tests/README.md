@@ -54,7 +54,7 @@ Live residual COMPLETE / Mass status is **not** decided by tests — see
 | JSDA | `test_jsda_*.py` |
 | Paper / agents | `test_paper_*.py`, `test_agents_*.py`, `test_strategy_spec_schema.py` |
 | Phase 3.5 / CF | `test_phase35_*.py`, `test_phase6_*.py` |
-| Ops projection | `test_ops_projection_*.py`, `test_lane_e_ops_auto_projection.py` |
+| Ops projection | `test_ops_projection_*.py`, `test_phase35_sync_script.py` (`--publish-ops`) |
 
 ---
 

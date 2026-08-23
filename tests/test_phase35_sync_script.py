@@ -122,6 +122,18 @@ def test_cf_export_sync_reaches_nonempty_pit_path(synced_cf_d1_db):
     assert [row["close"] for row in bars.rows] == [100.0, 102.0, 101.0, 104.0]
 
 
+def test_publish_ops_flag_default_off(sync_module):
+    """--publish-ops is parsed and defaults OFF; not auto-apply."""
+    parser = sync_module._build_parser()
+    on = parser.parse_args(["--db=test.sqlite", "--publish-ops"])
+    assert on.publish_ops is True
+    off = parser.parse_args(["--db=test.sqlite"])
+    assert off.publish_ops is False
+    help_text = parser.format_help()
+    assert "Default OFF for safety" in help_text or "default off" in help_text.lower()
+    assert "--apply-remote" in help_text or "apply-remote" in help_text
+
+
 @pytest.mark.live
 def test_sync_live_requires_worker_url(tmp_path, sync_module):
     """Live smoke. Skipped unless ``QP_LIVE=1`` and a worker URL is set.

@@ -160,6 +160,18 @@ describe("comboEventGateOk", () => {
     expect(comboEventGateOk("pb_rising", priced, {}, {}, 8, dummyPanel)).toBe(
       false,
     );
+    const src = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), "daily_path.ts"),
+      "utf8",
+    );
+    const eventCheap = src.slice(
+      src.indexOf('if (gate === "cheap_pb")'),
+      src.indexOf('if (gate === "margin_down")'),
+    );
+    expect(eventCheap).toContain("bars");
+    expect(eventCheap).toContain("fins");
+    expect(eventCheap).toContain("ev.bps");
+    expect(eventCheap).not.toContain("extras?.cheapPb");
   });
 
   it("cluster uses a linear window series and skips missing dates", () => {

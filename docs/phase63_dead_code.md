@@ -84,7 +84,7 @@ importers **on purpose**.
 | `gateway` / `gateway.ai` | `test_gateway_fail_closed` | **Keep** G0 |
 | `research.baseline_catalog` | `test_baseline_catalog` | **Keep** (protected) |
 | `research.catalog_compiler` | `test_catalog_compiler` | **Keep** closed-DSL; YAML not deleted |
-| `research.catalog_family` | `test_catalog_family` | **Keep** flow-gate ≠ flow family |
+| `research.catalog_family` | `test_catalog_compiler` (flow-gate ≠ flow family) | **Keep** flow-gate ≠ flow family |
 | `research.evaluation_ir` | `test_evaluation_ir` | **Keep** |
 | `research.research_capabilities` | `test_research_capabilities` | **Keep** deny-by-default |
 | `research.phase7_pilot` | `test_phase7_pilot_construct` | **Keep** construct-gated; Phase 7 OFF |
