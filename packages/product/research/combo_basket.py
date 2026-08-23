@@ -15,6 +15,7 @@ from research.stats_metrics import equity_path_drawdown, evaluate_daily_path_dd_
 from research.unique_logic.constants import (
     ALWAYS_ON_OCCUPANCY_WARN,
     NEAR_EMPTY_OCCUPANCY,
+    USABLE_OCCUPANCY_MIN,
 )
 
 
@@ -31,9 +32,10 @@ def blend_net_daily(series: Sequence[Sequence[float]]) -> list[float]:
 
 
 def occupancy_in_candidate_band(occ: float | None) -> bool:
+    """True for material-band occupancy. Thin (≤0.12) is not candidate blend."""
     if occ is None:
         return False
-    return float(NEAR_EMPTY_OCCUPANCY) < float(occ) < float(ALWAYS_ON_OCCUPANCY_WARN)
+    return float(USABLE_OCCUPANCY_MIN) < float(occ) < float(ALWAYS_ON_OCCUPANCY_WARN)
 
 
 def blend_window_cells(

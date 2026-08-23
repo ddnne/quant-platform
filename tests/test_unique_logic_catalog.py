@@ -30,6 +30,19 @@ def test_event_sides_ls_variants_stay_registered() -> None:
     )
 
 
+def test_catalog_index_is_one_pass_lookup() -> None:
+    from research.unique_logic.catalog import catalog_index, catalog_spec
+
+    idx = catalog_index()
+    assert idx["n"] >= 1
+    assert idx["n_combo"] >= 1
+    assert idx["go"] is False
+    lid = idx["combo_ids"][0]
+    assert catalog_spec(lid) is not None
+    assert catalog_spec(lid)["logic_id"] == lid
+    assert catalog_spec("not_a_real_logic_id_zzz") is None
+
+
 def test_parse_catalog_yaml_folded_and_params() -> None:
     spec = parse_catalog_yaml(
         """

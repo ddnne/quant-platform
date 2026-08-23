@@ -83,9 +83,9 @@ MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
         "members": (
             "event_ta_up_positive_eps",
             "event_large_surprise_positive_eps",
+            "event_ac_peps_taup",
             "event_eqar_high_positive_eps",
             "event_positive_eps_liq_high",
-            "event_ta_up_liq_high",
         ),
     },
     {
@@ -95,8 +95,8 @@ MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
         "members": (
             "event_positive_eps_uncrowded",
             "surprise_xs_uncrowded_afterclose",
+            "surprise_xs_peps_uncr",
             "event_ta_up_uncrowded",
-            "surprise_xs_taup_uncr",
         ),
     },
     {
@@ -119,7 +119,7 @@ MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
             "event_ta_up_positive_eps",
             "event_large_surprise_positive_eps",
             "surprise_xs_afterclose_ta_up",
-            "event_positive_eps_liq_high",
+            "event_ac_peps_taup",
         ),
     },
 )

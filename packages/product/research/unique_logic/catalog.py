@@ -135,12 +135,36 @@ def load_catalog_specs(*, root: Path | None = None) -> list[dict[str, Any]]:
     return list(_load_catalog_specs_cached(str((root or repo_root()).resolve())))
 
 
+@lru_cache(maxsize=8)
+def _catalog_by_id_cached(root_key: str) -> dict[str, dict[str, Any]]:
+    return {
+        str(spec["logic_id"]): spec
+        for spec in _load_catalog_specs_cached(root_key)
+        if spec.get("logic_id")
+    }
+
+
+def catalog_index(*, root: Path | None = None) -> dict[str, Any]:
+    """One-pass catalog lookup. YAML remains combo declaration SoT."""
+    root_key = str((root or repo_root()).resolve())
+    by_id = _catalog_by_id_cached(root_key)
+    combo = [
+        spec
+        for spec in by_id.values()
+        if str(spec.get("evaluator") or "") == _COMBO_EVALUATOR
+    ]
+    return {
+        "by_id": by_id,
+        "n": len(by_id),
+        "n_combo": len(combo),
+        "combo_ids": tuple(str(s["logic_id"]) for s in combo),
+        "go": False,
+        "not_a_pass": True,
+    }
+
+
 def catalog_spec(logic_id: str, *, root: Path | None = None) -> dict[str, Any] | None:
-    lid = str(logic_id)
-    for spec in load_catalog_specs(root=root):
-        if str(spec.get("logic_id")) == lid:
-            return spec
-    return None
+    return _catalog_by_id_cached(str((root or repo_root()).resolve())).get(str(logic_id))
 
 
 _COMBO_EVALUATOR = "research.unique_logic.event_combos.evaluate_combo_daily_mtm"

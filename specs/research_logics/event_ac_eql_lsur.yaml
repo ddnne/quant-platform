@@ -1,0 +1,26 @@
+logic_id: event_ac_eql_lsur
+headline: false
+generation_enabled: false
+promote_as_main: false
+go: false
+main_pool: true
+thesis: >
+  PEAD when the print is after close AND EqAR is low versus its PIT median AND the earnings surprise is large. Skip missing PIT prints (no invent).
+signal_definition: >
+  PEAD when the print is after close AND EqAR is low versus its PIT median AND the earnings surprise is large. Skip missing PIT prints (no invent).
+datasets:
+  - equities_bars_daily
+  - fins_summary
+  - markets_calendar
+params:
+  post_hold_days: 5
+  hold_days: 10
+  momentum_n: 5
+  min_hist: 20
+  mode: event_ac_eql_lsur
+  side: orig
+  gates: afterclose,eq_ar_low,large_surprise
+  cs_gate: None
+  entry_shift: 0
+  hold_tail_days: 0
+evaluator: research.unique_logic.event_combos.evaluate_combo_daily_mtm

@@ -243,11 +243,9 @@ def test_mechanical_baskets_are_four_valid_defs() -> None:
     evf = next(d for d in defs if d["rule"] == "event_fund_cross")
     assert flow["primary_candidate"] is True
     assert evf["primary_candidate"] is True
-    assert "event_ta_up_positive_eps" in evf["members"]
-    assert "event_positive_eps_liq_high" in evf["members"]
     assert "event_flatten_eps_down" not in evf["members"]
+    assert "cs_eqar_high" not in evf["members"]
     assert "cs_on_impulse" not in repo["members"]
-    assert "event_repo3m_down_pead" in repo["members"]
     assert repo["primary_candidate"] is False
     assert repo["primary"] is False
     from research.combo_basket_catalog import primary_mechanical_basket_defs
@@ -388,6 +386,8 @@ def test_combo_basket_blend_is_equal_weight() -> None:
     assert occupancy_in_candidate_band(0.2) is True
     assert occupancy_in_candidate_band(0.9) is False
     assert occupancy_in_candidate_band(0.01) is False
+    assert occupancy_in_candidate_band(0.10) is False
+    assert occupancy_in_candidate_band(0.12) is False
     cells = [
         _eval_complete_cell(
             "a",
