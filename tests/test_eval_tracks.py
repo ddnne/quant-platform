@@ -147,7 +147,7 @@ def test_catalog_and_plus_n_stopped_and_known_thin() -> None:
         EVENT_THREE_AND_PLUS_N_STOPPED,
         RECONSTITUTION_APPLY,
     )
-    from research.unique_logic.worker_bodies import (
+    from research.occupancy_guards import (
         CatalogAndPlusNStoppedError,
         EventThreeAndBatchError,
         KnownThinRewriteError,

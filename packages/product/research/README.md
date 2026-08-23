@@ -11,6 +11,7 @@ Research control plane (Phase 7 stays OFF): readiness attestation, experiment pl
 - **Candidate eval:** `research.cf_daily_path_job` `POST /v1/daily-path` → R2 `research/eval/job={id}/`. Helpers: `research.daily_path_eval`.
 - **Tracks:** `research.eval_tracks` `mid_n_explore` / `liq_large` (ADV-ranked; **not** head-N).
 - **Live flags:** `research.eval_flags` (AND +N stopped, reconstitution apply, wave id).
+- **Batch guards:** `research.occupancy_guards` (AND freeze, known-thin, cheap_pb cap, occupancy band).
 - **Thesis count:** `research.unique_logic.worker_bodies.countable_thesis_ids` (catalog + Worker body; YAML clones do not count).
 - **Catalog:** `specs/research_logics/*.yaml`. Worker ID arrays: generated `platform/workers/research-mass-eval/src/catalog_ids.ts` (leftover occupancy stays in `daily_path.ts`).
 - **Propose:** `POST /v1/propose-thesis` (`research.cf_propose_thesis`; Workers AI 70B then glm-4.7-flash then 8B CF-internal; LLM failure is `ok:false`/`llm_failed`, not stub-as-success; review_proposal_row; no auto-inject).
