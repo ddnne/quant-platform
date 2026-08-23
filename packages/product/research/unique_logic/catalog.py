@@ -303,8 +303,15 @@ def clear_catalog_caches() -> None:
     try:
         from research.unique_logic.event_combos import clear_combo_runtime_cache
     except ImportError:
-        return
-    clear_combo_runtime_cache()
+        pass
+    else:
+        clear_combo_runtime_cache()
+    try:
+        from research.combo_basket_catalog import clear_basket_caches
+    except ImportError:
+        pass
+    else:
+        clear_basket_caches()
 
 
 def write_combo_thesis_jsonl(

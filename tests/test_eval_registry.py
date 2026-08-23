@@ -333,6 +333,21 @@ def test_historical_baskets_are_deprecated_not_invalid() -> None:
     assert prim_rules.isdisjoint(HISTORICAL_BASKET_RULES)
 
 
+def test_mechanical_basket_defs_cache_returns_copies() -> None:
+    from research.combo_basket_catalog import mechanical_basket_defs
+    from research.unique_logic.catalog import clear_catalog_caches
+
+    a = mechanical_basket_defs()
+    a[0]["members"].append("mutated")
+    b = mechanical_basket_defs()
+    assert "mutated" not in b[0]["members"]
+    clear_catalog_caches()
+    c = mechanical_basket_defs()
+    fund = next(d for d in c if d["rule"] == "fundamentals_sleeve")
+    assert fund["valid"] is True
+    assert fund["nested_parent_count"] >= 1
+
+
 def test_reconstitution_options_drop_nested_without_reject() -> None:
     from research.combo_basket_catalog import (
         reconstitution_options,

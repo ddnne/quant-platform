@@ -1,6 +1,8 @@
 """Mechanical sleeve catalog. Equal-weight only. Not a promote / GO."""
 from __future__ import annotations
 
+from copy import deepcopy
+from functools import lru_cache
 from typing import Any, Sequence
 
 from research.unique_logic.constants import (
@@ -211,7 +213,14 @@ def nested_parent_pairs(logic_ids: Sequence[str]) -> list[dict[str, Any]]:
     can see them. Existing primary sleeves stay valid until a reconstitution
     plan replaces them. Empty gate sets are skipped (not a parent of all).
     """
-    ids = [str(x).strip() for x in logic_ids if str(x).strip()]
+    ids = tuple(str(x).strip() for x in logic_ids if str(x).strip())
+    return [dict(p) for p in _nested_parent_pairs_cached(ids)]
+
+
+@lru_cache(maxsize=256)
+def _nested_parent_pairs_cached(
+    ids: tuple[str, ...],
+) -> tuple[dict[str, Any], ...]:
     gates_by = {lid: _spec_gates(lid) for lid in ids}
     out: list[dict[str, Any]] = []
     for parent in ids:
@@ -231,7 +240,7 @@ def nested_parent_pairs(logic_ids: Sequence[str]) -> list[dict[str, Any]]:
                         "child_gates": sorted(gc),
                     }
                 )
-    return out
+    return tuple(out)
 
 
 def would_nest_in_sleeve(candidate: str, members: Sequence[str]) -> bool:
@@ -344,7 +353,18 @@ def equal_weights(n: int) -> list[float]:
     return [w] * int(n)
 
 
+def clear_basket_caches() -> None:
+    """Drop sleeve caches after catalog writes. Not a second SoT."""
+    _nested_parent_pairs_cached.cache_clear()
+    _mechanical_basket_defs_cached.cache_clear()
+
+
 def mechanical_basket_defs() -> list[dict[str, Any]]:
+    return [deepcopy(d) for d in _mechanical_basket_defs_cached()]
+
+
+@lru_cache(maxsize=1)
+def _mechanical_basket_defs_cached() -> tuple[dict[str, Any], ...]:
     out: list[dict[str, Any]] = []
     for raw in MECHANICAL_BASKETS:
         rule = str(raw.get("rule") or "mechanical")
@@ -373,7 +393,7 @@ def mechanical_basket_defs() -> list[dict[str, Any]]:
                 "go": False,
             }
         )
-    return out
+    return tuple(out)
 
 
 def primary_mechanical_basket_defs() -> list[dict[str, Any]]:
