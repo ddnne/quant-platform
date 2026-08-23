@@ -128,13 +128,17 @@ OPS_TOOLS: tuple[Tool, ...] = (
     Tool("ingestion_last_run", "Read the latest current ingestion run.", _object()),
     Tool(
         "dataset_coverage",
-        "Read one dataset's current Coverage V2 aggregate.",
+        "Read one dataset's current Coverage projection (policy_version as stored on the generation).",
         _object({"dataset": _STRING}, ("dataset",)),
     ),
-    Tool("coverage_gaps", "List current governed Coverage V2 gaps.", _object()),
+    Tool(
+        "coverage_gaps",
+        "List current governed datasets whose Coverage projection (policy_version as stored on the generation) is not COMPLETE.",
+        _object(),
+    ),
     Tool(
         "coverage_segments",
-        "Read bounded current Coverage V2 segment evidence.",
+        "Read bounded current Coverage projection (policy_version as stored on the generation) segment evidence.",
         _object({
             "dataset": _STRING,
             "status": {

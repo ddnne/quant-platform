@@ -62,6 +62,26 @@ def _plane(value: Any, *, name: str, mutable: bool) -> dict[str, Any]:
     return {**body, "plane": name, "mutable": mutable}
 
 
+def _stored_policy_version(row: Mapping[str, Any] | None) -> str:
+    if not isinstance(row, Mapping):
+        return ""
+    policy = row.get("policy_version")
+    if isinstance(policy, str) and policy.strip():
+        return policy.strip()
+    return ""
+
+
+def _coverage_projection_missing_reason(
+    row: Mapping[str, Any] | None = None,
+) -> str:
+    # Echo stored policy_version. Live projection is still collection-coverage/v2
+    # STALE; never freeze "Coverage V2" or invent unpublished V3.
+    policy = _stored_policy_version(row)
+    if policy:
+        return f"Coverage projection ({policy}) has not been populated"
+    return "Coverage projection has not been populated"
+
+
 class ResearchReadyReadService:
     """Immutable research interface backed only by published READY data."""
 
@@ -169,10 +189,7 @@ class OpsCurrentReadService:
                 dataset=dataset,
                 status="UNKNOWN",
                 coverage=None,
-                reason=(
-                    "Coverage V2 has not been evaluated for this governed "
-                    "dataset in the current control database"
-                ),
+                reason=_coverage_projection_missing_reason(coverage),
             )
         return self._result(
             dataset=dataset,
@@ -196,7 +213,7 @@ class OpsCurrentReadService:
                 gaps.append({
                     "dataset": dataset,
                     "status": "UNKNOWN",
-                    "reason": "Coverage V2 row is missing",
+                    "reason": _coverage_projection_missing_reason(row),
                 })
             elif row.get("status") != "COMPLETE":
                 gaps.append(row)
@@ -238,7 +255,7 @@ class OpsCurrentReadService:
         return self._result(
             status="AVAILABLE" if rows else "UNKNOWN",
             **({} if rows else {
-                "reason": "Coverage V2 segment inventory is empty or unavailable"
+                "reason": _coverage_projection_missing_reason()
             }),
             segments=rows,
             limit=size,
@@ -267,7 +284,7 @@ class OpsCurrentReadService:
         )
         return self._result(
             status="UNKNOWN",
-            reason="Coverage V2 segment inventory is empty or unavailable",
+            reason=_coverage_projection_missing_reason(),
             datasets=[{
                 "dataset": item,
                 "required_segments": None,

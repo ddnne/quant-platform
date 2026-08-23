@@ -5,6 +5,7 @@ from __future__ import annotations
 import sqlite3
 
 from data_access import QuantDataAccess, QuantReadDomainService
+from data_access.service import _coverage_projection_missing_reason
 from mcp_servers.quant_data.server import QuantDataMCPServer
 
 
@@ -104,6 +105,8 @@ def test_missing_ops_coverage_is_unknown_and_lists_every_governed_gap(tmp_path):
     )
     assert one["status"] == "UNKNOWN"
     assert one["coverage"] is None
+    assert one["reason"] == "Coverage projection has not been populated"
+    assert "Coverage V2" not in one["reason"]
 
     result = service.call_tool("coverage_gaps")
     assert result["status"] == "UNKNOWN"
@@ -112,6 +115,103 @@ def test_missing_ops_coverage_is_unknown_and_lists_every_governed_gap(tmp_path):
         row["dataset"] == "jsda_otc_bond_reference_prices"
         for row in result["gaps"]
     )
+    assert all(
+        row["reason"] == "Coverage projection has not been populated"
+        for row in result["gaps"]
+    )
+    assert all("Coverage V2" not in row["reason"] for row in result["gaps"])
+
+    segments = service.call_tool(
+        "coverage_segments", {"dataset": "jsda_tokyo_repo_rates"}
+    )
+    assert segments["status"] == "UNKNOWN"
+    assert segments["reason"] == "Coverage projection has not been populated"
+    assert "Coverage V2" not in segments["reason"]
+
+    backfill = service.call_tool(
+        "backfill_status", {"dataset": "jsda_tokyo_repo_rates"}
+    )
+    assert backfill["status"] == "UNKNOWN"
+    assert backfill["reason"] == "Coverage projection has not been populated"
+    assert "Coverage V2" not in backfill["reason"]
+
+
+def test_coverage_projection_missing_reason_echoes_stored_policy_not_v2():
+    assert _coverage_projection_missing_reason(None) == (
+        "Coverage projection has not been populated"
+    )
+    assert _coverage_projection_missing_reason({}) == (
+        "Coverage projection has not been populated"
+    )
+    echoed = _coverage_projection_missing_reason(
+        {"policy_version": "collection-coverage/v2"}
+    )
+    assert echoed == (
+        "Coverage projection (collection-coverage/v2) has not been populated"
+    )
+    assert "Coverage V2" not in echoed
+    assert "v3" not in echoed.lower()
+    assert _coverage_projection_missing_reason({"policy_version": "  "}) == (
+        "Coverage projection has not been populated"
+    )
+
+
+def test_ops_coverage_echoes_stored_policy_version_not_frozen_v2(tmp_path):
+    db_path = tmp_path / "current.sqlite"
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE dataset_coverage (
+            dataset TEXT PRIMARY KEY, status TEXT, policy_version TEXT,
+            governance_tier TEXT
+        );
+        CREATE TABLE coverage_segments (
+            dataset TEXT, segment_id TEXT, segment_start TEXT, status TEXT,
+            policy_version TEXT
+        );
+        INSERT INTO dataset_coverage VALUES
+            ('equities_bars_daily', 'PARTIAL', 'collection-coverage/v2',
+             'governed'),
+            ('jsda_tokyo_repo_rates', 'COMPLETE', 'collection-coverage/v2',
+             'governed');
+        INSERT INTO coverage_segments VALUES
+            ('equities_bars_daily', '2025-01', '2025-01-01', 'PARTIAL',
+             'collection-coverage/v2');
+        """
+    )
+    conn.commit()
+    conn.close()
+    service = QuantReadDomainService(QuantDataAccess(), ops_db_path=db_path)
+
+    coverage = service.call_tool(
+        "dataset_coverage", {"dataset": "equities_bars_daily"}
+    )
+    assert coverage["status"] == "PARTIAL"
+    assert coverage["coverage"]["policy_version"] == "collection-coverage/v2"
+    assert "Coverage V2" not in str(coverage)
+    assert "collection-coverage/v3" not in str(coverage)
+
+    complete = service.call_tool(
+        "dataset_coverage", {"dataset": "jsda_tokyo_repo_rates"}
+    )
+    assert complete["status"] == "COMPLETE"
+    assert complete["coverage"]["policy_version"] == "collection-coverage/v2"
+
+    gaps = service.call_tool("coverage_gaps")
+    by_dataset = {row["dataset"]: row for row in gaps["gaps"]}
+    assert "jsda_tokyo_repo_rates" not in by_dataset
+    bars = by_dataset["equities_bars_daily"]
+    assert bars["status"] == "PARTIAL"
+    assert bars["policy_version"] == "collection-coverage/v2"
+    missing = by_dataset["jsda_otc_bond_reference_prices"]
+    assert missing["status"] == "UNKNOWN"
+    assert missing["reason"] == "Coverage projection has not been populated"
+    assert "Coverage V2" not in missing["reason"]
+
+    segments = service.call_tool(
+        "coverage_segments", {"dataset": "equities_bars_daily"}
+    )
+    assert segments["segments"][0]["policy_version"] == "collection-coverage/v2"
 
 
 def test_research_calls_are_delegated_and_labeled_immutable():
