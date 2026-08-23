@@ -26,6 +26,7 @@ import { handlePruneChangelog } from "./ops_prune_changelog";
 import { handleParquetManifest } from "./ops_parquet_manifest";
 import { handleArtifactsJoinPlan } from "./ops_artifacts_plan";
 import { handleExportPaths } from "./http_export";
+import { json } from "./http_json";
 import { ingestionTokenMatches } from "./ingestion_token";
 import {
   writeCollectionReceipt,
@@ -566,11 +567,6 @@ async function runWithConcurrency<T>(
   const runners: Promise<void>[] = [];
   for (let i = 0; i < effective; i++) runners.push(runner());
   await Promise.all(runners);
-}
-
-
-function json(body: unknown, status = 200): Response {
-  return Response.json(body, { status });
 }
 
 async function handleHealth(env: Env): Promise<Response> {

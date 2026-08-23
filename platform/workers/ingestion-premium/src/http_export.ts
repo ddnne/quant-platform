@@ -3,16 +3,13 @@
  * DATA_EXPORT_TOKEN via X-Ingestion-Token; not ingest.
  */
 
+import { json } from "./http_json";
 import { ingestionTokenMatches } from "./ingestion_token";
 import { requireNaturalKeysV2Ready } from "./natural_key_migration";
 
 export interface ExportEnv {
   DB: D1Database;
   DATA_EXPORT_TOKEN?: string;
-}
-
-function json(body: unknown, status = 200): Response {
-  return Response.json(body, { status });
 }
 
 export async function handleExportD1(
