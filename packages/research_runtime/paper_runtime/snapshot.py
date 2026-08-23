@@ -27,6 +27,10 @@ from paper_runtime.snapshot_coverage_proof import (
     _coverage_v2_proof,
     _verify_coverage_v2_manifest,
 )
+from paper_runtime.snapshot_persist import (
+    _atomic_json,
+    _copy_sqlite,
+)
 from paper_runtime.snapshot_publish_policy import (
     _evaluate_publication_gate,
     _transition_policy,
@@ -538,32 +542,6 @@ def _watermarks_for(
     if missing:
         raise SnapshotRejected(f"required dataset watermarks missing: {missing}")
     return watermarks
-
-
-def _atomic_json(path: Path, payload: dict[str, Any], *, mode: int) -> None:
-    fd, raw_path = tempfile.mkstemp(prefix="." + path.name + ".", dir=path.parent)
-    temp_path = Path(raw_path)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(
-                payload, handle, ensure_ascii=True, sort_keys=True,
-                separators=(",", ":"), allow_nan=False,
-            )
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.chmod(temp_path, mode)
-        os.replace(temp_path, path)
-    except Exception:
-        temp_path.unlink(missing_ok=True)
-        raise
-
-
-def _copy_sqlite(source: sqlite3.Connection, target_path: Path) -> None:
-    target = sqlite3.connect(str(target_path))
-    try:
-        source.backup(target)
-    finally:
-        target.close()
 
 
 def publish_ready_snapshot(
