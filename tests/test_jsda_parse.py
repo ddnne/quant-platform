@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import inspect
 import io
 from pathlib import Path
 
@@ -90,6 +91,9 @@ def test_otc_headerless_23col_maps_overlapping_positional_fields():
     assert first["source_row_number"] == 1
     assert records[1]["security_code"] == "987654321"
     assert records[1]["individual_investor_flag"] == "1"
+    for rec in records:
+        assert rec.get("status") != "COMPLETE"
+        assert "COMPLETE" not in rec.values()
 
 
 def test_otc_headerless_23col_overlapping_fields_match_29col_prefix():
@@ -130,6 +134,44 @@ def test_otc_headerless_23col_overlapping_fields_match_29col_prefix():
 def test_otc_headerless_short_non_identity_stays_parse_zero():
     text = "not-a-date,x,code,name,20020820,1.5,1.2,99.8\n"
     assert parse_otc_reference_csv(text) == []
+
+
+def test_otc_headerless_23col_nz_parse_is_not_coverage_complete():
+    text = (_FIXTURES / "jsda_otc_reference_headerless_23col.csv").read_text(
+        encoding="utf-8"
+    )
+    records = parse_otc_reference_csv(
+        text.encode("cp932"),
+        publication_label_date="2002-08-02",
+        quote_effective_date="2002-08-01",
+    )
+    assert records, "23-col adapter must yield nz parse"
+    assert len(records) == _otc_raw_row_count(text) == 2
+    for rec in records:
+        assert rec.get("status") != "COMPLETE"
+        assert "COMPLETE" not in rec.values()
+
+
+def test_seal_complete_is_separate_function_parser_output_is_not_complete():
+    parse_src = inspect.getsource(parse_otc_reference_csv)
+    assert "COMPLETE" not in parse_src
+    root = Path(__file__).resolve().parents[1]
+    seal_src = (root / "scripts" / "jsda_otc_seal_official.py").read_text(
+        encoding="utf-8"
+    )
+    assert "def seal_day" in seal_src
+    assert "int(structured) != int(raw_count)" in seal_src
+    assert "raw_manifest_digest=digest" in seal_src
+    # Live 2002-08-02/05 stay unsealed without in-repo digest+count proof.
+    live_names = {
+        "S020802.csv",
+        "S020805.csv",
+        "20020802.csv",
+        "20020805.csv",
+        "2002-08-02.csv",
+        "2002-08-05.csv",
+    }
+    assert {p.name for p in _FIXTURES.iterdir()}.isdisjoint(live_names)
 
 
 # --------------------------------------------------------------------------- normalize
