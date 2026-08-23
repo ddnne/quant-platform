@@ -10,7 +10,7 @@ extracts landed. Leftover occupancy **HOLD** in `daily_path.ts`.
 `coverage_receipts`, `snapshot_publish_policy`, `snapshot_coverage_proof`,
 `snapshot_persist`, `snapshot_read`, `eval_orchestrate`,
 `ingestion-premium/collection_receipts.ts` — **DONE** in §7.  
-**Live strategy at `c9764ff4`:** §10 — remaining extracts vs HOLD. YAML
+**Live strategy at `242c2484`:** §10 — remaining extracts vs HOLD. YAML
 file-count waste is closed. Size is not waste. Do not extract leftover
 occupancy. Do not add YAML. Do not declare Phase 7 GO.  
 **Mass / READY / Phase 7:** unchanged (NO-GO / not declared / OFF)
@@ -364,13 +364,13 @@ and COMPLETE predicates unchanged, generated files still generated.
 
 ---
 
-## 10. Current remaining extracts vs HOLD (HEAD 0a8ced34)
+## 10. Current remaining extracts vs HOLD (HEAD 242c2484)
 
 This is the **live** refactor strategy for “the code is full of waste.”
 §§1–9 remain the plan at `41003a5` / status at `5c9b962`. Follow this
 section now. Size is not a split key. Live math is not waste.
 
-Measured at `0a8ced34`: tracked paths **781**; catalog YAML
+Measured at `242c2484`: tracked paths **793**; catalog YAML
 (`specs/research_logics/*.yaml`) **0**; remaining tracked YAML **1**
 (`specs/research_themes.yaml` — themes, not catalog logics); compiled
 n=**2254** (`migration.jsonl` 2254 lines);
@@ -443,9 +443,10 @@ CLI-put fence (`0b81eedb`), and job-artifact Worker put (`d6567268`;
 **DONE**. Remaining mixed: `reconstitution_evidence` still `default_r2_put`
 (dry_run only); leftover occupancy **HOLD** — do not schedule leftover
 occupancy extract. Compact catalog is optional HOLD, not a required
-extract. `verify_all` vs `verify_ci` stay **HOLD** split. Do not YAML
-+N. Do not declare Phase 7 GO. Python Evaluation IR codec emit
-**DONE** (`c9764ff4`; `evaluation_ir_codec.generated.py`). Premium
+extract. `verify_all` vs `verify_ci` stay **HOLD** split.
+`GATEWAY_TOKEN` service-binding residual stays **HOLD** (P632B-03). Do
+not YAML +N. Do not declare Phase 7 GO. Python Evaluation IR codec
+emit **DONE** (`c9764ff4`; `evaluation_ir_codec.generated.py`). Premium
 fetch/retry extract **DONE** (`a20d14d4`; `fetch_jq.ts`). BackfillPlanner
 `index_text` **DONE** (`2cbd894d`).
 
@@ -464,6 +465,7 @@ Not code extracts (environment / docs / optional freeze):
 | leftover git worktrees | **Environment waste, not code waste.** Measured **25** `git worktree list` rows at this write (this isolation included); `/private/tmp/qp-*` dirs were **101**. | Prune the environment. Not a module extract. |
 | Historical `docs/reviews/*.md` as live SoT | Freeze files stay historical (`HEAD at remaining-audit: 03cd1b1`; P632 re-diffs at named SHAs). | **Banners, not deletion.** Live flags: `phase62_residual_status.md` + MCP projection + this §10. |
 | Compact catalog family+template+parameter matrix | **NOT done.** `migration.jsonl` is still 2254 expanded rows. | Optional. Freeze n=2254 **HOLD**. Do not report 2254 as a product win. Do not YAML +N. |
+| GATEWAY_TOKEN service-binding residual | **HOLD** (P632B-03). Mass-eval still needs a second `GATEWAY_TOKEN` copy on the `AI_GATEWAY` service-binding path. Public/preview `fetch` stays token-gated. | Do not close without a documented unspoofable binding signal. Do not treat `CF-Worker` as auth. See [`reviews/P632B_03_gateway_token_service_binding_hold.md`](reviews/P632B_03_gateway_token_service_binding_hold.md). |
 
 `ingestion-premium/src/index.ts` (~678 after `a20d14d4`) is the ingest
 façade. Fetch/retry lives in `fetch_jq.ts`; persist in `persist_records.ts`;
