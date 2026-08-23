@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseRequest } from "./http_routes";
+import { parseRequest } from "./parse_request";
 
 describe("parseRequest", () => {
   it("rejects a non-object body", () => {
