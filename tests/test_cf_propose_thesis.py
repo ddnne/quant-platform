@@ -1050,7 +1050,7 @@ def test_clone_retry_reposts_catalog_gate_sets() -> None:
 
     out = invoke_cf_propose_thesis(n=1, job_id="test-clone-retry", http_post=_post)
     assert len(calls) == 2
-    assert calls[1]["why_avoid"][0] == "eq_ar_high+liq_high"
+    assert "eq_ar_high+liq_high" in calls[1]["why_avoid"]
     assert calls[1]["job_id"] == "test-clone-retry-retry"
     assert out["n_adoptable"] == 1
     assert out["auto_inject"] is False

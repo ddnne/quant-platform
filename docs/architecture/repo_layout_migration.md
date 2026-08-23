@@ -468,7 +468,7 @@ Machine-readable twin: [`repo_layout_mapping.json`](./repo_layout_mapping.json).
 
 ```
 scripts/
-├── ingest/          # run_ingestion_once, historical_backfill, parse_jsda_*, rebuild_receipts*
+├── ingest/          # run_ingestion_once, historical_backfill, rebuild_receipts*
 ├── sync/            # sync_d1_to_sqlite, restore_local_complete*, report_d1_*
 ├── coverage/        # write_collection_receipts, refresh_coverage_ledger, issue_signed_*
 ├── paper/           # later deleted: run_paper_once, run_agents_paper_once, rebuild_paper_index

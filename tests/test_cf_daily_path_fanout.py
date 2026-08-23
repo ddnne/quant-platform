@@ -226,6 +226,18 @@ def test_eval_tracks_are_two_and_not_head_n() -> None:
     assert "cheap_pb_event_reuse" in qids
 
 
+def test_offline_default_periods_match_cf_mass() -> None:
+    import research.eval_windows as ew
+    from research.cf_mass_eval_job import DEFAULT_REAL_MULTIYEAR_PERIODS as cf_periods
+    from research.offline import bar_eval as be
+
+    assert ew.DEFAULT_PERIODS == cf_periods
+    assert callable(be.evaluate_multi_day_hold_on_bars)
+    doc = f"{be.__doc__ or ''}"
+    assert "not CF SoT" in doc
+    assert "no GO" in doc
+
+
 def test_rank_eval_codes_is_not_head_n_and_skips_missing() -> None:
     from research.eval_universe import rank_eval_codes
 

@@ -135,7 +135,7 @@ packages/
 │   └── price_basis/         # (import price_basis) 共有 price-basis helper
 └── product/                 # オーケストレーション / プロダクト面
     ├── agents/              # 8 役割 agent + paper pipeline
-    ├── research/            # ideas / evaluation / readiness
+    ├── research/            # occupancy_audit / catalog / readiness
     ├── selection/           # budget ledger / screen / decision
     ├── execution/           # authorized paper execution
     ├── knowledge/           # immutable knowledge artifacts

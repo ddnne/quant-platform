@@ -162,3 +162,40 @@ def test_resolve_proxy_config_nothing_configured(monkeypatch, tmp_path):
     monkeypatch.delenv("INGESTION_PROXY_URL", raising=False)
     monkeypatch.delenv("INGESTION_PROXY_TOKEN", raising=False)
     assert resolve_proxy_config(config_dir=tmp_path) is None
+
+
+def test_make_jquants_http_accepts_verify_when_routed_via_proxy(monkeypatch):
+    """make_jquants_http(..., verify=False) must not TypeError via the proxy."""
+    monkeypatch.setattr(
+        secretsmod,
+        "resolve_proxy_config",
+        lambda: ProxyConfig(url=_PROXY, token=_TOKEN),
+    )
+    client = make_jquants_http("local", verify=False)
+    assert isinstance(client, CloudflareJquantsProxyHttpClient)
+
+
+def test_make_http_client_forwards_verify_to_proxy_client(monkeypatch):
+    """Explicit proxy path forwards verify= without TypeError."""
+    monkeypatch.setattr(
+        secretsmod,
+        "resolve_proxy_config",
+        lambda: ProxyConfig(url=_PROXY, token=_TOKEN),
+    )
+    client = make_http_client("local", jquants_via_cf_proxy=True, verify=False)
+    assert isinstance(client, CloudflareJquantsProxyHttpClient)
+
+
+def test_proxy_client_ctor_accepts_verify_and_still_fetches():
+    """Direct ctor with verify= builds a usable client (offline MockTransport)."""
+    cap: dict = {}
+    with CloudflareJquantsProxyHttpClient(
+        proxy_url=_PROXY,
+        proxy_token=_TOKEN,
+        verify=False,
+        transport=_capturing_transport(cap),
+    ) as client:
+        resp = client.get("https://api.jquants.com/v2/equities/bars/daily")
+    assert cap["url"] == f"{_PROXY}/v1/proxy/jquants"
+    assert cap["json"]["path"] == "/v2/equities/bars/daily"
+    assert resp.status == 200

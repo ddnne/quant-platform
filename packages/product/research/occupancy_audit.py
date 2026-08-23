@@ -73,7 +73,11 @@ def _float_occ_map(raw: Mapping[str, Any] | None) -> dict[str, float]:
 
 
 def load_ops_occupancy(root: str | Path | None = None) -> dict[str, dict[str, float]]:
-    """Latest occupancy_maps json, else cell dumps. Does not fan out. Not GO."""
+    """Latest occupancy_maps json, overlay cell dumps newer than maps. Not GO.
+
+    Maps-only would drop occupancy written after the last wave pack.
+    Does not fan out.
+    """
     from qp_paths import repo_root
 
     ops = Path(root) if root is not None else repo_root() / "data" / "ops" / "research_eval"
@@ -81,6 +85,9 @@ def load_ops_occupancy(root: str | Path | None = None) -> dict[str, dict[str, fl
         ops.glob("eval-occupancy-maps-*.json"),
         key=lambda p: (p.stat().st_mtime, p.name),
     )
+    mid: dict[str, float] = {}
+    liq: dict[str, float] = {}
+    maps_mtime = 0.0
     for path in reversed(maps):
         try:
             raw = json.loads(path.read_text(encoding="utf-8"))
@@ -88,10 +95,26 @@ def load_ops_occupancy(root: str | Path | None = None) -> dict[str, dict[str, fl
             continue
         if not isinstance(raw, dict):
             continue
-        mid = _float_occ_map(raw.get("mid_n_explore"))
-        liq = _float_occ_map(raw.get("liq_large"))
-        if mid and liq:
-            return {"mid_n_explore": mid, "liq_large": liq}
+        got_mid = _float_occ_map(raw.get("mid_n_explore"))
+        got_liq = _float_occ_map(raw.get("liq_large"))
+        if got_mid and got_liq:
+            mid, liq = got_mid, got_liq
+            maps_mtime = path.stat().st_mtime
+            break
+    for path in sorted(
+        ops.glob("eval-occupancy-audit-*_cells.json"),
+        key=lambda p: (p.stat().st_mtime, p.name),
+    ):
+        if path.stat().st_mtime + 1e-9 < maps_mtime:
+            continue
+        occ = occupancy_from_cells_file(path)
+        name = path.name
+        if "liq_large" in name:
+            liq.update(occ)
+        elif "mid_n_explore" in name:
+            mid.update(occ)
+    if mid or liq:
+        return {"mid_n_explore": mid, "liq_large": liq}
     return merge_occupancy_cell_dumps(ops)
 
 

@@ -1,0 +1,28 @@
+logic_id: surprise_xs_ta_down_liq_high
+headline: false
+generation_enabled: false
+promote_as_main: false
+go: false
+main_pool: true
+family_id: surprise_xs_rank
+thesis: >
+  Cross-sectional surprise when ADV is in the high PIT bucket AND total assets contracted versus the last prior print.
+signal_definition: >
+  Cross-sectional surprise when ADV is in the high PIT bucket AND total assets contracted versus the last prior print. Skip missing PIT prints (no invent).
+datasets:
+  - equities_bars_daily
+  - fins_summary
+  - markets_calendar
+  - markets_margin_interest
+params:
+  post_hold_days: 5
+  hold_days: 10
+  momentum_n: 5
+  min_hist: 20
+  mode: surprise_xs_ta_down_liq_high
+  side: orig
+  gates: liq_high,ta_down
+  cs_gate: None
+  entry_shift: 0
+  hold_tail_days: 0
+evaluator: research.unique_logic.event_combos.evaluate_combo_daily_mtm

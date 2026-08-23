@@ -204,7 +204,6 @@ Counts = number of `from X …` / `import X` statements under `tests/**/*.py` (s
 | `ops/cf_premium_backfill.py` | C (`parents[2]`) | CF premium backfill |
 | `ops_reeval_freshness.py` | D | wrangler bin under `ingestion-premium/node_modules/.bin`; `--config=…/ingestion-premium/wrangler.toml`; `cwd=ROOT` |
 | `ops_status.py` | A | `paper_runtime`, `storage` |
-| `parse_jsda_from_r2_mirror.py` | A | `ingestion.jsda`; default `data/raw`, `data/structured` |
 | `publish_ops_projection.py` | A | **`from scripts.export_ops_projection`**; wrangler cwd `quant-ops-mcp` or ROOT; config points at premium `wrangler.toml` |
 | `rebuild_paper_index.py` | A | `strategies.paper`; default `data/paper` |
 | `refresh_coverage_ledger.py` | A | `cf_platform.ingest_premium.coverage` |

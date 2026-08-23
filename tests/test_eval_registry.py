@@ -629,6 +629,33 @@ def test_load_ops_occupancy_prefers_maps_over_cells(tmp_path) -> None:
     assert "old" not in occ["mid_n_explore"]
 
 
+def test_load_ops_occupancy_overlays_newer_cells(tmp_path) -> None:
+    import json
+    import time
+
+    from research.occupancy_audit import load_ops_occupancy, write_eval_wave_pack
+
+    write_eval_wave_pack(
+        {"mid_n_explore": {"old": 0.2}, "liq_large": {"old": 0.21}},
+        wave="testold",
+        root=tmp_path,
+        put_r2=False,
+    )
+    time.sleep(0.05)
+    newer = [{"logic_id": "fresh", "occupancy": 0.4}]
+    (tmp_path / "eval-occupancy-audit-z-mid_n_explore_cells.json").write_text(
+        json.dumps(newer), encoding="utf-8"
+    )
+    (tmp_path / "eval-occupancy-audit-z-liq_large_cells.json").write_text(
+        json.dumps(newer), encoding="utf-8"
+    )
+    occ = load_ops_occupancy(tmp_path)
+    assert occ["mid_n_explore"]["old"] == 0.2
+    assert occ["mid_n_explore"]["fresh"] == 0.4
+    assert occ["liq_large"]["old"] == 0.21
+    assert occ["liq_large"]["fresh"] == 0.4
+
+
 def test_usable_sleeve_coverage_does_not_apply() -> None:
     from research.combo_basket_catalog import (
         BLEND_THINNER_KEEP_IDS,
