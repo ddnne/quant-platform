@@ -38,28 +38,20 @@ _EMPTY_CS = frozenset({"", "None", "none"})
 
 
 def unique_leftover_logic_ids() -> frozenset[str]:
-    """Original unique-22 leftover IDs. YAML unique families are the SoT."""
-    from research.unique_logic.catalog import unique_family_ids_from_yaml
-
-    out: set[str] = set()
-    for ids in unique_family_ids_from_yaml().values():
-        out.update(ids)
-    return frozenset(out)
+    """Original unique-22 leftover IDs. Unique families minus combo YAML."""
+    return RESEARCH_UNIQUE_LOGIC_IDS - CF_NEW_THESIS_IDS
 
 
 @lru_cache(maxsize=1)
 def unique22_occupancy_equal_lifted() -> frozenset[str]:
     """Leftover unique-22 whose YAML params.gates match comboEventGateOk occupancy."""
-    leftover = unique_leftover_logic_ids()
-    out: set[str] = set()
-    for spec in load_catalog_specs():
-        lid = str(spec.get("logic_id") or "")
-        if lid not in leftover:
-            continue
-        params = spec.get("params") if isinstance(spec.get("params"), dict) else {}
-        if params.get("gates"):
-            out.add(lid)
-    return frozenset(out)
+    from research.unique_logic.catalog import catalog_spec, spec_gates
+
+    return frozenset(
+        lid
+        for lid in unique_leftover_logic_ids()
+        if spec_gates(catalog_spec(lid))
+    )
 
 
 @lru_cache(maxsize=1)
@@ -149,8 +141,7 @@ def worker_implemented_logic_ids() -> frozenset[str]:
         | _ts_quoted_ids(src, "CF_EVENT_LOGIC_IDS")
         | _ts_quoted_ids(src, "CF_UNIQUE_CS_LOGIC_IDS")
     )
-    declared = unique_leftover_logic_ids() | set(CF_NEW_THESIS_IDS)
-    return frozenset(worker & declared)
+    return frozenset(worker & set(RESEARCH_UNIQUE_LOGIC_IDS))
 
 
 def _gates_of(spec: Mapping[str, Any]) -> list[str]:
@@ -616,15 +607,15 @@ def countable_inventory_bias() -> dict[str, Any]:
     """Family / primary-gate / dataset occupancy of countable theses. Not a pass."""
     from collections import Counter
 
+    from research.unique_logic.catalog import catalog_spec
+
     ids = countable_thesis_ids()
     primary: Counter[str] = Counter()
     all_gates: Counter[str] = Counter()
     prefix: Counter[str] = Counter()
     n_pb = n_pb_primary = n_ac = n_ac_primary = 0
-    for spec in load_catalog_specs():
-        lid = str(spec.get("logic_id") or "")
-        if lid not in ids:
-            continue
+    for lid in ids:
+        spec = catalog_spec(lid) or {}
         prefix[lid.split("_")[0]] += 1
         gates = _gates_of(spec)
         if gates:
