@@ -19,11 +19,14 @@ Shared golden: ``specs/evaluation_ir/golden.jsonl`` is emitted by
 Worker ``ALLOWED_FIELDS`` is emitted from this schema into
 ``evaluation_ir_allowed_fields.generated.ts``. Worker encode/decode body is
 emitted into ``evaluation_ir_codec.generated.ts``. Python encode/decode body
-is emitted into ``evaluation_ir_codec.generated.py``. Do not hand-edit those
+is emitted into ``evaluation_ir_codec.generated.py``. Python property types
+are emitted into ``evaluation_ir_types.generated.py``. Do not hand-edit those
 files. ``evaluation_ir.ts`` is the Worker façade. This module is the Python
 façade (schema load, grade wiring). Generated presentation lives in
 ``evaluation_ir_emit``. Encode keys (Python and Worker) must equal schema
 properties; CI freeze-checks that lock. There is no second field list.
+TypedDict cannot ban unknown fields; runtime validate remains SoT.
+Types are not a grade policy.
 """
 from __future__ import annotations
 
@@ -41,15 +44,19 @@ from research.evaluation_ir_emit import (
     assert_evaluation_ir_allowed_fields_ts_frozen,
     assert_evaluation_ir_codec_py_frozen,
     assert_evaluation_ir_codec_ts_frozen,
+    assert_evaluation_ir_types_py_frozen,
     evaluation_ir_allowed_fields_ts_path,
     evaluation_ir_allowed_fields_ts_source,
     evaluation_ir_codec_py_path,
     evaluation_ir_codec_py_source,
     evaluation_ir_codec_ts_path,
     evaluation_ir_codec_ts_source,
+    evaluation_ir_types_py_path,
+    evaluation_ir_types_py_source,
     write_evaluation_ir_allowed_fields_ts,
     write_evaluation_ir_codec_py,
     write_evaluation_ir_codec_ts,
+    write_evaluation_ir_types_py,
 )
 
 _GRADE_FIELDS: tuple[str, ...] = (
@@ -78,6 +85,9 @@ CODEC_TS_REL = (
 )
 CODEC_PY_REL = (
     Path("packages") / "product" / "research" / "evaluation_ir_codec.generated.py"
+)
+TYPES_PY_REL = (
+    Path("packages") / "product" / "research" / "evaluation_ir_types.generated.py"
 )
 EVALUATION_IR_TS_REL = (
     Path("platform") / "workers" / "research-mass-eval" / "src" / "evaluation_ir.ts"
@@ -594,10 +604,12 @@ __all__ = [
     "EvaluationIR",
     "GOLDEN_REL",
     "SCHEMA_REL",
+    "TYPES_PY_REL",
     "assert_evaluation_ir_allowed_fields_ts_frozen",
     "assert_evaluation_ir_codec_py_frozen",
     "assert_evaluation_ir_codec_ts_frozen",
     "assert_evaluation_ir_encode_keys_match_schema",
+    "assert_evaluation_ir_types_py_frozen",
     "candidate_from_job_artifact",
     "decode_evaluation_ir",
     "dumps_evaluation_ir_golden",
@@ -613,6 +625,8 @@ __all__ = [
     "evaluation_ir_encode_keys",
     "evaluation_ir_ts_encode_keys",
     "evaluation_ir_ts_path",
+    "evaluation_ir_types_py_path",
+    "evaluation_ir_types_py_source",
     "job_candidate_grade",
     "load_evaluation_ir_schema",
     "validate_evaluation_ir_schema",
@@ -620,6 +634,7 @@ __all__ = [
     "write_evaluation_ir_codec_py",
     "write_evaluation_ir_codec_ts",
     "write_evaluation_ir_golden",
+    "write_evaluation_ir_types_py",
 ]
 
 
@@ -628,3 +643,4 @@ if __name__ == "__main__":
     print(write_evaluation_ir_allowed_fields_ts())
     print(write_evaluation_ir_codec_ts())
     print(write_evaluation_ir_codec_py())
+    print(write_evaluation_ir_types_py())
