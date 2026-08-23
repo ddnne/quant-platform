@@ -960,6 +960,10 @@ def test_catalog_gate_set_avoid_is_existing_crosses() -> None:
     assert good_tok not in prefer_pairs
     assembled = assemble_why_avoid()
     assert len(assembled) <= PROPOSE_WHY_AVOID_LIMIT
+    from research.cf_propose_thesis import PROPOSE_BLOCKED_GATE_SETS
+
+    for tok in PROPOSE_BLOCKED_GATE_SETS:
+        assert tok in assembled
     for tok in prefer_pairs:
         assert tok in assembled
     triples = catalog_prefer_triple_avoid()

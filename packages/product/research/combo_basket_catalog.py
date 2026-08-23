@@ -31,6 +31,11 @@ BLEND_THINNER_KEEP_IDS: frozenset[str] = frozenset(
         "surprise_xs_peps_uncr",
     }
 )
+RECONSTITUTION_APPLY: bool = False
+HUMAN_RECONSTITUTION_PENDING: tuple[str, ...] = (
+    "basket_theme_fund",
+    "basket_event_fund",
+)
 
 HISTORICAL_HEAD4_MEMBERS: tuple[str, ...] = (
     "event_afterclose_positive_eps",
@@ -492,11 +497,16 @@ def reconstitution_occupancy_preview(
                 "apply": False,
             }
         )
+    pending = [
+        s["basket_id"] for s in sleeves if s.get("needs_reconstitution")
+    ]
     return {
         "version": "reconstitution-preview/v1",
         "keep_sleeves_job": KEEP_BOTH_SLEEVES_JOB,
         "flow_fifth_blend_thinner_job": FLOW_FIFTH_BLEND_THINNER_JOB,
         "do_not_restitch_blend": True,
+        "human_choice_required": True,
+        "human_pending": pending,
         "apply": False,
         "sleeves": sleeves,
         "go": False,
@@ -530,6 +540,7 @@ def usable_sleeve_coverage(
     sleeves: list[dict[str, Any]] = []
     candidates: list[dict[str, Any]] = []
     thinner_excluded: list[dict[str, Any]] = []
+    seen_thinner: set[str] = set()
     for d in mechanical_basket_defs():
         if d.get("historical"):
             continue
@@ -539,7 +550,7 @@ def usable_sleeve_coverage(
         primary = bool(d.get("primary"))
         member_lo = [_min_lo(m, mid, liq) for m in members]
         known_lo = [x for x in member_lo if x is not None]
-        weakest = min(known_lo) if len(known_lo) >= 5 else None
+        weakest = min(known_lo) if known_lo else None
         row = {
             "basket_id": bid,
             "rule": d.get("rule"),
@@ -567,20 +578,21 @@ def usable_sleeve_coverage(
             lo = _min_lo(lid, mid, liq)
             if lid in BLEND_THINNER_KEEP_IDS:
                 reasons = list(reasons) + ["blend_thinner_keep"]
-                thinner_excluded.append(
-                    {
-                        "basket_id": bid,
-                        "logic_id": lid,
-                        "lo": _round4(lo),
-                        "reason": "blend_thinner_keep",
-                        "job": FLOW_FIFTH_BLEND_THINNER_JOB,
-                        "apply": False,
-                    }
-                )
+                if lid not in seen_thinner:
+                    seen_thinner.add(lid)
+                    thinner_excluded.append(
+                        {
+                            "logic_id": lid,
+                            "lo": _round4(lo),
+                            "reason": "blend_thinner_keep",
+                            "job": FLOW_FIFTH_BLEND_THINNER_JOB,
+                            "apply": False,
+                        }
+                    )
             if lo is None:
                 reasons = list(reasons) + ["occupancy_unclassified"]
             elif weakest is not None and lo <= weakest:
-                reasons = list(reasons) + ["not_thicker_than_5th"]
+                reasons = list(reasons) + ["not_thicker_than_weakest"]
             if reasons:
                 continue
             scored.append((float(lo), lid, []))
@@ -607,6 +619,7 @@ def usable_sleeve_coverage(
         "n_replacement_ok": len(candidates),
         "blend_thinner_excluded": thinner_excluded,
         "keep_sleeves_job": KEEP_BOTH_SLEEVES_JOB,
+        "human_pending": list(HUMAN_RECONSTITUTION_PENDING),
         "apply": False,
         "invert_primary": False,
         "go": False,

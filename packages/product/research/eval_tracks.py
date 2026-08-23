@@ -16,7 +16,8 @@ from typing import Any, Mapping
 
 UNIVERSE_SELECT_ADV: str = "adv_desc_skip_missing_bars_and_fins"
 EVENT_THREE_AND_PLUS_N_STOPPED: bool = True
-CURRENT_EVAL_WAVE: str = "20260824es"
+RECONSTITUTION_APPLY: bool = False
+CURRENT_EVAL_WAVE: str = "20260824et"
 
 EVAL_TRACK_MID_N: str = "mid_n_explore"
 EVAL_TRACK_LIQ_LARGE: str = "liq_large"
@@ -85,7 +86,7 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
             "recorded research/eval/job=eval-inventory-bias-20260824ai/ "
             "inventory_bias.json; assert_new_batch_cheap_pb_cap refuses "
             "new batches at 20%; usable inventory 1724 (3-AND +N stopped); "
-            "eval-usable-inventory-20260824es usable 1780; 2-AND vol/flow/rate/fund; 3-AND +N stopped not_a_pass"
+            "eval-usable-inventory-20260824et usable 1780; 2-AND vol/flow/rate/fund; 3-AND +N stopped not_a_pass"
         ),
         "not_a_pass": True,
         "go": False,
@@ -97,6 +98,17 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
             "review_proposal_row then local_catalog_write_block_reasons; "
             "occupancy-equal Worker body required before a thesis counts; "
             "never catalog inject"
+        ),
+        "not_a_pass": True,
+        "go": False,
+    },
+    {
+        "id": "reconstitution_human_pending",
+        "track": EVAL_TRACK_LIQ_LARGE,
+        "why": (
+            "basket_theme_fund and basket_event_fund nested parents; "
+            "occupancy_preview is not a blend; RECONSTITUTION_APPLY false "
+            "until a human chooses drop_parents vs drop_children; KEEP 24df"
         ),
         "not_a_pass": True,
         "go": False,

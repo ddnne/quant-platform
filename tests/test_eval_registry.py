@@ -569,6 +569,8 @@ def test_write_eval_wave_pack_local_only(tmp_path) -> None:
     preview = recon["occupancy_preview"]
     assert preview["apply"] is False
     assert preview["do_not_restitch_blend"] is True
+    assert preview["human_choice_required"] is True
+    assert "basket_theme_fund" in preview["human_pending"]
     assert preview["keep_sleeves_job"] == "eval-cf-dp-both-sleeves-20260824df"
     prev_fund = next(
         s for s in preview["sleeves"] if s["basket_id"] == "basket_theme_fund"
@@ -639,6 +641,10 @@ def test_usable_sleeve_coverage_does_not_apply() -> None:
         {"event_afterclose_uncrowded", "surprise_xs_peps_uncr"}
     )
     assert out["keep_sleeves_job"] == "eval-cf-dp-both-sleeves-20260824df"
+    assert out["human_pending"] == [
+        "basket_theme_fund",
+        "basket_event_fund",
+    ]
     assert out["go"] is False
     assert out["invert_primary"] is False
     by_id = {s["basket_id"]: s for s in out["sleeves"]}
@@ -665,6 +671,8 @@ def test_reconstitution_occupancy_preview_does_not_apply() -> None:
     fund = by_id["basket_theme_fund"]
     assert fund["apply"] is False
     assert fund["needs_reconstitution"] is True
+    assert out["human_choice_required"] is True
+    assert "basket_theme_fund" in out["human_pending"]
     assert fund["current"]["n"] == 5
     assert fund["drop_parents_keep_children"]["occupancy_mean_not_a_blend"] is True
     lo = next(
@@ -691,6 +699,32 @@ def test_blend_thinner_keep_ids_are_excluded() -> None:
     excluded = {x["logic_id"] for x in out["blend_thinner_excluded"]}
     assert BLEND_THINNER_KEEP_IDS <= excluded
     assert all(x["apply"] is False for x in out["blend_thinner_excluded"])
+    assert len(out["blend_thinner_excluded"]) == len(BLEND_THINNER_KEEP_IDS)
+
+
+def test_four_member_sleeve_requires_thicker_than_weakest() -> None:
+    from research.combo_basket_catalog import (
+        mechanical_basket_defs,
+        usable_sleeve_coverage,
+    )
+
+    flow = next(
+        d for d in mechanical_basket_defs() if d["basket_id"] == "basket_theme_flow"
+    )
+    members = [str(x) for x in flow["members"]]
+    occ_ids = {m: 0.43 for m in members}
+    occ_ids["surprise_xs_taup_uncr"] = 0.43
+    occ_ids["event_afterclose_liq_high"] = 0.55
+    occ = {"mid_n_explore": occ_ids, "liq_large": dict(occ_ids)}
+    out = usable_sleeve_coverage(occ)
+    flow_row = next(s for s in out["sleeves"] if s["basket_id"] == "basket_theme_flow")
+    assert flow_row["weakest_lo"] == 0.43
+    flow_cands = [
+        c for c in out["replacement_candidates"] if c["basket_id"] == "basket_theme_flow"
+    ]
+    ids = {c["logic_id"] for c in flow_cands}
+    assert "surprise_xs_taup_uncr" not in ids
+    assert all(c["lo"] > 0.43 for c in flow_cands)
 
 
 def test_cost_defaults_are_shared() -> None:

@@ -54,6 +54,10 @@ PROPOSE_MAX_AND_GATES: int = 3
 # does not truncate catalog 2-AND clone magnets.
 PROPOSE_WHY_AVOID_LIMIT: int = 64
 CATALOG_GATE_SET_AVOID_LIMIT: int = 24
+# 24es review-ok 3-AND blocked n_pri<2 (two fund + one rate). Do not re-emit.
+PROPOSE_BLOCKED_GATE_SETS: tuple[str, ...] = (
+    "curve_flatten+eps_up+eq_ar_rising",
+)
 
 
 def review_proposal_row(proposal: Mapping[str, Any]) -> dict[str, Any]:
@@ -320,7 +324,11 @@ def assemble_why_avoid(extra: Sequence[str] | None = None) -> list[str]:
     Prefer-subset SPARSE is reserved so parked prefer ANDs are not truncated
     when catalog prefer pairs fill the cap. Does not GO.
     """
-    extra_toks = [str(x).strip() for x in (extra or ()) if str(x).strip()]
+    extra_toks = [
+        str(x).strip()
+        for x in (*PROPOSE_BLOCKED_GATE_SETS, *(extra or ()))
+        if str(x).strip()
+    ]
     pairs = catalog_prefer_pair_avoid()
     triples = catalog_prefer_triple_avoid()
     prefer_sparse = sparse_prefer_subset_avoid()
@@ -679,6 +687,7 @@ def invoke_cf_propose_thesis(
 __all__ = [
     "CATALOG_GATE_SET_AVOID_LIMIT",
     "PROPOSE_ALLOWED_DATASETS",
+    "PROPOSE_BLOCKED_GATE_SETS",
     "PROPOSE_WHY_AVOID_LIMIT",
     "assemble_why_avoid",
     "catalog_gate_set_avoid",

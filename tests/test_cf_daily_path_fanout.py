@@ -193,9 +193,11 @@ def test_eval_tracks_are_two_and_not_head_n() -> None:
         CURRENT_EVAL_WAVE,
         EVENT_THREE_AND_PLUS_N_STOPPED,
         NEXT_RESEARCH_QUEUE,
+        RECONSTITUTION_APPLY,
     )
 
     assert EVENT_THREE_AND_PLUS_N_STOPPED is True
+    assert RECONSTITUTION_APPLY is False
     assert CURRENT_EVAL_WAVE
     assert "go" not in CURRENT_EVAL_WAVE.lower()
     assert len(NEXT_RESEARCH_QUEUE) >= 5
@@ -207,6 +209,7 @@ def test_eval_tracks_are_two_and_not_head_n() -> None:
     assert "Workers AI" in q0["why"]
     assert "no auto-inject" in q0["why"]
     assert "both_track_sleeve_durability" in qids
+    assert "reconstitution_human_pending" in qids
     assert "propose_clone_retry" in qids
     assert "llm_title_gate_polarity" in qids
     both = next(q for q in NEXT_RESEARCH_QUEUE if q["id"] == "both_track_sleeve_durability")
