@@ -83,7 +83,7 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
             "recorded research/eval/job=eval-inventory-bias-20260824ai/ "
             "inventory_bias.json; assert_new_batch_cheap_pb_cap refuses "
             "new batches at 20%; usable inventory 1724 (3-AND +N stopped); "
-            "eval-usable-inventory-20260824ek not_a_pass"
+            "eval-usable-inventory-20260824el not_a_pass"
         ),
         "not_a_pass": True,
         "go": False,
@@ -92,8 +92,9 @@ NEXT_RESEARCH_QUEUE: tuple[dict[str, Any], ...] = (
         "id": "propose_review_no_inject",
         "track": EVAL_TRACK_LIQ_LARGE,
         "why": (
-            "review_proposal_row is the adopt gate; occupancy-equal Worker "
-            "body required before a thesis counts; never catalog inject"
+            "review_proposal_row then local_catalog_write_block_reasons; "
+            "occupancy-equal Worker body required before a thesis counts; "
+            "never catalog inject"
         ),
         "not_a_pass": True,
         "go": False,

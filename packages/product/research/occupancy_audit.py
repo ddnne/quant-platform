@@ -155,6 +155,72 @@ def occupancy_recorded_drift(
     }
 
 
+def usable_eval_snapshot(
+    occupancy_by_track: Mapping[str, Mapping[str, float]],
+) -> dict[str, Any]:
+    """Inventory v1 + usable-read v3 + cost-risk + drift. Not a pass.
+
+    Does not fan out occupancy. Does not GO. YAML remains catalog SoT.
+    """
+    from research.holding_metrics import DEFAULT_ONE_WAY_COST
+    from research.unique_logic.worker_bodies import (
+        CHEAP_PB_PRIMARY_GATE_CAP,
+        countable_thesis_ids,
+        usable_inventory,
+        usable_inventory_read,
+    )
+
+    inv = usable_inventory(occupancy_by_track)
+    read = usable_inventory_read(occupancy_by_track)
+    drift = occupancy_recorded_drift(
+        occupancy_by_track, sorted(countable_thesis_ids())
+    )
+    usable = set(inv.get("usable_ids") or ())
+    mid = dict(occupancy_by_track.get("mid_n_explore") or {})
+    liq = dict(occupancy_by_track.get("liq_large") or {})
+
+    def _summ(mp: Mapping[str, float]) -> dict[str, float | int]:
+        xs = sorted(float(mp[i]) for i in usable if i in mp)
+        n = len(xs)
+        if not n:
+            return {"n": 0}
+        return {
+            "n": n,
+            "min": round(xs[0], 4),
+            "p50": round(xs[n // 2], 4),
+            "max": round(xs[-1], 4),
+            "mean": round(sum(xs) / n, 4),
+        }
+
+    cost = {
+        "version": "usable-cost-risk/v1",
+        "n_usable": inv["n_usable"],
+        "occupancy": {"mid_n_explore": _summ(mid), "liq_large": _summ(liq)},
+        "one_way_cost": float(DEFAULT_ONE_WAY_COST),
+        "fake_split": False,
+        "pri_series": read["pri_series"],
+        "n_ands": read["n_ands"],
+        "cheap_pb_primary_share": read["cheap_pb_primary_share"],
+        "go": False,
+        "not_a_pass": True,
+    }
+    read_pack = dict(read)
+    read_pack.update(
+        {
+            "drift": drift,
+            "cheap_pb_primary_cap": CHEAP_PB_PRIMARY_GATE_CAP,
+            "do_not_silent_unpark": True,
+        }
+    )
+    return {
+        "inventory": inv,
+        "usable_read": read_pack,
+        "cost_risk": cost,
+        "go": False,
+        "not_a_pass": True,
+    }
+
+
 def run_occupancy_track(
     *,
     job_id: str,
@@ -225,4 +291,5 @@ __all__ = [
     "occupancy_from_cells_file",
     "occupancy_recorded_drift",
     "run_occupancy_track",
+    "usable_eval_snapshot",
 ]

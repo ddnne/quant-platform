@@ -498,6 +498,19 @@ def test_blend_option_summary_is_descriptive_not_a_pass() -> None:
     assert stitched_sum["apply"] is False
 
 
+def test_usable_eval_snapshot_is_not_a_pass() -> None:
+    from research.occupancy_audit import usable_eval_snapshot
+
+    snap = usable_eval_snapshot({"mid_n_explore": {}, "liq_large": {}})
+    assert snap["go"] is False
+    assert snap["not_a_pass"] is True
+    assert snap["inventory"]["version"] == "usable-inventory/v1"
+    assert snap["usable_read"]["version"] == "usable-read/v3"
+    assert snap["usable_read"]["do_not_silent_unpark"] is True
+    assert snap["cost_risk"]["fake_split"] is False
+    assert snap["cost_risk"]["not_a_pass"] is True
+
+
 def test_merge_daily_path_cells_for_ids_later_file_wins(tmp_path) -> None:
     import json
 
