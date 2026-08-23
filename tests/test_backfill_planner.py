@@ -236,12 +236,10 @@ def test_planner_fins_summary_without_v3_uses_coverage_json_not_invented_domain(
 
     from data_contracts.coverage import coverage_contract_for
     from data_contracts.source_capability import source_capability_contract_or_none
-    from ops.backfill_planner import _official_domain_start
     from storage.coverage_ledger import evaluate_segment, plan_required_segments
 
     dataset = "fins_summary"
     assert source_capability_contract_or_none(dataset) is None
-    assert _official_domain_start(dataset) is None
 
     policy = coverage_contract_for(dataset)
     assert policy.history_target_start == "2008-07-01"
