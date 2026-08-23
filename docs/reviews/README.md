@@ -1,6 +1,6 @@
 # Phase 6.3.1 review findings
 
-> **Live vs freeze.** Feature HEAD `b8696205` vs `origin/main` `b5c326a`. PR #1 is **BLOCKED** until `ci-aggregate` posts. Live MCP: Projection **STALE**, READY **null**. Historical A01 / A07 / A11 files are remaining-audit **freezes** at `03cd1b1`, not live SoT. `f224e7e` / `40d1aa90` / `67fcbd7c` / `ed94d504` / `5103b26b` / wave-7 (`3b64bdfc`) / wave-8 / `0a8ced34` / `242c2484` / wave-9 / `2b82ec7d` / wave-10 / `02fb6cbd` / wave-11 / `cf7da56c` / wave-12 / `b5f6f2de` / wave-13 review files stay earlier freezes, not live HEAD.
+> **Live vs freeze.** Feature HEAD `70d7c8bd` vs `origin/main` `b5c326a`. PR #1 is **BLOCKED** until `ci-aggregate` posts. Live MCP: Projection **STALE**, READY **null**. Historical A01 / A07 / A11 files are remaining-audit **freezes** at `03cd1b1`, not live SoT. `f224e7e` / `40d1aa90` / `67fcbd7c` / `ed94d504` / `5103b26b` / wave-7 (`3b64bdfc`) / wave-8 / `0a8ced34` / `242c2484` / wave-9 / `2b82ec7d` / wave-10 / `02fb6cbd` / wave-11 / `cf7da56c` / wave-12 / `b5f6f2de` / wave-13 review files stay earlier freezes, not live HEAD.
 
 Starting remote HEAD at first wave: `069913c`. Remaining-audit freeze: **`03cd1b1`**. Current `origin/main` is **`b5c326a`**.
 Review SHA named in the original brief (`96264f0`) is **not** the freeze.
@@ -29,7 +29,7 @@ IR `golden.jsonl` (`7f2dc12`).
 
 ## Phase 6.3.2 (feature `grok/phase63-ci-source-closure`)
 
-**This HEAD:** `b8696205` (later than wave-13 / `b1605c36`). **`origin/main`:** `b5c326a` (not merged). PR #1 **BLOCKED** until `ci-aggregate` posts. Live MCP: Projection **STALE**, READY **null**. Historical 6.3.1 files above (A01 / A07 / A11 included) are not live OPEN/CLOSED or live SoT for 6.3.2. `f224e7e` / `40d1aa90` / `67fcbd7c` / `ed94d504` / `5103b26b` / wave-7 (`3b64bdfc`) / wave-8 / `242c2484` / wave-9 / `2b82ec7d` / wave-10 / `02fb6cbd` / wave-11 / `cf7da56c` / wave-12 / `b5f6f2de` review files stay earlier freezes, not live HEAD. See:
+**This HEAD:** `70d7c8bd` (later than wave-13 / `b1605c36`). **`origin/main`:** `b5c326a` (not merged). PR #1 **BLOCKED** until `ci-aggregate` posts. Live MCP: Projection **STALE**, READY **null**. Historical 6.3.1 files above (A01 / A07 / A11 included) are not live OPEN/CLOSED or live SoT for 6.3.2. `f224e7e` / `40d1aa90` / `67fcbd7c` / `ed94d504` / `5103b26b` / wave-7 (`3b64bdfc`) / wave-8 / `242c2484` / wave-9 / `2b82ec7d` / wave-10 / `02fb6cbd` / wave-11 / `cf7da56c` / wave-12 / `b5f6f2de` review files stay earlier freezes, not live HEAD. See:
 
 - [`P632_wave0_live.md`](P632_wave0_live.md) — fetch remeasure
 - [`P632_brief_leaks.md`](P632_brief_leaks.md) — A–S vs feature branch
@@ -44,7 +44,7 @@ IR `golden.jsonl` (`7f2dc12`).
 - [`P632_wave11_status.md`](P632_wave11_status.md) — A–S freeze vs `02fb6cbd`
 - [`P632_wave12_status.md`](P632_wave12_status.md) — A–S freeze vs `cf7da56c`
 - [`P632_wave13_status.md`](P632_wave13_status.md) — A–S freeze vs `b5f6f2de`
-- [`P632_ind_A_revisit_b1605c36.md`](P632_ind_A_revisit_b1605c36.md) / [`P632_verify_ci_b1605c36.md`](P632_verify_ci_b1605c36.md) — Independent A and `verify_ci` at `b1605c36` (later code HEAD `b8696205`)
+- [`P632_ind_A_revisit_b1605c36.md`](P632_ind_A_revisit_b1605c36.md) / [`P632_verify_ci_b1605c36.md`](P632_verify_ci_b1605c36.md) — Independent A and `verify_ci` at `b1605c36` (later code HEAD `70d7c8bd`)
 - [`P632_ind_A_revisit_b5f6f2de.md`](P632_ind_A_revisit_b5f6f2de.md) / [`P632_ind_B_revisit_b5f6f2de.md`](P632_ind_B_revisit_b5f6f2de.md) / [`P632_ind_C_revisit_b5f6f2de.md`](P632_ind_C_revisit_b5f6f2de.md) / [`P632_test_inventory_b5f6f2de.md`](P632_test_inventory_b5f6f2de.md) / [`P632_verify_ci_b5f6f2de.md`](P632_verify_ci_b5f6f2de.md) — prior Independent A/B/C / inventory / `verify_ci` freezes
 
 Later on this branch (after the A01/A07 freeze): occupancy `yaml_remains_sot` removed; unused `cells_candidate_counts` deleted; compiled `catalog_path` is `migration.jsonl`; JSDA/JQ tests inject tmp Ed25519. Host PEM isolation and fresh-venv pytest remain OPEN.
