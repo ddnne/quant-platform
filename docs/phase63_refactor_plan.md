@@ -6,7 +6,8 @@
 `yaml_still_present: false`; tracked files ~631). Combo-gate and PIT-entry
 extracts landed. Leftover occupancy **HOLD** in `daily_path.ts`.  
 **Later extracts (tip `origin/main`):** `r2_feature_parse`, `r2_feature_normalize`,
-`coverage_ledger_io`, `snapshot_publish_policy`, `snapshot_coverage_proof` — **DONE** in §7.  
+`r2_available_at`, `coverage_ledger_io`, `coverage_receipts`, `snapshot_publish_policy`,
+`snapshot_coverage_proof`, `snapshot_persist`, `eval_orchestrate` — **DONE** in §7.  
 **Mass / READY / Phase 7:** unchanged (NO-GO / not declared / OFF)
 
 This is a **refactor plan**, not a rewrite mandate. Later lanes extract
@@ -280,16 +281,16 @@ No Mass/READY/Phase 7 arming.
 | 1 | `combo_gates.ts` from `daily_path.ts` | combo-gate **policy** | **DONE** (`combo_gates.ts`; leftover occupancy stayed) |
 | 2 | PIT entry module from `daily_path.ts` | PIT **entry** | **DONE** (`event_entry.ts`) |
 | 3 | leftover occupancy as **policy** | unique-22 lid branches | **HOLD** in `daily_path.ts` (occupancy-equal re-eval required; do not unify with `comboEventGateOk`) |
-| 4 | `r2_feature_context` parse vs normalize vs `available_at` policy | parse then normalize | **DONE** (`r2_feature_parse.py`, `r2_feature_normalize.py`; `available_at` / orchestration stay) |
-| 5 | `coverage_ledger` persist/read vs `evaluate_segment` | persistence I/O | **DONE** (`coverage_ledger_io.py`; COMPLETE predicates stay) |
-| 6 | `snapshot.py` publication gate vs artifact write vs proof | policy then evidence | **DONE** (`snapshot_publish_policy.py`, `snapshot_coverage_proof.py`; persist stays) |
+| 4 | `r2_feature_context` parse vs normalize vs `available_at` policy | parse, normalize, then policy | **DONE** (`r2_feature_parse.py`, `r2_feature_normalize.py`, `r2_available_at.py`; orchestration stays) |
+| 5 | `coverage_ledger` persist/read vs `evaluate_segment` | persist then evidence | **DONE** (`coverage_ledger_io.py`, `coverage_receipts.py`; COMPLETE predicates stay) |
+| 6 | `snapshot.py` publication gate vs artifact write vs proof | policy, evidence, persist | **DONE** (`snapshot_publish_policy.py`, `snapshot_coverage_proof.py`, `snapshot_persist.py`) |
 | 7 | Compiler owns `catalog_ids.ts` emit | generated **presentation** of policy IDs | **DONE** |
 | 8 | Digest lock (pin `compile_catalog()` digest) | — | **DONE** `sha256:6ad5ba57dfa41…` |
 | 9 | Mechanical YAML delete | files only | **DONE** (`yaml_still_present: false`) |
 | 10 | ingestion-premium persist vs HTTP vs receipt | one of persist / presentation / evidence | **optional**; worker path frozen — in-place only |
+| 11 | `eval.ts` period orchestration | orchestration | **DONE** (`eval_orchestrate.ts`; family formulas stayed) |
 
-`eval.ts` orchestration extract and `coverage.py` C-check *navigation*
-(comments / table of check ids) are optional and never a prerequisite.
+`coverage.py` C-check *navigation* (comments / table of check ids) is optional and never a prerequisite.
 `cost_models.py` and `options_225_vol_series.py` have **no** extract lane.
 
 ---
