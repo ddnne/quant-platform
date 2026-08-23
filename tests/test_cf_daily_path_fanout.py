@@ -405,3 +405,54 @@ def test_both_track_sleeve_fanout_uses_select_eval_universe() -> None:
         if isinstance(node, ast.FunctionDef)
     ]
     assert "run_both_track_sleeve_fanout" in names
+
+
+def test_mass_eval_spec_drops_unique_but_keeps_bar_native() -> None:
+    from research.cf_mass_eval_job import build_cf_mass_eval_job_spec
+
+    spec = build_cf_mass_eval_job_spec(
+        job_id="eval-test-drop-unique",
+        logic_ids=["event_skip_monday", "nky_vol_abs_level"],
+        mode="synthetic",
+    )
+    lids = [str(L.get("logic_id")) for L in spec["logics"]]
+    assert "event_skip_monday" not in lids
+    assert "nky_vol_abs_level" in lids
+    assert "event_skip_monday" in spec["dropped_unique_unsupported"]
+    assert spec["candidate_eval_sot"] == "daily_path_mtm_after_cost/v1"
+
+
+def test_mass_eval_screen_is_not_candidate_grade() -> None:
+    from research.cf_mass_eval_job import try_cf_mass_eval_status
+
+    st = try_cf_mass_eval_status()
+    assert st["status"] == "implemented"
+    assert st["default_mode"] == "r2_panels"
+    assert st["screen_kind"] == "period_net"
+    assert st["candidate_grade"] is False
+    assert st["n_survivors_are_not_a_pass"] is True
+    assert st["daily_path_complete"] is False
+    assert st["candidate_grade"] is False
+    assert st.get("unique_unsupported_on_period_net") is True
+    assert st.get("candidate_eval_sot") == "daily_path_mtm_after_cost/v1"
+
+
+def test_unique_mdh_collapse_is_not_candidate_complete() -> None:
+    from research.cf_mass_eval_job import is_unique_period_net_unsupported
+    from research.eval_registry import (
+        is_daily_path_complete_cell,
+        is_path_collapsed_cell,
+    )
+
+    assert is_unique_period_net_unsupported("event_skip_monday") is True
+    assert is_unique_period_net_unsupported("nky_vol_abs_level") is False
+    collapsed = {
+        "logic_id": "event_skip_monday",
+        "window": "y2015_full",
+        "daily_path_complete": True,
+        "signal_id": "c21_lite_fallback_mdh:event_calendar_gate",
+        "skip_reason": "unique_unsupported_on_period_net",
+    }
+    assert is_path_collapsed_cell(collapsed) is True
+    assert is_daily_path_complete_cell(collapsed) is False
+
