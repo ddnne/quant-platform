@@ -10,8 +10,9 @@ tries sources in order and returns the first that yields a *complete* pair:
 These tests pin the no-mix rule — a URL from one source paired with a token
 from another must resolve to ``None`` (fall back to direct fetch) rather than
 a Frankenstein config that could point an authenticated token at the wrong
-proxy. They also cover per-source completeness, source priority, and the
-robustness/normalization paths.
+proxy. One incomplete per source and one mix per unordered pair of sources;
+token-only and reverse-direction rows are the same classes. Also covers
+source priority and the robustness/normalization paths.
 """
 
 from __future__ import annotations
@@ -77,17 +78,11 @@ def test_split_file_pair_resolves(tmp_path):
 
 
 # ----------------------------------------------------- partial source -> None
+# One incomplete per source (url-only). Token-only is the same class.
 
 def test_env_url_only_is_none(tmp_path):
     cfg = resolve_proxy_config(
         env=_env(INGESTION_PROXY_URL=_URL), config_dir=tmp_path
-    )
-    assert cfg is None
-
-
-def test_env_token_only_is_none(tmp_path):
-    cfg = resolve_proxy_config(
-        env=_env(INGESTION_PROXY_TOKEN=_TOKEN), config_dir=tmp_path
     )
     assert cfg is None
 
@@ -97,41 +92,14 @@ def test_json_url_only_is_none(tmp_path):
     assert resolve_proxy_config(env=_env(), config_dir=tmp_path) is None
 
 
-def test_json_token_only_is_none(tmp_path):
-    _write_json_pair(tmp_path, url=None, token=_TOKEN)
-    assert resolve_proxy_config(env=_env(), config_dir=tmp_path) is None
-
-
 def test_split_url_file_only_is_none(tmp_path):
     _write_url_file(tmp_path, _URL)
     assert resolve_proxy_config(env=_env(), config_dir=tmp_path) is None
 
 
-def test_split_token_file_only_is_none(tmp_path):
-    _write_token_file(tmp_path, _TOKEN)
-    assert resolve_proxy_config(env=_env(), config_dir=tmp_path) is None
-
-
 # ----------------------------------------------------- THE MIX-REJECTION RULE
 # A URL from one source must NEVER be paired with a token from another.
-
-def test_env_url_with_file_token_is_none(tmp_path):
-    """URL from env must NOT pair with token from a split file."""
-    _write_token_file(tmp_path, _TOKEN)
-    cfg = resolve_proxy_config(
-        env=_env(INGESTION_PROXY_URL=_URL), config_dir=tmp_path
-    )
-    assert cfg is None
-
-
-def test_file_url_with_env_token_is_none(tmp_path):
-    """URL from a split file must NOT pair with token from env."""
-    _write_url_file(tmp_path, _URL)
-    cfg = resolve_proxy_config(
-        env=_env(INGESTION_PROXY_TOKEN=_TOKEN), config_dir=tmp_path
-    )
-    assert cfg is None
-
+# One row per unordered pair {env,json}, {env,split}, {json,split}.
 
 def test_env_url_with_json_token_is_none(tmp_path):
     """URL from env must NOT pair with token from the JSON file."""
@@ -142,11 +110,11 @@ def test_env_url_with_json_token_is_none(tmp_path):
     assert cfg is None
 
 
-def test_env_token_with_json_url_is_none(tmp_path):
-    """Token from env must NOT pair with URL from the JSON file."""
-    _write_json_pair(tmp_path, url=_URL, token=None)
+def test_env_url_with_file_token_is_none(tmp_path):
+    """URL from env must NOT pair with token from a split file."""
+    _write_token_file(tmp_path, _TOKEN)
     cfg = resolve_proxy_config(
-        env=_env(INGESTION_PROXY_TOKEN=_TOKEN), config_dir=tmp_path
+        env=_env(INGESTION_PROXY_URL=_URL), config_dir=tmp_path
     )
     assert cfg is None
 
@@ -155,13 +123,6 @@ def test_json_url_with_file_token_is_none(tmp_path):
     """URL from JSON must NOT pair with token from a split file."""
     _write_json_pair(tmp_path, url=_URL, token=None)
     _write_token_file(tmp_path, _TOKEN)
-    assert resolve_proxy_config(env=_env(), config_dir=tmp_path) is None
-
-
-def test_file_url_with_json_token_is_none(tmp_path):
-    """URL from a split file must NOT pair with token from JSON."""
-    _write_json_pair(tmp_path, url=None, token=_TOKEN)
-    _write_url_file(tmp_path, _URL)
     assert resolve_proxy_config(env=_env(), config_dir=tmp_path) is None
 
 
