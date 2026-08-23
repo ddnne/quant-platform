@@ -14,9 +14,17 @@ from cf_platform.ingest_premium.coverage import CheckResult, run_coverage
 from data_contracts.coverage import (
     COVERAGE_STATUSES,
     POLICY_VERSION,
+    SNAPSHOT_SEGMENT_GRANULARITIES,
     CollectionCoverageContract,
     all_coverage_contracts,
     coverage_contract_for,
+)
+from data_contracts.source_capability import (
+    TIP_SNAPSHOT_MODES,
+    OfficialRequiredDomainSubset,
+    SourceCapabilityContract,
+    required_domain_subset_official,
+    source_capability_contract_for,
 )
 from storage.coverage_ledger_io import (
     persist_refreshed_coverage,
@@ -86,6 +94,84 @@ def _month_end(value: date) -> date:
     return value.replace(day=calendar.monthrange(value.year, value.month)[1])
 
 
+_TIP_COVERAGE_MODES = frozenset({
+    "recent_snapshot",
+    "next_business_day_snapshot",
+    "same_day_am_snapshot",
+    "tip_snapshot",
+})
+
+
+def _source_capability_for(
+    dataset_id: str,
+) -> SourceCapabilityContract | None:
+    try:
+        return source_capability_contract_for(dataset_id)
+    except KeyError:
+        return None
+
+
+def _official_domain_for(
+    capability: SourceCapabilityContract | None,
+) -> OfficialRequiredDomainSubset | None:
+    if capability is None:
+        return None
+    return required_domain_subset_official(capability)
+
+
+def _is_tip_snapshot_policy(
+    policy: CollectionCoverageContract,
+    domain: OfficialRequiredDomainSubset | None,
+) -> bool:
+    if domain is not None and not domain.admit_historical_required_segments:
+        return True
+    if policy.segment_granularity in SNAPSHOT_SEGMENT_GRANULARITIES:
+        return True
+    if policy.coverage_mode in _TIP_COVERAGE_MODES:
+        return True
+    history_mode = policy.history_mode
+    return history_mode in TIP_SNAPSHOT_MODES
+
+
+def _snapshot_extra_scope(
+    policy: CollectionCoverageContract,
+    capability: SourceCapabilityContract | None,
+    domain: OfficialRequiredDomainSubset | None,
+    grain: str,
+) -> dict[str, Any]:
+    history_mode = (
+        domain.history_mode
+        if domain is not None
+        else (policy.history_mode or policy.coverage_mode)
+    )
+    extra: dict[str, Any] = {
+        "history_mode": history_mode,
+        "tip_only_operational": True,
+    }
+    if capability is None:
+        return extra
+    sla = capability.freshness_sla
+    extra["freshness_sla"] = {
+        "expected_after": sla.expected_after,
+        "usable_by": sla.usable_by,
+        "timezone": sla.timezone,
+        "rule": sla.rule,
+    }
+    window = capability.collection_window
+    extra["collection_window"] = {
+        "grain": grain,
+        "open": window.open,
+        "close": window.close,
+    }
+    if history_mode == "next_business_day_snapshot":
+        extra["evaluate_via"] = [
+            "collection_generation",
+            "collection_cutoff",
+            "freshness_sla",
+        ]
+    return extra
+
+
 def plan_required_segments(
     policy: CollectionCoverageContract,
     target_end: str,
@@ -93,13 +179,42 @@ def plan_required_segments(
     source: str = "jquants",
     expected_items_by_segment: Mapping[str, int] | None = None,
 ) -> tuple[RequiredCoverageSegment, ...]:
-    """Create the required inventory independently of observed rows/receipts."""
+    """Create the required inventory independently of observed rows/receipts.
+
+    SourceCapabilityContract V3 is SoT when present: official availability
+    clips bounded history, and tip/snapshot history modes yield a current
+    snapshot segment instead of invented monthly shells.
+    """
+    capability = _source_capability_for(policy.dataset_id)
+    domain = _official_domain_for(capability)
     start = date.fromisoformat(policy.history_target_start)
+    if domain is not None:
+        official = date.fromisoformat(domain.earliest_official_availability)
+        if start < official:
+            start = official
     end = date.fromisoformat(target_end)
     if end < start:
         raise ValueError("target_end precedes coverage history target")
-    granularity = policy.segment_granularity
+    tip_snapshot = _is_tip_snapshot_policy(policy, domain)
+    if tip_snapshot:
+        grain = (
+            domain.collection_window_grain
+            if domain is not None
+            else policy.segment_granularity
+        )
+        if grain not in SNAPSHOT_SEGMENT_GRANULARITIES:
+            grain = policy.segment_granularity
+            if grain not in SNAPSHOT_SEGMENT_GRANULARITIES:
+                grain = "collection_cutoff_snapshot"
+    else:
+        grain = policy.segment_granularity
+    granularity = grain
     segments: list[RequiredCoverageSegment] = []
+    extra_scope = (
+        _snapshot_extra_scope(policy, capability, domain, grain)
+        if tip_snapshot
+        else None
+    )
 
     def _append(segment_id: str, segment_start: date, segment_end: date) -> None:
         expected_items = None
@@ -115,7 +230,7 @@ def plan_required_segments(
         # Non-event source_query needs expected_items for COMPLETE; default one exhausted query.
         if expected_items is None and unit == "source_query":
             expected_items = 1
-        scope = {
+        scope: dict[str, Any] = {
             "coverage_mode": policy.coverage_mode,
             "expected_frequency": policy.expected_frequency,
             "expected_item_unit": unit,
@@ -124,6 +239,8 @@ def plan_required_segments(
             "universe_rule": policy.universe_rule,
             "segment_granularity": granularity,
         }
+        if extra_scope:
+            scope.update(extra_scope)
         segments.append(RequiredCoverageSegment(
             source=source,
             dataset=policy.dataset_id,
@@ -134,6 +251,10 @@ def plan_required_segments(
             expected_items=expected_items,
         ))
 
+    if tip_snapshot:
+        # Current collection window only. Do not expand monthly history.
+        _append(end.isoformat(), end, end)
+        return tuple(segments)
     if granularity == "calendar_month":
         cursor = start
         while cursor <= end:

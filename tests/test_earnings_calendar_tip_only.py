@@ -1,6 +1,6 @@
 """equities_earnings_calendar is a tip snapshot, not 200 monthly history.
 
-V2 collection_coverage.json is unwired. Does not mint empty COMPLETE.
+V3 planner does not mint empty COMPLETE shells for past months.
 """
 
 from __future__ import annotations
@@ -91,20 +91,36 @@ def test_required_set_is_not_200_calendar_months() -> None:
     assert required_set["count_rule"] == "issued_collection_windows_at_cutoff"
 
 
-def test_v2_planner_still_expands_200_months_v3_does_not_use_that_set() -> None:
-    """V2 ledger is unchanged here; V3 required set is snapshot grain."""
-    v2 = coverage_contract_for(DATASET)
-    assert v2.history_target_start == "2010-01-04"
-    assert v2.segment_granularity == "calendar_month"
-    planned = plan_required_segments(v2, V2_TARGET_END)
-    assert [seg.segment_id for seg in planned] == V2_REQUIRED_MONTHS
-    assert len(planned) == 200
+def test_planner_required_count_is_not_200_months() -> None:
+    """V3 planner yields the current cutoff snapshot, not 200 monthly shells."""
+    policy = coverage_contract_for(DATASET)
+    assert policy.history_target_start == "2010-01-04"
+    assert policy.segment_granularity == "collection_cutoff_snapshot"
+    assert policy.policy_version == "collection-coverage/v3"
+    assert policy.history_mode == "next_business_day_snapshot"
+    planned = plan_required_segments(policy, V2_TARGET_END)
+    ids = [seg.segment_id for seg in planned]
+    assert ids != V2_REQUIRED_MONTHS
+    assert len(planned) != 200
+    assert len(planned) == 1
+    assert "2010-01" not in ids
+    assert planned[0].expected_scope["segment_granularity"] == (
+        "collection_cutoff_snapshot"
+    )
+    assert planned[0].expected_scope["history_mode"] == (
+        "next_business_day_snapshot"
+    )
+    assert planned[0].expected_scope["evaluate_via"] == [
+        "collection_generation",
+        "collection_cutoff",
+        "freshness_sla",
+    ]
 
     mig = _load(_MIGRATION)
-    assert mig["before"]["required_segments"] == len(planned)
+    assert mig["before"]["required_segments"] == 200
     assert mig["after"]["required_calendar_months"] is False
-    assert len(mig["after"]["required_set"]["segment_ids"]) != len(planned)
-    assert mig["behavior_change"]["collection_coverage_json"] == "unchanged_until_wire"
+    assert len(mig["after"]["required_set"]["segment_ids"]) != 200
+    assert mig["behavior_change"]["collection_coverage_json"] == "wired_v3_planner"
 
 
 def test_fins_earnings_date_is_the_history_substitute() -> None:

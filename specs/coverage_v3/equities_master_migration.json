@@ -93,7 +93,7 @@
     "monthly_segments_start": "2008-05",
     "pit_history_start": "2008-05-07",
     "pre_provision_query": "clamp_to_2008-05-07",
-    "collection_coverage_json": "unchanged_until_wire",
+    "collection_coverage_json": "wired_v3_planner",
     "permanent_defer": "PD-D2-MASTER retained; remaining genuine gaps stay PARTIAL"
   },
   "remaining_genuine_gaps": {

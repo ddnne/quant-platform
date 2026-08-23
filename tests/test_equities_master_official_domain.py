@@ -1,6 +1,6 @@
 """equities_master official domain starts 2008-05-07 (coverage v3).
 
-Not a Dataset COMPLETE claim. V2 collection_coverage.json is unwired.
+Not a Dataset COMPLETE claim. 2006-08..2008-04 stay excluded_official_unavailable.
 """
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ from data_contracts.permanent_defer import (
     PERMANENT_DEFER_DATASETS,
     PERMANENT_DEFER_IDS,
 )
+from storage.coverage_ledger import plan_required_segments
 
 _REPO = Path(__file__).resolve().parents[1]
 _CAPABILITY = _REPO / "specs" / "source_capability" / "equities_master.json"
@@ -142,14 +143,31 @@ def test_remaining_genuine_gaps_stay_partial_no_dataset_complete():
     assert mig["invent_complete"] is False
 
 
-def test_v2_coverage_floor_not_rewritten_here():
-    """collection_coverage.json stays V2 until a later wire; this lane does not invent COMPLETE."""
-    v2 = coverage_contract_for("equities_master")
-    assert v2.history_target_start == NOT_REQUIRED_START
+def test_v3_planner_required_start_is_official_not_entitlement_floor():
+    """Official 2008-05-07 is required start; 2006-08..2008-04 stay excluded, not COMPLETE."""
+    policy = coverage_contract_for("equities_master")
+    assert policy.history_target_start == OFFICIAL_START
+    assert policy.policy_version == "collection-coverage/v3"
+    planned = plan_required_segments(policy, "2008-06-30")
+    ids = [segment.segment_id for segment in planned]
+    assert ids == ["2008-05", "2008-06"]
+    assert planned[0].segment_start == OFFICIAL_START
+    for month in OLD_MISDATE_MONTHS:
+        assert month not in ids
+
+    # Entitlement floor remains recorded; it is not historical required start.
     assert MASTER_JQ_SCOPE["history_target_start"] == NOT_REQUIRED_START
     assert MASTER_JQ_SCOPE["vendor_data_provision_start"] == OFFICIAL_START
     assert MASTER_JQ_SCOPE["invent_complete_via_floor_to_2008_05"] == "FORBIDDEN"
     assert MASTER_JQ_SCOPE["dataset_complete_invent"] == "FORBIDDEN"
+
+    mig = _load(_MIGRATION)
+    mapping = mig["old_new_required_segment_mapping"]["excluded_official_unavailable"]
+    excluded_ids = [row["segment_id"] for row in mapping]
+    assert excluded_ids == OLD_MISDATE_MONTHS
+    for row in mapping:
+        assert row["v3_status"] == EXCLUDED_STATUS
+        assert row["v3_status"] != "COMPLETE"
 
 
 def test_pd_d2_master_defer_retained_reason_records_official_start():

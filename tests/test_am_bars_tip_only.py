@@ -1,6 +1,6 @@
 """equities_bars_daily_am is a same-day AM snapshot, not 32 months of history.
 
-V2 collection_coverage.json is unwired. Not a Dataset COMPLETE 23 claim.
+V3 planner does not require 2024-01.. months as historical COMPLETE.
 """
 
 from __future__ import annotations
@@ -11,6 +11,7 @@ from pathlib import Path
 
 from data_contracts.coverage import coverage_contract_for
 from data_contracts.permanent_defer import TIP_ONLY_POLICY
+from storage.coverage_ledger import plan_required_segments
 
 _REPO = Path(__file__).resolve().parents[1]
 _CAPABILITY = _REPO / "specs" / "source_capability" / "equities_bars_daily_am.json"
@@ -183,16 +184,33 @@ def test_remaining_gaps_are_not_invented_complete_23():
     assert mig["affected_ready_generations"] == []
 
 
-def test_v2_coverage_floor_not_rewritten_here():
-    """collection_coverage.json stays V2 until a later wire."""
-    v2 = coverage_contract_for(DATASET)
-    assert v2.history_target_start == "2024-01-04"
+def test_planner_required_count_is_not_32_months():
+    """V3 planner requires the current AM snapshot, not 32 monthly history shells."""
+    policy = coverage_contract_for(DATASET)
+    assert policy.history_target_start == "2024-01-04"
+    assert policy.segment_granularity == "same_trading_day_am_snapshot"
+    assert policy.policy_version == "collection-coverage/v3"
+    assert policy.history_mode == "recent_snapshot"
+    planned = plan_required_segments(policy, "2026-08-14")
+    ids = [seg.segment_id for seg in planned]
+    assert len(planned) != 32
+    assert len(planned) == 1
+    assert "2024-01" not in ids
+    assert "2026-08" not in ids
+    assert planned[0].segment_id == "2026-08-14"
+    assert planned[0].expected_scope["segment_granularity"] != "calendar_month"
+    sla = planned[0].expected_scope["freshness_sla"]
+    assert sla["expected_after"] == "11:30"
+    assert sla["usable_by"] == "12:30"
+    assert sla["timezone"] == "Asia/Tokyo"
+    assert sla["rule"] == "same_trading_day_am"
+
     cap = _load(_CAPABILITY)
     assert cap["earliest_official_availability"] == "2024-01-04"
     assert cap["official_evidence_url"] == (
         "https://jpx-jquants.com/en/spec/eq-bars-daily-am"
     )
     mig = _load(_MIGRATION)
-    assert mig["behavior_change"]["collection_coverage_json"] == "unchanged_until_wire"
+    assert mig["behavior_change"]["collection_coverage_json"] == "wired_v3_planner"
     assert "For historical data" in mig["official_evidence"]["quote"]
     assert mig["official_evidence"]["history_endpoint"] == "/v2/equities/bars/daily"

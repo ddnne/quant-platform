@@ -1,18 +1,14 @@
 """Collection coverage policy paired with the canonical dataset contract.
 
-The policy deliberately distinguishes calendar/periodic series from irregular
-event feeds.  Event feeds are reconciled against the source collection window;
-they never acquire invented daily row-count expectations.
+The policy distinguishes calendar/periodic series from irregular event feeds
+and SourceCapabilityContract V3 snapshot grains. Event feeds never acquire
+invented daily row-count expectations.
 
-Event-driven + default ``calendar_month`` still *plans* one required segment
-per month (see ``storage.coverage_ledger.plan_required_segments``).
-``evaluate_segment`` will COMPLETE an event window with a trusted receipt
-even when ``observed_items==0``; it will PARTIAL a month with *no* receipt
-(``missing collection receipt``). That is why ``equities_earnings_calendar``
-shows 1/200 COMPLETE while the vendor API is next-business-day / recent-only
-(https://jpx-jquants.com/en/spec/eq-earnings-cal). Do not fabricate monthly
-COMPLETE shells. A later contract grain (snapshot / source_event_window)
-needs a product ADR — not a ``history_target_start`` bump to invent COMPLETE.
+V3 official-domain datasets (``equities_master``,
+``equities_earnings_calendar``, ``equities_bars_daily_am``) derive required
+inventory from SourceCapabilityContract. Tip/snapshot grains plan a current
+collection window, not hundreds of empty monthly COMPLETE shells. Official
+``2008-05-07`` for equities_master is domain correction, not Dataset COMPLETE.
 """
 
 from __future__ import annotations
@@ -31,9 +27,16 @@ COVERAGE_STATUSES = frozenset(
     {"COMPLETE", "PARTIAL", "STALE", "UNKNOWN", "FAILED"}
 )
 GOVERNANCE_TIERS = frozenset({"governed", "experimental"})
-SEGMENT_GRANULARITIES = frozenset({
-    "calendar_month", "official_archive_day", "official_archive_year", "source_time_series_file"
+SNAPSHOT_SEGMENT_GRANULARITIES = frozenset({
+    "collection_cutoff_snapshot",
+    "same_trading_day_am_snapshot",
 })
+SEGMENT_GRANULARITIES = frozenset({
+    "calendar_month",
+    "official_archive_day",
+    "official_archive_year",
+    "source_time_series_file",
+}) | SNAPSHOT_SEGMENT_GRANULARITIES
 _REQUIRED = frozenset(
     {
         "collection_scope",
@@ -63,6 +66,8 @@ class CollectionCoverageContract:
     structured_reconciliation_required: bool
     segment_granularity: str
     governance_tier: str
+    policy_version: str | None = None
+    history_mode: str | None = None
 
     @classmethod
     def from_dict(
@@ -84,7 +89,8 @@ class CollectionCoverageContract:
             if not isinstance(value, str) or not value:
                 raise ValueError(f"{dataset_id}.{name} must be non-empty string")
         # Annotation-only keys (vendor_data_provision_start, vendor_history_policy,
-        # citations) are ignored here; they must not move history_target_start.
+        # citations) do not silently copy into history_target_start. Official
+        # domain for V3 datasets is set explicitly from SourceCapabilityContract.
         tier = str(raw["governance_tier"])
         if tier not in GOVERNANCE_TIERS:
             raise ValueError(
@@ -98,7 +104,19 @@ class CollectionCoverageContract:
         for name in ("raw_retention_required", "structured_reconciliation_required"):
             if not isinstance(raw[name], bool):
                 raise ValueError(f"{dataset_id}.{name} must be boolean")
-        return cls(dataset_id=dataset_id, **{name: raw[name] for name in _REQUIRED})
+        optional: dict[str, Any] = {}
+        for name in ("policy_version", "history_mode"):
+            if name not in raw or raw[name] is None:
+                continue
+            value = raw[name]
+            if not isinstance(value, str) or not value:
+                raise ValueError(f"{dataset_id}.{name} must be non-empty string")
+            optional[name] = value
+        return cls(
+            dataset_id=dataset_id,
+            **{name: raw[name] for name in _REQUIRED},
+            **optional,
+        )
 
 
 def _load() -> tuple[str, Mapping[str, CollectionCoverageContract]]:
@@ -132,7 +150,8 @@ def _load() -> tuple[str, Mapping[str, CollectionCoverageContract]]:
         )
     contracts = {
         dataset_id: CollectionCoverageContract.from_dict(
-            dataset_id, {**defaults, **overrides}
+            dataset_id,
+            {**defaults, "policy_version": policy_version, **overrides},
         )
         for dataset_id, overrides in rows.items()
     }
@@ -158,6 +177,7 @@ __all__ = [
     "COVERAGE_STATUSES",
     "GOVERNANCE_TIERS",
     "SEGMENT_GRANULARITIES",
+    "SNAPSHOT_SEGMENT_GRANULARITIES",
     "POLICY_VERSION",
     "CollectionCoverageContract",
     "all_coverage_contracts",

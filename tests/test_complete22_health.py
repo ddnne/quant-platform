@@ -8,6 +8,7 @@ from __future__ import annotations
 import importlib.util
 import sqlite3
 import sys
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -69,6 +70,22 @@ def test_invent_complete_23_fails_exact_mode(health):
     assert rep["all_checks_pass"] is False
     assert rep["checks"]["COMPLETE_eq_22"] is False
     assert rep["checks"]["no_invent_complete_23"] is False
+
+
+def test_official_domain_2008_05_07_is_not_invent_23(health):
+    """Official listed-info start is allowed; floor-bump to TODAY is still forbidden."""
+    snap = health.good_fixture_snapshot()
+    snap["official_domain_start"] = "2008-05-07"
+    snap["dataset_complete"] = 22
+    rep = health.evaluate_complete22_health(snap)
+    assert rep["checks"]["no_invent_complete_23"] is True
+    assert rep["all_checks_pass"] is True
+
+    snap["dataset_complete"] = 23
+    snap["history_target_start"] = date.today().isoformat()
+    rep = health.evaluate_complete22_health(snap, exact_complete=True)
+    assert rep["checks"]["no_invent_complete_23"] is False
+    assert rep["all_checks_pass"] is False
 
 
 def test_missing_partial_tip_only_fails(health):

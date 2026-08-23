@@ -142,7 +142,7 @@ def test_w72_tip_only_policy_bars_am_and_otc():
 
 def test_w98_master_jq_scope_pre_plan_descope():
     """W98: PRE_PLAN is coverage OUT_OF_SCOPE; MISDATE stays required PARTIAL."""
-    assert coverage_contract_for("equities_master").history_target_start == "2006-08-13"
+    assert coverage_contract_for("equities_master").history_target_start == "2008-05-07"
     assert MASTER_JQ_SCOPE["history_target_start"] == "2006-08-13"
     bands = MASTER_JQ_SCOPE["bands"]
     assert isinstance(bands, dict)
