@@ -14,7 +14,12 @@ from research.combo_basket_catalog import (
     usable_sleeve_coverage,
 )
 from research.candidate_policy import job_candidate_grade
-from research.eval_registry import PROTOCOL_DAILY_PATH
+from research.eval_registry import (
+    PROTOCOL_DAILY_PATH,
+    is_daily_path_complete_cell,
+    is_path_broken_cell,
+    is_path_collapsed_cell,
+)
 from research.stats_metrics import equity_path_drawdown, evaluate_daily_path_dd_gate
 from research.unique_logic.constants import (
     ALWAYS_ON_OCCUPANCY_WARN,
@@ -229,7 +234,17 @@ def summarize_basket_trends(
         if m_occ is not None and m_occ <= NEAR_EMPTY_OCCUPANCY:
             flags.append("near_empty")
         hist = bool(spec.get("historical") or spec.get("deprecated"))
-        candidate = (not hist) and not bool(set(flags) & {"always_on", "near_empty"})
+        n_expected = len(group)
+        grade = job_candidate_grade(
+            n_expected=n_expected,
+            n_cells=n_expected,
+            n_complete=sum(1 for c in group if is_daily_path_complete_cell(c)),
+            n_collapsed=sum(1 for c in group if is_path_collapsed_cell(c)),
+            n_broken=sum(1 for c in group if is_path_broken_cell(c)),
+        )
+        candidate = bool(grade) and (not hist) and not bool(
+            set(flags) & {"always_on", "near_empty"}
+        )
         if hist:
             flags.append("historical")
         rows.append(
