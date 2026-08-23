@@ -75,6 +75,75 @@ describe("ingestion-premium export auth", () => {
     expect(JSON.parse(body)).toEqual({ error: "unauthorized" });
     expect(body).not.toContain(EXPORT_TOKEN);
   });
+
+  it("rejects GET/POST /v1/export/changes with unbound DATA_EXPORT_TOKEN and does not prepare D1", async () => {
+    for (const method of ["GET", "POST"] as const) {
+      const inner = stubD1();
+      let prepareCalls = 0;
+      const db = {
+        prepare(sql: string) {
+          prepareCalls += 1;
+          return inner.prepare(sql);
+        },
+      } as unknown as D1Database;
+      const env: ExportEnv = { DB: db, DATA_EXPORT_TOKEN: undefined };
+      const res = await handleExportPaths(
+        new Request("https://ingestion-premium.test/v1/export/changes", {
+          method,
+          headers: { "X-Ingestion-Token": EXPORT_TOKEN },
+        }),
+        env,
+      );
+      expect(res).not.toBeNull();
+      expect(res!.status).toBe(401);
+      const body = await res!.text();
+      expect(JSON.parse(body)).toEqual({ error: "unauthorized" });
+      expect(body).not.toContain(EXPORT_TOKEN);
+      expect(prepareCalls).toBe(0);
+    }
+  });
+
+  it("rejects /v1/export/changes with bound token when after_seq is negative", async () => {
+    const inner = stubD1();
+    const db = {
+      prepare(sql: string) {
+        const stmt = inner.prepare(sql);
+        const wrapped = {
+          bind(...args: unknown[]) {
+            stmt.bind(...args);
+            return wrapped;
+          },
+          first: async () => READY_MIGRATION,
+          all: async () => stmt.all(),
+          run: async () => stmt.run(),
+        };
+        return wrapped;
+      },
+    } as unknown as D1Database;
+    const env: ExportEnv = { DB: db, DATA_EXPORT_TOKEN: EXPORT_TOKEN };
+    const res = await handleExportPaths(
+      new Request("https://ingestion-premium.test/v1/export/changes?after_seq=-1", {
+        headers: { "X-Ingestion-Token": EXPORT_TOKEN },
+      }),
+      env,
+    );
+    expect(res).not.toBeNull();
+    expect(res!.status).toBe(400);
+    const body = await res!.text();
+    expect(JSON.parse(body)).toEqual({
+      error: "after_seq must be a non-negative safe integer",
+    });
+    expect(body).not.toContain(EXPORT_TOKEN);
+  });
+
+  it("returns null for unknown /v1/export/nope", async () => {
+    const env: ExportEnv = { DB: stubD1(), DATA_EXPORT_TOKEN: EXPORT_TOKEN };
+    const res = await handleExportPaths(
+      new Request("https://ingestion-premium.test/v1/export/nope"),
+      env,
+    );
+    expect(res).toBeNull();
+  });
 });
 
 describe("ingestion-premium health", () => {
