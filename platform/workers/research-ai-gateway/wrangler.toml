@@ -1,0 +1,17 @@
+# Strict AI Gateway. Research mass-eval must not bind Workers AI directly.
+#
+# Secrets:
+#   npx wrangler secret put GATEWAY_TOKEN -c platform/workers/research-ai-gateway/wrangler.toml
+#
+# Fail-closed: missing GATEWAY_TOKEN refuses /v1/complete.
+
+name = "quant-platform-research-ai-gateway"
+main = "src/index.ts"
+compatibility_date = "2026-08-01"
+workers_dev = true
+
+[ai]
+binding = "AI"
+
+[observability]
+enabled = true
