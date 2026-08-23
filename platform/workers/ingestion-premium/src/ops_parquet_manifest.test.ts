@@ -74,6 +74,25 @@ describe("handleParquetManifest auth", () => {
     assertUnauthorized(body);
     expect(r2Ops).toEqual([]);
   });
+
+  it("POST with only matching query token and no header is 401 and does not list or put", async () => {
+    const { bucket, r2Ops } = touchingBucket();
+    const env: ParquetManifestEnv = {
+      STRUCTURED_BUCKET: bucket,
+      INGESTION_RUN_TOKEN: RUN_TOKEN,
+    };
+    const res = await handleParquetManifest(
+      new Request(
+        `https://ingestion-premium.test/v1/ops/jsonl-to-parquet-meta?token=${encodeURIComponent(RUN_TOKEN)}`,
+        { method: "POST" },
+      ),
+      env,
+    );
+    expect(res.status).toBe(401);
+    const body = await res.text();
+    assertUnauthorized(body);
+    expect(r2Ops).toEqual([]);
+  });
 });
 
 describe("handleParquetManifest method", () => {
