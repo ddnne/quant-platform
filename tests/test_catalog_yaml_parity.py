@@ -178,9 +178,11 @@ def test_combo_yaml_gates_cs_gate_side_match_specs() -> None:
     from research.unique_logic import catalog as catalog_mod
 
     src = inspect.getsource(catalog_mod.yaml_combo_rows)
+    cached_src = inspect.getsource(catalog_mod._yaml_combo_rows_cached)
     assert "import NEW_COMBO_LOGIC" not in src
     assert "NEW_COMBO_LOGIC" not in src
-    assert "_COMBO_EVALUATOR" in src
+    assert "NEW_COMBO_LOGIC" not in cached_src
+    assert "_COMBO_EVALUATOR" in cached_src
 
 
 # Frozen theme keys from the former constants.ECONOMIC_THEME_IDS block.

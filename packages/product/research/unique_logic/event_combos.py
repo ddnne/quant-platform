@@ -1,6 +1,7 @@
 """Combo theses: YAML dispatch, CF Worker occupancy path. Does not GO."""
 from __future__ import annotations
 
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -78,14 +79,49 @@ def _yaml_combo_runtime_rows() -> tuple[dict[str, Any], ...]:
     return tuple(yaml_combo_rows())
 
 
-NEW_COMBO_LOGIC: tuple[dict[str, Any], ...] = _yaml_combo_runtime_rows()
-_COMBO_BY_ID: dict[str, dict[str, Any]] = {
-    str(s["logic_id"]): s for s in NEW_COMBO_LOGIC if s.get("logic_id")
-}
+@lru_cache(maxsize=1)
+def combo_runtime_rows() -> tuple[dict[str, Any], ...]:
+    """Combo runtime table. YAML remains declaration SoT."""
+    return _yaml_combo_runtime_rows()
+
+
+@lru_cache(maxsize=1)
+def _combo_by_id_cached() -> dict[str, dict[str, Any]]:
+    return {
+        str(s["logic_id"]): s for s in combo_runtime_rows() if s.get("logic_id")
+    }
 
 
 def spec_by_id(logic_id: str) -> dict[str, Any] | None:
-    return _COMBO_BY_ID.get(str(logic_id))
+    return _combo_by_id_cached().get(str(logic_id))
+
+
+def clear_combo_runtime_cache() -> None:
+    """Drop runtime combo cache after catalog writes. Not a second SoT."""
+    combo_runtime_rows.cache_clear()
+    _combo_by_id_cached.cache_clear()
+
+
+class _LazyComboLogic:
+    """Iterable combo runtime. Does not parse YAML until first use."""
+
+    def _rows(self) -> tuple[dict[str, Any], ...]:
+        return combo_runtime_rows()
+
+    def __iter__(self):
+        return iter(self._rows())
+
+    def __len__(self) -> int:
+        return len(self._rows())
+
+    def __getitem__(self, idx):
+        return self._rows()[idx]
+
+    def __bool__(self) -> bool:
+        return bool(self._rows())
+
+
+NEW_COMBO_LOGIC = _LazyComboLogic()
 
 
 def assert_yaml_matches_specs(*, root: Any = None) -> None:

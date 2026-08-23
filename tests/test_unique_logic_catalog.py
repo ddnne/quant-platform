@@ -30,6 +30,19 @@ def test_event_sides_ls_variants_stay_registered() -> None:
     )
 
 
+def test_spec_by_id_survives_catalog_cache_clear() -> None:
+    from research.unique_logic.catalog import clear_catalog_caches, combo_thesis_records
+    from research.unique_logic.event_combos import spec_by_id
+
+    rows = combo_thesis_records()
+    lid = str(rows[0]["logic_id"])
+    clear_catalog_caches()
+    spec = spec_by_id(lid)
+    assert spec is not None
+    assert spec["logic_id"] == lid
+    assert spec.get("go") is False
+
+
 def test_combo_thesis_records_are_cached() -> None:
     from research.unique_logic.catalog import (
         _combo_thesis_records_cached,

@@ -233,14 +233,19 @@ def combo_row_from_yaml(spec: Mapping[str, Any]) -> dict[str, Any]:
     return _combo_row(raw)
 
 
+@lru_cache(maxsize=8)
+def _yaml_combo_rows_cached(root_key: str) -> tuple[dict[str, Any], ...]:
+    """Runtime combo rows. YAML remains declaration SoT."""
+    return tuple(
+        combo_row_from_yaml(spec)
+        for spec in _load_catalog_specs_cached(root_key)
+        if str(spec.get("evaluator") or "") == _COMBO_EVALUATOR
+    )
+
+
 def yaml_combo_rows(*, root: Path | None = None) -> list[dict[str, Any]]:
     """Combo runtime rows from catalog YAML. Filter by evaluator; do not import combo runtime."""
-    rows: list[dict[str, Any]] = []
-    for spec in load_catalog_specs(root=root):
-        if str(spec.get("evaluator") or "") != _COMBO_EVALUATOR:
-            continue
-        rows.append(combo_row_from_yaml(spec))
-    return rows
+    return list(_yaml_combo_rows_cached(str((root or repo_root()).resolve())))
 
 
 @lru_cache(maxsize=8)
@@ -282,6 +287,12 @@ def clear_catalog_caches() -> None:
     _load_catalog_specs_cached.cache_clear()
     _catalog_by_id_cached.cache_clear()
     _combo_thesis_records_cached.cache_clear()
+    _yaml_combo_rows_cached.cache_clear()
+    try:
+        from research.unique_logic.event_combos import clear_combo_runtime_cache
+    except ImportError:
+        return
+    clear_combo_runtime_cache()
 
 
 def write_combo_thesis_jsonl(
