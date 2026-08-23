@@ -275,7 +275,10 @@ def test_worker_plans_non_event_query_units_before_collection():
     source = (
         _REPO / "platform/workers/ingestion-premium/src/index.ts"
     ).read_text(encoding="utf-8")
-    assert "INSERT INTO coverage_segments" in source
+    receipts = (
+        _REPO / "platform/workers/ingestion-premium/src/collection_receipts.ts"
+    ).read_text(encoding="utf-8")
+    assert "INSERT INTO coverage_segments" in receipts
     assert 'expected_frequency === "event_driven"' in source
     assert ": queries.length" in source
     assert "if (segment.canonicalMonth)" in source
