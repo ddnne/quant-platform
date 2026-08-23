@@ -1,5 +1,7 @@
 # Original 08-20/22 plan vs current tree
 
+> **Pointer (not a rewrite).** Register still holds at `40d1aa90`; AND product still stopped (`CATALOG_AND_PLUS_N_STOPPED=True`); remaining original-plan work is still human reconstitution (`RECONSTITUTION_APPLY=False`); Phase 7 still **NO-GO**. The body below is a freeze at `e927b97`.
+
 **Lane:** historian/auditor (isolation worktree; docs only)  
 **Tree at authoring:** `e927b97` (`docs/original-plan-gap`)  
 **Live residual:** [`../phase62_residual_status.md`](../phase62_residual_status.md)  
