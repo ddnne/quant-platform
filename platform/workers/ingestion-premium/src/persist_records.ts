@@ -1,6 +1,6 @@
 /**
  * Premium structured persist: D1 record upsert and watermark writes.
- * Fetch, ingestOne orchestration, and HTTP handlers stay in index.ts.
+ * Fetch/upsert stay together in index.ts as the ingestion façade.
  */
 
 import type { DatasetSpec } from "./catalog";
