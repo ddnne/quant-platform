@@ -228,6 +228,8 @@ def summarize_basket_trends(
                 "rule": spec.get("rule") or "mechanical",
                 "primary": bool(spec.get("primary")),
                 "primary_candidate": bool(spec.get("primary_candidate")),
+                "historical": bool(spec.get("historical")),
+                "deprecated": bool(spec.get("deprecated")),
                 "members": list(spec.get("members") or group[0].get("members") or []),
                 "n_windows": len(group),
                 "mean_member_occupancy": m_occ,

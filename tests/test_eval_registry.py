@@ -704,6 +704,9 @@ def test_summarize_basket_trends_is_not_a_pass() -> None:
     assert row["candidate"] is True
     assert row["n_pos_windows"] == 6
     assert row["go"] is False
+    assert row["historical"] is True
+    assert row["deprecated"] is True
+    assert row["primary"] is False
 
 
 def test_near_duplicate_is_not_candidate() -> None:
