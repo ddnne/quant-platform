@@ -10,7 +10,7 @@ extracts landed. Leftover occupancy **HOLD** in `daily_path.ts`.
 `coverage_receipts`, `snapshot_publish_policy`, `snapshot_coverage_proof`,
 `snapshot_persist`, `snapshot_read`, `eval_orchestrate`,
 `ingestion-premium/collection_receipts.ts` — **DONE** in §7.  
-**Live strategy at `8299ad84`:** §10 — remaining extracts vs HOLD. YAML
+**Live strategy at `88564075`:** §10 — remaining extracts vs HOLD. YAML
 file-count waste is closed. Size is not waste. Do not extract leftover
 occupancy. Do not add YAML. Do not declare Phase 7 GO.  
 **Mass / READY / Phase 7:** unchanged (NO-GO / not declared / OFF)
@@ -364,7 +364,7 @@ and COMPLETE predicates unchanged, generated files still generated.
 
 ---
 
-## 10. Current remaining extracts vs HOLD (HEAD 8299ad84)
+## 10. Current remaining extracts vs HOLD (HEAD 88564075)
 
 This is the **live** refactor strategy for “the code is full of waste.”
 §§1–9 remain the plan at `41003a5` / status at `5c9b962`. Follow this
@@ -527,11 +527,16 @@ pin (`159d8975`); ops-mcp OAuth bearer header-only (`f34b9dcc`) —
 **LANDED**. After `f34b9dcc`: ci-aggregate json helper is one module
 (`7dfed713`; charset + no-store, not premium); premium ops JSON
 responses use json helper (`77505a8f`); research `default_r2_put(`
-callers glob stays in `r2_io.py` (`8299ad84`) — **LANDED**. Remaining
-mixed HOLD unchanged: leftover occupancy, unique22, GATEWAY_TOKEN
-P632B-03, persist live upsert, compact catalog, `verify_all` vs
-`verify_ci`. Do not schedule leftover occupancy. Do not YAML +N. Do
-not declare Phase 7 GO. Do not claim ci-aggregate Worker exists live.
+callers glob stays in `r2_io.py` (`8299ad84`) — **LANDED**. After
+`8299ad84`: JSDA json helper (`adddbb87`); secrets json helper
+(`61a55e96`; proxy stream stays no-store); mass-eval json helper
+(`8a0475f7`; http.ts re-exports); ci-aggregate token compare
+(`e91d5f41`); ai-gateway token compare (`88564075`; GATEWAY_TOKEN
+service-binding HOLD unchanged) — **LANDED**. Remaining mixed HOLD:
+leftover occupancy, unique22, GATEWAY_TOKEN P632B-03, persist live
+upsert, compact catalog, `verify_all` vs `verify_ci`. Do not schedule
+leftover occupancy. Do not YAML +N. Do not declare Phase 7 GO. Do not
+claim ci-aggregate Worker exists live. Do not treat CF-Worker as auth.
 
 | Later | Mixed surface | Authority to pick | Must not |
 |------:|---------------|-------------------|----------|
@@ -559,7 +564,11 @@ delay helpers live there (`ec960406`). Sleep helper lives there
 helpers live in `identity.ts` (`ca00ff6d`). Premium json helper lives in
 `http_json.ts` (`a1428a21`). Premium ops also import `http_json.ts`
 (`77505a8f`). ci-aggregate json lives in its own `http_json.ts`
-(`7dfed713`). Do not family-slice remaining façade handlers.
+(`7dfed713`). JSDA/secrets json live in their `http_json.ts`.
+mass-eval json lives in `http_json.ts` re-exported from `http.ts`.
+ci-aggregate token compare lives in `authorized.ts`. gateway token
+compare lives in `authorized.ts`. Do not family-slice remaining
+façade handlers.
 
 ### 10.4 Do not
 
@@ -589,6 +598,8 @@ helpers live in `identity.ts` (`ca00ff6d`). Premium json helper lives in
 ✗ Claim reconstitution_evidence still calls default_r2_put at f34b9dcc
 ✗ Claim leftover occupancy / unique22 / GATEWAY_TOKEN P632B-03 / persist live upsert / compact catalog / verify_all vs verify_ci closed at 8299ad84
 ✗ Claim ci-aggregate Worker exists live at 8299ad84
+✗ Claim leftover occupancy / unique22 / GATEWAY_TOKEN P632B-03 / persist live upsert / compact catalog / verify_all vs verify_ci closed at 88564075
+✗ Claim ci-aggregate Worker exists live / CF-Worker is auth at 88564075
 ✗ Claim ci-aggregate Worker exists live
 ```
 
