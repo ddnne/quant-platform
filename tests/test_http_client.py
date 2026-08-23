@@ -75,6 +75,11 @@ def test_local_http_client_records_status_and_body():
     assert resp.text() == "boom"
 
 
+def test_local_http_client_ignores_ambient_proxy_by_default():
+    with LocalHttpClient(transport=httpx.MockTransport(lambda r: httpx.Response(200))) as client:
+        assert client._client.trust_env is False
+
+
 def test_cloudflare_client_refuses_to_fetch():
     client = CloudflareHttpClient()
     with pytest.raises(NotImplementedError):

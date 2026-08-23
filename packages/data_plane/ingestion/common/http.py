@@ -21,6 +21,13 @@ from typing import Any, Mapping, Optional, Protocol, Union, runtime_checkable
 _DEFAULT_UA = "quant-platform-ingest/0.1 (+personal-research; JST)"
 
 
+def _http_trust_env() -> bool:
+    """Default False so unit tests ignore ambient proxy. Opt-in via env."""
+    import os
+
+    return os.environ.get("QP_HTTP_TRUST_ENV", "").strip() in {"1", "true", "TRUE", "yes"}
+
+
 def transport_exception_types() -> tuple:
     """Exception types the HTTP client raises on connection / timeout faults.
 
@@ -97,6 +104,9 @@ class LocalHttpClient:
             verify=verify,
             follow_redirects=True,
             headers={"User-Agent": user_agent},
+            # Unit tests must not pick up ambient HTTPS_PROXY/SOCKS.
+            # Local ingest may set QP_HTTP_TRUST_ENV=1 to use the environment.
+            trust_env=_http_trust_env(),
         )
         if transport is not None:
             kwargs["transport"] = transport
@@ -203,6 +213,7 @@ class CloudflareJquantsProxyHttpClient:
             verify=verify,
             follow_redirects=True,
             headers={"User-Agent": user_agent},
+            trust_env=_http_trust_env(),
         )
         if transport is not None:
             kwargs["transport"] = transport
