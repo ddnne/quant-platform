@@ -5,8 +5,8 @@
 **Status at `5c9b962`:** YAML file-count waste **closed** (compiled map is SoT;
 `yaml_still_present: false`; tracked files ~631). Combo-gate and PIT-entry
 extracts landed. Leftover occupancy **HOLD** in `daily_path.ts`.  
-**Later extracts (tip `origin/main`):** `r2_feature_parse`, `coverage_ledger_io`,
-`snapshot_publish_policy` — **DONE** in §7.  
+**Later extracts (tip `origin/main`):** `r2_feature_parse`, `r2_feature_normalize`,
+`coverage_ledger_io`, `snapshot_publish_policy`, `snapshot_coverage_proof` — **DONE** in §7.  
 **Mass / READY / Phase 7:** unchanged (NO-GO / not declared / OFF)
 
 This is a **refactor plan**, not a rewrite mandate. Later lanes extract
@@ -280,9 +280,9 @@ No Mass/READY/Phase 7 arming.
 | 1 | `combo_gates.ts` from `daily_path.ts` | combo-gate **policy** | **DONE** (`combo_gates.ts`; leftover occupancy stayed) |
 | 2 | PIT entry module from `daily_path.ts` | PIT **entry** | **DONE** (`event_entry.ts`) |
 | 3 | leftover occupancy as **policy** | unique-22 lid branches | **HOLD** in `daily_path.ts` (occupancy-equal re-eval required; do not unify with `comboEventGateOk`) |
-| 4 | `r2_feature_context` parse vs normalize vs `available_at` policy | parse authority | **DONE** (`r2_feature_parse.py`; normalize / `available_at` / orchestration stay) |
+| 4 | `r2_feature_context` parse vs normalize vs `available_at` policy | parse then normalize | **DONE** (`r2_feature_parse.py`, `r2_feature_normalize.py`; `available_at` / orchestration stay) |
 | 5 | `coverage_ledger` persist/read vs `evaluate_segment` | persistence I/O | **DONE** (`coverage_ledger_io.py`; COMPLETE predicates stay) |
-| 6 | `snapshot.py` publication gate vs artifact write vs proof | publication **policy** | **DONE** (`snapshot_publish_policy.py`; proof / persist stay) |
+| 6 | `snapshot.py` publication gate vs artifact write vs proof | policy then evidence | **DONE** (`snapshot_publish_policy.py`, `snapshot_coverage_proof.py`; persist stays) |
 | 7 | Compiler owns `catalog_ids.ts` emit | generated **presentation** of policy IDs | **DONE** |
 | 8 | Digest lock (pin `compile_catalog()` digest) | — | **DONE** `sha256:6ad5ba57dfa41…` |
 | 9 | Mechanical YAML delete | files only | **DONE** (`yaml_still_present: false`) |
