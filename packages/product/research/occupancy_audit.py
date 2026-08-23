@@ -128,9 +128,9 @@ def _put_eval_bytes(
     if not put_r2:
         return None
     from research.cf_mass_eval_stage import RESEARCH_ARTIFACT_BUCKET
-    from research.r2_io import default_r2_put
+    from research.r2_io import put_research_artifact
 
-    put = default_r2_put(
+    put = put_research_artifact(
         RESEARCH_ARTIFACT_BUCKET,
         f"research/eval/job={job}/{r2name}",
         body,

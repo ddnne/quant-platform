@@ -23,7 +23,7 @@ from research.cf_mass_eval_stage import (
 )
 from research.eval_windows import DEFAULT_REAL_MULTIYEAR_PERIODS
 from research.freezes import CONTINUOUS_PAPER, MASS_RESEARCH, PHASE7
-from research.r2_io import default_r2_put
+from research.r2_io import put_research_artifact
 from research.research_capabilities import require_capability
 
 CF_MASS_EVAL_VERSION: str = "cf-mass-eval-job/v6"
@@ -326,7 +326,7 @@ def resolve_or_stage_panels(
         "job_id_staged": str(job_id),
     }
     try:
-        default_r2_put(
+        put_research_artifact(
             RESEARCH_ARTIFACT_BUCKET,
             meta_key,
             json.dumps(meta, indent=2, default=str).encode("utf-8"),

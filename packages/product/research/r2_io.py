@@ -9,6 +9,9 @@ put_children_then_manifest_via_worker is the Worker-client entry; it
 POSTs /v1/children-then-manifest with X-Mass-Eval-Token. It does not
 fall back to CLI put. Unbound Worker URL/token fail closed. Non-JSON
 bodies fail closed. Digests are Worker-computed, never forged here.
+Remote research job artifacts use put_research_artifact (Worker path).
+dry_run staging stays on default_r2_put. QP_ALLOW_PYTHON_R2_PUT does
+not grant CLI put on the Worker path.
 """
 
 from __future__ import annotations
@@ -272,6 +275,41 @@ def put_children_then_manifest_via_worker(
     }
 
 
+def put_research_artifact(
+    bucket: str,
+    key: str,
+    body: bytes,
+    *,
+    dry_run: bool = False,
+    staging_dir: str | Path | None = None,
+    http_post: Callable[..., Any] | None = None,
+    worker_url: str | None = None,
+    token: str | None = None,
+) -> dict[str, Any]:
+    """Put one research job object.
+
+    dry_run stages locally via default_r2_put. Remote POSTs Worker
+    children-then-manifest: empty children, the object is the manifest
+    (same shape as Worker daily_path job keys). CLI put is not authority.
+    QP_ALLOW_PYTHON_R2_PUT=1 does not grant CLI put on the remote path.
+    """
+    if dry_run:
+        return default_r2_put(
+            bucket,
+            key,
+            body,
+            dry_run=True,
+            staging_dir=staging_dir,
+        )
+    return put_children_then_manifest_via_worker(
+        (),
+        {"key": key, "body": body},
+        worker_url=worker_url,
+        token=token,
+        http_post=http_post,
+    )
+
+
 def default_r2_put(
     bucket: str,
     key: str,
@@ -387,6 +425,7 @@ __all__ = [
     "default_r2_get_object",
     "default_r2_put",
     "put_children_then_manifest_via_worker",
+    "put_research_artifact",
     "python_cli_put_is_not_immutable_authority",
     "python_r2_put_allowed",
 ]

@@ -16,6 +16,7 @@ from research.r2_io import (
     WORKER_PUT_URL_ENV,
     default_r2_put,
     put_children_then_manifest_via_worker,
+    put_research_artifact,
     python_r2_put_allowed,
 )
 from storage.immutable_artifact import ImmutableArtifactStore, content_digest
@@ -385,3 +386,107 @@ def test_children_then_manifest_source_is_not_cli_or_digest_forge() -> None:
     assert "CLI put is not authority" in doc
     assert "no digest forge" in doc
     assert "dry_run" in doc
+
+
+def test_put_research_artifact_dry_run_is_local_default_r2_put(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr(r2_io.subprocess, "run", _boom_remote)
+    monkeypatch.setattr(r2_io.urllib.request, "urlopen", _boom_remote)
+    got = put_research_artifact(
+        "quant-structured",
+        "research/eval/job=x/cost_verify.json",
+        b'{"n": 1}',
+        dry_run=True,
+        staging_dir=tmp_path,
+    )
+    assert got["status"] == "dry_run"
+    assert got.get("created") is not True
+    staged = Path(got["staged_path"])
+    assert staged.read_bytes() == b'{"n": 1}'
+
+
+def test_put_research_artifact_remote_posts_worker_not_cli(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv(WORKER_PUT_URL_ENV, "https://example.invalid/worker")
+    monkeypatch.setenv(WORKER_PUT_TOKEN_ENV, "tok")
+    monkeypatch.setenv(PYTHON_R2_PUT_ENV, "1")
+    monkeypatch.setattr(r2_io.subprocess, "run", _boom_remote)
+    monkeypatch.setattr(r2_io.urllib.request, "urlopen", _boom_remote)
+    seen: dict = {}
+
+    def fake_post(*, url, body, headers):
+        seen["url"] = url
+        seen["body"] = json.loads(body)
+        seen["headers"] = headers
+        return {
+            "ok": True,
+            "conflict": False,
+            "verified": True,
+            "go": False,
+            "manifest": {
+                "key": "research/eval/job=x/cost_verify.json",
+                "created": True,
+            },
+        }
+
+    got = put_research_artifact(
+        "quant-structured",
+        "research/eval/job=x/cost_verify.json",
+        b'{"n": 1}',
+        http_post=fake_post,
+    )
+    assert seen["url"].endswith("/v1/children-then-manifest")
+    assert seen["headers"]["X-Mass-Eval-Token"] == "tok"
+    assert seen["body"] == {
+        "children": [],
+        "manifest": {
+            "key": "research/eval/job=x/cost_verify.json",
+            "data": {"n": 1},
+        },
+    }
+    assert got["status"] == "put_ok"
+    assert got["ok"] is True
+    assert got.get("created") is True
+
+
+def test_put_research_artifact_remote_unbound_fail_closed(monkeypatch) -> None:
+    monkeypatch.delenv(WORKER_PUT_URL_ENV, raising=False)
+    monkeypatch.delenv(WORKER_PUT_TOKEN_ENV, raising=False)
+    monkeypatch.setenv(PYTHON_R2_PUT_ENV, "1")
+    monkeypatch.setattr(r2_io.subprocess, "run", _boom_remote)
+    monkeypatch.setattr(r2_io.urllib.request, "urlopen", _boom_remote)
+    with pytest.raises(R2IOError, match="python must use Worker children-then-manifest"):
+        put_research_artifact(
+            "quant-structured",
+            "research/eval/job=x/cost_verify.json",
+            b'{"n": 1}',
+        )
+
+
+def test_research_job_callers_use_worker_put_not_cli() -> None:
+    root = Path(__file__).resolve().parents[1] / "packages" / "product" / "research"
+    remote_callers = (
+        "cf_mass_eval_job.py",
+        "cf_mass_eval_stage.py",
+        "occupancy_audit.py",
+        "cf_propose_thesis.py",
+        "cf_cost_verify.py",
+    )
+    for name in remote_callers:
+        src = (root / name).read_text(encoding="utf-8")
+        assert "put_research_artifact" in src
+        assert "QP_ALLOW_PYTHON_R2_PUT" not in src
+        if name == "cf_mass_eval_stage.py":
+            assert "default_r2_put" not in src
+        else:
+            assert "default_r2_put(" not in src
+    recon = (root / "reconstitution_evidence.py").read_text(encoding="utf-8")
+    assert "default_r2_put(" in recon
+    assert "dry_run=True" in recon
+    assert "QP_ALLOW_PYTHON_R2_PUT" not in recon
+    helper = inspect.getsource(put_research_artifact)
+    assert "put_children_then_manifest_via_worker" in helper
+    assert "default_r2_put" in helper
+    assert "does not grant CLI put" in (put_research_artifact.__doc__ or "")

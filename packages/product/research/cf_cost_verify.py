@@ -303,10 +303,10 @@ def run_cost_on_off_compare(
         import json
 
         from research.cf_mass_eval_stage import RESEARCH_ARTIFACT_BUCKET
-        from research.r2_io import default_r2_put
+        from research.r2_io import put_research_artifact
 
         key = f"research/eval/job={jid}/cost_verify.json"
-        default_r2_put(
+        put_research_artifact(
             RESEARCH_ARTIFACT_BUCKET,
             key,
             json.dumps(out, default=str).encode("utf-8"),

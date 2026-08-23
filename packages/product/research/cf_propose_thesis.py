@@ -491,10 +491,10 @@ def _attach_reviews(
     out["not_a_pass"] = True
     if write_sidecar and job_id:
         from research.cf_mass_eval_stage import RESEARCH_ARTIFACT_BUCKET
-        from research.r2_io import default_r2_put
+        from research.r2_io import put_research_artifact
 
         key = f"research/eval/job={job_id}/review.json"
-        default_r2_put(
+        put_research_artifact(
             RESEARCH_ARTIFACT_BUCKET,
             key,
             json.dumps(

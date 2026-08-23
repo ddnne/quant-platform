@@ -110,6 +110,24 @@ def test_go_false_not_a_pass_no_git_scores() -> None:
     assert pack["missing_adv"]["skipped_no_invent"] is True
 
 
+def test_remote_cost_verify_uses_worker_put(monkeypatch) -> None:
+    seen: list[str] = []
+
+    def _fake_put(bucket, key, body, **kwargs):
+        assert kwargs.get("dry_run") is not True
+        seen.append(key)
+        return {"status": "put_ok"}
+
+    monkeypatch.setattr("research.r2_io.put_research_artifact", _fake_put)
+    pack = run_cost_on_off_compare(
+        logic_ids=["liq_unit"], dry_run=False, job_id="eval-cf-cost-test"
+    )
+    assert pack["go"] is False
+    assert pack["written"] is True
+    assert pack["r2_key"] == "research/eval/job=eval-cf-cost-test/cost_verify.json"
+    assert seen == ["research/eval/job=eval-cf-cost-test/cost_verify.json"]
+
+
 def test_cf_cost_verify_does_not_import_factory() -> None:
     src = VERIFY_PATH.read_text(encoding="utf-8")
     tree = ast.parse(src, filename=str(VERIFY_PATH))
