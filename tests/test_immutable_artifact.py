@@ -1,5 +1,6 @@
 """Create-if-absent: local digest store and default R2 put. Not GO."""
 
+import inspect
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -50,6 +51,13 @@ def test_dry_run_r2_put_does_not_call_remote(tmp_path: Path, monkeypatch) -> Non
     assert staged.read_bytes() == b"{}"
 
 
+def test_default_r2_put_documents_toctou_not_atomic() -> None:
+    sig = inspect.signature(default_r2_put)
+    assert sig.parameters["create_only"].default is True
+    text = f"{default_r2_put.__doc__ or ''}\n{inspect.getsource(default_r2_put)}"
+    assert "TOCTOU" in text
+
+
 def test_create_only_head_success_skips_put(tmp_path: Path, monkeypatch) -> None:
     wr = tmp_path / "wrangler"
     wr.write_text("")
@@ -74,3 +82,30 @@ def test_create_only_head_success_skips_put(tmp_path: Path, monkeypatch) -> None
     assert len(seen) == 1
     assert "head" in seen[0]
     assert "put" not in seen[0]
+
+
+def test_create_only_head_miss_calls_put(tmp_path: Path, monkeypatch) -> None:
+    wr = tmp_path / "wrangler"
+    wr.write_text("")
+    cfg = tmp_path / "wrangler.toml"
+    cfg.write_text("")
+    seen: list[list[str]] = []
+
+    def fake_run(cmd, **_k):
+        seen.append(list(cmd))
+        if "head" in cmd:
+            return SimpleNamespace(returncode=1, stdout="", stderr="not found")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(r2_io.subprocess, "run", fake_run)
+    got = default_r2_put(
+        "quant-structured",
+        "research/eval/job=x/daily_path.json",
+        b"{}",
+        wrangler=wr,
+        config=cfg,
+    )
+    assert got["status"] == "put_ok"
+    assert got["created"] is True
+    assert any("head" in c for c in seen)
+    assert any("put" in c for c in seen)
