@@ -48,6 +48,12 @@ def default_r2_put(
     """Put one object to R2 via wrangler (remote). dry_run stages only.
 
     create_only (default True): if the key already exists, do not overwrite.
+
+    wrangler ``r2 object put`` has no create-if-absent / if-not-exists flag
+    (Workers ``onlyIf.etagDoesNotMatch`` is not on the CLI). Existence is
+    therefore head-then-put. That sequence is TOCTOU: a concurrent writer
+    can create the key after a miss and this put will overwrite. If head
+    succeeds, skip put and return status ``exists``.
     """
     meta = {
         "bucket": bucket,
@@ -56,6 +62,7 @@ def default_r2_put(
         "content_type": content_type,
         "object_path": f"{bucket}/{key}",
     }
+    # Local stage only — never wrangler/remote.
     if dry_run:
         staged: str | None = None
         if staging_dir is not None:
@@ -74,6 +81,7 @@ def default_r2_put(
         )
 
     if create_only:
+        # TOCTOU: head hit refuses overwrite; a miss still races the put.
         head = subprocess.run(
             [
                 str(wr),
