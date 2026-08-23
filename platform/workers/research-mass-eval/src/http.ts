@@ -1,8 +1,10 @@
 /// <reference types="@cloudflare/workers-types" />
 
 import type { Env } from "./types";
+import { sha256Hex } from "./sha256";
 
 export { json } from "./http_json";
+export { sha256Hex } from "./sha256";
 
 export function freezePayload(env: Env) {
   return {
@@ -50,11 +52,6 @@ export async function authorized(
 
 export function isObject(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
-}
-
-export async function sha256Hex(bytes: Uint8Array): Promise<string> {
-  const buf = await crypto.subtle.digest("SHA-256", bytes);
-  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 export async function putJson(
