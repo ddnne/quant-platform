@@ -10,7 +10,7 @@ extracts landed. Leftover occupancy **HOLD** in `daily_path.ts`.
 `coverage_receipts`, `snapshot_publish_policy`, `snapshot_coverage_proof`,
 `snapshot_persist`, `snapshot_read`, `eval_orchestrate`,
 `ingestion-premium/collection_receipts.ts` — **DONE** in §7.  
-**Live strategy at `02fb6cbd`:** §10 — remaining extracts vs HOLD. YAML
+**Live strategy at `cf7da56c`:** §10 — remaining extracts vs HOLD. YAML
 file-count waste is closed. Size is not waste. Do not extract leftover
 occupancy. Do not add YAML. Do not declare Phase 7 GO.  
 **Mass / READY / Phase 7:** unchanged (NO-GO / not declared / OFF)
@@ -364,13 +364,13 @@ and COMPLETE predicates unchanged, generated files still generated.
 
 ---
 
-## 10. Current remaining extracts vs HOLD (HEAD 02fb6cbd)
+## 10. Current remaining extracts vs HOLD (HEAD cf7da56c)
 
 This is the **live** refactor strategy for “the code is full of waste.”
 §§1–9 remain the plan at `41003a5` / status at `5c9b962`. Follow this
 section now. Size is not a split key. Live math is not waste.
 
-Measured at `02fb6cbd`: tracked paths **811**; catalog YAML
+Measured at `cf7da56c`: tracked paths **818**; catalog YAML
 (`specs/research_logics/*.yaml`) **0**; remaining tracked YAML **1**
 (`specs/research_themes.yaml` — themes, not catalog logics); compiled
 n=**2254** (`migration.jsonl` 2254 lines);
@@ -408,7 +408,7 @@ numbers). `daily_path.ts` is **1682** (was 1677 in §2).
 | DO `budget_id` pin | **DONE** (`89415105`): create is not a reserve; string `budget_id` is not occupancy authority. In-memory algebra; live Edge occupancy unproven. |
 | BackfillPlanner JQ required segments | **DONE** (`bcd52f47`): all JQ jobs come from `plan_required_segments`. Bars/fins stay calendar_month jobs. Missing V3 does not invent official domain or COMPLETE. |
 | Shared official-index local HTML reader | **DONE** (`2323f6a5`): `ingestion.jsda.official_index.read_local_index_text`. CLIs use it. `cf_premium_backfill` uses it (`2b82ec7d`). Missing/blank stays fail-closed empty, not calendar inventory. |
-| Premium Worker units vs Python greps | **DONE**: catalog identity (`23a5cbb9`; `catalog.test.ts`); availability policy (`8fc13e24`; `availability.test.ts`); identity JST clocks (`5ac9cce1`; `identity.test.ts`); raw-page retain (`0383311f`; `index.test.ts`); coverage-segment plan (`0fee1b1e`; `index.test.ts` / `collection_receipts.test.ts`). Replaced Python greps. |
+| Premium Worker units vs Python greps | **DONE**: catalog identity (`23a5cbb9`; `catalog.test.ts`); availability policy (`8fc13e24`; `availability.test.ts`); identity JST clocks (`5ac9cce1`; `identity.test.ts`); raw-page retain (`0383311f`; `index.test.ts`); coverage-segment plan (`0fee1b1e`; `index.test.ts` / `collection_receipts.test.ts`); NK rebuild (`8fc9fa30`; `natural_key_migration.test.ts`). Replaced Python greps. |
 
 File-count drop after YAML deletion is not a quality win without the
 digest pin (already pinned). Do not re-run digest lock.
@@ -454,9 +454,9 @@ Codec emitters extract **DONE** (`54c1f472`; `evaluation_ir_emit.py`). Premium
 fetch/retry extract **DONE** (`a20d14d4`; `fetch_jq.ts`). BackfillPlanner
 `index_text` **DONE** (`2cbd894d`). Shared official-index reader **DONE**
 (`2323f6a5`; `cf_premium_backfill` uses it at `2b82ec7d`). Premium Worker
-units replaced catalog/availability/identity/raw-page/coverage-segment
+units replaced catalog/availability/identity/raw-page/coverage-segment/NK
 Python greps **DONE** (`23a5cbb9`; `8fc13e24`; `5ac9cce1`; `0383311f`;
-`0fee1b1e`).
+`0fee1b1e`; `8fc9fa30`).
 
 | Later | Mixed surface | Authority to pick | Must not |
 |------:|---------------|-------------------|----------|
