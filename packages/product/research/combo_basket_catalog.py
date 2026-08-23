@@ -11,10 +11,10 @@ from research.unique_logic.constants import (
 )
 
 DEFAULT_CANDIDATE_BASKET: tuple[str, ...] = (
+    "event_afterclose_positive_eps",
     "event_ta_up_positive_eps",
-    "event_positive_eps_liq_high",
-    "event_ta_up_liq_high",
     "surprise_xs_uncrowded_afterclose",
+    "event_positive_eps_liq_high",
 )
 
 RETIRED_BASKET_RULES: frozenset[str] = frozenset(
@@ -37,10 +37,10 @@ MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
         "rule": "event_family_only",
         "primary": False,
         "members": (
+            "event_afterclose_positive_eps",
             "event_ta_up_positive_eps",
+            "event_large_surprise_positive_eps",
             "event_eqar_high_positive_eps",
-            "event_positive_eps_liq_high",
-            "event_ta_up_liq_high",
         ),
     },
     {
@@ -82,6 +82,7 @@ MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
         "primary": True,
         "members": (
             "event_ta_up_positive_eps",
+            "event_large_surprise_positive_eps",
             "event_eqar_high_positive_eps",
             "event_positive_eps_liq_high",
             "event_ta_up_liq_high",
@@ -95,7 +96,7 @@ MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
             "event_positive_eps_uncrowded",
             "surprise_xs_uncrowded_afterclose",
             "event_ta_up_uncrowded",
-            "event_uncrowded_eqar_falling",
+            "surprise_xs_taup_uncr",
         ),
     },
     {
@@ -104,9 +105,9 @@ MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
         "primary": False,
         "members": (
             "event_repo3m_down_pead",
-            "event_ta_up_repo3m_down",
             "surprise_xs_repo3m_down",
-            "event_nkyvol_repo3m_down",
+            "event_positive_eps_repo3m",
+            "event_ta_up_repo3m_down",
         ),
     },
     {
@@ -114,11 +115,11 @@ MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
         "rule": "event_fund_cross",
         "primary": True,
         "members": (
+            "event_afterclose_positive_eps",
             "event_ta_up_positive_eps",
+            "event_large_surprise_positive_eps",
+            "surprise_xs_afterclose_ta_up",
             "event_positive_eps_liq_high",
-            "event_afterclose_crowded",
-            "surprise_xs_afterclose_flatten",
-            "event_eqar_high_liq_high",
         ),
     },
 )

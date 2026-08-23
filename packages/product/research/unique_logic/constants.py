@@ -453,6 +453,13 @@ THIN_SLEEVE_EXCLUDE_IDS: frozenset[str] = frozenset(
         "surprise_xs_div_sdown",
         "surprise_xs_div_tight",
         "surprise_xs_easy_pbr",
+        "event_epsu_np",
+        "event_eqf_p10",
+        "event_eql_pbr",
+        "event_eql_steep",
+        "surprise_xs_epsu_np",
+        "surprise_xs_eqf_p10",
+        "surprise_xs_eql_pbr",
     }
 )
 MF_VALUE_MOM_RATE_DELEGATES: bool = False

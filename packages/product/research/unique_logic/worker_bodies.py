@@ -499,17 +499,13 @@ def usable_inventory(
             continue
         a = mid.get(lid)
         b = liq.get(lid)
-        if a is None or b is None:
+        band = classify_occupancy_pair(a, b)
+        if band == "unclassified":
             n_unclassified += 1
             continue
         n_recorded += 1
-        lo = min(float(a), float(b))
-        hi = max(float(a), float(b))
-        if lo <= USABLE_OCCUPANCY_MIN:
-            continue
-        if hi >= ALWAYS_ON_OCCUPANCY_WARN:
-            continue
-        usable.append(lid)
+        if band == "material":
+            usable.append(lid)
     fam = Counter(usable_family_of(lid) for lid in usable)
     n = len(usable)
     return {

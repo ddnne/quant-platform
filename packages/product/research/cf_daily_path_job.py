@@ -377,6 +377,25 @@ def run_both_track_sleeve_fanout(
         track_jid = f"{jid}-{tid}"
         fan_pack: dict[str, Any] | None = None
         if invoke_fanout:
+            track_prefix = panels_prefix
+            if (
+                use_skip_stage
+                and not track_prefix
+                and use_mode == "r2_panels"
+            ):
+                from research.cf_mass_eval_job import (
+                    DEFAULT_REAL_MULTIYEAR_PERIODS as _DEF_PERIODS,
+                    PANELS_CACHE_PREFIX,
+                    panels_cache_id,
+                )
+
+                cid = panels_cache_id(
+                    periods or _DEF_PERIODS,
+                    max_codes=max_codes,
+                    max_days=max_days,
+                    track=tid,
+                )
+                track_prefix = f"{PANELS_CACHE_PREFIX}/{cid}/panels"
             fan_pack = dict(
                 fan(
                     job_id=track_jid,
@@ -392,7 +411,7 @@ def run_both_track_sleeve_fanout(
                     http_post=http_post,
                     skip_stage=use_skip_stage,
                     staging_dir=staging_dir,
-                    panels_prefix=panels_prefix,
+                    panels_prefix=track_prefix,
                     track=tid,
                     write_artifacts=not bool(dry_run),
                 )
