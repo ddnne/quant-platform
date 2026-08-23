@@ -10,34 +10,58 @@ import pytest
 from research.artifacts import ExperimentPlan
 from research.phase7_pilot import (
     PILOT_MAX_HYPOTHESES,
+    AuthorizedEvaluationService,
     MassResearchScheduler,
+    bind_authorized_evaluation_service,
 )
-from research.readiness import VerifiedResearchReadiness
+from research.readiness import (
+    VerifiedResearchReadiness,
+    _attestation_secret,
+    _sign_attestation,
+)
 from selection.budget_ledger import MassResearchDisabledError, ResearchBudgetCapability
 from selection.screen import ExperimentBudget
 from storage.immutable_artifact import ImmutableArtifactStore
 
+_TEST_HMAC_SECRET = b"phase7-pilot-construct-test-hmac"
 
-def _readiness(*, snapshot_id: str = "snap-1") -> VerifiedResearchReadiness:
+
+@pytest.fixture(autouse=True)
+def _hmac_secret(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("QUANT_READINESS_HMAC_SECRET", _TEST_HMAC_SECRET.decode())
+
+
+def _readiness(
+    *,
+    snapshot_id: str = "snap-1",
+    expires_at: str = "2099-01-01T00:00:00+00:00",
+    signature: str | None = None,
+    **field_overrides: object,
+) -> VerifiedResearchReadiness:
     digest = "sha256:" + ("ab" * 32)
-    return VerifiedResearchReadiness(
-        attestation_id="att-1",
-        snapshot_id=snapshot_id,
-        ready_state="READY",
-        ready_manifest_digest=digest,
-        immutable_db_digest=digest,
-        coverage_policy_version="v1",
-        coverage_proof_digest=digest,
-        governed_membership_digest=digest,
-        raw_proof_digest=digest,
-        b0_quality_proof_digest=digest,
-        source_generation="g1",
-        applied_sync_generation="g1",
-        verified_at="2026-01-01T00:00:00+00:00",
-        expires_at="2099-01-01T00:00:00+00:00",
-        evidence_digest=digest,
-        signature="hmac-sha256:test",
-    )
+    kwargs: dict[str, object] = {
+        "attestation_id": "att-1",
+        "snapshot_id": snapshot_id,
+        "ready_state": "READY",
+        "ready_manifest_digest": digest,
+        "immutable_db_digest": digest,
+        "coverage_policy_version": "v1",
+        "coverage_proof_digest": digest,
+        "governed_membership_digest": digest,
+        "raw_proof_digest": digest,
+        "b0_quality_proof_digest": digest,
+        "source_generation": "g1",
+        "applied_sync_generation": "g1",
+        "verified_at": "2026-01-01T00:00:00+00:00",
+        "expires_at": expires_at,
+        "evidence_digest": digest,
+        "signature": "hmac-sha256:pending",
+    }
+    kwargs.update(field_overrides)
+    pending = VerifiedResearchReadiness(**kwargs)  # type: ignore[arg-type]
+    if signature is None:
+        signature = _sign_attestation(pending.to_canonical_body(), _attestation_secret())
+    return replace(pending, signature=signature)
 
 
 def _budget(tmp_path: Path) -> ResearchBudgetCapability:
@@ -66,8 +90,8 @@ def _plan(*, snapshot_id: str = "snap-1") -> ExperimentPlan:
     )
 
 
-def _eval_service(*, bound: bool = True) -> SimpleNamespace:
-    return SimpleNamespace(bound=bound)
+def _eval_service() -> AuthorizedEvaluationService:
+    return bind_authorized_evaluation_service()
 
 
 def _store(tmp_path: Path) -> ImmutableArtifactStore:
@@ -112,10 +136,14 @@ def test_construct_fails_without_ready_snapshot_id(tmp_path: Path) -> None:
 def test_construct_fails_without_bound_evaluation_service(tmp_path: Path) -> None:
     with pytest.raises(MassResearchDisabledError, match="authorized_evaluation_service"):
         _construct(tmp_path, authorized_evaluation_service=None)
-    with pytest.raises(MassResearchDisabledError, match="bound"):
-        _construct(tmp_path, authorized_evaluation_service=_eval_service(bound=False))
-    with pytest.raises(MassResearchDisabledError, match="bound"):
+    with pytest.raises(MassResearchDisabledError, match="authorized_evaluation_service"):
+        _construct(tmp_path, authorized_evaluation_service=SimpleNamespace(bound=True))
+    with pytest.raises(MassResearchDisabledError, match="authorized_evaluation_service"):
         _construct(tmp_path, authorized_evaluation_service=SimpleNamespace())
+    with pytest.raises(MassResearchDisabledError, match="authorized_evaluation_service"):
+        AuthorizedEvaluationService()
+    with pytest.raises(MassResearchDisabledError, match="authorized_evaluation_service"):
+        _construct(tmp_path, authorized_evaluation_service=AuthorizedEvaluationService())
 
 
 def test_construct_fails_without_artifact_store_create_if_absent(
@@ -125,11 +153,36 @@ def test_construct_fails_without_artifact_store_create_if_absent(
         _construct(tmp_path, immutable_artifact_store=None)
     with pytest.raises(MassResearchDisabledError, match="create_if_absent"):
         _construct(tmp_path, immutable_artifact_store=SimpleNamespace())
+    with pytest.raises(MassResearchDisabledError, match="create_if_absent"):
+        _construct(
+            tmp_path,
+            immutable_artifact_store=SimpleNamespace(create_if_absent=lambda *_a, **_k: None),
+        )
 
 
 def test_construct_rejects_operator_override(tmp_path: Path) -> None:
     with pytest.raises(MassResearchDisabledError, match="operator_override"):
         _construct(tmp_path, operator_override={"reason": "force"})
+
+
+def test_construct_refuses_expired_or_bad_signature(tmp_path: Path) -> None:
+    expired = _readiness(expires_at="2000-01-01T00:00:00+00:00")
+    with pytest.raises(MassResearchDisabledError, match="invalid, expired"):
+        _construct(tmp_path, readiness=expired)
+    bad_sig = _readiness(signature="hmac-sha256:not-a-real-mac")
+    with pytest.raises(MassResearchDisabledError, match="invalid, expired"):
+        _construct(tmp_path, readiness=bad_sig)
+
+
+def test_construct_refuses_snapshot_mismatch(tmp_path: Path) -> None:
+    with pytest.raises(MassResearchDisabledError, match="invalid, expired"):
+        _construct(tmp_path, plan=_plan(snapshot_id="other-snap"))
+
+
+def test_construct_refuses_empty_digest(tmp_path: Path) -> None:
+    empty = _readiness(b0_quality_proof_digest="")
+    with pytest.raises(MassResearchDisabledError, match="non-empty digest"):
+        _construct(tmp_path, readiness=empty)
 
 
 def test_construct_succeeds_with_all_deps(tmp_path: Path) -> None:
