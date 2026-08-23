@@ -1,6 +1,7 @@
 import { barNativeHeldBook } from "./eval";
 import { sharpePeriod, tStatVsZero } from "./metrics";
 import { isPathBroken } from "./path_broken";
+import { afterClose, pitEventEntryShift } from "./event_entry";
 import type { BarsByCode, LogicSpec, PeriodPanel } from "./types";
 import {
   CF_EVENT_LOGIC_IDS,
@@ -362,14 +363,6 @@ function surpriseProxy(ev: {
   if (finite(e) && finite(p)) return (e as number) - (p as number);
   return null;
 }
-
-function afterClose(discTime: string | null | undefined): boolean {
-  const t = String(discTime || "").trim();
-  if (t.length < 4) return false;
-  const hh = Number(t.slice(0, 2));
-  return Number.isFinite(hh) && hh >= 15;
-}
-
 
 function comboGatesOf(params: Record<string, unknown>): string[] {
   const g = params.gates;
@@ -1192,11 +1185,13 @@ function eventHeld(
       if (sgn === null || sgn === 0 || sur === null) continue;
       let i = idx[disc];
       const after = afterClose(ev.disc_time);
+      const shift = pitEventEntryShift(ev.disc_time);
       if (i === undefined) {
         const later = dlist.find((d) => d > disc);
         if (later === undefined) continue;
         i = idx[later];
-      } else if (after && i + 1 < dlist.length) {
+      } else if (shift === 1) {
+        if (i + 1 >= dlist.length) continue;
         i = i + 1;
       }
       entries.push({
