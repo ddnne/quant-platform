@@ -46,9 +46,9 @@ formulas stay in one place even at 2k LOC. Splitting a numerator from its
 denominator, or a PIT median from the entry that consumes it, is a
 rewrite dressed as a refactor.
 
-**Size is not a split key.** `daily_path.ts` is 2411 lines because it
-mixes three authorities (PIT entry, leftover occupancy, combo gates), not
-because 800-line files are virtuous.
+**Size is not a split key.** `daily_path.ts` is 1677 lines. Combo-gate and
+PIT-entry extracts already landed; leftover occupancy **HOLD**s here.
+Length is not a reason to extract leftover occupancy.
 
 ---
 
@@ -56,22 +56,28 @@ because 800-line files are virtuous.
 
 `git ls-files` at `41003a5`: **2873** tracked paths, of which YAML was
 **2254** (**78.5%**). At `5c9b962` YAML is gone; tracked files **~631**.
+This tip: **653** tracked; YAML **0**; compiled n=**2254**.
 Compiler map `specs/research_catalog/` is catalog SoT. Do not add YAML.
-Do not hand-edit `catalog_ids.ts`.
+Do not hand-edit `catalog_ids.ts`. Unique22 park is leftover occupancy
+(`UNIQUE22_PARK_REASONS` / `daily_path.ts`), not YAML.
+
+LOC via `git ls-files … | xargs wc -l` at this tip. Extract statuses
+below are already in §7 — this table does **not** schedule new extracts.
+Leftover occupancy **HOLD** remains.
 
 | Path | LOC | Split? |
 |------|----:|--------|
-| `platform/workers/research-mass-eval/src/daily_path.ts` | 2411 | **Yes — by authority** (PIT entry / leftover occupancy / combo gates) |
-| `platform/workers/research-mass-eval/src/catalog_ids.ts` | 2326 | **No hand-edit.** GENERATED. Compiler owns it later |
+| `platform/workers/research-mass-eval/src/catalog_ids.ts` | 2327 | **No hand-edit.** GENERATED. Compiler owns emit (**DONE**) |
 | `packages/product/research/cost_models.py` | 2210 | **KEEP** live math |
-| `platform/workers/research-mass-eval/src/eval.ts` | 2030 | Orchestration vs live math only; do not family-slice the formulas |
+| `platform/workers/research-mass-eval/src/eval.ts` | 1806 | Orchestration vs live math only; `eval_orchestrate.ts` **DONE**; do not family-slice the formulas |
+| `platform/workers/research-mass-eval/src/daily_path.ts` | 1677 | Combo-gate + PIT-entry **DONE**. Leftover occupancy **HOLD** here. Do not extract leftover occupancy. Do not unify with `comboEventGateOk` |
 | `packages/edge/cf_platform/ingest_premium/coverage.py` | 1624 | KEEP as **evidence** measurement; do not per-check microfiles |
-| `packages/data_plane/storage/coverage_ledger.py` | 1564 | Policy evaluate vs persistence I/O vs evidence builders |
-| `platform/workers/ingestion-premium/src/index.ts` | 1439 | Fetch / persist / receipt evidence / HTTP presentation |
-| `packages/research_runtime/paper_runtime/snapshot.py` | 1407 | Publication policy vs proof evidence vs artifact persist |
-| `packages/product/research/r2_feature_context.py` | 1160 | Parse vs normalize vs `available_at` policy vs orchestrate |
+| `platform/workers/ingestion-premium/src/index.ts` | 1350 | Fetch / persist / receipt; `collection_receipts.ts` **DONE** |
+| `packages/data_plane/storage/coverage_ledger.py` | 1295 | `coverage_ledger_io` / `coverage_receipts` **DONE**; COMPLETE predicates stay |
 | `packages/product/research/options_225_vol_series.py` | 1140 | **KEEP** live math |
-| `packages/product/research/unique_logic/constants.py` | 778 | KEEP as **policy**. Do not explode park lists into YAML clones |
+| `packages/research_runtime/paper_runtime/snapshot.py` | 958 | Extracts **DONE** (`snapshot_publish_policy.py`, `snapshot_coverage_proof.py`, `snapshot_persist.py`, `snapshot_read.py`) |
+| `packages/product/research/unique_logic/constants.py` | 784 | KEEP as **policy**. Park reasons in `UNIQUE22_PARK_REASONS`; leftover occupancy in `daily_path.ts`. Do not explode park lists into YAML clones |
+| `packages/product/research/r2_feature_context.py` | 658 | Extracts **DONE** (`r2_feature_parse.py`, `r2_feature_normalize.py`, `r2_available_at.py`, `r2_io` get, `r2_feature_mirror.py`; `build_*_context` orchestration stays) |
 
 `packages/data_plane/data_contracts/coverage.py` is 165 lines and already
 **policy** (contract schema). Leave it. Do not merge it into the ledger
@@ -80,8 +86,9 @@ or the C-check module.
 Already-split siblings — **do not re-merge:** `mdh_collapse.ts`,
 `path_broken.ts`, `metrics.ts`, `cost_repo.py`, `cost_defaults.py`,
 `eval_loaders*.py`, phase35 coverage matrix split, Worker
-`combo_gates.test.ts` (tests already extracted; production gates still
-live in `daily_path.ts`). At this tip there is **no** `event_entry.ts`.
+`combo_gates.ts` / `combo_gates.test.ts` (combo-gate **policy** extracted),
+`event_entry.ts` (PIT **entry** extracted). Leftover occupancy **HOLD**
+in `daily_path.ts`. Do not schedule leftover occupancy extract.
 
 ---
 
@@ -99,27 +106,29 @@ This file is that path. Three authorities share it today:
 | `evalLogicDailyPathOnPanel` / `cellsFromPeriodPacks` | **orchestration / presentation** | Façade; may stay as the `daily_path` entry after extracts |
 
 `catalog_ids.ts` header and `scripts/sync_cf_new_thesis_ids.py` already
-say: **leftover occupancy stays in `daily_path.ts`.** That remains true
-until a dedicated occupancy module is extracted *as leftover policy*,
-not folded into combo gates.
+say: **leftover occupancy stays in `daily_path.ts`.** That remains
+**HOLD**. Do not extract leftover occupancy. Do not fold it into combo
+gates. Unique22 park is leftover occupancy (`UNIQUE22_PARK_REASONS` /
+`daily_path.ts`), not YAML.
 
 ### Allowed later extracts (one authority per lane)
 
-1. **Combo gates → `combo_gates.ts`**  
-   Move `comboEventGateOk`, `comboCsGateOk`, gate helpers, unknown-gate
-   fail-closed. Point `combo_gates.test.ts` at the new module. Do **not**
-   move leftover `!comboImpl` lid branches in the same commit.
+1. **Combo gates → `combo_gates.ts`** — **DONE**  
+   `comboEventGateOk`, `comboCsGateOk`, gate helpers, unknown-gate
+   fail-closed. `combo_gates.test.ts` points at the module. Leftover
+   `!comboImpl` lid branches stayed in `daily_path.ts`.
 
-2. **PIT entry → `event_entry.ts` (or equivalent)**  
+2. **PIT entry → `event_entry.ts` (or equivalent)** — **DONE**  
    Disc-time / surprise / entry bar index / `pitMedian` used for entry.
-   Do **not** relocate leftover occupancy predicates
+   Leftover occupancy predicates stayed
    (`event_pre_mom_agree_hold` uses `momentumAt(entryIdx)` on purpose —
    occupancy vs Python unique; combo `pre_mom` is `entryIdx-1`).
 
-3. **Leftover occupancy stays until (1)+(2) exist**  
-   Then a third lane may move unique-22 lid branches + leftover CS books
-   as **policy**, with occupancy-equal re-eval. Unifying leftover with
-   `comboEventGateOk` is a rewrite (it widens or thins occupancy).
+3. **Leftover occupancy — HOLD** in `daily_path.ts`  
+   Unique-22 lid branches stay here. Do **not** schedule leftover
+   occupancy extract. Unifying leftover with `comboEventGateOk` is a
+   rewrite (it widens or thins occupancy). Park reasons live in
+   `UNIQUE22_PARK_REASONS`; `yaml_still_present: false`.
 
 Do **not** split `heldBookDailyMtm` from `equityPathDrawdown`. Do **not**
 slice `gatedCsHeld` by thesis id.
@@ -194,7 +203,7 @@ not mint READY / arm Mass.
 / ΔBaseVol. Missing days omit (no ffill / no invent). Splitting
 `_atm_iv_at_cm` from `build_daily_skew_series` is fake-split.
 
-**`eval.ts` (2030).** Bar-native family evaluators + `barNativeHeldBook` +
+**`eval.ts` (1806).** Bar-native family evaluators + `barNativeHeldBook` +
 `evaluateLogicAcrossPeriods`. Allowed: move **orchestration**
 (`evaluateLogicAcrossPeriods`, `rankSurvivors`) and keep family math in
 one module. Disallowed: one file per `evalFlowDemand` / `evalFundPrice` /
@@ -215,7 +224,7 @@ trusted receipt. Calendar-day OTC inventory overhang is a **planner**
 issue (`plan_required_segments`), not a floor bump — see
 [`phase63_coverage_gap_audit.md`](phase63_coverage_gap_audit.md).
 
-### `paper_runtime/snapshot.py` (1407)
+### `paper_runtime/snapshot.py` (958)
 
 | Piece | Authority |
 |-------|-----------|
@@ -228,7 +237,7 @@ Extract along those lines if a lane needs locality. Do not split the
 Coverage V2 proof construction to shrink LOC. Production READY stays
 NO-GO; this file is the publication *machine*, not a GO switch.
 
-### `r2_feature_context.py` (1160)
+### `r2_feature_context.py` (658)
 
 | Piece | Authority |
 |-------|-----------|
@@ -238,9 +247,10 @@ NO-GO; this file is the publication *machine*, not a GO switch.
 | `default_r2_get_object` / `build_*_context` | **orchestration** |
 | `materialize_disposable_sqlite_mirror` | **persistence** (scratch; not experiment SoT) |
 
-Four authorities in one file is the problem, not 1160 lines.
+Extracts **DONE** (see §7). Remaining `build_*_context` orchestration
+stays. Size is not a split key.
 
-### `ingestion-premium/src/index.ts` (1439)
+### `ingestion-premium/src/index.ts` (1350)
 
 Already extracted: `catalog.ts`, `identity.ts`, `availability.ts`,
 rate-limit, SCD2 write, ops archive/prune. The remainder still mixes:
@@ -258,10 +268,12 @@ Natural-key / `available_at` stay in `identity.ts` / `availability.ts`
 frozen). No first-party `*.test.ts` here today; Python↔TS identity is
 `tests/test_identity_runtime_parity.py` (**Invariant**, not echo).
 
-### `unique_logic/constants.py` (778)
+### `unique_logic/constants.py` (784)
 
 **Policy** (gates, propose allow-list, occupancy parks, candidate exclude
-reasons). It is not eval scores. Do not generate per-YAML constant files.
+reasons). Park reasons live in `UNIQUE22_PARK_REASONS`; leftover occupancy
+stays in `daily_path.ts`. YAML is not SoT. It is not eval scores. Do not
+generate per-YAML constant files.
 `SPARSE_GATE_COMBOS` / `NEAR_EMPTY_PARK_IDS` stay lists of **reason
 classes**, not a 2254-row freeze. Family ID unions come from the compiled
 catalog (`unique_family_ids_from_yaml` is still the function name; alias
@@ -282,7 +294,7 @@ classified the suite; this plan does not re-count tests as a win.
 | No new YAML-per-file tests | Identity set-equality `yaml==py==constants` is Invariant. Two raw walks of 2254 files for `go:` / `family:` / `theme:` are freeze — collapse to **one** pass later; drop only after compiler digest owns those fields |
 | Dual-runtime echo | Do not add Python greps of Worker leftover occupancy. `combo_gates.test.ts` is **SoT for Worker gate policy**. Real Py↔TS *execution* parity (`test_identity_runtime_parity.py`) is Invariant |
 | Move tests with the extract | `combo_gates.test.ts` already imports from `daily_path.ts`; retarget on extract. Do not duplicate |
-| Structural replacement | After digest lock: `n == 2254` → compiler digest + set-equality. After occupancy extract: occupancy-equal fixture, not N paraphrases |
+| Structural replacement | After digest lock: `n == 2254` → compiler digest + set-equality. Leftover occupancy **HOLD** in `daily_path.ts` (no occupancy-extract fixture lane) |
 | Split-monolith already done | COMPLETE-21 / phase35 / cost_models test splits — keep the split; do not re-merge |
 
 Guard pack (every extract commit): Mass fail-closed, gateway fail-closed,
@@ -304,7 +316,7 @@ No Mass/READY/Phase 7 arming.
 |------:|------|-----------------|---------------------|
 | 1 | `combo_gates.ts` from `daily_path.ts` | combo-gate **policy** | **DONE** (`combo_gates.ts`; leftover occupancy stayed) |
 | 2 | PIT entry module from `daily_path.ts` | PIT **entry** | **DONE** (`event_entry.ts`) |
-| 3 | leftover occupancy as **policy** | unique-22 lid branches | **HOLD** in `daily_path.ts` (occupancy-equal re-eval required; do not unify with `comboEventGateOk`) |
+| 3 | leftover occupancy as **policy** | unique-22 lid branches | **HOLD** in `daily_path.ts` (do not extract; park reasons in `UNIQUE22_PARK_REASONS`, not YAML; do not unify with `comboEventGateOk`) |
 | 4 | `r2_feature_context` parse vs normalize vs `available_at` vs persist | parse, normalize, policy, then persist I/O | **DONE** (`r2_feature_parse.py`, `r2_feature_normalize.py`, `r2_available_at.py`, `r2_io` get, `r2_feature_mirror.py`; `build_*_context` orchestration stays) |
 | 5 | `coverage_ledger` persist/read vs `evaluate_segment` | persist then evidence | **DONE** (`coverage_ledger_io.py`, `coverage_receipts.py`; COMPLETE predicates stay) |
 | 6 | `snapshot.py` publication gate vs artifact write vs proof vs read | policy, evidence, persist, presentation | **DONE** (`snapshot_publish_policy.py`, `snapshot_coverage_proof.py`, `snapshot_persist.py`, `snapshot_read.py`) |

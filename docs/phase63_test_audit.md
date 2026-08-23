@@ -35,6 +35,12 @@ Helpers under `tests/` that pytest does not collect as modules are marked **supp
 | Worker first-party `*.test.ts` / `*.test.mjs` | 7 | 29 686 |
 | `specs/research_logics/*.yaml` | 2 254 | — |
 
+**Now (this tip):** YAML files are **0**. Compiled catalog n=**2254**
+(`yaml_still_present: false`). Unique22 park reasons live in
+`UNIQUE22_PARK_REASONS`; leftover occupancy stays in `daily_path.ts`.
+The 2 254 row above is Lane 17 start inventory (`1efb405`), not current
+YAML SoT.
+
 Worker tests inventoried (no `node_modules`):
 
 - `platform/workers/research-mass-eval/src/{combo_gates,mdh_collapse,path_broken}.test.ts`

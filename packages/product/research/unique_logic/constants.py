@@ -637,7 +637,11 @@ SPARSE_GATE_COMBOS: tuple[tuple[frozenset[str], str], ...] = (
 
 
 def _occupancy_parent_two_ands() -> tuple[tuple[frozenset[str], str], ...]:
-    """1-AND park and 2-AND thin/park YAML. Nested ANDs cannot be sleeve material."""
+    """1-AND park and 2-AND thin leftover occupancy (catalog, not YAML SoT).
+
+    Park reasons live in UNIQUE22_PARK_REASONS; leftover occupancy stays in
+    daily_path.ts. Nested ANDs cannot be sleeve material.
+    """
     from research.unique_logic.catalog import load_catalog_specs
 
     wanted = NEAR_EMPTY_PARK_IDS | THIN_SLEEVE_EXCLUDE_IDS

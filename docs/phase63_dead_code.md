@@ -65,8 +65,8 @@ eligible under §8.3. **Unsure** = document only.
 | `research.baseline_catalog` | Tests only (`test_baseline_catalog`) | **Keep.** Rejected S1–S5; Mass/READY false. |
 | `research.cost_models` | Yes (`offline.*`, `cost_repo`, mass thicken) | **Keep.** Do not rewrite. Split tests stay split. |
 | `research.options_225_vol_series` | Yes (`eval_loaders_sidecars`, `offline.factory_eval_data`) | **Keep.** Do not rewrite. |
-| daily_path leftover occupancy | Worker `combo_gates.test.ts` + YAML leftover vs `params.gates` | **Keep.** Unique-22 leftover (`event_pre_mom_agree_hold` uses `entryIdx`, not combo `pre_mom`). |
-| unique22 park YAML / `UNIQUE22_PARK_REASONS` | `worker_bodies`, `occupancy_audit`, `eval_summary` | **Keep.** Park reasons live in `UNIQUE22_PARK_REASONS` (`yaml_still_present: false`). |
+| daily_path leftover occupancy | Worker `daily_path.ts` + `combo_gates.test.ts` | **Keep.** Unique-22 leftover (`event_pre_mom_agree_hold` uses `entryIdx`, not combo `pre_mom`). Not YAML. |
+| unique22 park reasons / `UNIQUE22_PARK_REASONS` | `worker_bodies`, `occupancy_audit`, `eval_summary` | **Keep.** Park reasons live in `UNIQUE22_PARK_REASONS`; `yaml_still_present: false`; leftover occupancy stays in `daily_path.ts`. |
 
 `test_unique_logic_event_filters.py::test_worker_leftover_pre_mom_uses_entryidx_not_combo_pre_mom`
 had a Worker `daily_path.ts` grep that **echoed** `combo_gates.test.ts`.
@@ -166,7 +166,7 @@ delete**.
 
 - Delete any production module
 - Flip GO / Mass / READY / Phase 7
-- Add YAML / delete unique22 park YAML
+- Add YAML / delete unique22 park reasons (`UNIQUE22_PARK_REASONS`) or leftover occupancy
 - Invent Dataset COMPLETE
 - Rewrite `cost_models` / `options_225_vol_series`
 - Edit `research-mass-eval` production `src/`
