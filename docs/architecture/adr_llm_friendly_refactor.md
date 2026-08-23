@@ -439,29 +439,30 @@ Layer 4 — HISTORICAL / ARCHIVE (do not treat as current GO)
 
 ### 9.2 Guard pack (must stay green every B1 batch)
 
+Live G0 (modules exist; named pack in [`tests/README.md`](../../tests/README.md)):
+
 ```text
-tests/test_smoke.py
 tests/test_mass_research_gate.py
 tests/test_gateway_fail_closed.py
 tests/test_core_data_boundary.py
 tests/test_features_data_boundary.py
 tests/test_strategies_static_boundaries.py
-tests/test_phase7_gateway.py          # foundation fail-closed
+tests/test_plane_import_boundaries.py
 tests/test_ops_projection_publish_guard.py
-# plus any new test_plane_import_boundaries.py from B1-b
 ```
+
+Historical / **absent** (do **not** recreate): `tests/test_smoke.py`, `tests/test_phase7_gateway.py`. Smoke is this G0 pack, not `unittest tests.test_smoke`.
 
 **Command:**
 
 ```bash
 python -m pytest \
-  tests/test_smoke.py \
   tests/test_mass_research_gate.py \
   tests/test_gateway_fail_closed.py \
   tests/test_core_data_boundary.py \
   tests/test_features_data_boundary.py \
   tests/test_strategies_static_boundaries.py \
-  tests/test_phase7_gateway.py \
+  tests/test_plane_import_boundaries.py \
   tests/test_ops_projection_publish_guard.py \
   -q
 ```
@@ -472,7 +473,7 @@ python -m pytest \
 |------|------|-------|
 | **G0 Guard** | Every commit in B1 | Guard pack above |
 | **G1 Plane** | After touches in one plane | Layout migration §9 plane sets (A/B/C/D) |
-| **G2 Full offline** | End of each B1 sub-batch | `pytest tests/ -q` + `unittest tests.test_smoke` |
+| **G2 Full offline** | End of each B1 sub-batch | `pytest tests/ -q` |
 | **G3 Live** | Never required for B1 | `QP_LIVE=1` operator only |
 
 ### 9.4 Combinatorial reduction policy (B1-d)

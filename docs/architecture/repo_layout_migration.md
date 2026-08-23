@@ -538,6 +538,8 @@ If desired later:
 
 ### 9.2 Minimum pytest sets
 
+Historical batch-exit lists (include absent `tests/test_smoke.py` / `tests/test_phase7_gateway.py`); live G0 is [`tests/README.md`](../../tests/README.md).
+
 **Batch 0 (packaging / helpers)**
 
 ```text

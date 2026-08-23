@@ -2,7 +2,8 @@
 
 **Tip audited:** `1efb405` (`origin/main`)  
 **Worktree:** `p63/lane-17-test-audit`  
-**Mass / READY / Phase 7:** unchanged (NO-GO / not declared / OFF). This lane classifies tests; it does not flip GO.
+**Mass / READY / Phase 7:** unchanged (NO-GO / not declared / OFF). This lane classifies tests; it does not flip GO.  
+**HEAD (`origin/main`):** leftover Worker grep drop from `test_unique_logic_event_filters.py` landed in `ed0a2cb`. Live G0 is `tests/README.md` (no `unittest tests.test_smoke`).
 
 Do **not** treat test count as a win. The suite’s job is named invariants (PIT, receipts, false-COMPLETE, immutable READY, Mass fail-closed). Combinatorial paraphrases and YAML-per-file freezes are cost.
 
@@ -231,7 +232,7 @@ Prefer documenting over mass-delete when the extra check might still be the only
 | COMPLETE-21 / phase35 / cost_models / unique_logic splits | Split-monolith | Keep split | ADR B1-d target (`test_phase35_coverage_matrix.py` was ~1.2k LOC) already landed. |
 | PIT / `available_at` / receipts / false-COMPLETE / READY / `test_baseline_catalog.py` | Invariant | **Never delete** | Lane constraint. |
 
-`tests/README.md` still mentions `unittest tests.test_smoke` — that module is **absent** at this tip. Navigation bug, not a test to add.
+`tests/test_smoke.py` is **absent** (do not recreate). **HEAD:** `tests/README.md` live G0 no longer cites `unittest tests.test_smoke`.
 
 Dirty main (not in `1efb405`) had extra `test_catalog_family.py` / `test_research_capabilities.py` and Worker `capabilities.test.ts` / `candidate.test.ts` / `http.test.ts`. Out of this lane’s tree.
 

@@ -4,7 +4,8 @@
 **HEAD base:** `41003a5` (`origin/main`)  
 **Worktree:** `p63/lane-dead-code`  
 **Mass / READY / Phase 7 / GO:** unchanged (NO-GO / not declared / OFF).  
-**Dataset COMPLETE:** not this lane (do not invent).
+**Dataset COMPLETE:** not this lane (do not invent).  
+**HEAD (`origin/main`):** leftover Worker grep in `test_unique_logic_event_filters.py` dropped in `ed0a2cb` (this lane kept it). Live G0 is `tests/README.md` (no `unittest tests.test_smoke`). Catalog `yaml_still_present: false`.
 
 This note classifies **modules**, not “zero `import pkg.mod` grep hits”.
 Relative imports (`from .engine import run_backtest`) and
@@ -65,11 +66,12 @@ eligible under §8.3. **Unsure** = document only.
 | `research.cost_models` | Yes (`offline.*`, `cost_repo`, mass thicken) | **Keep.** Do not rewrite. Split tests stay split. |
 | `research.options_225_vol_series` | Yes (`eval_loaders_sidecars`, `offline.factory_eval_data`) | **Keep.** Do not rewrite. |
 | daily_path leftover occupancy | Worker `combo_gates.test.ts` + YAML leftover vs `params.gates` | **Keep.** Unique-22 leftover (`event_pre_mom_agree_hold` uses `entryIdx`, not combo `pre_mom`). |
-| unique22 park YAML / `UNIQUE22_PARK_REASONS` | `worker_bodies`, `occupancy_audit`, `eval_summary` | **Keep.** Do not delete park YAML. |
+| unique22 park YAML / `UNIQUE22_PARK_REASONS` | `worker_bodies`, `occupancy_audit`, `eval_summary` | **Keep.** Park reasons live in `UNIQUE22_PARK_REASONS` (`yaml_still_present: false`). |
 
 `test_unique_logic_event_filters.py::test_worker_leftover_pre_mom_uses_entryidx_not_combo_pre_mom`
-has a Worker `daily_path.ts` grep that **echoes** `combo_gates.test.ts`.
-YAML leftover-vs-lifted is unique. This lane **did not** drop either half.
+had a Worker `daily_path.ts` grep that **echoed** `combo_gates.test.ts`.
+YAML leftover-vs-lifted is unique. This lane **did not** drop either half;
+**HEAD:** grep dropped in `ed0a2cb`.
 
 ### Test-only production modules (not D-dead)
 
@@ -83,7 +85,7 @@ importers **on purpose**.
 | `agents.isolated_runner` | `test_process_isolated_runner` | **Keep** allowlisted binaries |
 | `gateway` / `gateway.ai` | `test_gateway_fail_closed` | **Keep** G0 |
 | `research.baseline_catalog` | `test_baseline_catalog` | **Keep** (protected) |
-| `research.catalog_compiler` | `test_catalog_compiler` | **Keep** closed-DSL; YAML not deleted |
+| `research.catalog_compiler` | `test_catalog_compiler` | **Keep** closed-DSL; compiled map is SoT (`yaml_still_present: false`) |
 | `research.catalog_family` | `test_catalog_compiler` (flow-gate ≠ flow family) | **Keep** flow-gate ≠ flow family |
 | `research.evaluation_ir` | `test_evaluation_ir` | **Keep** |
 | `research.research_capabilities` | `test_research_capabilities` | **Keep** deny-by-default |
@@ -139,11 +141,11 @@ Those assertions are **not** a restatement of publish-SQL tests; they hit
 | Candidate | Class | Action | Rationale |
 |-----------|-------|--------|-----------|
 | `tests/test_ops_projection_meta.py` | Representative husk | **Deleted this lane** (merged) | Assertions moved into `test_ops_projection_publish.py`. Same invariants, one file. |
-| `test_unique_logic_event_filters` Worker leftover grep | Dual-runtime echo | **Keep** | Lane constraint: daily_path leftover occupancy. YAML leftover-vs-lifted stays. |
+| `test_unique_logic_event_filters` Worker leftover grep | Dual-runtime echo | **Keep** (this lane); **dropped `ed0a2cb`** | Lane kept daily_path leftover occupancy. YAML leftover-vs-lifted stays. |
 | `test_catalog_yaml_parity` 2 254-file `family:`/`theme:` walks | Freeze file-count | **Document only** | Identity set-equality is invariant. |
 | `test_research_capabilities::test_job_candidate_grade_false_on_partial` | Mild overlap with `test_evaluation_ir` | **Keep both** | Direct function vs IR encode path (`n_collapsed`). |
 | cost_models / complete21 / phase35 splits | Split-monolith | **Keep split** | Prefer not re-merging math tests. |
-| `tests/README.md` `unittest tests.test_smoke` | Nav bug | **Document** | Module absent at this tip (Lane 17). Not a test to add. |
+| `tests/README.md` `unittest tests.test_smoke` | Nav bug | **Document** | Module absent. **HEAD:** live G0 is `tests/README.md` (no `unittest tests.test_smoke`). |
 
 PIT / `available_at` / receipts / false-COMPLETE / immutable READY /
 `test_baseline_catalog.py` / G0 guards / Worker `combo_gates`: **never

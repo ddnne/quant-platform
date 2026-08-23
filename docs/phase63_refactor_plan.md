@@ -5,6 +5,8 @@
 **Status at `5c9b962`:** YAML file-count waste **closed** (compiled map is SoT;
 `yaml_still_present: false`; tracked files ~631). Combo-gate and PIT-entry
 extracts landed. Leftover occupancy **HOLD** in `daily_path.ts`.  
+**Later extracts (tip `origin/main`):** `r2_feature_parse`, `coverage_ledger_io`,
+`snapshot_publish_policy` — **DONE** in §7.  
 **Mass / READY / Phase 7:** unchanged (NO-GO / not declared / OFF)
 
 This is a **refactor plan**, not a rewrite mandate. Later lanes extract
