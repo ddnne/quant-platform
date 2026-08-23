@@ -1,8 +1,19 @@
-"""Catalog YAML vs Python unique_logic identity (no scores, no GO)."""
+"""Catalog vs Python unique_logic identity (no scores, no GO).
+
+Freeze mechanism is the compiler digest pin (n=2254,
+sha256:6ad5ba57dfa41ed9a97e5895d9238040fbb5539b310a2ea4aa349172b6cb8c69)
+plus one identity set-equality. YAML files are 0; compiled map is SoT.
+Do not glob research_logics for family:/theme:/go: or re-count 2254.
+"""
 from __future__ import annotations
 
 from pathlib import Path
 
+from research.catalog_compiler import (
+    assert_compiled_logic_id_sets,
+    catalog_ids_ts_path,
+    catalog_ids_ts_source,
+)
 from research.unique_logic import all_unique_logic_specs, load_catalog_specs
 from research.unique_logic.constants import (
     CF_NEW_THESIS_IDS,
@@ -13,20 +24,16 @@ from research.unique_logic.constants import (
     python_only_gate_logic_ids,
 )
 
-_YAML_DIR = Path(__file__).resolve().parents[1] / "specs" / "research_logics"
-
 
 def test_catalog_yaml_parity_with_python_specs() -> None:
-    """YAML stems == catalog == constants. One identity test; do not pin counts."""
+    """compiler logic_id set == RESEARCH_UNIQUE_LOGIC_IDS == Worker catalog_ids.ts."""
     import inspect
-    import re
 
     from research.unique_logic import catalog as catalog_mod
     from research.unique_logic import constants as constants_mod
     from research.unique_logic.catalog import (
         _COMBO_EVALUATOR,
         _yaml_combo_kind,
-        compiled_migration_ids,
         unique_family_ids_from_yaml,
     )
     from research.unique_logic.constants import (
@@ -44,20 +51,13 @@ def test_catalog_yaml_parity_with_python_specs() -> None:
     catalog = load_catalog_specs()
     catalog_ids = {s["logic_id"] for s in catalog}
     py_ids = {s["logic_id"] for s in all_unique_logic_specs()}
-    yaml_ids = {p.stem for p in _YAML_DIR.glob("*.yaml")}
     combo_ids = {s["logic_id"] for s in NEW_COMBO_LOGIC}
 
-    assert catalog_ids == py_ids == set(RESEARCH_UNIQUE_LOGIC_IDS) == set(
-        compiled_migration_ids()
+    sets = assert_compiled_logic_id_sets()
+    assert catalog_ids == py_ids == sets["migration"] == sets["constants"] == set(
+        RESEARCH_UNIQUE_LOGIC_IDS
     )
-    if yaml_ids:
-        assert yaml_ids == catalog_ids
-        extra_yaml = sorted(yaml_ids - py_ids)
-        assert extra_yaml == []
-        missing_combo_files = sorted(
-            lid for lid in combo_ids if not (_YAML_DIR / f"{lid}.yaml").is_file()
-        )
-        assert missing_combo_files == []
+    assert catalog_ids_ts_path().read_text(encoding="utf-8") == catalog_ids_ts_source()
     assert combo_ids <= catalog_ids
     assert set(CF_NEW_THESIS_IDS) <= catalog_ids
     assert WORKER_ISOLATE_LIMIT_IDS == frozenset()
@@ -118,10 +118,7 @@ def test_catalog_yaml_parity_with_python_specs() -> None:
         | ADAPTIVE_LOGIC_IDS
         | CS_LOGIC_IDS
     )
-    if yaml_ids:
-        assert yaml_ids - combo_ids == set(original)
-    else:
-        assert original <= catalog_ids
+    assert original <= catalog_ids
     assert combo_ids == set(CF_NEW_THESIS_IDS)
     assert event | surprise_xs == set(CF_NEW_EVENT_THESIS_IDS)
     assert cs == set(CF_NEW_CS_THESIS_IDS)
@@ -161,21 +158,6 @@ def test_catalog_yaml_parity_with_python_specs() -> None:
         assert flag in header
         quoted = {f'"{lid}"' for lid in original} | {f"'{lid}'" for lid in original}
         assert not any(q in header for q in quoted)
-    yaml_files = list(_YAML_DIR.glob("*.yaml"))
-    if yaml_files:
-        for yml in yaml_files:
-            body = yml.read_text(encoding="utf-8")
-            assert re.search(r"(?m)^go:\s*true\s*$", body) is None
-            if yml.stem in original:
-                assert re.search(r"(?m)^family:\s+\S+", body)
-                assert re.search(r"(?m)^generation_enabled:\s*true\s*$", body) is None
-            else:
-                assert re.search(r"(?m)^family:", body) is None
-            assert re.search(r"(?m)^theme:", body) is None
-    else:
-        for s in catalog:
-            assert s.get("go") is not True
-            assert s.get("generation_enabled") is not True
 
 
 def test_combo_yaml_gates_cs_gate_side_match_specs() -> None:

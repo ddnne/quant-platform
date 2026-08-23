@@ -1,8 +1,6 @@
 """Active catalog vs legacy identity registry. Does not delete IDs. Not GO."""
 from __future__ import annotations
 
-import json
-
 from research import catalog_active
 from research.catalog_active import (
     active_logic_ids,
@@ -12,11 +10,8 @@ from research.catalog_active import (
 )
 from research.catalog_compiler import (
     COMPILER_VERSION,
-    MANIFEST_NAME,
     SPLIT_VERSION,
     assert_catalog_ids_emit_frozen,
-    catalog_artifact_dir,
-    compile_catalog,
 )
 from research.catalog_compiler import (
     active_logic_ids as compiler_active_logic_ids,
@@ -30,8 +25,7 @@ from research.catalog_compiler import (
 from research.catalog_compiler import (
     pilot_candidates as compiler_pilot_candidates,
 )
-from research.eval_flags import CATALOG_YAML_COUNT_AT_STOP
-from research.unique_logic.catalog import catalog_dir, compiled_migration_ids, load_catalog_specs
+from research.unique_logic.catalog import compiled_migration_ids, load_catalog_specs
 from research.unique_logic.worker_bodies import (
     UNIQUE22_PARK_REASONS,
     unique22_occupancy_equal_lifted,
@@ -41,23 +35,13 @@ from research.unique_logic.worker_bodies import (
 
 
 def test_freeze_n_compiled_still_2254() -> None:
-    pack = compile_catalog()
+    # Freeze n=2254 and digest pin live in test_catalog_compiler (compiler emit).
     freeze = assert_catalog_ids_emit_frozen()
-    dest = catalog_artifact_dir()
-    manifest = json.loads((dest / MANIFEST_NAME).read_text(encoding="utf-8"))
-    n = int(CATALOG_YAML_COUNT_AT_STOP)
-    assert pack["n"] == n == 2254
-    assert freeze["n_digest"] == freeze["freeze"] == freeze["n_logic_ids"] == 2254
-    assert manifest["n"] == 2254
-    assert manifest["digest"] == pack["digest"]
-    assert pack["version"] == manifest["version"] == COMPILER_VERSION
-    assert COMPILER_VERSION == "research_catalog_compiler/v1"
-    assert SPLIT_VERSION == "research_catalog_compiler/v2"
-    assert pack["go"] is False
+    assert freeze["ok"] is True
     assert freeze["go"] is False
     assert freeze["n_yaml"] == 0
-    assert not any(catalog_dir().glob("*.yaml"))
-    assert len(compiled_migration_ids()) == 2254
+    assert COMPILER_VERSION == "research_catalog_compiler/v1"
+    assert SPLIT_VERSION == "research_catalog_compiler/v2"
 
 
 def test_active_legacy_partition_compiled() -> None:
@@ -67,7 +51,7 @@ def test_active_legacy_partition_compiled() -> None:
     assert active < compiled
     assert active | legacy == compiled
     assert active.isdisjoint(legacy)
-    assert len(active) + len(legacy) == 2254
+    assert len(active) + len(legacy) == len(compiled)
     assert compiler_active_logic_ids() == active
     assert compiler_legacy_logic_ids() == legacy
 

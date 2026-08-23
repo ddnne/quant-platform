@@ -11,7 +11,6 @@ from research.catalog_compiler import (
     MANIFEST_NAME,
     MIGRATION_NAME,
     assert_catalog_ids_emit_frozen,
-    assert_compiled_logic_id_sets,
     catalog_artifact_dir,
     catalog_ids_ts_path,
     catalog_ids_ts_source,
@@ -19,14 +18,18 @@ from research.catalog_compiler import (
     compile_row,
 )
 from research.eval_flags import CATALOG_AND_PLUS_N_STOPPED, CATALOG_YAML_COUNT_AT_STOP
-from research.unique_logic.catalog import catalog_dir
-from research.unique_logic.constants import RESEARCH_UNIQUE_LOGIC_IDS
+
+# Freeze digest for compiled n=2254. Do not retune. Identity set-equality is
+# tests/test_catalog_yaml_parity.py (compiler == constants == catalog_ids.ts).
+_FROZEN_CATALOG_DIGEST = (
+    "sha256:6ad5ba57dfa41ed9a97e5895d9238040fbb5539b310a2ea4aa349172b6cb8c69"
+)
 
 
 def test_compiler_row_count_matches_yaml_freeze() -> None:
     pack = compile_catalog()
     assert pack["n"] == int(CATALOG_YAML_COUNT_AT_STOP)
-    assert pack["digest"].startswith("sha256:")
+    assert pack["digest"] == _FROZEN_CATALOG_DIGEST
     assert pack["go"] is False
     ids = [r["logic_id"] for r in pack["rows"]]
     assert len(ids) == len(set(ids))
@@ -57,7 +60,7 @@ def test_persisted_artifacts_match_live_digest() -> None:
     dest = catalog_artifact_dir()
     manifest = json.loads((dest / MANIFEST_NAME).read_text(encoding="utf-8"))
     assert manifest["n"] == pack["n"]
-    assert manifest["digest"] == pack["digest"]
+    assert manifest["digest"] == pack["digest"] == _FROZEN_CATALOG_DIGEST
     assert manifest["version"] == pack["version"] == COMPILER_VERSION
     assert pack["yaml_still_present"] is manifest["yaml_still_present"]
     assert manifest["go"] is False
@@ -94,15 +97,6 @@ def test_persisted_artifacts_match_live_digest() -> None:
         assert persisted["generation_enabled"] == live["generation_enabled"]
 
 
-def test_yaml_stems_lock_to_compiled_migration_ids() -> None:
-    """compiled migration.jsonl == RESEARCH_UNIQUE_LOGIC_IDS. YAML optional; one identity pass."""
-    sets = assert_compiled_logic_id_sets()
-    assert sets["migration"] == sets["constants"] == set(RESEARCH_UNIQUE_LOGIC_IDS)
-    if sets["yaml"]:
-        assert sets["yaml"] == sets["migration"]
-    assert catalog_dir().is_dir()
-
-
 def test_compiler_source_does_not_exec_or_eval() -> None:
     import research.catalog_compiler as mod
 
@@ -121,10 +115,10 @@ def test_catalog_ids_emit_owned_by_compiler() -> None:
     assert freeze["go"] is False
     assert CATALOG_AND_PLUS_N_STOPPED is True
     assert freeze["n_digest"] == freeze["freeze"] == freeze["n_logic_ids"] == 2254
-    if freeze["n_yaml"] > 0:
-        assert freeze["n_yaml"] == 2254
-    else:
-        assert freeze["n_yaml"] == 0
+    assert freeze["n_yaml"] == 0
+    dest = catalog_artifact_dir()
+    manifest = json.loads((dest / MANIFEST_NAME).read_text(encoding="utf-8"))
+    assert manifest["digest"] == _FROZEN_CATALOG_DIGEST
     path = catalog_ids_ts_path()
     generated = catalog_ids_ts_source()
     assert path.read_text(encoding="utf-8") == generated
