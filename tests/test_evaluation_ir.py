@@ -9,6 +9,7 @@ from typing import Any, Mapping
 import pytest
 
 from research import evaluation_ir as ir_module
+from research import evaluation_ir_emit as emit_module
 from research.candidate_policy import job_candidate_grade
 from research.evaluation_ir import (
     ALLOWED_FIELDS,
@@ -82,6 +83,18 @@ def test_encode_keys_match_schema_properties() -> None:
     gen = ir_module._CODEC_PY
     assert ir_module.encode_evaluation_ir is gen.encode_evaluation_ir
     assert ir_module.decode_evaluation_ir is gen.decode_evaluation_ir
+    assert ir_module.evaluation_ir_codec_ts_source is emit_module.evaluation_ir_codec_ts_source
+    assert ir_module.evaluation_ir_codec_py_source is emit_module.evaluation_ir_codec_py_source
+    assert (
+        ir_module.evaluation_ir_allowed_fields_ts_source
+        is emit_module.evaluation_ir_allowed_fields_ts_source
+    )
+    assert ir_module.assert_evaluation_ir_codec_ts_frozen is emit_module.assert_evaluation_ir_codec_ts_frozen
+    assert ir_module.assert_evaluation_ir_codec_py_frozen is emit_module.assert_evaluation_ir_codec_py_frozen
+    assert (
+        ir_module.assert_evaluation_ir_allowed_fields_ts_frozen
+        is emit_module.assert_evaluation_ir_allowed_fields_ts_frozen
+    )
     assert tuple(gen.ENCODE_KEYS) == schema_keys
     assert_evaluation_ir_encode_keys_match_schema()
     worker_src = evaluation_ir_ts_path().read_text(encoding="utf-8")
