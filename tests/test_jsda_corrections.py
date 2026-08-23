@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from ingestion.common.http import HttpResponse
@@ -117,9 +118,18 @@ def _seed_original(store):
     store.upsert("jsda_otc_bond_reference_prices", rows)
 
 
+def _inject_tmp_receipt_authority(monkeypatch, receipt_ed25519_keys):
+    """Bind governed writes to the tmp Ed25519 fixture; never production keys."""
+    monkeypatch.setattr(
+        "storage.trusted_receipt.load_signing_key",
+        lambda **kwargs: receipt_ed25519_keys.signing_key,
+    )
+
+
 def test_otc_correction_revision_no_lookahead_provenance_and_idempotency(
-    tmp_path,
+    tmp_path, monkeypatch, receipt_ed25519_keys
 ):
+    _inject_tmp_receipt_authority(monkeypatch, receipt_ed25519_keys)
     store = SqliteStore(tmp_path / "corrections.sqlite")
     _seed_original(store)
     client = _CorrectionClient()
@@ -177,6 +187,9 @@ def test_otc_correction_revision_no_lookahead_provenance_and_idempotency(
     )
     assert len(receipts) == 1 and receipts[0]["status"] == "SUCCESS"
     assert receipts[0]["raw_row_count"] == receipts[0]["structured_row_count"] == 1
+    evidence = json.loads(receipts[0]["digests_json"])
+    assert evidence.get("eligibility") == "TRUSTED_COLLECTION"
+    assert str(evidence.get("signature") or "").startswith("ed25519:")
 
     rerun = run_otc_reference_corrections(
         http=client,
@@ -222,8 +235,9 @@ def test_otc_correction_without_authority_does_not_apply(tmp_path, monkeypatch):
 
 
 def test_otc_correction_rerun_does_not_double_apply_when_not_complete(
-    tmp_path, monkeypatch,
+    tmp_path, monkeypatch, receipt_ed25519_keys
 ):
+    _inject_tmp_receipt_authority(monkeypatch, receipt_ed25519_keys)
     store = SqliteStore(tmp_path / "corrections-resume.sqlite")
     _seed_original(store)
     client = _CorrectionClient()

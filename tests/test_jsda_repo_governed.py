@@ -152,7 +152,18 @@ def test_parse_repo_xls_uses_xlrd_and_excel_serial_dates(monkeypatch):
     assert records[-1]["as_of_date"] == "2025-04-02"
 
 
-def test_tokyo_repo_runner_raw_receipt_coverage_and_resume(tmp_path, monkeypatch):
+def _inject_tmp_receipt_authority(monkeypatch, receipt_ed25519_keys):
+    """Bind governed writes to the tmp Ed25519 fixture; never production keys."""
+    monkeypatch.setattr(
+        "storage.trusted_receipt.load_signing_key",
+        lambda **kwargs: receipt_ed25519_keys.signing_key,
+    )
+
+
+def test_tokyo_repo_runner_raw_receipt_coverage_and_resume(
+    tmp_path, monkeypatch, receipt_ed25519_keys
+):
+    _inject_tmp_receipt_authority(monkeypatch, receipt_ed25519_keys)
     _install_workbook(monkeypatch)
     client = _RepoArchiveClient()
     store = SqliteStore(tmp_path / "repo.sqlite")
@@ -180,6 +191,8 @@ def test_tokyo_repo_runner_raw_receipt_coverage_and_resume(tmp_path, monkeypatch
     assert evidence["source_url"].endswith("trrts.xls")
     assert evidence["fetched_at"] == "2025-04-02T13:00:00+09:00"
     assert Path(evidence["raw_path"]).read_bytes() == client.workbook_bytes
+    assert evidence.get("eligibility") == "TRUSTED_COLLECTION"
+    assert str(evidence.get("signature") or "").startswith("ed25519:")
     coverage = read_dataset_coverage(store.path, dataset=TOKYO_REPO_DATASET)
     assert len(coverage) == 1 and coverage[0]["status"] == "COMPLETE"
 

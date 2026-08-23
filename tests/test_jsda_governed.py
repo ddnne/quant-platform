@@ -242,7 +242,18 @@ class _ArchiveClient:
         return HttpResponse(404, {}, b"", url)
 
 
-def test_otc_archive_backfill_receipts_raw_resume_and_missing_partial(tmp_path):
+def _inject_tmp_receipt_authority(monkeypatch, receipt_ed25519_keys):
+    """Bind governed writes to the tmp Ed25519 fixture; never production keys."""
+    monkeypatch.setattr(
+        "storage.trusted_receipt.load_signing_key",
+        lambda **kwargs: receipt_ed25519_keys.signing_key,
+    )
+
+
+def test_otc_archive_backfill_receipts_raw_resume_and_missing_partial(
+    tmp_path, monkeypatch, receipt_ed25519_keys
+):
+    _inject_tmp_receipt_authority(monkeypatch, receipt_ed25519_keys)
     store = SqliteStore(tmp_path / "structured.sqlite")
     client = _ArchiveClient()
     report = run_otc_reference_backfill(
@@ -274,6 +285,8 @@ def test_otc_archive_backfill_receipts_raw_resume_and_missing_partial(tmp_path):
         assert raw_path.read_bytes() == client.csv
         assert row["observed_items"] == row["expected_items"] == 1
         assert row["raw_row_count"] == row["structured_row_count"] == 2
+        assert digests.get("eligibility") == "TRUSTED_COLLECTION"
+        assert str(digests.get("signature") or "").startswith("ed25519:")
     missing_digests = __import__("json").loads(missing[0]["digests_json"])
     assert missing_digests["failure_kind"] == "MISSING_EXPECTED_SEGMENT"
 
@@ -348,19 +361,65 @@ def test_otc_archive_without_authority_does_not_write_structured(tmp_path, monke
     store.close()
 
 
-def test_governed_jsda_receipt_rejects_empty_raw_success(tmp_path, monkeypatch):
+def test_otc_archive_unsigned_stays_partial_without_complete_resume(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(
+        "storage.trusted_receipt.load_signing_key",
+        lambda **kwargs: None,
+    )
+    store = SqliteStore(tmp_path / "unsigned-resume.sqlite")
+    client = _ArchiveClient()
+    report = run_otc_reference_backfill(
+        http=client,
+        store=store,
+        data_base=tmp_path,
+        from_year=2002,
+        to_year=2002,
+        checked_at="2025-04-02T10:00:00+09:00",
+    )
+    assert (report.completed, report.resumed, report.failed) == (0, 0, 3)
+    assert store.count("jsda_otc_bond_reference_prices") == 0
+    receipts = read_collection_receipts(
+        store.path, dataset="jsda_otc_bond_reference_prices"
+    )
+    from ingestion.jsda.archive import _receipt_objects
+
+    policy = coverage_contract_for("jsda_otc_bond_reference_prices")
+    status, evaluated = evaluate_required_segments(
+        policy, report.required_segments, _receipt_objects(receipts)
+    )
+    assert status == "PARTIAL"
+    assert [item[2] for item in evaluated] == ["PARTIAL", "PARTIAL", "PARTIAL"]
+    coverage = read_dataset_coverage(
+        store.path, dataset="jsda_otc_bond_reference_prices"
+    )
+    assert coverage and coverage[0]["status"] == "PARTIAL"
+
+    second = run_otc_reference_backfill(
+        http=client,
+        store=store,
+        data_base=tmp_path,
+        from_year=2002,
+        to_year=2002,
+        checked_at="2025-04-02T10:00:01+09:00",
+    )
+    assert (second.completed, second.resumed, second.failed) == (0, 0, 3)
+    assert store.count("jsda_otc_bond_reference_prices") == 0
+    assert sum(url.endswith("20020802_reference.csv") for url in client.calls) == 2
+    assert sum(url.endswith("20020805_reference.csv") for url in client.calls) == 2
+    store.close()
+
+
+def test_governed_jsda_receipt_rejects_empty_raw_success(
+    tmp_path, receipt_ed25519_keys
+):
     from ingestion.jsda.receipts import record_governed_receipt
     from storage.coverage_ledger import RequiredCoverageSegment
-    from storage.receipt_crypto import ReceiptSigningKey, generate_keypair
     from storage.trusted_receipt import SignedReceiptAuthority
-    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-    from cryptography.hazmat.primitives.serialization import load_pem_private_key
 
-    priv_pem, _pub, kid = generate_keypair(key_id="jsda-empty-raw")
-    priv = load_pem_private_key(priv_pem, password=None)
-    assert isinstance(priv, Ed25519PrivateKey)
     authority = SignedReceiptAuthority(
-        signing_key=ReceiptSigningKey(key_id=kid, _private=priv)
+        signing_key=receipt_ed25519_keys.signing_key
     )
     store = SqliteStore(tmp_path / "empty-raw.sqlite")
     required = RequiredCoverageSegment(
