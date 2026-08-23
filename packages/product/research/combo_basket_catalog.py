@@ -111,6 +111,17 @@ MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
         ),
     },
     {
+        "basket_id": "basket_theme_invert",
+        "rule": "invert_print_sleeve",
+        "primary": False,
+        "members": (
+            "event_invert_positive_eps",
+            "event_afterclose_invert",
+            "event_ac_inv_peps",
+            "event_invert_ta_up",
+        ),
+    },
+    {
         "basket_id": "basket_event_fund",
         "rule": "event_fund_cross",
         "primary": True,
