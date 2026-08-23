@@ -189,9 +189,15 @@ def test_eval_tracks_are_two_and_not_head_n() -> None:
     assert large["not_a_pass"] is True
     assert infer_eval_track(max_codes=80) == EVAL_TRACK_MID_N
     assert infer_eval_track(max_codes=100) == EVAL_TRACK_LIQ_LARGE
-    from research.eval_tracks import EVENT_THREE_AND_PLUS_N_STOPPED, NEXT_RESEARCH_QUEUE
+    from research.eval_tracks import (
+        CURRENT_EVAL_WAVE,
+        EVENT_THREE_AND_PLUS_N_STOPPED,
+        NEXT_RESEARCH_QUEUE,
+    )
 
     assert EVENT_THREE_AND_PLUS_N_STOPPED is True
+    assert CURRENT_EVAL_WAVE
+    assert "go" not in CURRENT_EVAL_WAVE.lower()
     assert len(NEXT_RESEARCH_QUEUE) >= 5
     assert all(q.get("not_a_pass") is True for q in NEXT_RESEARCH_QUEUE)
     assert all(q.get("go") is not True for q in NEXT_RESEARCH_QUEUE)

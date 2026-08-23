@@ -533,7 +533,7 @@ def test_write_eval_wave_pack_local_only(tmp_path) -> None:
     from research.occupancy_audit import write_eval_wave_pack
 
     out = write_eval_wave_pack(
-        {"mid_n_explore": {}, "liq_large": {}},
+        {"mid_n_explore": {"x": 0.4}, "liq_large": {"x": 0.41}},
         wave="test24ep",
         root=tmp_path,
         put_r2=False,
@@ -541,9 +541,84 @@ def test_write_eval_wave_pack_local_only(tmp_path) -> None:
     assert out["go"] is False
     assert out["not_a_pass"] is True
     assert out["n_unique22_parked"] >= 1
+    assert out["occupancy_maps_job"] == "eval-occupancy-maps-test24ep"
+    assert (tmp_path / "eval-occupancy-maps-test24ep.json").is_file()
     assert (tmp_path / "eval-occupancy-drift-test24ep.json").is_file()
     assert (tmp_path / "eval-unique22-park-test24ep.json").is_file()
     assert (tmp_path / "eval-reconstitution-plan-test24ep.json").is_file()
+
+
+def test_merge_occupancy_cell_dumps_later_mtime_wins(tmp_path) -> None:
+    import json
+    import time
+
+    from research.occupancy_audit import merge_occupancy_cell_dumps
+
+    old = [{"logic_id": "x", "occupancy": 0.2}]
+    new = [{"logic_id": "x", "occupancy": 0.5}]
+    older = tmp_path / "eval-occupancy-audit-z-mid_n_explore_cells.json"
+    newer = tmp_path / "eval-occupancy-audit-a-mid_n_explore_cells.json"
+    older.write_text(json.dumps(old), encoding="utf-8")
+    time.sleep(0.05)
+    newer.write_text(json.dumps(new), encoding="utf-8")
+    (tmp_path / "eval-occupancy-audit-a-liq_large_cells.json").write_text(
+        json.dumps(new), encoding="utf-8"
+    )
+    out = merge_occupancy_cell_dumps(tmp_path)
+    assert out["mid_n_explore"]["x"] == 0.5
+    assert out["liq_large"]["x"] == 0.5
+
+
+def test_load_ops_occupancy_prefers_maps_over_cells(tmp_path) -> None:
+    import json
+
+    from research.occupancy_audit import load_ops_occupancy, write_eval_wave_pack
+
+    cells = [{"logic_id": "old", "occupancy": 0.2}]
+    (tmp_path / "eval-occupancy-audit-x-mid_n_explore_cells.json").write_text(
+        json.dumps(cells), encoding="utf-8"
+    )
+    (tmp_path / "eval-occupancy-audit-x-liq_large_cells.json").write_text(
+        json.dumps(cells), encoding="utf-8"
+    )
+    write_eval_wave_pack(
+        {"mid_n_explore": {"new": 0.3}, "liq_large": {"new": 0.31}},
+        wave="testmaps",
+        root=tmp_path,
+        put_r2=False,
+    )
+    occ = load_ops_occupancy(tmp_path)
+    assert occ["mid_n_explore"]["new"] == 0.3
+    assert "old" not in occ["mid_n_explore"]
+
+
+def test_run_eval_wave_local_stub_never_writes(tmp_path) -> None:
+    from research.occupancy_audit import run_eval_wave
+
+    def _invoke(**_kwargs):
+        return {
+            "ok": False,
+            "error": "llm_failed",
+            "n_adoptable": 0,
+            "proposals": [],
+            "reviews": [],
+        }
+
+    out = run_eval_wave(
+        {"mid_n_explore": {"x": 0.4}, "liq_large": {"x": 0.4}},
+        wave="test24eq",
+        root=tmp_path,
+        put_r2=False,
+        propose=True,
+        invoke=_invoke,
+    )
+    assert out["go"] is False
+    assert out["catalog_written"] is False
+    assert out["auto_inject"] is False
+    assert out["propose"]["written"] is False
+    assert out["propose"]["llm_failed_not_soup"] is True
+    assert (tmp_path / "eval-occupancy-maps-test24eq.json").is_file()
+    assert (tmp_path / "eval-cf-propose-test24eq.json").is_file()
 
 
 def test_merge_daily_path_cells_for_ids_later_file_wins(tmp_path) -> None:

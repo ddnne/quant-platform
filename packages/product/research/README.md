@@ -13,6 +13,7 @@ Research control plane (Phase 7 stays OFF): readiness attestation, experiment pl
 - **Thesis count:** `research.unique_logic.worker_bodies.countable_thesis_ids` (catalog + Worker body; YAML clones do not count).
 - **Catalog:** `specs/research_logics/*.yaml`. Worker ID arrays: generated `platform/workers/research-mass-eval/src/catalog_ids.ts` (leftover occupancy stays in `daily_path.ts`).
 - **Propose:** `POST /v1/propose-thesis` (`research.cf_propose_thesis`; Workers AI 70B then glm-4.7-flash then 8B CF-internal; LLM failure is `ok:false`/`llm_failed`, not stub-as-success; review_proposal_row; no auto-inject).
+- **Eval wave one-call:** `research.occupancy_audit.run_eval_wave` writes inventory / usable-read / series / cost-risk / jsonl / occupancy maps / drift / unique22 / reconstitution detect + propose write-gate. Never injects. Does not fan out occupancy. YAML remains catalog SoT.
 - **Smoke codes:** `research.eval_universe.HARNESS_SMOKE_CODES`. Not the eval entry.
 - **`cost_models.py` / `options_225_vol_series.py`:** live math. Do not fake-split.
 

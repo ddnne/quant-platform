@@ -97,7 +97,7 @@ data_contracts = ["*.json"]
 | `gateway/` | AI gateway | `ai` |
 | `knowledge/` | Knowledge store | `store` |
 | `ops/` | Ops helpers | `backfill_planner`, `projection_meta` |
-| `research/` | Research artifacts / readiness | `artifacts`, `evaluation`, `readiness`, `scheduler` |
+| `research/` | Research artifacts / readiness | `artifacts`, `occupancy_audit`, `readiness`, `scheduler` |
 | `selection/` | Screening / budget | `screen`, `decision`, `budget_ledger` |
 
 ### 2.3 Non-package layout nodes

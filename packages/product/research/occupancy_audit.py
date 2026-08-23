@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 from research.unique_logic.worker_bodies import (
     classify_occupancy_pair,
@@ -31,10 +31,13 @@ def merge_occupancy_cell_dumps(
     *,
     glob: str = "eval-occupancy-audit-*_cells.json",
 ) -> dict[str, dict[str, float]]:
-    """Merge occupancy-audit cell dumps into mid/liq maps. Later files win."""
+    """Merge occupancy-audit cell dumps into mid/liq maps. Later mtime wins."""
     mid: dict[str, float] = {}
     liq: dict[str, float] = {}
-    for path in sorted(Path(root).glob(glob)):
+    paths = sorted(
+        Path(root).glob(glob), key=lambda p: (p.stat().st_mtime, p.name)
+    )
+    for path in paths:
         occ = occupancy_from_cells_file(path)
         name = path.name
         if "liq_large" in name:
@@ -42,6 +45,74 @@ def merge_occupancy_cell_dumps(
         elif "mid_n_explore" in name:
             mid.update(occ)
     return {"mid_n_explore": mid, "liq_large": liq}
+
+
+def _ops_root(root: Path | None) -> Path:
+    if root is not None:
+        ops = Path(root)
+        ops.mkdir(parents=True, exist_ok=True)
+        return ops
+    from qp_paths import repo_root
+
+    ops = repo_root() / "data" / "ops" / "research_eval"
+    ops.mkdir(parents=True, exist_ok=True)
+    return ops
+
+
+def _float_occ_map(raw: Mapping[str, Any] | None) -> dict[str, float]:
+    out: dict[str, float] = {}
+    for key, val in dict(raw or {}).items():
+        lid = str(key).strip()
+        if not lid:
+            continue
+        try:
+            out[lid] = float(val)
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def load_ops_occupancy(root: str | Path | None = None) -> dict[str, dict[str, float]]:
+    """Latest occupancy_maps json, else cell dumps. Does not fan out. Not GO."""
+    from qp_paths import repo_root
+
+    ops = Path(root) if root is not None else repo_root() / "data" / "ops" / "research_eval"
+    maps = sorted(
+        ops.glob("eval-occupancy-maps-*.json"),
+        key=lambda p: (p.stat().st_mtime, p.name),
+    )
+    for path in reversed(maps):
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(raw, dict):
+            continue
+        mid = _float_occ_map(raw.get("mid_n_explore"))
+        liq = _float_occ_map(raw.get("liq_large"))
+        if mid and liq:
+            return {"mid_n_explore": mid, "liq_large": liq}
+    return merge_occupancy_cell_dumps(ops)
+
+
+def _put_eval_bytes(
+    *,
+    job: str,
+    r2name: str,
+    body: bytes,
+    put_r2: bool,
+) -> dict[str, Any] | None:
+    if not put_r2:
+        return None
+    from research.cf_mass_eval_stage import RESEARCH_ARTIFACT_BUCKET
+    from research.r2_io import default_r2_put
+
+    put = default_r2_put(
+        RESEARCH_ARTIFACT_BUCKET,
+        f"research/eval/job={job}/{r2name}",
+        body,
+    )
+    return {"job": job, "status": put.get("status"), "bytes": put.get("bytes")}
 
 
 def _track_from_cells_name(name: str) -> str | None:
@@ -231,12 +302,10 @@ def write_usable_eval_snapshot(
     put_r2: bool = False,
 ) -> dict[str, Any]:
     """Write inventory / usable-read / cost-risk / jsonl. Optional R2. Not GO."""
-    from qp_paths import repo_root
     from research.unique_logic.catalog import write_combo_thesis_jsonl
 
     snap = usable_eval_snapshot(occupancy_by_track)
-    ops = Path(root) if root is not None else repo_root() / "data" / "ops" / "research_eval"
-    ops.mkdir(parents=True, exist_ok=True)
+    ops = _ops_root(root)
     inv_job = f"eval-usable-inventory-{wave}"
     read_job = f"eval-usable-inventory-read-{wave}"
     series_job = f"eval-usable-series-{wave}"
@@ -256,24 +325,22 @@ def write_usable_eval_snapshot(
         path.write_text(body, encoding="utf-8")
     jsonl = write_combo_thesis_jsonl(ops / f"{jsonl_job}.jsonl")
     puts: list[dict[str, Any]] = []
-    if put_r2:
-        from research.cf_mass_eval_stage import RESEARCH_ARTIFACT_BUCKET
-        from research.r2_io import default_r2_put
-
-        mapping = (
-            (inv_job, f"{inv_job}.json", "inventory.json"),
-            (read_job, f"{read_job}.json", "usable_read.json"),
-            (series_job, f"{series_job}.json", "series.json"),
-            (cost_job, f"{cost_job}.json", "cost_risk.json"),
-            (jsonl_job, f"{jsonl_job}.jsonl", "combo_thesis.jsonl"),
+    mapping = (
+        (inv_job, f"{inv_job}.json", "inventory.json"),
+        (read_job, f"{read_job}.json", "usable_read.json"),
+        (series_job, f"{series_job}.json", "series.json"),
+        (cost_job, f"{cost_job}.json", "cost_risk.json"),
+        (jsonl_job, f"{jsonl_job}.jsonl", "combo_thesis.jsonl"),
+    )
+    for job, fname, r2name in mapping:
+        put = _put_eval_bytes(
+            job=job,
+            r2name=r2name,
+            body=(ops / fname).read_bytes(),
+            put_r2=put_r2,
         )
-        for job, fname, r2name in mapping:
-            put = default_r2_put(
-                RESEARCH_ARTIFACT_BUCKET,
-                f"research/eval/job={job}/{r2name}",
-                (ops / fname).read_bytes(),
-            )
-            puts.append({"job": job, "status": put.get("status"), "bytes": put.get("bytes")})
+        if put:
+            puts.append(put)
     return {
         "wave": wave,
         "n_usable": snap["inventory"]["n_usable"],
@@ -300,7 +367,6 @@ def write_eval_wave_pack(
 
     Does not fan out occupancy. Does not apply reconstitution. Does not inject.
     """
-    from qp_paths import repo_root
     from research.combo_basket_catalog import active_reconstitution_plan
     from research.unique_logic.worker_bodies import (
         UNIQUE22_PARK_REASONS,
@@ -312,7 +378,7 @@ def write_eval_wave_pack(
     snap = write_usable_eval_snapshot(
         occupancy_by_track, wave=wave, root=root, put_r2=put_r2
     )
-    ops = Path(root) if root is not None else repo_root() / "data" / "ops" / "research_eval"
+    ops = _ops_root(root)
     drift = occupancy_recorded_drift(
         occupancy_by_track, sorted(countable_thesis_ids())
     )
@@ -321,7 +387,19 @@ def write_eval_wave_pack(
     lifted = unique22_occupancy_equal_lifted()
     u22_job = f"eval-unique22-park-{wave}"
     recon_job = f"eval-reconstitution-plan-{wave}"
+    maps_job = f"eval-occupancy-maps-{wave}"
+    mid = _float_occ_map(occupancy_by_track.get("mid_n_explore"))
+    liq = _float_occ_map(occupancy_by_track.get("liq_large"))
     extras = {
+        maps_job: {
+            "job_id": maps_job,
+            "n_mid": len(mid),
+            "n_liq": len(liq),
+            "mid_n_explore": mid,
+            "liq_large": liq,
+            "go": False,
+            "not_a_pass": True,
+        },
         drift_job: {
             **dict(drift),
             "job_id": drift_job,
@@ -355,6 +433,7 @@ def write_eval_wave_pack(
         },
     }
     r2_names = {
+        maps_job: "occupancy_maps.json",
         drift_job: "drift.json",
         u22_job: "park.json",
         recon_job: "reconstitution_plan.json",
@@ -364,23 +443,112 @@ def write_eval_wave_pack(
         path = ops / f"{job}.json"
         raw = json.dumps(body, ensure_ascii=True, default=str)
         path.write_text(raw, encoding="utf-8")
-        if put_r2:
-            from research.cf_mass_eval_stage import RESEARCH_ARTIFACT_BUCKET
-            from research.r2_io import default_r2_put
-
-            put = default_r2_put(
-                RESEARCH_ARTIFACT_BUCKET,
-                f"research/eval/job={job}/{r2_names[job]}",
-                raw.encode("utf-8"),
-            )
-            puts.append({"job": job, "status": put.get("status"), "bytes": put.get("bytes")})
+        put = _put_eval_bytes(
+            job=job,
+            r2name=r2_names[job],
+            body=raw.encode("utf-8"),
+            put_r2=put_r2,
+        )
+        if put:
+            puts.append(put)
     return {
         **snap,
+        "occupancy_maps_job": maps_job,
         "drift_job": drift_job,
         "unique22_job": u22_job,
         "reconstitution_job": recon_job,
         "n_unique22_parked": len(park),
         "n_unique22_lifted": len(lifted),
+        "n_mid": len(mid),
+        "n_liq": len(liq),
+        "puts": puts,
+        "go": False,
+        "not_a_pass": True,
+    }
+
+
+def run_eval_wave(
+    occupancy_by_track: Mapping[str, Mapping[str, float]] | None = None,
+    *,
+    wave: str | None = None,
+    root: Path | None = None,
+    put_r2: bool = False,
+    propose: bool = True,
+    propose_n: int = 3,
+    invoke: Callable[..., Any] | None = None,
+) -> dict[str, Any]:
+    """One-call wave: occupancy maps + pack + propose write-gate. Never injects.
+
+    Does not fan out occupancy. Does not apply reconstitution. Does not GO.
+    """
+    from research.cf_mass_eval_job import CfMassEvalError
+    from research.eval_tracks import CURRENT_EVAL_WAVE
+
+    wave_id = str(wave or CURRENT_EVAL_WAVE).strip()
+    if occupancy_by_track is None:
+        occ: dict[str, dict[str, float]] = load_ops_occupancy(root)
+    else:
+        occ = {
+            "mid_n_explore": _float_occ_map(occupancy_by_track.get("mid_n_explore")),
+            "liq_large": _float_occ_map(occupancy_by_track.get("liq_large")),
+        }
+    pack = write_eval_wave_pack(occ, wave=wave_id, root=root, put_r2=put_r2)
+    propose_job = f"eval-cf-propose-{wave_id}"
+    propose_pack: dict[str, Any] = {
+        "job_id": propose_job,
+        "skipped": True,
+        "written": False,
+        "catalog_written": False,
+        "auto_inject": False,
+        "go": False,
+        "not_a_pass": True,
+    }
+    puts = list(pack.get("puts") or [])
+    if propose:
+        from research.cf_propose_thesis import (
+            invoke_cf_propose_thesis,
+            propose_eval_pack,
+        )
+
+        fn = invoke or invoke_cf_propose_thesis
+        try:
+            invoke_out = fn(
+                n=int(propose_n),
+                write_artifacts=False,
+                job_id=propose_job,
+            )
+        except (TimeoutError, CfMassEvalError) as exc:
+            invoke_out = {
+                "ok": False,
+                "error": "llm_failed",
+                "n_adoptable": 0,
+                "proposals": [],
+                "reviews": [],
+                "exception": type(exc).__name__,
+            }
+        propose_pack = propose_eval_pack(
+            invoke_out, occupancy_by_track=occ, job_id=propose_job
+        )
+        ops = _ops_root(root)
+        raw = json.dumps(propose_pack, ensure_ascii=True, default=str)
+        (ops / f"{propose_job}.json").write_text(raw, encoding="utf-8")
+        put = _put_eval_bytes(
+            job=propose_job,
+            r2name="propose.json",
+            body=raw.encode("utf-8"),
+            put_r2=put_r2,
+        )
+        if put:
+            puts.append(put)
+    return {
+        **pack,
+        "wave": wave_id,
+        "n_mid": len(occ.get("mid_n_explore") or {}),
+        "n_liq": len(occ.get("liq_large") or {}),
+        "propose_job": propose_job,
+        "propose": propose_pack,
+        "catalog_written": False,
+        "auto_inject": False,
         "puts": puts,
         "go": False,
         "not_a_pass": True,
@@ -452,10 +620,12 @@ def run_occupancy_track(
 __all__ = [
     "classify_occupancy_maps",
     "classify_occupancy_pair",
+    "load_ops_occupancy",
     "merge_daily_path_cells_for_ids",
     "merge_occupancy_cell_dumps",
     "occupancy_from_cells_file",
     "occupancy_recorded_drift",
+    "run_eval_wave",
     "run_occupancy_track",
     "usable_eval_snapshot",
     "write_usable_eval_snapshot",
