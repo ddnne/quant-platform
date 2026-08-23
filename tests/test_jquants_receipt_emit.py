@@ -77,19 +77,11 @@ def test_record_receipt_into_db(tmp_path: Path):
     store.close()
 
 
-def _unsigned_authority():
-    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-    from cryptography.hazmat.primitives.serialization import load_pem_private_key
-
-    from storage.receipt_crypto import ReceiptSigningKey, generate_keypair
+def _tmp_authority(receipt_ed25519_keys):
+    """Issuer bound to the session tmp Ed25519 registry; never production keys."""
     from storage.trusted_receipt import SignedReceiptAuthority
 
-    priv_pem, _pub, kid = generate_keypair(key_id="emit-test")
-    priv = load_pem_private_key(priv_pem, password=None)
-    assert isinstance(priv, Ed25519PrivateKey)
-    return SignedReceiptAuthority(
-        signing_key=ReceiptSigningKey(key_id=kid, _private=priv)
-    )
+    return SignedReceiptAuthority(signing_key=receipt_ed25519_keys.signing_key)
 
 
 def test_emit_segment_receipt_requires_authority(tmp_path: Path):
@@ -122,13 +114,15 @@ def test_require_signed_receipt_authority_fails_closed_without_key(monkeypatch):
         require_signed_receipt_authority()
 
 
-def test_emit_segment_receipt_rejects_empty_raw_success(tmp_path: Path):
+def test_emit_segment_receipt_rejects_empty_raw_success(
+    tmp_path: Path, receipt_ed25519_keys
+):
     from ingestion.jquants.receipts import emit_segment_receipt
 
     store = SqliteStore(tmp_path / "t.sqlite")
     policy = coverage_contract_for("markets_calendar")
     req = list(plan_required_segments(policy, "2026-08-11", source="jquants"))[0]
-    auth = _unsigned_authority()
+    auth = _tmp_authority(receipt_ed25519_keys)
     with pytest.raises(ValueError, match="empty-raw SUCCESS is forbidden"):
         emit_segment_receipt(
             store._conn,
@@ -141,4 +135,36 @@ def test_emit_segment_receipt_rejects_empty_raw_success(tmp_path: Path):
         )
     n = store._conn.execute("select count(*) from collection_receipts").fetchone()[0]
     assert n == 0
+    store.close()
+
+
+def test_emit_segment_receipt_records_verified_signature(
+    tmp_path: Path, receipt_ed25519_keys
+):
+    from ingestion.jquants.receipts import emit_segment_receipt
+    from storage.coverage_ledger import is_complete_eligible_receipt
+    from storage.receipt_crypto import verify_receipt_signature
+
+    store = SqliteStore(tmp_path / "t.sqlite")
+    policy = coverage_contract_for("markets_calendar")
+    req = list(plan_required_segments(policy, "2026-08-11", source="jquants"))[0]
+    record_required_segments(store._conn, [req])
+    raw = b'{"data":[{"Date":"2026-08-11"}]}'
+    receipt = emit_segment_receipt(
+        store._conn,
+        required=req,
+        run_id=1,
+        raw=raw,
+        observed_items=1,
+        structured_row_count=1,
+        authority=_tmp_authority(receipt_ed25519_keys),
+        commit=True,
+    )
+    assert receipt.status == "SUCCESS"
+    assert receipt.digests.get("eligibility") == "TRUSTED_COLLECTION"
+    assert str(receipt.digests.get("signature") or "").startswith("ed25519:")
+    assert verify_receipt_signature(receipt.digests)
+    assert is_complete_eligible_receipt(receipt)
+    n = store._conn.execute("select count(*) from collection_receipts").fetchone()[0]
+    assert n == 1
     store.close()

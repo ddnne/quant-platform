@@ -11,7 +11,28 @@ from datetime import datetime
 
 from ingestion.common.http import HttpResponse
 from ingestion.pipeline import run_jquants
+from storage import read_collection_receipts
+from storage.receipt_crypto import verify_receipt_signature
 from storage.sqlite_store import SqliteStore
+
+
+def _inject_tmp_receipt_authority(monkeypatch, receipt_ed25519_keys):
+    """Bind governed writes to the tmp Ed25519 fixture; never production keys."""
+    monkeypatch.setattr(
+        "storage.trusted_receipt.load_signing_key",
+        lambda **kwargs: receipt_ed25519_keys.signing_key,
+    )
+
+
+def _assert_verified_success_receipts(store, *, dataset: str | None = None) -> None:
+    receipts = read_collection_receipts(store.path, dataset=dataset)
+    success = [row for row in receipts if row["status"] == "SUCCESS"]
+    assert success, "governed persist SUCCESS requires a signed collection receipt"
+    for row in success:
+        digests = json.loads(row["digests_json"])
+        assert digests.get("eligibility") == "TRUSTED_COLLECTION"
+        assert str(digests.get("signature") or "").startswith("ed25519:")
+        assert verify_receipt_signature(digests)
 
 
 class _CatalogHttp:
@@ -44,7 +65,10 @@ def _store(tmp_path):
     return SqliteStore(tmp_path / "t.sqlite")
 
 
-def test_run_jquants_catalog_writes_to_generic_table(tmp_path):
+def test_run_jquants_catalog_writes_to_generic_table(
+    tmp_path, monkeypatch, receipt_ed25519_keys
+):
+    _inject_tmp_receipt_authority(monkeypatch, receipt_ed25519_keys)
     http = _CatalogHttp([{"Code": "8697", "Date": "2025-04-01", "Close": 100}])
     store = _store(tmp_path)
     today = datetime(2025, 4, 2, 9, 0, 0)
@@ -62,6 +86,7 @@ def test_run_jquants_catalog_writes_to_generic_table(tmp_path):
     assert len(rows) >= 1
     assert rows[0]["dataset"] == "equities_bars_daily"
     assert rows[0]["available_at"]  # PIT column populated
+    _assert_verified_success_receipts(store, dataset="equities_bars_daily")
     store.close()
 
 
@@ -77,8 +102,11 @@ def test_run_jquants_catalog_skips_unknown_dataset(tmp_path):
     store.close()
 
 
-def test_run_jquants_proxy_client_runs_without_api_key(tmp_path):
+def test_run_jquants_proxy_client_runs_without_api_key(
+    tmp_path, monkeypatch, receipt_ed25519_keys
+):
     # cf-jquants-proxy http + empty api_key must NOT be skipped.
+    _inject_tmp_receipt_authority(monkeypatch, receipt_ed25519_keys)
     http = _proxy_http()
     store = _store(tmp_path)
     today = datetime(2025, 4, 2, 9, 0, 0)
@@ -87,6 +115,7 @@ def test_run_jquants_proxy_client_runs_without_api_key(tmp_path):
         datasets=["markets_calendar"], mode="incremental",
     )
     assert len(reports) == 1 and reports[0].registered == 1
+    _assert_verified_success_receipts(store, dataset="markets_calendar")
     store.close()
 
 
@@ -103,8 +132,11 @@ def test_run_jquants_direct_without_key_is_skipped(tmp_path):
     store.close()
 
 
-def test_run_jquants_catalog_incremental_default_window(tmp_path):
+def test_run_jquants_catalog_incremental_default_window(
+    tmp_path, monkeypatch, receipt_ed25519_keys
+):
     # incremental + no explicit dates -> a recent from window is applied.
+    _inject_tmp_receipt_authority(monkeypatch, receipt_ed25519_keys)
     seen_params: list[dict] = []
 
     class _P:
@@ -127,4 +159,36 @@ def test_run_jquants_catalog_incremental_default_window(tmp_path):
     dates = sorted({p.get("date") for p in seen_params if p.get("date")})
     assert "2025-04-05" in dates
     assert "2025-04-10" in dates
+    receipts = read_collection_receipts(store.path, dataset="equities_bars_daily")
+    for row in receipts:
+        if row["status"] != "SUCCESS":
+            continue
+        digests = json.loads(row["digests_json"])
+        assert digests.get("eligibility") == "TRUSTED_COLLECTION"
+        assert str(digests.get("signature") or "").startswith("ed25519:")
+        assert verify_receipt_signature(digests)
+    store.close()
+
+
+def test_run_jquants_without_authority_does_not_write_structured(
+    tmp_path, monkeypatch
+):
+    """Governed fact upsert is forbidden until SignedReceiptAuthority is verified."""
+    monkeypatch.setattr(
+        "storage.trusted_receipt.load_signing_key",
+        lambda **kwargs: None,
+    )
+    http = _CatalogHttp([{"Code": "8697", "Date": "2025-04-01", "Close": 100}])
+    store = _store(tmp_path)
+    today = datetime(2025, 4, 2, 9, 0, 0)
+    reports = run_jquants(
+        http=http, store=store, api_key="k", data_base=tmp_path, today=today,
+        datasets=["equities_bars_daily"], mode="backfill",
+    )
+    assert reports
+    assert all(r.registered == 0 for r in reports)
+    assert all("receipt emit failed (governed)" in r.error for r in reports)
+    assert store.fetch_all("jquants_records") == []
+    receipts = read_collection_receipts(store.path, dataset="equities_bars_daily")
+    assert all(row["status"] != "SUCCESS" for row in receipts)
     store.close()
