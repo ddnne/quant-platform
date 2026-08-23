@@ -710,6 +710,15 @@ export async function callOpsTool(db, name, rawArguments) {
     const changeCount = await first(db, "SELECT COUNT(*) AS n FROM ingestion_change_log");
     const latest = change?.latest_change_seq == null ? null : Number(change.latest_change_seq);
     const changeLogRows = changeCount?.n == null ? 0 : Number(changeCount.n);
+    const pin = await first(db,
+      "SELECT last_applied_change_seq FROM ops_applied_pins WHERE feed = ? LIMIT 1",
+      ["jquants_records"]);
+    const appliedFeedRaw = pin?.last_applied_change_seq;
+    const appliedFeed =
+      appliedFeedRaw == null || appliedFeedRaw === ""
+        ? null
+        : Number(appliedFeedRaw);
+    const appliedFeedCursor = Number.isNaN(appliedFeed) ? null : appliedFeed;
     // Per-dataset export cursor + lag vs latest change_seq (null cursor = not synced).
     // applied_cursor stays null until local apply pin is projected — do not
     // pretend D1 watermark equals local research apply.
@@ -748,6 +757,7 @@ export async function callOpsTool(db, name, rawArguments) {
       latest_source_change_seq: latest,
       change_log_row_count: changeLogRows,
       bootstrapped: changeLogRows > 0 && null_cursors === 0,
+      applied_feed_cursor: appliedFeedCursor,
       watermarks: marks,
       datasets,
       null_export_cursor_count: null_cursors,

@@ -161,6 +161,13 @@ test("Ops queries run against the complete ingestion D1 migration sequence", asy
   db.close();
 });
 
+test("applied_feed_cursor is null until ops_applied_pins has a non-null seq", async () => {
+  const db = new DatabaseSync(":memory:");
+  const sync = await callOpsTool(d1(db), "sync_status", {});
+  assert.equal(sync.applied_feed_cursor, null);
+  db.close();
+});
+
 test("applied_cursor null is never CURRENT even when export lag is 0", () => {
   assert.equal(
     syncDatasetState({ exported: 10, applied: null, lag: 0, changeLogRows: 1 }),
