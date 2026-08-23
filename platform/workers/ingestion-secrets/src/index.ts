@@ -8,6 +8,7 @@
  */
 import premiumContract from "../../../../packages/data_plane/data_contracts/jquants_premium_core.json";
 import addonProxyContract from "../../../../packages/data_plane/data_contracts/jquants_proxy_addons.json";
+import { json } from "./http_json";
 
 export interface Env {
   JQUANTS_API_KEY: string;
@@ -59,9 +60,9 @@ export default {
 
     if (url.pathname === "/health") {
       if (request.method !== "GET") {
-        return Response.json({ error: "GET required" }, { status: 405 });
+        return json({ error: "GET required" }, 405);
       }
-      return Response.json({
+      return json({
         ok: true,
         has_jquants_key: Boolean(env.JQUANTS_API_KEY),
       });
@@ -73,31 +74,31 @@ export default {
         !env.JQUANTS_PROXY_TOKEN ||
         !(await tokenMatches(token, env.JQUANTS_PROXY_TOKEN))
       ) {
-        return Response.json({ error: "unauthorized" }, { status: 401 });
+        return json({ error: "unauthorized" }, 401);
       }
       if (!env.JQUANTS_API_KEY) {
-        return Response.json({ error: "JQUANTS_API_KEY not bound" }, { status: 500 });
+        return json({ error: "JQUANTS_API_KEY not bound" }, 500);
       }
       if (request.method !== "POST") {
-        return Response.json({ error: "POST required" }, { status: 405 });
+        return json({ error: "POST required" }, 405);
       }
       let rawBody: unknown;
       try {
         rawBody = await request.json();
       } catch {
-        return Response.json({ error: "invalid json" }, { status: 400 });
+        return json({ error: "invalid json" }, 400);
       }
       const body = parseProxyBody(rawBody);
       if (body === null) {
-        return Response.json(
+        return json(
           { error: "body requires path, optional method=GET, and string query values" },
-          { status: 400 },
+          400,
         );
       }
       if (!JQUANTS_PROXY_PATHS.has(body.path)) {
-        return Response.json(
+        return json(
           { error: "path is not allowed by the J-Quants proxy contracts" },
-          { status: 403 },
+          403,
         );
       }
       const target = new URL(JQ_BASE + body.path);
@@ -120,6 +121,6 @@ export default {
       });
     }
 
-    return Response.json({ error: "not found" }, { status: 404 });
+    return json({ error: "not found" }, 404);
   },
 } satisfies ExportedHandler<Env>;
