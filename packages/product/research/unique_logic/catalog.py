@@ -294,6 +294,9 @@ def combo_row_from_yaml(spec: Mapping[str, Any]) -> dict[str, Any]:
     return _combo_row(raw)
 
 
+combo_row_from_spec = combo_row_from_yaml
+
+
 @lru_cache(maxsize=8)
 def _yaml_combo_rows_cached(root_key: str) -> tuple[dict[str, Any], ...]:
     """Runtime combo rows from catalog specs (compiled when YAML is absent)."""
@@ -307,6 +310,9 @@ def _yaml_combo_rows_cached(root_key: str) -> tuple[dict[str, Any], ...]:
 def yaml_combo_rows(*, root: Path | None = None) -> list[dict[str, Any]]:
     """Combo runtime rows from catalog specs. Filter by evaluator; do not import combo runtime."""
     return list(_yaml_combo_rows_cached(str((root or repo_root()).resolve())))
+
+
+combo_rows_from_catalog = yaml_combo_rows
 
 
 @lru_cache(maxsize=8)
@@ -487,6 +493,9 @@ def unique_family_ids_from_yaml(*, root: Path | None = None) -> dict[str, frozen
             continue
         buckets[_unique_family_key(spec)].add(lid)
     return {k: frozenset(v) for k, v in buckets.items()}
+
+
+unique_family_ids_from_catalog = unique_family_ids_from_yaml
 
 
 def combo_thesis_ids_by_kind(*, root: Path | None = None) -> dict[str, frozenset[str]]:

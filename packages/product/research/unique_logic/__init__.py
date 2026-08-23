@@ -4,17 +4,25 @@ from __future__ import annotations
 from importlib import import_module
 from typing import Any
 
-from research.unique_logic.catalog import load_catalog_specs
+from research.unique_logic.catalog import (
+    combo_row_from_spec,
+    combo_rows_from_catalog,
+    load_catalog_specs,
+    unique_family_ids_from_catalog,
+)
 
 __all__ = [
     "adaptive",
     "all_unique_logic_specs",
+    "combo_row_from_spec",
+    "combo_rows_from_catalog",
     "cross_section",
     "cs_overlays",
     "event",
     "event_filters",
     "event_sides",
     "load_catalog_specs",
+    "unique_family_ids_from_catalog",
 ]
 
 
