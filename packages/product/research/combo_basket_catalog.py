@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from functools import lru_cache
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
 from research.unique_logic.constants import (
     ALWAYS_ON_CS_STICKY,
@@ -296,20 +296,27 @@ def replacement_reject_reasons(
     return reasons
 
 
-def reconstitution_options(logic_ids: Sequence[str]) -> dict[str, Any]:
+def reconstitution_options(
+    logic_ids: Sequence[str],
+    *,
+    nested: Sequence[Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
     """Drop nested parents or nested children. Does not mutate sleeves. Not a pass.
 
     apply_reject stays False until a human reconstitution replaces primary
     members. Empty leftover sleeves are recorded, not auto-filled.
+    Pass ``nested`` from mechanical_basket_defs to skip a second gate walk.
     """
     ids = [str(x).strip() for x in logic_ids if str(x).strip()]
-    nested = nested_parent_pairs(ids)
-    parents = {p["parent"] for p in nested}
-    children = {p["child"] for p in nested}
+    nested_list = (
+        [dict(p) for p in nested] if nested is not None else nested_parent_pairs(ids)
+    )
+    parents = {str(p.get("parent")) for p in nested_list}
+    children = {str(p.get("child")) for p in nested_list}
     keep_children = [i for i in ids if i not in parents]
     keep_parents = [i for i in ids if i not in children]
     return {
-        "nested_parents": nested,
+        "nested_parents": nested_list,
         "apply_reject": False,
         "drop_parents_keep_children": {
             "members": keep_children,
@@ -330,7 +337,10 @@ def reconstitution_plan() -> list[dict[str, Any]]:
     """Per-sleeve reconstitution options. Does not change members. Not a pass."""
     out: list[dict[str, Any]] = []
     for d in mechanical_basket_defs():
-        opts = reconstitution_options(list(d.get("members") or ()))
+        opts = reconstitution_options(
+            list(d.get("members") or ()),
+            nested=d.get("nested_parents"),
+        )
         nested_n = int(d.get("nested_parent_count") or 0)
         primary = bool(d.get("primary") or d.get("primary_candidate"))
         out.append(
