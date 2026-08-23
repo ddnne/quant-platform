@@ -514,6 +514,22 @@ def reconstitution_occupancy_preview(
     }
 
 
+def reconstitution_evidence_builder(
+    occupancy_by_track: Mapping[str, Mapping[str, float]] | None = None,
+    *,
+    cells_root: str | None = None,
+    cells_by_track: Mapping[str, Sequence[Mapping[str, Any]]] | None = None,
+) -> dict[str, Any]:
+    """Comparison artifact for human reconstitution. Does not apply. Not GO."""
+    from research.reconstitution_evidence import reconstitution_evidence_pack
+
+    return reconstitution_evidence_pack(
+        occupancy_by_track=occupancy_by_track,
+        cells_root=cells_root,
+        cells_by_track=cells_by_track,
+    )
+
+
 def usable_sleeve_coverage(
     occupancy_by_track: Mapping[str, Mapping[str, float]] | None = None,
     *,
