@@ -216,6 +216,7 @@ def test_merge_daily_path_cells_for_ids_later_file_wins(tmp_path) -> None:
     assert len(out["liq_large"]) == 1
 
 def test_unique22_lift_park_partition() -> None:
+    """Unique-22 leftover occupancy HOLD pin (entryIdx vs combo pre_mom). Not a daily_path.ts grep."""
     from research.unique_logic.worker_bodies import (
         unique22_occupancy_equal_lifted,
         unique22_occupancy_park,

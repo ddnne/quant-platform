@@ -168,7 +168,11 @@ def test_event_margin_crowding_skips_missing_and_empty_is_incomplete():
 
 
 def test_event_filter_yaml_leftover_vs_lifted_gates() -> None:
-    """Unique-22 leftover still needed; occupancy-equal lifts keep params.gates."""
+    """Catalog leftover vs occupancy-equal lifts.
+
+    Worker leftover occupancy (event_pre_mom_agree_hold entryIdx vs combo
+    pre_mom entryIdx-1) is SoT in combo_gates.test.ts. Do not grep daily_path.ts.
+    """
     from research.unique_logic.catalog import load_catalog_specs
 
     leftover = (
