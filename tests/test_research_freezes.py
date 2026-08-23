@@ -219,7 +219,7 @@ def test_near_empty_park_is_not_countable_or_basket_material() -> None:
     parked = near_empty_occupancy_park()
     assert parked == NEAR_EMPTY_PARK_IDS
     assert parked
-    assert "event_pb_tight_px_down" in parked
+    assert "event_flatten_easing" in parked
     countable = countable_thesis_ids()
     for lid in parked:
         spec = catalog_spec(lid)
@@ -234,7 +234,7 @@ def test_near_empty_park_is_not_countable_or_basket_material() -> None:
     from research.cf_daily_path_job import sleeve_durability_logic_ids
 
     assert THIN_SLEEVE_EXCLUDE_IDS
-    assert "event_eps_steep" in THIN_SLEEVE_EXCLUDE_IDS
+    assert "event_div_margin_up" in THIN_SLEEVE_EXCLUDE_IDS
     assert THIN_SLEEVE_EXCLUDE_IDS.isdisjoint(NEAR_EMPTY_PARK_IDS)
     assert THIN_SLEEVE_EXCLUDE_IDS.isdisjoint(sleeve_durability_logic_ids())
     thin_reasons = validate_basket_members(
@@ -247,6 +247,46 @@ def test_near_empty_park_is_not_countable_or_basket_material() -> None:
     ok = assert_new_batch_occupancy_not_near_empty(occ)
     assert ok["ok"] is True
     assert ok["n_near_empty"] == 0
+
+
+def test_usable_inventory_excludes_thin_park_and_unclassified() -> None:
+    from research.unique_logic.constants import (
+        NEAR_EMPTY_PARK_IDS,
+        THIN_SLEEVE_EXCLUDE_IDS,
+        USABLE_OCCUPANCY_MIN,
+    )
+    from research.unique_logic.worker_bodies import usable_inventory
+
+    lid = "event_eqar_high_liq_high"
+    thin = next(iter(THIN_SLEEVE_EXCLUDE_IDS))
+    park = next(iter(NEAR_EMPTY_PARK_IDS))
+    pack = usable_inventory(
+        {
+            "mid_n_explore": {lid: 0.30, thin: 0.30, park: 0.30},
+            "liq_large": {lid: 0.31, thin: 0.31, park: 0.31},
+        }
+    )
+    assert pack["go"] is False
+    assert pack["not_a_pass"] is True
+    assert pack["usable_occupancy_min"] == USABLE_OCCUPANCY_MIN
+    assert lid in pack["usable_ids"]
+    assert thin not in pack["usable_ids"]
+    assert park not in pack["usable_ids"]
+    assert pack["n_usable"] >= 1
+    assert "event" in pack["family"]
+
+
+def test_near_empty_batch_guard_and_park_sparse_cover() -> None:
+    from pathlib import Path
+    import json
+    from research.unique_logic.constants import NEAR_EMPTY_OCCUPANCY
+    from research.unique_logic.worker_bodies import (
+        NearEmptyBatchError,
+        assert_near_empty_park_covers,
+        assert_new_batch_occupancy_not_near_empty,
+        mean_occupancy_by_logic,
+    )
+
     try:
         assert_new_batch_occupancy_not_near_empty(
             {"ok_one": 0.20, "empty_one": NEAR_EMPTY_OCCUPANCY}
@@ -254,13 +294,6 @@ def test_near_empty_park_is_not_countable_or_basket_material() -> None:
         raise AssertionError("near_empty batch must reject")
     except NearEmptyBatchError:
         pass
-
-    from pathlib import Path
-    import json
-    from research.unique_logic.worker_bodies import (
-        assert_near_empty_park_covers,
-        mean_occupancy_by_logic,
-    )
 
     cells_path = (
         Path(__file__).resolve().parents[1]
@@ -276,10 +309,11 @@ def test_near_empty_park_is_not_countable_or_basket_material() -> None:
         assert cover["n_recorded"] >= 4
         assert cover["missing_from_park"] == []
 
-    from research.unique_logic.constants import SPARSE_GATE_COMBOS
+    from research.unique_logic.catalog import catalog_spec
+    from research.unique_logic.constants import NEAR_EMPTY_PARK_IDS, SPARSE_GATE_COMBOS
 
     sparse = [combo for combo, _ in SPARSE_GATE_COMBOS]
-    for lid in parked:
+    for lid in NEAR_EMPTY_PARK_IDS:
         spec = catalog_spec(lid)
         params = spec.get("params") if isinstance(spec.get("params"), dict) else {}
         gates = frozenset(str(g) for g in (params.get("gates") or []) if str(g).strip())

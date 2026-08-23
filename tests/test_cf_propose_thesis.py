@@ -804,7 +804,7 @@ def test_review_proposal_row_occupancy_and_polarity_table() -> None:
             "PEAD when EPS is below its PIT median AND the repo curve is flat AND overnight funding is easing. Skip missing PIT prints (no invent).",
             ["eps_down", "curve_flatten", "overnight_easing"],
             "occupancy_label_only",
-            "PEAD when EPS contracted versus the last prior print AND the repo curve flattened AND overnight funding eased. Skip missing PIT prints (no invent).",
+            None,
         ),
         (
             "The bond market is experiencing a liquidity squeeze when the repo curve steepens AND the market is experiencing a liquidity squeeze AND the overnight policy rate is tight.",

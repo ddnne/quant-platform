@@ -188,6 +188,8 @@ CF_EVENT_FIDELITY: dict[str, str] = {
 }
 ALWAYS_ON_OCCUPANCY_WARN: float = 0.85
 NEAR_EMPTY_OCCUPANCY: float = 0.05
+# Inclusive thin sleeve band is (NEAR_EMPTY, USABLE_OCCUPANCY_MIN].
+USABLE_OCCUPANCY_MIN: float = 0.12
 # Recorded mean occupancy ≤ NEAR_EMPTY_OCCUPANCY on both tracks (plus32vf).
 # Not countable, not basket material. Do not silently unpark.
 NEAR_EMPTY_PARK_IDS: frozenset[str] = frozenset(
@@ -225,6 +227,8 @@ NEAR_EMPTY_PARK_IDS: frozenset[str] = frozenset(
         "event_np_steep_easing",
         "event_np_steep",
         "event_pb_tight_px_down",
+        "event_flatten_easing",
+        "surprise_xs_flatten_easing",
     }
 )
 # Recorded mean occupancy ≥ ALWAYS_ON_OCCUPANCY_WARN. Not countable, not
@@ -272,6 +276,8 @@ THIN_SLEEVE_EXCLUDE_IDS: frozenset[str] = frozenset(
         "event_flatten_repo3m_np_neg",
         "event_eps_px_steep",
         "event_eps_steep",
+        "event_div_margin_up",
+        "surprise_xs_div_margin_up",
     }
 )
 MF_VALUE_MOM_RATE_DELEGATES: bool = False

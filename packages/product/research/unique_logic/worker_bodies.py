@@ -22,6 +22,8 @@ from research.unique_logic.constants import (
     NEAR_EMPTY_PARK_IDS,
     PYTHON_ONLY_EVENT_GATES,
     RESEARCH_UNIQUE_LOGIC_IDS,
+    THIN_SLEEVE_EXCLUDE_IDS,
+    USABLE_OCCUPANCY_MIN,
 )
 from research.unique_logic.near_duplicate import is_near_duplicate
 
@@ -432,6 +434,75 @@ def assert_new_batch_occupancy_in_material_band(
     }
 
 
+def usable_family_of(logic_id: str) -> str:
+    """Family tag for usable inventory. Not a pass."""
+    lid = str(logic_id or "")
+    if lid.startswith("surprise_xs"):
+        return "surprise_xs"
+    if lid.startswith("cs_"):
+        return "cs"
+    if lid.startswith("event_"):
+        return "event"
+    return lid.split("_")[0] or "other"
+
+
+def usable_inventory(
+    occupancy_by_track: Mapping[str, Mapping[str, float]],
+) -> dict[str, Any]:
+    """Countable material-band inventory. Excludes park / always-on / thin.
+
+    Both-track occupancy required. Occupancy in (USABLE_OCCUPANCY_MIN,
+    ALWAYS_ON_OCCUPANCY_WARN). Does not GO.
+    """
+    from collections import Counter
+
+    countable = countable_thesis_ids()
+    mid = dict(occupancy_by_track.get("mid_n_explore") or {})
+    liq = dict(occupancy_by_track.get("liq_large") or {})
+    usable: list[str] = []
+    n_unclassified = 0
+    n_recorded = 0
+    for lid in sorted(countable):
+        if lid in NEAR_EMPTY_PARK_IDS or lid in ALWAYS_ON_PARK_IDS:
+            continue
+        if lid in THIN_SLEEVE_EXCLUDE_IDS:
+            continue
+        a = mid.get(lid)
+        b = liq.get(lid)
+        if a is None or b is None:
+            n_unclassified += 1
+            continue
+        n_recorded += 1
+        lo = min(float(a), float(b))
+        hi = max(float(a), float(b))
+        if lo <= USABLE_OCCUPANCY_MIN:
+            continue
+        if hi >= ALWAYS_ON_OCCUPANCY_WARN:
+            continue
+        usable.append(lid)
+    fam = Counter(usable_family_of(lid) for lid in usable)
+    n = len(usable)
+    return {
+        "version": "usable-inventory/v1",
+        "n_usable": n,
+        "usable_ids": usable,
+        "family": dict(fam),
+        "family_share": {
+            k: round(v / n, 4) if n else 0.0 for k, v in sorted(fam.items())
+        },
+        "n_countable": len(countable),
+        "n_near_empty_park": len(NEAR_EMPTY_PARK_IDS),
+        "n_thin_sleeve_exclude": len(THIN_SLEEVE_EXCLUDE_IDS),
+        "n_always_on_park": len(ALWAYS_ON_PARK_IDS),
+        "n_recorded_both_track": n_recorded,
+        "n_unclassified": n_unclassified,
+        "usable_occupancy_min": USABLE_OCCUPANCY_MIN,
+        "always_on_occupancy_warn": ALWAYS_ON_OCCUPANCY_WARN,
+        "go": False,
+        "not_a_pass": True,
+    }
+
+
 def countable_inventory_bias() -> dict[str, Any]:
     """Family / primary-gate / dataset occupancy of countable theses. Not a pass."""
     from collections import Counter
@@ -508,6 +579,8 @@ __all__ = [
     "recorded_near_empty_ids",
     "recorded_always_on_ids",
     "countable_inventory_bias",
+    "usable_inventory",
+    "usable_family_of",
     "countable_thesis_ids",
     "mean_occupancy_by_logic",
     "near_empty_occupancy_park",
