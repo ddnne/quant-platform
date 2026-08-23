@@ -267,9 +267,40 @@ def _mean(xs: Sequence[Any]) -> float | None:
     return (sum(vs) / len(vs)) if vs else None
 
 
+def blend_option_summary(
+    cells: Sequence[Mapping[str, Any]],
+    *,
+    basket_id: str,
+    logic_ids: Sequence[str],
+) -> dict[str, Any]:
+    """Compact equal-weight blend stats. Drops net_daily. Not a pass."""
+    rows = blend_window_cells(cells, basket_id=basket_id, logic_ids=logic_ids)
+    complete = [r for r in rows if r.get("daily_path_complete")]
+    missing: set[str] = set()
+    for r in rows:
+        missing.update(str(x) for x in (r.get("missing_members") or ()) if str(x))
+    occs = [r.get("occupancy") for r in complete]
+    dds = [r.get("daily_path_DD") for r in complete]
+    nets = [r.get("total_ret_net") for r in complete]
+    return {
+        "basket_id": basket_id,
+        "members": list(logic_ids),
+        "n_windows": len(rows),
+        "n_complete": len(complete),
+        "missing_members": sorted(missing),
+        "occupancy_mean": _mean(occs),
+        "daily_path_DD_min": (min(float(x) for x in dds if x is not None) if any(x is not None for x in dds) else None),
+        "total_ret_net_mean": _mean(nets),
+        "apply": False,
+        "go": False,
+        "not_a_pass": True,
+    }
+
+
 __all__ = [
     "blend_net_daily",
     "blend_window_cells",
+    "blend_option_summary",
     "occupancy_in_candidate_band",
     "primary_sleeve_and_meta_cells",
     "summarize_basket_trends",

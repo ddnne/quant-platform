@@ -44,6 +44,56 @@ def merge_occupancy_cell_dumps(
     return {"mid_n_explore": mid, "liq_large": liq}
 
 
+def _track_from_cells_name(name: str) -> str | None:
+    if "liq_large" in name:
+        return "liq_large"
+    if "mid_n_explore" in name:
+        return "mid_n_explore"
+    return None
+
+
+def merge_daily_path_cells_for_ids(
+    root: str | Path,
+    logic_ids: Sequence[str],
+    *,
+    glob: str = "*_cells.json",
+) -> dict[str, list[dict[str, Any]]]:
+    """Later files win per (track, logic_id, window). Keeps net_daily. Not a pass."""
+    want = {str(x).strip() for x in logic_ids if str(x).strip()}
+    by_track: dict[str, dict[tuple[str, str], dict[str, Any]]] = {
+        "mid_n_explore": {},
+        "liq_large": {},
+    }
+    for path in sorted(Path(root).glob(glob)):
+        track = _track_from_cells_name(path.name)
+        if track is None:
+            continue
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(raw, list):
+            continue
+        slot = by_track[track]
+        for cell in raw:
+            if not isinstance(cell, dict):
+                continue
+            lid = str(cell.get("logic_id") or "").strip()
+            if lid not in want:
+                continue
+            nd = cell.get("net_daily")
+            if not isinstance(nd, list) or len(nd) < 2:
+                continue
+            wid = str(cell.get("window_id") or cell.get("window") or "").strip()
+            if not wid:
+                continue
+            slot[(lid, wid)] = cell
+    return {
+        track: list(slot.values())
+        for track, slot in by_track.items()
+    }
+
+
 def classify_occupancy_maps(
     occupancy_by_track: Mapping[str, Mapping[str, float]],
     logic_ids: Sequence[str],
@@ -170,6 +220,7 @@ def run_occupancy_track(
 __all__ = [
     "classify_occupancy_maps",
     "classify_occupancy_pair",
+    "merge_daily_path_cells_for_ids",
     "merge_occupancy_cell_dumps",
     "occupancy_from_cells_file",
     "occupancy_recorded_drift",

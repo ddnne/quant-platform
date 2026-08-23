@@ -390,6 +390,63 @@ def test_replacement_reject_reasons_block_soup_and_primary() -> None:
     assert replacement_reject_reasons("event_positive_eps_uncrowded", rest) == []
 
 
+def test_blend_option_summary_is_descriptive_not_a_pass() -> None:
+    from research.combo_basket import blend_option_summary
+
+    cells = [
+        _eval_complete_cell(
+            "a",
+            occupancy=0.2,
+            dates=["d0", "d1", "d2"],
+            net_daily=[0.0, 0.02, 0.0],
+        ),
+        _eval_complete_cell(
+            "b",
+            occupancy=0.3,
+            dates=["d0", "d1", "d2"],
+            net_daily=[0.0, 0.0, 0.02],
+        ),
+    ]
+    for c in cells:
+        c["window_id"] = "w0"
+        c["daily_path_complete"] = True
+    out = blend_option_summary(cells, basket_id="t", logic_ids=["a", "b"])
+    assert out["n_windows"] == 1
+    assert out["apply"] is False
+    assert out["go"] is False
+    assert out["not_a_pass"] is True
+    assert "net_daily" not in out
+    assert out["members"] == ["a", "b"]
+
+
+def test_merge_daily_path_cells_for_ids_later_file_wins(tmp_path) -> None:
+    import json
+
+    from research.occupancy_audit import merge_daily_path_cells_for_ids
+
+    a = {
+        "logic_id": "x",
+        "window_id": "w0",
+        "net_daily": [0.0, 0.01],
+        "occupancy": 0.2,
+    }
+    b = dict(a)
+    b["occupancy"] = 0.4
+    (tmp_path / "eval-a-mid_n_explore_cells.json").write_text(
+        json.dumps([a]), encoding="utf-8"
+    )
+    (tmp_path / "eval-b-mid_n_explore_cells.json").write_text(
+        json.dumps([b]), encoding="utf-8"
+    )
+    (tmp_path / "eval-c-liq_large_cells.json").write_text(
+        json.dumps([a]), encoding="utf-8"
+    )
+    out = merge_daily_path_cells_for_ids(tmp_path, ["x"])
+    assert len(out["mid_n_explore"]) == 1
+    assert out["mid_n_explore"][0]["occupancy"] == 0.4
+    assert len(out["liq_large"]) == 1
+
+
 def test_meta_baskets_are_fund_line_and_not_a_pass() -> None:
     from research.combo_basket_catalog import (
         META_BASKETS,
