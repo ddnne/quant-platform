@@ -109,6 +109,18 @@ class VerifiedResearchReadiness:
         return self
 
 
+def _host_receipt_pem_disabled() -> bool:
+    """True under pytest or QUANT_READINESS_DISABLE_HOST_PEM=1.
+
+    QUANT_READINESS_HMAC_SECRET still applies. Missing secret is fail-closed.
+    """
+    import os
+
+    if os.environ.get("QUANT_READINESS_DISABLE_HOST_PEM", "").strip() == "1":
+        return True
+    return bool(os.environ.get("PYTEST_CURRENT_TEST"))
+
+
 def _attestation_secret() -> bytes:
     """HMAC secret for attestation MAC (QUANT_READINESS_HMAC_SECRET or ~/.config)."""
     import os
@@ -119,9 +131,10 @@ def _attestation_secret() -> bytes:
     path = Path.home() / ".config" / "quant-platform" / "readiness_hmac_secret"
     if path.is_file():
         return path.read_bytes().strip()
-    key = Path.home() / ".config" / "quant-platform" / "receipt_signing_key.pem"
-    if key.is_file():
-        return hashlib.sha256(key.read_bytes() + b"|readiness-v2").digest()
+    if not _host_receipt_pem_disabled():
+        key = Path.home() / ".config" / "quant-platform" / "receipt_signing_key.pem"
+        if key.is_file():
+            return hashlib.sha256(key.read_bytes() + b"|readiness-v2").digest()
     raise MassResearchDisabledError("readiness HMAC secret not configured")
 
 

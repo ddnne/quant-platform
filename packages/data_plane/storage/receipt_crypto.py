@@ -27,6 +27,18 @@ CONFIG_DIR = Path.home() / ".config" / "quant-platform"
 PRIVATE_KEY_ENV = "QUANT_RECEIPT_SIGNING_KEY_PEM"
 PRIVATE_KEY_FILE = CONFIG_DIR / "receipt_signing_key.pem"
 VERIFY_KEYS_ENV = "QUANT_RECEIPT_VERIFY_KEYS"
+DISABLE_HOST_PEM_ENV = "QUANT_RECEIPT_DISABLE_HOST_PEM"
+
+
+def _host_pem_disabled() -> bool:
+    """True under pytest or QUANT_RECEIPT_DISABLE_HOST_PEM=1.
+
+    Explicit pem=/path=/QUANT_RECEIPT_SIGNING_KEY_PEM are unaffected.
+    Missing keys stay fail-closed (None).
+    """
+    if os.environ.get(DISABLE_HOST_PEM_ENV, "").strip() == "1":
+        return True
+    return bool(os.environ.get("PYTEST_CURRENT_TEST"))
 
 
 def _contracts_dir() -> Path:
@@ -135,6 +147,10 @@ def load_signing_key(
 
     Returns None if no private material is configured (production fail-closed
     for signing; tests inject keys explicitly).
+
+    Under pytest (PYTEST_CURRENT_TEST) or QUANT_RECEIPT_DISABLE_HOST_PEM=1,
+    the host config file is not read. Explicit pem=, path=, and
+    QUANT_RECEIPT_SIGNING_KEY_PEM still apply.
     """
     material: bytes | None = None
     if pem is not None:
@@ -145,7 +161,7 @@ def load_signing_key(
         env = os.environ.get(PRIVATE_KEY_ENV, "").strip()
         if env:
             material = env.encode("utf-8") if "BEGIN" in env else base64.b64decode(env)
-        elif PRIVATE_KEY_FILE.is_file():
+        elif not _host_pem_disabled() and PRIVATE_KEY_FILE.is_file():
             material = PRIVATE_KEY_FILE.read_bytes()
     if not material:
         return None

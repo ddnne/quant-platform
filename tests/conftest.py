@@ -180,6 +180,13 @@ def synced_cf_d1_db(
     return SimpleNamespace(db=db, rc=rc, calls=calls, rows=cf_d1_export_rows)
 
 
+@pytest.fixture(autouse=True)
+def _disable_host_receipt_pem(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Never load operator ~/.config receipt PEM during pytest."""
+    monkeypatch.setenv("QUANT_RECEIPT_DISABLE_HOST_PEM", "1")
+    monkeypatch.setenv("QUANT_READINESS_DISABLE_HOST_PEM", "1")
+
+
 @pytest.fixture
 def receipt_ed25519_keys(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
