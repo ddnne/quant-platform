@@ -5,7 +5,9 @@ immutable create-if-absent. Worker onlyIf children-then-manifest is the
 immutable authority. Python CLI put is not artifact authority.
 Remote put is fail-closed unless QP_ALLOW_PYTHON_R2_PUT=1.
 put_children_then_manifest_via_worker is the Worker-client entry; it
-does not fall back to CLI put. Unbound Worker URL/token fail closed.
+POSTs /v1/children-then-manifest with X-Mass-Eval-Token. It does not
+fall back to CLI put. Unbound Worker URL/token fail closed. Non-JSON
+bodies fail closed. Digests are Worker-computed, never forged here.
 """
 
 from __future__ import annotations
@@ -14,8 +16,10 @@ import json
 import os
 import subprocess
 import tempfile
+import urllib.error
+import urllib.request
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 from qp_paths import repo_root
 
@@ -41,6 +45,7 @@ _DEFAULT_WRANGLER_CONFIG = DEFAULT_WRANGLER_CONFIG
 PYTHON_R2_PUT_ENV = "QP_ALLOW_PYTHON_R2_PUT"
 WORKER_PUT_URL_ENV = "MASS_EVAL_WORKER_URL"
 WORKER_PUT_TOKEN_ENV = "MASS_EVAL_TOKEN"
+WORKER_CHILDREN_THEN_MANIFEST_PATH = "/v1/children-then-manifest"
 WORKER_CHILDREN_THEN_MANIFEST_ERROR = (
     "python must use Worker children-then-manifest; CLI put is not authority"
 )
@@ -94,6 +99,94 @@ def _item_body(item: Mapping[str, Any], label: str) -> bytes:
     return json.dumps(data, indent=2, default=str).encode("utf-8")
 
 
+def _item_json_data(item: Mapping[str, Any], label: str) -> Any:
+    """JSON value for the Worker put. Non-JSON body fail-closes; no digest forge."""
+    if "data" in item and item["data"] is not None:
+        data = item["data"]
+        if isinstance(data, bytes):
+            try:
+                return json.loads(data.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise R2IOError(f"{label} data is not JSON") from exc
+        return data
+    if "body" not in item or item["body"] is None:
+        raise R2IOError(f"{label} requires data or body")
+    raw = item["body"]
+    if isinstance(raw, bytes):
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise R2IOError(f"{label} body is not JSON") from exc
+    elif isinstance(raw, str):
+        text = raw
+    else:
+        raise R2IOError(f"{label} body must be bytes or str")
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise R2IOError(f"{label} body is not JSON") from exc
+
+
+def _worker_json_item(item: Mapping[str, Any], label: str) -> dict[str, Any]:
+    return {"key": _item_key(item, label), "data": _item_json_data(item, label)}
+
+
+def _post_worker_children_then_manifest(
+    url: str,
+    token: str,
+    payload: bytes,
+    *,
+    timeout: int,
+    http_post: Callable[..., Any] | None,
+) -> dict[str, Any]:
+    headers = {
+        "Content-Type": "application/json",
+        "X-Mass-Eval-Token": token,
+    }
+    if http_post is not None:
+        raw_resp = http_post(url=url, body=payload, headers=headers)
+        if isinstance(raw_resp, Mapping):
+            parsed = dict(raw_resp)
+        else:
+            text = raw_resp if isinstance(raw_resp, str) else raw_resp.decode("utf-8")
+            try:
+                loaded = json.loads(text)
+            except json.JSONDecodeError as exc:
+                raise R2IOError(WORKER_CHILDREN_THEN_MANIFEST_ERROR) from exc
+            if not isinstance(loaded, dict):
+                raise R2IOError(WORKER_CHILDREN_THEN_MANIFEST_ERROR)
+            parsed = loaded
+        return parsed
+
+    req = urllib.request.Request(url, data=payload, method="POST", headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read().decode("utf-8")
+            status = int(resp.status)
+    except urllib.error.HTTPError as exc:
+        detail = ""
+        try:
+            detail = exc.read().decode("utf-8")[:2000]
+        except Exception:
+            detail = str(exc)
+        raise R2IOError(
+            f"{WORKER_CHILDREN_THEN_MANIFEST_ERROR}: HTTP {exc.code}: {detail}"
+        ) from exc
+    except urllib.error.URLError as exc:
+        raise R2IOError(
+            f"{WORKER_CHILDREN_THEN_MANIFEST_ERROR}: network error: {exc}"
+        ) from exc
+    try:
+        loaded = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise R2IOError(
+            f"{WORKER_CHILDREN_THEN_MANIFEST_ERROR}: non-json (HTTP {status})"
+        ) from exc
+    if not isinstance(loaded, dict):
+        raise R2IOError(WORKER_CHILDREN_THEN_MANIFEST_ERROR)
+    return loaded
+
+
 def put_children_then_manifest_via_worker(
     children: Sequence[Mapping[str, Any]],
     manifest: Mapping[str, Any],
@@ -102,14 +195,15 @@ def put_children_then_manifest_via_worker(
     token: str | None = None,
     dry_run: bool = False,
     staging_dir: str | Path | None = None,
+    timeout: int = 120,
+    http_post: Callable[..., Any] | None = None,
 ) -> dict[str, Any]:
     """POST children-then-manifest via Worker. CLI put is not authority.
 
-    dry_run stages locally only. Remote requires Worker URL + MASS_EVAL_TOKEN
-    (or explicit args). Unbound URL/token fail closed. There is no CLI put
-    fallback and no digest forge. This commit does not ship an HTTP client;
-    remote always raises until Worker POST is wired. QP_ALLOW_PYTHON_R2_PUT=1
-    does not grant CLI put on this path.
+    dry_run stages locally only. Remote POSTs /v1/children-then-manifest with
+    X-Mass-Eval-Token (Worker ``authorized``). Unbound URL/token fail closed.
+    There is no CLI put fallback and no digest forge. Non-JSON body fail-closes.
+    QP_ALLOW_PYTHON_R2_PUT=1 does not grant CLI put on this path.
     """
     child_items = [dict(c) for c in children]
     manifest_item = dict(manifest)
@@ -137,8 +231,41 @@ def put_children_then_manifest_via_worker(
     tok = _bound_worker_token(token)
     if not url or not tok:
         raise R2IOError(WORKER_CHILDREN_THEN_MANIFEST_ERROR)
-    # No HTTP client in this commit; do not CLI put.
-    raise R2IOError(WORKER_CHILDREN_THEN_MANIFEST_ERROR)
+
+    child_payloads = [_worker_json_item(c, "child") for c in child_items]
+    manifest_payload = _worker_json_item(manifest_item, "manifest")
+    try:
+        body = json.dumps(
+            {"children": child_payloads, "manifest": manifest_payload}
+        ).encode("utf-8")
+    except TypeError as exc:
+        raise R2IOError(
+            f"{WORKER_CHILDREN_THEN_MANIFEST_ERROR}: payload is not JSON"
+        ) from exc
+
+    parsed = _post_worker_children_then_manifest(
+        url.rstrip("/") + WORKER_CHILDREN_THEN_MANIFEST_PATH,
+        tok,
+        body,
+        timeout=timeout,
+        http_post=http_post,
+    )
+    if parsed.get("ok") is not True:
+        err = str(parsed.get("error") or "worker rejected children-then-manifest")
+        raise R2IOError(f"{WORKER_CHILDREN_THEN_MANIFEST_ERROR}: {err}")
+    manifest_res = parsed.get("manifest")
+    created = False
+    if isinstance(manifest_res, Mapping):
+        created = bool(manifest_res.get("created"))
+    return {
+        "status": "put_ok" if created else "exists",
+        "ok": True,
+        "conflict": bool(parsed.get("conflict")),
+        "verified": bool(parsed.get("verified")),
+        "created": created,
+        "children": child_keys,
+        "manifest_key": manifest_key,
+    }
 
 
 def default_r2_put(
@@ -316,6 +443,7 @@ __all__ = [
     "REPO_ROOT",
     "R2IOError",
     "WORKER_CHILDREN_THEN_MANIFEST_ERROR",
+    "WORKER_CHILDREN_THEN_MANIFEST_PATH",
     "WORKER_PUT_TOKEN_ENV",
     "WORKER_PUT_URL_ENV",
     "default_r2_get_object",

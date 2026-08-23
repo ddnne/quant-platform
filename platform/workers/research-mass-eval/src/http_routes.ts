@@ -10,6 +10,7 @@ import {
   freezePayload,
   isObject,
   json,
+  putChildrenThenManifest,
 } from "./http";
 import { runProposeThesis } from "./propose_thesis";
 import type { Env, LogicSpec, MassEvalJobResult, MassEvalRequest } from "./types";
@@ -315,6 +316,88 @@ export async function dispatchMassEvalFetch(
         500,
       );
     }
+  }
+
+  if (url.pathname === "/v1/children-then-manifest") {
+    if (request.method !== "POST") {
+      return json({ error: "POST required" }, 405);
+    }
+    if (!(await authorized(request, env.MASS_EVAL_TOKEN))) {
+      return json({ error: "unauthorized" }, 401);
+    }
+    if (!env.STRUCTURED_BUCKET) {
+      return json({ error: "STRUCTURED_BUCKET not bound" }, 500);
+    }
+    let body: unknown;
+    try {
+      body = await request.json();
+    } catch {
+      return json({ error: "invalid JSON body" }, 400);
+    }
+    if (!isObject(body)) {
+      return json({ error: "body must be JSON object" }, 400);
+    }
+    if (!Array.isArray(body.children)) {
+      return json({ error: "children[] required" }, 400);
+    }
+    const children: Array<{ key: string; data: unknown }> = [];
+    for (let i = 0; i < body.children.length; i++) {
+      const raw = body.children[i];
+      if (!isObject(raw)) {
+        return json({ error: `children[${i}] must be object` }, 400);
+      }
+      const key = String(raw.key ?? "").trim();
+      if (!key) {
+        return json({ error: `children[${i}].key required` }, 400);
+      }
+      if (!("data" in raw)) {
+        return json({ error: `children[${i}].data required` }, 400);
+      }
+      children.push({ key, data: raw.data });
+    }
+    if (!isObject(body.manifest)) {
+      return json({ error: "manifest object required" }, 400);
+    }
+    const manifestKey = String(body.manifest.key ?? "").trim();
+    if (!manifestKey) {
+      return json({ error: "manifest.key required" }, 400);
+    }
+    if (!("data" in body.manifest)) {
+      return json({ error: "manifest.data required" }, 400);
+    }
+    // Digest is Worker-computed in putJsonCreateOnly. Pass through only a
+    // caller-supplied string; do not hash here.
+    let expected: string | undefined;
+    if (typeof body.expected_child_digest === "string") {
+      const digest = body.expected_child_digest.trim();
+      if (digest) expected = digest;
+    }
+    const commit = await putChildrenThenManifest(
+      env.STRUCTURED_BUCKET,
+      children,
+      { key: manifestKey, data: body.manifest.data },
+      expected,
+    );
+    const status = commit.ok ? 200 : commit.conflict ? 409 : 500;
+    return json(
+      {
+        ok: commit.ok,
+        children: commit.children,
+        manifest: commit.manifest,
+        conflict: commit.conflict,
+        verified: commit.verified,
+        go: false,
+        not_a_pass: true,
+        ...(commit.ok
+          ? {}
+          : {
+              error: commit.conflict
+                ? "artifact_conflict"
+                : "children_then_manifest_failed",
+            }),
+      },
+      status,
+    );
   }
 
   if (url.pathname === "/v1/propose-thesis") {
