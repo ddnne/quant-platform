@@ -52,10 +52,10 @@
       "fallback_policy": "ingest_time_conservative",
       "observation_grain": "issuer_morning_session",
       "bulk": "api",
-      "params": ["code", "date"],
+      "params": ["code", "pagination_key"],
       "code_param": true,
       "session": "morning",
-      "assumption": "The completed AM bar is knowable no earlier than the 11:30 JST morning close."
+      "assumption": "The completed AM bar is knowable no earlier than the 11:30 JST morning close. Vendor query is code + pagination_key (recent snapshot; no date/from/to)."
     },
     {
       "dataset_id": "fins_summary",
@@ -137,7 +137,7 @@
       "dataset_id": "equities_earnings_calendar",
       "path": "/v2/equities/earnings-calendar",
       "group": "core",
-      "date_mode": "range",
+      "date_mode": "today",
       "natural_key_fields": ["Date", "Code"],
       "event_time_policy": "observation_date",
       "event_time_fields": ["Date"],
@@ -147,9 +147,9 @@
       "fallback_policy": "ingest_time_conservative",
       "observation_grain": "issuer_scheduled_earnings_day",
       "bulk": "api",
-      "params": ["from", "to", "date"],
+      "params": ["pagination_key"],
       "code_param": false,
-      "assumption": "Date is a scheduled event date. Historical publication timing is unavailable, so ingest time is retained."
+      "assumption": "Vendor next-business-day snapshot (pagination_key only). Date is a scheduled event date; historical publication timing is unavailable, so ingest time is retained."
     },
     {
       "dataset_id": "markets_calendar",

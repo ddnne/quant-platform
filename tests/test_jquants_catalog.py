@@ -116,3 +116,16 @@ def test_fetch_dataset_paginates_via_pagination_key():
     rows = c.fetch_dataset("fins_dividend", code="1")
     assert [r["Code"] for r in rows] == ["1", "2"]
     assert http.last_params.get("pagination_key") == "tok"
+
+
+def test_am_and_earnings_params_match_vendor_snapshot_apis():
+    """AM and earnings-calendar query params match J-Quants V3 vendor snapshot APIs."""
+    am = catalog.get("equities_bars_daily_am")
+    assert am["params"] == ["code", "pagination_key"]
+    assert "date" not in am["params"]
+    assert "from" not in am["params"] and "to" not in am["params"]
+    earn = catalog.get("equities_earnings_calendar")
+    assert earn["params"] == ["pagination_key"]
+    assert earn["date_mode"] == "today"
+    assert "from" not in earn["params"] and "to" not in earn["params"]
+    assert "date" not in earn["params"]
