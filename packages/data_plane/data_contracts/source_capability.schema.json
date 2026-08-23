@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "source-capability/v3",
   "title": "SourceCapabilityContract",
-  "description": "Official-availability SoT. Unknown properties fail closed. policy_version source-capability/v3.",
+  "description": "Official-availability SoT. Dataset-level keys fail closed; nested evidence maps remain open. policy_version source-capability/v3.",
   "$defs": {
     "iso_date": {
       "type": "string",
@@ -22,7 +22,7 @@
     },
     "publication_calendar": {
       "type": "object",
-      "additionalProperties": false,
+      "additionalProperties": true,
       "required": ["kind", "timezone"],
       "properties": {
         "kind": { "$ref": "#/$defs/nonempty_string" },
@@ -32,7 +32,7 @@
     },
     "entitlement_semantics": {
       "type": "object",
-      "additionalProperties": false,
+      "additionalProperties": true,
       "required": ["clamp_before_earliest"],
       "properties": {
         "clamp_before_earliest": { "type": "boolean" },
@@ -41,7 +41,7 @@
     },
     "collection_window": {
       "type": "object",
-      "additionalProperties": false,
+      "additionalProperties": true,
       "required": ["grain", "open", "close"],
       "properties": {
         "grain": { "$ref": "#/$defs/nonempty_string" },
@@ -51,7 +51,7 @@
     },
     "freshness_sla": {
       "type": "object",
-      "additionalProperties": false,
+      "additionalProperties": true,
       "required": ["expected_after", "usable_by", "timezone", "rule"],
       "properties": {
         "expected_after": { "$ref": "#/$defs/nonempty_string" },
@@ -62,7 +62,7 @@
     },
     "event_time": {
       "type": "object",
-      "additionalProperties": false,
+      "additionalProperties": true,
       "required": ["policy", "fields"],
       "properties": {
         "policy": { "$ref": "#/$defs/nonempty_string" },
@@ -71,7 +71,7 @@
     },
     "available_at": {
       "type": "object",
-      "additionalProperties": false,
+      "additionalProperties": true,
       "required": ["policy"],
       "properties": {
         "policy": { "$ref": "#/$defs/nonempty_string" },
@@ -81,7 +81,7 @@
     },
     "revision_semantics": {
       "type": "object",
-      "additionalProperties": false,
+      "additionalProperties": true,
       "required": ["policy", "generation_on_revision"],
       "properties": {
         "policy": { "$ref": "#/$defs/nonempty_string" },
@@ -90,7 +90,7 @@
     },
     "research_profile_eligibility": {
       "type": "object",
-      "additionalProperties": false,
+      "additionalProperties": true,
       "required": ["include_in", "exclude_from", "exclusion_reason"],
       "properties": {
         "include_in": { "$ref": "#/$defs/string_array" },
