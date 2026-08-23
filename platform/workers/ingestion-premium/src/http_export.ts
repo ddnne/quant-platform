@@ -23,6 +23,9 @@ function json(body: unknown, status = 200): Response {
 export async function handleExportD1(
   env: ExportEnv, request: Request,
 ): Promise<Response> {
+  if (request.method !== "GET") {
+    return json({ error: "GET required" }, 405);
+  }
   if (!authorized(request, env.DATA_EXPORT_TOKEN)) {
     return json({ error: "unauthorized" }, 401);
   }
@@ -77,6 +80,9 @@ export async function handleExportD1(
 export async function handleExportChanges(
   env: ExportEnv, request: Request,
 ): Promise<Response> {
+  if (request.method !== "GET") {
+    return json({ error: "GET required" }, 405);
+  }
   if (!authorized(request, env.DATA_EXPORT_TOKEN)) {
     return json({ error: "unauthorized" }, 401);
   }

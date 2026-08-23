@@ -77,7 +77,10 @@ describe("ingestion-premium export auth", () => {
   });
 
   it("rejects GET/POST /v1/export/changes with unbound DATA_EXPORT_TOKEN and does not prepare D1", async () => {
-    for (const method of ["GET", "POST"] as const) {
+    for (const [method, status, error] of [
+      ["GET", 401, "unauthorized"],
+      ["POST", 405, "GET required"],
+    ] as const) {
       const inner = stubD1();
       let prepareCalls = 0;
       const db = {
@@ -95,9 +98,9 @@ describe("ingestion-premium export auth", () => {
         env,
       );
       expect(res).not.toBeNull();
-      expect(res!.status).toBe(401);
+      expect(res!.status).toBe(status);
       const body = await res!.text();
-      expect(JSON.parse(body)).toEqual({ error: "unauthorized" });
+      expect(JSON.parse(body)).toEqual({ error });
       expect(body).not.toContain(EXPORT_TOKEN);
       expect(prepareCalls).toBe(0);
     }
