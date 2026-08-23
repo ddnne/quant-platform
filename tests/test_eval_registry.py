@@ -441,6 +441,40 @@ def test_blend_option_summary_is_descriptive_not_a_pass() -> None:
     )
     assert honest["honest_windows"] is True
     assert honest["n_windows"] == 1
+    from research.combo_basket import stitch_cells_honest_windows
+
+    a17 = dict(cells[0])
+    a17["window_id"] = "y2017_q4"
+    a17["dates"] = ["d0", "d1"]
+    a17["net_daily"] = [0.0, 0.01]
+    a19 = dict(cells[0])
+    a19["window_id"] = "y2019_full"
+    a19["dates"] = ["e0", "e1"]
+    a19["net_daily"] = [0.0, 0.02]
+    a15 = dict(cells[0])
+    a15["window_id"] = "y2015_full"
+    st = stitch_cells_honest_windows([a17, a19, a15])
+    assert {c["window_id"] for c in st} == {"w2017_2019"}
+    cell = st[0]
+    assert cell["net_daily"] == [0.0, 0.01, 0.0, 0.02]
+    assert cell["missing_shards"] == []
+    b17 = dict(cells[1])
+    b17["window_id"] = "y2017_q4"
+    b17["dates"] = ["d0", "d1"]
+    b17["net_daily"] = [0.0, 0.00]
+    b19 = dict(cells[1])
+    b19["window_id"] = "y2019_full"
+    b19["dates"] = ["e0", "e1"]
+    b19["net_daily"] = [0.0, 0.02]
+    stitched_sum = blend_option_summary(
+        [a17, a19, a15, b17, b19],
+        basket_id="t",
+        logic_ids=["a", "b"],
+        stitch=True,
+    )
+    assert stitched_sum["stitched"] is True
+    assert stitched_sum["n_windows"] == 1
+    assert stitched_sum["apply"] is False
 
 
 def test_merge_daily_path_cells_for_ids_later_file_wins(tmp_path) -> None:

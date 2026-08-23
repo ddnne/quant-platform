@@ -284,15 +284,94 @@ def filter_cells_honest_windows(
     return out
 
 
+def stitch_cells_honest_windows(
+    cells: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Concatenate HONEST shards into 3 window_ids. Does not invent missing years.
+
+    Already-stitched cells (window_id in HONEST 3y catalog) win over shard concat.
+    Occupancy is length-weighted across present shards. Not a pass.
+    """
+    from research.eval_windows import HONEST_3Y_WINDOWS
+
+    catalog = {str(w["window_id"]) for w in HONEST_3Y_WINDOWS}
+    by_lid: dict[str, dict[str, Mapping[str, Any]]] = {}
+    for c in cells:
+        if not isinstance(c, Mapping):
+            continue
+        lid = str(c.get("logic_id") or "").strip()
+        wid = str(c.get("window_id") or c.get("window") or "").strip()
+        nd = c.get("net_daily")
+        if not lid or not wid or not isinstance(nd, list) or len(nd) < 2:
+            continue
+        by_lid.setdefault(lid, {})[wid] = c
+    out: list[dict[str, Any]] = []
+    for lid, by_win in by_lid.items():
+        for spec in HONEST_3Y_WINDOWS:
+            wid = str(spec["window_id"])
+            if wid in by_win:
+                out.append(dict(by_win[wid]))
+                continue
+            shards = [
+                str(s.get("period_id"))
+                for s in (spec.get("shards") or ())
+                if isinstance(s, Mapping) and s.get("period_id")
+            ]
+            present = [by_win[s] for s in shards if s in by_win]
+            if not present:
+                continue
+            nets: list[float] = []
+            dates: list[str] = []
+            occ_w = 0.0
+            occ_n = 0.0
+            for cell in present:
+                nd = [float(x) for x in (cell.get("net_daily") or [])]
+                dd = [str(x) for x in (cell.get("dates") or [])]
+                if len(dd) != len(nd):
+                    dd = [str(i) for i in range(len(nd))]
+                nets.extend(nd)
+                dates.extend(dd)
+                occ = cell.get("occupancy")
+                if occ is None:
+                    occ = cell.get("occupancy_frac")
+                n_days = max(1, len(nd) - 1)
+                if occ is not None:
+                    occ_w += float(occ) * n_days
+                    occ_n += n_days
+            mean_occ = (occ_w / occ_n) if occ_n else None
+            stitched = dict(present[0])
+            stitched["logic_id"] = lid
+            stitched["window_id"] = wid
+            stitched["window"] = wid
+            stitched["net_daily"] = nets
+            stitched["dates"] = dates
+            stitched["occupancy"] = mean_occ
+            stitched["occupancy_frac"] = mean_occ
+            stitched["n_days"] = len(nets)
+            stitched["missing_shards"] = [s for s in shards if s not in by_win]
+            stitched["stitched_from"] = [
+                str(c.get("window_id") or c.get("window")) for c in present
+            ]
+            out.append(stitched)
+    return out
+
+
 def blend_option_summary(
     cells: Sequence[Mapping[str, Any]],
     *,
     basket_id: str,
     logic_ids: Sequence[str],
     honest: bool = False,
+    stitch: bool = False,
 ) -> dict[str, Any]:
     """Compact equal-weight blend stats. Drops net_daily. Not a pass."""
-    used = filter_cells_honest_windows(cells) if honest else list(cells)
+    used: Sequence[Mapping[str, Any]]
+    if stitch:
+        used = stitch_cells_honest_windows(cells)
+    elif honest:
+        used = filter_cells_honest_windows(cells)
+    else:
+        used = list(cells)
     rows = blend_window_cells(used, basket_id=basket_id, logic_ids=logic_ids)
     complete = [r for r in rows if r.get("daily_path_complete")]
     missing: set[str] = set()
@@ -311,7 +390,8 @@ def blend_option_summary(
         "daily_path_DD_min": (min(float(x) for x in dds if x is not None) if any(x is not None for x in dds) else None),
         "total_ret_net_mean": _mean(nets),
         "apply": False,
-        "honest_windows": bool(honest),
+        "honest_windows": bool(honest or stitch),
+        "stitched": bool(stitch),
         "go": False,
         "not_a_pass": True,
     }
@@ -322,6 +402,7 @@ __all__ = [
     "blend_window_cells",
     "blend_option_summary",
     "filter_cells_honest_windows",
+    "stitch_cells_honest_windows",
     "occupancy_in_candidate_band",
     "primary_sleeve_and_meta_cells",
     "summarize_basket_trends",
