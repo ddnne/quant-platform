@@ -83,6 +83,8 @@ def unique22_occupancy_equal_lifted() -> frozenset[str]:
 def unique22_occupancy_park() -> frozenset[str]:
     """Leftover unique-22 whose occupancy is not combo-equal. Not a candidate.
 
+    Park reasons live in UNIQUE22_PARK_REASONS; leftover occupancy stays in
+    daily_path.ts. Do not unify with comboEventGateOk.
     Re-audit 2026-08-22: no additional occupancy-equal lifts. Remaining 17 are
     dedicated CS books, sticky surprise-xs, trail-K, side-switch, or
     momentumAt(entryIdx) leftover. Do not silently unpark.
