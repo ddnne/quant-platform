@@ -190,10 +190,10 @@ _OTC_REFERENCE_ALIASES: dict[str, list[str]] = {
 _OTC_HEADER_MARKERS = ("銘柄コード", "証券コード", "銘柄名", "債券名")
 
 # Official CSV is headerless (baisan_csv.pdf); 2015/2022 did not move columns.
-# Earliest archive days 2002-08-02 and 2002-08-05 are ~23 columns and fail
-# this 29-col gate → PARSE_ZERO in jsda_otc_seal_official (raw exists, ~4200
-# cp932 rows). Do not invent COMPLETE from those files until a layout
-# adapter yields nz parse with raw==structured.
+# 2002-08-02/05 are ~23 columns: a prefix of this 29-col map. Widths below 29
+# use only documented overlapping indexes (< 23). Do not invent later field
+# positions. Parser rows are not Coverage COMPLETE; the sealer still requires
+# nz parse, raw==structured, and digest match.
 _OTC_POSITIONAL_COLUMNS: dict[str, int] = {
     "publication_label_date": 0,
     "security_code": 2,
@@ -211,6 +211,13 @@ _OTC_POSITIONAL_COLUMNS: dict[str, int] = {
     "median_price": 27,
 }
 _OTC_POSITIONAL_MIN_COLUMNS = 29
+_OTC_EARLY_LAYOUT_COLUMN_LIMIT = 23
+_OTC_EARLY_POSITIONAL_COLUMNS: dict[str, int] = {
+    field: index
+    for field, index in _OTC_POSITIONAL_COLUMNS.items()
+    if index < _OTC_EARLY_LAYOUT_COLUMN_LIMIT
+}
+_OTC_POSITIONAL_IDENTITY_MIN_COLUMNS = _OTC_POSITIONAL_COLUMNS["bond_name"] + 1
 
 
 def _otc_header_text(cell: Any) -> str:
@@ -248,13 +255,23 @@ def _otc_columns(headers: List[str]) -> dict[str, int]:
 
 
 def _looks_like_otc_positional_row(row: List[str]) -> bool:
-    """True if the row matches the governed headerless layout."""
-    if len(row) < _OTC_POSITIONAL_MIN_COLUMNS:
+    """True if date@0 / code@2 / name@3 match the headerless identity."""
+    if len(row) < _OTC_POSITIONAL_IDENTITY_MIN_COLUMNS:
         return False
     source_date = re.sub(r"\D", "", _cell(row, 0))
     code = _cell(row, _OTC_POSITIONAL_COLUMNS["security_code"])
     name = _cell(row, _OTC_POSITIONAL_COLUMNS["bond_name"])
     return len(source_date) == 8 and source_date.isdigit() and bool(code and name)
+
+
+def _positional_otc_column_map(row: List[str]) -> Optional[dict[str, int]]:
+    """29-col map, or documented overlapping indexes when width < 29."""
+    width = len(row)
+    if width >= _OTC_POSITIONAL_MIN_COLUMNS:
+        return dict(_OTC_POSITIONAL_COLUMNS)
+    if width < _OTC_POSITIONAL_IDENTITY_MIN_COLUMNS:
+        return None
+    return dict(_OTC_EARLY_POSITIONAL_COLUMNS)
 
 
 def parse_otc_reference_csv(
@@ -276,14 +293,20 @@ def parse_otc_reference_csv(
     if header_index < 0:
         if not _looks_like_otc_positional_row(rows[0]):
             return []
-        columns = dict(_OTC_POSITIONAL_COLUMNS)
+        header_columns = None
         first_data_index = 0
     else:
-        columns = _otc_columns(headers)
+        header_columns = _otc_columns(headers)
         first_data_index = header_index + 1
     out: list[dict] = []
     for row_index, row in enumerate(rows[first_data_index:], start=first_data_index):
         source_row_number = row_index + 1
+        if header_columns is None:
+            columns = _positional_otc_column_map(row)
+            if columns is None:
+                continue
+        else:
+            columns = header_columns
         code = _cell(row, columns.get("security_code"))
         name = _cell(row, columns.get("bond_name"))
         if not code and not name:
