@@ -1,0 +1,60 @@
+{
+  "policy_version": "source-capability/v3",
+  "dataset_id": "jsda_otc_bond_reference_prices",
+  "source": "jsda",
+  "upstream_locator": "/shijyo/saiken/baibai/baisanchi/index.html",
+  "official_evidence_url": "https://market.jsda.or.jp/shijyo/saiken/baibai/baisanchi/index.html",
+  "history_mode": "official_archive_index",
+  "earliest_official_availability": "2002-08-02",
+  "historical_research_eligible": true,
+  "tip_only_operational": false,
+  "supported_query_parameters": ["year"],
+  "publication_calendar": {
+    "kind": "official_archive_index",
+    "timezone": "Asia/Tokyo",
+    "index_url": "https://market.jsda.or.jp/shijyo/saiken/baibai/baisanchi/index.html",
+    "publication_days_only": true,
+    "include_weekends": false,
+    "required_days": "official_index_listed_days_only"
+  },
+  "entitlement_semantics": {
+    "clamp_before_earliest": false,
+    "subscription_floor": null
+  },
+  "collection_window": {
+    "grain": "official_archive_index_day",
+    "open": "2002-08-02",
+    "close": "latest_official_archive_index_day",
+    "required_domain_start": "2002-08-02",
+    "required_set": "official_index_listed_days_only",
+    "expand_calendar_days": false,
+    "not_calendar_day_count": 8784
+  },
+  "freshness_sla": {
+    "expected_after": "15:00",
+    "usable_by": "16:00",
+    "timezone": "Asia/Tokyo",
+    "rule": "official_archive_index_day"
+  },
+  "event_time": {
+    "policy": "source_quote_session_close_1500_jst",
+    "fields": ["publication_label_date"]
+  },
+  "available_at": {
+    "policy": "ingest_time_conservative_when_publication_timestamp_unknown",
+    "field": null,
+    "known_publication_lag": null
+  },
+  "revision_semantics": {
+    "policy": "new_revision_available_no_earlier_than_correction_publication_or_ingestion",
+    "generation_on_revision": true
+  },
+  "research_profile_eligibility": {
+    "include_in": ["historical_research", "core_historical"],
+    "exclude_from": ["calendar_day_inventory"],
+    "exclusion_reason": "Required segments are official year-index listed publication days only. Calendar weekends and non-index weekdays are not required and must not be empty-COMPLETE.",
+    "historical_research": true,
+    "tip_only": false,
+    "dataset_complete_claim": false
+  }
+}
