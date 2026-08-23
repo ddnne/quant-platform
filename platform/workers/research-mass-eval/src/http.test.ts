@@ -249,7 +249,16 @@ describe("index.ts write order pin", () => {
     expect(daily.indexOf("putChildrenThenManifest")).toBeGreaterThan(
       daily.indexOf("putImmutableJson"),
     );
+  });
+});
+
+describe("http_routes.ts fetch dispatch", () => {
+  it("denies mass_screen and generation with 403", () => {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const src = readFileSync(join(here, "http_routes.ts"), "utf8");
     expect(src).toContain('capability: "mass_screen"');
+    expect(src).toContain('capability: "generation"');
     expect(src).toContain("403");
+    expect(src).toContain("authorized");
   });
 });
