@@ -1,7 +1,14 @@
 #!/usr/bin/env python3
-"""Seal official JSDA OTC archive days. No invent COMPLETE."""
+"""Seal official JSDA OTC archive days. No invent COMPLETE.
+
+Coverage refresh takes local official-index HTML as index_text.
+Omitted/blank text is fail-closed empty, not calendar COMPLETE.
+PARSE_ZERO 2002-08-02/05 stay PARTIAL without in-repo digest+count.
+Does not fetch live JSDA HTML.
+"""
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import os
@@ -38,6 +45,11 @@ FULL_OK_MIN = 100_000
 WAVE = "jsda_otc_official_backfill"
 ITEMS: list = []
 LOGDIR = ROOT / "data" / "ops"
+OTC_DATASET = "jsda_otc_bond_reference_prices"
+OTC_GRAIN = "official_archive_index_day"
+PARSE_ZERO_DAYS = frozenset({"2002-08-02", "2002-08-05"})
+# In-repo digest+count required to seal PARSE_ZERO days. Empty = stay PARTIAL.
+PARSE_ZERO_SEAL_PROOF: dict[str, tuple[str, int]] = {}
 
 TRIGGERS_DROP = [
     "invalidate_snapshot_jsda_otc_reference_i",
@@ -102,6 +114,58 @@ def sha256_file(path: Path) -> str:
     return "sha256:" + h.hexdigest()
 
 
+def _read_index_text(path: str | Path | None) -> str | None:
+    """Load local official-index HTML.
+
+    Omitted/blank → None (fail-closed empty). Missing PATH raises.
+    Never downloads the index. Never walks a calendar.
+    """
+    if path is None:
+        return None
+    raw = str(path).strip()
+    if not raw:
+        return None
+    file_path = Path(raw)
+    if not file_path.is_file():
+        raise FileNotFoundError(f"index HTML not found: {file_path}")
+    text = file_path.read_text(encoding="utf-8")
+    if not text.strip():
+        return None
+    return text
+
+
+def _parse_zero_unproven(day: str, digest: str | None, count: int) -> bool:
+    """True → 2002-08-02/05 stay PARSE_ZERO without in-repo digest+count."""
+    if day not in PARSE_ZERO_DAYS:
+        return False
+    proof = PARSE_ZERO_SEAL_PROOF.get(day)
+    if proof is None:
+        return True
+    expected_digest, expected_count = proof
+    if digest is None or not str(digest).startswith("sha256:"):
+        return True
+    if int(count) <= 0:
+        return True
+    return digest != expected_digest or int(count) != int(expected_count)
+
+
+def refresh_otc_coverage(
+    conn: sqlite3.Connection,
+    db_path: str | Path,
+    *,
+    index_text: str | None,
+    today: str = "2026-08-21",
+):
+    """Always pass index_text. Missing text is fail-closed empty, not COMPLETE."""
+    return refresh_coverage_ledger(
+        conn,
+        db_path,
+        datasets=[OTC_DATASET],
+        today=today,
+        index_text=index_text,
+    )
+
+
 def next_run_id(conn: sqlite3.Connection) -> int:
     row = conn.execute(
         "SELECT COALESCE(MAX(run_id), 900000) FROM collection_receipts"
@@ -114,9 +178,9 @@ def inventory_scope(conn: sqlite3.Connection, day: str):
         """
         SELECT expected_scope, segment_start, segment_end
         FROM coverage_segments
-        WHERE dataset='jsda_otc_bond_reference_prices' AND segment_id=?
+        WHERE dataset=? AND segment_id=?
         """,
-        (day,),
+        (OTC_DATASET, day),
     ).fetchone()
     if row is None:
         return {
@@ -124,7 +188,7 @@ def inventory_scope(conn: sqlite3.Connection, day: str):
             "expected_frequency": "trading_day",
             "expected_item_unit": "source_query",
             "segment_end": day,
-            "segment_granularity": "official_archive_day",
+            "segment_granularity": OTC_GRAIN,
             "segment_start": day,
             "universe_rule": "all_bonds_in_official_publication_file",
         }, day, day
@@ -294,6 +358,17 @@ def seal_day(conn, day, path, source_url, issuer):
         # ~4200 rows). Zero parse ≠ empty source and must not become COMPLETE.
         return {"segment_id": day, "status": "PARSE_ZERO", "path": str(path), "fmt": fmt}
     digest = sha256_file(path)
+    if _parse_zero_unproven(day, digest, len(parsed)):
+        # 23-col nz parse is not Coverage COMPLETE. Stay PARTIAL without
+        # in-repo digest+count proof.
+        return {
+            "segment_id": day,
+            "status": "PARSE_ZERO",
+            "path": str(path),
+            "fmt": fmt,
+            "raw": len(parsed),
+            "digest": digest,
+        }
     now = datetime.now(timezone.utc).isoformat()
     rows = normalize_otc_reference_prices(
         parsed,
@@ -327,7 +402,7 @@ def seal_day(conn, day, path, source_url, issuer):
     scope.setdefault("coverage_mode", "official_archive_index_reconciled")
     scope.setdefault("expected_frequency", "trading_day")
     scope.setdefault("expected_item_unit", "source_query")
-    scope.setdefault("segment_granularity", "official_archive_day")
+    scope.setdefault("segment_granularity", OTC_GRAIN)
     scope.setdefault("universe_rule", "all_bonds_in_official_publication_file")
     scope["segment_start"] = seg_start
     scope["segment_end"] = seg_end
@@ -336,7 +411,7 @@ def seal_day(conn, day, path, source_url, issuer):
     run_id = next_run_id(conn)
     required = RequiredCoverageSegment(
         source="jsda",
-        dataset="jsda_otc_bond_reference_prices",
+        dataset=OTC_DATASET,
         segment_id=day,
         segment_start=seg_start,
         segment_end=seg_end,
@@ -371,7 +446,7 @@ def seal_day(conn, day, path, source_url, issuer):
     record_collection_receipt(conn, receipt)
     conn.commit()
     return {
-        "dataset": "jsda_otc_bond_reference_prices",
+        "dataset": OTC_DATASET,
         "segment_id": day,
         "status": "SEALED",
         "raw": raw_count,
@@ -385,19 +460,37 @@ def seal_day(conn, day, path, source_url, issuer):
     }
 
 
-def main() -> int:
-    import argparse
-
-    global ITEMS, LOGDIR, WAVE
+def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--log-dir", type=Path, required=True)
     p.add_argument("--items", type=Path, default=None, help="full_ok json; default <log-dir>/otc_full_ok.json")
     p.add_argument("--wave", type=str, default="jsda_otc_official_backfill")
-    args = p.parse_args()
+    p.add_argument(
+        "--index-text",
+        default=None,
+        metavar="PATH",
+        help=(
+            "local official-archive index HTML. Omitted: index_text is None "
+            "so OTC required set is fail-closed empty, not a calendar replay. "
+            "Does not fetch live JSDA HTML."
+        ),
+    )
+    return p
+
+
+def main(argv: list[str] | None = None) -> int:
+    global ITEMS, LOGDIR, WAVE
+    p = _build_parser()
+    args = p.parse_args(argv)
     LOGDIR = args.log_dir
     WAVE = str(args.wave)
     items_path = args.items or (LOGDIR / "otc_full_ok.json")
     ITEMS = json.loads(items_path.read_text())
+    try:
+        index_text = _read_index_text(args.index_text)
+    except FileNotFoundError as e:
+        print(f"Error: {e}", flush=True)
+        return 1
     print(
         f"official PARTIAL seal n={len(ITEMS)} wave={WAVE} "
         f"span={ITEMS[0]['day'] if ITEMS else None}..{ITEMS[-1]['day'] if ITEMS else None}",
@@ -475,12 +568,7 @@ def main() -> int:
         return 0
     print("refresh_coverage_ledger (OTC)...", flush=True)
     t_ref = time.time()
-    refresh_coverage_ledger(
-        conn,
-        DB,
-        datasets=["jsda_otc_bond_reference_prices"],
-        today="2026-08-21",
-    )
+    refresh_otc_coverage(conn, DB, index_text=index_text, today="2026-08-21")
     conn.commit()
     print(f"refresh done in {time.time()-t_ref:.1f}s", flush=True)
 

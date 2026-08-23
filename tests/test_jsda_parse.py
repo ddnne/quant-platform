@@ -162,6 +162,8 @@ def test_seal_complete_is_separate_function_parser_output_is_not_complete():
     assert "def seal_day" in seal_src
     assert "int(structured) != int(raw_count)" in seal_src
     assert "raw_manifest_digest=digest" in seal_src
+    assert "index_text=index_text" in seal_src
+    assert "_parse_zero_unproven" in seal_src
     # Live 2002-08-02/05 stay unsealed without in-repo digest+count proof.
     live_names = {
         "S020802.csv",
