@@ -2,6 +2,8 @@
 
 import type { Env } from "./types";
 
+export { json } from "./http_json";
+
 export function freezePayload(env: Env) {
   return {
     mass_research: env.MASS_RESEARCH || "NO-GO",
@@ -44,16 +46,6 @@ export async function authorized(
     "";
   if (!got) return false;
   return tokenMatches(got, expected);
-}
-
-export function json(data: unknown, status = 200): Response {
-  return new Response(JSON.stringify(data, null, 2), {
-    status,
-    headers: {
-      "content-type": "application/json; charset=utf-8",
-      "cache-control": "no-store",
-    },
-  });
 }
 
 export function isObject(v: unknown): v is Record<string, unknown> {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { json } from "./http";
+import { json } from "./http_json";
 
 describe("json helper is no-store presentation", () => {
   it("returns 200 application/json with cache-control no-store", async () => {
