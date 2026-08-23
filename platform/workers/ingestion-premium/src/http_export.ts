@@ -26,7 +26,6 @@ export async function handleExportD1(
   if (!authorized(request, env.DATA_EXPORT_TOKEN)) {
     return json({ error: "unauthorized" }, 401);
   }
-  await requireNaturalKeysV2Ready(env.DB);
   const url = new URL(request.url);
   const table = url.searchParams.get("table") || "jquants_records";
   const allowed = new Set([
@@ -48,6 +47,7 @@ export async function handleExportD1(
   if (!Number.isInteger(cursorRaw) || cursorRaw < 0) {
     return json({ error: "cursor must be a non-negative integer" }, 400);
   }
+  await requireNaturalKeysV2Ready(env.DB);
 
   const r = await env.DB.prepare(
     `SELECT rowid AS __export_cursor, * FROM ${table}
@@ -80,7 +80,6 @@ export async function handleExportChanges(
   if (!authorized(request, env.DATA_EXPORT_TOKEN)) {
     return json({ error: "unauthorized" }, 401);
   }
-  await requireNaturalKeysV2Ready(env.DB);
   const url = new URL(request.url);
   const afterSeq = Number(url.searchParams.get("after_seq") || "0");
   const limit = Number(url.searchParams.get("limit") || "500");
@@ -90,6 +89,7 @@ export async function handleExportChanges(
   if (!Number.isInteger(limit) || limit < 1 || limit > 1000) {
     return json({ error: "limit must be an integer between 1 and 1000" }, 400);
   }
+  await requireNaturalKeysV2Ready(env.DB);
 
   const result = await env.DB.prepare(
     `SELECT change_seq, table_name, source, dataset, natural_key, event_time,
