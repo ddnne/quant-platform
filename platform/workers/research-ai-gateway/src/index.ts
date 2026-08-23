@@ -1,7 +1,7 @@
 /// <reference types="@cloudflare/workers-types" />
 
 import { authorized } from "./authorized";
-import { BudgetLedger } from "./budget_do";
+import { BudgetLedger } from "./budget_http";
 import { json } from "./http_json";
 import {
   decodeGatewayRequest,

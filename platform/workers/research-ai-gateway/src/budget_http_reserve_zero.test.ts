@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vitest";
-import {
-  MemoryBudgetStorage,
-  handleBudgetRequest,
-  zeroCounters,
-} from "./budget_do";
+import { MemoryBudgetStorage, zeroCounters } from "./budget_do";
+import { handleBudgetRequest } from "./budget_http";
 
 /**
  * POST /reserve without amounts is zero occupancy, not a consume.
