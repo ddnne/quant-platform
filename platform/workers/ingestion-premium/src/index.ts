@@ -111,6 +111,10 @@ function requestQueries(
   spec: DatasetSpec,
   opts: { from?: string; to?: string; today?: string },
 ): Record<string, string>[] {
+  // Vendor snapshot: AM is code+pagination_key; earnings is pagination_key. No date/from/to.
+  if (spec.id === "equities_bars_daily_am" || spec.id === "equities_earnings_calendar") {
+    return [{}];
+  }
   if (spec.dateMode === "none") return [{}];
 
   // Single-day key: most series use `date=`; short-sale uses `disc_date=`.
@@ -125,7 +129,7 @@ function requestQueries(
     return [{ [dayKey]: opts.today || defaultMarketDayJst() }];
   }
 
-  // range: calendar / topix / investor-types (bare from/to). Earnings calendar vendor is pagination_key snapshot.
+  // range: calendar / topix / investor-types (bare from/to).
   const from = opts.from || (opts.to ? opts.to : daysAgoJst(5));
   const to = opts.to || todayJst();
   if (from > to) throw new Error("from must be on or before to");
@@ -291,6 +295,12 @@ async function fetchDataset(
     let pagination: string | null = null;
     for (let page = 0; page < 200; page++) {
       const params = new URLSearchParams(baseQuery);
+      // AM/earnings vendor snapshot: never send date/from/to; pagination_key only on later pages.
+      if (spec.id === "equities_bars_daily_am" || spec.id === "equities_earnings_calendar") {
+        params.delete("date");
+        params.delete("from");
+        params.delete("to");
+      }
       if (pagination) params.set("pagination_key", pagination);
       const suffix = params.size > 0 ? `?${params.toString()}` : "";
       const url = JQ_BASE + path + suffix;
@@ -392,7 +402,12 @@ function collectionSegment(
     if (query[dayKey]) dates.push(query[dayKey]);
   }
   if (dates.length === 0) {
-    throw new Error(`collection window unavailable for ${spec.id}`);
+    // Vendor snapshot has no date/from/to query; collection window is ingest JST day.
+    if (spec.id === "equities_bars_daily_am" || spec.id === "equities_earnings_calendar") {
+      dates.push(todayJst());
+    } else {
+      throw new Error(`collection window unavailable for ${spec.id}`);
+    }
   }
   const start = [...dates].sort()[0];
   const end = [...dates].sort().at(-1)!;
