@@ -182,6 +182,9 @@ describe("ingestion-premium health", () => {
     expect(body).not.toContain(EXPORT_TOKEN);
     expect(body).not.toContain(API_KEY);
     expect(body).not.toContain(env.INGESTION_RUN_TOKEN);
+    expect(body).not.toContain("COMPLETE");
+    expect(body).not.toMatch(/Coverage COMPLETE/);
+    expect(body).not.toContain("READY");
     const json = JSON.parse(body) as {
       ok: boolean;
       has_jquants_key: boolean;
