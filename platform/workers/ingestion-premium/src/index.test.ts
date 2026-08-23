@@ -60,6 +60,21 @@ describe("ingestion-premium export auth", () => {
     expect(JSON.parse(body)).toEqual({ error: "unauthorized" });
     expect(body).not.toContain(EXPORT_TOKEN);
   });
+
+  it("rejects /v1/export/d1 with unbound DATA_EXPORT_TOKEN even when a header is sent", async () => {
+    const env: ExportEnv = { DB: stubD1(), DATA_EXPORT_TOKEN: undefined };
+    const res = await handleExportPaths(
+      new Request("https://ingestion-premium.test/v1/export/d1", {
+        headers: { "X-Ingestion-Token": EXPORT_TOKEN },
+      }),
+      env,
+    );
+    expect(res).not.toBeNull();
+    expect(res!.status).toBe(401);
+    const body = await res!.text();
+    expect(JSON.parse(body)).toEqual({ error: "unauthorized" });
+    expect(body).not.toContain(EXPORT_TOKEN);
+  });
 });
 
 describe("ingestion-premium health", () => {
