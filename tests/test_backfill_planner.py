@@ -131,3 +131,98 @@ def test_premium_rate_constants_documented():
     # Near-ceiling defaults (P0 rate accel); not a deep safety park under 450.
     assert PREMIUM_DRIVER_GENERAL_RPM >= 495
     assert PREMIUM_DRIVER_FINS_RPM >= 495
+
+
+def _month_ids(start, end):
+    months: list[str] = []
+    year, month = start.year, start.month
+    while (year, month) <= (end.year, end.month):
+        months.append(f"{year:04d}-{month:02d}")
+        month += 1
+        if month == 13:
+            month = 1
+            year += 1
+    return months
+
+
+def test_planner_am_snapshot_is_not_32_month_densify():
+    """AM bars are a same-day snapshot; V3 required set is not 32 monthly shells."""
+    from datetime import date
+
+    cutoff = date(2026, 8, 14)
+    plan = BackfillPlanner(cutoff=cutoff).plan(
+        datasets=["equities_bars_daily_am"],
+    )
+    ids = [j.segment_id for j in plan.jobs]
+    assert len(plan.jobs) != 32
+    assert len(plan.jobs) == 1
+    assert "2024-01" not in ids
+    assert "2026-08" not in ids
+    assert ids == [cutoff.isoformat()]
+    assert plan.jobs[0].requested_from == cutoff.isoformat()
+    assert plan.jobs[0].requested_to == cutoff.isoformat()
+
+
+def test_planner_earnings_snapshot_is_not_200_month_densify():
+    """Earnings calendar is a next-business-day snapshot, not 200 monthly shells."""
+    from datetime import date
+
+    cutoff = date(2026, 8, 14)
+    plan = BackfillPlanner(cutoff=cutoff).plan(
+        datasets=["equities_earnings_calendar"],
+    )
+    ids = [j.segment_id for j in plan.jobs]
+    assert len(plan.jobs) != 200
+    assert len(plan.jobs) == 1
+    assert "2010-01" not in ids
+    assert ids == [cutoff.isoformat()]
+    assert plan.jobs[0].requested_from == cutoff.isoformat()
+    assert plan.jobs[0].requested_to == cutoff.isoformat()
+
+
+def test_planner_master_jobs_exclude_pre_official_months():
+    """Official master domain starts 2008-05-07; 2006-08..2008-04 are not jobs.
+
+    JQUANTS_SUBSCRIPTION_FLOOR remains 2006-08-19 entitlement, not domain.
+    """
+    from datetime import date
+
+    from ops.backfill_planner import JQUANTS_SUBSCRIPTION_FLOOR
+
+    assert JQUANTS_SUBSCRIPTION_FLOOR == date(2006, 8, 19)
+    excluded = _month_ids(date(2006, 8, 1), date(2008, 4, 1))
+    plan = BackfillPlanner(cutoff=date(2008, 6, 30)).plan(
+        datasets=["equities_master"],
+        from_date="2006-08-19",
+        to_date="2008-06-30",
+    )
+    months = {j.segment_id for j in plan.jobs}
+    assert months.isdisjoint(excluded)
+    assert "2006-08" not in months
+    assert "2008-04" not in months
+    assert "2008-05" in months
+    assert "2008-06" in months
+    assert all(j.requested_from >= "2008-05-07" for j in plan.jobs)
+
+
+def test_planner_skips_complete_tip_snapshot_segment(tmp_path):
+    """Already-COMPLETE cutoff ids are skipped; planner does not invent COMPLETE."""
+    import sqlite3
+    from datetime import date
+
+    cutoff = date(2026, 8, 14)
+    db = tmp_path / "coverage.sqlite"
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "CREATE TABLE coverage_segments (dataset TEXT, segment_id TEXT, status TEXT)"
+    )
+    conn.execute(
+        "INSERT INTO coverage_segments VALUES (?, ?, ?)",
+        ("equities_bars_daily_am", cutoff.isoformat(), "COMPLETE"),
+    )
+    conn.commit()
+    conn.close()
+    plan = BackfillPlanner(cutoff=cutoff, db_path=db).plan(
+        datasets=["equities_bars_daily_am"],
+    )
+    assert plan.jobs == []

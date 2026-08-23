@@ -17,9 +17,18 @@ from typing import Any, Iterable, Literal, Mapping, Sequence
 from data_contracts.canonical import governed_datasets
 from data_contracts.coverage import (
     POLICY_VERSION as COVERAGE_POLICY_VERSION,
+    SNAPSHOT_SEGMENT_GRANULARITIES,
+    CollectionCoverageContract,
     all_coverage_contracts,
     coverage_contract_for,
 )
+from data_contracts.source_capability import (
+    TIP_SNAPSHOT_MODES,
+    SourceCapabilityContract,
+    source_capability_contract_for,
+)
+from storage.coverage_ledger import plan_required_segments
+
 PLAN_VERSION = "backfill-plan/v1"
 
 # ---------------------------------------------------------------------------
@@ -340,6 +349,31 @@ def _read_complete_segments(
         return set()
 
 
+def _source_capability(dataset_id: str) -> SourceCapabilityContract | None:
+    try:
+        return source_capability_contract_for(dataset_id)
+    except KeyError:
+        return None
+
+
+def _is_tip_snapshot_dataset(cov: CollectionCoverageContract) -> bool:
+    """Tip/recent snapshot datasets plan a current cutoff, not monthly history."""
+    cap = _source_capability(cov.dataset_id)
+    if cap is not None and cap.history_mode in TIP_SNAPSHOT_MODES:
+        return True
+    if cov.history_mode in TIP_SNAPSHOT_MODES:
+        return True
+    return cov.segment_granularity in SNAPSHOT_SEGMENT_GRANULARITIES
+
+
+def _official_domain_start(dataset_id: str) -> date | None:
+    """Official provision start. Entitlement floor is not official domain."""
+    cap = _source_capability(dataset_id)
+    if cap is None or cap.history_mode in TIP_SNAPSHOT_MODES:
+        return None
+    return date.fromisoformat(cap.earliest_official_availability)
+
+
 class BackfillPlanner:
     """Plan backfill jobs from Coverage Contract + endpoint capabilities.
 
@@ -366,6 +400,55 @@ class BackfillPlanner:
         # endpoints when the coverage segment is calendar_month.
         self.prefer_month_chunks_for_today = prefer_month_chunks_for_today
         self.endpoints = load_premium_endpoint_capabilities()
+
+    def _jobs_from_required_segments(
+        self,
+        cov: CollectionCoverageContract,
+        ep: EndpointCapability,
+        *,
+        contract_digest: str,
+        complete: set[str],
+        filter_from: date | None,
+        filter_to: date | None,
+    ) -> list[BackfillJob]:
+        """Emit at most Coverage V3 required segments (typically one cutoff snapshot)."""
+        try:
+            required = plan_required_segments(
+                cov, self.cutoff.isoformat(), source="jquants"
+            )
+        except ValueError:
+            return []
+        jobs: list[BackfillJob] = []
+        for seg in required:
+            if seg.segment_id in complete:
+                continue
+            a = _parse_date(seg.segment_start)
+            b = _parse_date(seg.segment_end)
+            if b < JQUANTS_SUBSCRIPTION_FLOOR:
+                continue
+            if a < JQUANTS_SUBSCRIPTION_FLOOR:
+                a = JQUANTS_SUBSCRIPTION_FLOOR
+            if a > b:
+                continue
+            if filter_from is not None and b < filter_from:
+                continue
+            if filter_to is not None and a > filter_to:
+                continue
+            jobs.append(
+                BackfillJob(
+                    dataset=cov.dataset_id,
+                    source="jquants",
+                    segment_id=seg.segment_id,
+                    requested_from=a.isoformat(),
+                    requested_to=b.isoformat(),
+                    endpoint_query_mode=ep.date_mode,
+                    priority=_PRIORITY.get(cov.dataset_id, 200),
+                    contract_digest=contract_digest,
+                    expected_evidence="raw_plus_structured_then_receipt",
+                    state="pending",
+                )
+            )
+        return jobs
 
     def plan(
         self,
@@ -419,18 +502,36 @@ class BackfillPlanner:
                         )
                     )
                     continue
+                complete = _read_complete_segments(conn, cov.dataset_id)
+                if _is_tip_snapshot_dataset(cov):
+                    jobs.extend(
+                        self._jobs_from_required_segments(
+                            cov,
+                            ep,
+                            contract_digest=contract_digest,
+                            complete=complete,
+                            filter_from=filter_from,
+                            filter_to=filter_to,
+                        )
+                    )
+                    continue
                 start = _parse_date(cov.history_target_start)
+                official = _official_domain_start(cov.dataset_id)
+                if official is not None and start < official:
+                    start = official
                 end = self.cutoff
                 if filter_from is not None and filter_from > start:
                     start = filter_from
                 if filter_to is not None and filter_to < end:
                     end = filter_to
                 # Clamp to subscription floor so OOS dates never reach /v1/run.
+                # Floor is entitlement only — not official domain (master 2008-05-07).
                 if start < JQUANTS_SUBSCRIPTION_FLOOR:
                     start = JQUANTS_SUBSCRIPTION_FLOOR
+                if official is not None and start < official:
+                    start = official
                 if start > end:
                     continue
-                complete = _read_complete_segments(conn, cov.dataset_id)
                 mode = ep.date_mode
                 if mode == "range":
                     # One range job per month segment (aligns with calendar_month granularity).
@@ -453,6 +554,10 @@ class BackfillPlanner:
                         continue
                     if a < JQUANTS_SUBSCRIPTION_FLOOR:
                         a = JQUANTS_SUBSCRIPTION_FLOOR
+                    if official is not None and b < official:
+                        continue
+                    if official is not None and a < official:
+                        a = official
                     if a > b:
                         continue
                     # Canonical segment ID must match Coverage Contract identity
