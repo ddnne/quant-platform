@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { clusterWindowSeries, comboCsGateOk, comboEventGateOk } from "./daily_path";
+import { clusterWindowSeries, comboCsGateOk, comboEventGateOk } from "./combo_gates";
 import type { PeriodPanel } from "./types";
 
 const dummyPanel = { fund_regime: { events_by_code: {} } } as PeriodPanel;
@@ -318,6 +318,10 @@ describe("comboEventGateOk", () => {
       join(dirname(fileURLToPath(import.meta.url)), "daily_path.ts"),
       "utf8",
     );
+    const gateSrc = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), "combo_gates.ts"),
+      "utf8",
+    );
     const leftover = src.slice(
       src.indexOf("if (!comboImpl)"),
       src.indexOf('if (lid === "event_afterclose_delay2"'),
@@ -333,9 +337,9 @@ describe("comboEventGateOk", () => {
     expect(agree).toContain("momentumAt(entryIdx)");
     expect(agree).toContain("momentumAt(pairs, 5, i)");
     expect(agree).not.toContain("momentumAt(pairs, 5, i - 1)");
-    const preMom = src.slice(
-      src.indexOf('if (gate === "pre_mom")'),
-      src.indexOf("// Unknown gate fails closed"),
+    const preMom = gateSrc.slice(
+      gateSrc.indexOf('if (gate === "pre_mom")'),
+      gateSrc.indexOf("// Unknown gate fails closed"),
     );
     expect(preMom).toContain("ev.entryIdx - 1");
     expect(src).not.toContain('if (lid === "event_pre_mom_easy_funding")');

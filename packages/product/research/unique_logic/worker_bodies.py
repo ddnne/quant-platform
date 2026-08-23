@@ -57,6 +57,7 @@ _WORKER_DAILY_PATH = (
     / "src"
     / "daily_path.ts"
 )
+_WORKER_COMBO_GATES = _WORKER_DAILY_PATH.parent / "combo_gates.ts"
 _WORKER_CATALOG_IDS = _WORKER_DAILY_PATH.parent / "catalog_ids.ts"
 _EMPTY_CS = frozenset({"", "None", "none"})
 
@@ -146,7 +147,7 @@ def _ts_quoted_ids(src: str, name: str) -> set[str]:
 @lru_cache(maxsize=1)
 def combo_cs_gates_implemented() -> frozenset[str]:
     """CS gates with a body in Worker ``comboCsGateOk`` (unknown fails closed)."""
-    src = _daily_path_src()
+    src = _WORKER_COMBO_GATES.read_text(encoding="utf-8")
     start = src.find("export function comboCsGateOk(")
     if start < 0:
         return frozenset()

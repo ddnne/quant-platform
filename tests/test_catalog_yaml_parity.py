@@ -305,7 +305,7 @@ def test_event_cheap_pb_gate_in_combo_and_yaml() -> None:
         / "research-mass-eval"
         / "src"
     )
-    src = (worker_src / "daily_path.ts").read_text(encoding="utf-8")
+    src = (worker_src / "combo_gates.ts").read_text(encoding="utf-8")
     # catalog_ids.ts COMBO_EVENT_GATES is generated; sync --check is the set SoT.
 
     event_block = re.search(
