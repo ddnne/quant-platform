@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 import sqlite3
+
+import pytest
 
 from data_contracts import coverage_contract_for
 from storage import (
@@ -15,6 +18,7 @@ from storage import (
     read_collection_receipts,
     record_collection_receipt,
 )
+from storage.receipt_crypto import build_signed_digest_fields
 from storage.sqlite_store import SqliteStore
 
 _REPO = Path(__file__).resolve().parents[1]
@@ -61,43 +65,19 @@ def _receipt(
 _SIGNED_KEY = None
 
 
-def _signed_digests(*, dataset, segment_id, source, run_id, raw_digest):
-    """Module-level test signing authority (Ed25519)."""
+@pytest.fixture(autouse=True)
+def _tmp_receipt_registry(receipt_ed25519_keys: SimpleNamespace):
+    """Sign coverage-v2 receipts against the tmp registry, never the repo file."""
     global _SIGNED_KEY
-    import base64
-    import json
-    from pathlib import Path
-    import storage.receipt_crypto as rc
-    from storage.receipt_crypto import (
-        ReceiptSigningKey,
-        build_signed_digest_fields,
-        generate_keypair,
-    )
-    from cryptography.hazmat.primitives.serialization import load_pem_private_key
-    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    previous = _SIGNED_KEY
+    _SIGNED_KEY = receipt_ed25519_keys.signing_key
+    yield
+    _SIGNED_KEY = previous
 
-    if _SIGNED_KEY is None:
-        priv_pem, pub, kid = generate_keypair(key_id="phase61-test")
-        # Append to repo public-key registry so other tests keep verifying.
-        keys_path = rc.PUBLIC_KEYS_PATH
-        try:
-            doc = json.loads(keys_path.read_text(encoding="utf-8"))
-        except Exception:
-            doc = {"schema_version": 1, "keys": []}
-        keys = list(doc.get("keys") or [])
-        keys = [k for k in keys if k.get("key_id") != kid]
-        keys.append(
-            {
-                "key_id": kid,
-                "public_key_b64": base64.b64encode(pub).decode(),
-                "algorithm": "Ed25519",
-            }
-        )
-        doc["keys"] = keys
-        keys_path.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
-        priv = load_pem_private_key(priv_pem, password=None)
-        assert isinstance(priv, Ed25519PrivateKey)
-        _SIGNED_KEY = ReceiptSigningKey(key_id=kid, _private=priv)
+
+def _signed_digests(*, dataset, segment_id, source, run_id, raw_digest):
+    """Sign with the tmp Ed25519 registry from receipt_ed25519_keys."""
+    assert _SIGNED_KEY is not None
     signed = build_signed_digest_fields(
         signing_key=_SIGNED_KEY,
         dataset=dataset,
