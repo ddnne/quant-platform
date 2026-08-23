@@ -519,7 +519,10 @@ function eventHeld(
         );
         if (String(params.side || "orig") === "flip") sgn = -ev.sign;
       }
-      // Unique-22 leftover (no params.gates). Combo YAML gates use comboEventGateOk.
+      // Leftover occupancy is Worker policy in daily_path.ts (no params.gates).
+      // Park reasons also recorded in Python UNIQUE22_PARK_REASONS.
+      // Compiled catalog is SoT; yaml_still_present false. Combo gates use comboEventGateOk.
+      // Do not drop without occupancy-equal re-eval.
       if (!comboImpl) {
       if (lid === "afterclose_only_event_hold" && !ev.after) ok = false;
       if (lid === "event_funding_stress_skip" || lid === "event_funding_adaptive_side") {
@@ -911,8 +914,10 @@ function gatedCsHeld(
   panel: PeriodPanel,
 ): Record<string, Record<string, number>> {
   // Unique-22 leftover CS books (xs_margin_delta / xs_low_vol / idio) and
-  // lid invert list are occupancy, not comboCsGateOk. Do not drop without
-  // occupancy-equal re-eval. Parked leftover stay non-candidate.
+  // lid invert list are leftover occupancy Worker policy here, not comboCsGateOk.
+  // Park reasons also recorded in Python UNIQUE22_PARK_REASONS.
+  // Compiled catalog is SoT; yaml_still_present false.
+  // Do not drop without occupancy-equal re-eval. Parked leftover stay non-candidate.
   const lid = String(logic.logic_id || "");
   const params = logic.params || {};
   if (lid === "xs_margin_delta_rank") {
