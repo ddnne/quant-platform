@@ -10,7 +10,7 @@ extracts landed. Leftover occupancy **HOLD** in `daily_path.ts`.
 `coverage_receipts`, `snapshot_publish_policy`, `snapshot_coverage_proof`,
 `snapshot_persist`, `snapshot_read`, `eval_orchestrate`,
 `ingestion-premium/collection_receipts.ts` — **DONE** in §7.  
-**Live strategy at `7a0801a6`:** §10 — remaining extracts vs HOLD. YAML
+**Live strategy at `a7d1e93d`:** §10 — remaining extracts vs HOLD. YAML
 file-count waste is closed. Size is not waste. Do not extract leftover
 occupancy. Do not add YAML. Do not declare Phase 7 GO.  
 **Mass / READY / Phase 7:** unchanged (NO-GO / not declared / OFF)
@@ -364,7 +364,7 @@ and COMPLETE predicates unchanged, generated files still generated.
 
 ---
 
-## 10. Current remaining extracts vs HOLD (HEAD 7a0801a6)
+## 10. Current remaining extracts vs HOLD (HEAD a7d1e93d)
 
 This is the **live** refactor strategy for “the code is full of waste.”
 §§1–9 remain the plan at `41003a5` / status at `5c9b962`. Follow this
@@ -512,15 +512,20 @@ magic 31/26 (`035e9306`); premium SHA-256 hex helper is one module
 (`98545741`) — **LANDED**. After `98545741`: premium JST now-clock helpers
 live in identity (`ca00ff6d`); premium ops token compare is timing-safe
 header-only (`67436ab7`); ai-gateway json response helper is one module
-(`7a0801a6`) — **LANDED**. Remaining mixed at this SHA: leftover
-occupancy, unique22, GATEWAY_TOKEN P632B-03, persist live upsert,
-compact catalog, `verify_all` vs `verify_ci` split (**HOLD**).
-Agent-capable fail-closed HTTP holes named at `03409ccd` remain
-**LANDED**. JST copies are **LANDED**. Agent-capable remaining: `index.ts`
-ingest `authorized()` still plaintext `===` (ops/export already
-`ingestion_token.ts`). Do not schedule leftover occupancy extract. Do
-not YAML +N. Do not declare Phase 7 GO. Do not claim ci-aggregate
-Worker exists live.
+(`7a0801a6`) — **LANDED**. After `7a0801a6`: premium ingest run token
+compare is timing-safe header-only (`b51c8812`); premium ingest run
+ignores query token (`a2e70c9f`) — **LANDED**. After `a2e70c9f`: premium
+json response helper is one module (`a1428a21`; `http_json.ts` is
+`Response.json` only, no Cache-Control; not gateway charset+no-store);
+premium export / JSDA / secrets / mass-eval / ai-gateway query-token
+pins (`809e45af`; `6be287db`; `7f97497d`; `6138b6ae`; `a7d1e93d`) —
+**LANDED**. Remaining mixed at this SHA: leftover occupancy, unique22,
+GATEWAY_TOKEN P632B-03, persist live upsert, compact catalog,
+`verify_all` vs `verify_ci` split (**HOLD**). Agent-capable fail-closed
+HTTP holes named at `03409ccd` remain **LANDED**. Ingest `authorized()`
+plaintext `===` is **LANDED** (closed). Premium `json()` two copies are
+**LANDED**. Do not schedule leftover occupancy extract. Do not YAML +N.
+Do not declare Phase 7 GO. Do not claim ci-aggregate Worker exists live.
 
 | Later | Mixed surface | Authority to pick | Must not |
 |------:|---------------|-------------------|----------|
@@ -545,8 +550,9 @@ export HTTP in `http_export.ts`; receipts in `collection_receipts.ts`.
 Retry jitter is `retry_jitter.ts` (`crypto.getRandomValues`). Backoff
 delay helpers live there (`ec960406`). Sleep helper lives there
 (`d3bfb5e8`). SHA-256 hex is `sha256.ts` (`98545741`). JST now-clock
-helpers live in `identity.ts` (`ca00ff6d`). Do not family-slice remaining
-façade handlers.
+helpers live in `identity.ts` (`ca00ff6d`). Premium json helper lives in
+`http_json.ts` (`a1428a21`). Do not family-slice remaining façade
+handlers.
 
 ### 10.4 Do not
 
@@ -570,6 +576,8 @@ façade handlers.
 ✗ Claim leftover occupancy / unique22 / GATEWAY_TOKEN P632B-03 / persist live upsert / compact catalog / verify_all vs verify_ci closed at ec960406
 ✗ Claim leftover occupancy / unique22 / GATEWAY_TOKEN P632B-03 / persist live upsert / compact catalog / verify_all vs verify_ci closed at 98545741
 ✗ Claim leftover occupancy / unique22 / GATEWAY_TOKEN P632B-03 / persist live upsert / compact catalog / verify_all vs verify_ci closed at 7a0801a6
+✗ Claim leftover occupancy / unique22 / GATEWAY_TOKEN P632B-03 / persist live upsert / compact catalog / verify_all vs verify_ci closed at a7d1e93d
+✗ Claim ingest authorized still plaintext === / premium json() still two copies at a7d1e93d
 ✗ Claim ci-aggregate Worker exists live
 ```
 
