@@ -486,8 +486,9 @@ def test_research_job_callers_use_worker_put_not_cli() -> None:
         else:
             assert "default_r2_put(" not in src
     recon = (root / "reconstitution_evidence.py").read_text(encoding="utf-8")
-    assert "default_r2_put(" in recon
+    assert "put_research_artifact" in recon
     assert "dry_run=True" in recon
+    assert "default_r2_put(" not in recon
     assert "QP_ALLOW_PYTHON_R2_PUT" not in recon
     helper = inspect.getsource(put_research_artifact)
     assert "put_children_then_manifest_via_worker" in helper
