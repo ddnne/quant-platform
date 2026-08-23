@@ -1,0 +1,27 @@
+logic_id: surprise_xs_np_easing
+headline: false
+generation_enabled: false
+promote_as_main: false
+go: false
+main_pool: true
+thesis: >
+  Surprise CS rank when net profit is negative AND overnight funding eased. Skip missing PIT prints (no invent).
+signal_definition: >
+  Surprise CS rank when net profit is negative AND overnight funding eased. Skip missing PIT prints (no invent).
+datasets:
+  - equities_bars_daily
+  - fins_summary
+  - markets_calendar
+  - jsda_tokyo_repo_rates
+params:
+  post_hold_days: 5
+  hold_days: 10
+  momentum_n: 5
+  min_hist: 20
+  mode: surprise_xs_np_easing
+  side: orig
+  gates: np_negative,overnight_easing
+  cs_gate: None
+  entry_shift: 0
+  hold_tail_days: 0
+evaluator: research.unique_logic.event_combos.evaluate_combo_daily_mtm

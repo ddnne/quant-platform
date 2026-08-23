@@ -239,6 +239,7 @@ def test_near_empty_park_is_not_countable_or_basket_material() -> None:
     assert "surprise_xs_pb_rising_crowded" in THIN_SLEEVE_EXCLUDE_IDS
     assert "event_margin_up_steep_curve" in THIN_SLEEVE_EXCLUDE_IDS
     assert "event_liq_high_steep_curve" in THIN_SLEEVE_EXCLUDE_IDS
+    assert "event_np_easing" in THIN_SLEEVE_EXCLUDE_IDS
     assert THIN_SLEEVE_EXCLUDE_IDS.isdisjoint(NEAR_EMPTY_PARK_IDS)
     assert THIN_SLEEVE_EXCLUDE_IDS.isdisjoint(sleeve_durability_logic_ids())
     thin_reasons = validate_basket_members(

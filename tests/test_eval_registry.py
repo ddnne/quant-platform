@@ -243,7 +243,8 @@ def test_mechanical_baskets_are_four_valid_defs() -> None:
     evf = next(d for d in defs if d["rule"] == "event_fund_cross")
     assert flow["primary_candidate"] is True
     assert evf["primary_candidate"] is True
-    assert "event_flatten_eps_up" in evf["members"]
+    assert "event_ta_up_positive_eps" in evf["members"]
+    assert "event_positive_eps_liq_high" in evf["members"]
     assert "event_flatten_eps_down" not in evf["members"]
     assert "cs_on_impulse" not in repo["members"]
     assert "event_repo3m_down_pead" in repo["members"]

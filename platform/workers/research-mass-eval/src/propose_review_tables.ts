@@ -328,6 +328,7 @@ export const SPARSE_GATE_COMBOS_REVIEW: string[][] = [
   ["margin_up", "repo_3m_down"],
   ["margin_up", "steep_curve"],
   ["margin_down", "nky_vol_high_skip"],
+  ["np_negative", "overnight_easing"],
   ["np_negative", "tight_funding"],
   ["eps_down", "overnight_p10"],
   ["overnight_p10", "sales_down"],

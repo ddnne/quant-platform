@@ -11,9 +11,9 @@ from research.unique_logic.constants import (
 )
 
 DEFAULT_CANDIDATE_BASKET: tuple[str, ...] = (
-    "event_eqar_high_liq_high",
+    "event_ta_up_positive_eps",
+    "event_positive_eps_liq_high",
     "event_ta_up_liq_high",
-    "event_eps_up_uncrowded",
     "surprise_xs_uncrowded_afterclose",
 )
 
@@ -37,10 +37,10 @@ MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
         "rule": "event_family_only",
         "primary": False,
         "members": (
-            "event_eqar_high_liq_high",
+            "event_ta_up_positive_eps",
+            "event_eqar_high_positive_eps",
+            "event_positive_eps_liq_high",
             "event_ta_up_liq_high",
-            "event_eqar_rising_ta_up_liq",
-            "event_eps_up_uncrowded",
         ),
     },
     {
@@ -48,10 +48,10 @@ MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
         "rule": "family_spread",
         "primary": False,
         "members": (
-            "event_eqar_high_liq_high",
+            "event_ta_up_positive_eps",
             "surprise_xs_uncrowded_afterclose",
-            "cs_margin_up_chase",
-            "surprise_xs_invert_eqar_high",
+            "cs_eqar_high_easy",
+            "surprise_xs_ta_up",
         ),
     },
     {
@@ -60,9 +60,9 @@ MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
         "primary": False,
         "members": (
             "event_eqar_high_liq_high",
-            "event_margin_down_liq_high",
-            "cs_on_impulse",
-            "cs_margin_up_chase",
+            "event_eps_up_uncrowded",
+            "event_eqar_rising_ta_up_liq",
+            "cs_repo3m_down",
         ),
     },
     {
@@ -70,10 +70,10 @@ MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
         "rule": "cs_family_only",
         "primary": False,
         "members": (
-            "cs_margin_up_chase",
-            "cs_margin_down_follow",
+            "cs_nky_vol_high_fade",
+            "cs_eqar_high_easy",
+            "cs_ta_up_easy",
             "cs_on_impulse",
-            "cs_repo3m_down",
         ),
     },
     {
@@ -81,10 +81,10 @@ MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
         "rule": "fundamentals_sleeve",
         "primary": True,
         "members": (
-            "event_eqar_high_liq_high",
+            "event_ta_up_positive_eps",
+            "event_eqar_high_positive_eps",
+            "event_positive_eps_liq_high",
             "event_ta_up_liq_high",
-            "event_eqar_rising_ta_up_liq",
-            "event_eps_up_uncrowded",
         ),
     },
     {
@@ -92,9 +92,9 @@ MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
         "rule": "margin_flow_sleeve",
         "primary": True,
         "members": (
-            "event_crowded_liq_ta_up_fade",
-            "event_uncrowded_liq_eqar_rising",
+            "event_positive_eps_uncrowded",
             "surprise_xs_uncrowded_afterclose",
+            "event_ta_up_uncrowded",
             "event_uncrowded_eqar_falling",
         ),
     },
@@ -104,9 +104,9 @@ MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
         "primary": False,
         "members": (
             "event_repo3m_down_pead",
-            "event_nkyvol_repo3m_down",
             "event_ta_up_repo3m_down",
-            "cs_repo3m_down_easy",
+            "surprise_xs_repo3m_down",
+            "event_nkyvol_repo3m_down",
         ),
     },
     {
@@ -114,11 +114,11 @@ MECHANICAL_BASKETS: tuple[dict[str, object], ...] = (
         "rule": "event_fund_cross",
         "primary": True,
         "members": (
-            "event_eqar_high_liq_high",
-            "event_pre_mom_liq_high",
+            "event_ta_up_positive_eps",
+            "event_positive_eps_liq_high",
             "event_afterclose_crowded",
             "surprise_xs_afterclose_flatten",
-            "event_flatten_eps_up",
+            "event_eqar_high_liq_high",
         ),
     },
 )

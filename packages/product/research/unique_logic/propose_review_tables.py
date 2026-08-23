@@ -71,6 +71,23 @@ _GATE_OCCUPANCY_SENTENCE: dict[str, str] = {
     "price_down": "price is down",
     "steep_curve": "the repo curve is steep",
     "overnight_easing": "overnight funding eased",
+    "afterclose": "the print is after close",
+    "ta_up": "total assets expanded versus the last prior print",
+    "positive_eps": "EPS is positive",
+    "eq_ar_high": "EqAR is high versus its PIT median",
+    "eq_ar_rising": "EqAR rose versus the last prior print",
+    "eq_ar_low": "EqAR is low versus its PIT median",
+    "eq_ar_falling": "EqAR fell versus the last prior print",
+    "uncrowded_margin": "margin is uncrowded versus its PIT median",
+    "crowded_margin": "margin is crowded versus its PIT median",
+    "liq_high": "ADV is in the high PIT bucket",
+    "eps_up": "EPS expanded versus the last prior print",
+    "large_surprise": "the earnings surprise is large",
+    "easy_funding": "overnight funding is easy",
+    "pre_mom": "pre-event momentum is positive",
+    "div_positive": "the name pays a dividend",
+    "on_impulse": "overnight is on an impulse",
+    "repo_3m_down": "the 3m repo rate declined",
 }
 _FUNDING_GATES: frozenset[str] = frozenset(
     {

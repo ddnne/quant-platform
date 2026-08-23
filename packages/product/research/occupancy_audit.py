@@ -77,9 +77,72 @@ def classify_occupancy_maps(
     }
 
 
+def run_occupancy_track(
+    *,
+    job_id: str,
+    logic_ids: Sequence[str],
+    track: str,
+    max_workers: int = 8,
+    timeout: int = 300,
+    write_artifacts: bool = True,
+) -> dict[str, Any]:
+    """One-track occupancy fanout. Does not overwrite cells.json. Does not GO."""
+    from research.cf_daily_path_job import run_cf_daily_path_fanout
+    from research.cf_mass_eval_job import (
+        DEFAULT_MAX_DAYS,
+        DEFAULT_REAL_MULTIYEAR_PERIODS,
+        PANELS_CACHE_PREFIX,
+        panels_cache_id,
+    )
+    from research.eval_tracks import eval_track
+
+    ids = [str(x) for x in logic_ids if str(x).strip()]
+    spec = eval_track(track)
+    max_codes = int(spec["max_codes"])
+    cid = panels_cache_id(
+        DEFAULT_REAL_MULTIYEAR_PERIODS,
+        max_codes=max_codes,
+        max_days=DEFAULT_MAX_DAYS,
+        track=track,
+    )
+    prefix = f"{PANELS_CACHE_PREFIX}/{cid}/panels"
+    pack = run_cf_daily_path_fanout(
+        job_id=job_id,
+        logic_ids=ids,
+        max_codes=max_codes,
+        max_days=DEFAULT_MAX_DAYS,
+        track=track,
+        skip_stage=True,
+        panels_prefix=prefix,
+        mode="r2_panels",
+        write_artifacts=bool(write_artifacts),
+        timeout=int(timeout),
+        max_workers=int(max_workers),
+    )
+    occ = dict(pack.get("occupancy_by_logic") or {})
+    table_path = Path(pack.get("table_path") or "")
+    if not occ and table_path.is_file():
+        occ = occupancy_from_cells_file(table_path)
+    missing = [x for x in ids if x not in occ]
+    return {
+        "job_id": job_id,
+        "eval_track": track,
+        "occupancy": occ,
+        "missing": missing,
+        "n_cells": pack.get("n_cells"),
+        "n_complete": pack.get("n_daily_path_complete"),
+        "n_errors": pack.get("n_errors"),
+        "errors": pack.get("errors"),
+        "table_path": pack.get("table_path"),
+        "go": False,
+        "not_a_pass": True,
+    }
+
+
 __all__ = [
     "classify_occupancy_maps",
     "classify_occupancy_pair",
     "merge_occupancy_cell_dumps",
     "occupancy_from_cells_file",
+    "run_occupancy_track",
 ]

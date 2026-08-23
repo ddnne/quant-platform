@@ -422,6 +422,8 @@ THIN_SLEEVE_EXCLUDE_IDS: frozenset[str] = frozenset(
         "event_pre_mom_steep_curve",
         "event_price_down_nkyvol_repo3m_fade",
         "event_px_down_p10",
+        "event_np_easing",
+        "surprise_xs_np_easing",
     }
 )
 MF_VALUE_MOM_RATE_DELEGATES: bool = False
