@@ -17,6 +17,7 @@ describe("PIT event entry", () => {
   });
 
   it("invented midnight clock is not same-day", () => {
+    // Sibling: tests/test_class_signals.py::test_python_worker_disctime_midnight_invent_is_next_session
     expect(discTimeKnown("00:00:00")).toBe(false);
     expect(discTimeKnown("00:00")).toBe(false);
     expect(pitEventEntryShift("00:00:00")).toBe(1);

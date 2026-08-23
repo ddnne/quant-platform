@@ -174,7 +174,10 @@ def test_class_signal_definitions_not_daily_sign():
 
 
 def test_event_post_pit_entry_no_lookahead():
-    """W82: DiscTime after session close / missing → next bar; no invent times."""
+    """W82: DiscTime after session close / missing → next bar; no invent times.
+
+    Worker sibling: platform/workers/research-mass-eval/src/event_entry.test.ts.
+    """
     from features.class_signals import (
         event_post_available_at_from_fields,
         event_post_entry_bar_index,
@@ -264,6 +267,94 @@ def test_event_post_pit_entry_no_lookahead():
     )
     assert ed5 == "2023-09-04"
     assert m5["look_ahead"] is False
+
+
+def test_python_worker_disctime_midnight_invent_is_next_session():
+    """Missing DiscTime and invented T00:00:00 / 00:00:00 are next-session in both runtimes.
+
+    Worker sibling: platform/workers/research-mass-eval/src/event_entry.test.ts
+    (invented midnight clock is not same-day). 12:00:00 same-day; 15:00:00 next.
+    """
+    import json
+    import subprocess
+    from pathlib import Path
+
+    from features.class_signals import (
+        event_post_available_at_from_fields,
+        event_post_entry_bar_index,
+    )
+
+    disc = "2023-08-31"
+    date_to_idx = {d: i for i, d in enumerate(["2023-08-30", disc, "2023-09-01"])}
+
+    def py_entry(**kwargs):
+        _, aa_meta = event_post_available_at_from_fields(disc_date=disc, **kwargs)
+        _, ed, m = event_post_entry_bar_index(date_to_idx, disc_date=disc, **kwargs)
+        shift = 0 if ed == disc else 1
+        return aa_meta["time_known"], m["time_known"], shift, ed
+
+    py = {
+        "missing": py_entry(disc_time=None),
+        "invented_midnight": py_entry(
+            disc_time=None, event_time=f"{disc}T00:00:00+09:00"
+        ),
+        "pre_close": py_entry(disc_time="12:00:00"),
+        "after_close": py_entry(disc_time="15:00:00"),
+    }
+    assert py["missing"][:3] == (False, False, 1)
+    assert py["invented_midnight"][:3] == (False, False, 1)
+    assert py["pre_close"] == (True, True, 0, disc)
+    assert py["after_close"][:3] == (True, True, 1)
+    assert py["missing"][3] == "2023-09-01"
+    assert py["invented_midnight"][3] == "2023-09-01"
+    assert py["after_close"][3] == "2023-09-01"
+
+    clocks = [None, "00:00:00", f"{disc}T00:00:00+09:00", "12:00:00", "15:00:00"]
+    worker_url = (
+        Path(__file__).resolve().parents[1]
+        / "platform/workers/research-mass-eval/src/event_entry.ts"
+    ).as_uri()
+    script = f"""
+      import fs from 'node:fs';
+      import {{ discTimeKnown, pitEventEntryShift }} from {json.dumps(worker_url)};
+      const clocks = JSON.parse(fs.readFileSync(0, 'utf8'));
+      const out = clocks.map((t) => ({{
+        discTime: t,
+        known: discTimeKnown(t),
+        shift: pitEventEntryShift(t),
+      }}));
+      process.stdout.write(JSON.stringify(out));
+    """
+    completed = subprocess.run(
+        [
+            "node",
+            "--no-warnings",
+            "--experimental-strip-types",
+            "--input-type=module",
+            "-e",
+            script,
+        ],
+        input=json.dumps(clocks),
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    worker = {row["discTime"]: row for row in json.loads(completed.stdout)}
+    assert worker[None]["known"] is False and worker[None]["shift"] == 1
+    assert worker["00:00:00"]["known"] is False and worker["00:00:00"]["shift"] == 1
+    iso = f"{disc}T00:00:00+09:00"
+    assert worker[iso]["known"] is False and worker[iso]["shift"] == 1
+    assert worker["12:00:00"]["known"] is True and worker["12:00:00"]["shift"] == 0
+    assert worker["15:00:00"]["known"] is True and worker["15:00:00"]["shift"] == 1
+    assert py["missing"][0] is worker[None]["known"]
+    assert py["missing"][2] == worker[None]["shift"]
+    assert py["invented_midnight"][0] is worker["00:00:00"]["known"]
+    assert py["invented_midnight"][2] == worker["00:00:00"]["shift"]
+    assert py["invented_midnight"][2] == worker[iso]["shift"]
+    assert py["pre_close"][0] is worker["12:00:00"]["known"]
+    assert py["pre_close"][2] == worker["12:00:00"]["shift"]
+    assert py["after_close"][0] is worker["15:00:00"]["known"]
+    assert py["after_close"][2] == worker["15:00:00"]["shift"]
 
 
 def test_event_post_flow_fund_signals():
