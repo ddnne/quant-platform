@@ -76,6 +76,27 @@ describe("ingestion-premium export auth", () => {
     expect(body).not.toContain(EXPORT_TOKEN);
   });
 
+  it("GET /v1/export/d1 with bound DATA_EXPORT_TOKEN prepares D1 after auth", async () => {
+    let prepareCalls = 0;
+    const db = {
+      prepare(_sql: string) {
+        prepareCalls += 1;
+        throw new Error("prepare-after-auth");
+      },
+    } as unknown as D1Database;
+    const env: ExportEnv = { DB: db, DATA_EXPORT_TOKEN: EXPORT_TOKEN };
+    await expect(
+      handleExportPaths(
+        new Request("https://ingestion-premium.test/v1/export/d1", {
+          method: "GET",
+          headers: { "X-Ingestion-Token": EXPORT_TOKEN },
+        }),
+        env,
+      ),
+    ).rejects.toThrow("prepare-after-auth");
+    expect(prepareCalls).toBeGreaterThan(0);
+  });
+
   it("rejects GET/POST /v1/export/changes with unbound DATA_EXPORT_TOKEN and does not prepare D1", async () => {
     for (const [method, status, error] of [
       ["GET", 401, "unauthorized"],
