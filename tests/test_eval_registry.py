@@ -383,6 +383,10 @@ def test_combo_basket_blend_is_equal_weight() -> None:
     assert len(DEFAULT_CANDIDATE_BASKET) >= 2
     assert len(DEFAULT_CANDIDATE_BASKET) <= 5
     assert validate_basket_members(["a"]) == ["need_at_least_2_members"]
+    cal = validate_basket_members(
+        ["event_skip_monday_uncrowded", "event_ta_up_uncrowded"]
+    )
+    assert "calendar_member" in cal
     blended = blend_net_daily([[0.0, 0.02, 0.00], [0.0, 0.00, 0.02]])
     assert abs(blended[1] - 0.01) < 1e-12
     assert abs(blended[2] - 0.01) < 1e-12

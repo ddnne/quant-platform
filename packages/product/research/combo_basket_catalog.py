@@ -7,6 +7,7 @@ from research.unique_logic.constants import (
     ALWAYS_ON_CS_STICKY,
     ALWAYS_ON_PARK_IDS,
     NEAR_EMPTY_PARK_IDS,
+    PROPOSE_CALENDAR_GATES,
     THIN_SLEEVE_EXCLUDE_IDS,
 )
 
@@ -175,7 +176,27 @@ def validate_basket_members(logic_ids: Sequence[str]) -> list[str]:
         reasons.append("always_on_member")
     if any(m in THIN_SLEEVE_EXCLUDE_IDS for m in ids):
         reasons.append("thin_sleeve_member")
+    if any(_member_has_calendar(m) for m in ids):
+        reasons.append("calendar_member")
     return reasons
+
+
+def _member_has_calendar(logic_id: str) -> bool:
+    """True when a sleeve member is a weekday/calendar permutation."""
+    lid = str(logic_id or "")
+    tokens = ("skip_monday", "skip_tuesday", "skip_wednesday", "friday_skip", "friday_only", "tue_thu")
+    if any(t in lid for t in tokens):
+        return True
+    from research.unique_logic.catalog import catalog_spec
+
+    spec = catalog_spec(lid)
+    if spec is None:
+        return False
+    params = spec.get("params") if isinstance(spec.get("params"), dict) else {}
+    gates = params.get("gates") if isinstance(params, dict) else []
+    if isinstance(gates, str):
+        gates = [x.strip() for x in gates.split(",") if x.strip()]
+    return bool(PROPOSE_CALENDAR_GATES.intersection(str(g) for g in (gates or ())))
 
 
 def equal_weights(n: int) -> list[float]:
