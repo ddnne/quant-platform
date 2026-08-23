@@ -267,14 +267,33 @@ def _mean(xs: Sequence[Any]) -> float | None:
     return (sum(vs) / len(vs)) if vs else None
 
 
+def filter_cells_honest_windows(
+    cells: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Keep HONEST 3y windows and their shards. Drops y2015_full. Not a pass."""
+    from research.eval_windows import honest_window_ids
+
+    want = honest_window_ids()
+    out: list[dict[str, Any]] = []
+    for c in cells:
+        if not isinstance(c, Mapping):
+            continue
+        wid = str(c.get("window_id") or c.get("window") or "").strip()
+        if wid in want:
+            out.append(dict(c))
+    return out
+
+
 def blend_option_summary(
     cells: Sequence[Mapping[str, Any]],
     *,
     basket_id: str,
     logic_ids: Sequence[str],
+    honest: bool = False,
 ) -> dict[str, Any]:
     """Compact equal-weight blend stats. Drops net_daily. Not a pass."""
-    rows = blend_window_cells(cells, basket_id=basket_id, logic_ids=logic_ids)
+    used = filter_cells_honest_windows(cells) if honest else list(cells)
+    rows = blend_window_cells(used, basket_id=basket_id, logic_ids=logic_ids)
     complete = [r for r in rows if r.get("daily_path_complete")]
     missing: set[str] = set()
     for r in rows:
@@ -292,6 +311,7 @@ def blend_option_summary(
         "daily_path_DD_min": (min(float(x) for x in dds if x is not None) if any(x is not None for x in dds) else None),
         "total_ret_net_mean": _mean(nets),
         "apply": False,
+        "honest_windows": bool(honest),
         "go": False,
         "not_a_pass": True,
     }
@@ -301,6 +321,7 @@ __all__ = [
     "blend_net_daily",
     "blend_window_cells",
     "blend_option_summary",
+    "filter_cells_honest_windows",
     "occupancy_in_candidate_band",
     "primary_sleeve_and_meta_cells",
     "summarize_basket_trends",

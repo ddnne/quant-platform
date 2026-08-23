@@ -30,8 +30,16 @@ from research.eval_windows import HONEST_3Y_WINDOWS
 from research.daily_path_eval import stitch_net, summarize_path
 
 def test_honest_windows_are_the_shared_catalog() -> None:
+    from research.eval_windows import honest_window_ids
+
     ids = [w["window_id"] for w in HONEST_3Y_WINDOWS]
     assert ids == ["w2017_2019", "w2020_2022", "w2023_2025"]
+    got = honest_window_ids()
+    assert set(ids) <= got
+    assert "y2017_q4" in got
+    assert "y2021_full" in got
+    assert "y2025_q4" in got
+    assert "y2015_full" not in got
 
 
 def test_manifest_from_rows_is_queryable_shape() -> None:
@@ -417,6 +425,22 @@ def test_blend_option_summary_is_descriptive_not_a_pass() -> None:
     assert out["not_a_pass"] is True
     assert "net_daily" not in out
     assert out["members"] == ["a", "b"]
+    from research.combo_basket import filter_cells_honest_windows
+
+    y2015 = dict(cells[0])
+    y2015["window_id"] = "y2015_full"
+    y2017 = dict(cells[0])
+    y2017["window_id"] = "y2017_q4"
+    kept = filter_cells_honest_windows([y2015, y2017])
+    assert [c["window_id"] for c in kept] == ["y2017_q4"]
+    honest = blend_option_summary(
+        [y2015, y2017, dict(cells[1], window_id="y2017_q4")],
+        basket_id="t",
+        logic_ids=["a", "b"],
+        honest=True,
+    )
+    assert honest["honest_windows"] is True
+    assert honest["n_windows"] == 1
 
 
 def test_merge_daily_path_cells_for_ids_later_file_wins(tmp_path) -> None:

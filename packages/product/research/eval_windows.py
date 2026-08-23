@@ -114,6 +114,18 @@ DEFAULT_REAL_MULTIYEAR_PERIODS: tuple[dict[str, Any], ...] = (
 
 DEFAULT_PERIODS = DEFAULT_REAL_MULTIYEAR_PERIODS
 
+
+def honest_window_ids() -> frozenset[str]:
+    """HONEST 3y window_ids plus their shard period_ids. Do not fork."""
+    out: set[str] = set()
+    for w in HONEST_3Y_WINDOWS:
+        out.add(str(w["window_id"]))
+        for shard in w.get("shards") or ():
+            pid = shard.get("period_id") if isinstance(shard, dict) else None
+            if pid:
+                out.add(str(pid))
+    return frozenset(out)
+
 # Legacy Q4-only periods for regression compare.
 DEFAULT_PERIODS_Q4: tuple[dict[str, Any], ...] = (
     {"period_id": "y2015_q4", "year": 2015, "period_start": "2015-09-01", "period_end": "2015-12-29"},
