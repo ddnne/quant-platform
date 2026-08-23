@@ -106,8 +106,9 @@ def _evaluate_publication_gate(
     )
     raw_manifests = _raw_manifests_for(conn, run_id, jquants_required)
     today = datetime.now(timezone.utc).date().isoformat()
+    # No year-index HTML on the READY path. Explicit None is fail-closed empty OTC.
     coverage_rows = refresh_coverage_ledger(
-        conn, staging_path, datasets=required, today=today
+        conn, staging_path, datasets=required, today=today, index_text=None
     )
     quality_results = run_coverage(
         staging_path,
