@@ -46,6 +46,16 @@ def test_pri_gate_sets_are_combo_event_gates() -> None:
     assert not (PRI_FLOW_GATES & PRI_RATE_GATES)
 
 
+def test_unique_leftover_matches_yaml_unique_families() -> None:
+    from research.unique_logic.catalog import unique_family_ids_from_yaml
+    from research.unique_logic.worker_bodies import unique_leftover_logic_ids
+
+    union = frozenset().union(*unique_family_ids_from_yaml().values())
+    leftover = unique_leftover_logic_ids()
+    assert leftover == union
+    assert leftover
+
+
 def test_usable_inventory_read_has_n_ands_and_pri_series() -> None:
     from research.unique_logic.worker_bodies import usable_inventory_read
 

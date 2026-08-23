@@ -72,17 +72,15 @@ def _combo_row(s: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def _yaml_combo_runtime_rows() -> tuple[dict[str, Any], ...]:
-    """Lazy-import: ``yaml_combo_rows`` calls ``_combo_row``."""
+def combo_runtime_rows() -> tuple[dict[str, Any], ...]:
+    """Combo runtime table. YAML remains declaration SoT.
+
+    Rows come from ``yaml_combo_rows`` (already cached). Do not keep a second
+    copy of the ~2k-row table here.
+    """
     from research.unique_logic.catalog import yaml_combo_rows
 
     return tuple(yaml_combo_rows())
-
-
-@lru_cache(maxsize=1)
-def combo_runtime_rows() -> tuple[dict[str, Any], ...]:
-    """Combo runtime table. YAML remains declaration SoT."""
-    return _yaml_combo_runtime_rows()
 
 
 @lru_cache(maxsize=1)
@@ -97,8 +95,7 @@ def spec_by_id(logic_id: str) -> dict[str, Any] | None:
 
 
 def clear_combo_runtime_cache() -> None:
-    """Drop runtime combo cache after catalog writes. Not a second SoT."""
-    combo_runtime_rows.cache_clear()
+    """Drop by-id index after catalog writes. yaml_combo_rows is catalog-owned."""
     _combo_by_id_cached.cache_clear()
 
 

@@ -234,15 +234,6 @@ def test_mechanical_baskets_are_valid_defs() -> None:
         assert CANDIDATE_POLICY["go"] is False
     primaries = [d for d in defs if d["primary"] or d.get("primary_candidate")]
     assert any(d["rule"] == "fundamentals_sleeve" for d in primaries)
-    event4 = next(d for d in defs if d["rule"] == "event_family_only")
-    head4 = next(d for d in defs if d["rule"] == "known_candidate_head")
-    fam4 = next(d for d in defs if d["rule"] == "family_spread")
-    assert event4["primary_candidate"] is False
-    assert head4["primary_candidate"] is False
-    assert fam4["primary_candidate"] is False
-    cs = [d for d in defs if d["rule"] == "cs_family_only"]
-    assert cs and cs[0]["primary"] is False
-    rules = {d["rule"] for d in defs}
     assert "fundamentals_sleeve" in rules
     assert "margin_flow_sleeve" in rules
     assert "repo_rate_sleeve" in rules

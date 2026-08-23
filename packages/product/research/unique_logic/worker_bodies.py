@@ -9,13 +9,8 @@ from typing import Any, Mapping, Sequence
 from qp_paths import repo_root
 from research.unique_logic.catalog import catalog_dir, load_catalog_specs
 from research.unique_logic.constants import (
-    ADAPTIVE_LOGIC_IDS,
     CF_NEW_THESIS_IDS,
     COMBO_EVENT_GATES,
-    CS_LOGIC_IDS,
-    EVENT_FILTER_LOGIC_IDS,
-    EVENT_LOGIC_IDS,
-    EVENT_SIDES_LOGIC_IDS,
     ALWAYS_ON_OCCUPANCY_WARN,
     ALWAYS_ON_PARK_IDS,
     NEAR_EMPTY_OCCUPANCY,
@@ -43,14 +38,13 @@ _EMPTY_CS = frozenset({"", "None", "none"})
 
 
 def unique_leftover_logic_ids() -> frozenset[str]:
-    """Original unique-22 leftover IDs."""
-    return (
-        EVENT_LOGIC_IDS
-        | EVENT_FILTER_LOGIC_IDS
-        | EVENT_SIDES_LOGIC_IDS
-        | ADAPTIVE_LOGIC_IDS
-        | CS_LOGIC_IDS
-    )
+    """Original unique-22 leftover IDs. YAML unique families are the SoT."""
+    from research.unique_logic.catalog import unique_family_ids_from_yaml
+
+    out: set[str] = set()
+    for ids in unique_family_ids_from_yaml().values():
+        out.update(ids)
+    return frozenset(out)
 
 
 @lru_cache(maxsize=1)
