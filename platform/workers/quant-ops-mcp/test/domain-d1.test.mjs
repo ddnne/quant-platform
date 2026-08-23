@@ -210,7 +210,8 @@ test("Ops queries run against the complete ingestion D1 migration sequence", asy
   const ops = await callOpsTool(d1(db), "ops_status", {});
   assert.equal(ops.raw_retention.manifests, 1);
   assert.equal(ops.raw_retention.acquired, 1);
-  assert.equal(ops.raw_retention.complete, undefined);
+  // deprecated alias of acquired; not a Dataset COMPLETE count
+  assert.equal(ops.raw_retention.complete, ops.raw_retention.acquired);
   db.close();
 });
 
@@ -482,7 +483,9 @@ test("raw ACQUIRED is captured like legacy COMPLETE and is not Coverage COMPLETE
   const ops = await callOpsTool(d1(db), "ops_status", {});
   assert.equal(ops.raw_retention.manifests, 3);
   assert.equal(ops.raw_retention.acquired, 2);
-  assert.equal(ops.raw_retention.complete, undefined);
+  // complete aliases acquired (SUM of ACQUIRED|legacy COMPLETE), not COMPLETE-only=1
+  assert.equal(ops.raw_retention.complete, 2);
+  assert.equal(ops.raw_retention.complete, ops.raw_retention.acquired);
   assert.doesNotMatch(JSON.stringify(ops.raw_retention), /Coverage COMPLETE/);
   db.close();
 });
