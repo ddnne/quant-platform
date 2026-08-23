@@ -1,12 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_STATUS_CONTEXT,
-  REQUIRED_WORKERS,
-  evaluateReceipts,
   githubStatusUrl,
   handleRequest,
-  type LaneReceipt,
 } from "./index";
+import {
+  REQUIRED_WORKERS,
+  evaluateReceipts,
+  type LaneReceipt,
+} from "./receipts_gate";
 
 const SHA_A = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const SHA_B = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
