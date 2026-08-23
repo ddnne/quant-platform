@@ -184,8 +184,7 @@ def validate_basket_members(logic_ids: Sequence[str]) -> list[str]:
 def _member_has_calendar(logic_id: str) -> bool:
     """True when a sleeve member is a weekday/calendar permutation."""
     lid = str(logic_id or "")
-    tokens = ("skip_monday", "skip_tuesday", "skip_wednesday", "friday_skip", "friday_only", "tue_thu")
-    if any(t in lid for t in tokens):
+    if any(g in lid for g in PROPOSE_CALENDAR_GATES):
         return True
     from research.unique_logic.catalog import catalog_spec
 
