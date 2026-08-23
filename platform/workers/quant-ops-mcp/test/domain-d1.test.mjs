@@ -32,6 +32,15 @@ function d1(db) {
 const projectionMigration = readFileSync(
   new URL("../migrations/0002_ops_projection.sql", import.meta.url), "utf8",
 );
+const inventoryMigration = readFileSync(
+  new URL("../migrations/0003_endpoint_inventory_sla.sql", import.meta.url), "utf8",
+);
+const generationMigration = readFileSync(
+  new URL("../migrations/0004_projection_generation.sql", import.meta.url), "utf8",
+);
+const appliedPinsMigration = readFileSync(
+  new URL("../migrations/0007_ops_applied_pins.sql", import.meta.url), "utf8",
+);
 const quotaMigration = readFileSync(
   new URL("../migrations/0001_remote_daily_quota.sql", import.meta.url), "utf8",
 );
@@ -92,7 +101,9 @@ test("real projection schema exposes bounded JSDA Coverage and READY metadata", 
   const coverage = await callOpsTool(d1(db), "dataset_coverage", {
     dataset: "jsda_otc_bond_reference_prices",
   });
-  assert.equal(coverage.status, "PARTIAL");
+  assert.equal(coverage.status, "UNKNOWN");
+  assert.equal(coverage.coverage, null);
+  assert.equal(coverage.last_known_good.status, "PARTIAL");
   const segments = await callOpsTool(d1(db), "coverage_segments", {
     dataset: "jsda_otc_bond_reference_prices", limit: 200,
   });
@@ -177,6 +188,165 @@ test("applied_cursor null is never CURRENT even when export lag is 0", () => {
     syncDatasetState({ exported: 10, applied: 10, lag: 0, changeLogRows: 1 }),
     "CURRENT",
   );
+});
+
+function seedSyncPlane(db, { exported, latest, applied }) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS ingestion_watermarks (
+      dataset TEXT PRIMARY KEY,
+      last_event_date TEXT,
+      last_ingested_at TEXT NOT NULL,
+      last_export_cursor INTEGER
+    );
+    CREATE TABLE IF NOT EXISTS ingestion_change_log (
+      change_seq INTEGER PRIMARY KEY AUTOINCREMENT,
+      table_name TEXT NOT NULL,
+      source TEXT NOT NULL,
+      dataset TEXT NOT NULL,
+      natural_key TEXT NOT NULL,
+      event_time TEXT NOT NULL,
+      available_at TEXT NOT NULL,
+      ingested_at TEXT NOT NULL,
+      payload TEXT NOT NULL,
+      raw_payload TEXT,
+      changed_at TEXT NOT NULL
+    );
+  `);
+  db.exec(appliedPinsMigration);
+  db.prepare(`INSERT INTO ingestion_watermarks
+    (dataset, last_event_date, last_ingested_at, last_export_cursor)
+    VALUES (?,?,?,?)`).run(
+      "equities_bars_daily", "2026-08-10", "2026-08-11T00:00:00Z", exported,
+    );
+  db.prepare(`INSERT INTO ingestion_change_log
+    (change_seq, table_name, source, dataset, natural_key, event_time,
+     available_at, ingested_at, payload, changed_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?)`).run(
+      latest, "jquants_records", "jquants", "equities_bars_daily", "nk",
+      "2026-08-10", "2026-08-10T00:00:00Z", "2026-08-11T00:00:00Z", "{}",
+      "2026-08-11T00:00:00Z",
+    );
+  db.prepare(`INSERT INTO ops_applied_pins
+    (feed, last_applied_change_seq, updated_at, projected_at, projection_generation_id)
+    VALUES (?,?,?,?,?)`).run(
+      "jquants_records", applied, "2026-08-12T00:00:00Z", "2026-08-12T00:00:00Z", null,
+    );
+}
+
+test("matching applied pin with export lag 0 is CURRENT", async () => {
+  const db = new DatabaseSync(":memory:");
+  seedSyncPlane(db, { exported: 10, latest: 10, applied: 10 });
+  const sync = await callOpsTool(d1(db), "sync_status", {});
+  assert.equal(sync.applied_feed_cursor, 10);
+  assert.equal(sync.datasets.length, 1);
+  assert.equal(sync.datasets[0].applied_cursor, 10);
+  assert.equal(sync.datasets[0].exported_cursor, 10);
+  assert.equal(sync.datasets[0].lag, 0);
+  assert.equal(sync.datasets[0].state, "CURRENT");
+  db.close();
+});
+
+test("applied pin with export lag greater than 0 is not CURRENT", async () => {
+  const db = new DatabaseSync(":memory:");
+  seedSyncPlane(db, { exported: 10, latest: 20, applied: 10 });
+  const sync = await callOpsTool(d1(db), "sync_status", {});
+  assert.equal(sync.applied_feed_cursor, 10);
+  assert.equal(sync.datasets[0].applied_cursor, 10);
+  assert.equal(sync.datasets[0].lag, 10);
+  assert.notEqual(sync.datasets[0].state, "CURRENT");
+  assert.equal(sync.datasets[0].state, "LAGGING");
+  db.close();
+});
+
+test("ops_applied_pins NULL seq is unpinned not CURRENT", async () => {
+  const db = new DatabaseSync(":memory:");
+  seedSyncPlane(db, { exported: 10, latest: 10, applied: null });
+  const sync = await callOpsTool(d1(db), "sync_status", {});
+  assert.equal(sync.applied_feed_cursor, null);
+  assert.equal(sync.datasets[0].applied_cursor, null);
+  assert.equal(sync.datasets[0].lag, 0);
+  assert.equal(sync.datasets[0].state, "EXPORT_CURRENT_APPLY_UNPINNED");
+  db.close();
+});
+
+function insertCoverageRow(db, dataset, status, generationId = null) {
+  const columns = [
+    "dataset", "status", "policy_version", "collection_scope",
+    "history_target_start", "history_target_end_rule", "coverage_mode",
+    "expected_frequency", "universe_rule", "raw_retention_required",
+    "structured_reconciliation_required", "governance_tier",
+    "observed_start", "observed_end", "row_count", "source_run_id",
+    "evaluated_at", "detail_json",
+  ];
+  const values = [
+    dataset, status, "collection-coverage/v2", "jsda", "2002-08-02", "current",
+    "official_archive_index_reconciled", "official_archive_day", "official_index",
+    1, 1, "governed", "2002-08-02", "2002-08-02", 1, 7, "2026-08-11T00:00:00Z", "{}",
+  ];
+  if (generationId != null) {
+    columns.push("projection_generation_id");
+    values.push(generationId);
+  }
+  const placeholders = columns.map(() => "?").join(",");
+  db.prepare(
+    `INSERT INTO dataset_coverage (${columns.join(",")}) VALUES (${placeholders})`,
+  ).run(...values);
+}
+
+test("COMPLETE coverage without active generation is UNKNOWN not COMPLETE", async () => {
+  const db = new DatabaseSync(":memory:");
+  db.exec(projectionMigration);
+  insertCoverageRow(db, "jsda_otc_bond_reference_prices", "COMPLETE");
+  const coverage = await callOpsTool(d1(db), "dataset_coverage", {
+    dataset: "jsda_otc_bond_reference_prices",
+  });
+  assert.equal(coverage.status, "UNKNOWN");
+  assert.equal(coverage.coverage, null);
+  assert.equal(coverage.last_known_good.status, "COMPLETE");
+  assert.match(coverage.reason, /last-known-good is not current COMPLETE/);
+
+  const gaps = await callOpsTool(d1(db), "coverage_gaps", {});
+  assert.equal(gaps.status, "UNKNOWN");
+  assert.equal(gaps.gaps.length, GOVERNED_DATASETS.length);
+  assert.ok(gaps.gaps.every((row) => row.status !== "COMPLETE"));
+  const otc = gaps.gaps.find((row) => row.dataset === "jsda_otc_bond_reference_prices");
+  assert.equal(otc.status, "UNKNOWN");
+
+  const endpoint = await callOpsTool(d1(db), "endpoint_status", {
+    dataset: "jsda_otc_bond_reference_prices",
+  });
+  assert.equal(endpoint.coverage.status, "UNKNOWN");
+  assert.equal(endpoint.coverage.last_known_good.status, "COMPLETE");
+  db.close();
+});
+
+test("active generation COMPLETE is current coverage COMPLETE", async () => {
+  const db = new DatabaseSync(":memory:");
+  db.exec(projectionMigration);
+  db.exec(inventoryMigration);
+  db.exec(generationMigration);
+  const gen = "projgen-active";
+  db.prepare(`INSERT INTO ops_projection_generation
+    (generation_id, status, generated_at, detail_json) VALUES (?,?,?,?)`).run(
+      gen, "ACTIVE", "2026-08-11T00:00:00Z", "{}",
+    );
+  db.prepare(`INSERT INTO ops_projection_active
+    (singleton, generation_id, activated_at) VALUES (?,?,?)`).run(
+      1, gen, "2026-08-11T00:00:00Z",
+    );
+  insertCoverageRow(db, "jsda_otc_bond_reference_prices", "COMPLETE", gen);
+  const coverage = await callOpsTool(d1(db), "dataset_coverage", {
+    dataset: "jsda_otc_bond_reference_prices",
+  });
+  assert.equal(coverage.status, "COMPLETE");
+  assert.equal(coverage.coverage.status, "COMPLETE");
+  assert.equal(coverage.active_generation, gen);
+
+  const endpoint = await callOpsTool(d1(db), "endpoint_status", {
+    dataset: "jsda_otc_bond_reference_prices",
+  });
+  assert.equal(endpoint.coverage.status, "COMPLETE");
+  db.close();
 });
 
 test("raw zero-row complete is empty-with-evidence not coverage complete", () => {

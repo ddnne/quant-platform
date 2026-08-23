@@ -293,7 +293,7 @@ export async function callOpsTool(db, name, rawArguments) {
         };
       }
     } else {
-      coverage = await first(db,
+      const lkg = await first(db,
         `SELECT dataset, status, policy_version, collection_scope,
                 history_target_start, history_target_end_rule, coverage_mode,
                 expected_frequency, universe_rule, raw_retention_required,
@@ -301,6 +301,16 @@ export async function callOpsTool(db, name, rawArguments) {
                 observed_start, observed_end, row_count, source_run_id,
                 evaluated_at, detail_json
            FROM dataset_coverage WHERE dataset = ? LIMIT 1`, [dataset]);
+      return {
+        plane: "ops_current", mutable: true, dataset,
+        status: "UNKNOWN",
+        active_generation: null,
+        coverage: null,
+        last_known_good: lkg || null,
+        reason: lkg
+          ? "no active projection generation; last-known-good is not current COMPLETE"
+          : "Coverage V2 projection has not been populated for this governed dataset",
+      };
     }
     return {
       plane: "ops_current", mutable: true, dataset,
@@ -313,19 +323,18 @@ export async function callOpsTool(db, name, rawArguments) {
 
   if (name === "coverage_gaps") {
     const active = await activeProjectionGeneration(db);
-    const binds = [];
-    let genClause = "";
-    if (active?.generation_id) {
-      genClause = " WHERE projection_generation_id = ?";
-      binds.push(active.generation_id);
-    }
-    const rows = await all(db,
-      `SELECT dataset, status, policy_version, collection_scope,
-              history_target_start, history_target_end_rule, coverage_mode,
-              expected_frequency, universe_rule, governance_tier,
-              observed_start, observed_end, row_count, source_run_id, evaluated_at
-         FROM dataset_coverage${genClause} ORDER BY governance_tier, dataset LIMIT 500`,
-      binds);
+    // Missing active generation: do not treat unfiltered COMPLETE as current.
+    const rows = active?.generation_id
+      ? await all(db,
+          `SELECT dataset, status, policy_version, collection_scope,
+                  history_target_start, history_target_end_rule, coverage_mode,
+                  expected_frequency, universe_rule, governance_tier,
+                  observed_start, observed_end, row_count, source_run_id, evaluated_at
+             FROM dataset_coverage
+            WHERE projection_generation_id = ?
+            ORDER BY governance_tier, dataset LIMIT 500`,
+          [active.generation_id])
+      : [];
     const present = new Map(rows.map((row) => [String(row.dataset), row]));
     const gaps = GOVERNED_DATASETS.flatMap((dataset) => {
       const row = present.get(dataset);
@@ -548,14 +557,37 @@ export async function callOpsTool(db, name, rawArguments) {
               collection_window, expected_frequency, coverage_segment_granularity,
               research_eligible, enabled, sla, historical_start
          FROM endpoint_inventory WHERE dataset_id = ? LIMIT 1`, [dataset]);
-    const coverage = await first(db,
-      `SELECT dataset, status, policy_version, collection_scope,
+    const active = await activeProjectionGeneration(db);
+    const coverageSelect = `SELECT dataset, status, policy_version, collection_scope,
               observed_start, observed_end, row_count, source_run_id, evaluated_at
-         FROM dataset_coverage WHERE dataset = ? LIMIT 1`, [dataset]);
+         FROM dataset_coverage`;
+    let coverage = null;
+    if (active?.generation_id) {
+      coverage = await first(db,
+        `${coverageSelect} WHERE dataset = ? AND projection_generation_id = ? LIMIT 1`,
+        [dataset, active.generation_id]);
+    }
+    if (!coverage) {
+      const lkg = await first(db, `${coverageSelect} WHERE dataset = ? LIMIT 1`, [dataset]);
+      return {
+        plane: "ops_current", mutable: true, dataset,
+        endpoint: endpoint || { dataset, status: "UNKNOWN", reason: "Endpoint not found in inventory" },
+        coverage: {
+          dataset,
+          status: "UNKNOWN",
+          reason: lkg
+            ? (active?.generation_id
+              ? "active generation missing dataset; last-known-good is not current COMPLETE"
+              : "no active projection generation; last-known-good is not current COMPLETE")
+            : "Coverage V2 projection not populated",
+          last_known_good: lkg || null,
+        },
+      };
+    }
     return {
       plane: "ops_current", mutable: true, dataset,
       endpoint: endpoint || { dataset, status: "UNKNOWN", reason: "Endpoint not found in inventory" },
-      coverage: coverage || { dataset, status: "UNKNOWN", reason: "Coverage V2 projection not populated" },
+      coverage,
     };
   }
 
@@ -720,8 +752,8 @@ export async function callOpsTool(db, name, rawArguments) {
         : Number(appliedFeedRaw);
     const appliedFeedCursor = Number.isNaN(appliedFeed) ? null : appliedFeed;
     // Per-dataset export cursor + lag vs latest change_seq (null cursor = not synced).
-    // applied_cursor stays null until local apply pin is projected — do not
-    // pretend D1 watermark equals local research apply.
+    // applied_cursor is the feed-level pin (ops_applied_pins, feed=jquants_records).
+    // Missing table / null pin stays null — never CURRENT.
     const datasets = (marks || []).map((row) => {
       const cursorRaw = row.last_export_cursor;
       const exported = cursorRaw == null || cursorRaw === "" ? null : Number(cursorRaw);
@@ -729,7 +761,7 @@ export async function callOpsTool(db, name, rawArguments) {
         latest == null || exported == null || Number.isNaN(exported)
           ? null
           : Math.max(0, latest - exported);
-      const applied = null;
+      const applied = appliedFeedCursor;
       const state = syncDatasetState({
         exported: Number.isNaN(exported) ? null : exported,
         applied,
@@ -764,7 +796,7 @@ export async function callOpsTool(db, name, rawArguments) {
       research_note:
         "Cloudflare ingestion progress ≠ local research apply. " +
         "Null export cursors are honest when change_log is empty or watermark not advanced; " +
-        "applied_cursor is null until local sync pin is projected. Do not treat null as COMPLETE.",
+        "applied_cursor is the feed-level pin; null pin is never CURRENT. Do not treat null as COMPLETE.",
     };
   }
 
