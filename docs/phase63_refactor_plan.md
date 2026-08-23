@@ -10,7 +10,7 @@ extracts landed. Leftover occupancy **HOLD** in `daily_path.ts`.
 `coverage_receipts`, `snapshot_publish_policy`, `snapshot_coverage_proof`,
 `snapshot_persist`, `snapshot_read`, `eval_orchestrate`,
 `ingestion-premium/collection_receipts.ts` — **DONE** in §7.  
-**Live strategy at `70d7c8bd`:** §10 — remaining extracts vs HOLD. YAML
+**Live strategy at `31f9a99b`:** §10 — remaining extracts vs HOLD. YAML
 file-count waste is closed. Size is not waste. Do not extract leftover
 occupancy. Do not add YAML. Do not declare Phase 7 GO.  
 **Mass / READY / Phase 7:** unchanged (NO-GO / not declared / OFF)
@@ -364,7 +364,7 @@ and COMPLETE predicates unchanged, generated files still generated.
 
 ---
 
-## 10. Current remaining extracts vs HOLD (HEAD 70d7c8bd)
+## 10. Current remaining extracts vs HOLD (HEAD 31f9a99b)
 
 This is the **live** refactor strategy for “the code is full of waste.”
 §§1–9 remain the plan at `41003a5` / status at `5c9b962`. Follow this
@@ -536,11 +536,12 @@ service-binding HOLD unchanged) — **LANDED**. After `88564075`: JSDA
 token compare (`9befdbc4`); secrets token compare (`7fb8e188`; WebCrypto
 timingSafeEqual); mass-eval SHA-256 hex (`c126261f`); ai-gateway SHA-256
 hex (`b8696205`) — **LANDED**. After `b8696205`: JSDA SHA-256 hex
-(`9136dc53`); mass-eval token compare (`70d7c8bd`) — **LANDED**. Remaining
-mixed HOLD: leftover occupancy, unique22, GATEWAY_TOKEN P632B-03, persist
-live upsert, compact catalog, `verify_all` vs `verify_ci`. mass-eval
-`freezePayload` still in `http.ts` (optional later; do not fake-split
-persist). Do not schedule leftover occupancy. Do not YAML +N. Do not
+(`9136dc53`); mass-eval token compare (`70d7c8bd`) — **LANDED**. After
+`70d7c8bd`: mass-eval freezePayload (`7fa38828`); extracted json/token/sha256
+glob (`31f9a99b`) — **LANDED**. Remaining mixed HOLD: leftover occupancy,
+unique22, GATEWAY_TOKEN P632B-03, persist live upsert, compact catalog,
+`verify_all` vs `verify_ci`. putJson persist stays in http.ts (do not
+fake-split). Do not schedule leftover occupancy. Do not YAML +N. Do not
 declare Phase 7 GO. Do not claim ci-aggregate Worker exists live. Do
 not treat CF-Worker as auth.
 
@@ -576,7 +577,8 @@ ci-aggregate token compare lives in `authorized.ts`. gateway token
 compare lives in `authorized.ts`. JSDA/secrets token compare live in
 their `authorized.ts`. JSDA/mass-eval/gateway SHA-256 hex live in their
 `sha256.ts`. mass-eval authorized lives in `authorized.ts` re-exported
-from `http.ts`. Do not family-slice remaining façade handlers.
+from `http.ts`. mass-eval `freeze.ts` re-exported from `http.ts`.
+Do not family-slice remaining façade handlers.
 
 ### 10.4 Do not
 
@@ -612,6 +614,8 @@ from `http.ts`. Do not family-slice remaining façade handlers.
 ✗ Claim ci-aggregate Worker exists live / CF-Worker is auth at b8696205
 ✗ Claim leftover occupancy / unique22 / GATEWAY_TOKEN P632B-03 / persist live upsert / compact catalog / verify_all vs verify_ci closed at 70d7c8bd
 ✗ Claim ci-aggregate Worker exists live / CF-Worker is auth at 70d7c8bd
+✗ Claim leftover occupancy / unique22 / GATEWAY_TOKEN P632B-03 / persist live upsert / compact catalog / verify_all vs verify_ci closed at 31f9a99b
+✗ Claim ci-aggregate Worker exists live / CF-Worker is auth at 31f9a99b
 ✗ Claim ci-aggregate Worker exists live
 ```
 
