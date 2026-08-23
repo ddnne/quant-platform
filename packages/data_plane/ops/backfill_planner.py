@@ -25,7 +25,7 @@ from data_contracts.coverage import (
 from data_contracts.source_capability import (
     TIP_SNAPSHOT_MODES,
     SourceCapabilityContract,
-    source_capability_contract_for,
+    source_capability_contract_or_none,
 )
 from storage.coverage_ledger import plan_required_segments
 
@@ -350,10 +350,8 @@ def _read_complete_segments(
 
 
 def _source_capability(dataset_id: str) -> SourceCapabilityContract | None:
-    try:
-        return source_capability_contract_for(dataset_id)
-    except KeyError:
-        return None
+    # Missing SourceCapability V3 is None — not an invented official domain.
+    return source_capability_contract_or_none(dataset_id)
 
 
 def _is_tip_snapshot_dataset(cov: CollectionCoverageContract) -> bool:
@@ -367,7 +365,10 @@ def _is_tip_snapshot_dataset(cov: CollectionCoverageContract) -> bool:
 
 
 def _official_domain_start(dataset_id: str) -> date | None:
-    """Official provision start. Entitlement floor is not official domain."""
+    """Official provision start from SourceCapability V3.
+
+    Missing V3 is None. Entitlement floor is not official domain.
+    """
     cap = _source_capability(dataset_id)
     if cap is None or cap.history_mode in TIP_SNAPSHOT_MODES:
         return None
@@ -517,6 +518,7 @@ class BackfillPlanner:
                     continue
                 start = _parse_date(cov.history_target_start)
                 official = _official_domain_start(cov.dataset_id)
+                # None when V3 is absent: do not invent a domain from floor/annotations.
                 if official is not None and start < official:
                     start = official
                 end = self.cutoff

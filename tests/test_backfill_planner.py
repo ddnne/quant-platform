@@ -205,6 +205,54 @@ def test_planner_master_jobs_exclude_pre_official_months():
     assert all(j.requested_from >= "2008-05-07" for j in plan.jobs)
 
 
+def test_planner_fins_summary_without_v3_uses_coverage_json_not_invented_domain():
+    """No-V3 governed datasets keep official domain None; start is coverage JSON.
+
+    Missing SourceCapability V3 is not an invented official domain.
+    plan_required_segments and BackfillPlanner both start at
+    collection_coverage.json history_target_start. evaluate_segment
+    without a receipt is PARTIAL, not COMPLETE.
+    """
+    from datetime import date
+
+    from data_contracts.coverage import coverage_contract_for
+    from data_contracts.source_capability import source_capability_contract_or_none
+    from ops.backfill_planner import _official_domain_start
+    from storage.coverage_ledger import evaluate_segment, plan_required_segments
+
+    dataset = "fins_summary"
+    assert source_capability_contract_or_none(dataset) is None
+    assert _official_domain_start(dataset) is None
+
+    policy = coverage_contract_for(dataset)
+    assert policy.history_target_start == "2008-07-01"
+    assert policy.earliest_official_availability is None
+
+    cutoff = date(2008, 8, 31)
+    planned = plan_required_segments(policy, cutoff.isoformat())
+    assert [segment.segment_id for segment in planned] == ["2008-07", "2008-08"]
+    assert planned[0].segment_start == policy.history_target_start
+    for segment in planned:
+        assert segment.expected_scope["coverage_mode"] == policy.coverage_mode
+        assert "earliest_official_availability" not in segment.expected_scope
+        assert "history_mode" not in segment.expected_scope
+
+    status, detail = evaluate_segment(policy, planned[0], None)
+    assert status == "PARTIAL"
+    assert status != "COMPLETE"
+    assert detail["reason"] == "missing collection receipt"
+
+    plan = BackfillPlanner(cutoff=cutoff).plan(datasets=[dataset])
+    assert [job.segment_id for job in plan.jobs] == ["2008-07", "2008-08"]
+    assert plan.jobs[0].requested_from == policy.history_target_start
+    assert all(
+        job.requested_from >= policy.history_target_start for job in plan.jobs
+    )
+    assert not any(
+        job.segment_id in {"2006-08", "2008-05", "2008-06"} for job in plan.jobs
+    )
+
+
 def test_planner_skips_complete_tip_snapshot_segment(tmp_path):
     """Already-COMPLETE cutoff ids are skipped; planner does not invent COMPLETE."""
     import sqlite3
