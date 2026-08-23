@@ -9,7 +9,31 @@ import {
   decodeEvaluationIR,
   encodeEvaluationIR,
   jobCandidateGrade as irGrade,
+  type EvaluationIREncodeArgs,
 } from "./evaluation_ir";
+
+const REPO_ROOT = join(
+  dirname(fileURLToPath(import.meta.url)),
+  "../../../..",
+);
+const GOLDEN_PATH = join(REPO_ROOT, "specs/evaluation_ir/golden.jsonl");
+
+type GoldenRow = {
+  id: string;
+  op: "roundtrip" | "decode";
+  args?: EvaluationIREncodeArgs;
+  payload?: Record<string, unknown>;
+  expect?: { candidate: boolean; failure_reason: string | null };
+  expect_error?: string;
+};
+
+function loadGolden(): GoldenRow[] {
+  return readFileSync(GOLDEN_PATH, "utf8")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .map((line) => JSON.parse(line) as GoldenRow);
+}
 
 describe("Evaluation IR golden vectors", () => {
   it("canonical fields, version, and jobCandidateGrade identity", () => {
@@ -146,5 +170,25 @@ describe("Evaluation IR golden vectors", () => {
     expect(daily).toContain("candidate_grade: evaluation_ir.candidate");
     expect(daily).not.toMatch(/candidate_grade:\s*jobCandidateGrade/);
     expect(src).toMatch(/screen_kind: "period_net"[\s\S]*candidate_grade: false/);
+  });
+
+  it("shared golden vectors match candidate and failure_reason", () => {
+    const rows = loadGolden();
+    expect(rows.length).toBeGreaterThanOrEqual(8);
+    for (const row of rows) {
+      if (row.op === "decode") {
+        expect(row.expect_error, row.id).toBeTruthy();
+        expect(() => decodeEvaluationIR(row.payload)).toThrow(
+          new RegExp(row.expect_error as string),
+        );
+        continue;
+      }
+      const encoded = encodeEvaluationIR(row.args as EvaluationIREncodeArgs);
+      expect(encoded.candidate, row.id).toBe(row.expect?.candidate);
+      expect(encoded.failure_reason, row.id).toBe(row.expect?.failure_reason);
+      const decoded = decodeEvaluationIR(encoded);
+      expect(decoded.candidate, row.id).toBe(row.expect?.candidate);
+      expect(decoded.failure_reason, row.id).toBe(row.expect?.failure_reason);
+    }
   });
 });

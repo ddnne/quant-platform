@@ -1,6 +1,11 @@
 """Golden vectors for the versioned Evaluation IR."""
 from __future__ import annotations
 
+import hashlib
+import json
+from pathlib import Path
+from typing import Any, Mapping
+
 import pytest
 
 from research.candidate_policy import job_candidate_grade
@@ -12,6 +17,24 @@ from research.evaluation_ir import (
     encode_evaluation_ir,
     job_candidate_grade as ir_grade,
 )
+
+GOLDEN_PATH = (
+    Path(__file__).resolve().parents[1] / "specs" / "evaluation_ir" / "golden.jsonl"
+)
+
+
+def _load_golden() -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for line in GOLDEN_PATH.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line:
+            rows.append(json.loads(line))
+    return rows
+
+
+def _canonical_digest(payload: Mapping[str, Any]) -> str:
+    blob = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
 def test_canonical_fields_and_version() -> None:
@@ -179,3 +202,19 @@ def test_job_artifact_unknown_ir_field_rejected() -> None:
         candidate_from_job_artifact(
             {"candidate_grade": True, "evaluation_ir": {**good, "go": True}}
         )
+
+
+@pytest.mark.parametrize("row", _load_golden(), ids=lambda row: row["id"])
+def test_shared_golden_vectors(row: dict[str, Any]) -> None:
+    if row["op"] == "decode":
+        with pytest.raises(ValueError, match=row["expect_error"]):
+            decode_evaluation_ir(row["payload"])
+        return
+    encoded = encode_evaluation_ir(**row["args"])
+    expect = row["expect"]
+    assert encoded["candidate"] is expect["candidate"]
+    assert encoded["failure_reason"] == expect["failure_reason"]
+    decoded = decode_evaluation_ir(encoded)
+    assert decoded.candidate is expect["candidate"]
+    assert decoded.failure_reason == expect["failure_reason"]
+    assert _canonical_digest(encoded) == _canonical_digest(decoded.to_dict())

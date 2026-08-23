@@ -7,6 +7,8 @@ and re-grades; a smuggled ``candidate: true`` cannot pass a partial job.
 Readers of daily-path job dicts must not trust a stored ``candidate_grade``
 boolean. Use ``candidate_from_job_artifact``: decode/re-grade ``evaluation_ir``
 when present, else ``job_candidate_grade`` on counts.
+
+Shared golden: ``specs/evaluation_ir/golden.jsonl`` (Python and Worker).
 """
 from __future__ import annotations
 

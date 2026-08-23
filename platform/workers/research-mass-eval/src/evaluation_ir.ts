@@ -3,6 +3,8 @@
 Candidate is not a free boolean and is not a second Python/TS policy copy.
 Encode always calls jobCandidateGrade. Decode rejects unknown fields
 and re-grades; a smuggled candidate:true cannot pass a partial job.
+
+Shared golden: specs/evaluation_ir/golden.jsonl (Python and Worker).
 */
 
 import { jobCandidateGrade } from "./candidate";

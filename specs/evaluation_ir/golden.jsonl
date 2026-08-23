@@ -1,0 +1,10 @@
+{"id":"complete_pass","op":"roundtrip","args":{"return_value":0.08,"cost":0.02,"turnover":0.15,"coverage":1.0,"collapsed":0,"n_expected":4,"n_cells":4,"n_complete":4,"n_collapsed":0,"n_broken":0},"expect":{"candidate":true,"failure_reason":null}}
+{"id":"partial_cells","op":"roundtrip","args":{"return_value":0.12,"cost":0.01,"turnover":0.4,"coverage":0.75,"collapsed":0,"n_expected":4,"n_cells":4,"n_complete":3},"expect":{"candidate":false,"failure_reason":"partial_incomplete"}}
+{"id":"n_expected_zero","op":"roundtrip","args":{"n_expected":0,"n_cells":0,"n_complete":0},"expect":{"candidate":false,"failure_reason":"n_expected_nonpositive"}}
+{"id":"collapsed","op":"roundtrip","args":{"n_expected":4,"n_cells":4,"n_complete":4,"n_collapsed":1},"expect":{"candidate":false,"failure_reason":"collapsed"}}
+{"id":"broken","op":"roundtrip","args":{"n_expected":4,"n_cells":4,"n_complete":4,"n_broken":1},"expect":{"candidate":false,"failure_reason":"broken"}}
+{"id":"n_cells_mismatch","op":"roundtrip","args":{"n_expected":4,"n_cells":3,"n_complete":3},"expect":{"candidate":false,"failure_reason":"n_cells_mismatch"}}
+{"id":"custom_failure_reason","op":"roundtrip","args":{"n_expected":4,"n_cells":4,"n_complete":3,"failure_reason":"operator_halt"},"expect":{"candidate":false,"failure_reason":"operator_halt"}}
+{"id":"complete_clears_supplied_reason","op":"roundtrip","args":{"n_expected":2,"n_cells":2,"n_complete":2,"n_collapsed":0,"n_broken":0,"failure_reason":"should_not_stick"},"expect":{"candidate":true,"failure_reason":null}}
+{"id":"unknown_field_reject","op":"decode","payload":{"version":"evaluation-ir/v1","return":0.0,"cost":0.0,"turnover":0.0,"coverage":1.0,"collapsed":0,"candidate":true,"failure_reason":null,"n_expected":2,"n_cells":2,"n_complete":2,"n_collapsed":0,"n_broken":0,"go":true},"expect_error":"unknown field"}
+{"id":"smuggled_candidate_partial","op":"decode","payload":{"version":"evaluation-ir/v1","return":null,"cost":null,"turnover":null,"coverage":null,"collapsed":0,"candidate":true,"failure_reason":"partial_incomplete","n_expected":4,"n_cells":4,"n_complete":3,"n_collapsed":0,"n_broken":0},"expect_error":"job_candidate_grade"}
