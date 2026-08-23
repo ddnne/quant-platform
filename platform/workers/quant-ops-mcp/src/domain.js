@@ -272,8 +272,27 @@ export async function callOpsTool(db, name, rawArguments) {
            FROM dataset_coverage
           WHERE dataset = ? AND projection_generation_id = ? LIMIT 1`,
         [dataset, active.generation_id]);
-    }
-    if (!coverage) {
+      if (!coverage) {
+        const lkg = await first(db,
+          `SELECT dataset, status, policy_version, collection_scope,
+                  history_target_start, history_target_end_rule, coverage_mode,
+                  expected_frequency, universe_rule, raw_retention_required,
+                  structured_reconciliation_required, governance_tier,
+                  observed_start, observed_end, row_count, source_run_id,
+                  evaluated_at, detail_json
+             FROM dataset_coverage WHERE dataset = ? LIMIT 1`, [dataset]);
+        return {
+          plane: "ops_current", mutable: true, dataset,
+          status: "UNKNOWN",
+          active_generation: active.generation_id,
+          coverage: null,
+          last_known_good: lkg || null,
+          reason: lkg
+            ? "active generation missing dataset; last-known-good is not current COMPLETE"
+            : "Coverage V2 projection has not been populated for this governed dataset",
+        };
+      }
+    } else {
       coverage = await first(db,
         `SELECT dataset, status, policy_version, collection_scope,
                 history_target_start, history_target_end_rule, coverage_mode,
@@ -293,12 +312,20 @@ export async function callOpsTool(db, name, rawArguments) {
   }
 
   if (name === "coverage_gaps") {
+    const active = await activeProjectionGeneration(db);
+    const binds = [];
+    let genClause = "";
+    if (active?.generation_id) {
+      genClause = " WHERE projection_generation_id = ?";
+      binds.push(active.generation_id);
+    }
     const rows = await all(db,
       `SELECT dataset, status, policy_version, collection_scope,
               history_target_start, history_target_end_rule, coverage_mode,
               expected_frequency, universe_rule, governance_tier,
               observed_start, observed_end, row_count, source_run_id, evaluated_at
-         FROM dataset_coverage ORDER BY governance_tier, dataset LIMIT 500`);
+         FROM dataset_coverage${genClause} ORDER BY governance_tier, dataset LIMIT 500`,
+      binds);
     const present = new Map(rows.map((row) => [String(row.dataset), row]));
     const gaps = GOVERNED_DATASETS.flatMap((dataset) => {
       const row = present.get(dataset);
@@ -554,7 +581,9 @@ export async function callOpsTool(db, name, rawArguments) {
       age = Number(metadata.age_seconds ?? 0);
     }
     let status = metadata.status || "UNKNOWN";
+    if (age == null && String(metadata.generated_at || "")) status = "UNKNOWN";
     if (status === "FRESH" && age != null && age > 86400) status = "STALE";
+    if (status === "FRESH" && age == null) status = "UNKNOWN";
     // Mixed generation detection across coverage table
     const gens = await all(db,
       `SELECT DISTINCT projection_generation_id AS g FROM dataset_coverage
