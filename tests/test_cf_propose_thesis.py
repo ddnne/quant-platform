@@ -806,6 +806,18 @@ def test_review_proposal_row_occupancy_and_polarity_table() -> None:
             "occupancy_label_only",
             "PEAD when EPS contracted versus the last prior print AND the repo curve flattened AND overnight funding eased. Skip missing PIT prints (no invent).",
         ),
+        (
+            "The bond market is experiencing a liquidity squeeze when the repo curve steepens AND the market is experiencing a liquidity squeeze AND the overnight policy rate is tight.",
+            ["curve_flatten", "liq_high", "overnight_tightening"],
+            "title_gate_polarity_mismatch",
+            "PEAD when the repo curve flattened AND liquidity is high AND overnight tightened. Skip missing PIT prints (no invent).",
+        ),
+        (
+            "Price is down AND repo curve is inverted AND net profit is negative is a BAD signal.",
+            ["price_down", "invert_curve", "np_negative"],
+            "occupancy_label_only",
+            "PEAD when price is down AND the repo curve inverted AND net profit is negative. Skip missing PIT prints (no invent).",
+        ),
     ]
     for bad_thesis, gates, reason, good_thesis in rows:
         payload = {

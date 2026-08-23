@@ -186,6 +186,21 @@ GATE_TITLE_CONTRA: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("rich_iv", ("cheap iv", "iv is cheap")),
     ("overnight_easing", ("tightening",)),
     ("overnight_tightening", ("easing", "easy funding")),
+    ("curve_flatten", (
+        "steepens",
+        "steepening",
+        "curve steepens",
+        "repo curve steepens",
+        "is steep",
+        "curve is steep",
+        "the curve is steep",
+    )),
+    ("liq_high", (
+        "liquidity squeeze",
+        "liquidity is low",
+        "low liquidity",
+        "illiquid",
+    )),
     ("repo_3m_down", (
         "high repo",
         "repo rate is high",
@@ -337,6 +352,17 @@ GATE_OCCUPANCY_LABEL: tuple[tuple[str, tuple[str, ...]], ...] = (
         "funding conditions tighten",
         "conditions tighten",
         "funding tightness",
+    )),
+    ("overnight_tightening", (
+        "policy rate",
+        "policy rate is tight",
+        "overnight policy rate",
+        "rate is tight",
+    )),
+    ("liq_high", (
+        "liquidity squeeze",
+        "squeeze",
+        "illiquid",
     )),
     ("price_down", (
         "under pressure",
@@ -580,6 +606,9 @@ TITLE_OCCUPANCY_META: tuple[str, ...] = (
     "occupied",
     "occupy lower",
     "occupy",
+    "bad signal",
+    "is a bad signal",
+    "a bad signal",
 )
 
 
