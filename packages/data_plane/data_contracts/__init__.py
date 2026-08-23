@@ -39,6 +39,7 @@ from .source_capability import (
     OfficialRequiredDomainSubset,
     SourceCapabilityContract,
     all_source_capability_contracts,
+    apply_official_query_clamp,
     required_domain_subset_official,
     source_capability_contract_for,
 )
@@ -112,6 +113,7 @@ __all__ = [
     "OfficialRequiredDomainSubset",
     "SourceCapabilityContract",
     "all_source_capability_contracts",
+    "apply_official_query_clamp",
     "required_domain_subset_official",
     "source_capability_contract_for",
 ]

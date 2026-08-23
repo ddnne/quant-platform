@@ -543,6 +543,38 @@ def source_capability_contract_for(dataset_id: str) -> SourceCapabilityContract:
         ) from exc
 
 
+def _earliest_official_availability(
+    contract: SourceCapabilityContract | Mapping[str, Any],
+) -> str:
+    if isinstance(contract, SourceCapabilityContract):
+        return contract.earliest_official_availability
+    return _iso_date(
+        contract.get("earliest_official_availability")
+        if isinstance(contract, Mapping)
+        else None,
+        "earliest_official_availability",
+    )
+
+
+def apply_official_query_clamp(
+    query_date: str,
+    contract: SourceCapabilityContract | Mapping[str, Any],
+) -> str:
+    """Clamp a snapshot/query date to official provision start.
+
+    Dates before ``earliest_official_availability`` are vendor-misdate
+    queries, not missing backfill and not required history. Does not
+    rewrite a PIT ``as_of`` used for ``available_at <= as_of``.
+    """
+    start = _earliest_official_availability(contract)
+    day = str(query_date).strip()[:10]
+    if len(day) != 10:
+        raise ValueError("query_date must be ISO date YYYY-MM-DD")
+    if day < start:
+        return start
+    return str(query_date).strip()
+
+
 __all__ = [
     "HISTORY_MODES",
     "POLICY_VERSION",
@@ -560,6 +592,7 @@ __all__ = [
     "RevisionSemantics",
     "SourceCapabilityContract",
     "all_source_capability_contracts",
+    "apply_official_query_clamp",
     "load_source_capability_dir",
     "parse_source_capability_document",
     "required_domain_subset_official",

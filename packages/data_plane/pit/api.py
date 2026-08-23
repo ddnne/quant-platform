@@ -30,6 +30,10 @@ import hashlib
 import json
 from typing import Any, Mapping
 
+from data_contracts.source_capability import (
+    apply_official_query_clamp,
+    source_capability_contract_for,
+)
 from ingestion.common.timeutil import parse_date_str, parse_dt, to_iso
 from ingestion.jquants.normalize import (
     normalize_daily_bars,
@@ -271,13 +275,25 @@ def get_equity_master(
     a code may be returned (ordered by ``code, snapshot_date``); callers that
     want the *latest-known-as-of* snapshot should take the last row per code.
 
+    ``snapshot_date`` is clipped to SourceCapabilityContract
+    ``earliest_official_availability`` (2008-05-07 for equities_master).
+    Pre-official dates are vendor-misdate, not required history. The PIT
+    ``as_of`` used for ``available_at <= as_of`` is not rewritten.
+
     ``code`` optionally restricts to a single issue (e.g. ``"8697"``).
     """
     as_of_iso = normalize_as_of(as_of)
-    extra_where: str | None = None
-    params: list[Any] = []
+    contract = source_capability_contract_for("equities_master")
+    # Floor snapshot/query dates; keep original as_of for the available_at gate.
+    official_start = apply_official_query_clamp(
+        min(as_of_iso[:10], contract.earliest_official_availability),
+        contract,
+    )
+    extra_where = "snapshot_date >= ?"
+    params: list[Any] = [official_start]
     if code is not None:
-        extra_where, params = "code = ?", [code]
+        extra_where += " AND code = ?"
+        params.append(code)
     rows = run_query(
         db_path,
         as_of=as_of_iso,
@@ -286,8 +302,8 @@ def get_equity_master(
         params=params,
         order_by="code, snapshot_date",
     )
-    catalog_clauses: list[str] = []
-    catalog_params: list[Any] = []
+    catalog_clauses: list[str] = ["substr(event_time, 1, 10) >= ?"]
+    catalog_params: list[Any] = [official_start]
     if code is not None:
         catalog_clauses.append(f"{_CATALOG_CODE_SQL} = ?")
         catalog_params.append(code)
@@ -302,6 +318,11 @@ def get_equity_master(
         [*rows, *_catalog_equity_master(catalog)],
         key_fields=("source", "code", "snapshot_date"),
     )
+    rows = [
+        row
+        for row in rows
+        if str(row.get("snapshot_date") or "")[:10] >= official_start
+    ]
     rows.sort(
         key=lambda row: (row.get("code") or "", row.get("snapshot_date") or "")
     )

@@ -17,8 +17,14 @@ from data_contracts.permanent_defer import (
     PERMANENT_DEFER_DATASETS,
     PERMANENT_DEFER_IDS,
 )
+from data_contracts.source_capability import (
+    apply_official_query_clamp,
+    source_capability_contract_for,
+)
 from ops.range_batch_scheduler import TRACK_A_FOCUS_RANGES
+from pit import get_equity_master
 from storage.coverage_ledger import plan_required_segments
+from storage.sqlite_store import SqliteStore
 
 _REPO = Path(__file__).resolve().parents[1]
 _CAPABILITY = _REPO / "specs" / "source_capability" / "equities_master.json"
@@ -103,6 +109,12 @@ def test_pre_official_queries_clamp_not_missing_backfill():
     assert apply_official_query_clamp("2008-04-30", cap) == OFFICIAL_START
     assert apply_official_query_clamp("2008-05-07", cap) == OFFICIAL_START
     assert apply_official_query_clamp("2008-05-08", cap) == "2008-05-08"
+    contract = source_capability_contract_for("equities_master")
+    assert contract.earliest_official_availability == OFFICIAL_START
+    assert apply_official_query_clamp("2006-08-13", contract) == OFFICIAL_START
+    assert apply_official_query_clamp("2008-04-30", contract) == OFFICIAL_START
+    assert apply_official_query_clamp("2008-05-07", contract) == OFFICIAL_START
+    assert apply_official_query_clamp("2008-05-08", contract) == "2008-05-08"
 
 
 def test_migration_excludes_21_old_partial_months_as_official_unavailable():
@@ -221,15 +233,68 @@ def test_pd_d2_master_defer_retained_reason_records_official_start():
     assert MASTER_JQ_SCOPE["dataset_complete_invent"] == "FORBIDDEN"
 
 
-def apply_official_query_clamp(query_date: str, cap: dict) -> str:
-    start = str(cap["earliest_official_availability"])
-    if query_date < start:
-        clamp = cap["collection_window"]["query_before_official_start"]
-        assert clamp["not_missing_backfill"] is True
-        return str(clamp["clamped_date"])
-    return query_date
-
-
 def month_in_required_domain(month: str, cap: dict) -> bool:
     start_month = str(cap["collection_window"]["required_segment_start_month"])
     return month >= start_month
+
+
+def _master_row(snapshot_date: str, available_at: str, company_name: str) -> dict:
+    return {
+        "source": "jquants",
+        "code": "8697",
+        "snapshot_date": snapshot_date,
+        "event_time": f"{snapshot_date}T09:00:00+09:00",
+        "available_at": available_at,
+        "ingested_at": available_at,
+        "company_name": company_name,
+    }
+
+
+def test_get_equity_master_excludes_pre_official_keeps_available_at_gate(tmp_path):
+    """Official domain floor is 2008-05-07; available_at <= as_of is unchanged."""
+    path = tmp_path / "ing.sqlite"
+    store = SqliteStore(path)
+    store.upsert(
+        "jquants_listed_info",
+        [
+            _master_row(
+                "2006-08-13", "2006-08-13T09:00:00+09:00", "misdate"
+            ),
+            _master_row(
+                "2008-04-30", "2008-04-30T09:00:00+09:00", "misdate"
+            ),
+            _master_row(
+                OFFICIAL_START, "2008-05-07T09:00:00+09:00", "official"
+            ),
+            _master_row(
+                "2008-05-08", "2008-05-08T09:00:00+09:00", "later"
+            ),
+        ],
+    )
+    store.close()
+
+    late = get_equity_master(
+        as_of="2026-08-01T00:00:00+09:00", code="8697", db_path=path
+    )
+    assert {row["snapshot_date"] for row in late.rows} == {
+        OFFICIAL_START,
+        "2008-05-08",
+    }
+    assert late.metadata["as_of"] == "2026-08-01T00:00:00+09:00"
+
+    # Do not rewrite as_of up to official start (would leak 2008 at 2006 as_of).
+    pre_official = get_equity_master(
+        as_of="2006-08-13T09:00:00+09:00", code="8697", db_path=path
+    )
+    assert pre_official.rows == []
+    assert pre_official.metadata["as_of"] == "2006-08-13T09:00:00+09:00"
+
+    before_pub = get_equity_master(
+        as_of="2008-05-07T08:59:59+09:00", code="8697", db_path=path
+    )
+    assert before_pub.rows == []
+
+    on_official = get_equity_master(
+        as_of="2008-05-07T09:00:00+09:00", code="8697", db_path=path
+    )
+    assert {row["snapshot_date"] for row in on_official.rows} == {OFFICIAL_START}
