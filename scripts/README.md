@@ -14,6 +14,8 @@ Candidate eval is `POST /v1/daily-path`, not `python -m research.unique_logic`
 (that CLI is a retired fail-closed stub). Live counts / GO gates: [docs/phase62_residual_status.md](../docs/phase62_residual_status.md)
 only. Do not launch Mass / READY / Phase7 / `cf_premium_backfill` from residual prose alone.
 
+Pre-push: [`verify_all.sh`](verify_all.sh) — pytest + catalog freeze + worker `npm test` (no live deploy; never `npm ci --legacy-peer-deps`).
+
 Phase 6 hardening utilities:
 
 - `ops_status.py --json` — offline READY snapshot, coverage, B0 and validation status.
