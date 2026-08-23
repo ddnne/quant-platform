@@ -47,6 +47,55 @@ _WRANGLER = (
 )
 
 
+def _fresh_ok_proposal() -> dict:
+    """3-AND not in catalog that review_proposal_row accepts. Avoids clone stale pins."""
+    from itertools import combinations
+
+    from research.unique_logic.catalog import combo_thesis_records
+    from research.unique_logic.constants import (
+        PRI_FLOW_GATES,
+        PRI_RATE_GATES,
+        PRI_VOL_GATES,
+        SPARSE_GATE_COMBOS,
+    )
+    from research.unique_logic.propose_review_tables import (
+        PROPOSE_CONTRADICTORY_GATE_PAIRS,
+    )
+
+    catalog_sets = {
+        frozenset(str(x) for x in (row.get("gates") or []) if str(x).strip())
+        for row in combo_thesis_records()
+    }
+    pri = sorted((PRI_VOL_GATES | PRI_FLOW_GATES | PRI_RATE_GATES) & PROPOSE_ALLOWED_GATES)
+    for combo in combinations(pri, 3):
+        s = frozenset(combo)
+        if s in catalog_sets:
+            continue
+        if any(pair <= s for pair, _ in SPARSE_GATE_COMBOS):
+            continue
+        if any(contra <= s for contra in PROPOSE_CONTRADICTORY_GATE_PAIRS):
+            continue
+        prop = {
+            "thesis": (
+                f"PEAD when {combo[0].replace('_', ' ')} and "
+                f"{combo[1].replace('_', ' ')} while "
+                f"{combo[2].replace('_', ' ')} hold names skip missing PIT prints"
+            ),
+            "signal_definition": f"AND({', '.join(combo)}) PIT skip missing",
+            "position_rule": "event-hold surprise sign",
+            "datasets": [
+                "equities_bars_daily",
+                "fins_summary",
+                "markets_margin_interest",
+                "jsda_tokyo_repo_rates",
+            ],
+            "gates": list(combo),
+        }
+        if review_proposal_row(prop)["ok"]:
+            return prop
+    raise AssertionError("no fresh review-ok 3-AND remains")
+
+
 def test_window_tweak_rejected() -> None:
     assert reject_window_tweak(
         {
@@ -226,13 +275,7 @@ def test_worker_index_contains_propose_thesis_route() -> None:
 
 
 def test_review_proposal_row_rejects_invent_and_weekday() -> None:
-    good = {
-        "thesis": "liquidity-conditioned EqAR rising after impulse",
-        "signal_definition": "AND(liq_high, eq_ar_rising, on_impulse) PIT",
-        "position_rule": "event-hold surprise sign",
-        "datasets": ["equities_bars_daily", "fins_summary"],
-        "gates": ["liq_high", "eq_ar_rising", "on_impulse"],
-    }
+    good = _fresh_ok_proposal()
     ok = review_proposal_row(good)
     assert ok["ok"] is True
     assert ok["auto_inject"] is False
@@ -945,16 +988,13 @@ def test_clone_retry_reposts_catalog_gate_sets() -> None:
                     }
                 ],
             }
+        fresh = _fresh_ok_proposal()
         return {
             "ok": True,
             "workers_ai_used": True,
             "proposals": [
                 {
-                    "thesis": "impulse EqAR rising with high ADV",
-                    "signal_definition": "AND(liq_high, eq_ar_rising, on_impulse) PIT",
-                    "position_rule": "event-hold surprise sign",
-                    "datasets": ["equities_bars_daily", "fins_summary"],
-                    "gates": ["liq_high", "eq_ar_rising", "on_impulse"],
+                    **fresh,
                     "status": "llm_not_catalog",
                 }
             ],

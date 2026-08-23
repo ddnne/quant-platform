@@ -181,6 +181,34 @@ def _yaml_combo_kind(spec: Mapping[str, Any], *, cs_gate: str | None) -> str:
     return "event"
 
 
+def normalize_gates(raw: Any) -> list[str]:
+    """Comma-string or sequence → gate tokens. Empty / None / 'None' → []."""
+    if raw in (None, "", "None"):
+        return []
+    if isinstance(raw, str):
+        return [
+            x.strip()
+            for x in raw.split(",")
+            if x.strip() and x.strip() != "None"
+        ]
+    return [
+        str(x).strip()
+        for x in list(raw)
+        if str(x).strip() and str(x).strip() != "None"
+    ]
+
+
+def spec_gates(spec: Mapping[str, Any] | None) -> list[str]:
+    """Gates from a catalog spec. params.gates then spec.gates. Missing → []."""
+    if not isinstance(spec, Mapping):
+        return []
+    params = spec.get("params") if isinstance(spec.get("params"), Mapping) else {}
+    raw = params.get("gates") if isinstance(params, Mapping) else None
+    if raw is None:
+        raw = spec.get("gates")
+    return normalize_gates(raw)
+
+
 def combo_row_from_yaml(spec: Mapping[str, Any]) -> dict[str, Any]:
     """Map catalog YAML to ``event_combos._combo_row`` keys. Missing gates/cs_gate/side fail closed."""
     from research.unique_logic.event_combos import _combo_row
@@ -193,21 +221,7 @@ def combo_row_from_yaml(spec: Mapping[str, Any]) -> dict[str, Any]:
     if missing:
         raise ValueError(f"{lid}: YAML params missing {', '.join(missing)}")
 
-    gates_raw = params["gates"]
-    if gates_raw in (None, "", "None"):
-        gates: list[str] = []
-    elif isinstance(gates_raw, str):
-        gates = [
-            x.strip()
-            for x in gates_raw.split(",")
-            if x.strip() and x.strip() != "None"
-        ]
-    else:
-        gates = [
-            str(x).strip()
-            for x in list(gates_raw)
-            if str(x).strip() and str(x).strip() != "None"
-        ]
+    gates = normalize_gates(params["gates"])
 
     cs_raw = params["cs_gate"]
     cs_gate = None if cs_raw in (None, "", "None") else str(cs_raw)
@@ -256,9 +270,7 @@ def _combo_thesis_records_cached(root_key: str) -> tuple[dict[str, Any], ...]:
         if str(spec.get("evaluator") or "") != _COMBO_EVALUATOR:
             continue
         params = spec.get("params") if isinstance(spec.get("params"), Mapping) else {}
-        gates = params.get("gates") if isinstance(params, Mapping) else []
-        if isinstance(gates, str):
-            gates = [x.strip() for x in gates.split(",") if x.strip()]
+        gates = spec_gates(spec)
         cs_raw = params.get("cs_gate") if isinstance(params, Mapping) else None
         cs_gate = None if cs_raw in (None, "", "None") else str(cs_raw)
         lid = str(spec.get("logic_id") or "")

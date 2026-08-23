@@ -160,23 +160,9 @@ def worker_implemented_logic_ids() -> frozenset[str]:
 
 
 def _gates_of(spec: Mapping[str, Any]) -> list[str]:
-    params = spec.get("params") if isinstance(spec.get("params"), Mapping) else {}
-    raw = params.get("gates") if isinstance(params, Mapping) else None
-    if raw is None:
-        raw = spec.get("gates")
-    if raw in (None, "", "None"):
-        return []
-    if isinstance(raw, str):
-        return [
-            x.strip()
-            for x in raw.split(",")
-            if x.strip() and x.strip() != "None"
-        ]
-    return [
-        str(x).strip()
-        for x in list(raw)
-        if str(x).strip() and str(x).strip() != "None"
-    ]
+    from research.unique_logic.catalog import spec_gates
+
+    return spec_gates(spec)
 
 
 def _cs_gate_of(spec: Mapping[str, Any]) -> str | None:

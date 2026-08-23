@@ -453,4 +453,20 @@ def test_sync_cf_new_thesis_ids_check() -> None:
     assert r.returncode == 0, r.stdout + r.stderr
 
 
+def test_unique_logic_cli_is_retired() -> None:
+    import subprocess
+    import sys
+
+    r = subprocess.run(
+        [sys.executable, "-m", "research.unique_logic"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert r.returncode != 0
+    blob = (r.stderr or "") + (r.stdout or "")
+    assert "retired" in blob
+    assert "Does not GO" in blob
+
+
 

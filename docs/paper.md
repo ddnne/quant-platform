@@ -150,20 +150,9 @@ Phase 6 では versioned `StrategySpec` / 宣言的 DSL を、生成側と trust
 
 ## CLI
 
-fixture DB など既存の structured DB に対して 1 run を実行する。
-
-```bash
-.venv/bin/python scripts/run_paper_once.py --help
-.venv/bin/python scripts/run_paper_once.py \
-  --strategy return-1d \
-  --start 2025-04-01 \
-  --end 2025-05-31 \
-  --db data/structured/ingestion.sqlite \
-  --universe 8697
-```
-
-CLI は ingestion を起動せず、指定 DB を PIT 経由で読むだけである。結果は既定で
-`data/paper/` 以下へ保存する。具体的な引数と既定値は `--help` を正本とする。
+`scripts/run_paper_once.py` / `rebuild_paper_index.py` are **deleted**.
+Paper runs go through `paper_runtime` APIs (see `tests/test_paper_*.py`).
+Do not add wave CLIs. Continuous paper remains UNARMED.
 
 ## Verify
 
@@ -172,20 +161,11 @@ CLI は ingestion を起動せず、指定 DB を PIT 経由で読むだけで�
 ```bash
 .venv/bin/python -m pytest tests/test_paper*.py tests/test_phase4*.py -q
 .venv/bin/python -m pytest -q
-.venv/bin/python scripts/run_paper_once.py --help
 ```
 
 本番同期済み DB の任意 smoke は、先に Phase 3.5 の B0 strict pass を確認してから明示的に
-有効化する。
-
-```bash
-QP_LIVE=1 .venv/bin/python scripts/run_paper_once.py \
-  --strategy return-1d --start 2026-04-01 --end 2026-06-30 \
-  --db data/structured/ingestion.sqlite --universe 7203,6758,9984
-```
-
-`QP_LIVE=1` は live broker を意味せず、local fixture ではなく実データ snapshot を使う
-Paper smoke の opt-in である。
+有効化する。 Paper CLI は削除済み。`QP_LIVE=1` は live broker を意味せず、
+local fixture ではなく実データ snapshot を使う Paper smoke の opt-in である。
 
 ## Scope
 

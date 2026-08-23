@@ -89,14 +89,8 @@ then gives the artifact to `RiskAgent`. Paper outputs use `data/paper`; risk
 audits use `data/risk/audits`. The pipeline refuses equal or nested roots.
 The risk audit id is content-derived and the audit JSON is immutable.
 
-Run the CLI locally (no network or broker):
-
-```bash
-.venv/bin/python scripts/run_agents_paper_once.py \
-  --db data/structured/ingestion.sqlite \
-  --start 2025-01-06 --end 2025-03-31 \
-  --universe 1332,8697 --momentum-n 5 --top-k 1
-```
+`scripts/run_agents_paper_once.py` is **deleted**. Drive the pipeline via
+`AgentPaperPipeline` (see `tests/test_agents_*.py`). Continuous paper remains UNARMED.
 
 Boundary and offline fixture coverage lives in `tests/test_agents_*.py` and
 `tests/test_strategy_spec_*.py`.

@@ -266,6 +266,38 @@ def test_mechanical_baskets_are_four_valid_defs() -> None:
     }
     assert "event_family_only" not in {d["rule"] for d in prim}
     assert "known_candidate_head" not in {d["rule"] for d in prim}
+    for d in defs:
+        assert "nested_parents" in d
+        assert isinstance(d["nested_parents"], list)
+        assert d["nested_parent_count"] == len(d["nested_parents"])
+
+
+def test_mechanical_baskets_report_nested_parents_without_reject() -> None:
+    """theme_fund / event_fund nested 2-AND⊂3-AND is detected, not invalid."""
+    from research.combo_basket_catalog import (
+        mechanical_basket_defs,
+        nested_parent_pairs,
+        validate_basket_members,
+    )
+
+    defs = {d["rule"]: d for d in mechanical_basket_defs()}
+    fund = defs["fundamentals_sleeve"]
+    evf = defs["event_fund_cross"]
+    pairs_fund = {(p["parent"], p["child"]) for p in fund["nested_parents"]}
+    pairs_evf = {(p["parent"], p["child"]) for p in evf["nested_parents"]}
+    known = ("event_ta_up_positive_eps", "event_ac_peps_taup")
+    assert known in pairs_fund
+    assert known in pairs_evf
+    assert (
+        "event_afterclose_positive_eps",
+        "event_ac_peps_taup",
+    ) in pairs_evf
+    assert fund["valid"] is True
+    assert evf["valid"] is True
+    assert validate_basket_members(fund["members"]) == []
+    assert validate_basket_members(evf["members"]) == []
+    assert nested_parent_pairs(["event_ta_up_positive_eps"]) == []
+    assert nested_parent_pairs([]) == []
 
 
 def test_meta_baskets_are_fund_line_and_not_a_pass() -> None:

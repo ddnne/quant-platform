@@ -181,21 +181,48 @@ def validate_basket_members(logic_ids: Sequence[str]) -> list[str]:
     return reasons
 
 
+def _spec_gates(logic_id: str) -> frozenset[str]:
+    from research.unique_logic.catalog import catalog_spec, spec_gates
+
+    return frozenset(spec_gates(catalog_spec(str(logic_id or ""))))
+
+
 def _member_has_calendar(logic_id: str) -> bool:
     """True when a sleeve member is a weekday/calendar permutation."""
     lid = str(logic_id or "")
     if any(g in lid for g in PROPOSE_CALENDAR_GATES):
         return True
-    from research.unique_logic.catalog import catalog_spec
+    return bool(PROPOSE_CALENDAR_GATES.intersection(_spec_gates(lid)))
 
-    spec = catalog_spec(lid)
-    if spec is None:
-        return False
-    params = spec.get("params") if isinstance(spec.get("params"), dict) else {}
-    gates = params.get("gates") if isinstance(params, dict) else []
-    if isinstance(gates, str):
-        gates = [x.strip() for x in gates.split(",") if x.strip()]
-    return bool(PROPOSE_CALENDAR_GATES.intersection(str(g) for g in (gates or ())))
+
+def nested_parent_pairs(logic_ids: Sequence[str]) -> list[dict[str, Any]]:
+    """Detect A.gates ⊂ B.gates inside one sleeve. Does not reject. Not a pass.
+
+    Nested 2-AND parents of a 3-AND sibling are recorded so reconstitution
+    can see them. Existing primary sleeves stay valid until a reconstitution
+    plan replaces them. Empty gate sets are skipped (not a parent of all).
+    """
+    ids = [str(x).strip() for x in logic_ids if str(x).strip()]
+    gates_by = {lid: _spec_gates(lid) for lid in ids}
+    out: list[dict[str, Any]] = []
+    for parent in ids:
+        gp = gates_by.get(parent) or frozenset()
+        if not gp:
+            continue
+        for child in ids:
+            if parent == child:
+                continue
+            gc = gates_by.get(child) or frozenset()
+            if gp < gc:
+                out.append(
+                    {
+                        "parent": parent,
+                        "child": child,
+                        "parent_gates": sorted(gp),
+                        "child_gates": sorted(gc),
+                    }
+                )
+    return out
 
 
 def equal_weights(n: int) -> list[float]:
@@ -213,6 +240,7 @@ def mechanical_basket_defs() -> list[dict[str, Any]]:
             continue
         members = tuple(str(x) for x in (raw.get("members") or ()))
         reasons = validate_basket_members(members)
+        nested = nested_parent_pairs(members)
         prim = bool(raw.get("primary"))
         pc = bool(raw.get("primary_candidate")) or prim
         out.append(
@@ -225,6 +253,8 @@ def mechanical_basket_defs() -> list[dict[str, Any]]:
                 "members": list(members),
                 "valid": not reasons,
                 "reject": reasons,
+                "nested_parents": nested,
+                "nested_parent_count": len(nested),
                 "promote_as_main": False,
                 "go": False,
             }

@@ -430,3 +430,22 @@ def test_countable_thesis_ids_require_worker_body() -> None:
     ][0]
     assert "worker_body_missing" in row["flags"]
     assert row["candidate"] is False
+
+
+def test_normalize_gates_and_spec_gates() -> None:
+    from research.unique_logic.catalog import catalog_spec, normalize_gates, spec_gates
+
+    assert normalize_gates(None) == []
+    assert normalize_gates("None") == []
+    assert normalize_gates("") == []
+    assert normalize_gates("ta_up,positive_eps") == ["ta_up", "positive_eps"]
+    assert normalize_gates(["afterclose", "positive_eps", "ta_up"]) == [
+        "afterclose",
+        "positive_eps",
+        "ta_up",
+    ]
+    spec = catalog_spec("event_ta_up_positive_eps")
+    assert spec is not None
+    assert set(spec_gates(spec)) == {"ta_up", "positive_eps"}
+    assert spec_gates(None) == []
+    assert spec_gates({"params": {}}) == []

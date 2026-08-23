@@ -236,7 +236,7 @@ Test tiers: `tests/README.md` (G0/G1/G2; ADR §12 / B1-d).
 | Coverage / receipts | `write_collection_receipts.py`, `refresh_coverage_ledger.py`, `issue_receipts_parallel.py`, `issue_signed_receipts_for_segments.py` | data_plane / edge (**empty-raw ban** incl. `{"data":[]}`; no COMPLETE without raw; sticky COMPLETE survives day-roll) |
 | Sync / D1 | `sync_d1_to_sqlite.py`, `report_d1_local_sync_lag.py`, `restore_local_complete_from_receipt.py` | ops |
 | Projection | `export_ops_projection.py`, `publish_ops_projection.py`, `ops_reeval_freshness.py`, `ops_reeval_observed_window.py`, `ops_status.py` | ops (**publish fail-closed**; observed_* re-eval does not rewrite segments) |
-| Paper / agents | `run_paper_once.py`, `run_agents_paper_once.py`, `rebuild_paper_index.py` | research / product |
+| Paper / agents | CLIs deleted; `paper_runtime` APIs + `agents/` | research / product |
 | Validation | `run_phase35_validation.py`, `run_phase4_accept.py` | edge / features |
 | Codegen | `generate_governed_js.py`, `verify_governed_js_drift.py` | contracts → Workers |
 

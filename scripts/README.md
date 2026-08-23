@@ -6,7 +6,7 @@ CLIs (`issue_receipts_parallel`, `publish_ops_projection`, `export_ops_projectio
 `refresh_coverage_ledger`, `sync_dataset_coverage_from_segments`, `ops_status`,
 `ops_reeval_*`, `write_collection_receipts`, `issue_signed_receipts_for_segments`,
 `restore_local_complete_from_receipt`,
-`record_research_eval`, `rebuild_paper_index`,
+`record_research_eval`,
 `parse_jsda_from_r2_mirror`, `backfill_status_report`,
 `generate_governed_js`, `verify_governed_js_drift`,
 `report_raw_throughput`) use it.
@@ -18,7 +18,7 @@ only. Do not launch Mass / READY / Phase7 / `cf_premium_backfill` from residual 
 Phase 6 hardening utilities:
 
 - `ops_status.py --json` — offline READY snapshot, coverage, B0 and validation status.
-- `rebuild_paper_index.py --root data/paper --json` — rebuild the disposable index from immutable Paper JSON.
+- Paper CLIs (`run_paper_once.py`, `run_agents_paper_once.py`, `rebuild_paper_index.py`) are **deleted**. Paper runtime stays in `packages/research_runtime/paper_runtime/`.
 - `python -m mcp_servers.quant_data --list-tools` — Quant Data Access MCP smoke.
 - `export_ops_projection.py` — verified local Coverage/READY/B0 metadataを bounded
   D1 projection SQL に変換。MCP 自体には write capability を与えない。
