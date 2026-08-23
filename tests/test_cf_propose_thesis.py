@@ -674,9 +674,11 @@ def test_worker_index_contains_propose_thesis_route() -> None:
     wr = (
         repo / "platform" / "workers" / "research-mass-eval" / "wrangler.toml"
     ).read_text(encoding="utf-8")
-    assert 'binding = "AI"' in wr
-    assert "[ai]" in wr
-    assert "env.AI.run" in src
+    assert 'binding = "AI_GATEWAY"' in wr
+    assert 'service = "quant-platform-research-ai-gateway"' in wr
+    assert "[ai]" not in wr
+    assert "env.AI.run" not in src
+    assert "completeViaGateway" in src
     assert "llm_not_catalog" in src
     assert "stubProposals" not in src
     assert "stub_propose_thesis_result" not in src

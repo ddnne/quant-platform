@@ -265,3 +265,5 @@ Dirty main (not in `1efb405`) had extra `test_catalog_family.py` / `test_researc
 | **Structural replacements** | 1 (`len(REVIEW_PHRASE_CASES) >= 40` → reason-class set) |
 
 Affected pytest after edit: `test_cf_propose_thesis.py`, `test_ready_coherence_integration.py`, `test_research_freezes.py`, `test_catalog_yaml_parity.py::test_event_cheap_pb_gate_in_combo_and_yaml` — 26 passed.
+
+Follow-up (fail-closed Gateway): `test_cf_propose_thesis.py` worker contract now asserts **no** `[ai]` / `env.AI.run` on mass-eval, and requires `AI_GATEWAY` service binding. That is a structural replacement, not a new combinatorial test.
