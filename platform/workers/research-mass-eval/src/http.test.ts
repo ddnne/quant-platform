@@ -403,6 +403,30 @@ describe("POST /v1/children-then-manifest", () => {
     expect(mem.putOrder).toEqual([]);
   });
 
+  it("denies when token unbound", async () => {
+    const mem = new MemR2();
+    const env = {
+      STRUCTURED_BUCKET: mem.asBucket(),
+    } as Env;
+    const res = await dispatchMassEvalFetch(
+      new Request("https://example.test/v1/children-then-manifest", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "X-Mass-Eval-Token": "secret",
+        },
+        body: JSON.stringify({
+          children: [{ key: "job/child.json", data: { n: 1 } }],
+          manifest: { key: "job/manifest.json", data: { n: 1 } },
+        }),
+      }),
+      env,
+      noopHandlers,
+    );
+    expect(res.status).toBe(503);
+    expect(mem.putOrder).toEqual([]);
+  });
+
   it("puts children then manifest when authorized", async () => {
     const mem = new MemR2();
     const env = {

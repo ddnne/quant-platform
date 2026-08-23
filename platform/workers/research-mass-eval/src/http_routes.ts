@@ -322,6 +322,9 @@ export async function dispatchMassEvalFetch(
     if (request.method !== "POST") {
       return json({ error: "POST required" }, 405);
     }
+    if (!env.MASS_EVAL_TOKEN) {
+      return json({ error: "MASS_EVAL_TOKEN not bound" }, 503);
+    }
     if (!(await authorized(request, env.MASS_EVAL_TOKEN))) {
       return json({ error: "unauthorized" }, 401);
     }
