@@ -31,7 +31,13 @@ def test_event_sides_ls_variants_stay_registered() -> None:
 
 
 def test_combo_thesis_records_are_compact_table_rows() -> None:
-    from research.unique_logic.catalog import combo_thesis_records
+    import json
+    from pathlib import Path
+
+    from research.unique_logic.catalog import (
+        combo_thesis_records,
+        write_combo_thesis_jsonl,
+    )
 
     rows = combo_thesis_records()
     assert rows
@@ -39,6 +45,13 @@ def test_combo_thesis_records_are_compact_table_rows() -> None:
     assert rec["go"] is False
     assert "logic_id" in rec and "gates" in rec and "kind" in rec
     assert rec["kind"] in {"event", "surprise_xs", "cs"}
+    path = Path("/tmp/combo_thesis_records_test.jsonl")
+    dump = write_combo_thesis_jsonl(path)
+    assert dump["n"] == len(rows)
+    assert dump["yaml_remains_sot"] is True
+    assert dump["go"] is False
+    first = json.loads(path.read_text(encoding="utf-8").splitlines()[0])
+    assert first["logic_id"] and first["go"] is False
 
 
 def test_catalog_index_is_one_pass_lookup() -> None:

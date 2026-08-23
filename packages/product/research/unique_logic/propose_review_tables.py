@@ -492,15 +492,11 @@ PROPOSE_CONTRADICTORY_GATE_PAIRS: tuple[frozenset[str], ...] = (
 
 
 def _catalog_gate_sets() -> set[frozenset[str]]:
-    from research.unique_logic.catalog import yaml_combo_rows
+    from research.unique_logic.catalog import combo_thesis_records
 
     catalog: set[frozenset[str]] = set()
-    for row in yaml_combo_rows():
-        gates = frozenset(
-            str(x)
-            for x in ((row.get("params") or {}).get("gates") or [])
-            if str(x).strip()
-        )
+    for row in combo_thesis_records():
+        gates = frozenset(str(x) for x in (row.get("gates") or []) if str(x).strip())
         if gates:
             catalog.add(gates)
     return catalog

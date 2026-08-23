@@ -269,6 +269,29 @@ def combo_thesis_records(*, root: Path | None = None) -> list[dict[str, Any]]:
     return out
 
 
+def write_combo_thesis_jsonl(
+    path: Path | str,
+    *,
+    root: Path | None = None,
+) -> dict[str, Any]:
+    """Dump compact combo rows. YAML remains declaration SoT. Not a second SoT."""
+    import json
+
+    rows = combo_thesis_records(root=root)
+    out = Path(path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with out.open("w", encoding="utf-8") as fh:
+        for rec in rows:
+            fh.write(json.dumps(rec, ensure_ascii=True, sort_keys=True) + "\n")
+    return {
+        "path": str(out),
+        "n": len(rows),
+        "go": False,
+        "not_a_pass": True,
+        "yaml_remains_sot": True,
+    }
+
+
 def unique_row_from_yaml(spec: Mapping[str, Any]) -> dict[str, Any]:
     """Map catalog YAML to an original-unique runtime row. Does not GO."""
     lid = str(spec.get("logic_id") or "")

@@ -550,6 +550,56 @@ def usable_inventory(
     }
 
 
+def usable_inventory_read(
+    occupancy_by_track: Mapping[str, Mapping[str, float]],
+) -> dict[str, Any]:
+    """Family and primary-gate of usable inventory. Not a pass."""
+    from collections import Counter
+
+    from research.unique_logic.catalog import combo_thesis_records
+
+    inv = usable_inventory(occupancy_by_track)
+    usable = set(inv["usable_ids"])
+    primary: Counter[str] = Counter()
+    all_gates: Counter[str] = Counter()
+    n_pb = n_pb_primary = n_ac = n_ac_primary = 0
+    for rec in combo_thesis_records():
+        lid = str(rec.get("logic_id") or "")
+        if lid not in usable:
+            continue
+        gates = [str(x) for x in (rec.get("gates") or []) if str(x).strip()]
+        if not gates:
+            continue
+        primary[gates[0]] += 1
+        for g in gates:
+            all_gates[g] += 1
+        if "cheap_pb" in gates:
+            n_pb += 1
+        if gates[0] == "cheap_pb":
+            n_pb_primary += 1
+        if "afterclose" in gates:
+            n_ac += 1
+        if gates[0] == "afterclose":
+            n_ac_primary += 1
+    n = int(inv["n_usable"])
+    return {
+        "version": "usable-read/v1",
+        "n_usable": n,
+        "family": inv["family"],
+        "family_share": inv["family_share"],
+        "primary_gate": dict(primary),
+        "all_gates": dict(all_gates),
+        "cheap_pb_in_gates": n_pb,
+        "cheap_pb_primary": n_pb_primary,
+        "cheap_pb_primary_share": round(n_pb_primary / n, 4) if n else 0.0,
+        "afterclose_in_gates": n_ac,
+        "afterclose_primary": n_ac_primary,
+        "afterclose_primary_share": round(n_ac_primary / n, 4) if n else 0.0,
+        "go": False,
+        "not_a_pass": True,
+    }
+
+
 def countable_inventory_bias() -> dict[str, Any]:
     """Family / primary-gate / dataset occupancy of countable theses. Not a pass."""
     from collections import Counter
@@ -627,6 +677,7 @@ __all__ = [
     "recorded_always_on_ids",
     "countable_inventory_bias",
     "usable_inventory",
+    "usable_inventory_read",
     "usable_family_of",
     "classify_occupancy_pair",
     "countable_thesis_ids",
