@@ -365,7 +365,8 @@ def repo_history_plane_status(
     n = 0
     mn = mx = None
     tenors = 0
-    if db.exists():
+    missing = not db.is_file()
+    if not missing:
         con = sqlite3.connect(str(db))
         try:
             n, mn, mx = con.execute(
@@ -389,6 +390,7 @@ def repo_history_plane_status(
         "sqlite_min": mn,
         "sqlite_max": mx,
         "sqlite_tenors": int(tenors or 0),
+        "sqlite_missing": missing,
         "d1_role": "hot_tip_only",
         "pit_path": "fail_closed_until_READY",
         "invent_complete": False,
