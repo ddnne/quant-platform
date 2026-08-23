@@ -4,14 +4,21 @@ Live flags stay in ``eval_flags``. Counting stays in ``worker_bodies``.
 """
 from __future__ import annotations
 
+import json
 from typing import Any, Mapping, Sequence
 
+from qp_paths import repo_root
 from research.eval_flags import (
     CATALOG_AND_PLUS_N_STOPPED,
     CATALOG_YAML_COUNT_AT_STOP,
     EVENT_THREE_AND_PLUS_N_STOPPED,
 )
-from research.unique_logic.catalog import catalog_dir, load_catalog_specs, spec_gates
+from research.unique_logic.catalog import (
+    catalog_dir,
+    compiled_migration_ids,
+    load_catalog_specs,
+    spec_gates,
+)
 from research.unique_logic.constants import (
     ALWAYS_ON_OCCUPANCY_WARN,
     KNOWN_THIN_UNUSED_GATE_SETS,
@@ -52,23 +59,53 @@ def primary_gate_of(spec: Mapping[str, Any]) -> str | None:
     return gates[0] if gates else None
 
 
+def _manifest_yaml_still_present() -> bool:
+    path = repo_root() / "specs" / "research_catalog" / "manifest.json"
+    if not path.is_file():
+        return True
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return True
+    if not isinstance(raw, Mapping):
+        return True
+    return bool(raw.get("yaml_still_present", True))
+
+
 def assert_catalog_and_plus_n_stopped() -> dict[str, Any]:
-    """Refuse yaml growth while CATALOG_AND_PLUS_N_STOPPED. Does not GO."""
+    """Refuse yaml growth while CATALOG_AND_PLUS_N_STOPPED. Does not GO.
+
+    yaml n>0 must equal CATALOG_YAML_COUNT_AT_STOP. yaml n==0 requires
+    compiled migration n to equal the freeze; yaml_still_present may be
+    false later. Does not delete YAML.
+    """
     n = len(list(catalog_dir().glob("*.yaml")))
+    freeze = int(CATALOG_YAML_COUNT_AT_STOP)
     out = {
         "stopped": bool(CATALOG_AND_PLUS_N_STOPPED),
         "n": n,
-        "freeze": int(CATALOG_YAML_COUNT_AT_STOP),
+        "n_compiled": 0,
+        "yaml_still_present": _manifest_yaml_still_present(),
+        "freeze": freeze,
         "ok": True,
         "go": False,
         "not_a_pass": True,
     }
     if not CATALOG_AND_PLUS_N_STOPPED:
         return out
-    if n != int(CATALOG_YAML_COUNT_AT_STOP):
+    if n > 0:
+        if n != freeze:
+            raise CatalogAndPlusNStoppedError(
+                f"catalog yaml n={n} != freeze {freeze}; "
+                "dated brief must flip CATALOG_AND_PLUS_N_STOPPED to add AND YAML"
+            )
+        return out
+    n_compiled = len(compiled_migration_ids())
+    out["n_compiled"] = n_compiled
+    if n_compiled != freeze:
         raise CatalogAndPlusNStoppedError(
-            f"catalog yaml n={n} != freeze {int(CATALOG_YAML_COUNT_AT_STOP)}; "
-            "dated brief must flip CATALOG_AND_PLUS_N_STOPPED to add AND YAML"
+            f"catalog yaml n=0 compiled n={n_compiled} != freeze {freeze}; "
+            "compiled migration n must equal CATALOG_YAML_COUNT_AT_STOP"
         )
     return out
 

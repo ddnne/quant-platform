@@ -162,6 +162,9 @@ def test_catalog_and_plus_n_stopped_and_known_thin() -> None:
     freeze = assert_catalog_and_plus_n_stopped()
     assert freeze["ok"] is True
     assert freeze["n"] == CATALOG_YAML_COUNT_AT_STOP
+    assert freeze["n"] > 0
+    assert freeze["yaml_still_present"] is True
+    assert freeze["go"] is False
     thin = assert_known_thin_unused_absent()
     assert thin["ok"] is True
     assert thin["hits"] == []
@@ -194,3 +197,49 @@ def test_catalog_and_plus_n_stopped_and_known_thin() -> None:
     except KnownThinRewriteError:
         pass
     assert CatalogAndPlusNStoppedError is not EventThreeAndBatchError
+
+
+def test_catalog_and_plus_n_stopped_yaml_n0_uses_compiled_n(monkeypatch, tmp_path) -> None:
+    import research.occupancy_guards as guards
+    from research.eval_flags import CATALOG_YAML_COUNT_AT_STOP
+    from research.occupancy_guards import (
+        CatalogAndPlusNStoppedError,
+        assert_catalog_and_plus_n_stopped,
+    )
+
+    freeze_n = int(CATALOG_YAML_COUNT_AT_STOP)
+    empty = tmp_path / "research_logics"
+    empty.mkdir()
+    drifted = tmp_path / "drifted"
+    drifted.mkdir()
+    (drifted / "only.yaml").write_text("logic_id: only\n", encoding="utf-8")
+
+    monkeypatch.setattr(guards, "catalog_dir", lambda: empty)
+    monkeypatch.setattr(
+        guards,
+        "compiled_migration_ids",
+        lambda: frozenset(f"id{i}" for i in range(freeze_n)),
+    )
+    monkeypatch.setattr(guards, "_manifest_yaml_still_present", lambda: False)
+    out = assert_catalog_and_plus_n_stopped()
+    assert out["n"] == 0
+    assert out["n_compiled"] == freeze_n
+    assert out["yaml_still_present"] is False
+    assert out["ok"] is True
+    assert out["go"] is False
+
+    monkeypatch.setattr(guards, "compiled_migration_ids", lambda: frozenset({"only"}))
+    try:
+        assert_catalog_and_plus_n_stopped()
+        raise AssertionError("yaml n=0 compiled mismatch must fail")
+    except CatalogAndPlusNStoppedError as exc:
+        assert "compiled n=1" in str(exc)
+        assert str(freeze_n) in str(exc)
+
+    monkeypatch.setattr(guards, "catalog_dir", lambda: drifted)
+    try:
+        assert_catalog_and_plus_n_stopped()
+        raise AssertionError("yaml n>0 != freeze must fail")
+    except CatalogAndPlusNStoppedError as exc:
+        assert "n=1" in str(exc)
+        assert "freeze" in str(exc)
