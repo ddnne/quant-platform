@@ -23,7 +23,7 @@ Do **not** add `scripts/run_wNN_*.py` or `docs/proof/w08*_wNN_*.md` scorecards.
 | remaining official 2003 | **0** |
 | remaining official 2002 | **2** PARSE_ZERO (`2002-08-02`, `2002-08-05`; not invented COMPLETE) |
 | remaining official 2004 | **0** |
-| projection | **FRESH** (`projgen-ef18b4f86ee946048161d25e2a30a2a8`) |
+| projection | **STALE** (`projgen-ef18b4f86ee946048161d25e2a30a2a8`; last generated 2026-08-21) |
 | COMPLETE datasets | **22** held |
 | DEFER | **4** |
 | PARTIAL (4, not invented COMPLETE) | `equities_earnings_calendar` · `equities_bars_daily_am` (tip-wait) · `equities_master` · OTC |
@@ -36,7 +36,7 @@ prose. Update the table after a published projection.
 
 | Flag | Value |
 |------|-------|
-| Mass | **NO-GO** |
+| Mass | **NO-GO** (Worker `/v1/mass-eval` `/v1/daily-path` `/v1/propose-thesis` 403 `capability_missing` until verified readiness) |
 | production READY | **未宣言** |
 | Phase 7 | **OFF** |
 | operational GO | **未宣言** |
@@ -66,4 +66,4 @@ Candidate pool (code: `CANDIDATE_POLICY`) excludes path_broken / path_collapsed 
 Latest empirical jobs (ids only; older ids stay on R2/D1). Two tracks — do not narrate from one print:
 - **mid_n_explore** (ADV 80): `eval-cf-dp-basket-alts-20260824ds-mid_n_explore`
 - **liq_large** (ADV 100): `eval-cf-dp-basket-alts-20260824ds-liq_large`
-Universe `adv_desc_skip_missing_bars_and_fins` (head-N forbidden). Worker `research-mass-eval/v141-24ev-flow50` (`caefdebd-1ad2-4df6-9e5c-1ad6e4a47b4f`). Baskets keep `eval-cf-dp-both-sleeves-20260824df`; alts apply false. Nested detect + reconstitution_options; **apply false** (`RECONSTITUTION_APPLY` false; human pending fund/event_fund; no auto drop_parents/children). Historical sleeves are not `candidate` in basket-trend summary. Cost/risk `eval-usable-cost-risk-20260824ev` not_a_pass. Usable `eval-usable-inventory-20260824ev` n_usable 1880; series `eval-usable-series-20260824ev`; occupancy maps `eval-occupancy-maps-20260824ev`; occupancy audit `eval-occupancy-audit-20260824ev-flow50` flow-thin +50 material thin 0 near_empty 0 (not 3-AND). Thin-series `eval-thin-series-20260824ev` flow filled; vol leftover known-thin; rate is map-count only (not a fill mandate). `CATALOG_AND_PLUS_N_STOPPED`. Drift `eval-occupancy-drift-20260824ev` 0 silent-unpark. unique22 park `eval-unique22-park-20260824ev` 5/17. event 3-AND +N **stopped**. Combo jsonl `eval-combo-jsonl-20260824ev` yaml_remains_sot. Flow 5th stitch blend `eval-flow-5th-blend-20260824ek` thinner; keep current. Reconstitution `eval-reconstitution-plan-20260824ev` apply false. Series-sleeve `eval-series-sleeve-20260824ev`. Propose `eval-cf-propose-20260824ev` llm_failed 0-adopt (not soup). Wave one-call `research.occupancy_audit.run_eval_wave`. Live flags `research.eval_flags`. GO deferred. HOLD: cost_models / options_225 / daily_path leftover / unique22 park YAML / CLI `__main__.py` / `ingestion.jsda.adapters` / `jquants/bulk.py`. Deleted `scripts/parse_jsda_from_r2_mirror.py` · `tests/test_research_offline_bar_eval.py` · `tests/test_http_proxy_verify.py`. `research.cost_defaults` is the shared 10bp literal.
+Universe `adv_desc_skip_missing_bars_and_fins` (head-N forbidden). Worker `research-mass-eval/v142-63-failclosed` (auth fail-closed if `MASS_EVAL_TOKEN` unbound; eval/propose 403 without verified readiness; no direct `env.AI`; R2 create-if-absent). Candidate grade false unless expected cells all complete (`research.candidate_policy`). Baskets keep `eval-cf-dp-both-sleeves-20260824df`; reconstitution **apply false**. Usable `eval-usable-inventory-20260824ev` n_usable 1880. `CATALOG_AND_PLUS_N_STOPPED`. unique22 park 5/17. Propose 0-adopt. B0 **UNKNOWN**. READY **null**. Projection **STALE** (age ~45h; last-known-good is not FRESH). Sync `applied_cursor=null` → not CURRENT. SLA table empty; AM projected `PROJECTION_STALE`. Raw 0-row COMPLETE ≠ dataset Coverage COMPLETE. Family reclass (`research.catalog_family`, n=2254): event 1350 · surprise_xs 891 · other 12 · CS 1. **flow_family true = 0**; flow **gate** but not flow family = **848**. Gate ≠ family. HOLD: cost_models / options_225 / daily_path leftover / unique22 park YAML. `research.eval_flags` / `occupancy_guards` / `research_capabilities` / `catalog_compiler`.
