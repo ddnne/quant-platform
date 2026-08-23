@@ -83,14 +83,11 @@ class FeatureContext:
         )
         return self._read("equity_bars_daily", kwargs)
 
-    def get_equity_master(self, **kwargs: Any):
-        """PIT equity master from official listed-info start 2008-05-07.
+    def _read_equity_master_official_island(self, kwargs: Mapping[str, Any]):
+        """PIT master from official listed-info start; pre-2008-05-07 is empty.
 
-        ``equities_master`` remains PD-D2-MASTER (not Dataset COMPLETE) for
-        remaining PARTIAL gaps after the official start. Features read the
-        official island through PIT with this context's ``as_of``. as_of or
-        snapshots before 2008-05-07 are empty / fail-closed. Tip-only AM,
-        earnings calendar, and JSDA OTC stay permanent DEFER.
+        Not Dataset COMPLETE. Remaining PARTIAL after the official start stays
+        PD-D2-MASTER. ``as_of`` is this context's trusted scope.
         """
         official_start = master_pit_history_start()
         if str(self.as_of)[:10] < official_start:
@@ -108,6 +105,17 @@ class FeatureContext:
             )
         return self._read("equity_master", kwargs)
 
+    def get_equity_master(self, **kwargs: Any):
+        """PIT equity master from official listed-info start 2008-05-07.
+
+        ``equities_master`` remains PD-D2-MASTER (not Dataset COMPLETE) for
+        remaining PARTIAL gaps after the official start. Features read the
+        official island through PIT with this context's ``as_of``. as_of or
+        snapshots before 2008-05-07 are empty / fail-closed. Tip-only AM,
+        earnings calendar, and JSDA OTC stay permanent DEFER.
+        """
+        return self._read_equity_master_official_island(kwargs)
+
     def get_market_calendar(self, **kwargs: Any):
         """PIT market calendar with the context's trusted scope injected.
 
@@ -121,9 +129,14 @@ class FeatureContext:
     def get_jquants_records(self, dataset: str, **kwargs: Any):
         """PIT generic catalog records with trusted scope injected.
 
-        Permanent DEFER dataset ids are fail-closed before the PIT read
-        (COMPLETE 21 usage readiness — features must not pull DEFER 5).
+        ``equities_master`` uses the same official-island path as
+        :meth:`get_equity_master` (pre-2008-05-07 empty; on/after PIT with
+        ``as_of``). Remaining PARTIAL stays PD-D2-MASTER; not Dataset
+        COMPLETE. Tip-only AM, earnings calendar, and JSDA OTC stay
+        permanent DEFER. Other DEFER ids fail closed before the PIT read.
         """
+        if str(dataset).strip() == "equities_master":
+            return self._read_equity_master_official_island(kwargs)
         eligible = require_feature_dataset(
             dataset, context="FeatureContext.get_jquants_records"
         )

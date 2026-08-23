@@ -56,7 +56,8 @@ COMPLETE_21_DATASETS: frozenset[str] = frozenset(
 _SHORTCUT_DATASET: dict[str, str] = {
     "equity_bars_daily": "equities_bars_daily",
     # PD-D2-MASTER residual (PARTIAL after official start). FeatureContext
-    # get_equity_master uses PIT from 2008-05-07; generic history still DEFERs.
+    # get_equity_master / get_jquants_records(dataset="equities_master") use
+    # PIT from 2008-05-07; require_feature_dataset still DEFERs generic history.
     "equity_master": "equities_master",
     "market_calendar": "markets_calendar",
     "jsda_repo_rates": "jsda_tokyo_repo_rates",
