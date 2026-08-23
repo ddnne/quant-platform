@@ -5,15 +5,12 @@ from __future__ import annotations
 import base64
 import json
 from pathlib import Path
-
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-from cryptography.hazmat.primitives.serialization import load_pem_private_key
+from types import SimpleNamespace
 
 from storage.coverage_ledger import (
     RequiredCoverageSegment,
     is_complete_eligible_receipt,
 )
-from storage.receipt_crypto import ReceiptSigningKey, generate_keypair
 from storage.trusted_receipt import SignedReceiptAuthority
 
 
@@ -26,28 +23,8 @@ def test_storage_package_hides_synthetic() -> None:
     )
 
 
-def test_forged_signature_rejected(tmp_path: Path):
-    import storage.receipt_crypto as rc
-
-    priv_pem, pub, kid = generate_keypair(key_id="k1")
-    keys_path = rc.PUBLIC_KEYS_PATH
-    try:
-        doc = json.loads(keys_path.read_text(encoding="utf-8"))
-    except Exception:
-        doc = {"schema_version": 1, "keys": []}
-    klist = [k for k in (doc.get("keys") or []) if k.get("key_id") != kid]
-    klist.append(
-        {
-            "key_id": kid,
-            "public_key_b64": base64.b64encode(pub).decode(),
-            "algorithm": "Ed25519",
-        }
-    )
-    doc["keys"] = klist
-    keys_path.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
-    priv = load_pem_private_key(priv_pem, password=None)
-    assert isinstance(priv, Ed25519PrivateKey)
-    auth = SignedReceiptAuthority(signing_key=ReceiptSigningKey(key_id=kid, _private=priv))
+def test_forged_signature_rejected(receipt_ed25519_keys: SimpleNamespace):
+    auth = SignedReceiptAuthority(signing_key=receipt_ed25519_keys.signing_key)
     req = RequiredCoverageSegment(
         source="jquants",
         dataset="markets_calendar",

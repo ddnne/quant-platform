@@ -1,13 +1,8 @@
 """Signed receipt boundary: only Ed25519-verified receipts can COMPLETE."""
 from __future__ import annotations
 
-import base64
-import json
 from dataclasses import replace
-from pathlib import Path
-
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-from cryptography.hazmat.primitives.serialization import load_pem_private_key
+from types import SimpleNamespace
 
 from data_contracts import coverage_contract_for
 from storage.coverage_ledger import (
@@ -15,9 +10,7 @@ from storage.coverage_ledger import (
     evaluate_segment,
     plan_required_segments,
 )
-from storage.receipt_crypto import ReceiptSigningKey, generate_keypair
 from storage.trusted_receipt import SignedReceiptAuthority
-import storage.receipt_crypto as rc
 
 
 def _month_required():
@@ -32,28 +25,8 @@ def _month_required():
     )[0]
 
 
-def _authority() -> SignedReceiptAuthority:
-    priv_pem, pub, kid = generate_keypair(key_id="test-key")
-    keys_path = rc.PUBLIC_KEYS_PATH
-    try:
-        doc = json.loads(keys_path.read_text(encoding="utf-8"))
-    except Exception:
-        doc = {"schema_version": 1, "keys": []}
-    keys = [k for k in (doc.get("keys") or []) if k.get("key_id") != kid]
-    keys.append(
-        {
-            "key_id": kid,
-            "public_key_b64": base64.b64encode(pub).decode(),
-            "algorithm": "Ed25519",
-        }
-    )
-    doc["keys"] = keys
-    keys_path.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
-    priv = load_pem_private_key(priv_pem, password=None)
-    assert isinstance(priv, Ed25519PrivateKey)
-    return SignedReceiptAuthority(
-        signing_key=ReceiptSigningKey(key_id=kid, _private=priv)
-    )
+def _authority(keys: SimpleNamespace) -> SignedReceiptAuthority:
+    return SignedReceiptAuthority(signing_key=keys.signing_key)
 
 
 def test_recovered_raw_only_cannot_complete():
@@ -96,10 +69,10 @@ def test_string_issuer_cannot_complete():
     assert status == "PARTIAL"
 
 
-def test_signed_receipt_can_complete():
+def test_signed_receipt_can_complete(receipt_ed25519_keys: SimpleNamespace):
     policy, req = _month_required()
     raw = b'{"data":[{"Date":"2025-01-01"}]}'
-    auth = _authority()
+    auth = _authority(receipt_ed25519_keys)
     receipt = auth.issue(
         required=req,
         run_id=1,

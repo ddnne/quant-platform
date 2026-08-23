@@ -26,6 +26,9 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
 CONFIG_DIR = Path.home() / ".config" / "quant-platform"
 PRIVATE_KEY_ENV = "QUANT_RECEIPT_SIGNING_KEY_PEM"
 PRIVATE_KEY_FILE = CONFIG_DIR / "receipt_signing_key.pem"
+VERIFY_KEYS_ENV = "QUANT_RECEIPT_VERIFY_KEYS"
+
+
 def _contracts_dir() -> Path:
     """Locate data_contracts on disk (import-stable; layout may be packages/*)."""
     import importlib.util
@@ -49,6 +52,17 @@ def _contracts_dir() -> Path:
 
 
 PUBLIC_KEYS_PATH = _contracts_dir() / "receipt_verify_public_keys.json"
+
+
+def _verify_keys_path(path: Path | None = None) -> Path:
+    """Resolve public-key registry: explicit path, env override, then production default."""
+    if path is not None:
+        return path
+    override = os.environ.get(VERIFY_KEYS_ENV, "").strip()
+    if override:
+        return Path(override)
+    return PUBLIC_KEYS_PATH
+
 
 PARSER_NORMALIZER_VERSION = "coverage-receipt/v3-ed25519"
 
@@ -142,8 +156,9 @@ def load_signing_key(
     if not kid:
         # Prefer key_id from committed public-key registry when present.
         try:
-            if PUBLIC_KEYS_PATH.is_file():
-                doc = json.loads(PUBLIC_KEYS_PATH.read_text(encoding="utf-8"))
+            keys_path = _verify_keys_path()
+            if keys_path.is_file():
+                doc = json.loads(keys_path.read_text(encoding="utf-8"))
                 rows = doc.get("keys") or []
                 if rows and rows[0].get("key_id"):
                     kid = str(rows[0]["key_id"])
@@ -160,7 +175,7 @@ def load_verify_keys(
 ) -> dict[str, ReceiptVerifyKey]:
     """Load public keys for receipt verification."""
     out: dict[str, ReceiptVerifyKey] = {}
-    keys_path = path or PUBLIC_KEYS_PATH
+    keys_path = _verify_keys_path(path)
     if keys_path.is_file():
         doc = json.loads(keys_path.read_text(encoding="utf-8"))
         for row in doc.get("keys") or []:
