@@ -8,6 +8,8 @@
  * - Structured XLS/XLSX parse stays trusted Python downstream (not TS)
  */
 
+import { json } from "./http_json";
+
 export interface Env {
   RAW_BUCKET: R2Bucket;
   DB: D1Database;
@@ -598,9 +600,9 @@ export default {
     const url = new URL(request.url);
     if (url.pathname === "/health") {
       if (request.method !== "GET") {
-        return Response.json({ error: "GET required" }, { status: 405 });
+        return json({ error: "GET required" }, 405);
       }
-      return Response.json({
+      return json({
         ok: true,
         worker: "ingestion-jsda",
         datasets: 3,
@@ -611,10 +613,10 @@ export default {
     }
     if (url.pathname === "/v1/run") {
       if (request.method !== "POST") {
-        return Response.json({ error: "POST required" }, { status: 405 });
+        return json({ error: "POST required" }, 405);
       }
       if (!(await authorized(request, env.INGESTION_RUN_TOKEN))) {
-        return Response.json({ error: "unauthorized" }, { status: 401 });
+        return json({ error: "unauthorized" }, 401);
       }
       const ds = url.searchParams.get("dataset") || "";
       const allowed: DatasetId[] = [
@@ -625,9 +627,9 @@ export default {
       const only =
         ds && (allowed as string[]).includes(ds) ? (ds as DatasetId) : undefined;
       const summary = await runAll(env, "manual", only);
-      return Response.json({ ok: summary.status === "pass", summary });
+      return json({ ok: summary.status === "pass", summary });
     }
-    return Response.json({ error: "not found" }, { status: 404 });
+    return json({ error: "not found" }, 404);
   },
 
   async scheduled(
