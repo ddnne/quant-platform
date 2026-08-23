@@ -562,27 +562,8 @@ def usable_inventory_read(
     usable = set(inv["usable_ids"])
     primary: Counter[str] = Counter()
     all_gates: Counter[str] = Counter()
-    n_pb = n_pb_primary = n_ac = n_ac_primary = 0
-    for rec in combo_thesis_records():
-        lid = str(rec.get("logic_id") or "")
-        if lid not in usable:
-            continue
-        gates = [str(x) for x in (rec.get("gates") or []) if str(x).strip()]
-        if not gates:
-            continue
-        primary[gates[0]] += 1
-        for g in gates:
-            all_gates[g] += 1
-        if "cheap_pb" in gates:
-            n_pb += 1
-        if gates[0] == "cheap_pb":
-            n_pb_primary += 1
-        if "afterclose" in gates:
-            n_ac += 1
-        if gates[0] == "afterclose":
-            n_ac_primary += 1
-    n = int(inv["n_usable"])
     fam_primary: Counter[str] = Counter()
+    n_pb = n_pb_primary = n_ac = n_ac_primary = 0
     for rec in combo_thesis_records():
         lid = str(rec.get("logic_id") or "")
         if lid not in usable:
@@ -591,6 +572,20 @@ def usable_inventory_read(
         fam = usable_family_of(lid)
         pg = gates[0] if gates else ""
         fam_primary[f"{fam}|{pg}"] += 1
+        if not gates:
+            continue
+        primary[pg] += 1
+        for g in gates:
+            all_gates[g] += 1
+        if "cheap_pb" in gates:
+            n_pb += 1
+        if pg == "cheap_pb":
+            n_pb_primary += 1
+        if "afterclose" in gates:
+            n_ac += 1
+        if pg == "afterclose":
+            n_ac_primary += 1
+    n = int(inv["n_usable"])
     return {
         "version": "usable-read/v2",
         "n_usable": n,

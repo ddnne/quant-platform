@@ -30,6 +30,22 @@ def test_event_sides_ls_variants_stay_registered() -> None:
     )
 
 
+def test_combo_thesis_records_are_cached() -> None:
+    from research.unique_logic.catalog import (
+        _combo_thesis_records_cached,
+        clear_catalog_caches,
+        combo_thesis_records,
+    )
+
+    clear_catalog_caches()
+    n = len(combo_thesis_records())
+    assert n >= 1
+    combo_thesis_records()
+    info = _combo_thesis_records_cached.cache_info()
+    assert info.hits >= 1
+    assert info.currsize >= 1
+
+
 def test_combo_thesis_records_are_compact_table_rows() -> None:
     import json
     from pathlib import Path

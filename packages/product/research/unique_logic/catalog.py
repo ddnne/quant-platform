@@ -243,10 +243,11 @@ def yaml_combo_rows(*, root: Path | None = None) -> list[dict[str, Any]]:
     return rows
 
 
-def combo_thesis_records(*, root: Path | None = None) -> list[dict[str, Any]]:
-    """Compact combo table rows. YAML stays declaration SoT until a jsonl cutover."""
+@lru_cache(maxsize=8)
+def _combo_thesis_records_cached(root_key: str) -> tuple[dict[str, Any], ...]:
+    """Compact combo table. YAML stays declaration SoT. Invalidate via cache_clear."""
     out: list[dict[str, Any]] = []
-    for spec in load_catalog_specs(root=root):
+    for spec in _load_catalog_specs_cached(root_key):
         if str(spec.get("evaluator") or "") != _COMBO_EVALUATOR:
             continue
         params = spec.get("params") if isinstance(spec.get("params"), Mapping) else {}
@@ -266,7 +267,21 @@ def combo_thesis_records(*, root: Path | None = None) -> list[dict[str, Any]]:
                 "go": False,
             }
         )
-    return out
+    return tuple(out)
+
+
+def combo_thesis_records(*, root: Path | None = None) -> list[dict[str, Any]]:
+    """Compact combo table rows. YAML stays declaration SoT until a jsonl cutover."""
+    return list(
+        _combo_thesis_records_cached(str((root or repo_root()).resolve()))
+    )
+
+
+def clear_catalog_caches() -> None:
+    """Drop YAML/combo caches after catalog writes. Not a second SoT."""
+    _load_catalog_specs_cached.cache_clear()
+    _catalog_by_id_cached.cache_clear()
+    _combo_thesis_records_cached.cache_clear()
 
 
 def write_combo_thesis_jsonl(
