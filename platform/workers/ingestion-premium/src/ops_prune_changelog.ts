@@ -10,10 +10,8 @@ export interface PruneEnv {
 
 function authorized(request: Request, expected: string | undefined): boolean {
   if (!expected) return false;
-  const url = new URL(request.url);
   const header = request.headers.get("X-Ingestion-Token") || "";
-  const query = url.searchParams.get("token") || "";
-  return header === expected || query === expected;
+  return header === expected;
 }
 
 export async function handlePruneChangelog(

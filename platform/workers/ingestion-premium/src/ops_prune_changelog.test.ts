@@ -65,6 +65,20 @@ describe("premium changelog prune auth", () => {
     assertUnauthorized401(res, body);
     expect(sql).toEqual([]);
   });
+
+  it("rejects a matching query token without X-Ingestion-Token", async () => {
+    const { db, sql } = touchingD1();
+    const res = await handlePruneChangelog(
+      new Request(
+        `${PRUNE_URL}?token=${encodeURIComponent(RUN_TOKEN)}`,
+        { method: "POST" },
+      ),
+      pruneEnv(RUN_TOKEN, db),
+    );
+    const body = await res.text();
+    assertUnauthorized401(res, body);
+    expect(sql).toEqual([]);
+  });
 });
 
 describe("premium changelog prune method", () => {
