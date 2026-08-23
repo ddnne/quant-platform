@@ -1,7 +1,12 @@
-"""CF mass-eval Worker invoke / deploy / run. Not a pass / not GO."""
+"""CF mass-eval Worker invoke / deploy / run. Not a pass / not GO.
+
+wrangler deploy is opt-in fail-closed: only QP_ALLOW_MASS_EVAL_DEPLOY=1
+allows subprocess wrangler deploy. Does not enable Mass.
+"""
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import time
 import urllib.error
@@ -38,6 +43,13 @@ from research.cf_mass_eval_stage import (
 )
 from research.eval_windows import DEFAULT_REAL_MULTIYEAR_PERIODS
 from research.r2_io import put_research_artifact
+
+MASS_EVAL_DEPLOY_ENV = "QP_ALLOW_MASS_EVAL_DEPLOY"
+
+
+def mass_eval_deploy_allowed() -> bool:
+    """True only when QP_ALLOW_MASS_EVAL_DEPLOY=1. Does not enable Mass."""
+    return os.environ.get(MASS_EVAL_DEPLOY_ENV, "").strip() == "1"
 
 
 def invoke_cf_mass_eval_worker(
@@ -117,6 +129,10 @@ def deploy_cf_mass_eval_worker(
     wrangler: str | Path | None = None,
     timeout: int = 300,
 ) -> dict[str, Any]:
+    if not mass_eval_deploy_allowed():
+        raise CfMassEvalError(
+            "wrangler deploy refused without QP_ALLOW_MASS_EVAL_DEPLOY=1"
+        )
     wr = Path(wrangler) if wrangler else _DEFAULT_WRANGLER
     if not wr.is_file():
         alt = _WORKER_DIR / "node_modules" / ".bin" / "wrangler"
