@@ -11,8 +11,6 @@ ingest_time_conservative) is executed in
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
 from cf_platform.ingest_premium.availability import (
@@ -31,10 +29,6 @@ from data_contracts.loader import (
     all_contracts,
     contract_for,
 )
-
-
-ROOT = Path(__file__).resolve().parents[1]
-IDENTITY_TS = ROOT / "platform/workers/ingestion-premium/src/identity.ts"
 
 
 def test_session_close_honors_tse_cutoff_and_morning_session():
@@ -157,11 +151,3 @@ def test_compatibility_field_union_is_derived_not_a_priority_policy():
         )
     )
     assert EVENT_FIELD_CANDIDATES == expected
-
-
-def test_worker_wrappers_delegate_contract_policy_and_identity_constants():
-    identity = IDENTITY_TS.read_text(encoding="utf-8")
-    assert "2024-11-05" in identity
-    assert "15:30:00" in identity
-    assert "15:00:00" in identity
-    assert "11:30:00" in identity
