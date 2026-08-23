@@ -369,6 +369,7 @@ def write_eval_wave_pack(
     """
     from research.combo_basket_catalog import (
         active_reconstitution_plan,
+        reconstitution_occupancy_preview,
         usable_sleeve_coverage,
     )
     from research.unique_logic.worker_bodies import (
@@ -448,6 +449,9 @@ def write_eval_wave_pack(
             "job_id": recon_job,
             "apply": False,
             "sleeves": recon_sleeves,
+            "occupancy_preview": reconstitution_occupancy_preview(
+                occupancy_by_track
+            ),
             "go": False,
             "not_a_pass": True,
         },

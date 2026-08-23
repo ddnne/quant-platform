@@ -566,6 +566,15 @@ def test_write_eval_wave_pack_local_only(tmp_path) -> None:
     assert isinstance(fund["nested_parent_count"], int)
     assert fund["nested_parent_count"] >= 1
     assert fund["nested_pairs"]
+    preview = recon["occupancy_preview"]
+    assert preview["apply"] is False
+    assert preview["do_not_restitch_blend"] is True
+    assert preview["keep_sleeves_job"] == "eval-cf-dp-both-sleeves-20260824df"
+    prev_fund = next(
+        s for s in preview["sleeves"] if s["basket_id"] == "basket_theme_fund"
+    )
+    assert prev_fund["apply"] is False
+    assert prev_fund["current"]["occupancy_mean_not_a_blend"] is True
     sleeve = json.loads(
         (tmp_path / "eval-series-sleeve-test24ep.json").read_text(encoding="utf-8")
     )
@@ -619,10 +628,17 @@ def test_load_ops_occupancy_prefers_maps_over_cells(tmp_path) -> None:
 
 
 def test_usable_sleeve_coverage_does_not_apply() -> None:
-    from research.combo_basket_catalog import usable_sleeve_coverage
+    from research.combo_basket_catalog import (
+        BLEND_THINNER_KEEP_IDS,
+        usable_sleeve_coverage,
+    )
 
     out = usable_sleeve_coverage({"mid_n_explore": {}, "liq_large": {}})
     assert out["apply"] is False
+    assert BLEND_THINNER_KEEP_IDS == frozenset(
+        {"event_afterclose_uncrowded", "surprise_xs_peps_uncr"}
+    )
+    assert out["keep_sleeves_job"] == "eval-cf-dp-both-sleeves-20260824df"
     assert out["go"] is False
     assert out["invert_primary"] is False
     by_id = {s["basket_id"]: s for s in out["sleeves"]}
@@ -631,6 +647,50 @@ def test_usable_sleeve_coverage_does_not_apply() -> None:
     assert by_id["basket_theme_invert"]["primary"] is False
     assert by_id["basket_theme_flow"]["needs_reconstitution"] is False
     assert out["replacement_candidates"] == []
+
+
+def test_reconstitution_occupancy_preview_does_not_apply() -> None:
+    from research.combo_basket_catalog import reconstitution_occupancy_preview
+
+    out = reconstitution_occupancy_preview(
+        {
+            "mid_n_explore": {"event_ta_up_positive_eps": 0.4},
+            "liq_large": {"event_ta_up_positive_eps": 0.41},
+        }
+    )
+    assert out["apply"] is False
+    assert out["go"] is False
+    assert out["do_not_restitch_blend"] is True
+    by_id = {s["basket_id"]: s for s in out["sleeves"]}
+    fund = by_id["basket_theme_fund"]
+    assert fund["apply"] is False
+    assert fund["needs_reconstitution"] is True
+    assert fund["current"]["n"] == 5
+    assert fund["drop_parents_keep_children"]["occupancy_mean_not_a_blend"] is True
+    lo = next(
+        r
+        for r in fund["current"]["by_id"]
+        if r["logic_id"] == "event_ta_up_positive_eps"
+    )
+    assert lo["lo"] == 0.4
+
+
+def test_blend_thinner_keep_ids_are_excluded() -> None:
+    from research.combo_basket_catalog import (
+        BLEND_THINNER_KEEP_IDS,
+        usable_sleeve_coverage,
+    )
+
+    occ = {
+        "mid_n_explore": {lid: 0.45 for lid in BLEND_THINNER_KEEP_IDS},
+        "liq_large": {lid: 0.46 for lid in BLEND_THINNER_KEEP_IDS},
+    }
+    out = usable_sleeve_coverage(occ)
+    cand = {c["logic_id"] for c in out["replacement_candidates"]}
+    assert cand.isdisjoint(BLEND_THINNER_KEEP_IDS)
+    excluded = {x["logic_id"] for x in out["blend_thinner_excluded"]}
+    assert BLEND_THINNER_KEEP_IDS <= excluded
+    assert all(x["apply"] is False for x in out["blend_thinner_excluded"])
 
 
 def test_cost_defaults_are_shared() -> None:

@@ -23,6 +23,14 @@ SLEEVE_THEME_GATES: dict[str, frozenset[str]] = {
     "basket_theme_repo": PRI_RATE_GATES,
     "basket_theme_invert": frozenset({"invert_curve"}),
 }
+KEEP_BOTH_SLEEVES_JOB: str = "eval-cf-dp-both-sleeves-20260824df"
+FLOW_FIFTH_BLEND_THINNER_JOB: str = "eval-flow-5th-blend-20260824ek"
+BLEND_THINNER_KEEP_IDS: frozenset[str] = frozenset(
+    {
+        "event_afterclose_uncrowded",
+        "surprise_xs_peps_uncr",
+    }
+)
 
 HISTORICAL_HEAD4_MEMBERS: tuple[str, ...] = (
     "event_afterclose_positive_eps",
@@ -393,6 +401,109 @@ def _min_lo(
     return min(float(mid[lid]), float(liq[lid]))
 
 
+def _round4(raw: float | None) -> float | None:
+    if raw is None:
+        return None
+    return round(float(raw), 4)
+
+
+def _occ_summary(
+    members: Sequence[str],
+    mid: Mapping[str, float],
+    liq: Mapping[str, float],
+) -> dict[str, Any]:
+    """Per-member occupancy. Mean is not a sleeve blend. Not GO."""
+    ids = [str(x) for x in members if str(x).strip()]
+    rows: list[dict[str, Any]] = []
+    los: list[float] = []
+    for lid in ids:
+        a = mid.get(lid)
+        b = liq.get(lid)
+        lo = _min_lo(lid, mid, liq)
+        if lo is not None:
+            los.append(float(lo))
+        rows.append(
+            {
+                "logic_id": lid,
+                "mid_n_explore": _round4(None if a is None else float(a)),
+                "liq_large": _round4(None if b is None else float(b)),
+                "lo": _round4(lo),
+            }
+        )
+    lo_pack: dict[str, float | int] | None = None
+    if los:
+        lo_pack = {
+            "n": len(los),
+            "min": round(min(los), 4),
+            "mean": round(sum(los) / len(los), 4),
+            "max": round(max(los), 4),
+        }
+    return {
+        "members": ids,
+        "n": len(ids),
+        "by_id": rows,
+        "lo": lo_pack,
+        "occupancy_mean_not_a_blend": True,
+        "go": False,
+        "not_a_pass": True,
+    }
+
+
+def reconstitution_occupancy_preview(
+    occupancy_by_track: Mapping[str, Mapping[str, float]] | None = None,
+) -> dict[str, Any]:
+    """drop_parents vs drop_children occupancy from maps. Does not apply.
+
+    Not a stitch blend. Does not fan out. Not GO.
+    """
+    occ = occupancy_by_track or {}
+    mid = dict(occ.get("mid_n_explore") or {})
+    liq = dict(occ.get("liq_large") or {})
+    defs = {
+        str(d["basket_id"]): d
+        for d in mechanical_basket_defs()
+        if not d.get("historical")
+    }
+    sleeves: list[dict[str, Any]] = []
+    for p in active_reconstitution_plan():
+        bid = str(p["basket_id"])
+        members = [str(x) for x in (defs.get(bid, {}).get("members") or ())]
+        drop_p = p.get("drop_parents_keep_children") or {}
+        drop_c = p.get("drop_children_keep_parents") or {}
+        keep_p = [str(x) for x in (drop_p.get("members") or ())]
+        keep_c = [str(x) for x in (drop_c.get("members") or ())]
+        sleeves.append(
+            {
+                "basket_id": bid,
+                "primary": p.get("primary"),
+                "needs_reconstitution": p.get("needs_reconstitution"),
+                "nested_parent_count": int(p.get("nested_parent_count") or 0),
+                "current": _occ_summary(members, mid, liq),
+                "drop_parents_keep_children": {
+                    **_occ_summary(keep_p, mid, liq),
+                    "dropped": list(drop_p.get("dropped") or []),
+                    "nested_parent_count": drop_p.get("nested_parent_count"),
+                },
+                "drop_children_keep_parents": {
+                    **_occ_summary(keep_c, mid, liq),
+                    "dropped": list(drop_c.get("dropped") or []),
+                    "nested_parent_count": drop_c.get("nested_parent_count"),
+                },
+                "apply": False,
+            }
+        )
+    return {
+        "version": "reconstitution-preview/v1",
+        "keep_sleeves_job": KEEP_BOTH_SLEEVES_JOB,
+        "flow_fifth_blend_thinner_job": FLOW_FIFTH_BLEND_THINNER_JOB,
+        "do_not_restitch_blend": True,
+        "apply": False,
+        "sleeves": sleeves,
+        "go": False,
+        "not_a_pass": True,
+    }
+
+
 def usable_sleeve_coverage(
     occupancy_by_track: Mapping[str, Mapping[str, float]] | None = None,
     *,
@@ -418,6 +529,7 @@ def usable_sleeve_coverage(
     already = primary_sleeve_member_ids()
     sleeves: list[dict[str, Any]] = []
     candidates: list[dict[str, Any]] = []
+    thinner_excluded: list[dict[str, Any]] = []
     for d in mechanical_basket_defs():
         if d.get("historical"):
             continue
@@ -439,6 +551,7 @@ def usable_sleeve_coverage(
             "needs_reconstitution": bool(primary and nested_n),
             "theme_gates": sorted(SLEEVE_THEME_GATES.get(bid, ())),
             "weakest_lo": weakest,
+            "occupancy": _occ_summary(members, mid, liq),
         }
         sleeves.append(row)
         if not primary:
@@ -452,6 +565,18 @@ def usable_sleeve_coverage(
                 lid, members, theme_gates=theme
             )
             lo = _min_lo(lid, mid, liq)
+            if lid in BLEND_THINNER_KEEP_IDS:
+                reasons = list(reasons) + ["blend_thinner_keep"]
+                thinner_excluded.append(
+                    {
+                        "basket_id": bid,
+                        "logic_id": lid,
+                        "lo": _round4(lo),
+                        "reason": "blend_thinner_keep",
+                        "job": FLOW_FIFTH_BLEND_THINNER_JOB,
+                        "apply": False,
+                    }
+                )
             if lo is None:
                 reasons = list(reasons) + ["occupancy_unclassified"]
             elif weakest is not None and lo <= weakest:
@@ -480,6 +605,8 @@ def usable_sleeve_coverage(
         "sleeves": sleeves,
         "replacement_candidates": candidates,
         "n_replacement_ok": len(candidates),
+        "blend_thinner_excluded": thinner_excluded,
+        "keep_sleeves_job": KEEP_BOTH_SLEEVES_JOB,
         "apply": False,
         "invert_primary": False,
         "go": False,
