@@ -24,9 +24,9 @@ export const OPS_TOOLS = Object.freeze([
   tool("projection_status", "Ops projection metadata including generated_at, source_generation, age, and status."),
   tool("collection_sla_status", "Dataset SLA/freshness status with expected_after, usable_by, freshness_policy, and states.", OPTIONAL_DATASET),
   tool("ingestion_last_run", "Latest current ingestion run and bounded summary."),
-  tool("dataset_coverage", "Current Coverage V2 aggregate for one governed dataset.", OPTIONAL_DATASET, ["dataset"]),
-  tool("coverage_gaps", "Current governed datasets whose Coverage V2 state is not COMPLETE."),
-  tool("coverage_segments", "Bounded Coverage V2 segment evidence.", {
+  tool("dataset_coverage", "Current Coverage projection (policy_version as stored on the generation) for one governed dataset.", OPTIONAL_DATASET, ["dataset"]),
+  tool("coverage_gaps", "Current governed datasets whose Coverage projection (policy_version as stored on the generation) is not COMPLETE."),
+  tool("coverage_segments", "Bounded Coverage projection (policy_version as stored on the generation) segment evidence.", {
     ...OPTIONAL_DATASET,
     status: { type: "string", enum: ["COMPLETE", "PARTIAL", "FAILED", "UNKNOWN", "STALE"] },
     limit: { type: "integer", minimum: 1, maximum: 500 },
@@ -137,6 +137,37 @@ export function syncDatasetState({ exported, applied, lag, changeLogRows }) {
   if (lag === 0 && Number(applied) === Number(exported)) return "CURRENT";
   if (lag != null && lag > 0) return "LAGGING";
   return "UNKNOWN";
+}
+
+/** @param {unknown} row */
+function storedPolicyVersion(row) {
+  if (!row || typeof row !== "object") return "";
+  const policy = /** @type {{policy_version?: unknown}} */ (row).policy_version;
+  return typeof policy === "string" && policy.trim() ? policy.trim() : "";
+}
+
+/**
+ * Missing-projection reason. Echo stored policy_version; never freeze "Coverage V2".
+ * @param {unknown} [row]
+ */
+function coverageProjectionMissingReason(row) {
+  const policy = storedPolicyVersion(row);
+  if (policy) return `Coverage projection (${policy}) has not been populated`;
+  return "Coverage projection has not been populated";
+}
+
+/**
+ * Last-known-good is not current COMPLETE. Echo stored policy_version when present.
+ * @param {unknown} lkg
+ * @param {{hasActive: boolean}} options
+ */
+function lastKnownGoodNotCurrentReason(lkg, { hasActive }) {
+  const policy = storedPolicyVersion(lkg);
+  const policyNote = policy ? `; policy_version ${policy}` : "";
+  if (hasActive) {
+    return `active generation missing dataset; last-known-good is not current COMPLETE${policyNote}`;
+  }
+  return `no active projection generation; last-known-good is not current COMPLETE${policyNote}`;
 }
 
 function tool(name, description, properties = {}, required = []) {
@@ -328,8 +359,8 @@ export async function callOpsTool(db, name, rawArguments) {
           coverage: null,
           last_known_good: lkg || null,
           reason: lkg
-            ? "active generation missing dataset; last-known-good is not current COMPLETE"
-            : "Coverage V2 projection has not been populated for this governed dataset",
+            ? lastKnownGoodNotCurrentReason(lkg, { hasActive: true })
+            : coverageProjectionMissingReason(lkg),
         };
       }
     } else {
@@ -348,8 +379,8 @@ export async function callOpsTool(db, name, rawArguments) {
         coverage: null,
         last_known_good: lkg || null,
         reason: lkg
-          ? "no active projection generation; last-known-good is not current COMPLETE"
-          : "Coverage V2 projection has not been populated for this governed dataset",
+          ? lastKnownGoodNotCurrentReason(lkg, { hasActive: false })
+          : coverageProjectionMissingReason(lkg),
       };
     }
     return {
@@ -357,7 +388,7 @@ export async function callOpsTool(db, name, rawArguments) {
       status: coverage ? coverage.status : "UNKNOWN",
       active_generation: active?.generation_id ?? null,
       coverage,
-      ...(coverage ? {} : { reason: "Coverage V2 projection has not been populated for this governed dataset" }),
+      ...(coverage ? {} : { reason: coverageProjectionMissingReason(coverage) }),
     };
   }
 
@@ -378,7 +409,13 @@ export async function callOpsTool(db, name, rawArguments) {
     const present = new Map(rows.map((row) => [String(row.dataset), row]));
     const gaps = GOVERNED_DATASETS.flatMap((dataset) => {
       const row = present.get(dataset);
-      if (!row) return [{ dataset, status: "UNKNOWN", reason: "Coverage V2 projection missing" }];
+      if (!row) {
+        return [{
+          dataset,
+          status: "UNKNOWN",
+          reason: coverageProjectionMissingReason(row),
+        }];
+      }
       return row.status === "COMPLETE" ? [] : [row];
     });
     return {
@@ -415,7 +452,7 @@ export async function callOpsTool(db, name, rawArguments) {
     return {
       plane: "ops_current", mutable: true,
       status: segments.length ? "AVAILABLE" : "UNKNOWN",
-      ...(segments.length ? {} : { reason: "Coverage V2 segment projection is empty or unavailable" }),
+      ...(segments.length ? {} : { reason: coverageProjectionMissingReason() }),
       segments, limit,
     };
   }
@@ -616,10 +653,8 @@ export async function callOpsTool(db, name, rawArguments) {
           dataset,
           status: "UNKNOWN",
           reason: lkg
-            ? (active?.generation_id
-              ? "active generation missing dataset; last-known-good is not current COMPLETE"
-              : "no active projection generation; last-known-good is not current COMPLETE")
-            : "Coverage V2 projection not populated",
+            ? lastKnownGoodNotCurrentReason(lkg, { hasActive: Boolean(active?.generation_id) })
+            : coverageProjectionMissingReason(lkg),
           last_known_good: lkg || null,
         },
       };
