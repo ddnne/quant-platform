@@ -59,8 +59,10 @@ def test_verify_ci_script_exists_executable_and_covers_required_steps() -> None:
     assert "evaluation_ir.ts" in src
     assert "evaluation_ir_allowed_fields.generated.ts" in src
     assert "evaluation_ir_codec.generated.ts" in src
+    assert "evaluation_ir_codec.generated.py" in src
     assert "assert_evaluation_ir_allowed_fields_ts_frozen()" in src
     assert "assert_evaluation_ir_codec_ts_frozen()" in src
+    assert "assert_evaluation_ir_codec_py_frozen()" in src
     assert "assert_evaluation_ir_encode_keys_match_schema()" in src
     assert "jsonschema" in src
     assert "jsonschema.validate" in src
@@ -146,6 +148,8 @@ def test_verify_ci_evaluation_ir_invokes_schema_and_codec_not_only_presence() ->
     assert "evaluation_ir.ts" in block
     assert "evaluation_ir_allowed_fields.generated.ts" in block
     assert "evaluation_ir_codec.generated.ts" in block
+    assert "evaluation_ir_codec.generated.py" in block
     assert "assert_evaluation_ir_allowed_fields_ts_frozen()" in block
     assert "assert_evaluation_ir_codec_ts_frozen()" in block
+    assert "assert_evaluation_ir_codec_py_frozen()" in block
     assert "assert_evaluation_ir_encode_keys_match_schema()" in block

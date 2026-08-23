@@ -18,15 +18,19 @@ Shared golden: ``specs/evaluation_ir/golden.jsonl`` is emitted by
 
 Worker ``ALLOWED_FIELDS`` is emitted from this schema into
 ``evaluation_ir_allowed_fields.generated.ts``. Worker encode/decode body is
-emitted into ``evaluation_ir_codec.generated.ts``. Do not hand-edit those
-files. ``evaluation_ir.ts`` is the façade. Encode keys (Python and Worker)
-must equal schema properties; CI freeze-checks that lock. There is no
-second field list.
+emitted into ``evaluation_ir_codec.generated.ts``. Python encode/decode body
+is emitted into ``evaluation_ir_codec.generated.py``. Do not hand-edit those
+files. ``evaluation_ir.ts`` is the Worker façade. This module is the Python
+façade (schema load, TS/Python emitters, grade wiring). Encode keys (Python
+and Worker) must equal schema properties; CI freeze-checks that lock. There
+is no second field list.
 """
 from __future__ import annotations
 
+import importlib.util
 import json
 import re
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
@@ -58,6 +62,9 @@ CODEC_TS_REL = (
     / "src"
     / "evaluation_ir_codec.generated.ts"
 )
+CODEC_PY_REL = (
+    Path("packages") / "product" / "research" / "evaluation_ir_codec.generated.py"
+)
 EVALUATION_IR_TS_REL = (
     Path("platform") / "workers" / "research-mass-eval" / "src" / "evaluation_ir.ts"
 )
@@ -76,6 +83,22 @@ _TS_ENCODE_VALUE_EXPR: dict[str, str] = {
     "n_complete": "n_complete",
     "n_collapsed": "n_collapsed",
     "n_broken": "n_broken",
+}
+# Python encode object values. Keys must equal schema.json properties.
+_PY_ENCODE_VALUE_EXPR: dict[str, str] = {
+    "version": "EVALUATION_IR_VERSION",
+    "return": "return_value",
+    "cost": "cost",
+    "turnover": "turnover",
+    "coverage": "coverage",
+    "collapsed": "collapsed",
+    "candidate": "candidate",
+    "failure_reason": "reason",
+    "n_expected": "n_expected_i",
+    "n_cells": "n_cells_i",
+    "n_complete": "n_complete_i",
+    "n_collapsed": "n_collapsed_i",
+    "n_broken": "n_broken_i",
 }
 _TS_OBJECT_KEY_RE = re.compile(
     r"""^(?:(?P<quoted>["'])(?P<quoted_key>[A-Za-z_][\w]*)(?P=quoted)|(?P<key>[A-Za-z_][\w]*))\s*(?::|,|$)?"""
@@ -221,28 +244,31 @@ EVALUATION_IR_SCHEMA: dict[str, Any] = load_evaluation_ir_schema()
 EVALUATION_IR_VERSION: str = str(
     EVALUATION_IR_SCHEMA["properties"]["version"]["const"]
 )
-ALLOWED_FIELDS: frozenset[str] = frozenset(EVALUATION_IR_SCHEMA["properties"])
 
 
-def _grade_failure_reason(
-    *,
-    n_expected: int,
-    n_cells: int,
-    n_complete: int,
-    n_collapsed: int,
-    n_broken: int,
-) -> str | None:
-    if int(n_expected) <= 0:
-        return "n_expected_nonpositive"
-    if int(n_cells) != int(n_expected):
-        return "n_cells_mismatch"
-    if int(n_complete) != int(n_expected):
-        return "partial_incomplete"
-    if int(n_collapsed) > 0:
-        return "collapsed"
-    if int(n_broken) > 0:
-        return "broken"
-    return None
+def _load_evaluation_ir_codec_py() -> Any:
+    name = "research.evaluation_ir_codec_generated"
+    existing = sys.modules.get(name)
+    if existing is not None:
+        return existing
+    path = Path(__file__).resolve().parent / CODEC_PY_REL.name
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        raise ImportError(
+            f"Evaluation IR codec artifact missing: {path}. "
+            "Regenerate: python -m research.evaluation_ir"
+        )
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[name] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+_CODEC_PY = _load_evaluation_ir_codec_py()
+encode_evaluation_ir = _CODEC_PY.encode_evaluation_ir
+decode_evaluation_ir = _CODEC_PY.decode_evaluation_ir
+ALLOWED_FIELDS: frozenset[str] = _CODEC_PY.ALLOWED_FIELDS
+ENCODE_KEYS: tuple[str, ...] = _CODEC_PY.ENCODE_KEYS
 
 
 def _as_int(value: Any, label: str) -> int:
@@ -288,113 +314,6 @@ class EvaluationIR:
     @classmethod
     def from_dict(cls, payload: Mapping[str, Any]) -> "EvaluationIR":
         return decode_evaluation_ir(payload)
-
-
-def encode_evaluation_ir(
-    *,
-    return_value: Any = None,
-    cost: Any = None,
-    turnover: Any = None,
-    coverage: Any = None,
-    collapsed: Any = 0,
-    n_expected: int,
-    n_cells: int,
-    n_complete: int,
-    n_collapsed: int = 0,
-    n_broken: int = 0,
-    failure_reason: str | None = None,
-) -> dict[str, Any]:
-    """Encode schema properties. ``candidate`` is ``job_candidate_grade`` only."""
-    n_expected_i = _as_int(n_expected, "n_expected")
-    n_cells_i = _as_int(n_cells, "n_cells")
-    n_complete_i = _as_int(n_complete, "n_complete")
-    n_collapsed_i = _as_int(n_collapsed, "n_collapsed")
-    n_broken_i = _as_int(n_broken, "n_broken")
-    candidate = job_candidate_grade(
-        n_expected=n_expected_i,
-        n_cells=n_cells_i,
-        n_complete=n_complete_i,
-        n_collapsed=n_collapsed_i,
-        n_broken=n_broken_i,
-    )
-    graded_reason = _grade_failure_reason(
-        n_expected=n_expected_i,
-        n_cells=n_cells_i,
-        n_complete=n_complete_i,
-        n_collapsed=n_collapsed_i,
-        n_broken=n_broken_i,
-    )
-    if candidate:
-        reason: str | None = None
-    elif failure_reason:
-        reason = str(failure_reason)
-    else:
-        reason = graded_reason
-    encoded = {
-        "version": EVALUATION_IR_VERSION,
-        "return": return_value,
-        "cost": cost,
-        "turnover": turnover,
-        "coverage": coverage,
-        "collapsed": collapsed,
-        "candidate": candidate,
-        "failure_reason": reason,
-        "n_expected": n_expected_i,
-        "n_cells": n_cells_i,
-        "n_complete": n_complete_i,
-        "n_collapsed": n_collapsed_i,
-        "n_broken": n_broken_i,
-    }
-    validate_evaluation_ir_schema(encoded)
-    return encoded
-
-
-def decode_evaluation_ir(payload: Mapping[str, Any]) -> EvaluationIR:
-    """Closed-schema decode. Unknown fields fail. Candidate is re-graded."""
-    validate_evaluation_ir_schema(payload)
-    n_expected = _as_int(payload["n_expected"], "n_expected")
-    n_cells = _as_int(payload["n_cells"], "n_cells")
-    n_complete = _as_int(payload["n_complete"], "n_complete")
-    n_collapsed = _as_int(payload.get("n_collapsed", 0), "n_collapsed")
-    n_broken = _as_int(payload.get("n_broken", 0), "n_broken")
-    candidate = job_candidate_grade(
-        n_expected=n_expected,
-        n_cells=n_cells,
-        n_complete=n_complete,
-        n_collapsed=n_collapsed,
-        n_broken=n_broken,
-    )
-    stored = payload.get("candidate")
-    if stored is not None and bool(stored) is not candidate:
-        raise ValueError("candidate must equal job_candidate_grade")
-    reason = payload.get("failure_reason")
-    if candidate:
-        failure_reason = None
-    elif reason is None or reason == "":
-        failure_reason = _grade_failure_reason(
-            n_expected=n_expected,
-            n_cells=n_cells,
-            n_complete=n_complete,
-            n_collapsed=n_collapsed,
-            n_broken=n_broken,
-        )
-    else:
-        failure_reason = str(reason)
-    return EvaluationIR(
-        return_value=payload.get("return"),
-        cost=payload.get("cost"),
-        turnover=payload.get("turnover"),
-        coverage=payload.get("coverage"),
-        collapsed=payload.get("collapsed", 0),
-        candidate=candidate,
-        failure_reason=failure_reason,
-        n_expected=n_expected,
-        n_cells=n_cells,
-        n_complete=n_complete,
-        n_collapsed=n_collapsed,
-        n_broken=n_broken,
-        version=EVALUATION_IR_VERSION,
-    )
 
 
 def candidate_from_job_artifact(job: Mapping[str, Any]) -> bool:
@@ -660,6 +579,18 @@ def _ts_encode_value_exprs(properties: Mapping[str, Any]) -> list[tuple[str, str
     return [(name, _TS_ENCODE_VALUE_EXPR[name]) for name in names]
 
 
+def _py_encode_value_exprs(properties: Mapping[str, Any]) -> list[tuple[str, str]]:
+    names = [str(name) for name in properties]
+    missing = [name for name in names if name not in _PY_ENCODE_VALUE_EXPR]
+    extra = sorted(set(_PY_ENCODE_VALUE_EXPR) - set(names))
+    if missing or extra:
+        raise ValueError(
+            "Python encode value map must equal schema.json properties: "
+            f"missing={missing} extra={extra}"
+        )
+    return [(name, _PY_ENCODE_VALUE_EXPR[name]) for name in names]
+
+
 def evaluation_ir_codec_ts_source(*, root: Path | None = None) -> str:
     """Emit Worker encode/decode from schema.json properties. Not a grade policy."""
     schema = load_evaluation_ir_schema(root=_eval_ir_root(root=root))
@@ -922,6 +853,216 @@ def assert_evaluation_ir_codec_ts_frozen(*, root: Path | None = None) -> None:
         )
 
 
+def evaluation_ir_codec_py_path(*, root: Path | None = None) -> Path:
+    return _eval_ir_root(root=root) / CODEC_PY_REL
+
+
+def evaluation_ir_codec_py_source(*, root: Path | None = None) -> str:
+    """Emit Python encode/decode from schema.json properties. Not a grade policy."""
+    schema = load_evaluation_ir_schema(root=_eval_ir_root(root=root))
+    properties = schema["properties"]
+    if not isinstance(properties, Mapping) or not properties:
+        raise ValueError("Evaluation IR schema properties must be a non-empty object")
+    version = properties["version"]["const"]
+    if not isinstance(version, str) or not version:
+        raise ValueError("Evaluation IR schema version const must be a string")
+    fields = [str(name) for name in properties]
+    keys_inner = ",\n".join(f"    {json.dumps(name)}" for name in fields)
+    encode_fields = ",\n".join(
+        f"            {json.dumps(name)}: {expr}"
+        for name, expr in _py_encode_value_exprs(properties)
+    )
+    version_lit = json.dumps(version)
+    return (
+        '"""Generated by research.evaluation_ir from specs/evaluation_ir/schema.json. '
+        "Do not edit by hand.\n"
+        "\n"
+        "Codec field SoT: schema.json properties. Encode object keys are those "
+        "properties in order.\n"
+        "Grade is job_candidate_grade only. Unknown fields fail. version const "
+        f"{version}.\n"
+        '"""\n'
+        "from __future__ import annotations\n"
+        "\n"
+        "from typing import Any, Mapping\n"
+        "\n"
+        "from research.candidate_policy import job_candidate_grade\n"
+        "\n"
+        f"EVALUATION_IR_VERSION = {version_lit}\n"
+        "\n"
+        "ENCODE_KEYS: tuple[str, ...] = (\n"
+        f"{keys_inner},\n"
+        ")\n"
+        "ALLOWED_FIELDS: frozenset[str] = frozenset(ENCODE_KEYS)\n"
+        "\n"
+        "\n"
+        "def _as_int(value: Any, label: str) -> int:\n"
+        "    try:\n"
+        "        return int(value)\n"
+        "    except (TypeError, ValueError) as exc:\n"
+        '        raise ValueError(f"{label} must be an integer") from exc\n'
+        "\n"
+        "\n"
+        "def _grade_failure_reason(\n"
+        "    *,\n"
+        "    n_expected: int,\n"
+        "    n_cells: int,\n"
+        "    n_complete: int,\n"
+        "    n_collapsed: int,\n"
+        "    n_broken: int,\n"
+        ") -> str | None:\n"
+        "    if int(n_expected) <= 0:\n"
+        '        return "n_expected_nonpositive"\n'
+        "    if int(n_cells) != int(n_expected):\n"
+        '        return "n_cells_mismatch"\n'
+        "    if int(n_complete) != int(n_expected):\n"
+        '        return "partial_incomplete"\n'
+        "    if int(n_collapsed) > 0:\n"
+        '        return "collapsed"\n'
+        "    if int(n_broken) > 0:\n"
+        '        return "broken"\n'
+        "    return None\n"
+        "\n"
+        "\n"
+        "def _assert_encode_keys(encoded: dict[str, Any]) -> dict[str, Any]:\n"
+        "    keys = tuple(encoded)\n"
+        "    if keys != ENCODE_KEYS:\n"
+        "        raise ValueError(\n"
+        '            f"encode keys drifted from schema.json: {list(keys)}"\n'
+        "        )\n"
+        "    return encoded\n"
+        "\n"
+        "\n"
+        "def encode_evaluation_ir(\n"
+        "    *,\n"
+        "    return_value: Any = None,\n"
+        "    cost: Any = None,\n"
+        "    turnover: Any = None,\n"
+        "    coverage: Any = None,\n"
+        "    collapsed: Any = 0,\n"
+        "    n_expected: int,\n"
+        "    n_cells: int,\n"
+        "    n_complete: int,\n"
+        "    n_collapsed: int = 0,\n"
+        "    n_broken: int = 0,\n"
+        "    failure_reason: str | None = None,\n"
+        ") -> dict[str, Any]:\n"
+        '    """Encode schema properties. ``candidate`` is ``job_candidate_grade`` only."""\n'
+        '    n_expected_i = _as_int(n_expected, "n_expected")\n'
+        '    n_cells_i = _as_int(n_cells, "n_cells")\n'
+        '    n_complete_i = _as_int(n_complete, "n_complete")\n'
+        '    n_collapsed_i = _as_int(n_collapsed, "n_collapsed")\n'
+        '    n_broken_i = _as_int(n_broken, "n_broken")\n'
+        "    candidate = job_candidate_grade(\n"
+        "        n_expected=n_expected_i,\n"
+        "        n_cells=n_cells_i,\n"
+        "        n_complete=n_complete_i,\n"
+        "        n_collapsed=n_collapsed_i,\n"
+        "        n_broken=n_broken_i,\n"
+        "    )\n"
+        "    graded_reason = _grade_failure_reason(\n"
+        "        n_expected=n_expected_i,\n"
+        "        n_cells=n_cells_i,\n"
+        "        n_complete=n_complete_i,\n"
+        "        n_collapsed=n_collapsed_i,\n"
+        "        n_broken=n_broken_i,\n"
+        "    )\n"
+        "    if candidate:\n"
+        "        reason: str | None = None\n"
+        "    elif failure_reason:\n"
+        "        reason = str(failure_reason)\n"
+        "    else:\n"
+        "        reason = graded_reason\n"
+        "    encoded = _assert_encode_keys(\n"
+        "        {\n"
+        f"{encode_fields},\n"
+        "        }\n"
+        "    )\n"
+        "    from research.evaluation_ir import validate_evaluation_ir_schema\n"
+        "\n"
+        "    validate_evaluation_ir_schema(encoded)\n"
+        "    return encoded\n"
+        "\n"
+        "\n"
+        "def decode_evaluation_ir(payload: Mapping[str, Any]) -> Any:\n"
+        '    """Closed-schema decode. Unknown fields fail. Candidate is re-graded."""\n'
+        "    from research.evaluation_ir import EvaluationIR, validate_evaluation_ir_schema\n"
+        "\n"
+        "    if not isinstance(payload, Mapping):\n"
+        '        raise ValueError("EvaluationIR must be an object")\n'
+        "    unknown = sorted(set(payload) - ALLOWED_FIELDS)\n"
+        "    if unknown:\n"
+        '        raise ValueError(f"EvaluationIR unknown field(s): {unknown}")\n'
+        "    validate_evaluation_ir_schema(payload)\n"
+        '    n_expected = _as_int(payload["n_expected"], "n_expected")\n'
+        '    n_cells = _as_int(payload["n_cells"], "n_cells")\n'
+        '    n_complete = _as_int(payload["n_complete"], "n_complete")\n'
+        '    n_collapsed = _as_int(payload.get("n_collapsed", 0), "n_collapsed")\n'
+        '    n_broken = _as_int(payload.get("n_broken", 0), "n_broken")\n'
+        "    candidate = job_candidate_grade(\n"
+        "        n_expected=n_expected,\n"
+        "        n_cells=n_cells,\n"
+        "        n_complete=n_complete,\n"
+        "        n_collapsed=n_collapsed,\n"
+        "        n_broken=n_broken,\n"
+        "    )\n"
+        "    stored = payload.get(\"candidate\")\n"
+        "    if stored is not None and bool(stored) is not candidate:\n"
+        '        raise ValueError("candidate must equal job_candidate_grade")\n'
+        '    reason = payload.get("failure_reason")\n'
+        "    if candidate:\n"
+        "        failure_reason = None\n"
+        '    elif reason is None or reason == "":\n'
+        "        failure_reason = _grade_failure_reason(\n"
+        "            n_expected=n_expected,\n"
+        "            n_cells=n_cells,\n"
+        "            n_complete=n_complete,\n"
+        "            n_collapsed=n_collapsed,\n"
+        "            n_broken=n_broken,\n"
+        "        )\n"
+        "    else:\n"
+        "        failure_reason = str(reason)\n"
+        "    return EvaluationIR(\n"
+        '        return_value=payload.get("return"),\n'
+        '        cost=payload.get("cost"),\n'
+        '        turnover=payload.get("turnover"),\n'
+        '        coverage=payload.get("coverage"),\n'
+        '        collapsed=payload.get("collapsed", 0),\n'
+        "        candidate=candidate,\n"
+        "        failure_reason=failure_reason,\n"
+        "        n_expected=n_expected,\n"
+        "        n_cells=n_cells,\n"
+        "        n_complete=n_complete,\n"
+        "        n_collapsed=n_collapsed,\n"
+        "        n_broken=n_broken,\n"
+        "        version=EVALUATION_IR_VERSION,\n"
+        "    )\n"
+    )
+
+
+def write_evaluation_ir_codec_py(*, root: Path | None = None) -> Path:
+    path = evaluation_ir_codec_py_path(root=root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(evaluation_ir_codec_py_source(root=root), encoding="utf-8")
+    return path
+
+
+def assert_evaluation_ir_codec_py_frozen(*, root: Path | None = None) -> None:
+    path = evaluation_ir_codec_py_path(root=root)
+    expected = evaluation_ir_codec_py_source(root=root)
+    if not path.is_file():
+        raise ValueError(
+            f"Evaluation IR codec artifact missing: {path}. "
+            "Regenerate: python -m research.evaluation_ir"
+        )
+    actual = path.read_text(encoding="utf-8")
+    if actual != expected:
+        raise ValueError(
+            "evaluation_ir_codec.generated.py drifted from schema.json. "
+            "Regenerate: python -m research.evaluation_ir"
+        )
+
+
 def evaluation_ir_ts_path(*, root: Path | None = None) -> Path:
     return _eval_ir_root(root=root) / EVALUATION_IR_TS_REL
 
@@ -1038,7 +1179,9 @@ def assert_evaluation_ir_encode_keys_match_schema(
 __all__ = [
     "ALLOWED_FIELDS",
     "ALLOWED_FIELDS_TS_REL",
+    "CODEC_PY_REL",
     "CODEC_TS_REL",
+    "ENCODE_KEYS",
     "EVALUATION_IR_SCHEMA",
     "EVALUATION_IR_TS_REL",
     "EVALUATION_IR_VERSION",
@@ -1046,6 +1189,7 @@ __all__ = [
     "GOLDEN_REL",
     "SCHEMA_REL",
     "assert_evaluation_ir_allowed_fields_ts_frozen",
+    "assert_evaluation_ir_codec_py_frozen",
     "assert_evaluation_ir_codec_ts_frozen",
     "assert_evaluation_ir_encode_keys_match_schema",
     "candidate_from_job_artifact",
@@ -1056,6 +1200,8 @@ __all__ = [
     "encode_evaluation_ir",
     "evaluation_ir_allowed_fields_ts_path",
     "evaluation_ir_allowed_fields_ts_source",
+    "evaluation_ir_codec_py_path",
+    "evaluation_ir_codec_py_source",
     "evaluation_ir_codec_ts_path",
     "evaluation_ir_codec_ts_source",
     "evaluation_ir_encode_keys",
@@ -1065,6 +1211,7 @@ __all__ = [
     "load_evaluation_ir_schema",
     "validate_evaluation_ir_schema",
     "write_evaluation_ir_allowed_fields_ts",
+    "write_evaluation_ir_codec_py",
     "write_evaluation_ir_codec_ts",
     "write_evaluation_ir_golden",
 ]
@@ -1074,3 +1221,4 @@ if __name__ == "__main__":
     print(write_evaluation_ir_golden())
     print(write_evaluation_ir_allowed_fields_ts())
     print(write_evaluation_ir_codec_ts())
+    print(write_evaluation_ir_codec_py())
