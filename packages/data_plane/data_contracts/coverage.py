@@ -51,10 +51,29 @@ _REQUIRED = frozenset(
         "governance_tier",
     }
 )
+# Optional metadata only. Never copied into history_target_start.
+VENDOR_ANNOTATION_FIELDS = (
+    "not_historical_required_start",
+    "earliest_official_availability",
+    "official_mode",
+    "vendor_data_provision_start",
+    "vendor_history_policy",
+    "vendor_data_provision_citation",
+    "vendor_history_policy_citation",
+)
+_OPTIONAL_STRINGS = ("policy_version", "history_mode") + VENDOR_ANNOTATION_FIELDS
 
 
 @dataclass(frozen=True)
 class CollectionCoverageContract:
+    """One dataset's collection policy.
+
+    Vendor annotation fields are optional documented metadata. They are
+    retained when present and omitted as ``None`` when absent.
+    ``history_target_start`` is always the JSON field as written — never
+    replaced by an entitlement floor or official-availability annotation.
+    """
+
     dataset_id: str
     collection_scope: str
     history_target_start: str
@@ -68,6 +87,13 @@ class CollectionCoverageContract:
     governance_tier: str
     policy_version: str | None = None
     history_mode: str | None = None
+    not_historical_required_start: str | None = None
+    earliest_official_availability: str | None = None
+    official_mode: str | None = None
+    vendor_data_provision_start: str | None = None
+    vendor_history_policy: str | None = None
+    vendor_data_provision_citation: str | None = None
+    vendor_history_policy_citation: str | None = None
 
     @classmethod
     def from_dict(
@@ -88,9 +114,9 @@ class CollectionCoverageContract:
         for name, value in strings.items():
             if not isinstance(value, str) or not value:
                 raise ValueError(f"{dataset_id}.{name} must be non-empty string")
-        # Annotation-only keys (vendor_data_provision_start, vendor_history_policy,
-        # citations) do not silently copy into history_target_start. Official
-        # domain for V3 datasets is set explicitly from SourceCapabilityContract.
+        # Vendor annotations stay on the object. Do not copy them into
+        # history_target_start; V2 floors and V3 official starts remain
+        # distinct JSON values.
         tier = str(raw["governance_tier"])
         if tier not in GOVERNANCE_TIERS:
             raise ValueError(
@@ -105,7 +131,7 @@ class CollectionCoverageContract:
             if not isinstance(raw[name], bool):
                 raise ValueError(f"{dataset_id}.{name} must be boolean")
         optional: dict[str, Any] = {}
-        for name in ("policy_version", "history_mode"):
+        for name in _OPTIONAL_STRINGS:
             if name not in raw or raw[name] is None:
                 continue
             value = raw[name]
@@ -117,6 +143,14 @@ class CollectionCoverageContract:
             **{name: raw[name] for name in _REQUIRED},
             **optional,
         )
+
+    def to_dict(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {"dataset_id": self.dataset_id}
+        for name in _REQUIRED:
+            payload[name] = getattr(self, name)
+        for name in _OPTIONAL_STRINGS:
+            payload[name] = getattr(self, name)
+        return payload
 
 
 def _load() -> tuple[str, Mapping[str, CollectionCoverageContract]]:
@@ -178,6 +212,7 @@ __all__ = [
     "GOVERNANCE_TIERS",
     "SEGMENT_GRANULARITIES",
     "SNAPSHOT_SEGMENT_GRANULARITIES",
+    "VENDOR_ANNOTATION_FIELDS",
     "POLICY_VERSION",
     "CollectionCoverageContract",
     "all_coverage_contracts",
