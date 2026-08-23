@@ -169,6 +169,8 @@ def test_event_margin_crowding_skips_missing_and_empty_is_incomplete():
 
 def test_event_filter_yaml_leftover_vs_lifted_gates() -> None:
     """Unique-22 leftover still needed; occupancy-equal lifts keep params.gates."""
+    from pathlib import Path
+
     from research.unique_logic.catalog import load_catalog_specs
 
     leftover = (

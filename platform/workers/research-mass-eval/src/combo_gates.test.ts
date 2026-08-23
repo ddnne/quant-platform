@@ -161,7 +161,7 @@ describe("comboEventGateOk", () => {
       false,
     );
     const src = readFileSync(
-      join(dirname(fileURLToPath(import.meta.url)), "daily_path.ts"),
+      join(dirname(fileURLToPath(import.meta.url)), "combo_gates.ts"),
       "utf8",
     );
     const eventCheap = src.slice(
