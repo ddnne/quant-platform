@@ -35,6 +35,8 @@ def _receipt(
 ) -> CollectionReceipt:
     raw_count = observed if raw_rows is None else raw_rows
     structured_count = raw_count if structured_rows is None else structured_rows
+    checked_at = f"2025-04-01T00:00:0{run_id}+00:00"
+    raw_digest = "sha256:" + "a" * 64
     return CollectionReceipt(
         source=segment.source,
         dataset=segment.dataset,
@@ -53,12 +55,18 @@ def _receipt(
             segment_id=segment.segment_id,
             source=segment.source,
             run_id=run_id,
-            raw_digest="sha256:" + "a" * 64,
+            raw_digest=raw_digest,
+            raw_count=raw_count,
+            structured_count=structured_count,
+            pagination_exhausted=pagination_exhausted,
+            segment_start=segment.segment_start,
+            segment_end=segment.segment_end,
+            checked_at=checked_at,
         ),
         run_id=run_id,
         status="SUCCESS",
         error=None,
-        checked_at=f"2025-04-01T00:00:0{run_id}+00:00",
+        checked_at=checked_at,
     )
 
 
@@ -75,7 +83,24 @@ def _tmp_receipt_registry(receipt_ed25519_keys: SimpleNamespace):
     _SIGNED_KEY = previous
 
 
-def _signed_digests(*, dataset, segment_id, source, run_id, raw_digest):
+def _signed_digests(
+    *,
+    dataset,
+    segment_id,
+    source,
+    run_id,
+    raw_digest,
+    raw_count=1,
+    structured_count=1,
+    pagination_exhausted=True,
+    segment_start=None,
+    segment_end=None,
+    checked_at=None,
+    structured_digest=None,
+    source_request_digest=None,
+    raw_manifest_digest=None,
+    structured_generation=None,
+):
     """Sign with the tmp Ed25519 registry from receipt_ed25519_keys."""
     assert _SIGNED_KEY is not None
     signed = build_signed_digest_fields(
@@ -85,13 +110,18 @@ def _signed_digests(*, dataset, segment_id, source, run_id, raw_digest):
         source=source,
         run_id=run_id,
         raw_digest=raw_digest,
-        raw_count=1,
-        structured_count=1,
-        structured_digest=None,
-        pagination_exhausted=True,
-        source_request_digest=None,
-        raw_manifest_digest=raw_digest,
-        structured_generation=run_id,
+        raw_count=raw_count,
+        structured_count=structured_count,
+        structured_digest=structured_digest,
+        pagination_exhausted=pagination_exhausted,
+        source_request_digest=source_request_digest,
+        raw_manifest_digest=raw_manifest_digest or raw_digest,
+        structured_generation=(
+            structured_generation if structured_generation is not None else run_id
+        ),
+        segment_start=segment_start,
+        segment_end=segment_end,
+        checked_at=checked_at,
     )
     signed["raw"] = raw_digest
     return signed

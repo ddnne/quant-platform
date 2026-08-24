@@ -373,8 +373,15 @@ def evaluate_segment(
     )
     if not identity_matches:
         return "PARTIAL", {"reason": "receipt does not match required scope"}
-    # Trusted-path gate: only Ed25519-verified signed receipts may COMPLETE.
-    if not is_complete_eligible_receipt(receipt):
+    # Trusted-path gate: only a VerifiedReceipt may COMPLETE.
+    try:
+        from storage.verified_receipt import (
+            ReceiptVerificationError,
+            require_verified_receipt,
+        )
+
+        require_verified_receipt(receipt, required=required)
+    except ReceiptVerificationError:
         return "PARTIAL", {
             "reason": "receipt not COMPLETE-eligible (valid Ed25519 signature required)",
             "eligibility": receipt_eligibility(receipt),
@@ -1401,7 +1408,7 @@ def is_synthetic_receipt(receipt: CollectionReceipt) -> bool:
 
 
 def receipt_eligibility(receipt: CollectionReceipt) -> str:
-    """TRUSTED_COLLECTION only with a verified Ed25519 signature, never issuer strings."""
+    """TRUSTED_COLLECTION only with a VerifiedReceipt, never issuer strings."""
     if is_synthetic_receipt(receipt) or receipt.digests.get("origin") in {
         "offline-test-fixture",
         "recovered-raw-only",
@@ -1409,27 +1416,26 @@ def receipt_eligibility(receipt: CollectionReceipt) -> str:
         "failed-collection",
     }:
         return "RECOVERED_RAW_ONLY"
-    # Lazy import avoids circular import at module load.
-    from storage.receipt_crypto import verify_receipt_signature
+    from storage.verified_receipt import ReceiptVerificationError, require_verified_receipt
 
-    if (
-        receipt.digests.get("eligibility") == "TRUSTED_COLLECTION"
-        and verify_receipt_signature(receipt.digests)
-    ):
-        return "TRUSTED_COLLECTION"
-    return "RECOVERED_RAW_ONLY"
+    try:
+        require_verified_receipt(receipt)
+    except ReceiptVerificationError:
+        return "RECOVERED_RAW_ONLY"
+    return "TRUSTED_COLLECTION"
 
 
 def is_complete_eligible_receipt(receipt: CollectionReceipt) -> bool:
-    """COMPLETE only with cryptographically verified signature."""
+    """COMPLETE only with a VerifiedReceipt (signed claims bound to the outer receipt)."""
     if is_synthetic_receipt(receipt):
         return False
-    from storage.receipt_crypto import verify_receipt_signature
+    from storage.verified_receipt import ReceiptVerificationError, require_verified_receipt
 
-    return (
-        receipt.digests.get("eligibility") == "TRUSTED_COLLECTION"
-        and verify_receipt_signature(receipt.digests)
-    )
+    try:
+        require_verified_receipt(receipt)
+    except ReceiptVerificationError:
+        return False
+    return True
 
 __all__ = [
     "CollectionReceipt",

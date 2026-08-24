@@ -4,14 +4,19 @@ from __future__ import annotations
 
 import base64
 import json
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from storage.coverage_ledger import (
     RequiredCoverageSegment,
+    evaluate_segment,
     is_complete_eligible_receipt,
 )
 from storage.trusted_receipt import SignedReceiptAuthority
+from storage.verified_receipt import ReceiptVerificationError, verify
 
 
 def test_storage_package_hides_synthetic() -> None:
@@ -63,6 +68,87 @@ def test_forged_signature_rejected(receipt_ed25519_keys: SimpleNamespace):
         checked_at=good.checked_at,
     )
     assert not is_complete_eligible_receipt(forged)
+
+
+def _calendar_required() -> RequiredCoverageSegment:
+    return RequiredCoverageSegment(
+        source="jquants",
+        dataset="markets_calendar",
+        segment_id="2025-01",
+        segment_start="2025-01-01",
+        segment_end="2025-01-31",
+        expected_scope={"month": "2025-01"},
+        expected_items=1,
+    )
+
+
+def test_signature_transplant_onto_mutated_outer_receipt_rejected(
+    receipt_ed25519_keys: SimpleNamespace,
+):
+    from data_contracts import coverage_contract_for
+
+    auth = SignedReceiptAuthority(signing_key=receipt_ed25519_keys.signing_key)
+    req = _calendar_required()
+    raw = b'{"data":[{"Date":"2025-01-01"}]}'
+    good = auth.issue(
+        required=req, run_id=1, raw=raw, observed_items=1, structured_row_count=1
+    )
+    verify(good, required=req, raw=raw)
+    assert is_complete_eligible_receipt(good)
+
+    transplanted = replace(
+        good,
+        segment_id="2099-12",
+        segment_start="2099-12-01",
+        segment_end="2099-12-31",
+    )
+    assert transplanted.digests["signature"] == good.digests["signature"]
+    assert transplanted.digests["signed_body_b64"] == good.digests["signed_body_b64"]
+    with pytest.raises(ReceiptVerificationError):
+        verify(transplanted)
+    assert not is_complete_eligible_receipt(transplanted)
+
+    spoofed_required = replace(
+        req,
+        segment_id="2099-12",
+        segment_start="2099-12-01",
+        segment_end="2099-12-31",
+    )
+    policy = coverage_contract_for("markets_calendar")
+    status, _detail = evaluate_segment(policy, spoofed_required, transplanted)
+    assert status != "COMPLETE"
+
+
+def test_extra_digests_cannot_override_standard_claims(
+    receipt_ed25519_keys: SimpleNamespace,
+):
+    from storage.coverage_ledger import compute_raw_digest
+
+    auth = SignedReceiptAuthority(signing_key=receipt_ed25519_keys.signing_key)
+    req = _calendar_required()
+    raw = b'{"data":[{"Date":"2025-01-01"}]}'
+    receipt = auth.issue(
+        required=req,
+        run_id=1,
+        raw=raw,
+        observed_items=1,
+        structured_row_count=1,
+        extra_digests={
+            "dataset": "evil-dataset",
+            "raw_digest": "sha256:" + "f" * 64,
+            "eligibility": "TRUSTED_COLLECTION",
+            "origin": "operator-note",
+        },
+    )
+    body = json.loads(base64.b64decode(receipt.digests["signed_body_b64"]))
+    assert body["dataset"] == req.dataset
+    assert "dataset" not in body["extra_digests"]
+    assert "raw_digest" not in body["extra_digests"]
+    assert body["extra_digests"]["origin"] == "operator-note"
+    assert receipt.digests["raw"] == compute_raw_digest(raw)
+    assert receipt.digests["raw"] != "sha256:" + "f" * 64
+    verify(receipt, required=req, raw=raw)
+    assert is_complete_eligible_receipt(receipt)
 
 
 def test_jsda_staging_never_complete_eligible(tmp_path: Path):
