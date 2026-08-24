@@ -3,6 +3,8 @@
  * DATA_EXPORT_TOKEN via X-Ingestion-Token; not ingest.
  */
 
+import { json } from "./http_json";
+import { ingestionTokenMatches } from "./ingestion_token";
 import { requireNaturalKeysV2Ready } from "./natural_key_migration";
 
 export interface ExportEnv {
@@ -10,23 +12,15 @@ export interface ExportEnv {
   DATA_EXPORT_TOKEN?: string;
 }
 
-function authorized(request: Request, expected: string | undefined): boolean {
-  if (!expected) return false;
-  const got = request.headers.get("X-Ingestion-Token") || "";
-  return got === expected;
-}
-
-function json(body: unknown, status = 200): Response {
-  return Response.json(body, { status });
-}
-
 export async function handleExportD1(
   env: ExportEnv, request: Request,
 ): Promise<Response> {
-  if (!authorized(request, env.DATA_EXPORT_TOKEN)) {
+  if (request.method !== "GET") {
+    return json({ error: "GET required" }, 405);
+  }
+  if (!(await ingestionTokenMatches(request, env.DATA_EXPORT_TOKEN))) {
     return json({ error: "unauthorized" }, 401);
   }
-  await requireNaturalKeysV2Ready(env.DB);
   const url = new URL(request.url);
   const table = url.searchParams.get("table") || "jquants_records";
   const allowed = new Set([
@@ -48,6 +42,7 @@ export async function handleExportD1(
   if (!Number.isInteger(cursorRaw) || cursorRaw < 0) {
     return json({ error: "cursor must be a non-negative integer" }, 400);
   }
+  await requireNaturalKeysV2Ready(env.DB);
 
   const r = await env.DB.prepare(
     `SELECT rowid AS __export_cursor, * FROM ${table}
@@ -64,7 +59,7 @@ export async function handleExportD1(
     delete clean.__export_cursor;
     return clean;
   });
-  return Response.json({
+  return json({
     table,
     rows,
     cursor: cursorRaw,
@@ -77,10 +72,12 @@ export async function handleExportD1(
 export async function handleExportChanges(
   env: ExportEnv, request: Request,
 ): Promise<Response> {
-  if (!authorized(request, env.DATA_EXPORT_TOKEN)) {
+  if (request.method !== "GET") {
+    return json({ error: "GET required" }, 405);
+  }
+  if (!(await ingestionTokenMatches(request, env.DATA_EXPORT_TOKEN))) {
     return json({ error: "unauthorized" }, 401);
   }
-  await requireNaturalKeysV2Ready(env.DB);
   const url = new URL(request.url);
   const afterSeq = Number(url.searchParams.get("after_seq") || "0");
   const limit = Number(url.searchParams.get("limit") || "500");
@@ -90,6 +87,7 @@ export async function handleExportChanges(
   if (!Number.isInteger(limit) || limit < 1 || limit > 1000) {
     return json({ error: "limit must be an integer between 1 and 1000" }, 400);
   }
+  await requireNaturalKeysV2Ready(env.DB);
 
   const result = await env.DB.prepare(
     `SELECT change_seq, table_name, source, dataset, natural_key, event_time,
