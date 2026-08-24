@@ -12,6 +12,7 @@ import pit
 import paper_runtime.snapshot as snapshot_module
 
 from data_contracts import all_contracts, all_coverage_contracts
+from data_contracts.coverage import SNAPSHOT_SEGMENT_GRANULARITIES
 from paper_runtime import (
     SnapshotRejected,
     data_snapshot_id,
@@ -32,11 +33,19 @@ from tests.test_phase61_coverage_v2 import _signed_digests
 
 
 def _jquants_coverage_contracts():
+    """JQ Premium-core only. index_text omitted; OTC would be empty, not weekend COMPLETE."""
     canonical = {contract.dataset_id for contract in all_contracts()}
-    return tuple(
+    policies = tuple(
         policy for policy in all_coverage_contracts()
         if policy.dataset_id in canonical
     )
+    assert all(
+        policy.segment_granularity != "official_archive_index_day"
+        and "official_archive_index" not in (policy.coverage_mode or "")
+        and policy.history_mode != "official_archive_index"
+        for policy in policies
+    ), "JQ READY fixture must not plan OTC; missing index_text is empty, not weekend COMPLETE"
+    return policies
 
 
 def _generic_row(dataset: str, key: str, date: str, **payload):
@@ -145,10 +154,21 @@ def _seed_publishable_db(path) -> tuple[str, ...]:
         ],
     )
     for policy in policies:
-        observed = 0 if policy.expected_frequency == "event_driven" else 1
+        # Tip snapshots stay PARTIAL on empty receipts; event-zero COMPLETE
+        # is only for genuine event_driven historical windows.
+        tip_snapshot = (
+            policy.segment_granularity in SNAPSHOT_SEGMENT_GRANULARITIES
+            or "snapshot" in (policy.coverage_mode or "")
+            or "snapshot" in (policy.history_mode or "")
+        )
+        observed = 0 if (
+            policy.expected_frequency == "event_driven" and not tip_snapshot
+        ) else 1
+        # JQ-only (see _jquants_coverage_contracts). index_text omitted:
+        # OTC would be empty required set, never invented weekend COMPLETE.
         planned = tuple(
             segment
-            if policy.expected_frequency == "event_driven"
+            if policy.expected_frequency == "event_driven" and not tip_snapshot
             else replace(segment, expected_items=observed)
             for segment in plan_required_segments(policy, today)
         )
@@ -194,6 +214,12 @@ def _seed_publishable_db(path) -> tuple[str, ...]:
                         source=segment.source,
                         run_id=run_id,
                         raw_digest="sha256:" + "1" * 64,
+                        raw_count=observed,
+                        structured_count=observed,
+                        pagination_exhausted=True,
+                        segment_start=segment.segment_start,
+                        segment_end=segment.segment_end,
+                        checked_at=today + "T16:00:00Z",
                     ),
                     run_id=run_id,
                     status="SUCCESS",
