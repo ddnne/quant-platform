@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { handleExportPaths, type ExportEnv } from "./http_export";
 import worker, { type Env } from "./index";
+import { MASTER_EVENT_TYPES } from "./master_scd2/types";
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -560,3 +561,235 @@ describe("ingestion-premium POST-only mutating routes", () => {
     expect(prepareCalls()).toBe(0);
   });
 });
+
+describe("ingestion-premium equities_master SCD2 universe evidence", () => {
+  const originalFetch = globalThis.fetch;
+  const DAY = "2025-04-01";
+  const NEXT = "2025-04-02";
+  const CURRENT_KEY = "structured/scd2/equities_master/CURRENT.json";
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  function listedRow(
+    code: string,
+    date: string,
+  ): Record<string, unknown> {
+    return {
+      Code: code,
+      Date: date,
+      CompanyName: `Name ${code}`,
+      Sector33Code: "7200",
+      Sector33CodeName: "Other Financing Business",
+      Sector17Code: "15",
+      Sector17CodeName: "Financials (Ex Banks)",
+      ScaleCategory: "TOPIX Large70",
+      MarketCode: "0111",
+      MarketCodeName: "Prime",
+      ListingDate: "2013-01-01",
+    };
+  }
+
+  function memoryBucket(): {
+    bucket: R2Bucket;
+    puts: { key: string; body: string }[];
+  } {
+    const puts: { key: string; body: string }[] = [];
+    const objects = new Map<string, string>();
+    const etags = new Map<string, string>();
+    const bucket = {
+      async get(key: string) {
+        const body = objects.get(key);
+        if (body === undefined) return null;
+        return {
+          json: async () => JSON.parse(body),
+          text: async () => body,
+          etag: etags.get(key),
+        };
+      },
+      async put(
+        key: string,
+        value: unknown,
+        options?: {
+          onlyIf?: { etagMatches?: string; etagDoesNotMatch?: string };
+        },
+      ) {
+        const body = typeof value === "string" ? value : "";
+        const exists = objects.has(key);
+        const existingEtag = etags.get(key);
+        if (options?.onlyIf?.etagDoesNotMatch === "*" && exists) {
+          return null;
+        }
+        if (
+          options?.onlyIf?.etagMatches &&
+          (!exists || existingEtag !== options.onlyIf.etagMatches)
+        ) {
+          return null;
+        }
+        const etag = `mem-${puts.length + 1}`;
+        objects.set(key, body);
+        etags.set(key, etag);
+        puts.push({ key, body });
+        return { key, etag };
+      },
+    } as unknown as R2Bucket;
+    return { bucket, puts };
+  }
+
+  function runEnv() {
+    const d1 = ingestD1();
+    const raw = capturingBucket();
+    const structured = memoryBucket();
+    return {
+      env: testEnv({
+        DB: d1.db,
+        RAW_BUCKET: raw.bucket,
+        STRUCTURED_BUCKET: structured.bucket,
+      }),
+      structured,
+    };
+  }
+
+  function vendorRows(rows: Record<string, unknown>[]) {
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ data: rows }), {
+        status: 200,
+      })) as typeof fetch;
+  }
+
+  async function runMaster(env: Env, from: string, to: string) {
+    const res = await worker.fetch(
+      new Request(
+        `https://ingestion-premium.test/v1/run?dataset=equities_master&from=${from}&to=${to}`,
+        {
+          method: "POST",
+          headers: { "X-Ingestion-Token": env.INGESTION_RUN_TOKEN! },
+        },
+      ),
+      env,
+    );
+    expect(res.status).toBe(200);
+    const body = await res.text();
+    expect(body).not.toContain("COMPLETE");
+    return JSON.parse(body) as { ok: boolean };
+  }
+
+  function evidenceBodies(puts: { key: string; body: string }[], from = 0) {
+    return puts
+      .slice(from)
+      .filter((put) => put.key.includes("/evidence/"))
+      .map((put) => JSON.parse(put.body) as Record<string, unknown>);
+  }
+
+  function eventRows(puts: { key: string; body: string }[], from = 0) {
+    return puts
+      .slice(from)
+      .filter((put) => put.key.includes("/events/"))
+      .flatMap((put) =>
+        put.body
+          .split("\n")
+          .filter((line) => line.length > 0)
+          .map((line) => JSON.parse(line) as Record<string, unknown>),
+      );
+  }
+
+  it("passes fetch/receipt universe evidence into upsertRecords for equities_master only", () => {
+    const src = readFileSync(join(here, "index.ts"), "utf8");
+    expect(src).toContain("masterUniverseEvidence");
+    expect(src).toContain('spec.id !== "equities_master"');
+    expect(src).toContain("paginationExhausted");
+    expect(src).toContain("fullUniverse");
+    expect(src).toContain("masterUniverseEvidence(spec, outcome)");
+    expect(src).not.toMatch(/fullUniverse:\s*true/);
+  });
+
+  it("DELISTED only when this run exhausted pagination for a single-day full universe", async () => {
+    const { env, structured } = runEnv();
+    vendorRows([
+      listedRow("8697", DAY),
+      listedRow("7203", DAY),
+      listedRow("6758", DAY),
+    ]);
+    await runMaster(env, DAY, DAY);
+    const afterFirst = structured.puts.length;
+
+    vendorRows([listedRow("8697", DAY), listedRow("7203", DAY)]);
+    await runMaster(env, DAY, DAY);
+
+    const current = structured.puts
+      .slice(afterFirst)
+      .filter((put) => put.key === CURRENT_KEY)
+      .at(-1);
+    expect(current).toBeDefined();
+    const snap = JSON.parse(current!.body) as {
+      count: number;
+      by_code: Record<string, unknown>;
+    };
+    expect(snap.count).toBe(2);
+    expect(snap.by_code["6758"]).toBeUndefined();
+    const delisted = eventRows(structured.puts, afterFirst).filter(
+      (row) => row.event_type === MASTER_EVENT_TYPES.DELISTED,
+    );
+    expect(delisted).toHaveLength(1);
+    expect(delisted[0]).toMatchObject({
+      event_type: MASTER_EVENT_TYPES.DELISTED,
+      local_code: "6758",
+    });
+    expect(evidenceBodies(structured.puts, afterFirst).at(-1)).toMatchObject({
+      pagination_exhausted: true,
+      full_universe: true,
+    });
+    expect(JSON.stringify(structured.puts.slice(afterFirst))).not.toContain(
+      "COMPLETE",
+    );
+  });
+
+  it("does not claim fullUniverse when this run spans multiple observation days", async () => {
+    const { env, structured } = runEnv();
+    vendorRows([
+      listedRow("8697", DAY),
+      listedRow("7203", DAY),
+      listedRow("6758", DAY),
+    ]);
+    await runMaster(env, DAY, DAY);
+    const afterFirst = structured.puts.length;
+
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const date = new URL(url).searchParams.get("date") ?? DAY;
+      return new Response(
+        JSON.stringify({
+          data: [listedRow("8697", date), listedRow("7203", date)],
+        }),
+        { status: 200 },
+      );
+    }) as typeof fetch;
+    await runMaster(env, DAY, NEXT);
+
+    const current = structured.puts
+      .slice(afterFirst)
+      .filter((put) => put.key === CURRENT_KEY)
+      .at(-1);
+    expect(current).toBeDefined();
+    const snap = JSON.parse(current!.body) as {
+      count: number;
+      by_code: Record<string, unknown>;
+    };
+    expect(snap.count).toBe(3);
+    expect(Object.keys(snap.by_code).sort()).toEqual(["6758", "7203", "8697"]);
+    expect(
+      eventRows(structured.puts, afterFirst).filter(
+        (row) => row.event_type === MASTER_EVENT_TYPES.DELISTED,
+      ),
+    ).toHaveLength(0);
+    expect(evidenceBodies(structured.puts, afterFirst).at(-1)).toMatchObject({
+      pagination_exhausted: true,
+      full_universe: false,
+    });
+    expect(JSON.stringify(structured.puts.slice(afterFirst))).not.toContain(
+      "COMPLETE",
+    );
+  });
+});
+
