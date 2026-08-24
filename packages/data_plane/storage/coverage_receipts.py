@@ -1,16 +1,57 @@
 """Coverage receipt evidence builders: digests and collection receipts.
 
 COMPLETE eligibility stays in ``coverage_ledger`` (policy).
+Empty JSON envelopes (``{"data":[]}``) are not trusted raw evidence.
 """
 
 from __future__ import annotations
 
 from datetime import datetime, timezone
 import hashlib
+import json
 from typing import TYPE_CHECKING, Any, Mapping
 
 if TYPE_CHECKING:
     from storage.coverage_ledger import CollectionReceipt, RequiredCoverageSegment
+
+# Signed extra_digests flag: expected-empty windows only. Unsigned [] is not this.
+EXPECTED_EMPTY_WITH_EVIDENCE = "EXPECTED_EMPTY_WITH_EVIDENCE"
+
+
+def _raw_has_trusted_payload(raw: bytes) -> bool:
+    """False for empty/stub envelopes that must not mint COMPLETE."""
+    if not raw:
+        return False
+    stripped = bytes(raw).strip()
+    if not stripped:
+        return False
+    if stripped in {b"[]", b"{}", b"null", b'""', b"''"}:
+        return False
+    if stripped in {b"[\n]", b"[\r\n]", b"{\n}", b"{\r\n}"}:
+        return False
+    try:
+        payload = json.loads(stripped)
+    except (json.JSONDecodeError, UnicodeDecodeError, ValueError, TypeError):
+        return True
+    if isinstance(payload, list) and len(payload) == 0:
+        return False
+    if isinstance(payload, dict):
+        if not payload:
+            return False
+        data = payload.get("data")
+        if isinstance(data, list) and len(data) == 0:
+            return False
+        rows = payload.get("rows")
+        if isinstance(rows, list) and len(rows) == 0 and "data" not in payload:
+            return False
+    return True
+
+
+def _has_expected_empty_evidence_flag(digests: Mapping[str, Any]) -> bool:
+    nested = digests.get("extra_digests")
+    if isinstance(nested, dict):
+        return bool(nested.get(EXPECTED_EMPTY_WITH_EVIDENCE))
+    return bool(digests.get(EXPECTED_EMPTY_WITH_EVIDENCE))
 
 
 def _now() -> str:
@@ -70,6 +111,19 @@ def build_collection_receipt(
                     "TRUSTED_COLLECTION requires Ed25519 signature fields",
                 )
 
+    empty_envelope = not _raw_has_trusted_payload(raw)
+    expected_empty = _has_expected_empty_evidence_flag(digests)
+    if empty_envelope and not expected_empty:
+        # Signed SUCCESS over {"data":[]} is not trusted raw. Ledger refuses COMPLETE.
+        digests["eligibility"] = "RECOVERED_RAW_ONLY"
+        digests.setdefault(
+            "trust_note",
+            "empty raw envelope is not COMPLETE-eligible evidence",
+        )
+        raw_pages = 0
+    else:
+        raw_pages = 1 if raw else 0
+
     return CollectionReceipt(
         source=required.source,
         dataset=required.dataset,
@@ -79,7 +133,7 @@ def build_collection_receipt(
         expected_scope=required.expected_scope,
         expected_items=required.expected_items,
         observed_items=int(observed_items),
-        raw_page_count=1 if raw else 0,
+        raw_page_count=raw_pages,
         raw_row_count=raw_rows,
         structured_row_count=structured,
         pagination_exhausted=bool(pagination_exhausted),
@@ -140,6 +194,7 @@ def build_synthetic_complete_receipt(
 
 
 __all__ = [
+    "EXPECTED_EMPTY_WITH_EVIDENCE",
     "SYNTHETIC_RECEIPT_MARKER",
     "build_collection_receipt",
     "build_synthetic_complete_receipt",
