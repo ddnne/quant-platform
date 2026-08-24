@@ -16,6 +16,7 @@ from storage.receipt_crypto import (
     ReceiptSigningKey,
     build_signed_digest_fields,
     load_signing_key,
+    partition_extra_digests,
 )
 
 
@@ -45,15 +46,15 @@ class SignedReceiptAuthority:
         structured_digest: str | None = None,
         extra_digests: Mapping[str, Any] | None = None,
     ) -> CollectionReceipt:
+        extras = partition_extra_digests(extra_digests)
         if status != "SUCCESS" or error:
             # Failed collections are unsigned evidence only.
             digests: dict[str, Any] = {
                 "eligibility": "RECOVERED_RAW_ONLY",
                 "origin": "failed-collection",
+                "extra_digests": extras,
             }
-            if extra_digests:
-                digests.update({k: v for k, v in extra_digests.items() if k != "eligibility"})
-            digests["eligibility"] = "RECOVERED_RAW_ONLY"
+            digests.update(extras)
             return build_collection_receipt(
                 required=required,
                 run_id=run_id,
@@ -86,19 +87,11 @@ class SignedReceiptAuthority:
             structured_generation=structured_generation
             if structured_generation is not None
             else run_id,
+            checked_at=checked_at,
+            segment_start=required.segment_start,
+            segment_end=required.segment_end,
+            extra_digests=extras,
         )
-        if extra_digests:
-            # Never allow extras to drop signature fields or forge eligibility.
-            for k, v in extra_digests.items():
-                if k in {
-                    "eligibility",
-                    "signature",
-                    "signed_body_b64",
-                    "issuer_key_id",
-                    "issuer_class",
-                }:
-                    continue
-                signed[k] = v
         return build_collection_receipt(
             required=required,
             run_id=run_id,
@@ -109,7 +102,7 @@ class SignedReceiptAuthority:
             pagination_exhausted=pagination_exhausted,
             status=status,
             error=error,
-            checked_at=checked_at,
+            checked_at=signed.get("checked_at") or checked_at,
             extra_digests=signed,
         )
 
