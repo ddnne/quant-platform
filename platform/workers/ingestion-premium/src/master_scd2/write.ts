@@ -14,6 +14,7 @@ import {
 
 const CURRENT_KEY = "structured/scd2/equities_master/CURRENT.json";
 const CURRENT_SCHEMA = "equities_master_scd2_current/v1" as const;
+const EVIDENCE_SCHEMA = "equities_master_scd2_evidence/v1" as const;
 
 export class CurrentParseError extends Error {
   readonly quarantineKey: string | null;
@@ -389,10 +390,45 @@ export async function writeMasterScd2(
     );
   }
 
+  const evidenceKey =
+    `structured/scd2/equities_master/evidence/dt=${asOf}/${runId}.json`;
+  const evidenceBody = JSON.stringify({
+    schema: EVIDENCE_SCHEMA,
+    run_id: runId,
+    as_of: asOf,
+    snapshot_key: snapshotKey,
+    events_key: eventsKey,
+    count: nextSnap.count,
+    event_count: events.length,
+    pagination_exhausted: evidence?.paginationExhausted === true,
+    full_universe: evidence?.fullUniverse === true,
+    updated_at: nextUpdatedAt,
+  });
+  try {
+    await putImmutable(
+      env.STRUCTURED_BUCKET,
+      evidenceKey,
+      evidenceBody,
+      "application/json",
+      {
+        schema: EVIDENCE_SCHEMA,
+        run_id: runId,
+        snapshot_key: snapshotKey,
+      },
+    );
+  } catch (e) {
+    throw new Error(
+      `SCD2 evidence commit failed; CURRENT pointer not advanced: ${
+        (e as Error).message || String(e)
+      }`,
+    );
+  }
+
   const pointer = {
     ...nextSnap,
     snapshot_key: snapshotKey,
     events_key: eventsKey,
+    evidence_key: evidenceKey,
   };
   await putCurrentPointer(
     env.STRUCTURED_BUCKET,
@@ -402,6 +438,7 @@ export async function writeMasterScd2(
       count: String(nextSnap.count),
       run_id: runId,
       snapshot_key: snapshotKey,
+      evidence_key: evidenceKey,
     },
     loaded.etag,
   );

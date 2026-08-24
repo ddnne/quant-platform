@@ -499,4 +499,62 @@ describe("writeMasterScd2", () => {
     expect(currentPut(puts).body).toBe(firstCurrent);
     expect(puts.slice(afterFirst)).toHaveLength(0);
   });
+
+  it("commits evidence before CURRENT and refuses COMPLETE in the watermark", async () => {
+    const { bucket, puts } = memoryBucket();
+    await writeMasterScd2(
+      { STRUCTURED_BUCKET: bucket },
+      [input(listedPayload())],
+      WHEN,
+    );
+    const keys = puts.map((put) => put.key);
+    const evidenceIdx = keys.findIndex((key) => key.includes("/evidence/"));
+    const currentIdx = keys.lastIndexOf(CURRENT_KEY);
+    expect(evidenceIdx).toBeGreaterThanOrEqual(0);
+    expect(evidenceIdx).toBeLessThan(currentIdx);
+    const evidence = JSON.parse(puts[evidenceIdx]!.body) as Record<string, unknown>;
+    expect(evidence.schema).toBe("equities_master_scd2_evidence/v1");
+    expect(evidence.as_of).toBe(AS_OF);
+    expect(evidence.snapshot_key).toBe(
+      puts.find((put) => put.key.includes("/snapshots/"))!.key,
+    );
+    expect(evidence.events_key).toBe(
+      puts.find((put) => put.key.includes("/events/"))!.key,
+    );
+    expect(evidence.pagination_exhausted).toBe(false);
+    expect(evidence.full_universe).toBe(false);
+    const pointer = parseCurrent(currentPut(puts).body) as Record<string, unknown>;
+    expect(pointer.evidence_key).toBe(puts[evidenceIdx]!.key);
+    assertNoCoverageComplete(evidence);
+    assertNoCoverageComplete(pointer);
+    assertNoCoverageComplete(puts[evidenceIdx]!.metadata);
+  });
+
+  it("evidence commit failure is not a run pass and does not move CURRENT", async () => {
+    const { bucket, puts } = memoryBucket();
+    const env = { STRUCTURED_BUCKET: bucket };
+    await writeMasterScd2(env, [input(listedPayload())], WHEN);
+    const firstCurrent = currentPut(puts).body;
+    const innerPut = bucket.put.bind(bucket);
+    bucket.put = (async (
+      key: string,
+      value: unknown,
+      options?: unknown,
+    ) => {
+      if (key.includes("/evidence/")) return null;
+      return innerPut(key, value, options as never);
+    }) as typeof bucket.put;
+
+    await expect(
+      writeMasterScd2(
+        env,
+        [input(listedPayload({ CompanyName: "JPX Group, Inc." }))],
+        new Date("2025-04-02T00:00:00.000Z"),
+      ),
+    ).rejects.toThrow(/evidence commit failed/);
+
+    expect(currentPut(puts).body).toBe(firstCurrent);
+    expect(puts.filter((put) => put.key === CURRENT_KEY)).toHaveLength(1);
+    expect(JSON.stringify(puts.map((put) => put.key))).not.toContain("COMPLETE");
+  });
 });
