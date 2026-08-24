@@ -1,0 +1,29 @@
+# STAGING STUB — not a production config. Do not wrangler deploy this file
+# against the production Cloudflare account.
+#
+# HUMAN: create a physically separate Cloudflare account, Worker name, D1,
+# KV, OAuth App callback, and secrets. Do not copy production binding IDs
+# into this file. Do not create those resources from this lane.
+#
+# Public surface remains GitHub OAuth read-only Ops MCP only. workers_dev
+# may stay true so a *staging* OAuth callback host exists; it must not be
+# the production workers.dev URL.
+
+name = "quant-platform-ops-read-mcp-staging"
+main = "src/index.js"
+compatibility_date = "2026-08-01"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = true
+
+[vars]
+ALLOWED_LOGIN = "ddnne"
+DAILY_ROW_QUOTA = "25000"
+# OAUTH_AUTHORIZATION_SERVER must be the staging workers.dev host after HUMAN
+# creates it. Do not set the production callback URL here.
+
+# Bindings omitted on purpose. Do not paste production KV or D1 ids.
+# Do not set OAUTH_AUTHORIZATION_SERVER to the production workers.dev host.
+#
+# After HUMAN creates staging resources, bind only staging names/ids:
+#   OAUTH_KV -> staging KV (distinct namespace)
+#   OPS_DB   -> staging D1 (distinct database)
