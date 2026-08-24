@@ -76,6 +76,26 @@ export async function verifyState(state, secret) {
   }
 }
 
+/**
+ * @typedef {{
+ *   GITHUB_CLIENT_ID?: string,
+ *   GITHUB_CLIENT_SECRET?: string,
+ *   STATE_SECRET?: string,
+ *   ALLOWED_LOGIN?: string,
+ *   OAUTH_PROVIDER: {
+ *     parseAuthRequest: (request: Request) => Promise<unknown>,
+ *     completeAuthorization: (opts: {
+ *       request: unknown,
+ *       userId: string,
+ *       metadata: Record<string, unknown>,
+ *       scope: string[],
+ *       props: { login: string, name: string },
+ *     }) => Promise<{ redirectTo: string }>,
+ *   },
+ * }} GithubHandlerEnv
+ */
+
+/** @type {import("hono").Hono<{ Bindings: GithubHandlerEnv }>} */
 export const githubHandler = new Hono();
 
 githubHandler.get("/authorize", async (c) => {

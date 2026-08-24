@@ -69,7 +69,9 @@ export class QuantOpsMcpAgent extends McpAgent {
           try {
             const db = this.env.OPS_DB;
             const value = await callOpsTool(db, tool.name, args);
-            const login = this.props?.login || "unknown";
+            const login = typeof this.props?.login === "string" && this.props.login
+              ? this.props.login
+              : "unknown";
             const quota = new DurableDailyQuota(db, this.env.DAILY_ROW_QUOTA);
             const charged = await quota.charge(
               { subject: `human:${login}`, clientId: login },
