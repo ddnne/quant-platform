@@ -143,24 +143,68 @@ def _metrics_from_cells(
     return slots
 
 
+_ECONOMICS_KEYS: tuple[str, ...] = ("net_sharpe", "net_return", "max_dd")
+# Occupancy / track fills are never a distinguisher or a cut score.
+_OCCUPANCY_NOT_A_SCORE_KEYS: tuple[str, ...] = (
+    "occupancy",
+    "mid_n_explore",
+    "liq_large",
+)
+
+
+def _economics_tuple(row: Mapping[str, Any]) -> tuple[Any, Any, Any]:
+    metrics = dict(row.get("metrics") or {})
+    return tuple(metrics.get(k) for k in _ECONOMICS_KEYS)
+
+
 def _economics_clearly_better(
     drop_parents: Mapping[str, Any],
     drop_children: Mapping[str, Any],
 ) -> bool:
     """True only with complete economics and no breadth shrink below 4.
 
-    Occupancy-only / missing Sharpe is not clearly better. Not apply.
+    Occupancy-only / missing Sharpe is not clearly better. Occupancy mean
+    is not a score. Not apply.
     """
     if int(drop_parents.get("sleeve_breadth") or 0) < MIN_SLEEVE_BREADTH_FOR_CLEAR_BETTER:
         return False
-    pm = dict(drop_parents.get("metrics") or {})
-    cm = dict(drop_children.get("metrics") or {})
-    p_sh, c_sh = pm.get("net_sharpe"), cm.get("net_sharpe")
-    p_ret, c_ret = pm.get("net_return"), cm.get("net_return")
-    p_dd, c_dd = pm.get("max_dd"), cm.get("max_dd")
+    p_sh, p_ret, p_dd = _economics_tuple(drop_parents)
+    c_sh, c_ret, c_dd = _economics_tuple(drop_children)
     if None in (p_sh, c_sh, p_ret, c_ret, p_dd, c_dd):
         return False
     return float(p_sh) > float(c_sh) and float(p_ret) > float(c_ret) and float(p_dd) >= float(c_dd)
+
+
+def _parent_child_indistinguishable(
+    drop_parents: Mapping[str, Any],
+    drop_children: Mapping[str, Any],
+) -> bool:
+    """True when parent vs child economics cannot be told apart.
+
+    Occupancy mean / lo / track fills are ignored. Missing Sharpe is
+    indistinguishable. Equal economics are indistinguishable. Not apply.
+    """
+    p_vals = _economics_tuple(drop_parents)
+    c_vals = _economics_tuple(drop_children)
+    if None in p_vals or None in c_vals:
+        return True
+    return all(float(a) == float(b) for a, b in zip(p_vals, c_vals))
+
+
+def _recommended_choice_for_sleeve(
+    drop_parents: Mapping[str, Any],
+    drop_children: Mapping[str, Any],
+) -> tuple[str, bool, bool]:
+    """Per-sleeve recommendation. Occupancy mean does not choose.
+
+    Indistinguishable parent/child → drop_children_keep_parents.
+    Recommended choice is not apply.
+    """
+    clearly_better = _economics_clearly_better(drop_parents, drop_children)
+    indistinguishable = _parent_child_indistinguishable(drop_parents, drop_children)
+    if indistinguishable or not clearly_better:
+        return DEFAULT_RECOMMENDED_CHOICE, indistinguishable, clearly_better
+    return "drop_parents_keep_children", indistinguishable, clearly_better
 
 
 def _option_row(
@@ -265,7 +309,7 @@ def reconstitution_evidence_pack(
         )
         current_metrics = empty_metric_slots()
         current_metrics.update(_occ_fill(prev.get("current") or {}))
-        clear = _economics_clearly_better(drop_p, drop_c)
+        rec, indistinguishable, clear = _recommended_choice_for_sleeve(drop_p, drop_c)
         all_clear = all_clear and clear
         sleeves.append(
             {
@@ -287,6 +331,10 @@ def reconstitution_evidence_pack(
                 },
                 "drop_parents_keep_children": drop_p,
                 "drop_children_keep_parents": drop_c,
+                "parent_child_indistinguishable": indistinguishable,
+                "recommended_choice": rec,
+                "recommended_choice_is_not_apply": True,
+                "occupancy_mean_is_not_a_score": True,
                 "economics_clearly_better": clear,
                 "apply": bool(RECONSTITUTION_APPLY),
                 "go": False,
@@ -295,9 +343,11 @@ def reconstitution_evidence_pack(
         )
 
     economics_clearly_better = bool(sleeves) and all_clear
+    sleeve_choices = [str(s.get("recommended_choice") or "") for s in sleeves]
     recommended = (
         "drop_parents_keep_children"
-        if economics_clearly_better
+        if sleeve_choices
+        and all(c == "drop_parents_keep_children" for c in sleeve_choices)
         else DEFAULT_RECOMMENDED_CHOICE
     )
     return {
@@ -324,6 +374,7 @@ def reconstitution_evidence_pack(
             "catalog_and_plus_n_stopped": bool(CATALOG_AND_PLUS_N_STOPPED),
             "event_three_and_plus_n_stopped": bool(EVENT_THREE_AND_PLUS_N_STOPPED),
             "occupancy_mean_is_not_a_score": True,
+            "occupancy_not_a_score_keys": list(_OCCUPANCY_NOT_A_SCORE_KEYS),
             "do_not_pick_cut_from_preview": True,
         },
         "sleeves": sleeves,
