@@ -7,6 +7,9 @@
  * Source: GLM_ARCHIVE_FIX_OK (import adjusted to named export).
  */
 
+import { json } from "./http_json";
+import { ingestionTokenMatches } from "./ingestion_token";
+import { sha256HexFromBytes } from "./sha256";
 import { r2DatasetSegment } from "./write_path_config";
 
 export interface ArchiveEnv {
@@ -19,25 +22,24 @@ export async function handleArchiveCold(
   request: Request,
   env: ArchiveEnv,
 ): Promise<Response> {
+  if (request.method !== "POST") {
+    return json({ error: "POST required" }, 405);
+  }
+
   const url = new URL(request.url);
 
-  const token =
-    request.headers.get("X-Ingestion-Token") || url.searchParams.get("token");
-  if (!env.INGESTION_RUN_TOKEN || !token || token !== env.INGESTION_RUN_TOKEN) {
-    return Response.json({ error: "unauthorized" }, { status: 401 });
+  if (!(await ingestionTokenMatches(request, env.INGESTION_RUN_TOKEN))) {
+    return json({ error: "unauthorized" }, 401);
   }
 
   const dataset = url.searchParams.get("dataset");
   if (!dataset) {
-    return Response.json({ error: "dataset is required" }, { status: 400 });
+    return json({ error: "dataset is required" }, 400);
   }
 
   const before = url.searchParams.get("before");
   if (!before || !/^\d{4}-\d{2}-\d{2}$/.test(before)) {
-    return Response.json(
-      { error: "before must be YYYY-MM-DD" },
-      { status: 400 },
-    );
+    return json({ error: "before must be YYYY-MM-DD" }, 400);
   }
 
   // meta mode: skip payload (raw still on quant-raw). Allows larger batches.
@@ -94,7 +96,7 @@ export async function handleArchiveCold(
     `archive/jquants_records/${seg}/batch/${runId}_after${afterRowid}${metaOnly ? "_meta" : ""}.ndjson`;
 
   if (!results || results.length === 0) {
-    return Response.json({
+    return json({
       archived: 0,
       deleted: 0,
       next_rowid: afterRowid,
@@ -145,12 +147,7 @@ export async function handleArchiveCold(
       )
       .join("\n") + "\n";
   const ndjsonBytes = new TextEncoder().encode(ndjson);
-
-  const digestBuf = await crypto.subtle.digest("SHA-256", ndjsonBytes);
-  const digestBytes = new Uint8Array(digestBuf);
-  const sha256 = Array.from(digestBytes)
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
+  const sha256 = await sha256HexFromBytes(ndjsonBytes);
 
   await env.STRUCTURED_BUCKET.put(r2Key, ndjsonBytes, {
     httpMetadata: { contentType: "application/x-ndjson" },
@@ -178,7 +175,7 @@ export async function handleArchiveCold(
   }
 
   const lastRid = rowids[rowids.length - 1]!;
-  return Response.json({
+  return json({
     archived: rows.length,
     deleted,
     next_rowid: lastRid,
