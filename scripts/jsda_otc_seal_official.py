@@ -40,6 +40,7 @@ from storage.coverage_ledger import (  # noqa: E402
     record_required_segments,
     refresh_coverage_ledger,
 )
+from storage.receipt_crypto import partition_extra_digests  # noqa: E402
 from storage.trusted_receipt import open_signed_receipt_authority  # noqa: E402
 
 RAW_ROOT = ROOT / "data" / "raw" / "jsda" / "jsda_otc_bond_reference_prices"
@@ -411,20 +412,22 @@ def seal_day(conn, day, path, source_url, issuer):
         raw_row_count=raw_count,
         pagination_exhausted=True,
         raw_manifest_digest=digest,
-        extra_digests={
-            "eligibility": "TRUSTED_COLLECTION",
-            "fetched_via": "cf_workers_fetch+local_raw",
-            "local_raw_path": str(path),
-            "r2_key_hint": f"raw/jsda/jsda_otc_bond_reference_prices/file_{path.name}/",
-            "source_url": source_url,
-            "parser_note": f"parse_otc_reference ({fmt}) + normalize_otc_reference_prices",
-            "wave": WAVE,
-            "full_ok": "http200_size_gt_100kb",
-            "policy": "W107_planned_official_historical_partial_backfill",
-            "gate": "historical_gt_100kb_or_tip_1_5mb",
-            "path_style": path.suffix,
-            "opt": "triggers_off_bulk",
-        },
+        extra_digests=partition_extra_digests(
+            {
+                "eligibility": "TRUSTED_COLLECTION",
+                "fetched_via": "cf_workers_fetch+local_raw",
+                "local_raw_path": str(path),
+                "r2_key_hint": f"raw/jsda/jsda_otc_bond_reference_prices/file_{path.name}/",
+                "source_url": source_url,
+                "parser_note": f"parse_otc_reference ({fmt}) + normalize_otc_reference_prices",
+                "wave": WAVE,
+                "full_ok": "http200_size_gt_100kb",
+                "policy": "W107_planned_official_historical_partial_backfill",
+                "gate": "historical_gt_100kb_or_tip_1_5mb",
+                "path_style": path.suffix,
+                "opt": "triggers_off_bulk",
+            }
+        ),
     )
     record_collection_receipt(conn, receipt)
     conn.commit()

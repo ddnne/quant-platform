@@ -14,6 +14,7 @@ from storage.coverage_ledger import (
     RequiredCoverageSegment,
     record_collection_receipt,
 )
+from storage.receipt_crypto import partition_extra_digests
 from storage.trusted_receipt import SignedReceiptAuthority
 
 
@@ -67,7 +68,7 @@ def record_governed_receipt(
             status="SUCCESS",
             error=None,
             checked_at=checked_at,
-            extra_digests=stamped,
+            extra_digests=partition_extra_digests(stamped),
             source_request_digest=(
                 source_request if isinstance(source_request, str) else None
             ),
