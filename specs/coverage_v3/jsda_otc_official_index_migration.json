@@ -1,0 +1,121 @@
+{
+  "policy_version": "coverage/v3",
+  "dataset_id": "jsda_otc_bond_reference_prices",
+  "migration_id": "jsda_otc_official_index_days",
+  "kind": "official_archive_index_not_calendar_days",
+  "invent_complete": false,
+  "dataset_complete_claim": false,
+  "empty_complete_forbidden": true,
+  "weekend_empty_complete": "FORBIDDEN",
+  "parse_zero_invent_complete": "FORBIDDEN",
+  "before": {
+    "coverage_policy_version": "collection-coverage/v2",
+    "history_target_start": "2002-08-02",
+    "history_target_end_rule": "latest_official_archive_index_day",
+    "segment_granularity": "official_archive_day",
+    "required_span": "2002-08-02..2026-08-19",
+    "required_segments": 8784,
+    "complete_segments": 5886,
+    "partial_segments": 2898,
+    "target_end": "2026-08-19",
+    "partial_reason": "missing collection receipt",
+    "status": "PARTIAL",
+    "false_partial": true,
+    "cause_classes": [
+      "CALENDAR_DAY_INVENTORY_OVERHANG",
+      "PARSER_SCHEMA_GAP"
+    ],
+    "note": "V2 plan_required_segments walks every calendar day from 2002-08-02 through 2026-08-19 (8784 = 5886 COMPLETE + 2898 PARTIAL), including weekends. Official remaining failed seal is 2 PARSE_ZERO days, not 2898."
+  },
+  "after": {
+    "coverage_policy_version": "coverage/v3",
+    "source_capability_policy_version": "source-capability/v3",
+    "history_mode": "official_archive_index",
+    "history_target_start": "2002-08-02",
+    "segment_granularity": "official_archive_index_day",
+    "historical_research_eligible": true,
+    "tip_only_operational": false,
+    "publication_days_only": true,
+    "required_set": {
+      "grain": "official_archive_index_day",
+      "source": "official_year_index_html",
+      "count_rule": "official_index_listed_days_only",
+      "expand_calendar_days": false,
+      "include_weekends": false,
+      "publication_days_only": true,
+      "not_calendar_day_count": 8784,
+      "segment_ids": []
+    }
+  },
+  "official_evidence": {
+    "url": "https://market.jsda.or.jp/shijyo/saiken/baibai/baisanchi/index.html",
+    "product": "公社債店頭売買参考統計値",
+    "required_days": "official_year_index_listed_publication_days",
+    "first_official_label_date": "2002-08-02",
+    "do_not_raise_floor_to_hide_parse_zero": true
+  },
+  "change_reason": "Required coverage is official year-index listed publication days, not the 8784-day calendar walk that includes weekends. The 2898 V2 PARTIAL calendar overhang is not converted to COMPLETE. Existing 5886 COMPLETE days map into the new required set; they are not re-COMPLETE. 2002-08-02 and 2002-08-05 remain genuine PARSE_ZERO gaps until the 23-col adapter seals.",
+  "old_new_required_segment_mapping": {
+    "mapped_existing_complete": {
+      "count": 5886,
+      "v2_status": "COMPLETE",
+      "v3_action": "map_into_required_set",
+      "re_complete": false,
+      "not_re_complete": true,
+      "note": "Existing COMPLETE official publication days reconcile into the official-index required set as mapping, not re-COMPLETE."
+    },
+    "calendar_overhang_excluded": {
+      "v2_partial_segments": 2898,
+      "converted_to_complete": false,
+      "v3_status": "excluded_not_in_official_index",
+      "empty_complete": false,
+      "weekend_empty_complete": "FORBIDDEN",
+      "not_in_official_index": 2896,
+      "genuine_parse_zero_remain_partial": 2,
+      "note": "2898 calendar overhang is not converted to COMPLETE. 2896 non-index calendar ids (weekends/holidays) leave the required set. Two official PARSE_ZERO days stay PARTIAL."
+    },
+    "genuine_parse_zero_gaps": [
+      {
+        "segment_id": "2002-08-02",
+        "v2_status": "PARTIAL",
+        "v3_status": "stay_PARTIAL",
+        "raw_exists": true,
+        "column_count": 23,
+        "parser_min_columns": 29,
+        "outcome": "PARSE_ZERO",
+        "invent_complete": false,
+        "note": "Official raw exists (23-col). PARSE_ZERO until adapter seals. Genuine gap."
+      },
+      {
+        "segment_id": "2002-08-05",
+        "v2_status": "PARTIAL",
+        "v3_status": "stay_PARTIAL",
+        "raw_exists": true,
+        "column_count": 23,
+        "parser_min_columns": 29,
+        "outcome": "PARSE_ZERO",
+        "invent_complete": false,
+        "note": "Official raw exists (23-col). PARSE_ZERO until adapter seals. Genuine gap."
+      }
+    ]
+  },
+  "affected_ready_generations": [],
+  "behavior_change": {
+    "required_grain": "official_archive_index_day",
+    "required_calendar_days": false,
+    "publication_days_only": true,
+    "history_target_start": "2002-08-02",
+    "collection_coverage_json": "unchanged_until_wire",
+    "weekend_empty_complete": "FORBIDDEN",
+    "parse_zero_invent_complete": "FORBIDDEN",
+    "mapped_complete_not_recomplete": true
+  },
+  "remaining_genuine_gaps": {
+    "classification": "stay_PARTIAL",
+    "items": ["2002-08-02", "2002-08-05"],
+    "dataset_complete_claim": false,
+    "calendar_overhang_is_not_a_gap": true,
+    "parse_zero_invent_complete": "FORBIDDEN",
+    "note": "Official remaining publication days that failed seal are 2002-08-02 and 2002-08-05 (23-col PARSE_ZERO). Do not raise the floor to 2002-08-06. Weekend/holiday calendar ids are not genuine gaps and must not be empty-COMPLETE."
+  }
+}

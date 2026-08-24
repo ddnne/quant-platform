@@ -1,8 +1,13 @@
 """Versioned Evaluation IR — single evaluation authority.
 
+Field names and types: ``specs/evaluation_ir/schema.json`` (codec SoT).
+Encode/decode validate against that schema. Unknown fields fail.
+``version`` must be ``evaluation-ir/v1``.
+
 Candidate is not a free boolean and is not a second Python/TS policy copy.
-Encode always calls ``job_candidate_grade``. Decode rejects unknown fields
-and re-grades; a smuggled ``candidate: true`` cannot pass a partial job.
+Encode always calls ``job_candidate_grade``. Decode re-grades; a smuggled
+``candidate: true`` cannot pass a partial job. The schema does not encode
+the grade predicate.
 
 Readers of daily-path job dicts must not trust a stored ``candidate_grade``
 boolean. Use ``candidate_from_job_artifact``: decode/re-grade ``evaluation_ir``
@@ -20,8 +25,6 @@ from typing import Any, Mapping
 
 from qp_paths import repo_root
 from research.candidate_policy import job_candidate_grade
-
-EVALUATION_IR_VERSION: str = "evaluation-ir/v1"
 
 CANONICAL_FIELDS: tuple[str, ...] = (
     "return",
@@ -41,11 +44,153 @@ _GRADE_FIELDS: tuple[str, ...] = (
     "n_broken",
 )
 
-ALLOWED_FIELDS: frozenset[str] = frozenset(
-    ("version",) + CANONICAL_FIELDS + _GRADE_FIELDS
+SCHEMA_REL = Path("specs") / "evaluation_ir" / "schema.json"
+GOLDEN_REL = Path("specs") / "evaluation_ir" / "golden.jsonl"
+
+_SUPPORTED_SCHEMA_DIALECTS = frozenset(
+    {
+        "http://json-schema.org/draft-07/schema#",
+        "https://json-schema.org/draft-07/schema#",
+        "https://json-schema.org/draft/2020-12/schema",
+    }
+)
+_SCHEMA_ROOT_KEYS = frozenset(
+    {
+        "$schema",
+        "$id",
+        "$comment",
+        "title",
+        "description",
+        "type",
+        "additionalProperties",
+        "required",
+        "properties",
+    }
+)
+_SCHEMA_PROP_KEYS = frozenset(
+    {"type", "const", "$comment", "description", "title"}
 )
 
-GOLDEN_REL = Path("specs") / "evaluation_ir" / "golden.jsonl"
+_SCHEMA: dict[str, Any] | None = None
+
+
+def _schema_path(*, root: Path | None = None) -> Path:
+    return (root or repo_root()) / SCHEMA_REL
+
+
+def _check_schema_document(schema: Mapping[str, Any]) -> None:
+    dialect = schema.get("$schema")
+    if dialect not in _SUPPORTED_SCHEMA_DIALECTS:
+        raise ValueError(f"unsupported Evaluation IR schema dialect: {dialect!r}")
+    extra = sorted(set(schema) - _SCHEMA_ROOT_KEYS)
+    if extra:
+        raise ValueError(f"Evaluation IR schema unknown keyword(s): {extra}")
+    if schema.get("type") != "object":
+        raise ValueError("Evaluation IR schema type must be object")
+    if schema.get("additionalProperties") is not False:
+        raise ValueError("Evaluation IR schema must set additionalProperties false")
+    properties = schema.get("properties")
+    if not isinstance(properties, Mapping) or not properties:
+        raise ValueError("Evaluation IR schema properties must be a non-empty object")
+    for name, spec in properties.items():
+        if spec is True:
+            continue
+        if not isinstance(spec, Mapping):
+            raise ValueError(f"Evaluation IR schema property {name!r} must be an object")
+        unknown = sorted(set(spec) - _SCHEMA_PROP_KEYS)
+        if unknown:
+            raise ValueError(
+                f"Evaluation IR schema property {name!r} unknown keyword(s): {unknown}"
+            )
+    version_spec = properties.get("version")
+    if not isinstance(version_spec, Mapping) or "const" not in version_spec:
+        raise ValueError("Evaluation IR schema version must declare const")
+    required = schema.get("required")
+    if not isinstance(required, list) or any(not isinstance(x, str) for x in required):
+        raise ValueError("Evaluation IR schema required must be a list of strings")
+    missing_canon = [name for name in CANONICAL_FIELDS if name not in properties]
+    if missing_canon:
+        raise ValueError(f"Evaluation IR schema missing canonical field(s): {missing_canon}")
+    missing_grade = [name for name in _GRADE_FIELDS if name not in properties]
+    if missing_grade:
+        raise ValueError(f"Evaluation IR schema missing grade field(s): {missing_grade}")
+    candidate_spec = properties.get("candidate")
+    if isinstance(candidate_spec, Mapping) and "const" in candidate_spec:
+        raise ValueError("Evaluation IR schema must not const-bind candidate")
+
+
+def load_evaluation_ir_schema(*, root: Path | None = None) -> dict[str, Any]:
+    """Load the codec SoT JSON Schema. Cached for the repo root."""
+    global _SCHEMA
+    if _SCHEMA is not None and root is None:
+        return _SCHEMA
+    path = _schema_path(root=root)
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise ValueError("Evaluation IR schema must be an object")
+    _check_schema_document(raw)
+    if root is None:
+        _SCHEMA = raw
+    return raw
+
+
+def _schema_type_ok(value: Any, type_name: str) -> bool:
+    if type_name == "object":
+        return isinstance(value, Mapping) and not isinstance(value, (str, bytes))
+    if type_name == "array":
+        return isinstance(value, list)
+    if type_name == "string":
+        return isinstance(value, str)
+    if type_name == "boolean":
+        return isinstance(value, bool)
+    if type_name == "null":
+        return value is None
+    if type_name == "integer":
+        return isinstance(value, int) and not isinstance(value, bool)
+    if type_name == "number":
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+    raise ValueError(f"unsupported JSON Schema type {type_name!r}")
+
+
+def _check_schema_value(value: Any, spec: Mapping[str, Any] | bool, label: str) -> None:
+    if spec is True:
+        return
+    declared = spec.get("type")
+    if declared is not None:
+        names = (declared,) if isinstance(declared, str) else tuple(declared)
+        if not any(_schema_type_ok(value, name) for name in names):
+            if names == ("integer",):
+                raise ValueError(f"{label} must be an integer")
+            raise ValueError(f"{label} must be {' or '.join(names)}")
+    if "const" in spec and value != spec["const"]:
+        if label == "version":
+            raise ValueError(f"unsupported Evaluation IR version: {value!r}")
+        raise ValueError(f"{label} must be {spec['const']!r}")
+
+
+def validate_evaluation_ir_schema(payload: Any) -> None:
+    """Closed-schema check from ``schema.json``. Does not grade candidate."""
+    schema = load_evaluation_ir_schema()
+    if not isinstance(payload, Mapping):
+        raise ValueError("EvaluationIR must be an object")
+    properties: Mapping[str, Any] = schema["properties"]
+    unknown = sorted(set(payload) - set(properties))
+    if unknown:
+        raise ValueError(f"EvaluationIR unknown field(s): {unknown}")
+    missing = [name for name in schema["required"] if name not in payload]
+    if missing:
+        raise ValueError(f"EvaluationIR missing {missing}")
+    for name, spec in properties.items():
+        if name not in payload:
+            continue
+        _check_schema_value(payload[name], spec, name)
+
+
+EVALUATION_IR_SCHEMA: dict[str, Any] = load_evaluation_ir_schema()
+EVALUATION_IR_VERSION: str = str(
+    EVALUATION_IR_SCHEMA["properties"]["version"]["const"]
+)
+ALLOWED_FIELDS: frozenset[str] = frozenset(EVALUATION_IR_SCHEMA["properties"])
 
 
 def _grade_failure_reason(
@@ -154,7 +299,7 @@ def encode_evaluation_ir(
         reason = str(failure_reason)
     else:
         reason = graded_reason
-    return {
+    encoded = {
         "version": EVALUATION_IR_VERSION,
         "return": return_value,
         "cost": cost,
@@ -169,21 +314,13 @@ def encode_evaluation_ir(
         "n_collapsed": n_collapsed_i,
         "n_broken": n_broken_i,
     }
+    validate_evaluation_ir_schema(encoded)
+    return encoded
 
 
 def decode_evaluation_ir(payload: Mapping[str, Any]) -> EvaluationIR:
     """Closed-schema decode. Unknown fields fail. Candidate is re-graded."""
-    if not isinstance(payload, Mapping):
-        raise ValueError("EvaluationIR must be an object")
-    unknown = sorted(set(payload) - ALLOWED_FIELDS)
-    if unknown:
-        raise ValueError(f"EvaluationIR unknown field(s): {unknown}")
-    version = str(payload.get("version") or EVALUATION_IR_VERSION)
-    if version != EVALUATION_IR_VERSION:
-        raise ValueError(f"unsupported Evaluation IR version: {version!r}")
-    missing = [name for name in ("n_expected", "n_cells", "n_complete") if name not in payload]
-    if missing:
-        raise ValueError(f"EvaluationIR missing {missing}")
+    validate_evaluation_ir_schema(payload)
     n_expected = _as_int(payload["n_expected"], "n_expected")
     n_cells = _as_int(payload["n_cells"], "n_cells")
     n_complete = _as_int(payload["n_complete"], "n_complete")
@@ -400,9 +537,11 @@ def write_evaluation_ir_golden(*, root: Path | None = None) -> Path:
 __all__ = [
     "ALLOWED_FIELDS",
     "CANONICAL_FIELDS",
+    "EVALUATION_IR_SCHEMA",
     "EVALUATION_IR_VERSION",
     "EvaluationIR",
     "GOLDEN_REL",
+    "SCHEMA_REL",
     "candidate_from_job_artifact",
     "decode_evaluation_ir",
     "dumps_evaluation_ir_golden",
@@ -410,6 +549,8 @@ __all__ = [
     "emit_golden_vector",
     "encode_evaluation_ir",
     "job_candidate_grade",
+    "load_evaluation_ir_schema",
+    "validate_evaluation_ir_schema",
     "write_evaluation_ir_golden",
 ]
 

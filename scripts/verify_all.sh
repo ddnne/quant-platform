@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Pre-push entry: pytest + catalog freeze + worker npm tests.
+# Authoritative CI (mandatory, no skips): scripts/verify_ci.sh
 # Fail-closed. No live wrangler deploy. Never npm ci --legacy-peer-deps.
 set -euo pipefail
 

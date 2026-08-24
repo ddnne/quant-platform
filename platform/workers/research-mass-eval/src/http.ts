@@ -78,7 +78,37 @@ export type CreateOnlyPutResult = {
   bytes: number;
   created: boolean;
   digest: string;
+  conflict: boolean;
+  status?: 409;
 };
+
+async function compareExisting(
+  bucket: R2Bucket,
+  key: string,
+  digest: string,
+): Promise<CreateOnlyPutResult | null> {
+  const obj = await bucket.get(key);
+  if (!obj) return null;
+  const existingBytes = new Uint8Array(await obj.arrayBuffer());
+  const existingDigest = `sha256:${await sha256Hex(existingBytes)}`;
+  if (existingDigest === digest) {
+    return {
+      key,
+      bytes: existingBytes.byteLength,
+      created: false,
+      digest,
+      conflict: false,
+    };
+  }
+  return {
+    key,
+    bytes: existingBytes.byteLength,
+    created: false,
+    digest,
+    conflict: true,
+    status: 409,
+  };
+}
 
 export async function putJsonCreateOnly(
   bucket: R2Bucket,
@@ -88,10 +118,8 @@ export async function putJsonCreateOnly(
   const body = JSON.stringify(data, null, 2);
   const bytes = new TextEncoder().encode(body);
   const digest = `sha256:${await sha256Hex(bytes)}`;
-  const existing = await bucket.head(key);
-  if (existing) {
-    return { key, bytes: 0, created: false, digest };
-  }
+  const existing = await compareExisting(bucket, key, digest);
+  if (existing) return existing;
   const put = await bucket.put(key, bytes, {
     httpMetadata: { contentType: "application/json; charset=utf-8" },
     customMetadata: {
@@ -102,9 +130,11 @@ export async function putJsonCreateOnly(
     onlyIf: { etagDoesNotMatch: "*" },
   });
   if (put === null) {
-    return { key, bytes: 0, created: false, digest };
+    const raced = await compareExisting(bucket, key, digest);
+    if (raced) return raced;
+    return { key, bytes: 0, created: false, digest, conflict: true, status: 409 };
   }
-  return { key, bytes: bytes.byteLength, created: true, digest };
+  return { key, bytes: bytes.byteLength, created: true, digest, conflict: false };
 }
 
 /** Content-addressed immutable JSON. Job IDs are aliases, not identity. */
@@ -120,7 +150,7 @@ export async function putImmutableJson(
   const key = `${plane}/sha256=${hex}.json`;
   const existing = await bucket.head(key);
   if (existing) {
-    return { key, bytes: existing.size, created: false, digest };
+    return { key, bytes: existing.size, created: false, digest, conflict: false };
   }
   const put = await bucket.put(key, bytes, {
     httpMetadata: { contentType: "application/json; charset=utf-8" },
@@ -132,9 +162,9 @@ export async function putImmutableJson(
     onlyIf: { etagDoesNotMatch: "*" },
   });
   if (put === null) {
-    return { key, bytes: 0, created: false, digest };
+    return { key, bytes: 0, created: false, digest, conflict: false };
   }
-  return { key, bytes: bytes.byteLength, created: true, digest };
+  return { key, bytes: bytes.byteLength, created: true, digest, conflict: false };
 }
 
 /**
@@ -183,6 +213,22 @@ export async function putChildrenThenManifest(
   const childPuts = await Promise.all(
     children.map((child) => putJsonCreateOnly(bucket, child.key, child.data)),
   );
+  if (childPuts.some((child) => child.conflict)) {
+    return {
+      children: childPuts,
+      manifest: {
+        key: manifest.key,
+        bytes: 0,
+        created: false,
+        digest: "",
+        conflict: true,
+        status: 409,
+      },
+      ok: false,
+      conflict: true,
+      verified: false,
+    };
+  }
   const manifestPut = await putJsonCreateOnly(bucket, manifest.key, manifest.data);
   if (manifestPut.created) {
     return {
@@ -191,6 +237,15 @@ export async function putChildrenThenManifest(
       ok: true,
       conflict: false,
       verified: true,
+    };
+  }
+  if (manifestPut.conflict) {
+    return {
+      children: childPuts,
+      manifest: manifestPut,
+      ok: false,
+      conflict: true,
+      verified: false,
     };
   }
   const digest =

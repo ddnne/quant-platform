@@ -1,0 +1,20 @@
+# Internal CI aggregate gate. Not a research API (no PIT, eval, ingest, or MCP).
+#
+# workers_dev is true only so Workers Builds lanes can POST receipts without a
+# custom zone route. Do not treat the workers.dev host as a product surface.
+#
+# Secrets (never in this file):
+#   npx wrangler secret put GITHUB_STATUS_TOKEN -c platform/workers/ci-aggregate/wrangler.toml
+# Unbound GITHUB_STATUS_TOKEN → HTTP 503 fail-closed (no GitHub success).
+
+name = "quant-platform-ci-aggregate"
+main = "src/index.ts"
+compatibility_date = "2026-08-01"
+workers_dev = true
+
+[vars]
+GITHUB_REPOSITORY = "ddnne/quant-platform"
+GITHUB_STATUS_CONTEXT = "ci-aggregate"
+
+[observability]
+enabled = true

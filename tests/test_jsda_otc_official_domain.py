@@ -1,0 +1,220 @@
+"""JSDA OTC required set is official index listed days, not calendar 8784.
+
+V2 collection_coverage.json is unwired. Not a Dataset COMPLETE claim.
+Does not fetch live HTML.
+"""
+
+from __future__ import annotations
+
+from datetime import date, timedelta
+import json
+from pathlib import Path
+
+from data_contracts.coverage import coverage_contract_for
+from data_contracts.permanent_defer import PERMANENT_DEFER_DATASETS, PERMANENT_DEFER_IDS
+from data_contracts.source_capability import (
+    SourceCapabilityContract,
+    required_domain_subset_official,
+    source_capability_contract_for,
+)
+from ingestion.jsda.urls import discover_otc_reference_segments
+from qp_paths import repo_root
+from storage.coverage_ledger import plan_required_segments
+
+_REPO = repo_root()
+_CAPABILITY = _REPO / "specs" / "source_capability" / "jsda_otc_bond_reference_prices.json"
+_MIGRATION = _REPO / "specs" / "coverage_v3" / "jsda_otc_official_index_migration.json"
+_FIXTURE = _REPO / "tests" / "fixtures" / "jsda_otc_official_index_tiny.html"
+
+DATASET = "jsda_otc_bond_reference_prices"
+OFFICIAL_START = "2002-08-02"
+OFFICIAL_EVIDENCE_URL = (
+    "https://market.jsda.or.jp/shijyo/saiken/baibai/baisanchi/index.html"
+)
+PARSE_ZERO_DAYS = ("2002-08-02", "2002-08-05")
+V2_TARGET_END = "2026-08-19"
+V2_REQUIRED = 8784
+V2_COMPLETE = 5886
+V2_PARTIAL = 2898
+EXCLUDED_STATUS = "excluded_not_in_official_index"
+WEEKEND_IN_TINY_SPAN = "2002-08-03"
+LISTED_TINY_DAYS = ("2002-08-02", "2002-08-05", "2002-08-06")
+
+
+def _load(path: Path) -> dict:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _listed_index_days(html: str, *, year: int = 2002) -> list[str]:
+    segments = discover_otc_reference_segments(html, year=year)
+    return [item.segment_id for item in segments]
+
+
+def _calendar_days(start: str, end: str) -> list[str]:
+    cursor = date.fromisoformat(start)
+    last = date.fromisoformat(end)
+    out: list[str] = []
+    while cursor <= last:
+        out.append(cursor.isoformat())
+        cursor += timedelta(days=1)
+    return out
+
+
+def test_capability_official_archive_index_not_tip_only() -> None:
+    cap = _load(_CAPABILITY)
+    mig = _load(_MIGRATION)
+    assert cap["dataset_id"] == DATASET
+    assert cap["policy_version"] == "source-capability/v3"
+    assert cap["history_mode"] == "official_archive_index"
+    assert cap["earliest_official_availability"] == OFFICIAL_START
+    assert cap["official_evidence_url"] == OFFICIAL_EVIDENCE_URL
+    assert cap["historical_research_eligible"] is True
+    assert cap["tip_only_operational"] is False
+    assert cap["research_profile_eligibility"]["dataset_complete_claim"] is False
+    assert cap["research_profile_eligibility"]["tip_only"] is False
+    assert mig["after"]["historical_research_eligible"] is True
+    assert mig["after"]["tip_only_operational"] is False
+    assert mig["after"]["history_mode"] == "official_archive_index"
+
+
+def test_required_set_is_official_index_days_not_calendar_8784() -> None:
+    cap = _load(_CAPABILITY)
+    mig = _load(_MIGRATION)
+    assert mig["before"]["required_segments"] == V2_REQUIRED
+    assert mig["before"]["complete_segments"] == V2_COMPLETE
+    assert mig["before"]["partial_segments"] == V2_PARTIAL
+    assert mig["before"]["required_segments"] == (
+        mig["before"]["complete_segments"] + mig["before"]["partial_segments"]
+    )
+    required_set = mig["after"]["required_set"]
+    assert required_set["count_rule"] == "official_index_listed_days_only"
+    assert required_set["expand_calendar_days"] is False
+    assert required_set["include_weekends"] is False
+    assert required_set["publication_days_only"] is True
+    assert required_set["not_calendar_day_count"] == V2_REQUIRED
+    assert required_set["grain"] == "official_archive_index_day"
+    assert cap["collection_window"]["grain"] == "official_archive_index_day"
+    assert cap["collection_window"]["grain"] != "official_archive_day"
+    assert cap["collection_window"]["expand_calendar_days"] is False
+    assert cap["publication_calendar"]["required_days"] == (
+        "official_index_listed_days_only"
+    )
+
+
+def test_tiny_offline_index_lists_three_dates_and_excludes_weekend() -> None:
+    html = _FIXTURE.read_text(encoding="utf-8")
+    listed = _listed_index_days(html)
+    assert listed == list(LISTED_TINY_DAYS)
+    assert len(listed) == 3
+    calendar = _calendar_days("2002-08-02", "2002-08-06")
+    assert len(calendar) == 5
+    assert WEEKEND_IN_TINY_SPAN in calendar
+    assert WEEKEND_IN_TINY_SPAN not in listed
+    assert date.fromisoformat(WEEKEND_IN_TINY_SPAN).weekday() >= 5
+    overhang = [day for day in calendar if day not in listed]
+    assert overhang == ["2002-08-03", "2002-08-04"]
+    assert all(date.fromisoformat(day).weekday() >= 5 for day in overhang)
+    assert "https://" not in html
+
+
+def test_calendar_overhang_2898_is_not_converted_to_complete() -> None:
+    mig = _load(_MIGRATION)
+    overhang = mig["old_new_required_segment_mapping"]["calendar_overhang_excluded"]
+    assert overhang["v2_partial_segments"] == V2_PARTIAL
+    assert overhang["converted_to_complete"] is False
+    assert overhang["v3_status"] == EXCLUDED_STATUS
+    assert overhang["v3_status"] != "COMPLETE"
+    assert overhang["empty_complete"] is False
+    assert overhang["weekend_empty_complete"] == "FORBIDDEN"
+    assert mig["weekend_empty_complete"] == "FORBIDDEN"
+    assert mig["invent_complete"] is False
+    assert mig["empty_complete_forbidden"] is True
+
+
+def test_parse_zero_2002_08_02_and_05_remain_genuine_gaps() -> None:
+    mig = _load(_MIGRATION)
+    gaps = mig["old_new_required_segment_mapping"]["genuine_parse_zero_gaps"]
+    ids = [row["segment_id"] for row in gaps]
+    assert ids == list(PARSE_ZERO_DAYS)
+    for row in gaps:
+        assert row["raw_exists"] is True
+        assert row["column_count"] == 23
+        assert row["parser_min_columns"] == 29
+        assert row["outcome"] == "PARSE_ZERO"
+        assert row["v2_status"] == "PARTIAL"
+        assert row["v3_status"] == "stay_PARTIAL"
+        assert row["v3_status"] != "COMPLETE"
+        assert row["invent_complete"] is False
+    remaining = mig["remaining_genuine_gaps"]
+    assert remaining["items"] == list(PARSE_ZERO_DAYS)
+    assert remaining["classification"] == "stay_PARTIAL"
+    assert remaining["dataset_complete_claim"] is False
+    assert remaining["parse_zero_invent_complete"] == "FORBIDDEN"
+    assert mig["parse_zero_invent_complete"] == "FORBIDDEN"
+    assert mig["after"]["history_target_start"] == OFFICIAL_START
+    assert mig["behavior_change"]["history_target_start"] == OFFICIAL_START
+
+
+def test_5886_complete_days_map_into_required_set_not_recomplete() -> None:
+    mig = _load(_MIGRATION)
+    mapped = mig["old_new_required_segment_mapping"]["mapped_existing_complete"]
+    assert mapped["count"] == V2_COMPLETE
+    assert mapped["v2_status"] == "COMPLETE"
+    assert mapped["v3_action"] == "map_into_required_set"
+    assert mapped["re_complete"] is False
+    assert mapped["not_re_complete"] is True
+    assert mig["behavior_change"]["mapped_complete_not_recomplete"] is True
+    assert mig["invent_complete"] is False
+    assert mig["dataset_complete_claim"] is False
+
+
+def test_v2_planner_still_expands_calendar_days_v3_does_not_use_that_set() -> None:
+    """V2 ledger is unchanged here; V3 required set is official index days."""
+    v2 = coverage_contract_for(DATASET)
+    assert v2.history_target_start == OFFICIAL_START
+    assert v2.segment_granularity == "official_archive_day"
+    planned = plan_required_segments(v2, V2_TARGET_END, source="jsda")
+    assert len(planned) == V2_REQUIRED
+    planned_ids = [seg.segment_id for seg in planned]
+    assert planned_ids[0] == OFFICIAL_START
+    assert planned_ids[-1] == V2_TARGET_END
+    assert WEEKEND_IN_TINY_SPAN in planned_ids
+
+    mig = _load(_MIGRATION)
+    assert mig["before"]["required_segments"] == len(planned)
+    assert mig["after"]["required_set"]["expand_calendar_days"] is False
+    assert mig["after"]["required_set"]["not_calendar_day_count"] == len(planned)
+    assert mig["behavior_change"]["collection_coverage_json"] == "unchanged_until_wire"
+    assert mig["behavior_change"]["required_calendar_days"] is False
+
+
+def test_v2_coverage_floor_not_rewritten_here() -> None:
+    v2 = coverage_contract_for(DATASET)
+    assert v2.history_target_start == OFFICIAL_START
+    assert v2.coverage_mode == "official_archive_index_reconciled"
+    assert v2.segment_granularity == "official_archive_day"
+    cap = _load(_CAPABILITY)
+    assert cap["earliest_official_availability"] == OFFICIAL_START
+    assert cap["official_evidence_url"] == OFFICIAL_EVIDENCE_URL
+    mig = _load(_MIGRATION)
+    assert mig["official_evidence"]["url"] == OFFICIAL_EVIDENCE_URL
+    assert mig["official_evidence"]["do_not_raise_floor_to_hide_parse_zero"] is True
+    assert DATASET in PERMANENT_DEFER_DATASETS
+    assert PERMANENT_DEFER_IDS[DATASET] == "PD-D5-JSDA-OTC"
+
+
+def test_capability_validates_against_v3_loader() -> None:
+    cap = _load(_CAPABILITY)
+    contract = SourceCapabilityContract.from_dict(cap)
+    assert contract.dataset_id == DATASET
+    assert contract.history_mode == "official_archive_index"
+    assert contract.historical_research_eligible is True
+    assert contract.tip_only_operational is False
+    assert contract.official_evidence_url == OFFICIAL_EVIDENCE_URL
+    domain = required_domain_subset_official(contract)
+    assert domain.publication_days_only is True
+    assert domain.admit_historical_required_segments is True
+    assert domain.collection_window_grain == "official_archive_index_day"
+    loaded = source_capability_contract_for(DATASET)
+    assert loaded.history_mode == "official_archive_index"
+    assert loaded.tip_only_operational is False

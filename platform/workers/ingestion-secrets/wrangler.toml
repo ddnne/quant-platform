@@ -8,3 +8,6 @@ workers_dev = true
 # Secret bindings (values set via `wrangler secret put`, never in this file):
 # - JQUANTS_API_KEY
 # - JQUANTS_PROXY_TOKEN        (allowlisted upstream GET only)
+
+[observability]
+enabled = true

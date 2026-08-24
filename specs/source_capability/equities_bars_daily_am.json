@@ -1,0 +1,50 @@
+{
+  "policy_version": "source-capability/v3",
+  "dataset_id": "equities_bars_daily_am",
+  "source": "jquants_premium_core",
+  "upstream_locator": "/v2/equities/bars/daily/am",
+  "official_evidence_url": "https://jpx-jquants.com/en/spec/eq-bars-daily-am",
+  "history_mode": "recent_snapshot",
+  "earliest_official_availability": "2024-01-04",
+  "historical_research_eligible": false,
+  "tip_only_operational": true,
+  "supported_query_parameters": ["code", "pagination_key"],
+  "publication_calendar": {
+    "kind": "tse_morning_session",
+    "timezone": "Asia/Tokyo",
+    "index_url": null
+  },
+  "entitlement_semantics": {
+    "clamp_before_earliest": false,
+    "subscription_floor": null
+  },
+  "collection_window": {
+    "grain": "same_trading_day_am_snapshot",
+    "open": "09:00",
+    "close": "11:30"
+  },
+  "freshness_sla": {
+    "expected_after": "11:30",
+    "usable_by": "12:30",
+    "timezone": "Asia/Tokyo",
+    "rule": "same_trading_day_am"
+  },
+  "event_time": {
+    "policy": "session_close",
+    "fields": ["Date"]
+  },
+  "available_at": {
+    "policy": "session_close",
+    "field": "Date",
+    "known_publication_lag": null
+  },
+  "revision_semantics": {
+    "policy": "same_day_am_snapshot",
+    "generation_on_revision": true
+  },
+  "research_profile_eligibility": {
+    "include_in": ["ops_same_day_am", "historical_am_stored_only"],
+    "exclude_from": ["core", "general_historical_research"],
+    "exclusion_reason": "Vendor AM is recent_snapshot tip-only, not full-day OHLC. General historical research routes to equities_bars_daily. A dedicated historical-AM profile may use only actually stored periods (do not invent)."
+  }
+}

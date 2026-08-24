@@ -51,6 +51,7 @@ def default_r2_put(
     dry_run: bool = False,
     staging_dir: str | Path | None = None,
     create_only: bool = True,
+    authoritative: bool = False,
 ) -> dict[str, Any]:
     """Put one object to R2 via wrangler (remote). dry_run stages only.
 
@@ -62,7 +63,10 @@ def default_r2_put(
     can create the key after a miss and this put will overwrite. If head
     succeeds, skip put and return status ``exists``.
     Python CLI put is not the immutable authority; Worker onlyIf is.
+    ``authoritative=True`` is refused.
     """
+    if authoritative:
+        raise R2IOError("python CLI put is not artifact authority")
     meta = {
         "bucket": bucket,
         "key": key,

@@ -4,8 +4,10 @@ import inspect
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 import research.r2_io as r2_io
-from research.r2_io import default_r2_put
+from research.r2_io import R2IOError, default_r2_put
 from storage.immutable_artifact import ImmutableArtifactStore, content_digest
 
 
@@ -54,12 +56,24 @@ def test_dry_run_r2_put_does_not_call_remote(tmp_path: Path, monkeypatch) -> Non
 def test_default_r2_put_documents_toctou_not_atomic() -> None:
     sig = inspect.signature(default_r2_put)
     assert sig.parameters["create_only"].default is True
+    assert sig.parameters["authoritative"].default is False
     text = f"{default_r2_put.__doc__ or ''}\n{inspect.getsource(default_r2_put)}"
     assert "TOCTOU" in text
     assert "not the immutable authority" in text
     assert "Worker onlyIf" in text
     assert "TOCTOU" in (r2_io.__doc__ or "")
     assert r2_io.python_cli_put_is_not_immutable_authority is True
+
+
+def test_default_r2_put_authoritative_is_refused() -> None:
+    with pytest.raises(R2IOError, match="python CLI put is not artifact authority"):
+        default_r2_put(
+            "quant-structured",
+            "research/eval/job=x/daily_path.json",
+            b"{}",
+            authoritative=True,
+            dry_run=True,
+        )
 
 
 def test_create_only_head_success_skips_put(tmp_path: Path, monkeypatch) -> None:

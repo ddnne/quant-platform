@@ -1,0 +1,67 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "specs/evaluation_ir/schema.json",
+  "title": "Evaluation IR",
+  "description": "Codec SoT for evaluation-ir/v1 fields. Candidate is graded by job_candidate_grade; this schema does not encode that predicate.",
+  "$comment": "Unknown fields fail (additionalProperties: false). version is the const evaluation-ir/v1. Do not add if/then on candidate.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "return",
+    "cost",
+    "turnover",
+    "coverage",
+    "collapsed",
+    "candidate",
+    "failure_reason",
+    "n_expected",
+    "n_cells",
+    "n_complete",
+    "n_collapsed",
+    "n_broken"
+  ],
+  "properties": {
+    "version": {
+      "type": "string",
+      "const": "evaluation-ir/v1"
+    },
+    "return": {
+      "description": "Passthrough metric; any JSON value including null."
+    },
+    "cost": {
+      "description": "Passthrough metric; any JSON value including null."
+    },
+    "turnover": {
+      "description": "Passthrough metric; any JSON value including null."
+    },
+    "coverage": {
+      "description": "Passthrough metric; any JSON value including null."
+    },
+    "collapsed": {
+      "description": "Passthrough metric; any JSON value including null."
+    },
+    "candidate": {
+      "type": "boolean",
+      "description": "Encoded boolean from job_candidate_grade. Not a schema predicate."
+    },
+    "failure_reason": {
+      "type": ["string", "null"]
+    },
+    "n_expected": {
+      "type": "integer"
+    },
+    "n_cells": {
+      "type": "integer"
+    },
+    "n_complete": {
+      "type": "integer"
+    },
+    "n_collapsed": {
+      "type": "integer"
+    },
+    "n_broken": {
+      "type": "integer"
+    }
+  }
+}

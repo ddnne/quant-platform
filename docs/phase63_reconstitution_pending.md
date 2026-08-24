@@ -144,3 +144,26 @@ Helper: `research.reconstitution_pending.pending_reconstitution_pack`
 reads `reconstitution_occupancy_preview` if it exists. It prints
 `HUMAN_RECONSTITUTION_PENDING` plus both human-only cuts. It does not
 apply.
+
+---
+
+## Evidence pack (compare only; apply stays false)
+
+`research.reconstitution_evidence.reconstitution_evidence_pack` (also
+`research.combo_basket_catalog.reconstitution_evidence_builder`) emits a
+comparison artifact for the two human-pending sleeves. It does **not**
+choose a live cut, does not flip `RECONSTITUTION_APPLY`, and does not
+mutate KEEP 24df members.
+
+Print (does not apply):
+
+```text
+python -m research.reconstitution_evidence
+```
+
+Default `recommended_choice` is `drop_children_keep_parents` when
+economics are not clearly better (prefer 2-condition hypotheses; avoid
+3-AND overfit; keep occupancy/breadth; do not shrink event fund to 2).
+`evidence_status` is `local_schema_only` or `r2_missing` until live KEEP
+job cells are supplied. Do not invent Sharpe. Live R2 put is dry_run
+only. `apply` stays False.

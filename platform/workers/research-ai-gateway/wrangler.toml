@@ -13,5 +13,13 @@ workers_dev = true
 [ai]
 binding = "AI"
 
+[durable_objects]
+bindings = [{ name = "BUDGET_LEDGER", class_name = "BudgetLedger" }]
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["BudgetLedger"]
+
+
 [observability]
 enabled = true
