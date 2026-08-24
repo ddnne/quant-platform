@@ -35,7 +35,8 @@ from paper_runtime.snapshot_persist import (
     begin_snapshot_sync,
 )
 from paper_runtime.snapshot_publish_policy import (
-    _evaluate_publication_gate,
+    READY_MANIFEST_SCHEMA,
+    evaluate_ready_publication,
     _transition_policy,
 )
 from paper_runtime.snapshot_read import (
@@ -586,30 +587,12 @@ def publish_ready_snapshot(
                 run_id, run_detail, validations, coverage_rows,
                 quality_summary, quality_failures, raw_manifests,
                 coverage_proof,
-            ) = _evaluate_publication_gate(
+            ) = evaluate_ready_publication(
                 conn, staging_path, build_id=build_id, required=required
             )
             watermarks = _watermarks_for(conn, required, coverage_rows)
-            from paper_runtime.ready_policy import ReadyPublicationPolicy
-
-            # raw_manifests already validated; None avoids a second shape fail.
-            policy = ReadyPublicationPolicy()
-            bundle = policy.evaluate(
-                conn,
-                staging_path,
-                required,
-                run_id=run_id,
-                coverage_proof=coverage_proof if isinstance(coverage_proof, dict) else None,
-                quality_status="PASS",
-                raw_manifest_ok=None,
-            )
-            if not bundle.passed:
-                detail = "; ".join(
-                    f"{i.name}: {i.reason}" for i in bundle.failures()
-                )
-                raise SnapshotRejected(
-                    f"READY publication policy failed: {detail}"
-                )
+            if READY_MANIFEST_SCHEMA.get("$id") != "ready-manifest/v1":
+                raise SnapshotRejected("ReadyManifest schema is not the publish gate")
         except Exception as exc:
             reason = str(exc)[:4000]
             conn.execute(
@@ -896,6 +879,7 @@ __all__ = [
     "DATA_SNAPSHOT_FORMAT",
     "LOCAL_SNAPSHOT_MANIFEST_FORMAT",
     "QUALITY_POLICY_VERSION",
+    "READY_MANIFEST_SCHEMA",
     "RESEARCH_SNAPSHOT_MANIFEST_FORMAT",
     "SNAPSHOT_STATES",
     "ReadySnapshot",

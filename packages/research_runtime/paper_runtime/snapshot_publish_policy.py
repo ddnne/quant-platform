@@ -14,8 +14,37 @@ from typing import Any
 from cf_platform.ingest_premium.coverage import run_coverage, summarize
 from data_contracts.loader import all_contracts
 from paper_runtime.snapshot_coverage_proof import _coverage_v2_proof
+from qp_paths import repo_root
 from storage.coverage_ledger import refresh_coverage_ledger
 
+READY_MANIFEST_SCHEMA_REL = Path("specs") / "ready" / "ready_manifest.schema.json"
+READY_MANIFEST_FORMAT = "ready-manifest/v1"
+
+
+def ready_manifest_schema_path() -> Path:
+    return repo_root() / READY_MANIFEST_SCHEMA_REL
+
+
+def load_ready_manifest_schema() -> dict[str, Any]:
+    """Load the single ReadyManifest schema. No second gate document."""
+    path = ready_manifest_schema_path()
+    if not path.is_file():
+        from paper_runtime.snapshot import SnapshotRejected
+
+        raise SnapshotRejected(f"ReadyManifest schema missing: {path}")
+    schema = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(schema, dict) or schema.get("$id") != READY_MANIFEST_FORMAT:
+        from paper_runtime.snapshot import SnapshotRejected
+
+        raise SnapshotRejected("ReadyManifest schema $id must be ready-manifest/v1")
+    if schema.get("additionalProperties") is not False:
+        from paper_runtime.snapshot import SnapshotRejected
+
+        raise SnapshotRejected("ReadyManifest schema must set additionalProperties false")
+    return schema
+
+
+READY_MANIFEST_SCHEMA: dict[str, Any] = load_ready_manifest_schema()
 
 _JQUANTS_DATASETS = frozenset(
     contract.dataset_id for contract in all_contracts()
@@ -189,3 +218,44 @@ def _evaluate_publication_gate(
         raw_manifests,
         coverage_proof,
     )
+
+
+def evaluate_ready_publication(
+    conn: sqlite3.Connection,
+    staging_path: Path,
+    *,
+    build_id: str,
+    required: tuple[str, ...],
+) -> tuple[
+    int, dict[str, Any], list[dict[str, Any]], list[dict[str, Any]],
+    dict[str, int], list[dict[str, Any]], dict[str, dict[str, Any]],
+    dict[str, Any],
+]:
+    """Single READY publication gate. Coverage/B0 plus ReadyPublicationPolicy."""
+    from paper_runtime.ready_policy import ReadyPublicationPolicy
+    from paper_runtime.snapshot import SnapshotRejected
+
+    # Bind the single ReadyManifest schema so publish cannot drift.
+    if READY_MANIFEST_SCHEMA.get("$id") != READY_MANIFEST_FORMAT:
+        raise SnapshotRejected("ReadyManifest schema is not the publish gate")
+
+    result = _evaluate_publication_gate(
+        conn, staging_path, build_id=build_id, required=required
+    )
+    (
+        run_id, _run_detail, _validations, _coverage_rows, _quality_summary,
+        failures, _raw_manifests, coverage_proof,
+    ) = result
+    bundle = ReadyPublicationPolicy().evaluate(
+        conn,
+        staging_path,
+        required,
+        run_id=run_id,
+        coverage_proof=coverage_proof if isinstance(coverage_proof, dict) else None,
+        quality_status="FAIL" if failures else "PASS",
+        raw_manifest_ok=True,
+    )
+    if not bundle.passed:
+        detail = "; ".join(f"{i.name}: {i.reason}" for i in bundle.failures())
+        raise SnapshotRejected(f"READY publication policy failed: {detail}")
+    return result
