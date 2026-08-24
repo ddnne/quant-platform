@@ -6,12 +6,13 @@ protocol + Risk inputs.
 
 official_mode(d) is coverage_contract_for(d).coverage_mode (per-dataset), not
 contract_versions.coverage_policy. That key is the collection_coverage.json
-document root (collection-coverage/v2). Master / AM / earnings JSON rows may
-set policy_version collection-coverage/v3. Do not bump the profile key to v3
-while live MCP projection is STALE V2. A FeatureRef/StrategySpec that lists a
-dataset must include that dataset in required_datasets or construction fails.
-Core does not unconditionally include tip-only AM bars or earnings calendar.
-This module does not publish READY, arm Mass, or start Phase 7.
+document root (collection-coverage/v2). SourceCapability JSON rows overlay
+collection-coverage/v3 on their coverage catalog entries. Do not bump the
+profile key to v3 while live MCP projection is STALE V2. A
+FeatureRef/StrategySpec that lists a dataset must include that dataset in
+required_datasets or construction fails. Core does not unconditionally
+include tip-only AM bars or earnings calendar. This module does not publish
+READY, arm Mass, or start Phase 7.
 """
 
 from __future__ import annotations
@@ -23,11 +24,13 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from data_contracts import (
+    COLLECTION_COVERAGE_V3,
     COVERAGE_POLICY_VERSION,
     JSDA_CONTRACT_VERSION,
     REGISTRY_VERSION,
     canonical_dataset_for,
     coverage_contract_for,
+    coverage_v3_dataset_ids,
     source_capability_contract_or_none,
 )
 from qp_paths import repo_root
@@ -65,18 +68,12 @@ CORE_REQUIRED_DATASETS: tuple[str, ...] = (
     "markets_calendar",
 )
 
-# Document-root policy. Per-dataset rows for master/AM/earnings override to v3.
-# core_v1.json contract_versions.coverage_policy stays v2; live MCP is STALE V2
-# with applied_cursor null and is not a READY publish.
+# Document-root policy. Per-dataset V3 ids come from SourceCapability JSON,
+# not a second hand list. core_v1.json contract_versions.coverage_policy stays
+# v2; live MCP is STALE V2 with applied_cursor null and is not a READY publish.
 COVERAGE_POLICY_DOCUMENT_ROOT: str = "collection-coverage/v2"
-COVERAGE_POLICY_V3: str = "collection-coverage/v3"
-COVERAGE_V3_DATASETS: frozenset[str] = frozenset(
-    {
-        "equities_master",
-        TIP_ONLY_AM_DATASET,
-        TIP_ONLY_EARNINGS_CALENDAR_DATASET,
-    }
-)
+COVERAGE_POLICY_V3: str = COLLECTION_COVERAGE_V3
+COVERAGE_V3_DATASETS: frozenset[str] = coverage_v3_dataset_ids()
 
 _PROFILE_FIELDS: frozenset[str] = frozenset(
     {

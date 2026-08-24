@@ -163,10 +163,12 @@
       "universe_rule": "all_filings_in_collection_window"
     },
     "jsda_otc_bond_reference_prices": {
+      "policy_version": "collection-coverage/v3",
       "collection_scope": "jsda_governed_otc_reference_archive",
       "history_target_start": "2002-08-02",
       "history_target_end_rule": "latest_official_archive_index_day",
       "coverage_mode": "official_archive_index_reconciled",
+      "history_mode": "official_archive_index",
       "expected_frequency": "trading_day",
       "universe_rule": "all_bonds_in_official_publication_file",
       "segment_granularity": "official_archive_index_day"
