@@ -8,6 +8,7 @@ from data_contracts import coverage_contract_for
 from storage.coverage_ledger import (
     build_collection_receipt,
     evaluate_segment,
+    is_complete_eligible_receipt,
     plan_required_segments,
 )
 from storage.trusted_receipt import SignedReceiptAuthority
@@ -84,3 +85,25 @@ def test_signed_receipt_can_complete(receipt_ed25519_keys: SimpleNamespace):
     assert receipt.digests["signature"].startswith("ed25519:")
     status, detail = evaluate_segment(policy, req, receipt)
     assert status == "COMPLETE", detail
+
+
+def test_signed_empty_data_envelope_is_not_complete(
+    receipt_ed25519_keys: SimpleNamespace,
+) -> None:
+    """Signed SUCCESS over ``{"data":[]}`` is PARTIAL, not Coverage COMPLETE."""
+    policy, req = _month_required()
+    raw = b'{"data":[]}'
+    auth = _authority(receipt_ed25519_keys)
+    receipt = auth.issue(
+        required=req,
+        run_id=1,
+        raw=raw,
+        observed_items=1,
+        structured_row_count=1,
+        raw_row_count=1,
+    )
+    assert receipt.status == "SUCCESS"
+    assert not is_complete_eligible_receipt(receipt)
+    status, detail = evaluate_segment(policy, req, receipt)
+    assert status == "PARTIAL", detail
+    assert status != "COMPLETE"

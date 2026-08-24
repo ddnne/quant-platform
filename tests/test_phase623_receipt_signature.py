@@ -40,7 +40,11 @@ def test_forged_signature_rejected(receipt_ed25519_keys: SimpleNamespace):
         expected_items=1,
     )
     good = auth.issue(
-        required=req, run_id=1, raw=b"{}", observed_items=1, structured_row_count=1
+        required=req,
+        run_id=1,
+        raw=b'{"data":[{"Date":"2025-01-01"}]}',
+        observed_items=1,
+        structured_row_count=1,
     )
     assert is_complete_eligible_receipt(good)
     # Tamper signature
