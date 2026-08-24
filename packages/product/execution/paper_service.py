@@ -19,12 +19,13 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+from typing import Any
 
 import features
 from agents.types import AuthorizedPaperExecutionRequest
 from paper_runtime import data_snapshot_id
 from strategies.paper import JsonPaperStore, PaperRunConfig, PaperRunResult, run_paper
-from strategies.spec import StrategySpec, interpret_strategy_spec
+from strategies.spec import FeatureRef, StrategySpec, interpret_strategy_spec
 
 
 class PaperExecutionRejected(ValueError):
@@ -70,12 +71,26 @@ def _authorization_id(
     return "sha256:" + hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
+def _iter_feature_refs(spec: StrategySpec) -> tuple[FeatureRef, ...]:
+    """Collect every FeatureRef the rule binds (single- and dual-feature rules)."""
+    rule = spec.rule
+    refs: list[FeatureRef] = []
+    for attr in ("feature", "value_feature", "momentum_feature"):
+        value = getattr(rule, attr, None)
+        if isinstance(value, FeatureRef):
+            refs.append(value)
+    if not refs:
+        raise PaperExecutionRejected("StrategySpec rule has no FeatureRef to attest")
+    return tuple(refs)
+
+
 class PaperExecutionService:
     """The single positive capability reaching :func:`strategies.paper.run_paper`.
 
     Construction is cheap and stateless aside from the optional paper store.
-    :meth:`execute` is the only entry point; it never exposes ``run_paper``,
-    the SQLite path, or any engine handle to its caller.
+    :meth:`execute` is the authority entry; :meth:`execute_runtime_dto` is the
+    paper_runtime DTO adapter. Neither exposes ``run_paper``, the SQLite path,
+    or any engine handle to its caller.
     """
 
     def __init__(self, paper_store: JsonPaperStore | None = None) -> None:
@@ -101,7 +116,68 @@ class PaperExecutionService:
                 "authorized; refusing to return a result pinned to the wrong "
                 "READY snapshot"
             )
+        self._attest_consumed_feature_versions(spec, result)
         return result
+
+    def execute_runtime_dto(self, request: Any) -> PaperRunResult:
+        """Adapt ``paper_runtime.execution`` DTO then apply the same authority.
+
+        Raw strategy objects are rejected. This is the only path from the
+        name-collision helper into ``run_paper``.
+        """
+        spec = getattr(request, "strategy", None)
+        if not isinstance(spec, StrategySpec):
+            raise PaperExecutionRejected(
+                "paper_runtime DTO execute requires a StrategySpec; "
+                "raw strategies cannot bypass PaperExecutionService"
+            )
+        config = getattr(request, "config", None)
+        if not isinstance(config, PaperRunConfig):
+            raise PaperExecutionRejected(
+                "paper_runtime DTO execute requires PaperRunConfig"
+            )
+        max_gross = getattr(request, "max_gross", None)
+        if max_gross is None:
+            raise PaperExecutionRejected("max_gross required")
+        declared_versions = getattr(request, "feature_ref_versions", None)
+        if declared_versions:
+            expected = {ref.id: str(ref.version) for ref in _iter_feature_refs(spec)}
+            for feature_id, version in dict(declared_versions).items():
+                pinned = expected.get(str(feature_id))
+                if pinned is not None and pinned != str(version):
+                    raise PaperExecutionRejected(
+                        "feature_ref_versions do not match the StrategySpec"
+                    )
+        plan = AuthorizedPaperExecutionRequest(
+            mode=str(getattr(request, "mode", "")),
+            authorization_id=str(getattr(request, "authorization_id", "") or ""),
+            strategy_id=spec.strategy_id,
+            strategy_spec_hash=str(
+                getattr(request, "strategy_spec_hash", "") or ""
+            ),
+            max_gross_weight=float(max_gross),
+            instructions=(),
+            ready_snapshot_id=str(getattr(request, "ready_snapshot_id", "") or ""),
+            ready_manifest_digest=str(
+                getattr(request, "ready_manifest_digest", "") or ""
+            ),
+            universe=tuple(getattr(request, "universe", ()) or ()),
+            period_start=str(getattr(request, "period_start", "") or ""),
+            period_end=str(getattr(request, "period_end", "") or ""),
+            cost_scenario=str(getattr(request, "cost_scenario", "default") or "default"),
+            expires_at=str(getattr(request, "expires_at", "") or ""),
+        )
+        object.__setattr__(
+            plan,
+            "profile_digest",
+            str(getattr(request, "profile_digest", "") or ""),
+        )
+        object.__setattr__(
+            plan,
+            "feature_ref_versions",
+            declared_versions,
+        )
+        return self.execute(plan, spec, config)
 
     def _authorize(
         self,
@@ -197,29 +273,95 @@ class PaperExecutionService:
         # 6. FeatureRef versions: every referenced feature must resolve to an
         #    approved signal definition at the exact pinned version.
         self._validate_feature_refs(spec)
+        self._attest_declared_feature_versions(plan, spec)
+
+        # 7. Research data profile identity (digest pin). Does not publish
+        #    READY, arm Mass, or evaluate profile_ready evidence.
+        self._attest_research_profile(plan, spec)
 
         return pinned_snapshot
 
     @staticmethod
     def _validate_feature_refs(spec: StrategySpec) -> None:
-        ref = spec.rule.feature
-        try:
-            definition = features.get_for_strategy(
-                ref.id,
-                version=ref.version,
-                allowed_statuses=("approved",),
-                allowed_roles=("signal",),
-            )
-        except (KeyError, features.FeatureGovernanceError) as exc:
+        for ref in _iter_feature_refs(spec):
+            try:
+                definition = features.get_for_strategy(
+                    ref.id,
+                    version=ref.version,
+                    allowed_statuses=("approved",),
+                    allowed_roles=("signal",),
+                )
+            except (KeyError, features.FeatureGovernanceError) as exc:
+                raise PaperExecutionRejected(
+                    f"FeatureRef {ref.id!r} version {ref.version!r} is not an "
+                    f"approved signal feature"
+                ) from exc
+            if str(definition.version) != str(ref.version):
+                raise PaperExecutionRejected(
+                    f"FeatureRef {ref.id!r} resolved to version "
+                    f"{definition.version!r}, not the pinned {ref.version!r}"
+                )
+
+    @staticmethod
+    def _attest_declared_feature_versions(
+        plan: AuthorizedPaperExecutionRequest, spec: StrategySpec
+    ) -> None:
+        declared = getattr(plan, "feature_ref_versions", None) or {}
+        if not declared:
+            return
+        expected = {ref.id: str(ref.version) for ref in _iter_feature_refs(spec)}
+        for feature_id, version in dict(declared).items():
+            pinned = expected.get(str(feature_id))
+            if pinned is not None and pinned != str(version):
+                raise PaperExecutionRejected(
+                    "feature_ref_versions do not match the StrategySpec"
+                )
+
+    @staticmethod
+    def _attest_research_profile(
+        plan: AuthorizedPaperExecutionRequest, spec: StrategySpec
+    ) -> None:
+        from research.research_data_profile import load_core_profile
+
+        profile = load_core_profile()
+        digest = str(profile.profile_digest or "")
+        if not digest.startswith("sha256:"):
             raise PaperExecutionRejected(
-                f"FeatureRef {ref.id!r} version {ref.version!r} is not an "
-                f"approved signal feature"
-            ) from exc
-        if str(definition.version) != str(ref.version):
-            raise PaperExecutionRejected(
-                f"FeatureRef {ref.id!r} resolved to version "
-                f"{definition.version!r}, not the pinned {ref.version!r}"
+                "core research data profile digest is missing; "
+                "refusing paper execution"
             )
+        declared = str(getattr(plan, "profile_digest", "") or "")
+        if declared and declared != digest:
+            raise PaperExecutionRejected(
+                "authorized profile_digest does not match the core "
+                "research data profile"
+            )
+        pinned_versions = {
+            str(dep.get("id")): str(dep.get("version"))
+            for dep in profile.feature_dependencies
+            if dep.get("id")
+        }
+        for ref in _iter_feature_refs(spec):
+            if ref.id in pinned_versions and pinned_versions[ref.id] != str(ref.version):
+                raise PaperExecutionRejected(
+                    f"FeatureRef {ref.id!r} version {ref.version!r} does not "
+                    f"match research data profile pin {pinned_versions[ref.id]!r}"
+                )
+
+    @staticmethod
+    def _attest_consumed_feature_versions(
+        spec: StrategySpec, result: PaperRunResult
+    ) -> None:
+        consumed = result.reproducibility.get("feature_versions") or {}
+        if not isinstance(consumed, dict):
+            return
+        for ref in _iter_feature_refs(spec):
+            got = consumed.get(ref.id)
+            if got is not None and str(got) != str(ref.version):
+                raise PaperExecutionRejected(
+                    f"paper run consumed FeatureRef {ref.id!r} version "
+                    f"{got!r}, not the pinned {ref.version!r}"
+                )
 
 
 __all__ = ["PaperExecutionService", "PaperExecutionRejected"]
