@@ -13,6 +13,10 @@ from research.readiness import (
     VerifiedResearchReadiness,
     require_mass_research_start,
 )
+from research.ready_manifest import (
+    ReadyManifest,
+    mint_verified_research_readiness,
+)
 from research.artifacts import (
     ExperimentPlan,
     ResearchIdea,
@@ -32,9 +36,11 @@ __all__ = [
     "OperatorOverrideCapability",
     "OperatorOverrideService",
     "ResearchIdea",
+    "ReadyManifest",
     "ResearchReadinessService",
     "ScheduledExperiment",
     "VerifiedResearchReadiness",
+    "mint_verified_research_readiness",
     "require_mass_research_start",
     "select_schedule_hypothesis_classes",
 ]

@@ -243,6 +243,10 @@ class ResearchReadinessService:
             describe_snapshot,
             latest_ready_snapshot,
         )
+        from research.ready_manifest import (
+            mint_verified_research_readiness,
+            ready_manifest_from_snapshot_document,
+        )
 
         if not self._snapshot_dir.is_dir():
             raise MassResearchDisabledError(
@@ -258,102 +262,12 @@ class ResearchReadinessService:
                 f"READY verifier failed: {exc}"
             ) from exc
 
-        manifest = dict(ready.manifest)
-        artifact_path = ready.artifact_path
-        db_digest = _file_sha256(artifact_path)
-        coverage_proof = str(
-            manifest.get("coverage_proof_digest")
-            or manifest.get("coverage_digest")
-            or ""
+        ready_manifest = ready_manifest_from_snapshot_document(dict(ready.manifest))
+        return mint_verified_research_readiness(
+            ready_manifest,
+            db_path=ready.artifact_path,
+            ttl_seconds=self._ttl,
         )
-        if not coverage_proof.startswith("sha256:"):
-            raise MassResearchDisabledError("READY manifest missing coverage proof digest")
-        membership = str(
-            manifest.get("governed_membership_digest")
-            or manifest.get("membership_digest")
-            or ""
-        )
-        if not membership.startswith("sha256:"):
-            raise MassResearchDisabledError(
-                "READY manifest missing governed membership digest"
-            )
-        raw_proof = str(manifest.get("raw_proof_digest") or "")
-        if not raw_proof.startswith("sha256:"):
-            raise MassResearchDisabledError("READY manifest missing raw proof digest")
-        b0_proof = str(
-            manifest.get("b0_quality_proof_digest")
-            or manifest.get("quality_digest")
-            or ""
-        )
-        if not b0_proof.startswith("sha256:"):
-            raise MassResearchDisabledError("READY manifest missing B0/quality proof digest")
-        source_gen = str(
-            manifest.get("source_generation")
-            or manifest.get("export_generation")
-            or ""
-        )
-        applied_gen = str(
-            manifest.get("applied_sync_generation")
-            or manifest.get("apply_generation")
-            or ""
-        )
-        if not source_gen or not applied_gen:
-            raise MassResearchDisabledError(
-                "READY manifest missing source/applied sync generation pins"
-            )
-        pin = manifest.get("export_apply_pin") or {}
-        if not isinstance(pin, Mapping) or not pin:
-            if source_gen != applied_gen and not manifest.get("export_apply_bound"):
-                raise MassResearchDisabledError(
-                    "READY manifest lacks export/apply generation binding"
-                )
-
-        verified_at = _now()
-        expires_at = verified_at + timedelta(seconds=max(60, self._ttl))
-        attestation_id = str(uuid4())
-        evidence = {
-            "snapshot_id": ready.snapshot_id,
-            "manifest_digest": str(manifest.get("manifest_digest") or ""),
-            "db_digest": db_digest,
-            "coverage_proof": coverage_proof,
-            "membership": membership,
-            "raw_proof": raw_proof,
-            "b0_proof": b0_proof,
-            "source_gen": source_gen,
-            "applied_gen": applied_gen,
-        }
-        body = {
-            "attestation_id": attestation_id,
-            "snapshot_id": ready.snapshot_id,
-            "ready_state": "READY",
-            "ready_manifest_digest": str(manifest.get("manifest_digest") or ""),
-            "immutable_db_digest": db_digest,
-            "coverage_policy_version": str(
-                manifest.get("coverage_policy_version") or ""
-            ),
-            "coverage_proof_digest": coverage_proof,
-            "governed_membership_digest": membership,
-            "raw_proof_digest": raw_proof,
-            "b0_quality_proof_digest": b0_proof,
-            "source_generation": source_gen,
-            "applied_sync_generation": applied_gen,
-            "verified_at": verified_at.isoformat(),
-            "expires_at": expires_at.isoformat(),
-            "evidence_digest": _digest(evidence),
-            "issuer": "ResearchReadinessService/v2",
-        }
-        if not body["ready_manifest_digest"].startswith("sha256:"):
-            raise MassResearchDisabledError("READY manifest_digest missing")
-        sig = _sign_attestation(body, _attestation_secret())
-        return VerifiedResearchReadiness(signature=sig, **body)
-
-
-def _file_sha256(path: Path) -> str:
-    h = hashlib.sha256()
-    with path.open("rb") as fh:
-        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
-            h.update(chunk)
-    return "sha256:" + h.hexdigest()
 
 
 def require_mass_research_start(
