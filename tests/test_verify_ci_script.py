@@ -446,7 +446,7 @@ def test_workers_builds_wrapper_is_fail_closed_and_hands_off_to_verify_ci() -> N
     assert "WORKERS_CI=1 is required" in outside.stderr
 
 
-def test_workers_builds_doc_names_native_check_and_deprecates_ci_aggregate() -> None:
+def test_workers_builds_doc_records_live_native_check_and_deprecates_ci_aggregate() -> None:
     doc = WORKERS_BUILDS_DOC.read_text(encoding="utf-8")
     assert WORKERS_BUILDS_DOC.is_file()
     assert "scripts/verify_ci.sh" in doc
@@ -458,7 +458,13 @@ def test_workers_builds_doc_names_native_check_and_deprecates_ci_aggregate() -> 
     assert "deprecated" in doc.lower()
     assert "ci-aggregate" in doc
     assert "CI_LANE_TOKEN" in doc
-    assert "HUMAN" in doc
-    assert "not live" in doc.lower() or "not exist" in doc.lower() or "does not exist" in doc.lower()
+    assert "Workers Builds: quant-platform-ci-aggregate-staging" in doc
+    assert "app_id" in doc
+    assert "85455" in doc
+    assert "bash scripts/workers_builds_verify_ci.sh" in doc
+    assert "SKIP_DEPENDENCY_INSTALL=1" in doc
+    assert "native check is not live" not in doc.lower()
+    assert "does not exist live" not in doc.lower()
+    assert "GET /builds/tokens returned no" not in doc
     assert "do not delete" in doc.lower() or "abolish" in doc.lower()
     assert "repo-root" in doc.lower() or "repository root" in doc.lower()

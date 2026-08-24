@@ -7,7 +7,9 @@ Architecture: [`docs/architecture.md`](../architecture.md) — CI/CD is Cloudfla
 
 This document is the operator map for:
 
-1. **Repo-root Workers Build** whose build command is [`scripts/verify_ci.sh`](../../scripts/verify_ci.sh).
+1. **Repo-root Workers Build** whose build command is
+   [`scripts/workers_builds_verify_ci.sh`](../../scripts/workers_builds_verify_ci.sh),
+   which hands authority to [`scripts/verify_ci.sh`](../../scripts/verify_ci.sh).
 2. The **native GitHub check run** posted by the Cloudflare Workers & Pages GitHub App (required check).
 3. Product-lane Builds (informational only).
 4. Deprecated **ci-aggregate** receipts (not proof a Cloudflare Build ran).
@@ -15,23 +17,29 @@ This document is the operator map for:
 Mass / READY / GO stay unarmed. A green check is not production publication and is
 not a research API.
 
-**The native GitHub App check does not exist live in this commit.** The
-Cloudflare Builds API repository connection exists, but creation of the
-repo-root Build is blocked on a user-owned Workers Builds API token. Branch
-protection is unchanged and CI mandatory closure is not claimed.
+**The native GitHub App check is live and required on `main`.** Its expected
+source is pinned to the Cloudflare Workers & Pages GitHub App; a same-named PAT
+status cannot satisfy branch protection.
 
-Current live operator state (2026-08-24 JST):
+Current live operator state (2026-08-25 JST):
 
 - Cloudflare repository connection:
   `31c86c8c-0883-4b4b-a8ca-dd821817dfab`
   (`github`, account `ddnne`, repository `ddnne/quant-platform`).
-- The isolated staging CI Worker exists and is private; its active candidate
-  version is `ae98854d-7766-4664-8f21-47651dfe51e1`.
-- `GET /builds/tokens` returned no Build token. The Builds API rejects Build
-  configuration creation without `build_token_uuid`.
-- A HUMAN must create/select that token in the Cloudflare dashboard (and
-  complete the GitHub App installation if prompted). This is the only remaining
-  credential operation for the native check. Do not substitute a PAT status.
+- Private CI Worker: `quant-platform-ci-aggregate-staging`; script tag
+  `6fb2d1474f884b33aa2be98b6a4bcacf`. The CI deploy command is the no-op
+  `true`, so a green check publishes no product Worker.
+- Build token UUID: `c43eaa86-018f-47c3-a67d-327f98b424d6`; name:
+  `Workers Builds - quant-platform root CI - 2026-08-25`. The secret value was
+  neither retrieved nor recorded.
+- Non-production trigger: `d9d45236-635c-42cc-a966-6360a6f3c076`; production
+  trigger: `53389400-a65c-467f-9634-72861cc3fe68`. Both use repository root
+  `/`, build `bash scripts/workers_builds_verify_ci.sh`, deploy `true`, cache
+  disabled, and `SKIP_DEPENDENCY_INSTALL=1`.
+- Native context: `Workers Builds: quant-platform-ci-aggregate-staging`, GitHub
+  App ID `85455`. Build `ce57148b-6c5f-4fc0-9edf-fcf15948011a` passed at commit
+  `9b2397f1067781741b0bd8d72b5bc8015a42fec2`; check run `97625670308` concluded
+  `success`.
 
 ## Authority (required check)
 
@@ -44,13 +52,13 @@ receipts are not.
 
 | Signal | Role |
 |---|---|
-| Native GitHub check from the Cloudflare GitHub App (repo-root Build) | **required** merge check, once a HUMAN connects the App and sets branch protection **expected source** to that App |
+| Native GitHub check from the Cloudflare GitHub App (repo-root Build) | **required** merge check; `main` pins context `Workers Builds: quant-platform-ci-aggregate-staging` to App ID `85455` |
 | Six product-lane Workers Builds / PR comments / per-worker check runs | **informational** |
-| `ci-aggregate` Worker + PAT `GITHUB_STATUS_TOKEN` + `CI_LANE_TOKEN` receipts | **deprecated** — not SoT; abolish **after** the native check exists. Do not delete [`platform/workers/ci-aggregate`](../../platform/workers/ci-aggregate/) in this change |
+| `ci-aggregate` Worker + PAT `GITHUB_STATUS_TOKEN` + `CI_LANE_TOKEN` receipts | **deprecated** — retired as merge authority; not SoT. Do not delete [`platform/workers/ci-aggregate`](../../platform/workers/ci-aggregate/) in this change |
 
-Branch protection must require the native check **from that App** (expected
-source / `checks[].app_id` = Cloudflare Workers & Pages). A PAT-posted context
-named `ci-aggregate` is not a substitute for a Cloudflare Build.
+Branch protection requires the exact native context above with expected source
+`checks[].app_id = 85455`. A PAT-posted context named `ci-aggregate` is not a
+substitute for a Cloudflare Build.
 
 ## Repo-root Build (authoritative)
 
@@ -60,7 +68,7 @@ Connect **one** Workers Build on repository `ddnne/quant-platform`:
 |---|---|
 | Root directory | repository root (`.`) |
 | Build command | `bash scripts/workers_builds_verify_ci.sh` |
-| Deploy command | **not** `npx wrangler deploy` of a product Worker. Do not auto-promote. Use a no-op or `npx wrangler versions upload` of a dedicated non-product CI Worker **after** a HUMAN creates it |
+| Deploy command | `true` (no-op; never product publication or auto-promotion) |
 | Watch paths | unset (always run `verify_ci.sh`) |
 
 Set build variable `SKIP_DEPENDENCY_INSTALL=1`. The repository wrapper probes
@@ -83,20 +91,19 @@ asdf rebuild.
 
 Workers Builds injects `WORKERS_CI_COMMIT_SHA`. Do not invent a SHA.
 
-## HUMAN steps (repository connected; native check is not live yet)
+## Required-check activation and smoke evidence
 
-Isolation does **not** do these. Do not mint `CI_LANE_TOKEN` / `GITHUB_STATUS_TOKEN`.
-Do not deploy production.
-
-1. In the Cloudflare dashboard, create/select the user-owned Workers Builds API
-   token and complete the Cloudflare Workers & Pages GitHub App installation if
-   the existing repository connection requests it.
-2. Create the repo-root Workers Build with the table above.
-3. Observe the native check name and GitHub App ID on an actual build.
-4. Set branch protection / ruleset **required status checks** to that native check, with **expected source** = the Cloudflare GitHub App. Do not leave PAT context `ci-aggregate` as the sole required check once the native check exists.
-5. Fail/pass smoke: a **fail** SHA must be unmergeable; a **pass** SHA must post the native App check (not a hand-rolled status).
-
-Until those steps land, CI is **not** mandatory-complete.
+- `main` branch protection remains strict and now requires only the exact native
+  context with expected source App ID `85455`. Admin enforcement and the other
+  protection fields were preserved.
+- Failure smoke PR #34: native check `FAILURE`; GitHub reported
+  `mergeStateStatus=BLOCKED`. The disposable branch was then deleted.
+- Success smoke PR #33, temporarily evaluated against `main` at
+  `9b2397f1067781741b0bd8d72b5bc8015a42fec2`: native check `SUCCESS`; GitHub
+  reported `mergeStateStatus=CLEAN`. The PR was restored to its original stacked
+  base and Draft state after the observation.
+- No `CI_LANE_TOKEN` or `GITHUB_STATUS_TOKEN` was minted. No smoke operation
+  deployed production.
 
 ## Product lanes (informational)
 
@@ -129,8 +136,10 @@ already ran every worker through `verify_ci.sh`.
 
 ## Mandatory CI vs explicit promote
 
-Workers Builds will **upload a version** whenever the deploy command runs.
-That is not the same as promoting the Active Deployment.
+The authoritative repo-root lane uses deploy command `true` and uploads no
+version. A product lane configured with `npx wrangler versions upload` stores a
+version when that deploy command runs; that is not the same as promoting the
+Active Deployment.
 
 | Step | Command | When |
 |---|---|---|
@@ -166,10 +175,10 @@ Worker: [`platform/workers/ci-aggregate`](../../platform/workers/ci-aggregate/)
 That is not proof a Cloudflare Build ran `verify_ci.sh`. A client with
 `CI_LANE_TOKEN` can post `pass` without Workers Builds.
 
-Keep the Worker **in tree**. `verify_ci.sh` still typechecks it. **Abolish** the
-Worker, PAT `GITHUB_STATUS_TOKEN`, and `CI_LANE_TOKEN` **after** the native
-GitHub App check exists and is the required check with the expected source set.
-Do not delete the Worker in this change. Do not mint those tokens here.
+Keep the Worker **in tree**. `verify_ci.sh` still typechecks it. The native
+GitHub App check is now required with the expected source, so the PAT receipt
+path is retired as authority. Physical Worker removal is a separate cleanup;
+do not delete it in this change and do not mint legacy tokens here.
 
 Print-only first-deploy helper (still print-only; not a producer):
 [`scripts/ci_aggregate_first_deploy.sh`](../../scripts/ci_aggregate_first_deploy.sh).
@@ -195,7 +204,7 @@ Do not accept a GitHub PR comment as a success signal.
 - Does not skip missing `node_modules` or missing lockfiles.
 - Does not `wrangler deploy` to production as a side effect of a green check.
 - Does not arm Mass / READY / GO.
-- Does not claim the Cloudflare native check exists live.
+- Does not treat a green native check as product publication or READY / GO.
 - Does not mint `CI_LANE_TOKEN` / `GITHUB_STATUS_TOKEN`.
 
 ## Public surfaces (preview vs production)

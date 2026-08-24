@@ -1,4 +1,4 @@
-# Phase 6.2 operational closure record — 2026-08-24
+# Phase 6.2 operational closure record — 2026-08-24–25
 
 This is an evidence record, not a GO declaration. Code/tree closure, isolated
 staging deployment, and live data readiness are reported independently.
@@ -12,8 +12,9 @@ staging deployment, and live data readiness are reported independently.
 - Replacement is a lossless, chronological 12-PR pointer stack. It preserves
   every final-tree file and commit; it does not cherry-pick, squash, or perform
   drop-based history surgery.
-- Production deployment and `main` merge remain prohibited until the native
-  Cloudflare GitHub App check is observed and required by expected source.
+- The native Cloudflare GitHub App check is observed and required by expected
+  source. Production deployment and `main` merge remain gated on the lossless
+  PR sequence and its strict per-head checks.
 
 ## Implemented closure
 
@@ -46,6 +47,13 @@ staging deployment, and live data readiness are reported independently.
   - top-level Wrangler environment pin: verifier unit tests and shell syntax PASS.
 - Final integrated Python suite on the closure tree: 1,572 tests collected,
   exit 0. A local PASS is not the GitHub merge authority.
+- Native Workers Build `ce57148b-6c5f-4fc0-9edf-fcf15948011a` at closure commit
+  `9b2397f1067781741b0bd8d72b5bc8015a42fec2`: PASS.
+  - Python: 1,567 passed, 7 skipped in the Cloudflare image.
+  - Catalog freeze and Evaluation IR schema/codec: PASS.
+  - All seven Workers completed clean `npm ci`, tests, typecheck, Wrangler
+    dry-run, and generated types checks; `verify_ci: ok`.
+  - Deploy command `true`: PASS; no Worker version or product deployment.
 
 ## Isolated Cloudflare staging
 
@@ -87,19 +95,30 @@ Production queues were provisioned but no production Worker was deployed:
 
 ## Native Workers Builds gate
 
-- Cloudflare Git repository connection was created:
-  `31c86c8c-0883-4b4b-a8ca-dd821817dfab` for
-  `ddnne/quant-platform`.
-- Builds limits are readable, but `GET /builds/tokens` returns an empty list.
-- Creating the Build through the API fails closed because
-  `build_token_uuid` is required.
-- Wrangler OAuth and the connected Cloudflare API session cannot create a
-  user API token. Environment and keychain searches found no suitable token.
-- Required HUMAN action: create/select a Workers Builds API token in the
-  Cloudflare dashboard and complete the GitHub App installation if prompted.
-  Then configure repo root `.`, build `bash scripts/verify_ci.sh`, no-op deploy,
-  observe the native App check name/source, and replace the legacy required
-  `ci-aggregate` context only after fail/pass smoke.
+- Repository connection `31c86c8c-0883-4b4b-a8ca-dd821817dfab` is active for
+  `ddnne/quant-platform`. The private CI Worker script tag is
+  `6fb2d1474f884b33aa2be98b6a4bcacf`.
+- Build token `c43eaa86-018f-47c3-a67d-327f98b424d6` was created through the
+  authenticated dashboard. Its secret value was neither retrieved nor recorded.
+- Non-production trigger `d9d45236-635c-42cc-a966-6360a6f3c076` and production
+  trigger `53389400-a65c-467f-9634-72861cc3fe68` both run repository root `/`,
+  build `bash scripts/workers_builds_verify_ci.sh`, deploy `true`, and set
+  `SKIP_DEPENDENCY_INSTALL=1`.
+- Bootstrap investigation remained fail-closed:
+  - `422e0115-0433-4ef2-a51b-110326b87d50`: default Python 3.13 lacked `_sqlite3`.
+  - `866d4d5f…`: asdf Python 3.11.15 also lacked `_sqlite3`.
+  - `cc3d61f6…`: build user is unprivileged `buildbot`; sudo/apt repair is unavailable.
+  - `a9f3099d…`: `/usr/bin/python3` 3.12.3 with SQLite 3.45.1 passed a live query.
+  - `1fc9e3d4…`: distro stdlib `venv` lacked ensurepip.
+  - `e071910a-2d79-4cd5-9ef5-c30d8f031e80`: pinned `virtualenv` wrapper worked; two helper PATH tests failed.
+  - `b7daedbe-aabe-42ad-aa26-cd0d19cfd5af`: one remaining host `venv` package-dependent test failed; 1,566 passed.
+  - `ce57148b-6c5f-4fc0-9edf-fcf15948011a`: corrected host-independent contract test; full PASS.
+- Native context `Workers Builds: quant-platform-ci-aggregate-staging`, App ID
+  `85455`, is the strict required check on `main`; legacy `ci-aggregate` is no
+  longer required. Check run `97625670308` is the first full PASS evidence.
+- Fail/pass protection smoke: PR #34 was `BLOCKED` on native `FAILURE`; PR #33,
+  temporarily evaluated against `main`, was `CLEAN` on native `SUCCESS`. The
+  disposable failed branch was deleted and #33 was restored to its stack base.
 
 ## Live quant-mcp remeasurement
 
@@ -124,8 +143,8 @@ Measured read-only on 2026-08-24; no live state was repaired or invented.
 
 ## Decision
 
-**Pilot / Mass / Phase 7: NO-GO.** The code paths fail closed, but the live
-conjunction is false: projection stale, READY absent, B0 unknown, applied cursor
-absent, four coverage datasets partial, and native Cloudflare merge authority
-not yet observed. No receipt, local test, staging deployment, or paper evidence
-is promoted into READY or GO authority.
+**Exact-four Pilot / Mass Research: NO-GO. Phase 7 Foundation may continue.**
+Cloudflare merge authority is live and required, but the operational readiness
+conjunction remains false: projection stale, READY absent, B0 unknown, applied
+cursor absent, and four coverage datasets partial. No receipt, local test,
+staging deployment, or paper evidence is promoted into READY or GO authority.
