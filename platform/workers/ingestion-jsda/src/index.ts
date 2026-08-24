@@ -5,17 +5,22 @@
  * - Outbound host allowlist only (jsda.or.jp / www / market)
  * - Immutable raw keys: raw/jsda/{dataset}/{segment_id}/{sha256}.{ext}
  * - Archive discovery: year indexes + data files (not maxDataFiles=3 heuristic PASS)
+ * - MAX_YEAR_PAGES default "1" is a rate/safety cap, not pagination exhaustion
  * - Structured XLS/XLSX parse stays trusted Python downstream (not TS)
  */
+
+import { authorized } from "./authorized";
+import { json } from "./http_json";
+import { sha256Hex } from "./sha256";
 
 export interface Env {
   RAW_BUCKET: R2Bucket;
   DB: D1Database;
   INGESTION_RUN_TOKEN?: string;
   USER_AGENT?: string;
-  /** 0 = unlimited data-file fetches; small N for min-segment runs. */
+  /** 0 = unlimited data-file fetches; small N is a rate/safety cap, not exhaustion. */
   MAX_DATA_FILES?: string;
-  /** 0 = all year archive pages; small N for min-segment runs. */
+  /** Rate/safety cap. Default "1". 0 = unlimited. Cap-hit is not exhaustion. */
   MAX_YEAR_PAGES?: string;
 }
 
@@ -43,21 +48,6 @@ type DatasetId =
   | "jsda_otc_bond_reference_prices"
   | "jsda_tokyo_repo_rates"
   | "jsda_corporate_bond_transactions";
-
-async function tokenMatches(provided: string, expected: string): Promise<boolean> {
-  const enc = new TextEncoder();
-  const [a, b] = await Promise.all([
-    crypto.subtle.digest("SHA-256", enc.encode(provided)),
-    crypto.subtle.digest("SHA-256", enc.encode(expected)),
-  ]);
-  return crypto.subtle.timingSafeEqual(a, b);
-}
-
-async function authorized(request: Request, expected?: string): Promise<boolean> {
-  if (!expected) return false;
-  const got = request.headers.get("X-Ingestion-Token") || "";
-  return tokenMatches(got, expected);
-}
 
 const MAX_ARTIFACT_BYTES = 32 * 1024 * 1024; // 32 MiB hard cap per artifact
 
@@ -110,11 +100,6 @@ function extractLinks(html: string, base: string): string[] {
     if (abs) out.push(abs);
   }
   return [...new Set(out)];
-}
-
-async function sha256Hex(buf: ArrayBuffer): Promise<string> {
-  const dig = await crypto.subtle.digest("SHA-256", buf);
-  return [...new Uint8Array(dig)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 async function fetchAllowed(
@@ -216,7 +201,7 @@ async function putManifest(
 ): Promise<string> {
   const text = JSON.stringify(manifest, null, 2);
   const bytes = new TextEncoder().encode(text);
-  const digest = await sha256Hex(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
+  const digest = await sha256Hex(bytes);
   const key = `raw/jsda/${dataset}/${segmentId}/manifest-${digest.slice(0, 16)}.json`;
   await env.RAW_BUCKET.put(key, text, {
     httpMetadata: { contentType: "application/json" },
@@ -231,14 +216,88 @@ async function putManifest(
   return key;
 }
 
+type DiscoveryRunStatus = "pass" | "fail" | "partial";
+
+export interface DiscoveryCapInput {
+  yearPagesFound: number;
+  maxYearPages: number;
+  dataFilesDiscovered: number;
+  dataFilesStored: number;
+  maxDataFiles: number;
+  fetchErrors: number;
+}
+
+export interface DiscoveryCapSemantics {
+  year_page_cap_hit: boolean;
+  data_file_cap_hit: boolean;
+  pagination_exhausted: boolean;
+  status: DiscoveryRunStatus;
+}
+
+/** 0 = unlimited. Unset MAX_YEAR_PAGES defaults to 1 (rate/safety, not exhaustion). */
+export function parseYearPageCap(raw: string | undefined): number {
+  return Math.max(0, Math.min(100, Number(raw ?? "1") || 0));
+}
+
+/** 0 = unlimited. Unset MAX_DATA_FILES stays unlimited. */
+export function parseDataFileCap(raw: string | undefined): number {
+  return Math.max(0, Math.min(10_000, Number(raw ?? "0") || 0));
+}
+
+/**
+ * Rate/safety caps are not archive exhaustion.
+ * Cap-truncated discovery is never coverage-eligible.
+ */
+export function discoveryCapSemantics(
+  input: DiscoveryCapInput,
+): DiscoveryCapSemantics {
+  const year_page_cap_hit =
+    input.maxYearPages > 0 && input.yearPagesFound > input.maxYearPages;
+  const data_file_cap_hit =
+    input.maxDataFiles > 0 && input.dataFilesDiscovered > input.maxDataFiles;
+  const capHit = year_page_cap_hit || data_file_cap_hit;
+  const fullFetch =
+    input.dataFilesStored === input.dataFilesDiscovered &&
+    input.fetchErrors === 0 &&
+    input.dataFilesStored > 0;
+  const pagination_exhausted = fullFetch && !capHit;
+
+  let status: DiscoveryRunStatus = "partial";
+  if (input.dataFilesDiscovered === 0 && input.yearPagesFound === 0) {
+    status = "partial";
+  } else if (pagination_exhausted) {
+    status = "pass";
+  } else if (input.dataFilesStored === 0 && !capHit) {
+    status = "fail";
+  } else {
+    status = "partial";
+  }
+  return {
+    year_page_cap_hit,
+    data_file_cap_hit,
+    pagination_exhausted,
+    status,
+  };
+}
+
+/** Coverage-eligible only when pagination truly exhausted (cap-hit never is). */
+export function discoveryIsCoverageEligible(
+  sem: Pick<DiscoveryCapSemantics, "pagination_exhausted" | "status">,
+): boolean {
+  return sem.status === "pass" && sem.pagination_exhausted === true;
+}
+
 interface CollectResult {
   dataset: DatasetId;
-  status: "pass" | "fail" | "partial";
+  status: DiscoveryRunStatus;
   expectedPages: number;
   fetchedPages: number;
   filesStored: number;
   keys: string[];
   detail: string;
+  pagination_exhausted: boolean;
+  year_page_cap_hit: boolean;
+  data_file_cap_hit: boolean;
 }
 
 async function collectWithDiscovery(
@@ -261,6 +320,9 @@ async function collectWithDiscovery(
         filesStored: 0,
         keys,
         detail: `root index HTTP ${root.status}`,
+        pagination_exhausted: false,
+        year_page_cap_hit: false,
+        data_file_cap_hit: false,
       };
     }
     const rootHtml = new TextDecoder().decode(root.bytes);
@@ -277,24 +339,20 @@ async function collectWithDiscovery(
     keys.push(rootPut.key);
 
     const rootLinks = extractLinks(rootHtml, rootIndex);
-    let yearPages = rootLinks.filter(isYearArchive);
+    const yearPagesFound = rootLinks.filter(isYearArchive);
     // Prefer highest archive year first (list order on index is not reliable).
-    yearPages = yearPages.slice().sort((a, b) => {
+    let yearPages = yearPagesFound.slice().sort((a, b) => {
       const ya = Number(YEAR_ARCHIVE_RE.exec(new URL(a).pathname)?.[1] || 0);
       const yb = Number(YEAR_ARCHIVE_RE.exec(new URL(b).pathname)?.[1] || 0);
       return yb - ya;
     });
-    const maxYearPages = Math.max(
-      0,
-      Math.min(100, Number(env.MAX_YEAR_PAGES ?? "0") || 0),
-    );
+    const maxYearPages = parseYearPageCap(env.MAX_YEAR_PAGES);
     if (maxYearPages > 0) {
       yearPages = yearPages.slice(0, maxYearPages);
     }
     const dataFromRoot = rootLinks.filter(isDataUrl);
 
-    // Crawl year archives when present (OTC style).
-    const pageUrls = [rootIndex, ...yearPages];
+    // Crawl year archives when present (OTC style). Cap is a rate/safety limit.
     const allData = new Set<string>(dataFromRoot);
     let fetchedPages = 1;
     for (const yearUrl of yearPages) {
@@ -323,10 +381,7 @@ async function collectWithDiscovery(
 
     // Fetch discovered data files. Optional max_files (query/env) for min-segment
     // evidence closure without multi-hour full-archive crawls.
-    const maxFiles = Math.max(
-      0,
-      Math.min(10_000, Number(env.MAX_DATA_FILES ?? "0") || 0),
-    );
+    const maxFiles = parseDataFileCap(env.MAX_DATA_FILES);
     let stored = 0;
     const errors: string[] = [];
     const artifacts: { url: string; key: string; digest: string }[] = [];
@@ -362,42 +417,44 @@ async function collectWithDiscovery(
       }
     }
 
+    const sem = discoveryCapSemantics({
+      yearPagesFound: yearPagesFound.length,
+      maxYearPages,
+      dataFilesDiscovered: allData.size,
+      dataFilesStored: stored,
+      maxDataFiles: maxFiles,
+      fetchErrors: errors.length,
+    });
+
     const manifestKey = await putManifest(env, dataset, `discovery_${day}`, {
       dataset,
       rootIndex,
-      discovered_year_pages: yearPages.length,
+      discovered_year_pages: yearPagesFound.length,
+      fetched_year_pages: yearPages.length,
       discovered_data_files: allData.size,
       stored,
+      year_page_cap_hit: sem.year_page_cap_hit,
+      data_file_cap_hit: sem.data_file_cap_hit,
+      pagination_exhausted: sem.pagination_exhausted,
       artifacts,
       errors: errors.slice(0, 20),
       fetched_at: new Date().toISOString(),
     });
     keys.push(manifestKey);
 
-    // Complete acquisition only when discovery scope fully fetched without errors
-    // and we observed at least the expected discovery surface.
-    // Repo series may only expose a single timeseries file on root — that is OK
-    // if all discovered data files were stored.
-    let status: "pass" | "partial" | "fail" = "partial";
-    if (allData.size === 0 && yearPages.length === 0) {
-      status = "partial"; // index only; deeper discovery may be needed
-    } else if (stored === allData.size && errors.length === 0 && stored > 0) {
-      status = "pass";
-    } else if (stored === 0) {
-      status = "fail";
-    } else {
-      status = "partial";
-    }
-
     return {
       dataset,
-      status,
-      expectedPages: pageUrls.length,
+      status: sem.status,
+      expectedPages: 1 + yearPagesFound.length,
       fetchedPages,
       filesStored: stored,
       keys,
+      pagination_exhausted: sem.pagination_exhausted,
+      year_page_cap_hit: sem.year_page_cap_hit,
+      data_file_cap_hit: sem.data_file_cap_hit,
       detail:
-        `years=${yearPages.length} data_discovered=${allData.size} stored=${stored}` +
+        `years=${yearPages.length}/${yearPagesFound.length} data_discovered=${allData.size}` +
+        ` stored=${stored} pagination_exhausted=${sem.pagination_exhausted}` +
         (errors.length ? ` errors=${errors.slice(0, 5).join("|")}` : ""),
     };
   } catch (e) {
@@ -408,6 +465,9 @@ async function collectWithDiscovery(
       fetchedPages: 0,
       filesStored: 0,
       keys,
+      pagination_exhausted: false,
+      year_page_cap_hit: false,
+      data_file_cap_hit: false,
       detail: (e as Error).message || String(e),
     };
   }
@@ -491,7 +551,12 @@ async function drainJobBatch(
         )
           .bind(new Date().toISOString(), job.job_id)
           .run();
-        results.push({ job_id: job.job_id, status: "fail", detail: "unsupported" });
+        results.push({
+          job_id: job.job_id,
+          status: "fail",
+          detail: "unsupported",
+          pagination_exhausted: false,
+        });
       }
     } catch (e) {
       await env.DB.prepare(
@@ -499,10 +564,22 @@ async function drainJobBatch(
       )
         .bind((e as Error).message.slice(0, 500), new Date().toISOString(), job.job_id)
         .run();
-      results.push({ job_id: job.job_id, status: "retry", detail: (e as Error).message });
+      results.push({
+        job_id: job.job_id,
+        status: "retry",
+        detail: (e as Error).message,
+        pagination_exhausted: false,
+      });
     }
   }
-  return { mode: "job_queue", drained: results.length, results };
+  return {
+    mode: "job_queue",
+    drained: results.length,
+    pagination_exhausted:
+      results.length > 0 &&
+      results.every((r) => r.pagination_exhausted === true),
+    results,
+  };
 }
 
 async function runAll(
@@ -525,6 +602,7 @@ async function runAll(
       mode: "durable_job_queue",
       enqueued,
       ...drain,
+      pagination_exhausted: drain.pagination_exhausted === true,
     };
     try {
       await env.DB.prepare(
@@ -559,12 +637,15 @@ async function runAll(
   const finishedAt = new Date().toISOString();
   const status =
     failed > 0 ? "partial" : partial > 0 ? "partial" : passed === results.length ? "pass" : "partial";
+  const pagination_exhausted =
+    results.length > 0 && results.every((r) => r.pagination_exhausted);
   const summary = {
     startedAt,
     finishedAt,
     status,
     triggeredBy,
     mode: "manual_full_discovery",
+    pagination_exhausted,
     datasetCount: results.length,
     passed,
     failed,
@@ -588,7 +669,10 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     if (url.pathname === "/health") {
-      return Response.json({
+      if (request.method !== "GET") {
+        return json({ error: "GET required" }, 405);
+      }
+      return json({
         ok: true,
         worker: "ingestion-jsda",
         datasets: 3,
@@ -598,8 +682,11 @@ export default {
       });
     }
     if (url.pathname === "/v1/run") {
+      if (request.method !== "POST") {
+        return json({ error: "POST required" }, 405);
+      }
       if (!(await authorized(request, env.INGESTION_RUN_TOKEN))) {
-        return Response.json({ error: "unauthorized" }, { status: 401 });
+        return json({ error: "unauthorized" }, 401);
       }
       const ds = url.searchParams.get("dataset") || "";
       const allowed: DatasetId[] = [
@@ -610,13 +697,13 @@ export default {
       const only =
         ds && (allowed as string[]).includes(ds) ? (ds as DatasetId) : undefined;
       const summary = await runAll(env, "manual", only);
-      return Response.json({ ok: summary.status === "pass", summary });
+      return json({ ok: summary.status === "pass", summary });
     }
-    return Response.json({ error: "not found" }, { status: 404 });
+    return json({ error: "not found" }, 404);
   },
 
   async scheduled(
-    _event: ScheduledEvent,
+    _controller: ScheduledController,
     env: Env,
     ctx: ExecutionContext,
   ): Promise<void> {
