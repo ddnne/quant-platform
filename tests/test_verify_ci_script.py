@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import os
+import stat
+import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -38,6 +40,37 @@ def _code_lines(src: str) -> list[tuple[int, str]]:
     return out
 
 
+def _extract_bash_function(src: str, name: str) -> str:
+    lines = src.splitlines(keepends=True)
+    out: list[str] = []
+    capturing = False
+    depth = 0
+    for line in lines:
+        if not capturing:
+            if line.lstrip().startswith(f"{name}()"):
+                capturing = True
+            else:
+                continue
+        code = line.split("#", 1)[0]
+        depth += code.count("{") - code.count("}")
+        out.append(line)
+        if depth <= 0:
+            break
+    body = "".join(out).strip()
+    assert body, f"function {name}() not found in {SCRIPT}"
+    return body
+
+
+def _helpers_script() -> str:
+    src = _src()
+    return "\n".join(
+        (
+            _extract_bash_function(src, "python_is_311_plus"),
+            _extract_bash_function(src, "find_python_311_plus"),
+        )
+    )
+
+
 def test_verify_ci_script_exists_executable_and_covers_required_steps() -> None:
     assert SCRIPT.is_file(), SCRIPT
     assert os.access(SCRIPT, os.X_OK), f"{SCRIPT} must be executable"
@@ -47,6 +80,10 @@ def test_verify_ci_script_exists_executable_and_covers_required_steps() -> None:
     assert "3.11" in src
     assert "sys.version_info" in src
     assert "do not silently use system python" in src
+    assert "find_python_311_plus" in src
+    assert "-m venv" in src
+    assert "python3.11" in src
+    assert "bootstrap .venv" in src
     assert "pip install -e" in src
     assert ".[dev]" in src
     assert "pytest tests/" in src
@@ -124,14 +161,15 @@ def test_verify_ci_bans_legacy_peer_deps_skips_and_live_deploy() -> None:
                 f"{SCRIPT}:{i} must not live wrangler deploy"
             )
         if "python3" in code or "python3." in code:
-            # Error text / comments may mention python3.11 for create instructions;
-            # executable code must not fall back to system python.
+            # Host python3.11 / python3>=3.11 may be located via command -v
+            # only to create .venv. Pytest still runs under .venv/bin/python.
             stripped = code.strip()
             if stripped and not stripped.startswith("echo "):
                 assert ".venv" in src
-                assert "command -v" not in code or "npm" in code, (
-                    f"{SCRIPT}:{i} must not silently use system python"
-                )
+                if "command -v" in code and "npm" not in code:
+                    assert "python3.11" in src
+                    assert "-m venv" in src
+                    assert "find_python_311_plus" in src
 
 
 def test_verify_ci_evaluation_ir_invokes_schema_and_codec_not_only_presence() -> None:
@@ -157,3 +195,137 @@ def test_verify_ci_evaluation_ir_invokes_schema_and_codec_not_only_presence() ->
     assert "assert_evaluation_ir_codec_py_frozen()" in block
     assert "assert_evaluation_ir_types_py_frozen()" in block
     assert "assert_evaluation_ir_encode_keys_match_schema()" in block
+
+
+def test_verify_ci_syntax_and_bootstrap_helpers_execute() -> None:
+    syntax = subprocess.run(
+        ["bash", "-n", str(SCRIPT)],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert syntax.returncode == 0, syntax.stderr
+    helpers = _helpers_script()
+    probe = subprocess.run(
+        [
+            "bash",
+            "-c",
+            helpers
+            + """
+set -euo pipefail
+found="$(find_python_311_plus)"
+test -n "$found"
+python_is_311_plus "$found"
+"$found" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)'
+""",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert probe.returncode == 0, probe.stderr + probe.stdout
+
+
+def test_verify_ci_bootstrap_creates_venv_when_missing(tmp_path: Path) -> None:
+    helpers = _helpers_script()
+    script = f"""
+set -euo pipefail
+{helpers}
+ROOT="{tmp_path}"
+venv_py="$ROOT/.venv/bin/python"
+test ! -x "$venv_py"
+host_py="$(find_python_311_plus)"
+"$host_py" -m venv "$ROOT/.venv"
+test -x "$venv_py"
+python_is_311_plus "$venv_py"
+"""
+    created = subprocess.run(
+        ["bash", "-c", script],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert created.returncode == 0, created.stderr + created.stdout
+    venv_py = tmp_path / ".venv" / "bin" / "python"
+    assert venv_py.is_file() or venv_py.is_symlink()
+
+
+def test_verify_ci_find_python_skips_system_39(tmp_path: Path) -> None:
+    fake_py = tmp_path / "python3"
+    fake_py.write_text("#!/bin/bash\nexit 1\n", encoding="utf-8")
+    fake_py.chmod(fake_py.stat().st_mode | stat.S_IXUSR)
+    env = os.environ.copy()
+    env["PATH"] = os.pathsep.join((str(tmp_path), "/bin", "/usr/bin"))
+    skipped = subprocess.run(
+        [
+            "bash",
+            "-c",
+            _helpers_script()
+            + """
+set -euo pipefail
+if find_python_311_plus; then
+  echo "selected a host python from a 3.9-only PATH" >&2
+  exit 1
+fi
+exit 0
+""",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+    )
+    assert skipped.returncode == 0, skipped.stderr + skipped.stdout
+
+
+def test_verify_ci_existing_venv_below_311_fails(tmp_path: Path) -> None:
+    bin_dir = tmp_path / ".venv" / "bin"
+    bin_dir.mkdir(parents=True)
+    fake = bin_dir / "python"
+    fake.write_text(
+        "#!/bin/bash\n"
+        'if [[ "${1:-}" == "-V" ]]; then echo "Python 3.9.18"; exit 0; fi\n'
+        "exit 1\n",
+        encoding="utf-8",
+    )
+    fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
+    rejected = subprocess.run(
+        [
+            "bash",
+            "-c",
+            _extract_bash_function(_src(), "python_is_311_plus")
+            + f"""
+set -euo pipefail
+venv_py="{fake}"
+if python_is_311_plus "$venv_py"; then
+  echo "accepted Python <3.11 venv" >&2
+  exit 1
+fi
+exit 0
+""",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert rejected.returncode == 0, rejected.stderr + rejected.stdout
+
+
+def test_no_github_actions_workflows() -> None:
+    gha = ROOT / ".github" / "workflows"
+    assert not gha.exists(), (
+        f"{gha} must stay absent; CI is Cloudflare Workers Builds, not GitHub Actions"
+    )
+    listed = subprocess.run(
+        ["git", "ls-files", ".github/workflows"],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert listed.stdout.strip() == "", listed.stdout
