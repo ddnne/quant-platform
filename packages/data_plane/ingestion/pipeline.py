@@ -15,6 +15,13 @@ from typing import List, Optional
 from .common.available_at import validate_available_at
 from .common.paths import raw_path
 from .common.timeutil import now_iso
+from .pipeline_receipts import (
+    _index_text_for_plan,
+    _plan_required_segments,
+    emit_catalog_job_receipt,
+    require_signed_receipt_authority,
+    rollback_governed_catalog_write,
+)
 
 
 @dataclass
@@ -358,19 +365,9 @@ def _run_jquants_catalog(
                     raw_bytes,
                     when,
                 )
-                # Coverage V2 receipt for this job window. Never fakes COMPLETE.
                 # Verify signing authority before structured mutation; upsert commits.
+                # Collection SUCCESS is not Coverage COMPLETE.
                 try:
-                    from data_contracts import coverage_contract_for
-                    from storage.coverage_ledger import (
-                        plan_required_segments,
-                        record_required_segments,
-                    )
-                    from .jquants.receipts import (
-                        emit_segment_receipt,
-                        require_signed_receipt_authority,
-                    )
-
                     authority = require_signed_receipt_authority()
                 except Exception as rec_exc:  # noqa: BLE001
                     return RunReport(
@@ -386,84 +383,17 @@ def _run_jquants_catalog(
                 )
                 n = reg.register("jquants_records", norm)
                 try:
-
-                    params = dict(getattr(job, "params", None) or {})
-                    policy = coverage_contract_for(job.dataset_id)
-                    target_end = (
-                        params.get("to")
-                        or params.get("date")
-                        or str(when)[:10]
+                    emit_catalog_job_receipt(
+                        store,
+                        job=job,
+                        when=when,
+                        raw_bytes=raw_bytes,
+                        rows=rows,
+                        structured_row_count=n,
+                        authority=authority,
                     )
-                    target_end = str(target_end)[:10]
-                    job_start = str(
-                        params.get("from") or params.get("date") or target_end
-                    )[:10]
-                    job_end = target_end
-                    # First plan without expected counts to discover segment ids.
-                    segs = list(
-                        plan_required_segments(
-                            policy, target_end, source="jquants"
-                        )
-                    )
-                    req0 = None
-                    for s in segs:
-                        if s.segment_start <= job_end and s.segment_end >= job_start:
-                            req0 = s
-                            break
-                    if req0 is None and segs:
-                        req0 = segs[-1]
-                    if req0 is not None:
-                        unit = (req0.expected_scope or {}).get(
-                            "expected_item_unit", "source_query"
-                        )
-                        exp_map = None
-                        if (
-                            policy.expected_frequency != "event_driven"
-                            and unit == "source_query"
-                        ):
-                            exp_map = {req0.segment_id: 1}
-                            segs = list(
-                                plan_required_segments(
-                                    policy,
-                                    target_end,
-                                    source="jquants",
-                                    expected_items_by_segment=exp_map,
-                                )
-                            )
-                            req = next(
-                                s for s in segs if s.segment_id == req0.segment_id
-                            )
-                        else:
-                            req = req0
-                        record_required_segments(store._conn, [req])
-                        run_id_row = store._conn.execute(
-                            "SELECT COALESCE(MAX(id), 0) FROM ingestion_run_log"
-                        ).fetchone()
-                        run_id = int(run_id_row[0]) if run_id_row else 0
-                        if unit == "source_query":
-                            obs = 1 if len(rows) > 0 else 0
-                        else:
-                            obs = len(rows)
-                        emit_segment_receipt(
-                            store._conn,
-                            required=req,
-                            run_id=run_id,
-                            raw=raw_bytes,
-                            observed_items=obs,
-                            structured_row_count=n,
-                            raw_row_count=len(rows),
-                            pagination_exhausted=True,
-                            status="SUCCESS",
-                            authority=authority,
-                            commit=False,
-                        )
-                        store._conn.commit()
                 except Exception as rec_exc:  # noqa: BLE001
-                    # Governed: receipt failure must not leave structured rows as PASS.
-                    try:
-                        store._conn.rollback()
-                    except Exception:  # noqa: BLE001
-                        pass
+                    rollback_governed_catalog_write(store)
                     return RunReport(
                         "jquants",
                         kind,

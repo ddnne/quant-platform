@@ -184,8 +184,11 @@ def emit_catalog_job_receipt(
             "SELECT COALESCE(MAX(id), 0) FROM ingestion_run_log"
         ).fetchone()
         run_id = int(run_id_row[0]) if run_id_row else 0
-        raw_count = count_raw_items(rows)
+        # Counts come from signed raw, never expected_items or unrelated rows.
+        raw_count = count_raw_items(raw_bytes)
         obs = observed_items_from_actual(unit=unit, raw_item_count=raw_count)
+        if not raw_bytes:
+            raise ValueError("empty-raw SUCCESS is forbidden")
         emit_segment_receipt(
             store._conn,
             required=req,
