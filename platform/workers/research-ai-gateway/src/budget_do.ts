@@ -13,6 +13,9 @@ export const PILOT_BUDGET_CAPS = {
   auto_promotion: false,
 } as const;
 
+/** Single control-plane ledger name. Caller budget_id is not occupancy. */
+export const CONTROL_PLANE_LEDGER_NAME = "pilot-control-plane";
+
 export type CounterName =
   | "experiment_plans"
   | "generations"
@@ -27,8 +30,22 @@ export type BudgetAmounts = Partial<Record<CounterName, number>>;
 
 export type ReservationStatus = "reserved" | "reconciled" | "released";
 
+export type CachedBudgetResult = {
+  http_status: number;
+  body: unknown;
+};
+
+export type BudgetAuditRecord = {
+  kind: "actual_exceeds_reserved";
+  reservation_id: string;
+  reserved: Counters;
+  actual: Counters;
+  at: number;
+};
+
 export type Reservation = {
   idempotency_key: string;
+  /** Opaque Budget Run ID issued by reserve. Not a caller-invented occupancy id. */
   reservation_id: string;
   amounts: Counters;
   actual: Counters | null;
@@ -37,6 +54,9 @@ export type Reservation = {
   created_at: number;
   reconciled_at: number | null;
   released_at: number | null;
+  request_digest: string | null;
+  cached_result: CachedBudgetResult | null;
+  finalize_error: string | null;
 };
 
 export type Lease = {
@@ -56,6 +76,10 @@ export type LedgerState = {
   reserved: Counters;
   reservations: Record<string, Reservation>;
   leases: Record<string, Lease>;
+  frozen: boolean;
+  frozen_at: number | null;
+  frozen_reason: string | null;
+  audit: BudgetAuditRecord[];
 };
 
 export type BudgetErr = { ok: false; error: string; detail?: string };
@@ -111,6 +135,10 @@ export function emptyLedger(now: number): LedgerState {
     reserved: zeroCounters(),
     reservations: {},
     leases: {},
+    frozen: false,
+    frozen_at: null,
+    frozen_reason: null,
+    audit: [],
   };
 }
 
@@ -239,6 +267,97 @@ function requireIdempotencyKey(raw: unknown): BudgetResult<{ idempotency_key: st
   return { ok: true, idempotency_key: key };
 }
 
+/** Bind a caller Idempotency-Key to a request digest. Missing key uses the digest. */
+export function bindIdempotencyKey(
+  clientKey: string | undefined | null,
+  requestDigest: string,
+): BudgetResult<{ idempotency_key: string; request_digest: string }> {
+  const digest = typeof requestDigest === "string" ? requestDigest.trim() : "";
+  if (!digest) return { ok: false, error: "request_digest required" };
+  const client = typeof clientKey === "string" ? clientKey.trim() : "";
+  if (client) {
+    if (client.length > 256) return { ok: false, error: "idempotency_key too long" };
+    return { ok: true, idempotency_key: client, request_digest: digest };
+  }
+  return { ok: true, idempotency_key: `digest:${digest}`, request_digest: digest };
+}
+
+function counterGreater(name: CounterName, left: number, right: number): boolean {
+  if (name === "cost_usd") return usdMicros(left) > usdMicros(right);
+  return left > right;
+}
+
+function minCounter(name: CounterName, left: number, right: number): number {
+  if (name === "cost_usd") return usdMicros(left) <= usdMicros(right) ? left : right;
+  return Math.min(left, right);
+}
+
+function minCounters(left: Counters, right: Counters): Counters {
+  const out = zeroCounters();
+  for (const name of COUNTERS) {
+    out[name] = minCounter(name, left[name], right[name]);
+  }
+  return out;
+}
+
+export function exceedsReserved(
+  reserved: Counters,
+  actual: Counters,
+): { name: CounterName; reserved: number; actual: number } | null {
+  for (const name of COUNTERS) {
+    if (counterGreater(name, actual[name], reserved[name])) {
+      return { name, reserved: reserved[name], actual: actual[name] };
+    }
+  }
+  return null;
+}
+
+function coerceReservation(raw: Reservation): Reservation {
+  return {
+    ...raw,
+    request_digest: raw.request_digest ?? null,
+    cached_result: raw.cached_result ?? null,
+    finalize_error: raw.finalize_error ?? null,
+  };
+}
+
+function coerceState(state: LedgerState): LedgerState {
+  state.frozen = state.frozen === true;
+  state.frozen_at = state.frozen_at ?? null;
+  state.frozen_reason = state.frozen_reason ?? null;
+  state.audit = Array.isArray(state.audit) ? state.audit : [];
+  const reservations: Record<string, Reservation> = {};
+  for (const [k, v] of Object.entries(state.reservations || {})) {
+    reservations[k] = coerceReservation(v);
+  }
+  state.reservations = reservations;
+  return state;
+}
+
+function closeReservationLease(state: LedgerState, reservation: Reservation, now: number): void {
+  if (!reservation.lease_id) return;
+  const lease = state.leases[reservation.lease_id];
+  if (lease && lease.released_at === null) lease.released_at = now;
+}
+
+function freezeForOverage(
+  state: LedgerState,
+  reservation: Reservation,
+  actual: Counters,
+  now: number,
+): void {
+  state.frozen = true;
+  state.frozen_at = now;
+  state.frozen_reason = "actual_exceeds_reserved";
+  state.audit.push({
+    kind: "actual_exceeds_reserved",
+    reservation_id: reservation.reservation_id,
+    reserved: amountsFromCounters(reservation.amounts),
+    actual: amountsFromCounters(actual),
+    at: now,
+  });
+}
+
 function activeLeaseCount(state: LedgerState): number {
   let n = 0;
   for (const lease of Object.values(state.leases)) {
@@ -266,7 +385,7 @@ export function recoverExpired(state: LedgerState, now: number): number {
 
 async function loadState(storage: BudgetStorage, now: number): Promise<LedgerState> {
   const existing = await storage.get<LedgerState>(STATE_KEY);
-  return existing ? existing : emptyLedger(now);
+  return existing ? coerceState(existing) : emptyLedger(now);
 }
 
 async function saveState(storage: BudgetStorage, state: LedgerState): Promise<void> {
@@ -294,13 +413,19 @@ export async function createBudget(
 
 export async function reserveBudget(
   storage: BudgetStorage,
-  input: { idempotency_key: string; amounts: unknown; acquire_lease?: boolean },
+  input: {
+    idempotency_key: string;
+    amounts: unknown;
+    acquire_lease?: boolean;
+    request_digest?: string;
+  },
   now = Date.now(),
 ): Promise<
   BudgetResult<{
     reservation: Reservation;
     lease: Lease | null;
     existing: boolean;
+    budget_run_id: string;
   }>
 > {
   const key = requireIdempotencyKey(input.idempotency_key);
@@ -308,16 +433,39 @@ export async function reserveBudget(
   const parsed = parseAmounts(input.amounts);
   if (!parsed.ok) return parsed;
   const amounts = parsed.amounts;
+  const digest =
+    typeof input.request_digest === "string" && input.request_digest.trim()
+      ? input.request_digest.trim()
+      : null;
 
   const state = await loadState(storage, now);
   recoverExpired(state, now);
   ensureCreated(state, now);
 
+  if (state.frozen) {
+    await saveState(storage, state);
+    return {
+      ok: false,
+      error: "budget_frozen",
+      detail: state.frozen_reason || "actual_exceeds_reserved",
+    };
+  }
+
   const existing = state.reservations[key.idempotency_key];
   if (existing && existing.status !== "released") {
+    if (digest && existing.request_digest && existing.request_digest !== digest) {
+      await saveState(storage, state);
+      return { ok: false, error: "idempotency_digest_conflict" };
+    }
     const lease = existing.lease_id ? state.leases[existing.lease_id] ?? null : null;
     await saveState(storage, state);
-    return { ok: true, reservation: structuredClone(existing), lease, existing: true };
+    return {
+      ok: true,
+      reservation: structuredClone(existing),
+      lease,
+      existing: true,
+      budget_run_id: existing.reservation_id,
+    };
   }
 
   const over = insufficient(state, amounts);
@@ -361,11 +509,32 @@ export async function reserveBudget(
     created_at: now,
     reconciled_at: null,
     released_at: null,
+    request_digest: digest,
+    cached_result: null,
+    finalize_error: null,
   };
   state.reserved = applyDelta(state.reserved, reservation.amounts, 1);
   state.reservations[key.idempotency_key] = reservation;
   await saveState(storage, state);
-  return { ok: true, reservation, lease, existing: false };
+  return {
+    ok: true,
+    reservation,
+    lease,
+    existing: false,
+    budget_run_id: reservation.reservation_id,
+  };
+}
+
+function applyCachedResult(
+  reservation: Reservation,
+  result: CachedBudgetResult | undefined,
+): void {
+  if (!result) return;
+  const status = Number(result.http_status);
+  reservation.cached_result = {
+    http_status: Number.isInteger(status) && status > 0 ? status : 500,
+    body: result.body,
+  };
 }
 
 export async function reconcileBudget(
@@ -373,6 +542,31 @@ export async function reconcileBudget(
   input: { idempotency_key: string; amounts: unknown },
   now = Date.now(),
 ): Promise<BudgetResult<{ reservation: Reservation; used: Counters }>> {
+  const finalized = await finalizeBudget(
+    storage,
+    { idempotency_key: input.idempotency_key, amounts: input.amounts },
+    now,
+  );
+  if (!finalized.ok) return finalized;
+  return { ok: true, reservation: finalized.reservation, used: finalized.used };
+}
+
+export async function finalizeBudget(
+  storage: BudgetStorage,
+  input: {
+    idempotency_key: string;
+    amounts: unknown;
+    result?: CachedBudgetResult;
+  },
+  now = Date.now(),
+): Promise<
+  BudgetResult<{
+    reservation: Reservation;
+    used: Counters;
+    frozen: boolean;
+    budget_run_id: string;
+  }>
+> {
   const key = requireIdempotencyKey(input.idempotency_key);
   if (!key.ok) return key;
   const parsed = parseAmounts(input.amounts);
@@ -384,19 +578,55 @@ export async function reconcileBudget(
   const reservation = state.reservations[key.idempotency_key];
   if (!reservation) return { ok: false, error: "reservation_not_found" };
   if (reservation.status === "reconciled") {
-    return { ok: true, reservation, used: amountsFromCounters(state.used) };
+    if (!reservation.cached_result) applyCachedResult(reservation, input.result);
+    await saveState(storage, state);
+    if (reservation.finalize_error) {
+      return {
+        ok: false,
+        error: reservation.finalize_error,
+        detail: state.frozen_reason || undefined,
+      };
+    }
+    return {
+      ok: true,
+      reservation,
+      used: amountsFromCounters(state.used),
+      frozen: state.frozen,
+      budget_run_id: reservation.reservation_id,
+    };
   }
   if (reservation.status === "released") {
     return { ok: false, error: "reservation_released" };
   }
 
+  const over = exceedsReserved(reservation.amounts, actual);
   state.reserved = applyDelta(state.reserved, reservation.amounts, -1);
-  state.used = applyDelta(state.used, actual, 1);
+  const charged = over ? minCounters(actual, reservation.amounts) : actual;
+  state.used = applyDelta(state.used, charged, 1);
   reservation.status = "reconciled";
   reservation.actual = amountsFromCounters(actual);
   reservation.reconciled_at = now;
+  applyCachedResult(reservation, input.result);
+  closeReservationLease(state, reservation, now);
+  if (over) {
+    freezeForOverage(state, reservation, actual, now);
+    reservation.finalize_error = "actual_exceeds_reserved";
+    await saveState(storage, state);
+    return {
+      ok: false,
+      error: "actual_exceeds_reserved",
+      detail: `${over.name}: actual=${over.actual} reserved=${over.reserved}`,
+    };
+  }
+  reservation.finalize_error = null;
   await saveState(storage, state);
-  return { ok: true, reservation, used: amountsFromCounters(state.used) };
+  return {
+    ok: true,
+    reservation,
+    used: amountsFromCounters(state.used),
+    frozen: false,
+    budget_run_id: reservation.reservation_id,
+  };
 }
 
 export async function heartbeatLease(
@@ -478,6 +708,7 @@ export async function snapshotBudget(
     active_leases: number;
     caps: typeof PILOT_BUDGET_CAPS;
     auto_promotion: false;
+    frozen: boolean;
   }>
 > {
   const state = await loadState(storage, now);
@@ -491,6 +722,7 @@ export async function snapshotBudget(
     active_leases: activeLeaseCount(state),
     caps: state.caps,
     auto_promotion: false,
+    frozen: state.frozen === true,
   };
 }
 

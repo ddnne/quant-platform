@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   PILOT_BUDGET_CAPS,
+  CONTROL_PLANE_LEDGER_NAME,
   MemoryBudgetStorage,
+  bindIdempotencyKey,
   createBudget,
+  finalizeBudget,
   heartbeatLease,
   reconcileBudget,
   recoverExpiredLeases,
@@ -276,5 +279,137 @@ describe("budget ledger algebra", () => {
     );
     expect(denied.ok).toBe(false);
     if (!denied.ok) expect(denied.detail).toContain("cost_usd");
+  });
+
+  it("issues an opaque budget_run_id; caller key is not occupancy", async () => {
+    const storage = new MemoryBudgetStorage();
+    const reserved = await reserveBudget(
+      storage,
+      { idempotency_key: "client-label", amounts: { model_calls: 1 } },
+      T0,
+    );
+    expect(reserved.ok).toBe(true);
+    if (!reserved.ok) throw new Error("reserve");
+    expect(reserved.budget_run_id).toBe(reserved.reservation.reservation_id);
+    expect(reserved.budget_run_id).not.toBe("client-label");
+    expect(CONTROL_PLANE_LEDGER_NAME).toBe("pilot-control-plane");
+  });
+
+  it("same digest-bound key does not double-spend; digest mismatch conflicts", async () => {
+    const storage = new MemoryBudgetStorage();
+    const a = await reserveBudget(
+      storage,
+      {
+        idempotency_key: "k-dup",
+        request_digest: "digest-a",
+        amounts: { model_calls: 1 },
+      },
+      T0,
+    );
+    const dup = await reserveBudget(
+      storage,
+      {
+        idempotency_key: "k-dup",
+        request_digest: "digest-a",
+        amounts: { model_calls: 1 },
+      },
+      T0 + 1,
+    );
+    const clash = await reserveBudget(
+      storage,
+      {
+        idempotency_key: "k-dup",
+        request_digest: "digest-b",
+        amounts: { model_calls: 1 },
+      },
+      T0 + 2,
+    );
+    expect(a.ok && dup.ok).toBe(true);
+    if (a.ok && dup.ok) {
+      expect(dup.existing).toBe(true);
+      expect(dup.budget_run_id).toBe(a.budget_run_id);
+    }
+    expect(clash.ok).toBe(false);
+    if (!clash.ok) expect(clash.error).toBe("idempotency_digest_conflict");
+    const snap = await snapshotBudget(storage, T0 + 2);
+    expect(snap.ok).toBe(true);
+    if (snap.ok) expect(snap.reserved.model_calls).toBe(1);
+  });
+
+  it("schema-reject finalize charges actual and closes the lease", async () => {
+    const storage = new MemoryBudgetStorage();
+    const reserved = await reserveBudget(
+      storage,
+      {
+        idempotency_key: "schema-reject",
+        amounts: { model_calls: 1, input_tokens: 40, output_tokens: 16 },
+        acquire_lease: true,
+      },
+      T0,
+    );
+    expect(reserved.ok).toBe(true);
+    const charged = await finalizeBudget(
+      storage,
+      {
+        idempotency_key: "schema-reject",
+        amounts: { model_calls: 1, input_tokens: 12, output_tokens: 4 },
+        result: { http_status: 400, body: { ok: false, error: "Insight.unknown field" } },
+      },
+      T0 + 1,
+    );
+    expect(charged.ok).toBe(true);
+    const snap = await snapshotBudget(storage, T0 + 1);
+    expect(snap.ok).toBe(true);
+    if (snap.ok && charged.ok) {
+      expect(snap.used.model_calls).toBe(1);
+      expect(snap.used.input_tokens).toBe(12);
+      expect(snap.used.output_tokens).toBe(4);
+      expect(snap.reserved.model_calls).toBe(0);
+      expect(snap.active_leases).toBe(0);
+      expect(charged.reservation.cached_result?.http_status).toBe(400);
+    }
+  });
+
+  it("actual over reserved freezes the ledger with an audit record and does not overspend", async () => {
+    const storage = new MemoryBudgetStorage();
+    await reserveBudget(
+      storage,
+      { idempotency_key: "over", amounts: { model_calls: 1, input_tokens: 10 } },
+      T0,
+    );
+    const over = await finalizeBudget(
+      storage,
+      { idempotency_key: "over", amounts: { model_calls: 1, input_tokens: 11 } },
+      T0 + 1,
+    );
+    expect(over.ok).toBe(false);
+    if (!over.ok) expect(over.error).toBe("actual_exceeds_reserved");
+    const snap = await snapshotBudget(storage, T0 + 1);
+    expect(snap.ok).toBe(true);
+    if (snap.ok) {
+      expect(snap.frozen).toBe(true);
+      expect(snap.used.input_tokens).toBe(10);
+      expect(snap.reserved.input_tokens).toBe(0);
+      expect(snap.auto_promotion).toBe(false);
+    }
+    const next = await reserveBudget(
+      storage,
+      { idempotency_key: "after-freeze", amounts: { model_calls: 1 } },
+      T0 + 2,
+    );
+    expect(next.ok).toBe(false);
+    if (!next.ok) expect(next.error).toBe("budget_frozen");
+  });
+
+  it("bindIdempotencyKey uses digest when the client key is absent", () => {
+    const bound = bindIdempotencyKey(undefined, "abc");
+    expect(bound.ok).toBe(true);
+    if (bound.ok) {
+      expect(bound.idempotency_key).toBe("digest:abc");
+      expect(bound.request_digest).toBe("abc");
+    }
+    const named = bindIdempotencyKey("k1", "abc");
+    expect(named.ok).toBe(true);
+    if (named.ok) expect(named.idempotency_key).toBe("k1");
   });
 });
