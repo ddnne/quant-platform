@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { computeVersionHash, MASTER_EVENT_TYPES } from "./types";
-import { payloadToMasterRecord, writeMasterScd2 } from "./write";
+import {
+  CurrentParseError,
+  payloadToMasterRecord,
+  writeMasterScd2,
+} from "./write";
 
 const CURRENT_KEY = "structured/scd2/equities_master/CURRENT.json";
 const WHEN = new Date("2025-04-01T00:00:00.000Z");
@@ -259,5 +263,67 @@ describe("writeMasterScd2", () => {
     assertNoCoverageComplete(current.metadata);
     assertNoCoverageComplete(rows);
     assertNoCoverageComplete(second);
+  });
+
+  it("CURRENT parse failure quarantines the body and does not write an empty snapshot", async () => {
+    const { bucket, puts } = memoryBucket();
+    const corrupt = "{not-json";
+    await bucket.put(CURRENT_KEY, corrupt);
+    const afterSeed = puts.length;
+
+    await expect(
+      writeMasterScd2(
+        { STRUCTURED_BUCKET: bucket },
+        [input(listedPayload())],
+        WHEN,
+      ),
+    ).rejects.toBeInstanceOf(CurrentParseError);
+
+    expect(puts.slice(afterSeed).some((put) => put.key === CURRENT_KEY)).toBe(
+      false,
+    );
+    expect(currentPut(puts).body).toBe(corrupt);
+
+    const quarantines = puts
+      .slice(afterSeed)
+      .filter((put) =>
+        put.key.startsWith("structured/scd2/equities_master/quarantine/"),
+      );
+    expect(quarantines).toHaveLength(1);
+    expect(quarantines[0]!.body).toBe(corrupt);
+    expect(quarantines[0]!.metadata?.reason).toBe("parse_failure");
+    expect(quarantines[0]!.key).not.toContain("COMPLETE");
+    assertNoCoverageComplete(quarantines);
+    assertNoCoverageComplete(puts.slice(afterSeed).map((put) => put.key));
+  });
+
+  it("CURRENT schema or by_code failure quarantines and leaves CURRENT in place", async () => {
+    const { bucket, puts } = memoryBucket();
+    const invalid = JSON.stringify({
+      schema: "not-a-current-schema",
+      updated_at: UPDATED_AT,
+      count: 0,
+    });
+    await bucket.put(CURRENT_KEY, invalid);
+    const afterSeed = puts.length;
+
+    const err = await writeMasterScd2(
+      { STRUCTURED_BUCKET: bucket },
+      [input(listedPayload())],
+      WHEN,
+    ).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(CurrentParseError);
+    expect((err as CurrentParseError).quarantineKey).toMatch(
+      /^structured\/scd2\/equities_master\/quarantine\/[0-9a-f]{64}\.json$/,
+    );
+    expect(puts.slice(afterSeed).some((put) => put.key === CURRENT_KEY)).toBe(
+      false,
+    );
+    expect(currentPut(puts).body).toBe(invalid);
+    expect(JSON.stringify(err)).not.toContain("COMPLETE");
+    assertNoCoverageComplete(puts.slice(afterSeed));
   });
 });

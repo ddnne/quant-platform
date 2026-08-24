@@ -4,6 +4,7 @@
  */
 
 import { newRunId } from "../identity";
+import { sha256HexFromString } from "../sha256";
 import {
   MASTER_EVENT_TYPES,
   computeVersionHash,
@@ -12,6 +13,16 @@ import {
 } from "./types";
 
 const CURRENT_KEY = "structured/scd2/equities_master/CURRENT.json";
+const CURRENT_SCHEMA = "equities_master_scd2_current/v1" as const;
+
+export class CurrentParseError extends Error {
+  readonly quarantineKey: string | null;
+  constructor(message: string, quarantineKey: string | null) {
+    super(message);
+    this.name = "CurrentParseError";
+    this.quarantineKey = quarantineKey;
+  }
+}
 
 export interface Scd2Env {
   STRUCTURED_BUCKET: R2Bucket;
@@ -25,7 +36,7 @@ interface CurrentEntry {
 }
 
 interface CurrentSnapshot {
-  schema: "equities_master_scd2_current/v1";
+  schema: typeof CURRENT_SCHEMA;
   updated_at: string;
   count: number;
   by_code: Record<string, CurrentEntry>;
@@ -123,27 +134,83 @@ function strOrUndef(v: unknown): string | undefined {
   return String(v);
 }
 
+function emptyCurrent(): CurrentSnapshot {
+  return {
+    schema: CURRENT_SCHEMA,
+    updated_at: "",
+    count: 0,
+    by_code: {},
+  };
+}
+
+function parseCurrentSnapshot(raw: string): CurrentSnapshot {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error("CURRENT snapshot JSON parse failed");
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("CURRENT snapshot is not an object");
+  }
+  const obj = parsed as Record<string, unknown>;
+  if (obj.schema !== CURRENT_SCHEMA) {
+    throw new Error("CURRENT snapshot schema mismatch");
+  }
+  if (
+    !obj.by_code ||
+    typeof obj.by_code !== "object" ||
+    Array.isArray(obj.by_code)
+  ) {
+    throw new Error("CURRENT snapshot by_code missing or invalid");
+  }
+  return {
+    schema: CURRENT_SCHEMA,
+    updated_at: typeof obj.updated_at === "string" ? obj.updated_at : "",
+    count:
+      typeof obj.count === "number"
+        ? obj.count
+        : Object.keys(obj.by_code as object).length,
+    by_code: obj.by_code as Record<string, CurrentEntry>,
+  };
+}
+
+async function quarantineCurrent(
+  bucket: R2Bucket,
+  raw: string,
+): Promise<string> {
+  const digest = await sha256HexFromString(raw);
+  const key = `structured/scd2/equities_master/quarantine/${digest}.json`;
+  await bucket.put(key, raw, {
+    httpMetadata: { contentType: "application/json" },
+    customMetadata: {
+      source_key: CURRENT_KEY,
+      reason: "parse_failure",
+    },
+  });
+  return key;
+}
+
 async function loadCurrent(bucket: R2Bucket): Promise<CurrentSnapshot> {
   const obj = await bucket.get(CURRENT_KEY);
-  if (!obj) {
-    return {
-      schema: "equities_master_scd2_current/v1",
-      updated_at: "",
-      count: 0,
-      by_code: {},
-    };
-  }
+  if (!obj) return emptyCurrent();
+  const raw = await obj.text();
   try {
-    const parsed = (await obj.json()) as CurrentSnapshot;
-    if (!parsed.by_code) parsed.by_code = {};
-    return parsed;
-  } catch {
-    return {
-      schema: "equities_master_scd2_current/v1",
-      updated_at: "",
-      count: 0,
-      by_code: {},
-    };
+    return parseCurrentSnapshot(raw);
+  } catch (e) {
+    let quarantineKey: string | null = null;
+    try {
+      quarantineKey = await quarantineCurrent(bucket, raw);
+    } catch {
+      /* still fail closed; never replace CURRENT with an empty snapshot */
+    }
+    const detail = (e as Error).message || String(e);
+    throw new CurrentParseError(
+      `CURRENT snapshot unreadable; refusing empty replacement${
+        quarantineKey ? `; quarantined ${quarantineKey}` : ""
+      }: ${detail}`,
+      quarantineKey,
+    );
   }
 }
 
@@ -229,7 +296,7 @@ export async function writeMasterScd2(
   }
 
   const nextSnap: CurrentSnapshot = {
-    schema: "equities_master_scd2_current/v1",
+    schema: CURRENT_SCHEMA,
     updated_at: jstIso(when),
     count: Object.keys(nextByCode).length,
     by_code: nextByCode,
