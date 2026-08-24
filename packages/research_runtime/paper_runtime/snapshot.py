@@ -12,7 +12,7 @@ import tempfile
 from datetime import datetime, timezone
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable, Mapping
 from urllib.parse import quote
 from uuid import uuid4
 
@@ -469,8 +469,12 @@ def _research_manifest_id(manifest: dict[str, Any]) -> str:
     identity = dict(manifest)
     identity.pop("snapshot_id", None)
     identity.pop("artifact", None)
+    identity.pop("created_at", None)
     identity.pop("committed_at", None)
     identity.pop("manifest_digest", None)
+    # ReadyManifest binds to snapshot_id and is therefore appended after the
+    # non-circular research snapshot identity has been calculated.
+    identity.pop("ready_manifest", None)
     return _canonical_digest(identity)
 
 
@@ -531,8 +535,16 @@ def publish_ready_snapshot(
     snapshot_dir: str | Path,
     *,
     required_datasets: Iterable[str],
+    _profile_coverage_evidence: Mapping[str, Any] | None = None,
+    _ready_manifest_builder: (
+        Callable[[Mapping[str, Any]], Mapping[str, Any]] | None
+    ) = None,
 ) -> ReadySnapshot:
-    """Gate a staging DB and atomically publish a read-only READY copy."""
+    """Gate a staging DB and atomically publish a read-only snapshot.
+
+    The product-owned READY(P) bridge may supply retained profile evidence and
+    a closed ReadyManifest builder. Both must be present together.
+    """
     staging_path = Path(staging_db).resolve()
     if not staging_path.is_file():
         raise FileNotFoundError(f"staging database does not exist: {staging_path}")
@@ -545,7 +557,14 @@ def publish_ready_snapshot(
         if policy.governance_tier == "governed"
     }
     required_set = set(required)
-    if not governed <= required_set or not required_set <= set(policies):
+    profile_bound = _ready_manifest_builder is not None
+    if profile_bound != (_profile_coverage_evidence is not None):
+        raise SnapshotRejected(
+            "profile coverage evidence and ReadyManifest builder must be supplied together"
+        )
+    if not profile_bound and (
+        not governed <= required_set or not required_set <= set(policies)
+    ):
         raise SnapshotRejected(
             "READY publication must cover every governed dataset and only "
             "contracted datasets: "
@@ -651,10 +670,21 @@ def publish_ready_snapshot(
             },
             "raw_manifests": raw_manifests,
             "validations": validations,
+            "created_at": created_at,
             "committed_at": committed_at,
         }
+        if profile_bound:
+            manifest["profile_coverage_evidence"] = {
+                str(dataset_id): dict(row)
+                for dataset_id, row in _profile_coverage_evidence.items()
+            }
         snapshot_id = _research_manifest_id(manifest)
         manifest["snapshot_id"] = snapshot_id
+        if profile_bound:
+            nested = _ready_manifest_builder(manifest)
+            if not isinstance(nested, Mapping):
+                raise SnapshotRejected("ReadyManifest builder did not return an object")
+            manifest["ready_manifest"] = dict(nested)
         stem = _artifact_stem(snapshot_id)
         artifact_path = destination / f"{stem}.sqlite"
         manifest_path = destination / f"{stem}.manifest.json"
@@ -826,6 +856,14 @@ def _manifest_snapshot_state(
         raise RuntimeError("latest local snapshot manifest is not READY")
     current_watermarks = _watermark_state(conn, tables)
     expected = manifest.get("dataset_watermarks")
+    if isinstance(manifest.get("ready_manifest"), Mapping):
+        required = manifest.get("required_datasets")
+        if not isinstance(required, list):
+            raise RuntimeError("profile-bound snapshot datasets are malformed")
+        required_set = set(required)
+        current_watermarks = [
+            row for row in current_watermarks if row.get("dataset") in required_set
+        ]
     if current_watermarks != expected:
         raise RuntimeError(
             "local ingestion watermarks no longer match the committed snapshot"

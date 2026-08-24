@@ -19,6 +19,7 @@ from research.readiness import (
     _attestation_secret,
     _sign_attestation,
 )
+from research.research_data_profile import load_core_profile
 from selection.budget_ledger import MassResearchDisabledError, ResearchBudgetCapability
 from selection.screen import ExperimentBudget
 from storage.immutable_artifact import ImmutableArtifactStore
@@ -39,9 +40,14 @@ def _readiness(
     **field_overrides: object,
 ) -> VerifiedResearchReadiness:
     digest = "sha256:" + ("ab" * 32)
+    profile = load_core_profile()
     kwargs: dict[str, object] = {
         "attestation_id": "att-1",
         "snapshot_id": snapshot_id,
+        "profile_id": profile.profile_id,
+        "profile_version": profile.profile_version,
+        "profile_digest": profile.profile_digest,
+        "dataset_ids": profile.required_datasets,
         "ready_state": "READY",
         "ready_manifest_digest": digest,
         "immutable_db_digest": digest,

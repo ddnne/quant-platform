@@ -41,6 +41,10 @@ class VerifiedResearchReadiness:
 
     attestation_id: str
     snapshot_id: str
+    profile_id: str
+    profile_version: str
+    profile_digest: str
+    dataset_ids: tuple[str, ...]
     ready_state: str
     ready_manifest_digest: str
     immutable_db_digest: str
@@ -61,6 +65,10 @@ class VerifiedResearchReadiness:
         return {
             "attestation_id": self.attestation_id,
             "snapshot_id": self.snapshot_id,
+            "profile_id": self.profile_id,
+            "profile_version": self.profile_version,
+            "profile_digest": self.profile_digest,
+            "dataset_ids": list(self.dataset_ids),
             "ready_state": self.ready_state,
             "ready_manifest_digest": self.ready_manifest_digest,
             "immutable_db_digest": self.immutable_db_digest,
@@ -90,6 +98,14 @@ class VerifiedResearchReadiness:
         now: datetime | None = None,
     ) -> bool:
         if self.ready_state != "READY":
+            return False
+        if (
+            not self.profile_id
+            or not self.profile_version
+            or not self.profile_digest.startswith("sha256:")
+            or not self.dataset_ids
+            or len(self.dataset_ids) != len(set(self.dataset_ids))
+        ):
             return False
         if self.is_expired(now=now):
             return False
@@ -265,7 +281,7 @@ class ResearchReadinessService:
         ready_manifest = ready_manifest_from_snapshot_document(dict(ready.manifest))
         return mint_verified_research_readiness(
             ready_manifest,
-            db_path=ready.artifact_path,
+            db_path=ready.db_path,
             ttl_seconds=self._ttl,
         )
 
