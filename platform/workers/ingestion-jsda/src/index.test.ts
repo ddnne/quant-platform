@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, it } from "vitest";
-import worker, {
+import {
   discoveryCapSemantics,
   discoveryIsCoverageEligible,
   parseDataFileCap,
   parseYearPageCap,
-} from "./index";
+} from "./discovery_caps";
+import worker from "./index";
 
 const RUN_TOKEN = "jsda-test-run-token-do-not-leak";
 
