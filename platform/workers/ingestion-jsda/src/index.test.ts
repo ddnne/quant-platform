@@ -1,11 +1,11 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   discoveryCapSemantics,
   discoveryIsCoverageEligible,
   parseDataFileCap,
   parseYearPageCap,
 } from "./discovery_caps";
-import worker from "./index";
+import worker, { type JsdaDatasetJob } from "./index";
 
 const RUN_TOKEN = "jsda-test-run-token-do-not-leak";
 
@@ -93,6 +93,7 @@ describe("ingestion-jsda handlers", () => {
   it("exposes health fetch and scheduled cron handlers", () => {
     expect(typeof worker.fetch).toBe("function");
     expect(typeof worker.scheduled).toBe("function");
+    expect(typeof worker.queue).toBe("function");
   });
 
   it("health and unauthorized run do not leak the run token", async () => {
@@ -241,6 +242,103 @@ describe("ingestion-jsda handlers", () => {
     expect(r2Ops).toEqual([]);
     expect(fetchCalls).toBe(0);
   });
+
+  it("authorized manual run enqueues one closed typed dataset job without acquiring", async () => {
+    rejectLiveFetch();
+    const sent: Array<{ body: unknown; contentType?: string }> = [];
+    const env = {
+      ...testEnv(),
+      JSDA_QUEUE: {
+        sendBatch: async (messages: Iterable<{ body: unknown; contentType?: string }>) => {
+          sent.push(...messages);
+          return { metadata: { metrics: { backlogCount: 1, backlogBytes: 1 } } };
+        },
+      } as never,
+    };
+    const res = await worker.fetch(
+      new Request(
+        "https://ingestion-jsda.test/v1/run?dataset=jsda_tokyo_repo_rates",
+        { method: "POST", headers: { "X-Ingestion-Token": RUN_TOKEN } },
+      ),
+      env,
+    );
+
+    expect(res.status).toBe(202);
+    expect(await res.json()).toEqual({
+      accepted: true,
+      mode: "cloudflare_queue",
+      queued: 1,
+      datasets: ["jsda_tokyo_repo_rates"],
+    });
+    expect(sent).toHaveLength(1);
+    expect(sent[0].contentType).toBe("json");
+    expect(Object.keys(sent[0].body as object).sort()).toEqual(
+      ["dataset", "job_id", "requested_at", "requested_by", "version"].sort(),
+    );
+    expect(sent[0].body).toMatchObject({
+      version: "jsda-dataset-job/v1",
+      dataset: "jsda_tokyo_repo_rates",
+      requested_by: "manual",
+    });
+    expect(JSON.stringify(sent[0].body)).not.toMatch(/url|payload/i);
+    expect(fetchCalls).toBe(0);
+  });
+
+  it("scheduled producer enqueues all three closed datasets", async () => {
+    rejectLiveFetch();
+    const sent: Array<{ body: JsdaDatasetJob }> = [];
+    const waits: Promise<unknown>[] = [];
+    const env = {
+      ...testEnv(),
+      JSDA_QUEUE: {
+        sendBatch: async (messages: Iterable<{ body: JsdaDatasetJob }>) => {
+          sent.push(...messages);
+          return { metadata: { metrics: { backlogCount: 3, backlogBytes: 3 } } };
+        },
+      } as never,
+    };
+    await worker.scheduled(
+      {} as ScheduledController,
+      env,
+      { waitUntil: (promise: Promise<unknown>) => waits.push(promise) } as ExecutionContext,
+    );
+    await Promise.all(waits);
+
+    expect(sent.map(({ body }) => body.dataset).sort()).toEqual(
+      [
+        "jsda_corporate_bond_transactions",
+        "jsda_otc_bond_reference_prices",
+        "jsda_tokyo_repo_rates",
+      ].sort(),
+    );
+    expect(sent.every(({ body }) => body.requested_by === "cron")).toBe(true);
+    expect(sent.every(({ body }) => !Object.hasOwn(body, "url"))).toBe(true);
+    expect(fetchCalls).toBe(0);
+  });
+
+  it("authorized manual run rejects a non-closed dataset without enqueueing", async () => {
+    rejectLiveFetch();
+    let sendCalls = 0;
+    const env = {
+      ...testEnv(),
+      JSDA_QUEUE: {
+        sendBatch: async () => {
+          sendCalls += 1;
+        },
+      } as never,
+    };
+    const res = await worker.fetch(
+      new Request(
+        "https://ingestion-jsda.test/v1/run?dataset=https%3A%2F%2Fevil.test%2Fpayload",
+        { method: "POST", headers: { "X-Ingestion-Token": RUN_TOKEN } },
+      ),
+      env,
+    );
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: "invalid dataset" });
+    expect(sendCalls).toBe(0);
+    expect(fetchCalls).toBe(0);
+  });
 });
 
 describe("JSDA rate/safety caps are not pagination exhaustion", () => {
@@ -308,14 +406,17 @@ describe("JSDA rate/safety caps are not pagination exhaustion", () => {
   });
 });
 
-describe("POST /v1/run records cap-hit as not exhausted", () => {
+describe("JSDA Queue consumer", () => {
   const originalFetch = globalThis.fetch;
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
   });
 
-  function acquiringEnv(): {
+  function acquiringEnv(caps: {
+    years: string;
+    files: string;
+  } = { years: "1", files: "3" }): {
     env: {
       RAW_BUCKET: never;
       DB: never;
@@ -323,17 +424,22 @@ describe("POST /v1/run records cap-hit as not exhausted", () => {
       MAX_YEAR_PAGES: string;
       MAX_DATA_FILES: string;
     };
+    bindings: unknown[][];
   } {
+    const bindings: unknown[][] = [];
     const stmt = {
-      bind: (..._args: unknown[]) => stmt,
+      bind: (...args: unknown[]) => {
+        bindings.push(args);
+        return stmt;
+      },
       run: async () => ({ success: true }),
       all: async () => ({ results: [] }),
     };
     return {
       env: {
         INGESTION_RUN_TOKEN: RUN_TOKEN,
-        MAX_YEAR_PAGES: "1",
-        MAX_DATA_FILES: "3",
+        MAX_YEAR_PAGES: caps.years,
+        MAX_DATA_FILES: caps.files,
         RAW_BUCKET: {
           head: async () => null,
           put: async () => ({}),
@@ -342,10 +448,58 @@ describe("POST /v1/run records cap-hit as not exhausted", () => {
           prepare: () => stmt,
         } as never,
       },
+      bindings,
     };
   }
 
-  it("job/run success with MAX_YEAR_PAGES=1 and MAX_DATA_FILES=3 records pagination_exhausted=false", async () => {
+  function job(
+    overrides: Partial<JsdaDatasetJob> = {},
+  ): JsdaDatasetJob {
+    return {
+      version: "jsda-dataset-job/v1",
+      dataset: "jsda_otc_bond_reference_prices",
+      requested_by: "manual",
+      requested_at: "2026-08-24T00:00:00.000Z",
+      job_id: "jsda:test:otc:2026-08-24",
+      ...overrides,
+    };
+  }
+
+  function queueDelivery(body: unknown): {
+    batch: MessageBatch<unknown>;
+    acked: () => number;
+    retried: () => number;
+  } {
+    let ackCount = 0;
+    let retryCount = 0;
+    const message = {
+      id: "queue-message-1",
+      timestamp: new Date("2026-08-24T00:00:01.000Z"),
+      body,
+      attempts: 1,
+      ack: () => {
+        ackCount += 1;
+      },
+      retry: () => {
+        retryCount += 1;
+      },
+    } as Message<unknown>;
+    return {
+      batch: {
+        messages: [message],
+        queue: "quant-jsda-ingestion",
+        metadata: {
+          metrics: { backlogCount: 1, backlogBytes: 1 },
+        },
+        ackAll: () => undefined,
+        retryAll: () => undefined,
+      },
+      acked: () => ackCount,
+      retried: () => retryCount,
+    };
+  }
+
+  it("retries a cap-truncated partial result instead of acknowledging it", async () => {
     const fetched: string[] = [];
     globalThis.fetch = (async (input: RequestInfo | URL) => {
       const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
@@ -382,39 +536,77 @@ describe("POST /v1/run records cap-hit as not exhausted", () => {
     }) as typeof fetch;
 
     const { env } = acquiringEnv();
-    const res = await worker.fetch(
-      new Request(
-        "https://ingestion-jsda.test/v1/run?dataset=jsda_otc_bond_reference_prices",
-        { method: "POST", headers: { "X-Ingestion-Token": RUN_TOKEN } },
-      ),
-      env,
-    );
-    expect(res.status).toBe(200);
-    const body = await res.text();
-    assertNoLeakOrCoverage(body);
-    const payload = JSON.parse(body) as {
-      ok?: boolean;
-      summary?: {
-        status?: string;
-        pagination_exhausted?: boolean;
-        results?: Array<{
-          pagination_exhausted?: boolean;
-          year_page_cap_hit?: boolean;
-          data_file_cap_hit?: boolean;
-          status?: string;
-        }>;
-      };
-    };
-    expect(payload.ok).not.toBe(true);
-    expect(payload.summary?.pagination_exhausted).toBe(false);
-    expect(payload.summary?.status).toBe("partial");
-    const otc = payload.summary?.results?.[0];
-    expect(otc?.pagination_exhausted).toBe(false);
-    expect(otc?.year_page_cap_hit).toBe(true);
-    expect(otc?.data_file_cap_hit).toBe(true);
-    expect(otc?.status).toBe("partial");
+    const delivery = queueDelivery(job());
+    await worker.queue(delivery.batch, env);
+
+    expect(delivery.acked()).toBe(0);
+    expect(delivery.retried()).toBe(1);
     expect(fetched.some((u) => /archive2024\.html/i.test(u))).toBe(true);
     expect(fetched.some((u) => /archive2023\.html/i.test(u))).toBe(false);
     expect(fetched.filter((u) => u.endsWith(".csv")).length).toBe(3);
+  });
+
+  it("acknowledges only an exhausted result with at least one stored data file", async () => {
+    const fetched: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      fetched.push(url);
+      if (new URL(url).pathname.endsWith("/index.html")) {
+        return new Response('<a href="data/otc-current.csv">current</a>', {
+          status: 200,
+          headers: { "content-type": "text/html" },
+        });
+      }
+      return new Response("isin,price\nJP000,100\n", {
+        status: 200,
+        headers: { "content-type": "text/csv" },
+      });
+    }) as typeof fetch;
+
+    const { env } = acquiringEnv({ years: "0", files: "0" });
+    const delivery = queueDelivery(job());
+    await worker.queue(delivery.batch, env);
+
+    expect(delivery.acked()).toBe(1);
+    expect(delivery.retried()).toBe(0);
+    expect(fetched).toHaveLength(2);
+  });
+
+  it("retries zero-row discovery and never marks it as a pass", async () => {
+    globalThis.fetch = (async () =>
+      new Response("<html>no data links</html>", {
+        status: 200,
+        headers: { "content-type": "text/html" },
+      })) as typeof fetch;
+
+    const { env, bindings } = acquiringEnv({ years: "0", files: "0" });
+    const delivery = queueDelivery(job());
+    await worker.queue(delivery.batch, env);
+
+    expect(delivery.acked()).toBe(0);
+    expect(delivery.retried()).toBe(1);
+    expect(JSON.stringify(bindings)).not.toContain('"pass"');
+  });
+
+  it("acks an invalid message with a URL field without fetching or persisting", async () => {
+    let fetchCalls = 0;
+    globalThis.fetch = (async () => {
+      fetchCalls += 1;
+      throw new Error("invalid message must not fetch");
+    }) as typeof fetch;
+    const { env, sql, r2Ops } = touchingEnv();
+    const delivery = queueDelivery({
+      ...job(),
+      url: "https://evil.test/arbitrary.csv",
+    });
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    await worker.queue(delivery.batch, env);
+    errorLog.mockRestore();
+
+    expect(delivery.acked()).toBe(1);
+    expect(delivery.retried()).toBe(0);
+    expect(fetchCalls).toBe(0);
+    expect(sql).toEqual([]);
+    expect(r2Ops).toEqual([]);
   });
 });

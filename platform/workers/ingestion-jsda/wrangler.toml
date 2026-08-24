@@ -23,6 +23,19 @@ binding = "DB"
 database_name = "quant-ingest"
 database_id = "be6fdcf8-40be-41fc-9535-7facd1fc2ffc"
 
+[[queues.producers]]
+binding = "JSDA_QUEUE"
+queue = "quant-jsda-ingestion"
+
+[[queues.consumers]]
+queue = "quant-jsda-ingestion"
+max_batch_size = 3
+max_batch_timeout = 5
+max_retries = 3
+retry_delay = 60
+dead_letter_queue = "quant-jsda-ingestion-dlq"
+max_concurrency = 1
+
 # Secrets (optional):
 #   INGESTION_RUN_TOKEN — gates /v1/run (reuse premium run token recommended)
 
@@ -52,6 +65,20 @@ bucket_name = "quant-raw"
 binding = "DB"
 database_name = "quant-ingest"
 database_id = "be6fdcf8-40be-41fc-9535-7facd1fc2ffc"
+
+# Queue bindings are non-inheritable and must be repeated for named environments.
+[[env.production.queues.producers]]
+binding = "JSDA_QUEUE"
+queue = "quant-jsda-ingestion"
+
+[[env.production.queues.consumers]]
+queue = "quant-jsda-ingestion"
+max_batch_size = 3
+max_batch_timeout = 5
+max_retries = 3
+retry_delay = 60
+dead_letter_queue = "quant-jsda-ingestion-dlq"
+max_concurrency = 1
 
 [env.production.vars]
 USER_AGENT = "quant-platform-ingest/0.1 (+personal-research; JSDA bond stats)"
