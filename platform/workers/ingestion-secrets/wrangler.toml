@@ -1,5 +1,12 @@
 # Secrets for quant-platform ingestion. Values live only on Cloudflare.
 # Put secrets: printf '%s' "$JQUANTS_API_KEY" | npx wrangler secret put JQUANTS_API_KEY -c platform/workers/ingestion-secrets/wrangler.toml
+#
+# Public surface: none. Narrow authenticated proxy (X-Ingestion-Token), not a
+# product API. workers_dev stays true so local runners can reach the token-gated
+# host without a custom zone. Closing workers_dev without HUMAN Cloudflare
+# Access / mTLS / Tunnel would silently break the secrets proxy.
+# Residual: HUMAN Access/mTLS/Tunnel. Do not treat CF-Worker as auth.
+# Staging is not [env.staging] in this file. See wrangler.staging.toml.
 name = "quant-platform-ingestion-secrets"
 main = "src/index.ts"
 compatibility_date = "2026-08-01"
@@ -8,3 +15,10 @@ workers_dev = true
 # Secret bindings (values set via `wrangler secret put`, never in this file):
 # - JQUANTS_API_KEY
 # - JQUANTS_PROXY_TOKEN        (allowlisted upstream GET only)
+
+[observability]
+enabled = true
+
+[env.production]
+name = "quant-platform-ingestion-secrets"
+workers_dev = true

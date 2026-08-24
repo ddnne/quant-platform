@@ -1,5 +1,13 @@
 # Quant Ops Read MCP — same remote MCP pattern as news-mcp:
 # GitHub OAuth (@cloudflare/workers-oauth-provider) + Agents McpAgent + /mcp.
+#
+# Public surface: GitHub OAuth read-only Ops MCP only (the sole public product
+# surface). workers_dev stays true because the GitHub OAuth App callback is
+# OAUTH_AUTHORIZATION_SERVER (this workers.dev URL). Disabling workers_dev
+# without a replacement custom route would 404 /callback.
+# Do not add SQL, R2 browse, ingest trigger, or READY publish tools.
+# Staging is not [env.staging] in this file (would share the production
+# Cloudflare account). See wrangler.staging.toml — HUMAN separate account.
 name = "quant-platform-ops-read-mcp"
 main = "src/index.js"
 compatibility_date = "2026-08-01"
@@ -37,3 +45,26 @@ OAUTH_AUTHORIZATION_SERVER = "https://quant-platform-ops-read-mcp.taku-haga.work
 
 [observability]
 enabled = true
+
+# Production uses the same Worker name (no -production suffix) so existing
+# OAuth clients keep the workers.dev callback host.
+[env.production]
+name = "quant-platform-ops-read-mcp"
+workers_dev = true
+
+[[env.production.kv_namespaces]]
+binding = "OAUTH_KV"
+id = "cbbfc9439c3e4a789fa103777d38f39e" # title: quant-ops-mcp-oauth
+
+[[env.production.d1_databases]]
+binding = "OPS_DB"
+database_name = "quant-ingest"
+database_id = "be6fdcf8-40be-41fc-9535-7facd1fc2ffc"
+
+[env.production.durable_objects]
+bindings = [{ name = "MCP_OBJECT", class_name = "QuantOpsMcpAgent" }]
+
+[env.production.vars]
+ALLOWED_LOGIN = "ddnne"
+DAILY_ROW_QUOTA = "25000"
+OAUTH_AUTHORIZATION_SERVER = "https://quant-platform-ops-read-mcp.taku-haga.workers.dev"

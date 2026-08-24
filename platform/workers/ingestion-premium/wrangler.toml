@@ -20,11 +20,19 @@
 # Cron: hourly at :15 (Premium endpoints publish continuously through the JST
 # trading day). Worker paces upstream at ~120 ms (500/min). Override concurrency
 # via [vars].INGEST_CONCURRENCY (default 6, max 8).
+#
+# Public surface: none. Cron/internal only. Not a public ingest API.
+# workers_dev=false: no stable *.workers.dev hostname.
+# preview_urls=false: version preview URLs are not a product surface
+# (wrangler 4.125.0 supports preview_urls).
+# Staging is not [env.staging] in this file (would share the production
+# Cloudflare account). See wrangler.staging.toml — HUMAN separate account.
 
 name = "quant-platform-ingestion-premium"
 main = "src/index.ts"
 compatibility_date = "2026-08-01"
-workers_dev = true
+workers_dev = false
+preview_urls = false
 
 # R2 — full response pages + manifest under raw/{dataset}/{run_id}/.
 [[r2_buckets]]
@@ -59,3 +67,24 @@ crons = ["15 * * * *"]
 
 [observability]
 enabled = true
+
+[env.production]
+name = "quant-platform-ingestion-premium"
+workers_dev = false
+preview_urls = false
+
+[[env.production.r2_buckets]]
+binding = "RAW_BUCKET"
+bucket_name = "quant-raw"
+
+[[env.production.r2_buckets]]
+binding = "STRUCTURED_BUCKET"
+bucket_name = "quant-structured"
+
+[[env.production.d1_databases]]
+binding = "DB"
+database_name = "quant-ingest"
+database_id = "be6fdcf8-40be-41fc-9535-7facd1fc2ffc"
+
+[env.production.vars]
+INGEST_CONCURRENCY = "6"
