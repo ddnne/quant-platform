@@ -6,6 +6,7 @@
   "scripts": {
     "deploy": "wrangler deploy",
     "typecheck": "tsc --noEmit",
+    "types": "wrangler types --include-runtime false",
     "test": "vitest run",
     "build": "wrangler deploy --dry-run --outdir .wrangler-dry-run"
   },
