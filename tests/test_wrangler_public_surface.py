@@ -131,9 +131,8 @@ def test_staging_uses_distinct_names_and_resources() -> None:
         staging_name = str(staging["name"])
         assert staging_name != prod_name, name
         assert staging_name.endswith("-staging"), staging_name
-        if name in INTERNAL_PRODUCT:
-            assert staging.get("workers_dev") is False, name
-            assert staging.get("preview_urls") is False, name
+        assert staging.get("workers_dev") is False, name
+        assert staging.get("preview_urls") is False, name
         for banned in PRODUCTION_BINDING_IDS:
             assert banned not in _strings(staging), f"{staging_path} binds {banned}"
         env = staging.get("env") or {}

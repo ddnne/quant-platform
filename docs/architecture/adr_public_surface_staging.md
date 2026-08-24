@@ -46,6 +46,7 @@ on wrangler 4.125.0.
 | Worker | Why `workers_dev` stays true | Residual |
 |---|---|---|
 | quant-ops-mcp | GitHub OAuth callback host (above) | keep read-only |
+| ingestion-secrets | local runners reach the token-gated host; no custom zone | **HUMAN** Cloudflare Access / mTLS / Tunnel before flipping `workers_dev` off. Closing it now would silently break the secrets proxy. |
 | ci-aggregate | receipt POST host without a custom zone | **not** a public research API (no PIT / eval / ingest / MCP). Lane G will abolish this Worker; this lane does **not** delete it. |
 
 Do not treat a `*.workers.dev` hostname as network privacy. Inbound auth is the
@@ -65,8 +66,7 @@ The operational-closure lane created empty, staging-only resources on
 2026-08-24: D1 `quant-ingest-staging`, R2 `quant-raw-staging` and
 `quant-structured-staging`, KV `quant-ops-mcp-oauth-staging`, and JSDA work/DLQ
 Queues. `platform/workers/*/wrangler.staging.toml` binds only those resources.
-No production secret was copied. Both production and staging secrets proxies
-are private
+No production secret was copied. The staging secrets proxy is private
 (`workers_dev=false`, `preview_urls=false`) until a service-binding consumer is
 available.
 
@@ -83,6 +83,7 @@ available.
 
 | Item | Owner |
 |---|---|
+| Cloudflare Access / mTLS / Tunnel for ingestion-secrets | **HUMAN** |
 | Separate staging OAuth application and staging-only secrets | **HUMAN** |
 | GATEWAY_TOKEN service-binding unspoofable replacement | **HOLD** |
 | ci-aggregate abolish | Lane G |
