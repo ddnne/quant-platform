@@ -30,6 +30,7 @@ from typing import Any
 from ingestion.jquants.catalog import (  # noqa: F401
     PREMIUM_CORE_DATASETS,
     is_premium_core,
+    list_datasets,
 )
 
 
@@ -127,10 +128,7 @@ def required_dataset_coverage(
 
 def assert_no_addon_in_required(
     scheduled: list[str], *,
-    addon_ids: tuple[str, ...] = (
-        "equities_bars_minute", "equities_trades",
-        "td_list", "td_files", "td_bulk",
-    ),
+    addon_ids: tuple[str, ...] = tuple(list_datasets("addon")),
 ) -> None:
     """Fail if any addon id appears in the scheduled (required) set."""
     leaked = sorted(set(scheduled) & set(addon_ids))
