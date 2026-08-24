@@ -77,6 +77,41 @@ def _verify_keys_path(path: Path | None = None) -> Path:
 
 
 PARSER_NORMALIZER_VERSION = "coverage-receipt/v3-ed25519"
+SIGNED_RECEIPT_CLAIMS_VERSION = "signed-receipt-claims/v1"
+
+# Closed claim names plus envelope aliases. extra_digests cannot occupy these.
+STANDARD_CLAIM_KEYS = frozenset(
+    {
+        "version",
+        "dataset",
+        "source",
+        "segment_id",
+        "segment_start",
+        "segment_end",
+        "source_request_digest",
+        "raw_manifest_digest",
+        "raw_digest",
+        "raw_count",
+        "structured_digest",
+        "structured_count",
+        "parser_normalizer_version",
+        "structured_generation",
+        "pagination_exhausted",
+        "discovery_exhausted",
+        "run_id",
+        "issuer_id",
+        "issued_at",
+        "checked_at",
+        "extra_digests",
+        "raw",
+        "eligibility",
+        "signature",
+        "signed_body_b64",
+        "issuer_class",
+        "issuer_key_id",
+        "body_digest",
+    }
+)
 
 
 def _now() -> str:
@@ -210,6 +245,19 @@ def load_verify_keys(
     return out
 
 
+def partition_extra_digests(extra_digests: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Copy extra_digests excluding standard claims and envelope aliases."""
+    if extra_digests is None:
+        return {}
+    if not isinstance(extra_digests, Mapping):
+        raise TypeError("extra_digests must be a mapping")
+    return {
+        str(key): value
+        for key, value in extra_digests.items()
+        if str(key) not in STANDARD_CLAIM_KEYS
+    }
+
+
 def verify_receipt_signature(
     digests: Mapping[str, Any],
     *,
@@ -250,46 +298,68 @@ def build_signed_digest_fields(
     raw_manifest_digest: str | None,
     structured_generation: int | None,
     issued_at: str | None = None,
+    checked_at: str | None = None,
+    segment_start: str | None = None,
+    segment_end: str | None = None,
+    discovery_exhausted: bool | None = None,
+    extra_digests: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Build digests dict fragment with Ed25519 signature (COMPLETE-eligible)."""
+    """Build digests dict fragment with Ed25519 signature over closed claims."""
     issued = issued_at or _now()
+    checked = checked_at or issued
+    extras = partition_extra_digests(extra_digests)
+    exhausted = bool(pagination_exhausted)
+    discovered = exhausted if discovery_exhausted is None else bool(discovery_exhausted)
     body_fields = {
+        "version": SIGNED_RECEIPT_CLAIMS_VERSION,
         "dataset": dataset,
-        "segment_id": segment_id,
         "source": source,
-        "run_id": int(run_id),
-        "raw_digest": raw_digest,
-        "raw_count": int(raw_count),
-        "structured_count": int(structured_count),
-        "structured_digest": structured_digest,
-        "pagination_exhausted": bool(pagination_exhausted),
+        "segment_id": segment_id,
+        "segment_start": segment_start,
+        "segment_end": segment_end,
         "source_request_digest": source_request_digest,
         "raw_manifest_digest": raw_manifest_digest,
-        "structured_generation": structured_generation,
+        "raw_digest": raw_digest,
+        "raw_count": int(raw_count),
+        "structured_digest": structured_digest,
+        "structured_count": int(structured_count),
         "parser_normalizer_version": PARSER_NORMALIZER_VERSION,
+        "structured_generation": structured_generation,
+        "pagination_exhausted": exhausted,
+        "discovery_exhausted": discovered,
+        "run_id": int(run_id),
+        "issuer_id": signing_key.key_id,
         "issued_at": issued,
-        "issuer_key_id": signing_key.key_id,
+        "checked_at": checked,
+        "extra_digests": extras,
     }
     body = canonical_receipt_body(body_fields)
     signature = signing_key.sign(body)
-    return {
+    envelope = {
         "eligibility": "TRUSTED_COLLECTION",
         "issuer_class": "SignedReceiptAuthority",
         "issuer_key_id": signing_key.key_id,
+        "issuer_id": signing_key.key_id,
         "parser_normalizer_version": PARSER_NORMALIZER_VERSION,
         "signed_body_b64": base64.b64encode(body).decode("ascii"),
         "signature": signature,
         "body_digest": body_digest(body),
         "issued_at": issued,
+        "checked_at": checked,
         "source_request_digest": source_request_digest,
         "raw_manifest_digest": raw_manifest_digest,
         "structured_generation": structured_generation,
         "structured_digest": structured_digest,
+        "extra_digests": extras,
     }
+    envelope.update(extras)
+    return envelope
 
 
 __all__ = [
     "PARSER_NORMALIZER_VERSION",
+    "SIGNED_RECEIPT_CLAIMS_VERSION",
+    "STANDARD_CLAIM_KEYS",
     "ReceiptSigningKey",
     "ReceiptVerifyKey",
     "build_signed_digest_fields",
@@ -297,5 +367,6 @@ __all__ = [
     "generate_keypair",
     "load_signing_key",
     "load_verify_keys",
+    "partition_extra_digests",
     "verify_receipt_signature",
 ]
