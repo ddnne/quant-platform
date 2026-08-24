@@ -2,6 +2,7 @@
 
 import {
   createBudget,
+  finalizeBudget,
   heartbeatLease,
   reconcileBudget,
   recoverExpiredLeases,
@@ -35,7 +36,16 @@ class DurableObjectBudgetStorage implements BudgetStorage {
 
 function errorStatus(error: string): number {
   if (error === "budget_exhausted") return 429;
-  if (error === "reservation_not_found" || error === "lease_not_active") return 409;
+  if (
+    error === "reservation_not_found" ||
+    error === "lease_not_active" ||
+    error === "budget_frozen" ||
+    error === "actual_exceeds_reserved" ||
+    error === "idempotency_digest_conflict" ||
+    error === "reservation_released"
+  ) {
+    return 409;
+  }
   return 400;
 }
 
@@ -74,6 +84,7 @@ export async function handleBudgetRequest(
           idempotency_key: String(rec.idempotency_key ?? ""),
           amounts: rec.amounts,
           acquire_lease: rec.acquire_lease === true,
+          request_digest: typeof rec.request_digest === "string" ? rec.request_digest : undefined,
         },
         now,
       );
@@ -84,6 +95,23 @@ export async function handleBudgetRequest(
         {
           idempotency_key: String(rec.idempotency_key ?? ""),
           amounts: rec.amounts,
+        },
+        now,
+      );
+      break;
+    case "/finalize":
+      result = await finalizeBudget(
+        storage,
+        {
+          idempotency_key: String(rec.idempotency_key ?? ""),
+          amounts: rec.amounts,
+          result:
+            rec.result && typeof rec.result === "object" && !Array.isArray(rec.result)
+              ? {
+                  http_status: Number((rec.result as Record<string, unknown>).http_status),
+                  body: (rec.result as Record<string, unknown>).body,
+                }
+              : undefined,
         },
         now,
       );

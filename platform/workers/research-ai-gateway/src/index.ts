@@ -1,6 +1,11 @@
 /// <reference types="@cloudflare/workers-types" />
 
 import { authorized } from "./authorized";
+import {
+  bindIdempotencyKey,
+  CONTROL_PLANE_LEDGER_NAME,
+  PILOT_BUDGET_CAPS,
+} from "./budget_do";
 import { BudgetLedger } from "./budget_http";
 import { json } from "./http_json";
 import {
@@ -9,6 +14,7 @@ import {
   estimateCostUsd,
   parseModelJson,
   type GatewayOk,
+  type GatewayRequest,
 } from "./schema";
 import { sha256Hex } from "./sha256";
 
@@ -54,24 +60,33 @@ function extractModelValue(
   return { ok: false, error: "model output is not JSON" };
 }
 
+type CachedBudgetBody = { http_status: number; body: unknown };
+
 type BudgetRpc = {
   ok: boolean;
   status?: number;
   error?: string;
   detail?: string;
   lease_id?: string;
+  existing?: boolean;
+  budget_run_id?: string;
+  reservation_status?: string;
+  cached_result?: CachedBudgetBody | null;
 };
 
-async function budgetRpc(
-  env: GatewayEnv,
-  budgetId: string,
-  path: string,
-  body: unknown,
-): Promise<BudgetRpc> {
+function parseCachedResult(raw: unknown): CachedBudgetBody | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const rec = raw as Record<string, unknown>;
+  const httpStatus = Number(rec.http_status);
+  if (!Number.isInteger(httpStatus) || httpStatus < 1) return null;
+  return { http_status: httpStatus, body: rec.body };
+}
+
+async function budgetRpc(env: GatewayEnv, path: string, body: unknown): Promise<BudgetRpc> {
   if (!env.BUDGET_LEDGER) {
     return { ok: false, status: 503, error: "budget_ledger_unbound" };
   }
-  const id = env.BUDGET_LEDGER.idFromName(budgetId);
+  const id = env.BUDGET_LEDGER.idFromName(CONTROL_PLANE_LEDGER_NAME);
   const stub = env.BUDGET_LEDGER.get(id);
   const res = await stub.fetch(
     new Request(`https://budget${path}`, {
@@ -92,13 +107,42 @@ async function budgetRpc(
   const rec = parsed as Record<string, unknown>;
   const lease =
     rec.lease && typeof rec.lease === "object" ? (rec.lease as Record<string, unknown>) : {};
+  const reservation =
+    rec.reservation && typeof rec.reservation === "object"
+      ? (rec.reservation as Record<string, unknown>)
+      : {};
+  const budgetRunId =
+    (typeof rec.budget_run_id === "string" && rec.budget_run_id) ||
+    (typeof reservation.reservation_id === "string" && reservation.reservation_id) ||
+    undefined;
   return {
     ok: rec.ok === true,
     status: res.status,
     error: typeof rec.error === "string" ? rec.error : undefined,
     detail: typeof rec.detail === "string" ? rec.detail : undefined,
     lease_id: typeof lease.lease_id === "string" ? lease.lease_id : undefined,
+    existing: rec.existing === true,
+    budget_run_id: budgetRunId,
+    reservation_status:
+      typeof reservation.status === "string" ? reservation.status : undefined,
+    cached_result: parseCachedResult(reservation.cached_result),
   };
+}
+
+function completeRequestDigestPayload(req: GatewayRequest): string {
+  return JSON.stringify({
+    model: req.model,
+    messages: req.messages,
+    max_tokens: req.max_tokens,
+    expected_schema: req.expected_schema ?? "",
+    prompt_digest: req.prompt_digest ?? "",
+    experiment_id: req.experiment_id ?? "",
+    ready_snapshot_id: req.ready_snapshot_id ?? "",
+  });
+}
+
+function cachedResponse(cached: CachedBudgetBody): Response {
+  return json(cached.body, cached.http_status);
 }
 
 function tokenCount(
@@ -150,19 +194,27 @@ export default {
     }
     const prompt = req.messages.map((m) => `${m.role}:${m.content}`).join("\n");
     const promptDigest = req.prompt_digest || `sha256:${await sha256Hex(prompt)}`;
-    const estimatedInput = Math.ceil(prompt.length / 4);
+    const requestDigest = await sha256Hex(completeRequestDigestPayload(req));
+    const bound = bindIdempotencyKey(request.headers.get("Idempotency-Key"), requestDigest);
+    if (!bound.ok) {
+      return json({ ok: false, error: bound.error }, 400);
+    }
+    const estimatedInput = Math.min(
+      PILOT_BUDGET_CAPS.max_input_tokens,
+      Math.max(64, Math.ceil(prompt.length / 2)),
+    );
     const estimatedCost = estimateCostUsd(req.model, estimatedInput, req.max_tokens);
-    const idempotencyKey =
-      request.headers.get("Idempotency-Key")?.trim() || crypto.randomUUID();
-    const reserved = await budgetRpc(env, req.budget_id, "/reserve", {
-      idempotency_key: idempotencyKey,
+    const reserveAmounts = {
+      model_calls: 1,
+      input_tokens: estimatedInput,
+      output_tokens: req.max_tokens,
+      cost_usd: estimatedCost,
+    };
+    const reserved = await budgetRpc(env, "/reserve", {
+      idempotency_key: bound.idempotency_key,
+      request_digest: bound.request_digest,
       acquire_lease: true,
-      amounts: {
-        model_calls: 1,
-        input_tokens: estimatedInput,
-        output_tokens: req.max_tokens,
-        cost_usd: estimatedCost,
-      },
+      amounts: reserveAmounts,
     });
     if (!reserved.ok) {
       return json(
@@ -170,39 +222,77 @@ export default {
         reserved.status || 429,
       );
     }
-    const release = () =>
-      budgetRpc(env, req.budget_id, "/release", {
-        idempotency_key: idempotencyKey,
-        lease_id: reserved.lease_id,
+    const budgetRunId = reserved.budget_run_id;
+    if (reserved.cached_result) {
+      return cachedResponse(reserved.cached_result);
+    }
+    if (reserved.existing) {
+      return json(
+        {
+          ok: false,
+          error: "budget_in_progress",
+          budget_run_id: budgetRunId,
+        },
+        409,
+      );
+    }
+
+    const failClosed = async (
+      errorBody: Record<string, unknown>,
+      httpStatus: number,
+      amounts: {
+        model_calls: number;
+        input_tokens: number;
+        output_tokens: number;
+        cost_usd: number;
+      },
+    ): Promise<Response> => {
+      const body = { ...errorBody, budget_run_id: budgetRunId };
+      const finalized = await budgetRpc(env, "/finalize", {
+        idempotency_key: bound.idempotency_key,
+        amounts,
+        result: { http_status: httpStatus, body },
       });
+      if (!finalized.ok) {
+        return json(
+          {
+            ok: false,
+            error: finalized.error || "budget_finalize_failed",
+            detail: finalized.detail,
+            budget_run_id: budgetRunId,
+          },
+          finalized.status || 500,
+        );
+      }
+      return json(body, httpStatus);
+    };
+
     try {
       const res = await env.AI.run(req.model, {
         messages: req.messages,
         max_tokens: req.max_tokens,
       });
       const extracted = extractModelValue(res);
+      const tokens = tokenCount(
+        res,
+        extracted.ok ? extracted.rawForTokens : "",
+        prompt,
+      );
+      const actual = {
+        model_calls: 1,
+        input_tokens: tokens.input,
+        output_tokens: tokens.output,
+        cost_usd: estimateCostUsd(req.model, tokens.input, tokens.output),
+      };
       if (!extracted.ok) {
-        await release();
-        return json({ ok: false, error: extracted.error }, 400);
+        return failClosed({ ok: false, error: extracted.error }, 400, actual);
       }
       const decoded = decodeTypedArtifact(extracted.value, req.expected_schema);
       if (!decoded.ok) {
-        await release();
-        return json({ ok: false, error: decoded.error }, 400);
+        return failClosed({ ok: false, error: decoded.error }, 400, actual);
       }
-      const tokens = tokenCount(res, extracted.rawForTokens, prompt);
       const canonical = JSON.stringify(decoded.value.artifact);
       const outputDigest = `sha256:${await sha256Hex(canonical)}`;
-      await budgetRpc(env, req.budget_id, "/reconcile", {
-        idempotency_key: idempotencyKey,
-        lease_id: reserved.lease_id,
-        usage: {
-          model_calls: 1,
-          input_tokens: tokens.input,
-          output_tokens: tokens.output,
-          cost_usd: estimateCostUsd(req.model, tokens.input, tokens.output),
-        },
-      });
       const payload: GatewayOk = {
         ok: true,
         schema: decoded.value.schema_name,
@@ -217,12 +307,32 @@ export default {
         ready_snapshot_id: req.ready_snapshot_id ?? null,
         experiment_id: req.experiment_id ?? null,
         budget_id: req.budget_id,
+        budget_run_id: budgetRunId || "",
       };
+      const finalized = await budgetRpc(env, "/finalize", {
+        idempotency_key: bound.idempotency_key,
+        amounts: actual,
+        result: { http_status: 200, body: payload },
+      });
+      if (!finalized.ok) {
+        return json(
+          {
+            ok: false,
+            error: finalized.error || "budget_finalize_failed",
+            detail: finalized.detail,
+            budget_run_id: budgetRunId,
+          },
+          finalized.status || 500,
+        );
+      }
       return json(payload);
     } catch (e) {
-      await release();
       const msg = e instanceof Error ? e.message : String(e);
-      return json({ ok: false, error: "ai_run_failed", detail: msg.slice(0, 180) }, 502);
+      return failClosed(
+        { ok: false, error: "ai_run_failed", detail: msg.slice(0, 180) },
+        502,
+        reserveAmounts,
+      );
     }
   },
 };
