@@ -20,15 +20,19 @@
 # Deploy:
 #   cd platform/workers/research-mass-eval && npm install && npx wrangler deploy --env production
 #
-# Public surface: internal/admin only. No public research execution.
-# Production workers_dev=false. preview_urls are version-only, not a research API.
+# Public surface: none. Internal/admin only. No public research execution.
+# workers_dev=false: no stable *.workers.dev hostname.
+# preview_urls=false: version preview URLs are not a research API
+# (wrangler 4.125.0 supports preview_urls).
+# Staging is not [env.staging] in this file (would share the production
+# Cloudflare account). See wrangler.staging.toml — HUMAN separate account.
 # Do not bind Workers AI here; propose uses service binding AI_GATEWAY.
 
 name = "quant-platform-research-mass-eval"
 main = "src/index.ts"
 compatibility_date = "2026-08-01"
 workers_dev = false
-preview_urls = true
+preview_urls = false
 
 # R2 — research mass-eval artifacts (and optional staged panels).
 [[r2_buckets]]
@@ -64,7 +68,7 @@ enabled = true
 [env.production]
 name = "quant-platform-research-mass-eval"
 workers_dev = false
-preview_urls = true
+preview_urls = false
 
 [[env.production.r2_buckets]]
 binding = "STRUCTURED_BUCKET"
