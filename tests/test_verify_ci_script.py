@@ -10,6 +10,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "verify_ci.sh"
+WORKERS_BUILDS_DOC = ROOT / "docs" / "ci" / "workers_builds.md"
 
 WORKERS = (
     "ingestion-jsda",
@@ -329,3 +330,21 @@ def test_no_github_actions_workflows() -> None:
         check=True,
     )
     assert listed.stdout.strip() == "", listed.stdout
+
+
+def test_workers_builds_doc_names_native_check_and_deprecates_ci_aggregate() -> None:
+    doc = WORKERS_BUILDS_DOC.read_text(encoding="utf-8")
+    assert WORKERS_BUILDS_DOC.is_file()
+    assert "scripts/verify_ci.sh" in doc
+    assert ".github/workflows" in doc
+    assert "legacy-peer-deps" in doc
+    assert "Cloudflare Workers & Pages" in doc or "GitHub App" in doc
+    assert "expected source" in doc.lower()
+    assert "informational" in doc.lower()
+    assert "deprecated" in doc.lower()
+    assert "ci-aggregate" in doc
+    assert "CI_LANE_TOKEN" in doc
+    assert "HUMAN" in doc
+    assert "not live" in doc.lower() or "not exist" in doc.lower() or "does not exist" in doc.lower()
+    assert "do not delete" in doc.lower() or "abolish" in doc.lower()
+    assert "repo-root" in doc.lower() or "repository root" in doc.lower()
