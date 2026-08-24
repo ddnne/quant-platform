@@ -8,7 +8,7 @@
 | **Tip at authoring** | `666510d` (layout migration Batches 0–E landed; import names unchanged) |
 | **Accepted after** | `8638936` (Track A dry-run landed; residual SoT live-synced in B1) |
 | **Supersedes** | Nothing (extends `repo_layout_migration.md` success criteria) |
-| **Related** | [`repo_layout_migration.md`](./repo_layout_migration.md), [`repo_layout_inventory.md`](./repo_layout_inventory.md), [`phase7_fail_closed.md`](./phase7_fail_closed.md), [`../phase62_residual_status.md`](../phase62_residual_status.md), [`llm_nav_map.md`](./llm_nav_map.md) |
+| **Related** | [`repo_layout_migration.md`](./repo_layout_migration.md), [`repo_layout_inventory.md`](./repo_layout_inventory.md), [`phase7_fail_closed.md`](./phase7_fail_closed.md), [`../phase62_residual_status.md`](../phase62_residual_status.md), [`../phase633_finding_ledger.md`](../phase633_finding_ledger.md), [`adr_review_findings_sot.md`](./adr_review_findings_sot.md), [`llm_nav_map.md`](./llm_nav_map.md) |
 
 **Hard process constraints (non-negotiable for B0 and all B1 batches):**
 
@@ -138,6 +138,7 @@ After layout migration, onboarding and multi-file agent edits still require trib
 | D8 | **Naming glossary** in nav map; status vocabulary enforced in new docs | B1-a |
 | D9 | No Mass/READY/Phase7 code paths armed; every batch re-runs `test_mass_research_gate.py` + gateway fail-closed | all |
 | D10 | Workers + `data/` frozen; only docs/comments may mention their paths | all |
+| D11 | **Live findings one ledger**: `docs/phase633_finding_ledger.md` is the sole current finding SoT. `docs/reviews/P632_wave*` and Independent A/B/C revisit files are **historical freezes, not live SoT**; do not add more (keep existing; do not delete this lane). See [`adr_review_findings_sot.md`](./adr_review_findings_sot.md) | Lane L |
 
 ---
 
@@ -331,6 +332,7 @@ Layer 0 — ALWAYS READ FIRST (agent entry)
   README.md
   docs/architecture/llm_nav_map.md          # this series' map
   docs/phase62_residual_status.md           # live residual + Mass NO-GO
+  docs/phase633_finding_ledger.md           # live finding ledger (sole)
   docs/architecture.md                      # plane boundaries
   docs/architecture/adr_llm_friendly_refactor.md  # when doing B1
 
@@ -348,6 +350,7 @@ Layer 3 — EVIDENCE (cite, do not “upgrade” status from these alone)
 
 Layer 4 — HISTORICAL / ARCHIVE (do not treat as current GO)
   dated `docs/proof/*` and ops notes (not residual SoT)
+  docs/reviews/P632_wave* / Independent A/B/C revisits — freezes, not live finding SoT
 ```
 
 ### 7.3 B1-a concrete doc actions
@@ -556,6 +559,8 @@ Prefer extending an existing area file over creating `test_misc_*.py`.
 - Do not commit secrets, data/*.sqlite, .venv, egg-info, node_modules.
 - Do not delete parity mirrors (Py/TS) or receipt verification keys casually.
 - Do not treat historical phase62*_status.md as current residual SoT.
+- Do not treat docs/reviews wave / Independent A/B/C revisit files as live finding SoT.
+- Do not add docs/reviews/P632_wave* or Independent A/B/C revisit files.
 ```
 
 ---
@@ -797,6 +802,8 @@ B1-e may document grouping without forcing directory moves (layout Batch F optio
 | [`repo_layout_mapping.json`](./repo_layout_mapping.json) | Machine-readable from→to |
 | [`../architecture.md`](../architecture.md) | PIT / coverage / MCP boundaries |
 | [`../phase62_residual_status.md`](../phase62_residual_status.md) | **Live residual SoT** |
+| [`../phase633_finding_ledger.md`](../phase633_finding_ledger.md) | **Live finding ledger (sole)** |
+| [`./adr_review_findings_sot.md`](./adr_review_findings_sot.md) | Review wave files = historical freezes; do not add more |
 | [`./phase7_fail_closed.md`](./phase7_fail_closed.md) | Phase 7 OFF |
 | [`../quant_data_access.md`](../quant_data_access.md) | Ops vs research read domains |
 | [`./llm_nav_map.md`](./llm_nav_map.md) | Agent entry map (B1 live) |
@@ -811,3 +818,4 @@ B1-e may document grouping without forcing directory moves (layout Batch F optio
 |------|--------|
 | 2026-08-12 | B0 Proposed: initial full ADR for LLM-friendly refactor; no implementation |
 | 2026-08-12 | **Accepted** (Grok review): Batch Z DEFER; leaf imports; residual single SoT; scripts optional; Mass/READY/Phase7 NO-GO. B1 may implement. |
+| 2026-08-24 | D11: live findings one ledger (`phase633_finding_ledger.md`); `docs/reviews` wave files are historical freezes, not live SoT. |
