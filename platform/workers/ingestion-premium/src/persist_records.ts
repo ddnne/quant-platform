@@ -1,6 +1,6 @@
 /**
  * Premium structured persist: D1 record upsert and watermark writes.
- * Fetch, ingestOne orchestration, and HTTP handlers stay in index.ts.
+ * Fetch/upsert stay together in index.ts as the ingestion façade.
  */
 
 import type { DatasetSpec } from "./catalog";
@@ -8,7 +8,12 @@ import { pickAvailableAt } from "./availability";
 import { naturalKey, pickEventTime, stableJson } from "./identity";
 import { isR2Only, wantsSummaryChangeLog } from "./write_path_config";
 import { writeJsonlToR2 } from "./r2_structured_writer";
-import { writeMasterScd2 } from "./master_scd2/write";
+import {
+  writeMasterScd2,
+  type MasterScd2UniverseEvidence,
+} from "./master_scd2/write";
+
+export type { MasterScd2UniverseEvidence };
 
 export interface PersistEnv {
   DB: D1Database;
@@ -114,6 +119,7 @@ export async function upsertRecords(
   spec: DatasetSpec,
   rows: Record<string, unknown>[],
   when: Date,
+  evidence?: MasterScd2UniverseEvidence,
 ): Promise<UpsertSummary> {
   if (rows.length === 0) return { inserted: 0, revisions: 0 };
   const ingestedAt = toJstIso(when);
@@ -145,6 +151,7 @@ export async function upsertRecords(
           payload: record.payload,
         })),
         when,
+        evidence,
       );
       if (wantsSummaryChangeLog(spec.id)) {
         const summaryPayload = JSON.stringify({
