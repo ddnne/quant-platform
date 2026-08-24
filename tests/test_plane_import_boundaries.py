@@ -6,6 +6,8 @@ Encodes ADR ``adr_llm_friendly_refactor.md`` §5.1 / §6.4:
 - Cross-plane edges must be on the allow-list.
 - Explicit exceptions: ``data_access → features|paper_runtime`` (read façade),
   ``paper_runtime → storage|cf_platform|data_contracts`` (READY control plane),
+  ``paper_runtime → execution`` (DTO adapter; execute delegates to the strong
+  paper service and must not call ``run_paper``),
   ``risk → agents`` (soft type edge).
 - Hard bans: product must not import ``ingestion`` market clients;
   ``core``/``features`` must not import ``storage`` / ``ingestion``;
@@ -55,6 +57,10 @@ ALLOWED_CROSS_PACKAGE: frozenset[tuple[str, str]] = frozenset(
         # shared read adapter under data_plane (ADR §5.1)
         ("data_access", "features"),
         ("data_access", "paper_runtime"),
+        # DTO adapter: paper_runtime.execution delegates to the strong service
+        ("paper_runtime", "execution"),
+        # Cycle breaker: import agents before execution.paper_service
+        ("paper_runtime", "agents"),
         # soft edge (inventory); keep until types move
         ("risk", "agents"),
     }
@@ -258,9 +264,11 @@ def test_plane_cross_import_allow_list():
 
     Exceptions:
     - data_access → features / paper_runtime (shared read adapter)
+    - paper_runtime → execution / agents (DTO adapter onto PaperExecutionService)
     - risk → agents (soft type edge)
     - data_plane → research_runtime only via those data_access exceptions
-    - research_runtime → product only via risk → agents
+    - research_runtime → product only via risk → agents and
+      paper_runtime → execution
     """
     offenders: list[str] = []
     for from_leaf, to_root, path, lineno, _ in _collect_edges():
@@ -287,7 +295,8 @@ def test_plane_cross_import_allow_list():
                 f"{path.relative_to(REPO_ROOT)}:{lineno}: "
                 f"{from_leaf}({from_plane}) → {to_root}({to_plane}) "
                 f"not allowed (plane allow: {sorted(allowed_planes)}; "
-                f"package exceptions: data_access→features|paper_runtime, risk→agents)"
+                f"package exceptions: data_access→features|paper_runtime, "
+                f"paper_runtime→execution|agents, risk→agents)"
             )
     assert not offenders, "plane allow-list violations:\n" + "\n".join(offenders)
 
