@@ -67,7 +67,11 @@ function listedPayload(
 }
 
 function input(payload: Record<string, unknown>) {
-  return { naturalKey: "8697", payload };
+  return { naturalKey: String(payload.Code ?? "8697"), payload };
+}
+
+function listedInput(code: string, name = `Name ${code}`) {
+  return input(listedPayload({ Code: code, CompanyName: name }));
 }
 
 function parseCurrent(body: string): {
@@ -325,5 +329,89 @@ describe("writeMasterScd2", () => {
     expect(currentPut(puts).body).toBe(invalid);
     expect(JSON.stringify(err)).not.toContain("COMPLETE");
     assertNoCoverageComplete(puts.slice(afterSeed));
+  });
+
+  it("partial page without trusted universe evidence preserves prior codes and emits no DELISTED", async () => {
+    const { bucket, puts } = memoryBucket();
+    const env = { STRUCTURED_BUCKET: bucket };
+    await writeMasterScd2(
+      env,
+      [listedInput("8697"), listedInput("7203"), listedInput("6758")],
+      WHEN,
+    );
+    const afterFirst = puts.length;
+
+    const later = new Date("2025-04-02T00:00:00.000Z");
+    const second = await writeMasterScd2(
+      env,
+      [listedInput("8697"), listedInput("7203")],
+      later,
+    );
+
+    const snap = parseCurrent(currentPut(puts, afterFirst).body);
+    expect(snap.count).toBe(3);
+    expect(Object.keys(snap.by_code).sort()).toEqual(["6758", "7203", "8697"]);
+    const events = eventPuts(puts, afterFirst);
+    expect(events).toHaveLength(0);
+    expect(second.events_key).toBeNull();
+    expect(second.inserted).toBe(0);
+    assertNoCoverageComplete(snap);
+    assertNoCoverageComplete(second);
+  });
+
+  it("DELISTED only with paginationExhausted and fullUniverse evidence", async () => {
+    const { bucket, puts } = memoryBucket();
+    const env = { STRUCTURED_BUCKET: bucket };
+    await writeMasterScd2(
+      env,
+      [listedInput("8697"), listedInput("7203"), listedInput("6758")],
+      WHEN,
+    );
+    const afterFirst = puts.length;
+    const prevHash = parseCurrent(currentPut(puts).body).by_code["6758"]!
+      .version_hash;
+
+    const later = new Date("2025-04-02T00:00:00.000Z");
+    const exhaustedOnly = await writeMasterScd2(
+      env,
+      [listedInput("8697"), listedInput("7203")],
+      later,
+      { paginationExhausted: true, fullUniverse: false },
+    );
+    expect(parseCurrent(currentPut(puts, afterFirst).body).count).toBe(3);
+    expect(exhaustedOnly.events_key).toBeNull();
+    const afterPartial = puts.length;
+
+    const trusted = await writeMasterScd2(
+      env,
+      [listedInput("8697"), listedInput("7203")],
+      later,
+      { paginationExhausted: true, fullUniverse: true },
+    );
+    const snap = parseCurrent(currentPut(puts, afterPartial).body);
+    expect(snap.count).toBe(2);
+    expect(snap.by_code["6758"]).toBeUndefined();
+    expect(Object.keys(snap.by_code).sort()).toEqual(["7203", "8697"]);
+
+    const events = eventPuts(puts, afterPartial);
+    expect(events).toHaveLength(1);
+    const rows = events[0]!.body
+      .split("\n")
+      .filter((line) => line.length > 0)
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      event_type: MASTER_EVENT_TYPES.DELISTED,
+      effective_date: "2025-04-02",
+      local_code: "6758",
+      prev_hash: prevHash,
+      new_hash: null,
+      attrs: null,
+    });
+    expect(trusted.inserted).toBe(1);
+    expect(trusted.events_key).toBe(events[0]!.key);
+    assertNoCoverageComplete(snap);
+    assertNoCoverageComplete(rows);
+    assertNoCoverageComplete(trusted);
   });
 });

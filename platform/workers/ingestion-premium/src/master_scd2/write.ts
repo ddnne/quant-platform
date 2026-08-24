@@ -219,10 +219,17 @@ export interface MasterScd2InputRecord {
   payload: unknown;
 }
 
+/** Trusted full-universe evidence required before DELISTED events. */
+export interface MasterScd2UniverseEvidence {
+  paginationExhausted: boolean;
+  fullUniverse: boolean;
+}
+
 export async function writeMasterScd2(
   env: Scd2Env,
   records: MasterScd2InputRecord[],
   when: Date,
+  evidence?: MasterScd2UniverseEvidence,
 ): Promise<{ inserted: number; revisions: number; events_key: string | null }> {
   const runId = newRunId("scd2");
   const asOf = jstDate(when);
@@ -266,13 +273,12 @@ export async function writeMasterScd2(
     }
   }
 
-  // Delistings: only when we have a full-universe snapshot (many codes).
-  // Avoid false delists on partial pages: require incoming >= 50% of previous.
+  // Delist only with trusted pagination-exhausted / full-universe evidence.
+  // Size heuristics (incoming vs previous) are not evidence.
   const prevCodes = Object.keys(prev.by_code);
-  if (
-    prevCodes.length > 0 &&
-    incomingCodes.size >= Math.max(100, Math.floor(prevCodes.length * 0.5))
-  ) {
+  const trustedFullUniverse =
+    evidence?.paginationExhausted === true && evidence?.fullUniverse === true;
+  if (prevCodes.length > 0 && trustedFullUniverse) {
     for (const code of prevCodes) {
       if (!incomingCodes.has(code)) {
         const old = prev.by_code[code]!;
