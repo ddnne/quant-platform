@@ -10,6 +10,7 @@ from data_contracts.canonical import governed_datasets
 from data_contracts.coverage import coverage_contract_for
 from data_contracts.source_capability import (
     all_source_capability_contracts,
+    coverage_v3_dataset_ids,
     load_source_capability_dir,
     required_domain_subset_official,
     source_capability_contract_for,
@@ -24,14 +25,7 @@ from research.research_data_profile import (
 )
 from storage.coverage_ledger import evaluate_segment, plan_required_segments
 
-_V3_DATASETS = frozenset(
-    {
-        "equities_master",
-        "equities_bars_daily_am",
-        "equities_earnings_calendar",
-        "jsda_otc_bond_reference_prices",
-    }
-)
+_V3_DATASETS = coverage_v3_dataset_ids()
 _NO_V3_DATASET = "fins_summary"
 
 
@@ -49,6 +43,7 @@ def test_on_disk_v3_is_only_the_four_existing_rows() -> None:
     ]
     loaded = {contract.dataset_id for contract in all_source_capability_contracts()}
     assert loaded == _V3_DATASETS
+    assert loaded == {name.removesuffix(".json") for name in on_disk}
 
 
 def test_empty_dir_is_valid_and_does_not_invent_rows(tmp_path: Path) -> None:
