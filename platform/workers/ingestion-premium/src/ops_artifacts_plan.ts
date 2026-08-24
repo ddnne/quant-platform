@@ -2,26 +2,21 @@
  * Artifacts join plan (read-only). No Mass research. Returns R2 keys + D1 SQL.
  */
 
+import { json } from "./http_json";
+import { ingestionTokenMatches } from "./ingestion_token";
+
 export interface ArtifactsPlanEnv {
   STRUCTURED_BUCKET: R2Bucket;
   DB: D1Database;
   INGESTION_RUN_TOKEN?: string;
 }
 
-function authorized(request: Request, expected: string | undefined): boolean {
-  if (!expected) return false;
-  const url = new URL(request.url);
-  const header = request.headers.get("X-Ingestion-Token") || "";
-  const query = url.searchParams.get("token") || "";
-  return header === expected || query === expected;
-}
-
 export async function handleArtifactsJoinPlan(
   request: Request,
   env: ArtifactsPlanEnv,
 ): Promise<Response> {
-  if (!authorized(request, env.INGESTION_RUN_TOKEN)) {
-    return Response.json({ error: "unauthorized" }, { status: 401 });
+  if (!(await ingestionTokenMatches(request, env.INGESTION_RUN_TOKEN))) {
+    return json({ error: "unauthorized" }, 401);
   }
 
   const url = new URL(request.url);
@@ -31,10 +26,7 @@ export async function handleArtifactsJoinPlan(
     .map((s) => s.trim())
     .filter(Boolean);
   if (datasets.length === 0) {
-    return Response.json(
-      { error: "datasets required (comma-separated)" },
-      { status: 400 },
-    );
+    return json({ error: "datasets required (comma-separated)" }, 400);
   }
   const from = url.searchParams.get("from") || "1970-01-01";
   const to = url.searchParams.get("to") || "9999-12-31";
@@ -90,7 +82,7 @@ export async function handleArtifactsJoinPlan(
     };
   }
 
-  return Response.json({
+  return json({
     schema: "artifacts-join-plan/v1",
     mass_research: "NO-GO",
     from,
