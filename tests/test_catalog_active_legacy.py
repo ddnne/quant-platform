@@ -56,15 +56,22 @@ def test_active_legacy_partition_compiled() -> None:
     assert compiler_legacy_logic_ids() == legacy
 
 
-def test_pilot_candidates_are_active_only() -> None:
+def test_pilot_candidates_are_experiment_plans_not_active_remainder() -> None:
+    from research.experiment_plans import PILOT_PLAN_COUNT, load_experiment_plans
+
     active = active_logic_ids()
     legacy = legacy_logic_ids()
+    compiled = compiled_migration_ids()
     pilots = pilot_candidates()
-    assert pilots <= active
-    assert pilots == active
+    expected = frozenset(plan.strategy_spec_id for plan in load_experiment_plans())
+    assert len(active) == 2092
+    assert len(pilots) == PILOT_PLAN_COUNT == 4
+    assert pilots == expected
+    assert pilots != active
+    assert pilots.isdisjoint(active)
     assert pilots.isdisjoint(legacy)
+    assert pilots.isdisjoint(compiled)
     assert compiler_pilot_candidates() == pilots
-    assert not any(catalog_kind(lid) == "legacy" for lid in pilots)
 
 
 def test_active_catalog_count_is_not_a_pass() -> None:
@@ -72,8 +79,9 @@ def test_active_catalog_count_is_not_a_pass() -> None:
     assert catalog_active.summary()["go"] is False
     assert catalog_active.summary()["not_a_pass"] is True
     assert pack["n_active_is_not_a_quality_metric"] is True
-    assert pack["n_active"] == len(pilot_candidates()) == len(active_logic_ids())
-    assert pack["n_pilot_candidates"] == pack["n_active"]
+    assert pack["n_active"] == len(active_logic_ids()) == 2092
+    assert pack["n_pilot_candidates"] == len(pilot_candidates()) == 4
+    assert pack["n_pilot_candidates"] != pack["n_active"]
     assert pack["go"] is False
     assert pack["not_a_pass"] is True
 

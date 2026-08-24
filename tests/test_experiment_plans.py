@@ -42,7 +42,9 @@ def test_typed_experiment_plans_are_exactly_four() -> None:
     n_active = len(active_logic_ids())
     assert n_active > 4
     assert set(PILOT_EXPERIMENT_PLAN_IDS).isdisjoint(active_logic_ids())
-    assert len(pilot_candidates()) == n_active
+    assert len(pilot_candidates()) == PILOT_PLAN_COUNT == 4
+    assert len(pilot_candidates()) != n_active
+    assert pilot_candidates() == frozenset(p.strategy_spec_id for p in plans)
     assert len(plans) != n_active
     for plan in plans:
         payload = plan.to_dict()

@@ -319,7 +319,7 @@ def catalog_kind(logic_id: str) -> str:
 
 
 def pilot_candidates() -> frozenset[str]:
-    """v2 split: active only. Does not put legacy IDs in the pilot helper."""
+    """ExperimentPlan strategy_spec_ids. Not the 2092 active remainder."""
     from research.catalog_active import pilot_candidates as _ids
 
     return _ids()
