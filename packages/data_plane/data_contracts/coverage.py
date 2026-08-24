@@ -1,18 +1,17 @@
 """Collection coverage policy paired with the canonical dataset contract.
 
-The policy deliberately distinguishes calendar/periodic series from irregular
-event feeds.  Event feeds are reconciled against the source collection window;
-they never acquire invented daily row-count expectations.
+The policy distinguishes calendar/periodic series from irregular event feeds
+and SourceCapabilityContract V3 snapshot grains. Event feeds never acquire
+invented daily row-count expectations.
 
-Event-driven + default ``calendar_month`` still *plans* one required segment
-per month (see ``storage.coverage_ledger.plan_required_segments``).
-``evaluate_segment`` will COMPLETE an event window with a trusted receipt
-even when ``observed_items==0``; it will PARTIAL a month with *no* receipt
-(``missing collection receipt``). That is why ``equities_earnings_calendar``
-shows 1/200 COMPLETE while the vendor API is next-business-day / recent-only
-(https://jpx-jquants.com/en/spec/eq-earnings-cal). Do not fabricate monthly
-COMPLETE shells. A later contract grain (snapshot / source_event_window)
-needs a product ADR — not a ``history_target_start`` bump to invent COMPLETE.
+V3 official-domain datasets are those with a SourceCapability JSON row.
+Their collection_coverage.json rows must match ``derive_collection_coverage_v3``
+(policy_version collection-coverage/v3; master history_target_start
+``2008-05-07``). Missing V3 stays None. Tip/snapshot grains plan a current
+collection window, not hundreds of empty monthly COMPLETE shells. Official
+``2008-05-07`` for equities_master is domain correction, not Dataset COMPLETE.
+Live MCP projection remains document-root collection-coverage/v2 until HUMAN
+refresh.
 """
 
 from __future__ import annotations
@@ -31,9 +30,17 @@ COVERAGE_STATUSES = frozenset(
     {"COMPLETE", "PARTIAL", "STALE", "UNKNOWN", "FAILED"}
 )
 GOVERNANCE_TIERS = frozenset({"governed", "experimental"})
-SEGMENT_GRANULARITIES = frozenset({
-    "calendar_month", "official_archive_day", "official_archive_year", "source_time_series_file"
+SNAPSHOT_SEGMENT_GRANULARITIES = frozenset({
+    "collection_cutoff_snapshot",
+    "same_trading_day_am_snapshot",
 })
+SEGMENT_GRANULARITIES = frozenset({
+    "calendar_month",
+    "official_archive_day",
+    "official_archive_index_day",
+    "official_archive_year",
+    "source_time_series_file",
+}) | SNAPSHOT_SEGMENT_GRANULARITIES
 _REQUIRED = frozenset(
     {
         "collection_scope",
@@ -48,10 +55,29 @@ _REQUIRED = frozenset(
         "governance_tier",
     }
 )
+# Optional metadata only. Never copied into history_target_start.
+VENDOR_ANNOTATION_FIELDS = (
+    "not_historical_required_start",
+    "earliest_official_availability",
+    "official_mode",
+    "vendor_data_provision_start",
+    "vendor_history_policy",
+    "vendor_data_provision_citation",
+    "vendor_history_policy_citation",
+)
+_OPTIONAL_STRINGS = ("policy_version", "history_mode") + VENDOR_ANNOTATION_FIELDS
 
 
 @dataclass(frozen=True)
 class CollectionCoverageContract:
+    """One dataset's collection policy.
+
+    Vendor annotation fields are optional documented metadata. They are
+    retained when present and omitted as ``None`` when absent.
+    ``history_target_start`` is always the JSON field as written — never
+    replaced by an entitlement floor or official-availability annotation.
+    """
+
     dataset_id: str
     collection_scope: str
     history_target_start: str
@@ -63,6 +89,15 @@ class CollectionCoverageContract:
     structured_reconciliation_required: bool
     segment_granularity: str
     governance_tier: str
+    policy_version: str | None = None
+    history_mode: str | None = None
+    not_historical_required_start: str | None = None
+    earliest_official_availability: str | None = None
+    official_mode: str | None = None
+    vendor_data_provision_start: str | None = None
+    vendor_history_policy: str | None = None
+    vendor_data_provision_citation: str | None = None
+    vendor_history_policy_citation: str | None = None
 
     @classmethod
     def from_dict(
@@ -83,8 +118,9 @@ class CollectionCoverageContract:
         for name, value in strings.items():
             if not isinstance(value, str) or not value:
                 raise ValueError(f"{dataset_id}.{name} must be non-empty string")
-        # Annotation-only keys (vendor_data_provision_start, vendor_history_policy,
-        # citations) are ignored here; they must not move history_target_start.
+        # Vendor annotations stay on the object. Do not copy them into
+        # history_target_start; V2 floors and V3 official starts remain
+        # distinct JSON values.
         tier = str(raw["governance_tier"])
         if tier not in GOVERNANCE_TIERS:
             raise ValueError(
@@ -98,7 +134,27 @@ class CollectionCoverageContract:
         for name in ("raw_retention_required", "structured_reconciliation_required"):
             if not isinstance(raw[name], bool):
                 raise ValueError(f"{dataset_id}.{name} must be boolean")
-        return cls(dataset_id=dataset_id, **{name: raw[name] for name in _REQUIRED})
+        optional: dict[str, Any] = {}
+        for name in _OPTIONAL_STRINGS:
+            if name not in raw or raw[name] is None:
+                continue
+            value = raw[name]
+            if not isinstance(value, str) or not value:
+                raise ValueError(f"{dataset_id}.{name} must be non-empty string")
+            optional[name] = value
+        return cls(
+            dataset_id=dataset_id,
+            **{name: raw[name] for name in _REQUIRED},
+            **optional,
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {"dataset_id": self.dataset_id}
+        for name in _REQUIRED:
+            payload[name] = getattr(self, name)
+        for name in _OPTIONAL_STRINGS:
+            payload[name] = getattr(self, name)
+        return payload
 
 
 def _load() -> tuple[str, Mapping[str, CollectionCoverageContract]]:
@@ -132,7 +188,8 @@ def _load() -> tuple[str, Mapping[str, CollectionCoverageContract]]:
         )
     contracts = {
         dataset_id: CollectionCoverageContract.from_dict(
-            dataset_id, {**defaults, **overrides}
+            dataset_id,
+            {**defaults, "policy_version": policy_version, **overrides},
         )
         for dataset_id, overrides in rows.items()
     }
@@ -158,6 +215,8 @@ __all__ = [
     "COVERAGE_STATUSES",
     "GOVERNANCE_TIERS",
     "SEGMENT_GRANULARITIES",
+    "SNAPSHOT_SEGMENT_GRANULARITIES",
+    "VENDOR_ANNOTATION_FIELDS",
     "POLICY_VERSION",
     "CollectionCoverageContract",
     "all_coverage_contracts",

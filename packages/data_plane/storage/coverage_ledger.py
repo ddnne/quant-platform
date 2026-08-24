@@ -14,9 +14,21 @@ from cf_platform.ingest_premium.coverage import CheckResult, run_coverage
 from data_contracts.coverage import (
     COVERAGE_STATUSES,
     POLICY_VERSION,
+    SNAPSHOT_SEGMENT_GRANULARITIES,
     CollectionCoverageContract,
     all_coverage_contracts,
     coverage_contract_for,
+)
+from data_contracts.source_capability import (
+    TIP_SNAPSHOT_MODES,
+    OfficialRequiredDomainSubset,
+    SourceCapabilityContract,
+    required_domain_subset_official,
+    source_capability_contract_or_none,
+)
+from ingestion.jsda.official_index import (
+    OFFICIAL_ARCHIVE_INDEX_DATASETS as _OFFICIAL_ARCHIVE_INDEX_DATASETS,
+    official_index_days,
 )
 from storage.coverage_ledger_io import (
     persist_refreshed_coverage,
@@ -28,6 +40,7 @@ from storage.coverage_ledger_io import (
     update_dataset_coverage_row,
 )
 from storage.coverage_receipts import (
+    EXPECTED_EMPTY_WITH_EVIDENCE,
     SYNTHETIC_RECEIPT_MARKER,
     build_collection_receipt,
     build_synthetic_complete_receipt,
@@ -86,20 +99,151 @@ def _month_end(value: date) -> date:
     return value.replace(day=calendar.monthrange(value.year, value.month)[1])
 
 
+_TIP_COVERAGE_MODES = frozenset({
+    "recent_snapshot",
+    "next_business_day_snapshot",
+    "same_day_am_snapshot",
+    "tip_snapshot",
+})
+_OFFICIAL_ARCHIVE_INDEX_MODES = frozenset({
+    "official_archive_index",
+    "official_archive_index_reconciled",
+})
+
+
+def _source_capability_for(
+    dataset_id: str,
+) -> SourceCapabilityContract | None:
+    return source_capability_contract_or_none(dataset_id)
+
+
+def _official_domain_for(
+    capability: SourceCapabilityContract | None,
+) -> OfficialRequiredDomainSubset | None:
+    if capability is None:
+        return None
+    return required_domain_subset_official(capability)
+
+
+def _is_tip_snapshot_policy(
+    policy: CollectionCoverageContract,
+    domain: OfficialRequiredDomainSubset | None,
+) -> bool:
+    if domain is not None and not domain.admit_historical_required_segments:
+        return True
+    if policy.segment_granularity in SNAPSHOT_SEGMENT_GRANULARITIES:
+        return True
+    if policy.coverage_mode in _TIP_COVERAGE_MODES:
+        return True
+    history_mode = policy.history_mode
+    return history_mode in TIP_SNAPSHOT_MODES
+
+
+def _snapshot_extra_scope(
+    policy: CollectionCoverageContract,
+    capability: SourceCapabilityContract | None,
+    domain: OfficialRequiredDomainSubset | None,
+    grain: str,
+) -> dict[str, Any]:
+    history_mode = (
+        domain.history_mode
+        if domain is not None
+        else (policy.history_mode or policy.coverage_mode)
+    )
+    extra: dict[str, Any] = {
+        "history_mode": history_mode,
+        "tip_only_operational": True,
+    }
+    if capability is None:
+        return extra
+    sla = capability.freshness_sla
+    extra["freshness_sla"] = {
+        "expected_after": sla.expected_after,
+        "usable_by": sla.usable_by,
+        "timezone": sla.timezone,
+        "rule": sla.rule,
+    }
+    window = capability.collection_window
+    extra["collection_window"] = {
+        "grain": grain,
+        "open": window.open,
+        "close": window.close,
+    }
+    if history_mode == "next_business_day_snapshot":
+        extra["evaluate_via"] = [
+            "collection_generation",
+            "collection_cutoff",
+            "freshness_sla",
+        ]
+    return extra
+
+
+def _uses_official_archive_index(
+    policy: CollectionCoverageContract,
+    domain: OfficialRequiredDomainSubset | None,
+) -> bool:
+    if policy.dataset_id in _OFFICIAL_ARCHIVE_INDEX_DATASETS:
+        return True
+    if policy.coverage_mode in _OFFICIAL_ARCHIVE_INDEX_MODES:
+        return True
+    if policy.history_mode == "official_archive_index":
+        return True
+    if domain is None:
+        return False
+    return (
+        domain.history_mode == "official_archive_index"
+        or domain.publication_days_only
+    )
+
+
 def plan_required_segments(
     policy: CollectionCoverageContract,
     target_end: str,
     *,
     source: str = "jquants",
     expected_items_by_segment: Mapping[str, int] | None = None,
+    index_text: str | None = None,
 ) -> tuple[RequiredCoverageSegment, ...]:
-    """Create the required inventory independently of observed rows/receipts."""
+    """Create the required inventory independently of observed rows/receipts.
+
+    SourceCapabilityContract V3 is SoT when present: official availability
+    clips bounded history, and tip/snapshot history modes yield a current
+    snapshot segment instead of invented monthly shells.
+
+    Official-archive-index datasets take listed publication days from
+    ``index_text``. Missing index text yields an empty required set
+    (UNKNOWN / fail-closed), not a calendar-day walk.
+    """
+    capability = _source_capability_for(policy.dataset_id)
+    domain = _official_domain_for(capability)
     start = date.fromisoformat(policy.history_target_start)
+    if domain is not None:
+        official = date.fromisoformat(domain.earliest_official_availability)
+        if start < official:
+            start = official
     end = date.fromisoformat(target_end)
     if end < start:
         raise ValueError("target_end precedes coverage history target")
-    granularity = policy.segment_granularity
+    tip_snapshot = _is_tip_snapshot_policy(policy, domain)
+    if tip_snapshot:
+        grain = (
+            domain.collection_window_grain
+            if domain is not None
+            else policy.segment_granularity
+        )
+        if grain not in SNAPSHOT_SEGMENT_GRANULARITIES:
+            grain = policy.segment_granularity
+            if grain not in SNAPSHOT_SEGMENT_GRANULARITIES:
+                grain = "collection_cutoff_snapshot"
+    else:
+        grain = policy.segment_granularity
+    granularity = grain
     segments: list[RequiredCoverageSegment] = []
+    extra_scope = (
+        _snapshot_extra_scope(policy, capability, domain, grain)
+        if tip_snapshot
+        else None
+    )
 
     def _append(segment_id: str, segment_start: date, segment_end: date) -> None:
         expected_items = None
@@ -115,7 +259,7 @@ def plan_required_segments(
         # Non-event source_query needs expected_items for COMPLETE; default one exhausted query.
         if expected_items is None and unit == "source_query":
             expected_items = 1
-        scope = {
+        scope: dict[str, Any] = {
             "coverage_mode": policy.coverage_mode,
             "expected_frequency": policy.expected_frequency,
             "expected_item_unit": unit,
@@ -124,6 +268,8 @@ def plan_required_segments(
             "universe_rule": policy.universe_rule,
             "segment_granularity": granularity,
         }
+        if extra_scope:
+            scope.update(extra_scope)
         segments.append(RequiredCoverageSegment(
             source=source,
             dataset=policy.dataset_id,
@@ -134,6 +280,21 @@ def plan_required_segments(
             expected_items=expected_items,
         ))
 
+    if tip_snapshot:
+        # Current collection window only. Do not expand monthly history.
+        _append(end.isoformat(), end, end)
+        return tuple(segments)
+    if (
+        _uses_official_archive_index(policy, domain)
+        or granularity == "official_archive_index_day"
+    ):
+        # Listed index days only. Grain is an alias, not a calendar walk.
+        # Missing index_text → empty, not weekends.
+        for day_s in official_index_days(policy.dataset_id, index_text):
+            day = date.fromisoformat(day_s)
+            if start <= day <= end:
+                _append(day_s, day, day)
+        return tuple(segments)
     if granularity == "calendar_month":
         cursor = start
         while cursor <= end:
@@ -146,11 +307,7 @@ def plan_required_segments(
             segment_end = min(end, date(year, 12, 31))
             _append(str(year), segment_start, segment_end)
     elif granularity == "official_archive_day":
-        # Walks every calendar day. JSDA OTC coverage_mode is
-        # official_archive_index_reconciled — required publication days come
-        # from the official year index, not weekends/holidays. Calendar-day
-        # inventory is why jsda_otc PARTIAL (~2898) >> PARSE_ZERO (2).
-        # Do not COMPLETE empty non-index days from this expansion.
+        # Non-index official_archive_day only. Index datasets returned above.
         cursor = start
         while cursor <= end:
             _append(cursor.isoformat(), cursor, cursor)
@@ -169,6 +326,33 @@ def plan_required_segments(
             f"unsupported segment granularity: {policy.segment_granularity!r}"
         )
     return tuple(segments)
+
+
+def _empty_observed_forbids_complete(policy: CollectionCoverageContract) -> bool:
+    """Tip snapshots and official-archive-index never COMPLETE on empty receipts.
+
+    Event-zero COMPLETE stays only for genuine event_driven historical windows
+    (fins disclosures). coverage_mode containing snapshot, snapshot grains
+    (collection_cutoff / same_trading_day), or official_archive_index stay
+    PARTIAL even when expected_frequency is still event_driven.
+    """
+    domain = _official_domain_for(_source_capability_for(policy.dataset_id))
+    if _is_tip_snapshot_policy(policy, domain):
+        return True
+    if _uses_official_archive_index(policy, domain):
+        return True
+    mode = policy.coverage_mode
+    grain = policy.segment_granularity
+    history_mode = policy.history_mode or ""
+    if "snapshot" in mode or "snapshot" in history_mode:
+        return True
+    if grain in SNAPSHOT_SEGMENT_GRANULARITIES:
+        return True
+    if grain.startswith(("collection_cutoff", "same_trading_day")):
+        return True
+    if grain == "official_archive_index_day":
+        return True
+    return "official_archive_index" in mode
 
 
 def evaluate_segment(
@@ -190,8 +374,15 @@ def evaluate_segment(
     )
     if not identity_matches:
         return "PARTIAL", {"reason": "receipt does not match required scope"}
-    # Trusted-path gate: only Ed25519-verified signed receipts may COMPLETE.
-    if not is_complete_eligible_receipt(receipt):
+    # Trusted-path gate: VerifiedReceipt plus non-empty trusted raw (or expected-empty flag).
+    try:
+        from storage.verified_receipt import (
+            ReceiptVerificationError,
+            require_verified_receipt,
+        )
+
+        require_verified_receipt(receipt, required=required)
+    except ReceiptVerificationError:
         return "PARTIAL", {
             "reason": "receipt not COMPLETE-eligible (valid Ed25519 signature required)",
             "eligibility": receipt_eligibility(receipt),
@@ -211,6 +402,10 @@ def evaluate_segment(
         return "FAILED", {"reason": receipt.error or "collection failed"}
     if not receipt.pagination_exhausted:
         return "PARTIAL", {"reason": "pagination not exhausted"}
+    if receipt.observed_items == 0 and _empty_observed_forbids_complete(policy):
+        return "PARTIAL", {
+            "reason": "empty tip-snapshot or archive-index receipt is not complete"
+        }
     if (
         policy.expected_frequency != "event_driven"
         and required.expected_items is None
@@ -241,6 +436,12 @@ def evaluate_segment(
         and receipt.raw_row_count != receipt.structured_row_count
     ):
         return "FAILED", {"reason": "raw/structured row mismatch"}
+    if not _has_nonempty_trusted_raw_evidence(receipt):
+        return "PARTIAL", {
+            "reason": "empty raw is not COMPLETE-eligible without "
+            "EXPECTED_EMPTY_WITH_EVIDENCE",
+            "raw_row_count": int(receipt.raw_row_count),
+        }
     return "COMPLETE", {
         "reason": "receipt reconciled",
         "event_zero": receipt.observed_items == 0,
@@ -616,8 +817,14 @@ def refresh_coverage_ledger(
     datasets: Iterable[str] | None = None,
     today: str | None = None,
     freshness_days: int = 7,
+    index_text: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Evaluate Coverage V2 segments and atomically refresh aggregate rows."""
+    """Evaluate Coverage V2 segments and atomically refresh aggregate rows.
+
+    Official-archive-index datasets take required days from
+    ``plan_required_segments`` / ``index_text``. Missing index text is
+    fail-closed empty, not a replay of calendar-day inventory.
+    """
     selected = tuple(datasets) if datasets is not None else tuple(
         policy.dataset_id for policy in all_coverage_contracts()
     )
@@ -715,9 +922,13 @@ def refresh_coverage_ledger(
             observed_start, observed_end = _merge_observed_window(
                 observed_start, observed_end, receipt_start, receipt_end,
             )
-        if policy.segment_granularity in {
-            "official_archive_day", "source_time_series_file"
-        }:
+        domain = _official_domain_for(_source_capability_for(dataset))
+        if (
+            policy.segment_granularity in {
+                "official_archive_day", "source_time_series_file"
+            }
+            and not _uses_official_archive_index(policy, domain)
+        ):
             # Keep inventory through target_end, plus already-COMPLETE days past UTC (JST can lead).
             required_segments = tuple(sorted(
                 (
@@ -732,7 +943,9 @@ def refresh_coverage_ledger(
                 key=lambda item: (item.segment_start, item.segment_id),
             ))
         else:
-            base_segments = plan_required_segments(policy, target_end, source=source)
+            base_segments = plan_required_segments(
+                policy, target_end, source=source, index_text=index_text,
+            )
             expected_items_by_segment: dict[str, int] = {}
             for segment in base_segments:
                 inventory = inventory_by_dataset[dataset].get(segment.segment_id)
@@ -753,6 +966,7 @@ def refresh_coverage_ledger(
                 target_end,
                 source=source,
                 expected_items_by_segment=expected_items_by_segment,
+                index_text=index_text,
             )
         segment_aggregate, segment_evaluations = evaluate_required_segments(
             policy, required_segments, receipts_by_dataset[dataset]
@@ -1201,7 +1415,7 @@ def is_synthetic_receipt(receipt: CollectionReceipt) -> bool:
 
 
 def receipt_eligibility(receipt: CollectionReceipt) -> str:
-    """TRUSTED_COLLECTION only with a verified Ed25519 signature, never issuer strings."""
+    """TRUSTED_COLLECTION only with a VerifiedReceipt, never issuer strings."""
     if is_synthetic_receipt(receipt) or receipt.digests.get("origin") in {
         "offline-test-fixture",
         "recovered-raw-only",
@@ -1209,31 +1423,45 @@ def receipt_eligibility(receipt: CollectionReceipt) -> str:
         "failed-collection",
     }:
         return "RECOVERED_RAW_ONLY"
-    # Lazy import avoids circular import at module load.
-    from storage.receipt_crypto import verify_receipt_signature
+    from storage.verified_receipt import ReceiptVerificationError, require_verified_receipt
 
-    if (
-        receipt.digests.get("eligibility") == "TRUSTED_COLLECTION"
-        and verify_receipt_signature(receipt.digests)
-    ):
-        return "TRUSTED_COLLECTION"
-    return "RECOVERED_RAW_ONLY"
+    try:
+        require_verified_receipt(receipt)
+    except ReceiptVerificationError:
+        return "RECOVERED_RAW_ONLY"
+    return "TRUSTED_COLLECTION"
+
+
+def _has_nonempty_trusted_raw_evidence(receipt: CollectionReceipt) -> bool:
+    """COMPLETE needs raw_count>0 or signed EXPECTED_EMPTY_WITH_EVIDENCE.
+
+    Unsigned ``[]`` / ``{"data":[]}`` is not expected-empty evidence.
+    """
+    if int(receipt.raw_row_count) > 0:
+        return True
+    extras = receipt.digests.get("extra_digests")
+    return isinstance(extras, dict) and bool(
+        extras.get(EXPECTED_EMPTY_WITH_EVIDENCE)
+    )
 
 
 def is_complete_eligible_receipt(receipt: CollectionReceipt) -> bool:
-    """COMPLETE only with cryptographically verified signature."""
+    """COMPLETE only with VerifiedReceipt and non-empty trusted raw evidence."""
     if is_synthetic_receipt(receipt):
         return False
-    from storage.receipt_crypto import verify_receipt_signature
+    from storage.verified_receipt import ReceiptVerificationError, require_verified_receipt
 
-    return (
-        receipt.digests.get("eligibility") == "TRUSTED_COLLECTION"
-        and verify_receipt_signature(receipt.digests)
-    )
+    try:
+        require_verified_receipt(receipt)
+    except ReceiptVerificationError:
+        return False
+    return _has_nonempty_trusted_raw_evidence(receipt)
+
 
 __all__ = [
     "CollectionReceipt",
     "RequiredCoverageSegment",
+    "EXPECTED_EMPTY_WITH_EVIDENCE",
     "SYNTHETIC_RECEIPT_MARKER",
     "build_collection_receipt",
     "build_synthetic_complete_receipt",
@@ -1243,6 +1471,7 @@ __all__ = [
     "evaluate_segment",
     "evaluate_required_segments",
     "is_synthetic_receipt",
+    "official_index_days",
     "plan_required_segments",
     "read_collection_receipts",
     "read_coverage_segments",

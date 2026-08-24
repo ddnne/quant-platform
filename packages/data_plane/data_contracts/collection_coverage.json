@@ -11,10 +11,12 @@
   },
   "datasets": {
     "equities_master": {
-      "history_target_start": "2006-08-13",
+      "policy_version": "collection-coverage/v3",
+      "history_target_start": "2008-05-07",
       "vendor_data_provision_start": "2008-05-07",
       "vendor_data_provision_citation": "https://jpx-jquants.com/en/spec/eq-master",
       "coverage_mode": "scd2_event_sourcing",
+      "history_mode": "bounded_history",
       "expected_frequency": "trading_day",
       "universe_rule": "all_listed_equities_at_event_date"
     },
@@ -25,12 +27,15 @@
       "universe_rule": "all_listed_equities_at_event_date"
     },
     "equities_bars_daily_am": {
+      "policy_version": "collection-coverage/v3",
       "history_target_start": "2024-01-04",
       "vendor_history_policy": "recent_data_only",
       "vendor_history_policy_citation": "https://jpx-jquants.com/en/spec/eq-bars-daily-am",
-      "coverage_mode": "trading_calendar",
+      "coverage_mode": "recent_snapshot",
+      "history_mode": "recent_snapshot",
       "expected_frequency": "trading_day",
-      "universe_rule": "all_listed_equities_at_event_date"
+      "universe_rule": "all_listed_equities_at_event_date",
+      "segment_granularity": "same_trading_day_am_snapshot"
     },
     "fins_summary": {
       "history_target_start": "2008-07-01",
@@ -57,12 +62,15 @@
       "universe_rule": "all_published_schedules_in_collection_window"
     },
     "equities_earnings_calendar": {
+      "policy_version": "collection-coverage/v3",
       "history_target_start": "2010-01-04",
       "vendor_history_policy": "recent_data_only_next_business_day",
       "vendor_history_policy_citation": "https://jpx-jquants.com/en/spec/eq-earnings-cal",
-      "coverage_mode": "event_reconciled",
+      "coverage_mode": "next_business_day_snapshot",
+      "history_mode": "next_business_day_snapshot",
       "expected_frequency": "event_driven",
-      "universe_rule": "all_calendar_entries_in_collection_window"
+      "universe_rule": "all_calendar_entries_in_collection_window",
+      "segment_granularity": "collection_cutoff_snapshot"
     },
     "markets_calendar": {
       "history_target_start": "2008-01-01",
@@ -155,13 +163,15 @@
       "universe_rule": "all_filings_in_collection_window"
     },
     "jsda_otc_bond_reference_prices": {
+      "policy_version": "collection-coverage/v3",
       "collection_scope": "jsda_governed_otc_reference_archive",
       "history_target_start": "2002-08-02",
       "history_target_end_rule": "latest_official_archive_index_day",
       "coverage_mode": "official_archive_index_reconciled",
+      "history_mode": "official_archive_index",
       "expected_frequency": "trading_day",
       "universe_rule": "all_bonds_in_official_publication_file",
-      "segment_granularity": "official_archive_day"
+      "segment_granularity": "official_archive_index_day"
     },
     "jsda_tokyo_repo_rates": {
       "collection_scope": "jsda_authoritative_tokyo_repo_timeseries",
