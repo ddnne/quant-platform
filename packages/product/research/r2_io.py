@@ -196,6 +196,46 @@ def default_r2_get_object(
             pass
 
 
+def put_children_then_manifest_via_worker(
+    *_args: object,
+    **_kwargs: object,
+) -> dict[str, Any]:
+    """Remote Worker POST is not CLI authority. Reconstitution never live-puts."""
+    raise R2IOError(
+        "CLI children-then-manifest is not artifact authority; "
+        "reconstitution evidence never live-puts"
+    )
+
+
+def put_research_artifact(
+    bucket: str,
+    key: str,
+    body: bytes,
+    *,
+    dry_run: bool = False,
+    staging_dir: str | Path | None = None,
+    http_post: object = None,
+    worker_url: str | None = None,
+    token: str | None = None,
+) -> dict[str, Any]:
+    """Put one research job object. dry_run stages locally. Not GO."""
+    if dry_run:
+        return default_r2_put(
+            bucket,
+            key,
+            body,
+            dry_run=True,
+            staging_dir=staging_dir,
+        )
+    return put_children_then_manifest_via_worker(
+        (),
+        {"key": key, "body": body},
+        worker_url=worker_url,
+        token=token,
+        http_post=http_post,
+    )
+
+
 __all__ = [
     "DEFAULT_WRANGLER",
     "DEFAULT_WRANGLER_CONFIG",
@@ -203,5 +243,7 @@ __all__ = [
     "R2IOError",
     "default_r2_get_object",
     "default_r2_put",
+    "put_children_then_manifest_via_worker",
+    "put_research_artifact",
     "python_cli_put_is_not_immutable_authority",
 ]
