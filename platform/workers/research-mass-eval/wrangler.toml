@@ -18,12 +18,21 @@
 #   npx wrangler secret put MASS_EVAL_TOKEN -c platform/workers/research-mass-eval/wrangler.toml
 #
 # Deploy:
-#   cd platform/workers/research-mass-eval && npm install && npx wrangler deploy
+#   cd platform/workers/research-mass-eval && npm install && npx wrangler deploy --env production
+#
+# Public surface: none. Internal/admin only. No public research execution.
+# workers_dev=false: no stable *.workers.dev hostname.
+# preview_urls=false: version preview URLs are not a research API
+# (wrangler 4.125.0 supports preview_urls).
+# Staging is not [env.staging] in this file (would share the production
+# Cloudflare account). See wrangler.staging.toml — HUMAN separate account.
+# Do not bind Workers AI here; propose uses service binding AI_GATEWAY.
 
 name = "quant-platform-research-mass-eval"
 main = "src/index.ts"
 compatibility_date = "2026-08-01"
-workers_dev = true
+workers_dev = false
+preview_urls = false
 
 # R2 — research mass-eval artifacts (and optional staged panels).
 [[r2_buckets]]
@@ -55,3 +64,31 @@ NETS_ONLY = "deny"
 
 [observability]
 enabled = true
+
+[env.production]
+name = "quant-platform-research-mass-eval"
+workers_dev = false
+preview_urls = false
+
+[[env.production.r2_buckets]]
+binding = "STRUCTURED_BUCKET"
+bucket_name = "quant-structured"
+
+[[env.production.d1_databases]]
+binding = "DB"
+database_name = "quant-ingest"
+database_id = "be6fdcf8-40be-41fc-9535-7facd1fc2ffc"
+
+[[env.production.services]]
+binding = "AI_GATEWAY"
+service = "quant-platform-research-ai-gateway"
+
+[env.production.vars]
+MASS_EVAL_VERSION = "research-mass-eval/v142-63-failclosed"
+MASS_EVAL_WAVE = "research-mass-eval"
+MASS_RESEARCH = "NO-GO"
+PHASE7 = "OFF"
+READY_DECLARED = "false"
+OPERATIONAL_GO = "false"
+CONTINUOUS_PAPER = "UNARMED"
+NETS_ONLY = "deny"
