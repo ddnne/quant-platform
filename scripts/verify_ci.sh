@@ -30,11 +30,21 @@ sys.stdout.write(str((p.get("scripts") or {}).get(sys.argv[2]) or ""))
 
 python_is_311_plus() {
   local cand="$1"
-  "$cand" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)'
+  "$cand" - <<'PY'
+import sqlite3
+import sys
+
+if sys.version_info < (3, 11):
+    raise SystemExit(1)
+with sqlite3.connect(":memory:") as db:
+    if db.execute("SELECT 1").fetchone() != (1,):
+        raise SystemExit(1)
+PY
 }
 
 # Host interpreter is only for `python -m venv`. Never run pytest with it.
-# Prefer python3.11; accept python3 only when it is 3.11+. Do not use system 3.9.
+# Prefer python3.11; accept python3 only when it is 3.11+ and has working
+# stdlib sqlite3. Do not use system 3.9 or a version-only incomplete runtime.
 find_python_311_plus() {
   local cand path
   for cand in python3.11 python3; do
@@ -58,7 +68,7 @@ if [[ ! -x "$venv_py" ]]; then
   echo "==> bootstrap .venv (Python 3.11+)"
   host_py=""
   if ! host_py="$(find_python_311_plus)"; then
-    echo "Python 3.11+ is required to create .venv (python3.11 or python3 >= 3.11)." >&2
+    echo "Python 3.11+ with working stdlib sqlite3 is required to create .venv." >&2
     echo "do not silently use system python" >&2
     exit 1
   fi
@@ -69,7 +79,7 @@ if [[ ! -x "$venv_py" ]]; then
   fi
 fi
 if ! python_is_311_plus "$venv_py"; then
-  echo ".venv must be Python 3.11+ (got $($venv_py -V 2>&1)); recreate: python3.11 -m venv .venv && .venv/bin/python -m pip install -e '.[dev]'" >&2
+  echo ".venv must be Python 3.11+ with working stdlib sqlite3 (got $($venv_py -V 2>&1))." >&2
   echo "do not silently use system python" >&2
   exit 1
 fi

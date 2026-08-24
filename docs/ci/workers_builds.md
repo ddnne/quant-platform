@@ -59,14 +59,17 @@ Connect **one** Workers Build on repository `ddnne/quant-platform`:
 | Setting | Value |
 |---|---|
 | Root directory | repository root (`.`) |
-| Build command | `bash scripts/verify_ci.sh` |
+| Build command | `bash scripts/workers_builds_verify_ci.sh` |
 | Deploy command | **not** `npx wrangler deploy` of a product Worker. Do not auto-promote. Use a no-op or `npx wrangler versions upload` of a dedicated non-product CI Worker **after** a HUMAN creates it |
 | Watch paths | unset (always run `verify_ci.sh`) |
 
-The repository pins Cloudflare's build interpreter with [`.python-version`](../../.python-version).
-Workers Builds otherwise defaults to Python 3.13; the pinned 3.11 build is the
-same supported runtime family used by local CI and includes the SQLite module
-required by the test suite.
+Set build variable `SKIP_DEPENDENCY_INSTALL=1`. The repository wrapper probes
+the documented Ubuntu 24.04 image's `/usr/bin/python3` for Python 3.11+ and an
+actual in-memory SQLite query, creates `.venv` with Cloudflare's preinstalled
+`pipx` and pinned `virtualenv`, then `exec`s the authoritative
+[`scripts/verify_ci.sh`](../../scripts/verify_ci.sh). It fails closed on image,
+interpreter, SQLite, or bootstrap drift; it does not require root, apt, or an
+asdf rebuild.
 
 [`scripts/verify_ci.sh`](../../scripts/verify_ci.sh) is fail-closed:
 
@@ -131,7 +134,7 @@ That is not the same as promoting the Active Deployment.
 
 | Step | Command | When |
 |---|---|---|
-| Mandatory CI | repo-root build command `bash scripts/verify_ci.sh` | every push / PR that should merge |
+| Mandatory CI | repo-root build command `bash scripts/workers_builds_verify_ci.sh` | every push / PR that should merge |
 | Version upload (optional, not promote) | `npx wrangler versions upload` | preview / non-production; or production-branch CI that must **not** go live |
 | Explicit promote | `npx wrangler deploy` **or** dashboard promote of a specific version | operator, after the native check is green **and** an explicit decision to ship |
 

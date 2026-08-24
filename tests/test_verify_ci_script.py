@@ -10,6 +10,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "verify_ci.sh"
+WORKERS_BUILDS_WRAPPER = ROOT / "scripts" / "workers_builds_verify_ci.sh"
 WORKERS_BUILDS_DOC = ROOT / "docs" / "ci" / "workers_builds.md"
 
 WORKERS = (
@@ -80,6 +81,9 @@ def test_verify_ci_script_exists_executable_and_covers_required_steps() -> None:
     assert ".venv" in src
     assert "3.11" in src
     assert "sys.version_info" in src
+    assert "import sqlite3" in src
+    assert 'sqlite3.connect(":memory:")' in src
+    assert 'db.execute("SELECT 1")' in src
     assert "do not silently use system python" in src
     assert "find_python_311_plus" in src
     assert "-m venv" in src
@@ -283,6 +287,43 @@ exit 0
     assert skipped.returncode == 0, skipped.stderr + skipped.stdout
 
 
+def test_verify_ci_find_python_rejects_version_only_runtime_without_sqlite(
+    tmp_path: Path,
+) -> None:
+    fake = tmp_path / "python3.11"
+    fake.write_text(
+        "#!/bin/bash\n"
+        "payload=$(/bin/cat)\n"
+        "if [[ \"$payload\" == *sqlite3* ]]; then exit 1; fi\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
+    (tmp_path / "python3").symlink_to(fake)
+    env = os.environ.copy()
+    env["PATH"] = str(tmp_path)
+    rejected = subprocess.run(
+        [
+            "/bin/bash",
+            "-c",
+            _helpers_script()
+            + """
+set -euo pipefail
+if find_python_311_plus; then
+  echo "accepted a version-only Python without sqlite3" >&2
+  exit 1
+fi
+""",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+    )
+    assert rejected.returncode == 0, rejected.stderr + rejected.stdout
+
+
 def test_verify_ci_existing_venv_below_311_fails(tmp_path: Path) -> None:
     bin_dir = tmp_path / ".venv" / "bin"
     bin_dir.mkdir(parents=True)
@@ -330,6 +371,43 @@ def test_no_github_actions_workflows() -> None:
         check=True,
     )
     assert listed.stdout.strip() == "", listed.stdout
+
+
+def test_workers_builds_wrapper_is_fail_closed_and_hands_off_to_verify_ci() -> None:
+    assert WORKERS_BUILDS_WRAPPER.is_file()
+    assert os.access(WORKERS_BUILDS_WRAPPER, os.X_OK)
+    src = WORKERS_BUILDS_WRAPPER.read_text(encoding="utf-8")
+    assert '"${WORKERS_CI:-}" == "1"' in src
+    assert '"${SKIP_DEPENDENCY_INSTALL:-}" == "1"' in src
+    assert '"${ID:-}" == "ubuntu"' in src
+    assert '"${VERSION_ID:-}" == "24.04"' in src
+    assert 'system_py="/usr/bin/python3"' in src
+    assert "virtualenv==21.7.4" in src
+    assert "python_has_ci_runtime" in src
+    assert "import sqlite3" in src
+    assert 'db.execute("SELECT 1")' in src
+    assert 'exec bash "$ROOT/scripts/verify_ci.sh"' in src
+    assert "apt-get" not in src
+    assert "asdf install" not in src
+    assert "asdf uninstall" not in src
+    syntax = subprocess.run(
+        ["bash", "-n", str(WORKERS_BUILDS_WRAPPER)],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert syntax.returncode == 0, syntax.stderr
+    outside = subprocess.run(
+        [str(WORKERS_BUILDS_WRAPPER)],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        env={"PATH": os.environ.get("PATH", "")},
+        check=False,
+    )
+    assert outside.returncode != 0
+    assert "WORKERS_CI=1 is required" in outside.stderr
 
 
 def test_workers_builds_doc_names_native_check_and_deprecates_ci_aggregate() -> None:
