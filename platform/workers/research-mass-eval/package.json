@@ -9,7 +9,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "build": "wrangler deploy --dry-run --outdir .wrangler-dry-run",
-    "tail": "wrangler tail"
+    "tail": "wrangler tail",
+    "types": "wrangler types --include-runtime false"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260820.1",
