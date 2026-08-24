@@ -79,7 +79,7 @@ def _pytest_python_first_env() -> dict[str, str]:
 
     env = os.environ.copy()
     env["PATH"] = os.pathsep.join(
-        (str(Path(sys.executable).resolve().parent), env.get("PATH", ""))
+        (str(Path(sys.executable).parent), env.get("PATH", ""))
     )
     return env
 
@@ -246,6 +246,27 @@ python_is_311_plus "$found"
 
 
 def test_verify_ci_bootstrap_creates_venv_when_missing(tmp_path: Path) -> None:
+    # Exercise the shell bootstrap contract without depending on whether the
+    # host distro packaged ensurepip/python3-venv. Workers Builds deliberately
+    # supplies the repository .venv via the pinned virtualenv wrapper first.
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    fake_py = fake_bin / "python3.11"
+    fake_py.write_text(
+        "#!/bin/bash\n"
+        "set -euo pipefail\n"
+        "if [[ \"${1:-}\" == \"-\" ]]; then /bin/cat >/dev/null; exit 0; fi\n"
+        "if [[ \"${1:-}\" == \"-m\" && \"${2:-}\" == \"venv\" ]]; then\n"
+        "  target=\"$3\"\n"
+        "  /bin/mkdir -p \"$target/bin\"\n"
+        "  /bin/cp \"$0\" \"$target/bin/python\"\n"
+        "  /bin/chmod +x \"$target/bin/python\"\n"
+        "  exit 0\n"
+        "fi\n"
+        "exit 1\n",
+        encoding="utf-8",
+    )
+    fake_py.chmod(fake_py.stat().st_mode | stat.S_IXUSR)
     helpers = _helpers_script()
     script = f"""
 set -euo pipefail
@@ -258,12 +279,14 @@ host_py="$(find_python_311_plus)"
 test -x "$venv_py"
 python_is_311_plus "$venv_py"
 """
+    env = os.environ.copy()
+    env["PATH"] = os.pathsep.join((str(fake_bin), env.get("PATH", "")))
     created = subprocess.run(
         ["bash", "-c", script],
         cwd=str(ROOT),
         capture_output=True,
         text=True,
-        env=_pytest_python_first_env(),
+        env=env,
         check=False,
     )
     assert created.returncode == 0, created.stderr + created.stdout
