@@ -1,0 +1,113 @@
+{
+  "policy_version": "coverage/v3",
+  "dataset_id": "equities_earnings_calendar",
+  "migration_id": "equities_earnings_calendar_tip_snapshot",
+  "kind": "false_partial_grain_correction",
+  "invent_complete": false,
+  "dataset_complete_claim": false,
+  "empty_complete_past_months": "FORBIDDEN",
+  "before": {
+    "coverage_policy_version": "collection-coverage/v2",
+    "history_target_start": "2010-01-04",
+    "segment_granularity": "calendar_month",
+    "required_span": "2010-01..2026-08",
+    "required_segments": 200,
+    "complete_segments": 1,
+    "partial_segments": 199,
+    "complete_months": ["2026-08"],
+    "partial_span": "2010-01..2026-07",
+    "partial_reason": "missing collection receipt",
+    "status": "PARTIAL",
+    "false_partial": true,
+    "cause_classes": [
+      "FALSE_PARTIAL_SEGMENT_SEMANTICS",
+      "VENDOR_TIP_ONLY"
+    ],
+    "note": "V2 default calendar_month plans one required segment per month from 2010-01-04. Vendor API is next-business-day / recent-only (pagination_key). 199 PARTIAL months are missing-receipt inventory, not 199 missing source months."
+  },
+  "after": {
+    "coverage_policy_version": "coverage/v3",
+    "source_capability_policy_version": "source-capability/v3",
+    "history_mode": "next_business_day_snapshot",
+    "segment_granularity": "collection_cutoff_snapshot",
+    "required_calendar_months": false,
+    "abolish_monthly_required_from": "2010-01",
+    "evaluate_via": [
+      "collection_generation",
+      "collection_cutoff",
+      "freshness_sla"
+    ],
+    "historical_research_eligible": false,
+    "tip_only_operational": true,
+    "history_substitute_dataset": "fins_earnings_date",
+    "required_set": {
+      "grain": "collection_cutoff_snapshot",
+      "expand_calendar_months": false,
+      "count_rule": "issued_collection_windows_at_cutoff",
+      "segment_ids": [],
+      "not_calendar_month_count": 200
+    }
+  },
+  "official_evidence": {
+    "url": "https://jpx-jquants.com/en/spec/eq-earnings-cal",
+    "quotes": [
+      "This API returns information about stocks whose financial results will be announced on the next business day.",
+      "It will be updated at around 19:00 (JST) only when there is an update for companies which end their fiscal year in March or September at the following site.",
+      "If you need scheduled announcement dates and publication history for all listed issues (including REITs), please use the Earnings Announcement Dates API."
+    ],
+    "query_parameters": ["pagination_key"],
+    "plan_data_period_url": "https://jpx-jquants.com/en/spec/data-spec",
+    "plan_data_period": "Earnings Calendar (March/September fiscal year-end only): Recent data only (all plans)",
+    "history_substitute": {
+      "dataset_id": "fins_earnings_date",
+      "url": "https://jpx-jquants.com/en/spec/fin-earnings-date",
+      "path": "/v2/fins/earnings-date",
+      "plan_data_period": "Premium since 2014/9/1"
+    },
+    "jpx_index_url": "https://www.jpx.co.jp/english/listing/event-schedules/financial-announcement/index.html"
+  },
+  "change_reason": "Vendor product is a next-business-day snapshot, not a monthly history series. Required inventory is issued collection windows at cutoff, evaluated via collection generation / cutoff / freshness SLA. Do not plan 200 calendar months from 2010. Do not mint empty COMPLETE for those months. Historical announcement dates route to fins_earnings_date.",
+  "old_new_required_segment_mapping": {
+    "excluded_vendor_tip_only": {
+      "span": "2010-01..2026-07",
+      "count": 199,
+      "v2_status": "PARTIAL",
+      "v3_status": "excluded_vendor_tip_only",
+      "not_empty_complete": true,
+      "not_source_gap": true,
+      "reason": "False-PARTIAL calendar-month inventory against a next-business-day snapshot API. Months without Mar/Sep FY next-day announcements are not source gaps."
+    },
+    "retained_tip_snapshot": {
+      "grain": "collection_cutoff_snapshot",
+      "v2_complete_month": "2026-08",
+      "v3_status": "tip_snapshot_evaluated_at_cutoff",
+      "empty_complete": "FORBIDDEN"
+    }
+  },
+  "affected_ready_generations": [],
+  "behavior_change": {
+    "required_grain": "collection_cutoff_snapshot",
+    "required_calendar_months": false,
+    "evaluate_via": [
+      "collection_generation",
+      "collection_cutoff",
+      "freshness_sla"
+    ],
+    "history_substitute_dataset": "fins_earnings_date",
+    "collection_coverage_json": "wired_v3_planner",
+    "empty_complete_past_months": "FORBIDDEN"
+  },
+  "vendor_scope_limits": [
+    "march_september_fiscal_year_end_only",
+    "reits_excluded",
+    "query_parameters_pagination_key_only",
+    "recent_data_only"
+  ],
+  "remaining_genuine_gaps": {
+    "items": [],
+    "dataset_complete_claim": false,
+    "excluded_199_months_are_not_gaps": true,
+    "vendor_scope_limits_are_not_required_inventory_holes": true,
+    "note": "199 monthly PARTIAL were false-PARTIAL. Vendor Mar/Sep FY and REIT limits are product bounds; history uses fins_earnings_date. A cutoff without a trusted SUCCESS receipt stays PARTIAL for that snapshot window and must not be filled with empty COMPLETE."
+  }
+}

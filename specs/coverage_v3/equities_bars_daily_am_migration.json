@@ -1,0 +1,357 @@
+{
+  "policy_version": "coverage/v3",
+  "dataset_id": "equities_bars_daily_am",
+  "migration_id": "equities_bars_daily_am_same_day_snapshot",
+  "kind": "recent_snapshot_not_monthly_history",
+  "invent_complete": false,
+  "dataset_complete_claim": false,
+  "empty_complete_forbidden": true,
+  "before": {
+    "coverage_policy_version": "collection-coverage/v2",
+    "history_target_start": "2024-01-04",
+    "segment_granularity": "calendar_month",
+    "required_segment_start_month": "2024-01",
+    "required_segments": 32,
+    "required_months": [
+      "2024-01",
+      "2024-02",
+      "2024-03",
+      "2024-04",
+      "2024-05",
+      "2024-06",
+      "2024-07",
+      "2024-08",
+      "2024-09",
+      "2024-10",
+      "2024-11",
+      "2024-12",
+      "2025-01",
+      "2025-02",
+      "2025-03",
+      "2025-04",
+      "2025-05",
+      "2025-06",
+      "2025-07",
+      "2025-08",
+      "2025-09",
+      "2025-10",
+      "2025-11",
+      "2025-12",
+      "2026-01",
+      "2026-02",
+      "2026-03",
+      "2026-04",
+      "2026-05",
+      "2026-06",
+      "2026-07",
+      "2026-08"
+    ],
+    "complete_segments": 1,
+    "complete_month": "2026-08",
+    "partial_segments": 31,
+    "partial_months": [
+      "2024-01",
+      "2024-02",
+      "2024-03",
+      "2024-04",
+      "2024-05",
+      "2024-06",
+      "2024-07",
+      "2024-08",
+      "2024-09",
+      "2024-10",
+      "2024-11",
+      "2024-12",
+      "2025-01",
+      "2025-02",
+      "2025-03",
+      "2025-04",
+      "2025-05",
+      "2025-06",
+      "2025-07",
+      "2025-08",
+      "2025-09",
+      "2025-10",
+      "2025-11",
+      "2025-12",
+      "2026-01",
+      "2026-02",
+      "2026-03",
+      "2026-04",
+      "2026-05",
+      "2026-06",
+      "2026-07"
+    ],
+    "note": "V2 required 32 calendar months from 2024-01. Vendor AM is recent data only; 31 history months are LIVE_API_EMPTY, not missing backfill."
+  },
+  "after": {
+    "coverage_policy_version": "coverage/v3",
+    "source_capability_policy_version": "source-capability/v3",
+    "history_mode": "recent_snapshot",
+    "tip_only_operational": true,
+    "segment_granularity": "same_trading_day_am_snapshot",
+    "required_historical_months": [],
+    "required_monthly_segments": 0,
+    "required_grain": "same_trading_day_am_snapshot",
+    "not_same_dataset_as": "equities_bars_daily",
+    "historical_research_substitute_dataset": "equities_bars_daily",
+    "historical_research_eligible": false,
+    "freshness_sla": {
+      "expected_after": "11:30",
+      "usable_by": "12:30",
+      "timezone": "Asia/Tokyo",
+      "rule": "same_trading_day_am"
+    },
+    "retained_collected_history": {
+      "action": "keep",
+      "grain": "actually_stored_periods_only",
+      "invent_fill": "FORBIDDEN",
+      "does_not_expand_required_domain": true,
+      "dedicated_historical_am_profile": "actually_stored_periods_only"
+    }
+  },
+  "official_evidence": {
+    "url": "https://jpx-jquants.com/en/spec/eq-bars-daily-am",
+    "quote": "Data for the day can be obtained until around 6:00 the next day. For historical data, please use Stock Prices (OHLC).",
+    "plan_data_period_url": "https://jpx-jquants.com/en/spec/data-spec",
+    "plan_data_period": "Morning Session Stock Prices (OHLC) — Recent data only",
+    "supported_query_parameters": [
+      "code",
+      "pagination_key"
+    ],
+    "unsupported_query_parameters": [
+      "date",
+      "from",
+      "to"
+    ],
+    "history_endpoint": "/v2/equities/bars/daily"
+  },
+  "change_reason": "Official AM endpoint is a same-trading-day morning snapshot (recent data only until around 06:00 the next day), not a 32-month historical series from 2024. Abolishing the V2 monthly required set does not mint empty COMPLETE for the 31 LIVE_API_EMPTY months and does not invent Dataset COMPLETE 23. General historical research uses equities_bars_daily. Already-collected raw/structured AM rows are retained as stored evidence only.",
+  "old_new_required_segment_mapping": {
+    "abolished_required_months": 32,
+    "excluded_official_unavailable": [
+      {
+        "segment_id": "2024-01",
+        "v2_status": "PARTIAL",
+        "v3_status": "excluded_official_unavailable",
+        "empty_complete": false
+      },
+      {
+        "segment_id": "2024-02",
+        "v2_status": "PARTIAL",
+        "v3_status": "excluded_official_unavailable",
+        "empty_complete": false
+      },
+      {
+        "segment_id": "2024-03",
+        "v2_status": "PARTIAL",
+        "v3_status": "excluded_official_unavailable",
+        "empty_complete": false
+      },
+      {
+        "segment_id": "2024-04",
+        "v2_status": "PARTIAL",
+        "v3_status": "excluded_official_unavailable",
+        "empty_complete": false
+      },
+      {
+        "segment_id": "2024-05",
+        "v2_status": "PARTIAL",
+        "v3_status": "excluded_official_unavailable",
+        "empty_complete": false
+      },
+      {
+        "segment_id": "2024-06",
+        "v2_status": "PARTIAL",
+        "v3_status": "excluded_official_unavailable",
+        "empty_complete": false
+      },
+      {
+        "segment_id": "2024-07",
+        "v2_status": "PARTIAL",
+        "v3_status": "excluded_official_unavailable",
+        "empty_complete": false
+      },
+      {
+        "segment_id": "2024-08",
+        "v2_status": "PARTIAL",
+        "v3_status": "excluded_official_unavailable",
+        "empty_complete": false
+      },
+      {
+        "segment_id": "2024-09",
+        "v2_status": "PARTIAL",
+        "v3_status": "excluded_official_unavailable",
+        "empty_complete": false
+      },
+      {
+        "segment_id": "2024-10",
+        "v2_status": "PARTIAL",
+        "v3_status": "excluded_official_unavailable",
+        "empty_complete": false
+      },
+      {
+        "segment_id": "2024-11",
+        "v2_status": "PARTIAL",
+        "v3_status": "excluded_official_unavailable",
+        "empty_complete": false
+      },
+      {
+        "segment_id": "2024-12",
+        "v2_status": "PARTIAL",
+        "v3_status": "excluded_official_unavailable",
+        "empty_complete": false
+      },
+      {
+        "segment_id": "2025-01",
+        "v2_status": "PARTIAL",
+        "v3_status": "excluded_official_unavailable",
+        "empty_complete": false
+      },
+      {
+        "segment_id": "2025-02",
+        "v2_status": "PARTIAL",
+        "v3_status": "excluded_official_unavailable",
+        "empty_complete": false
+      },
+      {
+        "segment_id": "2025-03",
+        "v2_status": "PARTIAL",
+        "v3_status": "excluded_official_unavailable",
+        "empty_complete": false
+      },
+      {
+        "segment_id": "2025-04",
+        "v2_status": "PARTIAL",
+        "v3_status": "excluded_official_unavailable",
+        "empty_complete": false
+      },
+      {
+        "segment_id": "2025-05",
+        "v2_status": "PARTIAL",
+        "v3_status": "excluded_official_unavailable",
+        "empty_complete": false
+      },
+      {
+        "segment_id": "2025-06",
+        "v2_status": "PARTIAL",
+        "v3_status": "excluded_official_unavailable",
+        "empty_complete": false
+      },
+      {
+        "segment_id": "2025-07",
+        "v2_status": "PARTIAL",
+        "v3_status": "excluded_official_unavailable",
+        "empty_complete": false
+      },
+      {
+        "segment_id": "2025-08",
+        "v2_status": "PARTIAL",
+        "v3_status": "excluded_official_unavailable",
+        "empty_complete": false
+      },
+      {
+        "segment_id": "2025-09",
+        "v2_status": "PARTIAL",
+        "v3_status": "excluded_official_unavailable",
+        "empty_complete": false
+      },
+      {
+        "segment_id": "2025-10",
+        "v2_status": "PARTIAL",
+        "v3_status": "excluded_official_unavailable",
+        "empty_complete": false
+      },
+      {
+        "segment_id": "2025-11",
+        "v2_status": "PARTIAL",
+        "v3_status": "excluded_official_unavailable",
+        "empty_complete": false
+      },
+      {
+        "segment_id": "2025-12",
+        "v2_status": "PARTIAL",
+        "v3_status": "excluded_official_unavailable",
+        "empty_complete": false
+      },
+      {
+        "segment_id": "2026-01",
+        "v2_status": "PARTIAL",
+        "v3_status": "excluded_official_unavailable",
+        "empty_complete": false
+      },
+      {
+        "segment_id": "2026-02",
+        "v2_status": "PARTIAL",
+        "v3_status": "excluded_official_unavailable",
+        "empty_complete": false
+      },
+      {
+        "segment_id": "2026-03",
+        "v2_status": "PARTIAL",
+        "v3_status": "excluded_official_unavailable",
+        "empty_complete": false
+      },
+      {
+        "segment_id": "2026-04",
+        "v2_status": "PARTIAL",
+        "v3_status": "excluded_official_unavailable",
+        "empty_complete": false
+      },
+      {
+        "segment_id": "2026-05",
+        "v2_status": "PARTIAL",
+        "v3_status": "excluded_official_unavailable",
+        "empty_complete": false
+      },
+      {
+        "segment_id": "2026-06",
+        "v2_status": "PARTIAL",
+        "v3_status": "excluded_official_unavailable",
+        "empty_complete": false
+      },
+      {
+        "segment_id": "2026-07",
+        "v2_status": "PARTIAL",
+        "v3_status": "excluded_official_unavailable",
+        "empty_complete": false
+      }
+    ],
+    "demoted_monthly_complete_to_snapshot": [
+      {
+        "segment_id": "2026-08",
+        "v2_status": "COMPLETE",
+        "v3_status": "same_trading_day_am_snapshot",
+        "keep_collected_history": true,
+        "monthly_historical_required": false
+      }
+    ],
+    "required_historical_months_after": []
+  },
+  "outcome_classes": {
+    "trading_day": "trading_day_same_day_am_snapshot_required_after_morning_close",
+    "holiday": "holiday_not_required_not_a_gap",
+    "unpublished": "unpublished_vendor_has_not_published_today_am_yet",
+    "api_error": "api_error_transport_or_http_failure_not_unpublished",
+    "entitlement_error": "entitlement_error_subscription_or_auth_failure_not_missing_history"
+  },
+  "affected_ready_generations": [],
+  "behavior_change": {
+    "required_domain": "same_trading_day_am_snapshot",
+    "monthly_historical_required_from_2024": "ABOLISHED",
+    "general_historical_research": "equities_bars_daily",
+    "dedicated_historical_am_profile": "actually_stored_periods_only",
+    "ops_sla": "expected_after 11:30 JST / usable_by 12:30 JST",
+    "collection_coverage_json": "wired_v3_planner",
+    "empty_complete_31_months": "FORBIDDEN",
+    "dataset_complete_23": "FORBIDDEN",
+    "not_same_as_full_day_bars": true
+  },
+  "remaining_genuine_gaps": {
+    "classification": "ops_same_day_am_not_monthly_history",
+    "excluded_history_months_are_not_gaps": true,
+    "dataset_complete_claim": false,
+    "empty_complete_claim": false,
+    "note": "31 V2 PARTIAL months 2024-01..2026-07 are outside OfficiallyAvailableDomain (vendor recent_snapshot). They are not missing history and must not be sealed empty COMPLETE. Holidays are not gaps. Genuine remaining issues are same-day: unpublished AM after the SLA on a trading day, API errors, or entitlement errors. Stored AM raw/structured already collected is kept; a dedicated historical-AM profile may bind only those stored periods."
+  }
+}
