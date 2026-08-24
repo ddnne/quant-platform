@@ -1,0 +1,172 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "source-capability/v3",
+  "title": "SourceCapabilityContract",
+  "description": "Official-availability SoT. Dataset-level keys fail closed; nested evidence maps remain open. policy_version source-capability/v3.",
+  "$defs": {
+    "iso_date": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+    },
+    "https_url": {
+      "type": "string",
+      "pattern": "^https://"
+    },
+    "nonempty_string": {
+      "type": "string",
+      "minLength": 1
+    },
+    "string_array": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/nonempty_string" }
+    },
+    "publication_calendar": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["kind", "timezone"],
+      "properties": {
+        "kind": { "$ref": "#/$defs/nonempty_string" },
+        "timezone": { "$ref": "#/$defs/nonempty_string" },
+        "index_url": { "anyOf": [{ "$ref": "#/$defs/https_url" }, { "type": "null" }] }
+      }
+    },
+    "entitlement_semantics": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["clamp_before_earliest"],
+      "properties": {
+        "clamp_before_earliest": { "type": "boolean" },
+        "subscription_floor": { "anyOf": [{ "$ref": "#/$defs/iso_date" }, { "type": "null" }] }
+      }
+    },
+    "collection_window": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["grain", "open", "close"],
+      "properties": {
+        "grain": { "$ref": "#/$defs/nonempty_string" },
+        "open": { "$ref": "#/$defs/nonempty_string" },
+        "close": { "$ref": "#/$defs/nonempty_string" }
+      }
+    },
+    "freshness_sla": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["expected_after", "usable_by", "timezone", "rule"],
+      "properties": {
+        "expected_after": { "$ref": "#/$defs/nonempty_string" },
+        "usable_by": { "$ref": "#/$defs/nonempty_string" },
+        "timezone": { "$ref": "#/$defs/nonempty_string" },
+        "rule": { "$ref": "#/$defs/nonempty_string" }
+      }
+    },
+    "event_time": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["policy", "fields"],
+      "properties": {
+        "policy": { "$ref": "#/$defs/nonempty_string" },
+        "fields": { "$ref": "#/$defs/string_array" }
+      }
+    },
+    "available_at": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["policy"],
+      "properties": {
+        "policy": { "$ref": "#/$defs/nonempty_string" },
+        "field": { "anyOf": [{ "$ref": "#/$defs/nonempty_string" }, { "type": "null" }] },
+        "known_publication_lag": { "anyOf": [{ "$ref": "#/$defs/nonempty_string" }, { "type": "null" }] }
+      }
+    },
+    "revision_semantics": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["policy", "generation_on_revision"],
+      "properties": {
+        "policy": { "$ref": "#/$defs/nonempty_string" },
+        "generation_on_revision": { "type": "boolean" }
+      }
+    },
+    "research_profile_eligibility": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["include_in", "exclude_from", "exclusion_reason"],
+      "properties": {
+        "include_in": { "$ref": "#/$defs/string_array" },
+        "exclude_from": { "$ref": "#/$defs/string_array" },
+        "exclusion_reason": { "$ref": "#/$defs/nonempty_string" }
+      }
+    },
+    "dataset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "dataset_id",
+        "source",
+        "upstream_locator",
+        "official_evidence_url",
+        "history_mode",
+        "earliest_official_availability",
+        "historical_research_eligible",
+        "tip_only_operational",
+        "supported_query_parameters",
+        "publication_calendar",
+        "entitlement_semantics",
+        "collection_window",
+        "freshness_sla",
+        "event_time",
+        "available_at",
+        "revision_semantics",
+        "research_profile_eligibility"
+      ],
+      "properties": {
+        "policy_version": { "const": "source-capability/v3" },
+        "dataset_id": { "$ref": "#/$defs/nonempty_string" },
+        "source": { "$ref": "#/$defs/nonempty_string" },
+        "upstream_locator": { "$ref": "#/$defs/nonempty_string" },
+        "official_evidence_url": { "$ref": "#/$defs/https_url" },
+        "history_mode": {
+          "type": "string",
+          "enum": [
+            "bounded_history",
+            "recent_snapshot",
+            "next_business_day_snapshot",
+            "event_stream",
+            "official_archive_index",
+            "periodic_archive"
+          ]
+        },
+        "earliest_official_availability": { "$ref": "#/$defs/iso_date" },
+        "historical_research_eligible": { "type": "boolean" },
+        "tip_only_operational": { "type": "boolean" },
+        "supported_query_parameters": { "$ref": "#/$defs/string_array" },
+        "publication_calendar": { "$ref": "#/$defs/publication_calendar" },
+        "entitlement_semantics": { "$ref": "#/$defs/entitlement_semantics" },
+        "collection_window": { "$ref": "#/$defs/collection_window" },
+        "freshness_sla": { "$ref": "#/$defs/freshness_sla" },
+        "event_time": { "$ref": "#/$defs/event_time" },
+        "available_at": { "$ref": "#/$defs/available_at" },
+        "revision_semantics": { "$ref": "#/$defs/revision_semantics" },
+        "research_profile_eligibility": { "$ref": "#/$defs/research_profile_eligibility" }
+      }
+    },
+    "bundle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["policy_version", "datasets"],
+      "properties": {
+        "policy_version": { "const": "source-capability/v3" },
+        "schema_version": { "const": 3 },
+        "datasets": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/dataset" }
+        }
+      }
+    }
+  },
+  "oneOf": [
+    { "$ref": "#/$defs/dataset" },
+    { "$ref": "#/$defs/bundle" }
+  ]
+}
