@@ -3,6 +3,9 @@
 Owns ``catalog_ids.ts`` emit. Python ``unique_logic.constants`` remain
 policy SoT for Worker ID arrays. Does not generate or exec Python.
 Does not add YAML. Compiled map is load SoT.
+
+v2 helpers classify active vs legacy identity without rewriting the v1
+digest lock or migration.jsonl.
 """
 from __future__ import annotations
 
@@ -21,6 +24,7 @@ from research.unique_logic.catalog import (
 
 
 COMPILER_VERSION = "research_catalog_compiler/v1"
+SPLIT_VERSION = "research_catalog_compiler/v2"
 ARTIFACT_REL = Path("specs") / "research_catalog"
 MANIFEST_NAME = "manifest.json"
 MIGRATION_NAME = "migration.jsonl"
@@ -291,6 +295,34 @@ def assert_catalog_ids_emit_frozen(*, root: Path | None = None) -> dict[str, Any
     sets = assert_compiled_logic_id_sets(root=root)
     out["n_logic_ids"] = len(sets["migration"])
     return out
+
+
+def active_logic_ids() -> frozenset[str]:
+    """v2 split: countable Worker theses in the compiled map. Not GO."""
+    from research.catalog_active import active_logic_ids as _ids
+
+    return _ids()
+
+
+def legacy_logic_ids() -> frozenset[str]:
+    """v2 split: compiled identity remainder. Replay/lineage only."""
+    from research.catalog_active import legacy_logic_ids as _ids
+
+    return _ids()
+
+
+def catalog_kind(logic_id: str) -> str:
+    """v2 split: ``active`` or ``legacy``. Unknown IDs fail closed."""
+    from research.catalog_active import catalog_kind as _kind
+
+    return _kind(logic_id)
+
+
+def pilot_candidates() -> frozenset[str]:
+    """ExperimentPlan strategy_spec_ids. Not the 2092 active remainder."""
+    from research.catalog_active import pilot_candidates as _ids
+
+    return _ids()
 
 
 def compile_catalog(
