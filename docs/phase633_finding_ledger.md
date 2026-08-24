@@ -22,7 +22,7 @@ Unresolved live P0 (merge gate) remains **>0**. Do not merge PR #1.
 |----|---------|--------|----------|-------|
 | D1 | Signed claims not bound to outer receipt; no VerifiedReceipt | FIXED (tree) | `verified_receipt.py`; `ec848bc4` | Independent review `6e112837` |
 | D2 | `extra_digests` overwrites standard claims | FIXED (tree) | `partition_extra_digests` | |
-| D3 | Empty-raw signed SUCCESS can evaluate COMPLETE | OPEN | review D/PIT issue 3 | Not invented COMPLETE; still a hole |
+| D3 | Empty-raw signed SUCCESS can evaluate COMPLETE | FIXED (tree) | `4caaa813` evaluate_segment + envelope classification | `{"data":[]}` not COMPLETE |
 | D4 | Master CURRENT parse miss → empty snapshot put | FIXED (tree) | `master_scd2/write.ts` quarantine | Lane I `8fa95798` |
 
 ### P1
@@ -65,11 +65,11 @@ Unresolved live P0 (merge gate) remains **>0**. Do not merge PR #1.
 |----|---------|--------|----------|-------|
 | A2 | `ProcessIsolatedRunner` defaulted `sys.executable` | FIXED (tree) | closed tool-id map | Lane J |
 | A3 | ReadyManifest split publisher/coherence/readiness | FIXED (tree) | `ready_manifest.py` | No live READY |
-| A4 | `pilot_candidates()==active` 2092 | OPEN | 4 ExperimentPlans exist; start() OFF | Not GO |
+| A4 | `pilot_candidates()==active` 2092 | FIXED (tree) | `87f5d7d7` four ExperimentPlan ids | start() still OFF |
 | A5 | leftover occupancy | HOLD | `daily_path.ts` | Do not extract |
 | A6 | live math size | KEEP | `cost_models` / `options_225` | Do not split |
-| A7 | `skipLibCheck` hides Env mismatch | OPEN | gateway wrangler types | |
-| A8 | Ops MCP still JS | OPEN | `checkJs` false | |
+| A7 | `skipLibCheck` hides Env mismatch | PARTIAL | ci-aggregate/secrets/jsda/premium `false`; gateway/mass-eval/ops-mcp still true | generated Env vs source still split on ci-aggregate |
+| A8 | Ops MCP still JS | PARTIAL | `checkJs: true` (`536ffe14`); source remains JS | skipLibCheck still true on MCP |
 
 ## Integration
 
