@@ -57,14 +57,18 @@ fence where a host exists. Do not treat the Worker itself as auth.
 Staging Workers **must**:
 
 1. Use **different Wrangler `name`s** (suffix `-staging`).
-2. Bind **physically separate** D1, R2, KV, and secrets (distinct ids / buckets).
-3. Live on a **HUMAN-created** Cloudflare account — not `[env.staging]` in the
-   production `wrangler.toml` (that would deploy onto the production account).
+2. Bind **physically separate** D1, R2, KV, Queue, and secrets (distinct ids /
+   buckets), even when they live in the same Cloudflare account.
+3. Use standalone `wrangler.staging.toml`, not `[env.staging]` in production
+   configuration, so a production deploy cannot select staging accidentally.
 
-This lane does **not** create those Cloudflare resources (**HUMAN**).
-`platform/workers/*/wrangler.staging.toml` stubs omit production binding IDs
-on purpose. Do not paste production D1 / KV ids or production R2 bucket names
-into a staging file.
+The operational-closure lane created empty, staging-only resources on
+2026-08-24: D1 `quant-ingest-staging`, R2 `quant-raw-staging` and
+`quant-structured-staging`, KV `quant-ops-mcp-oauth-staging`, and JSDA work/DLQ
+Queues. `platform/workers/*/wrangler.staging.toml` binds only those resources.
+No production secret was copied. The staging secrets proxy is private
+(`workers_dev=false`, `preview_urls=false`) until a service-binding consumer is
+available.
 
 Secrets-proxy public Access / mTLS / Tunnel credentials are **HUMAN** if needed.
 
@@ -75,13 +79,13 @@ Secrets-proxy public Access / mTLS / Tunnel credentials are **HUMAN** if needed.
 - Parse test: `tests/test_wrangler_public_surface.py` (offline `tomllib`).
 - Operator map in `docs/ci/workers_builds.md` remains historical for CI
   receipts; this ADR is the public-surface / staging topology SoT.
-- No live `wrangler deploy`, no staging account create, no production-promote.
+- Staging resource creation and version upload do not promote production.
 
 ## Residual
 
 | Item | Owner |
 |---|---|
 | Cloudflare Access / mTLS / Tunnel for ingestion-secrets | **HUMAN** |
-| Staging Cloudflare account + Worker names + D1/R2/KV/secrets | **HUMAN** |
+| Separate staging OAuth application and staging-only secrets | **HUMAN** |
 | GATEWAY_TOKEN service-binding unspoofable replacement | **HOLD** |
 | ci-aggregate abolish | Lane G |

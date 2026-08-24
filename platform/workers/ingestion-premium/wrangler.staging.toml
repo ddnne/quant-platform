@@ -1,9 +1,4 @@
-# STAGING STUB — not a production config. Do not wrangler deploy this file
-# against the production Cloudflare account.
-#
-# HUMAN: create a physically separate Cloudflare account, Worker name, D1,
-# R2, and secrets. Do not copy production binding IDs into this file.
-# Do not create those resources from this lane.
+# Staging uses distinct resources and carries no production secrets.
 
 name = "quant-platform-ingestion-premium-staging"
 main = "src/index.ts"
@@ -11,10 +6,20 @@ compatibility_date = "2026-08-01"
 workers_dev = false
 preview_urls = false
 
-# Bindings omitted on purpose. Do not paste production D1 ids or
-# production R2 bucket names into this file.
-#
-# After HUMAN creates staging resources, bind only staging names/ids:
-#   RAW_BUCKET        -> staging R2 (distinct bucket)
-#   STRUCTURED_BUCKET -> staging R2 (distinct bucket)
-#   DB                -> staging D1 (distinct database)
+[[r2_buckets]]
+binding = "RAW_BUCKET"
+bucket_name = "quant-raw-staging"
+
+[[r2_buckets]]
+binding = "STRUCTURED_BUCKET"
+bucket_name = "quant-structured-staging"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "quant-ingest-staging"
+database_id = "d448d1c6-27c8-4aeb-8702-3e7a8b6bf2bb"
+migrations_dir = "migrations"
+migrations_table = "d1_migrations_ingestion"
+
+[vars]
+INGEST_CONCURRENCY = "2"

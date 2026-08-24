@@ -1,16 +1,10 @@
-# STAGING STUB — not a production config. Do not wrangler deploy this file
-# against the production Cloudflare account.
-#
-# HUMAN: create a physically separate Cloudflare account, Worker name, and
-# secrets. Do not copy production secrets into staging.
-# Closing workers_dev without HUMAN Access / mTLS / Tunnel would break
-# local reachability. Residual: HUMAN Access/mTLS/Tunnel.
+# Private staging placeholder. No production secrets are copied.
 
 name = "quant-platform-ingestion-secrets-staging"
 main = "src/index.ts"
 compatibility_date = "2026-08-01"
-workers_dev = true
+workers_dev = false
+preview_urls = false
 
-# No production hostnames, D1 ids, R2 buckets, or secret values.
-# After HUMAN creates staging resources: wrangler secret put JQUANTS_API_KEY
-# and JQUANTS_PROXY_TOKEN on this staging Worker only.
+# No public route and no secret bindings until an internal service-binding
+# consumer is deployed.

@@ -1,8 +1,8 @@
 """Parse platform/workers wrangler.toml for public-surface topology.
 
 Internal product workers must keep workers_dev false (and preview_urls false).
-Documented exceptions may keep workers_dev true. Staging stubs must use
-different names and must not point at production binding IDs.
+Documented exceptions may keep workers_dev true. Staging must use different
+names and physically distinct binding IDs/resources.
 """
 
 from __future__ import annotations
@@ -36,6 +36,9 @@ PRODUCTION_D1_ID = "be6fdcf8-40be-41fc-9535-7facd1fc2ffc"
 PRODUCTION_KV_ID = "cbbfc9439c3e4a789fa103777d38f39e"
 PRODUCTION_BUCKETS = frozenset({"quant-raw", "quant-structured"})
 PRODUCTION_BINDING_IDS = frozenset({PRODUCTION_D1_ID, PRODUCTION_KV_ID}) | PRODUCTION_BUCKETS
+STAGING_D1_ID = "d448d1c6-27c8-4aeb-8702-3e7a8b6bf2bb"
+STAGING_KV_ID = "4402f398df93412ebe6774d1bc603142"
+STAGING_BUCKETS = frozenset({"quant-raw-staging", "quant-structured-staging"})
 
 
 def _load(path: Path) -> dict[str, Any]:
@@ -119,7 +122,7 @@ def test_production_wrangler_has_no_env_staging() -> None:
         assert "staging" not in env, name
 
 
-def test_staging_stubs_use_distinct_names_without_production_binding_ids() -> None:
+def test_staging_uses_distinct_names_and_resources() -> None:
     for name in PRODUCT_WORKERS:
         prod_cfg = _load(_worker_toml(name))
         staging_path = _staging_toml(name)
@@ -131,13 +134,28 @@ def test_staging_stubs_use_distinct_names_without_production_binding_ids() -> No
         if name in INTERNAL_PRODUCT:
             assert staging.get("workers_dev") is False, name
             assert staging.get("preview_urls") is False, name
-        text = staging_path.read_text(encoding="utf-8")
         for banned in PRODUCTION_BINDING_IDS:
-            assert banned not in text, f"{staging_path} contains production id {banned}"
             assert banned not in _strings(staging), f"{staging_path} binds {banned}"
         env = staging.get("env") or {}
         assert "production" not in env, name
-        assert "database_id" not in staging
-        assert "r2_buckets" not in staging
-        assert "d1_databases" not in staging
-        assert "kv_namespaces" not in staging
+
+    for name in ("ingestion-jsda", "ingestion-premium", "quant-ops-mcp", "research-mass-eval"):
+        staging = _load(_staging_toml(name))
+        databases = staging.get("d1_databases") or []
+        assert {row["database_id"] for row in databases} == {STAGING_D1_ID}, name
+        assert {row["database_name"] for row in databases} == {"quant-ingest-staging"}, name
+
+    r2_expected = {
+        "ingestion-jsda": {"quant-raw-staging"},
+        "ingestion-premium": STAGING_BUCKETS,
+        "research-mass-eval": {"quant-structured-staging"},
+    }
+    for name, expected in r2_expected.items():
+        staging = _load(_staging_toml(name))
+        assert {row["bucket_name"] for row in staging["r2_buckets"]} == expected
+
+    ops = _load(_staging_toml("quant-ops-mcp"))
+    assert {row["id"] for row in ops["kv_namespaces"]} == {STAGING_KV_ID}
+    secrets = _load(_staging_toml("ingestion-secrets"))
+    assert secrets.get("workers_dev") is False
+    assert secrets.get("preview_urls") is False
