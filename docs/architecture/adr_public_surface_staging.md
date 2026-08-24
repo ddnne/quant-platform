@@ -16,7 +16,7 @@
 ### 1. Public surface
 
 The **only** public product surface is GitHub OAuth **read-only** Ops MCP
-(`quant-platform-ops-read-mcp`). Remote callers get the existing 12 read tools.
+(`quant-platform-ops-read-mcp`). Remote callers get the existing 17 read tools.
 Ops MCP must not grow SQL, D1/R2 handles, secret-read, shell, arbitrary URL
 fetch, ingest/delete/publish, feature approve, or broker tools.
 
@@ -46,7 +46,6 @@ on wrangler 4.125.0.
 | Worker | Why `workers_dev` stays true | Residual |
 |---|---|---|
 | quant-ops-mcp | GitHub OAuth callback host (above) | keep read-only |
-| ingestion-secrets | local runners reach the token-gated host; no custom zone | **HUMAN** Cloudflare Access / mTLS / Tunnel before flipping `workers_dev` off. Closing it now would silently break the secrets proxy. |
 | ci-aggregate | receipt POST host without a custom zone | **not** a public research API (no PIT / eval / ingest / MCP). Lane G will abolish this Worker; this lane does **not** delete it. |
 
 Do not treat a `*.workers.dev` hostname as network privacy. Inbound auth is the
@@ -66,11 +65,10 @@ The operational-closure lane created empty, staging-only resources on
 2026-08-24: D1 `quant-ingest-staging`, R2 `quant-raw-staging` and
 `quant-structured-staging`, KV `quant-ops-mcp-oauth-staging`, and JSDA work/DLQ
 Queues. `platform/workers/*/wrangler.staging.toml` binds only those resources.
-No production secret was copied. The staging secrets proxy is private
+No production secret was copied. Both production and staging secrets proxies
+are private
 (`workers_dev=false`, `preview_urls=false`) until a service-binding consumer is
 available.
-
-Secrets-proxy public Access / mTLS / Tunnel credentials are **HUMAN** if needed.
 
 ---
 
@@ -85,7 +83,6 @@ Secrets-proxy public Access / mTLS / Tunnel credentials are **HUMAN** if needed.
 
 | Item | Owner |
 |---|---|
-| Cloudflare Access / mTLS / Tunnel for ingestion-secrets | **HUMAN** |
 | Separate staging OAuth application and staging-only secrets | **HUMAN** |
 | GATEWAY_TOKEN service-binding unspoofable replacement | **HOLD** |
 | ci-aggregate abolish | Lane G |

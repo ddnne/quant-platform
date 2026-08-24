@@ -6,8 +6,8 @@
 # workers_dev=false: no stable *.workers.dev hostname.
 # preview_urls=false: version preview URLs are not a product surface
 # (wrangler 4.125.0 supports preview_urls).
-# Staging is not [env.staging] in this file (would share the production
-# Cloudflare account). See wrangler.staging.toml — HUMAN separate account.
+# Staging is not [env.staging] in this file. See wrangler.staging.toml for
+# distinct staging-only D1, R2, Queue, and Worker resources.
 name = "quant-platform-ingestion-jsda"
 main = "src/index.ts"
 compatibility_date = "2026-08-01"

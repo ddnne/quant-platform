@@ -40,7 +40,7 @@ npx wrangler deploy
 ```
 
 Production uses `quant-jsda-ingestion` and `quant-jsda-ingestion-dlq`.
-The separate-account staging stub uses `quant-jsda-ingestion-staging` and
-`quant-jsda-ingestion-dlq-staging`; create those resources only in that account.
+Staging uses the distinct `quant-jsda-ingestion-staging` and
+`quant-jsda-ingestion-dlq-staging` queues defined in `wrangler.staging.toml`.
 No Worker consumes the DLQ automatically: inspect and replay it operationally
 after correcting the underlying cause.
