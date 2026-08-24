@@ -1,18 +1,27 @@
-"""Process-isolation foundation for agents (Phase 6.2.3 §10).
+"""Fail-closed process isolation for agent tools (Phase 6.2.3 §10).
 
-This is NOT a production Cloudflare Sandbox/Container. It is a restricted
-subprocess boundary for trusted offline tools:
+Production execution requires an active OS isolation backend. On macOS the
+default backend uses ``sandbox-exec`` with a deny-first Seatbelt profile. On
+hosts without a supported backend, :meth:`ProcessIsolatedRunner.run` refuses
+execution. There is no silent fallback to a normal host subprocess.
+
+An explicitly injected :class:`UnsafeOfflineTestBackend` preserves local unit
+and offline tests, but it must also be enabled with ``allow_unsafe_offline`` and
+results truthfully report that they were not OS-isolated.
+
+Both paths retain the positive capability boundary:
 
   - closed tool-id → fixed entrypoint map (unknown tool ids rejected)
   - default map does not include sys.executable
   - python -c / python -m rejected; shell=True never used
-  - secrets env vars are not inherited
+  - secrets env vars and stdin are not inherited
   - timeout + output size caps
   - run() accepts only a factory-issued signed capability
 
 AgentCapabilityRouter remains the in-process policy router. The signed
-capability envelope is the same positive interface a future isolate runner
-would verify. Real isolate deployment is a follow-on.
+capability envelope is the positive interface any future container/Cloudflare
+isolate backend must verify. This module does not claim an isolate where none
+is active.
 """
 
 from __future__ import annotations
@@ -23,7 +32,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
-from typing import Mapping, Sequence
+from typing import Mapping, Protocol, Sequence
 
 from .signed_capability import (
     DEFAULT_AUDIENCE,
@@ -56,6 +65,17 @@ _FORBIDDEN_BINARY_NAMES = frozenset(
         "wget",
         "nc",
         "ncat",
+        "perl",
+        "ruby",
+        "node",
+        "nodejs",
+        "deno",
+        "lua",
+        "php",
+        "osascript",
+        "swift",
+        "java",
+        "jshell",
     }
 )
 
@@ -83,6 +103,144 @@ class IsolatedRunResult:
     stderr: str
     argv: tuple[str, ...]
     tool_id: str
+    backend: str
+    os_isolated: bool
+
+
+class IsolationBackend(Protocol):
+    """Trusted launcher abstraction for an OS sandbox or explicit test path."""
+
+    name: str
+    is_os_sandbox: bool
+
+    def ensure_active(
+        self,
+        *,
+        env: Mapping[str, str],
+        timeout_seconds: float,
+    ) -> None:
+        """Raise unless the backend can enforce its declared boundary now."""
+
+    def wrap_argv(self, argv: Sequence[str]) -> tuple[str, ...]:
+        """Return the trusted launcher argv for one closed tool invocation."""
+
+
+@dataclass(frozen=True)
+class UnsafeOfflineTestBackend:
+    """Explicit non-isolating backend for offline tests only.
+
+    This class deliberately does not claim OS isolation. Production callers
+    must never opt into it.
+    """
+
+    name: str = "unsafe-offline-test"
+    is_os_sandbox: bool = False
+
+    def ensure_active(
+        self,
+        *,
+        env: Mapping[str, str],
+        timeout_seconds: float,
+    ) -> None:
+        del env, timeout_seconds
+
+    def wrap_argv(self, argv: Sequence[str]) -> tuple[str, ...]:
+        return tuple(argv)
+
+
+@dataclass(frozen=True)
+class MacOSSandboxExecBackend:
+    """macOS Seatbelt launcher with network/write/fork default-deny policy."""
+
+    sandbox_exec_path: str = "/usr/bin/sandbox-exec"
+    name: str = "macos-sandbox-exec"
+    is_os_sandbox: bool = True
+
+    @staticmethod
+    def _profile_literal(value: str) -> str:
+        escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+        return f'"{escaped}"'
+
+    def is_available(self) -> bool:
+        return (
+            sys.platform == "darwin"
+            and os.path.isfile(self.sandbox_exec_path)
+            and os.access(self.sandbox_exec_path, os.X_OK)
+        )
+
+    def profile_for_binary(self, binary: str) -> str:
+        """Build a deny-first profile allowing only loader reads and one exec."""
+        paths = sorted({binary, os.path.realpath(binary)})
+        exec_rules = " ".join(
+            f"(literal {self._profile_literal(path)})" for path in paths
+        )
+        return "\n".join(
+            (
+                "(version 1)",
+                "(deny default)",
+                "(deny network*)",
+                "(deny process-fork)",
+                f"(allow process-exec {exec_rules})",
+                "(allow sysctl-read)",
+                "(allow file-read*",
+                '  (literal "/")',
+                *(f"  (literal {self._profile_literal(path)})" for path in paths),
+                '  (subpath "/usr/lib")',
+                '  (subpath "/System/Library")',
+                ")",
+            )
+        )
+
+    def wrap_argv(self, argv: Sequence[str]) -> tuple[str, ...]:
+        if not argv:
+            raise IsolationRejected("empty backend argv")
+        profile = self.profile_for_binary(str(argv[0]))
+        return (self.sandbox_exec_path, "-p", profile, *argv)
+
+    def ensure_active(
+        self,
+        *,
+        env: Mapping[str, str],
+        timeout_seconds: float,
+    ) -> None:
+        if not self.is_available():
+            raise IsolationRejected("macOS sandbox-exec backend is unavailable")
+        probe_binary = "/usr/bin/true"
+        if not os.path.isfile(probe_binary):
+            raise IsolationRejected("macOS sandbox activation probe is unavailable")
+        probe = (
+            self.sandbox_exec_path,
+            "-p",
+            self.profile_for_binary(probe_binary),
+            probe_binary,
+        )
+        try:
+            completed = subprocess.run(
+                probe,
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=max(0.1, min(float(timeout_seconds), 5.0)),
+                env=dict(env),
+                stdin=subprocess.DEVNULL,
+                close_fds=True,
+                shell=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise IsolationRejected(
+                "macOS sandbox backend activation probe failed"
+            ) from exc
+        if completed.returncode != 0:
+            raise IsolationRejected(
+                "macOS sandbox backend activation probe failed "
+                f"(returncode={completed.returncode})"
+            )
+
+
+def _default_os_isolation_backend() -> IsolationBackend | None:
+    backend = MacOSSandboxExecBackend()
+    return backend if backend.is_available() else None
 
 
 def _binary_name(path: str) -> str:
@@ -104,7 +262,12 @@ def _is_python_binary(path: str) -> bool:
 def _is_forbidden_binary(path: str) -> bool:
     if _is_python_binary(path):
         return True
-    return _binary_name(path) in _FORBIDDEN_BINARY_NAMES
+    names = {_binary_name(path)}
+    try:
+        names.add(_binary_name(os.path.realpath(path)))
+    except OSError:
+        pass
+    return not names.isdisjoint(_FORBIDDEN_BINARY_NAMES)
 
 
 def _is_secret_env_key(key: str) -> bool:
@@ -136,7 +299,7 @@ def validate_isolated_argv(argv: Sequence[str]) -> None:
 
 
 class ProcessIsolatedRunner:
-    """Restricted subprocess runner keyed by closed tool ids, not free argv."""
+    """Closed tool runner that requires real OS isolation in production."""
 
     def __init__(
         self,
@@ -149,6 +312,8 @@ class ProcessIsolatedRunner:
         plan_hash: str,
         snapshot_hash: str,
         hmac_secret: bytes | None = None,
+        backend: IsolationBackend | None = None,
+        allow_unsafe_offline: bool = False,
     ) -> None:
         source = (
             tool_entrypoints
@@ -165,6 +330,8 @@ class ProcessIsolatedRunner:
                 raise IsolationRejected(
                     f"entrypoint for {tool_id!r} must be an absolute path"
                 )
+            if any(ord(char) < 32 for char in path):
+                raise IsolationRejected(f"entrypoint for {tool_id!r} is invalid")
             if _is_forbidden_binary(path):
                 raise IsolationRejected(f"binary not allowlisted: {path}")
         if tool_entrypoints is None and sys.executable in mapping.values():
@@ -177,6 +344,18 @@ class ProcessIsolatedRunner:
         self.plan_hash = str(plan_hash)
         self.snapshot_hash = str(snapshot_hash)
         self._hmac_secret = hmac_secret
+        self._backend = (
+            backend if backend is not None else _default_os_isolation_backend()
+        )
+        self._allow_unsafe_offline = bool(allow_unsafe_offline)
+        if (
+            self._backend is not None
+            and not self._backend.is_os_sandbox
+            and not self._allow_unsafe_offline
+        ):
+            raise IsolationRejected(
+                "non-isolating backend requires explicit allow_unsafe_offline=True"
+            )
 
     @property
     def allowed_binaries(self) -> frozenset[str]:
@@ -185,6 +364,11 @@ class ProcessIsolatedRunner:
     @property
     def tool_entrypoints(self) -> Mapping[str, str]:
         return self._tool_entrypoints
+
+    @property
+    def backend_name(self) -> str | None:
+        """Configured backend name; availability is verified again on every run."""
+        return self._backend.name if self._backend is not None else None
 
     def _scrub_env(self) -> dict[str, str]:
         clean: dict[str, str] = {
@@ -223,20 +407,37 @@ class ProcessIsolatedRunner:
         binary = self._tool_entrypoints[tool_id]
         argv = [binary, *args]
         validate_isolated_argv(argv)
+        backend = self._backend
+        if backend is None:
+            raise IsolationRejected(
+                "no active OS sandbox backend; production execution denied"
+            )
+        if not backend.is_os_sandbox and not self._allow_unsafe_offline:
+            raise IsolationRejected("non-isolating backend denied")
+        clean_env = self._scrub_env()
+        backend.ensure_active(
+            env=clean_env,
+            timeout_seconds=self.timeout_seconds,
+        )
+        execution_argv = backend.wrap_argv(argv)
+        if not execution_argv:
+            raise IsolationRejected("isolation backend produced empty argv")
         try:
             completed = subprocess.run(
-                list(argv),
+                list(execution_argv),
                 check=False,
                 capture_output=True,
                 text=True,
                 timeout=self.timeout_seconds,
                 cwd=self.cwd,
-                env=self._scrub_env(),
+                env=clean_env,
+                stdin=subprocess.DEVNULL,
+                close_fds=True,
                 shell=False,
             )
-        except subprocess.TimeoutExpired as exc:
+        except (OSError, subprocess.TimeoutExpired) as exc:
             raise IsolationRejected(
-                f"timeout after {self.timeout_seconds}s"
+                f"isolated execution failed or timed out after {self.timeout_seconds}s"
             ) from exc
         stdout = (completed.stdout or "")[: self.max_output_bytes]
         stderr = (completed.stderr or "")[: self.max_output_bytes]
@@ -246,16 +447,21 @@ class ProcessIsolatedRunner:
             stderr=stderr,
             argv=tuple(argv),
             tool_id=tool_id,
+            backend=backend.name,
+            os_isolated=backend.is_os_sandbox,
         )
 
 
 __all__ = [
     "DEFAULT_AUDIENCE",
     "DEFAULT_TOOL_ENTRYPOINTS",
+    "IsolationBackend",
     "IsolatedRunResult",
     "IsolationRejected",
+    "MacOSSandboxExecBackend",
     "ProcessIsolatedRunner",
     "SignedIsolationCapability",
+    "UnsafeOfflineTestBackend",
     "issue_isolation_capability",
     "validate_isolated_argv",
     "verify_isolation_capability",

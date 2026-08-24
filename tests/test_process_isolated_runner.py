@@ -12,7 +12,9 @@ from agents.isolated_runner import (
     DEFAULT_AUDIENCE,
     DEFAULT_TOOL_ENTRYPOINTS,
     IsolationRejected,
+    MacOSSandboxExecBackend,
     ProcessIsolatedRunner,
+    UnsafeOfflineTestBackend,
     issue_isolation_capability,
     validate_isolated_argv,
 )
@@ -46,6 +48,15 @@ def _runner(**kwargs: object) -> ProcessIsolatedRunner:
     return ProcessIsolatedRunner(**params)  # type: ignore[arg-type]
 
 
+def _offline_runner(**kwargs: object) -> ProcessIsolatedRunner:
+    params: dict[str, object] = {
+        "backend": UnsafeOfflineTestBackend(),
+        "allow_unsafe_offline": True,
+    }
+    params.update(kwargs)
+    return _runner(**params)
+
+
 def test_default_tool_map_excludes_sys_executable():
     runner = _runner()
     assert sys.executable not in runner.allowed_binaries
@@ -55,7 +66,7 @@ def test_default_tool_map_excludes_sys_executable():
 
 
 def test_allowlisted_true_binary():
-    runner = _runner()
+    runner = _offline_runner()
     cap = _cap()
     if not Path("/usr/bin/true").exists():
         pytest.skip("/usr/bin/true not present on this host")
@@ -63,6 +74,89 @@ def test_allowlisted_true_binary():
     assert result.returncode == 0
     assert result.tool_id == "true"
     assert result.argv[0] == "/usr/bin/true"
+    assert result.backend == "unsafe-offline-test"
+    assert result.os_isolated is False
+
+
+def test_production_fails_closed_without_os_backend(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from agents import isolated_runner as mod
+
+    monkeypatch.setattr(mod, "_default_os_isolation_backend", lambda: None)
+    runner = _runner()
+    cap = _cap()
+
+    def unexpected_subprocess(*_args: object, **_kwargs: object):
+        raise AssertionError("host subprocess fallback must not run")
+
+    monkeypatch.setattr(mod.subprocess, "run", unexpected_subprocess)
+    with pytest.raises(IsolationRejected, match="no active OS sandbox backend"):
+        runner.run("true", capability=cap)
+
+
+def test_unsafe_offline_backend_requires_explicit_opt_in():
+    with pytest.raises(IsolationRejected, match="allow_unsafe_offline"):
+        _runner(backend=UnsafeOfflineTestBackend())
+
+
+def test_macos_profile_is_deny_first_and_has_no_user_filesystem_allow():
+    profile = MacOSSandboxExecBackend().profile_for_binary("/usr/bin/true")
+    assert "(deny default)" in profile
+    assert "(deny network*)" in profile
+    assert "(deny process-fork)" in profile
+    assert '(allow process-exec (literal "/usr/bin/true"))' in profile
+    assert "/Users" not in profile
+    assert "/private" not in profile
+
+
+def test_macos_backend_executes_true_under_active_os_sandbox():
+    backend = MacOSSandboxExecBackend()
+    if not backend.is_available() or not Path("/usr/bin/true").exists():
+        pytest.skip("active macOS sandbox-exec backend not present")
+    result = _runner(backend=backend).run("true", capability=_cap())
+    assert result.returncode == 0
+    assert result.backend == "macos-sandbox-exec"
+    assert result.os_isolated is True
+
+
+def test_macos_backend_denies_arbitrary_filesystem_read():
+    backend = MacOSSandboxExecBackend()
+    stat_binary = Path("/usr/bin/stat")
+    if not backend.is_available() or not stat_binary.exists():
+        pytest.skip("active macOS sandbox-exec/stat not present")
+    runner = _runner(
+        backend=backend,
+        tool_entrypoints={"stat": str(stat_binary)},
+    )
+    result = runner.run(
+        "stat",
+        args=["/etc/passwd"],
+        capability=_cap(scope=frozenset({"stat"})),
+    )
+    assert result.returncode != 0
+    assert "Operation not permitted" in result.stderr
+    assert result.os_isolated is True
+
+
+def test_macos_backend_denies_arbitrary_filesystem_write(tmp_path: Path):
+    backend = MacOSSandboxExecBackend()
+    touch_binary = Path("/usr/bin/touch")
+    if not backend.is_available() or not touch_binary.exists():
+        pytest.skip("active macOS sandbox-exec/touch not present")
+    target = tmp_path / "sandbox-must-not-create-this"
+    runner = _runner(
+        backend=backend,
+        tool_entrypoints={"touch": str(touch_binary)},
+    )
+    result = runner.run(
+        "touch",
+        args=[str(target)],
+        capability=_cap(scope=frozenset({"touch"})),
+    )
+    assert result.returncode != 0
+    assert not target.exists()
+    assert result.os_isolated is True
 
 
 def test_rejects_shell_metacharacters():
@@ -107,6 +201,16 @@ def test_constructor_rejects_python_and_shell_entrypoints():
         _runner(tool_entrypoints={"sh": "/bin/sh"})
     with pytest.raises(IsolationRejected, match="not allowlisted"):
         _runner(tool_entrypoints={"curl": "/usr/bin/curl"})
+
+
+def test_constructor_rejects_shell_symlink(tmp_path: Path):
+    shell_link = tmp_path / "apparently-safe-tool"
+    try:
+        shell_link.symlink_to("/bin/sh")
+    except OSError:
+        pytest.skip("host does not permit symlink creation")
+    with pytest.raises(IsolationRejected, match="not allowlisted"):
+        _runner(tool_entrypoints={"safe": str(shell_link)})
 
 
 def test_run_requires_verified_capability():
