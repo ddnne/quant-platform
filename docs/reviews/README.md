@@ -1,5 +1,8 @@
 # Phase 6.3.1 review findings
 
+> **Live finding ledger:** [`../phase633_finding_ledger.md`](../phase633_finding_ledger.md).
+> Files in this directory are **historical freezes**, not live SoT. Do not add `P632_wave*` or Independent A/B/C revisit files. Policy: [`../architecture/adr_review_findings_sot.md`](../architecture/adr_review_findings_sot.md).
+
 > **Live vs freeze.** Feature HEAD `cb9916e0` vs `origin/main` `b5c326a`. PR #1 is **BLOCKED** until `ci-aggregate` posts. Live MCP: Projection **STALE**, READY **null**. Historical A01 / A07 / A11 files are remaining-audit **freezes** at `03cd1b1`, not live SoT. `f224e7e` / `40d1aa90` / `67fcbd7c` / `ed94d504` / `5103b26b` / wave-7 (`3b64bdfc`) / wave-8 / `0a8ced34` / `242c2484` / wave-9 / `2b82ec7d` / wave-10 / `02fb6cbd` / wave-11 / `cf7da56c` / wave-12 / `b5f6f2de` / wave-13 review files stay earlier freezes, not live HEAD.
 
 Starting remote HEAD at first wave: `069913c`. Remaining-audit freeze: **`03cd1b1`**. Current `origin/main` is **`b5c326a`**.
