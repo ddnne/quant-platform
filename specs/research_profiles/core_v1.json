@@ -1,0 +1,37 @@
+{
+  "profile_id": "core",
+  "profile_version": "research-data-profile/v1",
+  "purpose": "Baseline historical research. Tip-only AM bars and earnings calendar are excluded unless a FeatureRef or StrategySpec lists them.",
+  "required_datasets": [
+    "equities_master",
+    "equities_bars_daily",
+    "fins_details",
+    "fins_dividend",
+    "fins_earnings_date",
+    "fins_summary",
+    "markets_calendar"
+  ],
+  "required_coverage_mode": "official",
+  "contract_versions": {
+    "canonical_registry": "v1",
+    "coverage_policy": "collection-coverage/v2",
+    "evaluation_ir": "evaluation-ir/v1",
+    "jsda_governed": "jsda-governed/v1",
+    "strategy_spec": "strategy-spec/v3"
+  },
+  "feature_dependencies": [],
+  "strategy_dependencies": [],
+  "risk_dependencies": [
+    "crash",
+    "high_vol"
+  ],
+  "snapshot_cutoff": null,
+  "permitted_universe": [
+    "tse_prime_with_fins",
+    "tse_dividend_payers"
+  ],
+  "excluded_datasets_and_reasons": {
+    "equities_bars_daily_am": "PD-D4-BARS-AM tip-only AM bars; history DEFER; not a core historical input",
+    "equities_earnings_calendar": "PD-D4-EARN-CAL vendor tip-only earnings calendar; use fins_earnings_date"
+  }
+}
