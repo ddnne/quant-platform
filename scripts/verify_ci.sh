@@ -209,8 +209,11 @@ for dir in "${WORKERS[@]}"; do
   (cd "$dir" && npm test)
   echo "==> npm run typecheck ($name)"
   (cd "$dir" && npm run typecheck)
-  echo "==> wrangler deploy --dry-run ($name)"
-  (cd "$dir" && npx wrangler deploy --dry-run)
+  echo "==> wrangler deploy --dry-run --env= ($name)"
+  # Several production configs define a named env.production for explicit
+  # promotion. CI validates the top-level deployment surface deliberately;
+  # never leave Wrangler to infer an environment.
+  (cd "$dir" && npx wrangler deploy --dry-run --env="")
   if [[ -n "$(npm_script_body "$py" "$dir/package.json" types)" ]]; then
     echo "==> wrangler types --check ($name)"
     # Honor scripts.types flags (include-runtime false). Bare
