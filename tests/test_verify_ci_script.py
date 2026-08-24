@@ -6,6 +6,7 @@ import json
 import os
 import stat
 import subprocess
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -71,6 +72,16 @@ def _helpers_script() -> str:
             _extract_bash_function(src, "find_python_311_plus"),
         )
     )
+
+
+def _pytest_python_first_env() -> dict[str, str]:
+    """Run helper probes with pytest's already-validated interpreter first."""
+
+    env = os.environ.copy()
+    env["PATH"] = os.pathsep.join(
+        (str(Path(sys.executable).resolve().parent), env.get("PATH", ""))
+    )
+    return env
 
 
 def test_verify_ci_script_exists_executable_and_covers_required_steps() -> None:
@@ -228,6 +239,7 @@ python_is_311_plus "$found"
         cwd=str(ROOT),
         capture_output=True,
         text=True,
+        env=_pytest_python_first_env(),
         check=False,
     )
     assert probe.returncode == 0, probe.stderr + probe.stdout
@@ -251,6 +263,7 @@ python_is_311_plus "$venv_py"
         cwd=str(ROOT),
         capture_output=True,
         text=True,
+        env=_pytest_python_first_env(),
         check=False,
     )
     assert created.returncode == 0, created.stderr + created.stdout
