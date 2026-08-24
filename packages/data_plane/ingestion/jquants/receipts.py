@@ -16,6 +16,7 @@ from storage.coverage_ledger import (
     RequiredCoverageSegment,
     record_collection_receipt,
 )
+from storage.receipt_crypto import partition_extra_digests
 from storage.trusted_receipt import SignedReceiptAuthority
 
 
@@ -88,7 +89,7 @@ def emit_segment_receipt(
         raw_manifest_digest=raw_manifest_digest,
         structured_generation=structured_generation,
         structured_digest=structured_digest,
-        extra_digests=extra_digests,
+        extra_digests=partition_extra_digests(extra_digests),
     )
     record_collection_receipt(conn, receipt)
     if commit:
