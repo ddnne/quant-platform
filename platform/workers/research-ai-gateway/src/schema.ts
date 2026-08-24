@@ -88,6 +88,7 @@ export type GatewayOk = {
   ready_snapshot_id: string | null;
   experiment_id: string | null;
   budget_id: string;
+  budget_run_id: string;
 };
 
 export type DecodeResult<T> = { ok: true; value: T } | { ok: false; error: string };
@@ -144,10 +145,11 @@ function stripEnvelope(raw: Record<string, unknown>): Record<string, unknown> {
 }
 
 /**
- * Fail-closed budget stub. A persistent Durable Object ledger is not in this
- * commit. Missing budget_id refuses the call. Presence of budget_id is not a
- * transactional reserve/charge — Edge ledger is not yet transactional.
- * Do not post-charge-only.
+ * budget_id is a caller correlation/capability label, not occupancy.
+ * Occupancy is reserved by the control-plane Budget Durable Object, which
+ * issues an opaque Budget Run ID. Presence of budget_id is not a reserve.
+ * Create is not reserve. Missing budget_id refuses decode, not occupancy.
+ * Live Edge occupancy is unproven.
  */
 export function decodeGatewayRequest(raw: unknown): DecodeResult<GatewayRequest> {
   if (!isObj(raw)) return fail("body must be a JSON object");
@@ -183,7 +185,7 @@ export function decodeGatewayRequest(raw: unknown): DecodeResult<GatewayRequest>
     return fail("max_tokens must be integer 1..1400");
   }
   if (typeof raw.budget_id !== "string" || !raw.budget_id.trim()) {
-    return fail("budget_id required; Edge ledger is not yet transactional");
+    return fail("budget_id required");
   }
 
   const out: GatewayRequest = {
