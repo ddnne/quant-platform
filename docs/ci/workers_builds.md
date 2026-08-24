@@ -63,6 +63,11 @@ Connect **one** Workers Build on repository `ddnne/quant-platform`:
 | Deploy command | **not** `npx wrangler deploy` of a product Worker. Do not auto-promote. Use a no-op or `npx wrangler versions upload` of a dedicated non-product CI Worker **after** a HUMAN creates it |
 | Watch paths | unset (always run `verify_ci.sh`) |
 
+The repository pins Cloudflare's build interpreter with [`.python-version`](../../.python-version).
+Workers Builds otherwise defaults to Python 3.13; the pinned 3.11 build is the
+same supported runtime family used by local CI and includes the SQLite module
+required by the test suite.
+
 [`scripts/verify_ci.sh`](../../scripts/verify_ci.sh) is fail-closed:
 
 - Bootstraps `.venv` with Python 3.11+ when missing (`python3.11` or `python3` that is 3.11+; never system 3.9). Then `pip install -e ".[dev]"`.
