@@ -15,9 +15,23 @@ This document is the operator map for:
 Mass / READY / GO stay unarmed. A green check is not production publication and is
 not a research API.
 
-**The native GitHub App check does not exist live in this commit.** Isolation
-does not connect the App, does not change branch protection, and does not
-claim CI mandatory complete.
+**The native GitHub App check does not exist live in this commit.** The
+Cloudflare Builds API repository connection exists, but creation of the
+repo-root Build is blocked on a user-owned Workers Builds API token. Branch
+protection is unchanged and CI mandatory closure is not claimed.
+
+Current live operator state (2026-08-24 JST):
+
+- Cloudflare repository connection:
+  `31c86c8c-0883-4b4b-a8ca-dd821817dfab`
+  (`github`, account `ddnne`, repository `ddnne/quant-platform`).
+- The isolated staging CI Worker exists and is private; its active candidate
+  version is `ae98854d-7766-4664-8f21-47651dfe51e1`.
+- `GET /builds/tokens` returned no Build token. The Builds API rejects Build
+  configuration creation without `build_token_uuid`.
+- A HUMAN must create/select that token in the Cloudflare dashboard (and
+  complete the GitHub App installation if prompted). This is the only remaining
+  credential operation for the native check. Do not substitute a PAT status.
 
 ## Authority (required check)
 
@@ -61,15 +75,18 @@ Connect **one** Workers Build on repository `ddnne/quant-platform`:
 
 Workers Builds injects `WORKERS_CI_COMMIT_SHA`. Do not invent a SHA.
 
-## HUMAN steps (native check is not live yet)
+## HUMAN steps (repository connected; native check is not live yet)
 
 Isolation does **not** do these. Do not mint `CI_LANE_TOKEN` / `GITHUB_STATUS_TOKEN`.
 Do not deploy production.
 
-1. Install and connect the Cloudflare Workers & Pages GitHub App on `ddnne/quant-platform`.
-2. Create/connect the repo-root Workers Build with the table above.
-3. Set branch protection / ruleset **required status checks** to that native check, with **expected source** = the Cloudflare GitHub App. Do not leave PAT context `ci-aggregate` as the sole required check once the native check exists.
-4. Fail/pass smoke: a **fail** SHA must be unmergeable; a **pass** SHA must post the native App check (not a hand-rolled status).
+1. In the Cloudflare dashboard, create/select the user-owned Workers Builds API
+   token and complete the Cloudflare Workers & Pages GitHub App installation if
+   the existing repository connection requests it.
+2. Create the repo-root Workers Build with the table above.
+3. Observe the native check name and GitHub App ID on an actual build.
+4. Set branch protection / ruleset **required status checks** to that native check, with **expected source** = the Cloudflare GitHub App. Do not leave PAT context `ci-aggregate` as the sole required check once the native check exists.
+5. Fail/pass smoke: a **fail** SHA must be unmergeable; a **pass** SHA must post the native App check (not a hand-rolled status).
 
 Until those steps land, CI is **not** mandatory-complete.
 
