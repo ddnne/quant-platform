@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ready-manifest/v1",
+  "title": "ReadyManifest",
+  "description": "Single ReadyManifest type shared by publisher, coherence, and ReadinessService. Missing proofs are UNKNOWN or MISSING, never default PASS. This schema does not publish live READY.",
+  "$defs": {
+    "sha256_digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "proof_digest": {
+      "type": "string",
+      "pattern": "^(sha256:[0-9a-f]{64}|UNKNOWN|MISSING)$"
+    },
+    "generation_pin": {
+      "type": "string",
+      "minLength": 1
+    },
+    "iso_datetime": {
+      "type": "string",
+      "minLength": 1
+    },
+    "nonempty_string": {
+      "type": "string",
+      "minLength": 1
+    }
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "snapshot_id",
+    "profile_id",
+    "profile_digest",
+    "dataset_membership_digest",
+    "coverage_proof_digest",
+    "raw_proof_digest",
+    "validation_proof_digest",
+    "b0_proof_digest",
+    "source_generation",
+    "applied_sync_generation",
+    "pit_contract_digests",
+    "feature_generation",
+    "catalog_generation",
+    "created_at",
+    "published_at"
+  ],
+  "properties": {
+    "format": { "const": "ready-manifest/v1" },
+    "snapshot_id": { "$ref": "#/$defs/sha256_digest" },
+    "profile_id": { "$ref": "#/$defs/nonempty_string" },
+    "profile_digest": { "$ref": "#/$defs/proof_digest" },
+    "dataset_membership_digest": { "$ref": "#/$defs/proof_digest" },
+    "coverage_proof_digest": { "$ref": "#/$defs/proof_digest" },
+    "raw_proof_digest": { "$ref": "#/$defs/proof_digest" },
+    "validation_proof_digest": { "$ref": "#/$defs/proof_digest" },
+    "b0_proof_digest": { "$ref": "#/$defs/proof_digest" },
+    "source_generation": { "$ref": "#/$defs/generation_pin" },
+    "applied_sync_generation": { "$ref": "#/$defs/generation_pin" },
+    "pit_contract_digests": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": { "$ref": "#/$defs/proof_digest" }
+    },
+    "feature_generation": { "$ref": "#/$defs/generation_pin" },
+    "catalog_generation": { "$ref": "#/$defs/generation_pin" },
+    "created_at": { "$ref": "#/$defs/iso_datetime" },
+    "published_at": { "$ref": "#/$defs/iso_datetime" },
+    "manifest_digest": { "$ref": "#/$defs/sha256_digest" }
+  }
+}
