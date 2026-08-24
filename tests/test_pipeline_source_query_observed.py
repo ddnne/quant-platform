@@ -93,4 +93,5 @@ def test_source_query_empty_fetch_does_not_copy_expected_or_complete(
     status, detail = evaluate_segment(policy, required, receipt)
     assert status != "COMPLETE"
     assert status == "PARTIAL"
-    assert "COMPLETE" not in str(detail.get("reason") or "")
+    assert detail["eligibility"] == "RECOVERED_RAW_ONLY"
+    assert "valid Ed25519 signature required" in detail["reason"]

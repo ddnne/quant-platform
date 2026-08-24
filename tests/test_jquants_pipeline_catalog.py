@@ -164,7 +164,9 @@ def test_run_jquants_catalog_incremental_default_window(
         if row["status"] != "SUCCESS":
             continue
         digests = json.loads(row["digests_json"])
-        assert digests.get("eligibility") == "TRUSTED_COLLECTION"
+        # A valid signature preserves provenance, but an empty upstream
+        # envelope is deliberately ineligible for Coverage COMPLETE.
+        assert digests.get("eligibility") == "RECOVERED_RAW_ONLY"
         assert str(digests.get("signature") or "").startswith("ed25519:")
         assert verify_receipt_signature(digests)
     store.close()

@@ -23,6 +23,7 @@ from paper_runtime import (
 )
 from storage.coverage_ledger import (
     CollectionReceipt,
+    EXPECTED_EMPTY_WITH_EVIDENCE,
     plan_required_segments,
     record_collection_receipt,
     record_required_segments,
@@ -183,6 +184,11 @@ def _seed_publishable_db(path) -> tuple[str, ...]:
             from tests.test_phase61_coverage_v2 import _signed_digests as _sd
         for segment in planned:
             raw = b'{"data":[{"ok":true}]}'
+            expected_empty_evidence = (
+                {EXPECTED_EMPTY_WITH_EVIDENCE: True}
+                if observed == 0
+                else None
+            )
             if authority is not None:
                 receipt = authority.issue(
                     required=segment,
@@ -193,6 +199,7 @@ def _seed_publishable_db(path) -> tuple[str, ...]:
                     raw_row_count=observed,
                     pagination_exhausted=True,
                     checked_at=today + "T16:00:00Z",
+                    extra_digests=expected_empty_evidence,
                 )
             else:
                 receipt = CollectionReceipt(
@@ -220,6 +227,7 @@ def _seed_publishable_db(path) -> tuple[str, ...]:
                         segment_start=segment.segment_start,
                         segment_end=segment.segment_end,
                         checked_at=today + "T16:00:00Z",
+                        extra_digests=expected_empty_evidence,
                     ),
                     run_id=run_id,
                     status="SUCCESS",
