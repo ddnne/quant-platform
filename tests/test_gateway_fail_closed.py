@@ -8,6 +8,7 @@ import pytest
 
 from gateway.ai import (
     AIGateway,
+    GatewayBudget,
     GatewayResult,
     GatewaySchemaRejected,
     OfflineStubProvider,
@@ -18,6 +19,13 @@ from selection.budget_ledger import (
     ResearchBudgetCapability,
 )
 from selection.screen import ExperimentBudget
+
+
+def test_gateway_budget_is_not_edge_occupancy_authority() -> None:
+    assert GatewayBudget.EDGE_OCCUPANCY_AUTHORITY is False
+    doc = GatewayBudget.__doc__ or ""
+    assert "Not Edge occupancy authority" in doc
+    assert GatewayBudget().max_calls != 16
 
 
 def _budget(
