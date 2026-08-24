@@ -191,12 +191,17 @@ async function quarantineCurrent(
   return key;
 }
 
-async function loadCurrent(bucket: R2Bucket): Promise<CurrentSnapshot> {
+interface LoadedCurrent {
+  snap: CurrentSnapshot;
+  etag: string | null;
+}
+
+async function loadCurrent(bucket: R2Bucket): Promise<LoadedCurrent> {
   const obj = await bucket.get(CURRENT_KEY);
-  if (!obj) return emptyCurrent();
+  if (!obj) return { snap: emptyCurrent(), etag: null };
   const raw = await obj.text();
   try {
-    return parseCurrentSnapshot(raw);
+    return { snap: parseCurrentSnapshot(raw), etag: obj.etag ?? null };
   } catch (e) {
     let quarantineKey: string | null = null;
     try {
@@ -211,6 +216,42 @@ async function loadCurrent(bucket: R2Bucket): Promise<CurrentSnapshot> {
       }: ${detail}`,
       quarantineKey,
     );
+  }
+}
+
+async function putImmutable(
+  bucket: R2Bucket,
+  key: string,
+  body: string,
+  contentType: string,
+  metadata: Record<string, string>,
+): Promise<void> {
+  const put = await bucket.put(key, body, {
+    httpMetadata: { contentType },
+    customMetadata: metadata,
+    onlyIf: { etagDoesNotMatch: "*" },
+  });
+  if (put === null) {
+    throw new Error(`immutable object already exists: ${key}`);
+  }
+}
+
+async function putCurrentPointer(
+  bucket: R2Bucket,
+  body: string,
+  metadata: Record<string, string>,
+  etag: string | null,
+): Promise<void> {
+  const onlyIf = etag
+    ? { etagMatches: etag }
+    : { etagDoesNotMatch: "*" };
+  const put = await bucket.put(CURRENT_KEY, body, {
+    httpMetadata: { contentType: "application/json" },
+    customMetadata: metadata,
+    onlyIf,
+  });
+  if (put === null) {
+    throw new Error("CURRENT pointer CAS failed");
   }
 }
 
@@ -233,7 +274,8 @@ export async function writeMasterScd2(
 ): Promise<{ inserted: number; revisions: number; events_key: string | null }> {
   const runId = newRunId("scd2");
   const asOf = jstDate(when);
-  const prev = await loadCurrent(env.STRUCTURED_BUCKET);
+  const loaded = await loadCurrent(env.STRUCTURED_BUCKET);
+  const prev = loaded.snap;
   const nextByCode: Record<string, CurrentEntry> = {};
   const events: Scd2Event[] = [];
   const incomingCodes = new Set<string>();
@@ -301,23 +343,31 @@ export async function writeMasterScd2(
     }
   }
 
+  const nextUpdatedAt = jstIso(when);
+  if (prev.updated_at && nextUpdatedAt < prev.updated_at) {
+    throw new Error(
+      `CURRENT pointer is monotonic; refusing ${nextUpdatedAt} after ${prev.updated_at}`,
+    );
+  }
+
   const nextSnap: CurrentSnapshot = {
     schema: CURRENT_SCHEMA,
-    updated_at: jstIso(when),
+    updated_at: nextUpdatedAt,
     count: Object.keys(nextByCode).length,
     by_code: nextByCode,
   };
 
-  await env.STRUCTURED_BUCKET.put(
-    CURRENT_KEY,
+  const snapshotKey =
+    `structured/scd2/equities_master/snapshots/dt=${asOf}/${runId}.json`;
+  await putImmutable(
+    env.STRUCTURED_BUCKET,
+    snapshotKey,
     JSON.stringify(nextSnap),
+    "application/json",
     {
-      httpMetadata: { contentType: "application/json" },
-      customMetadata: {
-        schema: nextSnap.schema,
-        count: String(nextSnap.count),
-        run_id: runId,
-      },
+      schema: nextSnap.schema,
+      count: String(nextSnap.count),
+      run_id: runId,
     },
   );
 
@@ -326,15 +376,35 @@ export async function writeMasterScd2(
     eventsKey =
       `structured/scd2/equities_master/events/dt=${asOf}/${runId}.ndjson`;
     const body = events.map((e) => JSON.stringify(e)).join("\n") + "\n";
-    await env.STRUCTURED_BUCKET.put(eventsKey, body, {
-      httpMetadata: { contentType: "application/x-ndjson" },
-      customMetadata: {
+    await putImmutable(
+      env.STRUCTURED_BUCKET,
+      eventsKey,
+      body,
+      "application/x-ndjson",
+      {
         count: String(events.length),
         run_id: runId,
         date: asOf,
       },
-    });
+    );
   }
+
+  const pointer = {
+    ...nextSnap,
+    snapshot_key: snapshotKey,
+    events_key: eventsKey,
+  };
+  await putCurrentPointer(
+    env.STRUCTURED_BUCKET,
+    JSON.stringify(pointer),
+    {
+      schema: nextSnap.schema,
+      count: String(nextSnap.count),
+      run_id: runId,
+      snapshot_key: snapshotKey,
+    },
+    loaded.etag,
+  );
 
   return { inserted: events.length, revisions: 0, events_key: eventsKey };
 }

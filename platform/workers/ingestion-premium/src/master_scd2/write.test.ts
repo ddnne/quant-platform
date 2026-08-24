@@ -25,6 +25,7 @@ function memoryBucket(): {
     metadata?: Record<string, string>;
   }[] = [];
   const objects = new Map<string, string>();
+  const etags = new Map<string, string>();
   const bucket = {
     async get(key: string) {
       const body = objects.get(key);
@@ -32,17 +33,34 @@ function memoryBucket(): {
       return {
         json: async () => JSON.parse(body),
         text: async () => body,
+        etag: etags.get(key),
       };
     },
     async put(
       key: string,
       value: unknown,
-      options?: { customMetadata?: Record<string, string> },
+      options?: {
+        customMetadata?: Record<string, string>;
+        onlyIf?: { etagMatches?: string; etagDoesNotMatch?: string };
+      },
     ) {
       const body = typeof value === "string" ? value : "";
+      const exists = objects.has(key);
+      const existingEtag = etags.get(key);
+      if (options?.onlyIf?.etagDoesNotMatch === "*" && exists) {
+        return null;
+      }
+      if (
+        options?.onlyIf?.etagMatches &&
+        (!exists || existingEtag !== options.onlyIf.etagMatches)
+      ) {
+        return null;
+      }
+      const etag = `mem-${puts.length + 1}`;
       objects.set(key, body);
+      etags.set(key, etag);
       puts.push({ key, body, metadata: options?.customMetadata });
-      return { key, etag: `mem-${puts.length}` };
+      return { key, etag };
     },
   } as unknown as R2Bucket;
   return { bucket, puts };
@@ -413,5 +431,72 @@ describe("writeMasterScd2", () => {
     assertNoCoverageComplete(snap);
     assertNoCoverageComplete(rows);
     assertNoCoverageComplete(trusted);
+  });
+
+  it("writes immutable snapshot and events before CAS CURRENT pointer", async () => {
+    const { bucket, puts } = memoryBucket();
+    const result = await writeMasterScd2(
+      { STRUCTURED_BUCKET: bucket },
+      [input(listedPayload())],
+      WHEN,
+    );
+    const keys = puts.map((put) => put.key);
+    const snapIdx = keys.findIndex((key) => key.includes("/snapshots/"));
+    const eventIdx = keys.findIndex((key) => key.includes("/events/"));
+    const currentIdx = keys.lastIndexOf(CURRENT_KEY);
+    expect(snapIdx).toBeGreaterThanOrEqual(0);
+    expect(eventIdx).toBeGreaterThan(snapIdx);
+    expect(currentIdx).toBeGreaterThan(eventIdx);
+    const snap = parseCurrent(currentPut(puts).body);
+    expect(snap.by_code["8697"]).toBeDefined();
+    expect(result.events_key).toBe(puts[eventIdx]!.key);
+    expect(JSON.stringify(puts.map((put) => put.key))).not.toContain("COMPLETE");
+  });
+
+  it("CURRENT CAS failure leaves the pointer unchanged after immutable writes", async () => {
+    const { bucket, puts } = memoryBucket();
+    const env = { STRUCTURED_BUCKET: bucket };
+    await writeMasterScd2(env, [input(listedPayload())], WHEN);
+    const firstCurrent = currentPut(puts).body;
+    const innerPut = bucket.put.bind(bucket);
+    bucket.put = (async (
+      key: string,
+      value: unknown,
+      options?: unknown,
+    ) => {
+      if (key === CURRENT_KEY) return null;
+      return innerPut(key, value, options as never);
+    }) as typeof bucket.put;
+
+    await expect(
+      writeMasterScd2(
+        env,
+        [input(listedPayload({ CompanyName: "JPX Group, Inc." }))],
+        new Date("2025-04-02T00:00:00.000Z"),
+      ),
+    ).rejects.toThrow(/CURRENT pointer CAS failed/);
+
+    expect(currentPut(puts).body).toBe(firstCurrent);
+    expect(puts.some((put) => put.key.includes("/snapshots/"))).toBe(true);
+    expect(puts.filter((put) => put.key === CURRENT_KEY)).toHaveLength(1);
+  });
+
+  it("refuses to move CURRENT pointer backward in updated_at", async () => {
+    const { bucket, puts } = memoryBucket();
+    const env = { STRUCTURED_BUCKET: bucket };
+    await writeMasterScd2(env, [input(listedPayload())], WHEN);
+    const firstCurrent = currentPut(puts).body;
+    const afterFirst = puts.length;
+
+    await expect(
+      writeMasterScd2(
+        env,
+        [input(listedPayload())],
+        new Date("2025-03-31T00:00:00.000Z"),
+      ),
+    ).rejects.toThrow(/monotonic/);
+
+    expect(currentPut(puts).body).toBe(firstCurrent);
+    expect(puts.slice(afterFirst)).toHaveLength(0);
   });
 });
