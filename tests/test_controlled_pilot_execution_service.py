@@ -369,6 +369,18 @@ def test_controlled_service_public_constructor_has_no_caller_trust_root() -> Non
         ControlledPilotExecutionService(verifier=object())  # type: ignore[call-arg]
 
 
+def test_controlled_service_trust_roots_cannot_be_replaced_after_construction(
+) -> None:
+    service = ControlledPilotExecutionService()
+    attacker = TraderAuthorizationPublicKeyRegistry(
+        {"attacker": Ed25519PrivateKey.generate().public_key()}
+    )
+    with pytest.raises(AttributeError):
+        service._trader_verifier = attacker  # type: ignore[attr-defined]
+    with pytest.raises(AttributeError):
+        service._verifier = object()  # type: ignore[attr-defined]
+
+
 def test_controlled_service_rejects_caller_signed_readiness_under_configured_root(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

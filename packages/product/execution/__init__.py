@@ -22,7 +22,6 @@ from .paper_service import (
 from .trader_authority import (
     TraderAuthorizationPublicKeyRegistry,
     VerifiedTraderAuthorization,
-    open_controlled_trader_authorization_issuer,
 )
 
 __all__ = [
@@ -34,5 +33,4 @@ __all__ = [
     "PaperExecutionService",
     "TraderAuthorizationPublicKeyRegistry",
     "VerifiedTraderAuthorization",
-    "open_controlled_trader_authorization_issuer",
 ]

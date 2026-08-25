@@ -8,8 +8,11 @@ through their configured public-key loader.
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import json
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Mapping
 from unittest.mock import patch
 from uuid import uuid4
 
@@ -145,7 +148,22 @@ def controlled_pilot_execution_service(
         "load_pinned",
         return_value=trader_verifier,
     ):
-        return ControlledPilotExecutionService(paper_store=paper_store)
+        service = ControlledPilotExecutionService(paper_store=paper_store)
+
+    class _PinnedTestControlledPilotService:
+        def execute(self, **kwargs: Any) -> Any:
+            with patch.object(
+                ReadinessPublicKeyRegistry,
+                "load_pinned",
+                return_value=verifier,
+            ), patch.object(
+                TraderAuthorizationPublicKeyRegistry,
+                "load_pinned",
+                return_value=trader_verifier,
+            ):
+                return service.execute(**kwargs)
+
+    return _PinnedTestControlledPilotService()
 
 
 def make_trader_authorization_issuer(
@@ -153,18 +171,9 @@ def make_trader_authorization_issuer(
     key_id: str = "test-trader-authorization-v1",
     private_key: Ed25519PrivateKey | None = None,
 ) -> Any:
-    """Create the private trader issuer strictly inside test support."""
-    from execution.trader_authority import (
-        _ControlledTraderAuthorizationIssuer,
-        _ISSUER_TOKEN,
-    )
-
+    """Create an independent private DTO signer strictly inside tests."""
     key = private_key or Ed25519PrivateKey.generate()
-    return _ControlledTraderAuthorizationIssuer(
-        key_id=key_id,
-        private_key=key,
-        _token=_ISSUER_TOKEN,
-    )
+    return _TestTraderAuthorizationSigner(key_id=key_id, private_key=key)
 
 
 def issue_trader_authorization(
@@ -174,12 +183,114 @@ def issue_trader_authorization(
     **kwargs: Any,
 ) -> Any:
     """Issue under an ephemeral readiness trust root for unit tests."""
-    with patch.object(
-        ReadinessPublicKeyRegistry,
-        "load_pinned",
-        return_value=readiness_verifier,
-    ):
-        return issuer.issue(**kwargs)
+    return issuer.issue(readiness_verifier=readiness_verifier, **kwargs)
+
+
+def _test_trader_canonical_bytes(payload: Mapping[str, Any]) -> bytes:
+    return json.dumps(
+        dict(payload),
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+
+
+def _test_trader_digest(payload: Mapping[str, Any]) -> str:
+    return "sha256:" + hashlib.sha256(
+        _test_trader_canonical_bytes(payload)
+    ).hexdigest()
+
+
+class _TestTraderAuthorizationSigner:
+    """Test-owned signer; production exposes only the corresponding verifier."""
+
+    def __init__(
+        self, *, key_id: str, private_key: Ed25519PrivateKey
+    ) -> None:
+        self._key_id = str(key_id)
+        self._private_key = private_key
+
+    def issue(
+        self,
+        *,
+        readiness_verifier: ReadinessPublicKeyRegistry,
+        decision: Any,
+        experiment_plan: Any,
+        plan_set_binding: Any,
+        ready_manifest: Any,
+        readiness: Any,
+        resolved_universe: Any,
+        ttl_seconds: int = 1800,
+    ) -> Any:
+        from execution.trader_authority import (
+            TRADER_AUTHORIZATION_FORMAT,
+            TRADER_AUTHORIZATION_ISSUER,
+            TraderAuthorizationPublicKeyRegistry,
+            VerifiedTraderAuthorization,
+        )
+        from strategies.spec import strategy_spec_digest
+
+        # Test fixtures still prove their READY signature before deriving the
+        # DTO.  Production re-checks the complete digest chain at consumption.
+        readiness.require_valid(
+            expected_snapshot_id=ready_manifest.snapshot_id,
+            expected_plan_set_digest=plan_set_binding.plan_set_digest,
+            expected_closure_digest=plan_set_binding.closure_set_digest,
+            verifier=readiness_verifier,
+        )
+        seconds = int(ttl_seconds)
+        if seconds < 60 or seconds > 1800:
+            raise MassResearchDisabledError(
+                "trader authorization ttl must be between 60 and 1800 seconds"
+            )
+        issued = datetime.now(timezone.utc)
+        body: dict[str, Any] = {
+            "format": TRADER_AUTHORIZATION_FORMAT,
+            "mode": "paper",
+            "strategy_id": decision.strategy_spec.strategy_id,
+            "strategy_spec_hash": strategy_spec_digest(decision.strategy_spec),
+            "max_gross_weight": float(decision.max_gross_weight),
+            "ready_snapshot_id": ready_manifest.snapshot_id,
+            "ready_manifest_digest": ready_manifest.manifest_digest,
+            "readiness_attestation_id": readiness.attestation_id,
+            "profile_digest": plan_set_binding.profile_digest,
+            "plan_set_digest": plan_set_binding.plan_set_digest,
+            "dependency_closure_digest": plan_set_binding.closure_set_digest,
+            "universe_contract_id": resolved_universe.rule_id,
+            "universe_rule_digest": resolved_universe.rule_digest,
+            "resolved_universe_digest": (
+                resolved_universe.resolved_membership_digest
+            ),
+            "period_start": experiment_plan.period_start,
+            "period_end": experiment_plan.period_end,
+            "cost_scenario": experiment_plan.cost_scenario,
+            "issued_at": issued.isoformat(),
+            "expires_at": (issued + timedelta(seconds=seconds)).isoformat(),
+            "key_id": self._key_id,
+            "issuer": TRADER_AUTHORIZATION_ISSUER,
+        }
+        body["authorization_id"] = _test_trader_digest(body)
+        signature = "ed25519:" + base64.b64encode(
+            self._private_key.sign(_test_trader_canonical_bytes(body))
+        ).decode("ascii")
+        authorization = VerifiedTraderAuthorization(
+            signature=signature,
+            **{key: value for key, value in body.items() if key != "format"},
+        )
+        verifier = TraderAuthorizationPublicKeyRegistry(
+            {self._key_id: self._private_key.public_key()}
+        )
+        with patch.object(
+            TraderAuthorizationPublicKeyRegistry,
+            "load_pinned",
+            return_value=verifier,
+        ):
+            if not authorization.is_valid(now=issued):
+                raise MassResearchDisabledError(
+                    "synthetic trader authorization failed signed invariants"
+                )
+        return authorization
 
 
 def controlled_pilot_scheduler(

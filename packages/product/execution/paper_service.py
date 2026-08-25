@@ -568,6 +568,8 @@ class OfflineFixturePaperService(PaperExecutionService):
 class ControlledPilotExecutionService:
     """Only controlled path from exact plan + READY to one paper run."""
 
+    __slots__ = ("_core",)
+
     def __init__(
         self,
         *,
@@ -578,20 +580,20 @@ class ControlledPilotExecutionService:
         )
         from research.readiness import ReadinessPublicKeyRegistry
 
-        verifier = ReadinessPublicKeyRegistry.load_pinned()
-        if not isinstance(verifier, ReadinessPublicKeyRegistry):
+        if not isinstance(
+            ReadinessPublicKeyRegistry.load_pinned(),
+            ReadinessPublicKeyRegistry,
+        ):
             raise PaperExecutionRejected(
                 "controlled pilot requires a public-key-only readiness verifier"
             )
-        self._verifier = verifier
-        trader_verifier = TraderAuthorizationPublicKeyRegistry.load_pinned()
         if not isinstance(
-            trader_verifier, TraderAuthorizationPublicKeyRegistry
+            TraderAuthorizationPublicKeyRegistry.load_pinned(),
+            TraderAuthorizationPublicKeyRegistry,
         ):
             raise PaperExecutionRejected(
                 "controlled pilot requires a pinned trader authorization verifier"
             )
-        self._trader_verifier = trader_verifier
         self._core = PaperExecutionService(paper_store=paper_store)
 
     def execute(
@@ -611,13 +613,17 @@ class ControlledPilotExecutionService:
             PlanDependencyClosure,
             verify_plan_dependency_closure,
         )
-        from research.readiness import VerifiedPilotReadiness
+        from research.readiness import (
+            ReadinessPublicKeyRegistry,
+            VerifiedPilotReadiness,
+        )
         from research.ready_manifest import (
             ExactFourPilotReadyBinding,
             ReadyManifest,
             validate_ready_manifest_profile_binding,
         )
         from execution.trader_authority import VerifiedTraderAuthorization
+        from execution.trader_authority import _verify_pinned_trader_authorization
         from research.universe_contract import (
             ResolvedUniverseMembership,
             resolve_tse_prime_with_fins,
@@ -635,7 +641,7 @@ class ControlledPilotExecutionService:
             raise PaperExecutionRejected("VerifiedPilotReadiness required")
         if not isinstance(config, ControlledPilotRunConfig):
             raise PaperExecutionRejected("ControlledPilotRunConfig required")
-        if not isinstance(authorization, VerifiedTraderAuthorization):
+        if type(authorization) is not VerifiedTraderAuthorization:
             raise PaperExecutionRejected(
                 "VerifiedTraderAuthorization required"
             )
@@ -682,7 +688,7 @@ class ControlledPilotExecutionService:
             expected_snapshot_id=ready_manifest.snapshot_id,
             expected_plan_set_digest=plan_set_binding.plan_set_digest,
             expected_closure_digest=plan_set_binding.closure_set_digest,
-            verifier=self._verifier,
+            verifier=ReadinessPublicKeyRegistry.load_pinned(),
         )
         if (
             readiness.ready_manifest_digest != manifest_digest
@@ -708,7 +714,10 @@ class ControlledPilotExecutionService:
         if authorization.mode != "paper":
             raise PaperExecutionRejected("controlled execution mode is fixed to paper")
         try:
-            authorization.require_valid(verifier=self._trader_verifier)
+            if not _verify_pinned_trader_authorization(authorization):
+                raise MassResearchDisabledError(
+                    "VerifiedTraderAuthorization is expired, forged, or malformed"
+                )
         except MassResearchDisabledError as exc:
             raise PaperExecutionRejected(str(exc)) from exc
         recomputed_universe = resolve_tse_prime_with_fins(
